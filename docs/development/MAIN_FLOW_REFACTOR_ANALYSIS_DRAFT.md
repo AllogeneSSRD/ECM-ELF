@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.3`；P2a 普通 CXX 编译已完成，P2 任务合同及 P3–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.4`；P2a 普通 CXX 编译与 P2b 任务拥有权已完成，P2 请求/状态合同及 P3–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2a 已完成普通 CXX 编译，P2 任务合同及 P3–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2a/P2b 已完成普通 CXX 编译和任务拥有权，P2 请求/状态合同及 P3–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -632,6 +632,24 @@ host_driver、主机命令与策略进入 profile，产生新 local 叶目录 `s
 | Stage1 恢复/发布门禁 | 冻结基线和本阶段完整档 local 程序各通过 24 项；涵盖 scalar/SIMD、Edwards GPU、Montgomery PARAM0/2/3、停止/排他锁/身份拒绝/主备恢复/发布重试 | [基线](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/usability_baseline/summary.json)、[当前](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/usability_candidate/summary.json) |
 
 同步适配既有 usability 输入：旧 -ini/--ini 与平面配置改为当前 --config、shared/stage1/workers 层次和合法 TOML 字符串，不改原断言或生产配置规则。可选 CPU Stage2 分支的 pending 工作副本额外移除已完成的 publication.order，才真实表示未发布状态；源账本不动，原 4→8 curves 断言保留。该可选跨阶段分支未执行，不列入 24 项通过范围；执行版本源码和 hash 另行保存。没有运行 release、性能采样或新增后端能力。
+
+### P2b：唯一任务入口与结果/会话拥有权已完成
+
+对应程序版本 `0.45.4`。[验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/qualification.json)保存实际源码、程序和对象身份。当前实现说明见 [Stage1 单任务编排与资源拥有权](../architecture/STAGE1.md#单任务编排与资源拥有权)。本子步骤仍在现有驱动翻译单元内落地，没有增加空转发 task.cpp；请求/状态合同和物理模块提取继续实施，不宣称 P2 整体完成。
+
+原 run_stage1_once 直接改为唯一 run_stage1_task，queue/direct 两处共同调用，任务时序保留。Stage1TaskResult 禁止复制、支持移动，统一清理三个独立分配；CPU Montgomery 停止时可能只有 sigmas 而 factors 为空，现在同样释放，群阶诊断提前退出也不再绕过结果清理。后端交付之前的局部分配仍由后端负责，未整体改写内存分配算法。
+
+私有 Session 只拥有 batch/锁寿命，没有 run。先建立清理责任，再调用可能在取得锁后抛出的 begin；正常提交完成、失败保留及异常兜底都收口到同一结束入口。end_batch 移走路径字符串后清状态，失败清理不额外复制路径。已解析选项不再保存计时/总曲线数；每次执行的私有副本持有这两个可变字段，去掉 CPU 路径的三组 const 强制转换。现有全局 batch 和进度状态仍存在，尚未支持同进程多任务并行。
+
+| 验证 | 结果 | 证据 |
+| --- | --- | --- |
+| 算法及任务次序核对 | CPU Edwards/Montgomery、分派正文在明确类型/const-cast 替换后逐字一致；GPU Edwards 仅结果类型名变化；task 元数据、执行和发布顺序保持 | [源码核对](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/source_audit.json) |
+| 正式 local 构建 | Stage1 完整档 HostOnly 成功，0 CU；Stage2 仅共享版本头引起 1 个 CXX，0 CU。与 P2a 相比 31+2 个 CUDA 对象摘要全部不变 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/stage1_local_hostonly.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/stage2_local_hostonly.log) |
+| 重复构建 | Stage1 同 profile 0 CU、0 CXX、0 链接 | [日志](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/stage1_repeat.log) |
+| 恢复与发布 | 24 项现有门禁全部通过，含八种后端/曲线/CPU实现路径的停止、锁、身份拒绝和主备恢复 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/usability/summary.json) |
+| 最终程序对照 | Stage1 5 例、Stage2 5 例与 P0 冻结基线一致，记录摘要与最终冻结程序匹配 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/runtime/summary.json) |
+
+没有运行 release 或性能采样，也没有声称通过堆剖析证明整个旧执行块无泄漏；本步拥有权证据与运行退出路径范围如上。即时 factor、DONE/save、最终 submission→internal→seal→end_batch 及任务外队列推进顺序不变；具体 codec、CPU/GPU 算法块与输入处理仍待后续职责提取。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1204,7 +1222,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2a 完成，P2 任务合同及 P3–P7 未执行，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2a/P2b 完成，P2 请求/状态合同及 P3–P7 未执行，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

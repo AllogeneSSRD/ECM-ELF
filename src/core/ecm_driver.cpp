@@ -17,6 +17,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <utility>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -716,8 +717,6 @@ struct Stage1RunOptions {
     /* CLI and TOML resolve the same mathematical and execution choices. */
     ecm_stage1::Selection selection{};
     uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;     // 0 = auto (min(#tasks, #cores)); 1 = 顺序
-    long long stage1_t0_ms = 0;      // 进度条计时起点
-    uint32_t  stage1_curves = 0;     // 进度条总数
     std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
     int naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards 专属: 0 = ecm_edwards_cpu 的默认窗口
     /* Shared automatic save pattern. {curve} separates e/m0/m2/m3, {target}
@@ -748,7 +747,14 @@ struct Stage1RunOptions {
 
 static bool stage1_publish_factor(const Stage1RunOptions &,mpz_srcptr,uint64_t,uint64_t,mpz_srcptr);
 
-struct Stage1RunResult {
+// Private mutable legacy execution state. The caller's resolved options remain immutable.
+struct Stage1ExecutionOptions : Stage1RunOptions {
+    explicit Stage1ExecutionOptions(const Stage1RunOptions &options) : Stage1RunOptions(options) {}
+    long long stage1_t0_ms = 0;
+    uint32_t stage1_curves = 0;
+};
+
+struct Stage1TaskResult {
     int ret = ECM_ERROR;
     bool prepare_failed = false;
     bool publish_failed = false;
@@ -757,7 +763,28 @@ struct Stage1RunResult {
     uint64_t firstsigma64 = 0;       // full 64-bit sigma
     mpz_t *factors = nullptr;
     int *array_found = nullptr;
-    // Per-curve sigma of THIS batch (malloc'd, `curves` entries, caller frees; may be
+    Stage1TaskResult() = default;
+    Stage1TaskResult(const Stage1TaskResult &) = delete;
+    Stage1TaskResult &operator=(const Stage1TaskResult &) = delete;
+    Stage1TaskResult(Stage1TaskResult &&other) noexcept { swap(other); }
+    Stage1TaskResult &operator=(Stage1TaskResult &&other) noexcept {
+        Stage1TaskResult incoming(std::move(other));
+        swap(incoming);
+        return *this;
+    }
+    ~Stage1TaskResult() {
+        if(factors)for(uint32_t i=0;i<curves;++i)mpz_clear(factors[i]);
+        free(factors);
+        free(array_found);
+        free(sigmas); // May exist on a stopped CPU Montgomery task with no factors.
+    }
+    void swap(Stage1TaskResult &other) noexcept {
+        using std::swap;
+        swap(ret,other.ret);swap(prepare_failed,other.prepare_failed);swap(publish_failed,other.publish_failed);
+        swap(curves,other.curves);swap(firstsigma,other.firstsigma);swap(firstsigma64,other.firstsigma64);
+        swap(factors,other.factors);swap(array_found,other.array_found);swap(sigmas,other.sigmas);
+    }
+    // Per-curve sigma of THIS batch (malloc'd, `curves` entries, owned by this result; may be
     // null when a path does not know them). Needed because one batch does NOT always
     // share a sigma sequence: the Edwards path draws a random 64-bit sigma per curve,
     // so "firstsigma + i" would be wrong there. Consumers: the hit lines (D3, see
@@ -958,7 +985,7 @@ static bool ensure_dir(const std::string &dir) {
 
 // 自我 checkpoint 上下文 + 进度回调 (写 STAGE1 存档)
 struct EdwardsCheckpointCtx {
-    const Stage1RunOptions *opt;
+    const Stage1ExecutionOptions *opt;
     uint64_t sigma;
     uint64_t B1, B2;
     std::string save_path;
@@ -1038,7 +1065,7 @@ static bool edwards_completed_write(uint32_t curve,uint64_t sigma,const mpz_t fa
 }
 
 static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
-                                 const Stage1RunOptions &opt, double B1, double B2,
+                                 const Stage1ExecutionOptions &opt, double B1, double B2,
                                  uint32_t idx, uint64_t sigma, uint32_t curves,
                                  mpz_t factor_out, const std::string &ckpt_path,std::string &save_line) {
     mpz_t Qx, Qz;
@@ -1111,7 +1138,7 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
 struct EdwardsWorkerCtx {
     mpz_srcptr N;
     mpz_srcptr s;
-    const Stage1RunOptions *opt;
+    const Stage1ExecutionOptions *opt;
     double B1, B2;
     uint32_t curves;
     const uint64_t *sigmas;
@@ -1315,7 +1342,7 @@ struct EdSimdProg {
     uint32_t curves, batch_first, batch_count;
     size_t   s_bits;
     long long t0_ms;
-    const Stage1RunOptions *opt;
+    const Stage1ExecutionOptions *opt;
     double   B1, B2;
     const uint64_t *sigmas;
     const ifma_ctx_t *mc;
@@ -1408,7 +1435,7 @@ static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t
     return edwards_checkpoint_progress(ctx, cur);
 }
 
-static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N, mpz_srcptr s,
+static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_srcptr N, mpz_srcptr s,
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t *sigmas, mpz_t *factors, int *array_found,
                                        std::atomic<uint32_t> *done_ctr,std::string *save_lines) {
@@ -1740,7 +1767,7 @@ static void apply_thread_affinity(const std::vector<unsigned> &, uint32_t) {}
 static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                               const std::string &savefilename, bool saveappend,
                               const std::string &n_expr,
-                              const Stage1RunOptions &opt, Stage1RunResult *out) {
+                              Stage1ExecutionOptions &opt, Stage1TaskResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->publish_failed = false;
@@ -1850,8 +1877,8 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     std::cout << std::endl;
 
     auto *bar = stage1_bar_create();
-    ((Stage1RunOptions &)opt).stage1_t0_ms = stage1_now_ms();
-    ((Stage1RunOptions &)opt).stage1_curves = curves;
+    opt.stage1_t0_ms = stage1_now_ms();
+    opt.stage1_curves = curves;
     g_stage1_done.store(0);stage1_progress_set(0,curves);
     bool aborted = false;
     if (nthreads <= 1 && curves == 1) {
@@ -1927,8 +1954,8 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
             fflush(stdout);
         }
         /* 进度条: 照 CUDA stage-1 host 的样式, prefix 换成 stage1 */
-        ((Stage1RunOptions &)opt).stage1_t0_ms = stage1_now_ms();
-        ((Stage1RunOptions &)opt).stage1_curves = curves;
+        opt.stage1_t0_ms = stage1_now_ms();
+        opt.stage1_curves = curves;
         stage1_progress_set(0, curves);
         wctx.B1 = B1;
         wctx.B2 = B2;
@@ -2159,7 +2186,7 @@ static int mont_progress_cb_scalar(void *p, const mont_ladder_state_t *st)
 static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           const Stage1RunOptions &opt, Stage1RunResult *out) {
+                           Stage1ExecutionOptions &opt, Stage1TaskResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -2645,8 +2672,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     };
 
     indicators::ProgressBar *bar = stage1_bar_create();
-    ((Stage1RunOptions &)opt).stage1_t0_ms = stage1_now_ms();
-    ((Stage1RunOptions &)opt).stage1_curves = curves;
+    opt.stage1_t0_ms = stage1_now_ms();
+    opt.stage1_curves = curves;
     stage1_progress_set((double)(curves - pending.size()), curves);
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -2753,7 +2780,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           const Stage1RunOptions &opt, Stage1RunResult *out) {
+                           Stage1ExecutionOptions &opt, Stage1TaskResult *out) {
     ecm_stage1_set_backup_limit(opt.ckpt_backups);
 #if ECM_HAS_CUDA_EDWARDS
     if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
@@ -3027,10 +3054,30 @@ static bool stage1_publish_factor(const Stage1RunOptions &opt,mpz_srcptr n,uint6
     } catch(const std::exception &e){ecm_ts_fprintf(stderr,"ERROR: immediate Stage1 factor publication: %s\n",e.what());return false;}
 }
 
-static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
+// Owns batch state/lock lifetime only; task sequencing stays in run_stage1_task.
+class Stage1TaskSession {
+    bool active_ = false;
+public:
+    Stage1TaskSession() = default;
+    Stage1TaskSession(const Stage1TaskSession &) = delete;
+    Stage1TaskSession &operator=(const Stage1TaskSession &) = delete;
+    ~Stage1TaskSession() { close(false); }
+    void begin(const std::string &identity,uint32_t curves,bool fixed,uint64_t sigma) {
+        active_=true; // begin_batch may acquire its lock before throwing.
+        ecm_stage1_begin_batch(identity,curves,fixed,sigma);
+    }
+    void close(bool completed) {
+        if(!active_)return;
+        ecm_stage1_end_batch(completed);
+        active_=false;
+    }
+};
+
+static int run_stage1_task(const mpz_t N,double B1,double B2,uint32_t curves,
                            const std::string &savefilename,bool saveappend,const std::string &n_expr,
-                           const Stage1RunOptions &options,Stage1RunResult *out) {
-    Stage1RunOptions opt=options;*out=Stage1RunResult{};
+                           const Stage1RunOptions &options,Stage1TaskResult *out) {
+    Stage1RunOptions opt=options;*out=Stage1TaskResult{};
+    Stage1TaskSession session;
     try {
         if(!opt.target_kbnc) {
             // Direct CLI expressions retain k*b^n+c for naming and reporting.
@@ -3072,12 +3119,13 @@ static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
                 const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
                 identity+="|"+std::string(algorithm && *algorithm?algorithm:"ladder");
             }
-            ecm_stage1_begin_batch(identity,curves,opt.sigma_fixed,opt.fixed_sigma64);
+            session.begin(identity,curves,opt.sigma_fixed,opt.fixed_sigma64);
         }
         stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
-        const int rc=run_stage1_impl(N,B1,B2,curves,savefilename,saveappend,n_expr,opt,out);
-        if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;ecm_stage1_end_batch(false);return rc;}
+        Stage1ExecutionOptions execution(opt);
+        const int rc=run_stage1_impl(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
+        if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);return rc;}
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
         std::vector<std::pair<std::string,std::string>> internal_records;
@@ -3096,12 +3144,12 @@ static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
         }
         ecm_results::publish_internal_batch(opt.results_file,internal_records);
         ecm_results::seal_submissions(opt.submission_file,1,publication_task);
-        ecm_stage1_end_batch(true);
+        session.close(true);
         ecm_ts_fprintf(stdout,"Stage1 results: internal=%s submission=%s\n",opt.results_file.c_str(),opt.submission_file.c_str());
         return out->ret;
     } catch(const std::exception &e) {
         out->publish_failed=out->factors!=nullptr;out->prepare_failed=!out->publish_failed;out->ret=ECM_ERROR;
-        ecm_stage1_end_batch(false);ecm_ts_fprintf(stderr,"ERROR: Stage1: %s\n",e.what());return ECM_ERROR;
+        session.close(false);ecm_ts_fprintf(stderr,"ERROR: Stage1: %s\n",e.what());return ECM_ERROR;
     }
 }
 
@@ -3226,18 +3274,12 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
         }
     }
 
-    Stage1RunResult result;
-    run_stage1_once(N, B1, B2, curves, save_name, /*saveappend=*/true, n_expr, opt, &result);
+    Stage1TaskResult result;
+    run_stage1_task(N, B1, B2, curves, save_name, /*saveappend=*/true, n_expr, opt, &result);
 
     const bool has_factors = (result.factors != nullptr);
 
     if (result.prepare_failed || result.publish_failed) {
-        if (has_factors) {
-            for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
-            free(result.factors);
-            free(result.array_found);
-            free(result.sigmas);
-        }
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged.\n",
                        result.publish_failed ? "Stage1 save/result publication failed" :
                                                "backend prepare failed");
@@ -3277,12 +3319,6 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                        aid.empty() ? "N/A" : aid.c_str(), line.c_str());
     }
 
-    if (has_factors) {
-        for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
-        free(result.factors);
-        free(result.array_found);
-        free(result.sigmas);
-    }
 
     if (result.ret == ECM_ERROR && ecm_stage1_stop_requested()) {
         ecm_ts_fprintf(stdout, "STOP: Stage1 interrupted; worktodo unchanged: %s\n",
@@ -4547,18 +4583,17 @@ int main(int argc, char **argv){
         opt.handoff_c = -1;
     }
 
-    Stage1RunResult result;
-    const int rc1 = run_stage1_once(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);
+    Stage1TaskResult result;
+    const int rc1 = run_stage1_task(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);
 
     std::vector<uint32_t> go_primes;
     if (print_group_order) {
         build_primes_up_to_B1(B1, go_primes);
     }
 
-    /* 中止/失败时 run_stage1_once 已经释放并把 factors/array_found 置空 —— 直接索引
-       就是空指针解引用 (0xC0000005, Windows 还会弹一个模态崩溃框, 把管道卡死)。
-       队列路径早就用 has_factors 判过了, 这里漏了; 触发条件包括 SIMD 批量报错、
-       用户中止 (SIGINT/checkpoint abort) 等任何 stage-1 非正常结束。 */
+    // Failed/stopped tasks may have no result arrays or only a partial owned
+    // payload. Inspect factors only after successful execution; the owner
+    // releases every allocation on all exits, including group-order errors.
     const bool cli_has_factors = (result.ret != ECM_ERROR && result.factors != nullptr && result.array_found != nullptr);
 
     // Numeric Montgomery parameter used by the group-order helper. CPU Suyama
@@ -4665,10 +4700,6 @@ int main(int argc, char **argv){
             }
         }
 
-        for (uint32_t i = 0; i < result.curves; i++) mpz_clear(result.factors[i]);
-        free(result.factors);
-        free(result.array_found);
-        free(result.sigmas);
     }
     mpz_clear(N);
     /* 让调用方 (脚本/Prime95 前端) 能看到失败, 而不是把 0 当成"跑完了没因子"。 */

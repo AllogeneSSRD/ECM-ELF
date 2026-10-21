@@ -20,6 +20,16 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核、save 发布及各后端 checkpoint 仍沿用各自的路径。入口见 [ecm_stage1_selection.h](../../src/core/ecm_stage1_selection.h)、[ecm_driver.cpp](../../src/core/ecm_driver.cpp) 和 [ecm_backend.h](../../include/ecm_backend.h)。
 
+## 单任务编排与资源拥有权
+
+直接输入和队列计算共用驱动中的 `run_stage1_task`。它依次校验任务元数据与输出、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份、发布 submission/internal、seal 并结束批次。即时因子发布仍在原有安全位置执行；队列完成和交接协议位于任务调用之外。
+
+私有 `Stage1TaskSession` 只管理批次状态和锁，不提供另一套运行流程；在调用 begin 前建立清理责任，因此开始过程中抛出异常也能释放已取得的锁。成功结束才清除 checkpoint，失败或停止保留恢复材料。当前批次运行时仍是单进程单批次，不能据此推断已支持同进程并行任务。
+
+`Stage1TaskResult` 独立拥有 factors、array_found、sigmas，禁止复制并允许移动，所有退出路径自动释放；sigmas 的释放不以 factors 是否存在为条件。已解析的 `Stage1RunOptions` 不包含进度计时和曲线总数；这些可变字段属于每次执行的私有副本，CPU 回调不再强制修改只读选项。上述类型和算法块目前仍在同一驱动翻译单元中，尚未形成独立公开 task 接口。
+
+入口和拥有权见 [ecm_driver.cpp](../../src/core/ecm_driver.cpp#L757)，批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L317)；文件格式和恢复接纳以 [Checkpoint](CHECKPOINT.md) 为准。
+
 ## GPU 点乘
 
 ### CUDA 模块边界

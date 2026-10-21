@@ -78,9 +78,9 @@ static bool publish(const std::string &path,const std::string &lines,bool append
 }
 
 static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
-        const std::string &savefilename,bool saveappend,const Stage1RunOptions &opt,Stage1RunResult *out) {
+        const std::string &savefilename,bool saveappend,const Stage1RunOptions &opt,Stage1TaskResult *out) {
     using namespace ed_gpu_driver;
-    *out=Stage1RunResult{};out->curves=curves;
+    *out=Stage1TaskResult{};out->curves=curves;
     if(!curves)return ECM_ERROR;
     try {
         const auto initialization_start=Progress::Clock::now();

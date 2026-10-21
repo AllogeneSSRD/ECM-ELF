@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <iterator>
 #include <iostream>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -314,7 +315,7 @@ bool ecm_stage1_import_gpu_payload(const std::string &bytes,const std::vector<ui
     return true;
 }
 void ecm_stage1_end_batch(bool completed) {
-    const auto path=batch_path;batch_path.clear();batch_identity.clear();batch_records.clear();batch_sigmas.clear();
+    const auto path=std::move(batch_path);batch_path.clear();batch_identity.clear();batch_records.clear();batch_sigmas.clear();
     if(completed && !path.empty())ecm_stage1_remove_checkpoints(path);
 #ifdef _WIN32
     if(batch_lock!=INVALID_HANDLE_VALUE){CloseHandle(batch_lock);batch_lock=INVALID_HANDLE_VALUE;}
