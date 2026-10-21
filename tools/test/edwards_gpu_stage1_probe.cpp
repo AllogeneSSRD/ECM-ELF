@@ -51,8 +51,19 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
     uint32_t done=0,split=0;std::string error;
     EcmEdwardsNafMetrics metrics;
     auto execute=[&](mpz_t *data,uint32_t &pos,uint32_t chunk,EcmEdwardsProgress cb){
-        return window?ecm_cuda_edwards_stage1_naf(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error,window,algorithm,&metrics)
+        const auto before=pos;
+        const auto code=window?ecm_cuda_edwards_stage1_naf(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error,window,algorithm,&metrics)
                      :ecm_cuda_edwards_stage1(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error);
+        if(window && (code==0 || code==2)) {
+            if(before==metrics.columns)
+                require(!metrics.container_bits && !metrics.tpi && !metrics.dictionary_bytes,"completed NAF state selected device resources");
+            else {
+                uint32_t expected_bits=0,expected_tpi=0;
+                require(ecm_cuda_edwards_tier(mpz_sizeinbase(n.v,2),expected_bits,expected_tpi),"missing compiled NAF tier");
+                require(metrics.container_bits==expected_bits && metrics.tpi==expected_tpi,"executed NAF tier differs from query");
+            }
+        }
+        return code;
     };
     require(execute(state.data(),done,0,nullptr)==0,error.c_str());
     require(execute(resumed.data(),split,17,[](uint32_t,void *){return false;})==2,"slice stop failed");
@@ -64,7 +75,6 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
     require(execute(adaptive.data(),paused,0,nullptr)==0,error.c_str());
     uint32_t container=0,tpi=0;
     require(ecm_cuda_edwards_tier(mpz_sizeinbase(n.v,2),container,tpi),"missing compiled Edwards tier");
-    if(window)require(metrics.container_bits==container && metrics.tpi==tpi,"executed NAF tier differs from query");
     for(size_t i=0;i<size_t(count)*9;++i)require(!mpz_cmp(state[i],resumed[i]),"resumed result differs from uninterrupted run");
     for(size_t i=0;i<size_t(count)*9;++i)require(!mpz_cmp(state[i],adaptive[i]),"adaptive resume differs from uninterrupted run");
     std::string lines;

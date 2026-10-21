@@ -22,7 +22,7 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 ## 单任务编排与资源拥有权
 
-直接输入和队列调用同一个 [run_stage1_task](../../src/ecm/service/stage1/task.cpp#L138)。它依次校验任务元数据与输出、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份、发布 submission/internal、seal 并结束批次。即时因子仍在原有安全位置发布；队列完成和跨阶段交接协议在任务之外。
+直接输入和队列调用同一个 [run_stage1_task](../../src/ecm/service/stage1/task.cpp#L124)。它依次校验任务元数据与输出、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份、发布 submission/internal、seal 并结束批次。即时因子仍在原有安全位置发布；队列完成和跨阶段交接协议在任务之外。
 
 [公开请求与结果](../../include/ecm/service/stage1/task.h)只使用普通 C++ 和 GMP。Stage1Request 在同步调用期间借用模数、命名和已解析选项，选项分为执行偏好、身份和持久化策略三组。TaskResult 独立拥有逐曲线结果，禁止复制并允许移动，通过只读访问器取数；不保留请求引用，不公开原始分配或进度字段。状态区分完成、停止和失败，并记录准备、执行、持久化、发布或设备执行失败。CUDA 明确失败优先于同时收到的停止；CPU/OpenCL 的旧标记仍通过兼容映射接纳。设备执行失败使队列停止并保留原任务，不继续使用可能失效的设备 context。
 
@@ -100,7 +100,7 @@ CUDA workflow 将 sigma 选择与曲线参数化分开：先恢复并校验当�
 
 两种 CUDA workflow 均在计算前拥有结果数组。Edwards 末点验证和归一化写入独立结果，不改写用于恢复的原始批次状态；构造期真因子立即经过既有 submission 通道。完成状态保存成功后才发布最终 save，任务封存结果后才清除恢复材料。周期保存失败作为持久化失败返回，优先于同时收到的停止；最后一片已完成时继续完成当前批次的结果发布。
 
-磁盘版本、字段顺序和 size_t/time_t 布局保持。runtime.cu 保留 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
+磁盘版本、字段顺序和 size_t/time_t 布局保持。runtime.cu 保留 CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；档位注册与实际分派归 registry.cu，resident/PRAC 由独立 prac/runtime.cu 实现。global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
 
 ## GPU 点乘
 

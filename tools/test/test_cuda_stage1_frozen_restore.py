@@ -30,13 +30,15 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--device',type=int,default=1)
     parser.add_argument('--random-sigma',action='store_true',help='resume with random policy, retaining archived seeds')
+    parser.add_argument('--edwards-only',action='store_true',help='check an older Edwards text archive independently')
     args=parser.parse_args();exe=args.exe.resolve();source=args.fixtures.resolve();out=args.output.resolve()
     out.mkdir(parents=True,exist_ok=False)
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),device=args.device,cases=[],complete=False)
     for snapshot in sorted(source.glob('*_gpu*_checkpoint_before_fault.bin')):
         original=snapshot.read_bytes();identity,lanes=batch(snapshot)
         nh,model,bound,*_=identity.split('|');n=int(nh,16);b1=int(bound);count=len(lanes);sigma=lanes[0][0]
-        assert all(saved==sigma+i for i,(saved,_) in enumerate(lanes))
+        if args.edwards_only and model!='ed':continue
+        if model!='ed':assert all(saved==sigma+i for i,(saved,_) in enumerate(lanes))
         assert (n+1)&n==0,'fixture must have a Mersenne target'
         name=snapshot.name.removesuffix('_checkpoint_before_fault.bin');folder=out/name;folder.mkdir()
         token='e' if model=='ed' else 'm'+model.removeprefix('mont')
@@ -64,7 +66,7 @@ def main():
         assert snapshot.read_bytes()==original
         report['cases'].append(dict(name=name,curves=count,snapshot_sha256=hashlib.sha256(original).hexdigest(),payload_magic=lanes[0][1][:8].hex()))
         (out/'summary.json').write_text(json.dumps(report,indent=2)+'\n');print('PASS',name,count,flush=True)
-    assert len(report['cases'])==4,'four frozen CUDA curve/parameter fixtures required'
+    assert len(report['cases'])==(1 if args.edwards_only else 4),'required frozen CUDA curve/parameter fixtures missing'
     report['complete']=True;(out/'summary.json').write_text(json.dumps(report,indent=2)+'\n')
 
 

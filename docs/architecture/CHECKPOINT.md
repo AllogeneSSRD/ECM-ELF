@@ -37,7 +37,7 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `ckpt_backups` 决定 |
 | `主文件名.lock` | 批次独占锁；Windows 使用无共享打开、关闭时删除；POSIX 使用非阻塞 flock |
 
-来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L138)、[备份及锁](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L97)。
+来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L124)、[备份及锁](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L97)。
 
 ### 2.2 内容身份
 
@@ -275,7 +275,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 `ckpt_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
 
-来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L138)、[种子持久化](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
+来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L124)、[种子持久化](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
 
 ### 5.2 原子替换和备份
 
