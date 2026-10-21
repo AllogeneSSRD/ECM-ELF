@@ -1,40 +1,12 @@
-#pragma once
+#include "checkpoint.h"
+#include "host_math.h"
 #include "../../../../storage/save/ecm_edwards_io.h"
 #include "ecm/core/stage1/scalar.h"
 #include "../../../../storage/checkpoint/ecm_stage1_binary.h"
 #include "ecm/platform/logging.h"
 #include <cstring>
 #include <stdexcept>
-
 namespace ed_gpu_driver {
-using namespace ecm_edwards;
-struct Batch {
-    uint32_t count,done=0;
-    unsigned window=6;
-    int doubling=4;
-    Array state,factors;
-    std::vector<uint64_t> sigmas;
-    std::vector<int> hit;
-    explicit Batch(uint32_t c):count(c),state(size_t(c)*9),factors(c),sigmas(c),hit(c,0){}
-};
-static bool initialize(Batch &b,const mpz_t n,std::string &error) {
-    Integer d,px,py,a24,f;
-    for(uint32_t i=0;i<b.count;++i) {
-        const auto rc=construct(d.v,px.v,py.v,a24.v,f.v,b.sigmas[i],n);
-        auto *s=b.state.data()+size_t(i)*9;
-        if(rc==Setup::Degenerate){error="degenerate Atkin-Morain sigma="+std::to_string(b.sigmas[i]);return false;}
-        if(rc==Setup::Factor) {
-            b.hit[i]=1;mpz_set(b.factors[i],f.v);
-            // A harmless identity lane keeps batch indexing stable.
-            mpz_set_ui(s[2],1);mpz_set_ui(s[3],1);
-        } else {
-            mpz_set(s[0],d.v);mpz_set(s[1],px.v);mpz_set(s[2],py.v);
-            mpz_set_ui(s[3],1);mpz_mul(s[4],px.v,py.v);mpz_mod(s[4],s[4],n);
-        }
-        mpz_set_ui(s[6],1);mpz_set_ui(s[7],1);
-    }
-    return true;
-}
 static void binary_value(std::string &out,mpz_srcptr value) {
     if(mpz_sgn(value)<0)throw std::runtime_error("negative Edwards checkpoint value");
     const auto size=mpz_sgn(value)?(mpz_sizeinbase(value,2)+7)/8:0;
@@ -51,7 +23,7 @@ static void binary_value(ecm_stage1_binary::Reader &in,mpz_ptr value,size_t maxi
 static uint64_t scalar_fingerprint(mpz_srcptr scalar) {
     std::string bytes;binary_value(bytes,scalar);return hash(bytes);
 }
-static std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
+std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
     using namespace ecm_stage1_binary;
     std::string out("ECMEDB3",8);u32(out,3);u32(out,b.window);u32(out,uint32_t(b.doubling));
     u32(out,b.count);u32(out,b.done);u32(out,0);u64(out,b1);
@@ -62,11 +34,11 @@ static std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uin
     }
     u64(out,hash(out));return out;
 }
-static bool write_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
+bool save_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
     const auto body=checkpoint_body(b,n,scalar,b1);
     return ecm_stage1_write_blob(path,body);
 }
-static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,
+bool restore_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,
                     uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
     for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
         std::string text;if(!ecm_stage1_read_blob(candidate,text))continue;
@@ -140,4 +112,4 @@ static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t s
     }
     return false;
 }
-} // namespace ed_gpu_driver
+}

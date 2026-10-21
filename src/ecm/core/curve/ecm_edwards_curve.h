@@ -1,6 +1,7 @@
 #pragma once
 #include <gmp.h>
 #include <cstdint>
+#include <cstddef>
 
 // Checked Atkin-Morain construction, a=1. All inverses and singularities are
 // classified modulo the actual target, including when Stage2 uses a carrier.
@@ -92,4 +93,24 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24,
     if(mpz_sgn(T.v))return Setup::Degenerate;
     mpz_set_ui(factor,0);return Setup::Ready;
 }
+inline bool point_valid(const mpz_t n,const mpz_t d,mpz_t *p) {
+    for(unsigned j=0;j<4;++j)if(mpz_sgn(p[j])<0 || mpz_cmp(p[j],n)>=0)return false;
+    if(!mpz_sgn(p[0]) && !mpz_sgn(p[1]) && !mpz_sgn(p[2]) && !mpz_sgn(p[3]))return false;
+    Integer a,b,c;
+    mpz_mul(a.v,p[0],p[1]);mpz_mul(b.v,p[2],p[3]);mpz_sub(a.v,a.v,b.v);mpz_mod(a.v,a.v,n);
+    if(mpz_sgn(a.v))return false;
+    mpz_mul(a.v,p[0],p[0]);mpz_mul(b.v,p[1],p[1]);mpz_add(a.v,a.v,b.v);
+    mpz_mul(b.v,p[2],p[2]);mpz_sub(a.v,a.v,b.v);
+    mpz_mul(c.v,p[3],p[3]);mpz_mul(c.v,c.v,d);mpz_sub(a.v,a.v,c.v);mpz_mod(a.v,a.v,n);
+    return !mpz_sgn(a.v);
+}
+class Array {
+    mpz_t *p_;size_t size_;
+public:
+    explicit Array(size_t size):p_(new mpz_t[size]),size_(size){for(size_t i=0;i<size_;++i)mpz_init(p_[i]);}
+    ~Array(){for(size_t i=0;i<size_;++i)mpz_clear(p_[i]);delete[] p_;}
+    Array(const Array &)=delete;Array &operator=(const Array &)=delete;
+    mpz_t *data(){return p_;}
+    mpz_t &operator[](size_t i){return p_[i];}
+};
 } // namespace ecm_edwards

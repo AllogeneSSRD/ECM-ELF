@@ -28,7 +28,8 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "api.h"
 #include "host_math.h"
 #include "runtime.h"
-#include "host_io.h"
+#include "checkpoint.h"
+#include "output.h"
 #include "host_policy.h"
 using namespace ecm_cuda_mont_host;
 
@@ -443,7 +444,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   
   // The primary may be torn or corrupted; try each older generation in order.
   for (const std::string &candidate : ecm_stage1_checkpoint_candidates(ckpt_filename)) {
-    if (load_checkpoint(candidate.c_str(), &ckpt_header, &ckpt_data, &ckpt_data_size) !=
+    if (restore_checkpoint(candidate.c_str(), &ckpt_header, &ckpt_data, &ckpt_data_size) !=
         ECM_NO_FACTOR_FOUND) continue;
     const uint32_t wpc_want = suyama_layout ? 7u : 5u;
     const uint32_t param_want = param0 ? 0u : (param2 ? 2u : 3u);

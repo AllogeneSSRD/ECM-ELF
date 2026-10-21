@@ -155,7 +155,7 @@
     "src/core/ecm_cuda_stage2.h": "src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h",
     "src/core/ecm_driver.cpp": "src/ecm/application/cli/ecm_driver.cpp",
     "src/core/ecm_edwards_curve.h": "src/ecm/core/curve/ecm_edwards_curve.h",
-    "src/core/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h",
+    "src/core/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/checkpoint.h",
     "src/core/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl",
     "src/core/ecm_edwards_io.h": "src/ecm/storage/save/ecm_edwards_io.h",
     "src/core/ecm_edwards_naf.h": "src/ecm/core/stage1/ecm_edwards_naf.h",
@@ -818,8 +818,11 @@
     "src/ecm/service/planning/legacy/ecm_stage2_width_reference.h": "src/ecm/service/planning/ecm_stage2_width_reference.h",
     "src/ecm/service/stage2/legacy/ecm_stage2_factorize.h": "src/ecm/service/stage2/ecm_stage2_factorize.h",
     "src/ecm/backend/cuda/stage1/edwards/diagnostics/host_wait.h": "src/ecm/backend/cuda/stage1/edwards/host_wait.h",
-    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h",
+    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/checkpoint.h",
     "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp": "src/ecm/backend/cuda/stage1/edwards/workflow.cpp",
-    "src/ecm/backend/cuda/stage1/edwards/host_workflow.h": "src/ecm/backend/cuda/stage1/execution.h"
+    "src/ecm/backend/cuda/stage1/edwards/host_workflow.h": "src/ecm/backend/cuda/stage1/execution.h",
+    "src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/checkpoint.h",
+    "src/ecm/backend/cuda/stage1/montgomery/host_io.cpp": "src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp",
+    "src/ecm/backend/cuda/stage1/montgomery/host_io.h": "src/ecm/backend/cuda/stage1/montgomery/checkpoint.h"
   }
 }

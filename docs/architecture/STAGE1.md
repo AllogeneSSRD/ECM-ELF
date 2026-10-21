@@ -66,11 +66,11 @@ CPU 两条完整执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/c
 
 task 的 execute 依赖绑定 [execution.cpp](../../src/ecm/service/stage1/execution.cpp)的 execute_stage1。该文件只做后端与曲线分派。CUDA 由构建显式定义 `ECM_HAS_CUDA_STAGE1`，调用 [私有 execution.h](../../src/ecm/backend/cuda/stage1/execution.h) 的 `ecm_cuda_stage1::run_mont_stage1 / run_edwards_stage1`。两个完整入口参数粒度一致，分别位于曲线目录的 workflow.cpp；它们编排准备、恢复/构造、设备执行、末点及批次 save，不拥有任务账本或队列。
 
-[Montgomery workflow](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)在准备后直接调用 CUDA 曲线运行时，不经过旧长参数 backend hook；factory 继续提供设备准备、能力查询和兼容入口。[Edwards workflow](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)持有其状态、初始化、恢复、进度回调、末点检查、GCD 和 save；设备 binary/NAF 接口及检查点 codec 的后续分责不影响入口粒度。低层探针的链接清单不包含完整 workflow。
+[Montgomery workflow](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)在准备后直接调用 CUDA 曲线运行时，不经过旧长参数 backend hook；factory 继续提供设备准备、能力查询和兼容入口。[Edwards workflow](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)编排曲线准备、恢复、进度、末点检查与 save；Batch、构造和 checkpoint 分别由同目录的 batch.h、host_math.cpp、checkpoint.cpp 持有。低层探针的链接清单不包含完整 workflow。
 
 CUDA 关闭时调用 [OpenCL Montgomery workflow](../../src/ecm/backend/opencl/stage1/montgomery/workflow.cpp)，保留其既有参数、后端 hook 和发布行为。两条 CPU 完整流程继续位于 CPU 实现；共享分派不包含任何曲线工作流正文。共用的随机 sigma 和 batch d 声明在 `service/stage1/gpu_common.h`，与 OpenCL 入口 ABI 分离。
 
-CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先于同时收到的停止信号，不再被任务层改写为准备失败。CPU/OpenCL 的旧返回码和准备/发布标记仍通过兼容映射接纳。任务层按执行/发布调用边界归类逃逸异常，不根据结果指针是否已分配猜测阶段。Edwards 低层接口保留兼容返回码并可携带明确设备故障来源。周期存档策略和载荷模块的整理仍见实施草稿中的未完成项。
+CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先于同时收到的停止信号，不再被任务层改写为准备失败。CPU/OpenCL 的旧返回码和准备/发布标记仍通过兼容映射接纳。任务层按执行/发布调用边界归类逃逸异常，不根据结果指针是否已分配猜测阶段。Edwards 低层接口保留兼容返回码并可携带明确设备故障来源。周期存档策略和候选验证合同仍见实施草稿中的未完成项。
 
 这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；设备协作继续由 adapter.cu 持有。
 
@@ -80,15 +80,17 @@ CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先
 
 PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子立即通过既有 submission 通道持久化，并记录该曲线的 factor 结果；GCD=N 作为退化构造拒绝。设备批次不压紧索引：已找到因子的通道使用无害恒等状态，末点处理读取已保存的真因子，不能将该通道当作可用于 Stage2 的点。恢复时重新推导构造期因子元数据；旧载荷格式不变。有效曲线的公式与 sigma 身份不受影响；PARAM2 低层也拒绝 sigma<2，而不改用另一 sigma。
 
-构造布局、主机数组及结果分配检查尺寸；结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
+构造布局、主机数组及结果分配检查尺寸；Montgomery 结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
 
 ## Montgomery 主机数学与存档输出
 
 [host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)集中 param0/2/3 初始状态、param2 Jacobian 辅助计算、标量打包、np0、普通整数解包与最终结果处理。六个实际跨设备协作入口经私有 host_math.h 声明；内部转换和算术 helper 留在 CPP 内部。输出仍调用同一 factory 中的 outputf/test_verbose，verbose 状态没有复制。FULL_BUILD 条件下的诊断分支和断言语义保持。
 
-[host_io.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_io.cpp)集中 ladder V5 与 resident/PRAC checkpoint 编码、读取/校验、保存路径、TTY/screen 和 dump CSV。私有 host_io.h 只提供实际声明与原载荷数据布局。字节格式、版本、字段次序及 size_t/time_t 类型保持；resident 恢复仍在日志前回写 sigma。progress 的累计状态留运行层，格式及节流读取显式接收该状态，未导出新的可变全局。
+[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)持有 ladder V5 与 resident/PRAC 的编码、读取、校验及保存路径；[checkpoint.h](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.h)声明接口与载荷布局。[output.cpp](../../src/ecm/backend/cuda/stage1/montgomery/output.cpp)持有 TTY/screen、节流显示判断与 CSV，output.h 只声明输出接口。两种曲线均使用 save_checkpoint / restore_checkpoint 动词；现有返回类型与恢复策略仍由各自载荷决定。
 
-adapter.cu 保留真实 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环与资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。两份主机 CPP 无 CUDA SDK 依赖。改变数学或存档/输出函数体的实测增量为 2 CXX、0 CU；改变跨层声明或设备协作实现仍会使真实依赖失效。
+Edwards [batch.h](../../src/ecm/backend/cuda/stage1/edwards/batch.h)只描述主机状态；[host_math.cpp](../../src/ecm/backend/cuda/stage1/edwards/host_math.cpp)负责构造；[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)负责 V3 和旧文本读取及状态资格。GMP 数组拥有权和点不变量属于 [核心曲线数学](../../src/ecm/core/curve/ecm_edwards_curve.h)，批次模型不再引入 save/文件实现。workflow 直接调用实际 save 发布函数。
+
+磁盘版本、字段顺序和 size_t/time_t 布局保持。adapter.cu 保留 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
 
 ## GPU 点乘
 
@@ -173,8 +175,8 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 - [ecm_stage1_exp.cpp](../../src/ecm/core/stage1/ecm_stage1_exp.cpp)：指数生成和缓存。
 - [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp)、[ecm_stage1_binary.h](../../src/ecm/storage/checkpoint/ecm_stage1_binary.h)：二进制外壳、长度边界、CRC32C、锁及轮换恢复。
 - [ecm_stage1_legacy_gpu.h](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h)：旧 CUDA ladder V5 导入及逐 lane 模数校验。
-- [ecm_edwards_gpu_checkpoint.h](../../src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h)：GPU Edwards 二进制/旧文本载荷及状态验证。
-- [adapter.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)：设备调度、同步及回读；[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)负责曲线布局与归一化，[host_io.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_io.cpp)负责保存点与输出。
+- [checkpoint.cpp](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)：GPU Edwards 二进制/旧文本载荷及状态验证。
+- [adapter.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)：设备调度、同步及回读；[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)负责曲线布局与归一化，[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)负责保存点，output.cpp 负责输出。
 - [arithmetic.cuh](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh)、[instances.cuh](../../src/ecm/backend/cuda/stage1/montgomery/instances/instances.cuh)、[registry.cu](../../src/ecm/backend/cuda/stage1/montgomery/registry.cu)：设备 ladder、按组实例及薄发射器。
 - [edwards_runtime.inl](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)、[instances.cuh](../../src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh)：Edwards 主机循环与设备实例。
 - [prac_runtime.inl](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl)：计划、策略、切片及恢复。
@@ -190,7 +192,7 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 
 [host_policy.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp)在普通 CXX 实现环境选项、PRAC 策略、计划缓存选择、切片目标、采样和窗口解析；读取仍在原执行位置。私有数据声明不包含 SDK，域编号在 [domain.h](../../src/ecm/backend/cuda/stage1/montgomery/prac/domain.h)集中维护，与实际设备分派共享。修改解析正文不重新编译 CUDA 协作；修改实际域值/数据合同仍使设备依赖失效。
 
-诊断窗口的 GPU export、同步与回读在 CUDA，CSV 编码在 host_io.cpp。窗口部分乘积始终失败返回，不提交 NF/save 或内部完成结果。resident/PRAC 的资源、实际 dispatch、事件和定时循环继续属于 CUDA 模块，不要求脱离 CUDA。
+诊断窗口的 GPU export、同步与回读在 CUDA，CSV 编码在 output.cpp。窗口部分乘积始终失败返回，不提交 NF/save 或内部完成结果。resident/PRAC 的资源、实际 dispatch、事件和定时循环继续属于 CUDA 模块，不要求脱离 CUDA。
 
 ## 应用群阶诊断
 

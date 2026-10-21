@@ -1,6 +1,6 @@
 # CUDA Stage1 统一执行架构实施草稿
 
-状态：P0–P2 完成；当前实现 0.46.2，P3 待实施。起点实现版本 0.45.28；实施提交使用 `[0.46.z]`。
+状态：P0–P2、P3a 完成；当前实现 0.46.3，P3b 待实施。起点实现版本 0.45.28；实施提交使用 `[0.46.z]`。
 
 本草稿是此次开发的权威记录；[规划报告](../web/architecture-review-20261021-cuda-stage1.html)保留获批方案、R1–R9 的依据和目标，不代表已经实现。规划来源为任务“规划统一 CUDA Stage1 架构”（01a15f10-45d2-7a73-aa13-9dc3702ef03d）最后一轮扩展方案。起点 ef800e6。既有沙箱诊断相关四项工作区修改不属于此次工作。
 
@@ -87,3 +87,21 @@ PARAM0/PARAM2 不可逆分母分为真因子与退化。真因子立即写既有
 开发失败证据保留：`p2/build_prac.log` 和 `adapter_failed_01.log` 记录了上游 CGBN 无 include guard 的重复引入，已统一使用仓库已有 guarded types.cuh；未修改第三方。`contracts.log` 是 PowerShell 将预期 stderr 误作错误，修正测试执行器后 `contracts_03` 通过。首次 PARAM2 进程用例命中受限构建缺失的 192 档位，换用原选档为 384 的输入后通过；没有修改 PARAM2 缺档语义或放宽门限。首次收尾脚本误用严格 UTF-8 解析带本地编码注释的 save（P1），改按严格 ASCII 数学字段比较，未改写原文件。
 
 P3 仍需完成对称 checkpoint 模块、外壳/载荷候选验证、计算/持久化游标、周期保存失败和末片停止协议、Edwards 发布前结果拥有权及构造因子即时通道。P4 的运行规格/进度/资源预算及完成档快路径尚未实施；本阶段新增的游标字段尚不对外作持久化保证。
+
+## P3a 完成：检查点模块与主机模型分责
+
+为分别审阅结构迁移与持久化行为修正，P3 分为 P3a（模块边界）和 P3b（恢复/提交合同），分别验证提交。P3a 为 0.46.3。
+
+两曲线均采用 checkpoint.h/.cpp 与 save_checkpoint / restore_checkpoint 动词。Montgomery 的进度、TTY、CSV 进入 output.h/.cpp；原 native 结构、版本和尺寸字段保持。Edwards Batch 在 batch.h，构造实现进入 host_math.cpp，codec 不再承载它们的实现。数组拥有权和点不变量回归已有 core/curve 数学头，batch 不引入文件实现。删去只转发 save 发布的 publish 函数。没有改动各算法循环、候选选择、保存触发或发布顺序；包括 Edwards 发布后分配结果的问题，仍待 P3b 修正。
+
+证据 `p3a/qualification.json`：
+
+- 正式 local PRAC 构建通过；仅 adapter 这一个实际依赖新接口的 CUDA TU 重编译，设备实例继续复用。
+- 16 个真实主机 CPP 以普通 CXX 编译，SDK 头和 CUDA 编译次数均为 0。
+- 19 个具名函数迁移、Edwards 完整工作流顺序、Reader 编解码、磁盘结构/常量以及 core 数组/点检查片段，对 P2 源码做保留字面量的 token/文本核对；字节格式及算法正文保持。
+- 64 曲线数学门禁通过，与 P0 完成点逐项相同。
+- 独立容器探针通过：旧外壳、损坏/备份、Edwards binary V1 / NAF V2 文本恢复与 V3 写入，坐标/因子一致及错误标量拒绝。探针不链接任务、队列或 CUDA。
+- 新 frozen-restore 门禁实际恢复 P0（0.45.28）冻结的 V3 与 PARAM0/2/3 V5 生产快照，32 条完成结果与旧程序保存结果一致，且原快照 SHA256 不变。首次门禁未启用 verbose，不能观察被节流的 Mont 恢复日志；加 -v 后再次运行全部通过，首轮目录保留。
+- 当前 include 图 366 文件、789 边，0 环和公开私有依赖边。未进行性能测量。
+
+正式 Stage1、Checkpoint、Save 的入口与职责说明已同步。现有 bool/int 恢复返回及候选选择行为尚未统一为 R5 合同；计算/提交游标、周期写失败优先级、末片停止、Edwards 结果/即时因子发布和完成档优化保持为后续明确待办，不因文件改名宣称完成。

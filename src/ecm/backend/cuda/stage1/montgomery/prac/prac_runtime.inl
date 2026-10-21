@@ -79,7 +79,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         std::vector<uint32_t> data(bytes / sizeof(uint32_t));
         bool resumed = false;
         if (!window.enabled()) {
-            resumed=resident_checkpoint_restore(path,h,data,sigma,prac);
+            resumed=restore_checkpoint(path,h,data,sigma,prac);
         }
         {
             size_t initial_bytes = 0;
@@ -167,7 +167,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             const bool stopping=ecm_stage1_stop_requested();
             if (sampled || stopping || h.next>=total || (checkpoint_ms && std::chrono::duration<double, std::milli>(now - last_ckpt).count() >= checkpoint_ms)) {
                 CUDA_CHECK(cudaMemcpy(data.data(), gpu.data, bytes, cudaMemcpyDeviceToHost));
-                if (!resident_checkpoint_write(path, h, data)) throw std::runtime_error("resident checkpoint write failed");
+                if (!save_checkpoint(path, h, data)) throw std::runtime_error("resident checkpoint write failed");
                 outputf(OUTPUT_ALWAYS, "GPU: checkpoint saved (Montgomery domain, next=%llu/%llu)\n",
                         (unsigned long long)h.next, (unsigned long long)total);
                 last_ckpt = std::chrono::steady_clock::now();

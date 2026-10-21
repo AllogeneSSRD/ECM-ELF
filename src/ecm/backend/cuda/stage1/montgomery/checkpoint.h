@@ -1,13 +1,12 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
-#include <cstdio>
 #include <ctime>
 #include <string>
 #include <vector>
 #include <gmp.h>
-#define CHECKPOINT_MAGIC 0x45555047  // EPUG -> "GPUE" in hex (GPU ECM)
-#define CHECKPOINT_VERSION 5         // v4 may contain incorrect noncanonical ladder state
+#define CHECKPOINT_MAGIC 0x45555047
+#define CHECKPOINT_VERSION 5
 namespace ecm_cuda_mont_host {
 typedef struct {
   uint32_t magic;            // Magic number for validation
@@ -29,19 +28,11 @@ struct ResidentCheckpoint {
     uint32_t version, algorithm, domain, bits, tpi, curves, torsion, reserved;
 };
 
-bool stdout_is_tty();
-void print_progress(double,uint64_t,uint64_t,double,double,double,bool,const char *unit="bits");
-bool should_emit_progress_line(int,double,double);
 char *get_checkpoint_filename(mpz_srcptr);
 int save_checkpoint(const char *,const checkpoint_header_t *,const uint32_t *,size_t);
-int load_checkpoint(const char *,checkpoint_header_t *,uint32_t **,size_t *);
-FILE *open_dump_csv(const char *);
-void dump_curve_state_csv(FILE *,const char *,int,uint64_t,uint64_t,uint32_t,uint32_t,uint32_t,const uint32_t *,uint32_t,size_t);
+int restore_checkpoint(const char *,checkpoint_header_t *,uint32_t **,size_t *);
 #if ECM_CUDA_ENABLE_PRAC
-bool resident_checkpoint_write(const std::string &,ResidentCheckpoint,const std::vector<uint32_t> &);
-bool resident_checkpoint_restore(const std::string &,ResidentCheckpoint &,std::vector<uint32_t> &,uint64_t *,bool);
+bool save_checkpoint(const std::string &,ResidentCheckpoint,const std::vector<uint32_t> &);
+bool restore_checkpoint(const std::string &,ResidentCheckpoint &,std::vector<uint32_t> &,uint64_t *,bool);
 #endif
-struct PracWindow;
-void write_prac_window_csv(const PracWindow &,uint64_t,uint64_t,uint64_t,uint32_t,uint32_t,const std::vector<uint32_t> &);
-
 }

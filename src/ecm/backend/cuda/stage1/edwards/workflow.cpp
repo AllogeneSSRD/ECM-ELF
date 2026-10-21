@@ -26,7 +26,8 @@ using ecm_stage1::stage1_publish_factor;
 #include <iterator>
 #include <stdexcept>
 
-#include "ecm_edwards_gpu_checkpoint.h"
+#include "checkpoint.h"
+#include "host_math.h"
 
 namespace ed_gpu_driver {
 struct Progress {
@@ -77,7 +78,7 @@ static bool progress(uint32_t done,void *context) {
     if(!p.printed || stop || done==p.total || sample_time-p.last_print>=std::chrono::milliseconds(200))
         p.display(sample_time);
     if(stop || (p.opt.persistence.ckpt_ms && now-p.last>=p.opt.persistence.ckpt_ms)) {
-        if(!p.path.empty() && !write_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
+        if(!p.path.empty() && !save_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
             p.finish();p.failed=true;
             ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
         }
@@ -89,9 +90,7 @@ static bool progress(uint32_t done,void *context) {
     if(stop){p.finish();ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u\n",p.b.window?"NAF column":"binary bit",done);}
     return !stop;
 }
-static bool publish(const std::string &path,const std::string &lines,bool append) {
-    return ecm_edwards::publish_save(path,lines,append);
-}
+
 }
 
 int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
@@ -128,7 +127,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=ecm_stage1_batch_sigma(i,opt.identity.sigma_fixed?opt.identity.fixed_sigma64+i:random_sigma_u64());
         const auto stem=mont_format_save_name(opt.persistence.save_name_pattern,n,b1,&opt);
         const auto path=opt.persistence.tmp_dir.empty()?std::string{}:ecm_stage1_curve_record(0);
-        bool restored=!path.empty() && restore(path,batch,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed);
+        bool restored=!path.empty() && restore_checkpoint(path,batch,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed);
         std::string existing;
         if(!restored && !path.empty() && !ecm_stage1_read_blob(path,existing)) {
             // Pre-container GPU Edwards used ed_<old-pattern>.save.gpu.ckpt.
@@ -137,7 +136,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
                 if(old.rfind("m0_",0)==0)old.erase(0,3);
                 const auto legacy=(std::filesystem::path(opt.persistence.tmp_dir)/("ed_"+old+".gpu.ckpt")).string();
                 Batch saved(curves);saved.sigmas=batch.sigmas;saved.window=batch.window;saved.doubling=batch.doubling;
-                if(restore(legacy,saved,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
+                if(restore_checkpoint(legacy,saved,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
                     if(ecm_results::contains_stage1_curves(opt.persistence.results_file,n,uint64_t(b1),true,0,saved.sigmas))continue;
                     batch.done=saved.done;batch.window=saved.window;batch.doubling=saved.doubling;
                     batch.sigmas=saved.sigmas;batch.hit=saved.hit;
@@ -185,7 +184,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         }
         if(rc==2){if(p.failed)out->fail(ecm_stage1::FailureSource::Publication);else out->stop();return ECM_ERROR;}
         phase=ecm_stage1::FailureSource::Publication;
-        if(!path.empty() && !write_checkpoint(path,batch,n,scalar.v,uint64_t(b1))) {
+        if(!path.empty() && !save_checkpoint(path,batch,n,scalar.v,uint64_t(b1))) {
             out->publish_failed=true;throw std::runtime_error("cannot retain completed Edwards batch");
         }
         phase=ecm_stage1::FailureSource::Execution;
@@ -213,7 +212,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         }
         const auto save=savefilename.empty()?(opt.persistence.tmp_dir.empty()?std::string{}:opt.persistence.tmp_dir+"/")+stem:savefilename;
         phase=ecm_stage1::FailureSource::Publication;
-        if(!publish(save,lines,saveappend)) {
+        if(!ecm_edwards::publish_save(save,lines,saveappend)) {
             out->publish_failed=true;throw std::runtime_error("cannot publish Edwards save "+save);
         }
         // Only remove the resume state after publishing the completed batch.

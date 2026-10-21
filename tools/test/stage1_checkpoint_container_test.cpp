@@ -1,5 +1,8 @@
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/checkpoint.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/host_math.h"
+#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "../../src/ecm/storage/checkpoint/ecm_stage1_binary.h"
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -85,17 +88,17 @@ static void edwards(const fs::path &dir,const fs::path &audit,bool naf=true) {
     const uint64_t b1=audit.empty()?1000:260000000;
     std::vector<uint64_t> sigmas(count,0);std::vector<std::string> records(count);records[0]=payload;
     write(p,v1(identity,sigmas,records));ecm_stage1_set_checkpoint_path(p);ecm_stage1_begin_batch(identity,count,false,0);
-    Batch before(count);check(restore(ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false,false,false,-1),"legacy Edwards restore");
+    Batch before(count);check(restore_checkpoint(ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false,false,false,-1),"legacy Edwards restore");
     const auto bytes=checkpoint_body(before,n.v,scalar.v,b1);
     check(bytes.size()<payload.size() || audit.empty(),"Edwards compactness");
     check(ecm_stage1_write_blob(ecm_stage1_curve_record(0),bytes),"Edwards binary write");ecm_stage1_end_batch(false);
     ecm_stage1_set_checkpoint_path(p);ecm_stage1_begin_batch(identity,count,false,0);
-    Batch after(count);check(restore(ecm_stage1_curve_record(0),after,n.v,scalar.v,b1,false,false,false,-1),"binary Edwards restore");
+    Batch after(count);check(restore_checkpoint(ecm_stage1_curve_record(0),after,n.v,scalar.v,b1,false,false,false,-1),"binary Edwards restore");
     check(before.done==after.done && before.sigmas==after.sigmas && before.hit==after.hit,"Edwards metadata changed");
     for(size_t i=0;i<count*9;++i)check(mpz_cmp(before.state[i],after.state[i])==0,"Edwards coordinates changed");
     for(size_t i=0;i<count;++i)check(mpz_cmp(before.factors[i],after.factors[i])==0,"Edwards factor changed");
     mpz_add_ui(scalar.v,scalar.v,2);Batch wrong(count);
-    check(!restore(ecm_stage1_curve_record(0),wrong,n.v,scalar.v,b1,false,false,false,-1),"scalar fingerprint did not reject");
+    check(!restore_checkpoint(ecm_stage1_curve_record(0),wrong,n.v,scalar.v,b1,false,false,false,-1),"scalar fingerprint did not reject");
     std::cout<<"edwards_payload old_bytes="<<payload.size()<<" new_bytes="<<bytes.size()<<" curves="<<count<<" all_coordinates_equal=1\n";
     ecm_stage1_end_batch(false);
 }

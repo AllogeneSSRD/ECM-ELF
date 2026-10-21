@@ -139,7 +139,9 @@ foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/result
                 src/ecm/backend/opencl/stage1/montgomery/workflow.cpp
                 src/ecm/backend/cuda/stage1/montgomery/workflow.cpp
                 src/ecm/backend/cuda/stage1/edwards/workflow.cpp
-                src/ecm/backend/cuda/stage1/montgomery/host_math.cpp src/ecm/backend/cuda/stage1/montgomery/host_io.cpp
+                src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp
+                src/ecm/backend/cuda/stage1/edwards/host_math.cpp
+                src/ecm/backend/cuda/stage1/montgomery/host_math.cpp src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp src/ecm/backend/cuda/stage1/montgomery/output.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp
                 src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
                 include/ecm/platform/stage1_progress.h)

@@ -148,7 +148,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、指数总长/进度及数组几何，并恢复保存的 BITS/TPI；相应内核须存在。原始 V5 自动导入另逐 lane 核对完整 N。保存整个指数不必要：当前任务重新生成相应指数。
 
-来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/host_io.cpp)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/storage/checkpoint/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp#L937)。
+来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/storage/checkpoint/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp#L937)。
 
 ### 4.2 GPU Edwards V3
 
@@ -186,7 +186,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 大小精确为 **68 + bytes(N) + 52C + Σbytes(fᵢ) + Σbytes(vᵢⱼ)**，j=0..8。外层仍须再加自身开销。NAF 字典、完整指数、GPU 内存布局均不在该公式内。
 
-来源：[V3 编码和恢复](../../src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h#L38)、[GPU 驱动和安全边界](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
+来源：[V3 编码和恢复](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)、[GPU 驱动和安全边界](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
 
 ### 4.3 CPU Montgomery 文本记录 V1
 
@@ -304,7 +304,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 原始独立 GPU 来源只读保留。若内部结果账本已经确认其全部 sigma 完成，则跳过自动导入；仅将旧文件复制到全新目录而不携带账本，无法从该旧文件得知它是否已在别处完成。当前非空算术载荷优先，不用独立旧档覆盖它。
 
-来源：[V1 外层读取](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L254)、[CUDA V5 导入](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h#L14)、[Edwards 旧格式读取](../../src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h#L97)、[独立 Edwards 导入](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
+来源：[V1 外层读取](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L254)、[CUDA V5 导入](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h#L14)、[Edwards 旧格式读取](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)、[独立 Edwards 导入](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
 
 ## 7. Stage2 队列进度格式
 
