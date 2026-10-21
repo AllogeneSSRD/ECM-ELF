@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ECM 主流程重构完整方案</title><script src="https://cdn.tailwindcss.com"></script><style>
+
+:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f7f7f4;color:#202625;font:16px/1.7 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1120px;margin:auto;padding:42px 28px 70px}h1{font-size:30px;line-height:1.35;margin:0 0 12px}h2{font-size:23px;margin:0 0 14px}h3{font-size:18px;margin:0 0 10px}p{margin:9px 0}.caption,.files{font-size:13px;color:#59615e}.lead{font-size:19px;max-width:900px}.tag{display:inline-block;padding:2px 10px;border:1px solid #c9d2cc;border-radius:3px;font-size:12px;margin-right:6px}.strong{color:#166147;background:#eaf2ed}.explore{color:#755b27;background:#f6f1e7}.overview{display:grid;grid-template-columns:1.35fr 1fr;gap:28px;margin:30px 0 40px}.recommend{border-left:4px solid #26634c;padding:12px 20px;background:#edf3ef}.axes{padding:14px 20px;background:white;border:1px solid #d8ddda}.row{display:flex;gap:9px;align-items:center;justify-content:center}.node{border:1px solid #bbc6bf;background:white;padding:10px;text-align:center;min-width:95px;flex:1}.deep{border:2px solid #26634c;background:#eff5f1}.private{font-size:13px;color:#69716c}.split{display:grid;grid-template-columns:1fr 1fr;gap:22px}.diagram{padding:18px;background:#f5f6f3;min-height:185px}.diagram .row{margin:9px 0}.arrow{text-align:center;color:#60716a;font-size:20px;line-height:1.3}.label{font-size:12px;color:#5f6e65;margin-bottom:10px}.card{background:white;border-top:1px solid #cbd2ce;padding:26px 22px;margin:20px 0}.wins{display:flex;gap:22px;flex-wrap:wrap;color:#32624e;font-size:14px}.flow{display:flex;gap:8px;align-items:stretch;margin:15px 0;flex-wrap:wrap}.step{flex:1;min-width:130px;padding:12px;border-top:3px solid #879a8d;background:#f1f3ef}.step b{display:block;font-size:14px}.step span{font-size:12px;color:#5e665f}table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}th,td{padding:10px 12px;border-bottom:1px solid #dde1dc;text-align:left;vertical-align:top}th{font-weight:600;background:#f0f3ee}footer{margin-top:36px;border-top:1px solid #ccd4ce;padding-top:18px}.path{word-break:break-all;font-family:ui-monospace,Consolas,monospace;font-size:12px}a{color:#256747;text-decoration:underline} @media(max-width:760px){.overview,.split{grid-template-columns:1fr}main{padding:25px 16px}.node{min-width:65px}h1{font-size:25px}}
+
+
+.review-nav{display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 36px;padding:13px 0;border-top:1px solid #cbd2ce;border-bottom:1px solid #cbd2ce;font-size:14px}
+.granularity{margin-bottom:42px}.decision-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin:24px 0}.decision-grid>div{border-top:3px solid #95a99a;padding-top:12px}.decision-grid p{font-size:14px}
+.table-scroll{overflow-x:auto}table{table-layout:fixed}th,td{overflow-wrap:anywhere}code{font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow-wrap:anywhere}.action-table th:nth-child(1){width:30%}.action-table th:nth-child(2){width:17%}
+.open-section{margin:35px 0}.critical-note{border-left:4px solid #846d3e;background:#f5f1e7;padding:22px;margin:32px 0}.numbered{padding-left:23px}.numbered li{margin:12px 0}
+.architecture-details{border-top:1px solid #bbc6bf;margin-top:32px;padding-top:14px}.architecture-details>summary{cursor:pointer;font-size:21px;font-weight:600;padding:8px 0}.files{overflow-wrap:anywhere}
+@media(max-width:760px){.decision-grid{grid-template-columns:1fr;gap:12px}table{min-width:590px}.diagram .row{flex-wrap:wrap}}
+
+
+.runtime-section{margin:30px 0 42px}.behavior-legend{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}.behavior-legend span{font-size:12px;padding:4px 9px;background:#edf1ed;border:1px solid #cbd5cc}
+.runtime-table th:first-child{width:19%}.runtime-table th:nth-child(2){width:43%}.formula-line{padding:18px 20px;background:#eef4ef;border-left:3px solid #387256;line-height:1.95;margin:17px 0;font-family:system-ui,"Microsoft YaHei",sans-serif}
+.flow-detail{border-top:1px solid #cbd2ce;padding:14px 0;margin:8px 0}.flow-detail>summary{font-size:17px;font-weight:600;cursor:pointer;padding:4px 0}.flow-detail p{font-size:14px}.slice-comparison{padding:15px;background:#f1f4ef;line-height:1.9;font-size:14px}
+
+
+.compile-table th:first-child{width:17%}.compile-table th:nth-child(2){width:39%}
+.driver-stages{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}
+.driver-stages>div{padding:14px 13px;border-top:3px solid #8ba08e;background:#eef2eb}
+.driver-stages b{display:block;font-size:15px;margin-bottom:6px}.driver-stages span{font-size:13px;line-height:1.75;display:block}.driver-stages .execution-stage{background:#e3eee7;border-color:#26634c}
+@media(max-width:900px){.driver-stages{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.driver-stages{grid-template-columns:1fr}}
+
+
+main{max-width:1220px}.plan-section{margin:44px 0;padding-top:12px;scroll-margin-top:20px}
+.plan-section h2{font-size:25px;border-bottom:1px solid #cbd3cd;padding-bottom:12px}
+.plan-section h3{margin:30px 0 12px;font-size:19px;scroll-margin-top:20px}
+.plan-section p{margin:12px 0;max-width:1120px}
+.plan-list{padding-left:24px}.plan-list li{margin:9px 0}
+.plan-section table{table-layout:auto;min-width:720px;font-size:14px;line-height:1.7}
+.plan-section th:first-child{width:24%}.plan-section th, .plan-section td{overflow-wrap:anywhere}
+pre{margin:0 0 22px;padding:20px 22px;background:#18251f;color:#e7eee8;overflow-x:auto;border-radius:4px;line-height:1.72;tab-size:4}
+pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-space:pre;overflow-wrap:normal;color:inherit}
+.code-caption{font-size:12px;background:#e1e9e2;padding:7px 12px;border-radius:4px 4px 0 0;color:#375044;letter-spacing:.05em}
+.hero-note{padding:19px 22px;background:#e8f0e9;border-left:4px solid #256348;margin:22px 0}
+.phase-title{border-left:4px solid #486d55;background:#edf2eb;padding:10px 15px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin:24px 0}
+.kpis>div{padding:12px 15px;border-top:3px solid #789481;background:#eef1eb}
+.kpis b{display:block;font-size:20px}.kpis span{font-size:12px;color:#59665e}
+.phase-nav{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}
+.phase-nav a{padding:5px 12px;border:1px solid #b9c7bb;background:#f1f4ef;border-radius:2px;font-size:13px}
+.evidence-details{margin:45px 0 0;border-top:2px solid #9bae9e;padding-top:16px}
+.evidence-details>summary{font-size:22px;font-weight:600;cursor:pointer;padding:10px 0}
+.evidence-details .runtime-section,.evidence-details section{margin-top:26px}
+.pipeline{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.pipeline span{padding:8px 11px;background:#e9efe8;border:1px solid #c8d3c9;font-size:14px}
+@media(max-width:800px){.kpis{grid-template-columns:repeat(2,1fr)}.plan-section h2{font-size:22px}pre{padding:16px 13px}}
+@media print{body{background:white}main{max-width:none;padding:10px}.review-nav,.phase-nav{display:none}pre{white-space:pre-wrap;background:#f1f4ef;color:#111}.evidence-details{break-before:page}}
+</style></head><body><main>
+<header><div class="caption">ECM-ELF · 2026-10-21 · 设计与实施计划 / 尚未实施</div>
+<h1>主流程重构完整方案</h1><p class="lead">构建复用先行；明确 driver、task、factory 与 QueueWorkflow 的职责，精简重复封装。完整目录、Interface、伪代码与阶段门槛。</p>
+<div class="hero-note"><strong>本轮只整合文档。</strong>设备资源、上传、执行、同步和回读继续留在 CUDA Adapter。普通配置、主机准备、存档和输出改变时，目标是只重编受影响 CXX 并链接。</div>
+<div class="kpis"><div><b>31 个 CU</b><span>用户日志中的全量编译单元</span></div><div><b>1535.6 秒</b><span>单次 CUDA 编译阶段墙钟，非总脚本</span></div><div><b>默认逐 TU 复用</b><span>先落实 build_cuda_local 等隔离根</span></div><div><b>P0—P7</b><span>阶段交付与验收门槛</span></div></div>
+<p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。本次仅修订职责设计，未重新审计当前并行源码；原始快照保持不变。未构建或新增性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
+<p>本节是整合后的<strong>实施方案，状态为待实施</strong>；前文保留现状、数学和耦合依据。它不把目标目录写成当前结构，也不授权本轮修改代码。后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
+<p>整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的<a href="../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json">读取快照</a>，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。</p>
+<p>目标为：顶层按 application、service、core、backend、storage、platform 划分职责；计算 Implementation 按后端、阶段、曲线组织；include 只暴露跨 Module 必需的 Interface；CUDA 的主机、设备和实例统一进入 src。配置、主机曲线准备、文件编码与展示可普通 CXX 编译；需要 CUDA runtime 的资源、上传、执行、同步与回读继续留 CUDA Adapter。</p>
+<p>以下保持现有行为：独立 Stage1/Stage2 程序及 GUI 子进程模式、曲线身份与有效标量、受支持组合、配置优先级、文件格式与兼容范围、即时因子提交、checkpoint 安全点、队列完成顺序、生产算术检查和设备常量所有权。组织重构不同时升级算法、默认值、语言标准或文件协议。</p>
+<h3 id="决定模块粒度的规则">决定模块粒度的规则</h3>
+<ul class="plan-list">
+<li>一个 Module 隐藏一套完整规则，如一次任务、一次执行、恢复存储或结果发布。不是一文件一模块，也不是一函数一类。</li>
+<li>core 中频繁一起修改的构造/归一化/结果分类收回同一数学职责；稳定的进度单位、算术不变量和文件协议定义可以继续是小文件。</li>
+<li>公开 Interface 隐藏顺序、所有权和失败处理，形成 Depth；私有 .cpp、.cu、.cuh、.inl 可以按编译与阅读需要拆分。</li>
+<li>用阶段/批次级运行时选择连接 Adapter；域乘、点加倍和逐位热循环不新增跨 Module 虚调用。无需动态插件和深继承树。</li>
+<li>文件位置回答“功能在哪里”；依赖合同回答“改动影响谁”；构建与行为验收共同证明 Locality，文件行数不能单独证明复杂度下降。</li>
+</ul>
+</section>
+<section class="plan-section" id="plan-build"><h2>首先调整构建复用与输出隔离</h2>
+<h3 id="当前样例说明了什么">当前样例说明了什么</h3>
+<p>用户提供的 <a href="../../data/experiments/main_flow_refactor_plan_20261021/user_build_observation.txt">完整原始文本与构建日志</a> 记录一份 Stage1 LOCAL 构建：sm_89、压缩 ON、PTX OFF、tiers=all、resident/PRAC OFF、Jobs=8、CUDA 13.3、MSVC 14.51.36231；31 个 CUDA TU 全部编译，CUDA 并行编译阶段墙钟 1535.6 秒，最长 TU 1535.0 秒，并发 TU elapsed 之和为 8477.9 秒。之后还执行 CXX 编译和链接；不能把 1535.6 秒作为完整脚本耗时，也不能用 8477.9/1535.6 推导实测加速比。</p>
+<p>这是用户提供的单个样本，未复现。源码/二进制完整身份、CPU 型号、内存、系统负载与功耗条件未提供；sm_89 不是实体 GPU 型号。这里据此确定验收重点为“同配置复用”和“无关主机修改零 CU 编译”，不宣称重构后的耗时或性能提升。原始文本按字节保留，SHA256 为 A044EE0B4891EF4F86AF2F586BCA39275D9571D01133FFDF6F02F8B3710B9D25。</p>
+<p>现有策略见前文“当前重编的三个来源”：Stage1 仅 Incremental 启用逐对象跳过；Stage2 普通 local 在整体 signature 变化后重编全部源。先解决这些策略，再用后续提取缩小真实依赖。</p>
+<h3 id="目标输出目录">目标输出目录</h3>
+<p>dev/local/release 是用途，不等同于 Debug/Release 编译配置。目录名、profile marker 和实际编译参数必须同时一致。下表是目标，不是当前默认值；CPU/GUI/OpenCL 尚无完整正式入口族，不能写成已经具备。</p>
+<div class="table-scroll"><table><thead><tr><th>程序与用途</th><th>目标构建叶目录模式</th><th>约束</th></tr></thead><tbody>
+<tr><td>CUDA Stage1 local</td><td>build_cuda_local/stage1/sm89/&lt;profile-key&gt;/</td><td>本机生产策略；默认 all tiers、压缩 ON、无 PTX、PRAC OFF。架构可显式选择。</td></tr>
+<tr><td>CUDA Stage2 local</td><td>build_cuda_local/stage2/production/sm89/&lt;profile-key&gt;/</td><td>生产引擎；与 Stage1 独立 cache/对象/清单。</td></tr>
+<tr><td>CUDA Stage1 dev</td><td>build_cuda_dev/stage1/sm89/&lt;profile-key&gt;/</td><td>可缩小 tiers 或显式改参数；不借用 local/release 叶目录。</td></tr>
+<tr><td>CUDA Stage2 生产主流程开发</td><td>build_cuda_dev/stage2/production/sm89/&lt;profile-key&gt;/</td><td>编译生产引擎做开发，不因用途为 dev 自动切实验引擎。</td></tr>
+<tr><td>现有 Stage2 development engine</td><td>build_cuda_dev/stage2/experimental/sm89/&lt;profile-key&gt;/</td><td>明确保留实验身份；不进入生产源闭包和发布包。实验实现本身不在本次重构范围。</td></tr>
+<tr><td>CUDA Stage1 release</td><td>build_cuda_release/stage1/&lt;toolkit-group&gt;/&lt;arch-set&gt;/&lt;profile-key&gt;/</td><td>保留 CUDA12.6/13.3 分组与现有拆架构策略，不强用 local 参数。</td></tr>
+<tr><td>CUDA Stage2 release</td><td>build_cuda_release/stage2/&lt;toolkit-group&gt;/&lt;arch&gt;/&lt;profile-key&gt;/</td><td>每架构独立。当前 60/70 使用 12.6，其余目标使用 13.3；以实际支持检查为准。</td></tr>
+<tr><td>CPU Stage2 dev/local/release</td><td>build_cpu_&lt;role&gt;/stage2/&lt;libecm-or-gwpoly&gt;/&lt;profile-key&gt;/</td><td>新增正式入口时使用；当前入口在 tools/build/test，仍构建生产程序。CPU Stage1 继续随主 worker，不新增独立程序。</td></tr>
+<tr><td>OpenCL Stage1 dev/local/release</td><td>build_opencl_&lt;role&gt;/stage1/&lt;profile-key&gt;/</td><td>若补齐入口族，使用独立根；运行时 kernel cache 另按设备与内容身份管理。</td></tr>
+<tr><td>GUI dev/local/release</td><td>build_gui_&lt;role&gt;/&lt;profile-key&gt;/</td><td>正式 local/release 默认只编生产 GUI；fake worker/独立测试显式选择。</td></tr>
+</tbody></table></div>
+<p>叶目录统一容纳以下构建产物，不与用户运行文件混放：</p>
+<div class="code-caption">目标目录 / 构建流程</div><pre><code>&lt;build-leaf&gt;/
+├── profile.json                 # 用途、engine、工具链、ABI和编译策略
+├── cmake/                       # CMakeCache、生成规则、owner graph（如使用CMake）
+├── objects/                     # 或由CMake管理的对象目录；一份实际所有者
+├── state/                       # 每TU指纹、depfile索引、构建/链接/拆分/打包清单
+├── logs/                        # configure、逐TU、link及汇总
+└── bin/                         # exe、所需DLL、运行时资源与身份sidecar</code></pre>
+<p>objects/state 是职责名称，不要求第一步强行改变 CMake 私有对象布局；统一位置由构建 profile 解析器返回，消费者不得再猜目录或单独拼旧路径。日志、清单、DLL 与 exe 均属于同一 profile。发布包继续放现有 dist/cuda、dist/cuda-stage2-* 对应目录，与 build 根分离；保持当前包内容和多架构发布资格限制，重构本身不恢复尚未完成的发布资格。</p>
+<p>用户 TOML、worktodo、checkpoint、save、result 和实验数据不因 build 根改名而自动搬移或覆盖。更改 exe 输出位置时同步 GUI/启动器的定位规则、资源根和显式路径处理，验证工作目录变化不会意外改读另一份配置/队列。</p>
+<h3 id="profile-key-与身份">profile-key 与身份</h3>
+<p>profile-key 基于<strong>配置兼容性</strong>：用途、程序/engine、toolkit 组和版本、架构集合、CMake generator/config、MSVC/CRT、默认流、优化/设备宏、tiers/实例选择、PTX/压缩、PRAC、GMP 等 ABI/依赖策略。它不包含每个业务源码 hash 或每次 HEAD，否则修改一个 .cpp 就新建目录，失去增量价值。</p>
+<p>profile.json 保存可读字段和完整配置 hash，短 key 冲突时核对完整字段。显式 BuildDir/Build 同样检查 marker；不得静默把 local 叶目录改标成 release，或把实验叶目录改标为 production。配置组合变更使用另一叶目录；同一组合的源码变化由逐 TU 指纹处理。</p>
+<p>完整构建身份仍绑定源码、生成物、编译对象与 exe。区分“配置兼容身份”“逐 TU 编译身份”“链接/发布身份”，不是删去任一层校验。Stage1 host sidecar 继续避免整程序源码身份污染所有 CUDA 命令。</p>
+<h3 id="统一构建模式与编译规则">统一构建模式与编译规则</h3>
+<div class="table-scroll"><table><thead><tr><th>模式</th><th>精确定义</th><th>不满足时</th></tr></thead><tbody>
+<tr><td>默认 reuse</td><td>逐 TU 校验命令、include/depfile/response、工具链和对象 hash；只编译失效单元；链接输入变化才链接</td><td>只构建需要更新的单元，给出失效原因。</td></tr>
+<tr><td>rebuild / FullRebuild</td><td>显式重编当前 profile 的必要单元</td><td>不删除其他 profile、用途、架构或原始证据。</td></tr>
+<tr><td>reconfigure</td><td>更新生成配置和构建图</td><td>不等于清空对象。</td></tr>
+<tr><td>HostOnly</td><td>强约束不重编 .cu；有效 CUDA 对象必须全部可复用；主机按失效状态编译并链接</td><td>缺对象、合同/依赖/命令变化时提前失败，不静默回退全量 CUDA 编译。</td></tr>
+<tr><td>SkipBuild</td><td>完全不编译，只对完整身份匹配的冻结产物继续拆分/打包</td><td>失配即拒绝，不能补写清单冒充新产物。</td></tr>
+<tr><td>RelinkOnly</td><td>若保留此名，只允许已验证有效对象参与链接</td><td>主机/CUDA 对象过期则拒绝。当前 Stage1 此开关实际调用普通 cmake --build，迁移时兼容名称需明确告知新语义。</td></tr>
+</tbody></table></div>
+<p>互斥选项如 HostOnly+rebuild 明确拒绝。Incremental 可保留为旧入口兼容参数；新默认已经 reuse，不再需要用户记忆该开关。BAT 仅转发，默认值继续只维护在 PS1，生产源清单与 owner graph 保持唯一来源。</p>
+<p>普通 .cpp 逐步用兼容 CXX 编译器；.cu 用 NVCC。Stage2 现有 .cpp 也由 nvcc 驱动，先完成对象复用，再独立验证切 CXX 的 CRT、宏、异常/分配、GMP 与 CUDA 链接；设备 runtime 无需脱离 CUDA。SDK 只由实际选择的后端查找，根 CMake 的无条件 OpenCL 查找应收紧。共用源不自动共用对象：Stage1 两个 worker 的后端宏不同，只有编译合同一致才共用库。</p>
+<p>概念构建流程：</p>
+<div class="code-caption">目标目录 / 构建流程</div><pre><code>profile = resolve_and_validate_role_program_options()
+leaf = locate_isolated_leaf(profile)
+assert_profile_marker_compatible(leaf, profile)
+graph = generate_from_single_source_inventory(profile)
+
+for unit in graph.required_translation_units:
+    state = fingerprint(current_command, dependencies, toolchain, object)
+    if state.valid:
+        reuse(unit)
+    else:
+        if mode forbids_compilation_of(unit):
+            fail_with_reason(unit, state.reason)
+        compile_with_language_compiler(unit)
+        verify_inputs_unchanged_during_compile(unit)
+        record_object_identity(unit)
+
+if mode permits_link and link_inputs_or_command_changed:
+    link_and_record_identity()
+verify_final_source_object_exe_identity()
+write_summary(cxx_compiled, cu_compiled, reused, invalidation_reasons, timing_boundaries)</code></pre>
+<p>当前内容指纹会保守扫描预处理分支；改注释、移动路径也可能失效，这是有依据的重编。不能以“看起来不影响 GPU”为由忽略依赖。</p>
+<h3 id="旧目录和已有对象的处理">旧目录和已有对象的处理</h3>
+<p>保留 build_cuda_cmake 等旧目录及清单，不移动、删除或重写原始证据。过渡期间可显式用旧目录进行<strong>原用途</strong>的验证复用；它不能成为 release/其他 engine 的缓存。</p>
+<p>新默认目录首次可能需要完整编译。现有指纹包含绝对命令、working directory、response 和对象路径；不能直接复制/改名 CMakeCache、obj、.ecm-state.json，再宣称等价。跨目录 artifact import 是可选后续优化，必须验证旧对象、输入/ABI等价和来源，不作为本次默认增量的前提。源码目录迁移导致的合法一次重编也要记录，不许刷新 hash 绕过。</p>
+</section>
+<section class="plan-section" id="plan-tree"><h2>完整目标目录</h2>
+<p>这是<strong>模块级完整目标树</strong>，列出关键 Interface 和实现家族；不是把每个旧 helper 固定为一个新文件。只创建有实际使用的公开头，不要求空目录镜像。配置定义、第三方、测试和工具保持原领域；本次只调整必要构建入口与消费者路径。</p>
+<div class="code-caption">目标目录 / 构建流程</div><pre><code>ECM-ELF/
+├── CMakeLists.txt
+├── config/                              # ecm_options.json是配置唯一事实源
+├── include/ecm/                         # 跨Module Interface；无设备模板
+├── src/ecm/                             # 全部生产主流程Implementation
+├── tools/build/                         # dev/local/release及内部构建引擎
+├── tools/build/test/                     # 现有验证/探针；必要路径适配
+├── docs/                                # 正式状态文档与本设计草稿
+├── data/                                # 忽略的原始证据/运行与实验数据
+├── third_party/                         # 第三方依赖，不做内部重构
+├── .refactor/                           # 外部参考
+├── build_&lt;backend&gt;_&lt;role&gt;/               # 隔离构建；具体层次见前节
+└── dist/                                # 发布包</code></pre>
+<p>公开表面与实现使用对应路径：</p>
+<div class="code-caption">目标目录 / 构建流程</div><pre><code>include/ecm/
+├── application/
+│   ├── configuration/
+│   │   ├── settings.h                   # CLI/GUI共享模型和归一化入口
+│   │   └── generated/                   # 仅确需跨Module的生成声明
+│   └── gui/worker_controller.h           # 仅worker编排的窄接口
+├── core/
+│   ├── integer.h                        # 现有GMP的拥有值/借用合同
+│   ├── curve/{identity,construction,point}.h
+│   ├── stage1/scalar.h
+│   ├── stage2/{model,geometry}.h
+│   └── result/outcome.h
+├── service/
+│   ├── stage1/task.h                     # 数学请求、执行偏好、任务结果
+│   ├── stage2/task.h                     # 独立续算与父子编排合同
+│   ├── execution/{stage1,stage2}.h        # 粗执行Interface、能力、协作
+│   ├── planning/planner.h                # Auto B2 / D / 调优流程的输入输出
+│   └── work/{checkpoint,publication,queue}.h # queue.h声明workflow与文件合同
+├── backend/
+│   ├── cpu/factory.h
+│   ├── cuda/factory.h
+│   └── opencl/factory.h
+├── storage/{save,profile,cache,factory}.h # 数据合同与文件Adapter创建入口
+└── platform/{logging,process,file_commit}.h</code></pre>
+<div class="code-caption">目标目录 / 构建流程</div><pre><code>src/ecm/
+├── application/
+│   ├── cli/                             # Stage1 main/命令、stdin、帮助
+│   │   └── diagnostics/                 # 当前PARI群阶诊断等私有功能
+│   ├── cuda_stage2/                      # 独立main/命令与程序组装
+│   ├── cpu_stage2/                       # 当前CPU Edwards续算入口
+│   ├── gui/                             # 视图、UI状态、worker_controller
+│   │   └── models/                      # 现有概率、结果、生成等纯模型
+│   └── configuration/                   # 解析、生成物适配、兼容归一化
+│       └── generated/                   # 默认值/键描述/解析表等私有生成物
+├── core/
+│   ├── integer.cpp
+│   ├── curve/
+│   │   ├── identity.cpp
+│   │   ├── montgomery/                  # param0/2/3数学构造、检查
+│   │   └── edwards/                     # 数学构造、映射与完成点检查
+│   ├── stage1/                          # K构建、共享的NAF/PRAC数学语义
+│   ├── stage2/                          # bounds、geometry、D候选、概率/relocation
+│   └── result/                          # proper factor、退化/饱和分类
+├── service/
+│   ├── stage1/task.cpp                   # 唯一任务编排；Session默认私有同文件
+│   ├── stage2/                          # 独立任务、父子运行、receipt恢复
+│   ├── execution/                       # 只在有共享Implementation时建；不包转发层
+│   ├── planning/                        # 搜索/采样编排，不包含文件编码
+│   └── work/queue_workflow.cpp           # 循环与完成/失败/交接的完整私有实现
+├── backend/
+│   ├── cpu/
+│   │   ├── factory.cpp
+│   │   ├── arithmetic/{scalar,ifma}/    # GMP/MPN与IFMA；非曲线身份
+│   │   ├── stage1/{montgomery,edwards}/ # scalar/SIMD批执行和私有恢复
+│   │   └── stage2/{libecm,gwpoly}/
+│   ├── cuda/
+│   │   ├── factory.cpp
+│   │   ├── runtime/                    # device/memory/stream/event/error
+│   │   ├── dispatch/                   # tiers.def、能力和实例注册
+│   │   ├── arithmetic/{cgbn,goldilocks}/
+│   │   ├── stage1/
+│   │   │   ├── montgomery/
+│   │   │   │   ├── prepare.cpp         # 仅CUDA所需的主机布局准备
+│   │   │   │   ├── adapter.cu          # 资源、chunk、launch、同步/回读
+│   │   │   │   ├── launch.h            # 私有设备调用合同
+│   │   │   │   ├── point.cuh           # 私有设备算法
+│   │   │   │   ├── instances/          # 保留param/位宽/TPI独立TU
+│   │   │   │   └── prac/               # 当前可选resident/PRAC
+│   │   │   └── edwards/
+│   │   │       ├── prepare.cpp         # 主机NAF编码与布局准备
+│   │   │       ├── adapter.cu          # 允许保留runtime.cu形式
+│   │   │       ├── launch.h
+│   │   │       ├── point.cuh
+│   │   │       └── instances/
+│   │   ├── stage2/                     # 现有host引擎、private context、
+│   │   │                               # points/product/tree/remainder/S4/设备算术
+│   │   ├── ntt/                        # shape/runtime/graph/transform及实例
+│   │   └── planning/                   # CUDA形状、精度、内存/驻留模型
+│   └── opencl/
+│       ├── factory.cpp
+│       ├── runtime/                    # context/program/cache/资源加载
+│       ├── arithmetic/                 # 生产路径、manifest与组装
+│       ├── stage1/montgomery/          # 当前param3执行与私有恢复
+│       └── resources/                  # 生产.cl与include资源
+│           └── diagnostics/mont.cl     # 当前bench/mont.cl的生产自检用途
+├── storage/
+│   ├── factory.cpp
+│   ├── queue/                          # worktodo格式、锁、原子改写
+│   ├── checkpoint/                     # 外壳、主备、codec、legacy接纳
+│   ├── save/                           # 完成点读写和兼容
+│   ├── results/                        # data/ledger/submission/internal/seal
+│   ├── profile/                        # tune.toml读写、合并与schema
+│   ├── cache/                          # K/计划等主机缓存文件
+│   └── transfer/                       # Stage2 outbox/Prime95协议
+└── platform/                           # 日志、进程、路径/原子文件操作</code></pre>
+<p>映射关系为 include/ecm/&lt;module-path&gt;/ 与 src/ecm/&lt;module-path&gt;/；纯 Interface 可以无同名 .cpp，私有实现不创建公共镜像。CUDA 的 launch.h、.cuh、CGBN 类型、tiers 和实例留 src；其他 Module 只使用阶段合同与 factory。现有 include/ecm.h 等项目头通过私有兼容层过渡，避免与 libecm 的 &lt;ecm.h&gt; 混淆。</p>
+<p>配置字段、默认值、范围及说明仍只在config/ecm_options.json维护。生成器只作必要的输出路径适配，公开模型与私有解析表由同一来源生成，参考文档继续为生成物；不手工维护第二套默认值，不把完整生成schema传入设备编译闭包。</p>
+<p>原 kernels/cuda 的生产内容全部迁入 src/ecm/backend/cuda，不把实例合成巨型 .cu、不改变常量单一所有者或默认流、不因此引入 RDC。生产 OpenCL 资源也进入 src；<a href="../../src/opencl_ecm_selftest.cpp">opencl_ecm_selftest.cpp</a> 第 32–36 行读取的 bench/mont.cl 属于生产自检输入，迁入 diagnostics 时同步 loader 与打包。不能按 bench/test 文件名删除生产必需行为；纯测试/实验资源不进入生产清单。</p>
+</section>
+<section class="plan-section" id="plan-modules"><h2>模块职责、依赖与构建目标</h2>
+<div class="table-scroll"><table><thead><tr><th>Module / 建议构建目标</th><th>输入 → 输出</th><th>拥有的 Implementation；禁止承担的职责</th></tr></thead><tbody>
+<tr><td>application / 现有各 exe</td><td>CLI/TOML/GUI命令/队列来源 → 规范化请求、退出码或UI快照</td><td>文本、路径解释、组装factory、展示；不拆装设备状态。不同程序命令语义保留。</td></tr>
+<tr><td>core / ecm_core</td><td>数学身份、整数、bounds → 构造/标量/几何/分类结果</td><td>GMP主机数学和不变量；不读文件、配置、设备或Windows状态。</td></tr>
+<tr><td>service/stage1 / ecm_service</td><td>Stage1Request + 执行/存储能力 → TaskResult</td><td>session、恢复/准备/运行/最终发布；不读取worktodo语法或持有CUDA指针。</td></tr>
+<tr><td>service/stage2 / ecm_service</td><td>save任务、选择与进程能力 → receipt确认的续算结果</td><td>当前父子进程/恢复流程；不把CPU入口虚构为同等能力。</td></tr>
+<tr><td>service/execution / 声明与少量共享CXX</td><td>任务、编译能力、执行偏好 → 接纳或明确拒绝</td><td>粗执行Seam；没有逐域乘/逐位虚接口，不创建总设备框架。</td></tr>
+<tr><td>service/planning / ecm_service</td><td>数学候选、profile、后端资源快照 → PlanDecision</td><td>Auto B2/D/调优采样编排；纯数学归core，设备模型归backend，TOML归storage。</td></tr>
+<tr><td>service/work / ecm_service</td><td>来源ticket、任务结果/发布凭据 → 完成、保留、pending或失败</td><td>完整队列/交接顺序；不由writer自动推进源任务。</td></tr>
+<tr><td>backend/cpu / ecm_backend_cpu</td><td>阶段请求、计划、恢复态 → 结果/安全点事实</td><td>CPU线程、scalar/SIMD、lane与私有布局、ISA检测；公共构造数学不因运行在CPU就归此处。</td></tr>
+<tr><td>backend/cuda / ecm_backend_cuda</td><td>粗执行请求、窄协作Interface → 结果/快照/设备统计</td><td>设备runtime、数据布局、内核、NTT与模型；无配置/文件格式/展示实现。真实runtime可继续.cu。</td></tr>
+<tr><td>backend/opencl / ecm_backend_opencl</td><td>当前支持任务、执行选项 → 结果/快照</td><td>OpenCL资源、组装、cache、生产自检；不改变当前支持范围。</td></tr>
+<tr><td>storage / ecm_storage</td><td>身份、主机点/记录/文件请求 → 已校验输入或可靠写入确认</td><td>编解码、ledger、锁、备份与发布；不决定GPU同步、算法或队列成功。</td></tr>
+<tr><td>platform / ecm_platform</td><td>日志/进程/文件操作请求 → 操作结果、进程/句柄owner</td><td>系统机制；不承载TaskSession、总Supervisor或业务重试规则。</td></tr>
+</tbody></table></div>
+<p>依赖方向：application 组装 service 与 Adapter；service 依赖 core 和抽象执行/持久化 Interface；backend/storage 实现这些 Interface，并依赖 core/platform。core 不反向依赖它们。service/work 持久化合同由 service 拥有，filesystem Implementation 在 storage；源码声明依赖不应演变为 service/storage 静态库循环链接。</p>
+<p>只创建少量职责完整的库；CUDA Stage1/Stage2/NTT 可为其私有目标，每目录不强制成库。factory和session等文件名不强制形成类或独立Module；service/execution若只有合同声明，不建运行时转发对象。PUBLIC include 仅公开 include/；各 backend 私有 src 路径不传播。目标相关宏未消除前，共享源清单仍可按 exe 编译，不能为共享对象误改行为。</p>
+<p>曲线与后端两条轴采用组合：</p>
+<ul class="plan-list">
+<li>曲线身份为 target N + family + Montgomery param（Edwards不适用）+ sigma；B1/有效标量和执行选择分别记录。CPU旧配置的兼容映射先按实际路径解释，不能直接用旧GPU默认param3替代CPU实际param0。</li>
+<li>core/curve 共享 checked 构造、普通点和分类合同；GPU上传前 CPU packing 属于该GPU backend的普通 .cpp。CPU scalar/IFMA/CGBN/OpenCL 的运行布局各自私有。</li>
+<li>共享NAF数学语义不等于共享编码/字典/进度：CPU scalar、IFMA、CUDA默认窗口、字典坐标和位平面不同；中途状态不随意互换。</li>
+<li>Montgomery曲线与Montgomery模乘表示分别命名；Edwards也使用后者。Stage2 target N 与算术carrier M 保持不同含义。</li>
+<li>Stage2 CUDA已用x-only状态复用引擎；不按来源曲线复制整套多项式流程。工厂返回真实能力，不增加未实现的组合。</li>
+</ul>
+</section>
+<section class="plan-section" id="plan-boundaries"><h2>职责划分与重复封装检查</h2>
+<p>本节细化前述目标设计，仍未实施。driver、task、factory、QueueWorkflow 是职责名称，<strong>不是必须依次经过的四层，也不是四个必建的类</strong>。文件名只用于定位 Implementation；独立文件、类和构建目标都须有实际职责依据。</p>
+<h3 id="四个职责分别决定什么">四个职责分别决定什么</h3>
+<div class="table-scroll"><table><thead><tr><th>职责与建议落点</th><th>决定什么；输入 → 输出</th><th>不承担的职责</th></tr></thead><tbody>
+<tr><td>application driver；main.cpp及CLI私有实现即可</td><td>程序怎样运行：解析命令/配置、规范化输入、组装本exe已链接能力、选择直接/队列/查询模式、展示与退出码。输入为用户命令和运行环境，输出为任务调用或程序结果。</td><td>不再复制一次任务的准备/执行/恢复/发布，不处理设备状态或逐文件提交；无需单独Driver类。</td></tr>
+<tr><td>task；service/stage1/task.cpp中的run_stage1_task</td><td>一次任务怎样才算成功：请求不变量、session、恢复、执行、完整结果与发布确认、checkpoint结束。Stage1Request+窄依赖 → TaskResult。</td><td>不解析CLI/TOML、不循环读取worktodo、不更新finished/源队列、不包含kernel或文件编码。</td></tr>
+<tr><td>factory；backend或storage的创建函数</td><td>怎样创建所需实现：按已规范化选择创建当前exe支持的Adapter，返回拥有对象或明确错误。存储factory创建文件能力。</td><td>不运行任务、不打开TaskSession、不推进队列；曲线数学构造不是factory。若直接构造已足够，不必另建factory.cpp或Factory类。</td></tr>
+<tr><td>QueueWorkflow；service/work/queue_workflow.cpp中的run_queue_workflow</td><td>来源任务怎样继续或完成：读取下一项、调用同一task、解释停止/失败、完成交接与源队列协议，再继续循环。归一化任务来源+任务窄依赖+队列存储 → QueueResult。</td><td>不复制task七步；不拥有点状态、设备资源或结果编码。不再外包给第二个完整QueueService。</td></tr>
+</tbody></table></div>
+<p>driver只需要知道“调用哪条流程”。task的七步是一个Module内部可读的顺序；QueueWorkflow增加的是来源任务的循环、完成与交接语义，二者不是同一套编排。</p>
+<h3 id="调用关系组装与执行分开">调用关系：组装与执行分开</h3>
+<div class="code-caption">目标目录 / 构建流程</div><pre><code>application driver / main
+├── 解析与组装：持有必要owner、存储能力和本exe的创建函数
+├── 直接运行 ───────────────────────→ run_stage1_task
+└── 队列运行 → run_queue_workflow ───→ run_stage1_task
+                   ├── 获取下一条规范化任务（含当前配置重读）
+                   └── 私有完成/失败处理 → QueueStore、Transfer Adapter
+
+run_stage1_task                         # 唯一一次任务编排
+├── create_executor(selection)          # 每次任务一处创建/选择
+├── 私有TaskSession                     # 身份、锁、上下文及生命周期
+├── executor.prepare / execute          # prepare内接纳实际组合与恢复态
+└── CheckpointStore / Publisher         # 受控提交与最终确认
+
+executor → ExecutionContext             # 安全点、同步快照、可靠即时提交</code></pre>
+<p>application组装可供调用的创建函数，不在组装后先为同一任务create一次，再由task经过registry.select重选。task调用该函数一次，取得阶段级Executor；具体曲线/算法的实际支持、设备约束与恢复接纳由Executor.prepare负责。capabilities可用于查询或prepare内部校验，不要求每个task再额外查询一套全局能力。</p>
+<p>QueueWorkflow请求的next_task是窄函数引用或轻量来源对象，由应用适配配置重读、QueueStore读选和请求归一化。它只返回QueueItem/Empty/ReadError，不执行task或完成队列；不需要为这个回调再建立SourceService。这样service/work不用包含application的TOML/CLI实现。QueueItem保留ticket、规范化请求与完成所需的队列策略。</p>
+<h3 id="状态发布与文件机制各有一个所有者">状态、发布与文件机制各有一个所有者</h3>
+<ul class="plan-list">
+<li><strong>TaskSession是task的私有状态和资源owner。</strong> 不再提供另一套公开run。默认与task.cpp同文件或使用私有头；只有复杂状态值得独立实现时才拆session.cpp，不强制拆成第二个Module。</li>
+<li><strong>finalize_outcomes只核对完整性、身份与已分类状态。</strong> 不重新计算已完成GCD、归一化或再次即时提交factor。</li>
+<li><strong>Publisher.finish_batch负责最终发布确认与seal。</strong> 按既有ledger/幂等规则补齐所需输出，不另做数学后处理；session.finish_completed只结束checkpoint与释放会话，不再次调用publisher。</li>
+<li><strong>QueueWorkflow拥有完成顺序，QueueStore拥有文件机制。</strong> complete_queue_task是同一workflow的私有函数，维持park→finished→source更新→sync→flush→delivery。QueueStore只读写、锁、按expected ticket更新和执行协议去重，不调用task、不决定业务完成。</li>
+<li><strong>状态返回不新增I/O。</strong> 如果RAII已经默认保留恢复材料，retain_and_fail等方法只是包一层Failed返回，应直接返回。只有额外记录错误来源或执行真实状态规则时才保留私有helper。</li>
+</ul>
+<p>结果与checkpoint可以使用不同文件协议，但同一任务成功条件只有task负责；来源队列完成条件只有QueueWorkflow负责。逐曲线save/factor/DONE原有次序与失败反馈继续通过ExecutionContext和Adapter保持。</p>
+<h3 id="依赖和校验如何避免重复">依赖和校验如何避免重复</h3>
+<p>TaskDependencies只包含创建Executor的函数，以及CheckpointStore、Publisher、PlanCache等必要引用；没有QueueStore、完整Settings、GUI状态或可随意查询任意能力的service locator。QueueWorkflow另接收队列/交接存储，只把TaskDependencies传给task。可以用几个显式参数或轻量结构表达，不再增加BindingsView、TaskBindingsAdapter、QueueBindingsAdapter等剪裁转发层。</p>
+<p>校验按依据分配：driver处理文本语法、输入来源和配置覆盖；task校验数学请求与单次任务不变量；factory判断所选实现是否存在/可创建；prepare检查该实现的组合、设备与恢复状态。只做一次实现选择，不在每层重复解析或筛选同一个请求。必要的文件现状检查、恢复接纳、算术自检和发布前proper-factor/身份确认继续保留，它们检查的是不同事实。</p>
+<h3 id="已检查出的重叠及精简决定">已检查出的重叠及精简决定</h3>
+<div class="table-scroll"><table><thead><tr><th>重叠或风险</th><th>本方案采用的精简</th><th>删除或合并条件</th></tr></thead><tbody>
+<tr><td>driver和task同时列出七步；可能形成main→Driver.run→Task.run→Session.run</td><td>七步只放run_stage1_task；driver选择直接或队列入口；Session仅拥有状态</td><td>只转交同一请求、没有自己的程序级决策的Driver/TaskRunner层不建立。</td></tr>
+<tr><td>task.cpp、session.cpp被目录清单误解为两个公开执行Module</td><td>task.cpp默认含私有Session；不规定拆文件</td><td>若只是Task.run调用Session.run，则保留唯一入口与一份编排。</td></tr>
+<tr><td>compose选中实现、factory.create、executors.select重复选择</td><td>application只组装创建能力；task一处create；prepare接纳实际执行组合</td><td>不保留同一请求上的create+registry.select双路径。</td></tr>
+<tr><td>Queue.next/complete与run_worktodo都被称为完整workflow</td><td>公开入口统一run_queue_workflow；完成/失败处理收为私有函数；QueueStore只做文件机制</td><td>workflow外再包完整QueueService，或store反向调用task的设计不建立。</td></tr>
+<tr><td>Bindings从入口一路全量透传</td><td>应用owner留在应用；task与queue各接收有名窄依赖</td><td>不增加仅剪裁或转交Bindings的新Module。</td></tr>
+<tr><td>ExecutionService只转发factory/Executor；每个phase/helper各建类</td><td>service/execution可只定义合同；私有函数组织阶段细节</td><td>没有共享规则、状态、资源或错误翻译时，不建运行转发层/独立实现库。</td></tr>
+<tr><td>旧backend兼容链、新factory或provider只改调用名</td><td>有真实创建/兼容责任才保留；单一固定实现可直接构造</td><td>所有生产调用迁完且无校验、资源、ABI/错误翻译职责后删除纯转发；不能按名字直接删除Adapter。</td></tr>
+</tbody></table></div>
+<p>验收用删除测试（deletion test）：删除一层后若只少一次同参转发，没有规则散落，应合并；若使直接运行和队列各自复制恢复/发布规则，task应保留；若使多个调用者自行拼接finished/源队列/交接顺序，QueueWorkflow应保留。该判断用于是否建立独立公开Module/调用层，不因私有helper或访问器很短就全部内联。这是Implementation提取与P2/P4审核条件，不是本轮已删改源码的声明。</p>
+<p>上述调用图以Stage1为例。Stage2保留自己的父子receipt与来源完成workflow，可共用QueueStore机制，不为统一命名再建立通用Task基类或强套Stage1循环。</p>
+</section>
+<section class="plan-section" id="plan-interfaces"><h2>Interface 的数据、输入输出与所有权</h2>
+<p>下列是 C++17 概念合同，不是拟立即发布的SDK或稳定跨版本ABI。GMP继续是数学依赖；不引入大整数虚接口、std::span、std::expected 或 C++20 concepts。</p>
+<h3 id="关键数据">关键数据</h3>
+<div class="table-scroll"><table><thead><tr><th>数据</th><th>必需内容</th><th>所有权与不变量</th></tr></thead><tbody>
+<tr><td>Stage1Request</td><td>target N、来源metadata、B1/B2现有语义、CurveBatchSpec、执行偏好、输出策略</td><td>接纳后不可变；输出策略不传入CUDA执行请求。时间/进度不再塞回const请求。</td></tr>
+<tr><td>TaskDependencies / 私有TaskSession</td><td>创建Executor函数、checkpoint/publisher/cache与控制/进度引用 / 一次任务身份、锁、上下文、状态</td><td>前者是窄借用集合，不是service locator；后者只在task内拥有运行状态，不提供第二个公开run。</td></tr>
+<tr><td>CurveBatchSpec / ResolvedCurveSet</td><td>family、仅Mont存在的param、sigma策略/数量；prepare接纳恢复载荷后记录实际sigma</td><td>session拥有逐曲线身份目录；缺失身份可在prepare内按现有策略确定，一旦绑定不再改变。恢复以已保存sigma为准，不假定Edwards为first+i。</td></tr>
+<tr><td>ScalarPlan</td><td>K、1/12/48 LCM等现有构造身份、精确有效范围/计划身份</td><td>不变、共享借用；后端编码私有。缓存属于主机存储，不能把文件读取放进core。</td></tr>
+<tr><td>ExecutionInput</td><td>数学请求视图、CurveBatchSpec/会话身份目录、ScalarPlan、后端执行配置</td><td>没有worktodo、TOML对象、结果路径或GUI字段；准备/执行期间有效。RestoreView单独传入，载荷解释留在prepare。</td></tr>
+<tr><td>PreparedExecution</td><td>实际选择、后端私有曲线状态/资源、恢复位置</td><td>移动拥有的不透明对象；由Adapter释放，不能把CUDA/IFMA内部结构暴露给driver。</td></tr>
+<tr><td>CheckpointEnvelope / RestoreView</td><td>task/curve identity、kind/version、进度单位、后端兼容标记、载荷</td><td>外壳由存储校验；Adapter判断载荷能否恢复。view借用session，不能跨session持有。</td></tr>
+<tr><td>SnapshotView</td><td>身份、已完成安全点位置、host载荷/坐标、状态域与版本</td><td>仅同步提交调用内借用；writer返回后不得继续读取。无device pointer。</td></tr>
+<tr><td>ProgressFacts</td><td>阶段、曲线/批次、done/total、单位、wall/device计时边界</td><td>不带格式文本；binary bit、NAF column、PRAC step不混用；不重复相加嵌套时间。</td></tr>
+<tr><td>CurveOutcome / BatchOutcome</td><td>已分类状态、proper factor、规范化完成点、实际sigma、统计</td><td>拥有整数/数组，避免手工mpz_clear/free；有factor与有Stage2点是不同维度。</td></tr>
+<tr><td>TaskResult / PublishedTask</td><td>Completed/Stopped/Failed、错误来源、已可靠提交结果、恢复信息；完整发布凭据</td><td>Completed才有完整批次确认；Stopped不代表无因子，不能为未完成曲线发布NF。PublishedTask不宣称多文件原子事务。</td></tr>
+<tr><td>Stage2Input / PlanDecision</td><td>来源完成点、target N/carrier M、bounds、实际执行选择/资源模型</td><td>保留当前save接纳范围；plan注明设备副作用与预测/实测来源。</td></tr>
+<tr><td>QueueTicket / QueueItem</td><td>原始来源/worker/选取身份 / ticket、规范化请求与队列完成策略</td><td>ticket提交前重核来源，不能只保存行号；QueueItem不把完整TOML模型带进service。</td></tr>
+<tr><td>WorkerSnapshot</td><td>只读worker状态</td><td>UI不拥有执行线程、设备或进程句柄。</td></tr>
+</tbody></table></div>
+<p>有效因子仍满足 1&lt;f&lt;N 且 f整除N，复合proper factor可输出；GCD=N按当前退化/饱和合同处理。规范化完成点与中途checkpoint不是一个类型。没有通过检查的miss不能被包装为有效Stage2点。</p>
+<h3 id="粗-interface">粗 Interface</h3>
+<div class="table-scroll"><table><thead><tr><th>Interface / 操作</th><th>输入</th><th>输出与失败合同</th></tr></thead><tbody>
+<tr><td>Configuration.load/normalize</td><td>运行模式、CLI/TOML/来源值</td><td>Settings或输入错误；兼容现有优先级，不借重构改变默认值。</td></tr>
+<tr><td>CurveMath.construct / ScalarBuilder.build</td><td>target、CurveSpec / B1及构造策略</td><td>checked普通点/构造因子/退化结果；K与数学计划。无文件或设备副作用。</td></tr>
+<tr><td>run_stage1_task</td><td>Stage1Request、TaskDependencies</td><td>拥有结果的TaskResult；唯一一次任务入口；无需再建Stage1Task/TaskRunner转发类。</td></tr>
+<tr><td>create_executor（工厂函数）</td><td>阶段、已解析的后端选择与窄配置</td><td>拥有的Executor或创建错误；公共声明无SDK类型；每任务一处创建，不与registry.select重复。</td></tr>
+<tr><td>Stage1Executor.capabilities（按需）</td><td>查询/诊断请求</td><td>实际编译能力；不强制每任务额外全局查询。组合接纳可由prepare内部共享校验完成。</td></tr>
+<tr><td>Stage1Executor.prepare</td><td>ExecutionInput、RestoreView、ExecutionContext</td><td>接纳组合、设备约束和恢复态，返回PreparedExecution或Stopped/Failed；准备期间也能发现因子并提交。</td></tr>
+<tr><td>Stage1Executor.execute</td><td>PreparedExecution、ExecutionContext</td><td>BatchOutcome；返回前worker已join、设备已到所需安全状态，停止/错误包含恢复信息。</td></tr>
+<tr><td>ExecutionContext.safe_point</td><td>ProgressFacts</td><td>Continue / CheckpointThenContinue / CheckpointThenStop / Failed；控制与展示分清合同。</td></tr>
+<tr><td>ExecutionContext.store_checkpoint</td><td>SnapshotView</td><td>同步Ack或错误；成功返回后才允许复用借用buffer。</td></tr>
+<tr><td>ExecutionContext.publish_factor / accept_curve</td><td>curve identity + proper factor / 已分类完成点</td><td>同步Ack或错误；普通主机publisher执行即时ledger/save职责，Adapter不认识文件格式。保持各路径原时机。</td></tr>
+<tr><td>CheckpointStore.open/write/finish</td><td>identity / host record / 成功标记</td><td>锁与RestoreView / Ack / 清理或保留；不会因单条active record remove删除整个batch。</td></tr>
+<tr><td>Publisher.finish_batch</td><td>完整BatchOutcome与发布上下文</td><td>PublishedTask或输出错误；确认save，完成submission→internal batch→seal。</td></tr>
+<tr><td>run_queue_workflow</td><td>下一条规范化任务的窄回调、TaskDependencies、队列/交接存储</td><td>QueueResult；唯一循环与完成协议入口，私有函数处理失败和来源提交。</td></tr>
+<tr><td>QueueStore.read_next/update_expected</td><td>读选条件 / expected ticket及文件改写值</td><td>数据、Empty或I/O结果；仅文件机制，不调用task或决定业务成功。</td></tr>
+<tr><td>Save/Profile/PlanCache</td><td>读取选择、校验身份或待写的host值</td><td>已校验模型、CacheMiss或I/O错误；miss与损坏/不可接纳明确区分。</td></tr>
+<tr><td>Stage2Planner / Stage2Executor</td><td>候选+profile+设备快照 / 已验证续算输入与计划</td><td>PlanDecision / 受检查的执行结果；不支持能力明确返回，不伪造CPU/GPU等价参数。</td></tr>
+<tr><td>WorkerController</td><td>配置、start/stop命令、tick</td><td>只读WorkerSnapshot和操作错误；拥有worker编排，底层进程机制由Process Adapter负责。</td></tr>
+</tbody></table></div>
+<p>ExecutionContext 只有三组协作：安全点与控制/进度、同步checkpoint、可靠publication（含即时factor和完成点）。可以是一个私有上下文的几个方法/函数引用，不需要ProgressService、StopService、SnapshotService、FactorObserver多套框架。各调用不是热路径逐点调度。</p>
+<p>CPU并发回调由session/相应writer保持串行化规则；借用寿命覆盖prepare/execute；禁止重入同一session。恢复容器打开不代表已知全部sigma：Adapter在prepare内解码载荷、按现有规则补足缺失身份，并绑定到session后才构造/发布该曲线，后续不得重抽。身份目录访问是上下文的数据合同，不新增事件框架。</p>
+<p>对象化前仍保持当前单实例checkpoint与现有进程隔离，未验证前不宣称同进程多任务并发安全。设备失效等现有fatal退出不自动变成可恢复错误，单独核对后才调整。</p>
+</section>
+<section class="plan-section" id="plan-driver"><h2>driver 主流程伪代码</h2>
+<p>这里将程序入口、单次任务和队列workflow分开表达。它们不是依次包装同一个run；所有类名/辅助函数都只是C++17职责示意。compose_runtime是应用私有组装代码，可以直接写成局部构造，不新增Runtime/CompositionService。</p>
+<h3 id="driver只做入口与组装">driver：只做入口与组装</h3>
+<div class="code-caption">C++17 概念伪代码</div><pre><code>int main(Args args) {
+    auto command = parse_command(args);
+    if (command.is_query()) return run_query(command);
+
+    auto input = load_and_normalize_for_mode(command);
+    auto runtime = compose_runtime(input);       // 应用内owner与创建函数
+    TaskDependencies tasks {
+        runtime.create_executor, runtime.checkpoints, runtime.publisher,
+        runtime.plan_cache, runtime.signals
+    };                                          // 仅必要引用，不透传runtime
+
+    if (input.is_queue_mode())
+        return exit_code(run_queue_workflow(
+            runtime.next_queue_task, tasks, runtime.queue_stores));
+
+    for (auto target : input.direct_targets()) {
+        auto request = make_stage1_request(target, input);
+        auto result = run_stage1_task(request, tasks);
+        if (!result.completed()) return exit_code(result);
+    }
+    return existing_success_exit_policy();
+}</code></pre>
+<p>next_queue_task是应用提供的窄回调：按现有规则重读当前TOML，经QueueStore读选并归一化，返回QueueItem/Empty/ReadError。它不运行计算或完成队列。TaskDependencies不包含queue、完整配置和应用owner；这里只组装可用factory，不提前为某任务创建Executor。</p>
+<h3 id="taskcpp唯一一次任务编排">task.cpp：唯一一次任务编排</h3>
+<div class="code-caption">C++17 概念伪代码</div><pre><code>TaskResult run_stage1_task(const Stage1Request&amp; request, TaskDependencies&amp; deps) {
+    auto admitted = validate_task_invariants_and_outputs(request);
+    if (!admitted.ok()) return Failed(admitted.error());
+
+    // 私有Session只拥有状态；open建立锁、恢复容器和发布上下文。
+    auto opened = TaskSession::open(
+        request, deps.checkpoints, deps.publisher, deps.signals);
+    if (!opened.ok()) return Failed(opened.error());
+    auto session = opened.take();
+    // 默认析构保留可用恢复材料；这里不再调用Session.run。
+
+    auto created = deps.create_executor(request.execution_selection());
+    if (!created.ok()) return Failed(created.error());
+    auto executor = created.take();             // 每任务一处创建，无二次select
+
+    auto scalar = prepare_scalar_with_cache(session.scalar_request(), deps.plan_cache);
+    if (!scalar.ok()) return Failed(scalar.error());
+
+    auto prepared = executor-&gt;prepare(
+        session.execution_input(scalar.value()),
+        session.restore_view(), session.context());
+    if (!prepared.ok()) return as_task_result(prepared.status());
+
+    auto batch = executor-&gt;execute(prepared.value(), session.context());
+    if (!batch.completed()) return as_task_result(batch.status());
+
+    auto checked = session.finalize_outcomes(batch.take());
+    if (!checked.ok()) return Failed(checked.error());
+
+    auto published = deps.publisher.finish_batch(checked.value());
+    if (!published.ok()) return Failed(published.error());
+
+    session.finish_completed();                 // seal后结束checkpoint，不二次发布
+    return Completed(published.take());
+}</code></pre>
+<p>这七步只在task内存在：<strong>校验→打开会话→准备→执行→核对→最终发布→完成会话</strong>。as_task_result只是状态/错误来源转换，不触发另一轮恢复或I/O。直接返回成立的前提是Adapter在Stopped前已经完成合同要求的安全快照，Session默认释放资源并保留材料；不为显式“retain”名称增加无行为包装。</p>
+<p>finalize_outcomes不重复GCD/归一化或即时factor提交；finish_batch按当前ledger规则完成最终发布；finish_completed不隐藏第二次finish_batch。prepare保留各后端局部次序与实际能力/设备/载荷检查，driver不会逐步拼接CUDA buffer、SIMD lane或字节编码。</p>
+<h3 id="queueworkflow唯一队列循环与完成协议">QueueWorkflow：唯一队列循环与完成协议</h3>
+<div class="code-caption">C++17 概念伪代码</div><pre><code>QueueResult run_queue_workflow(NextTask next_task,
+                               TaskDependencies&amp; tasks,
+                               QueueStores&amp; stores) {
+    for (;;) {
+        auto selected = next_task();            // 包含按现有策略重读配置与选取
+        if (selected.empty()) return QueueEmpty;
+        if (selected.read_error()) return Failed(selected.error());
+        auto item = selected.take();             // ticket + request + queue policy
+
+        auto result = run_stage1_task(item.request, tasks);
+        if (result.stopped()) return Stopped;    // 不推进未完成来源任务
+
+        if (result.failed()) {
+            auto action = handle_task_failure(item, result.error(), stores);
+            if (action != RetryOrContinueAllowedByCurrentPolicy)
+                return Failed(result.error());
+            continue;
+        }
+
+        auto committed = complete_queue_task(
+            item, result.published_task(), stores);
+        if (!committed.ok())
+            return Failed(committed.error());   // 不静默重算并重复append
+    }
+}</code></pre>
+<p>NextTask只是可调用入口，不规定新的来源类。handle_task_failure与complete_queue_task是QueueWorkflow同一Implementation内的私有函数，不是额外公开Service。后者拥有park→finished→source更新→save sync→Stage2 flush→Prime95 delivery；QueueStore/Transfer Adapter只执行具体文件协议。Prime95 pending与计算失败不同；原失败/停止策略不变。</p>
+<h3 id="执行期间的三组协作">执行期间的三组协作</h3>
+<div class="code-caption">C++17 概念伪代码</div><pre><code>// 只示意安全点合同，不规定每个backend必须采用相同机械循环。
+auto decision = context.safe_point(progress_facts);
+
+if (decision.needs_checkpoint()) {
+    auto host_view = adapter.capture_safe_host_state();
+    // CUDA在这里或此前完成必要同步/D2H；CPU完成lane身份转换。
+    if (!context.store_checkpoint(host_view))
+        return Failed(SnapshotPublicationError);
+}
+if (decision.stop_requested()) return Stopped;
+
+// 也可发生于prepare的构造/字典求逆；具体先后保持现有路径。
+if (proper_factor_found &amp;&amp;
+    !context.publish_factor(curve_identity, factor))
+    return Failed(ResultPublicationError);
+
+if (curve_completed &amp;&amp;
+    !context.accept_curve(classified_host_outcome))
+    return Failed(SaveOrPublicationError);</code></pre>
+<p>主机快照writer无需CUDA；同步/D2H仍是Adapter行为。不能把暂态device pointer交给writer，也不为screen刷新额外下载全部曲线。CPU callback可直接持久化或先PAUSED返回再由外层持久化，不为整齐统一循环结构。</p>
+<p>必须保留当前细节：Edwards scalar的capture/DONE可先于factor发布，IFMA和Montgomery的具体顺序不同；最终submission→internal→seal→end_batch(true)不变；停止不得为未完成曲线发布NF。当前依据为 <a href="../../src/core/ecm_driver.cpp">ecm_driver.cpp</a> 第 3079–3104 行及前文逐后端细表。</p>
+<h3 id="独立-stage2-与-gui">独立 Stage2 与 GUI</h3>
+<p>Stage2有自己的状态机，不套用Stage1的checkpoint循环。其owner默认保留progress/pending；CUDA父进程流程示意中，checked表示失败即停止推进并由会话保留状态的错误检查：</p>
+<div class="code-caption">C++17 概念伪代码</div><pre><code>auto task = checked(stage2.open_and_validate(source));
+checked(task.recover_completed_pending_receipts());
+
+for (auto curve : task.remaining_curves()) {
+    if (stop.requested()) return Stopped;
+
+    auto pending = checked(task.persist_pending_before_launch(curve));
+    auto exited = worker.run(task.worker_request(curve, pending));
+    if (!exited.success()) return Failed(exited.error());
+
+    if (!publisher.has_durable_receipt(pending))
+        return Failed(MissingReceipt);
+    checked(task.persist_curve_completed(pending));
+}
+checked(publisher.seal_task(task.identity()));
+checked(complete_stage2_source_after_recheck(task, queue_stores)); // workflow私有
+checked(task.remove_completed_progress());</code></pre>
+<p>子进程重读save并验证fingerprint后调用Stage2Executor；完成异步算术检查，再发布结果和receipt。exit=0不能替代receipt。非零退出沿用当前保留/报错，后续重启才按durable receipt恢复，不能悄悄改成当场成功。依据为 <a href="../../src/core/ecm_cuda_stage2_main.cpp">ecm_cuda_stage2_main.cpp</a> 第 617、898、914–920、1505–1508、1551–1585 行。</p>
+<p>CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/父子receipt。GUI的WorkerController负责configure→选择exe→启动/监管→事件归并→停止/重启→快照；视图只提交命令并读快照。Stage1安全点停止、Stage2当前曲线结束后停止和等待子进程退出的现有语义保留；看见checkpoint文件不表示可以强杀。GUI监管与Stage2父子编排可复用进程机制，不强行合成总Supervisor。</p>
+</section>
+<section class="plan-section" id="plan-map"><h2>现有文件到目标模块的迁移映射</h2>
+<div class="table-scroll"><table><thead><tr><th>当前家族</th><th>目标</th><th>迁移约束</th></tr></thead><tbody>
+<tr><td>ecm_driver.cpp</td><td>application/cli、service/stage1、service/work、backend/cpu</td><td>先按完整职责提取；不把原二十多个参数搬到公共巨型options。</td></tr>
+<tr><td>ecm_edwards_gpu_driver.inl</td><td>service/stage1 + CUDA host prepare/Adapter + storage</td><td>拆掉对driver static helper的文本依赖；发布时机保留。</td></tr>
+<tr><td>ecm_stage1_selection、curve、exp、NAF/PRAC计划</td><td>core/curve、core/stage1；cache归storage</td><td>数学与后端选择/用户解析分开，曲线身份不随backend变化。</td></tr>
+<tr><td>ecm_checkpoint、mont_ckpt、Ed checkpoint helpers</td><td>storage/checkpoint + backend私有载荷codec</td><td>外壳/发布共享；算法状态与版本接纳由Adapter拥有。</td></tr>
+<tr><td>ecm_save、Ed io/save reader</td><td>storage/save + core点检查</td><td>兼容格式和消费者范围不变。</td></tr>
+<tr><td>ecm_result/submission/internal/file_publication</td><td>storage/results + platform + service/work</td><td>编码/账本细节收回.cpp，可靠确认与完成次序仍独立。</td></tr>
+<tr><td>ecm_queue_config、worktodo、p95_worktodo/transfer</td><td>application/configuration、storage/queue/transfer、service/work</td><td>解析、文件机制和推进策略按职责分；不扩展为工具内部重构。</td></tr>
+<tr><td>src/cpu/ecm_mont_cpu、ecm_edwards_cpu、simd_*</td><td>backend/cpu/stage1与arithmetic</td><td>scalar/SIMD状态、worker/join、lane转换保持完整；共享构造数学归core。</td></tr>
+<tr><td>src/cuda/stage1 + kernels/cuda/stage1/optional/prac</td><td>backend/cuda/stage1</td><td>包括resident/PRAC的配置、计划cache、checkpoint与screen隔离。</td></tr>
+<tr><td>src/cuda/stage2 + kernels/cuda/stage2</td><td>backend/cuda/stage2</td><td>延续已有引擎分工；设备常量单一所有者不变。</td></tr>
+<tr><td>src/cuda/ntt + kernels/cuda/ntt/shared</td><td>backend/cuda/ntt与arithmetic/所属阶段</td><td>Graph先于借用buffer释放；按真实复用归属，不制造泛化common。</td></tr>
+<tr><td>include/ecm/cuda的launch/types/tiers</td><td>backend/cuda私有src</td><td>必要factory与阶段合同才留include；不暴露设备模板。</td></tr>
+<tr><td>ecm_stage2_geometry/catalog/probability/relocation</td><td>core/stage2；设备筛选归CUDA planning</td><td>target/carrier、树布局、区间和算术不变量保持权威定义。</td></tr>
+<tr><td>ecm_stage2_tune_*、portable_model</td><td>service/planning、backend模型、storage/profile</td><td>搜索/预测/采样与TOML分开；生成字段表仍可私有小文件。</td></tr>
+<tr><td>ecm_cuda_stage2_main/portable_driver</td><td>application/cuda_stage2、service/stage2/planning/work</td><td>保留父子进程、pending、receipt、seal和源队列复核。</td></tr>
+<tr><td>ecm_cpu_stage2_main、gwpoly</td><td>application/cpu_stage2、backend/cpu/stage2</td><td>保留第三方生命周期和当前接纳范围。</td></tr>
+<tr><td>src/opencl_*、cl_probe、kernels/opencl/impl_opencl.cpp及生产资源</td><td>backend/opencl；中立日志归platform</td><td>包括生产自检所需bench/mont.cl，保持动态组装/cache键。</td></tr>
+<tr><td>src/gui生产文件</td><td>application/gui、platform/process、已有纯模型</td><td>保留WorkerProc；提取完整Controller，独立fake/test目标不迁入主流程。</td></tr>
+<tr><td>项目ecm.h/cgbn_stage1旧入口</td><td>core/service/私有兼容Adapter</td><td>先保留窄兼容转发，调用迁完后删除无用转发；不动第三方内部。</td></tr>
+</tbody></table></div>
+</section>
+<section class="plan-section" id="plan-phases"><h2>分阶段正式重构顺序</h2>
+<p>每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下是后续实施计划，本轮全部未执行。</p>
+<h3 id="phase-0" class="phase-title">P0 冻结现状与生产闭包</h3>
+<p>交付：当前主程序/源清单、完整支持矩阵、构建参数与工具链、对象/exe/文件样本身份、曲线/标量/恢复/发布顺序；保留并行未提交状态的独立快照。记录本轮附件但不把其当作干净提交或性能基线。</p>
+<p>通过条件：能定位每个生产入口和资源；强制自检、OpenCL诊断资源、设备常量、默认流、环境变量读取时机、错误/停止路径均纳入。现有已知限制单列，不能在重构时掩盖。</p>
+<h3 id="phase-1" class="phase-title">P1 首先完成构建复用和目录隔离</h3>
+<p>P1a保留当前编译器/算术/链接策略，统一逐TU默认reuse、失效理由、HostOnly/SkipBuild规则和owner graph。Stage2去掉“整体变更就全组重编”，Stage1 local/dev/release不再默认主动重编所有CU。</p>
+<p>P1b落实build_cuda_local/dev/release各stage/engine/toolkit/arch/profile叶目录、marker、日志和清单位置，更新包装入口与消费者定位；保留旧目录原用途兼容，不直接搬缓存。CPU/GUI/OpenCL补齐入口时遵循相同role规则，当前缺失能力明确标注。</p>
+<p>通过条件：同profile无修改二次构建零CXX/零CU且无不必要link；独立host源码改变零CU；改设备依赖/命令正确失效；HostOnly对失效对象提前拒绝；显式跨用途目录拒绝；包与build不混用。新目录首次冷构建和旧目录增量分开记录。P1通过后才做主体源码提取。</p>
+<h3 id="phase-2" class="phase-title">P2 收口合同、拥有权和普通 CXX 编译</h3>
+<p>交付：Stage1Request、拥有结果的TaskResult、私有TaskSession与粗ExecutionContext；以run_stage1_task为唯一任务入口。现有入口先由私有Adapter承接，不同时重写算法。移除请求被当作运行状态/强制const转换和手工数组拥有权扩散；按“职责划分与重复封装检查”去除同参转发、重复factory/select与Bindings全量透传。</p>
+<p>独立子步骤让Stage2 host .cpp切普通CXX；先校验CRT/宏/异常分配/GMP/CUDA链接，再改消费者。此步骤不要求runtime脱离CUDA，不能把“少CU重编”与“无需SDK”混为门槛。</p>
+<p>通过条件：CLI/queue共用一次任务入口，直接与队列语义不变；公开头自包含且不含设备模板/大writer实现；错误来源、Stopped与Completed明确；旧构建与发布清单仍可核对。</p>
+<h3 id="phase-3" class="phase-title">P3 完成目标目录与后端实现归位</h3>
+<p>交付：按目标树迁入src/ecm；CUDA生产实现完全离开kernels/cuda；生产OpenCL主机与资源一并归位；更新源清单、include、owner graph、资源loader和打包规则。保留必要旧入口转发以便逐步接入。</p>
+<p>迁移只改位置/引用，不改点公式、模板实例、默认流、常量所有者、强制检查和释放顺序。路径变化导致的合法重编在此集中记录，预期可能需要一次完整CUDA编译，不能为了复用放宽指纹。</p>
+<p>通过条件：生产闭包不再引用kernels/cuda和实验实现；实际tiers/参数族/实例注册一致；OpenCL资源可加载；NTT/Stage2常量和Graph寿命保持；相关消费者仅作必要路径适配。</p>
+<h3 id="phase-4" class="phase-title">P4 深化 Stage1 Module 并隔离非 GPU Implementation</h3>
+<p>交付：整段提取CPU曲线Adapter、GPU Montgomery和Edwards host workflow；配置/构造数学、checkpoint/save/result/tune/screen函数体落普通.cpp；.cu只保留必要协作声明和设备职责。resident/PRAC同步处理。</p>
+<p>task实现收敛为前述七步；application driver仅保留输入、组装、模式选择与展示/退出。QueueWorkflow拥有任务外循环和完成协议，QueueStore只做文件机制。先保持各后端GCD、save、factor、DONE与快照时机，再删过时转发；不按线程/lane/helper继续过拆。</p>
+<p>通过条件：四类非GPU功能的代表改动只重编受影响CXX并链接；screen不再因内联格式使Montgomery runtime.cu失效；恢复、即时提交失败、暂停和queue推进与旧版一致；.cu无法通过新头重新包含完整配置/writer。</p>
+<h3 id="phase-5" class="phase-title">P5 收口 Stage2 规划、持久化和运行状态</h3>
+<p>交付：Stage2TaskSession/CurveWorkerRunner、纯数学/设备模型/profile文件的归属；逐步拆私有context，收回过度拆分但总共同变化的头。现有15个host引擎.cpp继续保留完整职责，不重新造单体引擎。</p>
+<p>环境读取与全局状态实例化单独实施，先保留现有进程隔离；可恢复错误翻译与fatal CUDA错误行为分别核对，不声称已支持同进程多会话。</p>
+<p>通过条件：pending先落盘、子进程重读save校验、receipt确认、seal和source复核顺序不变；异步oracle在成功/重放决策前排空；Auto B2/D与tune字段/身份/计时合同一致；CPU入口不被扩大能力。</p>
+<h3 id="phase-6" class="phase-title">P6 GUI 与独立 CPU 入口归位</h3>
+<p>交付：WorkerController与只读快照，绘制不再编排worker；共享配置/队列读选和现有纯模型；CPU Stage2后端与正式构建入口清晰。Process Adapter保留具体句柄/pipe/Job/thread管理。</p>
+<p>通过条件：启动、停止、重启、崩溃/日志和阶段切换贯通；不因看见checkpoint强杀；测试/fake-worker不默认进入正式包；CPU/GW/libecm支持与依赖不变。</p>
+<h3 id="phase-7" class="phase-title">P7 综合验收、文档同步与收尾</h3>
+<p>交付：新结构与构建说明、迁移映射、当前支持/限制、依赖报告与验收证据；调用全部迁完后删除无价值兼容转发。正式现状文档改写为实际实现，草稿提示用户处理，不自动删除。</p>
+<p>通过条件：公开依赖无环，生产清单和包身份完整；主流程、恢复/故障、各实际支持后端与位宽覆盖通过；性能比较满足冻结条件且未引入未经说明的退化。多架构镜像构建、PTX/JIT和实体GPU原生验收分开记录，未具设备不宣称通过。</p>
+</section>
+<section class="plan-section" id="plan-validation"><h2>验收矩阵与待确认事项</h2>
+<div class="table-scroll"><table><thead><tr><th>维度</th><th>必须验证的结果</th><th>所属阶段</th></tr></thead><tbody>
+<tr><td>职责与封装</td><td>一份task编排、一处Executor创建、一份队列完成协议；Session不再run；窄依赖且无只转发同参的新增层</td><td>P2、P4</td></tr>
+<tr><td>构建增量</td><td>无修改0编译；host-only修改0CU；设备header/宏变更仅正确依赖失效；对象篡改拒绝</td><td>P1、P4</td></tr>
+<tr><td>输出隔离</td><td>role/engine/toolkit/arch不混用；旧目录不自动迁移；exe/资源/DLL/清单一致；运行文件不被覆盖</td><td>P1、P3</td></tr>
+<tr><td>数学与结果</td><td>固定N、curve、param、sigma、B1/有效K比较；proper/composite factor、退化与有效点合同不变</td><td>P0、P2–P5</td></tr>
+<tr><td>恢复与故障</td><td>保存/读回位置、损坏/主备接纳、停止、发布失败、已有因子、未完成NF与queue行为</td><td>P2、P4、P5</td></tr>
+<tr><td>CUDA/OpenCL执行</td><td>tiers/实例/常量、资源、同步/计时、自检、Graph借用寿命；无新增逐点虚调用</td><td>P3–P5</td></tr>
+<tr><td>Stage2</td><td>save fingerprint、pending/receipt、target/carrier、异步检查、重复发布与source复核</td><td>P5</td></tr>
+<tr><td>GUI/CPU</td><td>子进程状态、平滑停止、实际支持范围、普通CXX和第三方运行依赖</td><td>P6</td></tr>
+<tr><td>性能资格</td><td>相同输入、设备/功耗、源码与二进制、样本数和计时边界；原始证据不改写</td><td>P7</td></tr>
+</tbody></table></div>
+<p>这些是未来验证工作，不在本轮修改测试/工具内部的范围。必要的现有测试/工具路径适配随生产移动同步进行，不能通过删除测试、放宽门限或改变正确实现消除表面不一致。</p>
+<p>仍需在实施时核对的条件：</p>
+<ul class="plan-list">
+<li>最终profile字段与短key长度由真实命令/清单决定；不得把源码hash作为目录key。跨目录artifact import尚未设计与验证，初期不承诺。</li>
+<li>GUI/打包/现有脚本对exe根和运行时资源路径的全部消费者，P1/P3生成清单后逐一核对。</li>
+<li>共享源能否跨exe共用对象取决于目标宏与ABI；无证明时继续按目标编译。</li>
+<li>同进程多会话、跨后端checkpoint互换、错误恢复升级、结构化GUI进程协议属于另行验证/设计的能力，不由本次组织重构自动获得。</li>
+<li>实际支持组合以当前生产接纳和本机资格为准；当前CPU Stage2/GUI缺少的正式构建入口族是计划交付，不是现状声明。</li>
+</ul>
+</section>
+<section class="plan-section" id="plan-guidelines"><h2>C++ Core Guidelines 参考</h2>
+<p>采用其接口显式化、资源所有权和依赖控制原则：I.1/I.4、I.2、C.129、R.1、SF.9/SF.11。I.27 的 Pimpl 适合隐藏大型设备对象，不要求每个值类型增加间接层。本文的目录、粗Interface、profile和阶段顺序是本仓库的设计，不是规范规定的模板。</p>
+<p>来源：<a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">C++ Core Guidelines</a>，前文查阅日期 2026-10-21。</p>
+</section>
+<details id="source-analysis" class="evidence-details"><summary>现状、曲线公式、后端流程与粒度依据</summary><p class="caption">以下描述核对时的当前实现。整体目标与实施顺序以上方完整方案为准。</p><section id="runtime-flow" class="runtime-section">
+<h2>共同主干与真正的分支</h2>
+<p>你的顺序可作为主干，但必须把任务 checkpoint、曲线载荷、设备同步、结果回读和文件提交分开。下面描述<strong>当前代码</strong>；下方原有模块与重构方案仍是设计建议。</p>
+<div class="behavior-legend"><span>主机计算 / 控制</span><span>GPU 计算 / 资源</span><span>H2D / D2H</span><span>同步等待</span><span>输出 I/O</span><span>文件 I/O</span></div>
+<div class="table-scroll"><table class="runtime-table"><thead><tr><th>顺序</th><th>主机与 GPU 行为</th><th>输出和文件行为</th></tr></thead><tbody>
+<tr><td>1 启动与模式选择</td><td>CLI 解析；help/version/查询可提前结束；有位置 B1/B2 走 stdin，无位置参数走队列。</td><td>错误、帮助、版本属于输出 I/O。不是所有分支都读取 TOML、worktodo 或启动设备。</td></tr>
+<tr><td>2 配置与队列</td><td>按模式装入配置；队列按 worker、priority、skip、阶段接纳任务，计算实际 N 与构造身份。</td><td>TOML、日志、pending、save 启动同步可能已产生文件 I/O。区分空队列和读取错误。</td></tr>
+<tr><td>3 任务外壳</td><td>验证结果身份、输出所有权和路径；建立 batch identity 与恢复记录。</td><td>先锁定、装载任务 checkpoint 主/备容器，再进入后端取得 K。曲线 payload 的解释更晚。</td></tr>
+<tr><td>4 标量与后端准备</td><td>取得 K；按曲线/后端准备 bit、NAF 或 PRAC plan，恢复或构造曲线与起点。</td><td>指数缓存、载荷恢复和输出路径检查在此交错；不是统一“先 NAF 再恢复”。</td></tr>
+<tr><td>5 具体计算循环</td><td>CPU scalar/IFMA 无 GPU；CUDA/OpenCL 按 slice 启动并等待，回读量因路径而异。</td><td>进度是输出 I/O；定时/停止 checkpoint、dump 是独立文件分支。</td></tr>
+<tr><td>6 曲线收尾</td><td>取得 Q=[K]P；主机做映射、求逆/GCD、校验；可能得到点、复合因子、饱和或错误。</td><td>因子可在执行期间或曲线收尾立即发布，之后完成共享 save；没有统一素因子分解阶段。</td></tr>
+<tr><td>7 统一结果提交</td><td>核对全部曲线的实际 sigma/status；按身份形成记录。</td><td>逐曲线 submission ledger → 内部逐曲线 batch/JSONL → seal NF 批次 → end_batch(true)。</td></tr>
+<tr><td>8 队列交接或 CLI 诊断</td><td>队列处理命中/无因子/停止/错误；CLI 可选进行受限的群阶诊断。</td><td>pending → finished → 推进源队列 → 同步 save → flush/Prime95。Stage2 本身由另一个程序执行。</td></tr>
+</tbody></table></div>
+<p class="caption">依据：ecm_driver.cpp:3030–3104 / 3201–3376 / 3465–3950 / 3969–4675。细表与公式全文已同步到草稿“Stage1 实际运行顺序与后端行为核对”。</p>
+</section>
+
+<section id="flow-corrections" class="runtime-section"><h2>对原流程的关键修正</h2>
+<ol class="numbered">
+<li><b>配置覆盖不是全程序的一条链。</b> 队列重新装入 TOML；普通输入执行主要用 CLI/内建值，只另取 TOML 结果输出设置。gpu-info 另外实现部分 CLI 覆盖；不能把它推广为所有运行字段。</li>
+<li><b>任务 checkpoint 先于 K，具体载荷恢复则分支不同。</b> 已载入的曲线 record 可以从内存读取，不一定每曲线打开一份文件。</li>
+<li><b>NAF 只是一类算法。</b> CPU Edwards 有 binary 容量回退，CUDA Edwards 可选 binary；Montgomery 是 ladder 或受限的可选 PRAC。</li>
+<li><b>等待、回读、输出与写盘是四件事。</b> CUDA Montgomery/OpenCL 每片等待，普通片不回读点；CUDA Edwards 每片回读四坐标。</li>
+<li><b>非平凡 GCD 可以是复合数。</b> 当前没有通用“每曲线拆分合数因子”步骤；发布前验证范围和整除，不要求素性证明。</li>
+<li><b>不存在必经的独立逐曲线 data 输出。</b> checkpoint、完成点 save、内部结果、submission ledger 和可选 dump 各有用途。</li>
+<li><b>--go 是提交后的受限 CLI 诊断。</b> 它不是每条曲线的统一群阶步骤，也不是已经证明严格最小界限的工具。</li>
+</ol></section>
+
+<section id="flow-math" class="runtime-section"><h2>正确的公式与结果量</h2>
+<div class="formula-line"><b>L(B)</b> = lcm(1,…,B) = ∏<sub>ℓ 为素数，ℓ≤B</sub> ℓ<sup>max{e: ℓᵉ≤B}</sup><br><b>K</b> = tL(B)，Montgomery 的 t∈{1,12}；Edwards 的 t=48。<br><b>Q = [K]P</b>，坐标运算模 N；不是 a<sup>K</sup> mod N。</div>
+<div class="split">
+<div><h3>Montgomery x-only</h3><p>Q=(X:Z)。仅当 gcd(Z,N)=1 时，x=X·Z⁻¹ mod N。不可逆则检查 g=gcd(Z,N)。</p><p>有效因子：1&lt;g&lt;N 且 g|N。g=N 是饱和，不能作为 proper factor。</p></div>
+<div><h3>Edwards 完成点</h3><p>扩展坐标满足 XY=ZT 与 X²+Y²=Z²+d<sub>E</sub>T²。映射为 (U:W)=(Z+Y:Z−Y)。</p><p>最终检查 gcd(W,N)；可逆时 x<sub>M</sub>=U·W⁻¹ mod N。不是直接对 Edwards 原 Z 求最终 GCD。</p></div>
+</div>
+<p>源码 s/batch_s 是这里的 K。合数 N 下求逆不能解释为 Z<sup>N−2</sup>；代码的 mpz_invert 与那条邻近注释应区别对待。</p>
+<details class="flow-detail"><summary>三种 Montgomery 构造与 NAF 表示</summary>
+<p><b>param0：</b>u=σ²−5，v=4σ；A=(v−u)³(3u+v)/(4u³v)−2；a24=(A+2)/4；P=(u³:v³)。</p>
+<p><b>param3：</b>δ<sub>i</sub>=(σ+i)·(2³²)⁻¹ mod N；a24=δ<sub>i</sub>；A=4δ<sub>i</sub>−2；P=(2:1)，2P=(9:64δ<sub>i</sub>+8)。kernel 的整数 d=σ+i 不是普通域 δ<sub>i</sub>。</p>
+<p><b>param2：</b>先在 y²=x³+36 上算 (u,v)=[σ](-3,3)；x3=(3u+v+6)/(2(v−3))；A=−(3x3⁴+6x3²−1)/(4x3³)；a24=(A+2)/4；正式起点 P=(2:1)。当前 σ&lt;2 有调整，不能直接按原种子套公式。</p>
+<p>所有分式都要求分母可逆。当前 Edwards checked construction 有因子/退化分类；Montgomery param0/2 的部分逆元失败分支警告或置零继续，不能假定同样分类已经实现。</p>
+<p><b>NAF：</b>K=Σd<sub>j</sub>2<sup>j</sup>，非零 digit 是奇数且 |d<sub>j</sub>|&lt;2<sup>w−1</sup>；字典 P,3P,… 有 2<sup>w−2</sup> 项。NAF column 数可能多于 binary bit 数，不能混用 checkpoint 进度。</p>
+</details></section>
+
+<section id="flow-backends" class="runtime-section"><h2>各曲线和后端的细粒度行为</h2>
+<p>各表按真实步骤区分计算、传输、同步、输出与文件。正常片不一定触发所有列；失败和停止不能继续画到成功发布。</p>
+
+<details class="flow-detail"><summary>CPU Montgomery · scalar / 八路 IFMA</summary>
+<div class="table-scroll"><table class="runtime-table"><thead><tr><th>顺序</th><th>主机计算</th><th>输出 / 文件 I/O</th></tr></thead><tbody>
+<tr><td>准备</td><td>取得 K=tL → 选 scalar/IFMA → 一次展开 K 的 MSB bits。</td><td>读验指数缓存，未命中构造并尝试写回；写缓存失败不必让已构造 K 失败。</td></tr>
+<tr><td>恢复与分组</td><td>采用 checkpoint sigma，识别 DONE/INFLIGHT；按恢复 bit 分组，IFMA 最多八 lane 且同起始位置。</td><td>解释任务容器中的逻辑记录，必要时写初始 seed 记录。</td></tr>
+<tr><td>曲线准备</td><td>重建 Suyama 常数、恢复/初始化相邻点；转入 MPN/IFMA 表示，IFMA 可选 REDC/fold。</td><td>没有 GPU、H2D、D2H 或设备同步。</td></tr>
+<tr><td>循环与安全点</td><td>逐 bit x-only ladder；安全点转换普通域状态并回调。请求暂停后函数返回，外层再保存。</td><td>输出进度；文件写 INFLIGHT。定时保存后重新进入 ladder，停止则返回未完成。</td></tr>
+<tr><td>完成</td><td>主机 GCD / 归一化；当前 g=N 不细分，scalar 不可逆回退 X、IFMA 回退 0。</td><td>proper factor 即时发布 → DONE → 全部 worker join 后共享 save → 统一结果提交。</td></tr>
+</tbody></table></div>
+<p class="caption">driver:2179–2358 / 2470–2526 / 2576–2728；ecm_mont_cpu.cpp:185–274。不能把所有 miss 都称为有效 Stage2 affine 点。</p></details>
+
+<details class="flow-detail"><summary>CPU Edwards · scalar / 八路 IFMA / binary 例外</summary>
+<div class="table-scroll"><table class="runtime-table"><thead><tr><th>顺序</th><th>主机计算</th><th>输出 / 文件 I/O</th></tr></thead><tbody>
+<tr><td>标量与身份</td><td>取得 L 再乘 48；分配结果/save_lines，生成或恢复实际 sigma。</td><td>指数缓存与 batch/曲线记录恢复；DONE 可跳过新计算。</td></tr>
+<tr><td>scalar 准备</td><td>读 INFLIGHT → 构造并检查曲线 → 建奇数倍字典并归一化 → NAF → 初始化/恢复累计点。</td><td>构造和字典阶段可提前发现因子；它们不是 GPU 动作。</td></tr>
+<tr><td>IFMA 准备</td><td>整批 DONE 检查 → 构造预检 → SoA 曲线/字典 → 恢复同进度 lane → NAF。异常或单条尾部可回 scalar。</td><td>恢复读取晚于字典，区别于 scalar；八 lane 不代表八条 GPU 曲线。</td></tr>
+<tr><td>循环</td><td>按 NAF digit 倍点与有符号加点。callback 中直接写 checkpoint，不经过 Mont 式 PAUSED 再写。</td><td>输出进度、写 INFLIGHT、处理停止。IFMA 长度不足时可能没有批内 callback。</td></tr>
+<tr><td>完成</td><td>(U:W)=(Z+Y:Z−Y) → GCD → 点/因子分类；g=N 不生成 Stage2 点。</td><td>scalar：save_line → DONE → 即时因子；IFMA：即时因子 → save_line → DONE；最后共享 save。</td></tr>
+<tr><td>例外</td><td>超固定 MPN 容量的 scalar 回退 GMP binary double-and-add，不使用 NAF，也无同样恢复/callback能力。</td><td>字典失败后的分母 GCD 不是对已得复合因子做素因子分解。</td></tr>
+</tbody></table></div>
+<p class="caption">driver:1048–1101 / 1415–1565 / 1767–1977；ecm_edwards_cpu.cpp:370–476 / 606–643；simd_edwards.cpp:1045–1150。</p></details>
+
+<details class="flow-detail" open><summary>CUDA Montgomery · 默认 ladder / param0、2、3</summary>
+<div class="table-scroll"><table class="runtime-table"><thead><tr><th>顺序</th><th>GPU / 主机 / 传输与同步</th><th>输出 / 文件 I/O</th></tr></thead><tbody>
+<tr><td>准备</td><td>主机取得 K → prepare 设备/上下文 → host 结果与 sigma；进入后端，先上传 K words，之后读具体载荷。</td><td>指数缓存、兼容导入、save 可写性检查、checkpoint 读取。</td></tr>
+<tr><td>构造或恢复</td><td>无恢复：主机选 tier、GMP 构造 P/2P/常数；恢复：采用保存 sigma、tier、进度和布局。然后 H2D 整批状态。</td><td>param0/2 部分构造逆元失败仅警告或置零，不自动当 proper factor 发布。</td></tr>
+<tr><td>每片提交</td><td>主机定多 bit slice → GPU kernel → cudaDeviceSynchronize → managed error 检查 → event 计时。</td><td>普通片不回读曲线点。dump 开启时片前后另作 D2H 和 CSV 写入。</td></tr>
+<tr><td>片边界</td><td>按完成 bit/时间计算 ETA，调整下片；默认普通 buffer 是普通 residue，kernel 每片进/出 Montgomery 域。</td><td>输出进度。达到 checkpoint 间隔、停止或末片才 D2H 状态、checksum 并写盘。</td></tr>
+<tr><td>正常结束</td><td>当前末片保存后还会再 D2H 做最终处理。主机先 invert Z，失败再 GCD；g=N 导致批错误、拒绝最终 save。</td><td>释放资源 → driver 即时发布命中 → text save → 统一结果层；不是 kernel 做 GMP GCD。</td></tr>
+</tbody></table></div>
+<p class="caption">montgomery.cu:1088–1328 / 1400–1403 / 1523–1665；findfactor:222–237。fold 仅为受限构建/精确 Mersenne 输入路径，不能推广到所有曲线。</p>
+<div class="slice-comparison"><b>普通片：</b>GPU 点乘 → 等待/错误与计时 → 主机进度输出 → 下一片<br><b>保存片：</b>GPU 点乘 → 等待 → D2H 状态 → 主机序列化 → checkpoint 文件 → 下一片或停止</div>
+</details>
+
+<details class="flow-detail"><summary>CUDA Montgomery · 可选 resident / PRAC</summary>
+<p>仅可选实例、param0、非 fold 等条件满足时接纳。它们不是所有 param 的通用替换。</p>
+<ol class="numbered"><li>主机取得 K；PRAC 另构造/缓存 prime、repetition、chain descriptors。</li><li>恢复专用算法/域载荷；新数据 H2D 后 GPU INIT 进入 Montgomery 域，恢复态跳过 INIT。</li><li>resident 按 bit、PRAC 按 prime-record 分片；每片 event 等待并检查错误，普通片不回读点。</li><li>设备跨片保留 Montgomery 域；checkpoint 直接 D2H 保存该域载荷，不先 EXPORT。</li><li>完成时 GPU EXPORT → 同步 → D2H → 主机最终结果处理。窗口/采样限额诊断返回未完成，不进入成功 save 主线。</li></ol>
+<p class="caption">montgomery.cu:1007–1032；prac_runtime.inl:132–198 / 241–295。进度单位和恢复格式不同于默认 ladder。</p></details>
+
+<details class="flow-detail"><summary>CUDA Edwards · NAF / binary</summary>
+<div class="table-scroll"><table class="runtime-table"><thead><tr><th>顺序</th><th>GPU / 主机 / 传输与同步</th><th>输出 / 文件 I/O</th></tr></thead><tbody>
+<tr><td>主机准备</td><td>K=48L → host Batch → 算法选择与恢复；未恢复则 checked construction。默认 width-6 NAF，可选 binary。</td><td>读验指数/恢复记录。构造命中用占位 lane，暂不在构造现场发布因子。</td></tr>
+<tr><td>设备准备</td><td>选 tier/device；恢复后在 API 建正式 NAF plan；分配上传。NAF 额外 GPU 字典 kernel 并等待检查。</td><td>准备回调输出初始化和字典计时；完全完成的合法 NAF 恢复态可跳过 GPU。</td></tr>
+<tr><td>每片</td><td>GPU bit/column slice → 同步检查 → <b>每片 D2H 四个普通坐标</b>。binary 回读整份 data；NAF 只回读 publication Q。</td><td>输出按首次/200ms/停止/末片触发。checkpoint 使用已回读状态，不需再单独 D2H。</td></tr>
+<tr><td>域与进度</td><td>NAF 的设备累计点/字典跨片留 Montgomery 域；binary 每片进/出。done 为 MSB bit 或 NAF column。</td><td>算法、窗口、标量身份必须匹配恢复载荷；写盘失败/停止不能继续正常完成。</td></tr>
+<tr><td>完成</td><td>主机验扩展点 → (Z+Y:Z−Y) → GCD → affine x 或 factor；g=N 跳过该 Stage2 点。</td><td>先保留完成态 checkpoint；逐曲线收尾发布构造/最终因子 → 原子整批 text save → 统一结果。</td></tr>
+</tbody></table></div>
+<p class="caption">ecm_edwards_gpu_driver.inl:85–199；edwards_runtime.inl:31–114。NAF 的 column 数不保证等于 K bit 数。</p>
+<div class="slice-comparison"><b>每片：</b>GPU 点乘 → 等待 → D2H 当前 Q → 主机进度 → 输出 / 按需 checkpoint → 下一片</div>
+</details>
+
+<details class="flow-detail"><summary>OpenCL Montgomery · 仅 param3</summary>
+<div class="table-scroll"><table class="runtime-table"><thead><tr><th>顺序</th><th>GPU / 主机 / 传输与同步</th><th>输出 / 文件 I/O</th></tr></thead><tbody>
+<tr><td>准备</td><td>主机 K → prepare → host sigma；后端打包 K → 读载荷 → context → 路径/程序 → 新运行自检 → 恢复或构造 P/2P。</td><td>指数/内核缓存、源码加载、程序编译缓存、checkpoint、save 检查。</td></tr>
+<tr><td>上传</td><td>buffer 创建与 H2D；新状态由主机转 Montgomery 域再上传，恢复态已有该域。只 binary ladder，无 Edwards NAF。</td><td>主机域转换不是设备 kernel，也不是文件 I/O。</td></tr>
+<tr><td>普通片</td><td>初片约 10 bit，按约 80–120ms 调整；enqueue → <b>clFinish</b>，普通片不回读点。</td><td>定时 checkpoint 才下载 raw 域状态并写盘；进度输出和停止检查是后续独立动作。</td></tr>
+<tr><td>诊断片</td><td>sync_each_batch/dump：每片 D2H → 主机普通域转换 → 非末片重新转域并 H2D。</td><td>dump 另写文件，不能把该路径画成缺省每片行为。</td></tr>
+<tr><td>停止或完成</td><td>停止：同步/下载/保存后返回未完成。完成：D2H → 主机普通域转换 → invert Z 或 GCD → 资源释放。</td><td>返回 driver 后命中 publication → 可选 text save → 统一结果层。</td></tr>
+</tbody></table></div>
+<p class="caption">opencl_ecm_stage1.cpp:380–475 / 787–1028 / 1056–1297。findfactor 对逆元失败先标命中，g=N 由统一 publication 的 proper-factor 校验拒绝；其时序与 CUDA 并不完全相同。</p></details>
+
+<p class="critical-note"><b>Checkpoint remove 调用不等于已删除文件。</b> 生产 active batch 的逻辑 record 受 runtime:154–156 保护；真正清理在 save、两路结果和 seal 成功后的 end_batch(true)。失败则保留恢复条件。不要仅按某个 Adapter 里出现 remove 就推断唯一恢复文件已丢失。</p>
+</section>
+
+<section id="flow-outputs" class="runtime-section"><h2>结果 文件与队列的完成次序</h2>
+<div class="table-scroll"><table><thead><tr><th>产物</th><th>含义</th><th>何时发生</th></tr></thead><tbody>
+<tr><td>指数缓存</td><td>K 或 L 的可复用大整数，非曲线状态</td><td>计算之前读取/按条件回写；不保存 NAF、点或完成覆盖。</td></tr>
+<tr><td>Checkpoint</td><td>任务/曲线恢复状态与已完成记录</td><td>启动恢复、安全点保存、完成态保存；成功最终提交后清理。</td></tr>
+<tr><td>Text save</td><td>规范化完成点或因子</td><td>Adapter 收尾；恒等元/饱和不一定有可续算点，曲线尝试数可大于点记录数。</td></tr>
+<tr><td>内部结果</td><td>逐曲线 sigma、构造、状态、计算身份与运行元数据</td><td>任务后写内部 ledger 与 JSONL，不是完整坐标 dump。</td></tr>
+<tr><td>Submission</td><td>proper factor F 与 seal 后的 NF 曲线计数</td><td>命中可即时输出；任务后逐曲线记账，再 seal NF。不同曲线相同因子保留来源。</td></tr>
+<tr><td>Dump / 进度</td><td>可选坐标调试 / 用户可见运行状态</td><td>输出、pipe、日志、CSV 分别按配置，不是统一必经“内部 data”步骤。</td></tr>
+</tbody></table></div>
+<p><b>Save 是否可选也因路径而异：</b>普通输入 GPU Montgomery 仅在给出路径时保存，队列会生成路径；CPU Montgomery 在使用 checkpoint/tmp_dir 或显式 save 时保存；CPU/CUDA Edwards 缺省会自动命名并发布。</p>
+<p><b>Adapter 返回后的真实次序：</b>校验 per-curve 身份 → 每曲线 publish_submission(false) → publish_internal_batch → seal_submissions → end_batch(true)。失败走 end_batch(false)。</p>
+<p><b>去重区别：</b>发布按 N/曲线/param/sigma/B1/阶段/因子身份去重；param3 save 另将不同因子值从余因子表达式中依次可整除剥除。两者都不等于通用素因子分解。param0/2 save 保留原 N。</p>
+<p><b>队列成功：</b>无因子且需外部 Stage2 时先 park pending → finished → 按需替换为 Stage2 任务或移除源任务 → save 同步 → Stage2 flush → 支持构造的 Prime95 交接 → 下一条。</p>
+<p><b>停止/失败：</b>准备或结果发布失败保留队列并终止；停止保留恢复条件；被归类的执行错误可标 ERROR。交接失败保留 pending；已有算术成功不因此回滚。</p>
+</section>
+
+<section id="flow-gaps" class="runtime-section"><h2>群阶诊断与最小 B1/B2 不能混作保证</h2>
+<p>--go 在直接 CLI 中对已命中的 probable-prime 因子 p 计算 #E(F<sub>p</sub>) 并分解<strong>群阶</strong>；复合因子跳过。实际诊断在统一结果提交之后，不是运行每条曲线之前或保存结果之前的必经步骤。</p>
+<div class="formula-line">r<sub>p</sub> = ord(P mod p)，r<sub>p</sub> | #E(F<sub>p</sub>)<br>[K]P=O ⇔ r<sub>p</sub>|K<br>K=tL(B1) 时，r<sub>eff</sub>=r<sub>p</sub>/gcd(r<sub>p</sub>,t)<br>B<sub>1,point</sub> = max<sub>ℓ|r_eff</sub> ℓ<sup>vℓ(r_eff)</sup>，再受程序下界和饱和等条件约束。<br>理想单大素数 Stage2：m=r<sub>p</sub>/gcd(r<sub>p</sub>,K) 为素数 ℓ，且 B1&lt;ℓ≤B2。</div>
+<p>用整个群阶代替点阶只给出充分的消去界限；忽略 t=12/48 也会误判。当前 go_min_bounds 还把“最大素数幂对应的底素数”当作 largest_prime，不能视作严格最小 B1/B2。</p>
+<p class="caption">该 helper 使用 32 位 firstsigma+i 与 Montgomery 族重建。GPU Edwards 明确拒绝 --go；CPU Edwards、非连续/64 位 sigma 的诊断适用性仍需专门核对。本次修正文档解释，不修改实现或输出字段。</p>
+</section>
+
+<section class="runtime-section"><h2>由细粒度流程得到的重构约束</h2><p>曲线身份与有效 K 统一；CPU/GPU 热循环、进度单位和载荷保留差异。任务层集中定义成功与恢复条件，执行 Adapter 隐藏设备布局，通过有失败反馈的提交能力保持即时因子发布。输出格式、文件协议与设备传输各自有明确归属。</p></section>
+<section id="granularity" class="granularity">
+<h2>需要同时合并和拆分，先收敛职责与 Interface</h2>
+<p class="lead">core 的主要问题是：完整职责仍集中在大驱动里，具体实现却以大量头文件散落并向调用者公开。调整的目标是减少调用者必须理解的内容。</p>
+<div class="decision-grid">
+<div><h3>归属调整</h3><p>把文件放入正确 Module。显存模拟归 CUDA 规划；结果账本归 storage；CLI 与队列离开数学 core。</p></div>
+<div><h3>接口收口</h3><p>把实现状态、模型、codec 和平台头藏到私有实现。一个 Module 可以保留多个私有文件。</p></div>
+<div><h3>物理合并</h3><p>共同拥有同一状态、总要一起理解的文件才合并。不要按文件长度或相同前缀决定。</p></div>
+</div>
+<p class="caption">目录顶层结构统计：96 个文件、73 个头文件、34 个头文件不超过 80 行。统计含该目录内非主流程文件，只用于发现候选，不是生产闭包或复杂度评分。复核开始时 HEAD 为 8017ac48e0962da149b269f3bb022ff438b8c20c，包含未提交内容；源码摘要见完整草稿。</p>
+</section>
+
+<section id="merge-candidates"><h2>哪些应合并或收回私有实现</h2>
+<div class="table-scroll"><table class="action-table"><thead><tr><th>对象</th><th>判断</th><th>建议与理由</th></tr></thead><tbody>
+<tr><td><code>result_submission / internal_result / submission_writer</code></td><td>Strong<br>职责收口</td><td>同属结果发布 Module。公开结果记录与发布、查询、seal 等必要操作；格式、ledger、锁、原子发布放私有实现。不要合成一个巨型公共头。</td></tr>
+<tr><td><code>stage1_legacy_gpu + checkpoint codecs/runtime</code></td><td>Strong<br>实现私有化</td><td>旧格式探测、校验、导入是恢复过程的内部步骤；对任务公开会话/记录能力。binary 与各算法载荷仍可分别保留私有文件。</td></tr>
+<tr><td><code>stage1_exp + exp_cache</code></td><td>调用入口收口<br>保留不同实现</td><td>任务只需取得正确的标量计划；纯指数算法和磁盘缓存保持分离，不把文件系统带回数学 core。</td></tr>
+<tr><td><code>giant_memory + giant_state</code></td><td>Worth exploring<br>物理合并候选</td><td>同一组资源的静态容量与时间线回放，可成为 giant_resources 私有实现。先保持全部事件与寿命规则。</td></tr>
+<tr><td><code>ntt/s4/owner/initial/workspace memory</code></td><td>Strong<br>统一规划入口</td><td>同归 CUDA 资源规划 Module，但保留各资源子模型。调用者只看输入、计划与诊断；共享布局继续供执行使用。</td></tr>
+<tr><td><code>tune_* / portable_model / width_prediction</code></td><td>Strong<br>按活跃职责收口</td><td>profile 存储、成本预测、运行搜索分别拥有完整规则；字段解析和拟合基础不应引入整片模型头链。生成数据与各类计时单位校验继续独立。</td></tr>
+<tr><td><code>portable_driver.inl</code></td><td>Strong<br>提取完整流程</td><td>1487 行文本包含依赖 main 的 Options、Record、child_run。应形成普通实现与明确请求，不能只把外层变量换成长参数列表。</td></tr>
+</tbody></table></div>
+<p class="caption">“未见生产直接调用”只构成核对候选，不等于可删代码。auto_candidates、tune_tail_grid、EcmProfile/NttProfile::load、ComponentEstimator 未见当前生产直接调用；但 portable 仍复用其所在头链的字段、特征与 fit_route_cost。</p>
+</section>
+
+<article class="card"><h2>结果发布：合并职责，缩小公开表面</h2><span class="tag strong">Strong</span><span class="tag">存储 Interface</span>
+<p class="files">ecm_result_submission.h:2–5 · ecm_submission_writer.h:2–23 · 三个生产 main</p>
+<div class="split"><div class="diagram"><div class="label">当前：入口知道多种实现</div><div class="node">Stage1 / CPU Stage2 / CUDA Stage2</div><div class="arrow">↓</div><div class="row"><div class="node">编码</div><div class="node">ledger</div><div class="node">平台锁</div></div><div class="node private">连带曲线 helper、路径、原子替换</div></div>
+<div class="diagram"><div class="label">建议：同一发布 Module 内聚</div><div class="node">结构化结果与明确发布操作</div><div class="arrow">↓</div><div class="node deep">发布 Interface<div class="private">私有：codec / ledger / locks / replace</div></div><div class="node private">轻量路径契约仍供 GUI 共享</div></div></div>
+<p><b>收益：</b>Locality 集中在发布规则；入口不再了解持久化步骤。完成点 save、checkpoint、结果记录仍有不同操作，不压成一个通用 save()。</p></article>
+
+<article class="card"><h2>资源规划：保持子模型，隐藏组合过程</h2><span class="tag strong">Strong</span><span class="tag">规划 Interface</span>
+<p class="files">context.h:8–12 · workspace_memory.h:2–6 · CUDA plan.cpp:257–388</p>
+<div class="split"><div class="diagram"><div class="label">当前：实现头链向外扩散</div><div class="node">context / plan 调用者</div><div class="arrow">↓</div><div class="row"><div class="node">NTT</div><div class="node">S4</div><div class="node">giant</div></div><div class="row"><div class="node">owner</div><div class="node">initial</div><div class="node">workspace</div></div></div>
+<div class="diagram"><div class="label">建议：一个完整规划 Seam</div><div class="node">拓扑 + 后端布局 + 策略</div><div class="arrow">↓</div><div class="node deep">资源规划 Interface<div class="private">各子模型 + 同时刻 live bytes + 诊断</div></div><div class="arrow">↓</div><div class="node">计划摘要 / 拒绝原因</div></div></div>
+<p><b>收益：</b>Leverage 来自一次调用得到完整计划；不让点生成和多项式计算都包含整套模拟器。</p><p class="caption">workspace 的时序组合仍须保留；不同子模型的 peak_bytes 不能相加为进程峰值。BabyMemoryLayout 供执行与规划共享，不藏成两份公式。</p></article>
+
+<article class="card"><h2>调优：基础复用不应拖入整片模型</h2><span class="tag strong">Strong</span><span class="tag">模型与存储各自完整</span>
+<p class="files">portable_model.h:225,230 · tune_prediction.h:35 · tune_portable.h:109–118 · portable_driver.inl:229–230</p>
+<div class="split"><div class="diagram"><div class="label">当前：取得一个能力需穿过头链</div><div class="node">portable 成本模型</div><div class="arrow">↓</div><div class="node">components → prediction → tune_ecm</div><div class="arrow">↓</div><div class="node">解析 / profile / grid / 拟合</div></div>
+<div class="diagram"><div class="label">建议：按完整职责组织</div><div class="node">调优编排</div><div class="arrow">↓</div><div class="row"><div class="node deep">profile 存储</div><div class="node deep">成本预测</div><div class="node deep">运行搜索</div></div><div class="node private">私有基础：解析、拟合；独立数据：schema、冻结参考</div></div></div>
+<p><b>收益：</b>当前路径只依赖所需 Interface；预测、实时准入和成功准入缓存各有明确合同，不合成一个通用 planner 或 cache 类。</p></article>
+
+<section id="keep-contracts" class="open-section"><h2>这些小文件应保留</h2>
+<div class="table-scroll"><table><thead><tr><th>小文件或规则</th><th>真实共享者</th><th>为什么保留</th></tr></thead><tbody>
+<tr><td><code>ecm_expr.h</code></td><td>Stage1 与 CUDA Stage2</td><td>小 Interface 隐藏约 299 行整数表达式解析，具备实际 Depth。</td></tr>
+<tr><td><code>ecm_stage1_binary.h</code></td><td>checkpoint runtime、legacy、Edwards 载荷</td><td>小端、长度检查、CRC 与格式标识是共同不变量；可为私有共享头。</td></tr>
+<tr><td><code>ecm_result_paths.h</code></td><td>writer 与 gui/results.cpp:1</td><td>9 行也值得保留轻量契约；GUI 不应依赖整套结果写入器。</td></tr>
+<tr><td><code>ecm_result_json.h</code></td><td>结果编码、TOML、Stage2 queue state</td><td>解析基础不应被结果发布吞并，造成反向依赖。</td></tr>
+<tr><td><code>giant_chunk / giant_tree / BabyMemoryLayout</code></td><td>实际执行与规划/请求拓扑</td><td>分别保证批次完整、叶映射一致、分配布局一致。保持一个公式来源。</td></tr>
+<tr><td><code>runtime_cache / width_reference / *.def</code></td><td>搜索、预测与 schema 生成</td><td>缓存失效、冻结证据与字段单一来源各有独立规则，不是多余架构层。</td></tr>
+</tbody></table></div>
+<p>归入同一 Module，不等于必须并成一份头文件。私有文件可以细分；外部调用者不需要因此学习更多 Interface。</p>
+</section>
+
+<section id="driver-plan"><h2>ecm_driver 按六个完整职责提取</h2>
+<p>六个 Module 是职责目标，不规定只剩六个文件，也不要求每个 Module 建立独立库或继承层。CPU scalar/SIMD、lane 身份、快照与 worker 状态先按曲线保持整体。</p>
+<div class="split"><div class="diagram"><div class="label">当前：一个驱动持有所有知识</div><div class="node">ecm_driver.cpp · 4676 行</div><div class="arrow">↓</div><div class="row"><div class="node">CLI / PARI</div><div class="node">队列 / 交接</div></div><div class="row"><div class="node">CPU / GPU</div><div class="node">恢复 / 发布</div></div></div>
+<div class="diagram"><div class="label">建议：调用者只知道完整职责</div><div class="row"><div class="node">命令入口</div><div class="node">队列运行与完成</div></div><div class="arrow">↓</div><div class="node deep">Stage1 任务会话</div><div class="arrow">↓</div><div class="row"><div class="node">执行 Adapter</div><div class="node">checkpoint</div><div class="node">结果与完成点发布</div></div></div></div>
+<div class="table-scroll"><table><thead><tr><th>Module</th><th>原入口与行号</th><th>集中隐藏的 Implementation</th></tr></thead><tbody>
+<tr><td>命令入口</td><td>main:3969 · usage:536 · sigma:116/153 · gpu-info:3412</td><td>输入表达、帮助、命令、展示；PARI 诊断 214–535 可为 CLI 私有文件。</td></tr>
+<tr><td>队列运行与完成</td><td>run_queue_manager:3465 · queue_run_one:3201</td><td>worker、任务选择、完成提交和跨阶段交接。保留整条提交链，不按每步单建 Interface。</td></tr>
+<tr><td>任务会话</td><td>Options/Result:715/751 · run_stage1_once:3030</td><td>请求、结果拥有权、checkpoint 会话、执行选择和任务成功条件。</td></tr>
+<tr><td>批执行 Adapter</td><td>Edwards:959–1994 · Mont:2085–2749 · GPU:2773–2991 与 .inl</td><td>曲线、scalar/SIMD、worker、进度、快照安全点与回退；可有多个完整私有 .cpp。</td></tr>
+<tr><td>Checkpoint 存储</td><td>runtime / binary / legacy / 各曲线载荷</td><td>batch、主备、兼容、记录和持久化。安全快照的时机仍归执行 Adapter。</td></tr>
+<tr><td>结果与完成点发布</td><td>命名:770–848/2008–2083 · 发布:2994–3027/3083–3098</td><td>save codec、结果编码、ledger、seal；不决定队列推进和点乘切片。</td></tr>
+</tbody></table></div>
+<p class="caption">驱动中的 Stage1RunResult 仍暴露需手工清理的结果数组；Edwards 第 1930–1931 行又通过转换修改 const options。先明确请求值、session 状态和结果拥有权，再搬文件，避免把大上下文扩散到新公共头。</p>
+</section>
+
+<section id="timing-contract" class="critical-note"><h2>拆分不能把结果改成全部计算后统一发布</h2>
+<p>当前 CPU Edwards、CPU Montgomery、GPU Montgomery 与 GPU Edwards 都在执行中即时发布因子。发布失败会影响执行状态。新的 Seam 应是任务提供<strong>能返回失败的即时提交能力</strong>，由发布 Module 隐藏账本细节。</p>
+<p class="caption">证据：ecm_driver.cpp:1438/1559/1615/1863/2509/2624/2923；ecm_edwards_gpu_driver.inl:180。</p>
+<p><b>任务最终成功：</b>输出校验 → batch identity/lock → 继承 save → 执行与即时提交 → submission → internal batch → seal → end_batch(true)。失败保留 end_batch(false) 的恢复条件。</p>
+<p><b>队列完成：</b>park Stage2 pending → finished → 替换/移除源任务 → sync save → flush Stage2 → Prime95 delivery。最后一步失败保留 pending；不能重新判定算术失败。</p>
+</section>
+
+
+
+</details><footer><h2>方案源文档与证据</h2><p><a href="../development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md">主流程重构方案与分析草稿</a> 为本主题设计源文档，本页为阅读版。当前实现仍以架构与使用文档为准。</p><p><a href="../../data/experiments/main_flow_refactor_plan_20261021/user_build_observation.txt">用户原始构建观察</a> · <a href="../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json">前期整合源码快照</a> · <a href="../README.md">项目文档入口</a></p><p class="caption">原始证据位于忽略的 data/ 目录，随本机保留；本轮仅修改文档，没有修改生产代码、配置或构建脚本，也没有运行构建或测试。</p></footer></main></body></html>

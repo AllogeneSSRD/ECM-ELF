@@ -48,7 +48,8 @@ ecm.toml
 /data/
 /docs/data/
 /docs/paper/
-/docs/web/
+# /docs/web/
+/web
 AGENTS.md
 
 # Tool output and scratch directories

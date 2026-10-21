@@ -28,7 +28,7 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 `kernels/cuda/stage1/` 只维护设备算术、模板实例和薄发射器。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。核目录不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `include/ecm/cuda/cgbn_types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
 
-依赖方向为：核心驱动 → 中立接口 → CUDA 主机实现 → 中立发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码位于 `kernels/cuda/optional/prac/`，主机计划与运行时位于 `src/core/ecm_prac_plan.*` 和 `src/cuda/stage1/prac_*.inl`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。生产与开发 Stage2 使用各自源组；Stage2 主体及诊断源码的进一步拆分仍列入重构 TODO。部分诊断直接实例化设备模板，主机等待探针还包含私有主机运行时；独立探针接口待后续阶段完成，生产闭包禁止反向包含工具源码。
+依赖方向为：核心驱动 → 中立接口 → CUDA 主机实现 → 中立发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码位于 `kernels/cuda/optional/prac/`，主机计划与运行时位于 `src/core/ecm_prac_plan.*` 和 `src/cuda/stage1/prac_*.inl`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `include/ecm/cuda/diagnostics/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
 
 Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由相邻点及固定差点组成。GPU 以切片推进，避免一个超长 kernel 占用整段 B1。每曲线的末点先解码、检查，求 Z 与 N 的 GCD；可逆时归一化 X=X/Z mod N，再输出 save。
 
@@ -38,7 +38,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
 
-二进制与NAF的实例共享[位宽清单](../../src/cuda/ecm_cuda_edwards_tiers.inc)，核函数和七组实例化文件位于 `kernels/cuda/cgbn_edwards_instances*`，按TPI及位宽范围拆分并行编译；`src/cuda/`保留接口、输入校验、分派和主机驱动。模板算术与切片逻辑见[共用实例实现](../../kernels/cuda/stage1/edwards/instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
+二进制与NAF的实例共享[位宽清单](../../include/ecm/cuda/tiers.def)，核函数和七组实例化文件位于 `kernels/cuda/stage1/edwards/`，按TPI及位宽范围拆分并行编译；`src/cuda/stage1/`保留输入校验、分派和主机驱动，中立接口位于 `include/ecm/cuda/`。模板算术与切片逻辑见[共用实例实现](../../kernels/cuda/stage1/edwards/instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
 
 主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/cuda/stage1/edwards.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
