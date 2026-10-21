@@ -101,6 +101,11 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/core/stage1/selection.cpp
     src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
     src/ecm/service/planning/stage2.cpp
+    src/ecm/service/stage2/task.cpp
+    src/ecm/service/stage2/input.cpp
+    src/ecm/platform/process/stage2_curve_process.cpp
+    src/ecm/backend/cuda/stage2/host_policy.cpp
+    src/ecm/application/configuration/stage2_identity.cpp
     src/ecm/application/configuration/legacy/ecm_expr.cpp
     src/ecm/storage/queue/ecm_worktodo.cpp
     src/ecm/application/configuration/ecm_queue_config.cpp)

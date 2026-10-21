@@ -748,6 +748,8 @@
     "src/core/ecm_stage2_fingerprint.h": "include/ecm/platform/fingerprint.h",
     "src/ecm/platform/ecm_stage2_fingerprint.h": "include/ecm/platform/fingerprint.h",
     "src/core/ecm_stage2_portable_driver.inl": "src/ecm/service/planning/stage2.cpp",
-    "src/ecm/application/cuda_stage2/ecm_stage2_portable_driver.inl": "src/ecm/service/planning/stage2.cpp"
+    "src/ecm/application/cuda_stage2/ecm_stage2_portable_driver.inl": "src/ecm/service/planning/stage2.cpp",
+    "src/core/ecm_stage2_console.h": "src/ecm/platform/legacy/ecm_stage2_console.h",
+    "src/ecm/application/cuda_stage2/ecm_stage2_console.h": "src/ecm/platform/legacy/ecm_stage2_console.h"
   }
 }

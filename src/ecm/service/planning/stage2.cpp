@@ -8,6 +8,8 @@
 #include "ecm/platform/program_version.h"
 #include "ecm/platform/fingerprint.h"
 #include "stage2.h"
+#include "../stage2/input.h"
+#include "../../platform/process/stage2_curve_process.h"
 #include "../../service/planning/legacy/ecm_stage2_cost_profile.h"
 #include "../../service/planning/legacy/ecm_stage2_tune_format.h"
 #include "../../service/planning/legacy/ecm_stage2_tune_ecm.h"
@@ -48,7 +50,6 @@
 
 namespace s2prod {
 namespace fs=std::filesystem;
-// Included inside s2prod after the save/worker/planning helpers.
 namespace pt=ecm_stage2::tune::portable;
 namespace et=ecm_stage2::tune;
 struct PortableQuiet {
@@ -1536,4 +1537,136 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
         <<" budget_elapsed="<<budget.elapsed()<<" s profile="<<destination.string()<<" evidence="<<evidence.string()<<std::endl;
 }
 
+bool open_runtime_routes(const std::string &text,ecm_stage2::tune::portable::RuntimeRouteHints &out) {
+    out={};if(text.empty())return true;
+    if(text.size()>8257 || text.size()<130 || text[text.size()-65]!='#')return false;
+    const auto body=text.substr(0,text.size()-65),digest=text.substr(text.size()-64);
+    if(!ecm_stage2::tune::portable::RuntimePauseHints::valid_key(digest) ||
+       ecm_stage2::sha256_text(body)!=digest)return false;
+    return out.assign(body);
+}
+std::string seal_runtime_routes(const ecm_stage2::tune::portable::RuntimeRouteHints &routes) {
+    const auto body=routes.text();return body.empty()?std::string{}:body+'#'+ecm_stage2::sha256_text(body);
+}
+std::string select_auto(Options &o,const Record &r,bool apply) {
+    if(!o.tune_profile.empty())return select_auto_tuned(o,r);
+    if(!o.stage1_profile.empty() && !(o.stage1_seconds>0))throw std::runtime_error("Stage1 tune costs require a full ECM tune profile");
+    namespace c=ecm_stage2::cost;
+    if(o.carrier_exponent)throw std::runtime_error("Auto B2 needs a calibrated Mersenne-carrier profile; use explicit B2");
+#if NTT_GL_ADD_SUB_MASK != 0
+    throw std::runtime_error("Auto B2 has no calibrated cost profile for selected NTT add/sub arithmetic");
+#endif
+    if(o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
+    Handle guard;guard.value=CreateFileW(fs::path(o.cost_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock cost profile for reading");
+    const std::string hash=ecm_stage2::sha256_file(fs::path(o.cost_profile));
+    const auto profile=c::Profile::load(fs::path(o.cost_profile));
+    if(profile.binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("cost profile binary fingerprint mismatch; recalibration required");
+    // Bind only the measured configuration; explicit conflicting environment fails.
+    auto require=[](const char *key,uint64_t expected,uint64_t fallback) {
+        const char *value=std::getenv(key);const uint64_t actual=value?ecm_stage2::cost::integer(value):fallback;
+        if(actual!=expected)throw std::runtime_error(std::string("cost profile configuration mismatch: ")+key);
+    };
+    require("NTT_CUDA_WAIT_MODE",0,0);
+    for(const char *key:{"NTT_XADD6","NTT_BABY_DEVICE","NTT_POINT_MERSENNE","NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE",
+        "NTT_GFINV_SEG_EXACT","NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_GROOT_DEVICE","NTT_SCALED_DESCENT",
+        "NTT_S4_OUTPUT_WINDOW","NTT_S4_CHUNK_OUTPUT","NTT_DEVICE_GLEAF","NTT_GROOT_TO_FOLD","NTT_S4_ORACLE_ASYNC",
+        "NTT_S4_CARRY_BATCH","NTT_FUSE_WARP_TAIL"})require(key,1,1);
+    for(const char *key:{"NTT_GIANT_LADDER","NTT_GL_SHIFT_SCALE","NTT_CARRY_CHECK_FUSED","NTT_S4_HOSTPACK","NTT_S4_FINAL_READBACK"})require(key,0,0);
+    require("NTT_FUSE_COOP_OUTER",2,2);require("NTT_FUSE_T",12,12);require("NTT_FUSE_M",4,4);
+    require("NTT_FUSE_MID_COOP",0,0);
+    require("NTT_FUSE_JOINT",0,0);
+    require("NTT_S4_PACK_ZERO",0,0);
+    require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
+    require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
+    require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.
+    require("NTT_GIANT_SEED_PAIR",0,0); // Paired/rebased seeds require new measured costs.
+    require("NTT_GIANT_BASE_CPU",0,0);
+    require("NTT_GSCALE_DEVICE",0,0); // GPU Gamma correction requires new costs.
+    require("NTT_SCALED_ROOT_DEVICE",0,0); // Resident root preparation needs new costs.
+    require("NTT_SCALED_FRONTIER_DEVICE",0,0); // Resident descent layers require new costs.
+    require("NTT_FOLD_OWNER_REUSE",0,0); // Owner aliases need a matching layout/cost scope.
+    require("NTT_LADDER_CAP",8192,8192);
+    require("CUDA_LAUNCH_BLOCKING",0,0);
+    require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);
+    require("NTT_ARENA_WORKSPACE_POOL",1,1);require("NTT_FUSE_COMPACT_SCRATCH",1,1);
+    require("NTT_WORKSPACE_REUSE_BQ",0,0); // Two-buffer layouts require a matching memory/cost profile.
+    require("NTT_PHASE_TRIM_RAW",0,0); // Phase reclamation also needs a matching cost scope.
+    require("NTT_PHASE_TRIM_OUTPUT",0,0); // Output reclamation changes residency and timings.
+    require("NTT_OWNER_TRIM_FUSE",0,0); // Phase cache eviction needs a calibrated lifecycle/cost scope.
+    require("NTT_MEMORY_LEDGER",0,0); // Allocation instrumentation is outside production timing profiles.
+    require("NTT_REQUEST_AUDIT",0,0); // Request topology instrumentation is outside timing profiles.
+    require("NTT_S3_COMPACT_PRODUCTS",1,1); // Independent product capacity is the production default.
+    require("NTT_S3_PRODUCTS_TEST",0,0);require("NTT_S3_PRODUCTS_TEST_BAD",0,0);
+    require("NTT_GIANT_CHUNK_FLOOR",0,0);require("NTT_GIANT_POINT_BUDGET_KB",262144,262144);
+    require("NTT_S4_WORKSPACE_BUDGET",0,0); // Chunk policy needs a matching cost scope.
+    require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);
+    if(o.factor_only)_putenv_s("NTT_NAME_HITS","0");
+    const char *naming=std::getenv("NTT_NAME_HITS");
+    if(naming)require("NTT_NAME_HITS",profile.naming,profile.naming);
+    else _putenv_s("NTT_NAME_HITS",profile.naming?"1":"0");
+    if(!profile.naming)o.factor_only=true;
+    Big n;mpz_set_str(n.z,r.n.c_str(),16);const int bits=(int)mpz_sizeinbase(n.z,2);
+    if(bits<2||bits>8192||mpz_popcount(n.z)!=(mp_bitcnt_t)bits)throw std::runtime_error("cost profile requires exact Mersenne input");
+    uint64_t arena=o.arena;
+    if(!arena)if(const char *v=std::getenv("NTT_ARENA_CAP_KB")) {
+        const auto kb=c::integer(v);if(!kb||kb%1024)throw std::runtime_error("cost profile requires an explicit whole-MiB arena scope");arena=kb/1024;
+    }
+    if(std::none_of(profile.scopes.begin(),profile.scopes.end(),[&](const c::Scope &s){return s.bits==(uint64_t)bits&&s.b1==r.b1&&(!arena||s.arena_mb==arena);}))
+        throw std::runtime_error("no measured bit-width/B1/arena scope");
+    EcmStage2DeviceInfo device;
+    if(ecm_cuda_stage2_device_info(o.device,&device,profile.uuid.c_str()))throw std::runtime_error("cannot query matching Auto B2 device");
+    c::Request request;request.bits=bits;request.b1=r.b1;request.d=o.d;request.arena_mb=arena;request.owner_mb=o.owner_mb;
+    request.b2min=o.auto_min;request.b2max=o.auto_max;request.batch=o.stage1_batch;request.t1=o.stage1_seconds;request.adjust=o.ratio_adjust;
+    const auto plan=c::choose(profile,request,device);o.b2=plan.b2;o.d=plan.d;o.arena=plan.arena_mb;o.owner_mb=plan.owner_mb;
+    if(apply){
+        _putenv_s("NTT_GIANT_CHAIN_MIN",std::to_string(profile.chain_min).c_str());
+        _putenv_s("NTT_ARENA_CAP_KB",std::to_string(o.arena*1024).c_str());
+        _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
+        _putenv_s("NTT_D_MODEL","0");
+    }
+    return c::json(plan,hash);
+}
+std::string tune_metrics_json(const EcmStage2Metrics &m) {
+    std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
+        <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
+        <<",\"giant_seconds\":"<<m.giant_seconds<<",\"gtrees_seconds\":"<<m.gtrees_seconds<<",\"fold_seconds\":"<<m.fold_seconds
+        <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
+        <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
+        <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
+        <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
+    for(size_t i=0;i<ecm_stage2::timing::count;++i)
+        out<<",\"phase_"<<ecm_stage2::timing::names[i]<<"_seconds\":"<<m.phases.seconds[i];
+    out<<'}';return out.str();
+}
+ecm_stage2::tune::Fields tune_environment() {
+    std::map<std::string,std::string> env;
+    const auto block=GetEnvironmentStringsA();if(!block)throw std::runtime_error("cannot inspect tune policy");
+    for(const char *p=block;*p;p+=std::strlen(p)+1) {
+        std::string row=p;const auto eq=row.find('=');if(eq==row.npos || row.compare(0,4,"NTT_")!=0)continue;
+        const auto key=row.substr(0,eq),value=row.substr(eq+1);
+        // D is explicit during tune; logging and audits are not runtime knobs.
+        if(key=="NTT_D_MODEL" || key=="NTT_NO_PROGRESS" || key=="NTT_MEMORY_AUDIT" || key=="NTT_REQUEST_AUDIT")continue;
+        if(value.find_first_not_of("0123456789.eE+-")!=value.npos) {
+            FreeEnvironmentStringsA(block);throw std::runtime_error("ECM tune cannot describe nonnumeric policy: "+key);
+        }
+        auto field=key.substr(4);for(char &c:field)c=(char)std::tolower((unsigned char)c);
+        env[field]=value.empty()?"\"\"":value;
+    }
+    FreeEnvironmentStringsA(block);return env;
+}
+std::string plan_scalar(const std::string &json,const char *key) {
+    const auto marker=std::string("\"")+key+"\":";auto a=json.find(marker);
+    if(a==json.npos)throw std::runtime_error(std::string("plan field missing: ")+key);a+=marker.size();
+    const auto b=json.find_first_of(",}",a);return json.substr(a,b-a);
+}
+std::string curve_memory_record(const std::string &json) {
+    const auto a=json.find("\"curve_workspace_memory\":{");if(a==json.npos)throw std::runtime_error("curve memory model unavailable");
+    return json.substr(a,json.find("\"s4_memory\":",a)-a);
+}
+std::string giant_memory_record(const std::string &json) {
+    const auto a=json.find("\"giant_memory\":{");
+    if(a==json.npos)throw std::runtime_error("giant route plan missing");
+    return json.substr(a,json.find("\"model\":",a)-a);
+}
 }

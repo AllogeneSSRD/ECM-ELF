@@ -22,7 +22,7 @@ arena cap 不足时可淘汰缓存或按次分配；owner 预算/headroom 不足
 
 `stage2_arena_mb` 是预算上限，不是启动时预分配量，也不表示必须选满这部分显存。通常设备 free 大于 reserve 时，D 规划上限为 **C=min(A, free−reserve)**；A 为正的用户 arena 预算，A=0 时仅使用 free−reserve。默认 reserve=768 MiB。例如 A=6400、free=7106 时，规划 C=6338 MiB，继续提高 A 不增加这次规划的可用空间。依据为 [plan.cpp:78](../../src/ecm/backend/cuda/stage2/plan.cpp#L78)。运行 arena 可重新采用显式用户 cap，因此 `mem_budget.arena_cap` 显示 6400 不等于规划 JSON 的 `arena_cap_bytes` 必须也是 6400；该赋值见 [运行 arena](../../src/ecm/backend/cuda/stage2/engine.cpp#L178)。
 
-所需大工作区由选定 P、算术位宽和实际 packing 共同决定。三缓冲、单 slice、L=2²⁶ 时，**big=3×8×2²⁶ bytes=1536 MiB**；L 增至2²⁷才跳到3072 MiB。同一档内提高预算不会扩大该请求。`ntt_workspace_stats.full_peak_bytes` 还包括 small、table 和 fuse base；独立 S4、giant、fold/frontier 与驱动占用另计。曲线结束的 `arena=a/b` 采用 full peak，而不是仅 big；`fold=a/b` 采用实际启用的 owner 占用，回退时 a=0，b 均保留 TOML 值。投影入口见 [ecm_stage2_console.h:49](../../src/ecm/application/cuda_stage2/ecm_stage2_console.h#L49)。
+所需大工作区由选定 P、算术位宽和实际 packing 共同决定。三缓冲、单 slice、L=2²⁶ 时，**big=3×8×2²⁶ bytes=1536 MiB**；L 增至2²⁷才跳到3072 MiB。同一档内提高预算不会扩大该请求。`ntt_workspace_stats.full_peak_bytes` 还包括 small、table 和 fuse base；独立 S4、giant、fold/frontier 与驱动占用另计。曲线结束的 `arena=a/b` 采用 full peak，而不是仅 big；`fold=a/b` 采用实际启用的 owner 占用，回退时 a=0，b 均保留 TOML 值。投影入口见 [ecm_stage2_console.h:49](../../src/ecm/platform/legacy/ecm_stage2_console.h#L49)。
 
 默认选型按预计时间排名，不最大化显存用量。较大 D 通常减少 giant 数量，但也改变 P、初始化、下降以及 NTT 档位；不能仅由“剩余显存很多”或“更大工作区可以准入”推断它更快。当前原生默认搜索仍以 `arena_estimate_bytes` 的旧静态加总过滤候选，实际曲线规划使用共享工作区与生命周期模型；两者可能给出不同准入结果。入口为 [real_run_words](../../src/ecm/backend/cuda/stage2/plan.cpp#L45)、[默认搜索](../../src/ecm/backend/cuda/stage2/plan.cpp#L196)及下文曲线联合模型。显式 D 或合格实测候选仍须通过当前完整规划和实时检查；统一默认搜索筛选属于待验证改进。
 

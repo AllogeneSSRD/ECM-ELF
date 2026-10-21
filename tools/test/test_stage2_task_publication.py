@@ -3,6 +3,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import json
+import hashlib
 from pathlib import Path
 import subprocess
 import time
@@ -21,9 +22,11 @@ def main():
         lines.append(f'METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA={sigma}; B1=20; N=0x{n:x}; X=0x{x:x}; STATUS=POINT; CHECKSUM={checksum(n,x,sigma,20,"POINT")};\n')
     saved.write_text(''.join(lines),encoding='utf-8')
     queue=out/'worktodo.txt';task='ECMSTAGE2=1,2,347,-1,points.save,1000000000,0,4\n';queue.write_text(task)
-    ini=out/'ecm.toml';ini.write_text(f'user=\ncomputer=\nverbose=true\nstage2_save_dir={out}\nstage2_finished={out/"finished.txt"}\n')
+    ini=out/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n[stage1]\nverbose=true\n[stage2]\n'
+        f'stage2_save_dir={json.dumps(str(out))}\nstage2_finished={json.dumps(str(out/"finished.txt"))}\n')
     public=out/'results.json.txt';inside=out/'internal.jsonl'
-    command=list(map(str,[a.exe.resolve(),'--ini',ini,'--device',1,'--once','--worktodo',queue,
+    binary_sha256=hashlib.sha256(a.exe.read_bytes()).hexdigest()
+    command=list(map(str,[a.exe.resolve(),'--config',ini,'--device',1,'--once','--worktodo',queue,
         '--results',inside,'--submission',public,'--short-calibration',0,'--tune-runtime',0,
         '--auto-carrier',0,'--d',30030,'--log-level',2,'--log',out/'engine.log']))
     class Security(ctypes.Structure):
@@ -61,7 +64,8 @@ def main():
     assert len(rows)==4 and not queue.read_text().strip()
     assert len(submitted)==1 and submitted[0]['status']=='NF' and submitted[0]['curves']==4
     assert all(map(crc_valid,rows+submitted))
-    report=dict(complete=True,device=1,completed_before_stop=count,total=4,
+    assert hashlib.sha256(a.exe.read_bytes()).hexdigest()==binary_sha256
+    report=dict(complete=True,device=1,binary_sha256=binary_sha256,completed_before_stop=count,total=4,
         unfinished_nf_not_exported=True,resume_no_recalculation=True,final_nf_batches=1,crc_valid=True)
     (out/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8');print(json.dumps(report))
 

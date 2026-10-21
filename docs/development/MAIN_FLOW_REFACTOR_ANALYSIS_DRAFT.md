@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，Stage2 程序版本 `0.45.19`；P2、P3a/b/c、P4a–i 已完成；P5a/b 已完成进度/指纹存储与独立规划 CPP，P5 父子流程和 P6–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，Stage2 程序版本 `0.45.20`；P2、P3a/b/c、P4a–i 已完成；P5a–c 已完成存储、规划和父子流程归位；P5 进程请求收窄及 P6–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -899,6 +899,19 @@ Stage2 版本 `0.45.19`。原 1487 行文本包含已删除，选择、校准、
 - [5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p5b/runtime/summary.json)通过。两个构建尝试累计实际更新 3 CXX/0 CU/1 link；首次发现缺少私有前置声明，补齐后成功。两个 CUDA 对象相同，重复构建零编译/链接。真实编译依赖中无完整 TOML/Settings 实现头。
 
 [资格与冻结 worker](../../data/experiments/main_flow_refactor_implementation_20261021/p5b/qualification.json)。Stage1 对照仍为 0.45.17；本步未重建 OpenCL/CPU Stage2。下一步收口唯一父流程、曲线 worker 和进程适配，不添加重复 Runner；尚未进行全位宽和性能终验。
+
+### P5c：Stage2 父流程、曲线 worker 与进程职责归位
+
+Stage2 版本 `0.45.20`。application main 从 1508 行减至约 500 行，保留 CLI、配置合并、模式选择和退出；[task.cpp](../../src/ecm/service/stage2/task.cpp)拥有唯一父任务/队列流水线及完整曲线 worker，[input.cpp](../../src/ecm/service/stage2/input.cpp)集中 save/队列校验与持久诊断 append，[stage2_curve_process.cpp](../../src/ecm/platform/process/stage2_curve_process.cpp)拥有 Job、管道、停止和输出投影。环境/真实 CUDA 等待策略进入 backend host_policy，结果身份读取由普通配置 CPP 返回 3 个实际字段，仍在原发布位置读取。旧 console 头整体归 platform，未修改格式。不新增 TaskSession/Runner 的重复循环。
+
+父流程只接收路径、4 项队列策略及 3 项默认值，未透传完整 Settings。pending→子进程→持久 receipt→done→seal→源行复核→finished→移除队列→删除进度保持；输入错误先落原因再标错。worker 重读 save/校验 hash 后才规划，外部发布→内部持久结果→可选调优更新保持。进程单实例 stop/event 状态只保留一个拥有者，不宣称同进程多会话。私有 Options 仍覆盖多个模式，后续继续收窄曲线进程请求及双向 hints。
+
+- [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/source_contract_02/result.json)：34 个原函数、44 个既有规划函数、完整父/worker 流水线、应用配置与模式选择及 console 字节一致。
+- [5 个真实 CPP 的无 SDK 编译](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/host_compile_03/manifest.json)：application、task、input、身份读取和进程实现均不需 CUDA SDK 头或 nvcc；实际 CUDA policy/显存查询仍保留 SDK。
+- [12 项运行对比](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/workflow_runtime_02/result.json)：完成、dry、损坏输入、非法承载、save 改动、发布失败；[停止/恢复](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/stop_publication/report.json)在第 1/4 曲线后停止，恢复不重算，最后只发布一条 4 曲线 NF，CRC 正确。
+- [调优 8 项](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/planning_runtime/result.json)及 [5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/runtime/summary.json)通过；8 个主机对象更新，两个 CUDA 对象保持，重复构建零编译/链接。
+
+首次构建再次触发已知退役 include 误报，核对 9 个 SDK 文件未变并[保存证据](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/dependency_guard_02/result.json)，正式重试未改保护/缓存。另修正提取时字段名文本匹配、私有默认参数、缓存类型直接引用；全部失败日志保留。测试使用当前 TOML/CLI，未回退生产解析器。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p5c/qualification.json)。本阶段未重建 Stage1/OpenCL/CPU2，也未运行 release 或性能验收。
 
 ## 首先调整构建复用与输出隔离
 

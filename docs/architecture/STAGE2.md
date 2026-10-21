@@ -42,7 +42,7 @@ save提供目标N、sigma、B1和归一化X，不自动推断承载指数。Suya
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/ecm/core/stage2/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/ecm/backend/cuda/stage2/engine.cpp#L110)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/ecm/service/stage2/input.cpp)、[承载校验](../../src/ecm/core/stage2/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/ecm/backend/cuda/stage2/engine.cpp#L110)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
@@ -145,3 +145,9 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 ## 主机规划实现
 
 [planning/stage2.cpp](../../src/ecm/service/planning/stage2.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型当前位于私有 service/stage2，不作为外部 API。
+
+## 父任务与曲线子进程
+
+application/cuda_stage2 main 负责 CLI、配置合并、模式与退出。service/stage2/task.cpp 只有一条父任务循环：校验/恢复 → pending 落盘 → 子进程 → receipt 确认 → done → seal → 源行复核 → finished → 队列移除 → 进度清理。同文件的 curve_worker 保留重读 save/hash、规划、GCD/引擎和持久发布的完整顺序。
+
+platform/process/stage2_curve_process.cpp 管理 Job、管道、进程、停止和 console 投影；Worker/Task 不重复管理这些资源。service/stage2/input.cpp 集中实际输入校验；普通配置 CPP 在发布处读取结果身份。父流程只接受具体路径/队列策略/默认值，无完整 Settings 依赖。私有 Options 仍是 executable 内部调用数据，不是公开计算 API；一个进程只有一个活跃曲线/引擎状态。
