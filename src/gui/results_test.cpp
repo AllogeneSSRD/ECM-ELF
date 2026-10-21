@@ -1,5 +1,6 @@
 #include "results.h"
 #include "../core/ecm_result_json.h"
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -23,7 +24,7 @@ static std::string row(bool factor=false,bool stage2=false) {
     return std::string("{\"status\":\"")+(factor?"F":"NF")+"\",\"exponent\":127,\"worktype\":\"ECM\",\"b1\":100,"+
         (factor?(stage2?"\"stage\":2,\"b2\":10000,":"\"stage\":1,")+std::string("\"factors\":[\"233\"],"):
                  stage2?"\"b2\":10000,":"\"b2\":100,")+
-        "\"Edwards\":{},\"curves\":1,\"program\":{\"name\":\"ECM-ELF\",\"version\":\"0.44.8\"},"
+        "\"Edwards\":{},\"curves\":1,\"program\":{\"name\":\"ECM-ELF\",\"version\":\"0.44.9\"},"
         "\"timestamp\":\"2026-10-21 00:00:00\",\"checksum\":{\"version\":1,\"checksum\":\"1234ABCD\"}}";
 }
 int main(int argc,char **argv) {
@@ -48,6 +49,14 @@ int main(int argc,char **argv) {
         write(first,"\xef\xbb\xbf"+nf+"\r\n"+f+"\r\n");write(second,s2+'\n'+f2+'\n');
         check(store.refresh() && store.rows().size()==4,"read completed F and NF from both sources");
         check(!store.refresh(),"unchanged files do not reload");
+        const auto before_touch=fs::last_write_time(first);
+        fs::last_write_time(first,before_touch+std::chrono::seconds(2));
+        check(store.refresh() && store.rows().size()==4,"mtime-only change triggers automatic reload");
+        auto replacement=nf;replacement.replace(replacement.find("127"),3,"131");
+        write(first,"\xef\xbb\xbf"+replacement+"\r\n"+f+"\r\n");
+        fs::last_write_time(first,before_touch+std::chrono::seconds(4));
+        check(store.refresh() && store.rows()[0].target=="M131","same-size edit reloads when mtime changes");
+        write(first,"\xef\xbb\xbf"+nf+"\r\n"+f+"\r\n");store.refresh(true);
         check(store.rows()[0].stage==1 && store.rows()[1].stage==1 && store.rows()[2].stage==2 && store.rows()[3].stage==2,"derive stage from published result fields");
         ResultFilter filter;filter.status="F";
         check(store.filtered(filter)==std::vector<std::size_t>({1,3}),"F filter");

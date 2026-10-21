@@ -2839,42 +2839,54 @@ void App::draw_results_panel() {
     if(ImGui::Button(tr("open_folder").c_str()))open_in_explorer(path_dir(ini_path_));
     bool filter_changed=false;
     const std::string all=tr("all");
-    const auto status_preview=result_filter_.status.empty()?all:result_filter_.status;
-    ImGui::SetNextItemWidth(115.0f);
-    if(ImGui::BeginCombo(tr("status").c_str(),status_preview.c_str())) {
-        for(const auto &value:{std::string(),std::string("F"),std::string("NF")})
-            if(ImGui::Selectable(value.empty()?all.c_str():value.c_str(),result_filter_.status==value)) {
-                result_filter_.status=value;filter_changed=true;
-            }
-        ImGui::EndCombo();
-    }
-    if(ImGui::GetContentRegionAvail().x>180.0f)ImGui::SameLine();
-    ImGui::SetNextItemWidth(115.0f);
-    const auto stage_preview=result_filter_.stage?"Stage"+std::to_string(result_filter_.stage):all;
-    if(ImGui::BeginCombo(tr("stage").c_str(),stage_preview.c_str())) {
-        for(int stage=0;stage<=2;++stage) {
-            const auto label=stage?"Stage"+std::to_string(stage):all;
-            if(ImGui::Selectable(label.c_str(),result_filter_.stage==stage)) {result_filter_.stage=stage;filter_changed=true;}
+    if(ImGui::BeginTable("result_filters",4,ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("status",ImGuiTableColumnFlags_WidthStretch,1.0f);
+        ImGui::TableSetupColumn("stage",ImGuiTableColumnFlags_WidthStretch,1.2f);
+        ImGui::TableSetupColumn("source",ImGuiTableColumnFlags_WidthStretch,2.0f);
+        ImGui::TableSetupColumn("search",ImGuiTableColumnFlags_WidthStretch,2.0f);
+        const auto filter_column=[&](int column,const char *key) {
+            ImGui::TableSetColumnIndex(column);
+            ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(tr(key).c_str());ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+        };
+        ImGui::TableNextRow();filter_column(0,"status");
+        const auto status_preview=result_filter_.status.empty()?all:result_filter_.status;
+        if(ImGui::BeginCombo("##result_status",status_preview.c_str())) {
+            for(const auto &value:{std::string(),std::string("F"),std::string("NF")})
+                if(ImGui::Selectable(value.empty()?all.c_str():value.c_str(),result_filter_.status==value)) {
+                    result_filter_.status=value;filter_changed=true;
+                }
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
-    }
-    ImGui::SetNextItemWidth(std::max(120.0f,ImGui::GetContentRegionAvail().x-70.0f));
-    const auto source_preview=result_filter_.source<0?all:file_name(result_.files().at(result_filter_.source).path);
-    if(ImGui::BeginCombo(tr("source").c_str(),source_preview.c_str())) {
-        if(ImGui::Selectable(all.c_str(),result_filter_.source<0)) {result_filter_.source=-1;filter_changed=true;}
-        for(std::size_t i=0;i<result_.files().size();++i) {
-            const auto &file=result_.files()[i];ImGui::PushID(static_cast<int>(i));
-            if(ImGui::Selectable(file_name(file.path).c_str(),result_filter_.source==static_cast<int>(i))) {
-                result_filter_.source=static_cast<int>(i);filter_changed=true;
+        filter_column(1,"stage");
+        const auto stage_preview=result_filter_.stage?"Stage"+std::to_string(result_filter_.stage):all;
+        if(ImGui::BeginCombo("##result_stage",stage_preview.c_str())) {
+            for(int stage=0;stage<=2;++stage) {
+                const auto label=stage?"Stage"+std::to_string(stage):all;
+                if(ImGui::Selectable(label.c_str(),result_filter_.stage==stage)) {result_filter_.stage=stage;filter_changed=true;}
             }
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",file.path.c_str());
-            ImGui::PopID();
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
-    }
-    ImGui::SetNextItemWidth(std::max(120.0f,ImGui::GetContentRegionAvail().x-70.0f));
-    if(ImGui::InputText(tr("search").c_str(),result_search_,sizeof(result_search_))) {
-        result_filter_.search=result_search_;filter_changed=true;
+        filter_column(2,"source");
+        const auto source_preview=result_filter_.source<0?all:file_name(result_.files().at(result_filter_.source).path);
+        // Let the popup fit every source, up to the viewport's available height.
+        if(ImGui::BeginCombo("##result_source",source_preview.c_str(),ImGuiComboFlags_HeightLargest)) {
+            if(ImGui::Selectable(all.c_str(),result_filter_.source<0)) {result_filter_.source=-1;filter_changed=true;}
+            for(std::size_t i=0;i<result_.files().size();++i) {
+                const auto &file=result_.files()[i];ImGui::PushID(static_cast<int>(i));
+                if(ImGui::Selectable(file_name(file.path).c_str(),result_filter_.source==static_cast<int>(i))) {
+                    result_filter_.source=static_cast<int>(i);filter_changed=true;
+                }
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",file.path.c_str());
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        filter_column(3,"search");
+        if(ImGui::InputText("##result_search",result_search_,sizeof(result_search_))) {
+            result_filter_.search=result_search_;filter_changed=true;
+        }
+        ImGui::EndTable();
     }
     if(filter_changed){result_selected_.clear();result_focus_.clear();}
     const auto visible=result_.filtered(result_filter_);
@@ -2937,7 +2949,9 @@ void App::draw_results_panel() {
         ImGui::InputTextMultiline("##raw_result",const_cast<char*>(row.raw.c_str()),row.raw.size()+1,ImVec2(-1,70),ImGuiInputTextFlags_ReadOnly);
         break;
     }
-    if(ImGui::CollapsingHeader(tr("files").c_str()))for(const auto &file:result_.files()) {
+    const bool files_open=ImGui::CollapsingHeader(tr("files").c_str());
+    const bool files_just_opened=files_open && ImGui::IsItemToggledOpen();
+    if(files_open)for(const auto &file:result_.files()) {
         ImGui::TextWrapped("%s",file.path.c_str());
         if(!file.exists)ImGui::TextDisabled("%s",tr("missing").c_str());
         if(!file.error.empty())ImGui::TextWrapped("%s: %s",tr("read_error").c_str(),file.error.c_str());
@@ -2946,6 +2960,9 @@ void App::draw_results_panel() {
     for(const auto &file:result_.files())if(!file.error.empty() || file.pending_lines) {
         ImGui::TextColored(ImVec4(1.f,.75f,.4f,1.f),"%s",tr("file_notice").c_str());break;
     }
+    // A collapsing header expands content but does not scroll it into view.
+    // Request once after laying out the files, so the next frame can use their full height.
+    if(files_just_opened)ImGui::SetScrollHereY(1.0f);
     ImGui::End();
 }
 
