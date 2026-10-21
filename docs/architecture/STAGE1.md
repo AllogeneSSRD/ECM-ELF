@@ -54,7 +54,15 @@ task 的 execute 依赖直接绑定 [execution.cpp](../../src/ecm/service/stage1
 
 Edwards GPU 的状态、初始化、恢复、进度回调、完成点检查、GCD 和 save 集中在 [host_workflow.cpp](../../src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp)，私有 host_workflow.h 只声明真实入口。它是普通 CXX，仅加入 CUDA 生产 worker 清单；低层 Edwards GPU probe 清单继续独立。原 checkpoint codec 私有头还有独立容器验证消费者，继续保留。driver 不再文本包含 GPU 实现，也不再强制依赖这些 GPU 主机头。
 
-这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery adapter 中构造/codec 的进一步提取尚待完成。
+这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；设备协作继续由 adapter.cu 持有。
+
+## Montgomery 主机数学与存档输出
+
+[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)集中 param0/2/3 初始状态、param2 Jacobian 辅助计算、标量打包、np0、普通整数解包与最终结果处理。六个实际跨设备协作入口经私有 host_math.h 声明；内部转换和算术 helper 留在 CPP 内部。输出仍调用同一 factory 中的 outputf/test_verbose，verbose 状态没有复制。FULL_BUILD 条件下的诊断分支和断言语义保持。
+
+[host_io.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_io.cpp)集中 ladder V5 与 resident/PRAC checkpoint 编码、读取/校验、保存路径、TTY/screen 和 dump CSV。私有 host_io.h 只提供实际声明与原载荷数据布局。字节格式、版本、字段次序及 size_t/time_t 类型保持；resident 恢复仍在日志前回写 sigma。progress 的累计状态留运行层，格式及节流读取显式接收该状态，未导出新的可变全局。
+
+adapter.cu 保留真实 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环与资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。两份主机 CPP 无 CUDA SDK 依赖。改变数学或存档/输出函数体的实测增量为 2 CXX、0 CU；改变跨层声明或设备协作实现仍会使真实依赖失效。
 
 ## GPU 点乘
 

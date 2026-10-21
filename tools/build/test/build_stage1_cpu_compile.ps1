@@ -2,7 +2,9 @@
 # Full behavior/link validation uses the production workers separately.
 param([Parameter(Mandatory=$true)][string]$WorkerBuild,
       [Parameter(Mandatory=$true)][string]$Build,
-      [switch]$IncludeGpuHost)
+      [switch]$IncludeGpuHost,
+      [switch]$IncludeMontgomeryHost,
+      [switch]$EnablePracHost)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -17,7 +19,13 @@ if($IncludeGpuHost){
     $sources+=@('src/ecm/service/stage1/execution.cpp',
         'src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp')
 }
+if($IncludeMontgomeryHost){
+    $sources+=@('src/ecm/backend/cuda/stage1/montgomery/host_math.cpp',
+        'src/ecm/backend/cuda/stage1/montgomery/host_io.cpp')
+}
+if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}
 $definitions=if($IncludeGpuHost){' /DECM_HAS_CUDA_EDWARDS=1'}else{''}
+$definitions+=' /DECM_CUDA_ENABLE_PRAC='+$(if($EnablePracHost){'1'}else{'0'})
 $commands=@();$objects=[ordered]@{};$hashes=[ordered]@{}
 foreach($source in $sources){
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects[$source]=$object
@@ -44,6 +52,7 @@ foreach($source in $sources){
 }
 [ordered]@{complete=$true;compile_only=$true;compiler=$m.host_compiler;crt='MD';cuda_compiler_invocations=0;
     gpu_host_workflow_included=[bool]$IncludeGpuHost;
+    montgomery_host_included=[bool]$IncludeMontgomeryHost;prac_host_enabled=[bool]$EnablePracHost;
     cuda_sdk_include_paths=0;cuda_sdk_headers=0;avx512_compile_option=$false;
     source_hashes=$hashes;header_hashes=$headers;objects=$objectHashes}|
     ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8

@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.11`；P2、P3a/b/c、P4a/b/c 已完成，CPU/GPU host workflow 与唯一执行分派已提取；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.12`；P2、P3a/b/c、P4a/b/c/d 已完成，Montgomery 主机构造、结果与存档输出已隔离；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -783,6 +783,23 @@ GPU Edwards 的完整状态、初始化/恢复、进度回调和完成发布进�
 - [重复 local 构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/stage1_repeat.log)：0 CXX、0 CU、0 链接；Stage1 31 个、Stage2 2 个 CUDA 对象摘要与 P4b 相同。
 
 [最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/qualification.json)冻结输入、三个生产 worker 与依赖。未运行 release、性能采样或全 32 位宽终验。接下来仍须提取 Montgomery adapter 的构造/结果/codec、配置与 writer，并将队列协议集中到 QueueWorkflow。新审查确认当前队列只在启动时加载 TOML，没有逐任务热重载；此前设计中“当前配置重读”的说法已纠正，后续提取应保留启动快照。
+
+### P4d：Montgomery 主机数学、结果与持久化输出已隔离
+
+对应程序版本 `0.45.12`。adapter.cu 从约 1700 行缩至 994 行；556 行 host_math.cpp 集中完整 param0/2/3 构造、param2 Jacobian、转换、标量打包、np0 和结果处理；227 行 host_io.cpp 集中 ladder V5、resident/PRAC codec、路径、TTY/screen/节流和 CSV。只暴露实际跨 TU 入口与原载荷类型，内部 helper 保留私有，不新增执行类或 logger 框架。
+
+两份 CPP 只需标准库、GMP、已有主机日志/持久化声明，没有 CUDA/CGBN SDK 类型。outputf/test_verbose 仍使用 factory 的唯一 verbose 状态。FULL_BUILD 的旧诊断条件与 NDEBUG 断言语义保持，find_np0 的 mpz_invert 仍在断言之外。CARRY_BITS、真实 tier/dispatch 与设备资源保持运行层；没有复制 CGBN report ABI、伪造 __CUDACC__ 或修改第三方源码。
+
+global event 与标量上传先于恢复/构造、checkpoint 在回读之后编码、resident 完成后 EXPORT 再处理普通域结果的顺序保持。源码审查收紧 resident restore 的 sigma 输出合同，使回写继续发生在恢复日志之前；随后重编、重新冻结和回归。首次提取辅助脚本遇到原文件 LF/CRLF 匹配差异时尚未写生产文件，修正读取匹配后继续，未修改 BOM 或设备算术。实际临时等价改写已恢复，并清理搬迁来的尾随空格。
+
+- [最终源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/source_contract_final_02/result.json)：22 项函数检查、两种 checkpoint 字段布局、ladder/resident 执行次序及资源结构保持。
+- [设备闭包](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/device_structure/result.json)：55 项设备闭包、四组原始数学正文与 21+7 实例边界保持。
+- [实际增量](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/implementation_dependency_result.json)：数学解包和 screen 计算各作等价 cast 改写，只重编 2 CXX、0 CU、链接一次，31 个 CUDA 对象摘要保持；随后恢复代表函数原 token。声明层提取首次合法更新 adapter，一个 CU，30 个其他设备对象保持。
+- [无 SDK 独立编译](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/host_compile_final_02/manifest.json)：真实准备、CPU、分派、GPU Edwards、Montgomery math/IO 共六个 CPP，PRAC 主机 codec 开启编译，0 nvcc、0 SDK include、0 SDK 头。此项为编译资格，不宣称新 PRAC GPU 运行或性能资格。
+- [最终运行检查](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/usability_final_02/summary.json)：27 项 CPU/GPU 恢复、停止、发布、队列与独立 CPU Stage2 交接通过；[两阶段 P0 对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/runtime_final_02/summary.json)各 5 组通过。
+- [最终 OpenCL](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/opencl_resources_final_02/result.json)：完成点、结果/CRC、172 资源及两份旧缓存保持；[最终重复 local](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/stage1_repeat_02.log)为 0 CXX、0 CU、0 链接。
+
+[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/qualification.json)冻结最终源码和三个 worker。未运行 release、性能采样或全位宽终验。P4 继续收口配置/selection/writer、环境策略与 QueueWorkflow，不能把本子阶段写成整个 Stage1 架构已完成。
 
 ## 首先调整构建复用与输出隔离
 

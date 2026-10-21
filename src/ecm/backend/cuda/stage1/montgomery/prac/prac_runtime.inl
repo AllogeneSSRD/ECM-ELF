@@ -16,10 +16,6 @@
 #include <windows.h>
 #endif
 
-struct ResidentCheckpoint {
-    uint64_t magic, b1, scalar, modulus, identity, next, total, sigma, bytes, checksum;
-    uint32_t version, algorithm, domain, bits, tpi, curves, torsion, reserved;
-};
 struct ResidentResources {
     uint32_t *data = nullptr, *control = nullptr;
     cgbn_error_report_t *report = nullptr;
@@ -32,14 +28,6 @@ struct ResidentResources {
         if (end) cudaEventDestroy(end);
     }
 };
-static bool resident_checkpoint_write(const std::string &path, ResidentCheckpoint h,
-                                      const std::vector<uint32_t> &data) {
-    h.checksum = ecm_prac_hash(data.data(), data.size() * sizeof(uint32_t));
-    std::ostringstream out(std::ios::binary|std::ios::out);
-    out.write(reinterpret_cast<const char *>(&h), sizeof(h));
-    out.write(reinterpret_cast<const char *>(data.data()), h.bytes);
-    return out && ecm_stage1_write_blob(path,out.str());
-}
 #include "prac_window.inl"
 static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
     uint32_t curves, uint64_t *sigma, unsigned long checkpoint_ms, float *gputime,
@@ -154,22 +142,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         std::vector<uint32_t> data(bytes / sizeof(uint32_t));
         bool resumed = false;
         if (!window.enabled()) {
-            std::string saved;ecm_stage1_read_blob(path,saved);
-            std::istringstream in(saved,std::ios::binary|std::ios::in); ResidentCheckpoint old{};
-            if (in.read(reinterpret_cast<char *>(&old), sizeof(old))) {
-                bool compatible = old.magic == h.magic && old.version == h.version && old.b1 == h.b1 &&
-                    old.scalar == h.scalar && old.modulus == h.modulus && old.identity == h.identity &&
-                    old.total == total && old.bytes == bytes && old.algorithm == h.algorithm && old.domain == 1 &&
-                    old.bits == bits && old.tpi == tpi && old.curves == curves && old.torsion == torsion &&
-                    old.next <= total && (prac || old.next >= 1) && old.sigma <= UINT64_MAX - curves;
-                if (compatible && in.read(reinterpret_cast<char *>(data.data()), bytes) &&
-                    in.peek() == std::char_traits<char>::eof() && ecm_prac_hash(data.data(), bytes) == old.checksum) {
-                    h = old; *sigma = h.sigma; resumed = true;
-                    outputf(OUTPUT_ALWAYS, "GPU: resident checkpoint resumed (next=%llu/%llu, sigma=%llu)\n",
-                        (unsigned long long)h.next, (unsigned long long)total, (unsigned long long)*sigma);
-                } else throw std::runtime_error("resident checkpoint parameters/payload mismatch");
-            }
-            if(!saved.empty() && !resumed)throw std::runtime_error("invalid resident checkpoint payload");
+            resumed=resident_checkpoint_restore(path,h,data,sigma,prac);
         }
         if (!resumed) {
             size_t initial_bytes = 0;
