@@ -1,6 +1,6 @@
 # include/ecm 与 src/ecm 目录精简草稿
 
-日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0–D1b 完成，当前源码版本 0.45.27；D2–D3 待实施**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
+日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0–D2 完成，当前源码版本 0.45.28；D3 收口验证待完成**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
 
 ## 实施进度与证据
 
@@ -31,6 +31,16 @@ D0 提交：`22380cc`。D1、D2、D3 按下文顺序继续，验证完成后逐�
 按用户补充要求，CUDA local 的 BAT 与 PowerShell 共用固定短路径：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`；GUI 保持 `build_gui_local/ecm_gui.exe`。构建身份仍写入 `profile.json`，不把不同架构、tiers、引擎或用途自动混入同一个目录。需要并存时显式选择 Stage1 `-BuildDir`、Stage2 `-Build`；Stage2 显式 `-BuildRoot` 仍保留 profile 子目录。dev/release 布局保持现有合同，旧缓存不迁移、不删除。
 
 30 项 profile 检查通过，包含短默认路径、显式根层级、不同用途/阶段拒绝、身份突变、旧缓存准入及包目录隔离。Stage1 BAT 通过显式旧叶目录验证，31 个 CUDA 对象全部复用；GUI BAT 33 项自检通过。Stage2 BAT 已在默认 `build_stage2_local` 实际构建全部 35 个生产翻译单元，8 项规划/曲线子进程前后对照通过。D1 提交为 `2f22d10`；本阶段[结果](../../data/experiments/directory_layout_implementation_20261021/d1b/result.json)、[profile 检查](../../data/experiments/directory_layout_implementation_20261021/d1b/profiles/result.json)与[默认路径构建日志](../../data/experiments/directory_layout_implementation_20261021/d1b/stage2_default.log)保留。Stage1 的固定默认路径由同一解析器的实际 profile 检查验证；本阶段编译通过 BAT 显式复用既有两档验证目录，未在默认目录建立受限两档 profile，以便用户随后直接构建完整默认档位。
+
+### D2：Edwards 私有分类精简（已完成，0.45.28）
+
+checkpoint 与 host-wait 两个私有头已移至 Edwards 家族根，生产主机流程、诊断 Adapter 与检查点测试引用同步调整。方案 A 的 31 个文件路径全部迁移完成，9 个分类目录均删除；src 保持 515 个文件、目录由 80 减为 71，include 仍为 14 个公开头。最大深度仍为 5，最深 51 个文件全部属于实例与 PRAC。[353 文件审计](../../data/experiments/directory_layout_implementation_20261021/d2/audit_0.45.28.json)和[包含边界](../../data/experiments/directory_layout_implementation_20261021/d2/boundaries/result.json)通过。
+
+CUDA Stage1 通过 BAT 在浅层 `build_stage1_local_check` 构建 384/1024 两档，避免在用户完整默认目录写入受限 profile；Stage2 使用默认 `build_stage2_local`，复用两个 CUDA 对象，仅按需重编普通 CXX。GUI、OpenCL 和 CPU Stage2 libecm 也已更新至 0.45.28。27 项曲线/恢复/跨阶段案例、Stage2 停止恢复、GUI 33 项自检通过。12 种 host-wait 组合使用真实 CUDA 1280 档探针验证，事件创建符合合同，输出点逐字节一致；计时字段不作为性能结论。[D2 结果](../../data/experiments/directory_layout_implementation_20261021/d2/result.json)、[host-wait](../../data/experiments/directory_layout_implementation_20261021/d2/host_wait_run/result.json)、[产物身份](../../data/experiments/directory_layout_implementation_20261021/d2/artifacts.json)保留。
+
+检查点探针通过外壳恢复、损坏拒绝、旧 V1 外壳导入、Edwards NAF/Binary 旧载荷读入及新二进制恢复，逐坐标和因子一致。原测试构建入口漏链已存在的 NAF 构造实现；首轮补源误选后端调度文件，触发缺少 CUDA SDK 头，随后定位到真正定义所在的 `core/stage1/ecm_stage1_exp.cpp`，最终链接该普通 CXX 源通过，未添加 SDK 或伪造实现。两个失败轮次原样保留，见[定位记录](../../data/experiments/directory_layout_implementation_20261021/d2/checkpoint_builder_diagnosis.json)与[有效检查点运行](../../data/experiments/directory_layout_implementation_20261021/d2/checkpoint_run_03.log)。
+
+D1b 提交为 `3150abb`。D3 将完成无 CUDA SDK 的主机编译、9 类正文修改零 CU 和重复构建验证，再同步正式目录说明。
 
 ## 结论与适用范围
 
@@ -95,7 +105,7 @@ backend/cuda/stage1/edwards/diagnostics/host_wait.h
 
 ## 推荐目标目录
 
-以下展示 A 的目标。所有公开头完整列出；src 展示职责家族与本轮关键文件，未列出的现有文件留在对应家族，完整逐文件映射见清点证据。**这不是当前已实现的目录。**
+以下为 D2 已实现的方案 A 目录。所有公开头完整列出；src 展示职责家族与关键文件，未列出的现有文件留在对应家族。完整逐文件映射见清点证据；D3 验收状态单独记录。
 
 ```text
 include/ecm/                         # 14 个公开头，保持现有路径

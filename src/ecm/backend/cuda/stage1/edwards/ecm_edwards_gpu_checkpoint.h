@@ -1,7 +1,7 @@
 #pragma once
-#include "../../../../../storage/save/ecm_edwards_io.h"
+#include "../../../../storage/save/ecm_edwards_io.h"
 #include "ecm/core/stage1/scalar.h"
-#include "../../../../../storage/checkpoint/ecm_stage1_binary.h"
+#include "../../../../storage/checkpoint/ecm_stage1_binary.h"
 #include "ecm/platform/logging.h"
 #include <cstring>
 #include <stdexcept>

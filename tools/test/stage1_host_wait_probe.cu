@@ -53,7 +53,7 @@ static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
     diagnostic_event_flags|=diagnostic_blocking_event?cudaEventBlockingSync:cudaEventDefault;
     if(++diagnostic_events==2)diagnostic_stop_event=*event;return rc;
 }
-#include "../../src/ecm/backend/cuda/stage1/edwards/diagnostics/host_wait.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/host_wait.h"
 #include "ecm/core/stage1/scalar.h"
 
 static void require(bool value,const char *why){if(!value)throw std::runtime_error(why);}

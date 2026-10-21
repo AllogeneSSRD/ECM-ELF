@@ -28,7 +28,7 @@ NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/backend/cuda/ntt/`
 
 实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h`，JSON 转义及纯设备原语仍可共享。
 
-`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/backend/cuda/stage1/edwards/diagnostics/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
+`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/backend/cuda/stage1/edwards/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
 
 ## 输入与表示
 

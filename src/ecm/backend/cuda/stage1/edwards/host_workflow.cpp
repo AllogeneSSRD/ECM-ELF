@@ -26,7 +26,7 @@ using ecm_stage1::stage1_publish_factor;
 #include <iterator>
 #include <stdexcept>
 
-#include "legacy/ecm_edwards_gpu_checkpoint.h"
+#include "ecm_edwards_gpu_checkpoint.h"
 
 namespace ed_gpu_driver {
 struct Progress {

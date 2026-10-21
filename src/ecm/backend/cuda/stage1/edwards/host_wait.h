@@ -1,7 +1,7 @@
 #pragma once
 // Host-only diagnostic contract. The adapter compiles the real Stage1 host
 // loop and kernels as separate modules; the probe supplies only timed SDK hooks.
-#include "../naf.h"
+#include "naf.h"
 #include <cuda_runtime.h>
 struct EcmEdwardsNaf;
 namespace ecm_cuda_diagnostics {
