@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：设计草稿，尚未实施。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0 local 基线与运行样本已冻结，P1 待实施。生产代码与构建脚本尚未修改。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -16,7 +16,7 @@
 
 生产运行必需的算术检查、自检、错误检查仍属于主流程；不能按文件名包含 `test` 或 `selftest` 就排除。例如 OpenCL Stage1 编入并调用生产自检，见 [构建入口](../../CMakeLists.txt) 第 158–167 行及 [opencl_ecm_stage1.cpp](../../src/opencl_ecm_stage1.cpp) 第 929 行。
 
-本文件仅维护分析与目标方案，不调整源代码、配置、构建脚本、版本号或现有业务行为，也不产生性能提升结论。当前实现的权威入口仍为 [架构与术语](../architecture/OVERVIEW.md)、[Stage1](../architecture/STAGE1.md)、[Stage2](../architecture/STAGE2.md)、[Save](../architecture/SAVE.md) 和 [Checkpoint](../architecture/CHECKPOINT.md)。已有 [CUDA 结构草稿](GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md) 描述其实施范围；本草稿覆盖整个生产主流程，不将拟议目录写成已实现状态。
+本文件维护分析、目标方案与获授权后的分阶段实施记录，不将拟议目录写成已实现状态。实施验收采用 local build，不运行 release；已知沙箱编译限制通过沙箱外执行同一正式构建脚本处理，参数保持不变。其他预期外重大问题仍停止，不以修改算术或验收门限绕过。阶段提交使用 `[0.45.z]` 前缀；本次只有基线记录，程序版本仍为 `0.44.9`，不宣称已经产生 `0.45.0` 二进制，也不产生性能提升结论。当前实现的权威入口仍为 [架构与术语](../architecture/OVERVIEW.md)、[Stage1](../architecture/STAGE1.md)、[Stage2](../architecture/STAGE2.md)、[Save](../architecture/SAVE.md) 和 [Checkpoint](../architecture/CHECKPOINT.md)。已有 [CUDA 结构草稿](GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md) 描述其实施范围。
 
 ## 当前主流程
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**实施方案，状态为待实施**；前文保留现状、数学和耦合依据。它不把目标目录写成当前结构，也不授权本轮修改代码。后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 的 local 基线冻结，实际交付与验证限制见下节，P1 及后续目标尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -548,6 +548,28 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 - 公开 Interface 隐藏顺序、所有权和失败处理，形成 Depth；私有 .cpp、.cu、.cuh、.inl 可以按编译与阅读需要拆分。
 - 用阶段/批次级运行时选择连接 Adapter；域乘、点加倍和逐位热循环不新增跨 Module 虚调用。无需动态插件和深继承树。
 - 文件位置回答“功能在哪里”；依赖合同回答“改动影响谁”；构建与行为验收共同证明 Locality，文件行数不能单独证明复杂度下降。
+
+## 实施进度与阻塞记录
+
+### P0：local 基线与生产输入已冻结
+
+本次从干净提交 `57351082d0d909985f0c2c47580de94359d17e0b`（程序版本 `0.44.9`）开始。冻结 1959 个受版本控制文件的摘要和归档，覆盖生产入口、CUDA/OpenCL 资源、构建清单、配置定义、GUI/CPU 源码及现有协议说明。文档更新前复核源文件未变。设备、命令、日志、冻结程序、构建清单及样本位于本机忽略目录 [P0 验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p0/qualification.json)；原始数据不随 Git 提交，草稿与网页提交状态及摘要。
+
+| 项目 | 实际结果 | 证据与限制 |
+| --- | --- | --- |
+| Stage1 local | `build_stage1_local.ps1 -Incremental` 成功；31 个 CU 全部复用，重新编译 5 个 CXX 文件并链接 | [构建日志](../../data/experiments/main_flow_refactor_implementation_20261021/p0/stage1_local.log)；不是冷构建，也不是默认复用已完成的证明。 |
+| Stage2 local | 同一正式脚本 `build_stage2_local.ps1` 在沙箱外完整编译 25 个 TU、链接并写入清单成功 | [沙箱外构建日志](../../data/experiments/main_flow_refactor_implementation_20261021/p0/stage2_local_outside_sandbox.log)；源码与编译参数不变。 |
+| Stage1 工厂查询 | GPU1、完整 32 档的 260 项注册、选择及拒绝检查通过 | [检查结果](../../data/experiments/main_flow_refactor_implementation_20261021/p0/registry_02/result.json)。第一次调用误用手写的不完整期望档位，日志保留；第二次从 `tiers.def` 读取，不修改测试或生产实现。 |
+| 两阶段运行样本 | Stage1 5 例、Stage2 5 例各重复运行两次，完成点、非计时结果及目标叶值一致 | [运行记录](../../data/experiments/main_flow_refactor_implementation_20261021/p0/runtime/summary.json)；这是同一基线的可重复性与样本冻结，不是重构前后等价或完整支持矩阵运行验收。 |
+| 验收工具限制 | `test_stage1_usability.py` 首例因仍调用已移除的 `-ini` 被程序拒绝 | [失败日志](../../data/experiments/main_flow_refactor_implementation_20261021/p0/usability.log)；未放宽门限或修改实现。该脚本的配置/CLI 样本须在任务提取验收前适配，再验证暂停、恢复、发布重试。 |
+
+Stage1 样本覆盖 Montgomery PARAM0/2/3、Edwards NAF/binary；Stage2 覆盖普通 Montgomery/Edwards、承载、重定位和 host 回退，保留其生产算术检查。曲线身份、有效标量、checkpoint 安全点、即时因子发布、队列完成次序及 Stage2 pending/receipt 合同仍以本草稿的已核对流程和冻结源码为准。CPU/OpenCL/GUI 本次只冻结输入与已有支持限制，实际运行验收留在对应实施阶段，不把 CUDA 构建成功外推到这些后端。
+
+首次沙箱内 Stage2 构建在第 16/25 项 `kernels/cuda/stage2/arithmetic_kernels.cu` 失败：`Internal error`，随后 `nvcc error: 'ptxas' died with status 0xC0000008 (INVALID_HANDLE)`。失败记录和部分对象状态保留于 [原始失败记录](../../data/experiments/main_flow_refactor_implementation_20261021/p0/result.json)，不覆盖为成功。用户确认沙箱限制为已知问题并授权继续；随后沙箱外同脚本、同参数成功，旧失败不再阻塞 P0。**这只能证明沙箱外构建可用，具体错误根因未进一步诊断。** 后续 CUDA 编译沿用该执行方式，不为避开沙箱错误改变工具链、算术宏或编译并行度。
+
+工具链为 CUDA 13.3.73、MSVC 14.51.36231、sm_89。Stage1 保持完整 tiers、压缩开启、无 PTX、PRAC 关闭；Stage2 保持 SplitCompile=8、ptx/fixed mode3、outer unroll0、add/sub mask1。未运行 release、跨架构构建或性能比较。设备清单见 [devices.csv](../../data/experiments/main_flow_refactor_implementation_20261021/p0/devices.csv)。
+
+冻结程序 SHA256：Stage1 为 `22327aae26f81cde2bf8b95d075e50697649521890f5d7d97f71e85cd3980094`，Stage2 为 `6c1e5a4df7c813a17e561935dfa30068a689e7cdd2c439048d8a0beca9c8ccd5`；GMP DLL 为 `969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。源摘要文件 SHA256 为 `8793675558067C2EA53D1AC3236B95F2F639297BC0AE1E12EAB2C6D19FB33570`，源归档 SHA256 为 `50A99E7C930EE9EF8F640493BC8711A4BA0FD66FFE819446AE319A746F0B91A4`。成功构建后另行复制两阶段程序与匹配清单，失败构建记录不作为当前基线。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1120,7 +1142,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下是后续实施计划，本轮全部未执行。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 local 基线与输入冻结完成，P1–P7 未执行，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

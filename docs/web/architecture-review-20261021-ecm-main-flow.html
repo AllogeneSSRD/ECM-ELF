@@ -48,12 +48,12 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 @media(max-width:800px){.kpis{grid-template-columns:repeat(2,1fr)}.plan-section h2{font-size:22px}pre{padding:16px 13px}}
 @media print{body{background:white}main{max-width:none;padding:10px}.review-nav,.phase-nav{display:none}pre{white-space:pre-wrap;background:#f1f4ef;color:#111}.evidence-details{break-before:page}}
 </style></head><body><main>
-<header><div class="caption">ECM-ELF · 2026-10-21 · 设计与实施计划 / 尚未实施</div>
+<header><div class="caption">ECM-ELF · 2026-10-21 · 实施草稿 / P0 基线已冻结，P1 待实施</div>
 <h1>主流程重构完整方案</h1><p class="lead">构建复用先行；明确 driver、task、factory 与 QueueWorkflow 的职责，精简重复封装。完整目录、Interface、伪代码与阶段门槛。</p>
-<div class="hero-note"><strong>本轮只整合文档。</strong>设备资源、上传、执行、同步和回读继续留在 CUDA Adapter。普通配置、主机准备、存档和输出改变时，目标是只重编受影响 CXX 并链接。</div>
+<div class="hero-note"><strong>P0 local 基线已冻结。</strong>两阶段正式 local 脚本构建成功；沙箱编译限制通过沙箱外同参数构建避开。260 项工厂检查、Stage1 与 Stage2 各 5 例重复运行通过。P1 待实施，旧验收脚本的 CLI 样本适配仍待处理。</div>
 <div class="kpis"><div><b>31 个 CU</b><span>用户日志中的全量编译单元</span></div><div><b>1535.6 秒</b><span>单次 CUDA 编译阶段墙钟，非总脚本</span></div><div><b>默认逐 TU 复用</b><span>先落实 build_cuda_local 等隔离根</span></div><div><b>P0—P7</b><span>阶段交付与验收门槛</span></div></div>
-<p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。本次仅修订职责设计，未重新审计当前并行源码；原始快照保持不变。未构建或新增性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
-<p>本节是整合后的<strong>实施方案，状态为待实施</strong>；前文保留现状、数学和耦合依据。它不把目标目录写成当前结构，也不授权本轮修改代码。后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
+<p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。以上为前期设计依据，保持原始快照。本次 P0 从干净 HEAD 5735108、版本0.44.9开始，另存1959项源码摘要与local日志；两阶段 local 基线与运行样本已冻结，未运行 release。没有性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-progress">P0 基线记录</a><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
+<p>本节是整合后的<strong>目标实施方案</strong>；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 的 local 基线冻结，实际交付与验证限制见下节，P1 及后续目标尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
 <p>整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的<a href="../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json">读取快照</a>，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。</p>
 <p>目标为：顶层按 application、service、core、backend、storage、platform 划分职责；计算 Implementation 按后端、阶段、曲线组织；include 只暴露跨 Module 必需的 Interface；CUDA 的主机、设备和实例统一进入 src。配置、主机曲线准备、文件编码与展示可普通 CXX 编译；需要 CUDA runtime 的资源、上传、执行、同步与回读继续留 CUDA Adapter。</p>
 <p>以下保持现有行为：独立 Stage1/Stage2 程序及 GUI 子进程模式、曲线身份与有效标量、受支持组合、配置优先级、文件格式与兼容范围、即时因子提交、checkpoint 安全点、队列完成顺序、生产算术检查和设备常量所有权。组织重构不同时升级算法、默认值、语言标准或文件协议。</p>
@@ -65,6 +65,21 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 <li>用阶段/批次级运行时选择连接 Adapter；域乘、点加倍和逐位热循环不新增跨 Module 虚调用。无需动态插件和深继承树。</li>
 <li>文件位置回答“功能在哪里”；依赖合同回答“改动影响谁”；构建与行为验收共同证明 Locality，文件行数不能单独证明复杂度下降。</li>
 </ul>
+</section>
+<section class="plan-section" id="plan-progress"><h2>实施进度与阻塞记录</h2>
+<h3 id="p0local-基线与生产输入已冻结">P0：local 基线与生产输入已冻结</h3>
+<p>本次从干净提交 <code>57351082d0d909985f0c2c47580de94359d17e0b</code>（程序版本 <code>0.44.9</code>）开始。冻结 1959 个受版本控制文件的摘要和归档，覆盖生产入口、CUDA/OpenCL 资源、构建清单、配置定义、GUI/CPU 源码及现有协议说明。文档更新前复核源文件未变。设备、命令、日志、冻结程序、构建清单及样本位于本机忽略目录 <a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/qualification.json">P0 验证记录</a>；原始数据不随 Git 提交，草稿与网页提交状态及摘要。</p>
+<div class="table-scroll"><table><thead><tr><th>项目</th><th>实际结果</th><th>证据与限制</th></tr></thead><tbody>
+<tr><td>Stage1 local</td><td><code>build_stage1_local.ps1 -Incremental</code> 成功；31 个 CU 全部复用，重新编译 5 个 CXX 文件并链接</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/stage1_local.log">构建日志</a>；不是冷构建，也不是默认复用已完成的证明。</td></tr>
+<tr><td>Stage2 local</td><td>同一正式脚本 <code>build_stage2_local.ps1</code> 在沙箱外完整编译 25 个 TU、链接并写入清单成功</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/stage2_local_outside_sandbox.log">沙箱外构建日志</a>；源码与编译参数不变。</td></tr>
+<tr><td>Stage1 工厂查询</td><td>GPU1、完整 32 档的 260 项注册、选择及拒绝检查通过</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/registry_02/result.json">检查结果</a>。第一次调用误用手写的不完整期望档位，日志保留；第二次从 <code>tiers.def</code> 读取，不修改测试或生产实现。</td></tr>
+<tr><td>两阶段运行样本</td><td>Stage1 5 例、Stage2 5 例各重复运行两次，完成点、非计时结果及目标叶值一致</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/runtime/summary.json">运行记录</a>；这是同一基线的可重复性与样本冻结，不是重构前后等价或完整支持矩阵运行验收。</td></tr>
+<tr><td>验收工具限制</td><td><code>test_stage1_usability.py</code> 首例因仍调用已移除的 <code>-ini</code> 被程序拒绝</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/usability.log">失败日志</a>；未放宽门限或修改实现。该脚本的配置/CLI 样本须在任务提取验收前适配，再验证暂停、恢复、发布重试。</td></tr>
+</tbody></table></div>
+<p>Stage1 样本覆盖 Montgomery PARAM0/2/3、Edwards NAF/binary；Stage2 覆盖普通 Montgomery/Edwards、承载、重定位和 host 回退，保留其生产算术检查。曲线身份、有效标量、checkpoint 安全点、即时因子发布、队列完成次序及 Stage2 pending/receipt 合同仍以本草稿的已核对流程和冻结源码为准。CPU/OpenCL/GUI 本次只冻结输入与已有支持限制，实际运行验收留在对应实施阶段，不把 CUDA 构建成功外推到这些后端。</p>
+<p>首次沙箱内 Stage2 构建在第 16/25 项 <code>kernels/cuda/stage2/arithmetic_kernels.cu</code> 失败：<code>Internal error</code>，随后 <code>nvcc error: &#x27;ptxas&#x27; died with status 0xC0000008 (INVALID_HANDLE)</code>。失败记录和部分对象状态保留于 <a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/result.json">原始失败记录</a>，不覆盖为成功。用户确认沙箱限制为已知问题并授权继续；随后沙箱外同脚本、同参数成功，旧失败不再阻塞 P0。<strong>这只能证明沙箱外构建可用，具体错误根因未进一步诊断。</strong> 后续 CUDA 编译沿用该执行方式，不为避开沙箱错误改变工具链、算术宏或编译并行度。</p>
+<p>工具链为 CUDA 13.3.73、MSVC 14.51.36231、sm_89。Stage1 保持完整 tiers、压缩开启、无 PTX、PRAC 关闭；Stage2 保持 SplitCompile=8、ptx/fixed mode3、outer unroll0、add/sub mask1。未运行 release、跨架构构建或性能比较。设备清单见 <a href="../../data/experiments/main_flow_refactor_implementation_20261021/p0/devices.csv">devices.csv</a>。</p>
+<p>冻结程序 SHA256：Stage1 为 <code>22327aae26f81cde2bf8b95d075e50697649521890f5d7d97f71e85cd3980094</code>，Stage2 为 <code>6c1e5a4df7c813a17e561935dfa30068a689e7cdd2c439048d8a0beca9c8ccd5</code>；GMP DLL 为 <code>969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e</code>。源摘要文件 SHA256 为 <code>8793675558067C2EA53D1AC3236B95F2F639297BC0AE1E12EAB2C6D19FB33570</code>，源归档 SHA256 为 <code>50A99E7C930EE9EF8F640493BC8711A4BA0FD66FFE819446AE319A746F0B91A4</code>。成功构建后另行复制两阶段程序与匹配清单，失败构建记录不作为当前基线。</p>
 </section>
 <section class="plan-section" id="plan-build"><h2>首先调整构建复用与输出隔离</h2>
 <h3 id="当前样例说明了什么">当前样例说明了什么</h3>
@@ -532,7 +547,7 @@ checked(task.remove_completed_progress());</code></pre>
 </tbody></table></div>
 </section>
 <section class="plan-section" id="plan-phases"><h2>分阶段正式重构顺序</h2>
-<p>每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下是后续实施计划，本轮全部未执行。</p>
+<p>每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 local 基线与输入冻结完成，P1–P7 未执行，详见“实施进度与阻塞记录”。</p>
 <h3 id="phase-0" class="phase-title">P0 冻结现状与生产闭包</h3>
 <p>交付：当前主程序/源清单、完整支持矩阵、构建参数与工具链、对象/exe/文件样本身份、曲线/标量/恢复/发布顺序；保留并行未提交状态的独立快照。记录本轮附件但不把其当作干净提交或性能基线。</p>
 <p>通过条件：能定位每个生产入口和资源；强制自检、OpenCL诊断资源、设备常量、默认流、环境变量读取时机、错误/停止路径均纳入。现有已知限制单列，不能在重构时掩盖。</p>
@@ -589,7 +604,7 @@ checked(task.remove_completed_progress());</code></pre>
 <p>采用其接口显式化、资源所有权和依赖控制原则：I.1/I.4、I.2、C.129、R.1、SF.9/SF.11。I.27 的 Pimpl 适合隐藏大型设备对象，不要求每个值类型增加间接层。本文的目录、粗Interface、profile和阶段顺序是本仓库的设计，不是规范规定的模板。</p>
 <p>来源：<a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines">C++ Core Guidelines</a>，前文查阅日期 2026-10-21。</p>
 </section>
-<details id="source-analysis" class="evidence-details"><summary>现状、曲线公式、后端流程与粒度依据</summary><p class="caption">以下描述核对时的当前实现。整体目标与实施顺序以上方完整方案为准。</p><section id="runtime-flow" class="runtime-section">
+<details id="source-analysis" class="evidence-details"><summary>现状、曲线公式、后端流程与粒度依据</summary><p class="caption">以下描述前期核对快照中的实现，行号和版本以各节证据为准。实际实施状态见上方P0基线记录，目标与顺序见完整方案。</p><section id="runtime-flow" class="runtime-section">
 <h2>共同主干与真正的分支</h2>
 <p>你的顺序可作为主干，但必须把任务 checkpoint、曲线载荷、设备同步、结果回读和文件提交分开。下面描述<strong>当前代码</strong>；下方原有模块与重构方案仍是设计建议。</p>
 <div class="behavior-legend"><span>主机计算 / 控制</span><span>GPU 计算 / 资源</span><span>H2D / D2H</span><span>同步等待</span><span>输出 I/O</span><span>文件 I/O</span></div>
@@ -800,4 +815,4 @@ checked(task.remove_completed_progress());</code></pre>
 
 
 
-</details><footer><h2>方案源文档与证据</h2><p><a href="../development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md">主流程重构方案与分析草稿</a> 为本主题设计源文档，本页为阅读版。当前实现仍以架构与使用文档为准。</p><p><a href="../../data/experiments/main_flow_refactor_plan_20261021/user_build_observation.txt">用户原始构建观察</a> · <a href="../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json">前期整合源码快照</a> · <a href="../README.md">项目文档入口</a></p><p class="caption">原始证据位于忽略的 data/ 目录，随本机保留；本轮仅修改文档，没有修改生产代码、配置或构建脚本，也没有运行构建或测试。</p></footer></main></body></html>
+</details><footer><h2>方案源文档与证据</h2><p><a href="../development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md">主流程重构方案与分析草稿</a> 为本主题设计源文档，本页为阅读版。当前实现仍以架构与使用文档为准。</p><p><a href="../../data/experiments/main_flow_refactor_plan_20261021/user_build_observation.txt">用户原始构建观察</a> · <a href="../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json">前期整合源码快照</a> · <a href="../README.md">项目文档入口</a></p><p class="caption">原始证据位于忽略的 data/ 目录，随本机保留；本次完成P0 local基线冻结；保留沙箱内原始失败与沙箱外成功记录。生产代码、配置和构建脚本尚未修改，未运行release。</p></footer></main></body></html>
