@@ -2,6 +2,7 @@
 #include "../stage1/execution_contract.h"
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "../../storage/queue/ecm_worktodo.h"
+#include "../../storage/queue/owner_lease.h"
 #include "../../storage/transfer/ecm_stage2_transfer.h"
 #include "../../storage/transfer/p95_transfer.h"
 #include "ecm/platform/logging.h"
@@ -176,6 +177,9 @@ static bool run_one(const QueuePaths &paths,const QueueItem &item,const TaskDepe
 }
 
 int run_queue_workflow(const QueuePaths &paths,const NextQueueTask &next_task,const TaskDependencies &tasks) {
+    ecm_queue::OwnerLease owner;
+    try { owner.acquire(paths.worktodo, paths.worker); }
+    catch (const std::exception& error) { ecm_ts_fprintf(stderr,"FATAL: %s\n",error.what()); return 1; }
     int processed=0;
     for(;;) {
         if(ecm_stage1_stop_requested()) {

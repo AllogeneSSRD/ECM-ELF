@@ -1,0 +1,19 @@
+{
+  "columns": 8,
+  "rows": 7,
+  "frame_width": 224,
+  "frame_height": 248,
+  "logical_width": 112,
+  "logical_height": 124,
+  "moods": [
+    "Calm",
+    "Working",
+    "Waiting",
+    "Error",
+    "Done",
+    "Doze",
+    "Wink"
+  ],
+  "source_sha256": "1ec32d05c9b9c9e9b171bad911c161956daabca25572829afd73d261a919cf88",
+  "layers": 50
+}

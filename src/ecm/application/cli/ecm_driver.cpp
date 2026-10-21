@@ -373,6 +373,9 @@ static int print_gpu_info(const char *ini_used, int worker, int device_index,
 }
 
 int main(int argc, char **argv){
+    for (int i=1;i<argc;++i) if (std::string(argv[i])=="--gui-queue-protocol") {
+        std::puts("ECM_QUEUE_OWNER=1"); return 0;
+    }
     if (ecm_wants_usage(argc, argv)) {
         print_ecm_usage(argv[0]);
         return 0;

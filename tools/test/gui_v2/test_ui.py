@@ -39,7 +39,7 @@ def main():
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
     log = out / 'matrix.log'
-    process = subprocess.Popen([str(exe), '--diagnostics', str(log), '--validation', '--audit-ui', '--ui-scale', '1'],
+    process = subprocess.Popen([str(exe), '--diagnostics', str(log), '--ui-state', str(out / 'matrix.toml'), '--no-nvml', '--validation', '--audit-ui', '--ui-scale', '1'],
                                startupinfo=startup, env=env, cwd=out, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     hwnd = window(process.pid, 'ecm_gui_v2')
     sequence = 0
@@ -83,7 +83,7 @@ def main():
                 assert abs(sample['padding'] - 20 * scale) < .01, sample
                 assert sample['cjk'] == sample['mono_cjk'] == 1, sample
                 assert abs(sample['mono_i'] - sample['mono_w']) < .01, sample
-                assert sample['fonts'] == 2 and 0 < sample['textures'] <= 2, sample
+                assert sample['fonts'] == 3 and 0 < sample['textures'] <= 2, sample
                 assert sample['allocations'] > 0 and sample['gpu_bytes'] > 0, sample
                 sample.update(cycle=cycle, code=code)
                 samples.append(sample)
@@ -122,7 +122,7 @@ def main():
     assert 'memory_audit_end: bytes=0 allocations=0' in text, text
     # Deliberately remove CJK font discovery; English rescue remains readable.
     rescue = out / 'rescue.log'
-    run = subprocess.run([str(exe), '--diagnostics', str(rescue), '--language', 'zh', '--simulate-missing-cjk', '--frames', '8', '--validation'],
+    run = subprocess.run([str(exe), '--diagnostics', str(rescue), '--ui-state', str(out / 'rescue.toml'), '--no-nvml', '--language', 'zh', '--simulate-missing-cjk', '--frames', '8', '--validation'],
                          startupinfo=startup, env=env, cwd=out, timeout=30)
     rescue_text = rescue.read_text(encoding='utf-8')
     assert run.returncode == 0 and 'language=en cjk=0' in rescue_text and 'Chinese font unavailable' in rescue_text, rescue_text

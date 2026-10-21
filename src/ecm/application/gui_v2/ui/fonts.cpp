@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <filesystem>
 #include <initializer_list>
+#include <fstream>
 
 namespace ecmgui_v2::ui {
 namespace {
@@ -14,34 +15,49 @@ std::filesystem::path find_font(std::initializer_list<const wchar_t*> names) {
     }
     return {};
 }
-ImFont* add(const std::filesystem::path& path, bool merge = false) {
+ImFont* add(const std::filesystem::path& path, std::vector<std::vector<unsigned char>>& files, bool merge = false, unsigned char* shared = nullptr, int shared_size = 0) {
     if (path.empty()) return nullptr;
-    ImFontConfig config; config.MergeMode = merge;
-    return ImGui::GetIO().Fonts->AddFontFromFileTTF(path.u8string().c_str(), 15, &config);
+    ImFontConfig config; config.MergeMode = merge; config.FontDataOwnedByAtlas = false;
+    if (!shared) {
+        std::ifstream input(path, std::ios::binary);
+        files.emplace_back(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        if (files.back().empty()) return nullptr;
+        shared = files.back().data(); shared_size = static_cast<int>(files.back().size());
+    }
+    return ImGui::GetIO().Fonts->AddFontFromMemoryTTF(shared, shared_size, 15, &config);
 }
 }
 void Fonts::reload(bool request_chinese, bool simulate_missing_cjk, FILE* log) {
     auto& io = ImGui::GetIO();
-    io.FontDefault = nullptr;
-    io.Fonts->Clear(); body = mono = nullptr;
     const auto cjk_file = simulate_missing_cjk ? std::filesystem::path{} : find_font({L"msyh.ttc", L"simhei.ttf", L"simsun.ttc"});
     const auto ui_file = find_font({L"segoeui.ttf", L"arial.ttf"});
     const auto mono_file = find_font({L"consola.ttf", L"cour.ttf"});
     notice.clear();
     const auto primary_file = request_chinese && !cjk_file.empty() ? cjk_file : ui_file;
-    body = add(primary_file);
-    if (!body) body = io.Fonts->AddFontDefault();
-    if (!request_chinese && !cjk_file.empty()) add(cjk_file, true);
+    if (!english) {
+        english = add(ui_file, files);
+        if (!english) english = io.Fonts->AddFontDefault();
+        unsigned char* cjk_data = nullptr; int cjk_size = 0;
+        if (!cjk_file.empty()) {
+            add(cjk_file, files, true);
+            cjk_data = files.back().data(); cjk_size = static_cast<int>(files.back().size());
+            chinese_font = add(cjk_file, files, false, cjk_data, cjk_size);
+        }
+        mono = add(mono_file, files);
+        if (mono && cjk_data) add(cjk_file, files, true, cjk_data, cjk_size);
+        if (!mono) mono = english;
+    }
+    body = request_chinese && chinese_font ? chinese_font : english;
     cjk = body->IsGlyphInFont(0x4e2d) && body->IsGlyphInFont(0x6587);
     chinese = request_chinese && cjk;
     if (request_chinese && !chinese) notice = "Chinese font unavailable. Using English; install Microsoft YaHei, SimHei or SimSun.";
-    mono = add(mono_file);
-    if (mono && !cjk_file.empty()) add(cjk_file, true);
-    if (!mono) mono = body;
     io.FontDefault = body;
     std::fprintf(log, "fonts: language=%s cjk=%d ui=%s mono=%s notice=%s\n", chinese ? "zh" : "en", cjk,
         primary_file.u8string().c_str(), mono_file.u8string().c_str(), notice.c_str());
     std::fflush(log);
+}
+Fonts::~Fonts() {
+    if (ImGui::GetCurrentContext()) { ImGui::GetIO().FontDefault = nullptr; ImGui::GetIO().Fonts->Clear(); }
 }
 void Fonts::push(FontRole role) const {
     const float size = role == FontRole::Caption ? 13.f : role == FontRole::Heading ? 22.f : 15.f;

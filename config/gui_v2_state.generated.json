@@ -1,0 +1,8 @@
+{
+  "sha256": {
+    "src/ecm/application/gui_v2/generated/ui_values.h": "4e3fb45193d5a0aa71aa81f453f14c5caa68136d2f3f0f12b43d309c3b7a80dd",
+    "docs/GUI_V2_STATE_REFERENCE.md": "bcd1aaa8a56c95e2cf50636ee20ab1dfb57662afab1203cb6a613b7c61d03c7f",
+    "config/ecm_options.json": "6d272c8c74619503e81e53983aa54faec2854d2790ab5cf40ab3225b3b4e2117",
+    "tools/gen/generate_gui_v2_state.py": "66c58bb4f825fbc200ff1b1b978ce591321808892e8605eed32c1c00f266a738"
+  }
+}

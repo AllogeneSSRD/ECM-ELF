@@ -188,3 +188,10 @@ src/ecm/platform/generated/*.h text eol=lf
 # GUI v2 dependency provenance records raw upstream SHA256 hashes.
 third_party/gui_v2_vulkan/** text eol=lf
 third_party/imgui_vulkan/** text eol=lf
+config/gui_v2_state.generated.json text eol=lf
+src/ecm/application/gui_v2/generated/** text eol=lf
+docs/GUI_V2_STATE_REFERENCE.md text eol=lf
+tools/gen/generate_gui_v2_state.py text eol=lf
+
+third_party/gui_v2_pet/* text eol=lf
+third_party/imgui_vulkan/*.patch text eol=lf

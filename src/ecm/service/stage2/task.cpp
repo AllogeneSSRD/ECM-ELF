@@ -1,5 +1,6 @@
 // Unique parent task/queue pipeline and complete isolated curve worker.
 #include "task.h"
+#include "../../storage/queue/owner_lease.h"
 #include "input.h"
 #include "../planning/stage2.h"
 #include "../planning/ecm_stage2_runtime_cache.h"
@@ -257,6 +258,8 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
     const auto &[cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir]=paths;
     const int device=o.device;const uint64_t d=o.d,batch=o.batch;
     const bool queue = o.save.empty();
+    ecm_queue::OwnerLease owner;
+    if (queue) owner.acquire(worktodo.u8string(), o.worker);
     if (queue && o.selection) throw std::runtime_error("queue curve selection comes from ECMSTAGE2; use --save for overrides");
     Handle lock;
     if (queue) {

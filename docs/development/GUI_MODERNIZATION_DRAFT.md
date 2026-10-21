@@ -1,6 +1,6 @@
 # 独立 GUI v2：ImGui / Vulkan 现代化规划草稿
 
-状态：P0–P2 已完成，P3–P6 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
+状态：P0–P3 已完成（已列出硬件资格限制），P4 实施中，P5–P6 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -20,9 +20,22 @@
 - P2 诊断证据：首轮将首次启动容量与完整切换历史后的缓冲容量比较，发现 1 KiB 差异。逐块审计确认字体纹理同为 262144 bytes，变化来自顶点/索引缓冲（768+256 bytes）；固定完整预热序列后再比较三轮，未放宽相等门限。截图工具改为与宿主一致的物理 DPI 坐标。第三/四轮后台 Win32 鼠标消息受真实桌面鼠标所在窗口影响，改为显式 `--audit-ui` 的 ImGui 输入注入；实际桌面输入不据此宣称通过。原始 `_01`–`_04` 日志和截图保留，`_05` 已通过控件验收；补齐 loader 诊断及原子验证计数后，最终二进制证据为 `_06`。
 - P2 构建隔离：根工程 `ECM_BUILD_GUI=OFF`、`ECM_BUILD_GUI_V2=ON` 的独立目标构建通过，日志在 `data/experiments/gui_v2/root-*.log`；专用入口不依赖计算库。默认入口输出 `build_gui_v2_local/`，exe SHA256 `5b1c1eaf9a3b8a84a2ddb20945c5745b04df12207e03e80b8ac0e2453ce63c08`；移除 SDK/validation 环境变量后普通启动、8 帧呈现与退出通过，见 [默认入口证据](../../data/experiments/gui_v2/p2_default_smoke_20261021/result.json)。这是本机系统 runtime 验证，不代替干净分发机验收。补齐 loader 1.4.341 / 请求 API 1.1.0 / instance 扩展诊断，验证回调计数使用原子变量。新增依赖文件指定 LF，保证来源 SHA256 在 Windows checkout 后保持一致。当前使用与限制另见 [GUI v2 开发预览](../usage/GUI_V2.md)。
 - P2 文档：HTML 同步显示 3 个已完成阶段、4 个待实施阶段；离线浏览器验证阶段切换、明暗阅读、窄布局和 390px 视口均通过，无脚本错误或横向溢出。验证入口 `tools/test/gui_v2/test_plan_html.cjs`；草稿继续保留，等待用户决定后续整理。
+- P3：已完成，v2 里程碑 0.47.3。独立 App 复用原 Controller/Proc/业务模型；导航、工作区、检查区、日志与确认退出接通；侧车采用配置身份隔离的 LocalAppData 路径，显式路径可覆盖。21 个字段由 schema 生成，非法文件保留原字节。原业务 TOML 不因外观保存改写。
+- P3 验证：[主集成证据](../../data/experiments/gui_v2/p3_shell_04/result.json)，exe SHA256 `847f981e02ce4e1a65054fb8f5aa895a49addd61988fddb9a8453e09a156183c`。浮动窗跨两块 2560×1600 / 144 DPI 显示器、主 swapchain 三次缩放、浮动窗销毁重建、窄屏、侧车重启、安全停止与退出取消通过。宠物七状态、透明 owned/noactivate 窗口、最小化恢复与鼠标非激活合同通过。不同物理 DPI 与真实 IME 组合输入尚未获得资格，不据合成事件声称通过。
+- P3 队列互斥：共用 Stage1/Stage2 队列入口使用进程级文件区间锁，全队列与分区互斥，不同分区可并行，崩溃释放。v2 拒绝不支持能力标记的旧 worker；原 GUI 使用更新后的 worker 方受保护。见 [锁竞争证据](../../data/experiments/gui_v2/p3_ownership_01/result.json)。原 GUI 73 个保护文件及 exe 字节不变；仅获批准的 v2 独立 schema 加法，现有配置投影相同，见 [隔离审计](../../data/experiments/gui_v2/p3_legacy_01/result.json)。
+- P3 Vulkan 诊断：次 viewport 在 acquire 前批量转换 swapchain 图像产生 2 条验证错误；最小复现 `p3_viewport_red_01` 留存。v2 专用后端补丁取消提前转换，由 acquire 后 render pass 转换；绿色复现与完整集成均 API 错误/警告 0。原核心及 Win32/DX11 后端不变。主窗口重建保留 backend/字体和次窗口；显示格式改变明确要求重启。
+- P3 字体与宠物：缓存中英/等宽字体并共享字体文件内存，16 组合三轮严格资源稳定、退出显式分配归零，见 [字体证据](../../data/experiments/gui_v2/p3_ui_01/result.json)。ELYTerminal MIT 矢量角色离线生成 7×8 atlas；运行时原生分层窗口合成，不引入 Web runtime，默认关闭。严格侧车往返/非法文件保留及宠物几何测试通过（`p3_state_03`）。早期失败样本保留，不以假 worker 自身超时作为安全退出证据。
 - 草稿与 HTML 由 `tools/gen/render_gui_v2_plan.py` 同步，原始证据保留在忽略目录。各阶段独立提交 `[0.47.z]`。
 
 ## 1. 分析边界与基线
+
+### P3–P6 扩展授权与宠物兼容
+
+2026-10-21 用户授权继续 P3–P6，并参考 `.refactor/ELYTerminal/src/pet` 加入宠物。参考宠物为程序自带的分层矢量角色与行为状态机，不是 ChatGPT 宠物包格式。兼容范围包括可关闭的透明非激活独立窗口、主窗口边缘定位/顶部空间不足时转到底边、拖动及抚摸、状态表情、DPI、最小化和退出联动。主 GUI 使用 Vulkan；宠物透明窗口采用 Windows 原生分层位图合成，离线转换的上游矢量资产带 MIT 告知，运行时不引入浏览器/GPUI。
+
+用户另明确批准共用 worker 入口新增进程级队列互斥，以防两版 GUI 重复启动同一队列/worker；旧 GUI 源码、默认值与算法不变。v2 控制要求 worker 支持 `ECM_QUEUE_OWNER=1`；旧二进制不具备该互斥，不能假称受新锁约束。进程生命周期占用与短时队列编辑锁分离，worker=0 的全队列占用与各分区互斥，不同 worker 分区可并行。新增 v2 UI 字段仅位于 `config/ecm_options.json` 的独立侧车定义；现有 owners/options 投影保持原样，现有生成绑定/模板保持原样，仅 schema 源与哈希清单新增受批准内容。
+
+P3 加入侧车/渲染生命周期及宠物平台窗口基础，P4 完成业务页面与宠物状态接线，P5 同时验收宠物关闭/静止/动画的资源边界，P6 独立包携带资产、来源、许可及明确运行条件。所有未实测的物理跨屏、IME、功耗/吞吐条件仍明确列为待验证，不以合成事件代替真实硬件资格。
 
 - 初始分析检查时 HEAD 为 `8969467`，包含当时工作区改动；正式 P0–P2 实施从干净的 `a30c373` 开始，以 P0 保护清单及二进制哈希作为验收身份。
 - 公共源码版本与 `build_gui_local/ecm_gui.exe --version` 均为 `ECM-ELF 0.46.7`。相同版本号不能独立证明源码和二进制完全一致。

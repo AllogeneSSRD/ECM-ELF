@@ -509,6 +509,9 @@ int driver(Options o) {
 } // namespace s2prod
 
 int main(int argc, char **argv) {
+    for (int i=1;i<argc;++i) if (std::string(argv[i])=="--gui-queue-protocol") {
+        std::puts("ECM_QUEUE_OWNER=1"); return 0;
+    }
     try { return s2prod::driver(s2prod::arguments(argc, argv)); }
     catch (const std::exception &e) {
         const std::string message=std::string("ecm_cuda_stage2: ")+e.what();

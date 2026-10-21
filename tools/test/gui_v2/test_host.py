@@ -33,7 +33,7 @@ def main():
         ('surface-lost', ['--inject-failure', 'surface-lost'], 1),
         ('invalid-option', ['--unknown'], 1),
     ]:
-        command = [str(exe), '--diagnostics', str(out / (name + '.log')), *switches]
+        command = [str(exe), '--diagnostics', str(out / (name + '.log')), '--ui-state', str(out / (name + '.toml')), '--no-nvml', *switches]
         run = subprocess.run(command, startupinfo=startup, env=env, cwd=out, capture_output=True, timeout=30)
         (out / (name + '.stdout')).write_bytes(run.stdout + run.stderr)
         assert run.returncode == expected, (name, run.returncode)
@@ -45,7 +45,7 @@ def main():
                 assert 'injected renderer failure' in text, text
         cases.append({'name': name, 'exit': run.returncode, 'injected': name in ('device-lost', 'surface-lost', 'no-loader')})
     log = out / 'lifecycle.log'
-    command = [str(exe), '--diagnostics', str(log), '--validation']
+    command = [str(exe), '--diagnostics', str(log), '--ui-state', str(out / 'lifecycle.toml'), '--no-nvml', '--validation']
     process = subprocess.Popen(command, startupinfo=startup, env=env, cwd=out,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     hwnd = window(process.pid, 'ecm_gui_v2')

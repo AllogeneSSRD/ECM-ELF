@@ -33,6 +33,7 @@ private:
     VkFence fence_ = VK_NULL_HANDLE;
     VkExtent2D extent_{};
     std::vector<Image> images_;
-    void destroy_resources();
+    VkFormat format_ = VK_FORMAT_UNDEFINED;
+    void destroy_resources(bool full = true);
 };
 }

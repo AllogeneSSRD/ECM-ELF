@@ -3,7 +3,8 @@ param(
     [string]$BuildDir = 'build_gui_v2_test',
     [string]$VcVars = '',
     [string]$VulkanRoot = '',
-    [string]$BackendRoot = ''
+    [string]$BackendRoot = '',
+    [switch]$TestHelpers
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -35,5 +36,6 @@ function Invoke-Compiler([string]$Command, [string]$Log) {
     $output -split "`r?`n" | Where-Object { $_ -match 'gui_v2:|Built target|error|warning' } | Write-Host
 }
 Invoke-Compiler $configure 'configure.log'
-Invoke-Compiler "cmake --build `"$BuildDir`" --target ecm_gui_v2" 'build.log'
+$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test' } else { 'ecm_gui_v2' }
+Invoke-Compiler "cmake --build `"$BuildDir`" --target $targets" 'build.log'
 Write-Host "GUI v2 executable: $(Join-Path $BuildDir 'ecm_gui_v2.exe')"

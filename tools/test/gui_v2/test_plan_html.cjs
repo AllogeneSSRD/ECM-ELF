@@ -11,15 +11,16 @@ const assert = require('node:assert/strict');
   const browser = await chromium.launch({channel: 'msedge', headless: true});
   const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
   const errors = [];
+  const completed = Number(process.argv[3] || 4);
   page.on('pageerror', error => errors.push(String(error)));
   try {
     await page.goto(pathToFileURL(path.join(root, 'docs/web/gui-v2-vulkan-plan-20261021.html')).href);
     assert.match(await page.locator('#progress').innerText(), /P2：已完成/);
     assert.equal(await page.locator('[data-phase]').count(), 7);
-    assert.equal(await page.locator('[data-state="已完成"]').count(), 3);
+    assert.equal(await page.locator('[data-state="已完成"]').count(), completed);
     for (let i = 0; i < 7; ++i) {
       await page.locator(`[data-phase="${i}"]`).click();
-      assert.match(await page.locator('#phase-index').innerText(), new RegExp(`P${i} · ${i < 3 ? '已完成' : '待实施'}`));
+      assert.match(await page.locator('#phase-index').innerText(), new RegExp(`P${i} · ${i < completed ? '已完成' : '待实施'}`));
       assert.ok((await page.locator('#phase-gate').innerText()).length > 30);
     }
     await page.locator('#theme-toggle').click();
@@ -28,7 +29,7 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('#layout-mock').getAttribute('data-width'), 'narrow');
     await page.locator('a[href="#full-plan"]').click();
     assert.equal(await page.locator('#full-details').getAttribute('open'), '');
-    assert.match(await page.locator('.full-body').innerText(), /P0–P2 已完成/);
+    assert.match(await page.locator('.full-body').innerText(), /P0–P[2-6] 已完成/);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({path: path.join(out, 'desktop.png')});
     await page.setViewportSize({width: 390, height: 844});
@@ -37,7 +38,7 @@ const assert = require('node:assert/strict');
     assert.ok(widths[0] <= widths[1] + 1, widths);
     await page.screenshot({path: path.join(out, 'mobile.png')});
     assert.deepEqual(errors, []);
-    const result = {passed: true, phases: 7, completed: 3, consoleErrors: errors, mobileWidths: widths};
+    const result = {passed: true, phases: 7, completed, consoleErrors: errors, mobileWidths: widths};
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2));
     console.log(JSON.stringify(result));
   } finally { await browser.close(); }

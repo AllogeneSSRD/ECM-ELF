@@ -2,7 +2,9 @@
   {
     "file": "imgui_vulkan/imgui_impl_vulkan.cpp",
     "url": "https://raw.githubusercontent.com/ocornut/imgui/64944b4520b30772de8dbf0b37d0311746477a32/backends/imgui_impl_vulkan.cpp",
-    "sha256": "ab11062bc39d387cfa709cd3e98fff3e751d0986cbec890b7874fbab141515f1"
+    "sha256": "00e437b93ca4e5b4d230bfb66834f0f11cc5c917c9ec57db39afabb489d379d6",
+    "upstream_sha256": "ab11062bc39d387cfa709cd3e98fff3e751d0986cbec890b7874fbab141515f1",
+    "patch": "imgui_vulkan/acquire-before-use.patch"
   },
   {
     "file": "imgui_vulkan/imgui_impl_vulkan.h",

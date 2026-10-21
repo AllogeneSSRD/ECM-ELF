@@ -17,9 +17,9 @@ int create_surface(ImGuiViewport* viewport, ImU64 instance, const void* allocato
     return result;
 }
 }
-void VulkanWindow::destroy_resources() {
+void VulkanWindow::destroy_resources(bool full) {
     auto device = context_.device;
-    if (ImGui::GetIO().BackendRendererUserData) ImGui_ImplVulkan_Shutdown();
+    if (full && ImGui::GetIO().BackendRendererUserData) ImGui_ImplVulkan_Shutdown();
     for (const auto& image : images_) {
         if (image.framebuffer) vkDestroyFramebuffer(device, image.framebuffer, nullptr);
         if (image.view) vkDestroyImageView(device, image.view, nullptr);
@@ -29,10 +29,11 @@ void VulkanWindow::destroy_resources() {
     if (pool_) vkDestroyCommandPool(device, pool_, nullptr);
     if (acquired_) vkDestroySemaphore(device, acquired_, nullptr);
     if (fence_) vkDestroyFence(device, fence_, nullptr);
-    if (pass_) vkDestroyRenderPass(device, pass_, nullptr);
+    if (full && pass_) vkDestroyRenderPass(device, pass_, nullptr);
     if (swapchain_) vkDestroySwapchainKHR(device, swapchain_, nullptr);
     pool_ = VK_NULL_HANDLE; command_ = VK_NULL_HANDLE; acquired_ = VK_NULL_HANDLE;
-    fence_ = VK_NULL_HANDLE; pass_ = VK_NULL_HANDLE; swapchain_ = VK_NULL_HANDLE;
+    fence_ = VK_NULL_HANDLE; swapchain_ = VK_NULL_HANDLE;
+    if (full) { pass_ = VK_NULL_HANDLE; format_ = VK_FORMAT_UNDEFINED; }
 }
 void VulkanWindow::shutdown() {
     if (!context_.device) return;
@@ -44,7 +45,7 @@ void VulkanWindow::rebuild(uint32_t width, uint32_t height) {
     if (!width || !height) return;
     auto& c = context_;
     check_vk(vkDeviceWaitIdle(c.device), "wait before swapchain rebuild");
-    destroy_resources();
+    destroy_resources(false);
     VkSurfaceCapabilitiesKHR caps{};
     check_vk(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(c.physical, c.surface, &caps), "surface capabilities");
     if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
@@ -59,6 +60,7 @@ void VulkanWindow::rebuild(uint32_t width, uint32_t height) {
         if (candidate.format == VK_FORMAT_B8G8R8A8_UNORM && candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             format = candidate;
     if (format.format == VK_FORMAT_UNDEFINED) format.format = VK_FORMAT_B8G8R8A8_UNORM;
+    if (pass_ && format_ != format.format) throw std::runtime_error("Surface format changed; restart GUI v2 after display/HDR mode change");
     extent_ = caps.currentExtent.width == UINT32_MAX ? VkExtent2D{
         std::clamp(width, caps.minImageExtent.width, caps.maxImageExtent.width),
         std::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height)} : caps.currentExtent;
@@ -100,7 +102,10 @@ void VulkanWindow::rebuild(uint32_t width, uint32_t height) {
     pass.attachmentCount = 1; pass.pAttachments = &attachment;
     pass.subpassCount = 1; pass.pSubpasses = &subpass;
     pass.dependencyCount = 1; pass.pDependencies = &dependency;
-    check_vk(vkCreateRenderPass(c.device, &pass, nullptr, &pass_), "create render pass");
+    if (!pass_) {
+        check_vk(vkCreateRenderPass(c.device, &pass, nullptr, &pass_), "create render pass");
+        format_ = format.format;
+    }
     images_.resize(count);
     VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint32_t i = 0; i < count; ++i) {
@@ -132,7 +137,7 @@ void VulkanWindow::rebuild(uint32_t width, uint32_t height) {
     backend.ImageCount = count; backend.PipelineInfoMain.RenderPass = pass_;
     backend.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     backend.CheckVkResultFn = backend_check;
-    if (!ImGui_ImplVulkan_Init(&backend)) throw std::runtime_error("ImGui Vulkan initialization failed");
+    if (!ImGui::GetIO().BackendRendererUserData && !ImGui_ImplVulkan_Init(&backend)) throw std::runtime_error("ImGui Vulkan initialization failed");
     needs_rebuild = false; ++rebuilds;
     std::fprintf(log_, "swapchain: rebuild=%u extent=%ux%u images=%u format=%d present=FIFO\n", rebuilds, extent_.width, extent_.height, count, format.format);
     std::fflush(log_);

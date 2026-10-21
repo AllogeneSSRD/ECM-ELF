@@ -9,3 +9,12 @@ installation or Vulkan import library: Volk dynamically loads the system loader.
 Running the application requires a Vulkan 1.1 loader and a compatible graphics/present
 device. Validation layers are optional development dependencies; `--validation`
 requires them explicitly and fails if absent.
+
+The matching ImGui Vulkan backend has one v2-only local patch,
+`third_party/imgui_vulkan/acquire-before-use.patch`: platform swapchain images
+must not be transitioned before acquisition. The traditional render pass already
+performs the initial transition after acquire; the dynamic path discards old
+contents using UNDEFINED. The minimized detached-viewport regression records two
+validation errors before the patch and zero afterwards. Original and patched
+hashes are both recorded in provenance.json. The shared ImGui core and Win32/DX11
+backends remain unmodified.

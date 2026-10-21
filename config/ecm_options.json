@@ -1988,5 +1988,268 @@
       ]
     }
   ],
-  "aliases": []
+  "aliases": [],
+  "gui_v2_sidecar": {
+    "schema_version": 1,
+    "fields": [
+      {
+        "table": "state",
+        "key": "schema",
+        "field": "state_schema",
+        "type": "int",
+        "default": 1,
+        "description": [
+          "UI sidecar schema; incompatible versions are rejected.",
+          "UI 侧车版本；拒绝不兼容版本。"
+        ],
+        "minimum": 1,
+        "maximum": 1
+      },
+      {
+        "table": "ui",
+        "key": "theme",
+        "field": "ui_theme",
+        "type": "string",
+        "default": "dark",
+        "description": [
+          "Appearance mode, independent of legacy GUI settings.",
+          "外观模式，独立于旧 GUI 设置。"
+        ],
+        "values": [
+          "dark",
+          "light"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "language",
+        "field": "ui_language",
+        "type": "string",
+        "default": "en",
+        "description": [
+          "UI language; CJK font failure falls back to English.",
+          "界面语言；中文字体不可用时回退英文。"
+        ],
+        "values": [
+          "en",
+          "zh"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "scale",
+        "field": "ui_scale",
+        "type": "float",
+        "default": 0,
+        "description": [
+          "Zero selects window DPI; positive values select a fixed interface scale.",
+          "零按窗口 DPI 自动计算；正值指定界面比例。"
+        ],
+        "minimum": 0,
+        "maximum": 4
+      },
+      {
+        "table": "ui",
+        "key": "page",
+        "field": "ui_page",
+        "type": "int",
+        "default": 0,
+        "description": [
+          "Selected central page: workers, results, generator, probability, GPU, settings, components.",
+          "中央页面：worker、结果、生成器、概率、GPU、设置、组件。"
+        ],
+        "minimum": 0,
+        "maximum": 6
+      },
+      {
+        "table": "ui",
+        "key": "worker",
+        "field": "ui_worker",
+        "type": "int",
+        "default": 1,
+        "description": [
+          "Selected worker partition.",
+          "选中的 worker 分区。"
+        ],
+        "minimum": 1,
+        "maximum": 1024
+      },
+      {
+        "table": "ui",
+        "key": "inspector",
+        "field": "ui_inspector",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Show the worker inspector on sufficiently wide windows.",
+          "宽窗口显示 worker 检查区。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "logs",
+        "field": "ui_logs",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Show the log dock.",
+          "显示日志停靠窗。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "follow_log",
+        "field": "ui_follow_log",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Follow new worker output.",
+          "跟随新的 worker 输出。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "raw_log",
+        "field": "ui_raw_log",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Show raw output instead of classified event lines.",
+          "显示原始输出而非分类事件。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "dock",
+        "field": "ui_dock",
+        "type": "string",
+        "default": "",
+        "description": [
+          "Hex encoded ImGui layout; stored only in this sidecar.",
+          "十六进制编码的 ImGui 布局，仅存于本侧车。"
+        ],
+        "max_length": 524288
+      },
+      {
+        "table": "window",
+        "key": "x",
+        "field": "window_x",
+        "type": "int",
+        "default": -2147483648,
+        "description": [
+          "Window x in physical pixels; INT_MIN selects system placement.",
+          "窗口物理像素 x；INT_MIN 由系统放置。"
+        ],
+        "minimum": -2147483648,
+        "maximum": 2147483647
+      },
+      {
+        "table": "window",
+        "key": "y",
+        "field": "window_y",
+        "type": "int",
+        "default": -2147483648,
+        "description": [
+          "Window y in physical pixels; INT_MIN selects system placement.",
+          "窗口物理像素 y；INT_MIN 由系统放置。"
+        ],
+        "minimum": -2147483648,
+        "maximum": 2147483647
+      },
+      {
+        "table": "window",
+        "key": "width",
+        "field": "window_width",
+        "type": "int",
+        "default": 1280,
+        "description": [
+          "Restored window width in physical pixels.",
+          "恢复窗口的物理像素宽度。"
+        ],
+        "minimum": 480,
+        "maximum": 16384
+      },
+      {
+        "table": "window",
+        "key": "height",
+        "field": "window_height",
+        "type": "int",
+        "default": 850,
+        "description": [
+          "Restored window height in physical pixels.",
+          "恢复窗口的物理像素高度。"
+        ],
+        "minimum": 360,
+        "maximum": 16384
+      },
+      {
+        "table": "window",
+        "key": "maximized",
+        "field": "window_maximized",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Restore the maximized state.",
+          "恢复最大化状态。"
+        ]
+      },
+      {
+        "table": "worker",
+        "key": "stage1_exe",
+        "field": "worker_stage1_exe",
+        "type": "string",
+        "default": "",
+        "description": [
+          "Explicit Stage1 worker executable.",
+          "显式 Stage1 worker 程序路径。"
+        ]
+      },
+      {
+        "table": "worker",
+        "key": "stage2_exe",
+        "field": "worker_stage2_exe",
+        "type": "string",
+        "default": "",
+        "description": [
+          "Explicit Stage2 worker executable.",
+          "显式 Stage2 worker 程序路径。"
+        ]
+      },
+      {
+        "table": "pet",
+        "key": "enabled",
+        "field": "pet_enabled",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Show the ELYTerminal-compatible edge companion.",
+          "显示兼容 ELYTerminal 行为的窗口边缘宠物。"
+        ]
+      },
+      {
+        "table": "pet",
+        "key": "animate",
+        "field": "pet_animate",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Animate at the existing GUI cadence; no extra render loop.",
+          "按既有 GUI 节奏动画，不另开渲染循环。"
+        ]
+      },
+      {
+        "table": "pet",
+        "key": "left",
+        "field": "pet_left",
+        "type": "float",
+        "default": 72,
+        "description": [
+          "Companion offset from the main window left edge in logical units.",
+          "宠物相对主窗口左缘的逻辑单位偏移。"
+        ],
+        "minimum": 0,
+        "maximum": 16384
+      }
+    ]
+  }
 }
