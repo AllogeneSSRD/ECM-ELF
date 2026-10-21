@@ -99,7 +99,7 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 ## 代码入口
 
 - [main_win32.cpp](../../src/ecm/application/gui/main_win32.cpp#L87)：窗口矩形验证、恢复和保存。
-- [app.cpp](../../src/ecm/application/gui/app.cpp)、[worker_proc.cpp](../../src/ecm/application/gui/worker_proc.cpp)：界面和 worker 生命周期。
+- [app.cpp](../../src/ecm/application/gui/app.cpp)：界面；[worker_controller.cpp](../../src/ecm/application/gui/worker_controller.cpp)：唯一生命周期；[worker_proc.cpp](../../src/ecm/application/gui/worker_proc.cpp)：进程/Job/管道和重启策略。
 - [worktodo_gen.cpp](../../src/ecm/application/gui/worktodo_gen.cpp)、[results.cpp](../../src/ecm/application/gui/results.cpp)、[log_parse.cpp](../../src/ecm/application/gui/log_parse.cpp)：生成器、结果和进度。
 - [task_display.h](../../src/ecm/application/gui/task_display.h)：只用于显示的任务摘要与AID/因子替代；`log_parse.cpp::parse_stage2/Stage2Status`汇总阶段及完成曲线。
 - [probability_panel.cpp](../../src/ecm/application/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/ecm/application/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../include/ecm/core/stage2/probability.h)。
@@ -112,3 +112,11 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 生产源码位于 `src/ecm/application/gui/`。`tools/build/dev/build_gui.ps1` 默认输出 `build_gui_local/ecm_gui.exe`，只构建 GUI；fake worker、日志/结果/生成器测试位于 `tools/test/gui/`，CMake 标记 EXCLUDE_FROM_ALL，需要用 `-Targets` 显式选择。GUI 与本地计算 worker 使用各自输出目录，GUI 不链接计算引擎。
 
 `--selftest --config FILE.toml` 执行无窗口检查；`--worker-selftest --fake FILE.exe` 使用实际 Job/管道/停止事件测试进程 Adapter。后者不等于 GUI Controller 的混合阶段与关闭策略验收。测试必须使用当前 `--config` 和 TOML 分区/引号类型，worktodo 的 `[Worker #N]` 分区仍保持原格式。
+
+## 生命周期接口与拥有权
+
+WorkerController 拥有 worker 记录、启动、轮询、阶段分派和关闭协调；WorkerProc 拥有原生进程资源及崩溃退避/熔断。App 每帧推进 Controller，绘制借用的只读 WorkerView；原生进程对象不可见，日志不按帧复制。界面开关/跟随/高亮属于 App，命中、P95 与错误通过同步语义通知更新显示。
+
+阶段替换保留已有日志、计数和 P95，其他运行状态按新阶段初始化。停止先通知 worker，新的 checkpoint 只作提示；正常路径等待进程退出，超时才终止。运行或重启中的记录禁止重新配置后释放拥有权。配置默认值仍只来自生成物，Controller 接口不包含完整配置解析实现。
+
+显式 CMake 目标 `ecm_gui_controller_test` 独立链接实际 Controller/Process 和系统库，支持无窗口 fixture 及真实两阶段 worker 验证；它不依赖 ImGui、遥测或计算引擎。该验证与可见 GUI 绘制/像素测试分开。

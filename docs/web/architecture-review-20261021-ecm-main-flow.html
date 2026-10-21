@@ -50,7 +50,7 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 </style></head><body><main>
 <header><div class="caption">ECM-ELF · 2026-10-21 · 实施草稿 / P0–P3 与 P4a 已完成，P4职责提取进行中</div>
 <h1>主流程重构完整方案</h1><p class="lead">构建复用先行；明确 driver、task、factory 与 QueueWorkflow 的职责，精简重复封装。完整目录、Interface、伪代码与阶段门槛。</p>
-<div class="hero-note"><strong>P6a 已完成，GUI 版本 0.45.22。</strong>37 个 GUI 文件归位，默认构建只有 GUI，测试目标显式隔离；自检、进程、日志、结果、生成器及 checkpoint 扫描通过。P0–P5 已完成，P6 Controller 和 P7 终验继续实施。</div>
+<div class="hero-note"><strong>P6 已完成，GUI/CPU Stage2 版本 0.45.23。</strong>唯一 Controller、只读视图与 UI 状态分离，删除 11 处重复转发；10 场景/44 项、真实两阶段 worker、GUI 与 27 项 CPU 互操作通过。无窗口资格不替代像素/交互验收。P7 综合终验继续实施。</div>
 <div class="kpis"><div><b>31 个 CU</b><span>用户日志中的全量编译单元</span></div><div><b>1535.6 秒</b><span>单次 CUDA 编译阶段墙钟，非总脚本</span></div><div><b>默认逐 TU 复用</b><span>先落实 build_cuda_local 等隔离根</span></div><div><b>P0—P7</b><span>阶段交付与验收门槛</span></div></div>
 <p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。以上为前期设计依据，保持原始快照。本次 P0 从干净 HEAD 5735108、版本0.44.9开始，另存1959项源码摘要与local日志；P0 local 基线与P1a构建复用分别保留实际程序、清单与验证证据；未运行release，没有性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-progress">实施记录</a><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
 <p>本节是整合后的<strong>目标实施方案</strong>；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3 完成 CUDA/主机/OpenCL 家族归位，P4a–P4i 已完成 Stage1 职责整理，P5–P7 继续实施。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
@@ -342,6 +342,17 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 <p><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6a/source_contract/result.json">源码核对</a>证明 36 个内容文件只有路径/include 调整，CMake 仅调整位置和显式测试归属。<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6a/production_payload.json">首次默认产物</a>只有 ecm_gui.exe，随后显式构建测试 helper。实际无窗口自检 33 项、日志解析 85 项、结果 26 项、生成器 110 项、真实 WorkerProc 54 项通过；checkpoint 扫描 5 类 primary 接纳/3 类 backup-new-Stage2 排除通过。</p>
 <p>首次自检 fixture 将整数 autostart 写成 bool，被当前解析器拒绝；改正 fixture 为 0 后通过，原日志保留。发现旧 GUI 脚本仍有 <code>-ini</code>、旧分区/裸字符串及“看到 checkpoint 即强杀”的过期断言，不能作为本轮资格；P6b 使用当前 TOML/CLI 和正确退出策略验证 Controller。</p>
 <p><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6a/qualification.json">最终资格</a>冻结 GUI/测试程序。本步未提取 Controller，不宣称界面已与生命周期解耦；CPU Stage2 已归位且约 224 个实质行，不为目录整齐新增转发层。未重建计算 worker，未运行 CUDA release、GPU 性能或 GUI 混合阶段资格。</p>
+<h3 id="p6b唯一-workercontroller-与只读视图完成p6-完成">P6b：唯一 WorkerController 与只读视图完成，P6 完成</h3>
+<p>GUI 和独立 CPU Stage2 版本 <code>0.45.23</code>。<a href="../../src/ecm/application/gui/worker_controller.cpp">WorkerController</a>完整拥有配置投影、worker 构造、启动/轮询、日志/版本/进度归并、阶段切换和停止/关闭协调。其<a href="../../src/ecm/application/gui/worker_controller.h">私有接口</a>只声明轻量数据与前置类型，默认值引用生成物；不含完整 TOML/Settings 实现、ImGui、Localization 或 GPU monitor。WorkerProc 继续唯一拥有 Job、pipe、thread、停止事件和崩溃重启规则。</p>
+<p>App 保留绘制、配置编辑、布局、语言与提示。Controller 拥有 WorkerView，App 只借用 const 引用，不按帧复制日志，也不能访问其私有进程对象；显示开关、跟随和命中高亮由 App 的 WorkerUi 保存。阶段替换仍保留 events/raw/hits/tasks_done/progress_lines/P95，并重置原先会重置的 UI 状态。同步语义通知只承接原先的本地化提示/失效动作，不新增事件总线。11 处无额外职责的 App 转发已删除，按钮与 frame tick 直接调用唯一 Controller；只保留 Win32 关闭入口适配。</p>
+<ul class="plan-list">
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6b/source_contract_07/result.json">源码合同</a>：26 个函数、完整 tick 与阶段状态保留、停止/关闭正文一致；活跃/重启时重新配置在释放拥有权之前拒绝。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6b/runtime_03/result.json">Controller 运行</a>：10 个场景/44 项，涵盖 autostart、启动、进度/版本、恢复提示、崩溃与取消重启、停止超时、取消/强制/平滑关闭、S1→S2→S1。真实进程收到停止事件后写新 checkpoint，Controller 仍等待其自行退出，不因文件更新强杀。</li>
+<li>同一 Controller 驱动真实 CUDA Stage1 0.45.17 与 Stage2 0.45.21 完成混合队列：各 2 条内部结果、2 个 NF 提交批次、CRC 全通过。此为无窗口生命周期验收，不声称已运行可见 GUI/像素/交互测试。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6b/gui_checks_04/gui_checks.json">GUI/进程检查</a>：33 项自检、54 项进程监管、85 项日志、26 项结果、110 项生成器通过；真实 Controller 测试目标只链接系统库，无 ImGui/计算引擎/GMP/CUDA 头或库。</li>
+<li>CPU Stage2 以原 libecm、GWPoly OFF 正式本地构建；3 个项目 CPP、0 CUDA。<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6b/cpu_interop/summary.json">27 项互操作</a>通过。不为约 224 个实质行的直接入口增加 task/factory 转发，也不扩展 Montgomery/GWPoly 能力。</li>
+</ul>
+<p>构建和 fixture 的失效记录均保留：补齐时钟声明、修正提取工具对函数调用的识别、修正测试不存在的 B1 配置键及错误消息寿命；旧版本 fake 与新 GUI 的版本断言失败后显式重建 helper，未放宽断言或修改正确 parser。最后再次核对实际默认值来源，生产 App 一直显式传入原配置值。<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p6b/qualification.json">最终资格</a>。P6 完成；P7 继续修复已知构建保护误报、类别增量编译、完整位宽、文档和最终资格。</p>
 </section>
 <section class="plan-section" id="plan-build"><h2>首先调整构建复用与输出隔离</h2>
 <h3 id="当前样例说明了什么">当前样例说明了什么</h3>
@@ -809,7 +820,7 @@ checked(task.remove_completed_progress());</code></pre>
 </tbody></table></div>
 </section>
 <section class="plan-section" id="plan-phases"><h2>分阶段正式重构顺序</h2>
-<p>每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P5 完成，P6–P7 未完成，详见“实施进度与阻塞记录”。</p>
+<p>每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P6 完成，P7 未完成，详见“实施进度与阻塞记录”。</p>
 <h3 id="phase-0" class="phase-title">P0 冻结现状与生产闭包</h3>
 <p>交付：当前主程序/源清单、完整支持矩阵、构建参数与工具链、对象/exe/文件样本身份、曲线/标量/恢复/发布顺序；保留并行未提交状态的独立快照。记录本轮附件但不把其当作干净提交或性能基线。</p>
 <p>通过条件：能定位每个生产入口和资源；强制自检、OpenCL诊断资源、设备常量、默认流、环境变量读取时机、错误/停止路径均纳入。现有已知限制单列，不能在重构时掩盖。</p>

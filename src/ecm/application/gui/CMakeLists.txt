@@ -29,6 +29,7 @@ target_compile_options(ecm_gui_imgui PRIVATE /W3)
 add_executable(ecm_gui WIN32
     main_win32.cpp
     app.cpp
+    worker_controller.cpp
     probability_model.cpp
     probability_panel.cpp
     gpu_monitor.cpp
@@ -117,3 +118,13 @@ target_include_directories(ecm_gui_gen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} 
 target_compile_options(ecm_gui_gen_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_gen_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_gen_test)
+
+# Real Controller/Process integration without ImGui, telemetry or compute engines.
+add_executable(ecm_gui_controller_test EXCLUDE_FROM_ALL
+    "${CMAKE_SOURCE_DIR}/tools/test/gui/worker_controller_test.cpp"
+    worker_controller.cpp toml_file.cpp worker_proc.cpp log_parse.cpp platform_win32.cpp)
+target_include_directories(ecm_gui_controller_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
+target_compile_features(ecm_gui_controller_test PRIVATE cxx_std_17)
+target_compile_options(ecm_gui_controller_test PRIVATE /W3 /utf-8)
+target_link_libraries(ecm_gui_controller_test PRIVATE user32 gdi32 comdlg32 shell32)
+ecm_tool_output_root(ecm_gui_controller_test)

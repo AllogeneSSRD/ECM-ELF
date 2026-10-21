@@ -42,6 +42,10 @@ long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out)
 // Empty string when it cannot be determined.
 std::string exe_dir();
 
+std::string path_dir(const std::string &path);
+bool path_is_absolute(const std::string &path);
+std::string path_resolve(const std::string &base,const std::string &value);
+unsigned long long mono_ms();
 std::string path_join(const std::string &a, const std::string &b);
 bool file_exists(const std::string &path);
 std::string file_name(const std::string &path);

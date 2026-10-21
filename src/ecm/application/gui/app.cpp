@@ -66,73 +66,13 @@ namespace {
 
 // Directory part of a path ("" when it has no separator). Used by the Prime95 handoff
 // panel: worktodo.add lives next to the worktodo.txt the ini points at.
-std::string path_dir(const std::string &p) {
-    const std::size_t s = p.find_last_of("\\/");
-    return (s == std::string::npos) ? std::string() : p.substr(0, s);
-}
 
 // True for "C:\dir\file", "C:/dir/file" and "\\server\share" -- i.e. a path that must NOT be
 // joined onto another directory.
-bool path_is_absolute(const std::string &p) {
-    if (p.size() >= 2 && p[1] == ':') return true;
-    if (p.size() >= 1 && (p[0] == '\\' || p[0] == '/')) return true;
-    return false;
-}
 
 // An ini path value resolved against `base` (the driver's directory, like the driver does):
 // an absolute value is used as it is instead of being prefixed.
-std::string path_resolve(const std::string &base, const std::string &value) {
-    if (value.empty()) return std::string();
-    if (path_is_absolute(value)) return value;
-    return path_join(base, value);
-}
-bool is_stage2_exe(std::string name) {
-    name=file_name(name);for(char &c:name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return name.find("stage2")!=name.npos;
-}
-std::string resolve_gui_exe(const std::string &value) {
-    const auto local=path_resolve(exe_dir(),value);
-    return file_exists(local) || value.find_first_of("\\/")!=value.npos?local:value;
-}
-std::string adjacent_stage2_exe() {
-    const auto direct=path_join(exe_dir(),"ecm_cuda_stage2.exe");if(file_exists(direct))return direct;
-    std::vector<std::string> candidates;std::error_code error;
-    for(const auto &item:std::filesystem::directory_iterator(std::filesystem::u8path(exe_dir()),error)) {
-        if(error)break;
-        const auto name=item.path().filename().u8string();
-        if(name.compare(0,11,"cuda-stage2"))continue;
-        const auto exe=(item.path()/"ecm_cuda_stage2.exe").u8string();
-        if(file_exists(exe))candidates.push_back(exe);
-    }
-    return candidates.size()==1?candidates.front():"ecm_cuda_stage2.exe";
-}
-std::string queue_task(const std::string &path,int worker,int priority=0,int skip=0) {
-    std::ifstream in(std::filesystem::u8path(path));std::vector<std::pair<int,std::string>> tasks;
-    std::string line;int section=1;
-    while(std::getline(in,line)) {
-        const auto a=line.find_first_not_of(" \t\r");if(a==line.npos)continue;line.erase(0,a);
-        if(line.size()>=3 && static_cast<unsigned char>(line[0])==0xef &&
-           static_cast<unsigned char>(line[1])==0xbb &&
-           static_cast<unsigned char>(line[2])==0xbf)line.erase(0,3);
-        if(line.empty())continue;
-        auto lower=line;for(char &c:lower)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if(line.front()=='[') {
-            const auto hash=lower.find('#'),end=lower.find(']');section=-1;
-            if(lower.find("worker")!=lower.npos && hash!=lower.npos && end!=lower.npos) {
-                const auto digits=lower.substr(hash+1,end-hash-1);section=std::atoi(digits.c_str());
-            }
-        } else if(line.front()!='#' && line.front()!=';')
-            tasks.emplace_back(section,line);
-    }
-    std::string first,preferred;
-    for(const auto &task:tasks)if(task.first==worker) {
-        const int stage=task.second.compare(0,10,"ECMSTAGE2=")==0?2:1;
-        if(stage==skip)continue;
-        if(first.empty())first=task.second;
-        if(stage==priority && preferred.empty())preferred=task.second;
-    }
-    return preferred.empty()?first:preferred;
-}
+
 const char *stage2_phase_key(const std::string &phase) {
     if(phase=="starting")return "phase_starting";
     if(phase=="calibration")return "phase_calibration";
@@ -221,41 +161,9 @@ bool parse_int_list(const std::string &s, int *v, int n) {
 // fallback text "workers.state__stopped" (user report, 2026-09-28). With an explicit
 // table the ids are greppable, and --selftest verifies every one of them resolves.
 // Percent the driver reported when it resumed from a checkpoint ("Resuming from
-// checkpoint: 23.8% complete"); defined below, declared here because tick() uses it.
-bool parse_resume_pct(const std::string &line, double &pct);
+// checkpoint: 23.8% complete"); defined below, declared here because controller_.tick() uses it.
 
-const char *state_name(WorkerRunState s) {
-    switch (s) {
-        case WorkerRunState::Stopped: return "Stopped";
-        case WorkerRunState::Starting: return "Starting";
-        case WorkerRunState::Running: return "Running";
-        case WorkerRunState::Restarting: return "Restarting";
-        case WorkerRunState::Error: return "Error";
-        case WorkerRunState::QueueEmpty: return "QueueEmpty";
-    }
-    return "?";
-}
-
-const char *state_key(WorkerRunState s) {
-    switch (s) {
-        case WorkerRunState::Stopped: return "state_stopped";
-        case WorkerRunState::Starting: return "state_starting";
-        case WorkerRunState::Running: return "state_running";
-        case WorkerRunState::Restarting: return "state_restarting";
-        case WorkerRunState::Error: return "state_error";
-        case WorkerRunState::QueueEmpty: return "state_queue_empty";
-    }
-    return "state_stopped";
-}
-
-const WorkerRunState *all_worker_states(int *count) {
-    static const WorkerRunState kStates[] = {
-        WorkerRunState::Stopped,  WorkerRunState::Starting, WorkerRunState::Running,
-        WorkerRunState::Restarting, WorkerRunState::Error,  WorkerRunState::QueueEmpty,
-    };
-    if (count != nullptr) *count = static_cast<int>(sizeof(kStates) / sizeof(kStates[0]));
-    return kStates;
-}
+bool App::request_close(){return controller_.request_close();}
 
 bool App::init(const std::string &ini_path, const std::string &language, std::string &err) {
     ini_path_ = ini_path.empty() ? default_toml_path() : ini_path;
@@ -377,44 +285,26 @@ void App::set_trace(std::function<void(const std::string &)> fn) {
     pending_trace_.clear();
 }
 
-std::string App::resolve_stage1_exe() const {
-    if (!worker_exe_.empty() && !is_stage2_exe(worker_exe_)) {
-        // Relative paths resolve against the GUI's own directory.
-        if (worker_exe_.find('\\') == std::string::npos &&
-            worker_exe_.find('/') == std::string::npos) {
-            const std::string local = path_join(exe_dir(), worker_exe_);
-            if (file_exists(local)) return local;
-        }
-        return resolve_gui_exe(worker_exe_);
-    }
-    for (const char *name : {"ecm_cuda.exe", "ecm.exe"}) {
-        const std::string local = path_join(exe_dir(), name);
-        if (file_exists(local)) return local;
-    }
-    return "ecm_cuda.exe";                 // last resort: PATH lookup
-}
-bool App::stage2_mode() const {
-    return worker_stage2(1);
-}
-std::string App::resolve_stage2_exe() const {
-    if(resolved_stage2_exe_.empty())resolved_stage2_exe_=!stage2_exe_.empty()?resolve_gui_exe(stage2_exe_):
-        is_stage2_exe(worker_exe_)?resolve_gui_exe(worker_exe_):adjacent_stage2_exe();
-    return resolved_stage2_exe_;
-}
-bool App::worker_stage2(int worker_index) const {
-    const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),worker_index,true));
-    const auto path=path_resolve(path_dir(ini_path_),cfg.worktodo);
-    const auto task=queue_task(path,worker_index,cfg.worktodo_priority,cfg.worktodo_skip);
-    return task.compare(0,10,"ECMSTAGE2=")==0;
-}
-std::string App::resolve_worker_exe(int worker_index) const {
-    return (worker_index>0?worker_stage2(worker_index):stage2_mode())?resolve_stage2_exe():resolve_stage1_exe();
-}
 std::string App::task_text(const WorkerView &worker) const {
     return task_caption(worker.task,loc_.t("workers","known_factors"),"assignment ID",loc_.t("workers","task_unavailable"));
 }
+void App::rebuild_workers() {
+    controller_.set_sinks([this](const std::string &line){trace(line);},[this](const WorkerNotice &n){
+        if(n.kind==WorkerNotice::Kind::Hit){status_=loc_.t("results","factor_found")+": "+n.text;worker_ui_[n.worker].hit_flash_until=n.at_ms+5000;}
+        else if(n.kind==WorkerNotice::Kind::P95)p95_pending_next_scan_ms_=0;
+        else if(n.kind==WorkerNotice::Kind::StageChanged)worker_ui_[n.worker]=WorkerUi{};
+        else status_=n.text;
+    });
+    controller_.configure({ini_path_,worker_exe_,stage2_exe_,priority_,exit_confirm_,num_workers_,graceful_stop_ms_});
+    worker_ui_.clear();refresh_result_sources();gen_has_preview_=false;
+    gen_worker_index_=std::clamp(gen_worker_index_,1,num_workers_);
+    gen_target_device_=workers_[static_cast<size_t>(gen_worker_index_-1)].stage1_device;
+    gen_curve_type_=generator_curve_type(workers_[static_cast<size_t>(gen_worker_index_-1)]);
+    if(workers_[static_cast<size_t>(gen_worker_index_-1)].stage1_target=="cpu")gen_use_recommended_=false;
+}
+
 bool App::select_workflow_ini(const std::string &path) {
-    for(const auto &w:workers_)if(w.proc && (w.proc->running() || w.proc->state()==WorkerRunState::Restarting))return false;
+    for(const auto &w:workers_)if(w.has_process() && (w.running() || w.state()==WorkerRunState::Restarting))return false;
     TomlFile selected;std::string error;if(!selected.load(path,error)){status_=error;return false;}
     try {
         const auto gui=ecm_config::read_gui(ecm_config::section_entries(selected.lines(),"gui"));
@@ -429,314 +319,9 @@ bool App::select_workflow_ini(const std::string &path) {
         exit_confirm_=gui.exit_confirm;graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
         ini_=std::move(selected);ini_path_=std::filesystem::absolute(std::filesystem::u8path(path)).u8string();
         p95_pending_next_scan_ms_ = 0;
-        rebuild_workers();autostart_done_=true;selected_worker_=0;
+        rebuild_workers();controller_.suppress_autostart();selected_worker_=0;
         status_=loc_.t("workers","configuration_selected")+": "+ini_path_;return true;
     } catch(const std::exception &e){status_=e.what();return false;}
-}
-
-void App::rebuild_workers() {
-    workers_.clear();
-    refresh_result_sources();
-    resolved_stage2_exe_.clear();
-    gen_has_preview_=false;
-    for(int i=1;i<=num_workers_;++i)workers_.push_back(make_worker(i));
-    gen_worker_index_=std::clamp(gen_worker_index_,1,num_workers_);
-    gen_target_device_=workers_[static_cast<size_t>(gen_worker_index_-1)].stage1_device;
-    const auto &gen_worker=workers_[static_cast<size_t>(gen_worker_index_-1)];
-    gen_curve_type_=generator_curve_type(gen_worker);
-    if(gen_worker.stage1_target=="cpu")gen_use_recommended_=false;
-    refresh_device_warnings();
-}
-
-WorkerView App::make_worker(int index) const {
-    const std::string section="workers."+std::to_string(index);
-    auto gui_entries=ecm_config::section_entries(ini_.lines(),section);
-    const auto worker=ecm_config::read_worker(gui_entries);
-    WorkerView w;
-    w.index=index;w.stage2=worker_stage2(index);
-    w.exe=resolve_worker_exe(index);
-    // Stage1 resolves paths beside its executable; Stage2 resolves TOML paths
-    // beside the shared TOML. An adjacent pair therefore shares one work directory.
-    w.working_dir=w.stage2?path_dir(ini_path_):path_dir(w.exe);
-    if(w.working_dir.empty())w.working_dir=exe_dir();
-    w.name=worker.name;
-    if(!ini_.has(section,"name")) {
-        const auto token=w.name.find("{N}");
-        if(token!=w.name.npos)w.name.replace(token,3,std::to_string(index));
-    }
-    const auto entries=ecm_config::cli_entries(ini_.lines(),index,true);
-    const auto stage1=ecm_config::read_stage1(entries);
-    w.device=stage1.device;w.stage1_device=stage1.device;
-    w.curve_model=stage1.curve_model;w.execution_target=stage1.execution_target;
-    w.stage1_target=stage1.execution_target;w.gpu_param=stage1.gpu_param;
-    w.gpucurves=worker.gpucurves;
-    w.worktodo=path_resolve(path_dir(ini_path_),stage1.worktodo);
-    const auto log=index>1 && !stage1.log_file_explicit && stage1.log_file==ecm_config::defaults::stage1_log_file?
-        ecm_config::worker_file(stage1.log_file,index):stage1.log_file;
-    w.log_file=path_resolve(w.working_dir,log);
-    if(w.stage2) {
-        const auto stage2=ecm_config::read_stage2(entries);
-        w.execution_target="gpu";
-        if(stage2.device>=0)w.device=stage2.device;
-        w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
-            path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
-    }
-    w.task=queue_task(w.worktodo,index,stage1.worktodo_priority,stage1.worktodo_skip);
-    w.extra_args=worker.extra_args;w.autostart=worker.autostart!=0;
-    w.effective_config=effective_config_text(index);
-    WorkerSpawn spawn;
-    spawn.exe=w.exe;spawn.ini=ini_path_;spawn.working_dir=w.working_dir;
-    spawn.worker_index=index;spawn.priority=priority_;spawn.stage2=w.stage2;
-    if(w.stage2)spawn.extra_args={"--gui-events","--log-level","batches"};
-    std::string arg;bool quoted=false;
-    for(char c:w.extra_args) {
-        if(c=='"'){quoted=!quoted;continue;}
-        if(!quoted && (c==' ' || c=='\t')) {
-            if(!arg.empty()){spawn.extra_args.push_back(arg);arg.clear();}
-        } else arg.push_back(c);
-    }
-    if(!arg.empty())spawn.extra_args.push_back(arg);
-    w.proc.reset(new WorkerProc());w.proc->configure(spawn,WorkerLimits{});
-    w.proc->set_autostart(w.autostart);
-    return w;
-}
-
-void App::refresh_worker_for_queue(WorkerView &w) {
-    if (!w.proc || w.proc->running() || w.proc->state()==WorkerRunState::Restarting ||
-        worker_stage2(w.index)==w.stage2) return;
-    auto replacement=make_worker(w.index);
-    replacement.events=std::move(w.events);
-    replacement.raw=std::move(w.raw);
-    replacement.hits=w.hits;
-    replacement.tasks_done=w.tasks_done;
-    replacement.progress_lines=w.progress_lines;
-    replacement.p95=w.p95;
-    w.proc->stop();
-    trace("worker "+std::to_string(w.index)+": dispatch "+
-          (replacement.stage2?"ECMSTAGE2":"ECMSTAGE1"));
-    w=std::move(replacement);
-}
-
-void App::refresh_device_warnings() {
-    std::map<int,int> seen;
-    for(const auto &w:workers_)if(w.execution_target=="gpu")++seen[w.device];
-    for(auto &w:workers_)w.duplicate_device=w.execution_target=="gpu" && seen[w.device]>1;
-}
-
-void App::start_all() {
-    for (WorkerView &w : workers_) {
-        if (w.proc == nullptr) continue;
-        if (w.proc->running()) continue;
-        refresh_worker_for_queue(w);
-        std::string err;
-        if (w.proc->start(err)) {
-            trace("worker " + std::to_string(w.index) + ": started pid=" +
-                  std::to_string(w.proc->pid()) + " cmd=" + w.proc->command_line());
-        } else {
-            trace("worker " + std::to_string(w.index) + ": start failed: " + err);
-            status_ = "worker " + std::to_string(w.index) + ": " + err;
-        }
-    }
-}
-
-void App::stop_all() {
-    // The explicit "Stop all" button keeps its meaning (stop everything now) but still asks
-    // for a checkpoint first: dropping up to one checkpoint interval of GPU work for a
-    // button labelled "Stop" surprised the user (2026-09-28).
-    for (WorkerView &w : workers_) {
-        if (w.proc == nullptr) continue;
-        if (w.proc->running() || w.proc->state()==WorkerRunState::Restarting) request_stop(w.index);
-    }
-}
-
-void App::stop_all_quietly() {
-    // Exit path (docs/usage/GUI.md 5.6). Requirements from the user: closing the GUI
-    // must terminate the workers silently -- no restart, no "Error" state, no crash
-    // accounting, nothing in the status line, and no waiting around.
-    int running = 0;
-    for (WorkerView &w : workers_) {
-        if (w.proc == nullptr) continue;
-        if (w.proc->running()) ++running;
-        // WorkerProc::stop() is an immediate Job-object termination (TerminateJobObject),
-        // so it kills the worker and any grandchildren right here and returns without
-        // waiting for the driver to do anything. It also sets the state to Stopped and
-        // clears the state text, so nothing downstream can turn this into a crash.
-        w.proc->stop();
-    }
-    if (running > 0) {
-        // One line only: this is what a test asserts on (nothing else may appear between
-        // it and the process exit -- no Restarting/Error/restart lines).
-        trace("shutdown: terminated " + std::to_string(running) + " running worker(s)");
-    }
-}
-
-void App::tick() {
-    const unsigned long long now = mono_ms();
-    last_tick_ms_ = now;
-    tick_graceful_stops(now);
-    for (WorkerView &w : workers_) {
-        if (w.proc == nullptr) continue;
-        // Read the state BEFORE the autostart attempt, so the transition to Running
-        // is observed below and reaches the trace/UI like any other transition.
-        const WorkerRunState before = w.proc->state();
-        const int restarts_before = w.proc->restarts();
-        if (w.proc->autostart() && !w.proc->running() && before == WorkerRunState::Stopped &&
-            !w.proc->breaker_tripped() && !autostart_done_) {
-            std::string err;
-            if (w.proc->start(err)) {
-                trace("worker " + std::to_string(w.index) + ": autostart pid=" +
-                      std::to_string(w.proc->pid()) + " cmd=" + w.proc->command_line());
-            } else {
-                trace("worker " + std::to_string(w.index) + ": autostart failed: " + err);
-            }
-        }
-        w.proc->poll(now);
-        if(w.proc->running() && w.version_pid!=w.proc->pid()) {
-            w.version_pid=w.proc->pid();
-            w.application_version.clear();
-        }
-        WorkerProc::DrainedOutput d;
-        w.proc->drain(d);
-        if(!d.application_version.empty())w.application_version=d.application_version;
-        w.progress_lines += d.progress_lines;
-        if (d.last_progress.valid) {
-            w.progress = d.last_progress;
-            // Sample for the chart. The driver emits progress lines at a decaying rate, so
-            // every line is worth keeping when it carries new information. The series holds
-            // SECONDS PER CURVE (see WorkerView::hist_s_per_curve).
-            if (w.progress.s_per_curve > 0.0 && (!w.stage2 || d.speed_sample)) {
-                w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
-            }
-            const std::size_t cap = 600;
-            if (w.hist_s_per_curve.size() > cap) {
-                w.hist_s_per_curve.erase(
-                    w.hist_s_per_curve.begin(),
-                    w.hist_s_per_curve.begin() +
-                        static_cast<std::ptrdiff_t>(w.hist_s_per_curve.size() - cap));
-            }
-            // Trace one sample per 1% step at most: a script must be able to check the
-            // parsed numbers without the log growing by thousands of lines.
-            if (w.progress.pct - w.last_traced_pct >= 1.0 || w.last_traced_pct < 0.0) {
-                w.last_traced_pct = w.progress.pct;
-                char buf[220];
-                std::snprintf(buf, sizeof(buf),
-                              "progress pct=%.1f s_per_curve=%.3f eta=%.1f done=%llu total=%llu bits=%llu gpu=%d",
-                              w.progress.pct, w.progress.s_per_curve, w.progress.eta_s,
-                              w.progress.curves_done, w.progress.curves_total, w.progress.bits,
-                              w.progress.gpu ? 1 : 0);
-                trace("worker " + std::to_string(w.index) + ": " + buf);
-            }
-        }
-        if (!d.last_start_line.empty()) {
-            w.task = d.last_start_line;
-            trace("worker " + std::to_string(w.index) + ": task " + w.task);
-        }
-        if(d.stage2.valid) {
-            w.stage2_status=d.stage2;
-            if(d.last_start_line.empty() && (d.stage2_task_started || w.task.empty())) {
-                const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),w.index,true));
-                w.task=queue_task(w.worktodo,w.index,cfg.worktodo_priority,cfg.worktodo_skip);
-            }
-        }
-        // "Resuming from checkpoint: 23.8% complete" / "Checkpoint loaded: … (23.8%)" tells
-        // the GUI where the task already stands. That matters because the driver's redirected
-        // progress lines are gated on the (restored) batch counter, so the first one after a
-        // resume can be a long way off -- without this the bar sat empty and the panel said
-        // "waiting for the first progress line" for the whole session (measured 2026-09-29).
-        if (w.resume_pct < 0.0) {
-            for (const std::string &ev : d.events) {
-                double pct = 0.0;
-                if (parse_resume_pct(ev, pct)) {
-                    w.resume_pct = pct;
-                    w.progress.pct = pct;          // the bar starts where the work is
-                    w.progress.valid = false;      // but no speed/ETA numbers yet
-                    char buf[128];
-                    std::snprintf(buf, sizeof(buf), "progress seed=%.1f (from checkpoint)", pct);
-                    trace("worker " + std::to_string(w.index) + ": " + buf);
-                    break;
-                }
-            }
-        }
-        w.hits += static_cast<long long>(d.hits.size());
-        for (const HitInfo &h : d.hits) {
-            status_=loc_.t("results","factor_found")+": "+h.factor;
-            w.hit_flash_until = now + 5000;   // highlight the row for 5 s
-        }
-        w.events.insert(w.events.end(), d.events.begin(), d.events.end());
-        w.raw.insert(w.raw.end(), d.raw.begin(), d.raw.end());
-        // Prime95 handoff notices (docs/usage/GUI.md 18): keep the newest one per worker
-        // plus a trace line, so a script can prove what the strip shows.
-        for (const P95Notice &notice : d.p95) {
-            w.p95 = notice;
-            p95_pending_next_scan_ms_ = 0;
-            const char *lvl = notice.level == P95Notice::Level::Ok ? "ok"
-                            : notice.level == P95Notice::Level::Warn ? "warn"
-                            : notice.level == P95Notice::Level::Pending ? "pending" : "ready";
-            trace("worker " + std::to_string(w.index) + ": p95 " + lvl + " worker=" +
-                  std::to_string(notice.worker) + " added=" + std::to_string(notice.added) +
-                  " pending=" + std::to_string(notice.pending_at_start + notice.lines) +
-                  (notice.note.empty() ? "" : " note=" + notice.note) +
-                  (notice.error.empty() ? "" : " error=" + notice.error));
-        }
-        // "No input number on stdin" means the worker exe never entered queue mode: it is
-        // an ecm_cuda built before the D1/D2 changes, which treats `--worker N` as task
-        // arguments. Say so once (status line + trace) instead of letting the user watch
-        // the worker restart until the breaker trips.
-        if (d.old_driver && !w.old_driver) {
-            w.old_driver = true;
-            status_ = kOldDriverHint;
-            trace("worker " + std::to_string(w.index) + ": DIAGNOSIS: " + std::string(kOldDriverHint));
-        }
-        // Keep the panes bounded (the supervisor already caps the pipe buffer).
-        if (w.events.size() > 4000) {
-            w.events.erase(w.events.begin(),
-                           w.events.begin() + static_cast<std::ptrdiff_t>(w.events.size() - 4000));
-        }
-        if (w.raw.size() > 4000) {
-            w.raw.erase(w.raw.begin(),
-                        w.raw.begin() + static_cast<std::ptrdiff_t>(w.raw.size() - 4000));
-        }
-        if (w.proc->state() != before) {
-            trace("worker " + std::to_string(w.index) + ": state " +
-                  state_name(w.proc->state()) +
-                  (w.proc->state_text().empty() ? "" : " (" + w.proc->state_text() + ")"));
-        }
-        if (w.proc->restarts() != restarts_before) {
-            trace("worker " + std::to_string(w.index) + ": restart #" +
-                  std::to_string(w.proc->restarts()));
-        }
-        if(before!=WorkerRunState::QueueEmpty && w.proc->state()==WorkerRunState::QueueEmpty &&
-           !w.stop_requested && exit_phase_==ExitPhase::Idle) {
-            const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),w.index,true));
-            const auto next=queue_task(w.worktodo,w.index,cfg.worktodo_priority,cfg.worktodo_skip);
-            if(!next.empty() && (next.compare(0,10,"ECMSTAGE2=")==0)!=w.stage2) {
-                refresh_worker_for_queue(w);
-                std::string err;
-                if(w.proc->start(err))trace("worker "+std::to_string(w.index)+": dispatched pid="+
-                                            std::to_string(w.proc->pid())+" cmd="+w.proc->command_line());
-                else status_="worker "+std::to_string(w.index)+": "+err;
-            }
-        }
-    }
-    autostart_done_ = true;
-}
-
-std::string App::effective_config_text(int worker_index) const {
-    const auto section="workers."+std::to_string(worker_index);
-    std::ostringstream out;
-    out<<"next task = "<<(worker_stage2(worker_index)?"ECMSTAGE2":"ECMSTAGE1")<<"\n"
-       <<"exe = "<<resolve_worker_exe(worker_index)<<"\n";
-    std::set<std::string> keys;
-    for(const auto &binding:ecm_config::stage1_bindings)keys.insert(binding.key);
-    for(const auto &binding:ecm_config::stage2_bindings)keys.insert(binding.key);
-    const auto entries=ecm_config::cli_entries(ini_.lines(),worker_index,true);
-    for(const auto &entry:entries)if(keys.count(entry.first)) {
-        bool overridden=false;
-        for(const auto &line:ini_.lines())if(line.kind==TomlFile::Line::Kind::KeyValue &&
-            line.worker_scope==worker_index && ecm_config::lower(line.key)==entry.first)overridden=true;
-        out<<entry.first<<" = "<<entry.second<<(overridden?"   ["+section+"]":"   [global]")<<"\n";
-    }
-    return out.str();
 }
 
 void App::on_imgui_ready() {
@@ -785,7 +370,7 @@ bool App::shutdown(std::string &err, bool save_docking_layout) {
     // flush a checkpoint here (the old comment claimed otherwise); the loss is bounded by
     // its checkpoint interval ([Worker #N] ckpt_seconds, default 600 s, the production ini
     // uses 120 s). A checkpoint-on-signal protocol would be a driver change (D6, not done).
-    stop_all_quietly();
+    controller_.stop_all_quietly();
     capture_layout(save_docking_layout);
     if (!ini_.save(err)) return false;
     return true;
@@ -841,7 +426,7 @@ void App::set_window_rect(int x, int y, int w, int h) {
 }
 
 void App::draw() {
-    tick();
+    controller_.tick();
 
     // ---- Prime95 notification strip reserves its own row ------------------------
     // The strip sits directly under the menu bar and the dockspace starts BELOW it. That
@@ -958,168 +543,17 @@ void App::draw() {
 //   "Checkpoint loaded: s_partial=89173178/375102575 (23.8%), age=24348 seconds"
 //   "Resuming from checkpoint: 23.8% complete (s_partial=89173178/375102575)"
 // Returns false when the line is neither.
-bool parse_resume_pct(const std::string &line, double &pct) {
-    const char *kResume = "Resuming from checkpoint:";
-    const char *kLoaded = "Checkpoint loaded:";
-    const std::size_t r = line.find(kResume);
-    if (r != std::string::npos) {
-        try {
-            pct = std::stod(line.substr(r + std::strlen(kResume)));
-            return pct >= 0.0 && pct <= 100.0;
-        } catch (...) {
-            return false;
-        }
-    }
-    const std::size_t l = line.find(kLoaded);
-    if (l != std::string::npos) {
-        // "(23.8%)" -- take the number before the percent sign after the ratio.
-        const std::size_t pctPos = line.find('%', l);
-        if (pctPos == std::string::npos || pctPos == 0) return false;
-        const std::size_t open = line.rfind('(', pctPos);
-        if (open == std::string::npos) return false;
-        try {
-            pct = std::stod(line.substr(open + 1));
-            return pct >= 0.0 && pct <= 100.0;
-        } catch (...) {
-            return false;
-        }
-    }
-    return false;
-}
-
-std::string App::worker_dir(int worker_index) const {
-    if(worker_index>0)for(const auto &w:workers_)if(w.index==worker_index)return w.working_dir;
-    const auto directory=path_dir(resolve_stage1_exe());
-    return directory.empty()?exe_dir():directory;
-}
-
-bool App::request_close() {
-    // Called from WM_CLOSE and from File -> Quit (main_win32.cpp). Returns true when the
-    // window may close NOW.
-    int running = 0;
-    for (const WorkerView &w : workers_) {
-        if (w.proc != nullptr && w.proc->running()) ++running;
-    }
-    if (running == 0) {
-        quit_requested_ = true;
-        return true;
-    }
-    if (exit_confirm_ == "kill") {
-        // Explicit opt-out ([gui] exit_confirm = kill): terminate immediately.
-        trace("exit: " + std::to_string(running) + " worker(s) running, exit_confirm=kill");
-        stop_all_quietly();
-        quit_requested_ = true;
-        return true;
-    }
-    if (exit_confirm_ == "stop") {
-        // Scripted/unattended: no modal, but still checkpoint before terminating.
-        trace("exit: " + std::to_string(running) + " worker(s) running, exit_confirm=stop");
-        begin_graceful_exit();
-        return false;                       // the modal-free stopping phase is drawn below
-    }
-    // ask (default): open the confirmation modal; the window stays open.
-    if (exit_phase_ == ExitPhase::Idle) {
-        exit_phase_ = ExitPhase::Confirm;
-        trace("exit: confirmation requested (" + std::to_string(running) + " worker(s) running)");
-    }
-    return false;
-}
-
-void App::request_stop(int worker_index) {
-    for (WorkerView &w : workers_) {
-        if (w.index != worker_index) continue;
-        if (w.proc == nullptr) return;
-        if(!w.proc->running()) {if(w.proc->state()==WorkerRunState::Restarting)w.proc->stop();return;}
-        w.stop_requested = true;
-        w.ckpt_seen = false;
-        w.ckpt_baseline = w.stage2?0:newest_checkpoint_mtime(worker_dir(w.index), nullptr);
-        w.stop_deadline_ms = mono_ms() + graceful_stop_ms_;
-        w.proc->request_checkpoint_stop();
-        trace("worker " + std::to_string(w.index) +
-              (w.stage2?": stop requested (finishing current Stage2 curve, max ":": stop requested (waiting for a checkpoint, max ") +
-              std::to_string(graceful_stop_ms_ / 1000) + " s)");
-        return;
-    }
-}
-
-void App::begin_graceful_exit() {
-    exit_phase_ = ExitPhase::Stopping;
-    exit_deadline_ms_ = mono_ms() + graceful_stop_ms_;
-    for (WorkerView &w : workers_) {
-        if (w.proc == nullptr || !w.proc->running()) continue;
-        w.stop_requested = true;
-        w.ckpt_seen = false;
-        w.ckpt_baseline = w.stage2?0:newest_checkpoint_mtime(worker_dir(w.index), nullptr);
-        w.stop_deadline_ms = exit_deadline_ms_;
-        w.proc->request_checkpoint_stop();
-        trace("worker " + std::to_string(w.index) +
-              (w.stage2?": graceful stop requested (finishing current Stage2 curve, max ":": graceful stop requested (waiting for a checkpoint, max ") +
-              std::to_string(graceful_stop_ms_ / 1000) + " s)");
-    }
-}
-
-void App::tick_graceful_stops(unsigned long long now) {
-    for (WorkerView &w : workers_) {
-        if (w.proc == nullptr || !w.stop_requested) continue;
-        if (!w.proc->running()) {
-            // It exited on its own (finished its queue, or the driver honours a stop
-            // request) -- nothing left to wait for.
-            w.stop_requested = false;
-            continue;
-        }
-        if (!w.stage2 && !w.ckpt_seen) {
-            std::string name;
-            const long long m = newest_checkpoint_mtime(worker_dir(w.index), &name);
-            if (m != 0 && m > w.ckpt_baseline) {
-                w.ckpt_seen = true;
-                trace("worker " + std::to_string(w.index) + ": checkpoint file updated (" + name +
-                      "); waiting for worker exit");
-            }
-        }
-        // The child exits after writing its checkpoint. Never terminate it merely
-        // because a file appeared: rotation can publish a backup before the new
-        // primary is committed, and another worker may share this directory.
-        if (now >= w.stop_deadline_ms) {
-            char buf[160];
-            std::snprintf(buf, sizeof(buf), "worker %d: stop timeout; terminating worker",
-                          w.index);
-            trace(buf);
-            w.proc->stop();
-            w.stop_requested = false;
-            w.ckpt_seen = false;
-        }
-    }
-    if (exit_phase_ != ExitPhase::Stopping) return;
-    // All workers done? Then the window may close.
-    bool any_running = false;
-    for (const WorkerView &w : workers_) {
-        if (w.proc != nullptr && (w.proc->running() || w.stop_requested)) any_running = true;
-    }
-    if (!any_running) {
-        trace("exit: all workers stopped, closing");
-        exit_phase_ = ExitPhase::Idle;
-        quit_requested_ = true;
-    } else if (now >= exit_deadline_ms_) {
-        // Deadline reached: the remaining workers never checkpointed. Terminate them (the
-        // modal tells the user this is happening) instead of hanging forever.
-        trace("exit: deadline reached, terminating without a fresh checkpoint");
-        stop_all_quietly();
-        for (WorkerView &w : workers_) w.stop_requested = false;
-        exit_phase_ = ExitPhase::Idle;
-        quit_requested_ = true;
-    }
-}
 
 bool App::draw_exit_modal() {
     const auto exit_key=[&](const char *stage1,const char *stage2,const char *mixed) {
         bool has_stage1=false,has_stage2=false;
-        for(const auto &w:workers_)if(w.proc && w.proc->running()){if(w.stage2)has_stage2=true;else has_stage1=true;}
+        for(const auto &w:workers_)if(w.has_process() && w.running()){if(w.stage2)has_stage2=true;else has_stage1=true;}
         return has_stage1 && has_stage2?mixed:has_stage2?stage2:stage1;
     };
 
-    if (exit_phase_ == ExitPhase::Idle) return false;
+    if (controller_.exit_phase() == WorkerController::ExitPhase::Idle) return false;
     const char *title = "###exit_modal";
-    if (exit_phase_ == ExitPhase::Confirm) {
+    if (controller_.exit_phase() == WorkerController::ExitPhase::Confirm) {
         if (!ImGui::IsPopupOpen(title)) ImGui::OpenPopup(title);
     }
     bool stay_open = true;
@@ -1130,10 +564,10 @@ bool App::draw_exit_modal() {
     ImGui::SetNextWindowSize(ImVec2(560.0f * ImGui::GetIO().FontGlobalScale, 0.0f),
                             ImGuiCond_Always);
     if (ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (exit_phase_ == ExitPhase::Confirm) {
+        if (controller_.exit_phase() == WorkerController::ExitPhase::Confirm) {
             int running = 0;
             for (const WorkerView &w : workers_) {
-                if (w.proc != nullptr && w.proc->running()) ++running;
+                if (w.has_process() && w.running()) ++running;
             }
             char buf[256];
             std::snprintf(buf, sizeof(buf),loc_.t("exit",exit_key("confirm_stage1","confirm_stage2","confirm_mixed")).c_str(),running);
@@ -1143,13 +577,13 @@ bool App::draw_exit_modal() {
                 ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
                 trace("exit: confirmed by the user");
                 ImGui::CloseCurrentPopup();
-                begin_graceful_exit();
+                controller_.begin_graceful_exit();
             }
             ImGui::SameLine();
             if (ImGui::Button(loc_.t("exit","cancel").c_str(), ImVec2(120.0f, 0.0f)) ||
                 ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 trace("exit: cancelled by the user");
-                exit_phase_ = ExitPhase::Idle;
+                controller_.cancel_close();
                 ImGui::CloseCurrentPopup();
                 stay_open = false;
             }
@@ -1163,10 +597,10 @@ bool App::draw_exit_modal() {
     // While the stopping phase runs there is no popup left to keep open, so the progress is
     // its own small window. Escape (or the button) forces the exit without a fresh
     // checkpoint: the wait is bounded but a user must always be able to get out.
-    if (exit_phase_ == ExitPhase::Stopping) {
+    if (controller_.exit_phase() == WorkerController::ExitPhase::Stopping) {
         const unsigned long long now = mono_ms();
         const long long left_ms =
-            (exit_deadline_ms_ > now) ? static_cast<long long>(exit_deadline_ms_ - now) : 0;
+            (controller_.exit_deadline() > now) ? static_cast<long long>(controller_.exit_deadline() - now) : 0;
         ImGui::SetNextWindowPos(ImVec2(vp->GetCenter().x, vp->GetCenter().y), ImGuiCond_Always,
                                 ImVec2(0.5f, 0.5f));
         ImGui::Begin((loc_.t("exit","stopping_title")+"###exit_stopping").c_str(), nullptr,
@@ -1175,8 +609,8 @@ bool App::draw_exit_modal() {
         ImGui::TextWrapped(loc_.t("exit",exit_key("waiting_stage1","waiting_stage2","waiting_mixed")).c_str(),left_ms/1000);
         ImGui::Separator();
         for (const WorkerView &w : workers_) {
-            if (w.proc == nullptr) continue;
-            const bool running = w.proc->running();
+            if (!w.has_process()) continue;
+            const bool running = w.running();
             const auto state=loc_.t("workers",!running?"state_stopped":"stopping");
             ImGui::Text("Worker #%d (%s): %s",w.index,w.stage2?"Stage2":"Stage1",state.c_str());
         }
@@ -1184,15 +618,12 @@ bool App::draw_exit_modal() {
         if (ImGui::Button(loc_.t("exit","force_quit").c_str(), ImVec2(280.0f, 0.0f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             trace("exit: forced by the user (no fresh checkpoint)");
-            stop_all_quietly();
-            for (WorkerView &w : workers_) w.stop_requested = false;
-            exit_phase_ = ExitPhase::Idle;
-            quit_requested_ = true;
+            controller_.force_close();
             stay_open = false;
         }
         ImGui::End();
     }
-    return stay_open && exit_phase_ != ExitPhase::Idle;
+    return stay_open && controller_.exit_phase() != WorkerController::ExitPhase::Idle;
 }
 
 void App::build_default_layout(unsigned int dockspace_id) {
@@ -1429,8 +860,8 @@ void App::draw_menu_bar() {
             }
         }
         ImGui::Separator();
-        if (ImGui::MenuItem(loc_.t("menu", "start_all").c_str())) start_all();
-        if (ImGui::MenuItem(loc_.t("menu", "stop_all").c_str())) stop_all();
+        if (ImGui::MenuItem(loc_.t("menu", "start_all").c_str())) controller_.start_all();
+        if (ImGui::MenuItem(loc_.t("menu", "stop_all").c_str())) controller_.stop_all();
         ImGui::Separator();
         if (ImGui::MenuItem(loc_.t("menu", "quit").c_str())) {
             // Same flow as WM_CLOSE: with workers running this asks and checkpoints first.
@@ -1443,9 +874,9 @@ void App::draw_menu_bar() {
         if(ImGui::MenuItem(loc_.t("prob","title").c_str(),nullptr,show_probability_)) {
             show_probability_=true;probability_focus_requested_=true;
         }
-        for (WorkerView &w : workers_) {
+        for (const WorkerView &w : workers_) {
             ImGui::MenuItem((loc_.t("workers", "log_pane") + " #" + std::to_string(w.index)).c_str(),
-                            nullptr, &w.show_pane);
+                            nullptr, &worker_ui_[w.index].show_pane);
         }
         ImGui::EndMenu();
     }
@@ -1482,12 +913,12 @@ std::string App::p95AddPath() const {
 }
 
 std::string App::p95PendingPath() const {
-    return path_join(worker_dir(), "p95_add_pending.txt");
+    return path_join(controller_.worker_dir(), "p95_add_pending.txt");
 }
 
 long long App::p95PendingCount() {
     // Poll disk independently of worker notices, including files left by an earlier run.
-    // Notices invalidate the cache in tick() so a handoff is reflected immediately.
+    // Notices invalidate the cache in controller_.tick() so a handoff is reflected immediately.
     const unsigned long long now = mono_ms();
     if (now < p95_pending_next_scan_ms_) return p95_pending_cached_;
     p95_pending_next_scan_ms_ = now + 500;
@@ -1574,7 +1005,7 @@ void App::draw_p95_notice(float height, float host_top) {
         marker = "[OK] ";
     }
     bool has_stage1=false;int stage1_running=0,stage2_running=0;
-    for(const auto &w:workers_){if(!w.stage2)has_stage1=true;if(w.proc && w.proc->running()){if(w.stage2)++stage2_running;else ++stage1_running;}}
+    for(const auto &w:workers_){if(!w.stage2)has_stage1=true;if(w.has_process() && w.running()){if(w.stage2)++stage2_running;else ++stage1_running;}}
     if(!has_stage1) {
         const int running=stage2_running;
         std::snprintf(buf,sizeof(buf),loc_.t("stage2","notice").c_str(),running,static_cast<int>(workers_.size()));
@@ -1654,7 +1085,7 @@ std::string App::genWorktodoPath() const {
 }
 
 std::string App::p95WorktodoPath() const {
-    return path_resolve(worker_dir(), p95_worktodo_path_);
+    return path_resolve(controller_.worker_dir(), p95_worktodo_path_);
 }
 
 void App::gen_make_preview() {
@@ -1689,7 +1120,7 @@ void App::gen_make_preview() {
     if (gen_use_recommended_) {
         // The tier table and the SM count come from the driver itself (D4), so a copied
         // table can never drift from the kernels. --gpu-info writes nothing.
-        std::string cmd = "\"" + resolve_stage1_exe() + "\" --config \"" + ini_path_ +
+        std::string cmd = "\"" + controller_.resolve_stage1_exe() + "\" --config \"" + ini_path_ +
                           "\" --worker " + std::to_string(gen_worker_index_) + " --gpu-info -d " +
                           std::to_string(gen_target_device_) + " --curve " +
                           (gen_curve_type_=="e" ? "ed" : "mont");
@@ -2319,7 +1750,7 @@ void App::draw_workers_table() {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,6.0f);
 
     bool busy=false;
-    for(const auto &w:workers_)if(w.proc && (w.proc->running() || w.proc->state()==WorkerRunState::Restarting))busy=true;
+    for(const auto &w:workers_)if(w.has_process() && (w.running() || w.state()==WorkerRunState::Restarting))busy=true;
     ImGui::BeginDisabled(busy);
     ImGui::TextDisabled("%s",loc_.t("workers","worker_count").c_str());ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::GetFrameHeight()*3.0f);
@@ -2334,14 +1765,14 @@ void App::draw_workers_table() {
         ImGui::BeginDisabled(busy);
         const auto button=std::string(stage2?"Stage2: ":"Stage1: ")+loc_.t("workers","choose_exe")+"##exe"+(stage2?"2":"1");
         if(ImGui::SmallButton(button.c_str())) {
-            std::string chosen=stage2?resolve_stage2_exe():resolve_stage1_exe();
+            std::string chosen=stage2?controller_.resolve_stage2_exe():controller_.resolve_stage1_exe();
             if(browse_for_file(chosen,loc_.t("workers","choose_exe"),"Programs\0*.exe\0All\0*.*\0\0")) {
                 if(stage2)stage2_exe_=chosen;else worker_exe_=chosen;
                 rebuild_workers();capture_layout();std::string error;if(!ini_.save(error))status_=error;
             }
         }
         ImGui::EndDisabled();ImGui::SameLine();
-        const auto executable=stage2?resolve_stage2_exe():resolve_stage1_exe();
+        const auto executable=stage2?controller_.resolve_stage2_exe():controller_.resolve_stage1_exe();
         ImGui::TextDisabled("%s",file_name(executable).c_str());
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",executable.c_str());
     }
@@ -2355,9 +1786,9 @@ void App::draw_workers_table() {
 
     // Global controls: start/stop everything, plus the resolved worker executable
     // (so a wrong [gui] exe= is visible instead of mysterious).
-    if (ImGui::Button(loc_.t("workers", "start_all").c_str())) start_all();
+    if (ImGui::Button(loc_.t("workers", "start_all").c_str())) controller_.start_all();
     ImGui::SameLine();
-    if (ImGui::Button(loc_.t("workers", "stop_all").c_str())) stop_all();
+    if (ImGui::Button(loc_.t("workers", "stop_all").c_str())) controller_.stop_all();
     ImGui::Separator();
 
     // Column widths are explicit (derived from sample text, so they follow the DPI-scaled
@@ -2432,11 +1863,11 @@ void App::draw_workers_table() {
         float state_x = 0.0f, name_x = 0.0f, speed_x = 0.0f, eta_x = 0.0f, actions_x = 0.0f;
         float task_wrap_w = 0.0f;   // usable width of the task line (must be most of the row)
         for (std::size_t i = 0; i < workers_.size(); ++i) {
-            WorkerView &w = workers_[i];
-            const WorkerRunState st = w.proc ? w.proc->state() : WorkerRunState::Stopped;
+            const WorkerView &w = workers_[i];
+            const WorkerRunState st = w.has_process() ? w.state() : WorkerRunState::Stopped;
             ImGui::TableNextRow();
             // A hit flashes the row so the operator notices a long run paying off.
-            if (w.hit_flash_until > mono_ms()) {
+            if (worker_ui_[w.index].hit_flash_until > mono_ms()) {
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(40, 120, 40, 120));
             }
             ImGui::TableSetColumnIndex(0);
@@ -2451,13 +1882,13 @@ void App::draw_workers_table() {
             else if (st == WorkerRunState::Restarting) col = ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
             else if (st == WorkerRunState::QueueEmpty) col = ImVec4(0.5f, 0.7f, 1.0f, 1.0f);
             ImGui::TextColored(col, "%s", loc_.t("workers", w.stop_requested?"stopping":state_key(st)).c_str());
-            if (w.proc && !w.proc->state_text().empty()) {
+            if (w.has_process() && !w.state_text().empty()) {
                 // Full text in the tooltip (and the Detail panel): the column is sized for
                 // the state word so the progress bar keeps its width (see above).
                 ImGui::SameLine();
                 ImGui::TextDisabled("*");
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", w.proc->state_text().c_str());
+                    ImGui::SetTooltip("%s", w.state_text().c_str());
                 }
             }
 
@@ -2541,19 +1972,12 @@ void App::draw_workers_table() {
                 ImGui::BeginDisabled(w.stop_requested);
                 if (ImGui::SmallButton((loc_.t("workers", "stop") + tag).c_str())) {
                     // Graceful: a checkpoint is written first (docs/usage/GUI.md 5.6).
-                    request_stop(w.index);
+                    controller_.request_stop(w.index);
                 }
                 ImGui::EndDisabled();
             } else {
                 if (ImGui::SmallButton((loc_.t("workers", "start") + tag).c_str())) {
-                    std::string err;
-                    refresh_worker_for_queue(w);
-                    if (w.proc && w.proc->start(err)) {
-                        trace("worker " + std::to_string(w.index) + ": started pid=" +
-                              std::to_string(w.proc->pid()));
-                    } else {
-                        status_ = "worker " + std::to_string(w.index) + ": " + err;
-                    }
+                    controller_.start(w.index);
                 }
             }
 
@@ -2972,7 +2396,7 @@ void App::draw_detail_panel() {
         return;
     }
     if (selected_worker_ >= 0 && selected_worker_ < static_cast<int>(workers_.size())) {
-        WorkerView &w = workers_[static_cast<std::size_t>(selected_worker_)];
+        const WorkerView &w = workers_[static_cast<std::size_t>(selected_worker_)];
         ImGui::Text("%s #%d (%s)", loc_.t("workers", "col_name").c_str(), w.index, w.name.c_str());
         ImGui::TextColored(ImVec4(.75f,.8f,.9f,1.f),"%s  |  %s",w.stage2?"Stage2":"Stage1",task_text(w).c_str());
         if(w.stage2)draw_stage2_status(w);
@@ -2980,11 +2404,11 @@ void App::draw_detail_panel() {
         ImGui::Separator();
         ImGui::TextUnformatted(loc_.t("detail", "command_line").c_str());
         ImGui::BeginChild("cmd", ImVec2(0, 40), true);
-        ImGui::TextWrapped("%s", w.proc ? w.proc->command_line().c_str() : "-");
+        ImGui::TextWrapped("%s", w.has_process() ? w.command_line().c_str() : "-");
         ImGui::EndChild();
-        if (w.proc) {
+        if (w.has_process()) {
             ImGui::Text("%s %s   %s %d", loc_.t("workers", "col_state").c_str(),
-                        state_name(w.proc->state()), "restarts", w.proc->restarts());
+                        state_name(w.state()), "restarts", w.restarts());
         }
         // Diagnostics for "the progress bar does not move": how many progress lines the
         // GUI actually received from this worker, and what the last one said. A count of 0
@@ -3005,12 +2429,12 @@ void App::draw_detail_panel() {
 }
 
 void App::draw_worker_panes() {
-    for (WorkerView &w : workers_) {
-        if (!w.show_pane) continue;
+    for (const WorkerView &w : workers_) {
+        if (!worker_ui_[w.index].show_pane) continue;
         const std::string title = loc_.t("workers", "log_pane") + " #" +
                                   std::to_string(w.index) + " (" + w.name + ")###log" +
                                   std::to_string(w.index);
-        if (!ImGui::Begin(title.c_str(), &w.show_pane)) {
+        if (!ImGui::Begin(title.c_str(), &worker_ui_[w.index].show_pane)) {
             ImGui::End();
             continue;
         }
@@ -3058,14 +2482,14 @@ void App::draw_worker_panes() {
         }
         ImGui::SameLine();
         ImGui::Checkbox((loc_.t("workers", "show_raw") + "##" + std::to_string(w.index)).c_str(),
-                        &w.show_raw);
-        ImGui::SameLine();ImGui::Checkbox((loc_.t("workers","follow_output")+"##"+std::to_string(w.index)).c_str(),&w.follow_output);
+                        &worker_ui_[w.index].show_raw);
+        ImGui::SameLine();ImGui::Checkbox((loc_.t("workers","follow_output")+"##"+std::to_string(w.index)).c_str(),&worker_ui_[w.index].follow_output);
         ImGui::Separator();
-        const std::vector<std::string> &lines = w.show_raw ? w.raw : w.events;
+        const std::vector<std::string> &lines = worker_ui_[w.index].show_raw ? w.raw : w.events;
         if (lines.empty()) {
             ImGui::TextDisabled("%s", loc_.t("workers", "no_output").c_str());
         } else {
-            draw_worker_log_lines(lines,w.follow_output,ImVec2(0,0));
+            draw_worker_log_lines(lines,worker_ui_[w.index].follow_output,ImVec2(0,0));
         }
         ImGui::End();
     }

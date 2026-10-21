@@ -10,7 +10,7 @@
 #include "localization.h"
 #include "log_parse.h"
 #include "results.h"
-#include "worker_proc.h"
+#include "worker_controller.h"
 #include "worktodo_gen.h"
 
 #include <functional>
@@ -47,82 +47,6 @@ struct MetricPlot {
     float ms_per_sample = 0.0f; // hover read-out: age of a sample (0 = unknown)
 };
 
-// Worker state -> the plain name (used by --trace and the docs) and the localization id
-// under the "workers" panel. The ids are an EXPLICIT table (not derived from the name):
-// deriving them produced "state__stopped" (double underscore from the leading capital),
-// which is not in the XML files, so the table showed the raw fallback text
-// "workers.state__stopped" instead of "Stopped" (user report, 2026-09-28).
-// --selftest checks that every id here resolves in every localization file.
-const char *state_name(WorkerRunState s);
-const char *state_key(WorkerRunState s);
-// Every state, for the self-test's completeness check.
-const WorkerRunState *all_worker_states(int *count);
-
-// One row of the Workers table plus its log pane.
-struct WorkerView {
-    int index = 1;                    // [Worker #N] number (also --worker N)
-    std::string name;                 // [Worker #N] name= (GUI-only key)
-    int device = 0;                   // effective device= after section override
-    int stage1_device = 0;
-    std::string curve_model = ecm_config::defaults::stage1_curve;
-    std::string execution_target = ecm_config::defaults::stage1_target;
-    std::string stage1_target = ecm_config::defaults::stage1_target;
-    int gpu_param = ecm_config::defaults::stage1_gpu_param;
-    int gpucurves = 0;
-    std::string worktodo;
-    std::string log_file;
-    std::string extra_args;           // [Worker #N] extra_args= (space separated)
-    std::string exe;
-    std::string working_dir;
-    bool autostart = false;
-
-    // Live state (M2).
-    std::unique_ptr<WorkerProc> proc;
-    ProgressInfo progress;
-    long long progress_lines = 0;
-    long long tasks_done = 0;
-    long long hits = 0;
-    std::string task;                 // current worktodo line (from START:)
-    bool stage2=false;
-    Stage2Status stage2_status;
-    std::string application_version;  // observed banner of this worker process
-    unsigned long version_pid = 0;
-    std::vector<std::string> events;  // event layer (timestamped, ANSI-free)
-    std::vector<std::string> raw;     // everything, for the "raw output" toggle
-    // Progress history for the sparkline (one sample per accepted progress line).
-    // NOTE: the speed series is SECONDS PER CURVE, not curves/second: the driver prints
-    // s/curve, and "bigger is worse" is the axis the operator compares against the ETA
-    // (user request 2026-09-29: "曲线/秒 改为 秒/曲线").
-    std::vector<float> hist_s_per_curve;
-    unsigned long long last_sample_ms = 0;
-    double last_traced_pct = -1.0;
-    bool show_raw = false;
-    bool follow_output=true;
-    bool show_pane = true;
-    bool duplicate_device = false;    // another worker uses the same device (warning)
-    bool old_driver = false;          // worker exe printed "No input number on stdin"
-    // ---- Prime95 handoff notices (docs/usage/GUI.md 18) ---------------------------
-    // The driver prints one `p95_add:` line per finished task; the notice strip shows the
-    // most severe one. A Pending notice (and a non-empty pending file on disk) stays red
-    // until a later delivery succeeds.
-    P95Notice p95;                    // last notice of this worker
-    // Percent the driver reported when it resumed from a checkpoint ("Resuming from
-    // checkpoint: 23.8% complete"). A resumed run starts its progress line only after a
-    // long batch gap (see docs/usage/GUI.md 7.2), so the GUI shows this instead of an
-    // empty bar in the meantime. -1 = no resume seen.
-    double resume_pct = -1.0;
-    // ---- graceful stop (per worker) ------------------------------------------------
-    // A stop request does NOT kill the process right away: the driver checkpoints at its own
-    // interval, so the worker is terminated only after a checkpoint newer than the request
-    // appeared (or the deadline passed). See App::request_stop / docs/usage/GUI.md 5.6.
-    bool stop_requested = false;
-    unsigned long long stop_deadline_ms = 0;
-    long long ckpt_baseline = 0;      // newest checkpoint mtime when the stop was requested
-    bool ckpt_seen = false;           // a newer checkpoint appeared -> safe to terminate
-    unsigned long long hit_flash_until = 0;  // row highlight after a hit
-    std::string effective_config;     // "effective config" text for the detail panel
-};
-
 class App {
 public:
     // Reads the ini (default: <exe dir>/ecm.toml) and the localization files.
@@ -136,15 +60,12 @@ public:
     bool shutdown(std::string &err, bool save_docking_layout = true);
 
     void draw();
-    // Drives the worker supervisor (called once per frame from draw()).
-    void tick();
-
     // Optional hook so the host can mirror worker state transitions into --trace.
     // Lines produced before the hook is installed (App::init runs first) are buffered
     // and flushed here, so nothing is lost depending on the call order.
     void set_trace(std::function<void(const std::string &)> fn);
     // Set by File -> Quit (or WM_CLOSE): the host polls it and closes the window.
-    bool quit_requested() const { return quit_requested_; }
+    bool quit_requested() const { return controller_.quit_requested(); }
     // ---- exit flow -----------------------------------------------------------------
     // Closing the window while workers run must NOT silently kill them: request_close()
     // opens the confirmation modal and returns false (the host keeps the window alive);
@@ -152,9 +73,6 @@ public:
     // to checkpoint first, and the GUI waits for that (bounded) before terminating them.
     // [GUI] exit_confirm = ask | stop | kill, [GUI] graceful_stop_ms = <ms>.
     bool request_close();
-    // Stop button / row action: same graceful path for a single worker.
-    void request_stop(int worker_index);
-
     Localization &loc() { return loc_; }
     const Localization &loc() const { return loc_; }
     TomlFile &ini() { return ini_; }
@@ -185,21 +103,6 @@ public:
     void fall_back_to_english(const std::string &reason);
     const std::vector<WorkerView> &workers() const { return workers_; }
 
-    // Starts/stops every worker (menu + the per-row buttons).
-    void start_all();
-    void stop_all();
-    // Shutdown variant: terminate the workers immediately, quietly (no trace per worker,
-    // no state/crash accounting, one summary line) -- see the user requirement in
-    // docs/usage/GUI.md 5.6.
-    void stop_all_quietly();
-    // Resolves the worker executable: [GUI] exe=, else ecm_cuda.exe next to the GUI,
-    // then ecm.exe next to it; falls back to the bare name (PATH lookup).
-    std::string resolve_worker_exe(int worker_index=0) const;
-    std::string resolve_stage1_exe() const;
-    std::string resolve_stage2_exe() const;
-    bool stage2_mode() const;
-    bool worker_stage2(int worker_index) const;
-
     // Reloads the current language file (the "Reload localization" button).
     void reload_localization();
     void set_language(const std::string &language);
@@ -220,9 +123,6 @@ public:
 
 private:
     void rebuild_workers();
-    WorkerView make_worker(int index) const;
-    void refresh_device_warnings();
-    void refresh_worker_for_queue(WorkerView &worker);
     void draw_menu_bar();
     // Prominent full-width strip under the menu bar: the Prime95 handoff state in red /
     // yellow / green / grey, with the two "open" buttons (docs/usage/GUI.md 18).
@@ -261,12 +161,6 @@ private:
     // Exit confirmation + graceful-stop modal (drawn from draw()). Returns true while the
     // modal is open, i.e. the window must not close yet.
     bool draw_exit_modal();
-    // Starts the graceful stop for every running worker and switches to the waiting phase.
-    void begin_graceful_exit();
-    // Advances the per-worker graceful stop (checkpoint watch + deadline) from tick().
-    void tick_graceful_stops(unsigned long long now);
-    // Worker directory used for Stage1 primary-checkpoint update notices.
-    std::string worker_dir(int worker_index=0) const;
     // ---- Prime95 handoff ([queue] p95_worktodo_path / p95_add_workers) ---------------
     // Read from the ini by the GUI itself (not from a worker's output), so the "not
     // configured" hint is visible before any worker runs.
@@ -315,12 +209,15 @@ private:
     // line" can be told apart from "the sampled signal really is constant".
     void trace_gpu_history(int dev, const std::vector<GpuSample> &hist, float p_lo, float p_hi,
                            float c_lo, float c_hi);
-    std::string effective_config_text(int worker_index) const;
     void trace(const std::string &line) const;
     void refresh_result_sources();
     void copy_result_rows(const std::vector<std::size_t> &indices);
 
     TomlFile ini_;
+    WorkerController controller_{ini_};
+    const std::vector<WorkerView> &workers_=controller_.workers();
+    struct WorkerUi {bool show_raw=false,follow_output=true,show_pane=true;unsigned long long hit_flash_until=0;};
+    std::map<int,WorkerUi> worker_ui_;
     Localization loc_;
     GpuMonitor gpu_;
     ResultStore result_;
@@ -330,7 +227,6 @@ private:
     std::string result_focus_;
     std::string result_error_;
     unsigned long long result_refresh_at_=0;
-    std::vector<WorkerView> workers_;
     std::string ini_path_;
     std::string loc_dir_;
     std::string language_ = ecm_config::defaults::gui_language;
@@ -340,7 +236,6 @@ private:
     std::string layout_blob_loaded_;
     std::string worker_exe_;              // [GUI] exe= (empty = auto)
     std::string stage2_exe_;
-    mutable std::string resolved_stage2_exe_;
     float font_size_px_ = ecm_config::defaults::gui_font_size;           // [GUI] font_size= (0 = auto)
     bool font_snap_ = ecm_config::defaults::gui_font_snap;               // [GUI] font_snap= (PixelSnapH)
     std::string font_path_;               // [GUI] font= (empty = pick automatically)
@@ -353,12 +248,6 @@ private:
     std::string priority_ = ecm_config::defaults::gui_priority;
     int num_workers_ = ecm_config::defaults::gui_NumWorkers;
     bool layout_dirty_ = false;
-    bool autostart_done_ = false;
-    bool quit_requested_ = false;
-    // Exit flow: Idle -> (Confirm) -> Stopping -> quit_requested_
-    enum class ExitPhase { Idle, Confirm, Stopping };
-    ExitPhase exit_phase_ = ExitPhase::Idle;
-    unsigned long long exit_deadline_ms_ = 0;
     // [GUI] exit_confirm = ask | stop | kill (default ask)
     std::string exit_confirm_ = ecm_config::defaults::gui_exit_confirm;
     // [GUI] graceful_stop_ms: how long to wait for a fresh checkpoint before terminating.
@@ -368,7 +257,6 @@ private:
     bool start_tab_applied_ = false;     // the selection was applied (see draw())
     int panels_traced_at_frame_ = -1;    // frame counter when the rects were traced
     int frame_counter_ = 0;
-    unsigned long long last_tick_ms_ = 0;
     std::function<void(const std::string &)> trace_;
     std::vector<std::string> pending_trace_;
     // Main window rectangle (Win32 owns it; we persist it in [GUI] window=).

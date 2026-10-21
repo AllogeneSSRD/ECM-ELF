@@ -24,6 +24,21 @@ std::string get_env(const char *name) {
 
 } // namespace
 
+std::string path_dir(const std::string &p) {
+    const std::size_t s = p.find_last_of("\\/");
+    return (s == std::string::npos) ? std::string() : p.substr(0, s);
+}
+bool path_is_absolute(const std::string &p) {
+    if (p.size() >= 2 && p[1] == ':') return true;
+    if (p.size() >= 1 && (p[0] == '\\' || p[0] == '/')) return true;
+    return false;
+}
+std::string path_resolve(const std::string &base, const std::string &value) {
+    if (value.empty()) return std::string();
+    if (path_is_absolute(value)) return value;
+    return path_join(base, value);
+}
+
 std::vector<std::string> command_line_args() {
     std::vector<std::string> out;
 #ifdef _WIN32

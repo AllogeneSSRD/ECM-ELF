@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，Stage2 程序版本 `0.45.21`；P2、P3a/b/c、P4a–i 已完成；P5a–d 已完成存储、规划、父子流程和进程请求；P6–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，Stage2 程序版本 `0.45.21`；P2、P3a/b/c、P4a–i 已完成；P5a–d 已完成存储、规划、父子流程和进程请求；P6a/b 已完成 GUI 归位、Controller 和 CPU 入口核对；P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -935,6 +935,20 @@ GUI 版本 `0.45.22`，37 个文件完成归位：[生产入口](../../src/ecm/a
 
 [最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p6a/qualification.json)冻结 GUI/测试程序。本步未提取 Controller，不宣称界面已与生命周期解耦；CPU Stage2 已归位且约 224 个实质行，不为目录整齐新增转发层。未重建计算 worker，未运行 CUDA release、GPU 性能或 GUI 混合阶段资格。
 
+### P6b：唯一 WorkerController 与只读视图完成，P6 完成
+
+GUI 和独立 CPU Stage2 版本 `0.45.23`。[WorkerController](../../src/ecm/application/gui/worker_controller.cpp)完整拥有配置投影、worker 构造、启动/轮询、日志/版本/进度归并、阶段切换和停止/关闭协调。其[私有接口](../../src/ecm/application/gui/worker_controller.h)只声明轻量数据与前置类型，默认值引用生成物；不含完整 TOML/Settings 实现、ImGui、Localization 或 GPU monitor。WorkerProc 继续唯一拥有 Job、pipe、thread、停止事件和崩溃重启规则。
+
+App 保留绘制、配置编辑、布局、语言与提示。Controller 拥有 WorkerView，App 只借用 const 引用，不按帧复制日志，也不能访问其私有进程对象；显示开关、跟随和命中高亮由 App 的 WorkerUi 保存。阶段替换仍保留 events/raw/hits/tasks_done/progress_lines/P95，并重置原先会重置的 UI 状态。同步语义通知只承接原先的本地化提示/失效动作，不新增事件总线。11 处无额外职责的 App 转发已删除，按钮与 frame tick 直接调用唯一 Controller；只保留 Win32 关闭入口适配。
+
+- [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p6b/source_contract_07/result.json)：26 个函数、完整 tick 与阶段状态保留、停止/关闭正文一致；活跃/重启时重新配置在释放拥有权之前拒绝。
+- [Controller 运行](../../data/experiments/main_flow_refactor_implementation_20261021/p6b/runtime_03/result.json)：10 个场景/44 项，涵盖 autostart、启动、进度/版本、恢复提示、崩溃与取消重启、停止超时、取消/强制/平滑关闭、S1→S2→S1。真实进程收到停止事件后写新 checkpoint，Controller 仍等待其自行退出，不因文件更新强杀。
+- 同一 Controller 驱动真实 CUDA Stage1 0.45.17 与 Stage2 0.45.21 完成混合队列：各 2 条内部结果、2 个 NF 提交批次、CRC 全通过。此为无窗口生命周期验收，不声称已运行可见 GUI/像素/交互测试。
+- [GUI/进程检查](../../data/experiments/main_flow_refactor_implementation_20261021/p6b/gui_checks_04/gui_checks.json)：33 项自检、54 项进程监管、85 项日志、26 项结果、110 项生成器通过；真实 Controller 测试目标只链接系统库，无 ImGui/计算引擎/GMP/CUDA 头或库。
+- CPU Stage2 以原 libecm、GWPoly OFF 正式本地构建；3 个项目 CPP、0 CUDA。[27 项互操作](../../data/experiments/main_flow_refactor_implementation_20261021/p6b/cpu_interop/summary.json)通过。不为约 224 个实质行的直接入口增加 task/factory 转发，也不扩展 Montgomery/GWPoly 能力。
+
+构建和 fixture 的失效记录均保留：补齐时钟声明、修正提取工具对函数调用的识别、修正测试不存在的 B1 配置键及错误消息寿命；旧版本 fake 与新 GUI 的版本断言失败后显式重建 helper，未放宽断言或修改正确 parser。最后再次核对实际默认值来源，生产 App 一直显式传入原配置值。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p6b/qualification.json)。P6 完成；P7 继续修复已知构建保护误报、类别增量编译、完整位宽、文档和最终资格。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么
@@ -1506,7 +1520,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P5 完成，P6–P7 未完成，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P6 完成，P7 未完成，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 
