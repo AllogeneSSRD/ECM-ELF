@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Builds ecm_gui (and the GUI's test helpers) with one command, from a plain PowerShell.
+    Builds the production ecm_gui target with one command, from a plain PowerShell.
 
 .DESCRIPTION
     Why this exists: the GUI is built with CMake's "NMake Makefiles" generator, and
@@ -21,11 +21,10 @@
     detected, and can be overridden (see the parameters).
 
 .PARAMETER BuildDir
-    Build directory (default: build_gui). Created/configured on the first run.
+    Build directory (default: build_gui_local). Created/configured on the first run.
 
 .PARAMETER Targets
-    CMake targets to build. Default: the GUI plus the two unit-test binaries and the fake
-    worker (they are what tools\test scripts need).
+    CMake targets to build. Default: ecm_gui only. Test helpers require explicit -Targets.
 
 .PARAMETER Reconfigure
     Delete CMakeCache.txt and configure again (use after changing -Gmp / -OpenSslRoot /
@@ -58,8 +57,8 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1 -Generator "Visual Studio 17 2022"
 #>
 param(
-    [string]$BuildDir = "build_gui",
-    [string[]]$Targets = @('ecm_gui', 'ecm_gui_fake_worker', 'ecm_gui_log_parse_test', 'ecm_gui_results_test'),
+    [string]$BuildDir = "build_gui_local",
+    [string[]]$Targets = @('ecm_gui'),
     [switch]$Reconfigure,
     [switch]$Clean,
     [string]$Generator = "NMake Makefiles",

@@ -1,5 +1,5 @@
 #pragma once
-#include "../ecm/application/configuration/generated/ecm_config_generated.h"
+#include "../configuration/generated/ecm_config_generated.h"
 
 // Stage1/Stage2 worker supervision, readable progress, configuration and results.
 

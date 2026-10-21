@@ -655,7 +655,7 @@ elseif(NOT EXISTS "${ECM_IMGUI_DIR}/imgui.h")
     message(STATUS "gui: skipped -- ${ECM_IMGUI_DIR}/imgui.h not found. Vendor Dear ImGui "
                    "(docking branch) there; see third_party/imgui/README.md")
 else()
-    add_subdirectory(src/gui)
+    add_subdirectory(src/ecm/application/gui)
     message(STATUS "gui: ecm_gui enabled (ImGui from ${ECM_IMGUI_DIR})")
 endif()
 

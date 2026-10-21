@@ -925,6 +925,16 @@ Stage2 版本 `0.45.21`。[公开进程请求](../../include/ecm/platform/proces
 
 [最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p5d/qualification.json)。退役依赖误报的 9 个 SDK 内容再次核对未变，正式重试未改保护/缓存；该已知构建问题在 P7 修复。P5 完成，接下来实施 P6 GUI Controller；Stage1/OpenCL/CPU2 本步未重建，完整位宽与性能终验仍未执行，未运行 release。
 
+### P6a：GUI 生产目录与测试构建隔离完成
+
+GUI 版本 `0.45.22`，37 个文件完成归位：[生产入口](../../src/ecm/application/gui/main_win32.cpp)、App、进程 Adapter、配置/结果/生成器/监控及语言资源位于 `src/ecm/application/gui/`；4 个 fake/测试 fixture 移至 `tools/test/gui/`。原目录已删除，CMake 和直接编译入口同步，无兼容目录或源码副本。默认 `build_gui_local/` 只构建 GUI，测试目标 EXCLUDE_FROM_ALL，必须显式选择；不混入 CUDA 构建目录。
+
+[源码核对](../../data/experiments/main_flow_refactor_implementation_20261021/p6a/source_contract/result.json)证明 36 个内容文件只有路径/include 调整，CMake 仅调整位置和显式测试归属。[首次默认产物](../../data/experiments/main_flow_refactor_implementation_20261021/p6a/production_payload.json)只有 ecm_gui.exe，随后显式构建测试 helper。实际无窗口自检 33 项、日志解析 85 项、结果 26 项、生成器 110 项、真实 WorkerProc 54 项通过；checkpoint 扫描 5 类 primary 接纳/3 类 backup-new-Stage2 排除通过。
+
+首次自检 fixture 将整数 autostart 写成 bool，被当前解析器拒绝；改正 fixture 为 0 后通过，原日志保留。发现旧 GUI 脚本仍有 `-ini`、旧分区/裸字符串及“看到 checkpoint 即强杀”的过期断言，不能作为本轮资格；P6b 使用当前 TOML/CLI 和正确退出策略验证 Controller。
+
+[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p6a/qualification.json)冻结 GUI/测试程序。本步未提取 Controller，不宣称界面已与生命周期解耦；CPU Stage2 已归位且约 224 个实质行，不为目录整齐新增转发层。未重建计算 worker，未运行 CUDA release、GPU 性能或 GUI 混合阶段资格。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么

@@ -383,6 +383,6 @@ GPU 保存前的回传量由后端决定：Montgomery ladder/OpenCL 要取回其
 - [容器/旧档离线检查](../../tools/test/stage1_checkpoint_container_test.cpp)：CRC 标准向量、长度、损坏、身份、备份、Edwards 全坐标往返与 V5 导入。
 - [Stage1 完整/停止恢复](../../tools/test/test_stage1_usability.py)、[兼容及队列](../../tools/test/test_stage1_checkpoint_compat.py)。
 - [独立外层解码](../../tools/test/stage1_checkpoint_decode.py)、[Edwards 点与载荷检查](../../tools/test/test_edwards_gpu_pipeline.py)。
-- [GUI 检查点识别](../../src/gui/platform_win32.cpp#L107)：只识别主文件更新时间作为辅助信号，不能代替 worker 完成安全停止。
+- [GUI 检查点识别](../../src/ecm/application/gui/platform_win32.cpp#L107)：只识别主文件更新时间作为辅助信号，不能代替 worker 完成安全停止。
 
 这些入口说明可复核的范围，不意味着每次构建都已经执行全部验证。新增格式或语义须同时更新写入、读取、身份、错误路径和本文；不要只修改 magic 或文件名。损坏资料和原始实验保留在忽略的 `data/`，不作为正式格式的新规则来源。

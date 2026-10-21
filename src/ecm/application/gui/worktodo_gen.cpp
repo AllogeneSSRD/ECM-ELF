@@ -1,5 +1,5 @@
 #include "worktodo_gen.h"
-#include "../ecm/application/configuration/ecm_toml.h"
+#include "../configuration/ecm_toml.h"
 
 #include <algorithm>
 #include <cctype>

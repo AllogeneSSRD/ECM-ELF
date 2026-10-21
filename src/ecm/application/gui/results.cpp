@@ -1,5 +1,5 @@
 #include "results.h"
-#include "../ecm/storage/results/ecm_result_json.h"
+#include "../../storage/results/ecm_result_json.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>

@@ -11,7 +11,7 @@
 | Stage2 驱动 | save、独立队列、回执、日志、Auto B2 | [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp) |
 | CUDA Stage2 | 点生成、多项式树、NTT、归约、下降、GCD | [模块职责](STAGE2.md#cuda-模块边界)、[engine.cpp](../../src/ecm/backend/cuda/stage2/engine.cpp) |
 | CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [ecm_cpu_stage2_main.cpp](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[GW 后端](../../src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.cpp) |
-| GUI | 配置、worker 进程监管、队列生成、监控、结果展示 | [src/gui](../../src/gui/) |
+| GUI | 配置、worker 进程监管、队列生成、监控、结果展示 | [src/gui](../../src/ecm/application/gui/) |
 | 工具 | 构建、参考计算、数据集、计时、剖析和图表 | [tools](../../tools/) |
 
 生产 Stage2 源码独立于 `tools/experiments/cuda/stage2_tree/` 实验引擎；开发 wrapper 位于该目录的 `worker.cu`。实验树、BSGS、NTT 变体和 Tensor 候选均使用独立源组，生产闭包拒绝实验和测试目录。具体职责及探针接口见 [Stage2 模块边界](STAGE2.md#cuda-模块边界)。

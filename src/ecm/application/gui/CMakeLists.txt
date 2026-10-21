@@ -64,15 +64,15 @@ ecm_tool_output_root(ecm_gui)
 # NOTE: add_custom_command(OUTPUT) rejects generator expressions, and ecm_gui lands in the
 # build root anyway (ecm_tool_output_root below), so the path is CMAKE_BINARY_DIR.
 set(ECM_GUI_LOC_FILES
-    ${CMAKE_SOURCE_DIR}/src/gui/localization/english.xml
-    ${CMAKE_SOURCE_DIR}/src/gui/localization/chineseSimplified.xml
-    ${CMAKE_SOURCE_DIR}/src/gui/localization/README.md)
+    ${CMAKE_SOURCE_DIR}/src/ecm/application/gui/localization/english.xml
+    ${CMAKE_SOURCE_DIR}/src/ecm/application/gui/localization/chineseSimplified.xml
+    ${CMAKE_SOURCE_DIR}/src/ecm/application/gui/localization/README.md)
 set(ECM_GUI_LOC_DIR ${CMAKE_BINARY_DIR}/localization)
 add_custom_command(OUTPUT ${ECM_GUI_LOC_DIR}/english.xml
                           ${ECM_GUI_LOC_DIR}/chineseSimplified.xml
                           ${ECM_GUI_LOC_DIR}/README.md
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_SOURCE_DIR}/src/gui/localization ${ECM_GUI_LOC_DIR}
+            ${CMAKE_SOURCE_DIR}/src/ecm/application/gui/localization ${ECM_GUI_LOC_DIR}
     DEPENDS ${ECM_GUI_LOC_FILES}
     COMMENT "ecm_gui: sync localization/ next to the executable")
 add_custom_target(ecm_gui_localization DEPENDS
@@ -91,19 +91,19 @@ add_dependencies(ecm_gui ecm_gui_localization)
 #   ecm_gui_log_parse_test : unit test for the pure parsing layer
 # ---------------------------------------------------------------------------
 
-add_executable(ecm_gui_fake_worker fake_worker.cpp)
+add_executable(ecm_gui_fake_worker EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/fake_worker.cpp")
 target_include_directories(ecm_gui_fake_worker PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(ecm_gui_fake_worker PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_fake_worker PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_fake_worker)
 
-add_executable(ecm_gui_results_test results_test.cpp results.cpp)
+add_executable(ecm_gui_results_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/results_test.cpp" results.cpp)
 target_include_directories(ecm_gui_results_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(ecm_gui_results_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_results_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_results_test)
 
-add_executable(ecm_gui_log_parse_test log_parse_test.cpp log_parse.cpp)
+add_executable(ecm_gui_log_parse_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/log_parse_test.cpp" log_parse.cpp)
 target_include_directories(ecm_gui_log_parse_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(ecm_gui_log_parse_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_log_parse_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
@@ -112,7 +112,7 @@ ecm_tool_output_root(ecm_gui_log_parse_test)
 # worktodo generator (M6 scope A). The unit test also has an --emit mode so
 # tools/test/test_gui_generator.ps1 can compare its output byte-for-byte with
 # tools/ecm_worktodo/ecm.py.
-add_executable(ecm_gui_gen_test gen_test.cpp worktodo_gen.cpp)
+add_executable(ecm_gui_gen_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/gen_test.cpp" worktodo_gen.cpp)
 target_include_directories(ecm_gui_gen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 target_compile_options(ecm_gui_gen_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_gen_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

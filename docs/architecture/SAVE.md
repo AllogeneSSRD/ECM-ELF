@@ -232,7 +232,7 @@ Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制�
 - [可用性与保存失败重试](../../tools/test/test_stage1_usability.py)：CPU/GPU、固定种子、完整末点、输出所有权和停止恢复。
 - [命名、旧记录复制和混合队列](../../tools/test/test_stage1_checkpoint_compat.py)：原指数保留、显式路径、字段改写、前缀覆盖、构造冲突及交接。
 - [Edwards 独立点与 Stage2 校验](../../tools/test/test_edwards_gpu_pipeline.py)、[专用文本读取器](../../src/ecm/storage/save/ecm_edwards_save_reader.h)。
-- [Prime95 交付回归](../../tools/test/test_p95_transfer.ps1)、[GUI 新文件名解析](../../src/gui/results_test.cpp)。
+- [Prime95 交付回归](../../tools/test/test_p95_transfer.ps1)、[GUI 新文件名解析](../../src/ecm/application/gui/results_test.cpp)。
 
 待验证/改进：
 

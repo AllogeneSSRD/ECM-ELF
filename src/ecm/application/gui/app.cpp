@@ -1,7 +1,7 @@
 #include "app.h"
 #include "platform.h"
 #include "task_display.h"
-#include "../ecm/application/configuration/generated/ecm_config_generated.h"
+#include "../configuration/generated/ecm_config_generated.h"
 #include "ecm/platform/program_version.h"
 
 #include "imgui.h"

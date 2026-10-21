@@ -6,7 +6,7 @@
 
 #include <string>
 #include <vector>
-#include "../ecm/application/configuration/ecm_toml.h"
+#include "../configuration/ecm_toml.h"
 
 namespace ecmgui {
 

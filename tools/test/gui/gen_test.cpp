@@ -4,7 +4,7 @@
 //
 // Everything here is a pure function over strings and files: no window, no GPU, no ImGui.
 
-#include "worktodo_gen.h"
+#include "../../../src/ecm/application/gui/worktodo_gen.h"
 #include "gen_input_text.h"
 
 #include <cstdio>

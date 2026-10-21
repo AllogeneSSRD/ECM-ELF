@@ -42,3 +42,5 @@ Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/
 独立 CPU Edwards Stage2 使用 `test/build_cpu_stage2.ps1`；`-GwPoly` 启用 GWNUM/polymult 多线程快速多项式后端，无此开关保留 libecm 构建。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。
 
 OpenCL Stage1 的本机入口为 build_opencl_local.ps1；使用隔离的 build_opencl_local/stage1/&lt;key&gt; 叶目录、普通 CXX 及随附生产资源，不启用 CUDA。支持 -BuildDir、-Gmp、-OpenSslRoot、-OpenClRoot、-VcVars；当前只提供 local，不附带 release 打包。资源与加载合同见 [OpenCL](../../docs/architecture/OPENCL.md#资源与-local-构建)。
+
+GUI 使用 `dev/build_gui.ps1`，默认输出 `build_gui_local/`，只构建 `ecm_gui`。测试 helper 在 `tools/test/gui/`，必须显式指定 `-Targets`，不会进入默认构建；详见 [GUI 构建与验证](../../docs/usage/GUI.md#构建与独立验证)。

@@ -98,11 +98,17 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 
 ## 代码入口
 
-- [main_win32.cpp](../../src/gui/main_win32.cpp#L87)：窗口矩形验证、恢复和保存。
-- [app.cpp](../../src/gui/app.cpp)、[worker_proc.cpp](../../src/gui/worker_proc.cpp)：界面和 worker 生命周期。
-- [worktodo_gen.cpp](../../src/gui/worktodo_gen.cpp)、[results.cpp](../../src/gui/results.cpp)、[log_parse.cpp](../../src/gui/log_parse.cpp)：生成器、结果和进度。
-- [task_display.h](../../src/gui/task_display.h)：只用于显示的任务摘要与AID/因子替代；`log_parse.cpp::parse_stage2/Stage2Status`汇总阶段及完成曲线。
-- [probability_panel.cpp](../../src/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../include/ecm/core/stage2/probability.h)。
+- [main_win32.cpp](../../src/ecm/application/gui/main_win32.cpp#L87)：窗口矩形验证、恢复和保存。
+- [app.cpp](../../src/ecm/application/gui/app.cpp)、[worker_proc.cpp](../../src/ecm/application/gui/worker_proc.cpp)：界面和 worker 生命周期。
+- [worktodo_gen.cpp](../../src/ecm/application/gui/worktodo_gen.cpp)、[results.cpp](../../src/ecm/application/gui/results.cpp)、[log_parse.cpp](../../src/ecm/application/gui/log_parse.cpp)：生成器、结果和进度。
+- [task_display.h](../../src/ecm/application/gui/task_display.h)：只用于显示的任务摘要与AID/因子替代；`log_parse.cpp::parse_stage2/Stage2Status`汇总阶段及完成曲线。
+- [probability_panel.cpp](../../src/ecm/application/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/ecm/application/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../include/ecm/core/stage2/probability.h)。
 - [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp)：GUI任务事件和继承的安全停止请求，队列/存档仍由原生驱动处理。
-- [gpu_monitor.cpp](../../src/gui/gpu_monitor.cpp)、[toml_file.cpp](../../src/gui/toml_file.cpp)：监控和配置。
+- [gpu_monitor.cpp](../../src/ecm/application/gui/gpu_monitor.cpp)、[toml_file.cpp](../../src/ecm/application/gui/toml_file.cpp)：监控和配置。
 - 构建入口：`tools/build/dev/build_gui.ps1`；[构建说明](BUILD.md)。
+
+## 构建与独立验证
+
+生产源码位于 `src/ecm/application/gui/`。`tools/build/dev/build_gui.ps1` 默认输出 `build_gui_local/ecm_gui.exe`，只构建 GUI；fake worker、日志/结果/生成器测试位于 `tools/test/gui/`，CMake 标记 EXCLUDE_FROM_ALL，需要用 `-Targets` 显式选择。GUI 与本地计算 worker 使用各自输出目录，GUI 不链接计算引擎。
+
+`--selftest --config FILE.toml` 执行无窗口检查；`--worker-selftest --fake FILE.exe` 使用实际 Job/管道/停止事件测试进程 Adapter。后者不等于 GUI Controller 的混合阶段与关闭策略验收。测试必须使用当前 `--config` 和 TOML 分区/引号类型，worktodo 的 `[Worker #N]` 分区仍保持原格式。

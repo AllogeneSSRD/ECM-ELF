@@ -14,7 +14,7 @@
 
 键名和分区名区分大小写。一个键仅能放在其定义的分区或相应 worker 覆盖分区；同表重复键、未知键、未知表及类型错误会报告文件名和行号。内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。`worktodo.txt` 的 `[Worker #N]` 是独立的队列语法，不是 TOML 配置分区。
 
-[ecm_toml.h](../../src/ecm/application/configuration/ecm_toml.h) 读取项目使用的 TOML 值类型：带引号的字符串、布尔值、整数、浮点数及窗口整数数组；允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
+[ecm_toml.h](../../src/ecm/application/configuration/ecm_toml.h) 读取项目使用的 TOML 值类型：带引号的字符串、布尔值、整数、浮点数及窗口整数数组；允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/ecm/application/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
 
 ## 运行时限制
 
