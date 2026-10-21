@@ -43,11 +43,11 @@ if(ECM_ANDROID_GMP_ROOT AND EXISTS "${_ECM_GMP_HEADER}" AND EXISTS "${_ECM_GMP_L
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ECM_HAVE_GMP=1)
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${ECM_ANDROID_GMP_ROOT}/include")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-            "${MPA_ROOT}/src/ecm/application/configuration/legacy/ecm_expr.cpp"
+            "${MPA_ROOT}/src/ecm/application/configuration/ecm_expr.cpp"
             "${MPA_ROOT}/src/ecm/backend/opencl/stage1/montgomery/entry.cpp"
             "${MPA_ROOT}/src/ecm/backend/opencl/stage1/montgomery/engine.cpp"
             "${MPA_ROOT}/src/ecm/service/stage1/ecm_gpu_common.cpp"
-            "${MPA_ROOT}/src/ecm/service/execution/legacy/ecm_params_init.cpp"
+            "${MPA_ROOT}/src/ecm/service/execution/ecm_params_init.cpp"
             "${MPA_ROOT}/src/ecm/storage/checkpoint/ecm_checkpoint.cpp"
             "${MPA_ROOT}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp"
             "${MPA_ROOT}/src/ecm/storage/save/ecm_save.cpp"

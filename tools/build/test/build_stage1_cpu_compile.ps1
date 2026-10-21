@@ -26,7 +26,7 @@ if($IncludeMontgomeryHost){
         'src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
 }
 if($IncludeQueueHost){
-    $sources+=@('src/ecm/application/cli/stage1_input.cpp','src/ecm/application/cli/diagnostics/group_order.cpp',
+    $sources+=@('src/ecm/application/cli/stage1_input.cpp','src/ecm/application/cli/group_order.cpp',
         'src/ecm/application/cli/queue_source.cpp','src/ecm/service/work/queue_workflow.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}

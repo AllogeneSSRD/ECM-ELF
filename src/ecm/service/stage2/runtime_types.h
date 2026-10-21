@@ -15,7 +15,7 @@
 #include "../../platform/generated/configuration_defaults.h"
 #include "../../storage/queue/ecm_worktodo.h"
 #include "../../backend/cuda/stage2/ecm_cuda_stage2.h"
-#include "../planning/legacy/ecm_stage2_portable_model.h"
+#include "../planning/ecm_stage2_portable_model.h"
 namespace s2prod {
 namespace fs=std::filesystem;
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };

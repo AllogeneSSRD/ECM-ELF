@@ -1,6 +1,6 @@
 #include "ecm/storage/results/publication.h"
 #include "ecm_result_json.h"
-#include "../../core/curve/edwards/ecm_edwards_curve.h"
+#include "../../core/curve/ecm_edwards_curve.h"
 #include "generated/p95_fft_reference.h"
 #include "../save/ecm_edwards_io.h"
 #include "../../platform/ecm_file_publication.h"

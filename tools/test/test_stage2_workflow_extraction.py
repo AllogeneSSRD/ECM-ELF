@@ -46,7 +46,7 @@ def main():
     assert current_driver==old_driver,'application configuration/dispatch changed'
     previous_planner=old('src/ecm/service/planning/stage2.cpp');planner=modules['service/planning/stage2.cpp']
     for name in definitions(previous_planner):assert body(previous_planner,name)==body(planner,name),name
-    assert old('src/ecm/application/cuda_stage2/ecm_stage2_console.h')==read('src/ecm/platform/legacy/ecm_stage2_console.h')
+    assert old('src/ecm/application/cuda_stage2/ecm_stage2_console.h')==read('src/ecm/platform/ecm_stage2_console.h')
     assert not (ROOT/'src/ecm/application/cuda_stage2/ecm_stage2_console.h').exists()
     for name in ['service/stage2/task.cpp','platform/process/stage2_curve_process.cpp']:
         assert not re.search(r'ecm_toml|ecm_queue_config|ecm_config_generated|\bSettings\b',masked(modules[name]))

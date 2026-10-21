@@ -100,7 +100,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/ecm/backend/cuda/stage1/edwards/edwards.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
-[曲线构造](../../src/ecm/core/curve/edwards/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
+[曲线构造](../../src/ecm/core/curve/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
 [worker 接入](../../src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，恢复按 N 重新选择容器。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
 
@@ -182,4 +182,4 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 
 ## 应用群阶诊断
 
-[group_order.cpp](../../src/ecm/application/cli/diagnostics/group_order.cpp)是 CLI 私有完整诊断，负责 gp 路径、脚本/进程、输出解析和命中报告。driver 在原时点检查 gp 可用性，在单任务结果已发布后逐命中调用；复合因子继续跳过。该实现仍以群阶和旧 32 位诊断 sigma 生成 go_min_bounds，未计算实际点阶/固定 torsion 的严格最小界限；CPU Edwards 的适用性也没有新增资格。数学条件与限制见 [重构分析](../development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md#群阶诊断与最小界限公式)。
+[group_order.cpp](../../src/ecm/application/cli/group_order.cpp)是 CLI 私有完整诊断，负责 gp 路径、脚本/进程、输出解析和命中报告。driver 在原时点检查 gp 可用性，在单任务结果已发布后逐命中调用；复合因子继续跳过。该实现仍以群阶和旧 32 位诊断 sigma 生成 go_min_bounds，未计算实际点阶/固定 torsion 的严格最小界限；CPU Edwards 的适用性也没有新增资格。数学条件与限制见 [重构分析](../development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md#群阶诊断与最小界限公式)。

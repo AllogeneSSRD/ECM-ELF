@@ -2,7 +2,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include "../../src/ecm/service/planning/legacy/ecm_stage2_runtime_tune.h"
+#include "../../src/ecm/service/planning/ecm_stage2_runtime_tune.h"
 #include <iostream>
 namespace p=ecm_stage2::tune::portable;
 static unsigned checks=0;

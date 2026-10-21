@@ -1,7 +1,7 @@
-#include "../../src/ecm/service/planning/legacy/ecm_stage2_tune_ecm.h"
-#include "../../src/ecm/service/planning/legacy/ecm_stage2_tune_prediction.h"
-#include "../../src/ecm/service/planning/legacy/ecm_stage2_tune_auto.h"
-#include "../../src/ecm/service/planning/legacy/ecm_stage1_tune_profile.h"
+#include "../../src/ecm/service/planning/ecm_stage2_tune_ecm.h"
+#include "../../src/ecm/service/planning/ecm_stage2_tune_prediction.h"
+#include "../../src/ecm/service/planning/ecm_stage2_tune_auto.h"
+#include "../../src/ecm/service/planning/ecm_stage1_tune_profile.h"
 #include <iostream>
 #include <chrono>
 int main(int argc,char **argv) {

@@ -1,6 +1,6 @@
 # include/ecm 与 src/ecm 目录精简草稿
 
-日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0 完成，当前源码版本 0.45.25；D1–D3 待实施**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
+日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0–D1 完成，当前源码版本 0.45.26；D2–D3 待实施**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
 
 ## 实施进度与证据
 
@@ -12,7 +12,19 @@
 
 实际通过 BAT 的 `-Selftest` 调用完成 GUI local 构建，33 项自检全部通过；从仓库外工作目录再次调用同一 BAT，33 项再次通过，重复构建未编译或链接。保留既有 C4244 警告，未改配置默认值或 GUI 行为。日志：[首次构建](../../data/experiments/directory_layout_implementation_20261021/d0/gui.log)、[外部工作目录](../../data/experiments/directory_layout_implementation_20261021/d0/gui_external_cwd.log)。本阶段尚未迁移源码路径，未构建 release。
 
-D1、D2、D3 按下文顺序继续，验证完成后逐阶段提交。
+D0 提交：`22380cc`。D1、D2、D3 按下文顺序继续，验证完成后逐阶段提交。
+
+### D1：普通职责家族精简（已完成，0.45.26）
+
+已迁移 29 个非 backend 文件，删除 7 个空分类目录。配置表达式、兼容执行声明、Stage2 规划与辅助、平台输出、CLI 群阶诊断和共享 Edwards 构造均折回所属家族；include 仍为 14 个公开头。源文件数量保持 515，src 目录由 80 减为 73。
+
+修正生产、测试/生成器、构建源清单、Android 和当前文档的相关引用；历史源码读取映射只更新当前位置，冻结 Git 键继续保留。核对 353 个 C++/CUDA 文件，除允许的版本号和 include 路径外正文不变；资源字节、公开合同、翻译单元顺序与编译策略不变。校验原本直接相对引用的目标也必须保持，避免依赖其他 include 搜索目录的偶然回退。[有效正文及路径审计](../../data/experiments/directory_layout_implementation_20261021/d1/audit_0.45.26_02.json)、[当前包含边界](../../data/experiments/directory_layout_implementation_20261021/d1/boundaries_02/result.json)通过，配置 8 项生成物一致。
+
+正式 local 验证通过：CUDA Stage1（sm89、384/1024 两档，31 个 CU 翻译单元）、生产 CUDA Stage2（35 个翻译单元）、OpenCL、CPU Stage2 libecm，以及 GUI BAT。实际通过 27 项 CPU/GPU/恢复/跨阶段发布案例、Stage2 规划 8 项与任务流程 12 项前后对照、4 曲线停止恢复、23 项结果一致性、OpenCL 计算和 GUI 33 项自检。二进制与匹配清单另行冻结，详见 [D1 结果](../../data/experiments/directory_layout_implementation_20261021/d1/result.json)与[产物身份](../../data/experiments/directory_layout_implementation_20261021/d1/artifacts.json)。未重做全32档、release、多架构、可选 PRAC/GWPoly 或性能资格，不外推既有 0.45.24 的完整资格。
+
+本阶段保留首轮失败：一次性迁移辅助脚本重复清理已空目录；另有 6 个移动头文件共 10 条相对引用，被通用搜索根掩盖而漏改，实际 Stage2 构建及时拒绝。已修正清理脚本与相对引用，并重新审计/构建；最初宽泛搜索根审计 `audit_0.45.26.json` 已明确作废，不作为验收。沙箱 CMake 空程序检测的 C1902，以及结果测试硬链接拒绝，均保留原记录，随后同脚本/参数在沙箱外通过，没有改变算术、编译策略或测试条件。细节见[相对路径修复](../../data/experiments/directory_layout_implementation_20261021/d1/relative_repair.json)。
+
+旧 `test_stage2_planning_extraction.py` 对照早期 44 个函数，D0 与 D1 都有相同的 52 个函数，因此该冻结提取检查在迁移前已不匹配；未修改其断言或当作本轮通过项。[定位证据](../../data/experiments/directory_layout_implementation_20261021/d1/legacy_gate_diagnosis.json)保留。Stage1 closeout 只补充一个已验证的 include 改名，十个实现单元、十个群阶辅助和执行顺序检查通过。D2–D3 继续使用当前冻结正文、包含边界和实际运行验证。
 
 ## 结论与适用范围
 
@@ -28,8 +40,8 @@ D1、D2、D3 按下文顺序继续，验证完成后逐阶段提交。
 
 | 范围 | 文件数 | 目录数 | 最大深度 | 说明 |
 | --- | --- | --- | --- | --- |
-| 当前 include/ecm | 14 | 14 | 2 | 4 个头在 1 层，10 个头在 2 层 |
-| 当前 src/ecm | 515 | 80 | 5 | 339 个 C++/CUDA 相关文件、172 个 OpenCL 资源、4 个 GUI 构建/本地化文件 |
+| 规划基线 include/ecm | 14 | 14 | 2 | 4 个头在 1 层，10 个头在 2 层 |
+| 规划基线 src/ecm | 515 | 80 | 5 | 339 个 C++/CUDA 相关文件、172 个 OpenCL 资源、4 个 GUI 构建/本地化文件 |
 | 方案 A 的 src/ecm | 515 | 71 | 5 | 31 个文件换路径；最深文件由 53 减为 51，剩余全部属于 instances 或 PRAC |
 | 方案 B 的 src/ecm | 515 | 70 | 4 | 共 401 个不同文件换路径，包含 A；不是 31 与 372 的简单相加 |
 

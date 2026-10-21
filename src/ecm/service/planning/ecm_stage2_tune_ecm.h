@@ -1,10 +1,10 @@
 #pragma once
 #include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_cost_profile.h"
-#include "../../../backend/cuda/stage2/ecm_stage2_phase_times.h"
-#include "../../../core/stage2/ecm_stage2_giant_work.h"
+#include "../../backend/cuda/stage2/ecm_stage2_phase_times.h"
+#include "../../core/stage2/ecm_stage2_giant_work.h"
 #include "ecm_stage2_tune_grid.h"
-#include "../../../core/stage2/ecm_stage2_d_catalog.h"
+#include "../../core/stage2/ecm_stage2_d_catalog.h"
 #include <gmp.h>
 #include <limits>
 

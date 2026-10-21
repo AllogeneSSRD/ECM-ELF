@@ -1,7 +1,7 @@
 #pragma once
-#include "../../../backend/cuda/stage2/ecm_cuda_stage2.h"
-#include "../../../core/stage2/ecm_stage2_geometry.h"
-#include "../../../core/stage2/ecm_stage2_d_catalog.h"
+#include "../../backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "../../core/stage2/ecm_stage2_geometry.h"
+#include "../../core/stage2/ecm_stage2_d_catalog.h"
 #include <algorithm>
 #include <array>
 #include <cmath>

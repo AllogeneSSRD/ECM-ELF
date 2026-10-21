@@ -2,7 +2,7 @@
 #include "ecm_stage2_tune_ecm.h"
 #include "ecm_stage2_tune_ntt_profile.h"
 #include "ecm/core/stage2/probability.h"
-#include "../../../storage/profile/ecm_stage1_cost_csv.h"
+#include "../../storage/profile/ecm_stage1_cost_csv.h"
 #include "ecm_stage2_d_search.h"
 #include <chrono>
 #include <charconv>

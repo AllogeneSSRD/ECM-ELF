@@ -4,7 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 #include "../../src/ecm/storage/queue/ecm_stage2_queue_state.h"
-#include "../../src/ecm/platform/legacy/ecm_stage2_logging.h"
+#include "../../src/ecm/platform/ecm_stage2_logging.h"
 #include <iostream>
 
 int main(int argc,char **argv) {

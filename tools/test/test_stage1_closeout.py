@@ -15,6 +15,7 @@ NAMES={'Stage1RunOptions':'Stage1Options','Stage1ExecutionOptions':'ExecutionOpt
 
 def renamed(s):
     s=s.replace('legacy_execution.h','execution_contract.h')
+    s=s.replace('../execution/legacy/cgbn_stage1.h','../execution/cgbn_stage1.h')
     for a,b in NAMES.items():s=re.sub(r'\b'+a+r'\b',b,s)
     return s
 
@@ -25,7 +26,7 @@ def main():
     old=lambda name:subprocess.check_output(['git','show','469663a:'+name],cwd=ROOT).decode('utf-8-sig')
     read=lambda name:(ROOT/name).read_text(encoding='utf-8-sig')
     old_driver=old('src/ecm/application/cli/ecm_driver.cpp');driver=read('src/ecm/application/cli/ecm_driver.cpp')
-    diagnostic=read('src/ecm/application/cli/diagnostics/group_order.cpp')
+    diagnostic=read('src/ecm/application/cli/group_order.cpp')
     helpers=['trim','mpz_to_dec_string','build_primes_up_to_B1','factor_by_small_primes','format_group_order_smooth',
              'normalize_gp_path','gp_executable_exists','resolve_gp_path','get_gp_executable','compute_group_order_pari']
     for name in helpers:assert body(old_driver,name)==body(diagnostic,name),name

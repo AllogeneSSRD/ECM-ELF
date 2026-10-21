@@ -1,6 +1,6 @@
 #include <gmp.h>
 #include <cstdint>
-#include "ecm/service/execution/legacy/ecm.h"
+#include "ecm/service/execution/ecm.h"
 #include <iostream>
 
 extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found,

@@ -11,11 +11,11 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/service/stage1/execution.cpp
     src/ecm/backend/cpu/stage1/legacy_executor.cpp
     src/ecm/application/cli/stage1_input.cpp
-    src/ecm/application/cli/diagnostics/group_order.cpp
+    src/ecm/application/cli/group_order.cpp
     src/ecm/application/cli/queue_source.cpp
     src/ecm/service/work/queue_workflow.cpp
     src/ecm/application/cli/ecm_driver.cpp
-    src/ecm/service/execution/legacy/ecm_params_init.cpp
+    src/ecm/service/execution/ecm_params_init.cpp
     src/ecm/storage/checkpoint/ecm_checkpoint.cpp
     src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp
     src/ecm/storage/save/ecm_save.cpp
@@ -23,7 +23,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/application/configuration/ecm_queue_config.cpp
     src/ecm/storage/queue/ecm_worktodo.cpp
     src/ecm/storage/transfer/ecm_stage2_transfer.cpp
-    src/ecm/application/configuration/legacy/ecm_expr.cpp
+    src/ecm/application/configuration/ecm_expr.cpp
     src/ecm/storage/transfer/p95_transfer.cpp
     src/ecm/storage/queue/p95_worktodo.cpp
     src/ecm/platform/logging.cpp
@@ -106,7 +106,7 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/platform/process/stage2_curve_process.cpp
     src/ecm/backend/cuda/stage2/host_policy.cpp
     src/ecm/application/configuration/stage2_identity.cpp
-    src/ecm/application/configuration/legacy/ecm_expr.cpp
+    src/ecm/application/configuration/ecm_expr.cpp
     src/ecm/storage/queue/ecm_worktodo.cpp
     src/ecm/application/configuration/ecm_queue_config.cpp)
 set(ECM_STAGE2_ARITHMETIC_SOURCES src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu)

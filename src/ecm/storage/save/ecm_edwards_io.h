@@ -1,5 +1,5 @@
 #pragma once
-#include "../../core/curve/edwards/ecm_edwards_curve.h"
+#include "../../core/curve/ecm_edwards_curve.h"
 #include "../checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include <filesystem>
 #include <fstream>

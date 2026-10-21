@@ -5,7 +5,7 @@
 #include <limits>
 #include <set>
 #include <vector>
-#include "../../../core/stage2/ecm_stage2_geometry.h"
+#include "../../core/stage2/ecm_stage2_geometry.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
 inline bool d_search_improves(double a,double sa,double b,double sb) {

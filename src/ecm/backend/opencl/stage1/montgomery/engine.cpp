@@ -1,7 +1,7 @@
 // OpenCL ECM Stage 1 host (mirrors test/cgbn_stage1.cu)
 
-#include "../../../../service/execution/legacy/cgbn_stage1.h"
-#include "../../../../service/execution/legacy/ecm.h"
+#include "../../../../service/execution/cgbn_stage1.h"
+#include "../../../../service/execution/ecm.h"
 #include "../../runtime/cgbn_opencl.h"
 #include "../../../../storage/checkpoint/ecm_checkpoint.h"
 #include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"

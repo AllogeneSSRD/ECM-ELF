@@ -19,7 +19,7 @@
 
 #include "ecm_edwards_cpu.h"
 #include "../../arithmetic/scalar/ecm_edwards_mont.h"
-#include "../../../../core/curve/edwards/ecm_edwards_curve.h"
+#include "../../../../core/curve/ecm_edwards_curve.h"
 
 // 标量乘算法开关: 1 = w-NAF + 仿射字典 (默认), 0 = double-and-add (基准).
 #define ECM_EDWARDS_USE_NAF 1

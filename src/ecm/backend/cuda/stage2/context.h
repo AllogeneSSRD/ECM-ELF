@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../platform/legacy/ecm_stage2_logging.h"
+#include "../../../platform/ecm_stage2_logging.h"
 #include "ecm_cuda_stage2.h"
 #include "ecm_stage2_ntt_counts.h"
 #include "../../../core/stage2/ecm_stage2_d_catalog.h"

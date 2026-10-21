@@ -2,7 +2,7 @@
 
 分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：P0–P7已完成，源码与最终local版本0.45.24。实际覆盖和限制见[实施进度](#实施进度与阻塞记录)；当前目录/接口以正式架构文档为准。
 
-后续目录层级精简单独维护在[目录精简规划草稿](DIRECTORY_LAYOUT_SIMPLIFICATION_DRAFT.md)及其[网页阅读版](../web/directory-layout-plan-20261021.html)。该规划尚未实施，不替换本文件的已完成状态和冻结阶段记录。
+后续目录层级精简单独维护在[目录精简规划草稿](DIRECTORY_LAYOUT_SIMPLIFICATION_DRAFT.md)及其[网页阅读版](../web/directory-layout-plan-20261021.html)。方案 A 已实施 D0–D1，进度单独记录，不替换本文件的已完成状态和冻结阶段记录。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -868,7 +868,7 @@ task 中直接取得 SubmissionLock、prepare_internal_ledger 和 read_submissio
 
 对应程序版本 `0.45.17`，P4 的 Stage1 主流程职责整理完成。私有 [execution_contract.h](../../src/ecm/service/stage1/execution_contract.h)以 ExecutionOptions/ExecutionResult 表达一次计算的可变进度与拥有结果，删除三组重复别名；六个构造/移动/释放/状态方法落 [execution_contract.cpp](../../src/ecm/service/stage1/execution_contract.cpp)。TaskResult::State 只在 task.cpp 定义，后端不再看到其内部拥有类型。结果字段/布局、独立清理 sigma 和准备/发布失败优先级保持。TaskDependencies 仍是应用组装的三个私有回调，execute 是唯一粗计算入口，不为实现目录强行新增 Executor/Runner/factory 或重复 prepare/run 层。
 
-PARI helper 和整段命中诊断移入应用私有 [diagnostics/group_order.cpp](../../src/ecm/application/cli/diagnostics/group_order.cpp)，driver 从 1419 行减至 1001 行，只在原预检查、任务完成后调用真实诊断函数。保留 gp 优先级、执行/超时、probable-prime 过滤、输出与旧界限算法；删除没有调用者的旧 32 位 sigma 解析函数。未修订群阶/点阶的数学行为，旧 go_min_bounds、32 位诊断 sigma 和 Edwards 适用性限制仍见前述数学分析，不背书为严格最小 B1/B2。runtime 配置注释改为当前 OpenCL/应用选项职责，未改环境读取行为。
+PARI helper 和整段命中诊断移入应用私有 [diagnostics/group_order.cpp](../../src/ecm/application/cli/group_order.cpp)，driver 从 1419 行减至 1001 行，只在原预检查、任务完成后调用真实诊断函数。保留 gp 优先级、执行/超时、probable-prime 过滤、输出与旧界限算法；删除没有调用者的旧 32 位 sigma 解析函数。未修订群阶/点阶的数学行为，旧 go_min_bounds、32 位诊断 sigma 和 Edwards 适用性限制仍见前述数学分析，不背书为严格最小 B1/B2。runtime 配置注释改为当前 OpenCL/应用选项职责，未改环境读取行为。
 
 - [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4i/source_contract_04/result.json)：10 个诊断 helper、完整诊断与主入口顺序、六个拥有权方法、结果布局，以及 10 个 CPU/GPU/准备/队列实现单元仅发生既定词汇/包含路径调整。
 - [8 项任务](../../data/experiments/main_flow_refactor_implementation_20261021/p4i/task_contract/result.json)、[13 项队列](../../data/experiments/main_flow_refactor_implementation_20261021/p4i/queue_contract/result.json)通过真实 task/存储合同；[12 个主机 CPP](../../data/experiments/main_flow_refactor_implementation_20261021/p4i/host_compile/manifest.json)编译无 CUDA SDK。源码比较工具补齐构造 initializer/noexcept 的识别，失败检查记录保留，未改生产行为或放宽相等断言。

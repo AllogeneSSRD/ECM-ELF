@@ -1,5 +1,5 @@
 ﻿#include "stage1_input.h"
-#include "diagnostics/group_order.h"
+#include "group_order.h"
 #include "queue_source.h"
 using ecm_stage1_app::normalize_path_local;
 using ecm_stage1_app::resolve_rel_local;
@@ -61,15 +61,15 @@ using ecm_stage1_app::print_group_order_factor;
 #include "ecm/core/stage1/selection.h"
 #include "../../service/stage1/execution_contract.h"
 #include "ecm/application/configuration/runtime.h"
-#include "../../service/execution/legacy/ecm.h"
-#include "../../service/execution/legacy/cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
+#include "../../service/execution/ecm.h"
+#include "../../service/execution/cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
 #include "ecm/platform/logging.h"
 #include "ecm/platform/program_version.h"
 #include "../configuration/ecm_queue_config.h"
 #include "../../storage/queue/ecm_worktodo.h"
 #include "../../storage/transfer/ecm_stage2_transfer.h"
 #include "../../storage/queue/ecm_worker_list.h"
-#include "../configuration/legacy/ecm_expr.h"              /* shared exact integer expression parser */
+#include "../configuration/ecm_expr.h"              /* shared exact integer expression parser */
 #include "../../storage/transfer/p95_transfer.h"           /* finished task -> Prime95 worktodo.add (D4/§13) */
 #include "ecm/core/stage1/scalar.h"         /* s = torsion * lcm(1..B1), shared product tree */
 #include "../../storage/cache/ecm_stage1_exp_cache.h"   /* validated on-disk cache for that value */

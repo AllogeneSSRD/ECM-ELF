@@ -1,6 +1,6 @@
 #pragma once
 #include "ecm/service/stage1/task.h"
-#include "../execution/legacy/ecm.h"
+#include "../execution/ecm.h"
 
 // One private computation contract shared by CPU/GPU implementations.
 // Its raw payload and mutable progress stay private to the implementation.

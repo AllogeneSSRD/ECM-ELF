@@ -6,7 +6,7 @@
 #include "../../backend/cuda/stage1/edwards/host_workflow.h"
 #endif
 #include "ecm/service/execution/legacy_gpu.h"
-#include "../execution/legacy/cgbn_stage1.h"
+#include "../execution/cgbn_stage1.h"
 #include "../../storage/save/ecm_save.h"
 #include "../../storage/save/ecm_edwards_io.h"
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"

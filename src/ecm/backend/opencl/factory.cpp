@@ -5,9 +5,9 @@
 */
 
 #include "../../../../include/ecm/service/execution/legacy_gpu.h"
-#include "../../service/execution/legacy/ecm.h"                    /* ECM_ERROR */
+#include "../../service/execution/ecm.h"                    /* ECM_ERROR */
 
-#include "../../service/execution/legacy/cgbn_stage1.h"            /* gpu_prepare_opencl */
+#include "../../service/execution/cgbn_stage1.h"            /* gpu_prepare_opencl */
 #include "runtime/device.h"              /* configureOpenclDeviceIndex */
 #include "stage1/montgomery/entry.h"       /* opencl_ecm_stage1 */
 #include "arithmetic/path_registry.h" /* opencl_ecm_print_available_kernels */

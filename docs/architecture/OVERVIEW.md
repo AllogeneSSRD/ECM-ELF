@@ -22,7 +22,7 @@
 
 生产 giant chain 核在 `src/ecm/backend/cuda/stage2/device/giant_chain.cuh`；Stage2 主机流程、算术和 NTT 的依赖方向见 [模块边界](STAGE2.md#cuda-模块边界)。G 根树的分块空位布局和压缩请求形状由 `src/ecm/core/stage2/ecm_stage2_giant_tree.h` 定义。它们分别服务点生成和根多项式调度，F 树及其有序下降仍由原布局控制。
 
-`ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/ecm/application/configuration/legacy/ecm_expr.cpp)与 [worktodo 读写](../../src/ecm/storage/queue/ecm_worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在 [cuda_sources.cmake](../../tools/build/internal/cuda_sources.cmake) 中维护，由根 CMake 消费；不同后端仍分别编译这些源文件。
+`ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/ecm/application/configuration/ecm_expr.cpp)与 [worktodo 读写](../../src/ecm/storage/queue/ecm_worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在 [cuda_sources.cmake](../../tools/build/internal/cuda_sources.cmake) 中维护，由根 CMake 消费；不同后端仍分别编译这些源文件。
 
 CUDA 实现集中在 `src/ecm/backend/cuda/`：Stage1 按曲线组织主机实现、设备算法及独立实例；可选 PRAC 属于 Montgomery 私有家族。发射头、CGBN 类型和 dispatch/tiers.def 为私有实现。公开请求与选择合同在 include/ecm/service 和 include/ecm/core；实际后端准备/执行合同留在 service/stage1 私有头，应用只在组装处消费。模块职责和位宽边界以 [Stage1](STAGE1.md#cuda-模块边界) 为准。
 
@@ -46,11 +46,11 @@ src/ecm/
 │   └── gui/                        App、Controller、WorkerProc 和 GUI 模型
 ├── service/
 │   ├── stage1/                     task、拥有权、准备与唯一执行分派
-│   ├── execution/                  旧执行类型的私有协作，非第二个执行器
+│   ├── execution/                  libecm/C 执行类型与兼容声明，非第二个执行器
 │   ├── work/                       QueueWorkflow
 │   ├── stage2/                     父任务、曲线 worker、输入与私有合同
 │   └── planning/                   Stage2 方案、校准、profile 与测量
-├── core/{stage1,stage2}/            平台中立算法和数据模型
+├── core/{curve,stage1,stage2}/      共享曲线构造、平台中立算法和数据模型
 ├── backend/
 │   ├── cpu/{stage1,stage2,arithmetic}/
 │   ├── cuda/{stage1,stage2,ntt,arithmetic,planning,runtime,dispatch}/

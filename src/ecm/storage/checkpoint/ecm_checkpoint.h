@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../service/execution/legacy/ecm.h"
+#include "../../service/execution/ecm.h"
 
 #include <gmp.h>
 

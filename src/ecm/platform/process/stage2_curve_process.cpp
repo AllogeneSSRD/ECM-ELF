@@ -1,7 +1,7 @@
 // Owns process/job/pipe lifetime, stop policy and streamed console projection.
 #include "stage2_curve_process.h"
-#include "../legacy/ecm_stage2_console.h"
-#include "../legacy/ecm_stage2_logging.h"
+#include "../ecm_stage2_console.h"
+#include "../ecm_stage2_logging.h"
 #include <algorithm>
 #include <chrono>
 #include <fstream>

@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../core/stage2/ecm_stage2_giant_work.h"
+#include "../../core/stage2/ecm_stage2_giant_work.h"
 #include <set>
 #include <vector>
 

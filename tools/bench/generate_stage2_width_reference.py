@@ -16,7 +16,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--wide',type=Path,default=ROOT/'data/experiments/stage2_tuned_carrier_final_20261011/measurements.json')
     p.add_argument('--pair',type=Path,default=ROOT/'data/experiments/stage2_resume_tune_20261013/m12011_pair/report.json')
-    p.add_argument('--output',type=Path,default=ROOT/'src/ecm/service/planning/legacy/ecm_stage2_width_reference.h')
+    p.add_argument('--output',type=Path,default=ROOT/'src/ecm/service/planning/ecm_stage2_width_reference.h')
     args=p.parse_args();wide=json.loads(args.wide.read_text(encoding='utf-8'));pair=json.loads(args.pair.read_text(encoding='utf-8'))
     if not wide['complete'] or not pair['passed']:raise ValueError('reference evidence incomplete')
     records=[]
