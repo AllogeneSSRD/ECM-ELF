@@ -148,3 +148,10 @@ Animate at the existing GUI cadence; no extra render loop.
 
 Companion offset from the main window left edge in logical units.
 宠物相对主窗口左缘的逻辑单位偏移。
+
+## worker.count
+
+默认值：`0`；类型：`int`。
+
+Number of v2 workers; 0 follows the workflow GUI worker count. Does not modify legacy preferences.
+v2 worker 数量；0 跟随工作流中的数量，不改写旧版偏好。

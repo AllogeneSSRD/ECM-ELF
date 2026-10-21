@@ -1,36 +1,36 @@
-# GUI v2 开发预览
+# GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui / Vulkan 前端，当前版本为 0.47.2，完成 P0–P2。现有 DX11 GUI、公共 0.46.7 版本、默认配置和原构建入口保持不变。
+GUI v2 是独立的 Windows / C++ / Dear ImGui / Vulkan 前端，当前开发版本 0.47.4。工作台、结果、生成器、概率、GPU、设置已接通；原 DX11 GUI 的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
-当前提供单窗口组件预览：Ely 明暗主题，中英切换，100/125/150/200% 缩放，正文 15、辅助 13、标题 22 逻辑像素及等宽数据角色，按钮、表单、选择、状态与有限线条图标。初始缩放取窗口 DPI；界面比例也可以手工选择。窗口 DPI 改变时重新计算比例。缩放从逻辑基准重新建立样式，语言/比例切换在帧间释放后端纹理再重建字体。
+## 构建与启动
 
-这是组件预览程序，尚未接入任务控制、真实日志/结果、生成器、概率、监控或 UI 状态保存；关闭后外观选择不会保存。样板路径仅供输入预览，不读取或保存工作流，不启动 worker。业务接线、多 viewport、物理跨屏 DPI、IME 和正式分发验收属于后续阶段。
+运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；helper 不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。
 
-## 构建与运行
+运行要求系统 Vulkan 1.1 loader、graphics/present 与 swapchain 驱动；缺失明确失败，可另开原 GUI。常用参数：
 
-沿用本机已有 MSVC/CMake 环境，在仓库运行 `tools\build\build_gui_v2.bat`；默认生成 `build_gui_v2_local\ecm_gui_v2.exe`。原 `tools\build\build_gui.bat` 仍构建旧版。
+- `--config <工作流.toml>`：打开已有业务配置；设置中也可选择。autostart 经过能力与拥有权检查后执行。
+- `--ui-state <侧车.toml>`：默认 `%LOCALAPPDATA%/ECM-ELF/gui-v2/<配置身份>.toml`；与业务文件分离，非法侧车保留并禁止覆盖。
+- `--theme dark|light`、`--language en|zh`、`--ui-scale 1|1.25|1.5|2`：初始外观；设置可选自动 DPI。
+- `--pet` / `--no-pet`、`--pet-static`：宠物及动画覆盖，默认关闭。
+- `--no-nvml`：关闭可选的 500ms 后台 GPU 监控。
+- `--diagnostics <文件>`、`--version`：诊断路径与独立前端版本。
 
-新功能测试入口为 `tools/build/test/build_gui_v2.ps1`，可用 `-BuildDir build_gui_v2_test` 指定独立目录，用 `-VcVars` 指定 MSVC 环境脚本。入口直接配置 v2 子工程，不需要 OpenCL、GMP、OpenSSL 或 CUDA。根工程也支持 `ECM_BUILD_GUI_V2=ON`，默认 OFF；根工程本身的计算依赖仍按原要求检查。v2 与 `ECM_BUILD_GUI` 开关互相独立。
+设置中的 worker 路径、数量为 v2 偏好；数量 0 跟随工作流。相对程序路径优先工作流目录，其次前端目录。外观保存不改旧 `[gui]`。计算设置须显式保存，复核文件指纹并保留未改行/注释；外部修改须重载。运行中禁用编辑，未保存编辑禁止启动。
 
-源码依赖为原目录中固定于 `64944b4520b30772de8dbf0b37d0311746477a32` 的未修改 ImGui 核心/Win32 后端，以及新增的 `third_party/imgui_vulkan/` 与 `third_party/gui_v2_vulkan/`。缺依赖会在配置时给出具体路径。不查找开发 Vulkan SDK、import library 或着色器编译器，也不联网下载构建依赖。
+## 队列、页面与宠物
 
-运行要求系统 Vulkan loader 与支持 Vulkan 1.1、graphics/present 队列和 swapchain 的显卡驱动。不满足时明确退出并提示使用原 GUI。不会在 v2 内切换到 DX11。
+必须使用更新后的 Stage1/Stage2 worker：`--gui-queue-protocol` 返回 `ECM_QUEUE_OWNER=1`。共用入口的进程级文件区间锁覆盖 worker 生命周期，同一队列的相同分区拒绝重复运行，不同分区可并行；全队列与各分区互斥。崩溃由系统释放锁，持久锁文件不能手工删除绕过占用。原 GUI 必须指向更新 worker 才能参与保护；任意旧计算二进制不遵守新锁，v2 会拒绝启动。算法、曲线、param、sigma 及工作流格式不变。
 
-启动参数：
+工作台/检查区区分 Stage2 任务曲线进度与阶段/批次，保留 worker 版本、命令、Prime95 提示、事件/原始日志和安全停止。关闭日志或切页仍推进 Controller。结果支持 F/NF、阶段、来源与搜索，复制原始 JSON/checksum；筛选或文件更新清理失效选择。生成器按目标 worker 分区，输入或选项变化使预览失效，追加前复核文件并锁定队列；CPU 拒绝不支持组合。
 
-- `--version`：输出独立 v2 版本后退出。
-- `--theme dark|light`、`--language en|zh`、`--ui-scale 1|1.25|1.5|2`：初始外观。
-- `--diagnostics <path>`：诊断文件；默认当前目录 `ecm_gui_v2.log`。
-- `--validation`：要求已安装或通过 `VK_LAYER_PATH` 提供 Khronos validation layer；缺失明确失败。普通启动不要求该开发层。
+概率正反算、图表、CSV 对应显式计算的输入快照。挠群阶 T 不等于 D_eff。Edwards Z2xZ8 的已有 Stage1 经验代表值为 26.4081（B1=256、15–25 bit 点口径）；按 Edwards/Suyama 相对收益归一到 GMP 基线约 29.0，作为联合模型启发预设，未经直接 Stage2 标定。可选择经验口径或自定义，不把 16 当完整 Edwards 预设。数学模型本身和旧概率页不改。依据见 [参数化参考](../reference/ECM_PARAMETERIZATIONS.md) 与 `tools/ecm_prob/README.md`。
 
-正文优先 Segoe UI，中文优先 Microsoft YaHei / SimHei / SimSun；英文正文和等宽 Consolas 合并 CJK 救援。中文字体不可用时回退英文并显示说明。字体由 Windows 字体目录读取，不随程序分发；Ely 设计许可见 [NOTICE](../../src/ecm/application/gui_v2/ui/NOTICE.md)，Vulkan/Volk/ImGui 许可见各第三方目录。
+常用筛选使用点击标签；滚轮短暂提升刷新频率以平滑滚动，静止恢复 10Hz。Toast 不抢焦点；启动、安全停止、配置/生成器反馈保留详细日志。GPU 未知样本不伪造零值，单位为百分比、MHz、W、摄氏度和 MB。
 
-## 验证入口与限制
+Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚摸、最小化和退出联动；使用原生透明非激活 owned 窗口及离线 atlas，无 GPUI/Web runtime。关闭释放位图，最小化暂停动画。来源/许可见 `third_party/gui_v2_pet/` 和 `assets/gui_v2/pet_ely.json`。
 
-`tools/test/gui_v2/baseline.py` 冻结/复核旧版，`test_host.py` 验证真实 HWND/Vulkan 窗口生命周期与故障退出，`test_ui.py` 验证中英、明暗、四档缩放、重复纹理重建、等宽/CJK 字形及控件输入。测试显式指定 `--exe`、新的 `--out` 和开发层 `--layers` 目录，原始证据写入 `data/experiments/gui_v2/`。
+## 验证边界
 
-测试专用参数 `--frames N`、`--no-loader`、`--inject-failure device-lost|surface-lost`、`--simulate-missing-cjk` 用于受控退出和回退验证。故障注入不代表实际拔卡/驱动崩溃测试。
+已验证同为 144 DPI 的两块物理显示器及合成输入。不同物理 DPI、真实 IME、总 GPU 驻留、受控功耗/计算并行与独立干净机器仍需专项资格。系统 Segoe UI / 微软雅黑 / Consolas 不随包分发，缺中文字体退回英文。HDR/显示格式改变导致 render pass 不兼容时要求重启。
 
-`--audit-ui` 开启测试消息和显式 Vulkan 分配审计：`WM_APP+32` 切换主题/语言/比例，`WM_APP+33` 在 Win32 NewFrame 之后注入 ImGui 鼠标事件，使控件测试不依赖桌面鼠标所在窗口；文本/键盘仍发送 Win32 消息。普通运行不开启这些入口。审计记录应用经 Volk 发出的 `VkDeviceMemory` 分配，覆盖字体纹理及绘制缓冲，不包含驱动和 swapchain 的全部驻留内存，不能据此声称进程总显存或占用优于旧版。
-
-当前阶段的有效证据、阶段退出条件及后续工作见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 与 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+`--validation` 要求开发验证层，普通运行不需要。`--frames`、`--audit-ui`、`--audit-app`、`--no-loader`、`--inject-failure`、`--simulate-missing-cjk` 是测试入口。显式 Vulkan 分配不等于进程总显存，不能据 API 名称声明更低占用。验证脚本位于 `tools/test/gui_v2/`，证据存忽略目录 `data/experiments/gui_v2/`。

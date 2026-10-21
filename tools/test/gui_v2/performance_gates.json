@@ -1,0 +1,26 @@
+{
+  "frozen_before_sampling": "2026-10-21 P5; before test_performance.py execution",
+  "runs_per_condition": 5,
+  "warmup_seconds": 2,
+  "sample_seconds": 3,
+  "refresh_hz": 10,
+  "gpu_poll_ms": 500,
+  "physical_window": [1280, 850],
+  "one_core_cpu_increase_percentage_points_max": 5,
+  "private_bytes_increase_max": 201326592,
+  "private_bytes_absolute_max": 402653184,
+  "pet_cpu_increase_percentage_points_max": 2,
+  "pet_private_bytes_increase_max": 33554432,
+  "minimized_one_core_cpu_percent_max": 1,
+  "v2_frame_cpu_and_submit_p95_ms_max": 50,
+  "v2_message_to_submit_p95_ms_max": 250,
+  "toggle_gdi_handle_growth_max": 2,
+  "toggle_private_bytes_growth_max": 8388608,
+  "worker_throughput_ratio_min": 0.9,
+  "limits": [
+    "CPU is one logical core; private bytes are process committed private memory, not total system RAM",
+    "Frame timing ends at present submission, not physical display; response timing is an audit message, not measured physical input latency",
+    "Explicit Vulkan allocations exclude driver and swapchain residency; never call them total VRAM",
+    "Hardware IME, differing-DPI monitors, total GPU residency and controlled power/compute co-load require separate qualification"
+  ]
+}

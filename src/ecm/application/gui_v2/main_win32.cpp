@@ -4,7 +4,9 @@
 #include "ui/widgets.h"
 #include "app.h"
 #include "pet/window.h"
+#include "ui/scroll.h"
 #include <dwmapi.h>
+#include <commctrl.h>
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_vulkan.h"
@@ -30,6 +32,24 @@ unsigned audit_sequence = 0;
 bool audit_pointer = false;
 ImVec2 audit_position{};
 int audit_button = -1;
+ecmgui_v2::ui::SmoothScroll smooth_scroll;
+unsigned long long scroll_tick=0;
+void (*platform_create_window)(ImGuiViewport*)=nullptr;
+bool collect_wheel(UINT message,WPARAM w){
+    if(!ImGui::GetCurrentContext()||(message!=WM_MOUSEWHEEL&&message!=WM_MOUSEHWHEEL))return false;
+    const double delta=static_cast<short>(HIWORD(w))/double(WHEEL_DELTA);
+    smooth_scroll.add(message==WM_MOUSEHWHEEL?-delta:0,message==WM_MOUSEWHEEL?delta:0);return true;
+}
+LRESULT CALLBACK smooth_platform(HWND hwnd,UINT message,WPARAM w,LPARAM l,UINT_PTR id,DWORD_PTR){
+    if(collect_wheel(message,w))return 0;
+    if(message==WM_NCDESTROY)RemoveWindowSubclass(hwnd,smooth_platform,id);
+    return DefSubclassProc(hwnd,message,w,l);
+}
+void create_smooth_platform(ImGuiViewport* viewport){
+    platform_create_window(viewport);
+    const auto hwnd=static_cast<HWND>(viewport->PlatformHandleRaw?viewport->PlatformHandleRaw:viewport->PlatformHandle);
+    if(!SetWindowSubclass(hwnd,smooth_platform,1,0))throw std::runtime_error("Cannot attach viewport scroll handler");
+}
 struct Options {
     std::filesystem::path diagnostics = L"ecm_gui_v2.log";
     int frames = 0;
@@ -60,6 +80,7 @@ void console(const std::string& text) {
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), text.data(), static_cast<DWORD>(text.size()), &count, nullptr);
 }
 LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
+    if(collect_wheel(message,w))return 0;
     if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData &&
         ImGui_ImplWin32_WndProcHandler(hwnd, message, w, l)) return 1;
     switch (message) {
@@ -142,6 +163,8 @@ struct ImGuiSession {
             ImGui::DestroyContext();
             throw std::runtime_error("ImGui Win32 initialization failed");
         }
+        platform_create_window=ImGui::GetPlatformIO().Platform_CreateWindow;
+        ImGui::GetPlatformIO().Platform_CreateWindow=create_smooth_platform;
     }
     ~ImGuiSession() {
         if (ImGui::GetIO().BackendPlatformUserData) ImGui_ImplWin32_Shutdown();
@@ -224,6 +247,7 @@ int run(const Options& options, int show, FILE* log) {
         ImGui::GetIO().ConfigDpiScaleFonts = !show_components && state.ui_scale == 0;
         RECT client{}; GetClientRect(native.hwnd, &client);
         if (IsIconic(native.hwnd) || client.right <= 0 || client.bottom <= 0) {
+            smooth_scroll.cancel();
             MsgWaitForMultipleObjectsEx(0, nullptr, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             continue;
         }
@@ -253,6 +277,9 @@ int run(const Options& options, int show, FILE* log) {
             io.AddMousePosEvent(static_cast<float>(point.x), static_cast<float>(point.y));
             if (audit_button >= 0) { io.AddMouseButtonEvent(0, audit_button != 0); audit_button = -1; }
         }
+        const auto scroll_now=GetTickCount64();double wheel_x=0,wheel_y=0;
+        smooth_scroll.step(scroll_tick?(scroll_now-scroll_tick)/1000.:.016,wheel_x,wheel_y);scroll_tick=scroll_now;
+        if(wheel_x||wheel_y)ImGui::GetIO().AddMouseWheelEvent(static_cast<float>(wheel_x),static_cast<float>(wheel_y));
         ImGui::NewFrame();
         if (show_components) showcase.draw(pending, active, fonts, context.properties.deviceName);
         else app.draw(pending, active, fonts);
@@ -289,7 +316,8 @@ int run(const Options& options, int show, FILE* log) {
             ecmgui_v2::check_vk(options.failure == "surface-lost" ? VK_ERROR_SURFACE_LOST_KHR : VK_ERROR_DEVICE_LOST, "injected renderer failure");
         if (options.frames && frames >= static_cast<unsigned>(options.frames) && !limit_exit) { limit_exit = true; app.begin_exit(); }
         const auto elapsed = GetTickCount64() - started;
-        if (elapsed < 100) MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(100 - elapsed), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        const unsigned period=smooth_scroll.active()?16:100;
+        if (elapsed < period) MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(period - elapsed), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
     state.ui_theme = active.light ? "light" : "dark"; state.ui_language = fonts.chinese ? "zh" : "en";
     if (show_components) state.ui_scale = active.scale;

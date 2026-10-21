@@ -20,10 +20,14 @@ std::string executable_path(const std::string& input, const std::string& base) {
 App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log) {
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
         if (notices.size() == 32) notices.erase(notices.begin()); notices.push_back(notice);
-        if (!notice.text.empty()) status = notice.text;
+        if (!notice.text.empty()) {status = notice.text;toast(notice.text,notice.kind==ecmgui::WorkerNotice::Kind::Error);}
     });
 }
 App::~App() { shutdown_workers(); }
+void App::toast(const std::string& text,bool error) {
+    if(text.empty())return;
+    if(toasts.size()==4)toasts.pop_front();toasts.push_back({text,GetTickCount64()+4000,error});
+}
 void App::trace(const std::string& text) {
     if (messages.size() == 4000) messages.pop_front(); messages.push_back(text);
     std::fprintf(log_, "app: %s\n", text.c_str()); std::fflush(log_);
@@ -45,7 +49,8 @@ bool App::load_config(const std::string& input) {
         if (!candidate.load(path, error)) throw std::runtime_error(error);
         config = std::move(candidate); config_path = path; leases_.clear(); verified_.clear();
         std::snprintf(config_input, sizeof(config_input), "%s", path.c_str());
-        configure_workers(); ready = true; gen_valid = false; selected_results.clear();
+        configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};
+        ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
         status = "Workflow opened; worker control requires queue-owner protocol 1."; trace("config=" + path);
         return true;
@@ -55,6 +60,7 @@ void App::configure_workers() {
     auto settings = ecm_config::read_gui(ecm_config::section_entries(config.lines(), "gui"));
     ecmgui::WorkerSettings workers;
     workers.ini_path = config_path; workers.num_workers = std::clamp(settings.NumWorkers, 1, 1024);
+    if(state.worker_count>0)workers.num_workers=state.worker_count;
     const auto base = ecmgui::path_dir(config_path);
     auto first = state.worker_stage1_exe.empty() ? settings.exe : state.worker_stage1_exe;
     auto second = state.worker_stage2_exe.empty() ? settings.stage2_exe : state.worker_stage2_exe;
@@ -79,6 +85,7 @@ bool App::supports_owner(const std::string& path) {
 }
 bool App::start(int index) {
     if (!ready || controller.exit_phase() != ecmgui::WorkerController::ExitPhase::Idle) return false;
+    if (config.dirty()) { status="Save or reload workflow changes before starting workers."; return false; }
     try {
         for (const auto& worker : controller.workers()) if (worker.index == index) {
             if (worker.running()) return true;
@@ -89,12 +96,16 @@ bool App::start(int index) {
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
             if (!controller.start(index, true)) return false;
-            leases_[index] = std::move(lease); return true;
+            leases_[index] = std::move(lease); toast((state.ui_language=="zh"?"已启动 worker ":"Worker started: ")+std::to_string(index)); return true;
         }
     } catch (const std::exception& error) { status = error.what(); trace(status); }
     return false;
 }
 void App::tick() {
+    if (autostart_pending) {
+        autostart_pending = false;
+        for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);
+    }
     controller.tick();
     for (const auto& worker : controller.workers())
         if (!worker.running() && worker.state() != ecmgui::WorkerRunState::Restarting && worker.state() != ecmgui::WorkerRunState::Starting) leases_.erase(worker.index);
@@ -153,6 +164,8 @@ void App::begin_window(const char* name, bool* open, const ui::Settings& active)
 }
 void App::end_window() { ImGui::End(); ImGui::PopStyleVar(6); }
 void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Fonts& fonts) {
+    if(status!=last_status){last_status=status;toast(status);}
+    while(!toasts.empty()&&toasts.front().until<GetTickCount64())toasts.pop_front();
     const bool zh = fonts.chinese; const auto t = [zh](const char* en, const char* cn) { return zh ? cn : en; };
     if (ImGui::BeginMainMenuBar()) {
         ImGui::Text("ECM-ELF %s", version); ImGui::Separator();
@@ -201,6 +214,15 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         ImGui::SameLine(); if (ImGui::Button(t("Cancel", "取消"))) { controller.cancel_close(); ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
+    const auto viewport=ImGui::GetMainViewport();float toast_bottom=viewport->WorkPos.y+viewport->WorkSize.y-14*active.scale;
+    int toast_index=0;
+    for(auto it=toasts.rbegin();it!=toasts.rend();++it){
+        ImGui::SetNextWindowViewport(viewport->ID);ImGui::SetNextWindowPos({viewport->WorkPos.x+viewport->WorkSize.x-14*active.scale,toast_bottom},ImGuiCond_Always,{1,1});
+        ImGui::SetNextWindowSize({std::min(400*active.scale,viewport->WorkSize.x-28*active.scale),0});
+        ImGui::SetNextWindowBgAlpha(.96f);const auto name="Notice###v2.toast"+std::to_string(toast_index++);
+        ImGui::Begin(name.c_str(),nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoDocking|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing|ImGuiWindowFlags_NoNav|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::TextWrapped("%s",it->text.c_str());toast_bottom-=ImGui::GetWindowSize().y+8*active.scale;ImGui::End();
+    }
     if (state.ui_page == 5) {
         // Preferences are applied by the host at the next frame boundary.
         pending.light = state.ui_theme == "light"; pending.chinese = state.ui_language == "zh";
@@ -213,9 +235,13 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     if (!ready) return;
     if (ui::button("start-all", fonts.chinese ? "全部启动" : "Start all", ui::ButtonKind::Primary, p, active.scale))
         for (const auto& worker : controller.workers()) start(worker.index);
-    ImGui::SameLine(); if (ui::button("stop-all", fonts.chinese ? "安全停止" : "Stop safely", ui::ButtonKind::Secondary, p, active.scale)) controller.stop_all();
-    if (ImGui::BeginTable("workers", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollX)) {
-        for (const char* name : {"Worker", "State", "Stage", "Progress", "Action"}) ImGui::TableSetupColumn(name);
+    ImGui::SameLine(); if (ui::button("stop-all", fonts.chinese ? "安全停止" : "Stop safely", ui::ButtonKind::Secondary, p, active.scale)) {controller.stop_all();toast(fonts.chinese?"已请求安全停止，等待检查点边界":"Safe stop requested; waiting for checkpoint boundary");}
+    for (const auto& worker : controller.workers()) if (worker.p95.valid) {
+        const bool pending = worker.p95.level == ecmgui::P95Notice::Level::Pending;
+        ImGui::TextColored(pending ? ImVec4(1,.35f,.4f,1) : ImVec4(.8f,.65f,.35f,1), "Prime95 %s: %s %s", worker.name.c_str(),worker.p95.error.c_str(),worker.p95.note.c_str());
+    }
+    if (ImGui::BeginTable("workers", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable)) {
+        for (const char* name : {"Worker", "State", "Stage", "Task progress", "s/curve", "Done / hits", "Action"}) ImGui::TableSetupColumn(name,ImGuiTableColumnFlags_WidthFixed,100*active.scale);
         ImGui::TableHeadersRow();
         for (const auto& worker : controller.workers()) {
             ImGui::PushID(worker.index); ImGui::TableNextRow(); ImGui::TableNextColumn();
@@ -224,8 +250,10 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             ImGui::TableNextColumn(); ImGui::TextUnformatted(worker.stage2 ? "Stage 2" : "Stage 1");
             ImGui::TableNextColumn(); const auto progress = worker.stage2 ? worker.stage2_status.progress() : worker.progress;
             ImGui::ProgressBar(static_cast<float>(progress.valid ? progress.pct / 100 : 0), {-1, 0});
+            ImGui::TableNextColumn(); if (progress.valid) ImGui::Text("%.3f",progress.s_per_curve); else ImGui::TextUnformatted("--");
+            ImGui::TableNextColumn(); ImGui::Text("%lld / %lld",worker.tasks_done,worker.hits);
             ImGui::TableNextColumn();
-            if (worker.running()) { if (ImGui::SmallButton("Stop")) controller.request_stop(worker.index); }
+            if (worker.running()) { if (ImGui::SmallButton("Stop")) {controller.request_stop(worker.index);toast("Safe stop requested: "+worker.name);} }
             else if (ImGui::SmallButton("Start")) start(worker.index);
             ImGui::PopID();
         }
@@ -237,6 +265,15 @@ void App::draw_inspector(const ui::Fonts& fonts) {
     if (const auto worker = selected()) {
         ImGui::Text("%s / %s", worker->name.c_str(), ecmgui::state_name(worker->state()));
         ImGui::TextWrapped("%s", worker->task.c_str()); ImGui::Separator();
+        if (worker->stage2 && worker->stage2_status.valid) {
+            const auto& s=worker->stage2_status;
+            ImGui::Text("Task curves: %llu / %llu",s.done,s.total);
+            ImGui::Text("Phase: %s | batch %llu / %llu",s.phase.c_str(),s.batch,s.batches);
+            ImGui::Text("%s param=%d sigma=%llu",s.curve_model.c_str(),s.param,s.sigma);
+            ImGui::Text("B1=%llu B2=%llu",s.b1,s.b2);
+        }
+        if (!worker->hist_s_per_curve.empty()) ImGui::PlotLines("s/curve",worker->hist_s_per_curve.data(),static_cast<int>(worker->hist_s_per_curve.size()));
+        if (ImGui::Button("Open worker folder")) ecmgui::open_in_explorer(worker->working_dir);
         ImGui::TextWrapped("%s", worker->effective_config.c_str());
         ImGui::TextWrapped("Worker version: %s", worker->application_version.empty() ? "unknown" : worker->application_version.c_str());
         if (ImGui::Button("Copy command")) ImGui::SetClipboardText(worker->command_line().c_str());
@@ -256,6 +293,14 @@ void App::draw_logs(const ui::Fonts& fonts) {
     ImGui::PopFont(); ImGui::EndChild();
 }
 void App::draw_page(const ui::Settings& active, const ui::Fonts& fonts) {
-    draw_workers(active, fonts);
+    switch (state.ui_page) {
+    case 0: draw_workers(active, fonts); break;
+    case 1: draw_results(fonts.chinese); break;
+    case 2: draw_generator(fonts.chinese); break;
+    case 3: draw_probability(fonts.chinese); break;
+    case 4: draw_gpu(fonts.chinese); break;
+    case 5: draw_settings(fonts.chinese); break;
+    case 6: ui::state_strip(ui::palette(active.light),active.scale,fonts.chinese); break;
+    }
 }
 }

@@ -32,7 +32,7 @@ target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK 
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
 add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/vulkan_context.cpp render/vulkan_window.cpp
-    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp app.cpp ui_state.cpp pet/window.cpp)
+    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp app.cpp views/pages.cpp ui_state.cpp pet/window.cpp)
 include("${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 add_custom_target(ecm_gui_v2_config_check
     COMMAND ${CMAKE_COMMAND} "-DECM_GUI_V2_ROOT=${ECM_GUI_V2_ROOT}" -P "${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
@@ -45,7 +45,7 @@ target_compile_features(ecm_gui_v2_models PUBLIC cxx_std_17)
 target_compile_definitions(ecm_gui_v2_models PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ecm_gui_v2_models PRIVATE /W3 /utf-8 /EHsc)
 target_link_libraries(ecm_gui_v2_models PUBLIC user32 gdi32 comdlg32 shell32)
-target_link_libraries(ecm_gui_v2 PRIVATE ecm_gui_v2_backend ecm_gui_v2_models user32 gdi32 shell32 dwmapi ole32 gdiplus)
+target_link_libraries(ecm_gui_v2 PRIVATE ecm_gui_v2_backend ecm_gui_v2_models user32 gdi32 shell32 dwmapi ole32 gdiplus comctl32)
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/assets/pet_ely.png"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/assets"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ECM_GUI_V2_ROOT}/assets/gui_v2/pet_ely.png" "${CMAKE_BINARY_DIR}/assets/pet_ely.png"
@@ -66,3 +66,7 @@ target_compile_options(ecm_gui_v2_owner_probe PRIVATE /utf-8 /EHsc)
 add_executable(ecm_gui_v2_state_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/state_test.cpp" ui_state.cpp pet/window.cpp)
 target_link_libraries(ecm_gui_v2_state_test PRIVATE ecm_gui_v2_models gdiplus ole32)
 target_compile_options(ecm_gui_v2_state_test PRIVATE /utf-8 /EHsc /UNDEBUG)
+add_executable(ecm_gui_v2_app_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/app_test.cpp"
+    app.cpp views/pages.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp)
+target_link_libraries(ecm_gui_v2_app_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
+target_compile_options(ecm_gui_v2_app_test PRIVATE /utf-8 /EHsc /UNDEBUG)

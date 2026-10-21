@@ -2249,6 +2249,19 @@
         ],
         "minimum": 0,
         "maximum": 16384
+      },
+      {
+        "table": "worker",
+        "key": "count",
+        "field": "worker_count",
+        "type": "int",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 64,
+        "description": [
+          "Number of v2 workers; 0 follows the workflow GUI worker count. Does not modify legacy preferences.",
+          "v2 worker 数量；0 跟随工作流中的数量，不改写旧版偏好。"
+        ]
       }
     ]
   }
