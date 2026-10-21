@@ -1,6 +1,6 @@
 # 独立 GUI v2：ImGui / Vulkan 现代化规划草稿
 
-状态：P0–P4 已完成（已列出资格限制），P5 实施中，P6 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
+状态：P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 实施中。日期：2026-10-22。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -30,6 +30,14 @@
 - P4 交互补充：结果状态/阶段及概率范围/曲线预设改为点击标签。主窗口和原生浮动窗滚轮短暂 16ms 刷新并指数平滑，距离守恒，结束恢复 100ms；无额外动画线程。Toast 不抢焦点，启动、安全停止及其他操作状态可见。滚轮积分/有限收敛测试通过；真实桌面触控板体验仍需人工体验验收。
 - P4 概率修正：旧页面 16 明确是 torsion-only 基线，不能当完整 Edwards D_eff；旧页保持原样。v2 增加 Edwards 经验/相对归一/自定义预设；现有 B1=256、15–25 bit 数据的 Z2xZ8 经验值 26.408122，Edwards/Suyama 相对收益归一到 GMP exp(3.134) 基线为 29.015242。[依据与口径证据](../../data/experiments/gui_v2/p4_probability_01/result.json)。后者仅联合模型启发值，未经独立 Stage2 标定；不把挠群阶 16 或四舍五入 30 写成普适精确常量。论文依据：[ECM using Edwards curves](https://eprint.iacr.org/2008/016.pdf)，经验方法沿用仓库 `tools/ecm_prob/README.md`。
 - P5 采样前门限冻结：`tools/test/gui_v2/performance_gates.json` 指定每条件五次、预热 2s/采样 3s、10Hz/500ms、1280×850；单核 CPU 增量≤5pp，private 增量≤192MiB且≤384MiB，宠物额外 CPU≤2pp/内存≤32MiB，最小化 CPU≤1%，帧 CPU/提交 P95≤50ms，消息到提交 P95≤250ms，重复开关 GDI 增量≤2/内存≤8MiB，计算吞吐比≥0.9。尚未完成全部测量；任何未实测项不能记为通过。
+- P5：待验收，v2 里程碑 0.47.5。本机功能、互斥、计算及资源回归已执行，仍有一项未稳定通过的最小化 CPU 门禁，不将其改判为通过，不放宽冻结门限。
+- P5 功能：[未修改旧版合同与新版合同](../../data/experiments/gui_v2/p5_regression_02/result.json)、[实际 Stage1/Stage2 入口及两版启动顺序](../../data/experiments/gui_v2/p5_consumers_02/result.json)、[标签/原生滚轮/实际启动停止与 Toast](../../data/experiments/gui_v2/p5_interaction_02/result.json)、[多窗口/宠物/状态恢复](../../data/experiments/gui_v2/p5_shell_01/result.json)、[宿主故障回归](../../data/experiments/gui_v2/p5_host_01/result.json)均通过。最终候选 exe SHA256 `ea147acc0aaafccc81130ec70342eb0dbd0fae77308a4be5864808f11131c6b2`；API 验证错误/警告 0。
+- P5 真实计算：固定 M991 / B1=10000 / B2=0 / 8 曲线 / Montgomery PARAM0 / sigma 起点10，同一个更新 worker 在旧版和新版各跑五次；十次因子、曲线和 sigma 完全相同。worker 报告 GPU 区间中位数旧 982.059ms、新 1001.390ms，相对吞吐 0.9807≥0.9，见 [证据](../../data/experiments/gui_v2/p5_real_01/result.json)。计时排除前端启动，不等于完整 ECM 吞吐；现场外部 GPU 负载、功耗未控制。初始 Stage1 包装器在成功链接后收集无关目标对象失败，原失败日志保留；实际两个入口独立构建及二进制行为已验证，未把包装器失败记为成功。
+- P5 性能诊断：首轮七条件×五对、70 次采样暴露动画 PNG 重复裁切/缩放、结果每帧重建万行集合和长 fence 等待。按 mood/DPI 缓存缩放帧、按输入/文件变化缓存结果筛选；主 fence 非阻塞轮询，继续处理 Controller。原始失败 `p5_performance_01` 留存。[第二轮完整证据](../../data/experiments/gui_v2/p5_performance_02/result.json)仍保留失败标记；同样 70 次采样，长 Result 单核 CPU 中位数从9.375%降到2.083%，动画从6.735%降到2.604%；最坏条件帧 CPU/提交 P95 从456.568ms降到13.332ms，消息到提交 P95=16ms。与前轮比较均为同机短样本、不同二进制/时间，不能扩大成一般性能保证。帧计时与进程 CPU 边界分开；第二轮帧样本从明确的2s预热终点采集。
+- P5 资源：第二轮旧版空闲 private 中位数 96,227,328 bytes，新版 219,045,888；新版万行结果245,907,456，均通过增量≤192MiB/绝对≤384MiB门限。新版字体/CJK和布局成本高于旧版，不宣称 Vulkan 更省内存。显式 Vulkan 分配只计本进程 VkDeviceMemory，不是总显存。宠物五次预热后二十次开关 GDI=13→13、private 增加225280 bytes，退出显式 Vulkan 分配归零，见 [资源证据](../../data/experiments/gui_v2/p5_resources_01/result.json)。
+- P5 剩余门禁：第二轮最小化单核 CPU 中位数1.031%略高于1%。[五次启用/五次关闭NVML的线程拆分](../../data/experiments/gui_v2/p5_minimized_diagnosis_01/result.json)中，主线程中位数均0；辅助线程出现0–1.56%的短窗口波动，关闭NVML也有波动，不能单独归因NVML。3s计时每个15.625ms CPU量化约0.52pp；聚焦复测中位数较低不覆盖原失败。需要更长区间及驱动线程剖析确认，保留500ms采样合同。总显存、物理输入到显示延迟、受控功耗与独立干净机器仍未获得资格。
+- P5 侧车回归修复：新增字段导致重复 [worker] 的失败被严格往返测试捕获；生成器按表分组，重启明确拒绝忽略状态的假通过。schema 源统一LF，生成哈希匹配 Git checkout。未修改旧模型或旧测试期待。
+- P6：实施中，准备独立 GUI-only 候选包及中文路径、无 SDK/无开发层、资源/许可和重新定位验证。P5 未过门禁会随候选说明保留，不把候选包当完全合格发布。
 - 草稿与 HTML 由 `tools/gen/render_gui_v2_plan.py` 同步，原始证据保留在忽略目录。各阶段独立提交 `[0.47.z]`。
 
 ## 1. 分析边界与基线
@@ -341,7 +349,7 @@ v1/v2 使用不同 exe、构建目录、UI 状态、布局版本和资源位置�
 
 ## 8. 当前范围与待验证事项
 
-P0–P4 已接通并保留分阶段证据，P5 验收与 P6 独立分发准备继续推进。当前功能和运行条件见 [GUI v2](../usage/GUI_V2.md)。
+P0–P4 已接通并保留证据，P5 本机回归及性能修复已执行但仍有待验门禁；P6 独立分发准备继续推进。当前功能和运行条件见 [GUI v2](../usage/GUI_V2.md)。
 
 TODO：不同物理 DPI/真实 IME，触控板真实体验，多窗口闪烁主观资格，用户选择渲染设备，可选随包字体，长结果与计算并行的完整性能、总显存/受控功耗，以及独立干净机器验证。两块同为 144 DPI 的跨屏测试不替代这些条件。Edwards 联合模型相对归一预设尚无直接 Stage2 标定。
 

@@ -23,10 +23,10 @@ struct UiValues {
     bool window_maximized = false;
     std::string worker_stage1_exe = "";
     std::string worker_stage2_exe = "";
+    int worker_count = 0;
     bool pet_enabled = false;
     bool pet_animate = true;
     float pet_left = 72.0f;
-    int worker_count = 0;
 };
 template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("state","schema",value.state_schema);
@@ -47,10 +47,10 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("window","maximized",value.window_maximized);
     field("worker","stage1_exe",value.worker_stage1_exe);
     field("worker","stage2_exe",value.worker_stage2_exe);
+    field("worker","count",value.worker_count);
     field("pet","enabled",value.pet_enabled);
     field("pet","animate",value.pet_animate);
     field("pet","left",value.pet_left);
-    field("worker","count",value.worker_count);
 }
 inline void validate_ui(const UiValues& v) {
     if (v.state_schema < 1 || v.state_schema > 1) throw std::runtime_error("Invalid UI state: state.schema");
@@ -66,7 +66,7 @@ inline void validate_ui(const UiValues& v) {
     if (v.window_height < 360 || v.window_height > 16384) throw std::runtime_error("Invalid UI state: window.height");
     if (v.worker_stage1_exe.size() > 4096) throw std::runtime_error("Invalid UI state: worker.stage1_exe");
     if (v.worker_stage2_exe.size() > 4096) throw std::runtime_error("Invalid UI state: worker.stage2_exe");
-    if (v.pet_left < 0 || v.pet_left > 16384 || !std::isfinite(v.pet_left)) throw std::runtime_error("Invalid UI state: pet.left");
     if (v.worker_count < 0 || v.worker_count > 64) throw std::runtime_error("Invalid UI state: worker.count");
+    if (v.pet_left < 0 || v.pet_left > 16384 || !std::isfinite(v.pet_left)) throw std::runtime_error("Invalid UI state: pet.left");
 }
 }

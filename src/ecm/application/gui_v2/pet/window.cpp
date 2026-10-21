@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace ecmgui_v2::pet {
 Placement place(RECT main, RECT work, float scale, float left) {
@@ -39,7 +40,7 @@ void Window::clear_bitmap() {
 }
 void Window::close() {
     if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
-    clear_bitmap(); atlas_.reset(); frame_ = row_ = -1;
+    clear_bitmap(); atlas_.reset(); cached_frames_.clear();cached_frames_.shrink_to_fit();cached_rows_.fill(false);cache_width_=cache_height_=0;frame_ = row_ = -1;
 }
 Window::~Window() {
     close(); UnregisterClassW(L"ecm_gui_v2_pet", GetModuleHandleW(nullptr));
@@ -55,10 +56,22 @@ void Window::paint(const Placement& spot, int row, int frame) {
         if (!dc_ || !bitmap_) throw std::runtime_error("Cannot allocate pet surface");
         previous_ = static_cast<HBITMAP>(SelectObject(dc_, bitmap_));
     }
-    Gdiplus::Bitmap target(spot.width, spot.height, spot.width * 4, PixelFormat32bppPARGB, reinterpret_cast<BYTE*>(pixels_));
-    Gdiplus::Graphics graphics(&target); graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-    graphics.Clear(Gdiplus::Color(0, 0, 0, 0)); graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-    if (graphics.DrawImage(atlas_.get(), Gdiplus::Rect(0, 0, spot.width, spot.height), frame * 224, row * 248, 224, 248, Gdiplus::UnitPixel) != Gdiplus::Ok) throw std::runtime_error("Cannot draw pet atlas");
+    const auto count=static_cast<size_t>(spot.width)*spot.height;
+    if(cache_width_!=spot.width||cache_height_!=spot.height){
+        cached_frames_.assign(count*56,0);
+        cached_rows_.fill(false);cache_width_=spot.width;cache_height_=spot.height;
+    }
+    if(!cached_rows_[row]){
+        for(int index=0;index<8;++index){
+            auto* pixels=cached_frames_.data()+count*(row*8+index);
+            Gdiplus::Bitmap target(spot.width,spot.height,spot.width*4,PixelFormat32bppPARGB,reinterpret_cast<BYTE*>(pixels));
+            Gdiplus::Graphics graphics(&target);graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+            graphics.Clear(Gdiplus::Color(0,0,0,0));graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            if(graphics.DrawImage(atlas_.get(),Gdiplus::Rect(0,0,spot.width,spot.height),index*224,row*248,224,248,Gdiplus::UnitPixel)!=Gdiplus::Ok)throw std::runtime_error("Cannot cache pet atlas");
+        }
+        cached_rows_[row]=true;
+    }
+    std::memcpy(pixels_,cached_frames_.data()+count*(row*8+frame),count*sizeof(unsigned));
     POINT destination{spot.x, spot.y}, origin{}; SIZE size{spot.width, spot.height};
     BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
     if (!UpdateLayeredWindow(hwnd_, nullptr, &destination, &size, dc_, &origin, 0, &blend, ULW_ALPHA)) throw std::runtime_error("Cannot composite pet window");

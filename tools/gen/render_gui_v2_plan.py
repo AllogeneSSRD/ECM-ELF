@@ -73,7 +73,8 @@ assert len(phases) == 7
 progress = text.split('## 实施进度', 1)[1].split('## 1.', 1)[0].strip() if '## 实施进度' in text else '尚未开始实施。'
 status = re.search(r'^状态：([^。]+)', text, re.M).group(1)
 for phase in phases:
-    phase['state'] = '已完成' if re.search(r'^- ' + phase['id'] + r'：已完成', progress, re.M) else '待实施'
+    found = re.search(r'^- ' + phase['id'] + r'：(已完成|待验收|实施中)', progress, re.M)
+    phase['state'] = found[1] if found else '待实施'
 
 phase_buttons = ''.join(f'<button class="phase-button" data-phase="{i}" data-state="{p["state"]}" aria-pressed="{str(i==0).lower()}"><span>{p["id"]} · {p["state"]}</span>{html.escape(p["title"])}</button>' for i,p in enumerate(phases))
 page = r'''<!doctype html>

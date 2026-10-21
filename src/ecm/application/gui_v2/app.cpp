@@ -49,7 +49,7 @@ bool App::load_config(const std::string& input) {
         if (!candidate.load(path, error)) throw std::runtime_error(error);
         config = std::move(candidate); config_path = path; leases_.clear(); verified_.clear();
         std::snprintf(config_input, sizeof(config_input), "%s", path.c_str());
-        configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};
+        configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};result_view_dirty=true;
         ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
         status = "Workflow opened; worker control requires queue-owner protocol 1."; trace("config=" + path);
@@ -112,6 +112,7 @@ void App::tick() {
     const auto now = GetTickCount64();
     if (state.ui_page == 1 && now - last_results >= 500) {
         last_results = now; if (results.refresh()) {
+            result_view_dirty=true;
             std::set<std::string> present; for (const auto& row : results.rows()) present.insert(row.id);
             for (auto it = selected_results.begin(); it != selected_results.end();) if (!present.count(*it)) it = selected_results.erase(it); else ++it;
         }
@@ -235,7 +236,9 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     if (!ready) return;
     if (ui::button("start-all", fonts.chinese ? "全部启动" : "Start all", ui::ButtonKind::Primary, p, active.scale))
         for (const auto& worker : controller.workers()) start(worker.index);
+    start_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
     ImGui::SameLine(); if (ui::button("stop-all", fonts.chinese ? "安全停止" : "Stop safely", ui::ButtonKind::Secondary, p, active.scale)) {controller.stop_all();toast(fonts.chinese?"已请求安全停止，等待检查点边界":"Safe stop requested; waiting for checkpoint boundary");}
+    stop_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
     for (const auto& worker : controller.workers()) if (worker.p95.valid) {
         const bool pending = worker.p95.level == ecmgui::P95Notice::Level::Pending;
         ImGui::TextColored(pending ? ImVec4(1,.35f,.4f,1) : ImVec4(.8f,.65f,.35f,1), "Prime95 %s: %s %s", worker.name.c_str(),worker.p95.error.c_str(),worker.p95.note.c_str());

@@ -12,6 +12,9 @@ def products():
     full_schema = json.loads(SCHEMA.read_text(encoding='utf-8'))
     schema = full_schema['gui_v2_sidecar']
     fields = schema['fields']
+    # A TOML table may only be emitted once, even after fields are appended to the schema.
+    tables = list(dict.fromkeys(field['table'] for field in fields))
+    fields = [field for table in tables for field in fields if field['table'] == table]
     types = {'string': 'std::string', 'int': 'int', 'float': 'float', 'bool': 'bool'}
     lines = ['// Generated; edit config/ecm_options.json, not this file.', '#pragma once', '#include <string>', '#include <cmath>', '#include <stdexcept>',
              'namespace ecmgui_v2 {', 'struct UiValues {']

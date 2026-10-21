@@ -34,6 +34,7 @@ ImVec2 audit_position{};
 int audit_button = -1;
 ecmgui_v2::ui::SmoothScroll smooth_scroll;
 unsigned long long scroll_tick=0;
+unsigned performance_sequence=0;
 void (*platform_create_window)(ImGuiViewport*)=nullptr;
 bool collect_wheel(UINT message,WPARAM w){
     if(!ImGui::GetCurrentContext()||(message!=WM_MOUSEWHEEL&&message!=WM_MOUSEHWHEEL))return false;
@@ -60,6 +61,7 @@ struct Options {
     bool explicit_scale = false;
     bool explicit_theme = false, explicit_language = false;
     bool showcase = false, no_nvml = false, detach_probe = false, audit_app = false;
+    bool performance = false;
     std::string config;
     std::filesystem::path ui_state;
     int start_worker = 0;
@@ -95,6 +97,7 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
             if (w == 7 && l >= 0 && l <= 6) current_app->state.ui_page = static_cast<int>(l);
             if (w == 8 && l >= -1 && l <= 6) current_app->pet_test_mood = static_cast<int>(l);
             if (w == 9) current_app->state.pet_enabled = l != 0;
+            if (w == 10) performance_sequence=static_cast<unsigned>(l);
         }
         return 0;
     case WM_APP + 33:
@@ -192,7 +195,7 @@ int run(const Options& options, int show, FILE* log) {
     ecmgui_v2::ui::Fonts fonts;
     ecmgui_v2::VulkanContext context;
     context.initialize(native.hwnd, options.validation, options.no_loader, log);
-    ecmgui_v2::MemoryAudit memory(options.audit_ui);
+    ecmgui_v2::MemoryAudit memory(options.audit_ui||options.performance);
     ecmgui_v2::VulkanWindow renderer(context, log);
     auto pending = options.settings;
     if (!options.explicit_theme) pending.light = state.ui_theme == "light";
@@ -214,7 +217,7 @@ int run(const Options& options, int show, FILE* log) {
     try { const auto layout = state.layout(); if (!layout.empty() && !show_components) ImGui::LoadIniSettingsFromMemory(layout.data(), layout.size()); }
     catch (const std::exception& error) { app.trace(error.what()); app.reset_layout = true; }
     if (options.start_worker > 0) app.start(options.start_worker);
-    if (options.audit_ui) audit_settings = &pending;
+    if (options.audit_ui||options.audit_app) audit_settings = &pending;
     unsigned sampled_sequence = 0, sample_frames = 0;
     ShowWindow(native.hwnd, state.window_maximized && show != SW_HIDE ? SW_SHOWMAXIMIZED : show);
     unsigned frames = 0;
@@ -268,8 +271,9 @@ int run(const Options& options, int show, FILE* log) {
             MsgWaitForMultipleObjectsEx(0, nullptr, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             continue;
         }
+        LARGE_INTEGER draw_begin{},frequency{};if(options.performance){QueryPerformanceCounter(&draw_begin);QueryPerformanceFrequency(&frequency);}
         ImGui_ImplVulkan_NewFrame(); ImGui_ImplWin32_NewFrame();
-        if (options.audit_ui && audit_pointer) {
+        if ((options.audit_ui||options.audit_app) && audit_pointer) {
             auto& io = ImGui::GetIO();
             io.AddFocusEvent(true);
             io.AddMouseViewportEvent(ImGui::GetMainViewport()->ID);
@@ -284,11 +288,24 @@ int run(const Options& options, int show, FILE* log) {
         if (show_components) showcase.draw(pending, active, fonts, context.properties.deviceName);
         else app.draw(pending, active, fonts);
         ImGui::Render();
-        if (renderer.render(ImGui::GetDrawData())) {
+        LARGE_INTEGER ui_end{};if(options.performance)QueryPerformanceCounter(&ui_end);
+        const bool submitted=renderer.render(ImGui::GetDrawData());
+        if (submitted) {
             ++frames;
             if (frames == 1 || frames % 20 == 0) { std::fprintf(log, "frame: %u\n", frames); std::fflush(log); }
         }
         ImGui::UpdatePlatformWindows(); ImGui::RenderPlatformWindowsDefault();
+        if(options.audit_app&&!options.performance){
+            const auto point=[&](ImVec2 v){POINT p{static_cast<LONG>(v.x),static_cast<LONG>(v.y)};ScreenToClient(native.hwnd,&p);return p;};
+            const auto f=point(app.result_chips[1]),nf=point(app.result_chips[2]),wheel=point(app.result_wheel),start=point(app.start_control),stop=point(app.stop_control);
+            std::fprintf(log,"interaction_sample: page=%d visible=%zu scroll=%.3f toasts=%zu f=%ld,%ld nf=%ld,%ld wheel=%ld,%ld start=%ld,%ld stop=%ld,%ld\n",state.ui_page,app.result_indices.size(),app.result_scroll,app.toasts.size(),f.x,f.y,nf.x,nf.y,wheel.x,wheel.y,start.x,start.y,stop.x,stop.y);std::fflush(log);
+        }
+        if(options.performance){
+            LARGE_INTEGER draw_end{};QueryPerformanceCounter(&draw_end);
+            std::fprintf(log,"frame_sample: ms=%.4f gpu_bytes=%llu allocations=%zu gdi=%lu ui_ms=%.4f render_ms=%.4f submitted=%d\n",1000.*(draw_end.QuadPart-draw_begin.QuadPart)/frequency.QuadPart,static_cast<unsigned long long>(memory.bytes()),memory.allocations(),GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS),1000.*(ui_end.QuadPart-draw_begin.QuadPart)/frequency.QuadPart,1000.*(draw_end.QuadPart-ui_end.QuadPart)/frequency.QuadPart,submitted);
+            if(performance_sequence&&submitted){std::fprintf(log,"response_sample: seq=%u ticks=%llu\n",performance_sequence,GetTickCount64());performance_sequence=0;}
+            std::fflush(log);
+        }
         if (frames && frames % 20 == 0 && options.audit_app) {
             std::fprintf(log, "app_snapshot: frames=%u running=%d page=%d viewports=%d close=%d config_dirty=%d probe_dpi=%.2f probe_font=%.2f probe_padding=%.2f\n", frames, app.running_count(), state.ui_page, ImGui::GetPlatformIO().Viewports.Size, static_cast<int>(app.controller.exit_phase()), app.config.dirty(),app.probe_dpi,app.probe_font,app.probe_padding);
             std::fflush(log);
@@ -330,7 +347,7 @@ int run(const Options& options, int show, FILE* log) {
     current_app = nullptr; audit_app = false;
     renderer.shutdown();
     audit_settings = nullptr;
-    if (options.audit_ui) {
+    if (options.audit_ui||options.performance) {
         std::fprintf(log, "memory_audit_end: bytes=%llu allocations=%zu\n", static_cast<unsigned long long>(memory.bytes()), memory.allocations());
         if (memory.allocations()) throw std::runtime_error("Vulkan allocation audit found unreleased GUI memory");
     }
@@ -358,6 +375,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show) {
             else if (argument == L"--no-nvml") options.no_nvml = true;
             else if (argument == L"--detach-probe") options.detach_probe = true;
             else if (argument == L"--audit-app") options.audit_app = true;
+            else if (argument == L"--audit-performance") {options.performance=true;options.audit_app=true;}
             else if (argument == L"--pet") options.pet = 1;
             else if (argument == L"--no-pet") options.pet = 0;
             else if (argument == L"--pet-static") options.pet_static = true;

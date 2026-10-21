@@ -107,6 +107,7 @@ def main():
     restart=out/'restart.log'
     run=subprocess.run([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(restart),'--frames','10','--no-nvml','--validation'],cwd=out,env=env,startupinfo=startup,timeout=20)
     assert run.returncode==0 and 'pet: mood=' not in restart.read_text(encoding='utf-8')  # hidden host defers pet work
+    assert 'UI state ignored' not in restart.read_text(encoding='utf-8') and 'duplicate UI table' not in restart.read_text(encoding='utf-8')
     assert hashlib.sha256(config.read_bytes()).hexdigest()==before
     result=dict(passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),business_unchanged=True,viewport_survives_main_resize=True,
                 viewport_close_recreate=True,pet_owned_layered_noactivate=True,pet_minimize_restore=True,pet_moods=7,

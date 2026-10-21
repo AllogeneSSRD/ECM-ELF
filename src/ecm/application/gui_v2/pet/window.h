@@ -4,6 +4,8 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include <memory>
+#include <vector>
+#include <array>
 
 namespace ecmgui_v2::pet {
 enum class Mood { Calm, Working, Waiting, Error, Done, Doze, Wink };
@@ -25,6 +27,9 @@ private:
     HDC dc_ = nullptr;
     HBITMAP bitmap_ = nullptr, previous_ = nullptr;
     unsigned* pixels_ = nullptr;
+    std::vector<unsigned> cached_frames_;
+    int cache_width_=0,cache_height_=0;
+    std::array<bool,7> cached_rows_{};
     Placement previous_place_{};
     bool dragging_ = false, moved_ = false;
     POINT drag_start_{};

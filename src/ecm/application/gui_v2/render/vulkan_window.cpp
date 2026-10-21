@@ -145,7 +145,8 @@ void VulkanWindow::rebuild(uint32_t width, uint32_t height) {
 bool VulkanWindow::render(ImDrawData* draw) {
     if (needs_rebuild || !swapchain_) return false;
     auto& c = context_;
-    auto result = vkWaitForFences(c.device, 1, &fence_, VK_TRUE, 1000000000);
+    auto result = vkWaitForFences(c.device, 1, &fence_, VK_TRUE, 0);
+    if(result==VK_TIMEOUT)return false; // Keep Controller/input alive while an external GPU workload runs.
     check_vk(result, "wait for frame fence");
     uint32_t index = 0;
     result = vkAcquireNextImageKHR(c.device, swapchain_, 10000000, acquired_, VK_NULL_HANDLE, &index);

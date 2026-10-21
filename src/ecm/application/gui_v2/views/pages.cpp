@@ -18,7 +18,7 @@ bool same_stamp(const ecmgui::FileStamp& a,const ecmgui::FileStamp& b) {
     return a.exists==b.exists && a.size==b.size && a.mtime==b.mtime && a.hash==b.hash;
 }
 void number(const char* label,long long& value) { ImGui::InputScalar(label,ImGuiDataType_S64,&value); }
-bool chips(const char* id,int& value,const std::vector<const char*>& labels){
+bool chips(const char* id,int& value,const std::vector<const char*>& labels,ImVec2* centers=nullptr){
     bool changed=false;ImGui::PushID(id);int index=0;
     for(const auto label:labels){
         const auto width=ImGui::CalcTextSize(label).x+ImGui::GetStyle().FramePadding.x*2;
@@ -26,6 +26,7 @@ bool chips(const char* id,int& value,const std::vector<const char*>& labels){
         const bool selected=value==index;
         if(selected)ImGui::PushStyleColor(ImGuiCol_Button,ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
         if(ImGui::Button(label)){value=index;changed=true;}
+        if(centers)centers[index]=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
         if(selected)ImGui::PopStyleColor();
         ++index;
     }ImGui::PopID();return changed;
@@ -35,7 +36,7 @@ void App::draw_results(bool zh) {
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
     ImGui::TextUnformatted(tr(zh,"Published results","已发布结果"));
     const char* statuses[]{"All","F","NF"}; int status_index=result_filter.status=="F"?1:result_filter.status=="NF"?2:0;
-    if (chips("result-status",status_index,{tr(zh,"All statuses","全部状态"),"F","NF"})) result_filter.status=status_index?statuses[status_index]:"";
+    if (chips("result-status",status_index,{tr(zh,"All statuses","全部状态"),"F","NF"},result_chips)) result_filter.status=status_index?statuses[status_index]:"";
     chips("result-stage",result_filter.stage,{tr(zh,"All stages","全部阶段"),"Stage 1","Stage 2"});
     ImGui::InputText(tr(zh,"Search","搜索"),result_search,sizeof(result_search)); result_filter.search=result_search;
     if (ImGui::BeginCombo(tr(zh,"Source","来源"),result_filter.source<0?"All":results.files()[static_cast<size_t>(result_filter.source)].path.c_str())) {
@@ -43,9 +44,14 @@ void App::draw_results(bool zh) {
         for(size_t i=0;i<results.files().size();++i) if(ImGui::Selectable(results.files()[i].path.c_str(),result_filter.source==static_cast<int>(i))) result_filter.source=static_cast<int>(i);
         ImGui::EndCombo();
     }
-    const auto indices=results.filtered(result_filter);
-    std::set<std::string> visible; for(auto i:indices)visible.insert(results.rows()[i].id);
-    for(auto it=selected_results.begin();it!=selected_results.end();) if(!visible.count(*it))it=selected_results.erase(it);else ++it;
+    const auto signature=result_filter.status+'\n'+std::to_string(result_filter.stage)+'\n'+std::to_string(result_filter.source)+'\n'+result_filter.search;
+    if(result_view_dirty||signature!=result_view_signature){
+        result_indices=results.filtered(result_filter);visible_result_ids.clear();
+        for(auto i:result_indices)visible_result_ids.insert(results.rows()[i].id);
+        for(auto it=selected_results.begin();it!=selected_results.end();)if(!visible_result_ids.count(*it))it=selected_results.erase(it);else ++it;
+        result_view_dirty=false;result_view_signature=signature;
+    }
+    const auto& indices=result_indices;const auto& visible=visible_result_ids;
     if(ImGui::Button(tr(zh,"Select visible","选择可见行"))) selected_results=visible;
     ImGui::SameLine(); if(ImGui::Button(tr(zh,"Clear selection","清除选择")))selected_results.clear();
     ImGui::SameLine(); if(ImGui::Button(tr(zh,"Copy original JSON / checksum","复制原始 JSON / checksum"))) {
@@ -56,6 +62,7 @@ void App::draw_results(bool zh) {
     for(const auto& f:results.files()) if(!f.error.empty()||f.invalid_lines||f.pending_lines)
         ImGui::TextWrapped("%s: %s | invalid %zu | pending %zu",f.path.c_str(),f.error.c_str(),f.invalid_lines,f.pending_lines);
     if(ImGui::BeginTable("results",11,ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable,ImVec2(0,ImGui::GetContentRegionAvail().y))) {
+        result_scroll=ImGui::GetScrollY();result_wheel=ImVec2(ImGui::GetWindowPos().x+80,ImGui::GetWindowPos().y+ImGui::GetWindowSize().y*.6f);
         for(const char* title:{"Select","Status","Target","B1","B2","Curves","Model","Time","Factors","Stage","Source"}) ImGui::TableSetupColumn(title,ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableSetupScrollFreeze(2,1);ImGui::TableHeadersRow(); ImGuiListClipper clip;clip.Begin(static_cast<int>(indices.size()));
         while(clip.Step())for(int j=clip.DisplayStart;j<clip.DisplayEnd;++j) {

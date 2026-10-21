@@ -47,6 +47,12 @@ public:
     unsigned long long last_results = 0;
     ecmgui::ResultFilter result_filter;
     std::set<std::string> selected_results;
+    std::vector<size_t> result_indices;
+    std::set<std::string> visible_result_ids;
+    std::string result_view_signature;
+    bool result_view_dirty=true;
+    ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
+    float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};
     ecmgui::GenOptions gen_options;
     ecmgui::GpuProfile gen_gpu;

@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
   const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
   const errors = [];
   const completed = Number(process.argv[3] || 4);
+  const states = process.argv[4] ? process.argv[4].split(',') : Array.from({length:7},(_,i)=>i<completed?'已完成':'待实施');
   page.on('pageerror', error => errors.push(String(error)));
   try {
     await page.goto(pathToFileURL(path.join(root, 'docs/web/gui-v2-vulkan-plan-20261021.html')).href);
@@ -20,7 +21,7 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('[data-state="已完成"]').count(), completed);
     for (let i = 0; i < 7; ++i) {
       await page.locator(`[data-phase="${i}"]`).click();
-      assert.match(await page.locator('#phase-index').innerText(), new RegExp(`P${i} · ${i < completed ? '已完成' : '待实施'}`));
+      assert.match(await page.locator('#phase-index').innerText(), new RegExp(`P${i} · ${states[i]}`));
       assert.ok((await page.locator('#phase-gate').innerText()).length > 30);
     }
     await page.locator('#theme-toggle').click();

@@ -29,6 +29,14 @@ int main(int argc, char** argv) {
             if (WaitForSingleObject(stop,30000) != WAIT_OBJECT_0) return 5;
             out("Checkpoint saved: v2 GUI stop event\n"); return 1;
         }
+        if(arg_value("--scenario")=="v2-performance"){
+            HANDLE stop=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage1-stop-handle").c_str(),nullptr,10)));
+            out("START: ECMSTAGE1=1,2,127,-1,100,1\n");
+            const int count=std::atoi(arg_value("--lines","4000").c_str());
+            for(int i=0;i<count;++i)out("Checkpoint: isolated performance fixture %d\n",i);
+            if(WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
+            out("Checkpoint saved: v2 performance stop\n");return 1;
+        }
         return fixture_main(argc, argv);
     } catch (const std::exception& error) { std::fprintf(stderr, "FATAL: %s\n", error.what()); return 23; }
 }
