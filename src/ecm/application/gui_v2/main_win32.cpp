@@ -359,6 +359,17 @@ int run(const Options& options, int show, FILE* log) {
             for(int i=0;i<3;++i){const auto pos=point(app.exit_controls[i]);std::fprintf(log," exit%d=%ld,%ld",i,pos.x,pos.y);}
             for(int i=0;i<3;++i){const auto pos=point(app.title_controls[i]);std::fprintf(log," chrome%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");std::fflush(log);
             if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);const auto batch=ecmgui_v2::ui::stage2_batch(worker->stage2_status,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s | batch=%s | remaining=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str(),batch.label.c_str(),batch.remaining.c_str());}
+            std::fprintf(log,"gpu_settings: seconds=%d",state.ui_gpu_history_seconds);
+            for(int i=0;i<4;++i){const auto pos=point(app.gpu_range_controls[i]);std::fprintf(log," range%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");
+            for(const auto& device:app.gpu.devices()){
+                const auto found=app.gpu_presentations.find(device.index);if(found==app.gpu_presentations.end())continue;
+                const auto& display=found->second;const auto details=app.gpu_details.get(device.index);const auto pos=point(display.header);
+                std::fprintf(log,"gpu_detail: index=%d ready=%d driver=%s cuda=%d major=%d minor=%d sms=%d cores=%d charts=%zu hovered=%d header=%ld,%ld\n",device.index,app.gpu_details.ready(),details.driver.c_str(),details.cuda_version,details.major,details.minor,details.sm_count,device.cores,display.charts,display.hovered,pos.x,pos.y);
+                const auto one_line=[](std::string text){std::replace(text.begin(),text.end(),'\n','\t');return text;};
+                std::fprintf(log,"gpu_text: index=%d tooltip=%s\n",device.index,one_line(display.tooltip).c_str());
+                std::fprintf(log,"gpu_text: index=%d basic=%s\n",device.index,one_line(display.basic).c_str());
+                std::fprintf(log,"gpu_text: index=%d usage=%s | power=%s | clocks=%s\n",device.index,display.usage.c_str(),display.power.c_str(),display.clocks.c_str());
+            }
         }
         if(options.performance){
             LARGE_INTEGER draw_end{};QueryPerformanceCounter(&draw_end);

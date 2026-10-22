@@ -50,7 +50,10 @@ void App::trace(const std::string& text) {
 void App::initialize(const std::string& path, bool disable_nvml) {
     no_nvml = disable_nvml;
     if (!path.empty()) load_config(path); else status = "Open a workflow TOML to manage workers.";
-    if (!no_nvml && !gpu.start(500)) trace("GPU monitor unavailable: " + gpu.reason());
+    if (!no_nvml) {
+        if(!gpu.start(500))trace("GPU monitor unavailable: " + gpu.reason());
+        else gpu_details.start(gpu.nvml_source(),gpu.devices());
+    }
 }
 bool App::load_config(const std::string& input) {
     if (controller.busy()) { status = "Stop all workers before changing workflow."; return false; }

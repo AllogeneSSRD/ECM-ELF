@@ -201,41 +201,56 @@ void App::draw_probability(bool zh) {
         ImGui::PopID();}
 }
 void App::draw_gpu(bool zh) {
+    gpu_presentations.clear();
     if(!gpu.available()){ImGui::TextWrapped("%s",no_nvml?tr(zh,"Monitoring disabled","监控已禁用"):gpu.reason().c_str());return;}
     for(const auto& device:gpu.devices()) {
         ImGui::PushID(device.index);
+        auto& display=gpu_presentations[device.index];
         const auto title="#"+std::to_string(device.index)+"  "+device.name;
         const bool expanded=ImGui::CollapsingHeader(title.c_str(),ImGuiTreeNodeFlags_DefaultOpen);
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nNVML / 500 ms",device.name.c_str());
+        display.header={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+        const auto details=gpu_details.get(device.index);
+        const auto known=[](int n){return n>0?std::to_string(n):std::string("--");};
+        const auto capability=details.major>=0?std::to_string(details.major)+"."+std::to_string(details.minor):std::string("--");
+        const auto cuda=details.cuda_version>0?std::to_string(details.cuda_version/1000)+"."+std::to_string((details.cuda_version%1000)/10):std::string("--");
+        display.tooltip=device.name+"\n"+tr(zh,"Driver ","驱动 ")+(details.driver.empty()?"--":details.driver)+" | "+tr(zh,"CUDA (driver) ","CUDA（驱动支持） ")+cuda+
+            "\nSM "+capability+" | "+tr(zh,"SM count ","SM 数量 ")+known(details.sm_count)+" | "+tr(zh,"CUDA cores ","CUDA 核心数 ")+known(device.cores)+
+            "\n"+tr(zh,"VRAM ","显存 ")+known(static_cast<int>(device.mem_total_mb))+" MiB\nNVML / 500 ms";
+        display.hovered=ImGui::IsItemHovered();
+        if(display.hovered)ImGui::SetTooltip("%s",display.tooltip.c_str());
         if(!expanded){ImGui::PopID();continue;}
         const auto history=gpu.history(device.index);
         if(history.empty()||!history.back().valid){ImGui::TextUnformatted(tr(zh,"Unknown sample","采样未知"));ImGui::PopID();continue;}
         const auto& sample=history.back();const double occupied=ui::memory_occupancy(sample.mem_used_mb,device.mem_total_mb);
-        ImGui::TextWrapped("GPU %d%%  |  %.1f/%.0f W  |  %d °C",sample.util_gpu,sample.power_w,sample.power_limit_w,sample.temp_c);
-        char memory[80];if(std::isfinite(occupied))std::snprintf(memory,sizeof(memory),"%u/%u MiB (%.1f%%)",sample.mem_used_mb,device.mem_total_mb,occupied);else std::snprintf(memory,sizeof(memory),"--");
-        ImGui::TextWrapped(tr(zh,"Core %u / VRAM %u MHz  |  %s","核心 %u / 显存 %u MHz  |  %s"),sample.clock_sm_mhz,sample.clock_mem_mhz,memory);
+        char basic[256];std::snprintf(basic,sizeof(basic),"GPU %d%%  |  %.1f / %.0f W  |  %d °C",sample.util_gpu,sample.power_w,sample.power_limit_w,sample.temp_c);
+        display.basic=basic;ImGui::TextWrapped("%s",basic);
+        char memory[80];if(std::isfinite(occupied))std::snprintf(memory,sizeof(memory),"%u / %u MiB (%.1f%%)",sample.mem_used_mb,device.mem_total_mb,occupied);else std::snprintf(memory,sizeof(memory),"--");
+        std::snprintf(basic,sizeof(basic),tr(zh,"Core %u MHz  |  Memory %u MHz  |  %s","核心 %u MHz  |  显存 %u MHz  |  %s"),sample.clock_sm_mhz,sample.clock_mem_mhz,memory);
+        display.basic+='\n';display.basic+=basic;ImGui::TextWrapped("%s",basic);
         const auto throttle=ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons);if(!throttle.empty())ImGui::TextWrapped("%s",throttle.c_str());
-        int window=ImGui::GetStateStorage()->GetInt(ImGui::GetID("history-seconds"),2);
-        if(chips("history",window,{"15 s","30 s","60 s","120 s"}))ImGui::GetStateStorage()->SetInt(ImGui::GetID("history-seconds"),window);
-        const int seconds[]{15,30,60,120};const auto color=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
+        const int seconds=state.ui_gpu_history_seconds;const auto color=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
         std::vector<ui::ChartSeries> usage{{tr(zh,"GPU load","GPU 利用率"),color.stage1,{}},{tr(zh,"Memory occupied","显存占用"),color.stage2,{}}};
         std::vector<ui::ChartSeries> power{{tr(zh,"Power","功耗"),color.warning,{}}};
         std::vector<ui::ChartSeries> clocks{{tr(zh,"Core frequency","核心频率"),color.stage1,{}},{tr(zh,"Memory frequency","显存频率"),color.stage2,{}}};
-        for(const auto& v:history){const double x=(static_cast<double>(v.ts_ms)-static_cast<double>(sample.ts_ms))/1000.;if(x < -seconds[window])continue;
+        for(const auto& v:history){const double x=(static_cast<double>(v.ts_ms)-static_cast<double>(sample.ts_ms))/1000.;if(x < -seconds)continue;
             const double missing=std::numeric_limits<double>::quiet_NaN();usage[0].points.push_back({x,v.valid?double(v.util_gpu):missing});usage[1].points.push_back({x,v.valid?ui::memory_occupancy(v.mem_used_mb,device.mem_total_mb):missing});power[0].points.push_back({x,v.valid?v.power_w:missing});
             clocks[0].points.push_back({x,v.valid?double(v.clock_sm_mhz):missing});clocks[1].points.push_back({x,v.valid?double(v.clock_mem_mhz):missing});}
-        ui::ChartFormat format{true,true,"%.1f s","%.0f%%",-double(seconds[window]),0};
+        ui::ChartFormat format{true,true,"%.1f s","%.0f%%",-double(seconds),0};
         format.show_y_ticks=false;format.show_axis_titles=false;
         format.legend_controls=false;char corner[192];
-        if(std::isfinite(occupied))std::snprintf(corner,sizeof(corner),tr(zh,"%d%% / %.1f%%  |  max 100%%","%d%% / %.1f%%  |  上限 100%%"),sample.util_gpu,occupied);
-        else std::snprintf(corner,sizeof(corner),tr(zh,"%d%% / --  |  max 100%%","%d%% / --  |  上限 100%%"),sample.util_gpu);
+        if(std::isfinite(occupied))std::snprintf(corner,sizeof(corner),"GPU %d%% / 100%%  |  VRAM %.1f%% / 100%%",sample.util_gpu,occupied);
+        else std::snprintf(corner,sizeof(corner),"GPU %d%% / 100%%  |  VRAM -- / 100%%",sample.util_gpu);
+        display.usage=corner;
         format.corner_text=corner;
-        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,96,format);
+        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,96,format);++display.charts;
         format.percent_y=false;format.y_format="%.1f W";
-        if(sample.power_limit_w>0)std::snprintf(corner,sizeof(corner),tr(zh,"%.1f W  |  limit %.0f W","%.1f W  |  上限 %.0f W"),sample.power_w,sample.power_limit_w);
-        else std::snprintf(corner,sizeof(corner),tr(zh,"%.1f W  |  limit --","%.1f W  |  上限 --"),sample.power_w);
-        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,96,format);
-        if(ImGui::CollapsingHeader(tr(zh,"Frequency history","频率趋势"))){format.y_format="%.0f MHz";std::snprintf(corner,sizeof(corner),"%u / %u MHz",sample.clock_sm_mhz,sample.clock_mem_mhz);ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,96,format);}
+        if(sample.power_limit_w>0)std::snprintf(corner,sizeof(corner),"%.1f / %.0f W",sample.power_w,sample.power_limit_w);
+        else std::snprintf(corner,sizeof(corner),"%.1f / -- W",sample.power_w);
+        display.power=corner;
+        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,96,format);++display.charts;
+        format.y_format="%.0f MHz";std::snprintf(corner,sizeof(corner),tr(zh,"Core %u MHz  |  Memory %u MHz","核心 %u MHz  |  显存 %u MHz"),sample.clock_sm_mhz,sample.clock_mem_mhz);
+        display.clocks=corner;
+        ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,96,format);++display.charts;
         ImGui::PopID();
     }
 }
@@ -280,6 +295,10 @@ void App::draw_settings(bool zh) {
     const auto default_size=UiValues{}.ui_font_size;const auto default_label=std::string(tr(zh,"Default ","默认 "))+std::to_string(default_size);
     ImGui::SameLine();if(ImGui::SmallButton(default_label.c_str()))state.ui_font_size=default_size;
     ImGui::TextDisabled("%s",tr(zh,"Font size uses logical pixels; monitor DPI still applies.","字号使用逻辑像素，仍按显示器 DPI 缩放。"));
+    ImGui::TextUnformatted(tr(zh,"GPU chart time range","GPU 图表时间范围"));
+    const int gpu_seconds[]{15,30,60,120};int gpu_range=0;
+    for(int i=0;i<4;++i)if(state.ui_gpu_history_seconds==gpu_seconds[i])gpu_range=i;
+    if(chips("gpu-history",gpu_range,{"15 s","30 s","60 s","120 s"},gpu_range_controls))state.ui_gpu_history_seconds=gpu_seconds[gpu_range];
     ImGui::Checkbox(tr(zh,"Smooth scrolling","平滑滚动"),&state.ui_smooth_scroll);
     ImGui::Checkbox(tr(zh,"Allow panels outside the main window (restart)","允许面板移到应用窗口外（重启生效）"),&state.ui_external_windows);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"By default panels dock and float inside the main window. Enable this to create independent windows across monitors.","默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。"));

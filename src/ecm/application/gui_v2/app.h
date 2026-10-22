@@ -1,5 +1,6 @@
 #pragma once
 #include "ui_state.h"
+#include "gpu_details.h"
 #include "ui/widgets.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
@@ -42,6 +43,15 @@ public:
     ecmgui::WorkerController controller;
     ecmgui::ResultStore results;
     ecmgui::GpuMonitor gpu;
+    GpuDetailsCache gpu_details;
+    ImVec2 gpu_range_controls[4]{};
+    struct GpuPresentation {
+        ImVec2 header{};
+        size_t charts=0;
+        bool hovered=false;
+        std::string tooltip,basic,usage,power,clocks;
+    };
+    std::map<int,GpuPresentation> gpu_presentations;
     std::string status, config_path;
     std::deque<std::string> messages;
     std::vector<ecmgui::WorkerNotice> notices;

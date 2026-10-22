@@ -2063,6 +2063,23 @@
       },
       {
         "table": "ui",
+        "key": "gpu_history_seconds",
+        "field": "ui_gpu_history_seconds",
+        "type": "int",
+        "default": 60,
+        "description": [
+          "GPU chart time span in seconds, shared by all devices and persisted with UI preferences. Does not change the 500 ms sampling interval.",
+          "GPU 图表时间范围（秒），所有设备共用并随界面偏好保存；不改变 500 ms 采样间隔。"
+        ],
+        "values": [
+          15,
+          30,
+          60,
+          120
+        ]
+      },
+      {
+        "table": "ui",
         "key": "page",
         "field": "ui_page",
         "type": "int",
@@ -2280,7 +2297,12 @@
         "field": "pet_skin",
         "type": "string",
         "default": "classic",
-        "values": ["classic", "miss_pink_elf", "herrscher_of_human_ego", "hi_love_elf"],
+        "values": [
+          "classic",
+          "miss_pink_elf",
+          "herrscher_of_human_ego",
+          "hi_love_elf"
+        ],
         "description": [
           "ELY appearance. Switches immediately; official battlesuit names are preserved in the selector.",
           "ELY 外观，即时切换；选择项使用装甲的完整英文名称。"

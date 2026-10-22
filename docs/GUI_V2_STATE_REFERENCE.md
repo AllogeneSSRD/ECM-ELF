@@ -37,6 +37,13 @@ Zero selects window DPI; positive values select a fixed interface scale.
 Body and log font size in logical pixels, independently of interface DPI scale. Other font roles preserve their ratios.
 正文与日志字号（逻辑像素），独立于界面 DPI 比例；其他字体角色保持相对比例。
 
+## ui.gpu_history_seconds
+
+默认值：`60`；类型：`int`。
+
+GPU chart time span in seconds, shared by all devices and persisted with UI preferences. Does not change the 500 ms sampling interval.
+GPU 图表时间范围（秒），所有设备共用并随界面偏好保存；不改变 500 ms 采样间隔。
+
 ## ui.page
 
 默认值：`0`；类型：`int`。
