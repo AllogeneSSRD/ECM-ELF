@@ -57,6 +57,14 @@ public:
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 settings_search_control{};
     ImVec2 pet_skin_controls[4]{};
+    std::map<int,ImVec2> worker_select_controls,worker_action_controls,log_tab_controls;
+    ImVec2 log_raw_control{},log_follow_control{},title_drag_min{},title_drag_max{},title_controls[3]{};
+    int log_active_worker=-1;
+    bool log_current_raw=false,log_current_follow=true;
+    float log_scroll=0;
+    std::vector<std::pair<ImVec2,ImVec2>> worker_summary_rects;
+    float log_line_pitch=0,log_font_height=0,log_view_height=0;
+    size_t log_speed_samples=0;
     int settings_matches=0;
     float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};
@@ -96,6 +104,9 @@ private:
     std::map<std::string,std::filesystem::file_time_type> verified_;
     bool layout_ready_ = false, layout_wide_ = false;
     bool focus_right_ = true;
+    struct LogView {bool raw=false,follow=true,jump=true,speed=false;};
+    std::map<int,LogView> log_views_;
+    int log_last_worker_=-1;
     int drawn_center_page_=-1,drawn_right_page_=-1;
     std::map<std::string,float> window_dpi_;
     void begin_window(const char* name, bool* open, const ui::Settings& active);

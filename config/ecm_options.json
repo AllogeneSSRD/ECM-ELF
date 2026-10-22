@@ -2184,6 +2184,17 @@
       },
       {
         "table": "window",
+        "key": "title_bar",
+        "field": "window_title_bar",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Show the system title bar. Hidden mode retains drag, resize and window controls.",
+          "显示系统标题栏；隐藏后保留拖动、缩放和窗口控制按钮。"
+        ]
+      },
+      {
+        "table": "window",
         "key": "maximized",
         "field": "window_maximized",
         "type": "bool",

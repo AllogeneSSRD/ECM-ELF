@@ -44,6 +44,25 @@ int main(int argc, char** argv) {
             if(!std::filesystem::exists(marker))return 5;
             out("===== queue done, 1 task(s) processed =====\n");return 0;
         }
+        if(arg_value("--scenario")=="v2-presentation"){
+            out("ECM-ELF 0.49.1 (Stage1 fixture)\n");
+            out("START: ECMSTAGE1=1,2,%d,-1,100,1,\"1234567\"\n",worker==1?127:5237);
+            Sleep(500);
+            for(double speed:{1.75,2.25,1.85,2.10,1.95,2.0}){out("stage1: [====> ] 25.0%%  25/100 (~%.2f s/curve) elapsed 50.0s ETA 150.0s\n",speed);Sleep(300);}
+            for(int i=0;i<80;++i){out("Checkpoint saved: worker=%d event=%d\n",worker,i);out("RAW ONLY worker=%d sample=%d\n",worker,i);}
+            HANDLE stop=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage1-stop-handle").c_str(),nullptr,10)));
+            if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
+            out("Checkpoint saved: presentation stop worker=%d\n",worker);return 1;
+        }
+        if(arg_value("--scenario")=="v2-presentation-stage2"){
+            out("ECM-ELF 0.49.1 (Stage2 fixture)\n");
+            out("START: ECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");
+            out("stage2_plan: save=ed_m137.save requested=10 available=10 completed=2 B2=40000 D=210\n");
+            out("curve_start: 3/10 record=3 sigma=17 B1=20 checksum=verified curve_model=ed\n");
+            out("real_shape: B1=260000000 B2=1300000000000 S_bits=4283 D=1381380 P=126720\n");
+            out("stage2_phase: Giant points previous=0 elapsed=4\n");
+            out("batched_progress: batch=2/8 t=4 left=12\n");Sleep(300);return 0;
+        }
         return fixture_main(argc, argv);
     } catch (const std::exception& error) { std::fprintf(stderr, "FATAL: %s\n", error.what()); return 23; }
 }

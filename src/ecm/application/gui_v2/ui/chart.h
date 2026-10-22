@@ -16,6 +16,8 @@ struct ChartFormat {
     const char* y_format="%.6g";
     double xmin=std::numeric_limits<double>::quiet_NaN(),xmax=std::numeric_limits<double>::quiet_NaN();
     bool show_y_ticks=true,show_axis_titles=true;
+    bool legend_controls=true;
+    const char* corner_text=nullptr;
 };
 inline double integer_step(double range,int ticks){
     const double wanted=std::max(1.,range/std::max(1,ticks));
@@ -41,20 +43,32 @@ inline int chart_nearest(const std::vector<ChartPoint>& points,double x) {
 inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xlabel,const char* ylabel,bool zh,double ymax=0,float logical_height=180,ChartFormat format={}) {
     ImGui::PushID(id); const float scale=ImGui::GetFontSize()/15.f;
     const float legend_right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x;
-    for(size_t i=0;i<series.size();++i){auto& s=series[i];ImGui::PushID(static_cast<int>(i));
+    for(size_t i=0;format.legend_controls&&i<series.size();++i){auto& s=series[i];ImGui::PushID(static_cast<int>(i));
         const float legend_width=ImGui::CalcTextSize(s.label).x+ImGui::GetFontSize()+ImGui::GetStyle().FramePadding.y*2+ImGui::GetStyle().ItemInnerSpacing.x;
         if(i&&ImGui::GetItemRectMax().x+legend_width+ImGui::GetStyle().ItemSpacing.x<legend_right)ImGui::SameLine();
         const auto key=ImGui::GetID("visible");s.visible=ImGui::GetStateStorage()->GetBool(key,true);
         ImGui::PushStyleColor(ImGuiCol_Text,s.color);if(ImGui::Checkbox(s.label,&s.visible))ImGui::GetStateStorage()->SetBool(key,s.visible);ImGui::PopStyleColor();ImGui::PopID();}
+    if(!format.legend_controls)for(auto& s:series)s.visible=true;
     auto bounds=chart_bounds(series,ymax);
     if(std::isfinite(format.xmin)&&std::isfinite(format.xmax)&&format.xmin<format.xmax){bounds.xmin=format.xmin;bounds.xmax=format.xmax;}
     const auto origin=ImGui::GetCursorScreenPos();
-    const ImVec2 size{std::max(140.f*scale,ImGui::GetContentRegionAvail().x),logical_height*scale};
+    const float width=std::max(140.f*scale,ImGui::GetContentRegionAvail().x);
+    float legend_width=0;for(const auto& s:series)legend_width+=ImGui::CalcTextSize(s.label).x+22*scale;
+    const bool split_header=!format.legend_controls&&format.corner_text&&legend_width+ImGui::CalcTextSize(format.corner_text).x+24*scale>width;
+    const float extra=split_header?ImGui::GetTextLineHeight()+4*scale:0;
+    const ImVec2 size{width,logical_height*scale+extra};
     ImGui::InvisibleButton("plot",size);const bool hovered=ImGui::IsItemHovered();auto* draw=ImGui::GetWindowDrawList();
     const auto p=palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
-    const ImVec2 lo{origin.x+(format.show_y_ticks?48:10)*scale,origin.y+12*scale},hi{origin.x+size.x-12*scale,origin.y+size.y-(format.show_axis_titles?38:22)*scale};
+    const float header=format.legend_controls?0:ImGui::GetTextLineHeight()+8*scale+extra;
+    const ImVec2 lo{origin.x+(format.show_y_ticks?48:10)*scale,origin.y+12*scale+header},hi{origin.x+size.x-12*scale,origin.y+size.y-(format.show_axis_titles?38:22)*scale};
     draw->PushClipRect(origin,{origin.x+size.x,origin.y+size.y},true);
     draw->AddRectFilled(origin,{origin.x+size.x,origin.y+size.y},ImGui::GetColorU32(p.sunken),6*scale);
+    if(!format.legend_controls){
+        float x=origin.x+12*scale;const float y=origin.y+7*scale;
+        for(const auto& s:series){draw->AddLine({x,y+ImGui::GetFontSize()*.5f},{x+9*scale,y+ImGui::GetFontSize()*.5f},ImGui::GetColorU32(s.color),2*scale);x+=14*scale;
+            draw->AddText({x,y},ImGui::GetColorU32(s.color),s.label);x+=ImGui::CalcTextSize(s.label).x+8*scale;}
+        if(format.corner_text)draw->AddText({std::max(origin.x+12*scale,origin.x+width-12*scale-ImGui::CalcTextSize(format.corner_text).x),y+(split_header?ImGui::GetTextLineHeight()+4*scale:0)},ImGui::GetColorU32(p.fg),format.corner_text);
+    }
     const auto point=[&](double x,double y){return ImVec2{lo.x+static_cast<float>((x-bounds.xmin)/(bounds.xmax-bounds.xmin))*(hi.x-lo.x),hi.y-static_cast<float>((y-bounds.ymin)/(bounds.ymax-bounds.ymin))*(hi.y-lo.y)};};
     char label[64];
     for(int i=0;i<=4;++i){double y=bounds.ymax*i/4.;auto pos=point(bounds.xmin,y);
@@ -73,6 +87,8 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
         const auto ap=point(a.x,a.y),bp=point(b.x,b.y);auto fill=s.color;fill.w=.09f;
         draw->AddQuadFilled(ap,bp,{bp.x,hi.y},{ap.x,hi.y},ImGui::GetColorU32(fill));draw->AddLine(ap,bp,ImGui::GetColorU32(s.color),2*scale);
     }
+    for(const auto& s:series)if(s.visible&&s.points.size()==1&&std::isfinite(s.points[0].x)&&std::isfinite(s.points[0].y))
+        draw->AddCircleFilled(point(s.points[0].x,s.points[0].y),3*scale,ImGui::GetColorU32(s.color));
     draw->PopClipRect();
     if(format.show_axis_titles){
         draw->AddText({lo.x,origin.y+size.y-17*scale},ImGui::GetColorU32(p.muted),xlabel);

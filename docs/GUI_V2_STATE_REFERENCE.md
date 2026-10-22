@@ -149,6 +149,13 @@ Restored window width in physical pixels.
 Restored window height in physical pixels.
 恢复窗口的物理像素高度。
 
+## window.title_bar
+
+默认值：`true`；类型：`bool`。
+
+Show the system title bar. Hidden mode retains drag, resize and window controls.
+显示系统标题栏；隐藏后保留拖动、缩放和窗口控制按钮。
+
 ## window.maximized
 
 默认值：`false`；类型：`bool`。

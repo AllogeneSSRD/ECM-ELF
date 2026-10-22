@@ -226,10 +226,16 @@ void App::draw_gpu(bool zh) {
             clocks[0].points.push_back({x,v.valid?double(v.clock_sm_mhz):missing});clocks[1].points.push_back({x,v.valid?double(v.clock_mem_mhz):missing});}
         ui::ChartFormat format{true,true,"%.1f s","%.0f%%",-double(seconds[window]),0};
         format.show_y_ticks=false;format.show_axis_titles=false;
+        format.legend_controls=false;char corner[192];
+        if(std::isfinite(occupied))std::snprintf(corner,sizeof(corner),tr(zh,"%d%% / %.1f%%  |  max 100%%","%d%% / %.1f%%  |  上限 100%%"),sample.util_gpu,occupied);
+        else std::snprintf(corner,sizeof(corner),tr(zh,"%d%% / --  |  max 100%%","%d%% / --  |  上限 100%%"),sample.util_gpu);
+        format.corner_text=corner;
         ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,96,format);
         format.percent_y=false;format.y_format="%.1f W";
+        if(sample.power_limit_w>0)std::snprintf(corner,sizeof(corner),tr(zh,"%.1f W  |  limit %.0f W","%.1f W  |  上限 %.0f W"),sample.power_w,sample.power_limit_w);
+        else std::snprintf(corner,sizeof(corner),tr(zh,"%.1f W  |  limit --","%.1f W  |  上限 --"),sample.power_w);
         ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,96,format);
-        if(ImGui::CollapsingHeader(tr(zh,"Frequency history","频率趋势"))){format.y_format="%.0f MHz";ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,96,format);}
+        if(ImGui::CollapsingHeader(tr(zh,"Frequency history","频率趋势"))){format.y_format="%.0f MHz";std::snprintf(corner,sizeof(corner),"%u / %u MHz",sample.clock_sm_mhz,sample.clock_mem_mhz);ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,96,format);}
         ImGui::PopID();
     }
 }
@@ -271,6 +277,8 @@ void App::draw_settings(bool zh) {
     ImGui::Checkbox(tr(zh,"Smooth scrolling","平滑滚动"),&state.ui_smooth_scroll);
     ImGui::Checkbox(tr(zh,"Allow panels outside the main window (restart)","允许面板移到应用窗口外（重启生效）"),&state.ui_external_windows);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"By default panels dock and float inside the main window. Enable this to create independent windows across monitors.","默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。"));
+    ImGui::Checkbox(tr(zh,"Show system title bar","显示系统标题栏"),&state.window_title_bar);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"When hidden, drag the empty top bar; window controls and resizing remain available.","隐藏后可拖动顶部空白区域，仍可缩放并使用最小化、最大化和关闭按钮。"));
     ImGui::Checkbox(tr(zh,"Action toasts (errors always shown)","操作轻提示（错误仍显示）"),&state.ui_toasts);
     ImGui::Checkbox(tr(zh,"Ely pet","Ely 宠物"),&state.pet_enabled);ImGui::Checkbox(tr(zh,"Animate pet","宠物动画"),&state.pet_animate);
     ImGui::TextUnformatted(tr(zh,"ELY skin","ELY 皮肤"));

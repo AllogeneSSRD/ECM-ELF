@@ -9,10 +9,33 @@
 #include "../../../src/ecm/application/gui_v2/ui/chart.h"
 #include "../../../src/ecm/application/gui_v2/ui/i18n.h"
 #include "../../../src/ecm/application/gui_v2/ui/presentation.h"
+#include "../../../src/ecm/application/gui_v2/ui/worker_presentation.h"
+#include "../../../src/ecm/application/gui_v2/ui/log_presentation.h"
 namespace fs=std::filesystem;
 static void write(const fs::path& p,const std::string& text){std::ofstream f(p,std::ios::binary);f<<text;assert(f.good());}
 static std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
 int main(int argc,char** argv){
+    {ecmgui::WorkerView worker;worker.resume_pct=23.8;
+     auto display=ecmgui_v2::ui::worker_progress(worker,false);assert(display.label=="23.8% (resumed)"&&display.eta=="--"&&display.fraction>.237f&&display.fraction<.239f);
+     worker.progress.valid=true;worker.progress.pct=50;worker.progress.curves_done=5;worker.progress.curves_total=10;worker.progress.s_per_curve=2;worker.progress.eta_s=65;
+     display=ecmgui_v2::ui::worker_progress(worker,false);assert(display.label=="5 / 10  (50.0%)"&&display.speed=="2.00"&&display.eta=="65 s"&&display.eta_detail=="65 s (1 m 5 s)");
+     using ecmgui_v2::ui::eta_text;
+     assert(eta_text(3599.8,true)=="3600 s (1 h 0 m 0 s)");
+     assert(eta_text(90061,true)=="90061 s (1 d 1 h 1 m 1 s)");
+     assert(eta_text(-1)=="--"&&eta_text(std::numeric_limits<double>::infinity())=="--");
+     worker.stage2=true;worker.stage2_status.valid=true;worker.stage2_status.total=10;worker.stage2_status.done=2;
+     worker.stage2_status.current=3;worker.stage2_status.sigma=17;worker.stage2_status.curve_model="ed";
+     display=ecmgui_v2::ui::worker_progress(worker,false);assert(display.label=="2 / 10  (20.0%)"&&display.speed=="--"&&display.eta=="--");
+     const auto phase=ecmgui_v2::ui::worker_phase(worker,false);assert(phase.find("sigma=17")!=std::string::npos&&phase.find("param=")==std::string::npos);
+     assert(ecmgui_v2::ui::worker_shape(worker)=="B1=--  B2=--  S=-- bits  D=--  P=--");
+     worker.stage2_status.b1=260000000;worker.stage2_status.b2=1300000000000ULL;worker.stage2_status.bits=4283;worker.stage2_status.d=1381380;worker.stage2_status.p=126720;
+     assert(ecmgui_v2::ui::worker_shape(worker)=="B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720");
+     using ecmgui_v2::ui::log_tone;using ecmgui_v2::ui::LogTone;
+     assert(log_tone(ecmgui::parse_line("[2026-10-22 12:00:00] Checkpoint saved: test"))==LogTone::Info);
+     assert(log_tone(ecmgui::parse_line("stage2_phase: Giant points elapsed=4"))==LogTone::Stage2);
+     assert(log_tone(ecmgui::parse_line("FATAL: test"))==LogTone::Error);
+     assert(log_tone(ecmgui::parse_line("WARNING: test"))==LogTone::Warning);
+     assert(log_tone(ecmgui::parse_line("factor[0]=123"))==LogTone::Success);}
     int mask=0,center=0,right=4;
     for(int i=0;i<6;++i)assert(ecmgui_v2::ui::move_page(mask,center,right,i,true));
     assert(mask==63&&center==6&&!ecmgui_v2::ui::move_page(mask,center,right,6,true));

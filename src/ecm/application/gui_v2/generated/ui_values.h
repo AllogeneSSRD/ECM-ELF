@@ -26,6 +26,7 @@ struct UiValues {
     int window_y = (-2147483647 - 1);
     int window_width = 1280;
     int window_height = 850;
+    bool window_title_bar = true;
     bool window_maximized = false;
     std::string worker_stage1_exe = "";
     std::string worker_stage2_exe = "";
@@ -57,6 +58,7 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("window","y",value.window_y);
     field("window","width",value.window_width);
     field("window","height",value.window_height);
+    field("window","title_bar",value.window_title_bar);
     field("window","maximized",value.window_maximized);
     field("worker","stage1_exe",value.worker_stage1_exe);
     field("worker","stage2_exe",value.worker_stage2_exe);

@@ -55,7 +55,7 @@ def main():
                      'assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt',
                      'tools/gen/generate_gui_v2_pet_skins.py','tools/gen/render_ely_skins_preview.py',
                      'tools/test/gui_v2/test_pet_skins.py','tools/test/gui_v2/test_skin_assets.cjs',
-                     'tools/test/gui_v2/test_skin_preview.cjs','tools/test/gui_v2/test_startup_dispatch.py','docs/web/ely-skins-20261022.html',
+                     'tools/test/gui_v2/test_skin_preview.cjs','tools/test/gui_v2/test_startup_dispatch.py','tools/test/gui_v2/test_presentation.py','docs/web/ely-skins-20261022.html',
                      'docs/development/ELY_SKINS_DRAFT.md'])
     source_dir=package/'source';source_dir.mkdir();source_archive=source_dir/f'ECM-ELF-GUI-v2-{version}-source.zip'
     with zipfile.ZipFile(source_archive,'w',zipfile.ZIP_DEFLATED) as archive:

@@ -5,6 +5,7 @@
 #include "pet/window.h"
 #include "generated/pet_skins.h"
 #include "ui/scroll.h"
+#include "ui/worker_presentation.h"
 #include <dwmapi.h>
 #include <commctrl.h>
 #include "imgui.h"
@@ -91,6 +92,16 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
     if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData &&
         ImGui_ImplWin32_WndProcHandler(hwnd, message, w, l)) return 1;
     switch (message) {
+    case WM_NCHITTEST: {
+        const auto hit=DefWindowProcW(hwnd,message,w,l);
+        if(hit==HTCLIENT&&current_app&&!current_app->state.window_title_bar){
+            POINT p{static_cast<short>(LOWORD(l)),static_cast<short>(HIWORD(l))};
+            if(!(ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable))ScreenToClient(hwnd,&p);
+            const auto lo=current_app->title_drag_min,hi=current_app->title_drag_max;
+            if(p.x>=lo.x&&p.x<hi.x&&p.y>=lo.y&&p.y<hi.y)return HTCAPTION;
+        }
+        return hit;
+    }
     case WM_APP + 34:
         if (current_app && audit_app) {
             if (w == 1) current_app->start(static_cast<int>(l));
@@ -156,9 +167,16 @@ struct NativeWindow {
         for (char value : std::string(ecmgui_v2::version)) title += static_cast<wchar_t>(value);
         RECT rect{state.window_x, state.window_y, state.window_x + state.window_width, state.window_y + state.window_height};
         const bool visible = state.window_x != INT_MIN && state.window_y != INT_MIN && MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
-        hwnd = CreateWindowExW(0, wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
+        hwnd = CreateWindowExW(0, wc.lpszClassName, title.c_str(),state.window_title_bar?WS_OVERLAPPEDWINDOW:WS_OVERLAPPEDWINDOW&~WS_CAPTION,
             visible ? state.window_x : CW_USEDEFAULT, visible ? state.window_y : CW_USEDEFAULT, state.window_width, state.window_height, nullptr, nullptr, instance, nullptr);
         if (!hwnd) throw std::runtime_error("CreateWindowExW failed");
+    }
+    void title_bar(bool visible) {
+        const auto style=GetWindowLongPtrW(hwnd,GWL_STYLE);
+        if(visible!=!!(style&WS_CAPTION)){
+            SetWindowLongPtrW(hwnd,GWL_STYLE,visible?style|WS_CAPTION:style&~WS_CAPTION);
+            SetWindowPos(hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+        }
     }
 };
 struct ImGuiSession {
@@ -303,6 +321,7 @@ int run(const Options& options, int show, FILE* log) {
         ImGui::NewFrame();
         if (show_components) showcase.draw(pending, active, fonts, renderer.device_name());
         else app.draw(pending, active, fonts);
+        native.title_bar(state.window_title_bar);
         ImGui::Render();
         LARGE_INTEGER ui_end{};if(options.performance)QueryPerformanceCounter(&ui_end);
         const bool submitted=renderer.render(ImGui::GetDrawData(),clear_color);
@@ -321,6 +340,15 @@ int run(const Options& options, int show, FILE* log) {
             const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld\n",app.settings_matches,search.x,search.y);std::fflush(log);
             std::fprintf(log,"pet_skin_sample: selected=%s symbols=%d",state.pet_skin.c_str(),fonts.body->IsGlyphInFont(0x266a)&&fonts.body->IsGlyphInFont(0x2665));
             for(int i=0;i<4;++i){const auto skin=point(app.pet_skin_controls[i]);std::fprintf(log," skin%d=%ld,%ld",i,skin.x,skin.y);}std::fprintf(log,"\n");std::fflush(log);
+            const auto raw=point(app.log_raw_control),follow=point(app.log_follow_control),drag=point({(app.title_drag_min.x+app.title_drag_max.x)*.5f,(app.title_drag_min.y+app.title_drag_max.y)*.5f});
+            std::fprintf(log,"presentation_sample: selected=%d log_worker=%d raw=%d follow=%d scroll=%.1f title=%d raw_button=%ld,%ld follow_button=%ld,%ld drag=%ld,%ld",state.ui_worker,app.log_active_worker,app.log_current_raw,app.log_current_follow,app.log_scroll,state.window_title_bar,raw.x,raw.y,follow.x,follow.y,drag.x,drag.y);
+            for(const auto& tab:app.log_tab_controls){const auto pos=point(tab.second);std::fprintf(log," log%d=%ld,%ld",tab.first,pos.x,pos.y);}
+            for(const auto& row:app.worker_select_controls){if(row.first>4)break;const auto pos=point(row.second);std::fprintf(log," worker%d=%ld,%ld",row.first,pos.x,pos.y);}
+            for(const auto& row:app.worker_action_controls){if(row.first>4)break;const auto pos=point(row.second);std::fprintf(log," action%d=%ld,%ld",row.first,pos.x,pos.y);}
+            for(size_t i=0;i<app.worker_summary_rects.size()&&i<3;++i){const auto a=point(app.worker_summary_rects[i].first),b=point(app.worker_summary_rects[i].second);std::fprintf(log," summary%zu=%ld,%ld,%ld,%ld",i,a.x,a.y,b.x,b.y);}
+            std::fprintf(log," speed_samples=%zu line_pitch=%.2f font_height=%.2f log_height=%.2f",app.log_speed_samples,app.log_line_pitch,app.log_font_height,app.log_view_height);
+            for(int i=0;i<3;++i){const auto pos=point(app.title_controls[i]);std::fprintf(log," chrome%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");std::fflush(log);
+            if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str());}
         }
         if(options.performance){
             LARGE_INTEGER draw_end{};QueryPerformanceCounter(&draw_end);
