@@ -29,6 +29,7 @@ def main():
         user.PostMessageW(hwnd,0x8021,0,packed);time.sleep(.14);user.PostMessageW(hwnd,0x8021,1,packed);time.sleep(.14);user.PostMessageW(hwnd,0x8021,2,packed);time.sleep(.18)
     try:
         wait(lambda t:'pet_skin_sample:' in t and 'pet_skin: id=classic ' in t)
+        user.PostMessageW(hwnd,0x8022,11,3)
         wait(lambda t:int(snapshots('pet_skin_sample:')[-1]['skin0'].split(',')[0])>250 and 0<int(snapshots('pet_skin_sample:')[-1]['skin0'].split(',')[1])<1000)
         assert snapshots('pet_skin_sample:')[-1]['symbols']=='1','Official name symbols are missing from the selected font'
         offset=len(log.read_text(encoding='utf-8'));user.PostMessageW(hwnd,0x8022,8,1)

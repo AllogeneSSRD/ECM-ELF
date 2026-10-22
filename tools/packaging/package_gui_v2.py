@@ -53,10 +53,12 @@ def main():
     selected.update(['src/ecm/application/gui_v2/app.manifest','tools/packaging/package_gui_v2.py',
                      'tools/build/package_gui_v2.ps1','tools/test/gui_v2/test_package.py','tools/test/gui_v2/test_failure_shutdown.py'])
     selected.update(['.gitattributes','config/gui_v2_pet_skins.generated.json',
+                     'config/gui_v2_localization_aliases.json','config/gui_v2_localization.generated.json','tools/gen/generate_gui_v2_localization.py',
+                     'tools/test/gui_v2/language_probe.py','tools/test/gui_v2/test_localization_files.py',
                      'assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt',
                      'tools/gen/generate_gui_v2_pet_skins.py','tools/gen/render_ely_skins_preview.py',
                      'tools/test/gui_v2/test_pet_skins.py','tools/test/gui_v2/test_skin_assets.cjs',
-                     'tools/test/gui_v2/test_skin_preview.cjs','tools/test/gui_v2/test_startup_dispatch.py','tools/test/gui_v2/test_presentation.py','tools/test/gui_v2/test_font_exit.py','tools/test/gui_v2/test_font_offsets.py','tools/test/gui_v2/test_table_typography.py','tools/test/gui_v2/test_gpu_page.py','tools/test/gui_v2/test_navigation.py','docs/web/ely-skins-20261022.html',
+                     'tools/test/gui_v2/test_skin_preview.cjs','tools/test/gui_v2/test_startup_dispatch.py','tools/test/gui_v2/test_presentation.py','tools/test/gui_v2/test_font_exit.py','tools/test/gui_v2/test_font_offsets.py','tools/test/gui_v2/test_settings_window.py','tools/test/gui_v2/test_table_typography.py','tools/test/gui_v2/test_gpu_page.py','tools/test/gui_v2/test_navigation.py','docs/web/ely-skins-20261022.html',
                      'docs/development/ELY_SKINS_DRAFT.md'])
     source_dir=package/'source';source_dir.mkdir();source_archive=source_dir/f'ECM-ELF-GUI-v2-{version}-source.zip'
     with zipfile.ZipFile(source_archive,'w',zipfile.ZIP_DEFLATED) as archive:

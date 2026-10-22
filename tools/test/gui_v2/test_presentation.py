@@ -31,6 +31,8 @@ def main():
         x,y=map(int,value.split(','));packed=(y<<16)|(x&65535)
         for action in [0,1,2]:user.PostMessageW(hwnd,0x8021,action,packed);time.sleep(.15)
         time.sleep(.15)
+    def layout(text):
+        return [dict(re.findall(r'(\w+)=([-\d.,]+)',line)) for line in text.splitlines() if line.startswith('worker_layout_sample:')][-1]
     try:
         s=wait(lambda v,t:v['log_worker']=='1' and 'worker 3: state QueueEmpty' in t)
         assert not user.GetWindowLongPtrW(hwnd,-16)&0xC00000
@@ -48,8 +50,28 @@ def main():
         x1,y1,x2,y2=map(int,s['summary1'].split(','));ox,oy=origin.x-rect.left,origin.y-rect.top
         samples=[image.getpixel((x+ox,y1+2+oy)) for x in range(x1+12,x2-12)]
         assert len(set(samples))==1,sorted(set(samples))
+        g=layout(log.read_text(encoding='utf-8'))
+        assert g['start_size']==g['stop_size'] and g['columns']=='1' and g['cards']=='3',g
+        assert int(g['number1'].split(',')[0])<int(s['action1'].split(',')[0]),g
+        chart_scale=float(s['body_font'])/15
+        for i in range(2):
+            assert abs(float(g[f'height{i}'])/chart_scale-88)<.05 and float(g[f'plot{i}'])/chart_scale>=28 and g[f'xticks{i}']=='1',g
+        click(g['toggle']);wait(lambda v,t:layout(t)['columns']=='2')
+        g=layout(log.read_text(encoding='utf-8'));cards=[list(map(int,g[f'card{i}'].split(','))) for i in range(3)]
+        assert cards[0][1]==cards[1][1] and cards[0][2]<cards[1][0] and cards[2][1]>cards[0][3],g
+        capture(hwnd,out/'two-column-charts.png')
+        user.SetWindowPos(hwnd,None,40,40,640,900,0x14);time.sleep(.6)
+        wait(lambda v,t:layout(t)['requested']=='2' and layout(t)['columns']=='1')
+        capture(hwnd,out/'narrow-chart-fallback.png')
+        user.SetWindowPos(hwnd,None,40,40,1920,1200,0x14);time.sleep(.6)
+        wait(lambda v,t:layout(t)['columns']=='2')
+        click(layout(log.read_text(encoding='utf-8'))['toggle']);wait(lambda v,t:layout(t)['columns']=='1')
         # Scroll the outer workspace while hovering the first chart, so every
         # ordered worker section can be viewed without selecting a log tab.
+        # Compact charts now fit at the original height. Use a shorter viewport
+        # to retain meaningful outer-scroll coverage rather than require excess whitespace.
+        user.SetWindowPos(hwnd,None,40,40,1920,900,0x14);time.sleep(.6)
+        s=wait(lambda v,t:int(v['log1'].split(',')[1])<900)
         x,y=map(int,s['speed_min'].split(','));x+=200;y+=80
         user.PostMessageW(hwnd,0x8021,0,(y<<16)|(x&65535));time.sleep(.15)
         user.PostMessageW(hwnd,0x20A,((-960)&65535)<<16,0);time.sleep(.8)
@@ -57,7 +79,13 @@ def main():
         capture(hwnd,out/'all-worker-charts.png')
         user.PostMessageW(hwnd,0x20A,960<<16,0);time.sleep(.8)
         s=wait(lambda v,t:abs(int(v['speed_min'].split(',')[1])-int(s['speed_min'].split(',')[1]))<5)
+        user.SetWindowPos(hwnd,None,40,40,1920,1200,0x14);time.sleep(.6)
+        s=wait(lambda v,t:int(v['log1'].split(',')[1])>int(s['log1'].split(',')[1])+50)
+        click(layout(log.read_text(encoding='utf-8'))['toggle']);wait(lambda v,t:layout(t)['columns']=='2')
         click(s['log3']);s=wait(lambda v,t:v['log_worker']=='3' and 'shape=B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720' in t and 'batch=Giant batch 2 / 8 | remaining=Phase remaining 12.0 s' in t)
+        summaries=[line for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('worker_summary: index=3 ')]
+        detail=json.loads(summaries[-1].split(' text=',1)[1]).splitlines()
+        assert len(detail)==3 and 'Edwards' in detail[1] and 'B2=1300000000000' in detail[1] and '*B1=' not in detail[1] and 'B1=' not in detail[2],detail
         capture(hwnd,out/'stage2-shape.png')
         click(s['log1']);s=wait(lambda v,t:v['log_worker']=='1')
         click(s['log2']);s=wait(lambda v,t:v['log_worker']=='2');click(s['raw_button']);s=wait(lambda v,t:v['log_worker']=='2' and v['raw']=='1')
@@ -87,10 +115,11 @@ def main():
     finally:
         if proc.poll() is None:close(proc,hwnd)
     assert proc.returncode==0 and renderer_clean(log.read_text(encoding='utf-8'),'dx11')
-    saved=tomllib.loads(state.read_text(encoding='utf-8'));assert not saved['window']['title_bar'] and cfg.read_bytes()==original
-    restart_log=out/'restart.log';restart=subprocess.run([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(restart_log),'--frames','8','--no-nvml','--no-pet'],cwd=out,startupinfo=startup,timeout=20)
+    saved=tomllib.loads(state.read_text(encoding='utf-8'));assert not saved['window']['title_bar'] and cfg.read_bytes()==original and saved['ui']['worker_chart_columns']==2
+    restart_log=out/'restart.log';restart=subprocess.run([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(restart_log),'--audit-app','--frames','8','--no-nvml','--no-pet'],cwd=out,startupinfo=startup,timeout=20)
     assert restart.returncode==0 and 'UI state not loaded' not in restart_log.read_text(encoding='utf-8')
     assert not tomllib.loads(state.read_text(encoding='utf-8'))['window']['title_bar']
+    assert layout(restart_log.read_text(encoding='utf-8'))['requested']=='2'
     report=dict(passed=True,language=a.language,theme='light' if a.light else 'dark',workers=3,log_tabs=4,action_first=True,summary_covers_grid=True,table_eta_seconds=True,log_eta_seconds_and_reduced=True,stage2_shape_line=True,giant_batch=True,speed_samples=12,all_worker_charts=True,workspace_scroll=True,speed_in_workspace=True,no_log_chart=True,compact_log_rows=True,per_worker_raw_follow=True,table_selects_log=True,hidden_caption=True,caption_hit_test=True,maximize_restore=True,minimize_restore=True,resize=True,custom_close=True,title_preference_restart=True,business_unchanged=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),scope='Protocol-aware synthetic workers, no real ECM calculation')
     (out/'result.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
 

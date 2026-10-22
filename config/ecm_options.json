@@ -2037,6 +2037,18 @@
       },
       {
         "table": "ui",
+        "key": "language_file",
+        "field": "ui_language_file",
+        "type": "string",
+        "default": "",
+        "max_length": 255,
+        "description": [
+          "Interface XML filename in localization/v2 beside the executable. Empty migrates the legacy en/zh selection. Companion options.*.xml files are not selectable interface files.",
+          "程序旁localization/v2目录中的界面XML文件名；空值按旧en/zh选择迁移。配套options.*.xml不是可选界面文件。"
+        ]
+      },
+      {
+        "table": "ui",
         "key": "scale",
         "field": "ui_scale",
         "type": "float",
@@ -2089,6 +2101,21 @@
       },
       {
         "table": "ui",
+        "key": "worker_chart_columns",
+        "field": "ui_worker_chart_columns",
+        "type": "int",
+        "default": 1,
+        "values": [
+          1,
+          2
+        ],
+        "description": [
+          "Curve-time chart columns: 1 for list, 2 for two charts per row; narrow workspaces temporarily use one column without changing the saved choice.",
+          "曲线耗时图列数：1为列表，2为每行两图；工作区过窄时临时使用单列，不改变保存的选择。"
+        ]
+      },
+      {
+        "table": "ui",
         "key": "gpu_history_seconds",
         "field": "ui_gpu_history_seconds",
         "type": "int",
@@ -2106,6 +2133,35 @@
       },
       {
         "table": "ui",
+        "key": "stage2_timing_source",
+        "field": "ui_stage2_timing_source",
+        "type": "string",
+        "default": "auto",
+        "values": [
+          "auto",
+          "previous",
+          "tune"
+        ],
+        "max_length": 8,
+        "description": [
+          "Stage2 segment duration source: auto overlays previous completed-curve timings on tune data; previous or tune restricts the source. Missing durations are marked unknown.",
+          "Stage2区段时长来源：auto按上次完成曲线覆盖tune数据；previous或tune仅使用指定来源，缺项明确标为未知。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "stage2_tune_file",
+        "field": "ui_stage2_tune_file",
+        "type": "string",
+        "default": "",
+        "max_length": 4096,
+        "description": [
+          "Optional read-only Stage2 tune summary path. Empty uses the workflow stage2_tune_profile, then tune.toml or stage2_ecm_tune.toml next to the workflow/worker. Relative paths use the workflow directory.",
+          "可选的只读Stage2 tune摘要路径。空值使用工作流stage2_tune_profile，再查找工作流/worker旁的tune.toml或stage2_ecm_tune.toml；相对路径基于工作流目录。"
+        ]
+      },
+      {
+        "table": "ui",
         "key": "nav_order",
         "field": "ui_nav_order",
         "type": "string",
@@ -2113,8 +2169,8 @@
         "max_length": 7,
         "permutation_of": "0123456",
         "description": [
-          "Navigation order of all seven page IDs. Long-press and drag to reorder; pages moved right keep their position for return.",
-          "七个页面编号的导航顺序；长按拖动排序，移到右侧的页面保留返回位置。"
+          "Stable ordering of seven legacy IDs. ID 5 is reserved for the fixed Settings popup entry and ignored in page ordering. Long-press real pages to reorder; right-side pages keep their return position.",
+          "保留七个历史编号的完整顺序；编号5用于固定设置弹窗入口，不参与页面排序。其他页面可长按排序，右侧页面保留返回位置。"
         ]
       },
       {
@@ -2124,8 +2180,8 @@
         "type": "int",
         "default": 0,
         "description": [
-          "Selected central page: workers, results, generator, probability, GPU, settings, components.",
-          "中央页面：worker、结果、生成器、概率、GPU、设置、组件。"
+          "Selected central page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components. Legacy ID 5 opens Settings as a popup and returns the center to a real page.",
+          "中央页面：0任务、1结果、2生成器、3概率、4 GPU、6组件。旧编号5兼容为打开设置弹窗，并让中央区回到实际页面。"
         ],
         "minimum": 0,
         "maximum": 6
@@ -2367,8 +2423,8 @@
         "type": "int",
         "default": 0,
         "description": [
-          "Pages in the right dock share native horizontal tabs; closing a tab returns its page to navigation. At least one page remains central.",
-          "右侧停靠区的页面共用横排标签；关闭标签后回到导航，至少保留一个中央页面。"
+          "Real pages in the right dock share native horizontal tabs. Closing returns a page to navigation; one real page remains central. Settings bit 5 is cleared when opening old sidecars.",
+          "右侧实际页面共用横排标签，关闭后返回导航，至少保留一个实际中央页面；读取旧侧车时移除设置位5。"
         ],
         "minimum": 0,
         "maximum": 126
@@ -2380,8 +2436,8 @@
         "type": "int",
         "default": 4,
         "description": [
-          "Last active page in the right dock.",
-          "右侧停靠区最后激活的页面。"
+          "Last active real page in the right dock. Legacy Settings ID 5 is remapped on load.",
+          "右侧停靠区最后激活的实际页面；读取旧设置编号5时改选实际页面。"
         ],
         "minimum": 0,
         "maximum": 6

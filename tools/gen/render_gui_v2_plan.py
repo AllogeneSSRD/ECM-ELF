@@ -150,6 +150,7 @@ page = page.replace('Win32 + ImGui + Vulkan<br>', 'Win32 + ImGui + DX11（默认
 page = page.replace('03 · Vulkan 接入', '03 · 渲染后端')
 page = page.replace('<h2>03 · Vulkan 是独立的宿主工作</h2>', '<h2>03 · DX11 默认，Vulkan 保留诊断路径</h2><div class="notice"><strong>当前默认后端</strong>用户允许切回 DX11；新版外观、图表和宠物保留，默认启动不初始化 Vulkan。本机双屏有界拖动测试中用户未观察到冻结，完整性能矩阵与长期稳定性待验收。下列内容保留初始 Vulkan 宿主接入要求，不表示该可选路径已通过冻结验收。</div>')
 page = page.replace('<nav aria-label="章节">', '<nav aria-label="章节"><a href="#progress">实施进度</a>')
+page = page.replace('<section id="layout">', '<section id="layout"><div class="notice"><strong>当前原生布局</strong>下方保留初始结构概念图。0.49.7已使用带线性图标的导航、底部固定设置入口和独立六分类设置弹窗，支持主题预览卡片；系统标题栏默认隐藏。实际截图与验收见完整草稿中的0.49.7章节。</div>')
 page = page.replace('未构建 GUI v2、未测量运行性能、未执行发布。', '实际完成范围与验证见实施进度；后续阶段不视为已完成，未执行发布。')
 page = page.replace('__PHASE_BUTTONS__', phase_buttons)
 page = page.replace('__P0_WORK__', html.escape(phases[0]['work']))

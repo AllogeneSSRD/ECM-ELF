@@ -28,12 +28,18 @@ std::string executable_path(const std::string& input, const std::string& base) {
 }
 }
 App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log) {
-    if(ui::language_directory().empty()){std::string error;ui::load_languages(ecmgui::exe_dir()+"/localization/v2",error);if(!error.empty())trace("localization: "+error);}
+    if(state.ui_language_file.empty())state.ui_language_file=state.ui_language=="zh"?"chineseSimplified.xml":"english.xml";
+    if(ui::language_directory().empty()){std::string error;ui::load_languages(ecmgui::exe_dir()+"/localization/v2",error,state.ui_language_file);if(!error.empty())trace("localization: "+error);}
+    // Read old page/sidecar IDs without keeping Settings in the dock workspace.
+    if(state.ui_page==5){state.ui_page=0;open_settings();}
+    if(state.ui_right_pages&(1<<5)){state.ui_right_pages&=~(1<<5);reset_layout=true;}
+    if((state.ui_right_pages&95)==95){state.ui_right_pages&=~1;reset_layout=true;}
+    if(state.ui_right_page==5)for(int i:{4,3,2,1,0,6})if(ui::pinned(state.ui_right_pages,i)){state.ui_right_page=i;break;}
     if(state.ui_right_pages){
         if(!state.ui_right_visible||state.layout().find("v2.tools")!=std::string::npos)reset_layout=true;
         state.ui_right_visible=true;
     }
-    if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<7;++i)if(!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
+    if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<7;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
         if(notice.kind==ecmgui::WorkerNotice::Kind::StageChanged)
             for(const auto& worker:controller.workers())if(worker.index==notice.worker&&!supports_owner(worker.exe))
@@ -93,6 +99,9 @@ void App::configure_workers() {
     workers.priority = settings.priority; workers.exit_confirm = settings.exit_confirm;
     workers.graceful_stop_ms = static_cast<unsigned long long>(settings.graceful_stop_ms);
     controller.configure(workers); controller.suppress_autostart();
+    worker_b2_ratios_.clear();
+    for(const auto& worker:controller.workers())for(const auto& entry:ecm_config::cli_entries(config.lines(),worker.index))if(entry.first=="b2_ratio")
+        worker_b2_ratios_[worker.index]=ecm_config::read_stage2(ecm_config::Entries{entry}).b2_ratio;
     std::snprintf(stage1_input, sizeof(stage1_input), "%s", workers.worker_exe.c_str());
     std::snprintf(stage2_input, sizeof(stage2_input), "%s", workers.stage2_exe.c_str());
 }
@@ -118,7 +127,7 @@ bool App::start(int index) {
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
             if (!controller.start(index, true)) return false;
-            leases_[index] = std::move(lease); toast((ecmgui_v2::ui::text("worker_started_009c206a",state.ui_language=="zh"))+std::to_string(index)); return true;
+            leases_[index] = std::move(lease); toast((ecmgui_v2::ui::text("worker_started",state.ui_language=="zh"))+std::to_string(index)); return true;
         }
     } catch (const std::exception& error) { status = error.what(); trace(status); }
     return false;
@@ -137,6 +146,29 @@ void App::tick() {
     for (const auto& worker : controller.workers())
         if (!worker.running() && worker.state() != ecmgui::WorkerRunState::Restarting && worker.state() != ecmgui::WorkerRunState::Starting) leases_.erase(worker.index);
     const auto now = GetTickCount64();
+    auto timing_file=state.path;timing_file+=".stage2-timing.json";stage2_history_.load(timing_file);
+    const bool poll_tune=now>=stage2_tune_poll_;if(poll_tune)stage2_tune_poll_=now+1000;
+    for(const auto& worker:controller.workers())if(worker.stage2){
+        const auto device=gpu_details.get(worker.device).uuid;
+        stage2_history_.observe(worker,device);
+        const auto& stage=worker.stage2_status;auto& view=stage2_views_[worker.index];
+        const auto curve=std::to_string(stage.current)+"|"+std::to_string(stage.record)+"|"+std::to_string(stage.sigma);
+        if(view.clock_curve!=curve||view.phase!=stage.phase){view.clock_curve=curve;view.phase=stage.phase;view.phase_at=view.batch_at=now;view.batch=stage.batch;}
+        if(view.batch!=stage.batch){view.batch=stage.batch;view.batch_at=now;}
+        if(poll_tune){
+            const auto base=std::filesystem::u8path(config_path).parent_path();
+            auto file=state.ui_stage2_tune_file;
+            if(file.empty())file=config.get("workers."+std::to_string(worker.index)+".stage2","stage2_tune_profile",config.get("stage2","stage2_tune_profile"));
+            std::filesystem::path path;
+            if(!file.empty()){path=std::filesystem::u8path(file);if(path.is_relative())path=base/path;}
+            else for(const auto& dir:{base,std::filesystem::u8path(worker.exe).parent_path()})for(const char* name:{"tune.toml","stage2_ecm_tune.toml"}){
+                std::error_code error;const auto candidate=dir/name;if(path.empty()&&std::filesystem::is_regular_file(candidate,error))path=candidate;
+            }
+            std::error_code error;const auto stamp=std::filesystem::last_write_time(std::filesystem::u8path(worker.exe),error);
+            stage2_engine_ids_[worker.index]=error?"unknown":std::to_string(stamp.time_since_epoch().count());
+            stage2_tunes_[worker.index].refresh(path);
+        }
+    }
     if ((state.ui_page == 1 || ui::pinned(state.ui_right_pages,1)) && now - last_results >= 500) {
         last_results = now; if (results.refresh()) {
             result_view_dirty=true;
@@ -179,23 +211,29 @@ void App::build_layout(unsigned dock, float scale) {
     ImGui::DockBuilderDockWindow("Workspace###v2.workspace", center);
     if (inspector) ImGui::DockBuilderDockWindow("Inspector###v2.inspector", inspector);
     if(inspector)for(char id:state.ui_nav_order){const int page=id-'0';if(ui::pinned(state.ui_right_pages,page))ImGui::DockBuilderDockWindow(ui::right_window(page,false).c_str(),inspector);}
-    if (logs) ImGui::DockBuilderDockWindow("Logs###v2.logs", logs);
+    log_dock_=logs;
+    if (logs){
+        ImGui::DockBuilderDockWindow("Manager###v2.logs", logs);
+        for(const auto& w:controller.workers())ImGui::DockBuilderDockWindow(("Worker###v2.log.worker."+std::to_string(w.index)).c_str(),logs);
+    }
     ImGui::DockBuilderFinish(dock);
     if(state.ui_right_pages)focus_right_=true;
 }
-bool App::begin_window(const char* name, bool* open, const ui::Settings& active) {
+bool App::begin_window(const char* name, bool* open, const ui::Settings& active,ImGuiWindowFlags flags) {
     auto found = window_dpi_.find(name);
     const float dpi = state.ui_scale > 0 || found == window_dpi_.end() ? active.scale : found->second;
     const float ratio = dpi / active.scale;
     const auto& style = ImGui::GetStyle();
     const auto scaled = [ratio](ImVec2 v) { return ImVec2(v.x*ratio,v.y*ratio); };
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,scaled(style.WindowPadding));
+    const bool navigation=std::strstr(name,"###v2.navigation")!=nullptr;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,navigation?ImVec2{8*dpi,style.WindowPadding.y*ratio}:scaled(style.WindowPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,scaled(style.FramePadding));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,scaled(style.ItemSpacing));
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,scaled(style.CellPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,style.FrameRounding*ratio);
     ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,style.ScrollbarSize*ratio);
-    const bool visible=ImGui::Begin(name,open,std::strstr(name,"###v2.navigation")?ImGuiWindowFlags_HorizontalScrollbar:0); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;return visible;
+    if(navigation)ImGui::SetNextWindowScroll({0,0});
+    const bool visible=ImGui::Begin(name,open,flags|(navigation?ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse:0)); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;return visible;
 }
 void App::end_window() { ImGui::End(); ImGui::PopStyleVar(6); }
 bool App::save_preferences() {
@@ -204,34 +242,59 @@ bool App::save_preferences() {
         const bool saved=state.save();status=saved?"UI preferences saved":state.notice;toast(status,!saved);return saved;
     }catch(const std::exception& error){status=error.what();toast(status,true);return false;}
 }
+bool App::select_language_file(const std::string& file){
+    std::string error;const auto directory=ui::language_directory();
+    if(!ui::load_languages(directory,error,file)){toast(error,true);trace(error);return false;}
+    state.ui_language_file=file;state.ui_language=file=="english.xml"?"en":"zh";
+    if(!error.empty()){toast(error,true);trace(error);}return true;
+}
+void App::reload_language_file(){
+    const bool ok=select_language_file(state.ui_language_file);
+    if(ok)toast(ui::text("localization_reloaded",state.ui_language=="zh"));
+}
 bool App::move_page(int page,bool right) {
-    if(!ui::move_page(state.ui_right_pages,state.ui_page,state.ui_right_page,page,right)){toast(ecmgui_v2::ui::text("keep_at_least_one_central_page_d623b219",state.ui_language=="zh"));return false;}
-    if(right){state.ui_right_visible=true;focus_right_=true;}
-    reset_layout=true;
+    if(!ui::move_page(state.ui_right_pages,state.ui_page,state.ui_right_page,page,right)){toast(ecmgui_v2::ui::text("keep_at_least_one_central_page",state.ui_language=="zh"));return false;}
+    if(right){
+        state.ui_right_visible=true;focus_right_=true;
+        ImGuiID target=0;
+        for(const auto& tab:right_docks)if(tab.second&&ImGui::DockBuilderGetNode(tab.second)){target=tab.second;break;}
+        if(!target&&state.ui_inspector)if(const auto* inspector=ImGui::FindWindowByName("Inspector###v2.inspector"))target=inspector->DockId;
+        if(!target)if(const auto* workspace=ImGui::FindWindowByName("Workspace###v2.workspace"))if(workspace->DockId){
+            ImGuiID center=workspace->DockId;ImGui::DockBuilderSplitNode(center,ImGuiDir_Right,.34f,&target,&center);
+        }
+        if(target){ImGui::DockBuilderDockWindow(ui::right_window(page,false).c_str(),target);if(auto* node=ImGui::DockBuilderGetNode(target))ImGui::DockBuilderFinish(ImGui::DockNodeGetRootNode(node)->ID);}
+    }
     toast(ui::text(right?"moved_right":"moved_left",state.ui_language=="zh"));return true;
 }
 void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Fonts& fonts) {
+    if(state.ui_page==5){state.ui_page=drawn_center_page_>=0&&drawn_center_page_!=5?drawn_center_page_:0;open_settings();}
+    if(ImGui::GetIO().KeyCtrl&&ImGui::IsKeyPressed(ImGuiKey_Comma,false))open_settings();
+    navigation_icon_count=0;
+    language_control={};language_items[0]=language_items[1]={};language_file_controls.clear();
     worker_speed_samples=workspace_chart_count=0;worker_speed_min=worker_speed_max={};
+    worker_chart_rects.clear();worker_chart_metrics.clear();worker_chart_toggle={};
     for(auto& control:exit_controls)control={};
     if(status!=last_status){last_status=status;toast(status);}
     while(!toasts.empty()&&toasts.front().until<GetTickCount64())toasts.pop_front();
     const bool zh = fonts.chinese;
     if (ImGui::BeginMainMenuBar()) {
         ImGui::Text("ECM-ELF %s", version); ImGui::Separator();
-        if(ImGui::BeginMenu(ecmgui_v2::ui::text("view_dcc839a4",zh))){
-            if (ImGui::MenuItem(ecmgui_v2::ui::text("reset_layout_2e2a1784",zh))) reset_layout = true;
-            if(ImGui::MenuItem(ecmgui_v2::ui::text("inspector_da188e3b",zh),nullptr,&state.ui_inspector))reset_layout=true;
-            if(ImGui::MenuItem(ecmgui_v2::ui::text("logs_ea2100dc",zh),nullptr,&state.ui_logs))reset_layout=true;
-            ImGui::MenuItem(ecmgui_v2::ui::text("system_title_bar_285c57a3",zh),nullptr,&state.window_title_bar);
+        if(ImGui::BeginMenu(ecmgui_v2::ui::text("menu.view",zh))){
+            if (ImGui::MenuItem(ecmgui_v2::ui::text("menu.reset_layout",zh))) reset_layout = true;
+            if(ImGui::MenuItem(ecmgui_v2::ui::text("menu.inspector",zh),nullptr,&state.ui_inspector))reset_layout=true;
+            if(ImGui::MenuItem(ecmgui_v2::ui::text("menu.logs",zh),nullptr,&state.ui_logs))reset_layout=true;
+            ImGui::MenuItem(ecmgui_v2::ui::text("menu.title_bar",zh),nullptr,&state.window_title_bar);
             ImGui::EndMenu();
         }
-        if(ImGui::BeginMenu(ecmgui_v2::ui::text("language_a4fe6526",zh))){
-            if(ImGui::MenuItem(ui::text("language_english",zh),nullptr,state.ui_language=="en"))state.ui_language="en";
-            if(ImGui::MenuItem(ui::text("language_chinese",zh),nullptr,state.ui_language=="zh"))state.ui_language="zh";
-            if(ImGui::MenuItem(ui::text("reload_localization",zh))){std::string error;const auto directory=ui::language_directory();const bool ok=ui::load_languages(directory,error);toast(ok?ui::text("localization_reloaded",zh):error,!ok);if(!error.empty())trace(error);}
+        if(ImGui::BeginMenu(ecmgui_v2::ui::text("menu.language",zh))){
+            if(ImGui::IsWindowAppearing())ui::refresh_language_files();
+            const auto files=ui::language_files();
+            for(const auto& file:files){const auto label=ui::language_label(file)+"###language."+file;if(ImGui::MenuItem(label.c_str(),nullptr,state.ui_language_file==file))select_language_file(file);}
+            if(ImGui::MenuItem(ui::text("reload_localization",zh)))reload_language_file();
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem(ecmgui_v2::ui::text("notices_00a05fce",zh))) ImGui::OpenPopup("Notices###v2.notices");
+        if(ImGui::MenuItem(ui::text("settings",zh)))open_settings();
+        if (ImGui::MenuItem(ecmgui_v2::ui::text("menu.notices",zh))) ImGui::OpenPopup("Notices###v2.notices");
         if (ImGui::BeginPopup("Notices###v2.notices")) {
             ImGui::PushTextWrapPos(ImGui::GetFontSize()*34);
             const auto begin = messages.size() > 20 ? messages.size()-20 : 0;
@@ -247,7 +310,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
             ImGui::InvisibleButton("window-drag",{std::max(4.f,right-ImGui::GetCursorPosX()),h});title_drag_min=ImGui::GetItemRectMin();title_drag_max=ImGui::GetItemRectMax();
             const auto viewport=ImGui::GetMainViewport();const auto hwnd=static_cast<HWND>(viewport->PlatformHandleRaw?viewport->PlatformHandleRaw:viewport->PlatformHandle);
             const char* labels[]{"##window-min","##window-max","##window-close"};
-            const char* tips[]{ecmgui_v2::ui::text("minimize_d72e311c",zh),ecmgui_v2::ui::text("maximize_restore_ab9616c1",zh),ecmgui_v2::ui::text("close_7d9eb7ac",zh)};
+            const char* tips[]{ecmgui_v2::ui::text("window.minimize",zh),ecmgui_v2::ui::text("window.maximize_restore",zh),ecmgui_v2::ui::text("window.close",zh)};
             for(int i=0;i<3;++i){ImGui::SameLine();if(i==2)ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ui::palette(active.light).danger);
                 if(ImGui::Button(labels[i],{h,h}))PostMessageW(hwnd,i==2?WM_CLOSE:WM_SYSCOMMAND,i==0?SC_MINIMIZE:i==1?(IsZoomed(hwnd)?SC_RESTORE:SC_MAXIMIZE):0,0);
                 title_controls[i]={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
@@ -267,13 +330,18 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         build_layout(dock, active.scale); reset_layout = false;
     }
     layout_ready_ = true; layout_wide_ = wide;
-    begin_window(ecmgui_v2::ui::text("navigation_v2_navigation_fa8b2bee",zh),nullptr,active); fonts.push(ui::FontRole::Body);
+    begin_window(ecmgui_v2::ui::text("navigation.title",zh),nullptr,active); fonts.push(ui::FontRole::Body);
     const bool compact = ImGui::GetContentRegionAvail().x < 110 * active.scale;
     const auto item_center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
     for(auto& pos:nav_items)pos={};for(auto& pos:right_items)pos={};
     nav_drag_page=-1;nav_return={};
     const auto nav_palette=ui::palette(active.light);const float nav_scale=ImGui::GetFontSize()/15.f;
     nav_rounding=8*nav_scale;nav_item_height=std::max(40*nav_scale,ImGui::GetTextLineHeight()+16*nav_scale);nav_item_gap=8*nav_scale;
+    size_t nav_count=1;for(int i=0;i<7;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i))++nav_count;
+    const float nav_top=ImGui::GetCursorPosY(),nav_bottom=ImGui::GetWindowSize().y-ImGui::GetStyle().WindowPadding.y;
+    const float available_height=nav_bottom-nav_top,drop_height=ImGui::GetFrameHeight()+8*nav_scale,row_count=static_cast<float>(nav_count);
+    const bool short_nav=available_height<row_count*(nav_item_height+nav_item_gap)+drop_height+60*nav_scale;
+    if(short_nav){nav_item_gap=4*nav_scale;nav_item_height=std::max(ImGui::GetTextLineHeight()+4*nav_scale,std::min(nav_item_height,(available_height-drop_height)/row_count-nav_item_gap));}
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,nav_rounding);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,{0,.5f});
@@ -281,15 +349,11 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{ImGui::GetStyle().ItemSpacing.x,nav_item_gap});
     const auto order=state.ui_nav_order;
     for(char id:order){const int i=id-'0';
-        if(ui::pinned(state.ui_right_pages,i))continue;
-        ImGui::PushID(i);const auto label=std::string(ui::page_name(i,zh))+"###page";
-        ImGui::PushStyleColor(ImGuiCol_Button,state.ui_page==i?nav_palette.active:ImVec4{0,0,0,0});
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,nav_palette.hover);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,nav_palette.active);
-        if(ImGui::Button(label.c_str(),{std::max(ImGui::GetContentRegionAvail().x,ImGui::CalcTextSize(ui::page_name(i,zh)).x+24*nav_scale),nav_item_height}))state.ui_page=i;
-        ImGui::PopStyleColor(3);nav_items[i]=item_center();
+        if(i==5||ui::pinned(state.ui_right_pages,i))continue;
+        ImGui::PushID(i);
+        if(ui::navigation_button("##page",ui::page_name(i,zh),ui::page_icon(i),state.ui_page==i,nav_palette,nav_scale,nav_item_height))state.ui_page=i;
+        ++navigation_icon_count;nav_items[i]=item_center();
         const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
-        if(compact&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::page_name(i,zh));
         if(ImGui::IsItemActive()&&ImGui::GetIO().MouseDownDuration[0]>=.32f&&ImGui::BeginDragDropSource()){
             nav_drag_page=i;ImGui::SetDragDropPayload("V2_PAGE",&i,sizeof(i));ImGui::TextUnformatted(ui::page_name(i,zh));ImGui::EndDragDropSource();}
         if(ImGui::BeginDragDropTarget()){
@@ -298,23 +362,30 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
                 ImGui::GetWindowDrawList()->AddLine({lo.x,y},{hi.x,y},ImGui::GetColorU32(nav_palette.focus),2*nav_scale);
                 if(payload->IsDelivery())ui::reorder_page(state.ui_nav_order,*static_cast<const int*>(payload->Data),i,after);
             }ImGui::EndDragDropTarget();}
-        if(ImGui::BeginPopupContextItem("location")){if(ImGui::MenuItem(ecmgui_v2::ui::text("move_to_right_tabs_80d3c7aa",zh)))move_page(i,true);ImGui::EndPopup();}
+        if(ImGui::BeginPopupContextItem("location")){if(ImGui::MenuItem(ecmgui_v2::ui::text("move_to_right_tabs",zh)))move_page(i,true);ImGui::EndPopup();}
         ImGui::PopID();
     }
     ImGui::PopStyleVar(5);
-    ImGui::Separator();ImGui::Button(compact?">###right-drop":ecmgui_v2::ui::text("right_tabs_right_drop_3dd2712f",zh),{-1,0});
+    ImGui::Separator();ImGui::Button(compact?">###right-drop":ecmgui_v2::ui::text("navigation.right_tabs",zh),{-1,0});
     nav_drop=item_center();
     if(ImGui::BeginDragDropTarget()){if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE"))if(payload->DataSize==sizeof(int))move_page(*static_cast<const int*>(payload->Data),true);ImGui::EndDragDropTarget();}
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("long_press_a_page_then_drag_here_to_open_i_bded2000",zh));
-    if(!compact)ui::secondary_text(ecmgui_v2::ui::text("hold_and_drag_to_reorder_close_a_right_tab_ba726d0c",zh));
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("navigation.move_right_hint",zh));
+    if(!compact&&!short_nav)ui::secondary_text(ecmgui_v2::ui::text("navigation.reorder_hint",zh));
+    const float settings_y=ImGui::GetWindowSize().y-ImGui::GetStyle().WindowPadding.y-nav_item_height;
+    ImGui::SetCursorPosY(std::max(nav_top,settings_y));
+    if(ui::navigation_button("##open-settings",ui::page_name(5,zh),ui::Icon::Settings,settings_open,nav_palette,nav_scale,nav_item_height))open_settings();
+    settings_entry=nav_items[5]=item_center();++navigation_icon_count;
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text("settings_shortcut",zh));
+    nav_padding=ImGui::GetStyle().WindowPadding.x;nav_scroll={ImGui::GetScrollX(),ImGui::GetScrollY()};nav_size=ImGui::GetWindowSize();
+    nav_scrollbars={ImGui::GetCurrentWindow()->ScrollbarX?1.f:0.f,ImGui::GetCurrentWindow()->ScrollbarY?1.f:0.f};
     ImGui::PopFont(); end_window();
-    begin_window(ecmgui_v2::ui::text("workspace_v2_workspace_ebc1df62",zh),nullptr,active);
+    begin_window(ecmgui_v2::ui::text("workspace.title",zh),nullptr,active);
     workspace_docked=ImGui::IsWindowDocked();
     if(drawn_center_page_!=state.ui_page){ImGui::SetScrollY(0);drawn_center_page_=state.ui_page;}
     fonts.push(ui::FontRole::Body);
     ImGui::PushTextWrapPos(0); draw_page(active, fonts); ImGui::PopTextWrapPos(); ImGui::PopFont(); end_window();
-    if (state.ui_inspector && wide) { begin_window(ecmgui_v2::ui::text("inspector_v2_inspector_dc966628",zh), &state.ui_inspector,active); draw_inspector(fonts); end_window(); }
-    if (state.ui_logs) { begin_window(ecmgui_v2::ui::text("logs_v2_logs_a97cbe80",zh), &state.ui_logs,active); draw_logs(fonts); end_window(); }
+    if (state.ui_inspector && wide) { begin_window(ecmgui_v2::ui::text("inspector.title",zh), &state.ui_inspector,active); draw_inspector(fonts); end_window(); }
+    draw_log_windows(active,fonts);
     right_close_controls.clear();right_docks.clear();right_container_present=false;
     const auto right_order=state.ui_nav_order;std::vector<int> closed_pages;
     for(char id:right_order){const int page=id-'0';if(!ui::pinned(state.ui_right_pages,page))continue;
@@ -347,6 +418,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         probe_dpi = ImGui::GetWindowViewport()->DpiScale; probe_font = ImGui::GetFontSize(); probe_padding = ImGui::GetStyle().FramePadding.y;
         ImGui::TextUnformatted("Platform viewport probe"); end_window();
     }
+    draw_settings_window(active,fonts);
     draw_exit(active,fonts);
     const auto viewport=ImGui::GetMainViewport();float toast_bottom=viewport->WorkPos.y+viewport->WorkSize.y-14*active.scale;
     int toast_index=0;
@@ -367,6 +439,17 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         if (state.ui_scale > 0) pending.scale = state.ui_scale;
     }
 }
+std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
+    const auto task=ecmgui::task_caption(worker.task,ui::text("worker.known_factors",zh),"assignment ID",ui::text("worker.no_task",zh));
+    std::string summary=std::string(ui::text("worker.task_label",zh))+task;
+    if(worker.stage2){
+        const auto ratio=worker_b2_ratios_.find(worker.index);
+        summary+="\n"+ui::worker_construction(worker,ratio==worker_b2_ratios_.end()?0:ratio->second,zh);
+        char phase[512];std::snprintf(phase,sizeof(phase),ui::text("logs.phase_only",zh),ui::stage2_phase_name(worker.stage2_status,zh).c_str());
+        summary+="\n"+std::string(phase);
+    }
+    return summary;
+}
 void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     body_font_height=ImGui::GetFontSize();const auto* body_glyph=ImGui::GetFontBaked()->FindGlyph('M');body_glyph_height=body_glyph->Y1-body_glyph->Y0;
     const bool zh=fonts.chinese;
@@ -374,99 +457,56 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     const float toolbar_top=ImGui::GetCursorScreenPos().y;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{8*active.scale,4*active.scale});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{6*active.scale,6*active.scale});
-    fonts.push(ui::FontRole::Primary);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ecmgui_v2::ui::text("workers_7a1ec9fe",zh));ImGui::PopFont();
+    fonts.push(ui::FontRole::Primary);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ecmgui_v2::ui::text("worker.title",zh));ImGui::PopFont();
     if(ImGui::IsItemHovered()&&!config_path.empty())ImGui::SetTooltip("%s",config_path.c_str());
-    if(!ready){ui::secondary_text(ecmgui_v2::ui::text("open_a_workflow_in_settings_55a5439d",zh));ImGui::PopStyleVar(2);return;}
-    const float actions_width=ImGui::CalcTextSize(ecmgui_v2::ui::text("start_allstop_safely_13031d69",zh)).x+60*active.scale;
-    if(ImGui::GetContentRegionAvail().x>ImGui::GetItemRectSize().x+actions_width)ImGui::SameLine();
-    if (ui::button("start-all", ecmgui_v2::ui::text("start_all_1a7e6299",fonts.chinese), ui::ButtonKind::Primary, p, active.scale,false,&primary_font_height,true))
+    if(!ready){ui::secondary_text(ecmgui_v2::ui::text("worker.open_workflow_hint",zh));ImGui::PopStyleVar(2);return;}
+    const auto title_end=ImGui::GetItemRectMax();
+    const char* start_label=ui::text("action.start_all",zh);const char* stop_label=ui::text("action.stop_safely",zh);
+    const float stop_width=ImGui::CalcTextSize(stop_label).x+ImGui::GetFontSize()*19/15,stop_height=ImGui::GetFontSize();
+    fonts.push(ui::FontRole::Primary);
+    const float button_width=std::max(stop_width,ImGui::CalcTextSize(start_label).x+ImGui::GetFontSize()*19/15)+16*active.scale;
+    const float button_height=std::max(24*active.scale,std::max(stop_height,ImGui::GetFontSize())+8*active.scale);ImGui::PopFont();
+    const float toolbar_right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x,gap=ImGui::GetStyle().ItemSpacing.x;
+    if(title_end.x+2*button_width+2*gap<=toolbar_right)ImGui::SameLine();
+    if (ui::button("start-all", start_label, ui::ButtonKind::Primary, p, active.scale,false,&primary_font_height,true,button_width,button_height,ui::Icon::Play))
         for (const auto& worker : controller.workers()) if(!start(worker.index))toast(status,true);
     start_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
-    if(ImGui::GetContentRegionAvail().x>ImGui::GetItemRectSize().x+ImGui::CalcTextSize(ecmgui_v2::ui::text("stop_safely_a2e61809",zh)).x+24*active.scale)ImGui::SameLine();
-    if (ui::button("stop-all", ecmgui_v2::ui::text("stop_safely_a2e61809",fonts.chinese), ui::ButtonKind::Secondary, p, active.scale,false,&secondary_button_font_height,true)) {controller.stop_all();toast(ecmgui_v2::ui::text("safe_stop_requested_waiting_for_checkpoint_c4c6c1c2",fonts.chinese));}
+    start_button_size=ImGui::GetItemRectSize();
+    if(ImGui::GetItemRectMax().x+gap+button_width<=toolbar_right)ImGui::SameLine();
+    if (ui::button("stop-all", stop_label, ui::ButtonKind::Secondary, p, active.scale,false,&secondary_button_font_height,true,button_width,button_height,ui::Icon::Stop)) {controller.stop_all();toast(ecmgui_v2::ui::text("worker.safe_stop_requested",fonts.chinese));}
     stop_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
+    stop_button_size=ImGui::GetItemRectSize();
     worker_toolbar_height=ImGui::GetCursorScreenPos().y-toolbar_top;ImGui::PopStyleVar(2);
     for (const auto& worker : controller.workers()) if (worker.p95.valid) {
         const bool pending = worker.p95.level == ecmgui::P95Notice::Level::Pending;
         ImGui::TextColored(pending ? ImVec4(1,.35f,.4f,1) : ImVec4(.8f,.65f,.35f,1), "Prime95 %s: %s %s", worker.name.c_str(),worker.p95.error.c_str(),worker.p95.note.c_str());
     }
-    worker_select_controls.clear();worker_action_controls.clear();worker_table_rows=0;
+    worker_select_controls.clear();worker_number_controls.clear();worker_action_controls.clear();worker_table_rows=0;
     const float scale=ImGui::GetFontSize()/15.f;
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{8*scale,4*scale});
+    const auto left=ImGui::GetCursorScreenPos();const float visible_width=ImGui::GetContentRegionAvail().x;
+    const float cell_pad=(visible_width>=800*scale?8.f:3.f)*scale;
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{cell_pad,4*scale});
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{8*scale,4*scale});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{6*scale,2*scale});
     const float control_height=std::max(24*scale,ImGui::GetTextLineHeight()+8*scale);
-    float widths[]{72,112,80,84,150,64,76,76};
-    // Size non-flex columns from the actual localized values before deciding
-    // whether all eight columns fit. A long ETA/status must not be clipped.
+    // Proportional columns retain one information row at every width.
+    // Text elides within its cell; the full value remains available on hover.
+    float widths[]{28,72,112,80,84,150,64,76,76};
     for(const auto& worker:controller.workers()){
         const auto progress=ui::worker_progress(worker,zh);
         const auto label=ui::message(worker.stop_requested?"Stopping":ecmgui::state_name(worker.state()),zh);
-        widths[0]=std::max(widths[0],ImGui::CalcTextSize(ui::message("Stopping",zh).c_str()).x/scale+16);
-        widths[2]=std::max(widths[2],ImGui::CalcTextSize(label.c_str()).x/scale+26);
-        widths[5]=std::max(widths[5],ImGui::CalcTextSize(progress.speed.c_str()).x/scale);
-        widths[6]=std::max(widths[6],ImGui::CalcTextSize(progress.eta.c_str()).x/scale);
-        const auto done=std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits);
-        widths[7]=std::max(widths[7],ImGui::CalcTextSize(done.c_str()).x/scale);
+        widths[0]=std::max(widths[0],ImGui::CalcTextSize(std::to_string(worker.index).c_str()).x/scale);
+        widths[3]=std::max(widths[3],ImGui::CalcTextSize(label.c_str()).x/scale+26);
+        widths[6]=std::max(widths[6],ImGui::CalcTextSize(progress.speed.c_str()).x/scale);
+        widths[7]=std::max(widths[7],ImGui::CalcTextSize(progress.eta.c_str()).x/scale);
     }
-    float minimum=0;for(float w:widths)minimum+=(w+16)*scale;
-    const auto left=ImGui::GetCursorScreenPos();const float visible_width=ImGui::GetContentRegionAvail().x;
-    worker_flexible=visible_width<minimum;worker_table_scroll_max_x=0;worker_field_overflow=0;
-    worker_summary_rects.clear();
-    if(worker_flexible){
-        // Flow whole labelled fields; the enclosing workspace owns vertical scroll.
-        // Never hide columns or shrink the font to fit a narrow dock / large font.
-        const auto center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
-        const float right=left.x+visible_width;
-        for(const auto& worker:controller.workers()){
-            ++worker_table_rows;ImGui::PushID(worker.index);ImGui::BeginGroup();
-            const auto st=worker.state();const bool busy=worker.running()||st==ecmgui::WorkerRunState::Restarting;
-            const auto progress=ui::worker_progress(worker,zh);
-            const auto name="#"+std::to_string(worker.index)+" "+worker.name;
-            const float name_height=std::max(control_height,ImGui::CalcTextSize(name.c_str(),nullptr,false,std::max(1.f,visible_width-16*scale)).y+8*scale);
-            const auto name_pos=ImGui::GetCursorScreenPos();
-            if(ImGui::Selectable("##worker-name",state.ui_worker==worker.index,0,{visible_width,name_height})){state.ui_worker=worker.index;log_active_worker=worker.index;log_last_worker_=-1;}
-            worker_select_controls[worker.index]=center();
-            ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(),ImGui::GetFontSize(),{name_pos.x+8*scale,name_pos.y+4*scale},ImGui::GetColorU32(p.fg),name.c_str(),nullptr,std::max(1.f,visible_width-16*scale));
-            const auto row_top=ImGui::GetCursorScreenPos().y;
-            if(ui::button("worker-action",worker.stop_requested?ui::text("message_23",zh):busy?ui::text("stop_cae7d57b",zh):ui::text("start_e4bb9f1e",zh),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested,nullptr,true)){
-                if(busy){controller.request_stop(worker.index);toast("Safe stop requested: "+worker.name);}else if(!start(worker.index))toast(status,true);
-            }
-            worker_action_controls[worker.index]=center();worker_button_height=ImGui::GetItemRectSize().y;
-            const auto state_label=ui::message(worker.stop_requested?"Stopping":ecmgui::state_name(st),zh);
-            const float badge_width=ImGui::CalcTextSize(state_label.c_str()).x+26*scale;
-            if(ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+badge_width<=right)ImGui::SameLine();
-            ui::status_badge(state_label.c_str(),st==ecmgui::WorkerRunState::Error?ui::Status::Danger:worker.stop_requested?ui::Status::Warning:busy?ui::Status::Success:ui::Status::Info,p,scale);
-            const auto device=(worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device):std::string("CPU"))+" / S"+std::to_string(worker.stage2?2:1)+(worker.duplicate_device?"*":"");
-            if(ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+ImGui::CalcTextSize(device.c_str()).x<=right)ImGui::SameLine();
-            ImGui::AlignTextToFramePadding();ImGui::TextColored(worker.stage2?p.stage2:p.stage1,"%s",device.c_str());
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | %s",device.c_str(),worker.curve_model.c_str());
-            worker_row_height=ImGui::GetCursorScreenPos().y-row_top;
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
-            const bool separate=ImGui::CalcTextSize(progress.label.c_str()).x+16*scale>visible_width;
-            ImGui::ProgressBar(progress.fraction,{visible_width,control_height},separate?"":progress.label.c_str());ImGui::PopStyleColor();
-            if(separate){ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(progress.label.c_str());ImGui::PopTextWrapPos();}
-            const std::string fields[]{std::string(ui::text("s_curve_1715c3bd",zh))+": "+progress.speed,"ETA: "+progress.eta,std::string(ui::text("done_hits_8c10e20d",zh))+": "+std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits)};
-            for(int i=0;i<3;++i){
-                const float width=std::min(visible_width,ImGui::CalcTextSize(fields[i].c_str()).x);
-                if(i&&ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+width<=right)ImGui::SameLine();
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+std::max(1.f,width));ImGui::TextUnformatted(fields[i].c_str());ImGui::PopTextWrapPos();
-                worker_field_overflow=std::max(worker_field_overflow,ImGui::GetItemRectMax().x-right);
-            }
-            const auto task=ecmgui::task_caption(worker.task,ui::text("known_factors_f88cad5f",zh),"assignment ID",ui::text("no_queued_task_b954d32f",zh));
-            const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(ui::text("task_953516d5",zh))+task+(phase.empty()?"":"\n"+phase);
-            const auto summary_pos=ImGui::GetCursorScreenPos();
-            ImGui::PushTextWrapPos(0);ImGui::TextColored(p.muted,"%s",summary.c_str());ImGui::PopTextWrapPos();
-            worker_summary_rects.push_back({summary_pos,ImGui::GetItemRectMax()});
-            ImGui::EndGroup();ImGui::Separator();ImGui::PopID();
-        }
-        worker_table_height=worker_table_content_height=worker_table_required_height=worker_table_data_height=ImGui::GetCursorScreenPos().y-left.y;
-        worker_table_scroll_max_y=0;ImGui::PopStyleVar(3);draw_worker_speed(fonts);return;
-    }
+    float preferred_width=18*cell_pad;for(float width:widths)preferred_width+=width*scale;
+    const bool compress_columns=visible_width<preferred_width;
+    worker_table_scroll_max_x=0;worker_field_overflow=0;worker_table_columns=0;
+    worker_summary_rects.clear();worker_summary_texts.clear();
     const float padding=ImGui::GetStyle().CellPadding.y*2;float content_height=ImGui::GetTextLineHeight()+padding+4*scale;
     for(const auto& worker:controller.workers()){
-        const auto task=ecmgui::task_caption(worker.task,ecmgui_v2::ui::text("known_factors_f88cad5f",zh),"assignment ID",ecmgui_v2::ui::text("no_queued_task_b954d32f",zh));
-        const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(ecmgui_v2::ui::text("task_953516d5",zh))+task+(phase.empty()?"":"\n"+phase);
+        const auto summary=worker_summary(worker,zh);
         // Selectable's baseline follows the button's FramePadding.y in each row.
         content_height+=control_height+padding+ImGui::GetStyle().FramePadding.y;
         content_height+=ImGui::CalcTextSize(summary.c_str(),nullptr,false,std::max(1.f,visible_width-24*scale)).y+padding;
@@ -474,10 +514,10 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     // Reserve child viewport padding so every row remains visible.
     content_height+=ImGui::GetStyle().ScrollbarSize;
     // Keep every worker row in the table. Only the surrounding workspace scrolls
-    // vertically; narrow surfaces use the flow layout above.
+    // vertically; the same elastic columns are used on narrow surfaces.
     const float table_height=content_height;
     // New column order gets a fresh table identity instead of reusing old widths.
-    if (ImGui::BeginTable("workers-v2",8,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingFixedFit,{0,table_height})) {
+    if (ImGui::BeginTable("workers-elastic-v4",9,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_NoSavedSettings,{0,table_height})) {
         worker_table_scroll_max_x=ImGui::GetScrollMaxX();
         worker_table_scroll_max_y=ImGui::GetScrollMaxY();worker_table_height=ImGui::GetWindowSize().y;worker_table_content_height=ImGui::GetCurrentWindow()->ContentSize.y;
         const auto table_origin=ImGui::GetWindowPos();worker_table_data_height=ImGui::GetCurrentWindow()->InnerRect.GetHeight();
@@ -485,41 +525,63 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         std::vector<SummaryRow> summaries;auto* table_draw=ImGui::GetWindowDrawList();
         const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin(),table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         float body_top=table_clip_min.y;
-        const char* labels[]{ecmgui_v2::ui::text("action_64cff131",zh),"Worker",ecmgui_v2::ui::text("state_a3b50c47",zh),ecmgui_v2::ui::text("device_engine_1041b2a2",zh),ecmgui_v2::ui::text("task_progress_e38b9d46",zh),ecmgui_v2::ui::text("s_curve_1715c3bd",zh),"ETA",ecmgui_v2::ui::text("done_hits_8c10e20d",zh)};
-        for(int i=0;i<8;++i)ImGui::TableSetupColumn(labels[i],i==4?ImGuiTableColumnFlags_WidthStretch:ImGuiTableColumnFlags_WidthFixed,widths[i]*scale);
+        const char* labels[]{"#",ecmgui_v2::ui::text("worker.action",zh),ecmgui_v2::ui::text("worker_name",zh),ecmgui_v2::ui::text("worker.state",zh),ecmgui_v2::ui::text("worker.device_engine",zh),ecmgui_v2::ui::text("worker.progress",zh),ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),"ETA",ecmgui_v2::ui::text("worker.completed_hits",zh)};
+        for(int i=0;i<9;++i){const bool stretch=i!=0&&(compress_columns||i==5);
+            ImGui::TableSetupColumn(labels[i],stretch?ImGuiTableColumnFlags_WidthStretch:ImGuiTableColumnFlags_WidthFixed,stretch?widths[i]:widths[i]*scale);}
         ImGui::TableHeadersRow();
+        for(int i=0;i<9;++i)if(ImGui::TableGetColumnFlags(i)&ImGuiTableColumnFlags_IsVisible)++worker_table_columns;
         const auto center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
         for (const auto& worker : controller.workers()) {
             ++worker_table_rows;
             ImGui::PushID(worker.index);ImGui::TableNextRow(0,control_height+padding);
             const auto st=worker.state();const auto progress=ui::worker_progress(worker,zh);
-            const auto name="#"+std::to_string(worker.index)+" "+worker.name;
+            const auto value_cell=[&](const std::string& value,const ImVec4& color,bool selectable=false){
+                const auto pos=ImGui::GetCursorScreenPos();const float width=std::max(1.f,ImGui::GetContentRegionAvail().x);
+                const auto shown=ui::fitted_label(value.c_str(),width);
+                if(selectable){
+                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{0,ImGui::GetStyle().ItemSpacing.y});
+                    if(ImGui::Selectable("##worker",state.ui_worker==worker.index,0,{width,control_height})){state.ui_worker=worker.index;log_active_worker=worker.index;log_last_worker_=-1;}
+                    ImGui::PopStyleVar();
+                }
+                else ImGui::Dummy({width,control_height});
+                if(ImGui::IsItemHovered()&&(selectable||shown!=value))ImGui::SetTooltip("%s",value.c_str());
+                auto* draw=ImGui::GetWindowDrawList();draw->PushClipRect(pos,{pos.x+width,pos.y+control_height},true);
+                draw->AddText({pos.x,pos.y+(control_height-ImGui::GetFontSize())*.5f},ImGui::GetColorU32(color),shown.c_str());draw->PopClipRect();
+                worker_field_overflow=std::max(worker_field_overflow,ImGui::GetItemRectMax().x-pos.x-width);
+            };
             ImGui::TableSetColumnIndex(0);
             if(summaries.empty())body_top=std::max(body_top,ImGui::GetCursorScreenPos().y-ImGui::GetStyle().CellPadding.y);
             const float main_row_top=ImGui::GetCursorScreenPos().y;
+            value_cell(std::to_string(worker.index),p.muted);worker_number_controls[worker.index]=center();
+            ImGui::TableSetColumnIndex(1);
             const bool busy=worker.running()||st==ecmgui::WorkerRunState::Restarting;
-            if(ui::button("worker-action",worker.stop_requested?ecmgui_v2::ui::text("stopping_a71ee1d4",zh):busy?ecmgui_v2::ui::text("stop_cae7d57b",zh):ecmgui_v2::ui::text("start_e4bb9f1e",zh),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested,nullptr,true)){
+            const auto action_label=worker.stop_requested?ui::text("status.stopping",zh):busy?ui::text("action.stop",zh):ui::text("action.start",zh);
+            const float action_width=std::max(1.f,std::min(ImGui::GetContentRegionAvail().x,ImGui::CalcTextSize(action_label).x+35*scale));
+            const auto action_shown=ui::fitted_label(action_label,action_width-8*scale);
+            if(ui::button("worker-action",action_shown.c_str(),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested,nullptr,true,action_width,0,busy||worker.stop_requested?ui::Icon::Stop:ui::Icon::Play)){
                 if(busy){controller.request_stop(worker.index);toast("Safe stop requested: "+worker.name);}else if(!start(worker.index))toast(status,true);
             }
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)&&action_shown!=action_label)ImGui::SetTooltip("%s",action_label);
             worker_action_controls[worker.index]=center();worker_button_height=ImGui::GetItemRectSize().y;
-            ImGui::TableSetColumnIndex(1);
-            if(ImGui::Selectable(name.c_str(),state.ui_worker==worker.index,0,{0,control_height})){state.ui_worker=worker.index;log_active_worker=worker.index;log_last_worker_=-1;}
-            worker_select_controls[worker.index]=center();if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",worker.name.c_str());
             ImGui::TableSetColumnIndex(2);
+            value_cell(worker.name,p.fg,true);worker_select_controls[worker.index]=center();
+            ImGui::TableSetColumnIndex(3);
             const auto state_kind=st==ecmgui::WorkerRunState::Error?ui::Status::Danger:worker.stop_requested||st==ecmgui::WorkerRunState::Restarting?ui::Status::Warning:worker.running()?ui::Status::Success:ui::Status::Info;
-            ui::status_badge(worker.stop_requested?ecmgui_v2::ui::text("stopping_a71ee1d4",zh):ui::message(ecmgui::state_name(st),zh).c_str(),state_kind,p,scale);
-            if(ImGui::IsItemHovered()&&!worker.state_text().empty())ImGui::SetTooltip("%s",worker.state_text().c_str());
-            ImGui::TableSetColumnIndex(3);ImGui::AlignTextToFramePadding();
+            const auto state_label=worker.stop_requested?std::string(ui::text("status.stopping",zh)):ui::message(ecmgui::state_name(st),zh);
+            ui::status_badge(state_label.c_str(),state_kind,p,scale,std::max(1.f,ImGui::GetContentRegionAvail().x));
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",state_label.c_str(),worker.state_text().c_str());
+            ImGui::TableSetColumnIndex(4);ImGui::AlignTextToFramePadding();
             const auto device=worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device):std::string("CPU");
-            ImGui::TextColored(worker.stage2?p.stage2:p.stage1,"%s / S%d%s",device.c_str(),worker.stage2?2:1,worker.duplicate_device?"*":"");
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | Stage %d | %s%s",device.c_str(),worker.stage2?2:1,worker.curve_model.c_str(),worker.duplicate_device?ecmgui_v2::ui::text("multiple_workers_use_this_gpu_ad48019a",zh):"");
-            ImGui::TableSetColumnIndex(4);ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
-            ImGui::ProgressBar(progress.fraction,{-1,control_height},progress.label.c_str());ImGui::PopStyleColor();
-            ImGui::TableSetColumnIndex(5);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(progress.speed.c_str());
-            ImGui::TableSetColumnIndex(6);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(progress.eta.c_str());
-            ImGui::TableSetColumnIndex(7);ImGui::AlignTextToFramePadding();ImGui::Text("%lld / %lld",worker.tasks_done,worker.hits);
-            const auto task=ecmgui::task_caption(worker.task,ecmgui_v2::ui::text("known_factors_f88cad5f",zh),"assignment ID",ecmgui_v2::ui::text("no_queued_task_b954d32f",zh));
-            const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(ecmgui_v2::ui::text("task_953516d5",zh))+task+(phase.empty()?"":"\n"+phase);
+            value_cell(device+" / S"+std::to_string(worker.stage2?2:1)+(worker.duplicate_device?"*":""),worker.stage2?p.stage2:p.stage1);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | Stage %d | %s%s",device.c_str(),worker.stage2?2:1,worker.curve_model.c_str(),worker.duplicate_device?ecmgui_v2::ui::text("worker.shared_gpu_hint",zh):"");
+            ImGui::TableSetColumnIndex(5);ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
+            const auto progress_shown=ui::fitted_label(progress.label.c_str(),ImGui::GetContentRegionAvail().x-8*scale);
+            ImGui::ProgressBar(progress.fraction,{-1,control_height},progress_shown.c_str());ImGui::PopStyleColor();
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",progress.label.c_str());
+            ImGui::TableSetColumnIndex(6);value_cell(progress.speed,p.fg);
+            ImGui::TableSetColumnIndex(7);value_cell(progress.eta,p.fg);
+            ImGui::TableSetColumnIndex(8);value_cell(std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits),p.fg);
+            const auto summary=worker_summary(worker,zh);worker_summary_texts[worker.index]=summary;
             ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
             const auto row=ImGui::GetCursorScreenPos();worker_row_height=row.y-main_row_top;
             const ImVec2 pos{std::max(left.x+12*scale,row.x),row.y};const float right=left.x+visible_width-12*scale;
@@ -550,21 +612,46 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
 void App::draw_worker_speed(const ui::Fonts& fonts) {
     const bool zh=fonts.chinese;
     const auto p=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
+    const float scale=ImGui::GetFontSize()/15.f;
     worker_speed_min=ImGui::GetCursorScreenPos();
-    for(const auto& worker:controller.workers()){
+    const float right=worker_speed_min.x+ImGui::GetContentRegionAvail().x;
+    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ui::text("worker.curve_time",zh));
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(),right-ImGui::GetWindowPos().x-30*scale));
+    if(ui::icon_button("##worker-chart-layout",state.ui_worker_chart_columns==1?ui::Icon::Grid:ui::Icon::List,p,scale))
+        state.ui_worker_chart_columns=state.ui_worker_chart_columns==1?2:1;
+    worker_chart_toggle={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(state.ui_worker_chart_columns==1?"worker_charts_two_columns":"worker_charts_list",zh));
+    // Keep each chart above the shared chart widget's minimum width. Restore
+    // the saved two-column choice automatically when the workspace grows.
+    worker_chart_columns=state.ui_worker_chart_columns==2&&ImGui::GetContentRegionAvail().x>=360*scale?2:1;
+    const auto draw_chart=[&](const auto& worker){
         ImGui::PushID(worker.index);++workspace_chart_count;
-        const auto title=std::string(ecmgui_v2::ui::text("curve_time_369c1d1c",zh))+"  #"+std::to_string(worker.index)+" "+worker.name+" / "+(worker.stage2?"Stage2":"Stage1");
-        ImGui::SeparatorText(title.c_str());worker_speed_samples+=worker.hist_s_per_curve.size();
+        ImGui::BeginGroup();const auto top=ImGui::GetCursorScreenPos();
+        const auto title=worker.name+" / "+(worker.stage2?"Stage2":"Stage1");
+        const auto shown=ui::fitted_label(title.c_str(),ImGui::GetContentRegionAvail().x);
+        ImGui::TextUnformatted(shown.c_str());if(ImGui::IsItemHovered())ImGui::SetTooltip("#%d %s",worker.index,title.c_str());
+        worker_speed_samples+=worker.hist_s_per_curve.size();ui::ChartMetrics metrics;
         if(!worker.hist_s_per_curve.empty()){
-            std::vector<ui::ChartSeries> series{{ecmgui_v2::ui::text("s_curve_1715c3bd",zh),worker.stage2?p.stage2:p.stage1,{}}};
+            std::vector<ui::ChartSeries> series{{ecmgui_v2::ui::text("metrics.seconds_per_curve",zh),worker.stage2?p.stage2:p.stage1,{}}};
             for(size_t i=0;i<worker.hist_s_per_curve.size();++i)series[0].points.push_back({static_cast<double>(i+1),worker.hist_s_per_curve[i]});
             const auto value=ui::worker_progress(worker,zh).speed+" s/curve";
             ui::ChartFormat format;format.legend_controls=false;format.show_y_ticks=false;format.show_axis_titles=false;
-            format.integer_x=true;format.corner_text=value.c_str();format.y_format="%.2f s/curve";format.x_format="%.0f";
-            ui::chart("workspace-speed",series,ecmgui_v2::ui::text("sample_95a2f1ed",zh),"s/curve",zh,0,120,format);
-        }else ImGui::TextDisabled("%s",ecmgui_v2::ui::text("waiting_for_a_measured_curve_time_c1472a27",zh));
-        worker_speed_max=ImGui::GetItemRectMax();ImGui::PopID();
+            format.integer_x=true;format.corner_text=value.c_str();format.y_format="%.2f s/curve";format.x_format="%.0f";format.metrics=&metrics;
+            ui::chart("workspace-speed",series,ecmgui_v2::ui::text("chart.sample",zh),"s/curve",zh,0,88,format);
+        }else {ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",ecmgui_v2::ui::text("worker.waiting_curve_time",zh));ImGui::PopTextWrapPos();}
+        ImGui::EndGroup();worker_chart_rects.push_back({top,ImGui::GetItemRectMax()});worker_chart_metrics.push_back(metrics);ImGui::PopID();
+    };
+    if(worker_chart_columns==2){
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{6*scale,4*scale});
+        if(ImGui::BeginTable("worker-speed-grid",2,ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_NoSavedSettings)){
+            for(const auto& worker:controller.workers()){ImGui::TableNextColumn();draw_chart(worker);}
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+    }else{
+        for(const auto& worker:controller.workers())draw_chart(worker);
     }
+    worker_speed_max={right,ImGui::GetCursorScreenPos().y};
 }
 
 void App::draw_exit(const ui::Settings& active,const ui::Fonts& fonts) {
@@ -575,24 +662,24 @@ void App::draw_exit(const ui::Settings& active,const ui::Fonts& fonts) {
     const float width=std::max(240.f,std::min(600*active.scale,vp->WorkSize.x-24*active.scale));
     bool stage1=false,stage2=false;
     for(const auto& w:controller.workers())if(w.running()){stage1|=!w.stage2;stage2|=w.stage2;}
-    const auto explain=stage1&&stage2?ecmgui_v2::ui::text("stage1_saves_a_checkpoint_stage2_finishes__f16b2dc8",zh):
-        stage2?ecmgui_v2::ui::text("stage2_finishes_its_current_curve_before_s_23f91e06",zh):
-        ecmgui_v2::ui::text("stage1_saves_a_checkpoint_before_stopping_fd6d9575",zh);
+    const auto explain=stage1&&stage2?ecmgui_v2::ui::text("exit.mixed_stage_stop_hint",zh):
+        stage2?ecmgui_v2::ui::text("exit.stage2_stop_hint",zh):
+        ecmgui_v2::ui::text("exit.stage1_stop_hint",zh);
     const auto center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
     fonts.push(ui::FontRole::Body);
-    const char* popup=ecmgui_v2::ui::text("confirm_exit_v2_exit_bd0b37b2",zh);
+    const char* popup=ecmgui_v2::ui::text("exit.confirm_title",zh);
     if(phase==Phase::Confirm){
         if(!ImGui::IsPopupOpen(popup))ImGui::OpenPopup(popup);
         ImGui::SetNextWindowViewport(vp->ID);ImGui::SetNextWindowPos(vp->GetCenter(),ImGuiCond_Always,{.5f,.5f});
         ImGui::SetNextWindowSize({width,0});
         if(ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoMove)){
             ImGui::PushTextWrapPos(0);
-            ImGui::Text(ecmgui_v2::ui::text("d_worker_s_are_running_stop_safely_and_exi_24856f27",zh),running_count());
+            ImGui::Text(ecmgui_v2::ui::text("exit.running_workers_prompt",zh),running_count());
             ImGui::TextWrapped("%s",explain);ImGui::Separator();
             const bool keyboard=!ImGui::IsWindowAppearing()&&ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            const bool accept=ui::button("exit-stop",ecmgui_v2::ui::text("stop_and_exit_enter_61229fa0",zh),ui::ButtonKind::Primary,p,active.scale);
+            const bool accept=ui::button("exit-stop",ecmgui_v2::ui::text("exit.stop_and_exit",zh),ui::ButtonKind::Primary,p,active.scale);
             exit_controls[0]=center();
-            const bool cancel=ui::button("exit-cancel",ecmgui_v2::ui::text("cancel_esc_862c2324",zh),ui::ButtonKind::Secondary,p,active.scale);
+            const bool cancel=ui::button("exit-cancel",ecmgui_v2::ui::text("exit.cancel",zh),ui::ButtonKind::Secondary,p,active.scale);
             exit_controls[1]=center();
             if(cancel||(keyboard&&ImGui::IsKeyPressed(ImGuiKey_Escape))){controller.cancel_close();ImGui::CloseCurrentPopup();}
             else if(accept||(keyboard&&(ImGui::IsKeyPressed(ImGuiKey_Enter)||ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))){begin_exit();ImGui::CloseCurrentPopup();}
@@ -602,16 +689,16 @@ void App::draw_exit(const ui::Settings& active,const ui::Fonts& fonts) {
     if(controller.exit_phase()==Phase::Stopping){
         const auto now=GetTickCount64(),deadline=controller.exit_deadline();const double left=deadline>now?(deadline-now)/1000.:0;
         ImGui::SetNextWindowViewport(vp->ID);ImGui::SetNextWindowPos(vp->GetCenter(),ImGuiCond_Always,{.5f,.5f});ImGui::SetNextWindowSize({width,0});
-        ImGui::Begin(ecmgui_v2::ui::text("stopping_workers_v2_stopping_53c8f7ae",zh),nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDocking|ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Begin(ecmgui_v2::ui::text("exit.stopping_title",zh),nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDocking|ImGuiWindowFlags_NoSavedSettings);
         ImGui::PushTextWrapPos(0);
-        ImGui::TextWrapped("%s",explain);ImGui::Text(ecmgui_v2::ui::text("up_to_1f_s_remaining_2d6201db",zh),left);
-        ImGui::TextColored(p.warning,"%s",ecmgui_v2::ui::text("at_the_deadline_remaining_processes_are_te_0b34a996",zh));
+        ImGui::TextWrapped("%s",explain);ImGui::Text(ecmgui_v2::ui::text("exit.remaining_seconds",zh),left);
+        ImGui::TextColored(p.warning,"%s",ecmgui_v2::ui::text("exit.deadline_hint",zh));
         ImGui::Separator();
         for(const auto& w:controller.workers()){
-            ImGui::TextColored(w.running()?p.warning:p.success,"#%d %s | %s | %s",w.index,w.name.c_str(),w.stage2?"Stage2":"Stage1",w.running()?(w.stage2?ecmgui_v2::ui::text("finishing_current_curve_1fef6708",zh):ecmgui_v2::ui::text("waiting_for_checkpoint_b160a8dc",zh)):ecmgui_v2::ui::text("stopped_1a4f630a",zh));
+            ImGui::TextColored(w.running()?p.warning:p.success,"#%d %s | %s | %s",w.index,w.name.c_str(),w.stage2?"Stage2":"Stage1",w.running()?(w.stage2?ecmgui_v2::ui::text("exit.finishing_curve",zh):ecmgui_v2::ui::text("exit.waiting_checkpoint",zh)):ecmgui_v2::ui::text("status.stopped",zh));
         }
         ImGui::Separator();
-        const bool force=ui::button("exit-force",ecmgui_v2::ui::text("force_exit_esc_8774db86",zh),ui::ButtonKind::Danger,p,active.scale);exit_controls[2]=center();
+        const bool force=ui::button("exit-force",ecmgui_v2::ui::text("exit.force_exit",zh),ui::ButtonKind::Danger,p,active.scale);exit_controls[2]=center();
         if(force||(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)&&ImGui::IsKeyPressed(ImGuiKey_Escape))){trace("exit: forced by user without waiting for a fresh checkpoint");controller.force_close();}
         ImGui::PopTextWrapPos();ImGui::End();
     }
@@ -626,72 +713,129 @@ void App::draw_inspector(const ui::Fonts& fonts) {
         ImGui::TextWrapped("%s", worker->task.c_str()); ImGui::Separator();
         if (worker->stage2 && worker->stage2_status.valid) {
             const auto& s=worker->stage2_status;
-            ImGui::Text(ecmgui_v2::ui::text("task_curves_llu_llu_58f847e9",zh),s.done,s.total);
-            ImGui::Text(ecmgui_v2::ui::text("phase_s_batch_llu_llu_f8541ba8",zh),s.phase.c_str(),s.batch,s.batches);
+            ImGui::Text(ecmgui_v2::ui::text("worker.task_curves",zh),s.done,s.total);
+            ImGui::Text(ecmgui_v2::ui::text("worker.phase_batch",zh),s.phase.c_str(),s.batch,s.batches);
             if(s.curve_model=="ed")ImGui::Text("Edwards sigma=%llu",s.sigma);
             else ImGui::Text("%s param=%d sigma=%llu",s.curve_model.c_str(),s.param,s.sigma);
             ImGui::Text("B1=%llu B2=%llu",s.b1,s.b2);
         }
-        if (ImGui::Button(ecmgui_v2::ui::text("open_worker_folder_5650fc18",zh))) ecmgui::open_in_explorer(worker->working_dir);
+        if (ImGui::Button(ecmgui_v2::ui::text("open_worker_folder",zh))) ecmgui::open_in_explorer(worker->working_dir);
         ImGui::TextWrapped("%s", worker->effective_config.c_str());
-        ImGui::TextWrapped(ecmgui_v2::ui::text("worker_version_s_8c3af2a1",zh), worker->application_version.empty() ? ecmgui_v2::ui::text("unknown_b23a6a84",zh) : worker->application_version.c_str());
-        if (ImGui::Button(ecmgui_v2::ui::text("copy_command_9a01feec",zh))) ImGui::SetClipboardText(worker->command_line().c_str());
+        ImGui::TextWrapped(ecmgui_v2::ui::text("worker.version",zh), worker->application_version.empty() ? ecmgui_v2::ui::text("unknown",zh) : worker->application_version.c_str());
+        if (ImGui::Button(ecmgui_v2::ui::text("copy_command",zh))) ImGui::SetClipboardText(worker->command_line().c_str());
         ImGui::TextWrapped("%s", worker->command_line().c_str());
-    } else ImGui::TextUnformatted(ecmgui_v2::ui::text("no_worker_selected_947b0173",zh));
+    } else ImGui::TextUnformatted(ecmgui_v2::ui::text("no_worker_selected",zh));
     ImGui::PopFont();
 }
-void App::draw_logs(const ui::Fonts& fonts) {
+void App::draw_log_windows(const ui::Settings& active,const ui::Fonts& fonts){
+    log_tab_controls.clear();log_docks.clear();log_raw_control=log_follow_control={};
+    log_stage2_fraction=log_stage2_width=0;log_stage2_phase=-1;log_stage2_sources.clear();
+    if(!state.ui_logs)return;
+    const bool request=log_last_worker_!=state.ui_worker||log_active_worker<0;
+    if(request){log_active_worker=selected()?selected()->index:0;log_last_worker_=state.ui_worker;}
+    const int requested=log_active_worker;
+    for(size_t i=0;i<=controller.workers().size();++i){
+        const auto* worker=i?&controller.workers()[i-1]:nullptr;const int id=worker?worker->index:0;
+        const auto label=worker?"#"+std::to_string(id)+" "+worker->name+"###v2.log.worker."+std::to_string(id):std::string(ui::text("logs.title",fonts.chinese));
+        if(worker&&log_dock_)ImGui::SetNextWindowDockID(log_dock_,ImGuiCond_FirstUseEver);
+        if(request&&id==requested)ImGui::SetNextWindowFocus();
+        const bool visible=begin_window(label.c_str(),nullptr,active,ImGuiWindowFlags_NoFocusOnAppearing);auto* window=ImGui::GetCurrentWindow();
+        if(!worker&&window->DockId)log_dock_=window->DockId;
+        log_docks[id]=window->DockId;
+        if(window->DockNode&&window->DockNode->TabBar){
+            auto* bar=window->DockNode->TabBar;
+            if(const auto* tab=ImGui::TabBarFindTabByID(bar,window->TabId)){
+                const float x=bar->BarRect.Min.x+tab->Offset-bar->ScrollingAnim;
+                log_tab_controls[id]={x+tab->Width*.5f,(bar->BarRect.Min.y+bar->BarRect.Max.y)*.5f};
+            }
+        }
+        if(visible){
+            if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)){
+                log_active_worker=id;if(worker)state.ui_worker=id;log_last_worker_=state.ui_worker;
+            }
+            draw_logs(fonts,worker);
+        }
+        end_window();
+    }
+}
+void App::draw_stage2_progress(const ecmgui::WorkerView& worker,const ui::Palette& p,bool zh){
+    const auto& s=worker.stage2_status;auto& view=stage2_views_[worker.index];const auto now=GetTickCount64();
+    const auto engine=stage2_engine_ids_.find(worker.index);
+    const auto scope=ui::stage2_scope(worker,gpu_details.get(worker.device).uuid,engine==stage2_engine_ids_.end()?"unknown":engine->second);
+    const auto tune=stage2_tunes_.find(worker.index);
+    const auto identity=scope+"|"+std::to_string(s.current)+"|"+std::to_string(s.record)+"|"+std::to_string(s.sigma)+"|"+state.ui_stage2_timing_source+"|"+state.ui_stage2_tune_file+"|"+std::to_string(tune==stage2_tunes_.end()?0:tune->second.revision);
+    if(view.identity!=identity){
+        const auto phase_at=view.phase_at,batch_at=view.batch_at,batch=view.batch;const auto clock_curve=view.clock_curve;
+        view=PhaseView{};view.identity=identity;view.phase=s.phase;view.clock_curve=clock_curve;
+        view.phase_at=phase_at?phase_at:now;view.batch_at=batch_at?batch_at:now;view.batch=batch;
+        const int mode=state.ui_stage2_timing_source=="previous"?1:state.ui_stage2_timing_source=="tune"?2:0;
+        view.timing=ui::stage2_timing(stage2_history_.lookup(scope),tune==stage2_tunes_.end()?ui::no_phase_seconds():tune->second.value.lookup(s,gpu_details.get(worker.device).uuid),mode);
+    }
+    if(view.phase!=s.phase){view.phase=s.phase;view.phase_at=view.batch_at=now;view.batch=0;}
+    if(view.batch!=s.batch){view.batch=s.batch;view.batch_at=now;}
+    const int phase=ui::stage2_phase_index(s.phase);const auto weights=view.timing.fractions();double fraction=0;
+    if(phase>=0){
+        for(int i=0;i<phase;++i)fraction+=weights[i];double local=0;
+        if(s.batches){
+            local=std::clamp(double(s.batch)/double(s.batches),0.,1.);
+            if(worker.running()&&s.batch_left>0&&std::isfinite(s.batch_left))local=std::min(.99,local+(1-local)*double(now-view.batch_at)/1000/s.batch_left);
+        }else if(worker.running()&&view.timing.seconds[phase]>0)local=std::min(.95,double(now-view.phase_at)/1000/view.timing.seconds[phase]);
+        fraction+=weights[phase]*local;
+    }
+    view.high_water=std::max(view.high_water,ui::stage2_bounded_fraction(s,fraction));
+    char overlay[128];std::snprintf(overlay,sizeof(overlay),ui::text("stage2.curve_progress",zh),100.*view.high_water);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,p.stage2);ImGui::ProgressBar(view.high_water,{-1,ImGui::GetFrameHeight()},overlay);ImGui::PopStyleColor();
+    const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();auto* draw=ImGui::GetWindowDrawList();double boundary=0;
+    for(size_t i=0;i<weights.size()-1;++i){boundary+=weights[i];if(boundary>0&&boundary<1){const float x=lo.x+float(boundary)*(hi.x-lo.x);draw->AddLine({x,lo.y+2},{x,hi.y-2},ImGui::GetColorU32(p.border));}}
+    if(ImGui::IsItemHovered()){
+        ImGui::BeginTooltip();
+        if(!view.timing.any())ImGui::TextUnformatted(ui::text("stage2.source.placeholder",zh));
+        else for(size_t i=0;i<weights.size();++i){const auto key=std::string("stage2.phase.")+ui::stage2_phase_keys[i];
+            const auto source=ui::text(view.timing.sources[i]==1?"stage2.source.previous":view.timing.sources[i]==2?"stage2.source.tune":"stage2.source.unknown",zh);
+            if(view.timing.seconds[i]>=0)ImGui::Text("%s | %.3f s | %.1f%% | %s",ui::text(key.c_str(),zh),view.timing.seconds[i],weights[i]*100,source);
+            else ImGui::Text("%s | -- | %s",ui::text(key.c_str(),zh),source);
+        }
+        if(tune!=stage2_tunes_.end()&&!tune->second.value.notice.empty())ImGui::TextUnformatted(tune->second.value.notice.c_str());
+        if(!stage2_history_.notice.empty())ImGui::TextUnformatted(stage2_history_.notice.c_str());ImGui::EndTooltip();
+    }
+    log_stage2_fraction=view.high_water;log_stage2_width=hi.x-lo.x;log_stage2_phase=phase;
+    for(int source:view.timing.sources)log_stage2_sources+=char('0'+source);
+}
+void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_worker) {
     const bool zh=fonts.chinese;
     const auto p=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);const float scale=ImGui::GetFontSize()/15.f;
-    fonts.push(ui::FontRole::Body);log_tab_controls.clear();
+    fonts.push(ui::FontRole::Body);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{ImGui::GetStyle().ItemSpacing.x,4*scale});
-    const bool request=log_last_worker_!=state.ui_worker;
-    if(request){log_active_worker=selected()?selected()->index:0;log_last_worker_=state.ui_worker;}
-    const int requested_worker=log_active_worker;
-    const ecmgui::WorkerView* active_worker=nullptr;
-    if(ImGui::BeginTabBar("worker-logs",ImGuiTabBarFlags_FittingPolicyScroll)){
-        for(int item=0;item<=static_cast<int>(controller.workers().size());++item){
-            const auto* worker=item?&controller.workers()[static_cast<size_t>(item-1)]:nullptr;const int id=worker?worker->index:0;
-            const auto label=(worker?"#"+std::to_string(id)+" "+worker->name:std::string(ecmgui_v2::ui::text("application_e7ad522e",zh)))+"###log-"+std::to_string(id);
-            const bool open=ImGui::BeginTabItem(label.c_str(),nullptr,request&&id==requested_worker?ImGuiTabItemFlags_SetSelected:0);
-            log_tab_controls[id]={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-            if(open){log_active_worker=id;active_worker=worker;if(worker){state.ui_worker=id;log_last_worker_=id;}ImGui::EndTabItem();}
-        }
-        ImGui::EndTabBar();
-    }
-    // TabBar may defer a newly selected tab by a frame; always use its stable id.
-    for(const auto& w:controller.workers())if(w.index==log_active_worker)active_worker=&w;
+    const int log_id=active_worker?active_worker->index:0;
     if(active_worker){
         const auto progress=ui::worker_progress(*active_worker,zh);
-        const auto task=ecmgui::task_caption(active_worker->task,ecmgui_v2::ui::text("known_factors_f88cad5f",zh),"assignment ID",ecmgui_v2::ui::text("no_queued_task_b954d32f",zh));
-        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ecmgui_v2::ui::text("s_s_s_s_s_curve_eta_s_6c18c89b",zh),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
+        const auto task=ecmgui::task_caption(active_worker->task,ecmgui_v2::ui::text("worker.known_factors",zh),"assignment ID",ecmgui_v2::ui::text("worker.no_task",zh));
+        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ecmgui_v2::ui::text("logs.worker_summary",zh),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",active_worker->task.c_str(),ui::worker_phase(*active_worker,zh).c_str());
         const auto shape=ui::worker_shape(*active_worker);
         if(!shape.empty()){
             // Keep the shape on one line; hover to read it in a narrow pane.
             ImGui::TextColored(p.stage2,"%s",shape.c_str());
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",shape.c_str());
-        }
-        if(active_worker->stage2&&active_worker->stage2_status.valid){
-            const auto& s=active_worker->stage2_status;
-            ImGui::TextColored(p.stage2,ecmgui_v2::ui::text("phase_s_curve_llu_llu_221f1861",zh),s.phase.c_str(),s.current,s.total);
-            const auto batch=ui::stage2_batch(s,zh);
-            if(batch.visible){
-                ImGui::PushStyleColor(ImGuiCol_PlotHistogram,p.stage2);
-                ImGui::ProgressBar(batch.fraction,{std::min(420*scale,ImGui::GetContentRegionAvail().x),ImGui::GetFrameHeight()},batch.label.c_str());ImGui::PopStyleColor();
-                ImGui::TextDisabled("%s",batch.remaining.c_str());
-            }
-            if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ecmgui_v2::ui::text("stop_after_the_current_stage2_curve_d315e7ec",zh));
+        }else if(active_worker->stage2)ImGui::Dummy({0,ImGui::GetTextLineHeight()});
+        if(active_worker->stage2){
+            const auto& s=active_worker->stage2_status;const auto name=ui::stage2_phase_name(s,zh);
+            char phase_line[512];std::snprintf(phase_line,sizeof(phase_line),ui::text("logs.phase_only",zh),name.c_str());
+            std::string label=phase_line;const auto batch=ui::stage2_batch(s,zh);
+            if(batch.visible)label+=" | "+batch.label+" | "+batch.remaining;
+            ImGui::TextColored(p.stage2,"%s",label.c_str());if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",label.c_str(),s.phase.c_str());
+            draw_stage2_progress(*active_worker,p,zh);
+            if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ui::text("stop_after_the_current_stage2_curve",zh));
         }
     }
-    auto found=log_views_.find(log_active_worker);if(found==log_views_.end())found=log_views_.emplace(log_active_worker,LogView{state.ui_raw_log,state.ui_follow_log,true}).first;
-    auto& view=found->second;ImGui::PushID(log_active_worker);
-    if(ui::button("raw",ecmgui_v2::ui::text("raw_output_f3dbf20a",zh),view.raw?ui::ButtonKind::Selected:ui::ButtonKind::Secondary,p,scale)){view.raw=!view.raw;state.ui_raw_log=view.raw;view.jump=true;}
+    auto found=log_views_.find(log_id);if(found==log_views_.end())found=log_views_.emplace(log_id,LogView{state.ui_raw_log,state.ui_follow_log,true}).first;
+    auto& view=found->second;ImGui::PushID(log_id);
+    if(ui::button("raw",ecmgui_v2::ui::text("raw_output",zh),view.raw?ui::ButtonKind::Selected:ui::ButtonKind::Secondary,p,scale)){view.raw=!view.raw;state.ui_raw_log=view.raw;view.jump=true;}
     log_raw_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-    ImGui::SameLine();if(ui::button("follow",ecmgui_v2::ui::text("follow_641d1ef6",zh),view.follow?ui::ButtonKind::Selected:ui::ButtonKind::Secondary,p,scale)){view.follow=!view.follow;state.ui_follow_log=view.follow;view.jump=view.follow;}
+    ImGui::SameLine();if(ui::button("follow",ecmgui_v2::ui::text("follow",zh),view.follow?ui::ButtonKind::Selected:ui::ButtonKind::Secondary,p,scale)){view.follow=!view.follow;state.ui_follow_log=view.follow;view.jump=view.follow;}
     log_follow_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
     if(active_worker){
-        ImGui::SameLine();if(ui::button("log-folder",ecmgui_v2::ui::text("open_log_folder_4862da00",zh),ui::ButtonKind::Secondary,p,scale))ecmgui::open_in_explorer(ecmgui::path_dir(active_worker->log_file));
+        ImGui::SameLine();if(ui::button("log-folder",ecmgui_v2::ui::text("open_log_folder",zh),ui::ButtonKind::Secondary,p,scale))ecmgui::open_in_explorer(ecmgui::path_dir(active_worker->log_file));
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",active_worker->log_file.c_str());
         if(ImGui::GetContentRegionAvail().x>ImGui::CalcTextSize(ecmgui::file_name(active_worker->log_file).c_str()).x+16*scale){ImGui::SameLine();ImGui::TextDisabled("%s",ecmgui::file_name(active_worker->log_file).c_str());if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",active_worker->log_file.c_str());}
     }
@@ -706,7 +850,7 @@ void App::draw_logs(const ui::Fonts& fonts) {
     log_font_height=ImGui::GetTextLineHeight();log_line_pitch=ImGui::GetTextLineHeightWithSpacing();
     const auto* lines=active_worker?(view.raw?&active_worker->raw:&active_worker->events):nullptr;
     const size_t count=lines?lines->size():messages.size();
-    if(!count)ImGui::TextDisabled("%s",ecmgui_v2::ui::text("no_output_yet_7b7658d7",zh));
+    if(!count)ImGui::TextDisabled("%s",ecmgui_v2::ui::text("no_output_yet",zh));
     ImGuiListClipper clip;clip.Begin(static_cast<int>(count),log_line_pitch);
     while(clip.Step())for(int i=clip.DisplayStart;i<clip.DisplayEnd;++i){const auto& line=lines?(*lines)[static_cast<size_t>(i)]:messages[static_cast<size_t>(i)];
         ui::log_line(line,p);}
@@ -722,7 +866,7 @@ void App::draw_page(const ui::Settings& active, const ui::Fonts& fonts,int page)
     case 2: draw_generator(fonts.chinese); break;
     case 3: draw_probability(fonts.chinese); break;
     case 4: draw_gpu(fonts.chinese); break;
-    case 5: draw_settings(fonts.chinese); break;
+    case 5: open_settings(); break;
     case 6: ui::state_strip(ui::palette(active.light),active.scale,fonts.chinese); break;
     }
 }

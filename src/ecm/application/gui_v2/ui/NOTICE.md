@@ -6,6 +6,12 @@ Components, commit `17f936b98c8c8fbdd5454745ac70c22df8526689`, inspected in
 Lucide assets are bundled. The small line icons are drawn by this application.
 Windows system fonts are discovered at runtime and are not redistributed.
 
+The non-docking settings window, category sidebar and theme preview cards also
+reference `.refactor/ELYTerminal/src/settings/window.rs` and
+`.refactor/Ely-GPUI-Components/src/settings/section.rs`. These are native ImGui
+controls using this application's palette, line geometry and external XML text;
+no upstream icon artwork or GPUI window/runtime code is copied into the build.
+
 Upstream license:
 
 MIT License

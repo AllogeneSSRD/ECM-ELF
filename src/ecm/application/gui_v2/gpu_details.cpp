@@ -46,7 +46,7 @@ std::map<int,GpuDetails> query(const std::string& source,const std::vector<ecmgu
         void* dev=nullptr;if(!handle||handle(device.index,&dev)!=0)continue;
         int major=-1,minor=-1;
         if(capability&&capability(dev,&major,&minor)==0){info.major=major;info.minor=minor;}
-        char id[96]{};if(uuid&&uuid(dev,id,sizeof(id))==0)ids.emplace(id,device.index);
+        char id[96]{};if(uuid&&uuid(dev,id,sizeof(id))==0){ids.emplace(id,device.index);info.uuid=id;}
     }
     if(ids.empty())return result;
     Module cuda{LoadLibraryExW(L"nvcuda.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32)};if(!cuda.handle)return result;

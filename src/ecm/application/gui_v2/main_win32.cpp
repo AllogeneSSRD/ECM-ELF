@@ -112,7 +112,9 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
             if (w == 4) current_app->request_close();
             if (w == 5) current_app->controller.cancel_close();
             if (w == 6) current_app->test_float = l != 0;
-            if (w == 7 && l >= 0 && l <= 6) current_app->state.ui_page = static_cast<int>(l);
+            if (w == 7 && l >= 0 && l <= 6) {if(l==5)current_app->open_settings();else {current_app->settings_open=false;current_app->state.ui_page=static_cast<int>(l);}}
+            if(w==11&&l>=0&&l<6)current_app->open_settings(static_cast<int>(l));
+            if(w==12)current_app->settings_open=false;
             if (w == 8 && l >= -1 && l <= 6) current_app->pet_test_mood = static_cast<int>(l);
             if (w == 9) current_app->state.pet_enabled = l != 0;
             if (w == 10) performance_sequence=static_cast<unsigned>(l);
@@ -213,7 +215,8 @@ int run(const Options& options, int show, FILE* log) {
     }
     state.load();
     if (options.explicit_theme) state.ui_theme = options.settings.light ? "light" : "dark";
-    if (options.explicit_language) state.ui_language = options.settings.chinese ? "zh" : "en";
+    if (options.explicit_language) {state.ui_language = options.settings.chinese ? "zh" : "en";state.ui_language_file=options.settings.chinese?"chineseSimplified.xml":"english.xml";}
+    if(state.ui_language_file.empty())state.ui_language_file=state.ui_language=="zh"?"chineseSimplified.xml":"english.xml";
     if (options.explicit_scale) state.ui_scale = options.settings.scale;
     if (options.pet >= 0) state.pet_enabled = options.pet != 0;
     if (options.pet_static) state.pet_animate = false;
@@ -232,7 +235,7 @@ int run(const Options& options, int show, FILE* log) {
     pending.font_size=static_cast<float>(state.ui_font_size);
     pending.primary_offset=state.ui_primary_font_offset;pending.secondary_offset=state.ui_secondary_font_offset;
     if (!options.explicit_theme) pending.light = state.ui_theme == "light";
-    if (!options.explicit_language) pending.chinese = state.ui_language == "zh";
+    if (!options.explicit_language) pending.chinese = state.ui_language_file!="english.xml";
     if (!options.explicit_scale && state.ui_scale > 0) pending.scale = state.ui_scale;
     UINT dpi = GetDpiForWindow(native.hwnd);
     if (!options.explicit_scale && state.ui_scale == 0) pending.scale = dpi / 96.f;
@@ -243,7 +246,10 @@ int run(const Options& options, int show, FILE* log) {
     active.chinese = pending.chinese = fonts.chinese;
     ecmgui_v2::ui::apply_theme(active);
     std::string language_error;
-    ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",language_error);
+    const auto language_directory=ecmgui::exe_dir()+"/localization/v2";
+    if(!ecmgui_v2::ui::load_languages(language_directory,language_error,fonts.chinese?state.ui_language_file:"english.xml")){
+        std::string fallback_error;ecmgui_v2::ui::load_languages(language_directory,fallback_error,"english.xml");state.ui_language="en";
+    }
     if(!language_error.empty())std::fprintf(log,"localization: %s\n",language_error.c_str());
     ecmgui_v2::ui::Showcase showcase;
     const bool show_components = options.showcase || options.audit_ui;
@@ -254,6 +260,7 @@ int run(const Options& options, int show, FILE* log) {
     struct ResetPetPointer{~ResetPetPointer(){current_pet=nullptr;}} reset_pet_pointer;
     app.initialize(options.config, options.no_nvml || show_components); app.test_float = options.detach_probe;
     if (!state.notice.empty()) app.trace(state.notice);
+    if(!language_error.empty())app.toast(language_error,true);
     if(!fonts.notice.empty()){app.status=fonts.notice;app.trace(fonts.notice);}
     try { const auto layout = state.layout(); if (!layout.empty() && !show_components) ImGui::LoadIniSettingsFromMemory(layout.data(), layout.size()); }
     catch (const std::exception& error) { app.trace(error.what()); app.reset_layout = true; }
@@ -300,6 +307,7 @@ int run(const Options& options, int show, FILE* log) {
         const bool font_change = active.chinese != pending.chinese || active.scale != pending.scale;
         if (font_change) { fonts.reload(pending.chinese, options.missing_cjk, log); pending.chinese = fonts.chinese;
             if(!show_components)state.ui_language=fonts.chinese?"zh":"en";
+            if(!fonts.chinese&&state.ui_language_file!="english.xml"){std::string error;ecmgui_v2::ui::load_languages(language_directory,error,"english.xml");}
             if(!fonts.notice.empty()){app.toast(fonts.notice,true);app.trace(fonts.notice);}
         }
         if (resized || renderer.needs_rebuild()) {
@@ -351,15 +359,21 @@ int run(const Options& options, int show, FILE* log) {
             const auto drop=point(app.nav_drop),back=point(app.nav_return),english=point(app.language_items[0]),chinese=point(app.language_items[1]),save=point(app.save_ui_control),calculate=point(app.calculate_control);
             std::fprintf(log,"usability_sample: page=%d mask=%d right=%d shown=%d zh=%d charts=%d drop=%ld,%ld back=%ld,%ld en=%ld,%ld cn=%ld,%ld save=%ld,%ld calculate=%ld,%ld",state.ui_page,state.ui_right_pages,state.ui_right_page,state.ui_right_visible,fonts.chinese,app.probability_ready,drop.x,drop.y,back.x,back.y,english.x,english.y,chinese.x,chinese.y,save.x,save.y,calculate.x,calculate.y);
             for(int i=0;i<7;++i){const auto nav=point(app.nav_items[i]),right=point(app.right_items[i]);std::fprintf(log," nav%d=%ld,%ld tool%d=%ld,%ld",i,nav.x,nav.y,i,right.x,right.y);}
-            const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld\n",app.settings_matches,search.x,search.y);std::fflush(log);
+            const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld settings=%d settings_category=%d\n",app.settings_matches,search.x,search.y,app.settings_open,app.settings_category);std::fflush(log);
             std::fprintf(log,"navigation_sample: order=%s dragged=%d rounding=%.1f height=%.1f gap=%.1f tools=%d right_count=%zu",state.ui_nav_order.c_str(),app.nav_drag_page,app.nav_rounding,app.nav_item_height,app.nav_item_gap,app.right_container_present,app.right_docks.size());
+            std::fprintf(log," padding=%.1f nav_scroll=%.1f,%.1f scrollbars=%.0f,%.0f nav_size=%.0f,%.0f",app.nav_padding,app.nav_scroll.x,app.nav_scroll.y,app.nav_scrollbars.x,app.nav_scrollbars.y,app.nav_size.x,app.nav_size.y);
             for(const auto& tab:app.right_close_controls){const auto pos=point(tab.second);std::fprintf(log," close%d=%ld,%ld",tab.first,pos.x,pos.y);}
             for(const auto& tab:app.right_docks)std::fprintf(log," dock%d=%u",tab.first,tab.second);std::fprintf(log,"\n");
+            const auto language_combo=point(app.language_control);
+            std::fprintf(log,"language_sample: file=%s loaded=%s files=%zu label=%s combo=%ld,%ld start=%s",state.ui_language_file.c_str(),ecmgui_v2::ui::selected_language_file().c_str(),ecmgui_v2::ui::language_files().size(),ecmgui_v2::ui::language_label(state.ui_language_file).c_str(),language_combo.x,language_combo.y,ecmgui_v2::ui::text("action.start",fonts.chinese));
+            for(const auto& item:app.language_file_controls){const auto pos=point(item.second);std::fprintf(log," item[%s]=%ld,%ld",item.first.c_str(),pos.x,pos.y);}std::fprintf(log,"\n");
             std::fprintf(log,"pet_skin_sample: selected=%s symbols=%d",state.pet_skin.c_str(),fonts.body->IsGlyphInFont(0x266a)&&fonts.body->IsGlyphInFont(0x2665));
             for(int i=0;i<4;++i){const auto skin=point(app.pet_skin_controls[i]);std::fprintf(log," skin%d=%ld,%ld",i,skin.x,skin.y);}std::fprintf(log,"\n");std::fflush(log);
             const auto raw=point(app.log_raw_control),follow=point(app.log_follow_control),drag=point({(app.title_drag_min.x+app.title_drag_max.x)*.5f,(app.title_drag_min.y+app.title_drag_max.y)*.5f});
             std::fprintf(log,"presentation_sample: selected=%d log_worker=%d raw=%d follow=%d scroll=%.1f title=%d raw_button=%ld,%ld follow_button=%ld,%ld drag=%ld,%ld",state.ui_worker,app.log_active_worker,app.log_current_raw,app.log_current_follow,app.log_scroll,state.window_title_bar,raw.x,raw.y,follow.x,follow.y,drag.x,drag.y);
             for(const auto& tab:app.log_tab_controls){const auto pos=point(tab.second);std::fprintf(log," log%d=%ld,%ld",tab.first,pos.x,pos.y);}
+            std::fprintf(log," log_nested=%d stage2_fraction=%.6f stage2_width=%.2f stage2_phase=%d timing_sources=%s",app.log_nested_tabs,app.log_stage2_fraction,app.log_stage2_width,app.log_stage2_phase,app.log_stage2_sources.empty()?"none":app.log_stage2_sources.c_str());
+            for(const auto& pane:app.log_docks)std::fprintf(log," logdock%d=%u",pane.first,pane.second);
             for(const auto& row:app.worker_select_controls){if(row.first>4)break;const auto pos=point(row.second);std::fprintf(log," worker%d=%ld,%ld",row.first,pos.x,pos.y);}
             for(const auto& row:app.worker_action_controls){if(row.first>4)break;const auto pos=point(row.second);std::fprintf(log," action%d=%ld,%ld",row.first,pos.x,pos.y);}
             for(size_t i=0;i<app.worker_summary_rects.size()&&i<3;++i){const auto a=point(app.worker_summary_rects[i].first),b=point(app.worker_summary_rects[i].second);std::fprintf(log," summary%zu=%ld,%ld,%ld,%ld",i,a.x,a.y,b.x,b.y);}
@@ -367,16 +381,27 @@ int run(const Options& options, int show, FILE* log) {
             std::fprintf(log," table_scroll_y=%.2f table_height=%.2f table_content=%.2f body_font=%.2f body_glyph=%.2f log_glyph=%.2f log_body=%d",app.worker_table_scroll_max_y,app.worker_table_height,app.worker_table_content_height,app.body_font_height,app.body_glyph_height,app.log_glyph_height,app.log_uses_body);
             std::fprintf(log," table_required=%.2f table_data_height=%.2f table_rows=%zu",app.worker_table_required_height,app.worker_table_data_height,app.worker_table_rows);
             std::fprintf(log," toolbar_height=%.2f row_height=%.2f worker_button_height=%.2f",app.worker_toolbar_height,app.worker_row_height,app.worker_button_height);
-            std::fprintf(log," table_scroll_x=%.2f flexible=%d field_overflow=%.2f",app.worker_table_scroll_max_x,app.worker_flexible,app.worker_field_overflow);
+            std::fprintf(log," table_scroll_x=%.2f elastic=1 table_columns=%u field_overflow=%.2f",app.worker_table_scroll_max_x,app.worker_table_columns,app.worker_field_overflow);
             const auto font_control=point(app.font_size_control),speed_min=point(app.worker_speed_min),speed_max=point(app.worker_speed_max);
             std::fprintf(log," workspace_speed=%zu workspace_series=%zu speed_min=%ld,%ld speed_max=%ld,%ld font_size=%d font_base=%.1f font_control=%ld,%ld exit_phase=%d deadline=%llu",app.worker_speed_samples,app.workspace_chart_count,speed_min.x,speed_min.y,speed_max.x,speed_max.y,state.ui_font_size,ImGui::GetStyle().FontSizeBase,font_control.x,font_control.y,static_cast<int>(app.controller.exit_phase()),app.controller.exit_deadline());
             for(int i=0;i<3;++i){const auto pos=point(app.exit_controls[i]);std::fprintf(log," exit%d=%ld,%ld",i,pos.x,pos.y);}
             for(int i=0;i<3;++i){const auto pos=point(app.title_controls[i]);std::fprintf(log," chrome%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");std::fflush(log);
+            for(const auto& row:app.worker_summary_texts){if(row.first>3)break;std::fprintf(log,"worker_summary: index=%d text=%s\n",row.first,ecm_results::json::quote(row.second).c_str());}
             if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);const auto batch=ecmgui_v2::ui::stage2_batch(worker->stage2_status,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s | batch=%s | remaining=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str(),batch.label.c_str(),batch.remaining.c_str());}
             std::fprintf(log,"gpu_settings: seconds=%d",state.ui_gpu_history_seconds);
             for(int i=0;i<4;++i){const auto pos=point(app.gpu_range_controls[i]);std::fprintf(log," range%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");
             const auto primary_control=point(app.primary_offset_control),secondary_control=point(app.secondary_offset_control);
+            const auto settings_close=point(app.settings_close),settings_expand=point(app.settings_expand);
+            std::fprintf(log,"settings_sample: open=%d category=%d stacked=%d icons=%d close=%ld,%ld expand=%ld,%ld min=%.0f,%.0f max=%.0f,%.0f",app.settings_open,app.settings_category,app.settings_sidebar_stacked,app.navigation_icon_count,settings_close.x,settings_close.y,settings_expand.x,settings_expand.y,app.settings_min.x,app.settings_min.y,app.settings_max.x,app.settings_max.y);
+            std::fprintf(log," content=%.0f,%.0f,%.0f,%.0f",app.settings_content_min.x,app.settings_content_min.y,app.settings_content_max.x,app.settings_content_max.y);
+            for(int i=0;i<6;++i){const auto control=point(app.settings_categories[i]);std::fprintf(log," category%d=%ld,%ld",i,control.x,control.y);}
+            for(int i=0;i<2;++i){const auto control=point(app.theme_controls[i]);std::fprintf(log," theme%d=%ld,%ld",i,control.x,control.y);}
+            std::fprintf(log,"\n");
             std::fprintf(log,"typography_sample: body=%d primary_offset=%d secondary_offset=%d primary_size=%.1f secondary_size=%.1f primary_button=%.2f secondary_button=%.2f secondary_note=%.2f primary_control=%ld,%ld secondary_control=%ld,%ld\n",state.ui_font_size,state.ui_primary_font_offset,state.ui_secondary_font_offset,ecmgui_v2::ui::primary_font_size(ImGui::GetStyle().FontSizeBase),ecmgui_v2::ui::secondary_font_size(ImGui::GetStyle().FontSizeBase),app.primary_font_height,app.secondary_button_font_height,app.secondary_text_font_height,primary_control.x,primary_control.y,secondary_control.x,secondary_control.y);
+            const auto chart_toggle=point(app.worker_chart_toggle);
+            std::fprintf(log,"worker_layout_sample: start_size=%.1f,%.1f stop_size=%.1f,%.1f requested=%d columns=%d toggle=%ld,%ld cards=%zu",app.start_button_size.x,app.start_button_size.y,app.stop_button_size.x,app.stop_button_size.y,state.ui_worker_chart_columns,app.worker_chart_columns,chart_toggle.x,chart_toggle.y,app.worker_chart_rects.size());
+            for(const auto& row:app.worker_number_controls){const auto pos=point(row.second);std::fprintf(log," number%d=%ld,%ld",row.first,pos.x,pos.y);}
+            for(size_t i=0;i<app.worker_chart_rects.size();++i){const auto a=point(app.worker_chart_rects[i].first),b=point(app.worker_chart_rects[i].second);const auto& m=app.worker_chart_metrics[i];std::fprintf(log," card%zu=%ld,%ld,%ld,%ld height%zu=%.2f plot%zu=%.2f xticks%zu=%d",i,a.x,a.y,b.x,b.y,i,m.height,i,m.plot_height,i,m.x_ticks);}std::fprintf(log,"\n");
             for(const auto& device:app.gpu.devices()){
                 const auto found=app.gpu_presentations.find(device.index);if(found==app.gpu_presentations.end())continue;
                 const auto& display=found->second;const auto details=app.gpu_details.get(device.index);const auto pos=point(display.header);

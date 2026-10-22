@@ -23,6 +23,13 @@ Appearance mode, independent of legacy GUI settings.
 UI language; CJK font failure falls back to English.
 界面语言；中文字体不可用时回退英文。
 
+## ui.language_file
+
+默认值：`""`；类型：`string`。
+
+Interface XML filename in localization/v2 beside the executable. Empty migrates the legacy en/zh selection. Companion options.*.xml files are not selectable interface files.
+程序旁localization/v2目录中的界面XML文件名；空值按旧en/zh选择迁移。配套options.*.xml不是可选界面文件。
+
 ## ui.scale
 
 默认值：`0`；类型：`float`。
@@ -51,6 +58,13 @@ Primary action font offset from the body size, in logical pixels; secondary butt
 Secondary text font offset from the body size, in logical pixels; the rendered role has a minimum of 8 logical pixels.
 次要说明字号相对正文的偏移（逻辑像素）；实际字号最小为 8 逻辑像素。
 
+## ui.worker_chart_columns
+
+默认值：`1`；类型：`int`。
+
+Curve-time chart columns: 1 for list, 2 for two charts per row; narrow workspaces temporarily use one column without changing the saved choice.
+曲线耗时图列数：1为列表，2为每行两图；工作区过窄时临时使用单列，不改变保存的选择。
+
 ## ui.gpu_history_seconds
 
 默认值：`60`；类型：`int`。
@@ -58,19 +72,33 @@ Secondary text font offset from the body size, in logical pixels; the rendered r
 GPU chart time span in seconds, shared by all devices and persisted with UI preferences. Does not change the 500 ms sampling interval.
 GPU 图表时间范围（秒），所有设备共用并随界面偏好保存；不改变 500 ms 采样间隔。
 
+## ui.stage2_timing_source
+
+默认值：`"auto"`；类型：`string`。
+
+Stage2 segment duration source: auto overlays previous completed-curve timings on tune data; previous or tune restricts the source. Missing durations are marked unknown.
+Stage2区段时长来源：auto按上次完成曲线覆盖tune数据；previous或tune仅使用指定来源，缺项明确标为未知。
+
+## ui.stage2_tune_file
+
+默认值：`""`；类型：`string`。
+
+Optional read-only Stage2 tune summary path. Empty uses the workflow stage2_tune_profile, then tune.toml or stage2_ecm_tune.toml next to the workflow/worker. Relative paths use the workflow directory.
+可选的只读Stage2 tune摘要路径。空值使用工作流stage2_tune_profile，再查找工作流/worker旁的tune.toml或stage2_ecm_tune.toml；相对路径基于工作流目录。
+
 ## ui.nav_order
 
 默认值：`"0123456"`；类型：`string`。
 
-Navigation order of all seven page IDs. Long-press and drag to reorder; pages moved right keep their position for return.
-七个页面编号的导航顺序；长按拖动排序，移到右侧的页面保留返回位置。
+Stable ordering of seven legacy IDs. ID 5 is reserved for the fixed Settings popup entry and ignored in page ordering. Long-press real pages to reorder; right-side pages keep their return position.
+保留七个历史编号的完整顺序；编号5用于固定设置弹窗入口，不参与页面排序。其他页面可长按排序，右侧页面保留返回位置。
 
 ## ui.page
 
 默认值：`0`；类型：`int`。
 
-Selected central page: workers, results, generator, probability, GPU, settings, components.
-中央页面：worker、结果、生成器、概率、GPU、设置、组件。
+Selected central page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components. Legacy ID 5 opens Settings as a popup and returns the center to a real page.
+中央页面：0任务、1结果、2生成器、3概率、4 GPU、6组件。旧编号5兼容为打开设置弹窗，并让中央区回到实际页面。
 
 ## ui.worker
 
@@ -118,15 +146,15 @@ Hex encoded ImGui layout; stored only in this sidecar.
 
 默认值：`0`；类型：`int`。
 
-Pages in the right dock share native horizontal tabs; closing a tab returns its page to navigation. At least one page remains central.
-右侧停靠区的页面共用横排标签；关闭标签后回到导航，至少保留一个中央页面。
+Real pages in the right dock share native horizontal tabs. Closing returns a page to navigation; one real page remains central. Settings bit 5 is cleared when opening old sidecars.
+右侧实际页面共用横排标签，关闭后返回导航，至少保留一个实际中央页面；读取旧侧车时移除设置位5。
 
 ## ui.right_page
 
 默认值：`4`；类型：`int`。
 
-Last active page in the right dock.
-右侧停靠区最后激活的页面。
+Last active real page in the right dock. Legacy Settings ID 5 is remapped on load.
+右侧停靠区最后激活的实际页面；读取旧设置编号5时改选实际页面。
 
 ## ui.right_visible
 

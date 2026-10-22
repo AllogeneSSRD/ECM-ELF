@@ -31,6 +31,14 @@ int main(int argc,char** argv){
      assert(ecmgui_v2::ui::worker_shape(worker)=="B1=--  B2=--  S=-- bits  D=--  P=--");
      worker.stage2_status.b1=260000000;worker.stage2_status.b2=1300000000000ULL;worker.stage2_status.bits=4283;worker.stage2_status.d=1381380;worker.stage2_status.p=126720;
      assert(ecmgui_v2::ui::worker_shape(worker)=="B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720");
+     const auto direct=ecmgui_v2::ui::worker_construction(worker,0,false);
+     assert(direct.find("Edwards")!=std::string::npos&&direct.find("param=")==std::string::npos&&direct.find("B2=1300000000000")!=std::string::npos&&direct.find("sigma=17")!=std::string::npos);
+     assert(ecmgui_v2::ui::worker_construction(worker,5000,false).find("B2=5000*B1=1300000000000")!=std::string::npos);
+     assert(ecmgui_v2::ui::worker_construction(worker,4999,false).find("*B1=")==std::string::npos);
+     assert(ecmgui_v2::ui::worker_construction(worker,std::numeric_limits<unsigned long long>::max(),false).find("*B1=")==std::string::npos);
+     worker.stage2_status.curve_model="mont";worker.stage2_status.param=3;
+     assert(ecmgui_v2::ui::worker_construction(worker,5000,false).find("Montgomery param=3")!=std::string::npos);
+     worker.stage2_status.curve_model="ed";worker.stage2_status.param=-1;
      auto batch=ecmgui_v2::ui::stage2_batch(worker.stage2_status,false);assert(!batch.visible);
      worker.stage2_status.phase="Giant points";worker.stage2_status.batch=2;worker.stage2_status.batches=8;worker.stage2_status.batch_left=12;
      batch=ecmgui_v2::ui::stage2_batch(worker.stage2_status,false);assert(batch.visible&&batch.fraction==.25f&&batch.label=="Giant batch 2 / 8"&&batch.remaining=="Phase remaining 12.0 s");
@@ -43,16 +51,32 @@ int main(int argc,char** argv){
      assert(log_tone(ecmgui::parse_line("WARNING: test"))==LogTone::Warning);
      assert(log_tone(ecmgui::parse_line("factor[0]=123"))==LogTone::Success);}
     int mask=0,center=0,right=4;
-    for(int i=0;i<6;++i)assert(ecmgui_v2::ui::move_page(mask,center,right,i,true));
-    assert(mask==63&&center==6&&!ecmgui_v2::ui::move_page(mask,center,right,6,true));
-    assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==3&&!ecmgui_v2::ui::pinned(mask,3));
+    for(int i=0;i<5;++i)assert(ecmgui_v2::ui::move_page(mask,center,right,i,true));
+    assert(mask==31&&center==6&&!ecmgui_v2::ui::move_page(mask,center,right,6,true));
+    assert(!ecmgui_v2::ui::move_page(mask,center,right,5,true));
+    assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==6&&!ecmgui_v2::ui::pinned(mask,3));
     assert(!ecmgui_v2::ui::move_page(mask,center,right,-1,true));
     std::string order="0123456";
     assert(ecmgui_v2::ui::reorder_page(order,4,1,false)&&order=="0412356");
     assert(ecmgui_v2::ui::reorder_page(order,0,6,true)&&order=="4123560");
     assert(!ecmgui_v2::ui::reorder_page(order,3,3,false)&&!ecmgui_v2::ui::reorder_page(order,7,2,false));
     using namespace ecmgui_v2::ui;
+    assert(language_label("english.xml")=="english"&&language_label("custom.name.XML")=="custom.name");
+    assert(language_label("自定义语言.xml")=="自定义语言");
     assert(memory_occupancy(4096,8192)==50);assert(std::isnan(memory_occupancy(1,0)));
+    assert(power_value(9.4,55)==9.4&&power_value(165,55)==165);
+    assert(power_value(0,55)==0&&power_readout(0,55)=="0.0 / 55 W");
+    assert(std::isnan(power_value(590,55))&&std::isnan(power_value(165.000001,55)));
+    assert(power_readout(590,55)=="-- / 55 W"&&power_readout(165,55)=="165.0 / 55 W");
+    assert(power_value(590,0)==590&&power_readout(590,0)=="590.0 / -- W");
+    assert(power_readout(590,std::numeric_limits<double>::quiet_NaN())=="590.0 / -- W");
+    assert(power_value(590,285)==590); // Per-device/sample limit, not a global ceiling.
+    for(double bad:{-1.,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()})assert(std::isnan(power_value(bad,55)));
+    assert(std::isnan(power_value(9,55,false))&&power_readout(9,55,false)=="-- / 55 W");
+    std::vector<ChartSeries> power_charts{{"power",{},{{-1,power_value(9.2,55)},{-.5,power_value(590,55)},{0,power_value(9.4,55)}}}};
+    assert(power_charts[0].points.size()==3&&std::isnan(power_charts[0].points[1].y));
+    assert(chart_bounds(power_charts).ymax<11&&chart_nearest(power_charts[0].points,-.5)!=1);
+    power_charts[0].points={{0,power_value(590,55)}};assert(chart_nearest(power_charts[0].points,0)==-1&&chart_bounds(power_charts).ymax==1);
     assert(percent(.95)==95&&probability(95)==.95);assert(integer_step(29.9,3)==10&&integer_step(15,3)==5);
     std::vector<ChartSeries> charts{{"measured",{},{{-60,20},{-30,std::numeric_limits<double>::quiet_NaN()},{0,80}}}};
     const auto bounds=chart_bounds(charts);assert(bounds.xmin==-60&&bounds.xmax==0&&bounds.ymax>=80);
@@ -65,6 +89,37 @@ int main(int argc,char** argv){
     while(scroll.active()){scroll.step(.016,x,y);assert(y<=0);total+=y;assert(++steps<100);}
     assert(std::abs(total+3)<1e-9&&steps>1);
     assert(argc==2);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
+    {using namespace ecmgui_v2::ui;
+     auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
+     auto timing=stage2_timing(previous,tuned,0);assert(timing.seconds[5]==20&&timing.sources[5]==1&&timing.seconds[2]==10&&timing.sources[2]==2);
+     assert(std::abs(timing.fractions()[5]-2./3)<1e-6);
+     assert(stage2_timing(previous,tuned,1).seconds[2]==-1&&stage2_timing(previous,tuned,2).seconds[5]==80);
+     tuned[2]=std::numeric_limits<double>::infinity();assert(stage2_timing(no_phase_seconds(),tuned,2).seconds[2]==-1);
+     assert(stage2_phase_index("Giant points, G trees and fold")==5&&stage2_phase_index("unrecognized")==-1);
+     ecmgui::Stage2Status status;status.bits=4283;status.d=1381380;status.b2=1300000000000ULL;
+     status.phase="Publish result";assert(stage2_bounded_fraction(status,1)==.99f);
+     status.phase="complete";status.current=2;status.done=1;assert(stage2_bounded_fraction(status,1)==.99f);
+     status.phase="curve_done";assert(stage2_bounded_fraction(status,0)==1);status.phase.clear();
+     const auto tune=root/"tune.toml";
+     write(tune,"[profile]\nformat=8\nunit=\"full_stage2\"\n[condition.0]\nuuid_hex=\"aabb\"\n[width.4283.table.0]\ncondition=0\narithmetic_bits=4283\nphase_accounting=\"exclusive_engine_v1\"\nphase_baby_seconds=10\nmatrix=[\n[\"d\",\"b2\",\"phase_giant_loop_seconds\",\"checked\"],\n[1381380,1300000000000,80,6591],\n]\n");
+     Stage2Tune table;table.load(tune);auto row=table.lookup(status,"GPU-aabb");assert(table.notice.empty()&&row[2]==10&&row[5]==80);
+     assert(table.lookup(status,"GPU-ccdd")[5]==-1);status.d=210;assert(table.lookup(status,"GPU-aabb")[5]==-1);status.d=1381380;
+     const auto bad=root/"bad-tune.toml";write(bad,"[profile]\nformat=8\nunit=\"full_stage2\"\n[width.4283.table.0]\nmatrix=[\n[\"d\",\"d\"],\n");table.load(bad);assert(!table.notice.empty()&&table.lookup(status,"GPU-aabb")[5]==-1);
+     ecmgui::WorkerView w;w.exe="fixture.exe";w.device=0;
+     w.raw={"stage2_plan: save=test.save requested=2 available=2 completed=0 B2=1300000000000 D=1381380",
+       "curve_start: 1/2 record=1 sigma=17 B1=20 checksum=verified curve_model=ed",
+       "real_shape: B1=20 B2=1300000000000 S_bits=4283 D=1381380 P=126720",
+       "stage2_phase: Generate and normalize baby points previous=0 elapsed=0",
+       "stage2_phase: Giant points previous=10 elapsed=10",
+       "stage2_phase: Normalize fold and descend F tree previous=20 elapsed=30",
+       "curve_done: 1/2 record=1 seconds=35"};
+     Stage2TimingHistory history;const auto cache=root/"stage2-times.json";history.load(cache);history.observe(w,"GPU-aabb");
+     for(const auto& line:w.raw){const auto parsed=ecmgui::parse_line(line);if(parsed.stage2.kind!=ecmgui::Stage2Event::Kind::None)w.stage2_status.apply(parsed.stage2);}
+     const auto scope=stage2_scope(w,"GPU-aabb");assert(history.lookup(scope)[2]==10&&history.lookup(scope)[5]==20);
+     Stage2TimingHistory restored;restored.load(cache);assert(restored.notice.empty()&&restored.lookup(scope)[5]==20);
+     history.observe(w,"GPU-aabb");assert(history.lookup(scope)[5]==20); // No double-count on repeated view/tick.
+     const auto corrupt=root/"corrupt-times.json";write(corrupt,"{broken");Stage2TimingHistory retained;retained.load(corrupt);retained.observe(w,"GPU-aabb");assert(read(corrupt)=="{broken"&&!retained.notice.empty());
+    }
     {
         // Exercise external edits, Unicode paths, fallback and transactional reload.
         const auto loc=root/fs::u8path("语言资源");fs::create_directories(loc);
@@ -76,20 +131,35 @@ int main(int argc,char** argv){
         assert(found);write(loc/"chineseSimplified.xml",changed);
         std::string error;assert(load_languages(loc.u8string(),error));assert(message("Stopped",true)=="外部编辑测试");
         // A missing translated entry falls back to the external English baseline.
-        auto fallback=chinese;const auto begin=fallback.find("<Item id=\"stopped_1a4f630a\"");assert(begin!=fallback.npos);fallback.erase(begin,fallback.find("/>",begin)+2-begin);write(loc/"chineseSimplified.xml",fallback);
-        assert(load_languages(loc.u8string(),error));assert(std::string(text("stopped_1a4f630a",true))=="Stopped");
+        auto fallback=chinese;const auto begin=fallback.find("<Item id=\"status.stopped\"");assert(begin!=fallback.npos);fallback.erase(begin,fallback.find("/>",begin)+2-begin);write(loc/"chineseSimplified.xml",fallback);
+        assert(load_languages(loc.u8string(),error));assert(std::string(text("status.stopped",true))=="Stopped");
         auto invalid=chinese;const auto format=invalid.find("%.1f s");assert(format!=invalid.npos);invalid.replace(format,4,"%s");write(loc/"chineseSimplified.xml",invalid);
         assert(!load_languages(loc.u8string(),error)&&error.find("format mismatch")!=error.npos);
-        assert(std::string(text("stopped_1a4f630a",true))=="Stopped");
+        assert(std::string(text("status.stopped",true))=="Stopped");
         write(loc/"chineseSimplified.xml",chinese);write(loc/"english.xml","<EcmGui><Native-Langue><Panel id=\"ui\"><Item id=\"bad\" name=\"broken\"/>");
         assert(!load_languages(loc.u8string(),error));
         write(loc/"english.xml",english);assert(load_languages(loc.u8string(),error));
-        auto duplicate=chinese;const auto close=duplicate.find("</Panel>");assert(close!=duplicate.npos);duplicate.insert(close,"<Item id=\"stopped_1a4f630a\" name=\"Duplicate\"/>");write(loc/"chineseSimplified.xml",duplicate);
+        auto duplicate=chinese;const auto close=duplicate.find("</Panel>");assert(close!=duplicate.npos);duplicate.insert(close,"<Item id=\"status.stopped\" name=\"Duplicate\"/>");write(loc/"chineseSimplified.xml",duplicate);
         assert(!load_languages(loc.u8string(),error)&&error.find("Duplicate")!=error.npos);
         assert(message("Stopped",true)=="已停止");fs::remove(loc/"chineseSimplified.xml");
         assert(load_languages(loc.u8string(),error)&&!error.empty());assert(message("Stopped",true)=="Stopped");
         write(loc/"chineseSimplified.xml",chinese);assert(load_languages(loc.u8string(),error));
-        assert(message("Stopped",true)=="已停止");assert(load_languages(original.u8string(),error));
+        assert(message("Stopped",true)=="已停止");
+        write(loc/fs::u8path("自定义语言.xml"),changed);assert(load_languages(loc.u8string(),error,"自定义语言.xml"));
+        assert(selected_language_file()=="自定义语言.xml"&&message("Stopped",true)=="外部编辑测试");
+        const auto files=language_files();assert(std::find(files.begin(),files.end(),"自定义语言.xml")!=files.end());
+        assert(std::none_of(files.begin(),files.end(),[](const auto& name){return name.rfind("options.",0)==0;}));
+        assert(!load_languages(loc.u8string(),error,"../chineseSimplified.xml")&&selected_language_file()=="自定义语言.xml");
+        assert(!load_languages(loc.u8string(),error,"options.english.xml")&&selected_language_file()=="自定义语言.xml");
+        write(loc/"bad-custom.xml",invalid);assert(!load_languages(loc.u8string(),error,"bad-custom.xml")&&selected_language_file()=="自定义语言.xml");
+        const std::string legacy="<EcmGui><Native-Langue><Panel id=\"ui\"><Item id=\"start_e4bb9f1e\" name=\"旧版开始\"/><Item id=\"message_24\" name=\"旧版停止\"/></Panel></Native-Langue></EcmGui>";
+        write(loc/"legacy.xml",legacy);assert(load_languages(loc.u8string(),error,"legacy.xml"));
+        assert(std::string(text("action.start",true))=="旧版开始"&&std::string(text("start_e4bb9f1e",true))=="旧版开始"&&message("Stopped",true)=="旧版停止");
+        auto mixed=legacy;const auto panel_end=mixed.find("</Panel>");mixed.insert(panel_end,"<Item id=\"action.start\" name=\"Duplicate\"/>");write(loc/"mixed.xml",mixed);
+        assert(!load_languages(loc.u8string(),error,"mixed.xml")&&error.find("Duplicate")!=error.npos&&selected_language_file()=="legacy.xml");
+        write(loc/"bad-legacy.xml","<EcmGui><Native-Langue><Panel id=\"ui\"><Item id=\"worker_version_s_8c3af2a1\" name=\"%d\"/></Panel></Native-Langue></EcmGui>");
+        assert(!load_languages(loc.u8string(),error,"bad-legacy.xml")&&error.find("format mismatch")!=error.npos&&selected_language_file()=="legacy.xml");
+        assert(load_languages(original.u8string(),error));
     }
     const auto cfg=root/"ecm.toml",queue=root/"worktodo.txt";
     write(cfg,"# preserve comment\n[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=2\nfont_size=\"auto\"\n[workers.1]\nautostart=0\n[workers.2]\nautostart=0\n");

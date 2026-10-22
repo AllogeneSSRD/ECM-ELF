@@ -3,6 +3,7 @@
 #include "gpu_details.h"
 #include "ui/widgets.h"
 #include "ui/chart.h"
+#include "ui/stage2_progress.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
 #include "../gui/results.h"
@@ -31,6 +32,7 @@ public:
     void draw(ui::Settings& pending, const ui::Settings& active, const ui::Fonts& fonts);
     void draw_page(const ui::Settings& active, const ui::Fonts& fonts, int page=-1);
     bool move_page(int page,bool right);
+    void open_settings(int category=-1);
     bool save_preferences();
     const ecmgui::WorkerView* selected() const;
     void trace(const std::string& text);
@@ -68,16 +70,30 @@ public:
     bool result_view_dirty=true;
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
+    ImVec2 language_control{};
+    std::map<std::string,ImVec2> language_file_controls;
     int nav_drag_page=-1;
     float nav_rounding=0,nav_item_height=0,nav_item_gap=0;
+    float nav_padding=0;
+    ImVec2 nav_scroll{},nav_scrollbars{},nav_size{};
     std::map<int,ImVec2> right_close_controls;
     std::map<int,unsigned> right_docks;
+    std::map<int,unsigned> log_docks;
+    bool log_nested_tabs=false;
+    float log_stage2_fraction=0,log_stage2_width=0;
+    int log_stage2_phase=-1;
+    std::string log_stage2_sources;
     bool right_container_present=false;
     ImVec2 settings_search_control{};
     ImVec2 font_size_control{},exit_controls[3]{},worker_speed_min{},worker_speed_max{};
     ImVec2 primary_offset_control{},secondary_offset_control{};
     float primary_font_height=0,secondary_button_font_height=0,secondary_text_font_height=0;
     size_t worker_speed_samples=0,workspace_chart_count=0;
+    ImVec2 start_button_size{},stop_button_size{},worker_chart_toggle{};
+    int worker_chart_columns=1;
+    std::vector<std::pair<ImVec2,ImVec2>> worker_chart_rects;
+    std::vector<ui::ChartMetrics> worker_chart_metrics;
+    std::map<int,ImVec2> worker_number_controls;
     ImVec2 pet_skin_controls[4]{};
     std::map<int,ImVec2> worker_select_controls,worker_action_controls,log_tab_controls;
     ImVec2 log_raw_control{},log_follow_control{},title_drag_min{},title_drag_max{},title_controls[3]{};
@@ -85,17 +101,25 @@ public:
     bool log_current_raw=false,log_current_follow=true;
     float log_scroll=0;
     std::vector<std::pair<ImVec2,ImVec2>> worker_summary_rects;
+    std::map<int,std::string> worker_summary_texts;
     float log_line_pitch=0,log_font_height=0,log_view_height=0;
     float worker_table_scroll_max_y=0,worker_table_height=0,worker_table_content_height=0;
     float worker_table_required_height=0,worker_table_data_height=0;
     float worker_toolbar_height=0,worker_row_height=0,worker_button_height=0;
     float worker_table_scroll_max_x=0,worker_field_overflow=0;
-    bool worker_flexible=false;
+    unsigned worker_table_columns=0;
     size_t worker_table_rows=0;
     float body_font_height=0,body_glyph_height=0,log_glyph_height=0;
     bool log_uses_body=false;
     size_t log_speed_samples=0;
     int settings_matches=0;
+    bool settings_open=false,settings_maximized=false;
+    int settings_category=0;
+    ImVec2 settings_entry{},settings_close{},settings_expand{},settings_categories[6]{},theme_controls[2]{};
+    ImVec2 settings_min{},settings_max{};
+    ImVec2 settings_content_min{},settings_content_max{};
+    bool settings_sidebar_stacked=false;
+    int navigation_icon_count=0;
     float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};
     ecmgui::GenOptions gen_options;
@@ -134,24 +158,41 @@ private:
     std::map<std::string,std::filesystem::file_time_type> verified_;
     bool layout_ready_ = false, layout_wide_ = false;
     bool focus_right_ = true;
+    bool focus_settings_=false,place_settings_=true;
+    ImVec2 settings_restore_pos_{},settings_restore_size_{};
+    float settings_geometry_scale_=0;
     struct LogView {bool raw=false,follow=true,jump=true;};
     std::map<int,LogView> log_views_;
+    std::map<int,unsigned long long> worker_b2_ratios_;
+    ui::Stage2TimingHistory stage2_history_;
+    std::map<int,ui::AsyncStage2Tune> stage2_tunes_;
+    std::map<int,std::string> stage2_engine_ids_;
+    unsigned long long stage2_tune_poll_=0;
+    struct PhaseView {std::string identity,phase,clock_curve;unsigned long long phase_at=0,batch_at=0,batch=0;ui::Stage2Timing timing;float high_water=0;};
+    std::map<int,PhaseView> stage2_views_;
+    unsigned log_dock_=0;
     int log_last_worker_=-1;
     int drawn_center_page_=-1;
     std::map<std::string,float> window_dpi_;
-    bool begin_window(const char* name, bool* open, const ui::Settings& active);
+    bool begin_window(const char* name, bool* open, const ui::Settings& active,ImGuiWindowFlags flags=0);
     void end_window();
     void shutdown_workers() noexcept;
     bool supports_owner(const std::string& exe);
     void draw_workers(const ui::Settings& active, const ui::Fonts& fonts);
     void draw_worker_speed(const ui::Fonts& fonts);
+    std::string worker_summary(const ecmgui::WorkerView& worker,bool zh)const;
+    bool select_language_file(const std::string& file);
+    void reload_language_file();
     void draw_exit(const ui::Settings& active,const ui::Fonts& fonts);
     void draw_results(bool zh);
     void draw_generator(bool zh);
     void draw_probability(bool zh);
     void draw_gpu(bool zh);
     void draw_settings(bool zh);
-    void draw_logs(const ui::Fonts& fonts);
+    void draw_settings_window(const ui::Settings& active,const ui::Fonts& fonts);
+    void draw_log_windows(const ui::Settings& active,const ui::Fonts& fonts);
+    void draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* worker);
+    void draw_stage2_progress(const ecmgui::WorkerView& worker,const ui::Palette& palette,bool zh);
     void draw_inspector(const ui::Fonts& fonts);
     void build_layout(unsigned dock, float scale);
 };

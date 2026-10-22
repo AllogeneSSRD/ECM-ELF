@@ -31,9 +31,14 @@ def main():
                 metrics['table_required']=float(s['table_required']);metrics['table_data_height']=float(s['table_data_height'])
                 full_height=full_height and s['table_rows']=='6' and metrics['table_data_height']+.5>=metrics['table_required']
             for key in ['toolbar_height','row_height','worker_button_height']:metrics[key]=float(s[key])
-            metrics['flexible']=int(s['flexible']);metrics['table_scroll_x']=float(s['table_scroll_x']);metrics['field_overflow']=float(s['field_overflow'])
+            metrics['elastic']=int(s['elastic']);metrics['columns']=int(s['table_columns']);metrics['table_scroll_x']=float(s['table_scroll_x']);metrics['field_overflow']=float(s['field_overflow'])
+            layout=[dict(re.findall(r'(\w+)=([-\d.,]+)',line)) for line in text.splitlines() if line.startswith('worker_layout_sample:')][-1]
+            metrics['start_size']=list(map(float,layout['start_size'].split(',')));metrics['stop_size']=list(map(float,layout['stop_size'].split(',')))
+            assert metrics['start_size']==metrics['stop_size'],metrics
+            assert int(layout['number1'].split(',')[0])<int(s['action1'].split(',')[0])<int(s['worker1'].split(',')[0]),layout
             assert metrics['table_scroll_x']<=.5 and metrics['field_overflow']<=.5,metrics
-            if not metrics['flexible']:assert metrics['row_height']<=2.5*metrics['body_font'],metrics
+            assert metrics['elastic']==1 and metrics['columns']==9,metrics
+            assert metrics['row_height']<=2.5*metrics['body_font'],metrics
             assert metrics['worker_button_height']<=1.7*metrics['body_font'] and metrics['worker_button_height']>=metrics['body_font'],metrics
             assert metrics['toolbar_height']<=3*metrics['body_font'],metrics
             matched=metrics['log_body']==1 and metrics['body_font']==metrics['font_height'] and metrics['body_glyph']==metrics['log_glyph']

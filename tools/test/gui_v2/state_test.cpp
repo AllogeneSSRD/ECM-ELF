@@ -29,6 +29,10 @@ int main(int argc, char** argv) {
     assert(state.ui_font_size==15);state.ui_font_size=24;
     assert(state.ui_primary_font_offset==1&&state.ui_secondary_font_offset==-2);state.ui_primary_font_offset=4;state.ui_secondary_font_offset=-4;
     assert(state.ui_gpu_history_seconds==60);state.ui_gpu_history_seconds=120;
+    assert(state.ui_stage2_timing_source=="auto"&&state.ui_stage2_tune_file.empty());
+    state.ui_stage2_timing_source="tune";state.ui_stage2_tune_file="D:/tune 测试/tune.toml";
+    assert(state.ui_language_file.empty());state.ui_language_file="custom-中文.xml";
+    assert(state.ui_worker_chart_columns==1);state.ui_worker_chart_columns=2;
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
     state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
     state.ui_right_pages=(1<<3)|(1<<4);state.ui_right_page=3;state.ui_right_visible=false;state.ui_smooth_scroll=false;state.ui_toasts=false;
@@ -41,6 +45,9 @@ int main(int argc, char** argv) {
     assert(copy.ui_font_size==24);
     assert(copy.ui_primary_font_offset==4&&copy.ui_secondary_font_offset==-4);
     assert(copy.ui_gpu_history_seconds==120);
+    assert(copy.ui_stage2_timing_source=="tune"&&copy.ui_stage2_tune_file==state.ui_stage2_tune_file);
+    assert(copy.ui_language_file=="custom-中文.xml");
+    assert(copy.ui_worker_chart_columns==2);
     assert(copy.pet_skin=="hi_love_elf");
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
     const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
@@ -51,6 +58,11 @@ int main(int argc, char** argv) {
     }
     const auto invalid_range=dir/"invalid-gpu-range.toml";{std::ofstream out(invalid_range);out<<"[ui]\ngpu_history_seconds=61\n";}
     ecmgui_v2::UiState bad_range;bad_range.path=invalid_range;assert(!bad_range.load()&&!bad_range.save());
+    for(int columns:{0,3}){
+        const auto file=dir/("invalid-chart-columns-"+std::to_string(columns)+".toml");{std::ofstream out(file);out<<"[ui]\nworker_chart_columns="<<columns<<"\n";}
+        ecmgui_v2::UiState bad_columns;bad_columns.path=file;assert(!bad_columns.load()&&!bad_columns.save());
+    }
+    assert(migrated.ui_worker_chart_columns==1);
     const auto invalid_font=dir/"invalid-font.toml";{std::ofstream out(invalid_font);out<<"[ui]\nfont_size=31\n";}
     ecmgui_v2::UiState bad_font;bad_font.path=invalid_font;assert(!bad_font.load()&&!bad_font.save());
     const auto invalid_offset=dir/"invalid-offset.toml";{std::ofstream out(invalid_offset);out<<"[ui]\nprimary_font_offset=7\n";}

@@ -54,6 +54,19 @@ def main():
         s=wait(proc,log,lambda v:v.get('order')=='0123456' and v.get('title')=='0' and 'chrome2' in v)
         assert not user.GetWindowLongPtrW(hwnd,-16)&0xC00000
         assert float(s['rounding'])==8 and float(s['height'])>=40 and float(s['gap'])>=8
+        assert float(s['padding'])==8 and s['nav_scroll']=='0.0,0.0' and s['scrollbars']=='0,0'
+        user.SetWindowPos(hwnd,None,100,350,640,420,0x14)
+        s=wait(proc,log,lambda v:300<float(v.get('nav_size','0,9999').split(',')[1])<420 and coords(v['nav0'])[1]>50 and coords(v['nav5'])[1]>coords(v['drop'])[1]>coords(v['nav6'])[1])
+        initial={key:s[key] for key in ['nav0','nav5','drop']}
+        for message in [0x20a,0x20e]:
+            for delta in [-960,960]:
+                pointer(hwnd,s['nav0']);time.sleep(.12);user.PostMessageW(hwnd,message,(delta&65535)<<16,0);time.sleep(.7)
+                s=sample(log);assert s['nav_scroll']=='0.0,0.0' and s['scrollbars']=='0,0',s
+                assert all(s[key]==value for key,value in initial.items()),(initial,s)
+        assert 0<coords(s['nav5'])[1]<420
+        capture(hwnd,out/'fixed-navigation-small.png')
+        user.SetWindowPos(hwnd,None,100,350,1500,1000,0x14)
+        s=wait(proc,log,lambda v:float(v.get('nav_size','0,0').split(',')[1])>900 and coords(v['nav0'])[0]>100 and coords(v['nav5'])[1]>700)
         # A fast drag does not start navigation reordering.
         pointer(hwnd,s['nav4']);time.sleep(.12);pointer(hwnd,s['nav4'],1);time.sleep(.04);pointer(hwnd,s['nav1']);time.sleep(.04);pointer(hwnd,s['nav1'],2);time.sleep(.3)
         assert sample(log)['order']=='0123456'

@@ -61,6 +61,23 @@ int main(int argc, char** argv) {
             if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
             out("Checkpoint saved: presentation stop worker=%d\n",worker);return 1;
         }
+        if(arg_value("--scenario")=="v2-stage2-phases"){
+            out("START: ECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");
+            out("stage2_plan: save=ed_m137.save requested=10 available=10 completed=0 B2=1300000000000 D=1381380\n");
+            const char* phases[]{"Read and validate Stage1 point","Plan Stage2 bounds and memory","Generate and normalize baby points","Build baby-point F tree","Prepare polynomial inverse","Giant points, G trees and fold","Normalize fold and descend F tree","Accumulate leaf products and GCD","Validate arithmetic and finalize factors","Optional factor decomposition","Publish result"};
+            out("curve_start: 1/10 record=1 sigma=17 B1=260000000 checksum=verified curve_model=ed\n");
+            out("real_shape: B1=260000000 B2=1300000000000 S_bits=4283 D=1381380 P=126720\n");
+            for(int i=0;i<11;++i)out("stage2_phase: %s previous=%.2f elapsed=%.2f\n",phases[i],i?double(i):0.,double(i*(i+1))/2);
+            out("curve_done: 1/10 record=1 wall=66\n");
+            Sleep(300);
+            out("curve_start: 2/10 record=2 sigma=18 B1=260000000 checksum=verified curve_model=ed\n");
+            out("real_shape: B1=260000000 B2=1300000000000 S_bits=4283 D=1381380 P=126720\n");
+            for(int i=0;i<=5;++i)out("stage2_phase: %s previous=%.2f elapsed=%.2f\n",phases[i],i?double(i):0.,double(i*(i+1))/2);
+            out("batched_progress: batch=2/8 t=4 left=12\n");
+            HANDLE stop=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage2-stop-handle").c_str(),nullptr,10)));
+            if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
+            out("stage2_stopped: fixture\n");return 0;
+        }
         if(arg_value("--scenario")=="v2-presentation-stage2"){
             out("ECM-ELF 0.49.1 (Stage2 fixture)\n");
             out("START: ECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");

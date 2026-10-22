@@ -19,7 +19,7 @@ def main():
             for page in range(7):
                 user.PostMessageW(hwnd,0x8022,7,page);end=time.monotonic()+8
                 while time.monotonic()<end:
-                    if f'page={page} ' in log.read_text(encoding='utf-8'):break
+                    if ('settings_sample: open=1' if page==5 else f'page={page} ') in log.read_text(encoding='utf-8'):break
                     assert proc.poll() is None;time.sleep(.08)
                 else:raise AssertionError(f'Page {page} failed')
                 image=f'page-{page}-{zh}.png';capture(hwnd,out/image);screens.append(image)

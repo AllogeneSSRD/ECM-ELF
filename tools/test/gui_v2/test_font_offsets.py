@@ -31,11 +31,20 @@ def main():
         fonts_before=log.read_text(encoding='utf-8').count('fonts: ')
         user.PostMessageW(hwnd,0x8022,7,5)
         s=wait(lambda v:int(v['primary_control'].split(',')[0])>0 and float(v['secondary_note'])==13)
+        # Appearance now scrolls independently in the settings window.
+        for _ in range(20):
+            bounds=rows('settings_sample')[-1];x0,y0,x1,y1=map(float,bounds['content'].split(','))
+            s=rows('typography_sample')[-1];py=float(s['primary_control'].split(',')[1]);sy=float(s['secondary_control'].split(',')[1])
+            if y0+10<py<y1-10 and y0+10<sy<y1-10:break
+            x,y=int((x0+x1)/2),int((y0+y1)/2);user.PostMessageW(hwnd,0x8021,0,(y<<16)|(x&65535));time.sleep(.15)
+            user.PostMessageW(hwnd,0x20a,((-120)&65535)<<16,0);time.sleep(.35)
+        else:raise AssertionError('Font offsets not visible in settings content')
         click(s['primary_control'],25);s=wait(lambda v:3<=int(v['primary_offset'])<=6 and float(v['primary_size'])==15+int(v['primary_offset']))
-        click(s['secondary_control'],-70);s=wait(lambda v:-5<=int(v['secondary_offset'])<=-3 and float(v['secondary_size'])==15+int(v['secondary_offset']) and float(v['secondary_note'])==15+int(v['secondary_offset']))
+        click(s['secondary_control'],-30);s=wait(lambda v:-5<=int(v['secondary_offset'])<=-3 and float(v['secondary_size'])==15+int(v['secondary_offset']) and float(v['secondary_note'])==15+int(v['secondary_offset']))
         primary=int(s['primary_offset']);secondary=int(s['secondary_offset']);capture(hwnd,out/'offset-settings.png')
         user.PostMessageW(hwnd,0x8022,7,0)
         s=wait(lambda v:float(v['primary_button'])==15+primary and float(v['secondary_button'])==15)
+        geometry=rows('worker_layout_sample')[-1];assert geometry['start_size']==geometry['stop_size'],geometry
         presentation=rows('presentation_sample')[-1];assert float(presentation['font_height'])==float(presentation['body_font'])==15 and presentation['log_body']=='1'
         assert log.read_text(encoding='utf-8').count('fonts: ')==fonts_before
         capture(hwnd,out/'compact-workers.png')

@@ -10,7 +10,7 @@
 
 namespace ecmgui_v2::ui {
 struct ChartPoint { double x,y; };
-struct ChartSeries { const char* label; ImVec4 color; std::vector<ChartPoint> points; bool visible=true; std::string readout; };
+struct ChartSeries { const char* label; ImVec4 color; std::vector<ChartPoint> points; bool visible=true; std::string readout,readout_capacity; };
 struct ChartBounds {double xmin=0,xmax=1,ymin=0,ymax=1;};
 struct ChartMetrics {float height=0,plot_height=0,stroke=0,label_size=0,value_size=0;int header_rows=0;bool x_grid=true,x_ticks=true;};
 struct ChartFormat {
@@ -62,20 +62,29 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
     const auto font=ImGui::GetFont();const float body_px=ImGui::GetFontSize();
     const float caption_px=body_px*secondary_font_size(ImGui::GetStyle().FontSizeBase)/ImGui::GetStyle().FontSizeBase;
     const auto caption_width=[&](const char* text){return font->CalcTextSizeA(caption_px,std::numeric_limits<float>::max(),0,text).x;};
+    // Layout from a capacity pattern, independently of the changing live value.
+    // Proportional fonts may give '1' and '8' different widths: reserve the widest digit.
+    char widest='0';float digit_width=0;
+    for(char c='0';c<='9';++c){const char text[]{c,0};const float w=ImGui::CalcTextSize(text).x;if(w>digit_width){digit_width=w;widest=c;}}
+    const auto capacity=[&](const ChartSeries& s){
+        std::string value=s.readout_capacity.empty()?(format.percent_y?"100.0 / 100%":s.readout):s.readout_capacity;
+        for(char& c:value)if(c>='0'&&c<='9')c=widest;return value;
+    };
     struct LegendCell{const ChartSeries* series;ImVec2 label,value;float label_wrap,value_wrap;};std::vector<LegendCell> cells;
     float compact_header=0;int header_rows=0;
     if(format.compact&&!series.empty()){
         const float available=width-20*scale,gap=16*scale;
         const float column=(available-gap*(series.size()-1))/series.size();bool columns=true;
-        for(const auto& s:series)if(caption_width(s.label)+ImGui::CalcTextSize(s.readout.c_str()).x+24*scale>column)columns=false;
+        for(const auto& s:series)if(caption_width(s.label)+ImGui::CalcTextSize(capacity(s).c_str()).x+24*scale>column)columns=false;
         float y=origin.y+5*scale;size_t i=0;
         for(const auto& s:series){
             const float left=origin.x+10*scale+(columns?i*(column+gap):0),right=columns?left+column:origin.x+width-10*scale;
             const float value_width=ImGui::CalcTextSize(s.readout.c_str()).x;
-            const bool stacked=caption_width(s.label)+value_width+24*scale>right-left;
+            const auto reserved=capacity(s);
+            const bool stacked=caption_width(s.label)+ImGui::CalcTextSize(reserved.c_str()).x+24*scale>right-left;
             const float label_wrap=stacked?std::max(1.f,right-left-12*scale):0,value_wrap=stacked?std::max(1.f,right-left):0;
             const auto label_size=font->CalcTextSizeA(caption_px,std::numeric_limits<float>::max(),label_wrap,s.label);
-            const auto value_size=font->CalcTextSizeA(body_px,std::numeric_limits<float>::max(),value_wrap,s.readout.c_str());
+            const auto value_size=font->CalcTextSizeA(body_px,std::numeric_limits<float>::max(),value_wrap,reserved.c_str());
             const float h=stacked?label_size.y+3*scale+value_size.y:std::max(caption_px,body_px);
             cells.push_back({&s,{left+12*scale,y+(stacked?0:(h-caption_px)*.5f)},{stacked?left:std::max(left,right-value_width),y+(stacked?label_size.y+3*scale:0)},label_wrap,value_wrap});
             if(!columns){y+=h+4*scale;header_rows+=stacked?2:1;}else header_rows=1;
@@ -125,7 +134,7 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
     draw->PushClipRect(lo,hi,true);
     for(const auto& s:series)if(s.visible)for(size_t i=1;i<s.points.size();++i){const auto a=s.points[i-1],b=s.points[i];
         if(!std::isfinite(a.x)||!std::isfinite(a.y)||!std::isfinite(b.x)||!std::isfinite(b.y))continue;
-        const auto ap=point(a.x,a.y),bp=point(b.x,b.y);auto fill=s.color;fill.w=.04f;
+        const auto ap=point(a.x,a.y),bp=point(b.x,b.y);auto fill=s.color;fill.w=.12f;
         draw->AddQuadFilled(ap,bp,{bp.x,hi.y},{ap.x,hi.y},ImGui::GetColorU32(fill));draw->AddLine(ap,bp,ImGui::GetColorU32(s.color),format.stroke*scale);
     }
     for(const auto& s:series)if(s.visible&&s.points.size()==1&&std::isfinite(s.points[0].x)&&std::isfinite(s.points[0].y))
@@ -144,7 +153,7 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
         if(any){std::snprintf(label,sizeof(label),format.x_format,sample_x);ImGui::Text("%s: %s",xlabel,label);}
         for(const auto& s:series)if(s.visible){const auto found=std::find_if(s.points.begin(),s.points.end(),[sample_x](const ChartPoint& v){return v.x==sample_x;});
             if(found!=s.points.end()&&std::isfinite(found->y)){std::snprintf(label,sizeof(label),format.y_format,found->y);ImGui::TextColored(s.color,"%s: %s",s.label,label);}}
-        if(!any)ImGui::TextUnformatted(ecmgui_v2::ui::text("no_valid_samples_a530710c",zh));ImGui::EndTooltip();
+        if(!any)ImGui::TextUnformatted(ecmgui_v2::ui::text("no_valid_samples",zh));ImGui::EndTooltip();
     }
     ImGui::PopID();
 }

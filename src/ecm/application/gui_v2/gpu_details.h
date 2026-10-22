@@ -6,7 +6,7 @@
 
 namespace ecmgui_v2 {
 struct GpuDetails {
-    std::string driver;
+    std::string driver,uuid;
     int cuda_version=0,major=-1,minor=-1,sm_count=0;
 };
 // Read once off the UI thread. Hovering only reads the published snapshot.
