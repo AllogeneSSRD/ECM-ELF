@@ -37,6 +37,13 @@ int main(int argc, char** argv) {
             if(WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
             out("Checkpoint saved: v2 performance stop\n");return 1;
         }
+        if(arg_value("--scenario")=="v2-queue-switch"){
+            const auto marker=std::filesystem::u8path(arg_value("--marker"));
+            const auto deadline=GetTickCount64()+15000;
+            while(!std::filesystem::exists(marker)&&GetTickCount64()<deadline)Sleep(10);
+            if(!std::filesystem::exists(marker))return 5;
+            out("===== queue done, 1 task(s) processed =====\n");return 0;
+        }
         return fixture_main(argc, argv);
     } catch (const std::exception& error) { std::fprintf(stderr, "FATAL: %s\n", error.what()); return 23; }
 }

@@ -11,6 +11,9 @@
 
 namespace ecmgui_v2 {
 namespace {
+// The existing Controller announces a stage change before spawning its child.
+// A typed refusal stops that dispatch without changing the legacy Controller.
+struct DispatchBlocked : std::runtime_error { using std::runtime_error::runtime_error; };
 std::string executable_path(const std::string& input, const std::string& base) {
     if (input.empty()) return {};
     auto path = std::filesystem::u8path(input);
@@ -24,6 +27,9 @@ std::string executable_path(const std::string& input, const std::string& base) {
 App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log) {
     if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<7;++i)if(!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
+        if(notice.kind==ecmgui::WorkerNotice::Kind::StageChanged)
+            for(const auto& worker:controller.workers())if(worker.index==notice.worker&&!supports_owner(worker.exe))
+                throw DispatchBlocked(status);
         if (notices.size() == 32) notices.erase(notices.begin()); notices.push_back(notice);
         if (!notice.text.empty()) {status = notice.text;toast(notice.text,notice.kind==ecmgui::WorkerNotice::Kind::Error);}
     });
@@ -96,9 +102,8 @@ bool App::start(int index) {
         for (const auto& worker : controller.workers()) if (worker.index == index) {
             if (worker.running()) return true;
             if (!supports_owner(controller.resolve_worker_exe(index))) return false;
-            // Stage transitions run inside the unchanged Controller; validate both present engines.
-            for (const auto& exe : {controller.resolve_stage1_exe(), controller.resolve_stage2_exe()})
-                if (std::filesystem::exists(std::filesystem::u8path(exe)) && !supports_owner(exe)) return false;
+            // Only the selected engine is needed now. StageChanged validates any
+            // later dispatch before Controller can start the replacement child.
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
             if (!controller.start(index, true)) return false;
@@ -112,7 +117,12 @@ void App::tick() {
         autostart_pending = false;
         for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);
     }
-    controller.tick();
+    for(const auto& worker:controller.workers())
+        if(worker.state()==ecmgui::WorkerRunState::Restarting&&!supports_owner(worker.exe)){
+            controller.request_stop(worker.index);toast(status,true);
+        }
+    try { controller.tick(); }
+    catch(const DispatchBlocked& error) { status=error.what();toast(status,true); }
     for (const auto& worker : controller.workers())
         if (!worker.running() && worker.state() != ecmgui::WorkerRunState::Restarting && worker.state() != ecmgui::WorkerRunState::Starting) leases_.erase(worker.index);
     const auto now = GetTickCount64();

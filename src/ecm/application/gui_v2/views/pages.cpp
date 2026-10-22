@@ -201,24 +201,19 @@ void App::draw_probability(bool zh) {
         ImGui::PopID();}
 }
 void App::draw_gpu(bool zh) {
-    ImGui::TextUnformatted(tr(zh,"GPU monitoring (500 ms)","GPU 监控（500 ms）"));
     if(!gpu.available()){ImGui::TextWrapped("%s",no_nvml?tr(zh,"Monitoring disabled","监控已禁用"):gpu.reason().c_str());return;}
     for(const auto& device:gpu.devices()) {
-        ImGui::PushID(device.index);ImGui::SeparatorText(device.name.c_str());
+        ImGui::PushID(device.index);
+        const auto title="#"+std::to_string(device.index)+"  "+device.name;
+        const bool expanded=ImGui::CollapsingHeader(title.c_str(),ImGuiTreeNodeFlags_DefaultOpen);
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\nNVML / 500 ms",device.name.c_str());
+        if(!expanded){ImGui::PopID();continue;}
         const auto history=gpu.history(device.index);
         if(history.empty()||!history.back().valid){ImGui::TextUnformatted(tr(zh,"Unknown sample","采样未知"));ImGui::PopID();continue;}
         const auto& sample=history.back();const double occupied=ui::memory_occupancy(sample.mem_used_mb,device.mem_total_mb);
-        const int columns=ImGui::GetContentRegionAvail().x>=ImGui::GetFontSize()*24?2:1;
-        if(ImGui::BeginTable("metrics",columns,ImGuiTableFlags_SizingStretchSame)){
-            const auto metric=[&](const char* name,const char* value){ImGui::TableNextColumn();ImGui::TextDisabled("%s",name);ImGui::TextUnformatted(value);};
-            char value[96];std::snprintf(value,sizeof(value),"%d%%",sample.util_gpu);metric(tr(zh,"GPU load","GPU 利用率"),value);
-            if(std::isfinite(occupied))std::snprintf(value,sizeof(value),"%.1f%%  (%u / %u MiB)",occupied,sample.mem_used_mb,device.mem_total_mb);else std::snprintf(value,sizeof(value),"--");
-            metric(tr(zh,"Memory occupied","显存占用"),value);
-            std::snprintf(value,sizeof(value),"%u MHz",sample.clock_sm_mhz);metric(tr(zh,"Core frequency","核心频率"),value);
-            std::snprintf(value,sizeof(value),"%u MHz",sample.clock_mem_mhz);metric(tr(zh,"Memory frequency","显存频率"),value);
-            std::snprintf(value,sizeof(value),"%.1f / %.1f W",sample.power_w,sample.power_limit_w);metric(tr(zh,"Power / limit","功耗 / 上限"),value);
-            std::snprintf(value,sizeof(value),"%d C",sample.temp_c);metric(tr(zh,"Temperature","温度"),value);ImGui::EndTable();
-        }
+        ImGui::TextWrapped("GPU %d%%  |  %.1f/%.0f W  |  %d °C",sample.util_gpu,sample.power_w,sample.power_limit_w,sample.temp_c);
+        char memory[80];if(std::isfinite(occupied))std::snprintf(memory,sizeof(memory),"%u/%u MiB (%.1f%%)",sample.mem_used_mb,device.mem_total_mb,occupied);else std::snprintf(memory,sizeof(memory),"--");
+        ImGui::TextWrapped(tr(zh,"Core %u / VRAM %u MHz  |  %s","核心 %u / 显存 %u MHz  |  %s"),sample.clock_sm_mhz,sample.clock_mem_mhz,memory);
         const auto throttle=ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons);if(!throttle.empty())ImGui::TextWrapped("%s",throttle.c_str());
         int window=ImGui::GetStateStorage()->GetInt(ImGui::GetID("history-seconds"),2);
         if(chips("history",window,{"15 s","30 s","60 s","120 s"}))ImGui::GetStateStorage()->SetInt(ImGui::GetID("history-seconds"),window);
@@ -230,10 +225,11 @@ void App::draw_gpu(bool zh) {
             const double missing=std::numeric_limits<double>::quiet_NaN();usage[0].points.push_back({x,v.valid?double(v.util_gpu):missing});usage[1].points.push_back({x,v.valid?ui::memory_occupancy(v.mem_used_mb,device.mem_total_mb):missing});power[0].points.push_back({x,v.valid?v.power_w:missing});
             clocks[0].points.push_back({x,v.valid?double(v.clock_sm_mhz):missing});clocks[1].points.push_back({x,v.valid?double(v.clock_mem_mhz):missing});}
         ui::ChartFormat format{true,true,"%.1f s","%.0f%%",-double(seconds[window]),0};
-        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,155,format);
+        format.show_y_ticks=false;format.show_axis_titles=false;
+        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,96,format);
         format.percent_y=false;format.y_format="%.1f W";
-        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,155,format);
-        if(ImGui::CollapsingHeader(tr(zh,"Frequency history","频率趋势"))){format.y_format="%.0f MHz";ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,155,format);}
+        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,96,format);
+        if(ImGui::CollapsingHeader(tr(zh,"Frequency history","频率趋势"))){format.y_format="%.0f MHz";ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,96,format);}
         ImGui::PopID();
     }
 }

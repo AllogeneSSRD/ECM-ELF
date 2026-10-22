@@ -1,12 +1,16 @@
 # GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.48.0，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.48.1，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
 ## 构建与启动
 
 运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；helper 不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。
 
-运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。常用参数：
+运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。
+
+未传`--config`时，自动查找并载入`ecm_gui_v2.exe`同目录的`ecm.toml`，不受快捷方式“起始位置”或当前工作目录影响。不存在时保持GUI打开并提示选择工作流；存在但内容有误时显示加载错误。显式`--config`优先，指定文件失效时不会退回旁边的另一份配置。工作流路径确定后再选择对应的UI侧车，自动发现和显式打开同一配置使用相同身份。按该配置的`workers.N.autostart`执行自动启动。
+
+常用参数：
 
 - `--config <工作流.toml>`：打开已有业务配置；设置中也可选择。autostart 经过能力与拥有权检查后执行。
 - `--ui-state <侧车.toml>`：默认 `%LOCALAPPDATA%/ECM-ELF/gui-v2/<配置身份>.toml`；按启动配置身份隔离，与业务文件分离，非法侧车保留并禁止覆盖。
@@ -36,13 +40,15 @@ GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.48.0
 
 ## 队列、页面与宠物
 
-必须使用更新后的 Stage1/Stage2 worker：`--gui-queue-protocol` 返回 `ECM_QUEUE_OWNER=1`。共用入口的进程级文件区间锁覆盖 worker 生命周期，同一队列的相同分区拒绝重复运行，不同分区可并行；全队列与各分区互斥。崩溃由系统释放锁，持久锁文件不能手工删除绕过占用。原 GUI 必须指向更新 worker 才能参与保护；任意旧计算二进制不遵守新锁，v2 会拒绝启动。算法、曲线、param、sigma 及工作流格式不变。
+即将执行的计算worker须支持队列协议：`--gui-queue-protocol`返回`ECM_QUEUE_OWNER=1`。纯Stage2任务不要求未使用的Stage1同时升级，反之亦然；自动切换阶段时，在下一套引擎启动前检查其协议，不支持则停留在已停止状态并提示具体路径，GUI继续工作。协议查询只确认worker声明支持的版本；实际互斥由运行期间持有的文件锁完成，防止重复计算同一分区和并发争用检查点/完成记录。共用入口的进程级文件区间锁覆盖 worker 生命周期，同一队列的相同分区拒绝重复运行，不同分区可并行；全队列与各分区互斥。崩溃由系统释放锁，持久锁文件不能手工删除绕过占用。原 GUI 必须指向更新 worker 才能参与保护；任意旧计算二进制不遵守新锁，v2 会拒绝启动。算法、曲线、param、sigma 及工作流格式不变。
 
 工作台/检查区区分 Stage2 任务曲线进度与阶段/批次，保留 worker 版本、命令、Prime95 提示、事件/原始日志和安全停止。关闭日志或切页仍推进 Controller。结果支持 F/NF、阶段、来源与搜索，复制原始 JSON/checksum；筛选或文件更新清理失效选择。生成器按目标 worker 分区，输入或选项变化使预览失效，追加前复核文件并锁定队列；CPU 拒绝不支持组合。
 
 概率页分为“参数”和“图表与快照”；显式计算后转到图表视图。概率输入、摘要、图表和悬停以0–100%显示，B1/B2、曲线数与范围等输入去除无意义小数；D_eff、比率及非整数解保留有效精度。模型与CSV概率仍使用0–1。概率正反算、图表、CSV 对应同一输入快照；参数修改后提示重新计算，已有图表和 CSV 保留其原快照。挠群阶 T 不等于 D_eff。Edwards Z2xZ8 的已有 Stage1 经验代表值为 26.4081（B1=256、15–25 bit 点口径）；按 Edwards/Suyama 相对收益归一到 GMP 基线约 29.0，作为联合模型启发预设，未经直接 Stage2 标定。可选择经验口径或自定义，不把 16 当完整 Edwards 预设。数学模型本身和旧概率页不改。依据见 [参数化参考](../reference/ECM_PARAMETERIZATIONS.md) 与 `tools/ecm_prob/README.md`。
 
 常用筛选使用点击标签；滚轮短暂提升刷新频率以平滑滚动，静止恢复 10Hz。Toast 不抢焦点；启动、安全停止、配置/生成器反馈保留详细日志。GPU 未知样本不伪造零值，容量单位为MiB，另有百分比、MHz、W与摄氏度。GPU核心频率、显存频率分项显示并提供可展开趋势；显存占用是 `nvmlDeviceGetMemoryInfo` 已用/总容量，区分于 `nvmlUtilization_t.memory` 的读写活跃时间比例。[NVIDIA 指标说明](https://nvidia.custhelp.com/app/answers/detail/a_id/3751/kw/command)。概率图叠加 S1 / 联合 / 条件概率，统一明暗主题、网格、实际横坐标、坐标单位、淡色面积和悬停采样读数，图例可隐藏曲线。因子横轴直接使用快照的 bit / 十进制位数，不重复换算。GPU 曲线使用实际采样时间，支持 15/30/60/120 秒窗口；利用率/显存占用与功耗分图，缺失值断线。GPU时间轴固定对应所选时间窗并使用整数刻度，悬停统一显示一个实际采样时间（一位小数）及各指标，不重复x值。worker 检查区提供每曲线耗时图；横轴为采样序号，不假定为时间。图例开关和 GPU 时间窗为会话状态。
+
+GPU页每设备提供可折叠卡片，数值通常以两行显示：利用率/功耗/温度，以及核心/显存频率和显存已用/总量（百分比）。窄空间允许自然换行。常驻折线图高度为96逻辑单位，隐藏Y轴刻度文字与重复轴标题，保留网格、整数时间刻度和完整单位悬停读数；频率趋势按需展开。概率图的Y轴及尺寸不受GPU精简格式影响。
 
 Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚摸、最小化和退出联动；使用原生透明非激活 owned 窗口及离线 atlas，无 GPUI/Web runtime。关闭释放位图，最小化暂停动画。位置跟随主窗口客户区边缘，不使用含不可见边框的外框作为落脚点。每帧先隔离再缩放，防止双三次插值采到图集中相邻帧的颜色。`pet_ely.png` 为本项目离线生成物：从固定上游 `src/pet/rig.rs` 提取矢量层，经 `tools/gen/generate_gui_v2_pet.py` 输出SVG，再由 `render_gui_v2_pet.cjs` 生成1792×1736的56帧透明图集；上游睡眠标记为两个Z。原仓库不需要包含此PNG。来源/许可及哈希见 `third_party/gui_v2_pet/` 和 `assets/gui_v2/pet_ely.json`。
 

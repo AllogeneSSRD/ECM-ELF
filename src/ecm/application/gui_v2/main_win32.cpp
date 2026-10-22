@@ -446,6 +446,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show) {
                 }
             } else throw std::runtime_error("Unknown or incomplete option: " + utf8(argument.c_str()));
         }
+        if(options.config.empty()) {
+            const auto adjacent=std::filesystem::u8path(ecmgui::default_toml_path());
+            std::error_code error;
+            if(std::filesystem::is_regular_file(adjacent,error))options.config=std::filesystem::weakly_canonical(adjacent).u8string();
+        }
         log = _wfsopen(options.diagnostics.c_str(), L"w", _SH_DENYWR);
         if (!log) throw std::runtime_error("Cannot open GUI v2 diagnostics file");
         std::fprintf(log, "ECM-ELF GUI v2 %s backend=%s\n", ecmgui_v2::version,options.vulkan?"Vulkan":"DX11");

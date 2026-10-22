@@ -15,6 +15,7 @@ struct ChartFormat {
     const char* x_format="%.6g";
     const char* y_format="%.6g";
     double xmin=std::numeric_limits<double>::quiet_NaN(),xmax=std::numeric_limits<double>::quiet_NaN();
+    bool show_y_ticks=true,show_axis_titles=true;
 };
 inline double integer_step(double range,int ticks){
     const double wanted=std::max(1.,range/std::max(1,ticks));
@@ -51,13 +52,14 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
     const ImVec2 size{std::max(140.f*scale,ImGui::GetContentRegionAvail().x),logical_height*scale};
     ImGui::InvisibleButton("plot",size);const bool hovered=ImGui::IsItemHovered();auto* draw=ImGui::GetWindowDrawList();
     const auto p=palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
-    const ImVec2 lo{origin.x+48*scale,origin.y+12*scale},hi{origin.x+size.x-12*scale,origin.y+size.y-38*scale};
+    const ImVec2 lo{origin.x+(format.show_y_ticks?48:10)*scale,origin.y+12*scale},hi{origin.x+size.x-12*scale,origin.y+size.y-(format.show_axis_titles?38:22)*scale};
     draw->PushClipRect(origin,{origin.x+size.x,origin.y+size.y},true);
     draw->AddRectFilled(origin,{origin.x+size.x,origin.y+size.y},ImGui::GetColorU32(p.sunken),6*scale);
     const auto point=[&](double x,double y){return ImVec2{lo.x+static_cast<float>((x-bounds.xmin)/(bounds.xmax-bounds.xmin))*(hi.x-lo.x),hi.y-static_cast<float>((y-bounds.ymin)/(bounds.ymax-bounds.ymin))*(hi.y-lo.y)};};
     char label[64];
     for(int i=0;i<=4;++i){double y=bounds.ymax*i/4.;auto pos=point(bounds.xmin,y);
-        draw->AddLine(pos,{hi.x,pos.y},ImGui::GetColorU32(p.border));std::snprintf(label,sizeof(label),format.percent_y?"%.0f%%":"%.3g",y);draw->AddText({origin.x+5*scale,pos.y-6*scale},ImGui::GetColorU32(p.muted),label);
+        draw->AddLine(pos,{hi.x,pos.y},ImGui::GetColorU32(p.border));
+        if(format.show_y_ticks){std::snprintf(label,sizeof(label),format.percent_y?"%.0f%%":"%.3g",y);draw->AddText({origin.x+5*scale,pos.y-6*scale},ImGui::GetColorU32(p.muted),label);}
     }
     const int ticks=std::clamp(static_cast<int>((hi.x-lo.x)/(80*scale)),1,4);
     const double step=format.integer_x?integer_step(bounds.xmax-bounds.xmin,ticks):(bounds.xmax-bounds.xmin)/ticks;
@@ -72,8 +74,10 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
         draw->AddQuadFilled(ap,bp,{bp.x,hi.y},{ap.x,hi.y},ImGui::GetColorU32(fill));draw->AddLine(ap,bp,ImGui::GetColorU32(s.color),2*scale);
     }
     draw->PopClipRect();
-    draw->AddText({lo.x,origin.y+size.y-17*scale},ImGui::GetColorU32(p.muted),xlabel);
-    draw->AddText({hi.x-ImGui::CalcTextSize(ylabel).x,origin.y+2*scale},ImGui::GetColorU32(p.muted),ylabel);
+    if(format.show_axis_titles){
+        draw->AddText({lo.x,origin.y+size.y-17*scale},ImGui::GetColorU32(p.muted),xlabel);
+        draw->AddText({hi.x-ImGui::CalcTextSize(ylabel).x,origin.y+2*scale},ImGui::GetColorU32(p.muted),ylabel);
+    }
     draw->PopClipRect();
     if(hovered&&ImGui::GetIO().MousePos.x>=lo.x&&ImGui::GetIO().MousePos.x<=hi.x){
         const auto mx=ImGui::GetIO().MousePos.x;const double x=bounds.xmin+(mx-lo.x)/(hi.x-lo.x)*(bounds.xmax-bounds.xmin);
