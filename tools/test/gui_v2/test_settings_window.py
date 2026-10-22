@@ -17,7 +17,10 @@ def main():
         log=out/(name+'.log');proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app','--no-nvml','--no-pet'],cwd=out,startupinfo=startup)
         hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,40,40,1920,1200,0x14);user.ShowWindow(hwnd,4);return proc,hwnd,log
     proc,hwnd,log=launch('settings')
-    def rows(prefix):return [dict(re.findall(r'(\w+)=([^\s]+)',line)) for line in log.read_text(encoding='utf-8').splitlines() if line.startswith(prefix+':')]
+    def rows(prefix):
+        content=log.read_text(encoding='utf-8');end=content.rfind('\nworker_layout_sample:')
+        content=content[:end] if end>=0 else ''
+        return [dict(re.findall(r'(\w+)=([^\s]+)',line)) for line in content.splitlines() if line.startswith(prefix+':')]
     def wait(prefix,predicate):
         end=time.monotonic()+12
         while time.monotonic()<end:
@@ -27,7 +30,11 @@ def main():
         raise AssertionError(log.read_text(encoding='utf-8')[-5000:])
     def click(value):
         x,y=map(int,value.split(','));assert x>0 and y>0,value
-        for action in [0,1,2]:user.PostMessageW(hwnd,0x8021,action,(y<<16)|(x&65535));time.sleep(.14)
+        for action in [0,1,2]:
+            before=log.read_text(encoding='utf-8').count('\nworker_layout_sample:')
+            user.PostMessageW(hwnd,0x8021,action,(y<<16)|(x&65535));end=time.monotonic()+8
+            while log.read_text(encoding='utf-8').count('\nworker_layout_sample:')<before+2:
+                assert proc.poll() is None and time.monotonic()<end;time.sleep(.04)
     def category(i):
         s=wait('settings_sample',lambda v:v['open']=='1' and int(v['category'+str(i)].split(',')[0])>0)
         click(s['category'+str(i)]);return wait('settings_sample',lambda v:v['category']==str(i))
@@ -47,8 +54,8 @@ def main():
         wait('usability_sample',lambda v:v['matches']=='1');capture(hwnd,out/'computation-search.png')
         for letter in '_no_such_field':user.PostMessageW(hwnd,0x102,ord(letter),0)
         wait('usability_sample',lambda v:v['matches']=='0')
-        category(0);select_language(hwnd,log,'chineseSimplified.xml');wait('usability_sample',lambda v:v['zh']=='1')
-        select_language(hwnd,log,'english.xml');wait('usability_sample',lambda v:v['zh']=='0')
+        category(0);select_language(hwnd,log,'chineseSimplified.xml',click_handler=click);wait('usability_sample',lambda v:v['zh']=='1')
+        select_language(hwnd,log,'english.xml',click_handler=click);wait('usability_sample',lambda v:v['zh']=='0')
         v=rows('usability_sample')[-1];click(v['save']);time.sleep(.3)
         saved=tomllib.loads(state.read_text(encoding='utf-8'));assert saved['ui']['theme']=='light' and saved['ui']['gpu_history_seconds']==120 and saved['ui']['page']==0
         s=rows('settings_sample')[-1];before=tuple(map(float,s['min'].split(',')+s['max'].split(',')))

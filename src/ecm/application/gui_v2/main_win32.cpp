@@ -353,6 +353,10 @@ int run(const Options& options, int show, FILE* log) {
         }
         ImGui::UpdatePlatformWindows(); ImGui::RenderPlatformWindowsDefault();
         if(options.audit_app&&!options.performance){
+            const auto menu_point=[&](ImVec2 v){POINT p{static_cast<LONG>(v.x),static_cast<LONG>(v.y)};if(ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable)ScreenToClient(native.hwnd,&p);return p;};
+            const auto view=menu_point(app.view_control),logs=menu_point(app.view_logs_control),save_layout=menu_point(app.view_save_control);
+            std::string menu_items;for(const auto& key:app.view_item_keys){if(!menu_items.empty())menu_items+=',';menu_items+=key;}
+            std::fprintf(log,"view_sample: view=%ld,%ld logs_control=%ld,%ld save_control=%ld,%ld open=%d logs_visible=%d items=%s save_separator=%d save_count=%u layout_builds=%u\n",view.x,view.y,logs.x,logs.y,save_layout.x,save_layout.y,app.view_menu_open,state.ui_logs,menu_items.empty()?"none":menu_items.c_str(),app.view_save_separator,app.view_save_count,app.layout_build_count);
             for(int page:{2,3})if(state.ui_page==page){
                 const auto& form=page==2?app.generator_form:app.probability_form;
                 std::fprintf(log,"form_sample: page=%d columns=%d profile=%d empirical=%d divisor=%.15g ratio=%d curve=%s\n",page,form.columns,app.probability_profile,app.probability_empirical,app.probability_request.parameters.effective_divisor,app.probability_request.parameters.ratio_mode,app.gen_options.curve_type.c_str());

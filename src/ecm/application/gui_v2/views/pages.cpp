@@ -105,7 +105,7 @@ void App::draw_results(bool zh) {
         ImGui::TableSetupScrollFreeze(2,1);ImGui::TableHeadersRow(); ImGuiListClipper clip;clip.Begin(static_cast<int>(indices.size()));
         while(clip.Step())for(int j=clip.DisplayStart;j<clip.DisplayEnd;++j) {
             const auto& row=results.rows()[indices[static_cast<size_t>(j)]]; ImGui::PushID(row.id.c_str());ImGui::TableNextRow();ImGui::TableNextColumn();
-            bool chosen=selected_results.count(row.id)!=0;if(ImGui::Checkbox("##select",&chosen)){if(chosen)selected_results.insert(row.id);else selected_results.erase(row.id);}
+            bool chosen=selected_results.count(row.id)!=0;if(ecmgui_v2::ui::checkbox("##select",&chosen)){if(chosen)selected_results.insert(row.id);else selected_results.erase(row.id);}
             for(const auto* value:{&row.status,&row.target,&row.b1,&row.b2,&row.curves,&row.model,&row.timestamp,&row.factors}){ImGui::TableNextColumn();ImGui::TextUnformatted(value->c_str());}
             ImGui::TableNextColumn();ImGui::Text("%d",row.stage);ImGui::TableNextColumn();ImGui::Text("%zu:%zu",row.source+1,row.line);ImGui::PopID();
         } ImGui::EndTable();
@@ -160,15 +160,15 @@ void App::draw_generator(bool zh) {
         form.field("curves",ui::text(gen_options.use_recommended?"blocks_per_sm":"fixed_curves",zh),[&]{
             if(gen_options.use_recommended)ImGui::InputInt("##value",&gen_options.blocks_per_sm,0,0);
             else number("##value",gen_options.curves_fixed);
-        },ui::text("gpu_recommended_curves",zh),[&]{ImGui::Checkbox(ui::text("gpu_recommended_curves",zh),&gen_options.use_recommended);});
+        },ui::text("gpu_recommended_curves",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("gpu_recommended_curves",zh),&gen_options.use_recommended);});
         form.field("b1","B1",[&]{ImGui::InputTextWithHint("##value",ui::text("generator.b1_hint",zh),gen_b1,sizeof(gen_b1));});
         form.field("b2","B2",[&]{ImGui::InputTextWithHint("##value",ui::text("generator.b2_hint",zh),gen_b2,sizeof(gen_b2));});
     }
     {ui::CompactFormAudit path_audit;ui::CompactForm form("generator-path",path_audit,false);
         form.field("pattern",ui::text("save_pattern",zh),[&]{ImGui::InputText("##value",gen_pattern,sizeof(gen_pattern));});}
     if(ImGui::CollapsingHeader(ui::text("filters_and_ordering",zh))) {
-        ImGui::Checkbox(ui::text("deduplicate",zh),&gen_options.dedup);ImGui::SameLine();ImGui::Checkbox(ui::text("descending",zh),&gen_options.sort_desc);
-        ImGui::Checkbox(ui::text("sort_known_factors",zh),&gen_options.sort_factors);
+        ecmgui_v2::ui::checkbox(ui::text("deduplicate",zh),&gen_options.dedup);ImGui::SameLine();ecmgui_v2::ui::checkbox(ui::text("descending",zh),&gen_options.sort_desc);
+        ecmgui_v2::ui::checkbox(ui::text("sort_known_factors",zh),&gen_options.sort_factors);
         ui::CompactFormAudit filter_audit;ui::CompactForm form("generator-filters",filter_audit);
         form.field("sort",ui::text("sort_keys",zh),[&]{text("##value",gen_options.sort_by);});
         form.field("skip",ui::text("skip_curves",zh),[&]{number("##value",gen_options.skip_curves);});
@@ -176,7 +176,7 @@ void App::draw_generator(bool zh) {
         form.field("n-max",ui::text("max_exponent",zh),[&]{number("##value",gen_options.max_n);});
         form.field("curves-min",ui::text("min_input_curves",zh),[&]{number("##value",gen_options.min_curves);});
         form.field("curves-max",ui::text("max_input_curves",zh),[&]{number("##value",gen_options.max_curves);});
-        form.field("assignment","AID",[]{ImGui::TextUnformatted("N/A");},ui::text("set_assignment_n_a",zh),[&]{ImGui::Checkbox(ui::text("set_assignment_n_a",zh),&gen_options.set_has_na);});
+        form.field("assignment","AID",[]{ImGui::TextUnformatted("N/A");},ui::text("set_assignment_n_a",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("set_assignment_n_a",zh),&gen_options.set_has_na);});
     }
     if(gen_valid && generator_signature()!=gen_signature)gen_valid=false;
     if(ui::button("generate-preview",ecmgui_v2::ui::text("generate_preview",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!preview_generator())toast(status,true);ImGui::SameLine();
@@ -201,19 +201,19 @@ void App::draw_probability(bool zh) {
     {
         ui::CompactForm form("probability-fields",probability_form);
         form.field("size",ui::text("factor_size",zh),[&]{if(ImGui::InputDouble("##value",&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);},
-            ui::text("decimal_digits",zh),[&]{ImGui::Checkbox(ui::text("decimal_digits",zh),&request.decimal_digits);});
+            ui::text("decimal_digits",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("decimal_digits",zh),&request.decimal_digits);});
         form.field("curves",ui::text("curves",zh),[&]{ImGui::InputDouble("##value",&p.curves,0,0,"%.0f");});
-        form.field("b1","B1",[&]{ImGui::InputDouble("##value",&p.b1,0,0,"%.0f");},ui::text("probability.stage2_enabled",zh),[&]{ImGui::Checkbox(ui::text("probability.stage2_enabled",zh),&p.stage2);});
+        form.field("b1","B1",[&]{ImGui::InputDouble("##value",&p.b1,0,0,"%.0f");},ui::text("probability.stage2_enabled",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("probability.stage2_enabled",zh),&p.stage2);});
         form.field("b2",p.ratio_mode?"B2/B1":"B2",[&]{if(p.ratio_mode)ImGui::InputDouble("##value",&p.b2_ratio,0,0,"%.6g");else ImGui::InputDouble("##value",&p.b2,0,0,"%.0f");},
-            ui::text("use_b2_b1_ratio",zh),[&]{ImGui::Checkbox(ui::text("use_b2_b1_ratio",zh),&p.ratio_mode);});
+            ui::text("use_b2_b1_ratio",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("use_b2_b1_ratio",zh),&p.ratio_mode);});
         form.field("divisor","D_eff",[&]{
             if(probability_profile<ui::custom_curve_profile&&profile_changed)p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
             if(ImGui::InputDouble("##value",&p.effective_divisor,0,0,"%.6g"))probability_profile=ui::custom_curve_profile;
         },ui::text("use_stage1_empirical_calibration",zh),[&]{
-            if(ImGui::Checkbox(ui::text("use_stage1_empirical_calibration",zh),&probability_empirical)&&probability_profile<ui::custom_curve_profile)p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
+            if(ecmgui_v2::ui::checkbox(ui::text("use_stage1_empirical_calibration",zh),&probability_empirical)&&probability_profile<ui::custom_curve_profile)p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
         });
         form.field("target",ui::text("probability.target_percent",zh),[&]{double target=ui::percent(request.target);if(ImGui::InputDouble("##value",&target,0,0,"%.6g%%"))request.target=ui::probability(target);},
-            ui::text("cumulative_target",zh),[&]{ImGui::Checkbox(ui::text("cumulative_target",zh),&request.cumulative_target);});
+            ui::text("cumulative_target",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("cumulative_target",zh),&request.cumulative_target);});
     }
     ImGui::TextWrapped("%s",ui::text("probability.edwards_divisor_note",zh));
     int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",ui::text("combined",zh),ui::text("probability.stage2_conditional",zh)}))p.scope=static_cast<Scope>(scope);
@@ -223,7 +223,7 @@ void App::draw_probability(bool zh) {
         form.field("min",ui::text("size_min",zh),[&]{ImGui::InputDouble("##value",&request.size_min,0,0,"%.0f");});
         form.field("max",ui::text("size_max",zh),[&]{ImGui::InputDouble("##value",&request.size_max,0,0,"%.0f");});
         form.field("curves-max",ui::text("curves_max",zh),[&]{ImGui::InputDouble("##value",&request.curves_max,0,0,"%.0f");},
-            ui::text("auto_curves_range",zh),[&]{ImGui::Checkbox(ui::text("auto_curves_range",zh),&request.auto_curves_range);});
+            ui::text("auto_curves_range",zh),[&]{ecmgui_v2::ui::checkbox(ui::text("auto_curves_range",zh),&request.auto_curves_range);});
     }
         return;
     }
@@ -384,17 +384,17 @@ void App::draw_settings(bool zh) {
 
     }
     if(settings_category==1){
-    ImGui::Checkbox(ecmgui_v2::ui::text("smooth_scrolling",zh),&state.ui_smooth_scroll);
-    ImGui::Checkbox(ecmgui_v2::ui::text("settings.external_windows",zh),&state.ui_external_windows);
+    ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("smooth_scrolling",zh),&state.ui_smooth_scroll);
+    ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("settings.external_windows",zh),&state.ui_external_windows);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("settings.external_windows_hint",zh));
-    ImGui::Checkbox(ecmgui_v2::ui::text("show_system_title_bar",zh),&state.window_title_bar);
+    ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("show_system_title_bar",zh),&state.window_title_bar);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("settings.title_bar_hint",zh));
-    ImGui::Checkbox(ecmgui_v2::ui::text("action_toasts_errors_always_shown",zh),&state.ui_toasts);
+    ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("action_toasts_errors_always_shown",zh),&state.ui_toasts);
     {
         ImGui::SeparatorText(ecmgui_v2::ui::text("navigation_and_right_tabs",zh));
         ImGui::TextWrapped("%s",ecmgui_v2::ui::text("settings.navigation_hint",zh));
         for(int i=0;i<7;++i){if(i==5)continue;ImGui::PushID(i);bool right=ui::pinned(state.ui_right_pages,i);
-            if(ImGui::Checkbox(ui::page_name(i,zh),&right))move_page(i,right);ImGui::PopID();}
+            if(ecmgui_v2::ui::checkbox(ui::page_name(i,zh),&right))move_page(i,right);ImGui::PopID();}
         if(ImGui::Button(ecmgui_v2::ui::text("restore_default_layout",zh))){state.ui_right_pages=0;state.ui_right_visible=true;state.ui_inspector=true;state.ui_logs=true;reset_layout=true;}
         if(ImGui::Button(ecmgui_v2::ui::text("save_layout",zh)))save_preferences();
     }
@@ -416,7 +416,7 @@ void App::draw_settings(bool zh) {
 
     }
     if(settings_category==3){
-    ImGui::Checkbox(ecmgui_v2::ui::text("ely_pet",zh),&state.pet_enabled);ImGui::Checkbox(ecmgui_v2::ui::text("animate_pet",zh),&state.pet_animate);
+    ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("ely_pet",zh),&state.pet_enabled);ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("animate_pet",zh),&state.pet_animate);
     ImGui::TextUnformatted(ecmgui_v2::ui::text("pet.skin_label",zh));
     int pet_skin=0;std::vector<const char*> skin_labels;
     for(size_t i=0;i<pet::skins.size();++i){skin_labels.push_back(pet::skins[i].english);if(state.pet_skin==pet::skins[i].id)pet_skin=static_cast<int>(i);}
@@ -469,7 +469,7 @@ void App::draw_settings(bool zh) {
         const auto* option=selected_option(edit_table,edit_key);
         if(option){ImGui::TextWrapped("%s\n%s: %s | %s",ui::text(option->description_key,zh),ecmgui_v2::ui::text("type",zh),option->type,option->domain);}
         const bool toggle=option&&(std::string(option->type)=="bool"||std::string(option->domain)=="[0|1]");
-        if(toggle){settings_bool=std::string(edit_value)=="true"||std::string(edit_value)=="1";if(ImGui::Checkbox(ecmgui_v2::ui::text("enabled",zh),&settings_bool))std::snprintf(edit_value,sizeof(edit_value),"%s",std::string(option->type)=="bool"?(settings_bool?"true":"false"):(settings_bool?"1":"0"));}
+        if(toggle){settings_bool=std::string(edit_value)=="true"||std::string(edit_value)=="1";if(ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("enabled",zh),&settings_bool))std::snprintf(edit_value,sizeof(edit_value),"%s",std::string(option->type)=="bool"?(settings_bool?"true":"false"):(settings_bool?"1":"0"));}
         else ImGui::InputText(ecmgui_v2::ui::text("value",zh),edit_value,sizeof(edit_value));
         if(ImGui::Button(ecmgui_v2::ui::text("stage_edit",zh))&&!edit_business(edit_table,edit_key,edit_value))toast(status,true);ImGui::SameLine();if(ui::button("save-workflow",ecmgui_v2::ui::text("save_workflow",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!save_business())toast(status,true);
         ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("reload_discard_edits",zh)))load_config(config_path);

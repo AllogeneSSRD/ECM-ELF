@@ -403,6 +403,28 @@ GPU三图基础卡片高64逻辑单位，宽度足够时合计192；图例与当
 - [应用契约日志](../../data/experiments/gui_v2/curve_forms_contracts_0498_04/app.log)与[侧车契约日志](../../data/experiments/gui_v2/curve_forms_contracts_0498_04/state.log)通过，覆盖预览失效、目标分区、改文件拒绝、CPU不支持组合拒绝及概率快照；[旧GUI隔离](../../data/experiments/gui_v2/curve_forms_legacy_0498_01/result.json)确认73项受保护文件、旧二进制及既有业务配置投影保持一致。仅使用空闲DX11和合成输入，未运行真实ECM或Vulkan渲染。
 - 首轮原生测试发现表单分组中的第二列坐标重复偏移，已修复并补充容器右边界校验；原始失败留在 `curve_forms_native_0498_02`。早期沙箱路径访问失败、较大字号旧二进制对齐失败、构建期间误启动测试导致的链接占用证据均保留，不算通过；链接失败日志见 `curve_forms_build_locked_0498_01/build.log`。最终构建完成后按二进制身份重新验证上述两种字号，结果均通过。
 
+### 0.49.9 视图菜单保存与日志显隐布局稳定
+
+- 0.49.8整轮优化已按用户要求先提交，当前提交为 `21124fc`；本轮随后实施；保留设置内的恢复默认布局入口，顶栏视图菜单移除重置布局，底部新增分隔线与“保存布局与配置”。菜单文字与反馈继续使用外部XML。
+- 复现：[旧候选第一次](../../data/experiments/gui_v2/view_layout_red_0499_02/result.json)、[重复复现](../../data/experiments/gui_v2/view_layout_red_0499_03/result.json)。0.49.8二进制SHA-256为 `2ce55385fa072088c6f31a39acf8672f9fb06fe8fc9697c11591dd1bab8c7858`；用户手动调整到308px，真实菜单切换日志后回到236px，合成工作流无运行任务。
+- 排查假设：日志开关触发全局重建；ImGui隐藏节点折叠牵动外层；重显时窗口停靠恢复改写外层。代码确认日志菜单直接设置`reset_layout`，使`App::build_layout`按默认比例重建导航。修复保留隐显原生行为，将重显恢复限定在日志区域；首次从默认隐藏状态启用时也只分割工作区。新增构建计数用于回归确认无全局重建，记录实际菜单条目和保存操作。
+- 保存入口复用工作流的已有保存校验，有脏计算配置时先保存，无改动时不改写工作流；UI侧车包含当前窗口正常尺寸/位置、最大化状态和停靠布局。非法只读侧车在开始前拒绝保存；计算保存冲突时不继续覆盖UI侧车。两个文件不提供跨文件事务。
+- 最终独立构建成功，171项源码目录指纹核对通过，版本0.49.9，候选SHA-256为 `8712c8dc166b4e690c2ba13be027dd692d79fc38835650e85a634482a73dac15`。本轮改动尚未提交，旧ZIP未重打包。
+- 原生回归通过：[初始显示日志](../../data/experiments/gui_v2/view_layout_green_0499_01/result.json)、[初始隐藏日志](../../data/experiments/gui_v2/view_layout_hidden_0499_01/result.json)、[中文隐藏后保存/重启/再启用](../../data/experiments/gui_v2/view_layout_zh_saved_hidden_0499_01/result.json)。两轮真实菜单反复显隐均保持手动308px，中央页面、右侧两个标签及其停靠ID不变，全局布局构建计数不增加；三份日志窗口重新停靠成功，显式保存的侧车即时包含1500px窗口宽度与非空停靠布局，重启保持尺寸。截图确认视图菜单实际条目为检查区/日志/系统标题栏/分隔线/保存布局与配置，不含重置布局。
+- [应用契约日志](../../data/experiments/gui_v2/view_contracts_0499_01/app.log)覆盖脏计算配置的合并保存、干净工作流不改写、外部文件冲突时侧车不改写、非法只读侧车拒绝；[侧车契约日志](../../data/experiments/gui_v2/view_contracts_0499_01/state.log)通过；[右侧关闭回归](../../data/experiments/gui_v2/view_right_return_0499_01/result.json)保持中央页与手动导航宽度；[旧GUI隔离](../../data/experiments/gui_v2/view_legacy_0499_01/result.json)确认73个受保护文件及旧二进制保持一致。仅使用空闲DX11与合成配置，无真实ECM任务或Vulkan渲染。
+- 首次复现脚本将历史采样字段累积，导致隐藏后仍读到旧logdock字段；已改为逐类别只取最新采样，再连续两次确认同一旧二进制复现。该首轮失败记录保留于 `view_layout_red_0499_01`。本轮未添加临时DEBUG日志，菜单条目与布局构建计数保留为显式audit-app诊断；旧菜单翻译键仅为旧词典别名兼容保留。防回归边界为可见性切换仅调整所属停靠区域，避免将全局布局重建作为显示开关的副作用。
+
+### 0.49.9 补充：短输入等宽与小尺寸复选框
+
+- 按本轮补充要求继续优化，版本保持0.49.9，不自动提交。`CompactForm`先收集完整字段及关联开关，测量最长开关后统一分配输入宽度与右侧预留区；没有开关的字段不再扩宽，开关起点保持同列对齐。空间不足时改为单列，保存命名模板保留整行。
+- v2独立的`ui::checkbox`继续调用原生Checkbox处理输入与导航，原生方框绘制设为透明后按当前主题绘制紧凑方框与细勾线。默认15字号下从原约27px缩为17px，勾线1.1px，随字号/DPI缩放；整段标签仍可点击，窄区域按UTF-8边界省略并悬停显示全文。设置、结果选择、生成器/概率与概率图图例、组件页均使用相同控件，不修改固定ImGui源码或旧GUI。
+- 保留工作期间外部XML中的“Stage1 + Stage2”文案调整；初次构建因词典指纹过期被配置检查拒绝，更新生成指纹后重建，失败配置日志保留在 `equal_fields_configure_0499_01`。
+- 最终0.49.9独立构建成功，172项冻结目录指纹核对通过；候选SHA-256为 `8c4cad3007965b303b29a6a6779bec45bbc68fe24c904564c0425f6d3eb5a002`，保持未提交状态，旧ZIP未重打包。
+- [15字号原生中英回归](../../data/experiments/gui_v2/equal_fields_native_0499_03/result.json)与[24字号原生中英回归](../../data/experiments/gui_v2/equal_fields_large_font_0499_02/result.json)通过，分别覆盖2200/900/640px窗口；确认全部短输入等宽、同列输入边缘与开关起点对齐、开关不越过容器，原有64次概率预设及B2/B1/经验口径切换保持正确。24字号640px窄界面按需省略标签且保留完整提示。
+- [应用与复选框契约](../../data/experiments/gui_v2/equal_fields_contracts_0499_02/app.log)、[侧车契约](../../data/experiments/gui_v2/equal_fields_contracts_0499_02/state.log)通过；15/24字号下实际鼠标点击方框与标签、Tab导航后空格、禁用拒绝切换与混合状态均验证。首轮键盘测试只设置程序焦点而未进入键盘导航；无渲染器对照确认原生与紧凑Checkbox均不被该输入激活，加入真实Tab事件后两者一致通过，探针与原始输出保留在 `check_keyboard_probe_0499_01`。
+- [设置页原生回归](../../data/experiments/gui_v2/equal_fields_settings_0499_02/result.json)通过，覆盖六分组、明暗主题、外部XML语言、缩放/窄窗口、界面保存及旧侧车迁移；[图例布局扫描](../../data/experiments/gui_v2/equal_fields_chart_0499_01/result.json)21330例无跳动；[旧GUI隔离](../../data/experiments/gui_v2/equal_fields_legacy_0499_01/result.json)确认73项受保护文件与旧二进制一致。仅空闲DX11和无渲染器测试，未运行真实ECM或Vulkan。
+- 表单与设置脚本原有固定短延时可能读到部分帧日志，或在一次渲染前覆盖按下/释放事件。保留首次失败于 `equal_fields_native_0499_01`、`equal_fields_native_0499_02`、`equal_fields_settings_0499_01`；脚本改为只读取完整帧，并确认两次帧提交后才发送下一输入，未放宽预设、保存或几何断言。设置语言选择辅助函数增加可选点击回调，其他调用者的默认行为保留。
+
 ## 1. 分析边界与基线
 
 ### P3–P6 扩展授权与宠物兼容

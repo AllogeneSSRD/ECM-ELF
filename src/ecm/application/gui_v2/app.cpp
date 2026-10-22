@@ -199,6 +199,7 @@ void App::shutdown_workers() noexcept {
     } catch (...) { controller.force_close(); }
 }
 void App::build_layout(unsigned dock, float scale) {
+    ++layout_build_count;
     const auto viewport = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dock); ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
     ImGui::DockBuilderSetNodeSize(dock, viewport->WorkSize);
@@ -236,11 +237,54 @@ bool App::begin_window(const char* name, bool* open, const ui::Settings& active,
     const bool visible=ImGui::Begin(name,open,flags|(navigation?ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse:0)); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;return visible;
 }
 void App::end_window() { ImGui::End(); ImGui::PopStyleVar(6); }
-bool App::save_preferences() {
+bool App::save_preferences(const char* success_key) {
     try {
         size_t length=0;const auto* layout=ImGui::SaveIniSettingsToMemory(&length);state.layout(std::string(layout,length));
-        const bool saved=state.save();status=saved?"UI preferences saved":state.notice;toast(status,!saved);return saved;
+        const auto* viewport=ImGui::GetMainViewport();
+        const auto hwnd=static_cast<HWND>(viewport->PlatformHandleRaw?viewport->PlatformHandleRaw:viewport->PlatformHandle);
+        if(hwnd&&!IsIconic(hwnd)){
+            state.window_maximized=IsZoomed(hwnd)!=FALSE;
+            if(!state.window_maximized){RECT rect{};if(GetWindowRect(hwnd,&rect)){state.window_x=rect.left;state.window_y=rect.top;state.window_width=rect.right-rect.left;state.window_height=rect.bottom-rect.top;}}
+        }
+        const bool saved=state.save();status=saved?ui::text(success_key,state.ui_language!="en"):state.notice;toast(status,!saved);return saved;
     }catch(const std::exception& error){status=error.what();toast(status,true);return false;}
+}
+bool App::save_layout_config(){
+    if(!state.writable){status=state.notice;toast(status,true);return false;}
+    if(config.dirty()&&!save_business()){toast(status,true);return false;}
+    const bool saved=save_preferences("message.layout_config_saved");if(saved)++view_save_count;return saved;
+}
+void App::set_logs_visible(bool visible){
+    if(visible==state.ui_logs)return;
+    std::vector<std::string> names{"Manager###v2.logs"};
+    for(const auto& worker:controller.workers())names.push_back("Worker###v2.log.worker."+std::to_string(worker.index));
+    const auto dock_id=[](const std::string& name,unsigned& id){
+        if(const auto* window=ImGui::FindWindowByName(name.c_str())){id=window->DockId;return true;}
+        if(const auto* settings=ImGui::FindWindowSettingsByID(ImHashStr(name.c_str()))){id=settings->DockId;return true;}return false;
+    };
+    if(!visible){
+        hidden_log_docks_.clear();
+        for(const auto& name:names){unsigned id=0;if(dock_id(name,id))hidden_log_docks_[name]=id;}
+        if(const auto* manager=ImGui::FindWindowByName(names.front().c_str()))if(const auto* node=manager->DockNode)
+            if(node->ParentNode&&node->ParentNode->SplitAxis==ImGuiAxis_Y&&node->ParentNode->Size.y>0)
+                log_height_ratio_=std::clamp(node->Size.y/node->ParentNode->Size.y,.1f,.75f);
+    }else{
+        ImGuiID fallback=0,root=0;
+        for(const auto& name:names){
+            unsigned id=0;const auto found=hidden_log_docks_.find(name);
+            const bool known=found!=hidden_log_docks_.end()?(id=found->second,true):dock_id(name,id);
+            if(known&&!id)continue; // A floating log window keeps its existing geometry.
+            if(!id||!ImGui::DockBuilderGetNode(id)){
+                if(!fallback)if(const auto* workspace=ImGui::FindWindowByName("Workspace###v2.workspace"))if(workspace->DockId){
+                    ImGuiID center=workspace->DockId;ImGui::DockBuilderSplitNode(center,ImGuiDir_Down,log_height_ratio_,&fallback,&center);
+                }
+                id=fallback;
+            }
+            if(id){ImGui::DockBuilderDockWindow(name.c_str(),id);root=ImGui::DockNodeGetRootNode(ImGui::DockBuilderGetNode(id))->ID;if(name==names.front())log_dock_=id;}
+        }
+        if(root)ImGui::DockBuilderFinish(root);hidden_log_docks_.clear();
+    }
+    state.ui_logs=visible;
 }
 bool App::select_language_file(const std::string& file){
     std::string error;const auto directory=ui::language_directory();
@@ -270,6 +314,8 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     if(state.ui_page==5){state.ui_page=drawn_center_page_>=0&&drawn_center_page_!=5?drawn_center_page_:0;open_settings();}
     if(ImGui::GetIO().KeyCtrl&&ImGui::IsKeyPressed(ImGuiKey_Comma,false))open_settings();
     navigation_icon_count=0;
+    view_control=view_logs_control=view_save_control={};view_menu_open=view_save_separator=false;
+    view_item_keys.clear();
     language_control={};language_items[0]=language_items[1]={};language_file_controls.clear();
     worker_speed_samples=workspace_chart_count=0;worker_speed_min=worker_speed_max={};
     worker_chart_rects.clear();worker_chart_metrics.clear();worker_chart_toggle={};
@@ -279,11 +325,17 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     const bool zh = fonts.chinese;
     if (ImGui::BeginMainMenuBar()) {
         ImGui::Text("ECM-ELF %s", version); ImGui::Separator();
-        if(ImGui::BeginMenu(ecmgui_v2::ui::text("menu.view",zh))){
-            if (ImGui::MenuItem(ecmgui_v2::ui::text("menu.reset_layout",zh))) reset_layout = true;
-            if(ImGui::MenuItem(ecmgui_v2::ui::text("menu.inspector",zh),nullptr,&state.ui_inspector))reset_layout=true;
-            if(ImGui::MenuItem(ecmgui_v2::ui::text("menu.logs",zh),nullptr,&state.ui_logs))reset_layout=true;
-            ImGui::MenuItem(ecmgui_v2::ui::text("menu.title_bar",zh),nullptr,&state.window_title_bar);
+        view_menu_open=ImGui::BeginMenu(ecmgui_v2::ui::text("menu.view",zh));
+        view_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+        if(view_menu_open){
+            const auto menu_item=[&](const char* key,bool selected=false){view_item_keys.push_back(key);return ImGui::MenuItem(ui::text(key,zh),nullptr,selected);};
+            if(menu_item("menu.inspector",state.ui_inspector)){state.ui_inspector=!state.ui_inspector;reset_layout=true;}
+            if(menu_item("menu.logs",state.ui_logs))set_logs_visible(!state.ui_logs);
+            view_logs_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+            if(menu_item("menu.title_bar",state.window_title_bar))state.window_title_bar=!state.window_title_bar;
+            ImGui::Separator();view_save_separator=true;
+            if(menu_item("menu.save_layout_config"))save_layout_config();
+            view_save_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
             ImGui::EndMenu();
         }
         if(ImGui::BeginMenu(ecmgui_v2::ui::text("menu.language",zh))){

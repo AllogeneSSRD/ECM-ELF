@@ -219,7 +219,7 @@ void Showcase::draw(Settings& pending, const Settings& active, const Fonts& font
         icon(Icon::Folder, p, s); ImGui::SameLine(); ImGui::TextDisabled("%s", ecmgui_v2::ui::text("components.path_preview_hint",zh));
         form_row(ecmgui_v2::ui::text("workflow_path",zh), "##path", path, sizeof(path), s);
         field_center = {(ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) / 2, (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) / 2};
-        ImGui::Checkbox(ecmgui_v2::ui::text("components.enable_option",zh), &selected);
+        ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("components.enable_option",zh), &selected);
         ImGui::TextDisabled(ecmgui_v2::ui::text("components.primary_click_count",zh), clicks);
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         ImGui::TextUnformatted(ecmgui_v2::ui::text("status_vocabulary",zh));

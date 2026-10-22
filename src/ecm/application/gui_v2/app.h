@@ -34,7 +34,9 @@ public:
     void draw_page(const ui::Settings& active, const ui::Fonts& fonts, int page=-1);
     bool move_page(int page,bool right);
     void open_settings(int category=-1);
-    bool save_preferences();
+    bool save_preferences(const char* success_key="message.ui_saved");
+    bool save_layout_config();
+    void set_logs_visible(bool visible);
     const ecmgui::WorkerView* selected() const;
     void trace(const std::string& text);
     void toast(const std::string& text,bool error=false);
@@ -72,6 +74,10 @@ public:
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 language_control{};
+    ImVec2 view_control{},view_logs_control{},view_save_control{};
+    bool view_menu_open=false,view_save_separator=false;
+    std::vector<std::string> view_item_keys;
+    unsigned layout_build_count=0,view_save_count=0;
     ui::CompactFormAudit generator_form,probability_form;
     std::map<int,std::pair<ImVec2,ImVec2>> generator_curve_controls,probability_curve_controls;
     std::map<std::string,ImVec2> language_file_controls;
@@ -174,6 +180,8 @@ private:
     struct PhaseView {std::string identity,phase,clock_curve;unsigned long long phase_at=0,batch_at=0,batch=0;ui::Stage2Timing timing;float high_water=0;};
     std::map<int,PhaseView> stage2_views_;
     unsigned log_dock_=0;
+    std::map<std::string,unsigned> hidden_log_docks_;
+    float log_height_ratio_=.28f;
     int log_last_worker_=-1;
     int drawn_center_page_=-1;
     std::map<std::string,float> window_dpi_;

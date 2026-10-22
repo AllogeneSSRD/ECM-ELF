@@ -1,6 +1,7 @@
 #pragma once
 #include "fonts.h"
 #include "icons.h"
+#include "checkbox.h"
 
 namespace ecmgui_v2::ui {
 enum class ButtonKind { Primary, Secondary, Ghost, Danger, Selected };

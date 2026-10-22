@@ -165,7 +165,7 @@
       <Item id="custom" name="Custom" />
       <Item id="use_stage1_empirical_calibration" name="Use stage1 empirical calibration" />
       <Item id="probability.edwards_divisor_note" name="Torsion order is not D_eff. Edwards Z2xZ8: measured stage1 D=26.4081; relative Suyama rebase ~29.0 is a combined-model heuristic, not a direct Stage2 calibration." />
-      <Item id="combined" name="Combined" />
+      <Item id="combined" name="Stage1 + Stage2" />
       <Item id="probability.stage2_conditional" name="Stage 2 conditional" />
       <Item id="forward" name="Forward" />
       <Item id="probability.target_percent" name="Target probability (%)" />
@@ -365,6 +365,8 @@
       <Item id="generator.b1_hint" name="Empty keeps input" />
       <Item id="generator.b2_hint" name="Empty keeps input" />
       <Item id="probability.profile_values" name="%s&#10;Stage1 empirical D_eff = %.6g&#10;Combined-model D_eff = %.6g (Edwards uses a relative Suyama heuristic)" />
+      <Item id="menu.save_layout_config" name="Save layout and settings" />
+      <Item id="message.layout_config_saved" name="Layout and settings saved" />
     </Panel>
   </Native-Langue>
 </EcmGui>

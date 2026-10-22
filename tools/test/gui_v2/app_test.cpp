@@ -92,6 +92,26 @@ int main(int argc,char** argv){
     ecmgui_v2::ui::SmoothScroll scroll;scroll.add(0,-3);double total=0,x=0,y=0;int steps=0;
     while(scroll.active()){scroll.step(.016,x,y);assert(y<=0);total+=y;assert(++steps<100);}
     assert(std::abs(total+3)<1e-9&&steps>1);
+    {auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={600,400};io.DeltaTime=1.f/60;
+     io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;io.Fonts->AddFontDefault();unsigned char* pixels;int width,height;io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+     for(float size:{15.f,24.f}){
+         ImGui::GetStyle().FontSizeBase=size;ImGui::GetStyle().FramePadding={10,6};bool checked=false;CheckboxMetrics metrics;
+         const auto frame=[&](bool disabled=false,bool mixed=false,bool focus=false){
+             ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({500,300});ImGui::Begin("checkbox-contract",nullptr,ImGuiWindowFlags_NoSavedSettings);
+             if(focus)ImGui::SetKeyboardFocusHere();ImGui::BeginDisabled(disabled);ImGui::PushItemFlag(ImGuiItemFlags_MixedValue,mixed);
+             const bool changed=checkbox("Option",&checked,&metrics);ImGui::PopItemFlag();ImGui::EndDisabled();ImGui::End();ImGui::Render();return changed;
+         };
+         frame();assert(metrics.box<metrics.native_frame*.8f&&metrics.stroke<metrics.box*.1f);
+         io.AddMousePosEvent(metrics.min.x+metrics.box*.5f,metrics.min.y+metrics.box*.5f);frame();
+         io.AddMouseButtonEvent(0,true);frame();io.AddMouseButtonEvent(0,false);assert(frame()&&checked);
+         io.AddMousePosEvent(metrics.max.x+15,metrics.min.y+metrics.box*.5f);frame();
+         io.AddMouseButtonEvent(0,true);frame();io.AddMouseButtonEvent(0,false);assert(frame()&&!checked);
+         io.AddMouseButtonEvent(0,true);frame(true);io.AddMouseButtonEvent(0,false);assert(!frame(true)&&!checked);
+         io.AddMousePosEvent(-100,-100);frame(false,false,true);frame();
+         io.AddKeyEvent(ImGuiKey_Tab,true);frame();io.AddKeyEvent(ImGuiKey_Tab,false);frame();
+         io.AddKeyEvent(ImGuiKey_Space,true);const bool key_down=frame();io.AddKeyEvent(ImGuiKey_Space,false);const bool key_up=frame();assert((key_down||key_up)&&checked);
+         frame(false,true);assert(metrics.mixed);
+     }ImGui::DestroyContext(context);}
     assert(argc==2);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
     {using namespace ecmgui_v2::ui;
      auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
@@ -184,6 +204,16 @@ int main(int argc,char** argv){
     using namespace ecmgui::probability_ui;Request request;const auto forward=calculate(request);assert(forward.error.empty());
     auto inverse=request;inverse.solve=Solve::Curves;inverse.target=.75;const auto solved=calculate(inverse);assert(solved.error.empty());assert(cumulative(solved.probability.selected,solved.parameters.curves)>=.75);
     const auto csv=curve_csv(forward);request.parameters.b1=10;assert(curve_csv(forward)==csv);
+    {auto* context=ImGui::CreateContext();ImGui::GetIO().IniFilename=nullptr;
+     assert(app.edit_business("shared","b2_ratio","40")&&app.save_layout_config());
+     assert(!app.config.dirty()&&read(cfg).find("b2_ratio = 40")!=std::string::npos&&fs::exists(state.path));
+     const auto saved_state=read(state.path);const auto saved_config=read(cfg);
+     assert(app.save_layout_config()&&read(cfg)==saved_config); // Clean workflow is not rewritten.
+     assert(app.edit_business("shared","b2_ratio","50"));write(cfg,saved_config+"# external save conflict\n");
+     assert(!app.save_layout_config()&&read(state.path)==saved_state&&app.config.dirty());
+     assert(app.load_config(cfg.u8string()));state.writable=false;state.notice="fixture read-only sidecar";
+     assert(app.edit_business("shared","b2_ratio","60")&&!app.save_layout_config()&&read(cfg)==saved_config+"# external save conflict\n");
+     state.writable=true;assert(app.load_config(cfg.u8string()));ImGui::DestroyContext(context);}
     assert(original.find("font_size=\"auto\"")!=std::string::npos);
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true}\n";
 }

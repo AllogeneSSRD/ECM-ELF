@@ -26,7 +26,10 @@ def main():
         proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app','--no-nvml','--no-pet','--language',language],cwd=out,startupinfo=si)
         hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,10,10,2200,1150,0x14);user.ShowWindow(hwnd,4)
         def records(prefix):
-            return [dict(re.findall(r'(\w+)=([^\s]+)',s)) for s in log.read_text(encoding='utf-8').splitlines() if s.startswith(prefix+':')]
+            content=log.read_text(encoding='utf-8');end=content.rfind('\ninteraction_sample:')
+            # Consume only complete frame batches, never newer headers with old geometry.
+            content=content[:end] if end>=0 else ''
+            return [dict(re.findall(r'(\w+)=([^\s]+)',s)) for s in content.splitlines() if s.startswith(prefix+':')]
         def current():
             rows=records('form_sample');return rows[-1] if rows else {}
         def wait(predicate):
@@ -38,7 +41,11 @@ def main():
             raise AssertionError(log.read_text(encoding='utf-8')[-4500:])
         def click_rect(rect):
             x1,y1,x2,y2=map(float,rect.split(','));x,y=round((x1+x2)/2),round((y1+y2)/2)
-            for action in [0,1,2]:user.PostMessageW(hwnd,0x8021,action,(y<<16)|(x&65535));time.sleep(.12)
+            for action in [0,1,2]:
+                before=log.read_text(encoding='utf-8').count('\ninteraction_sample:')
+                user.PostMessageW(hwnd,0x8021,action,(y<<16)|(x&65535));end=time.monotonic()+8
+                while log.read_text(encoding='utf-8').count('\ninteraction_sample:')<before+2:
+                    assert proc.poll() is None and time.monotonic()<end;time.sleep(.04)
         def controls(page):return {int(s['id']):s['rect'] for s in records('curve_choice') if s['page']==str(page)}
         def fields(page):return {s['id']:s for s in records('form_field') if s['page']==str(page)}
         def check_geometry(page,columns):
@@ -54,6 +61,12 @@ def main():
             first_column=[pairs[i][0] for i in range(len(pairs))]
             starts=[float(f[key]['input'].split(',')[0]) for key in (first_column if columns==2 else f)]
             assert max(starts)-min(starts)<=1,starts
+            widths=[float(entry['input'].split(',')[2])-float(entry['input'].split(',')[0]) for entry in f.values()]
+            assert max(widths)-min(widths)<=1,widths
+            for column in range(columns):
+                keys=[key for pair in pairs for key in pair][column::columns]
+                actions=[float(f[key]['action'].split(',')[0]) for key in keys if float(f[key]['action'].split(',')[2])>0]
+                assert not actions or max(actions)-min(actions)<=1,actions
         try:
             wait(lambda s:s['page']=='2' and s['columns']=='2');time.sleep(.3)
             gen=controls(2);assert set(gen)=={0,1,4,5},gen;check_geometry(2,2)
@@ -81,10 +94,12 @@ def main():
             capture(hwnd,out/f'probability-{language}-narrow.png')
             user.PostMessageW(hwnd,0x8022,7,2);wait(lambda s:s['page']=='2' and s['columns']=='1');time.sleep(.3);check_geometry(2,1)
             capture(hwnd,out/f'generator-{language}-narrow.png')
+            user.SetWindowPos(hwnd,None,20,20,640,1000,0x14);time.sleep(.5);check_geometry(2,1);capture(hwnd,out/f'generator-{language}-640.png')
+            user.PostMessageW(hwnd,0x8022,7,3);wait(lambda s:s['page']=='3' and s['columns']=='1');time.sleep(.3);check_geometry(3,1);capture(hwnd,out/f'probability-{language}-640.png')
         finally:close(proc,hwnd)
         assert 'D3D11 device lost' not in log.read_text(encoding='utf-8')
     assert cfg.read_bytes()==original and not (out/'worktodo.txt').exists()
-    result=dict(passed=True,preset_checks=checks,languages=2,font_size=a.font_size,wide_pairs=True,narrow_single=True,labels_left=True,inputs_aligned=True,actions_right=True,generator_supported_only=True,workflow_unchanged=True,calibration_sha256=hashlib.sha256(model.REP_FILE.read_bytes()).hexdigest(),exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())
+    result=dict(passed=True,preset_checks=checks,languages=2,font_size=a.font_size,wide_pairs=True,narrow_single=True,narrow_widths=[900,640],labels_left=True,inputs_aligned=True,equal_input_widths=True,actions_aligned=True,actions_right=True,generator_supported_only=True,workflow_unchanged=True,calibration_sha256=hashlib.sha256(model.REP_FILE.read_bytes()).hexdigest(),exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())
     (out/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 
 if __name__=='__main__':main()

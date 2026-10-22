@@ -1,5 +1,6 @@
 #include "i18n.h"
 #pragma once
+#include "checkbox.h"
 #include "theme.h"
 #include <algorithm>
 #include <cmath>
@@ -53,7 +54,7 @@ inline void chart(const char* id,std::vector<ChartSeries>& series,const char* xl
         const float legend_width=ImGui::CalcTextSize(s.label).x+ImGui::GetFontSize()+ImGui::GetStyle().FramePadding.y*2+ImGui::GetStyle().ItemInnerSpacing.x;
         if(i&&ImGui::GetItemRectMax().x+legend_width+ImGui::GetStyle().ItemSpacing.x<legend_right)ImGui::SameLine();
         const auto key=ImGui::GetID("visible");s.visible=ImGui::GetStateStorage()->GetBool(key,true);
-        ImGui::PushStyleColor(ImGuiCol_Text,s.color);if(ImGui::Checkbox(s.label,&s.visible))ImGui::GetStateStorage()->SetBool(key,s.visible);ImGui::PopStyleColor();ImGui::PopID();}
+        ImGui::PushStyleColor(ImGuiCol_Text,s.color);if(ecmgui_v2::ui::checkbox(s.label,&s.visible))ImGui::GetStateStorage()->SetBool(key,s.visible);ImGui::PopStyleColor();ImGui::PopID();}
     if(!format.legend_controls)for(auto& s:series)s.visible=true;
     auto bounds=chart_bounds(series,ymax);
     if(std::isfinite(format.xmin)&&std::isfinite(format.xmax)&&format.xmin<format.xmax){bounds.xmin=format.xmin;bounds.xmax=format.xmax;}

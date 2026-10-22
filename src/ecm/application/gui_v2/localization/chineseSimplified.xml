@@ -165,7 +165,7 @@
       <Item id="custom" name="自定义" />
       <Item id="use_stage1_empirical_calibration" name="使用 Stage1 经验标定口径" />
       <Item id="probability.edwards_divisor_note" name="挠群阶不等于 D_eff。Edwards Z2xZ8 的 Stage1 经验 D=26.4081；相对 Suyama 归一约 29.0，是联合模型启发值，未经独立 Stage2 标定。" />
-      <Item id="combined" name="联合" />
+      <Item id="combined" name="Stage1 + Stage2" />
       <Item id="probability.stage2_conditional" name="Stage2 条件概率" />
       <Item id="forward" name="正算" />
       <Item id="probability.target_percent" name="目标概率（%）" />
@@ -365,6 +365,8 @@
       <Item id="generator.b1_hint" name="空白保留输入" />
       <Item id="generator.b2_hint" name="空白保留输入" />
       <Item id="probability.profile_values" name="%s&#10;Stage1 经验 D_eff = %.6g&#10;联合模型 D_eff = %.6g（Edwards 为相对 Suyama 启发值）" />
+      <Item id="menu.save_layout_config" name="保存布局与配置" />
+      <Item id="message.layout_config_saved" name="布局与配置已保存" />
     </Panel>
   </Native-Langue>
 </EcmGui>
