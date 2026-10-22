@@ -9,6 +9,7 @@ struct UiValues {
     std::string ui_theme = "dark";
     std::string ui_language = "en";
     float ui_scale = 0.0f;
+    int ui_font_size = 15;
     int ui_page = 0;
     int ui_worker = 1;
     bool ui_inspector = true;
@@ -36,11 +37,40 @@ struct UiValues {
     float pet_left = 72.0f;
     std::string pet_skin = "classic";
 };
+namespace ui_limits {
+inline constexpr int state_schema_min = 1;
+inline constexpr int state_schema_max = 1;
+inline constexpr float ui_scale_min = 0.0f;
+inline constexpr float ui_scale_max = 4.0f;
+inline constexpr int ui_font_size_min = 10;
+inline constexpr int ui_font_size_max = 30;
+inline constexpr int ui_page_min = 0;
+inline constexpr int ui_page_max = 6;
+inline constexpr int ui_worker_min = 1;
+inline constexpr int ui_worker_max = 1024;
+inline constexpr int ui_right_pages_min = 0;
+inline constexpr int ui_right_pages_max = 126;
+inline constexpr int ui_right_page_min = 0;
+inline constexpr int ui_right_page_max = 6;
+inline constexpr int window_x_min = (-2147483647 - 1);
+inline constexpr int window_x_max = 2147483647;
+inline constexpr int window_y_min = (-2147483647 - 1);
+inline constexpr int window_y_max = 2147483647;
+inline constexpr int window_width_min = 480;
+inline constexpr int window_width_max = 16384;
+inline constexpr int window_height_min = 360;
+inline constexpr int window_height_max = 16384;
+inline constexpr int worker_count_min = 0;
+inline constexpr int worker_count_max = 64;
+inline constexpr float pet_left_min = 0.0f;
+inline constexpr float pet_left_max = 16384.0f;
+}
 template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("state","schema",value.state_schema);
     field("ui","theme",value.ui_theme);
     field("ui","language",value.ui_language);
     field("ui","scale",value.ui_scale);
+    field("ui","font_size",value.ui_font_size);
     field("ui","page",value.ui_page);
     field("ui","worker",value.ui_worker);
     field("ui","inspector",value.ui_inspector);
@@ -73,6 +103,7 @@ inline void validate_ui(const UiValues& v) {
     if ((v.ui_theme != "dark" && v.ui_theme != "light") || v.ui_theme.size() > 4096) throw std::runtime_error("Invalid UI state: ui.theme");
     if ((v.ui_language != "en" && v.ui_language != "zh") || v.ui_language.size() > 4096) throw std::runtime_error("Invalid UI state: ui.language");
     if (v.ui_scale < 0 || v.ui_scale > 4 || !std::isfinite(v.ui_scale)) throw std::runtime_error("Invalid UI state: ui.scale");
+    if (v.ui_font_size < 10 || v.ui_font_size > 30) throw std::runtime_error("Invalid UI state: ui.font_size");
     if (v.ui_page < 0 || v.ui_page > 6) throw std::runtime_error("Invalid UI state: ui.page");
     if (v.ui_worker < 1 || v.ui_worker > 1024) throw std::runtime_error("Invalid UI state: ui.worker");
     if (v.ui_dock.size() > 524288) throw std::runtime_error("Invalid UI state: ui.dock");

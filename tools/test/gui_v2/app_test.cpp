@@ -30,6 +30,11 @@ int main(int argc,char** argv){
      assert(ecmgui_v2::ui::worker_shape(worker)=="B1=--  B2=--  S=-- bits  D=--  P=--");
      worker.stage2_status.b1=260000000;worker.stage2_status.b2=1300000000000ULL;worker.stage2_status.bits=4283;worker.stage2_status.d=1381380;worker.stage2_status.p=126720;
      assert(ecmgui_v2::ui::worker_shape(worker)=="B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720");
+     auto batch=ecmgui_v2::ui::stage2_batch(worker.stage2_status,false);assert(!batch.visible);
+     worker.stage2_status.phase="Giant points";worker.stage2_status.batch=2;worker.stage2_status.batches=8;worker.stage2_status.batch_left=12;
+     batch=ecmgui_v2::ui::stage2_batch(worker.stage2_status,false);assert(batch.visible&&batch.fraction==.25f&&batch.label=="Giant batch 2 / 8"&&batch.remaining=="Phase remaining 12.0 s");
+     worker.stage2_status.batch=9;worker.stage2_status.batch_left=-1;
+     batch=ecmgui_v2::ui::stage2_batch(worker.stage2_status,true);assert(batch.fraction==1&&batch.remaining=="阶段剩余 --");
      using ecmgui_v2::ui::log_tone;using ecmgui_v2::ui::LogTone;
      assert(log_tone(ecmgui::parse_line("[2026-10-22 12:00:00] Checkpoint saved: test"))==LogTone::Info);
      assert(log_tone(ecmgui::parse_line("stage2_phase: Giant points elapsed=4"))==LogTone::Stage2);

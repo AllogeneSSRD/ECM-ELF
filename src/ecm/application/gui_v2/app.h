@@ -56,6 +56,8 @@ public:
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 settings_search_control{};
+    ImVec2 font_size_control{},exit_controls[3]{},worker_speed_min{},worker_speed_max{};
+    size_t worker_speed_samples=0,workspace_chart_count=0;
     ImVec2 pet_skin_controls[4]{};
     std::map<int,ImVec2> worker_select_controls,worker_action_controls,log_tab_controls;
     ImVec2 log_raw_control{},log_follow_control{},title_drag_min{},title_drag_max{},title_controls[3]{};
@@ -64,6 +66,11 @@ public:
     float log_scroll=0;
     std::vector<std::pair<ImVec2,ImVec2>> worker_summary_rects;
     float log_line_pitch=0,log_font_height=0,log_view_height=0;
+    float worker_table_scroll_max_y=0,worker_table_height=0,worker_table_content_height=0;
+    float worker_table_required_height=0,worker_table_data_height=0;
+    size_t worker_table_rows=0;
+    float body_font_height=0,body_glyph_height=0,log_glyph_height=0;
+    bool log_uses_body=false;
     size_t log_speed_samples=0;
     int settings_matches=0;
     float result_scroll=0;
@@ -104,7 +111,7 @@ private:
     std::map<std::string,std::filesystem::file_time_type> verified_;
     bool layout_ready_ = false, layout_wide_ = false;
     bool focus_right_ = true;
-    struct LogView {bool raw=false,follow=true,jump=true,speed=false;};
+    struct LogView {bool raw=false,follow=true,jump=true;};
     std::map<int,LogView> log_views_;
     int log_last_worker_=-1;
     int drawn_center_page_=-1,drawn_right_page_=-1;
@@ -114,6 +121,8 @@ private:
     void shutdown_workers() noexcept;
     bool supports_owner(const std::string& exe);
     void draw_workers(const ui::Settings& active, const ui::Fonts& fonts);
+    void draw_worker_speed(const ui::Fonts& fonts);
+    void draw_exit(const ui::Settings& active,const ui::Fonts& fonts);
     void draw_results(bool zh);
     void draw_generator(bool zh);
     void draw_probability(bool zh);

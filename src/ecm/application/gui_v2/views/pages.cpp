@@ -274,6 +274,12 @@ void App::draw_settings(bool zh) {
     int language=state.ui_language=="zh";if(chips("language",language,{"English","中文"},language_items))state.ui_language=language?"zh":"en";
     const float scales[]{0,1,1.25f,1.5f,2};int scale=0;for(int i=1;i<5;++i)if(std::abs(state.ui_scale-scales[i])<.01f)scale=i;
     if(chips("scale",scale,{tr(zh,"Auto DPI","自动 DPI"),"100%","125%","150%","200%"}))state.ui_scale=scales[scale];
+    ImGui::SetNextItemWidth(180*ImGui::GetStyle().FontScaleDpi);
+    ImGui::SliderInt(tr(zh,"Font size","字体大小"),&state.ui_font_size,ui_limits::ui_font_size_min,ui_limits::ui_font_size_max,"%d px",ImGuiSliderFlags_AlwaysClamp);
+    font_size_control={ImGui::GetItemRectMin().x+90*ImGui::GetStyle().FontScaleDpi,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+    const auto default_size=UiValues{}.ui_font_size;const auto default_label=std::string(tr(zh,"Default ","默认 "))+std::to_string(default_size);
+    ImGui::SameLine();if(ImGui::SmallButton(default_label.c_str()))state.ui_font_size=default_size;
+    ImGui::TextDisabled("%s",tr(zh,"Font size uses logical pixels; monitor DPI still applies.","字号使用逻辑像素，仍按显示器 DPI 缩放。"));
     ImGui::Checkbox(tr(zh,"Smooth scrolling","平滑滚动"),&state.ui_smooth_scroll);
     ImGui::Checkbox(tr(zh,"Allow panels outside the main window (restart)","允许面板移到应用窗口外（重启生效）"),&state.ui_external_windows);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"By default panels dock and float inside the main window. Enable this to create independent windows across monitors.","默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。"));

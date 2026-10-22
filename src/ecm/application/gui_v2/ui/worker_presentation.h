@@ -5,6 +5,16 @@
 #include <cstdio>
 namespace ecmgui_v2::ui {
 struct WorkerProgress {float fraction=0;std::string label="--",speed="--",eta="--",eta_detail="--";};
+struct Stage2Batch {bool visible=false;float fraction=0;std::string label,remaining;};
+inline Stage2Batch stage2_batch(const ecmgui::Stage2Status& s,bool zh) {
+    Stage2Batch out;if(!s.valid||!s.batches)return out;out.visible=true;
+    out.fraction=static_cast<float>(std::clamp(double(s.batch)/double(s.batches),0.,1.));
+    const bool giant=s.phase.find("Giant")!=s.phase.npos||s.phase.find("giant")!=s.phase.npos;
+    out.label=std::string(giant?(zh?"Giant 批次":"Giant batch"):(zh?"批次":"Batch"))+" "+std::to_string(s.batch)+" / "+std::to_string(s.batches);
+    char text[96];if(std::isfinite(s.batch_left)&&s.batch_left>=0)std::snprintf(text,sizeof(text),zh?"阶段剩余 %.1f s":"Phase remaining %.1f s",s.batch_left);
+    else std::snprintf(text,sizeof(text),"%s",zh?"阶段剩余 --":"Phase remaining --");
+    out.remaining=text;return out;
+}
 inline std::string eta_text(double seconds,bool detail=false) {
     if(!std::isfinite(seconds)||seconds<0)return "--";
     char text[160];const double rounded=std::round(seconds);

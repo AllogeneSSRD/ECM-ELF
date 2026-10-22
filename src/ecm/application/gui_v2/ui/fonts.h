@@ -12,6 +12,7 @@ struct Fonts {
     ImFont* mono = nullptr;
     bool cjk = false;
     bool chinese = false;
+    float base_size = 15;
     std::string notice;
     ImFont* english = nullptr;
     ImFont* chinese_font = nullptr;

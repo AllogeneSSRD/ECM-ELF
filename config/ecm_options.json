@@ -2050,6 +2050,19 @@
       },
       {
         "table": "ui",
+        "key": "font_size",
+        "field": "ui_font_size",
+        "type": "int",
+        "default": 15,
+        "description": [
+          "Body and log font size in logical pixels, independently of interface DPI scale. Other font roles preserve their ratios.",
+          "正文与日志字号（逻辑像素），独立于界面 DPI 比例；其他字体角色保持相对比例。"
+        ],
+        "minimum": 10,
+        "maximum": 30
+      },
+      {
+        "table": "ui",
         "key": "page",
         "field": "ui_page",
         "type": "int",

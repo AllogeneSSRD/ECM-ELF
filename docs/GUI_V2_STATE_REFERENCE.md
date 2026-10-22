@@ -30,6 +30,13 @@ UI language; CJK font failure falls back to English.
 Zero selects window DPI; positive values select a fixed interface scale.
 零按窗口 DPI 自动计算；正值指定界面比例。
 
+## ui.font_size
+
+默认值：`15`；类型：`int`。
+
+Body and log font size in logical pixels, independently of interface DPI scale. Other font roles preserve their ratios.
+正文与日志字号（逻辑像素），独立于界面 DPI 比例；其他字体角色保持相对比例。
+
 ## ui.page
 
 默认值：`0`；类型：`int`。

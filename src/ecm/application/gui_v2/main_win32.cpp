@@ -226,12 +226,14 @@ int run(const Options& options, int show, FILE* log) {
     ecmgui_v2::RenderHost renderer(native.hwnd,options.vulkan,options.validation,options.no_loader,options.trace_render,options.audit_ui||options.performance,log);
     auto& memory=renderer; // Explicit Vulkan allocations only; DX11 reports that scope as unavailable.
     auto pending = options.settings;
+    pending.font_size=static_cast<float>(state.ui_font_size);
     if (!options.explicit_theme) pending.light = state.ui_theme == "light";
     if (!options.explicit_language) pending.chinese = state.ui_language == "zh";
     if (!options.explicit_scale && state.ui_scale > 0) pending.scale = state.ui_scale;
     UINT dpi = GetDpiForWindow(native.hwnd);
     if (!options.explicit_scale && state.ui_scale == 0) pending.scale = dpi / 96.f;
     auto active = pending;
+    fonts.base_size=active.font_size;
     fonts.reload(active.chinese, options.missing_cjk, log);
     state.ui_language=fonts.chinese?"zh":"en";
     active.chinese = pending.chinese = fonts.chinese;
@@ -271,7 +273,9 @@ int run(const Options& options, int show, FILE* log) {
         if (options.audit_app && app.pet_test_mood >= 0) mood = static_cast<ecmgui_v2::pet::Mood>(app.pet_test_mood);
         companion.tick(mood);
         if (!companion.error.empty()) app.status = companion.error;
-        if (close_requested) { close_requested = false; if (app.request_close()) quit = true; }
+        if (close_requested) { close_requested = false; if (app.request_close()) quit = true;
+            else if(IsIconic(native.hwnd))ShowWindow(native.hwnd,SW_RESTORE);
+        }
         if (app.done()) quit = true;
         if (quit) break;
         const auto new_dpi = GetDpiForWindow(native.hwnd);
@@ -293,8 +297,9 @@ int run(const Options& options, int show, FILE* log) {
             renderer.rebuild(static_cast<uint32_t>(client.right), static_cast<uint32_t>(client.bottom));
             resized = false;
         }
-        if (font_change || active.light != pending.light) {
+        if (font_change || active.light != pending.light || active.font_size != pending.font_size) {
             active = pending;
+            fonts.base_size=active.font_size;
             ecmgui_v2::ui::apply_theme(active);
             const BOOL dark = !active.light; DwmSetWindowAttribute(native.hwnd, 20, &dark, sizeof(dark));
         }
@@ -347,8 +352,13 @@ int run(const Options& options, int show, FILE* log) {
             for(const auto& row:app.worker_action_controls){if(row.first>4)break;const auto pos=point(row.second);std::fprintf(log," action%d=%ld,%ld",row.first,pos.x,pos.y);}
             for(size_t i=0;i<app.worker_summary_rects.size()&&i<3;++i){const auto a=point(app.worker_summary_rects[i].first),b=point(app.worker_summary_rects[i].second);std::fprintf(log," summary%zu=%ld,%ld,%ld,%ld",i,a.x,a.y,b.x,b.y);}
             std::fprintf(log," speed_samples=%zu line_pitch=%.2f font_height=%.2f log_height=%.2f",app.log_speed_samples,app.log_line_pitch,app.log_font_height,app.log_view_height);
+            std::fprintf(log," table_scroll_y=%.2f table_height=%.2f table_content=%.2f body_font=%.2f body_glyph=%.2f log_glyph=%.2f log_body=%d",app.worker_table_scroll_max_y,app.worker_table_height,app.worker_table_content_height,app.body_font_height,app.body_glyph_height,app.log_glyph_height,app.log_uses_body);
+            std::fprintf(log," table_required=%.2f table_data_height=%.2f table_rows=%zu",app.worker_table_required_height,app.worker_table_data_height,app.worker_table_rows);
+            const auto font_control=point(app.font_size_control),speed_min=point(app.worker_speed_min),speed_max=point(app.worker_speed_max);
+            std::fprintf(log," workspace_speed=%zu workspace_series=%zu speed_min=%ld,%ld speed_max=%ld,%ld font_size=%d font_base=%.1f font_control=%ld,%ld exit_phase=%d deadline=%llu",app.worker_speed_samples,app.workspace_chart_count,speed_min.x,speed_min.y,speed_max.x,speed_max.y,state.ui_font_size,ImGui::GetStyle().FontSizeBase,font_control.x,font_control.y,static_cast<int>(app.controller.exit_phase()),app.controller.exit_deadline());
+            for(int i=0;i<3;++i){const auto pos=point(app.exit_controls[i]);std::fprintf(log," exit%d=%ld,%ld",i,pos.x,pos.y);}
             for(int i=0;i<3;++i){const auto pos=point(app.title_controls[i]);std::fprintf(log," chrome%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");std::fflush(log);
-            if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str());}
+            if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);const auto batch=ecmgui_v2::ui::stage2_batch(worker->stage2_status,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s | batch=%s | remaining=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str(),batch.label.c_str(),batch.remaining.c_str());}
         }
         if(options.performance){
             LARGE_INTEGER draw_end{};QueryPerformanceCounter(&draw_end);

@@ -52,7 +52,7 @@ void apply_theme(const Settings& settings) {
     c[ImGuiCol_PlotLines] = p.stage1; c[ImGuiCol_PlotLinesHovered] = p.stage2;
     c[ImGuiCol_PlotHistogram] = p.stage1; c[ImGuiCol_PlotHistogramHovered] = p.stage2;
     style.ScaleAllSizes(settings.scale);
-    style.FontSizeBase = 15; style.FontScaleDpi = settings.scale;
+    style.FontSizeBase = settings.font_size; style.FontScaleDpi = settings.scale;
     ImGui::GetStyle() = style;
 }
 }

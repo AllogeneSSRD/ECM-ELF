@@ -6,6 +6,7 @@ struct Settings {
     bool light = false;
     bool chinese = false;
     float scale = 1;
+    float font_size = 15;
 };
 struct Palette {
     ImVec4 bg, surface, sunken, overlay, hover, active, border, strong;

@@ -24,7 +24,16 @@ def products():
         if value == '-2147483648': value = '(-2147483647 - 1)'
         if field['type'] == 'float': value = f"{float(field['default'])}f"
         lines.append(f"    {types[field['type']]} {field['field']} = {value};")
-    lines += ['};', 'template<class V,class F> void visit_ui_fields(V& value,F&& field) {']
+    lines += ['};', 'namespace ui_limits {']
+    for field in fields:
+        if field['type'] not in ['int', 'float']: continue
+        for bound, suffix in [('minimum', 'min'), ('maximum', 'max')]:
+            if bound not in field: continue
+            value = field[bound]
+            literal = '(-2147483647 - 1)' if value == -2147483648 else str(value)
+            if field['type'] == 'float': literal = f'{float(value)}f'
+            lines.append(f'inline constexpr {types[field["type"]]} {field["field"]}_{suffix} = {literal};')
+    lines += ['}', 'template<class V,class F> void visit_ui_fields(V& value,F&& field) {']
     for field in fields:
         lines.append(f'    field("{field["table"]}","{field["key"]}",value.{field["field"]});')
     lines += ['}', 'inline void validate_ui(const UiValues& v) {']

@@ -37,7 +37,8 @@ def main():
         point=w.POINT(*map(int,s['drag'].split(',')));assert user.ClientToScreen(hwnd,c.byref(point))
         assert user.SendMessageW(hwnd,0x84,0,((point.y&65535)<<16)|(point.x&65535))==2
         time.sleep(4.2);capture(hwnd,out/'workers-and-alpha.png')
-        s=wait(lambda v,t:int(v.get('speed_samples','0'))>=6 and 'table_eta=150 s | log_eta=150 s (2 m 30 s)' in t)
+        s=wait(lambda v,t:int(v.get('workspace_speed','0'))>=12 and v['speed_samples']=='0' and 'table_eta=150 s | log_eta=150 s (2 m 30 s)' in t)
+        assert s['workspace_series']=='3' and int(s['speed_min'].split(',')[1])<int(s['log1'].split(',')[1])
         assert int(s['action1'].split(',')[0])<int(s['worker1'].split(',')[0])
         assert 0<float(s['line_pitch'])-float(s['font_height'])<=3.5
         # A spanning task row is an opaque band after table borders are merged.
@@ -47,7 +48,16 @@ def main():
         x1,y1,x2,y2=map(int,s['summary1'].split(','));ox,oy=origin.x-rect.left,origin.y-rect.top
         samples=[image.getpixel((x+ox,y1+2+oy)) for x in range(x1+12,x2-12)]
         assert len(set(samples))==1,sorted(set(samples))
-        click(s['log3']);s=wait(lambda v,t:v['log_worker']=='3' and 'shape=B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720' in t)
+        # Scroll the outer workspace while hovering the first chart, so every
+        # ordered worker section can be viewed without selecting a log tab.
+        x,y=map(int,s['speed_min'].split(','));x+=200;y+=80
+        user.PostMessageW(hwnd,0x8021,0,(y<<16)|(x&65535));time.sleep(.15)
+        user.PostMessageW(hwnd,0x20A,((-960)&65535)<<16,0);time.sleep(.8)
+        lower=wait(lambda v,t:int(v['speed_min'].split(',')[1])<int(s['speed_min'].split(',')[1])-30)
+        capture(hwnd,out/'all-worker-charts.png')
+        user.PostMessageW(hwnd,0x20A,960<<16,0);time.sleep(.8)
+        s=wait(lambda v,t:abs(int(v['speed_min'].split(',')[1])-int(s['speed_min'].split(',')[1]))<5)
+        click(s['log3']);s=wait(lambda v,t:v['log_worker']=='3' and 'shape=B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720' in t and 'batch=Giant batch 2 / 8 | remaining=Phase remaining 12.0 s' in t)
         capture(hwnd,out/'stage2-shape.png')
         click(s['log1']);s=wait(lambda v,t:v['log_worker']=='1')
         click(s['log2']);s=wait(lambda v,t:v['log_worker']=='2');click(s['raw_button']);s=wait(lambda v,t:v['log_worker']=='2' and v['raw']=='1')
@@ -81,7 +91,7 @@ def main():
     restart_log=out/'restart.log';restart=subprocess.run([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(restart_log),'--frames','8','--no-nvml','--no-pet'],cwd=out,startupinfo=startup,timeout=20)
     assert restart.returncode==0 and 'UI state not loaded' not in restart_log.read_text(encoding='utf-8')
     assert not tomllib.loads(state.read_text(encoding='utf-8'))['window']['title_bar']
-    report=dict(passed=True,language=a.language,theme='light' if a.light else 'dark',workers=3,log_tabs=4,action_first=True,summary_covers_grid=True,table_eta_seconds=True,log_eta_seconds_and_reduced=True,stage2_shape_line=True,speed_samples=6,compact_log_rows=True,per_worker_raw_follow=True,table_selects_log=True,hidden_caption=True,caption_hit_test=True,maximize_restore=True,minimize_restore=True,resize=True,custom_close=True,title_preference_restart=True,business_unchanged=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),scope='Protocol-aware synthetic workers, no real ECM calculation')
+    report=dict(passed=True,language=a.language,theme='light' if a.light else 'dark',workers=3,log_tabs=4,action_first=True,summary_covers_grid=True,table_eta_seconds=True,log_eta_seconds_and_reduced=True,stage2_shape_line=True,giant_batch=True,speed_samples=12,all_worker_charts=True,workspace_scroll=True,speed_in_workspace=True,no_log_chart=True,compact_log_rows=True,per_worker_raw_follow=True,table_selects_log=True,hidden_caption=True,caption_hit_test=True,maximize_restore=True,minimize_restore=True,resize=True,custom_close=True,title_preference_restart=True,business_unchanged=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),scope='Protocol-aware synthetic workers, no real ECM calculation')
     (out/'result.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
 
 if __name__=='__main__':main()
