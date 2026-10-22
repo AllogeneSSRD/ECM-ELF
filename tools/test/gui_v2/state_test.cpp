@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
     assert(!state.window_title_bar);state.window_title_bar=true;
     assert(state.ui_nav_order=="0123456");state.ui_nav_order="4012356";
     assert(state.ui_font_size==15);state.ui_font_size=24;
+    assert(state.ui_primary_font_offset==1&&state.ui_secondary_font_offset==-2);state.ui_primary_font_offset=4;state.ui_secondary_font_offset=-4;
     assert(state.ui_gpu_history_seconds==60);state.ui_gpu_history_seconds=120;
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
     state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
@@ -38,6 +39,7 @@ int main(int argc, char** argv) {
     assert(copy.ui_external_windows);
     assert(copy.window_title_bar&&copy.ui_nav_order=="4012356");
     assert(copy.ui_font_size==24);
+    assert(copy.ui_primary_font_offset==4&&copy.ui_secondary_font_offset==-4);
     assert(copy.ui_gpu_history_seconds==120);
     assert(copy.pet_skin=="hi_love_elf");
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
@@ -51,6 +53,8 @@ int main(int argc, char** argv) {
     ecmgui_v2::UiState bad_range;bad_range.path=invalid_range;assert(!bad_range.load()&&!bad_range.save());
     const auto invalid_font=dir/"invalid-font.toml";{std::ofstream out(invalid_font);out<<"[ui]\nfont_size=31\n";}
     ecmgui_v2::UiState bad_font;bad_font.path=invalid_font;assert(!bad_font.load()&&!bad_font.save());
+    const auto invalid_offset=dir/"invalid-offset.toml";{std::ofstream out(invalid_offset);out<<"[ui]\nprimary_font_offset=7\n";}
+    ecmgui_v2::UiState bad_offset;bad_offset.path=invalid_offset;assert(!bad_offset.load()&&!bad_offset.save());
     const auto invalid = dir / "invalid.toml";
     { std::ofstream out(invalid); out << "[state]\nschema=999\n"; }
     std::ifstream original(invalid,std::ios::binary); const std::string before((std::istreambuf_iterator<char>(original)),{}); original.close();

@@ -1,3 +1,4 @@
+#include "i18n.h"
 #pragma once
 #include "../../gui/worker_controller.h"
 #include <algorithm>
@@ -10,9 +11,9 @@ inline Stage2Batch stage2_batch(const ecmgui::Stage2Status& s,bool zh) {
     Stage2Batch out;if(!s.valid||!s.batches)return out;out.visible=true;
     out.fraction=static_cast<float>(std::clamp(double(s.batch)/double(s.batches),0.,1.));
     const bool giant=s.phase.find("Giant")!=s.phase.npos||s.phase.find("giant")!=s.phase.npos;
-    out.label=std::string(giant?(zh?"Giant 批次":"Giant batch"):(zh?"批次":"Batch"))+" "+std::to_string(s.batch)+" / "+std::to_string(s.batches);
-    char text[96];if(std::isfinite(s.batch_left)&&s.batch_left>=0)std::snprintf(text,sizeof(text),zh?"阶段剩余 %.1f s":"Phase remaining %.1f s",s.batch_left);
-    else std::snprintf(text,sizeof(text),"%s",zh?"阶段剩余 --":"Phase remaining --");
+    out.label=std::string(giant?(ecmgui_v2::ui::text("giant_batch_adc2a626",zh)):(ecmgui_v2::ui::text("batch_320b5d80",zh)))+" "+std::to_string(s.batch)+" / "+std::to_string(s.batches);
+    char text[96];if(std::isfinite(s.batch_left)&&s.batch_left>=0)std::snprintf(text,sizeof(text),ecmgui_v2::ui::text("phase_remaining_1f_s_ff3ab5fe",zh),s.batch_left);
+    else std::snprintf(text,sizeof(text),"%s",ecmgui_v2::ui::text("phase_remaining_94bab929",zh));
     out.remaining=text;return out;
 }
 inline std::string eta_text(double seconds,bool detail=false) {
@@ -43,8 +44,8 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
         }
     } else if(std::isfinite(worker.resume_pct)&&worker.resume_pct>=0) {
         const double pct=std::clamp(worker.resume_pct,0.,100.);out.fraction=static_cast<float>(pct/100.);
-        std::snprintf(text,sizeof(text),zh?"%.1f%% (已恢复)":"%.1f%% (resumed)",pct);out.label=text;
-    } else if(worker.running()||worker.state()==ecmgui::WorkerRunState::Restarting)out.label=zh?"等待首次进度":"Waiting for progress";
+        std::snprintf(text,sizeof(text),ecmgui_v2::ui::text("1f_resumed_be6aa774",zh),pct);out.label=text;
+    } else if(worker.running()||worker.state()==ecmgui::WorkerRunState::Restarting)out.label=ecmgui_v2::ui::text("waiting_for_progress_bcc4332d",zh);
     return out;
 }
 inline std::string worker_shape(const ecmgui::WorkerView& worker) {
@@ -56,7 +57,7 @@ inline std::string worker_shape(const ecmgui::WorkerView& worker) {
 inline std::string worker_phase(const ecmgui::WorkerView& worker,bool zh) {
     if(!worker.stage2||!worker.stage2_status.valid)return {};
     const auto& s=worker.stage2_status;char text[256];
-    std::snprintf(text,sizeof(text),zh?"阶段 %s | 曲线 %llu/%llu | 批次 %llu/%llu | B1=%llu B2=%llu":"Phase %s | curve %llu/%llu | batch %llu/%llu | B1=%llu B2=%llu",s.phase.c_str(),s.current,s.total,s.batch,s.batches,s.b1,s.b2);
+    std::snprintf(text,sizeof(text),ecmgui_v2::ui::text("phase_s_curve_llu_llu_batch_llu_llu_b1_llu_035650b1",zh),s.phase.c_str(),s.current,s.total,s.batch,s.batches,s.b1,s.b2);
     std::string result=text;
     if(s.sigma){result+=" | "+s.curve_model;if(s.curve_model!="ed"&&s.curve_model!="edwards")result+=" param="+std::to_string(s.param);result+=" sigma="+std::to_string(s.sigma);}
     return result;

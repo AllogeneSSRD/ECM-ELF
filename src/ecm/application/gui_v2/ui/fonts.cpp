@@ -68,7 +68,7 @@ Fonts::~Fonts() {
     if (ImGui::GetCurrentContext()) { ImGui::GetIO().FontDefault = nullptr; ImGui::GetIO().Fonts->Clear(); }
 }
 void Fonts::push(FontRole role) const {
-    const float size = (role == FontRole::Caption ? 13.f : role == FontRole::Heading ? 22.f : 15.f)*base_size/15.f;
+    const float size=role==FontRole::Caption?secondary_font_size(base_size):role==FontRole::Primary?primary_font_size(base_size):role==FontRole::Heading?22.f*base_size/15.f:base_size;
     ImGui::PushFont(role == FontRole::Mono ? mono : body, size);
 }
 }

@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace ecmgui_v2::ui {
-enum class FontRole { Body, Caption, Heading, Mono };
+enum class FontRole { Body, Caption, Heading, Mono, Primary };
 struct Fonts {
     ~Fonts();
     ImFont* body = nullptr;

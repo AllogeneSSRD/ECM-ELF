@@ -28,6 +28,7 @@ std::string executable_path(const std::string& input, const std::string& base) {
 }
 }
 App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log) {
+    if(ui::language_directory().empty()){std::string error;ui::load_languages(ecmgui::exe_dir()+"/localization/v2",error);if(!error.empty())trace("localization: "+error);}
     if(state.ui_right_pages){
         if(!state.ui_right_visible||state.layout().find("v2.tools")!=std::string::npos)reset_layout=true;
         state.ui_right_visible=true;
@@ -117,7 +118,7 @@ bool App::start(int index) {
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
             if (!controller.start(index, true)) return false;
-            leases_[index] = std::move(lease); toast((state.ui_language=="zh"?"已启动 worker ":"Worker started: ")+std::to_string(index)); return true;
+            leases_[index] = std::move(lease); toast((ecmgui_v2::ui::text("worker_started_009c206a",state.ui_language=="zh"))+std::to_string(index)); return true;
         }
     } catch (const std::exception& error) { status = error.what(); trace(status); }
     return false;
@@ -204,32 +205,33 @@ bool App::save_preferences() {
     }catch(const std::exception& error){status=error.what();toast(status,true);return false;}
 }
 bool App::move_page(int page,bool right) {
-    if(!ui::move_page(state.ui_right_pages,state.ui_page,state.ui_right_page,page,right)){toast(state.ui_language=="zh"?"至少保留一个中央页面":"Keep at least one central page");return false;}
+    if(!ui::move_page(state.ui_right_pages,state.ui_page,state.ui_right_page,page,right)){toast(ecmgui_v2::ui::text("keep_at_least_one_central_page_d623b219",state.ui_language=="zh"));return false;}
     if(right){state.ui_right_visible=true;focus_right_=true;}
     reset_layout=true;
-    toast(state.ui_language=="zh"?(right?"已移到右侧标签页":"已返回左侧导航"):(right?"Moved to right tabs":"Returned to navigation"));return true;
+    toast(ui::text(right?"moved_right":"moved_left",state.ui_language=="zh"));return true;
 }
 void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Fonts& fonts) {
     worker_speed_samples=workspace_chart_count=0;worker_speed_min=worker_speed_max={};
     for(auto& control:exit_controls)control={};
     if(status!=last_status){last_status=status;toast(status);}
     while(!toasts.empty()&&toasts.front().until<GetTickCount64())toasts.pop_front();
-    const bool zh = fonts.chinese; const auto t = [zh](const char* en, const char* cn) { return zh ? cn : en; };
+    const bool zh = fonts.chinese;
     if (ImGui::BeginMainMenuBar()) {
         ImGui::Text("ECM-ELF %s", version); ImGui::Separator();
-        if(ImGui::BeginMenu(t("View","视图"))){
-            if (ImGui::MenuItem(t("Reset layout", "重置布局"))) reset_layout = true;
-            if(ImGui::MenuItem(t("Inspector", "检查区"),nullptr,&state.ui_inspector))reset_layout=true;
-            if(ImGui::MenuItem(t("Logs", "日志"),nullptr,&state.ui_logs))reset_layout=true;
-            ImGui::MenuItem(t("System title bar","系统标题栏"),nullptr,&state.window_title_bar);
+        if(ImGui::BeginMenu(ecmgui_v2::ui::text("view_dcc839a4",zh))){
+            if (ImGui::MenuItem(ecmgui_v2::ui::text("reset_layout_2e2a1784",zh))) reset_layout = true;
+            if(ImGui::MenuItem(ecmgui_v2::ui::text("inspector_da188e3b",zh),nullptr,&state.ui_inspector))reset_layout=true;
+            if(ImGui::MenuItem(ecmgui_v2::ui::text("logs_ea2100dc",zh),nullptr,&state.ui_logs))reset_layout=true;
+            ImGui::MenuItem(ecmgui_v2::ui::text("system_title_bar_285c57a3",zh),nullptr,&state.window_title_bar);
             ImGui::EndMenu();
         }
-        if(ImGui::BeginMenu(t("Language","语言"))){
-            if(ImGui::MenuItem("English",nullptr,state.ui_language=="en"))state.ui_language="en";
-            if(ImGui::MenuItem("中文",nullptr,state.ui_language=="zh"))state.ui_language="zh";
+        if(ImGui::BeginMenu(ecmgui_v2::ui::text("language_a4fe6526",zh))){
+            if(ImGui::MenuItem(ui::text("language_english",zh),nullptr,state.ui_language=="en"))state.ui_language="en";
+            if(ImGui::MenuItem(ui::text("language_chinese",zh),nullptr,state.ui_language=="zh"))state.ui_language="zh";
+            if(ImGui::MenuItem(ui::text("reload_localization",zh))){std::string error;const auto directory=ui::language_directory();const bool ok=ui::load_languages(directory,error);toast(ok?ui::text("localization_reloaded",zh):error,!ok);if(!error.empty())trace(error);}
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem(t("Notices", "通知"))) ImGui::OpenPopup("Notices###v2.notices");
+        if (ImGui::MenuItem(ecmgui_v2::ui::text("notices_00a05fce",zh))) ImGui::OpenPopup("Notices###v2.notices");
         if (ImGui::BeginPopup("Notices###v2.notices")) {
             ImGui::PushTextWrapPos(ImGui::GetFontSize()*34);
             const auto begin = messages.size() > 20 ? messages.size()-20 : 0;
@@ -245,7 +247,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
             ImGui::InvisibleButton("window-drag",{std::max(4.f,right-ImGui::GetCursorPosX()),h});title_drag_min=ImGui::GetItemRectMin();title_drag_max=ImGui::GetItemRectMax();
             const auto viewport=ImGui::GetMainViewport();const auto hwnd=static_cast<HWND>(viewport->PlatformHandleRaw?viewport->PlatformHandleRaw:viewport->PlatformHandle);
             const char* labels[]{"##window-min","##window-max","##window-close"};
-            const char* tips[]{t("Minimize","最小化"),t("Maximize / restore","最大化/还原"),t("Close","关闭")};
+            const char* tips[]{ecmgui_v2::ui::text("minimize_d72e311c",zh),ecmgui_v2::ui::text("maximize_restore_ab9616c1",zh),ecmgui_v2::ui::text("close_7d9eb7ac",zh)};
             for(int i=0;i<3;++i){ImGui::SameLine();if(i==2)ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ui::palette(active.light).danger);
                 if(ImGui::Button(labels[i],{h,h}))PostMessageW(hwnd,i==2?WM_CLOSE:WM_SYSCOMMAND,i==0?SC_MINIMIZE:i==1?(IsZoomed(hwnd)?SC_RESTORE:SC_MAXIMIZE):0,0);
                 title_controls[i]={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
@@ -265,7 +267,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         build_layout(dock, active.scale); reset_layout = false;
     }
     layout_ready_ = true; layout_wide_ = wide;
-    begin_window(t("Navigation###v2.navigation","导航###v2.navigation"),nullptr,active); fonts.push(ui::FontRole::Body);
+    begin_window(ecmgui_v2::ui::text("navigation_v2_navigation_fa8b2bee",zh),nullptr,active); fonts.push(ui::FontRole::Body);
     const bool compact = ImGui::GetContentRegionAvail().x < 110 * active.scale;
     const auto item_center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
     for(auto& pos:nav_items)pos={};for(auto& pos:right_items)pos={};
@@ -296,23 +298,23 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
                 ImGui::GetWindowDrawList()->AddLine({lo.x,y},{hi.x,y},ImGui::GetColorU32(nav_palette.focus),2*nav_scale);
                 if(payload->IsDelivery())ui::reorder_page(state.ui_nav_order,*static_cast<const int*>(payload->Data),i,after);
             }ImGui::EndDragDropTarget();}
-        if(ImGui::BeginPopupContextItem("location")){if(ImGui::MenuItem(t("Move to right tabs","移到右侧标签页")))move_page(i,true);ImGui::EndPopup();}
+        if(ImGui::BeginPopupContextItem("location")){if(ImGui::MenuItem(ecmgui_v2::ui::text("move_to_right_tabs_80d3c7aa",zh)))move_page(i,true);ImGui::EndPopup();}
         ImGui::PopID();
     }
     ImGui::PopStyleVar(5);
-    ImGui::Separator();ImGui::Button(compact?">###right-drop":t("Right tabs >###right-drop","右侧标签页 >###right-drop"),{-1,0});
+    ImGui::Separator();ImGui::Button(compact?">###right-drop":ecmgui_v2::ui::text("right_tabs_right_drop_3dd2712f",zh),{-1,0});
     nav_drop=item_center();
     if(ImGui::BeginDragDropTarget()){if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE"))if(payload->DataSize==sizeof(int))move_page(*static_cast<const int*>(payload->Data),true);ImGui::EndDragDropTarget();}
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",t("Long-press a page, then drag here to open it in the right tabs.","长按页面后拖到此处，在右侧标签页中显示。"));
-    if(!compact)ImGui::TextWrapped("%s",t("Hold and drag to reorder. Close a right tab to return it here.","长按拖动排序；关闭右侧标签后自动返回。"));
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("long_press_a_page_then_drag_here_to_open_i_bded2000",zh));
+    if(!compact)ui::secondary_text(ecmgui_v2::ui::text("hold_and_drag_to_reorder_close_a_right_tab_ba726d0c",zh));
     ImGui::PopFont(); end_window();
-    begin_window(t("Workspace###v2.workspace","工作区###v2.workspace"),nullptr,active);
+    begin_window(ecmgui_v2::ui::text("workspace_v2_workspace_ebc1df62",zh),nullptr,active);
     workspace_docked=ImGui::IsWindowDocked();
     if(drawn_center_page_!=state.ui_page){ImGui::SetScrollY(0);drawn_center_page_=state.ui_page;}
     fonts.push(ui::FontRole::Body);
     ImGui::PushTextWrapPos(0); draw_page(active, fonts); ImGui::PopTextWrapPos(); ImGui::PopFont(); end_window();
-    if (state.ui_inspector && wide) { begin_window(t("Inspector###v2.inspector","检查区###v2.inspector"), &state.ui_inspector,active); draw_inspector(fonts); end_window(); }
-    if (state.ui_logs) { begin_window(t("Logs###v2.logs","日志###v2.logs"), &state.ui_logs,active); draw_logs(fonts); end_window(); }
+    if (state.ui_inspector && wide) { begin_window(ecmgui_v2::ui::text("inspector_v2_inspector_dc966628",zh), &state.ui_inspector,active); draw_inspector(fonts); end_window(); }
+    if (state.ui_logs) { begin_window(ecmgui_v2::ui::text("logs_v2_logs_a97cbe80",zh), &state.ui_logs,active); draw_logs(fonts); end_window(); }
     right_close_controls.clear();right_docks.clear();right_container_present=false;
     const auto right_order=state.ui_nav_order;std::vector<int> closed_pages;
     for(char id:right_order){const int page=id-'0';if(!ui::pinned(state.ui_right_pages,page))continue;
@@ -361,85 +363,165 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         // Preferences are applied by the host at the next frame boundary.
         pending.light = state.ui_theme == "light"; pending.chinese = state.ui_language == "zh";
         pending.font_size=static_cast<float>(state.ui_font_size);
+        pending.primary_offset=state.ui_primary_font_offset;pending.secondary_offset=state.ui_secondary_font_offset;
         if (state.ui_scale > 0) pending.scale = state.ui_scale;
     }
 }
 void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     body_font_height=ImGui::GetFontSize();const auto* body_glyph=ImGui::GetFontBaked()->FindGlyph('M');body_glyph_height=body_glyph->Y1-body_glyph->Y0;
-    const bool zh=fonts.chinese;const auto t=[zh](const char* en,const char* cn){return zh?cn:en;};
+    const bool zh=fonts.chinese;
     const auto p = ui::palette(active.light);
-    ui::section_header(fonts.chinese ? "计算任务" : "Workers", config_path.empty() ? t("Open a workflow in Settings.","请在设置中打开工作流。") : config_path.c_str(), fonts, p);
-    if (!ready) return;
-    if (ui::button("start-all", fonts.chinese ? "全部启动" : "Start all", ui::ButtonKind::Primary, p, active.scale))
+    const float toolbar_top=ImGui::GetCursorScreenPos().y;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{8*active.scale,4*active.scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{6*active.scale,6*active.scale});
+    fonts.push(ui::FontRole::Primary);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ecmgui_v2::ui::text("workers_7a1ec9fe",zh));ImGui::PopFont();
+    if(ImGui::IsItemHovered()&&!config_path.empty())ImGui::SetTooltip("%s",config_path.c_str());
+    if(!ready){ui::secondary_text(ecmgui_v2::ui::text("open_a_workflow_in_settings_55a5439d",zh));ImGui::PopStyleVar(2);return;}
+    const float actions_width=ImGui::CalcTextSize(ecmgui_v2::ui::text("start_allstop_safely_13031d69",zh)).x+60*active.scale;
+    if(ImGui::GetContentRegionAvail().x>ImGui::GetItemRectSize().x+actions_width)ImGui::SameLine();
+    if (ui::button("start-all", ecmgui_v2::ui::text("start_all_1a7e6299",fonts.chinese), ui::ButtonKind::Primary, p, active.scale,false,&primary_font_height,true))
         for (const auto& worker : controller.workers()) if(!start(worker.index))toast(status,true);
     start_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
-    ImGui::SameLine(); if (ui::button("stop-all", fonts.chinese ? "安全停止" : "Stop safely", ui::ButtonKind::Secondary, p, active.scale)) {controller.stop_all();toast(fonts.chinese?"已请求安全停止，等待检查点边界":"Safe stop requested; waiting for checkpoint boundary");}
+    if(ImGui::GetContentRegionAvail().x>ImGui::GetItemRectSize().x+ImGui::CalcTextSize(ecmgui_v2::ui::text("stop_safely_a2e61809",zh)).x+24*active.scale)ImGui::SameLine();
+    if (ui::button("stop-all", ecmgui_v2::ui::text("stop_safely_a2e61809",fonts.chinese), ui::ButtonKind::Secondary, p, active.scale,false,&secondary_button_font_height,true)) {controller.stop_all();toast(ecmgui_v2::ui::text("safe_stop_requested_waiting_for_checkpoint_c4c6c1c2",fonts.chinese));}
     stop_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
+    worker_toolbar_height=ImGui::GetCursorScreenPos().y-toolbar_top;ImGui::PopStyleVar(2);
     for (const auto& worker : controller.workers()) if (worker.p95.valid) {
         const bool pending = worker.p95.level == ecmgui::P95Notice::Level::Pending;
         ImGui::TextColored(pending ? ImVec4(1,.35f,.4f,1) : ImVec4(.8f,.65f,.35f,1), "Prime95 %s: %s %s", worker.name.c_str(),worker.p95.error.c_str(),worker.p95.note.c_str());
     }
     worker_select_controls.clear();worker_action_controls.clear();worker_table_rows=0;
     const float scale=ImGui::GetFontSize()/15.f;
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{8*scale,9*scale});
-    const float widths[]{72,112,80,84,150,64,76,76};
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,{8*scale,4*scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{8*scale,4*scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{6*scale,2*scale});
+    const float control_height=std::max(24*scale,ImGui::GetTextLineHeight()+8*scale);
+    float widths[]{72,112,80,84,150,64,76,76};
+    // Size non-flex columns from the actual localized values before deciding
+    // whether all eight columns fit. A long ETA/status must not be clipped.
+    for(const auto& worker:controller.workers()){
+        const auto progress=ui::worker_progress(worker,zh);
+        const auto label=ui::message(worker.stop_requested?"Stopping":ecmgui::state_name(worker.state()),zh);
+        widths[0]=std::max(widths[0],ImGui::CalcTextSize(ui::message("Stopping",zh).c_str()).x/scale+16);
+        widths[2]=std::max(widths[2],ImGui::CalcTextSize(label.c_str()).x/scale+26);
+        widths[5]=std::max(widths[5],ImGui::CalcTextSize(progress.speed.c_str()).x/scale);
+        widths[6]=std::max(widths[6],ImGui::CalcTextSize(progress.eta.c_str()).x/scale);
+        const auto done=std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits);
+        widths[7]=std::max(widths[7],ImGui::CalcTextSize(done.c_str()).x/scale);
+    }
     float minimum=0;for(float w:widths)minimum+=(w+16)*scale;
     const auto left=ImGui::GetCursorScreenPos();const float visible_width=ImGui::GetContentRegionAvail().x;
+    worker_flexible=visible_width<minimum;worker_table_scroll_max_x=0;worker_field_overflow=0;
+    worker_summary_rects.clear();
+    if(worker_flexible){
+        // Flow whole labelled fields; the enclosing workspace owns vertical scroll.
+        // Never hide columns or shrink the font to fit a narrow dock / large font.
+        const auto center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
+        const float right=left.x+visible_width;
+        for(const auto& worker:controller.workers()){
+            ++worker_table_rows;ImGui::PushID(worker.index);ImGui::BeginGroup();
+            const auto st=worker.state();const bool busy=worker.running()||st==ecmgui::WorkerRunState::Restarting;
+            const auto progress=ui::worker_progress(worker,zh);
+            const auto name="#"+std::to_string(worker.index)+" "+worker.name;
+            const float name_height=std::max(control_height,ImGui::CalcTextSize(name.c_str(),nullptr,false,std::max(1.f,visible_width-16*scale)).y+8*scale);
+            const auto name_pos=ImGui::GetCursorScreenPos();
+            if(ImGui::Selectable("##worker-name",state.ui_worker==worker.index,0,{visible_width,name_height})){state.ui_worker=worker.index;log_active_worker=worker.index;log_last_worker_=-1;}
+            worker_select_controls[worker.index]=center();
+            ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(),ImGui::GetFontSize(),{name_pos.x+8*scale,name_pos.y+4*scale},ImGui::GetColorU32(p.fg),name.c_str(),nullptr,std::max(1.f,visible_width-16*scale));
+            const auto row_top=ImGui::GetCursorScreenPos().y;
+            if(ui::button("worker-action",worker.stop_requested?ui::text("message_23",zh):busy?ui::text("stop_cae7d57b",zh):ui::text("start_e4bb9f1e",zh),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested,nullptr,true)){
+                if(busy){controller.request_stop(worker.index);toast("Safe stop requested: "+worker.name);}else if(!start(worker.index))toast(status,true);
+            }
+            worker_action_controls[worker.index]=center();worker_button_height=ImGui::GetItemRectSize().y;
+            const auto state_label=ui::message(worker.stop_requested?"Stopping":ecmgui::state_name(st),zh);
+            const float badge_width=ImGui::CalcTextSize(state_label.c_str()).x+26*scale;
+            if(ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+badge_width<=right)ImGui::SameLine();
+            ui::status_badge(state_label.c_str(),st==ecmgui::WorkerRunState::Error?ui::Status::Danger:worker.stop_requested?ui::Status::Warning:busy?ui::Status::Success:ui::Status::Info,p,scale);
+            const auto device=(worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device):std::string("CPU"))+" / S"+std::to_string(worker.stage2?2:1)+(worker.duplicate_device?"*":"");
+            if(ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+ImGui::CalcTextSize(device.c_str()).x<=right)ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();ImGui::TextColored(worker.stage2?p.stage2:p.stage1,"%s",device.c_str());
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | %s",device.c_str(),worker.curve_model.c_str());
+            worker_row_height=ImGui::GetCursorScreenPos().y-row_top;
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
+            const bool separate=ImGui::CalcTextSize(progress.label.c_str()).x+16*scale>visible_width;
+            ImGui::ProgressBar(progress.fraction,{visible_width,control_height},separate?"":progress.label.c_str());ImGui::PopStyleColor();
+            if(separate){ImGui::PushTextWrapPos(0);ImGui::TextUnformatted(progress.label.c_str());ImGui::PopTextWrapPos();}
+            const std::string fields[]{std::string(ui::text("s_curve_1715c3bd",zh))+": "+progress.speed,"ETA: "+progress.eta,std::string(ui::text("done_hits_8c10e20d",zh))+": "+std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits)};
+            for(int i=0;i<3;++i){
+                const float width=std::min(visible_width,ImGui::CalcTextSize(fields[i].c_str()).x);
+                if(i&&ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+width<=right)ImGui::SameLine();
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+std::max(1.f,width));ImGui::TextUnformatted(fields[i].c_str());ImGui::PopTextWrapPos();
+                worker_field_overflow=std::max(worker_field_overflow,ImGui::GetItemRectMax().x-right);
+            }
+            const auto task=ecmgui::task_caption(worker.task,ui::text("known_factors_f88cad5f",zh),"assignment ID",ui::text("no_queued_task_b954d32f",zh));
+            const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(ui::text("task_953516d5",zh))+task+(phase.empty()?"":"\n"+phase);
+            const auto summary_pos=ImGui::GetCursorScreenPos();
+            ImGui::PushTextWrapPos(0);ImGui::TextColored(p.muted,"%s",summary.c_str());ImGui::PopTextWrapPos();
+            worker_summary_rects.push_back({summary_pos,ImGui::GetItemRectMax()});
+            ImGui::EndGroup();ImGui::Separator();ImGui::PopID();
+        }
+        worker_table_height=worker_table_content_height=worker_table_required_height=worker_table_data_height=ImGui::GetCursorScreenPos().y-left.y;
+        worker_table_scroll_max_y=0;ImGui::PopStyleVar(3);draw_worker_speed(fonts);return;
+    }
     const float padding=ImGui::GetStyle().CellPadding.y*2;float content_height=ImGui::GetTextLineHeight()+padding+4*scale;
     for(const auto& worker:controller.workers()){
-        const auto task=ecmgui::task_caption(worker.task,t("Known factors","已知因子"),"assignment ID",t("No queued task","暂无队列任务"));
-        const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(t("Task: ","任务："))+task+(phase.empty()?"":"\n"+phase);
-        content_height+=std::max(32*scale,ImGui::GetTextLineHeight()*2+ImGui::GetStyle().ItemSpacing.y)+padding;
+        const auto task=ecmgui::task_caption(worker.task,ecmgui_v2::ui::text("known_factors_f88cad5f",zh),"assignment ID",ecmgui_v2::ui::text("no_queued_task_b954d32f",zh));
+        const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(ecmgui_v2::ui::text("task_953516d5",zh))+task+(phase.empty()?"":"\n"+phase);
+        // Selectable's baseline follows the button's FramePadding.y in each row.
+        content_height+=control_height+padding+ImGui::GetStyle().FramePadding.y;
         content_height+=ImGui::CalcTextSize(summary.c_str(),nullptr,false,std::max(1.f,visible_width-24*scale)).y+padding;
     }
-    if(minimum>visible_width)content_height+=ImGui::GetStyle().ScrollbarSize;
+    // Reserve child viewport padding so every row remains visible.
+    content_height+=ImGui::GetStyle().ScrollbarSize;
     // Keep every worker row in the table. Only the surrounding workspace scrolls
-    // vertically; ScrollX retains access to columns on a narrow surface.
+    // vertically; narrow surfaces use the flow layout above.
     const float table_height=content_height;
     // New column order gets a fresh table identity instead of reusing old widths.
-    if (ImGui::BeginTable("workers-v2",8,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|ImGuiTableFlags_ScrollX|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_Resizable|ImGuiTableFlags_SizingFixedFit,{0,table_height},std::max(visible_width,minimum))) {
+    if (ImGui::BeginTable("workers-v2",8,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_PadOuterX|ImGuiTableFlags_SizingFixedFit,{0,table_height})) {
+        worker_table_scroll_max_x=ImGui::GetScrollMaxX();
         worker_table_scroll_max_y=ImGui::GetScrollMaxY();worker_table_height=ImGui::GetWindowSize().y;worker_table_content_height=ImGui::GetCurrentWindow()->ContentSize.y;
         const auto table_origin=ImGui::GetWindowPos();worker_table_data_height=ImGui::GetCurrentWindow()->InnerRect.GetHeight();
         struct SummaryRow {ImVec2 min,max,pos;float wrap;std::string text;};
         std::vector<SummaryRow> summaries;auto* table_draw=ImGui::GetWindowDrawList();
         const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin(),table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         float body_top=table_clip_min.y;
-        const char* labels[]{t("Action","操作"),"Worker",t("State","状态"),t("Device / engine","设备/引擎"),t("Task progress","任务进度"),t("s/curve","秒/曲线"),"ETA",t("Done / hits","完成/命中")};
+        const char* labels[]{ecmgui_v2::ui::text("action_64cff131",zh),"Worker",ecmgui_v2::ui::text("state_a3b50c47",zh),ecmgui_v2::ui::text("device_engine_1041b2a2",zh),ecmgui_v2::ui::text("task_progress_e38b9d46",zh),ecmgui_v2::ui::text("s_curve_1715c3bd",zh),"ETA",ecmgui_v2::ui::text("done_hits_8c10e20d",zh)};
         for(int i=0;i<8;++i)ImGui::TableSetupColumn(labels[i],i==4?ImGuiTableColumnFlags_WidthStretch:ImGuiTableColumnFlags_WidthFixed,widths[i]*scale);
         ImGui::TableHeadersRow();
         const auto center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
         for (const auto& worker : controller.workers()) {
             ++worker_table_rows;
-            ImGui::PushID(worker.index);ImGui::TableNextRow(0,48*scale);
+            ImGui::PushID(worker.index);ImGui::TableNextRow(0,control_height+padding);
             const auto st=worker.state();const auto progress=ui::worker_progress(worker,zh);
             const auto name="#"+std::to_string(worker.index)+" "+worker.name;
             ImGui::TableSetColumnIndex(0);
             if(summaries.empty())body_top=std::max(body_top,ImGui::GetCursorScreenPos().y-ImGui::GetStyle().CellPadding.y);
+            const float main_row_top=ImGui::GetCursorScreenPos().y;
             const bool busy=worker.running()||st==ecmgui::WorkerRunState::Restarting;
-            if(ui::button("worker-action",worker.stop_requested?t("Stopping","停止中"):busy?t("Stop","停止"):t("Start","启动"),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested)){
+            if(ui::button("worker-action",worker.stop_requested?ecmgui_v2::ui::text("stopping_a71ee1d4",zh):busy?ecmgui_v2::ui::text("stop_cae7d57b",zh):ecmgui_v2::ui::text("start_e4bb9f1e",zh),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested,nullptr,true)){
                 if(busy){controller.request_stop(worker.index);toast("Safe stop requested: "+worker.name);}else if(!start(worker.index))toast(status,true);
             }
-            worker_action_controls[worker.index]=center();
+            worker_action_controls[worker.index]=center();worker_button_height=ImGui::GetItemRectSize().y;
             ImGui::TableSetColumnIndex(1);
-            if(ImGui::Selectable(name.c_str(),state.ui_worker==worker.index,0,{0,32*scale})){state.ui_worker=worker.index;log_active_worker=worker.index;log_last_worker_=-1;}
+            if(ImGui::Selectable(name.c_str(),state.ui_worker==worker.index,0,{0,control_height})){state.ui_worker=worker.index;log_active_worker=worker.index;log_last_worker_=-1;}
             worker_select_controls[worker.index]=center();if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",worker.name.c_str());
             ImGui::TableSetColumnIndex(2);
             const auto state_kind=st==ecmgui::WorkerRunState::Error?ui::Status::Danger:worker.stop_requested||st==ecmgui::WorkerRunState::Restarting?ui::Status::Warning:worker.running()?ui::Status::Success:ui::Status::Info;
-            ui::status_badge(worker.stop_requested?t("Stopping","停止中"):ui::message(ecmgui::state_name(st),zh).c_str(),state_kind,p,scale);
+            ui::status_badge(worker.stop_requested?ecmgui_v2::ui::text("stopping_a71ee1d4",zh):ui::message(ecmgui::state_name(st),zh).c_str(),state_kind,p,scale);
             if(ImGui::IsItemHovered()&&!worker.state_text().empty())ImGui::SetTooltip("%s",worker.state_text().c_str());
             ImGui::TableSetColumnIndex(3);ImGui::AlignTextToFramePadding();
             const auto device=worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device):std::string("CPU");
             ImGui::TextColored(worker.stage2?p.stage2:p.stage1,"%s / S%d%s",device.c_str(),worker.stage2?2:1,worker.duplicate_device?"*":"");
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | Stage %d | %s%s",device.c_str(),worker.stage2?2:1,worker.curve_model.c_str(),worker.duplicate_device?t("\nMultiple workers use this GPU","\n多个 worker 使用同一 GPU"):"");
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | Stage %d | %s%s",device.c_str(),worker.stage2?2:1,worker.curve_model.c_str(),worker.duplicate_device?ecmgui_v2::ui::text("multiple_workers_use_this_gpu_ad48019a",zh):"");
             ImGui::TableSetColumnIndex(4);ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);
-            ImGui::ProgressBar(progress.fraction,{-1,32*scale},progress.label.c_str());ImGui::PopStyleColor();
+            ImGui::ProgressBar(progress.fraction,{-1,control_height},progress.label.c_str());ImGui::PopStyleColor();
             ImGui::TableSetColumnIndex(5);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(progress.speed.c_str());
             ImGui::TableSetColumnIndex(6);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(progress.eta.c_str());
             ImGui::TableSetColumnIndex(7);ImGui::AlignTextToFramePadding();ImGui::Text("%lld / %lld",worker.tasks_done,worker.hits);
-            const auto task=ecmgui::task_caption(worker.task,t("Known factors","已知因子"),"assignment ID",t("No queued task","暂无队列任务"));
-            const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(t("Task: ","任务："))+task+(phase.empty()?"":"\n"+phase);
+            const auto task=ecmgui::task_caption(worker.task,ecmgui_v2::ui::text("known_factors_f88cad5f",zh),"assignment ID",ecmgui_v2::ui::text("no_queued_task_b954d32f",zh));
+            const auto phase=ui::worker_phase(worker,zh);const auto summary=std::string(ecmgui_v2::ui::text("task_953516d5",zh))+task+(phase.empty()?"":"\n"+phase);
             ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
-            const auto row=ImGui::GetCursorScreenPos();
+            const auto row=ImGui::GetCursorScreenPos();worker_row_height=row.y-main_row_top;
             const ImVec2 pos{std::max(left.x+12*scale,row.x),row.y};const float right=left.x+visible_width-12*scale;
             const float wrap=std::max(1.f,right-pos.x),height=ImGui::CalcTextSize(summary.c_str(),nullptr,false,wrap).y;
             ImGui::Dummy({1,height});
@@ -461,7 +543,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         }
         table_draw->PopClipRect();
     }
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(3);
     draw_worker_speed(fonts);
 }
 
@@ -471,16 +553,16 @@ void App::draw_worker_speed(const ui::Fonts& fonts) {
     worker_speed_min=ImGui::GetCursorScreenPos();
     for(const auto& worker:controller.workers()){
         ImGui::PushID(worker.index);++workspace_chart_count;
-        const auto title=std::string(zh?"曲线耗时":"Curve time")+"  #"+std::to_string(worker.index)+" "+worker.name+" / "+(worker.stage2?"Stage2":"Stage1");
+        const auto title=std::string(ecmgui_v2::ui::text("curve_time_369c1d1c",zh))+"  #"+std::to_string(worker.index)+" "+worker.name+" / "+(worker.stage2?"Stage2":"Stage1");
         ImGui::SeparatorText(title.c_str());worker_speed_samples+=worker.hist_s_per_curve.size();
         if(!worker.hist_s_per_curve.empty()){
-            std::vector<ui::ChartSeries> series{{zh?"秒/曲线":"s/curve",worker.stage2?p.stage2:p.stage1,{}}};
+            std::vector<ui::ChartSeries> series{{ecmgui_v2::ui::text("s_curve_1715c3bd",zh),worker.stage2?p.stage2:p.stage1,{}}};
             for(size_t i=0;i<worker.hist_s_per_curve.size();++i)series[0].points.push_back({static_cast<double>(i+1),worker.hist_s_per_curve[i]});
             const auto value=ui::worker_progress(worker,zh).speed+" s/curve";
             ui::ChartFormat format;format.legend_controls=false;format.show_y_ticks=false;format.show_axis_titles=false;
             format.integer_x=true;format.corner_text=value.c_str();format.y_format="%.2f s/curve";format.x_format="%.0f";
-            ui::chart("workspace-speed",series,zh?"采样序号":"Sample","s/curve",zh,0,120,format);
-        }else ImGui::TextDisabled("%s",zh?"等待实测曲线耗时":"Waiting for a measured curve time");
+            ui::chart("workspace-speed",series,ecmgui_v2::ui::text("sample_95a2f1ed",zh),"s/curve",zh,0,120,format);
+        }else ImGui::TextDisabled("%s",ecmgui_v2::ui::text("waiting_for_a_measured_curve_time_c1472a27",zh));
         worker_speed_max=ImGui::GetItemRectMax();ImGui::PopID();
     }
 }
@@ -488,29 +570,29 @@ void App::draw_worker_speed(const ui::Fonts& fonts) {
 void App::draw_exit(const ui::Settings& active,const ui::Fonts& fonts) {
     using Phase=ecmgui::WorkerController::ExitPhase;
     const auto phase=controller.exit_phase();if(phase==Phase::Idle)return;
-    const bool zh=fonts.chinese;const auto t=[zh](const char* en,const char* cn){return zh?cn:en;};
+    const bool zh=fonts.chinese;
     const auto p=ui::palette(active.light);const auto* vp=ImGui::GetMainViewport();
     const float width=std::max(240.f,std::min(600*active.scale,vp->WorkSize.x-24*active.scale));
     bool stage1=false,stage2=false;
     for(const auto& w:controller.workers())if(w.running()){stage1|=!w.stage2;stage2|=w.stage2;}
-    const auto explain=stage1&&stage2?t("Stage1 saves a checkpoint; Stage2 finishes its current curve before stopping.","Stage1 保存检查点后停止；Stage2 完成当前曲线后停止。"):
-        stage2?t("Stage2 finishes its current curve before stopping.","Stage2 完成当前曲线后停止。"):
-        t("Stage1 saves a checkpoint before stopping.","Stage1 保存检查点后停止。");
+    const auto explain=stage1&&stage2?ecmgui_v2::ui::text("stage1_saves_a_checkpoint_stage2_finishes__f16b2dc8",zh):
+        stage2?ecmgui_v2::ui::text("stage2_finishes_its_current_curve_before_s_23f91e06",zh):
+        ecmgui_v2::ui::text("stage1_saves_a_checkpoint_before_stopping_fd6d9575",zh);
     const auto center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
     fonts.push(ui::FontRole::Body);
-    const char* popup=zh?"退出确认###v2.exit":"Confirm exit###v2.exit";
+    const char* popup=ecmgui_v2::ui::text("confirm_exit_v2_exit_bd0b37b2",zh);
     if(phase==Phase::Confirm){
         if(!ImGui::IsPopupOpen(popup))ImGui::OpenPopup(popup);
         ImGui::SetNextWindowViewport(vp->ID);ImGui::SetNextWindowPos(vp->GetCenter(),ImGuiCond_Always,{.5f,.5f});
         ImGui::SetNextWindowSize({width,0});
         if(ImGui::BeginPopupModal(popup,nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoMove)){
             ImGui::PushTextWrapPos(0);
-            ImGui::Text(t("%d worker(s) are running. Stop safely and exit?","当前 %d 个 worker 正在运行，安全停止后退出？"),running_count());
+            ImGui::Text(ecmgui_v2::ui::text("d_worker_s_are_running_stop_safely_and_exi_24856f27",zh),running_count());
             ImGui::TextWrapped("%s",explain);ImGui::Separator();
             const bool keyboard=!ImGui::IsWindowAppearing()&&ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            const bool accept=ui::button("exit-stop",t("Stop and exit (Enter)","停止并退出（Enter）"),ui::ButtonKind::Primary,p,active.scale);
+            const bool accept=ui::button("exit-stop",ecmgui_v2::ui::text("stop_and_exit_enter_61229fa0",zh),ui::ButtonKind::Primary,p,active.scale);
             exit_controls[0]=center();
-            const bool cancel=ui::button("exit-cancel",t("Cancel (Esc)","取消（Esc）"),ui::ButtonKind::Secondary,p,active.scale);
+            const bool cancel=ui::button("exit-cancel",ecmgui_v2::ui::text("cancel_esc_862c2324",zh),ui::ButtonKind::Secondary,p,active.scale);
             exit_controls[1]=center();
             if(cancel||(keyboard&&ImGui::IsKeyPressed(ImGuiKey_Escape))){controller.cancel_close();ImGui::CloseCurrentPopup();}
             else if(accept||(keyboard&&(ImGui::IsKeyPressed(ImGuiKey_Enter)||ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))){begin_exit();ImGui::CloseCurrentPopup();}
@@ -520,16 +602,16 @@ void App::draw_exit(const ui::Settings& active,const ui::Fonts& fonts) {
     if(controller.exit_phase()==Phase::Stopping){
         const auto now=GetTickCount64(),deadline=controller.exit_deadline();const double left=deadline>now?(deadline-now)/1000.:0;
         ImGui::SetNextWindowViewport(vp->ID);ImGui::SetNextWindowPos(vp->GetCenter(),ImGuiCond_Always,{.5f,.5f});ImGui::SetNextWindowSize({width,0});
-        ImGui::Begin(t("Stopping workers###v2.stopping","正在停止 worker###v2.stopping"),nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDocking|ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Begin(ecmgui_v2::ui::text("stopping_workers_v2_stopping_53c8f7ae",zh),nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDocking|ImGuiWindowFlags_NoSavedSettings);
         ImGui::PushTextWrapPos(0);
-        ImGui::TextWrapped("%s",explain);ImGui::Text(t("Up to %.1f s remaining","最多等待 %.1f s"),left);
-        ImGui::TextColored(p.warning,"%s",t("At the deadline, remaining processes are terminated without a fresh checkpoint.","到达时限后将终止剩余进程，可能没有最新检查点。"));
+        ImGui::TextWrapped("%s",explain);ImGui::Text(ecmgui_v2::ui::text("up_to_1f_s_remaining_2d6201db",zh),left);
+        ImGui::TextColored(p.warning,"%s",ecmgui_v2::ui::text("at_the_deadline_remaining_processes_are_te_0b34a996",zh));
         ImGui::Separator();
         for(const auto& w:controller.workers()){
-            ImGui::TextColored(w.running()?p.warning:p.success,"#%d %s | %s | %s",w.index,w.name.c_str(),w.stage2?"Stage2":"Stage1",w.running()?(w.stage2?t("Finishing current curve","等待当前曲线完成"):t("Waiting for checkpoint","等待检查点")):t("Stopped","已停止"));
+            ImGui::TextColored(w.running()?p.warning:p.success,"#%d %s | %s | %s",w.index,w.name.c_str(),w.stage2?"Stage2":"Stage1",w.running()?(w.stage2?ecmgui_v2::ui::text("finishing_current_curve_1fef6708",zh):ecmgui_v2::ui::text("waiting_for_checkpoint_b160a8dc",zh)):ecmgui_v2::ui::text("stopped_1a4f630a",zh));
         }
         ImGui::Separator();
-        const bool force=ui::button("exit-force",t("Force exit (Esc)","强制退出（Esc）"),ui::ButtonKind::Danger,p,active.scale);exit_controls[2]=center();
+        const bool force=ui::button("exit-force",ecmgui_v2::ui::text("force_exit_esc_8774db86",zh),ui::ButtonKind::Danger,p,active.scale);exit_controls[2]=center();
         if(force||(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)&&ImGui::IsKeyPressed(ImGuiKey_Escape))){trace("exit: forced by user without waiting for a fresh checkpoint");controller.force_close();}
         ImGui::PopTextWrapPos();ImGui::End();
     }
@@ -537,29 +619,29 @@ void App::draw_exit(const ui::Settings& active,const ui::Fonts& fonts) {
 }
 
 void App::draw_inspector(const ui::Fonts& fonts) {
-    const bool zh=fonts.chinese;const auto t=[zh](const char* en,const char* cn){return zh?cn:en;};
+    const bool zh=fonts.chinese;
     fonts.push(ui::FontRole::Body);
     if (const auto worker = selected()) {
         ImGui::Text("%s / %s", worker->name.c_str(), ui::message(ecmgui::state_name(worker->state()),zh).c_str());
         ImGui::TextWrapped("%s", worker->task.c_str()); ImGui::Separator();
         if (worker->stage2 && worker->stage2_status.valid) {
             const auto& s=worker->stage2_status;
-            ImGui::Text(t("Task curves: %llu / %llu","任务曲线数：%llu / %llu"),s.done,s.total);
-            ImGui::Text(t("Phase: %s | batch %llu / %llu","阶段：%s | 批次 %llu / %llu"),s.phase.c_str(),s.batch,s.batches);
+            ImGui::Text(ecmgui_v2::ui::text("task_curves_llu_llu_58f847e9",zh),s.done,s.total);
+            ImGui::Text(ecmgui_v2::ui::text("phase_s_batch_llu_llu_f8541ba8",zh),s.phase.c_str(),s.batch,s.batches);
             if(s.curve_model=="ed")ImGui::Text("Edwards sigma=%llu",s.sigma);
             else ImGui::Text("%s param=%d sigma=%llu",s.curve_model.c_str(),s.param,s.sigma);
             ImGui::Text("B1=%llu B2=%llu",s.b1,s.b2);
         }
-        if (ImGui::Button(t("Open worker folder","打开 worker 目录"))) ecmgui::open_in_explorer(worker->working_dir);
+        if (ImGui::Button(ecmgui_v2::ui::text("open_worker_folder_5650fc18",zh))) ecmgui::open_in_explorer(worker->working_dir);
         ImGui::TextWrapped("%s", worker->effective_config.c_str());
-        ImGui::TextWrapped(t("Worker version: %s","计算程序版本：%s"), worker->application_version.empty() ? t("unknown","未知") : worker->application_version.c_str());
-        if (ImGui::Button(t("Copy command","复制命令"))) ImGui::SetClipboardText(worker->command_line().c_str());
+        ImGui::TextWrapped(ecmgui_v2::ui::text("worker_version_s_8c3af2a1",zh), worker->application_version.empty() ? ecmgui_v2::ui::text("unknown_b23a6a84",zh) : worker->application_version.c_str());
+        if (ImGui::Button(ecmgui_v2::ui::text("copy_command_9a01feec",zh))) ImGui::SetClipboardText(worker->command_line().c_str());
         ImGui::TextWrapped("%s", worker->command_line().c_str());
-    } else ImGui::TextUnformatted(t("No worker selected","未选中 worker"));
+    } else ImGui::TextUnformatted(ecmgui_v2::ui::text("no_worker_selected_947b0173",zh));
     ImGui::PopFont();
 }
 void App::draw_logs(const ui::Fonts& fonts) {
-    const bool zh=fonts.chinese;const auto t=[zh](const char* en,const char* cn){return zh?cn:en;};
+    const bool zh=fonts.chinese;
     const auto p=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);const float scale=ImGui::GetFontSize()/15.f;
     fonts.push(ui::FontRole::Body);log_tab_controls.clear();
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{ImGui::GetStyle().ItemSpacing.x,4*scale});
@@ -570,7 +652,7 @@ void App::draw_logs(const ui::Fonts& fonts) {
     if(ImGui::BeginTabBar("worker-logs",ImGuiTabBarFlags_FittingPolicyScroll)){
         for(int item=0;item<=static_cast<int>(controller.workers().size());++item){
             const auto* worker=item?&controller.workers()[static_cast<size_t>(item-1)]:nullptr;const int id=worker?worker->index:0;
-            const auto label=(worker?"#"+std::to_string(id)+" "+worker->name:std::string(t("Application","程序")))+"###log-"+std::to_string(id);
+            const auto label=(worker?"#"+std::to_string(id)+" "+worker->name:std::string(ecmgui_v2::ui::text("application_e7ad522e",zh)))+"###log-"+std::to_string(id);
             const bool open=ImGui::BeginTabItem(label.c_str(),nullptr,request&&id==requested_worker?ImGuiTabItemFlags_SetSelected:0);
             log_tab_controls[id]={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
             if(open){log_active_worker=id;active_worker=worker;if(worker){state.ui_worker=id;log_last_worker_=id;}ImGui::EndTabItem();}
@@ -581,8 +663,8 @@ void App::draw_logs(const ui::Fonts& fonts) {
     for(const auto& w:controller.workers())if(w.index==log_active_worker)active_worker=&w;
     if(active_worker){
         const auto progress=ui::worker_progress(*active_worker,zh);
-        const auto task=ecmgui::task_caption(active_worker->task,t("Known factors","已知因子"),"assignment ID",t("No queued task","暂无队列任务"));
-        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,t("%s | %s | %s | %s s/curve | ETA %s","%s | %s | %s | %s 秒/曲线 | ETA %s"),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
+        const auto task=ecmgui::task_caption(active_worker->task,ecmgui_v2::ui::text("known_factors_f88cad5f",zh),"assignment ID",ecmgui_v2::ui::text("no_queued_task_b954d32f",zh));
+        ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ecmgui_v2::ui::text("s_s_s_s_s_curve_eta_s_6c18c89b",zh),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",active_worker->task.c_str(),ui::worker_phase(*active_worker,zh).c_str());
         const auto shape=ui::worker_shape(*active_worker);
         if(!shape.empty()){
@@ -592,24 +674,24 @@ void App::draw_logs(const ui::Fonts& fonts) {
         }
         if(active_worker->stage2&&active_worker->stage2_status.valid){
             const auto& s=active_worker->stage2_status;
-            ImGui::TextColored(p.stage2,t("Phase: %s | curve %llu / %llu","阶段：%s | 曲线 %llu / %llu"),s.phase.c_str(),s.current,s.total);
+            ImGui::TextColored(p.stage2,ecmgui_v2::ui::text("phase_s_curve_llu_llu_221f1861",zh),s.phase.c_str(),s.current,s.total);
             const auto batch=ui::stage2_batch(s,zh);
             if(batch.visible){
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram,p.stage2);
                 ImGui::ProgressBar(batch.fraction,{std::min(420*scale,ImGui::GetContentRegionAvail().x),ImGui::GetFrameHeight()},batch.label.c_str());ImGui::PopStyleColor();
                 ImGui::TextDisabled("%s",batch.remaining.c_str());
             }
-            if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",t("Stop after the current Stage2 curve","当前 Stage2 曲线完成后停止"));
+            if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ecmgui_v2::ui::text("stop_after_the_current_stage2_curve_d315e7ec",zh));
         }
     }
     auto found=log_views_.find(log_active_worker);if(found==log_views_.end())found=log_views_.emplace(log_active_worker,LogView{state.ui_raw_log,state.ui_follow_log,true}).first;
     auto& view=found->second;ImGui::PushID(log_active_worker);
-    if(ui::button("raw",t("Raw output","原始输出"),view.raw?ui::ButtonKind::Primary:ui::ButtonKind::Secondary,p,scale)){view.raw=!view.raw;state.ui_raw_log=view.raw;view.jump=true;}
+    if(ui::button("raw",ecmgui_v2::ui::text("raw_output_f3dbf20a",zh),view.raw?ui::ButtonKind::Selected:ui::ButtonKind::Secondary,p,scale)){view.raw=!view.raw;state.ui_raw_log=view.raw;view.jump=true;}
     log_raw_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-    ImGui::SameLine();if(ui::button("follow",t("Follow","跟随"),view.follow?ui::ButtonKind::Primary:ui::ButtonKind::Secondary,p,scale)){view.follow=!view.follow;state.ui_follow_log=view.follow;view.jump=view.follow;}
+    ImGui::SameLine();if(ui::button("follow",ecmgui_v2::ui::text("follow_641d1ef6",zh),view.follow?ui::ButtonKind::Selected:ui::ButtonKind::Secondary,p,scale)){view.follow=!view.follow;state.ui_follow_log=view.follow;view.jump=view.follow;}
     log_follow_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
     if(active_worker){
-        ImGui::SameLine();if(ui::button("log-folder",t("Open log folder","打开日志目录"),ui::ButtonKind::Secondary,p,scale))ecmgui::open_in_explorer(ecmgui::path_dir(active_worker->log_file));
+        ImGui::SameLine();if(ui::button("log-folder",ecmgui_v2::ui::text("open_log_folder_4862da00",zh),ui::ButtonKind::Secondary,p,scale))ecmgui::open_in_explorer(ecmgui::path_dir(active_worker->log_file));
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",active_worker->log_file.c_str());
         if(ImGui::GetContentRegionAvail().x>ImGui::CalcTextSize(ecmgui::file_name(active_worker->log_file).c_str()).x+16*scale){ImGui::SameLine();ImGui::TextDisabled("%s",ecmgui::file_name(active_worker->log_file).c_str());if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",active_worker->log_file.c_str());}
     }
@@ -624,7 +706,7 @@ void App::draw_logs(const ui::Fonts& fonts) {
     log_font_height=ImGui::GetTextLineHeight();log_line_pitch=ImGui::GetTextLineHeightWithSpacing();
     const auto* lines=active_worker?(view.raw?&active_worker->raw:&active_worker->events):nullptr;
     const size_t count=lines?lines->size():messages.size();
-    if(!count)ImGui::TextDisabled("%s",t("No output yet","暂无输出"));
+    if(!count)ImGui::TextDisabled("%s",ecmgui_v2::ui::text("no_output_yet_7b7658d7",zh));
     ImGuiListClipper clip;clip.Begin(static_cast<int>(count),log_line_pitch);
     while(clip.Step())for(int i=clip.DisplayStart;i<clip.DisplayEnd;++i){const auto& line=lines?(*lines)[static_cast<size_t>(i)]:messages[static_cast<size_t>(i)];
         ui::log_line(line,p);}

@@ -15,6 +15,7 @@ namespace fs=std::filesystem;
 static void write(const fs::path& p,const std::string& text){std::ofstream f(p,std::ios::binary);f<<text;assert(f.good());}
 static std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
 int main(int argc,char** argv){
+    std::string localization_error;assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",localization_error));
     {ecmgui::WorkerView worker;worker.resume_pct=23.8;
      auto display=ecmgui_v2::ui::worker_progress(worker,false);assert(display.label=="23.8% (resumed)"&&display.eta=="--"&&display.fraction>.237f&&display.fraction<.239f);
      worker.progress.valid=true;worker.progress.pct=50;worker.progress.curves_done=5;worker.progress.curves_total=10;worker.progress.s_per_curve=2;worker.progress.eta_s=65;
@@ -64,6 +65,32 @@ int main(int argc,char** argv){
     while(scroll.active()){scroll.step(.016,x,y);assert(y<=0);total+=y;assert(++steps<100);}
     assert(std::abs(total+3)<1e-9&&steps>1);
     assert(argc==2);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
+    {
+        // Exercise external edits, Unicode paths, fallback and transactional reload.
+        const auto loc=root/fs::u8path("语言资源");fs::create_directories(loc);
+        const auto original=fs::u8path(language_directory());
+        for(const auto& item:fs::directory_iterator(original))if(item.path().extension()==".xml")fs::copy_file(item.path(),loc/item.path().filename());
+        const auto english=read(loc/"english.xml"),chinese=read(loc/"chineseSimplified.xml");
+        auto changed=chinese;size_t at=0;bool found=false;
+        while((at=changed.find("name=\"已停止\"",at))!=changed.npos){found=true;changed.replace(at,std::strlen("name=\"已停止\""),"name=\"外部编辑测试\"");at+=std::strlen("name=\"外部编辑测试\"");}
+        assert(found);write(loc/"chineseSimplified.xml",changed);
+        std::string error;assert(load_languages(loc.u8string(),error));assert(message("Stopped",true)=="外部编辑测试");
+        // A missing translated entry falls back to the external English baseline.
+        auto fallback=chinese;const auto begin=fallback.find("<Item id=\"stopped_1a4f630a\"");assert(begin!=fallback.npos);fallback.erase(begin,fallback.find("/>",begin)+2-begin);write(loc/"chineseSimplified.xml",fallback);
+        assert(load_languages(loc.u8string(),error));assert(std::string(text("stopped_1a4f630a",true))=="Stopped");
+        auto invalid=chinese;const auto format=invalid.find("%.1f s");assert(format!=invalid.npos);invalid.replace(format,4,"%s");write(loc/"chineseSimplified.xml",invalid);
+        assert(!load_languages(loc.u8string(),error)&&error.find("format mismatch")!=error.npos);
+        assert(std::string(text("stopped_1a4f630a",true))=="Stopped");
+        write(loc/"chineseSimplified.xml",chinese);write(loc/"english.xml","<EcmGui><Native-Langue><Panel id=\"ui\"><Item id=\"bad\" name=\"broken\"/>");
+        assert(!load_languages(loc.u8string(),error));
+        write(loc/"english.xml",english);assert(load_languages(loc.u8string(),error));
+        auto duplicate=chinese;const auto close=duplicate.find("</Panel>");assert(close!=duplicate.npos);duplicate.insert(close,"<Item id=\"stopped_1a4f630a\" name=\"Duplicate\"/>");write(loc/"chineseSimplified.xml",duplicate);
+        assert(!load_languages(loc.u8string(),error)&&error.find("Duplicate")!=error.npos);
+        assert(message("Stopped",true)=="已停止");fs::remove(loc/"chineseSimplified.xml");
+        assert(load_languages(loc.u8string(),error)&&!error.empty());assert(message("Stopped",true)=="Stopped");
+        write(loc/"chineseSimplified.xml",chinese);assert(load_languages(loc.u8string(),error));
+        assert(message("Stopped",true)=="已停止");assert(load_languages(original.u8string(),error));
+    }
     const auto cfg=root/"ecm.toml",queue=root/"worktodo.txt";
     write(cfg,"# preserve comment\n[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=2\nfont_size=\"auto\"\n[workers.1]\nautostart=0\n[workers.2]\nautostart=0\n");
     write(queue,"# queue preserved\n[Worker #1]\n[Worker #2]\n");

@@ -73,9 +73,27 @@ def main():
             assert expected[first]['driver'] in tooltip and 'SM ' in tooltip and str(expected[first]['cores']) in tooltip,tooltip
             corners=[line for line in lines if line.startswith(f'gpu_text: index={first} usage=')][-1]
             assert all(word not in corners for word in ['上限','max','limit']),corners
-            assert ' / 100%' in corners and ' | ' in corners and ' MHz  |  ' in corners,corners
+            assert ' / 100%' in corners and ' | ' in corners and ' MHz | ' in corners,corners
             basic=[line.split('basic=',1)[1] for line in lines if line.startswith(f'gpu_text: index={first} basic=')][-1]
-            assert not re.search(r'\d/|/\d',basic) and basic.count(' | ')==4,basic
+            assert not re.search(r'\d/|/\d',basic) and basic.count(' | ')==1,basic
+            styles={int(row['index']):row for row in records(text,'gpu_style')}
+            for index,style in styles.items():
+                assert sum(float(style['height'+str(i)]) for i in range(3))<=200,style
+                for i in range(3):
+                    assert float(style['plot'+str(i)])>=27.9 and float(style['stroke'+str(i)])<1.3,style
+                    assert float(style['label'+str(i)])<float(style['value'+str(i)]),style
+                    assert style['vgrid'+str(i)]=='0' and style['xticks'+str(i)]=='0',style
+            # A narrow, larger-font layout may wrap legend groups, but must keep
+            # a complete plot band and remove fixed vertical/time markings.
+            if language=='zh':
+                user.SetWindowPos(hwnd,None,40,40,900,850,0x14);time.sleep(.6)
+                capture(hwnd,folder/'gpu-narrow.png')
+                narrow=records(log.read_text(encoding='utf-8'),'gpu_style')[-len(expected):]
+                assert len(narrow)==len(expected)
+                for style in narrow:
+                    for i in range(3):assert float(style['plot'+str(i)])>=27.9 and style['vgrid'+str(i)]=='0' and style['xticks'+str(i)]=='0',style
+                user.SetWindowPos(hwnd,None,40,40,1920,1400,0x14);time.sleep(.5)
+                text=log.read_text(encoding='utf-8')
             nav=records(text,'usability_sample')[-1];point(nav['nav5'],True)
             wait(lambda text:records(text,'usability_sample')[-1]['page']=='5')
             settings=wait(lambda text: records(text,'gpu_settings')[-1] if int(records(text,'gpu_settings')[-1]['range0'].split(',')[0])>0 else None)
@@ -94,7 +112,7 @@ def main():
         restart=folder/'restart.log'
         run=subprocess.run([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(restart),'--audit-app','--frames','12','--no-pet'],cwd=folder,startupinfo=startup,timeout=25)
         assert run.returncode==0 and records(restart.read_text(encoding='utf-8'),'gpu_settings')[-1]['seconds']==str(seconds)
-        results.append(dict(language=language,devices=len(actual),three_charts_each=True,metadata_matches_driver=True,tooltip=True,spacing=True,time_range=seconds,persisted=True))
+        results.append(dict(language=language,devices=len(actual),three_charts_each=True,compact_colored_legend_values=True,no_vertical_grid_or_time_ticks=True,thin_curves=True,metadata_matches_driver=True,tooltip=True,spacing=True,time_range=seconds,persisted=True))
     result=dict(passed=True,cases=results,reference=expected,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),business_unchanged=True,scope='DX11, actual driver metadata only; no compute workers, CUDA contexts or Vulkan rendering')
     (out/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 

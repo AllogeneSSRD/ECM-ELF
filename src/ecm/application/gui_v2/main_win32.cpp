@@ -1,4 +1,5 @@
 #include "version.h"
+#include "ui/i18n.h"
 #include "render/render_host.h"
 #include "ui/widgets.h"
 #include "app.h"
@@ -229,6 +230,7 @@ int run(const Options& options, int show, FILE* log) {
     auto& memory=renderer; // Explicit Vulkan allocations only; DX11 reports that scope as unavailable.
     auto pending = options.settings;
     pending.font_size=static_cast<float>(state.ui_font_size);
+    pending.primary_offset=state.ui_primary_font_offset;pending.secondary_offset=state.ui_secondary_font_offset;
     if (!options.explicit_theme) pending.light = state.ui_theme == "light";
     if (!options.explicit_language) pending.chinese = state.ui_language == "zh";
     if (!options.explicit_scale && state.ui_scale > 0) pending.scale = state.ui_scale;
@@ -240,6 +242,9 @@ int run(const Options& options, int show, FILE* log) {
     state.ui_language=fonts.chinese?"zh":"en";
     active.chinese = pending.chinese = fonts.chinese;
     ecmgui_v2::ui::apply_theme(active);
+    std::string language_error;
+    ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",language_error);
+    if(!language_error.empty())std::fprintf(log,"localization: %s\n",language_error.c_str());
     ecmgui_v2::ui::Showcase showcase;
     const bool show_components = options.showcase || options.audit_ui;
     ecmgui_v2::App app(state, log); current_app = &app; audit_app = options.audit_app;
@@ -301,7 +306,7 @@ int run(const Options& options, int show, FILE* log) {
             renderer.rebuild(static_cast<uint32_t>(client.right), static_cast<uint32_t>(client.bottom));
             resized = false;
         }
-        if (font_change || active.light != pending.light || active.font_size != pending.font_size) {
+        if (font_change || active.light != pending.light || active.font_size != pending.font_size || active.primary_offset!=pending.primary_offset || active.secondary_offset!=pending.secondary_offset) {
             active = pending;
             fonts.base_size=active.font_size;
             ecmgui_v2::ui::apply_theme(active);
@@ -361,6 +366,8 @@ int run(const Options& options, int show, FILE* log) {
             std::fprintf(log," speed_samples=%zu line_pitch=%.2f font_height=%.2f log_height=%.2f",app.log_speed_samples,app.log_line_pitch,app.log_font_height,app.log_view_height);
             std::fprintf(log," table_scroll_y=%.2f table_height=%.2f table_content=%.2f body_font=%.2f body_glyph=%.2f log_glyph=%.2f log_body=%d",app.worker_table_scroll_max_y,app.worker_table_height,app.worker_table_content_height,app.body_font_height,app.body_glyph_height,app.log_glyph_height,app.log_uses_body);
             std::fprintf(log," table_required=%.2f table_data_height=%.2f table_rows=%zu",app.worker_table_required_height,app.worker_table_data_height,app.worker_table_rows);
+            std::fprintf(log," toolbar_height=%.2f row_height=%.2f worker_button_height=%.2f",app.worker_toolbar_height,app.worker_row_height,app.worker_button_height);
+            std::fprintf(log," table_scroll_x=%.2f flexible=%d field_overflow=%.2f",app.worker_table_scroll_max_x,app.worker_flexible,app.worker_field_overflow);
             const auto font_control=point(app.font_size_control),speed_min=point(app.worker_speed_min),speed_max=point(app.worker_speed_max);
             std::fprintf(log," workspace_speed=%zu workspace_series=%zu speed_min=%ld,%ld speed_max=%ld,%ld font_size=%d font_base=%.1f font_control=%ld,%ld exit_phase=%d deadline=%llu",app.worker_speed_samples,app.workspace_chart_count,speed_min.x,speed_min.y,speed_max.x,speed_max.y,state.ui_font_size,ImGui::GetStyle().FontSizeBase,font_control.x,font_control.y,static_cast<int>(app.controller.exit_phase()),app.controller.exit_deadline());
             for(int i=0;i<3;++i){const auto pos=point(app.exit_controls[i]);std::fprintf(log," exit%d=%ld,%ld",i,pos.x,pos.y);}
@@ -368,10 +375,14 @@ int run(const Options& options, int show, FILE* log) {
             if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);const auto batch=ecmgui_v2::ui::stage2_batch(worker->stage2_status,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s | batch=%s | remaining=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str(),batch.label.c_str(),batch.remaining.c_str());}
             std::fprintf(log,"gpu_settings: seconds=%d",state.ui_gpu_history_seconds);
             for(int i=0;i<4;++i){const auto pos=point(app.gpu_range_controls[i]);std::fprintf(log," range%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");
+            const auto primary_control=point(app.primary_offset_control),secondary_control=point(app.secondary_offset_control);
+            std::fprintf(log,"typography_sample: body=%d primary_offset=%d secondary_offset=%d primary_size=%.1f secondary_size=%.1f primary_button=%.2f secondary_button=%.2f secondary_note=%.2f primary_control=%ld,%ld secondary_control=%ld,%ld\n",state.ui_font_size,state.ui_primary_font_offset,state.ui_secondary_font_offset,ecmgui_v2::ui::primary_font_size(ImGui::GetStyle().FontSizeBase),ecmgui_v2::ui::secondary_font_size(ImGui::GetStyle().FontSizeBase),app.primary_font_height,app.secondary_button_font_height,app.secondary_text_font_height,primary_control.x,primary_control.y,secondary_control.x,secondary_control.y);
             for(const auto& device:app.gpu.devices()){
                 const auto found=app.gpu_presentations.find(device.index);if(found==app.gpu_presentations.end())continue;
                 const auto& display=found->second;const auto details=app.gpu_details.get(device.index);const auto pos=point(display.header);
                 std::fprintf(log,"gpu_detail: index=%d ready=%d driver=%s cuda=%d major=%d minor=%d sms=%d cores=%d charts=%zu hovered=%d header=%ld,%ld\n",device.index,app.gpu_details.ready(),details.driver.c_str(),details.cuda_version,details.major,details.minor,details.sm_count,device.cores,display.charts,display.hovered,pos.x,pos.y);
+                std::fprintf(log,"gpu_style: index=%d block_height=%.2f",device.index,display.height);
+                for(int i=0;i<3;++i){const auto& m=display.chart_metrics[i];std::fprintf(log," height%d=%.2f plot%d=%.2f stroke%d=%.2f label%d=%.2f value%d=%.2f rows%d=%d vgrid%d=%d xticks%d=%d",i,m.height,i,m.plot_height,i,m.stroke,i,m.label_size,i,m.value_size,i,m.header_rows,i,m.x_grid,i,m.x_ticks);}std::fprintf(log,"\n");
                 const auto one_line=[](std::string text){std::replace(text.begin(),text.end(),'\n','\t');return text;};
                 std::fprintf(log,"gpu_text: index=%d tooltip=%s\n",device.index,one_line(display.tooltip).c_str());
                 std::fprintf(log,"gpu_text: index=%d basic=%s\n",device.index,one_line(display.basic).c_str());

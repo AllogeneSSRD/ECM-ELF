@@ -17,6 +17,7 @@ def main():
     build_identity=exe.with_name('gui_v2_build_manifest.json');identity=json.loads(build_identity.read_text(encoding='utf-8-sig'))
     assert identity['exe_sha256']==hashlib.sha256(exe.read_bytes()).hexdigest(),'Build manifest does not match executable'
     shutil.copy2(build_identity,package/'build-manifest.json')
+    shutil.copytree(exe.parent/'localization/v2',package/'localization/v2')
     licenses=package/'licenses';licenses.mkdir()
     sources={
         'ECM-ELF-LICENSE.txt':'LICENSE',
@@ -55,7 +56,7 @@ def main():
                      'assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt',
                      'tools/gen/generate_gui_v2_pet_skins.py','tools/gen/render_ely_skins_preview.py',
                      'tools/test/gui_v2/test_pet_skins.py','tools/test/gui_v2/test_skin_assets.cjs',
-                     'tools/test/gui_v2/test_skin_preview.cjs','tools/test/gui_v2/test_startup_dispatch.py','tools/test/gui_v2/test_presentation.py','tools/test/gui_v2/test_font_exit.py','tools/test/gui_v2/test_table_typography.py','tools/test/gui_v2/test_gpu_page.py','tools/test/gui_v2/test_navigation.py','docs/web/ely-skins-20261022.html',
+                     'tools/test/gui_v2/test_skin_preview.cjs','tools/test/gui_v2/test_startup_dispatch.py','tools/test/gui_v2/test_presentation.py','tools/test/gui_v2/test_font_exit.py','tools/test/gui_v2/test_font_offsets.py','tools/test/gui_v2/test_table_typography.py','tools/test/gui_v2/test_gpu_page.py','tools/test/gui_v2/test_navigation.py','docs/web/ely-skins-20261022.html',
                      'docs/development/ELY_SKINS_DRAFT.md'])
     source_dir=package/'source';source_dir.mkdir();source_archive=source_dir/f'ECM-ELF-GUI-v2-{version}-source.zip'
     with zipfile.ZipFile(source_archive,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -83,6 +84,9 @@ Skin PNGs are external files in assets/ beside the executable, not embedded.
 Copy or replace a registered atlas and restart; see docs/GUI_V2.md for format.
 Additional unregistered names/IDs still require a rebuilt skin registry.
 UI preferences are independent in LocalAppData; --ui-state overrides the path.
+UI translations are external UTF-8 XML files under localization/v2/.
+Edit english.xml/chineseSimplified.xml and use Language > Reload localization.
+The options.*.xml files are generated from the configuration schema.
 Use --diagnostics to choose a writable log path if the current directory is read-only.
 Review ecm.toml.example before using it; it is not loaded automatically.
 

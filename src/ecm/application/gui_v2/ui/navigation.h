@@ -1,11 +1,11 @@
+#include "i18n.h"
 #pragma once
 #include <string>
 #include <algorithm>
 namespace ecmgui_v2::ui {
 inline const char* page_name(int page, bool zh) {
-    static const char* en[]{"Workers","Results","Generator","Probability","GPU","Settings","Components"};
-    static const char* cn[]{"任务","结果","生成器","概率","GPU","设置","组件"};
-    return page>=0&&page<7?(zh?cn[page]:en[page]):"";
+    static const char* keys[]{"workers_7a1ec9fe","results_219c4a6c","generator_1ade60ab","probability_9c9be01b","gpu_ea49523d","settings_74a883a0","components_a150ce22"};
+    return page>=0&&page<7?text(keys[page],zh):"";
 }
 inline bool pinned(int mask,int page) { return page>=0&&page<7&&(mask&(1<<page))!=0; }
 // Reinsert before/after the target; move hidden right-side pages as stable IDs.

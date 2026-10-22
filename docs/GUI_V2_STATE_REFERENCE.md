@@ -34,8 +34,22 @@ Zero selects window DPI; positive values select a fixed interface scale.
 
 默认值：`15`；类型：`int`。
 
-Body and log font size in logical pixels, independently of interface DPI scale. Other font roles preserve their ratios.
-正文与日志字号（逻辑像素），独立于界面 DPI 比例；其他字体角色保持相对比例。
+Body and log font size in logical pixels, independently of interface DPI scale. Primary actions and secondary text apply their configured offsets; headings preserve their ratio.
+正文与日志字号（逻辑像素），独立于界面 DPI 比例；主要操作与次要说明使用各自偏移，标题保持相对比例。
+
+## ui.primary_font_offset
+
+默认值：`1`；类型：`int`。
+
+Primary action font offset from the body size, in logical pixels; secondary buttons and log text keep the body size.
+主要操作字号相对正文的偏移（逻辑像素）；次要按钮和日志正文保持正文字号。
+
+## ui.secondary_font_offset
+
+默认值：`-2`；类型：`int`。
+
+Secondary text font offset from the body size, in logical pixels; the rendered role has a minimum of 8 logical pixels.
+次要说明字号相对正文的偏移（逻辑像素）；实际字号最小为 8 逻辑像素。
 
 ## ui.gpu_history_seconds
 

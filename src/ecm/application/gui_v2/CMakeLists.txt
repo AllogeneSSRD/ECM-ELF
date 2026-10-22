@@ -33,14 +33,14 @@ target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK 
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
 add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/dx11_window.cpp render/vulkan_context.cpp render/vulkan_window.cpp
-    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp app.cpp views/pages.cpp ui_state.cpp pet/window.cpp gpu_details.cpp)
+    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp app.cpp views/pages.cpp ui_state.cpp pet/window.cpp gpu_details.cpp)
 include("${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 add_custom_target(ecm_gui_v2_config_check
     COMMAND ${CMAKE_COMMAND} "-DECM_GUI_V2_ROOT=${ECM_GUI_V2_ROOT}" -P "${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 set(_old "${ECM_GUI_V2_ROOT}/src/ecm/application/gui")
 add_library(ecm_gui_v2_models STATIC "${_old}/worker_controller.cpp" "${_old}/worker_proc.cpp"
     "${_old}/toml_file.cpp" "${_old}/log_parse.cpp" "${_old}/platform_win32.cpp"
-    "${_old}/results.cpp" "${_old}/worktodo_gen.cpp" "${_old}/probability_model.cpp" "${_old}/gpu_monitor.cpp")
+    "${_old}/results.cpp" "${_old}/worktodo_gen.cpp" "${_old}/probability_model.cpp" "${_old}/gpu_monitor.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ui/localization_xml.cpp")
 target_include_directories(ecm_gui_v2_models PUBLIC "${ECM_GUI_V2_ROOT}/include" "${_old}")
 target_compile_features(ecm_gui_v2_models PUBLIC cxx_std_17)
 target_compile_definitions(ecm_gui_v2_models PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -69,6 +69,9 @@ foreach(_skin miss_pink_elf herrscher_of_human_ego hi_love_elf)
     add_dependencies(ecm_gui_v2_assets ecm_gui_v2_skin_${_skin})
 endforeach()
 add_dependencies(ecm_gui_v2 ecm_gui_v2_assets)
+add_custom_target(ecm_gui_v2_localization ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/localization" "${CMAKE_BINARY_DIR}/localization/v2")
+add_dependencies(ecm_gui_v2 ecm_gui_v2_localization)
 target_compile_options(ecm_gui_v2 PRIVATE /W4 /utf-8 /EHsc)
 target_link_options(ecm_gui_v2 PRIVATE /MANIFEST:EMBED "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")
 set_property(TARGET ecm_gui_v2 APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")
@@ -88,7 +91,8 @@ add_executable(ecm_gui_v2_state_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/
 target_link_libraries(ecm_gui_v2_state_test PRIVATE ecm_gui_v2_models gdiplus ole32)
 target_compile_options(ecm_gui_v2_state_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 add_executable(ecm_gui_v2_app_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/app_test.cpp"
-    app.cpp views/pages.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp gpu_details.cpp)
+    app.cpp views/pages.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp)
+add_dependencies(ecm_gui_v2_app_test ecm_gui_v2_localization)
 target_link_libraries(ecm_gui_v2_app_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
 target_compile_options(ecm_gui_v2_app_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 target_link_options(ecm_gui_v2_app_test PRIVATE /MANIFEST:EMBED "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")

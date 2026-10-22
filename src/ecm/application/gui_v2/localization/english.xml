@@ -1,0 +1,321 @@
+<?xml version='1.0' encoding='utf-8'?>
+<EcmGui>
+  <Native-Langue name="english" filename="english.xml" version="1">
+    <Panel id="ui">
+      <Item id="view_dcc839a4" name="View" />
+      <Item id="reset_layout_2e2a1784" name="Reset layout" />
+      <Item id="inspector_da188e3b" name="Inspector" />
+      <Item id="logs_ea2100dc" name="Logs" />
+      <Item id="system_title_bar_285c57a3" name="System title bar" />
+      <Item id="language_a4fe6526" name="Language" />
+      <Item id="notices_00a05fce" name="Notices" />
+      <Item id="minimize_d72e311c" name="Minimize" />
+      <Item id="maximize_restore_ab9616c1" name="Maximize / restore" />
+      <Item id="close_7d9eb7ac" name="Close" />
+      <Item id="navigation_v2_navigation_fa8b2bee" name="Navigation###v2.navigation" />
+      <Item id="move_to_right_tabs_80d3c7aa" name="Move to right tabs" />
+      <Item id="right_tabs_right_drop_3dd2712f" name="Right tabs &gt;###right-drop" />
+      <Item id="long_press_a_page_then_drag_here_to_open_i_bded2000" name="Long-press a page, then drag here to open it in the right tabs." />
+      <Item id="hold_and_drag_to_reorder_close_a_right_tab_ba726d0c" name="Hold and drag to reorder. Close a right tab to return it here." />
+      <Item id="workspace_v2_workspace_ebc1df62" name="Workspace###v2.workspace" />
+      <Item id="inspector_v2_inspector_dc966628" name="Inspector###v2.inspector" />
+      <Item id="logs_v2_logs_a97cbe80" name="Logs###v2.logs" />
+      <Item id="open_a_workflow_in_settings_55a5439d" name="Open a workflow in Settings." />
+      <Item id="known_factors_f88cad5f" name="Known factors" />
+      <Item id="no_queued_task_b954d32f" name="No queued task" />
+      <Item id="task_953516d5" name="Task: " />
+      <Item id="action_64cff131" name="Action" />
+      <Item id="state_a3b50c47" name="State" />
+      <Item id="device_engine_1041b2a2" name="Device / engine" />
+      <Item id="task_progress_e38b9d46" name="Task progress" />
+      <Item id="s_curve_1715c3bd" name="s/curve" />
+      <Item id="done_hits_8c10e20d" name="Done / hits" />
+      <Item id="stopping_a71ee1d4" name="Stopping" />
+      <Item id="stop_cae7d57b" name="Stop" />
+      <Item id="start_e4bb9f1e" name="Start" />
+      <Item id="multiple_workers_use_this_gpu_ad48019a" name="&#10;Multiple workers use this GPU" />
+      <Item id="stage1_saves_a_checkpoint_stage2_finishes__f16b2dc8" name="Stage1 saves a checkpoint; Stage2 finishes its current curve before stopping." />
+      <Item id="stage2_finishes_its_current_curve_before_s_23f91e06" name="Stage2 finishes its current curve before stopping." />
+      <Item id="stage1_saves_a_checkpoint_before_stopping_fd6d9575" name="Stage1 saves a checkpoint before stopping." />
+      <Item id="d_worker_s_are_running_stop_safely_and_exi_24856f27" name="%d worker(s) are running. Stop safely and exit?" />
+      <Item id="stop_and_exit_enter_61229fa0" name="Stop and exit (Enter)" />
+      <Item id="cancel_esc_862c2324" name="Cancel (Esc)" />
+      <Item id="stopping_workers_v2_stopping_53c8f7ae" name="Stopping workers###v2.stopping" />
+      <Item id="up_to_1f_s_remaining_2d6201db" name="Up to %.1f s remaining" />
+      <Item id="at_the_deadline_remaining_processes_are_te_0b34a996" name="At the deadline, remaining processes are terminated without a fresh checkpoint." />
+      <Item id="finishing_current_curve_1fef6708" name="Finishing current curve" />
+      <Item id="waiting_for_checkpoint_b160a8dc" name="Waiting for checkpoint" />
+      <Item id="stopped_1a4f630a" name="Stopped" />
+      <Item id="force_exit_esc_8774db86" name="Force exit (Esc)" />
+      <Item id="task_curves_llu_llu_58f847e9" name="Task curves: %llu / %llu" />
+      <Item id="phase_s_batch_llu_llu_f8541ba8" name="Phase: %s | batch %llu / %llu" />
+      <Item id="open_worker_folder_5650fc18" name="Open worker folder" />
+      <Item id="worker_version_s_8c3af2a1" name="Worker version: %s" />
+      <Item id="unknown_b23a6a84" name="unknown" />
+      <Item id="copy_command_9a01feec" name="Copy command" />
+      <Item id="no_worker_selected_947b0173" name="No worker selected" />
+      <Item id="application_e7ad522e" name="Application" />
+      <Item id="s_s_s_s_s_curve_eta_s_6c18c89b" name="%s | %s | %s | %s s/curve | ETA %s" />
+      <Item id="phase_s_curve_llu_llu_221f1861" name="Phase: %s | curve %llu / %llu" />
+      <Item id="stop_after_the_current_stage2_curve_d315e7ec" name="Stop after the current Stage2 curve" />
+      <Item id="raw_output_f3dbf20a" name="Raw output" />
+      <Item id="follow_641d1ef6" name="Follow" />
+      <Item id="open_log_folder_4862da00" name="Open log folder" />
+      <Item id="no_output_yet_7b7658d7" name="No output yet" />
+      <Item id="worker_started_009c206a" name="Worker started: " />
+      <Item id="keep_at_least_one_central_page_d623b219" name="Keep at least one central page" />
+      <Item id="workers_7a1ec9fe" name="Workers" />
+      <Item id="start_all_1a7e6299" name="Start all" />
+      <Item id="stop_safely_a2e61809" name="Stop safely" />
+      <Item id="safe_stop_requested_waiting_for_checkpoint_c4c6c1c2" name="Safe stop requested; waiting for checkpoint boundary" />
+      <Item id="curve_time_369c1d1c" name="Curve time" />
+      <Item id="sample_95a2f1ed" name="Sample" />
+      <Item id="waiting_for_a_measured_curve_time_c1472a27" name="Waiting for a measured curve time" />
+      <Item id="confirm_exit_v2_exit_bd0b37b2" name="Confirm exit###v2.exit" />
+      <Item id="no_valid_samples_a530710c" name="No valid samples" />
+      <Item id="design_system_4a866105" name="Design system" />
+      <Item id="components_components_4cf95529" name="Components###components" />
+      <Item id="typography_typography_f1f32d35" name="Typography###typography" />
+      <Item id="a_quieter_workspace_4771eb10" name="A quieter workspace" />
+      <Item id="p2_component_preview_worker_controls_and_b_c9ecbaff" name="P2 component preview. Worker controls and business pages arrive in later phases." />
+      <Item id="appearance_3907fa7f" name="Appearance" />
+      <Item id="interface_scale_6ba5218d" name="Interface scale" />
+      <Item id="actions_ff8059dc" name="Actions" />
+      <Item id="primary_action_da2eb576" name="Primary action" />
+      <Item id="secondary_62f2ccff" name="Secondary" />
+      <Item id="disabled_75081b59" name="Disabled" />
+      <Item id="ghost_action_e10eaa58" name="Ghost action" />
+      <Item id="danger_action_7c4d0637" name="Danger action" />
+      <Item id="interaction_states_specimen_dea5e57a" name="Interaction states (specimen)" />
+      <Item id="form_selection_7eb99b4c" name="Form &amp; selection" />
+      <Item id="preview_path_no_file_will_be_opened_or_sav_84370819" name="Preview path; no file will be opened or saved" />
+      <Item id="workflow_path_d11ce1d6" name="Workflow path" />
+      <Item id="enable_sample_option_option_0a4f69ac" name="Enable sample option###option" />
+      <Item id="primary_action_clicks_u_11904dd4" name="Primary action clicks: %u" />
+      <Item id="status_vocabulary_ff0020b0" name="Status vocabulary" />
+      <Item id="running_f4ccae29" name="Running" />
+      <Item id="waiting_6e293a8c" name="Waiting" />
+      <Item id="error_54a0e8c1" name="Error" />
+      <Item id="sample_states_no_active_workers_27fa1752" name="Sample states; no active workers." />
+      <Item id="type_precision_8f686fc3" name="Type &amp; precision" />
+      <Item id="body_segoe_ui_with_cjk_rescue_54f51b52" name="Body / Segoe UI with CJK rescue" />
+      <Item id="caption_13_logical_px_use_tab_to_inspect_k_05a5bddf" name="Caption / 13 logical px. Use Tab to inspect keyboard focus." />
+      <Item id="giant_batch_adc2a626" name="Giant batch" />
+      <Item id="batch_320b5d80" name="Batch" />
+      <Item id="phase_remaining_1f_s_ff3ab5fe" name="Phase remaining %.1f s" />
+      <Item id="phase_remaining_94bab929" name="Phase remaining --" />
+      <Item id="1f_resumed_be6aa774" name="%.1f%% (resumed)" />
+      <Item id="waiting_for_progress_bcc4332d" name="Waiting for progress" />
+      <Item id="phase_s_curve_llu_llu_batch_llu_llu_b1_llu_035650b1" name="Phase %s | curve %llu/%llu | batch %llu/%llu | B1=%llu B2=%llu" />
+      <Item id="published_results_8d015a9f" name="Published results" />
+      <Item id="all_statuses_8ee57323" name="All statuses" />
+      <Item id="all_stages_e7974b8d" name="All stages" />
+      <Item id="search_49c266ba" name="Search" />
+      <Item id="source_0e570ca6" name="Source" />
+      <Item id="all_a52ace42" name="All" />
+      <Item id="select_visible_70f58736" name="Select visible" />
+      <Item id="clear_selection_cea4d2e0" name="Clear selection" />
+      <Item id="copy_original_json_checksum_55c6ba36" name="Copy original JSON / checksum" />
+      <Item id="zu_zu_selected_zu_7c9cde22" name="%zu / %zu | selected %zu" />
+      <Item id="s_s_invalid_zu_pending_zu_0f1d8942" name="%s: %s | invalid %zu | pending %zu" />
+      <Item id="select_2a78025d" name="Select" />
+      <Item id="status_920e413c" name="Status" />
+      <Item id="target_978354db" name="Target" />
+      <Item id="curves_4c2c115c" name="Curves" />
+      <Item id="model_5e2c614c" name="Model" />
+      <Item id="time_33b93476" name="Time" />
+      <Item id="factors_d7cf50c1" name="Factors" />
+      <Item id="stage_de838855" name="Stage" />
+      <Item id="task_generator_7faad54f" name="Task generator" />
+      <Item id="target_worker_b23c5ad4" name="Target worker" />
+      <Item id="gpu_recommended_curves_9c4a8ce8" name="GPU recommended curves" />
+      <Item id="blocks_per_sm_1e2788f4" name="Blocks per SM" />
+      <Item id="fixed_curves_6258ac95" name="Fixed curves" />
+      <Item id="b1_override_empty_keeps_input_0765337e" name="B1 override (empty keeps input)" />
+      <Item id="b2_override_0_disables_d7b40a2b" name="B2 override (0 disables)" />
+      <Item id="save_pattern_dcf76fd4" name="Save pattern" />
+      <Item id="filters_and_ordering_9cfc39f8" name="Filters and ordering" />
+      <Item id="deduplicate_f0dd6a72" name="Deduplicate" />
+      <Item id="descending_79479a6c" name="Descending" />
+      <Item id="sort_known_factors_3b6981b8" name="Sort known factors" />
+      <Item id="sort_keys_4c73617e" name="Sort keys" />
+      <Item id="skip_curves_8d9ed55f" name="Skip curves" />
+      <Item id="min_exponent_1_any_8a0bccc6" name="Min exponent (-1: any)" />
+      <Item id="max_exponent_2c38acf2" name="Max exponent" />
+      <Item id="min_input_curves_e78af800" name="Min input curves" />
+      <Item id="max_input_curves_1901b341" name="Max input curves" />
+      <Item id="set_assignment_n_a_5ff15e72" name="Set assignment N/A" />
+      <Item id="generate_preview_f82333b8" name="Generate preview" />
+      <Item id="append_to_queue_170d8d59" name="Append to queue" />
+      <Item id="s_read_d_duplicates_d_ae76c89e" name="%s | read %d | duplicates %d" />
+      <Item id="current_preview_40f8da45" name="Current preview" />
+      <Item id="expired_preview_37dfc620" name="Expired preview" />
+      <Item id="copy_preview_311cbd9b" name="Copy preview" />
+      <Item id="ecm_probability_43508814" name="ECM probability" />
+      <Item id="parameters_e68b36b1" name="Parameters" />
+      <Item id="charts_and_snapshot_94e2f72c" name="Charts and snapshot" />
+      <Item id="calculate_snapshot_a22049db" name="Calculate snapshot" />
+      <Item id="probability_snapshot_ready_64bbce9f" name="Probability snapshot ready" />
+      <Item id="copy_snapshot_csv_bea99b05" name="Copy snapshot CSV" />
+      <Item id="snapshot_csv_copied_a15d488a" name="Snapshot CSV copied" />
+      <Item id="factor_size_f27e87f9" name="Factor size" />
+      <Item id="decimal_digits_b45d60b0" name="Decimal digits" />
+      <Item id="stage_2_enabled_8976ac2a" name="Stage 2 enabled" />
+      <Item id="use_b2_b1_ratio_5f0b38ea" name="Use B2/B1 ratio" />
+      <Item id="custom_494ca78f" name="Custom" />
+      <Item id="use_stage1_empirical_calibration_b45c1f82" name="Use stage1 empirical calibration" />
+      <Item id="torsion_order_is_not_d_eff_edwards_z2xz8_m_917a40eb" name="Torsion order is not D_eff. Edwards Z2xZ8: measured stage1 D=26.4081; relative Suyama rebase ~29.0 is a combined-model heuristic, not a direct Stage2 calibration." />
+      <Item id="combined_8036ed37" name="Combined" />
+      <Item id="stage_2_conditional_18266507" name="Stage 2 conditional" />
+      <Item id="forward_f1c65e14" name="Forward" />
+      <Item id="target_probability_ff15b758" name="Target probability (%)" />
+      <Item id="cumulative_target_b5b1c689" name="Cumulative target" />
+      <Item id="plot_range_6e66c843" name="Plot range" />
+      <Item id="size_min_0426839f" name="Size min" />
+      <Item id="size_max_a05f6c92" name="Size max" />
+      <Item id="auto_curves_range_f85bb5f0" name="Auto curves range" />
+      <Item id="curves_max_eea3d4c0" name="Curves max" />
+      <Item id="set_parameters_then_calculate_a_snapshot_t_6f098e9f" name="Set parameters, then calculate a snapshot to view its curves." />
+      <Item id="parameters_changed_the_charts_and_csv_stil_d32359e5" name="Parameters changed. The charts and CSV still describe the previous snapshot; calculate again to update." />
+      <Item id="snapshot_b1_0f_b2_0f_curves_0f_bits_6g_b2ea4d63" name="Snapshot B1=%.0f B2=%.0f curves=%.0f bits=%.6g" />
+      <Item id="s1_6g_s1_s2_6g_s2_conditional_6g_88ed90d8" name="S1 %.6g%% | S1+S2 %.6g%% | S2 conditional %.6g%%" />
+      <Item id="selected_per_curve_6g_cumulative_6g_8caa0715" name="Selected per curve %.6g%% | cumulative %.6g%%" />
+      <Item id="solution_s_residual_6g_pp_s_80b3192b" name="Solution %s | residual %.6g pp%s" />
+      <Item id="lower_bound_sufficient_cf517509" name=" | lower bound sufficient" />
+      <Item id="per_curve_probability_size_71a03e06" name="Per-curve probability / size" />
+      <Item id="cumulative_probability_size_0bcf67ec" name="Cumulative probability / size" />
+      <Item id="cumulative_probability_curves_3769b2e1" name="Cumulative probability / curves" />
+      <Item id="s2_s1_missed_7420a12d" name="S2 | S1 missed" />
+      <Item id="factor_digits_496da08e" name="Factor digits" />
+      <Item id="factor_bits_15c9189c" name="Factor bits" />
+      <Item id="probability_de7e6ede" name="Probability (%)" />
+      <Item id="monitoring_disabled_9432cd8b" name="Monitoring disabled" />
+      <Item id="driver_0c1299f4" name="Driver " />
+      <Item id="cuda_driver_b9ddcb1e" name="CUDA (driver) " />
+      <Item id="sm_count_d07f07a8" name="SM count " />
+      <Item id="cuda_cores_bc6ad6f3" name="CUDA cores " />
+      <Item id="vram_d04c2bb5" name="VRAM " />
+      <Item id="unknown_sample_e6665d60" name="Unknown sample" />
+      <Item id="core_u_mhz_memory_u_mhz_s_4e959bf5" name="Core %u MHz  |  Memory %u MHz  |  %s" />
+      <Item id="gpu_load_30c049fb" name="GPU load" />
+      <Item id="memory_occupied_03c116ce" name="Memory occupied" />
+      <Item id="power_848e9656" name="Power" />
+      <Item id="core_frequency_63975ac8" name="Core frequency" />
+      <Item id="memory_frequency_b5886939" name="Memory frequency" />
+      <Item id="seconds_from_latest_sample_7e115cd0" name="Seconds from latest sample" />
+      <Item id="core_u_mhz_memory_u_mhz_65f86063" name="Core %u MHz  |  Memory %u MHz" />
+      <Item id="appearance_and_interaction_16ace6fc" name="Appearance and interaction" />
+      <Item id="dark_60acc53f" name="Dark" />
+      <Item id="light_dbcd5e7b" name="Light" />
+      <Item id="auto_dpi_38f46a94" name="Auto DPI" />
+      <Item id="font_size_6d784d95" name="Font size" />
+      <Item id="default_f12bc6ea" name="Default " />
+      <Item id="font_size_uses_logical_pixels_monitor_dpi__fad8e1e4" name="Font size uses logical pixels; monitor DPI still applies." />
+      <Item id="gpu_chart_time_range_19468e7b" name="GPU chart time range" />
+      <Item id="smooth_scrolling_f62e8490" name="Smooth scrolling" />
+      <Item id="allow_panels_outside_the_main_window_resta_972e3b76" name="Allow panels outside the main window (restart)" />
+      <Item id="by_default_panels_dock_and_float_inside_th_469a5486" name="By default panels dock and float inside the main window. Enable this to create independent windows across monitors." />
+      <Item id="show_system_title_bar_6e15fd01" name="Show system title bar" />
+      <Item id="when_hidden_drag_the_empty_top_bar_window__83f3723f" name="When hidden, drag the empty top bar; window controls and resizing remain available." />
+      <Item id="action_toasts_errors_always_shown_2ef6996e" name="Action toasts (errors always shown)" />
+      <Item id="ely_pet_1100b952" name="Ely pet" />
+      <Item id="animate_pet_d53550fa" name="Animate pet" />
+      <Item id="ely_skin_67bfe14c" name="ELY skin" />
+      <Item id="ely_skin_cf778253" name="ELY skin: " />
+      <Item id="save_ui_preferences_b7e00f2f" name="Save UI preferences" />
+      <Item id="appearance_and_layout_are_also_saved_on_a__9b4c60a6" name="Appearance and layout are also saved on a normal exit. Computation settings require their own Save workflow action." />
+      <Item id="navigation_and_right_tabs_c90aebf6" name="Navigation and right tabs" />
+      <Item id="hold_a_navigation_page_and_drag_to_reorder_244eb05e" name="Hold a navigation page and drag to reorder. Right-side pages share horizontal dock tabs; close a tab to return it to navigation. At least one central page remains." />
+      <Item id="restore_default_layout_c8df250c" name="Restore default layout" />
+      <Item id="save_layout_26ac39b1" name="Save layout" />
+      <Item id="workflow_2e2d5c56" name="Workflow" />
+      <Item id="browse_workflow_f6379582" name="Browse workflow" />
+      <Item id="open_workflow_8d5f0289" name="Open workflow" />
+      <Item id="open_reload_002e2127" name="Open / reload" />
+      <Item id="worker_settings_bd2e3420" name="Worker settings" />
+      <Item id="stage1_executable_50902b05" name="Stage1 executable" />
+      <Item id="stage2_executable_3b6f5722" name="Stage2 executable" />
+      <Item id="choose_worker_executable_8157cf69" name="Choose worker executable" />
+      <Item id="browse_stage1_f27f693d" name="Browse Stage1" />
+      <Item id="browse_stage2_b26e15b0" name="Browse Stage2" />
+      <Item id="worker_count_0_follows_workflow_291604da" name="Worker count (0 follows workflow)" />
+      <Item id="apply_worker_settings_5e29a826" name="Apply worker settings" />
+      <Item id="worker_settings_applied_849be3a6" name="Worker settings applied" />
+      <Item id="edit_computation_settings_58236f98" name="Edit computation settings" />
+      <Item id="search_descriptions_or_keys_choose_a_field_92349d21" name="Search descriptions or keys; choose a field, stage its value, then save the workflow. Worker overrides keep their section." />
+      <Item id="search_settings_255b076d" name="Search settings" />
+      <Item id="shared_e3c4b39d" name="Shared" />
+      <Item id="worker_a67b04cd" name="Worker" />
+      <Item id="no_matching_existing_settings_5461a9f5" name="No matching existing settings" />
+      <Item id="section_dfca5da5" name="Section" />
+      <Item id="key_99a52df3" name="Key" />
+      <Item id="available_settings_018544ed" name="Available settings" />
+      <Item id="type_baaddf70" name="Type" />
+      <Item id="enabled_92c1cdfd" name="Enabled" />
+      <Item id="value_8e37953d" name="Value" />
+      <Item id="stage_edit_12101dc2" name="Stage edit" />
+      <Item id="save_workflow_e77921c8" name="Save workflow" />
+      <Item id="reload_discard_edits_bd211ada" name="Reload / discard edits" />
+      <Item id="unsaved_workflow_changes_01a66bda" name="Unsaved workflow changes" />
+      <Item id="results_219c4a6c" name="Results" />
+      <Item id="generator_1ade60ab" name="Generator" />
+      <Item id="probability_9c9be01b" name="Probability" />
+      <Item id="gpu_ea49523d" name="GPU" />
+      <Item id="settings_74a883a0" name="Settings" />
+      <Item id="components_a150ce22" name="Components" />
+      <Item id="normal_a7248eeb" name="Normal" />
+      <Item id="hover_c76ae86a" name="Hover" />
+      <Item id="pressed_57997acc" name="Pressed" />
+      <Item id="focus_9d3cab2b" name="Focus" />
+      <Item id="selected_57fd7a0c" name="Selected" />
+      <Item id="cjk_fallback_task_log_d147f3c4" name="CJK fallback / task log" />
+      <Item id="language_english" name="English" />
+      <Item id="language_chinese" name="中文" />
+      <Item id="message_0" name="Open a workflow TOML to manage workers." />
+      <Item id="message_1" name="Stop all workers before changing workflow." />
+      <Item id="message_2" name="Workflow opened; worker control requires queue-owner protocol 1." />
+      <Item id="message_3" name="Save or reload workflow changes before starting workers." />
+      <Item id="message_4" name="Stop workers and save workflow before generating." />
+      <Item id="message_5" name="Select a valid target worker." />
+      <Item id="message_6" name="CPU supports e/m0 with explicit curve count; GPU recommendation and m2/m3 are unavailable." />
+      <Item id="message_7" name="Cannot read target queue" />
+      <Item id="message_8" name="Preview expired; generate again." />
+      <Item id="message_9" name="Stop workers before editing workflow." />
+      <Item id="message_10" name="Stop workers before saving workflow." />
+      <Item id="message_11" name="Legacy GUI preferences are preserved; use v2 appearance controls." />
+      <Item id="message_12" name="Unsaved workflow edit" />
+      <Item id="message_13" name="Workflow changed externally; reload before saving." />
+      <Item id="message_14" name="UI preferences saved" />
+      <Item id="message_15" name="Moved to right tools" />
+      <Item id="message_16" name="Moved to left navigation" />
+      <Item id="message_17" name="Probability snapshot ready" />
+      <Item id="message_18" name="Snapshot CSV copied" />
+      <Item id="message_19" name="Keep at least one central page" />
+      <Item id="message_20" name="Running" />
+      <Item id="message_21" name="Idle" />
+      <Item id="message_22" name="Starting" />
+      <Item id="message_23" name="Stopping" />
+      <Item id="message_24" name="Stopped" />
+      <Item id="message_25" name="Restarting" />
+      <Item id="message_26" name="Error" />
+      <Item id="message_27" name="Queue empty" />
+      <Item id="message_28" name="QueueEmpty" />
+      <Item id="message_29" name="Worker executable missing: " />
+      <Item id="message_30" name="Worker lacks queue ownership protocol 1; install the updated worker: " />
+      <Item id="message_31" name="Preview ready: " />
+      <Item id="message_32" name="Queue appended: " />
+      <Item id="message_33" name="Worker started: " />
+      <Item id="message_34" name="Safe stop requested: " />
+      <Item id="message_35" name="GPU profile unavailable: " />
+      <Item id="start_allstop_safely_13031d69" name="Start allStop safely" />
+      <Item id="vram_u_u_mib_d_c_d3c46e35" name="VRAM %u / %u MiB | %d °C" />
+      <Item id="primary_action_font_offset_034fcf3c" name="Primary action font offset" />
+      <Item id="secondary_text_font_offset_78d4f12a" name="Secondary text font offset" />
+      <Item id="reset_offsets_1e6247e3" name="Reset offsets" />
+      <Item id="moved_right" name="Moved to right tabs" />
+      <Item id="moved_left" name="Returned to navigation" />
+      <Item id="reload_localization" name="Reload localization" />
+      <Item id="localization_reloaded" name="Localization reloaded" />
+    </Panel>
+  </Native-Langue>
+</EcmGui>

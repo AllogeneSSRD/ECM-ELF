@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / 'config/ecm_options.json'
@@ -57,16 +58,26 @@ def products():
     result = {'src/ecm/application/gui_v2/generated/ui_values.h': '\n'.join(lines) + '\n',
               'docs/GUI_V2_STATE_REFERENCE.md': '\n'.join(reference)}
     meta=['// Generated; edit config/ecm_options.json.', '#pragma once', 'namespace ecmgui_v2 {',
-          'struct BusinessOption { const char *table,*key,*domain,*english,*chinese,*type; bool has_min,has_max; double minimum,maximum; };',
+          'struct BusinessOption { const char *table,*key,*domain,*description_key,*type; bool has_min,has_max; double minimum,maximum; };',
           'inline constexpr BusinessOption business_options[]={']
     for option in full_schema['options']:
         if option['owner']=='gui': continue
         table='workers.1' if option['owner']=='worker' else 'shared' if option.get('shared_with') else option['owner']
-        strings=[table,option['key'],option.get('domain',''),*option['description'],option['type']]
+        strings=[table,option['key'],option.get('domain',''),'option_'+table+'_'+option['key'],option['type']]
         meta.append('    {'+','.join(json.dumps(v,ensure_ascii=True) for v in strings)+','+
                     ','.join(['true' if 'minimum' in option else 'false','true' if 'maximum' in option else 'false',str(option.get('minimum',0)),str(option.get('maximum',0))])+'},')
     meta+=['};','}']
     result['src/ecm/application/gui_v2/generated/business_options.h']='\n'.join(meta)+'\n'
+    # Configuration prose stays schema-owned, but is loaded as XML at runtime.
+    for language,index in [('english',0),('chineseSimplified',1)]:
+        root=ET.Element('EcmGui');native=ET.SubElement(root,'Native-Langue',name=language)
+        panel=ET.SubElement(native,'Panel',id='ui')
+        for option in full_schema['options']:
+            if option['owner']=='gui':continue
+            table='workers.1' if option['owner']=='worker' else 'shared' if option.get('shared_with') else option['owner']
+            ET.SubElement(panel,'Item',id='option_'+table+'_'+option['key'],name=option['description'][index])
+        ET.indent(root,space='  ')
+        result[f'src/ecm/application/gui_v2/localization/options.{language}.xml']='<?xml version="1.0" encoding="utf-8"?>\n<!-- Generated; edit config/ecm_options.json. -->\n'+ET.tostring(root,encoding='unicode')+'\n'
     hashes = {path: hashlib.sha256(value.encode()).hexdigest() for path, value in result.items()}
     for path in [SCHEMA, Path(__file__)]: hashes[path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     result['config/gui_v2_state.generated.json'] = json.dumps({'sha256': hashes}, indent=2) + '\n'

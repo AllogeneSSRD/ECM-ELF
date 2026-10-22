@@ -1,0 +1,321 @@
+<?xml version='1.0' encoding='utf-8'?>
+<EcmGui>
+  <Native-Langue name="chineseSimplified" filename="chineseSimplified.xml" version="1">
+    <Panel id="ui">
+      <Item id="view_dcc839a4" name="视图" />
+      <Item id="reset_layout_2e2a1784" name="重置布局" />
+      <Item id="inspector_da188e3b" name="检查区" />
+      <Item id="logs_ea2100dc" name="日志" />
+      <Item id="system_title_bar_285c57a3" name="系统标题栏" />
+      <Item id="language_a4fe6526" name="语言" />
+      <Item id="notices_00a05fce" name="通知" />
+      <Item id="minimize_d72e311c" name="最小化" />
+      <Item id="maximize_restore_ab9616c1" name="最大化/还原" />
+      <Item id="close_7d9eb7ac" name="关闭" />
+      <Item id="navigation_v2_navigation_fa8b2bee" name="导航###v2.navigation" />
+      <Item id="move_to_right_tabs_80d3c7aa" name="移到右侧标签页" />
+      <Item id="right_tabs_right_drop_3dd2712f" name="右侧标签页 &gt;###right-drop" />
+      <Item id="long_press_a_page_then_drag_here_to_open_i_bded2000" name="长按页面后拖到此处，在右侧标签页中显示。" />
+      <Item id="hold_and_drag_to_reorder_close_a_right_tab_ba726d0c" name="长按拖动排序；关闭右侧标签后自动返回。" />
+      <Item id="workspace_v2_workspace_ebc1df62" name="工作区###v2.workspace" />
+      <Item id="inspector_v2_inspector_dc966628" name="检查区###v2.inspector" />
+      <Item id="logs_v2_logs_a97cbe80" name="日志###v2.logs" />
+      <Item id="open_a_workflow_in_settings_55a5439d" name="请在设置中打开工作流。" />
+      <Item id="known_factors_f88cad5f" name="已知因子" />
+      <Item id="no_queued_task_b954d32f" name="暂无队列任务" />
+      <Item id="task_953516d5" name="任务：" />
+      <Item id="action_64cff131" name="操作" />
+      <Item id="state_a3b50c47" name="状态" />
+      <Item id="device_engine_1041b2a2" name="设备/引擎" />
+      <Item id="task_progress_e38b9d46" name="任务进度" />
+      <Item id="s_curve_1715c3bd" name="秒/曲线" />
+      <Item id="done_hits_8c10e20d" name="完成/命中" />
+      <Item id="stopping_a71ee1d4" name="停止中" />
+      <Item id="stop_cae7d57b" name="停止" />
+      <Item id="start_e4bb9f1e" name="启动" />
+      <Item id="multiple_workers_use_this_gpu_ad48019a" name="&#10;多个 worker 使用同一 GPU" />
+      <Item id="stage1_saves_a_checkpoint_stage2_finishes__f16b2dc8" name="Stage1 保存检查点后停止；Stage2 完成当前曲线后停止。" />
+      <Item id="stage2_finishes_its_current_curve_before_s_23f91e06" name="Stage2 完成当前曲线后停止。" />
+      <Item id="stage1_saves_a_checkpoint_before_stopping_fd6d9575" name="Stage1 保存检查点后停止。" />
+      <Item id="d_worker_s_are_running_stop_safely_and_exi_24856f27" name="当前 %d 个 worker 正在运行，安全停止后退出？" />
+      <Item id="stop_and_exit_enter_61229fa0" name="停止并退出（Enter）" />
+      <Item id="cancel_esc_862c2324" name="取消（Esc）" />
+      <Item id="stopping_workers_v2_stopping_53c8f7ae" name="正在停止 worker###v2.stopping" />
+      <Item id="up_to_1f_s_remaining_2d6201db" name="最多等待 %.1f s" />
+      <Item id="at_the_deadline_remaining_processes_are_te_0b34a996" name="到达时限后将终止剩余进程，可能没有最新检查点。" />
+      <Item id="finishing_current_curve_1fef6708" name="等待当前曲线完成" />
+      <Item id="waiting_for_checkpoint_b160a8dc" name="等待检查点" />
+      <Item id="stopped_1a4f630a" name="已停止" />
+      <Item id="force_exit_esc_8774db86" name="强制退出（Esc）" />
+      <Item id="task_curves_llu_llu_58f847e9" name="任务曲线数：%llu / %llu" />
+      <Item id="phase_s_batch_llu_llu_f8541ba8" name="阶段：%s | 批次 %llu / %llu" />
+      <Item id="open_worker_folder_5650fc18" name="打开 worker 目录" />
+      <Item id="worker_version_s_8c3af2a1" name="计算程序版本：%s" />
+      <Item id="unknown_b23a6a84" name="未知" />
+      <Item id="copy_command_9a01feec" name="复制命令" />
+      <Item id="no_worker_selected_947b0173" name="未选中 worker" />
+      <Item id="application_e7ad522e" name="程序" />
+      <Item id="s_s_s_s_s_curve_eta_s_6c18c89b" name="%s | %s | %s | %s 秒/曲线 | ETA %s" />
+      <Item id="phase_s_curve_llu_llu_221f1861" name="阶段：%s | 曲线 %llu / %llu" />
+      <Item id="stop_after_the_current_stage2_curve_d315e7ec" name="当前 Stage2 曲线完成后停止" />
+      <Item id="raw_output_f3dbf20a" name="原始输出" />
+      <Item id="follow_641d1ef6" name="跟随" />
+      <Item id="open_log_folder_4862da00" name="打开日志目录" />
+      <Item id="no_output_yet_7b7658d7" name="暂无输出" />
+      <Item id="worker_started_009c206a" name="已启动 worker " />
+      <Item id="keep_at_least_one_central_page_d623b219" name="至少保留一个中央页面" />
+      <Item id="workers_7a1ec9fe" name="计算任务" />
+      <Item id="start_all_1a7e6299" name="全部启动" />
+      <Item id="stop_safely_a2e61809" name="安全停止" />
+      <Item id="safe_stop_requested_waiting_for_checkpoint_c4c6c1c2" name="已请求安全停止，等待检查点边界" />
+      <Item id="curve_time_369c1d1c" name="曲线耗时" />
+      <Item id="sample_95a2f1ed" name="采样序号" />
+      <Item id="waiting_for_a_measured_curve_time_c1472a27" name="等待实测曲线耗时" />
+      <Item id="confirm_exit_v2_exit_bd0b37b2" name="退出确认###v2.exit" />
+      <Item id="no_valid_samples_a530710c" name="无有效采样" />
+      <Item id="design_system_4a866105" name="设计系统" />
+      <Item id="components_components_4cf95529" name="组件样板###components" />
+      <Item id="typography_typography_f1f32d35" name="文字与数据###typography" />
+      <Item id="a_quieter_workspace_4771eb10" name="清晰、专注的工作空间" />
+      <Item id="p2_component_preview_worker_controls_and_b_c9ecbaff" name="P2 组件预览。任务控制与业务页面将在后续阶段接入。" />
+      <Item id="appearance_3907fa7f" name="外观" />
+      <Item id="interface_scale_6ba5218d" name="界面缩放" />
+      <Item id="actions_ff8059dc" name="操作" />
+      <Item id="primary_action_da2eb576" name="主要操作" />
+      <Item id="secondary_62f2ccff" name="次要操作" />
+      <Item id="disabled_75081b59" name="不可用" />
+      <Item id="ghost_action_e10eaa58" name="轻量操作" />
+      <Item id="danger_action_7c4d0637" name="危险操作" />
+      <Item id="interaction_states_specimen_dea5e57a" name="交互状态（样板）" />
+      <Item id="form_selection_7eb99b4c" name="表单与选择" />
+      <Item id="preview_path_no_file_will_be_opened_or_sav_84370819" name="预览路径；不会打开或保存文件" />
+      <Item id="workflow_path_d11ce1d6" name="工作流路径" />
+      <Item id="enable_sample_option_option_0a4f69ac" name="启用样板选项###option" />
+      <Item id="primary_action_clicks_u_11904dd4" name="主要操作点击次数：%u" />
+      <Item id="status_vocabulary_ff0020b0" name="状态语义" />
+      <Item id="running_f4ccae29" name="运行" />
+      <Item id="waiting_6e293a8c" name="等待" />
+      <Item id="error_54a0e8c1" name="错误" />
+      <Item id="sample_states_no_active_workers_27fa1752" name="以上为状态样板，当前未连接 worker。" />
+      <Item id="type_precision_8f686fc3" name="文字与精确数据" />
+      <Item id="body_segoe_ui_with_cjk_rescue_54f51b52" name="正文 / 微软雅黑与中文救援" />
+      <Item id="caption_13_logical_px_use_tab_to_inspect_k_05a5bddf" name="辅助文字 / 13 逻辑像素。使用 Tab 查看键盘焦点。" />
+      <Item id="giant_batch_adc2a626" name="Giant 批次" />
+      <Item id="batch_320b5d80" name="批次" />
+      <Item id="phase_remaining_1f_s_ff3ab5fe" name="阶段剩余 %.1f s" />
+      <Item id="phase_remaining_94bab929" name="阶段剩余 --" />
+      <Item id="1f_resumed_be6aa774" name="%.1f%% (已恢复)" />
+      <Item id="waiting_for_progress_bcc4332d" name="等待首次进度" />
+      <Item id="phase_s_curve_llu_llu_batch_llu_llu_b1_llu_035650b1" name="阶段 %s | 曲线 %llu/%llu | 批次 %llu/%llu | B1=%llu B2=%llu" />
+      <Item id="published_results_8d015a9f" name="已发布结果" />
+      <Item id="all_statuses_8ee57323" name="全部状态" />
+      <Item id="all_stages_e7974b8d" name="全部阶段" />
+      <Item id="search_49c266ba" name="搜索" />
+      <Item id="source_0e570ca6" name="来源" />
+      <Item id="all_a52ace42" name="全部" />
+      <Item id="select_visible_70f58736" name="选择可见行" />
+      <Item id="clear_selection_cea4d2e0" name="清除选择" />
+      <Item id="copy_original_json_checksum_55c6ba36" name="复制原始 JSON / checksum" />
+      <Item id="zu_zu_selected_zu_7c9cde22" name="%zu / %zu | 已选择 %zu" />
+      <Item id="s_s_invalid_zu_pending_zu_0f1d8942" name="%s: %s | 无效 %zu | 待完成 %zu" />
+      <Item id="select_2a78025d" name="选择" />
+      <Item id="status_920e413c" name="状态" />
+      <Item id="target_978354db" name="目标" />
+      <Item id="curves_4c2c115c" name="曲线数" />
+      <Item id="model_5e2c614c" name="曲线" />
+      <Item id="time_33b93476" name="时间" />
+      <Item id="factors_d7cf50c1" name="因子" />
+      <Item id="stage_de838855" name="阶段" />
+      <Item id="task_generator_7faad54f" name="任务生成器" />
+      <Item id="target_worker_b23c5ad4" name="目标 worker" />
+      <Item id="gpu_recommended_curves_9c4a8ce8" name="GPU 推荐曲线数" />
+      <Item id="blocks_per_sm_1e2788f4" name="每 SM 块数" />
+      <Item id="fixed_curves_6258ac95" name="固定曲线数" />
+      <Item id="b1_override_empty_keeps_input_0765337e" name="B1 覆盖（留空保留输入）" />
+      <Item id="b2_override_0_disables_d7b40a2b" name="B2 覆盖（0 关闭）" />
+      <Item id="save_pattern_dcf76fd4" name="保存文件名" />
+      <Item id="filters_and_ordering_9cfc39f8" name="筛选与排序" />
+      <Item id="deduplicate_f0dd6a72" name="去重" />
+      <Item id="descending_79479a6c" name="降序" />
+      <Item id="sort_known_factors_3b6981b8" name="排序已知因子" />
+      <Item id="sort_keys_4c73617e" name="排序键" />
+      <Item id="skip_curves_8d9ed55f" name="跳过曲线数" />
+      <Item id="min_exponent_1_any_8a0bccc6" name="最小指数（-1 不限制）" />
+      <Item id="max_exponent_2c38acf2" name="最大指数" />
+      <Item id="min_input_curves_e78af800" name="输入最小曲线数" />
+      <Item id="max_input_curves_1901b341" name="输入最大曲线数" />
+      <Item id="set_assignment_n_a_5ff15e72" name="设置任务标识 N/A" />
+      <Item id="generate_preview_f82333b8" name="生成预览" />
+      <Item id="append_to_queue_170d8d59" name="追加到队列" />
+      <Item id="s_read_d_duplicates_d_ae76c89e" name="%s | 读取 %d | 重复 %d" />
+      <Item id="current_preview_40f8da45" name="当前预览" />
+      <Item id="expired_preview_37dfc620" name="已失效预览" />
+      <Item id="copy_preview_311cbd9b" name="复制预览" />
+      <Item id="ecm_probability_43508814" name="ECM 概率" />
+      <Item id="parameters_e68b36b1" name="参数" />
+      <Item id="charts_and_snapshot_94e2f72c" name="图表与快照" />
+      <Item id="calculate_snapshot_a22049db" name="计算快照" />
+      <Item id="probability_snapshot_ready_64bbce9f" name="概率快照已就绪" />
+      <Item id="copy_snapshot_csv_bea99b05" name="复制快照 CSV" />
+      <Item id="snapshot_csv_copied_a15d488a" name="已复制快照 CSV" />
+      <Item id="factor_size_f27e87f9" name="因子大小" />
+      <Item id="decimal_digits_b45d60b0" name="十进制位数" />
+      <Item id="stage_2_enabled_8976ac2a" name="启用 Stage2" />
+      <Item id="use_b2_b1_ratio_5f0b38ea" name="使用 B2/B1 比率" />
+      <Item id="custom_494ca78f" name="自定义" />
+      <Item id="use_stage1_empirical_calibration_b45c1f82" name="使用 Stage1 经验标定口径" />
+      <Item id="torsion_order_is_not_d_eff_edwards_z2xz8_m_917a40eb" name="挠群阶不等于 D_eff。Edwards Z2xZ8 的 Stage1 经验 D=26.4081；相对 Suyama 归一约 29.0，是联合模型启发值，未经独立 Stage2 标定。" />
+      <Item id="combined_8036ed37" name="联合" />
+      <Item id="stage_2_conditional_18266507" name="Stage2 条件概率" />
+      <Item id="forward_f1c65e14" name="正算" />
+      <Item id="target_probability_ff15b758" name="目标概率（%）" />
+      <Item id="cumulative_target_b5b1c689" name="累计目标" />
+      <Item id="plot_range_6e66c843" name="绘图范围" />
+      <Item id="size_min_0426839f" name="大小下限" />
+      <Item id="size_max_a05f6c92" name="大小上限" />
+      <Item id="auto_curves_range_f85bb5f0" name="自动曲线数范围" />
+      <Item id="curves_max_eea3d4c0" name="最大曲线数" />
+      <Item id="set_parameters_then_calculate_a_snapshot_t_6f098e9f" name="请先设置参数并计算快照，再查看曲线。" />
+      <Item id="parameters_changed_the_charts_and_csv_stil_d32359e5" name="参数已修改。图表与 CSV 仍对应上次快照，请重新计算以更新。" />
+      <Item id="snapshot_b1_0f_b2_0f_curves_0f_bits_6g_b2ea4d63" name="快照 B1=%.0f B2=%.0f 曲线数=%.0f 二进制位数=%.6g" />
+      <Item id="s1_6g_s1_s2_6g_s2_conditional_6g_88ed90d8" name="S1 %.6g%% | S1+S2 %.6g%% | S2 条件概率 %.6g%%" />
+      <Item id="selected_per_curve_6g_cumulative_6g_8caa0715" name="当前单曲线概率 %.6g%% | 累计概率 %.6g%%" />
+      <Item id="solution_s_residual_6g_pp_s_80b3192b" name="求解值 %s | 残差 %.6g 个百分点%s" />
+      <Item id="lower_bound_sufficient_cf517509" name=" | 下限已满足目标" />
+      <Item id="per_curve_probability_size_71a03e06" name="单曲线概率 / 因子大小" />
+      <Item id="cumulative_probability_size_0bcf67ec" name="累计概率 / 因子大小" />
+      <Item id="cumulative_probability_curves_3769b2e1" name="累计概率 / 曲线数" />
+      <Item id="s2_s1_missed_7420a12d" name="S2 | S1 未命中" />
+      <Item id="factor_digits_496da08e" name="因子十进制位数" />
+      <Item id="factor_bits_15c9189c" name="因子二进制位数" />
+      <Item id="probability_de7e6ede" name="概率（%）" />
+      <Item id="monitoring_disabled_9432cd8b" name="监控已禁用" />
+      <Item id="driver_0c1299f4" name="驱动 " />
+      <Item id="cuda_driver_b9ddcb1e" name="CUDA（驱动支持） " />
+      <Item id="sm_count_d07f07a8" name="SM 数量 " />
+      <Item id="cuda_cores_bc6ad6f3" name="CUDA 核心数 " />
+      <Item id="vram_d04c2bb5" name="显存 " />
+      <Item id="unknown_sample_e6665d60" name="采样未知" />
+      <Item id="core_u_mhz_memory_u_mhz_s_4e959bf5" name="核心 %u MHz  |  显存 %u MHz  |  %s" />
+      <Item id="gpu_load_30c049fb" name="GPU 利用率" />
+      <Item id="memory_occupied_03c116ce" name="显存占用" />
+      <Item id="power_848e9656" name="功耗" />
+      <Item id="core_frequency_63975ac8" name="核心频率" />
+      <Item id="memory_frequency_b5886939" name="显存频率" />
+      <Item id="seconds_from_latest_sample_7e115cd0" name="距最新采样秒数" />
+      <Item id="core_u_mhz_memory_u_mhz_65f86063" name="核心 %u MHz  |  显存 %u MHz" />
+      <Item id="appearance_and_interaction_16ace6fc" name="外观与交互" />
+      <Item id="dark_60acc53f" name="深色" />
+      <Item id="light_dbcd5e7b" name="浅色" />
+      <Item id="auto_dpi_38f46a94" name="自动 DPI" />
+      <Item id="font_size_6d784d95" name="字体大小" />
+      <Item id="default_f12bc6ea" name="默认 " />
+      <Item id="font_size_uses_logical_pixels_monitor_dpi__fad8e1e4" name="字号使用逻辑像素，仍按显示器 DPI 缩放。" />
+      <Item id="gpu_chart_time_range_19468e7b" name="GPU 图表时间范围" />
+      <Item id="smooth_scrolling_f62e8490" name="平滑滚动" />
+      <Item id="allow_panels_outside_the_main_window_resta_972e3b76" name="允许面板移到应用窗口外（重启生效）" />
+      <Item id="by_default_panels_dock_and_float_inside_th_469a5486" name="默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。" />
+      <Item id="show_system_title_bar_6e15fd01" name="显示系统标题栏" />
+      <Item id="when_hidden_drag_the_empty_top_bar_window__83f3723f" name="隐藏后可拖动顶部空白区域，仍可缩放并使用最小化、最大化和关闭按钮。" />
+      <Item id="action_toasts_errors_always_shown_2ef6996e" name="操作轻提示（错误仍显示）" />
+      <Item id="ely_pet_1100b952" name="Ely 宠物" />
+      <Item id="animate_pet_d53550fa" name="宠物动画" />
+      <Item id="ely_skin_67bfe14c" name="ELY 皮肤" />
+      <Item id="ely_skin_cf778253" name="ELY 皮肤：" />
+      <Item id="save_ui_preferences_b7e00f2f" name="保存界面偏好" />
+      <Item id="appearance_and_layout_are_also_saved_on_a__9b4c60a6" name="正常退出也会保存外观与布局；计算设置必须单独点击“保存工作流”。" />
+      <Item id="navigation_and_right_tabs_c90aebf6" name="导航与右侧标签页" />
+      <Item id="hold_a_navigation_page_and_drag_to_reorder_244eb05e" name="长按导航页面拖动排序。右侧页面共用横排停靠标签；关闭标签后自动回到导航，至少保留一个中央页面。" />
+      <Item id="restore_default_layout_c8df250c" name="恢复默认布局" />
+      <Item id="save_layout_26ac39b1" name="保存布局" />
+      <Item id="workflow_2e2d5c56" name="工作流" />
+      <Item id="browse_workflow_f6379582" name="选择工作流" />
+      <Item id="open_workflow_8d5f0289" name="打开工作流" />
+      <Item id="open_reload_002e2127" name="打开 / 重载" />
+      <Item id="worker_settings_bd2e3420" name="Worker 设置" />
+      <Item id="stage1_executable_50902b05" name="Stage1 计算程序" />
+      <Item id="stage2_executable_3b6f5722" name="Stage2 计算程序" />
+      <Item id="choose_worker_executable_8157cf69" name="选择计算程序" />
+      <Item id="browse_stage1_f27f693d" name="选择 Stage1" />
+      <Item id="browse_stage2_b26e15b0" name="选择 Stage2" />
+      <Item id="worker_count_0_follows_workflow_291604da" name="worker 数量（0 跟随工作流）" />
+      <Item id="apply_worker_settings_5e29a826" name="应用 worker 设置" />
+      <Item id="worker_settings_applied_849be3a6" name="已应用 worker 设置" />
+      <Item id="edit_computation_settings_58236f98" name="编辑计算设置" />
+      <Item id="search_descriptions_or_keys_choose_a_field_92349d21" name="按说明或配置键搜索；选择字段、暂存数值，再保存工作流。已有 worker 覆盖项保留原分区。" />
+      <Item id="search_settings_255b076d" name="搜索设置" />
+      <Item id="shared_e3c4b39d" name="共用" />
+      <Item id="worker_a67b04cd" name="Worker" />
+      <Item id="no_matching_existing_settings_5461a9f5" name="没有匹配的现有设置" />
+      <Item id="section_dfca5da5" name="配置节" />
+      <Item id="key_99a52df3" name="配置键" />
+      <Item id="available_settings_018544ed" name="可用设置" />
+      <Item id="type_baaddf70" name="类型" />
+      <Item id="enabled_92c1cdfd" name="启用" />
+      <Item id="value_8e37953d" name="数值" />
+      <Item id="stage_edit_12101dc2" name="暂存编辑" />
+      <Item id="save_workflow_e77921c8" name="保存工作流" />
+      <Item id="reload_discard_edits_bd211ada" name="重载 / 放弃修改" />
+      <Item id="unsaved_workflow_changes_01a66bda" name="工作流有未保存修改" />
+      <Item id="results_219c4a6c" name="结果" />
+      <Item id="generator_1ade60ab" name="生成器" />
+      <Item id="probability_9c9be01b" name="概率" />
+      <Item id="gpu_ea49523d" name="GPU" />
+      <Item id="settings_74a883a0" name="设置" />
+      <Item id="components_a150ce22" name="组件" />
+      <Item id="normal_a7248eeb" name="常态" />
+      <Item id="hover_c76ae86a" name="悬停" />
+      <Item id="pressed_57997acc" name="按下" />
+      <Item id="focus_9d3cab2b" name="焦点" />
+      <Item id="selected_57fd7a0c" name="选中" />
+      <Item id="cjk_fallback_task_log_d147f3c4" name="中文救援 / 任务日志" />
+      <Item id="language_english" name="English" />
+      <Item id="language_chinese" name="中文" />
+      <Item id="message_0" name="请在设置中打开工作流 TOML，再管理计算任务。" />
+      <Item id="message_1" name="请先停止所有任务，再切换工作流。" />
+      <Item id="message_2" name="已打开工作流；计算程序须支持队列拥有权协议 1。" />
+      <Item id="message_3" name="请先保存或重载工作流修改，再启动任务。" />
+      <Item id="message_4" name="请先停止任务并保存工作流，再生成队列。" />
+      <Item id="message_5" name="请选择有效的目标 worker。" />
+      <Item id="message_6" name="CPU 仅支持 e/m0 与显式曲线数；无法使用 GPU 推荐和 m2/m3。" />
+      <Item id="message_7" name="无法读取目标队列" />
+      <Item id="message_8" name="预览已失效，请重新生成。" />
+      <Item id="message_9" name="请先停止任务，再编辑工作流。" />
+      <Item id="message_10" name="请先停止任务，再保存工作流。" />
+      <Item id="message_11" name="旧 GUI 偏好保持不变，请使用 v2 外观设置。" />
+      <Item id="message_12" name="工作流修改尚未保存" />
+      <Item id="message_13" name="工作流已被外部修改，请重载后再保存。" />
+      <Item id="message_14" name="已保存界面偏好" />
+      <Item id="message_15" name="已移到右侧工具栏" />
+      <Item id="message_16" name="已移回左侧导航" />
+      <Item id="message_17" name="概率快照已就绪" />
+      <Item id="message_18" name="已复制快照 CSV" />
+      <Item id="message_19" name="至少保留一个中央页面" />
+      <Item id="message_20" name="运行中" />
+      <Item id="message_21" name="空闲" />
+      <Item id="message_22" name="启动中" />
+      <Item id="message_23" name="停止中" />
+      <Item id="message_24" name="已停止" />
+      <Item id="message_25" name="重启中" />
+      <Item id="message_26" name="错误" />
+      <Item id="message_27" name="队列为空" />
+      <Item id="message_28" name="队列为空" />
+      <Item id="message_29" name="找不到计算程序：" />
+      <Item id="message_30" name="计算程序不支持队列拥有权协议 1，请更新：" />
+      <Item id="message_31" name="预览已就绪：" />
+      <Item id="message_32" name="已追加队列：" />
+      <Item id="message_33" name="已启动 worker：" />
+      <Item id="message_34" name="已请求安全停止：" />
+      <Item id="message_35" name="无法获取 GPU 配置：" />
+      <Item id="start_allstop_safely_13031d69" name="全部启动安全停止" />
+      <Item id="vram_u_u_mib_d_c_d3c46e35" name="显存 %u / %u MiB | %d °C" />
+      <Item id="primary_action_font_offset_034fcf3c" name="主按钮字号偏移" />
+      <Item id="secondary_text_font_offset_78d4f12a" name="次要文本字号偏移" />
+      <Item id="reset_offsets_1e6247e3" name="重置字号偏移" />
+      <Item id="moved_right" name="已移到右侧标签页" />
+      <Item id="moved_left" name="已返回左侧导航" />
+      <Item id="reload_localization" name="重新载入语言文件" />
+      <Item id="localization_reloaded" name="已重新载入语言文件" />
+    </Panel>
+  </Native-Langue>
+</EcmGui>

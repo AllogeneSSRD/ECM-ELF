@@ -2,10 +2,13 @@
 
 namespace ecmgui_v2::ui {
 namespace {
+int primary_offset=UiValues{}.ui_primary_font_offset,secondary_offset=UiValues{}.ui_secondary_font_offset;
 ImVec4 color(unsigned hex, float alpha = 1) {
     return {((hex >> 16) & 255) / 255.f, ((hex >> 8) & 255) / 255.f, (hex & 255) / 255.f, alpha};
 }
 }
+float primary_font_size(float body_size){return std::max(8.f,body_size+primary_offset);}
+float secondary_font_size(float body_size){return std::max(8.f,body_size+secondary_offset);}
 Palette palette(bool light) {
     if (light) return {
         color(0xfcfaf7), color(0xffffff), color(0xf6f4f1), color(0xffffff),
@@ -21,6 +24,7 @@ Palette palette(bool light) {
         color(0x182c1f), color(0x342611), color(0x3a1d1b), color(0x19273a), color(0x4eb9ad), color(0xa998dd)};
 }
 void apply_theme(const Settings& settings) {
+    primary_offset=settings.primary_offset;secondary_offset=settings.secondary_offset;
     ImGuiStyle style{};
     if (settings.light) ImGui::StyleColorsLight(&style); else ImGui::StyleColorsDark(&style);
     const auto p = palette(settings.light);

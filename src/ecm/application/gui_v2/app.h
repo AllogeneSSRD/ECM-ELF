@@ -2,6 +2,7 @@
 #include "ui_state.h"
 #include "gpu_details.h"
 #include "ui/widgets.h"
+#include "ui/chart.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
 #include "../gui/results.h"
@@ -50,6 +51,8 @@ public:
         size_t charts=0;
         bool hovered=false;
         std::string tooltip,basic,usage,power,clocks;
+        ui::ChartMetrics chart_metrics[3];
+        float height=0;
     };
     std::map<int,GpuPresentation> gpu_presentations;
     std::string status, config_path;
@@ -72,6 +75,8 @@ public:
     bool right_container_present=false;
     ImVec2 settings_search_control{};
     ImVec2 font_size_control{},exit_controls[3]{},worker_speed_min{},worker_speed_max{};
+    ImVec2 primary_offset_control{},secondary_offset_control{};
+    float primary_font_height=0,secondary_button_font_height=0,secondary_text_font_height=0;
     size_t worker_speed_samples=0,workspace_chart_count=0;
     ImVec2 pet_skin_controls[4]{};
     std::map<int,ImVec2> worker_select_controls,worker_action_controls,log_tab_controls;
@@ -83,6 +88,9 @@ public:
     float log_line_pitch=0,log_font_height=0,log_view_height=0;
     float worker_table_scroll_max_y=0,worker_table_height=0,worker_table_content_height=0;
     float worker_table_required_height=0,worker_table_data_height=0;
+    float worker_toolbar_height=0,worker_row_height=0,worker_button_height=0;
+    float worker_table_scroll_max_x=0,worker_field_overflow=0;
+    bool worker_flexible=false;
     size_t worker_table_rows=0;
     float body_font_height=0,body_glyph_height=0,log_glyph_height=0;
     bool log_uses_body=false;

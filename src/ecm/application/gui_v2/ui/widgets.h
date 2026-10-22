@@ -2,10 +2,11 @@
 #include "fonts.h"
 
 namespace ecmgui_v2::ui {
-enum class ButtonKind { Primary, Secondary, Ghost, Danger };
+enum class ButtonKind { Primary, Secondary, Ghost, Danger, Selected };
 enum class Status { Success, Warning, Danger, Info };
 enum class Icon { Grid, Sliders, Check, Folder };
-bool button(const char* id, const char* label, ButtonKind kind, const Palette& p, float scale, bool disabled = false);
+bool button(const char* id, const char* label, ButtonKind kind, const Palette& p, float scale, bool disabled = false,float* rendered_size=nullptr,bool compact=false);
+void secondary_text(const char* text,float* rendered_size=nullptr);
 void status_badge(const char* label, Status status, const Palette& p, float scale);
 void section_header(const char* title, const char* detail, const Fonts& fonts, const Palette& p);
 void form_row(const char* label, const char* id, char* value, size_t capacity, float scale);

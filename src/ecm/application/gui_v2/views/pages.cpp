@@ -14,7 +14,6 @@
 
 namespace ecmgui_v2 {
 namespace {
-const char* tr(bool zh,const char* en,const char* cn) { return zh?cn:en; }
 bool text(const char* label,std::string& value,size_t limit=1024) {
     std::vector<char> buffer(std::max(limit,value.size()+1)); std::copy(value.begin(),value.end(),buffer.begin());
     if (!ImGui::InputText(label,buffer.data(),buffer.size())) return false;
@@ -50,13 +49,13 @@ bool chips(const char* id,int& value,const std::vector<const char*>& labels,ImVe
 }
 void App::draw_results(bool zh) {
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
-    ImGui::TextUnformatted(tr(zh,"Published results","已发布结果"));
+    ImGui::TextUnformatted(ecmgui_v2::ui::text("published_results_8d015a9f",zh));
     const char* statuses[]{"All","F","NF"}; int status_index=result_filter.status=="F"?1:result_filter.status=="NF"?2:0;
-    if (chips("result-status",status_index,{tr(zh,"All statuses","全部状态"),"F","NF"},result_chips)) result_filter.status=status_index?statuses[status_index]:"";
-    chips("result-stage",result_filter.stage,{tr(zh,"All stages","全部阶段"),"Stage 1","Stage 2"});
-    ImGui::InputText(tr(zh,"Search","搜索"),result_search,sizeof(result_search)); result_filter.search=result_search;
-    if (ImGui::BeginCombo(tr(zh,"Source","来源"),result_filter.source<0?tr(zh,"All","全部"):results.files()[static_cast<size_t>(result_filter.source)].path.c_str())) {
-        if (ImGui::Selectable(tr(zh,"All","全部"),result_filter.source<0)) result_filter.source=-1;
+    if (chips("result-status",status_index,{ecmgui_v2::ui::text("all_statuses_8ee57323",zh),"F","NF"},result_chips)) result_filter.status=status_index?statuses[status_index]:"";
+    chips("result-stage",result_filter.stage,{ecmgui_v2::ui::text("all_stages_e7974b8d",zh),"Stage 1","Stage 2"});
+    ImGui::InputText(ecmgui_v2::ui::text("search_49c266ba",zh),result_search,sizeof(result_search)); result_filter.search=result_search;
+    if (ImGui::BeginCombo(ecmgui_v2::ui::text("source_0e570ca6",zh),result_filter.source<0?ecmgui_v2::ui::text("all_a52ace42",zh):results.files()[static_cast<size_t>(result_filter.source)].path.c_str())) {
+        if (ImGui::Selectable(ecmgui_v2::ui::text("all_a52ace42",zh),result_filter.source<0)) result_filter.source=-1;
         for(size_t i=0;i<results.files().size();++i) if(ImGui::Selectable(results.files()[i].path.c_str(),result_filter.source==static_cast<int>(i))) result_filter.source=static_cast<int>(i);
         ImGui::EndCombo();
     }
@@ -68,18 +67,18 @@ void App::draw_results(bool zh) {
         result_view_dirty=false;result_view_signature=signature;
     }
     const auto& indices=result_indices;const auto& visible=visible_result_ids;
-    if(ImGui::Button(tr(zh,"Select visible","选择可见行"))) selected_results=visible;
-    ImGui::SameLine(); if(ImGui::Button(tr(zh,"Clear selection","清除选择")))selected_results.clear();
-    ImGui::SameLine(); if(ImGui::Button(tr(zh,"Copy original JSON / checksum","复制原始 JSON / checksum"))) {
+    if(ImGui::Button(ecmgui_v2::ui::text("select_visible_70f58736",zh))) selected_results=visible;
+    ImGui::SameLine(); if(ImGui::Button(ecmgui_v2::ui::text("clear_selection_cea4d2e0",zh)))selected_results.clear();
+    ImGui::SameLine(); if(ImGui::Button(ecmgui_v2::ui::text("copy_original_json_checksum_55c6ba36",zh))) {
         std::vector<size_t> copy; for(auto i:indices)if(selected_results.count(results.rows()[i].id))copy.push_back(i);
         ImGui::SetClipboardText(results.copy_text(copy).c_str());
     }
-    ImGui::Text(tr(zh,"%zu / %zu | selected %zu","%zu / %zu | 已选择 %zu"),indices.size(),results.rows().size(),selected_results.size());
+    ImGui::Text(ecmgui_v2::ui::text("zu_zu_selected_zu_7c9cde22",zh),indices.size(),results.rows().size(),selected_results.size());
     for(const auto& f:results.files()) if(!f.error.empty()||f.invalid_lines||f.pending_lines)
-        ImGui::TextWrapped(tr(zh,"%s: %s | invalid %zu | pending %zu","%s: %s | 无效 %zu | 待完成 %zu"),f.path.c_str(),f.error.c_str(),f.invalid_lines,f.pending_lines);
+        ImGui::TextWrapped(ecmgui_v2::ui::text("s_s_invalid_zu_pending_zu_0f1d8942",zh),f.path.c_str(),f.error.c_str(),f.invalid_lines,f.pending_lines);
     if(ImGui::BeginTable("results",11,ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable,ImVec2(0,ImGui::GetContentRegionAvail().y))) {
         result_scroll=ImGui::GetScrollY();result_wheel=ImVec2(ImGui::GetWindowPos().x+80,ImGui::GetWindowPos().y+ImGui::GetWindowSize().y*.6f);
-        for(const char* title:{tr(zh,"Select","选择"),tr(zh,"Status","状态"),tr(zh,"Target","目标"),"B1","B2",tr(zh,"Curves","曲线数"),tr(zh,"Model","曲线"),tr(zh,"Time","时间"),tr(zh,"Factors","因子"),tr(zh,"Stage","阶段"),tr(zh,"Source","来源")}) ImGui::TableSetupColumn(title,ImGuiTableColumnFlags_WidthFixed,110);
+        for(const char* title:{ecmgui_v2::ui::text("select_2a78025d",zh),ecmgui_v2::ui::text("status_920e413c",zh),ecmgui_v2::ui::text("target_978354db",zh),"B1","B2",ecmgui_v2::ui::text("curves_4c2c115c",zh),ecmgui_v2::ui::text("model_5e2c614c",zh),ecmgui_v2::ui::text("time_33b93476",zh),ecmgui_v2::ui::text("factors_d7cf50c1",zh),ecmgui_v2::ui::text("stage_de838855",zh),ecmgui_v2::ui::text("source_0e570ca6",zh)}) ImGui::TableSetupColumn(title,ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableSetupScrollFreeze(2,1);ImGui::TableHeadersRow(); ImGuiListClipper clip;clip.Begin(static_cast<int>(indices.size()));
         while(clip.Step())for(int j=clip.DisplayStart;j<clip.DisplayEnd;++j) {
             const auto& row=results.rows()[indices[static_cast<size_t>(j)]]; ImGui::PushID(row.id.c_str());ImGui::TableNextRow();ImGui::TableNextColumn();
@@ -128,129 +127,131 @@ bool App::apply_generator() {
     }catch(const std::exception& e){status=e.what();return false;}
 }
 void App::draw_generator(bool zh) {
-    ImGui::TextUnformatted(tr(zh,"Task generator","任务生成器"));
+    ImGui::TextUnformatted(ecmgui_v2::ui::text("task_generator_7faad54f",zh));
     ImGui::InputTextMultiline("ECM / ECM2",gen_input,sizeof(gen_input),ImVec2(-1,140));
-    ImGui::InputInt(tr(zh,"Target worker","目标 worker"),&gen_worker);
+    ImGui::InputInt(ecmgui_v2::ui::text("target_worker_b23c5ad4",zh),&gen_worker);
     int curve=gen_options.curve_type=="e"?0:gen_options.curve_type=="m0"?1:gen_options.curve_type=="m2"?2:3;
     if(chips("generator-curve",curve,{"Edwards (e)","Montgomery PARAM0","Montgomery PARAM2","Montgomery PARAM3"}))gen_options.curve_type=std::vector<std::string>{"e","m0","m2","m3"}[curve];
-    ImGui::Checkbox(tr(zh,"GPU recommended curves","GPU 推荐曲线数"),&gen_options.use_recommended);
-    if(gen_options.use_recommended)ImGui::InputInt(tr(zh,"Blocks per SM","每 SM 块数"),&gen_options.blocks_per_sm);
-    else number(tr(zh,"Fixed curves","固定曲线数"),gen_options.curves_fixed);
-    ImGui::InputText(tr(zh,"B1 override (empty keeps input)","B1 覆盖（留空保留输入）"),gen_b1,sizeof(gen_b1));
-    ImGui::InputText(tr(zh,"B2 override (0 disables)","B2 覆盖（0 关闭）"),gen_b2,sizeof(gen_b2));
-    ImGui::InputText(tr(zh,"Save pattern","保存文件名"),gen_pattern,sizeof(gen_pattern));
-    if(ImGui::CollapsingHeader(tr(zh,"Filters and ordering","筛选与排序"))) {
-        ImGui::Checkbox(tr(zh,"Deduplicate","去重"),&gen_options.dedup);ImGui::Checkbox(tr(zh,"Descending","降序"),&gen_options.sort_desc);
-        ImGui::Checkbox(tr(zh,"Sort known factors","排序已知因子"),&gen_options.sort_factors);text(tr(zh,"Sort keys","排序键"),gen_options.sort_by);
-        number(tr(zh,"Skip curves","跳过曲线数"),gen_options.skip_curves);number(tr(zh,"Min exponent (-1: any)","最小指数（-1 不限制）"),gen_options.min_n);number(tr(zh,"Max exponent","最大指数"),gen_options.max_n);
-        number(tr(zh,"Min input curves","输入最小曲线数"),gen_options.min_curves);number(tr(zh,"Max input curves","输入最大曲线数"),gen_options.max_curves);ImGui::Checkbox(tr(zh,"Set assignment N/A","设置任务标识 N/A"),&gen_options.set_has_na);
+    ImGui::Checkbox(ecmgui_v2::ui::text("gpu_recommended_curves_9c4a8ce8",zh),&gen_options.use_recommended);
+    if(gen_options.use_recommended)ImGui::InputInt(ecmgui_v2::ui::text("blocks_per_sm_1e2788f4",zh),&gen_options.blocks_per_sm);
+    else number(ecmgui_v2::ui::text("fixed_curves_6258ac95",zh),gen_options.curves_fixed);
+    ImGui::InputText(ecmgui_v2::ui::text("b1_override_empty_keeps_input_0765337e",zh),gen_b1,sizeof(gen_b1));
+    ImGui::InputText(ecmgui_v2::ui::text("b2_override_0_disables_d7b40a2b",zh),gen_b2,sizeof(gen_b2));
+    ImGui::InputText(ecmgui_v2::ui::text("save_pattern_dcf76fd4",zh),gen_pattern,sizeof(gen_pattern));
+    if(ImGui::CollapsingHeader(ecmgui_v2::ui::text("filters_and_ordering_9cfc39f8",zh))) {
+        ImGui::Checkbox(ecmgui_v2::ui::text("deduplicate_f0dd6a72",zh),&gen_options.dedup);ImGui::Checkbox(ecmgui_v2::ui::text("descending_79479a6c",zh),&gen_options.sort_desc);
+        ImGui::Checkbox(ecmgui_v2::ui::text("sort_known_factors_3b6981b8",zh),&gen_options.sort_factors);text(ecmgui_v2::ui::text("sort_keys_4c73617e",zh),gen_options.sort_by);
+        number(ecmgui_v2::ui::text("skip_curves_8d9ed55f",zh),gen_options.skip_curves);number(ecmgui_v2::ui::text("min_exponent_1_any_8a0bccc6",zh),gen_options.min_n);number(ecmgui_v2::ui::text("max_exponent_2c38acf2",zh),gen_options.max_n);
+        number(ecmgui_v2::ui::text("min_input_curves_e78af800",zh),gen_options.min_curves);number(ecmgui_v2::ui::text("max_input_curves_1901b341",zh),gen_options.max_curves);ImGui::Checkbox(ecmgui_v2::ui::text("set_assignment_n_a_5ff15e72",zh),&gen_options.set_has_na);
     }
     if(gen_valid && generator_signature()!=gen_signature)gen_valid=false;
-    if(ImGui::Button(tr(zh,"Generate preview","生成预览"))&&!preview_generator())toast(status,true);ImGui::SameLine();
-    ImGui::BeginDisabled(!gen_valid||controller.busy());if(ImGui::Button(tr(zh,"Append to queue","追加到队列"))&&!apply_generator())toast(status,true);ImGui::EndDisabled();
+    if(ui::button("generate-preview",ecmgui_v2::ui::text("generate_preview_f82333b8",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!preview_generator())toast(status,true);ImGui::SameLine();
+    ImGui::BeginDisabled(!gen_valid||controller.busy());if(ui::button("apply-preview",ecmgui_v2::ui::text("append_to_queue_170d8d59",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!apply_generator())toast(status,true);ImGui::EndDisabled();
     if(!gen_preview.text.empty()) {
-        ImGui::Text(tr(zh,"%s | read %d | duplicates %d","%s | 读取 %d | 重复 %d"),gen_valid?tr(zh,"Current preview","当前预览"):tr(zh,"Expired preview","已失效预览"),gen_preview.read,gen_preview.duplicates);
-        if(ImGui::Button(tr(zh,"Copy preview","复制预览")))ImGui::SetClipboardText(gen_preview.text.c_str());
+        ImGui::Text(ecmgui_v2::ui::text("s_read_d_duplicates_d_ae76c89e",zh),gen_valid?ecmgui_v2::ui::text("current_preview_40f8da45",zh):ecmgui_v2::ui::text("expired_preview_37dfc620",zh),gen_preview.read,gen_preview.duplicates);
+        if(ImGui::Button(ecmgui_v2::ui::text("copy_preview_311cbd9b",zh)))ImGui::SetClipboardText(gen_preview.text.c_str());
         for(const auto& e:gen_preview.parse_errors)ImGui::TextWrapped("%s",e.c_str());for(const auto& e:gen_preview.warnings)ImGui::TextWrapped("%s",e.c_str());
         ImGui::BeginChild("preview",ImVec2(0,180),true,ImGuiWindowFlags_HorizontalScrollbar);ImGui::TextUnformatted(gen_preview.text.c_str());ImGui::EndChild();
     }
 }
 void App::draw_probability(bool zh) {
     using namespace ecmgui::probability_ui; auto& request=probability_request;auto& p=request.parameters;
-    ImGui::TextUnformatted(tr(zh,"ECM probability","ECM 概率"));
-    chips("probability-view",probability_tab,{tr(zh,"Parameters","参数"),tr(zh,"Charts and snapshot","图表与快照")});
-    if(ImGui::Button(tr(zh,"Calculate snapshot","计算快照"))){probability_result=calculate(request);probability_ready=true;probability_tab=1;toast(probability_result.error.empty()?tr(zh,"Probability snapshot ready","概率快照已就绪"):probability_result.error,!probability_result.error.empty());}
+    ImGui::TextUnformatted(ecmgui_v2::ui::text("ecm_probability_43508814",zh));
+    chips("probability-view",probability_tab,{ecmgui_v2::ui::text("parameters_e68b36b1",zh),ecmgui_v2::ui::text("charts_and_snapshot_94e2f72c",zh)});
+    if(ui::button("calculate-snapshot",ecmgui_v2::ui::text("calculate_snapshot_a22049db",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)){probability_result=calculate(request);probability_ready=true;probability_tab=1;toast(probability_result.error.empty()?ecmgui_v2::ui::text("probability_snapshot_ready_64bbce9f",zh):probability_result.error,!probability_result.error.empty());}
     calculate_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-    if(probability_ready&&probability_result.error.empty()){ImGui::SameLine();if(ImGui::Button(tr(zh,"Copy snapshot CSV","复制快照 CSV"))){ImGui::SetClipboardText(curve_csv(probability_result).c_str());toast(tr(zh,"Snapshot CSV copied","已复制快照 CSV"));}}
+    if(probability_ready&&probability_result.error.empty()){ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("copy_snapshot_csv_bea99b05",zh))){ImGui::SetClipboardText(curve_csv(probability_result).c_str());toast(ecmgui_v2::ui::text("snapshot_csv_copied_a15d488a",zh));}}
     if(probability_tab==0){
     double size=size_from_bits(p.factor_bits,request.decimal_digits);
-    if(ImGui::InputDouble(tr(zh,"Factor size","因子大小"),&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);
-    ImGui::Checkbox(tr(zh,"Decimal digits","十进制位数"),&request.decimal_digits);
-    ImGui::InputDouble("B1",&p.b1,0,0,"%.0f");ImGui::Checkbox(tr(zh,"Stage 2 enabled","启用 Stage2"),&p.stage2);
-    ImGui::Checkbox(tr(zh,"Use B2/B1 ratio","使用 B2/B1 比率"),&p.ratio_mode);if(p.ratio_mode)ImGui::InputDouble("B2/B1",&p.b2_ratio,0,0,"%.6g");else ImGui::InputDouble("B2",&p.b2,0,0,"%.0f");
-    ImGui::InputDouble(tr(zh,"Curves","曲线数"),&p.curves,0,0,"%.0f");
-    const bool profile_changed=chips("curve-profile",probability_profile,{"Suyama / PARAM2","Edwards Z2xZ8","Edwards Z12","PARAM1","PARAM3",tr(zh,"Custom","自定义")});
-    const bool basis_changed=ImGui::Checkbox(tr(zh,"Use stage1 empirical calibration","使用 Stage1 经验标定口径"),&probability_empirical);
+    if(ImGui::InputDouble(ecmgui_v2::ui::text("factor_size_f27e87f9",zh),&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);
+    ImGui::Checkbox(ecmgui_v2::ui::text("decimal_digits_b45d60b0",zh),&request.decimal_digits);
+    ImGui::InputDouble("B1",&p.b1,0,0,"%.0f");ImGui::Checkbox(ecmgui_v2::ui::text("stage_2_enabled_8976ac2a",zh),&p.stage2);
+    ImGui::Checkbox(ecmgui_v2::ui::text("use_b2_b1_ratio_5f0b38ea",zh),&p.ratio_mode);if(p.ratio_mode)ImGui::InputDouble("B2/B1",&p.b2_ratio,0,0,"%.6g");else ImGui::InputDouble("B2",&p.b2,0,0,"%.0f");
+    ImGui::InputDouble(ecmgui_v2::ui::text("curves_4c2c115c",zh),&p.curves,0,0,"%.0f");
+    const bool profile_changed=chips("curve-profile",probability_profile,{"Suyama / PARAM2","Edwards Z2xZ8","Edwards Z12","PARAM1","PARAM3",ecmgui_v2::ui::text("custom_494ca78f",zh)});
+    const bool basis_changed=ImGui::Checkbox(ecmgui_v2::ui::text("use_stage1_empirical_calibration_b45c1f82",zh),&probability_empirical);
     if(probability_profile<5&&(profile_changed||basis_changed))p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
     if(ImGui::InputDouble("D_eff",&p.effective_divisor,0,0,"%.6g"))probability_profile=5;
-    ImGui::TextWrapped("%s",tr(zh,"Torsion order is not D_eff. Edwards Z2xZ8: measured stage1 D=26.4081; relative Suyama rebase ~29.0 is a combined-model heuristic, not a direct Stage2 calibration.","挠群阶不等于 D_eff。Edwards Z2xZ8 的 Stage1 经验 D=26.4081；相对 Suyama 归一约 29.0，是联合模型启发值，未经独立 Stage2 标定。"));
-    int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",tr(zh,"Combined","联合"),tr(zh,"Stage 2 conditional","Stage2 条件概率")}))p.scope=static_cast<Scope>(scope);
-    int solve=static_cast<int>(request.solve);if(chips("solve",solve,{tr(zh,"Forward","正算"),tr(zh,"Curves","曲线数"),tr(zh,"Factor size","因子大小"),"B1","B2","D_eff"}))request.solve=static_cast<Solve>(solve);
-    double target=ui::percent(request.target);if(ImGui::InputDouble(tr(zh,"Target probability (%)","目标概率（%）"),&target,0,0,"%.6g%%"))request.target=ui::probability(target);
-    ImGui::Checkbox(tr(zh,"Cumulative target","累计目标"),&request.cumulative_target);
-    if(ImGui::CollapsingHeader(tr(zh,"Plot range","绘图范围"))){ImGui::InputDouble(tr(zh,"Size min","大小下限"),&request.size_min,0,0,"%.0f");ImGui::InputDouble(tr(zh,"Size max","大小上限"),&request.size_max,0,0,"%.0f");ImGui::Checkbox(tr(zh,"Auto curves range","自动曲线数范围"),&request.auto_curves_range);ImGui::InputDouble(tr(zh,"Curves max","最大曲线数"),&request.curves_max,0,0,"%.0f");}
+    ImGui::TextWrapped("%s",ecmgui_v2::ui::text("torsion_order_is_not_d_eff_edwards_z2xz8_m_917a40eb",zh));
+    int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",ecmgui_v2::ui::text("combined_8036ed37",zh),ecmgui_v2::ui::text("stage_2_conditional_18266507",zh)}))p.scope=static_cast<Scope>(scope);
+    int solve=static_cast<int>(request.solve);if(chips("solve",solve,{ecmgui_v2::ui::text("forward_f1c65e14",zh),ecmgui_v2::ui::text("curves_4c2c115c",zh),ecmgui_v2::ui::text("factor_size_f27e87f9",zh),"B1","B2","D_eff"}))request.solve=static_cast<Solve>(solve);
+    double target=ui::percent(request.target);if(ImGui::InputDouble(ecmgui_v2::ui::text("target_probability_ff15b758",zh),&target,0,0,"%.6g%%"))request.target=ui::probability(target);
+    ImGui::Checkbox(ecmgui_v2::ui::text("cumulative_target_b5b1c689",zh),&request.cumulative_target);
+    if(ImGui::CollapsingHeader(ecmgui_v2::ui::text("plot_range_6e66c843",zh))){ImGui::InputDouble(ecmgui_v2::ui::text("size_min_0426839f",zh),&request.size_min,0,0,"%.0f");ImGui::InputDouble(ecmgui_v2::ui::text("size_max_a05f6c92",zh),&request.size_max,0,0,"%.0f");ImGui::Checkbox(ecmgui_v2::ui::text("auto_curves_range_f85bb5f0",zh),&request.auto_curves_range);ImGui::InputDouble(ecmgui_v2::ui::text("curves_max_eea3d4c0",zh),&request.curves_max,0,0,"%.0f");}
         return;
     }
-    if(!probability_ready){ImGui::TextWrapped("%s",tr(zh,"Set parameters, then calculate a snapshot to view its curves.","请先设置参数并计算快照，再查看曲线。"));return;}
+    if(!probability_ready){ImGui::TextWrapped("%s",ecmgui_v2::ui::text("set_parameters_then_calculate_a_snapshot_t_6f098e9f",zh));return;}
     const auto& r=probability_result;if(!r.error.empty()){ImGui::TextWrapped("%s",r.error.c_str());return;}
     const auto values=[](const Request& q){const auto& v=q.parameters;return std::make_tuple(v.factor_bits,v.b1,v.b2,v.b2_ratio,v.curves,v.effective_divisor,v.stage2,v.ratio_mode,v.scope,q.solve,q.target,q.cumulative_target,q.decimal_digits,q.auto_curves_range,q.size_min,q.size_max,q.curves_max);};
-    if(values(request)!=values(r.request))ImGui::TextWrapped("%s",tr(zh,"Parameters changed. The charts and CSV still describe the previous snapshot; calculate again to update.","参数已修改。图表与 CSV 仍对应上次快照，请重新计算以更新。"));
-    ImGui::Text(tr(zh,"Snapshot B1=%.0f B2=%.0f curves=%.0f bits=%.6g","快照 B1=%.0f B2=%.0f 曲线数=%.0f 二进制位数=%.6g"),r.parameters.b1,effective_b2(r.parameters),r.parameters.curves,r.parameters.factor_bits);
-    ImGui::Text(tr(zh,"S1 %.6g%% | S1+S2 %.6g%% | S2 conditional %.6g%%","S1 %.6g%% | S1+S2 %.6g%% | S2 条件概率 %.6g%%"),ui::percent(r.probability.stage1),ui::percent(r.probability.combined),ui::percent(r.probability.conditional));
-    ImGui::Text(tr(zh,"Selected per curve %.6g%% | cumulative %.6g%%","当前单曲线概率 %.6g%% | 累计概率 %.6g%%"),ui::percent(r.probability.selected),ui::percent(cumulative(r.probability.selected,r.parameters.curves)));
+    if(values(request)!=values(r.request))ImGui::TextWrapped("%s",ecmgui_v2::ui::text("parameters_changed_the_charts_and_csv_stil_d32359e5",zh));
+    ImGui::Text(ecmgui_v2::ui::text("snapshot_b1_0f_b2_0f_curves_0f_bits_6g_b2ea4d63",zh),r.parameters.b1,effective_b2(r.parameters),r.parameters.curves,r.parameters.factor_bits);
+    ImGui::Text(ecmgui_v2::ui::text("s1_6g_s1_s2_6g_s2_conditional_6g_88ed90d8",zh),ui::percent(r.probability.stage1),ui::percent(r.probability.combined),ui::percent(r.probability.conditional));
+    ImGui::Text(ecmgui_v2::ui::text("selected_per_curve_6g_cumulative_6g_8caa0715",zh),ui::percent(r.probability.selected),ui::percent(cumulative(r.probability.selected,r.parameters.curves)));
     if(r.request.solve!=Solve::Forward){const bool integral=r.request.solve==Solve::Curves||r.request.solve==Solve::B1||r.request.solve==Solve::B2;
         char value[64];std::snprintf(value,sizeof(value),integral?"%.0f":"%.12g",r.solved_value);
-        ImGui::Text(tr(zh,"Solution %s | residual %.6g pp%s","求解值 %s | 残差 %.6g 个百分点%s"),value,ui::percent(r.residual),r.lower_bound_sufficient?tr(zh," | lower bound sufficient"," | 下限已满足目标"):"");}
+        ImGui::Text(ecmgui_v2::ui::text("solution_s_residual_6g_pp_s_80b3192b",zh),value,ui::percent(r.residual),r.lower_bound_sufficient?ecmgui_v2::ui::text("lower_bound_sufficient_cf517509",zh):"");}
     const std::vector<Point>* series[]{&r.sizes,&r.size_totals,&r.curve_counts};
-    const char* labels[]{tr(zh,"Per-curve probability / size","单曲线概率 / 因子大小"),tr(zh,"Cumulative probability / size","累计概率 / 因子大小"),tr(zh,"Cumulative probability / curves","累计概率 / 曲线数")};
+    const char* labels[]{ecmgui_v2::ui::text("per_curve_probability_size_71a03e06",zh),ecmgui_v2::ui::text("cumulative_probability_size_0bcf67ec",zh),ecmgui_v2::ui::text("cumulative_probability_curves_3769b2e1",zh)};
     const auto colors=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
     for(int i=0;i<3;++i){ImGui::PushID(i);ImGui::SeparatorText(labels[i]);
-        std::vector<ui::ChartSeries> lines{{"S1",colors.stage1,{}},{"S1+S2",colors.stage2,{}},{tr(zh,"S2 | S1 missed","S2 | S1 未命中"),colors.warning,{}}};
+        std::vector<ui::ChartSeries> lines{{"S1",colors.stage1,{}},{"S1+S2",colors.stage2,{}},{ecmgui_v2::ui::text("s2_s1_missed_7420a12d",zh),colors.warning,{}}};
         for(const auto& v:*series[i]){lines[0].points.push_back({v.x,ui::percent(v.stage1)});lines[1].points.push_back({v.x,ui::percent(v.combined)});lines[2].points.push_back({v.x,ui::percent(v.conditional)});}
-        ui::chart("probability",lines,i==2?tr(zh,"Curves","曲线数"):r.request.decimal_digits?tr(zh,"Factor digits","因子十进制位数"):tr(zh,"Factor bits","因子二进制位数"),tr(zh,"Probability (%)","概率（%）"),zh,100,180,{true,true,"%.0f","%.6g%%"});
+        ui::chart("probability",lines,i==2?ecmgui_v2::ui::text("curves_4c2c115c",zh):r.request.decimal_digits?ecmgui_v2::ui::text("factor_digits_496da08e",zh):ecmgui_v2::ui::text("factor_bits_15c9189c",zh),ecmgui_v2::ui::text("probability_de7e6ede",zh),zh,100,180,{true,true,"%.0f","%.6g%%"});
         ImGui::PopID();}
 }
 void App::draw_gpu(bool zh) {
     gpu_presentations.clear();
-    if(!gpu.available()){ImGui::TextWrapped("%s",no_nvml?tr(zh,"Monitoring disabled","监控已禁用"):gpu.reason().c_str());return;}
+    if(!gpu.available()){ImGui::TextWrapped("%s",no_nvml?ecmgui_v2::ui::text("monitoring_disabled_9432cd8b",zh):gpu.reason().c_str());return;}
     for(const auto& device:gpu.devices()) {
         ImGui::PushID(device.index);
         auto& display=gpu_presentations[device.index];
         const auto title="#"+std::to_string(device.index)+"  "+device.name;
         const bool expanded=ImGui::CollapsingHeader(title.c_str(),ImGuiTreeNodeFlags_DefaultOpen);
+        const float block_top=ImGui::GetItemRectMin().y;
         display.header={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
         const auto details=gpu_details.get(device.index);
         const auto known=[](int n){return n>0?std::to_string(n):std::string("--");};
         const auto capability=details.major>=0?std::to_string(details.major)+"."+std::to_string(details.minor):std::string("--");
         const auto cuda=details.cuda_version>0?std::to_string(details.cuda_version/1000)+"."+std::to_string((details.cuda_version%1000)/10):std::string("--");
-        display.tooltip=device.name+"\n"+tr(zh,"Driver ","驱动 ")+(details.driver.empty()?"--":details.driver)+" | "+tr(zh,"CUDA (driver) ","CUDA（驱动支持） ")+cuda+
-            "\nSM "+capability+" | "+tr(zh,"SM count ","SM 数量 ")+known(details.sm_count)+" | "+tr(zh,"CUDA cores ","CUDA 核心数 ")+known(device.cores)+
-            "\n"+tr(zh,"VRAM ","显存 ")+known(static_cast<int>(device.mem_total_mb))+" MiB\nNVML / 500 ms";
+        display.tooltip=device.name+"\n"+ecmgui_v2::ui::text("driver_0c1299f4",zh)+(details.driver.empty()?"--":details.driver)+" | "+ecmgui_v2::ui::text("cuda_driver_b9ddcb1e",zh)+cuda+
+            "\nSM "+capability+" | "+ecmgui_v2::ui::text("sm_count_d07f07a8",zh)+known(details.sm_count)+" | "+ecmgui_v2::ui::text("cuda_cores_bc6ad6f3",zh)+known(device.cores)+
+            "\n"+ecmgui_v2::ui::text("vram_d04c2bb5",zh)+known(static_cast<int>(device.mem_total_mb))+" MiB\nNVML / 500 ms";
         display.hovered=ImGui::IsItemHovered();
         if(display.hovered)ImGui::SetTooltip("%s",display.tooltip.c_str());
         if(!expanded){ImGui::PopID();continue;}
         const auto history=gpu.history(device.index);
-        if(history.empty()||!history.back().valid){ImGui::TextUnformatted(tr(zh,"Unknown sample","采样未知"));ImGui::PopID();continue;}
+        if(history.empty()||!history.back().valid){ImGui::TextUnformatted(ecmgui_v2::ui::text("unknown_sample_e6665d60",zh));ImGui::PopID();continue;}
         const auto& sample=history.back();const double occupied=ui::memory_occupancy(sample.mem_used_mb,device.mem_total_mb);
-        char basic[256];std::snprintf(basic,sizeof(basic),"GPU %d%%  |  %.1f / %.0f W  |  %d °C",sample.util_gpu,sample.power_w,sample.power_limit_w,sample.temp_c);
-        display.basic=basic;ImGui::TextWrapped("%s",basic);
-        char memory[80];if(std::isfinite(occupied))std::snprintf(memory,sizeof(memory),"%u / %u MiB (%.1f%%)",sample.mem_used_mb,device.mem_total_mb,occupied);else std::snprintf(memory,sizeof(memory),"--");
-        std::snprintf(basic,sizeof(basic),tr(zh,"Core %u MHz  |  Memory %u MHz  |  %s","核心 %u MHz  |  显存 %u MHz  |  %s"),sample.clock_sm_mhz,sample.clock_mem_mhz,memory);
-        display.basic+='\n';display.basic+=basic;ImGui::TextWrapped("%s",basic);
-        const auto throttle=ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons);if(!throttle.empty())ImGui::TextWrapped("%s",throttle.c_str());
+        char basic[192];std::snprintf(basic,sizeof(basic),ecmgui_v2::ui::text("vram_u_u_mib_d_c_d3c46e35",zh),sample.mem_used_mb,device.mem_total_mb,sample.temp_c);
+        display.basic=basic;ui::secondary_text(basic);
+        const auto throttle=ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons);if(!throttle.empty())ui::secondary_text(throttle.c_str());
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{ImGui::GetStyle().ItemSpacing.x,4*ImGui::GetFontSize()/15.f});
         const int seconds=state.ui_gpu_history_seconds;const auto color=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
-        std::vector<ui::ChartSeries> usage{{tr(zh,"GPU load","GPU 利用率"),color.stage1,{}},{tr(zh,"Memory occupied","显存占用"),color.stage2,{}}};
-        std::vector<ui::ChartSeries> power{{tr(zh,"Power","功耗"),color.warning,{}}};
-        std::vector<ui::ChartSeries> clocks{{tr(zh,"Core frequency","核心频率"),color.stage1,{}},{tr(zh,"Memory frequency","显存频率"),color.stage2,{}}};
+        std::vector<ui::ChartSeries> usage{{ecmgui_v2::ui::text("gpu_load_30c049fb",zh),color.stage1,{}},{ecmgui_v2::ui::text("memory_occupied_03c116ce",zh),color.stage2,{}}};
+        std::vector<ui::ChartSeries> power{{ecmgui_v2::ui::text("power_848e9656",zh),color.warning,{}}};
+        std::vector<ui::ChartSeries> clocks{{ecmgui_v2::ui::text("core_frequency_63975ac8",zh),color.stage1,{}},{ecmgui_v2::ui::text("memory_frequency_b5886939",zh),color.stage2,{}}};
         for(const auto& v:history){const double x=(static_cast<double>(v.ts_ms)-static_cast<double>(sample.ts_ms))/1000.;if(x < -seconds)continue;
             const double missing=std::numeric_limits<double>::quiet_NaN();usage[0].points.push_back({x,v.valid?double(v.util_gpu):missing});usage[1].points.push_back({x,v.valid?ui::memory_occupancy(v.mem_used_mb,device.mem_total_mb):missing});power[0].points.push_back({x,v.valid?v.power_w:missing});
             clocks[0].points.push_back({x,v.valid?double(v.clock_sm_mhz):missing});clocks[1].points.push_back({x,v.valid?double(v.clock_mem_mhz):missing});}
         ui::ChartFormat format{true,true,"%.1f s","%.0f%%",-double(seconds),0};
         format.show_y_ticks=false;format.show_axis_titles=false;
-        format.legend_controls=false;char corner[192];
-        if(std::isfinite(occupied))std::snprintf(corner,sizeof(corner),"GPU %d%% / 100%%  |  VRAM %.1f%% / 100%%",sample.util_gpu,occupied);
-        else std::snprintf(corner,sizeof(corner),"GPU %d%% / 100%%  |  VRAM -- / 100%%",sample.util_gpu);
-        display.usage=corner;
-        format.corner_text=corner;
-        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,96,format);++display.charts;
+        format.legend_controls=false;format.compact=true;format.show_x_ticks=false;format.show_x_grid=false;
+        char readout[96];std::snprintf(readout,sizeof(readout),"%d / 100%%",sample.util_gpu);usage[0].readout=readout;
+        if(std::isfinite(occupied))std::snprintf(readout,sizeof(readout),"%.1f / 100%%",occupied);else std::snprintf(readout,sizeof(readout),"-- / 100%%");usage[1].readout=readout;
+        display.usage=std::string(usage[0].label)+" "+usage[0].readout+" | "+usage[1].label+" "+usage[1].readout;
+        format.metrics=&display.chart_metrics[0];
+        ui::chart("usage",usage,ecmgui_v2::ui::text("seconds_from_latest_sample_7e115cd0",zh),"%",zh,100,64,format);++display.charts;
         format.percent_y=false;format.y_format="%.1f W";
-        if(sample.power_limit_w>0)std::snprintf(corner,sizeof(corner),"%.1f / %.0f W",sample.power_w,sample.power_limit_w);
-        else std::snprintf(corner,sizeof(corner),"%.1f / -- W",sample.power_w);
-        display.power=corner;
-        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,96,format);++display.charts;
-        format.y_format="%.0f MHz";std::snprintf(corner,sizeof(corner),tr(zh,"Core %u MHz  |  Memory %u MHz","核心 %u MHz  |  显存 %u MHz"),sample.clock_sm_mhz,sample.clock_mem_mhz);
-        display.clocks=corner;
-        ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,96,format);++display.charts;
+        if(sample.power_limit_w>0)std::snprintf(readout,sizeof(readout),"%.1f / %.0f W",sample.power_w,sample.power_limit_w);else std::snprintf(readout,sizeof(readout),"%.1f / -- W",sample.power_w);
+        power[0].readout=readout;display.power=readout;format.metrics=&display.chart_metrics[1];
+        ui::chart("power",power,ecmgui_v2::ui::text("seconds_from_latest_sample_7e115cd0",zh),"W",zh,0,64,format);++display.charts;
+        format.y_format="%.0f MHz";
+        std::snprintf(readout,sizeof(readout),"%u MHz",sample.clock_sm_mhz);clocks[0].readout=readout;
+        std::snprintf(readout,sizeof(readout),"%u MHz",sample.clock_mem_mhz);clocks[1].readout=readout;
+        display.clocks=std::string(clocks[0].label)+" "+clocks[0].readout+" | "+clocks[1].label+" "+clocks[1].readout;
+        format.metrics=&display.chart_metrics[2];
+        ui::chart("clocks",clocks,ecmgui_v2::ui::text("seconds_from_latest_sample_7e115cd0",zh),"MHz",zh,0,64,format);++display.charts;
+        ImGui::PopStyleVar();display.height=ImGui::GetItemRectMax().y-block_top;
         ImGui::PopID();
     }
 }
@@ -284,92 +285,99 @@ bool App::save_business() {
     const auto path=config_path;return load_config(path);
 }
 void App::draw_settings(bool zh) {
-    ImGui::SeparatorText(tr(zh,"Appearance and interaction","外观与交互"));
-    int theme=state.ui_theme=="light";if(chips("theme",theme,{tr(zh,"Dark","深色"),tr(zh,"Light","浅色")}))state.ui_theme=theme?"light":"dark";
-    int language=state.ui_language=="zh";if(chips("language",language,{"English","中文"},language_items))state.ui_language=language?"zh":"en";
+    ImGui::SeparatorText(ecmgui_v2::ui::text("appearance_and_interaction_16ace6fc",zh));
+    int theme=state.ui_theme=="light";if(chips("theme",theme,{ecmgui_v2::ui::text("dark_60acc53f",zh),ecmgui_v2::ui::text("light_dbcd5e7b",zh)}))state.ui_theme=theme?"light":"dark";
+    int language=state.ui_language=="zh";if(chips("language",language,{ui::text("language_english",zh),ui::text("language_chinese",zh)},language_items))state.ui_language=language?"zh":"en";
     const float scales[]{0,1,1.25f,1.5f,2};int scale=0;for(int i=1;i<5;++i)if(std::abs(state.ui_scale-scales[i])<.01f)scale=i;
-    if(chips("scale",scale,{tr(zh,"Auto DPI","自动 DPI"),"100%","125%","150%","200%"}))state.ui_scale=scales[scale];
+    if(chips("scale",scale,{ecmgui_v2::ui::text("auto_dpi_38f46a94",zh),"100%","125%","150%","200%"}))state.ui_scale=scales[scale];
     ImGui::SetNextItemWidth(180*ImGui::GetStyle().FontScaleDpi);
-    ImGui::SliderInt(tr(zh,"Font size","字体大小"),&state.ui_font_size,ui_limits::ui_font_size_min,ui_limits::ui_font_size_max,"%d px",ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderInt(ecmgui_v2::ui::text("font_size_6d784d95",zh),&state.ui_font_size,ui_limits::ui_font_size_min,ui_limits::ui_font_size_max,"%d px",ImGuiSliderFlags_AlwaysClamp);
     font_size_control={ImGui::GetItemRectMin().x+90*ImGui::GetStyle().FontScaleDpi,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-    const auto default_size=UiValues{}.ui_font_size;const auto default_label=std::string(tr(zh,"Default ","默认 "))+std::to_string(default_size);
+    const auto default_size=UiValues{}.ui_font_size;const auto default_label=std::string(ecmgui_v2::ui::text("default_f12bc6ea",zh))+std::to_string(default_size);
     ImGui::SameLine();if(ImGui::SmallButton(default_label.c_str()))state.ui_font_size=default_size;
-    ImGui::TextDisabled("%s",tr(zh,"Font size uses logical pixels; monitor DPI still applies.","字号使用逻辑像素，仍按显示器 DPI 缩放。"));
-    ImGui::TextUnformatted(tr(zh,"GPU chart time range","GPU 图表时间范围"));
+    ui::secondary_text(ecmgui_v2::ui::text("font_size_uses_logical_pixels_monitor_dpi__fad8e1e4",zh),&secondary_text_font_height);
+    ImGui::SetNextItemWidth(180*ImGui::GetStyle().FontScaleDpi);
+    ImGui::SliderInt(ecmgui_v2::ui::text("primary_action_font_offset_034fcf3c",zh),&state.ui_primary_font_offset,ui_limits::ui_primary_font_offset_min,ui_limits::ui_primary_font_offset_max,"%+d px",ImGuiSliderFlags_AlwaysClamp);
+    primary_offset_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+    ImGui::SetNextItemWidth(180*ImGui::GetStyle().FontScaleDpi);
+    ImGui::SliderInt(ecmgui_v2::ui::text("secondary_text_font_offset_78d4f12a",zh),&state.ui_secondary_font_offset,ui_limits::ui_secondary_font_offset_min,ui_limits::ui_secondary_font_offset_max,"%+d px",ImGuiSliderFlags_AlwaysClamp);
+    secondary_offset_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+    ImGui::SameLine();if(ImGui::SmallButton(ecmgui_v2::ui::text("reset_offsets_1e6247e3",zh))){const UiValues defaults;state.ui_primary_font_offset=defaults.ui_primary_font_offset;state.ui_secondary_font_offset=defaults.ui_secondary_font_offset;}
+    ImGui::TextUnformatted(ecmgui_v2::ui::text("gpu_chart_time_range_19468e7b",zh));
     const int gpu_seconds[]{15,30,60,120};int gpu_range=0;
     for(int i=0;i<4;++i)if(state.ui_gpu_history_seconds==gpu_seconds[i])gpu_range=i;
     if(chips("gpu-history",gpu_range,{"15 s","30 s","60 s","120 s"},gpu_range_controls))state.ui_gpu_history_seconds=gpu_seconds[gpu_range];
-    ImGui::Checkbox(tr(zh,"Smooth scrolling","平滑滚动"),&state.ui_smooth_scroll);
-    ImGui::Checkbox(tr(zh,"Allow panels outside the main window (restart)","允许面板移到应用窗口外（重启生效）"),&state.ui_external_windows);
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"By default panels dock and float inside the main window. Enable this to create independent windows across monitors.","默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。"));
-    ImGui::Checkbox(tr(zh,"Show system title bar","显示系统标题栏"),&state.window_title_bar);
-    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"When hidden, drag the empty top bar; window controls and resizing remain available.","隐藏后可拖动顶部空白区域，仍可缩放并使用最小化、最大化和关闭按钮。"));
-    ImGui::Checkbox(tr(zh,"Action toasts (errors always shown)","操作轻提示（错误仍显示）"),&state.ui_toasts);
-    ImGui::Checkbox(tr(zh,"Ely pet","Ely 宠物"),&state.pet_enabled);ImGui::Checkbox(tr(zh,"Animate pet","宠物动画"),&state.pet_animate);
-    ImGui::TextUnformatted(tr(zh,"ELY skin","ELY 皮肤"));
+    ImGui::Checkbox(ecmgui_v2::ui::text("smooth_scrolling_f62e8490",zh),&state.ui_smooth_scroll);
+    ImGui::Checkbox(ecmgui_v2::ui::text("allow_panels_outside_the_main_window_resta_972e3b76",zh),&state.ui_external_windows);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("by_default_panels_dock_and_float_inside_th_469a5486",zh));
+    ImGui::Checkbox(ecmgui_v2::ui::text("show_system_title_bar_6e15fd01",zh),&state.window_title_bar);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("when_hidden_drag_the_empty_top_bar_window__83f3723f",zh));
+    ImGui::Checkbox(ecmgui_v2::ui::text("action_toasts_errors_always_shown_2ef6996e",zh),&state.ui_toasts);
+    ImGui::Checkbox(ecmgui_v2::ui::text("ely_pet_1100b952",zh),&state.pet_enabled);ImGui::Checkbox(ecmgui_v2::ui::text("animate_pet_d53550fa",zh),&state.pet_animate);
+    ImGui::TextUnformatted(ecmgui_v2::ui::text("ely_skin_67bfe14c",zh));
     int pet_skin=0;std::vector<const char*> skin_labels;
     for(size_t i=0;i<pet::skins.size();++i){skin_labels.push_back(pet::skins[i].english);if(state.pet_skin==pet::skins[i].id)pet_skin=static_cast<int>(i);}
     if(chips("pet-skin",pet_skin,skin_labels,pet_skin_controls)){
         state.pet_skin=pet::skins[pet_skin].id;
-        toast(std::string(tr(zh,"ELY skin: ","ELY 皮肤："))+pet::skins[pet_skin].english);
+        toast(std::string(ecmgui_v2::ui::text("ely_skin_cf778253",zh))+pet::skins[pet_skin].english);
     }
     if(zh)ImGui::TextDisabled("%s",pet::skins[pet_skin].chinese);
-    if(ImGui::Button(tr(zh,"Save UI preferences","保存界面偏好")))save_preferences();
+    if(ui::button("save-ui",ecmgui_v2::ui::text("save_ui_preferences_b7e00f2f",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi))save_preferences();
     save_ui_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-    ImGui::TextWrapped("%s",tr(zh,"Appearance and layout are also saved on a normal exit. Computation settings require their own Save workflow action.","正常退出也会保存外观与布局；计算设置必须单独点击“保存工作流”。"));
+    ui::secondary_text(ecmgui_v2::ui::text("appearance_and_layout_are_also_saved_on_a__9b4c60a6",zh));
     if(!state.writable)ImGui::TextWrapped("%s",state.notice.c_str());
-    ImGui::TextWrapped("%s",state.path.u8string().c_str());
+    ui::secondary_text(state.path.u8string().c_str());
     {
-        ImGui::SeparatorText(tr(zh,"Navigation and right tabs","导航与右侧标签页"));
-        ImGui::TextWrapped("%s",tr(zh,"Hold a navigation page and drag to reorder. Right-side pages share horizontal dock tabs; close a tab to return it to navigation. At least one central page remains.","长按导航页面拖动排序。右侧页面共用横排停靠标签；关闭标签后自动回到导航，至少保留一个中央页面。"));
+        ImGui::SeparatorText(ecmgui_v2::ui::text("navigation_and_right_tabs_c90aebf6",zh));
+        ImGui::TextWrapped("%s",ecmgui_v2::ui::text("hold_a_navigation_page_and_drag_to_reorder_244eb05e",zh));
         for(int i=0;i<7;++i){ImGui::PushID(i);bool right=ui::pinned(state.ui_right_pages,i);
             if(ImGui::Checkbox(ui::page_name(i,zh),&right))move_page(i,right);ImGui::PopID();}
-        if(ImGui::Button(tr(zh,"Restore default layout","恢复默认布局"))){state.ui_right_pages=0;state.ui_right_visible=true;state.ui_inspector=true;state.ui_logs=true;reset_layout=true;}
-        if(ImGui::Button(tr(zh,"Save layout","保存布局")))save_preferences();
+        if(ImGui::Button(ecmgui_v2::ui::text("restore_default_layout_c8df250c",zh))){state.ui_right_pages=0;state.ui_right_visible=true;state.ui_inspector=true;state.ui_logs=true;reset_layout=true;}
+        if(ImGui::Button(ecmgui_v2::ui::text("save_layout_26ac39b1",zh)))save_preferences();
     }
-    ImGui::SeparatorText(tr(zh,"Workflow","工作流"));ImGui::InputText("TOML",config_input,sizeof(config_input));
-    if(ImGui::Button(tr(zh,"Browse workflow","选择工作流"))){std::string path=config_input;const char filter[]="TOML\0*.toml\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,tr(zh,"Open workflow","打开工作流"),std::string(filter,sizeof(filter))))std::snprintf(config_input,sizeof(config_input),"%s",path.c_str());}
-    ImGui::SameLine();if(ImGui::Button(tr(zh,"Open / reload","打开 / 重载"))&&!load_config(config_input))toast(status,true);
-    if(ImGui::CollapsingHeader(tr(zh,"Worker settings","Worker 设置"))){
+    ImGui::SeparatorText(ecmgui_v2::ui::text("workflow_2e2d5c56",zh));ImGui::InputText("TOML",config_input,sizeof(config_input));
+    if(ImGui::Button(ecmgui_v2::ui::text("browse_workflow_f6379582",zh))){std::string path=config_input;const char filter[]="TOML\0*.toml\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,ecmgui_v2::ui::text("open_workflow_8d5f0289",zh),std::string(filter,sizeof(filter))))std::snprintf(config_input,sizeof(config_input),"%s",path.c_str());}
+    ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("open_reload_002e2127",zh))&&!load_config(config_input))toast(status,true);
+    if(ImGui::CollapsingHeader(ecmgui_v2::ui::text("worker_settings_bd2e3420",zh))){
     ImGui::BeginDisabled(controller.busy()||config.dirty());
-    ImGui::InputText(tr(zh,"Stage1 executable","Stage1 计算程序"),stage1_input,sizeof(stage1_input));
-    ImGui::InputText(tr(zh,"Stage2 executable","Stage2 计算程序"),stage2_input,sizeof(stage2_input));
-    auto browse_exe=[&](const char* id,char* value,size_t capacity){if(ImGui::Button(id)){std::string path=value;const char filter[]="Executable\0*.exe\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,tr(zh,"Choose worker executable","选择计算程序"),std::string(filter,sizeof(filter))))std::snprintf(value,capacity,"%s",path.c_str());}};
-    browse_exe(tr(zh,"Browse Stage1","选择 Stage1"),stage1_input,sizeof(stage1_input));ImGui::SameLine();browse_exe(tr(zh,"Browse Stage2","选择 Stage2"),stage2_input,sizeof(stage2_input));
+    ImGui::InputText(ecmgui_v2::ui::text("stage1_executable_50902b05",zh),stage1_input,sizeof(stage1_input));
+    ImGui::InputText(ecmgui_v2::ui::text("stage2_executable_3b6f5722",zh),stage2_input,sizeof(stage2_input));
+    auto browse_exe=[&](const char* id,char* value,size_t capacity){if(ImGui::Button(id)){std::string path=value;const char filter[]="Executable\0*.exe\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,ecmgui_v2::ui::text("choose_worker_executable_8157cf69",zh),std::string(filter,sizeof(filter))))std::snprintf(value,capacity,"%s",path.c_str());}};
+    browse_exe(ecmgui_v2::ui::text("browse_stage1_f27f693d",zh),stage1_input,sizeof(stage1_input));ImGui::SameLine();browse_exe(ecmgui_v2::ui::text("browse_stage2_b26e15b0",zh),stage2_input,sizeof(stage2_input));
     ImGui::EndDisabled();
-    ImGui::BeginDisabled(controller.busy());ImGui::InputInt(tr(zh,"Worker count (0 follows workflow)","worker 数量（0 跟随工作流）"),&state.worker_count);state.worker_count=std::clamp(state.worker_count,0,64);
+    ImGui::BeginDisabled(controller.busy());ImGui::InputInt(ecmgui_v2::ui::text("worker_count_0_follows_workflow_291604da",zh),&state.worker_count);state.worker_count=std::clamp(state.worker_count,0,64);
     ImGui::BeginDisabled(config.dirty());
-    if(ImGui::Button(tr(zh,"Apply worker settings","应用 worker 设置"))){state.worker_stage1_exe=stage1_input;state.worker_stage2_exe=stage2_input;if(ready)configure_workers();toast(tr(zh,"Worker settings applied","已应用 worker 设置"));}
+    if(ImGui::Button(ecmgui_v2::ui::text("apply_worker_settings_5e29a826",zh))){state.worker_stage1_exe=stage1_input;state.worker_stage2_exe=stage2_input;if(ready)configure_workers();toast(ecmgui_v2::ui::text("worker_settings_applied_849be3a6",zh));}
     ImGui::EndDisabled();
     ImGui::EndDisabled();
     }
     ImGui::BeginDisabled(controller.busy());
-    if(ready && ImGui::CollapsingHeader(tr(zh,"Edit computation settings","编辑计算设置"),ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextWrapped("%s",tr(zh,"Search descriptions or keys; choose a field, stage its value, then save the workflow. Worker overrides keep their section.","按说明或配置键搜索；选择字段、暂存数值，再保存工作流。已有 worker 覆盖项保留原分区。"));
-        ImGui::InputText(tr(zh,"Search settings","搜索设置"),settings_search,sizeof(settings_search));
+    if(ready && ImGui::CollapsingHeader(ecmgui_v2::ui::text("edit_computation_settings_58236f98",zh),ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextWrapped("%s",ecmgui_v2::ui::text("search_descriptions_or_keys_choose_a_field_92349d21",zh));
+        ImGui::InputText(ecmgui_v2::ui::text("search_settings_255b076d",zh),settings_search,sizeof(settings_search));
         settings_search_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-        chips("settings-group",settings_group,{tr(zh,"All","全部"),tr(zh,"Shared","共用"),"Stage1","Stage2",tr(zh,"Worker","Worker")});
+        chips("settings-group",settings_group,{ecmgui_v2::ui::text("all_a52ace42",zh),ecmgui_v2::ui::text("shared_e3c4b39d",zh),"Stage1","Stage2",ecmgui_v2::ui::text("worker_a67b04cd",zh)});
         const char* groups[]{"","shared","stage1","stage2","workers.1"};
-        const auto visible=[&](const char* table,const char* key,const BusinessOption* option){const auto base=option_table(table);return (!settings_group||base==groups[settings_group])&&matches(std::string(table)+"."+key+" "+(option?(zh?option->chinese:option->english):""),settings_search);};
+        const auto visible=[&](const char* table,const char* key,const BusinessOption* option){const auto base=option_table(table);return (!settings_group||base==groups[settings_group])&&matches(std::string(table)+"."+key+" "+(option?(ui::text(option->description_key,zh)):""),settings_search);};
         auto select_field=[&](const char* table,const char* key){std::snprintf(edit_table,sizeof(edit_table),"%s",table);std::snprintf(edit_key,sizeof(edit_key),"%s",key);std::snprintf(edit_value,sizeof(edit_value),"%s",config.get(table,key).c_str());};
         int shown=0;
         if(ImGui::BeginChild("fields",ImVec2(0,180),true))for(const auto& line:config.lines())if(line.kind==ecm_config::TomlLine::Kind::KeyValue&&line.section!="gui"){
             const auto* option=selected_option(line.section.c_str(),line.key.c_str());if(!visible(line.section.c_str(),line.key.c_str(),option))continue;++shown;
             const auto name=line.section+"."+line.key+" = "+line.value;if(ImGui::Selectable(name.c_str(),line.section==edit_table&&line.key==edit_key))select_field(line.section.c_str(),line.key.c_str());
-            if(option&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",zh?option->chinese:option->english);}
-        settings_matches=shown;if(!shown)ImGui::TextUnformatted(tr(zh,"No matching existing settings","没有匹配的现有设置"));
-        ImGui::EndChild();ImGui::InputText(tr(zh,"Section","配置节"),edit_table,sizeof(edit_table));ImGui::InputText(tr(zh,"Key","配置键"),edit_key,sizeof(edit_key));
-        if(ImGui::BeginCombo(tr(zh,"Available settings","可用设置"),edit_key)){
-            for(const auto& option:business_options){if(!visible(option.table,option.key,&option))continue;const auto name=std::string(option.table)+"."+option.key;if(ImGui::Selectable(name.c_str()))select_field(option.table,option.key);if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",zh?option.chinese:option.english);}ImGui::EndCombo();
+            if(option&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(option->description_key,zh));}
+        settings_matches=shown;if(!shown)ImGui::TextUnformatted(ecmgui_v2::ui::text("no_matching_existing_settings_5461a9f5",zh));
+        ImGui::EndChild();ImGui::InputText(ecmgui_v2::ui::text("section_dfca5da5",zh),edit_table,sizeof(edit_table));ImGui::InputText(ecmgui_v2::ui::text("key_99a52df3",zh),edit_key,sizeof(edit_key));
+        if(ImGui::BeginCombo(ecmgui_v2::ui::text("available_settings_018544ed",zh),edit_key)){
+            for(const auto& option:business_options){if(!visible(option.table,option.key,&option))continue;const auto name=std::string(option.table)+"."+option.key;if(ImGui::Selectable(name.c_str()))select_field(option.table,option.key);if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(option.description_key,zh));}ImGui::EndCombo();
         }
         const auto* option=selected_option(edit_table,edit_key);
-        if(option){ImGui::TextWrapped("%s\n%s: %s | %s",zh?option->chinese:option->english,tr(zh,"Type","类型"),option->type,option->domain);}
+        if(option){ImGui::TextWrapped("%s\n%s: %s | %s",ui::text(option->description_key,zh),ecmgui_v2::ui::text("type_baaddf70",zh),option->type,option->domain);}
         const bool toggle=option&&(std::string(option->type)=="bool"||std::string(option->domain)=="[0|1]");
-        if(toggle){settings_bool=std::string(edit_value)=="true"||std::string(edit_value)=="1";if(ImGui::Checkbox(tr(zh,"Enabled","启用"),&settings_bool))std::snprintf(edit_value,sizeof(edit_value),"%s",std::string(option->type)=="bool"?(settings_bool?"true":"false"):(settings_bool?"1":"0"));}
-        else ImGui::InputText(tr(zh,"Value","数值"),edit_value,sizeof(edit_value));
-        if(ImGui::Button(tr(zh,"Stage edit","暂存编辑"))&&!edit_business(edit_table,edit_key,edit_value))toast(status,true);ImGui::SameLine();if(ImGui::Button(tr(zh,"Save workflow","保存工作流"))&&!save_business())toast(status,true);
-        ImGui::SameLine();if(ImGui::Button(tr(zh,"Reload / discard edits","重载 / 放弃修改")))load_config(config_path);
-        if(config.dirty())ImGui::TextUnformatted(tr(zh,"Unsaved workflow changes","工作流有未保存修改"));
+        if(toggle){settings_bool=std::string(edit_value)=="true"||std::string(edit_value)=="1";if(ImGui::Checkbox(ecmgui_v2::ui::text("enabled_92c1cdfd",zh),&settings_bool))std::snprintf(edit_value,sizeof(edit_value),"%s",std::string(option->type)=="bool"?(settings_bool?"true":"false"):(settings_bool?"1":"0"));}
+        else ImGui::InputText(ecmgui_v2::ui::text("value_8e37953d",zh),edit_value,sizeof(edit_value));
+        if(ImGui::Button(ecmgui_v2::ui::text("stage_edit_12101dc2",zh))&&!edit_business(edit_table,edit_key,edit_value))toast(status,true);ImGui::SameLine();if(ui::button("save-workflow",ecmgui_v2::ui::text("save_workflow_e77921c8",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!save_business())toast(status,true);
+        ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("reload_discard_edits_bd211ada",zh)))load_config(config_path);
+        if(config.dirty())ImGui::TextUnformatted(ecmgui_v2::ui::text("unsaved_workflow_changes_01a66bda",zh));
     } ImGui::EndDisabled();
 }
 }

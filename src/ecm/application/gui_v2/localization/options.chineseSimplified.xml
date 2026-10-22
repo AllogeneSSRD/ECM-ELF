@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated; edit config/ecm_options.json. -->
+<EcmGui>
+  <Native-Langue name="chineseSimplified">
+    <Panel id="ui">
+      <Item id="option_shared_worktodo" name="Stage1/Stage2 共用的任务队列。ECMSTAGE1 与 ECMSTAGE2 前缀选择执行程序；两阶段分别记录完成任务。同一 worker 同时只能有一个进程消费此队列。" />
+      <Item id="option_shared_b2_ratio" name="使用此 TOML 执行 Stage2 时，非零整数将 B2 设为存档 B1 与此值的乘积，直接读档也适用。0 或不填写此键沿用原有 B2 选择；乘积溢出会报错。" />
+      <Item id="option_stage1_auto_stage2" name="启用 Stage1 无因子成功完成后的 Stage2 交接。未指定接收 worker 且目标为同一 worktodo 时，原位置改写为 ECMSTAGE2；否则按 auto_stage2_worktodo/auto_stage2_workers 投递。保留 Stage1 finished 记录；找到因子不生成 Stage2 任务。0 关闭新交接，worker 分区可覆盖。" />
+      <Item id="option_stage1_auto_stage2_workers" name="auto_stage2=1 时的接收 worker，可填写 1..1000000 内单个编号、逗号列表或区间；选择任务数最少者，并列取较小编号。auto 使用目标队列已有 worker 分区，无分区时使用 GUI NumWorkers。显式指定但尚不存在的分区会创建。留空保留当前 worker，同文件原位改写，其他文件也使用当前编号；目标不可写时保留待投递记录。" />
+      <Item id="option_stage1_auto_stage2_worktodo" name="auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo；可填写绝对文件路径，或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的 stage2_finished；worker 分区可覆盖。" />
+      <Item id="option_shared_priority" name="队列选择顺序：0 按文件顺序；1 优先完成 ECMSTAGE1；2 优先完成 ECMSTAGE2。优先阶段暂无任务时执行另一阶段；worker 分区可覆盖。" />
+      <Item id="option_shared_skip" name="0 处理两个阶段；1 完全跳过 ECMSTAGE1 行；2 完全跳过 ECMSTAGE2 行。worker 分区可覆盖。" />
+      <Item id="option_stage1_finished" name="指定 Stage1 已完成任务的记录文件。用于保留原任务行和处理结果，不是曲线计算的中间存档。" />
+      <Item id="option_stage1_log_file" name="指定 Stage1 普通运行日志，程序追加写入。留空关闭文件日志；未显式指定文件名时，worker 2 等自动使用 screen_2.log 这类带编号的文件名。" />
+      <Item id="option_stage1_tmp_dir" name="指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此键不是 Stage2 全部临时显存或内存的预算。" />
+      <Item id="option_stage1_save_sync_dir_1" name="指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。" />
+      <Item id="option_stage1_save_sync_dir_2" name="指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。" />
+      <Item id="option_stage1_sync_mode" name="控制 Stage1 任务完成后的存档同步。incremental 仅同步本次任务期间更新的文件；full 同步全部符合条件的存档。程序启动时仍执行一次完整同步。" />
+      <Item id="option_stage1_p95_worktodo_path" name="用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。" />
+      <Item id="option_stage1_edwards_stage2_transfer" name="启用后，将已完成的 Edwards Stage1 任务作为 ECMSTAGE2 投递到共用 worktodo 的接收 worker 分区。存档使用绝对路径；投递失败时保留待投递记录。两项同时设置时以 auto_stage2 为准。" />
+      <Item id="option_stage1_edwards_stage2_worker" name="edwards_stage2_transfer=1 时的接收 worker。0 沿用 Stage1 worker 编号；正数指定共用 worktodo 中的接收分区。" />
+      <Item id="option_stage1_p95_add_workers" name="选择接收交接任务的 Prime95 worker，可指定单个编号、编号列表或区间；程序在候选 worker 中选择队列较短者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认 worker 处理。" />
+      <Item id="option_stage1_p95_keep_aid" name="控制交接任务是否保留 PrimeNet assignment ID。1 保留未被判定失效的 AID，0 一律去掉；已在 Prime95 日志中确认失效的 AID 会去掉，以免任务再次被丢弃。" />
+      <Item id="option_stage1_p95_recover_lost" name="控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，0 关闭自动补投；只对程序能够确认的已交接任务生效。" />
+      <Item id="option_stage1_progress_color" name="选择 Stage1 控制台进度文字颜色。none 关闭着色；此设置不改变普通文件日志内容或计算方式。" />
+      <Item id="option_stage1_progress_log_seconds" name="控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。" />
+      <Item id="option_stage1_verbose" name="控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由 stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。" />
+      <Item id="option_stage1_curve" name="Stage1 曲线模型：mont 为 Montgomery，ed 为 Atkin-Morain Edwards。Edwards 支持 CPU 与 CUDA GPU，固定使用 48*lcm(1..B1)；OpenCL 不支持 Edwards。CUDA Edwards 输出 METHOD=ECM-EDWARDS-AM 存档供 CUDA Stage2 使用。" />
+      <Item id="option_stage1_target" name="选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件内切换 CUDA 与 OpenCL。" />
+      <Item id="option_stage1_impl" name="CPU Stage1 算术实现：auto 根据 CPU 能力和批量选择；simd 要求 AVX512-IFMA；scalar 使用 GMP。GPU 运行时拒绝非 auto 值。" />
+      <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
+      <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。" />
+      <Item id="option_stage1_affinity" name="设置 CPU Stage1 计算线程的亲和性，可用逻辑 CPU 编号列表或区间；线程依次循环使用列表中的 CPU。空值、none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现只对单处理器组内编号 0..63 生效，其他平台不执行此绑定；编号还须对应实际可用的逻辑 CPU。" />
+      <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
+      <Item id="option_stage1_exp_cache" name="指定 Stage1 指数缓存目录，复用相同 B1 和指数模式的预计算结果。留空使用可执行文件目录；off、none、0 或 - 关闭缓存。显式相对目录以进程当前工作目录为基准；很小的 B1 可能直接计算而不写缓存。" />
+      <Item id="option_stage1_naf_w" name="设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此设置。" />
+      <Item id="option_stage1_lcm" name="Montgomery Stage1 标量是 lcm(1..B1) 乘 1 或 12。Edwards 固定使用 48·lcm，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。" />
+      <Item id="option_stage1_sigma" name="曲线起始 sigma；0 表示随机生成，连续曲线使用 sigma+i 且不得在 64 位处回绕。CUDA PARAM0 接受完整 64 位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是 Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。" />
+      <Item id="option_stage1_p95_dir" name="保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 p95_worktodo_path。" />
+      <Item id="option_stage1_ckpt_backups" name="Stage1 检查点轮换备份的最大份数；主存档另计，0 表示只保留主存档。恢复时跳过损坏或无法读取的代次；Stage1 完成后清理主存档及所有备份。" />
+      <Item id="option_stage1_ckpt_seconds" name="设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。" />
+      <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
+      <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
+      <Item id="option_stage1_tpi" name="设置 OpenCL 每个大整数使用的线程数，需满足有效 TPI 与整数 limb 数的布局约束。CUDA 后端自行按位宽选择 TPI，不使用此键；不要用它调整 CUDA 的线程块大小。" />
+      <Item id="option_stage1_wg_size" name="设置 OpenCL 工作组大小，0 由后端自动选择。显式值必须满足当前设备和内核的限制；CUDA 后端不使用此设置。" />
+      <Item id="option_stage1_kernel_mul" name="指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。CUDA 后端忽略此键。" />
+      <Item id="option_stage1_kernel_sqr" name="指定 OpenCL 模平方内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
+      <Item id="option_stage1_kernel_add" name="指定 OpenCL 模加内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
+      <Item id="option_stage1_kernel_sub" name="指定 OpenCL 模减内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
+      <Item id="option_stage1_kernel_special_mult" name="指定 OpenCL 特殊乘法内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
+      <Item id="option_shared_user" name="Stage1与Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。" />
+      <Item id="option_shared_computer" name="结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。" />
+      <Item id="option_stage2_stage2_submission_file" name="仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存在本地忽略文件中。" />
+      <Item id="option_stage2_stage2_finished" name="记录共用 worktodo 中已完成或输入错误的 Stage2 任务，保存原任务、结果状态及提交回执。路径必须不同于 Stage1 finished 和活动队列。" />
+      <Item id="option_stage2_stage2_log_file" name="指定 Stage2 普通运行日志，追加记录阶段、批次、警告和结束统计。留空关闭普通文件日志，控制台仍输出；未显式指定时，多 worker 自动给默认文件名加编号后缀。" />
+      <Item id="option_stage2_stage2_results_file" name="指定 Stage2 成功曲线结果的 JSONL 文件，包含因子信息和续跑回执。留空使用默认文件名；不要在未完成队列续跑期间单独删除或替换它，否则会失去回执对账依据。" />
+      <Item id="option_stage2_stage2_debug_log_file" name="指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。" />
+      <Item id="option_stage2_stage2_progress_file" name="旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;task-id&gt;.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。" />
+      <Item id="option_stage2_stage2_progress_dir" name="每任务 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;task-id&gt;.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、save 内容、曲线范围和 B2；调整任务顺序、设备/显存/日志路径或 D/承载调优不会重置已完成曲线。文件仅保存计数和回执元数据，任务发布并移出队列后清除。" />
+      <Item id="option_stage2_stage2_save_dir" name="指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。" />
+      <Item id="option_stage2_stage2_debug_log" name="控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开启本选项也不把全部调试输出刷到控制台。" />
+      <Item id="option_stage2_stage2_device" name="Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。" />
+      <Item id="option_stage2_stage2_log_level" name="兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 stage2_debug_log。" />
+      <Item id="option_stage2_stage2_ntt_counts" name="生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。" />
+      <Item id="option_stage2_stage2_relocation" name="可选的生产 GPU Stage2 保守 relocation。保持 B2 和原 giant 终点，干净 NF 使用较短后缀；命中或出现目标 N 非单位（包括 GCD=N）时重放原区间。短点块按完整 G 边界重分。默认 0 保留原算法，CLI --relocation 覆盖当前 worker 的 TOML。D/AutoB2 和内存准入使用原区间估算；本模式不采集 ECM 调优样本、不执行启动 ECM 标定，并禁用显式 --tune ecm；纯 NTT 样本仍可复用。" />
+      <Item id="option_stage2_stage2_b2" name="设置未在命令行或任务行给出非零 B2 时使用的 Stage2 上界。0 表示继续从其他来源选择；显式 B2 必须大于存档的 B1。增大 B2 通常增加搜索范围、运行时间及显存需求；命令行非零 B2 优先于任务行，任务行优先于此键。" />
+      <Item id="option_stage2_stage2_d" name="手动指定 Stage2 算法步长 D。0 自动选形；非零值除满足偶数且不小于 6 外，还必须满足当前引擎的布局限制。D 会改变树规模、批次数和内存需求，通常保持自动。" />
+      <Item id="option_stage2_stage2_batch_mb" name="设置 Stage2 S4 批次的工作缓冲预算，单位为 MiB。增大预算可能减少分批开销，但会占用更多显存；它只约束对应批次缓冲，不是整个进程的显存上限。" />
+      <Item id="option_stage2_stage2_arena_mb" name="设置 Stage2 大工作区预算，单位为 MiB，用于规划可用的 NTT 工作形状。0 由运行环境或自动规划决定，不表示不使用显存；过小可能迫使较小工作形状或使任务无法运行。表、坐标和其他模块仍可能另占显存。" />
+      <Item id="option_stage2_stage2_fold_mb" name="设置 fold 累积结果驻留 GPU 的预算，单位为 MiB。0 关闭这部分驻留；所需空间超过预算时可退回分批路径，可能显著增加处理和传输开销。此预算与大工作区、批次缓冲分别控制，不是总显存限制。" />
+      <Item id="option_stage2_stage2_factorize_hits" name="控制是否调用 PARI/GP 进一步分解命中的因子。1 开启，0 只保留 Stage2 已得到并验证的因子结果；进一步分解可能增加曲线结束后的时间，需要可用的 stage2_gp。" />
+      <Item id="option_stage2_stage2_factor_only" name="控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 stage2_factorize_hits。" />
+      <Item id="option_stage2_stage2_auto_b2" name="所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用 Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 stage2_tune_ignore 控制。当前输入仍检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。" />
+      <Item id="option_stage2_stage2_gp" name="指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 TOML 键不使用数据集脚本的 --gp 环境变量回退规则。" />
+      <Item id="option_stage2_stage2_factor_timeout" name="设置每次 PARI/GP 因子分解调用的超时时间，单位为秒。仅影响附加的因子分解，不限制 Stage2 曲线计算时长；超时不表示原 Stage2 算法未找到因子。" />
+      <Item id="option_stage2_stage2_cost_profile" name="stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保持原二进制、设备、算术及标定资格检查；新的完整 ECM tune 不放宽旧合同。留空不提供旧配置。" />
+      <Item id="option_stage2_stage2_auto_carrier" name="对有效ECMSTAGE2=1,2,p,-1保存点，验证N整除M=2^p-1且2&lt;=p&lt;=16384后加入承载候选。普通成本按target_bits、梅森成本按arithmetic_bits=p查询，并遵循stage2_prediction_policy；完整M_p已使用原生梅森算术，不重复加入相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。" />
+      <Item id="option_stage2_stage2_prediction_policy" name="model：优先使用精确配对实测；其他输入分别按通用、梅森算术位宽区间预测，满足双侧误差保护及当前显存准入才替换。缺调优资料时使用明确标为估算的4060 Laptop/1800MHz基础模型；未覆盖的NTT/驻留区间保留默认。paired恢复原精确位宽/B2实测收益门禁。B1不作为复用门槛。" />
+      <Item id="option_stage2_stage2_tune_arithmetic" name="显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo/save配对仍遵循stage2_auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。" />
+      <Item id="option_stage2_stage2_tune_profile" name="格式7最终ECM矩阵TOML。按arithmetic_bits分别查询通用、梅森算术数据，原生完整梅森数数据也可校准承载；target_bits和carrier_exponent保留测量身份。估算替换遵循stage2_prediction_policy，缺数据可使用基础模型；B1不作为复用门槛。留空且未指定旧成本配置时使用相邻stage2_ecm_tune.toml。" />
+      <Item id="option_stage2_stage2_tune_runtime" name="按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；至少两次观察后按均值、标准差及切换余量比较。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。" />
+      <Item id="option_stage2_stage2_tune_runtime_samples" name="完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少两次用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。" />
+      <Item id="option_stage2_stage2_short_ntt_batch_tune" name="实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。" />
+      <Item id="option_stage2_stage2_pack_zero" name="每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。" />
+      <Item id="option_stage2_stage1_tune_profile" name="已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。" />
+      <Item id="option_stage2_stage2_auto_min_b2" name="Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。" />
+      <Item id="option_stage2_stage2_auto_max_b2" name="Auto B2 搜索上界；0 为 2.6e12。未测值允许估算，显式任务 B2 优先。" />
+      <Item id="option_stage2_stage1_batch" name="指定 Auto B2 成本估算对应的 Stage1 批次曲线数。它用于选择或核对 Stage1 的成本条件，不会让 Stage2 驱动启动该批 Stage1 计算，也不改变任务要处理的曲线数。" />
+      <Item id="option_stage2_stage1_seconds_per_curve" name="为 Auto B2 提供正的 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。优先于 Stage1 tune 实测。未指定时，完整 ECM tune 需匹配 stage1_tune_profile；旧组件 profile 使用其自身匹配的 Stage1 数据。此值不是本次运行时限，也不是调优输入的准备耗时。" />
+      <Item id="option_stage2_stage2_ratio_adjust" name="将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。" />
+      <Item id="option_workers.1_name" name="设置此 worker 在 GUI 中显示的名称。未配置时显示 Worker #N，其中 N 为 worker 编号；只改变显示名称，不改变设备或任务分配。" />
+      <Item id="option_workers.1_autostart" name="控制 GUI 启动后是否自动启动此 worker。0 不启动，非零值启动；此设置不影响从命令行直接启动 worker 的行为。" />
+      <Item id="option_workers.1_extra_args" name="向 GUI 启动的 worker 追加命令行参数。参数以空格分隔，含空格的路径使用双引号；命令行覆盖配置文件的选项应以实际 worker 支持的参数为准。" />
+      <Item id="option_workers.1_gpucurves" name="保留旧 GUI 配置的曲线数显示字段，可继承全局同名值。Stage1 队列执行的曲线数由各任务行决定，此键不会覆盖任务；直接单次运行的 -gpucurves 是独立命令行参数。" />
+      <Item id="option_stage2_stage2_tune_ignore" name="逗号分隔的复用忽略项；留空核对全部条件。memory 默认匹配执行路径。算术合法性及当前显存准入始终检查。" />
+      <Item id="option_stage2_stage2_tune_budget_seconds" name="调优预算，包含输入准备、测量及显式开启的预热。每个位宽/B2 从默认模型的 D 开始比较邻档，仅沿超过 2% 且跨过 MAD 噪声界限的实测收益移动。复用已测候选；到期完成正在运行的测量并保留有效摘要。" />
+      <Item id="option_stage2_stage2_tune_warmup" name="0 表示 ECM/NTT 调优及启动短校准直接开始正式测量，不执行丢弃的预热轮次；1 表示每个形状先运行一轮经过核验的预热，占用相同预算但不计入中位数/MAD。CLI --tune-warmup 0|1 覆盖此键；必要算术检查始终执行。" />
+      <Item id="option_stage2_stage2_short_calibration" name="无合适 ECM tune 文件、必要组件缺失或任务位宽完全没有可复用校准覆盖时短校准；部分覆盖允许估算。" />
+      <Item id="option_stage2_stage2_short_calibration_seconds" name="短校准测量预算，不含首次 CUDA 初始化；到期完成当前测量后停止。" />
+      <Item id="option_stage2_stage2_tune_error_limit" name="非负完整曲线成本模型的留一验证相对误差门限。稀疏估算保留不确定性标记，不能覆盖默认 D；局部下降比较实测中位数与 MAD，不用预测误差决定移动。" />
+      <Item id="option_stage2_stage1_cost_csv" name="总流程 Auto B2 的 Stage1 秒/曲线 CSV；列为 container_bits 或 target_bits、tpi、curves、b1、mhz、seconds_per_curve；可选 tpb、exponent。缺失位宽可插值或外推，成本已摊销。" />
+      <Item id="option_stage2_stage1_cost_mhz" name="Stage1 成本反频率缩放的目标频率；0 使用 CSV 参考频率，不修改 GPU 时钟。" />
+      <Item id="option_stage2_stage2_target_factor_bits" name="Dickman 半光滑成功概率的目标素因子位数；0 根据 B1 推荐，与完整模数位宽不同。" />
+      <Item id="option_stage2_stage2_tune_condition_tag" name="可选测量条件标签，例如固定频率或功耗。不同标签保留独立最快汇总；忽略 environment 时允许复用。" />
+      <Item id="option_stage1_stage1_submission_file" name="Stage1 提交 JSON：整条任务完成后合并 NF（B2=B1）；验证后的因子立即单曲线输出。私有账本位于输出目录的 data/ 下。" />
+      <Item id="option_stage1_stage1_results_file" name="统一格式的逐曲线 Stage1 内部 JSONL，包含 CRC32 与执行元数据，与提交文件分开。" />
+    </Panel>
+  </Native-Langue>
+</EcmGui>

@@ -11,6 +11,8 @@ struct UiValues {
     std::string ui_language = "en";
     float ui_scale = 0.0f;
     int ui_font_size = 15;
+    int ui_primary_font_offset = 1;
+    int ui_secondary_font_offset = -2;
     int ui_gpu_history_seconds = 60;
     std::string ui_nav_order = "0123456";
     int ui_page = 0;
@@ -47,6 +49,10 @@ inline constexpr float ui_scale_min = 0.0f;
 inline constexpr float ui_scale_max = 4.0f;
 inline constexpr int ui_font_size_min = 10;
 inline constexpr int ui_font_size_max = 30;
+inline constexpr int ui_primary_font_offset_min = 0;
+inline constexpr int ui_primary_font_offset_max = 6;
+inline constexpr int ui_secondary_font_offset_min = -6;
+inline constexpr int ui_secondary_font_offset_max = 0;
 inline constexpr int ui_page_min = 0;
 inline constexpr int ui_page_max = 6;
 inline constexpr int ui_worker_min = 1;
@@ -74,6 +80,8 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("ui","language",value.ui_language);
     field("ui","scale",value.ui_scale);
     field("ui","font_size",value.ui_font_size);
+    field("ui","primary_font_offset",value.ui_primary_font_offset);
+    field("ui","secondary_font_offset",value.ui_secondary_font_offset);
     field("ui","gpu_history_seconds",value.ui_gpu_history_seconds);
     field("ui","nav_order",value.ui_nav_order);
     field("ui","page",value.ui_page);
@@ -109,6 +117,8 @@ inline void validate_ui(const UiValues& v) {
     if ((v.ui_language != "en" && v.ui_language != "zh") || v.ui_language.size() > 4096) throw std::runtime_error("Invalid UI state: ui.language");
     if (v.ui_scale < 0 || v.ui_scale > 4 || !std::isfinite(v.ui_scale)) throw std::runtime_error("Invalid UI state: ui.scale");
     if (v.ui_font_size < 10 || v.ui_font_size > 30) throw std::runtime_error("Invalid UI state: ui.font_size");
+    if (v.ui_primary_font_offset < 0 || v.ui_primary_font_offset > 6) throw std::runtime_error("Invalid UI state: ui.primary_font_offset");
+    if (v.ui_secondary_font_offset < -6 || v.ui_secondary_font_offset > 0) throw std::runtime_error("Invalid UI state: ui.secondary_font_offset");
     if ((v.ui_gpu_history_seconds != 15 && v.ui_gpu_history_seconds != 30 && v.ui_gpu_history_seconds != 60 && v.ui_gpu_history_seconds != 120)) throw std::runtime_error("Invalid UI state: ui.gpu_history_seconds");
     auto sorted_ui_nav_order = v.ui_nav_order; std::sort(sorted_ui_nav_order.begin(),sorted_ui_nav_order.end());
     if (sorted_ui_nav_order != "0123456" || v.ui_nav_order.size() > 7) throw std::runtime_error("Invalid UI state: ui.nav_order");

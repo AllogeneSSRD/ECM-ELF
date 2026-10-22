@@ -10,7 +10,7 @@ def main():
     a=p.parse_args();out=a.out.resolve();out.mkdir();exe=a.exe.resolve()
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     rows=[]
-    for name,font,scale,width,height,language in [('wide',15,1,1920,1200,'zh'),('narrow',20,1.25,1120,850,'zh'),('large',30,2,1920,1400,'en')]:
+    for name,font,scale,width,height,language in [('wide',15,1,1920,1200,'zh'),('narrow',20,1.25,1120,850,'zh'),('small',15,1,800,850,'en'),('large',30,2,1920,1400,'en')]:
         folder=out/name;folder.mkdir();cfg=folder/'ecm.toml';queue=folder/'worktodo.txt';queue.write_text('')
         cfg.write_text('[shared]\nworktodo="worktodo.txt"\n[gui]\nNumWorkers=6\n'+''.join(f'[workers.{i}]\nautostart=0\n' for i in range(1,7)))
         original=cfg.read_bytes();state=folder/'ui.toml';state.write_text(f'[ui]\npage=0\nlanguage="{language}"\nfont_size={font}\nscale={scale}\nlogs=true\ninspector=false\ntoasts=false\n')
@@ -30,6 +30,12 @@ def main():
             if 'table_required' in s:
                 metrics['table_required']=float(s['table_required']);metrics['table_data_height']=float(s['table_data_height'])
                 full_height=full_height and s['table_rows']=='6' and metrics['table_data_height']+.5>=metrics['table_required']
+            for key in ['toolbar_height','row_height','worker_button_height']:metrics[key]=float(s[key])
+            metrics['flexible']=int(s['flexible']);metrics['table_scroll_x']=float(s['table_scroll_x']);metrics['field_overflow']=float(s['field_overflow'])
+            assert metrics['table_scroll_x']<=.5 and metrics['field_overflow']<=.5,metrics
+            if not metrics['flexible']:assert metrics['row_height']<=2.5*metrics['body_font'],metrics
+            assert metrics['worker_button_height']<=1.7*metrics['body_font'] and metrics['worker_button_height']>=metrics['body_font'],metrics
+            assert metrics['toolbar_height']<=3*metrics['body_font'],metrics
             matched=metrics['log_body']==1 and metrics['body_font']==metrics['font_height'] and metrics['body_glyph']==metrics['log_glyph']
             rows.append(dict(name=name,font=font,scale=scale,width=width,height=height,language=language,metrics=metrics,full_table_height=full_height,matched_typography=matched))
         finally:close(proc,hwnd)
