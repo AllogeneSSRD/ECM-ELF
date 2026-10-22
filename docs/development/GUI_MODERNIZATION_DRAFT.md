@@ -392,6 +392,17 @@ GPU三图基础卡片高64逻辑单位，宽度足够时合计192；图例与当
 - 验证：[宽面板及ratio展开](../../data/experiments/gui_v2/stage2_summary_wide_0497_02/result.json)、[640px/24字号完整说明与高度](../../data/experiments/gui_v2/stage2_summary_narrow_0497_01/result.json)通过，实际绘制文本被检查为三条逻辑行，Edwards无param，阶段无重复B1/B2；[直接B2与三worker展示](../../data/experiments/gui_v2/stage2_summary_presentation_0497_01/result.json)检查未用ratio时不显示公式。应用测试覆盖Montgomery param、Edwards、ratio不匹配及乘法溢出保护。首轮宽面板测试误将共享键`b2_ratio`放入`[stage2]`被正确拒绝；按既有schema改正为`[shared]`，不修改正确的配置校验，原失败目录保留。
 - 当前本地exe SHA256：`5c3405dd8928b367553539f0bb6a6693c51cae74a3c9aca7e25ed770c7ed438f`，版本0.49.7，未提交Git；旧ZIP未重打包。此前原生日志/进度/GPU/导航/设置证据保留各自二进制身份，末次说明改动后重跑应用及宽窄/直接B2展示，不据旧证据声明最终二进制已重跑完整性能矩阵。正式使用说明与HTML同步。
 
+### 0.49.8 生成器与概率页的曲线选择及紧凑表单
+
+- 按用户要求先将当前全部未忽略更改提交为 `5a3e3d2 [0.49.7]`，包括工作区新增测试入口与忽略规则；本轮布局修改随后进行。
+- 两页共用 Edwards / Montgomery 两组按钮与左标签、右关联开关的表单。短字段在足够宽度下一行两个，窄区域按当前字号自动单列，保存命名模板占整行；高级筛选与绘图范围使用相同布局。
+- 概率页补齐四种 Edwards 与四种 Montgomery，Edwards 按现有代表 D_eff 递减；param 0 / 2 分开取值。数据依据 `tools/ecm_prob/out/d_eff_representative.json`、`model.py::THEORETICAL_D` 与 `rho.py` 常数，数值保存在 v2 展示预设，不新增计算算法。Edwards 联合模型仍为相对 Suyama 归一启发值，未经直接 Stage2 拟合。
+- 生成器只列工作队列实现接受的 e/m0/m2/m3，CPU 组合校验、GPU 推荐获取、预览失效、目标分区及拥有权校验沿用既有实现。新增界面文字在外部 XML 维护。
+- 最终独立构建成功，171项源码目录指纹核对通过；候选 `ecm_gui_v2.exe` SHA-256为 `2ce55385fa072088c6f31a39acf8672f9fb06fe8fc9697c11591dd1bab8c7858`，版本0.49.8，默认DX11。新布局尚未提交，旧ZIP未重打包。
+- 验证通过：[15字号原生双语布局与数值](../../data/experiments/gui_v2/curve_forms_native_0498_05/result.json)、[24字号原生双语布局与数值](../../data/experiments/gui_v2/curve_forms_large_font_0498_03/result.json)。两种字号共64次预设点击，分别对照经验数据与理论/相对归一模型；确认两组按钮的顺序、生成器支持集合、宽面板两列、窄面板单列、输入左对齐、说明在左、关联开关在右且不越界，以及B2/B1切换。比对数据SHA-256为 `48b9b5fa05824be6fd6fa5566805f322fd3f4abecdb22d22087eaf9edfc206bc`。
+- [应用契约日志](../../data/experiments/gui_v2/curve_forms_contracts_0498_04/app.log)与[侧车契约日志](../../data/experiments/gui_v2/curve_forms_contracts_0498_04/state.log)通过，覆盖预览失效、目标分区、改文件拒绝、CPU不支持组合拒绝及概率快照；[旧GUI隔离](../../data/experiments/gui_v2/curve_forms_legacy_0498_01/result.json)确认73项受保护文件、旧二进制及既有业务配置投影保持一致。仅使用空闲DX11和合成输入，未运行真实ECM或Vulkan渲染。
+- 首轮原生测试发现表单分组中的第二列坐标重复偏移，已修复并补充容器右边界校验；原始失败留在 `curve_forms_native_0498_02`。早期沙箱路径访问失败、较大字号旧二进制对齐失败、构建期间误启动测试导致的链接占用证据均保留，不算通过；链接失败日志见 `curve_forms_build_locked_0498_01/build.log`。最终构建完成后按二进制身份重新验证上述两种字号，结果均通过。
+
 ## 1. 分析边界与基线
 
 ### P3–P6 扩展授权与宠物兼容

@@ -360,6 +360,11 @@
       <Item id="stage2.phase.curve_done" name="曲线完成" />
       <Item id="stage2.phase.task_done" name="任务完成" />
       <Item id="stage2.phase.ended" name="已结束" />
+      <Item id="curve.edwards_title" name="Edwards:" />
+      <Item id="curve.montgomery_title" name="Montgomery:" />
+      <Item id="generator.b1_hint" name="空白保留输入" />
+      <Item id="generator.b2_hint" name="空白保留输入" />
+      <Item id="probability.profile_values" name="%s&#10;Stage1 经验 D_eff = %.6g&#10;联合模型 D_eff = %.6g（Edwards 为相对 Suyama 启发值）" />
     </Panel>
   </Native-Langue>
 </EcmGui>

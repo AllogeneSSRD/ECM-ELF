@@ -3,6 +3,7 @@
 #include "gpu_details.h"
 #include "ui/widgets.h"
 #include "ui/chart.h"
+#include "ui/compact_form.h"
 #include "ui/stage2_progress.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
@@ -71,6 +72,8 @@ public:
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 language_control{};
+    ui::CompactFormAudit generator_form,probability_form;
+    std::map<int,std::pair<ImVec2,ImVec2>> generator_curve_controls,probability_curve_controls;
     std::map<std::string,ImVec2> language_file_controls;
     int nav_drag_page=-1;
     float nav_rounding=0,nav_item_height=0,nav_item_gap=0;

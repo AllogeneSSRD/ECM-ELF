@@ -258,6 +258,17 @@
 <li><code>App::configure_workers</code>读取与worker相同的配置覆盖投影，缓存已应用的<code>b2_ratio</code>；<code>ui::worker_construction</code>只在非零ratio、已知B1/B2、无溢出且乘积相符时显示<code>B2=5000*B1=1300000000000</code>，否则显示实际B2，不由数值整除反推ratio。显示不改变B1、B2或算法。<code>App::worker_summary</code>供预留高度和整行绘制共同调用，避免说明增加后裁切或出现内部滚动。</li>
 <li>验证：<a href="../../data/experiments/gui_v2/stage2_summary_wide_0497_02/result.json">宽面板及ratio展开</a>、<a href="../../data/experiments/gui_v2/stage2_summary_narrow_0497_01/result.json">640px/24字号完整说明与高度</a>通过，实际绘制文本被检查为三条逻辑行，Edwards无param，阶段无重复B1/B2；<a href="../../data/experiments/gui_v2/stage2_summary_presentation_0497_01/result.json">直接B2与三worker展示</a>检查未用ratio时不显示公式。应用测试覆盖Montgomery param、Edwards、ratio不匹配及乘法溢出保护。首轮宽面板测试误将共享键<code>b2_ratio</code>放入<code>[stage2]</code>被正确拒绝；按既有schema改正为<code>[shared]</code>，不修改正确的配置校验，原失败目录保留。</li>
 <li>当前本地exe SHA256：<code>5c3405dd8928b367553539f0bb6a6693c51cae74a3c9aca7e25ed770c7ed438f</code>，版本0.49.7，未提交Git；旧ZIP未重打包。此前原生日志/进度/GPU/导航/设置证据保留各自二进制身份，末次说明改动后重跑应用及宽窄/直接B2展示，不据旧证据声明最终二进制已重跑完整性能矩阵。正式使用说明与HTML同步。</li>
+</ul>
+<h4>0.49.8 生成器与概率页的曲线选择及紧凑表单</h4>
+<ul>
+<li>按用户要求先将当前全部未忽略更改提交为 <code>5a3e3d2 [0.49.7]</code>，包括工作区新增测试入口与忽略规则；本轮布局修改随后进行。</li>
+<li>两页共用 Edwards / Montgomery 两组按钮与左标签、右关联开关的表单。短字段在足够宽度下一行两个，窄区域按当前字号自动单列，保存命名模板占整行；高级筛选与绘图范围使用相同布局。</li>
+<li>概率页补齐四种 Edwards 与四种 Montgomery，Edwards 按现有代表 D_eff 递减；param 0 / 2 分开取值。数据依据 <code>tools/ecm_prob/out/d_eff_representative.json</code>、<code>model.py::THEORETICAL_D</code> 与 <code>rho.py</code> 常数，数值保存在 v2 展示预设，不新增计算算法。Edwards 联合模型仍为相对 Suyama 归一启发值，未经直接 Stage2 拟合。</li>
+<li>生成器只列工作队列实现接受的 e/m0/m2/m3，CPU 组合校验、GPU 推荐获取、预览失效、目标分区及拥有权校验沿用既有实现。新增界面文字在外部 XML 维护。</li>
+<li>最终独立构建成功，171项源码目录指纹核对通过；候选 <code>ecm_gui_v2.exe</code> SHA-256为 <code>2ce55385fa072088c6f31a39acf8672f9fb06fe8fc9697c11591dd1bab8c7858</code>，版本0.49.8，默认DX11。新布局尚未提交，旧ZIP未重打包。</li>
+<li>验证通过：<a href="../../data/experiments/gui_v2/curve_forms_native_0498_05/result.json">15字号原生双语布局与数值</a>、<a href="../../data/experiments/gui_v2/curve_forms_large_font_0498_03/result.json">24字号原生双语布局与数值</a>。两种字号共64次预设点击，分别对照经验数据与理论/相对归一模型；确认两组按钮的顺序、生成器支持集合、宽面板两列、窄面板单列、输入左对齐、说明在左、关联开关在右且不越界，以及B2/B1切换。比对数据SHA-256为 <code>48b9b5fa05824be6fd6fa5566805f322fd3f4abecdb22d22087eaf9edfc206bc</code>。</li>
+<li><a href="../../data/experiments/gui_v2/curve_forms_contracts_0498_04/app.log">应用契约日志</a>与<a href="../../data/experiments/gui_v2/curve_forms_contracts_0498_04/state.log">侧车契约日志</a>通过，覆盖预览失效、目标分区、改文件拒绝、CPU不支持组合拒绝及概率快照；<a href="../../data/experiments/gui_v2/curve_forms_legacy_0498_01/result.json">旧GUI隔离</a>确认73项受保护文件、旧二进制及既有业务配置投影保持一致。仅使用空闲DX11和合成输入，未运行真实ECM或Vulkan渲染。</li>
+<li>首轮原生测试发现表单分组中的第二列坐标重复偏移，已修复并补充容器右边界校验；原始失败留在 <code>curve_forms_native_0498_02</code>。早期沙箱路径访问失败、较大字号旧二进制对齐失败、构建期间误启动测试导致的链接占用证据均保留，不算通过；链接失败日志见 <code>curve_forms_build_locked_0498_01/build.log</code>。最终构建完成后按二进制身份重新验证上述两种字号，结果均通过。</li>
 </ul></section><section id="boundaries"><h2>01 · 两个前端，独立演进</h2><div class="twocol"><div class="identity"><div class="label">原 GUI · 保持不变</div><strong>ecm_gui.exe</strong><p>Win32 + ImGui + Direct3D 11<br>原目录、入口、默认值、布局与测试期望保留。</p></div><div class="identity"><div class="label">GUI v2 · 新增</div><strong>ecm_gui_v2.exe</strong><p>Win32 + ImGui + DX11（默认）<br>Vulkan 仅显式诊断<br>新增工程、构建入口、输出目录和 UI 状态。</p></div></div><div class="table-wrap"><table><thead><tr><th>范围</th><th>原 GUI</th><th>GUI v2 规划</th></tr></thead><tbody>
 <tr><td>实现</td><td><code>src/ecm/application/gui/</code></td><td><code>src/ecm/application/gui_v2/</code></td></tr><tr><td>构建入口</td><td><code>tools/build/build_gui.bat</code></td><td>新增 <code>tools/build/build_gui_v2.bat</code></td></tr><tr><td>默认输出</td><td><code>build_gui_local/</code></td><td><code>build_gui_v2_local/</code></td></tr><tr><td>界面状态</td><td>原 <code>[gui]</code> 及停靠布局</td><td>独立 LocalAppData 侧车，支持 <code>--ui-state</code></td></tr><tr><td>依赖</td><td>不增加 Vulkan 要求</td><td><code>ECM_BUILD_GUI_V2</code> 默认 OFF，显式构建时检查依赖</td></tr><tr><td>业务模块</td><td>原实现和链接关系不变</td><td>明确列源，只读复用 Controller、结果、生成器和概率等模块</td></tr>
 </tbody></table></div><p class="caption-line caption">v2 保存外观和窗口状态不改写旧 UI 配置；业务 TOML 与 UI 状态分开。两个 GUI 对同一 worker / 队列组的控制拥有权必须在启动前验证。</p></section>
@@ -513,6 +524,17 @@
 <li><code>App::configure_workers</code>读取与worker相同的配置覆盖投影，缓存已应用的<code>b2_ratio</code>；<code>ui::worker_construction</code>只在非零ratio、已知B1/B2、无溢出且乘积相符时显示<code>B2=5000*B1=1300000000000</code>，否则显示实际B2，不由数值整除反推ratio。显示不改变B1、B2或算法。<code>App::worker_summary</code>供预留高度和整行绘制共同调用，避免说明增加后裁切或出现内部滚动。</li>
 <li>验证：<a href="../../data/experiments/gui_v2/stage2_summary_wide_0497_02/result.json">宽面板及ratio展开</a>、<a href="../../data/experiments/gui_v2/stage2_summary_narrow_0497_01/result.json">640px/24字号完整说明与高度</a>通过，实际绘制文本被检查为三条逻辑行，Edwards无param，阶段无重复B1/B2；<a href="../../data/experiments/gui_v2/stage2_summary_presentation_0497_01/result.json">直接B2与三worker展示</a>检查未用ratio时不显示公式。应用测试覆盖Montgomery param、Edwards、ratio不匹配及乘法溢出保护。首轮宽面板测试误将共享键<code>b2_ratio</code>放入<code>[stage2]</code>被正确拒绝；按既有schema改正为<code>[shared]</code>，不修改正确的配置校验，原失败目录保留。</li>
 <li>当前本地exe SHA256：<code>5c3405dd8928b367553539f0bb6a6693c51cae74a3c9aca7e25ed770c7ed438f</code>，版本0.49.7，未提交Git；旧ZIP未重打包。此前原生日志/进度/GPU/导航/设置证据保留各自二进制身份，末次说明改动后重跑应用及宽窄/直接B2展示，不据旧证据声明最终二进制已重跑完整性能矩阵。正式使用说明与HTML同步。</li>
+</ul>
+<h4>0.49.8 生成器与概率页的曲线选择及紧凑表单</h4>
+<ul>
+<li>按用户要求先将当前全部未忽略更改提交为 <code>5a3e3d2 [0.49.7]</code>，包括工作区新增测试入口与忽略规则；本轮布局修改随后进行。</li>
+<li>两页共用 Edwards / Montgomery 两组按钮与左标签、右关联开关的表单。短字段在足够宽度下一行两个，窄区域按当前字号自动单列，保存命名模板占整行；高级筛选与绘图范围使用相同布局。</li>
+<li>概率页补齐四种 Edwards 与四种 Montgomery，Edwards 按现有代表 D_eff 递减；param 0 / 2 分开取值。数据依据 <code>tools/ecm_prob/out/d_eff_representative.json</code>、<code>model.py::THEORETICAL_D</code> 与 <code>rho.py</code> 常数，数值保存在 v2 展示预设，不新增计算算法。Edwards 联合模型仍为相对 Suyama 归一启发值，未经直接 Stage2 拟合。</li>
+<li>生成器只列工作队列实现接受的 e/m0/m2/m3，CPU 组合校验、GPU 推荐获取、预览失效、目标分区及拥有权校验沿用既有实现。新增界面文字在外部 XML 维护。</li>
+<li>最终独立构建成功，171项源码目录指纹核对通过；候选 <code>ecm_gui_v2.exe</code> SHA-256为 <code>2ce55385fa072088c6f31a39acf8672f9fb06fe8fc9697c11591dd1bab8c7858</code>，版本0.49.8，默认DX11。新布局尚未提交，旧ZIP未重打包。</li>
+<li>验证通过：<a href="../../data/experiments/gui_v2/curve_forms_native_0498_05/result.json">15字号原生双语布局与数值</a>、<a href="../../data/experiments/gui_v2/curve_forms_large_font_0498_03/result.json">24字号原生双语布局与数值</a>。两种字号共64次预设点击，分别对照经验数据与理论/相对归一模型；确认两组按钮的顺序、生成器支持集合、宽面板两列、窄面板单列、输入左对齐、说明在左、关联开关在右且不越界，以及B2/B1切换。比对数据SHA-256为 <code>48b9b5fa05824be6fd6fa5566805f322fd3f4abecdb22d22087eaf9edfc206bc</code>。</li>
+<li><a href="../../data/experiments/gui_v2/curve_forms_contracts_0498_04/app.log">应用契约日志</a>与<a href="../../data/experiments/gui_v2/curve_forms_contracts_0498_04/state.log">侧车契约日志</a>通过，覆盖预览失效、目标分区、改文件拒绝、CPU不支持组合拒绝及概率快照；<a href="../../data/experiments/gui_v2/curve_forms_legacy_0498_01/result.json">旧GUI隔离</a>确认73项受保护文件、旧二进制及既有业务配置投影保持一致。仅使用空闲DX11和合成输入，未运行真实ECM或Vulkan渲染。</li>
+<li>首轮原生测试发现表单分组中的第二列坐标重复偏移，已修复并补充容器右边界校验；原始失败留在 <code>curve_forms_native_0498_02</code>。早期沙箱路径访问失败、较大字号旧二进制对齐失败、构建期间误启动测试导致的链接占用证据均保留，不算通过；链接失败日志见 <code>curve_forms_build_locked_0498_01/build.log</code>。最终构建完成后按二进制身份重新验证上述两种字号，结果均通过。</li>
 </ul>
 <h3>1. 分析边界与基线</h3>
 <h4>P3–P6 扩展授权与宠物兼容</h4>

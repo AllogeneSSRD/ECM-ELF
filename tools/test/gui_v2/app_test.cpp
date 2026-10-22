@@ -85,6 +85,10 @@ int main(int argc,char** argv){
     assert(message("Preview ready: C:/test.toml",true)=="预览已就绪：C:/test.toml");assert(message("raw worker payload",true)=="raw worker payload");
     const auto edwards=ecmgui_v2::ui::curve_divisor(1);assert(edwards>28&&edwards<31);
     assert(ecmgui_v2::ui::curve_divisor(1,true)==26.408122047632308);
+    assert(edwards_profiles()==(std::array<int,4>{1,2,6,7}));
+    assert(curve_divisor(5,true)==20.15667357813588&&curve_divisor(5)==curve_divisor(0));
+    assert(curve_divisor(6,true)==14.16200621274284&&curve_divisor(7,true)==8.510017237617587);
+    for(const auto& preset:curve_presets){assert(curve_divisor(preset.id)>0);if(preset.generator)assert(std::string(preset.generator)=="e"||std::string(preset.generator)=="m0"||std::string(preset.generator)=="m2"||std::string(preset.generator)=="m3");}
     ecmgui_v2::ui::SmoothScroll scroll;scroll.add(0,-3);double total=0,x=0,y=0;int steps=0;
     while(scroll.active()){scroll.step(.016,x,y);assert(y<=0);total+=y;assert(++steps<100);}
     assert(std::abs(total+3)<1e-9&&steps>1);

@@ -46,6 +46,29 @@ bool chips(const char* id,int& value,const std::vector<const char*>& labels,ImVe
         ++index;
     }ImGui::PopID();return changed;
 }
+bool curve_buttons(const char* id,int& value,bool generator,bool zh,std::map<int,std::pair<ImVec2,ImVec2>>& controls){
+    bool changed=false;controls.clear();ImGui::PushID(id);
+    if(ImGui::BeginTable("families",2,ImGuiTableFlags_SizingStretchProp)){
+        const auto ed=ui::text("curve.edwards_title",zh),mont=ui::text("curve.montgomery_title",zh);
+        ImGui::TableSetupColumn("family",ImGuiTableColumnFlags_WidthFixed,std::max(ImGui::CalcTextSize(ed).x,ImGui::CalcTextSize(mont).x));
+        ImGui::TableSetupColumn("profiles",ImGuiTableColumnFlags_WidthStretch);
+        for(bool edwards:{true,false}){
+            ImGui::TableNextRow();ImGui::TableNextColumn();ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(edwards?ed:mont);ImGui::TableNextColumn();
+            const auto ids=edwards?ui::edwards_profiles():std::array<int,4>{0,3,5,4};
+            const float left=ImGui::GetCursorScreenPos().x,right=left+ImGui::GetContentRegionAvail().x;
+            bool first=true;
+            for(int index:ids){const auto& preset=ui::curve_presets[index];if(generator&&!preset.generator)continue;
+                const float width=ImGui::CalcTextSize(preset.label).x+ImGui::GetStyle().FramePadding.x*2;
+                if(!first&&ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+width<=right)ImGui::SameLine();
+                const bool selected=value==index;if(selected)ImGui::PushStyleColor(ImGuiCol_Button,ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+                if(ImGui::Button(preset.label)){value=index;changed=true;}
+                controls[index]={ImGui::GetItemRectMin(),ImGui::GetItemRectMax()};
+                if(ImGui::IsItemHovered())ImGui::SetTooltip(ui::text("probability.profile_values",zh),preset.source,ui::curve_divisor(index,true),ui::curve_divisor(index,false));
+                if(selected)ImGui::PopStyleColor();first=false;
+            }
+        }ImGui::EndTable();
+    }ImGui::PopID();return changed;
+}
 }
 void App::draw_results(bool zh) {
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
@@ -128,21 +151,32 @@ bool App::apply_generator() {
 }
 void App::draw_generator(bool zh) {
     ImGui::TextUnformatted(ecmgui_v2::ui::text("task_generator",zh));
-    ImGui::InputTextMultiline("ECM / ECM2",gen_input,sizeof(gen_input),ImVec2(-1,140));
-    ImGui::InputInt(ecmgui_v2::ui::text("target_worker",zh),&gen_worker);
-    int curve=gen_options.curve_type=="e"?0:gen_options.curve_type=="m0"?1:gen_options.curve_type=="m2"?2:3;
-    if(chips("generator-curve",curve,{"Edwards (e)","Montgomery PARAM0","Montgomery PARAM2","Montgomery PARAM3"}))gen_options.curve_type=std::vector<std::string>{"e","m0","m2","m3"}[curve];
-    ImGui::Checkbox(ecmgui_v2::ui::text("gpu_recommended_curves",zh),&gen_options.use_recommended);
-    if(gen_options.use_recommended)ImGui::InputInt(ecmgui_v2::ui::text("blocks_per_sm",zh),&gen_options.blocks_per_sm);
-    else number(ecmgui_v2::ui::text("fixed_curves",zh),gen_options.curves_fixed);
-    ImGui::InputText(ecmgui_v2::ui::text("generator.b1_override",zh),gen_b1,sizeof(gen_b1));
-    ImGui::InputText(ecmgui_v2::ui::text("generator.b2_override",zh),gen_b2,sizeof(gen_b2));
-    ImGui::InputText(ecmgui_v2::ui::text("save_pattern",zh),gen_pattern,sizeof(gen_pattern));
-    if(ImGui::CollapsingHeader(ecmgui_v2::ui::text("filters_and_ordering",zh))) {
-        ImGui::Checkbox(ecmgui_v2::ui::text("deduplicate",zh),&gen_options.dedup);ImGui::Checkbox(ecmgui_v2::ui::text("descending",zh),&gen_options.sort_desc);
-        ImGui::Checkbox(ecmgui_v2::ui::text("sort_known_factors",zh),&gen_options.sort_factors);text(ecmgui_v2::ui::text("sort_keys",zh),gen_options.sort_by);
-        number(ecmgui_v2::ui::text("skip_curves",zh),gen_options.skip_curves);number(ecmgui_v2::ui::text("generator.min_exponent",zh),gen_options.min_n);number(ecmgui_v2::ui::text("max_exponent",zh),gen_options.max_n);
-        number(ecmgui_v2::ui::text("min_input_curves",zh),gen_options.min_curves);number(ecmgui_v2::ui::text("max_input_curves",zh),gen_options.max_curves);ImGui::Checkbox(ecmgui_v2::ui::text("set_assignment_n_a",zh),&gen_options.set_has_na);
+    ImGui::TextUnformatted("ECM / ECM2");ImGui::InputTextMultiline("##assignments",gen_input,sizeof(gen_input),ImVec2(-1,140));
+    int curve=0;for(const auto& preset:ui::curve_presets)if(preset.generator&&gen_options.curve_type==preset.generator)curve=preset.id;
+    if(curve_buttons("generator-curve",curve,true,zh,generator_curve_controls))gen_options.curve_type=ui::curve_presets[curve].generator;
+    {
+        ui::CompactForm form("generator-fields",generator_form);
+        form.field("worker",ui::text("target_worker",zh),[&]{ImGui::InputInt("##value",&gen_worker,0,0);});
+        form.field("curves",ui::text(gen_options.use_recommended?"blocks_per_sm":"fixed_curves",zh),[&]{
+            if(gen_options.use_recommended)ImGui::InputInt("##value",&gen_options.blocks_per_sm,0,0);
+            else number("##value",gen_options.curves_fixed);
+        },ui::text("gpu_recommended_curves",zh),[&]{ImGui::Checkbox(ui::text("gpu_recommended_curves",zh),&gen_options.use_recommended);});
+        form.field("b1","B1",[&]{ImGui::InputTextWithHint("##value",ui::text("generator.b1_hint",zh),gen_b1,sizeof(gen_b1));});
+        form.field("b2","B2",[&]{ImGui::InputTextWithHint("##value",ui::text("generator.b2_hint",zh),gen_b2,sizeof(gen_b2));});
+    }
+    {ui::CompactFormAudit path_audit;ui::CompactForm form("generator-path",path_audit,false);
+        form.field("pattern",ui::text("save_pattern",zh),[&]{ImGui::InputText("##value",gen_pattern,sizeof(gen_pattern));});}
+    if(ImGui::CollapsingHeader(ui::text("filters_and_ordering",zh))) {
+        ImGui::Checkbox(ui::text("deduplicate",zh),&gen_options.dedup);ImGui::SameLine();ImGui::Checkbox(ui::text("descending",zh),&gen_options.sort_desc);
+        ImGui::Checkbox(ui::text("sort_known_factors",zh),&gen_options.sort_factors);
+        ui::CompactFormAudit filter_audit;ui::CompactForm form("generator-filters",filter_audit);
+        form.field("sort",ui::text("sort_keys",zh),[&]{text("##value",gen_options.sort_by);});
+        form.field("skip",ui::text("skip_curves",zh),[&]{number("##value",gen_options.skip_curves);});
+        form.field("n-min",ui::text("generator.min_exponent",zh),[&]{number("##value",gen_options.min_n);});
+        form.field("n-max",ui::text("max_exponent",zh),[&]{number("##value",gen_options.max_n);});
+        form.field("curves-min",ui::text("min_input_curves",zh),[&]{number("##value",gen_options.min_curves);});
+        form.field("curves-max",ui::text("max_input_curves",zh),[&]{number("##value",gen_options.max_curves);});
+        form.field("assignment","AID",[]{ImGui::TextUnformatted("N/A");},ui::text("set_assignment_n_a",zh),[&]{ImGui::Checkbox(ui::text("set_assignment_n_a",zh),&gen_options.set_has_na);});
     }
     if(gen_valid && generator_signature()!=gen_signature)gen_valid=false;
     if(ui::button("generate-preview",ecmgui_v2::ui::text("generate_preview",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!preview_generator())toast(status,true);ImGui::SameLine();
@@ -162,22 +196,35 @@ void App::draw_probability(bool zh) {
     calculate_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
     if(probability_ready&&probability_result.error.empty()){ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("copy_snapshot_csv",zh))){ImGui::SetClipboardText(curve_csv(probability_result).c_str());toast(ecmgui_v2::ui::text("snapshot_csv_copied",zh));}}
     if(probability_tab==0){
+    const bool profile_changed=curve_buttons("curve-profile",probability_profile,false,zh,probability_curve_controls);
     double size=size_from_bits(p.factor_bits,request.decimal_digits);
-    if(ImGui::InputDouble(ecmgui_v2::ui::text("factor_size",zh),&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);
-    ImGui::Checkbox(ecmgui_v2::ui::text("decimal_digits",zh),&request.decimal_digits);
-    ImGui::InputDouble("B1",&p.b1,0,0,"%.0f");ImGui::Checkbox(ecmgui_v2::ui::text("probability.stage2_enabled",zh),&p.stage2);
-    ImGui::Checkbox(ecmgui_v2::ui::text("use_b2_b1_ratio",zh),&p.ratio_mode);if(p.ratio_mode)ImGui::InputDouble("B2/B1",&p.b2_ratio,0,0,"%.6g");else ImGui::InputDouble("B2",&p.b2,0,0,"%.0f");
-    ImGui::InputDouble(ecmgui_v2::ui::text("curves",zh),&p.curves,0,0,"%.0f");
-    const bool profile_changed=chips("curve-profile",probability_profile,{"Suyama / PARAM2","Edwards Z2xZ8","Edwards Z12","PARAM1","PARAM3",ecmgui_v2::ui::text("custom",zh)});
-    const bool basis_changed=ImGui::Checkbox(ecmgui_v2::ui::text("use_stage1_empirical_calibration",zh),&probability_empirical);
-    if(probability_profile<5&&(profile_changed||basis_changed))p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
-    if(ImGui::InputDouble("D_eff",&p.effective_divisor,0,0,"%.6g"))probability_profile=5;
-    ImGui::TextWrapped("%s",ecmgui_v2::ui::text("probability.edwards_divisor_note",zh));
-    int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",ecmgui_v2::ui::text("combined",zh),ecmgui_v2::ui::text("probability.stage2_conditional",zh)}))p.scope=static_cast<Scope>(scope);
-    int solve=static_cast<int>(request.solve);if(chips("solve",solve,{ecmgui_v2::ui::text("forward",zh),ecmgui_v2::ui::text("curves",zh),ecmgui_v2::ui::text("factor_size",zh),"B1","B2","D_eff"}))request.solve=static_cast<Solve>(solve);
-    double target=ui::percent(request.target);if(ImGui::InputDouble(ecmgui_v2::ui::text("probability.target_percent",zh),&target,0,0,"%.6g%%"))request.target=ui::probability(target);
-    ImGui::Checkbox(ecmgui_v2::ui::text("cumulative_target",zh),&request.cumulative_target);
-    if(ImGui::CollapsingHeader(ecmgui_v2::ui::text("plot_range",zh))){ImGui::InputDouble(ecmgui_v2::ui::text("size_min",zh),&request.size_min,0,0,"%.0f");ImGui::InputDouble(ecmgui_v2::ui::text("size_max",zh),&request.size_max,0,0,"%.0f");ImGui::Checkbox(ecmgui_v2::ui::text("auto_curves_range",zh),&request.auto_curves_range);ImGui::InputDouble(ecmgui_v2::ui::text("curves_max",zh),&request.curves_max,0,0,"%.0f");}
+    {
+        ui::CompactForm form("probability-fields",probability_form);
+        form.field("size",ui::text("factor_size",zh),[&]{if(ImGui::InputDouble("##value",&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);},
+            ui::text("decimal_digits",zh),[&]{ImGui::Checkbox(ui::text("decimal_digits",zh),&request.decimal_digits);});
+        form.field("curves",ui::text("curves",zh),[&]{ImGui::InputDouble("##value",&p.curves,0,0,"%.0f");});
+        form.field("b1","B1",[&]{ImGui::InputDouble("##value",&p.b1,0,0,"%.0f");},ui::text("probability.stage2_enabled",zh),[&]{ImGui::Checkbox(ui::text("probability.stage2_enabled",zh),&p.stage2);});
+        form.field("b2",p.ratio_mode?"B2/B1":"B2",[&]{if(p.ratio_mode)ImGui::InputDouble("##value",&p.b2_ratio,0,0,"%.6g");else ImGui::InputDouble("##value",&p.b2,0,0,"%.0f");},
+            ui::text("use_b2_b1_ratio",zh),[&]{ImGui::Checkbox(ui::text("use_b2_b1_ratio",zh),&p.ratio_mode);});
+        form.field("divisor","D_eff",[&]{
+            if(probability_profile<ui::custom_curve_profile&&profile_changed)p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
+            if(ImGui::InputDouble("##value",&p.effective_divisor,0,0,"%.6g"))probability_profile=ui::custom_curve_profile;
+        },ui::text("use_stage1_empirical_calibration",zh),[&]{
+            if(ImGui::Checkbox(ui::text("use_stage1_empirical_calibration",zh),&probability_empirical)&&probability_profile<ui::custom_curve_profile)p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
+        });
+        form.field("target",ui::text("probability.target_percent",zh),[&]{double target=ui::percent(request.target);if(ImGui::InputDouble("##value",&target,0,0,"%.6g%%"))request.target=ui::probability(target);},
+            ui::text("cumulative_target",zh),[&]{ImGui::Checkbox(ui::text("cumulative_target",zh),&request.cumulative_target);});
+    }
+    ImGui::TextWrapped("%s",ui::text("probability.edwards_divisor_note",zh));
+    int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",ui::text("combined",zh),ui::text("probability.stage2_conditional",zh)}))p.scope=static_cast<Scope>(scope);
+    int solve=static_cast<int>(request.solve);if(chips("solve",solve,{ui::text("forward",zh),ui::text("curves",zh),ui::text("factor_size",zh),"B1","B2","D_eff"}))request.solve=static_cast<Solve>(solve);
+    if(ImGui::CollapsingHeader(ui::text("plot_range",zh))){
+        ui::CompactFormAudit range_audit;ui::CompactForm form("probability-range",range_audit);
+        form.field("min",ui::text("size_min",zh),[&]{ImGui::InputDouble("##value",&request.size_min,0,0,"%.0f");});
+        form.field("max",ui::text("size_max",zh),[&]{ImGui::InputDouble("##value",&request.size_max,0,0,"%.0f");});
+        form.field("curves-max",ui::text("curves_max",zh),[&]{ImGui::InputDouble("##value",&request.curves_max,0,0,"%.0f");},
+            ui::text("auto_curves_range",zh),[&]{ImGui::Checkbox(ui::text("auto_curves_range",zh),&request.auto_curves_range);});
+    }
         return;
     }
     if(!probability_ready){ImGui::TextWrapped("%s",ecmgui_v2::ui::text("probability.calculate_hint",zh));return;}

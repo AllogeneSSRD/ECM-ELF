@@ -360,6 +360,11 @@
       <Item id="stage2.phase.curve_done" name="Curve finished" />
       <Item id="stage2.phase.task_done" name="Task finished" />
       <Item id="stage2.phase.ended" name="Ended" />
+      <Item id="curve.edwards_title" name="Edwards:" />
+      <Item id="curve.montgomery_title" name="Montgomery:" />
+      <Item id="generator.b1_hint" name="Empty keeps input" />
+      <Item id="generator.b2_hint" name="Empty keeps input" />
+      <Item id="probability.profile_values" name="%s&#10;Stage1 empirical D_eff = %.6g&#10;Combined-model D_eff = %.6g (Edwards uses a relative Suyama heuristic)" />
     </Panel>
   </Native-Langue>
 </EcmGui>

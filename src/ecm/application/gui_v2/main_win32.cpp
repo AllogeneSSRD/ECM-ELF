@@ -353,6 +353,14 @@ int run(const Options& options, int show, FILE* log) {
         }
         ImGui::UpdatePlatformWindows(); ImGui::RenderPlatformWindowsDefault();
         if(options.audit_app&&!options.performance){
+            for(int page:{2,3})if(state.ui_page==page){
+                const auto& form=page==2?app.generator_form:app.probability_form;
+                std::fprintf(log,"form_sample: page=%d columns=%d profile=%d empirical=%d divisor=%.15g ratio=%d curve=%s\n",page,form.columns,app.probability_profile,app.probability_empirical,app.probability_request.parameters.effective_divisor,app.probability_request.parameters.ratio_mode,app.gen_options.curve_type.c_str());
+                const auto rect=[&](const char* key,ImVec2 lo,ImVec2 hi){std::fprintf(log," %s=%.1f,%.1f,%.1f,%.1f",key,lo.x,lo.y,hi.x,hi.y);};
+                for(const auto& field:form.fields){std::fprintf(log,"form_field: page=%d id=%s",page,field.first.c_str());const auto& r=field.second;rect("label",r.label_min,r.label_max);rect("input",r.input_min,r.input_max);rect("action",r.action_min,r.action_max);std::fprintf(log," right=%.1f\n",r.right);}
+                const auto& controls=page==2?app.generator_curve_controls:app.probability_curve_controls;
+                for(const auto& item:controls){std::fprintf(log,"curve_choice: page=%d id=%d",page,item.first);rect("rect",item.second.first,item.second.second);std::fprintf(log,"\n");}
+            }
             const auto point=[&](ImVec2 v){POINT p{static_cast<LONG>(v.x),static_cast<LONG>(v.y)};if(ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable)ScreenToClient(native.hwnd,&p);return p;};
             const auto f=point(app.result_chips[1]),nf=point(app.result_chips[2]),wheel=point(app.result_wheel),start=point(app.start_control),stop=point(app.stop_control);
             std::fprintf(log,"interaction_sample: page=%d visible=%zu scroll=%.3f toasts=%zu f=%ld,%ld nf=%ld,%ld wheel=%ld,%ld start=%ld,%ld stop=%ld,%ld\n",state.ui_page,app.result_indices.size(),app.result_scroll,app.toasts.size(),f.x,f.y,nf.x,nf.y,wheel.x,wheel.y,start.x,start.y,stop.x,stop.y);std::fflush(log);
