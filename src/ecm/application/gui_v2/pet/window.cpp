@@ -125,6 +125,21 @@ void Window::tick(Mood mood) {
         if (!IsWindowVisible(hwnd_)) ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     } catch (const std::exception& failure) { error = failure.what(); state_.pet_enabled = false; close(); std::fprintf(log_, "pet_error: %s\n", error.c_str()); std::fflush(log_); }
 }
+void Window::follow_owner() {
+    if(!hwnd_)return;
+    if(IsIconic(owner_)||!IsWindowVisible(owner_)){ShowWindow(hwnd_,SW_HIDE);return;}
+    RECT main{};POINT origin{};MONITORINFO monitor{sizeof(monitor)};
+    if(!GetClientRect(owner_,&main)||!ClientToScreen(owner_,&origin)||
+       !GetMonitorInfoW(MonitorFromWindow(owner_,MONITOR_DEFAULTTONEAREST),&monitor))return;
+    OffsetRect(&main,origin.x,origin.y);
+    const auto spot=place(main,monitor.rcWork,std::max(1u,GetDpiForWindow(owner_))/96.f,state_.pet_left);
+    // The native move/resize loop pauses the application's frame loop. Reuse
+    // existing layered pixels here; DPI rasterisation stays in the normal tick.
+    const int y=spot.y+spot.height-previous_place_.height;
+    if(SetWindowPos(hwnd_,nullptr,spot.x,y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE)){
+        previous_place_.x=spot.x;previous_place_.y=y;
+    }
+}
 LRESULT CALLBACK Window::procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
     auto self = reinterpret_cast<Window*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == WM_NCCREATE) { self = static_cast<Window*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams); SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self)); }

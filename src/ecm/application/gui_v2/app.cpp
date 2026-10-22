@@ -28,6 +28,10 @@ std::string executable_path(const std::string& input, const std::string& base) {
 }
 }
 App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log) {
+    if(state.ui_right_pages){
+        if(!state.ui_right_visible||state.layout().find("v2.tools")!=std::string::npos)reset_layout=true;
+        state.ui_right_visible=true;
+    }
     if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<7;++i)if(!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
         if(notice.kind==ecmgui::WorkerNotice::Kind::StageChanged)
@@ -132,7 +136,7 @@ void App::tick() {
     for (const auto& worker : controller.workers())
         if (!worker.running() && worker.state() != ecmgui::WorkerRunState::Restarting && worker.state() != ecmgui::WorkerRunState::Starting) leases_.erase(worker.index);
     const auto now = GetTickCount64();
-    if ((state.ui_page == 1 || (state.ui_right_visible && ui::pinned(state.ui_right_pages,1))) && now - last_results >= 500) {
+    if ((state.ui_page == 1 || ui::pinned(state.ui_right_pages,1)) && now - last_results >= 500) {
         last_results = now; if (results.refresh()) {
             result_view_dirty=true;
             std::set<std::string> present; for (const auto& row : results.rows()) present.insert(row.id);
@@ -168,17 +172,17 @@ void App::build_layout(unsigned dock, float scale) {
     ImGuiID center = dock, nav = 0, inspector = 0, logs = 0;
     const bool wide = viewport->WorkSize.x >= 1100 * scale;
     ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, std::clamp(170*scale/viewport->WorkSize.x,.16f,.35f), &nav, &center);
-    if ((wide && state.ui_inspector)||(state.ui_right_pages && state.ui_right_visible)) ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, wide?.34f:.43f, &inspector, &center);
+    if ((wide && state.ui_inspector)||state.ui_right_pages) ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, wide?.34f:.43f, &inspector, &center);
     if (state.ui_logs) ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, .28f, &logs, &center);
     ImGui::DockBuilderDockWindow("Navigation###v2.navigation", nav);
     ImGui::DockBuilderDockWindow("Workspace###v2.workspace", center);
     if (inspector) ImGui::DockBuilderDockWindow("Inspector###v2.inspector", inspector);
-    if (inspector && state.ui_right_pages && state.ui_right_visible) ImGui::DockBuilderDockWindow("Tools###v2.tools", inspector);
+    if(inspector)for(char id:state.ui_nav_order){const int page=id-'0';if(ui::pinned(state.ui_right_pages,page))ImGui::DockBuilderDockWindow(ui::right_window(page,false).c_str(),inspector);}
     if (logs) ImGui::DockBuilderDockWindow("Logs###v2.logs", logs);
     ImGui::DockBuilderFinish(dock);
-    if(state.ui_right_pages&&state.ui_right_visible)focus_right_=true;
+    if(state.ui_right_pages)focus_right_=true;
 }
-void App::begin_window(const char* name, bool* open, const ui::Settings& active) {
+bool App::begin_window(const char* name, bool* open, const ui::Settings& active) {
     auto found = window_dpi_.find(name);
     const float dpi = state.ui_scale > 0 || found == window_dpi_.end() ? active.scale : found->second;
     const float ratio = dpi / active.scale;
@@ -190,7 +194,7 @@ void App::begin_window(const char* name, bool* open, const ui::Settings& active)
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,scaled(style.CellPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,style.FrameRounding*ratio);
     ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,style.ScrollbarSize*ratio);
-    ImGui::Begin(name,open,std::strstr(name,"###v2.navigation")?ImGuiWindowFlags_HorizontalScrollbar:0); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;
+    const bool visible=ImGui::Begin(name,open,std::strstr(name,"###v2.navigation")?ImGuiWindowFlags_HorizontalScrollbar:0); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;return visible;
 }
 void App::end_window() { ImGui::End(); ImGui::PopStyleVar(6); }
 bool App::save_preferences() {
@@ -203,7 +207,7 @@ bool App::move_page(int page,bool right) {
     if(!ui::move_page(state.ui_right_pages,state.ui_page,state.ui_right_page,page,right)){toast(state.ui_language=="zh"?"至少保留一个中央页面":"Keep at least one central page");return false;}
     if(right){state.ui_right_visible=true;focus_right_=true;}
     reset_layout=true;
-    toast(state.ui_language=="zh"?(right?"已移到右侧工具栏":"已移回左侧导航"):(right?"Moved to right tools":"Moved to left navigation"));return true;
+    toast(state.ui_language=="zh"?(right?"已移到右侧标签页":"已返回左侧导航"):(right?"Moved to right tabs":"Returned to navigation"));return true;
 }
 void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Fonts& fonts) {
     worker_speed_samples=workspace_chart_count=0;worker_speed_min=worker_speed_max={};
@@ -218,7 +222,6 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
             if(ImGui::MenuItem(t("Inspector", "检查区"),nullptr,&state.ui_inspector))reset_layout=true;
             if(ImGui::MenuItem(t("Logs", "日志"),nullptr,&state.ui_logs))reset_layout=true;
             ImGui::MenuItem(t("System title bar","系统标题栏"),nullptr,&state.window_title_bar);
-            if(state.ui_right_pages && ImGui::MenuItem(t("Tools", "工具栏"),nullptr,&state.ui_right_visible))reset_layout=true;
             ImGui::EndMenu();
         }
         if(ImGui::BeginMenu(t("Language","语言"))){
@@ -266,26 +269,42 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     const bool compact = ImGui::GetContentRegionAvail().x < 110 * active.scale;
     const auto item_center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
     for(auto& pos:nav_items)pos={};for(auto& pos:right_items)pos={};
-    for (int i = 0; i < 7; ++i) {
+    nav_drag_page=-1;nav_return={};
+    const auto nav_palette=ui::palette(active.light);const float nav_scale=ImGui::GetFontSize()/15.f;
+    nav_rounding=8*nav_scale;nav_item_height=std::max(40*nav_scale,ImGui::GetTextLineHeight()+16*nav_scale);nav_item_gap=8*nav_scale;
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,nav_rounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,{0,.5f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*nav_scale,8*nav_scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{ImGui::GetStyle().ItemSpacing.x,nav_item_gap});
+    const auto order=state.ui_nav_order;
+    for(char id:order){const int i=id-'0';
         if(ui::pinned(state.ui_right_pages,i))continue;
-        ImGui::PushID(i); const auto label = std::string(ui::page_name(i,zh)) + "###page";
-        if (ImGui::Selectable(label.c_str(), state.ui_page == i,0,{std::max(ImGui::GetContentRegionAvail().x,ImGui::CalcTextSize(ui::page_name(i,zh)).x+12*active.scale),0})) state.ui_page = i;
-        nav_items[i]=item_center();
-        if (compact && ImGui::IsItemHovered()) ImGui::SetTooltip("%s",ui::page_name(i,zh));
-        if(ImGui::BeginDragDropSource()){ImGui::SetDragDropPayload("V2_PAGE",&i,sizeof(i));ImGui::TextUnformatted(ui::page_name(i,zh));ImGui::EndDragDropSource();}
-        if(ImGui::BeginPopupContextItem("location")){if(ImGui::MenuItem(t("Move to right tools","移到右侧工具栏")))move_page(i,true);ImGui::EndPopup();}
+        ImGui::PushID(i);const auto label=std::string(ui::page_name(i,zh))+"###page";
+        ImGui::PushStyleColor(ImGuiCol_Button,state.ui_page==i?nav_palette.active:ImVec4{0,0,0,0});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,nav_palette.hover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,nav_palette.active);
+        if(ImGui::Button(label.c_str(),{std::max(ImGui::GetContentRegionAvail().x,ImGui::CalcTextSize(ui::page_name(i,zh)).x+24*nav_scale),nav_item_height}))state.ui_page=i;
+        ImGui::PopStyleColor(3);nav_items[i]=item_center();
+        const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
+        if(compact&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::page_name(i,zh));
+        if(ImGui::IsItemActive()&&ImGui::GetIO().MouseDownDuration[0]>=.32f&&ImGui::BeginDragDropSource()){
+            nav_drag_page=i;ImGui::SetDragDropPayload("V2_PAGE",&i,sizeof(i));ImGui::TextUnformatted(ui::page_name(i,zh));ImGui::EndDragDropSource();}
+        if(ImGui::BeginDragDropTarget()){
+            if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE",ImGuiDragDropFlags_AcceptBeforeDelivery))if(payload->DataSize==sizeof(int)){
+                const bool after=ImGui::GetIO().MousePos.y>nav_items[i].y;const float y=after?hi.y:lo.y;
+                ImGui::GetWindowDrawList()->AddLine({lo.x,y},{hi.x,y},ImGui::GetColorU32(nav_palette.focus),2*nav_scale);
+                if(payload->IsDelivery())ui::reorder_page(state.ui_nav_order,*static_cast<const int*>(payload->Data),i,after);
+            }ImGui::EndDragDropTarget();}
+        if(ImGui::BeginPopupContextItem("location")){if(ImGui::MenuItem(t("Move to right tabs","移到右侧标签页")))move_page(i,true);ImGui::EndPopup();}
         ImGui::PopID();
     }
-    ImGui::Separator();ImGui::Button(compact?">###tools-drop":t("Tools >###tools-drop","工具 >###tools-drop"),{-1,0});
+    ImGui::PopStyleVar(5);
+    ImGui::Separator();ImGui::Button(compact?">###right-drop":t("Right tabs >###right-drop","右侧标签页 >###right-drop"),{-1,0});
     nav_drop=item_center();
-    if(compact&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",t("Drop a page here to move it to right tools","将页面拖到此处，移入右侧工具栏"));
-    if(ImGui::IsItemClicked()&&state.ui_right_pages){state.ui_right_visible=true;reset_layout=true;}
     if(ImGui::BeginDragDropTarget()){if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE"))if(payload->DataSize==sizeof(int))move_page(*static_cast<const int*>(payload->Data),true);ImGui::EndDragDropTarget();}
-    ImGui::TextWrapped("%s",compact?"":t("Right-click or drag a page to Tools.","右键页面或拖到工具按钮。"));
-    ImGui::Button(compact?"<###nav-drop":t("< Navigation###nav-drop","< 导航###nav-drop"),{-1,0});
-    nav_return=item_center();
-    if(compact&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",t("Drop a tool here to return it to navigation","将工具拖到此处，移回导航"));
-    if(ImGui::BeginDragDropTarget()){if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE"))if(payload->DataSize==sizeof(int))move_page(*static_cast<const int*>(payload->Data),false);ImGui::EndDragDropTarget();}
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",t("Long-press a page, then drag here to open it in the right tabs.","长按页面后拖到此处，在右侧标签页中显示。"));
+    if(!compact)ImGui::TextWrapped("%s",t("Hold and drag to reorder. Close a right tab to return it here.","长按拖动排序；关闭右侧标签后自动返回。"));
     ImGui::PopFont(); end_window();
     begin_window(t("Workspace###v2.workspace","工作区###v2.workspace"),nullptr,active);
     workspace_docked=ImGui::IsWindowDocked();
@@ -294,30 +313,32 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     ImGui::PushTextWrapPos(0); draw_page(active, fonts); ImGui::PopTextWrapPos(); ImGui::PopFont(); end_window();
     if (state.ui_inspector && wide) { begin_window(t("Inspector###v2.inspector","检查区###v2.inspector"), &state.ui_inspector,active); draw_inspector(fonts); end_window(); }
     if (state.ui_logs) { begin_window(t("Logs###v2.logs","日志###v2.logs"), &state.ui_logs,active); draw_logs(fonts); end_window(); }
-    if(state.ui_right_pages && state.ui_right_visible){
-        if(focus_right_){ImGui::SetNextWindowFocus();focus_right_=false;}
-        begin_window(t("Tools###v2.tools","工具###v2.tools"),&state.ui_right_visible,active);fonts.push(ui::FontRole::Body);
-        if(!ui::pinned(state.ui_right_pages,state.ui_right_page))for(int i=0;i<7;++i)if(ui::pinned(state.ui_right_pages,i)){state.ui_right_page=i;break;}
-        {
-            bool first=true;
-            for(int i=0;i<7;++i)if(ui::pinned(state.ui_right_pages,i)){
-                const auto name=ui::page_name(i,zh);const auto width=ImGui::CalcTextSize(name).x+ImGui::GetStyle().FramePadding.x*2;
-                if(!first&&ImGui::GetItemRectMax().x+width+ImGui::GetStyle().ItemSpacing.x<ImGui::GetWindowPos().x+ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x)ImGui::SameLine();first=false;
-                if(state.ui_right_page==i)ImGui::PushStyleColor(ImGuiCol_Button,ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-                const bool selected=state.ui_right_page==i;
-                if(ImGui::Button(name))state.ui_right_page=i;
-                right_items[i]=item_center();
-                if(selected)ImGui::PopStyleColor();
-                if(ImGui::BeginDragDropSource()){ImGui::SetDragDropPayload("V2_PAGE",&i,sizeof(i));ImGui::TextUnformatted(ui::page_name(i,zh));ImGui::EndDragDropSource();}
-                if(ImGui::BeginPopupContextItem()){if(ImGui::MenuItem(t("Move to navigation","移回导航")))move_page(i,false);ImGui::EndPopup();}
+    right_close_controls.clear();right_docks.clear();right_container_present=false;
+    const auto right_order=state.ui_nav_order;std::vector<int> closed_pages;
+    for(char id:right_order){const int page=id-'0';if(!ui::pinned(state.ui_right_pages,page))continue;
+        if(focus_right_&&state.ui_right_page==page)ImGui::SetNextWindowFocus();
+        bool open=true;const auto name=ui::right_window(page,zh);
+        const bool visible=begin_window(name.c_str(),&open,active);
+        if(visible&&open){
+            if(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))state.ui_right_page=page;
+            fonts.push(ui::FontRole::Body);ImGui::PushTextWrapPos(0);draw_page(active,fonts,page);ImGui::PopTextWrapPos();ImGui::PopFont();
+        }
+        // Audit actual native dock tab positions; there is no nested Tools shell.
+        const auto window=ImGui::GetCurrentWindow();
+        right_docks[page]=window->DockId;
+        if(window->DockNode&&window->DockNode->TabBar){
+            const auto bar=window->DockNode->TabBar;
+            if(const auto tab=ImGui::TabBarFindTabByID(bar,window->TabId)){
+                const float x=bar->BarRect.Min.x+tab->Offset-bar->ScrollingAnim;
+                right_items[page]={x+tab->Width*.4f,(bar->BarRect.Min.y+bar->BarRect.Max.y)*.5f};
+                right_close_controls[page]={x+tab->Width-bar->FramePadding.x-ImGui::GetFontSize()*.5f,bar->BarRect.Min.y+bar->FramePadding.y+ImGui::GetFontSize()*.5f};
             }
         }
-        const int right=state.ui_right_page;
-        if(drawn_right_page_!=right){ImGui::SetScrollY(0);drawn_right_page_=right;}
-        if(ImGui::SmallButton(t("< Move to navigation","< 移回导航")))move_page(right,false);
-        if(ui::pinned(state.ui_right_pages,right)){ImGui::Separator();ImGui::PushID("right-content");ImGui::PushTextWrapPos(0);draw_page(active,fonts,right);ImGui::PopTextWrapPos();ImGui::PopID();}
-        ImGui::PopFont();end_window();
+        end_window();if(!open)closed_pages.push_back(page);
     }
+    focus_right_=false;
+    for(int page:closed_pages)move_page(page,false);
+    if(const auto old=ImGui::FindWindowByName("Tools###v2.tools"))right_container_present=old->Active;
     if (test_float) {
         ImGui::SetNextWindowPos({ImGui::GetMainViewport()->Pos.x + ImGui::GetMainViewport()->Size.x + 30, ImGui::GetMainViewport()->Pos.y + 30}, ImGuiCond_FirstUseEver);
         begin_window("Detached lifecycle probe###v2.float", &test_float,active);

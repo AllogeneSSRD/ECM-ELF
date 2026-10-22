@@ -320,11 +320,10 @@ void App::draw_settings(bool zh) {
     if(!state.writable)ImGui::TextWrapped("%s",state.notice.c_str());
     ImGui::TextWrapped("%s",state.path.u8string().c_str());
     {
-        ImGui::SeparatorText(tr(zh,"Navigation and right tools","导航与右侧工具栏"));
-        ImGui::TextWrapped("%s",tr(zh,"Move pages between navigation and right tools. Drag window title bars to dock or float them; at least one central page remains.","可将页面移入右侧工具栏，或移回导航；拖动窗口标题可停靠或浮动。至少保留一个中央页面。"));
+        ImGui::SeparatorText(tr(zh,"Navigation and right tabs","导航与右侧标签页"));
+        ImGui::TextWrapped("%s",tr(zh,"Hold a navigation page and drag to reorder. Right-side pages share horizontal dock tabs; close a tab to return it to navigation. At least one central page remains.","长按导航页面拖动排序。右侧页面共用横排停靠标签；关闭标签后自动回到导航，至少保留一个中央页面。"));
         for(int i=0;i<7;++i){ImGui::PushID(i);bool right=ui::pinned(state.ui_right_pages,i);
             if(ImGui::Checkbox(ui::page_name(i,zh),&right))move_page(i,right);ImGui::PopID();}
-        if(ImGui::Checkbox(tr(zh,"Show right tools","显示右侧工具栏"),&state.ui_right_visible))reset_layout=true;
         if(ImGui::Button(tr(zh,"Restore default layout","恢复默认布局"))){state.ui_right_pages=0;state.ui_right_visible=true;state.ui_inspector=true;state.ui_logs=true;reset_layout=true;}
         if(ImGui::Button(tr(zh,"Save layout","保存布局")))save_preferences();
     }

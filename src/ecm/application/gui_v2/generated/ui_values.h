@@ -3,6 +3,7 @@
 #include <string>
 #include <cmath>
 #include <stdexcept>
+#include <algorithm>
 namespace ecmgui_v2 {
 struct UiValues {
     int state_schema = 1;
@@ -11,6 +12,7 @@ struct UiValues {
     float ui_scale = 0.0f;
     int ui_font_size = 15;
     int ui_gpu_history_seconds = 60;
+    std::string ui_nav_order = "0123456";
     int ui_page = 0;
     int ui_worker = 1;
     bool ui_inspector = true;
@@ -28,7 +30,7 @@ struct UiValues {
     int window_y = (-2147483647 - 1);
     int window_width = 1280;
     int window_height = 850;
-    bool window_title_bar = true;
+    bool window_title_bar = false;
     bool window_maximized = false;
     std::string worker_stage1_exe = "";
     std::string worker_stage2_exe = "";
@@ -73,6 +75,7 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("ui","scale",value.ui_scale);
     field("ui","font_size",value.ui_font_size);
     field("ui","gpu_history_seconds",value.ui_gpu_history_seconds);
+    field("ui","nav_order",value.ui_nav_order);
     field("ui","page",value.ui_page);
     field("ui","worker",value.ui_worker);
     field("ui","inspector",value.ui_inspector);
@@ -107,6 +110,8 @@ inline void validate_ui(const UiValues& v) {
     if (v.ui_scale < 0 || v.ui_scale > 4 || !std::isfinite(v.ui_scale)) throw std::runtime_error("Invalid UI state: ui.scale");
     if (v.ui_font_size < 10 || v.ui_font_size > 30) throw std::runtime_error("Invalid UI state: ui.font_size");
     if ((v.ui_gpu_history_seconds != 15 && v.ui_gpu_history_seconds != 30 && v.ui_gpu_history_seconds != 60 && v.ui_gpu_history_seconds != 120)) throw std::runtime_error("Invalid UI state: ui.gpu_history_seconds");
+    auto sorted_ui_nav_order = v.ui_nav_order; std::sort(sorted_ui_nav_order.begin(),sorted_ui_nav_order.end());
+    if (sorted_ui_nav_order != "0123456" || v.ui_nav_order.size() > 7) throw std::runtime_error("Invalid UI state: ui.nav_order");
     if (v.ui_page < 0 || v.ui_page > 6) throw std::runtime_error("Invalid UI state: ui.page");
     if (v.ui_worker < 1 || v.ui_worker > 1024) throw std::runtime_error("Invalid UI state: ui.worker");
     if (v.ui_dock.size() > 524288) throw std::runtime_error("Invalid UI state: ui.dock");

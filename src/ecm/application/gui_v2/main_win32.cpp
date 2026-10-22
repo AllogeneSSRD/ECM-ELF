@@ -28,6 +28,7 @@ bool resized = false;
 bool close_requested = false;
 bool audit_app = false;
 ecmgui_v2::App* current_app = nullptr;
+ecmgui_v2::pet::Window* current_pet = nullptr;
 ecmgui_v2::ui::Settings* audit_settings = nullptr;
 unsigned audit_sequence = 0;
 bool audit_pointer = false;
@@ -135,7 +136,8 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
             audit_sequence = static_cast<unsigned>(l);
         }
         return 0;
-    case WM_SIZE: resized = true; return 0;
+    case WM_WINDOWPOSCHANGED: if(current_pet)current_pet->follow_owner(); break;
+    case WM_SIZE: resized = true;if(current_pet)current_pet->follow_owner();return 0;
     case WM_DPICHANGED: {
         auto rect = reinterpret_cast<RECT*>(l);
         SetWindowPos(hwnd, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top,
@@ -243,6 +245,8 @@ int run(const Options& options, int show, FILE* log) {
     ecmgui_v2::App app(state, log); current_app = &app; audit_app = options.audit_app;
     struct ResetPointers { ~ResetPointers() { current_app = nullptr; audit_app = false; audit_settings = nullptr; } } reset_pointers;
     ecmgui_v2::pet::Window companion(native.hwnd, state, log);
+    current_pet=&companion;
+    struct ResetPetPointer{~ResetPetPointer(){current_pet=nullptr;}} reset_pet_pointer;
     app.initialize(options.config, options.no_nvml || show_components); app.test_float = options.detach_probe;
     if (!state.notice.empty()) app.trace(state.notice);
     if(!fonts.notice.empty()){app.status=fonts.notice;app.trace(fonts.notice);}
@@ -343,6 +347,9 @@ int run(const Options& options, int show, FILE* log) {
             std::fprintf(log,"usability_sample: page=%d mask=%d right=%d shown=%d zh=%d charts=%d drop=%ld,%ld back=%ld,%ld en=%ld,%ld cn=%ld,%ld save=%ld,%ld calculate=%ld,%ld",state.ui_page,state.ui_right_pages,state.ui_right_page,state.ui_right_visible,fonts.chinese,app.probability_ready,drop.x,drop.y,back.x,back.y,english.x,english.y,chinese.x,chinese.y,save.x,save.y,calculate.x,calculate.y);
             for(int i=0;i<7;++i){const auto nav=point(app.nav_items[i]),right=point(app.right_items[i]);std::fprintf(log," nav%d=%ld,%ld tool%d=%ld,%ld",i,nav.x,nav.y,i,right.x,right.y);}
             const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld\n",app.settings_matches,search.x,search.y);std::fflush(log);
+            std::fprintf(log,"navigation_sample: order=%s dragged=%d rounding=%.1f height=%.1f gap=%.1f tools=%d right_count=%zu",state.ui_nav_order.c_str(),app.nav_drag_page,app.nav_rounding,app.nav_item_height,app.nav_item_gap,app.right_container_present,app.right_docks.size());
+            for(const auto& tab:app.right_close_controls){const auto pos=point(tab.second);std::fprintf(log," close%d=%ld,%ld",tab.first,pos.x,pos.y);}
+            for(const auto& tab:app.right_docks)std::fprintf(log," dock%d=%u",tab.first,tab.second);std::fprintf(log,"\n");
             std::fprintf(log,"pet_skin_sample: selected=%s symbols=%d",state.pet_skin.c_str(),fonts.body->IsGlyphInFont(0x266a)&&fonts.body->IsGlyphInFont(0x2665));
             for(int i=0;i<4;++i){const auto skin=point(app.pet_skin_controls[i]);std::fprintf(log," skin%d=%ld,%ld",i,skin.x,skin.y);}std::fprintf(log,"\n");std::fflush(log);
             const auto raw=point(app.log_raw_control),follow=point(app.log_follow_control),drag=point({(app.title_drag_min.x+app.title_drag_max.x)*.5f,(app.title_drag_min.y+app.title_drag_max.y)*.5f});

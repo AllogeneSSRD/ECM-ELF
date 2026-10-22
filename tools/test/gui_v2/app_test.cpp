@@ -46,6 +46,10 @@ int main(int argc,char** argv){
     assert(mask==63&&center==6&&!ecmgui_v2::ui::move_page(mask,center,right,6,true));
     assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==3&&!ecmgui_v2::ui::pinned(mask,3));
     assert(!ecmgui_v2::ui::move_page(mask,center,right,-1,true));
+    std::string order="0123456";
+    assert(ecmgui_v2::ui::reorder_page(order,4,1,false)&&order=="0412356");
+    assert(ecmgui_v2::ui::reorder_page(order,0,6,true)&&order=="4123560");
+    assert(!ecmgui_v2::ui::reorder_page(order,3,3,false)&&!ecmgui_v2::ui::reorder_page(order,7,2,false));
     using namespace ecmgui_v2::ui;
     assert(memory_occupancy(4096,8192)==50);assert(std::isnan(memory_occupancy(1,0)));
     assert(percent(.95)==95&&probability(95)==.95);assert(integer_step(29.9,3)==10&&integer_step(15,3)==5);

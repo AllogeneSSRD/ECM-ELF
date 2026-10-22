@@ -65,6 +65,11 @@ public:
     bool result_view_dirty=true;
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
+    int nav_drag_page=-1;
+    float nav_rounding=0,nav_item_height=0,nav_item_gap=0;
+    std::map<int,ImVec2> right_close_controls;
+    std::map<int,unsigned> right_docks;
+    bool right_container_present=false;
     ImVec2 settings_search_control{};
     ImVec2 font_size_control{},exit_controls[3]{},worker_speed_min{},worker_speed_max{};
     size_t worker_speed_samples=0,workspace_chart_count=0;
@@ -124,9 +129,9 @@ private:
     struct LogView {bool raw=false,follow=true,jump=true;};
     std::map<int,LogView> log_views_;
     int log_last_worker_=-1;
-    int drawn_center_page_=-1,drawn_right_page_=-1;
+    int drawn_center_page_=-1;
     std::map<std::string,float> window_dpi_;
-    void begin_window(const char* name, bool* open, const ui::Settings& active);
+    bool begin_window(const char* name, bool* open, const ui::Settings& active);
     void end_window();
     void shutdown_workers() noexcept;
     bool supports_owner(const std::string& exe);

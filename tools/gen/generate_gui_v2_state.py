@@ -16,7 +16,7 @@ def products():
     tables = list(dict.fromkeys(field['table'] for field in fields))
     fields = [field for table in tables for field in fields if field['table'] == table]
     types = {'string': 'std::string', 'int': 'int', 'float': 'float', 'bool': 'bool'}
-    lines = ['// Generated; edit config/ecm_options.json, not this file.', '#pragma once', '#include <string>', '#include <cmath>', '#include <stdexcept>',
+    lines = ['// Generated; edit config/ecm_options.json, not this file.', '#pragma once', '#include <string>', '#include <cmath>', '#include <stdexcept>', '#include <algorithm>',
              'namespace ecmgui_v2 {', 'struct UiValues {']
     for field in fields:
         assert len(field['description']) == 2 and field['type'] in types
@@ -40,6 +40,10 @@ def products():
     for field in fields:
         name = f'v.{field["field"]}'
         tests = []
+        if 'permutation_of' in field:
+            assert field['type'] == 'string' and sorted(field['default']) == sorted(field['permutation_of'])
+            lines.append(f'    auto sorted_{field["field"]} = {name}; std::sort(sorted_{field["field"]}.begin(),sorted_{field["field"]}.end());')
+            tests.append(f'sorted_{field["field"]} != {json.dumps("".join(sorted(field["permutation_of"])))}')
         if 'minimum' in field: tests.append(f'{name} < {"(-2147483647 - 1)" if field["minimum"] == -2147483648 else field["minimum"]}')
         if 'maximum' in field: tests.append(f'{name} > {field["maximum"]}')
         if field['type'] == 'float': tests.append(f'!std::isfinite({name})')

@@ -18,6 +18,7 @@ public:
     Window(HWND owner, UiState& state, FILE* log) : owner_(owner), state_(state), log_(log) {}
     ~Window();
     void tick(Mood mood);
+    void follow_owner();
     HWND handle() const { return hwnd_; }
     std::string error;
 private:

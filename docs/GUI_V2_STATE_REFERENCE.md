@@ -44,6 +44,13 @@ Body and log font size in logical pixels, independently of interface DPI scale. 
 GPU chart time span in seconds, shared by all devices and persisted with UI preferences. Does not change the 500 ms sampling interval.
 GPU 图表时间范围（秒），所有设备共用并随界面偏好保存；不改变 500 ms 采样间隔。
 
+## ui.nav_order
+
+默认值：`"0123456"`；类型：`string`。
+
+Navigation order of all seven page IDs. Long-press and drag to reorder; pages moved right keep their position for return.
+七个页面编号的导航顺序；长按拖动排序，移到右侧的页面保留返回位置。
+
 ## ui.page
 
 默认值：`0`；类型：`int`。
@@ -97,22 +104,22 @@ Hex encoded ImGui layout; stored only in this sidecar.
 
 默认值：`0`；类型：`int`。
 
-Bit mask of pages moved to the right tool dock; at least one page remains central.
-移入右侧工具栏的页面位掩码；至少保留一个中央页面。
+Pages in the right dock share native horizontal tabs; closing a tab returns its page to navigation. At least one page remains central.
+右侧停靠区的页面共用横排标签；关闭标签后回到导航，至少保留一个中央页面。
 
 ## ui.right_page
 
 默认值：`4`；类型：`int`。
 
-Selected right tool page.
-当前选中的右侧工具页面。
+Last active page in the right dock.
+右侧停靠区最后激活的页面。
 
 ## ui.right_visible
 
 默认值：`true`；类型：`bool`。
 
-Show moved pages in a dockable right panel.
-在可停靠的右侧窗显示移入的页面。
+Compatibility field retained for old sidecars. Right-side pages are always displayed; close their tabs to return them to navigation.
+保留以读取旧侧车的兼容字段；右侧页面直接显示，关闭标签即可回到导航。
 
 ## ui.smooth_scroll
 
@@ -165,10 +172,10 @@ Restored window height in physical pixels.
 
 ## window.title_bar
 
-默认值：`true`；类型：`bool`。
+默认值：`false`；类型：`bool`。
 
-Show the system title bar. Hidden mode retains drag, resize and window controls.
-显示系统标题栏；隐藏后保留拖动、缩放和窗口控制按钮。
+Show the system title bar; hidden by default with window controls in the app top bar. Explicit saved choices are retained.
+显示系统标题栏；默认隐藏，窗口按钮位于应用顶栏；保留显式保存的选择。
 
 ## window.maximized
 
