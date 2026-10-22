@@ -44,7 +44,12 @@ ecm.toml
 *.ecm-ledger*
 
 # Local dependencies, datasets, and generated documentation content.
-/third_party
+/third_party/*
+!/third_party/gui_v2_pet/
+/third_party/gui_v2_pet/*
+!/third_party/gui_v2_pet/LICENSE
+!/third_party/gui_v2_pet/README.md
+!/third_party/gui_v2_pet/rig.rs
 /data/
 /docs/data/
 /docs/paper/
@@ -86,3 +91,12 @@ AGENTS.md
 /e[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
 /saves/
 /feeder.log
+# Keep the upstream Classic ELY atlas and its attribution reproducible.
+# New costumes, reference art and web-only variants remain local.
+/assets/*
+!/assets/gui_v2/
+/assets/gui_v2/*
+!/assets/gui_v2/pet_ely.png
+!/assets/gui_v2/pet_ely.json
+!/assets/gui_v2/CLASSIC-ELY-NOTICE.md
+!/assets/gui_v2/ELYTerminal-LICENSE.txt

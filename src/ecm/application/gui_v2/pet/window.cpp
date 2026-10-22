@@ -1,4 +1,5 @@
 #include "window.h"
+#include "../generated/pet_skins.h"
 #include "../../gui/platform.h"
 #include <algorithm>
 #include <cmath>
@@ -31,14 +32,24 @@ Placement place(RECT main, RECT work, float scale, float left) {
     return {x, y, width, height, bottom};
 }
 bool Window::open() {
-    if (hwnd_) return true;
     if (!gdiplus_) { Gdiplus::GdiplusStartupInput input; if (Gdiplus::GdiplusStartup(&gdiplus_, &input, nullptr) != Gdiplus::Ok) { error = "Pet: Windows graphics unavailable"; return false; } }
-    const auto path = std::filesystem::u8path(ecmgui::exe_dir()) / L"assets" / L"pet_ely.png";
+    if (!atlas_ || loaded_skin_ != state_.pet_skin) {
+    const auto* skin=find_skin(state_.pet_skin);
+    if(!skin){error="Pet skin unknown: "+state_.pet_skin;return false;}
+    const auto path = std::filesystem::u8path(ecmgui::exe_dir()) / L"assets" / skin->atlas;
     if (!std::filesystem::exists(path) || std::filesystem::file_size(path) > 8388608) { error = "Pet atlas missing or too large: " + path.u8string(); return false; }
-    atlas_.reset(Gdiplus::Bitmap::FromFile(path.c_str(), FALSE));
-    if (!atlas_ || atlas_->GetLastStatus() != Gdiplus::Ok || atlas_->GetWidth() != 1792 || atlas_->GetHeight() != 1736) {
-        atlas_.reset(); error = "Pet atlas invalid; expected 1792 x 1736 RGBA"; return false;
+    // The layered window already owns its displayed pixels. Release the old
+    // decoded sheet before opening another, avoiding two full RGBA atlases live.
+    atlas_.reset();
+    std::unique_ptr<Gdiplus::Bitmap> next(Gdiplus::Bitmap::FromFile(path.c_str(), FALSE));
+    if (!next || next->GetLastStatus() != Gdiplus::Ok || next->GetWidth() != 1792 || next->GetHeight() != 1736) {
+        error = "Pet atlas invalid; expected 1792 x 1736 RGBA"; return false;
     }
+    atlas_=std::move(next);loaded_skin_=state_.pet_skin;
+    cached_frames_.clear();cached_rows_.fill(false);cache_width_=cache_height_=0;frame_=row_=-1;error.clear();
+    std::fprintf(log_,"pet_skin: id=%s atlas=%s\n",skin->id,skin->atlas);std::fflush(log_);
+    }
+    if (hwnd_) return true;
     WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc = procedure; wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"ecm_gui_v2_pet"; wc.hCursor = LoadCursorW(nullptr, IDC_HAND);
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) { error = "Cannot register pet window"; return false; }
@@ -54,7 +65,7 @@ void Window::clear_bitmap() {
 }
 void Window::close() {
     if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
-    clear_bitmap(); atlas_.reset(); cached_frames_.clear();cached_frames_.shrink_to_fit();cached_rows_.fill(false);cache_width_=cache_height_=0;frame_ = row_ = -1;
+    clear_bitmap(); atlas_.reset();loaded_skin_.clear();cached_frames_.clear();cached_frames_.shrink_to_fit();cached_rows_.fill(false);cache_width_=cache_height_=0;frame_ = row_ = -1;
 }
 Window::~Window() {
     close(); UnregisterClassW(L"ecm_gui_v2_pet", GetModuleHandleW(nullptr));
@@ -92,7 +103,7 @@ void Window::tick(Mood mood) {
     if (!state_.pet_enabled) { if (hwnd_ || atlas_) close(); return; }
     if (IsIconic(owner_) || !IsWindowVisible(owner_)) { if (hwnd_) ShowWindow(hwnd_, SW_HIDE); return; }
     try {
-        if (!open()) { state_.pet_enabled = false; std::fprintf(log_, "pet_error: %s\n", error.c_str()); return; }
+        if (!open()) { close();state_.pet_enabled = false; std::fprintf(log_, "pet_error: %s\n", error.c_str()); return; }
         const auto now = GetTickCount64();
         if (mood != source_) { source_ = mood; since_ = now; }
         auto shown = source_;

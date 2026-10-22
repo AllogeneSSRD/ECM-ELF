@@ -33,6 +33,7 @@ struct UiValues {
     bool pet_enabled = false;
     bool pet_animate = true;
     float pet_left = 72.0f;
+    std::string pet_skin = "classic";
 };
 template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("state","schema",value.state_schema);
@@ -63,6 +64,7 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("pet","enabled",value.pet_enabled);
     field("pet","animate",value.pet_animate);
     field("pet","left",value.pet_left);
+    field("pet","skin",value.pet_skin);
 }
 inline void validate_ui(const UiValues& v) {
     if (v.state_schema < 1 || v.state_schema > 1) throw std::runtime_error("Invalid UI state: state.schema");
@@ -82,5 +84,6 @@ inline void validate_ui(const UiValues& v) {
     if (v.worker_stage2_exe.size() > 4096) throw std::runtime_error("Invalid UI state: worker.stage2_exe");
     if (v.worker_count < 0 || v.worker_count > 64) throw std::runtime_error("Invalid UI state: worker.count");
     if (v.pet_left < 0 || v.pet_left > 16384 || !std::isfinite(v.pet_left)) throw std::runtime_error("Invalid UI state: pet.left");
+    if ((v.pet_skin != "classic" && v.pet_skin != "miss_pink_elf" && v.pet_skin != "herrscher_of_human_ego" && v.pet_skin != "hi_love_elf") || v.pet_skin.size() > 4096) throw std::runtime_error("Invalid UI state: pet.skin");
 }
 }

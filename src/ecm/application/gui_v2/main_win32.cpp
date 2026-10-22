@@ -3,6 +3,7 @@
 #include "ui/widgets.h"
 #include "app.h"
 #include "pet/window.h"
+#include "generated/pet_skins.h"
 #include "ui/scroll.h"
 #include <dwmapi.h>
 #include <commctrl.h>
@@ -64,6 +65,7 @@ struct Options {
     bool performance = false;
     bool trace_render=false;
     bool vulkan=false;
+    std::string pet_skin;
     int external_windows=-1;
     std::string config;
     std::filesystem::path ui_state;
@@ -194,6 +196,7 @@ int run(const Options& options, int show, FILE* log) {
     if (options.explicit_scale) state.ui_scale = options.settings.scale;
     if (options.pet >= 0) state.pet_enabled = options.pet != 0;
     if (options.pet_static) state.pet_animate = false;
+    if(!options.pet_skin.empty())state.pet_skin=options.pet_skin;
     if(options.external_windows>=0)state.ui_external_windows=options.external_windows!=0;
     SYSTEMTIME utc{};GetSystemTime(&utc);
     std::fprintf(log,"render_session: utc=%04u-%02u-%02uT%02u:%02u:%02u.%03uZ ticks=%llu external_windows=%d trace=%d\n",utc.wYear,utc.wMonth,utc.wDay,utc.wHour,utc.wMinute,utc.wSecond,utc.wMilliseconds,GetTickCount64(),state.ui_external_windows,options.trace_render);std::fflush(log);
@@ -316,6 +319,8 @@ int run(const Options& options, int show, FILE* log) {
             std::fprintf(log,"usability_sample: page=%d mask=%d right=%d shown=%d zh=%d charts=%d drop=%ld,%ld back=%ld,%ld en=%ld,%ld cn=%ld,%ld save=%ld,%ld calculate=%ld,%ld",state.ui_page,state.ui_right_pages,state.ui_right_page,state.ui_right_visible,fonts.chinese,app.probability_ready,drop.x,drop.y,back.x,back.y,english.x,english.y,chinese.x,chinese.y,save.x,save.y,calculate.x,calculate.y);
             for(int i=0;i<7;++i){const auto nav=point(app.nav_items[i]),right=point(app.right_items[i]);std::fprintf(log," nav%d=%ld,%ld tool%d=%ld,%ld",i,nav.x,nav.y,i,right.x,right.y);}
             const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld\n",app.settings_matches,search.x,search.y);std::fflush(log);
+            std::fprintf(log,"pet_skin_sample: selected=%s symbols=%d",state.pet_skin.c_str(),fonts.body->IsGlyphInFont(0x266a)&&fonts.body->IsGlyphInFont(0x2665));
+            for(int i=0;i<4;++i){const auto skin=point(app.pet_skin_controls[i]);std::fprintf(log," skin%d=%ld,%ld",i,skin.x,skin.y);}std::fprintf(log,"\n");std::fflush(log);
         }
         if(options.performance){
             LARGE_INTEGER draw_end{};QueryPerformanceCounter(&draw_end);
@@ -406,6 +411,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show) {
             else if (argument == L"--pet") options.pet = 1;
             else if (argument == L"--no-pet") options.pet = 0;
             else if (argument == L"--pet-static") options.pet_static = true;
+            else if(argument==L"--pet-skin"&&i+1<args.size()){
+                options.pet_skin=utf8(args[++i].c_str());
+                if(!ecmgui_v2::pet::find_skin(options.pet_skin))throw std::runtime_error("Unknown ELY skin: "+options.pet_skin);
+            }
             else if ((argument == L"--diagnostics" || argument == L"--frames" || argument == L"--inject-failure" ||
                       argument == L"--theme" || argument == L"--language" || argument == L"--ui-scale" || argument == L"--config" || argument == L"--ui-state" || argument == L"--start-worker") && i + 1 < args.size()) {
                 const auto value = args[++i];

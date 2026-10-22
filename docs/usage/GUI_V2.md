@@ -1,6 +1,6 @@
 # GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.47.8，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.48.0，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
 ## 构建与启动
 
@@ -12,6 +12,7 @@ GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.47.8
 - `--ui-state <侧车.toml>`：默认 `%LOCALAPPDATA%/ECM-ELF/gui-v2/<配置身份>.toml`；按启动配置身份隔离，与业务文件分离，非法侧车保留并禁止覆盖。
 - `--theme dark|light`、`--language en|zh`、`--ui-scale 1|1.25|1.5|2`：初始外观；设置可选自动 DPI。
 - `--pet` / `--no-pet`、`--pet-static`：宠物及动画覆盖，默认关闭。
+- `--pet-skin classic|miss_pink_elf|herrscher_of_human_ego|hi_love_elf`：初始ELY皮肤覆盖；配合`--pet`启用，默认保持Classic ELY。
 - `--no-nvml`：关闭可选的 500ms 后台 GPU 监控。
 - `--renderer dx11|vulkan`：默认dx11；仅显式选择vulkan时要求系统Vulkan 1.1 loader、graphics/present与swapchain驱动。
 - `--single-viewport`：保持所有 ImGui 面板在主窗口内，当前默认模式。
@@ -44,6 +45,26 @@ GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.47.8
 常用筛选使用点击标签；滚轮短暂提升刷新频率以平滑滚动，静止恢复 10Hz。Toast 不抢焦点；启动、安全停止、配置/生成器反馈保留详细日志。GPU 未知样本不伪造零值，容量单位为MiB，另有百分比、MHz、W与摄氏度。GPU核心频率、显存频率分项显示并提供可展开趋势；显存占用是 `nvmlDeviceGetMemoryInfo` 已用/总容量，区分于 `nvmlUtilization_t.memory` 的读写活跃时间比例。[NVIDIA 指标说明](https://nvidia.custhelp.com/app/answers/detail/a_id/3751/kw/command)。概率图叠加 S1 / 联合 / 条件概率，统一明暗主题、网格、实际横坐标、坐标单位、淡色面积和悬停采样读数，图例可隐藏曲线。因子横轴直接使用快照的 bit / 十进制位数，不重复换算。GPU 曲线使用实际采样时间，支持 15/30/60/120 秒窗口；利用率/显存占用与功耗分图，缺失值断线。GPU时间轴固定对应所选时间窗并使用整数刻度，悬停统一显示一个实际采样时间（一位小数）及各指标，不重复x值。worker 检查区提供每曲线耗时图；横轴为采样序号，不假定为时间。图例开关和 GPU 时间窗为会话状态。
 
 Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚摸、最小化和退出联动；使用原生透明非激活 owned 窗口及离线 atlas，无 GPUI/Web runtime。关闭释放位图，最小化暂停动画。位置跟随主窗口客户区边缘，不使用含不可见边框的外框作为落脚点。每帧先隔离再缩放，防止双三次插值采到图集中相邻帧的颜色。`pet_ely.png` 为本项目离线生成物：从固定上游 `src/pet/rig.rs` 提取矢量层，经 `tools/gen/generate_gui_v2_pet.py` 输出SVG，再由 `render_gui_v2_pet.cjs` 生成1792×1736的56帧透明图集；上游睡眠标记为两个Z。原仓库不需要包含此PNG。来源/许可及哈希见 `third_party/gui_v2_pet/` 和 `assets/gui_v2/pet_ely.json`。
+
+“设置 → ELY皮肤”提供Classic ELY和三套装甲造型：Miss Pink Elf♪、Herrscher of Human: Ego、Hi♪ Love Elf♥。英文名及符号按装甲Wiki核对，名称来源与造型依据见 [资产说明](../../assets/gui_v2/skins/README.md)，动画可在 [离线皮肤预览](../web/ely-skins-20261022.html)比较。新皮肤沿用窗口边缘Q版比例，服饰、发型和头饰依据用户例图重绘，每套七状态×八帧；原版图集继续保留。点击立即更换，保持非激活宠物窗口及位置，清空旧帧缓存；正常退出或保存界面偏好持久化`pet.skin`。只加载当前图集，不预载全部皮肤。缺少选择的图集时提示文件名并关闭宠物，GUI继续运行。完整名称中的♪/♥使用系统Segoe UI Symbol补充字形，字体不随包分发。
+
+## 安装与替换皮肤
+
+皮肤PNG是外部资源，不嵌入exe，也不要求加入Git。程序固定从 **`ecm_gui_v2.exe` 同目录的 `assets` 文件夹**读取，与启动时的工作目录无关。三套新增皮肤的安装文件名为：
+
+- `assets/pet_ely_miss_pink_elf.png`
+- `assets/pet_ely_herrscher_of_human_ego.png`
+- `assets/pet_ely_hi_love_elf.png`
+
+将需要的PNG复制到该位置，启动GUI v2，在“设置”中启用ELY宠物，再点击“ELY皮肤”中的对应名称。也可运行 `ecm_gui_v2.exe --pet --pet-skin hi_love_elf`，其余两套使用对应ID。开发构建的目标目录为 `build_gui_v2_local/assets/`；本仓库资源源目录为 `assets/gui_v2/`，构建步骤仅将PNG复制到程序旁，不把它们链接进exe。
+
+替换已登记皮肤的图案无需编译：退出程序，保留文件名并替换PNG，再启动。图片必须是1792×1736的透明RGBA动画图集，单帧224×248，8列×7行；各行依次是待机、工作、等待、异常、完成、睡觉、眨眼。文件不得超过8MiB。普通立绘或单帧PNG不能直接使用。当前运行时不读取同名JSON、SVG或`skins/manifest.json`，这些文件用于制作、来源记录与构建校验。缺少选中的PNG时仅关闭宠物并提示路径，主界面继续工作。
+
+目前只有Classic ELY与上述三个ID，尚无文件选择式导入或自动扫描。添加一个全新的皮肤名称/ID仍须更新注册表、配置允许值及相应生成物并重新编译；仅把额外PNG放进`assets`不会增加列表项。同名PNG替换也不会实时监测文件变化，重启后加载新图。
+
+新增PNG、SVG和素材清单仅保存在本机，按用户要求不提交Git。Git忽略规则精确放行原版`pet_ely.png`、`pet_ely.json`、[来源与生成说明](../../assets/gui_v2/CLASSIC-ELY-NOTICE.md)、[上游完整MIT许可证](../../assets/gui_v2/ELYTerminal-LICENSE.txt)及`third_party/gui_v2_pet/`中的固定源码、许可和说明；其他新增皮肤继续忽略。原版说明与许可随构建资源和候选包一同复制。运行时可按需单独安装皮肤PNG；当前开发构建及完整候选包仍校验全部本地图集/配方，新克隆工作区须先恢复这些本地资源才能通过构建。图片可通过本地备份或独立资源包保存，避免增加Git历史体积。
+
+[网页画廊](../web/ely-skins-20261022.html)另提供三套中空浅色菱形瞳孔变体，以及现有版本切换和静态双眼放大。菱形仅绘制轮廓，中心保留虹膜底色，不使用实心填充。变体位于被忽略的`assets/web/ely_variants/`，只用于Web演示，不加入程序皮肤列表、原生资源目录、配置或程序分发包；程序仍使用现有三套图集。
 
 ## 验证边界
 

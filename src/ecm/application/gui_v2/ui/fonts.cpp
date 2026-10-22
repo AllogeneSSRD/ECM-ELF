@@ -15,9 +15,10 @@ std::filesystem::path find_font(std::initializer_list<const wchar_t*> names) {
     }
     return {};
 }
-ImFont* add(const std::filesystem::path& path, std::vector<std::vector<unsigned char>>& files, bool merge = false, unsigned char* shared = nullptr, int shared_size = 0) {
+ImFont* add(const std::filesystem::path& path, std::vector<std::vector<unsigned char>>& files, bool merge = false, unsigned char* shared = nullptr, int shared_size = 0, ImFont* destination = nullptr) {
     if (path.empty()) return nullptr;
     ImFontConfig config; config.MergeMode = merge; config.FontDataOwnedByAtlas = false;
+    if(destination)config.DstFont=destination;
     if (!shared) {
         std::ifstream input(path, std::ios::binary);
         files.emplace_back(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
@@ -46,6 +47,13 @@ void Fonts::reload(bool request_chinese, bool simulate_missing_cjk, FILE* log) {
         mono = add(mono_file, files);
         if (mono && cjk_data) add(cjk_file, files, true, cjk_data, cjk_size);
         if (!mono) mono = english;
+        // Preserve the battlesuit names' musical note and heart, including in English UI.
+        const auto symbol_file=find_font({L"seguisym.ttf"});
+        if(add(symbol_file,files,true,nullptr,0,english)){
+            auto* symbol_data=files.back().data();const int symbol_size=static_cast<int>(files.back().size());
+            if(chinese_font)add(symbol_file,files,true,symbol_data,symbol_size,chinese_font);
+            if(mono!=english&&mono!=chinese_font)add(symbol_file,files,true,symbol_data,symbol_size,mono);
+        }
     }
     body = request_chinese && chinese_font ? chinese_font : english;
     cjk = body->IsGlyphInFont(0x4e2d) && body->IsGlyphInFont(0x6587);

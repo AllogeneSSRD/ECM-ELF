@@ -1,0 +1,20 @@
+{
+  "sha256": {
+    "assets/gui_v2/pet_ely_herrscher_of_human_ego.json": "eef381293bf0bf5a9c4ecd6e9590d294bf0d0bcac5424722ddf8cb3c9b7b00c0",
+    "assets/gui_v2/pet_ely_herrscher_of_human_ego.png": "a43f13ad459ccfe003c088fca6de59cf996918a3ab7c91ddc3cb269fe76471a9",
+    "assets/gui_v2/pet_ely_hi_love_elf.json": "09eaba4c1cd365b49c9eb84b0e51f8c02bba5e1b71a7cd06c9bc1c051d960367",
+    "assets/gui_v2/pet_ely_hi_love_elf.png": "014653a65c6e62d1d6c48d93db27b9d3ff4e7daa0a93480414553aafacfa39d7",
+    "assets/gui_v2/pet_ely_miss_pink_elf.json": "71dea30658966abaf18ac8376750cd5fae40972f1223c18b6319af29e3afb7df",
+    "assets/gui_v2/pet_ely_miss_pink_elf.png": "4a9141d6ab06d6e0360e067f5b0536a42740a1020281fdccab8eaa41ed677c2e",
+    "assets/gui_v2/skins/herrscher_of_human_ego.svg": "91be7cd132338b557fa92f79281df256b9bf68b9092f3df82d94b755b66898da",
+    "assets/gui_v2/skins/hi_love_elf.svg": "8dbe718de19d1061438e8e4f10f99a6994dc755317fcd43dd545d5ab328e2dd8",
+    "assets/gui_v2/skins/manifest.json": "824aff721da32f3c6e66802db642121dae8d1975d2038eaf4a17c86b4584c7be",
+    "assets/gui_v2/skins/miss_pink_elf.svg": "b0d8f4fb8821ac409cc6875a49de1222885973604e8514b67c077e5a00a92eba",
+    "assets/gui_v2/skins/shared.svg": "1683c7fd5d0ba50313a2f2e7c3aa381f12de2728427af0061c04984a5274922a",
+    "src/ecm/application/gui_v2/generated/pet_skins.h": "2ce8ac8078aece43ed8648e3941e9f5bd5bc966c0f88c8417d6803a8eb3eaf3f",
+    "third_party/gui_v2_pet/rig.rs": "c34e9274cf77d8011eee331d91f3ea7869a619f9fc72266a85ff7a9ad6a9cca6",
+    "tools/gen/generate_gui_v2_pet.py": "bde3646eef98ef82368a13621a5f84c5d5a1946498e30e25d0ca73565c1b93ff",
+    "tools/gen/generate_gui_v2_pet_skins.py": "7aff6f34a5440cc6f9d210f38c7fb7b9855b87fffc7a3df8476ea31abb89a054",
+    "tools/gen/render_gui_v2_pet.cjs": "73d57c7b09c21fa48495ba98eefcf57944d5e4a9b0dc3b05328dc01e551aa3c2"
+  }
+}

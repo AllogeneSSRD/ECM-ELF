@@ -195,3 +195,11 @@ tools/gen/generate_gui_v2_state.py text eol=lf
 
 third_party/gui_v2_pet/* text eol=lf
 third_party/imgui_vulkan/*.patch text eol=lf
+
+# Skin metadata fingerprints reference the editable offline recipe bytes.
+assets/gui_v2/skins/** text eol=lf
+assets/gui_v2/pet_ely_*.json text eol=lf
+tools/gen/generate_gui_v2_pet.py text eol=lf
+tools/gen/generate_gui_v2_pet_skins.py text eol=lf
+tools/gen/render_gui_v2_pet.cjs text eol=lf
+config/gui_v2_pet_skins.generated.json text eol=lf

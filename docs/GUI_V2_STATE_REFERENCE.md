@@ -197,3 +197,10 @@ Animate at the existing GUI cadence; no extra render loop.
 
 Companion offset from the main window left edge in logical units.
 宠物相对主窗口左缘的逻辑单位偏移。
+
+## pet.skin
+
+默认值：`"classic"`；类型：`string`。
+
+ELY appearance. Switches immediately; official battlesuit names are preserved in the selector.
+ELY 外观，即时切换；选择项使用装甲的完整英文名称。

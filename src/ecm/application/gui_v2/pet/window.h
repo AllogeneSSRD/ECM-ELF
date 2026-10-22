@@ -26,6 +26,7 @@ private:
     FILE* log_ = nullptr;
     ULONG_PTR gdiplus_ = 0;
     std::unique_ptr<Gdiplus::Bitmap> atlas_;
+    std::string loaded_skin_;
     HDC dc_ = nullptr;
     HBITMAP bitmap_ = nullptr, previous_ = nullptr;
     unsigned* pixels_ = nullptr;

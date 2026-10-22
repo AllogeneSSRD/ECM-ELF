@@ -52,6 +52,22 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/assets/pet_ely.png"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ECM_GUI_V2_ROOT}/assets/gui_v2/pet_ely.png" "${CMAKE_BINARY_DIR}/assets/pet_ely.png"
     DEPENDS "${ECM_GUI_V2_ROOT}/assets/gui_v2/pet_ely.png")
 add_custom_target(ecm_gui_v2_assets DEPENDS "${CMAKE_BINARY_DIR}/assets/pet_ely.png")
+foreach(_notice CLASSIC-ELY-NOTICE.md ELYTerminal-LICENSE.txt)
+    add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/assets/${_notice}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/assets"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ECM_GUI_V2_ROOT}/assets/gui_v2/${_notice}" "${CMAKE_BINARY_DIR}/assets/${_notice}"
+        DEPENDS "${ECM_GUI_V2_ROOT}/assets/gui_v2/${_notice}")
+endforeach()
+add_custom_target(ecm_gui_v2_pet_notices DEPENDS "${CMAKE_BINARY_DIR}/assets/CLASSIC-ELY-NOTICE.md" "${CMAKE_BINARY_DIR}/assets/ELYTerminal-LICENSE.txt")
+add_dependencies(ecm_gui_v2_assets ecm_gui_v2_pet_notices)
+foreach(_skin miss_pink_elf herrscher_of_human_ego hi_love_elf)
+    add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/assets/pet_ely_${_skin}.png"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/assets"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ECM_GUI_V2_ROOT}/assets/gui_v2/pet_ely_${_skin}.png" "${CMAKE_BINARY_DIR}/assets/pet_ely_${_skin}.png"
+        DEPENDS "${ECM_GUI_V2_ROOT}/assets/gui_v2/pet_ely_${_skin}.png")
+    add_custom_target(ecm_gui_v2_skin_${_skin} DEPENDS "${CMAKE_BINARY_DIR}/assets/pet_ely_${_skin}.png")
+    add_dependencies(ecm_gui_v2_assets ecm_gui_v2_skin_${_skin})
+endforeach()
 add_dependencies(ecm_gui_v2 ecm_gui_v2_assets)
 target_compile_options(ecm_gui_v2 PRIVATE /W4 /utf-8 /EHsc)
 target_link_options(ecm_gui_v2 PRIVATE /MANIFEST:EMBED "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")

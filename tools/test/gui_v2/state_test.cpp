@@ -1,5 +1,6 @@
 #include "../../../src/ecm/application/gui_v2/ui_state.h"
 #include "../../../src/ecm/application/gui_v2/pet/window.h"
+#include "../../../src/ecm/application/gui_v2/generated/pet_skins.h"
 #include <cassert>
 #include <fstream>
 #include <cstdio>
@@ -19,6 +20,9 @@ int main(int argc, char** argv) {
     assert(client_bottom.bottom&&client_bottom.y+client_bottom.height==client.bottom);DestroyWindow(owner);
     const auto dir = fs::u8path(argv[1]); fs::create_directories(dir);
     ecmgui_v2::UiState state; state.path = dir / "state.toml";
+    assert(state.pet_skin=="classic");state.pet_skin="hi_love_elf";
+    assert(ecmgui_v2::pet::skins.size()==4&&ecmgui_v2::pet::find_skin(state.pet_skin));
+    assert(!ecmgui_v2::pet::find_skin("../../arbitrary-image"));
     assert(!state.ui_external_windows);state.ui_external_windows=true;
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
     state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
@@ -28,6 +32,7 @@ int main(int argc, char** argv) {
     assert(copy.ui_theme == "light" && copy.ui_language == "zh" && copy.pet_enabled && copy.pet_left == 126.5f);
     assert(copy.worker_stage1_exe == state.worker_stage1_exe && copy.layout() == state.layout());
     assert(copy.ui_external_windows);
+    assert(copy.pet_skin=="hi_love_elf");
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
     const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
     ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts&&!migrated.ui_external_windows);
@@ -40,6 +45,9 @@ int main(int argc, char** argv) {
     const auto invalid_layout=dir/"invalid-layout.toml";
     {std::ofstream out(invalid_layout);out<<"[ui]\ndock=\"0\"\n";}
     ecmgui_v2::UiState bad_layout;bad_layout.path=invalid_layout;assert(!bad_layout.load()&&!bad_layout.save());
+    const auto invalid_skin=dir/"invalid-skin.toml";
+    {std::ofstream out(invalid_skin);out<<"[pet]\nskin=\"../../outside\"\n";}
+    ecmgui_v2::UiState bad_skin;bad_skin.path=invalid_skin;assert(!bad_skin.load()&&!bad_skin.save());
     using ecmgui_v2::pet::place;
     const auto top = place({100,400,1300,1200}, {0,0,1920,1440}, 1, 72);
     assert(!top.bottom && top.x == 172 && top.y == 276 && top.width == 112 && top.height == 124);

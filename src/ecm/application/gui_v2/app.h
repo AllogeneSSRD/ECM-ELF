@@ -56,6 +56,7 @@ public:
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 settings_search_control{};
+    ImVec2 pet_skin_controls[4]{};
     int settings_matches=0;
     float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};

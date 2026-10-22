@@ -5,6 +5,7 @@
 #include "../ui/navigation.h"
 #include "../ui/i18n.h"
 #include "../ui/presentation.h"
+#include "../generated/pet_skins.h"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -276,6 +277,14 @@ void App::draw_settings(bool zh) {
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"By default panels dock and float inside the main window. Enable this to create independent windows across monitors.","默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。"));
     ImGui::Checkbox(tr(zh,"Action toasts (errors always shown)","操作轻提示（错误仍显示）"),&state.ui_toasts);
     ImGui::Checkbox(tr(zh,"Ely pet","Ely 宠物"),&state.pet_enabled);ImGui::Checkbox(tr(zh,"Animate pet","宠物动画"),&state.pet_animate);
+    ImGui::TextUnformatted(tr(zh,"ELY skin","ELY 皮肤"));
+    int pet_skin=0;std::vector<const char*> skin_labels;
+    for(size_t i=0;i<pet::skins.size();++i){skin_labels.push_back(pet::skins[i].english);if(state.pet_skin==pet::skins[i].id)pet_skin=static_cast<int>(i);}
+    if(chips("pet-skin",pet_skin,skin_labels,pet_skin_controls)){
+        state.pet_skin=pet::skins[pet_skin].id;
+        toast(std::string(tr(zh,"ELY skin: ","ELY 皮肤："))+pet::skins[pet_skin].english);
+    }
+    if(zh)ImGui::TextDisabled("%s",pet::skins[pet_skin].chinese);
     if(ImGui::Button(tr(zh,"Save UI preferences","保存界面偏好")))save_preferences();
     save_ui_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
     ImGui::TextWrapped("%s",tr(zh,"Appearance and layout are also saved on a normal exit. Computation settings require their own Save workflow action.","正常退出也会保存外观与布局；计算设置必须单独点击“保存工作流”。"));

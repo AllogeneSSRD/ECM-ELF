@@ -43,6 +43,8 @@ def main():
     assert 'language=en cjk=0' in run('missing-cjk',['--language','zh','--simulate-missing-cjk'])
     assert 'worker_processes=0' in run('no-nvml',['--no-nvml'])
     assert 'pet: mood=' in run('pet',['--pet'],show=True)
+    for skin in manifest.get('pet_skins',[])[1:]:
+        assert f'pet_skin: id={skin} ' in run('pet-'+skin,['--pet','--pet-skin',skin],show=True)
     no_pet=out/'without-pet';no_pet.mkdir();shutil.copy2(exe,no_pet/exe.name)
     assert 'pet_error: Pet atlas missing' in run('missing-pet',['--pet'],show=True,binary=no_pet/exe.name)
     corrupt=out/'corrupt.toml';corrupt.write_text('[state]\nschema=999\n');before=corrupt.read_bytes()
