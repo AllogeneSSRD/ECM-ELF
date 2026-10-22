@@ -55,7 +55,7 @@ public:
     bool result_view_dirty=true;
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
-    ImVec2 settings_tabs[3]{},settings_search_control{};
+    ImVec2 settings_search_control{};
     int settings_matches=0;
     float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};
@@ -70,7 +70,6 @@ public:
     char edit_table[128] = "stage1", edit_key[128]{}, edit_value[4096]{};
     char settings_search[256]{};
     int settings_group=0;
-    int settings_tab=0;
     bool settings_bool=false;
     ecmgui::FileStamp config_stamp;
     bool autostart_pending = false;
@@ -87,6 +86,7 @@ public:
     bool probability_empirical=false;
     ui::Showcase showcase;
     bool test_float = false;
+    bool workspace_docked=false;
     int pet_test_mood = -1;
     float probe_dpi = 0, probe_font = 0, probe_padding = 0;
 private:
@@ -95,6 +95,7 @@ private:
     std::map<std::string,std::filesystem::file_time_type> verified_;
     bool layout_ready_ = false, layout_wide_ = false;
     bool focus_right_ = true;
+    int drawn_center_page_=-1,drawn_right_page_=-1;
     std::map<std::string,float> window_dpi_;
     void begin_window(const char* name, bool* open, const ui::Settings& active);
     void end_window();

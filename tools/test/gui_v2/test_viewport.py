@@ -14,7 +14,7 @@ def main():
     env=os.environ.copy(); env['VK_LAYER_PATH']=str(args.layers.resolve())
     startup=subprocess.STARTUPINFO(); startup.dwFlags=subprocess.STARTF_USESHOWWINDOW; startup.wShowWindow=0
     log=out/'viewport.log'
-    run=subprocess.run([str(args.exe.resolve()),'--frames','10','--detach-probe','--no-nvml','--validation','--audit-app','--ui-state',str(out/'ui.toml'),'--diagnostics',str(log)],cwd=out,env=env,startupinfo=startup,timeout=20)
+    run=subprocess.run([str(args.exe.resolve()),'--frames','10','--multi-viewport','--detach-probe','--no-nvml','--renderer','vulkan','--validation','--audit-app','--ui-state',str(out/'ui.toml'),'--diagnostics',str(log)],cwd=out,env=env,startupinfo=startup,timeout=20)
     text=log.read_text(encoding='utf-8')
     assert run.returncode==0 and 'validation_summary: errors=0 warnings=0' in text,text
     (out/'result.json').write_text(json.dumps(dict(passed=True,acquire_before_use=True)))

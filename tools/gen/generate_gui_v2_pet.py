@@ -78,7 +78,12 @@ def frame(parts, mood, index):
         if 'Hand' in bone and mood == 'Working': transform = f'translate(0 {abs(math.sin(phase)) * -3:.3f})'
         color = f'#{part["color"]:06x}'
         shapes = part['shapes'].replace('"black"', f'"{color}"')
-        chunks.append(f'<g fill="{color}" opacity="{part["alpha"]}" transform="{transform}">{shapes}</g>')
+        # Inline SVG IDs share the document namespace, including different atlas cells.
+        # Each mask must belong to this pose rather than the first frame's clipPath.
+        for name in re.findall(r'id="([^"]+)"', shapes):
+            unique = f'ely-{mood}-{index}-{part["name"]}-{name}'
+            shapes = shapes.replace(f'id="{name}"', f'id="{unique}"').replace(f'url(#{name})', f'url(#{unique})')
+        chunks.append(f'<g data-part="{part["name"]}" fill="{color}" opacity="{part["alpha"]}" transform="{transform}">{shapes}</g>')
     return '<svg xmlns="http://www.w3.org/2000/svg" width="224" height="248" viewBox="110 -36 292 323">' + ''.join(chunks) + '</svg>'
 
 

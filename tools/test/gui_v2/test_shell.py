@@ -1,4 +1,4 @@
-"""Actual Vulkan platform-window / Controller / sidecar / pet integration."""
+"""Selected renderer platform-window / Controller / sidecar / pet integration."""
 import argparse
 import ctypes as c
 from ctypes import wintypes as w
@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from renderer_probe import renderer_args,renderer_clean
 from win32_probe import window, capture, user, callback_type
 
 
 def main():
-    parser=argparse.ArgumentParser()
+    parser=argparse.ArgumentParser();parser.add_argument('--renderer',choices=['dx11','vulkan'],default='dx11')
     parser.add_argument('--exe',type=Path,required=True)
     parser.add_argument('--worker',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
@@ -31,7 +32,7 @@ def main():
     config.write_text(f'[shared]\nworktodo={json.dumps(str(queue))}\n[gui]\nNumWorkers=2\nexe={json.dumps(str(worker))}\nexit_confirm="ask"\ngraceful_stop_ms=1200\n[workers.1]\nautostart=0\nextra_args="--scenario v2-checkpoint-stop"\n[workers.2]\nautostart=0\nextra_args="--scenario v2-checkpoint-stop"\n')
     before=hashlib.sha256(config.read_bytes()).hexdigest()
     log=out/'shell.log'; state=out/'ui.toml'
-    process=subprocess.Popen([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(log),'--no-nvml','--validation','--audit-app','--detach-probe','--pet','--start-worker','1'],cwd=out,env=env,startupinfo=startup)
+    process=subprocess.Popen([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(log),'--no-nvml',*renderer_args(args.renderer),'--audit-app','--multi-viewport','--detach-probe','--pet','--start-worker','1'],cwd=out,env=env,startupinfo=startup)
     hwnd=window(process.pid,'ecm_gui_v2')
     def wait(pattern, timeout=15):
         end=time.monotonic()+timeout
@@ -98,18 +99,18 @@ def main():
     finally:
         if process.poll() is None: user.PostMessageW(hwnd,0x8022,3,0); process.wait(timeout=10)
     text=log.read_text(encoding='utf-8')
-    assert 'validation_summary: errors=0 warnings=0' in text,text
+    assert renderer_clean(text,args.renderer),text
     assert 'worker_processes=0' in text and state.exists()
     assert 'graceful stop requested' in text and 'state Restarting (exit code 5' not in text,text
     assert hashlib.sha256(config.read_bytes()).hexdigest()==before
     assert '[pet]' in state.read_text() and 'enabled = true' in state.read_text()
     # Restart restores a separate sidecar while keeping business config byte-identical.
     restart=out/'restart.log'
-    run=subprocess.run([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(restart),'--frames','10','--no-nvml','--validation'],cwd=out,env=env,startupinfo=startup,timeout=20)
+    run=subprocess.run([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(restart),'--frames','10','--no-nvml',*renderer_args(args.renderer)],cwd=out,env=env,startupinfo=startup,timeout=20)
     assert run.returncode==0 and 'pet: mood=' not in restart.read_text(encoding='utf-8')  # hidden host defers pet work
     assert 'UI state not loaded' not in restart.read_text(encoding='utf-8') and 'UI state not saved' not in restart.read_text(encoding='utf-8')
     assert hashlib.sha256(config.read_bytes()).hexdigest()==before
-    result=dict(passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),business_unchanged=True,viewport_survives_main_resize=True,
+    result=dict(renderer=args.renderer,passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),business_unchanged=True,viewport_survives_main_resize=True,
                 viewport_close_recreate=True,pet_owned_layered_noactivate=True,pet_minimize_restore=True,pet_moods=7,
                 duplicate_consumer_refused=True,close_confirm_cancel_and_graceful=True,sidecar_restart=True,
                 physical_monitors=monitors,viewport_monitor_dpi=monitor_dpi,pet_mouse_noactivate=True,

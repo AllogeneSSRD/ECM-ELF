@@ -1,10 +1,11 @@
 """Exercise page dragging, live language controls, snapshot charts and sidecar restart."""
 import argparse,ctypes as c,hashlib,json,os,re,subprocess,time,tomllib
 from pathlib import Path
+from renderer_probe import renderer_args,renderer_clean
 from win32_probe import window,close,user,capture
 
 def main():
-    parser=argparse.ArgumentParser()
+    parser=argparse.ArgumentParser();parser.add_argument('--renderer',choices=['dx11','vulkan'],default='dx11')
     for name in ['exe','out','layers']:parser.add_argument('--'+name,type=Path,required=True)
     args=parser.parse_args();out=args.out.resolve();out.mkdir();exe=args.exe.resolve()
     cfg=out/'ecm.toml';cfg.write_text('[shared]\nworktodo="worktodo.txt"\nb2_ratio=0\n[stage1]\ntarget="cpu"\n[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n',encoding='utf-8');before=cfg.read_bytes()
@@ -15,7 +16,7 @@ def main():
     def launch(name,extra=()):
         log=out/(name+'.log');logs.append(log)
         startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-        proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app','--validation','--no-nvml',*extra],cwd=out,env=env,startupinfo=startup)
+        proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app',*renderer_args(args.renderer),'--no-nvml',*extra],cwd=out,env=env,startupinfo=startup)
         hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,60,80,1920,1200,0x14);user.ShowWindow(hwnd,4)
         return proc,hwnd,log
     def snapshots(log):
@@ -50,7 +51,13 @@ def main():
         click(hwnd,s['en']);s=wait(proc,log,lambda v:v['zh']=='0')
         click(hwnd,s['cn']);s=wait(proc,log,lambda v:v['zh']=='1');click(hwnd,s['save'])
         saved=tomllib.loads(state.read_text(encoding='utf-8'));assert saved['ui']['right_pages']==24 and saved['ui']['language']=='zh'
-        click(hwnd,s['settings2']);s=wait(proc,log,lambda v:v['settings_tab']=='2' and int(v['search'].split(',')[0])>0)
+        # Settings are one flowing page; scroll the workspace to its search field.
+        for _ in range(25):
+            s=wait(proc,log,lambda v:v['page']=='5')
+            if 150<int(s['search'].split(',')[1])<800:break
+            user.PostMessageW(hwnd,0x8021,0,(400<<16)|600);time.sleep(.15)
+            user.PostMessageW(hwnd,0x20a,((-360)&65535)<<16,0);time.sleep(.3)
+        else:raise AssertionError('Flowing settings search did not become visible')
         click(hwnd,s['search'])
         for letter in 'target':user.PostMessageW(hwnd,0x102,ord(letter),0)
         s=wait(proc,log,lambda v:v['matches']=='1');capture(hwnd,out/'settings-search.png')
@@ -78,10 +85,11 @@ def main():
         assert 'Chinese font unavailable' in log.read_text(encoding='utf-8');capture(hwnd,out/'font-rescue.png')
     finally:close(proc,hwnd)
     assert proc.returncode==0
-    for log in logs:assert 'validation_summary: errors=0 warnings=0' in log.read_text(encoding='utf-8')
-    result=dict(passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),drag_to_right_and_back=True,
+    for log in logs:assert renderer_clean(log.read_text(encoding='utf-8'),args.renderer)
+    result=dict(renderer=args.renderer,passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),drag_to_right_and_back=True,
                 clicked_live_language_both_directions=True,clicked_snapshot=True,explicit_save_and_restart=True,
                 settings_search_and_empty_state=True,live_font_rescue_without_retry_loop=True,
+                flowing_settings=True,
                 actual_snapshot_dark_and_light=True,
                 narrow_right_tools=True,business_unchanged=True,limits=['Pointer events use the explicit test seam; physical IME and different monitor DPI remain unqualified.'])
     (out/'result.json').write_text(json.dumps(result,indent=2),encoding='utf-8');print(json.dumps(result))

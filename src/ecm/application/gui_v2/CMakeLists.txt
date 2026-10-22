@@ -25,13 +25,14 @@ add_library(ecm_gui_v2_backend STATIC
     "${ECM_GUI_V2_IMGUI}/imgui.cpp" "${ECM_GUI_V2_IMGUI}/imgui_draw.cpp"
     "${ECM_GUI_V2_IMGUI}/imgui_tables.cpp" "${ECM_GUI_V2_IMGUI}/imgui_widgets.cpp"
     "${ECM_GUI_V2_IMGUI}/backends/imgui_impl_win32.cpp"
+    "${ECM_GUI_V2_IMGUI}/backends/imgui_impl_dx11.cpp"
     "${ECM_GUI_V2_BACKEND}/imgui_impl_vulkan.cpp" "${ECM_GUI_V2_VULKAN}/volk/volk.c")
 target_include_directories(ecm_gui_v2_backend PUBLIC "${ECM_GUI_V2_IMGUI}" "${ECM_GUI_V2_IMGUI}/backends"
     "${ECM_GUI_V2_BACKEND}" "${ECM_GUI_V2_VULKAN}/include" "${ECM_GUI_V2_VULKAN}/volk")
 target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK VK_USE_PLATFORM_WIN32_KHR
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
-add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/vulkan_context.cpp render/vulkan_window.cpp
+add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/dx11_window.cpp render/vulkan_context.cpp render/vulkan_window.cpp
     ui/theme.cpp ui/fonts.cpp ui/widgets.cpp app.cpp views/pages.cpp ui_state.cpp pet/window.cpp)
 include("${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 add_custom_target(ecm_gui_v2_config_check
@@ -45,7 +46,7 @@ target_compile_features(ecm_gui_v2_models PUBLIC cxx_std_17)
 target_compile_definitions(ecm_gui_v2_models PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ecm_gui_v2_models PRIVATE /W3 /utf-8 /EHsc)
 target_link_libraries(ecm_gui_v2_models PUBLIC user32 gdi32 comdlg32 shell32)
-target_link_libraries(ecm_gui_v2 PRIVATE ecm_gui_v2_backend ecm_gui_v2_models user32 gdi32 shell32 dwmapi ole32 gdiplus comctl32)
+target_link_libraries(ecm_gui_v2 PRIVATE ecm_gui_v2_backend ecm_gui_v2_models user32 gdi32 shell32 dwmapi ole32 gdiplus comctl32 d3d11 dxgi d3dcompiler)
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/assets/pet_ely.png"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/assets"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ECM_GUI_V2_ROOT}/assets/gui_v2/pet_ely.png" "${CMAKE_BINARY_DIR}/assets/pet_ely.png"
@@ -58,7 +59,7 @@ set_property(TARGET ecm_gui_v2 APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOU
 target_compile_options(ecm_gui_v2_backend PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_v2 PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 add_dependencies(ecm_gui_v2 ecm_config_check ecm_gui_v2_config_check)
-message(STATUS "gui_v2: independent Win32/Vulkan target enabled; runtime loader via Volk")
+message(STATUS "gui_v2: independent Win32 target; DX11 default, Vulkan diagnostic opt-in via Volk")
 add_executable(ecm_gui_v2_fake_worker EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/fake_worker.cpp")
 target_link_libraries(ecm_gui_v2_fake_worker PRIVATE ecm_gui_v2_models)
 target_compile_options(ecm_gui_v2_fake_worker PRIVATE /utf-8 /EHsc)

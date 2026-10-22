@@ -5,7 +5,7 @@ from win32_probe import window,close,process_sample,user
 def main():
     p=argparse.ArgumentParser();p.add_argument('--exe',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--layers',type=Path,required=True);a=p.parse_args();out=a.out.resolve();out.mkdir();log=out/'resources.log';g=json.loads(Path(__file__).with_name('performance_gates.json').read_text())
     env=os.environ.copy();env['VK_LAYER_PATH']=str(a.layers.resolve());startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-    proc=subprocess.Popen([str(a.exe.resolve()),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--no-nvml','--validation','--audit-performance'],cwd=out,env=env,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
+    proc=subprocess.Popen([str(a.exe.resolve()),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--no-nvml','--renderer','vulkan','--validation','--audit-performance'],cwd=out,env=env,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
     user.GetGuiResources.argtypes=[c.c_void_p,c.c_ulong];user.GetGuiResources.restype=c.c_ulong
     def toggle(on):user.PostMessageW(hwnd,0x8022,9,on);time.sleep(.24)
     try:

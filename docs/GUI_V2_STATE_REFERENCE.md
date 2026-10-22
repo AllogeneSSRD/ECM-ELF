@@ -114,6 +114,13 @@ Smooth wheel scrolling in main and detached windows.
 Show non-activating action notifications; errors always remain visible.
 显示不抢焦点的操作轻提示；错误提示仍显示。
 
+## ui.external_windows
+
+默认值：`false`；类型：`bool`。
+
+Allow detached native panel windows after restart; default keeps docking and floating inside the main window to avoid the observed slow presentation path.
+重启后允许原生独立面板窗；默认在主窗口内停靠/浮动，以规避已观察到的慢呈现路径。
+
 ## window.x
 
 默认值：`-2147483648`；类型：`int`。

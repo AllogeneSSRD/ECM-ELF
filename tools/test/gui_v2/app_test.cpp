@@ -8,6 +8,7 @@
 #include "../../../src/ecm/application/gui_v2/ui/navigation.h"
 #include "../../../src/ecm/application/gui_v2/ui/chart.h"
 #include "../../../src/ecm/application/gui_v2/ui/i18n.h"
+#include "../../../src/ecm/application/gui_v2/ui/presentation.h"
 namespace fs=std::filesystem;
 static void write(const fs::path& p,const std::string& text){std::ofstream f(p,std::ios::binary);f<<text;assert(f.good());}
 static std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
@@ -18,6 +19,8 @@ int main(int argc,char** argv){
     assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==3&&!ecmgui_v2::ui::pinned(mask,3));
     assert(!ecmgui_v2::ui::move_page(mask,center,right,-1,true));
     using namespace ecmgui_v2::ui;
+    assert(memory_occupancy(4096,8192)==50);assert(std::isnan(memory_occupancy(1,0)));
+    assert(percent(.95)==95&&probability(95)==.95);assert(integer_step(29.9,3)==10&&integer_step(15,3)==5);
     std::vector<ChartSeries> charts{{"measured",{},{{-60,20},{-30,std::numeric_limits<double>::quiet_NaN()},{0,80}}}};
     const auto bounds=chart_bounds(charts);assert(bounds.xmin==-60&&bounds.xmax==0&&bounds.ymax>=80);
     assert(chart_nearest(charts[0].points,-29)==2);assert(chart_bounds(charts,100).ymax==100);

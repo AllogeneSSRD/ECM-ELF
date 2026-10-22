@@ -1,6 +1,6 @@
-# 独立 GUI v2：ImGui / Vulkan 现代化规划草稿
+# 独立 GUI v2：ImGui 现代化规划草稿
 
-状态：P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成，0.47.7 适用性优化已完成。日期：2026-10-22。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
+状态：P0–P4 已完成，P5 待验收（默认DX11的完整性能矩阵未重测），P6 独立候选准备完成；0.47.8 已修复显示与宠物问题，默认DX11，双屏有界拖动测试未观察到冻结，可选Vulkan冻结根因待查。日期：2026-10-22。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。初始规划及P0–P6以Vulkan实施；本轮经用户授权将DX11设为默认，可选Vulkan不作为稳定路径。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -55,6 +55,44 @@
 
 - 适用性分发：[0.47.7 候选包](../../data/experiments/gui_v2/usability_package_01/ECM-ELF-GUI-v2-0.47.7.zip)，独立 GUI、许可、资产、匹配源码与构建身份；仍不附计算 worker 或系统运行时。草稿继续保留。
 - 适用性包验证：[中文目录与依赖/非法侧车检查](../../data/experiments/gui_v2/usability_package_test_01/result.json)通过，21个清单文件逐项校验，另有清单自身；ZIP SHA256 `3d70cae13db874632144a64f5c45306659d1c135769df4aa49f5098045e39be5`。源码归档的[134个共有构建目录文件](../../data/experiments/gui_v2/usability_source_01/result.json)逐项匹配最终构建身份，包含三份新UI头；保守构建目录另外记录本地ImGui README，归档固定核心白名单不包含该说明文件。本轮未重做归档独立编译，不将P6旧版本重建证据当作0.47.7重建证据。离线HTML阶段/390px阅读检查通过，P5仍待验收。
+
+
+### 0.47.8 问题检查与修复
+
+按用户问题顺序建立验收清单，保留失败样本；不能把驱动恢复、UI单线程阻塞和整机冻结混为一谈。
+
+1. 多屏冻结：最高优先级，已由用户在本轮拖动测试期间确认复现，尚未修复。无计算任务，测试始终在4070 Ti外接屏进行，内屏同时无响应；鼠标指针仍可移动，但应用和任务栏时钟停止更新，Ctrl+Alt+Del没有可见响应，数秒后恢复。冻结期间的点击、拖动和滚动在恢复后体现效果；这不能区分当时已处理输入与恢复后处理积压输入。具体起止时刻及当时的测试子项未知。暂时默认关闭原生独立面板窗，保留主窗口内部停靠；新增28号侧车字段及命令行覆盖，属于未获资格的规避措施，不能宣称整桌面冻结已消除。已停止本机拖动/多平台窗重复复测，继续分析已有日志。
+2. 导航：已修复。保留页面名称及完整提示，窄侧栏可横向滚动，默认宽度改为170逻辑单位并受可用空间约束，不再以数字替代名称。切页回到顶部，避免上一页滚动位置隐藏新页信息。
+3. ECM概率：已修复。B1/B2、曲线数、范围等输入和计数摘要不显示无意义小数；概率输入、摘要、坐标与悬停使用0–100%。D_eff、比率、非整数解保留精度；模型与CSV仍使用0–1及原快照合同，算法不改。
+4. GPU：已修复。核心/显存频率分项卡片及可展开趋势；显存占用率由NVML已用容量/总容量计算，单位MiB，区分于util.memory的读写活跃时间比例。每帧从同一份历史快照读取最新值与图表；时间窗固定为15/30/60/120秒、整数刻度，悬停共享一个实际采样时间并保留一位小数，不重复x值。指标口径见 [NVIDIA说明](https://nvidia.custhelp.com/app/answers/detail/a_id/3751/kw/command)。
+5. Ely：已修复客户区边缘定位与相邻帧插值串色。原生GDI+回归在修复前检出78个相邻绿色污染像素，隔离当前帧并镜像边缘采样后为0；缓存策略不变。客户区上下锚点、非激活窗口与睡眠截图通过。上游睡眠标记本来是两个Z，八帧均检查标记范围；PNG仍与原资产逐字节相同，并非重新绘制角色。
+6. 设置：已修复。改为外观、导航/布局、工作流、计算设置依次排列的单页流式布局；移除外观/布局/工作流子页，保留显式暂存/保存、侧车独立及搜索筛选。
+
+冻结排查假设优先级更新为：平台窗呈现/交换链同步、图表几何触发的渲染负载、字体纹理上传等待、NVML查询。若呈现路径相关，等待应集中在present/acquire/交换链重建且独立窗条件更严重；若图表相关，无图表对照应明显减少；若字体相关，应与字体上传/重新装载重合；若NVML相关，关闭采样应消失。现有证据只支持优先调查呈现路径，不能认定驱动或桌面合成器根因。`render/call_trace.h` 的可选 `--trace-render` 记录调用进入/返回及UTC与单调时钟映射，不改变Vulkan返回或增加采样线程；逐调用写盘只用于诊断，不用于P5门禁。
+
+呈现证据：`issues_layout_trace_01` 的 `vkQueuePresentKHR` 曾阻塞547/531ms。最终二进制SHA256 `cfbaf09594dd17877bf9f142fd598c8bf76c7cb37a1c3d2fc8df6334afcb8a2f`，RTX4070 Ti、设备API1.4.341、驱动原始版本2559967232、请求API1.1，1400×1000窗口、144 DPI、GPU监控开启，无worker，预热1.5秒，每模式仅一次有界拖动。严格内部窗/独立窗测试均确认工作区实际脱离停靠；CPU边界为NewFrame前至主窗和平台窗绘制完成，不包含屏幕显示时间。独立窗原结果在进程退出前读取日志，漏掉最后一次present=1000ms、整帧=1000.9226ms，原“52.8042ms / responsive=true”不构成通过。修正脚本为进程退出后统计，并从原完整日志离线重算检出该失败，未再启动GUI；原始结果不改写。用户报告的两屏冻结优先于任何CPU/API通过记录。见 `issues_desktop_freeze_report_01/user-report.json`、`call-summary.json` 及 `issues_layout_strict_multi_01/layout.log`。
+
+测试坐标诊断：早期内部单窗测试使用多平台窗坐标转换，硬编码拖动未可靠命中，因此 `issues_layout_single_01`、`issues_layout_single_gpu_01`、`issues_layout_final_01` 不能作布局改善证据。修复审计入口坐标换算后增加“概率已计算/GPU可用/实际脱离停靠”检查；全部失败和旧采样保留。即使严格内部窗一次采样低于3ms，也不足以证明全桌面冻结消失。布局脚本默认内部窗，独立窗须显式选用；当前不再在受影响桌面执行。
+
+系统证据：较早 `issues_0478_diagnosis_01/nvlddmkm-events.xml` 有Graphics FECS Exception: Logging error 0x2，尚未与冻结发生时间关联。补充报告后只读获取最近两小时System/Application事件，未发现新增显示/硬件System事件；Application中的内核报告引用10月5日/9日旧转储，不归为本次故障。无新事件不等于无冻结；证据在 `issues_desktop_freeze_report_01/`。未更改TDR/驱动设置，未运行计算压力任务。
+
+宠物证据与假设更正：早期HTML有重复clipPath ID，现以帧/层命名空间隔离；但inline/isolated SVG之间240个像素只有1–2级抗锯齿差异，不能据此认定其导致睡眠色块。真正原生回归见 `issues_pet_red_01/native-red.log` 与 `issues_regression_03/v2-state.log`（78→0）；唯一ID与每帧两个Z的范围检查见 `issues_pet_atlas_test_03/result.json`，运行时客户区定位/Doze/非激活见 `issues_pet_runtime_02/result.json`。PNG SHA256仍为 `eb0eac5b7a5809d5ea0cf4d1e6dac8e521650671e243648508408cc98bfb1972`；它由固定 `src/pet/rig.rs` 经Python导出7×8 SVG、Node/Playwright离线栅格化为1792×1736透明图集，上游无需有同名文件。
+
+其他回归：原版自检/日志/生成器/结果/Controller及v2状态/业务合同 `issues_regression_03` 全部通过；实际筛选/滚轮/启动停止Toast见 `issues_interaction_02`，右侧页移动、双语、保存重启、设置流式搜索与明暗图表见 `issues_ui_03`，七页双语宽窄见 `issues_pages_03`。API验证错误/警告均0，仅说明调用检查通过；`issues_viewport_02` 的显式独立窗API通过不代表桌面刷新通过。本轮不将P5待验收改为已完成，旧GUI源码、二进制与既有配置投影继续独立审计。
+
+### 0.47.8 DX11默认后端（用户追加授权）
+
+用户补充旧GUI使用DX没有上述冻结，并允许工程量不大时切回DX。v2增加独立 `render/dx11_window.*`，使用与原GUI相同家族的D3D11经典swapchain、匹配且未修改的ImGui DX11后端；`render/render_host.h`只构造所选宿主。默认DX11，`--renderer vulkan`显式诊断；不改ImGui控件/业务模型、旧GUI源码或算法。硬件不支持时仅按旧版方式尝试系统WARP；DX11不初始化Volk/Vulkan设备，Vulkan专用验证/注入/调用跟踪参数在DX11模式明确拒绝。运行时显存审计仍只定义为显式VkDeviceMemory，DX11不把该零值当D3D显存测量。原生独立面板默认仍关闭，但DX11支持显式开启。
+
+最终默认DX11二进制SHA256 `18f81dd93b90fa2ba4849490b45072ed2c8ee182098cb895b170aad5c37bcd03`。`issues_dx11_host_01`确认未传后端参数、实际适配器NVIDIA GeForce RTX4070 Ti、feature level11.0、硬件模式；加载D3D11/DXGI而未加载vulkan-1.dll。三次有限窗口缩放、最小化恢复与正常释放通过。内部/独立面板GPU图表各一次有界拖动：窗口1400×1000物理像素、144DPI、无worker、NVML开启、预热1.5s，统计拖动起至进程退出的CPU帧分别169/245个、最大5.4419/13.7865ms；两者均实际脱离停靠，正常退出。CPU计时不等于显示延迟；这些短样本不用于P5完整门禁。证据 `issues_dx11_layout_single_01` / `issues_dx11_layout_multi_01`。
+
+用户对该轮DX11图表拖动/缩放/最小化反馈“没有观察到冻结”，因此记录为本机这一轮实际画面观察通过；与此前Vulkan冻结分别记录，不能据此认定Vulkan根因已修复，也不能承诺长期或其他驱动稳定。新增 `test_dx11_host.py`记录真实加载模块，公共页面/交互测试显式记录后端，DX11使用独立shutdown/退出检查，不冒充Vulkan API验证。历史Vulkan宿主、字体资源、故障和性能脚本显式选择Vulkan，当前不再自动执行其图形复测。
+
+DX11最终二进制的七页双语宽窄、设置/语言/右侧页移动与快照图表、实际筛选/滚轮/启动停止Toast、上下边缘Doze/非激活、跨屏面板缩放/销毁重建/侧车恢复/安全退出均通过，分别在 `issues_dx11_pages_01`、`issues_dx11_usability_01`、`issues_dx11_interaction_01`、`issues_dx11_pet_runtime_01`、`issues_dx11_shell_01`。未运行真实ECM计算任务，未改变冻结的性能门限；本轮功能验证和用户观察不替代DX11完整性能矩阵、不同物理DPI、IME与干净OS资格。
+
+最终独立候选：[GUI v2 0.47.8 ZIP](../../data/experiments/gui_v2/issues_dx11_package_01/ECM-ELF-GUI-v2-0.47.8.zip)，SHA256 `94f509156b8e2d52968d3383f89498355348fb8547eeec337556250291fe4602`，22个文件含清单，不附计算worker。`issues_dx11_package_test_01/result.json`通过中文重定位目录/PATH仅System32/无开发层环境、字体和宠物缺失、非法侧车/布局保留、重启及原业务字节；PE导入含D3D11而无静态Vulkan/OpenCL/WebView2。缺loader仅在显式Vulkan且立即失败的测试入口验证，没有启动Vulkan设备。包内默认后端、运行要求及Vulkan限制同步。
+
+随包源码在新目录独立构建并默认DX11六帧启动退出成功，见 `issues_dx11_source_build_01/result.json`；139个共有源目录输入逐项匹配主构建身份。仅忽略的上游ImGui说明README未收入源码归档，其源码/头文件/许可均已包含；不宣称PE逐位可重复或独立干净OS资格。旧GUI73个保护文件、原exe哈希及既有配置投影再次通过 `issues_legacy_01`，schema生成物检查通过；当前状态与业务合同助手通过 `issues_dx11_state_01` / `issues_dx11_app_01`。离线HTML七阶段、六个已完成/P5待验收、主题与390px窄屏通过 `issues_html_01`，本次草稿继续保留，不自动清理。
 
 ## 1. 分析边界与基线
 

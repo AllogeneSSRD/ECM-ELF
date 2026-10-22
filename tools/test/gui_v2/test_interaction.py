@@ -1,9 +1,10 @@
 """Click real ImGui controls through the explicit app input seam; native wheel."""
 import argparse,ctypes as c,json,os,re,subprocess,time
 from pathlib import Path
+from renderer_probe import renderer_args,renderer_clean
 from win32_probe import window,close,user,capture
 def main():
-    p=argparse.ArgumentParser()
+    p=argparse.ArgumentParser();p.add_argument('--renderer',choices=['dx11','vulkan'],default='dx11')
     for name in ['exe','worker','out','layers']:p.add_argument('--'+name,type=Path,required=True)
     a=p.parse_args();out=a.out.resolve();out.mkdir();log=out/'interaction.log';cfg=out/'ecm.toml';worker=a.worker.resolve()
     cfg.write_text('[gui]\nNumWorkers=1\ngraceful_stop_ms=1200\nexit_confirm="stop"\nexe='+json.dumps(str(worker))+'\n[workers.1]\nautostart=0\nextra_args="--scenario v2-checkpoint-stop"\n');(out/'worktodo.txt').write_text('[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n')
@@ -11,7 +12,7 @@ def main():
     records=[json.dumps(row) for _ in range(299)];row['status']='F';row['stage']=1;row['factors']=['233'];records.append(json.dumps(row));(out/'results.json.txt').write_text('\n'.join(records)+'\n')
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     env=os.environ.copy();env['VK_LAYER_PATH']=str(a.layers.resolve());startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(cfg),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--audit-app','--validation','--no-nvml'],cwd=out,env=env,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,80,200,1500,1000,0x14);user.ShowWindow(hwnd,4)
+    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(cfg),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--audit-app',*renderer_args(a.renderer),'--no-nvml'],cwd=out,env=env,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,80,200,1500,1000,0x14);user.ShowWindow(hwnd,4)
     def snapshots():
         return [dict(re.findall(r'(\w+)=([-\d.,]+)',line)) for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('interaction_sample:')]
     def wait(predicate):
@@ -38,7 +39,7 @@ def main():
         while 'stop requested (waiting for a checkpoint' not in log.read_text(encoding='utf-8') and time.monotonic()<end:time.sleep(.04)
         assert 'stop requested (waiting for a checkpoint' in log.read_text(encoding='utf-8');capture(hwnd,out/'stop-toast.png')
     finally:close(proc,hwnd)
-    assert 'validation_summary: errors=0 warnings=0' in log.read_text(encoding='utf-8')
-    result=dict(passed=True,filter_chip_F_NF=True,smooth_native_wheel_positions=positive,clicked_start_stop=True,toast_visible=True,limits=['ImGui pointer injection is explicitly test-only; native WM_MOUSEWHEEL is real host handling; no physical IME/desktop mouse qualification'])
+    assert renderer_clean(log.read_text(encoding='utf-8'),a.renderer)
+    result=dict(renderer=a.renderer,passed=True,filter_chip_F_NF=True,smooth_native_wheel_positions=positive,clicked_start_stop=True,toast_visible=True,limits=['ImGui pointer injection is explicitly test-only; native WM_MOUSEWHEEL is real host handling; no physical IME/desktop mouse qualification'])
     (out/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 if __name__=='__main__':main()

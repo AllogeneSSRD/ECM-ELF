@@ -29,9 +29,9 @@ def main():
                     (run/'results.json.txt').write_text((json.dumps(row)+'\n')*10000)
                 command=[str(exe if newer else old),'--config',str(cfg),'--language','en' if newer else 'english']
                 if newer:
-                    command+=['--ui-state',str(run/'ui.toml'),'--diagnostics',str(log),'--audit-performance']
+                    command+=['--ui-state',str(run/'ui.toml'),'--diagnostics',str(log),'--renderer','vulkan','--audit-performance']
                     if condition.startswith('pet-'):command+=['--pet']+(['--pet-static'] if condition=='pet-static' else [])
-                    if condition=='floating':command+=['--detach-probe']
+                    if condition=='floating':command+=['--multi-viewport','--detach-probe']
                 proc=subprocess.Popen(command,cwd=run,env=env,startupinfo=startup,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);hwnd=window(proc.pid,'ecm_gui_v2' if newer else 'ecm_gui')
                 try:
                     user.SetWindowPos(hwnd,None,80,350,*g['physical_window'],0x14);user.ShowWindow(hwnd,6 if condition=='minimized' else 4)

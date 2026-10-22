@@ -49,7 +49,7 @@ def main():
 Run ecm_gui_v2.exe and choose a workflow in Settings, or:
   ecm_gui_v2.exe --config "D:\\workflow\\ecm.toml"
 
-Requirements: Windows 10/11 x64, Vulkan 1.1 graphics/present/swapchain driver,
+Requirements: Windows 10/11 x64, Direct3D 11 driver (system WARP fallback),
 Microsoft Visual C++ x64 runtime matching the MSVC build. No development SDK,
 validation layer, Electron or browser runtime is required.
 
@@ -72,10 +72,17 @@ inside ECM-ELF-GUI-v2-source to rebuild (MSVC/CMake required; no compute SDK).
 See docs/GUI_V2.md for controls and boundaries. Candidate qualification is local;
 different physical DPI/real IME/controlled co-load/total VRAM and a separate clean
 machine are not implied by a clean-directory smoke test.
+
+DX11 is the default renderer and does not load a Vulkan runtime. This candidate's
+bounded RTX 4070 Ti dual-screen drag/resize/minimize test had no user-observed
+freeze. This is not a long-term or cross-device stability guarantee.
+Use --renderer vulkan only for explicit diagnosis; that optional path requires
+Vulkan 1.1 and has an unresolved desktop-image freeze during panel dragging.
+Clean Vulkan validation and CPU timings do not qualify actual desktop refresh.
 '''
     (package/'README.txt').write_text(readme,encoding='utf-8')
     files={p.relative_to(package).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(package.rglob('*')) if p.is_file()}
-    manifest=dict(kind='independent-gui-only-candidate',version=version,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),files_sha256=files,worker_protocol_required=1,development_sdk_required=False,system_requirements=['Windows x64','Vulkan 1.1 capable loader/driver','MSVC x64 runtime'],contains_compute_workers=False)
+    manifest=dict(kind='independent-gui-only-candidate',version=version,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),files_sha256=files,worker_protocol_required=1,development_sdk_required=False,default_renderer='dx11',optional_renderer='vulkan',system_requirements=['Windows x64','Direct3D 11 driver or system WARP','MSVC x64 runtime'],optional_vulkan_requirement='Vulkan 1.1 loader/graphics/present/swapchain; desktop freeze unresolved',contains_compute_workers=False)
     (package/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');archive=out/(package.name+'.zip')
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
         for path in sorted(package.rglob('*')):

@@ -6,6 +6,20 @@
 #include <cstring>
 
 namespace ecmgui_v2::pet {
+RECT client_bounds(HWND owner) {
+    RECT bounds{};if(!GetClientRect(owner,&bounds))throw std::runtime_error("Cannot read pet owner client bounds");
+    POINT origin{};if(!ClientToScreen(owner,&origin))throw std::runtime_error("Cannot locate pet owner client bounds");
+    OffsetRect(&bounds,origin.x,origin.y);return bounds;
+}
+void raster_frame(Gdiplus::Bitmap& atlas,const Gdiplus::Rect& source,int width,int height,unsigned* pixels) {
+    std::unique_ptr<Gdiplus::Bitmap> isolated(atlas.Clone(source,PixelFormat32bppPARGB));
+    if(!isolated||isolated->GetLastStatus()!=Gdiplus::Ok)throw std::runtime_error("Cannot isolate pet frame");
+    Gdiplus::Bitmap target(width,height,width*4,PixelFormat32bppPARGB,reinterpret_cast<BYTE*>(pixels));
+    Gdiplus::Graphics graphics(&target);graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+    graphics.Clear(Gdiplus::Color(0,0,0,0));graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    Gdiplus::ImageAttributes attributes;attributes.SetWrapMode(Gdiplus::WrapModeTileFlipXY);
+    if(graphics.DrawImage(isolated.get(),Gdiplus::Rect(0,0,width,height),0,0,source.Width,source.Height,Gdiplus::UnitPixel,&attributes)!=Gdiplus::Ok)throw std::runtime_error("Cannot cache pet atlas");
+}
 Placement place(RECT main, RECT work, float scale, float left) {
     const int width = std::max(1, static_cast<int>(std::lround(112 * scale)));
     const int height = std::max(1, static_cast<int>(std::lround(124 * scale)));
@@ -64,10 +78,7 @@ void Window::paint(const Placement& spot, int row, int frame) {
     if(!cached_rows_[row]){
         for(int index=0;index<8;++index){
             auto* pixels=cached_frames_.data()+count*(row*8+index);
-            Gdiplus::Bitmap target(spot.width,spot.height,spot.width*4,PixelFormat32bppPARGB,reinterpret_cast<BYTE*>(pixels));
-            Gdiplus::Graphics graphics(&target);graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-            graphics.Clear(Gdiplus::Color(0,0,0,0));graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-            if(graphics.DrawImage(atlas_.get(),Gdiplus::Rect(0,0,spot.width,spot.height),index*224,row*248,224,248,Gdiplus::UnitPixel)!=Gdiplus::Ok)throw std::runtime_error("Cannot cache pet atlas");
+            raster_frame(*atlas_,Gdiplus::Rect(index*224,row*248,224,248),spot.width,spot.height,pixels);
         }
         cached_rows_[row]=true;
     }
@@ -88,7 +99,7 @@ void Window::tick(Mood mood) {
         if (shown == Mood::Done && now - since_ >= 4000) shown = Mood::Calm;
         if (shown == Mood::Calm && now - since_ >= 300000) shown = Mood::Doze;
         if (petted_until_ > now) shown = Mood::Wink;
-        RECT main{}; GetWindowRect(owner_, &main);
+        const RECT main=client_bounds(owner_);
         MONITORINFO monitor{sizeof(monitor)};
         if (!GetMonitorInfoW(MonitorFromWindow(owner_, MONITOR_DEFAULTTONEAREST), &monitor)) throw std::runtime_error("Cannot locate pet work area");
         const float scale = std::max(1u, GetDpiForWindow(owner_)) / 96.f;
@@ -115,7 +126,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) 
         POINT point{}; GetCursorPos(&point); const float scale = GetDpiForWindow(self->owner_) / 96.f;
         if (std::abs(point.x - self->drag_start_.x) + std::abs(point.y - self->drag_start_.y) > 4 * scale) self->moved_ = true;
         if (self->moved_) {
-            RECT owner{}; GetWindowRect(self->owner_, &owner);
+            const RECT owner=client_bounds(self->owner_);
             self->state_.pet_left = std::clamp(self->drag_left_ + (point.x - self->drag_start_.x) / scale, 0.f, std::max(0.f, (owner.right - owner.left) / scale - 112));
         }
         return 0;

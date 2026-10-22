@@ -21,6 +21,7 @@ struct UiValues {
     bool ui_right_visible = true;
     bool ui_smooth_scroll = true;
     bool ui_toasts = true;
+    bool ui_external_windows = false;
     int window_x = (-2147483647 - 1);
     int window_y = (-2147483647 - 1);
     int window_width = 1280;
@@ -50,6 +51,7 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("ui","right_visible",value.ui_right_visible);
     field("ui","smooth_scroll",value.ui_smooth_scroll);
     field("ui","toasts",value.ui_toasts);
+    field("ui","external_windows",value.ui_external_windows);
     field("window","x",value.window_x);
     field("window","y",value.window_y);
     field("window","width",value.window_width);

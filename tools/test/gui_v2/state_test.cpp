@@ -6,8 +6,20 @@
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     namespace fs = std::filesystem;
+    ULONG_PTR gdiplus;Gdiplus::GdiplusStartupInput input;assert(Gdiplus::GdiplusStartup(&gdiplus,&input,nullptr)==Gdiplus::Ok);
+    {Gdiplus::Bitmap atlas(16,16,PixelFormat32bppARGB);Gdiplus::Graphics g(&atlas);g.Clear(Gdiplus::Color(255,0,255,0));
+    Gdiplus::SolidBrush red(Gdiplus::Color(255,255,0,0));g.FillRectangle(&red,4,4,4,4);g.Flush(Gdiplus::FlushIntentionSync);
+    std::vector<unsigned> pixels(144);ecmgui_v2::pet::raster_frame(atlas,{4,4,4,4},12,12,pixels.data());
+    int contaminated=0;for(const auto pixel:pixels)if(((pixel>>8)&255)>0)++contaminated;
+    std::printf("pet adjacent-tile contaminated pixels: %d\n",contaminated);std::fflush(stdout);assert(contaminated==0);}
+    Gdiplus::GdiplusShutdown(gdiplus);
+    const auto owner=CreateWindowExW(0,L"STATIC",L"pet anchor fixture",WS_OVERLAPPEDWINDOW,100,0,800,600,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);assert(owner);
+    const auto client=ecmgui_v2::pet::client_bounds(owner);RECT outer{};assert(GetWindowRect(owner,&outer));
+    assert(client.bottom<outer.bottom);const auto client_bottom=ecmgui_v2::pet::place(client,{0,0,1920,1440},1,72);
+    assert(client_bottom.bottom&&client_bottom.y+client_bottom.height==client.bottom);DestroyWindow(owner);
     const auto dir = fs::u8path(argv[1]); fs::create_directories(dir);
     ecmgui_v2::UiState state; state.path = dir / "state.toml";
+    assert(!state.ui_external_windows);state.ui_external_windows=true;
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
     state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
     state.ui_right_pages=(1<<3)|(1<<4);state.ui_right_page=3;state.ui_right_visible=false;state.ui_smooth_scroll=false;state.ui_toasts=false;
@@ -15,9 +27,10 @@ int main(int argc, char** argv) {
     ecmgui_v2::UiState copy; copy.path = state.path; assert(copy.load());
     assert(copy.ui_theme == "light" && copy.ui_language == "zh" && copy.pet_enabled && copy.pet_left == 126.5f);
     assert(copy.worker_stage1_exe == state.worker_stage1_exe && copy.layout() == state.layout());
+    assert(copy.ui_external_windows);
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
     const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
-    ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts);
+    ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts&&!migrated.ui_external_windows);
     const auto invalid = dir / "invalid.toml";
     { std::ofstream out(invalid); out << "[state]\nschema=999\n"; }
     std::ifstream original(invalid,std::ios::binary); const std::string before((std::istreambuf_iterator<char>(original)),{}); original.close();

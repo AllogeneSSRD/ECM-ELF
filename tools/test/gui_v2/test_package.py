@@ -2,6 +2,7 @@
 import argparse,ctypes,hashlib,json,os,shutil,struct,subprocess,time
 from pathlib import Path
 from win32_probe import window,close,user
+from renderer_probe import renderer_clean
 def imports(path):
     data=path.read_bytes();pe=struct.unpack_from('<I',data,0x3c)[0];assert data[pe:pe+4]==b'PE\0\0'
     sections=struct.unpack_from('<H',data,pe+6)[0];optional_size=struct.unpack_from('<H',data,pe+20)[0];optional=pe+24
@@ -20,7 +21,8 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--package',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();out=a.out.resolve();out.mkdir();source=a.package.resolve();package=out/'relocated-中文';shutil.copytree(source,package);exe=package/'ecm_gui_v2.exe'
     manifest=json.loads((package/'manifest.json').read_text());assert not manifest['contains_compute_workers']
     for name,digest in manifest['files_sha256'].items():assert hashlib.sha256((package/name).read_bytes()).hexdigest()==digest,name
-    modules=imports(exe);assert not any(name.lower() in ['d3d11.dll','vulkan-1.dll','opencl.dll','webview2loader.dll'] for name in modules)
+    modules=imports(exe);assert 'd3d11.dll' in [name.lower() for name in modules]
+    assert not any(name.lower() in ['vulkan-1.dll','opencl.dll','webview2loader.dll'] for name in modules)
     assert not list(package.rglob('vulkan-1.dll')) and not list(package.rglob('*validation*.dll'))
     windows=ctypes.create_unicode_buffer(32768);assert ctypes.WinDLL('kernel32').GetWindowsDirectoryW(windows,len(windows))
     env=os.environ.copy();env['PATH']=str(Path(windows.value)/'System32');env.pop('VULKAN_SDK',None);env.pop('VK_LAYER_PATH',None);env.pop('VK_INSTANCE_LAYERS',None)
@@ -30,13 +32,14 @@ def main():
         log=out/(name+'.log');cmd=[str(binary),'--config',str(cfg),'--ui-state',str(out/(name+'.toml')),'--diagnostics',str(log),'--frames','12',*flags]
         proc=subprocess.Popen(cmd,cwd=out,env=env,startupinfo=startup,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         if show:hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
-        proc.wait(timeout=30);assert proc.returncode==expected,(name,proc.returncode);text=log.read_text(encoding='utf-8');assert 'validation_summary: errors=0' in text
+        proc.wait(timeout=30);assert proc.returncode==expected,(name,proc.returncode);text=log.read_text(encoding='utf-8')
+        assert renderer_clean(text,'dx11') if expected==0 else 'No Vulkan loader available' in text
         cases[name]=dict(exit=proc.returncode);return text
     assert 'frame: 1' in run('normal',[])
     unicode_config=out/'中文工作流.toml';unicode_config.write_bytes(cfg.read_bytes());unicode_log=out/'unicode.log'
     run_unicode=subprocess.run([str(exe),'--config',str(unicode_config),'--ui-state',str(out/'unicode-ui.toml'),'--diagnostics',str(unicode_log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
     assert run_unicode.returncode==0 and 'app: config=' in unicode_log.read_text(encoding='utf-8');cases['unicode-workflow-read']=True
-    assert 'No Vulkan loader available' in run('no-loader',['--no-loader'],1)
+    assert 'No Vulkan loader available' in run('no-loader',['--renderer','vulkan','--no-loader'],1)
     assert 'language=en cjk=0' in run('missing-cjk',['--language','zh','--simulate-missing-cjk'])
     assert 'worker_processes=0' in run('no-nvml',['--no-nvml'])
     assert 'pet: mood=' in run('pet',['--pet'],show=True)

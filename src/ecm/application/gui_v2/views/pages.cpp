@@ -4,6 +4,7 @@
 #include "../ui/chart.h"
 #include "../ui/navigation.h"
 #include "../ui/i18n.h"
+#include "../ui/presentation.h"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -162,57 +163,76 @@ void App::draw_probability(bool zh) {
     if(probability_ready&&probability_result.error.empty()){ImGui::SameLine();if(ImGui::Button(tr(zh,"Copy snapshot CSV","复制快照 CSV"))){ImGui::SetClipboardText(curve_csv(probability_result).c_str());toast(tr(zh,"Snapshot CSV copied","已复制快照 CSV"));}}
     if(probability_tab==0){
     double size=size_from_bits(p.factor_bits,request.decimal_digits);
-    if(ImGui::InputDouble(tr(zh,"Factor size","因子大小"),&size))p.factor_bits=bits_from_size(size,request.decimal_digits);
+    if(ImGui::InputDouble(tr(zh,"Factor size","因子大小"),&size,0,0,"%.0f"))p.factor_bits=bits_from_size(size,request.decimal_digits);
     ImGui::Checkbox(tr(zh,"Decimal digits","十进制位数"),&request.decimal_digits);
-    ImGui::InputDouble("B1",&p.b1);ImGui::Checkbox(tr(zh,"Stage 2 enabled","启用 Stage2"),&p.stage2);
-    ImGui::Checkbox(tr(zh,"Use B2/B1 ratio","使用 B2/B1 比率"),&p.ratio_mode);if(p.ratio_mode)ImGui::InputDouble("B2/B1",&p.b2_ratio);else ImGui::InputDouble("B2",&p.b2);
-    ImGui::InputDouble(tr(zh,"Curves","曲线数"),&p.curves);
+    ImGui::InputDouble("B1",&p.b1,0,0,"%.0f");ImGui::Checkbox(tr(zh,"Stage 2 enabled","启用 Stage2"),&p.stage2);
+    ImGui::Checkbox(tr(zh,"Use B2/B1 ratio","使用 B2/B1 比率"),&p.ratio_mode);if(p.ratio_mode)ImGui::InputDouble("B2/B1",&p.b2_ratio,0,0,"%.6g");else ImGui::InputDouble("B2",&p.b2,0,0,"%.0f");
+    ImGui::InputDouble(tr(zh,"Curves","曲线数"),&p.curves,0,0,"%.0f");
     const bool profile_changed=chips("curve-profile",probability_profile,{"Suyama / PARAM2","Edwards Z2xZ8","Edwards Z12","PARAM1","PARAM3",tr(zh,"Custom","自定义")});
     const bool basis_changed=ImGui::Checkbox(tr(zh,"Use stage1 empirical calibration","使用 Stage1 经验标定口径"),&probability_empirical);
     if(probability_profile<5&&(profile_changed||basis_changed))p.effective_divisor=ui::curve_divisor(probability_profile,probability_empirical);
-    if(ImGui::InputDouble("D_eff",&p.effective_divisor))probability_profile=5;
+    if(ImGui::InputDouble("D_eff",&p.effective_divisor,0,0,"%.6g"))probability_profile=5;
     ImGui::TextWrapped("%s",tr(zh,"Torsion order is not D_eff. Edwards Z2xZ8: measured stage1 D=26.4081; relative Suyama rebase ~29.0 is a combined-model heuristic, not a direct Stage2 calibration.","挠群阶不等于 D_eff。Edwards Z2xZ8 的 Stage1 经验 D=26.4081；相对 Suyama 归一约 29.0，是联合模型启发值，未经独立 Stage2 标定。"));
     int scope=static_cast<int>(p.scope);if(chips("probability-scope",scope,{"Stage 1",tr(zh,"Combined","联合"),tr(zh,"Stage 2 conditional","Stage2 条件概率")}))p.scope=static_cast<Scope>(scope);
     int solve=static_cast<int>(request.solve);if(chips("solve",solve,{tr(zh,"Forward","正算"),tr(zh,"Curves","曲线数"),tr(zh,"Factor size","因子大小"),"B1","B2","D_eff"}))request.solve=static_cast<Solve>(solve);
-    ImGui::InputDouble(tr(zh,"Target probability","目标概率"),&request.target);ImGui::Checkbox(tr(zh,"Cumulative target","累计目标"),&request.cumulative_target);
-    if(ImGui::CollapsingHeader(tr(zh,"Plot range","绘图范围"))){ImGui::InputDouble(tr(zh,"Size min","大小下限"),&request.size_min);ImGui::InputDouble(tr(zh,"Size max","大小上限"),&request.size_max);ImGui::Checkbox(tr(zh,"Auto curves range","自动曲线数范围"),&request.auto_curves_range);ImGui::InputDouble(tr(zh,"Curves max","最大曲线数"),&request.curves_max);}
+    double target=ui::percent(request.target);if(ImGui::InputDouble(tr(zh,"Target probability (%)","目标概率（%）"),&target,0,0,"%.6g%%"))request.target=ui::probability(target);
+    ImGui::Checkbox(tr(zh,"Cumulative target","累计目标"),&request.cumulative_target);
+    if(ImGui::CollapsingHeader(tr(zh,"Plot range","绘图范围"))){ImGui::InputDouble(tr(zh,"Size min","大小下限"),&request.size_min,0,0,"%.0f");ImGui::InputDouble(tr(zh,"Size max","大小上限"),&request.size_max,0,0,"%.0f");ImGui::Checkbox(tr(zh,"Auto curves range","自动曲线数范围"),&request.auto_curves_range);ImGui::InputDouble(tr(zh,"Curves max","最大曲线数"),&request.curves_max,0,0,"%.0f");}
         return;
     }
     if(!probability_ready){ImGui::TextWrapped("%s",tr(zh,"Set parameters, then calculate a snapshot to view its curves.","请先设置参数并计算快照，再查看曲线。"));return;}
     const auto& r=probability_result;if(!r.error.empty()){ImGui::TextWrapped("%s",r.error.c_str());return;}
     const auto values=[](const Request& q){const auto& v=q.parameters;return std::make_tuple(v.factor_bits,v.b1,v.b2,v.b2_ratio,v.curves,v.effective_divisor,v.stage2,v.ratio_mode,v.scope,q.solve,q.target,q.cumulative_target,q.decimal_digits,q.auto_curves_range,q.size_min,q.size_max,q.curves_max);};
     if(values(request)!=values(r.request))ImGui::TextWrapped("%s",tr(zh,"Parameters changed. The charts and CSV still describe the previous snapshot; calculate again to update.","参数已修改。图表与 CSV 仍对应上次快照，请重新计算以更新。"));
-    ImGui::Text(tr(zh,"Snapshot B1=%.9g B2=%.9g curves=%.9g bits=%.6g","快照 B1=%.9g B2=%.9g 曲线数=%.9g 二进制位数=%.6g"),r.parameters.b1,effective_b2(r.parameters),r.parameters.curves,r.parameters.factor_bits);
-    ImGui::Text(tr(zh,"S1 %.8g | S1+S2 %.8g | S2 conditional %.8g","S1 %.8g | S1+S2 %.8g | S2 条件概率 %.8g"),r.probability.stage1,r.probability.combined,r.probability.conditional);
-    ImGui::Text(tr(zh,"Selected per curve %.8g | cumulative %.8g","当前单曲线概率 %.8g | 累计概率 %.8g"),r.probability.selected,cumulative(r.probability.selected,r.parameters.curves));
-    if(r.request.solve!=Solve::Forward)ImGui::Text(tr(zh,"Solution %.12g | residual %.6g%s","求解值 %.12g | 残差 %.6g%s"),r.solved_value,r.residual,r.lower_bound_sufficient?tr(zh," | lower bound sufficient"," | 下限已满足目标"):"");
+    ImGui::Text(tr(zh,"Snapshot B1=%.0f B2=%.0f curves=%.0f bits=%.6g","快照 B1=%.0f B2=%.0f 曲线数=%.0f 二进制位数=%.6g"),r.parameters.b1,effective_b2(r.parameters),r.parameters.curves,r.parameters.factor_bits);
+    ImGui::Text(tr(zh,"S1 %.6g%% | S1+S2 %.6g%% | S2 conditional %.6g%%","S1 %.6g%% | S1+S2 %.6g%% | S2 条件概率 %.6g%%"),ui::percent(r.probability.stage1),ui::percent(r.probability.combined),ui::percent(r.probability.conditional));
+    ImGui::Text(tr(zh,"Selected per curve %.6g%% | cumulative %.6g%%","当前单曲线概率 %.6g%% | 累计概率 %.6g%%"),ui::percent(r.probability.selected),ui::percent(cumulative(r.probability.selected,r.parameters.curves)));
+    if(r.request.solve!=Solve::Forward){const bool integral=r.request.solve==Solve::Curves||r.request.solve==Solve::B1||r.request.solve==Solve::B2;
+        char value[64];std::snprintf(value,sizeof(value),integral?"%.0f":"%.12g",r.solved_value);
+        ImGui::Text(tr(zh,"Solution %s | residual %.6g pp%s","求解值 %s | 残差 %.6g 个百分点%s"),value,ui::percent(r.residual),r.lower_bound_sufficient?tr(zh," | lower bound sufficient"," | 下限已满足目标"):"");}
     const std::vector<Point>* series[]{&r.sizes,&r.size_totals,&r.curve_counts};
     const char* labels[]{tr(zh,"Per-curve probability / size","单曲线概率 / 因子大小"),tr(zh,"Cumulative probability / size","累计概率 / 因子大小"),tr(zh,"Cumulative probability / curves","累计概率 / 曲线数")};
     const auto colors=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
     for(int i=0;i<3;++i){ImGui::PushID(i);ImGui::SeparatorText(labels[i]);
         std::vector<ui::ChartSeries> lines{{"S1",colors.stage1,{}},{"S1+S2",colors.stage2,{}},{tr(zh,"S2 | S1 missed","S2 | S1 未命中"),colors.warning,{}}};
-        for(const auto& v:*series[i]){lines[0].points.push_back({v.x,v.stage1});lines[1].points.push_back({v.x,v.combined});lines[2].points.push_back({v.x,v.conditional});}
-        ui::chart("probability",lines,i==2?tr(zh,"Curves","曲线数"):r.request.decimal_digits?tr(zh,"Factor digits","因子十进制位数"):tr(zh,"Factor bits","因子二进制位数"),tr(zh,"Probability (0-1)","概率（0–1）"),zh,1);
+        for(const auto& v:*series[i]){lines[0].points.push_back({v.x,ui::percent(v.stage1)});lines[1].points.push_back({v.x,ui::percent(v.combined)});lines[2].points.push_back({v.x,ui::percent(v.conditional)});}
+        ui::chart("probability",lines,i==2?tr(zh,"Curves","曲线数"):r.request.decimal_digits?tr(zh,"Factor digits","因子十进制位数"):tr(zh,"Factor bits","因子二进制位数"),tr(zh,"Probability (%)","概率（%）"),zh,100,180,{true,true,"%.0f","%.6g%%"});
         ImGui::PopID();}
 }
 void App::draw_gpu(bool zh) {
     ImGui::TextUnformatted(tr(zh,"GPU monitoring (500 ms)","GPU 监控（500 ms）"));
     if(!gpu.available()){ImGui::TextWrapped("%s",no_nvml?tr(zh,"Monitoring disabled","监控已禁用"):gpu.reason().c_str());return;}
     for(const auto& device:gpu.devices()) {
-        ImGui::PushID(device.index);ImGui::SeparatorText(device.name.c_str());ecmgui::GpuSample sample;
-        if(!gpu.latest(device.index,sample)||!sample.valid){ImGui::TextUnformatted(tr(zh,"Unknown sample","采样未知"));ImGui::PopID();continue;}
-        ImGui::Text(tr(zh,"GPU %d%% | memory %d%% | %u / %u MB","GPU %d%% | 显存 %d%% | %u / %u MB"),sample.util_gpu,sample.util_mem,sample.mem_used_mb,device.mem_total_mb);
-        ImGui::Text(tr(zh,"%u MHz | %u MHz memory | %d C | %.2f / %.2f W","核心 %u MHz | 显存 %u MHz | %d C | %.2f / %.2f W"),sample.clock_sm_mhz,sample.clock_mem_mhz,sample.temp_c,sample.power_w,sample.power_limit_w);
-        ImGui::TextWrapped("%s",ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons).c_str());
+        ImGui::PushID(device.index);ImGui::SeparatorText(device.name.c_str());
+        const auto history=gpu.history(device.index);
+        if(history.empty()||!history.back().valid){ImGui::TextUnformatted(tr(zh,"Unknown sample","采样未知"));ImGui::PopID();continue;}
+        const auto& sample=history.back();const double occupied=ui::memory_occupancy(sample.mem_used_mb,device.mem_total_mb);
+        const int columns=ImGui::GetContentRegionAvail().x>=ImGui::GetFontSize()*24?2:1;
+        if(ImGui::BeginTable("metrics",columns,ImGuiTableFlags_SizingStretchSame)){
+            const auto metric=[&](const char* name,const char* value){ImGui::TableNextColumn();ImGui::TextDisabled("%s",name);ImGui::TextUnformatted(value);};
+            char value[96];std::snprintf(value,sizeof(value),"%d%%",sample.util_gpu);metric(tr(zh,"GPU load","GPU 利用率"),value);
+            if(std::isfinite(occupied))std::snprintf(value,sizeof(value),"%.1f%%  (%u / %u MiB)",occupied,sample.mem_used_mb,device.mem_total_mb);else std::snprintf(value,sizeof(value),"--");
+            metric(tr(zh,"Memory occupied","显存占用"),value);
+            std::snprintf(value,sizeof(value),"%u MHz",sample.clock_sm_mhz);metric(tr(zh,"Core frequency","核心频率"),value);
+            std::snprintf(value,sizeof(value),"%u MHz",sample.clock_mem_mhz);metric(tr(zh,"Memory frequency","显存频率"),value);
+            std::snprintf(value,sizeof(value),"%.1f / %.1f W",sample.power_w,sample.power_limit_w);metric(tr(zh,"Power / limit","功耗 / 上限"),value);
+            std::snprintf(value,sizeof(value),"%d C",sample.temp_c);metric(tr(zh,"Temperature","温度"),value);ImGui::EndTable();
+        }
+        const auto throttle=ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons);if(!throttle.empty())ImGui::TextWrapped("%s",throttle.c_str());
         int window=ImGui::GetStateStorage()->GetInt(ImGui::GetID("history-seconds"),2);
         if(chips("history",window,{"15 s","30 s","60 s","120 s"}))ImGui::GetStateStorage()->SetInt(ImGui::GetID("history-seconds"),window);
-        const int seconds[]{15,30,60,120};const auto history=gpu.history(device.index);const auto color=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
-        std::vector<ui::ChartSeries> usage{{tr(zh,"GPU load","GPU 利用率"),color.stage1,{}},{tr(zh,"Memory load","显存利用率"),color.stage2,{}}};
+        const int seconds[]{15,30,60,120};const auto color=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);
+        std::vector<ui::ChartSeries> usage{{tr(zh,"GPU load","GPU 利用率"),color.stage1,{}},{tr(zh,"Memory occupied","显存占用"),color.stage2,{}}};
         std::vector<ui::ChartSeries> power{{tr(zh,"Power","功耗"),color.warning,{}}};
+        std::vector<ui::ChartSeries> clocks{{tr(zh,"Core frequency","核心频率"),color.stage1,{}},{tr(zh,"Memory frequency","显存频率"),color.stage2,{}}};
         for(const auto& v:history){const double x=(static_cast<double>(v.ts_ms)-static_cast<double>(sample.ts_ms))/1000.;if(x < -seconds[window])continue;
-            const double missing=std::numeric_limits<double>::quiet_NaN();usage[0].points.push_back({x,v.valid?double(v.util_gpu):missing});usage[1].points.push_back({x,v.valid?double(v.util_mem):missing});power[0].points.push_back({x,v.valid?v.power_w:missing});}
-        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,155);
-        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,155);
+            const double missing=std::numeric_limits<double>::quiet_NaN();usage[0].points.push_back({x,v.valid?double(v.util_gpu):missing});usage[1].points.push_back({x,v.valid?ui::memory_occupancy(v.mem_used_mb,device.mem_total_mb):missing});power[0].points.push_back({x,v.valid?v.power_w:missing});
+            clocks[0].points.push_back({x,v.valid?double(v.clock_sm_mhz):missing});clocks[1].points.push_back({x,v.valid?double(v.clock_mem_mhz):missing});}
+        ui::ChartFormat format{true,true,"%.1f s","%.0f%%",-double(seconds[window]),0};
+        ui::chart("usage",usage,tr(zh,"Seconds from latest sample","距最新采样秒数"),"%",zh,100,155,format);
+        format.percent_y=false;format.y_format="%.1f W";
+        ui::chart("power",power,tr(zh,"Seconds from latest sample","距最新采样秒数"),"W",zh,0,155,format);
+        if(ImGui::CollapsingHeader(tr(zh,"Frequency history","频率趋势"))){format.y_format="%.0f MHz";ui::chart("clocks",clocks,tr(zh,"Seconds from latest sample","距最新采样秒数"),"MHz",zh,0,155,format);}
         ImGui::PopID();
     }
 }
@@ -246,14 +266,14 @@ bool App::save_business() {
     const auto path=config_path;return load_config(path);
 }
 void App::draw_settings(bool zh) {
-    chips("settings-view",settings_tab,{tr(zh,"Appearance","外观"),tr(zh,"Layout","布局"),tr(zh,"Workflow","工作流")},settings_tabs);
-    if(settings_tab==0){
     ImGui::SeparatorText(tr(zh,"Appearance and interaction","外观与交互"));
     int theme=state.ui_theme=="light";if(chips("theme",theme,{tr(zh,"Dark","深色"),tr(zh,"Light","浅色")}))state.ui_theme=theme?"light":"dark";
     int language=state.ui_language=="zh";if(chips("language",language,{"English","中文"},language_items))state.ui_language=language?"zh":"en";
     const float scales[]{0,1,1.25f,1.5f,2};int scale=0;for(int i=1;i<5;++i)if(std::abs(state.ui_scale-scales[i])<.01f)scale=i;
     if(chips("scale",scale,{tr(zh,"Auto DPI","自动 DPI"),"100%","125%","150%","200%"}))state.ui_scale=scales[scale];
     ImGui::Checkbox(tr(zh,"Smooth scrolling","平滑滚动"),&state.ui_smooth_scroll);
+    ImGui::Checkbox(tr(zh,"Allow panels outside the main window (restart)","允许面板移到应用窗口外（重启生效）"),&state.ui_external_windows);
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tr(zh,"By default panels dock and float inside the main window. Enable this to create independent windows across monitors.","默认在主窗口内停靠和浮动；启用后可创建跨显示器的独立窗口。"));
     ImGui::Checkbox(tr(zh,"Action toasts (errors always shown)","操作轻提示（错误仍显示）"),&state.ui_toasts);
     ImGui::Checkbox(tr(zh,"Ely pet","Ely 宠物"),&state.pet_enabled);ImGui::Checkbox(tr(zh,"Animate pet","宠物动画"),&state.pet_animate);
     if(ImGui::Button(tr(zh,"Save UI preferences","保存界面偏好")))save_preferences();
@@ -261,8 +281,7 @@ void App::draw_settings(bool zh) {
     ImGui::TextWrapped("%s",tr(zh,"Appearance and layout are also saved on a normal exit. Computation settings require their own Save workflow action.","正常退出也会保存外观与布局；计算设置必须单独点击“保存工作流”。"));
     if(!state.writable)ImGui::TextWrapped("%s",state.notice.c_str());
     ImGui::TextWrapped("%s",state.path.u8string().c_str());
-    }
-    if(settings_tab==1){
+    {
         ImGui::SeparatorText(tr(zh,"Navigation and right tools","导航与右侧工具栏"));
         ImGui::TextWrapped("%s",tr(zh,"Move pages between navigation and right tools. Drag window title bars to dock or float them; at least one central page remains.","可将页面移入右侧工具栏，或移回导航；拖动窗口标题可停靠或浮动。至少保留一个中央页面。"));
         for(int i=0;i<7;++i){ImGui::PushID(i);bool right=ui::pinned(state.ui_right_pages,i);
@@ -271,7 +290,6 @@ void App::draw_settings(bool zh) {
         if(ImGui::Button(tr(zh,"Restore default layout","恢复默认布局"))){state.ui_right_pages=0;state.ui_right_visible=true;state.ui_inspector=true;state.ui_logs=true;reset_layout=true;}
         if(ImGui::Button(tr(zh,"Save layout","保存布局")))save_preferences();
     }
-    if(settings_tab!=2)return;
     ImGui::SeparatorText(tr(zh,"Workflow","工作流"));ImGui::InputText("TOML",config_input,sizeof(config_input));
     if(ImGui::Button(tr(zh,"Browse workflow","选择工作流"))){std::string path=config_input;const char filter[]="TOML\0*.toml\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,tr(zh,"Open workflow","打开工作流"),std::string(filter,sizeof(filter))))std::snprintf(config_input,sizeof(config_input),"%s",path.c_str());}
     ImGui::SameLine();if(ImGui::Button(tr(zh,"Open / reload","打开 / 重载"))&&!load_config(config_input))toast(status,true);

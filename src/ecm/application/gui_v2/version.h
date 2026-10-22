@@ -1,5 +1,5 @@
 #pragma once
 
 namespace ecmgui_v2 {
-inline constexpr char version[] = "0.47.7";
+inline constexpr char version[] = "0.47.8";
 }

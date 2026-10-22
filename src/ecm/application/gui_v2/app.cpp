@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <thread>
+#include <cstring>
 
 namespace ecmgui_v2 {
 namespace {
@@ -145,7 +146,7 @@ void App::build_layout(unsigned dock, float scale) {
     ImGui::DockBuilderSetNodeSize(dock, viewport->WorkSize);
     ImGuiID center = dock, nav = 0, inspector = 0, logs = 0;
     const bool wide = viewport->WorkSize.x >= 1100 * scale;
-    ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, wide ? .16f : .11f, &nav, &center);
+    ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, std::clamp(170*scale/viewport->WorkSize.x,.16f,.35f), &nav, &center);
     if ((wide && state.ui_inspector)||(state.ui_right_pages && state.ui_right_visible)) ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, wide?.34f:.43f, &inspector, &center);
     if (state.ui_logs) ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, .28f, &logs, &center);
     ImGui::DockBuilderDockWindow("Navigation###v2.navigation", nav);
@@ -168,7 +169,7 @@ void App::begin_window(const char* name, bool* open, const ui::Settings& active)
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,scaled(style.CellPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,style.FrameRounding*ratio);
     ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize,style.ScrollbarSize*ratio);
-    ImGui::Begin(name,open); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;
+    ImGui::Begin(name,open,std::strstr(name,"###v2.navigation")?ImGuiWindowFlags_HorizontalScrollbar:0); window_dpi_[name] = ImGui::GetWindowViewport()->DpiScale;
 }
 void App::end_window() { ImGui::End(); ImGui::PopStyleVar(6); }
 bool App::save_preferences() {
@@ -223,8 +224,8 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     for(auto& pos:nav_items)pos={};for(auto& pos:right_items)pos={};
     for (int i = 0; i < 7; ++i) {
         if(ui::pinned(state.ui_right_pages,i))continue;
-        ImGui::PushID(i); const auto label = (compact ? std::to_string(i+1) : std::string(ui::page_name(i,zh))) + "###page";
-        if (ImGui::Selectable(label.c_str(), state.ui_page == i)) state.ui_page = i;
+        ImGui::PushID(i); const auto label = std::string(ui::page_name(i,zh)) + "###page";
+        if (ImGui::Selectable(label.c_str(), state.ui_page == i,0,{std::max(ImGui::GetContentRegionAvail().x,ImGui::CalcTextSize(ui::page_name(i,zh)).x+12*active.scale),0})) state.ui_page = i;
         nav_items[i]=item_center();
         if (compact && ImGui::IsItemHovered()) ImGui::SetTooltip("%s",ui::page_name(i,zh));
         if(ImGui::BeginDragDropSource()){ImGui::SetDragDropPayload("V2_PAGE",&i,sizeof(i));ImGui::TextUnformatted(ui::page_name(i,zh));ImGui::EndDragDropSource();}
@@ -242,7 +243,10 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     if(compact&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",t("Drop a tool here to return it to navigation","将工具拖到此处，移回导航"));
     if(ImGui::BeginDragDropTarget()){if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE"))if(payload->DataSize==sizeof(int))move_page(*static_cast<const int*>(payload->Data),false);ImGui::EndDragDropTarget();}
     ImGui::PopFont(); end_window();
-    begin_window(t("Workspace###v2.workspace","工作区###v2.workspace"),nullptr,active); fonts.push(ui::FontRole::Body);
+    begin_window(t("Workspace###v2.workspace","工作区###v2.workspace"),nullptr,active);
+    workspace_docked=ImGui::IsWindowDocked();
+    if(drawn_center_page_!=state.ui_page){ImGui::SetScrollY(0);drawn_center_page_=state.ui_page;}
+    fonts.push(ui::FontRole::Body);
     ImGui::PushTextWrapPos(0); draw_page(active, fonts); ImGui::PopTextWrapPos(); ImGui::PopFont(); end_window();
     if (state.ui_inspector && wide) { begin_window(t("Inspector###v2.inspector","检查区###v2.inspector"), &state.ui_inspector,active); draw_inspector(fonts); end_window(); }
     if (state.ui_logs) { begin_window(t("Logs###v2.logs","日志###v2.logs"), &state.ui_logs,active); draw_logs(fonts); end_window(); }
@@ -265,6 +269,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
             }
         }
         const int right=state.ui_right_page;
+        if(drawn_right_page_!=right){ImGui::SetScrollY(0);drawn_right_page_=right;}
         if(ImGui::SmallButton(t("< Move to navigation","< 移回导航")))move_page(right,false);
         if(ui::pinned(state.ui_right_pages,right)){ImGui::Separator();ImGui::PushID("right-content");ImGui::PushTextWrapPos(0);draw_page(active,fonts,right);ImGui::PopTextWrapPos();ImGui::PopID();}
         ImGui::PopFont();end_window();
@@ -273,7 +278,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         ImGui::SetNextWindowPos({ImGui::GetMainViewport()->Pos.x + ImGui::GetMainViewport()->Size.x + 30, ImGui::GetMainViewport()->Pos.y + 30}, ImGuiCond_FirstUseEver);
         begin_window("Detached lifecycle probe###v2.float", &test_float,active);
         probe_dpi = ImGui::GetWindowViewport()->DpiScale; probe_font = ImGui::GetFontSize(); probe_padding = ImGui::GetStyle().FramePadding.y;
-        ImGui::TextUnformatted("Vulkan platform viewport"); end_window();
+        ImGui::TextUnformatted("Platform viewport probe"); end_window();
     }
     if (controller.exit_phase() == ecmgui::WorkerController::ExitPhase::Confirm) ImGui::OpenPopup("Exit###v2.exit");
     if (ImGui::BeginPopupModal("Exit###v2.exit", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {

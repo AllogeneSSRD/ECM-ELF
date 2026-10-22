@@ -10,7 +10,7 @@ def main():
     kernel=c.WinDLL('kernel32');kernel.OpenProcess.argtypes=[c.c_ulong,c.c_int,c.c_ulong];kernel.OpenProcess.restype=c.c_void_p;kernel.GetExitCodeProcess.argtypes=[c.c_void_p,c.POINTER(c.c_ulong)];kernel.CloseHandle.argtypes=[c.c_void_p]
     cases={}
     for fault in ['device-lost','surface-lost']:
-        log=out/(fault+'.log');run=subprocess.run([str(a.exe.resolve()),'--config',str(cfg),'--ui-state',str(out/(fault+'.toml')),'--diagnostics',str(log),'--no-nvml','--validation','--start-worker','1','--inject-failure',fault],cwd=out,env=env,startupinfo=startup,timeout=30)
+        log=out/(fault+'.log');run=subprocess.run([str(a.exe.resolve()),'--config',str(cfg),'--ui-state',str(out/(fault+'.toml')),'--diagnostics',str(log),'--no-nvml','--renderer','vulkan','--validation','--start-worker','1','--inject-failure',fault],cwd=out,env=env,startupinfo=startup,timeout=30)
         text=log.read_text(encoding='utf-8');assert run.returncode==1 and 'injected renderer failure' in text and 'graceful stop requested' in text and 'shutdown: terminated' not in text
         assert 'validation_summary: errors=0 warnings=0' in text
         pid=int(re.search(r'started pid=(\d+)',text)[1]);handle=kernel.OpenProcess(0x1000,False,pid)

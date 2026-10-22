@@ -11,7 +11,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Edwards CPU Stage2](usage/EDWARDS_CPU_STAGE2.md)：统一文本存档、GW 多线程快速多项式、libecm NTT/plain 续算及大 B2 验证。
 - [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、TOML 身份、参考 FFT 长度、批次去重与本地恢复。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
-- [GUI v2 候选](usage/GUI_V2.md)：独立 Vulkan 页面、可迁移侧栏、分组设置/语言、交互图表、Ely 宠物及验收限制；[草稿与进度](development/GUI_MODERNIZATION_DRAFT.md)、[HTML 阅读版](web/gui-v2-vulkan-plan-20261021.html)。
+- [GUI v2 候选](usage/GUI_V2.md)：默认DX11、可迁移侧栏、流式设置/语言、交互图表、Ely宠物；Vulkan显式诊断路径及验收限制；[草稿与进度](development/GUI_MODERNIZATION_DRAFT.md)、[HTML 阅读版](web/gui-v2-vulkan-plan-20261021.html)。
 - [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
 - [ptxas 沙箱编译诊断草稿](development/PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)：CUDA 13.3.73 单文件并行与严格句柄检查的最小复现、因果对照及已验证的串行编译处理。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
