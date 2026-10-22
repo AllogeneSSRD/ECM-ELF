@@ -44,12 +44,12 @@ def products():
     result = {'src/ecm/application/gui_v2/generated/ui_values.h': '\n'.join(lines) + '\n',
               'docs/GUI_V2_STATE_REFERENCE.md': '\n'.join(reference)}
     meta=['// Generated; edit config/ecm_options.json.', '#pragma once', 'namespace ecmgui_v2 {',
-          'struct BusinessOption { const char *table,*key,*domain,*english,*chinese; bool has_min,has_max; double minimum,maximum; };',
+          'struct BusinessOption { const char *table,*key,*domain,*english,*chinese,*type; bool has_min,has_max; double minimum,maximum; };',
           'inline constexpr BusinessOption business_options[]={']
     for option in full_schema['options']:
         if option['owner']=='gui': continue
         table='workers.1' if option['owner']=='worker' else 'shared' if option.get('shared_with') else option['owner']
-        strings=[table,option['key'],option.get('domain',''),*option['description']]
+        strings=[table,option['key'],option.get('domain',''),*option['description'],option['type']]
         meta.append('    {'+','.join(json.dumps(v,ensure_ascii=True) for v in strings)+','+
                     ','.join(['true' if 'minimum' in option else 'false','true' if 'maximum' in option else 'false',str(option.get('minimum',0)),str(option.get('maximum',0))])+'},')
     meta+=['};','}']

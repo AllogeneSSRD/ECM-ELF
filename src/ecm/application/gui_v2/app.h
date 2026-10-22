@@ -27,7 +27,9 @@ public:
     void begin_exit();
     bool done() const { return controller.quit_requested(); }
     void draw(ui::Settings& pending, const ui::Settings& active, const ui::Fonts& fonts);
-    void draw_page(const ui::Settings& active, const ui::Fonts& fonts);
+    void draw_page(const ui::Settings& active, const ui::Fonts& fonts, int page=-1);
+    bool move_page(int page,bool right);
+    bool save_preferences();
     const ecmgui::WorkerView* selected() const;
     void trace(const std::string& text);
     void toast(const std::string& text,bool error=false);
@@ -52,6 +54,9 @@ public:
     std::string result_view_signature;
     bool result_view_dirty=true;
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
+    ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
+    ImVec2 settings_tabs[3]{},settings_search_control{};
+    int settings_matches=0;
     float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};
     ecmgui::GenOptions gen_options;
@@ -63,6 +68,10 @@ public:
     int gen_worker = 1;
     char gen_b1[64]{}, gen_b2[64]{}, gen_pattern[512] = "{curve}_{target}_{b1}.save";
     char edit_table[128] = "stage1", edit_key[128]{}, edit_value[4096]{};
+    char settings_search[256]{};
+    int settings_group=0;
+    int settings_tab=0;
+    bool settings_bool=false;
     ecmgui::FileStamp config_stamp;
     bool autostart_pending = false;
     bool preview_generator();
@@ -74,6 +83,7 @@ public:
     ecmgui::probability_ui::Result probability_result;
     bool probability_ready = false;
     int probability_profile=0;
+    int probability_tab=0;
     bool probability_empirical=false;
     ui::Showcase showcase;
     bool test_float = false;
@@ -84,6 +94,7 @@ private:
     std::map<int,std::unique_ptr<ecm_queue::OwnerLease>> leases_;
     std::map<std::string,std::filesystem::file_time_type> verified_;
     bool layout_ready_ = false, layout_wide_ = false;
+    bool focus_right_ = true;
     std::map<std::string,float> window_dpi_;
     void begin_window(const char* name, bool* open, const ui::Settings& active);
     void end_window();

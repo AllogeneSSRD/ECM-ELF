@@ -10,10 +10,14 @@ int main(int argc, char** argv) {
     ecmgui_v2::UiState state; state.path = dir / "state.toml";
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
     state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
+    state.ui_right_pages=(1<<3)|(1<<4);state.ui_right_page=3;state.ui_right_visible=false;state.ui_smooth_scroll=false;state.ui_toasts=false;
     assert(state.save());
     ecmgui_v2::UiState copy; copy.path = state.path; assert(copy.load());
     assert(copy.ui_theme == "light" && copy.ui_language == "zh" && copy.pet_enabled && copy.pet_left == 126.5f);
     assert(copy.worker_stage1_exe == state.worker_stage1_exe && copy.layout() == state.layout());
+    assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
+    const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
+    ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts);
     const auto invalid = dir / "invalid.toml";
     { std::ofstream out(invalid); out << "[state]\nschema=999\n"; }
     std::ifstream original(invalid,std::ios::binary); const std::string before((std::istreambuf_iterator<char>(original)),{}); original.close();

@@ -16,6 +16,11 @@ struct UiValues {
     bool ui_follow_log = true;
     bool ui_raw_log = false;
     std::string ui_dock = "";
+    int ui_right_pages = 0;
+    int ui_right_page = 4;
+    bool ui_right_visible = true;
+    bool ui_smooth_scroll = true;
+    bool ui_toasts = true;
     int window_x = (-2147483647 - 1);
     int window_y = (-2147483647 - 1);
     int window_width = 1280;
@@ -40,6 +45,11 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("ui","follow_log",value.ui_follow_log);
     field("ui","raw_log",value.ui_raw_log);
     field("ui","dock",value.ui_dock);
+    field("ui","right_pages",value.ui_right_pages);
+    field("ui","right_page",value.ui_right_page);
+    field("ui","right_visible",value.ui_right_visible);
+    field("ui","smooth_scroll",value.ui_smooth_scroll);
+    field("ui","toasts",value.ui_toasts);
     field("window","x",value.window_x);
     field("window","y",value.window_y);
     field("window","width",value.window_width);
@@ -60,6 +70,8 @@ inline void validate_ui(const UiValues& v) {
     if (v.ui_page < 0 || v.ui_page > 6) throw std::runtime_error("Invalid UI state: ui.page");
     if (v.ui_worker < 1 || v.ui_worker > 1024) throw std::runtime_error("Invalid UI state: ui.worker");
     if (v.ui_dock.size() > 524288) throw std::runtime_error("Invalid UI state: ui.dock");
+    if (v.ui_right_pages < 0 || v.ui_right_pages > 126) throw std::runtime_error("Invalid UI state: ui.right_pages");
+    if (v.ui_right_page < 0 || v.ui_right_page > 6) throw std::runtime_error("Invalid UI state: ui.right_page");
     if (v.window_x < (-2147483647 - 1) || v.window_x > 2147483647) throw std::runtime_error("Invalid UI state: window.x");
     if (v.window_y < (-2147483647 - 1) || v.window_y > 2147483647) throw std::runtime_error("Invalid UI state: window.y");
     if (v.window_width < 480 || v.window_width > 16384) throw std::runtime_error("Invalid UI state: window.width");

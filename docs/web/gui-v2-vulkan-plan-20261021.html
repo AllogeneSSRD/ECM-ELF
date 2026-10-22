@@ -17,9 +17,9 @@
 </head>
 <body>
 <div class="frame">
-<aside class="sidebar"><div class="brand">ECM-ELF<small>GUI v2 · DESIGN PLAN</small></div><nav aria-label="章节"><a href="#progress">实施进度</a><a href="#boundaries">01 · 双版本边界</a><a href="#current">02 · 现状与设计规则</a><a href="#vulkan">03 · Vulkan 接入</a><a href="#layout">04 · 目标布局</a><a href="#phases">05 · 开发阶段</a><a href="#checks">06 · 验收与交付</a><a href="#full-plan">完整规划与依据</a></nav><div class="sidebar-foot">2026-10-21<br>离线阅读 · 无外部依赖<br>P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成</div></aside>
+<aside class="sidebar"><div class="brand">ECM-ELF<small>GUI v2 · DESIGN PLAN</small></div><nav aria-label="章节"><a href="#progress">实施进度</a><a href="#boundaries">01 · 双版本边界</a><a href="#current">02 · 现状与设计规则</a><a href="#vulkan">03 · Vulkan 接入</a><a href="#layout">04 · 目标布局</a><a href="#phases">05 · 开发阶段</a><a href="#checks">06 · 验收与交付</a><a href="#full-plan">完整规划与依据</a></nav><div class="sidebar-foot">2026-10-21<br>离线阅读 · 无外部依赖<br>P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成，0.47.7 适用性优化已完成</div></aside>
 <main>
-<header class="hero"><div class="eyebrow">C++ / DEAR IMGUI / WIN32 / VULKAN</div><div class="hero-top"><h1>独立构建 GUI v2</h1><button id="theme-toggle" type="button" aria-pressed="false">深色阅读</button></div><p class="intro">保留原 GUI，在独立前端中实现 Ely 风格的布局、配色、字体和控件。先证明 Vulkan 宿主可靠，再逐页接入业务功能。</p><div class="meta"><span class="badge">P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成</span><span>原版 DX11 保留</span><span>新版 Vulkan 独立构建</span><span>v2 为前端名称，不是公共版本 2.x</span></div></header>
+<header class="hero"><div class="eyebrow">C++ / DEAR IMGUI / WIN32 / VULKAN</div><div class="hero-top"><h1>独立构建 GUI v2</h1><button id="theme-toggle" type="button" aria-pressed="false">深色阅读</button></div><p class="intro">保留原 GUI，在独立前端中实现 Ely 风格的布局、配色、字体和控件。先证明 Vulkan 宿主可靠，再逐页接入业务功能。</p><div class="meta"><span class="badge">P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成，0.47.7 适用性优化已完成</span><span>原版 DX11 保留</span><span>新版 Vulkan 独立构建</span><span>v2 为前端名称，不是公共版本 2.x</span></div></header>
 
 <section id="progress"><h2>实施进度</h2><ul>
 <li>P0：已完成，v2 里程碑 0.47.0。旧 GUI 74 个源码、后端、配置和测试文件已冻结；原 exe 单独复制到隔离目录，SHA256 保持 <code>32f3a9a2905ff39e6f098f0c943dedbaa3bdbea291ef7122417634958b85919b</code>。旧版公共标识保持 0.46.7，v2 使用独立 <code>version.h</code> 记录 0.47.z。</li>
@@ -59,6 +59,19 @@
 <li>P6 诊断：中文路径原先被窄字符接口误解；只为v2加入UTF-8进程manifest，中文目录中的完整业务读写合同通过，系统代码页和旧GUI不变。非法layout hex原先会被重置后覆盖，<code>p6_layout_red_01</code>保留复现；现在装载阶段拒绝且禁止保存。初次包的版本横幅解析、测试环境SystemRoot假设和遗漏忽略目录ImGui核心的源码归档失败全部保留，未放宽检查。</li>
 <li>P6 来源：<a href="../../data/experiments/gui_v2/p6_source_build_04/result.json">最终源码归档独立构建与运行</a>通过，131个共有源目录文件哈希逐项匹配，归档无Git目录也可构建；不宣称PE逐位可重复。宠物50层/56帧离线重新生成的PNG及元数据与随包版本完全一致（<code>p6_pet_asset_01</code>），原始/规范LF源码哈希分别记录，PNG SHA256 <code>eb0eac5b7a5809d5ea0cf4d1e6dac8e521650671e243648508408cc98bfb1972</code>。临时草稿保留，待用户决定整理。</li>
 <li>草稿与 HTML 由 <code>tools/gen/render_gui_v2_plan.py</code> 同步，原始证据保留在忽略目录。各阶段独立提交 <code>[0.47.z]</code>。</li>
+</ul>
+<ul>
+<li>适用性优化：已完成，v2 0.47.7。补充外观 / 布局 / 工作流设置分组、双语搜索与 schema 类型/范围帮助、开关式布尔编辑、worker 文件选择。主题/语言/DPI 使用标签；语言菜单即时应用，窗口/表头/常用 UI 提示同步，原始计算日志不翻译。27 个侧车字段统一生成；原配置默认值及算法不变。</li>
+<li>适用性布局：页面右键或拖到导航下方工具按钮移入右侧，以标签切换；右键、返回按钮或拖回导航返回。至少保留一页在中央；页位/右侧选中项/显示状态与停靠布局保存恢复。移入后自动激活工具窗；窄窗使用紧凑按钮、提示、文字换行与可滚动内容。设置可恢复默认布局，主菜单收拢为视图/语言/通知。</li>
+<li>适用性图表：原生 ImDrawList 网格、带真实 x 值的多曲线/淡色面积、可隐藏图例、悬停采样读数；无新运行时依赖。概率参数/快照视图分离，计算后显示快照图，输入变动提示重算；bit/digits 使用模型返回的既定 x 单位。GPU 支持15/30/60/120s实际采样时间窗，缺失断线；worker速度图以采样序号为横轴。不会据新图表声明 P5 性能门禁已通过。</li>
+</ul>
+<ul>
+<li>适用性验证：<a href="../../data/experiments/gui_v2/usability_ui_04/result.json">最终交互/重启/字体救援</a>通过，exe SHA256 <code>8337c3e0712d48fce1821c7c0dd05966bce477b1954a791e13876aeee97c21b5</code>。实际点击搜索、空状态、双向语言切换与快照计算，拖入/拖回、显式保存与重启、明暗快照图、窄窗口和中文字体缺失时无循环重载均通过。<code>usability_ui_01</code>暴露工具页被同 dock 检查区遮挡，修复为移入后激活；失败证据保留，后续验证不放宽条件。</li>
+<li>适用性回归：<a href="../../data/experiments/gui_v2/usability_pages_01/result.json">全部七页/两语言/宽窄/Vulkan</a>、<a href="../../data/experiments/gui_v2/usability_regression_01/result.json">原 GUI + v2 合同</a>、<a href="../../data/experiments/gui_v2/usability_interaction_01/result.json">筛选/滚轮/启动停止Toast</a>及<a href="../../data/experiments/gui_v2/usability_legacy_01/result.json">原文件与原配置投影隔离</a>通过；Vulkan API验证错误/警告均0。测试指针为显式注入，滚轮走原生窗口消息，不能代替真实IME或不同物理DPI资格；本轮未重做P5完整性能矩阵，原门禁仍待验收。</li>
+</ul>
+<ul>
+<li>适用性分发：<a href="../../data/experiments/gui_v2/usability_package_01/ECM-ELF-GUI-v2-0.47.7.zip">0.47.7 候选包</a>，独立 GUI、许可、资产、匹配源码与构建身份；仍不附计算 worker 或系统运行时。草稿继续保留。</li>
+<li>适用性包验证：<a href="../../data/experiments/gui_v2/usability_package_test_01/result.json">中文目录与依赖/非法侧车检查</a>通过，21个清单文件逐项校验，另有清单自身；ZIP SHA256 <code>3d70cae13db874632144a64f5c45306659d1c135769df4aa49f5098045e39be5</code>。源码归档的<a href="../../data/experiments/gui_v2/usability_source_01/result.json">134个共有构建目录文件</a>逐项匹配最终构建身份，包含三份新UI头；保守构建目录另外记录本地ImGui README，归档固定核心白名单不包含该说明文件。本轮未重做归档独立编译，不将P6旧版本重建证据当作0.47.7重建证据。离线HTML阶段/390px阅读检查通过，P5仍待验收。</li>
 </ul></section><section id="boundaries"><h2>01 · 两个前端，独立演进</h2><div class="twocol"><div class="identity"><div class="label">原 GUI · 保持不变</div><strong>ecm_gui.exe</strong><p>Win32 + ImGui + Direct3D 11<br>原目录、入口、默认值、布局与测试期望保留。</p></div><div class="identity"><div class="label">GUI v2 · 新增</div><strong>ecm_gui_v2.exe</strong><p>Win32 + ImGui + Vulkan<br>新增工程、构建入口、输出目录和 UI 状态。</p></div></div><div class="table-wrap"><table><thead><tr><th>范围</th><th>原 GUI</th><th>GUI v2 规划</th></tr></thead><tbody>
 <tr><td>实现</td><td><code>src/ecm/application/gui/</code></td><td><code>src/ecm/application/gui_v2/</code></td></tr><tr><td>构建入口</td><td><code>tools/build/build_gui.bat</code></td><td>新增 <code>tools/build/build_gui_v2.bat</code></td></tr><tr><td>默认输出</td><td><code>build_gui_local/</code></td><td><code>build_gui_v2_local/</code></td></tr><tr><td>界面状态</td><td>原 <code>[gui]</code> 及停靠布局</td><td>独立 LocalAppData 侧车，支持 <code>--ui-state</code></td></tr><tr><td>依赖</td><td>不增加 Vulkan 要求</td><td><code>ECM_BUILD_GUI_V2</code> 默认 OFF，显式构建时检查依赖</td></tr><tr><td>业务模块</td><td>原实现和链接关系不变</td><td>明确列源，只读复用 Controller、结果、生成器和概率等模块</td></tr>
 </tbody></table></div><p class="caption-line caption">v2 保存外观和窗口状态不改写旧 UI 配置；业务 TOML 与 UI 状态分开。两个 GUI 对同一 worker / 队列组的控制拥有权必须在启动前验证。</p></section>
@@ -74,7 +87,7 @@
 <section id="checks"><h2>06 · 外观、业务、后端与原版保护分别验收</h2><div class="check-grid"><div class="check-group"><h3>原 GUI 不变</h3><p>源码与后端差异、原入口、UI 默认值和旧布局；v2 关闭或缺 SDK 时，旧版仍可配置与构建。</p></div><div class="check-group"><h3>Vulkan 生命周期</h3><p>主次窗口、呈现队列、同步、纹理、重建及失败清理；validation 输出和跨屏实际行为。</p></div><div class="check-group"><h3>业务功能等价</h3><p>安全停止、退出、原始 JSON / checksum 复制、生成器预览与 mtime、概率快照及监控采样。</p></div><div class="check-group"><h3>可读性与低占用</h3><p>中英、明暗、四档缩放、长标签和窄屏；同条件至少 5 次采样，性能门限事先冻结。</p></div></div><p class="caption caption-line">CPU、working set / private bytes、显存、绘制时间和输入延迟分别报告。worker 吞吐独立计时；不因使用 Vulkan 就宣称更低占用。</p><div class="source-links"><a href="../development/GUI_MODERNIZATION_DRAFT.md">权威 Markdown 草稿</a><a href="../usage/GUI.md">原 GUI 当前说明</a><a href="../usage/GUI_V2.md">GUI v2 开发预览说明</a><a href="../README.md">文档入口</a></div></section>
 
 <section id="full-plan"><h2>完整规划与依据</h2><p class="caption">以下是权威草稿的完整阅读内容。源码依据、固定第三方提交、业务合同和待验证事项均保留。</p><details class="full-plan" id="full-details"><summary>展开完整规划</summary><div class="full-body"><h2>独立 GUI v2：ImGui / Vulkan 现代化规划草稿</h2>
-<p>状态：P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成。日期：2026-10-22。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。</p>
+<p>状态：P0–P4 已完成，P5 本机验收部分通过、最小化 CPU 门禁待稳定验证，P6 独立候选准备完成，0.47.7 适用性优化已完成。日期：2026-10-22。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。</p>
 <p>本文件是本主题的权威临时草稿。<a href="../web/gui-v2-vulkan-plan-20261021.html">HTML 阅读版</a>呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。</p>
 <h3>实施进度</h3>
 <ul>
@@ -115,6 +128,19 @@
 <li>P6 诊断：中文路径原先被窄字符接口误解；只为v2加入UTF-8进程manifest，中文目录中的完整业务读写合同通过，系统代码页和旧GUI不变。非法layout hex原先会被重置后覆盖，<code>p6_layout_red_01</code>保留复现；现在装载阶段拒绝且禁止保存。初次包的版本横幅解析、测试环境SystemRoot假设和遗漏忽略目录ImGui核心的源码归档失败全部保留，未放宽检查。</li>
 <li>P6 来源：<a href="../../data/experiments/gui_v2/p6_source_build_04/result.json">最终源码归档独立构建与运行</a>通过，131个共有源目录文件哈希逐项匹配，归档无Git目录也可构建；不宣称PE逐位可重复。宠物50层/56帧离线重新生成的PNG及元数据与随包版本完全一致（<code>p6_pet_asset_01</code>），原始/规范LF源码哈希分别记录，PNG SHA256 <code>eb0eac5b7a5809d5ea0cf4d1e6dac8e521650671e243648508408cc98bfb1972</code>。临时草稿保留，待用户决定整理。</li>
 <li>草稿与 HTML 由 <code>tools/gen/render_gui_v2_plan.py</code> 同步，原始证据保留在忽略目录。各阶段独立提交 <code>[0.47.z]</code>。</li>
+</ul>
+<ul>
+<li>适用性优化：已完成，v2 0.47.7。补充外观 / 布局 / 工作流设置分组、双语搜索与 schema 类型/范围帮助、开关式布尔编辑、worker 文件选择。主题/语言/DPI 使用标签；语言菜单即时应用，窗口/表头/常用 UI 提示同步，原始计算日志不翻译。27 个侧车字段统一生成；原配置默认值及算法不变。</li>
+<li>适用性布局：页面右键或拖到导航下方工具按钮移入右侧，以标签切换；右键、返回按钮或拖回导航返回。至少保留一页在中央；页位/右侧选中项/显示状态与停靠布局保存恢复。移入后自动激活工具窗；窄窗使用紧凑按钮、提示、文字换行与可滚动内容。设置可恢复默认布局，主菜单收拢为视图/语言/通知。</li>
+<li>适用性图表：原生 ImDrawList 网格、带真实 x 值的多曲线/淡色面积、可隐藏图例、悬停采样读数；无新运行时依赖。概率参数/快照视图分离，计算后显示快照图，输入变动提示重算；bit/digits 使用模型返回的既定 x 单位。GPU 支持15/30/60/120s实际采样时间窗，缺失断线；worker速度图以采样序号为横轴。不会据新图表声明 P5 性能门禁已通过。</li>
+</ul>
+<ul>
+<li>适用性验证：<a href="../../data/experiments/gui_v2/usability_ui_04/result.json">最终交互/重启/字体救援</a>通过，exe SHA256 <code>8337c3e0712d48fce1821c7c0dd05966bce477b1954a791e13876aeee97c21b5</code>。实际点击搜索、空状态、双向语言切换与快照计算，拖入/拖回、显式保存与重启、明暗快照图、窄窗口和中文字体缺失时无循环重载均通过。<code>usability_ui_01</code>暴露工具页被同 dock 检查区遮挡，修复为移入后激活；失败证据保留，后续验证不放宽条件。</li>
+<li>适用性回归：<a href="../../data/experiments/gui_v2/usability_pages_01/result.json">全部七页/两语言/宽窄/Vulkan</a>、<a href="../../data/experiments/gui_v2/usability_regression_01/result.json">原 GUI + v2 合同</a>、<a href="../../data/experiments/gui_v2/usability_interaction_01/result.json">筛选/滚轮/启动停止Toast</a>及<a href="../../data/experiments/gui_v2/usability_legacy_01/result.json">原文件与原配置投影隔离</a>通过；Vulkan API验证错误/警告均0。测试指针为显式注入，滚轮走原生窗口消息，不能代替真实IME或不同物理DPI资格；本轮未重做P5完整性能矩阵，原门禁仍待验收。</li>
+</ul>
+<ul>
+<li>适用性分发：<a href="../../data/experiments/gui_v2/usability_package_01/ECM-ELF-GUI-v2-0.47.7.zip">0.47.7 候选包</a>，独立 GUI、许可、资产、匹配源码与构建身份；仍不附计算 worker 或系统运行时。草稿继续保留。</li>
+<li>适用性包验证：<a href="../../data/experiments/gui_v2/usability_package_test_01/result.json">中文目录与依赖/非法侧车检查</a>通过，21个清单文件逐项校验，另有清单自身；ZIP SHA256 <code>3d70cae13db874632144a64f5c45306659d1c135769df4aa49f5098045e39be5</code>。源码归档的<a href="../../data/experiments/gui_v2/usability_source_01/result.json">134个共有构建目录文件</a>逐项匹配最终构建身份，包含三份新UI头；保守构建目录另外记录本地ImGui README，归档固定核心白名单不包含该说明文件。本轮未重做归档独立编译，不将P6旧版本重建证据当作0.47.7重建证据。离线HTML阶段/390px阅读检查通过，P5仍待验收。</li>
 </ul>
 <h3>1. 分析边界与基线</h3>
 <h4>P3–P6 扩展授权与宠物兼容</h4>

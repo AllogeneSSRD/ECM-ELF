@@ -38,6 +38,7 @@ unsigned performance_sequence=0;
 void (*platform_create_window)(ImGuiViewport*)=nullptr;
 bool collect_wheel(UINT message,WPARAM w){
     if(!ImGui::GetCurrentContext()||(message!=WM_MOUSEWHEEL&&message!=WM_MOUSEHWHEEL))return false;
+    if(current_app&&!current_app->state.ui_smooth_scroll)return false;
     const double delta=static_cast<short>(HIWORD(w))/double(WHEEL_DELTA);
     smooth_scroll.add(message==WM_MOUSEHWHEEL?-delta:0,message==WM_MOUSEWHEEL?delta:0);return true;
 }
@@ -257,7 +258,10 @@ int run(const Options& options, int show, FILE* log) {
             continue;
         }
         const bool font_change = active.chinese != pending.chinese || active.scale != pending.scale;
-        if (font_change) { fonts.reload(pending.chinese, options.missing_cjk, log); pending.chinese = fonts.chinese; }
+        if (font_change) { fonts.reload(pending.chinese, options.missing_cjk, log); pending.chinese = fonts.chinese;
+            if(!show_components)state.ui_language=fonts.chinese?"zh":"en";
+            if(!fonts.notice.empty()){app.toast(fonts.notice,true);app.trace(fonts.notice);}
+        }
         if (resized || renderer.needs_rebuild) {
             renderer.rebuild(static_cast<uint32_t>(client.right), static_cast<uint32_t>(client.bottom));
             resized = false;
@@ -301,6 +305,11 @@ int run(const Options& options, int show, FILE* log) {
             const auto point=[&](ImVec2 v){POINT p{static_cast<LONG>(v.x),static_cast<LONG>(v.y)};ScreenToClient(native.hwnd,&p);return p;};
             const auto f=point(app.result_chips[1]),nf=point(app.result_chips[2]),wheel=point(app.result_wheel),start=point(app.start_control),stop=point(app.stop_control);
             std::fprintf(log,"interaction_sample: page=%d visible=%zu scroll=%.3f toasts=%zu f=%ld,%ld nf=%ld,%ld wheel=%ld,%ld start=%ld,%ld stop=%ld,%ld\n",state.ui_page,app.result_indices.size(),app.result_scroll,app.toasts.size(),f.x,f.y,nf.x,nf.y,wheel.x,wheel.y,start.x,start.y,stop.x,stop.y);std::fflush(log);
+            const auto drop=point(app.nav_drop),back=point(app.nav_return),english=point(app.language_items[0]),chinese=point(app.language_items[1]),save=point(app.save_ui_control),calculate=point(app.calculate_control);
+            std::fprintf(log,"usability_sample: page=%d mask=%d right=%d shown=%d zh=%d charts=%d drop=%ld,%ld back=%ld,%ld en=%ld,%ld cn=%ld,%ld save=%ld,%ld calculate=%ld,%ld",state.ui_page,state.ui_right_pages,state.ui_right_page,state.ui_right_visible,fonts.chinese,app.probability_ready,drop.x,drop.y,back.x,back.y,english.x,english.y,chinese.x,chinese.y,save.x,save.y,calculate.x,calculate.y);
+            for(int i=0;i<7;++i){const auto nav=point(app.nav_items[i]),right=point(app.right_items[i]);std::fprintf(log," nav%d=%ld,%ld tool%d=%ld,%ld",i,nav.x,nav.y,i,right.x,right.y);}
+            for(int i=0;i<3;++i){const auto pos=point(app.settings_tabs[i]);std::fprintf(log," settings%d=%ld,%ld",i,pos.x,pos.y);}
+            const auto search=point(app.settings_search_control);std::fprintf(log," settings_tab=%d matches=%d search=%ld,%ld\n",app.settings_tab,app.settings_matches,search.x,search.y);std::fflush(log);
         }
         if(options.performance){
             LARGE_INTEGER draw_end{};QueryPerformanceCounter(&draw_end);

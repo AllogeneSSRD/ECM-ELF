@@ -5,10 +5,24 @@
 #include <cstring>
 #include "../../../src/ecm/application/gui_v2/ui/scroll.h"
 #include "../../../src/ecm/application/gui_v2/ui/probability_presets.h"
+#include "../../../src/ecm/application/gui_v2/ui/navigation.h"
+#include "../../../src/ecm/application/gui_v2/ui/chart.h"
+#include "../../../src/ecm/application/gui_v2/ui/i18n.h"
 namespace fs=std::filesystem;
 static void write(const fs::path& p,const std::string& text){std::ofstream f(p,std::ios::binary);f<<text;assert(f.good());}
 static std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
 int main(int argc,char** argv){
+    int mask=0,center=0,right=4;
+    for(int i=0;i<6;++i)assert(ecmgui_v2::ui::move_page(mask,center,right,i,true));
+    assert(mask==63&&center==6&&!ecmgui_v2::ui::move_page(mask,center,right,6,true));
+    assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==3&&!ecmgui_v2::ui::pinned(mask,3));
+    assert(!ecmgui_v2::ui::move_page(mask,center,right,-1,true));
+    using namespace ecmgui_v2::ui;
+    std::vector<ChartSeries> charts{{"measured",{},{{-60,20},{-30,std::numeric_limits<double>::quiet_NaN()},{0,80}}}};
+    const auto bounds=chart_bounds(charts);assert(bounds.xmin==-60&&bounds.xmax==0&&bounds.ymax>=80);
+    assert(chart_nearest(charts[0].points,-29)==2);assert(chart_bounds(charts,100).ymax==100);
+    charts[0].visible=false;const auto empty=chart_bounds(charts);assert(empty.xmax>empty.xmin&&empty.ymax>empty.ymin);
+    assert(message("Preview ready: C:/test.toml",true)=="预览已就绪：C:/test.toml");assert(message("raw worker payload",true)=="raw worker payload");
     const auto edwards=ecmgui_v2::ui::curve_divisor(1);assert(edwards>28&&edwards<31);
     assert(ecmgui_v2::ui::curve_divisor(1,true)==26.408122047632308);
     ecmgui_v2::ui::SmoothScroll scroll;scroll.add(0,-3);double total=0,x=0,y=0;int steps=0;

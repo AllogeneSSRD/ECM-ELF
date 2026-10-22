@@ -79,6 +79,41 @@ Show raw output instead of classified event lines.
 Hex encoded ImGui layout; stored only in this sidecar.
 十六进制编码的 ImGui 布局，仅存于本侧车。
 
+## ui.right_pages
+
+默认值：`0`；类型：`int`。
+
+Bit mask of pages moved to the right tool dock; at least one page remains central.
+移入右侧工具栏的页面位掩码；至少保留一个中央页面。
+
+## ui.right_page
+
+默认值：`4`；类型：`int`。
+
+Selected right tool page.
+当前选中的右侧工具页面。
+
+## ui.right_visible
+
+默认值：`true`；类型：`bool`。
+
+Show moved pages in a dockable right panel.
+在可停靠的右侧窗显示移入的页面。
+
+## ui.smooth_scroll
+
+默认值：`true`；类型：`bool`。
+
+Smooth wheel scrolling in main and detached windows.
+主窗口与分离窗口使用平滑滚轮滚动。
+
+## ui.toasts
+
+默认值：`true`；类型：`bool`。
+
+Show non-activating action notifications; errors always remain visible.
+显示不抢焦点的操作轻提示；错误提示仍显示。
+
 ## window.x
 
 默认值：`-2147483648`；类型：`int`。

@@ -2262,6 +2262,65 @@
           "Number of v2 workers; 0 follows the workflow GUI worker count. Does not modify legacy preferences.",
           "v2 worker 数量；0 跟随工作流中的数量，不改写旧版偏好。"
         ]
+      },
+      {
+        "table": "ui",
+        "key": "right_pages",
+        "field": "ui_right_pages",
+        "type": "int",
+        "default": 0,
+        "description": [
+          "Bit mask of pages moved to the right tool dock; at least one page remains central.",
+          "移入右侧工具栏的页面位掩码；至少保留一个中央页面。"
+        ],
+        "minimum": 0,
+        "maximum": 126
+      },
+      {
+        "table": "ui",
+        "key": "right_page",
+        "field": "ui_right_page",
+        "type": "int",
+        "default": 4,
+        "description": [
+          "Selected right tool page.",
+          "当前选中的右侧工具页面。"
+        ],
+        "minimum": 0,
+        "maximum": 6
+      },
+      {
+        "table": "ui",
+        "key": "right_visible",
+        "field": "ui_right_visible",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Show moved pages in a dockable right panel.",
+          "在可停靠的右侧窗显示移入的页面。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "smooth_scroll",
+        "field": "ui_smooth_scroll",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Smooth wheel scrolling in main and detached windows.",
+          "主窗口与分离窗口使用平滑滚轮滚动。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "toasts",
+        "field": "ui_toasts",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "Show non-activating action notifications; errors always remain visible.",
+          "显示不抢焦点的操作轻提示；错误提示仍显示。"
+        ]
       }
     ]
   }
