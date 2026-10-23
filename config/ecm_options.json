@@ -1139,8 +1139,8 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-        "Invoke PARI/GP to further decompose found factors: 1 enables; 0 keeps only factors extracted and verified by Stage2. Decomposition can add time after curve computation and requires a working stage2_gp.",
-        "控制是否调用 PARI/GP 进一步分解命中的因子。1 开启，0 只保留 Stage2 已得到并验证的因子结果；进一步分解可能增加曲线结束后的时间，需要可用的 stage2_gp。"
+        "Further decompose found factors: 1 enables GP-first analysis with a bounded CPU/GMP fallback when GP is unavailable; 0 keeps only factors extracted and verified by Stage2. Only complete, proven decomposition sets factorization_complete. Unfinished diagnostics preserve the original factor and successful curve status.",
+        "控制命中因子的附加分解。1 开启，优先 GP，GP 不可用时使用有预算的 CPU/GMP 回退；0 只保留 Stage2 已得到并验证的因子。仅完整且全部已证素的分解标为完成；诊断未完成仍保留原始因子与曲线成功状态。"
       ]
     },
     {
@@ -1190,8 +1190,8 @@
       "effective_default": "gp.exe",
       "path_base": "CreateProcess/PATH",
       "description": [
-        "PARI/GP executable used for further factor decomposition. gp.exe follows Windows executable search rules; a full path is also accepted. Required only when stage2_factorize_hits is enabled. This TOML key does not use the dataset scripts' --gp environment-variable fallback.",
-        "指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 TOML 键不使用数据集脚本的 --gp 环境变量回退规则。"
+        "Preferred PARI/GP executable for optional factor decomposition. gp.exe follows Windows executable search rules; a full path is accepted. When GP cannot run, bounded CPU/GMP analysis is attempted without selecting another GP executable. Dataset scripts retain their separate --gp resolution rules.",
+        "指定附加因子分解优先使用的 PARI/GP 程序。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 无法运行时尝试有预算的 CPU/GMP 分析，不另选 GP 程序；数据集脚本继续使用各自的 --gp 路径规则。"
       ]
     },
     {
@@ -1207,8 +1207,8 @@
       "minimum": 1,
       "maximum": 600,
       "description": [
-        "Timeout in seconds for each PARI/GP factor-decomposition call. Limits only optional decomposition, not Stage2 curve computation. A timeout does not invalidate a factor already found by Stage2.",
-        "设置每次 PARI/GP 因子分解调用的超时时间，单位为秒。仅影响附加的因子分解，不限制 Stage2 曲线计算时长；超时不表示原 Stage2 算法未找到因子。"
+        "Timeout in seconds for each preferred GP decomposition call. Timeout permits CPU/GMP fallback, separately limited to 2 seconds per factor and 10 seconds per curve worker. These bounds affect optional diagnostics, not the original factor or Stage2 computation status.",
+        "设置优先 GP 分解调用的超时秒数。超时后允许 CPU/GMP 回退，后者单因子限 2 秒、单曲线 worker 累计限 10 秒。预算仅影响附加诊断，不改变原始因子或 Stage2 计算状态。"
       ]
     },
     {
@@ -2000,6 +2000,20 @@
         "Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from submission output.",
         "统一格式的逐曲线 Stage1 内部 JSONL，包含 CRC32 与执行元数据，与提交文件分开。"
       ]
+    },
+    {
+      "owner": "gui",
+      "key": "group_order_gp",
+      "field": "group_order_gp",
+      "type": "string",
+      "default": "",
+      "domain": "<path-to-gp.exe|empty>",
+      "fx": "GUI_v2_group_order",
+      "parser": "gui",
+      "description": [
+        "PARI/GP executable for the Group Order Factor GUI. Empty searches gp in PATH. GUI-only; compute worker settings remain independent.",
+        "群阶分解界面使用的PARI/GP程序路径；空值在PATH查找gp。仅供GUI使用，不修改计算worker设置。"
+      ]
     }
   ],
   "aliases": [],
@@ -2179,12 +2193,12 @@
         "key": "nav_order",
         "field": "ui_nav_order",
         "type": "string",
-        "default": "0123456",
-        "max_length": 7,
-        "permutation_of": "0123456",
+        "default": "01237456",
+        "max_length": 8,
+        "permutation_of": "01234567",
         "description": [
-          "Stable ordering of seven legacy IDs. ID 5 is reserved for the fixed Settings popup entry and ignored in page ordering. Long-press real pages to reorder; right-side pages keep their return position.",
-          "保留七个历史编号的完整顺序；编号5用于固定设置弹窗入口，不参与页面排序。其他页面可长按排序，右侧页面保留返回位置。"
+          "Stable page IDs 0..7; ID 5 opens Settings. Legacy seven-page orders append Group Order Factor without resetting the layout.",
+          "稳定页面编号0..7；5打开设置。旧七页排序追加群阶分解页，不重置布局。"
         ]
       },
       {
@@ -2194,11 +2208,11 @@
         "type": "int",
         "default": 0,
         "description": [
-          "Selected central page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components. Legacy ID 5 opens Settings as a popup and returns the center to a real page.",
-          "中央页面：0任务、1结果、2生成器、3概率、4 GPU、6组件。旧编号5兼容为打开设置弹窗，并让中央区回到实际页面。"
+          "Selected page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components, 7 Group Order Factor; 5 opens Settings.",
+          "页面：0任务、1结果、2生成器、3概率、4 GPU、6组件、7群阶分解；5打开设置。"
         ],
         "minimum": 0,
-        "maximum": 6
+        "maximum": 7
       },
       {
         "table": "ui",
@@ -2441,7 +2455,7 @@
           "右侧实际页面共用横排标签，关闭后返回导航，至少保留一个实际中央页面；读取旧侧车时移除设置位5。"
         ],
         "minimum": 0,
-        "maximum": 126
+        "maximum": 254
       },
       {
         "table": "ui",
@@ -2454,7 +2468,7 @@
           "右侧停靠区最后激活的实际页面；读取旧设置编号5时改选实际页面。"
         ],
         "minimum": 0,
-        "maximum": 6
+        "maximum": 7
       },
       {
         "table": "ui",

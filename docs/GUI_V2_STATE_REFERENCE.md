@@ -88,17 +88,17 @@ Optional read-only Stage2 tune summary path. Empty uses the workflow stage2_tune
 
 ## ui.nav_order
 
-默认值：`"0123456"`；类型：`string`。
+默认值：`"01237456"`；类型：`string`。
 
-Stable ordering of seven legacy IDs. ID 5 is reserved for the fixed Settings popup entry and ignored in page ordering. Long-press real pages to reorder; right-side pages keep their return position.
-保留七个历史编号的完整顺序；编号5用于固定设置弹窗入口，不参与页面排序。其他页面可长按排序，右侧页面保留返回位置。
+Stable page IDs 0..7; ID 5 opens Settings. Legacy seven-page orders append Group Order Factor without resetting the layout.
+稳定页面编号0..7；5打开设置。旧七页排序追加群阶分解页，不重置布局。
 
 ## ui.page
 
 默认值：`0`；类型：`int`。
 
-Selected central page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components. Legacy ID 5 opens Settings as a popup and returns the center to a real page.
-中央页面：0任务、1结果、2生成器、3概率、4 GPU、6组件。旧编号5兼容为打开设置弹窗，并让中央区回到实际页面。
+Selected page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components, 7 Group Order Factor; 5 opens Settings.
+页面：0任务、1结果、2生成器、3概率、4 GPU、6组件、7群阶分解；5打开设置。
 
 ## ui.worker
 

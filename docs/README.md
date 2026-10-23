@@ -11,7 +11,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Edwards CPU Stage2](usage/EDWARDS_CPU_STAGE2.md)：统一文本存档、GW 多线程快速多项式、libecm NTT/plain 续算及大 B2 验证。
 - [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、TOML 身份、参考 FFT 长度、批次去重与本地恢复。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
-- [GUI v2 候选](usage/GUI_V2.md)：默认DX11、可迁移侧栏、独立分组设置/语言、交互图表、[图标图鉴](web/gui-v2-icons.html)、Ely宠物与[三款装甲皮肤预览](web/ely-skins-20261022.html)；Vulkan显式诊断路径及验收限制；[草稿与进度](development/GUI_MODERNIZATION_DRAFT.md)、[HTML 阅读版](web/gui-v2-vulkan-plan-20261021.html)。
+- [GUI v2 候选](usage/GUI_V2.md)：默认DX11、可迁移侧栏、独立分组设置/语言、交互图表、群阶/点阶分解与结果文件导入、[图标图鉴](web/gui-v2-icons.html)、Ely宠物与[三款装甲皮肤预览](web/ely-skins-20261022.html)；Vulkan显式诊断路径及验收限制；[草稿与进度](development/GUI_MODERNIZATION_DRAFT.md)、[HTML 阅读版](web/gui-v2-vulkan-plan-20261021.html)。
 - [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
 - [ptxas 沙箱编译诊断草稿](development/PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)：CUDA 13.3.73 单文件并行与严格句柄检查的最小复现、因果对照及已验证的串行编译处理。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
@@ -21,6 +21,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 实现
 
 - [架构与术语](architecture/OVERVIEW.md)：模块职责、数据表示和入口。
+- [CPU/GMP 群阶与点阶模块](architecture/GROUP_ORDER.md)：整数分解、BSGS/Mestre、点阶、资源与证明边界，以及 Stage1/Stage2 的 GP 优先自动回退。
 - [目录精简规划草稿](development/DIRECTORY_LAYOUT_SIMPLIFICATION_DRAFT.md)：方案 A 已完成，版本 0.45.28；31 个路径调整、14 个公开头保留，GUI 单一 BAT/local 短默认目录与零 CU 验证通过。[网页阅读版](web/directory-layout-plan-20261021.html)。
 - [主流程重构方案草稿](development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md)：P0–P7已完成，源码/local版本0.45.24；保留设计、分阶段记录和证据，当前目录与职责以正式架构为准。[网页阅读版](web/architecture-review-20261021-ecm-main-flow.html)同步实施状态与源码依据，不替代当前架构与构建规范。
 - [CUDA 可视化架构图谱](../web/index.html)：代码分层、编译清单、位宽与运行时流程的离线交互网页；维护入口见 [网页说明](../web/README.md)。
@@ -35,6 +36,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [OpenCL 算子](architecture/OPENCL.md)：路径注册、内核组装和设备约束。
 
 ## 性能与后续工作
+
+- [本地群阶与点阶分析研究草稿](development/LOCAL_GROUP_ORDER_DRAFT.md)：GP 职责、算法取舍、独立模块数据集验收与主程序回退接入；[HTML 结果](web/cpu-group-order-validation-20261023.html)。
 
 - [主流程重构验收](performance/MAIN_FLOW_QUALIFICATION.md)：0.45.24本机local、完整位宽、非GPU正文零CU、实际恢复/交接与8个代表样例的配对性能范围。
 

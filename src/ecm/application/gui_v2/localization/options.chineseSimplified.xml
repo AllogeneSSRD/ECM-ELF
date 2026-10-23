@@ -68,11 +68,11 @@
       <Item id="option_stage2_stage2_batch_mb" name="设置 Stage2 S4 批次的工作缓冲预算，单位为 MiB。增大预算可能减少分批开销，但会占用更多显存；它只约束对应批次缓冲，不是整个进程的显存上限。" />
       <Item id="option_stage2_stage2_arena_mb" name="设置 Stage2 大工作区预算，单位为 MiB，用于规划可用的 NTT 工作形状。0 由运行环境或自动规划决定，不表示不使用显存；过小可能迫使较小工作形状或使任务无法运行。表、坐标和其他模块仍可能另占显存。" />
       <Item id="option_stage2_stage2_fold_mb" name="设置 fold 累积结果驻留 GPU 的预算，单位为 MiB。0 关闭这部分驻留；所需空间超过预算时可退回分批路径，可能显著增加处理和传输开销。此预算与大工作区、批次缓冲分别控制，不是总显存限制。" />
-      <Item id="option_stage2_stage2_factorize_hits" name="控制是否调用 PARI/GP 进一步分解命中的因子。1 开启，0 只保留 Stage2 已得到并验证的因子结果；进一步分解可能增加曲线结束后的时间，需要可用的 stage2_gp。" />
+      <Item id="option_stage2_stage2_factorize_hits" name="控制命中因子的附加分解。1 开启，优先 GP，GP 不可用时使用有预算的 CPU/GMP 回退；0 只保留 Stage2 已得到并验证的因子。仅完整且全部已证素的分解标为完成；诊断未完成仍保留原始因子与曲线成功状态。" />
       <Item id="option_stage2_stage2_factor_only" name="控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 stage2_factorize_hits。" />
       <Item id="option_stage2_stage2_auto_b2" name="所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用 Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 stage2_tune_ignore 控制。当前输入仍检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。" />
-      <Item id="option_stage2_stage2_gp" name="指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 TOML 键不使用数据集脚本的 --gp 环境变量回退规则。" />
-      <Item id="option_stage2_stage2_factor_timeout" name="设置每次 PARI/GP 因子分解调用的超时时间，单位为秒。仅影响附加的因子分解，不限制 Stage2 曲线计算时长；超时不表示原 Stage2 算法未找到因子。" />
+      <Item id="option_stage2_stage2_gp" name="指定附加因子分解优先使用的 PARI/GP 程序。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 无法运行时尝试有预算的 CPU/GMP 分析，不另选 GP 程序；数据集脚本继续使用各自的 --gp 路径规则。" />
+      <Item id="option_stage2_stage2_factor_timeout" name="设置优先 GP 分解调用的超时秒数。超时后允许 CPU/GMP 回退，后者单因子限 2 秒、单曲线 worker 累计限 10 秒。预算仅影响附加诊断，不改变原始因子或 Stage2 计算状态。" />
       <Item id="option_stage2_stage2_cost_profile" name="stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保持原二进制、设备、算术及标定资格检查；新的完整 ECM tune 不放宽旧合同。留空不提供旧配置。" />
       <Item id="option_stage2_stage2_auto_carrier" name="对有效ECMSTAGE2=1,2,p,-1保存点，验证N整除M=2^p-1且2&lt;=p&lt;=16384后加入承载候选。普通成本按target_bits、梅森成本按arithmetic_bits=p查询，并遵循stage2_prediction_policy；完整M_p已使用原生梅森算术，不重复加入相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。" />
       <Item id="option_stage2_stage2_prediction_policy" name="model：优先使用精确配对实测；其他输入分别按通用、梅森算术位宽区间预测，满足双侧误差保护及当前显存准入才替换。缺调优资料时使用明确标为估算的4060 Laptop/1800MHz基础模型；未覆盖的NTT/驻留区间保留默认。paired恢复原精确位宽/B2实测收益门禁。B1不作为复用门槛。" />

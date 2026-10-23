@@ -1,10 +1,10 @@
 # GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.49.10，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.51.0，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
 ## 构建与启动
 
-运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；helper 不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。
+运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、群阶分析助手 `ecm_group_order_ui.exe` 及其 `gmp-10.dll`。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。独立 helper 默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
 
 运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。
 
@@ -97,6 +97,18 @@ Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚�
 
 “设置 → ELY宠物 → ELY皮肤”提供Classic ELY和三套装甲造型：Miss Pink Elf♪、Herrscher of Human: Ego、Hi♪ Love Elf♥。英文名及符号按装甲Wiki核对，名称来源与造型依据见 [资产说明](../../assets/gui_v2/skins/README.md)，动画可在 [离线皮肤预览](../web/ely-skins-20261022.html)比较。新皮肤沿用窗口边缘Q版比例，服饰、发型和头饰依据用户例图重绘，每套七状态×八帧；原版图集继续保留。点击立即更换，保持非激活宠物窗口及位置，清空旧帧缓存；正常退出或保存界面偏好持久化`pet.skin`。只加载当前图集，不预载全部皮肤。缺少选择的图集时提示文件名并关闭宠物，GUI继续运行。完整名称中的♪/♥使用系统Segoe UI Symbol补充字形，字体不随包分发。
 
+## 群阶分解 / Group Order Factor
+
+导航中的“群阶分解”使用与ECM概率页相同的两行曲线按钮：Edwards 和 Montgomery param 0/1/2/3。当前重建后端支持 Atkin–Morain Edwards（Z2 x Z8），其他 Edwards 概率模型按钮禁用并显示说明。输入十进制素因子 p 与完整 uint64 sigma；曲线、param、sigma 共同确定数学身份。计算的是该素域上的完整群阶和**原始构造点的点阶**，不包含计算 worker 后续施加的 choose12 / 48LCM 标量；二者不能与“有效点阶”混用。算法、证明资格和预算定义统一见 [群阶模块](../architecture/GROUP_ORDER.md)。
+
+“自动”优先PARI/GP，不可用时使用有预算的CPU/GMP；也可显式选GP或本地。GP默认等待30秒，本地单次预算2秒，GUI助手总截止45秒。运算在独立进程进行，页面切换和主界面继续响应；取消或退出会终止助手及其GP子进程。大素域可能无法在预算内完成，本地回退不保证解决全部GP输入。结果保留输入快照、实际后端、状态、模数素性、逐因子素性及回退原因；群阶未算出或点阶未完成时不显示为成功，部分分解显示剩余余因子。`complete`与全部素性已证明是不同条件；“概率素数”仍明确标为未证明。可复制当前完整JSON结果。
+
+在页面的GP路径栏输入或浏览选择`gp.exe`。“保存GP路径”只将`[gui] group_order_gp`写入当前工作流`ecm.toml`，保留注释及其他未改字段；未保存的计算配置仍保持草稿，外部文件发生变化时拒绝覆盖。相对目录路径以当前工作流目录解释，空值在PATH查找`gp`。该字段只供GUI助手使用，Stage1/Stage2的GP设置保持独立。路径尚未保存时也可以立即用于本页计算；选择后端和数学输入属于会话状态。
+
+页面自动扫描当前工作流目录中的`*result*.txt`，并纳入工作流已配置的结果文件；未载入工作流时扫描GUI程序目录。因此`results.json.txt`和`results.json_2.txt`会分别出现在来源下拉列表；也可用“选择结果文件”打开其他目录的TXT/JSON/JSONL，再用“重新扫描”刷新。每行必须是独立JSON对象，只导入`status=F`、`worktype=ECM`且包含可识别sigma的因子；支持普通Montgomery的顶层sigma/param、`Edwards.sigma`及`GMP-ECM-param3.sigma`，每个因子分别列出。点击记录填入p、sigma和算法，不会自动开始计算或改写来源。NF、缺失/越界sigma、冲突曲线标记和不支持的构造会跳过并显示计数；该导入不验证结果CRC或代替因子证明。单文件上限32MiB、20000个因子。
+
+独立分发需将`ecm_group_order_ui.exe`与匹配的`gmp-10.dll`放在GUI旁；缺少助手时只提示分析不能启动。PARI/GP不随候选包分发，用户单独安装并指定路径。助手不启动计算worker、不写队列、不修改GPU频率。专项验证入口为`tools/test/gui_v2/test_group_order.py`、`test_group_order_backend.py`及`ecm_gui_v2_group_order_test.exe`。
+
 ## 安装与替换皮肤
 
 皮肤PNG是外部资源，不嵌入exe，也不要求加入Git。程序固定从 **`ecm_gui_v2.exe` 同目录的 `assets` 文件夹**读取，与启动时的工作目录无关。三套新增皮肤的安装文件名为：
@@ -133,7 +145,7 @@ Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚�
 
 ## 独立候选包
 
-先用独立构建入口生成程序，再运行 `tools/build/package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新的目录>`；可用 `-Python` 指定解释器。包包含 GUI、宠物资产、使用/侧车说明、许可、逐文件 SHA256、构建源目录快照及 ZIP 校验，不覆盖旧版。不包含计算 worker、系统字体、Vulkan loader、开发层或 Microsoft runtime；更新 worker 另行安装，1024-bit 专用验收 worker 不能作为完整发布替代。
+先用独立构建入口生成程序，再运行 `tools/build/package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新的目录>`；可用 `-Python` 指定解释器。包包含GUI、群阶分析助手及匹配GMP DLL、宠物资产、使用/侧车说明、许可、逐文件SHA256、构建源目录快照及ZIP校验，不覆盖旧版。源码包包含助手所用的本地GMP源码、构建配置及安装文件，DLL可替换；本机Zen3/BMI2依赖的跨CPU兼容性尚未验证。不包含计算worker、PARI/GP、系统字体、Vulkan loader、开发层或Microsoft runtime；更新worker另行安装，1024-bit专用验收worker不能作为完整发布替代。
 
 v2 自带 UTF-8 进程 manifest，使复用的窄字符文件接口在支持的 Windows 版本上处理中文路径；不改变系统代码页或旧 GUI。依据：[Microsoft 进程 UTF-8 文档](https://learn.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page)。计算 worker 的非 ASCII 路径兼容性须按其自身构建单独确认。
 

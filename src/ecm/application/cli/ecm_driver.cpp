@@ -212,7 +212,9 @@ static void print_ecm_usage(const char *prog) {
               << "  -v                   Verbose output\n"
               << "  -save <file>         Append factorization lines to file\n"
               << "  -savea <file>        Same as -save (append mode)\n"
-              << "  --go                 Print group order diagnostics (requires gp/PARI)\n"
+              << "  --go                 Print optional group order diagnostics (GP preferred, CPU fallback)\n"
+              << "  --go-backend <mode>  auto (default), gp or native; diagnosis never changes task status\n"
+              << "  --go-gp-timeout <s>  GP diagnostic deadline in seconds (1..600; default 30)\n"
               << "  --gp <path>          Path to gp executable (default: gp on PATH)\n"
               << "  --mul <path>         Montgomery mul kernel path (OpenCL only)\n"
               << "  --sqr <path>         Montgomery sqr kernel path (OpenCL only)\n"
@@ -401,6 +403,7 @@ int main(int argc, char **argv){
     int sigma_param_claim = -1;     /* "-sigma i:s" -> i (gmp-ecm: selects -param i) */
     bool sigma_param_set = false;
     bool print_group_order = false;
+    ecm_diagnostics::Settings go_settings;
     std::string savefilename;
     bool saveappend = false;
     std::string gp_bin_path;
@@ -559,6 +562,22 @@ int main(int argc, char **argv){
         }
         if(a == "--go") {
             print_group_order = true;
+            continue;
+        }
+        if(a == "--go-backend") {
+            if(i+1>=argc){std::cerr<<"Error, --go-backend requires auto, gp or native\n";return 1;}
+            try{go_settings.backend=ecm_diagnostics::parse_backend(argv[++i]);}
+            catch(const std::exception &e){std::cerr<<"Error, "<<e.what()<<'\n';return 1;}
+            continue;
+        }
+        if(a == "--go-gp-timeout") {
+            if(i+1>=argc){std::cerr<<"Error, --go-gp-timeout requires seconds (1..600)\n";return 1;}
+            const std::string value=argv[++i];
+            if(value.empty() || value.size()>3 || value.find_first_not_of("0123456789")!=value.npos ||
+               std::strtoul(value.c_str(),nullptr,10)<1 || std::strtoul(value.c_str(),nullptr,10)>600){
+                std::cerr<<"Error, --go-gp-timeout must be 1..600 seconds\n";return 1;
+            }
+            go_settings.gp_timeout_ms=std::strtoul(value.c_str(),nullptr,10)*1000;
             continue;
         }
         if(a == "--gp" && i+1<argc) {
@@ -759,18 +778,9 @@ int main(int argc, char **argv){
         }
     }
 
-    // Early check: when --go is requested, ensure gp/PARI is available before any GPU init.
-    std::string go_gp_exe;
-    if (print_group_order) {
-        go_gp_exe = resolve_gp_path(get_gp_executable(gp_bin_path));
-        if (!gp_executable_exists(go_gp_exe)) {
-            std::cerr << "gp executable not found: " << go_gp_exe << "\n"
-                      << "Please provide the gp path with: --gp <path/to/gp>\n"
-                      << "(If gp/PARI is installed, ensure 'gp' is on PATH, "
-                      << "or use --gp to specify the full path.)" << std::endl;
-            return 1;
-        }
-    }
+    // Diagnosis follows durable task publication; GP availability is not admission.
+    go_settings.gp=resolve_gp_path(get_gp_executable(gp_bin_path));
+    ecm_diagnostics::Session go_session(go_settings);
 
     std::cout << "ecm driver starting" << std::endl;
     std::cout << "  curve_model: " << ecm_stage1::curve_model_name(selection.curve)
@@ -959,10 +969,6 @@ int main(int argc, char **argv){
     auto result=run_stage1_task({N,B1,B2,gpucurves,savefilename,saveappend,nline,opt},stage1_tasks);
     const int rc1=result.task_return();
 
-    std::vector<uint32_t> go_primes;
-    if (print_group_order) {
-        build_primes_up_to_B1(B1, go_primes);
-    }
 
     // Failed/stopped tasks may have no result arrays or only a partial owned
     // payload. Inspect factors only after successful execution; the owner
@@ -993,7 +999,10 @@ int main(int argc, char **argv){
                           << " execution_target=" << target_token
                           << " save=" << savefilename << "\n";
                 free(s);
-                if (print_group_order && !print_group_order_factor(result,i,go_param,go_gp_exe,go_primes))return 1;
+                if (print_group_order)print_group_order_factor(result,i,go_param,go_session,B1,
+                    opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards?48:
+                        opt.execution.selection.scalar_construction==ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12?12:1,
+                    opt.execution.selection.curve==ecm_stage1::CurveModel::Montgomery?ecm_group_order::Family::Montgomery:ecm_group_order::Family::Edwards);
             }
         }
 

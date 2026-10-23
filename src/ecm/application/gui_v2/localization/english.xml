@@ -400,6 +400,49 @@
       <Item id="gpu.clock_invalid" name="Enter an ordered min/max pair within the supported MHz range." />
       <Item id="gpu.clock_disconnected" name="GPU unavailable or identity changed. Refresh before retrying." />
       <Item id="gpu.clock_failed" name="GPU clock operation failed; see the driver message below." />
+      <Item id="go.title" name="Group Order Factor" />
+      <Item id="go.description" name="Reconstruct the original curve over a prime factor; compute group order, point order and factorizations. GP is preferred, with a bounded local fallback." />
+      <Item id="go.unsupported" name="This Edwards construction is not implemented by the order engine." />
+      <Item id="go.factor" name="Prime factor p" />
+      <Item id="go.gp_path" name="GP executable" />
+      <Item id="go.save_path" name="Save GP path to ecm.toml" />
+      <Item id="go.gp_hint" name="Empty: find gp in PATH. Relative paths use the workflow directory." />
+      <Item id="go.auto" name="GP + local fallback" />
+      <Item id="go.native" name="Local CPU/GMP" />
+      <Item id="go.calculate" name="Calculate orders" />
+      <Item id="go.cancel" name="Cancel analysis" />
+      <Item id="go.running" name="Analyzing in a separate process. GP: 30 s; local fallback: 2 s; total deadline: 45 s." />
+      <Item id="go.status" name="Status" />
+      <Item id="go.backend" name="Backend" />
+      <Item id="go.primality" name="Modulus primality" />
+      <Item id="go.proof" name="Proof qualification" />
+      <Item id="go.proven" name="Proven" />
+      <Item id="go.conditional" name="Conditional / incomplete" />
+      <Item id="go.group_order" name="Group order #E(F_p)" />
+      <Item id="go.point_order" name="Original point order ord(P)" />
+      <Item id="go.group_factorization" name="Group order factorization" />
+      <Item id="go.point_factorization" name="Point order factorization" />
+      <Item id="go.remaining" name="Unfactored cofactor" />
+      <Item id="go.fallback" name="GP fallback reason" />
+      <Item id="go.copy" name="Copy analysis JSON" />
+      <Item id="go.finished" name="Order analysis finished" />
+      <Item id="go.stale" name="Inputs changed; the result belongs to the snapshot above." />
+      <Item id="go.incomplete" name="Not completed" />
+      <Item id="go.result_files" name="Import sigma and factors from results" />
+      <Item id="go.refresh" name="Rescan result files" />
+      <Item id="go.choose_file" name="Choose result file" />
+      <Item id="go.select_file" name="Select a result file" />
+      <Item id="go.records_hint" name="Select a factor row to fill the inputs. Files are read-only; NF and entries without a valid sigma are skipped." />
+      <Item id="go.open_config" name="Open a workflow TOML before saving the GP path." />
+      <Item id="go.saved" name="GP path saved" />
+      <Item id="go.status.complete" name="Complete" />
+      <Item id="go.status.partial" name="Partial" />
+      <Item id="go.status.resource_limit" name="Resource limit" />
+      <Item id="go.status.invalid_input" name="Invalid input" />
+      <Item id="go.primality.composite" name="Composite" />
+      <Item id="go.primality.probable" name="Probable prime (unproven)" />
+      <Item id="go.primality.proven" name="Proven prime" />
+      <Item id="go.browse" name="Browse" />
     </Panel>
   </Native-Langue>
 </EcmGui>

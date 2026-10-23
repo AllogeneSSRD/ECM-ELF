@@ -308,6 +308,7 @@ struct GuiValues {
     std::string start_tab="workers";
     std::string exit_confirm="ask";
     int64_t graceful_stop_ms=300000;
+    std::string group_order_gp="";
 };
 inline const Binding<GuiValues> gui_bindings[]={
     {"gpu_clock_ranges",[](GuiValues&c,const std::string&v){c.gpu_clock_ranges=v;}},
@@ -328,6 +329,7 @@ inline const Binding<GuiValues> gui_bindings[]={
     {"start_tab",[](GuiValues&c,const std::string&v){c.start_tab=v;}},
     {"exit_confirm",[](GuiValues&c,const std::string&v){c.exit_confirm=(v=="ask"||v=="stop"||v=="kill")?v:"ask";}},
     {"graceful_stop_ms",[](GuiValues&c,const std::string&v){c.graceful_stop_ms=gui_long(v,300000,1000,3600000);}},
+    {"group_order_gp",[](GuiValues&c,const std::string&v){c.group_order_gp=v;}},
 };
 inline GuiValues read_gui(const Entries &entries){GuiValues c;apply(c,entries,gui_bindings);return c;}
 struct WorkerValues {

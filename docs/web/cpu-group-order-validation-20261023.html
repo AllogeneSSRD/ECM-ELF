@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CPU/GMP 群阶与点阶 · 验证与主程序接入</title>
+<style>
+:root{color-scheme:light dark;--bg:#f7f8fa;--fg:#17212a;--muted:#52616d;--line:#d8dfe5;--accent:#126378;--panel:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#151a20;--fg:#e3e9ef;--muted:#aab7c3;--line:#37434e;--accent:#7dc6dc;--panel:#1c242d}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.7 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:1100px;margin:auto;padding:40px 24px}h1{font-size:30px;line-height:1.35;margin:8px 0 16px}h2{font-size:21px;margin:32px 0 12px}p{margin:10px 0}.meta,.note{color:var(--muted);font-size:14px}.lead{font-size:19px;color:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:24px;margin:30px 0}.stat{padding:14px 0;border-top:2px solid var(--line)}.stat strong{display:block;font-size:28px;font-weight:650}.stat span{color:var(--muted)}
+.scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;background:var(--panel)}th,td{text-align:left;padding:13px 15px;border-bottom:1px solid var(--line)}th{font-size:14px;color:var(--muted);font-weight:600}td.num,th.num{text-align:right;white-space:nowrap}
+a{color:var(--accent)}.limit{border-left:3px solid var(--accent);padding:10px 20px;margin:24px 0}details{margin-top:20px;border-top:1px solid var(--line);padding-top:14px}summary{cursor:pointer}code{font-size:13px;overflow-wrap:anywhere}.foot{margin-top:36px;padding-top:18px;border-top:1px solid var(--line)}
+</style>
+<main>
+<div class="meta">ECM-ELF · 2026-10-23 · CPU/GMP 独立模块 · run_02</div>
+<h1>整数分解、群阶与点阶计算已实现</h1>
+<p class="lead">数据集验证通过。完整群阶计数已有正确性基线，性能尚未达到 GP。</p>
+<p>本页记录独立模块的数据集与性能基线，未写工作数据库。0.51.0 已增加 Stage1 <code>--go</code> 和 Stage2 附加分解的 GP 优先回退，当前行为见<a href="../architecture/GROUP_ORDER.md">正式模块说明</a>。</p>
+<h2>0.51.0 主程序接入已通过验证</h2>
+<p>Stage1 <code>--go</code> 默认优先使用 GP，缺失、超时或异常时尝试有预算的 CPU/GMP。Stage1 验证通过后，Stage2 的 <code>--factorize-hits</code> 已采用相同策略。因子先保存和发布，再执行可选诊断；诊断未完成保持原始因子和主计算成功状态。</p>
+<div class="stats">
+<div class="stat"><strong>24 / 24</strong><span>Stage1 CPU 路径<br>服务故障与实际命中验证</span></div>
+<div class="stat"><strong>24 / 24</strong><span>Stage1 CUDA 路径<br>RTX 4060 Laptop GPU 实际命中</span></div>
+<div class="stat"><strong>10 / 10</strong><span>Stage2 真实队列<br>saved-X 命中、发布和重启回执</span></div>
+</div>
+<p class="note">每组 Stage1 包含相同的 12 个服务检查和各自 12 个实际 CLI 检查。Stage2 使用 CPU saved-X shortcut，未额外验证 GPU Stage2 算术。另有既有 Stage2 前端 2/2 与核心 CTest 1/1 通过。完整记录见<a href="../development/LOCAL_GROUP_ORDER_DRAFT.md#0510-主程序-gp-优先回退实施验收">实施草稿</a>与<a href="../../data/experiments/go_fallback_20261023/acceptance.json">本机验收索引</a>。</p>
+<div class="limit">本地诊断每例最多约 2 秒、session 累计约 10 秒，另有表项与迭代上限；无法完成时明确标注状态、余因子及素性资格。大于 uint64 的概率素数不冒充已证素因子。GP 数学错误单独报告；GP 本身不可用才自动回退。</div>
+<h2>独立模块的数据集与性能基线</h2>
+<div class="stats">
+<div class="stat"><strong>2,688 / 2,688</strong><span>原始点阶及分解匹配<br>输入已有完整分解，重新验证</span></div>
+<div class="stat"><strong>2,554 + 134</strong><span>完整分解 + 保留正确余因子<br>每例 250 ms，全部乘积匹配</span></div>
+<div class="stat"><strong>54 + 21</strong><span>群阶完成匹配 + 达到表预算<br>75 例分层尝试，大域明确未完成</span></div>
+</div>
+<h2>正确性覆盖与证明资格</h2>
+<p>只读默认库 2,671 条已有阶记录，加上 17 条 Edwards 冻结参考；另有 35 组 GP 独立构造对照，覆盖 Montgomery param 0/1/2/3、Edwards、完整 uint64 sigma 和退化输入。测试构建与独立 CMake Release 构建均通过自测，CTest 1/1 通过。</p>
+<div class="limit"><strong>数值匹配与素性证明分别记录。</strong><br>1,624 组点阶结果的素性资格为本地 proven；其余 1,064 组包含大于 uint64 的 probable 素性分类，正确性比对使用数据集已有的外部证明。当前模块没有大整数素性证明器。</div>
+<h2>相同 24 个输入、3 轮交替执行：进程批次中位耗时</h2>
+<div class="scroll"><table>
+<thead><tr><th>工作负载</th><th class="num">CPU/GMP</th><th class="num">GP 2.17.3</th><th>当前结论</th></tr></thead>
+<tbody>
+<tr><td>构造 + 完整群阶 + 分解 + 点阶</td><td class="num">1,550.68 ms</td><td class="num">189.23 ms</td><td>本地耗时约为 GP 的 8.19 倍</td></tr>
+<tr><td>仅整数分解</td><td class="num">43.37 ms</td><td class="num">116.11 ms</td><td>该批次本地耗时较低</td></tr>
+<tr><td>构造 + 点阶，提供已有分解</td><td class="num">66.78 ms</td><td class="num">121.80 ms</td><td>该批次本地耗时较低</td></tr>
+</tbody></table></div>
+<p class="note">计时包括每批一个进程的启动、输入输出及该工作负载计算，串行单线程。后两项受启动与调度影响明显，不能直接解释为算术核心的加速。完整冻结输入及 sigma 见原始证据；p 跨至 85608965982066833903。</p>
+<h2>全库的模块内部耗时分布</h2>
+<div class="scroll"><table>
+<thead><tr><th>操作</th><th class="num">输入数</th><th class="num">中位数</th><th class="num">P95</th></tr></thead>
+<tbody>
+<tr><td>整数分解，仅完整完成样本</td><td class="num">2,554</td><td class="num">0.3354 ms</td><td class="num">14.6564 ms</td></tr>
+<tr><td>点阶，提供已有分解</td><td class="num">2,688</td><td class="num">1.9894 ms</td><td class="num">11.7797 ms</td></tr>
+</tbody></table></div>
+<p class="note">每个不同输入测一次；从模块入口到返回，不含启动、解析和日志。134 个部分分解不计入第一行，不能以该行代表全部输入成本。内部阶段与总时间存在包含关系，不能相加。</p>
+<h2>已实现范围</h2>
+<p>试除、完全幂、Pollard–Brent rho；保留余因子的部分结果；正确模型映射；Jacobian 标量乘；枚举及 BSGS/Mestre 配合二次扭曲 CRT 的群阶计数；从已知群阶或其他消去倍数恢复原始点阶。输入倍数不会被标为已计算群阶。</p>
+<p>完整计数受 baby 表预算限制，38～49 位十进制 Edwards 参考全部明确停止。主程序已接入有预算的 GP 回退；SEA、补充分解后端与大整数素性证明尚未实现。计数性能优化可研究批量归一化和表结构。</p>
+<details><summary>实验条件与二进制身份</summary>
+<p class="note">AMD Ryzen AI 9 HX 370 · Windows x64 · 单线程共享桌面 · 频率未固定 · 功耗未测。MSVC 19.51.36260，/O2 /MD /std:c++17，GMP 6.3.0。独立 CMake 构建另行自测，不用于这些性能数据。</p>
+<p>探针 SHA256：<code>4ef02d5c43243e112917cc9f28166cde94881208e27012afd3421bac597c25db</code></p>
+<p>摘要 SHA256：<code>500e5ac1c96d7557c82376b59413fcce2f55b6ac0401099bb29d000be8c46e15</code></p>
+<p class="note">第一次完整验证保存在 run_01；本页以 run_02 为基线。墙钟预算的完成数量随共享桌面负载略有变化，完整原始记录均保留。</p>
+</details>
+<div class="foot"><a href="../architecture/GROUP_ORDER.md">当前模块说明</a> · <a href="../development/LOCAL_GROUP_ORDER_DRAFT.md">研究与验收草稿</a> · <a href="../../data/experiments/cpu_group_order_20261023/run_02/summary.json">本机原始摘要</a>
+<p class="note">原始数据、可执行文件及全部请求/响应在 Git 忽略的 data/experiments/ 下。临时草稿保留，后续由用户决定处理。</p></div>
+</main>
+</html>

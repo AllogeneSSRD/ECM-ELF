@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     assert(!ecmgui_v2::pet::find_skin("../../arbitrary-image"));
     assert(!state.ui_external_windows);state.ui_external_windows=true;
     assert(!state.window_title_bar);state.window_title_bar=true;
-    assert(state.ui_nav_order=="0123456");state.ui_nav_order="4012356";
+    assert(state.ui_nav_order=="01237456");state.ui_nav_order="40123567";
     assert(state.ui_font_size==15);state.ui_font_size=24;
     assert(state.ui_primary_font_offset==1&&state.ui_secondary_font_offset==-2);state.ui_primary_font_offset=4;state.ui_secondary_font_offset=-4;
     assert(state.ui_gpu_history_seconds==60);state.ui_gpu_history_seconds=120;
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
     assert(copy.ui_theme == "light" && copy.ui_language == "zh" && copy.pet_enabled && copy.pet_left == 126.5f);
     assert(copy.worker_stage1_exe == state.worker_stage1_exe && copy.layout() == state.layout());
     assert(copy.ui_external_windows);
-    assert(copy.window_title_bar&&copy.ui_nav_order=="4012356");
+    assert(copy.window_title_bar&&copy.ui_nav_order=="40123567");
     assert(copy.ui_font_size==24);
     assert(copy.ui_primary_font_offset==4&&copy.ui_secondary_font_offset==-4);
     assert(copy.ui_gpu_history_seconds==120);
@@ -51,7 +51,8 @@ int main(int argc, char** argv) {
     assert(copy.pet_skin=="hi_love_elf");
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
     const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
-    ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts&&!migrated.ui_external_windows&&!migrated.window_title_bar&&migrated.ui_font_size==15&&migrated.ui_gpu_history_seconds==60&&migrated.ui_nav_order=="0123456");
+    ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts&&!migrated.ui_external_windows&&!migrated.window_title_bar&&migrated.ui_font_size==15&&migrated.ui_gpu_history_seconds==60&&migrated.ui_nav_order=="01237456");
+    {const auto old=dir/"seven-pages.toml";{std::ofstream out(old);out<<"[ui]\nnav_order=\"4012356\"\nright_pages=16\n";}ecmgui_v2::UiState previous;previous.path=old;assert(previous.load()&&previous.ui_nav_order=="40123567"&&previous.ui_right_pages==16);}
     for(const auto order:{"0012345","012345","0123457"}){
         const auto invalid_order=dir/(std::string("invalid-order-")+order+".toml");{std::ofstream out(invalid_order);out<<"[ui]\nnav_order=\""<<order<<"\"\n";}
         ecmgui_v2::UiState bad_order;bad_order.path=invalid_order;assert(!bad_order.load()&&!bad_order.save());

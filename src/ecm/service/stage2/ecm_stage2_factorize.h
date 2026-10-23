@@ -1,5 +1,9 @@
 #pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#include "../diagnostics/order_analysis.h"
 #include <gmp.h>
 #include <filesystem>
 #include <fstream>
@@ -48,87 +52,43 @@ inline std::vector<std::string> result_factors(const std::string &json) {
         if(pos>=json.size() || json[pos++]!=',')throw std::runtime_error("invalid engine factor separator");
     }
 }
+
 inline std::string factor_details(const std::string &engine_result,const mpz_t modulus,
                                    const std::filesystem::path &gp,unsigned timeout_seconds,
                                    const std::filesystem::path &directory) {
-    std::set<std::string> unique_primes;bool complete=true;std::string details="[";
-    size_t ordinal=0;
+    using namespace ecm_group_order;
+    ecm_diagnostics::Settings settings;settings.gp=gp.string();settings.gp_timeout_ms=uint64_t(timeout_seconds)*1000;
+    ecm_diagnostics::Session session(settings);
+    std::set<std::string> unique_primes;bool complete=true;std::string details="[";size_t ordinal=0;
     for(const auto &raw:result_factors(engine_result)) {
-        mpz_t value,reconstructed,prime,power;mpz_inits(value,reconstructed,prime,power,nullptr);
-        if(mpz_set_str(value,raw.c_str(),10) || mpz_cmp_ui(value,1)<=0 || mpz_cmp(value,modulus)>=0 ||
-           !mpz_divisible_p(modulus,value)) {
-            mpz_clears(value,reconstructed,prime,power,nullptr);
+        Integer n(raw);
+        if(mpz_cmp_ui(n.v,1)<=0 || mpz_cmp(n.v,modulus)>=0 || !mpz_divisible_p(modulus,n.v))
             throw std::runtime_error("engine reported an invalid factor");
+        auto result=session.factor(n);const auto &value=result.value;
+        const bool proven_complete=value.status==Status::Complete && value.all_proven;
+        complete=complete && proven_complete;
+        std::string status=proven_complete?"complete":value.factors.empty()?"unresolved":"partial";
+        std::string reason=value.reason;
+        if(reason.empty() && !proven_complete)reason="primality_unproven";
+        // Diagnostic logging is best effort, never admission for publishing raw hits.
+        std::string log;
+        if(!result.gp_output.empty())try {
+            std::filesystem::create_directories(directory);
+            const auto path=directory/(std::to_string(GetCurrentProcessId())+"_"+std::to_string(GetTickCount64())+"_"+std::to_string(ordinal)+".log");
+            std::ofstream file(path,std::ios::binary);file<<result.gp_output;if(file)log=path.string();
+        }catch(const std::exception &){}
+        if(ordinal++)details+=',';
+        details+="{\"raw\":"+json_quote(raw)+",\"log\":"+json_quote(log)+",\"backend\":"+json_quote(result.backend)+
+            ",\"status\":"+json_quote(status)+",\"reason\":"+json_quote(reason)+",\"gp_failure\":"+json_quote(result.gp_failure)+
+            ",\"remaining_cofactor\":"+json_quote(value.cofactor.str())+",\"prime_powers\":[";
+        for(size_t i=0;i<value.factors.size();++i){
+            const auto &part=value.factors[i];if(i)details+=',';
+            const bool proven=part.primality==Primality::Proven;
+            if(proven)unique_primes.insert(part.prime.str());
+            details+="{\"factor\":"+json_quote(part.prime.str())+",\"multiplicity\":"+std::to_string(part.exponent)+
+                ",\"proven\":"+(proven?"true":"false")+",\"primality\":"+json_quote(name(part.primality))+"}";
         }
-        std::filesystem::create_directories(directory);
-        const auto stem=std::to_string(GetCurrentProcessId())+"_"+std::to_string(GetTickCount64())+"_"+std::to_string(++ordinal);
-        const auto script=directory/(stem+".gp"),log=directory/(stem+".log");
-        std::ofstream out(script,std::ios::binary);
-        out<<"ecm_split(n)={my(f=factor(n),v=1);for(i=1,matsize(f)[1],"
-              "if(!isprime(f[i,1]),error(\"unproven factor\"));v*=f[i,1]^f[i,2];"
-              "print(\"FACTOR \",f[i,1],\" \",f[i,2]));"
-              "if(v!=n,error(\"factor product\"));print(\"OK\")};\necm_split("<<raw<<");\nquit();\n";
-        out.close();if(!out)throw std::runtime_error("cannot write factor analysis script");
-        SECURITY_ATTRIBUTES attributes{sizeof(attributes),nullptr,TRUE};NativeHandle output,input,process,thread;
-        output.value=CreateFileW(log.c_str(),GENERIC_WRITE,FILE_SHARE_READ,&attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
-        input.value=CreateFileW(L"NUL",GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,&attributes,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
-        std::string failure;DWORD exit_code=1;
-        if(output.value==INVALID_HANDLE_VALUE || input.value==INVALID_HANDLE_VALUE)failure="log_open_failed";
-        else {
-            STARTUPINFOW startup{};startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESTDHANDLES;
-            startup.hStdOutput=startup.hStdError=output.value;startup.hStdInput=input.value;
-            PROCESS_INFORMATION info{};auto command=process_quote(gp.wstring())+L" -q -f "+process_quote(script.wstring());
-            if(!CreateProcessW(nullptr,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&info))failure="gp_launch_failed";
-            else {
-                process.value=info.hProcess;thread.value=info.hThread;
-                const auto wait=WaitForSingleObject(process.value,timeout_seconds*1000);
-                if(wait!=WAIT_OBJECT_0) {
-                    TerminateProcess(process.value,2);WaitForSingleObject(process.value,5000);
-                    failure=wait==WAIT_TIMEOUT ? "gp_timeout" : "gp_wait_failed";
-                } else if(!GetExitCodeProcess(process.value,&exit_code) || exit_code)failure="gp_exit_failed";
-            }
-        }
-        if(output.value!=INVALID_HANDLE_VALUE){CloseHandle(output.value);output.value=INVALID_HANDLE_VALUE;}
-        std::vector<std::pair<std::string,unsigned long>> parts;bool ok=false;
-        mpz_set_ui(reconstructed,1);
-        if(failure.empty()) {
-            std::error_code error;const auto bytes=std::filesystem::file_size(log,error);
-            if(error || bytes>2*1024*1024)failure="gp_output_invalid";
-            else {
-                std::ifstream input_log(log);std::string line;
-                while(std::getline(input_log,line)) {
-                    line.erase(std::remove(line.begin(),line.end(),'\r'),line.end());
-                    if(line=="OK")ok=true;
-                    if(line.compare(0,7,"FACTOR "))continue;
-                    std::istringstream row(line.substr(7));std::string p,extra;unsigned long e=0;
-                    if(!(row>>p>>e) || row>>extra || !e || e>8192 || p.empty() ||
-                       p.size()>2500 || p.find_first_not_of("0123456789")!=p.npos ||
-                       mpz_set_str(prime,p.c_str(),10) || mpz_cmp_ui(prime,2)<0 || mpz_cmp(prime,value)>0 ||
-                       (mpz_sizeinbase(prime,2)-1)*e>mpz_sizeinbase(value,2)) {
-                        failure="gp_factor_invalid";break;
-                    }
-                    for(const auto &old:parts)if(old.first==p)failure="gp_duplicate_factor";
-                    if(!failure.empty())break;
-                    mpz_pow_ui(power,prime,e);mpz_mul(reconstructed,reconstructed,power);
-                    if(mpz_cmp(reconstructed,value)>0){failure="gp_factor_product_exceeded";break;}
-                    parts.emplace_back(p,e);
-                }
-                if(!input_log.eof() && !input_log)failure="gp_output_read_failed";
-                if(!ok || mpz_cmp(reconstructed,value))failure="gp_factorization_incomplete";
-            }
-        }
-        if(ordinal>1)details+=',';
-        details+="{\"raw\":"+json_quote(raw)+",\"log\":"+json_quote(log.string())+",\"status\":";
-        if(!failure.empty()) {complete=false;details+="\"unresolved\",\"reason\":"+json_quote(failure)+",\"prime_powers\":[]}";}
-        else {
-            details+="\"complete\",\"prime_powers\":[";
-            for(size_t i=0;i<parts.size();++i) {
-                if(i)details+=',';unique_primes.insert(parts[i].first);
-                details+="{\"factor\":"+json_quote(parts[i].first)+",\"multiplicity\":"+std::to_string(parts[i].second)+",\"proven\":true}";
-            }
-            details+="]}";
-        }
-        mpz_clears(value,reconstructed,prime,power,nullptr);
+        details+="]}";
     }
     details+=']';std::string primes="[";
     for(const auto &p:unique_primes){if(primes.size()>1)primes+=',';primes+=json_quote(p);}primes+=']';

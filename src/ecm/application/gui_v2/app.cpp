@@ -33,13 +33,13 @@ App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log
     // Read old page/sidecar IDs without keeping Settings in the dock workspace.
     if(state.ui_page==5){state.ui_page=0;open_settings();}
     if(state.ui_right_pages&(1<<5)){state.ui_right_pages&=~(1<<5);reset_layout=true;}
-    if((state.ui_right_pages&95)==95){state.ui_right_pages&=~1;reset_layout=true;}
-    if(state.ui_right_page==5)for(int i:{4,3,2,1,0,6})if(ui::pinned(state.ui_right_pages,i)){state.ui_right_page=i;break;}
+    if((state.ui_right_pages&223)==223){state.ui_right_pages&=~1;reset_layout=true;}
+    if(state.ui_right_page==5)for(int i:{4,3,2,1,0,6,7})if(ui::pinned(state.ui_right_pages,i)){state.ui_right_page=i;break;}
     if(state.ui_right_pages){
         if(!state.ui_right_visible||state.layout().find("v2.tools")!=std::string::npos)reset_layout=true;
         state.ui_right_visible=true;
     }
-    if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<7;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
+    if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<8;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
         if(notice.kind==ecmgui::WorkerNotice::Kind::StageChanged)
             for(const auto& worker:controller.workers())if(worker.index==notice.worker&&!supports_owner(worker.exe))
@@ -76,6 +76,8 @@ bool App::load_config(const std::string& input) {
             throw std::runtime_error("Business TOML and UI sidecar must be distinct");
         std::string error; ecmgui::TomlFile candidate;
         if (!candidate.load(path, error)) throw std::runtime_error(error);
+        group_order_job.cancel();
+        group_order_loaded=false;
         config = std::move(candidate); config_path = path; leases_.clear(); verified_.clear();log_views_.clear();log_last_worker_=-1;
         saved_clock_profiles.clear();saved_clock_automatic.clear();clock_drafts.clear();
         clock_profiles_valid=parse_clock_profiles(config.get("gui","gpu_clock_ranges"),saved_clock_profiles,&saved_clock_automatic);
@@ -145,6 +147,7 @@ bool App::start(int index) {
 }
 void App::tick() {
     tick_gpu_clocks();
+    if(group_order_job.poll())toast(group_order_job.error.empty()?ui::text("go.finished",state.ui_language=="zh"):group_order_job.error,!group_order_job.error.empty());
     if (autostart_pending) {
         autostart_pending = false;
         for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);
@@ -401,7 +404,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     nav_drag_page=-1;nav_return={};
     const auto nav_palette=ui::palette(active.light);const float nav_scale=ImGui::GetFontSize()/15.f;
     nav_rounding=8*nav_scale;nav_item_height=std::max(40*nav_scale,ImGui::GetTextLineHeight()+16*nav_scale);nav_item_gap=8*nav_scale;
-    size_t nav_count=1;for(int i=0;i<7;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i))++nav_count;
+    size_t nav_count=1;for(int i=0;i<8;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i))++nav_count;
     const float nav_top=ImGui::GetCursorPosY(),nav_bottom=ImGui::GetWindowSize().y-ImGui::GetStyle().WindowPadding.y;
     const float available_height=nav_bottom-nav_top,drop_height=ImGui::GetFrameHeight()+8*nav_scale,row_count=static_cast<float>(nav_count);
     const bool short_nav=available_height<row_count*(nav_item_height+nav_item_gap)+drop_height+60*nav_scale;
@@ -931,6 +934,7 @@ void App::draw_page(const ui::Settings& active, const ui::Fonts& fonts,int page)
     case 3: draw_probability(fonts.chinese); break;
     case 4: draw_gpu(fonts.chinese); break;
     case 5: open_settings(); break;
+    case 7: draw_group_order(fonts.chinese); break;
     case 6: ui::state_strip(ui::palette(active.light),active.scale,fonts.chinese); break;
     }
 }

@@ -112,7 +112,7 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
             if (w == 4) current_app->request_close();
             if (w == 5) current_app->controller.cancel_close();
             if (w == 6) current_app->test_float = l != 0;
-            if (w == 7 && l >= 0 && l <= 6) {if(l==5)current_app->open_settings();else {current_app->settings_open=false;current_app->state.ui_page=static_cast<int>(l);}}
+            if (w == 7 && l >= 0 && l <= 7) {if(l==5)current_app->open_settings();else {current_app->settings_open=false;current_app->state.ui_page=static_cast<int>(l);}}
             if(w==11&&l>=0&&l<6)current_app->open_settings(static_cast<int>(l));
             if(w==12)current_app->settings_open=false;
             if (w == 8 && l >= -1 && l <= 6) current_app->pet_test_mood = static_cast<int>(l);
@@ -370,7 +370,7 @@ int run(const Options& options, int show, FILE* log) {
             std::fprintf(log,"interaction_sample: page=%d visible=%zu scroll=%.3f toasts=%zu f=%ld,%ld nf=%ld,%ld wheel=%ld,%ld start=%ld,%ld stop=%ld,%ld\n",state.ui_page,app.result_indices.size(),app.result_scroll,app.toasts.size(),f.x,f.y,nf.x,nf.y,wheel.x,wheel.y,start.x,start.y,stop.x,stop.y);std::fflush(log);
             const auto drop=point(app.nav_drop),back=point(app.nav_return),english=point(app.language_items[0]),chinese=point(app.language_items[1]),save=point(app.save_ui_control),calculate=point(app.calculate_control);
             std::fprintf(log,"usability_sample: page=%d mask=%d right=%d shown=%d zh=%d charts=%d drop=%ld,%ld back=%ld,%ld en=%ld,%ld cn=%ld,%ld save=%ld,%ld calculate=%ld,%ld",state.ui_page,state.ui_right_pages,state.ui_right_page,state.ui_right_visible,fonts.chinese,app.probability_ready,drop.x,drop.y,back.x,back.y,english.x,english.y,chinese.x,chinese.y,save.x,save.y,calculate.x,calculate.y);
-            for(int i=0;i<7;++i){const auto nav=point(app.nav_items[i]),right=point(app.right_items[i]);std::fprintf(log," nav%d=%ld,%ld tool%d=%ld,%ld",i,nav.x,nav.y,i,right.x,right.y);}
+            for(int i=0;i<8;++i){const auto nav=point(app.nav_items[i]),right=point(app.right_items[i]);std::fprintf(log," nav%d=%ld,%ld tool%d=%ld,%ld",i,nav.x,nav.y,i,right.x,right.y);}
             const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld settings=%d settings_category=%d\n",app.settings_matches,search.x,search.y,app.settings_open,app.settings_category);std::fflush(log);
             std::fprintf(log,"navigation_sample: order=%s dragged=%d rounding=%.1f height=%.1f gap=%.1f tools=%d right_count=%zu",state.ui_nav_order.c_str(),app.nav_drag_page,app.nav_rounding,app.nav_item_height,app.nav_item_gap,app.right_container_present,app.right_docks.size());
             std::fprintf(log," padding=%.1f nav_scroll=%.1f,%.1f scrollbars=%.0f,%.0f nav_size=%.0f,%.0f",app.nav_padding,app.nav_scroll.x,app.nav_scroll.y,app.nav_scrollbars.x,app.nav_scrollbars.y,app.nav_size.x,app.nav_size.y);
@@ -400,6 +400,12 @@ int run(const Options& options, int show, FILE* log) {
             for(int i=0;i<3;++i){const auto pos=point(app.title_controls[i]);std::fprintf(log," chrome%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");std::fflush(log);
             for(const auto& row:app.worker_summary_texts){if(row.first>3)break;std::fprintf(log,"worker_summary: index=%d text=%s\n",row.first,ecm_results::json::quote(row.second).c_str());}
             if(const auto* worker=app.selected()){const auto display=ecmgui_v2::ui::worker_progress(*worker,false);const auto batch=ecmgui_v2::ui::stage2_batch(worker->stage2_status,false);std::fprintf(log,"log_detail: worker=%d table_eta=%s | log_eta=%s | shape=%s | batch=%s | remaining=%s\n",worker->index,display.eta.c_str(),display.eta_detail.c_str(),ecmgui_v2::ui::worker_shape(*worker).c_str(),batch.label.c_str(),batch.remaining.c_str());}
+            {const auto calc=point(app.group_order_calculate),save=point(app.group_order_save),cancel=point(app.group_order_cancel);
+             std::fprintf(log,"group_order_ui: busy=%d profile=%d files=%zu records=%zu selected=%d status=%s group=%s point=%s calculate=%ld,%ld save=%ld,%ld cancel=%ld,%ld",app.group_order_job.busy(),app.group_order_input.profile,app.group_order_files.size(),app.group_order_records.size(),app.group_order_file,app.group_order_job.result.get("status").text().c_str(),app.group_order_job.result.get("group_order").text().c_str(),app.group_order_job.result.get("point_order").text().c_str(),calc.x,calc.y,save.x,save.y,cancel.x,cancel.y);
+             for(const auto&entry:app.group_order_form.fields){const auto a=point(entry.second.input_min),b=point(entry.second.input_max);std::fprintf(log," %s=%ld,%ld",entry.first.c_str(),(a.x+b.x)/2,(a.y+b.y)/2);}
+             for(const auto&entry:app.group_order_controls){const auto pos=point(entry.second);std::fprintf(log," go_%s=%ld,%ld",entry.first.c_str(),pos.x,pos.y);}
+             std::fprintf(log," backend=%d input_factor=%s input_sigma=%s",app.group_order_input.backend,app.group_order_input.factor.c_str(),app.group_order_input.sigma.c_str());
+             for(const auto&entry:app.group_order_curve_controls){const auto a=point(entry.second.first),b=point(entry.second.second);std::fprintf(log," curve%d=%ld,%ld",entry.first,(a.x+b.x)/2,(a.y+b.y)/2);}std::fprintf(log,"\n");}
             std::fprintf(log,"gpu_settings: seconds=%d",state.ui_gpu_history_seconds);
             for(int i=0;i<4;++i){const auto pos=point(app.gpu_range_controls[i]);std::fprintf(log," range%d=%ld,%ld",i,pos.x,pos.y);}std::fprintf(log,"\n");
             const auto primary_control=point(app.primary_offset_control),secondary_control=point(app.secondary_offset_control);

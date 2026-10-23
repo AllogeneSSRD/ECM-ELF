@@ -1,6 +1,6 @@
 # 独立 GUI v2：ImGui 现代化规划草稿
 
-状态：P0–P4 已完成，P5 待验收（默认DX11的完整性能矩阵未重测），P6 独立候选准备完成；0.49.10加入GPU频率悬浮设置、按UUID保存草稿及显式自动应用，复用现有采样；0.49.7统一导航图标、独立分组设置弹窗、单行弹性任务表、独立编号与等大启停按钮、紧凑耗时图及列表/双列切换；0.49.6压缩GPU图表并移除竖向网格/时间刻度、加入字号偏移、自适应任务布局和外部XML国际化；0.49.5 调整导航排序与右侧原生标签、默认隐藏系统标题栏并修复ELY拖动跟随，保留0.49.4的GPU页与悬停设备信息，保留0.49.3的任务表内部纵向滚动与日志/正文字体修复，保留0.49.2的字号、全部worker耗时图、Stage2批次及退出反馈，保留0.49.1的任务表与主题日志，保留默认DX11，可选Vulkan冻结根因待查。日期：2026-10-23。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。初始规划及P0–P6以Vulkan实施；0.47.8经用户授权将DX11设为默认，可选Vulkan不作为稳定路径。
+状态：P0–P4 已完成，P5 待验收（默认DX11的完整性能矩阵未重测），P6 独立候选准备完成；0.51.0加入群阶/点阶分解、GP路径持久化与双结果文件导入；0.49.10加入GPU频率悬浮设置、按UUID保存草稿及显式自动应用，复用现有采样；0.49.7统一导航图标、独立分组设置弹窗、单行弹性任务表、独立编号与等大启停按钮、紧凑耗时图及列表/双列切换；0.49.6压缩GPU图表并移除竖向网格/时间刻度、加入字号偏移、自适应任务布局和外部XML国际化；0.49.5 调整导航排序与右侧原生标签、默认隐藏系统标题栏并修复ELY拖动跟随，保留0.49.4的GPU页与悬停设备信息，保留0.49.3的任务表内部纵向滚动与日志/正文字体修复，保留0.49.2的字号、全部worker耗时图、Stage2批次及退出反馈，保留0.49.1的任务表与主题日志，保留默认DX11，可选Vulkan冻结根因待查。日期：2026-10-23。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。初始规划及P0–P6以Vulkan实施；0.47.8经用户授权将DX11设为默认，可选Vulkan不作为稳定路径。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -445,6 +445,24 @@ GPU三图基础卡片高64逻辑单位，宽度足够时合计192；图例与当
 - [真实worker兼容检查](../../data/experiments/gui_v2/worker_sync_04910_01/compatibility_final/result.json)31项通过：队列协议、版本、未配置/手动/自动频率记录、未知GUI键及其单次警告、纯界面类型跳过、NumWorkers保留、自动Stage2分发配置读取，以及未知计算键/分区、计算类型、GUI语法、重复键和必要分发值类型错误拒绝。全部使用便携隔离副本和空队列，配置及队列字节保持原样；不读取业务任务、不执行ECM或真实锁频。独立TOML fixture同时确认GUI严格模式不变、纯GUI值不进入计算投影、分发后备数量仍为配置的3。
 - 更新中发现旧Stage1构建目录的本地化依赖探测前缀与当前编译输出不匹配，部分`.obj.d`为空，头文件改变没有触发重编译；[旧程序复现日志](../../data/experiments/gui_v2/worker_sync_04910_01/compatibility_stale_stage1/stage1-routing-type.log)被新增契约拒绝。最小工程在当前默认/英文环境均可正确增量，不把问题泛化为所有中文工具链。保留旧主机对象及探测缓存后，让正式入口重新探测并重编主机代码；关键配置对象依赖恢复为14117字节并包含公共解析头，最终31项行为检查通过。原始日志、两组最小探测及缓存证据保留在`worker_sync_04910_01`；当前复用限制与处置见[构建说明](../usage/BUILD.md#复用构建)。
 - [实际部署核对](../../data/experiments/gui_v2/worker_sync_04910_01/deployment.json)确认两个程序及构建清单已更新至`D:/code/GIMPS/ecm-win-x86_64-sm89-cuda13.3_param0`，替换前没有目标worker运行，替换后程序摘要和协议一致。原程序及原Stage2清单备份在`backup/workers-0.49.10-20261023-021307`；业务TOML、队列、tune、GUI与GMP运行库摘要保持原样。部署目录GUI沿用既有0.49.10候选，本仓库最终GUI候选另在`build_gui_v2_local`重建并通过上述DX11回归。
+
+
+### 0.51.0 群阶分解界面
+
+- 按用户授权读取引用任务“探究本地群阶分解算法”，复用其`ecm_diagnostics::Session`及CPU/GMP核心，不在GUI重新实现数学算法。用户要求的界面、GP路径持久化和结果文件选择在v2接入；计算程序与前端版本按用户提交要求统一为0.51.0；本次提交覆盖Group Order核心、Stage1/Stage2接入及GUI，ELY日常行为改动保留在工作区，不部署至实际工作流。
+- 新页面稳定ID为7，默认位于概率页之后；旧七项导航顺序按原顺序追加新ID，保留侧栏宽度、停靠及已有页面ID。与生成器/概率页共用`ui/curve_selector.h`；支持Montgomery param0/1/2/3及Atkin–Morain Edwards，其他Edwards概率预设禁用。输入p和完整uint64 sigma，结果区显示完整群阶、原始点阶、两者分解、素性/证明资格和未完成原因，不混入choose12/48LCM有效标量。
+- GUI通过`GroupOrderJob`启动独立`ecm_group_order_ui.exe`，主帧仅零等待轮询；GP单次30秒、本地2秒、外层45秒。Windows Job Object先约束挂起的助手再恢复，取消、析构和超时终止整棵助手/GP进程树。输入与输出为有大小上限的独立临时文件，无shell拼接或队列操作；原始业务配置、任务和GPU控制独立。
+- `[gui] group_order_gp`是空默认GUI字段，定义及英中说明只在配置schema维护；页面可浏览、编辑和显式保存，保存仅改此键且核对磁盘指纹，其他业务草稿不被顺带写入。相对路径基于工作流目录，空值走PATH，计算worker的GP配置不变。全部新增界面标签来自`localization/v2`外部XML。
+- 自动发现当前工作流目录内`*result*.txt`及已配置结果路径，实际目录中的`results.json.txt`、`results.json_2.txt`符合规则。手动文件选择允许其他目录；切换来源、逐因子填入、重新扫描保留正确文件身份。只读导入F/ECM、顶层Montgomery或Edwards/param3嵌套sigma，保留uint64精度，跳过缺失、冲突及不支持身份；32MiB/20000因子限额，未声明验证CRC。
+- 版本统一前的0.50.0功能验收构建日志为`group_order_gui_0500_01/build-04.log`，前端SHA-256为`1d19e6318cac90282956def395cf48ebef4f8e41e8b51ba3e41cfe9c62486d35`，助手为`171c9eb8d5622404a0a9bce3c6c87ac30be5758a113a59e579e4d3f006de7d36`，GMP DLL为`969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。该轮构建前后核对GUI、核心、曲线、协调层及GMP安装文件指纹；当前0.51.0构建身份以本轮提交核对记录为准。
+- [15组GP/本地对照](../../data/experiments/gui_v2/group_order_gui_0500_01/gp-native-02/result.json)覆盖p=1009、1013、10007，sigma=26及五种构造，群阶、点阶与素数幂分解逐项一致；GP身份SHA-256为`e8d7ddfb09c5c61bd58f0d645f6cd664253c4eb1f9b532aaa6bd191625b9a3cf`。这是功能正确性对照，不是性能结论或大素域资格。
+- `ecm_gui_v2_group_order_test`在`contract-02`通过五构造、分解乘积、点阶整除群阶、缺GP自动回退/GP-only拒绝、复合输入拒绝、uint64越界、不支持Edwards拒绝、两文件只读导入及取消助手/GP树。App契约在`app-03`验证GP单键保存、计算草稿保留和外部改动拒绝；侧车在`state-02`验证新旧导航迁移及已有往返。
+- [原生页面](../../data/experiments/gui_v2/group_order_gui_0500_01/native-ui-04/result.json)通过英文15、中文15/24字号、1920与900px窗口，实际输入、GP保存、两文件选择恢复构造、重新扫描及GP/本地计算；文件字节不变，无worker/GPU操作。首三轮输入/坐标脚本失败保留于`native-ui-01..03`：WM_CHAR退格不等于退格键、初次下拉定位及输入快照提示会改变控件坐标；改为完整键事件和等待实际布局稳定后，原有数学/导入/几何断言全部保留。早期生成检查/漏限定名构建失败保留于`build.log`与`build-02.log`，没有改宽校验。
+- [共用曲线表单回归](../../data/experiments/gui_v2/group_order_gui_0500_01/curve-forms-01/result.json)通过中英两页32次预设、宽面板两列/900和640px单列及原有数值口径；[冻结身份与契约汇总](../../data/experiments/gui_v2/group_order_gui_0500_01/verification.json)核对196个输入文件。源码包解出后独立CMake配置通过，日志见`source-configure-01/configure.log`；尚未在独立干净机器做完整重建或性能矩阵。
+- [旧GUI隔离](../../data/experiments/gui_v2/group_order_gui_0500_01/legacy.json)确认73个受保护文件和旧exe相同；例外仅两个经授权的空默认GUI持久化键，以及参考后端三条Stage2说明文字，原有配置运行字段逐项不变。P5完整性能矩阵及Vulkan冻结根因仍未重验。
+- [独立候选](../../data/experiments/gui_v2/group_order_gui_0500_01/package-01/package-result.json)包含GUI、群阶助手、匹配GMP DLL及完整许可/对应本地源码，不包含PARI/GP或计算worker。ZIP SHA-256为`e2a5ad93e12ebcf913b85969766ed3c065cac8fa19c415f6c2de34b4d9b63853`；[中文目录与仅System32 PATH](../../data/experiments/gui_v2/group_order_gui_0500_01/package-smoke-01/result.json)验证重定位后的本地群阶计算及已有启动/皮肤/异常状态回归。GMP仍为本机Zen3/BMI2候选，不声明任意x64兼容。临时草稿保留待用户整理。
+
+- 按用户要求统一为`[0.51.0]`提交计算程序与UI。提交前GUI重建通过，exe SHA-256为`6231b83d07ddb6104076be43b002d1705b0bee4c23dfae8325b85592502de10f`；助手和GMP身份保持前述值。计算端7份验收文件/二进制摘要及24项已测试源码逐项匹配，见`data/experiments/group_order_commit_0510_20261023_01/compute-verification.json`。配置、侧车及XML生成器检查通过；本机GUI构建仍包含工作区未提交的ELY行为，因此该二进制不是“仅提交内容”的洁净发布资格。实际工作流和部署包不变。0.51.0原生页面回归通过英文15、中文15/24字号、双结果文件导入、GP保存与计算及900px窄界面，见`data/experiments/group_order_commit_0510_20261023_01/gui-ui/result.json`。
 
 ## 1. 分析边界与基线
 

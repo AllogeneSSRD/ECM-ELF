@@ -134,6 +134,7 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
 endforeach()
 foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/results/ecm_result_json.h
+                src/ecm/core/group_order/group_order.h src/ecm/service/diagnostics/order_analysis.h
                 include/ecm/core/stage1/selection.h include/ecm/core/stage1/scalar.h include/ecm/service/stage1/task.h
                 src/ecm/service/stage1/execution_contract.h src/ecm/platform/generated/configuration_defaults.h
                 src/ecm/backend/opencl/stage1/montgomery/workflow.cpp

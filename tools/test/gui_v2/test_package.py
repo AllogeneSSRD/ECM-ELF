@@ -26,6 +26,12 @@ def main():
     assert not list(package.rglob('vulkan-1.dll')) and not list(package.rglob('*validation*.dll'))
     windows=ctypes.create_unicode_buffer(32768);assert ctypes.WinDLL('kernel32').GetWindowsDirectoryW(windows,len(windows))
     env=os.environ.copy();env['PATH']=str(Path(windows.value)/'System32');env.pop('VULKAN_SDK',None);env.pop('VK_LAYER_PATH',None);env.pop('VK_INSTANCE_LAYERS',None)
+    assert manifest['group_order_helper'] and not manifest['pari_gp_redistributed']
+    helper=package/'ecm_group_order_ui.exe';assert 'gmp-10.dll' in [name.lower() for name in imports(helper)]
+    request=out/'order-request.json';response=out/'order-response.json'
+    request.write_text(json.dumps(dict(factor='1009',sigma='26',profile=0,backend=2,gp='')),encoding='utf-8')
+    subprocess.run([str(helper),str(request),str(response)],cwd=out,env=env,check=True,timeout=15)
+    order=json.loads(response.read_text());assert order['status']=='complete' and order['backend']=='native' and order['point_minimality']
     startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
     cases={};cfg=out/'workflow.toml';cfg.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n');original=cfg.read_bytes()
     def run(name,flags,expected=0,show=False,binary=exe):

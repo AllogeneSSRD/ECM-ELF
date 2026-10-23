@@ -3,6 +3,8 @@
 # Keep source order: it is the existing compile/link order, not a glob.
 cmake_minimum_required(VERSION 3.20)
 set(ECM_STAGE1_COMMON_SOURCES
+    src/ecm/core/group_order/group_order.cpp
+    src/ecm/service/diagnostics/order_analysis.cpp
     src/ecm/core/stage1/selection.cpp
     src/ecm/storage/results/publication.cpp
     src/ecm/service/stage1/task.cpp
@@ -98,6 +100,8 @@ set(ECM_STAGE1_PRAC_SOURCES
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
+    src/ecm/core/group_order/group_order.cpp
+    src/ecm/service/diagnostics/order_analysis.cpp
     src/ecm/platform/fingerprint.cpp
     src/ecm/storage/queue/stage2_progress.cpp
     src/ecm/storage/results/publication.cpp

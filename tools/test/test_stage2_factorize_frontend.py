@@ -1,4 +1,4 @@
-"""CPU frontend fixtures: multiplicities, GP failure and INI/CLI precedence.
+"""CPU frontend fixtures: multiplicities, GP fallback and TOML/CLI precedence.
 
 These factor-revealing X values test the existing saved-X shortcut; they are
 not claimed to be valid completed Stage1 points or GPU Stage2 factor trials.
@@ -17,22 +17,28 @@ def main():
     if any(root.iterdir()):raise RuntimeError('Use a fresh directory')
     n=(1<<21)-1;x=7**2*127;save=root/'fixture.save'
     save.write_text(f'METHOD=ECM; PARAM=0; SIGMA=6; B1=2; N=(2^21-1); X=0x{x:x}; CHECKSUM={2*6*n*x%4294967291};\n')
-    ini=root/'ecm.toml';ini.write_text(f'[stage2]\nstage2_factorize_hits=1\nstage2_gp={a.gp.resolve()}\nstage2_factor_timeout=15\n')
+    ini=root/'ecm.toml';ini.write_text(f'[stage2]\nstage2_factorize_hits=true\nstage2_gp={json.dumps(str(a.gp.resolve()))}\nstage2_factor_timeout=15\n')
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')};rows=[]
     for name,extra in [('multiplicity',[]),('missing_gp',['--gp',str(root/'missing_gp.exe')])]:
-        result=root/(name+'.jsonl');log=root/(name+'.log')
-        cmd=[str(a.exe.resolve()),'--ini',str(ini),'--save',str(save),'--b2','3','--device','1',
+        work=root/name;work.mkdir();local_save=work/'fixture.save';local_save.write_bytes(save.read_bytes())
+        result=work/(name+'.jsonl');log=work/(name+'.log')
+        cmd=[str(a.exe.resolve()),'--config',str(ini),'--save',str(local_save),'--b2','3','--device','1',
+             '--short-calibration','0','--tune-runtime','0','--d','210','--carrier-exponent','0',
              '--results',str(result),'--log',str(log),*extra]
-        r=subprocess.run(cmd,capture_output=True,cwd=root,env=env,timeout=30)
+        r=subprocess.run(cmd,capture_output=True,cwd=work,env=env,timeout=30)
         (root/(name+'_driver.log')).write_bytes(r.stdout+r.stderr);assert r.returncode==0
-        row=json.loads(result.read_text());assert row['status']=='factor_in_saved_X' and row['factors']==[str(x)]
+        row=json.loads(result.read_text());assert row['factors']==[str(x)]
+        engine=row.get('stage2-engine',row);assert engine['status']=='factor_in_saved_X'
         if name=='multiplicity':
-            assert row['factorization_complete']
-            parts={int(q['factor']):q['multiplicity'] for q in row['factor_analysis'][0]['prime_powers']}
+            assert engine['factorization_complete']
+            parts={int(q['factor']):q['multiplicity'] for q in engine['factor_analysis'][0]['prime_powers']}
             assert parts=={7:2,127:1}
         else:
-            assert not row['factorization_complete'] and row['prime_factors']==[]
-            assert row['factor_analysis'][0]['reason']=='gp_launch_failed'
+            assert engine['factorization_complete']
+            assert engine['factor_analysis'][0]['backend']=='native'
+            assert engine['factor_analysis'][0]['gp_failure']=='gp_launch_failed'
+            parts={int(q['factor']):q['multiplicity'] for q in engine['factor_analysis'][0]['prime_powers']}
+            assert parts=={7:2,127:1}
         rows.append(row)
     (root/'summary.json').write_text(json.dumps(dict(passed=2,failed=0,scope='CPU frontend synthetic saved-X fixtures',rows=rows),indent=2))
     print('factor frontend: 2 passed, 0 failed')

@@ -1,5 +1,6 @@
 #pragma once
 #include "ui_state.h"
+#include "group_order_job.h"
 #include "gpu_details.h"
 #include "gpu_clocks.h"
 #include "gpu_clock_automation.h"
@@ -92,7 +93,7 @@ public:
     std::string result_view_signature;
     bool result_view_dirty=true;
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
-    ImVec2 nav_items[7]{},right_items[7]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
+    ImVec2 nav_items[8]{},right_items[8]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 language_control{};
     ImVec2 view_control{},view_logs_control{},view_save_control{};
     bool view_menu_open=false,view_save_separator=false;
@@ -176,6 +177,19 @@ public:
     int probability_profile=0;
     int probability_tab=0;
     bool probability_empirical=false;
+    OrderInput group_order_input;
+    GroupOrderJob group_order_job;
+    std::vector<std::string> group_order_files;
+    std::vector<OrderRecord> group_order_records;
+    int group_order_file=-1;
+    std::string group_order_file_error,group_order_base;
+    bool group_order_loaded=false;
+    ui::CompactFormAudit group_order_form;
+    std::map<int,std::pair<ImVec2,ImVec2>> group_order_curve_controls;
+    std::map<std::string,ImVec2> group_order_controls;
+    ImVec2 group_order_calculate{},group_order_save{},group_order_cancel{};
+    void draw_group_order(bool zh);
+    bool save_group_order_gp();
     ui::Showcase showcase;
     bool test_float = false;
     bool workspace_docked=false;

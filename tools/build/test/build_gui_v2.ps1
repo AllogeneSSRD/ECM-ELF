@@ -11,7 +11,7 @@ $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot
 if (-not [IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $catalog = @('src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/application/configuration',
-    'src/ecm/platform/generated','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','assets/gui_v2')
+    'src/ecm/platform/generated','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/service/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gmp-zen3/dist','assets/gui_v2')
 $inputs = @($catalog | ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $repo $_) -File -Recurse })
 $inputHashes = [ordered]@{}
 foreach ($file in $inputs | Sort-Object FullName -Unique) {
@@ -44,7 +44,7 @@ function Invoke-Compiler([string]$Command, [string]$Log) {
     $output -split "`r?`n" | Where-Object { $_ -match 'gui_v2:|Built target|error|warning' } | Write-Host
 }
 Invoke-Compiler $configure 'configure.log'
-$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test' } else { 'ecm_gui_v2' }
+$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test' } else { 'ecm_gui_v2' }
 Invoke-Compiler "cmake --build `"$BuildDir`" --target $targets" 'build.log'
 foreach ($key in $inputHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $repo $key) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $inputHashes[$key]) {
@@ -58,6 +58,8 @@ elseif (Test-Path -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json')) {
     $sourceCommit = (Get-Content -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json') -Raw -Encoding UTF8 | ConvertFrom-Json).source_commit
 }
 [ordered]@{schema=1;exe_sha256=(Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant();
+    group_order_helper_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_group_order_ui.exe')).Hash.ToLowerInvariant();
+    group_order_runtime_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'gmp-10.dll')).Hash.ToLowerInvariant();
     source_commit=$sourceCommit;source_catalog_sha256=$inputHashes;
     boundary='Conservative repository source catalog frozen before configure and checked after build; not a claim that every catalog file is linked';
     vcvars=$VcVars;cmake_cache_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'CMakeCache.txt')).Hash.ToLowerInvariant()

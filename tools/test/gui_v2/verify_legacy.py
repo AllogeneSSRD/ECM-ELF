@@ -16,11 +16,20 @@ def main():
     # User explicitly authorized GPU clock draft persistence in the main TOML.
     # This one empty-default GUI-only field is additive; every existing option
     # and all protected legacy GUI bytes remain exactly equal to the baseline.
-    clocks=[o for o in current['options'] if o['owner']=='gui' and o['key']=='gpu_clock_ranges']
-    assert len(clocks)==1 and clocks[0]['field']=='gpu_clock_ranges' and clocks[0]['type']=='string' and clocks[0]['default']=='' and clocks[0]['parser']=='gui'
-    current['options'].remove(clocks[0]);assert current==old
+    for key in ['gpu_clock_ranges','group_order_gp']:
+        fields=[o for o in current['options'] if o['owner']=='gui' and o['key']==key]
+        assert len(fields)==1 and fields[0]['field']==key and fields[0]['type']=='string' and fields[0]['default']=='' and fields[0]['parser']=='gui'
+        current['options'].remove(fields[0])
+    # The referenced order backend updated three Stage2 help descriptions to
+    # document its GP/native fallback. All runtime/schema fields still match P0.
+    help_keys={'stage2_factorize_hits','stage2_gp','stage2_factor_timeout'}
+    for previous,now in zip(old['options'],current['options']):
+        if now['owner']=='stage2' and now['key'] in help_keys:
+            previous['description']=now['description']
+    assert current==old
     assert hashlib.sha256((root/'build_gui_local/ecm_gui.exe').read_bytes()).hexdigest()==baseline['legacy_sha256']
     result=dict(passed=True,byte_identical=len(checked),legacy_exe=baseline['legacy_sha256'],schema_existing_projection_unchanged=True,
-                approved_exception='Add gui_v2_sidecar and empty-default gui.gpu_clock_ranges; user approved TOML clock drafts and shared worker entry ownership separately')
+                approved_exception='Add gui_v2_sidecar, empty-default gui.gpu_clock_ranges and gui.group_order_gp; user authorized clock and GP path persistence',
+                backend_help_only=['stage2_factorize_hits','stage2_gp','stage2_factor_timeout'])
     a.out.parent.mkdir(parents=True,exist_ok=True); a.out.write_text(json.dumps(result,indent=2)); print(json.dumps(result))
 if __name__=='__main__': main()

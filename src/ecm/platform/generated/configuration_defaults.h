@@ -122,6 +122,7 @@ inline constexpr uint64_t stage2_stage2_target_factor_bits=0;
 inline constexpr char stage2_stage2_tune_condition_tag[]="";
 inline constexpr char stage1_stage1_submission_file[]="results.json.txt";
 inline constexpr char stage1_stage1_results_file[]="stage1_results.jsonl";
+inline constexpr char gui_group_order_gp[]="";
 inline constexpr char stage2_worktodo[]="worktodo.txt";
 inline constexpr uint64_t stage2_b2_ratio=0;
 inline constexpr int stage2_priority=0;

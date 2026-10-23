@@ -122,5 +122,6 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_tune_condition_tag","string"},
     {"stage1","stage1_submission_file","string"},
     {"stage1","stage1_results_file","string"},
+    {"gui","group_order_gp","string"},
 };
 } // namespace ecm_config

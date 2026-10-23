@@ -6,8 +6,8 @@ namespace ecmgui_v2::ui {
 // Application-drawn line icons: one view box / stroke, no font or image dependency.
 enum class Icon { None, Play, Stop, Grid, List, Sliders, Check, Folder, Cpu, Results, Generate, Chart, Gpu, Settings, Palette, Pet, Layout };
 inline Icon page_icon(int page){
-    static const Icon icons[]{Icon::Cpu,Icon::Results,Icon::Generate,Icon::Chart,Icon::Gpu,Icon::Settings,Icon::Grid};
-    return page>=0&&page<7?icons[page]:Icon::Grid;
+    static const Icon icons[]{Icon::Cpu,Icon::Results,Icon::Generate,Icon::Chart,Icon::Gpu,Icon::Settings,Icon::Grid,Icon::Generate};
+    return page>=0&&page<8?icons[page]:Icon::Grid;
 }
 inline void line_icon(ImDrawList* draw,Icon shape,ImVec2 pos,float size,ImU32 color){
     const float u=size/24,stroke=1.6f*u;

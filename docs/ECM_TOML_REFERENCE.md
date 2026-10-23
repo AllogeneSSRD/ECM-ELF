@@ -856,9 +856,9 @@ stage2_factor_timeout = 30
 
 Type / 类型: `u64`; range / 范围: `<x:Z,1..600>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Timeout in seconds for each PARI/GP factor-decomposition call. Limits only optional decomposition, not Stage2 curve computation. A timeout does not invalidate a factor already found by Stage2.
+Timeout in seconds for each preferred GP decomposition call. Timeout permits CPU/GMP fallback, separately limited to 2 seconds per factor and 10 seconds per curve worker. These bounds affect optional diagnostics, not the original factor or Stage2 computation status.
 
-设置每次 PARI/GP 因子分解调用的超时时间，单位为秒。仅影响附加的因子分解，不限制 Stage2 曲线计算时长；超时不表示原 Stage2 算法未找到因子。
+设置优先 GP 分解调用的超时秒数。超时后允许 CPU/GMP 回退，后者单因子限 2 秒、单曲线 worker 累计限 10 秒。预算仅影响附加诊断，不改变原始因子或 Stage2 计算状态。
 
 ### stage2_factorize_hits
 
@@ -868,9 +868,9 @@ stage2_factorize_hits = false
 
 Type / 类型: `bool`; range / 范围: `[0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Invoke PARI/GP to further decompose found factors: 1 enables; 0 keeps only factors extracted and verified by Stage2. Decomposition can add time after curve computation and requires a working stage2_gp.
+Further decompose found factors: 1 enables GP-first analysis with a bounded CPU/GMP fallback when GP is unavailable; 0 keeps only factors extracted and verified by Stage2. Only complete, proven decomposition sets factorization_complete. Unfinished diagnostics preserve the original factor and successful curve status.
 
-控制是否调用 PARI/GP 进一步分解命中的因子。1 开启，0 只保留 Stage2 已得到并验证的因子结果；进一步分解可能增加曲线结束后的时间，需要可用的 stage2_gp。
+控制命中因子的附加分解。1 开启，优先 GP，GP 不可用时使用有预算的 CPU/GMP 回退；0 只保留 Stage2 已得到并验证的因子。仅完整且全部已证素的分解标为完成；诊断未完成仍保留原始因子与曲线成功状态。
 
 ### stage2_finished
 
@@ -912,9 +912,9 @@ stage2_gp = ""
 
 Type / 类型: `string`; range / 范围: `<exe>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-PARI/GP executable used for further factor decomposition. gp.exe follows Windows executable search rules; a full path is also accepted. Required only when stage2_factorize_hits is enabled. This TOML key does not use the dataset scripts' --gp environment-variable fallback.
+Preferred PARI/GP executable for optional factor decomposition. gp.exe follows Windows executable search rules; a full path is accepted. When GP cannot run, bounded CPU/GMP analysis is attempted without selecting another GP executable. Dataset scripts retain their separate --gp resolution rules.
 
-指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 TOML 键不使用数据集脚本的 --gp 环境变量回退规则。
+指定附加因子分解优先使用的 PARI/GP 程序。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 无法运行时尝试有预算的 CPU/GMP 分析，不另选 GP 程序；数据集脚本继续使用各自的 --gp 路径规则。
 
 ### stage2_log_file
 
@@ -1349,6 +1349,18 @@ Type / 类型: `i64`; range / 范围: `<x:Z,1000..3600000>`; worker override / w
 Maximum wait in milliseconds after requesting a safe worker stop. Process exit ends the wait; workers still running at the deadline are terminated. Allow enough time for Stage1 checkpoint writes or the full current Stage2 curve. Stage2 curve counters are not intermediate arithmetic saves.
 
 请求安全停止后等待的最长时间，单位毫秒。进程退出结束等待；到期仍运行的worker强制终止。应为Stage1检查点写入或当前Stage2整条曲线留足时间；Stage2曲线计数不是中间算术存档。
+
+### group_order_gp
+
+```toml
+group_order_gp = ""
+```
+
+Type / 类型: `string`; range / 范围: `<path-to-gp.exe|empty>`; worker override / worker 覆盖: `no / 不支持`.
+
+PARI/GP executable for the Group Order Factor GUI. Empty searches gp in PATH. GUI-only; compute worker settings remain independent.
+
+群阶分解界面使用的PARI/GP程序路径；空值在PATH查找gp。仅供GUI使用，不修改计算worker设置。
 
 ### language
 

@@ -1,6 +1,7 @@
 #include "../app.h"
 #include "../generated/business_options.h"
 #include "../ui/probability_presets.h"
+#include "../ui/curve_selector.h"
 #include "../ui/chart.h"
 #include "../ui/navigation.h"
 #include "../ui/i18n.h"
@@ -46,29 +47,7 @@ bool chips(const char* id,int& value,const std::vector<const char*>& labels,ImVe
         ++index;
     }ImGui::PopID();return changed;
 }
-bool curve_buttons(const char* id,int& value,bool generator,bool zh,std::map<int,std::pair<ImVec2,ImVec2>>& controls){
-    bool changed=false;controls.clear();ImGui::PushID(id);
-    if(ImGui::BeginTable("families",2,ImGuiTableFlags_SizingStretchProp)){
-        const auto ed=ui::text("curve.edwards_title",zh),mont=ui::text("curve.montgomery_title",zh);
-        ImGui::TableSetupColumn("family",ImGuiTableColumnFlags_WidthFixed,std::max(ImGui::CalcTextSize(ed).x,ImGui::CalcTextSize(mont).x));
-        ImGui::TableSetupColumn("profiles",ImGuiTableColumnFlags_WidthStretch);
-        for(bool edwards:{true,false}){
-            ImGui::TableNextRow();ImGui::TableNextColumn();ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(edwards?ed:mont);ImGui::TableNextColumn();
-            const auto ids=edwards?ui::edwards_profiles():std::array<int,4>{0,3,5,4};
-            const float left=ImGui::GetCursorScreenPos().x,right=left+ImGui::GetContentRegionAvail().x;
-            bool first=true;
-            for(int index:ids){const auto& preset=ui::curve_presets[index];if(generator&&!preset.generator)continue;
-                const float width=ImGui::CalcTextSize(preset.label).x+ImGui::GetStyle().FramePadding.x*2;
-                if(!first&&ImGui::GetItemRectMax().x+ImGui::GetStyle().ItemSpacing.x+width<=right)ImGui::SameLine();
-                const bool selected=value==index;if(selected)ImGui::PushStyleColor(ImGuiCol_Button,ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-                if(ImGui::Button(preset.label)){value=index;changed=true;}
-                controls[index]={ImGui::GetItemRectMin(),ImGui::GetItemRectMax()};
-                if(ImGui::IsItemHovered())ImGui::SetTooltip(ui::text("probability.profile_values",zh),preset.source,ui::curve_divisor(index,true),ui::curve_divisor(index,false));
-                if(selected)ImGui::PopStyleColor();first=false;
-            }
-        }ImGui::EndTable();
-    }ImGui::PopID();return changed;
-}
+
 }
 void App::draw_results(bool zh) {
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
@@ -153,7 +132,7 @@ void App::draw_generator(bool zh) {
     ImGui::TextUnformatted(ecmgui_v2::ui::text("task_generator",zh));
     ImGui::TextUnformatted("ECM / ECM2");ImGui::InputTextMultiline("##assignments",gen_input,sizeof(gen_input),ImVec2(-1,140));
     int curve=0;for(const auto& preset:ui::curve_presets)if(preset.generator&&gen_options.curve_type==preset.generator)curve=preset.id;
-    if(curve_buttons("generator-curve",curve,true,zh,generator_curve_controls))gen_options.curve_type=ui::curve_presets[curve].generator;
+    if(ui::curve_buttons("generator-curve",curve,true,zh,generator_curve_controls))gen_options.curve_type=ui::curve_presets[curve].generator;
     {
         ui::CompactForm form("generator-fields",generator_form);
         form.field("worker",ui::text("target_worker",zh),[&]{ImGui::InputInt("##value",&gen_worker,0,0);});
@@ -196,7 +175,7 @@ void App::draw_probability(bool zh) {
     calculate_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
     if(probability_ready&&probability_result.error.empty()){ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("copy_snapshot_csv",zh))){ImGui::SetClipboardText(curve_csv(probability_result).c_str());toast(ecmgui_v2::ui::text("snapshot_csv_copied",zh));}}
     if(probability_tab==0){
-    const bool profile_changed=curve_buttons("curve-profile",probability_profile,false,zh,probability_curve_controls);
+    const bool profile_changed=ui::curve_buttons("curve-profile",probability_profile,false,zh,probability_curve_controls);
     double size=size_from_bits(p.factor_bits,request.decimal_digits);
     {
         ui::CompactForm form("probability-fields",probability_form);
@@ -394,7 +373,7 @@ void App::draw_settings(bool zh) {
     {
         ImGui::SeparatorText(ecmgui_v2::ui::text("navigation_and_right_tabs",zh));
         ImGui::TextWrapped("%s",ecmgui_v2::ui::text("settings.navigation_hint",zh));
-        for(int i=0;i<7;++i){if(i==5)continue;ImGui::PushID(i);bool right=ui::pinned(state.ui_right_pages,i);
+        for(int i=0;i<8;++i){if(i==5)continue;ImGui::PushID(i);bool right=ui::pinned(state.ui_right_pages,i);
             if(ecmgui_v2::ui::checkbox(ui::page_name(i,zh),&right))move_page(i,right);ImGui::PopID();}
         if(ImGui::Button(ecmgui_v2::ui::text("restore_default_layout",zh))){state.ui_right_pages=0;state.ui_right_visible=true;state.ui_inspector=true;state.ui_logs=true;reset_layout=true;}
         if(ImGui::Button(ecmgui_v2::ui::text("save_layout",zh)))save_preferences();

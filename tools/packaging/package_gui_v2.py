@@ -16,6 +16,10 @@ def main():
     shutil.copy2(ROOT/'assets/gui_v2/skins/README.md',package/'assets/ELY-skins-NOTICE.md')
     build_identity=exe.with_name('gui_v2_build_manifest.json');identity=json.loads(build_identity.read_text(encoding='utf-8-sig'))
     assert identity['exe_sha256']==hashlib.sha256(exe.read_bytes()).hexdigest(),'Build manifest does not match executable'
+    for name,key in [('ecm_group_order_ui.exe','group_order_helper_sha256'),('gmp-10.dll','group_order_runtime_sha256')]:
+        dependency=exe.with_name(name)
+        assert hashlib.sha256(dependency.read_bytes()).hexdigest()==identity[key],f'Build manifest does not match {name}'
+        shutil.copy2(dependency,package/name)
     shutil.copy2(build_identity,package/'build-manifest.json')
     shutil.copytree(exe.parent/'localization/v2',package/'localization/v2')
     licenses=package/'licenses';licenses.mkdir()
@@ -26,7 +30,11 @@ def main():
         'Vulkan-Headers-MIT.txt':'third_party/gui_v2_vulkan/LICENSES/MIT.txt','Ely-Pet-MIT.txt':'third_party/gui_v2_pet/LICENSE',
         'Ely-Pet-NOTICE.md':'third_party/gui_v2_pet/README.md','Ely-Design-NOTICE.md':'src/ecm/application/gui_v2/ui/NOTICE.md',
         'Vulkan-provenance.json':'third_party/gui_v2_vulkan/provenance.json','Vulkan-NOTICE.md':'third_party/gui_v2_vulkan/README.md',
-        'acquire-before-use.patch':'third_party/imgui_vulkan/acquire-before-use.patch'}
+        'acquire-before-use.patch':'third_party/imgui_vulkan/acquire-before-use.patch',
+        'GMP-LGPL-3.0.txt':'third_party/gmp-zen3/src/COPYING.LESSERv3',
+        'GMP-GPL-3.0.txt':'third_party/gmp-zen3/src/COPYINGv3',
+        'GMP-README.txt':'third_party/gmp-zen3/src/README',
+        'GMP-NOTICE.md':'src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md'}
     for name,source in sources.items():shutil.copy2(ROOT/source,licenses/name)
     (package/'docs').mkdir();shutil.copy2(ROOT/'docs/usage/GUI_V2.md',package/'docs/GUI_V2.md');shutil.copy2(ROOT/'docs/GUI_V2_STATE_REFERENCE.md',package/'docs/GUI_V2_STATE_REFERENCE.md')
     shutil.copy2(ROOT/'config/ecm.toml.example',package/'ecm.toml.example')
@@ -42,6 +50,10 @@ def main():
     # This is a local working-tree snapshot, not an export of HEAD. Include the
     # exact frozen build inputs even when optional art is deliberately ignored.
     selected.update(identity['source_catalog_sha256'])
+    # Corresponding local GMP source and build configuration for the replaceable
+    # DLL. No compiler outputs or private workflows are added.
+    selected.update(path.relative_to(ROOT).as_posix() for path in (ROOT/'third_party/gmp-zen3/src').rglob('*') if path.is_file())
+    selected.update('third_party/gmp-zen3/build/'+name for name in ['config.status','config.h','config.m4'])
     for name,digest in identity['source_catalog_sha256'].items():
         assert hashlib.sha256((ROOT/name).read_bytes()).hexdigest()==digest,f'Build input changed after compilation: {name}'
     # The original pinned core is intentionally an ignored local dependency in
@@ -52,6 +64,9 @@ def main():
                 selected.add(path.relative_to(ROOT).as_posix())
     selected.update(['src/ecm/application/gui_v2/app.manifest','tools/packaging/package_gui_v2.py',
                      'tools/build/package_gui_v2.ps1','tools/test/gui_v2/test_package.py','tools/test/gui_v2/test_failure_shutdown.py'])
+    selected.update(['tools/test/gui_v2/group_order_test.cpp','tools/test/gui_v2/test_group_order.py',
+                     'tools/test/gui_v2/test_group_order_backend.py',
+                     'tools/test/group_order_probe.cpp'])
     selected.update(['.gitattributes','config/gui_v2_pet_skins.generated.json',
                      'config/gui_v2_localization_aliases.json','config/gui_v2_localization.generated.json','tools/gen/generate_gui_v2_localization.py',
                      'tools/test/gui_v2/language_probe.py','tools/test/gui_v2/test_localization_files.py',
@@ -74,6 +89,11 @@ Microsoft Visual C++ x64 runtime matching the MSVC build. No development SDK,
 validation layer, Electron or browser runtime is required.
 
 This GUI-only package contains no compute worker and never replaces ecm_gui.exe.
+Group Order Factor uses the included ecm_group_order_ui.exe and replaceable
+gmp-10.dll. PARI/GP is optional and installed/configured separately. This local
+GMP build uses Zen3/BMI2 kernels; arbitrary x64 CPU compatibility is not qualified.
+Its corresponding source and build configuration are in source/, and licenses
+and dependency identity are in licenses/ and build-manifest.json.
 Install updated Stage1/Stage2 workers separately, with their original dependencies
 and complete GPU tiers. Do NOT ship the small-tier acceptance workers as a release.
 Workers must report ECM_QUEUE_OWNER=1 for --gui-queue-protocol. An unchanged old
@@ -112,7 +132,7 @@ Clean Vulkan validation and CPU timings do not qualify actual desktop refresh.
 '''
     (package/'README.txt').write_text(readme,encoding='utf-8')
     files={p.relative_to(package).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(package.rglob('*')) if p.is_file()}
-    manifest=dict(kind='independent-gui-only-candidate',version=version,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),source_has_uncommitted_changes=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),includes_local_untracked_assets=True,files_sha256=files,worker_protocol_required=1,development_sdk_required=False,default_renderer='dx11',optional_renderer='vulkan',pet_skins=['classic']+[skin['id'] for skin in skin_catalog['skins']],system_requirements=['Windows x64','Direct3D 11 driver or system WARP','MSVC x64 runtime'],optional_vulkan_requirement='Vulkan 1.1 loader/graphics/present/swapchain; desktop freeze unresolved',contains_compute_workers=False)
+    manifest=dict(kind='independent-gui-only-candidate',version=version,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),source_has_uncommitted_changes=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),includes_local_untracked_assets=True,files_sha256=files,worker_protocol_required=1,development_sdk_required=False,default_renderer='dx11',optional_renderer='vulkan',pet_skins=['classic']+[skin['id'] for skin in skin_catalog['skins']],system_requirements=['Windows x64','Direct3D 11 driver or system WARP','MSVC x64 runtime','Group Order helper GMP DLL: local Zen3/BMI2 candidate'],optional_vulkan_requirement='Vulkan 1.1 loader/graphics/present/swapchain; desktop freeze unresolved',contains_compute_workers=False,group_order_helper=True,pari_gp_redistributed=False)
     (package/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');archive=out/(package.name+'.zip')
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
         for path in sorted(package.rglob('*')):

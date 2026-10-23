@@ -33,7 +33,7 @@ target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK 
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
 add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/dx11_window.cpp render/vulkan_context.cpp render/vulkan_window.cpp
-    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp ui_state.cpp pet/window.cpp gpu_details.cpp gpu_clocks.cpp)
+    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp views/group_order.cpp group_order_job.cpp ui_state.cpp pet/window.cpp gpu_details.cpp gpu_clocks.cpp)
 include("${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 add_custom_target(ecm_gui_v2_config_check
     COMMAND ${CMAKE_COMMAND} "-DECM_GUI_V2_ROOT=${ECM_GUI_V2_ROOT}" -P "${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
@@ -91,7 +91,7 @@ add_executable(ecm_gui_v2_state_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/
 target_link_libraries(ecm_gui_v2_state_test PRIVATE ecm_gui_v2_models gdiplus ole32)
 target_compile_options(ecm_gui_v2_state_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 add_executable(ecm_gui_v2_app_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/app_test.cpp"
-    app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp gpu_clocks.cpp)
+    app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp views/group_order.cpp group_order_job.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp gpu_clocks.cpp)
 add_dependencies(ecm_gui_v2_app_test ecm_gui_v2_localization)
 target_link_libraries(ecm_gui_v2_app_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
 target_compile_options(ecm_gui_v2_app_test PRIVATE /utf-8 /EHsc /UNDEBUG)
@@ -102,7 +102,26 @@ add_library(ecm_gui_v2_fake_nvml_readonly SHARED EXCLUDE_FROM_ALL "${ECM_GUI_V2_
 add_executable(ecm_gui_v2_fake_clock_query EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/fake_clock_query.cpp")
 target_compile_definitions(ecm_gui_v2_fake_nvml_readonly PRIVATE NO_LOCK_EXPORTS)
 add_executable(ecm_gui_v2_gpu_clock_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/gpu_clock_test.cpp"
-    app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp gpu_clocks.cpp)
+    app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp views/group_order.cpp group_order_job.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp gpu_clocks.cpp)
 add_dependencies(ecm_gui_v2_gpu_clock_test ecm_gui_v2_localization ecm_gui_v2_fake_nvml ecm_gui_v2_fake_nvml_readonly ecm_gui_v2_fake_clock_query)
 target_link_libraries(ecm_gui_v2_gpu_clock_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
 target_compile_options(ecm_gui_v2_gpu_clock_test PRIVATE /utf-8 /EHsc /UNDEBUG)
+
+# CPU diagnostics live in a separate cancellable process; the GUI stays GMP-free.
+if(NOT TARGET ecm_group_order)
+    add_subdirectory("${ECM_GUI_V2_ROOT}/src/ecm/core/group_order" "${CMAKE_BINARY_DIR}/group_order_core")
+endif()
+add_executable(ecm_group_order_ui group_order_runner.cpp group_order_job.cpp
+    "${ECM_GUI_V2_ROOT}/src/ecm/service/diagnostics/order_analysis.cpp")
+target_compile_features(ecm_group_order_ui PRIVATE cxx_std_17)
+target_compile_definitions(ecm_group_order_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+target_compile_options(ecm_group_order_ui PRIVATE /utf-8 /EHsc)
+target_link_libraries(ecm_group_order_ui PRIVATE ecm_group_order)
+add_custom_command(TARGET ecm_group_order_ui POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${ECM_GROUP_ORDER_GMP_ROOT}/bin/gmp-10.dll" "$<TARGET_FILE_DIR:ecm_group_order_ui>")
+add_dependencies(ecm_gui_v2 ecm_group_order_ui)
+add_executable(ecm_gui_v2_group_order_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/group_order_test.cpp" group_order_job.cpp)
+target_compile_features(ecm_gui_v2_group_order_test PRIVATE cxx_std_17)
+target_compile_definitions(ecm_gui_v2_group_order_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+target_compile_options(ecm_gui_v2_group_order_test PRIVATE /utf-8 /EHsc /UNDEBUG)
+add_dependencies(ecm_gui_v2_group_order_test ecm_group_order_ui)

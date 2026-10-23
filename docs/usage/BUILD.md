@@ -19,6 +19,8 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 ## 默认策略
 
+GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui_v2_local`。常规目标包含群阶分析助手及匹配的GMP DLL，无需CUDA；本机候选继续使用本地Zen3/BMI2依赖，未声明通用x64发布资格。`tools/build/package_gui_v2.ps1`是独立GUI候选打包入口，会附带对应GMP源码/许可；与下文计算worker的release策略分开，详见[GUI v2](GUI_V2.md#构建与启动)。
+
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
 位宽唯一清单为 `src/ecm/backend/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/backend/cuda/stage1/montgomery/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标，保留统一构建参数与发布拆分流程。

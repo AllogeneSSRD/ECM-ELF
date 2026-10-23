@@ -52,14 +52,15 @@ int main(int argc,char** argv){
      assert(log_tone(ecmgui::parse_line("factor[0]=123"))==LogTone::Success);}
     int mask=0,center=0,right=4;
     for(int i=0;i<5;++i)assert(ecmgui_v2::ui::move_page(mask,center,right,i,true));
-    assert(mask==31&&center==6&&!ecmgui_v2::ui::move_page(mask,center,right,6,true));
+    assert(mask==31&&center==6&&ecmgui_v2::ui::move_page(mask,center,right,6,true));
+    assert(center==7&&!ecmgui_v2::ui::move_page(mask,center,right,7,true));
     assert(!ecmgui_v2::ui::move_page(mask,center,right,5,true));
-    assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==6&&!ecmgui_v2::ui::pinned(mask,3));
+    assert(ecmgui_v2::ui::move_page(mask,center,right,3,false)&&center==7&&!ecmgui_v2::ui::pinned(mask,3));
     assert(!ecmgui_v2::ui::move_page(mask,center,right,-1,true));
     std::string order="0123456";
     assert(ecmgui_v2::ui::reorder_page(order,4,1,false)&&order=="0412356");
     assert(ecmgui_v2::ui::reorder_page(order,0,6,true)&&order=="4123560");
-    assert(!ecmgui_v2::ui::reorder_page(order,3,3,false)&&!ecmgui_v2::ui::reorder_page(order,7,2,false));
+    assert(!ecmgui_v2::ui::reorder_page(order,3,3,false)&&!ecmgui_v2::ui::reorder_page(order,8,2,false));
     using namespace ecmgui_v2::ui;
     assert(language_label("english.xml")=="english"&&language_label("custom.name.XML")=="custom.name");
     assert(language_label("自定义语言.xml")=="自定义语言");
@@ -215,5 +216,11 @@ int main(int argc,char** argv){
      assert(app.edit_business("shared","b2_ratio","60")&&!app.save_layout_config()&&read(cfg)==saved_config+"# external save conflict\n");
      state.writable=true;assert(app.load_config(cfg.u8string()));ImGui::DestroyContext(context);}
     assert(original.find("font_size=\"auto\"")!=std::string::npos);
+    {const auto path=root/"gp-config.toml";write(path,"# preserve GP comment\n[shared]\nb2_ratio=10\n[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n");
+     ecmgui_v2::UiState preferences;ecmgui_v2::App gp_app(preferences,stdout);assert(gp_app.load_config(path.u8string()));
+     assert(gp_app.edit_business("shared","b2_ratio","25"));gp_app.group_order_input.gp="C:/GP Folder/gp.exe";assert(gp_app.save_group_order_gp());
+     assert(gp_app.config.dirty()&&gp_app.config.get("shared","b2_ratio")=="25");
+     const auto saved=read(path);assert(saved.find("b2_ratio=10")!=saved.npos&&saved.find("# preserve GP comment")!=saved.npos&&saved.find("C:/GP Folder/gp.exe")!=saved.npos);
+     write(path,saved+"# external edit\n");gp_app.group_order_input.gp="other.exe";assert(!gp_app.save_group_order_gp()&&read(path)==saved+"# external edit\n");}
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true}\n";
 }

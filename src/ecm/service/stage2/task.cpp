@@ -197,14 +197,6 @@ int curve_worker(Options o) {
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     double factor_seconds = 0;
-    if (o.factorize_hits) {
-        stage2_log::phase("Optional factor decomposition");
-        const auto begin = std::chrono::steady_clock::now();
-        result += ',' + ecm_stage2::factor_details(result, n.z, fs::path(o.gp), o.factor_timeout,
-                                                   fs::path(o.results).parent_path() / "factor_details");
-        factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
-    }
-    stage2_log::phase("Publish result");
     const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::path(o.ini);
     const auto identity=read_result_identity(identity_ini,o.worker,!o.ini.empty());
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
@@ -219,6 +211,21 @@ int curve_worker(Options o) {
     const auto external_path=o.submission.empty()?identity_ini.parent_path()/identity.submission:fs::path(o.submission);
     if(submission.stage==1){submission.d=0;submission.poly_size=0;}
     ecm_results::publish_submission(external_path,submission,n.z);
+    // The primary verified factor is durable before optional decomposition.
+    // A failed diagnostic cannot turn a successful curve into a replay/failure.
+    if (o.factorize_hits) {
+        stage2_log::phase("Optional factor decomposition");
+        const auto begin = std::chrono::steady_clock::now();
+        try {
+            result += ',' + ecm_stage2::factor_details(result, n.z, fs::path(o.gp), o.factor_timeout,
+                                                       fs::path(o.results).parent_path() / "factor_details");
+        } catch(const std::exception &error) {
+            std::cerr<<"WARNING: optional factor decomposition unresolved: "<<error.what()<<std::endl;
+            result+=",\"factorization_complete\":false,\"prime_factors\":[],\"factor_analysis\":[],\"factor_analysis_error\":"+json_string(error.what());
+        }
+        factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+    }
+    stage2_log::phase("Publish result");
     std::string engine="{\"name\":\"cuda-ntt\",\"status\":"+json_string(status)+
         ",\"save\":"+json_string(o.save)+",\"record\":"+std::to_string(o.index)+
         ",\"record_hash\":"+json_string(std::to_string(o.hash))+",\"worker\":"+std::to_string(o.worker)+
