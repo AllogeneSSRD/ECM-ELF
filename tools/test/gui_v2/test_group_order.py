@@ -81,7 +81,13 @@ def main():
             assert max(v[1] for v in coords)-min(v[1] for v in coords)<=1,coords
         try:
             wait(lambda r:r['files']=='2' and 'factor' in r and 'curve1' in r)
-            click('factor');type_text('1009');click('sigma');type_text('\b'*20+'26')
+            initial=samples();assert initial.get('input_sigma','')=='' and initial['sigma_min']=='6'
+            click('factor');type_text('1009');click('calculate')
+            empty=wait(lambda r:int(r['completions'])==1);assert empty['busy']=='0' and empty['toast_error']=='1'
+            capture(hwnd,folder/'empty-sigma.png')
+            click('curve1');wait(lambda r:r['profile']=='1' and r['sigma_min']=='1');assert samples().get('input_sigma','')==''
+            click('curve0');wait(lambda r:r['profile']=='0' and r['sigma_min']=='6')
+            click('sigma');type_text('26')
             wait(lambda r:r.get('input_factor')=='1009' and r.get('input_sigma')=='26')
             row_geometry();click('save');time.sleep(.2)
             saved=tomllib.loads(cfg.read_text(encoding='utf-8'));assert saved['gui']['group_order_gp']==str(gp) and saved['shared']['b2_ratio']==10 and saved['workers']['1']['autostart']==0
@@ -89,6 +95,12 @@ def main():
             if not a.gp_only:backend(2)
             click('calculate');r=wait(lambda r:r.get('status')=='complete' and r['busy']=='0');assert int(r['group'])%int(r['point'])==0
             assert r['success']=='1' and r['toast_error']=='0' and int(r['toast_count'])>0
+            lo=tuple(map(float,r['output_min'].split(',')));hi=tuple(map(float,r['output_max'].split(',')))
+            start=(lo[0]+1,lo[1]+font*.5+2);end=(hi[0]-4,hi[1]-3)
+            pointer(start,0);pointer(start,1);pointer(end,0);pointer(end,2)
+            selected=wait(lambda r:int(r['text_selection'])>0)
+            type_text('x');assert samples()['group']==r['group'] and samples()['point']==r['point']
+            capture(hwnd,folder/'selected-output.png')
             click('go_copy');copied=clipboard_text()
             assert '#E(F_p): ' in copied and 'ord(P): ' in copied and '\n    = ' in copied and '×' in copied
             assert not any(text in copied for text in ['primality','proven','素数','已证明','"protocol"'])
@@ -118,7 +130,7 @@ def main():
             row_geometry()
             for key in ['factor','sigma','calculate','save','go_gp']:
                 x,y=map(float,r[key].split(','));assert 20<x<920 and 20<y<1220,(key,r)
-            capture(hwnd,folder/'narrow.png');cases.append(dict(language=language,font=font,imported_profiles=imported,narrow_width=900,retest_toast=True,async_failure_toast=True,validation_failure_toast=True,plain_math_copy=True))
+            capture(hwnd,folder/'narrow.png');cases.append(dict(language=language,font=font,imported_profiles=imported,narrow_width=900,retest_toast=True,async_failure_toast=True,validation_failure_toast=True,plain_math_copy=True,empty_sigma_hint=True,mouse_text_selection=True))
         except BaseException:
             capture(hwnd,folder/'failure.png');raise
         finally:close(proc,hwnd)

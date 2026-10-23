@@ -22,6 +22,10 @@ int main(int argc,char**argv){
     const auto original_first=read(first),original_second=read(second);
     assert(discover_order_files(root.u8string(),{first.u8string(),first.u8string()}).size()==2);
     std::string error;auto rows=read_order_records(first.u8string(),error);assert(rows.size()==2&&!error.empty()&&rows[0].input.sigma=="18446744073709551615");rows=read_order_records(second.u8string(),error);assert(rows.size()==1&&rows[0].input.profile==4&&!error.empty());
+    {OrderInput empty;empty.factor="1009";assert(empty.sigma.empty()&&!valid_order_input(empty,error));
+     empty.sigma="5";assert(!valid_order_input(empty,error));empty.sigma="6";assert(valid_order_input(empty,error));
+     for(int profile:{0,1,3,4,5}){empty.profile=profile;empty.sigma="18446744073709551615";assert(valid_order_input(empty,error));
+         empty.sigma="18446744073709551616";assert(!valid_order_input(empty,error));}}
     OrderInput input{"1009","26","",0,2};GroupOrderJob job;
     {using namespace order_gp;
      assert(multiply(std::string(500,'9'),std::string(500,'9'))==std::string(499,'9')+"8"+std::string(499,'0')+"1");

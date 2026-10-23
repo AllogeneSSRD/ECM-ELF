@@ -5,7 +5,8 @@
 #include <vector>
 namespace ecmgui_v2 {
 namespace go_json=ecm_results::json;
-struct OrderInput {std::string factor,sigma="6",gp;int profile=0,backend=0;};
+struct OrderInput {std::string factor,sigma,gp;int profile=0,backend=0;};
+inline unsigned order_sigma_minimum(int profile){return profile==0?6u:1u;}
 bool valid_order_input(const OrderInput&,std::string& error);
 std::string find_order_gp();
 struct OrderRecord {OrderInput input;std::string label,source;size_t line=0;};

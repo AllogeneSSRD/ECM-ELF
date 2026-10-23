@@ -448,6 +448,9 @@
       <Item id="go.failed" name="群阶计算未完成" />
       <Item id="go.cancelled" name="已取消计算" />
       <Item id="go.remaining_hint" name="[n] 表示尚未分解的余因子。" />
+      <Item id="go.sigma.suyama_range" name="6 ~ 2^64 - 1" />
+      <Item id="go.sigma.range" name="1 ~ 2^64 - 1" />
+      <Item id="go.sigma.hint" name="填写范围内的整数；仍需对所选素因子检查并排除退化构造。" />
       <Item id="go.primality.unknown" name="未检查" />
     </Panel>
   </Native-Langue>

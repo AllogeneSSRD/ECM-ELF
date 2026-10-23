@@ -232,5 +232,21 @@ int main(int argc,char** argv){
      assert(job.start(input,"missing-helper.exe")&&!job.busy());notify.notify_group_order();assert(!notify.group_order_success&&notify.toasts.back().error);
      input.sigma="invalid";assert(!job.start(input,"missing-helper.exe"));notify.notify_group_order();assert(!notify.group_order_success&&notify.toasts.back().error);
      assert(notify.group_order_completions==7);}
-    std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true}\n";
+    {ecmgui_v2::UiState preferences;ecmgui_v2::App text_app(preferences,stdout);
+     text_app.group_order_loaded=true;text_app.group_order_input={"1009","26","",0,1};text_app.group_order_job.snapshot=text_app.group_order_input;
+     text_app.group_order_job.result=ecmgui_v2::go_json::parse(R"({"status":"complete","backend":"gp","all_proven":true,"modulus_primality":"proven","group_computed":true,"point_minimality":true,"group_order":"996","point_order":"249","cofactor":"1","group_factors":[{"prime":"2","exponent":"2"},{"prime":"3","exponent":"1"},{"prime":"83","exponent":"1"}],"point_factors":[{"prime":"3","exponent":"1"},{"prime":"83","exponent":"1"}]})");
+     auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={1800,1400};io.DeltaTime=1.f/60;
+     io.Fonts->AddFontDefault();unsigned char* pixels;int width,height;io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+     static std::string copied;auto& platform=ImGui::GetPlatformIO();
+     platform.Platform_SetClipboardTextFn=[](ImGuiContext*,const char* value){copied=value;};
+     platform.Platform_GetClipboardTextFn=[](ImGuiContext*){return copied.c_str();};
+     const auto frame=[&]{ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({1500,1200});ImGui::Begin("order-text-contract",nullptr,ImGuiWindowFlags_NoSavedSettings);text_app.draw_group_order(false);ImGui::End();ImGui::Render();};
+     frame();frame();const auto lo=text_app.group_order_output_min,hi=text_app.group_order_output_max;
+     io.AddMousePosEvent(lo.x+1,lo.y+ImGui::GetFontSize()*.5f+2);frame();io.AddMouseButtonEvent(0,true);frame();
+     io.AddMousePosEvent(hi.x-4,hi.y-3);frame();io.AddMouseButtonEvent(0,false);frame();assert(text_app.group_order_selection>0);
+     const auto copy=[&]{copied.clear();io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddKeyEvent(ImGuiKey_C,true);frame();io.AddKeyEvent(ImGuiKey_C,false);io.AddKeyEvent(ImGuiMod_Ctrl,false);frame();};
+     copy();assert(copied=="Group order #E(F_p): 996\n    = 2^2 × 3 × 83\nPoint order ord(P): 249\n    = 3 × 83");
+     const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
+     ImGui::DestroyContext(context);}
+    std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";
 }

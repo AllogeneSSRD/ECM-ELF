@@ -448,6 +448,9 @@
       <Item id="go.failed" name="Order analysis incomplete" />
       <Item id="go.cancelled" name="Analysis cancelled" />
       <Item id="go.remaining_hint" name="[n] denotes an unresolved cofactor." />
+      <Item id="go.sigma.suyama_range" name="6 ~ 2^64 - 1" />
+      <Item id="go.sigma.range" name="1 ~ 2^64 - 1" />
+      <Item id="go.sigma.hint" name="Enter an integer in this range. Degenerate constructions are rejected for the selected prime." />
       <Item id="go.primality.unknown" name="Not checked" />
     </Panel>
   </Native-Langue>

@@ -66,7 +66,8 @@ bool button(const char* id, const char* label, ButtonKind kind, const Palette& p
     ImGui::PushStyleColor(ImGuiCol_Text, text);
     ImGui::PushStyleColor(ImGuiCol_Button, normal);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, primary ? p.accent_hover : p.hover);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, primary ? p.muted : p.active);
+    const ImVec4 primary_active{std::min(1.f,p.accent.x+.025f),std::min(1.f,p.accent.y+.025f),std::min(1.f,p.accent.z+.025f),p.accent.w};
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, primary ? primary_active : p.active);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, kind == ButtonKind::Ghost ? 0.f : scale);
     if(compact)ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{(width>0?4.f:8.f)*scale,4*scale});
     ImGui::BeginDisabled(disabled);

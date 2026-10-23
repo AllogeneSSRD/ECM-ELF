@@ -25,7 +25,7 @@ std::string find_order_gp(){return executable_in_path(L"gp.exe");}
 bool valid_order_input(const OrderInput&i,std::string&error){
     error.clear();if(!digits(i.factor)||i.factor.size()>1234){error="Factor must be a decimal prime (maximum 4096 bits)";return false;}
     if(!digits(i.sigma)||i.sigma.size()>20){error="Sigma must be a uint64 decimal integer";return false;}
-    try{size_t n=0;const auto sigma=std::stoull(i.sigma,&n);if(n!=i.sigma.size()||!sigma||(i.profile==0&&sigma<6))throw std::runtime_error("sigma");}
+    try{size_t n=0;const auto sigma=std::stoull(i.sigma,&n);if(n!=i.sigma.size()||sigma<order_sigma_minimum(i.profile))throw std::runtime_error("sigma");}
     catch(...){error="Sigma is outside the selected construction's range";return false;}
     if(i.profile!=0&&i.profile!=1&&i.profile!=3&&i.profile!=4&&i.profile!=5){error="Unsupported curve construction";return false;}
     if(i.backend<0||i.backend>2){error="Unknown backend";return false;}return true;

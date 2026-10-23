@@ -191,6 +191,8 @@ public:
     unsigned group_order_completions=0;
     bool group_order_success=false;
     std::string group_order_copy;
+    ImVec2 group_order_output_min{},group_order_output_max{};
+    int group_order_selection=0;
     void notify_group_order();
     void draw_group_order(bool zh);
     bool save_group_order_gp();
