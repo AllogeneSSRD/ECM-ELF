@@ -15,6 +15,7 @@
 
 ## 第三方实现
 
+- [ELYTerminal 桌宠行为](ELY_PET_BEHAVIOR.md)：固定版本的情绪、微动作时间表、点击及睡眠条件，区分上游矢量动作与图集适配。
 - [GPUOWL NTT](GPUOWL_NTT.md)：保留 `DEV_GPUOWL_NTT_NOTES.md` §§1–10 的域运算、IBDWT、twiddle、CRT、carry 与源码索引。
 - [GPUOWL CUDA FFT](GPUOWL_FFT.md)：共享内核、浮点/整数/混合路径和权重布局。
 - [Prime95 Poly Stage2](PRIME95_STAGE2.md)：D/B2/内存、F/G/倒数、截断 fold、共享变换、scaled 下降与源码行号。

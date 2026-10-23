@@ -56,7 +56,7 @@ bool Window::open() {
     hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"Ely companion", WS_POPUP,
         0, 0, 112, 124, owner_, nullptr, wc.hInstance, this);
     if (!hwnd_) { error = "Cannot create pet window"; return false; }
-    since_ = GetTickCount64(); frame_ = row_ = -1; error.clear(); return true;
+    behavior_.interact(GetTickCount64(),false);frame_ = row_ = -1; error.clear(); return true;
 }
 void Window::clear_bitmap() {
     if (dc_ && previous_) SelectObject(dc_, previous_);
@@ -71,7 +71,7 @@ Window::~Window() {
     close(); UnregisterClassW(L"ecm_gui_v2_pet", GetModuleHandleW(nullptr));
     if (gdiplus_) Gdiplus::GdiplusShutdown(gdiplus_);
 }
-void Window::paint(const Placement& spot, int row, int frame) {
+void Window::paint(const Placement& spot, int row, int frame, int sway) {
     if (!bitmap_ || spot.width != previous_place_.width || spot.height != previous_place_.height) {
         clear_bitmap(); dc_ = CreateCompatibleDC(nullptr);
         BITMAPINFO info{}; info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -94,10 +94,27 @@ void Window::paint(const Placement& spot, int row, int frame) {
         cached_rows_[row]=true;
     }
     std::memcpy(pixels_,cached_frames_.data()+count*(row*8+frame),count*sizeof(unsigned));
+    if(sway){
+        // Only the forelock above the head moves. Shear fades to zero at its
+        // root; premultiplied pixels use linear filtering without atlas bleed.
+        const auto* source=cached_frames_.data()+count*(row*8+frame);
+        const int left=int(spot.width*.39f),right=int(spot.width*.66f);
+        const int top=int(spot.height*.12f),bottom=int(spot.height*.30f);
+        for(int y=top;y<bottom;++y){
+            const float shift=sway*.1f*(spot.width/112.f)*2.f*(bottom-1-y)/std::max(1,bottom-1-top);
+            for(int x=left;x<right;++x){
+                const float from=x-shift;const int a=int(std::floor(from));const float mix=from-a;
+                const unsigned one=a>=left&&a<right?source[y*spot.width+a]:0;
+                const unsigned two=a+1>=left&&a+1<right?source[y*spot.width+a+1]:0;
+                unsigned pixel=0;for(int channel=0;channel<32;channel+=8)pixel|=unsigned(std::lround(((one>>channel)&255)*(1-mix)+((two>>channel)&255)*mix))<<channel;
+                pixels_[y*spot.width+x]=pixel;
+            }
+        }
+    }
     POINT destination{spot.x, spot.y}, origin{}; SIZE size{spot.width, spot.height};
     BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
     if (!UpdateLayeredWindow(hwnd_, nullptr, &destination, &size, dc_, &origin, 0, &blend, ULW_ALPHA)) throw std::runtime_error("Cannot composite pet window");
-    previous_place_ = spot; frame_ = frame; row_ = row;
+    previous_place_ = spot; frame_ = frame; row_ = row;sway_=sway;
 }
 void Window::tick(Mood mood) {
     if (!state_.pet_enabled) { if (hwnd_ || atlas_) close(); return; }
@@ -105,23 +122,21 @@ void Window::tick(Mood mood) {
     try {
         if (!open()) { close();state_.pet_enabled = false; std::fprintf(log_, "pet_error: %s\n", error.c_str()); return; }
         const auto now = GetTickCount64();
-        if (mood != source_) { source_ = mood; since_ = now; }
-        auto shown = source_;
-        if (shown == Mood::Done && now - since_ >= 4000) shown = Mood::Calm;
-        if (shown == Mood::Calm && now - since_ >= 300000) shown = Mood::Doze;
-        if (petted_until_ > now) shown = Mood::Wink;
+        const auto pose=behavior_.sample(now,mood,state_.pet_animate,dragging_);
         const RECT main=client_bounds(owner_);
         MONITORINFO monitor{sizeof(monitor)};
         if (!GetMonitorInfoW(MonitorFromWindow(owner_, MONITOR_DEFAULTTONEAREST), &monitor)) throw std::runtime_error("Cannot locate pet work area");
         const float scale = std::max(1u, GetDpiForWindow(owner_)) / 96.f;
-        const auto spot = place(main, monitor.rcWork, scale, state_.pet_left);
-        const int frame = state_.pet_animate ? static_cast<int>((now / 150) % 8) : 0;
-        const int row = static_cast<int>(shown);
+        const auto anchor=place(main, monitor.rcWork, scale, state_.pet_left);
+        auto spot=anchor;rise_=pose.rise;spot.y=std::max(int(monitor.rcWork.top),spot.y-int(std::lround(rise_*scale)));
+        const int frame=pose.frame,sway=int(std::lround(pose.forelock*10));
+        const int row = static_cast<int>(pose.mood);
         const bool relocated = spot.x != previous_place_.x || spot.y != previous_place_.y || spot.width != previous_place_.width || spot.height != previous_place_.height;
-        if (row != row_ || relocated) {
+        if (row != row_ || anchor.x!=previous_anchor_.x || anchor.y!=previous_anchor_.y || anchor.width!=previous_anchor_.width || anchor.height!=previous_anchor_.height) {
             std::fprintf(log_, "pet: mood=%d edge=%s dpi=%.0f x=%d y=%d w=%d h=%d\n", row, spot.bottom ? "bottom" : "top", scale * 96, spot.x, spot.y, spot.width, spot.height); std::fflush(log_);
         }
-        if (frame != frame_ || row != row_ || relocated) paint(spot, row, frame);
+        if (frame != frame_ || row != row_ || relocated || sway!=sway_) paint(spot, row, frame,sway);
+        previous_anchor_=anchor;
         if (!IsWindowVisible(hwnd_)) ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     } catch (const std::exception& failure) { error = failure.what(); state_.pet_enabled = false; close(); std::fprintf(log_, "pet_error: %s\n", error.c_str()); std::fflush(log_); }
 }
@@ -135,7 +150,7 @@ void Window::follow_owner() {
     const auto spot=place(main,monitor.rcWork,std::max(1u,GetDpiForWindow(owner_))/96.f,state_.pet_left);
     // The native move/resize loop pauses the application's frame loop. Reuse
     // existing layered pixels here; DPI rasterisation stays in the normal tick.
-    const int y=spot.y+spot.height-previous_place_.height;
+    const int y=std::max(int(monitor.rcWork.top),spot.y+spot.height-previous_place_.height-int(std::lround(rise_*std::max(1u,GetDpiForWindow(owner_))/96.f)));
     if(SetWindowPos(hwnd_,nullptr,spot.x,y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE)){
         previous_place_.x=spot.x;previous_place_.y=y;
     }
@@ -146,6 +161,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) 
     if (!self) return DefWindowProcW(hwnd, message, w, l);
     if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (message == WM_LBUTTONDOWN) {
+        self->behavior_.interact(GetTickCount64(),false);
         GetCursorPos(&self->drag_start_); self->drag_left_ = self->state_.pet_left; self->dragging_ = true; self->moved_ = false; SetCapture(hwnd); return 0;
     }
     if (message == WM_MOUSEMOVE && self->dragging_) {
@@ -159,7 +175,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) 
     }
     if (message == WM_LBUTTONUP && self->dragging_) {
         self->dragging_ = false; ReleaseCapture();
-        if (!self->moved_) { self->petted_until_ = GetTickCount64() + 1500; self->since_ = GetTickCount64(); }
+        self->behavior_.interact(GetTickCount64(),!self->moved_);
         return 0;
     }
     if (message == WM_CAPTURECHANGED) { self->dragging_ = false; return 0; }

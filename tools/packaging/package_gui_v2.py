@@ -65,7 +65,8 @@ def main():
     selected.update(['src/ecm/application/gui_v2/app.manifest','tools/packaging/package_gui_v2.py',
                      'tools/build/package_gui_v2.ps1','tools/test/gui_v2/test_package.py','tools/test/gui_v2/test_failure_shutdown.py'])
     selected.update(['tools/test/gui_v2/group_order_test.cpp','tools/test/gui_v2/test_group_order.py',
-                     'tools/test/gui_v2/test_group_order_backend.py',
+                     'tools/test/gui_v2/test_group_order_backend.py','tools/test/gui_v2/pet_behavior_test.cpp',
+                     'tools/test/gui_v2/test_pet_idle.py','tools/build/test/build_pet_behavior.ps1',
                      'tools/test/group_order_probe.cpp'])
     selected.update(['.gitattributes','config/gui_v2_pet_skins.generated.json',
                      'config/gui_v2_localization_aliases.json','config/gui_v2_localization.generated.json','tools/gen/generate_gui_v2_localization.py',
