@@ -7,6 +7,7 @@ namespace ecmgui_v2 {
 namespace go_json=ecm_results::json;
 struct OrderInput {std::string factor,sigma="6",gp;int profile=0,backend=0;};
 bool valid_order_input(const OrderInput&,std::string& error);
+std::string find_order_gp();
 struct OrderRecord {OrderInput input;std::string label,source;size_t line=0;};
 std::vector<OrderRecord> read_order_records(const std::string& path,std::string& error);
 std::vector<std::string> discover_order_files(const std::string& directory,const std::vector<std::string>& configured={});
@@ -28,7 +29,12 @@ private:
     HANDLE process_=nullptr,job_=nullptr;
     std::wstring request_,output_;
     unsigned long long started_=0;
+    bool gp_phase_=false;
+    std::string helper_,fallback_;
     void cleanup();
+    void stop();
+    void launch(bool gp);
+    bool gp_failed(const std::string& reason);
 };
 std::string order_signature(const OrderInput&);
 }

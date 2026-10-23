@@ -4,9 +4,9 @@
 #include <initializer_list>
 namespace ecmgui_v2::ui {
 // Application-drawn line icons: one view box / stroke, no font or image dependency.
-enum class Icon { None, Play, Stop, Grid, List, Sliders, Check, Folder, Cpu, Results, Generate, Chart, Gpu, Settings, Palette, Pet, Layout };
+enum class Icon { None, Play, Stop, Grid, List, Sliders, Check, Folder, Cpu, Results, Generate, Chart, Gpu, Settings, Palette, Pet, Layout, Calculate };
 inline Icon page_icon(int page){
-    static const Icon icons[]{Icon::Cpu,Icon::Results,Icon::Generate,Icon::Chart,Icon::Gpu,Icon::Settings,Icon::Grid,Icon::Generate};
+    static const Icon icons[]{Icon::Cpu,Icon::Results,Icon::Generate,Icon::Chart,Icon::Gpu,Icon::Settings,Icon::Grid,Icon::Calculate};
     return page>=0&&page<8?icons[page]:Icon::Grid;
 }
 inline void line_icon(ImDrawList* draw,Icon shape,ImVec2 pos,float size,ImU32 color){
@@ -38,6 +38,7 @@ inline void line_icon(ImDrawList* draw,Icon shape,ImVec2 pos,float size,ImU32 co
     case Icon::Palette:draw->AddBezierCubic(point(21,12),point(21,0),point(2,0),point(3,13),color,stroke);draw->AddBezierCubic(point(3,13),point(4,24),point(18,23),point(14,16),color,stroke);draw->AddBezierCubic(point(14,16),point(12,12),point(21,17),point(21,12),color,stroke);for(auto c:{ImVec2{8,8},ImVec2{13,6},ImVec2{17,9}})circle(c.x,c.y,1);break;
     case Icon::Pet:draw->AddBezierCubic(point(4,15),point(1,5),point(8,1),point(9,7),color,stroke);draw->AddBezierCubic(point(15,7),point(16,1),point(23,5),point(20,15),color,stroke);draw->AddBezierCubic(point(4,15),point(4,24),point(20,24),point(20,15),color,stroke);circle(8,14,1);circle(16,14,1);line(10,18,14,18);break;
     case Icon::Layout:rect(3,3,21,21);line(9,3,9,21);line(9,15,21,15);break;
+    case Icon::Calculate:line(4,7,10,7);line(7,4,7,10);line(14,7,20,7);line(4.5f,14.5f,9.5f,19.5f);line(9.5f,14.5f,4.5f,19.5f);line(14,15.5f,20,15.5f);line(14,18.5f,20,18.5f);break;
     case Icon::Folder:line(3,8,3,4);line(3,4,10,4);line(10,4,13,8);rect(3,8,21,20);break;
     case Icon::Check:line(4,12,10,18);line(10,18,21,5);break;
     case Icon::Sliders:for(int i=0;i<3;++i){const float y=5.f+i*7;const float x=i==1?15.f:8.f;line(3,y,x-3,y);line(x+3,y,21,y);circle(x,y,3);}break;

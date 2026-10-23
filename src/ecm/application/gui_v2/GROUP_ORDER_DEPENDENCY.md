@@ -1,8 +1,10 @@
 # Group Order Factor helper dependency
 
-`ecm_gui_v2.exe` starts `ecm_group_order_ui.exe` for explicit order analysis.
-The helper dynamically links `gmp-10.dll`; the GUI itself does not load GMP.
-PARI/GP is optional, is configured separately, and is not redistributed.
+`ecm_gui_v2.exe` calls the configured or PATH-discovered PARI/GP directly for
+order analysis. Only local CPU/GMP execution (explicit or Auto fallback) starts
+`ecm_group_order_ui.exe`. The helper dynamically links `gmp-10.dll`; the GUI
+itself does not load GMP. A working GP does not require the helper or GMP DLL.
+PARI/GP is configured separately and is not redistributed.
 
 The local candidate uses the existing `third_party/gmp-zen3/dist` installation.
 Its build selects x86_64 Zen3 assembly/BMI2 kernels; do not qualify this DLL for

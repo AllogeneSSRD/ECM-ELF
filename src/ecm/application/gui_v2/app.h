@@ -43,7 +43,7 @@ public:
     void set_logs_visible(bool visible);
     const ecmgui::WorkerView* selected() const;
     void trace(const std::string& text);
-    void toast(const std::string& text,bool error=false);
+    void toast(const std::string& text,bool error=false,bool repeat=false);
     struct Toast {std::string text; unsigned long long until; bool error;};
     std::deque<Toast> toasts;
     std::string last_status;
@@ -188,6 +188,10 @@ public:
     std::map<int,std::pair<ImVec2,ImVec2>> group_order_curve_controls;
     std::map<std::string,ImVec2> group_order_controls;
     ImVec2 group_order_calculate{},group_order_save{},group_order_cancel{};
+    unsigned group_order_completions=0;
+    bool group_order_success=false;
+    std::string group_order_copy;
+    void notify_group_order();
     void draw_group_order(bool zh);
     bool save_group_order_gp();
     ui::Showcase showcase;

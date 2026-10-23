@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
     const names = source.toString('utf8').match(/enum class Icon\s*\{([^}]+)\}/)[1].split(',').map(s => s.trim());
     const data = await page.locator('#icon-data').evaluate(e => JSON.parse(e.textContent));
     assert.deepEqual(data.map(i => i.name), names);
-    assert.equal(names.length, 17);
+    assert.equal(names.length, 18);
     assert.equal(data.find(i => i.name === 'None').svg, '');
     assert.ok(data.filter(i => i.name !== 'None').every(i => i.svg.length));
     assert.equal(await page.locator('#source-sha').innerText(), createHash('sha256').update(source).digest('hex'));
@@ -34,7 +34,7 @@ const assert = require('node:assert/strict');
       assert.equal(await page.locator('#preview svg').count(), name === 'None' ? 0 : 1);
     }
     await page.locator('[data-group="操作"]').click();
-    assert.deepEqual(await page.locator('.tile').evaluateAll(es => es.map(e => e.dataset.icon)), ['Play', 'Stop']);
+    assert.deepEqual(await page.locator('.tile').evaluateAll(es => es.map(e => e.dataset.icon)), ['Play', 'Stop', 'Calculate']);
     await page.locator('[data-group="全部"]').click();
     await page.locator('#search').fill('paLETte');
     assert.equal(await page.locator('.tile').count(), 1);

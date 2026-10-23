@@ -53,6 +53,10 @@ Stage2 结果中的 `factor_analysis` 保留 `raw`，新增 `backend`、`gp_fail
 
 主程序回归构建入口为 `tools/build/test/build_go_fallback.ps1`（CPU 路线）、`build_stage1_fallback_cuda.ps1`、`build_go_fallback_fixture.ps1` 和 `build_stage2_fallback.ps1`。`tools/test/test_go_fallback.py --target cpu|gpu` 检查真实命中与提交文件，CPU 还比较因子 save；`test_stage2_gp_fallback.py` 检查队列回执及附加诊断。Stage2 测试通过合成 saved-X 因子进入真实队列和发布流程，不代表额外验证 GPU Stage2 算术。两个 host-only 构建仍执行原有 CUDA 对象身份检查。
 
+## GUI v2 分析入口
+
+GUI的Auto / PARI/GP路线通过`application/gui_v2/group_order_job.cpp`直接调用已配置或PATH发现的GP，不依赖本地助手；本地模式及Auto的非数学故障回退才调用`ecm_group_order_ui.exe`。助手复用本节所述CPU/GMP核心。GUI内置GP模型沿用相同曲线身份和直接点映射，主机端不链接GMP，使用有界十进制检查分解乘积、点阶整除及Hasse界；模数/因子素性和点最小性由GP实际验证。GP数学错误返回无效，不触发本地回退。该前端调度独立于Stage1/Stage2的Session，不改变计算程序的配置或运行策略；控件、PATH优先级与交付文件见[GUI使用说明](../usage/GUI_V2.md#群阶分解--group-order-factor)。
+
 ## 独立构建和验证
 
 Windows 测试构建仅需 MSVC x64 与 GMP，不查找 CUDA：

@@ -90,7 +90,8 @@ Microsoft Visual C++ x64 runtime matching the MSVC build. No development SDK,
 validation layer, Electron or browser runtime is required.
 
 This GUI-only package contains no compute worker and never replaces ecm_gui.exe.
-Group Order Factor uses the included ecm_group_order_ui.exe and replaceable
+Group Order Factor calls configured/PATH-discovered PARI/GP directly. Local
+CPU/GMP execution uses the included ecm_group_order_ui.exe and replaceable
 gmp-10.dll. PARI/GP is optional and installed/configured separately. This local
 GMP build uses Zen3/BMI2 kernels; arbitrary x64 CPU compatibility is not qualified.
 Its corresponding source and build configuration are in source/, and licenses

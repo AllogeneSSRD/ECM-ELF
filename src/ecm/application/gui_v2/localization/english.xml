@@ -401,17 +401,17 @@
       <Item id="gpu.clock_disconnected" name="GPU unavailable or identity changed. Refresh before retrying." />
       <Item id="gpu.clock_failed" name="GPU clock operation failed; see the driver message below." />
       <Item id="go.title" name="Group Order Factor" />
-      <Item id="go.description" name="Reconstruct the original curve over a prime factor; compute group order, point order and factorizations. GP is preferred, with a bounded local fallback." />
+      <Item id="go.description" name="Reconstruct a curve from sigma and a prime factor; compute group and original point orders." />
       <Item id="go.unsupported" name="This Edwards construction is not implemented by the order engine." />
       <Item id="go.factor" name="Prime factor p" />
       <Item id="go.gp_path" name="GP executable" />
-      <Item id="go.save_path" name="Save GP path to ecm.toml" />
+      <Item id="go.save_path" name="Save" />
       <Item id="go.gp_hint" name="Empty: find gp in PATH. Relative paths use the workflow directory." />
-      <Item id="go.auto" name="GP + local fallback" />
+      <Item id="go.auto" name="Auto" />
       <Item id="go.native" name="Local CPU/GMP" />
       <Item id="go.calculate" name="Calculate orders" />
       <Item id="go.cancel" name="Cancel analysis" />
-      <Item id="go.running" name="Analyzing in a separate process. GP: 30 s; local fallback: 2 s; total deadline: 45 s." />
+      <Item id="go.running" name="Analyzing…" />
       <Item id="go.status" name="Status" />
       <Item id="go.backend" name="Backend" />
       <Item id="go.primality" name="Modulus primality" />
@@ -419,13 +419,13 @@
       <Item id="go.proven" name="Proven" />
       <Item id="go.conditional" name="Conditional / incomplete" />
       <Item id="go.group_order" name="Group order #E(F_p)" />
-      <Item id="go.point_order" name="Original point order ord(P)" />
+      <Item id="go.point_order" name="Point order ord(P)" />
       <Item id="go.group_factorization" name="Group order factorization" />
       <Item id="go.point_factorization" name="Point order factorization" />
       <Item id="go.remaining" name="Unfactored cofactor" />
       <Item id="go.fallback" name="GP fallback reason" />
-      <Item id="go.copy" name="Copy analysis JSON" />
-      <Item id="go.finished" name="Order analysis finished" />
+      <Item id="go.copy" name="Copy result" />
+      <Item id="go.finished" name="Order analysis complete" />
       <Item id="go.stale" name="Inputs changed; the result belongs to the snapshot above." />
       <Item id="go.incomplete" name="Not completed" />
       <Item id="go.result_files" name="Import sigma and factors from results" />
@@ -443,6 +443,12 @@
       <Item id="go.primality.probable" name="Probable prime (unproven)" />
       <Item id="go.primality.proven" name="Proven prime" />
       <Item id="go.browse" name="Browse" />
+      <Item id="go.select_gp" name="Select GP" />
+      <Item id="go.algorithm" name="Algorithm" />
+      <Item id="go.failed" name="Order analysis incomplete" />
+      <Item id="go.cancelled" name="Analysis cancelled" />
+      <Item id="go.remaining_hint" name="[n] denotes an unresolved cofactor." />
+      <Item id="go.primality.unknown" name="Not checked" />
     </Panel>
   </Native-Langue>
 </EcmGui>

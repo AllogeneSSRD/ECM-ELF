@@ -222,5 +222,15 @@ int main(int argc,char** argv){
      assert(gp_app.config.dirty()&&gp_app.config.get("shared","b2_ratio")=="25");
      const auto saved=read(path);assert(saved.find("b2_ratio=10")!=saved.npos&&saved.find("# preserve GP comment")!=saved.npos&&saved.find("C:/GP Folder/gp.exe")!=saved.npos);
      write(path,saved+"# external edit\n");gp_app.group_order_input.gp="other.exe";assert(!gp_app.save_group_order_gp()&&read(path)==saved+"# external edit\n");}
+    {ecmgui_v2::UiState preferences;ecmgui_v2::App notify(preferences,stdout);
+     auto& job=notify.group_order_job;job.result.type='o';job.result.set("status",ecmgui_v2::go_json::Value::string("complete"));
+     notify.notify_group_order();notify.notify_group_order();
+     assert(notify.group_order_completions==2&&notify.toasts.size()==2&&notify.group_order_success&&!notify.toasts.back().error);
+     for(const char* status:{"partial","resource_limit","invalid_input"}){
+         job.result.set("status",ecmgui_v2::go_json::Value::string(status));notify.notify_group_order();assert(!notify.group_order_success&&notify.toasts.back().error);}
+     ecmgui_v2::OrderInput input{"1009","26",(root/"missing-gp.exe").u8string(),0,1};
+     assert(job.start(input,"missing-helper.exe")&&!job.busy());notify.notify_group_order();assert(!notify.group_order_success&&notify.toasts.back().error);
+     input.sigma="invalid";assert(!job.start(input,"missing-helper.exe"));notify.notify_group_order();assert(!notify.group_order_success&&notify.toasts.back().error);
+     assert(notify.group_order_completions==7);}
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true}\n";
 }

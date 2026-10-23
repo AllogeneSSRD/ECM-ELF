@@ -5,6 +5,7 @@
 #include "ui/chart.h"
 #include "ui/worker_presentation.h"
 #include "ui/log_presentation.h"
+#include "ui/group_order_presentation.h"
 #include "../gui/task_display.h"
 #include "imgui_internal.h" // DockBuilder is kept in the v2 layout module.
 #include <algorithm>
@@ -49,10 +50,22 @@ App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log
     });
 }
 App::~App() { shutdown_workers(); }
-void App::toast(const std::string& text,bool error) {
+void App::toast(const std::string& text,bool error,bool repeat) {
     if(text.empty())return;
-    if(!toasts.empty()&&toasts.back().text==text){toasts.back().until=GetTickCount64()+4000;toasts.back().error|=error;return;}
+    if(!repeat&&!toasts.empty()&&toasts.back().text==text){toasts.back().until=GetTickCount64()+4000;toasts.back().error|=error;return;}
     if(toasts.size()==4)toasts.pop_front();toasts.push_back({text,GetTickCount64()+4000,error});
+}
+void App::notify_group_order(){
+    const bool zh=state.ui_language=="zh";
+    group_order_success=ui::order_succeeded(group_order_job.result,group_order_job.error);
+    ++group_order_completions;
+    std::string message=ui::text(group_order_success?"go.finished":"go.failed",zh);
+    if(!group_order_success){
+        const auto status=group_order_job.result.get("status").text();
+        if(!status.empty())message+=" · "+std::string(ui::text(("go.status."+status).c_str(),zh));
+        else if(!group_order_job.error.empty())message+=" · "+group_order_job.error;
+    }
+    toast(message,!group_order_success,true);
 }
 void App::trace(const std::string& text) {
     if (messages.size() == 4000) messages.pop_front(); messages.push_back(text);
@@ -147,7 +160,7 @@ bool App::start(int index) {
 }
 void App::tick() {
     tick_gpu_clocks();
-    if(group_order_job.poll())toast(group_order_job.error.empty()?ui::text("go.finished",state.ui_language=="zh"):group_order_job.error,!group_order_job.error.empty());
+    if(group_order_job.poll())notify_group_order();
     if (autostart_pending) {
         autostart_pending = false;
         for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);

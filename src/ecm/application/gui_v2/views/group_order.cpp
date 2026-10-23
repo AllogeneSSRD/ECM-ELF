@@ -2,6 +2,7 @@
 #include "../ui/i18n.h"
 #include "../ui/curve_selector.h"
 #include "../ui/presentation.h"
+#include "../ui/group_order_presentation.h"
 #include <commdlg.h>
 #include <filesystem>
 #include <algorithm>
@@ -35,47 +36,77 @@ void App::draw_group_order(bool zh){
         group_order_file=it==group_order_files.end()?-1:int(it-group_order_files.begin());group_order_records.clear();group_order_file_error.clear();
         if(group_order_file>=0)group_order_records=read_order_records(group_order_files[group_order_file],group_order_file_error);
     };
-    if(!group_order_loaded){group_order_input.gp=ready?config.get("gui","group_order_gp"):"";group_order_loaded=true;group_order_base=base;group_order_records.clear();group_order_file=-1;refresh();}
+    if(!group_order_loaded){group_order_input.gp=ready?config.get("gui","group_order_gp"):"";if(group_order_input.gp.empty())group_order_input.gp=find_order_gp();group_order_loaded=true;group_order_base=base;group_order_records.clear();group_order_file=-1;refresh();}
     group_order_controls.clear();
     ImGui::TextUnformatted(ui::text("go.title",zh));ui::secondary_text(ui::text("go.description",zh));
     ui::curve_buttons("go-curves",group_order_input.profile,false,zh,group_order_curve_controls,true);
     {ui::CompactForm form("go-fields",group_order_form);
         form.field("factor",ui::text("go.factor",zh),[&]{edit("##factor",group_order_input.factor,1235);});
         form.field("sigma","sigma",[&]{edit("##sigma",group_order_input.sigma,21);});}
-    ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ui::text("go.gp_path",zh));ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::max(80*scale,ImGui::GetContentRegionAvail().x-140*scale));edit("##go-gp",group_order_input.gp);group_order_controls["gp"]=center();
-    ImGui::SameLine();if(ui::button("go-browse-gp",ui::text("go.browse",zh),ui::ButtonKind::Secondary,p,scale,false,nullptr,true)){auto path=browse(true);if(!path.empty())group_order_input.gp=path;}
-    if(ui::button("go-save",ui::text("go.save_path",zh),ui::ButtonKind::Secondary,p,scale,!ready,nullptr,true))save_group_order_gp();group_order_save=center();
-    ImGui::TextWrapped("%s",ui::text("go.gp_hint",zh));
     const char*backends[]{ui::text("go.auto",zh),"PARI/GP",ui::text("go.native",zh)};
-    for(int i=0;i<3;++i){if(i)ImGui::SameLine();const bool selected=group_order_input.backend==i;if(selected)ImGui::PushStyleColor(ImGuiCol_Button,ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));ImGui::PushID(i);if(ImGui::Button(backends[i]))group_order_input.backend=i;group_order_controls["backend"+std::to_string(i)]=center();ImGui::PopID();if(selected)ImGui::PopStyleColor();}
-    if(ui::button("go-calculate",ui::text("go.calculate",zh),ui::ButtonKind::Primary,p,scale,group_order_job.busy(),nullptr,true)){
+    const float available=ImGui::GetContentRegionAvail().x,row_height=24*scale;
+    float combo_width=0;for(auto name:backends)combo_width=std::max(combo_width,ImGui::CalcTextSize(name).x);
+    combo_width=std::min(combo_width+ImGui::CalcTextSize(ui::text("go.algorithm",zh)).x+50*scale,available*.4f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{8*scale,4.5f*scale});
+    if(ImGui::BeginTable("go-gp-row",5,ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_NoPadOuterX)){
+        ImGui::TableSetupColumn("label",ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize("GP").x);
+        ImGui::TableSetupColumn("path",ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("browse",ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize(ui::text("go.browse",zh)).x+16*scale);
+        ImGui::TableSetupColumn("save",ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize(ui::text("go.save_path",zh)).x+16*scale);
+        ImGui::TableSetupColumn("algorithm",ImGuiTableColumnFlags_WidthFixed,combo_width);
+        ImGui::TableNextRow();ImGui::TableNextColumn();ImGui::AlignTextToFramePadding();ui::secondary_text("GP");ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1);std::vector<char> path(std::max(size_t(4097),group_order_input.gp.size()+1));std::copy(group_order_input.gp.begin(),group_order_input.gp.end(),path.begin());
+        if(ImGui::InputTextWithHint("##go-gp",ui::text("go.select_gp",zh),path.data(),path.size()))group_order_input.gp=path.data();group_order_controls["gp"]=center();
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",group_order_input.gp.c_str(),ui::text("go.gp_hint",zh));ImGui::TableNextColumn();
+        if(ui::button("go-browse-gp",ui::text("go.browse",zh),ui::ButtonKind::Secondary,p,scale,false,nullptr,true,-1,row_height)){auto selected=browse(true);if(!selected.empty())group_order_input.gp=selected;}group_order_controls["browse"]=center();ImGui::TableNextColumn();
+        if(ui::button("go-save",ui::text("go.save_path",zh),ui::ButtonKind::Secondary,p,scale,!ready,nullptr,true,-1,row_height))save_group_order_gp();group_order_save=center();ImGui::TableNextColumn();
+        const std::string preview=std::string(ui::text("go.algorithm",zh))+": "+backends[group_order_input.backend];ImGui::SetNextItemWidth(-1);
+        const bool open=ImGui::BeginCombo("##go-algorithm",preview.c_str());group_order_controls["algorithm"]=center();
+        if(open){for(int i=0;i<3;++i){if(ImGui::Selectable(backends[i],group_order_input.backend==i))group_order_input.backend=i;group_order_controls["backend"+std::to_string(i)]=center();}ImGui::EndCombo();}
+        ImGui::EndTable();
+    }ImGui::PopStyleVar();
+    if(ui::button("go-calculate",ui::text("go.calculate",zh),ui::ButtonKind::Primary,p,scale,group_order_job.busy(),nullptr,true,0,0,ui::Icon::Calculate)){
         auto request=group_order_input;
         if(!request.gp.empty()&&fs::u8path(request.gp).is_relative()){
             const auto path=fs::u8path(base)/fs::u8path(request.gp);if(request.gp.find_first_of("/\\")!=std::string::npos||fs::exists(path))request.gp=path.lexically_normal().u8string();}
-        if(!group_order_job.start(request,ecmgui::exe_dir()+"/ecm_group_order_ui.exe"))toast(group_order_job.error,true);
+        const bool started=group_order_job.start(request,ecmgui::exe_dir()+"/ecm_group_order_ui.exe");
+        if(started&&request.gp==group_order_input.gp&&!group_order_job.snapshot.gp.empty())group_order_input.gp=group_order_job.snapshot.gp;
+        // GP-only refusal can finish synchronously; poll() has no process to observe.
+        if(!group_order_job.busy())notify_group_order();
     }group_order_calculate=center();ImGui::SameLine();
-    if(ui::button("go-cancel",ui::text("go.cancel",zh),ui::ButtonKind::Secondary,p,scale,!group_order_job.busy(),nullptr,true))group_order_job.cancel();group_order_cancel=center();
+    if(ui::button("go-cancel",ui::text("go.cancel",zh),ui::ButtonKind::Secondary,p,scale,!group_order_job.busy(),nullptr,true)){group_order_job.cancel();toast(ui::text("go.cancelled",zh),false,true);}group_order_cancel=center();
     if(group_order_job.busy())ui::secondary_text(ui::text("go.running",zh));
     if(!group_order_job.error.empty())ImGui::TextWrapped("%s",group_order_job.error.c_str());
+    group_order_copy.clear();
     const auto&r=group_order_job.result;
-    if(r.type=='o'){
+    if(r.type=='o'&&r.has("status")){
         ImGui::Separator();const auto&snapshot=group_order_job.snapshot;
         ImGui::TextWrapped("p = %s | sigma = %s | %s",snapshot.factor.c_str(),snapshot.sigma.c_str(),ui::curve_presets[snapshot.profile].label);
         // Path resolution belongs to the snapshot; compare the editable mathematical identity.
         if(snapshot.factor!=group_order_input.factor||snapshot.sigma!=group_order_input.sigma||snapshot.profile!=group_order_input.profile)ui::secondary_text(ui::text("go.stale",zh));
-        ImGui::Text("%s: %s | %s: %s",ui::text("go.status",zh),ui::text(("go.status."+r.get("status").text()).c_str(),zh),ui::text("go.backend",zh),r.get("backend").text().c_str());
-        ImGui::Text("%s: %s | %s: %s",ui::text("go.primality",zh),ui::text(("go.primality."+r.get("modulus_primality").text()).c_str(),zh),ui::text("go.proof",zh),ui::text(r.get("all_proven").scalar=="true"?"go.proven":"go.conditional",zh));
+        const std::string status=ui::text(("go.status."+r.get("status").text()).c_str(),zh);
+        const std::string summary=status+" | "+r.get("backend").text()+" | "+ui::text(r.get("all_proven").scalar=="true"?"go.proven":"go.conditional",zh);
+        ImGui::TextWrapped("%s",summary.c_str());
+        if(ImGui::IsItemHovered()){
+            ImGui::BeginTooltip();ImGui::Text("%s: %s",ui::text("go.primality",zh),ui::text(("go.primality."+r.get("modulus_primality").text()).c_str(),zh));
+            if(!r.get("fallback").text().empty())ImGui::TextWrapped("%s: %s",ui::text("go.fallback",zh),r.get("fallback").text().c_str());ImGui::EndTooltip();
+        }
         const bool group=r.get("group_computed").scalar=="true",point=r.get("status").text()=="complete"&&r.get("point_minimality").scalar=="true";
-        ImGui::TextWrapped("%s: %s",ui::text("go.group_order",zh),group?r.get("group_order").text().c_str():ui::text("go.incomplete",zh));
-        ImGui::TextWrapped("%s: %s",ui::text("go.point_order",zh),point?r.get("point_order").text().c_str():ui::text("go.incomplete",zh));
-        const auto show_factors=[&](const char*key,const char*title){ImGui::TextUnformatted(ui::text(title,zh));std::string value;
-            for(const auto&f:r.get(key).items){if(!value.empty())value+=" * ";value+=f.get("prime").text()+"^"+f.get("exponent").text()+" ["+ui::text(("go.primality."+f.get("primality").text()).c_str(),zh)+"]";}if(value.empty()&&point&&r.get("point_order").text()=="1"&&std::string(key)=="point_factors")value="1";ImGui::TextWrapped("%s",value.empty()?ui::text("go.incomplete",zh):value.c_str());};
-        if(group)show_factors("group_factors","go.group_factorization");if(point)show_factors("point_factors","go.point_factorization");
-        if(r.get("cofactor").text()!="1"&&r.get("cofactor").text()!="")ImGui::TextWrapped("%s: %s",ui::text("go.remaining",zh),r.get("cofactor").text().c_str());
+        group_order_copy="p = "+snapshot.factor+" | sigma = "+snapshot.sigma+" | "+ui::curve_presets[snapshot.profile].label+"\n"+status+" | "+r.get("backend").text()+"\n";
+        const auto show_order=[&](bool is_point,bool computed){
+            const std::string first=std::string(ui::text(is_point?"go.point_order":"go.group_order",zh))+": "+(computed?r.get(is_point?"point_order":"group_order").text():ui::text("go.incomplete",zh));
+            ImGui::TextWrapped("%s",first.c_str());group_order_copy+=first+"\n";
+            if(computed){
+                auto factors=ui::order_factorization(r,is_point);
+                const std::string second="= "+(factors.empty()?std::string(ui::text("go.incomplete",zh)):factors);
+                ImGui::Indent(20*scale);ImGui::TextWrapped("%s",second.c_str());ImGui::Unindent(20*scale);
+                if(!is_point&&r.get("cofactor").text()!="1"&&!r.get("cofactor").text().empty()&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text("go.remaining_hint",zh));
+                group_order_copy+="    "+second+"\n";
+            }
+        };
+        show_order(false,group);show_order(true,point);
         if(!r.get("reason").text().empty())ImGui::TextWrapped("%s",r.get("reason").text().c_str());
-        if(!r.get("fallback").text().empty())ImGui::TextWrapped("%s: %s",ui::text("go.fallback",zh),r.get("fallback").text().c_str());
-        if(ImGui::Button(ui::text("go.copy",zh)))ImGui::SetClipboardText(r.dump().c_str());
+        if(ui::button("go-copy",ui::text("go.copy",zh),ui::ButtonKind::Secondary,p,scale,false,nullptr,true))ImGui::SetClipboardText(group_order_copy.c_str());group_order_controls["copy"]=center();
     }
     ImGui::Separator();ImGui::TextUnformatted(ui::text("go.result_files",zh));
     if(ImGui::Button(ui::text("go.refresh",zh)))refresh();group_order_controls["refresh"]=center();ImGui::SameLine();
