@@ -6,7 +6,9 @@
 
 struct EcmQueueConfig : ecm_config::Stage1Values {};
 
-// Unknown keys/tables, duplicate keys and invalid TOML values are errors.
+// Compute keys/tables are strict. GUI-only values are skipped; unknown GUI keys
+// produce warnings. NumWorkers remains available/validated for Stage1 routing.
+// TOML syntax and duplicate checks apply to every table.
 // Matching [workers.N.*] tables override the global stage/shared tables.
 // Key names are case sensitive. worker is 1-based (<=0: globals only).
 bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg);

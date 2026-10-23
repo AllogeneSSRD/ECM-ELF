@@ -33,7 +33,7 @@ target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK 
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
 add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/dx11_window.cpp render/vulkan_context.cpp render/vulkan_window.cpp
-    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp app.cpp views/pages.cpp views/settings_window.cpp ui_state.cpp pet/window.cpp gpu_details.cpp)
+    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp ui_state.cpp pet/window.cpp gpu_details.cpp gpu_clocks.cpp)
 include("${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 add_custom_target(ecm_gui_v2_config_check
     COMMAND ${CMAKE_COMMAND} "-DECM_GUI_V2_ROOT=${ECM_GUI_V2_ROOT}" -P "${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
@@ -91,9 +91,18 @@ add_executable(ecm_gui_v2_state_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/
 target_link_libraries(ecm_gui_v2_state_test PRIVATE ecm_gui_v2_models gdiplus ole32)
 target_compile_options(ecm_gui_v2_state_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 add_executable(ecm_gui_v2_app_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/app_test.cpp"
-    app.cpp views/pages.cpp views/settings_window.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp)
+    app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp gpu_clocks.cpp)
 add_dependencies(ecm_gui_v2_app_test ecm_gui_v2_localization)
 target_link_libraries(ecm_gui_v2_app_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
 target_compile_options(ecm_gui_v2_app_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 target_link_options(ecm_gui_v2_app_test PRIVATE /MANIFEST:EMBED "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")
 set_property(TARGET ecm_gui_v2_app_test APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")
+add_library(ecm_gui_v2_fake_nvml SHARED EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/fake_nvml_clocks.cpp")
+add_library(ecm_gui_v2_fake_nvml_readonly SHARED EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/fake_nvml_clocks.cpp")
+add_executable(ecm_gui_v2_fake_clock_query EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/fake_clock_query.cpp")
+target_compile_definitions(ecm_gui_v2_fake_nvml_readonly PRIVATE NO_LOCK_EXPORTS)
+add_executable(ecm_gui_v2_gpu_clock_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/gpu_clock_test.cpp"
+    app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp ui_state.cpp ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp gpu_details.cpp gpu_clocks.cpp)
+add_dependencies(ecm_gui_v2_gpu_clock_test ecm_gui_v2_localization ecm_gui_v2_fake_nvml ecm_gui_v2_fake_nvml_readonly ecm_gui_v2_fake_clock_query)
+target_link_libraries(ecm_gui_v2_gpu_clock_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
+target_compile_options(ecm_gui_v2_gpu_clock_test PRIVATE /utf-8 /EHsc /UNDEBUG)

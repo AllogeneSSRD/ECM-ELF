@@ -44,7 +44,7 @@ function Invoke-Compiler([string]$Command, [string]$Log) {
     $output -split "`r?`n" | Where-Object { $_ -match 'gui_v2:|Built target|error|warning' } | Write-Host
 }
 Invoke-Compiler $configure 'configure.log'
-$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test' } else { 'ecm_gui_v2' }
+$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test' } else { 'ecm_gui_v2' }
 Invoke-Compiler "cmake --build `"$BuildDir`" --target $targets" 'build.log'
 foreach ($key in $inputHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $repo $key) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $inputHashes[$key]) {

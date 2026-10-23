@@ -290,6 +290,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
 };
 inline Stage2Values read_stage2(const Entries &entries){Stage2Values c;apply(c,entries,stage2_bindings);return c;}
 struct GuiValues {
+    std::string gpu_clock_ranges="";
     int NumWorkers=1;
     std::string exe="";
     std::string stage2_exe="";
@@ -309,6 +310,7 @@ struct GuiValues {
     int64_t graceful_stop_ms=300000;
 };
 inline const Binding<GuiValues> gui_bindings[]={
+    {"gpu_clock_ranges",[](GuiValues&c,const std::string&v){c.gpu_clock_ranges=v;}},
     {"NumWorkers",[](GuiValues&c,const std::string&v){c.NumWorkers=gui_integer(v,1,1,64);}},
     {"exe",[](GuiValues&c,const std::string&v){c.exe=v;}},
     {"stage2_exe",[](GuiValues&c,const std::string&v){c.stage2_exe=v;}},

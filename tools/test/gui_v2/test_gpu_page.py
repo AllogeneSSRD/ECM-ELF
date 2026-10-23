@@ -37,7 +37,10 @@ def main():
     a=p.parse_args();exe=a.exe.resolve();out=a.out.resolve();out.mkdir();expected=reference();results=[]
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p
     assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
-    def records(text,prefix):return [dict(re.findall(r'(\w+)=([^\s]+)',line)) for line in text.splitlines() if line.startswith(prefix+':')]
+    def records(text,prefix):
+        cut=text.rfind('\nview_sample:')
+        text=text[:cut] if cut>=0 else '' # Consume only completed audit frames.
+        return [dict(re.findall(r'(\w+)=([^\s]+)',line)) for line in text.splitlines() if line.startswith(prefix+':')]
     for language,seconds in [('zh',15),('en',120)]:
         folder=out/language;folder.mkdir();state=folder/'ui.toml';log=folder/'ui.log';cfg=folder/'ecm.toml'
         cfg.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n');before=cfg.read_bytes()
@@ -54,7 +57,14 @@ def main():
             raise AssertionError(log.read_text(encoding='utf-8')[-4000:])
         def point(value,click=False):
             x,y=map(int,value.split(','));assert 0<x<1920 and 0<y<1400,value
-            for action in ([0,1,2] if click else [0]):user.PostMessageW(hwnd,0x8021,action,(y<<16)|(x&65535));time.sleep(.15)
+            for action in ([0,1,2] if click else [0]):
+                before=log.read_text(encoding='utf-8').count('\ninteraction_sample:')
+                user.PostMessageW(hwnd,0x8021,action,(y<<16)|(x&65535))
+                end=time.monotonic()+8
+                while time.monotonic()<end:
+                    if log.read_text(encoding='utf-8').count('\ninteraction_sample:')>=before+2:break
+                    assert proc.poll() is None;time.sleep(.035)
+                else:raise AssertionError('No rendered pointer acknowledgement')
         def devices(text):
             latest={int(row['index']):row for row in records(text,'gpu_detail')}
             return latest if len(latest)==len(expected) and all(row['ready']=='1' and row['charts']=='3' for row in latest.values()) else None

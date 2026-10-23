@@ -9,7 +9,9 @@ bool ecm_queue_config_load(const std::string &path,EcmQueueConfig &cfg) {
 bool ecm_queue_config_load(const std::string &path,int worker,EcmQueueConfig &cfg) {
   try {
     std::vector<ecm_config::TomlLine> lines;
-    if(!ecm_config::read_toml(path,lines))return false;
+    std::vector<std::string> ignored_gui;
+    if(!ecm_config::read_toml(path,lines,ecm_config::TomlReadMode::Computation,&ignored_gui))return false;
+    for(const auto &key:ignored_gui)std::fprintf(stderr,"[ecm] WARNING: ignoring unknown GUI-only TOML key: %s\n",key.c_str());
     if(worker>1 && std::none_of(lines.begin(),lines.end(),[&](const auto &l){
         return l.kind==ecm_config::TomlLine::Kind::Section && l.worker_scope==worker;
     }))std::fprintf(stderr,"[ecm] NOTE: %s has no [workers.%d] table; worker uses global values.\n",path.c_str(),worker);

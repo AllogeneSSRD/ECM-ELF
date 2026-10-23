@@ -418,6 +418,12 @@ int run(const Options& options, int show, FILE* log) {
                 const auto found=app.gpu_presentations.find(device.index);if(found==app.gpu_presentations.end())continue;
                 const auto& display=found->second;const auto details=app.gpu_details.get(device.index);const auto pos=point(display.header);
                 std::fprintf(log,"gpu_detail: index=%d ready=%d driver=%s cuda=%d major=%d minor=%d sms=%d cores=%d charts=%zu hovered=%d header=%ld,%ld\n",device.index,app.gpu_details.ready(),details.driver.c_str(),details.cuda_version,details.major,details.minor,details.sm_count,device.cores,display.charts,display.hovered,pos.x,pos.y);
+                {const auto gear=point(display.gear),a=point(display.popover_min),b=point(display.popover_max),apply=point(display.apply),clock_save=point(display.save),reset=point(display.reset),refresh=point(display.refresh);
+                 const auto low=point(display.range_slider.low),high=point(display.range_slider.high),min=point(display.input_low),max=point(display.input_high);
+                 const auto clock=app.gpu_clocks.get(device.index);
+                 std::fprintf(log,"gpu_clock_source: index=%d smi=%d pstate=%d\n",device.index,clock.smi_range,clock.pstate_range);
+                 if(clock.error)std::fprintf(log,"gpu_clock_error: index=%d detail=%s\n",device.index,clock.detail.c_str());
+                 std::fprintf(log,"gpu_clock: index=%d gear=%ld,%ld open=%d rect=%ld,%ld,%ld,%ld range=%d,%d draft=%d,%d low=%ld,%ld high=%ld,%ld min=%ld,%ld max=%ld,%ld apply=%ld,%ld save=%ld,%ld reset=%ld,%ld refresh=%ld,%ld busy=%d error=%d completed=%u uuid=%s\n",device.index,gear.x,gear.y,display.popover,a.x,a.y,b.x,b.y,display.supported.low,display.supported.high,display.draft.low,display.draft.high,low.x,low.y,high.x,high.y,min.x,min.y,max.x,max.y,apply.x,apply.y,clock_save.x,clock_save.y,reset.x,reset.y,refresh.x,refresh.y,clock.busy,clock.error,clock.completed,clock.uuid.c_str());}
                 std::fprintf(log,"gpu_style: index=%d block_height=%.2f",device.index,display.height);
                 for(int i=0;i<3;++i){const auto& m=display.chart_metrics[i];std::fprintf(log," height%d=%.2f plot%d=%.2f stroke%d=%.2f label%d=%.2f value%d=%.2f rows%d=%d vgrid%d=%d xticks%d=%d",i,m.height,i,m.plot_height,i,m.stroke,i,m.label_size,i,m.value_size,i,m.header_rows,i,m.x_grid,i,m.x_ticks);}std::fprintf(log,"\n");
                 const auto one_line=[](std::string text){std::replace(text.begin(),text.end(),'\n','\t');return text;};

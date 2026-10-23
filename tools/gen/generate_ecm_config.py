@@ -289,6 +289,8 @@ def toml_reference(schema):
            "- `[workers.N.shared]`, `[workers.N.stage1]`, `[workers.N.stage2]`: worker overrides for the matching table. / 对应分区的 worker 覆盖。", "",
            "Precedence: built-in default < global table < matching worker table < CLI. A key may appear only once in a table; unknown tables, duplicate keys and invalid TOML values are errors. `worktodo.txt` retains its separate `[Worker #N]` queue sections. INI files are not read.", "",
            "优先级：内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。同一分区中的键不能重复；未知分区、重复键和无效 TOML 值会报错。`worktodo.txt` 继续使用独立的 `[Worker #N]` 队列分区。程序不读取 INI。", "",
+           "Compute programs skip GUI-only values in `[gui]` and `[workers.N]`, warning about unknown keys in those tables. The exception is `gui.NumWorkers`: it remains validated and available as the Stage1 routing fallback when a destination queue has no worker sections. Unknown compute keys/tables, invalid compute types, malformed TOML and duplicate keys are still errors. GUI readers retain strict schema validation. This compatibility boundary does not permit arbitrary unknown tables or unsupported TOML value syntax.", "",
+           "计算程序跳过 `[gui]` 和 `[workers.N]` 中的纯界面值，对其中未知键给出警告。例外是 `gui.NumWorkers`：目标队列没有 worker 分区时，Stage1 分发用它作为后备数量，仍保留并校验。计算键和分区未知、计算值类型错误、TOML 语法错误和重复键仍拒绝；GUI 读取器继续严格校验 schema。兼容范围不包括任意未知分区或尚不支持的 TOML 值语法。", "",
            "The shared worktodo path and Stage2 relative paths use the TOML directory; other Stage1 relative paths use the executable directory. CLI relative paths use the current directory.", "",
            "共用 worktodo 与 Stage2 的相对路径基于 TOML 所在目录；其他 Stage1 相对路径基于可执行文件目录；命令行相对路径基于当前目录。", ""]
     originals = [o for o in schema["options"] if not o.get("_mirror")]

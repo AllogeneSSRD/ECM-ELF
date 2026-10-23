@@ -1,10 +1,13 @@
 #pragma once
 #include "ui_state.h"
 #include "gpu_details.h"
+#include "gpu_clocks.h"
+#include "gpu_clock_automation.h"
 #include "ui/widgets.h"
 #include "ui/chart.h"
 #include "ui/compact_form.h"
 #include "ui/stage2_progress.h"
+#include "ui/range_slider.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
 #include "../gui/results.h"
@@ -50,6 +53,19 @@ public:
     ecmgui::ResultStore results;
     ecmgui::GpuMonitor gpu;
     GpuDetailsCache gpu_details;
+    GpuClocks gpu_clocks;
+    struct ClockDraft {ClockRange range;bool initialized=false,automatic=false;std::string message_key;};
+    ClockProfiles saved_clock_profiles;
+    std::set<std::string> saved_clock_automatic;
+    std::map<std::string,ClockAutoPolicy> clock_auto_policies;
+    struct ClockPending {ClockRange range;bool automatic=false;ClockAutoReason reason=ClockAutoReason::None;};
+    std::map<int,ClockPending> clock_pending;
+    std::map<std::string,ClockDraft> clock_drafts;
+    std::map<int,unsigned> clock_completions;
+    bool clock_profiles_valid=true,clock_policies_seeded=false;
+    bool save_gpu_clock_range(const std::string& uuid,ClockRange range,bool automatic=false);
+    void tick_gpu_clocks();
+    void draw_gpu_clock_control(int index,const std::string& uuid,bool zh);
     ImVec2 gpu_range_controls[4]{};
     struct GpuPresentation {
         ImVec2 header{};
@@ -58,6 +74,10 @@ public:
         std::string tooltip,basic,usage,power,clocks;
         ui::ChartMetrics chart_metrics[3];
         float height=0;
+        ImVec2 gear{},popover_min{},popover_max{},apply{},reset{},save{},refresh{},input_low{},input_high{},automatic{};
+        ui::RangeSliderAudit range_slider;
+        bool popover=false;
+        ClockRange supported,draft;
     };
     std::map<int,GpuPresentation> gpu_presentations;
     std::string status, config_path;

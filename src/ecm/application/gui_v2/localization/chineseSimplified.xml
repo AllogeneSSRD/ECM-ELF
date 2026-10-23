@@ -367,6 +367,39 @@
       <Item id="probability.profile_values" name="%s&#10;Stage1 经验 D_eff = %.6g&#10;联合模型 D_eff = %.6g（Edwards 为相对 Suyama 启发值）" />
       <Item id="menu.save_layout_config" name="保存布局与配置" />
       <Item id="message.layout_config_saved" name="布局与配置已保存" />
+      <Item id="gpu.clock_settings" name="GPU 核心频率范围" />
+      <Item id="gpu.clock_busy" name="正在等待驱动响应…" />
+      <Item id="gpu.clock_limits" name="支持范围：%d – %d MHz" />
+      <Item id="gpu.clock_min" name="最小 MHz" />
+      <Item id="gpu.clock_max" name="最大 MHz" />
+      <Item id="gpu.clock_apply" name="应用" />
+      <Item id="gpu.clock_save" name="保存到 ecm.toml" />
+      <Item id="gpu.clock_reset" name="恢复默认频率" />
+      <Item id="gpu.clock_refresh" name="刷新范围" />
+      <Item id="gpu.clock_draft_hint" name="当前为草稿，关闭后保留修改，点击应用才设置 GPU。两端数值相同时请求固定频率。" />
+      <Item id="gpu.clock_actual_hint" name="驱动选择最接近的支持频率，实际采样仍受负载、温度和功耗影响。应用或恢复默认需要驱动授权。" />
+      <Item id="gpu.clock_applied_range" name="本次会话最近已接受：%d – %d MHz" />
+      <Item id="gpu.clock_current_unknown" name="已有锁频策略未知，图表显示实际采样频率。" />
+      <Item id="gpu.clock_supported_source" name="NVML 支持的图形频率 / MHz" />
+      <Item id="gpu.clock_smi_source" name="nvidia-smi 支持的图形频率 / MHz（NVML 查询回退）" />
+      <Item id="gpu.clock_pstate_source" name="NVML 性能状态频率范围 / MHz" />
+      <Item id="gpu.clock_applied" name="GPU 频率范围已获驱动接受" />
+      <Item id="gpu.clock_reset_done" name="已恢复 GPU 默认频率策略" />
+      <Item id="gpu.clock_saved" name="已保存频率草稿及自动选项，本次不立即修改硬件" />
+      <Item id="gpu.clock_automatic" name="自动应用" />
+      <Item id="gpu.clock_auto_hint" name="点击应用启用本次选项。保存后：启动时一次、每个整点，以及连续高于上限或低于下限 5 秒后自动应用。未应用的编辑仍为草稿；恢复默认会关闭本次会话自动应用。" />
+      <Item id="gpu.clock_auto_startup" name="启动时 GPU 频率范围已应用" />
+      <Item id="gpu.clock_auto_hourly" name="整点 GPU 频率范围已应用" />
+      <Item id="gpu.clock_auto_deviation" name="检测到预期外频率越界，已重新应用 GPU 范围" />
+      <Item id="gpu.clock_unexpected" name="预期外异常：GPU #%d 频率 %u MHz 连续 5 秒超出 %d – %d MHz，重新应用一次。" />
+      <Item id="gpu.clock_open_config" name="请先打开 ecm.toml 工作流，以保存该草稿。" />
+      <Item id="gpu.clock_config_invalid" name="gui.gpu_clock_ranges 格式无效，请修正后重新载入再保存。" />
+      <Item id="gpu.clock_config_changed" name="ecm.toml 已被外部修改，请重新载入后再保存草稿。" />
+      <Item id="gpu.clock_permission" name="驱动拒绝权限。应用或恢复默认可能需要以管理员身份运行管理器。" />
+      <Item id="gpu.clock_unsupported" name="此 GPU 或驱动不支持所请求的频率操作。" />
+      <Item id="gpu.clock_invalid" name="请在支持的 MHz 范围内输入最小值 ≤ 最大值。" />
+      <Item id="gpu.clock_disconnected" name="GPU 不可用或身份已变化，请刷新后重试。" />
+      <Item id="gpu.clock_failed" name="GPU 频率操作失败，请查看下方驱动信息。" />
     </Panel>
   </Native-Langue>
 </EcmGui>

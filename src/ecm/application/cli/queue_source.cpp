@@ -202,7 +202,7 @@ int run_queue_manager(const std::string &ini_path, int worker,const ecm_stage1::
             ecm_ts_fprintf(stderr,"FATAL: Stage2 receiver worker must be 1..1000000\n");return 1;
         }
         std::vector<ecm_config::TomlLine> lines;
-        if(!ecm_config::read_toml(ini,lines)) {
+        if(!ecm_config::read_toml(ini,lines,ecm_config::TomlReadMode::Computation)) {
             ecm_ts_fprintf(stderr,"FATAL: cannot read Stage2 receiver configuration\n");return 1;
         }
         const auto receiver_cfg=ecm_config::read_stage2(ecm_config::cli_entries(lines,receiver,true));

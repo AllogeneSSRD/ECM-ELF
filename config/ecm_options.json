@@ -1448,6 +1448,20 @@
     },
     {
       "owner": "gui",
+      "key": "gpu_clock_ranges",
+      "field": "gpu_clock_ranges",
+      "type": "string",
+      "default": "",
+      "domain": "<GPU-UUID:minMHz-maxMHz[:auto];...>",
+      "fx": "GUI_v2_clock_drafts",
+      "parser": "gui",
+      "description": [
+        "GUI v2 GPU core-clock drafts keyed by NVML GPU UUID: GPU-<UUID>:minMHz-maxMHz, separated by semicolons. Optional :auto enables one startup apply, every local whole hour, and a one-shot reapply after each continuous 5-second out-of-range episode. Detection reuses the monitor samples. Without :auto, loading never changes hardware. Saving does not apply drafts in this session; Apply activates the draft range and auto option. Reset disables auto in this session without erasing saved drafts. Empty saves none; worker computation settings are unaffected.",
+        "GUI v2 的 GPU 核心频率草稿：GPU-<UUID>:最小MHz-最大MHz，多卡用分号分隔。可选 :auto 启用启动时一次、每个本地整点、以及每次连续越界 5 秒后的单次自动应用；检测复用监控采样。无 :auto 时载入不修改硬件。保存不应用本次草稿；点击应用才启用本次范围和自动选项。恢复默认关闭本次会话自动应用，不删除保存草稿。空值不保存范围，不改变 worker 计算配置。"
+      ]
+    },
+    {
+      "owner": "gui",
       "key": "NumWorkers",
       "field": "NumWorkers",
       "type": "int",

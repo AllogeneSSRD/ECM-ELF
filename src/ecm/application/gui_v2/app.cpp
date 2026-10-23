@@ -63,7 +63,7 @@ void App::initialize(const std::string& path, bool disable_nvml) {
     if (!path.empty()) load_config(path); else status = "Open a workflow TOML to manage workers.";
     if (!no_nvml) {
         if(!gpu.start(500))trace("GPU monitor unavailable: " + gpu.reason());
-        else gpu_details.start(gpu.nvml_source(),gpu.devices());
+        else {gpu_details.start(gpu.nvml_source(),gpu.devices());gpu_clocks.start(gpu.nvml_source(),system_clock_query_tool());}
     }
 }
 bool App::load_config(const std::string& input) {
@@ -77,6 +77,17 @@ bool App::load_config(const std::string& input) {
         std::string error; ecmgui::TomlFile candidate;
         if (!candidate.load(path, error)) throw std::runtime_error(error);
         config = std::move(candidate); config_path = path; leases_.clear(); verified_.clear();log_views_.clear();log_last_worker_=-1;
+        saved_clock_profiles.clear();saved_clock_automatic.clear();clock_drafts.clear();
+        clock_profiles_valid=parse_clock_profiles(config.get("gui","gpu_clock_ranges"),saved_clock_profiles,&saved_clock_automatic);
+        // Loading a different workflow does not replay startup commands. The
+        // first valid workflow seeds per-GPU policies once for this process.
+        if(!clock_policies_seeded){
+            clock_policies_seeded=true;
+            for(const auto& entry:saved_clock_profiles)if(!clock_auto_policies.count(entry.first)){
+                auto& policy=clock_auto_policies[entry.first];policy.range=entry.second;policy.enabled=saved_clock_automatic.count(entry.first)!=0;
+            }
+        }
+        if(!clock_profiles_valid)trace("Invalid gui.gpu_clock_ranges; clock profile saving disabled until corrected and reloaded.");
         std::snprintf(config_input, sizeof(config_input), "%s", path.c_str());
         configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};result_view_dirty=true;
         ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
@@ -133,6 +144,7 @@ bool App::start(int index) {
     return false;
 }
 void App::tick() {
+    tick_gpu_clocks();
     if (autostart_pending) {
         autostart_pending = false;
         for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);

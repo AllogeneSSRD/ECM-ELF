@@ -12,11 +12,12 @@ static void write(const std::filesystem::path &path,const std::string &body) {
     out<<body;
     expect(bool(out),"cannot write fixture");
 }
-static void rejected(const std::filesystem::path &path,const std::string &body) {
+static void rejected(const std::filesystem::path &path,const std::string &body,
+                     ecm_config::TomlReadMode mode=ecm_config::TomlReadMode::Strict) {
     write(path,body);
     std::vector<ecm_config::TomlLine> lines;
     try {
-        ecm_config::read_toml(path.string(),lines);
+        ecm_config::read_toml(path.string(),lines,mode);
         (void)ecm_config::read_stage1(ecm_config::cli_entries(lines,2));
         (void)ecm_config::read_stage2(ecm_config::cli_entries(lines,2));
     }
@@ -57,6 +58,27 @@ int main(int argc,char **argv) {
         rejected(temp,"[stage2]\nstage2_pack_zero = 1\n");
         rejected(temp,"[workers.2.stage1]\nstage2_device = 1\n");
         rejected(temp,"[stage1]\nsigma = 18446744073709551616\n");
+        rejected(temp,"[gui]\nfuture_style = true\n");
+        rejected(temp,"[gui]\ngpu_clock_ranges = 123\n");
+        write(temp,"[shared]\nworktodo='compute.txt'\n[gui]\nfuture_style=true\n"
+                   "NumWorkers=3\ngpu_clock_ranges=123\n[workers.2]\nfuture_label='unused'\n"
+                   "[workers.2.stage1]\ndevice=1\n");
+        std::vector<std::string> ignored_gui;
+        expect(ecm_config::read_toml(temp.string(),lines,ecm_config::TomlReadMode::Computation,&ignored_gui),"compute TOML unavailable");
+        expect(ignored_gui.size()==2&&ignored_gui[0].find("gui.future_style")!=std::string::npos&&
+               ignored_gui[1].find("workers.2.future_label")!=std::string::npos,"unknown GUI warnings missing");
+        const auto compute=ecm_config::cli_entries(lines,2);
+        expect(compute.size()==2&&ecm_config::read_stage1(compute).device==1&&
+               ecm_config::read_stage2(compute).worktodo=="compute.txt","GUI data leaked into compute projection");
+        const auto routing=ecm_config::section_entries(lines,"gui");
+        expect(routing.size()==1&&ecm_config::read_gui(routing).NumWorkers==3,
+               "required Stage1 routing worker count was lost");
+        expect(ecm_config::section_entries(lines,"workers.2").empty(),"GUI worker values were retained in computation mode");
+        for(const auto *invalid:{"[stage1]\nfuture_compute=true\n","[stage1]\ndevice='0'\n",
+                 "[future]\nvalue=true\n","[gui]\nfuture_style='unterminated\n",
+                 "[gui]\nNumWorkers='3'\n",
+                 "[gui]\nfuture_style=true\nfuture_style=false\n"})
+            rejected(temp,invalid,ecm_config::TomlReadMode::Computation);
         std::filesystem::remove(temp);
         std::cout<<"TOML parser and generated defaults: PASS\n";
         return 0;

@@ -267,10 +267,11 @@ void App::draw_gpu(bool zh) {
         if(display.hovered)ImGui::SetTooltip("%s",display.tooltip.c_str());
         if(!expanded){ImGui::PopID();continue;}
         const auto history=gpu.history(device.index);
-        if(history.empty()||!history.back().valid){ImGui::TextUnformatted(ecmgui_v2::ui::text("unknown_sample",zh));ImGui::PopID();continue;}
+        if(history.empty()||!history.back().valid){ui::secondary_text(ecmgui_v2::ui::text("unknown_sample",zh));draw_gpu_clock_control(device.index,details.uuid,zh);ImGui::PopID();continue;}
         const auto& sample=history.back();const double occupied=ui::memory_occupancy(sample.mem_used_mb,device.mem_total_mb);
         char basic[192];std::snprintf(basic,sizeof(basic),ecmgui_v2::ui::text("gpu.memory_temperature",zh),sample.mem_used_mb,device.mem_total_mb,sample.temp_c);
         display.basic=basic;ui::secondary_text(basic);
+        draw_gpu_clock_control(device.index,details.uuid,zh);
         const auto throttle=ecmgui::GpuMonitor::throttle_text(sample.throttle_reasons);if(!throttle.empty())ui::secondary_text(throttle.c_str());
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{ImGui::GetStyle().ItemSpacing.x,4*ImGui::GetFontSize()/15.f});
         const int seconds=state.ui_gpu_history_seconds;const auto color=ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f);

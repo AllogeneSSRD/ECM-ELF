@@ -227,7 +227,7 @@ using Settings=ecm_config::Stage2Values;
 
 Settings stage2_ini(const fs::path &path,int worker) {
     std::vector<ecm_config::TomlLine> lines;
-    ecm_config::read_toml(path.string(),lines);
+    ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Computation);
     return ecm_config::read_stage2(ecm_config::cli_entries(lines,worker,true));
 }
 

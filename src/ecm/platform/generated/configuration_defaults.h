@@ -88,6 +88,7 @@ inline constexpr uint64_t stage2_stage2_auto_max_b2=0;
 inline constexpr uint64_t stage2_stage1_batch=1;
 inline constexpr double stage2_stage1_seconds_per_curve=0;
 inline constexpr double stage2_stage2_ratio_adjust=1;
+inline constexpr char gui_gpu_clock_ranges[]="";
 inline constexpr int gui_NumWorkers=1;
 inline constexpr char gui_exe[]="";
 inline constexpr char gui_stage2_exe[]="";

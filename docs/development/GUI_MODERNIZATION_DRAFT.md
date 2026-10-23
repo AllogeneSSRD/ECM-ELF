@@ -1,6 +1,6 @@
 # 独立 GUI v2：ImGui 现代化规划草稿
 
-状态：P0–P4 已完成，P5 待验收（默认DX11的完整性能矩阵未重测），P6 独立候选准备完成；0.49.7统一导航图标、独立分组设置弹窗、单行弹性任务表、独立编号与等大启停按钮、紧凑耗时图及列表/双列切换；0.49.6压缩GPU图表并移除竖向网格/时间刻度、加入字号偏移、自适应任务布局和外部XML国际化；0.49.5 调整导航排序与右侧原生标签、默认隐藏系统标题栏并修复ELY拖动跟随，保留0.49.4的GPU页与悬停设备信息，保留0.49.3的任务表内部纵向滚动与日志/正文字体修复，保留0.49.2的字号、全部worker耗时图、Stage2批次及退出反馈，保留0.49.1的任务表与主题日志，保留默认DX11，可选Vulkan冻结根因待查。日期：2026-10-22。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。初始规划及P0–P6以Vulkan实施；0.47.8经用户授权将DX11设为默认，可选Vulkan不作为稳定路径。
+状态：P0–P4 已完成，P5 待验收（默认DX11的完整性能矩阵未重测），P6 独立候选准备完成；0.49.10加入GPU频率悬浮设置、按UUID保存草稿及显式自动应用，复用现有采样；0.49.7统一导航图标、独立分组设置弹窗、单行弹性任务表、独立编号与等大启停按钮、紧凑耗时图及列表/双列切换；0.49.6压缩GPU图表并移除竖向网格/时间刻度、加入字号偏移、自适应任务布局和外部XML国际化；0.49.5 调整导航排序与右侧原生标签、默认隐藏系统标题栏并修复ELY拖动跟随，保留0.49.4的GPU页与悬停设备信息，保留0.49.3的任务表内部纵向滚动与日志/正文字体修复，保留0.49.2的字号、全部worker耗时图、Stage2批次及退出反馈，保留0.49.1的任务表与主题日志，保留默认DX11，可选Vulkan冻结根因待查。日期：2026-10-23。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。初始规划及P0–P6以Vulkan实施；0.47.8经用户授权将DX11设为默认，可选Vulkan不作为稳定路径。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -424,6 +424,27 @@ GPU三图基础卡片高64逻辑单位，宽度足够时合计192；图例与当
 - [应用与复选框契约](../../data/experiments/gui_v2/equal_fields_contracts_0499_02/app.log)、[侧车契约](../../data/experiments/gui_v2/equal_fields_contracts_0499_02/state.log)通过；15/24字号下实际鼠标点击方框与标签、Tab导航后空格、禁用拒绝切换与混合状态均验证。首轮键盘测试只设置程序焦点而未进入键盘导航；无渲染器对照确认原生与紧凑Checkbox均不被该输入激活，加入真实Tab事件后两者一致通过，探针与原始输出保留在 `check_keyboard_probe_0499_01`。
 - [设置页原生回归](../../data/experiments/gui_v2/equal_fields_settings_0499_02/result.json)通过，覆盖六分组、明暗主题、外部XML语言、缩放/窄窗口、界面保存及旧侧车迁移；[图例布局扫描](../../data/experiments/gui_v2/equal_fields_chart_0499_01/result.json)21330例无跳动；[旧GUI隔离](../../data/experiments/gui_v2/equal_fields_legacy_0499_01/result.json)确认73项受保护文件与旧二进制一致。仅空闲DX11和无渲染器测试，未运行真实ECM或Vulkan。
 - 表单与设置脚本原有固定短延时可能读到部分帧日志，或在一次渲染前覆盖按下/释放事件。保留首次失败于 `equal_fields_native_0499_01`、`equal_fields_native_0499_02`、`equal_fields_settings_0499_01`；脚本改为只读取完整帧，并确认两次帧提交后才发送下一输入，未放宽预设、保存或几何断言。设置语言选择辅助函数增加可选点击回调，其他调用者的默认行为保留。
+
+### 0.49.10 GPU频率悬浮设置与自动应用
+
+- 用户要求先提交的0.49.9优化已提交为`e9c6069`。本轮新增每卡VRAM旁齿轮、非模态悬浮窗、同一横轴双端滑块及精确MHz输入；关闭保留草稿，手动应用和恢复默认走独立后台NVML服务。
+- 新增主配置schema的`gui.gpu_clock_ranges`字符串保存UUID、范围及可选`:auto`；不改已有键或默认值。保留其他设备记录和注释，外部修改拒绝覆盖；未保存的计算配置留在内存，运行worker不会因保存该UI专属字段而被重配。Stage1/Stage2计算程序改为跳过纯界面字段，对未知GUI键提示；保留Stage1分发所需的`gui.NumWorkers`后备数量及类型校验。计算字段、分区、语法与重复键仍严格校验，GUI读取器保持严格。旧版计算程序需更新一次以获得此兼容边界。
+- 用户追加的自动应用以最新确认执行：启动一次、每个本地整点无条件一次；核心频率连续低于下限或高于上限5秒立即重设一次，并记录预期外消息。直接复用GPU图表的500ms采样，不增加频率驱动查询。范围内恢复后重新武装，无效/过期或长采样间断重置计时；同一连续异常只处理一次。自动操作使用已提交范围，未应用滑块草稿不会进入自动路径。
+- NVML范围来自支持频率组合或性能状态上下限；设置使用GPU locked clocks接口，恢复使用reset GPU locked clocks，不执行设备重置。后台按UUID重新定位并在写入前核验范围，权限/不支持/设备丢失失败显示Toast。接口依据和完整使用方法维护在[GUI v2](../usage/GUI_V2.md)。
+- 原生回归中观察到RTX 4060 Laptop的进程内SupportedMemoryClocks(count)返回999，刷新后仍可出现；同一时刻独立nvidia-smi成功，独立后台服务12次查询也成功，不能据此宣称驱动根因已修复。增加DLL查询失败时的系统nvidia-smi只读范围回退，保持按UUID、5秒超时、严格整数输出和明确来源，不改实时采样或驱动写入路径。原始失败及只读对照保留于gpu_clocks_native_04910_03至_06及gpu_clocks_service_probe_04910_01。
+- 最终独立构建成功，版本0.49.10，177项冻结源码目录指纹一致，候选SHA-256为`c36dca56b75f67058f860fc579078c0d4d15db77674b4bd107ff13325f685a9a`；本轮功能与计算程序同步更新按`[0.49.10]`提交，旧ZIP未重打包。
+- [模拟NVML与应用契约](../../data/experiments/gui_v2/worker_sync_04910_01/clocks.log)通过：UUID隔离、同值锁频、实时范围复核、异步/忙状态、权限及不支持/缺符号、瞬时错误后刷新、只读命令回退与无效输出拒绝、关闭保留草稿、保存不写硬件、脏计算配置保留及外部修改拒绝。启动只执行一次、同会话重载不重新启用、整点无条件触发、4999/5000毫秒边界、上下界、采样间断/未知、同次异常去重均通过合成时间验证；写入/恢复只调用模拟DLL。
+- [最终原生DX11回归](../../data/experiments/gui_v2/worker_sync_04910_01/native_clocks/result.json)通过，覆盖英文15字号、中文15及24字号、1920×1400及900×850窗口、双GPU齿轮与悬浮窗、拖动/关闭/重开、独立TOML保存与正常退出。RTX 4070 Ti和RTX 4060 Laptop均读到210–3105MHz，与nvidia-smi支持列表一致；该轮未触发命令回退，回退路径另由模拟命令及真实失败时的外部只读对照验证，不宣称已修复NVML驱动根因。
+- [应用契约](../../data/experiments/gui_v2/worker_sync_04910_01/app.log)、[侧车契约](../../data/experiments/gui_v2/worker_sync_04910_01/state.log)及[旧GUI隔离](../../data/experiments/gui_v2/worker_sync_04910_01/legacy_final.json)通过；73项受保护文件、旧二进制与全部既有主配置定义保持原样，唯一新增主键为用户授权的GUI频率草稿。
+- [原有GPU页回归](../../data/experiments/gui_v2/gpu_clocks_gpu_page_04910_02/result.json)通过，两种语言下设备详情、三图布局、图例字号/间距、横轴/网格规则及15/120秒范围保存恢复保持正确；原脚本固定短延时再次出现鼠标事件被覆盖，改为等待完整帧和两次帧确认，首次失败保留于gpu_clocks_gpu_page_04910_01。
+- [最终HTML检查](../../data/experiments/gui_v2/worker_sync_04910_01/html/result.json)覆盖七阶段状态、明暗切换、窄布局及390px页面宽度；草稿和离线阅读版同步，临时草稿保留供用户决定后续整理。
+- 首次原生脚本在悬浮窗自动测高完成前读取几何，第二次在关闭前校验退出摘要；已修正测试时序，不放宽几何或退出断言，原始证据保留于gpu_clocks_native_04910_01和_02。真实GPU未执行自动或手动锁频，未运行ECM计算或Vulkan；实际授权硬件写入仍需用户环境确认。实现入口为`views/gpu_clock_control.cpp::draw_gpu_clock_control/tick_gpu_clocks`、`gpu_clocks.cpp::GpuClocks::run`和`gpu_clock_automation.h::ClockAutoPolicy::evaluate`。
+
+
+- Stage1与CUDA Stage2公共版本统一为0.49.10，按正式local入口构建，CUDA 13.3 / MSVC 14.51.36231 / sm89；所有CUDA对象通过缓存身份校验，本轮不改计算内核。Stage1 SHA-256为`89dc83e30cc2cc8521524bfa0cdde826ef207d1a58fac353d2e90601cff41d98`，Stage2为`f47f05e1eab5302f6aa6785f42db50741539cefc26656e5d980ca3e59e12be93`；正式清单分别为`build_stage1_local/stage1_local_manifest.json`和`build_stage2_local/build_manifest.json`。
+- [真实worker兼容检查](../../data/experiments/gui_v2/worker_sync_04910_01/compatibility_final/result.json)31项通过：队列协议、版本、未配置/手动/自动频率记录、未知GUI键及其单次警告、纯界面类型跳过、NumWorkers保留、自动Stage2分发配置读取，以及未知计算键/分区、计算类型、GUI语法、重复键和必要分发值类型错误拒绝。全部使用便携隔离副本和空队列，配置及队列字节保持原样；不读取业务任务、不执行ECM或真实锁频。独立TOML fixture同时确认GUI严格模式不变、纯GUI值不进入计算投影、分发后备数量仍为配置的3。
+- 更新中发现旧Stage1构建目录的本地化依赖探测前缀与当前编译输出不匹配，部分`.obj.d`为空，头文件改变没有触发重编译；[旧程序复现日志](../../data/experiments/gui_v2/worker_sync_04910_01/compatibility_stale_stage1/stage1-routing-type.log)被新增契约拒绝。最小工程在当前默认/英文环境均可正确增量，不把问题泛化为所有中文工具链。保留旧主机对象及探测缓存后，让正式入口重新探测并重编主机代码；关键配置对象依赖恢复为14117字节并包含公共解析头，最终31项行为检查通过。原始日志、两组最小探测及缓存证据保留在`worker_sync_04910_01`；当前复用限制与处置见[构建说明](../usage/BUILD.md#复用构建)。
+- [实际部署核对](../../data/experiments/gui_v2/worker_sync_04910_01/deployment.json)确认两个程序及构建清单已更新至`D:/code/GIMPS/ecm-win-x86_64-sm89-cuda13.3_param0`，替换前没有目标worker运行，替换后程序摘要和协议一致。原程序及原Stage2清单备份在`backup/workers-0.49.10-20261023-021307`；业务TOML、队列、tune、GUI与GMP运行库摘要保持原样。部署目录GUI沿用既有0.49.10候选，本仓库最终GUI候选另在`build_gui_v2_local`重建并通过上述DX11回归。
 
 ## 1. 分析边界与基线
 

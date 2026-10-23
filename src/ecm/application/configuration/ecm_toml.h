@@ -115,7 +115,9 @@ inline std::string toml_value(const std::string &source,char &kind) {
     std::string result;for(char c:value)if(c!='_')result+=c;
     return result;
 }
-inline bool read_toml(const std::string &path,std::vector<TomlLine> &lines) {
+enum class TomlReadMode { Strict, Computation };
+inline bool read_toml(const std::string &path,std::vector<TomlLine> &lines,
+                      TomlReadMode mode=TomlReadMode::Strict,std::vector<std::string> *ignored_gui=nullptr) {
     std::ifstream in(path,std::ios::binary);
     if(!in)return false;
     lines.clear();std::string raw,section;bool first=true;size_t number=0;
@@ -147,6 +149,16 @@ inline bool read_toml(const std::string &path,std::vector<TomlLine> &lines) {
                     throw std::runtime_error("invalid TOML key");
                 if(!keys.insert(section+"."+l.key).second)throw std::runtime_error("duplicate TOML key: "+l.key);
                 const auto *option=toml_option(section,l.key);
+                // GUI settings are outside the computation projection, except
+                // NumWorkers: Stage1 routing uses it when the destination queue
+                // has no worker sections. Keep its schema/type validation.
+                const bool gui_table=section=="gui" ||
+                    (toml_worker(section)>0 && section.find('.',8)==std::string::npos);
+                if(mode==TomlReadMode::Computation && gui_table && !(section=="gui" && l.key=="NumWorkers")) {
+                    char kind=0;(void)toml_value(t.substr(eq+1),kind);
+                    if(!option && ignored_gui)ignored_gui->push_back(path+":"+std::to_string(number)+": "+section+"."+l.key);
+                    l.kind=TomlLine::Kind::Other;lines.push_back(std::move(l));continue;
+                }
                 if(!option)throw std::runtime_error("unknown TOML key or invalid table: "+l.key);
                 char kind=0;l.value=toml_value(t.substr(eq+1),kind);
                 const std::string type=option->type;

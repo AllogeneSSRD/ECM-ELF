@@ -88,6 +88,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage1_batch","u64"},
     {"stage2","stage1_seconds_per_curve","double"},
     {"stage2","stage2_ratio_adjust","double"},
+    {"gui","gpu_clock_ranges","string"},
     {"gui","NumWorkers","int"},
     {"gui","exe","string"},
     {"gui","stage2_exe","string"},

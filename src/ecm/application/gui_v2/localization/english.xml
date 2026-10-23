@@ -367,6 +367,39 @@
       <Item id="probability.profile_values" name="%s&#10;Stage1 empirical D_eff = %.6g&#10;Combined-model D_eff = %.6g (Edwards uses a relative Suyama heuristic)" />
       <Item id="menu.save_layout_config" name="Save layout and settings" />
       <Item id="message.layout_config_saved" name="Layout and settings saved" />
+      <Item id="gpu.clock_settings" name="GPU core clock range" />
+      <Item id="gpu.clock_busy" name="Waiting for the driver…" />
+      <Item id="gpu.clock_limits" name="Supported range: %d – %d MHz" />
+      <Item id="gpu.clock_min" name="Min MHz" />
+      <Item id="gpu.clock_max" name="Max MHz" />
+      <Item id="gpu.clock_apply" name="Apply" />
+      <Item id="gpu.clock_save" name="Save to ecm.toml" />
+      <Item id="gpu.clock_reset" name="Reset clocks" />
+      <Item id="gpu.clock_refresh" name="Refresh range" />
+      <Item id="gpu.clock_draft_hint" name="Draft only. Closing keeps edits; Apply changes the GPU. Equal endpoints request a fixed clock." />
+      <Item id="gpu.clock_actual_hint" name="The driver selects the nearest supported clock. Actual clocks still depend on load, temperature and power. Driver permission is required to apply or reset." />
+      <Item id="gpu.clock_applied_range" name="Last accepted in this session: %d – %d MHz" />
+      <Item id="gpu.clock_current_unknown" name="Existing lock policy is unknown; the chart shows sampled clocks." />
+      <Item id="gpu.clock_supported_source" name="NVML supported graphics clocks / MHz" />
+      <Item id="gpu.clock_smi_source" name="nvidia-smi supported graphics clocks / MHz (NVML query fallback)" />
+      <Item id="gpu.clock_pstate_source" name="NVML performance-state clock limits / MHz" />
+      <Item id="gpu.clock_applied" name="GPU clock range accepted by the driver" />
+      <Item id="gpu.clock_reset_done" name="Default GPU clock policy restored" />
+      <Item id="gpu.clock_saved" name="Draft and auto option saved; no immediate hardware change" />
+      <Item id="gpu.clock_automatic" name="Auto apply" />
+      <Item id="gpu.clock_auto_hint" name="Apply activates this option. When saved: apply once at startup, every whole hour, and after 5 s outside either bound. Unapplied edits stay drafts. Reset turns off auto for this session." />
+      <Item id="gpu.clock_auto_startup" name="Startup GPU clock range applied" />
+      <Item id="gpu.clock_auto_hourly" name="Hourly GPU clock range applied" />
+      <Item id="gpu.clock_auto_deviation" name="Unexpected clock deviation: GPU range reapplied" />
+      <Item id="gpu.clock_unexpected" name="Unexpected GPU #%d clock: %u MHz outside %d – %d MHz for 5 s; reapplying once." />
+      <Item id="gpu.clock_open_config" name="Open an ecm.toml workflow to save this draft." />
+      <Item id="gpu.clock_config_invalid" name="Invalid gui.gpu_clock_ranges; correct the value and reload before saving." />
+      <Item id="gpu.clock_config_changed" name="ecm.toml changed externally; reload before saving this draft." />
+      <Item id="gpu.clock_permission" name="Driver permission denied. Apply or reset may require running the manager as administrator." />
+      <Item id="gpu.clock_unsupported" name="This GPU or driver does not support the requested clock operation." />
+      <Item id="gpu.clock_invalid" name="Enter an ordered min/max pair within the supported MHz range." />
+      <Item id="gpu.clock_disconnected" name="GPU unavailable or identity changed. Refresh before retrying." />
+      <Item id="gpu.clock_failed" name="GPU clock operation failed; see the driver message below." />
     </Panel>
   </Native-Langue>
 </EcmGui>

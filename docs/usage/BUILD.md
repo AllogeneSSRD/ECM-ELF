@@ -56,6 +56,8 @@ Stage1 输出 `dist/cuda/`，Stage2 多架构输出 `dist/cuda-stage2/`；每架
 
 Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。
 
+复用旧的MSVC/CMake构建目录时，需核对关键主机对象的`.obj.d`确实包含头文件依赖。旧编译器探测缓存中的本地化`SHOWINCLUDES`前缀可能与当前输出不匹配，造成依赖文件为空，头文件变化后仍报告构建成功。遇到此情况，先保留证据，备份并移开该目录的C/C++编译器探测缓存和主机对象，再用正式入口重新探测、编译并验证实际程序行为；不编辑依赖指纹或CUDA对象来绕过校验。该主机依赖限制不适用于Stage2的`/sourceDependencies`内容校验。
+
 配置读写、sigma 生成、曲线 CPU 参数化、运行选择、逐曲线结果、checkpoint/save、data/result/tune.toml/屏幕的主机实现正文使用普通 CXX。`tools/test/test_host_incremental_boundaries.py` 通过正式 local 脚本验证这些正文修改只重编译主机单元，随后恢复源文件；不会改写对象或清单强行复用。接口、CUDA runtime 或其实际依赖的修改仍可能重编译 CU。验收证据与适用构建见 [统一 Stage1 实施记录](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md#p5-完成完整档位兼容编译边界与固定条件对照)。
 
 Stage2 默认逐编译单元复用，整体源码/构建签名变化不会直接触发整组重编；每个失效单元打印重编原因。主机 `.cpp` 使用选定 MSVC 的普通 C++ 编译，保留原有 `/MT`、C++17、`/O2`、`/EHsc` 和 NTT 宏；CUDA `.cu` 与链接仍使用 nvcc，真实 runtime 调用仍需 CUDA SDK。MSVC `/sourceDependencies` JSON 将实际 SDK/STL/宏包含纳入同一内容与对象身份校验，不以本地正则扫描替代编译器依赖。链接命令、GMP 导入库、对象摘要和程序摘要全部匹配时跳过链接；旧清单首次建立链接输入记录可能需要一次链接。

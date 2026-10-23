@@ -5,7 +5,7 @@
     "src/ecm/application/gui_v2/generated/business_options.h": "691adc09d9ea18cb462d93c4cd7e3d4cbc26b0a11731bd099e91a8bfdb2bbd55",
     "src/ecm/application/gui_v2/localization/options.english.xml": "3a5001386c8e0675a96916c375a81037f6e59341c14a4bfd7ca11629c67e88ea",
     "src/ecm/application/gui_v2/localization/options.chineseSimplified.xml": "9b48baf2d4d8456990d8dbb466bdbe8356f0859da22de7b8e9a1e5f500adf361",
-    "config/ecm_options.json": "ca7566d8ba2340fc49fb6743911b8b807c7393d7a1212626fd3f73d175203331",
+    "config/ecm_options.json": "7ced64992e378142c218d8603ee78b52f4a5408253f147e6027df70c953aaadd",
     "tools/gen/generate_gui_v2_state.py": "c4f612e51223d51363012b29274e3255d21a519cacc6ee6b598867c2924192ac"
   }
 }
