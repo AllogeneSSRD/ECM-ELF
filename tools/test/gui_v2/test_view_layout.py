@@ -11,7 +11,7 @@ def main():
     out=a.out.resolve();out.mkdir();exe=a.exe.resolve()
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     cfg=out/'ecm.toml';cfg.write_text('[gui]\nNumWorkers=2\n[workers.1]\nautostart=0\n[workers.2]\nautostart=0\n');original=cfg.read_bytes()
-    state=out/'ui.toml';state.write_text('[ui]\npage=1\nright_pages=24\nright_page=4\nlogs='+str(not a.start_hidden).lower()+'\ninspector=false\nscale=1\nfont_size=15\nlanguage="'+a.language+'"\ntoasts=false\n[window]\ntitle_bar=false\n')
+    state=out/'ui.toml';state.write_text('[ui]\npage=1\nright_pages=24\nright_page=4\nlogs_keep_visible=true\nlogs='+str(not a.start_hidden).lower()+'\ninspector=false\nscale=1\nfont_size=15\nlanguage="'+a.language+'"\ntoasts=false\n[window]\ntitle_bar=false\n')
     def launch(name):
         log=out/(name+'.log');si=subprocess.STARTUPINFO();si.dwFlags=subprocess.STARTF_USESHOWWINDOW;si.wShowWindow=0
         proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--audit-app','--diagnostics',str(log),'--no-nvml','--no-pet','--language',a.language],cwd=out,startupinfo=si)
@@ -65,7 +65,7 @@ def main():
             assert all(int(after.get('logdock'+str(i),'0'))>0 for i in range(3)),after
             if a.save_hidden:toggle_logs(False);after=sample()
             click(after['view']);wait(lambda s:s.get('save_control','0,0')!='0,0');capture(hwnd,out/'view-menu.png')
-            s=sample();assert s['items']=='menu.inspector,menu.logs,menu.title_bar,menu.save_layout_config' and s['save_separator']=='1',s;click(s['save_control'])
+            s=sample();assert s['items']=='menu.inspector,menu.logs,menu.keep_logs_visible,menu.title_bar,menu.save_layout_config' and s['save_separator']=='1',s;click(s['save_control'])
             wait(lambda s:s.get('save_count')=='1');saved=tomllib.loads(state.read_text(encoding='utf-8'));assert saved['ui']['dock'] and saved['window']['width']==1500 and saved['ui']['logs']==(not a.save_hidden),saved
             assert cfg.read_bytes()==original
             result.update(explicit_save=True,no_reset_entry=True,separator=True)

@@ -254,6 +254,10 @@ int run(const Options& options, int show, FILE* log) {
     ecmgui_v2::ui::Showcase showcase;
     const bool show_components = options.showcase || options.audit_ui;
     ecmgui_v2::App app(state, log); current_app = &app; audit_app = options.audit_app;
+    if(options.audit_app)ImGui::GetCurrentContext()->DockNodeWindowMenuHandler=[](ImGuiContext* ctx,ImGuiDockNode* node,ImGuiTabBar* bar){
+        ImGui::DockNodeWindowMenuHandler_Default(ctx,node,bar);
+        if(current_app&&bar->Tabs.Size==1){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();current_app->dock_hide_control={(a.x+b.x)*.5f,(a.y+b.y)*.5f};}
+    };
     struct ResetPointers { ~ResetPointers() { current_app = nullptr; audit_app = false; audit_settings = nullptr; } } reset_pointers;
     ecmgui_v2::pet::Window companion(native.hwnd, state, log);
     current_pet=&companion;
@@ -356,7 +360,11 @@ int run(const Options& options, int show, FILE* log) {
             const auto menu_point=[&](ImVec2 v){POINT p{static_cast<LONG>(v.x),static_cast<LONG>(v.y)};if(ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable)ScreenToClient(native.hwnd,&p);return p;};
             const auto view=menu_point(app.view_control),logs=menu_point(app.view_logs_control),save_layout=menu_point(app.view_save_control);
             std::string menu_items;for(const auto& key:app.view_item_keys){if(!menu_items.empty())menu_items+=',';menu_items+=key;}
-            std::fprintf(log,"view_sample: view=%ld,%ld logs_control=%ld,%ld save_control=%ld,%ld open=%d logs_visible=%d items=%s save_separator=%d save_count=%u layout_builds=%u\n",view.x,view.y,logs.x,logs.y,save_layout.x,save_layout.y,app.view_menu_open,state.ui_logs,menu_items.empty()?"none":menu_items.c_str(),app.view_save_separator,app.view_save_count,app.layout_build_count);
+            std::fprintf(log,"view_sample: view=%ld,%ld logs_control=%ld,%ld save_control=%ld,%ld open=%d logs_visible=%d items=%s save_separator=%d save_count=%u layout_builds=%u\n",view.x,view.y,logs.x,logs.y,save_layout.x,save_layout.y,app.view_menu_open,app.logs_visible,menu_items.empty()?"none":menu_items.c_str(),app.view_save_separator,app.view_save_count,app.layout_build_count);
+            const auto keep_logs=menu_point(app.view_keep_logs_control),dock_hide=menu_point(app.dock_hide_control);
+            std::fprintf(log,"workspace_policy: keep=%d logs_enabled=%d keep_control=%ld,%ld hide_control=%ld,%ld",state.ui_logs_keep_visible,state.ui_logs,keep_logs.x,keep_logs.y,dock_hide.x,dock_hide.y);
+            const bool tab_preferences[]{state.ui_nav_hide_tab_bar,state.ui_workspace_hide_tab_bar,state.ui_right_hide_tab_bar};
+            for(int i=0;i<3;++i){const auto menu=menu_point(app.dock_menu_controls[i]);std::fprintf(log," node%d=%u hidden%d=%d preference%d=%d menu%d=%ld,%ld",i,app.dock_roles[i],i,app.dock_hidden[i],i,tab_preferences[i],i,menu.x,menu.y);}std::fprintf(log,"\n");
             for(int page:{2,3})if(state.ui_page==page){
                 const auto& form=page==2?app.generator_form:app.probability_form;
                 std::fprintf(log,"form_sample: page=%d columns=%d profile=%d empirical=%d divisor=%.15g ratio=%d curve=%s\n",page,form.columns,app.probability_profile,app.probability_empirical,app.probability_request.parameters.effective_divisor,app.probability_request.parameters.ratio_mode,app.gen_options.curve_type.c_str());
@@ -418,6 +426,9 @@ int run(const Options& options, int show, FILE* log) {
             for(int i=0;i<2;++i){const auto control=point(app.theme_controls[i]);std::fprintf(log," theme%d=%ld,%ld",i,control.x,control.y);}
             std::fprintf(log,"\n");
             std::fprintf(log,"typography_sample: body=%d primary_offset=%d secondary_offset=%d primary_size=%.1f secondary_size=%.1f primary_button=%.2f secondary_button=%.2f secondary_note=%.2f primary_control=%ld,%ld secondary_control=%ld,%ld\n",state.ui_font_size,state.ui_primary_font_offset,state.ui_secondary_font_offset,ecmgui_v2::ui::primary_font_size(ImGui::GetStyle().FontSizeBase),ecmgui_v2::ui::secondary_font_size(ImGui::GetStyle().FontSizeBase),app.primary_font_height,app.secondary_button_font_height,app.secondary_text_font_height,primary_control.x,primary_control.y,secondary_control.x,secondary_control.y);
+            const auto auto_y=point(app.worker_chart_auto_control);
+            std::fprintf(log,"worker_scale: auto_y=%d auto_control=%ld,%ld",state.ui_worker_chart_auto_y,auto_y.x,auto_y.y);
+            for(size_t i=0;i<app.worker_chart_metrics.size();++i)std::fprintf(log," ymin%zu=%.9g ymax%zu=%.9g",i,app.worker_chart_metrics[i].ymin,i,app.worker_chart_metrics[i].ymax);std::fprintf(log,"\n");
             const auto chart_toggle=point(app.worker_chart_toggle);
             std::fprintf(log,"worker_layout_sample: start_size=%.1f,%.1f stop_size=%.1f,%.1f requested=%d columns=%d toggle=%ld,%ld cards=%zu",app.start_button_size.x,app.start_button_size.y,app.stop_button_size.x,app.stop_button_size.y,state.ui_worker_chart_columns,app.worker_chart_columns,chart_toggle.x,chart_toggle.y,app.worker_chart_rects.size());
             for(const auto& row:app.worker_number_controls){const auto pos=point(row.second);std::fprintf(log," number%d=%ld,%ld",row.first,pos.x,pos.y);}
@@ -479,7 +490,7 @@ int run(const Options& options, int show, FILE* log) {
     }
     state.ui_theme = active.light ? "light" : "dark"; state.ui_language = fonts.chinese ? "zh" : "en";
     if (show_components) state.ui_scale = active.scale;
-    if (!show_components) { size_t size = 0; const auto layout = ImGui::SaveIniSettingsToMemory(&size); state.layout(std::string(layout, size)); }
+    if (!show_components) { app.sync_dock_tabs();size_t size = 0; const auto layout = ImGui::SaveIniSettingsToMemory(&size); state.layout(std::string(layout, size)); }
     if (!IsIconic(native.hwnd)) {
         state.window_maximized = IsZoomed(native.hwnd) != FALSE;
         if (!state.window_maximized) { RECT rect{}; GetWindowRect(native.hwnd, &rect); state.window_x = rect.left; state.window_y = rect.top; state.window_width = rect.right - rect.left; state.window_height = rect.bottom - rect.top; }

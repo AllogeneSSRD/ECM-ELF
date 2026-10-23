@@ -365,6 +365,7 @@ void App::draw_settings(bool zh) {
     }
     if(settings_category==1){
     ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("smooth_scrolling",zh),&state.ui_smooth_scroll);
+    if(ui::checkbox(ui::text("menu.keep_logs_visible",zh),&state.ui_logs_keep_visible)){if(state.ui_logs_keep_visible)state.ui_logs=true;update_logs_visibility();}
     ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("settings.external_windows",zh),&state.ui_external_windows);
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("settings.external_windows_hint",zh));
     ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("show_system_title_bar",zh),&state.window_title_bar);

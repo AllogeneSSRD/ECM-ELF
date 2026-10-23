@@ -69,6 +69,7 @@ bool UiState::load() {
             }
         }
         if (input.bad()) throw std::runtime_error("cannot read UI state");
+        const std::array<bool,3> saved_tabs{values.count("ui.nav_hide_tab_bar")!=0,values.count("ui.workspace_hide_tab_bar")!=0,values.count("ui.right_hide_tab_bar")!=0};
         UiValues candidate;
         std::set<std::string> known_tables;
         visit_ui_fields(candidate, [&](const char* table, const char* key, auto& field) {
@@ -87,7 +88,7 @@ bool UiState::load() {
         validate_ui(candidate);
         if(candidate.ui_dock.size()%2 || candidate.ui_dock.find_first_not_of("0123456789abcdef")!=std::string::npos)
             throw std::runtime_error("invalid UI layout hex");
-        static_cast<UiValues&>(*this) = std::move(candidate);
+        static_cast<UiValues&>(*this) = std::move(candidate);dock_tab_saved=saved_tabs;
         return true;
     } catch (const std::exception& error) { writable = false; notice = "UI state not loaded; original retained: " + std::string(error.what()); return false; }
 }

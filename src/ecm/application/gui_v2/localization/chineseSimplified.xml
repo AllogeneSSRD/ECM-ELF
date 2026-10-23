@@ -5,6 +5,8 @@
       <Item id="menu.view" name="视图" />
       <Item id="menu.reset_layout" name="重置布局" />
       <Item id="menu.inspector" name="检查区" />
+      <Item id="menu.keep_logs_visible" name="保持日志页面可见" />
+      <Item id="worker_charts_auto_y" name="按当前采样窗口自动缩放Y轴" />
       <Item id="menu.logs" name="日志" />
       <Item id="menu.title_bar" name="系统标题栏" />
       <Item id="menu.language" name="语言" />

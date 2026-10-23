@@ -5,6 +5,8 @@
       <Item id="menu.view" name="View" />
       <Item id="menu.reset_layout" name="Reset layout" />
       <Item id="menu.inspector" name="Inspector" />
+      <Item id="menu.keep_logs_visible" name="Keep logs visible across pages" />
+      <Item id="worker_charts_auto_y" name="Auto-fit Y axis to the current sample window" />
       <Item id="menu.logs" name="Logs" />
       <Item id="menu.title_bar" name="System title bar" />
       <Item id="menu.language" name="Language" />

@@ -62,6 +62,15 @@ int main(int argc,char** argv){
     assert(ecmgui_v2::ui::reorder_page(order,0,6,true)&&order=="4123560");
     assert(!ecmgui_v2::ui::reorder_page(order,3,3,false)&&!ecmgui_v2::ui::reorder_page(order,8,2,false));
     using namespace ecmgui_v2::ui;
+    {LogVisibility logs;logs.change_view(0);assert(logs.visible(true,false,true)&&!logs.visible(true,false,false));
+     logs.change_view(1);logs.manual=true;assert(logs.visible(false,false,false));logs.change_view(2);assert(!logs.visible(true,false,false));
+     assert(logs.visible(true,true,false)&&!logs.visible(false,true,false));
+     std::vector<ChartSeries> samples{{"speed",{},{{0,100},{1,1.75},{2,2.25},{3,std::numeric_limits<double>::quiet_NaN()}}}};
+     const auto fit=chart_bounds(samples,0,true,1,3);assert(fit.ymin>0&&fit.ymin<1.75&&fit.ymax>2.25&&fit.ymax<3);
+     assert(chart_bounds(samples).ymin==0&&chart_bounds(samples).ymax>=100);
+     const auto none=chart_bounds(samples,0,true,4,5);assert(none.ymin==0&&none.ymax==1);
+     samples[0].points={{0,.001},{1,.001}};const auto flat=chart_bounds(samples,0,true);assert(flat.ymin<.001&&flat.ymax>.001&&flat.ymin>=0);
+     samples[0].visible=false;const auto hidden=chart_bounds(samples,0,true);assert(hidden.ymin==0&&hidden.ymax==1);}
     assert(language_label("english.xml")=="english"&&language_label("custom.name.XML")=="custom.name");
     assert(language_label("自定义语言.xml")=="自定义语言");
     assert(memory_occupancy(4096,8192)==50);assert(std::isnan(memory_occupancy(1,0)));

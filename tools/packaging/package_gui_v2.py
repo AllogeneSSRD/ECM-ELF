@@ -64,7 +64,7 @@ def main():
                 selected.add(path.relative_to(ROOT).as_posix())
     selected.update(['src/ecm/application/gui_v2/app.manifest','tools/packaging/package_gui_v2.py',
                      'tools/build/package_gui_v2.ps1','tools/test/gui_v2/test_package.py','tools/test/gui_v2/test_failure_shutdown.py'])
-    selected.update(['tools/test/gui_v2/group_order_test.cpp','tools/test/gui_v2/test_group_order.py',
+    selected.update(['tools/test/gui_v2/group_order_test.cpp','tools/test/gui_v2/test_group_order.py','tools/test/gui_v2/test_workspace_policy.py',
                      'tools/test/gui_v2/test_group_order_backend.py','tools/test/gui_v2/pet_behavior_test.cpp',
                      'tools/test/gui_v2/test_pet_idle.py','tools/build/test/build_pet_behavior.ps1',
                      'tools/test/group_order_probe.cpp'])

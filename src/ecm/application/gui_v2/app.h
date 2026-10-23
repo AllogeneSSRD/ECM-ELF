@@ -8,6 +8,7 @@
 #include "ui/chart.h"
 #include "ui/compact_form.h"
 #include "ui/stage2_progress.h"
+#include "ui/log_visibility.h"
 #include "ui/range_slider.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
@@ -41,6 +42,14 @@ public:
     bool save_preferences(const char* success_key="message.ui_saved");
     bool save_layout_config();
     void set_logs_visible(bool visible);
+    void update_logs_visibility();
+    bool workers_view_visible() const;
+    void sync_dock_tabs();
+    bool logs_visible=true;
+    std::array<unsigned,3> dock_roles{};
+    std::array<bool,3> dock_hidden{};
+    std::array<ImVec2,3> dock_menu_controls{};
+    ImVec2 dock_hide_control{};
     const ecmgui::WorkerView* selected() const;
     void trace(const std::string& text);
     void toast(const std::string& text,bool error=false,bool repeat=false);
@@ -95,7 +104,7 @@ public:
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[8]{},right_items[8]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 language_control{};
-    ImVec2 view_control{},view_logs_control{},view_save_control{};
+    ImVec2 view_control{},view_logs_control{},view_keep_logs_control{},view_save_control{};
     bool view_menu_open=false,view_save_separator=false;
     std::vector<std::string> view_item_keys;
     unsigned layout_build_count=0,view_save_count=0;
@@ -119,7 +128,7 @@ public:
     ImVec2 primary_offset_control{},secondary_offset_control{};
     float primary_font_height=0,secondary_button_font_height=0,secondary_text_font_height=0;
     size_t worker_speed_samples=0,workspace_chart_count=0;
-    ImVec2 start_button_size{},stop_button_size{},worker_chart_toggle{};
+    ImVec2 start_button_size{},stop_button_size{},worker_chart_toggle{},worker_chart_auto_control{};
     int worker_chart_columns=1;
     std::vector<std::pair<ImVec2,ImVec2>> worker_chart_rects;
     std::vector<ui::ChartMetrics> worker_chart_metrics;
@@ -219,6 +228,11 @@ private:
     unsigned long long stage2_tune_poll_=0;
     struct PhaseView {std::string identity,phase,clock_curve;unsigned long long phase_at=0,batch_at=0,batch=0;ui::Stage2Timing timing;float high_water=0;};
     std::map<int,PhaseView> stage2_views_;
+    ui::LogVisibility log_visibility_;
+    std::array<unsigned,3> tab_nodes_{};
+    std::array<bool,3> tab_known_{};
+    void apply_logs_visibility(bool visible);
+    int log_context()const{return state.ui_page*16+(state.ui_right_pages?state.ui_right_page+1:0);}
     unsigned log_dock_=0;
     std::map<std::string,unsigned> hidden_log_docks_;
     float log_height_ratio_=.28f;

@@ -2245,8 +2245,8 @@
         "type": "bool",
         "default": true,
         "description": [
-          "Show the log dock.",
-          "显示日志停靠窗。"
+          "Enable logs in Workers management; automatic hiding on other views does not change this saved preference.",
+          "开启Workers管理页日志；其他视图的自动隐藏不改变此保存偏好。"
         ]
       },
       {
@@ -2512,6 +2512,61 @@
         "description": [
           "Allow detached native panel windows after restart; default keeps docking and floating inside the main window to avoid the observed slow presentation path.",
           "重启后允许原生独立面板窗；默认在主窗口内停靠/浮动，以规避已观察到的慢呈现路径。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "worker_chart_auto_y",
+        "field": "ui_worker_chart_auto_y",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Fit curve-time Y bounds to finite samples in the current retained window; off keeps a zero baseline.",
+          "曲线耗时Y轴按当前保留窗口的有效样本自动缩放；关闭时从0开始。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "logs_keep_visible",
+        "field": "ui_logs_keep_visible",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Keep enabled logs visible across pages; otherwise follow visible Workers management, with a temporary manual override on other views.",
+          "已开启日志跨页保持可见；关闭时跟随可见的Workers管理页，其他视图可临时手动打开。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "nav_hide_tab_bar",
+        "field": "ui_nav_hide_tab_bar",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Remember the native Navigation dock Hide tab bar choice across restarts and layout rebuilding.",
+          "持久记忆导航停靠窗Hide tab bar选择，布局重建后保留。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "workspace_hide_tab_bar",
+        "field": "ui_workspace_hide_tab_bar",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Remember the native Workspace dock Hide tab bar choice across restarts and layout rebuilding.",
+          "持久记忆工作区停靠窗Hide tab bar选择，布局重建后保留。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "right_hide_tab_bar",
+        "field": "ui_right_hide_tab_bar",
+        "type": "bool",
+        "default": false,
+        "description": [
+          "Remember the right dock Hide tab bar choice. Multiple native tabs remain visible; the choice resumes when one remains.",
+          "持久记忆右侧停靠窗Hide tab bar选择；多个原生标签保持可见，恢复单标签时恢复该选择。"
         ]
       }
     ]

@@ -41,6 +41,10 @@ App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log
         state.ui_right_visible=true;
     }
     if(ui::pinned(state.ui_right_pages,state.ui_page))for(int i=0;i<8;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i)){state.ui_page=i;break;}
+    tab_known_=state.dock_tab_saved;
+    const bool hidden[]{state.ui_nav_hide_tab_bar,state.ui_workspace_hide_tab_bar,state.ui_right_hide_tab_bar};
+    for(int i=0;i<3;++i)tab_known_[i]=tab_known_[i]||hidden[i];
+    logs_visible=state.ui_logs&&(state.ui_page==0||state.ui_logs_keep_visible||(ui::pinned(state.ui_right_pages,0)&&state.ui_right_page==0));
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
         if(notice.kind==ecmgui::WorkerNotice::Kind::StageChanged)
             for(const auto& worker:controller.workers())if(worker.index==notice.worker&&!supports_owner(worker.exe))
@@ -227,6 +231,7 @@ void App::shutdown_workers() noexcept {
     } catch (...) { controller.force_close(); }
 }
 void App::build_layout(unsigned dock, float scale) {
+    sync_dock_tabs();tab_nodes_={};
     ++layout_build_count;
     const auto viewport = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dock); ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
@@ -235,7 +240,7 @@ void App::build_layout(unsigned dock, float scale) {
     const bool wide = viewport->WorkSize.x >= 1100 * scale;
     ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, std::clamp(170*scale/viewport->WorkSize.x,.16f,.35f), &nav, &center);
     if ((wide && state.ui_inspector)||state.ui_right_pages) ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, wide?.34f:.43f, &inspector, &center);
-    if (state.ui_logs) ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, .28f, &logs, &center);
+    if (logs_visible) ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, .28f, &logs, &center);
     ImGui::DockBuilderDockWindow("Navigation###v2.navigation", nav);
     ImGui::DockBuilderDockWindow("Workspace###v2.workspace", center);
     if (inspector) ImGui::DockBuilderDockWindow("Inspector###v2.inspector", inspector);
@@ -267,6 +272,7 @@ bool App::begin_window(const char* name, bool* open, const ui::Settings& active,
 void App::end_window() { ImGui::End(); ImGui::PopStyleVar(6); }
 bool App::save_preferences(const char* success_key) {
     try {
+        sync_dock_tabs();
         size_t length=0;const auto* layout=ImGui::SaveIniSettingsToMemory(&length);state.layout(std::string(layout,length));
         const auto* viewport=ImGui::GetMainViewport();
         const auto hwnd=static_cast<HWND>(viewport->PlatformHandleRaw?viewport->PlatformHandleRaw:viewport->PlatformHandle);
@@ -282,8 +288,8 @@ bool App::save_layout_config(){
     if(config.dirty()&&!save_business()){toast(status,true);return false;}
     const bool saved=save_preferences("message.layout_config_saved");if(saved)++view_save_count;return saved;
 }
-void App::set_logs_visible(bool visible){
-    if(visible==state.ui_logs)return;
+void App::apply_logs_visibility(bool visible){
+    if(visible==logs_visible)return;
     std::vector<std::string> names{"Manager###v2.logs"};
     for(const auto& worker:controller.workers())names.push_back("Worker###v2.log.worker."+std::to_string(worker.index));
     const auto dock_id=[](const std::string& name,unsigned& id){
@@ -312,7 +318,40 @@ void App::set_logs_visible(bool visible){
         }
         if(root)ImGui::DockBuilderFinish(root);hidden_log_docks_.clear();
     }
-    state.ui_logs=visible;
+    logs_visible=visible;
+}
+bool App::workers_view_visible()const{
+    const auto shown=[](const char* name){const auto* w=ImGui::FindWindowByName(name);return !w||!w->DockNode||!w->DockNode->VisibleWindow||w->DockNode->VisibleWindow==w;};
+    if(state.ui_page==0&&shown("Workspace###v2.workspace"))return true;
+    if(!ui::pinned(state.ui_right_pages,0))return false;
+    const auto name=ui::right_window(0,false);return ImGui::FindWindowByName(name.c_str())?shown(name.c_str()):state.ui_right_page==0;
+}
+void App::set_logs_visible(bool visible){
+    log_visibility_.change_view(log_context());
+    if(workers_view_visible()||state.ui_logs_keep_visible){state.ui_logs=visible;log_visibility_.manual=false;}
+    else log_visibility_.manual=visible;
+    update_logs_visibility();
+}
+void App::update_logs_visibility(){
+    log_visibility_.change_view(log_context());
+    apply_logs_visibility(log_visibility_.visible(state.ui_logs,state.ui_logs_keep_visible,workers_view_visible()));
+}
+void App::sync_dock_tabs(){
+    std::array<ImGuiWindow*,3> windows{ImGui::FindWindowByName("Navigation###v2.navigation"),ImGui::FindWindowByName("Workspace###v2.workspace"),nullptr};
+    if(state.ui_right_pages){windows[2]=ImGui::FindWindowByName(ui::right_window(state.ui_right_page,false).c_str());
+        if(!windows[2])for(int page=0;page<8;++page)if(ui::pinned(state.ui_right_pages,page)){windows[2]=ImGui::FindWindowByName(ui::right_window(page,false).c_str());if(windows[2])break;}}
+    bool* preferences[]{&state.ui_nav_hide_tab_bar,&state.ui_workspace_hide_tab_bar,&state.ui_right_hide_tab_bar};
+    for(int i=0;i<3;++i){
+        auto* node=windows[i]?windows[i]->DockNode:nullptr;
+        dock_roles[i]=node?node->ID:0;dock_hidden[i]=node&&node->IsHiddenTabBar();
+        dock_menu_controls[i]=node?ImVec2{node->Pos.x+ImGui::GetStyle().WindowBorderSize+ImGui::GetStyle().FramePadding.x+ImGui::GetFontSize()*.5f,node->Pos.y+ImGui::GetStyle().FramePadding.y+ImGui::GetFontSize()*.5f}:ImVec2{};
+        if(!node||node->Windows.Size!=1){tab_nodes_[i]=0;continue;}
+        if(tab_nodes_[i]!=node->ID){
+            if(!tab_known_[i])*preferences[i]=node->IsHiddenTabBar();
+            else {node->SetLocalFlags(*preferences[i]?node->LocalFlags|ImGuiDockNodeFlags_HiddenTabBar:node->LocalFlags&~ImGuiDockNodeFlags_HiddenTabBar);ImGui::MarkIniSettingsDirty();}
+            tab_known_[i]=true;tab_nodes_[i]=node->ID;
+        }else if(!node->WantHiddenTabBarToggle)*preferences[i]=node->IsHiddenTabBar();
+    }
 }
 bool App::select_language_file(const std::string& file){
     std::string error;const auto directory=ui::language_directory();
@@ -342,11 +381,12 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     if(state.ui_page==5){state.ui_page=drawn_center_page_>=0&&drawn_center_page_!=5?drawn_center_page_:0;open_settings();}
     if(ImGui::GetIO().KeyCtrl&&ImGui::IsKeyPressed(ImGuiKey_Comma,false))open_settings();
     navigation_icon_count=0;
-    view_control=view_logs_control=view_save_control={};view_menu_open=view_save_separator=false;
+    view_control=view_logs_control=view_keep_logs_control=view_save_control={};view_menu_open=view_save_separator=false;
+    dock_hide_control={};
     view_item_keys.clear();
     language_control={};language_items[0]=language_items[1]={};language_file_controls.clear();
     worker_speed_samples=workspace_chart_count=0;worker_speed_min=worker_speed_max={};
-    worker_chart_rects.clear();worker_chart_metrics.clear();worker_chart_toggle={};
+    worker_chart_rects.clear();worker_chart_metrics.clear();worker_chart_toggle=worker_chart_auto_control={};
     for(auto& control:exit_controls)control={};
     if(status!=last_status){last_status=status;toast(status);}
     while(!toasts.empty()&&toasts.front().until<GetTickCount64())toasts.pop_front();
@@ -358,8 +398,13 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         if(view_menu_open){
             const auto menu_item=[&](const char* key,bool selected=false){view_item_keys.push_back(key);return ImGui::MenuItem(ui::text(key,zh),nullptr,selected);};
             if(menu_item("menu.inspector",state.ui_inspector)){state.ui_inspector=!state.ui_inspector;reset_layout=true;}
-            if(menu_item("menu.logs",state.ui_logs))set_logs_visible(!state.ui_logs);
+            if(menu_item("menu.logs",logs_visible))set_logs_visible(!logs_visible);
             view_logs_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+            if(menu_item("menu.keep_logs_visible",state.ui_logs_keep_visible)){
+                state.ui_logs_keep_visible=!state.ui_logs_keep_visible;log_visibility_.manual=false;
+                if(state.ui_logs_keep_visible)state.ui_logs=true;update_logs_visibility();
+            }
+            view_keep_logs_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
             if(menu_item("menu.title_bar",state.window_title_bar))state.window_title_bar=!state.window_title_bar;
             ImGui::Separator();view_save_separator=true;
             if(menu_item("menu.save_layout_config"))save_layout_config();
@@ -403,6 +448,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         }
         ImGui::EndMainMenuBar();
     }
+    sync_dock_tabs();update_logs_visibility();
     const auto dock = ImGui::DockSpaceOverViewport(ImGui::GetID("v2.dock"), ImGui::GetMainViewport());
     const bool wide = ImGui::GetMainViewport()->WorkSize.x >= 1100 * active.scale;
     const auto node = ImGui::DockBuilderGetNode(dock);
@@ -459,6 +505,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     nav_padding=ImGui::GetStyle().WindowPadding.x;nav_scroll={ImGui::GetScrollX(),ImGui::GetScrollY()};nav_size=ImGui::GetWindowSize();
     nav_scrollbars={ImGui::GetCurrentWindow()->ScrollbarX?1.f:0.f,ImGui::GetCurrentWindow()->ScrollbarY?1.f:0.f};
     ImGui::PopFont(); end_window();
+    update_logs_visibility();
     begin_window(ecmgui_v2::ui::text("workspace.title",zh),nullptr,active);
     workspace_docked=ImGui::IsWindowDocked();
     if(drawn_center_page_!=state.ui_page){ImGui::SetScrollY(0);drawn_center_page_=state.ui_page;}
@@ -491,6 +538,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     }
     focus_right_=false;
     for(int page:closed_pages)move_page(page,false);
+    sync_dock_tabs();
     if(const auto old=ImGui::FindWindowByName("Tools###v2.tools"))right_container_present=old->Active;
     if (test_float) {
         ImGui::SetNextWindowPos({ImGui::GetMainViewport()->Pos.x + ImGui::GetMainViewport()->Size.x + 30, ImGui::GetMainViewport()->Pos.y + 30}, ImGuiCond_FirstUseEver);
@@ -696,11 +744,16 @@ void App::draw_worker_speed(const ui::Fonts& fonts) {
     worker_speed_min=ImGui::GetCursorScreenPos();
     const float right=worker_speed_min.x+ImGui::GetContentRegionAvail().x;
     ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ui::text("worker.curve_time",zh));
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX(),right-ImGui::GetWindowPos().x-30*scale));
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(),right-ImGui::GetWindowPos().x-60*scale-ImGui::GetStyle().ItemSpacing.x));
     if(ui::icon_button("##worker-chart-layout",state.ui_worker_chart_columns==1?ui::Icon::Grid:ui::Icon::List,p,scale))
         state.ui_worker_chart_columns=state.ui_worker_chart_columns==1?2:1;
     worker_chart_toggle={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(state.ui_worker_chart_columns==1?"worker_charts_two_columns":"worker_charts_list",zh));
+    ImGui::SameLine();const bool auto_selected=state.ui_worker_chart_auto_y;if(auto_selected)ImGui::PushStyleColor(ImGuiCol_Button,p.active);
+    if(ui::icon_button("##worker-chart-auto-y",ui::Icon::Sliders,p,scale))state.ui_worker_chart_auto_y=!state.ui_worker_chart_auto_y;
+    worker_chart_auto_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text("worker_charts_auto_y",zh));
+    if(auto_selected)ImGui::PopStyleColor();
     // Keep each chart above the shared chart widget's minimum width. Restore
     // the saved two-column choice automatically when the workspace grows.
     worker_chart_columns=state.ui_worker_chart_columns==2&&ImGui::GetContentRegionAvail().x>=360*scale?2:1;
@@ -716,7 +769,7 @@ void App::draw_worker_speed(const ui::Fonts& fonts) {
             for(size_t i=0;i<worker.hist_s_per_curve.size();++i)series[0].points.push_back({static_cast<double>(i+1),worker.hist_s_per_curve[i]});
             const auto value=ui::worker_progress(worker,zh).speed+" s/curve";
             ui::ChartFormat format;format.legend_controls=false;format.show_y_ticks=false;format.show_axis_titles=false;
-            format.integer_x=true;format.corner_text=value.c_str();format.y_format="%.2f s/curve";format.x_format="%.0f";format.metrics=&metrics;
+            format.auto_y=state.ui_worker_chart_auto_y;format.integer_x=true;format.corner_text=value.c_str();format.y_format="%.2f s/curve";format.x_format="%.0f";format.metrics=&metrics;
             ui::chart("workspace-speed",series,ecmgui_v2::ui::text("chart.sample",zh),"s/curve",zh,0,88,format);
         }else {ImGui::PushTextWrapPos(0);ImGui::TextDisabled("%s",ecmgui_v2::ui::text("worker.waiting_curve_time",zh));ImGui::PopTextWrapPos();}
         ImGui::EndGroup();worker_chart_rects.push_back({top,ImGui::GetItemRectMax()});worker_chart_metrics.push_back(metrics);ImGui::PopID();
@@ -810,7 +863,7 @@ void App::draw_inspector(const ui::Fonts& fonts) {
 void App::draw_log_windows(const ui::Settings& active,const ui::Fonts& fonts){
     log_tab_controls.clear();log_docks.clear();log_raw_control=log_follow_control={};
     log_stage2_fraction=log_stage2_width=0;log_stage2_phase=-1;log_stage2_sources.clear();
-    if(!state.ui_logs)return;
+    if(!logs_visible)return;
     const bool request=log_last_worker_!=state.ui_worker||log_active_worker<0;
     if(request){log_active_worker=selected()?selected()->index:0;log_last_worker_=state.ui_worker;}
     const int requested=log_active_worker;

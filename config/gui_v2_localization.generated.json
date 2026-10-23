@@ -1,8 +1,8 @@
 {
   "sha256": {
     "config/gui_v2_localization_aliases.json": "ddee3039933fb7c9dd26109314912d931b0bfa80f775c51b9848c56aa6560aab",
-    "src/ecm/application/gui_v2/localization/english.xml": "cf1910ee30aadfc0d337171e557c7a085b0908f4f5572ac4d9e760ac8963f387",
-    "src/ecm/application/gui_v2/localization/chineseSimplified.xml": "754141f47c8e2ca2df43fb54ee05719b9c524194d42d89fdff54d5d61cfa58db",
+    "src/ecm/application/gui_v2/localization/english.xml": "c374b8443e08d78aeed494a64f8af915566dee416551693726c1fed3d7ca787e",
+    "src/ecm/application/gui_v2/localization/chineseSimplified.xml": "903cf6690e4b8b291be01517662245097804e7276030a1fd0ccd2e30149dad71",
     "tools/gen/generate_gui_v2_localization.py": "f2c20f92873f30b6ce02ee0dfa5a19e025e76f115af8dfdc9c6144f0f6069cd1",
     "src/ecm/application/gui_v2/generated/localization_aliases.h": "6aa1accd91fafa29c4eb5ca1948f5155f14418f165dad05ade13ffb7675ea25b"
   }

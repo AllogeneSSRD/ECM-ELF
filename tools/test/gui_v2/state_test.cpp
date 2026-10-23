@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
     state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
     state.ui_right_pages=(1<<3)|(1<<4);state.ui_right_page=3;state.ui_right_visible=false;state.ui_smooth_scroll=false;state.ui_toasts=false;
+    state.ui_logs_keep_visible=true;state.ui_worker_chart_auto_y=true;state.ui_nav_hide_tab_bar=true;state.ui_workspace_hide_tab_bar=true;state.ui_right_hide_tab_bar=true;
     assert(state.save());
     ecmgui_v2::UiState copy; copy.path = state.path; assert(copy.load());
     assert(copy.ui_theme == "light" && copy.ui_language == "zh" && copy.pet_enabled && copy.pet_left == 126.5f);
@@ -48,6 +49,8 @@ int main(int argc, char** argv) {
     assert(copy.ui_stage2_timing_source=="tune"&&copy.ui_stage2_tune_file==state.ui_stage2_tune_file);
     assert(copy.ui_language_file=="custom-中文.xml");
     assert(copy.ui_worker_chart_columns==2);
+    assert(copy.ui_logs_keep_visible&&copy.ui_worker_chart_auto_y&&copy.ui_nav_hide_tab_bar&&copy.ui_workspace_hide_tab_bar&&copy.ui_right_hide_tab_bar);
+    assert(copy.dock_tab_saved[0]&&copy.dock_tab_saved[1]&&copy.dock_tab_saved[2]);
     assert(copy.pet_skin=="hi_love_elf");
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
     const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
@@ -63,7 +66,7 @@ int main(int argc, char** argv) {
         const auto file=dir/("invalid-chart-columns-"+std::to_string(columns)+".toml");{std::ofstream out(file);out<<"[ui]\nworker_chart_columns="<<columns<<"\n";}
         ecmgui_v2::UiState bad_columns;bad_columns.path=file;assert(!bad_columns.load()&&!bad_columns.save());
     }
-    assert(migrated.ui_worker_chart_columns==1);
+    assert(migrated.ui_worker_chart_columns==1&&!migrated.ui_logs_keep_visible&&!migrated.ui_worker_chart_auto_y&&!migrated.dock_tab_saved[0]);
     const auto invalid_font=dir/"invalid-font.toml";{std::ofstream out(invalid_font);out<<"[ui]\nfont_size=31\n";}
     ecmgui_v2::UiState bad_font;bad_font.path=invalid_font;assert(!bad_font.load()&&!bad_font.save());
     const auto invalid_offset=dir/"invalid-offset.toml";{std::ofstream out(invalid_offset);out<<"[ui]\nprimary_font_offset=7\n";}

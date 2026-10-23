@@ -118,8 +118,8 @@ Show the worker inspector on sufficiently wide windows.
 
 默认值：`true`；类型：`bool`。
 
-Show the log dock.
-显示日志停靠窗。
+Enable logs in Workers management; automatic hiding on other views does not change this saved preference.
+开启Workers管理页日志；其他视图的自动隐藏不改变此保存偏好。
 
 ## ui.follow_log
 
@@ -183,6 +183,41 @@ Show non-activating action notifications; errors always remain visible.
 
 Allow detached native panel windows after restart; default keeps docking and floating inside the main window to avoid the observed slow presentation path.
 重启后允许原生独立面板窗；默认在主窗口内停靠/浮动，以规避已观察到的慢呈现路径。
+
+## ui.worker_chart_auto_y
+
+默认值：`false`；类型：`bool`。
+
+Fit curve-time Y bounds to finite samples in the current retained window; off keeps a zero baseline.
+曲线耗时Y轴按当前保留窗口的有效样本自动缩放；关闭时从0开始。
+
+## ui.logs_keep_visible
+
+默认值：`false`；类型：`bool`。
+
+Keep enabled logs visible across pages; otherwise follow visible Workers management, with a temporary manual override on other views.
+已开启日志跨页保持可见；关闭时跟随可见的Workers管理页，其他视图可临时手动打开。
+
+## ui.nav_hide_tab_bar
+
+默认值：`false`；类型：`bool`。
+
+Remember the native Navigation dock Hide tab bar choice across restarts and layout rebuilding.
+持久记忆导航停靠窗Hide tab bar选择，布局重建后保留。
+
+## ui.workspace_hide_tab_bar
+
+默认值：`false`；类型：`bool`。
+
+Remember the native Workspace dock Hide tab bar choice across restarts and layout rebuilding.
+持久记忆工作区停靠窗Hide tab bar选择，布局重建后保留。
+
+## ui.right_hide_tab_bar
+
+默认值：`false`；类型：`bool`。
+
+Remember the right dock Hide tab bar choice. Multiple native tabs remain visible; the choice resumes when one remains.
+持久记忆右侧停靠窗Hide tab bar选择；多个原生标签保持可见，恢复单标签时恢复该选择。
 
 ## window.x
 
