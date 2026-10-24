@@ -130,7 +130,9 @@ def inspect_modules(cuda,build,stage,report):
                 unit=manifest['compile_units'][source]
                 records.append(dict(label=Path(source).stem,object=unit['entry']['output']))
     inspector=cuda/'bin/cuobjdump.exe'
-    for record in records:
+    for index,record in enumerate(records,1):
+        if index==1 or index%10==0 or index==len(records):
+            print(f'  Inspect {stage} PTX: {index}/{len(records)} {record["label"]}',flush=True)
         # Stream only entry declarations out of the potentially large PTX dump.
         proc=subprocess.Popen([str(inspector),'--dump-ptx',record['object']],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         entries=[];versions=set();targets=set()
@@ -181,6 +183,8 @@ def gui_identity(gui,gmp):
 
 def main(plan):
     build=Path(plan['build_root']).resolve();out=Path(plan['out']).resolve();gui=Path(plan['gui']).resolve();gmp=Path(plan['gmp']).resolve()
+    print('== Package preflight: Stage2 entry catalogue ==',flush=True)
+    catalog=stage2_catalog()
     gui_identity(gui,gmp)
     gmp_sources,gmp_licenses=distribution(gmp)
     version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'include/ecm/platform/program_version.h').read_text())[1]
@@ -217,6 +221,7 @@ def main(plan):
             if sha(binary).lower()!=expected.lower():raise ValueError(f'Worker changed: {binary}')
             banner=subprocess.check_output([str(binary),'--version'],stderr=subprocess.STDOUT).decode(errors='replace')
             if version not in banner:raise ValueError(f'Worker version differs from release: {banner}')
+            print(f'== Package {profile}/{stage}: CUDA images and module entries ==',flush=True)
             cuda=Path(manifest['cuda_root']);image=images(cuda,binary,ptx,sass)
             report=build/'components'/f'{profile}.{stage}.modules.json'
             image['module_report_sha256']=inspect_modules(cuda,leaf,stage,report)
@@ -225,7 +230,7 @@ def main(plan):
                 rows=re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),',(ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(),re.M)
                 expected_modules={f'edwards_{width}' for width,_ in rows}|{f'mont{param}_{width}' for width,mont in rows if mont=='1' for param in (0,2,3)}
                 if {m['label'] for m in module_report['modules']}!=expected_modules:raise ValueError('Incomplete Stage1 module membership')
-            else:verify_stage2_membership(module_report,layout,stage2_catalog())
+            else:verify_stage2_membership(module_report,layout,catalog)
             if any(m['ptx_targets']!=['.target sm_'+ptx] for m in module_report['modules']):raise ValueError('Unexpected module PTX target')
             copy(binary,folder/exe)
             component_records[stage]=dict(executable_sha256=sha(binary),manifest_sha256=sha(record['manifest']),images=image)

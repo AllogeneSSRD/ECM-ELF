@@ -88,6 +88,8 @@ Stage2聚合模式不提供按容量隔离JIT的保证：算术或NTT镜像可�
 
 发布统一输出到 `release/ecm-elf-<版本>-cu<CUDA版本>/`；分阶段入口只生成构建组件记录。`components/package-manifest.json` 保存本次所选包的目录名、ZIP 名、包内文件、EXE、ZIP及模块报告摘要；它只证明构建和静态镜像/载荷检查，不自动获得运行时资格。`tools/test/test_release_bundle.py --release release --manifest <构建目录>/components/package-manifest.json --output <新证据目录>` 验证当前布局，也保留对已有 schema 1 冻结包的检查能力。
 
+打包首先通过真实生成器读取Stage2只读入口清单，接口检查在耗时的CUDA镜像提取之前完成；只读模式不生成隔离源码。后续输出当前profile、阶段及PTX模块检查进度，区分组件身份验证与cuobjdump镜像检查。
+
 ## 复用构建
 
 Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。

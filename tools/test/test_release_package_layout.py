@@ -27,6 +27,21 @@ class ReleaseLayout(unittest.TestCase):
     def put(self,path,value='fixture\n'):
         path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value,encoding='utf-8');return path
 
+    def test_packaging_imports_real_stage2_catalog(self):
+        # Exercise the production import/call boundary: assembly fixtures mock
+        # this seam and cannot detect a reverted generator API.
+        catalog=packaging.stage2_catalog()
+        self.assertEqual(len(catalog),176)
+        self.assertEqual(sum(m['label'].startswith('arithmetic_') for m in catalog),112)
+        self.assertEqual(sum(m['label'].startswith('ntt_') for m in catalog),64)
+
+    def test_catalog_failure_precedes_payload_work(self):
+        plan=dict(build_root=str(self.build),out=str(self.out),gui=str(self.gui),gmp=str(self.gmp),profiles=['cu11.8'])
+        with patch.object(packaging,'stage2_catalog',side_effect=RuntimeError('catalog unavailable')),\
+             patch.object(packaging,'gui_identity') as gui:
+            with self.assertRaisesRegex(RuntimeError,'catalog unavailable'):packaging.main(plan)
+            gui.assert_not_called()
+
     def fixture(self,layout='grouped'):
         self.layout=layout
         self.put(self.repo/'include/ecm/platform/program_version.h','inline constexpr char version[] = "0.52.1";')

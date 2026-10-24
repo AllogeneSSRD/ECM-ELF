@@ -343,3 +343,13 @@ Stage2 cu11.8/cu13.3均通过正式release阶段入口及源码/编译器/GMP/�
 cu11.8聚合版的同一8193位完整worker也完成，结果及目标叶指纹与冻结样例一致，2048项Montgomery必需自检通过、pending=0，见 `stage2_worker_cu118/summary.json`。该次私有冷缓存运行初始化等待较长；未单独观测驱动JIT窗口，不把整段曲线耗时称为纯JIT，仍保留grouped冷/热预算待验。两套完整worker均在GPU1 RTX4060 Laptop、sm89、610.88驱动验证，设备快照为 `device.csv`；CPU为Ryzen AI9 HX370，未锁定功耗/时钟，期间存在并发构建和其他GPU上下文。该条件不替代旧GPU、旧驱动或原生sm60/sm80资格。
 
 CPU回归为构建/计时合同7项、完整包布局6项、profile隔离33项通过；另有10个PowerShell入口/辅助脚本语法检查通过。隔离备选的生成成员、稳定生成、只读元数据、编译宏、profile分离及打包均有CPU回归。旧GPU/旧驱动、全档构建加速比及grouped的冷/热JIT预算仍待相应条件验证；未重打包原冻结发布目录。草稿保留，由用户决定后续处理。
+
+## 14. 打包生成器接口回退修复（2026-10-24）
+
+用户报告两个组件身份验证通过后，打包调用 `generate(..., emit=False)` 报TypeError。Git核对确认e5a826e中的只读接口在27b198d中回退为旧的 `generate(out)`，而调用方和构建合同仍使用新接口。直接调用真实打包器的Stage2目录读取函数及已有稳定生成合同，均复现同一错误；不是CUDA编译或GPU运行失败。
+
+恢复生成器的emit参数及manifest返回值；emit=False保留只读语义，emit=True维持原生成内容和稳定写入。打包入口先读取一次Stage2目录，再进行GUI/依赖核对、源码归档和CUDA镜像检查，避免全量cuobjdump之后才发现接口错误。增加profile/阶段及每批模块进度提示。原打包夹具对目录函数使用mock，未覆盖真实动态导入接口；新增真实目录回归和前置失败顺序回归，完整包布局8项、构建/生成/计时合同7项通过。
+
+本轮证据根为 `data/experiments/release_catalog_fix_20261024/`。正式CUDA11.8完整发布入口在独立输出目录复核，Stage1和Stage2均复用现有CUDA对象、重编译0个单元；两阶段身份验证、125个Stage1模块及2个Stage2聚合对象的CUDA镜像与成员检查通过。首次运行在最终移动目录时遇到Windows WinError 5，原始失败保留于 `release.log`；核对暂存文件和ZIP摘要与清单一致后，仅重试发布移动即成功，未重复镜像提取。最终实物包通过 `test_release_bundle.py --static-only`，报告为 `bundle_static/result.json`；另核对嵌套源码包包含恢复后的只读生成器接口。该结果不替代旧GPU、旧驱动及JIT运行资格验证。
+
+修复构建脚本不增加主程序版本；不改写已有构建清单或冻结证据来绕过身份检查。草稿保留供用户后续处理。
