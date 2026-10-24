@@ -1,6 +1,6 @@
 # 构建与发布
 
-工具位于 `tools/build/`。从任意目录调用 PS1，或双击同名 BAT；BAT 转交参数，无参数运行结束后暂停。默认值由 PS1 维护。
+工具位于 `tools/build/`。从任意目录调用 PS1，或双击 BAT；BAT 转交参数，无参数运行结束后暂停。默认值由 PS1 维护；两个按 CUDA 版本命名的 release BAT 固定传入对应 profile 与 `-Jobs 16`。
 
 Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通过 `CGBN_INCLUDE_DIR` 指向该目录，需要其他安装位置时可在配置时覆盖。
 
@@ -13,9 +13,9 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 | Stage1 | `build_stage1_dev` | `build_stage1_local` | `build_stage1_release` |
 | Stage2 | `build_stage2_dev` | `build_stage2_local` | `build_stage2_release` |
 
-每项均有 `.ps1` 与 `.bat`。完整发布使用 `tools/build/build_release.ps1/.bat`；两项 release 入口只重建并验证相应阶段，不生成完整包。Stage1 默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`，release 使用 `SplitCompile=1`、默认8路编译单元并行。构建入口不自动运行数学、GPU 或性能测试。
+每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 使用 `SplitCompile=1`。构建入口不自动运行数学、GPU 或性能测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -39,8 +39,8 @@ Stage2：独立生产 CUDA 引擎，固定 Goldilocks PTX 后端、canonical 减
 
 | 分发目录 | CUDA | 唯一 PTX | 唯一 SASS |
 | --- | --- | --- | --- |
-| cu11.8 | 11.8 | compute_50 | sm_60 |
-| cu13.3 | 13.3 | compute_75 | sm_80 |
+| ecm-elf-&lt;版本&gt;-cu11.8 | 11.8 | compute_50 | sm_60 |
+| ecm-elf-&lt;版本&gt;-cu13.3 | 13.3 | compute_75 | sm_80 |
 
 需要安装所选 CUDA、相容的 Visual Studio x64 C++ 工具集、Git、CMake、Python、PowerShell 5.1+ 和 GMP。完整发布用 `-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp` 覆盖安装入口。脚本在构建前核对所有请求工具链的真实版本、虚拟/原生目标及 MSVC 支持范围；缺少任一默认工具链即失败。local/dev 保留各自 `-CudaRoot` 参数。
 
@@ -50,7 +50,11 @@ Windows 旧包面向 Maxwell/Pascal：sm50/52 需要 PTX50 JIT；sm61 可使用 
 
 ## 完整发布与按需加载
 
-运行 `tools\build\build_release.bat` 默认构建 GUI v2、两套 Stage1/Stage2，并生成 `release/ecm-elf-<主程序版本>/cu11.8/`、`cu13.3/` 及各自 ZIP/SHA256。`-Profile cu11.8` 或 `cu13.3` 可只生成指定版本；`-SkipBuild` 仍核对源码、profile、工具链、依赖、对象和程序身份。`-SkipPackage` 只构建/验证。`-BuildRoot` 默认 `build_cuda_release`；`-OutDir` 默认 `release`，必须与构建目录分离。每个阶段的精确叶目录记录在 `<BuildRoot>/components/cu<版本>.stageN.json`，不按时间扫描“最新程序”。已有同版本目录会拒绝覆盖，重打包使用新的 `-OutDir`，以保留用户配置和队列。
+运行 `tools\build\build_release_cu11.8.bat` 或 `build_release_cu13.3.bat`，分别构建对应 CUDA 的完整包；两者均传入 `-Jobs 16`，并只预检所选 CUDA 工具链。BAT 可继续传入 `-OutDir`、`-SkipBuild` 等参数；需要调整 profile 或并行数时，直接使用 `build_release.ps1 -Profile cu11.8 -Jobs <数量>`。`build_release.ps1/.bat` 默认仍构建 GUI v2 和两套 Stage1/Stage2，默认并行数也是16。
+
+完整包生成到 `release/ecm-elf-<主程序版本>-cu11.8/`、`release/ecm-elf-<主程序版本>-cu13.3/`，ZIP/SHA256 同层存放，ZIP 名为 `ecm-elf-<主程序版本>-cu<CUDA版本>-win-x64.zip`。ZIP 内的唯一顶层目录保留完整包名，例如 `ecm-elf-0.52.1-cu11.8/`。两个 CUDA 包可先后发布到同一个 `-OutDir`。
+
+`-SkipBuild` 仍核对源码、profile、工具链、依赖、对象和程序身份。`-SkipPackage` 只构建/验证。`-BuildRoot` 默认 `build_cuda_release`；`-OutDir` 默认 `release`，必须与构建目录分离。每个阶段的精确叶目录记录在 `<BuildRoot>/components/cu<版本>.stageN.json`，不按时间扫描“最新程序”。所选包的目录、ZIP 或 SHA256 已存在时均拒绝覆盖，重打包使用新的 `-OutDir`，以保留用户配置和队列。
 
 每个 CUDA 目录内同层包含 `ecm_cuda.exe`、`ecm_cuda_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、原始日志和计时不进入分发目录。
 
@@ -76,7 +80,7 @@ CUDA worker 在首次 CUDA 调用前将未设置的 `CUDA_MODULE_LOADING` 默认
 
 对应源码快照从当前Git检出根枚举源码，包含未提交的新源码，排除被忽略的测试输出；固定第三方源码和许可另按明确目录纳入。解压源码重建完整包时，先在解压根执行`git init`，并准备上述工具链、vcpkg GMP和PARI材料；打包拒绝借用解压目录父层的另一个仓库。
 
-发布统一输出到 `release/ecm-elf-<版本>/`；分阶段入口只生成构建组件记录。`components/package-manifest.json` 保存包内文件、EXE、ZIP及模块报告摘要；它只证明构建和静态镜像/载荷检查，不自动获得运行时资格。
+发布统一输出到 `release/ecm-elf-<版本>-cu<CUDA版本>/`；分阶段入口只生成构建组件记录。`components/package-manifest.json` 保存本次所选包的目录名、ZIP 名、包内文件、EXE、ZIP及模块报告摘要；它只证明构建和静态镜像/载荷检查，不自动获得运行时资格。`tools/test/test_release_bundle.py --release release --manifest <构建目录>/components/package-manifest.json --output <新证据目录>` 验证当前布局，也保留对已有 schema 1 冻结包的检查能力。
 
 ## 复用构建
 

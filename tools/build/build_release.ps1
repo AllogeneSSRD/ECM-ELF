@@ -4,7 +4,7 @@ param(
     [ValidateSet('all','cu11.8','cu13.3')][string]$Profile='all',
     [ValidateSet('all','stage1','stage2')][string]$Component='all',
     [string]$BuildRoot='build_cuda_release', [string]$OutDir='release',
-    [ValidateRange(1,64)][int]$Jobs=8,
+    [ValidateRange(1,64)][int]$Jobs=16,
     [string]$Gmp='', [string]$Cuda118Root='', [string]$Cuda133Root='', [string]$VcVars='',
     [switch]$SkipBuild, [switch]$SkipPackage
 )

@@ -9,7 +9,7 @@
 | Stage1 | `build_stage1_dev.ps1/.bat` | `build_stage1_local.ps1/.bat` | `build_stage1_release.ps1/.bat` |
 | Stage2 | `build_stage2_dev.ps1/.bat` | `build_stage2_local.ps1/.bat` | `build_stage2_release.ps1/.bat` |
 
-完整发布使用 `build_release.ps1/.bat`，默认生成 cu11.8 与 cu13.3 完整包；表中的 release 入口只构建/验证相应阶段。Stage1 默认 `Jobs=8`；Stage2 local 默认 `SplitCompile=8`，release 默认 `Jobs=8, SplitCompile=1`。PS1 为默认参数来源，BAT 原样转交参数。无参数 BAT 结束暂停，有参数返回退出码。入口不自动运行测试。
+完整发布分别使用 `build_release_cu11.8.bat`、`build_release_cu13.3.bat`，固定传入所选 CUDA profile 和 `-Jobs 16`；`build_release.ps1/.bat` 保留默认双包总入口。表中的 release 入口只构建/验证相应阶段。Stage1 本机/开发默认 `Jobs=8`；Stage2 local 默认 `SplitCompile=8`；发布两阶段默认 `Jobs=16`，Stage2 release 使用 `SplitCompile=1`。PS1 为默认参数来源；单 CUDA BAT 已传入 profile/Jobs，调整这两项时直接调用 PS1。无参数 BAT 结束暂停，有参数返回退出码。入口不自动运行测试。
 
 ## 参数定位
 
@@ -17,7 +17,7 @@
 - Stage2 本机/开发：`-Arch`、`-Build`、`-SplitCompile`、`-GlBackend`、`-AddSubMask`、`-OuterUnrollU`、`-HostOnly`、`-Rebuild`。默认逐单元复用；HostOnly 在编译前验证 CUDA 对象/参数和源身份，与 Rebuild 互斥。
 - 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；阶段入口是相应组件的包装。
 - 发布工具链：`-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp`；发布要求同一 vcpkg 通用 GMP，缺失或身份变化即失败。local/dev 保留 `-CudaRoot` 和各自依赖参数。
-- 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。已有版本目录不覆盖，重打包指定新的 `-OutDir`。
+- 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。输出为 `release/ecm-elf-<版本>-cu11.8/`、`ecm-elf-<版本>-cu13.3/`，ZIP 内保留同名完整目录。所选包已有目录、ZIP 或 SHA256 时不覆盖，重打包指定新的 `-OutDir`；另一个 CUDA 包可发布到同一输出根。
 
 local BAT/PowerShell 默认输出为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；显式本机/开发目录是最终叶目录。固定短目录中的 `profile.json` 仍拒绝跨用途、跨阶段或不兼容配置复用；需要并存时指定不同 `-BuildDir`/`-Build`，不自动覆盖。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 

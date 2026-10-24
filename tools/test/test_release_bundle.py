@@ -36,7 +36,12 @@ def main():
     def persist():(out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
     for profile,identity in manifest['profiles'].items():
         assert profile in ('cu11.8','cu13.3')
-        folder=root/profile;files=identity['files_sha256'];verify(folder,files)
+        if manifest['schema']>=2:
+            directory=f'ecm-elf-{manifest["version"]}-{profile}'
+            assert identity['directory']==directory
+            assert identity['archive']==f'{directory}-win-x64.zip'
+        else:directory=profile
+        folder=root/directory;files=identity['files_sha256'];verify(folder,files)
         for name in ('ecm_cuda.exe','ecm_cuda_stage2.exe','ecm_gui_v2.exe','ecm_group_order_ui.exe','ecm_diagnostics_host.exe','gmp-10.dll','ecm.toml','ecm.toml.example','worktodo.txt','source/release-source.zip'):
             assert name in files,('missing required payload',profile,name)
         assert sha(folder/'gmp-10.dll')==manifest['gmp_sha256']
@@ -46,12 +51,12 @@ def main():
             assert '.gitignore' in sources.namelist()
         assert set(p.name for p in (folder/'assets').iterdir())=={'pet_ely.png','pet_ely.json','CLASSIC-ELY-NOTICE.md','ELYTerminal-LICENSE.txt'}
         assert not any('manifest' in Path(name).name.lower() and name.endswith('.json') for name in files)
-        archive=root/f'{root.name}-{profile}-win-x64.zip'
+        archive=root/identity['archive'] if manifest['schema']>=2 else root/f'{root.name}-{profile}-win-x64.zip'
         assert sha(archive)==identity['archive_sha256']
         assert archive.with_suffix('.zip.sha256').read_text().split()[0]==sha(archive)
         with zipfile.ZipFile(archive) as value:
-            assert set(value.namelist())=={profile+'/'+name for name in files}
-            for name,digest in files.items():assert hashlib.sha256(value.read(profile+'/'+name)).hexdigest()==digest
+            assert set(value.namelist())=={directory+'/'+name for name in files}
+            for name,digest in files.items():assert hashlib.sha256(value.read(directory+'/'+name)).hexdigest()==digest
         # Negative identity checks operate on expected metadata only, never on
         # the release directory or installed dependencies.
         bad=dict(files);bad['gmp-10.dll']='0'*64

@@ -313,3 +313,13 @@ CUPTI观察器只用于测试。退出时flush导致Windows加载锁挂起的原
 80个独立冷/热进程样本完成，原始记录为`runtime_final_sampling/`。Stage1冷JIT中位数11.8为1.3104秒、13.3 PTX副本为0.7272秒；Stage2分别9.6077、9.5718秒；各5个热样本记录缓存活动、无重新编译。进程墙钟、输入、计时边界、设备条件及完整覆盖以正式[发布/JIT验证](../performance/RELEASE_JIT.md)为准；不宣称稳定吞吐收益。
 
 Maxwell/Pascal、sm60/sm80实体GPU和旧驱动本机不可用，继续明确未测，不宣布旧驱动最低已验版本。原现代包在未来GPU自动回退、旧驱动/EAGER加载范围、目标负载的JIT预算和稳定吞吐门限保留待验。草稿随实现纳入提交，完成后由用户处理；正式使用方式见[构建与发布](../usage/BUILD.md)。
+
+## 12. 发布目录与分版本启动入口（2026-10-24）
+
+按用户要求，后续发布直接输出 `release/ecm-elf-<版本>-cu11.8/` 与 `ecm-elf-<版本>-cu13.3/`。ZIP 内唯一顶层目录采用相同完整名称，避免解压后只得到 CUDA 版本目录；主程序版本仍从权威版本头读取，不固定为示例0.52.1。ZIP及SHA256位于release根，各包的目录、ZIP或SHA256已存在时拒绝覆盖；两种profile可以先后发布到同一输出根。现有冻结产物和证据不迁移、不重写。
+
+新增 `tools/build/build_release_cu11.8.bat` 与 `build_release_cu13.3.bat`，分别固定传入对应profile和16个并行任务，保留参数转交、无参数暂停和退出码。总入口及两阶段release PS1默认Jobs同步为16，Stage2仍保持SplitCompile=1。需要其他并行数时直接调用PS1。双包总入口仍可用，不变更本机/开发默认并行数，不修改主程序版本。
+
+打包manifest更新为schema 2并记录实际目录/ZIP名；完整包检查器验证新的压缩成员根目录，同时继续支持schema 1冻结包。`tools/test/test_release_package_layout.py` 使用私有假组件执行真实打包和静态包门禁，覆盖双包、先后单包发布、解压根目录、拒绝覆盖目录/ZIP/SHA256，以及两个BAT实际传参和退出码；测试不编译或运行计算worker。
+
+验证结果：新增布局测试4项、现有 `tools/test/test_release_build_contracts.py` 6项全部通过；三个公开release PS1语法解析无错误，Jobs默认值均为16。本轮未重新编译计算程序或重打包现有发布产物。正式说明已同步到BUILD及构建工具README，草稿保留供用户处理。

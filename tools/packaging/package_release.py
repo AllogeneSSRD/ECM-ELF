@@ -18,6 +18,25 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def read(path):return json.loads(Path(path).read_text(encoding='utf-8-sig'))
 
 
+def release_paths(out,version,profile):
+    folder=out/f'ecm-elf-{version}-{profile}'
+    archive=out/f'{folder.name}-win-x64.zip'
+    return folder,archive,archive.with_suffix('.zip.sha256')
+
+
+def assert_outputs_available(paths):
+    for path in paths:
+        if path.exists():raise ValueError(f'Release output already exists; preserve user configuration and select a fresh OutDir: {path}')
+
+
+def write_payload_archive(folder,archive,files):
+    with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as payload:
+        for filename in files:payload.write(folder/filename,folder.name+'/'+filename)
+    digest=sha(archive)
+    archive.with_suffix('.zip.sha256').write_text(digest+'  '+archive.name+'\n',encoding='ascii')
+    return digest
+
+
 def source_paths():
     # Respect repository ignores for application/tools: local test queues and
     # results can live below tools/test, even when they have source-like suffixes.
@@ -128,11 +147,10 @@ def main(plan):
     gui_identity(gui,gmp)
     gmp_sources,gmp_licenses=distribution(gmp)
     version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'include/ecm/platform/program_version.h').read_text())[1]
-    name=f'ecm-elf-{version}'
-    final=out/name
-    if final.exists():raise ValueError(f'Release version already exists; preserve user configuration and select a fresh OutDir: {final}')
-    staging=build/'_packages'/uuid.uuid4().hex/name;staging.mkdir(parents=True)
-    qualified=dict(schema=1,status='build_and_static_images_verified',tests_run=False,version=version,profiles={},gmp_sha256=sha(gmp/'bin/gmp-10.dll'))
+    outputs=[path for profile in plan['profiles'] for path in release_paths(out,version,profile)]
+    assert_outputs_available(outputs)
+    staging=build/'_packages'/uuid.uuid4().hex;staging.mkdir(parents=True)
+    qualified=dict(schema=2,status='build_and_static_images_verified',tests_run=False,version=version,profiles={},gmp_sha256=sha(gmp/'bin/gmp-10.dll'))
     def copy(src,dst):
         dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dst)
     # A source snapshot includes new/uncommitted implementation files too.
@@ -143,7 +161,7 @@ def main(plan):
             archive.write(ROOT/rel,rel)
         for path,rel in gmp_sources:archive.write(path,rel)
     for profile in plan['profiles']:
-        ptx,sass=TARGETS[profile];folder=staging/profile;folder.mkdir()
+        ptx,sass=TARGETS[profile];folder,archive,_=release_paths(staging,version,profile);folder.mkdir()
         component_records={}
         for stage,exe in [('stage1','ecm_cuda.exe'),('stage2','ecm_cuda_stage2.exe')]:
             record=read(build/'components'/f'{profile}.{stage}.json');leaf=Path(record['build']);manifest=read(record['manifest'])
@@ -193,17 +211,15 @@ def main(plan):
             copy(ROOT/source,folder/'licenses'/filename)
         copy(source_archive,folder/'source'/source_archive.name)
         files={path.relative_to(folder).as_posix():sha(path) for path in sorted(folder.rglob('*')) if path.is_file()}
-        archive=staging/f'{name}-{profile}-win-x64.zip'
-        with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as zip:
-            for filename in files:zip.write(folder/filename,profile+'/'+filename)
-        archive_sha=sha(archive)
-        archive.with_suffix(archive.suffix+'.sha256').write_text(archive_sha+'  '+archive.name+'\n',encoding='ascii')
-        qualified['profiles'][profile]=dict(components=component_records,files_sha256=files,archive_sha256=archive_sha)
+        archive_sha=write_payload_archive(folder,archive,files)
+        qualified['profiles'][profile]=dict(directory=folder.name,archive=archive.name,components=component_records,files_sha256=files,archive_sha256=archive_sha)
     source_archive.unlink()  # Scratch copy; the corresponding source is inside every CUDA directory.
     (build/'components/package-manifest.json').write_text(json.dumps(qualified,indent=2),encoding='utf-8')
     out.mkdir(parents=True,exist_ok=True)
-    staging.rename(final)
-    print(f'Complete packages: {final}')
+    assert_outputs_available(outputs)
+    for final in outputs:(staging/final.name).rename(final)
+    staging.rmdir()
+    print(f'Complete packages: {out} ({", ".join(plan["profiles"])})')
 
 
 if __name__=='__main__':
