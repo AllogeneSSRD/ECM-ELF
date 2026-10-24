@@ -6,7 +6,153 @@ CUDA Montgomery 默认 ladder、TPB128、按容器选择 TPI，分档寄存器�
 
 完整曲线 wall、GPU kernel 时间、批量摊销 s/curve 和短时投影分别报告。生产 B1=10e6…260e6 的短时采样按完整/窗口工作比投影，排除冷准备、最终归一化/save；checkpoint 不算已完成曲线。
 
-计时先预热，再按相反/交错顺序重复，保留完整矩阵、失败和原始日志。管理员 NCU 会重放，采集时间不作吞吐；Nsight Systems 的自身事件间隙不等于整卡空闲比例。
+重复实验采用预热及相反/交错顺序，并保留完整矩阵、失败和原始日志；下列单次 GPU 矩阵按用户指定不重复，不提供波动估计。管理员 NCU 会重放，采集时间不作吞吐；Nsight Systems 的自身事件间隙不等于整卡空闲比例。
+
+## RTX4070 Ti 全范围 Stage1 对比
+
+2026-10-24 的测量覆盖同一组 **13 个梅森余因子、318–16272 bits**。GPU Edwards 为 **ECM-ELF 0.52.0**，Montgomery PARAM0 为 **0.52.2**，每模型、每输入各测一批（n=1）；Prime95 两类构造各有 **39 个有效单核样本**（每输入 n=3），CPU 由用户确认固定为 4.0 GHz。
+
+Edwards 继续使用独立的主循环计时。新增 Montgomery 日志只有**包含初始化的全局计时**，因此作为单列参考，保留其真实边界。统一折算至 B1=1e6 后，Edwards 主循环成本为 **0.006198–1.704841 秒/曲线**，Montgomery 含初始化参考为 **0.012868–3.525354 秒/曲线**。两者不是同边界的算法性能比较，也不是端到端时间。
+
+![两类曲线的GPU计时与Prime95单核成本：对数坐标，Montgomery含初始化](attachments/stage1-edwards-mont0-rtx4070ti-times-log.png)
+
+![两类曲线的GPU计时与Prime95单核成本：线性坐标，Montgomery含初始化](attachments/stage1-edwards-mont0-rtx4070ti-times-linear.png)
+
+### 输入与工况
+
+GPU START 工作行中的已知因子逐项通过整除验证；计算出的实际 N 位宽与原生 GPU 输出相符，并与 CPU 原工作行的目标一致。CPU screen 日志不打印已知因子列表，因此 CPU 输入身份的证据范围是原工作行，不能单凭 screen 日志证明执行时剥离了这些因子。
+
+两次 GPU 测量均使用 device 0、RTX4070 Ti、60 SM、TPB128、120 个 block，即发射 2 block/SM；实际驻留仍受资源约束。Edwards 为 NAF w6、HWCD 倍点，Montgomery 为 Suyama PARAM0。TPI4/8/16/32 对应 B1=1e6/2e5/5e4/1e4，批量为 3840/1920/960/480。不同构造使用各自的进位余量，容器不强制相同：M1009 的 Edwards/Montgomery 为 **384/512 bits**，M12511 为 **12288/13312 bits**；不能把这些点的差异全部归因于点运算公式。
+
+Montgomery 原生运行日志直接记录卡名和 SM 数；Edwards 的 device 0 由分析时设备枚举对应到同一张 RTX4070 Ti，枚举时驱动为 610.88，完整设备身份保存在忽略的证据目录。**运行时 GPU 频率、功耗及其他并发负载未记录**。另外，Montgomery CPU 日志的执行时段约为 17:33–17:40，GPU 为 17:34–17:40，二者重叠；这是现有工况参考，不宣称隔离运行。精确 CPU 型号和 Prime95 版本未写入这两份 CPU 日志。
+
+### 计时边界与完整矩阵
+
+| 路径 | 采用计时 | 包含与排除 |
+| --- | --- | --- |
+| GPU Edwards | `loop_gpu_ms` | NAF 主循环每次发射前后 CUDA event 区间累计；排除字典、初始化、切片后坐标回读/导入、主机回调、GCD、save 和结果发布 |
+| GPU Montgomery PARAM0 | `gputime` | 从 `global_start` 到末次切片 `stop` 的 CUDA event 区间；包含标量传输、曲线初始化、分配/准备及期间的主机提交间隙，排除末次结果回读、GCD、save 和结果发布 |
+| CPU Prime95 | `Stage 1 complete ... Total time` | 原生 Stage1 时间，包含字典等 Stage1 工作；排除 Stage2 及整进程启动 |
+
+实现依据为 Edwards 的 `src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl:96–123`、`workflow.cpp:225`，以及 Montgomery 的 `src/ecm/backend/cuda/stage1/montgomery/runtime.cu:194,673–674,763`。`GPU Edwards NAF` 汇总行是在主循环结束后输出，不能用它到 save 行的墙钟间隔代表主循环。CUDA event 区间不称 profiler 的纯 kernel 时间；嵌套的 `api_seconds` 不重复相加。
+
+按实测批量 C、B1 和所选计时 T 计算 `GPU秒/曲线@1e6 = T / C × (1e6/B1)`。后 11 组是线性外推。**Montgomery 的该折算会同时放大固定准备开销**，不是扣除初始化后的主循环成绩，也不是在目标 B1 重测的总时间；没有用日志秒级时间戳估计并扣除准备成本。
+
+| M 指数 | N bits | 实测 B1 | 曲线/批 | Ed 主循环秒/批 | Mont 全局秒/批 | Ed 秒/曲线@1e6 | Mont 秒/曲线@1e6 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 503 | 318 | 1,000,000 | 3,840 | 23.802016 | 49.413900 | 0.006198 | 0.012868 |
+| 1009 | 383 | 1,000,000 | 3,840 | 24.240707 | 58.623500 | 0.006313 | 0.015267 |
+| 2003 | 1939 | 200,000 | 1,920 | 14.076281 | 33.736000 | 0.036657 | 0.087854 |
+| 3001 | 2726 | 50,000 | 960 | 3.808978 | 9.331060 | 0.079354 | 0.194397 |
+| 4001 | 3600 | 50,000 | 960 | 6.007012 | 13.830800 | 0.125146 | 0.288142 |
+| 5003 | 4667 | 50,000 | 960 | 8.648950 | 19.705300 | 0.180186 | 0.410527 |
+| 6011 | 5872 | 50,000 | 960 | 12.308746 | 26.525200 | 0.256432 | 0.552608 |
+| 7001 | 6797 | 50,000 | 960 | 16.276028 | 35.425700 | 0.339084 | 0.738035 |
+| 8011 | 7995 | 50,000 | 960 | 20.898027 | 44.541500 | 0.435376 | 0.927948 |
+| 10267 | 10232 | 10,000 | 480 | 3.298233 | 7.962240 | 0.687132 | 1.658800 |
+| 12511 | 12285 | 10,000 | 480 | 4.804200 | 12.262400 | 1.000875 | 2.554667 |
+| 14401 | 14328 | 10,000 | 480 | 6.415296 | 13.484000 | 1.336520 | 2.809167 |
+| 16319 | 16272 | 10,000 | 480 | 8.183239 | 16.921700 | 1.704841 | 3.525354 |
+
+两模型 13 个实测批次的计时之和分别为 **152.767714 秒（Edwards 主循环）**、**341.763300 秒（Montgomery 全局）**，只是不同 B1/批量的事件时间求和。各输入折算至 B1=1e6 后的一曲线成本之和分别为 **6.194114**、**13.775634 秒**。
+
+### GPU 型号与 CPU 等效核心数
+
+![RTX4070 Ti等效CPU核心数：逐输入为对数坐标，两类GPU计时边界不同](attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
+
+![RTX4070 Ti等效CPU核心数：逐输入为线性坐标，两类GPU计时边界不同](attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-linear.png)
+
+各构造使用自己的 Prime95 单核中位数作分子：`K = CPU秒/曲线@1e6 ÷ GPU折算秒/曲线@1e6`。每个数据点标注对应的等效核心数，保留两位小数，文字颜色与曲线一致。Edwards 逐输入为 **6.83–551.43 核**，Montgomery 含初始化参考为 **3.67–230.31 核**。范围线只表示 CPU 三个样本的 min/max，不包含尚未测量的 GPU 波动，不是置信区间。
+
+左图采用明确的等输入组合：13 个输入在 B1=1e6 下各占相同曲线数量，GPU 保持本次满批次摊销成本。按 `K_mix = Σ CPU中位秒/曲线 ÷ Σ GPU折算秒/曲线`，得到 **RTX4070 Ti Edwards 主循环 ≈ 13.05 个本次 4 GHz CPU 核心**（80.838/6.194114），**Montgomery 含初始化参考 ≈ 6.81 核**（93.781/13.775634）。不对逐输入倍率作算术平均；这些数字不是只提交 13 条单曲线时的延迟，也不是多核 CPU 实测扩展比。两条路径的计时边界、版本和运行时段不同，不能用 13.05/6.81 声称算法加速倍数。
+
+M503/M1009 的 Edwards 容器和批量相同，主循环时间接近；CPU 却分别采用 FMA3/32 和 AVX-512/128，因此等效核数可相差很大。大位宽的 Edwards 约 6.83–10.59 核，Montgomery 参考约 3.67–5.34 核；小位宽的数百核结果不能当成整张卡的固定等价。
+
+### 证据与复现
+
+Edwards 来源为 `tools/benchmarks/stage1/screen_e.log`，Montgomery 为 `screen_m1.log`。后者开头附带同一批旧 Edwards 记录，**只提取后半部 0.52.2 的 13 个 PARAM0 任务**，不重复计数。26 个 GPU 样本均有完整批次 save 和结果发布；Edwards 的队列中断发生于第 13 批发布之后，Montgomery 记录完成 13 个任务。页眉的全局 `param3` 默认值不代替各任务的曲线选择，实际以 typed save、`queue_save` 及原生 GPU 输出核对。
+
+| 数据 | 原始快照、参考快照与设备枚举 | 逐项汇总、来源行号与 CSV |
+| --- | --- | --- |
+| Edwards 0.52.0 | `data/experiments/stage1_gpu_0_52_0_20261024/ed_4070ti_01/` | `data/benchmarks/stage1_gpu_0_52_0_20261024/ed_4070ti_01/` |
+| Montgomery 0.52.2 | `data/experiments/stage1_gpu_0_52_2_20261024/mont0_4070ti_02/` | `data/benchmarks/stage1_gpu_0_52_2_20261024/mont0_4070ti_02/` |
+
+每个汇总目录包含 `summary.json` 和 `comparison.csv`；新对比图 PNG/SVG 位于 `data/figures/stage1_gpu_0_52_2_20261024/mont0_4070ti_02/`，正文引用 PNG 副本置于本页 `attachments/`。核对范围为因子整除、输入身份、容器/进位余量、TPI/批量、计时及完成记录，没有据此宣称独立末点数学验算。
+
+[analyze_stage1_gpu.py](../../tools/bench/analyze_stage1_gpu.py) 不启动 GPU 计算。Edwards 复算可使用默认 `screen_e.log` 与旧 CPU 汇总；新增 Montgomery 和两模型对比图从仓库根目录运行：
+
+```powershell
+python tools/bench/analyze_stage1_gpu.py --model mont0 `
+  --log tools/benchmarks/stage1/screen_m1.log `
+  --cpu data/benchmarks/stage1_prime95_mont_20261024/summary.json `
+  --device-map data/experiments/stage1_gpu_0_52_0_20261024/ed_4070ti_01/device-map.csv `
+  --sm-count 60 `
+  --evidence data/experiments/stage1_gpu_0_52_2_20261024/mont0_4070ti_02 `
+  --output data/benchmarks/stage1_gpu_0_52_2_20261024/mont0_4070ti_02 `
+  --figures data/figures/stage1_gpu_0_52_2_20261024/mont0_4070ti_02 `
+  --compare data/benchmarks/stage1_gpu_0_52_0_20261024/ed_4070ti_01/summary.json `
+  --attachments docs/performance/attachments
+```
+
+**待验证**：Montgomery 独立主循环计时、4060 Laptop 全范围测量、隔离运行的重复样本及运行时 GPU 工况。保留当前计时实现，本次仅分析现有日志。
+
+## Prime95 单核基准与 B1 外推
+
+CPU 两类曲线均为 B1=1,000,000、4.0 GHz 单核，每输入 3 个有效计时。日志将 worker 绑定到逻辑 CPU 1，并报告 AMD Zen 架构；精确 CPU 型号、Prime95 版本及 CPU 功耗未记录，不从当前安装程序推定。Montgomery 是日志中的曲线构造名称；Suyama sigma 与 PARAM0 的对应参照 Prime95 `ecm.cpp:4960–4961,7359`，不由名称推断所有内部算术选项。
+
+Edwards 的 M4001 使用补测 curve 2、3、4，按用户指定排除 curve 1 的 **4.995 秒**预热；原日志中该输入直接恢复 Stage2，没有 Stage1 计时。其余 12 组保留全部三次完成计时，合计 **39 个有效样本、1 个排除预热**。Montgomery 全部 13×3=**39 个有效样本**，不额外丢弃 curve 1。任务完成行中的曲线总数不代替实测样本数。
+
+下表单位为秒/曲线，取原生 Stage1 中位数和实测 min…max；两类曲线的 FFT 档位逐输入一致。其曲线 sigma 不同，不宣称同一条曲线的端点配对。
+
+| M 指数 | 原任务余因子 bits | Stage1 FFT | Ed 中位数 | Ed min…max | Mont 中位数 | Mont min…max |
+| ---: | ---: | --- | ---: | --- | ---: | --- |
+| 503 | 318 | FMA3 / 32 | 2.164 | 2.089…2.540 | 2.490 | 2.457…2.814 |
+| 1009 | 383 | AVX-512 / 128 | 3.481 | 3.480…3.483 | 3.516 | 3.418…3.524 |
+| 2003 | 1939 | AVX-512 / 128 | 3.323 | 3.265…3.548 | 3.266 | 3.265…3.288 |
+| 3001 | 2726 | AVX-512 / 256 | 4.878 | 4.873…5.062 | 5.651 | 4.863…5.774 |
+| 4001 | 3600 | AVX-512 / 256 | 4.474 | 4.405…4.496 | 5.603 | 5.581…5.629 |
+| 5003 | 4667 | AVX-512 / 256 | 4.777 | 4.743…4.988 | 5.416 | 5.210…5.504 |
+| 6011 | 5872 | AVX-512 / 384 | 5.929 | 5.841…6.278 | 7.253 | 7.253…7.326 |
+| 7001 | 6797 | AVX-512 / 384 | 5.971 | 5.918…6.299 | 7.311 | 7.233…7.629 |
+| 8011 | 7995 | AVX-512 / 384 | 5.921 | 5.887…5.945 | 7.315 | 7.267…7.421 |
+| 10267 | 10232 | AVX-512 / 512 | 7.279 | 7.223…7.562 | 8.856 | 8.842…9.006 |
+| 12511 | 12285 | AVX-512 / 640 | 10.146 | 9.346…10.223 | 11.175 | 11.160…11.226 |
+| 14401 | 14328 | AVX-512 / 768 | 10.846 | 10.774…11.646 | 12.980 | 12.720…13.003 |
+| 16319 | 16272 | AVX-512 / 768 | 11.649 | 10.870…12.115 | 12.949 | 12.742…14.178 |
+
+两组成本随 FFT 档位呈分段变化，不拟合成严格按位宽递增的曲线。Edwards M503 的 max/min−1 为 21.6%，Montgomery M3001 约为 18.7%，均保留原始离散。13 个输入的 CPU 中位数之和为 Edwards **80.838 秒**、Montgomery **93.781 秒**，只描述本次组合，不能排除不同运行时段与并发负载的影响。
+
+B1 按用户指定的线性关系外推，**不是对应 B1 的重新实测，也不是多 B1 拟合**：
+
+\[
+T_{\rm CPU}(B_1)=T_{\rm CPU}(10^6)\frac{B_1}{10^6}.
+\]
+
+B1=11e6/44e6 分别乘以 11/44；例如 M16319 的 Edwards 为 **128.139/512.556 秒**，Montgomery 为 **142.439/569.756 秒**。完整 13 输入的两档外推均保存在各自 `summary.csv`、`summary.json`；这里只沿 B1 外推，不跨位宽插值，也不按频率修正其他历史 GPU/CPU 样本。
+
+| 曲线 | 原始输入（`tools/benchmarks/prime95/`） | 原始快照 | 统计与外推 |
+| --- | --- | --- | --- |
+| Edwards | `screen_stage1_1e6.log`、`补充4001移动到原文件忽略curve1预热.log` | `data/experiments/stage1_prime95_20261024/` | `data/benchmarks/stage1_prime95_20261024/` |
+| Montgomery | `screen_stage1_mont_1e6.log` | `data/experiments/stage1_prime95_mont_20261024/` | `data/benchmarks/stage1_prime95_mont_20261024/` |
+
+计时读取原生 `Stage 1 complete ... Total time`，排除 Stage2 初始化、主循环及 GCD，也不是整进程墙钟。Prime95 参考源码 `ecm.cpp:7420,7682` 显示其 Stage1 范围覆盖指数/字典处理、主循环、末点检查及向 Montgomery 的转换，曲线初始构造在前。日志显示后续 Stage2 会自动扩大 B2，相关时间不加入本表。
+
+复算入口为 [analyze_prime95_stage1.py](../../tools/bench/analyze_prime95_stage1.py)，Edwards 保持原补测及预热排除参数；Montgomery 使用 `--curve-type Montgomery`，指定各自输出目录以保留独立证据：
+
+```powershell
+python tools/bench/analyze_prime95_stage1.py --cpu-ghz 4.0 `
+  --log tools/benchmarks/prime95/screen_stage1_mont_1e6.log `
+  --curve-type Montgomery `
+  --evidence-dir data/experiments/stage1_prime95_mont_20261024 `
+  --output data/benchmarks/stage1_prime95_mont_20261024 `
+  --figures data/figures/stage1_prime95_mont_20261024
+```
+
+### 匹配 GPU 工作行
+
+[prepare_stage1_gpu_matrix.py](../../tools/bench/prepare_stage1_gpu_matrix.py) 为每张卡生成两类曲线、每条件一次的 `ECMSTAGE1=` 工作行，保存点前缀 `e_` / `m0_` 选择构造，文件名末尾提供 B1；B2=B1、skip_curves=0，不自动续算 Stage2。分别按实际余因子位宽与设备元数据的进位余量选择最小可用容器，Edwards/Montgomery 为 1/6 bits，不共用容器结果。
+
+TPB128，批量 `C=2×SM数×(TPB/TPI)`：4070 Ti（60 SM）为 3840/1920/960/480，4060 Laptop（24 SM）为 1536/768/384/192，分别对应 TPI4/8/16/32。独立配置、工作行及生成计划位于 `data/experiments/stage1_gpu_tpi_2blocks_sm_20261024/{rtx4070ti,rtx4060_laptop}/`；当前 GPU 测量覆盖与计时限制以[本页完整矩阵](#rtx4070-ti-全范围-stage1-对比)为准。生成只查询程序/设备元数据，不启动 ECM 计算；原始日志与结果不进入公共 Git。
 
 ## GPU Edwards 主机等待与自适应切片
 
