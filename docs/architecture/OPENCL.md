@@ -36,4 +36,6 @@ local 构建以普通 CXX 编译，关闭 CUDA、GUI、工具及独立 CPU Stage
 
 资源加载保留显式 --kernel-root、当前目录相对查找及编译默认根的既有优先关系。默认根指向构建叶目录随附资源；不含默认宏的实现使用 src/ecm/backend/opencl/resources 回退。生产自检源在 diagnostics/mont.cl；旧逻辑名称 bench/mont.cl 先按旧方式查找，缺失时再加载 diagnostics/mont.cl，因此已有自定义根仍可使用原布局。实际算术、源拼装次序和设备/驱动/完整源/编译选项的缓存身份保持。
 
-Android CMake 消费同一主机源码，Gradle 从新生产根和原纯 bench 根组合资源，保留 assets/kernels/opencl 逻辑根。本轮只核对其路径合同，未进行 Android 实体构建或设备验收。当前没有 OpenCL release 打包入口，也未声明整个输出目录可任意移动后自动定位资源；可使用显式 --kernel-root 指定部署位置。
+完整发布入口使用独立release用途构建并分发 `ecm.exe`、生产资源及OpenSSL运行库，GMP固定使用与GUI/CUDA worker相同的vcpkg通用版本。该构建启用 `ECM_OPENCL_PORTABLE_RESOURCES`，默认资源根由EXE所在目录派生，显式 `--kernel-root` 仍优先；local默认仍保留上述构建目录资源根。分发与身份验证以[构建与发布](../usage/BUILD.md#完整发布与按需加载)为准。OpenCL内核由设备驱动统一JIT，两套CUDA包不改变其编译策略。
+
+Android CMake 消费同一主机源码，Gradle 从新生产根和原纯 bench 根组合资源，保留 assets/kernels/opencl 逻辑根。本轮只核对其路径合同，未进行 Android 实体构建或设备验收。

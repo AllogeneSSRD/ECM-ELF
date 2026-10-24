@@ -21,6 +21,8 @@ class ReleaseLayout(unittest.TestCase):
         self.root=Path(self.temp.name);self.repo=self.root/'repo'
         self.build=self.root/'build';self.out=self.root/'release'
         self.gui=self.root/'gui';self.gmp=self.root/'gmp'
+        self.opencl=self.build/'opencl-release'
+        self.cache_forces=[]
 
     def tearDown(self):self.temp.cleanup()
 
@@ -54,6 +56,10 @@ class ReleaseLayout(unittest.TestCase):
                      'tools/build/build_release.ps1']:
             self.put(self.repo/name)
         self.put(self.gmp/'bin/gmp-10.dll')
+        for name in ['ecm.exe','gmp-10.dll','libcrypto-3-x64.dll','libssl-3-x64.dll','opencl_resources/test.cl','licenses/OpenSSL.txt']:
+            self.put(self.opencl/name)
+        self.opencl_files={p.relative_to(self.opencl).as_posix():packaging.sha(p) for p in self.opencl.rglob('*') if p.is_file()}
+        self.put(self.opencl/'build_manifest.json','{}')
         for name in ['ecm_gui_v2.exe','ecm_group_order_ui.exe','gmp-10.dll','ecm_diagnostics_host.exe','localization/v2/en.xml']:
             self.put(self.gui/name)
         self.put(self.gui/'diagnostics_build_manifest.json',json.dumps(dict(sources_sha256={},files_sha256={'ecm_diagnostics_host.exe':packaging.sha(self.gui/'ecm_diagnostics_host.exe')})))
@@ -66,7 +72,8 @@ class ReleaseLayout(unittest.TestCase):
                 path=self.put(leaf/'manifest.json',json.dumps(manifest))
                 self.put(self.build/'components'/f'{profile}.{stage}.json',json.dumps(dict(build=str(leaf),manifest=str(path),exe=str(binary))))
 
-    def inspect(self,cuda,leaf,stage,report):
+    def inspect(self,cuda,leaf,stage,report,cache=None):
+        self.cache_forces.append(cache.force)
         ptx=packaging.TARGETS[leaf.parent.name][0]
         if stage=='stage1':
             modules=[dict(label=label) for label in ['edwards_512','mont0_512','mont2_512','mont3_512']]
@@ -82,9 +89,10 @@ class ReleaseLayout(unittest.TestCase):
     def catalog(self):
         return [dict(label='arithmetic_test_4',kernel='s2g_test_kernel'),dict(label='ntt_test_4',kernel='tile_kernel')]
 
-    def assemble(self,profiles):
-        plan=dict(build_root=str(self.build),out=str(self.out),gui=str(self.gui),gmp=str(self.gmp),profiles=profiles,stage2_kernel_layout=self.layout)
+    def assemble(self,profiles,reinspect=False):
+        plan=dict(build_root=str(self.build),out=str(self.out),gui=str(self.gui),gmp=str(self.gmp),profiles=profiles,stage2_kernel_layout=self.layout,reinspect_cuda=reinspect)
         with patch.object(packaging,'ROOT',self.repo),patch.object(packaging,'gui_identity'),\
+             patch.object(packaging,'verify_opencl',return_value=dict(files_sha256=self.opencl_files)),\
              patch.object(packaging,'distribution',return_value=([],[])),\
              patch.object(packaging,'source_paths',return_value=[self.repo/'tools/build/build_release.ps1']),\
              patch.object(packaging,'images',return_value={}),\
@@ -109,6 +117,7 @@ class ReleaseLayout(unittest.TestCase):
             with zipfile.ZipFile(archive) as payload:payload.extractall(extracted)
             self.assertEqual([p.name for p in extracted.iterdir()],[folder.name])
             self.assertTrue((extracted/folder.name/'ecm_gui_v2.exe').is_file())
+            for name in self.opencl_files:self.assertEqual(packaging.sha(extracted/folder.name/name),self.opencl_files[name])
             before=packaging.sha(archive)
             with self.assertRaisesRegex(ValueError,'already exists'):self.assemble([profile])
             self.assertEqual(packaging.sha(archive),before)
@@ -120,6 +129,10 @@ class ReleaseLayout(unittest.TestCase):
 
     def test_isolated_stage2_remains_available(self):
         self.fixture('isolated');self.assemble(['cu11.8','cu13.3'])
+
+    def test_force_inspection_option_reaches_each_component(self):
+        self.fixture();self.assemble(['cu11.8'],reinspect=True)
+        self.assertEqual(self.cache_forces,[True,True])
 
     def test_grouped_membership_rejects_wrong_or_missing_entries(self):
         report=dict(modules=[dict(label='arithmetic_kernels',entries=['.entry _Z15s2g_test_kernelILi4EEv()']),

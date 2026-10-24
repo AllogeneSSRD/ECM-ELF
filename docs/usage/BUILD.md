@@ -54,13 +54,17 @@ Windows 旧包面向 Maxwell/Pascal：sm50/52 需要 PTX50 JIT；sm61 可使用 
 
 ## 完整发布与按需加载
 
-运行 `tools\build\build_release_cu11.8.bat` 或 `build_release_cu13.3.bat`，分别构建对应 CUDA 的完整包；两者均传入 `-Jobs 16`，并只预检所选 CUDA 工具链。BAT 可继续传入 `-OutDir`、`-SkipBuild` 等参数；需要调整 profile 或并行数时，直接使用 `build_release.ps1 -Profile cu11.8 -Jobs <数量>`。`build_release.ps1/.bat` 默认仍构建 GUI v2 和两套 Stage1/Stage2，默认并行数也是16。
+运行 `tools\build\build_release_cu11.8.bat` 或 `build_release_cu13.3.bat`，分别构建对应 CUDA 的完整包；两者均传入 `-Jobs 16`，并只预检所选 CUDA 工具链。BAT 可继续传入 `-OutDir`、`-SkipBuild` 等参数；需要调整 profile 或并行数时，直接使用 `build_release.ps1 -Profile cu11.8 -Jobs <数量>`。`build_release.ps1/.bat` 默认构建 GUI v2、共享 OpenCL worker 和两套 CUDA Stage1/Stage2，默认并行数也是16。
 
 完整包生成到 `release/ecm-elf-<主程序版本>-cu11.8/`、`release/ecm-elf-<主程序版本>-cu13.3/`，ZIP/SHA256 同层存放，ZIP 名为 `ecm-elf-<主程序版本>-cu<CUDA版本>-win-x64.zip`。ZIP 内的唯一顶层目录保留完整包名，例如 `ecm-elf-0.52.1-cu11.8/`。两个 CUDA 包可先后发布到同一个 `-OutDir`。
 
 `-SkipBuild` 仍核对源码、profile、工具链、依赖、对象和程序身份。`-SkipPackage` 只构建/验证。`-BuildRoot` 默认 `build_cuda_release`；`-OutDir` 默认 `release`，必须与构建目录分离。每个阶段的精确叶目录记录在 `<BuildRoot>/components/cu<版本>.stageN.json`，不按时间扫描“最新程序”。所选包的目录、ZIP 或 SHA256 已存在时均拒绝覆盖，重打包使用新的 `-OutDir`，以保留用户配置和队列。
 
-每个 CUDA 目录内同层包含 `ecm_cuda.exe`、`ecm_cuda_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、原始日志和计时不进入分发目录。
+每个 CUDA 目录内同层包含 OpenCL `ecm.exe`、`ecm_cuda.exe`、`ecm_cuda_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。OpenCL附带 `opencl_resources/`、OpenSSL运行库及许可；两套CUDA包共用相同OpenCL产物，OpenCL内核统一由驱动JIT，不按CUDA版本区分。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、验证缓存、原始日志和计时不进入分发目录。
+
+完整入口通过 `build_opencl_local.ps1 -BuildRole release` 在 `<BuildRoot>/opencl-release` 构建独立发布用途的OpenCL worker，使用通用vcpkg GMP并关闭CUDA编译器。可用 `-OpenClRoot`、`-OpenSslRoot` 覆盖头文件/导入库及OpenSSL安装位置。构建前后核对保守源码集合、工具链、依赖和资源身份；`-SkipBuild` 只核对已有产物，不为缺失组件补建。发布程序默认从自身目录查找OpenCL资源，显式 `--kernel-root` 仍优先。OpenCL加载器由用户安装的显卡驱动提供，包内不附厂商驱动。
+
+cuobjdump提取结果保存在 `<BuildRoot>/components/cuobjdump-cache/`，按对象或EXE内容SHA256、工具路径/摘要以及验证脚本身份区分。未变输入复用提取结果；对象、EXE、工具或验证脚本变化时重新检查相应输入。缓存损坏/缺失自动重建，失败的工具调用不写入缓存；成功条目逐个原子落盘，中断后可复用已完成条目。每次打包仍核对源码、profile、依赖、对象/EXE身份、当前模块成员及PTX/SASS目标，不因缓存命中跳过这些门禁。日志汇报复用和实际检查数量；完整入口加 `-ReinspectCuda` 可强制重新提取所有请求组件的CUDA镜像。
 
 Stage1 local/dev/release默认由 `tiers.def` 派生125个曲线/param/容器模块，另保留3个常规 CUDA 单元；Edwards binary/NAF 共用对应容器。Stage2默认使用两个聚合设备单元，共享原有设备常量；隔离备选由原始显式实例和薄发射器派生176个设备模块，主机常量快照只同步到被调用的模块。生成文件保留于构建目录，其原始源码/生成器均参与身份验证。
 
@@ -142,7 +146,7 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 
 使用 tools/build/build_opencl_local.ps1 构建 ecm.exe，默认叶目录为 build_opencl_local/stage1/&lt;profile-key&gt;。可用 -BuildDir 指定最终叶目录，-OpenClRoot 指定含 include/CL/cl.h 与 OpenCL.lib 的 SDK 根；-Gmp、-OpenSslRoot、-VcVars 可覆盖主机依赖。入口不启用 CUDA 编译器，沿用普通 CXX 的 /MD 优化配置。
 
-输出包含程序、GMP/OpenSSL 运行库、profile.json、build_manifest.json 和 opencl_resources。原有环境或命令选择、PARAM3 支持范围和生产自检保持；资源查找和部署限制见 [OpenCL](../architecture/OPENCL.md#资源与-local-构建)。当前没有对应 OpenCL dev/release 包装族。
+输出包含程序、GMP/OpenSSL 运行库、profile.json、build_manifest.json 和 opencl_resources。原有环境或命令选择、PARAM3 支持范围和生产自检保持；资源查找和部署限制见 [OpenCL](../architecture/OPENCL.md#资源与-local-构建)。该入口默认仍为local；完整发布入口用独立release身份调用它并打包，无单独OpenCL dev/release BAT族。
 
 ### 编译期间输入稳定性
 

@@ -44,6 +44,10 @@ def main():
         folder=root/directory;files=identity['files_sha256'];verify(folder,files)
         for name in ('ecm_cuda.exe','ecm_cuda_stage2.exe','ecm_gui_v2.exe','ecm_group_order_ui.exe','ecm_diagnostics_host.exe','gmp-10.dll','ecm.toml','ecm.toml.example','worktodo.txt','source/release-source.zip'):
             assert name in files,('missing required payload',profile,name)
+        if manifest['schema']>=3:
+            for name in ('ecm.exe','libcrypto-3-x64.dll','libssl-3-x64.dll','licenses/OpenSSL.txt'):assert name in files,('missing OpenCL payload',profile,name)
+            assert any(name.startswith('opencl_resources/') for name in files),'Missing OpenCL resources'
+            assert identity['components']['opencl']['executable_sha256']==files['ecm.exe']
         assert sha(folder/'gmp-10.dll')==manifest['gmp_sha256']
         with zipfile.ZipFile(folder/'source/release-source.zip') as sources:
             assert not any(name.startswith('tools/test/') and any(part.startswith('_') for part in Path(name).parts[2:-1]) for name in sources.namelist()),'Private test output inside source archive'
@@ -73,7 +77,8 @@ def main():
             cwd=out/('unrelated '+profile);cwd.mkdir()
             env={k:v for k,v in os.environ.items() if not k.startswith(('ECM_','NTT_','CUDA_','VK_'))}
             env['PATH']=str(Path(os.environ['SystemRoot'])/'System32');env.pop('VULKAN_SDK',None)
-            for worker in ('ecm_cuda.exe','ecm_cuda_stage2.exe'):
+            workers=('ecm.exe','ecm_cuda.exe','ecm_cuda_stage2.exe') if manifest['schema']>=3 else ('ecm_cuda.exe','ecm_cuda_stage2.exe')
+            for worker in workers:
                 command=[str(relocated/worker),'--version']
                 proc=subprocess.run(command,cwd=cwd,env=env,capture_output=True,timeout=20)
                 assert proc.returncode==0 and manifest['version'] in proc.stdout.decode(errors='replace'),(profile,worker,proc.returncode)

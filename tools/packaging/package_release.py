@@ -1,7 +1,6 @@
 """Assemble and inspect complete, independently usable CUDA release bundles."""
 import argparse
 from collections import Counter
-import hashlib
 import importlib.util
 import json
 import re
@@ -11,12 +10,13 @@ import uuid
 import zipfile
 from pathlib import Path
 from gmp_payload import distribution
+from cuda_inspection_cache import InspectionCache, sha
+from opencl_release_payload import verify as verify_opencl
 
 ROOT=Path(__file__).resolve().parents[2]
 TARGETS={'cu11.8':('50','60'),'cu13.3':('75','80')}
 
 
-def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def read(path):return json.loads(Path(path).read_text(encoding='utf-8-sig'))
 
 
@@ -50,7 +50,7 @@ def source_paths():
     # These explicitly pinned vendor sources are intentionally Git-ignored.
     for base in ['third_party/cgbn','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gui_v2_pet']:
         paths.update(path for path in (ROOT/base).rglob('*') if path.is_file())
-    extensions={'.c','.cpp','.cu','.h','.hpp','.cuh','.inl','.def','.ps1','.py','.bat','.cmake','.txt','.json','.xml','.md','.rc','.manifest','.in','.patch','.rs'}
+    extensions={'.c','.cpp','.cu','.cl','.h','.hpp','.cuh','.inl','.def','.ps1','.py','.bat','.cmake','.txt','.json','.xml','.md','.rc','.manifest','.in','.patch','.rs'}
     notices={'LICENSE','COPYING','COPYRIGHT','NOTICE'}
     def allowed(path):
         parts=path.relative_to(ROOT).parts
@@ -65,14 +65,21 @@ def verify_inputs(values):
         if sha(path).lower()!=digest.lower():raise ValueError(f'Frozen source changed: {name}')
 
 
-def images(cuda,binary,ptx,sass):
+def images(cuda,binary,ptx,sass,cache=None):
     inspector=cuda/'bin/cuobjdump.exe'
-    result={}
-    for kind,flag,expected,suffix in [('sass','--list-elf',sass,'cubin'),('ptx','--list-ptx',ptx,'ptx')]:
-        value=subprocess.check_output([str(inspector),flag,str(binary)],stderr=subprocess.STDOUT).decode(errors='replace')
-        found=set(re.findall(r'\.sm_(\d+)\.[^\s]*'+suffix,value))
-        if found!={expected}:raise ValueError(f'{binary}: unexpected {kind} images {found}, expected {expected}')
-        result[kind]=sorted(found)
+    def scan():
+        result={}
+        for kind,flag,suffix in [('sass','--list-elf','cubin'),('ptx','--list-ptx','ptx')]:
+            value=subprocess.check_output([str(inspector),flag,str(binary)],stderr=subprocess.STDOUT).decode(errors='replace')
+            result[kind]=sorted(set(re.findall(r'\.sm_(\d+)\.[^\s]*'+suffix,value)))
+        # Do not cache incomplete or failed inspection results.
+        validate(result)
+        return result
+    def validate(result):
+        for kind,expected in [('sass',sass),('ptx',ptx)]:
+            if result.get(kind)!=[expected]:raise ValueError(f'{binary}: unexpected {kind} images {result.get(kind)}, expected {expected}')
+    result=cache.get('images',binary,scan)[0] if cache else scan()
+    validate(result)
     return result
 
 
@@ -106,7 +113,7 @@ def verify_stage2_membership(report,layout,catalog):
             if actual!=expected:raise ValueError(f'Incomplete grouped Stage2 entry membership: {module["label"]}')
 
 
-def inspect_modules(cuda,build,stage,report):
+def inspect_modules(cuda,build,stage,report,cache=None):
     records=[]
     if stage=='stage1':
         units=read(build/'compile_commands.json')
@@ -133,16 +140,21 @@ def inspect_modules(cuda,build,stage,report):
     for index,record in enumerate(records,1):
         if index==1 or index%10==0 or index==len(records):
             print(f'  Inspect {stage} PTX: {index}/{len(records)} {record["label"]}',flush=True)
-        # Stream only entry declarations out of the potentially large PTX dump.
-        proc=subprocess.Popen([str(inspector),'--dump-ptx',record['object']],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        entries=[];versions=set();targets=set()
-        for raw in proc.stdout:
-            line=raw.decode(errors='replace').strip()
-            if '.entry ' in line:entries.append(line)
-            if line.startswith('.version '):versions.add(line)
-            if line.startswith('.target '):targets.add(line)
-        errors=proc.stderr.read();code=proc.wait()
-        if code:raise ValueError(f'Module inspection failed: {record["label"]}: {errors!r}')
+        def scan():
+            # Stream only metadata out of the potentially large PTX dump.
+            proc=subprocess.Popen([str(inspector),'--dump-ptx',record['object']],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            entries=[];versions=set();targets=set()
+            for raw in proc.stdout:
+                line=raw.decode(errors='replace').strip()
+                if '.entry ' in line:entries.append(line)
+                if line.startswith('.version '):versions.add(line)
+                if line.startswith('.target '):targets.add(line)
+            errors=proc.stderr.read();code=proc.wait()
+            if code:raise ValueError(f'Module inspection failed: {record["label"]}: {errors!r}')
+            if not entries or not versions or not targets:raise ValueError(f'Device module lacks PTX metadata: {record["label"]}')
+            return dict(entries=entries,ptx_versions=sorted(versions),ptx_targets=sorted(targets))
+        metadata,digest=cache.get('module-ptx',record['object'],scan) if cache else (scan(),sha(record['object']))
+        entries=metadata['entries']
         if not entries:raise ValueError(f'Isolated device module has no entry: {record["label"]}')
         if stage=='stage1':
             for entry in entries:
@@ -157,7 +169,7 @@ def inspect_modules(cuda,build,stage,report):
                 if not valid:raise ValueError(f'Unexpected curve/parameter/width inside {record["label"]}: {entry}')
         elif 'kernel' in record and (len(entries)!=1 or record['kernel'] not in entries[0]):
             raise ValueError(f'Unexpected entry membership inside {record["label"]}: {entries}')
-        record.update(entries=entries,ptx_versions=sorted(versions),ptx_targets=sorted(targets),sha256=sha(record['object']))
+        record.update(metadata,sha256=digest)
     report.write_text(json.dumps(dict(schema=1,stage=stage,modules=records),indent=2),encoding='utf-8')
     return sha(report)
 
@@ -186,12 +198,16 @@ def main(plan):
     print('== Package preflight: Stage2 entry catalogue ==',flush=True)
     catalog=stage2_catalog()
     gui_identity(gui,gmp)
+    opencl=Path(plan.get('opencl',build/'opencl-release')).resolve()
+    opencl_identity=verify_opencl(opencl,gmp)
     gmp_sources,gmp_licenses=distribution(gmp)
     version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'include/ecm/platform/program_version.h').read_text())[1]
+    banner=subprocess.check_output([str(opencl/'ecm.exe'),'--version'],stderr=subprocess.STDOUT).decode(errors='replace')
+    if version not in banner:raise ValueError('OpenCL worker version differs from release')
     outputs=[path for profile in plan['profiles'] for path in release_paths(out,version,profile)]
     assert_outputs_available(outputs)
     staging=build/'_packages'/uuid.uuid4().hex;staging.mkdir(parents=True)
-    qualified=dict(schema=2,status='build_and_static_images_verified',tests_run=False,version=version,profiles={},gmp_sha256=sha(gmp/'bin/gmp-10.dll'))
+    qualified=dict(schema=3,status='build_and_static_images_verified',tests_run=False,version=version,profiles={},gmp_sha256=sha(gmp/'bin/gmp-10.dll'))
     def copy(src,dst):
         dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dst)
     # A source snapshot includes new/uncommitted implementation files too.
@@ -204,6 +220,8 @@ def main(plan):
     for profile in plan['profiles']:
         ptx,sass=TARGETS[profile];folder,archive,_=release_paths(staging,version,profile);folder.mkdir()
         component_records={}
+        for filename in opencl_identity['files_sha256']:copy(opencl/filename,folder/filename)
+        component_records['opencl']=dict(executable_sha256=sha(opencl/'ecm.exe'),manifest_sha256=sha(opencl/'build_manifest.json'))
         for stage,exe in [('stage1','ecm_cuda.exe'),('stage2','ecm_cuda_stage2.exe')]:
             record=read(build/'components'/f'{profile}.{stage}.json');leaf=Path(record['build']);manifest=read(record['manifest'])
             if manifest['role']!='release' or manifest['ptx_architecture']!=ptx:raise ValueError('Wrong release component profile')
@@ -222,9 +240,12 @@ def main(plan):
             banner=subprocess.check_output([str(binary),'--version'],stderr=subprocess.STDOUT).decode(errors='replace')
             if version not in banner:raise ValueError(f'Worker version differs from release: {banner}')
             print(f'== Package {profile}/{stage}: CUDA images and module entries ==',flush=True)
-            cuda=Path(manifest['cuda_root']);image=images(cuda,binary,ptx,sass)
+            cuda=Path(manifest['cuda_root'])
+            cache=InspectionCache(build/'components/cuobjdump-cache',cuda,force=plan.get('reinspect_cuda',False))
+            image=images(cuda,binary,ptx,sass,cache)
             report=build/'components'/f'{profile}.{stage}.modules.json'
-            image['module_report_sha256']=inspect_modules(cuda,leaf,stage,report)
+            image['module_report_sha256']=inspect_modules(cuda,leaf,stage,report,cache)
+            print(f'  cuobjdump cache: reused {cache.hits}, inspected {cache.misses}',flush=True)
             module_report=read(report)
             if stage=='stage1':
                 rows=re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),',(ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(),re.M)

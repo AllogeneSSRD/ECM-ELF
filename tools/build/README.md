@@ -17,7 +17,7 @@
 - Stage2 本机/开发：`-Arch`、`-Build`、`-SplitCompile`、`-KernelLayout grouped/isolated`、`-GlBackend`、`-AddSubMask`、`-OuterUnrollU`、`-HostOnly`、`-Rebuild`。默认grouped，隔离备选仅支持生产引擎。默认逐单元复用；HostOnly 在编译前验证 CUDA 对象/参数和源身份，与 Rebuild 互斥。
 - 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`、`-Stage2KernelLayout grouped/isolated`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；Stage2阶段包装使用 `-KernelLayout` 选择布局。
 - 发布工具链：`-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp`；发布要求同一 vcpkg 通用 GMP，缺失或身份变化即失败。local/dev 保留 `-CudaRoot` 和各自依赖参数。
-- 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。输出为 `release/ecm-elf-<版本>-cu11.8/`、`ecm-elf-<版本>-cu13.3/`，ZIP 内保留同名完整目录。所选包已有目录、ZIP 或 SHA256 时不覆盖，重打包指定新的 `-OutDir`；另一个 CUDA 包可发布到同一输出根。
+- 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。cuobjdump按文件内容、工具和验证器身份缓存，`-ReinspectCuda` 强制复查。输出为 `release/ecm-elf-<版本>-cu11.8/`、`ecm-elf-<版本>-cu13.3/`，ZIP 内保留同名完整目录。所选包已有目录、ZIP 或 SHA256 时不覆盖，重打包指定新的 `-OutDir`；另一个 CUDA 包可发布到同一输出根。
 
 local BAT/PowerShell 默认输出为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；显式本机/开发目录是最终叶目录。固定短目录中的 `profile.json` 仍拒绝跨用途、跨阶段或不兼容配置复用；需要并存时指定不同 `-BuildDir`/`-Build`，不自动覆盖。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 
@@ -43,7 +43,7 @@ Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/
 
 独立 CPU Edwards Stage2 使用 `test/build_cpu_stage2.ps1`；`-GwPoly` 启用 GWNUM/polymult 多线程快速多项式后端，无此开关保留 libecm 构建。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。
 
-OpenCL Stage1 的本机入口为 build_opencl_local.ps1；使用隔离的 build_opencl_local/stage1/&lt;key&gt; 叶目录、普通 CXX 及随附生产资源，不启用 CUDA。支持 -BuildDir、-Gmp、-OpenSslRoot、-OpenClRoot、-VcVars；当前只提供 local，不附带 release 打包。资源与加载合同见 [OpenCL](../../docs/architecture/OPENCL.md#资源与-local-构建)。
+OpenCL Stage1 的本机入口为 build_opencl_local.ps1；默认使用隔离的 build_opencl_local/stage1/&lt;key&gt; 叶目录、普通 CXX 及随附生产资源，不启用 CUDA。支持 -BuildDir、-Gmp、-OpenSslRoot、-OpenClRoot、-VcVars。完整发布入口以 `-BuildRole release` 调用它，构建 `<BuildRoot>/opencl-release/ecm.exe`，附带资源、OpenSSL及许可，并与其他组件共用通用vcpkg GMP。两套CUDA包均包含相同OpenCL程序；其内核统一JIT。完整入口也接收 `-OpenSslRoot`、`-OpenClRoot`。资源与加载合同见 [OpenCL](../../docs/architecture/OPENCL.md#资源与-local-构建)。
 
 GUI 统一使用 `build_gui.bat`，不区分 dev/local/release；它把参数和退出码交给现有 `dev/build_gui.ps1`，后者仍是默认参数来源。无参数双击构建完成后暂停；有参数调用直接返回。默认输出 `build_gui_local/`，只构建 `ecm_gui`，可传 `-Selftest` 构建后自检。测试 helper 在 `tools/test/gui/`，必须显式指定 `-Targets`，不会进入默认构建；详见 [GUI 构建与验证](../../docs/usage/GUI.md#构建与独立验证)。
 

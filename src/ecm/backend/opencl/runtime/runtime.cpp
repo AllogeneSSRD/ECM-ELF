@@ -14,6 +14,12 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#ifdef ECM_OPENCL_PORTABLE_RESOURCES
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -314,11 +320,26 @@ static std::string kernel_root_with_slash(const char *root) {
     return path;
 }
 
+static std::string portable_kernel_root() {
+#if defined(_WIN32) && defined(ECM_OPENCL_PORTABLE_RESOURCES)
+    char path[32768];
+    const DWORD size = GetModuleFileNameA(nullptr, path, sizeof(path));
+    if (size > 0 && size < sizeof(path)) {
+        const std::string exe(path, size);
+        const auto slash = exe.find_last_of("/\\");
+        if (slash != std::string::npos) return exe.substr(0, slash + 1) + "opencl_resources/";
+    }
+#endif
+    return {};
+}
+
 static std::string ecm_stage1_kernel_root() {
     const std::string &root = ecm_runtime_config().kernel_root;
     if (!root.empty()) {
         return kernel_root_with_slash(root.c_str());
     }
+    const std::string portable = portable_kernel_root();
+    if (!portable.empty()) return portable;
 #ifdef ECM_KERNEL_ROOT_DEFAULT
     return kernel_root_with_slash(ECM_KERNEL_ROOT_DEFAULT);
 #endif
@@ -343,6 +364,11 @@ static std::string load_kernel_at_roots(const char *rel_path) {
         if (!content.empty()) {
             return content;
         }
+    }
+    const std::string portable = portable_kernel_root();
+    if (!portable.empty()) {
+        const std::string content = load_text_file((portable + rel_path).c_str());
+        if (!content.empty()) return content;
     }
 #ifdef ECM_KERNEL_ROOT_DEFAULT
     {

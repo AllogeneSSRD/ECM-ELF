@@ -116,7 +116,7 @@ class Contracts(unittest.TestCase):
         import package_release
         subprocess.run(['git','init','-q',str(self.out)],check=True)
         (self.out/'.gitignore').write_text('/tools/test/_*\n/third_party/*\n')
-        for name in ['tools/test/_run/worktodo.txt','tools/test/new_gate.py','third_party/cgbn/include/cgbn.h']:
+        for name in ['tools/test/_run/worktodo.txt','tools/test/new_gate.py','third_party/cgbn/include/cgbn.h','src/ecm/backend/opencl/resources/test.cl']:
             path=self.out/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('fixture\n')
         original=package_release.ROOT
         try:
@@ -125,6 +125,7 @@ class Contracts(unittest.TestCase):
             self.assertNotIn('tools/test/_run/worktodo.txt',paths)
             self.assertIn('tools/test/new_gate.py',paths)
             self.assertIn('third_party/cgbn/include/cgbn.h',paths)
+            self.assertIn('src/ecm/backend/opencl/resources/test.cl',paths)
             (self.out/'.gitignore').write_text('/third_party/*\n')
             paths={p.relative_to(self.out).as_posix() for p in package_release.source_paths()}
             self.assertNotIn('tools/test/_run/worktodo.txt',paths)

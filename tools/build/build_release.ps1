@@ -7,7 +7,8 @@ param(
     [string]$BuildRoot='build_cuda_release', [string]$OutDir='release',
     [ValidateRange(1,64)][int]$Jobs=16,
     [string]$Gmp='', [string]$Cuda118Root='', [string]$Cuda133Root='', [string]$VcVars='',
-    [switch]$SkipBuild, [switch]$SkipPackage
+    [string]$OpenSslRoot='', [string]$OpenClRoot='',
+    [switch]$SkipBuild, [switch]$SkipPackage, [switch]$ReinspectCuda
 )
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -35,6 +36,18 @@ if($LASTEXITCODE){throw 'vcpkg GMP source/provenance preflight failed'}
 $records=Join-Path $BuildRoot 'components'
 New-Item -ItemType Directory -Force $records | Out-Null
 $gui=Join-Path $BuildRoot 'gui-v2-release'
+$opencl=Join-Path $BuildRoot 'opencl-release'
+if($Component -eq 'all'){
+    $openclArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build_opencl_local.ps1'),
+        '-BuildRole','release','-BuildDir',$opencl,'-Gmp',$dependency.Root)
+    foreach($option in @('OpenSslRoot','OpenClRoot','VcVars')){
+        $value=Get-Variable $option -ValueOnly
+        if($value){$openclArgs+=@('-'+$option,$value)}
+    }
+    if($SkipBuild){$openclArgs+='-SkipBuild'}
+    & powershell @openclArgs
+    if($LASTEXITCODE){throw 'Release OpenCL worker build/verification failed'}
+}
 if(-not $SkipBuild -and $Component -eq 'all') {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test/build_gui_v2.ps1') `
         -BuildDir $gui -GmpRoot $dependency.Root -BasePetOnly
@@ -105,7 +118,7 @@ foreach($name in $names) {
 }
 if($Component -ne 'all' -or $SkipPackage){Write-Host "Release components verified: $Component, $($names -join ','); packaging skipped";exit 0}
 $plan=Join-Path $records 'package-plan.json'
-[ordered]@{profiles=@($names);build_root=$BuildRoot;out=$OutDir;gui=$gui;gmp=$dependency.Root;stage2_kernel_layout=$Stage2KernelLayout} |
+[ordered]@{profiles=@($names);build_root=$BuildRoot;out=$OutDir;gui=$gui;opencl=$opencl;gmp=$dependency.Root;stage2_kernel_layout=$Stage2KernelLayout;reinspect_cuda=[bool]$ReinspectCuda} |
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $plan -Encoding UTF8
 & python (Join-Path $repo 'tools/packaging/package_release.py') --plan $plan
 if($LASTEXITCODE){throw 'Complete release packaging failed'}

@@ -96,6 +96,10 @@ target_link_libraries(cgbn_opencl PRIVATE
 target_compile_definitions(cgbn_opencl PRIVATE
     "ECM_KERNEL_ROOT_DEFAULT=\"${CMAKE_BINARY_DIR}/opencl_resources\""
 )
+option(ECM_OPENCL_PORTABLE_RESOURCES "Load release OpenCL resources beside the executable" OFF)
+if(ECM_OPENCL_PORTABLE_RESOURCES)
+    target_compile_definitions(cgbn_opencl PRIVATE ECM_OPENCL_PORTABLE_RESOURCES=1)
+endif()
 
 # Production resources accompany the local worker and are independent of CXX
 # objects. Keep the diagnostic Montgomery self-test in the same payload.
