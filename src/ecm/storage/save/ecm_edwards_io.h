@@ -7,6 +7,7 @@
 #include <vector>
 #include <set>
 #include <sstream>
+#include <algorithm>
 
 namespace ecm_edwards {
 inline std::string hex(const mpz_t x) {
@@ -42,7 +43,16 @@ inline bool publish_save(const std::string &path,const std::string &lines,bool a
         if(old.bad())return false;
     }
     std::istringstream incoming(lines);std::string line;
-    while(std::getline(incoming,line))if(seen.insert(key(line)).second)out<<line<<'\n';
+    std::vector<std::pair<uint64_t,std::string>> batch;bool point_records=true;
+    while(std::getline(incoming,line)) {
+        const auto at=line.compare(0,10,"METHOD=ECM")==0?line.find("SIGMA="):std::string::npos;uint64_t sigma=0;
+        if(at==std::string::npos)point_records=false;
+        else try {size_t used=0;sigma=std::stoull(line.substr(at+6),&used);if(!used || at+6+used>=line.size() || line[at+6+used]!=';')return false;}
+             catch(const std::exception &){return false;}
+        batch.emplace_back(sigma,std::move(line));
+    }
+    if(point_records)std::stable_sort(batch.begin(),batch.end(),[](const auto &a,const auto &b){return a.first<b.first;});
+    for(const auto &record:batch)if(seen.insert(key(record.second)).second)out<<record.second<<'\n';
     out.close();return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
 }
 // Validate raw extended coordinates; reducing corrupt input would hide errors.

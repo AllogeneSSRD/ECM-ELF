@@ -98,8 +98,8 @@ bool stage1_publish_factor(const Stage1Options &opt,mpz_srcptr n,uint64_t b1,uin
     static std::mutex mutex;std::lock_guard<std::mutex> lock(mutex);
     try {
         auto r=stage1_submission(opt,n,b1);r.stage=1;r.sigma=sigma;r.when=ecm_results::utc_timestamp();
-        r.factors.push_back(ecm_results::decimal(factor));ecm_results::publish_submission(opt.persistence.submission_file,r,n);return true;
-    } catch(const std::exception &e){ecm_ts_fprintf(stderr,"ERROR: immediate Stage1 factor publication: %s\n",e.what());return false;}
+        r.factors.push_back(ecm_results::decimal(factor));(void)ecm_results::submission_json(r,n);return true;
+    } catch(const std::exception &e){ecm_ts_fprintf(stderr,"ERROR: Stage1 factor validation: %s\n",e.what());return false;}
 }
 
 // Owns batch state/lock lifetime only; task sequencing stays in run_stage1_task.
@@ -151,11 +151,7 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
             return std::filesystem::absolute(a).lexically_normal()==std::filesystem::absolute(b).lexically_normal() || std::filesystem::equivalent(a,b,ec);};
         if(same(opt.persistence.results_file,opt.persistence.submission_file) || same(savefilename,opt.persistence.results_file) || same(savefilename,opt.persistence.submission_file))
             throw std::runtime_error("Stage1 save, internal results and submission paths must differ");
-        for(const auto &file:{opt.persistence.results_file,opt.persistence.submission_file}) {
-            if(file.empty())throw std::runtime_error("empty Stage1 result output path");
-            if(std::filesystem::exists(file) && !ecm_results::has_result_ledger(file))
-                throw std::runtime_error("result output has no owned ledger; select a fresh Stage1 result path");
-        }
+        ecm_results::check_stage1_outputs(opt.persistence.results_file,opt.persistence.submission_file);
         ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);
         const auto exponent=opt.identity.target_kbnc?opt.identity.handoff_n:(mpz_popcount(plus.v)==1?mpz_scan1(plus.v,0):0);
         const auto name=std::string(base.edwards?".e":".m"+std::to_string(base.param))+"_s1_"+
@@ -185,22 +181,20 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         out->validate_curves(N);
         phase=FailureSource::Publication;
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
-        std::vector<std::pair<std::string,std::string>> internal_records;
+        std::vector<ecm_results::Stage1BatchRecord> records;
         std::string task_identity=ecm_edwards::hex(N)+"|"+std::to_string(base.b1)+(base.edwards?"ed":"mont"+std::to_string(base.param));
         for(uint32_t i=0;i<out->curves;++i)task_identity+="|"+std::to_string(out->sigmas[i]);
         const auto publication_task=std::to_string(ecm_edwards::hash(task_identity));
+        const auto publication_when=ecm_results::utc_timestamp();
         for(uint32_t i=0;i<out->curves;++i) {
-            auto r=base;r.publication_task=publication_task;r.sigma=out->sigmas[i];r.when=ecm_results::utc_timestamp();
+            auto r=base;r.publication_task=publication_task;r.sigma=out->sigmas[i];r.when=publication_when;
             if(out->array_found[i]!=ECM_NO_FACTOR_FOUND){r.stage=1;r.factors.push_back(ecm_results::decimal(out->factors[i]));}
-            (void)ecm_results::submission_json(r,N);
-            const auto key=ecm_edwards::hex(N)+"|"+(r.edwards?"ed":"mont"+std::to_string(r.param))+"|"+std::to_string(r.sigma)+"|"+std::to_string(r.b1)+"|stage1";
             std::ostringstream extra;extra<<",\"stage1-engine\":{\"curve\":"<<i<<",\"target\":"<<ecm_results::quoted(ecm_stage1::execution_target_name(opt.execution.selection.target))
                 <<",\"batch-seconds\":"<<seconds<<",\"coverage\":\"B1\"}";
-            internal_records.emplace_back(key,ecm_results::internal_json(r,N,0,deps.build_identity(),extra.str()));
-            ecm_results::publish_submission(opt.persistence.submission_file,r,N,false);
+            records.push_back({r,ecm_results::internal_json(r,N,0,deps.build_identity(),extra.str())});
         }
-        ecm_results::publish_internal_batch(opt.persistence.results_file,internal_records);
-        ecm_results::seal_submissions(opt.persistence.submission_file,1,publication_task);
+        ecm_results::publish_stage1_batch(opt.persistence.results_file,opt.persistence.submission_file,
+                                        std::move(records),N,task_identity);
         session.close(true);
         ecm_ts_fprintf(stdout,"Stage1 results: internal=%s submission=%s\n",opt.persistence.results_file.c_str(),opt.persistence.submission_file.c_str());
         out->finish_task(out->ret,false);

@@ -126,8 +126,12 @@ def main():
         for row in internal:
             verify_result(row)
         assert sum(v['curves'] for v in public) == count
-        assert len(list(ledger(public_path).glob('*.curve'))) == count
-        assert sum(json.loads(v.read_text().splitlines()[3])['curves'] for v in ledger(public_path).glob('*.batch')) == sum(v['status']=='NF' for v in internal)
+        assert not ledger(public_path).exists(), 'Stage1 created per-curve receipts'
+        sigma=lambda row:row.get('Edwards',row.get('GMP-ECM-param3',{})).get('sigma',row.get('sigma'))
+        assert [sigma(row) for row in internal]==sorted(sigma(row) for row in internal)
+        assert [sigma(row) for row in public if row['status']=='F']==sorted(sigma(row) for row in public if row['status']=='F')
+        assert sum(row['curves'] for row in public if row['status']=='NF')==sum(row['status']=='NF' for row in internal)
+        assert 'stage1-publication' in internal[0]
         for row in public:
             assert row['fft-length'] > 0 and crc_valid(row) and 'security-code' not in row
             if row['status']=='F':assert row['stage']==1 and row['curves']==1 and 'b2' not in row
@@ -187,20 +191,26 @@ def main():
                 if name=='ed_scalar':
                     # Simulate interrupted Stage2 publication on a working copy,
                     # preserving the completed source ledger and its export.
-                    pending=work/'pending.json.txt';pending_ledger=ledger(pending)
+                    pending_work=work/'pending_case';pending_work.mkdir()
+                    pending=pending_work/'results.json.txt';pending_ledger=ledger(pending)
                     shutil.copytree(ledger(submission),pending_ledger)
-                    for sealed in pending_ledger.glob('*.batch'):
+                    for sealed in pending_ledger.rglob('*.batch'):
                         if json.loads(sealed.read_text().splitlines()[3])['b2']>1000:sealed.unlink()
                     # This working copy models NF records never sealed/exported
                     # by Stage2. A copied durable append history would instead
                     # describe a completed publication and correctly replay it.
                     (pending_ledger/'publication.order').unlink()
-                    ini=work/'pending.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n[stage1]\nstage1_submission_file='+toml_string(pending)+'\n',encoding='utf-8')
-                    replay[replay.index('--config')+1]=ini
-                    call('stage1_with_pending_stage2_nf',replay,work,str(n)+'\n')
-                    assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==4 and len(list(pending_ledger.glob('*.batch')))==1
-                    assert len(list(pending_ledger.glob('*.curve')))==8
-                    call('pending_stage2_export',[stage2,'--export-results','--submission',pending,'--config',ini],work)
+                    pending.write_bytes(before)
+                    shutil.copy2(work/'stage1_results.jsonl',pending_work/'stage1_results.jsonl')
+                    shutil.copy2(work/'points.save',pending_work/'points.save')
+                    ini=pending_work/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n',encoding='utf-8')
+                    pending_replay=list(replay)
+                    for option,value in (('--config',ini),('--tmp-dir',pending_work),('-save',pending_work/'points.save')):
+                        pending_replay[pending_replay.index(option)+1]=value
+                    call('stage1_with_pending_stage2_nf',pending_replay,pending_work,str(n)+'\n')
+                    assert pending.read_bytes()==before and not list(pending_ledger.rglob('*.batch'))
+                    assert len(list(pending_ledger.rglob('*.curve')))==4
+                    call('pending_stage2_export',[stage2,'--export-results','--submission',pending,'--config',ini],pending_work)
                     assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==8
                     passed('stage1_preserves_pending_stage2_nf')
 
@@ -277,7 +287,7 @@ def main():
                 else:
                     raise AssertionError('no arithmetic checkpoint')
                 competing=call(name+'_exclusive',cmd,work,good=False)
-                assert 'another worker owns' in competing
+                assert 'another worker owns' in competing or 'queue worker already owned' in competing
                 assert kernel.SetEvent(event)
                 assert p.wait(timeout=120) != 0
             finally:

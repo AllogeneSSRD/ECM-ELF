@@ -10,6 +10,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iterator>
 #include <map>
@@ -98,8 +99,8 @@ std::string crc_hex(const std::string &s) {
 }
 // Compute from the final record, including its source version, model marker,
 // actual/reference FFT field and final timestamp. Sealing must call this again.
-std::string with_result_checksum(const std::string &line) {
-    auto row=json::parse(line);if(row.type!='o')throw std::runtime_error("result is not a JSON object");
+static json::Value result_with_checksum(json::Value row) {
+    if(row.type!='o')throw std::runtime_error("result is not a JSON object");
     if(!row.has("errors"))row.set("errors",json::parse("{\"invariant\":0}"));
     if(!row.has("os"))row.set("os",json::parse("{\"os\":"+quoted(ecm_program::host_os)+",\"architecture\":"+quoted(ecm_program::host_arch)+"}"));
     std::string target=row.get("exponent").text();
@@ -130,7 +131,10 @@ std::string with_result_checksum(const std::string &line) {
         program.get("name").text(),program.get("version").text(),"","",os.get("os").text(),os.get("architecture").text(),row.get("timestamp").text()};
     std::string canonical;for(size_t i=0;i<slots.size();++i){if(i)canonical+=';';canonical+=slots[i];}
     row.set("checksum",json::parse("{\"version\":1,\"checksum\":"+quoted(crc_hex(canonical))+"}"));
-    return row.dump();
+    return row;
+}
+std::string with_result_checksum(const std::string &line) {
+    return result_with_checksum(json::parse(line)).dump();
 }
 std::string submission_json(const Submission &r,const mpz_t n) {
     const bool hit=!r.factors.empty();
@@ -306,13 +310,33 @@ std::string read_submission_bytes(const fs::path &path) {
     if(in.bad())throw std::runtime_error("cannot finish reading submission output");
     return text;
 }
+namespace {
+std::string stage1_factor_identity(const json::Value &);
+bool owned_stage1_submission(const std::string &text) {
+    std::istringstream in(text);std::string line;bool found=false;
+    while(std::getline(in,line)) {
+        if(line.empty())continue;
+        const auto row=json::parse(line);
+        if(row.type!='o' || row.get("program").get("name").text()!=ecm_program::name ||
+           (row.get("status").text()!="NF" && row.get("status").text()!="F") ||
+           (row.get("stage").text()!="1" && row.get("b1").text()!=row.get("b2").text()) ||
+           row.get("checksum").dump()!=json::parse(with_result_checksum(line)).get("checksum").dump())return false;
+        found=true;
+    }
+    return found;
+}
+std::string publication_row_identity(const json::Value &row) {
+    const auto factor=stage1_factor_identity(row);
+    return factor.empty()?row.dump():"stage1-factor:"+factor;
+}
+}
 // The caller holds SubmissionLock. The durable publication history is written
 // before appending: a retry can finish a partial append without reordering or
 // duplicating previously published bytes. Existing outputs seed the history.
 void append_submissions(const fs::path &path,const fs::path &ledger) {
     struct Row {std::string id,json;fs::file_time_type time;};
     std::map<std::string,Row> rows;
-    for(const auto &file:fs::directory_iterator(ledger)) {
+    for(const auto &file:fs::recursive_directory_iterator(ledger)) {
         if(file.path().extension()!=".curve" && file.path().extension()!=".batch")continue;
         const auto entry=read_submission_entry(file.path());
         const bool batch=file.path().extension()==".batch";
@@ -332,6 +356,10 @@ void append_submissions(const fs::path &path,const fs::path &ledger) {
         if(record.key!="publication-order" || record.group!="ORDER" || value.type!='s')
             throw std::runtime_error("invalid submission publication history");
         ordered=value.text();
+        // Stage1 commits its two final files without a private ledger. Adopt
+        // only a verified Stage1 suffix appended after this Stage2 history.
+        if(actual.size()>ordered.size() && actual.compare(0,ordered.size(),ordered)==0 &&
+           owned_stage1_submission(actual.substr(ordered.size())))ordered=actual;
         if(actual.size()>ordered.size() || ordered.compare(0,actual.size(),actual)!=0)
             throw std::runtime_error("submission output differs from publication history");
     }
@@ -342,21 +370,21 @@ void append_submissions(const fs::path &path,const fs::path &ledger) {
         if(line.empty())continue;
         const auto value=json::parse(line);
         if(value.type!='o')throw std::runtime_error("invalid submission output row");
-        published.insert(value.dump());
+        published.insert(publication_row_identity(value));
     }
     // Only unrecorded receipts need this recovery order. Normal publication
     // appends each newly sealed NF batch or immediate F under the same lock.
     std::vector<Row> pending;
-    for(const auto &pair:rows)if(!published.count(json::parse(pair.second.json).dump()))pending.push_back(pair.second);
+    for(const auto &pair:rows)if(!published.count(publication_row_identity(json::parse(pair.second.json))))pending.push_back(pair.second);
     std::sort(pending.begin(),pending.end(),[](const auto &a,const auto &b){
         if(a.time!=b.time)return a.time<b.time;return a.id<b.id;
     });
     for(const auto &row:pending) {
-        if(!published.insert(json::parse(row.json).dump()).second)continue;
+        if(!published.insert(publication_row_identity(json::parse(row.json))).second)continue;
         if(!ordered.empty() && ordered.back()!='\n')ordered+='\n';
         ordered+=row.json+'\n';
     }
-    if(!has_order || !pending.empty()) {
+    if(!has_order || !pending.empty() || read_submission_entry(order_path).json!=json::quote(ordered)) {
         const auto body="ECM_SUBMISSION_V1\npublication-order\nORDER\n"+json::quote(ordered)+'\n';
         atomic_text(order_path,body+std::to_string(ecm_edwards::hash(body))+'\n');
     }
@@ -380,14 +408,14 @@ void seal_submissions(const fs::path &path,int stage_filter,const std::string &t
     SubmissionLock lock(path);const auto ledger=migrate_result_ledger(path);if(!fs::exists(ledger/"format"))return;
     require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");
     std::set<std::string> sealed,lines;
-    for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".batch") {
+    for(const auto &file:fs::recursive_directory_iterator(ledger))if(file.path().extension()==".batch") {
         const auto batch=read_submission_entry(file.path());lines.insert(batch.json);
         std::istringstream ids(batch.group);std::string id;
         while(std::getline(ids,id,','))if(!sealed.insert(id).second)throw std::runtime_error("NF curve occurs in two submission batches");
     }
-    struct Pending {std::string id;SubmissionEntry entry;fs::file_time_type time;};
+    struct Pending {std::string id;SubmissionEntry entry;fs::file_time_type time;fs::path directory;};
     std::map<std::string,std::vector<Pending>> pending;
-    for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
+    for(const auto &file:fs::recursive_directory_iterator(ledger))if(file.path().extension()==".curve") {
         const auto id=file.path().stem().string();const auto entry=read_submission_entry(file.path());
         if(entry.group=="F" || sealed.count(id))continue;
         if(!task.empty() && entry.group.compare(0,task.size()+3,"T:"+task+":"))continue;
@@ -399,7 +427,7 @@ void seal_submissions(const fs::path &path,int stage_filter,const std::string &t
             const auto end=group.find(':',2);
             if(end!=std::string::npos)group.resize(end);
         }
-        pending[group].push_back({id,entry,fs::last_write_time(file.path())});
+        pending[group].push_back({id,entry,fs::last_write_time(file.path()),file.path().parent_path()});
     }
     for(auto &group:pending) {
         auto &entries=group.second;
@@ -428,7 +456,7 @@ void seal_submissions(const fs::path &path,int stage_filter,const std::string &t
         }
         const auto key=std::to_string(ecm_edwards::hash(ids));
         const auto body="ECM_SUBMISSION_V1\n"+key+'\n'+ids+'\n'+json+'\n';
-        atomic_text(ledger/(key+".batch"),body+std::to_string(ecm_edwards::hash(body))+'\n');
+        atomic_text(entries.front().directory/(key+".batch"),body+std::to_string(ecm_edwards::hash(body))+'\n');
         lines.insert(json);
         append_submissions(path,ledger);
     }
@@ -444,7 +472,8 @@ fs::path prepare_submission_ledger(const fs::path &path) {
     const auto ledger=migrate_result_ledger(path);
     if(!fs::exists(ledger/"format")) {
         // Never replace an unrelated Prime95/manual result file.
-        if(fs::exists(path))throw std::runtime_error("submission file has no owned ledger; select a fresh output path");
+        if(fs::exists(path) && !owned_stage1_submission(read_submission_bytes(path)))
+            throw std::runtime_error("submission file has no owned ledger; select a fresh output path");
         fs::create_directories(ledger);atomic_text(ledger/"format","ECM_SUBMISSION_LEDGER_V1\n");
     }
     require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");
@@ -453,6 +482,12 @@ fs::path prepare_submission_ledger(const fs::path &path) {
 void ensure_submission_output(const fs::path &path) {
     SubmissionLock lock(path);
     append_submissions(path,prepare_submission_ledger(path));
+}
+void check_stage2_outputs(const fs::path &internal,const fs::path &submission,bool resumed) {
+    if(has_result_ledger(submission))return;
+    if(resumed || (fs::exists(internal) && fs::file_size(internal)) ||
+       (fs::exists(submission) && fs::file_size(submission) && !owned_stage1_submission(read_submission_bytes(submission))))
+        throw std::runtime_error("Stage2 result ledger is missing; restore its data directory before continuing");
 }
 void publish_submission(const fs::path &path,const Submission &r,const mpz_t n,bool render_now) {
     if(r.curves!=1)throw std::runtime_error("submission ledger accepts individual completed curves");
@@ -466,11 +501,27 @@ void publish_submission(const fs::path &path,const Submission &r,const mpz_t n,b
     const auto group_key=r.factors.empty()?"T:"+r.publication_task+":"+
         (r.publication_order?"O:"+std::to_string(r.publication_order)+":":std::string{})+submission_json(group,n):"F";
     const auto group_line=r.factors.empty()?group_key.substr(0,group_key.size()-1):group_key;
-    const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
+    fs::path receipt_directory=ledger;
+    if(!r.save_name.empty()) {
+        const auto folder=fs::u8path(r.save_name);
+        if(folder.filename()!=folder || r.save_name=="." || r.save_name==".." ||
+           r.save_name.find_first_of("/\\:")!=std::string::npos)
+            throw std::runtime_error("invalid result save namespace");
+        receipt_directory/=folder;fs::create_directories(receipt_directory);
+    }
+    const auto receipt_name=std::to_string(ecm_edwards::hash(key))+".curve";
+    auto entry=receipt_directory/receipt_name;
+    // The first mathematical receipt keeps its owner even if another save
+    // contains the same point. Lookup exact filenames, not every old receipt.
+    if(!fs::exists(entry)) {
+        if(fs::exists(ledger/receipt_name))entry=ledger/receipt_name;
+        else for(const auto &folder:fs::directory_iterator(ledger))
+            if(folder.is_directory() && fs::exists(folder.path()/receipt_name)){entry=folder.path()/receipt_name;break;}
+    }
     if(r.stage==1 && !fs::exists(entry)) {
         // Preserve older receipts and their first owner; their filenames used
         // the continuation B2. Export also collapses existing legacy duplicates.
-        for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
+        for(const auto &file:fs::recursive_directory_iterator(ledger))if(file.path().extension()==".curve") {
             const auto previous=read_submission_entry(file.path());
             if(previous.group=="F" && stage1_factor_key(previous.key)==key) {
                 if(render_now || !r.factors.empty())append_submissions(path,ledger);return;
@@ -536,8 +587,10 @@ void refresh_internal(const fs::path &path) {
 } // namespace ecm_results
 
 namespace ecm_results {
+namespace { bool contains_stage1_output(const std::filesystem::path &,mpz_srcptr,uint64_t,bool,unsigned,const std::vector<uint64_t> &); }
 bool contains_stage1_curves(const std::filesystem::path &path,mpz_srcptr n,uint64_t b1,
                                      bool edwards,unsigned param,const std::vector<uint64_t> &sigmas) {
+    if(std::filesystem::exists(path))return contains_stage1_output(path,n,b1,edwards,param,sigmas);
     if(!ecm_results::has_result_ledger(path))return false;
     ecm_results::SubmissionLock lock(path);
     const auto ledger=ecm_results::prepare_internal_ledger(path);
@@ -552,3 +605,247 @@ bool contains_stage1_curves(const std::filesystem::path &path,mpz_srcptr n,uint6
 }
 
 } // namespace ecm_results
+
+namespace ecm_results {
+namespace {
+size_t stage1_rows(const fs::path &path,const std::function<void(const json::Value &)> &visit={},bool first_only=false) {
+    if(!fs::exists(path))return 0;
+    std::ifstream in(path,std::ios::binary);std::string line;size_t count=0;
+    if(!in)throw std::runtime_error("cannot read Stage1 internal results");
+    while(std::getline(in,line)) {
+        if(!line.empty() && line.back()=='\r')line.pop_back();
+        if(line.empty())continue;
+        auto row=json::parse(line);
+        if(row.type!='o' || row.get("program").get("name").text()!=ecm_program::name ||
+           !row.has("stage1-engine") || row.get("b1").text()!=row.get("b2").text(row.get("b1").text()) ||
+           row.get("stage").text()=="2")
+            throw std::runtime_error("Stage1 internal output is not an owned Stage1 result");
+        const auto checked=result_with_checksum(row);
+        if(row.get("checksum").dump()!=checked.get("checksum").dump())
+            throw std::runtime_error("Stage1 internal result checksum mismatch");
+        ++count;if(visit)visit(row);
+        if(first_only)return count;
+    }
+    if(in.bad())throw std::runtime_error("cannot finish reading Stage1 internal results");
+    return count;
+}
+std::string absolute_result_path(const fs::path &path) {
+    return fs::absolute(path).lexically_normal().u8string();
+}
+std::string result_pair_identity(const fs::path &internal,const fs::path &submission) {
+    const auto relative=fs::absolute(submission).lexically_normal().lexically_relative(fs::absolute(internal).lexically_normal().parent_path());
+    return relative.empty()?absolute_result_path(submission):relative.generic_u8string();
+}
+uint64_t result_sigma(const json::Value &row) {
+    const auto text=row.has("Edwards")?row.get("Edwards").get("sigma").text():
+        row.has("GMP-ECM-param3")?row.get("GMP-ECM-param3").get("sigma").text():row.get("sigma").text();
+    if(text.empty() || text.find_first_not_of("0123456789")!=text.npos)
+        throw std::runtime_error("result has no numeric sigma");
+    return std::stoull(text);
+}
+void result_modulus(const json::Value &row,mpz_ptr saved) {
+        ecm_edwards::Integer factor;
+        if(row.has("N")) {
+            if(mpz_set_str(saved,row.get("N").text().c_str(),10))throw std::runtime_error("invalid saved result modulus");
+        } else {
+            const auto exponent=std::stoull(row.has("exponent")?row.get("exponent").text():row.get("n").text());
+            if(exponent>1000000000)throw std::runtime_error("oversized saved result target");
+            mpz_ui_pow_ui(saved,row.has("exponent")?2:std::stoul(row.get("b").text()),static_cast<unsigned long>(exponent));
+            if(!row.has("exponent")) {
+                if(mpz_set_str(factor.v,row.get("k").text().c_str(),10))throw std::runtime_error("invalid saved result k");
+                mpz_mul(saved,saved,factor.v);
+            }
+            if(mpz_set_str(factor.v,row.has("exponent")?"-1":row.get("c").text().c_str(),10))
+                throw std::runtime_error("invalid saved result c");
+            mpz_add(saved,saved,factor.v);
+            for(const auto &known:row.get("known-factors").items) {
+                if(mpz_set_str(factor.v,known.text().c_str(),10) || mpz_cmp_ui(factor.v,1)<=0 || !mpz_divisible_p(saved,factor.v))
+                    throw std::runtime_error("invalid saved result known factor");
+                mpz_divexact(saved,saved,factor.v);
+            }
+        }
+}
+bool stage1_modulus_matches(const json::Value &row,mpz_srcptr n) {
+    ecm_edwards::Integer saved;result_modulus(row,saved.v);return mpz_cmp(saved.v,n)==0;
+}
+std::string stage1_factor_identity(const json::Value &row) {
+    if(row.get("status").text()!="F" || row.get("stage").text()!="1")return {};
+    ecm_edwards::Integer n;result_modulus(row,n.v);
+    const auto model=row.has("Edwards")?"ed":"mont"+row.get("param").text(row.has("GMP-ECM-param3")?"3":"0");
+    return ecm_edwards::hex(n.v)+"|"+std::to_string(result_sigma(row))+"|"+row.get("b1").text()+"|"+
+        model+"|"+row.get("factors").dump();
+}
+bool stage1_work_matches(const json::Value &row,const Submission &r,mpz_srcptr n) {
+    return row.get("b1").text()==std::to_string(r.b1) && row.has("Edwards")==r.edwards &&
+        (r.edwards || row.get("param").text(row.has("GMP-ECM-param3")?"3":"0")==std::to_string(r.param)) && stage1_modulus_matches(row,n);
+}
+bool contains_stage1_output(const fs::path &path,mpz_srcptr n,uint64_t b1,bool edwards,unsigned param,
+                            const std::vector<uint64_t> &sigmas) {
+    std::set<uint64_t> wanted(sigmas.begin(),sigmas.end());
+    if(wanted.empty())return false;
+    Submission work;work.b1=b1;work.edwards=edwards;work.param=int(param);
+    stage1_rows(path,[&](const json::Value &row) {
+        const auto sigma=result_sigma(row);
+        if(wanted.count(sigma) && stage1_work_matches(row,work,n))wanted.erase(sigma);
+    });
+    return wanted.empty();
+}
+json::Value checked_stage1_plan(const json::Value &value) {
+    if(value.type!='o' || value.get("version").text()!="1")
+        throw std::runtime_error("unsupported Stage1 publication plan");
+    auto body=value;
+    const auto checksum=body.get("hash").text();
+    body.members.erase(std::remove_if(body.members.begin(),body.members.end(),
+        [](const auto &p){return p.first=="hash";}),body.members.end());
+    if(checksum!=std::to_string(ecm_edwards::hash(body.dump())))
+        throw std::runtime_error("Stage1 publication plan checksum mismatch");
+    return body;
+}
+void replay_stage1_plan(const json::Value &plan,const fs::path &internal,const fs::path &submission,std::string &actual) {
+    if(plan.get("submission").text()!=result_pair_identity(internal,submission))
+        throw std::runtime_error("Stage1 publication plan belongs to another submission path");
+    const auto offset=std::stoull(plan.get("offset").text());
+    const auto tail=plan.get("append").text();
+    if(offset>actual.size() ||
+       plan.get("prefix-hash").text()!=std::to_string(ecm_edwards::hash(actual.substr(0,size_t(offset)))))
+        throw std::runtime_error("Stage1 submission history differs from committed batch");
+    const auto available=(std::min)(tail.size(),actual.size()-size_t(offset));
+    if(actual.compare(size_t(offset),available,tail,0,available))
+        throw std::runtime_error("Stage1 submission suffix differs from committed batch");
+    if(available<tail.size())actual+=tail.substr(available);
+}
+}
+void check_stage1_outputs(const fs::path &internal,const fs::path &submission) {
+    if(internal.empty() || submission.empty())throw std::runtime_error("empty Stage1 result output path");
+    if(!fs::exists(internal) && has_result_ledger(internal))refresh_internal(internal);
+    if(!fs::exists(submission) && has_result_ledger(submission))refresh_submission_if_owned(submission);
+    // Early ownership check only. The complete history is checked once under
+    // the writer locks when the finished batch is committed.
+    const auto rows=stage1_rows(internal,{},true);
+    if(!rows && fs::exists(submission) && fs::file_size(submission) && !has_result_ledger(submission))
+        throw std::runtime_error("Stage1 submission has no owned internal result history");
+}
+void publish_stage1_batch(const fs::path &internal,const fs::path &submission,
+                          std::vector<Stage1BatchRecord> records,mpz_srcptr n,
+                          const std::string &identity) {
+    if(records.empty() || identity.empty())throw std::runtime_error("empty Stage1 publication batch");
+    if(absolute_result_path(internal)==absolute_result_path(submission))
+        throw std::runtime_error("Stage1 output paths must differ");
+    std::stable_sort(records.begin(),records.end(),[](const auto &a,const auto &b){
+        return a.submission.sigma<b.submission.sigma;
+    });
+    for(size_t i=0;i<records.size();++i) {
+        const auto &r=records[i].submission;
+        if(!r.stage1_only || r.curves!=1 || r.b1!=records.front().submission.b1 ||
+           r.edwards!=records.front().submission.edwards || r.param!=records.front().submission.param ||
+           (i && records[i-1].submission.sigma==r.sigma))
+            throw std::runtime_error("invalid Stage1 batch identity");
+        auto row=json::parse(records[i].internal);
+        if(!row.has("stage1-engine") || result_sigma(row)!=r.sigma || !stage1_work_matches(row,r,n) ||
+           row.get("factors").dump()!=json::parse(submission_json(r,n)).get("factors").dump())
+            throw std::runtime_error("Stage1 internal record differs from submission");
+    }
+    SubmissionLock internal_lock(internal),submission_lock(submission);
+    auto actual=read_submission_bytes(submission);const auto original=actual;
+    // A prior Stage2 commit may have a partially appended export. Reading its
+    // single order file is sufficient; Stage1 never enumerates curve receipts.
+    const auto order=submission_ledger(submission)/"publication.order";
+    const auto legacy_order=legacy_submission_ledger(submission)/"publication.order";
+    const auto owned_order=fs::exists(order)?order:legacy_order;
+    if(fs::exists(owned_order)) {
+        const auto entry=read_submission_entry(owned_order);
+        if(entry.key!="publication-order" || entry.group!="ORDER")throw std::runtime_error("invalid submission publication history");
+        const auto history=json::parse(entry.json).text();
+        if(actual.size()<history.size() && history.compare(0,actual.size(),actual)==0)actual=history;
+        else if(actual.compare(0,history.size(),history))throw std::runtime_error("submission output differs from publication history");
+    }
+    const auto request_count=records.size();
+    std::string sigma_identity;
+    for(const auto &record:records)sigma_identity+=std::to_string(record.submission.sigma)+',';
+    std::map<uint64_t,size_t> requested;
+    for(size_t i=0;i<records.size();++i)requested.emplace(records[i].submission.sigma,i);
+    std::vector<bool> covered(records.size(),false);
+    bool already=false;
+    const auto rows=stage1_rows(internal,[&](const json::Value &row) {
+        const auto found=requested.find(result_sigma(row));
+        if(found!=requested.end() && stage1_work_matches(row,records[found->second].submission,n))covered[found->second]=true;
+        if(row.has("stage1-publication")) {
+        const auto plan=checked_stage1_plan(row.get("stage1-publication"));
+        replay_stage1_plan(plan,internal,submission,actual);
+        if(plan.get("identity").text()==identity) {
+            if(plan.get("count").text()!=std::to_string(records.size()) || plan.get("sigmas").text()!=sigma_identity)
+                throw std::runtime_error("Stage1 batch identity collision");
+            already=true;
+        }
+    }});
+    if(!rows && !actual.empty() && !has_result_ledger(submission))
+        throw std::runtime_error("Stage1 submission has no owned internal result history");
+    if(already) {
+        if(std::find(covered.begin(),covered.end(),false)!=covered.end())
+            throw std::runtime_error("committed Stage1 internal batch is incomplete");
+        if(actual!=original || !fs::exists(submission))atomic_text(submission,actual);
+        return;
+    }
+    std::vector<Stage1BatchRecord> fresh;
+    for(size_t i=0;i<records.size();++i)if(!covered[i])fresh.push_back(std::move(records[i]));
+    records=std::move(fresh);
+    if(records.empty()) {
+        if(!fs::exists(submission))throw std::runtime_error("legacy submission export is missing; restore its owned ledger first");
+        if(actual!=original)atomic_text(submission,actual);
+        return;
+    }
+    // Per-curve work and all aggregation stay in memory. NF remains one batch
+    // report; only factor reports carry sigma in the submission protocol.
+    std::set<std::string> existing_factors;
+    std::set<std::string> existing_reports;
+    std::istringstream exported(actual);std::string exported_line;
+    while(std::getline(exported,exported_line))if(!exported_line.empty()) {
+        const auto row=json::parse(exported_line);existing_reports.insert(row.dump());
+        const auto key=stage1_factor_identity(row);
+        if(!key.empty())existing_factors.insert(key);
+    }
+    std::string tail;
+    Submission nf;uint64_t nf_count=0;
+    for(const auto &record:records) {
+        if(record.submission.factors.empty()) {nf=record.submission;++nf_count;}
+        else {
+            const auto line=submission_json(record.submission,n);
+            if(existing_factors.insert(stage1_factor_identity(json::parse(line))).second)tail+=line;
+        }
+    }
+    if(nf_count) {
+        nf.curves=nf_count;
+        auto report=submission_json(nf,n);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        while(existing_reports.count(json::parse(report).dump())) {
+            if(std::chrono::steady_clock::now()>deadline)throw std::runtime_error("system clock did not advance for NF report");
+            nf.when=utc_timestamp();report=submission_json(nf,n);
+            if(existing_reports.count(json::parse(report).dump()))std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        tail+=report;
+    }
+    if(!actual.empty() && actual.back()!='\n')tail='\n'+tail;
+    auto plan=json::parse("{}");
+    plan.set("version",json::Value::number("1"));
+    plan.set("identity",json::Value::string(identity));
+    plan.set("count",json::Value::number(std::to_string(request_count)));
+    plan.set("sigmas",json::Value::string(sigma_identity));
+    plan.set("submission",json::Value::string(result_pair_identity(internal,submission)));
+    plan.set("offset",json::Value::number(std::to_string(actual.size())));
+    plan.set("prefix-hash",json::Value::string(std::to_string(ecm_edwards::hash(actual))));
+    plan.set("append",json::Value::string(tail));
+    plan.set("hash",json::Value::string(std::to_string(ecm_edwards::hash(plan.dump()))));
+    std::string output=read_submission_bytes(internal);
+    if(!output.empty() && output.back()!='\n')output+='\n';
+    for(size_t i=0;i<records.size();++i) {
+        auto row=json::parse(records[i].internal);
+        if(i==0)row.set("stage1-publication",plan);
+        output+=with_result_checksum(row.dump())+'\n';
+    }
+    // The first final file carries the tiny, checksummed batch commit plan.
+    // A crash before the second replacement can therefore finish publication
+    // from the existing final output, without per-curve receipts or a journal.
+    atomic_text(internal,output);
+    actual+=tail;atomic_text(submission,actual);
+}
+}

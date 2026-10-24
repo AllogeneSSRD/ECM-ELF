@@ -161,6 +161,7 @@ int main(int argc,char **argv) {
         omp_set_num_threads(static_cast<int>(o.threads));
         std::cout<<"CPU Edwards Stage2 backend="<<o.backend<<" threads="<<o.threads<<" memory_mib="<<o.memory<<" libecm="<<ecm_version()<<std::endl;
         for(uint64_t i=o.skip;i<end;++i) {
+            ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             if(stopped())return 130;const auto &r=rows[i];Integer n,x,d,px,py,a24,f;
             mpz_set_str(n.v,r.n.c_str(),16);mpz_set_str(x.v,r.x.c_str(),16);
             auto selected=o;
@@ -215,12 +216,15 @@ int main(int argc,char **argv) {
             ecm_results::Submission report;report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=o.b2;
             report.publication_task=publication_task;report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
             report.publication_order=i+1;
+            report.save_name=std::filesystem::path(o.save).stem().u8string();
             report.d=details.d;report.poly_size=details.poly_size;report.stage2_fft_length=details.fft_length;
             if(stage)report.factors.push_back(number(f.v));
+            ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             ecm_results::publish_submission(o.submission,report,n.v);
             if(!publish_save(o.results,json,true))throw std::runtime_error("result publication failed");
             std::cout<<"completed save-line="<<r.line<<" sigma="<<r.sigma<<" status="<<(stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
         }
+        ecm_results::check_stage2_outputs(o.results,o.submission,end>o.skip);
         ecm_results::seal_submissions(o.submission,2,publication_task,true);
         return 0;
     }catch(const std::exception &e){std::cerr<<"CPU Stage2: "<<e.what()<<'\n';return 1;}

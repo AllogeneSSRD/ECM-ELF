@@ -109,6 +109,7 @@ int curve_worker(Options o) {
         throw std::runtime_error("cannot disable optional prime-witness naming");
     if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
         throw std::runtime_error("incomplete internal curve-worker arguments");
+    if(!o.tune_child && !o.submission.empty())ecm_results::check_stage2_outputs(o.results,o.submission);
     std::ifstream in(o.save, std::ios::binary);
     if (!in) throw std::runtime_error("cannot reread save");
     in.seekg(static_cast<std::streamoff>(o.offset));
@@ -202,6 +203,7 @@ int curve_worker(Options o) {
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
     submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
     submission.publication_order=o.index;
+    submission.save_name=fs::path(o.save).stem().u8string();
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
     submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
@@ -210,6 +212,7 @@ int curve_worker(Options o) {
     submission.stage=submission.factors.empty()?0:(status=="factor_in_saved_X"?1:2);
     const auto external_path=o.submission.empty()?identity_ini.parent_path()/identity.submission:fs::path(o.submission);
     if(submission.stage==1){submission.d=0;submission.poly_size=0;}
+    ecm_results::check_stage2_outputs(o.results,external_path);
     ecm_results::publish_submission(external_path,submission,n.z);
     // The primary verified factor is durable before optional decomposition.
     // A failed diagnostic cannot turn a successful curve into a replay/failure.
@@ -458,6 +461,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                 if(code||result.empty())throw std::runtime_error("Stage2 planning failed");
                 std::cout<<result<<std::endl;continue;
             }
+            if(!o.tune_child)ecm_results::check_stage2_outputs(results,o.submission,persist && state.done>0);
             if(persist) {
                 // Publish intent first, then launch. Only a complete result with
                 // this random receipt can resolve an ambiguous interrupted exit.
@@ -478,7 +482,10 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                 report(message.str());
             }
         }
-        if(task_completed && !o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission,2,o.publication_task,true);
+        if(task_completed && !o.dry && !o.plan_only && !o.tune_child) {
+            ecm_results::check_stage2_outputs(results,o.submission,persist && state.done>0);
+            ecm_results::seal_submissions(o.submission,2,o.publication_task,true);
+        }
         if(!queue||o.dry||o.plan_only)break;
         if(state.done<state.total)break;
         std::string current;

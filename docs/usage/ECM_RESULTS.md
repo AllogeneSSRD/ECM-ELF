@@ -1,14 +1,14 @@
 # ECM 结果输出
 
-CPU/CUDA Stage1、CPU Edwards Stage2 与 CUDA Stage2 同时维护逐曲线内部 JSONL 和提交格式 `results.json.txt`。**NF 仅在整条 worktodo 任务完成时导出；有 NF 时，Stage2 每条完成的任务生成一行 NF，曲线数是该任务完成且未找到因子的曲线总数，参数取最后完成的 NF 曲线。中途停止只保存内部结果、进度和待发布回执。发现并验证因子时立即额外导出一行 F，固定 curves=1，保留 sigma。** 直接 CLI 运行所选曲线范围视为一个任务。Stage1 NF 的 B2=B1，Stage2 NF 记录最后一条 NF 曲线实际请求的 B2。提交结构参考 Prime95，程序身份如实记录为 ECM-ELF，并附 CRC32；生成文件不触发网络请求。
+CPU/CUDA Stage1、CPU Edwards Stage2 与 CUDA Stage2 同时维护逐曲线内部 JSONL 和提交格式 `results.json.txt`。Stage1 整批完成后在内存中聚合，统一发布两份最终文件；中途因子只验证并保留在恢复状态中。Stage2 每完成一条曲线就追加一条内部 JSONL，因子立即额外导出一行 F，固定 curves=1 并保留 sigma。NF 仅在整条任务完成时导出，有 NF 的任务生成一行，曲线数是完成且未找到因子的曲线总数。直接 CLI 运行所选曲线范围视为一个任务。Stage1 NF 的 B2=B1，Stage2 NF 记录最后一条 NF 曲线实际请求的 B2。提交结构参考 Prime95，程序身份如实记录为 ECM-ELF，并附 CRC32；生成文件不触发网络请求。
 
 ## 共用发布接口与实现
 
 Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 [publication.h](../../include/ecm/storage/results/publication.h) 和 [publication.cpp](../../src/ecm/storage/results/publication.cpp)。公开头包含拥有字符串/集合的 Submission 数据和实际序列化、发布、seal、恢复导出入口；不包含 JSON 解析实现、文件锁、操作系统句柄、文件读写或 CRC 函数体。
 
-internal_json/submission_json 接收记录、借用 N 及实际运行元数据，返回原协议 JSON 文本；publish_submission 接收目标路径、单曲线记录与 N，验证后建立 receipt，因子立即发布，NF 按原 seal 规则完成整批发布。publish_internal_batch 保持内部逐曲线顺序；refresh_internal/refresh_submission_if_owned 沿原 owned-ledger 规则恢复输出。文件/协议失败继续抛出原异常，任务与队列决定失败策略。
+internal_json/submission_json 接收记录、借用 N 及实际运行元数据，返回协议 JSON 文本。Stage1 的 publish_stage1_batch 接收整批逐曲线结果，负责数值 sigma 排序、去重、双文件发布及恢复。Stage2 的 publish_submission 验证后建立逐曲线 receipt，因子立即发布，NF 按 seal 规则完成任务发布。publish_internal_batch、refresh_internal 保留旧内部账本的读取和恢复能力；refresh_submission_if_owned 恢复提交账本。文件/协议失败抛出异常，任务与队列决定失败策略。
 
-contains_stage1_curves 接收结果路径、N、B1、曲线族/param 和 sigma 集合，在同一个实际存储锁内核对全部 receipt；缺项返回 false，身份碰撞或损坏仍报错。它替代 task 对锁、内部目录和 ledger entry 的直接操作，不增加同参转发。锁、旧目录迁移、append 历史、partial append 恢复、CRC 与聚合规则集中在 CPP；原存储布局和协议保持。
+contains_stage1_curves 接收结果路径、N、B1、曲线族/param 和 sigma 集合，优先流式核对最终 Stage1 JSONL；文件缺失时兼容旧内部账本。缺项返回 false，损坏报错。锁、旧目录兼容、发布历史恢复、CRC 与聚合规则集中在 CPP。
 
 ## 文件与身份
 
@@ -37,7 +37,7 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 
 内部 JSONL 的公共顺序为 status、目标、worktype、b1/b2、d/poly-size、curves、曲线/sigma、fft-length、因子、程序/系统/时间与 checksum。CPU libecm 和 CUDA 的实际 fft-length 为 0，gwpoly 记录真实 GW 长度。执行诊断集中于 stage1-engine 或 stage2-engine；CUDA 保留 queue_receipt 和可恢复调优样本 tune_observation，调优计划及检查计数保留在 stage2-engine。关闭的 relocation/Auto B2 不生成整组零值。
 
-梅森目标用 exponent 与 known-factors 精确表示，不重复存储 N_hex，也不重复存储提交路径、参考表名称和模型。一般整数保留必要的完整 N。Python 分析入口通过 tools/ecm_report/result_format.py 在内存中兼容旧的 B1/B2、N_hex 等别名，磁盘新格式不再写这些重复字段。内部文件不直接粘贴到手工提交页面。
+梅森目标用 exponent 与 known-factors 精确表示，不重复存储 N_hex、参考表名称和模型。一般整数保留必要的完整 N。Stage1 每批首行额外携带 stage1-publication 恢复计划，描述配对提交文件及待发布字节；该字段不进入手工提交行。Python 分析入口通过 tools/ecm_report/result_format.py 在内存中兼容旧的 B1/B2、N_hex 等别名。内部文件不直接粘贴到手工提交页面。
 
 提交文件每行一个 JSON 对象，UTF-8、以换行结束：
 
@@ -76,7 +76,7 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 15. os.architecture，即 `x86_64`。
 16. timestamp，保留结果中的 UTC 字符串 `YYYY-MM-DD HH:MM:SS`。
 
-Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/ecm/storage/results/publication.cpp)；提交字段和数学一致性验证使用 [公共结果模型](../../src/ecm/storage/results/publication.cpp)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点和算术，包括命中时的即时因子发布，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
+Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/ecm/storage/results/publication.cpp)；提交字段和数学一致性验证使用 [公共结果模型](../../src/ecm/storage/results/publication.cpp)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点、算术与因子验证，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
 
 Stage1 内部 `fft-length=0` 表示没有 GWNUM 变换长度，提交版本使用正的 Prime95 参考容量；`stage1-engine.coverage=B1` 不表示执行过 Stage2。
 
@@ -92,30 +92,40 @@ curves、d、poly-size、stage2-fft-length、status、stage、user、computer、
 
 ## 去重、批次与恢复
 
-三类账本是程序内部数据，位于结果文件所在目录的 `data/` 下，与 `data/experiments/` 并列，保留原文件夹名称。例如：
+### Stage1 整批发布
 
-- `data/stage1_results.jsonl.ecm-ledger/`：逐曲线内部回执、去重及导出顺序。
-- `data/results.json.txt.ecm-ledger/`：worker 1 的提交回执与不可变 NF 批次。
-- `data/results.json_2.txt.ecm-ledger/`：worker 2 的独立提交回执与批次。
+Stage1 不创建逐曲线 `.curve`、`.batch` 或独立 `publication.order`。逐曲线结果在内存中排序、验证和聚合，整批结束时发布 `stage1_results.jsonl` 与 `results.json.txt`；save 和 checkpoint 继续保留原有职责。内部 JSONL 的本批行按无符号 64 位 sigma 升序排列；提交因子行按同一顺序排列，NF 聚合成一行放在本批因子行之后。NF 没有 sigma，不能按逐曲线方式排序。历史批次保持原字节及顺序，不作全文件重排。
 
-它们用于崩溃恢复与避免重复计算工作被重复计数，不能作为无用缓存删除。每份回执使用绑定数学工作的键及独立文件完整性散列；内部 CRC32 是另一项校验。提交账本中的 `publication.order` 保存带完整性散列的发布历史，包含 F/NF 的实际发布顺序和原始行内容；结果文件缺失时可据此重建。短期独占锁仍位于输出旁，以便和旧程序互斥，关闭后删除。
+原生 Stage1 text-save 的新批次也按数值 sigma 排序；Stage2 依次读取这些点，因此直接承接该顺序。旧 save 历史不重排。Stage2 内部 JSONL 始终完成一条追加一条，旧 save、手工选择范围或重算记录的顺序仍由实际输入和执行决定。
 
-首次访问时，在独占锁内将旧的输出旁账本整体重命名到 data/；不改曲线回执或已经发布批次内容。两处同时存在时拒绝自动合并，以免丢失归属或重复计数。新内部账本为 V2，记录显式递增导出序号；读 V1 时保留原回执写入时间顺序，时间完全相同的旧回执只能以数学键稳定排序。默认随机 sigma 无需连续；固定 sigma 的序列和曲线身份不因此改变。旧导出曾按 sigma 字符串排序，不表示 save 缺失曲线。
+两份最终文件不能作为单个文件系统事务替换。内部本批首行的 `stage1-publication` 保存版本、完整性散列、批次身份与 sigma 集合、相对提交路径、旧提交前缀长度/散列及本批提交文本。持有两个输出锁后，发布器流式验证内部历史与 CRC，先原子替换内部结果，再原子替换提交文件。第二步失败时 checkpoint 不清理；重试验证计划并补齐缺失或部分提交，不重复计数。已提交内部批次缺行、计划损坏或提交文件偏离已确认前缀均报错，不覆盖损坏证据。
 
-曲线键绑定实际 N、模型、sigma、B1、B2、stage 和因子；Stage1 因子的键不包含续算 B2，Stage2 重读同一因子也只保留首次回执。内部 Stage1 回执不重复追加；Stage2 内部日志可以保留重算诊断。已有身份、时间、版本及已封存 NF 批次不因重放而变更。
+短期独占锁及同目录 `.new` 原子替换文件仍会存在；它们不是逐曲线回执。任务成功后才移除算术 checkpoint。内部最终文件同时承担发布恢复依据，需与提交文件一同归档；保持二者相对位置可整体移动目录。更改配对文件名、只保留一份历史或跨磁盘改变配对位置前应另选全新输出。CRC32 只保护规范字段，发布计划的独立散列校验计划自身，不是加密签名。
 
-NF 回执还绑定任务范围。Stage1 不会封存 Stage2 未完成的 NF，CUDA 停止时不会封存未完成任务；同一任务恢复后完成剩余曲线才生成提交行。Stage2 同一任务内即使自动选出的 B2、D、P 不同，也合并为一行，采用最后完成的 NF 曲线的参数与 UTC 时间，并重新计算 checksum；逐曲线内部 JSONL 保留各自实际参数。参数不同时，汇总行中的 B2 不表示每条曲线都完成到该界限，逐曲线覆盖情况应查内部回执。F 一经验证立即单独导出，永远为 1 曲线。已发布行保持不变，新任务生成独立批次；同秒完全相同的新批次等待真实 UTC 推进。
-提交文件以二进制追加方式写入，新结果只加到末尾；已有行的内容、顺序和换行字节保持不变，末行没有换行时先追加分隔换行。F 与 NF 按实际发布顺序混排，不按状态、目标、散列键或结果时间戳重排。首次使用现有提交文件时，以现有内容建立发布历史；尚未导出的回执按回执写入时间补到末尾，同一时间以回执键稳定排序。
+旧内部与提交账本仍可恢复旧记录；正常 Stage1 发布不遍历旧逐曲线目录。最终内部文件缺失时，预检可从其旧归属账本恢复；旧账本不包含新整批输出，不得用旧账本单独重建新历史。内部最终文件存在时以它为准，不能使用旧版程序的内部导出命令覆盖它。已有数学曲线按 N、曲线族、param、sigma、B1 去重；已在旧提交中即时导出的 Stage1 因子也不会重复发布。
 
-在独占锁内，先通过临时文件原子保存发布历史，再向提交文件追加。写入中断后，只要现有文件是发布历史的字节前缀，重试会补齐未写入的后缀，包含最后一行只写了一部分的情况；不会重复追加。文件缺失时按记录顺序恢复；已有文件与历史不一致或历史校验失败时报错，不覆盖文件。不要手动修改提交文件或单独删除发布历史；归档时一并保留提交文件及账本。
+### Stage2 回执与追加
 
-账本原子更新、Stage1 检查点与内部结果仍使用同目录临时文件替换规则。Windows 的原子替换遇到访问/共享/锁定错误时最多等待 500 ms 重试；提交文件追加失败时报错，发布历史保留待追加内容供恢复。崩溃时也可能留下尚未封存的 NF。正常应续算原任务直至完整完成；只有确认账本中的全部待发布工作均已完成、希望主动导出时，才使用 CPU 的显式恢复命令。此命令会封存待发布回执，无需重新执行算术，不是自动停止流程：
+Stage2 保留逐曲线 durable receipt，目录在原提交账本下增加 save 文件名去扩展名的子目录。例如 `e_m10267_1e4.save` 使用：
+
+- `data/results.json.txt.ecm-ledger/e_m10267_1e4/`：单曲线 `.curve` 和封存 NF `.batch`。
+- `data/results.json.txt.ecm-ledger/format`、`publication.order`：账本归属和共同提交历史。
+
+worker 后缀、显式提交路径和最终 `stage2_results.jsonl` 路径不变。旧根目录回执和新子目录一起读取，已有首次数学回执保留归属；同一曲线出现在另一个 save 中不重复计数。Stage1 因子身份不包含续算 B2，Stage2 重读同一因子不重复导出。内部 Stage2 JSONL 可保留重算诊断。
+
+整个提交账本丢失时，已有 Stage2 内部结果、Stage2 提交行或恢复进度会使预检报错；CPU/CUDA 在下一条算术前、发布前及任务封存前检查。保留最终文件和队列，不自动按内部 JSONL 猜测已提交批次。已存在合法 Stage1 提交、但尚无任何 Stage2 工作时允许首次建立 Stage2 账本。若所有结果、账本与恢复进度一起丢失，程序无法辨认是否曾完成工作；局部删除子目录也不等同于整个账本缺失检查，不能据此保证自动发现所有漏项。恢复数据后再继续，不能把账本当作可随意清空的缓存。
+
+NF 回执绑定任务范围；CUDA 停止时不封存未完成任务，同一任务恢复后完成剩余曲线才生成提交行。Stage2 同一任务即使各曲线 B2、D、P 不同，也合并一行，采用最后完成的 NF 曲线实际参数与 UTC 时间，并重算 checksum。汇总 B2 不表示每条曲线覆盖相同界限，逐曲线覆盖情况以内部 JSONL 为准。F 立即单独导出，固定一条曲线。完全相同的新 NF 报告等待真实 UTC 秒推进，最多两秒后报错，不虚构时间。
+
+提交文件以二进制追加写入，保持已有文件对象、字节和行顺序。锁内先原子保存带散列的 `publication.order`，再追加未写入后缀。部分追加或文件缺失可恢复；内容与历史冲突或账本损坏时报错。Stage1、Stage2 共用提交文件时，Stage2 可接纳具有程序身份与有效 CRC 的 Stage1 前缀/新增后缀，Stage1 可读取一个已有发布历史文件完成部分提交恢复，均保留已发布字节。
+
+账本属于恢复依据，不能作为缓存删除。旧的输出旁账本首次访问时整体移到结果目录的 `data/`；两处同时存在则拒绝自动合并。旧内部 V1/V2 回执仍沿其导出顺序读取；新 Stage1 行不写入这些账本。Windows 原子替换遇到共享或锁定错误时最多重试 500 ms。Stage2 显式恢复命令按其任务范围封存待发布回执，不执行算术：
 
 ```powershell
 ecm_cpu_stage2.exe --export-results --submission results.json.txt
 ```
 
-正常任务完成或找到因子时从账本更新导出；启动与未完成 NF 不主动改写提交文件。CPU 显式恢复命令按 Stage2 任务范围封存待发布回执。不要删除账本后继续向同名文件累计工作：没有归属账本的现存结果文件会被拒绝覆盖。需归档时一并保留结果文件与账本；新增独立输出可选全新路径。损坏账本校验失败时停止，原始证据应保留。此账本只管理结果发布，不保存曲线内部算术状态。
+该命令适用于 Stage2 账本，不替代 Stage1 双文件重试流程；未完成工作应续算原任务。归档保留最终文件、相关账本及尚未完成的 checkpoint。结果发布存储不保存曲线内部算术状态。
 
 ## 隐私与提交检查
 

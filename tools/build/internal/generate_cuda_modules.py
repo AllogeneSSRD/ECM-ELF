@@ -46,7 +46,7 @@ def symbol(text):
     return re.sub(r'[^A-Za-z0-9_]', '_', text)
 
 
-def generate(out, *, emit=True):
+def generate(out):
     out = out.resolve()
     headers = sorted(set((CUDA / 'stage2/device').glob('*.cuh')) | set((CUDA / 'ntt/device').glob('*.cuh')))
     wrappers = {}
@@ -98,7 +98,7 @@ def generate(out, *, emit=True):
             target = (path.parent / match[1]).resolve()
             return '#include "' + mirrors.get(target, target).as_posix() + '"'
         text = re.sub(r'#include\s*"([^"\n]+)"', include, text)
-        if emit:write(mirrors[path], text)
+        write(mirrors[path], text)
 
     modules = []
     for group, source in [('arithmetic', CUDA / 'stage2/device/arithmetic_kernels.cu'),
@@ -131,7 +131,7 @@ def generate(out, *, emit=True):
                 text += instantiation + '\n'
                 if name == 'ecm_launch_tile_kernel':
                     text += f'const void *ecm_ntt_tile_{symbol(arguments)}() {{ return (const void*)tile_kernel<{arguments}>; }}\n'
-                if emit:write(path, text)
+                write(path, text)
                 modules.append(dict(source=path.as_posix(), label=identity, kernel=wrapper['kernel'],
                                     arguments=arguments, implementation=wrapper['header'].relative_to(ROOT).as_posix()))
         missing = set(instantiations) - set(wrappers)
@@ -143,10 +143,8 @@ def generate(out, *, emit=True):
     inputs = set(headers) | {CUDA / 'stage2/device/arithmetic_kernels.cu', CUDA / 'ntt/device/transform_kernels.cu', Path(__file__).resolve()}
     manifest = dict(schema=1, modules=modules,
                     inputs_sha256={p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(inputs)})
-    if emit:
-        write(out / 'modules.json', json.dumps(manifest, indent=2) + '\n')
-        print(f'{len(modules)} isolated Stage2/NTT modules: {out}')
-    return manifest
+    write(out / 'modules.json', json.dumps(manifest, indent=2) + '\n')
+    print(f'{len(modules)} isolated Stage2/NTT modules: {out}')
 
 
 if __name__ == '__main__':
