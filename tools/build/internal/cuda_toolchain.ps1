@@ -1,11 +1,12 @@
 # Shared CUDA architecture/toolkit and supported MSVC selection for build entries.
-function Resolve-EcmCudaToolkit([string]$Archs, [string]$CudaRoot = '') {
+function Resolve-EcmCudaToolkit([string]$Archs, [string]$CudaRoot = '', [string]$Version = '') {
+    $requestedVersion = $Version
     $architectures = @($Archs.Split(',') | ForEach-Object { [int]($_ -replace '^sm_', '') })
     $legacy = @($architectures | Where-Object { $_ -lt 75 }).Count -gt 0
     if ($legacy -and @($architectures | Where-Object { $_ -ge 75 }).Count) {
         throw 'Legacy and modern CUDA architectures require separate build directories'
     }
-    $version = if ($legacy) { '12.6' } else { '13.3' }
+    $version = if ($requestedVersion) { $requestedVersion } elseif ($legacy) { '12.6' } else { '13.3' }
     if (-not $CudaRoot) {
         $CudaRoot = [Environment]::GetEnvironmentVariable('CUDA_PATH_V' + $version.Replace('.','_'))
         if (-not $CudaRoot) { $CudaRoot = Join-Path $env:ProgramFiles ('NVIDIA GPU Computing Toolkit/CUDA/v' + $version) }
@@ -15,6 +16,7 @@ function Resolve-EcmCudaToolkit([string]$Archs, [string]$CudaRoot = '') {
     if (-not (Test-Path -LiteralPath $nvcc)) { throw "CUDA $version not found: $nvcc; specify the corresponding CUDA root" }
     $versionText = (& $nvcc --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { throw "Cannot identify CUDA toolkit: $nvcc" }
+    if ($requestedVersion -and $versionText -notmatch ('release\s+' + [regex]::Escape($requestedVersion) + '(?:,|\s)')) { throw "Expected CUDA $requestedVersion, found: $versionText" }
     $supported = @(& $nvcc --list-gpu-arch)
     if ($LASTEXITCODE -ne 0) { throw "Cannot list CUDA architectures: $nvcc" }
     foreach ($arch in $architectures) {

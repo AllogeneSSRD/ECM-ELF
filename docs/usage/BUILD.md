@@ -4,7 +4,7 @@
 
 Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通过 `CGBN_INCLUDE_DIR` 指向该目录，需要其他安装位置时可在配置时覆盖。
 
-## 六组入口
+## 构建入口
 
 独立 CPU Edwards Stage2 使用新功能入口 `tools/build/test/build_cpu_stage2.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
 
@@ -13,9 +13,9 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 | Stage1 | `build_stage1_dev` | `build_stage1_local` | `build_stage1_release` |
 | Stage2 | `build_stage2_dev` | `build_stage2_local` | `build_stage2_release` |
 
-每项均有 `.ps1` 与 `.bat`。Stage1 默认 8 路独立 CUDA TU 并行；Stage2 默认 `SplitCompile=8`，多架构依次构建，每个架构内并行。构建入口不自动运行测试。
+每项均有 `.ps1` 与 `.bat`。完整发布使用 `tools/build/build_release.ps1/.bat`；两项 release 入口只重建并验证相应阶段，不生成完整包。Stage1 默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`，release 使用 `SplitCompile=1`、默认8路编译单元并行。构建入口不自动运行数学、GPU 或性能测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；分发包仍在独立 `dist` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -23,7 +23,7 @@ GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
-位宽唯一清单为 `src/ecm/backend/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/backend/cuda/stage1/montgomery/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标，保留统一构建参数与发布拆分流程。
+位宽唯一清单为 `src/ecm/backend/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/backend/cuda/stage1/montgomery/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
 
 新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该 worker 测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
 
@@ -35,34 +35,58 @@ Stage2：独立生产 CUDA 引擎，固定 Goldilocks PTX 后端、canonical 减
 
 ## 工具链与架构
 
-两阶段发布默认 `Archs=60,70,75,86,89,120`。
+完整发布默认生成两个 CUDA profile；PTX 与 SASS 独立指定，公开 release 入口不再接收旧 `Archs/PtxArch` 参数。
 
-| 架构 | CUDA |
-| --- | --- |
-| sm60、sm70 | 12.6 |
-| sm75、sm86、sm89、sm120 | 13.3 |
+| 分发目录 | CUDA | 唯一 PTX | 唯一 SASS |
+| --- | --- | --- | --- |
+| cu11.8 | 11.8 | compute_50 | sm_60 |
+| cu13.3 | 13.3 | compute_75 | sm_80 |
 
-需要安装所选 CUDA、相容的 Visual Studio x64 C++ 工具集、CMake、PowerShell 5.1+ 和 GMP。脚本按 CUDA 头文件声明的 MSVC 范围选择受支持工具集，不默认绕过版本检查。通过 `-LegacyCudaRoot`、`-CudaRoot`、`-VcVars` 指定安装入口。
+需要安装所选 CUDA、相容的 Visual Studio x64 C++ 工具集、Git、CMake、Python、PowerShell 5.1+ 和 GMP。完整发布用 `-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp` 覆盖安装入口。脚本在构建前核对所有请求工具链的真实版本、虚拟/原生目标及 MSVC 支持范围；缺少任一默认工具链即失败。local/dev 保留各自 `-CudaRoot` 参数。
 
-Stage1 分工具链构建多架构程序，再用对应 nvprune/cuobjdump 拆分；默认 sm75 包保留 compute75 PTX，其余包携带各自 SASS。Stage2 逐架构直接构建生产程序。不同 CUDA/MSVC 的缓存目录分离。构建成功不等于每个架构均已完成运行验收。
+两阶段直接生成对应 profile 的双目标镜像，不经过六架构裁剪。`tools/build/internal/release_profiles.ps1` 是发布目标的唯一配置。不同 CUDA/MSVC/profile 的缓存目录分离；最终 EXE 的 cuobjdump 镜像检查和逐模块 PTX 清单留在构建目录。构建、兼容 SASS、强制 PTX JIT 和目标实体 GPU 运行是不同的验证条件。
+
+Windows 旧包面向 Maxwell/Pascal：sm50/52 需要 PTX50 JIT；sm61 可使用 sm60 同大版本相容 SASS。452.39 是 CUDA11.x 小版本兼容条件，不能当成11.8 PTX 的最低驱动；522.06是11.8对应的Windows驱动，作为候选测试基线。实际旧卡、旧驱动尚须分别验证，显式加载不能修复不支持的 PTX ISA。[NVIDIA 11.8发布说明](https://docs.nvidia.com/cuda/archive/11.8.0/cuda-toolkit-release-notes/index.html)、[小版本兼容限制](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)。
+
+## 完整发布与按需加载
+
+运行 `tools\build\build_release.bat` 默认构建 GUI v2、两套 Stage1/Stage2，并生成 `release/ecm-elf-<主程序版本>/cu11.8/`、`cu13.3/` 及各自 ZIP/SHA256。`-Profile cu11.8` 或 `cu13.3` 可只生成指定版本；`-SkipBuild` 仍核对源码、profile、工具链、依赖、对象和程序身份。`-SkipPackage` 只构建/验证。`-BuildRoot` 默认 `build_cuda_release`；`-OutDir` 默认 `release`，必须与构建目录分离。每个阶段的精确叶目录记录在 `<BuildRoot>/components/cu<版本>.stageN.json`，不按时间扫描“最新程序”。已有同版本目录会拒绝覆盖，重打包使用新的 `-OutDir`，以保留用户配置和队列。
+
+每个 CUDA 目录内同层包含 `ecm_cuda.exe`、`ecm_cuda_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、原始日志和计时不进入分发目录。
+
+发布 Stage1 由 `tiers.def` 派生125个曲线/param/容器模块，另保留3个常规 CUDA 单元；Edwards binary/NAF 共用对应容器。发布 Stage2 由原始显式实例和薄发射器派生176个设备模块，按实际容量、路径或变换选取；主机常量快照只同步到被调用的模块。生成镜像保留于构建目录，其原始源码/生成器均参与身份验证。local/dev 默认保留原分组构建。
+
+CUDA worker 在首次 CUDA 调用前将未设置的 `CUDA_MODULE_LOADING` 默认设为 `LAZY`；用户显式值保留。Stage1 全档枚举使用纯元数据，Montgomery全档`--gpu-info`的`blocks_per_sm=0`表示尚未查询occupancy；指定实际输入位宽后只取得选中档位的内核/occupancy。懒加载需要驱动支持；旧驱动或显式 EAGER 下的加载范围不据此获证。按需 JIT 的最终资格以实际加载模块观察为准，不能只凭 TU 拆分宣布通过。
+
+## nvcc 编译计时
+
+正式 CMake、独立 Stage2 和维护中的探针构建在实际 nvcc 编译/链接命令附加 `--time`。每次执行写入独立 `<build>/timing/<唯一ID>/nvcc.csv` 及命令/退出码/外层经过时间记录，避免并发追加同一文件；计时路径不进入语义编译指纹。无改动复用不生成虚构耗时，失败记录保留，成功但缺少非空 CSV 会报错。CXX 编译只保留主机/队列计时。并发单元耗时之和不等于队列墙钟，nvcc 内部阶段与外层时间不能重复相加。
+
+上述样本覆盖项目目标的编译和链接；版本查询及CMake内部编译器识别/能力探测不计入目标编译样本。
+
+`tools/build/test/build_cuda_jit_trace.ps1` 编译测试专用 CUPTI 观察 DLL；`tools/test/test_release_runtime.py --help` 指定冻结基线、观察器、设备和证据目录，分别验证数学结果、实际模块及冷/热独立缓存。观察器不随发布包分发。JIT 编译、缓存加载/存储活动与进程墙钟分别记录；缺少独立 JIT 记录不能填零或把完整启动时间称为纯 JIT 时间。强制PTX变量不能替代实际镜像观测；本机现代包的PTX验证方法、对应测试副本及覆盖限制见[发布/JIT验证](../performance/RELEASE_JIT.md)。
+
+发布对象的独立数学探针由 `tools/build/test/build_release_probes.ps1 -Profile cu11.8/cu13.3 -Stage stage1/stage2` 构建。`build_release_ptx_fixture.ps1` 只在独立目录制作并核对 PTX 测试副本，不覆盖发布 EXE。混合队列范围与完整包验证分别使用 `tools/test/test_release_switching.py`、`test_release_bundle.py`；输入和新证据目录须显式指定。
 
 ## GMP 与打包
 
 本机/开发默认使用本地 Zen3 GMP；发布默认使用 vcpkg 通用 x64 GMP，缺失时明确报错，不自动回退到 Zen3。自定义 `-Gmp <prefix>` 必须提供匹配的头文件、导入库、DLL 和许可证。Zen3 库使用 BMI2/ADX 等指令，其 CPU 兼容范围由实际构建决定。
 
-包内只分发程序、GMP DLL、共享 TOML 模板、空队列、`ECM_TOML_REFERENCE.md` 与许可证。不包含 `*manifest.json`、`DEV_*`、README 或其他项目文档。重新打包保留已有 TOML/队列；ZIP 从干净暂存目录生成，不收录 save、日志和运行数据。
+完整包的载荷见上节。GMP 发布依赖要求可验证的 vcpkg `share/gmp/vcpkg.spdx.json`、匹配的头文件/导入库/DLL、配方与上游源码；缺少对应材料会在构建前失败。Zen3 不作为发布回退。ZIP 从干净暂存目录生成，不收录 save、日志和运行数据。
 
-Stage1 输出 `dist/cuda/`，Stage2 多架构输出 `dist/cuda-stage2/`；每架构有目录、ZIP 和 SHA256。构建/拆分/打包清单留在构建目录，包括源码、依赖、编译器、架构和程序身份。
+对应源码快照从当前Git检出根枚举源码，包含未提交的新源码，排除被忽略的测试输出；固定第三方源码和许可另按明确目录纳入。解压源码重建完整包时，先在解压根执行`git init`，并准备上述工具链、vcpkg GMP和PARI材料；打包拒绝借用解压目录父层的另一个仓库。
+
+发布统一输出到 `release/ecm-elf-<版本>/`；分阶段入口只生成构建组件记录。`components/package-manifest.json` 保存包内文件、EXE、ZIP及模块报告摘要；它只证明构建和静态镜像/载荷检查，不自动获得运行时资格。
 
 ## 复用构建
 
 Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。
 
-复用旧的MSVC/CMake构建目录时，需核对关键主机对象的`.obj.d`确实包含头文件依赖。旧编译器探测缓存中的本地化`SHOWINCLUDES`前缀可能与当前输出不匹配，造成依赖文件为空，头文件变化后仍报告构建成功。遇到此情况，先保留证据，备份并移开该目录的C/C++编译器探测缓存和主机对象，再用正式入口重新探测、编译并验证实际程序行为；不编辑依赖指纹或CUDA对象来绕过校验。该主机依赖限制不适用于Stage2的`/sourceDependencies`内容校验。
+复用旧的MSVC/CMake构建目录时，需核对关键主机对象的`.obj.d`确实包含头文件依赖。旧编译器探测缓存中的本地化`SHOWINCLUDES`前缀可能与当前输出不匹配，造成依赖文件为空，头文件变化后仍报告构建成功。遇到此情况，先保留证据，备份并移开该目录的C/C++编译器探测缓存和主机对象，再用正式入口重新探测、编译并验证实际程序行为；不编辑依赖指纹或CUDA对象来绕过校验。Stage2使用编译器依赖清单校验内容：新MSVC采用`/sourceDependencies`，14.16采用`/showIncludes`并保留实际SDK/STL/宏包含。
 
 配置读写、sigma 生成、曲线 CPU 参数化、运行选择、逐曲线结果、checkpoint/save、data/result/tune.toml/屏幕的主机实现正文使用普通 CXX。`tools/test/test_host_incremental_boundaries.py` 通过正式 local 脚本验证这些正文修改只重编译主机单元，随后恢复源文件；不会改写对象或清单强行复用。接口、CUDA runtime 或其实际依赖的修改仍可能重编译 CU。验收证据与适用构建见 [统一 Stage1 实施记录](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md#p5-完成完整档位兼容编译边界与固定条件对照)。
 
-Stage2 默认逐编译单元复用，整体源码/构建签名变化不会直接触发整组重编；每个失效单元打印重编原因。主机 `.cpp` 使用选定 MSVC 的普通 C++ 编译，保留原有 `/MT`、C++17、`/O2`、`/EHsc` 和 NTT 宏；CUDA `.cu` 与链接仍使用 nvcc，真实 runtime 调用仍需 CUDA SDK。MSVC `/sourceDependencies` JSON 将实际 SDK/STL/宏包含纳入同一内容与对象身份校验，不以本地正则扫描替代编译器依赖。链接命令、GMP 导入库、对象摘要和程序摘要全部匹配时跳过链接；旧清单首次建立链接输入记录可能需要一次链接。
+Stage2 默认逐编译单元复用，整体源码/构建签名变化不会直接触发整组重编；每个失效单元打印重编原因。主机 `.cpp` 使用选定 MSVC 的普通 C++ 编译，保留原有 `/MT`、C++17、`/O2`、`/EHsc` 和 NTT 宏；CUDA `.cu` 与链接仍使用 nvcc，真实 runtime 调用仍需 CUDA SDK。MSVC的编译器依赖记录将实际 SDK/STL/宏包含纳入同一内容与对象身份校验，不以本地正则扫描替代编译器依赖。链接命令、GMP 导入库、对象摘要和程序摘要全部匹配时跳过链接；旧清单首次建立链接输入记录可能需要一次链接。
 
 Stage2 的 `-HostOnly` 在任何编译前核对完整清单，只复用身份一致的 CUDA 对象，主机部分仍按需编译；架构、后端、工具链、GMP 头、CUDA 依赖或任一 CUDA 对象改变时拒绝。`-HostOnly` 与强制重建的 `-Rebuild` 互斥。普通复用和发布 `-SkipBuild` 同时核对程序、编译单元、依赖和对象；旧 manifest 缺少身份记录时须正常重建。保留构建目录中的 `.ecm.d`、`.ecm-state.json`、源清单和 manifest；不能修改清单或替换 DLL 来绕过核对。
 
@@ -70,15 +94,15 @@ Stage2 的 `-HostOnly` 在任何编译前核对完整清单，只复用身份一
 
 `profile.json` 保存完整 SHA256 及字段。CUDA local 默认使用 `build_stage1_local`、`build_stage2_local` 固定短目录；dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。固定 local 目录与任何显式叶目录都只容纳一个相容 profile；配置不匹配时拒绝，不改写 marker，也不自动清空目录。需要同时保留不同架构、tiers 或编译策略时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
 
-本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。Stage1 多工具链 release 的公开 `-BuildDir`、Stage2 多架构 release 的 `-Build` 保持根语义；Stage2 单架构 release 的 `-Build` 为最终叶目录。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
+本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。公开 release 统一只接收 `-BuildRoot` 根目录，叶目录由完整 profile 派生。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
 
 旧目录不自动移动或复制。显式指定旧目录时，仅对已有正式清单、工具链/GMP/架构/策略相符的目录原位核对并建立 marker；未知非空目录拒绝。`-SkipBuild` 要求已有正确 marker，仍需通过原有构建和打包身份检查。路径消费者需使用入口打印的精确叶目录或显式配置，不选择扫描结果中的“最新”程序。
 
-CPU-only 检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_profile_paths.py`。发布静态检查 `test_cuda_p5_release.py` 对默认布局有多个相容 profile 时拒绝歧义，可用 `--build-leaves` JSON 显式指定各 stage/arch 的最终叶目录。该路径检查不等于 release 构建或多架构镜像资格。
+CPU-only 身份检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_profile_paths.py`；双 profile/生成边界/计时合同使用 `test_release_build_contracts.py`。`test_cuda_p5_release.py`、`test_cuda_p5_images.py`保留为原六架构阶段的显式冻结验收工具，不用于认定当前双 CUDA 完整包。路径检查不等于运行资格。
 
 ## CUDA 源清单与依赖身份
 
-翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含35个单元：15个 `STAGE2_ENGINE` 主机 CPP、算术 CU、NTT CU、四个 NTT 主机 CPP 和14个应用/服务/平台/存储 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 的 `STAGE2_ENGINE` 包含17个主机 CPP，其中常量快照和模块调度只在隔离发布宏下提供实现；release 的设备生成器用176个细分单元替代算术/NTT两个聚合 CU。实际编译成员以构建目录内 `cuda_sources.json`、模块清单和编译记录为准。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 

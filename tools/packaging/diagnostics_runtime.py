@@ -1,12 +1,13 @@
 """Freeze and distribute the shared diagnostic host, dependencies and sources."""
 import argparse, hashlib, json, shutil, zipfile
 from pathlib import Path
+from gmp_payload import distribution
 ROOT=Path(__file__).resolve().parents[2]
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def sources():
     roots=['src/ecm/service/diagnostics','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/storage/results','include/ecm']
     files={p for root in roots for p in (ROOT/root).rglob('*') if p.is_file()}
-    files.update(ROOT/p for p in ['LICENSE','tools/packaging/diagnostics_runtime.py','tools/build/test/build_diagnostics.ps1','tools/test/diagnostics_probe.cpp'])
+    files.update(ROOT/p for p in ['LICENSE','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1','tools/test/diagnostics_probe.cpp'])
     return sorted(files)
 def input_identity(gmp,pari,without):
     value=dict(sources_sha256={p.relative_to(ROOT).as_posix():digest(p) for p in sources()},
@@ -35,17 +36,13 @@ def freeze(binary,gmp,pari,without):
         for src in sorted((pari/'data/seadata').rglob('*')):
             if src.is_file():copy(src,'pari-data/'+src.relative_to(pari/'data').as_posix())
         copy(pari/'COPYING','licenses/PARI-GPL-2.0.txt')
-    for src in ['COPYING.LESSERv3','COPYINGv3']:
-        copy(ROOT/'third_party/gmp-zen3/src'/src,'licenses/GMP-'+src+'.txt')
+    gmp_sources,gmp_licenses=distribution(gmp)
+    for src,name in gmp_licenses:copy(src,'licenses/'+name)
     copy(ROOT/'LICENSE','licenses/ECM-ELF-LICENSE.txt')
     archive=folder/'diagnostics-source.zip'
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as out:
         for p in sources():out.write(p,p.relative_to(ROOT).as_posix())
-        for p in (ROOT/'third_party/gmp-zen3/src').rglob('*'):
-            if p.is_file():out.write(p,p.relative_to(ROOT).as_posix())
-        for name in ['config.status','config.h','config.m4']:
-            p=ROOT/'third_party/gmp-zen3/build'/name
-            if p.is_file():out.write(p,p.relative_to(ROOT).as_posix())
+        for p,name in gmp_sources:out.write(p,name)
         for name in ['include/gmp.h','lib/gmp.lib','bin/gmp-10.dll']:
             out.write(gmp/name,'build-dependencies/gmp/'+name)
         out.writestr('SOURCE-BUILD.txt','Rebuild the diagnostic host from this extracted source root on Windows x64:\n'

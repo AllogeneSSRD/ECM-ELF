@@ -32,6 +32,8 @@ $commands+=('"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -Xcompiler /MD '+
     ' -L third_party/gmp-zen3/dist/lib -lgmp -o "'+$exe+'"')
 $batch=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($batch,("@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n"+($commands -join "`r`n")+"`r`n"),[Text.UTF8Encoding]::new($false))
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+Enable-EcmNvccBatchTiming $batch $Build
 & cmd.exe /d /c $batch 2>&1|Out-File (Join-Path $Build 'build.log') -Encoding utf8
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 30;throw 'Stage1 diagnostic adapter build failed'}
 Assert-EcmHashes $hashes (Get-EcmSourceHashes $repo $deps) 'Host-wait source changed'

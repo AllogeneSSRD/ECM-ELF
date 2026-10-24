@@ -30,6 +30,8 @@ $command="`"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$($m
     "-I `"$repo/src`" -I `"$($dependency.Root)/include`" `"$source`" $engineArgs -L `"$($dependency.Root)/lib`" -lgmp -o `"$output`""
 $batch=Join-Path $Build '_objects/relocation_probe.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+Enable-EcmNvccBatchTiming $batch $Build
 & cmd.exe /d /c $batch
 if($LASTEXITCODE -ne 0){throw 'Relocation probe build failed'}
 Assert-EcmBuildUnits $repo $Build $manifest $sourceSet.Sources $includeDirs -Production

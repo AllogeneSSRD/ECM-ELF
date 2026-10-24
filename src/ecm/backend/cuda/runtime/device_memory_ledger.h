@@ -52,8 +52,10 @@ inline bool enabled() {
     static const bool value=[] {const char *e=std::getenv("NTT_MEMORY_LEDGER");return e && std::atoi(e)!=0;}();
     return value;
 }
-inline Ledger ledger;
-inline std::mutex lock;
+// MSVC 14.16 registers a destructor per TU for a nontrivial inline variable.
+// A function-local static has one guarded lifetime across all engine/NTT TUs.
+inline Ledger &current_ledger() {static Ledger value;return value;}
+inline std::mutex &ledger_lock() {static std::mutex value;return value;}
 inline std::string source(const char *file,int line) {
     std::string name=file;const auto pos=name.find_last_of("/\\");
     if(pos!=std::string::npos)name.erase(0,pos+1);
@@ -62,7 +64,8 @@ inline std::string source(const char *file,int line) {
 template<class T> cudaError_t allocate(T **pointer,size_t bytes,const char *file,int line) {
     const auto result=::cudaMalloc(reinterpret_cast<void**>(pointer),bytes);
     if(!enabled())return result;
-    std::lock_guard<std::mutex> guard(lock);
+    std::lock_guard<std::mutex> guard(ledger_lock());
+    auto &ledger=current_ledger();
     if(result!=cudaSuccess){++ledger.failures;return result;}
     if(!ledger.allocate(*pointer,bytes,source(file,line),persistent_scope)) {
         std::fprintf(stderr,"FATAL: Stage2 memory ledger duplicate/overflow at %s:%d\n",file,line);std::exit(3);
@@ -72,13 +75,14 @@ template<class T> cudaError_t allocate(T **pointer,size_t bytes,const char *file
 inline cudaError_t release(void *pointer) {
     const auto result=::cudaFree(pointer);
     if(enabled() && result==cudaSuccess) {
-        std::lock_guard<std::mutex> guard(lock);ledger.release(pointer);
+        std::lock_guard<std::mutex> guard(ledger_lock());current_ledger().release(pointer);
     }
     return result;
 }
 inline void snapshot(const char *name) {
     if(!enabled())return;
-    std::lock_guard<std::mutex> guard(lock);
+    std::lock_guard<std::mutex> guard(ledger_lock());
+    auto &ledger=current_ledger();
     size_t persistent_bytes=0,persistent_allocations=0;
     for(const auto &entry:ledger.live)if(entry.second.persistent){persistent_bytes+=entry.second.bytes;++persistent_allocations;}
     stage2_log::print(stage2_log::debug,
@@ -105,7 +109,8 @@ inline void snapshot(const char *name) {
 struct Session {
     Session() {
         if(!enabled())return;
-        std::lock_guard<std::mutex> guard(lock);
+        std::lock_guard<std::mutex> guard(ledger_lock());
+        auto &ledger=current_ledger();
         for(const auto &entry:ledger.live)if(!entry.second.persistent) {
             std::fprintf(stderr,"FATAL: Stage2 curve-local allocation live at session start\n");std::exit(3);
         }

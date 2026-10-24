@@ -20,6 +20,8 @@ $hashes['src/ecm/backend/cuda/ntt/parameters.h']=(Get-FileHash src/ecm/backend/c
 $hashes['src/ecm/backend/cuda/runtime/launch.h']=(Get-FileHash src/ecm/backend/cuda/runtime/launch.h).Hash
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -Xptxas -v -I include -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_tensor_goldilocks_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $watch=[Diagnostics.Stopwatch]::StartNew()
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 & cmd.exe /c $line
 $code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 35;throw 'Goldilocks Tensor Core probe build failed'}

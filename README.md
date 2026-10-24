@@ -23,6 +23,10 @@ ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、Ope
 
 性能比较与适用范围见 [Stage1 性能](docs/performance/STAGE1.md)、[Stage2 性能](docs/performance/STAGE2.md)和[历史性能记录](#historical-performance)；结论以各自注明的输入、设备、构建及计时边界为准。
 
+**推荐使用新版 [GUI v2](docs/usage/GUI_V2.md)**（`ecm_gui_v2.exe`），集中管理 Stage1/Stage2 worker、任务队列、运行状态和结果。
+
+![GUI v2 worker 管理界面](docs/image/GUIv2-workers.png)
+
 ## 目录
 
 | 章节 | 内容 |

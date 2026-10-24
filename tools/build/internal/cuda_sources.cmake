@@ -124,6 +124,8 @@ set(ECM_STAGE2_NTT_SOURCES
     src/ecm/backend/cuda/ntt/checks.cpp
     src/ecm/backend/cuda/ntt/device/transform_kernels.cu)
 set(ECM_STAGE2_ENGINE_SOURCES
+    src/ecm/backend/cuda/stage2/constants.cpp
+    src/ecm/backend/cuda/ntt/module_dispatch.cpp
     src/ecm/backend/cuda/stage2/context.cpp
     src/ecm/backend/cuda/stage2/options.cpp
     src/ecm/backend/cuda/stage2/resources.cpp
@@ -158,6 +160,13 @@ set(ECM_CUDA_SOURCE_GROUPS
     EXPERIMENT_STAGE2_BSGS EXPERIMENT_STAGE2_TREE EXPERIMENT_NTT EXPERIMENT_CUFFT EXPERIMENT_GIANT)
 set(ECM_CUDA_BUILD_INPUTS
     CMakeLists.txt
+    tools/build/internal/cuda_modules.cmake
+    tools/build/internal/generate_cuda_modules.py
+    tools/build/internal/run_compile_jobs.py
+    tools/build/internal/cuda_timing.ps1
+    tools/build/internal/cuda_timing.cmake
+    tools/build/internal/timed_nvcc.py
+    tools/build/internal/release_profiles.ps1
     tools/build/internal/cuda_sources.cmake
     tools/build/internal/cuda_build_state.ps1
     tools/build/internal/cuda_build_profile.ps1

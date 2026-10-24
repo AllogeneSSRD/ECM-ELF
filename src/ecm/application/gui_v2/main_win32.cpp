@@ -4,7 +4,7 @@
 #include "ui/widgets.h"
 #include "app.h"
 #include "pet/window.h"
-#include "generated/pet_skins.h"
+#include "pet/catalog.h"
 #include "ui/scroll.h"
 #include "ui/worker_presentation.h"
 #include <dwmapi.h>

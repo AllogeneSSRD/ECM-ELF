@@ -319,7 +319,8 @@ extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, int edward
         t.ipb = (raw[i].tpi != 0u) ? (raw[i].tpb / raw[i].tpi) : 0u;
 
         uint32_t bps = 0;
-        ecm_cuda_tier_occupancy(param0, param2, t.bits, &bps);
+        // A metadata-only all-tier listing must not JIT every device module.
+        if (want_bits != 0u) ecm_cuda_tier_occupancy(param0, param2, t.bits, &bps);
         t.blocks_per_sm = bps;
 
         t.blocks_min = sm;

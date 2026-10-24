@@ -26,6 +26,8 @@ foreach($dep in $deps){
 $exe=Join-Path $Build 'ntt_addsub_probe.exe';$log=Join-Path $Build 'build.log'
 $src=Join-Path $Build 'sources/tools/test/ntt_addsub_probe.cu'
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=3 -DNTT_OUTER_UNROLL_U=0 -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 `"$src`" -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 $watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /d /c $line;$code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 35;throw 'Add/sub probe build failed'}
 foreach($dep in $deps){

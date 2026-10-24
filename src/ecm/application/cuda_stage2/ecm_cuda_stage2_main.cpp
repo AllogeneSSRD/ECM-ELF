@@ -508,7 +508,12 @@ int driver(Options o) {
 
 } // namespace s2prod
 
+#include "ecm/platform/cuda_loading.h"
 int main(int argc, char **argv) {
+    ecm_cuda_default_module_loading();
+    for (int i=1;i<argc;++i) if (std::string(argv[i])=="--version") {
+        std::cout<<ecm_program::name<<' '<<ecm_program::version<<std::endl;return 0;
+    }
     for (int i=1;i<argc;++i) if (std::string(argv[i])=="--gui-queue-protocol") {
         std::puts("ECM_QUEUE_OWNER=1"); return 0;
     }

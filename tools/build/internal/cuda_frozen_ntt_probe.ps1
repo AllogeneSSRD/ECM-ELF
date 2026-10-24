@@ -41,6 +41,8 @@ function Invoke-EcmFrozenNttProbeBuild {
         '-I "'+$snapshot+'/include" -I "'+$gmp+'/include" "'+$src+'" -L "'+$gmp+'/lib" -lgmp -o "'+$exe+'"'
     $batch=Join-Path $Build 'compile.cmd'
     [IO.File]::WriteAllText($batch,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
+    . (Join-Path $PSScriptRoot 'cuda_timing.ps1')
+    Enable-EcmNvccBatchTiming $batch $Build
     & cmd.exe /d /c $batch 2>&1|Out-File (Join-Path $Build 'build.log') -Encoding utf8
     if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 30;throw 'Frozen NTT consumer failed'}
     Assert-EcmHashes $hashes (Get-EcmSourceHashes $SourceRoot $deps) 'Frozen source changed'

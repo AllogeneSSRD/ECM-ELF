@@ -18,6 +18,8 @@ $deps=@(Get-EcmSourceClosure $repo $deps @('include','third_party/gmp-zen3/dist/
     @('tools/build/internal/cuda_build_state.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$fixedMode -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_small_roots_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 $watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /c $line;$code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 35;throw 'Small roots probe build failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force

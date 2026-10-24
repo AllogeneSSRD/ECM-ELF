@@ -1,5 +1,7 @@
 # CUDA 模块验收
 
+当前双CUDA完整发布与JIT验证见[双CUDA发布与JIT验证](RELEASE_JIT.md)。下文数据绑定0.44.6 LOCAL程序，不能替代新发布程序的资格。
+
 本文记录0.44.6程序的位宽、构建、行为与性能覆盖。算法、配置默认值、存档协议和输出语义保持；主程序源码仅增加修订号。生产模块职责见[架构总览](../architecture/OVERVIEW.md)、[Stage1](../architecture/STAGE1.md)、[Stage2](../architecture/STAGE2.md)与[NTT](../architecture/NTT.md)。
 
 验收范围为本机LOCAL编译、完整位宽功能与性能。完整位宽与行为门禁通过，9个代表样例的配对性能检查通过。多架构发布按用户要求暂缓，部分构建证据保留，不构成完整发布矩阵或其他实体GPU的验收结论。

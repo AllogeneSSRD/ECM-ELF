@@ -12,6 +12,8 @@ $deps=@(Get-EcmSourceClosure $repo $deps @('include','third_party/gmp-zen3/dist/
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash $dep).Hash}
 $exe=Join-Path $Build 'ntt_carry_fused_probe.exe';$log=Join-Path $Build 'build.log'
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=3 -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 tools/test/ntt_carry_fused_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 $watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /c $line;$code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 30;throw 'Fused carry probe build failed'}
 foreach($dep in $deps){if((Get-FileHash $dep).Hash -ne $hashes[$dep]){throw "Source changed: $dep"}}

@@ -8,6 +8,33 @@ void cgbn_stage1_launch(cgbn_stage1_kernel_fn kernel,dim3 grid,dim3 block,
     uint32_t *scalar,uint32_t *data,uint32_t curves,uint32_t sigma,uint32_t np0) {
     kernel<<<grid,block>>>(report,scalar_bits,start,count,scalar,data,curves,sigma,np0);
 }
+#ifdef ECM_CUDA_ISOLATE_TIERS
+#define ECM_CUDA_MONT_ONLY
+#ifdef IS_DEV_BUILD
+#define ECM_CUDA_MONT_DEV_ONLY
+#endif
+#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) \
+cgbn_stage1_kernel_fn ecm_mont_param0_w##W(uint32_t,uint32_t*); \
+cgbn_stage1_kernel_fn ecm_mont_param2_w##W(uint32_t,uint32_t*); \
+cgbn_stage1_kernel_fn ecm_mont_param3_w##W(uint32_t,uint32_t*);
+#include "../../dispatch/tiers.def"
+#undef ECM_CUDA_TIER
+#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) \
+if (BITS == W) { \
+    if (param == 0) return ecm_mont_param0_w##W(BITS,TPI_out); \
+    if (param == 2) return ecm_mont_param2_w##W(BITS,TPI_out); \
+    return ecm_mont_param3_w##W(BITS,TPI_out); }
+static cgbn_stage1_kernel_fn isolated_dispatch(int param,uint32_t BITS,uint32_t *TPI_out) {
+#include "../../dispatch/tiers.def"
+    return nullptr;
+}
+#undef ECM_CUDA_TIER
+#undef ECM_CUDA_MONT_DEV_ONLY
+#undef ECM_CUDA_MONT_ONLY
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t b,uint32_t *t) {return isolated_dispatch(3,b,t);}
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t b,uint32_t *t) {return isolated_dispatch(0,b,t);}
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t b,uint32_t *t) {return isolated_dispatch(2,b,t);}
+#else
 cgbn_stage1_kernel_fn ecm_mont_param3_g0(uint32_t,uint32_t*);
 cgbn_stage1_kernel_fn ecm_mont_param3_g1(uint32_t,uint32_t*);
 cgbn_stage1_kernel_fn ecm_mont_param3_g2(uint32_t,uint32_t*);
@@ -87,6 +114,8 @@ cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi32(uint32_t bits,uint32_t *tp
     return nullptr;
 }
 
+#endif
+
 void ecm_build_tier_list_default(std::vector<uint32_t> &out) {
   out.clear();
 #define ECM_CUDA_ALL_TIERS
@@ -117,6 +146,7 @@ void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
 
 
 
+#ifndef ECM_CUDA_ISOLATE_TIERS
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t BITS, uint32_t *TPI_out) {
     cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_tpi4(BITS, TPI_out);
     if (k != nullptr) return k;
@@ -150,6 +180,8 @@ cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t BITS, uint32_t
     return cgbn_stage1_kernel_param2_tpi32(BITS, TPI_out);
 }
 
+#endif
+
 /* ── D4: kernel-tier query (ecm_cuda.exe --gpu-info) ─────────────────────────────
    Reports the tiers this build carries plus the TPB/TPI each one launches with, using the
    SAME tier lists and the SAME per-TPI dispatch as the run path. That is what makes the
@@ -165,26 +197,34 @@ int ecm_cuda_tier_list(int param0, int param2, uint32_t want_bits,
     if (carry_bits != nullptr) *carry_bits = (uint32_t)CARRY_BITS;
     if (out == nullptr || max_out <= 0) return -1;
 
-    std::vector<uint32_t> tiers;
-    if (param0) {
-        ecm_build_tier_list_param0(tiers);
-    } else {
-        ecm_build_tier_list_default(tiers);
-    }
+    (void)param0;
+#if ECM_NO_PARAM2
+    if (param2) return -1;
+#else
+    (void)param2;
+#endif
+    struct Tier {uint32_t bits,tpi;};
+#define ECM_CUDA_MONT_ONLY
+#ifdef IS_DEV_BUILD
+#define ECM_CUDA_MONT_DEV_ONLY
+#endif
+    static const Tier tiers[]={
+#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) {W,T},
+#include "../../dispatch/tiers.def"
+#undef ECM_CUDA_TIER
+        {0,0}};
+#undef ECM_CUDA_MONT_DEV_ONLY
+#undef ECM_CUDA_MONT_ONLY
 
     int written = 0;
-    for (std::size_t i = 0; i < tiers.size(); ++i) {
-        const uint32_t bits = tiers[i];
+    for (const Tier &tier : tiers) {
+        const uint32_t bits = tier.bits;
+        if (!bits) continue;
         if (want_bits != 0u && bits < want_bits + (uint32_t)CARRY_BITS) continue;
-        uint32_t tpi_u32 = 0;
-        cgbn_stage1_kernel_fn k = param0 ? cgbn_stage1_kernel_suyama_dispatch(bits, &tpi_u32)
-                                 : param2 ? cgbn_stage1_kernel_param2_dispatch(bits, &tpi_u32)
-                                          : cgbn_stage1_kernel_dispatch(bits, &tpi_u32);
-        if (k == nullptr) continue;          /* tier not instantiated in this build */
         if (written < max_out) {
             out[written].bits = bits;
             out[written].tpb = (uint32_t)TPB_DEFAULT;
-            out[written].tpi = tpi_u32;
+            out[written].tpi = tier.tpi;
         }
         ++written;
         if (want_bits != 0u) break;          /* the kernel would stop at the first fit */

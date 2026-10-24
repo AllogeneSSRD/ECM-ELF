@@ -18,6 +18,8 @@ $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -Literal
 $glMode=@{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 tools/test/ntt_coop_outer_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $watch=[Diagnostics.Stopwatch]::StartNew()
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 & cmd.exe /c $line
 $code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 30;throw 'NTT cooperative probe build failed'}

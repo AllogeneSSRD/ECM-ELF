@@ -84,6 +84,7 @@ if ($HostOnly -and ($Rebuild -or -not $SkipUpToDate -or $Only -or $SourceRegex -
 }
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 . (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
+. (Join-Path $PSScriptRoot 'cuda_timing.ps1')
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
@@ -154,7 +155,7 @@ foreach ($e in $entries) {
         Bat = Join-Path $logDir "$name.bat"
         Out = Join-Path $logDir "$name.log"
         Err = Join-Path $logDir "$name.err.log"
-        Proc = $null; Start = $null; Seconds = 0.0
+        Proc = $null; Start = $null; Seconds = 0.0; Timing = $null
     }
 }
 
@@ -176,6 +177,8 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
         $compileCommand = $j.Entry.command
         if ($j.Entry.file -match '\.cu$' -or $j.Entry.command -match '(?i)(?:^|[\\/" ])nvcc(?:\.exe)?(?:"|\s)') {
             $compileCommand += " --generate-dependencies-with-compile --dependency-output `"$($j.Obj).ecm.d`""
+            $j.Timing = New-EcmNvccTiming $BuildDir $j.Entry.file $compileCommand
+            $compileCommand = $j.Timing.ActualCommand
         }
         $bat = "@echo off`r`n$vcSetup`r`nif errorlevel 1 exit /b 1`r`ncd /d `"$($j.Entry.directory)`"`r`n$compileCommand`r`n"
         [System.IO.File]::WriteAllText($j.Bat, $bat, [System.Text.UTF8Encoding]::new($false))
@@ -197,6 +200,10 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
             try { $j.Proc.WaitForExit(); $code = $j.Proc.ExitCode } catch { $code = $null }
             $objFresh = ($j.Obj -and (Test-Path $j.Obj) -and ((Get-Item $j.Obj).LastWriteTime -ge $j.Start))
             if ($null -eq $code) { $code = if ($objFresh) { 0 } else { 1 } }
+            if ($j.Timing) {
+                try { Complete-EcmNvccTiming $j.Timing $code }
+                catch { Write-Host $_.Exception.Message; $code = 125 }
+            }
             $objMissing = ($j.Obj -and -not $objFresh)
             if ($code -ne 0 -or $objMissing) {
                 $failed += $j

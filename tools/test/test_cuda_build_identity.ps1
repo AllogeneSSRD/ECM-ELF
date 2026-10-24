@@ -166,8 +166,9 @@ Check (@($inventory.groups.STAGE2_NTT).Count -eq 5 -and
     @($inventory.groups.STAGE2_ARITHMETIC).Count -eq 1 -and
     $inventory.groups.STAGE2_ARITHMETIC[0] -eq 'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu') 'Stage2 arithmetic and NTT module membership'
 $expectedProduction=@($inventory.groups.STAGE2_ENGINE)+@($inventory.groups.STAGE2_ARITHMETIC)+@($inventory.groups.STAGE2_NTT)
-$engine=@('context','options','resources','plan','engine','batch','points','product','tree','remainder','s4','factors','checks','diagnostics','tune') | ForEach-Object { 'src/ecm/backend/cuda/stage2/'+$_+'.cpp' }
-Check (@($inventory.groups.STAGE2_ENGINE).Count -eq 15 -and
+$engine=@('constants','context','options','resources','plan','engine','batch','points','product','tree','remainder','s4','factors','checks','diagnostics','tune') | ForEach-Object { 'src/ecm/backend/cuda/stage2/'+$_+'.cpp' }
+$engine += 'src/ecm/backend/cuda/ntt/module_dispatch.cpp'
+Check (@($inventory.groups.STAGE2_ENGINE).Count -eq 17 -and
     @(Compare-Object ($inventory.groups.STAGE2_ENGINE|Sort-Object) ($engine|Sort-Object)).Count -eq 0) 'Stage2 host module membership'
 $expectedProduction=@($expectedProduction|Where-Object {$_})
 $production=@($inventory.groups.STAGE2_PRODUCTION)

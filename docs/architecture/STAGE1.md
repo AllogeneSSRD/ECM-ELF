@@ -112,6 +112,8 @@ CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/backend/cuda/`
 
 设备算术与薄发射器位于各曲线目录，独立实例放在对应 `instances/`。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。设备实例闭包不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `src/ecm/backend/cuda/arithmetic/cgbn/types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
 
+发布构建启用 `ECM_CUDA_ISOLATE_TIERS`，由 `tools/build/internal/cuda_modules.cmake` 从同一 `tiers.def` 派生32个Edwards容器模块及31×3个Montgomery参数化/容器模块；local/dev保留上述分组。全档枚举读取纯元数据，任务选定宽度后才调用对应工厂并查询occupancy，避免信息展示触及所有设备函数。Edwards binary/NAF共享该容器模块；sigma仍是运行时参数，不生成sigma专用实例。旧NVCC不支持每核 `__maxnreg__` 时，Montgomery隔离单元按当前位宽政策设置56/128/255的编译器寄存器预算。实际按需JIT范围及驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
+
 依赖方向为：任务/旧执行适配 → CUDA 私有 API → CUDA 主机实现 → 私有发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码、主机计划与运行时统一位于 `src/ecm/backend/cuda/stage1/montgomery/prac/`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `src/ecm/backend/cuda/stage1/edwards/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
 
 Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由相邻点及固定差点组成。GPU 以切片推进，避免一个超长 kernel 占用整段 B1。每曲线的末点先解码、检查，求 Z 与 N 的 GCD；可逆时归一化 X=X/Z mod N，再输出 save。

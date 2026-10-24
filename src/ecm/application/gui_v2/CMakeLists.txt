@@ -34,6 +34,10 @@ target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK 
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
 add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/dx11_window.cpp render/vulkan_context.cpp render/vulkan_window.cpp
     ui/theme.cpp ui/fonts.cpp ui/widgets.cpp ui/i18n.cpp app.cpp views/pages.cpp views/settings_window.cpp views/gpu_clock_control.cpp views/group_order.cpp group_order_job.cpp ui_state.cpp pet/window.cpp gpu_details.cpp gpu_clocks.cpp)
+option(ECM_GUI_V2_BASE_PET_ONLY "Only expose the distributed Classic ELY pet" OFF)
+if(ECM_GUI_V2_BASE_PET_ONLY)
+    target_compile_definitions(ecm_gui_v2 PRIVATE ECM_GUI_V2_BASE_PET_ONLY)
+endif()
 include("${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")
 add_custom_target(ecm_gui_v2_config_check
     COMMAND ${CMAKE_COMMAND} "-DECM_GUI_V2_ROOT=${ECM_GUI_V2_ROOT}" -P "${ECM_GUI_V2_ROOT}/tools/build/internal/check_gui_v2_config.cmake")

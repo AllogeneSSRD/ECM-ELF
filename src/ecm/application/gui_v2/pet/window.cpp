@@ -1,5 +1,5 @@
 #include "window.h"
-#include "../generated/pet_skins.h"
+#include "catalog.h"
 #include "../../gui/platform.h"
 #include <algorithm>
 #include <cmath>

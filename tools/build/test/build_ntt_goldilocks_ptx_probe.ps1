@@ -11,6 +11,8 @@ $deps=@('tools/test/ntt_goldilocks_ptx_probe.cu','tools/experiments/cuda/ntt_var
     'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/build/test/build_ntt_goldilocks_ptx_probe.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep).Hash}
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_goldilocks_ptx_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 $watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /c $line;$code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 30;throw 'Goldilocks PTX build failed'}
 foreach($dep in $deps){if((Get-FileHash -LiteralPath $dep).Hash -ne $hashes[$dep]){throw "Source changed during build: $dep"}}

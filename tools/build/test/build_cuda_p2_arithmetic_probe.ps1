@@ -27,6 +27,8 @@ $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 -arch='+$man
     ' tools/test/cuda_stage2_arithmetic_probe.cpp "'+$object+'" -L "'+$gmp+'/lib" -lgmp -o "'+$exe+'"'
 $batch=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+Enable-EcmNvccBatchTiming $batch $Build
 & cmd.exe /d /c $batch 2>&1|Out-File (Join-Path $Build 'build.log') -Encoding utf8
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 25;throw 'P2 arithmetic probe build failed'}
 if((Get-FileHash $object).Hash -ne $hash){throw 'Production arithmetic object changed'}

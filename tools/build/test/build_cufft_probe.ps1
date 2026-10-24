@@ -30,6 +30,8 @@ $link='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -Xcompiler /MD "'+$obj+'" '+
 $body="@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$compile`r`nif errorlevel 1 exit /b 1`r`n$link`r`nexit /b %errorlevel%`r`n"
 $batch=Join-Path $Build 'build.cmd';$log=Join-Path $Build 'build.log'
 [IO.File]::WriteAllText($batch,$body,[Text.UTF8Encoding]::new($false))
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+Enable-EcmNvccBatchTiming $batch $Build
 & cmd.exe /d /c $batch 2>&1|Out-File $log -Encoding utf8
 if($LASTEXITCODE -ne 0){Get-Content $log -Tail 25;throw 'Experimental cuFFT probe build failed'}
 Assert-EcmHashes $hashes (Get-EcmSourceHashes $repo $deps) 'cuFFT source changed during build'

@@ -24,6 +24,7 @@ param(
     [string]$OpenSslRoot = "",
     [string]$VcVars = "",
     [string]$CudaRoot = ""
+    ,[string]$ResultFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,8 +36,8 @@ $VcVars = $vc.VcVars
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale' }
 $archList = @($Archs.Split(','))
-if (@($archList | Select-Object -Unique).Count -ne $archList.Count -or ($PtxArch -and $PtxArch -notin $archList)) {
-    throw 'Architectures must be unique and include PtxArch'
+if (@($archList | Select-Object -Unique).Count -ne $archList.Count) {
+    throw 'Architectures must be unique'
 }
 if (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $repo $OutDir }
 . (Join-Path $PSScriptRoot 'gmp_dependency.ps1')
@@ -58,10 +59,12 @@ foreach ($name in @('include/gmp.h','lib/gmp.lib','bin/gmp-10.dll')) {
     $configureOptions = @(
         '-G', '"NMake Makefiles"',
         "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_TRY_COMPILE_CONFIGURATION=Release",
         "-DCMAKE_CUDA_COMPILER=`"$($cuda.Nvcc.Replace('\','/'))`"",
         "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
         "-DCMAKE_CXX_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
         "-DECM_ENABLE_CUDA=ON",
+        "-DECM_CUDA_ISOLATE_TIERS=ON",
         "-DECM_CUDA_FULL_BUILD=ON",
         "-DECM_CUDA_ENABLE_PRAC=$(if ($EnablePrac) { 'ON' } else { 'OFF' })",
         "-DECM_CUDA_ARCHITECTURES=`"$($Archs -replace ',', ';')`"",
@@ -146,6 +149,11 @@ if (-not $SkipBuild) {
     foreach ($name in $dependencyHashes.Keys) {
         if ($manifest.dependency_hashes.$name -ne $dependencyHashes[$name]) { throw "Stage1 dependency changed: $name" }
     }
+}
+
+if ($ResultFile) {
+    [ordered]@{ stage = 'stage1'; build = $BuildDir; manifest = $manifestPath; exe = (Join-Path $BuildDir 'ecm_cuda.exe') } |
+        ConvertTo-Json | Set-Content -LiteralPath $ResultFile -Encoding UTF8
 }
 
 if (-not $SkipSplit) {

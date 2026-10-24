@@ -374,7 +374,11 @@ static int print_gpu_info(const char *ini_used, int worker, int device_index,
     return 0;
 }
 
+#include "ecm/platform/cuda_loading.h"
 int main(int argc, char **argv){
+#ifdef ECM_HAS_CUDA_STAGE1
+    ecm_cuda_default_module_loading();
+#endif
     for (int i=1;i<argc;++i) if (std::string(argv[i])=="--gui-queue-protocol") {
         std::puts("ECM_QUEUE_OWNER=1"); return 0;
     }

@@ -46,6 +46,8 @@ function Invoke-EcmExperimentBuild {
     $watch=[Diagnostics.Stopwatch]::StartNew()
     if(-not $reused) {
         [IO.File]::WriteAllText($batch,$body,[Text.UTF8Encoding]::new($false))
+        . (Join-Path $PSScriptRoot 'cuda_timing.ps1')
+        Enable-EcmNvccBatchTiming $batch $Build
         & cmd.exe /d /c $batch 2>&1|Out-File $log -Encoding utf8
         if($LASTEXITCODE -ne 0){Get-Content $log -Tail 35;throw "Experimental target failed: $Name"}
     }

@@ -18,13 +18,15 @@
 
 `S4ResidentOwner` 持有独立分配，`S4DeviceBatch` 显式携带 owner、范围和元数据，fold/frontier 只借用合同允许的存储。pinned 输入/输出槽及快照事件仍使用原有等待和释放顺序；资源拆分不增加同步。每个成功结果及 relocation 决策前排空检查，reducer 析构时先排空依赖 shape/N 的快照，再释放 shape、设备/主机缓冲和事件。
 
-`src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu` 是点与系数算术的设备编译单元。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放。设备常量及其上传接口归同一编译单元所有；不使用 RDC。
+`src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu` 维护点与系数算术的显式实例清单。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放；不使用 RDC。
 
-位宽清单仍由 `src/ecm/backend/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。实例化组合保持当前启动路径，不按 NW 再拆分编译单元。
+位宽清单仍由 `src/ecm/backend/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev 保留算术与NTT聚合编译单元；release由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。
+
+隔离发布的每个算术模块持有自己的设备常量。`constants.cpp` 保存按设备区分的主机快照及修订号，更新快照不访问全部设备模块；被调用的薄启动器在修订号/设备变化时才向所属模块上传。NTT的 `module_dispatch.cpp` 只返回选定tile句柄；固定mode3无需广播归约模式。实际按需JIT资格须观察驱动加载模块，构建策略与旧驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
 
 NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/backend/cuda/ntt/`，设备变换和 carry 位于 `src/ecm/backend/cuda/ntt/device/`，域原语位于 `src/ecm/backend/cuda/arithmetic/goldilocks/`。主机持有缓冲、事件、错误检查和计时，设备模块提供薄启动接口；依赖方向为 ECM 编排 → NTT/算术接口 → 设备原语。NTT 不依赖 ECM 树、fold 或 GCD，详见 [NTT 代码入口](NTT.md#代码入口与依据)。
 
-生产源由 `STAGE2_PRODUCTION` 清单选择，其中 `STAGE2_ENGINE` 显式列出15个主机模块。生产闭包拒绝 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`；编译器发现的间接依赖也受同一检查。
+生产源由 `STAGE2_PRODUCTION` 清单选择，其中 `STAGE2_ENGINE` 显式列出17个主机模块。生产闭包拒绝 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`；编译器发现的间接依赖也受同一检查。
 
 实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h`，JSON 转义及纯设备原语仍可共享。
 

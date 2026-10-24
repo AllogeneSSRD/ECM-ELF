@@ -20,7 +20,9 @@ $cpuCommand="cl /nologo /O2 /std:c++17 /EHsc /utf-8 /I third_party/gmp-zen3/dist
 $linkCommand="nvcc -arch=$Arch `"$gpuObj`" `"$cpuObj`" -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`""
 '' | Set-Content -LiteralPath $log
 foreach($command in @($gpuCommand,$cpuCommand,$linkCommand)){
-    & cmd.exe /d /c ($prefix+$command) 2>&1 | Add-Content -LiteralPath $log
+    . (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+    $timedCommand=ConvertTo-EcmTimedNvccCommand ($prefix+$command) $Build
+    & cmd.exe /d /c $timedCommand 2>&1 | Add-Content -LiteralPath $log
     if($LASTEXITCODE -ne 0){Get-Content $log -Tail 40;throw 'Edwards GPU point probe build failed'}
 }
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force

@@ -81,7 +81,25 @@ __device__ __forceinline__ void s2g_submod(unsigned long long *r, const unsigned
     }
 }
 
+#ifdef ECM_CUDA_ISOLATED_DEVICE
+#include <stdexcept>
+static __device__ __constant__ S2GDeviceConstants g_s2g_device_constants={};
+// Bind only the module selected by the caller. Updating host constants must not
+// touch every capacity/module and trigger unrelated PTX compilation.
+static void ecm_stage2_bind_module_constants() {
+    static thread_local unsigned long long bound_revision=0;
+    static thread_local int bound_device=-1;
+    S2GDeviceConstants value{};unsigned long long revision=0;int device=-1;
+    auto error=ecm_stage2_constant_snapshot(&value,&revision,&device);
+    if(error==cudaSuccess && (device!=bound_device || revision!=bound_revision)) {
+        error=cudaMemcpyToSymbol(g_s2g_device_constants,&value,sizeof(value));
+        if(error==cudaSuccess){bound_device=device;bound_revision=revision;}
+    }
+    if(error!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(error));
+}
+#else
 __device__ __constant__ S2GDeviceConstants g_s2g_device_constants={};
+#endif
 #include "point_mersenne.cuh"
 
 template <int NW>

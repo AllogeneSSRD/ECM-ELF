@@ -6,7 +6,7 @@
 #include "../ui/navigation.h"
 #include "../ui/i18n.h"
 #include "../ui/presentation.h"
-#include "../generated/pet_skins.h"
+#include "../pet/catalog.h"
 #include <algorithm>
 #include <fstream>
 #include <sstream>

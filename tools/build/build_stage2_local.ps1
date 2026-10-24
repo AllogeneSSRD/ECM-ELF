@@ -15,14 +15,17 @@ param(
     [ValidateSet('local','dev','release')][string]$BuildRole = 'local',
     [ValidateSet('production','development')][string]$Engine = 'production',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
+    [ValidatePattern('^$|^[0-9]+$')][string]$PtxArch = '',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
     [ValidateSet(0,1,2,3)][int]$AddSubMask = 0,
     [ValidateRange(1,64)][int]$SplitCompile = 8,
+    [ValidateRange(1,64)][int]$Jobs = 8,
     [string]$Gmp = '',
     [string]$CudaRoot = '',
     [string]$VcVars = '',
     [switch]$HostOnly,
+    [string]$ResultFile = '',
     [switch]$Rebuild
 )
 $ErrorActionPreference = 'Stop'
@@ -38,7 +41,7 @@ $Gmp = $gmpDependency.Root
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 . (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
-$buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency
+$buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency $PtxArch
 $Build = Resolve-EcmBuildDirectory $repo $buildProfile $Build $BuildRoot
 Assert-EcmBuildProfile $Build $buildProfile
 Write-Host '== Stage2 build =='
@@ -54,9 +57,16 @@ Write-Host "   MSVC      : $($vc.Version)"
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'internal/check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 . (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
+. (Join-Path $PSScriptRoot 'internal/cuda_timing.ps1')
 $inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
+$moduleDirectory = ''
+if ($BuildRole -eq 'release') {
+    $moduleDirectory = Join-Path $Build 'cuda_modules/stage2'
+    & python (Join-Path $PSScriptRoot 'internal/generate_cuda_modules.py') --out $moduleDirectory
+    if ($LASTEXITCODE) { throw 'CUDA module generation failed' }
+}
 $includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/ecm/backend/cuda')
-$sourceSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs
+$sourceSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs $moduleDirectory
 $sources = @($sourceSet.Sources)
 $cudaSources = @($sourceSet.CudaSources)
 $deps = @($sourceSet.Dependencies)
@@ -86,7 +96,8 @@ foreach ($src in $sources) {
     $command = if ($src -in $cudaSources) {
         $buildProfile.CompilePrefix + " -c `"$src`" -o `"$obj`""
     } else {
-        $buildProfile.HostCompilePrefix + " /c `"$src`" /Fo`"$obj`" /sourceDependencies `"$obj.ecm-msvc.json`""
+        $dependencyFlag = if ([version]$vc.Version -lt [version]'14.28') { '/showIncludes' } else { "/sourceDependencies `"$obj.ecm-msvc.json`"" }
+        $buildProfile.HostCompilePrefix + " /c `"$src`" /Fo`"$obj`" $dependencyFlag"
     }
     $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
     $compileEntries[$src] = $entry
@@ -131,6 +142,8 @@ $linkInputs = if ($previous) { $previous.link_inputs } else { $null }
 if (-not $fresh) {
     $objects = @()
     $compiled = 0
+    $pendingJobs = @()
+    $pendingTimings = @{}
     $compileSeconds = 0.0
     Write-Host "== compile $($sources.Count) translation units =="
     foreach ($src in $sources) {
@@ -154,8 +167,11 @@ if (-not $fresh) {
         Write-Host ("  start [{0}/{1}] {2}" -f $compiled, ($sources.Count - $(if ($HostOnly) { $cudaSources.Count } else { 0 })), $src)
         Write-Host ("       reason: {0}" -f $reason)
         $compileCommand = $compileEntries[$src].command
+        $phaseTiming = $null
         if ($src -in $cudaSources) {
             $compileCommand += " --generate-dependencies-with-compile --dependency-output `"$obj.ecm.d`""
+            $phaseTiming = New-EcmNvccTiming $Build $src $compileCommand
+            $compileCommand = $phaseTiming.ActualCommand
         }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         # Keep setup and compilation on separate lines. Capture via a pipe:
@@ -163,20 +179,33 @@ if (-not $fresh) {
         # restricted Windows execution environments, even on an empty source.
         $commandFile = Join-Path $objDir "$stem.compile.cmd"
         [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$compileCommand`r`n", [Text.UTF8Encoding]::new($false))
-        & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $log -Encoding utf8
-        $code = $LASTEXITCODE
-        $sw.Stop()
-        $compileSeconds += $sw.Elapsed.TotalSeconds
-        if ($code -ne 0) {
-            Write-Host ("  FAIL {0} ({1:N1}s, exit {2})" -f $stem, $sw.Elapsed.TotalSeconds, $code) -ForegroundColor Red
-            Write-Host "       log: $log"
-            Get-Content $log -Tail 40
-            throw "compile failed: $src"
+        $pendingJobs += [ordered]@{ source=$src; command_file=$commandFile; log=$log
+            msvc_includes=$(if ($compileCommand -match '/showIncludes') { "$obj.ecm-msvc.json" } else { $null }) }
+        if ($phaseTiming) { $pendingTimings[$src] = $phaseTiming }
+    }
+    if ($pendingJobs.Count) {
+        $jobPlan = Join-Path $objDir 'compile-jobs.json'
+        $jobResult = Join-Path $objDir 'compile-results.json'
+        ConvertTo-Json -InputObject @($pendingJobs) -Depth 4 | Set-Content -LiteralPath $jobPlan -Encoding UTF8
+        & python (Join-Path $PSScriptRoot 'internal/run_compile_jobs.py') --plan $jobPlan --out $jobResult --jobs $Jobs
+        $compileExit = $LASTEXITCODE
+        if (-not (Test-Path -LiteralPath $jobResult)) { throw 'Compiler executor did not finish; inspect unit logs' }
+        $results = Get-Content -LiteralPath $jobResult -Raw | ConvertFrom-Json
+        $compileSeconds = $results.wall_seconds
+        foreach ($unitResult in $results.units) {
+            $src = $unitResult.source
+            if ($pendingTimings.ContainsKey($src)) {
+                $pendingTimings[$src].Started = [DateTime]::Parse($unitResult.started_utc)
+                Complete-EcmNvccTiming $pendingTimings[$src] $unitResult.exit_code $unitResult.elapsed_seconds
+            }
+            if ($unitResult.exit_code) { Get-Content -LiteralPath $unitResult.log -Tail 25 }
+            else {
+                $after = Get-EcmCompileState $repo $compileEntries[$src] $vc.Setup $includeDirs -Production:($Engine -eq 'production')
+                Assert-EcmCompileInputs $beforeStates[$src] $after
+                Save-EcmCompileState $after
+            }
         }
-        $after = Get-EcmCompileState $repo $compileEntries[$src] $vc.Setup $includeDirs -Production:($Engine -eq 'production')
-        Assert-EcmCompileInputs $beforeStates[$src] $after
-        Save-EcmCompileState $after
-        Write-Host ("  ok   {0,-26} ({1:N1}s)" -f $stem, $sw.Elapsed.TotalSeconds)
+        if ($compileExit) { throw 'Stage2 compilation failed; inspect compile-results.json and unit logs' }
     }
     Write-Host ("compiled {0} TU(s): wall {1:N1}s (nvcc split compile={2})" -f $compiled, $compileSeconds, $SplitCompile)
     $objArgs = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
@@ -197,8 +226,11 @@ if (-not $fresh) {
         $linkTimer = [Diagnostics.Stopwatch]::StartNew()
         $commandFile = Join-Path $objDir 'link.cmd'
         $linkCommand = $line.Substring(($vc.Setup + ' && ').Length)
+        $linkTiming = New-EcmNvccTiming $Build 'stage2-link' $linkCommand
+        $linkCommand = $linkTiming.ActualCommand
         [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$linkCommand`r`n", [Text.UTF8Encoding]::new($false))
         & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $linkLog -Encoding utf8
+        Complete-EcmNvccTiming $linkTiming $LASTEXITCODE
         if ($LASTEXITCODE -ne 0) { Get-Content $linkLog -Tail 40; throw 'link failed' }
         $linkTimer.Stop()
         Write-Host ("  ok   link ({0:N1}s)" -f $linkTimer.Elapsed.TotalSeconds)
@@ -208,7 +240,7 @@ if (-not $fresh) {
             throw "Source changed during build: $dep"
         }
     }
-    $currentSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs
+    $currentSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs $moduleDirectory
     Assert-EcmHashes $sourceHashes (Get-EcmSourceHashes $repo $currentSet.Dependencies) 'Source changed during build'
     if ($HostOnly) {
         foreach ($src in $cudaSources) {
@@ -259,6 +291,8 @@ $manifest = [ordered]@{
     exe = (Resolve-Path $exe).Path
     sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash
     architecture = $Arch
+    ptx_architecture = $PtxArch
+    module_directory = $moduleDirectory
     engine = $Engine
     gl_backend = $GlBackend
     gl_fixed_mode = $glMode
@@ -286,4 +320,8 @@ Write-Host "   executable : $exe"
 Write-Host "   logs       : $objDir"
 Write-Host ("   elapsed    : {0:N1}s" -f $buildTimer.Elapsed.TotalSeconds)
 Write-Host 'done'
+if ($ResultFile) {
+    [ordered]@{ stage = 'stage2'; build = $Build; manifest = $manifestPath; exe = $exe } |
+        ConvertTo-Json | Set-Content -LiteralPath $ResultFile -Encoding UTF8
+}
 exit 0

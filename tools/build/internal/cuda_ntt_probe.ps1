@@ -58,6 +58,8 @@ function Invoke-EcmNttProbeBuild {
     $compile+=('"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" '+($objects -join ' ')+' -L "'+$Gmp+'/lib" -lgmp -o "'+$exe+'"')
     $batch=Join-Path $Build 'compile.cmd';$log=Join-Path $Build 'build.log'
     [IO.File]::WriteAllText($batch,("@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n"+($compile -join "`r`n")+"`r`n"),[Text.UTF8Encoding]::new($false))
+    . (Join-Path $PSScriptRoot 'cuda_timing.ps1')
+    Enable-EcmNvccBatchTiming $batch $Build
     & cmd.exe /d /c $batch 2>&1 | Out-File $log -Encoding utf8
     if($LASTEXITCODE -ne 0){Get-Content $log -Tail 40;throw "NTT consumer build failed: $Source"}
     $compiledObjects=[ordered]@{}

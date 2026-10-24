@@ -25,6 +25,8 @@ $sourceHashes=[ordered]@{}
 foreach($dep in $deps){$sourceHashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 tools/test/stage2_d_model_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $timer=[Diagnostics.Stopwatch]::StartNew()
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+$line=ConvertTo-EcmTimedNvccCommand $line $Build
 & cmd.exe /c $line
 if($LASTEXITCODE -ne 0){Get-Content $log -Tail 30;throw 'D model probe build failed'}
 $timer.Stop()

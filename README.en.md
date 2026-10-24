@@ -23,6 +23,10 @@ ECM-ELF provides a standalone, multi-backend ECM workflow: CUDA/CGBN, OpenCL or 
 
 For performance comparisons and applicable ranges, see [Stage1 performance](docs/performance/STAGE1.md), [Stage2 performance](docs/performance/STAGE2.md) and the [historical performance record](#historical-performance). Each result is bounded by its stated input, device, build and timing scope.
 
+**Recommended: [GUI v2](docs/usage/GUI_V2.md)** (`ecm_gui_v2.exe`) for managing Stage1/Stage2 workers, task queues, progress, and results.
+
+![GUI v2 worker management](docs/image/GUIv2-workers.png)
+
 ## Contents
 
 | Section | Scope |

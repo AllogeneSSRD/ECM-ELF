@@ -4,6 +4,8 @@ GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.52.0
 
 ## 构建与启动
 
+完整 CUDA 发布由 `tools/build/build_release.ps1/.bat` 构建，使用独立 `gui-v2-release` 目录、统一 vcpkg 通用 GMP，并只启用基础 Classic ELY 注册项和资源。两个 CUDA 包各自包含完整 GUI v2、群阶/诊断助手和相邻计算 worker。发布不会直接拾取已有 local GUI 候选；入口核对 GMP头/库/DLL、源码和程序身份。下面的独立 local/GUI-only 入口保留完整皮肤候选及其本地依赖条件，完整发布的目录、工具链和载荷以[构建与发布](BUILD.md)为准。
+
 运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、群阶分析助手 `ecm_group_order_ui.exe`、`gmp-10.dll`、本地 `libpari.dll` 及 `pari-data/`。准备本地PARI依赖时，运行 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3安装目录> --archive <原始源码tar.gz>`，脚本验证固定源码摘要、复制Win64库/已配置头文件/SEA数据并记录身份；默认位置 `third_party/pari-2.17.3` 由Git忽略。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。独立 helper 默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
 
 运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。

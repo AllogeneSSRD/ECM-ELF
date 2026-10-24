@@ -4,6 +4,8 @@ param(
     [string]$VcVars = '',
     [string]$VulkanRoot = '',
     [string]$BackendRoot = '',
+    [string]$GmpRoot = '',
+    [switch]$BasePetOnly,
     [switch]$TestHelpers,
     [switch]$WithoutLocalPari
 )
@@ -11,10 +13,24 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 if (-not [IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
+if ($GmpRoot) { $GmpRoot = [IO.Path]::GetFullPath($GmpRoot) }
+$gmpIdentity = $null
+if ($GmpRoot) {
+    . (Join-Path $PSScriptRoot '../internal/gmp_dependency.ps1')
+    $gmpIdentity = Resolve-EcmGmp $repo $GmpRoot -Release
+}
 if ($WithoutLocalPari -and (Test-Path -LiteralPath (Join-Path $BuildDir 'libpari.dll'))) { throw 'WithoutLocalPari requires a fresh build directory without a retained PARI runtime' }
 $catalog = @('src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/application/configuration',
-    'src/ecm/platform/generated','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/service/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gmp-zen3/dist','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/build/test/build_diagnostics.ps1')
+    'src/ecm/platform/generated','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/service/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1')
+if (-not $GmpRoot) { $catalog += 'third_party/gmp-zen3/dist' }
+$catalog += @('tools/build/test/build_gui_v2.ps1','tools/build/internal/check_gui_v2_config.cmake',
+    'config/gui_v2_localization.generated.json','config/gui_v2_state.generated.json')
 $inputs = @($catalog | ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $repo $_) -File -Recurse })
+if($BasePetOnly) {
+    $assetRoot=(Join-Path $repo 'assets/gui_v2').TrimEnd('\')+'\'
+    $inputs=@($inputs|Where-Object { -not $_.FullName.StartsWith($assetRoot,[StringComparison]::OrdinalIgnoreCase) -or
+        ($_.DirectoryName -eq $assetRoot.TrimEnd('\') -and $_.Name -in @('pet_ely.png','pet_ely.json','CLASSIC-ELY-NOTICE.md','ELYTerminal-LICENSE.txt')) })
+}
 if (-not $WithoutLocalPari) {
     $pari = Join-Path $repo 'third_party/pari-2.17.3'
     if (-not (Test-Path -LiteralPath (Join-Path $pari 'provenance.json'))) { throw 'Prepare local PARI with tools/build/test/prepare_gui_v2_pari.py first' }
@@ -42,6 +58,8 @@ if (-not $VcVars) {
 }
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 $defs = @('-DCMAKE_BUILD_TYPE=Release')
+if ($GmpRoot) { $defs += "-DECM_GROUP_ORDER_GMP_ROOT=`"$GmpRoot`"" }
+if ($BasePetOnly) { $defs += '-DECM_GUI_V2_BASE_PET_ONLY=ON' } else { $defs += '-DECM_GUI_V2_BASE_PET_ONLY=OFF' }
 if ($WithoutLocalPari) { $defs += '-DECM_GUI_V2_LOCAL_PARI=OFF' } else { $defs += '-DECM_GUI_V2_LOCAL_PARI=ON' }
 if ($VulkanRoot) { $defs += "-DECM_GUI_V2_VULKAN=`"$VulkanRoot`"" }
 if ($BackendRoot) { $defs += "-DECM_GUI_V2_BACKEND=`"$BackendRoot`"" }
@@ -66,6 +84,11 @@ foreach ($key in $inputHashes.Keys) {
     }
 }
 $binary = Join-Path $BuildDir 'ecm_gui_v2.exe'
+if ($gmpIdentity) {
+    foreach ($name in $gmpIdentity.Hashes.Keys) {
+        if ((Get-FileHash -LiteralPath (Join-Path $GmpRoot $name)).Hash -ne $gmpIdentity.Hashes[$name]) { throw "GUI GMP dependency changed during build: $name" }
+    }
+}
 $sourceCommit = 'source archive without git metadata'
 if (Test-Path -LiteralPath (Join-Path $repo '.git')) { $sourceCommit = & git -C $repo rev-parse HEAD }
 elseif (Test-Path -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json')) {
@@ -76,6 +99,7 @@ elseif (Test-Path -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json')) {
     group_order_helper_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_group_order_ui.exe')).Hash.ToLowerInvariant();
     group_order_runtime_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'gmp-10.dll')).Hash.ToLowerInvariant();
     native_pari_enabled=(-not $WithoutLocalPari);
+    gmp_root=$GmpRoot;gmp_hashes=$(if($gmpIdentity){$gmpIdentity.Hashes}else{$null});base_pet_only=[bool]$BasePetOnly;
     native_pari_sha256=$(if (-not $WithoutLocalPari) { (Get-FileHash -LiteralPath (Join-Path $BuildDir 'libpari.dll')).Hash.ToLowerInvariant() } else { $null });
     source_commit=$sourceCommit;source_catalog_sha256=$inputHashes;
     boundary='Conservative repository source catalog frozen before configure and checked after build; not a claim that every catalog file is linked';

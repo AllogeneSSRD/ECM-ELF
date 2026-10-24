@@ -166,7 +166,7 @@ function Get-EcmCompileState([string]$Repo, $Entry, [string]$Setup = '', [string
     $object = Get-EcmObjectPath $Entry
     $paths = @(Get-EcmSourceClosure $Repo @($Entry.file) (@($inputs.IncludeDirs) + $IncludeDirs) -Production:$Production)
     $paths += @($inputs.Responses | ForEach-Object { Get-EcmSourceKey $Repo $_ })
-    $compilerPaths = if ($Entry.command -match '(?:^|\s)/sourceDependencies\s') {
+    $compilerPaths = if ($Entry.command -match '(?:^|\s)/(?:sourceDependencies\s|showIncludes(?:\s|$))') {
         Get-EcmMsvcDependencyPaths "$object.ecm-msvc.json" $Entry
     } else { Get-EcmDepfilePaths "$object.ecm.d" $Entry.directory }
     $paths += @($compilerPaths |
@@ -256,14 +256,22 @@ function Assert-EcmCompileInputs($Before, $After) {
     }
 }
 
-function Get-EcmStage2SourceSet([string]$Repo, $Inventory, [string]$Engine, [string[]]$IncludeDirs = @()) {
+function Get-EcmStage2SourceSet([string]$Repo, $Inventory, [string]$Engine, [string[]]$IncludeDirs = @(), [string]$Modules = '') {
     $group = if ($Engine -eq 'production') { 'STAGE2_PRODUCTION' } else { 'STAGE2_DEVELOPMENT' }
     $engineSources = @($Inventory.groups.$group)
+    if ($Modules) {
+        $moduleInventory = Get-Content -LiteralPath (Join-Path $Modules 'modules.json') -Raw | ConvertFrom-Json
+        foreach ($inputFile in $moduleInventory.inputs_sha256.PSObject.Properties) {
+            if ((Get-FileHash -LiteralPath (Join-Path $Repo $inputFile.Name)).Hash -ine $inputFile.Value) { throw "CUDA module generator input changed: $($inputFile.Name)" }
+        }
+        $engineSources = @($engineSources | Where-Object { $_ -notmatch '/(arithmetic_kernels|transform_kernels)\.cu$' }) + @($moduleInventory.modules.source)
+    }
     $cudaSources = @($engineSources | Where-Object { $_ -match '\.cu$' })
     $sources = @($engineSources) + @($Inventory.groups.STAGE2_HOST)
     $cudaDeps = @(Get-EcmSourceClosure $Repo $cudaSources $IncludeDirs -Production:($Engine -eq 'production'))
     $deps = @(Get-EcmSourceClosure $Repo $sources $IncludeDirs -Production:($Engine -eq 'production')) +
         @($Inventory.build_inputs) + @('tools/build/build_stage2_local.ps1')
+    if ($Modules) { $deps += @($moduleInventory.inputs_sha256.PSObject.Properties.Name) + @((Join-Path $Modules 'modules.json')) }
     return [pscustomobject]@{ Sources = $sources; CudaSources = $cudaSources;
         Dependencies = @($deps | Sort-Object -Unique); CudaDependencies = $cudaDeps }
 }

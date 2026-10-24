@@ -33,6 +33,8 @@ $commands+=('"'+$m.cuda_root+'/bin/nvcc.exe" -std=c++17 -arch=sm_'+$m.architectu
 $commands+='if errorlevel 1 exit /b 1'
 $script=Join-Path $output 'build.cmd'
 [IO.File]::WriteAllText($script,"@echo off`r`n$($m.compile_setup)`r`nif errorlevel 1 exit /b 1`r`n"+($commands -join "`r`n")+"`r`n",[Text.UTF8Encoding]::new($false))
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+Enable-EcmNvccBatchTiming $script $output
 & cmd.exe /d /c $script 2>&1|Out-File -LiteralPath (Join-Path $output 'build.log') -Encoding utf8
 if($LASTEXITCODE){Get-Content -LiteralPath (Join-Path $output 'build.log') -Tail 30;throw 'CUDA Stage1 contracts build failed'}
 Copy-Item -LiteralPath (Join-Path $m.gmp_root 'bin/gmp-10.dll') -Destination $output

@@ -79,6 +79,8 @@ $exe=Join-Path $Build 'edwards_gpu_stage1_probe.exe'
 $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -arch='+$Arch+' -Xcompiler /MD '+$objArgs+' -L third_party/gmp-zen3/dist/lib -lgmp -o "'+$exe+'"'
 $cmdFile=Join-Path $Build 'link.cmd'
 [IO.File]::WriteAllText($cmdFile,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
+. (Join-Path $PSScriptRoot '../internal/cuda_timing.ps1')
+Enable-EcmNvccBatchTiming $cmdFile $Build
 & cmd.exe /d /c $cmdFile 2>&1 | Out-File (Join-Path $Build 'link.log') -Encoding utf8
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'link.log') -Tail 30;throw 'link failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force

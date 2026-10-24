@@ -295,6 +295,13 @@ if(ECM_ENABLE_CUDA)
     endif()
     option(ECM_CUDA_ENABLE_PRAC "Build experimental resident/PRAC Stage1 kernels (slow template compilation)" OFF)
 
+    include("${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_timing.cmake")
+    option(ECM_CUDA_ISOLATE_TIERS "One device module per curve/param/container" OFF)
+    if(ECM_CUDA_ISOLATE_TIERS)
+        include("${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_modules.cmake")
+        ecm_stage1_isolate_modules()
+        add_compile_definitions(ECM_CUDA_ISOLATE_TIERS)
+    endif()
     add_executable(ecm_cuda
         ${ECM_STAGE1_COMMON_SOURCES}
         ${ECM_STAGE1_CUDA_SOURCES})
@@ -341,7 +348,7 @@ if(ECM_ENABLE_CUDA)
     # you build on one machine and run on another with a newer GPU.
     set(ECM_CUDA_EMBED_PTX "OFF" CACHE STRING "1 = also embed PTX (JIT to newer archs; bigger binaries)")
     set(ECM_CUDA_COMPRESS  "ON"  CACHE STRING "1 = compress the embedded fatbin (-Xfatbin -compress-all)")
-set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (release recipe: the oldest supported arch)")
+    set(ECM_CUDA_PTX_ARCH "" CACHE STRING "one independent virtual PTX target")
 
     if(ECM_CUDA_EMBED_PTX)
         set(_ecm_cuda_arches "${ECM_CUDA_ARCHITECTURES}")
@@ -357,21 +364,15 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         endforeach()
     endif()
 
-    # ECM_CUDA_PTX_ARCH=<arch>: embed PTX for ONE architecture only (normally the oldest one
-    # you support) while every other architecture gets SASS only.  This is the release
-    # recipe: the PTX fallback lets the driver JIT onto GPUs newer than anything you built
-    # SASS for, and it costs only ~24% of one SASS set (measured on our kernels).
-    # Set it together with ECM_CUDA_EMBED_PTX=OFF, e.g.
-    #   -DECM_CUDA_ARCHITECTURES=75;86;89;90;100;120 -DECM_CUDA_PTX_ARCH=75
+    # Independent virtual and real targets: e.g. real 60 + virtual 50 for cu11.8,
+    # or real 80 + virtual 75 for cu13.3. A PTX target need not be a SASS member.
     if(ECM_CUDA_PTX_ARCH)
         set(_ecm_cuda_arches "")
         foreach(_a IN LISTS ECM_CUDA_ARCHITECTURES)
-            if(_a MATCHES "^${ECM_CUDA_PTX_ARCH}(-|$)")
-                list(APPEND _ecm_cuda_arches "${_a}")          # SASS + PTX
-            else()
-                list(APPEND _ecm_cuda_arches "${_a}-real")     # SASS only
-            endif()
+            string(REGEX REPLACE "-real$" "" _real "${_a}")
+            list(APPEND _ecm_cuda_arches "${_real}-real")
         endforeach()
+        list(APPEND _ecm_cuda_arches "${ECM_CUDA_PTX_ARCH}-virtual")
         message(STATUS "ecm_cuda: PTX embedded for ${ECM_CUDA_PTX_ARCH} only; "
                        "device code: ${_ecm_cuda_arches}")
     endif()

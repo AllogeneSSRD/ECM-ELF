@@ -12,7 +12,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、TOML 身份、参考 FFT 长度、批次去重与本地恢复。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
 - [GUI v2 候选](usage/GUI_V2.md)：默认DX11、可迁移侧栏、独立分组设置/语言、交互图表、群阶/点阶分解与结果文件导入、[图标图鉴](web/gui-v2-icons.html)、Ely宠物与[三款装甲皮肤预览](web/ely-skins-20261022.html)；Vulkan显式诊断路径及验收限制；[草稿与进度](development/GUI_MODERNIZATION_DRAFT.md)、[HTML 阅读版](web/gui-v2-vulkan-plan-20261021.html)。
-- [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
+- [构建与发布](usage/BUILD.md)：双 CUDA 完整发布入口、分阶段构建、GPU 架构、CUDA/GMP 依赖和发布内容。
+- [Release 改造草稿](development/RELEASE_BUILD_REDESIGN_DRAFT.md)：双 CUDA 完整包、GUI v2、统一 vcpkg GMP、nvcc 计时和按需 JIT 的需求与实施验收记录；当前使用方式见[构建与发布](usage/BUILD.md)。
 - [ptxas 沙箱编译诊断草稿](development/PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)：CUDA 13.3.73 单文件并行与严格句柄检查的最小复现、因果对照及已验证的串行编译处理。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
 - [ECM 报告工具](../tools/ecm_report/README.md)：PrimeNet 进度导入、两日变化图和按日期及指数范围统计的增长热度图。
@@ -36,6 +37,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [OpenCL 算子](architecture/OPENCL.md)：路径注册、内核组装和设备约束。
 
 ## 性能与后续工作
+
+- [双 CUDA 发布与 JIT 验证](performance/RELEASE_JIT.md)：0.52.1 发布身份、实际加载模块、数学对照、冷/热 JIT 计时及旧 GPU/驱动的未测边界。
 
 - [本地群阶与点阶分析研究草稿](development/LOCAL_GROUP_ORDER_DRAFT.md)：GP 职责、算法取舍、独立模块数据集验收与主程序回退接入；[HTML 结果](web/cpu-group-order-validation-20261023.html)。
 

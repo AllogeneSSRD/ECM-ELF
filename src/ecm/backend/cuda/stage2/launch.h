@@ -12,6 +12,9 @@ struct S2GDeviceConstants {
 };
 static_assert(offsetof(S2GDeviceConstants,divisor)==0,"divisor must lead constant storage");
 cudaError_t ecm_stage2_copy_constants(const void *source,size_t bytes,size_t offset=0,cudaMemcpyKind kind=cudaMemcpyHostToDevice);
+#ifdef ECM_CUDA_ISOLATED_DEVICE
+cudaError_t ecm_stage2_constant_snapshot(S2GDeviceConstants *,unsigned long long *,int *);
+#endif
 template<int NW,bool XADD6=false>
 void ecm_launch_s2g_ladder_kernel(EcmCudaLaunch cfg, const unsigned long long *n, unsigned long long ninv, int nw, const unsigned long long *qx, const unsigned long long *qz, const unsigned long long *a24, const unsigned long long *mone, const unsigned long long *js, int npts, unsigned long long *out_x, unsigned long long *out_z, bool normal_output);
 template<int NW>
