@@ -217,7 +217,7 @@ int curve_worker(Options o) {
         stage2_log::phase("Optional factor decomposition");
         const auto begin = std::chrono::steady_clock::now();
         try {
-            result += ',' + ecm_stage2::factor_details(result, n.z, fs::path(o.gp), o.factor_timeout,
+            result += ',' + ecm_stage2::factor_details(result, n.z, fs::u8path(o.gp), o.factor_timeout,
                                                        fs::path(o.results).parent_path() / "factor_details");
         } catch(const std::exception &error) {
             std::cerr<<"WARNING: optional factor decomposition unresolved: "<<error.what()<<std::endl;

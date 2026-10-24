@@ -1,4 +1,5 @@
 #include "order_analysis.h"
+#include "pari_protocol.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -8,7 +9,9 @@
 #include <stdexcept>
 #include <thread>
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <cerrno>
@@ -42,7 +45,17 @@ std::wstring process_quote(const std::wstring&s){
     out.append(2*slashes,L'\\');return out+L'"';
 }
 #endif
-ProcessResult execute_gp(const Settings&s,const std::string&body){
+std::filesystem::path host_path(const Settings& s){
+    if(!s.pari_host.empty())return std::filesystem::u8path(s.pari_host);
+#ifdef _WIN32
+    wchar_t path[32768];const auto size=GetModuleFileNameW(nullptr,path,32768);
+    if(!size||size==32768)throw std::runtime_error("Cannot locate diagnostic executable");
+    return std::filesystem::path(path).parent_path()/L"ecm_diagnostics_host.exe";
+#else
+    return "/nonexistent/ecm_diagnostics_host"; // Win64 ABI is the only qualified DLL.
+#endif
+}
+ProcessResult execute_process(const Settings&s,const std::string&body,bool pari=false){
     ProcessResult out;Temporary temporary;
 #ifdef _WIN32
     wchar_t directory[MAX_PATH],script[MAX_PATH],log[MAX_PATH];
@@ -51,7 +64,7 @@ ProcessResult execute_gp(const Settings&s,const std::string&body){
     }
     temporary.script=script;
     if(!GetTempFileNameW(directory,L"eco",0,log)){out.failure="gp_temp_failed";return out;}
-    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};Handle output,input,process,thread;
+    SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};Handle output,input,process,thread,job;
     output.value=CreateFileW(log,GENERIC_WRITE|GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
         &sa,OPEN_EXISTING,FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
     if(output.value==INVALID_HANDLE_VALUE){DeleteFileW(log);out.failure="gp_capture_failed";return out;}
@@ -71,11 +84,19 @@ ProcessResult execute_gp(const Settings&s,const std::string&body){
     STARTUPINFOW startup{};startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESTDHANDLES;
     startup.hStdOutput=startup.hStdError=output.value;startup.hStdInput=input.value;
     PROCESS_INFORMATION info{};
-    auto command=process_quote(std::filesystem::path(s.gp).wstring())+L" -q -f "+process_quote(temporary.script.wstring());
-    if(!CreateProcessW(nullptr,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&info)){
+    auto command=process_quote(pari?host_path(s).wstring():std::filesystem::u8path(s.gp).wstring())+(pari?L" ":L" -q -f ");
+    if(!pari&&s.gp_stack_bytes)command+=L"-s "+std::to_wstring(s.gp_stack_bytes)+L" ";
+    command+=process_quote(temporary.script.wstring());
+    if(!CreateProcessW(nullptr,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,nullptr,&startup,&info)){
         out.failure="gp_launch_failed";return out;
     }
     process.value=info.hProcess;thread.value=info.hThread;
+    job.value=CreateJobObjectW(nullptr,nullptr);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if(pari){limits.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_PROCESS_MEMORY;limits.ProcessMemoryLimit=512ull*1024*1024;}
+    if(!job.value||!SetInformationJobObject(job.value,JobObjectExtendedLimitInformation,&limits,sizeof(limits))||!AssignProcessToJobObject(job.value,process.value)||ResumeThread(thread.value)==DWORD(-1)){
+        TerminateProcess(process.value,2);WaitForSingleObject(process.value,1000);out.failure="gp_isolation_failed";return out;
+    }
     for(;;){
         LARGE_INTEGER size{};
         if(!GetFileSizeEx(output.value,&size)){out.failure="gp_capture_failed";break;}
@@ -83,9 +104,9 @@ ProcessResult execute_gp(const Settings&s,const std::string&body){
         DWORD wait=WaitForSingleObject(process.value,5);
         if(wait==WAIT_OBJECT_0)break;
         if(wait!=WAIT_TIMEOUT){out.failure="gp_wait_failed";break;}
-        if(milliseconds(start)>=s.gp_timeout_ms){out.failure="gp_timeout";break;}
+        if(milliseconds(start)>=(pari?s.pari_timeout_ms:s.gp_timeout_ms)){out.failure="gp_timeout";break;}
     }
-    if(!out.failure.empty()){TerminateProcess(process.value,2);WaitForSingleObject(process.value,5000);}
+    if(!out.failure.empty()){TerminateJobObject(job.value,2);WaitForSingleObject(process.value,1000);}
     DWORD code=1;if(!GetExitCodeProcess(process.value,&code) || code){if(out.failure.empty())out.failure="gp_exit_failed";}
     LARGE_INTEGER zero{};SetFilePointerEx(output.value,zero,nullptr,FILE_BEGIN);
     char buffer[4096];DWORD read=0;
@@ -98,14 +119,16 @@ ProcessResult execute_gp(const Settings&s,const std::string&body){
     if(!child){
         int input=open("/dev/null",O_RDONLY);if(input>=0)dup2(input,STDIN_FILENO);
         dup2(output,STDOUT_FILENO);dup2(output,STDERR_FILENO);
-        execlp(s.gp.c_str(),s.gp.c_str(),"-q","-f",temporary.script.c_str(),static_cast<char*>(nullptr));_exit(127);
+        if(pari){auto host=host_path(s).string();execl(host.c_str(),host.c_str(),temporary.script.c_str(),static_cast<char*>(nullptr));_exit(127);}
+        if(s.gp_stack_bytes){const auto size=std::to_string(s.gp_stack_bytes);execlp(s.gp.c_str(),s.gp.c_str(),"-q","-f","-s",size.c_str(),temporary.script.c_str(),static_cast<char*>(nullptr));}
+        else execlp(s.gp.c_str(),s.gp.c_str(),"-q","-f",temporary.script.c_str(),static_cast<char*>(nullptr));_exit(127);
     }
     int status=0;
     for(;;){
         struct stat size{};if(fstat(output,&size) || size.st_size>off_t(max_output)){out.failure="gp_output_limit";break;}
         const pid_t done=waitpid(child,&status,WNOHANG);if(done==child)break;
         if(done<0 && errno!=EINTR){out.failure="gp_wait_failed";break;}
-        if(milliseconds(start)>=s.gp_timeout_ms){out.failure="gp_timeout";break;}
+        if(milliseconds(start)>=(pari?s.pari_timeout_ms:s.gp_timeout_ms)){out.failure="gp_timeout";break;}
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     if(!out.failure.empty()){kill(child,SIGKILL);while(waitpid(child,&status,0)<0 && errno==EINTR){}}
@@ -207,60 +230,91 @@ Factorization parse_factor(const std::string&text,const Integer&n){
     out.cofactor=Integer(1);out.status=Status::Complete;out.all_proven=true;return out;
 }
 } // namespace
-Backend parse_backend(const std::string&s){if(s=="auto")return Backend::Auto;if(s=="gp")return Backend::Gp;if(s=="native")return Backend::Native;throw std::invalid_argument("--go-backend must be auto, gp or native");}
-const char *name(Backend b){return b==Backend::Auto?"auto":b==Backend::Gp?"gp":"native";}
+Backend parse_backend(const std::string&s){if(s=="auto")return Backend::Auto;if(s=="gp")return Backend::Gp;if(s=="native"||s=="pari")return Backend::Native;if(s=="gmp")return Backend::Gmp;throw std::invalid_argument("--go-backend must be auto, pari/native, gp or gmp");}
+const char *name(Backend b){return b==Backend::Auto?"auto":b==Backend::Gp?"gp":b==Backend::Gmp?"gmp":"pari";}
 std::string quote(const std::string&s){
     std::string out="\"";const char*hex="0123456789abcdef";
     for(unsigned char c:s){if(c=='"'||c=='\\'){out+='\\';out+=char(c);}else if(c<32){out+="\\u00";out+=hex[c>>4];out+=hex[c&15];}else out+=char(c);}return out+'"';
 }
+namespace {
+pari_protocol::V native_request(const Integer& n,const char* operation){auto v=pari_protocol::object();v.set("operation",pari_protocol::V::string(operation));v.set("integer",pari_protocol::V::string(n.str()));return v;}
+pari_protocol::V last_checkpoint(const ProcessResult& process){
+    pari_protocol::V value;std::istringstream lines(process.output);std::string line;
+    while(std::getline(lines,line)){try{auto v=ecm_results::json::parse(line);if(v.get("protocol").text()=="2")value=std::move(v);}catch(const std::exception&) {}}
+    if(value.type!='o')throw std::runtime_error("pari_protocol_failed");
+    if(value.has("error"))throw std::runtime_error(value.get("error").text());return value;
+}
+std::string pari_failure(std::string s){if(s.rfind("gp_",0)==0)s.replace(0,3,"pari_");return s;}
+}
 Session::Session(Settings s):settings_(std::move(s)){}
 GroupResult Session::group(const CurveRequest&r){
-    GroupResult out;out.backend=settings_.backend==Backend::Native?"native":"gp";
+    GroupResult out;out.backend=name(settings_.backend==Backend::Auto?Backend::Native:settings_.backend);
     try{
-        if(mpz_cmp_ui(r.prime.v,3)<=0 || classify_prime(r.prime)==Primality::Composite){out.value.reason="modulus must be a prime >3";return out;}
-        // Reject per-curve mathematical errors without poisoning GP health for
-        // the remaining curves. In particular a singular initialization is not
-        // evidence that GP itself is unavailable.
+        if(mpz_cmp_ui(r.prime.v,3)<=0||mpz_sizeinbase(r.prime.v,2)>settings_.native.max_bits||classify_prime(r.prime)==Primality::Composite){out.value.reason="modulus must be a prime >3 within the input bit limit";return out;}
         (void)construct_curve(r);
-        if(settings_.backend!=Backend::Native && unavailable_.empty()){
-            auto process=execute_gp(settings_,group_script(r));out.gp_output=std::move(process.output);
-            if(process.failure.empty()){
-                if(out.gp_output.find("ECM_MATH_ERROR|")!=std::string::npos){out.value.reason="gp_mathematical_error";return out;}
-                try{out.value=parse_group(out.gp_output,r.prime);return out;}
-                catch(const std::invalid_argument&e){out.value.reason=std::string("gp_invalid_result: ")+e.what();return out;}
-                catch(const std::runtime_error&e){process.failure=e.what();}
+        if(settings_.backend==Backend::Auto||settings_.backend==Backend::Native){
+            if(native_ms_>=settings_.native_total_ms){out.value.status=Status::ResourceLimit;out.pari_failure=out.value.reason="PARI session budget exhausted";}
+            else{
+                auto request=native_request(r.prime,"group");request.set("sigma",pari_protocol::V::string(std::to_string(r.sigma)));request.set("family",pari_protocol::V::string(r.family==Family::Edwards?"edwards":"montgomery"));request.set("parameter",pari_protocol::V::number(std::to_string(r.parameter)));
+                auto settings=settings_;settings.pari_timeout_ms=std::min(settings.pari_timeout_ms,uint64_t(std::ceil(settings_.native_total_ms-native_ms_)));
+                const auto start=Clock::now();auto process=execute_process(settings,request.dump(),true);native_ms_+=milliseconds(start);
+                try{out.value=pari_protocol::group(last_checkpoint(process),r);}catch(const std::exception&e){out.value.status=Status::ResourceLimit;out.value.reason=e.what();}
+                if(!process.failure.empty()&&out.value.status!=Status::InvalidInput){out.value.status=Status::ResourceLimit;out.value.all_proven=false;out.value.reason=pari_failure(process.failure)+"; "+out.value.reason;}
+                out.pari_failure=out.value.reason;
+                if(out.value.status==Status::Complete||out.value.status==Status::InvalidInput)return out;
             }
-            unavailable_=process.failure;
+            if(settings_.backend==Backend::Native)return out;
         }
-        out.gp_failure=unavailable_;
-        if(settings_.backend==Backend::Gp){out.value.status=Status::ResourceLimit;out.value.reason=unavailable_;return out;}
-        out.backend="native";
-        if(native_ms_>=settings_.native_total_ms){out.value.status=Status::ResourceLimit;out.value.reason="native session budget exhausted";return out;}
+        if(settings_.backend!=Backend::Gmp){
+            if(unavailable_.empty()){
+                auto process=execute_process(settings_,group_script(r));out.gp_output=std::move(process.output);
+                if(process.failure.empty()){
+                    if(out.gp_output.find("ECM_MATH_ERROR|")!=std::string::npos){out.backend="gp";out.value=Analysis{};out.value.reason="gp_mathematical_error";return out;}
+                    try{auto value=parse_group(out.gp_output,r.prime);out.value=std::move(value);out.backend="gp";return out;}
+                    catch(const std::invalid_argument&e){out.backend="gp";out.value=Analysis{};out.value.reason=std::string("gp_invalid_result: ")+e.what();return out;}
+                    catch(const std::runtime_error&e){process.failure=e.what();}
+                }unavailable_=process.failure;
+            }
+            out.gp_failure=unavailable_;
+            if(out.value.reason.empty())out.value.reason=unavailable_;else out.value.reason+="; "+unavailable_;
+            if(out.value.status==Status::InvalidInput)out.value.status=Status::ResourceLimit;
+            return out; // Never silently select the GMP algorithm.
+        }
+        if(native_ms_>=settings_.native_total_ms){out.value.status=Status::ResourceLimit;out.value.reason="GMP session budget exhausted";return out;}
         auto limits=settings_.native;limits.milliseconds=std::min(limits.milliseconds,uint64_t(std::ceil(settings_.native_total_ms-native_ms_)));
         const auto start=Clock::now();out.value=analyze(r,limits);native_ms_+=milliseconds(start);
-    }catch(const std::exception&e){out.value.status=Status::InvalidInput;out.value.reason=e.what();}
-    return out;
+    }catch(const std::exception&e){out.value.status=Status::InvalidInput;out.value.reason=e.what();}return out;
 }
 FactorResult Session::factor(const Integer&integer){
-    FactorResult out;out.backend="gp";out.value.cofactor=integer;
+    FactorResult out;out.backend=name(settings_.backend==Backend::Auto?Backend::Native:settings_.backend);out.value.cofactor=integer;
     try{
-        if(mpz_cmp_ui(integer.v,1)<0){out.value.reason="factorization requires a positive integer";return out;}
-        if(settings_.backend!=Backend::Native && unavailable_.empty()){
-            auto process=execute_gp(settings_,factor_script(integer));out.gp_output=std::move(process.output);
-            if(process.failure.empty()){
-                try{out.value=parse_factor(out.gp_output,integer);return out;}
-                catch(const std::invalid_argument&e){out.value.reason=std::string("gp_invalid_result: ")+e.what();return out;}
-                catch(const std::runtime_error&e){process.failure=e.what();}
-            }
-            unavailable_=process.failure;
+        if(mpz_cmp_ui(integer.v,1)<0||mpz_sizeinbase(integer.v,2)>settings_.native.max_bits){out.value.reason="factorization requires a positive integer within the input bit limit";return out;}
+        if(settings_.backend==Backend::Auto||settings_.backend==Backend::Native){
+            if(native_ms_>=settings_.native_total_ms){out.value.status=Status::ResourceLimit;out.pari_failure=out.value.reason="PARI session budget exhausted";}
+            else{
+                auto settings=settings_;settings.pari_timeout_ms=std::min(settings.pari_timeout_ms,uint64_t(std::ceil(settings_.native_total_ms-native_ms_)));
+                const auto start=Clock::now();auto process=execute_process(settings,native_request(integer,"factor").dump(),true);native_ms_+=milliseconds(start);
+                try{out.value=pari_protocol::factor(last_checkpoint(process),integer);}catch(const std::exception&e){out.value.status=Status::ResourceLimit;out.value.reason=e.what();}
+                if(!process.failure.empty()&&out.value.status!=Status::InvalidInput){out.value.status=Status::Partial;out.value.all_proven=false;out.value.reason=pari_failure(process.failure)+"; "+out.value.reason;}
+                out.pari_failure=out.value.reason;
+                if(out.value.status==Status::Complete||out.value.status==Status::InvalidInput)return out;
+            }if(settings_.backend==Backend::Native)return out;
         }
-        out.gp_failure=unavailable_;
-        if(settings_.backend==Backend::Gp){out.value.status=Status::ResourceLimit;out.value.reason=unavailable_;return out;}
-        out.backend="native";
-        if(native_ms_>=settings_.native_total_ms){out.value.status=Status::ResourceLimit;out.value.reason="native session budget exhausted";return out;}
+        if(settings_.backend!=Backend::Gmp){
+            if(unavailable_.empty()){
+                auto process=execute_process(settings_,factor_script(integer));out.gp_output=std::move(process.output);
+                if(process.failure.empty()){
+                    try{auto value=parse_factor(out.gp_output,integer);out.value=std::move(value);out.backend="gp";return out;}
+                    catch(const std::invalid_argument&e){out.backend="gp";out.value=Factorization{};out.value.cofactor=integer;out.value.reason=std::string("gp_invalid_result: ")+e.what();return out;}
+                    catch(const std::runtime_error&e){process.failure=e.what();}
+                }unavailable_=process.failure;
+            }
+            out.gp_failure=unavailable_;if(out.value.reason.empty())out.value.reason=unavailable_;else out.value.reason+="; "+unavailable_;
+            if(out.value.status==Status::InvalidInput)out.value.status=Status::ResourceLimit;return out;
+        }
+        if(native_ms_>=settings_.native_total_ms){out.value.status=Status::ResourceLimit;out.value.reason="GMP session budget exhausted";return out;}
         auto limits=settings_.native;limits.milliseconds=std::min(limits.milliseconds,uint64_t(std::ceil(settings_.native_total_ms-native_ms_)));
         const auto start=Clock::now();out.value=factor_integer(integer,limits);native_ms_+=milliseconds(start);
-    }catch(const std::exception&e){out.value.status=Status::InvalidInput;out.value.reason=e.what();}
-    return out;
+    }catch(const std::exception&e){out.value.status=Status::InvalidInput;out.value.reason=e.what();}return out;
 }
 } // namespace ecm_diagnostics

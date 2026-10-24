@@ -23,4 +23,14 @@ inline std::string order_factorization(const ecm_results::json::Value& result,bo
 inline bool order_succeeded(const ecm_results::json::Value& result,const std::string& error){
     return error.empty()&&result.get("status").text()=="complete";
 }
+inline std::string order_input_factorization(const ecm_results::json::Value& result){
+    ecm_results::json::Value input;input.type='o';
+    input.set("group_factors",result.get("input_factors"));input.set("cofactor",result.get("input_cofactor"));
+    return order_factorization(input,false);
+}
+inline bool order_native_limited(const ecm_results::json::Value& result){
+    if((result.get("backend").text()=="native"||result.get("backend").text()=="pari"||result.get("backend").text()=="gmp")&&result.get("status").text()=="resource_limit")return true;
+    for(const auto& component:result.get("components").items)if(order_native_limited(component))return true;
+    return (result.get("backend").text()=="native"||result.get("backend").text()=="pari"||result.get("backend").text()=="gmp")&&result.has("input_cofactor")&&result.get("input_cofactor").text()!="1";
+}
 }

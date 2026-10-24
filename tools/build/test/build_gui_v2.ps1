@@ -1,18 +1,31 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 param(
     [string]$BuildDir = 'build_gui_v2_test',
     [string]$VcVars = '',
     [string]$VulkanRoot = '',
     [string]$BackendRoot = '',
-    [switch]$TestHelpers
+    [switch]$TestHelpers,
+    [switch]$WithoutLocalPari
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 if (-not [IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
+if ($WithoutLocalPari -and (Test-Path -LiteralPath (Join-Path $BuildDir 'libpari.dll'))) { throw 'WithoutLocalPari requires a fresh build directory without a retained PARI runtime' }
 $catalog = @('src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/application/configuration',
-    'src/ecm/platform/generated','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/service/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gmp-zen3/dist','assets/gui_v2')
+    'src/ecm/platform/generated','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/service/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gmp-zen3/dist','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/build/test/build_diagnostics.ps1')
 $inputs = @($catalog | ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $repo $_) -File -Recurse })
+if (-not $WithoutLocalPari) {
+    $pari = Join-Path $repo 'third_party/pari-2.17.3'
+    if (-not (Test-Path -LiteralPath (Join-Path $pari 'provenance.json'))) { throw 'Prepare local PARI with tools/build/test/prepare_gui_v2_pari.py first' }
+    $provenance = Get-Content -LiteralPath (Join-Path $pari 'provenance.json') -Raw | ConvertFrom-Json
+    foreach ($entry in $provenance.sha256.PSObject.Properties) {
+        $file = Join-Path $pari $entry.Name
+        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { throw "Local PARI identity mismatch: $($entry.Name)" }
+        $inputs += Get-Item -LiteralPath $file
+    }
+    $inputs += Get-Item -LiteralPath (Join-Path $pari 'provenance.json')
+}
 $inputHashes = [ordered]@{}
 foreach ($file in $inputs | Sort-Object FullName -Unique) {
     $key = $file.FullName.Substring($repo.Length+1).Replace('\','/')
@@ -29,6 +42,7 @@ if (-not $VcVars) {
 }
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 $defs = @('-DCMAKE_BUILD_TYPE=Release')
+if ($WithoutLocalPari) { $defs += '-DECM_GUI_V2_LOCAL_PARI=OFF' } else { $defs += '-DECM_GUI_V2_LOCAL_PARI=ON' }
 if ($VulkanRoot) { $defs += "-DECM_GUI_V2_VULKAN=`"$VulkanRoot`"" }
 if ($BackendRoot) { $defs += "-DECM_GUI_V2_BACKEND=`"$BackendRoot`"" }
 $configure = "cmake -S `"$repo/src/ecm/application/gui_v2`" -B `"$BuildDir`" -G `"NMake Makefiles`" " + ($defs -join ' ')
@@ -44,7 +58,7 @@ function Invoke-Compiler([string]$Command, [string]$Log) {
     $output -split "`r?`n" | Where-Object { $_ -match 'gui_v2:|Built target|error|warning' } | Write-Host
 }
 Invoke-Compiler $configure 'configure.log'
-$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test' } else { 'ecm_gui_v2' }
+$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test ecm_gui_v2_native_timeout_fixture' } else { 'ecm_gui_v2' }
 Invoke-Compiler "cmake --build `"$BuildDir`" --target $targets" 'build.log'
 foreach ($key in $inputHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $repo $key) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $inputHashes[$key]) {
@@ -58,8 +72,11 @@ elseif (Test-Path -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json')) {
     $sourceCommit = (Get-Content -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json') -Raw -Encoding UTF8 | ConvertFrom-Json).source_commit
 }
 [ordered]@{schema=1;exe_sha256=(Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant();
+    diagnostics_host_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_diagnostics_host.exe')).Hash.ToLowerInvariant();
     group_order_helper_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_group_order_ui.exe')).Hash.ToLowerInvariant();
     group_order_runtime_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'gmp-10.dll')).Hash.ToLowerInvariant();
+    native_pari_enabled=(-not $WithoutLocalPari);
+    native_pari_sha256=$(if (-not $WithoutLocalPari) { (Get-FileHash -LiteralPath (Join-Path $BuildDir 'libpari.dll')).Hash.ToLowerInvariant() } else { $null });
     source_commit=$sourceCommit;source_catalog_sha256=$inputHashes;
     boundary='Conservative repository source catalog frozen before configure and checked after build; not a claim that every catalog file is linked';
     vcvars=$VcVars;cmake_cache_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'CMakeCache.txt')).Hash.ToLowerInvariant()

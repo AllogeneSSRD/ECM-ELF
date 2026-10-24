@@ -31,7 +31,15 @@ def main():
     request=out/'order-request.json';response=out/'order-response.json'
     request.write_text(json.dumps(dict(factor='1009',sigma='26',profile=0,backend=2,gp='')),encoding='utf-8')
     subprocess.run([str(helper),str(request),str(response)],cwd=out,env=env,check=True,timeout=15)
-    order=json.loads(response.read_text());assert order['status']=='complete' and order['backend']=='native' and order['point_minimality']
+    order=json.loads(response.read_text());assert order['status']=='complete' and order['backend']=='pari' and order['point_minimality']
+    if manifest.get('native_pari_library'):
+        assert order['native_engine']=='pari' and order['all_proven']
+        request.write_text(json.dumps(dict(factor='6277101735386680763835789423207666416083908700390324961279',sigma='26',profile=0,backend=2,gp='')),encoding='utf-8')
+        subprocess.run([str(helper),str(request),str(response)],cwd=out,env=env,check=True,timeout=8)
+        order=json.loads(response.read_text())
+        assert order['status']=='complete' and order['native_engine']=='pari' and order['all_proven']
+        assert order['group_order']=='6277101735386680763835789423165887359574653668381181441896'
+        assert 'libpari.dll' not in [name.lower() for name in modules],'Math library must stay outside the GUI process'
     startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
     cases={};cfg=out/'workflow.toml';cfg.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n');original=cfg.read_bytes()
     def run(name,flags,expected=0,show=False,binary=exe):

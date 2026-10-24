@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 project(main)
 
 # Config source, generated bindings, templates and reference must agree.
@@ -663,6 +663,17 @@ elseif(NOT EXISTS "${ECM_IMGUI_DIR}/imgui.h")
 else()
     add_subdirectory(src/ecm/application/gui)
     message(STATUS "gui: ecm_gui enabled (ImGui from ${ECM_IMGUI_DIR})")
+endif()
+
+# Shared optional order/factor diagnostics; math library stays in its own host.
+if(WIN32)
+    set(ECM_DIAGNOSTICS_GMP_ROOT "${ECM_WINDOWS_GMP_ROOT}" CACHE PATH "Diagnostic host GMP prefix" FORCE)
+    add_subdirectory(src/ecm/service/diagnostics)
+    foreach(_worker ecm ecm_cuda ecm_cuda_stage2)
+        if(TARGET ${_worker})
+            add_dependencies(${_worker} ecm_diagnostics_runtime)
+        endif()
+    endforeach()
 endif()
 
 # GUI v2 is opt-in and independent of the legacy GUI target and its renderer.

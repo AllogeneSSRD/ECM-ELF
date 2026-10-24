@@ -23,12 +23,13 @@ static std::string executable_in_path(const fs::path&name){
 }
 std::string find_order_gp(){return executable_in_path(L"gp.exe");}
 bool valid_order_input(const OrderInput&i,std::string&error){
-    error.clear();if(!digits(i.factor)||i.factor.size()>1234){error="Factor must be a decimal prime (maximum 4096 bits)";return false;}
+    error.clear();const auto nonzero=i.factor.find_first_not_of('0');
+    if(!digits(i.factor)||i.factor.size()>1234||nonzero==i.factor.npos||(i.factor.size()-nonzero==1&&i.factor[nonzero]=='1')){error="Factor must be a decimal integer >1 (maximum 4096 bits)";return false;}
     if(!digits(i.sigma)||i.sigma.size()>20){error="Sigma must be a uint64 decimal integer";return false;}
     try{size_t n=0;const auto sigma=std::stoull(i.sigma,&n);if(n!=i.sigma.size()||sigma<order_sigma_minimum(i.profile))throw std::runtime_error("sigma");}
     catch(...){error="Sigma is outside the selected construction's range";return false;}
     if(i.profile!=0&&i.profile!=1&&i.profile!=3&&i.profile!=4&&i.profile!=5){error="Unsupported curve construction";return false;}
-    if(i.backend<0||i.backend>2){error="Unknown backend";return false;}return true;
+    if(i.backend<0||i.backend>3){error="Unknown backend";return false;}return true;
 }
 std::vector<OrderRecord> read_order_records(const std::string&path,std::string&error){
     std::vector<OrderRecord> rows;error.clear();size_t skipped=0,line=0;
@@ -64,30 +65,29 @@ std::vector<std::string> discover_order_files(const std::string&directory,const 
         if(name.size()>8&&name.find("result")!=std::string::npos&&name.size()>=4&&name.substr(name.size()-4)==".txt")add(it->path());
     }return paths;
 }
-void GroupOrderJob::cleanup(){if(job_)CloseHandle(job_);if(process_)CloseHandle(process_);job_=process_=nullptr;std::error_code e;if(!request_.empty())fs::remove(request_,e);if(!output_.empty())fs::remove(output_,e);request_.clear();output_.clear();}
+void GroupOrderJob::cleanup(){if(job_)CloseHandle(job_);if(process_)CloseHandle(process_);job_=process_=nullptr;std::error_code e;if(!request_.empty())fs::remove(request_,e);if(!output_.empty()){fs::remove(output_,e);fs::remove(output_+L".next",e);}request_.clear();output_.clear();}
 void GroupOrderJob::stop(){if(process_){TerminateJobObject(job_,1);WaitForSingleObject(process_,1000);}cleanup();}
 void GroupOrderJob::cancel(){if(process_)error="Analysis cancelled";stop();}
 bool GroupOrderJob::start(const OrderInput&i,const std::string&helper){
     if(busy())return false;error.clear();result={};if(!valid_order_input(i,error))return false;
     snapshot=i;helper_=helper;fallback_.clear();signature=order_signature(i);started_=GetTickCount64();
-    if(snapshot.backend!=2){
-        if(snapshot.gp.empty())snapshot.gp=find_order_gp();
-        else{auto name=fs::u8path(snapshot.gp);if(!name.has_parent_path()){if(!name.has_extension())name+=L".exe";const auto found=executable_in_path(name);if(!found.empty())snapshot.gp=found;}}
-        if(!snapshot.gp.empty())try{launch(true);return true;}catch(const std::exception&){stop();return gp_failed("gp_start_failed");}
-        return gp_failed("gp_not_found");
-    }
-    try{launch(false);return true;}catch(const std::exception&e){error=e.what();stop();return false;}
+    if(snapshot.gp.empty())snapshot.gp=find_order_gp();
+    else{auto name=fs::u8path(snapshot.gp);if(!name.has_parent_path()){if(!name.has_extension())name+=L".exe";const auto found=executable_in_path(name);if(!found.empty())snapshot.gp=found;}}
+    if(snapshot.backend==1){if(snapshot.gp.empty()){result=order_gp::failure("gp","gp_not_found");return true;}try{launch(true);return true;}catch(const std::exception&){stop();return gp_failed("gp_start_failed");}}
+
+    try{launch(false);return true;}catch(const std::exception&e){const std::string reason=e.what();stop();if(snapshot.backend==0&&!snapshot.gp.empty()){try{fallback_="pari_helper_unavailable";launch(true);return true;}catch(const std::exception&){stop();}}error=reason;return false;}
 }
 void GroupOrderJob::launch(bool gp){
-    gp_phase_=gp;
+    gp_phase_=gp;phase_started_=GetTickCount64();
     try{
         wchar_t directory[MAX_PATH],name[MAX_PATH];if(!GetTempPathW(MAX_PATH,directory)||!GetTempFileNameW(directory,L"ego",0,name))throw std::runtime_error("Cannot create analysis request");request_=name;
         if(!GetTempFileNameW(directory,L"ego",0,name))throw std::runtime_error("Cannot create analysis output");output_=name;
-        go_json::Value request;request.type='o';request.set("factor",go_json::Value::string(snapshot.factor));request.set("sigma",go_json::Value::string(snapshot.sigma));request.set("gp",go_json::Value::string(""));request.set("profile",go_json::Value::number(std::to_string(snapshot.profile)));request.set("backend",go_json::Value::number("2"));
+        go_json::Value request;request.type='o';request.set("factor",go_json::Value::string(snapshot.factor));request.set("sigma",go_json::Value::string(snapshot.sigma));request.set("gp",go_json::Value::string(snapshot.gp));request.set("profile",go_json::Value::number(std::to_string(snapshot.profile)));request.set("backend",go_json::Value::number(std::to_string(snapshot.backend)));
         std::ofstream out(request_,std::ios::binary);out<<(gp?order_gp::script(snapshot):request.dump());out.close();if(!out)throw std::runtime_error("Cannot write analysis request");
         job_=CreateJobObjectW(nullptr,nullptr);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if(!gp){limits.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_PROCESS_MEMORY;limits.ProcessMemoryLimit=512ull*1024*1024;}
         if(!job_||!SetInformationJobObject(job_,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))throw std::runtime_error("Cannot isolate analysis process");
-        const auto exe=fs::u8path(gp?snapshot.gp:helper_).wstring();auto cmd=quote(exe)+(gp?L" -q -f "+quote(request_):L" "+quote(request_)+L" "+quote(output_));STARTUPINFOW si{sizeof(si)};PROCESS_INFORMATION pi{};
+        const auto exe=fs::u8path(gp?snapshot.gp:helper_).wstring();auto cmd=quote(exe)+(gp?L" -q -f -s 134217728 "+quote(request_):L" "+quote(request_)+L" "+quote(output_));STARTUPINFOW si{sizeof(si)};PROCESS_INFORMATION pi{};
         HANDLE capture=INVALID_HANDLE_VALUE,input=INVALID_HANDLE_VALUE;
         if(gp){SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};capture=CreateFileW(output_.c_str(),GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_TEMPORARY,nullptr);
             if(capture!=INVALID_HANDLE_VALUE)SetHandleInformation(capture,HANDLE_FLAG_INHERIT,HANDLE_FLAG_INHERIT);
@@ -104,8 +104,19 @@ void GroupOrderJob::launch(bool gp){
 }
 bool GroupOrderJob::gp_failed(const std::string&reason){
     stop();fallback_=reason;
-    if(snapshot.backend==1){result=order_gp::failure("gp",reason);return true;}
+    if(snapshot.backend==1||snapshot.backend==0){result=order_gp::failure("gp",reason);return true;}
     try{launch(false);return true;}catch(const std::exception&e){error=reason+"; "+e.what();stop();return false;}
+}
+bool GroupOrderJob::native_interrupted(const std::string&reason){
+    if(process_){TerminateJobObject(job_,124);WaitForSingleObject(process_,1000);}
+    try{result=go_json::parse(read(output_));if(result.get("protocol").text()!="1")throw std::runtime_error("Invalid checkpoint");}
+    catch(...){result=order_gp::failure("native",reason);}
+    if(result.get("status").text()!="complete"){
+        result.set("status",go_json::Value::string(result.has("components")?"partial":"resource_limit"));
+        result.set("all_proven",order_gp::flag(false));
+        const auto phase=result.get("reason").text();result.set("reason",go_json::Value::string(reason+(phase.empty()?"":"; "+phase)));
+    }
+    if(!fallback_.empty())result.set("fallback",go_json::Value::string(fallback_));cleanup();return true;
 }
 bool GroupOrderJob::poll(){
     if(!process_)return false;
@@ -113,12 +124,14 @@ bool GroupOrderJob::poll(){
         if(fs::file_size(output_)>2*1024*1024)throw std::runtime_error(gp_phase_?"gp_output_limit":"Analysis output exceeds limit");
         if(GetTickCount64()-started_>45000)throw std::runtime_error("Analysis exceeded 45 second deadline");
         const auto wait=WaitForSingleObject(process_,0);if(wait==WAIT_FAILED)throw std::runtime_error("Cannot wait for analysis process");
-        if(wait==WAIT_TIMEOUT){if(gp_phase_&&GetTickCount64()-started_>=30000)throw std::runtime_error("gp_timeout");return false;}
+        if(wait==WAIT_TIMEOUT){if(gp_phase_&&GetTickCount64()-started_>=30000)throw std::runtime_error("gp_timeout");if(!gp_phase_&&(snapshot.backend==2||snapshot.backend==3)&&GetTickCount64()-phase_started_>=7000)return native_interrupted("native five-second budget plus coordinator cleanup exceeded");return false;}
         DWORD code=0;GetExitCodeProcess(process_,&code);
         if(gp_phase_){if(code)throw std::runtime_error("gp_exit_failed");result=order_gp::parse(read(output_),snapshot);cleanup();return true;}
+        if(code==124)return native_interrupted("native five-second budget exhausted");
         auto value=go_json::parse(read(output_));
         if(value.get("protocol").text()!="1")throw std::runtime_error("Invalid analysis helper protocol");
-        result=std::move(value);if(!fallback_.empty())result.set("fallback",go_json::Value::string(fallback_));if(code||result.has("error"))error=result.get("error").text("Analysis helper failed");cleanup();return true;
+        result=std::move(value);if(code&&!result.has("error"))return native_interrupted("Local native engine exited (Windows "+std::to_string(code)+")");
+        if(!fallback_.empty())result.set("fallback",go_json::Value::string(fallback_));if(code||result.has("error"))error=result.get("error").text("Analysis helper failed");cleanup();return true;
     }catch(const std::invalid_argument&e){result=order_gp::failure(gp_phase_?"gp":"native",e.what(),"invalid_input");stop();return true;}
     catch(const std::exception&e){const std::string message=e.what();if(gp_phase_){gp_failed(message);return !busy();}stop();error=message;return true;}
 }

@@ -97,6 +97,8 @@ if ($Stage1Exe) {
 }
 $hashes = [ordered]@{}
 $files = @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt','ECM_TOML_REFERENCE.md')
+. (Join-Path $PSScriptRoot 'diagnostics_payload.ps1')
+$files = @($files + @(Copy-EcmDiagnosticsPayload $repo $Build $OutDir) | Select-Object -Unique)
 foreach ($name in $files) {
     $hashes[$name] = (Get-FileHash -LiteralPath (Join-Path $OutDir $name) -Algorithm SHA256).Hash
 }

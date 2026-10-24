@@ -229,7 +229,7 @@ void print_group_order_factor(const ecm_stage1::TaskResult &result,uint32_t i,in
         auto diagnosis=session.group(request);const auto &value=diagnosis.value;
         std::cout<<"  go_status["<<i<<"]: backend="<<diagnosis.backend<<" status="<<ecm_group_order::name(value.status)
             <<" all_proven="<<(value.all_proven?1:0)<<" reason="<<ecm_diagnostics::quote(value.reason)
-            <<" gp_failure="<<ecm_diagnostics::quote(diagnosis.gp_failure)<<'\n';
+            <<" pari_failure="<<ecm_diagnostics::quote(diagnosis.pari_failure)<<" gp_failure="<<ecm_diagnostics::quote(diagnosis.gp_failure)<<'\n';
         if(value.group_order_computed){
             std::cout<<"  go["<<i<<"]="<<value.group_order.str()<<'\n';
             std::cout<<"  go_factor["<<i<<"]=";print_parts(value.multiple_factorization.factors,B1);std::cout<<'\n';

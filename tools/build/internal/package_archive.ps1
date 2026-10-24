@@ -14,8 +14,11 @@ $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $staging = Join-Path $BuildDir ('_packages/' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
 foreach ($name in $Files) {
-    if ([IO.Path]::GetFileName($name) -ne $name) { throw "Archive payload must be a filename: $name" }
-    Copy-Item -LiteralPath (Join-Path $PackageDir $name) -Destination $staging
+    $base = [IO.Path]::GetFullPath($staging).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+    $target = [IO.Path]::GetFullPath((Join-Path $base $name))
+    if ([IO.Path]::IsPathRooted($name) -or -not $target.StartsWith($base,[StringComparison]::OrdinalIgnoreCase)) { throw "Invalid archive payload path: $name" }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $PackageDir $name) -Destination $target
 }
 # Do not archive a user's existing TOML config, work queue, saves, logs or progress state.
 Copy-Item -LiteralPath (Join-Path $staging 'ecm.toml.example') -Destination (Join-Path $staging 'ecm.toml')
@@ -25,7 +28,7 @@ $header = if ($Stage -eq 'stage1') { '# Add Stage1 ECM worktodo assignments here
 }
 [IO.File]::WriteAllText((Join-Path $staging $queueName), $header + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
 $zip = $PackageDir.TrimEnd('\','/') + '.zip'
-$payload = @(Get-ChildItem -LiteralPath $staging -File | ForEach-Object { $_.FullName })
+$payload = @(Get-ChildItem -LiteralPath $staging | ForEach-Object { $_.FullName })
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal -Force
 $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText($zip + '.sha256', "$digest  $([IO.Path]::GetFileName($zip))" + [Environment]::NewLine)

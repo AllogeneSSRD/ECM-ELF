@@ -413,6 +413,7 @@ int run(const Options& options, int show, FILE* log) {
              for(const auto&entry:app.group_order_form.fields){const auto a=point(entry.second.input_min),b=point(entry.second.input_max);std::fprintf(log," %s=%ld,%ld",entry.first.c_str(),(a.x+b.x)/2,(a.y+b.y)/2);}
              for(const auto&entry:app.group_order_controls){const auto pos=point(entry.second);std::fprintf(log," go_%s=%ld,%ld",entry.first.c_str(),pos.x,pos.y);}
              std::fprintf(log," completions=%u success=%d toast_count=%zu toast_error=%d backend=%d input_factor=%s input_sigma=%s",app.group_order_completions,app.group_order_success,app.toasts.size(),!app.toasts.empty()&&app.toasts.back().error,app.group_order_input.backend,app.group_order_input.factor.c_str(),app.group_order_input.sigma.c_str());
+               std::fprintf(log," native_engine=%s all_proven=%d",app.group_order_job.result.get("native_engine").text().c_str(),app.group_order_job.result.get("all_proven").scalar=="true");
              const auto output_lo=point(app.group_order_output_min),output_hi=point(app.group_order_output_max);
              std::fprintf(log," sigma_min=%u text_selection=%d output_min=%ld,%ld output_max=%ld,%ld",ecmgui_v2::order_sigma_minimum(app.group_order_input.profile),app.group_order_selection,output_lo.x,output_lo.y,output_hi.x,output_hi.y);
              for(const auto&entry:app.group_order_curve_controls){const auto a=point(entry.second.first),b=point(entry.second.second);std::fprintf(log," curve%d=%ld,%ld",entry.first,(a.x+b.x)/2,(a.y+b.y)/2);}std::fprintf(log,"\n");}

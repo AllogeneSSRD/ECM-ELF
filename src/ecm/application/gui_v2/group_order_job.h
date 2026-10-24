@@ -29,13 +29,14 @@ public:
 private:
     HANDLE process_=nullptr,job_=nullptr;
     std::wstring request_,output_;
-    unsigned long long started_=0;
+    unsigned long long started_=0,phase_started_=0;
     bool gp_phase_=false;
     std::string helper_,fallback_;
     void cleanup();
     void stop();
     void launch(bool gp);
     bool gp_failed(const std::string& reason);
+    bool native_interrupted(const std::string& reason);
 };
 std::string order_signature(const OrderInput&);
 }

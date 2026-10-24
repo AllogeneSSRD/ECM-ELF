@@ -1,5 +1,6 @@
 #pragma once
 #include "group_order_job.h"
+#include "group_order_result.h"
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -34,9 +35,8 @@ if(k==1,
  if(b==0||a^2==4,error("singular Montgomery curve"));E=ellinit([0,b*a,0,b^2,0]);P=[b*x,b^2*y]);
 if(#E==0||!ellisoncurve(E,P),error("invalid curve"));[E,P];
 };
-)GP")+"ecm_go()={my(p="+i.factor+",s="+i.sigma+",k="+std::to_string(i.profile)+R"GP(,m,E,P,n,f,o,fo);
-if(p<=3||p>=2^4096||s==0,print("ECM_MATH_ERROR|invalid_input");return());
-if(!isprime(p),print("ECM_MATH_ERROR|composite_modulus");return());
+)GP")+R"GP(ecm_prime(p,s,k)={my(m,E,P,n,f,o,fo);
+if(p<=3,print("ECM_MATH_ERROR|unsupported_characteristic");return());
 iferr(m=ecm_model(p,s,k),err,print("ECM_MATH_ERROR|invalid_curve");return());E=m[1];P=m[2];
 n=ellcard(E);f=factor(n);for(i=1,matsize(f)[1],if(!isprime(f[i,1]),error("unproven factor")));
 o=ellorder(E,P,[n,f]);fo=factor(o);if(n%o||ellmul(E,P,o)!=[0],error("point order"));
@@ -45,6 +45,12 @@ print("GROUP|",n);print("POINT|",o);
 for(i=1,matsize(f)[1],print("G|",f[i,1],"|",f[i,2]));
 for(i=1,matsize(fo)[1],print("P|",fo[i,1],"|",fo[i,2]));print("ECM_OK");
 };
+)GP"+"ecm_go()={my(n="+i.factor+",s="+i.sigma+",k="+std::to_string(i.profile)+R"GP(,f,p);
+if(n<=1||n>=2^4096||s==0,print("ECM_MATH_ERROR|invalid_input");return());
+if(isprime(n),ecm_prime(n,s,k);return());
+f=factor(n);for(j=1,matsize(f)[1],if(!isprime(f[j,1]),error("unproven input factor")));
+for(j=1,matsize(f)[1],p=f[j,1];print("COMPONENT|",p,"|",f[j,2]);ecm_prime(p,s,k);print("END_COMPONENT"));
+print("ECM_BATCH_OK");};
 iferr(ecm_go(),err,print("ECM_GP_ERROR"));quit();
 )GP";
 }
@@ -58,7 +64,41 @@ inline std::string multiply(const std::string&a,const std::string&b){
 }
 inline std::string plus_one(std::string s){for(auto it=s.rbegin();it!=s.rend();++it)if(*it!='9'){++*it;return s;}else *it='0';return '1'+s;}
 inline std::string difference(std::string a,std::string b){if(compare(a,b)<0)a.swap(b);int borrow=0;for(size_t i=0;i<a.size();++i){int d=a[a.size()-1-i]-'0'-borrow-(i<b.size()?b[b.size()-1-i]-'0':0);borrow=d<0;a[a.size()-1-i]=char('0'+(d<0?d+10:d));}return natural(a);}
+inline go_json::Value parse(const std::string&raw,const OrderInput&i);
+inline go_json::Value parse_components(const std::string&raw,const OrderInput&i){
+    using V=go_json::Value;V components,factors;components.type=factors.type='a';
+    std::istringstream in(raw);std::string line,prime,exponent,body,product="1",previous;
+    bool active=false,done=false;
+    const auto bound=natural(i.factor);
+    while(std::getline(in,line)){
+        if(!line.empty()&&line.back()=='\r')line.pop_back();
+        if(line.rfind("COMPONENT|",0)==0){
+            if(active||done||components.items.size()>=4096)throw std::invalid_argument("Invalid GP component boundary");
+            const auto split=line.find('|',10);if(split==line.npos)throw std::invalid_argument("Invalid GP component");
+            prime=natural(line.substr(10,split-10));exponent=natural(line.substr(split+1));
+            if(compare(prime,"2")<0||compare(prime,bound)>=0||(!previous.empty()&&compare(prime,previous)<=0)||exponent.size()>4)throw std::invalid_argument("Invalid GP input factor");
+            const auto e=std::stoul(exponent);if(!e||e>4096)throw std::invalid_argument("Invalid GP input exponent");
+            for(unsigned n=0;n<e;++n){product=multiply(product,prime);if(compare(product,bound)>0)throw std::invalid_argument("GP input factors exceed modulus");}
+            active=true;body.clear();previous=prime;
+        }else if(line=="END_COMPONENT"){
+            if(!active)throw std::invalid_argument("Unexpected GP component end");
+            auto input=i;input.factor=prime;auto component=parse(body,input);
+            component.set("prime",V::string(prime));component.set("exponent",V::number(exponent));components.items.push_back(std::move(component));
+            V f;f.type='o';f.set("prime",V::string(prime));f.set("exponent",V::number(exponent));f.set("primality",V::string("proven"));factors.items.push_back(std::move(f));active=false;
+        }else if(line=="ECM_BATCH_OK"){
+            if(active||done)throw std::invalid_argument("Invalid GP batch completion");done=true;
+        }else if(active){
+            if(line=="ECM_GP_ERROR"||line=="ECM_BATCH_OK")throw std::runtime_error("gp_protocol_failed");
+            body+=line+'\n';
+        }else if(line=="ECM_GP_ERROR")throw std::runtime_error("gp_protocol_failed");
+        else if(line.rfind("GROUP|",0)==0||line.rfind("POINT|",0)==0||line=="ECM_OK")throw std::invalid_argument("GP result outside component");
+    }
+    if(!done||active||components.items.empty())throw std::runtime_error("gp_protocol_failed");
+    if(product!=bound)throw std::invalid_argument("GP input factor product mismatch");
+    return order_components(std::move(components),std::move(factors),"1","gp",true);
+}
 inline go_json::Value parse(const std::string&raw,const OrderInput&i){
+    if(raw.find("COMPONENT|")!=raw.npos)return parse_components(raw,i);
     std::istringstream in(raw);std::string line,group,point;bool ok=false;std::map<std::string,unsigned> g,p;
     while(std::getline(in,line)){
         if(!line.empty()&&line.back()=='\r')line.pop_back();

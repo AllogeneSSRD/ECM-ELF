@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 param([string]$Build='build_go_fallback_fixture')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
@@ -10,3 +10,8 @@ $command='cl.exe /nologo /O2 /MD /EHsc /std:c++17 /utf-8 /I src /I third_party/g
 & cmd /d /c (Join-Path $Build 'build.cmd') 2>&1|Out-File (Join-Path $Build 'build.log') -Encoding utf8
 if($LASTEXITCODE){Get-Content (Join-Path $Build 'build.log') -Tail 25;throw 'fallback fixture compile failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
+
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build_diagnostics.ps1') -Build (Join-Path $Build 'diagnostics-build') -VcVars $vc
+if($LASTEXITCODE){throw 'fixture diagnostics build failed'}
+& python (Join-Path $repo 'tools/packaging/diagnostics_runtime.py') --package-build (Join-Path $Build 'diagnostics-build') --out $Build
+if($LASTEXITCODE){throw 'fixture diagnostics deployment failed'}

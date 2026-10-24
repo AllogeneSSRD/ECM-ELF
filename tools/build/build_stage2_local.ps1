@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
 Build the standalone CUDA Stage2 save/queue executable (MSVC + nvcc + GMP).
@@ -221,6 +221,13 @@ foreach ($name in $gmpHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $Gmp $name)).Hash -ne $gmpHashes[$name]) { throw "GMP changed during build: $name" }
 }
 Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $Build -Force
+# The queue driver is built without CMake; build the same diagnostic host target.
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test/build_diagnostics.ps1') -Build (Join-Path $Build 'diagnostics-build') -GmpRoot $Gmp -VcVars $vc.VcVars
+if ($LASTEXITCODE) { throw 'Stage2 diagnostic host build failed' }
+$diagnosticFiles = & python (Join-Path $repo 'tools/packaging/diagnostics_runtime.py') --package-build (Join-Path $Build 'diagnostics-build') --out $Build
+if ($LASTEXITCODE) { throw 'Stage2 diagnostic runtime deployment failed' }
+Copy-Item -LiteralPath (Join-Path $Build 'diagnostics-build/diagnostics_build_manifest.json') -Destination $Build -Force
+
 $objectHashes = [ordered]@{}
 $compileUnits = [ordered]@{}
 foreach ($src in $sources) {

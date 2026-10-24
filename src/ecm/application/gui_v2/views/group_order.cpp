@@ -43,7 +43,7 @@ void App::draw_group_order(bool zh){
     {ui::CompactForm form("go-fields",group_order_form);
         form.field("factor",ui::text("go.factor",zh),[&]{edit("##factor",group_order_input.factor,1235);});
         form.field("sigma","sigma",[&]{edit("##sigma",group_order_input.sigma,21,ui::text(group_order_input.profile==0?"go.sigma.suyama_range":"go.sigma.range",zh));if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text("go.sigma.hint",zh));});}
-    const char*backends[]{ui::text("go.auto",zh),"PARI/GP",ui::text("go.native",zh)};
+    const char*backends[]{ui::text("go.auto",zh),"PARI/GP",ui::text("go.native",zh),"GMP"};
     const float available=ImGui::GetContentRegionAvail().x,row_height=24*scale;
     float combo_width=0;for(auto name:backends)combo_width=std::max(combo_width,ImGui::CalcTextSize(name).x);
     combo_width=std::min(combo_width+ImGui::CalcTextSize(ui::text("go.algorithm",zh)).x+50*scale,available*.4f);
@@ -62,10 +62,10 @@ void App::draw_group_order(bool zh){
         if(ui::button("go-save",ui::text("go.save_path",zh),ui::ButtonKind::Secondary,p,scale,!ready,nullptr,true,-1,row_height))save_group_order_gp();group_order_save=center();ImGui::TableNextColumn();
         const std::string preview=std::string(ui::text("go.algorithm",zh))+": "+backends[group_order_input.backend];ImGui::SetNextItemWidth(-1);
         const bool open=ImGui::BeginCombo("##go-algorithm",preview.c_str());group_order_controls["algorithm"]=center();
-        if(open){for(int i=0;i<3;++i){if(ImGui::Selectable(backends[i],group_order_input.backend==i))group_order_input.backend=i;group_order_controls["backend"+std::to_string(i)]=center();}ImGui::EndCombo();}
+        if(open){for(int i=0;i<4;++i){if(ImGui::Selectable(backends[i],group_order_input.backend==i))group_order_input.backend=i;group_order_controls["backend"+std::to_string(i)]=center();}ImGui::EndCombo();}
         ImGui::EndTable();
     }ImGui::PopStyleVar();
-    if(ui::button("go-calculate",ui::text("go.calculate",zh),ui::ButtonKind::Primary,p,scale,group_order_job.busy(),nullptr,true,0,0,ui::Icon::Calculate)){
+    const auto calculate=[&](){
         auto request=group_order_input;
         if(!request.gp.empty()&&fs::u8path(request.gp).is_relative()){
             const auto path=fs::u8path(base)/fs::u8path(request.gp);if(request.gp.find_first_of("/\\")!=std::string::npos||fs::exists(path))request.gp=path.lexically_normal().u8string();}
@@ -73,7 +73,9 @@ void App::draw_group_order(bool zh){
         if(started&&request.gp==group_order_input.gp&&!group_order_job.snapshot.gp.empty())group_order_input.gp=group_order_job.snapshot.gp;
         // GP-only refusal can finish synchronously; poll() has no process to observe.
         if(!group_order_job.busy())notify_group_order();
-    }group_order_calculate=center();ImGui::SameLine();
+    };
+    if(ui::button("go-calculate",ui::text("go.calculate",zh),ui::ButtonKind::Primary,p,scale,group_order_job.busy(),nullptr,true,0,0,ui::Icon::Calculate))calculate();
+    group_order_calculate=center();ImGui::SameLine();
     if(ui::button("go-cancel",ui::text("go.cancel",zh),ui::ButtonKind::Secondary,p,scale,!group_order_job.busy(),nullptr,true)){group_order_job.cancel();toast(ui::text("go.cancelled",zh),false,true);}group_order_cancel=center();
     if(group_order_job.busy())ui::secondary_text(ui::text("go.running",zh));
     if(!group_order_job.error.empty())ImGui::TextWrapped("%s",group_order_job.error.c_str());
@@ -81,30 +83,46 @@ void App::draw_group_order(bool zh){
     const auto&r=group_order_job.result;
     if(r.type=='o'&&r.has("status")){
         ImGui::Separator();const auto&snapshot=group_order_job.snapshot;
-        ImGui::TextWrapped("p = %s | sigma = %s | %s",snapshot.factor.c_str(),snapshot.sigma.c_str(),ui::curve_presets[snapshot.profile].label);
+        const bool composite=r.has("components");
+        ImGui::TextWrapped("%s = %s | sigma = %s | %s",composite?"n":"p",snapshot.factor.c_str(),snapshot.sigma.c_str(),ui::curve_presets[snapshot.profile].label);
         // Path resolution belongs to the snapshot; compare the editable mathematical identity.
         if(snapshot.factor!=group_order_input.factor||snapshot.sigma!=group_order_input.sigma||snapshot.profile!=group_order_input.profile)ui::secondary_text(ui::text("go.stale",zh));
         const std::string status=ui::text(("go.status."+r.get("status").text()).c_str(),zh);
-        const std::string summary=status+" | "+r.get("backend").text()+" | "+ui::text(r.get("all_proven").scalar=="true"?"go.proven":"go.conditional",zh);
+        const std::string summary=status+" | "+r.get("backend").text()+" | "+ui::text(r.get("all_proven").scalar=="true"?"go.proven":r.get("status").text()=="complete"?"go.conditional":"go.incomplete",zh);
         ImGui::TextWrapped("%s",summary.c_str());
         if(ImGui::IsItemHovered()){
             ImGui::BeginTooltip();ImGui::Text("%s: %s",ui::text("go.primality",zh),ui::text(("go.primality."+r.get("modulus_primality").text()).c_str(),zh));
+            if(!r.get("native_engine").text().empty())ImGui::Text("%s: %s",ui::text("go.local_engine",zh),r.get("native_engine").text().c_str());
+            if(!r.get("native_failure").text().empty())ImGui::TextWrapped("%s",r.get("native_failure").text().c_str());
             if(!r.get("fallback").text().empty())ImGui::TextWrapped("%s: %s",ui::text("go.fallback",zh),r.get("fallback").text().c_str());ImGui::EndTooltip();
         }
-        const bool group=r.get("group_computed").scalar=="true",point=r.get("status").text()=="complete"&&r.get("point_minimality").scalar=="true";
-        group_order_copy="p = "+snapshot.factor+" | sigma = "+snapshot.sigma+" | "+ui::curve_presets[snapshot.profile].label+"\n"+status+" | "+r.get("backend").text()+"\n";
+        group_order_copy=std::string(composite?"n = ":"p = ")+snapshot.factor+" | sigma = "+snapshot.sigma+" | "+ui::curve_presets[snapshot.profile].label+"\n"+status+" | "+r.get("backend").text()+"\n";
         std::string output;
-        const auto show_order=[&](bool is_point,bool computed){
-            const std::string first=std::string(ui::text(is_point?"go.point_order":"go.group_order",zh))+": "+(computed?r.get(is_point?"point_order":"group_order").text():ui::text("go.incomplete",zh));
+        const auto show_order=[&](const go_json::Value& value,bool is_point,bool computed){
+            const std::string first=std::string(ui::text(is_point?"go.point_order":"go.group_order",zh))+": "+(computed?value.get(is_point?"point_order":"group_order").text():ui::text("go.incomplete",zh));
             if(!output.empty())output+="\n";output+=first;group_order_copy+=first+"\n";
             if(computed){
-                auto factors=ui::order_factorization(r,is_point);
+                auto factors=ui::order_factorization(value,is_point);
                 const std::string second="= "+(factors.empty()?std::string(ui::text("go.incomplete",zh)):factors);
                 output+="\n    "+second;
                 group_order_copy+="    "+second+"\n";
             }
         };
-        show_order(false,group);show_order(true,point);
+        const auto show_component=[&](const go_json::Value& value){
+            show_order(value,false,value.get("group_computed").scalar=="true");
+            show_order(value,true,value.get("status").text()=="complete"&&value.get("point_minimality").scalar=="true");
+        };
+        if(composite){
+            ui::secondary_text(ui::text("go.composite_hint",zh));
+            output="n = "+ui::order_input_factorization(r);group_order_copy+=output+"\n";
+            for(const auto& component:r.get("components").items){
+                std::string heading="p = "+component.get("prime").text();
+                if(component.get("exponent").text()!="1")heading+=" | e = "+component.get("exponent").text();
+                heading+=" | "+std::string(ui::text(("go.status."+component.get("status").text()).c_str(),zh));
+                output+="\n\n"+heading;group_order_copy+="\n"+heading+"\n";show_component(component);
+                if(!component.get("reason").text().empty()){output+="\n"+component.get("reason").text();group_order_copy+=component.get("reason").text()+"\n";}
+            }
+        }else show_component(r);
         // Use native text editing interaction in read-only mode, with the ordinary
         // body font and transparent frame. Keep one selection across both orders.
         std::vector<char> selectable(output.begin(),output.end());selectable.push_back(0);
@@ -120,6 +138,12 @@ void App::draw_group_order(bool zh){
         ImGui::PopID();ImGui::PopStyleColor();ImGui::PopStyleVar(2);
         if(!r.get("reason").text().empty())ImGui::TextWrapped("%s",r.get("reason").text().c_str());
         if(ui::button("go-copy",ui::text("go.copy",zh),ui::ButtonKind::Secondary,p,scale,false,nullptr,true))ImGui::SetClipboardText(group_order_copy.c_str());group_order_controls["copy"]=center();
+        if(ui::order_native_limited(r)){
+            ui::secondary_text(ui::text("go.native_limit_hint",zh));
+            if(ui::button("go-auto-retry",ui::text("go.auto_retry",zh),ui::ButtonKind::Secondary,p,scale,group_order_job.busy(),nullptr,true)){
+                group_order_input.backend=0;calculate();
+            }group_order_controls["auto_retry"]=center();
+        }
     }
     ImGui::Separator();ImGui::TextUnformatted(ui::text("go.result_files",zh));
     if(ImGui::Button(ui::text("go.refresh",zh)))refresh();group_order_controls["refresh"]=center();ImGui::SameLine();

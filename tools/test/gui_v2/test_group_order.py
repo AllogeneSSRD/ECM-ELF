@@ -13,7 +13,10 @@ def clipboard_text():
     kernel=c.WinDLL('kernel32',use_last_error=True)
     kernel.GlobalLock.argtypes=[c.c_void_p];kernel.GlobalLock.restype=c.c_void_p
     kernel.GlobalUnlock.argtypes=[c.c_void_p]
-    assert user.OpenClipboard(None)
+    deadline=time.monotonic()+2
+    while not user.OpenClipboard(None):
+        assert time.monotonic()<deadline,'Clipboard remained busy'
+        time.sleep(.025)
     try:
         handle=user.GetClipboardData(13);assert handle
         address=kernel.GlobalLock(handle);assert address
@@ -81,7 +84,9 @@ def main():
             assert max(v[1] for v in coords)-min(v[1] for v in coords)<=1,coords
         try:
             wait(lambda r:r['files']=='2' and 'factor' in r and 'curve1' in r)
-            initial=samples();assert initial.get('input_sigma','')=='' and initial['sigma_min']=='6'
+            initial=samples();
+            if a.gp_only:backend(1)
+            assert initial.get('input_sigma','')=='' and initial['sigma_min']=='6'
             click('factor');type_text('1009');click('calculate')
             empty=wait(lambda r:int(r['completions'])==1);assert empty['busy']=='0' and empty['toast_error']=='1'
             capture(hwnd,folder/'empty-sigma.png')
@@ -107,15 +112,34 @@ def main():
             (folder/'copied.txt').write_text(copied,encoding='utf-8')
             completed=int(r['completions']);click('calculate');r=wait(lambda r:int(r['completions'])==completed+1 and r['busy']=='0')
             assert r['success']=='1' and r['toast_error']=='0'
-            # A mathematical failure is asynchronous; invalid text fails before spawning.
-            click('factor');type_text('\b'*4+'15');click('calculate');r=wait(lambda r:int(r['completions'])==completed+2 and r['busy']=='0')
-            assert r['status']=='invalid_input' and r['success']=='0' and r['toast_error']=='1'
-            click('factor');type_text('\b'*2+'1009');click('sigma');type_text('\b'*2+'x');click('calculate')
-            r=wait(lambda r:int(r['completions'])==completed+3);assert r['success']=='0' and r['toast_error']=='1'
-            click('sigma');type_text('\b'+'26');click('calculate');r=wait(lambda r:int(r['completions'])==completed+4 and r['busy']=='0')
+            # Composite input preserves separate selectable/copyable prime-field results.
+            click('factor');type_text('\b'*4+'1022117');click('calculate');r=wait(lambda r:int(r['completions'])==completed+2 and r['busy']=='0')
+            assert r['status']=='complete' and r['success']=='1' and r['toast_error']=='0'
+            click('go_copy');composite=clipboard_text()
+            assert 'n = 1022117' in composite and 'p = 1009' in composite and 'p = 1013' in composite
+            assert composite.count('#E(F_p): ')==2 and composite.count('ord(P): ')==2
+            (folder/'composite-copied.txt').write_text(composite,encoding='utf-8');capture(hwnd,folder/'composite-result.png')
+            # Unsupported small characteristic stays local to that component.
+            click('factor');type_text('\b'*7+'2018');click('calculate');r=wait(lambda r:int(r['completions'])==completed+3 and r['busy']=='0')
+            assert r['status']=='partial' and r['success']=='0' and r['toast_error']=='1'
+            click('go_copy');partial=clipboard_text();assert 'p = 2' in partial and 'p = 1009' in partial and '#E(F_p): 996' in partial
+            # Malformed input still fails before spawning.
+            click('factor');type_text('\b'*4+'1009');click('sigma');type_text('\b'*2+'x');click('calculate')
+            r=wait(lambda r:int(r['completions'])==completed+4);assert r['success']=='0' and r['toast_error']=='1'
+            click('sigma');type_text('\b'+'26');click('calculate');r=wait(lambda r:int(r['completions'])==completed+5 and r['busy']=='0')
             assert r['success']=='1' and r['status']=='complete'
             capture(hwnd,folder/('auto-gp-result.png' if a.gp_only else 'native-result.png'))
             click('curve2');time.sleep(.1);assert samples()['profile']=='0','Unsupported Edwards choice must stay disabled'
+            if not a.gp_only:
+                # User's larger prime now completes in the native library,
+                # including the primality proof, without a GP process.
+                completed=int(samples()['completions']);click('factor');type_text('\b'*4+'3436193553215096358758503')
+                click('sigma');type_text('\b'*2+'1955774944');click('calculate')
+                r=wait(lambda r:int(r['completions'])==completed+1 and r['busy']=='0')
+                assert r['backend']=='2' and r['status']=='complete' and r['group']=='3436193553215760556775100' and r['point']=='286349462767980046397925'
+                assert r['native_engine']=='pari' and r['all_proven']=='1'
+                assert r['success']=='1' and r['toast_error']=='0'
+                capture(hwnd,folder/'large-native-result.png')
             # The two real result-file shapes restore parameterization, sigma and p.
             imported=[]
             for index in range(2):

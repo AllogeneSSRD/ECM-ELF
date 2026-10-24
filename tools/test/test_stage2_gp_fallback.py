@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import time
@@ -15,6 +16,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     for key in ('exe','fixture','gp','output'):ap.add_argument('--'+key,type=Path,required=True)
     a=ap.parse_args();root=a.output.resolve();root.mkdir(parents=True,exist_ok=False);passed=[]
+    bare=root/'without-diagnostics';bare.mkdir();shutil.copy2(a.exe.resolve(),bare/a.exe.name);shutil.copy2(a.exe.resolve().parent/'gmp-10.dll',bare/'gmp-10.dll')
     for mode in ('real','missing','timeout','protocol','exit','flood','factor_invalid','probable','partial','blocked_log'):
         work=root/mode;work.mkdir();env=os.environ.copy();env['ECM_TEST_GP_MODE']=mode
         if mode=='probable':exponent=254;raw=(1<<127)-1
@@ -28,7 +30,9 @@ def main():
         if mode=='blocked_log':(work/'factor_details').write_text('Deliberate non-directory diagnostic path',encoding='utf-8')
         results=work/'result.jsonl';log=work/'curve.log'
         queue=work/'worktodo.txt';queue.write_text(f'ECMSTAGE2=1,2,{exponent},-1,"fixture.save",3,0,1\n',encoding='utf-8')
-        cmd=[str(a.exe.resolve()),'--config',str(ini),'--worktodo',str(queue),'--once','--device','1',
+        fault=mode in ('timeout','protocol','exit','flood','factor_invalid')
+        binary=bare/a.exe.name if fault else a.exe.resolve()
+        cmd=[str(binary),'--config',str(ini),'--worktodo',str(queue),'--once','--device','1',
              '--short-calibration','0','--tune-runtime','0','--d','210','--carrier-exponent','0',
              '--results',str(results),'--log',str(log)]
         # Watch the actual GP child boundary: the raw submission must already exist.
@@ -52,15 +56,19 @@ def main():
         reconstructed=int(analysis['remaining_cofactor'])
         for q in analysis['prime_powers']:reconstructed*=int(q['factor'])**q['multiplicity']
         assert reconstructed==raw,analysis
-        if mode in ('real','blocked_log'):assert analysis['backend']=='gp' and details['factorization_complete'],analysis
+        if mode in ('real','blocked_log','missing','probable'):
+            assert analysis['backend']=='pari' and details['factorization_complete'],analysis
+            assert analysis['gp_failure']=='',analysis
+            assert all(p['proven'] for p in analysis['prime_powers']),analysis
+        elif mode=='partial':
+            assert analysis['backend']=='pari',analysis
+            if details['factorization_complete']:assert int(analysis['remaining_cofactor'])==1
+            else:assert int(analysis['remaining_cofactor'])>1
         elif mode=='factor_invalid':assert analysis['backend']=='gp' and not details['factorization_complete'],analysis
-        elif mode=='probable':
-            assert not details['factorization_complete'] and details['prime_factors']==[],details
-            assert analysis['status']=='partial' and analysis['reason']=='primality_unproven',analysis
-            assert len(analysis['prime_powers'])==1 and not analysis['prime_powers'][0]['proven'],analysis
-        elif mode=='partial':assert not details['factorization_complete'] and int(analysis['remaining_cofactor'])>1,analysis
         else:
-            assert analysis['backend']=='native' and details['factorization_complete'],details
+            assert analysis['backend']=='pari' and not details['factorization_complete'],details
+            assert analysis['gp_failure'] and analysis['pari_failure'],analysis
+        if mode not in ('probable','partial') and details['factorization_complete']:
             assert {int(q['factor']):q['multiplicity'] for q in analysis['prime_powers']}=={7:2,127:1}
         assert all(q['proven'] for q in analysis['prime_powers'] if q['factor'] in details['prime_factors'])
         # Replay uses the existing receipt/checkpoint; diagnosis must not duplicate hits.

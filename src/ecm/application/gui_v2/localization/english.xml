@@ -403,14 +403,15 @@
       <Item id="gpu.clock_disconnected" name="GPU unavailable or identity changed. Refresh before retrying." />
       <Item id="gpu.clock_failed" name="GPU clock operation failed; see the driver message below." />
       <Item id="go.title" name="Group Order Factor" />
-      <Item id="go.description" name="Reconstruct a curve from sigma and a prime factor; compute group and original point orders." />
+      <Item id="go.description" name="Reconstruct curves from sigma and a factor; composite factors are split automatically." />
       <Item id="go.unsupported" name="This Edwards construction is not implemented by the order engine." />
-      <Item id="go.factor" name="Prime factor p" />
+      <Item id="go.composite_hint" name="Orders are computed separately over each F_p; e records input multiplicity, not a field extension." />
+      <Item id="go.factor" name="Factor n" />
       <Item id="go.gp_path" name="GP executable" />
       <Item id="go.save_path" name="Save" />
       <Item id="go.gp_hint" name="Empty: find gp in PATH. Relative paths use the workflow directory." />
       <Item id="go.auto" name="Auto" />
-      <Item id="go.native" name="Local CPU/GMP" />
+      <Item id="go.native" name="Local PARI DLL" />
       <Item id="go.calculate" name="Calculate orders" />
       <Item id="go.cancel" name="Cancel analysis" />
       <Item id="go.running" name="Analyzing…" />
@@ -419,7 +420,7 @@
       <Item id="go.primality" name="Modulus primality" />
       <Item id="go.proof" name="Proof qualification" />
       <Item id="go.proven" name="Proven" />
-      <Item id="go.conditional" name="Conditional / incomplete" />
+      <Item id="go.conditional" name="Conditional" />
       <Item id="go.group_order" name="Group order #E(F_p)" />
       <Item id="go.point_order" name="Point order ord(P)" />
       <Item id="go.group_factorization" name="Group order factorization" />
@@ -429,6 +430,8 @@
       <Item id="go.copy" name="Copy result" />
       <Item id="go.finished" name="Order analysis complete" />
       <Item id="go.stale" name="Inputs changed; the result belongs to the snapshot above." />
+      <Item id="go.native_limit_hint" name="Local analysis reached its time or resource budget. Auto / PARI/GP can try further." />
+      <Item id="go.auto_retry" name="Retry with Auto" />
       <Item id="go.incomplete" name="Not completed" />
       <Item id="go.result_files" name="Import sigma and factors from results" />
       <Item id="go.refresh" name="Rescan result files" />
@@ -446,6 +449,7 @@
       <Item id="go.primality.proven" name="Proven prime" />
       <Item id="go.browse" name="Browse" />
       <Item id="go.select_gp" name="Select GP" />
+      <Item id="go.local_engine" name="Local engine" />
       <Item id="go.algorithm" name="Algorithm" />
       <Item id="go.failed" name="Order analysis incomplete" />
       <Item id="go.cancelled" name="Analysis cancelled" />

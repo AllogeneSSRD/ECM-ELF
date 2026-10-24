@@ -856,9 +856,9 @@ stage2_factor_timeout = 30
 
 Type / 类型: `u64`; range / 范围: `<x:Z,1..600>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Timeout in seconds for each preferred GP decomposition call. Timeout permits CPU/GMP fallback, separately limited to 2 seconds per factor and 10 seconds per curve worker. These bounds affect optional diagnostics, not the original factor or Stage2 computation status.
+Timeout in seconds for each external GP fallback decomposition call. Local PARI calls have a 5-second process deadline and a 10-second cumulative session budget per curve worker. Explicit GMP analysis remains bounded to 2 seconds per call. These diagnostics never change the original factor or successful Stage2 computation status.
 
-设置优先 GP 分解调用的超时秒数。超时后允许 CPU/GMP 回退，后者单因子限 2 秒、单曲线 worker 累计限 10 秒。预算仅影响附加诊断，不改变原始因子或 Stage2 计算状态。
+设置备选外部 GP 分解调用的超时秒数。本地 PARI 单次进程限 5 秒、单曲线 worker 会话累计限 10 秒；显式选择 GMP 时单次限 2 秒。附加诊断不改变原始因子或 Stage2 成功状态。
 
 ### stage2_factorize_hits
 
@@ -868,9 +868,9 @@ stage2_factorize_hits = false
 
 Type / 类型: `bool`; range / 范围: `[0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Further decompose found factors: 1 enables GP-first analysis with a bounded CPU/GMP fallback when GP is unavailable; 0 keeps only factors extracted and verified by Stage2. Only complete, proven decomposition sets factorization_complete. Unfinished diagnostics preserve the original factor and successful curve status.
+Further decompose found factors: 1 uses the shared diagnostic service (local PARI DLL first, external GP second); GMP is never selected automatically. 0 keeps only factors extracted and verified by Stage2. Only complete, proven decomposition sets factorization_complete. Unfinished diagnostics preserve the original factor and successful curve status.
 
-控制命中因子的附加分解。1 开启，优先 GP，GP 不可用时使用有预算的 CPU/GMP 回退；0 只保留 Stage2 已得到并验证的因子。仅完整且全部已证素的分解标为完成；诊断未完成仍保留原始因子与曲线成功状态。
+控制命中因子的附加分解。1 使用共享诊断层，优先本地 PARI DLL，备选外部 GP，不自动使用 GMP 算法；0 只保留 Stage2 已得到并验证的因子。仅完整且全部已证素的分解标为完成；诊断未完成仍保留原始因子与曲线成功状态。
 
 ### stage2_finished
 
@@ -912,9 +912,9 @@ stage2_gp = ""
 
 Type / 类型: `string`; range / 范围: `<exe>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Preferred PARI/GP executable for optional factor decomposition. gp.exe follows Windows executable search rules; a full path is accepted. When GP cannot run, bounded CPU/GMP analysis is attempted without selecting another GP executable. Dataset scripts retain their separate --gp resolution rules.
+External PARI/GP fallback executable for optional factor decomposition. The local PARI DLL is tried first. gp.exe follows Windows executable search rules; a full path is accepted. GP failure preserves partial PARI results and never enables GMP automatically. Dataset scripts retain their separate --gp resolution rules.
 
-指定附加因子分解优先使用的 PARI/GP 程序。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 无法运行时尝试有预算的 CPU/GMP 分析，不另选 GP 程序；数据集脚本继续使用各自的 --gp 路径规则。
+指定附加因子分解的外部 PARI/GP 备选程序，默认先使用本地 PARI DLL。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 失败保留 PARI 部分结果，不自动使用 GMP；数据集脚本继续使用各自的 --gp 路径规则。
 
 ### stage2_log_file
 
@@ -1358,9 +1358,9 @@ group_order_gp = ""
 
 Type / 类型: `string`; range / 范围: `<path-to-gp.exe|empty>`; worker override / worker 覆盖: `no / 不支持`.
 
-PARI/GP executable for the Group Order Factor GUI. Empty searches gp in PATH. GUI-only; compute worker settings remain independent.
+External PARI/GP fallback executable for the Group Order Factor GUI. Auto tries the local PARI DLL first; empty searches gp in PATH only when GP is needed. GUI-only path setting; compute workers use the same diagnostic service with independent GP paths.
 
-群阶分解界面使用的PARI/GP程序路径；空值在PATH查找gp。仅供GUI使用，不修改计算worker设置。
+群阶分解界面使用的外部 PARI/GP 备选程序路径。Auto 默认先使用本地 PARI DLL；空值在需要 GP 时从 PATH 查找。此路径仅供 GUI 使用，计算 worker 使用相同诊断层，但 GP 路径独立设置。
 
 ### language
 

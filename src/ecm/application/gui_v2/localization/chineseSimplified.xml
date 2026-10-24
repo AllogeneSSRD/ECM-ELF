@@ -403,14 +403,15 @@
       <Item id="gpu.clock_disconnected" name="GPU 不可用或身份已变化，请刷新后重试。" />
       <Item id="gpu.clock_failed" name="GPU 频率操作失败，请查看下方驱动信息。" />
       <Item id="go.title" name="群阶分解" />
-      <Item id="go.description" name="按sigma和素因子重建曲线，计算群阶、原始点阶及分解。" />
+      <Item id="go.description" name="按sigma和因子重建曲线；合数自动分解后逐个计算群阶和原始点阶。" />
       <Item id="go.unsupported" name="群阶引擎尚未实现此Edwards构造。" />
-      <Item id="go.factor" name="素因子 p" />
+      <Item id="go.composite_hint" name="按各个素域 F_p 分别计算；e 表示输入中的幂次，不代表扩域。" />
+      <Item id="go.factor" name="因子 n" />
       <Item id="go.gp_path" name="GP程序路径" />
       <Item id="go.save_path" name="保存" />
       <Item id="go.gp_hint" name="留空在PATH查找gp；相对路径基于工作流目录。" />
       <Item id="go.auto" name="Auto" />
-      <Item id="go.native" name="本地CPU/GMP" />
+      <Item id="go.native" name="本地 PARI DLL" />
       <Item id="go.calculate" name="计算群阶与点阶" />
       <Item id="go.cancel" name="取消分析" />
       <Item id="go.running" name="计算中…" />
@@ -419,7 +420,7 @@
       <Item id="go.primality" name="模数素性" />
       <Item id="go.proof" name="证明资格" />
       <Item id="go.proven" name="已证明" />
-      <Item id="go.conditional" name="有条件或未完成" />
+      <Item id="go.conditional" name="有条件" />
       <Item id="go.group_order" name="群阶 #E(F_p)" />
       <Item id="go.point_order" name="点阶 ord(P)" />
       <Item id="go.group_factorization" name="群阶分解" />
@@ -429,6 +430,8 @@
       <Item id="go.copy" name="复制结果" />
       <Item id="go.finished" name="群阶计算完成" />
       <Item id="go.stale" name="输入已改变，结果对应上方参数快照。" />
+      <Item id="go.native_limit_hint" name="本地分析达到时间或资源预算；可使用 Auto / PARI/GP 进一步尝试。" />
+      <Item id="go.auto_retry" name="使用Auto重试" />
       <Item id="go.incomplete" name="未完成" />
       <Item id="go.result_files" name="从结果文件导入sigma与因子" />
       <Item id="go.refresh" name="重新扫描结果文件" />
@@ -446,6 +449,7 @@
       <Item id="go.primality.proven" name="已证明素数" />
       <Item id="go.browse" name="浏览" />
       <Item id="go.select_gp" name="选择GP" />
+      <Item id="go.local_engine" name="本地引擎" />
       <Item id="go.algorithm" name="算法" />
       <Item id="go.failed" name="群阶计算未完成" />
       <Item id="go.cancelled" name="已取消计算" />

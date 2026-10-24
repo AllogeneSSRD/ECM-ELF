@@ -1,4 +1,4 @@
-"""Stage1 GP-first fallback and preservation of real CPU/CUDA factor publication."""
+"""Stage1 DLL-first diagnostics and preservation of real CPU/CUDA factor publication."""
 import argparse
 import hashlib
 import json
@@ -19,15 +19,15 @@ def main():
         env.update(ECM_TEST_GP_MODE=mode,ECM_TEST_GP_COUNTER=str(counter))
         env.pop('ECM_TEST_BAD_CURVE_FIRST',None)
         if mode=='bad_curve':env['ECM_TEST_BAD_CURVE_FIRST']='1'
-        backend='native' if mode in ('native','exhausted') else 'gp' if mode=='gp_only' else 'auto'
+        backend='native' if mode in ('native','exhausted') else 'gp'
         path=gp if mode in ('real','bad_curve') else work/'missing.exe' if mode in ('missing','gp_only') else fixture
         run=subprocess.run([str(fixture),str(path),backend,'0' if mode=='exhausted' else '10000'],env=env,capture_output=True,text=True,timeout=12)
         (work/'run.log').write_text(run.stdout+run.stderr,encoding='utf-8');assert run.returncode==0
         rows=[json.loads(line) for line in run.stdout.splitlines()];assert len(rows)==2
         if mode in ('real','bad_curve'):assert all(r['backend']=='gp' and r['status']=='complete' for r in rows),rows
         elif mode in ('invalid','math'):assert all(r['backend']=='gp' and r['status']=='invalid_input' for r in rows),rows
-        elif mode in ('exhausted','gp_only'):assert all(r['status']=='resource_limit' for r in rows),rows
-        else:assert all(r['backend']=='native' and r['status']=='complete' for r in rows),rows
+        elif mode not in ('native',):assert all(r['status']=='resource_limit' for r in rows),rows
+        else:assert all(r['backend']=='pari' and r['status']=='complete' for r in rows),rows
         if rows[0]['status']=='complete':assert all(r['group']=='59649589504338456' and r['point']=='14912397376084614' for r in rows)
         calls=len(counter.read_text().splitlines()) if counter.exists() else 0
         if mode in ('timeout','protocol','exit','flood'):assert calls==1,(mode,calls)
@@ -51,6 +51,8 @@ def main():
             elif mode=='real':cmd+=['--gp',str(gp)]
             else:cmd+=['--gp',str(fixture)]
             if mode=='native':cmd+=['--go-backend','native']
+            if mode in ('real','invalid','math'):cmd+=['--go-backend','gp']
+            if large:cmd+=['--go-backend','gmp']
             if mode=='gp_only':cmd+=['--go-backend','gp']
         cmd += [str(b1),'0']
         run=subprocess.run(cmd,input=str(n)+'\n',capture_output=True,text=True,errors='replace',cwd=work,env=env,timeout=30)
@@ -84,10 +86,10 @@ def main():
         old=[line for line in diagnostics if line.startswith(('  go[','  go_factor[','  go_min_bounds['))]
         if mode=='real':legacy=old;assert 'backend=gp status=complete' in log,log
         if mode in ('missing','native','timeout','protocol','exit','flood'):
-            assert 'backend=native status=complete' in log,log
+            assert 'backend=pari status=complete' in log,log
             assert old==legacy,(mode,old,legacy)
             assert 'go_point_order[0]=14912397376084614' in log
-        if large:assert 'backend=native status=resource_limit' in log,log
+        if large:assert 'backend=gmp status=resource_limit' in log,log
         checks.append(dict(case='cli_'+mode,passed=True,returncode=run.returncode,saved_files=[f.name for f in saves]))
         print('passed',mode,flush=True)
     summary=dict(passed=len(checks),failed=0,target=a.target,device=a.device if a.target=='gpu' else None,

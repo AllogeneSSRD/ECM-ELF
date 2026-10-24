@@ -57,7 +57,7 @@ inline std::string factor_details(const std::string &engine_result,const mpz_t m
                                    const std::filesystem::path &gp,unsigned timeout_seconds,
                                    const std::filesystem::path &directory) {
     using namespace ecm_group_order;
-    ecm_diagnostics::Settings settings;settings.gp=gp.string();settings.gp_timeout_ms=uint64_t(timeout_seconds)*1000;
+    ecm_diagnostics::Settings settings;settings.gp=gp.u8string();settings.gp_timeout_ms=uint64_t(timeout_seconds)*1000;
     ecm_diagnostics::Session session(settings);
     std::set<std::string> unique_primes;bool complete=true;std::string details="[";size_t ordinal=0;
     for(const auto &raw:result_factors(engine_result)) {
@@ -79,7 +79,7 @@ inline std::string factor_details(const std::string &engine_result,const mpz_t m
         }catch(const std::exception &){}
         if(ordinal++)details+=',';
         details+="{\"raw\":"+json_quote(raw)+",\"log\":"+json_quote(log)+",\"backend\":"+json_quote(result.backend)+
-            ",\"status\":"+json_quote(status)+",\"reason\":"+json_quote(reason)+",\"gp_failure\":"+json_quote(result.gp_failure)+
+            ",\"pari_failure\":"+json_quote(result.pari_failure)+",\"status\":"+json_quote(status)+",\"reason\":"+json_quote(reason)+",\"gp_failure\":"+json_quote(result.gp_failure)+
             ",\"remaining_cofactor\":"+json_quote(value.cofactor.str())+",\"prime_powers\":[";
         for(size_t i=0;i<value.factors.size();++i){
             const auto &part=value.factors[i];if(i)details+=',';

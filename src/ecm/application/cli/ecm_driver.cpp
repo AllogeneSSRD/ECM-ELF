@@ -213,7 +213,7 @@ static void print_ecm_usage(const char *prog) {
               << "  -save <file>         Append factorization lines to file\n"
               << "  -savea <file>        Same as -save (append mode)\n"
               << "  --go                 Print optional group order diagnostics (GP preferred, CPU fallback)\n"
-              << "  --go-backend <mode>  auto (default), gp or native; diagnosis never changes task status\n"
+              << "  --go-backend <mode>  auto (PARI DLL then GP), pari/native, gp or gmp; diagnosis never changes task status\n"
               << "  --go-gp-timeout <s>  GP diagnostic deadline in seconds (1..600; default 30)\n"
               << "  --gp <path>          Path to gp executable (default: gp on PATH)\n"
               << "  --mul <path>         Montgomery mul kernel path (OpenCL only)\n"
@@ -565,7 +565,7 @@ int main(int argc, char **argv){
             continue;
         }
         if(a == "--go-backend") {
-            if(i+1>=argc){std::cerr<<"Error, --go-backend requires auto, gp or native\n";return 1;}
+            if(i+1>=argc){std::cerr<<"Error, --go-backend requires auto, pari/native, gp or gmp\n";return 1;}
             try{go_settings.backend=ecm_diagnostics::parse_backend(argv[++i]);}
             catch(const std::exception &e){std::cerr<<"Error, "<<e.what()<<'\n';return 1;}
             continue;

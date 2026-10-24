@@ -11,6 +11,7 @@ $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot
 $gmpDependency = Resolve-EcmGmp -Repo $repo -Gmp $Gmp -Release
 $Gmp = $gmpDependency.Root
 . (Join-Path $PSScriptRoot 'release_payload.ps1')
+. (Join-Path $PSScriptRoot 'diagnostics_payload.ps1')
 $splitPath = Join-Path $BuildDir 'split_manifest.json'
 $split = Get-Content -LiteralPath $splitPath -Raw | ConvertFrom-Json
 $manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
@@ -49,6 +50,7 @@ foreach ($arch in $Archs.Split(',')) {
         [IO.File]::WriteAllText($queue, '# Add Stage1 ECM worktodo assignments here.' + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
     }
     $files = @('ecm_cuda.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt','ECM_TOML_REFERENCE.md')
+    $files = @($files + @(Copy-EcmDiagnosticsPayload $repo $BuildDir $package) | Select-Object -Unique)
     $hashes = [ordered]@{}
     foreach ($file in $files) { $hashes[$file] = (Get-FileHash -LiteralPath (Join-Path $package $file)).Hash }
     [ordered]@{ architecture = "sm_$arch"; status = 'release_candidate_build_only'; tests_run = $false; hashes = $hashes } |

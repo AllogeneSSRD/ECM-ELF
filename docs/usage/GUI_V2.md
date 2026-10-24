@@ -1,10 +1,10 @@
 # GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.51.5，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.52.0，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
 ## 构建与启动
 
-运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、群阶分析助手 `ecm_group_order_ui.exe` 及其 `gmp-10.dll`。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。独立 helper 默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
+运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、群阶分析助手 `ecm_group_order_ui.exe`、`gmp-10.dll`、本地 `libpari.dll` 及 `pari-data/`。准备本地PARI依赖时，运行 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3安装目录> --archive <原始源码tar.gz>`，脚本验证固定源码摘要、复制Win64库/已配置头文件/SEA数据并记录身份；默认位置 `third_party/pari-2.17.3` 由Git忽略。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。独立 helper 默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
 
 运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。
 
@@ -107,11 +107,15 @@ Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚�
 
 ## 群阶分解 / Group Order Factor
 
-导航中的“群阶分解”使用与ECM概率页相同的两行曲线按钮：Edwards 和 Montgomery param 0/1/2/3。当前重建后端支持 Atkin–Morain Edwards（Z2 x Z8），其他 Edwards 概率模型按钮禁用并显示说明。输入十进制素因子 p 与完整 uint64 sigma；sigma默认留空，空输入框按所选构造显示范围：Suyama为`6 ~ 2^64 - 1`，其余已支持构造为`1 ~ 2^64 - 1`。范围提示来自外部XML；计算前需要手动填写或从结果文件导入sigma。范围内仍可能因当前素域上的退化构造被拒绝；2^53是部分随机生成路径的界限，不作为群阶分析上限。曲线、param、sigma 共同确定数学身份。计算的是该素域上的完整群阶和**原始构造点的点阶**，不包含计算 worker 后续施加的 choose12 / 48LCM 标量；二者不能与“有效点阶”混用。算法、证明资格和预算定义统一见 [群阶模块](../architecture/GROUP_ORDER.md)。
+导航中的“群阶分解”使用与ECM概率页相同的两行曲线按钮：Edwards 和 Montgomery param 0/1/2/3。当前重建后端支持 Atkin–Morain Edwards（Z2 x Z8），其他 Edwards 概率模型按钮禁用并显示说明。输入十进制因子 n（允许合数）与完整 uint64 sigma；sigma默认留空，空输入框按所选构造显示范围：Suyama为`6 ~ 2^64 - 1`，其余已支持构造为`1 ~ 2^64 - 1`。范围提示来自外部XML；计算前需要手动填写或从结果文件导入sigma。范围内仍可能因当前素域上的退化构造被拒绝；2^53是部分随机生成路径的界限，不作为群阶分析上限。曲线、param、sigma 共同确定数学身份。素数输入直接计算该素域上的完整群阶和**原始构造点的点阶**，不包含计算 worker 后续施加的 choose12 / 48LCM 标量；二者不能与“有效点阶”混用。算法、证明资格和预算定义统一见 [群阶模块](../architecture/GROUP_ORDER.md)。
 
-页面中的GP设置是一行：`GP [路径] [浏览] [保存] [算法: Auto / PARI/GP / 本地CPU/GMP]`。载入工作流后，已保存的GP路径优先；为空时按当前进程PATH顺序查找`gp.exe`并将完整路径填入输入框，未找到时显示“选择GP”。不扫描其他安装目录，不自动保存发现结果。路径细节与相对路径规则放在悬停提示中，常驻设置不再占用多行。
+页面中的GP设置是一行：`GP [路径] [浏览] [保存] [算法: Auto / PARI/GP / 本地 PARI DLL / GMP]`。载入工作流后，已保存的GP路径优先；为空时按当前进程PATH顺序查找`gp.exe`并将完整路径填入输入框，未找到时显示“选择GP”。不扫描其他安装目录，不自动保存发现结果。路径细节与相对路径规则放在悬停提示中，常驻设置不再占用多行。
 
-`Auto`先直接启动GP；GP缺失、无法启动、超时或协议不可用时才启动本地助手。显式`PARI/GP`只使用GP，失败不转本地；显式`本地CPU/GMP`才直接检查和调用`ecm_group_order_ui.exe`。GP正常时无需助手或GMP DLL。助手缺失的报错会给出完整文件路径和Windows错误码；界面打开和算法下拉选择本身不启动分析。GP默认等待30秒，本地单次预算2秒，整个请求截止45秒；取消或退出结束当前GP/助手进程作业。运算不阻塞主界面，大素域在本地预算内可能未完成。
+合数输入先自动分解为素数幂，按每个不同素因子 p 分别重建同一曲线身份并显示 `#E(F_p)`、`ord(P)` 及其分解；输入分解中的幂次 e 只记录重复次数，不将其解释为扩域 F_(p^e)，也不声称得到模合数环上的总群阶或总点阶。结果仍可鼠标选取和复制。遇到特征 2/3 或当前参数在某个素域退化时，仅该分量未完成，保留其他分量。预算不足时保留已分出的素因子和以方括号标出的输入余因子，整体状态为部分完成；不会将未分解余因子当作素数。
+
+`Auto`使用与 Stage1/Stage2 相同的共享诊断层，先启动本地 PARI DLL，缺失、无法加载或资源不足时再尝试 GP，不自动使用 GMP。显式“本地 PARI DLL”不调用 GP；显式“GMP”保留原有有界算法。显式“PARI/GP”直接运行外部 GP，不需要本地助手。GUI 助手缺失时 Auto 仍可尝试可用的 GP。界面打开或切换算法不启动分析。
+
+本地路线为 GUI → `ecm_group_order_ui.exe` → `ecm_diagnostics_host.exe` → PARI DLL。每个 DLL 请求最多 5 秒，本页本地会话累计 5 秒；PARI 进程内存上限 512 MiB。备选 GP 截止 30 秒、栈 128 MiB，整个异步请求截止 45 秒，取消或退出回收子进程。群阶、分解、素性证明和点阶验证范围统一见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。≤192 bit 是已接入的素域范围，不保证任意输入都在 5 秒内完成。超时保留已核验字段与余因子。
 
 GP证明模数及分解因子素性，检查点消去及最小性；GUI独立检查协议完成、分解乘积、点阶因子包含关系和Hasse界。数学错误不会伪装为GP不可用而自动回退。结果保留输入快照、实际后端、状态及未完成原因；未执行素性检查时明确显示“未检查”，部分分解显示剩余余因子。`complete`与全部素性已证明是不同条件，CPU大整数的概率素性仍明确标为未证明。状态、实际后端与整体证明资格合并为一行，模数素性及GP回退原因在该行悬停查看。群阶与点阶各用两行：`群阶 #E(F_p): 数值` / `点阶 ord(P): 数值`，下一行缩进显示`= 2^2 × 3 × 83`等乘法分解式；省略指数1，不逐项标注素性。`[n]`表示尚未分解的余因子，不能当作素数。群阶与点阶共用无边框、透明背景的只读文本区，支持鼠标跨行选择和Ctrl+C复制选中部分；输入不能改写结果，整块高度按正文和自动换行计算，长整数与分解式随容器换行。复制结果为输入快照、状态/后端和两组数学表达式的纯文本，不包含逐因子素性或内部JSON字段；完整证明元数据仍保留在内部分析结果。每次计算结束独立弹出Toast，重复计算也提示；部分完成、资源限制、非法输入和启动失败均提示未完成，取消单独提示。群阶导航与计算按钮使用无外框、两行排列加减乘等号的运算图标，可在图标图鉴预览。
 
@@ -119,7 +123,7 @@ GP证明模数及分解因子素性，检查点消去及最小性；GUI独立检
 
 页面自动扫描当前工作流目录中的`*result*.txt`，并纳入工作流已配置的结果文件；未载入工作流时扫描GUI程序目录。因此`results.json.txt`和`results.json_2.txt`会分别出现在来源下拉列表；也可用“选择结果文件”打开其他目录的TXT/JSON/JSONL，再用“重新扫描”刷新。每行必须是独立JSON对象，只导入`status=F`、`worktype=ECM`且包含可识别sigma的因子；支持普通Montgomery的顶层sigma/param、`Edwards.sigma`及`GMP-ECM-param3.sigma`，每个因子分别列出。点击记录填入p、sigma和算法，不会自动开始计算或改写来源。NF、缺失/越界sigma、冲突曲线标记和不支持的构造会跳过并显示计数；该导入不验证结果CRC或代替因子证明。单文件上限32MiB、20000个因子。
 
-本地分解或Auto回退需要将`ecm_group_order_ui.exe`与匹配的`gmp-10.dll`放在GUI旁；仅使用GP可以省略这两个文件。PARI/GP不随候选包分发，用户单独安装并指定路径或加入PATH。两条分析路线都不启动计算worker、不写队列、不修改GPU频率。专项验证入口为`tools/test/gui_v2/test_group_order.py`（`--gp-only`检查无助手/GMP的GUI）、`test_group_order_backend.py`及`ecm_gui_v2_group_order_test.exe <helper> <故障GP fixture> <新的输出目录> <真实GP>`。
+本地分析需要同目录的 `ecm_group_order_ui.exe`、`ecm_diagnostics_host.exe`、匹配的 `gmp-10.dll`、`libpari.dll` 和 `pari-data/seadata`。DLL 或数据缺失、ABI 不匹配时，Auto 尝试 GP；显式本地模式报告未完成，不暗中使用 GMP。只有手动选择 GMP 才使用原有 20 万 BSGS 表项/每次 2 秒算法，超过 64 位仍仅给出 probable 素性分类。仅使用外部 GP 可省略全部本地助手和数学库。外部 gp.exe 不随包分发。分析不启动计算 worker、不写队列、不修改 GPU 频率。后端验收使用 `tools/test/test_shared_pari.py`，GUI 数学对照使用 `test_group_order_backend.py` 与 `test_native_order.py`，实际界面验证使用 `test_group_order.py`。
 
 ## 安装与替换皮肤
 
@@ -159,7 +163,7 @@ ELY行为专项可运行`tools/build/test/build_pet_behavior.ps1 -Build <新的�
 
 ## 独立候选包
 
-先用独立构建入口生成程序，再运行 `tools/build/package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新的目录>`；可用 `-Python` 指定解释器。包包含GUI、群阶分析助手及匹配GMP DLL、宠物资产、使用/侧车说明、许可、逐文件SHA256、构建源目录快照及ZIP校验，不覆盖旧版。源码包包含助手所用的本地GMP源码、构建配置及安装文件，DLL可替换；本机Zen3/BMI2依赖的跨CPU兼容性尚未验证。不包含计算worker、PARI/GP、系统字体、Vulkan loader、开发层或Microsoft runtime；更新worker另行安装，1024-bit专用验收worker不能作为完整发布替代。
+先用独立构建入口生成程序，再运行 `tools/build/package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新的目录>`；可用 `-Python` 指定解释器。包包含GUI、群阶分析助手及匹配GMP DLL、本地PARI库和SEA数据、宠物资产、使用/侧车说明、许可、逐文件SHA256、构建源目录快照及ZIP校验，不覆盖旧版。源码包包含助手所用的本地GMP源码、构建配置及安装文件，也包含原始PARI源码归档、配置头文件和SEA数据；DLL可替换；本机Zen3/BMI2依赖的跨CPU兼容性尚未验证。不包含计算worker、外部gp.exe、系统字体、Vulkan loader、开发层或Microsoft runtime；更新worker另行安装，1024-bit专用验收worker不能作为完整发布替代。
 
 v2 自带 UTF-8 进程 manifest，使复用的窄字符文件接口在支持的 Windows 版本上处理中文路径；不改变系统代码页或旧 GUI。依据：[Microsoft 进程 UTF-8 文档](https://learn.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page)。计算 worker 的非 ASCII 路径兼容性须按其自身构建单独确认。
 

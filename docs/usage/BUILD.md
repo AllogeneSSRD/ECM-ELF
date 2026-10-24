@@ -113,3 +113,14 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 构建前后核对已知依赖内容。成功编译发现新的系统/宏 include 时纳入新指纹；旧 include 退出新 compiler 清单时，按 live 源根重新读取旧文件哈希，而不是将缺少清单键当作内容变化。旧文件在编译期间被修改或删除、或无法验证仍失败。持久对象记录 schema、命令/工具链/对象哈希和 HostOnly 检查不变。
 
 `tools/test/test_cuda_build_identity.ps1` 覆盖身份变异与跨 PowerShell 指纹；`tools/build/test/test_msvc_header_retirement.ps1` 使用正式主机编译器产生真实旧/新依赖并核对退役行为。两者输出到显式隔离目录，不改生产对象缓存。
+
+
+## 共享 PARI 诊断依赖
+
+Stage1、Stage2 与 GUI v2 默认采用 PARI DLL → 外部 GP 的诊断顺序；GMP 分析仅显式选择。实际 ECM 运算后端不变。完整本机构建需要准备 `third_party/pari-2.17.3/`；准备命令为 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3目录> --archive <原始源码tar.gz>`，版本和文件摘要由 provenance 校验。
+
+共享助手的 CMake 入口为 `src/ecm/service/diagnostics/`，生成 `ecm_diagnostics_host.exe`。主工程 Stage1/OpenCL/CMake Stage2 的目标自动依赖它；独立 Stage2 队列构建调用同一目标，使用与 worker 一致的 GMP 安装前缀。测试入口为 `tools/build/test/build_diagnostics.ps1 -Build <独立目录>`；可显式构建 `ecm_diagnostics_probe` 进行协议与故障验收。GUI v2 使用相同目标，保留独立的合数输入协调助手 `ecm_group_order_ui.exe`。
+
+本地输出附带助手、GMP、PARI DLL、`pari-data/seadata`、许可证和 `diagnostics-source.zip`，并生成逐文件及源码摘要的 `diagnostics_build_manifest.json`。Stage1/Stage2 发布打包核对该冻结身份，再将完整依赖纳入 ZIP，支持受限的相对目录路径；不打包用户配置、队列或日志。PARI 原始源码、配置头文件及 SEA 数据声明随包保留；没有 gp.exe。只复制计算 EXE 不构成完整的 DLL 诊断部署。
+
+`-WithoutLocalPari`（共享助手/GUI 测试构建）或 `ECM_DIAGNOSTICS_LOCAL_PARI=OFF` 用于明确的无 DLL 测试，要求新目录；它不启用自动 GMP。Windows 发布候选要求完整 PARI 依赖。运行时 DLL 缺失时 Auto 可尝试用户配置的 GP。当前 Win64 ABI、预算与证明语义见[共享诊断层](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。

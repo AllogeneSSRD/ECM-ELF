@@ -6,7 +6,7 @@
 
 `ecm_cuda.exe` 使用 NVIDIA CUDA/CGBN 并行处理曲线。`ecm.exe` 提供 CPU 和 OpenCL 路径；CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.md) 为准。
 
-`--go` 是命中后的可选群阶诊断：默认 GP 优先，不可用时尝试有预算的 CPU/GMP 回退。`--go-backend auto|gp|native` 可选择后端，`--go-gp-timeout 1..600` 设置 GP 截止秒数（默认 30）；诊断未完成不影响因子存档、结果和主计算退出码。输出区分旧群阶界限与新增点阶界限，资源和素性证明范围见[群阶模块](../architecture/GROUP_ORDER.md#主程序的-gp-优先与回退)。GPU Edwards 的既有 `--go` 限制保留。
+`--go` 是命中后的可选群阶诊断：默认优先本地 PARI DLL，备选外部 GP，不自动使用 GMP 算法。`--go-backend auto|pari|gp|gmp` 可选择后端，`native` 保留为 `pari` 的兼容别名，`--go-gp-timeout 1..600` 设置 GP 截止秒数（默认 30）；诊断未完成不影响因子存档、结果和主计算退出码。输出区分旧群阶界限与新增点阶界限，资源和素性证明范围见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。GPU Edwards 的既有 `--go` 限制保留。
 
 生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。`ECM=`/`ECM2=` 队列行没有 save 名称；CPU/GPU 的自动 save 共用 `save_name_pattern`，默认 `{curve}_{target}_{b1}.save`，写入 `tmp_dir`。curve 为 e、m0、m2、m3；target 保留梅森任务的原始指数，例如 m5351，即使已经剥离因子。普通整数使用 bit 加实际位宽。B1 使用紧凑写法，例如 `m0_m5351_260e6.save`、`e_m5351_260e6.save`。旧自定义模式自动补充曲线前缀；CLI 显式 `-save` 路径保持原样。保存失败时任务留在 worktodo，不会进入 finished。
 

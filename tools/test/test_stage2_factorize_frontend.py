@@ -1,4 +1,4 @@
-"""CPU frontend fixtures: multiplicities, GP fallback and TOML/CLI precedence.
+"""CPU frontend fixtures: multiplicities, DLL-first diagnostics and TOML/CLI precedence.
 
 These factor-revealing X values test the existing saved-X shortcut; they are
 not claimed to be valid completed Stage1 points or GPU Stage2 factor trials.
@@ -35,10 +35,11 @@ def main():
             assert parts=={7:2,127:1}
         else:
             assert engine['factorization_complete']
-            assert engine['factor_analysis'][0]['backend']=='native'
-            assert engine['factor_analysis'][0]['gp_failure']=='gp_launch_failed'
+            assert engine['factor_analysis'][0]['backend']=='pari'
+            assert engine['factor_analysis'][0]['gp_failure']==''
             parts={int(q['factor']):q['multiplicity'] for q in engine['factor_analysis'][0]['prime_powers']}
             assert parts=={7:2,127:1}
+        assert engine['factor_analysis'][0]['backend']=='pari'
         rows.append(row)
     (root/'summary.json').write_text(json.dumps(dict(passed=2,failed=0,scope='CPU frontend synthetic saved-X fixtures',rows=rows),indent=2))
     print('factor frontend: 2 passed, 0 failed')

@@ -46,3 +46,5 @@ OpenCL Stage1 的本机入口为 build_opencl_local.ps1；使用隔离的 build_
 GUI 统一使用 `build_gui.bat`，不区分 dev/local/release；它把参数和退出码交给现有 `dev/build_gui.ps1`，后者仍是默认参数来源。无参数双击构建完成后暂停；有参数调用直接返回。默认输出 `build_gui_local/`，只构建 `ecm_gui`，可传 `-Selftest` 构建后自检。测试 helper 在 `tools/test/gui/`，必须显式指定 `-Targets`，不会进入默认构建；详见 [GUI 构建与验证](../../docs/usage/GUI.md#构建与独立验证)。
 
 GUI v2 独立入口 `build_gui_v2.bat` 默认生成 `build_gui_v2_local/ecm_gui_v2.exe`，默认使用DX11，`--renderer vulkan`保留诊断路径，不修改原GUI。`package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新目录>`创建GUI-only候选包及校验清单，不附计算worker。要求构建输出的源目录身份清单与exe哈希相符。当前运行条件和待验门禁见 [GUI v2](../../docs/usage/GUI_V2.md)。
+
+共享 PARI 诊断的构建入口为 `test/build_diagnostics.ps1`；正式 Stage1/Stage2 和 GUI v2 自动附带同一助手目标及完整依赖，默认 DLL → GP，GMP 仅显式选择。构建前后的源码/依赖冻结及分发要求见[共享 PARI 诊断依赖](../../docs/usage/BUILD.md#共享-pari-诊断依赖)。
