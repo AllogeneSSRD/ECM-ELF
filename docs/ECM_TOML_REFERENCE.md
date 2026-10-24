@@ -992,9 +992,9 @@ stage2_progress_dir = ""
 
 Type / 类型: `string`; range / 范围: `<dir>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Directory for per-task .ecm_ckpt_stage2_<bits>_<task-id>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, save contents, selected curve range and B2; reordering tasks, changing device/memory/log paths or tuning D/carrier does not reset completed curves. Files contain counts and receipt metadata only, and are removed after the task is published and advanced.
+Directory for per-task .ecm_ckpt_stage2_<bits>_<task-id>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, full save contents and skip. On restart the current effective B2/Auto B2 and requested curve count override the checkpoint policy; completed curves retain their actual bounds. A target below the completed count warns and seals all completed work. Files contain counts, policy and receipt metadata only, and are removed after publication and queue advancement.
 
-每任务 .ecm_ckpt_stage2_<bits>_<task-id>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、save 内容、曲线范围和 B2；调整任务顺序、设备/显存/日志路径或 D/承载调优不会重置已完成曲线。文件仅保存计数和回执元数据，任务发布并移出队列后清除。
+每任务 .ecm_ckpt_stage2_<bits>_<task-id>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。文件仅保存计数、执行策略和回执元数据，结果发布并推进队列后清除。
 
 ### stage2_progress_file
 

@@ -312,6 +312,8 @@ std::string read_submission_bytes(const fs::path &path) {
 }
 namespace {
 std::string stage1_factor_identity(const json::Value &);
+uint64_t result_sigma(const json::Value &);
+bool stage1_modulus_matches(const json::Value &,mpz_srcptr);
 bool owned_stage1_submission(const std::string &text) {
     std::istringstream in(text);std::string line;bool found=false;
     while(std::getline(in,line)) {
@@ -488,6 +490,33 @@ void check_stage2_outputs(const fs::path &internal,const fs::path &submission,bo
     if(resumed || (fs::exists(internal) && fs::file_size(internal)) ||
        (fs::exists(submission) && fs::file_size(submission) && !owned_stage1_submission(read_submission_bytes(submission))))
         throw std::runtime_error("Stage2 result ledger is missing; restore its data directory before continuing");
+}
+std::vector<uint64_t> legacy_stage2_bounds(const fs::path &submission) {
+    if(!has_result_ledger(submission))return {};
+    SubmissionLock lock(submission);const auto ledger=migrate_result_ledger(submission);
+    require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");std::set<uint64_t> bounds;
+    for(const auto &file:fs::recursive_directory_iterator(ledger)) {
+        if(file.path().extension()!=".curve" && file.path().extension()!=".batch")continue;
+        const auto row=json::parse(read_submission_entry(file.path()).json);
+        if(row.has("b2"))bounds.insert(std::stoull(row.get("b2").text()));
+    }
+    return {bounds.begin(),bounds.end()};
+}
+bool has_stage2_attempt(const fs::path &submission,const std::string &task,uint64_t order,
+                       mpz_srcptr n,uint64_t sigma,uint64_t b1,bool edwards) {
+    if(!has_result_ledger(submission))return false;
+    SubmissionLock lock(submission);const auto ledger=migrate_result_ledger(submission);
+    require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");
+    const auto prefix="T:"+task+":O:"+std::to_string(order)+':';
+    for(const auto &file:fs::recursive_directory_iterator(ledger))if(file.path().extension()==".curve") {
+        const auto entry=read_submission_entry(file.path());
+        if(entry.group.compare(0,prefix.size(),prefix)==0)return true;
+        if(entry.group!="F")continue;
+        const auto row=json::parse(entry.json);
+        if(row.has("Edwards")==edwards && result_sigma(row)==sigma && row.get("b1").text()==std::to_string(b1) &&
+           stage1_modulus_matches(row,n))return true;
+    }
+    return false;
 }
 void publish_submission(const fs::path &path,const Submission &r,const mpz_t n,bool render_now) {
     if(r.curves!=1)throw std::runtime_error("submission ledger accepts individual completed curves");

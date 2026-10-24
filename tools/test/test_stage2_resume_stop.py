@@ -109,7 +109,7 @@ def main():
     assert 'gmp_selftest_bad=0' in checks and 'gmp_check_bad=0' in checks
     checkpoint=Path(re.search(r'^stage2_plan: .* checkpoint=(.+)$',text,re.M)[1].strip())
     state=checkpoint.read_text(encoding='utf-8')
-    assert re.match(rf'^2 {args.done} {args.total} "[^"]+" "" "[0-9a-f]{{64}}" ""\s*$',state),state
+    assert re.match(rf'^3 {args.done} {args.total} "[^"]+" "" "[0-9a-f]{{64}}" "" "[0-9a-f]{{64}}" \d+ [01]\s*$',state),state
     assert sha(queue)==before['queue_sha256'] and sha(ini)==before['ini_sha256']
     result={'passed':True,**before,'record':args.record,'done':args.done,'total':args.total,
             'checkpoint':str(checkpoint),'checkpoint_bytes':checkpoint.stat().st_size,

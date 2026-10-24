@@ -28,6 +28,9 @@ std::string submission_json(const Submission &,mpz_srcptr);
 std::string internal_json(Submission,mpz_srcptr,uint64_t,const std::string &,const std::string &extra_fields={});
 void check_stage1_outputs(const std::filesystem::path &,const std::filesystem::path &);
 void check_stage2_outputs(const std::filesystem::path &,const std::filesystem::path &,bool resumed=false);
+std::vector<uint64_t> legacy_stage2_bounds(const std::filesystem::path &);
+bool has_stage2_attempt(const std::filesystem::path &,const std::string &,uint64_t,
+                       mpz_srcptr,uint64_t,uint64_t,bool);
 void publish_stage1_batch(const std::filesystem::path &,const std::filesystem::path &,
                          std::vector<Stage1BatchRecord>,mpz_srcptr,const std::string &);
 bool has_result_ledger(const std::filesystem::path &);

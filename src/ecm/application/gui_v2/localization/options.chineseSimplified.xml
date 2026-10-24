@@ -56,7 +56,7 @@
       <Item id="option_stage2_stage2_results_file" name="指定 Stage2 成功曲线结果的 JSONL 文件，包含因子信息和续跑回执。留空使用默认文件名；不要在未完成队列续跑期间单独删除或替换它，否则会失去回执对账依据。" />
       <Item id="option_stage2_stage2_debug_log_file" name="指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。" />
       <Item id="option_stage2_stage2_progress_file" name="旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;task-id&gt;.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。" />
-      <Item id="option_stage2_stage2_progress_dir" name="每任务 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;task-id&gt;.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、save 内容、曲线范围和 B2；调整任务顺序、设备/显存/日志路径或 D/承载调优不会重置已完成曲线。文件仅保存计数和回执元数据，任务发布并移出队列后清除。" />
+      <Item id="option_stage2_stage2_progress_dir" name="每任务 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;task-id&gt;.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。文件仅保存计数、执行策略和回执元数据，结果发布并推进队列后清除。" />
       <Item id="option_stage2_stage2_save_dir" name="指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。" />
       <Item id="option_stage2_stage2_debug_log" name="控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开启本选项也不把全部调试输出刷到控制台。" />
       <Item id="option_stage2_stage2_device" name="Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。" />

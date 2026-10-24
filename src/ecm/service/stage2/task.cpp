@@ -400,41 +400,68 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             progress_lock.value=CreateFileW(lockpath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
                 FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
             if(progress_lock.value==INVALID_HANDLE_VALUE)throw std::runtime_error("another process owns this Stage2 task checkpoint");
-            const auto key=task.id();
-            const bool loaded=state.load(progress);
-            if(loaded && state.identity!=key)throw std::runtime_error("Stage2 checkpoint task ID mismatch: "+progress.string());
-            if(!loaded && stage2_queue::import_legacy(legacy_progress,task,[&](const std::string &line) {
+            const auto legacy_bounds=[&] {return ecm_results::legacy_stage2_bounds(o.submission);};
+            auto source=stage2_queue::load_task(progress_dir,mpz_sizeinbase(target.z,2),task,state,legacy_bounds);
+            const auto match_legacy=[&](const std::string &line) {
                 const auto old=queue_fields(line);Big n;std::string error;
                 return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
-            },state)) {
-                state.save(progress);
-                // Retain the old bytes as an archive; never overwrite an earlier import.
-                const fs::path archive(legacy_progress.string()+".migrated."+ecm_stage2::sha256_file(legacy_progress).substr(0,16));
-                const bool archived=MoveFileExW(legacy_progress.c_str(),archive.c_str(),0)!=0;
-                report("stage2_resume_import: completed="+std::to_string(state.done)+" total="+std::to_string(state.total)+
-                    " legacy_archived="+std::to_string(archived)+" checkpoint="+progress.string());
+            };
+            if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state,legacy_bounds))source=legacy_progress;
+            else if(source==progress && fs::exists(legacy_progress)) {
+                stage2_queue::State previous;
+                if(stage2_queue::import_legacy(legacy_progress,task,match_legacy,previous,legacy_bounds) &&
+                   previous.run==state.run && previous.publication_task==state.publication_task)source=legacy_progress;
             }
-            if(state.identity.empty()) {
-                state.identity=key;state.total=plan.size();state.run=stage2_queue::token();state.save(progress);
-            }
-            if(state.total!=plan.size())throw std::runtime_error("progress curve count differs from validated task");
+            const auto previous_total=state.total,previous_b2=state.b2;
+            const auto previous_auto=state.auto_b2;
             const auto pending_results=state.pending_results.empty()?results:fs::path(state.pending_results);
             if(!state.pending.empty() && stage2_queue::result_written(pending_results,state.pending)) {
                 ++state.done;state.pending.clear();state.pending_results.clear();state.save(progress);
                 report("Recovered completed curve from durable result receipt.");
             }
+            if(state.done>plan.size() && records(save,skip,state.done).size()!=state.done)
+                throw std::runtime_error("Stage2 completed progress exceeds the available save records");
+            if(!state.pending.empty() && (state.total!=task.total || state.b2!=task.b2 || state.auto_b2!=task.auto_b2)) {
+                // A force-stopped attempt with no durable outcome can be abandoned.
+                // A receipt written before a torn JSONL append must first be
+                // resolved under the original policy, rather than counted twice.
+                const auto next=records(save,skip+state.done,1);
+                if(next.empty())throw std::runtime_error("Stage2 pending curve is absent from its original save");
+                if(!ecm_results::has_stage2_attempt(o.submission,state.publication_task,next[0].index,
+                        target.z,next[0].sigma,next[0].b1,next[0].edwards)) {
+                    state.pending.clear();state.pending_results.clear();
+                    report("Abandoned uncommitted Stage2 curve attempt before applying the new task policy.");
+                }
+            }
+            state.reconfigure(task);state.save(progress);
+            if(!source.empty() && source!=progress) {
+                // Retain old bytes outside checkpoint discovery; never replace an archive.
+                const fs::path archive(source.string()+".migrated."+ecm_stage2::sha256_file(source).substr(0,16));
+                const bool archived=MoveFileExW(source.c_str(),archive.c_str(),0)!=0;
+                if(!archived)throw std::runtime_error("cannot archive imported Stage2 checkpoint; preserve both files and resolve the source before continuing: "+source.string());
+                report("stage2_resume_import: completed="+std::to_string(state.done)+" total="+std::to_string(state.total)+
+                    " legacy_archived="+std::to_string(archived)+" checkpoint="+progress.string());
+            }
+            if(!source.empty() && (previous_total!=task.total || previous_b2!=task.b2 || previous_auto!=task.auto_b2))
+                report("stage2_resume_override: previous_total="+std::to_string(previous_total)+" requested="+std::to_string(task.total)+
+                    " completed="+std::to_string(state.done)+" effective_total="+std::to_string(state.total)+
+                    " previous_B2="+std::to_string(previous_b2)+" B2="+std::to_string(task.b2)+
+                    "; completed curves retain their actual bounds.",true);
+            if(state.done>plan.size())report("WARNING: requested="+std::to_string(plan.size())+
+                " is below already completed="+std::to_string(state.done)+
+                "; no further curves will run; sealing all completed curves (factor hits reported separately).",true);
         }
         if(stage2_log::enabled(stage2_log::curve)||o.dry) {
             if(o.gui_events && !task_line.empty())std::cout<<"START: "<<task_line<<std::endl;
             std::ostringstream message;
             message << "stage2_plan: save=" << save.string() << " requested=" << (count?std::to_string(count):"all")
-                    << " available=" << plan.size() << " completed=" << state.done << " remaining=" << plan.size()-state.done
+                    << " available=" << plan.size() << " completed=" << state.done << " remaining=" << (state.done<plan.size()?plan.size()-state.done:0)
                     << " B2=" << b2 << " D=" << d << " device=" << device << " worker=" << o.worker
                     << " log=" << log.string() << " results=" << results.string();
             if(persist)message<<" checkpoint="<<progress.string();
             report(message.str());
         }
-        o.publication_task=persist?state.identity:std::to_string(ecm_edwards::hash(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
+        o.publication_task=persist?state.publication_task:std::to_string(ecm_edwards::hash(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
         bool task_completed=true;
         for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
             poll_inherited_stop();
