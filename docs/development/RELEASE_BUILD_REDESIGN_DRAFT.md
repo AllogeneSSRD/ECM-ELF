@@ -387,3 +387,13 @@ cuobjdump结果采用内容寻址缓存，键包含输入SHA256、工具路径/�
 独立OpenCL release构建及最终冻结通过，`opencl_progress.log` 包含依赖、快照、configure、实时编译链接、部署及最终核对提示。CPU回归19项（release前置/失败/时间戳4项，既有构建合同7项，CUDA检查缓存4项，OpenCL载荷4项）及4个PowerShell语法检查通过，两组生成器check通过。本轮没有缩减身份检查或实现源内容的持久缓存，也未重打完整分发包。
 
 提交生成器修复时，生成物按提交所基于的HEAD配置生成，并逐项核对暂存区哈希清单，避免将其他任务的配置说明改动混入本次提交。工作区使用当前配置生成的文件及其他任务改动保持，仍可随对应配置一并提交。草稿保留供用户后续处理。
+
+## 18. 完整日志与阶段内部并行验证（2026-10-24）
+
+按用户授权，统一release入口同时将整次输出实时写入 `<OutDir>/release-v<主程序版本>-<profile>.log`；版本取主程序版本头，不采用GUI版本。默认单包例如 `release/release-v0.52.3-cu11.8.log`，双包总入口为 `release-v0.52.3-all.log`，相同版本/profile重跑覆盖该文件。`internal/release_logging.ps1` 通过独立执行进程捕获生成步骤、子脚本、原生stdout/stderr和失败退出码；组件入口复用同一规则。原有逐TU日志和OpenCL叶目录build.log保留。
+
+`VerifyJobs=4` 独立于编译 `Jobs=16`，贯穿公开release入口、Stage1内部构建器、Stage2驱动和最终身份核对。`internal/cuda_build_verify.ps1` 在每次调用创建独立PowerShell 5.1工作池；结果按输入顺序归集，逐8单元报告进度。预检完成后才编译，完成编译后复查，再进行最终身份核对和打包；任一阶段失败即停止。每阶段重新读取内容、递归依赖、命令/setup和对象，不跨阶段共享哈希或放宽内容身份规则。Stage2的主机/CUDA单元均进入同一验证入口；源码集合、工具链/profile和整程序摘要检查仍按原顺序执行。
+
+CPU证据位于 `data/experiments/release_parallel_verify_20261024/`：`parallel_final/result.json` 记录1/4/8路下81项验证，覆盖结果顺序和指纹一致、同时间戳修改、命令/setup、对象篡改、新增/删除依赖、manifest不匹配、缺失对象与空摘要不能相互匹配，以及失败阻断；`identity_final/result.json` 记录原54项身份变异门禁；`python_tests.log` 记录13项release前置、日志与既有构建合同测试，包括含空格参数、原生stdout/stderr和非零退出码保留。8个修改/新增PowerShell入口和辅助文件语法检查通过。
+
+性能验证仅覆盖cu11.8 Stage1完整构建入口（`-Component stage1 -SkipPackage -VerifyJobs 8`），不代表完整双包或cuobjdump打包耗时。最终实现无改动样本见 `unchanged8_verified.json`、同名 `.log` 和 `.manifest.json`：调用前源码清单已与上一轮完全一致；整个入口119.830秒，预检18.959秒、复查18.859秒，最终逐单元核对约19.7秒。128个CUDA单元全复用，无C++编译或链接，EXE和manifest前后SHA256分别相同。版本0.52.3、CUDA 11.8/MSVC 14.16、Ryzen AI 9 HX 370（12核24线程）、暖文件缓存、CPU功耗/时钟未锁定、桌面活动、无GPU计算，样本数1；从调用release到退出计墙钟，不含外部取证，不由此前不同快照的串行样本推导稳定加速比。cu11.8 Stage2真实驱动已通过默认4路预检、复查与最终身份核对，39个单元全部复用、链接跳过；日志见 `stage2-output/release-v0.52.3-cu11.8.log`，结果见 `stage2_default4.json`。原始失败样本及刷新轮次保留，草稿供用户后续处理。

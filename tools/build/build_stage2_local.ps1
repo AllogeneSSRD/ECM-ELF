@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
 Build the standalone CUDA Stage2 save/queue executable (MSVC + nvcc + GMP).
@@ -21,6 +21,7 @@ param(
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
     [ValidateSet(0,1,2,3)][int]$AddSubMask = 0,
     [ValidateRange(1,64)][int]$SplitCompile = 8,
+    [ValidateRange(1,64)][int]$VerifyJobs=4,
     [ValidateRange(1,64)][int]$Jobs = 8,
     [string]$Gmp = '',
     [string]$CudaRoot = '',
@@ -103,8 +104,12 @@ foreach ($src in $sources) {
     }
     $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
     $compileEntries[$src] = $entry
-    $beforeStates[$src] = Get-EcmCompileState $repo $entry $vc.Setup $includeDirs -Production:($Engine -eq 'production')
+
 }
+$requests=@($sources | ForEach-Object {[pscustomobject]@{Entry=$compileEntries[$_]}})
+$preflight=@(Invoke-EcmCompileVerification $repo $requests -Setup $vc.Setup -IncludeDirs $includeDirs -Production:($Engine -eq 'production') -VerifyJobs $VerifyJobs -Phase 'Stage2 reuse preflight')
+$reuseReasons=@{}
+for($i=0;$i -lt $sources.Count;$i++){$beforeStates[$sources[$i]]=$preflight[$i].State;$reuseReasons[$sources[$i]]=$preflight[$i].Reason}
 $previous = $null
 $manifestPath = Join-Path $Build 'build_manifest.json'
 if (Test-Path -LiteralPath $manifestPath) { $previous = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json }
@@ -137,7 +142,7 @@ $fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -an
     ([IO.File]::ReadAllText((Resolve-Path $signaturePath)) -eq $signatureText) -and
     ($previous.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash)
 if ($fresh) {
-    try { Assert-EcmBuildUnits $repo $Build $previous $sources $includeDirs -Production:($Engine -eq 'production') }
+    try { Assert-EcmBuildUnits $repo $Build $previous $sources $includeDirs -Production:($Engine -eq 'production') -VerifyJobs $VerifyJobs }
     catch { $fresh = $false }
 }
 $linkInputs = if ($previous) { $previous.link_inputs } else { $null }
@@ -160,7 +165,7 @@ if (-not $fresh) {
             Write-Host ("  skip {0} (verified CUDA object)" -f $stem)
             continue
         }
-        $reason = if ($Rebuild) { 'forced rebuild' } else { Get-EcmCompileInvalidationReason $beforeStates[$src] }
+        $reason = if ($Rebuild) { 'forced rebuild' } else { $reuseReasons[$src] }
         if (-not $reason) {
             Write-Host ("  skip {0} (verified command, dependencies and object)" -f $stem)
             continue
@@ -264,11 +269,13 @@ Copy-Item -LiteralPath (Join-Path $Build 'diagnostics-build/diagnostics_build_ma
 
 $objectHashes = [ordered]@{}
 $compileUnits = [ordered]@{}
+$postcheck=@(Invoke-EcmCompileVerification $repo $requests -Setup $vc.Setup -IncludeDirs $includeDirs -Production:($Engine -eq 'production') -ManifestOnly -VerifyJobs $VerifyJobs -Phase 'Stage2 postcheck')
+$unitIndex=0
 foreach ($src in $sources) {
     $stem = $objectNames[$src]
-    $objectHash = (Get-FileHash -LiteralPath (Join-Path $objDir "$stem.obj")).Hash
+    $objectHash = $postcheck[$unitIndex].ObjectHash
     $objectHashes[$stem] = $objectHash
-    $state = Get-EcmCompileState $repo $compileEntries[$src] $vc.Setup $includeDirs -Production:($Engine -eq 'production')
+    $state = $postcheck[$unitIndex].State;$unitIndex++
     if ($fresh -or ($HostOnly -and $src -in $cudaSources)) {
         $expected = $previous.compile_units.$src.fingerprint
         $expectedObject = $previous.compile_units.$src.object_sha256

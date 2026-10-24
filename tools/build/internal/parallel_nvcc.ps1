@@ -65,6 +65,7 @@ param(
     [string]$BuildDir = "build_cuda_cmake",
     [string]$Target = "ecm_cuda",
     [int]$Jobs = 0,
+    [ValidateRange(1,64)][int]$VerifyJobs=4,
     [string]$Only = "",
     [string]$SourceRegex = '\.cu$',
     [switch]$AllSources,
@@ -123,15 +124,17 @@ New-Item -ItemType Directory -Force $logDir | Out-Null
 # --- decide what to compile -------------------------------------------------
 Write-Host ("== CUDA reuse preflight: {0} units; checking commands, dependency contents and objects ==" -f @($entries).Count)
 $preflightWatch=[Diagnostics.Stopwatch]::StartNew()
-$tuList = @()
+$requests=@($entries | ForEach-Object {[pscustomobject]@{Entry=$_}})
+$preflight=@(Invoke-EcmCompileVerification $repo $requests -Setup $vcSetup -VerifyJobs $VerifyJobs -Phase 'CUDA reuse preflight')
+$tuList = @();$entryIndex=0
 foreach ($e in $entries) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($e.file)
     $obj = Get-EcmObjectPath $e $BuildDir
     if (@($entries | Where-Object { [IO.Path]::GetFileNameWithoutExtension($_.file) -ieq $name }).Count -gt 1) {
         $name = (Get-EcmSourceKey $BuildDir $obj) -replace '[^A-Za-z0-9_.-]', '_'
     }
-    $state = Get-EcmCompileState $repo $e $vcSetup
-    $reason = if ($SkipUpToDate -and -not $Rebuild) { Get-EcmCompileInvalidationReason $state } else { 'forced rebuild' }
+    $state = $preflight[$entryIndex].State
+    $reason = if ($SkipUpToDate -and -not $Rebuild) { $preflight[$entryIndex].Reason } else { 'forced rebuild' }
     $skip = $reason -eq ''
     if ($HostOnly) {
         if (-not $skip) { throw "HostOnly CUDA object is not reusable: $($e.file): $reason" }
@@ -159,9 +162,7 @@ foreach ($e in $entries) {
         Err = Join-Path $logDir "$name.err.log"
         Proc = $null; Start = $null; Seconds = 0.0; Timing = $null
     }
-    if($tuList.Count -eq 1 -or $tuList.Count%8 -eq 0 -or $tuList.Count -eq @($entries).Count){
-        Write-Host ('   Checked {0}/{1}: {2} ({3:N1}s elapsed)' -f $tuList.Count,@($entries).Count,$name,$preflightWatch.Elapsed.TotalSeconds)
-    }
+    $entryIndex++
 }
 $preflightSeconds=$preflightWatch.Elapsed.TotalSeconds
 
@@ -235,7 +236,7 @@ $wall = ((Get-Date) - $compileStart).TotalSeconds
 $sum = ($tuList | Measure-Object -Property Seconds -Sum).Sum
 Write-Host ("compiled {0} TU(s): elapsed wall {1:N1}s (sum of concurrent TU elapsed times {2:N1}s)" -f `
     $todo.Count, $wall, $sum)
-$timingReport=[ordered]@{jobs=$Jobs;wall_seconds=$wall;tu_elapsed_sum_seconds=$sum;reuse_preflight_seconds=$preflightSeconds;
+$timingReport=[ordered]@{jobs=$Jobs;verify_jobs=$VerifyJobs;wall_seconds=$wall;tu_elapsed_sum_seconds=$sum;reuse_preflight_seconds=$preflightSeconds;
     units=@($tuList|ForEach-Object{[ordered]@{source=$_.Entry.file;object=$_.Obj;skipped=$_.Skip;started=$_.Start;seconds=$_.Seconds}})
 }
 $timingReport|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
@@ -249,15 +250,8 @@ if ($failed.Count -gt 0) {
 }
 
 Write-Host '== CUDA postcheck: verify inputs and objects remained unchanged =='
-$postcheckWatch=[Diagnostics.Stopwatch]::StartNew();$checked=0
-foreach ($j in $tuList) {
-    $current = Get-EcmCompileState $repo $j.Entry $vcSetup
-    if (-not (Test-EcmCompileState $current)) { throw "Compile dependency/object changed during build: $($j.Entry.file)" }
-    $checked++
-    if($checked -eq 1 -or $checked%8 -eq 0 -or $checked -eq $tuList.Count){
-        Write-Host ('   Verified {0}/{1}: {2} ({3:N1}s elapsed)' -f $checked,$tuList.Count,$j.Name,$postcheckWatch.Elapsed.TotalSeconds)
-    }
-}
+$postcheckWatch=[Diagnostics.Stopwatch]::StartNew()
+Invoke-EcmCompileVerification $repo $requests -Setup $vcSetup -RequireReusable -VerifyJobs $VerifyJobs -Phase 'CUDA postcheck' | Out-Null
 $timingReport['reuse_postcheck_seconds']=$postcheckWatch.Elapsed.TotalSeconds
 $timingReport|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
 

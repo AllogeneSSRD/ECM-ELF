@@ -58,6 +58,10 @@ release入口先自动同步业务配置和GUI v2派生文件，再解析依赖�
 
 运行 `tools\build\build_release_cu11.8.bat` 或 `build_release_cu13.3.bat`，分别构建对应 CUDA 的完整包；两者均传入 `-Jobs 16`，并只预检所选 CUDA 工具链。BAT 可继续传入 `-OutDir`、`-SkipBuild` 等参数；需要调整 profile 或并行数时，直接使用 `build_release.ps1 -Profile cu11.8 -Jobs <数量>`。`build_release.ps1/.bat` 默认构建 GUI v2、共享 OpenCL worker 和两套 CUDA Stage1/Stage2，默认并行数也是16。
 
+发布入口将整次控制台输出同时写到 `<OutDir>/release-v<主程序版本>-<profile>.log`，默认例如 `D:\code\MPA-OpenCl\release\release-v0.52.3-cu11.8.log`；双包总入口使用 `release-v0.52.3-all.log`。日志包含配置同步、原生构建输出、验证、打包、错误及最终退出码，运行中持续刷新。相同版本/profile 再次执行会覆盖上次日志，需要保留多次记录时先复制日志或指定其他 `-OutDir`；组件入口也遵循这一命名。
+
+`-VerifyJobs` 默认4，控制CUDA逐单元的复用预检、构建后复查和最终身份核对内部并行数，与编译的 `-Jobs 16` 独立；可经BAT传入 `-VerifyJobs 8`。预检全部成功后才进入编译，编译完成后复查，再进行最终核对和打包，阶段间保持顺序。每阶段创建独立工作池，重新读取依赖、命令和对象内容；不跨阶段缓存内容摘要，不以时间戳代替内容检查。失败会终止该阶段并释放其工作池。
+
 完整包生成到 `release/ecm-elf-<主程序版本>-cu11.8/`、`release/ecm-elf-<主程序版本>-cu13.3/`，ZIP/SHA256 同层存放，ZIP 名为 `ecm-elf-<主程序版本>-cu<CUDA版本>-win-x64.zip`。ZIP 内的唯一顶层目录保留完整包名，例如 `ecm-elf-0.52.1-cu11.8/`。两个 CUDA 包可先后发布到同一个 `-OutDir`。
 
 `-SkipBuild` 仍核对源码、profile、工具链、依赖、对象和程序身份。`-SkipPackage` 只构建/验证。`-BuildRoot` 默认 `build_cuda_release`；`-OutDir` 默认 `release`，必须与构建目录分离。每个阶段的精确叶目录记录在 `<BuildRoot>/components/cu<版本>.stageN.json`，不按时间扫描“最新程序”。所选包的目录、ZIP 或 SHA256 已存在时均拒绝覆盖，重打包使用新的 `-OutDir`，以保留用户配置和队列。
@@ -66,7 +70,9 @@ release入口先自动同步业务配置和GUI v2派生文件，再解析依赖�
 
 完整入口通过 `build_opencl_local.ps1 -BuildRole release` 在 `<BuildRoot>/opencl-release` 构建独立发布用途的OpenCL worker，使用通用vcpkg GMP并关闭CUDA编译器。可用 `-OpenClRoot`、`-OpenSslRoot` 覆盖头文件/导入库及OpenSSL安装位置。构建前后核对保守源码集合、工具链、依赖和资源身份；`-SkipBuild` 只核对已有产物，不为缺失组件补建。发布程序默认从自身目录查找OpenCL资源，显式 `--kernel-root` 仍优先。OpenCL加载器由用户安装的显卡驱动提供，包内不附厂商驱动。
 
-OpenCL入口输出依赖/编译器、源输入快照、CMake配置、编译链接、依赖部署及最终核对阶段；原生构建输出实时显示，并保存在叶目录的 `build.log`。Stage1在CMake输出设备架构后报告配置耗时和源码扫描，再逐批汇报CUDA复用预检与构建后复查的进度。`par_nvcc/timings.json` 单独记录 `reuse_preflight_seconds` 和 `reuse_postcheck_seconds`；这些是内容身份检查耗时，不算入nvcc编译时间。无须重编CUDA时仍执行内容核验。
+OpenCL入口输出依赖/编译器、源输入快照、CMake配置、编译链接、依赖部署及最终核对阶段；原生构建输出实时显示，并保存在叶目录的 `build.log`。Stage1在CMake输出设备架构后报告配置耗时和源码扫描，再逐批汇报CUDA复用预检与构建后复查的进度。`par_nvcc/timings.json` 单独记录 `verify_jobs`、`reuse_preflight_seconds` 和 `reuse_postcheck_seconds`；这些是内容身份检查耗时，不算入nvcc编译时间。无须重编CUDA时仍执行内容核验。Stage2的预检、复查和最终逐单元身份核对同样使用 `VerifyJobs`；源码集合、工具链/profile和整程序摘要核对保留原有顺序。
+
+无改动验证样本（2026-10-24）：0.52.3、CUDA 11.8/MSVC 14.16、Stage1全128个CUDA单元，`-Component stage1 -SkipPackage -VerifyJobs 8` 整个入口墙钟119.830秒，其中预检18.959秒、复查18.859秒，最终逐单元核对约19.7秒；128个单元全部复用，无C++编译或链接，EXE及构建manifest前后SHA256相同。设备为Ryzen AI 9 HX 370（12核/24线程），暖文件缓存，未锁定CPU功耗/时钟，存在桌面活动，不运行GPU计算，样本数1。计时从调用release入口到退出，不包含外部取证；输入、二进制/manifest摘要、逐TU计时及原始日志见 `data/experiments/release_parallel_verify_20261024/unchanged8_verified.json`、同名 `.manifest.json` 和 `.log`。这不是完整双包或打包耗时，也不作为稳定加速比。
 
 cuobjdump提取结果保存在 `<BuildRoot>/components/cuobjdump-cache/`，按对象或EXE内容SHA256、工具路径/摘要以及验证脚本身份区分。未变输入复用提取结果；对象、EXE、工具或验证脚本变化时重新检查相应输入。缓存损坏/缺失自动重建，失败的工具调用不写入缓存；成功条目逐个原子落盘，中断后可复用已完成条目。每次打包仍核对源码、profile、依赖、对象/EXE身份、当前模块成员及PTX/SASS目标，不因缓存命中跳过这些门禁。日志汇报复用和实际检查数量；完整入口加 `-ReinspectCuda` 可强制重新提取所有请求组件的CUDA镜像。
 
@@ -156,7 +162,7 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 
 构建前后核对已知依赖内容。成功编译发现新的系统/宏 include 时纳入新指纹；旧 include 退出新 compiler 清单时，按 live 源根重新读取旧文件哈希，而不是将缺少清单键当作内容变化。旧文件在编译期间被修改或删除、或无法验证仍失败。持久对象记录 schema、命令/工具链/对象哈希和 HostOnly 检查不变。
 
-`tools/test/test_cuda_build_identity.ps1` 覆盖身份变异与跨 PowerShell 指纹；`tools/build/test/test_msvc_header_retirement.ps1` 使用正式主机编译器产生真实旧/新依赖并核对退役行为。两者输出到显式隔离目录，不改生产对象缓存。
+`tools/test/test_cuda_build_identity.ps1` 覆盖身份变异与跨 PowerShell 指纹；`tools/test/test_cuda_parallel_verify.ps1 -Output <新目录>` 在1/4/8路下核对结果顺序、相同指纹、保留时间戳的内容修改、命令/setup、对象篡改、新增/删除依赖以及阶段失败阻断。`tools/build/test/test_msvc_header_retirement.ps1` 使用正式主机编译器产生真实旧/新依赖并核对退役行为。这些测试输出到显式隔离目录，不改生产对象缓存。
 
 
 ## 共享 PARI 诊断依赖

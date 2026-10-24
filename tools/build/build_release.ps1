@@ -5,13 +5,20 @@ param(
     [ValidateSet('all','stage1','stage2')][string]$Component='all',
     [ValidateSet('grouped','isolated')][string]$Stage2KernelLayout='grouped',
     [string]$BuildRoot='build_cuda_release', [string]$OutDir='release',
+    [ValidateRange(1,64)][int]$VerifyJobs=4,
     [ValidateRange(1,64)][int]$Jobs=16,
     [string]$Gmp='', [string]$Cuda118Root='', [string]$Cuda133Root='', [string]$VcVars='',
     [string]$OpenSslRoot='', [string]$OpenClRoot='',
-    [switch]$SkipBuild, [switch]$SkipPackage, [switch]$ReinspectCuda
+    [switch]$SkipBuild, [switch]$SkipPackage, [switch]$ReinspectCuda,
+    [Parameter(DontShow=$true)][switch]$LogWorker
 )
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+if(-not $LogWorker){
+    . (Join-Path $PSScriptRoot 'internal/release_logging.ps1')
+    $code=Invoke-EcmReleaseLogged $repo $PSCommandPath $PSBoundParameters $Profile $OutDir
+    exit $code
+}
 . (Join-Path $PSScriptRoot 'internal/release_profiles.ps1')
 . (Join-Path $PSScriptRoot 'internal/gmp_dependency.ps1')
 . (Join-Path $PSScriptRoot 'internal/stage1_release_sources.ps1')
@@ -69,7 +76,7 @@ foreach($name in $names) {
     if(-not $SkipBuild) {
         if($Component -in @('all','stage1')) {
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'internal/build_stage1_release_group.ps1') `
-                -BuildRoot $BuildRoot -OutDir $OutDir -Archs $target.Sass -PtxArch $target.Ptx -Jobs $Jobs `
+                -BuildRoot $BuildRoot -OutDir $OutDir -Archs $target.Sass -PtxArch $target.Ptx -Jobs $Jobs -VerifyJobs $VerifyJobs `
                 -CudaRoot $tools.Cuda.Root -VcVars $tools.Vc.VcVars -Gmp $dependency.Root -SkipSplit -ResultFile $stage1Record
             if($LASTEXITCODE){throw "Release Stage1 failed: $name"}
         }
@@ -77,7 +84,7 @@ foreach($name in $names) {
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build_stage2_local.ps1') `
                 -BuildRoot $BuildRoot -BuildRole release -Arch ('sm_'+$target.Sass) -PtxArch $target.Ptx `
                 -KernelLayout $Stage2KernelLayout `
-                -SplitCompile $target.SplitCompile -Jobs $Jobs -CudaRoot $tools.Cuda.Root -VcVars $tools.Vc.VcVars `
+                -SplitCompile $target.SplitCompile -Jobs $Jobs -VerifyJobs $VerifyJobs -CudaRoot $tools.Cuda.Root -VcVars $tools.Vc.VcVars `
                 -Gmp $dependency.Root -ResultFile $stage2Record
             if($LASTEXITCODE){throw "Release Stage2 failed: $name"}
         }
@@ -106,7 +113,7 @@ foreach($name in $names) {
         }
         if($stage -eq 'stage1') {
             if($manifest.architectures -ne $target.Sass -or $manifest.tiers -or $manifest.enable_prac){throw 'Complete release requires full production tiers, PRAC disabled'}
-            Assert-Stage1BuildIdentity $repo $record.build $manifest
+            Assert-Stage1BuildIdentity $repo $record.build $manifest -VerifyJobs $VerifyJobs
         } else {
             if($manifest.architecture -ne ('sm_'+$target.Sass) -or $manifest.engine -ne 'production' -or
                 $manifest.gl_fixed_mode -ne 3 -or $manifest.add_sub_mask -ne 1 -or $manifest.outer_unroll_u -ne 0 -or
@@ -119,7 +126,7 @@ foreach($name in $names) {
             $includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/ecm/backend/cuda')
             $set=Get-EcmStage2SourceSet $repo $inventory production $includeDirs $manifest.module_directory
             Assert-EcmHashes $manifest.source_hashes (Get-EcmSourceHashes $repo $set.Dependencies) 'Stage2 source identity changed'
-            Assert-EcmBuildUnits $repo $record.build $manifest $set.Sources $includeDirs -Production
+            Assert-EcmBuildUnits $repo $record.build $manifest $set.Sources $includeDirs -Production -VerifyJobs $VerifyJobs
         }
         if((Get-FileHash -LiteralPath (Join-Path $record.build 'gmp-10.dll')).Hash -ne $dependency.Hashes['bin/gmp-10.dll']){throw 'Release runtime GMP mismatch'}
         Write-Host "Verified $name/$stage"

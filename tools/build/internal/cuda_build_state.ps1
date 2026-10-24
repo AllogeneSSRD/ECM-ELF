@@ -214,7 +214,7 @@ function Get-EcmMsvcDependencyPaths([string]$Path, $Entry) {
     return @($dependencies.Data.Source) + @($dependencies.Data.Includes)
 }
 
-function Get-EcmCompileInvalidationReason($State) {
+function Get-EcmCompileInvalidationReason($State, [string]$ObjectHash='') {
     $record = "$($State.object).ecm-state.json"
     if (-not (Test-Path -LiteralPath $State.object)) { return 'object missing' }
     if (-not (Test-Path -LiteralPath $record)) { return 'dependency record missing' }
@@ -224,7 +224,8 @@ function Get-EcmCompileInvalidationReason($State) {
         try { Assert-EcmHashes $saved.source_hashes $State.source_hashes }
         catch { return "source or dependency changed: $($_.Exception.Message)" }
         if ($saved.fingerprint -ne $State.fingerprint) { return 'compile command or setup changed' }
-        if ($saved.object_sha256 -ne (Get-FileHash -LiteralPath $State.object -Algorithm SHA256).Hash) { return 'object content changed' }
+        if (-not $ObjectHash) {$ObjectHash=(Get-FileHash -LiteralPath $State.object -Algorithm SHA256).Hash}
+        if ($saved.object_sha256 -ne $ObjectHash) { return 'object content changed' }
         return ''
     } catch { return "dependency record invalid: $($_.Exception.Message)" }
 }
@@ -299,17 +300,19 @@ function Assert-EcmObjectHashes([string]$BuildDir, $Objects) {
 }
 
 function Assert-EcmBuildUnits([string]$Repo, [string]$BuildDir, $Manifest,
-        [string[]]$Sources, [string[]]$IncludeDirs = @(), [switch]$Production) {
+        [string[]]$Sources, [string[]]$IncludeDirs = @(), [switch]$Production,
+        [ValidateRange(1,64)][int]$VerifyJobs=4) {
     if ($Manifest.identity_schema -ne 1 -or -not $Manifest.compile_units) {
         throw 'Build identity is missing dependency records; rebuild old manifests'
     }
     if (@($Manifest.compile_units.PSObject.Properties).Count -ne $Sources.Count) { throw 'Build translation-unit set changed' }
-    foreach ($source in $Sources) {
+    $requests=@(foreach ($source in $Sources) {
         $unit = $Manifest.compile_units.$source
         if (-not $unit -or $unit.entry.file -ine (Resolve-EcmSourcePath $Repo $source)) { throw "Build translation unit changed: $source" }
         $object = Get-EcmObjectPath $unit.entry $BuildDir
-        $state = Get-EcmCompileState $Repo $unit.entry $Manifest.compile_setup $IncludeDirs -Production:$Production
-        if ($unit.fingerprint -ne $state.fingerprint) { throw "Build compile dependency changed: $source" }
-        if ($unit.object_sha256 -ne (Get-FileHash -LiteralPath $object -Algorithm SHA256).Hash) { throw "Build object changed: $source" }
-    }
+        [pscustomobject]@{Entry=$unit.entry;ValidateFingerprint=$true;ExpectedFingerprint=$unit.fingerprint;ValidateObject=$true;ExpectedObjectHash=$unit.object_sha256}
+    })
+    Invoke-EcmCompileVerification $Repo $requests $Manifest.compile_setup $IncludeDirs -Production:$Production -ManifestOnly -VerifyJobs $VerifyJobs -Phase 'Final build identity' | Out-Null
 }
+
+. (Join-Path $PSScriptRoot 'cuda_build_verify.ps1')

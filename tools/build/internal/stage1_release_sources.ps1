@@ -1,4 +1,4 @@
-﻿# Source/object identity shared by Stage1 release, splitting and SkipBuild.
+# Source/object identity shared by Stage1 release, splitting and SkipBuild.
 . (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
 
 function Get-Stage1CudaObjects([string]$BuildDir) {
@@ -42,17 +42,15 @@ function Assert-Stage1ReleaseSources($Expected, $Actual) {
     Assert-EcmHashes $Expected $Actual 'Stage1 source changed; rebuild before packaging'
 }
 
-function Assert-Stage1BuildIdentity([string]$Repo, [string]$BuildDir, $Manifest) {
+function Assert-Stage1BuildIdentity([string]$Repo, [string]$BuildDir, $Manifest, [ValidateRange(1,64)][int]$VerifyJobs=4) {
     if ($Manifest.identity_schema -ne 1 -or -not $Manifest.compile_setup) { throw 'Stage1 build identity missing; rebuild old manifests' }
     Assert-Stage1ReleaseSources $Manifest.source_hashes (Get-Stage1ReleaseSources $Repo -EnablePrac:$Manifest.enable_prac -BuildDir $BuildDir)
     $objects = @(Get-Stage1CudaObjects $BuildDir)
     if (@($Manifest.objects.PSObject.Properties).Count -ne $objects.Count) { throw 'Stage1 CUDA object set changed' }
-    foreach ($object in $objects) {
-        if ($Manifest.objects.$object -ne (Get-FileHash -LiteralPath (Join-Path $BuildDir $object)).Hash) { throw "Stage1 CUDA object changed: $object" }
-    }
-    foreach ($entry in @(Get-EcmTargetCompileEntries $BuildDir ecm_cuda | Where-Object { $_.file -match '\.cu$' })) {
-        $state = Get-EcmCompileState $Repo $entry $Manifest.compile_setup -Production
-        if (-not (Test-EcmCompileState $state)) { throw "Stage1 CUDA dependency/command changed: $($entry.file)" }
-    }
+    $requests=@(foreach ($entry in @(Get-EcmTargetCompileEntries $BuildDir ecm_cuda | Where-Object { $_.file -match '\.cu$' })) {
+        $object=Get-EcmSourceKey $BuildDir (Get-EcmObjectPath $entry $BuildDir)
+        [pscustomobject]@{Entry=$entry;ValidateObject=$true;ExpectedObjectHash=$Manifest.objects.$object}
+    })
+    Invoke-EcmCompileVerification $Repo $requests -Setup $Manifest.compile_setup -Production -RequireReusable -VerifyJobs $VerifyJobs -Phase 'Final Stage1 identity' | Out-Null
     if ($Manifest.executable_sha256 -ne (Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_cuda.exe')).Hash) { throw 'Stage1 executable changed' }
 }

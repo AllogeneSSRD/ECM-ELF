@@ -15,13 +15,15 @@
 
 - Stage1 本机/开发：`-Arch`、`-BuildDir`、`-Jobs`、`-Tiers`、`-KernelLayout isolated/grouped`、`-EnablePrac`、`-HostOnly`、`-FullRebuild`、`-Extra`。默认isolated，验证并复用 CUDA 对象，`-Incremental` 保留兼容；默认不编译 PRAC，改变构建参数后仅重编失效单元。已有分组缓存首次切换须使用新的BuildDir。
 - Stage2 本机/开发：`-Arch`、`-Build`、`-SplitCompile`、`-KernelLayout grouped/isolated`、`-GlBackend`、`-AddSubMask`、`-OuterUnrollU`、`-HostOnly`、`-Rebuild`。默认grouped，隔离备选仅支持生产引擎。默认逐单元复用；HostOnly 在编译前验证 CUDA 对象/参数和源身份，与 Rebuild 互斥。
-- 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`、`-Stage2KernelLayout grouped/isolated`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；Stage2阶段包装使用 `-KernelLayout` 选择布局。
+- 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`、`-VerifyJobs`（默认4）、`-Stage2KernelLayout grouped/isolated`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；Stage2阶段包装使用 `-KernelLayout` 选择布局。
 - 发布工具链：`-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp`；发布要求同一 vcpkg 通用 GMP，缺失或身份变化即失败。local/dev 保留 `-CudaRoot` 和各自依赖参数。
 - 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。cuobjdump按文件内容、工具和验证器身份缓存，`-ReinspectCuda` 强制复查。输出为 `release/ecm-elf-<版本>-cu11.8/`、`ecm-elf-<版本>-cu13.3/`，ZIP 内保留同名完整目录。所选包已有目录、ZIP 或 SHA256 时不覆盖，重打包指定新的 `-OutDir`；另一个 CUDA 包可发布到同一输出根。
 
 local BAT/PowerShell 默认输出为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；显式本机/开发目录是最终叶目录。固定短目录中的 `profile.json` 仍拒绝跨用途、跨阶段或不兼容配置复用；需要并存时指定不同 `-BuildDir`/`-Build`，不自动覆盖。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 
 完整参数以各 PS1 的 param 与帮助为准。发布只附 `ECM_TOML_REFERENCE.md` 这一份项目说明；源码/构建/拆分/打包清单保留在构建目录，ZIP 旁保留 SHA256。
+
+完整输出默认实时保存到 `release/release-v<主程序版本>-<profile>.log`，例如 `release-v0.52.3-cu11.8.log`；双包入口为 `release-v0.52.3-all.log`，可通过 `-OutDir` 调整位置。同版本/profile 重跑覆盖上次日志。`VerifyJobs` 控制预检、复查和最终身份核对各自内部并行，阶段间保持顺序；不跨阶段复用文件摘要。日志、并行语义与验证记录以[构建与发布](../../docs/usage/BUILD.md#完整发布与按需加载)为准。
 
 ## 子目录
 

@@ -17,6 +17,9 @@ class PrebuildTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(dir=base);self.repo=Path(self.temp.name)
         build=self.repo/'tools/build';(build/'internal').mkdir(parents=True)
         shutil.copy2(ROOT/'tools/build/build_release.ps1',build/'build_release.ps1')
+        shutil.copy2(ROOT/'tools/build/internal/release_logging.ps1',build/'internal/release_logging.ps1')
+        version=self.repo/'include/ecm/platform/program_version.h';version.parent.mkdir(parents=True)
+        version.write_text('inline constexpr char version[] = "0.52.3";')
         for name in ('release_profiles','gmp_dependency','stage1_release_sources','cuda_build_profile'):
             (build/'internal'/f'{name}.ps1').write_text('')
         (build/'internal/gmp_dependency.ps1').write_text(
@@ -43,11 +46,40 @@ class PrebuildTests(unittest.TestCase):
         self.assertEqual(visits,['generate_ecm_config:[]','generate_gui_v2_state:[]','dependency'])
         self.assertIn('synchronize generate_ecm_config.py',output)
         self.assertIn('synchronize generate_gui_v2_state.py',output)
+        log=self.repo/'release/release-v0.52.3-all.log'
+        self.assertTrue(log.is_file())
+        self.assertIn('fixture dependency boundary',log.read_text(encoding='utf-8-sig'))
+        self.assertIn('Release exit code: 1',log.read_text(encoding='utf-8-sig'))
 
     def test_skip_build_checks_without_generation(self):
         visits,output=self.run_entry('-SkipBuild')
         self.assertEqual(visits,["generate_ecm_config:['--check']","generate_gui_v2_state:['--check']",'dependency'])
         self.assertIn('check generate_ecm_config.py',output)
+
+    def test_profile_version_and_custom_directory(self):
+        visits,output=self.run_entry('-Profile','cu11.8','-VerifyJobs','8','-OutDir','logs with spaces')
+        self.assertEqual(visits[-1],'dependency')
+        log=self.repo/'logs with spaces/release-v0.52.3-cu11.8.log'
+        self.assertTrue(log.is_file())
+        self.assertIn(str(log),output)
+
+    def test_logger_captures_native_streams_and_exit_code(self):
+        script=self.repo/'streams.ps1'
+        script.write_text('param([switch]$LogWorker,[string]$Label)\n'
+            'Write-Host "host:$Label"\n'
+            '& cmd /d /c "echo native-output & echo native-error 1>&2 & exit /b 17"\n'
+            'exit $LASTEXITCODE\n')
+        runner=self.repo/'runner.ps1'
+        runner.write_text(
+            '. "$PSScriptRoot/tools/build/internal/release_logging.ps1"\n'
+            '$code=Invoke-EcmReleaseLogged $PSScriptRoot "$PSScriptRoot/streams.ps1" '
+            '@{Label="two words"} cu13.3 logs\nexit $code\n')
+        result=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(runner)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,17)
+        content=(self.repo/'logs/release-v0.52.3-cu13.3.log').read_text(encoding='utf-8-sig')
+        for line in ('host:two words','native-output','native-error','Release exit code: 17'):
+            self.assertIn(line,content)
+        self.assertIn('native-output',result.stdout)
 
     def test_generator_failure_stops_before_other_work(self):
         for name in ('generate_ecm_config','generate_gui_v2_state'):

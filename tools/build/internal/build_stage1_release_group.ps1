@@ -15,6 +15,7 @@ param(
     [ValidatePattern('^$|^[0-9]+$')][string]$PtxArch = "",
     [string]$Tiers = "",
     [switch]$EnablePrac,
+    [ValidateRange(1,64)][int]$VerifyJobs=4,
     [ValidateRange(1,64)][int]$Jobs = 8,
     [switch]$SkipBuild,
     [switch]$SkipSplit,
@@ -118,7 +119,7 @@ if (-not $SkipBuild) {
     }
 
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "parallel_nvcc.ps1") `
-        -BuildDir $BuildDir -Jobs $Jobs -VcVars $VcVars -VcVersion $vc.Version
+        -BuildDir $BuildDir -Jobs $Jobs -VerifyJobs $VerifyJobs -VcVars $VcVars -VcVersion $vc.Version
     if ($LASTEXITCODE -ne 0) { throw "Stage1 release build failed ($LASTEXITCODE)" }
     Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $BuildDir -Force
     $frozenSources = $sourceHashes | ConvertTo-Json -Depth 3 | ConvertFrom-Json
@@ -149,7 +150,7 @@ if (-not $SkipBuild) {
         throw 'Stage1 SkipBuild requires the same architecture, tiers, PRAC flag, toolkit and executable'
     }
     Assert-Stage1ReleaseSources $manifest.source_hashes $sourceHashes
-    Assert-Stage1BuildIdentity $repo $BuildDir $manifest
+    Assert-Stage1BuildIdentity $repo $BuildDir $manifest -VerifyJobs $VerifyJobs
     foreach ($name in $dependencyHashes.Keys) {
         if ($manifest.dependency_hashes.$name -ne $dependencyHashes[$name]) { throw "Stage1 dependency changed: $name" }
     }

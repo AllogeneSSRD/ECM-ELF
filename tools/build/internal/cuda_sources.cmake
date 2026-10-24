@@ -169,6 +169,7 @@ set(ECM_CUDA_BUILD_INPUTS
     tools/build/internal/release_profiles.ps1
     tools/build/internal/cuda_sources.cmake
     tools/build/internal/cuda_build_state.ps1
+    tools/build/internal/cuda_build_verify.ps1
     tools/build/internal/cuda_build_profile.ps1
     tools/build/internal/check_ecm_config.cmake
     tools/build/internal/cuda_toolchain.ps1
