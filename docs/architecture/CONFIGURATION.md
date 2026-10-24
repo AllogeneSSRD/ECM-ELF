@@ -2,9 +2,11 @@
 
 ## 单一数据源
 
-[config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 与 worker 的键、类型、默认值、静态范围和英中说明。`shared_with` 使两阶段使用同一个 `[shared]` 定义。运行时读取生成的 C++ 绑定，不读取 JSON。修改定义后运行 `python tools/gen/generate_ecm_config.py`；`--check` 与 [构建检查](../../tools/build/internal/check_ecm_config.cmake) 验证生成物哈希。
+[config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 与 worker 的键、类型、默认值、静态范围和英中说明。`shared_with` 使两阶段使用同一个 `[shared]` 定义。运行时读取生成的 C++ 绑定，不读取 JSON。修改定义后依次运行 `python tools/gen/generate_ecm_config.py` 和 `python tools/gen/generate_gui_v2_state.py`，分别同步业务配置绑定/参考与GUI v2状态、业务选项元数据及英中文说明XML；仅修改说明也需要同步两组生成物。release构建入口自动在依赖解析、组件构建及身份冻结之前依次执行这两步，失败立即停止；`-SkipBuild` 只执行各自的 `--check`，不改写源文件。生成器保留内容未变产物的时间戳，避免每次构建触发GUI重编译。[业务构建检查](../../tools/build/internal/check_ecm_config.cmake) 和 [GUI v2构建检查](../../tools/build/internal/check_gui_v2_config.cmake) 继续严格验证哈希，CMake检查本身不生成文件。
 
 生成物包括 [默认配置](../../config/ecm.toml.default)、[示例配置](../../config/ecm.toml.example)、[逐键参考](../ECM_TOML_REFERENCE.md)、C++ 绑定、[独立默认值头](../../src/ecm/platform/generated/configuration_defaults.h)、TOML 键表、嵌入模板和哈希清单。独立默认值头只依赖标准整数/数组类型，供 task 等主机实现消费；完整应用绑定包含该头，不重复生成默认值定义。两份配置按分区及键名排序；每个条目先写 `键 = 默认值`，再写英文、中文注释，最后空一行。显式设置会改变 worker 后缀或环境变量优先级的键保留带注释的默认值，启用时取消注释。参考文档仅由生成器维护。
+
+嵌入模板使用UTF-8字节对应的字符数组初始化，保留 `default_toml` 的constexpr字符数组接口及末尾NUL，避免旧MSVC对超过65535字节的拼接字符串字面量报C1091；不改变默认TOML内容或配置写出方式。
 
 ## TOML 分区
 

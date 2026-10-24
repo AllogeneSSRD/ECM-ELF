@@ -16,6 +16,15 @@ $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $PSScriptRoot 'internal/gmp_dependency.ps1')
 . (Join-Path $PSScriptRoot 'internal/stage1_release_sources.ps1')
 . (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
+foreach($generator in @('generate_ecm_config.py','generate_gui_v2_state.py')){
+    $generatorArgs=@()
+    if($SkipBuild){$generatorArgs=@('--check')}
+    $action=if($SkipBuild){'check'}else{'synchronize'}
+    Write-Host "== Release configuration: $action $generator =="
+    & python (Join-Path $repo "tools/gen/$generator") @generatorArgs
+    if($LASTEXITCODE){throw "Release configuration $action failed: $generator"}
+}
+Write-Host '== Release: resolve GMP and CUDA toolchains =='
 $dependency=Resolve-EcmGmp $repo $Gmp -Release
 foreach($name in @('BuildRoot','OutDir')) {
     $path=Get-Variable $name -ValueOnly

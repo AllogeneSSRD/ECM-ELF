@@ -4,11 +4,11 @@
     "src/ecm/application/configuration/generated/ecm_config_generated.h": "ea2e348b37aacb7553cac9cb6a1229536ee3693e5a5c9815015403c963d1ced9",
     "src/ecm/platform/generated/configuration_defaults.h": "2c8e6910cbd35901f9a3e35026088e09b7612adf40eb2daec38749d0529db00a",
     "src/ecm/application/configuration/generated/ecm_toml_schema.h": "89df5f0ee303ed547a12bd83dc5ca1b430736efe25b2a7049c13db092a7ecc9b",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "d1e2ddb36674309fef15195e1438ec6afd0a95822d673dedd4c5fc7589ade2ba",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "0e665dcbb95c090d946728cb140996cd00806d033192b816c44f14ee869e8b47",
     "config/ecm.toml.default": "91c62261af6bee76e6026e2ef3ba89237103e90dc66bf890bbb2233fe7188c2e",
     "config/ecm.toml.example": "9a48b2f6bf2958605363849cc36f74020a69ba90e4ee8a68e1a8f1a1095ccb01",
     "docs/ECM_TOML_REFERENCE.md": "065aa9bd7625b32f987dc8c928d57cdf79223794565c23b8c52a4b1da2037c75",
-    "config/ecm_options.json": "6eeb702b87dedead4402c8245189591faf6f7f7657b59db58e34a35802ec1b9f",
-    "tools/gen/generate_ecm_config.py": "43c1f96f5e4c94177869e2a551ac25a41056d8cc545a80d9e5141afb4be57973"
+    "config/ecm_options.json": "1fdc6634ac61d39e3d7f7222cabf8057b514f4adf6439c2f94053657cfce62d9",
+    "tools/gen/generate_ecm_config.py": "bf97cf98a7ab1a944200b5e9129b611fdb17e9b2bbbce6a43e2e9e438159b179"
   }
 }

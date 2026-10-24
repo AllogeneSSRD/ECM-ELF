@@ -94,7 +94,8 @@ def main():
             assert path.exists() and path.read_bytes() == content.encode(), f'Stale v2 UI generated file: {name}'
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding='utf-8', newline='\n')
+            if not path.exists() or path.read_bytes()!=content.encode():
+                path.write_text(content, encoding='utf-8', newline='\n')
     print('GUI v2 state definitions current' if args.check else 'GUI v2 state definitions generated')
 
 

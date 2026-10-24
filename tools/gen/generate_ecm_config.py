@@ -328,16 +328,14 @@ def toml_schema_header(schema):
 
 
 def template_header(value):
-    # Keep the C++ source ASCII while preserving exact UTF-8 TOML bytes.
-    # Literal boundaries prevent a following ASCII hex digit extending a \x escape.
+    # A character initializer list preserves the UTF-8 bytes and constexpr array
+    # API without MSVC 14.16's 65535-byte concatenated string-literal limit.
     lines = ["// Generated; edit config/ecm_options.json.", "#pragma once",
-             "namespace ecm_config {", "inline constexpr const char default_toml[]="]
-    for line in value.splitlines(keepends=True):
-        chunks = re.split(r"([^\x00-\x7f]+)", line)
-        literals = [literal(c) if c.isascii() else '"' + ''.join(f"\\x{b:02x}" for b in c.encode("utf-8")) + '"'
-                    for c in chunks if c]
-        lines.append("    " + " ".join(literals))
-    return "\n".join(lines + [";", "}", ""])
+             "namespace ecm_config {", "inline constexpr const char default_toml[]={"]
+    encoded=value.encode('utf-8')
+    for offset in range(0,len(encoded),24):
+        lines.append("    "+','.join(f"'\\x{byte:02x}'" for byte in encoded[offset:offset+24])+',')
+    return "\n".join(lines + ["    '\\0'", "};", "}", ""])
 
 
 def products(schema):

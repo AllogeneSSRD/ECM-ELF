@@ -121,6 +121,8 @@ $logDir = Join-Path $BuildDir "par_nvcc"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
 # --- decide what to compile -------------------------------------------------
+Write-Host ("== CUDA reuse preflight: {0} units; checking commands, dependency contents and objects ==" -f @($entries).Count)
+$preflightWatch=[Diagnostics.Stopwatch]::StartNew()
 $tuList = @()
 foreach ($e in $entries) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($e.file)
@@ -157,7 +159,11 @@ foreach ($e in $entries) {
         Err = Join-Path $logDir "$name.err.log"
         Proc = $null; Start = $null; Seconds = 0.0; Timing = $null
     }
+    if($tuList.Count -eq 1 -or $tuList.Count%8 -eq 0 -or $tuList.Count -eq @($entries).Count){
+        Write-Host ('   Checked {0}/{1}: {2} ({3:N1}s elapsed)' -f $tuList.Count,@($entries).Count,$name,$preflightWatch.Elapsed.TotalSeconds)
+    }
 }
+$preflightSeconds=$preflightWatch.Elapsed.TotalSeconds
 
 $todo = @($tuList | Where-Object { -not $_.Skip })
 Write-Host ("parallel nvcc: {0} of {1} translation units, {2} concurrent (logs in {3})" -f `
@@ -229,9 +235,10 @@ $wall = ((Get-Date) - $compileStart).TotalSeconds
 $sum = ($tuList | Measure-Object -Property Seconds -Sum).Sum
 Write-Host ("compiled {0} TU(s): elapsed wall {1:N1}s (sum of concurrent TU elapsed times {2:N1}s)" -f `
     $todo.Count, $wall, $sum)
-[ordered]@{jobs=$Jobs;wall_seconds=$wall;tu_elapsed_sum_seconds=$sum;
+$timingReport=[ordered]@{jobs=$Jobs;wall_seconds=$wall;tu_elapsed_sum_seconds=$sum;reuse_preflight_seconds=$preflightSeconds;
     units=@($tuList|ForEach-Object{[ordered]@{source=$_.Entry.file;object=$_.Obj;skipped=$_.Skip;started=$_.Start;seconds=$_.Seconds}})
-}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
+}
+$timingReport|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
 if ($slowest) {
     Write-Host ("longest TU = {0} ({1:N1}s)" -f $slowest, $longest)
 }
@@ -241,10 +248,18 @@ if ($failed.Count -gt 0) {
     exit 1
 }
 
+Write-Host '== CUDA postcheck: verify inputs and objects remained unchanged =='
+$postcheckWatch=[Diagnostics.Stopwatch]::StartNew();$checked=0
 foreach ($j in $tuList) {
     $current = Get-EcmCompileState $repo $j.Entry $vcSetup
     if (-not (Test-EcmCompileState $current)) { throw "Compile dependency/object changed during build: $($j.Entry.file)" }
+    $checked++
+    if($checked -eq 1 -or $checked%8 -eq 0 -or $checked -eq $tuList.Count){
+        Write-Host ('   Verified {0}/{1}: {2} ({3:N1}s elapsed)' -f $checked,$tuList.Count,$j.Name,$postcheckWatch.Elapsed.TotalSeconds)
+    }
 }
+$timingReport['reuse_postcheck_seconds']=$postcheckWatch.Elapsed.TotalSeconds
+$timingReport|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
 
 if ($NoBuild) { exit 0 }
 

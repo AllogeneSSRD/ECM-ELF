@@ -101,12 +101,16 @@ if (-not $SkipBuild) {
     $ptxLabel = if ($PtxArch) { "PTX for sm_$PtxArch only" } else { 'SASS only' }
     Write-Host "== RELEASE rule: archs [$Archs], $ptxLabel, uncompressed (prunable) =="
     Write-Host "   Experimental resident/PRAC: $([bool]$EnablePrac)"
+    $phaseWatch=[Diagnostics.Stopwatch]::StartNew()
     & cmd.exe /c "$($vc.Setup) && cmake $cfg" | Select-String -Pattern 'device code|PTX embedded|Error' |
         ForEach-Object { "   $($_.Line.Trim())" }
     if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+    Write-Host ('== Stage1: CMake configure complete ({0:N1}s); scan current source closure ==' -f $phaseWatch.Elapsed.TotalSeconds)
+    $phaseWatch.Restart()
     # Configure and the encoding guard may update generated sources or tracked
     # BOMs. Freeze the actual target closure before compiling.
     $sourceHashes = Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac -BuildDir $BuildDir
+    Write-Host ('   Source closure: {0} files, {1:N1}s' -f $sourceHashes.Count,$phaseWatch.Elapsed.TotalSeconds)
 
     if ($FullRebuild) {
         Remove-EcmCudaObjects $BuildDir
