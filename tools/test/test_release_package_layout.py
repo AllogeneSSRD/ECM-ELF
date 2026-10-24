@@ -27,7 +27,8 @@ class ReleaseLayout(unittest.TestCase):
     def put(self,path,value='fixture\n'):
         path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value,encoding='utf-8');return path
 
-    def fixture(self):
+    def fixture(self,layout='grouped'):
+        self.layout=layout
         self.put(self.repo/'include/ecm/platform/program_version.h','inline constexpr char version[] = "0.52.1";')
         self.put(self.repo/'src/ecm/backend/cuda/dispatch/tiers.def','ECM_CUDA_TIER(512,4,128,1,0)\n')
         for name in ['.gitignore','CMakeLists.txt','LICENSE','docs/ECM_TOML_REFERENCE.md','tools/diag/ensure_bom.ps1',
@@ -46,22 +47,33 @@ class ReleaseLayout(unittest.TestCase):
                 leaf=self.build/profile/stage;binary=self.put(leaf/exe);self.put(leaf/'gmp-10.dll')
                 manifest=dict(role='release',ptx_architecture=ptx,source_hashes={},cuda_root=str(self.root/'cuda'),sha256=packaging.sha(binary))
                 if stage=='stage1':manifest.update(architectures=sass,tiers='',enable_prac=False)
-                else:manifest.update(architecture='sm_'+sass,engine='production',gl_fixed_mode=3,add_sub_mask=1,outer_unroll_u=0)
+                else:manifest.update(architecture='sm_'+sass,engine='production',gl_fixed_mode=3,add_sub_mask=1,outer_unroll_u=0,kernel_layout=layout,module_directory=('isolated' if layout=='isolated' else ''))
                 path=self.put(leaf/'manifest.json',json.dumps(manifest))
                 self.put(self.build/'components'/f'{profile}.{stage}.json',json.dumps(dict(build=str(leaf),manifest=str(path),exe=str(binary))))
 
     def inspect(self,cuda,leaf,stage,report):
         ptx=packaging.TARGETS[leaf.parent.name][0]
-        labels=['edwards_512','mont0_512','mont2_512','mont3_512'] if stage=='stage1' else [str(i) for i in range(176)]
-        self.put(report,json.dumps(dict(modules=[dict(label=label,ptx_targets=['.target sm_'+ptx]) for label in labels])))
+        if stage=='stage1':
+            modules=[dict(label=label) for label in ['edwards_512','mont0_512','mont2_512','mont3_512']]
+        elif self.layout=='isolated':
+            modules=[dict(label=m['label'],entries=[f'.entry _Z{len(m["kernel"])}{m["kernel"]}ILi4EEv()']) for m in self.catalog()]
+        else:
+            modules=[dict(label=label,entries=[f'.entry _Z{len(m["kernel"])}{m["kernel"]}ILi4EEv()' for m in self.catalog() if m['label'].startswith(group+'_')])
+                     for label,group in [('arithmetic_kernels','arithmetic'),('transform_kernels','ntt')]]
+        for module in modules:module['ptx_targets']=['.target sm_'+ptx]
+        self.put(report,json.dumps(dict(modules=modules)))
         return packaging.sha(report)
 
+    def catalog(self):
+        return [dict(label='arithmetic_test_4',kernel='s2g_test_kernel'),dict(label='ntt_test_4',kernel='tile_kernel')]
+
     def assemble(self,profiles):
-        plan=dict(build_root=str(self.build),out=str(self.out),gui=str(self.gui),gmp=str(self.gmp),profiles=profiles)
+        plan=dict(build_root=str(self.build),out=str(self.out),gui=str(self.gui),gmp=str(self.gmp),profiles=profiles,stage2_kernel_layout=self.layout)
         with patch.object(packaging,'ROOT',self.repo),patch.object(packaging,'gui_identity'),\
              patch.object(packaging,'distribution',return_value=([],[])),\
              patch.object(packaging,'source_paths',return_value=[self.repo/'tools/build/build_release.ps1']),\
              patch.object(packaging,'images',return_value={}),\
+             patch.object(packaging,'stage2_catalog',side_effect=self.catalog),\
              patch.object(packaging,'inspect_modules',side_effect=self.inspect),\
              patch.object(packaging.subprocess,'check_output',return_value=b'ECM-ELF 0.52.1'):
             packaging.main(plan)
@@ -90,6 +102,18 @@ class ReleaseLayout(unittest.TestCase):
         self.fixture();self.assemble(['cu11.8'])
         first=packaging.release_paths(self.out,'0.52.1','cu11.8')[1];digest=packaging.sha(first)
         self.assemble(['cu13.3']);self.assertEqual(packaging.sha(first),digest)
+
+    def test_isolated_stage2_remains_available(self):
+        self.fixture('isolated');self.assemble(['cu11.8','cu13.3'])
+
+    def test_grouped_membership_rejects_wrong_or_missing_entries(self):
+        report=dict(modules=[dict(label='arithmetic_kernels',entries=['.entry _Z15s2g_test_kernelILi4EEv()']),
+                             dict(label='transform_kernels',entries=['.entry _ZN53_GLOBAL__N__hash12311tile_kernelILi4EEv()'])])
+        packaging.verify_stage2_membership(report,'grouped',self.catalog())
+        report['modules'][1]['entries']=[]
+        with self.assertRaisesRegex(ValueError,'entry membership'):packaging.verify_stage2_membership(report,'grouped',self.catalog())
+        report['modules'][1]['entries']=['.entry _Z12wrong_kernelILi4EEv()']
+        with self.assertRaisesRegex(ValueError,'Unknown'):packaging.verify_stage2_membership(report,'grouped',self.catalog())
 
     def test_existing_folder_zip_or_checksum_is_preserved(self):
         paths=packaging.release_paths(self.out,'0.52.1','cu11.8')

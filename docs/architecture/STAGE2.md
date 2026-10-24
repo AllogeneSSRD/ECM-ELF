@@ -20,9 +20,9 @@
 
 `src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu` 维护点与系数算术的显式实例清单。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放；不使用 RDC。
 
-位宽清单仍由 `src/ecm/backend/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev 保留算术与NTT聚合编译单元；release由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。
+位宽清单仍由 `src/ecm/backend/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev/release默认使用算术与NTT两个聚合编译单元；支持的工具链通过nvcc内部并行优化。生产引擎可显式选择 `KernelLayout=isolated`，由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。两种布局通过编译参数和构建profile隔离。
 
-隔离发布的每个算术模块持有自己的设备常量。`constants.cpp` 保存按设备区分的主机快照及修订号，更新快照不访问全部设备模块；被调用的薄启动器在修订号/设备变化时才向所属模块上传。NTT的 `module_dispatch.cpp` 只返回选定tile句柄；固定mode3无需广播归约模式。实际按需JIT资格须观察驱动加载模块，构建策略与旧驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
+聚合模式沿用各聚合单元的设备常量，不启用隔离宏及主机快照路径，不保证逐容量隔离JIT。隔离备选的每个算术模块持有自己的设备常量；`constants.cpp` 保存按设备区分的主机快照及修订号，更新快照不访问全部设备模块，被调用的薄启动器在修订号/设备变化时才向所属模块上传。NTT的 `module_dispatch.cpp` 只返回选定tile句柄；固定mode3无需广播归约模式。实际按需JIT资格须观察驱动加载模块，构建策略与旧驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
 
 NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/backend/cuda/ntt/`，设备变换和 carry 位于 `src/ecm/backend/cuda/ntt/device/`，域原语位于 `src/ecm/backend/cuda/arithmetic/goldilocks/`。主机持有缓冲、事件、错误检查和计时，设备模块提供薄启动接口；依赖方向为 ECM 编排 → NTT/算术接口 → 设备原语。NTT 不依赖 ECM 树、fold 或 GCD，详见 [NTT 代码入口](NTT.md#代码入口与依据)。
 

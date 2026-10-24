@@ -3,6 +3,7 @@
 param(
     [ValidateSet('all','cu11.8','cu13.3')][string]$Profile='all',
     [ValidateSet('all','stage1','stage2')][string]$Component='all',
+    [ValidateSet('grouped','isolated')][string]$Stage2KernelLayout='grouped',
     [string]$BuildRoot='build_cuda_release', [string]$OutDir='release',
     [ValidateRange(1,64)][int]$Jobs=16,
     [string]$Gmp='', [string]$Cuda118Root='', [string]$Cuda133Root='', [string]$VcVars='',
@@ -25,7 +26,7 @@ $names=if($Profile -eq 'all'){@('cu11.8','cu13.3')}else{@($Profile)}
 # Preflight every requested toolchain before constructing any component.
 $toolchains=@{}
 foreach($name in $names) {
-    $target=Get-EcmReleaseTarget $name
+    $target=Get-EcmReleaseTarget $name $Stage2KernelLayout
     $root=if($name -eq 'cu11.8'){$Cuda118Root}else{$Cuda133Root}
     $toolchains[$name]=Resolve-EcmReleaseToolchain $target $root $VcVars
 }
@@ -53,6 +54,7 @@ foreach($name in $names) {
         if($Component -in @('all','stage2')) {
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build_stage2_local.ps1') `
                 -BuildRoot $BuildRoot -BuildRole release -Arch ('sm_'+$target.Sass) -PtxArch $target.Ptx `
+                -KernelLayout $Stage2KernelLayout `
                 -SplitCompile $target.SplitCompile -Jobs $Jobs -CudaRoot $tools.Cuda.Root -VcVars $tools.Vc.VcVars `
                 -Gmp $dependency.Root -ResultFile $stage2Record
             if($LASTEXITCODE){throw "Release Stage2 failed: $name"}
@@ -86,7 +88,11 @@ foreach($name in $names) {
         } else {
             if($manifest.architecture -ne ('sm_'+$target.Sass) -or $manifest.engine -ne 'production' -or
                 $manifest.gl_fixed_mode -ne 3 -or $manifest.add_sub_mask -ne 1 -or $manifest.outer_unroll_u -ne 0 -or
-                -not $manifest.module_directory -or $manifest.sha256 -ne (Get-FileHash -LiteralPath $record.exe).Hash){throw 'Stage2 production identity mismatch'}
+                $manifest.kernel_layout -ne $Stage2KernelLayout -or $fields.'option/kernel_layout' -ne $Stage2KernelLayout -or
+                [bool]$manifest.module_directory -ne ($Stage2KernelLayout -eq 'isolated') -or
+                $manifest.split_compile -ne $target.SplitCompile -or
+                $fields.'option/split_compile' -ne [string]$target.SplitCompile -or
+                $manifest.sha256 -ne (Get-FileHash -LiteralPath $record.exe).Hash){throw 'Stage2 production identity mismatch'}
             $inventory=Get-EcmCudaInventory $repo (Join-Path $record.build 'cuda_sources.json')
             $includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/ecm/backend/cuda')
             $set=Get-EcmStage2SourceSet $repo $inventory production $includeDirs $manifest.module_directory
@@ -99,7 +105,7 @@ foreach($name in $names) {
 }
 if($Component -ne 'all' -or $SkipPackage){Write-Host "Release components verified: $Component, $($names -join ','); packaging skipped";exit 0}
 $plan=Join-Path $records 'package-plan.json'
-[ordered]@{profiles=@($names);build_root=$BuildRoot;out=$OutDir;gui=$gui;gmp=$dependency.Root} |
+[ordered]@{profiles=@($names);build_root=$BuildRoot;out=$OutDir;gui=$gui;gmp=$dependency.Root;stage2_kernel_layout=$Stage2KernelLayout} |
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $plan -Encoding UTF8
 & python (Join-Path $repo 'tools/packaging/package_release.py') --plan $plan
 if($LASTEXITCODE){throw 'Complete release packaging failed'}

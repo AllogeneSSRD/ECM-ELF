@@ -2,6 +2,8 @@
 
 发布目标、入口、完整载荷及复用合同以[构建与发布](../usage/BUILD.md)为准。本文区分静态镜像、实际加载模块、数学对照与耗时；构建成功不自动获得运行资格。完整两套包已生成，运行覆盖仅以以下实际证据为准。
 
+下述Stage2证据对应0.52.1的 `kernel_layout=isolated`，适用于该冻结构建及隔离备选，不认定当前默认grouped布局已通过逐容量隔离或取得相同JIT耗时。grouped的数学、冷/热加载及稳定吞吐须按新二进制身份另验。
+
 ## 环境与证据
 
 证据根为 `data/experiments/release_build_redesign/`。冻结计算基线为0.52.0，位于 `baseline_20261024/`；新计算版本0.52.1，GUI独立0.52.0。两份发布组件的精确程序、构建路径及源码/工具链/对象身份由 `build_cuda_release/components/cu<版本>.stageN.json` 指向的清单绑定。

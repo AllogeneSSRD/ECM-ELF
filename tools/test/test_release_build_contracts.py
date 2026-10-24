@@ -40,6 +40,11 @@ class Contracts(unittest.TestCase):
         before={p:p.stat().st_mtime_ns for p in self.out.rglob('*') if p.is_file()}
         generator.generate(self.out)
         self.assertEqual(before,{p:p.stat().st_mtime_ns for p in before})
+        metadata=self.out/'metadata-only'
+        catalog=generator.generate(metadata,emit=False)
+        self.assertEqual([(v['label'],v['kernel'],v['arguments']) for v in catalog['modules']],
+                         [(v['label'],v['kernel'],v['arguments']) for v in inventory['modules']])
+        self.assertFalse(metadata.exists())
         for entry in inventory['modules']:
             text=Path(entry['source']).read_text(encoding='utf-8-sig')
             self.assertEqual(re.findall(r'^#define ECM_MODULE_(\w+)',text,re.M),[entry['kernel']])
@@ -69,6 +74,24 @@ class Contracts(unittest.TestCase):
         self.assertEqual(sorted(v['status'] for v in records),['complete','complete','failed','timing_missing'])
         self.assertTrue(all('--time' not in v['semantic_command'] for v in records))
 
+    @unittest.skipUnless(sys.platform=='win32','Windows compiler stdout handle contract')
+    def test_compile_executor_uses_pipe_and_preserves_failure(self):
+        executor=module('run_compile_jobs')
+        compiler=self.out/'compiler_handle.py'
+        compiler.write_text('import ctypes,ctypes.wintypes,sys\n'
+            'kernel=ctypes.windll.kernel32\n'
+            'kernel.GetStdHandle.restype=ctypes.wintypes.HANDLE\n'
+            'kernel.GetFileType.argtypes=[ctypes.wintypes.HANDLE]\n'
+            'kind=kernel.GetFileType(kernel.GetStdHandle(-11))\n'
+            'print("compiler stdout type",kind,flush=True)\n'
+            'raise SystemExit(int(sys.argv[1]) if kind==3 else 31)\n')
+        batch=self.out/'compile.cmd';log=self.out/'compile.log'
+        for expected in (0,8):
+            batch.write_text(f'@echo off\n"{sys.executable}" "{compiler}" {expected}\n')
+            result=executor.run(dict(source=str(compiler),command_file=str(batch),log=str(log)))
+            self.assertEqual(result['exit_code'],expected,log.read_text(errors='replace'))
+            self.assertIn('compiler stdout type 3',log.read_text())
+
     def test_stage1_tier_filter_preserves_single_modules(self):
         project=self.out/'CMakeLists.txt'
         project.write_text('cmake_minimum_required(VERSION 3.20)\nproject(modules NONE)\n'
@@ -84,6 +107,9 @@ class Contracts(unittest.TestCase):
         values=json.loads(subprocess.check_output(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-Command',command]))
         self.assertEqual([(v['Name'],v['Version'],v['Ptx'],v['Sass']) for v in values],
                          [('cu11.8','11.8','50','60'),('cu13.3','13.3','75','80')])
+        self.assertEqual([v['SplitCompile'] for v in values],[1,8])
+        command=f". '{(INTERNAL/'release_profiles.ps1').as_posix()}'; (Get-EcmReleaseTarget cu13.3 isolated).SplitCompile"
+        self.assertEqual(subprocess.check_output(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-Command',command]).strip(),b'1')
 
     def test_source_archive_excludes_private_test_data(self):
         packaging=ROOT/'tools/packaging';sys.path.insert(0,str(packaging))

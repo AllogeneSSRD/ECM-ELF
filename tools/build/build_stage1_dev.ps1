@@ -12,6 +12,7 @@ param(
     [string]$Arch = '89',
     [int]$Jobs = 8,
     [string]$Tiers = '',
+    [ValidateSet('isolated','grouped')][string]$KernelLayout = 'isolated',
     [switch]$EnablePrac,
     [switch]$FullRebuild,
     [switch]$RelinkOnly,

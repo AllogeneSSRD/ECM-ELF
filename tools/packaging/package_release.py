@@ -1,6 +1,8 @@
 """Assemble and inspect complete, independently usable CUDA release bundles."""
 import argparse
+from collections import Counter
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
@@ -74,6 +76,36 @@ def images(cuda,binary,ptx,sass):
     return result
 
 
+def stage2_catalog():
+    spec=importlib.util.spec_from_file_location('stage2_modules',ROOT/'tools/build/internal/generate_cuda_modules.py')
+    generator=importlib.util.module_from_spec(spec);spec.loader.exec_module(generator)
+    # Read the authoritative entry/instantiation inventory without generating
+    # isolated sources for the default grouped build.
+    return generator.generate(ROOT,emit=False)['modules']
+
+
+def verify_stage2_membership(report,layout,catalog):
+    modules=report['modules']
+    if layout=='isolated':
+        expected={m['label']:m['kernel'] for m in catalog}
+        if len(modules)!=len(expected) or {m['label'] for m in modules}!=set(expected):raise ValueError('Incomplete isolated Stage2 module membership')
+        for module in modules:
+            if len(module['entries'])!=1 or expected[module['label']] not in module['entries'][0]:raise ValueError('Wrong isolated Stage2 entry')
+    else:
+        if len(modules)!=2 or {m['label'] for m in modules}!={'arithmetic_kernels','transform_kernels'}:raise ValueError('Wrong grouped Stage2 object membership')
+        for module in modules:
+            group='arithmetic' if module['label']=='arithmetic_kernels' else 'ntt'
+            expected=Counter(m['kernel'] for m in catalog if m['label'].startswith(group+'_'))
+            actual=Counter()
+            for entry in module['entries']:
+                # NVCC anonymous namespace hashes can end in digits directly
+                # before the Itanium name-length field.
+                matches=[name for name in expected if re.search(str(len(name))+re.escape(name)+r'(?:I|[A-Za-z_])',entry)]
+                if len(matches)!=1:raise ValueError(f'Unknown grouped Stage2 entry: {entry}')
+                actual[matches[0]]+=1
+            if actual!=expected:raise ValueError(f'Incomplete grouped Stage2 entry membership: {module["label"]}')
+
+
 def inspect_modules(cuda,build,stage,report):
     records=[]
     if stage=='stage1':
@@ -88,10 +120,15 @@ def inspect_modules(cuda,build,stage,report):
             records.append(dict(label=Path(unit['file']).stem,object=str(path),curve=match[1],capacity=int(match[2])))
     else:
         manifest=read(build/'build_manifest.json')
-        modules=read(Path(manifest['module_directory'])/'modules.json')['modules']
-        for module in modules:
-            unit=manifest['compile_units'][module['source']]
-            records.append(dict(label=module['label'],object=unit['entry']['output'],kernel=module['kernel'],arguments=module['arguments']))
+        if manifest['module_directory']:
+            modules=read(Path(manifest['module_directory'])/'modules.json')['modules']
+            for module in modules:
+                unit=manifest['compile_units'][module['source']]
+                records.append(dict(label=module['label'],object=unit['entry']['output'],kernel=module['kernel'],arguments=module['arguments']))
+        else:
+            for source in manifest['cuda_sources']:
+                unit=manifest['compile_units'][source]
+                records.append(dict(label=Path(source).stem,object=unit['entry']['output']))
     inspector=cuda/'bin/cuobjdump.exe'
     for record in records:
         # Stream only entry declarations out of the potentially large PTX dump.
@@ -116,7 +153,7 @@ def inspect_modules(cuda,build,stage,report):
                     valid=width and int(width[1])==record['capacity']
                     valid=valid and (('kernel_double_add_suyama' in entry and ('ELb1E' in entry)==(param==2)) if param in (0,2) else ('kernel_double_add' in entry and 'suyama' not in entry))
                 if not valid:raise ValueError(f'Unexpected curve/parameter/width inside {record["label"]}: {entry}')
-        elif len(entries)!=1 or record['kernel'] not in entries[0]:
+        elif 'kernel' in record and (len(entries)!=1 or record['kernel'] not in entries[0]):
             raise ValueError(f'Unexpected entry membership inside {record["label"]}: {entries}')
         record.update(entries=entries,ptx_versions=sorted(versions),ptx_targets=sorted(targets),sha256=sha(record['object']))
     report.write_text(json.dumps(dict(schema=1,stage=stage,modules=records),indent=2),encoding='utf-8')
@@ -168,8 +205,12 @@ def main(plan):
             if manifest['role']!='release' or manifest['ptx_architecture']!=ptx:raise ValueError('Wrong release component profile')
             if stage=='stage1':
                 if manifest['architectures']!=sass or manifest['tiers'] or manifest['enable_prac']:raise ValueError('Stage1 is not a full production release')
-            elif manifest['architecture']!='sm_'+sass or manifest['engine']!='production' or manifest['gl_fixed_mode']!=3 or manifest['add_sub_mask']!=1 or manifest['outer_unroll_u']!=0:
-                raise ValueError('Stage2 is not a production release')
+            else:
+                if manifest['architecture']!='sm_'+sass or manifest['engine']!='production' or manifest['gl_fixed_mode']!=3 or manifest['add_sub_mask']!=1 or manifest['outer_unroll_u']!=0:
+                    raise ValueError('Stage2 is not a production release')
+                layout=plan.get('stage2_kernel_layout','grouped')
+                if layout not in ('grouped','isolated') or manifest.get('kernel_layout')!=layout or bool(manifest.get('module_directory'))!=(layout=='isolated'):
+                    raise ValueError('Stage2 kernel layout differs from release plan')
             verify_inputs(manifest['source_hashes'])
             if sha(leaf/'gmp-10.dll')!=sha(gmp/'bin/gmp-10.dll'):raise ValueError(f'{stage} runtime differs from vcpkg')
             binary=Path(record['exe']);expected=manifest.get('executable_sha256',manifest.get('sha256'))
@@ -184,10 +225,11 @@ def main(plan):
                 rows=re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),',(ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(),re.M)
                 expected_modules={f'edwards_{width}' for width,_ in rows}|{f'mont{param}_{width}' for width,mont in rows if mont=='1' for param in (0,2,3)}
                 if {m['label'] for m in module_report['modules']}!=expected_modules:raise ValueError('Incomplete Stage1 module membership')
-            elif len(module_report['modules'])!=176:raise ValueError('Incomplete Stage2 module membership')
+            else:verify_stage2_membership(module_report,layout,stage2_catalog())
             if any(m['ptx_targets']!=['.target sm_'+ptx] for m in module_report['modules']):raise ValueError('Unexpected module PTX target')
             copy(binary,folder/exe)
             component_records[stage]=dict(executable_sha256=sha(binary),manifest_sha256=sha(record['manifest']),images=image)
+            if stage=='stage2':component_records[stage]['kernel_layout']=layout
         for filename in ['ecm_gui_v2.exe','ecm_group_order_ui.exe','gmp-10.dll']:
             copy(gui/filename,folder/filename)
         diagnostic=read(gui/'diagnostics_build_manifest.json')

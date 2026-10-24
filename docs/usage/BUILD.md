@@ -13,7 +13,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 | Stage1 | `build_stage1_dev` | `build_stage1_local` | `build_stage1_release` |
 | Stage2 | `build_stage2_dev` | `build_stage2_local` | `build_stage2_release` |
 
-每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 使用 `SplitCompile=1`。构建入口不自动运行数学、GPU 或性能测试。
+每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 cu13.3 聚合模式使用 `SplitCompile=8`，cu11.8及隔离备选使用1。构建入口不自动运行数学、GPU 或性能测试。
 
 本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
@@ -22,6 +22,8 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui_v2_local`。常规目标包含群阶分析助手及匹配的GMP DLL，无需CUDA；本机候选继续使用本地Zen3/BMI2依赖，未声明通用x64发布资格。`tools/build/package_gui_v2.ps1`是独立GUI候选打包入口，会附带对应GMP源码/许可；与下文计算worker的release策略分开，详见[GUI v2](GUI_V2.md#构建与启动)。
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
+
+Stage1 local/dev 默认 `-KernelLayout isolated`，与 release 共用按曲线/param/容器生成的独立编译单元，避免多个大位宽挤在同一组文件形成编译长尾；每个内核及其设备辅助函数仍一起编译。`-KernelLayout grouped` 保留分组备选。local 仍为单架构、压缩、无PTX，不改成发布镜像策略。布局进入构建身份，已有分组缓存不能当成隔离缓存复用；首次切换可指定新的 `-BuildDir build_stage1_local_isolated`，旧目录保留。
 
 位宽唯一清单为 `src/ecm/backend/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/backend/cuda/stage1/montgomery/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
 
@@ -32,6 +34,8 @@ Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器�
 独立探针默认编全档，可用 `-Tiers 384` 构建单档；验证时执行 `edwards_gpu_stage1_probe.exe 1 <新输出目录> 384` 检查回退、上限和三种执行模式。多档受限构建使用末尾参数 `--compiled-tiers`，全档完整用例则省略最后参数。探针编译和链接均显式使用 `/MD` 与 worker 一致。短标量 CPU 参考使用 w2，边界输入仅按奇数模数和有效曲线构造筛选，避免把大素数搜索或大 CPU 字典作为算术验收的前置工作；末点、GCD、点不变量和恢复比较均保留。
 
 Stage2：独立生产 CUDA 引擎，固定 Goldilocks PTX 后端、canonical 减法、`AddSubMask=1`、`OuterUnrollU=0`。这里“PTX 后端”是内联模算术，不表示一定携带驱动 JIT 的 compute PTX。开发引擎由独立 wrapper 选择。
+
+Stage2 local/release 默认 `-KernelLayout grouped`：设备实现使用算术和NTT两个聚合CU，支持的工具链通过 `SplitCompile` 在单次nvcc内并行优化。完整发布使用 `-Stage2KernelLayout isolated`、阶段发布使用 `-KernelLayout isolated` 可启用176模块隔离备选；该备选仅适用于生产引擎。聚合与隔离使用不同profile和清单，`-SkipBuild` 不接受布局混用。CUDA11.8没有 `--split-compile`，旧包固定1，不传入不支持的选项。
 
 ## 工具链与架构
 
@@ -58,9 +62,11 @@ Windows 旧包面向 Maxwell/Pascal：sm50/52 需要 PTX50 JIT；sm61 可使用 
 
 每个 CUDA 目录内同层包含 `ecm_cuda.exe`、`ecm_cuda_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、原始日志和计时不进入分发目录。
 
-发布 Stage1 由 `tiers.def` 派生125个曲线/param/容器模块，另保留3个常规 CUDA 单元；Edwards binary/NAF 共用对应容器。发布 Stage2 由原始显式实例和薄发射器派生176个设备模块，按实际容量、路径或变换选取；主机常量快照只同步到被调用的模块。生成镜像保留于构建目录，其原始源码/生成器均参与身份验证。local/dev 默认保留原分组构建。
+Stage1 local/dev/release默认由 `tiers.def` 派生125个曲线/param/容器模块，另保留3个常规 CUDA 单元；Edwards binary/NAF 共用对应容器。Stage2默认使用两个聚合设备单元，共享原有设备常量；隔离备选由原始显式实例和薄发射器派生176个设备模块，主机常量快照只同步到被调用的模块。生成文件保留于构建目录，其原始源码/生成器均参与身份验证。
 
 CUDA worker 在首次 CUDA 调用前将未设置的 `CUDA_MODULE_LOADING` 默认设为 `LAZY`；用户显式值保留。Stage1 全档枚举使用纯元数据，Montgomery全档`--gpu-info`的`blocks_per_sm=0`表示尚未查询occupancy；指定实际输入位宽后只取得选中档位的内核/occupancy。懒加载需要驱动支持；旧驱动或显式 EAGER 下的加载范围不据此获证。按需 JIT 的最终资格以实际加载模块观察为准，不能只凭 TU 拆分宣布通过。
+
+Stage2聚合模式不提供按容量隔离JIT的保证：算术或NTT镜像可能包含未选容量/变体。静态打包仍检查两个对象、完整设备入口/实例成员及PTX/SASS目标，不再将176个独立镜像作为默认条件。隔离备选继续验证逐模块成员。`test_release_runtime.py` 默认保持原隔离范围门禁；聚合模式必须显式传入 `--allow-grouped-stage2`，报告记录布局，数学及镜像选路验证保留，结果不声明逐容量隔离通过。0.52.1隔离构建的已有JIT数据不能作为聚合模式的运行资格。
 
 ## nvcc 编译计时
 
@@ -106,7 +112,7 @@ CPU-only 身份检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_
 
 ## CUDA 源清单与依赖身份
 
-翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 的 `STAGE2_ENGINE` 包含17个主机 CPP，其中常量快照和模块调度只在隔离发布宏下提供实现；release 的设备生成器用176个细分单元替代算术/NTT两个聚合 CU。实际编译成员以构建目录内 `cuda_sources.json`、模块清单和编译记录为准。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 的 `STAGE2_ENGINE` 包含17个主机 CPP，其中常量快照和模块调度只在隔离宏下提供实现；默认使用算术/NTT两个聚合CU，显式隔离时由设备生成器替换为176个细分单元。实际编译成员以构建目录内 `cuda_sources.json`、模块清单和编译记录为准。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 

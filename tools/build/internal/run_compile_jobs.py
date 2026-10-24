@@ -13,8 +13,14 @@ def run(job):
     started = datetime.datetime.now(datetime.timezone.utc).isoformat()
     timer = time.perf_counter()
     with open(job['log'], 'wb') as log:
-        result = subprocess.run(['cmd.exe', '/d', '/c', job['command_file']], stdout=log, stderr=subprocess.STDOUT,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
+        # NVCC's host-compiler probe can crash with a regular-file stdout
+        # handle in restricted Windows environments. Drain a pipe into the log
+        # instead; preserve bounded memory, complete diagnostics and exit code.
+        result = subprocess.Popen(['cmd.exe', '/d', '/c', job['command_file']], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
+        with result.stdout:
+            for chunk in iter(lambda: result.stdout.read(65536), b''):log.write(chunk)
+        result.wait()
     if job.get('msvc_includes') and result.returncode == 0:
         # /showIncludes is the compiler's dependency output on MSVC 14.16,
         # which predates /sourceDependencies. Keep SDK and macro includes too.

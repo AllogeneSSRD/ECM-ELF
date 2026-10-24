@@ -19,10 +19,6 @@ $inventory=Get-EcmCudaInventory $repo
 $workerSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/core/stage1/ecm_stage1_exp.cpp')
 $sources=$workerSources+
     @('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp')
-$deps=@(Get-EcmSourceClosure $repo $sources @('include','src','third_party/cgbn/include'))+
-    @('tools/build/test/build_edwards_gpu_stage1_probe.ps1')
-$hashes=[ordered]@{}
-foreach($source in ($sources+$deps|Select-Object -Unique)){$hashes[$source]=(Get-FileHash -LiteralPath $source).Hash}
 $worker=$null
 if($WorkerBuild){
     $WorkerBuild=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkerBuild)
@@ -30,13 +26,23 @@ if($WorkerBuild){
     if("sm_$($local.architecture)" -ne $Arch){throw 'worker architecture mismatch'}
     if($local.tiers -ne $Tiers){throw 'worker tier selection mismatch'}
     Assert-Stage1BuildIdentity $repo $WorkerBuild $local
+    $entries=@(Get-EcmTargetCompileEntries $WorkerBuild ecm_cuda)
+    if($local.kernel_layout -eq 'isolated') {
+        $workerSources=@($workerSources|Where-Object{$_ -notmatch '/instances/'})+
+            @($entries|Where-Object{$_.file.Replace('\','/') -match '/cuda_modules/stage1/edwards_\d+\.cu$'}|ForEach-Object{$_.file})
+        $sources=$workerSources+@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp')
+    }
     $worker=[pscustomobject]@{objects=[pscustomobject]@{}}
-    foreach($entry in @(Get-EcmTargetCompileEntries $WorkerBuild ecm_cuda)){
-        if((Get-EcmSourceKey $repo $entry.file) -notin $workerSources){continue}
+    foreach($entry in $entries){
+        if((Get-EcmSourceKey $repo $entry.file) -notin $workerSources -and $entry.file -notin $workerSources){continue}
         $path=Get-EcmObjectPath $entry $WorkerBuild
         $worker.objects|Add-Member -NotePropertyName $entry.file -NotePropertyValue ([pscustomobject]@{path=$path;sha256=(Get-FileHash $path).Hash})
     }
 }
+$deps=@(Get-EcmSourceClosure $repo $sources @('include','src','third_party/cgbn/include'))+
+    @('tools/build/test/build_edwards_gpu_stage1_probe.ps1')
+$hashes=[ordered]@{}
+foreach($source in ($sources+$deps|Select-Object -Unique)){$hashes[$source]=(Get-FileHash -LiteralPath (Resolve-EcmSourcePath $repo $source)).Hash}
 $previous=$null;$manifestPath=Join-Path $Build 'manifest.json'
 if($Incremental -and (Test-Path $manifestPath)){$previous=Get-Content $manifestPath -Raw|ConvertFrom-Json}
 $reuse=$previous -and $previous.arch -eq $Arch -and $previous.tiers -eq $Tiers
@@ -46,7 +52,7 @@ foreach($source in $sources){
     $stem=[IO.Path]::GetFileNameWithoutExtension($source)
     $obj=Join-Path $objDir ($stem+'.obj')
     if($worker -and $source -in $workerSources){
-        $absolute=(Join-Path $repo $source).Replace('\','/')
+        $absolute=(Resolve-EcmSourcePath $repo $source).Replace('\','/')
         $entry=@($worker.objects.PSObject.Properties|Where-Object{$_.Name.Replace('\','/') -eq $absolute})
         if($entry.Count -ne 1){throw "worker object absent: $source"}
         $obj=$entry[0].Value.path

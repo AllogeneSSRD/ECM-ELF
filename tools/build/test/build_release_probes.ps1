@@ -1,4 +1,4 @@
-# Independent GMP probes linked to the exact isolated release objects.
+# Independent GMP probes linked to the exact selected release objects.
 param([ValidateSet('cu11.8','cu13.3')][string]$Profile='cu13.3',
     [ValidateSet('stage1','stage2')][string]$Stage='stage2',
     [string]$BuildRoot='build_cuda_release',[Parameter(Mandatory=$true)][string]$Build)
@@ -35,9 +35,12 @@ if($Stage -eq 'stage1') {
     $set=Get-EcmStage2SourceSet $repo $inventory production $dirs $manifest.module_directory
     Assert-EcmBuildUnits $repo $record.build $manifest $set.Sources $dirs -Production
     foreach($property in $manifest.compile_units.PSObject.Properties) {
-        if($property.Name.Replace('\','/') -match '/arithmetic_[^/]+\.cu$|/stage2/constants\.cpp$'){$objects+=$property.Value.entry.output}
+        $source=$property.Name.Replace('\','/')
+        if($manifest.module_directory) {
+            if($source -match '/arithmetic_[^/]+\.cu$|/stage2/constants\.cpp$'){$objects+=$property.Value.entry.output}
+        } elseif($source -eq 'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu') {$objects+=$property.Value.entry.output}
     }
-    if($objects.Count -lt 2){throw 'Isolated arithmetic object set missing'}
+    if(($manifest.module_directory -and $objects.Count -lt 2) -or (-not $manifest.module_directory -and $objects.Count -ne 1)){throw 'Selected arithmetic object set missing'}
     $sources=@('tools/test/cuda_stage2_arithmetic_probe.cpp');$name='probe.exe';$crt='/MT'
 }
 $frozen=[ordered]@{}

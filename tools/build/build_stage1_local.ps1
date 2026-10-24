@@ -11,16 +11,17 @@
         no PTX              ECM_CUDA_EMBED_PTX=OFF        (needs exactly sm_<Arch>)
         one architecture    sm_89                         (override with -Arch)
         full kernel set, all tiers, param2 enabled
+        isolated curve/parameterization/tier device modules
 
     The compile step uses tools\build\internal\parallel_nvcc.ps1 for independent CUDA TUs.
 
 .PARAMETER BuildDir   Explicit final build directory; omitted uses build_stage1_local.
 .PARAMETER Arch       CUDA architecture (default 89).
 .PARAMETER Jobs       Concurrent nvcc processes (default 8).
-.PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120" -- cuts a rebuild from ~8 min to
-                      ~40 s.  Empty (default) = every tier.
+.PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120". Empty (default) = every tier.
 .PARAMETER FullRebuild  Delete the CUDA objects first (forces a clean kernel compile).
 .PARAMETER EnablePrac  Include experimental resident/PRAC kernels (default OFF).
+.PARAMETER KernelLayout  Isolated modules by default; grouped retains the aggregate source layout.
 .PARAMETER HostOnly    Verify all CUDA objects and refuse any CUDA compilation.
 .PARAMETER RelinkOnly  Removed unsafe bypass; use verified reuse or HostOnly instead.
 .PARAMETER Gmp / OpenSslRoot  Override the dependency paths when they are not the defaults.
@@ -37,6 +38,7 @@ param(
     [string]$Arch = "89",
     [int]$Jobs = 8,
     [string]$Tiers = "",
+    [ValidateSet('isolated','grouped')][string]$KernelLayout = 'isolated',
     [switch]$EnablePrac,       # experimental resident/PRAC kernels; excluded by default
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
@@ -52,7 +54,7 @@ param(
 $ErrorActionPreference = "Stop"
 if ($RelinkOnly) { throw 'RelinkOnly no longer bypasses verification; use normal reuse or HostOnly for host edits' }
 if ($HostOnly -and ($FullRebuild -or -not $Incremental)) { throw 'HostOnly and forced CUDA rebuild are mutually exclusive' }
-if ($Extra -match '(?i)(?:^|\s)-(?:S|B|G)(?:\s|$)|-D(?:CMAKE_(?:CUDA_COMPILER|CUDA_HOST_COMPILER|CXX_COMPILER|BUILD_TYPE)|ECM_CUDA_(?:ARCHITECTURES|PTX_ARCH|EMBED_PTX|COMPRESS|ENABLE_PRAC)|ECM_TIERS)(?::\w+)?=') {
+if ($Extra -match '(?i)(?:^|\s)-(?:S|B|G)(?:\s|$)|-D(?:CMAKE_(?:CUDA_COMPILER|CUDA_HOST_COMPILER|CXX_COMPILER|BUILD_TYPE)|ECM_CUDA_(?:ARCHITECTURES|PTX_ARCH|EMBED_PTX|COMPRESS|ENABLE_PRAC|ISOLATE_TIERS)|ECM_TIERS)(?::\w+)?=') {
     throw 'Extra cannot override toolchain, architecture, output or named build policy; use the corresponding build parameters'
 }
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -73,6 +75,7 @@ $configureOptions = @(
     "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
     "-DCMAKE_CXX_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
     "-DECM_ENABLE_CUDA=ON",
+    "-DECM_CUDA_ISOLATE_TIERS=$(if ($KernelLayout -eq 'isolated') { 'ON' } else { 'OFF' })",
     "-DECM_CUDA_FULL_BUILD=ON",
     "-DECM_CUDA_ENABLE_PRAC=$(if ($EnablePrac) { 'ON' } else { 'OFF' })",
     "-DECM_CUDA_ARCHITECTURES=$Arch",
@@ -104,6 +107,7 @@ $cfg = "-S `"$repo`" -B `"$BuildDir`" $configureOptions"
 
 Write-Host "== LOCAL build rule: sm_$Arch, compression ON, no PTX, tiers='$(if ($Tiers) { $Tiers } else { 'all' })' =="
 Write-Host "   Experimental resident/PRAC: $([bool]$EnablePrac)"
+Write-Host "   CUDA module layout: $KernelLayout"
 Write-Host "   CUDA: $($cuda.Root); MSVC: $($vc.Version)"
 Write-Host "   role=$BuildRole profile=$($buildProfile.Key) leaf=$BuildDir"
 # nvcc reads a BOM-less source file as GBK; a CJK comment then swallows the next line of
@@ -145,7 +149,7 @@ foreach ($obj in (Get-Stage1CudaObjects $BuildDir)) {
     $localObjects[$obj] = (Get-FileHash -LiteralPath (Join-Path $BuildDir $obj)).Hash
 }
 [ordered]@{ identity_schema = 1; role = $BuildRole; profile_sha256 = $buildProfile.Hash;
-    engine = 'production'; tiers = $Tiers; enable_prac = [bool]$EnablePrac;
+    engine = 'production'; tiers = $Tiers; enable_prac = [bool]$EnablePrac; kernel_layout = $KernelLayout;
     compile_setup = $vc.Setup; gmp_root = $Gmp;
     dependency_hashes = [ordered]@{ header = (Get-FileHash (Join-Path $Gmp 'include/gmp.h')).Hash;
         library = (Get-FileHash (Join-Path $Gmp 'lib/gmp.lib')).Hash; runtime = (Get-FileHash (Join-Path $Gmp 'bin/gmp-10.dll')).Hash };

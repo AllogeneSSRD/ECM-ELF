@@ -323,3 +323,23 @@ Maxwell/Pascal、sm60/sm80实体GPU和旧驱动本机不可用，继续明确未
 打包manifest更新为schema 2并记录实际目录/ZIP名；完整包检查器验证新的压缩成员根目录，同时继续支持schema 1冻结包。`tools/test/test_release_package_layout.py` 使用私有假组件执行真实打包和静态包门禁，覆盖双包、先后单包发布、解压根目录、拒绝覆盖目录/ZIP/SHA256，以及两个BAT实际传参和退出码；测试不编译或运行计算worker。
 
 验证结果：新增布局测试4项、现有 `tools/test/test_release_build_contracts.py` 6项全部通过；三个公开release PS1语法解析无错误，Jobs默认值均为16。本轮未重新编译计算程序或重打包现有发布产物。正式说明已同步到BUILD及构建工具README，草稿保留供用户处理。
+
+## 13. Stage1本机拆分与Stage2聚合默认（2026-10-24）
+
+用户确认Stage2编译不是瓶颈，授权release默认回到与local相同的算术/NTT两个聚合CU，保留176模块拆分为显式备选；同时授权为Stage1本机编译长尾调整代码架构。Stage1 local/dev默认共用release的曲线/param/容器模块生成器，保留 `KernelLayout=grouped`。生成文件仍包含内核及完整设备辅助函数实现；不把单个算术调用链拆成跨对象的设备函数。无需为本次构建策略改动增加主程序版本。
+
+Stage2统一用 `KernelLayout=grouped/isolated` 选择，完整发布入口对应 `Stage2KernelLayout`。默认cu13.3聚合使用nvcc内部SplitCompile=8；cu11.8不支持该选项，保持1；隔离备选保持1。布局进入release profile和manifest，隔离宏、模块生成与常量快照只在显式isolated时启用，SkipBuild严格检查所选布局。打包对聚合模式检查两个设备对象及权威入口/实例成员，对隔离模式检查逐模块成员；元数据枚举不生成隔离源码。
+
+按本次批准变更，Stage2 grouped不再提供按容量隔离JIT保证。运行范围测试必须显式选择 `--allow-grouped-stage2`，报告保存布局；已有0.52.1隔离构建的JIT资格和耗时不能移用于grouped。原冻结包、日志和设备范围证据不变。Stage1按需模块范围要求继续保留。
+
+本次证据写入 `data/experiments/cuda_layout_20261024/`。真实构建初次在受限环境出现CMake空C测试C1902及nvcc主机探测崩溃。最小独立CUDA样例证实相同命令stdout直接写文件返回5、经PIPE采集返回0；`run_compile_jobs.py`改为管道流式落盘，保留退出码和有界内存。Windows stdout句柄回归先观察到FILE类型1导致失败，修复后PIPE类型3成功，并验证非零退出码8保留。CMake空C探测另在正常本机环境重跑，不绕过编译器能力检查。
+
+实际构建验证覆盖Stage1的512、13312、17408容器及Stage2两套CUDA聚合release。此代表性构建不作为全档构建加速比，当前并发负载也不能用于稳定吞吐结论。旧Stage1分组profile不自动重标或覆盖，首次切换使用新BuildDir。
+
+验证结果：Stage1通过正式local入口构建12个CUDA单元，最终EXE有12个cubin、无PTX；同参数HostOnly复用12个单元、CUDA重编数为0（`stage1_build_verified.log`、`stage1_host_only.log`）。复用真实Edwards对象的CPU独立对照9项通过，覆盖三个容器及NAF/binary、边界、分段恢复和自适应重启（`stage1_probe_math.log`）。Montgomery param0/2/3在512、13312两个容器各4曲线，共24条末点与冻结0.52.0基线相同；源码、命令、输入及EXE摘要见私有 `verify_workers.py`、各case目录和 `worker_summary.json`。
+
+Stage2 cu11.8/cu13.3均通过正式release阶段入口及源码/编译器/GMP/对象身份核对。两者各包含112个算术入口和64个NTT入口，静态目录、PTX/SASS及EXE/manifest摘要见 `stage2_cu118_static.json`、`stage2_cu133_static.json` 和对应modules报告。cu13.3独立GMP算术探针1536个模数、152064次比较、错误0；8193位完整worker结果及目标叶指纹与冻结样例一致，2048项Montgomery必需自检、672项S4自检和118项GMP检查无错误，异步检查pending=0。完整worker的debug诊断保存于debug.log；运行检查器同时读取原始stdout与debug文件，保留原数学及指纹门禁，不因日志分流放宽检查。
+
+cu11.8聚合版的同一8193位完整worker也完成，结果及目标叶指纹与冻结样例一致，2048项Montgomery必需自检通过、pending=0，见 `stage2_worker_cu118/summary.json`。该次私有冷缓存运行初始化等待较长；未单独观测驱动JIT窗口，不把整段曲线耗时称为纯JIT，仍保留grouped冷/热预算待验。两套完整worker均在GPU1 RTX4060 Laptop、sm89、610.88驱动验证，设备快照为 `device.csv`；CPU为Ryzen AI9 HX370，未锁定功耗/时钟，期间存在并发构建和其他GPU上下文。该条件不替代旧GPU、旧驱动或原生sm60/sm80资格。
+
+CPU回归为构建/计时合同7项、完整包布局6项、profile隔离33项通过；另有10个PowerShell入口/辅助脚本语法检查通过。隔离备选的生成成员、稳定生成、只读元数据、编译宏、profile分离及打包均有CPU回归。旧GPU/旧驱动、全档构建加速比及grouped的冷/热JIT预算仍待相应条件验证；未重打包原冻结发布目录。草稿保留，由用户决定后续处理。

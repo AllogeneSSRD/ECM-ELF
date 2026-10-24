@@ -81,6 +81,7 @@ def main():
     parser.add_argument('--samples',type=int,default=5)
     parser.add_argument('--skip-sampling',action='store_true')
     parser.add_argument('--sampling-only',action='store_true')
+    parser.add_argument('--allow-grouped-stage2',action='store_true',help='Explicitly test grouped Stage2 math/timing without claiming per-capacity JIT isolation')
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     profiles=['cu11.8','cu13.3'] if args.profile=='all' else [args.profile]
     observer=args.observer.resolve();baseline=args.baseline.resolve();build=args.build_root.resolve()
@@ -95,16 +96,22 @@ def main():
     binaries={}
     inspectors={}
     ptx_binaries={}
+    stage2_layouts={}
     for profile in profiles:
         binaries[profile]={}
         for stage in (('stage1','stage2') if args.stage=='all' else (args.stage,)):
             record=load(build/'components'/f'{profile}.{stage}.json')
             manifest=load(record['manifest']);binary=Path(record['exe']).resolve()
+            if stage=='stage2':
+                layout=manifest.get('kernel_layout','isolated' if manifest.get('module_directory') else 'grouped')
+                assert layout=='isolated' or args.allow_grouped_stage2,'Grouped Stage2 requires --allow-grouped-stage2; per-capacity JIT isolation is not its scope contract'
+                stage2_layouts[profile]=layout
             assert sha(binary).lower()==manifest.get('executable_sha256',manifest.get('sha256')).lower()
             result['inputs'][str(binary)]=sha(binary);binaries[profile][stage]=binary
             for path in (Path(record['manifest']).resolve(),binary.parent/'gmp-10.dll'):
                 result['inputs'][str(path)]=sha(path)
             inspectors[profile]=inspector
+    result['stage2_kernel_layouts']=stage2_layouts
     if args.ptx_fixtures:
         derived=load(args.ptx_fixtures)
         assert derived['complete'] and derived['kind']=='derived_ptx_only_test_images'
@@ -137,6 +144,8 @@ def main():
         start=time.perf_counter()
         proc=subprocess.run(command,input=input.encode() if input else None,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,cwd=folder,timeout=1800)
         seconds=time.perf_counter()-start;text=proc.stdout.decode('utf-8','replace');(folder/'stdout.log').write_text(text,encoding='utf-8')
+        debug=folder/'debug.log'
+        if debug.is_file():text+='\n'+debug.read_text(encoding='utf-8-sig',errors='replace')
         assert proc.returncode==0,(name,proc.returncode,text[-2500:])
         names=[];loaded=[]
         if observe:
@@ -217,10 +226,11 @@ def main():
                     for token in ('mont_selftest: cases=2048 mismatches=0','gmp_check_bad=0','pending=0'):
                         assert token in text,(profile,fixture['name'],token)
                     assert leaves and re.findall(r'^target_descent_values: (.*)$',text,re.M)[-1:]==leaves[-1:],'Stage2 target leaves changed'
-                    for cubin_name in measurement['entries']:
-                        if re.search(r'(?:s2g_|s4_reduce_kernel|s4_mersenne_fixture)',cubin_name):
-                            capacity_match=re.search(r'ILi(\d+)E',cubin_name)
-                            if capacity_match:assert int(capacity_match[1])==fixture['capacity'],('unselected Stage2 capacity',cubin_name)
+                    if stage2_layouts[profile]=='isolated':
+                        for cubin_name in measurement['entries']:
+                            if re.search(r'(?:s2g_|s4_reduce_kernel|s4_mersenne_fixture)',cubin_name):
+                                capacity_match=re.search(r'ILi(\d+)E',cubin_name)
+                                if capacity_match:assert int(capacity_match[1])==fixture['capacity'],('unselected Stage2 capacity',cubin_name)
                     assert measurement['entries'],'Stage2 scope was not observed'
                     result['cases'].append(dict(stage='stage2',profile=profile,mode=mode,fixture=fixture['name'],measurement=measurement));persist();print('PASS',profile,mode,fixture['name'],flush=True)
     if not args.skip_sampling:

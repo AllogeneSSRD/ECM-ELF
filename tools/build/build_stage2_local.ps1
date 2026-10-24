@@ -14,6 +14,7 @@ param(
     [string]$BuildRoot = '',
     [ValidateSet('local','dev','release')][string]$BuildRole = 'local',
     [ValidateSet('production','development')][string]$Engine = 'production',
+    [ValidateSet('grouped','isolated')][string]$KernelLayout = 'grouped',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidatePattern('^$|^[0-9]+$')][string]$PtxArch = '',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
@@ -41,7 +42,7 @@ $Gmp = $gmpDependency.Root
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 . (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
-$buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency $PtxArch
+$buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency $PtxArch $KernelLayout
 $Build = Resolve-EcmBuildDirectory $repo $buildProfile $Build $BuildRoot
 Assert-EcmBuildProfile $Build $buildProfile
 Write-Host '== Stage2 build =='
@@ -49,6 +50,7 @@ Write-Host "   engine    : $Engine"
 Write-Host "   GPU       : $Arch"
 Write-Host "   NTT       : backend=$GlBackend add/sub=$AddSubMask outer_unroll=$OuterUnrollU"
 Write-Host "   parallel  : nvcc split compile=$SplitCompile"
+Write-Host "   modules   : $KernelLayout"
 Write-Host "   build dir : $Build"
 Write-Host "   role/key  : $BuildRole / $($buildProfile.Key)"
 Write-Host "   GMP       : $Gmp"
@@ -60,7 +62,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tool
 . (Join-Path $PSScriptRoot 'internal/cuda_timing.ps1')
 $inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
 $moduleDirectory = ''
-if ($BuildRole -eq 'release') {
+if ($KernelLayout -eq 'isolated') {
     $moduleDirectory = Join-Path $Build 'cuda_modules/stage2'
     & python (Join-Path $PSScriptRoot 'internal/generate_cuda_modules.py') --out $moduleDirectory
     if ($LASTEXITCODE) { throw 'CUDA module generation failed' }
@@ -293,6 +295,7 @@ $manifest = [ordered]@{
     architecture = $Arch
     ptx_architecture = $PtxArch
     module_directory = $moduleDirectory
+    kernel_layout = $KernelLayout
     engine = $Engine
     gl_backend = $GlBackend
     gl_fixed_mode = $glMode

@@ -14,6 +14,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_dev
 param(
     [string]$Build = '',
     [ValidateSet('production','development')][string]$Engine = 'development',
+    [ValidateSet('grouped','isolated')][string]$KernelLayout = 'grouped',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,

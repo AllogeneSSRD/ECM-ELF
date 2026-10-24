@@ -45,6 +45,11 @@ $experimental = Profile -Role dev -Engine development
 Check ((Resolve-EcmBuildDirectory $fixture $experimental) -like '*stage2\experimental\sm89*') 'experimental engine stays explicitly separate'
 $release = Profile -Role release
 Check ((Resolve-EcmBuildDirectory $fixture $release) -like '*build_cuda_release\stage2\cuda13_3\sm89*') 'release is grouped by toolkit and architecture'
+$isolated = New-EcmStage2Profile $fixture release production sm_89 ptx 0 1 1 $cuda $vc $gmp '' isolated
+$grouped = New-EcmStage2Profile $fixture release production sm_89 ptx 0 1 1 $cuda $vc $gmp '' grouped
+Check ($isolated.Hash -ne $grouped.Hash) 'Stage2 grouped and isolated layouts cannot share a profile'
+Check ($isolated.CompilePrefix -match 'ECM_CUDA_ISOLATED_DEVICE' -and $grouped.CompilePrefix -notmatch 'ECM_CUDA_ISOLATED_DEVICE') 'isolated constants and dispatch are enabled only by explicit layout'
+Reject { New-EcmStage2Profile $fixture dev development sm_89 ptx 0 1 8 $cuda $vc $gmp '' isolated } 'production engine' 'isolated generator cannot silently replace a development engine'
 Reject { Profile -Role release -Engine development } 'production engine' 'experimental engine cannot become release'
 $explicit = Join-Path $fixture 'explicit_leaf'
 Check ((Resolve-EcmBuildDirectory $fixture $a $explicit) -eq $explicit) 'explicit Build remains a final leaf without appended profile'

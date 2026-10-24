@@ -9,13 +9,13 @@
 | Stage1 | `build_stage1_dev.ps1/.bat` | `build_stage1_local.ps1/.bat` | `build_stage1_release.ps1/.bat` |
 | Stage2 | `build_stage2_dev.ps1/.bat` | `build_stage2_local.ps1/.bat` | `build_stage2_release.ps1/.bat` |
 
-完整发布分别使用 `build_release_cu11.8.bat`、`build_release_cu13.3.bat`，固定传入所选 CUDA profile 和 `-Jobs 16`；`build_release.ps1/.bat` 保留默认双包总入口。表中的 release 入口只构建/验证相应阶段。Stage1 本机/开发默认 `Jobs=8`；Stage2 local 默认 `SplitCompile=8`；发布两阶段默认 `Jobs=16`，Stage2 release 使用 `SplitCompile=1`。PS1 为默认参数来源；单 CUDA BAT 已传入 profile/Jobs，调整这两项时直接调用 PS1。无参数 BAT 结束暂停，有参数返回退出码。入口不自动运行测试。
+完整发布分别使用 `build_release_cu11.8.bat`、`build_release_cu13.3.bat`，固定传入所选 CUDA profile 和 `-Jobs 16`；`build_release.ps1/.bat` 保留默认双包总入口。表中的 release 入口只构建/验证相应阶段。Stage1 本机/开发默认 `Jobs=8`，按曲线/param/容器独立编译；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2默认聚合：cu13.3使用 `SplitCompile=8`，cu11.8及隔离备选使用1。PS1 为默认参数来源；单 CUDA BAT 已传入 profile/Jobs，调整这两项时直接调用 PS1。无参数 BAT 结束暂停，有参数返回退出码。入口不自动运行测试。
 
 ## 参数定位
 
-- Stage1 本机/开发：`-Arch`、`-BuildDir`、`-Jobs`、`-Tiers`、`-EnablePrac`、`-HostOnly`、`-FullRebuild`、`-Extra`。默认验证并复用 CUDA 对象，`-Incremental` 保留兼容；默认不编译 PRAC，改变构建参数后仅重编失效单元。
-- Stage2 本机/开发：`-Arch`、`-Build`、`-SplitCompile`、`-GlBackend`、`-AddSubMask`、`-OuterUnrollU`、`-HostOnly`、`-Rebuild`。默认逐单元复用；HostOnly 在编译前验证 CUDA 对象/参数和源身份，与 Rebuild 互斥。
-- 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；阶段入口是相应组件的包装。
+- Stage1 本机/开发：`-Arch`、`-BuildDir`、`-Jobs`、`-Tiers`、`-KernelLayout isolated/grouped`、`-EnablePrac`、`-HostOnly`、`-FullRebuild`、`-Extra`。默认isolated，验证并复用 CUDA 对象，`-Incremental` 保留兼容；默认不编译 PRAC，改变构建参数后仅重编失效单元。已有分组缓存首次切换须使用新的BuildDir。
+- Stage2 本机/开发：`-Arch`、`-Build`、`-SplitCompile`、`-KernelLayout grouped/isolated`、`-GlBackend`、`-AddSubMask`、`-OuterUnrollU`、`-HostOnly`、`-Rebuild`。默认grouped，隔离备选仅支持生产引擎。默认逐单元复用；HostOnly 在编译前验证 CUDA 对象/参数和源身份，与 Rebuild 互斥。
+- 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`、`-Stage2KernelLayout grouped/isolated`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；Stage2阶段包装使用 `-KernelLayout` 选择布局。
 - 发布工具链：`-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp`；发布要求同一 vcpkg 通用 GMP，缺失或身份变化即失败。local/dev 保留 `-CudaRoot` 和各自依赖参数。
 - 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。输出为 `release/ecm-elf-<版本>-cu11.8/`、`ecm-elf-<版本>-cu13.3/`，ZIP 内保留同名完整目录。所选包已有目录、ZIP 或 SHA256 时不覆盖，重打包指定新的 `-OutDir`；另一个 CUDA 包可发布到同一输出根。
 
