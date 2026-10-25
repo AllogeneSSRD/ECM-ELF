@@ -31,6 +31,13 @@ Placement place(RECT main, RECT work, float scale, float left) {
     const int y = bottom ? std::max(work.top, std::min(main.bottom, work.bottom) - height) : main.top - height;
     return {x, y, width, height, bottom};
 }
+int floating_y(const Placement& anchor,int work_top,float scale,float rise,int surface_height) {
+    const int offset=static_cast<int>(std::lround(rise*scale));
+    // Float toward the owner: an external pet must never lift its feet off the
+    // top edge. Preserve its resting bottom when reusing a different-DPI raster.
+    const int rest=anchor.y+anchor.height-surface_height;
+    return std::max(work_top,rest+(anchor.bottom?-offset:offset));
+}
 bool Window::open() {
     if (!gdiplus_) { Gdiplus::GdiplusStartupInput input; if (Gdiplus::GdiplusStartup(&gdiplus_, &input, nullptr) != Gdiplus::Ok) { error = "Pet: Windows graphics unavailable"; return false; } }
     if (!atlas_ || loaded_skin_ != state_.pet_skin) {
@@ -128,7 +135,7 @@ void Window::tick(Mood mood) {
         if (!GetMonitorInfoW(MonitorFromWindow(owner_, MONITOR_DEFAULTTONEAREST), &monitor)) throw std::runtime_error("Cannot locate pet work area");
         const float scale = std::max(1u, GetDpiForWindow(owner_)) / 96.f;
         const auto anchor=place(main, monitor.rcWork, scale, state_.pet_left);
-        auto spot=anchor;rise_=pose.rise;spot.y=std::max(int(monitor.rcWork.top),spot.y-int(std::lround(rise_*scale)));
+        auto spot=anchor;rise_=pose.rise;spot.y=floating_y(anchor,monitor.rcWork.top,scale,rise_,spot.height);
         const int frame=pose.frame,sway=int(std::lround(pose.forelock*10));
         const int row = static_cast<int>(pose.mood);
         const bool relocated = spot.x != previous_place_.x || spot.y != previous_place_.y || spot.width != previous_place_.width || spot.height != previous_place_.height;
@@ -147,10 +154,11 @@ void Window::follow_owner() {
     if(!GetClientRect(owner_,&main)||!ClientToScreen(owner_,&origin)||
        !GetMonitorInfoW(MonitorFromWindow(owner_,MONITOR_DEFAULTTONEAREST),&monitor))return;
     OffsetRect(&main,origin.x,origin.y);
-    const auto spot=place(main,monitor.rcWork,std::max(1u,GetDpiForWindow(owner_))/96.f,state_.pet_left);
+    const float scale=std::max(1u,GetDpiForWindow(owner_))/96.f;
+    const auto spot=place(main,monitor.rcWork,scale,state_.pet_left);
     // The native move/resize loop pauses the application's frame loop. Reuse
     // existing layered pixels here; DPI rasterisation stays in the normal tick.
-    const int y=std::max(int(monitor.rcWork.top),spot.y+spot.height-previous_place_.height-int(std::lround(rise_*std::max(1u,GetDpiForWindow(owner_))/96.f)));
+    const int y=floating_y(spot,monitor.rcWork.top,scale,rise_,previous_place_.height);
     if(SetWindowPos(hwnd_,nullptr,spot.x,y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE)){
         previous_place_.x=spot.x;previous_place_.y=y;
     }

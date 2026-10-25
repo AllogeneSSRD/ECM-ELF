@@ -11,6 +11,8 @@
 namespace ecmgui_v2::pet {
 struct Placement { int x, y, width, height; bool bottom; };
 Placement place(RECT main, RECT work, float scale, float left);
+// surface_height may be the previous DPI raster while the native move loop runs.
+int floating_y(const Placement& anchor, int work_top, float scale, float rise, int surface_height);
 RECT client_bounds(HWND owner);
 void raster_frame(Gdiplus::Bitmap& atlas,const Gdiplus::Rect& source,int width,int height,unsigned* pixels);
 class Window {

@@ -90,5 +90,18 @@ int main(int argc, char** argv) {
     assert(bottom.bottom && bottom.y == 1152 && bottom.width == 224 && bottom.x >= 0);
     const auto negative = place({-1900,300,-700,1100}, {-1920,0,0,1400}, 1.5f, 99999);
     assert(negative.x + negative.width <= 0 && negative.width == 168 && negative.height == 186);
+    // Both normal animation and native move reuse the same signed edge offset.
+    for(float scale:{1.f,1.25f,1.5f,2.f})for(float rise:{0.f,1.5f,3.f}){
+        const RECT work{-1920,-300,0,1400},owner{-1800,400,-700,1200};
+        const auto outside=place(owner,work,scale,72);
+        const auto inside=place({-1800,-300,-700,1200},work,scale,72);
+        assert(!outside.bottom&&inside.bottom);
+        for(int raster_height:{outside.height,124,248}){
+            const auto y=ecmgui_v2::pet::floating_y(outside,work.top,scale,rise,raster_height);
+            assert(y+raster_height==owner.top+std::lround(rise*scale));
+        }
+        const auto y=ecmgui_v2::pet::floating_y(inside,work.top,scale,rise,inside.height);
+        assert(y+inside.height==1200-std::lround(rise*scale));
+    }
     std::puts("PASS: sidecar roundtrip, invalid-state retention, Unicode paths, pet work-area/DPI geometry");
 }
