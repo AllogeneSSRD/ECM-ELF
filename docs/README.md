@@ -28,6 +28,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [CUDA 可视化架构图谱](../web/index.html)：代码分层、编译清单、位宽与运行时流程的离线交互网页；维护入口见 [网页说明](../web/README.md)。
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
 - [Stage1 主机重构开发草稿](web/stage1-intake-architecture-20261025.html)：首轮0.53.0提交、第二轮0.53.1输入与执行入口、拥有结果及统一发布；保留讨论和验收证据，待用户决定草稿处理。
+- [Stage1 下一轮重构候选](web/stage1-next-refactor-review-20261025.html)：0.53.1之后的CUDA结果模型、CPU文本往返与checkpoint拥有权审查；仅为待确认建议。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
 - [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。
 - [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量、CPU/GPU 分工及可选 relocation/原区间重放。
