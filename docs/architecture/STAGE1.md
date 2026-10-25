@@ -18,25 +18,27 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 `ECMSTAGE1` 作为 save 型 Stage1 输入时，文件名前缀决定该任务的曲线构造，末尾字段决定 B1；覆盖 TOML 后再校验后端能力和 sigma 范围。`ECMSTAGE2` 只由独立 Stage2 程序领取。每条 Stage1 任务复制基础选项，防止混合队列之间传播覆盖。Edwards 前缀同时恢复其固定标量约定；执行目标保持 TOML 设置。名称、旧 save 历史复制及交接合同见[队列输入](../usage/STAGE1.md#程序与输入)。
 
-这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核及各后端 checkpoint 保持各自职责；后端生成 save 记录，文件发布与区间校验共用保存模块。入口见 [selection.h](../../include/ecm/core/stage1/selection.h)、[main.cpp](../../src/main.cpp) 和 [ecm_backend.h](../../include/ecm/service/execution/legacy_gpu.h)。
+这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核及各后端 checkpoint 保持各自职责；后端返回拥有的逐曲线结果；task 调用保存模块编码、发布并取得明确区间。入口见 [selection.h](../../include/ecm/core/stage1/selection.h)、[main.cpp](../../src/main.cpp) 和 [ecm_backend.h](../../include/ecm/service/execution/legacy_gpu.h)。
 
 ## 单任务编排与资源拥有权
 
-直接输入和队列调用同一个 [run_stage1_task](../../src/ecm/service/stage1/task.cpp)。它依次校验任务元数据与输出归属、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份，再将整批结果交给 publish_stage1_batch。发布器在内存中按 uint64 sigma 排序和聚合，最终内部结果与提交文件均成功后才结束批次。因子在后端安全位置验证，最终随整批发布；队列完成和跨阶段交接协议在任务之外。去重、双文件恢复及 Stage2 账本兼容见[结果输出](../usage/ECM_RESULTS.md#去重批次与恢复)。
+直接输入和队列调用同一个 [run_stage1_task](../../src/ecm/service/stage1/task.cpp)。它依次校验任务元数据与输出归属、打开批次、接纳旧 save 历史、直接调用选定的后端入口、核对逐曲线身份，编码并发布最终 save，再将整批结果交给 publish_stage1_batch。发布器在内存中按 uint64 sigma 排序和聚合，最终内部结果与提交文件均成功后才结束批次。因子在后端安全位置验证，最终随整批发布；队列完成和跨阶段交接协议在任务之外。去重、双文件恢复及 Stage2 账本兼容见[结果输出](../usage/ECM_RESULTS.md#去重批次与恢复)。
 
 [公开请求与结果](../../include/ecm/service/stage1/task.h)只使用普通 C++ 和 GMP。Stage1Request 在同步调用期间借用模数、命名和已解析选项，选项分为执行偏好、身份和持久化策略三组。TaskResult 独立拥有逐曲线结果，禁止复制并允许移动，通过只读访问器取数；不保留请求引用，不公开原始分配或进度字段。状态区分完成、停止和失败，并记录准备、执行、持久化、发布或设备执行失败。CUDA 明确失败优先于同时收到的停止；CPU/OpenCL 的旧标记仍通过兼容映射接纳。设备执行失败使队列停止并保留原任务，不继续使用可能失效的设备 context。
 
-私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
+私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。计算结果以逐曲线拥有值保存；旧数组只在后端兼容适配中使用，转换时移动 GMP 值，不复制整批大整数。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [main.cpp](../../src/main.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调，以及 CUDA 延迟验证能力标志 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；逐曲线状态明确区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed，旧 CPU/OpenCL 通过 Legacy 兼容。CUDA 的拥有值与 sigma 在发布前核对状态一致性，不能将退化/失败当作无因子完成；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
+应用 [main.cpp](../../src/main.cpp)负责模式、进程启动、worker资源与队列循环。归一化当前任务后，通过 [select_stage1_entry](../../src/ecm/service/stage1/execution.cpp)选择一个普通函数入口；选择不执行CUDA，不改变任务。task随后直接调用选定入口，不经过另一层执行转发。构建身份、默认NAF和CUDA延迟验证能力仍由应用组装。
 
-任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 20 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+[私有计算合同](../../src/ecm/service/stage1/execution_contract.h)以 ExecutionOptions 保存执行副本，以 ComputationResult 返回完成/停止/失败及来源、拥有的逐曲线结果。每条结果区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed。LegacyExecutionResult 仅适配旧CPU工作线程与设备数组，在后端返回前转成拥有值；task不从旧返回码、flags或数组猜测执行状态。TaskResult::State另保存最终发布状态、明确的save Range和队列尚未提交的checkpoint责任；计算完成与文件发布完成是两个事实。
+
+任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 22 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
 ## 应用输入与队列编排
 
-main 组装一次计算、身份和默认 NAF 依赖，单次与队列模式共用 task。三个来源的解析、默认与覆盖、拥有的完整输入分别集中在 [io](../../src/io/)；唯一队列循环和完成顺序在 main。解析不改动运行时单例，归一化不写队列/日志/同步文件；完整流程和目录见 [架构与术语](OVERVIEW.md)。
+main 按当前任务组装计算入口、身份和默认 NAF 依赖，单次与队列模式共用 task。三个来源的解析、默认与覆盖、拥有的完整输入分别集中在 [io](../../src/io/)；唯一队列循环和完成顺序在 main。解析不改动运行时单例，归一化不写队列/日志/同步文件；完整流程和目录见 [架构与术语](OVERVIEW.md)。
 
-后端先发布批次 save，task 核对本批 N、B1、curve/param、sigma 与 checksum，并发布最终结果。队列随后强制重读 save，核对发布时确认的连续 METHOD 区间。成功后先持久保存 P95/本地 Stage2 待交接责任，再保存完成记录、发布 finished 并按原任务票据原子推进队列，清理完成 checkpoint，最后执行备份与交接重试。计算、准备、设备或发布失败/停止按来源处理；选中的非法输入标错并继续，标错/I/O/锁失败终止。
+task接收后端的拥有结果，调用纯编码器生成save，在发布后核对本批 N、B1、curve/param、sigma 与 checksum，再发布最终结果。save发布器显式返回Range，没有thread_local Capture。队列随后强制重读 save，核对发布时确认的连续 METHOD 区间。成功后先持久保存 P95/本地 Stage2 待交接责任，再保存完成记录、发布 finished 并按原任务票据原子推进队列，清理完成 checkpoint，最后执行备份与交接重试。计算、准备、设备或发布失败/停止按来源处理；选中的非法输入标错并继续，标错/I/O/锁失败终止。
 
 完成记录保留队列提交前后版本证据，恢复不再执行已经完成的数学工作；若外部编辑使提交状态不可判定，保留结果、checkpoint 和完成记录并停止，不猜测下一条重复任务。未来任务的正常新增、删除、重排在运行期间仍可进行。P95 的文件先就绪、任务后发布及交接消费限制见 [使用说明](../usage/STAGE1.md#prime95-持久交接)。
 
@@ -56,21 +58,21 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 ## CPU 执行与共享主机准备
 
-CPU 两条完整执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp)，通过同目录私有头的 run_edwards_stage1、run_mont_stage1 接收 N、B1/B2、曲线数、save 策略、表达式和本次执行选项，填充已有 ExecutionResult。线程/ISA 选择、点状态、恢复、分批推进、逐曲线 GCD、factor/DONE 与存档时序由该 Implementation 集中持有。它用普通基线 CXX 编译，不把 AVX512 编译设置施加到调度文件；原 SIMD 实现继续独立编译。应用仍解析 affinity 文本，执行模块只应用解析后的 CPU 集合。
+CPU 两条执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp)，通过同目录私有头的 run_edwards_stage1、run_mont_stage1 接收统一Stage1Request与执行副本，返回ComputationResult。线程/ISA选择、点状态、恢复、推进、逐曲线GCD与DONE仍集中在原有实现；兼容入口接纳旧数组，Montgomery在释放xs前移动末点，Edwards解码并校验DONE_V1中的归一化点/因子，空点记录转为CompletedWithoutPoint。最终save与结果文件由task发布，后端不提前删除完成材料。普通基线CXX不继承AVX512编译设置；应用归一化affinity，执行模块应用CPU集合。
 
 [preparation.cpp](../../src/ecm/service/stage1/preparation.cpp)集中 CPU/GPU 共用的标量缓存入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列已提取到各自普通 CXX。
 
-各完整工作流负责自己的 factor、DONE 与 save 顺序，任务层负责最终账本和批次关闭。实际设备同步和回读继续依赖 CUDA。
+各工作流负责计算与安全点DONE/checkpoint；任务层负责最终save、结果发布和批次关闭。实际设备同步和回读继续依赖 CUDA。
 
 ## 唯一执行分派与 GPU 主机流程
 
-task 的 execute 依赖绑定 [execution.cpp](../../src/ecm/service/stage1/execution.cpp)的 execute_stage1。该文件只做后端与曲线分派。CUDA 由构建显式定义 `ECM_HAS_CUDA_STAGE1`，调用 [私有 execution.h](../../src/ecm/backend/cuda/stage1/execution.h) 的 `ecm_cuda_stage1::run_mont_stage1 / run_edwards_stage1`。两个完整入口参数粒度一致，分别位于曲线目录的 workflow.cpp；它们编排准备、恢复/构造、设备执行、末点及批次 save，不拥有任务账本或队列。
+[execution.cpp](../../src/ecm/service/stage1/execution.cpp)按实际任务的target与曲线选择入口，Montgomery各param均选择同一个run_mont_stage1。CUDA由构建显式定义ECM_HAS_CUDA_STAGE1；[execution.h](../../src/ecm/backend/cuda/stage1/execution.h)声明两个同签名入口。两条workflow线性编排准备、恢复候选验证、布局接纳或新曲线构造、设备执行、结果收集；不拥有最终save/results发布或队列。
 
-[Montgomery workflow](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)在准备后直接调用 CUDA 曲线运行时，不经过旧长参数 backend hook；factory 继续提供设备准备、能力查询和兼容入口。[Edwards workflow](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)编排曲线准备、恢复、进度、末点检查与 save；Batch、构造和 checkpoint 分别由同目录的 batch.h、host_math.cpp、checkpoint.cpp 持有。低层探针的链接清单不包含完整 workflow。
+[Montgomery workflow](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/backend/cuda/stage1/montgomery/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 
-CUDA 关闭时调用 [OpenCL Montgomery workflow](../../src/ecm/backend/opencl/stage1/montgomery/workflow.cpp)，保留其既有参数、后端 hook 和发布行为。两条 CPU 完整流程继续位于 CPU 实现；共享分派不包含任何曲线工作流正文。共用的随机 sigma 和 batch d 声明在 `service/stage1/gpu_common.h`，与 OpenCL 入口 ABI 分离。
+[Edwards workflow](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)管理Batch、恢复、构造、进度和末点分类；同目录checkpoint.cpp拥有专用codec。两种曲线save_checkpoint均以bool表示持久提交成功；decode解释载荷并返回RestoreResult，候选接纳和布局检查仍留在实际拥有这些约束的位置。中途checkpoint参与安全点，最终发布失败仍可恢复已完成计算。
 
-CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先于同时收到的停止信号，不再被任务层改写为准备失败。CPU/OpenCL 的旧返回码和准备/发布标记仍通过兼容映射接纳。任务层按执行/发布调用边界归类逃逸异常，不根据结果指针是否已分配猜测阶段。Edwards 低层接口保留兼容返回码并可携带明确设备故障来源。周期存档策略和候选验证合同仍见实施草稿中的未完成项。
+CUDA关闭时选择[OpenCL Montgomery workflow](../../src/ecm/backend/opencl/stage1/montgomery/workflow.cpp)。其设备hook和算术保持，最终结果同样交给task。CPU/OpenCL旧状态映射集中在兼容转换；明确失败优先于同时收到的停止信号。任务层按计算/发布阶段归类逃逸异常。
 
 这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；Edwards 运行入口的校验/选择/错误适配也使用普通 CXX。设备协作继续由 runtime.cu 持有。
 
@@ -78,7 +80,7 @@ CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先
 
 [Montgomery runtime](../../src/ecm/backend/cuda/stage1/montgomery/runtime.h)返回完成、主动停止、采样截止或失败；[运行结果合同](../../src/ecm/backend/cuda/stage1/runtime_contract.h)区分实际失败来源。旧 C 入口只负责兼容适配。CUDA/CGBN 检查通过异常返回运行边界，设备缓冲、事件、报告、诊断文件和主机数组由 [资源拥有者](../../src/ecm/backend/cuda/stage1/montgomery/resources.cuh)释放。调用方不假定设备错误后的 context 可以继续使用。Edwards 的已有缓冲、报告及事件拥有者禁止复制，设备错误同样回到任务层。
 
-PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子立即通过既有 submission 通道持久化，并记录该曲线的 factor 结果；GCD=N 作为退化构造拒绝。设备批次不压紧索引：已找到因子的通道使用无害恒等状态，末点处理读取已保存的真因子，不能将该通道当作可用于 Stage2 的点。恢复时重新推导构造期因子元数据；旧载荷格式不变。有效曲线的公式与 sigma 身份不受影响；PARAM2 低层也拒绝 sigma<2，而不改用另一 sigma。
+PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子校验后记录为该曲线的factor结果，随整批最终结果发布；GCD=N 作为退化构造拒绝。设备批次不压紧索引：已找到因子的通道使用无害恒等状态，末点处理读取已保存的真因子，不能将该通道当作可用于 Stage2 的点。恢复时重新推导构造期因子元数据；旧载荷格式不变。有效曲线的公式与 sigma 身份不受影响；PARAM2 低层也拒绝 sigma<2，而不改用另一 sigma。
 
 构造布局、主机数组及结果分配检查尺寸；两曲线的结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
 
@@ -98,7 +100,7 @@ Edwards [batch.h](../../src/ecm/backend/cuda/stage1/edwards/batch.h)只描述主
 
 CUDA workflow 将 sigma 选择与曲线参数化分开：先恢复并校验当前/兼容存档，采用载荷中的 sigma；没有算术载荷时查询已持久化种子；只有缺失种子的新任务才调用随机生成器。随后使用确定的 sigma 构造曲线。恢复校验所需的基点重建仍使用存档 sigma，不生成新种子。Montgomery 保持连续批次，Edwards 保持逐曲线种子；结果、日志和 PARAM2/3 save 均使用实际采用的 sigma。
 
-两种 CUDA workflow 均在计算前拥有结果数组。Edwards 末点验证和归一化写入独立结果，不改写用于恢复的原始批次状态；构造期真因子立即经过既有 submission 通道。完成状态保存成功后才发布最终 save，任务封存结果后才清除恢复材料。周期保存失败作为持久化失败返回，优先于同时收到的停止；最后一片已完成时继续完成当前批次的结果发布。
+两种 CUDA workflow 均在计算前拥有结果数组。Edwards 末点验证和归一化写入独立结果，不改写用于恢复的原始批次状态；构造期真因子校验后保存在拥有结果中，最终随整批发布。完成状态保存成功后才发布最终 save，任务封存结果后才清除恢复材料。周期保存失败作为持久化失败返回，优先于同时收到的停止；最后一片已完成时继续完成当前批次的结果发布。
 
 磁盘版本、字段顺序和 size_t/time_t 布局保持。runtime.cu 保留 CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；档位注册与实际分派归 registry.cu，resident/PRAC 由独立 prac/runtime.cu 实现。global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
 

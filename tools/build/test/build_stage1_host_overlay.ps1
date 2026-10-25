@@ -1,7 +1,10 @@
 # Isolated host refactor build. Verify the production CUDA source closure and
-# object hashes, then compile the current host inventory without invoking nvcc.
+# object hashes, then compile the current host inventory. Explicitly opt in to
+# rebuilding changed CUDA closures with the original compile commands and flags;
+# all original objects and the production executable remain untouched.
 param([string]$WorkerBuild='build_stage1_local',
-      [Parameter(Mandatory=$true)][string]$Build)
+      [Parameter(Mandatory=$true)][string]$Build,
+      [switch]$RecompileChangedCuda)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -18,27 +21,43 @@ $all=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
 $cudaSources=@($all|Where-Object {$_ -match '\.cu$'})
 $cudaEntries=@(Get-EcmTargetCompileEntries $worker ecm_cuda|Where-Object {$_.file -match '\.cu$'})
 if($cudaSources.Count -ne $cudaEntries.Count){throw 'CUDA source inventory changed; use a normal CUDA build'}
-$reused=[ordered]@{};$objects=@();$sourceHashes=[ordered]@{}
+$reused=[ordered]@{};$objects=@();$sourceHashes=[ordered]@{};$cudaCommands=@();$rebuilt=[ordered]@{}
 foreach($entry in $cudaEntries) {
     $key=Get-EcmSourceKey $repo $entry.file
     if($key -notin $cudaSources){throw "Unexpected CUDA source: $key"}
     $inputs=Get-EcmCommandInputs $entry
     $closure=Get-EcmSourceClosure $repo @($entry.file) $inputs.IncludeDirs -Production
+    $changed=$false
     foreach($source in $closure) {
         $hash=(Get-FileHash -LiteralPath (Join-Path $repo $source)).Hash
         $expected=$m.source_hashes.$source
         if(-not $expected -and (Join-Path $repo $source) -eq (Join-Path $m.gmp_root 'include/gmp.h')){$expected=$m.dependency_hashes.header}
-        if($expected -ne $hash){throw "CUDA dependency changed; normal build required: $source"}
+        if($expected -ne $hash){
+            if(-not $RecompileChangedCuda){throw "CUDA dependency changed; normal build required: $source"}
+            $changed=$true
+        }
         $sourceHashes[$source]=$hash
     }
     $object=Get-EcmObjectPath $entry $worker
     $relative=Get-EcmSourceKey $worker $object
     $hash=(Get-FileHash -LiteralPath $object).Hash
     if($m.objects.$relative -ne $hash){throw "CUDA object changed: $relative"}
-    $reused[$object]=$hash;$objects+=('"'+$object+'"')
+    $reused[$object]=$hash # Verify the original objects remain untouched even when rebuilding.
+    if($changed) {
+        $fresh=Join-Path $output ($key.Replace('/','_')+'.obj')
+        $command=[regex]::Replace([string]$entry.command,'(?<= -o )[^ ]+',('"'+$fresh+'"'))
+        $command=[regex]::Replace($command,' -Xcompiler=-Fd[^ ]+','')
+        $cudaCommands+=('pushd "'+$worker+'"')
+        $cudaCommands+=$command
+        $cudaCommands+='if errorlevel 1 exit /b 1'
+        $cudaCommands+='popd'
+        $rebuilt[$key]=[ordered]@{object=$fresh;command=$command}
+        $objects+=('"'+$fresh+'"')
+    }else{$objects+=('"'+$object+'"')}
+
 }
 $sources=@($all|Where-Object {$_ -notmatch '\.cu$'}|Select-Object -Unique)
-$commands=@()
+$commands=@($cudaCommands)
 foreach($source in $sources) {
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects+=('"'+$object+'"')
     $arch=if($source -match 'simd_|ifma'){ ' /arch:AVX512' }else{''}
@@ -62,7 +81,7 @@ foreach($object in $reused.Keys){if((Get-FileHash -LiteralPath $object).Hash -ne
 foreach($source in $sourceHashes.Keys){if((Get-FileHash -LiteralPath (Join-Path $repo $source)).Hash -ne $sourceHashes[$source]){throw "Source changed during build: $source"}}
 Copy-Item -LiteralPath (Join-Path $m.gmp_root 'bin/gmp-10.dll') -Destination $output
 [ordered]@{complete=$true;worker_manifest_sha256=(Get-FileHash -LiteralPath $manifestPath).Hash;
-    reused_cuda=$reused;source_hashes=$sourceHashes;cuda_compiler_invocations=0;
+    reused_cuda=$reused;rebuilt_cuda=$rebuilt;source_hashes=$sourceHashes;cuda_compiler_invocations=$rebuilt.Count;
     exe_sha256=(Get-FileHash -LiteralPath $exe).Hash}|ConvertTo-Json -Depth 5|
     Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8
-Write-Host "Stage1 overlay built: host=$($sources.Count), verified CUDA=$($reused.Count)"
+Write-Host "Stage1 overlay built: host=$($sources.Count), verified CUDA=$($reused.Count), rebuilt CUDA=$($rebuilt.Count)"

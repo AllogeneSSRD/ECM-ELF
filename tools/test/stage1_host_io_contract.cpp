@@ -42,11 +42,11 @@ int main(int argc,char **argv)try {
     check(!ecm_worktodo_commit_completion(receipt.string(),queue.string(),1,completed,error),"ambiguous recovery must stop");
     const auto save=root/"m0_m7_100.save";put(save,"# old history\n"+point(10)+point(11));
     ecm_save::Range range;
-    {ecm_save::Capture capture;check(ecm_save::publish(save.string(),point(21)+point(20)+point(22),true),"publish append");range=capture.range;}
+    range=ecm_save::publish_batch(save.string(),point(21)+point(20)+point(22),true);
     check(range.valid && range.skip==2 && range.records.size()==3 && ecm_save::record_count(save.string())==5,"actual batch range");
     const auto snapshot=ecm_save::verified_snapshot(range);
     const auto original_range=range;
-    {ecm_save::Capture capture;check(ecm_save::publish(save.string(),point(22)+point(20)+point(21),true),"deduplicated recovery");check(capture.range.skip==2 && capture.range.records==range.records,"recovered range differs");}
+    {const auto recovered=ecm_save::publish_batch(save.string(),point(22)+point(20)+point(21),true);check(recovered.skip==2 && recovered.records==range.records,"recovered range differs");}
     check(get(save)==snapshot,"recovery rewrote history");
     check(!ecm_save::publish(save.string(),point(11)+point(20)+point(30),true) && get(save)==snapshot,"noncontiguous batch must not publish");
     check(ecm_save::record_count((root/"absent.save").string())==0,"missing save count");
@@ -68,7 +68,7 @@ int main(int argc,char **argv)try {
     check(ecm_parse_stage2_line(add,task,error) && fs::equivalent(fs::u8path(task.save_name),target),"P95 task points at local save");
     check(ecm_sync::flush_p95(p95,error) && get(root/"p95/worktodo.add")==add,"P95 replay duplicated task");
     // A later batch extends the target; an old pending snapshot cannot truncate it.
-    {ecm_save::Capture capture;check(ecm_save::publish(save.string(),point(30),true),"second batch");range=capture.range;}
+    range=ecm_save::publish_batch(save.string(),point(30),true);
     handoff="ECMSTAGE2=1,2,7,-1,\""+save.string()+"\",10000,5,1";
     check(ecm_sync::park_p95(p95,handoff,range,error) && ecm_sync::flush_p95(p95,error),"append-only P95 update");
     check(get(target).compare(0,snapshot.size(),snapshot)==0,"published P95 prefix changed");

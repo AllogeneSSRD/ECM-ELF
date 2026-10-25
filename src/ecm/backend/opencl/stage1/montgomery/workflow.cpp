@@ -14,10 +14,13 @@
 
 using namespace ecm_stage1;
 namespace ecm_opencl_stage1 {
-int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
-                           const std::string &savefilename, bool saveappend,
-                           const std::string &n_expr,
-                           ExecutionOptions &opt, ExecutionResult *out) {
+ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &request,ecm_stage1::ExecutionOptions &opt) {
+    const auto N=request.modulus;const auto n=N;
+    const auto B1=request.b1,B2=request.b2,b1=B1,b2=B2;
+    const auto curves=request.curves;
+    const auto &n_expr=request.expression;
+    LegacyExecutionResult raw;auto *out=&raw;
+
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -27,7 +30,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 
     if (curves == 0) {
         std::cerr << "gpucurves must be > 0" << std::endl;
-        return ECM_ERROR;
+        return ecm_stage1::take_computation_result(std::move(raw),ECM_ERROR,ecm_stage1_stop_requested()!=0);
     }
 
     // Setup params.
@@ -68,7 +71,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         std::cerr << "Failed to compute batch_s" << std::endl;
         mpz_clear(batch_s);
         ecm_clear(params);
-        return ECM_ERROR;
+        return ecm_stage1::take_computation_result(std::move(raw),ECM_ERROR,ecm_stage1_stop_requested()!=0);
     }
     mpz_set(params->batch_s, batch_s);
     params->batch_last_B1_used = B1;
@@ -96,18 +99,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             out->prepare_failed = true;
             mpz_clear(batch_s);
             ecm_clear(params);
-            return ECM_ERROR;
-        }
-    }
-
-    std::string resolved_save = savefilename;
-    if (!resolved_save.empty()) {
-        resolved_save = opencl_ecm_resolve_data_path(resolved_save.c_str());
-        if (!opencl_ecm_check_save_file_writable(resolved_save, saveappend)) {
-            out->publish_failed = true;
-            mpz_clear(batch_s);
-            ecm_clear(params);
-            return ECM_ERROR;
+            return ecm_stage1::take_computation_result(std::move(raw),ECM_ERROR,ecm_stage1_stop_requested()!=0);
         }
     }
 
@@ -138,7 +130,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         free(array_found);
         mpz_clear(batch_s);
         ecm_clear(params);
-        return ECM_ERROR;
+        return ecm_stage1::take_computation_result(std::move(raw),ECM_ERROR,ecm_stage1_stop_requested()!=0);
     }
     for(uint32_t i=1;i<curves;++i)ecm_stage1_batch_sigma(i,firstsigma64+i);
     mpz_t batch_d;
@@ -167,47 +159,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 
     std::cout << "GPU stage1 returned: " << ret << " gputime=" << gputime << " ms\n";
     if(ret!=ECM_ERROR)for(uint32_t i=0;i<curves;++i)if(array_found[i]!=ECM_NO_FACTOR_FOUND &&
-        !stage1_publish_factor(opt,N,uint64_t(B1),firstsigma64+i,factors[i])){out->publish_failed=true;ret=ECM_ERROR;break;}
-
-    if (ret != ECM_ERROR && !resolved_save.empty()) {
-        /* All parametrizations save the actual computation modulus. Dividing
-           out factors here would invalidate the stored X and checksum. */
-        const auto n_expr_save=ecm_save_modulus_expression(n_expr,N);
-        bool wrote = false;
-        if (params->gpu_param == 0) {
-            std::vector<uint64_t> sigmas(curves);
-            for (uint32_t i = 0; i < curves; i++) sigmas[i] = firstsigma64 + i;
-            std::vector<int> hit(curves, 0);
-            /* factors[i] holds the normalized x for a miss and the factor for a hit,
-               exactly like the CPU path's xs[] -- and findfactor()/array_found tells
-               us which is which. */
-            for (uint32_t i = 0; i < curves; i++)
-                hit[i] = (array_found[i] != ECM_NO_FACTOR_FOUND) ? 1 : 0;
-            wrote = ecm_append_save_lines_mont(resolved_save, N, B1, sigmas.data(), curves,
-                                               factors, hit.data(), n_expr_save);
-            if (!wrote)
-                std::cerr << "Failed to append param0 save lines into " << resolved_save << std::endl;
-        } else if (params->gpu_param == 2) {
-            /* param2 ("batch 2", 6-torsion): PARAM=2 with the ORIGINAL N for the same
-               checksum reason as param0, and SIGMA = the scalar multiplier sigma0+i the
-               GPU used.  gmp-ecm reads this back with -param 2; Prime95 cannot read it
-               (sigma_type only accepts 0/1/3).  See
-               docs/performance/STAGE1.md */
-            wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
-                                                 n_expr_save, 2);
-            if (!wrote)
-                std::cerr << "Failed to append param2 save lines into " << resolved_save << std::endl;
-        } else {
-            wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
-                                                 n_expr_save);
-            if (!wrote)
-                std::cerr << "Failed to append GPU save lines into " << resolved_save << std::endl;
-        }
-        if (!wrote) {
-            out->publish_failed = true;
-            ret = ECM_ERROR;
-        }
-    }
+        !validate_stage1_factor(N,factors[i])){out->publish_failed=true;ret=ECM_ERROR;break;}
 
     mpz_clear(batch_d);
     mpz_clear(batch_s);
@@ -224,6 +176,6 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     if (out->sigmas != nullptr) {
         for (uint32_t i = 0; i < curves; i++) out->sigmas[i] = firstsigma64 + i;
     }
-    return ret;
+    return ecm_stage1::take_computation_result(std::move(raw),ret,ecm_stage1_stop_requested()!=0);
 }
 }

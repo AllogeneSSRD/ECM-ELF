@@ -1289,9 +1289,7 @@ cleanup:
     free(s_bits);
     free(data);
 
-    if (youpi != ECM_ERROR && opencl_ecm_checkpoint_remove(ckpt_filename) == 0) {
-        ocl_log_verbose(verbose, "Checkpoint file removed\n");
-    }
+    // Task owns completed checkpoint cleanup after final publication.
 
     *sigma_ptr = sigma;
     return youpi;

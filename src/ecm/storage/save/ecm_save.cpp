@@ -29,14 +29,14 @@ namespace {
 constexpr unsigned long CHKSUMMOD = 4294967291UL;
 
 std::string mpz_to_dec_string(const mpz_t v) {
-    char *s = mpz_get_str(nullptr, 10, v);
+    char* s = mpz_get_str(nullptr, 10, v);
     std::string out = s ? s : "";
     free(s);
     return out;
 }
 
 std::string build_who_field() {
-    const char *uname = std::getenv("LOGNAME");
+    const char* uname = std::getenv("LOGNAME");
     if (!uname || !*uname) {
         uname = std::getenv("USERNAME");
     }
@@ -64,12 +64,11 @@ std::string build_who_field() {
 
 } // namespace
 
-std::string opencl_ecm_resolve_data_path(const char *path) {
+std::string opencl_ecm_resolve_data_path(const char* path) {
     return opencl_ecm_resolve_data_path_buf(path);
 }
 
-
-bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool saveappend) {
+bool opencl_ecm_check_save_file_writable(const std::string& savefilename, bool saveappend) {
     if (savefilename.empty()) {
         return false;
     }
@@ -79,18 +78,17 @@ bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool s
         return false;
     }
     if (!opencl_ecm_ensure_parent_dir(savefilename.c_str())) {
-        ecm_ts_fprintf(stderr, "Could not create parent directory for %s\n",
-                       savefilename.c_str());
+        ecm_ts_fprintf(stderr, "Could not create parent directory for %s\n", savefilename.c_str());
         return false;
     }
-    FILE *savefile = fopen(savefilename.c_str(), "a");
+    FILE* savefile = fopen(savefilename.c_str(), "a");
     if (savefile == nullptr) {
         ecm_ts_fprintf(stderr, "Could not open file %s for writing\n", savefilename.c_str());
         return false;
     }
     fclose(savefile);
     if (!saveappend) {
-        struct stat st {};
+        struct stat st{};
         if (stat(savefilename.c_str(), &st) != 0 || st.st_size != 0) {
             ecm_ts_fprintf(stderr, "Save file %s initialization failed\n", savefilename.c_str());
             return false;
@@ -103,131 +101,67 @@ bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool s
     return true;
 }
 
-std::string ecm_save_modulus_expression(const std::string &original_expr,const mpz_t N) {
+std::string ecm_save_modulus_expression(const std::string& original_expr, const mpz_t N) {
     // X and CHECKSUM were computed modulo N. The published expression must
     // describe that same modulus even when this batch found a factor.
-    return original_expr.empty()?mpz_to_dec_string(N):original_expr;
+    return original_expr.empty() ? mpz_to_dec_string(N) : original_expr;
 }
 
-bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N, double B1,
-                                  uint32_t firstsigma, uint32_t curves, mpz_t *factors,
-                                  const std::string &n_expr_save, int param_id) {
-    if (!opencl_ecm_ensure_parent_dir(savefilename.c_str())) {
-        ecm_ts_fprintf(stderr, "Could not create parent directory for %s\n",
-                       savefilename.c_str());
-        return false;
-    }
+std::string ecm_encode_mont_save(mpz_srcptr n, double b1, int param,
+                                 const std::vector<EcmSavePoint>& points,
+                                 const std::string& expression) {
     std::ostringstream out;
-
-    mpz_t sigma_mpz, checksum;
-    mpz_init(sigma_mpz);
-    mpz_init(checksum);
-
-    const time_t t = std::time(nullptr);
+    ecm_edwards::Integer sigma, checksum;
+    const auto now = std::time(nullptr);
     char timebuf[128] = {0};
-    const tm *lt = std::localtime(&t);
-    if (lt) {
-        std::strftime(timebuf, sizeof(timebuf), "%a %b %d %H:%M:%S %Y", lt);
+    if (const auto* local = std::localtime(&now))
+        std::strftime(timebuf, sizeof(timebuf), "%a %b %d %H:%M:%S %Y", local);
+    const auto who = build_who_field();
+    for (const auto& point : points) {
+        // unsigned long is only 32 bits on Windows; retain the full sigma.
+        mpz_set_ui(sigma.v, static_cast<unsigned long>(point.sigma >> 32));
+        mpz_mul_2exp(sigma.v, sigma.v, 32);
+        mpz_add_ui(sigma.v, sigma.v, static_cast<unsigned long>(point.sigma & 0xffffffffull));
+        mpz_set_d(checksum.v, b1);
+        mpz_mul_ui(checksum.v, checksum.v, mpz_fdiv_ui(sigma.v, CHKSUMMOD));
+        mpz_mul_ui(checksum.v, checksum.v, mpz_fdiv_ui(n, CHKSUMMOD));
+        mpz_mul_ui(checksum.v, checksum.v, mpz_fdiv_ui(point.value, CHKSUMMOD));
+        mpz_mul_ui(checksum.v, checksum.v, static_cast<unsigned long>(param + 1) % CHKSUMMOD);
+        out << "METHOD=ECM";
+        if (param)
+            out << "; PARAM=" << param;
+        out << "; SIGMA=" << mpz_to_dec_string(sigma.v) << "; B1=" << std::llround(b1)
+            << "; N=" << expression << "; X=0x" << ecm_edwards::hex(point.value)
+            << "; CHECKSUM=" << mpz_fdiv_ui(checksum.v, CHKSUMMOD)
+            << "; PROGRAM=" << ecm_program::name << "; X0=0x0; Y0=0x0;"
+            << (who.empty() ? "" : " WHO=" + who + ";") << " TIME=" << timebuf << ";\n";
     }
-    const std::string who = build_who_field();
+    return out.str();
+}
 
-    for (uint32_t i = 0; i < curves; ++i) {
-        mpz_set_ui(sigma_mpz, firstsigma + i);
-        mpz_set_d(checksum, B1);
-        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(sigma_mpz, CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(N, CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(factors[i], CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, (unsigned long)(param_id + 1) % CHKSUMMOD);
-        const unsigned long csum = mpz_fdiv_ui(checksum, CHKSUMMOD);
-
-        char *sigma_dec = mpz_get_str(nullptr, 10, sigma_mpz);
-        char *x_hex = mpz_get_str(nullptr, 16, factors[i]);
-
-        out << "METHOD=ECM; PARAM=" << param_id
-            << "; SIGMA=" << sigma_dec
-            << "; B1=" << std::llround(B1)
-            << "; N=" << n_expr_save
-            << "; X=0x" << x_hex
-            << "; CHECKSUM=" << csum
-            << "; PROGRAM=" << ecm_program::name << ";"
-            << " X0=0x0; Y0=0x0;"
-            << (who.empty() ? "" : (" WHO=" + who + ";"))
-            << " TIME=" << timebuf << ";"
-            << "\n";
-
-        free(sigma_dec);
-        free(x_hex);
-    }
-
-    mpz_clear(sigma_mpz);
-    mpz_clear(checksum);
-    if(!ecm_edwards::publish_save(savefilename,out.str(),true))return false;
-    ecm_ts_fprintf(stdout, "Saved %u curve line(s) to %s\n", curves, savefilename.c_str());
+bool opencl_ecm_append_save_lines(const std::string& path, const mpz_t n, double b1, uint32_t first,
+                                  uint32_t count, mpz_t* values, const std::string& expression,
+                                  int param) {
+    std::vector<EcmSavePoint> points;
+    points.reserve(count);
+    for (uint32_t i = 0; i < count; ++i)
+        points.push_back({uint64_t(first) + i, values[i]});
+    if (!ecm_save::publish(path, ecm_encode_mont_save(n, b1, param, points, expression), true))
+        return false;
+    ecm_ts_fprintf(stdout, "Saved %u curve line(s) to %s\n", count, path.c_str());
     return true;
 }
 
-/* ---------------------------------------------------------------------------
- * Suyama-sigma Montgomery (gmp-ecm -param 0) save lines.
- *
- * Field family is the same one the param3 writer above uses; the three
- * differences are documented in ecm_save.h.  SIGMA is 64-bit, so it cannot go
- * through mpz_set_ui (unsigned long is 32-bit on Windows) -- it is assembled
- * from two halves instead.
- * ------------------------------------------------------------------------- */
-bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, double B1,
-                                const uint64_t *sigmas, uint32_t curves, const mpz_t *xs,
-                                const int *hit, const std::string &n_expr_save)
-{
-    std::ostringstream out;
-
-    mpz_t sigma_mpz, checksum;
-    mpz_init(sigma_mpz);
-    mpz_init(checksum);
-
-    const time_t t = std::time(nullptr);
-    char timebuf[128] = {0};
-    const tm *lt = std::localtime(&t);
-    if (lt) std::strftime(timebuf, sizeof(timebuf), "%a %b %d %H:%M:%S %Y", lt);
-    const std::string who = build_who_field();
-
-    for (uint32_t i = 0; i < curves; ++i) {
-        /* the curve's own sigma, assembled for 64-bit safety (Windows'
-           mpz_set_ui takes a 32-bit unsigned long) */
-        mpz_set_ui(sigma_mpz, (unsigned long)(sigmas[i] >> 32));
-        mpz_mul_2exp(sigma_mpz, sigma_mpz, 32);
-        mpz_add_ui(sigma_mpz, sigma_mpz, (unsigned long)(sigmas[i] & 0xFFFFFFFFull));
-
-        mpz_set_d(checksum, B1);
-        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(sigma_mpz, CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(N, CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(xs[i], CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, 1 % CHKSUMMOD);      /* param 0 -> (param+1) = 1 */
-        const unsigned long csum = mpz_fdiv_ui(checksum, CHKSUMMOD);
-
-        char *sigma_dec = mpz_get_str(nullptr, 10, sigma_mpz);
-        char *x_hex = mpz_get_str(nullptr, 16, xs[i]);
-
-        out << "METHOD=ECM"
-            << "; SIGMA=" << sigma_dec
-            << "; B1=" << std::llround(B1)
-            << "; N=" << n_expr_save
-            << "; X=0x" << x_hex
-            << "; CHECKSUM=" << csum
-            << "; PROGRAM=" << ecm_program::name << ";"
-            << " X0=0x0; Y0=0x0;"
-            << (who.empty() ? "" : (" WHO=" + who + ";"))
-            << " TIME=" << timebuf << ";"
-            << "\n";
-
-        free(sigma_dec);
-        free(x_hex);
-        (void)hit;   /* callers already put the factor into xs[i] for hit curves */
-    }
-
-    mpz_clear(sigma_mpz);
-    mpz_clear(checksum);
-    if(!ecm_edwards::publish_save(savefilename,out.str(),true))return false;
-    ecm_ts_fprintf(stdout, "Saved %u Montgomery curve line(s) to %s\n", curves,
-                   savefilename.c_str());
+bool ecm_append_save_lines_mont(const std::string& path, const mpz_t n, double b1,
+                                const uint64_t* sigmas, uint32_t count, const mpz_t* values,
+                                const int* hit, const std::string& expression) {
+    std::vector<EcmSavePoint> points;
+    points.reserve(count);
+    for (uint32_t i = 0; i < count; ++i)
+        points.push_back({sigmas[i], values[i]});
+    (void)hit;
+    if (!ecm_save::publish(path, ecm_encode_mont_save(n, b1, 0, points, expression), true))
+        return false;
+    ecm_ts_fprintf(stdout, "Saved %u Montgomery curve line(s) to %s\n", count, path.c_str());
     return true;
 }

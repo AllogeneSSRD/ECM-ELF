@@ -1,6 +1,6 @@
 # Save：Stage1 完成点、文本格式与交接
 
-本文是当前 save 的格式与发布说明。曲线内状态及 Stage2 队列进度另见 [CHECKPOINT](CHECKPOINT.md)。操作入口见 [Stage1](../usage/STAGE1.md)、[CUDA Stage2](../usage/STAGE2.md)、[CPU Edwards Stage2](../usage/EDWARDS_CPU_STAGE2.md)；配置默认值和范围见 [TOML 参考](../ECM_TOML_REFERENCE.md)。
+本文是当前 save 的格式与发布说明。最终save由Stage1 task统一组织，后端返回拥有的点、因子或无点结果；编码器生成文本，发布器显式返回连续Range，task再发布最终结果。曲线内状态及 Stage2 队列进度另见 [CHECKPOINT](CHECKPOINT.md)。操作入口见 [Stage1](../usage/STAGE1.md)、[CUDA Stage2](../usage/STAGE2.md)、[CPU Edwards Stage2](../usage/EDWARDS_CPU_STAGE2.md)；配置默认值和范围见 [TOML 参考](../ECM_TOML_REFERENCE.md)。
 
 ## 1. Save 保存的是什么
 
@@ -138,8 +138,8 @@ CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且
 
 ### 6.1 一次发布的步骤
 
-1. 生成本批各条文本记录；CPU/GPU 输出都使用普通域值。
-2. 可写性预检检查目录和目标策略。`-save` 避免覆盖已有文件；`-savea`/队列允许追加。具体分支也可能在算术结束时才执行发布检查。
+1. task在计算前检查目标目录、结果文件和保存策略。`-save` 拒绝启动时已有的文件；`-savea`/队列允许追加。预检不持有整个计算期间的文件锁。
+2. 后端返回拥有的普通域点/因子/无点结果，task调用编码器生成本批文本。发布时重新读取最新历史，保留计算期间其他发布者已追加的记录；不以预检时的快照覆盖文件。
 3. 持有目标文件的短时跨进程发布锁，读取旧字节和记录键。
 4. 原生 ECM save 新批次按 uint64 sigma 排序，再追加尚未出现的新记录；旧历史保持顺序。确认本批去重后仍为连续区间。此排序不适用于借用发布函数的 CPU Stage2 JSONL。
 5. 在同目录写临时文件并持久化，再原子替换目标；返回实际路径、skip 和记录身份。此路径不轮换 checkpoint 的 `.bak.save`。

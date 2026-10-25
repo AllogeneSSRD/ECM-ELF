@@ -1,4 +1,5 @@
 #include "checkpoint.h"
+#include "construction.h"
 #include "../../runtime/cuda_ecm_shim.h"
 #include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include <cstring>
@@ -20,7 +21,7 @@ std::string checkpoint_record() {
 /**
  * Save checkpoint to file
  */
-int save_checkpoint(const char *filename,
+bool save_checkpoint(const char *filename,
                     const checkpoint_header_t *header,
                     const uint32_t *data,
                     size_t data_size) {
@@ -29,11 +30,11 @@ int save_checkpoint(const char *filename,
   std::string bytes(reinterpret_cast<const char *>(header),sizeof(*header));
   bytes.append(reinterpret_cast<const char *>(data),data_size);
   bytes.append(reinterpret_cast<const char *>(&sum),sizeof(sum));
-  if(!ecm_stage1_write_blob(filename,bytes))return ECM_ERROR;
+  if(!ecm_stage1_write_blob(filename,bytes))return false;
   outputf(OUTPUT_VERBOSE, "Checkpoint saved: s_partial=%lu/%lu (%.1f%%)\n",
           header->s_partial, header->s_num_bits,
           100.0 * header->s_partial / header->s_num_bits);
-  return ECM_NO_FACTOR_FOUND;
+  return true;
 }
 
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &bytes,mpz_srcptr n,
@@ -41,6 +42,8 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &bytes,
     std::vector<uint32_t> &data) {
   using namespace ecm_stage1_checkpoint;
   if(bytes.size()<sizeof(header)+sizeof(uint64_t))return {RestoreState::Corrupt,"short Montgomery checkpoint"};
+  if(param!=0 && param!=2 && param!=3)return {RestoreState::Incompatible,"unsupported Montgomery parametrization"};
+  const auto layout=ladder_construction(param);
   checkpoint_header_t h;memcpy(&h,bytes.data(),sizeof(h));
   if(h.magic!=CHECKPOINT_MAGIC || h.version!=CHECKPOINT_VERSION ||
      !h.data_size || h.data_size!=bytes.size()-sizeof(h)-sizeof(uint64_t))
@@ -52,14 +55,14 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &bytes,
       return {RestoreState::Incompatible,"Montgomery checkpoint request mismatch"};
   if(h.BITS<mpz_sizeinbase(n,2)+6 || h.BITS>16384 || h.BITS%32 ||
      (h.TPI!=4 && h.TPI!=8 && h.TPI!=16 && h.TPI!=32) ||
-     h.data_size!=uint64_t(param==3?5:7)*curves*(h.BITS/8) ||
+     h.data_size!=uint64_t(layout.words)*curves*(h.BITS/8) ||
      !h.s_partial || h.s_partial>scalar_bits || h.batches_complete<0 ||
      h.sigma>UINT64_MAX-(curves-1ull) ||
      (param!=0 && (h.sigma>UINT32_MAX || curves>0x100000000ull-h.sigma)))
       return {RestoreState::Corrupt,"invalid Montgomery geometry, cursor or sigma"};
   std::vector<uint32_t> decoded(h.data_size/sizeof(uint32_t));
   memcpy(decoded.data(),bytes.data()+sizeof(h),h.data_size);
-  const uint32_t words=param==3?5:7,limbs=h.BITS/32;
+  const uint32_t words=layout.words,limbs=h.BITS/32;
   mpz_t value;mpz_init(value);bool valid=true;
   for(uint32_t i=0;i<curves && valid;++i)for(uint32_t j=0;j<words;++j) {
       mpz_import(value,limbs,-1,sizeof(uint32_t),0,0,decoded.data()+(size_t(i)*words+j)*limbs);

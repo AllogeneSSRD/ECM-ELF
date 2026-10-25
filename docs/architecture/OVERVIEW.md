@@ -70,11 +70,11 @@ src/ecm/
 
 顶层按职责，后端内部按技术再按曲线。CPU/CUDA/OpenCL 分别实现实际支持的曲线组合；没有统一所有点运算的虚函数层。算法差异、状态域、实例和 checkpoint 载荷仍属于具体后端。普通 CXX 的主机数学、文件编码和显示可独立修改；实际 CUDA 分配、发射、同步和回读继续依赖 CUDA。
 
-main → 解析三个来源 → normalize → task → 唯一执行分派 → 完整后端流程。`src/io/cli.cpp` 保留显式选项和值的位置，不更改运行时单例、缓存或文件；`config.cpp` 读取带来源位置的配置，生成默认值和覆盖顺序在归一化时应用。共享 TOML 文法位于 `config_format.h`，供 GUI 的保真编辑和 Stage2 使用。`worktodo.cpp` 集中读取、CSV/worker 解析、选择、编辑锁、首条同文匹配、原子改写及完成恢复。
+main → 解析三个来源 → normalize → main选择当前任务入口 → task直接调用完整后端流程。`src/io/cli.cpp` 保留显式选项和值的位置，不更改运行时单例、缓存或文件；`config.cpp` 读取带来源位置的配置，生成默认值和覆盖顺序在归一化时应用。共享 TOML 文法位于 `config_format.h`，供 GUI 的保真编辑和 Stage2 使用。`worktodo.cpp` 集中读取、CSV/worker 解析、选择、编辑锁、首条同文匹配、原子改写及完成恢复。
 
-队列只有 worktodo 一个来源。main 持有 worker 消费租约，计算期间不持有队列编辑锁；每次完成重新读取文件，按当前 worker 中第一条完全相同的任务匹配，不依赖旧行号。`normalize_worktodo()` 将两种 Stage1 语法归一化为拥有 N、字符串和选项的 `NormalizedStage1Task`；该对象冻结当前任务，main 不再分别组装两种格式的参数。
+队列只有 worktodo 一个来源。main 持有 worker 消费租约，计算期间不持有队列编辑锁；每次完成重新读取文件，按当前 worker 中第一条完全相同的任务匹配，不依赖旧行号。`normalize_direct()`与`normalize_worktodo()`将CLI/stdin和两种worktodo语法收口为拥有N、字符串和选项的`NormalizedStage1Task`；main在归一化后不再补写计算字段。队列票据、原行和交接文本独立保存在`WorktodoStage1Task`，不会进入计算请求。
 
-`Stage1Request` 借用规范化输入至同步调用结束，`TaskResult` 拥有逐曲线结果及实际保存范围。保存 Module 在短文件锁内发布并确认 METHOD 记录区间，完成时强制重读；历史追加、去重或恢复不能用“末尾总数减请求数”代替区间证明。队列成功任务保留 checkpoint 至完成记录与源行提交成功；中断的完成记录优先恢复，无法判断队列提交版本时停止并保留证据。
+`Stage1Request` 借用规范化输入至同步调用结束，`TaskResult` 拥有逐曲线结果及实际保存范围。task调用保存Module编码最终批次，并由发布器在短文件锁内显式返回已提交的METHOD记录区间，完成时强制重读；历史追加、去重或恢复不能用“末尾总数减请求数”代替区间证明。队列成功任务保留 checkpoint 至完成记录与源行提交成功；中断的完成记录优先恢复，无法判断队列提交版本时停止并保留证据。
 
 日志镜像的寿命和外部日志逐行读取由日志 Module 管理，P95 业务解释仍由同步代码负责。`save_sync_dir_1/2` 是独立备份；P95 使用 `p95_sync_dir`，先持久记录交接责任，再验证和发布目标 save，最后发布 worktodo.add。跨进程消费确认的限制和恢复方式见 [Stage1 使用说明](../usage/STAGE1.md#prime95-持久交接)。Stage2 的父任务与曲线子进程职责保持，见 [Stage2](STAGE2.md#父任务与曲线子进程)。
 
@@ -85,7 +85,8 @@ main → 解析三个来源 → normalize → task → 唯一执行分派 → �
 | 入口 | 输入与寿命 | 输出与副作用 |
 | --- | --- | --- |
 | `run_stage1_task` | Stage1Request借用N、B1/B2、曲线数、save/表达式与已解析选项至同步返回；三个私有依赖回调 | TaskResult独立拥有逐曲线结果和失败来源/旧返回码；任务内发布、seal及批次清理 |
-| `execute_stage1`（私有） | 已解析执行选项、N/界限、曲线批量、命名；可写执行结果 | 选择一次完整CPU/GPU流程，准备/恢复/安全点协作后填充结果；不重复最终task发布 |
+| `select_stage1_entry`（私有） | 当前任务的已归一化Selection | 只返回普通函数入口，无设备操作；task直接调用 |
+| `run_mont_stage1` / `run_edwards_stage1`（私有） | 同步Stage1Request与执行副本 | 拥有的ComputationResult；计算与checkpoint安全点，最终文件由task发布 |
 | `run_worktodo`（main 私有） | CLI 显式输入、配置快照、唯一 worktodo；逐任务拥有归一化输入 | 唯一任务循环、完成记录、finished、源行推进及交接；没有 source 回调层 |
 | `run_tasks` / `curve_worker`（私有） | 已解析Options和窄路径/队列/默认值；worker重读save/hash | 父任务进度、曲线结果、receipt和退出状态；校准共用同一请求投影 |
 | `run_curve_process` | 拥有协议字段的CurveProcessRequest；同步selection通知，不保留调用方引用 | 0/3/1退出状态及输出转送；资源/I/O/停止异常向调用方传播，清理本机句柄 |

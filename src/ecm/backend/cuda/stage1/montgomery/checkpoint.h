@@ -19,7 +19,7 @@ typedef struct {
   uint64_t sigma;            // Starting sigma (full 64 bits since v4)
   uint32_t BITS;             // Kernel bit size
   uint32_t TPI;              // Threads per instance (needed for kernel selection)
-  uint32_t gpu_param;        // 3 = batch parametrization, 0 = Suyama param0
+  uint32_t gpu_param;        // 0 = Suyama, 2 = batch-2, 3 = batch
   uint32_t reserved;         // padding, keeps data_size 8-byte aligned
   size_t data_size;          // Size of GPU data
   time_t timestamp;          // When checkpoint was created
@@ -30,7 +30,7 @@ struct ResidentCheckpoint {
 };
 
 std::string checkpoint_record();
-int save_checkpoint(const char *,const checkpoint_header_t *,const uint32_t *,size_t);
+bool save_checkpoint(const char *,const checkpoint_header_t *,const uint32_t *,size_t);
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_srcptr,
     uint64_t scalar_bits,uint32_t curves,uint32_t param,checkpoint_header_t &,std::vector<uint32_t> &);
 #if ECM_CUDA_ENABLE_PRAC

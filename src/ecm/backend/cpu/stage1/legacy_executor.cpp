@@ -60,8 +60,8 @@
 namespace ecm_cpu_stage1 {
 using ecm_stage1::Stage1Options;
 using ecm_stage1::ExecutionOptions;
-using ecm_stage1::ExecutionResult;
-using ecm_stage1::stage1_publish_factor;
+using ecm_stage1::LegacyExecutionResult;
+using ecm_stage1::validate_stage1_factor;
 using ecm_stage1::compute_batch_s;
 using ecm_stage1::random_sigma_u64;
 using ecm_stage1::mont_format_save_name;
@@ -578,7 +578,7 @@ static int edwards_run_batch_simd_impl(const ExecutionOptions &opt, mpz_srcptr N
             const int rc=edwards_run_one_curve(N,s,opt,B1,B2,i,sigmas[i],opt.stage1_curves,factors[i],path,save_lines[i]);
             if(rc==2 || rc<0)return rc;
             array_found[i]=rc==1?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
-            if(rc==1 && !stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i]))return ECM_ERROR;
+            if(rc==1 && !validate_stage1_factor(N,factors[i]))return ECM_ERROR;
             if(done_ctr)done_ctr->fetch_add(1,std::memory_order_relaxed);
         }
         return 0;
@@ -699,7 +699,7 @@ static int edwards_run_batch_simd_impl(const ExecutionOptions &opt, mpz_srcptr N
         if (mpz_cmp_ui(fac[k], 1) > 0) {
             mpz_set(factors[i], fac[k]);
             array_found[i] = ECM_FACTOR_FOUND_STEP1;
-            if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i]))rc=ECM_ERROR;
+            if(!validate_stage1_factor(N,factors[i]))rc=ECM_ERROR;
             std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
             ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
                            i, (unsigned long long)sigmas[i]);
@@ -755,7 +755,7 @@ static void edwards_worker(EdwardsWorkerCtx *ctx) {
                                                  ctx->factors[i], ctx->ckpt_paths[i],ctx->save_lines[i]);
             if (rc == 1) {
                 ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
-                if(!stage1_publish_factor(*ctx->opt,ctx->N,uint64_t(ctx->B1),sigma,ctx->factors[i])){ctx->aborted->store(1);break;}
+                if(!validate_stage1_factor(ctx->N,ctx->factors[i])){ctx->aborted->store(1);break;}
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
                 if (ctx->opt->execution.verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigma
@@ -832,10 +832,10 @@ static void apply_thread_affinity(const std::vector<unsigned> &, uint32_t) {}
 
 // curves == 1 or opt.execution.stage1_threads == 1 -> 顺序执行 (与历史行为一致);
 // 否则按曲线并行 (每线程独立曲线, 动态取号), 吞吐随核数线性提升.
-int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
+static int compute_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                               const std::string &savefilename, bool saveappend,
                               const std::string &n_expr,
-                              ExecutionOptions &opt, ExecutionResult *out) {
+                              ExecutionOptions &opt, LegacyExecutionResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->publish_failed = false;
@@ -955,7 +955,7 @@ int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                                                  factors[i], ckpt_paths[i],save_lines[i]);
             if (rc == 1) {
                 array_found[i] = ECM_FACTOR_FOUND_STEP1;
-                if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i])){aborted=true;break;}
+                if(!validate_stage1_factor(N,factors[i])){aborted=true;break;}
                 if (opt.execution.verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigmas[i]
                               << " -> factor found" << std::endl;
@@ -1061,19 +1061,20 @@ int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         return ECM_ERROR;
     }
 
-    const auto stem=mont_format_save_name(opt.persistence.save_name_pattern,N,B1,&opt);
-    const auto save=savefilename.empty()?(opt.persistence.tmp_dir.empty()?std::string{}:opt.persistence.tmp_dir+"/")+stem:savefilename;
-    std::string lines;for(const auto &line:save_lines)lines+=line;
-    if(!ecm_edwards::publish_save(save,lines,saveappend)) {
-        out->publish_failed=true;out->ret=ECM_ERROR;
-        ecm_ts_fprintf(stderr,"ERROR: cannot publish Edwards save %s\n",save.c_str());
-        mpz_clear(s);for(uint32_t i=0;i<curves;++i)mpz_clear(factors[i]);free(factors);free(array_found);return ECM_ERROR;
-    }
-    for(const auto &path:ckpt_paths)if(!path.empty())ecm_stage1_remove_checkpoints(path);
-    ecm_ts_fprintf(stdout,"Edwards Stage1 save: %s (%u attempted curves)\n",save.c_str(),curves);
-    (void)n_expr;
-
+    // DONE_V1 is compatibility checkpoint material, never final publication.
+    // Decode its normalized value before transferring ownership to task.
     mpz_clear(s);
+    out->factors=factors;out->array_found=array_found;
+    out->curve_kinds.assign(curves,LegacyExecutionResult::CurveKind::CompletedWithoutPoint);
+    for(uint32_t i=0;i<curves;++i) {
+        if(save_lines[i].empty())continue;
+        ecm_save::Range candidate;candidate.valid=true;candidate.records={save_lines[i]};
+        ecm_save::validate_batch(candidate,N,uint64_t(B1),-1,{sigmas[i]});
+        const auto at=save_lines[i].find("X=")+2,end=save_lines[i].find(';',at);
+        if(mpz_set_str(factors[i],save_lines[i].substr(at,end-at).c_str(),0))throw std::runtime_error("invalid completed Edwards point");
+        out->curve_kinds[i]=array_found[i]==ECM_NO_FACTOR_FOUND?LegacyExecutionResult::CurveKind::Stage2Point:LegacyExecutionResult::CurveKind::Factor;
+    }
+    (void)savefilename;(void)saveappend;(void)n_expr;
 
     out->ret = ECM_NO_FACTOR_FOUND;
     out->firstsigma = (uint32_t)(firstsigma & 0xFFFFFFFFu);
@@ -1204,10 +1205,10 @@ static int mont_progress_cb_scalar(void *p, const mont_ladder_state_t *st)
     return mont_progress_cb(p, st->bitnum);
 }
 
-int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
+static int compute_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           ExecutionOptions &opt, ExecutionResult *out) {
+                           ExecutionOptions &opt, LegacyExecutionResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -1554,7 +1555,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                         mpz_set(xs[c], bg[k]);
                         hit[c] = 1;
                         local++;
-                        if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[c],factors[c]))checkpoint_failed.store(1);
+                        if(!validate_stage1_factor(N,factors[c]))checkpoint_failed.store(1);
                     } else {
                         mpz_set(xs[c], bx[k]);
                     }
@@ -1669,7 +1670,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                     mpz_set(xs[c], g);
                     hit[c] = 1;
                     found_atomic.fetch_add(1);
-                    if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[c],factors[c]))checkpoint_failed.store(1);
+                    if(!validate_stage1_factor(N,factors[c]))checkpoint_failed.store(1);
                 } else {
                     mpz_set(xs[c], x);
                 }
@@ -1751,31 +1752,13 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            i, (unsigned long long)sigmas[i]);
     }
 
-    /* ONE shared save file for the whole task (same N, same B1), named with the
-       CUDA/GPU convention: m{n}_{b1}.save */
-    bool save_failed = false;
-    if (use_ckpt || !savefilename.empty()) {
-        const std::string fname = mont_format_save_name(opt.persistence.save_name_pattern, N, B1,&opt);
-        const std::string path = savefilename.empty()?opt.persistence.tmp_dir+"/"+fname:
-            opencl_ecm_resolve_data_path_buf(savefilename.c_str());
-        if(!savefilename.empty() && !opencl_ecm_check_save_file_writable(path,saveappend))save_failed=true;
-        if(!save_failed)save_failed = !ecm_append_save_lines_mont(
-            path, N, B1, sigmas.data(), curves, xs.data(), hit,
-            n_expr.empty() ? std::to_string(mpz_sizeinbase(N, 2)) : n_expr);
-        if (save_failed) {
-            ecm_ts_fprintf(stderr, "ERROR: could not publish Montgomery save %s\n", path.c_str());
-        } else {
-            ecm_ts_fprintf(stdout, "  save            : %s (%u curve lines, shared)\n",
-                           path.c_str(), curves);
-        }
-        /* The .save above is now the durable artifact (and the interoperable one),
-           so the resume scratch files are no longer needed: dropping them makes a
-           repeated run a fresh run instead of an instant replay of this one. */
-        if (!save_failed) {
-            for (uint32_t i = 0; i < curves; i++)
-                mont_ckpt_remove(mont_ckpt_path(ckpt_stem, i));
-        }
+    // Move normalized points/factors out before releasing CPU worker storage.
+    out->curve_kinds.resize(curves);
+    for(uint32_t i=0;i<curves;++i) {
+        mpz_swap(factors[i],xs[i]);
+        out->curve_kinds[i]=hit[i]?LegacyExecutionResult::CurveKind::Factor:LegacyExecutionResult::CurveKind::Stage2Point;
     }
+    (void)savefilename;(void)saveappend;(void)n_expr;
 
     if (n_done_ck || n_inflight_ck) {
         ecm_ts_fprintf(stdout, "  resumed from checkpoint: %u curve(s) already done, %u mid-ladder\n",
@@ -1788,13 +1771,23 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     free(hit);
     mpz_clear(s);
 
-    out->ret = save_failed ? ECM_ERROR :
-               (found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND);
-    out->publish_failed = save_failed;
+    out->ret = found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
     out->factors = factors;
     out->array_found = array_found;
     return out->ret;
 }
 
+
+// Compatibility seam for legacy CPU workers: arrays and flags end here.
+ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r,ExecutionOptions &options) {
+    LegacyExecutionResult raw;
+    const int code=compute_mont_stage1(r.modulus,r.b1,r.b2,r.curves,r.save_file,r.append_save,r.expression,options,&raw);
+    return ecm_stage1::take_computation_result(std::move(raw),code,ecm_stage1_stop_requested()!=0);
+}
+ecm_stage1::ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request &r,ExecutionOptions &options) {
+    LegacyExecutionResult raw;
+    const int code=compute_edwards_stage1(r.modulus,r.b1,r.b2,r.curves,r.save_file,r.append_save,r.expression,options,&raw);
+    return ecm_stage1::take_computation_result(std::move(raw),code,ecm_stage1_stop_requested()!=0);
+}
 
 } // namespace ecm_cpu_stage1

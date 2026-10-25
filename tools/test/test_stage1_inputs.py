@@ -57,7 +57,7 @@ def main():
         try:
             for line in proc.stdout:
                 lines.append(line);now=time.perf_counter()-start
-                if 'Saved ' in line and 'curve line(s)' in line or 'Edwards Stage1 save:' in line:events['save']=now
+                if 'Saved ' in line and 'curve line(s)' in line or 'Edwards Stage1 save:' in line or 'Stage1 save:' in line:events['save']=now
                 if 'Stage1 results:' in line:events['result']=now
                 if 'Stage1 save range:' in line:events['range']=now
                 if 'queue done' in line:events['queue_done']=now

@@ -29,6 +29,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "host_math.h"
 #include "runtime.h"
 #include "checkpoint.h"
+#include "construction.h"
 #include "output.h"
 #include "host_policy.h"
 using namespace ecm_cuda_mont_host;
@@ -146,11 +147,12 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
    * NOTE: the selector arrives from the driver (ini gpu_param / CLI --gpu-param);
    * see docs/architecture/STAGE1.md.
    * ------------------------------------------------------------------------- */
-  const bool param0 = (gpu_param == 0);
+  const auto layout=ladder_construction(uint32_t(gpu_param));
+  const bool param0 = layout.full_sigma;
   const bool param2 = (gpu_param == 2);
   /* param0 and param2 share the 7-word Suyama buffer layout and kernel family shape
      (they differ only in the step variant the family instantiates). */
-  const bool suyama_layout = param0 || param2;
+  const bool suyama_layout = layout.words==7;
   /* sigma64 is the authoritative curve index (Suyama param0 uses a full 64-bit
      sigma, like the CPU path); the batch parametrizations carry a 32-bit parameter
      (param3: d = sigma/2^32; param2: the scalar multiplier sigma itself). */
@@ -430,12 +432,12 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   /* Buffer layout of this run: 5 words/curve for param3 (N, aX, aZ, bX, bZ) and
      7 for param0 (N, a24, xdiff, aX, aZ, bX, bZ).  Derived, not hard-coded, so a
      checkpoint resume is validated against it in both directions. */
-  const uint32_t words_per_curve = suyama_layout ? 7u : 5u;
+  const uint32_t words_per_curve = layout.words;
   /* param0 AND param2 use the 7-word layout (N, a24, xdiff, aX, aZ, bX, bZ);
      using the param0 ternary here made param2 decode its result from word 1
      (= a24) instead of word 3 (= aX), which is what broke the gmp-ecm comparison. */
-  const int      p1_word = suyama_layout ? 3 : 1;      /* X of P_a */
-  const int      p2_word = suyama_layout ? 5 : 3;      /* X of P_b */
+  const int      p1_word = int(layout.first_x);      /* X of P_a */
+  const int      p2_word = int(layout.second_x);      /* X of P_b */
   if (data_size != checked_size({size_t(words_per_curve),size_t(curves),size_t(BITS/8)})) {
     outputf(OUTPUT_ERROR,
             "GPU: internal error: curve buffer size %zu does not match the %u-word/curve layout\n",
@@ -732,15 +734,14 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       header.timestamp = time(NULL);
       
       outcome.snapshot_cursor=s_partial;
-      const int saved=ckpt_path.empty()?ECM_NO_FACTOR_FOUND:
-          save_checkpoint(ckpt_filename,&header,data,data_size);
-      if(saved!=ECM_NO_FACTOR_FOUND)throw RunError(Failure::Persistence,"Montgomery checkpoint write failed");
+      const bool saved=ckpt_path.empty() || save_checkpoint(ckpt_filename,&header,data,data_size);
+      if(!saved)throw RunError(Failure::Persistence,"Montgomery checkpoint write failed");
       if(!ckpt_path.empty())outcome.durable_cursor=s_partial;
       last_checkpoint_time=std::chrono::steady_clock::now();
       if (stop_now) {
         if(s_partial<s_num_bits)outcome.termination=Termination::Stopped;
-        outputf(saved == ECM_NO_FACTOR_FOUND ? OUTPUT_NORMAL : OUTPUT_ERROR,
-                saved == ECM_NO_FACTOR_FOUND ? (ckpt_path.empty()?"Stage1 stopped: no checkpoint configured, progress is not recoverable\n":"Stage1 stopped: checkpoint saved\n") :
+        outputf(saved ? OUTPUT_NORMAL : OUTPUT_ERROR,
+                saved ? (ckpt_path.empty()?"Stage1 stopped: no checkpoint configured, progress is not recoverable\n":"Stage1 stopped: checkpoint saved\n") :
                                                "Stage1 stop requested but checkpoint write failed\n");
         break;
       }

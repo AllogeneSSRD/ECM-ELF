@@ -72,7 +72,7 @@ def main():
     driver = (ROOT/'src/main.cpp').read_text(encoding='utf-8-sig')
     assert len(re.findall(r'^TaskResult run_stage1_task\(', task, re.M)) == 1
     assert len(re.findall(r'^static int run_worktodo\(', driver, re.M)) == 1
-    assert driver.count('run_stage1_task({') == 2
+    assert len(re.findall(r'\brun_stage1_task\s*\(',driver)) == 2
     assert 'NextQueueTask' not in driver
     assert not re.search(r'run_stage1_impl|Stage1TaskSession|class .*Runner', driver)
     session = task[task.index('class Stage1TaskSession'):task.index('TaskResult run_stage1_task')]

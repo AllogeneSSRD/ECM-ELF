@@ -3,6 +3,7 @@
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_binary.h"
 #include "../../src/ecm/storage/save/publication.h"
+#include "../../src/ecm/storage/save/ecm_save.h"
 #include "../../src/ecm/storage/save/ecm_edwards_io.h"
 #include <filesystem>
 #include <fstream>
@@ -41,8 +42,8 @@ static int window() {return 8;}
 
 // Computation is replaced at the private legacy seam. Real task sequencing,
 // checkpoint locking, publication, result ownership and status mapping run.
-static int execute(mpz_srcptr n,double,double,uint32_t count,const std::string &save,bool,
-                   const std::string &,ExecutionOptions &options,ExecutionResult *out) {
+static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::string &save,bool,
+                   const std::string &,ExecutionOptions &options,LegacyExecutionResult *out) {
     ++calls;
     require(options.stage1_curves==0 && options.stage1_t0_ms==0,"execution state reused");
     options.stage1_curves=count;options.stage1_t0_ms=123;
@@ -68,6 +69,7 @@ static int execute(mpz_srcptr n,double,double,uint32_t count,const std::string &
         stop_now();out->publish_failed=mode=="stop_publication";
         return ECM_ERROR; // Deliberately only sigmas: owner must release independently.
     }
+    if(mode=="legacy_failure")return ECM_ERROR;
     if(mode=="prepare") {out->prepare_failed=true;return ECM_ERROR;}
     if(mode=="execution" || mode=="execution_stop") {
         if(mode=="execution_stop")stop_now();
@@ -87,30 +89,36 @@ static int execute(mpz_srcptr n,double,double,uint32_t count,const std::string &
     if(!factors || !found){std::free(factors);std::free(found);throw std::bad_alloc();}
     for(uint32_t i=0;i<count;++i) {
         const bool hit=i==0 && (mode=="factor" || mode=="publication");
-        mpz_init_set_ui(factors[i],hit?(mode=="factor"?101:5):0);
+        mpz_init_set_ui(factors[i],hit?101:0);
         found[i]=hit?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
     }
     out->factors=factors;out->array_found=found;
     out->firstsigma=26;out->firstsigma64=26;
     out->ret=ECM_NO_FACTOR_FOUND; // A hit array may carry a factor independently of this code.
-    if(mode=="bad_save_checksum") {
-        std::string records;
-        for(uint32_t i=0;i<count;++i)records+="METHOD=ECM; SIGMA="+std::to_string(out->sigmas[i])+"; B1=20; N=10403; X=0x1; CHECKSUM=0;\n";
-        require(ecm_save::publish(save,records,false),"bad-checksum fixture publication");
+    if(mode=="concurrent_append") {
+        ecm_edwards::Integer x;mpz_set_ui(x.v,1);
+        require(ecm_save::publish(save,ecm_encode_mont_save(n,20,0,{{999,x.v}},"10403"),true),"concurrent append fixture");
     }
+    if(mode=="save_failure")fs::create_directory(save);
+    if(mode=="publication")fs::create_directory(options.persistence.submission_file);
     if(mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_invalid") {
-        using Kind=ExecutionResult::CurveKind;
+        using Kind=LegacyExecutionResult::CurveKind;
         out->curve_kinds.assign(count,mode=="typed_no_point"?Kind::CompletedWithoutPoint:Kind::Stage2Point);
         if(mode=="typed_invalid")out->curve_kinds[0]=Kind::Degenerate;
-        out->completion=ExecutionResult::Completion::Completed;
+        out->completion=LegacyExecutionResult::Completion::Completed;
     }
     if(mode=="typed_partial_point") {
-        using Kind=ExecutionResult::CurveKind;
+        using Kind=LegacyExecutionResult::CurveKind;
         out->curve_kinds={Kind::CompletedWithoutPoint,Kind::Stage2Point};
-        mpz_set_ui(factors[1],1);out->completion=ExecutionResult::Completion::Completed;
-        require(ecm_save::publish(save,ecm_edwards::save_line(n,factors[1],out->sigmas[1],20,false),false),"partial point publication");
+        mpz_set_ui(factors[1],1);out->completion=LegacyExecutionResult::Completion::Completed;
     }
     return out->ret;
+}
+
+static ComputationResult execute(const Stage1Request &r,ExecutionOptions &options) {
+    LegacyExecutionResult raw;
+    const auto code=legacy_execute(r.modulus,r.b1,r.b2,r.curves,r.save_file,r.append_save,r.expression,options,&raw);
+    return take_computation_result(std::move(raw),code,ecm_stage1_stop_requested()!=0);
 }
 
 int main(int argc,char **argv) {
@@ -120,7 +128,7 @@ int main(int argc,char **argv) {
         fs::create_directories(folder);
         Stage1Options options;options.execution.selection.target=ExecutionTarget::Cpu;
         options.execution.selection.curve=CurveModel::Montgomery;options.execution.selection.gpu_param=0;
-        if(mode=="typed_partial_point")options.execution.selection.curve=CurveModel::Edwards;
+        if(mode=="typed_partial_point" || mode=="typed_no_point")options.execution.selection.curve=CurveModel::Edwards;
         if(mode=="selection_snapshot") {
             options.execution.selection.target=ExecutionTarget::Gpu;
 #ifdef _WIN32
@@ -132,27 +140,28 @@ int main(int argc,char **argv) {
         options.persistence.tmp_dir=folder.string();options.persistence.results_file=(folder/"internal.jsonl").string();
         options.persistence.submission_file=(folder/"results.json.txt").string();options.identity.sigma_fixed=true;options.identity.fixed_sigma64=26;
         const auto save=(folder/"point.save").string();const std::string expression="10403";
-        const auto checkpoint=folder/(mode=="typed_partial_point"?".e_s1_bit14_20.ckpt":".m0_s1_bit14_20.ckpt");
+        const auto checkpoint=folder/((mode=="typed_partial_point" || mode=="typed_no_point")?".e_s1_bit14_20.ckpt":".m0_s1_bit14_20.ckpt");
         if(mode=="bad_begin") {std::ofstream damaged(checkpoint,std::ios::binary);damaged<<"damaged-container";}
         mpz_t n;mpz_init_set_ui(n,10403);
         const TaskDependencies deps{execute,identity,window};
         auto result=run_stage1_task({n,20,20,2,save,false,expression,options},deps);
         mpz_clear(n); // Result factors/sigmas must not borrow the request's modulus.
         require(options.execution.stage1_threads==ecm_stage1::Stage1Options{}.execution.stage1_threads,"request changed");
-        if(mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot") {
+        if(mode=="concurrent_append" || mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot") {
             require(calls==1 && result.status()==TaskStatus::Completed,"completed status");
             require(result.failure_source()==FailureSource::None && result.task_return()==ECM_NO_FACTOR_FOUND,"completed code");
             require(result.curves()==2 && result.has_sigmas() && result.sigma(1)==27,"curve identity");
             require(!fs::exists(checkpoint) && fs::exists(options.persistence.results_file) && fs::exists(options.persistence.submission_file),"completed publication");
+            if(mode=="concurrent_append")require(result.save_range().skip==1 && ecm_save::record_count(save)==3,"concurrent history overwritten");
             if(mode=="typed_partial_point")require(result.save_range().valid && result.save_range().records.size()==1,"partial actual range");
             auto moved=std::move(result);
             require(!result.has_factors() && moved.curves()==2 && moved.sigma(0)==26,"move ownership");
             if(mode=="factor")require(mpz_cmp_ui(moved.factor(0),101)==0 && moved.found(0)==ECM_FACTOR_FOUND_STEP1,"owned factor with legacy NF code");
         } else if(mode=="stop") {
             require(result.status()==TaskStatus::Stopped && result.failure_source()==FailureSource::None,"stopped status");
-            require(result.has_sigmas() && !result.has_factors(),"independently owned sigma payload");
+            require(result.curves()==0,"incomplete compatibility payload became completed curve outcomes");
             require(fs::exists(checkpoint) && !fs::exists(options.persistence.submission_file),"stop published incomplete NF");
-        } else if(mode=="publication" || mode=="stop_publication" || mode=="bad_save_checksum") {
+        } else if(mode=="publication" || mode=="stop_publication" || mode=="save_failure") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Publication,"publication priority/source");
             require(fs::exists(checkpoint),"publication failure lost checkpoint");
         } else if(mode=="execution" || mode=="execution_stop" || mode=="throw" || mode=="typed_invalid") {
@@ -164,7 +173,7 @@ int main(int argc,char **argv) {
         } else if(mode=="device" || mode=="device_stop") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Device,"device failure/stop priority");
             require(fs::exists(checkpoint),"device failure lost checkpoint");
-        } else if(mode=="prepare" || mode=="bad_begin") {
+        } else if(mode=="legacy_failure" || mode=="prepare" || mode=="bad_begin") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Preparation,"legacy preparation mapping");
             if(mode=="bad_begin") {
                 require(calls==0,"corrupt begin reached execution");

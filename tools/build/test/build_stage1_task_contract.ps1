@@ -22,7 +22,7 @@ if($QueueWorkflow){
     & (Join-Path $PSScriptRoot 'build_stage1_host_io.ps1') -WorkerBuild $WorkerBuild -Build $Build
     return
 }
-if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/sync/files.cpp','src/ecm/storage/save/publication.cpp')}
+if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/sync/files.cpp','src/ecm/storage/save/publication.cpp','src/ecm/storage/save/ecm_save.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/storage/cache/ecm_stage1_exp_cache.cpp')}
 if($MontgomeryPolicy){
     if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
     $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path

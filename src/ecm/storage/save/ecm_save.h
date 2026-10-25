@@ -4,13 +4,14 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 /** Resolve relative paths against {@link opencl_ecm_set_work_dir}; absolute paths unchanged. */
-std::string opencl_ecm_resolve_data_path(const char *path);
+std::string opencl_ecm_resolve_data_path(const char* path);
 
-bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool saveappend);
+bool opencl_ecm_check_save_file_writable(const std::string& savefilename, bool saveappend);
 
-std::string ecm_save_modulus_expression(const std::string &original_expr,const mpz_t N);
+std::string ecm_save_modulus_expression(const std::string& original_expr, const mpz_t N);
 
 /**
  * Append one text save line per curve in the gmp-ecm batch form (`METHOD=ECM; PARAM=id`).
@@ -21,9 +22,9 @@ std::string ecm_save_modulus_expression(const std::string &original_expr,const m
  * both back (`-param 2` / `-param 3`); Prime95 can read param 3 but not param 2
  * (its GMP-ECM resume reader maps param 3 to sigma_type 3).
  */
-bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N, double B1,
-                                  uint32_t firstsigma, uint32_t curves, mpz_t *factors,
-                                  const std::string &n_expr_save,
+bool opencl_ecm_append_save_lines(const std::string& savefilename, const mpz_t N, double B1,
+                                  uint32_t firstsigma, uint32_t curves, mpz_t* factors,
+                                  const std::string& n_expr_save,
                                   /* ECM_PARAM_BATCH_32BITS_D, spelled out so this header
                                      does not have to pull in the param-id enum */
                                   int param_id = 3);
@@ -45,6 +46,15 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
  * belong to the stored X makes a stage-2 handoff rebuild a different curve (it then
  * searches a curve whose point it never had).
  */
-bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, double B1,
-                                const uint64_t *sigmas, uint32_t curves, const mpz_t *xs,
-                                const int *hit, const std::string &n_expr_save);
+bool ecm_append_save_lines_mont(const std::string& savefilename, const mpz_t N, double B1,
+                                const uint64_t* sigmas, uint32_t curves, const mpz_t* xs,
+                                const int* hit, const std::string& n_expr_save);
+
+// Borrowed values, consumed synchronously by the pure text encoder.
+struct EcmSavePoint {
+    uint64_t sigma;
+    mpz_srcptr value;
+};
+
+std::string ecm_encode_mont_save(mpz_srcptr, double, int, const std::vector<EcmSavePoint>&,
+                                 const std::string&);
