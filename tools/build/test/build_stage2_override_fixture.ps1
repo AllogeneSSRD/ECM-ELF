@@ -6,7 +6,8 @@ Set-Location $repo
 $m=Get-Content -LiteralPath (Join-Path $WorkerBuild 'build_manifest.json') -Raw|ConvertFrom-Json
 $output=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 if(Test-Path -LiteralPath $output){throw 'Use a fresh build directory'}
-New-Item -ItemType Directory -Path $output|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $output
 $sources=@('tools/test/stage2_override_fixture.cpp','src/ecm/storage/results/publication.cpp',
     'src/ecm/storage/queue/stage2_progress.cpp','src/ecm/platform/fingerprint.cpp')
 $command='"'+$m.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MT /utf-8 /DNOMINMAX /I include /I src /I "'+

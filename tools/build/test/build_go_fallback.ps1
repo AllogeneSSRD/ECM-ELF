@@ -3,6 +3,8 @@ param([string]$Build='build_go_fallback_stage1')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 # Compile the real Stage1/OpenCL frontend and exercise its CPU route; no CUDA TUs.
 & cmake -S $repo -B $Build -DECM_ENABLE_CUDA=OFF -DOPENSSL_ROOT_DIR=D:/code/vcpkg/installed/x64-windows
 if($LASTEXITCODE){throw 'Stage1 fallback test configure failed'}

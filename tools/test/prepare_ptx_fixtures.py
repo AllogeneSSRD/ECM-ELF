@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--stage',choices=['stage1','stage2','both'],default='both')
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
+    (out/'.gitignore').write_text('*\n', encoding='utf-8')
     (out/'collector.py').write_bytes(Path(__file__).read_bytes())
     report=dict(complete=False,kind='derived_ptx_only_test_images',collector_sha256=sha(__file__),components={})
     for stage in (('stage1','stage2') if args.stage=='both' else (args.stage,)):

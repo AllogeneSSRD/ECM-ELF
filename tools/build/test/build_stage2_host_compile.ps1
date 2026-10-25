@@ -17,7 +17,8 @@ $sources=@('src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp',
     'src/ecm/service/stage2/task.cpp','src/ecm/service/stage2/input.cpp',
     'src/ecm/platform/process/stage2_curve_process.cpp')
 foreach($source in $sources){if($source -notin $inventory.groups.STAGE2_HOST){throw "Missing production source: $source"}}
-New-Item -ItemType Directory -Path $output|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $output
 $commands=@();$hashes=[ordered]@{};$objects=[ordered]@{}
 foreach($source in $sources){
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects[$source]=$object

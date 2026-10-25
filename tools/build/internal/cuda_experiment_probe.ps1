@@ -11,10 +11,11 @@ function Invoke-EcmExperimentBuild {
     $dirs=@('include','third_party/cgbn/include','third_party/cgbn/include/cgbn',(Join-Path $gmp 'include'))
     $deps=@(Get-EcmSourceClosure $Repo $Sources $dirs)+@(
         'tools/build/internal/cuda_experiment_probe.ps1','tools/build/internal/cuda_build_state.ps1',
-        'tools/build/internal/cuda_toolchain.ps1')
+        'tools/build/internal/cuda_toolchain.ps1','tools/build/internal/build_directory.ps1')
     $hashes=Get-EcmSourceHashes $Repo $deps
     $names=Get-EcmObjectNames $Sources
-    New-Item -ItemType Directory -Force $Build | Out-Null
+    . (Join-Path $PSScriptRoot 'build_directory.ps1')
+    Initialize-EcmBuildDirectory $Build
     $objects=@();$commands=@()
     foreach($source in $Sources) {
         $obj=Join-Path $Build ($names[$source]+'.obj');$objects+=$obj

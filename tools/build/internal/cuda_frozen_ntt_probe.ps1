@@ -15,6 +15,8 @@ function Invoke-EcmFrozenNttProbeBuild {
     if($AllowedSources) {
         foreach($dep in $deps){if($AllowedSources.$dep -ne $hashes[$dep]){throw "Frozen dependency absent or stale in manifest: $dep"}}
     }
+    . (Join-Path $PSScriptRoot 'build_directory.ps1')
+    Initialize-EcmBuildDirectory $Build
     $snapshot=Join-Path $Build 'sources';$generated=[ordered]@{}
     foreach($dep in $deps) {
         if([IO.Path]::IsPathRooted($dep)){throw 'Frozen project closure must use relative paths'}
@@ -31,7 +33,7 @@ function Invoke-EcmFrozenNttProbeBuild {
         }
     }
     if($legacy){$Defines+=@('NTT_POLY_PROBE_NO_MAIN=1')}
-    $own=@($Source,'tools/build/internal/cuda_frozen_ntt_probe.ps1','tools/build/internal/cuda_build_state.ps1','tools/build/internal/cuda_toolchain.ps1')
+    $own=@($Source,'tools/build/internal/cuda_frozen_ntt_probe.ps1','tools/build/internal/build_directory.ps1','tools/build/internal/cuda_build_state.ps1','tools/build/internal/cuda_toolchain.ps1')
     $local=Get-EcmSourceHashes $Repo $own
     $src=Join-Path $snapshot $Source;New-Item -ItemType Directory -Force (Split-Path -Parent $src)|Out-Null
     Copy-Item (Join-Path $Repo $Source) $src;$generated['sources/'+$Source]=(Get-FileHash $src).Hash

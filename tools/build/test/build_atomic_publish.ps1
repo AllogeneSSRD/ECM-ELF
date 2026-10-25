@@ -8,7 +8,8 @@ $cuda=Resolve-EcmCudaToolkit -Archs 89
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 $Evidence=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Evidence)
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $file=Join-Path $Build 'build.cmd'
 $command='"'+$vc.Compiler+'" /nologo /O2 /std:c++17 /EHsc /utf-8 /I include /I src tools/test/atomic_publish_fixture.cpp src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp /Fo"'+$Build+'/" /Fe"'+$Build+'/atomic_publish.exe"'
 [IO.File]::WriteAllText($file,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))

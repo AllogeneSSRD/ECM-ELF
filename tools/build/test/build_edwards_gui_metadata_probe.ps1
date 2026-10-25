@@ -7,7 +7,8 @@ Set-Location $repo
 $cuda=Resolve-EcmCudaToolkit -Archs 89
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $sources=@('tools/test/edwards_gui_metadata_probe.cpp','src/ecm/application/gui/log_parse.cpp','src/ecm/application/gui/results.cpp')
 $objects=@()
 foreach($source in $sources){

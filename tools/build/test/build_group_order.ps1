@@ -8,7 +8,8 @@ $GmpRoot=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath
 $vcvars=Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
 if(-not $vcvars){throw 'MSVC x64 tools not found'}
 if(-not (Test-Path -LiteralPath (Join-Path $GmpRoot 'lib/gmp.lib'))){throw 'GMP import library not found'}
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'group_order_probe.exe'
 $command='cl.exe /nologo /O2 /MD /std:c++17 /EHsc /W4 /utf-8 /I src /I "'+$GmpRoot+'/include" src/ecm/core/group_order/group_order.cpp tools/test/group_order_probe.cpp /Fo"'+$Build+'/" /Fe"'+$exe+'" /link /LIBPATH:"'+$GmpRoot+'/lib" gmp.lib'
 $file=Join-Path $Build 'build.cmd'

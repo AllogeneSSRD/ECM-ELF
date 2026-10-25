@@ -13,7 +13,8 @@ $target=Get-EcmReleaseTarget $Profile
 $tools=Resolve-EcmReleaseToolchain $target $manifest.cuda_root
 if($tools.Vc.Compiler -ine $manifest.host_compiler){throw 'Probe compiler differs from release'}
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $inventory=Get-EcmCudaInventory $repo
 $objects=@();$sources=@()
 if($Stage -eq 'stage1') {

@@ -79,7 +79,8 @@ Write-Host ("   build dir : " + $BuildDir)
 Write-Host ("   targets   : " + ($Targets -join ', '))
 Write-Host ("   vcvars    : " + $VcVars)
 
-New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $BuildDir
 
 # Native stderr must not become a terminating error under $ErrorActionPreference = Stop.
 function Invoke-DevCmd([string]$commandLine, [int]$timeoutMin) {

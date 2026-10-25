@@ -5,7 +5,8 @@ $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
 $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'ntt_goldilocks_ptx_probe.exe';$log=Join-Path $Build 'build.log'
 $deps=@('tools/test/ntt_goldilocks_ptx_probe.cu','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh',
     'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/build/test/build_ntt_goldilocks_ptx_probe.ps1')

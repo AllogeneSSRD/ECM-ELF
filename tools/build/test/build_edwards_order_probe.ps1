@@ -7,7 +7,8 @@ Set-Location $repo
 $cuda=Resolve-EcmCudaToolkit -Archs 89
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'edwards_curve_order_probe.exe';$obj=Join-Path $Build 'edwards_curve_order_probe.obj'
 $command='"'+$vc.Compiler+'" /nologo /O2 /MD /std:c++17 /EHsc /utf-8 /I include /I src /I third_party/gmp-zen3/dist/include tools/test/edwards_curve_order_probe.cpp /Fo"'+$obj+'" /Fe"'+$exe+'" /link /LIBPATH:third_party/gmp-zen3/dist/lib gmp.lib'
 $file=Join-Path $Build 'build.cmd'

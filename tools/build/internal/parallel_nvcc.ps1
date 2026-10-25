@@ -90,6 +90,8 @@ $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 if (-not (Test-Path $BuildDir)) { throw "build dir not found: $BuildDir" }
+. (Join-Path $PSScriptRoot 'build_directory.ps1')
+Initialize-EcmBuildDirectory $BuildDir
 
 if (-not $VcVars) {
     $candidates = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvars64.bat" -ErrorAction SilentlyContinue |

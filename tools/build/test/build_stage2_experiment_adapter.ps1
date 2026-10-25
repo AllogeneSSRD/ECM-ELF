@@ -23,7 +23,8 @@ $object=$unit.entry.output
 if(-not $object -or (Get-FileHash $object).Hash -ne $unit.object_sha256){throw 'Experimental object missing or changed'}
 $adapter='tools/test/stage2_experiment_adapter.cpp'
 $hashes=Get-EcmSourceHashes $repo (Get-EcmSourceClosure $repo @($adapter) $dirs)
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'probe.exe'
 $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 -arch='+$manifest.architecture+
     ' -I "'+$repo+'/include" -I "'+$gmp+'/include" -Xcompiler /utf-8 '+

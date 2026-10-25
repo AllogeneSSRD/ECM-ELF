@@ -2,7 +2,8 @@ param([string]$Build='data/experiments/gui_v2/pet_behavior')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Path $Build -Force | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $vc=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars64.bat' | Select-Object -First 1).FullName
 if(-not $vc){throw 'MSVC not found'}
 $source=Join-Path $repo 'tools/test/gui_v2/pet_behavior_test.cpp'

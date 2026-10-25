@@ -9,6 +9,8 @@ $Source=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 if(-not (Test-Path -LiteralPath (Join-Path $Source 'CMakeLists.txt'))){throw 'Missing frozen CMake source'}
 if(Test-Path -LiteralPath $Build){throw 'Use a fresh baseline build directory'}
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 & (Join-Path $Source 'tools/build/build_stage1_local.ps1') -BuildDir $Build -Arch 89 -Jobs 8 -Tiers $Tiers `
     -Gmp (Join-Path $repo 'third_party/gmp-zen3/dist') -Extra '-DECM_BUILD_TOOLS=OFF -DECM_BUILD_GUI=OFF'
 if($LASTEXITCODE -ne 0){throw 'Frozen baseline build failed'}

@@ -13,7 +13,9 @@ $cuda=Resolve-EcmCudaToolkit -Archs $Arch
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 $objDir=Join-Path $Build 'CMakeFiles/edwards_gpu_stage1_probe.dir'
-New-Item -ItemType Directory -Force $objDir | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
+Initialize-EcmBuildDirectory $objDir
 . (Join-Path $PSScriptRoot '../internal/stage1_release_sources.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $workerSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/core/stage1/ecm_stage1_exp.cpp')

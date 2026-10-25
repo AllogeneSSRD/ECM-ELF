@@ -10,7 +10,8 @@ $output=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
 if(Test-Path -LiteralPath $output){throw 'Use a fresh output directory'}
 $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Raw|ConvertFrom-Json
 if(-not $m.compile_setup -or -not $m.host_compiler -or -not $m.cuda_root){throw 'Formal local toolchain manifest required'}
-New-Item -ItemType Directory -Path $output|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $output
 $sources=@('src/ecm/backend/cuda/stage1/montgomery/host_math.cpp',
     'src/ecm/backend/cuda/stage1/edwards/runtime.cpp','src/ecm/core/stage1/ecm_stage1_exp.cpp',
     'src/ecm/service/stage1/execution_contract.cpp','tools/test/stage1_cuda_host_contract.cpp')

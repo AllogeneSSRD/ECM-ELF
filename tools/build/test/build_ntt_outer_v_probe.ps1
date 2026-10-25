@@ -8,7 +8,8 @@ $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($
 if(Test-Path -LiteralPath $Build){throw 'Use a fresh build directory'}
 $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
-New-Item -ItemType Directory $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $deps=@('tools/test/ntt_outer_v_probe.cu','tools/test/ntt_coop_outer_probe.cu',
     'tools/experiments/cuda/ntt_variants/main.cu','tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh',
     'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh',

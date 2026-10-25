@@ -59,7 +59,7 @@ foreach($part in $BuildDir.Split([char[]]'\/')){
 }
 $buildProfile=[pscustomobject]@{Hash=$hash;Fields=$fields}
 $marker=Join-Path $BuildDir 'profile.json'
-if(-not (Test-Path -LiteralPath $marker) -and (Test-Path -LiteralPath $BuildDir) -and @(Get-ChildItem -LiteralPath $BuildDir -Force).Count){throw 'Unmarked build directory; choose a fresh leaf'}
+if(-not (Test-Path -LiteralPath $marker) -and (Test-Path -LiteralPath $BuildDir) -and @(Get-ChildItem -LiteralPath $BuildDir -Force | Where-Object { $_.Name -ne '.gitignore' -or $_.PSIsContainer }).Count){throw 'Unmarked build directory; choose a fresh leaf'}
 Assert-EcmBuildProfile $BuildDir $buildProfile -ReadOnly:$SkipBuild
 Write-Host "   Build directory: $BuildDir"
 $payloadTool=Join-Path $repo 'tools/packaging/opencl_release_payload.py'

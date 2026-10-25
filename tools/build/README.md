@@ -2,6 +2,8 @@
 
 用户流程、默认策略、工具链和分发内容以 [构建与发布](../../docs/usage/BUILD.md) 为准。
 
+所有构建用途的输出目录在写入产物前创建内部 `.gitignore`（一行 `*`），复用时自动补齐；公共初始化函数位于 `internal/build_directory.ps1`。新入口也应调用它，构建目录无需登记到根 `.gitignore`。profile、SkipBuild 和测试的新目录限制仍独立校验，详见[用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
+
 ## 一键入口
 
 | 程序 | 开发 | 本机生产 | 发布生产 |

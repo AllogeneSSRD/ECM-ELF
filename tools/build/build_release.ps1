@@ -50,7 +50,9 @@ foreach($name in $names) {
 & python -c "import sys;sys.path.insert(0,sys.argv[1]);from gmp_payload import distribution;distribution(sys.argv[2])" (Join-Path $repo 'tools/packaging') $dependency.Root
 if($LASTEXITCODE){throw 'vcpkg GMP source/provenance preflight failed'}
 $records=Join-Path $BuildRoot 'components'
-New-Item -ItemType Directory -Force $records | Out-Null
+. (Join-Path $PSScriptRoot 'internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $BuildRoot
+Initialize-EcmBuildDirectory $records
 $gui=Join-Path $BuildRoot 'gui-v2-release'
 $opencl=Join-Path $BuildRoot 'opencl-release'
 if($Component -eq 'all'){

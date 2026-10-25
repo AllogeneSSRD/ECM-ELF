@@ -2,7 +2,8 @@
 param([string]$Build='build_cuda_cmake/ntt_carry_fused_probe',[ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89')
 $ErrorActionPreference='Stop';$repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
 if(Test-Path (Join-Path $Build 'manifest.json')){throw 'Use a fresh build directory'}
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue|Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
 $deps=@('tools/test/ntt_carry_fused_probe.cu','tools/experiments/cuda/ntt_variants/main.cu','tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh','tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/build/test/build_ntt_carry_fused_probe.ps1')

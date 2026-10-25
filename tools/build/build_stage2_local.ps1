@@ -76,7 +76,8 @@ $deps = @($sourceSet.Dependencies)
 $cudaDeps = @($sourceSet.CudaDependencies)
 $objectNames = Get-EcmObjectNames $sources
 $objDir = Join-Path $Build '_objects'
-New-Item -ItemType Directory -Force $objDir | Out-Null
+. (Join-Path $PSScriptRoot 'internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $objDir
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
 $glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]

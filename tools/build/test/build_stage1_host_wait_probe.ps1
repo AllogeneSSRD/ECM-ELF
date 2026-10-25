@@ -8,7 +8,8 @@ $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $cuda=Resolve-EcmCudaToolkit -Archs $Arch;$vc=Resolve-EcmVcEnvironment $cuda
 $Build=Resolve-EcmSourcePath $repo $Build
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $kernels=@{1280='cgbn_edwards_instances_tpi8.cu';5632='cgbn_edwards_instances_tpi16_4608_6144.cu';10240='cgbn_edwards_instances_tpi32_9216_12288.cu'}
 $sources=@('tools/test/stage1_host_wait_probe.cu','tools/test/adapters/edwards_host_wait.cu',
     ('src/ecm/backend/cuda/stage1/edwards/instances/'+$kernels[$Tier]),'src/ecm/core/stage1/ecm_stage1_exp.cpp')

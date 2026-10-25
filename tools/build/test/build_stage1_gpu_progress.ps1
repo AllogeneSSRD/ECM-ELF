@@ -5,7 +5,8 @@ $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
 $vcvars=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars64.bat'|Select-Object -First 1).FullName
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'stage1_gpu_progress_test.exe';$script=Join-Path $Build 'build.cmd'
 $line="@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nif errorlevel 1 exit /b 1`r`n"+
     "cl /nologo /O2 /std:c++17 /EHsc /MD /utf-8 /I include /I src tools/test/stage1_gpu_progress_test.cpp src/ecm/platform/stage1_progress.cpp /Fe:`"$exe`" /Fo:`"$Build/`"`r`nexit /b %errorlevel%`r`n"

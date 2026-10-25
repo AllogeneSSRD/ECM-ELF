@@ -20,7 +20,8 @@ $unit=$manifest.compile_units.'src/ecm/backend/cuda/stage2/device/arithmetic_ker
 $object=$unit.entry.output
 if(-not $object){$object=Join-Path $WorkerBuild '_objects/arithmetic_kernels.obj'}
 $hash=(Get-FileHash $object).Hash
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'probe.exe'
 $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 -arch='+$manifest.architecture+
     ' -I "'+$repo+'/include" -I "'+$gmp+'/include" -Xcompiler /utf-8 '+

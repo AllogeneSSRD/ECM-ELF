@@ -6,7 +6,8 @@ $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
 $vcvars=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars64.bat' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'edwards_gpu_point_probe.exe'
 $log=Join-Path $Build 'build.log'
 $gpuObj=Join-Path $Build 'edwards_gpu_point_probe.obj'

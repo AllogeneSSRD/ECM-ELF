@@ -7,7 +7,8 @@ Set-Location $repo
 $cuda=Resolve-EcmCudaToolkit -Archs 89
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $command='"'+$vc.Compiler+'" /nologo /O2 /std:c++17 /EHsc /utf-8 /I include /I src /I third_party/gmp-zen3/dist/include tools/test/edwards_save_ladder_check.cpp /Fo"'+$Build+'/check.obj" /Fe"'+$Build+'/edwards_save_ladder_check.exe" /link /LIBPATH:third_party/gmp-zen3/dist/lib gmp.lib'
 $file=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($file,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))

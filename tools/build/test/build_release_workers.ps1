@@ -12,7 +12,9 @@ $tools=Resolve-EcmReleaseToolchain $target $CudaRoot $VcVars
 $dependency=Resolve-EcmGmp $repo $Gmp -Release
 if(-not [IO.Path]::IsPathRooted($BuildRoot)){$BuildRoot=Join-Path $repo $BuildRoot}
 $records=Join-Path $BuildRoot 'components'
-New-Item -ItemType Directory -Force $records | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $BuildRoot
+Initialize-EcmBuildDirectory $records
 if($Stage -in @('stage1','both')) {
     $arguments=@('-BuildRoot',$BuildRoot,'-OutDir',(Join-Path $repo 'release/.stage1-component'),
         '-Archs',$target.Sass,'-PtxArch',$target.Ptx,'-Jobs',$Jobs,

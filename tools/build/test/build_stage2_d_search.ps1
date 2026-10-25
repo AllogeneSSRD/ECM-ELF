@@ -14,7 +14,9 @@ if (-not $buildPath.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [Strin
 if (Test-Path -LiteralPath $buildPath) { throw 'Use a fresh development build directory' }
 $manifest = Get-Content -LiteralPath (Join-Path $basePath 'build_manifest.json') -Raw | ConvertFrom-Json
 $objects = Join-Path $buildPath '_objects'
-New-Item -ItemType Directory -Path $objects -Force | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $buildPath
+Initialize-EcmBuildDirectory $objects
 Copy-Item -LiteralPath (Join-Path $basePath 'build_manifest.json') -Destination $buildPath
 Copy-Item -LiteralPath (Join-Path $basePath '_objects/ecm_cuda_stage2.obj') -Destination $objects
 # The formal builder verifies every CUDA dependency and the object hash before

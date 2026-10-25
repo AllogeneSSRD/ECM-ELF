@@ -42,6 +42,8 @@ $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot
 if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 if (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $repo $OutDir }
 if (-not (Test-Path $BuildDir)) { throw "build dir not found: $BuildDir" }
+. (Join-Path $PSScriptRoot 'build_directory.ps1')
+Initialize-EcmBuildDirectory $BuildDir
 
 . (Join-Path $PSScriptRoot 'cuda_toolchain.ps1')
 $cuda = Resolve-EcmCudaToolkit -Archs $Archs -CudaRoot $CudaRoot

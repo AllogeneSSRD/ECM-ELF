@@ -10,7 +10,8 @@ if($IntegratedSchedule -and $UnrollU -notin @(0,4)){throw 'Integrated schedule s
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 if(Test-Path (Join-Path $Build 'manifest.json')){throw 'Use a fresh build directory'}
 $deps=@('tools/test/ntt_coop_outer_probe.cu','tools/experiments/cuda/ntt_variants/main.cu',
         'tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh',

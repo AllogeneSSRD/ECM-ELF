@@ -10,7 +10,9 @@ $out=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Ou
 if(Test-Path -LiteralPath $out){throw 'Use a fresh output directory'}
 $m=Get-Content -LiteralPath (Join-Path $worker 'build_manifest.json') -Raw -Encoding UTF8|ConvertFrom-Json
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host compiler identity required'}
-$fixture=Join-Path $out 'fixture';New-Item -ItemType Directory -Path $fixture|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $out
+$fixture=Join-Path $out 'fixture';Initialize-EcmBuildDirectory $fixture
 $source=Join-Path $fixture 'main.cpp';$header=Join-Path $fixture 'retired header.h';$obj=Join-Path $fixture 'main.obj';$exe=Join-Path $fixture 'main.exe'
 $command='"'+$m.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MT /c "'+$source+'" /Fo"'+$obj+'" /sourceDependencies "'+$obj+'.ecm-msvc.json"'
 $entry=[pscustomobject]@{file=$source;directory=$fixture;command=$command;output=$obj}

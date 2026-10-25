@@ -14,7 +14,8 @@ if($Stage -eq 'stage1') {
     $cuda=Resolve-EcmCudaToolkit -Archs 89
     $vc=Resolve-EcmVcEnvironment $cuda
     $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-    New-Item -ItemType Directory -Force $Build|Out-Null
+    . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+    Initialize-EcmBuildDirectory $Build
     $all='128,192,256,384,512,768,1024,1280,1536,1792,2048,2560,3072,3584,4096,4608,5120,5632,6144,6656,7168,7680,8192,9216,10240,11264,12288,13312,14336,15360,16384,17408'
     $profiles=@(
         @('all','',$all),

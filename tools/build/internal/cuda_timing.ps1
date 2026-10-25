@@ -14,6 +14,8 @@ function Enable-EcmNvccBatchTiming([string]$CommandFile, [string]$Build) {
 }
 
 function New-EcmNvccTiming([string]$Build, [string]$Label, [string]$Command) {
+    . (Join-Path $PSScriptRoot 'build_directory.ps1')
+    Initialize-EcmBuildDirectory $Build
     $directory = Join-Path $Build ('timing/' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
     $csv = Join-Path $directory 'nvcc.csv'

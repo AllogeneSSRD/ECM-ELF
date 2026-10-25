@@ -8,7 +8,8 @@ $m=Get-Content -LiteralPath (Join-Path $WorkerBuild 'stage1_local_manifest.json'
 $dest=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 if(-not $dest.StartsWith($repo+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Build must stay inside the repository'}
 if(Test-Path -LiteralPath $dest){throw 'Use a fresh probe directory'}
-New-Item -ItemType Directory -Path $dest|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $dest
 if($WithStage2){
  $backend=Get-Content -LiteralPath (Join-Path $BackendBuild 'build_manifest.json') -Raw|ConvertFrom-Json
  $objects=@($backend.link_inputs.objects.PSObject.Properties.Name)

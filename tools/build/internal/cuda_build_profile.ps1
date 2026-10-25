@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'build_directory.ps1')
+
 # Configuration compatibility is distinct from source/TU and executable identity.
 # Values are flat strings so PS 5.1 and PS 7 produce the same framed digest.
 function Get-EcmProfileHash($Fields) {
@@ -119,6 +121,14 @@ function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf =
             throw "Build directory belongs to another stage: $part; requested $($buildProfile.Stage)"
         }
     }
+    if ($Root) {
+        if (-not [IO.Path]::IsPathRooted($Root)) { $Root = Join-Path $Repo $Root }
+        $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\','/')
+        if ($rootPath -ine [IO.Path]::GetFullPath($Repo).TrimEnd('\','/') -and
+            $rootPath -ne [IO.Path]::GetPathRoot($rootPath).TrimEnd('\','/')) {
+            Initialize-EcmBuildDirectory $rootPath
+        }
+    }
     return $leafPath
 }
 
@@ -190,13 +200,14 @@ function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly)
             (Get-EcmProfileHash $marker.fields) -cne $buildProfile.Hash) {
             throw 'Build profile/role/engine differs; choose its matching leaf or a fresh directory'
         }
+        Initialize-EcmBuildDirectory $Leaf
         return
     }
     if ($ReadOnly) { throw 'A matching profile marker is required for SkipBuild; build/verify this leaf first' }
-    if ((Test-Path -LiteralPath $Leaf) -and @(Get-ChildItem -LiteralPath $Leaf -Force).Count) {
+    if ((Test-Path -LiteralPath $Leaf) -and @(Get-ChildItem -LiteralPath $Leaf -Force | Where-Object { $_.Name -ne '.gitignore' -or $_.PSIsContainer }).Count) {
         Assert-EcmLegacyProfile $Leaf $buildProfile
     }
-    New-Item -ItemType Directory -Path $Leaf -Force | Out-Null
+    Initialize-EcmBuildDirectory $Leaf
     $marker = [ordered]@{ schema = 1; profile_sha256 = $buildProfile.Hash; fields = $buildProfile.Fields }
     [IO.File]::WriteAllText($path, ($marker | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }

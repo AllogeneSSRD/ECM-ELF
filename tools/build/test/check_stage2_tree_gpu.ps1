@@ -68,7 +68,8 @@ foreach ($e in @($ref, $gpu)) {
     if (-not (Test-Path $e)) { throw "missing $e (build it: tools\build\test\build_stage2_tree_ref.ps1 / tools\build\dev\build_stage2_tree_gpu.ps1)" }
 }
 if (-not $Sandbox) { $Sandbox = Join-Path $repo ('data\experiments\stage2gpuc_' + (Get-Date -Format 'yyyyMMdd-HHmmss')+'_'+[Guid]::NewGuid().ToString('N').Substring(0,8)) }
-New-Item -ItemType Directory -Force $Sandbox | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Sandbox
 $cpu = Join-Path $Sandbox 'F_cpu.txt'
 $gpuDump = Join-Path $Sandbox 'F_gpu.txt'
 

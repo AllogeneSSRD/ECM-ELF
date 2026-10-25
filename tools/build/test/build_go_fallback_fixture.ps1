@@ -4,7 +4,8 @@ $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
 $vc=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars64.bat'|Sort-Object FullName -Descending|Select-Object -First 1).FullName
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $command='cl.exe /nologo /O2 /MD /EHsc /std:c++17 /utf-8 /I src /I third_party/gmp-zen3/dist/include tools/test/go_fallback_fixture.cpp src/ecm/service/diagnostics/order_analysis.cpp src/ecm/core/group_order/group_order.cpp /Fo"'+$Build+'/" /Fe"'+$Build+'/go_fallback_fixture.exe" /link /LIBPATH:third_party/gmp-zen3/dist/lib gmp.lib'
 [IO.File]::WriteAllText((Join-Path $Build 'build.cmd'),"@echo off`r`ncall `"$vc`" >nul 2>&1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
 & cmd /d /c (Join-Path $Build 'build.cmd') 2>&1|Out-File (Join-Path $Build 'build.log') -Encoding utf8

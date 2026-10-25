@@ -10,7 +10,8 @@ if(-not $VcVars){$VcVars=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Stud
 if(-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)){throw 'vcvars64.bat not found; pass -VcVars'}
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 if(Test-Path -LiteralPath $Build){throw 'Use a fresh build directory to preserve reference evidence'}
-New-Item -ItemType Directory -Path $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $sources=@('tools/bench/stage1_gmp_reference.cpp','tools/build/test/build_stage1_gmp_reference.ps1')
 $hashes=[ordered]@{}
 foreach($source in $sources){$hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash}

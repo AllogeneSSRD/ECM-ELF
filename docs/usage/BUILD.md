@@ -118,6 +118,12 @@ Stage2 的 `-HostOnly` 在任何编译前核对完整清单，只复用身份一
 
 ## 用途与 profile 目录
 
+dev、local、release 和测试构建入口在写入产物前，为输出目录创建或补齐内部 `.gitignore`，内容为一行 `*`；该文件自身也被忽略，不提交占位文件。构建根目录及实际叶目录分别初始化，嵌套的 `build` / `build_*` 容器也补齐规则；显式指定其他目录名称时沿用同样行为，无须向仓库根 `.gitignore` 登记路径。发布包的分发目录不添加该构建标记。
+
+共享入口为 `tools/build/internal/build_directory.ps1` 的 `Initialize-EcmBuildDirectory`；部分测试入口直接写入同一规则。已有正确标记不必重写，缺失或含其他规则的构建标记会补为 `*`。该操作不清空目录，也不修改 `profile.json`、对象、可执行文件或依赖身份记录。仓库根及源码目录不能作为忽略全部内容的构建输出。只有 `.gitignore` 的目录可用于首次正式构建；已有其他产物时仍须通过旧目录身份核对，`-SkipBuild` 仍要求已有匹配的 `profile.json`，要求新目录的测试仍拒绝复用。
+
+目录行为与真实 Git 忽略检查使用 `tools/test/test_build_directory.ps1 -Output <新证据目录>`；它也检查补齐标记不会放宽 profile / SkipBuild 门禁。
+
 `profile.json` 保存完整 SHA256 及字段。CUDA local 默认使用 `build_stage1_local`、`build_stage2_local` 固定短目录；dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。固定 local 目录与任何显式叶目录都只容纳一个相容 profile；配置不匹配时拒绝，不改写 marker，也不自动清空目录。需要同时保留不同架构、tiers 或编译策略时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
 
 本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。公开 release 统一只接收 `-BuildRoot` 根目录，叶目录由完整 profile 派生。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
@@ -128,7 +134,7 @@ CPU-only 身份检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_
 
 ## CUDA 源清单与依赖身份
 
-翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 的 `STAGE2_ENGINE` 包含17个主机 CPP，其中常量快照和模块调度只在隔离宏下提供实现；默认使用算术/NTT两个聚合CU，显式隔离时由设备生成器替换为176个细分单元。实际编译成员以构建目录内 `cuda_sources.json`、模块清单和编译记录为准。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 的 `STAGE2_ENGINE` 包含18个主机 CPP，其中常量快照和模块调度只在隔离宏下提供实现；默认使用算术/NTT两个聚合CU，显式隔离时由设备生成器替换为176个细分单元。实际编译成员以构建目录内 `cuda_sources.json`、模块清单和编译记录为准。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 

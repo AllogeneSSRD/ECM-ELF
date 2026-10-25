@@ -164,6 +164,7 @@ set(ECM_CUDA_SOURCE_GROUPS
     STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT
     EXPERIMENT_STAGE2_BSGS EXPERIMENT_STAGE2_TREE EXPERIMENT_NTT EXPERIMENT_CUFFT EXPERIMENT_GIANT)
 set(ECM_CUDA_BUILD_INPUTS
+    tools/build/internal/build_directory.ps1
     CMakeLists.txt
     tools/build/internal/cuda_modules.cmake
     tools/build/internal/generate_cuda_modules.py

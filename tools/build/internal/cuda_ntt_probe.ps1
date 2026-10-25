@@ -26,9 +26,10 @@ function Invoke-EcmNttProbeBuild {
         }
     }
     $deps+=@('tools/build/internal/cuda_ntt_probe.ps1','tools/build/internal/cuda_sources.cmake',
-             'tools/build/internal/cuda_build_state.ps1','tools/build/internal/cuda_toolchain.ps1')
+             'tools/build/internal/cuda_build_state.ps1','tools/build/internal/cuda_toolchain.ps1','tools/build/internal/build_directory.ps1')
     $hashes=Get-EcmSourceHashes $Repo $deps
-    New-Item -ItemType Directory -Force $Build | Out-Null
+    . (Join-Path $PSScriptRoot 'build_directory.ps1')
+    Initialize-EcmBuildDirectory $Build
     $objects=@();$objectHashes=[ordered]@{};$compile=@();$watch=[Diagnostics.Stopwatch]::StartNew()
     if($WorkerBuild) {
         if($DefaultStream -ne 'legacy'){throw 'Production objects use the legacy default stream'}

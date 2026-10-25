@@ -21,7 +21,8 @@ $hashes=Get-EcmSourceHashes $repo $deps
 $libraries=@((Join-Path $cuda.Root 'lib/x64/cufft.lib'),(Join-Path $gmp 'lib/gmp.lib'))
 $libraryHashes=[ordered]@{}
 foreach($lib in $libraries){$libraryHashes[$lib]=(Get-FileHash -LiteralPath $lib).Hash}
-New-Item -ItemType Directory -Force $Build|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $obj=Join-Path $Build 'cufft_probe.obj';$exe=Join-Path $Build 'cufft_kron_probe.exe'
 $compile='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 -arch='+$Arch+
     ' -Xcompiler /MD -Xcompiler /utf-8 -I "'+$gmp+'/include" -c "'+$sources[0]+'" -o "'+$obj+'"'

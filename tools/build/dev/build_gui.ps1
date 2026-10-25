@@ -133,7 +133,8 @@ if ($Reconfigure) {
         if (Test-Path $p) { Remove-Item $p -Force; Write-Host ("   (removed " + $f + ")") }
     }
 }
-New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $BuildDir
 
 # Runs a command line through cmd.exe with the developer environment loaded and returns
 # @{ exit; text }. Native stderr must not become a PowerShell terminating error (with

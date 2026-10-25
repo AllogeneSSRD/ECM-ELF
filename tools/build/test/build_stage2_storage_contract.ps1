@@ -14,7 +14,8 @@ $inventory=Get-EcmCudaInventory $repo
 $sources=@('src/ecm/platform/fingerprint.cpp','src/ecm/storage/queue/stage2_progress.cpp')
 foreach($source in $sources){if($source -notin $inventory.groups.STAGE2_HOST){throw "Missing production collaborator: $source"}}
 $sources+=@('tools/test/stage2_resume_fixture.cpp')
-New-Item -ItemType Directory -Path $output|Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $output
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources){
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects+=('"'+$object+'"')

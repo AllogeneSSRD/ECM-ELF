@@ -30,7 +30,8 @@ $vcvars = (Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxili
 if (-not $vcvars) { throw "vcvars64.bat not found; install the MSVC build tools" }
 
 $exe = Join-Path $Build 'stage2_tree_ref.exe'
-New-Item -ItemType Directory -Force $Build | Out-Null
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 
 # NOTE the object path is a FULL FILE NAME, not a directory with a trailing backslash:
 # `/Fo:"dir\"` is the classic Windows trap -- cmd reads the `\"` as an escaped quote, the
