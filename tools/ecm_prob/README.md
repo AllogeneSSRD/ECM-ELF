@@ -145,7 +145,7 @@ D_eff 波动仅 ~5–8%（而 fraction 波动 ~10×），证明归一化正确�
 param0/param3 = 1.30×（bit15）→ 1.62×（bit30）→ 1.50–2.12×（bit31–40，噪声区）。
 
 **D 的数值含义、跨参数化可比性（局部幂律 `f ∝ D^e`）、两个口径警告、以及 B2 的影响**
-成功率推导见 `docs/reference/ECM_PARAMETERIZATIONS.md` §§6.5–6.8；本工具以 `--b2-factor` 指定 B2/B1。
+成功率推导见 `docs/architecture/ECM_PARAMETERIZATIONS.md` §§6.5–6.8；本工具以 `--b2-factor` 指定 B2/B1。
 
 **D_eff ≈ 21 vs GMP-ECM 22.97 的口径差异**：本工具 D_eff 是"stage-1-only、单一 bit、
 local-ρ 模型"口径，用于**跨曲线比较**；GMP-ECM 的 `3.134` 按"stage1+stage2 + 数位区间

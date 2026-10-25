@@ -62,6 +62,6 @@ for bit in scalar, from MSB to LSB:
 ## 公式与来源
 
 - [Montgomery 曲线、Suyama 与 PRAC](ECM_MONTGOMERY_MATH.md)：完整公式及参考实现入口。
-- [参数化与成功率](ECM_PARAMETERIZATIONS.md)：光滑性、点阶与群阶。
+- [参数化与成功率](../architecture/ECM_PARAMETERIZATIONS.md)：光滑性、点阶与群阶。
 - [Edwards 数学](ECM_EDWARDS_MATH.md)：另一种点表示及其 Stage1/Stage2 转换。
 

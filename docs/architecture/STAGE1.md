@@ -200,7 +200,7 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 
 使用和已测最佳范围见 [Stage1 使用](../usage/STAGE1.md)、[性能](../performance/STAGE1.md)。
 
-完整数学见 [Montgomery / Suyama / PRAC](../reference/ECM_MONTGOMERY_MATH.md)、[Edwards](../reference/ECM_EDWARDS_MATH.md) 和[参数化](../reference/ECM_PARAMETERIZATIONS.md)。
+完整数学见 [Montgomery / Suyama / PRAC](../reference/ECM_MONTGOMERY_MATH.md)、[Edwards](../reference/ECM_EDWARDS_MATH.md) 和[参数化](ECM_PARAMETERIZATIONS.md)。
 
 ## Montgomery 环境与诊断策略
 

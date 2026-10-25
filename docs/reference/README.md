@@ -7,7 +7,7 @@
 - [GPU Stage1 数学流程](ECM_STAGE1_GPU_MATH.md)：输入、ladder、因子提取、并行和成本；来自 `ECM_GPU_FLOW.md`。
 - [Montgomery / Suyama / Lucas / PRAC](ECM_MONTGOMERY_MATH.md)：差分公式、标量、链复用与 Prime95/GMP-ECM 入口。
 - [Edwards 构造与公式](ECM_EDWARDS_MATH.md)：Atkin–Morain、扩展坐标、NAF、坐标转换及 Prime95 v6 格式；来自 `ECM_EDWARDS_STAGE1.md`。
-- [参数化与成功率](ECM_PARAMETERIZATIONS.md)：sigma、挠子群、有效除子、Dickman 模型；来自 `ECM_PARAMETERIZATION_ANALYSIS.md`。
+- [参数化与成功率](../architecture/ECM_PARAMETERIZATIONS.md)：sigma、挠子群、有效除子、Dickman 模型；来自 `ECM_PARAMETERIZATION_ANALYSIS.md`。
 - [X-only 标量乘研究](ECM_XONLY_SCALAR.md)：差分信息限制、成本枚举、伪代码与不确定性。
 - [Stage2 D参数数学](ECM_STAGE2_D_PARAMETERS.md)：smooth生成、φ/2、D与P非单调、giant/多项式工作量和候选覆盖判断。
 - [多项式 Stage2 数学](ECM_STAGE2_MATH.md)：Newton 逆、fold、齐次尺度、scaled 下降及工作量。

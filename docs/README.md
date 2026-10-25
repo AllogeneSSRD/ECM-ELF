@@ -44,6 +44,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [主流程重构验收](performance/MAIN_FLOW_QUALIFICATION.md)：0.45.24本机local、完整位宽、非GPU正文零CU、实际恢复/交接与8个代表样例的配对性能范围。
 
+- [GKL family (iv) 曲线实验](performance/ECM_FRIENDLY_IV.md)：有理挠群、约 420 万组独立群阶/点阶、条件 D_eff、GMP NAF 及 GPU Stage2 因子接续与性能边界。
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
 - [Stage2 性能](performance/STAGE2.md)：0.38.4 完整 GPU 矩阵、普通/承载、版本对照、分项分析与 Montgomery 全范围参考。
 - [Stage2 精确输入与 Prime95 / CPU 参考](performance/EDWARDS_STAGE2.md)：13 个精确余因子、两档实际 B2、Prime95 两曲线族全范围和保留的 libecm 样本。
