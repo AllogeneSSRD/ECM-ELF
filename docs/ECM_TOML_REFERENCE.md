@@ -110,9 +110,9 @@ affinity = ""
 
 Type / 类型: `string`; range / 范围: `[none|auto|<n>,...|<a>-<b>]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Logical CPU IDs or ranges for CPU Stage1 threads, assigned round-robin. Empty, none, or auto leaves scheduling to the OS. The current Windows implementation supports only IDs 0..63 in one processor group; other platforms do not apply this binding. Use IDs available on the machine.
+CPU affinity list/ranges, e.g. 0-7,10. Indices must be 0..1023, with at most 1024 entries. Empty, auto or none leaves threads unpinned. Invalid entries are rejected with their source and allowed grammar, including values hidden by worker/CLI overrides.
 
-设置 CPU Stage1 计算线程的亲和性，可用逻辑 CPU 编号列表或区间；线程依次循环使用列表中的 CPU。空值、none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现只对单处理器组内编号 0..63 生效，其他平台不执行此绑定；编号还须对应实际可用的逻辑 CPU。
+CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。
 
 ### auto_stage2
 
@@ -364,7 +364,7 @@ Append normal Stage1 output to this file. Empty disables file logging. When no f
 naf_w = 0
 ```
 
-Type / 类型: `int`; range / 范围: `[0|3..12]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `int`; range / 范围: `[0|2..12]; CPU: [0|3..12]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
 Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.
 
@@ -418,6 +418,18 @@ Recover handoffs deleted by Prime95 because of invalid assignment IDs. 1 checks 
 
 控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，0 关闭自动补投；只对程序能够确认的已交接任务生效。
 
+### p95_sync_dir
+
+```toml
+p95_sync_dir = ""
+```
+
+Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Dedicated save destination for Prime95 handoff; required with p95_worktodo_path. Backup destinations are independent. Existing published save prefixes must remain unchanged; only complete appended records may extend them.
+
+Prime95 交接专用存档目录，启用 p95_worktodo_path 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。
+
 ### p95_worktodo_path
 
 ```toml
@@ -426,9 +438,9 @@ p95_worktodo_path = ""
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files.
+Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files. Requires p95_sync_dir. The save is validated and published before worktodo.add.
 
-用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。
+用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入 worktodo.add。
 
 ### progress_color
 
@@ -486,9 +498,9 @@ save_sync_dir_1 = ""
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-First destination for Stage1 save synchronization. Empty disables this destination; sync_mode controls the files and synchronization policy.
+First destination for Stage1 save synchronization. Empty disables this destination; sync_mode controls the files and synchronization policy. Backup only; this path never authorizes publishing a Prime95 task.
 
-指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。
+指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。
 
 ### save_sync_dir_2
 
@@ -498,9 +510,9 @@ save_sync_dir_2 = ""
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Second destination for Stage1 save synchronization. Both destinations may be enabled; empty disables only this destination.
+Second destination for Stage1 save synchronization. Both destinations may be enabled; empty disables only this destination. Backup only; this path never authorizes publishing a Prime95 task.
 
-指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。
+指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。
 
 ### sigma
 

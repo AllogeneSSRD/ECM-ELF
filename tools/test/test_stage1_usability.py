@@ -1,5 +1,6 @@
 """Offline Stage1 output, batch checkpoint and CPU/GPU endpoint regression gates."""
 import argparse
+import ast
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -22,6 +23,29 @@ from test_result_output_consistency import crc_valid
 def toml_string(value):
     return json.dumps(str(value), ensure_ascii=False)
 def ledger(path): return path.parent/'data'/(path.name+'.ecm-ledger')
+def saved_integer(expression):
+    def value(node):
+        if isinstance(node,ast.Constant) and type(node.value) is int:return node.value
+        if isinstance(node,ast.UnaryOp) and isinstance(node.op,(ast.UAdd,ast.USub)):
+            return value(node.operand)*(1 if isinstance(node.op,ast.UAdd) else -1)
+        if isinstance(node,ast.BinOp):
+            left,right=value(node.left),value(node.right)
+            if isinstance(node.op,ast.Add):return left+right
+            if isinstance(node.op,ast.Sub):return left-right
+            if isinstance(node.op,ast.Mult):return left*right
+            if isinstance(node.op,ast.Pow):return left**right
+            if isinstance(node.op,(ast.Div,ast.FloorDiv)):
+                assert right and left%right==0
+                return left//right
+        raise AssertionError('unexpected save expression')
+    return value(ast.parse(expression.replace('^','**'),mode='eval').body)
+def verify_mont_save(path,expected_n):
+    for line in path.read_text().splitlines():
+        fields=dict(token.strip().split('=',1) for token in line.split(';') if '=' in token)
+        n=saved_integer(fields['N']);x=int(fields['X'],0);sigma=int(fields['SIGMA']);b1=int(fields['B1']);param=int(fields.get('PARAM','0'))
+        assert n==expected_n,('save modulus differs from computation',n,expected_n)
+        assert 0<=x<n
+        assert int(fields['CHECKSUM'])==(b1*sigma*n*x*(param+1))%4294967291
 spec = importlib.util.spec_from_file_location('oracle', ROOT/'tools/test/test_edwards_gpu_pipeline.py')
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
@@ -146,6 +170,8 @@ def main():
         assert f'.{"e" if model=="ed" else "m"+str(param)}_s1_{label}_{b1}.ckpt' in log
         if model == 'ed':
             oracle.records(work/'points.save')
+        else:
+            verify_mont_save(work/'points.save',n)
         passed(name)
         return work, cmd, internal
 

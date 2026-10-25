@@ -1,4 +1,5 @@
 #include "p95_transfer.h"
+#include "ecm/platform/log_read.h"
 #include "../queue/ecm_worker_list.h"
 
 #include "../queue/p95_worktodo.h"
@@ -291,7 +292,7 @@ void park_lines(const P95TransferConfig &cfg, const std::vector<std::string> &li
         return;
     }
     std::vector<std::string> all = read_lines(cfg.pending_path);
-    for (const std::string &l : lines) all.push_back(l);
+    for (const std::string &l : lines)if(std::find(all.begin(),all.end(),l)==all.end())all.push_back(l);
     write_lines_atomic(cfg.pending_path, all, err);
 }
 
@@ -399,28 +400,25 @@ std::vector<std::string> p95_rejected_aids(const std::string &prime_log,
     const std::string files[2] = {prime_log, results_txt};
     for (const std::string &path : files) {
         if (path.empty()) continue;
-        std::ifstream in(path);
-        if (!in) continue;
-        read_any = true;
-        std::string line;
-        while (std::getline(in, line)) {
+        const bool read=ecm_visit_log_lines(path,[&](const std::string &line) {
             /* Prime95 writes, on the line after "PrimeNet error 43: Invalid assignment key":
                    ap: no such assignment key, GUID: <guid>, key: <32 hex>
                Only that shape is accepted, so an unrelated "key:" elsewhere cannot poison the
                set and make us drop a perfectly good AID. */
-            if (line.find("no such assignment key") == std::string::npos) continue;
+            if (line.find("no such assignment key") == std::string::npos) return;
             const std::size_t k = line.rfind("key:");
-            if (k == std::string::npos) continue;
+            if (k == std::string::npos) return;
             std::string key = trim(line.substr(k + 4));
             for (char &c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            if (key.size() < 8 || key.size() > 64) continue;
+            if (key.size() < 8 || key.size() > 64) return;
             bool hex = true;
             for (char c : key) {
                 if (!std::isxdigit(static_cast<unsigned char>(c))) { hex = false; break; }
             }
-            if (!hex) continue;
+            if (!hex) return;
             if (std::find(out.begin(), out.end(), key) == out.end()) out.push_back(key);
-        }
+        });
+        read_any=read_any || read;
     }
     if (!read_any && err != nullptr) {
         *err = "no Prime95 log could be read (prime.log / results.txt missing)";
@@ -520,7 +518,7 @@ P95TransferResult p95_transfer_deliver(const P95TransferConfig &cfg, const std::
         r.aid_dropped = true;                            // ini p95_keep_aid = 0
         task = p95_strip_aid(task);
     }
-    queued.push_back(task);
+    if(std::find(queued.begin(),queued.end(),task)==queued.end())queued.push_back(task);
 
     std::string note;
     r.worker = choose_worker(cfg, todo_dir, add_path, note);

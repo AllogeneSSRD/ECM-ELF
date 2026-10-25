@@ -7,7 +7,8 @@ $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
 $worker=(Resolve-Path -LiteralPath $WorkerBuild).Path
 $output=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-if(Test-Path -LiteralPath $output){throw 'Use a fresh test build directory'}
+New-Item -ItemType Directory -Force -Path $output|Out-Null
+[IO.File]::WriteAllText((Join-Path $output '.gitignore'),"*`n")
 $manifestPath=Join-Path $worker 'build_manifest.json'
 $m=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
 if($m.engine -ne 'production' -or -not $m.compile_units -or -not $m.link_inputs.command){throw 'Verified production build manifest required'}
@@ -18,8 +19,30 @@ $prefix=$m.compile_setup+' && '
 if(-not $link.StartsWith($prefix)){throw 'Unexpected recorded link setup'}
 $link=$link.Substring($prefix.Length)
 # Validate every CUDA unit before preparing or compiling host output.
+$moves=@{'src/ecm/storage/queue/ecm_worktodo.cpp'='src/io/worktodo.cpp';
+    'src/ecm/application/configuration/ecm_queue_config.cpp'='src/io/config.cpp'}
+$units=[ordered]@{}
 foreach($property in $m.compile_units.PSObject.Properties) {
-    $source=$property.Name;$unit=$property.Value
+    $old=$property.Name;$source=if($moves.ContainsKey($old)){$moves[$old]}else{$old}
+    $unit=$property.Value|ConvertTo-Json -Depth 8|ConvertFrom-Json
+    if($source -ne $old){$unit.entry.file=Join-Path $repo $source;$unit.entry.command=$unit.entry.command.Replace($old,$source).Replace($old.Replace('/','\'),$source.Replace('/','\'))}
+    $units[$source]=$unit
+}
+if(-not $units.Contains('src/sync/files.cpp')) {
+    $unit=$units['src/io/config.cpp']|ConvertTo-Json -Depth 8|ConvertFrom-Json
+    $unit.entry.file=Join-Path $repo 'src/sync/files.cpp';$unit.entry.command=$unit.entry.command.Replace('src/io/config.cpp','src/sync/files.cpp')
+    $unit.fingerprint='';$units['src/sync/files.cpp']=$unit
+    $extraObject=Join-Path $output 'src_sync_files.cpp.obj'
+    $link+=' "'+$extraObject+'"'
+}
+foreach($source in $units.Keys) {
+    $unit=$units[$source]
+    $linkObject=Get-EcmObjectPath $unit.entry
+    if(-not $source.EndsWith('.cu')){
+        $newObject=Join-Path $output ($source.Replace('/','_')+'.obj')
+        $unit.entry.command=$unit.entry.command.Replace($linkObject,$newObject).Replace(' /c ',' /I "'+$repo+'/src" /c ')
+        $unit.entry.output=$newObject
+    }
     $state=Get-EcmCompileState $repo $unit.entry $m.compile_setup -Production
     $states[$source]=$state
     $unchanged=$state.fingerprint -eq $unit.fingerprint -and
@@ -28,13 +51,12 @@ foreach($property in $m.compile_units.PSObject.Properties) {
     if($source.EndsWith('.cu')){throw "CUDA inputs changed; build the production worker normally first: $source"}
     $object=Join-Path $output ($source.Replace('/','_')+'.obj')
     $command=$unit.entry.command.Replace($state.object,$object)
-    if($command -eq $unit.entry.command){throw "Could not redirect host object: $source"}
+    if($state.object -ne $object){throw "Could not redirect host object: $source"}
     $commands+=$command;$commands+='if errorlevel 1 exit /b 1'
     $entry=$unit.entry|ConvertTo-Json -Depth 5|ConvertFrom-Json
     $entry.command=$command;$entry.output=$object;$entries[$source]=$entry
-    $link=$link.Replace($state.object,$object)
+    if($source -ne 'src/sync/files.cpp'){$link=$link.Replace($linkObject,$object)}
 }
-New-Item -ItemType Directory -Path $output|Out-Null
 $exe=Join-Path $output 'ecm_cuda_stage2.exe'
 $link=$link.Replace((Join-Path $worker 'ecm_cuda_stage2.exe'),$exe)
 if(-not $link.Contains($exe)){throw 'Could not redirect test executable'}
@@ -45,7 +67,7 @@ $lines=@('@echo off',$m.compile_setup,'if errorlevel 1 exit /b 1')+$commands
 & cmd.exe /d /c $batch 2>&1|Out-File -LiteralPath (Join-Path $output 'build.log') -Encoding utf8
 if($LASTEXITCODE){Get-Content -LiteralPath (Join-Path $output 'build.log') -Tail 30;throw 'Stage2 host overlay failed'}
 foreach($source in $states.Keys) {
-    $entry=if($entries.Contains($source)){$entries[$source]}else{$m.compile_units.$source.entry}
+    $entry=if($entries.Contains($source)){$entries[$source]}else{$units[$source].entry}
     $after=Get-EcmCompileState $repo $entry $m.compile_setup -Production
     Assert-EcmCompileInputs $states[$source] $after
     if($reused.Contains($source) -and (Get-FileHash -LiteralPath $reused[$source].object).Hash -ne $reused[$source].sha256){throw "Reused object changed: $source"}

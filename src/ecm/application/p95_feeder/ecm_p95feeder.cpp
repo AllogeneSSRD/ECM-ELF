@@ -44,7 +44,7 @@
 #include <gmp.h>
 
 #include "../../storage/save/ecm_edwards_save.h"
-#include "../../storage/queue/ecm_worktodo.h"
+#include "io/worktodo.h"
 #include "../../storage/queue/p95_worktodo.h"
 
 #ifdef _WIN32

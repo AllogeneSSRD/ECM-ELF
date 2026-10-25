@@ -84,7 +84,7 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 当前写入 `ECMS1B2` 二进制容器：固定小端字段、逐记录长度与 CRC32C，以及完整文件 CRC32C。任务身份绑定完整模数、曲线族、参数化、B1、指数约定、曲线数及精确 sigma；CPU 另绑定实现和 NAF 窗口，GPU 载荷检查自己的算法与状态布局。Montgomery CUDA ladder 保留 V5 头和设备状态。Edwards GPU 的二进制 V3 载荷保存状态、算法和指数指纹；指数从 B1 重建或从已验证缓存取得，不将完整大指数写进检查点。
 
-文本批次 V1 及其旧 Edwards GPU 文本载荷仍可读取。CUDA Montgomery ladder 可以从同目录旧 `.ecm_ckpt_<bits>_<first8>_<last8>.dat` 及其备份导入带校验的 V5 状态：逐 lane 核对完整 N、参数化、曲线数、布局、指数位数和进度，保留原文件。只有新批次没有算术载荷时才尝试导入；已有算术载荷优先。随机 sigma 从有效旧档继承，固定 sigma 不得被不同曲线替换；V4 及更早版本不导入。旧 GPU Edwards 独立文件 `ed_<旧模式>.save.gpu.ckpt` 也可在没有现有算术载荷时导入默认或当前模式对应的文件，继续检查完整 N、B1、指数、sigma 及曲线状态，原文件保留。
+文本批次 V1 及其旧 Edwards GPU 文本载荷仍可读取。CUDA Montgomery ladder 可以从同目录旧 `.ecm_ckpt_<bits>_<first8>_<last8>.dat` 及其备份导入带校验的 V5 状态：逐 lane 核对完整 N、参数化、曲线数、布局、指数位数和进度，保留原文件。没有待验证的批次容器且没有当前算术载荷时才尝试导入；已有算术载荷优先。已有仅种子批次保留自身 sigma 并从头计算，不用独立旧 GPU 档覆盖。随机 sigma 从有效旧档继承，固定 sigma 不得被不同曲线替换；V4 及更早版本不导入。旧 GPU Edwards 独立文件 `ed_<旧模式>.save.gpu.ckpt` 也可在没有现有算术载荷时导入默认或当前模式对应的文件，继续检查完整 N、B1、指数、sigma 及曲线状态，原文件保留。
 
 保留的旧源档不会单凭存在就反复续算：同一内部结果已确认全部曲线完成时，自动导入跳过该来源。迁移检查点时应保留配对最终结果，以及旧历史仍依赖的账本；若只将旧档复制到全新工作目录，程序无法从旧文件本身得知它是否已在其他目录完成。
 
@@ -92,9 +92,17 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 同一批次有进程独占锁，防止两个 worker 同时写同名文件。CPU Edwards 已完成曲线保留结果，CPU Montgomery 保留完成结果及尚未完成的 ladder 状态；SIMD Edwards 在各 lane 的恢复位号一致时继续该批，否则重算该 SIMD 批。GPU 存放整个设备批次的状态。只支持本容器中的对应后端载荷，不自动读取 Prime95 的检查点。Stage2 的曲线计数文件并非曲线内算术检查点；本节命名和续算保证适用于 Stage1。
 
-最终多曲线 save、内部 JSONL 和提交 JSON 均成功发布后才删除检查点。写入失败时保留批次状态和原队列任务；恢复发布不会重复增加数学工作回执或重复追加相同 save 记录。内部与提交文件的配置、字段和校验见 [ECM 结果输出](ECM_RESULTS.md)。
+单次模式在最终多曲线 save、内部 JSONL 和提交 JSON 均成功发布后删除检查点。队列模式继续保留 checkpoint，直至持久完成记录、finished 和源行提交成功；重启优先恢复收尾，完成状态不明时停止并保留证据。写入失败时保留批次状态和原队列任务；恢复发布不会重复增加数学工作回执或重复追加相同 save 记录。内部与提交文件的配置、字段和校验见 [ECM 结果输出](ECM_RESULTS.md)。
 
-Prime95 交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 自动忽略配置的 Prime95 转移路径，仅输出说明，不访问该路径或转移账本。受支持的 Montgomery PARAM0/3 可将 save 同步并向 Prime95 `worktodo.add` 追加任务，save 字段指向实际输出文件；失败交付进入 pending 文件，后续重试。不要由两个程序共同改写 Prime95 活动 `worktodo.txt`。
+### Prime95 持久交接
+
+交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 忽略 Prime95 转移路径，仅输出说明，不访问转移路径或账本。受支持的 Montgomery PARAM0/3 使用 `p95_worktodo_path` 指定外部队列，另须配置 `p95_sync_dir` 指定 save 目标目录；`save_sync_dir_1/2` 只用于备份，不作为 P95 文件已就绪的依据。P95 save 读取的 sigma 上限为 2⁶³−1；更宽 sigma 可以进行本地 Stage1，但不能交给该读取协议。
+
+成功批次生成规范化的 `ECMSTAGE2` 行，引用 P95 目录中的实际 save 与本批区间。同步先持久保存交接责任和原文件版本，再验证 N、B1、param、sigma、checksum、范围和既有目标前缀，完整发布并落盘目标文件，最后发布并落盘 `worktodo.add`。目标历史只允许延长，不能回退或重排。不同本地历史若使用同一目标文件名，会报前缀冲突并保留待交接记录；应为这些 worker 选择独立 p95_sync_dir 或保存名，不自动拼接并重映射 skip。任务引用的绝对路径须能被 Prime95 进程访问。文件失败不会发布对应任务；文件已就绪而任务写入失败时保留待交接记录，后续合资格任务或初始空队列启动可重试，无须重算 Stage1。关闭 `p95_worktodo_path` 暂停新的 P95 重试，保留的交接记录在重新启用后仍按原目标和路由投递。
+
+待交接记录位于程序目录的 `p95_add_pending.txt.handoff/`，`.intent` 表示仍由本程序承担交付责任，`.done` 保留批次去重依据。不要删除这些记录来清除 GUI 红色提示。旧 `p95_add_pending.txt` 中引用绝对 save 且范围、校验有效的 `ECMSTAGE2` 行会先转为新记录；无法证明保存范围的旧 `ECM/ECM2` 行保持原样并报错，需人工核对，不会猜测文件后继续投递。
+
+“投递成功”表示本程序已持久发布 drop box，不代表 Prime95 已完成接纳。Prime95 不参与本程序的写锁/完成确认，不能承诺跨进程恰好一次。崩溃若发生在发布与确认之间，恢复会检查 add、活动队列和发送账本；仍不能判定时保留 `.sending` 和 intent 并停止该交接，避免盲目重复。计算结果仍保留。不要让两个独立消费者同时修改 Prime95 活动 `worktodo.txt`。
 
 `edwards_stage2_transfer=1` 也可将无因子完成的 Edwards Stage1 任务投递到 `edwards_stage2_worker` 指定的 worker；0 沿用当前编号。它使用接收 worker 的共用 worktodo 配置。两项同时启用时由 `auto_stage2` 接管，通用的 worker 列表与目标文件设置见[自动交接](#自动交接到-stage2)。
 
@@ -108,7 +116,19 @@ Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并�
 
 ## 代码入口
 
-- [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)：命令行、TOML、队列、进度和交接。
-- [adapter.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)：CUDA 设备调度与资源；曲线构造/结果在同目录 host_math.cpp，codec/screen 在 host_io.cpp。
+- [main.cpp](../../src/main.cpp)：命令行、TOML、队列、进度和交接。
+- [runtime.cu](../../src/ecm/backend/cuda/stage1/montgomery/runtime.cu)：CUDA 设备调度与资源；曲线构造与结果转换在同目录 host_math.cpp，进度和诊断输出在 output.cpp，checkpoint codec 在 checkpoint.cpp。
 - [ecm_stage1_exp.cpp](../../src/ecm/core/stage1/ecm_stage1_exp.cpp)：指数生成与缓存。
 - [CPU 实现目录](../../src/ecm/backend/cpu/stage1/)：Montgomery、Edwards 和保存点。
+
+## 输入归一化与运行中编辑
+
+`src/io/cli.cpp`、`config.cpp`、`worktodo.cpp` 分别解释三个来源，`normalize.cpp` 应用默认、优先级和组合检查。原始输入保留显式值及来源位置；配置生成默认仍只以 `config/ecm_options.json` 为准。`ECM/ECM2` 省略曲线数时在归一化时补为 Prime95 的 100 条，空/零 sigma 表示未指定。无 B1/B2 位置参数时只有 worktodo 能提供任务；单次模式继续从 stdin 读取 N 或整数表达式。
+
+队列模式拒绝 CLI 的 `--curve`、`--gpu-param`、`--lcm`、`-gpucurves`、`-save/-savea` 和单次群阶诊断选项；`--bits` 需用于 `--gpu-info`。任务结构由 worktodo/typed save 决定。显式设备、target、impl、reduction、线程、NAF、affinity、checkpoint、目录和内核偏好可覆盖 worker 配置。sigma 优先级为 worktodo > 显式 CLI > 配置 > 原有随机策略；队列 CLI 仅接受不带 param 前缀的 sigma。运行时调试/缓存标志继续作用于进程。`--p95-dir` 为旧兼容参数，不启用交接。
+
+CLI/配置非法输入停止启动，诊断给出来源、键、原值和允许类型/范围；覆盖不会掩盖一个非法显式值。选中的非法 worktodo 行标为 `# ERROR` 并继续；文件、锁和标错写入失败停止。未知计算配置键严格报错，GUI-only 扩展仍按共享读取合同处理。
+
+计算期间冻结当前任务，其他行允许新增、删除、修改或重排。完成时重新读取文件，在当前 worker 中从上到下匹配第一条完全相同的任务；行号只用于诊断。找不到当前任务时保留结果和完成记录并停止推进，不删除其他行。任意编辑器不遵守文件编辑锁时，无法提供与合作写入方相同的并发保证。
+
+启动只检查当前 worker 的 `ECMSTAGE1` 且 skip=0 的行，按有效 save 的 METHOD 记录数修复；同一文件在该轮扫描中只统计一次，已有 `ECMSTAGE2` 和其他 worker 不改动。实际领取时重新统计以处理前序任务增长；收尾再强制重读并采用发布证明的本批区间。例如历史 150 条、新完成 300 条，最终为 skip=150、count=300。去重或恢复时以实际连续记录为准，不用总数减请求数猜测；无法证明连续范围则停止收尾。

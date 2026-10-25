@@ -3,6 +3,7 @@
 param([Parameter(Mandatory=$true)][string]$WorkerBuild,
       [Parameter(Mandatory=$true)][string]$Build,
       [switch]$IncludeGpuHost,
+      [switch]$IncludeOpenCLHost,
       [switch]$IncludeMontgomeryHost,
       [switch]$EnablePracHost,
       [switch]$IncludeQueueHost)
@@ -15,6 +16,7 @@ if(Test-Path -LiteralPath $output){throw 'Use a fresh output directory'}
 $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Raw|ConvertFrom-Json
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 New-Item -ItemType Directory -Path $output|Out-Null
+[IO.File]::WriteAllText((Join-Path $output ".gitignore"),"*`n")
 $sources=@('src/ecm/service/stage1/execution_contract.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/legacy_executor.cpp')
 if($IncludeGpuHost){
     $sources+=@('src/ecm/service/stage1/execution.cpp',
@@ -30,9 +32,10 @@ if($IncludeMontgomeryHost){
         'src/ecm/backend/cuda/stage1/montgomery/output.cpp',
         'src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
 }
+if($IncludeOpenCLHost){$sources+='src/ecm/backend/opencl/stage1/montgomery/workflow.cpp'}
 if($IncludeQueueHost){
-    $sources+=@('src/ecm/application/cli/stage1_input.cpp','src/ecm/application/cli/group_order.cpp',
-        'src/ecm/application/cli/queue_source.cpp','src/ecm/service/work/queue_workflow.cpp')
+    $sources+=@('src/io/normalize.cpp','src/ecm/application/cli/group_order.cpp',
+        'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/sync/files.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}
 $definitions=if($IncludeGpuHost){' /DECM_HAS_CUDA_STAGE1=1'}else{''}
@@ -63,6 +66,7 @@ foreach($source in $sources){
 }
 [ordered]@{complete=$true;compile_only=$true;compiler=$m.host_compiler;crt='MD';cuda_compiler_invocations=0;
     gpu_host_workflow_included=[bool]$IncludeGpuHost;
+    opencl_host_workflow_included=[bool]$IncludeOpenCLHost;
     montgomery_host_included=[bool]$IncludeMontgomeryHost;prac_host_enabled=[bool]$EnablePracHost;
     queue_host_included=[bool]$IncludeQueueHost;
     cuda_sdk_include_paths=0;cuda_sdk_headers=0;avx512_compile_option=$false;

@@ -158,7 +158,7 @@ Current `--help` also lists OpenCL kernel-root, binary-cache, TPI, work-group, l
 
 The former README's environment-variable migration corresponds to current flags. `--kernel-root DIR` selects the `.cl` source tree; `--kernel-cache-dir DIR`, `--no-kernel-cache` and `--kernel-cache-verbose` control the binary cache; `--compile-verbose` reports compilation time. `--tpi N` and `--wg N` support experiments with instance threads and work-group size. `--force-normalize`, `--addsub-fused-unroll`, `--sync-each-batch`, `--gpu-dump`, `--profile-ops` and `--verify-gpu` support diagnostics and cross-checks. They are not CUDA kernel-selection interfaces; validate results again after changing an operator path.
 
-Operator microbenchmarks have their own CLI. `opencl_ecm_addsub` provides `--no-asm`, `--asm-b64`, `--addsub-fused-unroll` and `--csv`; `opencl_ecm_montsqr` provides `--wg-impl`, `--wg-impl4-unroll`, `--csv` and related options. Both take kernel iterations, instances and launch repeats as positional arguments, with `--bits` selecting operand size. These are single-operator measurements and cannot be equated directly with complete ECM seconds per curve. Source entry points are `src/opencl_ecm_addsub_bench.cpp` and `src/opencl_ecm_montsqr_bench.cpp`.
+Operator microbenchmarks have their own CLI. `opencl_ecm_addsub` provides `--no-asm`, `--asm-b64`, `--addsub-fused-unroll` and `--csv`; `opencl_ecm_montsqr` provides `--wg-impl`, `--wg-impl4-unroll`, `--csv` and related options. Both take kernel iterations, instances and launch repeats as positional arguments, with `--bits` selecting operand size. These are single-operator measurements and cannot be equated directly with complete ECM seconds per curve. Source entry points are `tools/bench/opencl_ecm_addsub_bench.cpp` and `tools/bench/opencl_ecm_montsqr_bench.cpp`.
 
 <a id="cpu-stage1"></a>
 ## CPU Stage1 configuration
@@ -310,7 +310,7 @@ These historical numbers compare only the recorded machine, exponent, binaries a
 ## Documentation and repository layout
 
 - The [documentation index](docs/README.md) covers current usage, implementation, performance evidence and TODO. [Stage1](docs/usage/STAGE1.md), [Stage2](docs/usage/STAGE2.md) and [GUI](docs/usage/GUI.md) give detailed workflows.
-- The [architecture overview](docs/architecture/OVERVIEW.md) traces the driver in `src/core/`, CPU code in `src/cpu/`, CUDA glue in `src/cuda/`, the OpenCL host in `src/opencl_ecm_stage1.cpp`, and kernels in `kernels/cuda/` and `kernels/opencl/`. [Configuration maintenance](docs/architecture/CONFIGURATION.md) explains generation from `config/ecm_options.json` into templates and references.
+- The [architecture overview](docs/architecture/OVERVIEW.md) traces `src/main.cpp`, `src/io/`, `src/sync/`, and the CPU/CUDA/OpenCL backends under `src/ecm/`; standalone tests and tools live under `tools/`. [Configuration maintenance](docs/architecture/CONFIGURATION.md) explains generation from `config/ecm_options.json` into templates and references.
 - [Fixed mathematical and third-party references](docs/reference/README.md) retain ECM, curve, Goldilocks/NTT, Prime95/PrMers/GPUOWL derivations and research conditions. Original papers and translations remain in `docs/paper/`.
 - The [tools index](tools/README.md) covers `build/`, `bench/`, `test/`, `gen/`, `disasm/`, `log_parser/`, `ecm_prob/` and more. NPU microbenchmarks are under [RyzenAI](RyzenAI/README_ADDSUB.md).
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm/core/stage1/selection.h"
 #include <gmp.h>
+#include "ecm/storage/save/range.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@ struct Stage1Persistence {
     unsigned long ckpt_ms;
     unsigned ckpt_backups;
     std::string results_file="stage1_results.jsonl",submission_file="results.json.txt";
+    bool retain_completed_checkpoint=false;
 };
 
 struct Stage1Options {
@@ -90,6 +92,8 @@ public:
     mpz_srcptr factor(uint32_t index) const noexcept;
     int found(uint32_t index) const noexcept;
     uint64_t sigma(uint32_t index) const noexcept;
+    const ecm_save::Range &save_range() const noexcept;
+    const std::string &completed_checkpoint() const noexcept;
 };
 
 TaskResult run_stage1_task(const Stage1Request &,const TaskDependencies &);

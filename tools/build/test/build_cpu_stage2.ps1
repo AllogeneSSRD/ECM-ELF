@@ -9,6 +9,8 @@ if(-not $VcVars){
 }
 if(-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)){throw 'MSVC x64 environment not found'}
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
+New-Item -ItemType Directory -Force -Path $Build|Out-Null
+[IO.File]::WriteAllText((Join-Path $Build ".gitignore"),"*`n")
 $project=Join-Path $Build 'project';New-Item -ItemType Directory -Force $project | Out-Null
 $gmpRoot=(Join-Path $repo 'third_party/gmp-zen3/dist').Replace('\','/')
 $repoUnix=$repo.Replace('\','/')

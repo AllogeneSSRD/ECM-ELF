@@ -2,6 +2,8 @@
 #include "../../src/ecm/service/stage1/execution_contract.h"
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_binary.h"
+#include "../../src/ecm/storage/save/publication.h"
+#include "../../src/ecm/storage/save/ecm_edwards_io.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -39,7 +41,7 @@ static int window() {return 8;}
 
 // Computation is replaced at the private legacy seam. Real task sequencing,
 // checkpoint locking, publication, result ownership and status mapping run.
-static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,bool,
+static int execute(mpz_srcptr n,double,double,uint32_t count,const std::string &save,bool,
                    const std::string &,ExecutionOptions &options,ExecutionResult *out) {
     ++calls;
     require(options.stage1_curves==0 && options.stage1_t0_ms==0,"execution state reused");
@@ -91,11 +93,22 @@ static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,b
     out->factors=factors;out->array_found=found;
     out->firstsigma=26;out->firstsigma64=26;
     out->ret=ECM_NO_FACTOR_FOUND; // A hit array may carry a factor independently of this code.
+    if(mode=="bad_save_checksum") {
+        std::string records;
+        for(uint32_t i=0;i<count;++i)records+="METHOD=ECM; SIGMA="+std::to_string(out->sigmas[i])+"; B1=20; N=10403; X=0x1; CHECKSUM=0;\n";
+        require(ecm_save::publish(save,records,false),"bad-checksum fixture publication");
+    }
     if(mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_invalid") {
         using Kind=ExecutionResult::CurveKind;
         out->curve_kinds.assign(count,mode=="typed_no_point"?Kind::CompletedWithoutPoint:Kind::Stage2Point);
         if(mode=="typed_invalid")out->curve_kinds[0]=Kind::Degenerate;
         out->completion=ExecutionResult::Completion::Completed;
+    }
+    if(mode=="typed_partial_point") {
+        using Kind=ExecutionResult::CurveKind;
+        out->curve_kinds={Kind::CompletedWithoutPoint,Kind::Stage2Point};
+        mpz_set_ui(factors[1],1);out->completion=ExecutionResult::Completion::Completed;
+        require(ecm_save::publish(save,ecm_edwards::save_line(n,factors[1],out->sigmas[1],20,false),false),"partial point publication");
     }
     return out->ret;
 }
@@ -107,6 +120,7 @@ int main(int argc,char **argv) {
         fs::create_directories(folder);
         Stage1Options options;options.execution.selection.target=ExecutionTarget::Cpu;
         options.execution.selection.curve=CurveModel::Montgomery;options.execution.selection.gpu_param=0;
+        if(mode=="typed_partial_point")options.execution.selection.curve=CurveModel::Edwards;
         if(mode=="selection_snapshot") {
             options.execution.selection.target=ExecutionTarget::Gpu;
 #ifdef _WIN32
@@ -118,18 +132,19 @@ int main(int argc,char **argv) {
         options.persistence.tmp_dir=folder.string();options.persistence.results_file=(folder/"internal.jsonl").string();
         options.persistence.submission_file=(folder/"results.json.txt").string();options.identity.sigma_fixed=true;options.identity.fixed_sigma64=26;
         const auto save=(folder/"point.save").string();const std::string expression="10403";
-        const auto checkpoint=folder/".m0_s1_bit14_20.ckpt";
+        const auto checkpoint=folder/(mode=="typed_partial_point"?".e_s1_bit14_20.ckpt":".m0_s1_bit14_20.ckpt");
         if(mode=="bad_begin") {std::ofstream damaged(checkpoint,std::ios::binary);damaged<<"damaged-container";}
         mpz_t n;mpz_init_set_ui(n,10403);
         const TaskDependencies deps{execute,identity,window};
         auto result=run_stage1_task({n,20,20,2,save,false,expression,options},deps);
         mpz_clear(n); // Result factors/sigmas must not borrow the request's modulus.
         require(options.execution.stage1_threads==ecm_stage1::Stage1Options{}.execution.stage1_threads,"request changed");
-        if(mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="selection_snapshot") {
+        if(mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot") {
             require(calls==1 && result.status()==TaskStatus::Completed,"completed status");
             require(result.failure_source()==FailureSource::None && result.task_return()==ECM_NO_FACTOR_FOUND,"completed code");
             require(result.curves()==2 && result.has_sigmas() && result.sigma(1)==27,"curve identity");
             require(!fs::exists(checkpoint) && fs::exists(options.persistence.results_file) && fs::exists(options.persistence.submission_file),"completed publication");
+            if(mode=="typed_partial_point")require(result.save_range().valid && result.save_range().records.size()==1,"partial actual range");
             auto moved=std::move(result);
             require(!result.has_factors() && moved.curves()==2 && moved.sigma(0)==26,"move ownership");
             if(mode=="factor")require(mpz_cmp_ui(moved.factor(0),101)==0 && moved.found(0)==ECM_FACTOR_FOUND_STEP1,"owned factor with legacy NF code");
@@ -137,7 +152,7 @@ int main(int argc,char **argv) {
             require(result.status()==TaskStatus::Stopped && result.failure_source()==FailureSource::None,"stopped status");
             require(result.has_sigmas() && !result.has_factors(),"independently owned sigma payload");
             require(fs::exists(checkpoint) && !fs::exists(options.persistence.submission_file),"stop published incomplete NF");
-        } else if(mode=="publication" || mode=="stop_publication") {
+        } else if(mode=="publication" || mode=="stop_publication" || mode=="bad_save_checksum") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Publication,"publication priority/source");
             require(fs::exists(checkpoint),"publication failure lost checkpoint");
         } else if(mode=="execution" || mode=="execution_stop" || mode=="throw" || mode=="typed_invalid") {

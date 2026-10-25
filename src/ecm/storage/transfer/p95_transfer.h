@@ -29,6 +29,7 @@
 struct P95TransferConfig {
     // ini `p95_worktodo_path`: Prime95's worktodo.txt. Empty = the feature is off.
     std::string worktodo_path;
+    std::string sync_dir; // Dedicated, validated save destination (p95_sync_dir).
     // ini `p95_add_workers`: "" (no section header) | "3" | "1,3" | "1-8" | "auto".
     std::string add_workers;
     // Where undelivered lines wait (usually "<exe dir>\p95_add_pending.txt").

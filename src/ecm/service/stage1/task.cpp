@@ -13,9 +13,11 @@
 #include <regex>
 #include <sstream>
 #include <cstring>
+#include <cmath>
+#include "sync/files.h"
 
 namespace ecm_stage1 {
-struct TaskResult::State : ExecutionResult {};
+struct TaskResult::State : ExecutionResult {ecm_save::Range save_range;std::string completed_checkpoint;};
 
 Stage1ExecutionPreferences::Stage1ExecutionPreferences()
     : stage1_threads(ecm_config::defaults::stage1_stage1_threads),
@@ -43,10 +45,15 @@ mpz_srcptr TaskResult::factor(uint32_t i) const noexcept {return has_factors()?d
 int TaskResult::found(uint32_t i) const noexcept {return has_found()?data_->array_found[i]:ECM_ERROR;}
 uint64_t TaskResult::sigma(uint32_t i) const noexcept {return has_sigmas()?data_->sigmas[i]:0;}
 
+const ecm_save::Range &TaskResult::save_range() const noexcept {return data_->save_range;}
+const std::string &TaskResult::completed_checkpoint() const noexcept {return data_->completed_checkpoint;}
+
 static void stage1_copy_save_history(const Stage1Options &opt,const std::string &destination) {
     if(opt.persistence.legacy_save_source.empty())return;
     const auto source=opencl_ecm_resolve_data_path_buf(opt.persistence.legacy_save_source.c_str());
     const auto target=opencl_ecm_resolve_data_path_buf(destination.c_str());
+    if(!opencl_ecm_ensure_parent_dir(target.c_str()))throw std::runtime_error("cannot create prefixed save directory");
+    ecm_sync::FileLock publication(target);
     if((std::filesystem::exists(target) && std::filesystem::file_size(target)) ||
        !std::filesystem::exists(source) || !std::filesystem::file_size(source))return;
     std::ifstream input(source,std::ios::binary);if(!input)throw std::runtime_error("cannot read legacy save history");
@@ -72,9 +79,7 @@ static void stage1_copy_save_history(const Stage1Options &opt,const std::string 
     if(input.bad())throw std::runtime_error("cannot read complete legacy save history");
     if(!records)return;
     if(!opencl_ecm_ensure_parent_dir(target.c_str()))throw std::runtime_error("cannot create prefixed save directory");
-    const auto temp=ecm_stage1_checkpoint_temp_path(target);
-    std::filesystem::copy_file(source,temp,std::filesystem::copy_options::overwrite_existing);
-    if(!ecm_stage1_commit_checkpoint(target,temp))throw std::runtime_error("cannot publish prefixed save history");
+    ecm_sync::write_atomic(std::filesystem::u8path(target),ecm_sync::read_file(std::filesystem::u8path(source)));
     ecm_ts_fprintf(stdout,"Stage1 save history copied: source=%s target=%s records=%llu original_retained=1\n",
                    source.c_str(),target.c_str(),static_cast<unsigned long long>(records));
 }
@@ -92,6 +97,24 @@ static ecm_results::Submission stage1_submission(const Stage1Options &opt,const 
     }
     // Validate complete metadata against the actual modulus before running.
     (void)ecm_results::target_exponent(r,N);return r;
+}
+
+static void validate_saved_batch(const ecm_save::Range &range,const Stage1Options &opt,mpz_srcptr expected,double bound,const ExecutionResult &result) {
+    if(!range.valid)return;
+    const bool ed=opt.execution.selection.curve==CurveModel::Edwards;
+    const bool legacy_ed=ed && result.curve_kinds.empty();
+    std::vector<uint64_t> sigmas;
+    for(uint32_t i=0;i<result.curves;++i)
+        if(!ed || result.curve_kinds.empty() || result.curve_kinds[i]!=ExecutionResult::CurveKind::CompletedWithoutPoint)
+            sigmas.push_back(result.sigmas[i]);
+    if(!legacy_ed && range.records.size()!=sigmas.size())throw std::runtime_error("saved batch count differs from completed point count");
+    ecm_save::validate_batch(range,expected,ed?uint64_t(bound):uint64_t(std::llround(bound)),
+        ed?-1:opt.execution.selection.target==ExecutionTarget::Cpu?0:opt.execution.selection.gpu_param,sigmas,legacy_ed);
+    if(legacy_ed)for(uint32_t i=0;i<result.curves;++i)if(result.array_found[i]!=ECM_NO_FACTOR_FOUND) {
+        const auto token="SIGMA="+std::to_string(result.sigmas[i])+";";
+        if(std::none_of(range.records.begin(),range.records.end(),[&](const auto &line){return line.find(token)!=line.npos;}))
+            throw std::runtime_error("saved batch omitted a completed factor");
+    }
 }
 
 bool stage1_publish_factor(const Stage1Options &opt,mpz_srcptr n,uint64_t b1,uint64_t sigma,mpz_srcptr factor) {
@@ -175,11 +198,14 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
         phase=FailureSource::Execution;
+        ecm_save::Capture publication;
         const int rc=deps.execute(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
         if(rc==ECM_ERROR){if(out->completion==ExecutionResult::Completion::Legacy && !ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);out->finish_task(rc,ecm_stage1_stop_requested()!=0);return result;}
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
         out->validate_curves(N);
+        out->save_range=std::move(publication.range);
         phase=FailureSource::Publication;
+        validate_saved_batch(out->save_range,opt,N,B1,*out);
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
         std::vector<ecm_results::Stage1BatchRecord> records;
         std::string task_identity=ecm_edwards::hex(N)+"|"+std::to_string(base.b1)+(base.edwards?"ed":"mont"+std::to_string(base.param));
@@ -195,7 +221,8 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         }
         ecm_results::publish_stage1_batch(opt.persistence.results_file,opt.persistence.submission_file,
                                         std::move(records),N,task_identity);
-        session.close(true);
+        if(opt.persistence.retain_completed_checkpoint)out->completed_checkpoint=path;
+        session.close(!opt.persistence.retain_completed_checkpoint);
         ecm_ts_fprintf(stdout,"Stage1 results: internal=%s submission=%s\n",opt.persistence.results_file.c_str(),opt.persistence.submission_file.c_str());
         out->finish_task(out->ret,false);
         return result;

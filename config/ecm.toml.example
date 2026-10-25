@@ -41,12 +41,11 @@ worktodo = "worktodo.txt"
 [stage1]
 
 affinity = ""
-# EN: Logical CPU IDs or ranges for CPU Stage1 threads, assigned round-robin. Empty, none, or auto leaves
-# EN: scheduling to the OS. The current Windows implementation supports only IDs 0..63 in one processor
-# EN: group; other platforms do not apply this binding. Use IDs available on the machine.
-# 中文：设置 CPU Stage1 计算线程的亲和性，可用逻辑 CPU 编号列表或区间；线程依次循环使用列表中的 CPU。空值、
-# 中文：none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现只对单处理器组内编号 0..63 生效，其他平
-# 中文：台不执行此绑定；编号还须对应实际可用的逻辑 CPU。
+# EN: CPU affinity list/ranges, e.g. 0-7,10. Indices must be 0..1023, with at most 1024 entries. Empty,
+# EN: auto or none leaves threads unpinned. Invalid entries are rejected with their source and allowed
+# EN: grammar, including values hidden by worker/CLI overrides.
+# 中文：CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非
+# 中文：法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。
 
 auto_stage2 = 0
 # EN: Enable Stage1-to-Stage2 handoff after successful Stage1 without a factor. With no receiver list and
@@ -217,11 +216,20 @@ p95_recover_lost = true
 # 中文：控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，
 # 中文：0 关闭自动补投；只对程序能够确认的已交接任务生效。
 
+p95_sync_dir = ""
+# EN: Dedicated save destination for Prime95 handoff; required with p95_worktodo_path. Backup destinations
+# EN: are independent. Existing published save prefixes must remain unchanged; only complete appended
+# EN: records may extend them.
+# 中文：Prime95 交接专用存档目录，启用 p95_worktodo_path 时必须设置。备份目录独立；已发布存档前缀保持不变，
+# 中文：只允许追加完整记录。
+
 p95_worktodo_path = ""
 # EN: Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this
-# EN: path and keep saves local; they do not access Prime95 transfer files.
+# EN: path and keep saves local; they do not access Prime95 transfer files. Requires p95_sync_dir. The
+# EN: save is validated and published before worktodo.add.
 # 中文：用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，
-# 中文：存档保留在本地，不访问 Prime95 转移文件。
+# 中文：存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入
+# 中文：worktodo.add。
 
 progress_color = "cyan"
 # EN: Color of the Stage1 console progress bar. none disables color. This does not change ordinary file
@@ -256,13 +264,16 @@ save_name_pattern = "{curve}_{target}_{b1}.save"
 
 save_sync_dir_1 = ""
 # EN: First destination for Stage1 save synchronization. Empty disables this destination; sync_mode
-# EN: controls the files and synchronization policy.
-# 中文：指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。
+# EN: controls the files and synchronization policy. Backup only; this path never authorizes publishing a
+# EN: Prime95 task.
+# 中文：指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。 仅用于文件备份；
+# 中文：此路径不作为 Prime95 任务发布依据。
 
 save_sync_dir_2 = ""
 # EN: Second destination for Stage1 save synchronization. Both destinations may be enabled; empty disables
-# EN: only this destination.
-# 中文：指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。
+# EN: only this destination. Backup only; this path never authorizes publishing a Prime95 task.
+# 中文：指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。 仅用于文
+# 中文：件备份；此路径不作为 Prime95 任务发布依据。
 
 sigma = 0
 # EN: Initial curve sigma. 0 chooses a random value; consecutive curves use sigma+i without 64-bit

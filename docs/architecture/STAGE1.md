@@ -14,11 +14,11 @@ Stage1 单次运行和队列模式共用五个独立选择项：`curve`（Montgo
 
 TOML 使用 `curve`、`target`、`impl`、`reduction`、`lcm`；CLI 使用同名的双横线选项。`curve=mont|ed` 与 `target=cpu|gpu` 是不同轴；`impl=auto|simd|scalar` 只用于 CPU，`reduction=auto|montgomery|mersenne-fold` 控制 CPU SIMD 约减，`lcm=1|12` 控制 Montgomery 标量的倍数。Edwards 路径按曲线约定固定使用 48·lcm(1…B1)，因此拒绝 `lcm=12`；GPU 执行不接受非 auto 的 CPU 专用选项，显式归约必须同时选择 `impl=simd`，避免 auto 落到标量后忽略该设置。
 
-GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行范围取决于链接的后端和构建配置。CPU Montgomery 只实现 PARAM0，因此 CPU 单次运行只接受 `-sigma 0:s` 这种带参数化前缀的种子；Edwards 不接受参数化前缀，`--gpu-param` 仅适用于 GPU。启动曲线计算前，驱动查询当前 GPU 后端是否支持该参数化；OpenCL 仅实现 PARAM3，CUDA 的 PARAM2 与 PARAM3 还受是否编入相应内核及折叠构建配置约束。CUDA PARAM0 在曲线构造、检查点及 save 中保留完整 64 位 sigma，批次不得在 2⁶⁴ 处回绕。PARAM2/3 的固定 sigma 及曲线批次须满足 sigma+曲线数≤2³²；不再截取低 32 位继续计算。参数化与 sigma 的冲突、后端不支持项在初始化 GPU 前报错。队列任务的 sigma 不符合要求时停止并保留原 worktodo。
+GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行范围取决于链接的后端和构建配置。CPU Montgomery 只实现 PARAM0，因此 CPU 单次运行只接受 `-sigma 0:s` 这种带参数化前缀的种子；Edwards 不接受参数化前缀，`--gpu-param` 仅适用于 GPU。启动曲线计算前，驱动查询当前 GPU 后端是否支持该参数化；OpenCL 仅实现 PARAM3，CUDA 的 PARAM2 与 PARAM3 还受是否编入相应内核及折叠构建配置约束。CUDA PARAM0 在曲线构造、检查点及 save 中保留完整 64 位 sigma，批次不得在 2⁶⁴ 处回绕。PARAM2/3 的固定 sigma 及曲线批次须满足 sigma+曲线数≤2³²；不再截取低 32 位继续计算。参数化与 sigma 的冲突、后端不支持项在初始化 GPU 前报错。选中的队列任务 sigma 不符合要求时输出来源、值和范围，标为错误行并继续；队列 I/O 或标错失败时停止。
 
 `ECMSTAGE1` 作为 save 型 Stage1 输入时，文件名前缀决定该任务的曲线构造，末尾字段决定 B1；覆盖 TOML 后再校验后端能力和 sigma 范围。`ECMSTAGE2` 只由独立 Stage2 程序领取。每条 Stage1 任务复制基础选项，防止混合队列之间传播覆盖。Edwards 前缀同时恢复其固定标量约定；执行目标保持 TOML 设置。名称、旧 save 历史复制及交接合同见[队列输入](../usage/STAGE1.md#程序与输入)。
 
-这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核、save 发布及各后端 checkpoint 仍沿用各自的路径。入口见 [selection.h](../../include/ecm/core/stage1/selection.h)、[ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp) 和 [ecm_backend.h](../../include/ecm/service/execution/legacy_gpu.h)。
+这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核及各后端 checkpoint 保持各自职责；后端生成 save 记录，文件发布与区间校验共用保存模块。入口见 [selection.h](../../include/ecm/core/stage1/selection.h)、[main.cpp](../../src/main.cpp) 和 [ecm_backend.h](../../include/ecm/service/execution/legacy_gpu.h)。
 
 ## 单任务编排与资源拥有权
 
@@ -28,17 +28,17 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调，以及 CUDA 延迟验证能力标志 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；逐曲线状态明确区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed，旧 CPU/OpenCL 通过 Legacy 兼容。CUDA 的拥有值与 sigma 在发布前核对状态一致性，不能将退化/失败当作无因子完成；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
+任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [main.cpp](../../src/main.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调，以及 CUDA 延迟验证能力标志 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；逐曲线状态明确区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed，旧 CPU/OpenCL 通过 Legacy 兼容。CUDA 的拥有值与 sigma 在发布前核对状态一致性，不能将退化/失败当作无因子完成；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
 
-任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 18 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 20 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
 ## 应用输入与队列编排
 
-driver 组装一次计算、身份和默认 NAF 三回调，直接模式调用 task，队列模式进入应用 [queue_source.cpp](../../src/ecm/application/cli/queue_source.cpp)。source 读取一次配置快照，解析两种任务格式，规范化参数/路径，并按实际曲线初始化 Prime95 交接；它通过 NextQueueTask 提供已规范化输入，不执行计算或完成提交。[stage1_input.cpp](../../src/ecm/application/cli/stage1_input.cpp)集中共同输入检查和命名。
+main 组装一次计算、身份和默认 NAF 依赖，单次与队列模式共用 task。三个来源的解析、默认与覆盖、拥有的完整输入分别集中在 [io](../../src/io/)；唯一队列循环和完成顺序在 main。解析不改动运行时单例，归一化不写队列/日志/同步文件；完整流程和目录见 [架构与术语](OVERVIEW.md)。
 
-[queue_workflow.cpp](../../src/ecm/service/work/queue_workflow.cpp)是唯一任务循环与完成协议。其 [公开合同](../../include/ecm/service/work/queue_workflow.h)中 QueueItem 拥有 mpz 模数、字符串和本次选项；转交配置指针借用应用状态至同步返回，不能保存 Stage1Request 的借用引用。QueuePaths 仅传队列/finished/save 同步策略，没有整个应用 Settings 或额外 Runner。
+后端先发布批次 save，task 核对本批 N、B1、curve/param、sigma 与 checksum，并发布最终结果。队列随后强制重读 save，核对发布时确认的连续 METHOD 区间。成功后先持久保存 P95/本地 Stage2 待交接责任，再保存完成记录、发布 finished 并按原任务票据原子推进队列，清理完成 checkpoint，最后执行备份与交接重试。计算、准备、设备或发布失败/停止按来源处理；选中的非法输入标错并继续，标错/I/O/锁失败终止。
 
-单任务发布封存仍在 task。QueueWorkflow 检查准备/持久化/发布/设备失败 → 展示因子 → 检查停止/执行失败；成功后 Stage2 pending → finished → 按原票据删除/替换源行 → 同步 save → Stage2 flush → Prime95 delivery。文件模块只做具体读写。准备/持久化/发布/设备失败或停止保留原行，其他执行失败标记原行；解析错误标记失败的既有返回 0 策略也保留。save skip 仍在执行前预读；Prime95 idle recovery 区分初始空队列和已读取无效任务。不存在逐任务重新读取 TOML。
+完成记录保留队列提交前后版本证据，恢复不再执行已经完成的数学工作；若外部编辑使提交状态不可判定，保留结果、checkpoint 和完成记录并停止，不猜测下一条重复任务。未来任务的正常新增、删除、重排在运行期间仍可进行。P95 的文件先就绪、任务后发布及交接消费限制见 [使用说明](../usage/STAGE1.md#prime95-持久交接)。
 
 ## 选择词汇与配置依赖
 
@@ -52,7 +52,7 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 [stage1_progress.h](../../include/ecm/platform/stage1_progress.h)只声明共享 GPU screen 格式及 SpeedWindow 方法；实现位于 [stage1_progress.cpp](../../src/ecm/platform/stage1_progress.cpp)。50 样本窗口的布局、统计公式与 stdout 协议保持，不新增 Pimpl 分配。CUDA 包含声明；修改格式或速度统计函数体只需重编对应 CXX。Montgomery 对该头的多余显式 OBJECT_DEPENDS 已移除，真实 include 依赖仍正常校验。
 
-共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列已提取；Montgomery 环境策略、私有执行合同和应用 PARI 已收口。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
+共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列读写已集中于主机读写 Module；Montgomery 环境策略、私有执行合同和应用 PARI 已收口。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
 
 ## CPU 执行与共享主机准备
 
@@ -120,13 +120,13 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 ### GPU Edwards
 
-[CUDA NAF 批量入口](../../src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [标量与 NAF 合同](../../include/ecm/core/stage1/scalar.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../src/ecm/backend/cuda/stage1/edwards/naf.cuh)。
+[CUDA NAF 批量入口](../../src/ecm/backend/cuda/stage1/edwards/runtime.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [标量与 NAF 合同](../../include/ecm/core/stage1/scalar.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../src/ecm/backend/cuda/stage1/edwards/naf.cuh)。
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
 
 二进制与NAF的实例共享[位宽清单](../../src/ecm/backend/cuda/dispatch/tiers.def)，核函数和七组实例化文件位于 `src/ecm/backend/cuda/stage1/edwards/instances/`，按TPI及位宽范围拆分并行编译；`src/ecm/backend/cuda/stage1/`保留输入校验、分派和主机驱动，相关 API 为曲线目录内的私有头。模板算术与切片逻辑见[共用实例实现](../../src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
 
-主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/ecm/backend/cuda/stage1/edwards/edwards.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
+主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/ecm/backend/cuda/stage1/edwards/runtime.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
 [曲线构造](../../src/ecm/core/curve/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
@@ -193,7 +193,7 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 - [runtime.cu](../../src/ecm/backend/cuda/stage1/montgomery/runtime.cu)：设备调度、同步及回读；[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)负责曲线布局与归一化，[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)负责保存点，output.cpp 负责输出。
 - [arithmetic.cuh](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh)、[instances.cuh](../../src/ecm/backend/cuda/stage1/montgomery/instances/instances.cuh)、[registry.cu](../../src/ecm/backend/cuda/stage1/montgomery/registry.cu)：设备 ladder、按组实例及薄发射器。
 - [edwards_runtime.inl](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)、[instances.cuh](../../src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh)：Edwards 主机循环与设备实例。
-- [prac_runtime.inl](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl)：计划、策略、切片及恢复。
+- [PRAC runtime.cu](../../src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu)：计划、策略、切片及恢复。
 - [cgbn_stage1_prac_single_add.cuh](../../src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_single_add.cuh)：专用链规则。
 - [cgbn_edwards_point.cuh](../../src/ecm/backend/cuda/stage1/edwards/point.cuh)：GPU Edwards 扩展坐标算术，由批量 worker 与独立探针共用。
 - [ecm_mont_cpu.cpp](../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.cpp)、[ecm_edwards_cpu.cpp](../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp)：CPU 实现。

@@ -921,13 +921,17 @@ long long App::p95PendingCount() {
     if (now < p95_pending_next_scan_ms_) return p95_pending_cached_;
     p95_pending_next_scan_ms_ = now + 500;
     std::ifstream in(p95PendingPath());
-    if (!in) return p95_pending_cached_ = 0;
     long long n = 0;
     std::string line;
     while (std::getline(in, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
         if (!line.empty()) ++n;
     }
+    std::error_code error;
+    const auto intents=std::filesystem::u8path(p95PendingPath()+".handoff");
+    if(std::filesystem::exists(intents,error))
+        for(std::filesystem::directory_iterator it(intents,error),end;!error && it!=end;it.increment(error))
+            if(it->path().extension()==".intent")++n;
     return p95_pending_cached_ = n;
 }
 
@@ -1035,7 +1039,9 @@ void App::draw_p95_notice(float height, float host_top) {
         }
         ImGui::SameLine();
         if (ImGui::SmallButton(loc_.t("p95", "open_pending").c_str())) {
-            open_in_explorer(p95PendingPath());
+            const auto intents=p95PendingPath()+".handoff";
+            std::error_code error;
+            open_in_explorer(std::filesystem::exists(std::filesystem::u8path(intents),error)?intents:p95PendingPath());
         }
         ImGui::SameLine();
         ImGui::TextDisabled("p95_add_workers=%s",

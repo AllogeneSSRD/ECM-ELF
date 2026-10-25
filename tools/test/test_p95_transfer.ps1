@@ -17,8 +17,8 @@
       [3] auto              : NumWorkers=2 from prime.txt, worker 1 busy -> worker 2 wins
       [4] range             : p95_add_workers = 1-2, worker 1 empty -> worker 1 wins
       [5] invalid specs     : 2000 and "abc" -> warning + header-less append (never a throw)
-      [6] verbatim          : AID and known-factors field survive byte for byte, and the
-                              line is delivered even when the run finds a factor
+      [6] verbatim          : AID and known-factors survive; the actual saved range and
+                              absolute synchronized file are delivered for NF batches
       [7] lock held         : a fresh worktodo.add.lock fails the delivery; the line is
                               PARKED and the next task re-delivers it (then pending is gone)
       [8] stale lock        : a lock older than 60 s is preempted instead of blocking
@@ -114,6 +114,7 @@ function Invoke-Task {
     Write-Text (Join-Path $dir 'p95\prime.txt') $primeTxt
     if ($primeLog -ne "") { Write-Text (Join-Path $dir 'p95\prime.log') $primeLog }
     Write-Text $p95TodoPath $p95Todo
+    $task = [regex]::Replace($task, '"([^"]+\.save)"', {param($m) '"' + (Join-Path $dir ('saves\' + [IO.Path]::GetFileName($m.Groups[1].Value))) + '"'})
     Write-Text $todo ("[Worker #1]`r`n" + $task + "`r`n")
 
     # NOTE: parenthesise every concatenation inside an array literal -- the comma binds
@@ -130,7 +131,9 @@ function Invoke-Task {
         ('log_file = ' + (Toml-String $log)),
         'verbose = false',
         'ckpt_seconds = 0',
+        'exp_cache = "off"',
         ('p95_worktodo_path = ' + (Toml-String $p95TodoPath)),
+        ('p95_sync_dir = ' + (Toml-String (Join-Path $dir 'p95\saves'))),
         ('p95_add_workers = ' + (Toml-String $workerSpec))
     )
     if ($iniExtra -ne '') { $iniLines += $iniExtra }
@@ -151,12 +154,21 @@ function Invoke-Task {
     $sw.Stop()
     Write-Text (Join-Path $dir ('run_' + [Guid]::NewGuid().ToString('N') + '.log')) $out
     Check ($name + ' process completed') ($code -eq 0) ("exit=" + $code)
+    $actualAdd = @(if (Test-Path $addPath) { Get-Content -LiteralPath $addPath } else { @() })
+    foreach ($savedLine in @($actualAdd | Where-Object { $_ -match '^ECMSTAGE2=' })) {
+        $savedPath = [regex]::Match($savedLine, '"([^"]+\.save)"').Groups[1].Value
+        Check ($name + ' points published before assignment') ([IO.Path]::IsPathRooted($savedPath) -and (Test-Path -LiteralPath $savedPath -PathType Leaf))
+    }
+    # Existing routing assertions compare only the unchanged CSV fields; the
+    # absolute destination itself is verified above and preserved as actualAdd.
+    $comparableAdd = @($actualAdd | ForEach-Object { [regex]::Replace($_, '"([^"]+\.save)"', {param($m) '"' + [IO.Path]::GetFileName($m.Groups[1].Value) + '"'}) })
 
     return @{
         dir         = $dir
         out         = $out
         addPath     = $addPath
-        add         = @(if (Test-Path $addPath) { Get-Content -LiteralPath $addPath } else { @() })
+        add         = $comparableAdd
+        actualAdd   = $actualAdd
         p95TodoPath = $p95TodoPath
         p95Before   = $p95Before
         p95After    = if (Test-Path $p95TodoPath) { Get-Content -LiteralPath $p95TodoPath -Raw } else { '' }
@@ -238,18 +250,17 @@ Check "abc used worker=0"                   ((Get-Notice $r5b.out 'warn') -match
 
 # ------------------------------------------------------------------ [6] verbatim ---------
 Write-Host "[6] AID + known factors survive byte for byte"
-# 1943118631 really divides 2^677-1 (docs/usage/STAGE1.md), so N_eff is legitimate.
-$verbatim = 'ECMSTAGE1=ABCDEF0123456789ABCDEF0123456789,1,2,677,-1,"m0_m677_1e3.save",0,0,1,"1943118631"'
+# Divide 2^1042-1 by 2^521+1; the remaining prime M521 cannot yield a factor.
+$known = ([Numerics.BigInteger]::Pow([Numerics.BigInteger]2,521)+1).ToString()
+$verbatim = 'ECMSTAGE1=ABCDEF0123456789ABCDEF0123456789,1,2,1042,-1,"m0_m1042_1e3.save",0,0,1,"' + $known + '"'
 $handoffVerbatim = $verbatim.Replace('ECMSTAGE1=', 'ECMSTAGE2=')
 $r6 = Invoke-Task -name 'verbatim' -task $verbatim -workerSpec '1' -p95Todo $todoBoth
 $hit6 = ($r6.out -match 'FACTOR FOUND')
 Write-Host ("      elapsed={0:N1}s  factor found in this run: {1}" -f $r6.seconds, $hit6)
 Check "the fields survive in worktodo.add"      ($r6.add -contains $handoffVerbatim)
 Check "the AID is preserved"                    (@($r6.add | Where-Object { $_ -match 'ABCDEF0123456789ABCDEF0123456789' }).Count -eq 1)
-Check "the known-factors field is preserved"    (@($r6.add | Where-Object { $_ -match '"1943118631"' }).Count -eq 1)
-# Deliberately unconditional: the handoff must not depend on whether a factor was found
-# (Prime95's stage 2 still has to run the GCD and report it).
-Check "delivered whether or not it hit"         ($r6.add -contains $handoffVerbatim)
+Check "the known-factors field is preserved"    (@($r6.add | Where-Object { $_.Contains('"' + $known + '"') }).Count -eq 1)
+Check "the NF batch is delivered"              (-not $hit6 -and $r6.add -contains $handoffVerbatim)
 
 # ------------------------------------------------------------------ [7] lock -------------
 Write-Host "[7] a held lock parks the line, the next task re-delivers it"
@@ -259,7 +270,7 @@ Check "the delivery failed loudly"          ($r7a.out -match 'p95_add: pending')
 Check "the reason mentions the lock"        ((Get-Notice $r7a.out 'pending') -match 'lock')
 Check "it waited for the lock"              ($r7a.seconds -ge 2.5)
 Check "no worktodo.add was written"         (-not (Test-Path $r7a.addPath))
-Check "the line was parked"                 ((Test-Path $pending) -and ((Get-Content -LiteralPath $pending -Raw) -match [regex]::Escape('m0_m521_1e3.save')))
+Check "the line was parked durably"         (@(Get-ChildItem -LiteralPath ($pending+'.handoff') -Filter '*.intent' -ErrorAction SilentlyContinue).Count -eq 1)
 Check "the pending count is reported"       ((Get-Notice $r7a.out 'pending') -match 'lines=1')
 Check "the task still left our queue"       (-not ((Get-Content (Join-Path $r7a.dir 'worktodo.txt') -Raw) -match 'ECMSTAGE1'))
 
@@ -267,9 +278,9 @@ Remove-Item -LiteralPath $r7a.lockPath -Force
 $r7b = Invoke-Task -name 'locked' -task $task -workerSpec '1' -p95Todo $todoBoth -KeepAdd
 Write-Host ("      second run: {0}" -f (Get-Notice $r7b.out 'ok'))
 Check "the next delivery was ok"            ($null -ne (Get-Notice $r7b.out 'ok'))
-Check "it reports the re-delivery"          ((Get-Notice $r7b.out 'ok') -match 'pending_delivered=1')
+Check "it reports the re-delivery"          ($r7b.out -match 'p95_add: ok [^\r\n]*pending_delivered=1')
 Check "both lines are in worktodo.add"      (@($r7b.add | Where-Object { $_ -match 'm0_m521_1e3\.save' }).Count -eq 2)
-Check "the pending file is gone"            (-not (Test-Path $pending))
+Check "no handoff responsibility remains"   (@(Get-ChildItem -LiteralPath ($pending+'.handoff') -Filter '*.intent' -ErrorAction SilentlyContinue).Count -eq 0)
 
 # ------------------------------------------------------------------ [8] stale lock -------
 Write-Host "[8] a lock older than 60 s is preempted instead of waited on"
@@ -317,7 +328,9 @@ Write-Host "[10] a line Prime95 threw away is re-delivered without its AID"
 Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
 # The ledger says we delivered `taskBadAid`; PrimeNet rejected that key (prime.log above) and
 # Prime95 no longer holds the line, so the driver must hand it over again without the AID.
-[System.IO.File]::WriteAllText($ledger, ('sent ' + $handoffBadAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+$recoverable = @($r9.actualAdd | Where-Object { $_ -match '^ECMSTAGE2=' })[0]
+$recoverableWithAid = $recoverable.Replace('ECMSTAGE2=', ('ECMSTAGE2='+$rejectedAid+','))
+[System.IO.File]::WriteAllText($ledger, ('sent ' + $recoverableWithAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 $r10 = Invoke-Task -name 'recover' -task $task -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad
 $notice10 = Get-Notice $r10.out 'warn'
 Write-Host ("      notice: {0}" -f $(if ($notice10) { $notice10.Trim() } else { '(none)' }))
@@ -331,9 +344,9 @@ Check "it is not re-delivered twice"            ($null -eq (Get-Notice $r10b.out
 
 Write-Host "[10b] nothing is recovered when Prime95 still holds the line"
 Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
-[System.IO.File]::WriteAllText($ledger, ('sent ' + $handoffBadAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($ledger, ('sent ' + $recoverableWithAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 # The line (AID stripped) is already in Prime95's worktodo.txt -> no recovery.
-$r10c = Invoke-Task -name 'recoverheld' -task $task -workerSpec '1' -p95Todo ($todoBoth + 'ECMSTAGE2=1,2,521,-1,"m0_m521_1e3.save",0,0,1' + "`r`n") -primeLog $primeLogBad
+$r10c = Invoke-Task -name 'recoverheld' -task $task -workerSpec '1' -p95Todo ($todoBoth + $recoverable + "`r`n") -primeLog $primeLogBad
 Check "no recovery while Prime95 holds it"      ($null -eq (Get-Notice $r10c.out 'warn'))
 
 # ------------------------------------------------------------------ [11] keep_aid = 0 ----

@@ -40,7 +40,7 @@ def main():
                   for k,v in second['compile_units'].items() if k.endswith('.cu')}}
     assert len(objects) == 33 and all(sha(Path(p)) == h for p,h in objects.items())
     probes = [
-        ('configuration_read', 'src/ecm/application/configuration/ecm_toml.h', 'inline bool read_toml('),
+        ('configuration_read', 'src/io/config_format.h', 'inline bool read_toml('),
         ('configuration_write', 'src/ecm/application/gui/toml_file.cpp', 'bool TomlFile::save('),
         ('curve_cpu_math', 'src/ecm/backend/cuda/stage1/montgomery/host_math.cpp', 'void to_mpz('),
         ('sigma_generation', 'src/ecm/service/stage1/preparation.cpp', 'uint64_t random_sigma_u64('),

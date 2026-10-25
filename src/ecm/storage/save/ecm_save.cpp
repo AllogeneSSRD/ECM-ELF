@@ -103,51 +103,10 @@ bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool s
     return true;
 }
 
-std::string opencl_ecm_build_saved_n_expr(const std::string &original_expr, const mpz_t N,
-                                          uint32_t curves, mpz_t *factors, int *array_found) {
-    std::string expr = original_expr.empty() ? mpz_to_dec_string(N) : original_expr;
-    mpz_t remaining;
-    mpz_init_set(remaining, N);
-
-    std::vector<std::string> uniq_factors_dec;
-    uniq_factors_dec.reserve(curves);
-    for (uint32_t i = 0; i < curves; ++i) {
-        if (array_found[i] == ECM_NO_FACTOR_FOUND) {
-            continue;
-        }
-        if (mpz_cmp_ui(factors[i], 1) <= 0 || mpz_cmp(factors[i], N) >= 0) {
-            continue;
-        }
-        std::string dec = mpz_to_dec_string(factors[i]);
-        if (std::find(uniq_factors_dec.begin(), uniq_factors_dec.end(), dec) ==
-            uniq_factors_dec.end()) {
-            uniq_factors_dec.push_back(dec);
-        }
-    }
-
-    std::sort(uniq_factors_dec.begin(), uniq_factors_dec.end(),
-              [](const std::string &a, const std::string &b) {
-                  if (a.size() != b.size()) {
-                      return a.size() < b.size();
-                  }
-                  return a < b;
-              });
-
-    mpz_t f;
-    mpz_init(f);
-    for (const std::string &dec : uniq_factors_dec) {
-        if (mpz_set_str(f, dec.c_str(), 10) != 0) {
-            continue;
-        }
-        if (!mpz_divisible_p(remaining, f)) {
-            continue;
-        }
-        expr = "(" + expr + ")/" + dec;
-        mpz_divexact(remaining, remaining, f);
-    }
-    mpz_clear(f);
-    mpz_clear(remaining);
-    return expr;
+std::string ecm_save_modulus_expression(const std::string &original_expr,const mpz_t N) {
+    // X and CHECKSUM were computed modulo N. The published expression must
+    // describe that same modulus even when this batch found a factor.
+    return original_expr.empty()?mpz_to_dec_string(N):original_expr;
 }
 
 bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N, double B1,

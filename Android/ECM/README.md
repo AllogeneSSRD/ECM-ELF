@@ -110,8 +110,8 @@ MPA-OpenCl/
 │   ├── ecm_addsub_bench.cl
 │   └── mp_addsub/generated/*.cl
 ├── include/opencl_ecm_addsub_manifest.h   ← 复用：内核列表与构建清单 API
-├── src/opencl_ecm_addsub_manifest.cpp     ← 复用：manifest 实现（CMake 链入 libecm.so）
-└── src/opencl_ecm_addsub_bench.cpp        ← 桌面专用（GMP + cgbn::opencl），Android 不链接
+├── tools/bench/opencl_ecm_addsub_manifest.cpp ← 复用：manifest 实现（CMake 链入 libecm.so）
+└── tools/bench/opencl_ecm_addsub_bench.cpp    ← 桌面专用（GMP + cgbn::opencl），Android 不链接
 ```
 
 ### 从 Windows 复用的部分

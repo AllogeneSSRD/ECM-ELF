@@ -16,7 +16,11 @@
 
 键名和分区名区分大小写。一个键仅能放在其定义的分区或相应 worker 覆盖分区；同表重复键、未知键、未知表及类型错误会报告文件名和行号。内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。`worktodo.txt` 的 `[Worker #N]` 是独立的队列语法，不是 TOML 配置分区。
 
-[ecm_toml.h](../../src/ecm/application/configuration/ecm_toml.h) 读取项目使用的 TOML 值类型：带引号的字符串、布尔值、整数、浮点数及窗口整数数组；允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/ecm/application/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
+[config_format.h](../../src/io/config_format.h) 提供共享 TOML 文法及标量解析，支持带引号的字符串、布尔值、整数、浮点数及窗口整数数组，允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/ecm/application/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
+
+Stage1 的 [config.cpp](../../src/io/config.cpp) 读取显式值、所在分区和源行，校验显式非法值，不补任务默认或改变运行时单例。[normalize.cpp](../../src/io/normalize.cpp) 从生成默认值开始应用全局、worker 与显式 CLI，保留配置键的指定状态，再生成拥有自身数据的任务输入。被高优先级值覆盖的非法配置仍会报错。启动所需的配置路径/worker 默认与完整任务归一化分开。Stage2 复用同一文法和配置读取，保留其现有执行编排。
+
+CLI/配置错误停止启动，诊断包含来源、键、原值和预期范围；选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
 
 ## 运行时限制
 

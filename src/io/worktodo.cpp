@@ -1,5 +1,6 @@
-#include "ecm_worktodo.h"
-#include "../../application/configuration/ecm_toml.h"
+#include "io/worktodo.h"
+#include "sync/files.h"
+#include "io/config_format.h"
 
 #include <algorithm>
 #include <cctype>
@@ -12,6 +13,11 @@
 #include <chrono>
 #include <utility>
 #include <vector>
+#include <cerrno>
+#include <cmath>
+#include <limits>
+#include <sstream>
+#include <iomanip>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -101,6 +107,13 @@ std::vector<std::string> split_csv(const std::string &s) {
     }
     return out;
 }
+bool csv_quotes_valid(const std::string &s) {
+    bool quoted=false;
+    for(size_t i=0;i<s.size();++i)if(s[i]=='"') {
+        if(quoted && i+1<s.size() && s[i+1]=='"'){++i;continue;}quoted=!quoted;
+    }
+    return !quoted;
+}
 
 #ifdef _WIN32
 std::wstring utf8_to_wide(const std::string &s) {
@@ -175,6 +188,8 @@ static bool parse_save_line(const std::string &line, const std::string &prefix,
     task = EcmStage2Task{};
     task.raw_line = s;
 
+    if(!csv_quotes_valid(s)){err="key=CSV value='"+s+"'; expected a closing double quote (escape quotes as two double quotes)";return false;}
+
     if (s.size() <= prefix.size() ||
         s.compare(0, prefix.size(), prefix) != 0) {
         err = "line does not start with " + prefix;
@@ -193,12 +208,18 @@ static bool parse_save_line(const std::string &line, const std::string &prefix,
         err = "not enough fields (need at least " + std::to_string(8) + " core columns)";
         return false;
     }
+    if(cols.size()>need+1){err="key=CSV; expected 8 core fields and at most one quoted known-factors field";return false;}
 
     task.k = cols[idx];
     task.b = cols[idx + 1];
     task.c = cols[idx + 3];
     task.save_name = cols[idx + 4];
-    // cols[idx+5] = B2 (ignored), cols[idx+6] = skip_curves (ignored).
+    try {
+        task.b2_text=cols[idx+5].empty()?"0":cols[idx+5];
+        task.has_b2=!cols[idx+5].empty();task.has_skip=!cols[idx+6].empty();
+        (void)ecm_config::unsigned_integer(task.b2_text,"B2 (integer >=0)");
+        task.skip_curves=cols[idx+6].empty()?0:ecm_config::unsigned_integer(cols[idx+6],"skip_curves (integer >=0)");
+    }catch(const std::exception &e){err=e.what();return false;}
 
     // n (exponent) must fit in unsigned long.
     {
@@ -208,8 +229,8 @@ static bool parse_save_line(const std::string &line, const std::string &prefix,
             return false;
         }
         char *end = nullptr;
-        const unsigned long v = std::strtoul(nstr.c_str(), &end, 10);
-        if (end == nstr.c_str() || *end != '\0') {
+        errno=0;const unsigned long v = std::strtoul(nstr.c_str(), &end, 10);
+        if (errno==ERANGE || end == nstr.c_str() || *end != '\0') {
             err = "invalid exponent n: '" + nstr + "'";
             return false;
         }
@@ -220,9 +241,9 @@ static bool parse_save_line(const std::string &line, const std::string &prefix,
     {
         const std::string &cstr = cols[idx + 7];
         char *end = nullptr;
-        const unsigned long v = std::strtoul(cstr.c_str(), &end, 10);
-        if (end == cstr.c_str() || *end != '\0' || v == 0 || v > 0xFFFFFFFFul) {
-            err = "invalid curves_to_run: '" + cstr + "'";
+        errno=0;const unsigned long v = std::strtoul(cstr.c_str(), &end, 10);
+        if (errno==ERANGE || cstr.empty() || cstr[0]=='-' || end == cstr.c_str() || *end != '\0' || v == 0 || v > 0xFFFFFFFFul) {
+            err = "key=curves_to_run value='" + cstr + "'; expected integer [1,4294967295]";
             return false;
         }
         task.curves_to_run = static_cast<uint32_t>(v);
@@ -248,12 +269,34 @@ bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::st
     return parse_save_line(line, "ECMSTAGE2=", task, err);
 }
 
+bool ecm_rewrite_stage2_range(const std::string &line,uint64_t skip,uint32_t count,
+                             std::string &rewritten,std::string &err) {
+    EcmStage2Task task;const bool stage1=line.compare(0,10,"ECMSTAGE1=")==0;
+    if(!(stage1?ecm_parse_stage1_line(line,task,err):ecm_parse_stage2_line(line,task,err)))return false;
+    const auto begin=line.find('=')+1;const auto fields=split_csv(line.substr(begin));
+    const size_t offset=is_int_like(fields[0])?0:1;
+    // Preserve every unmodified CSV token, including quoting and whitespace.
+    std::vector<std::pair<size_t,size_t>> spans;size_t start=begin;bool quoted=false;
+    for(size_t i=begin;i<=line.size();++i) {
+        if(i<line.size() && line[i]=='"') {
+            if(quoted && i+1<line.size() && line[i+1]=='"'){++i;continue;}
+            quoted=!quoted;continue;
+        }
+        if(i!=line.size() && (quoted || line[i]!=','))continue;
+        spans.push_back({start,i});start=i+1;
+    }
+    const auto s=spans.at(offset+6),c=spans.at(offset+7);
+    rewritten=line.substr(0,s.first)+std::to_string(skip)+line.substr(s.second,c.first-s.second)+std::to_string(count)+line.substr(c.second);
+    return true;
+}
+
 bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &err) {
     std::string s = line;
     strip_bom(s);
     trim(s);
     task = Ecm2Task{};
     task.raw_line = s;
+    if(!csv_quotes_valid(s)){err="key=CSV value='"+s+"'; expected a closing double quote";return false;}
 
     // Prime95 将 ECM= 与 ECM2= 视为等价 (commonc.c:2934)。
     // 格式: [<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves>][,<sigma>][,"factors"]
@@ -277,6 +320,7 @@ bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &e
             const std::size_t q1 = body.rfind('"');
             if (q1 != std::string::npos && q1 > q0) {
                 factors_raw = body.substr(q0 + 1, q1 - q0 - 1);
+                if(!ecm_config::trim(body.substr(q1+1)).empty()){err="key=known-factors; expected end of task after closing quote";return false;}
             }
         }
     }
@@ -316,8 +360,8 @@ bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &e
             return false;
         }
         char *end = nullptr;
-        const unsigned long v = std::strtoul(nstr.c_str(), &end, 10);
-        if (end == nstr.c_str() || *end != '\0') {
+        errno=0;const unsigned long v = std::strtoul(nstr.c_str(), &end, 10);
+        if (errno==ERANGE || end == nstr.c_str() || *end != '\0') {
             err = "invalid exponent n: '" + nstr + "'";
             return false;
         }
@@ -327,8 +371,8 @@ bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &e
         const std::string &b1str = cols[idx + 4];
         char *end = nullptr;
         const double v = std::strtod(b1str.c_str(), &end);
-        if (end == b1str.c_str() || *end != '\0' || !(v > 0.0)) {
-            err = "invalid B1: '" + b1str + "'";
+        if (end == b1str.c_str() || *end != '\0' || !std::isfinite(v) || !(v > 0.0)) {
+            err = "key=B1 value='" + b1str + "'; expected finite positive bound";
             return false;
         }
         task.B1 = v;
@@ -342,38 +386,42 @@ bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &e
         if (!b2str.empty()) {
             char *end = nullptr;
             const double v = std::strtod(b2str.c_str(), &end);
-            if (end != b2str.c_str() && *end == '\0' && v >= 0.0) {
+            if (end != b2str.c_str() && *end == '\0' && std::isfinite(v) && v >= 0.0) {
                 task.B2 = v;
+                task.has_b2=true;
                 task.b2_text = b2str;
-            }
+            }else{err="key=B2 value='"+b2str+"'; expected finite nonnegative bound";return false;}
         }
         ++p;
     }
-    task.curves_to_run = 100;   // Prime95 默认 100 条曲线
+    // Omitted fields remain absent; io/normalize supplies Prime95's defaults.
     if (cols.size() > p) {
         const std::string &cstr = cols[p];
-        if (!cstr.empty() && is_int_like(cstr)) {
+        if (!cstr.empty()) {
             char *end = nullptr;
-            const unsigned long v = std::strtoul(cstr.c_str(), &end, 10);
-            if (end != cstr.c_str() && *end == '\0' && v > 0 && v <= 0xFFFFFFFFul) {
+            errno=0;const unsigned long v = std::strtoul(cstr.c_str(), &end, 10);
+            if (is_int_like(cstr) && cstr[0]!='-' && errno!=ERANGE && end != cstr.c_str() && *end == '\0' && v > 0 && v <= 0xFFFFFFFFul) {
                 task.curves_to_run = static_cast<uint32_t>(v);
-            }
+                task.has_curves=true;
+            }else{err="key=curves_to_run value='"+cstr+"'; expected integer [1,4294967295]";return false;}
         }
         ++p;
     }
     if (cols.size() > p) {
         const std::string &sstr = cols[p];
-        if (!sstr.empty() && is_int_like(sstr)) {
+        if (!sstr.empty()) {
             char *end = nullptr;
-            const unsigned long long v = std::strtoull(sstr.c_str(), &end, 10);
-            if (end != sstr.c_str() && *end == '\0' && v > 0) {
-                task.has_sigma = true;
+            errno=0;const unsigned long long v = std::strtoull(sstr.c_str(), &end, 10);
+            if (is_int_like(sstr) && sstr[0]!='-' && errno!=ERANGE && end != sstr.c_str() && *end == '\0') {
+                task.has_sigma = v>0;
+                task.has_sigma_field=true;
                 task.sigma = v;
-            }
+            }else{err="key=sigma value='"+sstr+"'; expected integer [0,18446744073709551615], 0=unspecified";return false;}
         }
         ++p;
     }
     // known factors (来自 quoted 尾字段)
+    for(size_t i=p;i<cols.size();++i)if(!cols[i].empty()){err="key=CSV value='"+cols[i]+"'; unexpected field; expected quoted known factors or end of task";return false;}
     if (!factors_raw.empty()) {
         const std::vector<std::string> facs = split_csv(factors_raw);
         for (const std::string &f : facs) {
@@ -401,7 +449,7 @@ bool ecm_extract_b1_from_save_name(const std::string &save_name, double *b1_out,
     const std::string token = stem.substr(us + 1);
     char *end = nullptr;
     const double b1 = std::strtod(token.c_str(), &end);
-    if (end == token.c_str() || *end != '\0' || b1 <= 0.0) {
+    if (end == token.c_str() || *end != '\0' || !std::isfinite(b1) || b1 <= 0.0) {
         err = "cannot parse B1 from save_name token '" + token + "'";
         return false;
     }
@@ -577,7 +625,7 @@ WorktodoStage ecm_worktodo_stage(const std::string &line) {
 
 WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int worker,
     WorktodoSelection selection, WorktodoStage consumer,
-    std::string &line, std::string &err) {
+    std::string &line, std::string &err,size_t *source_line) {
     line.clear();
     err.clear();
     std::ifstream in(path);
@@ -587,7 +635,9 @@ WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int work
     }
     int section = 1;
     std::string first, preferred, raw;
+    size_t number=0,first_number=0,preferred_number=0;
     while (std::getline(in, raw)) {
+        ++number;
         if (classify_line(raw, &section, nullptr) != LineKind::Task ||
             !worker_matches(section, worker)) continue;
         std::string task = raw;
@@ -595,8 +645,8 @@ WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int work
         trim(task);
         const auto stage = ecm_worktodo_stage(task);
         if (selection.skip == static_cast<int>(stage)) continue;
-        if (first.empty()) first = task;
-        if (selection.priority == static_cast<int>(stage) && preferred.empty()) preferred = task;
+        if (first.empty()){first = task;first_number=number;}
+        if (selection.priority == static_cast<int>(stage) && preferred.empty()){preferred = task;preferred_number=number;}
     }
     if (in.bad()) {
         err = "worktodo read failed: " + path;
@@ -606,6 +656,7 @@ WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int work
     if (selected.empty() || (consumer != WorktodoStage::Any &&
         ecm_worktodo_stage(selected) != consumer)) return WorktodoReadResult::Empty;
     line = selected;
+    if(source_line)*source_line=preferred.empty()?first_number:preferred_number;
     return WorktodoReadResult::Task;
 }
 
@@ -614,28 +665,31 @@ WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int wor
     return ecm_worktodo_read_next_line(path, worker, {}, WorktodoStage::Any, line, err);
 }
 
+bool ecm_worktodo_stage1_lines(const std::string &path,int worker,std::vector<std::string> &lines,std::string &err) {
+    std::ifstream in(path);if(!in){err="cannot read worktodo: "+path;return false;}
+    lines.clear();std::string raw;int section=1;
+    while(std::getline(in,raw))if(classify_line(raw,&section,nullptr)==LineKind::Task && worker_matches(section,worker)) {
+        strip_bom(raw);trim(raw);if(starts_with(raw,"ECMSTAGE1="))lines.push_back(raw);
+    }
+    if(in.bad()){err="incomplete worktodo read: "+path;return false;}return true;
+}
+
 bool ecm_worktodo_advance(const std::string &path, const std::string &first_line,
                           WorktodoAction action) {
     return ecm_worktodo_advance(path, 1, first_line, action);
 }
 
 bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
-                          WorktodoAction action, const std::string &replacement) {
+                          WorktodoAction action, const std::string &replacement,const std::string &receipt,const std::string &receipt_payload) {
     if (action == WorktodoAction::Replace &&
         (replacement.empty() || replacement.find_first_of("\r\n") != std::string::npos)) return false;
     QueueEditLock lock(path);
     if (!lock.valid()) return false;
-    std::ifstream in(path);
-    if (!in.is_open()) {
-        return false;
-    }
-    std::vector<std::string> lines;
-    std::string l;
-    while (std::getline(in, l)) {
-        lines.push_back(l);
-    }
-    in.close();
-
+    std::string before;
+    try{before=ecm_sync::read_file(std::filesystem::u8path(path));}catch(...){return false;}
+    std::istringstream in(before);
+    std::vector<std::string> lines;std::string l;
+    while(std::getline(in,l)){if(!l.empty() && l.back()=='\r')l.pop_back();lines.push_back(l);}
     int section = 1;
     bool found = false;
     for (std::size_t i = 0; i < lines.size(); ++i) {
@@ -671,19 +725,12 @@ bool ecm_worktodo_advance(const std::string &path, int worker, const std::string
         return false;
     }
 
-    const std::string tmp = path + ".tmp";
-    std::ofstream out(tmp, std::ios::out | std::ios::trunc);
-    if (!out.is_open()) {
-        return false;
-    }
-    for (const std::string &ln : lines) {
-        out << ln << "\n";
-    }
-    out.close();
-    if (out.fail()) {
-        return false;
-    }
-    return replace_file(tmp, path);
+    std::string after;for(const auto &ln:lines)after+=ln+"\n";
+    try {
+        if(!receipt.empty())ecm_sync::write_atomic(std::filesystem::u8path(receipt),receipt_payload+
+            "\nECM-ADVANCE\n"+std::to_string(ecm_sync::fingerprint(before))+" "+std::to_string(ecm_sync::fingerprint(after))+"\n");
+        ecm_sync::write_atomic(std::filesystem::u8path(path),after);return true;
+    }catch(...){return false;}
 }
 
 bool ecm_worktodo_list_workers(const std::string &path, std::vector<uint32_t> &workers,
@@ -834,77 +881,46 @@ bool ecm_worktodo_append_unique(const std::string &path, const std::string &fini
     return true;
 }
 
-void ecm_sync_save_files(const std::string &dir, const std::string &sync_dir_1,
-                         const std::string &sync_dir_2, bool full,
-                         long long since_epoch_seconds) {
-    if (sync_dir_1.empty() && sync_dir_2.empty()) {
-        return;
-    }
-#ifdef _WIN32
-    // Use wide APIs so CJK paths (e.g. GIMPS_同步) survive the UTF-8 ini → Win32
-    // conversion correctly.
-    const std::wstring wdir = utf8_to_wide(dir);
-    const std::wstring wpat = wdir + L"\\*.save";
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW(wpat.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    const std::wstring wsync1 = utf8_to_wide(sync_dir_1);
-    const std::wstring wsync2 = utf8_to_wide(sync_dir_2);
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            continue;
+
+bool ecm_append_text_line_unique(const std::string &path,const std::string &line) {
+    try {
+        const auto file=std::filesystem::u8path(path);
+        if(!file.parent_path().empty())std::filesystem::create_directories(file.parent_path());
+        QueueEditLock lock(path);if(!lock.valid())return false;
+        auto bytes=std::filesystem::exists(file)?ecm_sync::read_file(file):std::string{};
+        std::istringstream in(bytes);std::string old;
+        while(std::getline(in,old)){if(!old.empty() && old.back()=='\r')old.pop_back();if(old==line)return true;}
+        if(!bytes.empty() && bytes.back()!='\n')bytes+='\n';
+        ecm_sync::write_atomic(file,bytes+line+"\n");return true;
+    }catch(...){return false;}
+}
+
+bool ecm_worktodo_store_completion(const std::string &receipt,const CompletedWorktodo &c,std::string &err) {
+    try {
+        std::ostringstream out;out<<"ECM-STAGE1-COMPLETED 1\n"<<std::quoted(c.ticket)<<'\n'<<std::quoted(c.record)<<'\n'
+            <<std::quoted(c.replacement)<<'\n'<<std::quoted(c.finished)<<'\n'<<std::quoted(c.checkpoint)<<'\n';
+        if(std::filesystem::exists(std::filesystem::u8path(receipt)))throw std::runtime_error("previous Stage1 completion has not been acknowledged");
+        ecm_sync::write_atomic(std::filesystem::u8path(receipt),out.str());return true;
+    }catch(const std::exception &e){err=e.what();return false;}
+}
+bool ecm_worktodo_commit_completion(const std::string &receipt,const std::string &queue,int worker,CompletedWorktodo &c,std::string &err) {
+    try {
+        const auto bytes=ecm_sync::read_file(std::filesystem::u8path(receipt));std::istringstream in(bytes);std::string magic;
+        std::getline(in,magic);
+        if(magic!="ECM-STAGE1-COMPLETED 1" || !(in>>std::quoted(c.ticket)>>std::quoted(c.record)>>std::quoted(c.replacement)>>std::quoted(c.finished)>>std::quoted(c.checkpoint)))
+            throw std::runtime_error("invalid Stage1 completion receipt: "+receipt);
+        const auto evidence=bytes.find("\nECM-ADVANCE\n");
+        if(evidence!=bytes.npos) {
+            std::istringstream versions(bytes.substr(evidence+13));uint64_t before=0,after=0;
+            if(!(versions>>before>>after))throw std::runtime_error("invalid queue commit evidence: "+receipt);
+            const auto current=ecm_sync::fingerprint(ecm_sync::read_file(std::filesystem::u8path(queue)));
+            if(current==after)return true;
+            if(current!=before)throw std::runtime_error("queue changed across an interrupted completion; receipt retained for inspection: "+receipt);
         }
-        // The marker is rounded to seconds; include saves published in that second.
-        if (!full && filetime_to_epoch(fd.ftLastWriteTime) < since_epoch_seconds) {
-            continue;
-        }
-        const std::wstring wsrc = wdir + L"\\" + fd.cFileName;
-        if (!wsync1.empty()) {
-            CopyFileW(wsrc.c_str(), (wsync1 + L"\\" + fd.cFileName).c_str(), FALSE);
-        }
-        if (!wsync2.empty()) {
-            CopyFileW(wsrc.c_str(), (wsync2 + L"\\" + fd.cFileName).c_str(), FALSE);
-        }
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-#else
-    DIR *d = opendir(dir.c_str());
-    if (d == nullptr) {
-        return;
-    }
-    const auto copy_narrow = [](const std::string &src, const std::string &dst) {
-        std::ifstream in(src, std::ios::binary);
-        if (!in.is_open()) {
-            return;
-        }
-        std::ofstream out(dst, std::ios::binary | std::ios::trunc);
-        if (out.is_open()) {
-            out << in.rdbuf();
-        }
-    };
-    struct dirent *e;
-    while ((e = readdir(d)) != nullptr) {
-        const std::string name = e->d_name;
-        if (name.size() < 5 || name.compare(name.size() - 5, 5, ".save") != 0) {
-            continue;
-        }
-        const std::string fullpath = dir + "/" + name;
-        struct stat st;
-        if (stat(fullpath.c_str(), &st) != 0) {
-            continue;
-        }
-        if (!full && static_cast<long long>(st.st_mtime) < since_epoch_seconds) {
-            continue;
-        }
-        if (!sync_dir_1.empty()) {
-            copy_narrow(fullpath, sync_dir_1 + "/" + name);
-        }
-        if (!sync_dir_2.empty()) {
-            copy_narrow(fullpath, sync_dir_2 + "/" + name);
-        }
-    }
-    closedir(d);
-#endif
+        if(!ecm_append_text_line_unique(c.finished,c.record))throw std::runtime_error("cannot publish finished record: "+c.finished);
+        const auto payload=evidence==bytes.npos?bytes:bytes.substr(0,evidence);
+        if(!ecm_worktodo_advance(queue,worker,c.ticket,c.replacement.empty()?WorktodoAction::Remove:WorktodoAction::Replace,c.replacement,receipt,payload))
+            throw std::runtime_error("cannot match/advance completed task; result and completion receipt retained: "+queue);
+        return true;
+    }catch(const std::exception &e){err=e.what();return false;}
 }

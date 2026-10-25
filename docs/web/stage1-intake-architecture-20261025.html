@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stage1 首次主机重构规划草稿</title>
+<style>
+:root{color-scheme:light;--ink:#182735;--muted:#536474;--line:#d9e1e5;--accent:#176451}*{box-sizing:border-box}body{margin:0;background:#f5f5f0;color:var(--ink);font:16px/1.75 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1120px;margin:auto;padding:48px 26px 80px}h1{font-size:34px;line-height:1.35;margin:10px 0 20px}h2{font-size:24px;margin:0 0 15px}h3{font-size:18px;margin:20px 0 8px}p{margin:8px 0 16px}a{color:#176451;text-decoration:underline}code{font:13px/1.6 Consolas,monospace;overflow-wrap:anywhere}.meta,.evidence{color:var(--muted);font-size:13px}.lead{font-size:20px;max-width:900px}.panel,article{background:white;border:1px solid var(--line);border-radius:14px;padding:27px;margin:24px 0}.pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.diagram{padding:20px;background:#f3f6f7;border-radius:10px;min-height:230px}.node{border:1px solid #b6c7d1;background:white;border-radius:7px;padding:9px 12px;margin:5px 0}.deep{border:2px solid var(--accent);background:#eaf5ef;padding:14px;border-radius:8px}.arrow{text-align:center;color:#627786;line-height:1.3}.caption{font-size:13px;color:var(--muted);margin-bottom:12px}.badge{display:inline-block;padding:2px 10px;border-radius:20px;background:#e3f2e9;color:#15573d;font-size:12px;margin-right:6px}.explore{background:#fff0ce;color:#805a0a}.callout{padding:14px 18px;border-left:4px solid #c29127;background:#fff6df;margin:16px 0}.files{font:13px/1.8 Consolas,monospace;color:#536474;overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}td,th{padding:13px 11px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#eef2f3}ul,ol{padding-left:22px}li{margin:7px 0}.small{font-size:14px}.top{background:#173d33;color:white}.top a{color:#c2edd8}footer{font-size:13px;color:var(--muted)}@media(max-width:760px){main{padding:25px 15px}.pair{grid-template-columns:1fr}h1{font-size:27px}.panel,article{padding:20px}.scroll{overflow:auto}table{min-width:670px}}@media print{body{background:white}.panel,article{break-inside:avoid}main{padding:0}}
+</style>
+</head>
+<body>
+<section id="implementation-status" class="panel" style="max-width:1120px;margin:24px auto;border:2px solid #176451">
+<h2>0.52.5 实施与验收完成</h2>
+<p>三项均已确认并实施。下方保留各轮规划与讨论；当前能力以此卡和正式说明为准。后续可读性与目录收尾见<a href="#sync-cleanup">本轮清理记录</a>。尚未提交 Git，测试使用隔离二进制，未替换用户生产程序。</p>
+<p><code>cli/config/worktodo → normalize_worktodo → main 唯一循环 → task/后端 → 实际保存区间 → 持久交接/完成记录 → finished/源行提交 → 文件先发布、P95 任务后发布</code></p>
+<ul><li><code>src/io/cli.cpp、config.cpp、worktodo.cpp</code> 分管三个来源，worktodo 聚合读写；normalize 集中默认、显式覆盖和拥有的任务输入。入口为 src/main.cpp，旧 queue_source/queue_workflow 桥接已删除。</li>
+<li>CLI/配置错误停止并报告来源、键、原值与合法范围；非法选中任务标错继续。执行偏好允许显式 CLI 覆盖 worker，结构字段明确拒绝；sigma 为 worktodo → CLI → 配置 → 原有随机策略。</li>
+<li>任务使用快照，未来队列可增删重排；同 worker 首个相同行即匹配。启动只修复当前 worker 的 ECMSTAGE1 skip=0；领取时重检，完成时强制重读，采用发布证明的连续实际区间，不能按总数减请求数猜测。</li>
+<li>完成记录保存提交前后版本，源行提交后才清理完成 checkpoint。P95 冻结目标、路由和实际范围，目标前缀只能延长，相同批次不会因后续 save 追加而重复交付。</li>
+<li>日志读写归日志 Module；普通备份与 P95 分开。<code>p95_sync_dir</code> 专用于 save，<code>p95_worktodo_path</code> 指定外部队列。启用受支持的 P95 交接时必须配置前者，不能用备份目录代替。</li></ul>
+<h3>验收中补齐的真实边界</h3>
+<p>PARAM3 旧版找到因子后，会把 N 表达式改成余因子，但 X/checksum 仍基于原算术 N。已在旧 0.52.2 复现，并以独立整数求值和 checksum 验证定位；当前 PARAM0/2/3 一律保存实际计算模数。仅修改 CUDA/OpenCL 两处 workflow 的保存表达式选择，点乘、因子搜索与 CUDA 内核没有变化。旧失配文件不自动重写。</p>
+<p>Edwards 合法完成但 gcd(Qz,N)=N 时没有 Stage2 点。实际区间可少于尝试曲线数；CPU/GPU 整批无点时仍发布全部 Stage1 结果并正常完成，finished 的实际 count 为0，不生成 Stage2/P95 任务。补充了真实无点任务和部分有点的任务合同。</p>
+<h3>构建与回归</h3>
+<ul><li>50 个 Stage1 host 单元重建、31 个已核验 CUDA 对象复用；Stage2 39 个 host 单元重建、2 个 CUDA 对象复用。没有调用 nvcc。CUDA 依赖与对象、host 源码/头闭包均有散列证据。</li>
+<li>20 项任务合同、14 项真实输入/动态队列用例、27 项实际计算与八种停止恢复路径、33 项旧检查点/命名/历史与混合队列检查、103 项 P95 路由/AID/锁故障与恢复检查通过。</li>
+<li>真实文件的区间、去重、完成恢复、源变化、文件失败禁止任务发布、冻结路由、后续增长去重和坏 checksum 拒绝检查通过；最终结果批次、Stage2 本地交接、GUI 构建与 110/26/85 项 GUI 逻辑检查通过；CPU Stage2 重建通过。</li>
+<li>计算基线 <code>8500a84</code>：231 个计算文件正文不变，另有上文两处保存表达式修复；121 个旧默认值不变，仅新增 p95_sync_dir。目录收尾后 453 文件的 include 图无环、无公开头引用私有实现；解析器没有运行时写入副作用。</li></ul>
+<h3>最终收尾测量</h3>
+<p>每条任务使用独立新目录、无历史 save，P95/备份关闭，exp_cache=off；1000 曲线、B1=100、固定 sigma=100000，521/10267 位，两种曲线、每种位宽每版2次独立进程（共16样本）；RTX 4070 Ti，设备0，配置功耗上限285W，未锁频、未测瞬时功耗。计时为父进程收到 save 完成行→结果行，以及结果行→queue done；内存每20ms查询 OS 峰值工作集，表中取两个进程样本最大值，不相加组件峰值。功能测试/编译曾在整体实验期间运行，未控制 OS 缓存与后台负载；这些是有限样本，不是统计性能保证。</p>
+<div class="scroll"><table><thead><tr><th>输入</th><th>旧版 save→结果 / 秒</th><th>新版 save→结果 / 秒</th><th>新版结果→队列完成 / 秒</th><th>进程峰值工作集 MiB，旧→新</th></tr></thead><tbody><tr><td>Montgomery PARAM0 / 521 位</td><td>0.175–0.201</td><td>0.175–0.182</td><td>0.019–0.040</td><td>136.46 → 136.14</td></tr><tr><td>Edwards / 521 位</td><td>0.175–0.191</td><td>0.187–0.224</td><td>0.019–0.020</td><td>146.65 → 148.04</td></tr><tr><td>Montgomery PARAM0 / 10267 位</td><td>0.180–0.188</td><td>0.213–0.215</td><td>0.035–0.037</td><td>180.03 → 180.10</td></tr><tr><td>Edwards / 10267 位</td><td>0.339–0.343</td><td>0.458–0.461</td><td>0.086–0.089</td><td>208.03 → 211.17</td></tr></tbody></table></div>
+<p>此次未复现最初约30秒的等待，不能据此宣称对原生产场景的30秒问题已完成验证。新版新增字段校验、一次强制读档和持久提交，较旧测试版有小幅收尾开销。初始重构样本暴露了重复读档/文本复制：移除冗余读档并采用记录视图后，10267位 Edwards 的 save→结果从约0.55秒降到约0.46秒，结果→队列完成从约0.26秒降到约0.09秒；初始及最终全部原始样本均保留。</p>
+<p class="evidence">旧测试二进制为0.52.2，SHA256 <code>94a4aeb4367bc5c3bb88fa41fc6032a393215295aa469781b0e648cce81e027f</code>；首轮功能验收0.52.5二进制为 <code>38d67f9774bb183e23badd51aab04bfb315ca2e3d2a6b600c4988eaac3f0b344</code>。旧二进制与源码比较基线8500a84不是同一身份。证据根目录 <code>data/experiments/stage1_host_refactor_20261025/</code>；计时为 <a href="../../data/experiments/stage1_host_refactor_20261025/timing_final/summary.json">timing_final/summary.json</a>，初始样本 input_matrix，真实回归 usability_current/checkpoint_verified，P95 p95_pass，文件合同 host_io_pass，任务 task_pass，静态 static_pass/graph_pass。PARAM3 的旧版失败样本 param3_baseline_repro 和无点失败样本 no_points_repro 保留。</p>
+<h3>保证范围与剩余验证</h3>
+<p>P95 drop box 发布成功不代表消费者已确认；不承诺跨进程恰好一次。模糊确认、外部改写导致队列提交状态无法判定及不能证明连续性的批次保留证据并停止相应推进。不同本地历史不得向同一个 P95 保存名拼接；冲突时保留待交接记录，使用不同同步目录或文件名。真实外部 Prime95/GMP-ECM 进程的端到端续算，以及原大 B1/长历史生产场景，仍需对应环境验证；本次只对模拟外部目录做交付测试。</p>
+<p>旧兼容测试已迁移至当前 TOML/CLI、绝对同步路径和实际区间约定；同种子独立旧档不能覆盖待验证的仅种子批次，这是保留的原有恢复行为，未修改其计算模块。</p>
+<p>正式说明：<a href="../architecture/OVERVIEW.md">架构</a> · <a href="../architecture/SAVE.md">Save</a> · <a href="../usage/STAGE1.md">Stage1</a>。此文件为临时开发草稿，保留历轮讨论，完成后由用户决定处理，不自动删除。</p>
+</section>
+<main>
+<header>
+<div class="meta">ECM-ELF · 2026-10-25 · 临时规划草稿 · 规划基线 8500a84 · 实施与验收见上方</div>
+<h1>Stage1 首次主机重构：讨论结果与实施合同</h1>
+<p class="lead">复杂度集中在配置与任务的重复组装、输入读取中夹带的历史交接扫描与日志输出，以及文件名没有表达真实职责。优先收拢这些知识，保留队列、单任务和后端各自已有的职责。</p>
+<p class="meta">术语依据：CONTEXT.md → docs/architecture/OVERVIEW.md；未发现 docs/adr/。图中实框表示 Module，绿色框表示提高 Depth 后的 Module。Interface 包括顺序、配置、错误和生命周期约束；Seam 是可替换位置，Adapter 是具体输入适配。Depth 应带来 Leverage 与 Locality，不以文件数或代码行数衡量。</p>
+</header>
+<section class="panel" id="discussion-coverage">
+<h2>讨论结果覆盖清单</h2>
+<p>本文件是本主题的统一临时规划，已逐轮汇总用户要求、已选规则、源码核对与待确认建议。尚未实现的内容不作为当前产品能力；后文的早期审查证据用于解释问题，具体实施以当前决策及状态标记为准。</p>
+<div class="scroll"><table><thead><tr><th>讨论议题</th><th>已写入的结果</th><th>状态</th></tr></thead><tbody>
+<tr><td>首次范围</td><td>收拢 Stage1 主机输入、队列与收尾协作；减少浅转发，数学与 GPU workflow 不重构。原“前九步”中的 task/后端分派已属单任务内部。</td><td>规划范围</td></tr>
+<tr><td>目录与命名</td><td>三个来源分别为 cli/config/worktodo，归一化独立；读写扩展后建议 input → io。ecm_driver 改 main。</td><td>src/io/ 与 src/main.cpp 均已确认</td></tr>
+<tr><td>读写聚合</td><td>worktodo 同一 Module 负责读、解析、定位、加锁与编辑提交；配置也可提供显式读写操作。纯解析函数不隐含修改文件。</td><td>用户要求</td></tr>
+<tr><td>默认值</td><td>解析保留显式值与缺省状态，归一化集中补默认；启动最小默认与完整任务默认区分。配置默认值仍只在 ecm_options.json 维护。</td><td>纳入方案</td></tr>
+<tr><td>任务前后生命周期</td><td>不把曲线内 checkpoint、结果合同上移到输入层；日志读写及资源归日志 Module，备份与 P95 交接归专门同步 Module。</td><td>用户要求及范围约束</td></tr>
+<tr><td>动态 worktodo</td><td>运行任务使用快照，其他任务可变化；任务间重读最新队列。worker 内从前向后首个相同行即匹配，不增加公共条目 ID。</td><td>首条匹配由用户确认；其余纳入方案</td></tr>
+<tr><td>记录原子性</td><td>整行作为任务记录；短锁内读最新文件并原子替换，不拿启动旧快照覆盖。普通外部编辑器不自动遵守协作锁。</td><td>纳入方案，明确保证范围</td></tr>
+<tr><td>输入诊断</td><td>说明来源/位置、键、原始值、合法类型/范围/单位及修正办法；硬范围、推荐值、组合约束、运行时条件分别处理。</td><td>用户要求</td></tr>
+<tr><td>CLI 覆盖</td><td>队列模式显式拒绝曲线数量/类型等任务结构选项；sigma 为 worktodo → CLI → 配置；执行偏好可由 CLI 覆盖 worker。</td><td>用户确认；完整字段清单待落表</td></tr>
+<tr><td>坏任务处理</td><td>worktodo 当前任务输入非法，标错并继续；配置、I/O、锁及标错提交失败不可批量误标为坏任务。</td><td>标错继续由用户确认；错误分类纳入方案</td></tr>
+<tr><td>p95_for_task 核对修正</td><td>该函数初始化与扫描/报告，只读历史文件；实际补投发生在完成后的 delivery，不把扫描日志称为已经投递。</td><td>源码已核实并修正早期分析</td></tr>
+<tr><td>P95 同步与备份</td><td>新增 P95 专用同步路径；原 save_sync_dir_1/2 只作备份。save 成功发布并确认范围后才发布外部任务，失败可恢复。</td><td>用户要求；路径具体定义待确认</td></tr>
+<tr><td>skip 启动与收尾</td><td>启动检测零 skip，任务结束后重新检查实际 save；最终任务行进入 finished/P95。正常追加时 skip=结束总数−本批实际记录数。空文件不证明完成。</td><td>用户建议及公式澄清已记录</td></tr>
+<tr><td>累计 save</td><td>P95 用 skip/count 定位本批；允许追加，保持已交付前缀。恢复/去重必须核对本批范围，不机械用请求数相减。</td><td>用户指出的机制已纳入；异常范围验证纳入验收</td></tr>
+<tr><td>构建与兼容验收</td><td>共享文法供 Stage2/GUI/feeder 复用；更新构建、生成物与检查扫描；删除替代路径，行为门禁替代源码形状冻结。</td><td>工程实施项</td></tr>
+</tbody></table></div>
+</section>
+<section class="panel" id="host-io-and-handoff">
+<h2>当前决策：主机读写模块与可靠 P95 交接</h2>
+<p>实现已按用户授权开始。已确认 worktodo 读写集中、ecm_driver 改为 main、日志归日志模块、同步归专门模块；原 input 目录的职责扩展为主机读写。目录名已确定为 <code>src/io/</code>，入口为 <code>src/main.cpp</code>。</p>
+<div class="scroll"><table><thead><tr><th>位置与 Module</th><th>职责</th></tr></thead><tbody>
+<tr><td><code>src/main.cpp</code></td><td>模式选择、启动资源的使用、唯一队列循环与执行顺序。调用单任务入口；合并旧 driver/queue_source/workflow 中被替代的应用编排，不保留 source 回调和纯转发链。</td></tr>
+<tr><td><code>src/io/cli.cpp</code></td><td>命令行文法、模式与显式值。队列模式拒绝 CLI 的任务结构选项。</td></tr>
+<tr><td><code>src/io/config.cpp</code></td><td>配置读取、格式检查，以及明确调用的模板创建/配置保存。解析函数不自动修改文件；配置键和默认值仍由现有定义生成。</td></tr>
+<tr><td><code>src/io/worktodo.cpp</code></td><td>集中负责 worktodo 读取、区段/任务解析、选择、编辑锁、首条匹配、标错/移除/替换/追加和原子文件提交。私有辅助函数可以拆分，不把读写拆成相互转发的 Module；不执行数学计算。</td></tr>
+<tr><td><code>src/io/normalize.cpp</code></td><td>来源规则、默认、派生、冲突、完整任务和诊断，不产生队列/日志/同步写入。</td></tr>
+<tr><td>既有日志 Module</td><td>日志文件的打开、关闭、读写与 mirror 生命周期归其拥有；main 使用日志能力，不保留裸 FILE* 清理协议。不新建重复日志实现。</td></tr>
+<tr><td>专门的同步 Module</td><td>分开普通文件备份与可靠 P95 文件/任务交接。可按实际体量使用 backup.cpp 与 p95.cpp；不再借 worktodo 文件承载 save 扫描和复制。</td></tr>
+</tbody></table></div>
+<h3>队列模式字段</h3>
+<p><b>已确认：</b>进入 worktodo 模式后，CLI 显式指定曲线数量、曲线类型等任务结构字段应明确拒绝，即使值恰巧与当前任务一致也不采用隐含覆盖。sigma 是例外，优先级为 <code>worktodo → CLI → worker 配置 → 缺省策略</code>，0/未指定按各来源已定义的语义区分。设备、日志等执行偏好仍允许显式 CLI 覆盖 worker 配置。</p>
+<p>完整禁止选项表仍须逐字段列出，特别是 param、B1/B2、save、lcm 等字段的模式角色。CLI 模式错误属于启动错误，不应把正确的 worktodo 行标错；任务行自身非法仍按用户决定标为错误行并继续。</p>
+<h3>备份路径与 P95 同步路径分离</h3>
+<p><b>已确认：</b>原 <code>save_sync_dir_1/2</code> 只承担文件备份，不能再作为 P95 文件就绪的隐含保证。新增 P95 专用同步路径。</p>
+<p><b>已确认：</b>新增 <code>p95_sync_dir</code> 表示交接 save 的目标目录，继续由 <code>p95_worktodo_path</code> 指定 Prime95 队列位置；任务引用 P95 目标目录内的已发布文件。本轮沿用独立队列路径，不采用统一根目录推导。启用交接但缺少必要路径时报完整配置错误，不从备份目录猜测或静默回退。</p>
+<h3>交接提交点与故障恢复</h3>
+<p>核心性质：<b>Prime95 能看到任务行时，该行引用的 save 已完整发布并经校验。</b>普通文件系统没有跨独立文件的一次 rename 事务。以 worktodo.add 发布为最后提交点，允许“文件已就绪、任务尚未可见”的可恢复状态，禁止“任务可见、文件缺失或半写”。</p>
+<ol>
+<li>本地结果完成后，持久保存交接意图：源文件版本/曲线范围、目标路径、任务文本与目标 worker。</li>
+<li>固定本批所需 save 内容，在目标目录写临时文件；完成写入、关闭与所需持久化检查，验证内容和范围，再原子发布目标文件。</li>
+<li>目标文件就绪后才提交引用它的 worktodo.add 任务，保留已有队列内容；投递路径来自同一交接记录。</li>
+<li>记录交接完成。文件失败不投递；队列失败保留就绪文件与待投递记录，重启续投，不重算 Stage1。</li>
+</ol>
+<p>本地 worktodo 推进前，至少须有足够的持久完成/交接意图可供恢复；持久记录写入失败停止推进。普通备份失败独立报告，不作为 P95 文件就绪证明。</p>
+<div class="callout">P95 的 skip/count 可定位累计 save 中的本批范围，允许稳定文件名继续增长；已经交付的记录前缀必须保持不变，不能截断、重排或用旧版本回退。目标文件发布时要保留历史前缀，并确认本次范围已全部就绪，再投递任务。需要验证 Prime95 并发读取、恢复去重和 add 已发布但完成回执未写的窗口；当前不能宣称跨程序恰好一次已解决。</div>
+<p>现有 ECM/ECM2 完成行直接传给 delivery，ECMSTAGE1 才改前缀；若目标是 P95 使用本批 save，必须核对外部任务文本引用正确目标文件及曲线范围，不能仅转发原任务。资格与格式兼容以验证结果为准。</p>
+<p class="evidence">当前缺口：storage/queue/ecm_worktodo.cpp:837 的 ecm_sync_save_files 返回 void，CopyFileW 结果未检查；service/work/queue_workflow.cpp:123–145 在备份后继续投递；storage/transfer/p95_transfer.cpp:477 仅接收配置和文本，不验证 save 已同步；实际 add 写入在 storage/queue/p95_worktodo.cpp:180。</p>
+<h3>ECMSTAGE1 的 skip 初始化与收尾校正</h3>
+<p>用户建议启动检测保存文件，并在 save 发布后强制复核，改写后的任务才进入 finished 与 P95 交接。当前 parse_save_line 不保存 B2/skip，ECMSTAGE1 的 skip 未参与 Stage1 点乘；新结构须保留并验证该字段，用于本批结果范围及后续交接，不改变 Stage1 数学工作量。</p>
+<ol>
+<li><b>启动预处理：</b>在本 worker 的 ECMSTAGE1 行中，对 skip=0 且指定 save 已存在的任务读取记录数，重写 skip。未找到文件和空文件均为0；读取失败须报告，不能当成0。按归一化后实际输出路径检查，兼容前缀与历史来源。相同文件在一次扫描中可复用计数，避免重复读取。</li>
+<li><b>实际领取：</b>再次确定当前文件中的批次起点。启动时校正不能冻结未来任务的起点：多个任务可能使用同一 save，前一任务会使其增长。运行/恢复使用稳定的本批范围事实；重启后不能把已写的本批记录误算成全部历史记录。</li>
+<li><b>收尾强制复核：</b>只有在 save 和结果发布成功后，重新读取总记录数，并验证本次记录的身份与范围。设原有 B、本次普通追加 C、收尾总数 E，则 E=B+C，输出 skip=B=E−C，curves=C；E−B 是新增数量，不能把 E 直接写入 skip。</li>
+<li><b>统一最终任务行：</b>用同一份已验证的路径、skip 与 curves 构造收尾记录，持久化恢复所需状态后再执行 worktodo 改写、finished 和 P95 流程。程序自行重写后同步更新队列票据，避免后续拿旧文本匹配失败。原行匹配仍使用同 worker 首个相同行规则。</li>
+</ol>
+<p>例如旧150条、本次新增300条、最终450条：ECMSTAGE1 finished 中保留 skip=150、curves=300，转换为 ECMSTAGE2 后仍用这个范围。任务初始的空文件只代表可写性预检，不代表任何曲线已经完成。</p>
+<p>计数应与 P95 的 skip_resumefile_line 口径一致，按 METHOD= 记录计数，不能把注释/空行算作曲线；交付的本次范围还须通过格式、身份和完整性检查。此自动填充只适用于 Stage1 输入；已有 ECMSTAGE2 的 skip=0 是有效的“从第一条开始”，不能因 save 存在而重写。扫描范围建议限于当前 worker，其他 worker 可能正在执行，其行不能由本 worker 启动扫描擅自改写。</p>
+<p>save 发布会去重，恢复也可能复用已发布记录，故 C 不能始终直接取请求曲线数；E−请求数不能可靠定位去重或恢复后的本批。应使用保存发布确认的批次范围/记录身份；无法证明连续正确范围时停止交接，不能猜测末尾若干条属于本次。</p>
+<p class="evidence">依据：storage/queue/ecm_worktodo.cpp:201 忽略原 B2/skip；storage/save/ecm_save.cpp:72 可写性预检以 a 模式创建空文件；storage/save/ecm_edwards_io.h:31 的发布保留旧记录、按批次 sigma 排序并去重；service/stage1/task.cpp:178 在 execute 返回后才进入结果发布；.refactor/p95v3106b01.source/ecm.cpp:6879 使用 skip；resume_gmp.c:353 按 METHOD= 记录跳过。此段为设计，未实施。</p>
+</section>
+<section class="panel">
+<h2>先校正分析范围</h2>
+<p>上一轮“前九步”是职责展开，不是九层实际调用。第 8 步 run_stage1_task 已进入单任务，第 9 步 execute_stage1 是任务内部的执行分派；结果一致性检查、checkpoint 身份与锁不属于进程启动。</p>
+<div class="pair"><div class="diagram"><div class="caption">任务之前：只需理解三件事</div><div class="node">启动：模式、配置、worker、资源寿命</div><div class="arrow">↓</div><div class="node">队列：所有权、读取、错误与停止策略</div><div class="arrow">↓</div><div class="node">输入：当前行 → 已验证的本任务数据</div></div><div class="diagram"><div class="caption">单任务内部：继续保留</div><div class="node">run_stage1_task：结果与 checkpoint</div><div class="arrow">↓</div><div class="node">execute_stage1：CPU / CUDA / OpenCL 选择</div><div class="arrow">↓</div><div class="node">曲线 workflow → runtime → kernel</div></div></div>
+<p class="evidence">依据：service/work/queue_workflow.cpp:25、179；service/stage1/task.cpp:124；service/stage1/execution.cpp:12。</p>
+</section>
+<section class="panel">
+<h2>application/cli 的名字表达了什么</h2>
+<p><code>application</code> 表达用户用例的编排与外部输入适配；<code>cli</code> 是 command-line interface，即 argv、help、退出码和控制台交互。当前目录实际承载了更宽的 Stage1 应用职责，并被 CUDA/OpenCL 两个 Stage1 程序共同编译。</p>
+<div class="scroll"><table><thead><tr><th>当前文件</th><th>名字暗示</th><th>实际 Implementation 与判断</th></tr></thead><tbody>
+<tr><td><code>ecm_driver.cpp</code></td><td>驱动程序</td><td>main、argv/help、查询、单次任务组装、运行和命中后输出。driver 过宽，也容易与 CUDA 驱动混淆；作为程序入口，main 的语义更明确。</td></tr>
+<tr><td><code>queue_source.cpp/.h</code></td><td>提供下一条队列输入的 Adapter</td><td>run_queue_manager 同时处理配置、日志、路径、交接恢复、默认选项、启动同步和任务解析；source 明显小于实际职责，是最需要修正的命名。</td></tr>
+<tr><td><code>stage1_input.cpp/.h</code></td><td>Stage1 输入</td><td>混合路径定位、save 类型推断、曲线/参数约束、affinity 文法、结果路径配置。input 范围过宽，调用者必须知道哪些函数属于哪一类。</td></tr>
+<tr><td><code>group_order.cpp/.h</code></td><td>群阶数学实现</td><td>主要是命中后诊断输出与 GP 路径适配，也有小素数辅助逻辑。核心数学另在 core/group_order，诊断协调另在 service/diagnostics；order_diagnostics 更接近本文件角色。</td></tr>
+</tbody></table></div>
+<p class="small">可保留 cli 作为传输方式目录，也可在明确 Stage1 应用职责后改为 application/stage1。仅重命名或搬目录不会提高 Depth。不要同时引入大批 main → app → runner → manager 转发。</p>
+</section>
+<article id="input">
+<span class="badge">Strong</span><span class="badge">in-process</span>
+<h2>候选 1：收拢任务输入的解释与组装</h2>
+<div class="files">application/cli/{ecm_driver.cpp,queue_source.cpp,stage1_input.cpp}<br>storage/queue/ecm_worktodo.cpp · service/work/queue_workflow.cpp</div>
+<div class="pair"><div class="diagram"><div class="caption">现状：同一规则分散在不同路径</div><div class="node">直接运行：单独组装 Stage1Options</div><div class="node">ECM 行：修改共享 opt，再填 QueueItem</div><div class="node">ECMSTAGE1 行：改 identity，再复制 task_opt</div><div class="node">各自设置命名、身份、校验与交接文本</div></div><div class="diagram"><div class="caption">候选：一个输入解释 Module，保留真实 Adapter</div><div class="node">argv / 两种 worktodo 语法</div><div class="arrow">↓</div><div class="deep">不可变 worker 默认值 + 当前任务字段<br>集中决定身份、构造方式、sigma、命名与验证</div><div class="arrow">↓</div><div class="node">拥有本任务数据的输入 → 既有队列与 task</div></div></div>
+<p><b>问题：</b>重复组装使一个行为变更需要同时理解多个分支；跨任务可变 opt 增加推理负担。本次没有证明它已经造成跨任务数据错误。</p>
+<p><b>方案：</b>各语法 Adapter 只解释来源差异，共同规则集中；每条任务从不可变默认值创建，不复用上一条任务的可变 identity。统一输入完成验证后，再进入明确的副作用阶段。</p>
+<ul><li>Locality：规则修改集中</li><li>Leverage：多种真实输入共用验证</li><li>Interface：来源差异明确</li></ul>
+<p class="evidence">依据：queue_source.cpp:453、533 重复填 identity；494、575 重复填 QueueItem；547 才复制 task_opt；548 与 finalize_queue_input:115 重复验证 save-based 分支。ecm_driver.cpp:909–956 独立组装。p95_for_task 在 ECM 分支:503，最终校验在:508。</p>
+<p class="small">验证重点：ECM/ECM2 与 ECMSTAGE1 的等价输入、typed save 对 curve/param 的覆盖、精确 sigma 与溢出、错误任务不触发交接写入、连续任务不继承上一条选择。保留后端对不可信状态的防御性验证。</p>
+</article>
+<article id="startup">
+<span class="badge">Strong</span><span class="badge">in-process</span>
+<h2>候选 2：让启动资源与交接恢复有明确生命周期</h2>
+<div class="files">application/cli/queue_source.cpp · service/work/queue_workflow.cpp<br>storage/queue/owner_lease.h · storage/transfer/{ecm_stage2_transfer.h,p95_transfer.h}</div>
+<div class="pair"><div class="diagram"><div class="caption">现状：启动维护与输入读取交织</div><div class="node">打开全局 mirror 日志</div><div class="node">Stage2 pending flush / save 全同步</div><div class="node">进入 workflow 才取得 OwnerLease</div><div class="node">next_task → p95_for_task → 历史扫描与状态日志</div></div><div class="diagram"><div class="caption">候选：应用启动 Module 管资源，输入解释保持清晰</div><div class="deep">启动资源由作用域拥有<br>明确所有权覆盖范围<br>显式执行恢复与同步<br>各退出路径统一清理</div><div class="arrow">↓</div><div class="node">读取并验证任务 → 计算 → 完成协议</div></div></div>
+<p><b>问题：</b>调用者无法仅从 source/next_task 名字判断是否触及交接文件；手动日志清理只在函数末尾，之前还有多个提前返回。</p>
+<p><b>方案：</b>将启动与队列应用的组合职责说清楚，用作用域管理日志资源；交接恢复与同步集中在具名的生命周期阶段。删除重复协调，继续复用既有文件机制。</p>
+<ul><li>Locality：顺序与清理集中</li><li>Leverage：失败路径一致退出</li><li>Interface：副作用可见</li></ul>
+<p class="evidence">依据：queue_source.cpp:168–176 打开并挂接 mirror，:592 才解除和 fclose；:248 执行 Stage2 flush，:411–413 启动同步；queue_workflow.cpp:180–182 才 acquire。queue_source.cpp:257–320 的 p95_for_task 初始化配置、读取历史并输出状态；其 p95_transfer_recover_lines 只返回候选，不修改交接文件。实际补投位于任务完成后的 p95_transfer_deliver。</p>
+<div class="callout">空队列启动也可能扫描 Prime95 交接历史，但当前不会仅凭这次扫描完成补投；函数内“重启立即恢复”的注释和 recovered 日志需要与实际写入区分。Stage2 pending flush、save 同步则确有写入。重排前须逐项确定所有权并验证，不机械把全部工作搬进一个锁，也不悄悄删除启动同步。</div>
+</article>
+<article id="settings">
+<span class="badge explore">Worth exploring</span><span class="badge">in-process</span>
+<h2>候选 3：收拢“有效配置”的解释，先厘清现有语义</h2>
+<div class="files">application/cli/ecm_driver.cpp · application/cli/queue_source.cpp<br>application/configuration/{ecm_queue_config.cpp,ecm_toml.h,runtime.cpp}</div>
+<div class="pair"><div class="diagram"><div class="caption">现状：入口路径各自解释配置</div><div class="node">argv 局部值 / 全局设置</div><div class="node">--gpu-info 单独合并 TOML 与 CLI</div><div class="node">队列从 cfg 独立构造 opt</div><div class="node">单次运行再投影结果设置</div></div><div class="diagram"><div class="caption">候选：保留来源，集中完成有效值投影</div><div class="node">配置定义 / TOML worker / 显式 CLI</div><div class="arrow">↓</div><div class="deep">有效配置解释 Module<br>模式允许的覆盖规则明确<br>任务字段单独叠加</div><div class="arrow">↓</div><div class="node">查询和执行消费同一解释结果</div></div></div>
+<p><b>问题：</b>Interface 含有未显式表达的配置顺序；只看参数解析器不能判断队列最终采用什么值。</p>
+<p><b>方案：</b>保留是否显式指定与来源，集中投影有效值；避免解析 argv 时先写全局、稍后再覆写。任务内容和 worker 默认值分别解释。</p>
+<ul><li>Locality：优先级集中</li><li>Leverage：查询与执行复用</li><li>Interface：显式值区别于默认值</li></ul>
+<p class="evidence">依据：ecm_driver.cpp:764 仅向队列传 ini_path、worker、依赖；queue_source.cpp:323–376 从 cfg 建 opt；ecm_driver.cpp:727–744 的 --gpu-info 自行合并 CLI。--exp-cache 在 driver:502 设置，queue_source:125 先重置为程序目录，:348 再采用 TOML。</p>
+<div class="callout">当前产品并非所有计算 CLI 参数在队列模式都生效。本轮已选择：执行偏好允许 CLI 覆盖 worker，任务结构字段明确拒绝，sigma 使用 worktodo → CLI → 配置。实施须按该授权分字段落实，不套用一个全局优先级。配置键及英中说明仍以 config/ecm_options.json 为唯一维护来源。</div>
+</article>
+<section class="panel">
+<h2>必要工作为什么仍然存在</h2>
+<p>配置合并决定运行哪个 worker；队列锁避免重复消费；数学输入验证保证 N 与已知因子正确；命名固定后续恢复与交接位置。删除对应 Module 会把复杂度搬回调用者，因此它们通过 deletion test，值得保留。</p>
+<p>单任务 checkpoint、结果恢复和 CPU/CUDA/OpenCL 分派同样应保留在任务内部。准备函数的数量不等于启动耗时；本次未测量性能。可能有实际 I/O 成本的是 save 同步、历史交接恢复和文件扫描，需单独计时，不能承诺压缩调用层即可加速。</p>
+<p class="small">现有 task/queue 契约测试、真实 worker 可用性测试继续保护完成协议。tools/test/test_stage1_queue_extraction.py 还含与旧提交正文相同的结构冻结断言；若批准更改职责，应更新这些结构断言，保留错误码、完成顺序和数学结果等行为检查，不能仅维持旧源码形状。</p>
+</section>
+<section class="panel" id="input-plan">
+<h2>输入归一化：三个来源与一次归一化</h2>
+<p>用户已选择输入归一化，要求剥离旧架构并减少层级。职责现扩展为主机读写，目录建议为 <code>src/io/</code>，见页面顶部当前决策。入口和主机读写现已迁到平级目录；src/ecm 保留计算与后端实现。三个来源的解释与一次归一化继续保留，worktodo 读写在同一 Module 内。</p>
+<div class="scroll"><table><thead><tr><th>拟议文件</th><th>负责</th><th>不承担</th></tr></thead><tbody>
+<tr><td><code>cli.cpp</code></td><td>argv、运行模式、位置参数、显式选项；保留是否指定和原始来源。</td><td>执行任务、设置 CUDA、写全局缓存设置、扫描交接历史。</td></tr>
+<tr><td><code>config.cpp</code></td><td>TOML 读写、文法与键检查、worker 作用域；显式配置保存与默认模板创建。</td><td>打开 mirror 日志、同步 save。纯解析调用不自动修改输入文件。</td></tr>
+<tr><td><code>worktodo.cpp</code></td><td>读取、解析与选择；保留原行、字段是否省略和精确数字；持锁标错/删除/替换/追加并原子提交。</td><td>数学任务执行、日志资源、save 备份与 P95 文件交接。编辑和纯解析入口分开，但位于同一 Module。</td></tr>
+<tr><td><code>normalize.cpp</code></td><td>集中合并来源、核对冲突、解释 typed save、计算实际 N、确定本任务选项和路径，产生拥有数据的完整任务。</td><td>新增 manager、runner、factory 或仅转发调用。不可写队列、结果与交接文件。</td></tr>
+<tr><td>窄头文件</td><td>共享值、来源与诊断合同；复用正确领域类型，按实际消费者拆分，不以 io 名义合并为巨型公共头。</td><td>万能配置字典、全程序上下文、运行资源句柄和后端状态。</td></tr>
+</tbody></table></div>
+<div class="pair"><div class="diagram"><div class="caption">并列来源，非串行层级</div><div class="node">cli.cpp　　config.cpp　　worktodo.cpp</div><div class="arrow">↓ 来源值按模式组合 ↓</div><div class="deep">normalize.cpp：一次归一化与交叉验证</div><div class="arrow">↓</div><div class="node">直接执行任务 / 队列循环执行任务</div></div><div class="diagram"><div class="caption">减少旧桥接，而非只搬文件</div><div class="node">移除旧的重复字段投影与校验路径</div><div class="node">收回 queue_source 内的任务组装</div><div class="node">工作流直接消费归一化任务</div><div class="node">只有一个生产来源的 source 回调可评估删除</div></div></div>
+<p><b>为什么建议四个实现文件：</b>前三个文件各自解析一种来源；来源合并是不同的、真实的业务逻辑。把它分别放进 CLI 和队列入口会再次重复，把它塞进某个解析器会使该解析器理解其他来源。normalize 增加的是规则归属，不增加一条只转发的运行层级。若暂时限制为三个解析文件，归一化仍须在唯一已有执行入口集中，不能复制两套。</p>
+<h3>必须先写清的合同</h3>
+<ol>
+<li><b>省略与显式值：</b>0、空字符串、Auto 与未指定各自区分。sigma 和 B2 不经 double 中转。来源位置保留到诊断完成。</li>
+<li><b>来源优先级：</b>启动选项、worker 默认值、任务字段分别定义。曲线、param、sigma 的冲突，以及 typed save 的权威字段逐项列明；不能一律套用 CLI &gt; worktodo &gt; TOML。</li>
+<li><b>路径基准：</b>程序目录、配置目录与当前目录分别保留，先固定现有语义，不把全局转绝对路径等价为统一相对路径基准。</li>
+<li><b>输入所有权：</b>当前任务拥有 N、字符串和选项。worker 默认值不可变；不借用即将释放的 parser 缓冲区，不沿用上一任务的可变身份。</li>
+<li><b>错误与队列票据：</b>空队列、文件读取失败、语法错误、语义冲突分别表达；保留原行，队列层决定停止或标错，parser 不自己推进队列。</li>
+<li><b>共享格式：</b>配置和 worktodo 的文法也用于 Stage2、GUI、p95_feeder。初期聚焦 Stage1，但同一格式必须只有一份解释；不能复制成不兼容的 Stage1 专用文法。</li>
+</ol>
+<p class="evidence">共享消费者依据：application/cuda_stage2/ecm_cuda_stage2_main.cpp、service/stage2/input.cpp/runtime_types.h、application/gui/toml_file.h/results.h/worktodo_gen.cpp、application/p95_feeder/ecm_p95feeder.cpp。现有配置定义仍在 config/ecm_options.json，由生成器维护默认值与说明。</p>
+<p><b>实施顺序候选：</b>按已讨论规则完成字段表 → 建立共享数据与读写模块 → 集中归一化并让 main/唯一队列循环改用 → 完成可靠同步与收尾 → 删除被替代的旧组装/转发路径。只迁文件或长期保留两套相同规则不算完成。已确认字段按当前决策落实，剩余细则明确标为待确认。</p>
+<p class="small">行为验收应覆盖等价来源、相邻不同曲线任务、typed save、worker 覆盖、精确 sigma/B2、省略/0、路径基准、读取错误与空队列、原始票据保留、解析不修改文件，以及 Stage2/GUI 的共享格式兼容。输入规则可先做无 GPU 验证，再用少量真实任务核对最终输入与完成协议。</p>
+</section>
+<section class="panel" id="defaults-and-live-queue">
+<h2>默认值与运行期间的 worktodo 修改</h2>
+<h3>默认值：在归一化阶段补齐</h3>
+<p>输入归一化方向已同意；读写扩展后的 io 名称仍为建议。parser 返回文件中或 argv 中实际提供的值，保留未指定、来源、位置及 worker 作用域；不在三个 parser 中分别填满业务默认值。normalize 依据逐字段来源规则选值，缺少可用来源时采用配置定义中的默认值，再做派生与交叉验证。配置默认值仍只在 config/ecm_options.json 维护；ECM 文法约定的省略含义也在对应的归一化规则中集中落实，不丢失来源差异。</p>
+<p>显式 0、空字符串、Auto 与缺省不可混为一谈。非法显式值应报错，不静默回退默认。读取配置所需的 config 路径、worker 编号与模式属于最小启动决策，可在读取配置前采用同套默认定义；完整任务归一化仍在配置及任务字段齐备后完成，无需增加一层启动框架。依赖设备的 Auto 策略先保留为策略，不在 parser 中初始化 GPU。</p>
+<h3>动态队列：允许其他任务变化，当前任务使用固定快照</h3>
+<p>建议允许尚未执行任务新增、删除、重排和整条修改；完成一条任务后重新读取最新 worktodo，不把启动时整份列表当作固定执行计划。当前任务的实际 N、B1、曲线/param、sigma、曲线数与输出策略在领取时固定。修改或删除当前行不等于取消正在执行的计算；运行期间不采用修改后的参数。重启时重新归一化，仍按各阶段已批准的恢复规则处理。</p>
+<div class="pair"><div class="diagram"><div class="caption">领取时</div><div class="node">短暂读取 worktodo 的完整状态</div><div class="node">选择任务，保存队列票据与本任务快照</div><div class="node">释放编辑锁，计算期间允许修改其他任务</div></div><div class="diagram"><div class="caption">完成时</div><div class="node">短编辑锁内重读最新文件</div><div class="node">按票据找当前条目并验证未被修改</div><div class="node">只移除/替换该条目，保留其他最新内容</div><div class="node">临时文件 → 原子替换，再读下一任务</div></div></div>
+<p><b>行号不是任务身份。</b>用户已确定本轮采用“每个 worker 下第一个完全相同的任务行即匹配”。队列票据保留 worker 和原任务行；完成时在最新文件对应 worker 范围内从前向后查找，零条匹配为冲突，一条或多条均取第一条，只消耗一条。沿用当前去 BOM、去首尾空白的比较预处理，字段内容保持精确比较。</p>
+<p>本轮不增加稳定条目 ID。完全相同的行视为可互换记录：无法区分移动原行与删除后新增相同文本，但按已选规则都匹配。同内容重复任务可以继续排队，完成一条只消耗一条。AID、N 或 sigma 不单独替代完整原行匹配。</p>
+<p>完成时对应 worker 下已找不到原任务行内容：保留已产生的计算结果，不删改其他行，停止自动推进并明确报告冲突。改动后的行若内容不同就不会匹配；如仍有其他相同行，则按用户确定的首条匹配规则处理。结果完成与队列推进分开核对，避免因推进失败自动重复计算或重复发布。当前实现已有首条内容匹配，本轮尚未实施其他改造。</p>
+<h3>原子性分为记录语义与文件提交</h3>
+<p>一条非注释任务行作为一个完整逻辑记录：任务语义的修改按整条新记录处理，执行中不接受一半旧参数、一半新参数。它并不意味着操作系统对文本的一行写入天然原子。程序应在短编辑锁内读取最新文件、验证票据并提交完整新文件；执行期间只持有 worker 消费者所有权，不长期独占队列编辑。</p>
+<div class="callout">现有 .edit.lock 是协作锁，普通文本编辑器不会自动遵守。原子替换保证发布一个完整文件，不能单独避免覆盖同时发生的外部保存；mtime 或散列的提交前复查也不是原子的内容比较并替换。要对并发编辑提供严格保证，GUI、工具和程序必须共同遵守编辑协议。任意外部编辑器只能做冲突检测和尽力保护，不能承诺绝不丢失更新。任务间 live edit 与多写者同时提交须分别说明。</div>
+<p class="evidence">当前源码：storage/queue/ecm_worktodo.cpp:519 的 QueueEditLock；:578 的每次重读；:622 的短锁、最新文件内内容匹配、首条命中和临时文件替换；storage/queue/owner_lease.h 的消费者所有权；service/work/queue_workflow.cpp:110 附近的完成后队列推进。上述增强均未实施。</p>
+</section>
+<section class="panel" id="input-diagnostics">
+<h2>可自行修正的输入诊断</h2>
+<p>用户要求通过返回值或报错即可理解并修正输入。将诊断作为输入 Module 的 Interface：每个错误包含稳定错误类别、输入来源与位置、键或任务字段、原始值、合法类型/集合/范围及单位，以及适用条件。能提供明确修正办法时附一条提示；不猜测或自动改写用户输入。</p>
+<div class="pair"><div class="diagram"><div class="caption">CLI：非法枚举</div><div class="node"><code>ERROR E_INPUT_VALUE<br>CLI: --gpu-param = "7"<br>允许：0、2、3<br>含义：0=Suyama，2=PARAM2，3=PARAM3</code></div></div><div class="diagram"><div class="caption">worktodo：显式非法值不能视为省略</div><div class="node"><code>ERROR E_INPUT_VALUE<br>worktodo.txt:18 [Worker #2]<br>ECM.curves = "abc"<br>要求：1..4294967295 的十进制整数<br>提示：省略该字段时才采用约定缺省值</code></div></div></div>
+<p>上述格式与错误名均为设计示例，尚未实现。内部结构化诊断由统一文本输出呈现到 stderr，GUI 可以使用同一信息；不为每个 parser 新增一套异常框架。正常结果输出与输入错误分开，失败返回非零退出状态。</p>
+<ol>
+<li><b>解析时：</b>未知键/选项、缺少值、格式错误、数值溢出、静态范围不满足。当错误键有高置信度近似项时提示正确拼写，不自动替换。</li>
+<li><b>归一化时：</b>跨来源冲突与条件范围，例如 curve=ed 与 lcm=12，各字段单独合法但组合不支持；说明相关键、有效值及各自来源。</li>
+<li><b>运行条件核对时：</b>设备数、编译实例能力、可用内存等动态约束。只有查询设备后才能报告实际 device 上界，parser 不为此建立 CUDA 计算环境。</li>
+</ol>
+<p>缺少必填项要说明字段和输入格式；不能把省略、显式 0、格式非法视为同一情况。一次可报告多个相互独立的错误；遇到结构破损不继续推测字段，避免大量连锁误报。CLI/配置失败停止启动；worktodo 的诊断与队列错误处理策略分开，parser 不自行删除或标错行。</p>
+<p><b>规则只维护一份：</b>配置键、默认值和英中说明继续由 config/ecm_options.json 维护，补足可供校验与诊断共同使用的硬范围、枚举、单位和特殊值信息；CLI 选项与配置键建立对应关系。跨字段的实际语义规则集中在 normalize，错误解释与判定引用同一规则。worktodo 的纯语法约束由其格式定义维护，复用相同的整数解析与诊断能力。</p>
+<div class="callout">现有 domain 不宜直接充当硬范围：naf_w 的 domain 为 0 或 3..12，但描述和 CUDA 实现允许显式 2..12，3..12 是常用范围；ckpt_seconds 的描述还保留负数按 0 处理的兼容行为。实施时先区分硬限制、推荐范围及兼容转换，再使元数据、实现、文档与诊断一致，不能仅为生成报错收窄正确实现。</div>
+<p class="evidence">现状依据：storage/queue/ecm_worktodo.cpp:337–380 对若干非法可选 B2、curves、sigma 保留默认值；application/cli/ecm_driver.cpp:506 的 gpu-param 错误已说明允许值但未统一实际值和来源；application/configuration/ecm_toml.h 提供部分路径/行号、未知键和类型错误；config/ecm_options.json 的 naf_w、ckpt_seconds、sigma 元数据。这里只列重构需解决的诊断与语义问题，未修改产品行为。</p>
+</section>
+<section class="panel" id="first-refactor-readiness">
+<h2>首轮实施前还需要补齐的合同</h2>
+<p class="meta">本节核对源码基线 8500a84；规划状态，未实施。</p>
+<p>已明确目录与四个实现职责、归一化补默认、可自行修正的诊断，以及 worker 内首个相同行匹配。剩余工作主要是逐字段和执行入口的具体合同，不需要继续增加抽象层。</p>
+<ol>
+<li><b>运行模式与来源清单：</b>完整列出 queue、单次运行、help、GPU 查询、内核清单与命中后诊断等现有模式。单次运行的 N 当前来自 stdin，包含表达式与已知因子语义；应归入 CLI 单次模式的任务载荷，不新增一个队列来源。配置路径/worker 的最小启动默认、已有环境选项及模式退出顺序须纳入。</li>
+<li><b>逐字段覆盖表：</b>记录默认、配置键、worker、CLI、worktodo、typed save、特殊值和冲突规则。用户已确认队列 CLI 拒绝曲线数量/类型等任务结构字段；sigma 按 worktodo → CLI → 配置；执行偏好仍可由 CLI 覆盖。剩余选项的完整允许/禁止表仍须制定。</li>
+<li><b>共享数据合同：</b>明确解析值的指定状态与来源、规范任务的数据所有权、执行快照、原始队列票据，以及错误诊断。复用正确领域类型，避免新造第二套完整运行参数或万能 map。配置 parser 读取真实字段；默认值只在归一化落实。</li>
+<li><b>最终调用图与旧代码退出：</b>确定 main、启动资源和唯一队列循环如何直接消费新输入。queue_source 中输入组装被替代后删除；日志、同步、Prime95 扫描等明确归现有生命周期，不能塞进 parser，也不能让旧入口继续套住一串新转发。只有一个生产来源的 NextQueueTask 桥接可移除；task 与后端流程保持完整。</li>
+<li><b>行为变更清单：</b>显式非法字段不再静默采用默认、错误中的来源和值域属于本轮诊断目标；负 ckpt_seconds 等现有明确兼容转换单列。默认值、数学构造、合法输入的 sigma、save/checkpoint 身份、输出文件与 GUI 协议不顺便修改。变化须同步描述与行为验证。</li>
+<li><b>队列提交协议：</b>读取最新文件、同 worker 首条内容匹配、零匹配的处理、锁范围、半写/读取失败的处理，以及结果已成功但队列推进失败的恢复顺序，需形成可验证规则。用户已确认当前 worktodo 任务输入非法时按原行标错并继续后续任务；错误归属必须区分启动配置错误、任务输入错误、读取/锁/提交失败，不能把全局故障批量标记为坏任务。标错写入失败则停止，避免循环重复领取。不要把首轮扩大为与任意外部编辑器的严格多写者事务；严格保证限于共同遵锁的写者，外部保存做尽力冲突保护。</li>
+<li><b>共享消费者与生成闭包：</b>配置/worktodo 文法涉及 Stage2、GUI、feeder；列明哪些调用改用新实现、哪些仅保留兼容入口，以及旧实现的删除点。更新 CMake、host 源清单、生成器输出/指纹与必要脚本，避免新目录源码未被编译或未被依赖检查扫描。</li>
+<li><b>验收与删除条件：</b>用等价输入、字段边界、诊断、连续异构任务与动态队列行为做门禁，保留 Stage2/GUI 兼容、双结果及 checkpoint 回归。先无 GPU 输入测试，再主机编译和少量真实 CPU/CUDA/OpenCL 任务。验证结果和输出身份优先；旧源码正文冻结断言按获批设计更新，不用它限制新布局。</li>
+</ol>
+<p class="evidence">新增缺口依据：application/cli/ecm_driver.cpp:762–764 的队列模式分派与 :832 附近的 stdin 输入；tools/build/internal/cuda_sources.cmake 的显式源清单；tools/test/test_main_flow_boundaries.py 只扫描 include/ecm 与 src/ecm，新增 src/io 等位置后必须扩展扫描；tools/test/test_stage1_configuration_seam.py 含旧提交正文/路径相同断言，须与新设计同步维护。</p>
+<h3>建议首轮范围</h3>
+<p>替换 Stage1 的 CLI/配置/worktodo 读写与任务归一化，driver 改 main，删除被替代的桥接；日志归日志 Module、备份与 P95 可靠交接归专门同步 Module，完成诊断与共享消费者兼容。保持数学、GPU workflow 与本地存档/结果合同；新增交接一致性、P95 专用路径与备份路径职责。Stage2 执行编排及其他目录重排留在后续，共享文法不复制、不分叉。</p>
+<p>提交前形成一份临时实施草稿，明确最终文件去向、覆盖规则、行为变化、验收证据与旧实现删除条件。版本及二进制身份按实施时实际基线记录；不把未重建的旧二进制称为新源码验收产物。</p>
+</section>
+<section class="panel top">
+<h2>三项确认：已授权实施</h2>
+<ol>
+<li><b>最终目录名与入口位置：</b>已确认使用 src/io/ 与 src/main.cpp；原始 input 名称不再使用。</li>
+<li><b>P95 专用路径：</b>已确认 p95_sync_dir 只指 save 目录，p95_worktodo_path 继续指外部队列。</li>
+<li><b>启动 skip 校正范围：</b>已确认只处理当前 worker 的 ECMSTAGE1 行；其他 worker 自行处理，已有 ECMSTAGE2 行不改。启动检测及收尾强制复核均已实施。</li>
+</ol>
+<p>其他细节由工程规划收敛：任务结构 CLI 完整拒绝表、sigma 的现有 0/省略语义、共享值类型与错误分类、旧实现删除映射、生成器/构建/GUI 兼容、故障注入和回归用例。不要将已决定的 sigma 优先级、坏任务标错继续或重复行首条匹配重新列为开放问题。</p>
+<p>拟沿用的安全恢复行为：P95 投递失败在待投递记录可靠持久化后继续 Stage1；持久记录失败则停止推进。save 范围无法证明正确时保留结果并停止收尾/交接，不猜测、不错误投递。若多个 worker 可能写同一 save，发布与本批范围确认必须串行，计算可并行；锁顺序与崩溃恢复属于实施合同，不扩大成通用事务框架。</p>
+<p>目标是主流程理解“启动、消费队列、执行任务、可靠收尾”；删除被替代的旧桥接，继续复用正确的数学和设备实现。本文持续保留各轮讨论，实际实现与验收以顶部状态卡及正式说明为准。</p>
+</section>
+<section class="panel" id="sync-cleanup">
+<h2>后续整理：sync 可读性与 src 根目录</h2>
+<p>本轮按用户要求整理排版、注释和工具位置。版本保持0.52.5，尚未提交 Git；未替换现用程序，不重测 GPU 性能。上方性能数据保留其原测试条件和二进制身份。</p>
+<h3>同步代码</h3>
+<p><code>src/sync/</code> 的五个 C++ 文件统一为4空格缩进、100列换行；函数、字段、条件分支、文件锁作用域和提交阶段分开展示。局部 <code>.clang-format</code> 固定该目录风格，不影响其他模块。补充文件落盘与原子替换、P95 冻结路由、仅允许源前缀增长、发送状态不明时禁止盲目重投，以及持久确认先于清理责任的注释。</p>
+<p>字段顺序和P95版本3文本协议不变；编解码与 checksum 在统一局部变量名称后逐记号核对一致。文件发布实现的有效代码记号不变，仅补显式标准头。备份目标筛选、历史意图检查和旧 pending 读取改用显式代码块及提前跳过，减少多层嵌套；不修改提交顺序、错误策略或计算逻辑。</p>
+<h3>文件去向</h3>
+<ul><li><code>tools/test/</code>：main_test、opencl_low_risk_tests 的CPP/头、两个 sliced_cios 测试，共5个文件。</li>
+<li><code>tools/disasm/</code>：OpenCL 汇编自检及两个 ISA 导出工具，共3个文件。</li>
+<li><code>tools/bench/</code>：两个 OpenCL 微基准及两个 manifest 实现，共4个文件；manifest 仍由桌面与 Android 显式链接。</li>
+<li>删除无消费者的 <code>cgbn_stage1_stub.cpp</code> 和两个未被包含的 bench 声明头。src 根目录现只保留 main.cpp。生产后端实际使用的运行前自检保留在后端。</li></ul>
+<p>CMake、Android 引用、当前使用说明及冻结源码测试的路径映射已同步；没有改写冻结基线。移出的12个文件按字节核对，内容保持一致。根目录检查已加入现有架构验证器，避免独立工具再回流 src。</p>
+<h3>验证与证据</h3>
+<p>八个桌面 OpenCL 测试/基准/ISA 目标全部构建成功，未配置 CUDA 目标、未调用 nvcc、未运行 GPU；共享 manifest 均在该构建中编译。真实文件合同验证完成记录恢复、连续区间、去重、冻结投递、目标失败及后续重试；本轮另覆盖第二备份路径、仅复制 save，以及第一目标失败后第二目标仍可完成。格式检查、231个计算文件不变门禁和453个生产文件 include 图检查通过，公开头没有私有实现依赖，引用图无环。</p>
+<p>Android 仅同步并静态核对共享源路径，本轮没有做 Android/NDK 构建。证据位于 <code>data/experiments/stage1_sync_cleanup_20261025/</code>：<code>cleanup_inventory.json</code>、<code>source_audit.json</code>、<code>opencl_tools_build/opencl_tools_manifest.json</code>、<code>host_io_backup_build</code>、<code>host_io_backup_run</code>、<code>graph</code> 和 <code>static</code>。首轮功能和性能原始证据继续保留。</p>
+</section>
+<section class="panel" id="next-refactoring-topics">
+<h2>下一轮补充重构范围：总体方案已确认</h2>
+<p>用户已确认采用1B、2B、3B、4A；下方保留范围讨论，调用归属和param组织继续细化。本节不改变此前已确认的字段优先级、动态队列、实际保存范围和交接保证。</p>
+<article><h3>1. 单次运行与队列的最终输入收口（优先）</h3>
+<p><b>现状：</b>队列已使用 normalize_worktodo；单次模式在 main.cpp 调用 normalize_options 后，仍逐项重写 selection、线程、NAF、设备、checkpoint、内核路径、sigma 和 tmp_dir。规则虽已有共用部分，最终赋值仍分散。</p>
+<div class="pair"><div class="diagram"><div class="caption">当前</div><div class="node">单次：归一化 → main 再组装</div><div class="node">队列：normalize_worktodo → 执行</div></div><div class="diagram"><div class="caption">候选目标</div><div class="deep">两种模式生成一致的最终计算输入</div><div class="node">队列单独持有票据与交接信息</div></div></div>
+<p><b>需要讨论：</b>完整归一化的结束点；谁拥有 N 与表达式；单次 stdin 目标的解析归属；队列票据/交接文本与计算请求的区分；保留单次模式既有默认目录和输出约定。目标是集中规则，避免增加同参转发层。</p>
+<p class="evidence">依据：src/main.cpp:989–1032；src/io/normalize.cpp；src/io/normalize.h。</p></article>
+<article><h3>2. main 的启动、队列策略与同步职责</h3>
+<p><b>现状：</b>main 保留唯一队列循环，也持有配置启动、P95 惰性初始化、外部 AID 恢复扫描、skip 修复、完成记录和交接编排。p95_for_task 仍同时解释资格与初始化外部状态。</p>
+<div class="pair"><div class="diagram"><div class="caption">当前</div><div class="node">main：模式 + 队列 + 部分同步内部策略</div></div><div class="diagram"><div class="caption">候选目标</div><div class="deep">main：清晰的启动与唯一队列循环</div><div class="node">已有 io / sync / 日志 Module 各自拥有规则</div></div></div>
+<p><b>需要讨论：</b>进程、worker、任务三个资源寿命；哪些工作每次启动一次、每条任务一次或仅重试时执行；当前任务冻结后才判断的交接资格；空队列恢复行为与无权限访问外部路径时的策略。通过职责收口减少理解跳转，不引入新的 Runner/Manager 链。</p>
+<p class="evidence">依据：src/main.cpp:377 的 run_worktodo、:517 的 p95_for_task；src/sync/p95.cpp。</p></article>
+<article><h3>3. 执行结果与保存发布合同（重要）</h3>
+<p><b>现状：</b>ExecutionResult 同时包含 Completion、TaskStatus、FailureSource、ret/task_return、旧 prepare_failed/publish_failed，以及类型化 curve_kinds 和旧并行数组。task 通过 thread_local Capture 获得后端发布的 save 范围，返回值没有完整表达该副作用。</p>
+<div class="pair"><div class="diagram"><div class="caption">当前</div><div class="node">旧返回码/标志 + 类型化状态</div><div class="node">后端发布 save → 隐式 Capture → task</div></div><div class="diagram"><div class="caption">候选目标</div><div class="deep">明确且唯一的结果状态与拥有权</div><div class="node">计算产物与保存发布通过显式合同传递</div></div></div>
+<p><b>需要讨论：</b>哪一层决定最终状态；旧 CPU/OpenCL 状态的适配位置；每条曲线 Factor/Stage2Point/CompletedWithoutPoint/失败的完整表达；谁生成记录、谁持久发布；已验证 Range 是否作为显式发布结果返回。保存点少于尝试数、零点批次、停止与设备错误优先级及失败后可重试责任都要保留。</p>
+<p class="evidence">依据：src/ecm/service/stage1/execution_contract.h:ExecutionResult；src/ecm/service/stage1/task.cpp:Capture 与发布；src/ecm/storage/save/publication.cpp:thread_local capture。</p></article>
+<article><h3>4. CUDA 两条 workflow 与 checkpoint 生命周期</h3>
+<p><b>现状：</b>run_mont_stage1 和 run_edwards_stage1 已有同风格入口；内部准备、恢复、设备执行、逐曲线结果转换和发布协作仍明显不同。Montgomery 保存接口还存在 int/bool 两类返回约定，Edwards 则使用 Batch 与 RestoreResult。</p>
+<div class="pair"><div class="diagram"><div class="caption">当前</div><div class="node">同风格入口，不同的内部阶段与 checkpoint 协作</div></div><div class="diagram"><div class="caption">候选目标</div><div class="deep">阶段名称、输入输出与失败约定一致</div><div class="node">曲线数学、载荷布局和设备算法各有明确归属</div></div></div>
+<p><b>需要讨论：</b>准备→恢复→初始化→执行/停止→结果转换→发布的共同阶段；恢复候选检查与实际接纳的区别；谁控制 autosave、停止存档、最终存档和进度报告；save/load/decode 命名和错误合同。统一调用者需要理解的规则，保留必要的曲线及内核载荷差异，避免用大模板或回调表隐藏顺序。</p>
+<p class="evidence">依据：src/ecm/backend/cuda/stage1/execution.h；montgomery/workflow.cpp、checkpoint.h；edwards/workflow.cpp、checkpoint.h。</p></article>
+<p><b>建议顺序：</b>先讨论第1项，明确最终输入和 main 的职责；第2项伴随收口。随后先确定第3项的结果/发布合同，再实施第4项。每轮都须有错误恢复与外部行为回归，并将真实长历史 save、日志、备份/P95 启用场景的收尾计时纳入验收；原约30秒场景尚未复现，不能将架构整理视作该问题已经验证解决。</p>
+</section>
+<section class="panel" id="next-refactoring-options">
+<h2>四项重构的方案比较：已选择1B、2B、3B、4A</h2>
+<p>用户已同意 <b>1B、2B、3B、4A</b>。以下保留方案比较与理由；本轮继续确认调用与param排布，尚未开始新的产品代码修改。成本和风险是依据耦合做出的定性判断，不是实测性能结论。</p>
+<article><h3>1. 最终输入：推荐 B</h3>
+<div class="scroll"><table><thead><tr><th>方案</th><th>优点</th><th>缺点及适用条件</th></tr></thead><tbody>
+<tr><td>A：继续共享选项填充函数，保留两种任务组装</td><td>改动小；直接沿用单次和队列的已有结构；适合很小的维护补丁。</td><td>最终赋值仍有两个入口；命名、身份和模式差异仍容易随维护漂移。主要减少重复代码，规则集中程度有限。</td></tr>
+<tr><td><b>B：两个来源适配，产出同一份拥有的计算输入</b></td><td>默认、覆盖、目标验证、构造和命名有明确结束点；main 直接消费最终输入；两种模式可共用后续校验与任务入口。</td><td>需要迁移直接输入和现有 NormalizedStage1Task；须仔细保留单次目录、stdin 表达式、显式保存路径等既有语义，并明确 GMP 数据拥有权。</td></tr>
+</tbody></table></div>
+<p><b>建议形态：</b>继续复用已有领域选项和同步 Stage1Request；最终输入只拥有计算所需的 N、表达式、构造、曲线数、界限及输出策略。队列票据、原始行、finished/交接计划留在队列信息中，不让单次运行填造假的队列字段。main 不在归一化后继续重写计算字段。无需新增万能键值参数系统。</p></article>
+<article><h3>2. main：推荐 B</h3>
+<div class="scroll"><table><thead><tr><th>方案</th><th>优点</th><th>缺点及适用条件</th></tr></thead><tbody>
+<tr><td>A：保留当前职责，只分成清楚的静态函数和局部结构</td><td>文件和调用层级少；修改风险较低；适合主要诉求是让 main 更容易逐段阅读。</td><td>P95 外部状态解释、任务资格和初始化仍与应用编排耦合；main 继续知道较多同步内部规则，后续独立验证和复用较困难。</td></tr>
+<tr><td><b>B：main 编排，具体规则归已有模块，作用域对象持有资源</b></td><td>配置解释归 io；P95 初始化/恢复规则归 sync；日志资源归日志模块；资源寿命和任务顺序一目了然；唯一队列循环仍留 main。</td><td>必须明确每项工作的触发时机，搬错位置会导致每条任务重复初始化，或不支持的曲线也访问外部目录；需要核对空队列恢复和错误传播。</td></tr>
+</tbody></table></div>
+<p><b>建议形态：</b>明确进程、worker、任务三种寿命；worker 配置与资源使用明确类型和 RAII。只有在对象确实拥有资源时才引入它，不新增 App→Manager→Runner 的同参转发链，也不建立当前同步单批次程序用不到的事件驱动框架。</p></article>
+<article><h3>3. 结果与最终发布：推荐 B，A 是可独立验收的保守选择</h3>
+<div class="scroll"><table><thead><tr><th>方案</th><th>优点</th><th>缺点及适用条件</th></tr></thead><tbody>
+<tr><td>A：后端继续发布 save，显式返回状态和保存区间</td><td>较小改动即可去掉 thread_local Capture；现有后端保存/恢复顺序容易保留；适合限定本轮迁移量。</td><td>每条后端 workflow 仍负责最终文件发布及其失败处理；task 继续协调已发生的文件副作用，共同发布政策仍分散。</td></tr>
+<tr><td><b>B：后端返回拥有的逐曲线结果，task 统一最终发布</b></td><td>计算产物只有一份明确的拥有权；save 模块根据点/因子编码；task 统一保存发布、结果发布及其失败策略；Range 从发布器明确返回，移除 Capture 隐式通道。</td><td>改动涉及 CPU、CUDA、OpenCL 的末点输出及旧适配代码；必须证明点/因子/sigma 对应关系、文本编码和 checksum 不变；移动拥有权，避免额外复制整批大整数。</td></tr>
+</tbody></table></div>
+<div class="pair"><div class="diagram"><div class="caption">当前事实传递</div><div class="node">后端计算并写 save</div><div class="arrow">↓ 隐式 Capture</div><div class="node">task 核对区间并写结果</div><div class="arrow">↓</div><div class="node">队列完成提交</div></div><div class="diagram"><div class="caption">方案 B 的候选合同</div><div class="node">后端：拥有的逐曲线结果</div><div class="arrow">↓ 显式结果</div><div class="deep">task：编码/校验 → save 发布返回 Range → 最终结果发布</div><div class="arrow">↓</div><div class="node">队列：持久交接与源行提交</div></div></div>
+<p><b>共同要求：</b>状态在各自层次有唯一来源，但保留计算完成、最终文件发布完成、队列提交完成三个事实。后端结果表达 Completed/Stopped/Failed 及原因、每条曲线的点/因子/无点/失败；task 另表达整体发布结果，队列另承担交接和完成责任。旧返回码及数组可在兼容入口适配，不要求 GPU/SIMD 的内部计算布局改变。</p>
+<p><b>存档约束：</b>中途 checkpoint 仍由执行安全点协作保存；B 统一的是最终 save 与结果发布。计算交给发布前必须明确已有的可恢复材料；发布失败保留它们，队列完成后再按已有合同清理。零可保存点批次仍完整发布 Stage1 尝试结果，不生成空 Stage2 任务。若先选 A，应单独标明其最终边界，避免长期维护两套发布权威。</p></article>
+<article><h3>4. CUDA workflow 与 checkpoint：推荐 A</h3>
+<div class="scroll"><table><thead><tr><th>方案</th><th>优点</th><th>缺点及适用条件</th></tr></thead><tbody>
+<tr><td><b>A：保留两条显式 workflow，统一阶段合同与必要的共用操作</b></td><td>run_mont_stage1 和 run_edwards_stage1 均能线性阅读；顺序、错误和寿命一致；不同曲线、恢复布局和算法依赖仍清楚；不需要增加通用执行层。</td><td>少量流程骨架会重复；共用政策变动时仍需核对两个入口，应靠相同的阶段合同和回归矩阵约束。</td></tr>
+<tr><td>B：一个通用 workflow，曲线提供策略/回调</td><td>真正完全相同的流程政策可以只实现一次；有多个形状相同的执行实现时，新增实现成本较低。</td><td>需要证明阶段与前置条件确实相同；否则容易产生大量可选钩子、曲线条件和类型擦除，理解实际调用顺序反而更难，并与单任务编排重复。</td></tr>
+</tbody></table></div>
+<p><b>建议形态：</b>以共同词汇说明准备、恢复候选检查、布局选择、接纳恢复/构造新批次、设备执行、结果转换的前置条件与产物；每条 workflow 显式写出其顺序。采用3B后，最终 save/结果发布属于 task，不再留在 workflow；中途 checkpoint 仍在安全点参与。</p>
+<p><b>checkpoint 子方案：</b>复用现有批次容器与持久提交器，统一 encode/decode/restore/save 的职责与返回约定，载荷和几何校验仍由曲线 codec 拥有。decode 解释单份载荷，restore 处理读档、候选与接纳，save 完成已定义的编码/提交。无需把两种曲线强行改成同一种内部载荷，或为统一名字新增一层转发。</p></article>
+<p><b>推荐依赖顺序：</b>1B 与2B先收口入口；明确3B的结果和发布归属后，再按4A整理两条 CUDA workflow。可以分批迁移后端，但每批都须有一个明确的执行与发布责任人，不能让新旧路径同时提交同一批次。各轮继续沿用此前默认/优先级、队列匹配、保存区间、停止恢复和交接语义，性能改善以实际测量为准。</p>
+</section>
+<section class="panel" id="stage1-dispatch-param-design">
+<h2>调用归属与 Montgomery param 排布：已确认</h2>
+<p>总体组合1B、2B、3B、4A及本节调用归属已由用户确认。Montgomery保留一个公开workflow，拆分构造、布局和必要的内部批次执行；不新增完整param级workflow。第一轮整理提交后开始第二轮实施。</p>
+<h3>谁调用 run_xx_stage1</h3>
+<p><b>建议由 run_stage1_task 实际调用。</b>main 在最终输入归一化后组装适合该任务的普通函数入口，task 持有该入口并调用一次。选择入口只做 target、曲线族及本程序后端能力的路由，不运行CUDA、不改输入。该选择随每条实际任务进行，不能按worker默认曲线固定，因为typed save可能改变任务构造。</p>
+<div class="diagram"><div class="node">main：归一化 → 选择本任务入口（仅组装依赖）</div><div class="arrow">↓</div><div class="deep">run_stage1_task：批次寿命 → 调用选定 run_xx_stage1 → 最终 save/结果发布</div><div class="arrow">↓</div><div class="node">main 队列：完成记录、源行提交及持久交接</div></div>
+<p>现有 service/stage1/execution.cpp 中的 execute_stage1 是执行转发分派；建议改为返回选定入口的解析函数，使 task 直接调用目标，不再嵌套一层转发。选择函数复用现有文件，不新增Manager/Runner/注册框架；task 继续只依赖普通主机合同，不引入CUDA SDK类型，测试可以传入同类型计算入口。</p>
+<h3>构造身份、执行算法、实际布局分开</h3>
+<ul><li><b>构造身份：</b>Montgomery/Edwards；Montgomery的param0/2/3；显式sigma或待解析的sigma策略，以及N、B1、标量约定等。param在归一化结束时确定，执行中不改；一条任务和一个GPU批次使用一种构造。</li>
+<li><b>算法要求：</b>ladder、resident、PRAC等属于执行选择，不能通过切换param满足要求。现有CUDA代码的resident/PRAC还受编译能力约束，并限制param0；可判定的非法组合应尽早给出明确错误。</li>
+<li><b>实际执行布局：</b>设备、容器位宽、TPI、缓冲区和内核实例在后端准备/恢复接纳时确定。它必须兼容已固定的构造与有效checkpoint；不能以换param或丢弃进度作静默回退。</li></ul>
+<p>未指定sigma时，归一化保存的是策略，不应提前生成随机值并覆盖恢复种子。有效checkpoint的sigma先接纳；只有新批次才调用生成器。显式sigma须与恢复状态一致。算法/布局的用户要求、checkpoint记录和设备能力分别核对，沿用现有显式冲突拒绝及恢复语义。</p>
+<h3>一个 Mont workflow，param 贯穿必要阶段</h3>
+<p>保持公开的 <code>run_mont_stage1</code> 一个入口。param0/2/3分别提供有差异的构造、内核能力、布局描述及编码规则，不再各建完整的任务执行链。普通输入解析也不应把param当作执行后期的内核开关。</p>
+<div class="scroll"><table><thead><tr><th>逻辑阶段</th><th>责任归属</th><th>param 的作用</th></tr></thead><tbody>
+<tr><td>输入归一化</td><td>io/normalize</td><td>确定param、检查静态约束，保留sigma的显式/自动状态；该身份随后冻结。</td></tr>
+<tr><td>选择执行入口</td><td>main组装、现有execution模块提供选择</td><td>Mont的三种param都选run_mont_stage1；param不增加一层公开workflow分派。</td></tr>
+<tr><td>准备与恢复候选检查</td><td>Mont workflow与checkpoint模块</td><td>根据构造与算法要求检查可用实现；验证候选的N、param、B1/指数、曲线身份等。此时读取候选不等于接纳它。</td></tr>
+<tr><td>确定布局并接纳恢复</td><td>后端准备、运行时与codec协作</td><td>按构造/算法/设备及有效候选选择实际布局，完成载荷验证；不能把另一param的载荷解释为当前param。</td></tr>
+<tr><td>恢复或构造新批次</td><td>Mont曲线构造</td><td>恢复已有状态；新批次才解析新sigma并调用对应param构造。恢复可重建必要的派生资源，但不清零进度。</td></tr>
+<tr><td>执行与checkpoint安全点</td><td>Mont runtime</td><td>使用匹配的内核实例与载荷布局；三种param复用已相同的调度、停止、进度和持久化政策。</td></tr>
+<tr><td>结果转换</td><td>Mont数学/转换模块</td><td>按实际布局解码每条曲线，返回拥有的点/因子/无点或失败结果；不能只按param0与非param0二分。</td></tr>
+<tr><td>最终保存及结果发布</td><td>task调用save/results模块</td><td>按已固定param编码、校验并发布；最终Range显式返回；编码差异不反向改变计算输入。</td></tr>
+</tbody></table></div>
+<p>这些是职责阶段，不要求每一阶段新增一个文件或只转发的函数。以当前<b>ladder</b>实现为例，param0/2使用7-word布局，param3使用5-word布局；param0/2虽共享布局形状，构造和内核步骤仍有区别。其他算法的布局须按其实际合同核对，不能直接套用ladder布局。</p>
+<h3>代码摆放建议</h3>
+<ul><li><code>service/stage1/task.cpp</code>：实际调用入口与统一最终发布。</li>
+<li><code>service/stage1/execution.cpp</code>：选择入口；不拥有第二套执行生命周期。</li>
+<li><code>cuda/stage1/execution.h</code>：Mont/Edwards两个同风格主机入口合同。</li>
+<li><code>montgomery/workflow.cpp</code>：显式Mont流程；<code>host_policy.cpp</code>集中算法/能力选择，<code>host_math.cpp</code>集中param构造与结果转换，<code>runtime.cu</code>负责设备执行，<code>checkpoint.cpp</code>负责专用codec。</li>
+<li>当前Mont <code>output.cpp</code>实际负责进度和诊断输出，不是最终save/results发布。最终编码和发布留在storage/save与storage/results。先复用现有文件；param专用数学代码增长到确有独立维护价值时，再拆内部param文件。</li></ul>
+<p>建议集中一个明确的Mont构造描述或必要的局部switch，让各阶段使用已验证的param、能力和布局信息，减少散落的param0/param2布尔判断；不为三个param增加通用虚类树或多层工厂。不同param任务仍按队列独立执行，本轮不引入批次内混合param。</p>
+<p class="evidence">核对：service/stage1/execution.cpp；cuda/stage1/execution.h；montgomery/workflow.cpp、runtime.cu（算法限制、恢复、构造与words_per_curve/p1_word）、host_math.h、host_policy.cpp、checkpoint.h、output.h。</p>
+</section>
+<section class="panel" id="first-round-commit"><h2>第一轮提交整理</h2><p>输入、队列编辑、持久交接、日志与根目录工具清理作为第一轮0.53.0提交。提交前重新通过配置生成检查、计算源码与默认值核对（231个计算文件、两处已验证的save序列化修正、121项既有默认值）、当前依赖图检查（453文件、972边、无循环）。既有任务、输入、恢复、P95、工具构建与同步验证证据见前述验收。</p><p>冻结搬迁测试test_main_flow_layout.py仍要求452个源路径一一映射，但当前两份Edwards runtime已合并为一个目标（451个唯一目标）；其纯搬迁前提已失效，未将其作为当前架构验收通过项。后续以当前依赖图、真实构建及运行合同核验，冻结映射与原始失败记录保留。</p></section>
+<footer>临时开发草稿保留历轮规划与核对过程；实施现状见顶部状态卡和正式架构。早期源码证据默认相对规划基线 src/ecm/，旧路径不作为当前入口。草稿完成后保留供用户处理；页面自带 CSS，可离线阅读。</footer>
+</main></body></html>

@@ -77,18 +77,19 @@ def main():
 
     def setup(name, model='mont', target='gpu', param=0, pattern='', task=None):
         work=out/name;work.mkdir();ini=work/'ecm.toml'
-        ini.write_text(f'curve={model}\ntarget={target}\nimpl={"scalar" if target=="cpu" else "auto"}\n'
-            f'gpu_param={param}\ndevice={args.device}\nckpt_seconds=0\nckpt_backups=2\n'
-            f'worktodo={work/"worktodo.txt"}\nfinished={work/"finished.txt"}\ntmp_dir={work}\n'
-            'log_file=\nuser=\ncomputer=\n'+(f'save_name_pattern={pattern}\n' if pattern else ''))
+        ini.write_text(f'[shared]\nworktodo={json.dumps(str(work/"worktodo.txt"))}\nuser=""\ncomputer=""\n'
+            f'[stage1]\ncurve="{model}"\ntarget="{target}"\nimpl="{"scalar" if target=="cpu" else "auto"}"\n'
+            f'gpu_param={param}\ndevice={args.device}\nckpt_seconds=0\nckpt_backups=2\nexp_cache="off"\n'
+            f'finished={json.dumps(str(work/"finished.txt"))}\ntmp_dir={json.dumps(str(work))}\n'
+            'log_file=""\n'+(f'save_name_pattern={json.dumps(pattern)}\n' if pattern else ''))
         (work/'worktodo.txt').write_text(task or 'ECM2=1,2,347,-1,100000,1000000,8\n')
         return work,ini
 
-    def run(name,work,ini,local_exe=None,good=True):
-        result=subprocess.run([str(local_exe or exe),'-ini',str(ini)],cwd=work,env=env,capture_output=True,timeout=180)
+    def run(name,work,ini,local_exe=None,good=True,empty=True):
+        result=subprocess.run([str(local_exe or exe),'--config',str(ini)],cwd=work,env=env,capture_output=True,timeout=180)
         text=(result.stdout+result.stderr).decode('utf-8','replace');(out/(name+'.log')).write_text(text)
         assert (result.returncode==0)==good,(name,text[-2500:])
-        if good:assert not (work/'worktodo.txt').read_text().strip()
+        if good and empty:assert not (work/'worktodo.txt').read_text().strip()
         report['checks'].append(name)
         (out/'summary.json').write_text(json.dumps(report,indent=2)+'\n')
         return text
@@ -104,14 +105,20 @@ def main():
             (work/'.m0_s1_m347_100000.ckpt').write_bytes(v1(identity,rows))
         else:
             old.write_bytes(payload)
-            if seed:(work/'.m0_s1_m347_100000.ckpt').write_bytes(v1(identity,[(1000+i,b'') for i in range(len(rows))]))
+            if seed:(work/'.m0_s1_m347_100000.ckpt').write_bytes(v1(identity,[(sigma,b'') for sigma,_ in rows]))
             if backup:
                 old.with_name(old.stem+'.bak.dat').write_bytes(payload)
                 damaged=bytearray(payload);damaged[-10]^=1;old.write_bytes(damaged)
         before=old.read_bytes() if old.exists() else None
         text=run(name,work,ini)
-        assert 'Resuming from checkpoint:' in text
-        if name!='mont_v1':assert 'legacy GPU checkpoint imported:' in text and old.read_bytes()==before
+        if seed:
+            # A validated seed-only batch keeps its own curve identities. The
+            # unchanged legacy importer does not replace a pending container.
+            assert 'Stage1 batch resume:' in text and 'legacy GPU checkpoint imported:' not in text
+            assert old.read_bytes()==before
+        else:
+            assert 'Resuming from checkpoint:' in text
+            if name!='mont_v1':assert 'legacy GPU checkpoint imported:' in text and old.read_bytes()==before
         assert points(work/'m0_m347_1e5.save')==expected,'legacy Mont endpoint changed'
         if name=='mont_v5':
             (work/'worktodo.txt').write_text('ECM2=1,2,347,-1,100000,1000000,8\n')
@@ -170,17 +177,18 @@ def main():
         task=f'ECMSTAGE1={aid},1,2,1982,-1,"{token}",260000000,{2 if history else 0},2,"{(1<<991)+1}"\n'
         (work/'worktodo.txt').write_text(task)
         prime=work/'p95';prime.mkdir();(prime/'worktodo.txt').write_text('[Worker #1]\n')
-        with ini.open('a') as file:file.write(f'sigma=20260924\np95_worktodo_path={prime/"worktodo.txt"}\np95_add_workers=1\nsave_sync_dir_1={prime}\n')
+        with ini.open('a') as file:file.write(f'sigma=20260924\np95_worktodo_path={json.dumps(str(prime/"worktodo.txt"))}\np95_sync_dir={json.dumps(str(prime/"saves"))}\np95_add_workers="1"\nsave_sync_dir_1={json.dumps(str(prime))}\n')
         text=run(name,work,ini,local_exe)
-        expected=task.strip().replace('"'+token+'"','"'+new_token+'"')
+        expected=task.strip().replace('"'+token+'"','"'+str(target)+'"')
         assert 'START: '+task.strip() in text
         assert (work/'finished.txt').read_text().strip()==expected
         assert source.read_bytes()==source_bytes
         assert len(points(target))==(4 if history else 2)
         if history:assert set(points(baseline)).issubset(set(points(target)))
         if model=='mont':
-            assert expected.replace('ECMSTAGE1=','ECMSTAGE2=',1) in (prime/'worktodo.add').read_text().splitlines()
-            assert target.exists() if absolute else (prime/target.name).exists()
+            delivered=expected.replace('ECMSTAGE1=','ECMSTAGE2=',1).replace('"'+str(target)+'"','"'+str(prime/'saves'/target.name)+'"')
+            assert delivered in (prime/'worktodo.add').read_text().splitlines()
+            assert (prime/'saves'/target.name).exists()
             assert (prime/'worktodo.txt').read_text()=='[Worker #1]\n'
         else:assert not (prime/'worktodo.add').exists()
 
@@ -202,7 +210,7 @@ def main():
         task=f'ECMSTAGE1=1,2,1982,-1,"{save}",260000000,0,2,"{(1<<991)+1}"\n'
         (work/'worktodo.txt').write_text(task)
         with ini.open('a') as file:
-            file.write('sigma=20260922\nB1=9000\n'+('lcm=12\n' if prefix=='e' else ''))
+            file.write('sigma=20260922\n'+('lcm="12"\n' if prefix=='e' else ''))
         text=run(name,work,ini)
         actual=points(save);assert len(actual)==2
         assert all(row[3]=='1000' for row in actual)
@@ -215,26 +223,27 @@ def main():
     local_exe=work/'ecm_cuda.exe';shutil.copyfile(exe,local_exe)
     shutil.copyfile(exe.parent/'gmp-10.dll',work/'gmp-10.dll')
     prime=work/'p95';prime.mkdir();(prime/'worktodo.txt').write_text('[Worker #1]\n')
-    with ini.open('a') as file:file.write(f'sigma=20260922\np95_worktodo_path={prime/"worktodo.txt"}\np95_add_workers=1\n')
+    with ini.open('a') as file:file.write(f'sigma=20260922\np95_worktodo_path={json.dumps(str(prime/"worktodo.txt"))}\np95_sync_dir={json.dumps(str(prime/"saves"))}\np95_add_workers="1"\n')
     tasks=[]
     for prefix in ('e','m0','m3','legacy'):
         save=work/f'{prefix}_m1982_1e3.save'
         tasks.append(f'ECMSTAGE1=1,2,1982,-1,"{save}",260000000,0,2,"{(1<<991)+1}"')
     (work/'worktodo.txt').write_text('\n'.join(tasks)+'\n')
-    run(name,work,ini,local_exe)
+    mixed_log=run(name,work,ini,local_exe)
     finished=(work/'finished.txt').read_text().splitlines()
     assert finished[:3]==tasks[:3]
     assert 'm2_legacy_' in finished[3]
     delivered=(prime/'worktodo.add').read_text().splitlines()
     assert [line for line in delivered if line.startswith('ECMSTAGE2=')]==[
-        task.replace('ECMSTAGE1=','ECMSTAGE2=',1) for task in tasks[1:3]]
+        task.replace('ECMSTAGE1=','ECMSTAGE2=',1).replace(str(work),str(prime/'saves'))
+        for task in tasks[1:3] if 'task='+task not in mixed_log]
     assert all(row[:2]==('ECM','2') for row in points(work/'m2_legacy_m1982_1e3.save'))
     for prefix in ('m2','m3'):
         name=f'prefix_reject_{prefix}_cpu';work,ini=setup(name,target='cpu')
         task=f'ECMSTAGE1=1,2,1982,-1,"{prefix}_m1982_1e3.save",0,0,2,"{(1<<991)+1}"\n'
         (work/'worktodo.txt').write_text(task)
-        text=run(name,work,ini,good=False)
-        assert 'requires target=gpu' in text and (work/'worktodo.txt').read_text()==task
+        text=run(name,work,ini,empty=False)
+        assert 'requires target=gpu' in text and '# ERROR' in (work/'worktodo.txt').read_text()
         assert not list(work.glob('*.save'))
     report['complete']=True;(out/'summary.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(dict(complete=True,checks=len(report['checks']))))

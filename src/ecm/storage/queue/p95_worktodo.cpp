@@ -1,4 +1,5 @@
 #include "p95_worktodo.h"
+#include "sync/files.h"
 
 #include <algorithm>
 #include <cctype>
@@ -196,7 +197,7 @@ bool p95_write_worktodo_add(const std::string &path,
             sections.push_back(s);
             target = &sections.back();
         }
-        target->lines.push_back(a.second);
+        if(std::find(target->lines.begin(),target->lines.end(),a.second)==target->lines.end())target->lines.push_back(a.second);
     }
 
     // Keep a deterministic, ascending worker order.
@@ -205,39 +206,16 @@ bool p95_write_worktodo_add(const std::string &path,
                          return a.worker < b.worker;
                      });
 
-    const std::string tmp = path + (tmp_suffix != nullptr ? tmp_suffix : ".feeder.tmp");
-    {
-        std::ofstream out(tmp, std::ios::trunc);
-        if (!out) { err = "cannot write " + tmp; return false; }
-        bool first = true;
-        for (const P95WorkerSection &s : sections) {
-            if (!first) out << "\n";
-            first = false;
-            if (s.worker > 0) out << "[Worker #" << s.worker << "]\n";
-            for (const std::string &l : s.lines) out << l << "\n";
-        }
-        out.close();
-        if (out.fail()) { err = "write failed: " + tmp; return false; }
+    std::ostringstream out;bool first=true;
+    for(const auto &section:sections) {
+        if(!first)out<<"\n";first=false;
+        if(section.worker>0)out<<"[Worker #"<<section.worker<<"]\n";
+        for(const auto &line:section.lines)out<<line<<"\n";
     }
-
-    // Replace the real file with the finished temp file. On Windows remove()+rename()
-    // leaves a window in which worktodo.add does not exist at all -- and Prime95 may look
-    // for it at exactly that moment (it deletes the file after incorporating it), so use
-    // the atomic replace instead. On POSIX rename() already replaces atomically.
-#ifdef _WIN32
-    if (!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        err = "cannot replace " + path;
-        remove(tmp.c_str());
-        return false;
-    }
-#else
-    if (rename(tmp.c_str(), path.c_str()) != 0) {
-        err = "cannot replace " + path;
-        remove(tmp.c_str());
-        return false;
-    }
-#endif
-    return true;
+    try {
+        ecm_sync::write_atomic(std::filesystem::u8path(path),out.str(),tmp_suffix?tmp_suffix:".feeder.tmp");
+        return true;
+    }catch(const std::exception &e){err=e.what();return false;}
 }
 
 bool p95_read_prime_int(const std::string &prime_txt_path, const std::string &key,

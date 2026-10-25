@@ -1,4 +1,12 @@
 #include "ecm/platform/logging.h"
+#include "ecm/platform/log_file.h"
+#include "ecm/platform/log_read.h"
+#include <fstream>
+
+bool ecm_visit_log_lines(const std::string &path,const std::function<void(const std::string &)> &visitor) {
+    std::ifstream in(path);if(!in)return false;std::string line;
+    while(std::getline(in,line))visitor(line);return !in.bad();
+}
 #include "ecm/application/configuration/runtime.h"
 
 #include <chrono>
@@ -11,6 +19,14 @@
 #include <sstream>
 #include <streambuf>
 #include <string>
+
+EcmLogMirror::~EcmLogMirror(){if(file_){ecm_log_set_mirror(nullptr);std::fclose(file_);}}
+bool EcmLogMirror::open(const std::string &path) {
+    if(file_)return false;
+    file_=std::fopen(path.c_str(),"a");
+    if(!file_)return false;
+    ecm_log_set_mirror(file_);return true;
+}
 
 #ifdef _WIN32
 #include <windows.h>

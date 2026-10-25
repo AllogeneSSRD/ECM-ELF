@@ -10,15 +10,14 @@ std::string opencl_ecm_resolve_data_path(const char *path);
 
 bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool saveappend);
 
-std::string opencl_ecm_build_saved_n_expr(const std::string &original_expr, const mpz_t N,
-                                          uint32_t curves, mpz_t *factors, int *array_found);
+std::string ecm_save_modulus_expression(const std::string &original_expr,const mpz_t N);
 
 /**
  * Append one text save line per curve in the gmp-ecm batch form (`METHOD=ECM; PARAM=id`).
  *
  * `param_id` selects the parametrization recorded in the `PARAM=` key and mixed into the
- * line checksum: 3 = the historical batch family (default, keeps every earlier caller
- * byte-identical) or 2 = the 6-torsion "batch 2" family (gpu_param = 2).  gmp-ecm reads
+ * line checksum: 3 = the batch family (default) or 2 = the 6-torsion "batch 2"
+ * family (gpu_param = 2). gmp-ecm reads
  * both back (`-param 2` / `-param 3`); Prime95 can read param 3 but not param 2
  * (its GMP-ECM resume reader maps param 3 to sigma_type 3).
  */

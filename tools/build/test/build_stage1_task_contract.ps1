@@ -19,10 +19,10 @@ $sources=@('src/ecm/storage/results/publication.cpp','src/ecm/core/stage1/select
     'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
     'src/ecm/core/stage1/ecm_stage1_exp.cpp','src/ecm/platform/stage1_progress.cpp')
 if($QueueWorkflow){
-    $sources+=@('src/ecm/service/work/queue_workflow.cpp','src/ecm/storage/queue/ecm_worktodo.cpp',
-        'src/ecm/storage/queue/p95_worktodo.cpp','src/ecm/storage/transfer/p95_transfer.cpp',
-        'src/ecm/storage/transfer/ecm_stage2_transfer.cpp')
+    & (Join-Path $PSScriptRoot 'build_stage1_host_io.ps1') -WorkerBuild $WorkerBuild -Build $Build
+    return
 }
+if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/sync/files.cpp','src/ecm/storage/save/publication.cpp')}
 if($MontgomeryPolicy){
     if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
     $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path
@@ -32,6 +32,7 @@ foreach($source in $sources){if($source -notin $production){throw "Missing produ
 $fixture=if($MontgomeryPolicy){'stage1_policy_contract'}elseif($QueueWorkflow){'stage1_queue_contract'}else{'stage1_task_contract'}
 $sources+=@('tools/test/'+$fixture+'.cpp')
 New-Item -ItemType Directory -Path $buildPath|Out-Null
+[IO.File]::WriteAllText((Join-Path $buildPath ".gitignore"),"*`n")
 $objects=@();$commands=@();$hashes=[ordered]@{}
 foreach($source in $sources){
     $name=$source.Replace('/','_')+'.obj';$object=Join-Path $buildPath $name;$objects+=('"'+$object+'"')

@@ -18,7 +18,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    files = sorted(p.resolve() for folder in ('include/ecm', 'src/ecm')
+    assert sorted(p.name for p in (ROOT/'src').iterdir() if p.is_file()) == ['main.cpp'], \
+        'src root is reserved for the application entry; tests and tools belong under tools/'
+    files = sorted(p.resolve() for folder in ('include/ecm', 'src')
                    for p in (ROOT/folder).rglob('*') if p.suffix in SUFFIXES)
     source_set = set(files)
     roots = [ROOT/p for p in ('include', 'src', 'src/ecm/backend/cuda',
@@ -67,11 +69,11 @@ def main():
     for old in ('kernels/cuda', 'src/core', 'src/cpu', 'src/cuda', 'src/gui'):
         assert not [p for p in (ROOT/old).rglob('*') if p.is_file()], old
     task = (ROOT/'src/ecm/service/stage1/task.cpp').read_text(encoding='utf-8-sig')
-    driver = (ROOT/'src/ecm/application/cli/ecm_driver.cpp').read_text(encoding='utf-8-sig')
-    queue = (ROOT/'src/ecm/service/work/queue_workflow.cpp').read_text(encoding='utf-8-sig')
+    driver = (ROOT/'src/main.cpp').read_text(encoding='utf-8-sig')
     assert len(re.findall(r'^TaskResult run_stage1_task\(', task, re.M)) == 1
-    assert len(re.findall(r'^int run_queue_workflow\(', queue, re.M)) == 1
-    assert 'run_stage1_task({' in driver and 'run_stage1_task({' in queue
+    assert len(re.findall(r'^static int run_worktodo\(', driver, re.M)) == 1
+    assert driver.count('run_stage1_task({') == 2
+    assert 'NextQueueTask' not in driver
     assert not re.search(r'run_stage1_impl|Stage1TaskSession|class .*Runner', driver)
     session = task[task.index('class Stage1TaskSession'):task.index('TaskResult run_stage1_task')]
     assert not re.search(r'\brun\s*\(', session)

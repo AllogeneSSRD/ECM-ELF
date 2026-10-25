@@ -30,6 +30,9 @@ struct EcmStage2Task {
     std::string c;               // signed integer string
     unsigned long n = 0;         // exponent
     std::string save_name;       // save file name (contains B1)
+    std::string b2_text="0";
+    uint64_t skip_curves=0;
+    bool has_b2=false,has_skip=false;
     uint32_t curves_to_run = 0;  // GPU curves per batch
     std::vector<std::string> factors; // known factors (optional)
 };
@@ -47,6 +50,7 @@ struct Ecm2Task {
     double B2 = 0.0;
     std::string b2_text = "0";   // original valid token for exact Stage2 handoff
     uint32_t curves_to_run = 0;
+    bool has_b2=false,has_curves=false,has_sigma_field=false;
     bool has_sigma = false;
     uint64_t sigma = 0;           // optional specific sigma (64-bit)
     std::vector<std::string> factors; // known factors (optional)
@@ -60,6 +64,12 @@ bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::st
 // their original spelling. Used when Stage1 adds its curve/param prefix.
 bool ecm_rewrite_stage2_save(const std::string &line,const std::string &save,
                              std::string &rewritten,std::string &err);
+bool ecm_rewrite_stage2_range(const std::string &line,uint64_t skip,uint32_t count,
+                              std::string &rewritten,std::string &err);
+// Snapshot of current-worker Stage1 save assignments. Completion still matches
+// the first identical row in a freshly read file, never a stale line number.
+bool ecm_worktodo_stage1_lines(const std::string &path,int worker,
+                             std::vector<std::string> &lines,std::string &err);
 
 // Parse one Prime95 ECM2= line into `task`. Returns false and fills `err` on failure.
 bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &err);
@@ -89,7 +99,7 @@ struct WorktodoSelection {
 WorktodoStage ecm_worktodo_stage(const std::string &line);
 WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int worker,
     WorktodoSelection selection, WorktodoStage consumer,
-    std::string &line, std::string &err);
+    std::string &line, std::string &err,size_t *source_line=nullptr);
 WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int worker,
                                                std::string &line, std::string &err);
 
@@ -131,7 +141,8 @@ int ecm_worktodo_parse_worker_header(const std::string &line, bool *is_bracket_l
 // Section-aware variants of the two functions above.
 bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &line);
 bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
-                          WorktodoAction action, const std::string &replacement = {});
+                          WorktodoAction action, const std::string &replacement = {},
+                          const std::string &receipt = {},const std::string &receipt_payload = {});
 
 // Distinct worker indices that own at least one task line (worker 1 when the file
 // has no headers), ascending. The GUI uses this to flag sections that have no
@@ -146,6 +157,17 @@ bool ecm_worktodo_worker_loads(const std::string &path,std::map<int,size_t> &loa
 
 // Append one line (with trailing newline) to `path`, creating parent dirs.
 bool ecm_append_text_line(const std::string &path, const std::string &line);
+bool ecm_append_text_line_unique(const std::string &path,const std::string &line);
+
+struct CompletedWorktodo {
+    std::string ticket,record,replacement,finished,checkpoint;
+};
+// Durable completion responsibility. Leave the receipt until checkpoint cleanup
+// is acknowledged. Recovery verifies the exact before/after queue versions;
+// ambiguous external edits stop recovery instead of consuming another task.
+bool ecm_worktodo_store_completion(const std::string &receipt,const CompletedWorktodo &,std::string &err);
+bool ecm_worktodo_commit_completion(const std::string &receipt,const std::string &queue,int worker,
+                                  CompletedWorktodo &completed,std::string &err);
 
 // Atomically add one Stage2 assignment to a worker section. The queue edit is
 // serialized with ecm_worktodo_advance; an active or finished identical line
@@ -155,9 +177,3 @@ bool ecm_append_text_line(const std::string &path, const std::string &line);
 bool ecm_worktodo_append_unique(const std::string &path, const std::string &finished,
                                 int worker, const std::string &line, std::string &err);
 
-// Copy *.save files from `dir` into `sync_dir_1` and `sync_dir_2` (empty dirs
-// are skipped). With `full` every *.save is copied; otherwise only files whose
-// mtime is strictly newer than `since` (seconds since epoch).
-void ecm_sync_save_files(const std::string &dir, const std::string &sync_dir_1,
-                         const std::string &sync_dir_2, bool full,
-                         long long since_epoch_seconds);

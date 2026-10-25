@@ -12,7 +12,8 @@
 add_executable(ecm_p95feeder
     ${CMAKE_SOURCE_DIR}/src/ecm/application/p95_feeder/ecm_p95feeder.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/storage/queue/p95_worktodo.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/storage/queue/ecm_worktodo.cpp
+    ${CMAKE_SOURCE_DIR}/src/sync/files.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/worktodo.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/storage/save/ecm_edwards_save.cpp
 )
 

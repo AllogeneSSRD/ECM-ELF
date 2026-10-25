@@ -176,20 +176,9 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             !stage1_publish_factor(opt,N,uint64_t(B1),firstsigma64+i,factors[i])){out->fail(FailureSource::Publication);ret=ECM_ERROR;break;}
 
         if (ret != ECM_ERROR && !resolved_save.empty()) {
-            /* The save must describe the SAME curve family the GPU just ran:
-                 gpu_param = 3 -> batch parametrization, written with PARAM=3, and with
-                                  the batch path's historical N rewriting (N divided by
-                                  the factors found so far);
-                 gpu_param = 0 -> Suyama param0, written in the param0 form (no PARAM=),
-                                  which is what gmp-ecm -param 0 and Prime95 sigma_type=1
-                                  read back for stage 2.  It must carry the ORIGINAL N:
-                                  gmp-ecm checks the line checksum against N, so the
-                                  factor-stripped expression makes it reject every line
-                                  with "bad checksum". */
-            const std::string n_expr_stripped =
-                opencl_ecm_build_saved_n_expr(n_expr, N, curves, factors, array_found);
-            const std::string n_expr_param0 =
-                n_expr.empty() ? std::to_string(mpz_sizeinbase(N, 2)) : n_expr;
+            /* All parametrizations save the actual computation modulus. Dividing
+               out factors here would invalidate the stored X and checksum. */
+            const auto n_expr_save=ecm_save_modulus_expression(n_expr,N);
             bool wrote = false;
             if (params->gpu_param == 0) {
                 std::vector<uint64_t> sigmas(curves);
@@ -201,7 +190,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                 for (uint32_t i = 0; i < curves; i++)
                     hit[i] = (array_found[i] != ECM_NO_FACTOR_FOUND) ? 1 : 0;
                 wrote = ecm_append_save_lines_mont(resolved_save, N, B1, sigmas.data(), curves,
-                                                   factors, hit.data(), n_expr_param0);
+                                                   factors, hit.data(), n_expr_save);
                 if (!wrote)
                     std::cerr << "Failed to append param0 save lines into " << resolved_save << std::endl;
             } else if (params->gpu_param == 2) {
@@ -211,12 +200,12 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                    (sigma_type only accepts 0/1/3).  See
                    docs/performance/STAGE1.md */
                 wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
-                                                     n_expr_param0, 2);
+                                                     n_expr_save, 2);
                 if (!wrote)
                     std::cerr << "Failed to append param2 save lines into " << resolved_save << std::endl;
             } else {
                 wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
-                                                     n_expr_stripped);
+                                                     n_expr_save);
                 if (!wrote)
                     std::cerr << "Failed to append GPU save lines into " << resolved_save << std::endl;
             }

@@ -2,8 +2,8 @@
 
 // Shared TOML reader. The supported value types are the scalar and integer-array
 // types used by the generated ECM schema. GUI edits retain untouched source lines.
-#include "../../storage/results/ecm_result_json.h"
-#include "generated/ecm_toml_schema.h"
+#include "../ecm/storage/results/ecm_result_json.h"
+#include "../ecm/application/configuration/generated/ecm_toml_schema.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -31,6 +31,25 @@ inline std::string lower(std::string s) {
     for(char &c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
+// Shared input value grammar, used before precedence by CLI and TOML.
+inline std::vector<unsigned> affinity_indices(const std::string &raw) {
+    const auto text=trim(raw);std::vector<unsigned> out;
+    if(text.empty() || text=="none" || text=="auto")return out;
+    const auto bad=[&](){return std::runtime_error("key=affinity value='"+raw+"'; expected comma-separated CPU indices/ranges in [0,1023], at most 1024 entries, e.g. 0-7,10");};
+    const auto index=[&](std::string token){token=trim(token);
+        if(token.empty() || token.find_first_not_of("0123456789")!=token.npos)throw bad();
+        const auto value=std::stoul(token);if(value>1023)throw bad();return static_cast<unsigned>(value);};
+    size_t at=0;
+    while(at<=text.size()) {
+        const auto comma=text.find(',',at);const auto token=trim(text.substr(at,comma==text.npos?text.npos:comma-at));
+        const auto dash=token.find('-');unsigned lo=0,hi=0;
+        try{lo=index(token.substr(0,dash));hi=dash==token.npos?lo:index(token.substr(dash+1));}catch(...){throw bad();}
+        if(hi<lo || hi-lo+1>1024-out.size())throw bad();
+        for(auto value=lo;value<=hi;++value)out.push_back(value);
+        if(comma==text.npos)break;at=comma+1;
+    }
+    return out;
+}
 inline int worker_header(const std::string &line,bool *bracket=nullptr) {
     if(bracket)*bracket=false;
     if(line.size()<3||line.front()!='['||line.back()!=']')return 0;
@@ -50,6 +69,7 @@ struct TomlLine {
     Kind kind=Kind::Blank;
     std::string raw,section,key,value;
     int worker_scope=0;
+    size_t line_number=0;
 };
 inline int toml_worker(const std::string &section) {
     if(section.compare(0,8,"workers."))return 0;
@@ -127,7 +147,7 @@ inline bool read_toml(const std::string &path,std::vector<TomlLine> &lines,
         if(!raw.empty()&&raw.back()=='\r')raw.pop_back();
         if(first&&raw.compare(0,3,"\xef\xbb\xbf")==0)raw.erase(0,3);
         first=false;
-        TomlLine l;l.raw=raw;l.section=section;l.worker_scope=toml_worker(section);
+        TomlLine l;l.raw=raw;l.section=section;l.worker_scope=toml_worker(section);l.line_number=number;
         const auto t=trim(raw);
         try {
             if(t.empty())l.kind=TomlLine::Kind::Blank;
@@ -171,7 +191,10 @@ inline bool read_toml(const std::string &path,std::vector<TomlLine> &lines,
                 l.kind=TomlLine::Kind::KeyValue;
             }
         } catch(const std::exception &e) {
-            throw std::runtime_error(path+":"+std::to_string(number)+": "+e.what());
+            const auto *meta=toml_option(section,l.key);
+            throw std::runtime_error("INPUT[config] "+path+":"+std::to_string(number)+" worker="+std::to_string(l.worker_scope)+
+                " key="+l.key+" value='"+raw+"'; "+e.what()+
+                (meta?std::string("; expected ")+meta->type+" "+meta->domain:"; use a documented key in this table"));
         }
         lines.push_back(std::move(l));
     }

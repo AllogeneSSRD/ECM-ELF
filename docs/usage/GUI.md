@@ -30,7 +30,7 @@ GPU 批量建议向实际 Stage1 程序查询所选曲线的编译档位：Montg
 
 生成器明确选择一个目标 worker，显示当前队列阶段、Stage1 设备及实际队列路径，生成的任务只写入该 worker 分区。即使当前任务正在 Stage2，生成器也依据该 worker 的 Stage1 配置产生 Stage1 行。切换目标 worker 或 TOML 会清除旧预览，需要重新生成。
 
-Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 写入由驱动负责。GUI 不是 Prime95 活动队列的第二个消费者。
+Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 写入由驱动负责。GUI 不是 Prime95 活动队列的第二个消费者。专用 save 路径、持久待交接记录与模糊确认的处理见 [Stage1 持久交接](STAGE1.md#prime95-持久交接)。
 
 ## 日志、结果与监控
 
@@ -60,7 +60,7 @@ Stage2支持启动短校准、存档校验、D/P与内存规划、小步点（ba
 
 GPU 面板动态加载 NVML，显示利用率、显存、SM/graphics 时钟、功耗、温度和限频原因。驱动不支持的指标显示不可用；NVML 利用率不是 SM occupancy。监控不改变 GPU 功率/频率配置。
 
-`[gui] refresh_hz` 默认 10 Hz，设置空闲时绘制与 worker 状态处理的目标频率；鼠标、键盘和窗口消息会提前唤醒界面。较低值节省 CPU，但图表与仅由 worker 产生的状态更新可能最多延后一个刷新周期，10 Hz 时约 100 ms。`[gui] gpu_poll_ms` 默认 500 ms，由独立线程控制 NVML 指标采样；即使提高界面刷新频率也不会增加采样次数。未选中的停靠页跳过内容布局与图表处理，NVML 采样仍持续。Prime95 待处理文件每 500 ms 检查一次，收到 worker 交接通知后立即重新检查。
+`[gui] refresh_hz` 默认 10 Hz，设置空闲时绘制与 worker 状态处理的目标频率；鼠标、键盘和窗口消息会提前唤醒界面。较低值节省 CPU，但图表与仅由 worker 产生的状态更新可能最多延后一个刷新周期，10 Hz 时约 100 ms。`[gui] gpu_poll_ms` 默认 500 ms，由独立线程控制 NVML 指标采样；即使提高界面刷新频率也不会增加采样次数。未选中的停靠页跳过内容布局与图表处理，NVML 采样仍持续。Prime95 旧待处理文件及 `.handoff/*.intent` 每 500 ms 检查一次，收到 worker 交接通知后立即重新检查。
 
 NVML 采样时不持有 UI 读取设备/历史的锁；初始化仍同步，没有进程隔离或超时保证。`--trace` 可记录初始化与窗口恢复。
 

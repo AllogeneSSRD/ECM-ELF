@@ -1,6 +1,6 @@
 // Standalone smoke test for the Prime95 ECM2= worktodo parser.
 // Compile: cl /EHsc /I <gmp>/include /I src/core tools/test/ecm_worktodo_test.cpp src/core/ecm_worktodo.cpp gmp.lib
-#include "../../src/ecm/storage/queue/ecm_worktodo.h"
+#include "io/worktodo.h"
 #include <cstdio>
 #include <cstring>
 #include <string>

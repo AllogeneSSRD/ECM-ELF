@@ -18,15 +18,16 @@
 
 # ---------------------------------------------------------------------------
 # opencl_ecm_addsub: OpenCL add/sub micro-benchmark (main() lives behind
-# BUILD_OPENCL_ECM_ADDSUB_MAIN=1 in src/opencl_ecm_addsub_bench.cpp).
+# BUILD_OPENCL_ECM_ADDSUB_MAIN=1 in tools/bench/opencl_ecm_addsub_bench.cpp).
 # ---------------------------------------------------------------------------
 add_executable(opencl_ecm_addsub
-    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_addsub_bench.cpp
-    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_addsub_manifest.cpp
+    ${CMAKE_SOURCE_DIR}/tools/bench/opencl_ecm_addsub_bench.cpp
+    ${CMAKE_SOURCE_DIR}/tools/bench/opencl_ecm_addsub_manifest.cpp
 )
 
 target_include_directories(opencl_ecm_addsub PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
 )
 
 target_compile_definitions(opencl_ecm_addsub PRIVATE BUILD_OPENCL_ECM_ADDSUB_MAIN=1)
@@ -177,11 +178,12 @@ endif()
 # (main() behind BUILD_OPENCL_ECM_MONTSQR_MAIN=1).
 # ---------------------------------------------------------------------------
 add_executable(opencl_ecm_montsqr
-    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_montsqr_bench.cpp
+    ${CMAKE_SOURCE_DIR}/tools/bench/opencl_ecm_montsqr_bench.cpp
 )
 
 target_include_directories(opencl_ecm_montsqr PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
 )
 
 target_compile_definitions(opencl_ecm_montsqr PRIVATE BUILD_OPENCL_ECM_MONTSQR_MAIN=1)

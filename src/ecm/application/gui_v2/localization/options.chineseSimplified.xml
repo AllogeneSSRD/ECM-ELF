@@ -13,10 +13,11 @@
       <Item id="option_stage1_finished" name="指定 Stage1 已完成任务的记录文件。用于保留原任务行和处理结果，不是曲线计算的中间存档。" />
       <Item id="option_stage1_log_file" name="指定 Stage1 普通运行日志，程序追加写入。留空关闭文件日志；未显式指定文件名时，worker 2 等自动使用 screen_2.log 这类带编号的文件名。" />
       <Item id="option_stage1_tmp_dir" name="指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此键不是 Stage2 全部临时显存或内存的预算。" />
-      <Item id="option_stage1_save_sync_dir_1" name="指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。" />
-      <Item id="option_stage1_save_sync_dir_2" name="指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。" />
+      <Item id="option_stage1_save_sync_dir_1" name="指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。" />
+      <Item id="option_stage1_save_sync_dir_2" name="指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。" />
       <Item id="option_stage1_sync_mode" name="控制 Stage1 任务完成后的存档同步。incremental 仅同步本次任务期间更新的文件；full 同步全部符合条件的存档。程序启动时仍执行一次完整同步。" />
-      <Item id="option_stage1_p95_worktodo_path" name="用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。" />
+      <Item id="option_stage1_p95_sync_dir" name="Prime95 交接专用存档目录，启用 p95_worktodo_path 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。" />
+      <Item id="option_stage1_p95_worktodo_path" name="用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入 worktodo.add。" />
       <Item id="option_stage1_edwards_stage2_transfer" name="启用后，将已完成的 Edwards Stage1 任务作为 ECMSTAGE2 投递到共用 worktodo 的接收 worker 分区。存档使用绝对路径；投递失败时保留待投递记录。两项同时设置时以 auto_stage2 为准。" />
       <Item id="option_stage1_edwards_stage2_worker" name="edwards_stage2_transfer=1 时的接收 worker。0 沿用 Stage1 worker 编号；正数指定共用 worktodo 中的接收分区。" />
       <Item id="option_stage1_p95_add_workers" name="选择接收交接任务的 Prime95 worker，可指定单个编号、编号列表或区间；程序在候选 worker 中选择队列较短者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认 worker 处理。" />
@@ -30,7 +31,7 @@
       <Item id="option_stage1_impl" name="CPU Stage1 算术实现：auto 根据 CPU 能力和批量选择；simd 要求 AVX512-IFMA；scalar 使用 GMP。GPU 运行时拒绝非 auto 值。" />
       <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
       <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。" />
-      <Item id="option_stage1_affinity" name="设置 CPU Stage1 计算线程的亲和性，可用逻辑 CPU 编号列表或区间；线程依次循环使用列表中的 CPU。空值、none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现只对单处理器组内编号 0..63 生效，其他平台不执行此绑定；编号还须对应实际可用的逻辑 CPU。" />
+      <Item id="option_stage1_affinity" name="CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。" />
       <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
       <Item id="option_stage1_exp_cache" name="指定 Stage1 指数缓存目录，复用相同 B1 和指数模式的预计算结果。留空使用可执行文件目录；off、none、0 或 - 关闭缓存。显式相对目录以进程当前工作目录为基准；很小的 B1 可能直接计算而不写缓存。" />
       <Item id="option_stage1_naf_w" name="设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此设置。" />
@@ -81,6 +82,7 @@
       <Item id="option_stage2_stage2_tune_runtime" name="按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；至少两次观察后按均值、标准差及切换余量比较。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。" />
       <Item id="option_stage2_stage2_tune_runtime_samples" name="完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少两次用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。" />
       <Item id="option_stage2_stage2_short_ntt_batch_tune" name="实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。" />
+      <Item id="option_stage2_stage2_low_cpu_wait" name="可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。&#10;默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。&#10;显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。&#10;未配置时保留专家环境覆盖；读回前休眠可单独实验。" />
       <Item id="option_stage2_stage2_pack_zero" name="每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。" />
       <Item id="option_stage2_stage1_tune_profile" name="已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。" />
       <Item id="option_stage2_stage2_auto_min_b2" name="Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。" />

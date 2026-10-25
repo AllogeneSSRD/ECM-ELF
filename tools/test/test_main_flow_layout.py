@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
     mapping=LAYOUT['moved'];assert len(mapping)==len(set(mapping.values()))==LAYOUT.get('expected_moved_files',142)
+    retired=set(LAYOUT.get('removed_sources',[]))
     hashes={}
     for old,new in mapping.items():
         assert not (ROOT/old).exists(),old
@@ -47,6 +48,10 @@ def main():
         assert expected_text(old)==relocation_text(old),('include target changed',old)
         hashes[new]=hashlib.sha256(path.read_bytes()).hexdigest()
     for old in LAYOUT['include_consumers']:
+        if old in retired:
+            assert not (ROOT/old).exists(),('retired source returned',old)
+            assert old not in (ROOT/'tools/build/internal/cuda_sources.cmake').read_text(encoding='utf8'),old
+            continue
         path=current_source(old)
         assert body(expected_text(old))==body(path.read_text(encoding='utf-8-sig')),old
         assert expected_text(old)==relocation_text(old),('include target changed',old)
@@ -58,7 +63,8 @@ def main():
                           'third_party/imgui','third_party/imgui/backends','kernels/opencl']]
     edges=0;generated_edges=[]
     for name in sorted(set(mapping.values())|set(LAYOUT['include_consumers'])-set(mapping)):
-        path=ROOT/name
+        if name in retired:continue
+        path=current_source(name)
         for inc in re.finditer(r'(?m)^\s*#\s*include\s*"([^"\r\n]+)"',path.read_text(encoding='utf-8-sig')):
             if (name,inc[1])==('tools/test/stage2_s4_program_fixture.cpp','fixture.cpp'):
                 # This existing CPU allocator test consumes an output generated

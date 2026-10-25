@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 #include "../../platform/generated/configuration_defaults.h"
-#include "../../storage/queue/ecm_worktodo.h"
+#include "io/worktodo.h"
 #include "../../backend/cuda/stage2/ecm_cuda_stage2.h"
 #include "../planning/ecm_stage2_portable_model.h"
 namespace s2prod {

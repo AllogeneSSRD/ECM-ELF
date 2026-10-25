@@ -158,7 +158,7 @@ OpenCL 的内核根目录、二进制缓存、TPI、work-group 及日志诊断�
 
 原 README 的环境变量迁移说明对应当前命令行：`--kernel-root DIR` 指定 `.cl` 源码树，`--kernel-cache-dir DIR`、`--no-kernel-cache` 和 `--kernel-cache-verbose` 控制二进制缓存，`--compile-verbose` 显示编译耗时；`--tpi N` 与 `--wg N` 用于实验实例线程数和 work-group。`--force-normalize`、`--addsub-fused-unroll`、`--sync-each-batch`、`--gpu-dump`、`--profile-ops`、`--verify-gpu` 是诊断/对拍开关。它们不能作为 CUDA kernel 选择接口；改变内核路径后应重新验证结果。
 
-算子微基准的 CLI 与主程序分开：`opencl_ecm_addsub` 提供 `--no-asm`、`--asm-b64`、`--addsub-fused-unroll`、`--csv`；`opencl_ecm_montsqr` 提供 `--wg-impl`、`--wg-impl4-unroll`、`--csv` 等。两者的位置参数为内核迭代数、实例数、重复 launch 次数，`--bits` 指定位宽。微基准是单算子测量，不应与完整 ECM 每曲线耗时直接混用。源码入口分别为 `src/opencl_ecm_addsub_bench.cpp`、`src/opencl_ecm_montsqr_bench.cpp`。
+算子微基准的 CLI 与主程序分开：`opencl_ecm_addsub` 提供 `--no-asm`、`--asm-b64`、`--addsub-fused-unroll`、`--csv`；`opencl_ecm_montsqr` 提供 `--wg-impl`、`--wg-impl4-unroll`、`--csv` 等。两者的位置参数为内核迭代数、实例数、重复 launch 次数，`--bits` 指定位宽。微基准是单算子测量，不应与完整 ECM 每曲线耗时直接混用。源码入口分别为 `tools/bench/opencl_ecm_addsub_bench.cpp`、`tools/bench/opencl_ecm_montsqr_bench.cpp`。
 
 <a id="cpu-stage1"></a>
 ## CPU Stage1 配置教程
@@ -310,7 +310,7 @@ Windows GUI 使用 Dear ImGui docking、Win32/DX11 和 NVML。一个 worker 对�
 ## 文档与仓库布局
 
 - [文档目录](docs/README.md) 汇总当前使用、实现、性能依据和 TODO；[Stage1](docs/usage/STAGE1.md)、[Stage2](docs/usage/STAGE2.md)、[GUI](docs/usage/GUI.md) 是各程序的详细用法。
-- [架构总览](docs/architecture/OVERVIEW.md) 从 `src/core/` 驱动、`src/cpu/`、`src/cuda/`、`src/opencl_ecm_stage1.cpp`、`kernels/cuda/` 和 `kernels/opencl/` 追踪数据流。[配置维护](docs/architecture/CONFIGURATION.md) 说明 `config/ecm_options.json` 到模板/参考的生成关系。
+- [架构总览](docs/architecture/OVERVIEW.md) 从 `src/main.cpp`、`src/io/`、`src/sync/` 及 `src/ecm/` 的 CPU/CUDA/OpenCL 后端追踪数据流；独立测试与工具位于 `tools/`。[配置维护](docs/architecture/CONFIGURATION.md) 说明 `config/ecm_options.json` 到模板/参考的生成关系。
 - [固定数学与第三方资料](docs/reference/README.md) 保留 ECM、曲线、Goldilocks/NTT、Prime95/PrMers/GPUOWL 的推导和研究条件；原论文与译述在 `docs/paper/`。
 - [工具目录](tools/README.md) 索引 `build/`、`bench/`、`test/`、`gen/`、`disasm/`、`log_parser/`、`ecm_prob/` 等。NPU 微基准见 [RyzenAI](RyzenAI/README_ADDSUB.md)。
 

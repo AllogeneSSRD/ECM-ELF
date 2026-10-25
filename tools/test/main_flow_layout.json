@@ -827,6 +827,23 @@
     "src/ecm/backend/cuda/stage1/montgomery/adapter.cu": "src/ecm/backend/cuda/stage1/montgomery/runtime.cu",
     "src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl": "src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu",
     "src/ecm/backend/cuda/stage1/edwards/edwards.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp",
-    "src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp"
-  }
+    "src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp",
+    "src/main_test.cpp": "tools/test/main_test.cpp",
+    "src/opencl_low_risk_tests.cpp": "tools/test/opencl_low_risk_tests.cpp",
+    "src/opencl_low_risk_tests.h": "tools/test/opencl_low_risk_tests.h",
+    "src/sliced_cios_test.cpp": "tools/test/sliced_cios_test.cpp",
+    "src/sliced_cios_8192_test.cpp": "tools/test/sliced_cios_8192_test.cpp",
+    "src/opencl_asm_selftest.cpp": "tools/disasm/opencl_asm_selftest.cpp",
+    "src/opencl_mont_isa_export.cpp": "tools/disasm/opencl_mont_isa_export.cpp",
+    "src/opencl_addsub_isa_export.cpp": "tools/disasm/opencl_addsub_isa_export.cpp",
+    "src/opencl_ecm_addsub_bench.cpp": "tools/bench/opencl_ecm_addsub_bench.cpp",
+    "src/opencl_ecm_montsqr_bench.cpp": "tools/bench/opencl_ecm_montsqr_bench.cpp",
+    "src/opencl_ecm_addsub_manifest.cpp": "tools/bench/opencl_ecm_addsub_manifest.cpp",
+    "src/opencl_ecm_montsqr_manifest.cpp": "tools/bench/opencl_ecm_montsqr_manifest.cpp"
+  },
+  "removed_sources": [
+    "src/cgbn_stage1_stub.cpp",
+    "src/opencl_ecm_addsub_bench.h",
+    "src/opencl_ecm_montsqr_bench.h"
+  ]
 }

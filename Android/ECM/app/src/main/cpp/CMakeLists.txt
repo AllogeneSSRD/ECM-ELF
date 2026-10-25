@@ -22,8 +22,8 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         ecm_android_run.cpp
         opencl_android_shim.cpp
         opencl_ecm_log_android.cpp
-        "${MPA_ROOT}/src/opencl_ecm_addsub_manifest.cpp"
-        "${MPA_ROOT}/src/opencl_ecm_montsqr_manifest.cpp")
+        "${MPA_ROOT}/tools/bench/opencl_ecm_addsub_manifest.cpp"
+        "${MPA_ROOT}/tools/bench/opencl_ecm_montsqr_manifest.cpp")
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE __ANDROID__ CL_TARGET_OPENCL_VERSION=120)

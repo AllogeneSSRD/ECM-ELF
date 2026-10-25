@@ -9,12 +9,17 @@ $buildPath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPa
 $evidencePath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Evidence)
 if(Test-Path -LiteralPath $buildPath){throw 'Use a fresh build directory'}
 New-Item -ItemType Directory -Path $buildPath|Out-Null
+[IO.File]::WriteAllText((Join-Path $buildPath ".gitignore"),"*`n")
 $sources=@('tools/test/result_batch_contract.cpp','src/ecm/storage/results/publication.cpp',
- 'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
+ 'src/sync/files.cpp','src/ecm/storage/save/publication.cpp','src/ecm/application/configuration/ecm_expr.cpp','src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
  'src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp')
-$command='"'+$manifest.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MD /utf-8 /I include /I src /I "'+
- $manifest.gmp_root+'/include" '+($sources -join ' ')+' /Fo"'+$buildPath+'/" /Fe"'+$buildPath+
- '/result_batch_contract.exe" /link /LIBPATH:"'+$manifest.gmp_root+'/lib" gmp.lib'
+$objects=@();$commands=@()
+foreach($source in $sources){
+ $object=Join-Path $buildPath ($source.Replace('/','_')+'.obj');$objects+=('"'+$object+'"')
+ $commands+=('"'+$manifest.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MD /utf-8 /I include /I src /I "'+$manifest.gmp_root+'/include" /c "'+$source+'" /Fo"'+$object+'"')
+ $commands+='if errorlevel 1 exit /b 1'
+}
+$command=($commands -join "`r`n")+"`r`n"+'"'+$manifest.host_compiler+'" /nologo '+($objects -join ' ')+' /Fe"'+$buildPath+'/result_batch_contract.exe" /link /LIBPATH:"'+$manifest.gmp_root+'/lib" gmp.lib'
 $batch=Join-Path $buildPath 'build.cmd'
 $lines=@('@echo off',$manifest.compile_setup,'if errorlevel 1 exit /b 1',$command,'exit /b %errorlevel%','')
 [IO.File]::WriteAllText($batch,[string]::Join([Environment]::NewLine,$lines),[Text.UTF8Encoding]::new($false))

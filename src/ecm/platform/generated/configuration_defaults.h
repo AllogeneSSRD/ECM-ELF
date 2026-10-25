@@ -16,6 +16,7 @@ inline constexpr char stage1_tmp_dir[]=".";
 inline constexpr char stage1_save_sync_dir_1[]="";
 inline constexpr char stage1_save_sync_dir_2[]="";
 inline constexpr char stage1_sync_mode[]="incremental";
+inline constexpr char stage1_p95_sync_dir[]="";
 inline constexpr char stage1_p95_worktodo_path[]="";
 inline constexpr bool stage1_edwards_stage2_transfer=false;
 inline constexpr int stage1_edwards_stage2_worker=0;

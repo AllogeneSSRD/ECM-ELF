@@ -41,10 +41,13 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp")
 add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp"
     "${_ecm_repo}/src/ecm/storage/results/publication.cpp"
+    "${_ecm_repo}/src/ecm/storage/save/publication.cpp"
+    "${_ecm_repo}/src/sync/files.cpp"
+    "${_ecm_repo}/src/ecm/application/configuration/ecm_expr.cpp"
     "${_ecm_repo}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp")
 target_compile_features(ecm_cpu_stage2 PRIVATE cxx_std_17)
 # Public host contracts; <ecm.h> remains the third-party libecm header.
-target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include")
+target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include" "${_ecm_repo}/src")
 target_compile_definitions(ecm_cpu_stage2 PRIVATE _CRT_SECURE_NO_WARNINGS "ECM_BUILD_ID=\"${_ecm_build_id}\"" "ECM_LIBECM_NTT_THRESHOLD=${_ecm_ntt_threshold}")
 target_link_libraries(ecm_cpu_stage2 PRIVATE ecm_cpu_library)
 target_compile_options(ecm_cpu_stage2 PRIVATE /O2 /openmp)

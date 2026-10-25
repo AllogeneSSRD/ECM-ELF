@@ -4,7 +4,7 @@
 #include <cuda_runtime_api.h>
 #include "../../backend/cuda/stage2/ecm_cuda_stage2.h"
 #include "../../core/stage2/ecm_stage2_modulus.h"
-#include "../../storage/queue/ecm_worktodo.h"
+#include "io/worktodo.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/platform/fingerprint.h"
 #include "stage2.h"
