@@ -20,8 +20,9 @@
  *      cache built for a larger one is caught by the exact B1 comparison in (1).
  *   A cache that fails any check is ignored (the caller rebuilds and overwrites it).
  *
- * The file is written to "<dir>/<name>.tmp" and then renamed over the target, so a reader never
- * sees a partial file and two concurrent writers simply produce two identical valid files.
+ * Each writer uses its own process/sequence temporary file, then renames over the target.
+ * Concurrent writers cannot truncate one another's pending file. Cache write failures
+ * remain optional: a successfully built exponent is still usable without a cache entry.
  * ------------------------------------------------------------------------- */
 #ifndef ECM_STAGE1_EXP_CACHE_H
 #define ECM_STAGE1_EXP_CACHE_H

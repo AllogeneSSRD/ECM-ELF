@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stage1 下一轮重构候选</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>*{box-sizing:border-box}body{margin:0;background:#f3f5f3;color:#172c30;font:16px/1.75 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1140px;margin:auto;padding:38px 24px 70px}h1{font-size:32px;line-height:1.3}h2{font-size:23px;margin:0 0 14px}h3{font-size:17px}p{margin:10px 0}a{color:#14644d}code,.files{font:13px/1.7 Consolas,monospace;overflow-wrap:anywhere}.meta,.files{color:#53666c}.card{background:white;padding:26px;margin:24px 0;border:1px solid #cfdbd7;border-radius:12px}.hero{background:#123f35;color:white}.hero a{color:#bdedda}.badge{display:inline-block;border-radius:20px;padding:3px 12px;background:#dff1e8;color:#195642;font-size:13px}.amber{background:#fff0ce;color:#6d4d0b}.pair{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:20px 0}.flow{background:#edf2f2;border-radius:10px;padding:18px}.node{border:1px solid #afc5c0;background:white;padding:10px 13px;border-radius:5px}.deep{border:2px solid #17624e;background:#dff1e8}.warn{border:1px dashed #b56c32;background:#fff3e9}.arrow{text-align:center;color:#6c7d78;line-height:1.4;margin:3px}.caption{font-size:13px;color:#53666c;margin-bottom:8px}ul{padding-left:23px}li{margin:7px 0}.two{display:grid;grid-template-columns:1fr 1fr;gap:25px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:11px;border-bottom:1px solid #dce4e1;vertical-align:top}th{background:#edf3ef}.scroll{overflow:auto}.note{padding:14px 18px;border-left:4px solid #a06b20;background:#fff6e5}.steps{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.steps span{border:1px solid #b8cec6;padding:8px 13px;border-radius:7px;background:#edf6f1}svg{max-width:100%;height:auto}.mermaid{background:#f5f8f7;padding:12px}.details{font-size:14px}footer{font-size:13px;color:#53666c;margin-top:30px}@media(max-width:760px){main{padding:22px 15px}h1{font-size:26px}.pair,.two{grid-template-columns:1fr}.card{padding:20px}table{min-width:620px}}</style></head><body><main>
-<header><div class="meta">ECM-ELF · 2026-10-25 · 审查基线 b8f73a5 / 0.53.1 · 临时规划草稿</div><h1>下一步：让新流程摆脱旧结果模型</h1><p>第二轮已提交并完成既定验收。以下是只读探究得到的候选，尚未获得实施确认；本次没有新增产品代码或性能测量。工作区其他GUI更新未纳入本次提交。</p><p><a href="stage1-intake-architecture-20261025.html#second-round-implementation">前两轮实施与验收</a> · <a href="../architecture/STAGE1.md">当前Stage1实现</a> · <a href="stage1-result-latency-20261024.html">此前收尾延迟调查</a></p></header>
+<header><div class="meta">ECM-ELF · 2026-10-25 · 审查基线 b8f73a5 / 0.53.1 · 临时规划草稿</div><h1>下一步：结果拥有权与主机读写职责收口</h1><p>第二轮已提交并完成既定验收。用户已同意下述CUDA直接结果、CPU类型化结果、checkpoint拥有权，以及<a href="#storage-migration">storage迁移与合并</a>、<a href="#io-layout">io平铺目录</a>的规划，均尚未实施。本轮补齐<a href="#implementation-contract">开工前的实施合同建议</a>，没有修改产品代码或新增性能测量。工作区其他GUI更新不属于本轮范围。</p><p><a href="stage1-intake-architecture-20261025.html#second-round-implementation">前两轮实施与验收</a> · <a href="../architecture/STAGE1.md">当前Stage1实现</a> · <a href="stage1-result-latency-20261024.html">此前收尾延迟调查</a></p></header>
 <section class="card hero" id="recommendation"><h2>优先推荐：先收口 CUDA 结果模型</h2><p>已有的计算Interface与task最终发布保持。CUDA直接返回拥有结果，让兼容Adapter集中在确有旧数组/返回码的入口；先Edwards，后Montgomery。每种曲线仍保留一条线性workflow，Mont各param继续共用入口。</p><p>预期收益是状态与拥有权更清楚、减少转换，不能据此承诺解决收尾耗时。</p></section>
 <article class="card" id="cuda-results"><span class="badge">Strong · 建议首先实施</span><h2>1. CUDA计算 Module：缩小兼容 Adapter</h2>
 <p class="files">cuda/stage1/edwards/workflow.cpp:169、:409–460；montgomery/workflow.cpp:39、:117–169；service/stage1/execution_contract.h:18、:60、:89；execution_contract.cpp:142–190</p>
@@ -33,6 +33,94 @@
 <p><b>建议：</b>在原任务规模、长save/结果历史、日志与P95/备份实际配置下，增加互不重复计数的阶段观测，同时保留完整墙钟。task.cpp:362–386现有batch-seconds包含计算和save收尾，但没有覆盖随后结果发布、队列、备份与交接的完整分解。观察到哪一步增长，再讨论缓存、扫描或写入优化。</p>
 <p class="note">这是诊断任务，不是认定0.53.1仍存在30秒延迟，也不以本次结构整理作为性能修复证据。</p>
 </section>
-<section class="card" id="scope"><h2>建议下一轮只做候选1</h2><p>先Edwards直接结果，再Montgomery局部数组适配；每一小步复用既有task/恢复/数值验收。候选2另轮处理，候选3先梳理接纳与锁的合同。若生产收尾仍慢，优先插入上面的诊断任务。</p><p>暂不优先继续拆main：main.cpp:231–415的完成协议和:440起的worker循环仍长，但应先识别需归还io/sync的业务规则。单纯搬到新的Manager/Runner无法减少调用者需要理解的事实。</p><p class="meta">本轮未创建新执行Interface。后续在候选被选定后，再讨论状态、拥有权和迁移合同。未发现docs/adr目录；未重开已确认的param共享workflow、task最终发布或worktodo编辑规则。</p></section>
-<footer>临时规划草稿，记录当前证据及待确认候选；正式现状见STAGE1/OVERVIEW。文件按仓库规则保留，实施前不将候选写成现行行为。页面自带CSS与流程图，支持离线阅读；Tailwind仅用于渐进样式增强。</footer>
+<section class="card" id="scope"><h2>已同意的主线：CUDA → CPU → checkpoint</h2><p>先Edwards直接结果，再Montgomery局部数组适配；每一小步复用既有task/恢复/数值验收。CPU另轮处理，checkpoint先梳理接纳与锁的合同。若生产收尾仍慢，优先插入上面的诊断任务。storage整理按下面的职责逐批穿插，不要求先搬完整个目录。</p><p>暂不优先继续拆main：main.cpp:231–415的完成协议和:440起的worker循环仍长，但应先识别需归还io/sync的业务规则。单纯搬到新的Manager/Runner无法减少调用者需要理解的事实。</p><p class="meta">本轮未创建新执行Interface。未发现docs/adr目录；未重开已确认的param共享workflow、task最终发布或worktodo编辑规则。</p></section>
+<section class="card hero" id="storage-migration"><span class="badge">已同意规划 · 未实施</span><h2>storage逐步退出：按职责归属迁移，同时减少薄文件</h2><p>最终取消src/ecm/storage这个混合目录。文件格式、持久发布与恢复容器归io；跨程序/worker交接归sync；数学状态的编码资格归后端；成本预测归planning。不是把全部文件搬进io，也不是建立另一层StorageManager。</p><p>合并标准：同一格式的读写、同一协议的状态推进放一起；删除单纯转发的Interface。独立格式、不同失败政策或真实多方复用的Module继续独立，以增加Depth和Locality为目标，不设置文件行数或数量的硬指标。</p></section>
+<article class="card" id="storage-files"><span class="badge">Strong · 适合先做的小批次</span><h2>4. 基础文件与最终save：收口重复的文件知识</h2>
+<div class="pair"><div class="flow"><div class="caption">当前：理解一次save需要跨多个薄文件</div><div class="node">ecm_save + publication<br>ecm_edwards_io + save_reader</div><div class="arrow">↓</div><div class="node warn">sync/files + platform/file_publication<br>通用路径还藏在OpenCL checkpoint内</div></div><div class="flow"><div class="caption">建议：格式与文件原语各有完整职责</div><div class="node deep">io/save<br>Mont/Ed最终文本编码、读取、校验、范围与批量发布</div><div class="arrow">↓</div><div class="node">io/files<br>路径、短锁、租约、读写与持久替换</div></div></div>
+<p><b>合并对象：</b>storage/save/ecm_save.cpp/h、publication.cpp/h、ecm_edwards_io.h、ecm_edwards_save_reader.h，合成一个最终save Module。当前这些文件连同头声明约624行；合并后用清晰的格式分区和内部函数表达两种格式，不再为编码、checksum、读回、发布各建一层文件。纯save编码仍可单独调用，不强迫计算阶段写文件。</p>
+<p><b>基础文件：</b>sync/files.cpp/h的通用部分迁io/files；platform/ecm_file_publication.h的OS替换实现并入相同Module；owner_lease.h的OS实现也收进.cpp。FileLock短临界区与OwnerLease进程期worker租约继续保持不同类型、协议、超时及锁粒度。worktodo的短编辑锁仅在核对协议一致后复用基础实现，计算期间仍不持队列编辑锁。backup_saves声明随实现归sync/backup.h，不让通用文件头声明备份业务。</p>
+<p><b>需要先解除的混用：</b>CPU Stage2现在借Edwards的publish_save写JSON，publication还保留非METHOD文本分支。应转向结果Module的明确写入操作后再移除save内的非save路径；不能因合并直接拒绝旧调用。ecm_edwards_io内的Integer依赖、hex/hash被其他模块借用，也应逐项归还实际类型头或已有工具，避免新save头继续传递曲线算术依赖。</p>
+<p class="details"><b>Interface与验收：</b>保存Range仍显式返回；按sigma排序、忽略PROGRAM后缀的去重、连续区间证明、空Edwards批次、并发追加及恢复幂等均保留。持久替换必须区分文件flush、rename、目录flush与Windows重试；现有两种实现不能仅因同名就互换。用现有发布/故障注入/多进程合同验证，不新增同参转发Adapter。</p>
+</article>
+<article class="card" id="storage-protocols"><span class="badge">Strong · 合并同一交接协议</span><h2>5. P95交接：状态推进集中，外部文件格式独立</h2>
+<div class="pair"><div class="flow"><div class="caption">当前：一条P95交接跨两层状态逻辑</div><div class="node">sync/p95：冻结intent、sending/done</div><div class="arrow">↓</div><div class="node warn">storage/transfer/p95_transfer<br>AID、worker路由、旧pending与发送</div><div class="arrow">↓</div><div class="node">storage/queue/p95_worktodo</div></div><div class="flow"><div class="caption">建议：一个交接Module，一份格式Adapter</div><div class="node deep">sync/p95<br>唯一交接状态推进与恢复；内部完成发送/AID处理</div><div class="arrow">↓</div><div class="node">io/prime95<br>Prime95队列/prime.txt格式Adapter<br>sync与独立feeder共同复用</div></div></div>
+<p><b>合并：</b>storage/transfer/p95_transfer.cpp/h并入sync/p95.cpp/h。现有冻结intent作为交接责任中心，旧pending保留兼容导入；路由、AID和发送成为该Module内部逻辑。两部分目前约923行实现，合并仍需有段落、内部函数和必要注释；不再按每个交接阶段拆一个薄文件。收益是一个Seam内核对完整失败/恢复规则，不是承诺文件立即缩短多少。</p>
+<p><b>不合并：</b>p95_worktodo迁为io/prime95.cpp/h，不能塞进本地io/worktodo。Prime95无header属于worker0，本地属于worker1；P95接受;;MOVED;;且写入会按worker排序，本地保留队列顺序及重复section。两种格式是实际存在的Adapter差异。feeder独占的tmp扫描和save命名小函数移入feeder；无生产调用的read_save_state须完成工具调用核查后删除。</p>
+<p><b>Stage2交接：</b>ecm_stage2_transfer.cpp/h迁sync/stage2.cpp/h，保留它自己的负载路由、outbox和重放规则；实际队列编辑仍调用io/worktodo。不能因为两者都交接而与P95合为一个大协议。</p>
+<p class="note">“文件先于worktodo.add”继续通过冻结交接责任、文件发布、队列追加和恢复协议保证，不能声称两个独立文件具有一个OS级原子事务。Stage2 outbox当前append+flush与.new替换的持久性/加锁差异应单独核验；若修正，必须有崩溃点测试和独立行为提交。</p>
+<p class="details"><b>验收：</b>文件失败不发布任务行；任务行失败保留可重试责任；sending不确定状态不盲目重发；目标worker/AID、拒绝恢复、源save变化检测、重复行匹配和feeder独立构建保持。日志读写继续归日志Module，sync只解释P95业务记录。</p>
+</article>
+<section class="card" id="storage-map"><h2>完整归属建议</h2><p>下表是逻辑Module命名，不意味着每一行新增一个.h。现有真正公开的Interface随职责迁到include/ecm/io对应头；私有头留src/io，避免同名公开/私有转发头并存。除生成物及确有维护价值的实现族外，先使用浅目录，不预建每个只有一对文件的子文件夹。</p>
+<div class="scroll"><table><thead><tr><th>当前文件/职责</th><th>建议归属与合并</th><th>不能随搬迁改变的合同</th></tr></thead><tbody>
+<tr><td>save/ecm_save、publication、Edwards文本io/reader</td><td>io/save，一份最终save格式与发布Module</td><td>纯编码和落盘可分别调用；范围证明、排序、去重和校验保留</td></tr>
+<tr><td>results/publication.cpp与公开publication.h</td><td>io/results，保持一个结果Module</td><td>Stage1内存批量发布；Stage2仍每完成一条append一条，中间目录/旧账本恢复不变</td></tr>
+<tr><td>results/ecm_result_json.h</td><td>io/json.h，保留共享JSON语法；需要时移非模板实现到.cpp，不新增result_json转发层</td><td>配置、GUI、Stage2等实际共用；对象次序与数字字面值精度保持，不转double</td></tr>
+<tr><td>results/generated/p95_fft_reference.h</td><td>随结果Module置于io/generated，仍由生成器维护</td><td>不合进手写.cpp，不改变参考表</td></tr>
+<tr><td>checkpoint/ecm_stage1_checkpoint_runtime</td><td>结合已同意候选3，迁io/stage1_checkpoint；任务作用域实际拥有容器状态、候选和锁</td><td>备份轮转、候选接纳、已完成保留到队列提交；数学资格由后端验证</td></tr>
+<tr><td>runtime内停止信号、借用停止句柄</td><td>归platform运行寿命职责，不能跟随容器进入io</td><td>进程期停止请求与任务期checkpoint资源寿命不同；安全点才做I/O</td></tr>
+<tr><td>checkpoint/ecm_checkpoint</td><td>通用work_dir/路径移io/files；OpenCL专用header/codec移OpenCL Montgomery后端</td><td>先解除“查通用路径必须包含OpenCL执行类型”的依赖；旧原生格式继续可读</td></tr>
+<tr><td>checkpoint/ecm_mont_ckpt</td><td>归CPU Montgomery checkpoint，随候选2整理，不强行进通用io</td><td>数学状态与ISA/位进度资格属于后端，持久字节提交复用io容器</td></tr>
+<tr><td>save/ecm_edwards_save.cpp/h</td><td>更名io/prime95_save.cpp/h：这是Prime95 ECM V6二进制格式，并非最终Edwards文本save</td><td>CPU与feeder共用格式；后端负责从运行态投影snapshot，不把线程/算术塞进格式Module</td></tr>
+<tr><td>checkpoint/ecm_stage1_binary.h</td><td>随io checkpoint保留紧凑共享二进制助手</td><td>容器、CUDA Edwards与旧GPU导入均使用；共享不等于薄转发，不强行塞入某个.cpp</td></tr>
+<tr><td>checkpoint/ecm_stage1_legacy_gpu.h</td><td>归共享Montgomery旧GPU恢复Adapter；具体位置随候选3核定</td><td>CUDA与OpenCL都有调用，不能移到CUDA私有目录；N/布局/进度验证不是通用文件操作</td></tr>
+<tr><td>queue/stage2_progress.cpp、公开stage2_progress.h、私有ecm_stage2_queue_state.h</td><td>io/stage2_checkpoint，一个Module；合并仅承载LegacyIdentity/import的私有头</td><td>identity不含可变B2/total；pending未确认时的修改限制、publication_task旧目录关联保留；恢复后的执行决定仍归Stage2任务</td></tr>
+<tr><td>queue/ecm_worker_list.h</td><td>合并io/worktodo中worker列表语法</td><td>不因此引入config生成schema/JSON依赖；更新独立交接测试链接</td></tr>
+<tr><td>queue/owner_lease.h；sync/files；platform/ecm_file_publication.h</td><td>io/files，集中OS文件实现，保留不同锁类型</td><td>租约与短锁不是同一协议；不能改变现有锁文件命名及进程互斥范围</td></tr>
+<tr><td>queue/p95_worktodo；transfer/p95_transfer；transfer/ecm_stage2_transfer</td><td>分别归io/prime95、并入sync/p95、迁sync/stage2</td><td>格式读写与交接责任不同，不再共用storage/queue/transfer混合目录</td></tr>
+<tr><td>cache/ecm_stage1_exp_cache.cpp/h</td><td>io/exponent_cache，保持一对文件；准备阶段显式传目录/策略并编排miss后计算</td><td>标量算法留core；损坏可重建、写缓存失败不使有效计算失败。PRAC默认缓存目录的调用也须迁移</td></tr>
+<tr><td>profile/ecm_stage1_cost_csv.h</td><td>归service/planning/stage1_cost完整成本模型；CSV加载可作为内部实现</td><td>tier/TPI、插值、外推是预测规则；不为几十行加载器再造一个薄io/csv文件，也不把预测算法搬进io</td></tr>
+</tbody></table></div>
+<p><b>结果Module不继续膨胀：</b>当前results/publication.cpp已有880行，JSON解析被多方复用，应该保留独立语法Module。Stage1批量与Stage2逐条写入是两种现行政策，不能借统一目录改成一种。必要时按实际格式/协议整理内部实现，不按read/write/validate/publish各拆一套头。</p>
+<p><b>缓存需要独立失败政策：</b>当前固定.tmp路径的多writer行为需核验，不能仅凭“内容相同”认定安全；若修正应使用锁或唯一临时路径并保留可重建语义。取消g_cache_dir要连同CUDA host_policy的PRAC默认目录消费一起处理，不能仅删除全局入口。</p>
+</section>
+<section class="card" id="io-layout"><span class="badge">已同意规划 · 未实施</span><h2>目录补充：io默认平铺，不为一对文件建子目录</h2>
+<p>当前src/io本来就是平铺。前文io/save、io/results、io/stage1_checkpoint等表示Module主名，不表示必须建立同名文件夹；这点在路径说明中明确。建议迁移后仍把各Module直接放在src/io，不建立save/、results/、checkpoint/、cache/、queue/等每个只含一两份文件的目录。文件名已经表达职责，额外目录不能增加Depth，只增加查找层级。</p>
+<pre class="files">src/io/
+  cli.cpp / cli.h
+  config.cpp / config.h / config_format.h
+  normalize.cpp / normalize.h
+  worktodo.cpp / worktodo.h
+  files.cpp / files.h
+  save.cpp
+  results.cpp
+  json.h
+  prime95.cpp / prime95.h
+  prime95_save.cpp / prime95_save.h
+  stage1_checkpoint.cpp / stage1_checkpoint.h
+  stage1_binary.h
+  stage2_checkpoint.cpp
+  exponent_cache.cpp / exponent_cache.h
+  generated/p95_fft_reference.h</pre>
+<p>上图展示建议文件归属，尚未实施。save/results/stage2_checkpoint的现有公开声明迁至include/ecm/io/save.h、results.h、stage2_checkpoint.h，公开目录同样平铺；不再另建src/io同名转发头。其余私有头留src/io，公开与私有的最终选择以真实消费范围为准，不为目录整齐扩大公开Interface。</p>
+<p><b>保留子目录的条件：</b>有明确的维护来源或实际实现族，例如generated即使当前只有一个文件，也表达“生成器维护、不可手改”；未来一个Module有多种实际格式/平台实现且私有文件较多时，再考虑独立目录。仅有.h与.cpp一对、预计以后会扩展、或名称属于同一分类，都不足以现在增加目录。</p>
+<p><b>目录扁平不等于职责合并：</b>Stage1/Stage2 checkpoint、最终save与Prime95二进制save继续是不同Module，以清晰文件名区分；不合成一个巨大io.cpp。sync也沿用p95、stage2、backup的平铺文件组织，不再建立每个只有一对文件的协议子目录。</p>
+</section>
+<section class="card" id="storage-sequence"><h2>逐步迁移顺序与验收方式</h2>
+<ol><li><b>小范围基础收口：</b>先迁io/files，合并最终save的紧密文件；结果和共享JSON可在这一批迁名，但不改变Stage1/Stage2发布政策。每个提交维持可构建，不依赖一个空壳storage转发层才能运行。</li>
+<li><b>继续已同意的CUDA → CPU主线：</b>CUDA直接拥有结果；随后CPU消除Edwards文本往返，并把CPU codec和共享Prime95二进制格式放回合理位置。不要先机械搬CPU文件、下一轮又重新拆移。</li>
+<li><b>checkpoint拥有权与迁移一同设计：</b>容器进io、专用codec归后端、停止寿命归platform；Stage2进度合并为一对文件。保持同进程单活跃任务，不顺带增加并行任务特性。</li>
+<li><b>交接单独成轮：</b>整合P95状态推进和格式Adapter，再整理Stage2 outbox；纯路径/文件合并与持久性改进分别提交，防止目录差异掩盖协议变化。</li>
+<li><b>缓存、成本模型和最终清理：</b>结合准备流程去全局缓存目录，成本模型归planning；核查所有生产/GUI/feeder/工具调用与构建清单，移除不再使用的函数及空storage目录，不长期保留双路径兼容头。</li></ol>
+<p><b>验收面：</b>目录/包含方向检查用于识别循环与旧路径；实际构建覆盖Stage1 CPU/CUDA/OpenCL、两种Stage2、GUI和feeder。运行验证按受影响Module选择现有save、JSON、队列、恢复、P95/Stage2交接及故障点合同；CPU/CUDA计算变更再做数值对照。冻结搬迁映射保留原始证据，当前生产构建清单和架构检查随新归属更新。</p>
+<p><b>推荐取舍：</b>先认可职责表，再实施io/files与最终save这两个高确定性收口；其余随已同意主线分轮推进。结构收益通过调用方需要理解的状态减少、重复转发被删除和修改集中来核对，不把文件更少自动等同于更快。若要评价长历史收尾性能，仍按本页独立诊断的计时边界另测。</p>
+</section>
+<section class="card" id="implementation-contract"><span class="badge">实施合同已同意 · 分批实施中</span><h2>开工前补齐：兼容、失败语义与验收</h2>
+<p>目录归属、合并方向和计算主线已经同意，不再重新选择。下列是建议采用的实施合同；具体函数签名、内部函数排布、构建清单修改属于实现工作，不要求用户逐项设计。只有证据表明确需改变外部合同，才另行说明该变化。</p>
+<ol><li><b>本轮范围与版本：</b>本轮目标覆盖本页已同意的计算结果、CPU文本往返、checkpoint拥有权和storage迁移，按前述顺序拆成可独立构建、验证和审查的小批提交。以当前0.53.1为基线，整体兼容重构建议发布为0.53.2；不因每次路径搬迁重复递增版本。正式开工重新核对HEAD、工作区和二进制身份，保留当前无关GUI改动；同文件必要的include调整也不能夹带GUI功能改动。</li>
+<li><b>存量兼容与输出合同：</b>本轮不主动升级save/checkpoint/结果JSON/账本/完成记录/交接意图的磁盘schema、命名或路径规则。已有中断任务应无需手动搬数据即可继续，由旧样本验证可读、当前格式写入兼容；旧格式导入路径保留至有明确退役决定。版本、时间和诊断身份等正常变化在对照中显式剥离，数学字段与结果字段不因此放宽。Stage1仍无逐曲线回执，批内按sigma排序；Stage2仍逐条append，保留现行中间回执路径。Stage2允许worktodo覆盖B2/目标曲线数、已完成数超过新目标时按已完成数发布并警告的规则继续有效。</li>
+<li><b>失败与提交顺序：</b>明确checkpoint完成、最终save发布、结果发布、完成责任持久化、源行推进、交接发布各自的提交点，以现有生产顺序为依据逐项核对。在这些实际写入点做故障注入，恢复后既不能漏掉已完成工作，也不能重复推进错误任务。最终结果或队列提交失败时保留所需恢复材料；缓存可重建且写失败不使有效计算失败；备份与P95就绪状态继续分别解释。I/O报告操作、路径和系统原因，task/交接Module决定任务政策，不由通用文件函数吞错后假装成功。</li>
+<li><b>资源、锁与回调：</b>任务作用域实际拥有本批checkpoint状态、候选和相应锁，后端只借用；借用不逃逸同步调用。进程停止请求与worker租约保持进程寿命。列清短编辑/发布锁和任务容器锁的获取顺序，离线validator不重入存储，计算期间不持队列编辑锁；重构不能用thread_local、默认全局session或新的转发类重新隐藏这些约束。CPU的GMP、线程、SIMD lane以及Mont必要数组均有明确拥有者。</li>
+<li><b>缺陷处理：</b>Stage2 outbox的持久性/加锁、固定缓存.tmp的并发行为、Windows替换重试差异均属于待验证问题，不先写成已确认故障。复现后，若修复是恢复现有合同，在独立提交中补修复与回归；如需改变重试、重复发布或外部恢复政策，则先给出具体影响再确认。目录迁移与协议修正不混在无法区分的提交里。</li>
+<li><b>验收与测量：</b>先冻结0.53.1对照二进制和旧格式样本，记录输入、构建身份与耗时；每批只运行受影响的现有合同，整体完成后构建核对Stage1 CPU/CUDA/OpenCL、两种Stage2、GUI/feeder。数值与恢复覆盖实际支持的曲线/param/算法组合，CPU scalar/IFMA及不同lane进度；I/O覆盖并发追加、损坏回退与中断重启。依赖图无新增循环，主流程无需旧storage路径或长期转发头，数学/设备改动限于已授权部分。缓存/备份/交接的失败必须各走真实入口。</li>
+<li><b>性能与完成标准：</b>小B1的约1000曲线用于放大主机开销，再加长save/结果历史及真实日志/P95/备份配置。基线与新实现使用相同设备、输入和配置，计时边界一致，记录墙钟、构建/测试耗时、可获得的CPU/文件I/O指标与独立进程峰值工作集；GPU测试不并行。不得把组件峰值或嵌套计时相加。先用重复样本判断噪声，只有回退或未解释增长才扩大复测；不以少量样本承诺百分比加速。最终还需同步正式架构、构建说明及当前路径检查，保留临时草稿和原始证据，向用户报告尚未覆盖的设备/配置。</li></ol>
+<p class="note">用户已同意实施合同并授权开始，允许先修复缺陷再迁移。以下记录已完成的小批次；其余已同意规划仍待实施，不能提前写成生产现状。</p>
+</section>
+<section class="card" id="defects-first"><h2>第一批：迁移前修复缓存与Stage2 outbox缺陷</h2>
+<p>基线HEAD为c807a26，主程序0.53.1；冻结源码摘要、初始工作区状态和可用基线二进制于data/experiments/stage1_third_refactor_20261025。工作区现有GUI及构建目录初始化改动另行保留。</p>
+<p><b>复现：</b>通过真实缓存save和Stage2 park/flush入口，在C文件关闭/打开与队列追加调用处控制调度。原实现两次重复均出现固定.tmp争用导致缓存发布失败、超大缓存nwords抛分配异常、flush丢失期间park的记录。不是GPU性能或数学故障。</p>
+<p><b>修复：</b>缓存临时路径增加进程与原子序号，检查fclose结果；读载荷前按打开句柄核对文件长度、位数与字数。Stage2 park/flush在同一outbox锁内读写，路由负载包含锁内待发记录；新增及确认均复用持久write_atomic，确认失败保留原始责任。文件schema、任务行语义和目标端去重不变。</p>
+<p><b>验证：</b>三项失败案例修复后各重复3次通过；另验park临时文件创建失败不能报成功、确认失败后保留责任、恢复后不重复任务。既有stage2_transfer_test真实队列/路由/finished恢复通过。窄测试每例约0.04–0.38秒，含人为调度等待，不属于生产性能数据；构建耗时由各build/manifest.json记录。</p>
+<p class="files">回归：tools/test/storage_concurrency_contract.cpp；tools/build/test/build_storage_concurrency.ps1。原始证据：data/experiments/stage1_third_refactor_20261025/defects_before/result.json、defects_after/result.json、defects_verified/result.json；既有合同：stage2_transfer_fixed。</p>
+</section>
+<footer>临时规划草稿，区分已同意但未实施的规划与新增实施合同建议；正式现状见STAGE1/OVERVIEW。文件按仓库规则保留，实施前不将候选写成现行行为。页面自带CSS与流程图，支持离线阅读；Tailwind仅用于渐进样式增强。</footer>
 </main></body></html>

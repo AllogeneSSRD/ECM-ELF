@@ -7,11 +7,17 @@
 #include <string.h>
 
 #include <chrono>
+#include <atomic>
+#include <limits>
 #include <string>
 #include <vector>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
 
 using Clock = std::chrono::steady_clock;
@@ -24,6 +30,7 @@ const uint64_t ECM_EXP_CACHE_MIN_B1 = 1000000ull;   /* below this a build is ~10
 
 namespace {
 std::string g_cache_dir;
+std::atomic<uint64_t> next_temp{0};
 }
 
 void ecm_exp_cache_set_dir(const std::string &dir)
@@ -257,6 +264,24 @@ bool ecm_exp_cache_load(const std::string &path, mpz_t s, uint64_t B1, uint64_t 
         if (why) *why = "bit length implausible for this B1";
         return false;
     }
+    // Validate the advertised allocation against both the bit count and the
+    // opened file, before trusting a possibly damaged cache header.
+    const uint64_t words = h.nbits / 64 + (h.nbits % 64 != 0);
+#ifdef _WIN32
+    struct _stat64 info{};
+    const bool sized = _fstat64(_fileno(f), &info) == 0;
+#else
+    struct stat info{};
+    const bool sized = fstat(fileno(f), &info) == 0;
+#endif
+    if (h.nwords != words || h.nwords > (std::numeric_limits<size_t>::max)() / 8 ||
+        !sized || info.st_size < 0 || uint64_t(info.st_size) < sizeof(h) ||
+        h.nwords != (uint64_t(info.st_size) - sizeof(h)) / 8 ||
+        (uint64_t(info.st_size) - sizeof(h)) % 8 != 0) {
+        fclose(f);
+        if (why) *why = "payload length does not match header/file size";
+        return false;
+    }
     std::vector<uint64_t> w((size_t)h.nwords);
     const size_t got = fread(&w[0], sizeof(uint64_t), (size_t)h.nwords, f);
     if (got != (size_t)h.nwords) {
@@ -309,7 +334,15 @@ bool ecm_exp_cache_save(const std::string &path, const mpz_t s, uint64_t B1, uin
     h.hash = fnv1a64(w, count * sizeof(uint64_t), h.hash);
     h.csum = payload_csum(w, count);
 
-    const std::string tmp = path + ".tmp";
+    // Writers must not truncate or rename one another's temporary files, even
+    // when another executable version is using the same cache directory.
+#ifdef _WIN32
+    const auto process = GetCurrentProcessId();
+#else
+    const auto process = getpid();
+#endif
+    const std::string tmp = path + ".tmp." + std::to_string(process) + "." +
+                            std::to_string(next_temp.fetch_add(1));
     ensure_parent_dir(path);
     FILE *f = fopen(tmp.c_str(), "wb");
     if (!f) {
@@ -319,7 +352,7 @@ bool ecm_exp_cache_save(const std::string &path, const mpz_t s, uint64_t B1, uin
     }
     bool ok = fwrite(&h, 1, sizeof h, f) == sizeof h &&
               fwrite(w, sizeof(uint64_t), count, f) == count;
-    fclose(f);
+    ok = fclose(f) == 0 && ok;
     free(w);
     if (!ok) {
         remove(tmp.c_str());
