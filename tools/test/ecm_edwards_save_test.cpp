@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include <gmp.h>
-#include "../../src/ecm/storage/save/ecm_edwards_save.h"
+#include "io/prime95_save.h"
 
 static bool read_file_bytes(const std::string &path, std::vector<unsigned char> &out) {
     std::ifstream in(path, std::ios::binary);
@@ -17,6 +17,8 @@ static bool read_file_bytes(const std::string &path, std::vector<unsigned char> 
 }
 
 int main() {
+    ecm_stage1_checkpoint::Context checkpoint;
+
     mpz_t Qx, Qz, rx, rz;
     mpz_inits(Qx, Qz, rx, rz, NULL);
     mpz_set_str(Qx, "85183067367971599076486525774441605347591666837158980405258912417697054795733873485227501504996375824397", 10);
@@ -77,13 +79,13 @@ int main() {
     mpz_set_str(ez, "555", 10);
 
     const std::string s1_path = "D:/code/MPA-OpenCl/tools/test/fixtures/_test_stage1.save";
-    if (!ecm_edwards_write_stage1(s1_path, cm, 2, 1442105, 12345, 64, dx, dy, ex, ey, ez)) {
+    if (!ecm_edwards_write_stage1(checkpoint, s1_path, cm, 2, 1442105, 12345, 64, dx, dy, ex, ey, ez)) {
         printf("STAGE1 WRITE FAILED\n");
         return 1;
     }
     ecm_save_common rc2;
     uint64_t sp; uint32_t ebs, bn, ds;
-    if (!ecm_edwards_read_stage1(s1_path, rc2, &sp, &ebs, &bn, &ds, rdx, rdy, rex, rey, rez)) {
+    if (!ecm_edwards_read_stage1(checkpoint, s1_path, rc2, &sp, &ebs, &bn, &ds, rdx, rdy, rex, rey, rez)) {
         printf("STAGE1 READ FAILED\n");
         return 1;
     }

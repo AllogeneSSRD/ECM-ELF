@@ -1,7 +1,9 @@
 #include "io/worktodo.h"
-#include "sync/files.h"
+#include "io/files.h"
 #include "sync/p95.h"
-#include "ecm/storage/save/publication.h"
+#include "sync/backup.h"
+#include "ecm/io/save.h"
+#include "ecm/io/results.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -9,8 +11,8 @@
 #include <vector>
 namespace fs=std::filesystem;
 static void check(bool yes,const char *message){if(!yes)throw std::runtime_error(message);}
-static void put(const fs::path &p,const std::string &s){ecm_sync::write_atomic(p,s);}
-static std::string get(const fs::path &p){return ecm_sync::read_file(p);}
+static void put(const fs::path &p,const std::string &s){ecm_io::write_atomic(p,s);}
+static std::string get(const fs::path &p){return ecm_io::read_file(p);}
 static std::string point(unsigned sigma){return "METHOD=ECM; SIGMA="+std::to_string(sigma)+"; B1=100; N=127; X=0x1; CHECKSUM="+std::to_string(12700ull*sigma)+"; PROGRAM=fixture;\n";}
 int main(int argc,char **argv)try {
     check(argc==2,"supply a fresh evidence directory");const auto root=fs::absolute(fs::u8path(argv[1]));
@@ -51,7 +53,9 @@ int main(int argc,char **argv)try {
     check(!ecm_save::publish(save.string(),point(11)+point(20)+point(30),true) && get(save)==snapshot,"noncontiguous batch must not publish");
     check(ecm_save::record_count((root/"absent.save").string())==0,"missing save count");
     put(root/"opaque.jsonl","{\"sigma\":9}\n");
-    check(ecm_save::publish((root/"opaque.jsonl").string(),"{\"sigma\":3}\n",true),"opaque publisher compatibility");
+    ecm_results::append_text_record(root/"opaque.jsonl","{\"sigma\":3}");
+    ecm_results::append_text_record(root/"opaque.jsonl","{\"sigma\":3}");
+    check(get(root/"opaque.jsonl")=="{\"sigma\":9}\n{\"sigma\":3}\n","opaque result append/de-duplication");
     P95TransferConfig p95;p95.worktodo_path=(root/"p95/worktodo.txt").string();p95.sync_dir=(root/"p95/saves").string();
     p95.pending_path=(root/"p95_pending.txt").string();p95.sent_ledger_path=(root/"sent.txt").string();p95.recover_lost=false;
     fs::create_directories(fs::u8path(p95.sync_dir));const auto target=fs::u8path(p95.sync_dir)/save.filename();fs::create_directory(target);

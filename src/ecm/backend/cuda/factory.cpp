@@ -1,3 +1,4 @@
+#include "io/stage1_checkpoint.h"
 /* ecm_cuda_backend.cu — CUDA implementation of the ECM backend seam.
 
    Linked only into the `ecm_cuda` executable. Provides:
@@ -10,7 +11,8 @@
 */
 
 #include "ecm/service/execution/legacy_gpu.h"
-#include "stage1/montgomery/api.h"   /* native cgbn_ecm_stage1 */
+#include "stage1/montgomery/api.h"
+#include "stage1/montgomery/runtime.h"   /* native cgbn_ecm_stage1 */
 #include "runtime/cuda_ecm_shim.h"      /* OUTPUT_*, outputf/test_verbose/ecm_cuda_set_verbose */
 #include "runtime/cudacommon.h"         /* kernel_info declaration */
 #include "ecm/platform/logging.h"     /* ecm_ts_vfprintf / ecm_ts_fprintf */
@@ -338,7 +340,7 @@ extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, int edward
     return ECM_BACKEND_QUERY_OK;
 }
 
-extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
+extern "C" int ecm_backend_stage1(void* checkpoint_context, mpz_t *factors, int *array_found,
                                   const mpz_t N, const mpz_t s,
                                   uint32_t curves, uint64_t *sigma,
                                   unsigned long checkpoint_interval_ms,
@@ -347,10 +349,13 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
                                   const char *gpu_mul_path, const char *gpu_sqr_path,
                                   const char *gpu_add_path, const char *gpu_sub_path,
                                   const char *gpu_special_mult_path) {
+    if (!checkpoint_context) return -1;
+    auto& checkpoint = *static_cast<ecm_stage1_checkpoint::Context*>(checkpoint_context);
+
     (void)gpu_mul_path; (void)gpu_sqr_path; (void)gpu_add_path;
     (void)gpu_sub_path; (void)gpu_special_mult_path;
 
     ecm_cuda_set_verbose(verbose);
-    return cgbn_ecm_stage1(factors, array_found, N, s, curves, sigma,
-                           checkpoint_interval_ms, gputime, verbose, gpu_param, B1, torsion);
+    return ecm_cuda_stage1::execute_mont_batch(checkpoint, factors, array_found, N, s, curves, sigma,
+                           checkpoint_interval_ms, gputime, verbose, gpu_param, B1, torsion).code;
 }

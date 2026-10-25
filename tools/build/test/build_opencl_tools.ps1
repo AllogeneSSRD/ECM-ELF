@@ -1,6 +1,8 @@
 # Build relocated OpenCL tools without configuring or compiling CUDA targets.
 param([string]$WorkerBuild='build_stage1_local',
-      [Parameter(Mandatory=$true)][string]$Build)
+      [Parameter(Mandatory=$true)][string]$Build,
+      [string[]]$Targets=@('main','sliced_cios_test','sliced_cios_8192_test','opencl_ecm_addsub',
+          'opencl_ecm_montsqr','opencl_asm_selftest','opencl_mont_isa_export','opencl_addsub_isa_export'))
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -17,8 +19,6 @@ $sslRoot=Split-Path -Parent ($sslEntry -replace '^OPENSSL_INCLUDE_DIR:PATH=','')
 $compiler=$manifest.host_compiler.Replace('\','/')
 $gmp=$manifest.gmp_root.Replace('\','/')
 $cuda=$manifest.cuda_root.Replace('\','/')
-$targets=@('main','sliced_cios_test','sliced_cios_8192_test','opencl_ecm_addsub',
-    'opencl_ecm_montsqr','opencl_asm_selftest','opencl_mont_isa_export','opencl_addsub_isa_export')
 $configure='cmake -S "'+$repo+'" -B "'+$output+'" -G "NMake Makefiles"'+
     ' -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="'+$compiler+'" -DCMAKE_CXX_COMPILER="'+$compiler+'"'+
     ' -DECM_ENABLE_CUDA=OFF -DCMAKE_CUDA_COMPILER=NOTFOUND -DECM_BUILD_TOOLS=ON'+

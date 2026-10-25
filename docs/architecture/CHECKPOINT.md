@@ -37,7 +37,7 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `ckpt_backups` 决定 |
 | `主文件名.lock` | 批次独占锁；Windows 使用无共享打开、关闭时删除；POSIX 使用非阻塞 flock |
 
-来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L124)、[备份及锁](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L97)。
+来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L124)、[备份及锁](../../src/io/stage1_checkpoint.cpp)。
 
 ### 2.2 内容身份
 
@@ -57,6 +57,12 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 曲线数另在外层头中比较；各 sigma 在记录头中保存。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i；随机任务采用已存种子。GPU Edwards 的窗口、binary/NAF 模式及倍点变体在载荷内验证。
 
 设备编号、GPU 型号、驱动版本、D、B2、输出路径不在该外层身份中。不能据此推断任意设备或后端之间均可恢复：内部布局、构建包含的内核和算法约束仍须满足。CPU auto 切换实际实现的情况还受各后端的分块恢复条件约束。
+
+### Context 与停止信号
+
+`src/io/stage1_checkpoint.cpp/h` 的 Context 拥有本任务的 records、sigma、恢复候选、备份策略和独占锁。task 通过普通函数参数借给 CPU/CUDA/OpenCL 后端，后端回调不读取全局活跃批次。Context 不可复制；活跃期间不能重新 begin 或改路径，begin 部分失败的锁也由析构释放。关闭其他 Context 不改变本批记录，但生产驱动仍只执行单活跃任务。
+
+离线载荷验证在容器互斥量内运行，回调不能重新进入该 Context 的 I/O。进程级停止标志和 GUI event 属于 `platform/stage1_stop`，信号处理只标记停止，不做文件 I/O。数学状态的资格和编码仍由各后端决定；CPU Edwards 使用 `io/prime95_save` 的独立二进制格式适配。
 
 ## 3. 当前外层二进制格式 V2
 
@@ -99,7 +105,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 读取先核对完整文件 CRC，再检查版本、长度、最小记录头空间、flags、逐记录 CRC 和无多余尾字节。变长字段读取不得越过剩余输入。外层通过后才比较任务身份、曲线数和固定 sigma。文件整体会先读入主机字符串，不能将“长度检查”理解为零拷贝或无需整文件内存。
 
-来源：[V2 写入](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L178)、[V2/V1 恢复](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L205)、[小端原语和 CRC32C](../../src/ecm/storage/checkpoint/ecm_stage1_binary.h#L10)。
+来源：[V2 写入](../../src/io/stage1_checkpoint.cpp)、[V2/V1 恢复](../../src/io/stage1_checkpoint.cpp)、[小端原语和 CRC32C](../../src/io/stage1_binary.h)。
 
 ## 4. 后端载荷总览
 
@@ -148,7 +154,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、指数总长/进度及数组几何，并恢复保存的 BITS/TPI；相应内核须存在。原始 V5 自动导入另逐 lane 核对完整 N。保存整个指数不必要：当前任务重新生成相应指数。
 
-来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/runtime.cu)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/storage/checkpoint/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp#L937)。
+来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/runtime.cu)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp)、[OpenCL 状态](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp#L937)。
 
 ### 4.2 GPU Edwards V3
 
@@ -205,7 +211,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 校验初值采用较短的 1469598103934665603。恢复要求 N/B1/TORSION/SBITS 一致，检查标记、结束行、校验和状态所需数据；上层同时核对曲线索引。标量和 SIMD 使用相同数学记录；实际批处理是否能继续还取决于 lane 进度等调用条件，不能仅根据 FIELD 文本推断可以切换实现。外层 CPU 实现身份也会限制切换。
 
-来源：[记录结构](../../src/ecm/storage/checkpoint/ecm_mont_ckpt.h#L41)、[写入](../../src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp#L96)、[读取](../../src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp#L147)。
+来源：[记录结构](../../src/ecm/backend/cpu/stage1/montgomery/checkpoint.h)、[写入](../../src/ecm/backend/cpu/stage1/montgomery/checkpoint.cpp)、[读取](../../src/ecm/backend/cpu/stage1/montgomery/checkpoint.cpp)。
 
 ### 4.4 CPU Edwards 二进制记录和完成记录
 
@@ -239,7 +245,7 @@ giant 为 u32 limb 数 m，随后 m 个低 limb 在前的 u32；当前写入零�
 
 CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存 sigma、返回码 0/1、十六进制 factor，以及带双引号/转义的完整文本 save 行；无可用点时该行可以为空。记录没有独立尾校验，依靠外层 CRC。保存已完成结果是为了发布失败或批次停止后不重复计算已完成曲线。
 
-来源：[CPU Edwards codec](../../src/ecm/storage/save/ecm_edwards_save.cpp#L279)、[CPU 批次执行与完成记录](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
+来源：[CPU Edwards codec](../../src/io/prime95_save.cpp)、[CPU 批次执行与完成记录](../../src/ecm/backend/cpu/stage1/edwards/workflow.cpp)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
 
 ### 4.5 可选 CUDA resident / PRAC
 
@@ -275,7 +281,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 `ckpt_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
 
-来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L124)、[种子持久化](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
+来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L124)、[种子持久化](../../src/io/stage1_checkpoint.cpp)、[GPU Edwards 完成状态](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
 
 ### 5.2 原子替换和备份
 
@@ -289,7 +295,7 @@ CUDA 离线校验不重入 storage，也不发布因子。Edwards 核对原始�
 
 CUDA Montgomery 的运行结果分别报告同步确认的计算游标、已回读的安全快照游标与已成功发布的持久化游标；计算前进不代表存档已提交。周期保存按 steady clock 计时。必要保存失败返回持久化错误并优先于停止，队列保留原行。未配置 checkpoint 路径时不创建隐式回退文件，停止进度不能恢复；末片完成与停止同时发生时完成当前批次的验证和发布，再由队列决定停止后续任务。
 
-来源：[轮换和清理](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L121)、[文件替换](../../src/ecm/platform/ecm_file_publication.h#L13)。
+来源：[轮换和清理](../../src/io/stage1_checkpoint.cpp)、[文件替换](../../src/io/files.cpp)。
 
 ## 6. 仍可读取的兼容格式
 
@@ -306,7 +312,7 @@ CUDA Montgomery 的运行结果分别报告同步确认的计算游标、已回�
 
 原始独立 GPU 来源只读保留。若内部结果账本已经确认其全部 sigma 完成，则跳过自动导入；仅将旧文件复制到全新目录而不携带账本，无法从该旧文件得知它是否已在别处完成。当前非空算术载荷优先，不用独立旧档覆盖它。
 
-来源：[V1 外层读取](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L254)、[CUDA V5 导入](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h#L14)、[Edwards 旧格式读取](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)、[独立 Edwards 导入](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
+来源：[V1 外层读取](../../src/io/stage1_checkpoint.cpp)、[CUDA V5 导入](../../src/ecm/service/stage1/legacy_gpu_checkpoint.h)、[Edwards 旧格式读取](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)、[独立 Edwards 导入](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)。
 
 ## 7. Stage2 队列进度格式
 
@@ -367,7 +373,7 @@ Stage2 不保存 NTT、多项式、树、fold 或单曲线内部状态。只在�
 
 schema 1 / 单文件 `.progress` 仍可导入，目标、AID、save 内容和 skip 须匹配。旧文件在新 checkpoint 持久化后归档为 `.migrated.<摘要>`，不覆盖已有归档；失败停止并保留两份文件，重启会重试归档。输入不匹配的旧任务保留。`.dat` 临时文件及归档不参与活动 checkpoint 匹配。
 
-来源：[State/Task 声明](../../include/ecm/storage/queue/stage2_progress.h)、[schema、策略更新与兼容发现](../../src/ecm/storage/queue/stage2_progress.cpp)、[恢复与运行顺序](../../src/ecm/service/stage2/task.cpp)。
+来源：[State/Task 声明](../../include/ecm/io/stage2_checkpoint.h)、[schema、策略更新与兼容发现](../../src/io/stage2_checkpoint.cpp)、[恢复与运行顺序](../../src/ecm/service/stage2/task.cpp)。
 
 ## 8. 存储、写入成本和边界
 

@@ -10,7 +10,7 @@
 #include <vector>
 #define NOMINMAX
 #include <windows.h>
-#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "ecm/io/save.h"
 #include "ecm/core/stage1/scalar.h"
 
 static bool diagnostic_blocking_event=false;

@@ -10,8 +10,8 @@ $evidencePath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromP
 if(Test-Path -LiteralPath $buildPath){throw 'Use a fresh build directory'}
 New-Item -ItemType Directory -Path $buildPath|Out-Null
 [IO.File]::WriteAllText((Join-Path $buildPath ".gitignore"),"*`n")
-$sources=@('tools/test/result_batch_contract.cpp','src/ecm/storage/results/publication.cpp',
- 'src/sync/files.cpp','src/ecm/storage/save/publication.cpp','src/ecm/application/configuration/ecm_expr.cpp','src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
+$sources=@('tools/test/result_batch_contract.cpp','src/io/results.cpp',
+ 'src/io/files.cpp','src/io/save.cpp','src/ecm/application/configuration/ecm_expr.cpp','src/io/stage1_checkpoint.cpp','src/ecm/platform/stage1_stop.cpp','src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp',
  'src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp')
 $objects=@();$commands=@()
 foreach($source in $sources){

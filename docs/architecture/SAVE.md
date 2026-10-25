@@ -100,7 +100,7 @@ CPU/GPU PARAM0 与 GPU PARAM2/3 均保存实际计算模数的表达式；缺少
 
 命中时的 X 是因子，没有点的继续意义。文本没有独立命中标志；消费者需据算术或其他结果判定。Stage1 结果账本是曲线结果的独立依据，见 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 
-来源：[模数表达式及 Montgomery 写入](../../src/ecm/storage/save/ecm_save.cpp)、[CUDA 保存调用](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)、[保存字段校验](../../src/ecm/storage/save/publication.cpp)。
+来源：[模数表达式及 Montgomery 写入](../../src/io/save.cpp)、[CUDA 保存调用](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)、[保存字段校验](../../src/io/save.cpp)。
 
 ## 5. Edwards save VERSION=1
 
@@ -132,7 +132,7 @@ PARAM 被禁止；默认不写 PROGRAM/WHO/TIME，也不写 Z。可选 Z 若提�
 
 CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且不超过2⁵³，并验证 FACTOR 严格大于1且整除 N。CUDA 读取器另受自身位宽上限约束；不能将两个入口的检查集合视为完全相同。
 
-来源：[save_line / save_checksum](../../src/ecm/storage/save/ecm_edwards_io.h#L19)、[坐标与状态判定](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)、[CPU 专用读取](../../src/ecm/storage/save/ecm_edwards_save_reader.h#L22)。
+来源：[save_line / save_checksum](../../include/ecm/io/save.h)、[坐标与状态判定](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)、[CPU 专用读取](../../include/ecm/io/save.h)。
 
 ## 6. 写入、去重与发布
 
@@ -165,7 +165,7 @@ CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且
 
 追加旧文件 S bytes、新行 T bytes，单次合并约读 S、写 S+T；队列完成检查再读一次 S+T。P95 同步及普通备份另有复制开销。不能按“只追加 T bytes”估算磁盘工作量。主机保存文本和去重键，额外内存随历史增长；文件备份不属于 GPU 显存。
 
-来源：[save 发布与区间验证](../../src/ecm/storage/save/publication.cpp)、[持久原子文件操作](../../src/sync/files.cpp)、[可写性预检](../../src/ecm/storage/save/ecm_save.cpp)、[task 发布](../../src/ecm/service/stage1/task.cpp)、[队列收尾](../../src/main.cpp)。
+来源：[save 发布与区间验证](../../src/io/save.cpp)、[持久原子文件操作](../../src/io/files.cpp)、[可写性预检](../../src/io/save.cpp)、[task 发布](../../src/ecm/service/stage1/task.cpp)、[队列收尾](../../src/main.cpp)。
 
 ## 7. 消费者和交接能力
 
@@ -205,7 +205,7 @@ CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且
 
 Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制，不使用 Prime95 `worktodo.add`。完成 save 发布后先记录待投递行，再将原任务移入 Stage1 finished；交付时将实际 save 的绝对路径写入接收 worker 的共用 `worktodo` 分区。队列追加和 Stage2 移除任务共用短时编辑锁；重试前检查活动队列及 Stage2 finished 中的完成行或输入错误回执，避免在队列发布后、待投递记录清除前崩溃导致重复交付。接收 worker 的选择和 B2 要求见 [Stage1 使用](../usage/STAGE1.md#检查点与交接)。
 
-来源：[队列完成与交接](../../src/main.cpp)、[P95 持久交接](../../src/sync/p95.cpp)、[普通备份](../../src/sync/backup.cpp)、[交付器](../../src/ecm/storage/transfer/p95_transfer.h)。
+来源：[队列完成与交接](../../src/main.cpp)、[P95 持久交接](../../src/sync/p95.cpp)、[普通备份](../../src/sync/backup.cpp)、[交付器](../../src/sync/p95.h)。
 
 ## 8. 保留的二进制 MIDSTAGE 接口
 
@@ -223,13 +223,13 @@ Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制�
 
 该 writer 直接截断写目标，并非文本 save 的 `.new`+轮换发布器。`read_midstage` 仅实现其 MIDSTAGE 子集；公共头版本数通过不等于任意 Prime95 版本/状态都已支持。不能把这层保留接口当作所有外部二进制 save 的通用恢复器。
 
-来源：[MIDSTAGE 写入/读取](../../src/ecm/storage/save/ecm_edwards_save.cpp#L201)、[feeder 消费入口](../../src/ecm/application/p95_feeder/ecm_p95feeder.cpp#L429)。
+来源：[MIDSTAGE 写入/读取](../../src/io/prime95_save.cpp)、[feeder 消费入口](../../src/ecm/application/p95_feeder/ecm_p95feeder.cpp#L429)。
 
 ## 9. 验证入口与 TODO
 
 - [可用性与保存失败重试](../../tools/test/test_stage1_usability.py)：CPU/GPU、固定种子、完整末点、输出所有权和停止恢复。
 - [命名、旧记录复制和混合队列](../../tools/test/test_stage1_checkpoint_compat.py)：原指数保留、显式路径、字段改写、前缀覆盖、构造冲突及交接。
-- [Edwards 独立点与 Stage2 校验](../../tools/test/test_edwards_gpu_pipeline.py)、[专用文本读取器](../../src/ecm/storage/save/ecm_edwards_save_reader.h)。
+- [Edwards 独立点与 Stage2 校验](../../tools/test/test_edwards_gpu_pipeline.py)、[专用文本读取器](../../include/ecm/io/save.h)。
 - [输入、动态队列及无可用点回归](../../tools/test/test_stage1_inputs.py)、[Prime95 文件先于任务的真实文件合同](../../tools/test/stage1_host_io_contract.cpp)、[GUI 新文件名解析](../../tools/test/gui/results_test.cpp)。
 
 待验证/改进：

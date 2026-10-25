@@ -1,9 +1,12 @@
+#include "io/stage1_checkpoint.h"
 #include "checkpoint.h"
 #include "host_math.h"
-#include "../../../../storage/save/ecm_edwards_io.h"
+#include "ecm/io/save.h"
 #include "ecm/core/stage1/scalar.h"
-#include "../../../../storage/checkpoint/ecm_stage1_binary.h"
+#include "io/stage1_binary.h"
 #include "ecm/platform/logging.h"
+#include "io/files.h"
+#include <sstream>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -22,7 +25,7 @@ static void binary_value(ecm_stage1_binary::Reader &in,mpz_ptr value,size_t maxi
     mpz_import(value,size,-1,1,0,0,bytes.data());
 }
 static uint64_t scalar_fingerprint(mpz_srcptr scalar) {
-    std::string bytes;binary_value(bytes,scalar);return hash(bytes);
+    std::string bytes;binary_value(bytes,scalar);return ecm_io::fingerprint(bytes);
 }
 std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
     using namespace ecm_stage1_binary;
@@ -33,11 +36,11 @@ std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b
         u64(out,b.sigmas[i]);u32(out,uint32_t(b.hit[i]));binary_value(out,b.factors[i]);
         for(unsigned j=0;j<9;++j)binary_value(out,b.state[size_t(i)*9+j]);
     }
-    u64(out,hash(out));return out;
+    u64(out,ecm_io::fingerprint(out));return out;
 }
-bool save_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
+bool save_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
     const auto body=checkpoint_body(b,n,scalar,b1);
-    return ecm_stage1_write_blob(path,body);
+    return checkpoint.write_blob(path,body);
 }
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,Batch &b,
         mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
@@ -49,7 +52,7 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
                 if(text.size()<68)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 const auto body=std::string_view(text).substr(0,text.size()-8);
                 Reader footer(std::string_view(text).substr(text.size()-8));
-                if(footer.u64()!=hash(std::string(body)))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+                if(footer.u64()!=ecm_io::fingerprint(std::string(body)))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 Reader data(body);data.take(8);if(data.u32()!=3)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 window=data.u32();doubling=int(data.u32());
                 if(data.u32()!=b.count)return {RestoreState::Incompatible,"GPU Edwards checkpoint curve count differs"};temp.done=data.u32();
@@ -69,7 +72,7 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         } else {
         const auto end=text.rfind("CHECKSUM ");if(end==std::string::npos)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         const auto body=text.substr(0,end);std::istringstream check(text.substr(end+9));uint64_t sum;std::string extra;
-        if(!(check>>sum) || (check>>extra) || sum!=hash(body))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+        if(!(check>>sum) || (check>>extra) || sum!=ecm_io::fingerprint(body))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         std::istringstream data(body);std::string tag,nh,sh,fh;uint64_t bound;uint32_t count,done;
         if(!(data>>tag))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         if(tag=="ECM_GPU_EDWARDS_NAF_V2") {
@@ -116,18 +119,18 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         RestoreState::AlreadyComputed:RestoreState::Resumed,{}};
 }
 
-ecm_stage1_checkpoint::RestoreResult restore_checkpoint(const std::string &path,Batch &b,
+ecm_stage1_checkpoint::RestoreResult restore_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const std::string &path,Batch &b,
         mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
     using namespace ecm_stage1_checkpoint;
     RestoreResult result;
-    for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
-        std::string text;const auto read=ecm_stage1_read_checkpoint_blob(candidate,text);
+    for(const auto &candidate:checkpoint.candidates(path)) {
+        std::string text;const auto read=checkpoint.read_checkpoint_blob(candidate,text);
         if(read==BlobRead::Missing)continue;
         if(read==BlobRead::IoFailure){result={RestoreState::IoFailure,"cannot read GPU Edwards checkpoint"};continue;}
         auto decoded=decode_checkpoint(text,b,n,scalar,b1,fixed,window_fixed,doubling_fixed,mode_fixed);
         if(decoded.state==RestoreState::Incompatible)return decoded;
         if(!decoded.restored()){result=std::move(decoded);continue;}
-        if(candidate!=path)ecm_stage1_mark_bad_primary(path);
+        if(candidate!=path)checkpoint.mark_bad_primary(path);
         ecm_ts_fprintf(stdout,"GPU Edwards resume: columns=%u window=%u doubling=%d path=%s\n",b.done,b.window,b.doubling,candidate.c_str());
         return decoded;
     }

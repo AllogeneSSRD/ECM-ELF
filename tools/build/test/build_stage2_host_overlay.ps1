@@ -21,6 +21,19 @@ $link=$link.Substring($prefix.Length)
 # Validate every CUDA unit before preparing or compiling host output.
 $moves=@{'src/ecm/storage/queue/ecm_worktodo.cpp'='src/io/worktodo.cpp';
     'src/ecm/application/configuration/ecm_queue_config.cpp'='src/io/config.cpp'}
+$moves['src/ecm/storage/cache/ecm_stage1_exp_cache.cpp']='src/io/exponent_cache.cpp'
+$moves['src/ecm/storage/checkpoint/ecm_checkpoint.cpp']='src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp'
+$moves['src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp']='src/ecm/backend/cpu/stage1/montgomery/checkpoint.cpp'
+$moves['src/ecm/storage/save/ecm_edwards_save.cpp']='src/io/prime95_save.cpp'
+$moves['src/ecm/storage/queue/p95_worktodo.cpp']='src/io/prime95.cpp'
+$moves['src/ecm/storage/queue/stage2_progress.cpp']='src/io/stage2_checkpoint.cpp'
+$moves['src/ecm/storage/transfer/ecm_stage2_transfer.cpp']='src/sync/stage2.cpp'
+$moves['src/ecm/storage/transfer/p95_transfer.cpp']='src/sync/p95.cpp'
+$moves['src/sync/files.cpp']='src/io/files.cpp'
+$moves['src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp']='src/io/stage1_checkpoint.cpp'
+$moves['src/ecm/storage/save/ecm_save.cpp']='src/io/save.cpp'
+$moves['src/ecm/storage/save/publication.cpp']='src/io/save.cpp'
+$moves['src/ecm/storage/results/publication.cpp']='src/io/results.cpp'
 $units=[ordered]@{}
 foreach($property in $m.compile_units.PSObject.Properties) {
     $old=$property.Name;$source=if($moves.ContainsKey($old)){$moves[$old]}else{$old}
@@ -28,12 +41,14 @@ foreach($property in $m.compile_units.PSObject.Properties) {
     if($source -ne $old){$unit.entry.file=Join-Path $repo $source;$unit.entry.command=$unit.entry.command.Replace($old,$source).Replace($old.Replace('/','\'),$source.Replace('/','\'))}
     $units[$source]=$unit
 }
-if(-not $units.Contains('src/sync/files.cpp')) {
+$inventory=Get-EcmCudaInventory $repo
+foreach($source in $inventory.groups.STAGE2_HOST) {
+    if($units.Contains($source)){continue}
     $unit=$units['src/io/config.cpp']|ConvertTo-Json -Depth 8|ConvertFrom-Json
-    $unit.entry.file=Join-Path $repo 'src/sync/files.cpp';$unit.entry.command=$unit.entry.command.Replace('src/io/config.cpp','src/sync/files.cpp')
-    $unit.fingerprint='';$units['src/sync/files.cpp']=$unit
-    $extraObject=Join-Path $output 'src_sync_files.cpp.obj'
-    $link+=' "'+$extraObject+'"'
+    $unit.entry.file=Join-Path $repo $source
+    $unit.entry.command=$unit.entry.command.Replace('src/io/config.cpp',$source)
+    $unit.fingerprint='';$units[$source]=$unit
+    $link+=' "'+(Join-Path $output ($source.Replace('/','_')+'.obj'))+'"'
 }
 foreach($source in $units.Keys) {
     $unit=$units[$source]
@@ -55,7 +70,7 @@ foreach($source in $units.Keys) {
     $commands+=$command;$commands+='if errorlevel 1 exit /b 1'
     $entry=$unit.entry|ConvertTo-Json -Depth 5|ConvertFrom-Json
     $entry.command=$command;$entry.output=$object;$entries[$source]=$entry
-    if($source -ne 'src/sync/files.cpp'){$link=$link.Replace($linkObject,$object)}
+    $link=$link.Replace($linkObject,$object)
 }
 $exe=Join-Path $output 'ecm_cuda_stage2.exe'
 $link=$link.Replace((Join-Path $worker 'ecm_cuda_stage2.exe'),$exe)

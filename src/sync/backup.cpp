@@ -1,4 +1,5 @@
-#include "files.h"
+#include "sync/backup.h"
+#include "io/files.h"
 #include "ecm/platform/logging.h"
 #include <chrono>
 
@@ -18,7 +19,7 @@ void backup_saves(const std::string& dir, const std::string& first, const std::s
                 std::chrono::system_clock::now());
             if (!full && std::chrono::system_clock::to_time_t(modified) < since)
                 continue;
-            const auto bytes = read_file(entry.path());
+            const auto bytes = ecm_io::read_file(entry.path());
             for (const auto& destination : {first, second}) {
                 if (destination.empty())
                     continue;
@@ -31,8 +32,8 @@ void backup_saves(const std::string& dir, const std::string& first, const std::s
                         continue;
 
                     std::filesystem::create_directories(target.parent_path());
-                    FileLock lock(target.u8string());
-                    write_atomic(target, bytes);
+                    ecm_io::FileLock lock(target.u8string());
+                    ecm_io::write_atomic(target, bytes);
                 } catch (const std::exception& e) {
                     ecm_ts_fprintf(stderr, "WARNING: save backup: %s\n", e.what());
                 }

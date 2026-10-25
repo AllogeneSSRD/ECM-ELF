@@ -1,6 +1,5 @@
 #include "host_policy.h"
 #include "../../runtime/cuda_ecm_shim.h"
-#include "../../../../storage/cache/ecm_stage1_exp_cache.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -8,9 +7,9 @@
 #include <stdexcept>
 namespace ecm_cuda_mont_host {
 
-MontRequestedSpec capture_mont_request(const char *algorithm) {
+MontRequestedSpec capture_mont_request(const char *algorithm, const std::string& default_cache_dir) {
     MontRequestedSpec request;
-    request.default_plan_cache=ecm_exp_cache_get_dir();
+    request.default_plan_cache=default_cache_dir;
     for(const auto *key:{"ECM_GPU_STAGE1_ALGO","ECM_PRAC_WINDOW","ECM_PRAC_VARIANT",
         "ECM_PRAC_REG_TARGET","ECM_STAGE1_TPI","ECM_PRAC_CONSTANTS","ECM_PRAC_PLAN_CACHE",
         "ECM_PRAC_TARGET_MS","ECM_GPU_STAGE1_SAMPLE_SECONDS","ECM_GPU_DUMP",

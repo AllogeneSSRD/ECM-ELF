@@ -43,18 +43,72 @@
 
 #include <gmp.h>
 
-#include "../../storage/save/ecm_edwards_save.h"
+#include "io/prime95_save.h"
 #include "io/worktodo.h"
-#include "../../storage/queue/p95_worktodo.h"
+#include "io/prime95.h"
 
 #ifdef _WIN32
 #include <io.h>
 #include <direct.h>
+#include <windows.h>
 #define FEEDER_ACCESS _access
 #else
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #define FEEDER_ACCESS access
 #endif
+
+static std::string p95_ecm_save_name(uint32_t n) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "e%07u", n);
+    return std::string(buf);
+}
+
+static bool p95_list_tmp_files(const std::string &dir, std::vector<std::string> &names) {
+    names.clear();
+    std::string d = dir;
+    if (d.empty()) d = ".";
+    struct Entry { std::string name; long long mtime; };
+    std::vector<Entry> found;
+
+#ifdef _WIN32
+    WIN32_FIND_DATAA fd;
+    const std::string pattern = d + "\\*.tmp";
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        // An empty directory is not an error.
+        return true;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        ULARGE_INTEGER t;
+        t.LowPart = fd.ftLastWriteTime.dwLowDateTime;
+        t.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+        found.push_back({std::string(fd.cFileName), (long long)t.QuadPart});
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *dp = opendir(d.c_str());
+    if (!dp) return false;
+    struct dirent *de;
+    while ((de = readdir(dp)) != nullptr) {
+        const std::string name = de->d_name;
+        if (name.size() < 4 || name.compare(name.size() - 4, 4, ".tmp") != 0) continue;
+        struct stat st;
+        if (stat((d + "/" + name).c_str(), &st) != 0) continue;
+        found.push_back({name, (long long)st.st_mtime});
+    }
+    closedir(dp);
+#endif
+
+    std::sort(found.begin(), found.end(), [](const Entry &a, const Entry &b) {
+        if (a.mtime != b.mtime) return a.mtime < b.mtime;
+        return a.name < b.name;
+    });
+    for (const Entry &e : found) names.push_back(e.name);
+    return true;
+}
 
 namespace {
 

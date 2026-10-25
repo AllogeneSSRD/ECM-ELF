@@ -1,6 +1,6 @@
-#include "ecm/storage/results/publication.h"
-#include "../../src/ecm/storage/results/ecm_result_json.h"
-#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "ecm/io/results.h"
+#include "io/json.h"
+#include "ecm/io/save.h"
 #include <iostream>
 #include <filesystem>
 #include <fstream>

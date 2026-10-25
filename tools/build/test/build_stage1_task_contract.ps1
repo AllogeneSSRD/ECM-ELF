@@ -15,14 +15,14 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/ecm/storage/results/publication.cpp','src/ecm/core/stage1/selection.cpp','src/ecm/service/stage1/task.cpp','src/ecm/service/stage1/execution_contract.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
-    'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
+$sources=@('src/io/results.cpp','src/ecm/core/stage1/selection.cpp','src/ecm/service/stage1/task.cpp','src/ecm/service/stage1/execution_contract.cpp','src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp',
+    'src/io/stage1_checkpoint.cpp','src/ecm/platform/stage1_stop.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
     'src/ecm/core/stage1/ecm_stage1_exp.cpp','src/ecm/platform/stage1_progress.cpp')
 if($QueueWorkflow){
     & (Join-Path $PSScriptRoot 'build_stage1_host_io.ps1') -WorkerBuild $WorkerBuild -Build $Build
     return
 }
-if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/sync/files.cpp','src/ecm/storage/save/publication.cpp','src/ecm/storage/save/ecm_save.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/storage/cache/ecm_stage1_exp_cache.cpp')}
+if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/io/files.cpp','src/io/save.cpp','src/ecm/service/stage1/preparation.cpp','src/io/exponent_cache.cpp')}
 if($MontgomeryPolicy){
     if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
     $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path

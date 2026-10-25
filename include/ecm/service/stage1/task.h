@@ -1,11 +1,12 @@
 #pragma once
 #include "ecm/core/stage1/selection.h"
 #include <gmp.h>
-#include "ecm/storage/save/range.h"
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace ecm_save { struct Range; }
 
 namespace ecm_stage1 {
 
@@ -38,6 +39,7 @@ struct Stage1Persistence {
     std::string save_name_pattern;
     std::string legacy_save_source;
     std::string tmp_dir;
+    std::string exponent_cache_dir; // Empty explicitly disables the optional cache.
     unsigned long ckpt_ms;
     unsigned ckpt_backups;
     std::string results_file="stage1_results.jsonl",submission_file="results.json.txt";

@@ -6,9 +6,9 @@ $m=Get-Content -LiteralPath (Join-Path $WorkerBuild 'stage1_local_manifest.json'
 $output=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 New-Item -ItemType Directory -Force -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output '.gitignore'),"*`n")
-$sources=@('src/io/worktodo.cpp','src/sync/files.cpp','src/sync/p95.cpp','src/sync/backup.cpp',
-    'src/ecm/storage/save/publication.cpp','src/ecm/application/configuration/ecm_expr.cpp','src/ecm/storage/transfer/p95_transfer.cpp',
-    'src/ecm/storage/queue/p95_worktodo.cpp','src/ecm/platform/logging.cpp',
+$sources=@('src/io/worktodo.cpp','src/io/files.cpp','src/io/results.cpp','src/sync/p95.cpp','src/sync/backup.cpp',
+    'src/io/save.cpp','src/ecm/application/configuration/ecm_expr.cpp',
+    'src/io/prime95.cpp','src/ecm/platform/logging.cpp',
     'src/ecm/application/configuration/runtime.cpp','tools/test/stage1_host_io_contract.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources) {

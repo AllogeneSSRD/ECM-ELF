@@ -4,6 +4,8 @@
 #include <vector>
 
 // Host computation interface and private compatibility storage for old kernels.
+namespace ecm_stage1_checkpoint { class Context; }
+
 namespace ecm_stage1 {
 
 // Private mutable execution state. The caller's resolved options remain immutable.
@@ -15,8 +17,10 @@ struct ExecutionOptions : Stage1Options {
     std::string gpu_algorithm;
 };
 
+enum class CurveKind { Legacy, Factor, Stage2Point, CompletedWithoutPoint, Degenerate, Failed };
+
 struct LegacyExecutionResult {
-    enum class CurveKind { Legacy, Factor, Stage2Point, CompletedWithoutPoint, Degenerate, Failed };
+    using CurveKind = ecm_stage1::CurveKind;
     std::vector<CurveKind> curve_kinds;
     // Legacy CPU/OpenCL collaborators may still report through the old flags.
     // CUDA workflows report failure or stop explicitly, before returning.
@@ -57,7 +61,7 @@ struct LegacyExecutionResult {
 // Computation owns one classified value per attempted curve. Raw arrays above
 // are compatibility storage for old kernels/CPU workers and never reach task.
 struct CurveOutcome {
-    using Kind = LegacyExecutionResult::CurveKind;
+    using Kind = CurveKind;
     Kind kind = Kind::Failed;
     uint64_t sigma = 0;
     mpz_t value;
@@ -92,12 +96,15 @@ struct ComputationResult {
     FailureSource failure = FailureSource::None;
     int legacy_code = ECM_ERROR;
     std::vector<CurveOutcome> curves;
+    void set_curve(uint32_t, CurveKind, mpz_srcptr, uint64_t sigma);
+    void fail(FailureSource) noexcept;
+    void stop() noexcept;
     void validate(mpz_srcptr) const;
 };
 
 // A single compatibility conversion owns status mapping and moves GMP values.
 ComputationResult take_computation_result(LegacyExecutionResult&&, int code, bool stopped);
-using Stage1Entry = ComputationResult (*)(const Stage1Request&, ExecutionOptions&);
+using Stage1Entry = ComputationResult (*)(const Stage1Request&, ExecutionOptions&, ecm_stage1_checkpoint::Context&);
 
 struct TaskDependencies {
     Stage1Entry execute;

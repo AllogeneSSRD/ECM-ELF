@@ -3,8 +3,8 @@
 #include "../../../../service/execution/cgbn_stage1.h"
 #include "../../../../service/execution/ecm.h"
 #include "../../runtime/cgbn_opencl.h"
-#include "../../../../storage/checkpoint/ecm_checkpoint.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "ecm/backend/opencl/stage1/montgomery/checkpoint.h"
+#include "io/stage1_checkpoint.h"
 #include "debug_utils.h"
 #include "../../../../../../include/ecm/platform/logging.h"
 #include "montgomery.h"
@@ -771,11 +771,14 @@ extern "C" int gpu_prepare_opencl(size_t n_log2, int verbose, const char *gpu_mu
     return ensure_ecm_kernel(plan, verbose, &init_ms);
 }
 
-extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, const mpz_t s,
+extern "C" int cgbn_ecm_stage1(void* checkpoint_context, mpz_t *factors, int *array_found, const mpz_t N, const mpz_t s,
                     uint32_t curves, uint32_t *sigma_ptr,
                     unsigned long checkpoint_interval_ms, float *gputime, int verbose,
                     const char *gpu_mul_path, const char *gpu_sqr_path, const char *gpu_add_path,
                     const char *gpu_sub_path, const char *gpu_special_mult_path) {
+    if (!checkpoint_context) return -1;
+    auto& checkpoint = *static_cast<ecm_stage1_checkpoint::Context*>(checkpoint_context);
+
     uint32_t sigma = *sigma_ptr;
     if (sigma == 0 || (uint64_t)sigma + curves > 0xFFFFFFFFull) {
         ecm_ts_fprintf(stderr, "Invalid sigma/curves range\n");
@@ -790,14 +793,15 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
         return ECM_ERROR;
     }
 
-    const char *ckpt_filename = opencl_ecm_checkpoint_filename(N);
+    const auto ckpt_filename_storage = opencl_ecm_checkpoint_filename(checkpoint, N);
+    const char* ckpt_filename = ckpt_filename_storage.c_str();
     opencl_ecm_checkpoint_header_t ckpt_header{};
     uint32_t *ckpt_data = nullptr;
     size_t ckpt_data_size = 0;
     int ckpt_loaded = 0;
 
-    for (const std::string &candidate : ecm_stage1_checkpoint_candidates(ckpt_filename)) {
-        if (opencl_ecm_checkpoint_load(candidate.c_str(), &ckpt_header, &ckpt_data,
+    for (const std::string &candidate : checkpoint.candidates(ckpt_filename)) {
+        if (opencl_ecm_checkpoint_load(checkpoint, candidate.c_str(), &ckpt_header, &ckpt_data,
                                        &ckpt_data_size) != ECM_NO_FACTOR_FOUND)
             continue;
         if (ckpt_header.curves == curves && ckpt_header.s_num_bits == s_num_bits &&
@@ -830,7 +834,7 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
                 ckpt_loaded = 1;
                 sigma = (uint32_t)ckpt_header.sigma;
                 if (candidate != ckpt_filename) {
-                    ecm_stage1_mark_bad_primary(ckpt_filename);
+                    checkpoint.mark_bad_primary(ckpt_filename);
                     ecm_ts_fprintf(stderr, "Restored Stage1 backup: %s\n", candidate.c_str());
                 }
             }
@@ -1177,7 +1181,7 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
                     header.reserved = 0;
                     header.data_size = (uint64_t)data_size;
                     header.timestamp = (int64_t)time(nullptr);
-                    if (opencl_ecm_checkpoint_save(ckpt_filename, &header, ckpt_buf.data(),
+                    if (opencl_ecm_checkpoint_save(checkpoint, ckpt_filename, &header, ckpt_buf.data(),
                                                    data_size) == ECM_NO_FACTOR_FOUND)
                         last_checkpoint_wall = now_wall;
                 } else {
@@ -1235,7 +1239,7 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
             hdr.reserved = 0;
             hdr.data_size = (uint64_t)data_size;
             hdr.timestamp = (int64_t)time(nullptr);
-            if (opencl_ecm_checkpoint_save(ckpt_filename, &hdr, ckpt_buf.data(), data_size) ==
+            if (opencl_ecm_checkpoint_save(checkpoint, ckpt_filename, &hdr, ckpt_buf.data(), data_size) ==
                 ECM_NO_FACTOR_FOUND)
                 ecm_ts_fprintf(stderr, "Checkpoint saved (%llu/%llu bits, %.1f%%)\n",
                                (unsigned long long)s_partial, (unsigned long long)s_num_bits,

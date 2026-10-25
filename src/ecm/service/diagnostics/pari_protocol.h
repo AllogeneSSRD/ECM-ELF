@@ -1,6 +1,6 @@
 #pragma once
 #include "../../core/group_order/group_order.h"
-#include "../../storage/results/ecm_result_json.h"
+#include "io/json.h"
 
 // Private, versioned process protocol. Integers always remain decimal strings.
 namespace ecm_diagnostics::pari_protocol {

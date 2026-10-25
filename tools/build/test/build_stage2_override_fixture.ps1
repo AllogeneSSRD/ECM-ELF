@@ -8,8 +8,10 @@ $output=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
 if(Test-Path -LiteralPath $output){throw 'Use a fresh build directory'}
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $output
-$sources=@('tools/test/stage2_override_fixture.cpp','src/ecm/storage/results/publication.cpp',
-    'src/ecm/storage/queue/stage2_progress.cpp','src/ecm/platform/fingerprint.cpp')
+$sources=@('tools/test/stage2_override_fixture.cpp','src/io/results.cpp','src/io/files.cpp',
+    'src/io/save.cpp','src/ecm/application/configuration/ecm_expr.cpp','src/ecm/platform/logging.cpp',
+    'src/ecm/application/configuration/runtime.cpp',
+    'src/io/stage2_checkpoint.cpp','src/ecm/platform/fingerprint.cpp')
 $command='"'+$m.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MT /utf-8 /DNOMINMAX /I include /I src /I "'+
     $m.gmp_root+'/include" '+($sources -join ' ')+' /Fo"'+$output+'/" /Fe"'+$output+
     '/stage2_override_fixture.exe" /link /LIBPATH:"'+$m.gmp_root+'/lib" gmp.lib'

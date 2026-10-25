@@ -6,42 +6,40 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/core/group_order/group_order.cpp
     src/ecm/service/diagnostics/order_analysis.cpp
     src/ecm/core/stage1/selection.cpp
-    src/ecm/storage/results/publication.cpp
+    src/io/results.cpp
     src/ecm/service/stage1/task.cpp
     src/ecm/service/stage1/execution_contract.cpp
     src/ecm/service/stage1/preparation.cpp
     src/ecm/service/stage1/execution.cpp
-    src/ecm/backend/cpu/stage1/legacy_executor.cpp
+    src/ecm/backend/cpu/stage1/edwards/workflow.cpp src/ecm/backend/cpu/stage1/montgomery/workflow.cpp src/ecm/backend/cpu/stage1/execution_support.cpp
     src/io/normalize.cpp
     src/ecm/application/cli/group_order.cpp
     src/io/cli.cpp
-    src/sync/files.cpp
+    src/io/files.cpp
     src/sync/backup.cpp
     src/sync/p95.cpp
-    src/ecm/storage/save/publication.cpp
+    src/io/save.cpp
     src/main.cpp
     src/ecm/service/execution/ecm_params_init.cpp
-    src/ecm/storage/checkpoint/ecm_checkpoint.cpp
-    src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp
-    src/ecm/storage/save/ecm_save.cpp
+    src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp
+    src/io/stage1_checkpoint.cpp src/ecm/platform/stage1_stop.cpp
     src/ecm/service/stage1/ecm_gpu_common.cpp
     src/io/config.cpp
     src/io/worktodo.cpp
-    src/ecm/storage/transfer/ecm_stage2_transfer.cpp
+    src/sync/stage2.cpp
     src/ecm/application/configuration/ecm_expr.cpp
-    src/ecm/storage/transfer/p95_transfer.cpp
-    src/ecm/storage/queue/p95_worktodo.cpp
+    src/io/prime95.cpp
     src/ecm/platform/logging.cpp
     src/ecm/platform/stage1_progress.cpp
     src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp
-    src/ecm/storage/save/ecm_edwards_save.cpp
+    src/io/prime95_save.cpp
     src/ecm/backend/cpu/stage1/edwards/simd_edwards.cpp
     src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
     src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.cpp
     src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.cpp
-    src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp
+    src/ecm/backend/cpu/stage1/montgomery/checkpoint.cpp
     src/ecm/core/stage1/ecm_stage1_exp.cpp
-    src/ecm/storage/cache/ecm_stage1_exp_cache.cpp)
+    src/io/exponent_cache.cpp)
 set(ECM_STAGE1_EDWARDS_SOURCES
     src/ecm/backend/cuda/stage1/edwards/runtime.cpp
     src/ecm/backend/cuda/stage1/edwards/edwards_runtime.cu
@@ -103,11 +101,15 @@ set(ECM_STAGE1_PRAC_SOURCES
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
+    src/io/files.cpp
+    src/io/save.cpp
+    src/ecm/platform/logging.cpp
+    src/ecm/application/configuration/runtime.cpp
     src/ecm/core/group_order/group_order.cpp
     src/ecm/service/diagnostics/order_analysis.cpp
     src/ecm/platform/fingerprint.cpp
-    src/ecm/storage/queue/stage2_progress.cpp
-    src/ecm/storage/results/publication.cpp
+    src/io/stage2_checkpoint.cpp
+    src/io/results.cpp
     src/ecm/core/stage1/selection.cpp
     src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
     src/ecm/service/planning/stage2.cpp
@@ -118,7 +120,6 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/application/configuration/stage2_identity.cpp
     src/ecm/application/configuration/ecm_expr.cpp
     src/io/worktodo.cpp
-    src/sync/files.cpp
     src/io/config.cpp)
 set(ECM_STAGE2_ARITHMETIC_SOURCES src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu)
 set(ECM_STAGE2_NTT_SOURCES

@@ -169,6 +169,29 @@ ComputationResult take_computation_result(LegacyExecutionResult&& raw, int code,
     return result;
 }
 
+void ComputationResult::set_curve(uint32_t lane, CurveKind kind, mpz_srcptr value,
+                                   uint64_t sigma) {
+    auto& curve = curves.at(lane);
+    curve.kind = kind;
+    curve.sigma = sigma;
+    if (value)
+        mpz_set(curve.value, value);
+    else
+        mpz_set_ui(curve.value, 0);
+}
+
+void ComputationResult::fail(FailureSource source) noexcept {
+    completion = Completion::Failed;
+    failure = source;
+    legacy_code = ECM_ERROR;
+}
+
+void ComputationResult::stop() noexcept {
+    completion = Completion::Stopped;
+    failure = FailureSource::None;
+    legacy_code = ECM_ERROR;
+}
+
 void ComputationResult::validate(mpz_srcptr n) const {
     if (completion != Completion::Completed)
         throw std::logic_error("Stage1 computation is incomplete");

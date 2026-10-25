@@ -8,7 +8,7 @@ if(Test-Path -LiteralPath $output){throw 'Use a fresh build directory'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output '.gitignore'),"*`n")
 $sources=@('tools/test/storage_concurrency_contract.cpp','src/io/worktodo.cpp',
-    'src/sync/files.cpp','src/ecm/core/stage1/ecm_stage1_exp.cpp')
+    'src/io/files.cpp','src/ecm/core/stage1/ecm_stage1_exp.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources) {
     $object=Join-Path $output ($source.Replace('/','_')+'.obj')
@@ -19,7 +19,7 @@ foreach($source in $sources) {
     $commands+='if errorlevel 1 exit /b 1'
     $hashes[$source]=(Get-FileHash -LiteralPath $source).Hash
 }
-foreach($source in @('src/ecm/storage/cache/ecm_stage1_exp_cache.cpp','src/ecm/storage/transfer/ecm_stage2_transfer.cpp')) {
+foreach($source in @('src/io/exponent_cache.cpp','src/sync/stage2.cpp')) {
     $hashes[$source]=(Get-FileHash -LiteralPath $source).Hash
 }
 $exe=Join-Path $output 'storage_concurrency.exe'

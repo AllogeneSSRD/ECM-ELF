@@ -6,7 +6,7 @@ CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=4
 
 Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8 -GwPoly`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP、`.refactor/gmp-ecm` 源码，以及 `.refactor/p95v3106b01.source/gwnum` 中匹配头文件的 `gwnum64.lib` / `polymult64.lib`，不需要 CUDA。GW 构建按这两个本地库使用静态 MSVC CRT（/MT）；不附加 `-GwPoly` 可构建仅有 libecm 的版本。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR` 和 `ECM_GWNUM_ROOT`；根 CMake 提供默认关闭的 `ECM_BUILD_CPU_STAGE2`，并以 `ECM_CPU_GW_POLY=ON` 启用 GW 后端。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。支持 TOML 中的结果身份和提交文件配置；此程序尚未纳入 CUDA 发布包、GUI 或 Stage2 队列入口。
 
-本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[严格存档读取](../../src/ecm/storage/save/ecm_edwards_save_reader.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
+本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[严格存档读取](../../include/ecm/io/save.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 
 典型交接：
 

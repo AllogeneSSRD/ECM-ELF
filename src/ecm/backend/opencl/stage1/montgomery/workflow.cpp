@@ -1,12 +1,11 @@
-#include "ecm/storage/results/publication.h"
+#include "ecm/io/results.h"
 #include "workflow.h"
 #include "../../../../service/stage1/preparation.h"
 #include "ecm/service/execution/legacy_gpu.h"
 #include "../../../../service/execution/cgbn_stage1.h"
-#include "../../../../storage/save/ecm_save.h"
-#include "../../../../storage/save/ecm_edwards_io.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
-#include "../../../../storage/checkpoint/ecm_stage1_legacy_gpu.h"
+#include "ecm/io/save.h"
+#include "io/stage1_checkpoint.h"
+#include "ecm/service/stage1/legacy_gpu_checkpoint.h"
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -14,7 +13,7 @@
 
 using namespace ecm_stage1;
 namespace ecm_opencl_stage1 {
-ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &request,ecm_stage1::ExecutionOptions &opt) {
+ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &request,ecm_stage1::ExecutionOptions &opt, ecm_stage1_checkpoint::Context& checkpoint) {
     const auto N=request.modulus;const auto n=N;
     const auto B1=request.b1,B2=request.b2,b1=B1,b2=B2;
     const auto curves=request.curves;
@@ -67,7 +66,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
     mpz_t batch_s;
     mpz_init(batch_s);
     if (!compute_batch_s(batch_s, B1,
-                         opt.execution.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u)) {
+                         opt.execution.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u, opt.persistence.exponent_cache_dir)) {
         std::cerr << "Failed to compute batch_s" << std::endl;
         mpz_clear(batch_s);
         ecm_clear(params);
@@ -78,7 +77,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
     {
         const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
         if(std::string(ecm_backend_name())=="CUDA/CGBN" && (!algorithm || !*algorithm || std::string(algorithm)=="ladder"))
-            ecm_stage1_import_legacy_gpu(N,batch_s,curves,uint32_t(params->gpu_param),
+            ecm_stage1_import_legacy_gpu(checkpoint, N,batch_s,curves,uint32_t(params->gpu_param),
                 opt.identity.sigma_fixed,opt.identity.fixed_sigma64,[&](uint64_t sigma,uint32_t count){
                     std::vector<uint64_t> sigmas(count);for(uint32_t i=0;i<count;++i)sigmas[i]=sigma+i;
                     return ecm_results::contains_stage1_curves(opt.persistence.results_file,N,uint64_t(B1),false,unsigned(params->gpu_param),sigmas);
@@ -120,7 +119,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
     uint64_t firstsigma64 = opt.identity.sigma_fixed
         ? opt.identity.fixed_sigma64
         : (gpu_param0 ? random_sigma_u64() : (uint64_t)gpu_pick_random_sigma(curves));
-    firstsigma64=ecm_stage1_batch_sigma(0,firstsigma64);
+    firstsigma64=checkpoint.sigma(0,firstsigma64);
     const uint32_t firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
     if (!gpu_param0 &&
         (firstsigma64 > 0xFFFFFFFFull || curves > 0x100000000ull - firstsigma64)) {
@@ -132,7 +131,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
         ecm_clear(params);
         return ecm_stage1::take_computation_result(std::move(raw),ECM_ERROR,ecm_stage1_stop_requested()!=0);
     }
-    for(uint32_t i=1;i<curves;++i)ecm_stage1_batch_sigma(i,firstsigma64+i);
+    for(uint32_t i=1;i<curves;++i)checkpoint.sigma(i,firstsigma64+i);
     mpz_t batch_d;
     mpz_init(batch_d);
     /* batch_d is the batch parametrization's curve constant; only param3 uses it */
@@ -145,7 +144,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
               << " (" << curves << " curves, " << ecm_backend_name() << ")" << std::endl;
 
     float gputime = 0.0f;
-    int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves,
+    int ret = ecm_backend_stage1(&checkpoint, factors, array_found, N, params->batch_s, curves,
                                        &firstsigma64, params->gpu_checkpoint_interval_ms,
                                        &gputime, params->verbose, params->gpu_param,
                                        (uint64_t)std::floor(B1 + 0.0001),

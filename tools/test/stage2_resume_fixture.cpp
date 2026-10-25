@@ -3,7 +3,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
-#include "../../src/ecm/storage/queue/ecm_stage2_queue_state.h"
+#include "ecm/io/stage2_checkpoint.h"
 #include "../../src/ecm/platform/ecm_stage2_logging.h"
 #include <iostream>
 

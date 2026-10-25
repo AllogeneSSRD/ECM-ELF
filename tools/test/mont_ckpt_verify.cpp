@@ -34,7 +34,7 @@
 #include <vector>
 
 #include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"
-#include "../../src/ecm/storage/checkpoint/ecm_mont_ckpt.h"
+#include "ecm/backend/cpu/stage1/montgomery/checkpoint.h"
 #include "../../src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.h"
 
 static int g_fail = 0;
@@ -174,6 +174,8 @@ static void run_scalar_chunked(mpz_t x_out, mpz_t g_out, const mpz_t N, uint64_t
 
 int main(int argc, char **argv)
 {
+    ecm_stage1_checkpoint::Context checkpoint;
+
     const double B1 = (argc > 1) ? atof(argv[1]) : 5000.0;
     const size_t chunk = (argc > 2) ? (size_t)strtoul(argv[2], NULL, 10) : 512;
 
@@ -348,28 +350,28 @@ int main(int argc, char **argv)
         mpz_set_ui(ck.Z1, 1);
         mont_ckpt_ident(&ck, 7, 424242ull, B1, torsion, nbits, "ifma");
 
-        const std::string path = mont_ckpt_path(stem, 7);
-        check(mont_ckpt_write(path, N, &ck) == 0, "write INFLIGHT record");
+        const std::string path = mont_ckpt_path(checkpoint, stem, 7);
+        check(mont_ckpt_write(checkpoint, path, N, &ck) == 0, "write INFLIGHT record");
 
         std::string why;
-        int ok = mont_ckpt_read(path, N, B1, torsion, nbits, &rd, &why);
+        int ok = mont_ckpt_read(checkpoint, path, N, B1, torsion, nbits, &rd, &why);
         check(ok == 1, "read it back");
         check(rd.status == MONT_CKPT_INFLIGHT && rd.bitnum == 2048 && rd.curve == 7 &&
               rd.sigma == 424242ull, "identity fields survive");
         check(mpz_cmp(rd.X0, ck.X0) == 0 && mpz_cmp(rd.Z0, ck.Z0) == 0 &&
               mpz_cmp(rd.X1, ck.X1) == 0 && mpz_cmp(rd.Z1, ck.Z1) == 0, "state survives");
 
-        check(mont_ckpt_read(path, N, B1 + 1, torsion, nbits, &rd, &why) == 0,
+        check(mont_ckpt_read(checkpoint, path, N, B1 + 1, torsion, nbits, &rd, &why) == 0,
               "rejects a different B1");
-        check(mont_ckpt_read(path, N, B1, 12, nbits, &rd, &why) == 0,
+        check(mont_ckpt_read(checkpoint, path, N, B1, 12, nbits, &rd, &why) == 0,
               "rejects a different torsion");
-        check(mont_ckpt_read(path, N, B1, torsion, nbits + 1, &rd, &why) == 0,
+        check(mont_ckpt_read(checkpoint, path, N, B1, torsion, nbits + 1, &rd, &why) == 0,
               "rejects a different s_bits");
         {
             mpz_t N2;
             mpz_init(N2);
             mpz_set_ui(N2, 12345);
-            check(mont_ckpt_read(path, N2, B1, torsion, nbits, &rd, &why) == 0,
+            check(mont_ckpt_read(checkpoint, path, N2, B1, torsion, nbits, &rd, &why) == 0,
                   "rejects a different N");
             mpz_clear(N2);
         }
@@ -380,9 +382,9 @@ int main(int argc, char **argv)
             const size_t endpos = all.rfind("END");
             const std::string trunc = (endpos == std::string::npos) ? all : all.substr(0, endpos);
             write_file(path + ".trunc", trunc);
-            check(mont_ckpt_read(path + ".trunc", N, B1, torsion, nbits, &rd, &why) == 0,
+            check(mont_ckpt_read(checkpoint, path + ".trunc", N, B1, torsion, nbits, &rd, &why) == 0,
                   "rejects a truncated file (no END)");
-            mont_ckpt_remove(path + ".trunc");
+            mont_ckpt_remove(checkpoint, path + ".trunc");
         }
 
         /* corrupted payload: flip one payload byte */
@@ -392,9 +394,9 @@ int main(int argc, char **argv)
             if (pos != std::string::npos && pos + 5 < all.size())
                 all[pos + 5] = (all[pos + 5] == 'a') ? 'b' : 'a';
             write_file(path + ".bad", all);
-            check(mont_ckpt_read(path + ".bad", N, B1, torsion, nbits, &rd, &why) == 0,
+            check(mont_ckpt_read(checkpoint, path + ".bad", N, B1, torsion, nbits, &rd, &why) == 0,
                   "rejects a corrupted payload (checksum)");
-            mont_ckpt_remove(path + ".bad");
+            mont_ckpt_remove(checkpoint, path + ".bad");
         }
 
         /* DONE record */
@@ -405,18 +407,18 @@ int main(int argc, char **argv)
         ck.bitnum = nbits;
         mpz_set_ui(ck.xout, 0xabcdef);
         mont_ckpt_ident(&ck, 8, 999ull, B1, torsion, nbits, "mpn");
-        const std::string p2 = mont_ckpt_path(stem, 8);
-        check(mont_ckpt_write(p2, N, &ck) == 0, "write DONE record");
+        const std::string p2 = mont_ckpt_path(checkpoint, stem, 8);
+        check(mont_ckpt_write(checkpoint, p2, N, &ck) == 0, "write DONE record");
         mont_ckpt_t rd2;
         mont_ckpt_init(&rd2);
-        check(mont_ckpt_read(p2, N, B1, torsion, nbits, &rd2, &why) == 1 &&
+        check(mont_ckpt_read(checkpoint, p2, N, B1, torsion, nbits, &rd2, &why) == 1 &&
               rd2.status == MONT_CKPT_DONE && rd2.hit == 0 && mpz_cmp_ui(rd2.xout, 0xabcdef) == 0,
               "DONE record round trip");
 
         /* a DONE record whose result line was lost must be refused (the writer
            always emits XOUT/FACTOR, so this is built by hand) */
         {
-            const std::string p3 = mont_ckpt_path(stem, 9);
+            const std::string p3 = mont_ckpt_path(checkpoint, stem, 9);
             mont_ckpt_t ck3;
             mont_ckpt_init(&ck3);
             ck3.status = MONT_CKPT_DONE;
@@ -424,20 +426,20 @@ int main(int argc, char **argv)
             ck3.bitnum = nbits;
             mpz_set_ui(ck3.xout, 12345);
             mont_ckpt_ident(&ck3, 9, 1ull, B1, torsion, nbits, "mpn");
-            mont_ckpt_write(p3, N, &ck3);
+            mont_ckpt_write(checkpoint, p3, N, &ck3);
             const std::string p3bad = p3 + ".noresult";
             check(rewrite_without(p3, p3bad, "XOUT="), "hand-crafted DONE record without a result");
-            check(mont_ckpt_read(p3bad, N, B1, torsion, nbits, &rd2, &why) == 0,
+            check(mont_ckpt_read(checkpoint, p3bad, N, B1, torsion, nbits, &rd2, &why) == 0,
                   "rejects DONE without a result");
-            check(mont_ckpt_read(p3, N, B1, torsion, nbits, &rd2, &why) == 1,
+            check(mont_ckpt_read(checkpoint, p3, N, B1, torsion, nbits, &rd2, &why) == 1,
                   "control: the same record WITH the result is accepted");
-            mont_ckpt_remove(p3);
-            mont_ckpt_remove(p3bad);
+            mont_ckpt_remove(checkpoint, p3);
+            mont_ckpt_remove(checkpoint, p3bad);
             mont_ckpt_clear(&ck3);
         }
 
-        mont_ckpt_remove(path);
-        mont_ckpt_remove(p2);
+        mont_ckpt_remove(checkpoint, path);
+        mont_ckpt_remove(checkpoint, p2);
         mont_ckpt_clear(&ck);
         mont_ckpt_clear(&rd);
         mont_ckpt_clear(&rd2);

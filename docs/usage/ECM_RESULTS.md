@@ -4,7 +4,7 @@ CPU/CUDA Stage1、CPU Edwards Stage2 与 CUDA Stage2 同时维护逐曲线内部
 
 ## 共用发布接口与实现
 
-Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 [publication.h](../../include/ecm/storage/results/publication.h) 和 [publication.cpp](../../src/ecm/storage/results/publication.cpp)。公开头包含拥有字符串/集合的 Submission 数据和实际序列化、发布、seal、恢复导出入口；不包含 JSON 解析实现、文件锁、操作系统句柄、文件读写或 CRC 函数体。
+Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 [results.h](../../include/ecm/io/results.h) 和 [results.cpp](../../src/io/results.cpp)。公开头包含拥有字符串/集合的 Submission 数据和实际序列化、发布、seal、恢复导出入口；不包含 JSON 解析实现、文件锁、操作系统句柄、文件读写或 CRC 函数体。
 
 internal_json/submission_json 接收记录、借用 N 及实际运行元数据，返回协议 JSON 文本。Stage1 的 publish_stage1_batch 接收整批逐曲线结果，负责数值 sigma 排序、去重、双文件发布及恢复。Stage2 的 publish_submission 验证后建立逐曲线 receipt，因子立即发布，NF 按 seal 规则完成任务发布。publish_internal_batch、refresh_internal 保留旧内部账本的读取和恢复能力；refresh_submission_if_owned 恢复提交账本。文件/协议失败抛出异常，任务与队列决定失败策略。
 
@@ -76,7 +76,7 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 15. os.architecture，即 `x86_64`。
 16. timestamp，保留结果中的 UTC 字符串 `YYYY-MM-DD HH:MM:SS`。
 
-Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/ecm/storage/results/publication.cpp)；提交字段和数学一致性验证使用 [公共结果模型](../../src/ecm/storage/results/publication.cpp)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点、算术与因子验证，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
+Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/io/results.cpp)；提交字段和数学一致性验证使用 [公共结果模型](../../src/io/results.cpp)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点、算术与因子验证，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
 
 Stage1 内部 `fft-length=0` 表示没有 GWNUM 变换长度，提交版本使用正的 Prime95 参考容量；`stage1-engine.coverage=B1` 不表示执行过 Stage2。
 
@@ -159,4 +159,4 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 PrimeNet v5 API 0.97 描述的是 `ar` 请求字段与结果类型，不是现代手工提交 JSON 的完整规范；结构还需对照 Prime95 生成器及正式样本。[固定源码与 API 研究](../reference/ECM_RESULT_JSON.md) 列出依据。上述 Montgomery NF 批次已有用户提供的服务器接受回执；Edwards、因子结果及其他提交入口仍需各自验证。AutoPrimeNet 的固定程序名扫描规则未修改。
 
-实现入口：[提交序列化](../../src/ecm/storage/results/publication.cpp) 的 `submission_json`、[账本与原子导出](../../src/ecm/storage/results/publication.cpp) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。
+实现入口：[提交序列化](../../src/io/results.cpp) 的 `submission_json`、[账本与原子导出](../../src/io/results.cpp) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。

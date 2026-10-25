@@ -1,7 +1,8 @@
-#include "ecm/storage/results/publication.h"
-#include "ecm/storage/queue/stage2_progress.h"
+#include "io/stage1_checkpoint.h"
+#include "ecm/io/results.h"
+#include "ecm/io/stage2_checkpoint.h"
 #include "ecm/platform/fingerprint.h"
-#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "ecm/io/save.h"
 #include <fstream>
 #include <iomanip>
 #include <iostream>

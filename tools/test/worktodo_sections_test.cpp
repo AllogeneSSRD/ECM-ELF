@@ -201,13 +201,12 @@ static void test_stage_selection_and_transition() {
     std::remove((path+".edit.lock").c_str());
 }
 
-static void test_ini_priority_sections() {
-    const std::string path="worktodo_ini_sections_test.ini";
-    write_file(path,{"priority=2","[GUI]","priority=below_normal",
-                     "[Worker #1]","priority=1","[GUI]","priority=high",
-                     "[Worker #2]","skip=2"});
-    std::vector<ecm_config::IniLine> lines;
-    check(ecm_config::read_ini(path,lines),"INI with GUI and worker sections opens");
+static void test_toml_priority_sections() {
+    const std::string path="worktodo_sections_test.toml";
+    write_file(path,{"[shared]","priority=2","[gui]","priority=\"high\"",
+                     "[workers.1.shared]","priority=1","[workers.2.shared]","skip=2"});
+    std::vector<ecm_config::TomlLine> lines;
+    check(ecm_config::read_toml(path,lines),"TOML with GUI and worker sections opens");
     const auto value=[](const ecm_config::Entries &entries,const std::string &key) {
         for(const auto &entry:entries)if(entry.first==key)return entry.second;
         return std::string{};
@@ -217,17 +216,21 @@ static void test_ini_priority_sections() {
     check(value(worker1,"priority")=="1" && value(worker2,"priority")=="2",
           "CLI priority ignores GUI process priority and respects worker overrides");
     check(value(worker2,"skip")=="2","worker 2 skip override remains visible");
-    check(value(ecm_config::section_entries(lines,"GUI"),"priority")=="high",
+    check(value(ecm_config::section_entries(lines,"gui"),"priority")=="high",
           "GUI priority remains available to the GUI");
     std::remove(path.c_str());
 }
 
-int main() {
+int main() try {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     test_header_syntax();
     test_first_line_and_advance();
     test_list_workers();
     test_stage_selection_and_transition();
-    test_ini_priority_sections();
+    test_toml_priority_sections();
     printf("\npassed: %d   failed: %d\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
+} catch (const std::exception& error) {
+    std::fprintf(stderr, "%s\n", error.what());
+    return 1;
 }

@@ -1,9 +1,13 @@
+#include "io/files.h"
 // Standalone CPU Edwards continuation. This target's <ecm.h> is libecm's API.
 #include <ecm.h>
-#include "../../storage/save/ecm_edwards_save_reader.h"
-#include "ecm/storage/results/publication.h"
+#include "ecm/io/save.h"
+#include "ecm/io/results.h"
+#include "ecm/core/curve/ecm_edwards_curve.h"
+#include "ecm/platform/stage1_stop.h"
 #include "../configuration/generated/ecm_config_generated.h"
 #include <chrono>
+#include <charconv>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -23,6 +27,13 @@ namespace {
 using namespace ecm_edwards;
 std::string quote(const std::string &s) {return ecm_results::quoted(s);}
 std::string number(const mpz_t x) {return ecm_results::decimal(x);}
+uint64_t decimal(const std::string& text) {
+    uint64_t value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || parsed.ec != std::errc() || parsed.ptr != text.data() + text.size())
+        throw std::runtime_error("expected unsigned decimal integer: " + text);
+    return value;
+}
 void set64(mpz_t x,uint64_t n) {mpz_import(x,1,1,sizeof n,0,0,&n);}
 struct Options {
     std::string save,results="results_cpu_stage2.jsonl",submission,ini,backend="auto",user,computer,aid;
@@ -156,7 +167,7 @@ int main(int argc,char **argv) {
         if(o.dry){std::cout<<"validated "<<end-o.skip<<" curves; B2="<<o.b2<<'\n';return 0;}
         std::string task_key=std::to_string(o.b2);
         for(uint64_t i=o.skip;i<end;++i)task_key+="|"+rows[i].n+"|"+std::to_string(rows[i].sigma)+"|"+std::to_string(rows[i].b1);
-        const auto publication_task=std::to_string(ecm_edwards::hash(task_key));
+        const auto publication_task=std::to_string(ecm_io::fingerprint(task_key));
         ecm_stage1_install_stop_handler();if(o.stop_handle && !ecm_stage1_set_stop_handle(o.stop_handle))throw std::runtime_error("invalid stop handle");
         omp_set_num_threads(static_cast<int>(o.threads));
         std::cout<<"CPU Edwards Stage2 backend="<<o.backend<<" threads="<<o.threads<<" memory_mib="<<o.memory<<" libecm="<<ecm_version()<<std::endl;
@@ -221,7 +232,7 @@ int main(int argc,char **argv) {
             if(stage)report.factors.push_back(number(f.v));
             ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             ecm_results::publish_submission(o.submission,report,n.v);
-            if(!publish_save(o.results,json,true))throw std::runtime_error("result publication failed");
+            ecm_results::append_text_record(o.results,json);
             std::cout<<"completed save-line="<<r.line<<" sigma="<<r.sigma<<" status="<<(stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
         }
         ecm_results::check_stage2_outputs(o.results,o.submission,end>o.skip);

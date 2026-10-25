@@ -1,5 +1,5 @@
 #pragma once
-#include <gmp.h>
+#include "ecm/core/integer.h"
 #include <cstdint>
 #include <cstddef>
 
@@ -11,18 +11,6 @@
 // All inverse/singularity checks use the actual target, even with a Stage2 carrier.
 namespace ecm_edwards {
 enum class Setup { Ready, Factor, Degenerate };
-
-struct Integer {
-    mpz_t v;
-    Integer() {
-        mpz_init(v);
-    }
-    ~Integer() {
-        mpz_clear(v);
-    }
-    Integer(const Integer &) = delete;
-    Integer &operator=(const Integer &) = delete;
-};
 
 // A failed inverse may expose a proper factor. gcd = n instead denotes a
 // degenerate construction, not a factor suitable for publication.
@@ -308,27 +296,4 @@ inline bool point_valid(const mpz_t n, const mpz_t d, mpz_t *p) {
     return !mpz_sgn(a.v);
 }
 
-class Array {
-    mpz_t *p_;
-    size_t size_;
-
-public:
-    explicit Array(size_t size) : p_(new mpz_t[size]), size_(size) {
-        for (size_t i = 0; i < size_; ++i)
-            mpz_init(p_[i]);
-    }
-    ~Array() {
-        for (size_t i = 0; i < size_; ++i)
-            mpz_clear(p_[i]);
-        delete[] p_;
-    }
-    Array(const Array &) = delete;
-    Array &operator=(const Array &) = delete;
-    mpz_t *data() {
-        return p_;
-    }
-    mpz_t &operator[](size_t i) {
-        return p_[i];
-    }
-};
 } // namespace ecm_edwards

@@ -1,6 +1,6 @@
+#include "io/files.h"
 // Unique parent task/queue pipeline and complete isolated curve worker.
 #include "task.h"
-#include "../../storage/queue/owner_lease.h"
 #include "input.h"
 #include "../planning/stage2.h"
 #include "../planning/ecm_stage2_runtime_cache.h"
@@ -10,12 +10,12 @@
 #include "../../platform/ecm_stage2_logging.h"
 #include "../../core/stage2/ecm_stage2_modulus.h"
 #include "ecm_stage2_factorize.h"
-#include "../../storage/queue/ecm_stage2_queue_state.h"
-#include "../../storage/save/ecm_edwards_io.h"
+#include "ecm/io/stage2_checkpoint.h"
+#include "ecm/io/save.h"
 #include "ecm/platform/fingerprint.h"
 #include "ecm/platform/program_version.h"
-#include "ecm/storage/results/publication.h"
-#include "../../storage/results/ecm_result_json.h"
+#include "ecm/io/results.h"
+#include "io/json.h"
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -462,7 +462,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             if(persist)message<<" checkpoint="<<progress.string();
             report(message.str());
         }
-        o.publication_task=persist?state.publication_task:std::to_string(ecm_edwards::hash(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
+        o.publication_task=persist?state.publication_task:std::to_string(ecm_io::fingerprint(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
         bool task_completed=true;
         for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
             poll_inherited_stop();

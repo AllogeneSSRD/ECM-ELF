@@ -1,3 +1,4 @@
+#include "io/stage1_checkpoint.h"
 // ecm_edwards_checkpoint_test.cpp — 分块可恢复标量乘单测.
 // 1) 完整跑一条曲线 → 参考 Qx/Qz.
 // 2) 分块跑, 在第一个 chunk 处中止 → 捕获 checkpoint.

@@ -15,7 +15,7 @@ extern "C" {
  * Thin host-side entry point that mirrors the gmp-ecm GPU call chain.
  * The caller owns the factor buffers and initializes them for `curves` items.
  */
-int opencl_ecm_stage1(mpz_t *factors,
+int opencl_ecm_stage1(void* checkpoint_context, mpz_t *factors,
                       int *array_found,
                       const mpz_t n,
                       const mpz_t s,

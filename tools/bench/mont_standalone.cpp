@@ -9,7 +9,7 @@
  *        torsion default 1 = gmp-ecm convention (lcm(1..B1)); 12 = Prime95 choose12
  * ------------------------------------------------------------------------- */
 #include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"
-#include "../../src/ecm/storage/save/ecm_save.h"
+#include "ecm/io/save.h"
 
 #include <gmp.h>
 #include <stdio.h>

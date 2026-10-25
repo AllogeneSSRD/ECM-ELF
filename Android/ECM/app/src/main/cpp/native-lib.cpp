@@ -1,3 +1,4 @@
+#include "io/files.h"
 #include <jni.h>
 
 #include <android/asset_manager_jni.h>
@@ -12,7 +13,7 @@
 #include "opencl_runtime.h"
 #include "../../../../../../src/ecm/backend/opencl/arithmetic/path_registry.h"
 
-#include "../../../../../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
+#include "../../../../../../src/ecm/backend/opencl/stage1/montgomery/checkpoint.h"
 
 #include <cstdint>
 
@@ -157,7 +158,7 @@ Java_com_example_ecm_MainActivity_nativeInitAssets(
         const char* path = env->GetStringUTFChars(cache_dir, nullptr);
         if (path != nullptr) {
             set_opencl_cache_dir(path);
-            opencl_ecm_set_work_dir(path);
+            ecm_io::set_work_dir(path);
             env->ReleaseStringUTFChars(cache_dir, path);
         }
     }

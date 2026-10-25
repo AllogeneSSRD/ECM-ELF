@@ -65,7 +65,7 @@ GMP-ECM 的 `param` 枚举定义在 `ecm.h:179-189`。所有 Montgomery 形式�
 
 以上除法均指模 `N` 的可逆元；[公共构造入口 `construct`](../../src/ecm/core/curve/ecm_edwards_curve.h#L37)以 Jacobian 坐标求辅助倍点、归一化一次，并检查各分母、`d(1−d)` 的单位性和 `P` 在曲线上。逆元不存在时求 GCD：真因子与退化构造分开报告；`σ=0` 直接视为退化。构造还输出 `a24=(A+2)/4=1/(1−d)`，供转成 Montgomery x-only 后使用；推导和 Prime95 `sigma_type=0` 的坐标约定见[Edwards 数学说明](../reference/ECM_EDWARDS_MATH.md#1-曲线构造atkin-morainsigma_type0)。
 
-调用方接受固定的正 `uint64` σ；固定批次的第 `i` 条使用 `σ+i`，先检查 64 位回绕。未指定 σ 时，每条曲线分别取随机 σ（生成器排除 `σ≤5`）；保存/恢复记录每条曲线的完整 64 位值，不能用批次首值替代各条随机 σ。[CPU 批次](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp#L893)、[CUDA 批次](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp#L197)和[输入校验](../../src/ecm/application/cli/stage1_input.cpp#L117)采用这套身份。固定 σ 可以取生成器不会随机选到的小正整数，但仍须通过构造与单位性检查。
+调用方接受固定的正 `uint64` σ；固定批次的第 `i` 条使用 `σ+i`，先检查 64 位回绕。未指定 σ 时，每条曲线分别取随机 σ（生成器排除 `σ≤5`）；保存/恢复记录每条曲线的完整 64 位值，不能用批次首值替代各条随机 σ。[CPU 批次](../../src/ecm/backend/cpu/stage1/edwards/workflow.cpp)、[CUDA 批次](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp#L197)和[输入校验](../../src/io/normalize.cpp)采用这套身份。固定 σ 可以取生成器不会随机选到的小正整数，但仍须通过构造与单位性检查。
 
 **现有 Edwards 执行路径共享上述同一构造，区别在点算术和标量执行：**
 

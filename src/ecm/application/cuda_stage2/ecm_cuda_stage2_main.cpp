@@ -27,8 +27,8 @@
 #include "../../service/planning/ecm_stage2_runtime_tune.h"
 #include "../../core/stage2/ecm_stage2_geometry.h"
 #include "../../platform/ecm_stage2_logging.h"
-#include "../../storage/save/ecm_edwards_io.h"
-#include "ecm/storage/results/publication.h"
+#include "ecm/io/save.h"
+#include "ecm/io/results.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>

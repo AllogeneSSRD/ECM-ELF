@@ -4,7 +4,7 @@
 namespace ecm_stage1 {
 // Existing host preparation/naming policy. Inputs are borrowed for the call;
 // scalar output and returned names are owned by the caller.
-bool compute_batch_s(mpz_t,double,unsigned torsion=1);
+bool compute_batch_s(mpz_t,double,unsigned torsion=1,const std::string& cache_dir={});
 uint64_t random_sigma_u64();
 std::string stage1_save_prefix(const Stage1Options &);
 std::string stage1_prefixed_save(const std::string &,const std::string &);

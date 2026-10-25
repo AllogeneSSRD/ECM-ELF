@@ -11,7 +11,7 @@
  * ------------------------------------------------------------------------- */
 #include "../../src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.h"
 #include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"
-#include "../../src/ecm/storage/save/ecm_save.h"
+#include "ecm/io/save.h"
 
 #include <gmp.h>
 #include <stdio.h>

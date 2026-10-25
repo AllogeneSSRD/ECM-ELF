@@ -1,83 +1,111 @@
-"""Current Stage1 execution architecture and unchanged arithmetic inventory gate.
+"""Current execution/IO boundaries and frozen arithmetic compatibility gate.
 
-Runtime acceptance uses the task/file contracts, real input matrix, differential
-saved endpoints and checkpoint compatibility tests. Approved host execution and
-publication changes are explicitly enumerated; device arithmetic stays frozen.
+Numerical and persistence contracts run separately with the real workers. This
+check permits explicit checkpoint borrowing in CUDA host orchestration, while
+requiring every remaining device/core token to match the pre-migration source.
 """
 import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
-ROOT=Path(__file__).resolve().parents[2]
-BASELINE='6df207b'
-APPROVED={
-    'src/ecm/backend/cpu/stage1/legacy_executor.cpp',
-    'src/ecm/backend/cpu/stage1/legacy_executor.h',
-    'src/ecm/backend/cuda/stage1/execution.h',
-    'src/ecm/backend/cuda/stage1/montgomery/workflow.cpp',
-    'src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp',
-    'src/ecm/backend/cuda/stage1/montgomery/checkpoint.h',
-    'src/ecm/backend/cuda/stage1/montgomery/runtime.cu',
-    'src/ecm/backend/cuda/stage1/edwards/workflow.cpp',
-    'src/ecm/backend/opencl/stage1/montgomery/workflow.cpp',
-    'src/ecm/backend/opencl/stage1/montgomery/workflow.h',
-    'src/ecm/backend/opencl/stage1/montgomery/engine.cpp',
-}
+ROOT = Path(__file__).resolve().parents[2]
+BASELINE = '0ba1462'
+METHODS = {
+    'set_backup_limit':'ecm_stage1_set_backup_limit', 'backup_limit':'ecm_stage1_backup_limit',
+    'candidates':'ecm_stage1_checkpoint_candidates', 'mark_bad_primary':'ecm_stage1_mark_bad_primary',
+    'commit':'ecm_stage1_commit_checkpoint', 'remove':'ecm_stage1_remove_checkpoints',
+    'set_path':'ecm_stage1_set_checkpoint_path', 'path':'ecm_stage1_checkpoint_path',
+    'begin':'ecm_stage1_begin_batch', 'pending':'ecm_stage1_checkpoint_pending',
+    'validate_pending':'ecm_stage1_validate_pending_checkpoint', 'saved_sigma':'ecm_stage1_saved_sigma',
+    'sigma':'ecm_stage1_batch_sigma', 'read_checkpoint_blob':'ecm_stage1_read_checkpoint_blob',
+    'read_blob':'ecm_stage1_read_blob', 'write_blob':'ecm_stage1_write_blob',
+    'import_payload':'ecm_stage1_import_gpu_payload', 'close':'ecm_stage1_end_batch'}
+TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//[^\n]*|/\*.*?\*/|[A-Za-z_][A-Za-z_0-9]*|[0-9]+|[^\s]', re.S)
+
+def tokens(text):
+    text = re.sub(r'^\s*#\s*include[^\n]*', '', text, flags=re.M)
+    return [m.group() for m in TOKEN.finditer(text) if not m.group().startswith(('//', '/*'))]
+
+def borrowed(text):
+    text = re.sub(r'ecm_stage1_checkpoint::Context\s*&\s*checkpoint\s*,\s*', '', text)
+    text = re.sub(r'ecm_stage1_checkpoint::Context\s+checkpoint\s*;', '', text)
+    for method, original in METHODS.items():
+        text = re.sub(r'checkpoint\.' + method + r'\s*\(', original + '(', text)
+    for name in ('checkpoint_record','save_checkpoint','run_mont_resident','run_mont_runtime','execute_mont_batch'):
+        text = re.sub(r'\b'+name+r'\(checkpoint\s*,\s*', name+'(', text)
+        text = text.replace(name+'(checkpoint)', name+'()')
+    return text
+
+def definition(text, marker):
+    start = text.index(marker)
+    opening = text.index('{', start)
+    depth = 0
+    for index in range(opening, len(text)):
+        if text[index] == '{': depth += 1
+        elif text[index] == '}':
+            depth -= 1
+            if not depth:
+                end = index + 1
+                if text[end:end+1] == ';': end += 1
+                return text[start:end]
+    raise AssertionError(marker)
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--output',type=Path,required=True)
-    args=p.parse_args();args.output.mkdir(parents=True,exist_ok=False)
-    old_names=set(subprocess.check_output(['git','ls-tree','-r','--name-only',BASELINE],cwd=ROOT,text=True).splitlines())
-    old=lambda n:subprocess.check_output(['git','show',BASELINE+':'+n],cwd=ROOT).decode('utf-8-sig').replace('\r\n','\n')
-    read=lambda n:(ROOT/n).read_text(encoding='utf-8-sig')
-    unchanged={};changed=[]
-    for folder in ['src/ecm/backend','src/ecm/core']:
-        for path in (ROOT/folder).rglob('*'):
-            if path.suffix not in {'.cpp','.cu','.h','.cuh'}:continue
-            name=path.relative_to(ROOT).as_posix()
-            if name not in old_names:
-                assert name=='src/ecm/backend/cuda/stage1/montgomery/construction.h',('unreviewed computation file',name)
-                continue
-            if old(name)!=read(name):
-                assert name in APPROVED,('unreviewed arithmetic change',name)
-                changed.append(name)
-            else:unchanged[name]=hashlib.sha256(path.read_bytes()).hexdigest()
-    assert set(changed)==APPROVED
-    # Verify the only edited .cu changes layout description and checkpoint status,
-    # preserving the existing ladder launch and arithmetic implementation exactly.
-    name='src/ecm/backend/cuda/stage1/montgomery/runtime.cu'
-    expected=old(name).replace('#include "checkpoint.h"','#include "checkpoint.h"\n#include "construction.h"')
-    edits=[('  const bool param0 = (gpu_param == 0);','  const auto layout=ladder_construction(uint32_t(gpu_param));\n  const bool param0 = layout.full_sigma;'),
-           ('  const bool suyama_layout = param0 || param2;','  const bool suyama_layout = layout.words==7;'),
-           ('const uint32_t words_per_curve = suyama_layout ? 7u : 5u;','const uint32_t words_per_curve = layout.words;'),
-           ('const int      p1_word = suyama_layout ? 3 : 1;','const int      p1_word = int(layout.first_x);'),
-           ('const int      p2_word = suyama_layout ? 5 : 3;','const int      p2_word = int(layout.second_x);'),
-           ('      const int saved=ckpt_path.empty()?ECM_NO_FACTOR_FOUND:\n          save_checkpoint(ckpt_filename,&header,data,data_size);\n      if(saved!=ECM_NO_FACTOR_FOUND)',
-            '      const bool saved=ckpt_path.empty() || save_checkpoint(ckpt_filename,&header,data,data_size);\n      if(!saved)')]
-    for before,after in edits:
-        assert expected.count(before)==1,before
-        expected=expected.replace(before,after)
-    expected=expected.replace('saved == ECM_NO_FACTOR_FOUND','saved')
-    assert expected==read(name),'unexpected CUDA runtime change'
-    assert read('config/ecm_options.json')==old('config/ecm_options.json'),'configuration changed'
-    task=read('src/ecm/service/stage1/task.cpp')
-    assert 'deps.execute(request, execution)' in task and 'publish_batch(' in task
-    assert 'LegacyExecutionResult' not in task and 'prepare_failed' not in task
-    for n in ['src/ecm/storage/save/publication.h','src/ecm/storage/save/publication.cpp']:
-        assert 'Capture' not in read(n) and 'thread_local' not in read(n)
-    assert 'execute_stage1' not in read('src/ecm/service/stage1/execution.cpp')
-    for curve in ['montgomery','edwards']:
-        workflow=read(f'src/ecm/backend/cuda/stage1/{curve}/workflow.cpp')
-        assert 'publish_save(' not in workflow and 'append_save_lines' not in workflow
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args(); args.output.mkdir(parents=True, exist_ok=False)
+    old = lambda name: subprocess.check_output(['git','show',BASELINE+':'+name],cwd=ROOT).decode('utf-8-sig')
+    read = lambda name: (ROOT/name).read_text(encoding='utf-8-sig')
+    names = subprocess.check_output(['git','ls-tree','-r','--name-only',BASELINE],cwd=ROOT,text=True).splitlines()
+    hashes = {}; device = []; core = []
+    for name in names:
+        path = ROOT/name
+        if path.suffix in ('.cu','.cuh','.cl') and name.startswith(('src/ecm/backend/','kernels/')):
+            assert tokens(borrowed(read(name))) == tokens(old(name)), ('device arithmetic changed',name)
+            device.append(name)
+        if name.startswith('src/ecm/core/') and path.suffix in ('.cpp','.h'):
+            expected = old(name)
+            if name.endswith('curve/ecm_edwards_curve.h'):
+                owner = read('include/ecm/core/integer.h')
+                for marker in ('struct Integer {', 'class Array {'):
+                    part = definition(expected,marker)
+                    assert tokens(part) == tokens(definition(owner,marker)), ('integer owner changed',marker)
+                    expected = expected.replace(part,'')
+            assert tokens(read(name)) == tokens(expected), ('core arithmetic changed',name)
+            core.append(name)
+        if path.is_file() and name.startswith('src/ecm/backend/cpu/arithmetic/'):
+            assert tokens(read(name)) == tokens(old(name)), ('CPU arithmetic changed',name)
+        if path.is_file() and name.startswith('src/ecm/backend/cpu/stage1/'):
+            current = read(name)
+            current = re.sub(r', const std::string& cache_dir(?: = \{\})?', '', current)
+            current = current.replace('torsion, cache_dir, &status',
+                                      'torsion, ecm_exp_cache_get_dir(), &status')
+            assert tokens(current) == tokens(old(name)), ('CPU scalar/SIMD arithmetic changed',name)
+        if path.is_file() and name.startswith(('src/ecm/core/','src/ecm/backend/')):
+            hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for curve in ('edwards','montgomery'):
+        for backend in ('cpu','cuda'):
+            workflow = read(f'src/ecm/backend/{backend}/stage1/{curve}/workflow.cpp')
+            assert 'LegacyExecutionResult' not in workflow and 'take_computation_result' not in workflow
+            assert 'ComputationResult' in workflow
+            assert 'publish_save(' not in workflow and 'append_save_lines' not in workflow
+    task = read('src/ecm/service/stage1/task.cpp')
+    assert 'ecm_stage1_checkpoint::Context session;' in task
+    assert 'deps.execute(request, execution, session)' in task
+    assert 'struct Context::State' in read('src/io/stage1_checkpoint.cpp')
+    for text in (read('src/io/stage1_checkpoint.cpp'),read('src/io/exponent_cache.cpp')):
+        assert 'thread_local' not in text and 'g_cache_dir' not in text
+    assert not list((ROOT/'src/ecm/storage').rglob('*'))
+    assert not list((ROOT/'include/ecm/storage').rglob('*'))
+    assert read('config/ecm_options.json') == old('config/ecm_options.json'), 'configuration schema changed'
     subprocess.run(['python','tools/gen/generate_ecm_config.py','--check'],cwd=ROOT,check=True)
-    result=dict(complete=True,baseline=BASELINE,unchanged_computation_files=len(unchanged),
-                approved_host_files=sorted(changed),cuda_arithmetic_unchanged=True,
-                existing_configuration_unchanged=True,implicit_capture_removed=True,
-                source_hashes=unchanged,gpu_runs=0)
+    result = dict(complete=True,baseline=BASELINE,device_files=len(device),core_files=len(core),
+                  explicit_context_only_in_device_orchestration=True,core_arithmetic_unchanged=True,
+                  owned_cpu_cuda_results=True,storage_removed=True,source_hashes=hashes,gpu_runs=0)
     (args.output/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in result.items() if k!='source_hashes'}))
 
-if __name__=='__main__':main()
+if __name__ == '__main__': main()

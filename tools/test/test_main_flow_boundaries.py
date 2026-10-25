@@ -35,7 +35,9 @@ def main():
             public.append(name)
             # Every exposed family has a corresponding implementation family;
             # header-only models need not invent a same-named .cpp.
-            assert (ROOT/'src/ecm'/path.parent.relative_to(ROOT/'include/ecm')).is_dir(), name
+            family = path.parent.relative_to(ROOT/'include/ecm')
+            implementation = ROOT/'src'/family if family.parts[0] == 'io' else ROOT/'src/ecm'/family
+            assert implementation.is_dir(), name
         graph[path] = []
         for inc in re.findall(r'(?m)^\s*#\s*include\s*["<]([^">]+)[">]',
                               path.read_text(encoding='utf-8-sig')):
@@ -75,8 +77,11 @@ def main():
     assert len(re.findall(r'\brun_stage1_task\s*\(',driver)) == 2
     assert 'NextQueueTask' not in driver
     assert not re.search(r'run_stage1_impl|Stage1TaskSession|class .*Runner', driver)
-    session = task[task.index('class Stage1TaskSession'):task.index('TaskResult run_stage1_task')]
-    assert not re.search(r'\brun\s*\(', session)
+    assert 'Stage1TaskSession' not in task
+    assert 'ecm_stage1_checkpoint::Context session;' in task
+    assert 'deps.execute(request, execution, session)' in task
+    container = (ROOT/'src/io/stage1_checkpoint.cpp').read_text(encoding='utf-8-sig')
+    assert 'struct Context::State' in container and 'thread_local' not in container
     result = dict(complete=True, files=len(files), public_headers=len(public),
                   include_edges=len(edges), include_cycles=0, public_private_edges=0,
                   task_entry_points=1, queue_entry_points=1,

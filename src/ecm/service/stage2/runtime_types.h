@@ -1,4 +1,5 @@
 #pragma once
+
 // Private normalized invocation/state shared by the Stage2 executable modules.
 // TOML Settings stays in the application; computation modules borrow no parser.
 #ifndef NOMINMAX

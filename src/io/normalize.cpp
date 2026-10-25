@@ -3,8 +3,9 @@
 #include "io/cli.h"
 #include "io/worktodo.h"
 #include <cmath>
+#include <filesystem>
 #include <limits>
-#include "ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "io/stage1_checkpoint.h"
 #include "ecm/service/stage1/preparation.h"
 #include <sstream>
 #include <regex>
@@ -22,6 +23,16 @@
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
 namespace ecm_stage1_app {
+
+// Resolve optional cache policy once. Empty input means the existing executable-directory default;
+// an explicit disable token remains empty and is never replaced again during execution.
+static std::string normalized_cache_dir(const std::string& value, const std::string& exe) {
+    if (value == "off" || value == "none" || value == "0" || value == "-")
+        return {};
+    const auto path = value.empty() ? (exe.empty() ? std::string(".") : exe) : value;
+    return std::filesystem::absolute(std::filesystem::u8path(path)).lexically_normal().u8string();
+}
+
 void normalize_assignment(Ecm2Task& task) {
     if (!task.has_curves)
         task.curves_to_run = 100; // Prime95 ECM/ECM2 grammar default.
@@ -203,6 +214,8 @@ bool normalize_direct(const CliInput& input, const EcmQueueConfig& cfg,
                                           : static_cast<unsigned long>(std::llround(ms));
         }
         opt.persistence.tmp_dir = normalize_path_local(input.tmp_dir.empty() ? "." : input.tmp_dir);
+        opt.persistence.exponent_cache_dir =
+            normalized_cache_dir(input.exp_cache, get_exe_dir_local());
         out.save_file = input.savefilename;
         out.append_save = input.saveappend;
         // Keep exact k*b^n+c metadata when the direct expression supplies it.
@@ -358,6 +371,7 @@ ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg, const std
     opt.execution.gpu_sub_path = cfg.kernel_sub;
     opt.execution.gpu_special_mult_path = cfg.kernel_special_mult;
     opt.persistence.save_name_pattern = cfg.save_name_pattern;
+    opt.persistence.exponent_cache_dir = normalized_cache_dir(cfg.exp_cache, exe);
     const auto ms = cfg.ckpt_seconds * 1000.0;
     opt.persistence.ckpt_ms = ms <= 0 ? 0
                               : ms >= double(ULONG_MAX)

@@ -1,7 +1,7 @@
 // Exercise the production cache/outbox implementations with deterministic
 // scheduling at their existing C-file and queue-publication calls.
 #include "io/worktodo.h"
-#include "sync/files.h"
+#include "io/files.h"
 #include <windows.h>
 #include <gmp.h>
 #include <algorithm>
@@ -70,11 +70,11 @@ bool append(const std::string& path, const std::string& finished, int worker,
 
 #define fopen schedule::open
 #define fclose schedule::close
-#include "../../src/ecm/storage/cache/ecm_stage1_exp_cache.cpp"
+#include "io/exponent_cache.cpp"
 #undef fopen
 #undef fclose
 #define ecm_worktodo_append_unique schedule::append
-#include "../../src/ecm/storage/transfer/ecm_stage2_transfer.cpp"
+#include "sync/stage2.cpp"
 #undef ecm_worktodo_append_unique
 
 static void require(bool value, const char* message) {
@@ -169,7 +169,7 @@ static void outbox_race(const std::filesystem::path& root) {
     require(park.get(), "concurrent park failed");
     size_t remaining = 0;
     require(ecm_stage2_transfer_flush(cfg.pending, remaining, error), "retry outbox");
-    const auto bytes = ecm_sync::read_file(std::filesystem::u8path(cfg.worktodo));
+    const auto bytes = ecm_io::read_file(std::filesystem::u8path(cfg.worktodo));
     require(bytes.find(first) != std::string::npos, "first handoff missing");
     require(bytes.find(second) != std::string::npos, "flush discarded concurrent parked handoff");
 }
@@ -185,17 +185,17 @@ static void outbox_failures(const std::filesystem::path& root) {
     require(!std::filesystem::exists(cfg.pending), "failed park created outbox");
     std::filesystem::remove(blocked);
     require(ecm_stage2_transfer_park(cfg, line, error), "park retry failed");
-    const auto original = ecm_sync::read_file(cfg.pending);
+    const auto original = ecm_io::read_file(cfg.pending);
     std::filesystem::create_directory(blocked);
     size_t remaining = 0;
     require(!ecm_stage2_transfer_flush(cfg.pending, remaining, error),
             "failed acknowledgement reported success");
-    require(remaining == 1 && ecm_sync::read_file(cfg.pending) == original,
+    require(remaining == 1 && ecm_io::read_file(cfg.pending) == original,
             "acknowledgement failure lost responsibility");
     std::filesystem::remove(blocked);
     require(ecm_stage2_transfer_flush(cfg.pending, remaining, error) && remaining == 0,
             "acknowledgement retry failed");
-    const auto queue = ecm_sync::read_file(cfg.worktodo);
+    const auto queue = ecm_io::read_file(cfg.worktodo);
     const auto first = queue.find(line);
     require(first != std::string::npos && queue.find(line, first + 1) == std::string::npos,
             "acknowledgement retry duplicated assignment");

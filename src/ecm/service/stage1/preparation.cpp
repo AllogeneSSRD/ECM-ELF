@@ -1,7 +1,7 @@
 #include "preparation.h"
 #include "ecm/core/stage1/selection.h"
-#include "../../storage/cache/ecm_stage1_exp_cache.h"
-#include "../../storage/save/ecm_edwards_io.h"
+#include "io/exponent_cache.h"
+#include "ecm/io/save.h"
 #include "ecm/platform/logging.h"
 #include <cmath>
 #include <chrono>
@@ -25,7 +25,7 @@
 
 namespace ecm_stage1 {
 using Stage1Options=Stage1Options;
-bool compute_batch_s(mpz_t s, double B1, unsigned torsion){
+bool compute_batch_s(mpz_t s, double B1, unsigned torsion, const std::string& cache_dir){
     if(B1 < 2.0) {
         mpz_set_ui(s, torsion);
         return true;
@@ -37,7 +37,7 @@ bool compute_batch_s(mpz_t s, double B1, unsigned torsion){
     /* The exponent is cached on disk (validated on load, see ecm_stage1_exp_cache.h): at
        B1 = 260e6 building it costs ~10 s and every task in a worktodo would repeat that. */
     std::string status;
-    if (!ecm_build_lcm_exponent_cached(s, limit64, torsion, ecm_exp_cache_get_dir(), &status)) {
+    if (!ecm_build_lcm_exponent_cached(s, limit64, torsion, cache_dir, &status)) {
         return false;
     }
     ecm_ts_fprintf(stdout, "stage1 exponent built: %s (torsion=%u)\n", status.c_str(), torsion);

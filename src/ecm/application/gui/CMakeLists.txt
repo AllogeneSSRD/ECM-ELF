@@ -44,7 +44,7 @@ add_executable(ecm_gui WIN32
     worktodo_gen.cpp
     ${ECM_GUI_SOURCES})
 target_include_directories(ecm_gui PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${ECM_IMGUI_DIR})
 target_link_libraries(ecm_gui PRIVATE
@@ -93,19 +93,19 @@ add_dependencies(ecm_gui ecm_gui_localization)
 # ---------------------------------------------------------------------------
 
 add_executable(ecm_gui_fake_worker EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/fake_worker.cpp")
-target_include_directories(ecm_gui_fake_worker PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(ecm_gui_fake_worker PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(ecm_gui_fake_worker PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_fake_worker PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_fake_worker)
 
 add_executable(ecm_gui_results_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/results_test.cpp" results.cpp)
-target_include_directories(ecm_gui_results_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(ecm_gui_results_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(ecm_gui_results_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_results_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_results_test)
 
 add_executable(ecm_gui_log_parse_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/log_parse_test.cpp" log_parse.cpp)
-target_include_directories(ecm_gui_log_parse_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(ecm_gui_log_parse_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(ecm_gui_log_parse_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_log_parse_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_log_parse_test)
@@ -114,7 +114,7 @@ ecm_tool_output_root(ecm_gui_log_parse_test)
 # tools/test/test_gui_generator.ps1 can compare its output byte-for-byte with
 # tools/ecm_worktodo/ecm.py.
 add_executable(ecm_gui_gen_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/gen_test.cpp" worktodo_gen.cpp)
-target_include_directories(ecm_gui_gen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(ecm_gui_gen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(ecm_gui_gen_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_gen_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_gen_test)
@@ -123,7 +123,7 @@ ecm_tool_output_root(ecm_gui_gen_test)
 add_executable(ecm_gui_controller_test EXCLUDE_FROM_ALL
     "${CMAKE_SOURCE_DIR}/tools/test/gui/worker_controller_test.cpp"
     worker_controller.cpp toml_file.cpp worker_proc.cpp log_parse.cpp platform_win32.cpp)
-target_include_directories(ecm_gui_controller_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(ecm_gui_controller_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(ecm_gui_controller_test PRIVATE cxx_std_17)
 target_compile_options(ecm_gui_controller_test PRIVATE /W3 /utf-8)
 target_link_libraries(ecm_gui_controller_test PRIVATE user32 gdi32 comdlg32 shell32)

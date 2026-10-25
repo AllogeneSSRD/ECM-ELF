@@ -1,5 +1,5 @@
 #pragma once
-#include "../../storage/results/ecm_result_json.h"
+#include "io/json.h"
 
 namespace ecmgui_v2 {
 // Composite input is a collection of prime-field analyses, never a claimed

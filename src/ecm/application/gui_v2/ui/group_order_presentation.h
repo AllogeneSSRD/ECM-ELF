@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../storage/results/ecm_result_json.h"
+#include "io/json.h"
 #include <string>
 
 namespace ecmgui_v2::ui {

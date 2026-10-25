@@ -13,7 +13,7 @@ if(NOT ECM_GROUP_ORDER_GMP_INCLUDE STREQUAL "${ECM_GROUP_ORDER_GMP_ROOT}/include
 endif()
 add_library(ecm_group_order STATIC group_order.cpp)
 target_compile_features(ecm_group_order PUBLIC cxx_std_17)
-target_include_directories(ecm_group_order PUBLIC "${ECM_GROUP_ORDER_REPO}/src" "${ECM_GROUP_ORDER_GMP_INCLUDE}")
+target_include_directories(ecm_group_order PUBLIC "${ECM_GROUP_ORDER_REPO}/src" "${ECM_GROUP_ORDER_REPO}/include" "${ECM_GROUP_ORDER_GMP_INCLUDE}")
 target_link_libraries(ecm_group_order PUBLIC "${ECM_GROUP_ORDER_GMP_LIBRARY}")
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_executable(group_order_probe "${ECM_GROUP_ORDER_REPO}/tools/test/group_order_probe.cpp")

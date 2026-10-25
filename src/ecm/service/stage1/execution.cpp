@@ -1,7 +1,6 @@
 #include "execution.h"
 #include <stdexcept>
-#include "../../backend/cpu/stage1/legacy_executor.h"
-#include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "../../backend/cpu/stage1/execution.h"
 #if ECM_HAS_CUDA_STAGE1
 #include "../../backend/cuda/stage1/execution.h"
 #else

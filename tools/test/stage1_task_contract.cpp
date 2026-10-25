@@ -1,10 +1,8 @@
 #include "ecm/service/stage1/task.h"
 #include "../../src/ecm/service/stage1/execution_contract.h"
-#include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
-#include "../../src/ecm/storage/checkpoint/ecm_stage1_binary.h"
-#include "../../src/ecm/storage/save/publication.h"
-#include "../../src/ecm/storage/save/ecm_save.h"
-#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "io/stage1_checkpoint.h"
+#include "io/stage1_binary.h"
+#include "ecm/io/save.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -43,7 +41,8 @@ static int window() {return 8;}
 // Computation is replaced at the private legacy seam. Real task sequencing,
 // checkpoint locking, publication, result ownership and status mapping run.
 static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::string &save,bool,
-                   const std::string &,ExecutionOptions &options,LegacyExecutionResult *out) {
+                   const std::string &,ExecutionOptions &options,LegacyExecutionResult *out,
+                   ecm_stage1_checkpoint::Context& checkpoint) {
     ++calls;
     require(options.stage1_curves==0 && options.stage1_t0_ms==0,"execution state reused");
     options.stage1_curves=count;options.stage1_t0_ms=123;
@@ -51,8 +50,8 @@ static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::s
     out->curves=count;
     out->sigmas=static_cast<uint64_t *>(std::malloc(sizeof(uint64_t)*count));
     require(out->sigmas!=nullptr,"sigma allocation");
-    for(uint32_t i=0;i<count;++i)out->sigmas[i]=ecm_stage1_batch_sigma(i,26+i);
-    require(ecm_stage1_write_blob(ecm_stage1_curve_record(0),"task-contract-state"),"checkpoint write");
+    for(uint32_t i=0;i<count;++i)out->sigmas[i]=checkpoint.sigma(i,26+i);
+    require(checkpoint.write_blob(ecm_stage1_curve_record(0),"task-contract-state"),"checkpoint write");
     if(mode=="selection_snapshot") {
 #ifdef _WIN32
         require(_putenv_s("ECM_GPU_STAGE1_ALGO","bad")==0,"environment mutation");
@@ -60,7 +59,7 @@ static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::s
         require(setenv("ECM_GPU_STAGE1_ALGO","bad",1)==0,"environment mutation");
 #endif
         require(options.gpu_algorithm=="resident","execution selection did not retain snapshot");
-        std::ifstream file(ecm_stage1_checkpoint_path(),std::ios::binary);
+        std::ifstream file(checkpoint.path(),std::ios::binary);
         const std::string bytes{std::istreambuf_iterator<char>(file),{}};
         ecm_stage1_binary::Reader in(bytes);in.take(8);in.u32();in.u32();const auto identity=in.take(in.u64());
         require(identity.size()>=13 && identity.substr(identity.size()-13)=="|gpu|resident","task identity differs from execution selection");
@@ -115,9 +114,10 @@ static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::s
     return out->ret;
 }
 
-static ComputationResult execute(const Stage1Request &r,ExecutionOptions &options) {
+static ComputationResult execute(const Stage1Request &r,ExecutionOptions &options,
+                                  ecm_stage1_checkpoint::Context& checkpoint) {
     LegacyExecutionResult raw;
-    const auto code=legacy_execute(r.modulus,r.b1,r.b2,r.curves,r.save_file,r.append_save,r.expression,options,&raw);
+    const auto code=legacy_execute(r.modulus,r.b1,r.b2,r.curves,r.save_file,r.append_save,r.expression,options,&raw,checkpoint);
     return take_computation_result(std::move(raw),code,ecm_stage1_stop_requested()!=0);
 }
 

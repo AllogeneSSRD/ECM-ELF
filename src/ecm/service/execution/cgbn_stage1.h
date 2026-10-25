@@ -30,7 +30,7 @@
 extern "C" {
 #endif
 
-int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
+int cgbn_ecm_stage1(void* checkpoint_context, mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint32_t *sigma,
              unsigned long checkpoint_interval_ms,

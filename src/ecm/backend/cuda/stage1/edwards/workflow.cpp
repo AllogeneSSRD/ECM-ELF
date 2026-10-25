@@ -1,16 +1,17 @@
-#include "ecm/storage/results/publication.h"
+#include "ecm/io/results.h"
 #include "../execution.h"
 #include "../../../../service/stage1/preparation.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "io/stage1_checkpoint.h"
 #include "ecm/platform/logging.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+using ecm_stage1::ComputationResult;
 using ecm_stage1::compute_batch_s;
+using ecm_stage1::CurveKind;
 using ecm_stage1::ensure_dir;
-using ecm_stage1::LegacyExecutionResult;
 using ecm_stage1::mont_format_save_name;
 using ecm_stage1::random_sigma_u64;
 using ecm_stage1::stage1_now_ms;
@@ -21,8 +22,8 @@ using ecm_stage1::validate_stage1_factor;
 #include "naf.h"
 #include "runtime.h"
 #include "ecm/core/stage1/scalar.h"
-#include "../../../../storage/save/ecm_edwards_io.h"
-#include "../../../../storage/checkpoint/ecm_stage1_binary.h"
+#include "ecm/io/save.h"
+#include "io/stage1_binary.h"
 #include "ecm/platform/stage1_progress.h"
 #include <iterator>
 #include <stdexcept>
@@ -32,6 +33,7 @@ using ecm_stage1::validate_stage1_factor;
 
 namespace ed_gpu_driver {
 struct Progress {
+    ecm_stage1_checkpoint::Context& checkpoint;
     using Clock = std::chrono::steady_clock;
     Batch& b;
     mpz_srcptr n, scalar;
@@ -46,10 +48,11 @@ struct Progress {
     bool printed = false, line_open = false;
     ecm_stage1_gpu_progress::SpeedWindow speed;
 
-    Progress(Batch& batch, mpz_srcptr modulus, mpz_srcptr exponent, const Stage1Options& options,
-             const std::string& checkpoint, uint64_t bound, uint64_t bits,
+    Progress(ecm_stage1_checkpoint::Context& owner, Batch& batch, mpz_srcptr modulus,
+             mpz_srcptr exponent, const Stage1Options& options,
+             const std::string& checkpoint_path, uint64_t bound, uint64_t bits,
              const EcmEdwardsNafMetrics* measurements, Clock::time_point start)
-        : b(batch), n(modulus), scalar(exponent), opt(options), path(checkpoint), b1(bound),
+        : checkpoint(owner), b(batch), n(modulus), scalar(exponent), opt(options), path(checkpoint_path), b1(bound),
           total(bits), last(Clock::now()), metrics(measurements), initialization_start(start) {
     }
 
@@ -126,7 +129,7 @@ static bool progress(uint32_t done, void* context) {
         bool saved = true;
         try {
             if (!p.path.empty())
-                saved = save_checkpoint(p.path, p.b, p.n, p.scalar, p.b1);
+                saved = save_checkpoint(p.checkpoint, p.path, p.b, p.n, p.scalar, p.b1);
         } catch (const std::exception& error) {
             saved = false;
             ecm_ts_fprintf(stderr, "ERROR: %s\n", error.what());
@@ -160,35 +163,29 @@ static bool progress(uint32_t done, void* context) {
 
 ecm_stage1::ComputationResult
 ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
-                                    ecm_stage1::ExecutionOptions& opt) {
+                                    ecm_stage1::ExecutionOptions& opt, ecm_stage1_checkpoint::Context& checkpoint) {
     const auto N = request.modulus;
     const auto n = N;
     const auto B1 = request.b1, B2 = request.b2, b1 = B1, b2 = B2;
     const auto curves = request.curves;
     const auto& n_expr = request.expression;
-    LegacyExecutionResult raw;
-    auto* out = &raw;
+    ComputationResult result;
 
     using namespace ed_gpu_driver;
-    *out = LegacyExecutionResult{};
-    out->curves = curves;
     if (!curves) {
-        out->fail(ecm_stage1::FailureSource::Preparation);
-        return ecm_stage1::take_computation_result(std::move(raw), ECM_ERROR,
-                                                   ecm_stage1_stop_requested() != 0);
+        result.fail(ecm_stage1::FailureSource::Preparation);
+        return result;
     }
     auto phase = ecm_stage1::FailureSource::Preparation;
     try {
-        out->allocate_curves(curves);
-        std::fill(out->curve_kinds.begin(), out->curve_kinds.end(),
-                  LegacyExecutionResult::CurveKind::Failed);
+        result.curves.resize(curves);
         (void)n_expr;
         // Prepare: scalar and explicit algorithm requirements define recovery admission.
         const auto initialization_start = Progress::Clock::now();
         if (opt.execution.naf_w != 0 && (opt.execution.naf_w < 2 || opt.execution.naf_w > 12))
             throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
         Integer scalar;
-        if (!compute_batch_s(scalar.v, b1, 48))
+        if (!compute_batch_s(scalar.v, b1, 48, opt.persistence.exponent_cache_dir))
             throw std::runtime_error("cannot build Edwards exponent");
         if (!opt.persistence.tmp_dir.empty() && !ensure_dir(opt.persistence.tmp_dir))
             throw std::runtime_error("cannot create Edwards save directory");
@@ -219,7 +216,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         }
         // Restore candidates: decode first; accept only a compatible construction/layout.
         bool selected_payload = false;
-        ecm_stage1_validate_pending_checkpoint(
+        checkpoint.validate_pending(
             [&](const std::vector<std::string>& records, std::vector<uint64_t>& sigmas) {
                 using namespace ecm_stage1_checkpoint;
                 if (records.size() != curves || sigmas.size() != curves)
@@ -271,7 +268,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                            batch.done, batch.window, batch.doubling, path.c_str());
         if (!restored && !path.empty()) {
             const auto decoded =
-                restore_checkpoint(path, batch, n, scalar.v, uint64_t(b1), opt.identity.sigma_fixed,
+                restore_checkpoint(checkpoint, path, batch, n, scalar.v, uint64_t(b1), opt.identity.sigma_fixed,
                                    opt.execution.naf_w != 0, dbl_env != nullptr, mode_fixed);
             if (decoded.state == ecm_stage1_checkpoint::RestoreState::Incompatible ||
                 decoded.state == ecm_stage1_checkpoint::RestoreState::IoFailure)
@@ -279,7 +276,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             restored = decoded.restored();
         }
         std::string existing;
-        if (!restored && !path.empty() && !ecm_stage1_read_blob(path, existing)) {
+        if (!restored && !path.empty() && !checkpoint.read_blob(path, existing)) {
             // Pre-container GPU Edwards used ed_<old-pattern>.save.gpu.ckpt.
             for (const auto& pattern :
                  {std::string("m{n}_{b1}.save"), opt.persistence.save_name_pattern}) {
@@ -293,7 +290,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 saved.sigmas = batch.sigmas;
                 saved.window = batch.window;
                 saved.doubling = batch.doubling;
-                if (restore_checkpoint(legacy, saved, n, scalar.v, uint64_t(b1),
+                if (restore_checkpoint(checkpoint, legacy, saved, n, scalar.v, uint64_t(b1),
                                        opt.identity.sigma_fixed, opt.execution.naf_w != 0,
                                        dbl_env != nullptr, mode_fixed)
                         .restored()) {
@@ -309,7 +306,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                         mpz_set(batch.factors[i], saved.factors[i]);
                     for (size_t i = 0; i < size_t(curves) * 9; ++i)
                         mpz_set(batch.state[i], saved.state[i]);
-                    if (!ecm_stage1_import_gpu_payload(
+                    if (!checkpoint.import_payload(
                             checkpoint_body(batch, n, scalar.v, uint64_t(b1)), batch.sigmas))
                         throw std::runtime_error("cannot import legacy Edwards checkpoint");
                     ecm_ts_fprintf(
@@ -323,32 +320,31 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         }
         // Construct only when no compatible saved batch was accepted.
         if (!restored) {
-            if (!path.empty() && ecm_stage1_read_blob(path, existing))
+            if (!path.empty() && checkpoint.read_blob(path, existing))
                 throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
             // Sigma selection and curve parameterization are separate operations.
             for (uint32_t i = 0; i < curves; ++i) {
                 uint64_t sigma = 0;
-                if (!ecm_stage1_saved_sigma(i, sigma))
+                if (!checkpoint.saved_sigma(i, sigma))
                     sigma = opt.identity.sigma_fixed ? opt.identity.fixed_sigma64 + i
                                                      : random_sigma_u64();
-                batch.sigmas[i] = ecm_stage1_batch_sigma(i, sigma);
+                batch.sigmas[i] = checkpoint.sigma(i, sigma);
             }
             std::string error;
             uint32_t degenerate_curve = UINT32_MAX;
             if (!initialize(
                     batch, n, error,
                     [&](uint32_t lane, mpz_srcptr factor) {
-                        out->set_curve(lane, LegacyExecutionResult::CurveKind::Factor, factor,
-                                       batch.sigmas[lane]);
+                        result.set_curve(lane, CurveKind::Factor, factor, batch.sigmas[lane]);
                         if (validate_stage1_factor(n, factor))
                             return true;
-                        out->publish_failed = true;
+                        result.fail(ecm_stage1::FailureSource::Publication);
                         return false;
                     },
                     &degenerate_curve)) {
                 if (degenerate_curve < curves)
-                    out->set_curve(degenerate_curve, LegacyExecutionResult::CurveKind::Degenerate,
-                                   nullptr, batch.sigmas[degenerate_curve]);
+                    result.set_curve(degenerate_curve, CurveKind::Degenerate, nullptr,
+                                     batch.sigmas[degenerate_curve]);
                 throw std::runtime_error(error);
             }
         }
@@ -358,7 +354,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                        opt.execution.device_index, curves, mpz_sizeinbase(n, 2),
                        mpz_sizeinbase(scalar.v, 2), batch.window, batch.doubling);
         EcmEdwardsNafMetrics metrics;
-        Progress p{batch,
+        Progress p{checkpoint, batch,
                    n,
                    scalar.v,
                    opt,
@@ -391,20 +387,19 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 static_cast<unsigned long long>(metrics.dictionary_bytes),
                 metrics.dictionary_gpu_ms, metrics.loop_gpu_ms, metrics.launches);
         if (rc < 0) {
-            out->fail(run.failure == ecm_cuda_stage1::Failure::Device
-                          ? ecm_stage1::FailureSource::Device
-                      : run.failure == ecm_cuda_stage1::Failure::Preparation
-                          ? ecm_stage1::FailureSource::Preparation
-                          : ecm_stage1::FailureSource::Execution);
+            result.fail(run.failure == ecm_cuda_stage1::Failure::Device
+                            ? ecm_stage1::FailureSource::Device
+                        : run.failure == ecm_cuda_stage1::Failure::Preparation
+                            ? ecm_stage1::FailureSource::Preparation
+                            : ecm_stage1::FailureSource::Execution);
             throw std::runtime_error(run.error);
         }
         if (rc == 2) {
             if (p.failed)
-                out->fail(ecm_stage1::FailureSource::Persistence);
+                result.fail(ecm_stage1::FailureSource::Persistence);
             else
-                out->stop();
-            return ecm_stage1::take_computation_result(std::move(raw), ECM_ERROR,
-                                                       ecm_stage1_stop_requested() != 0);
+                result.stop();
+            return result;
         }
         phase = ecm_stage1::FailureSource::Execution;
         // Collect owned factor/point/no-point outcomes from the final layout.
@@ -428,8 +423,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                     ecm_ts_fprintf(stdout,
                                    "Edwards identity: sigma=%llu gcd(Qz,N)=N, no Stage2 point\n",
                                    static_cast<unsigned long long>(batch.sigmas[i]));
-                    out->set_curve(i, LegacyExecutionResult::CurveKind::CompletedWithoutPoint,
-                                   nullptr, batch.sigmas[i]);
+                    result.set_curve(i, CurveKind::CompletedWithoutPoint, nullptr, batch.sigmas[i]);
                     continue;
                 } else {
                     mpz_invert(inv.v, z.v, n);
@@ -439,35 +433,30 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             }
             if (batch.hit[i])
                 mpz_set(x.v, batch.factors[i]);
-            out->set_curve(i,
-                           hit ? LegacyExecutionResult::CurveKind::Factor
-                               : LegacyExecutionResult::CurveKind::Stage2Point,
-                           x.v, batch.sigmas[i]);
+            result.set_curve(i, hit ? CurveKind::Factor : CurveKind::Stage2Point, x.v,
+                             batch.sigmas[i]);
             found = found || hit;
         }
-        out->validate_curves(n);
+        result.completion = ComputationResult::Completion::Completed;
+        result.validate(n);
         // Arithmetic state stays immutable while owned final values are published.
         phase = ecm_stage1::FailureSource::Persistence;
-        if (!path.empty() && !save_checkpoint(path, batch, n, scalar.v, uint64_t(b1)))
+        if (!path.empty() && !save_checkpoint(checkpoint, path, batch, n, scalar.v, uint64_t(b1)))
             throw std::runtime_error("cannot retain completed Edwards batch");
         phase = ecm_stage1::FailureSource::Execution;
         // The task seals result publication before removing its resume state.
-        out->firstsigma64 = out->sigmas[0];
-        out->firstsigma = uint32_t(out->sigmas[0]);
-        out->completion = LegacyExecutionResult::Completion::Completed;
-        out->ret = found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
+        result.completion = ComputationResult::Completion::Completed;
+        result.legacy_code = found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
         (void)b2;
-        return ecm_stage1::take_computation_result(std::move(raw), out->ret,
-                                                   ecm_stage1_stop_requested() != 0);
+        return result;
     } catch (const std::exception& e) {
         if (const auto* checkpoint = dynamic_cast<const ecm_stage1_checkpoint::Error*>(&e))
             phase = checkpoint->state == ecm_stage1_checkpoint::RestoreState::IoFailure
                         ? ecm_stage1::FailureSource::Persistence
                         : ecm_stage1::FailureSource::Preparation;
-        if (out->completion != LegacyExecutionResult::Completion::Failed)
-            out->fail(out->publish_failed ? ecm_stage1::FailureSource::Publication : phase);
+        if (result.failure == ecm_stage1::FailureSource::None)
+            result.fail(phase);
         ecm_ts_fprintf(stderr, "ERROR: GPU Edwards Stage1: %s\n", e.what());
-        return ecm_stage1::take_computation_result(std::move(raw), ECM_ERROR,
-                                                   ecm_stage1_stop_requested() != 0);
+        return result;
     }
 }

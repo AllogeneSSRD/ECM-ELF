@@ -1,7 +1,7 @@
 #define main fixture_main
 #include "../gui/fake_worker.cpp"
 #undef main
-#include "../../../src/ecm/storage/queue/owner_lease.h"
+#include "io/files.h"
 #include "../../../src/ecm/application/gui/toml_file.h"
 #include "../../../src/ecm/application/configuration/generated/ecm_config_generated.h"
 int main(int argc, char** argv) {

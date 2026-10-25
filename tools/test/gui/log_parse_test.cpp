@@ -15,7 +15,6 @@
 // use it too, otherwise they exercise the "no timestamp" path by accident.
 // A macro (not a variable) so TS "rest of the line" concatenates as a literal.
 #define TS "[2026-09-28 18:42:41] "
-#include <string>
 
 using namespace ecmgui;
 

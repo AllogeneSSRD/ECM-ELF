@@ -22,7 +22,6 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "host_policy.h"
 #include <stdexcept>
 #include "../../runtime/cuda_ecm_shim.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "ecm/platform/stage1_progress.h"
 #include "ecm/platform/logging.h"
 #include <cstring>

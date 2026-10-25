@@ -2,10 +2,10 @@
 #include "../../../../service/stage1/preparation.h"
 #include "ecm/service/execution/legacy_gpu.h"
 #include "../../../../service/stage1/gpu_common.h"
-#include "ecm/storage/results/publication.h"
-#include "../../../../storage/save/ecm_edwards_io.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
-#include "../../../../storage/checkpoint/ecm_stage1_legacy_gpu.h"
+#include "ecm/io/results.h"
+#include "ecm/io/save.h"
+#include "io/stage1_checkpoint.h"
+#include "ecm/service/stage1/legacy_gpu_checkpoint.h"
 #include "../../runtime/cuda_ecm_shim.h"
 #include "runtime.h"
 #include "host_policy.h"
@@ -21,35 +21,30 @@ namespace {
 struct ConstructionCapture {
     mpz_srcptr modulus;
     const uint64_t* sigma;
-    LegacyExecutionResult* result;
+    ComputationResult* result;
 };
 
 bool capture_construction_factor(uint32_t lane, mpz_srcptr factor, void* context) {
     const auto& p = *static_cast<ConstructionCapture*>(context);
-    p.result->set_curve(lane, LegacyExecutionResult::CurveKind::Factor, factor, *p.sigma + lane);
+    p.result->set_curve(lane, CurveKind::Factor, factor, *p.sigma + lane);
     return validate_stage1_factor(p.modulus, factor);
 }
 } // namespace
 
 ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request,
-                                              ecm_stage1::ExecutionOptions& opt) {
+                                              ecm_stage1::ExecutionOptions& opt, ecm_stage1_checkpoint::Context& checkpoint) {
     const auto N = request.modulus;
     const auto B1 = request.b1, B2 = request.b2;
     const auto curves = request.curves;
-    LegacyExecutionResult raw;
-    auto* out = &raw;
-
-    *out = LegacyExecutionResult{};
+    ComputationResult result;
     auto phase = FailureSource::Preparation;
     try {
         if (!curves)
             throw std::invalid_argument("gpucurves must be > 0");
-        out->allocate_curves(curves);
-        std::fill(out->curve_kinds.begin(), out->curve_kinds.end(),
-                  LegacyExecutionResult::CurveKind::Failed);
+        result.curves.resize(curves);
 
         // Prepare: freeze the algorithm request before checkpoint inspection.
-        const auto requested = ecm_cuda_mont_host::capture_mont_request(opt.gpu_algorithm.c_str());
+        const auto requested = ecm_cuda_mont_host::capture_mont_request(opt.gpu_algorithm.c_str(), opt.persistence.exponent_cache_dir);
 
         ecm_edwards::Integer owned_scalar;
         auto* batch_s = owned_scalar.v;
@@ -57,17 +52,16 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
                              opt.execution.selection.scalar_construction ==
                                      ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12
                                  ? 12u
-                                 : 1u)) {
+                                 : 1u, opt.persistence.exponent_cache_dir)) {
             std::cerr << "Failed to compute batch_s" << std::endl;
-            out->fail(FailureSource::Preparation);
-            return ecm_stage1::take_computation_result(std::move(raw), ECM_ERROR,
-                                                       ecm_stage1_stop_requested() != 0);
+            result.fail(FailureSource::Preparation);
+            return result;
         }
         // Restore candidates are inspected before fresh sigma generation.
         {
             const auto& algorithm = opt.gpu_algorithm;
             if (std::string(ecm_backend_name()) == "CUDA/CGBN" && algorithm == "ladder")
-                ecm_stage1_import_legacy_gpu(
+                ecm_stage1_import_legacy_gpu(checkpoint,
                     N, batch_s, curves, uint32_t(opt.execution.selection.gpu_param),
                     opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                     [&](uint64_t sigma, uint32_t count) {
@@ -92,14 +86,17 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
                     : opt.execution.gpu_special_mult_path.c_str());
             if (prep != 0) {
                 std::cerr << "GPU: backend prepare failed" << std::endl;
-                out->fail(FailureSource::Preparation);
-                return ecm_stage1::take_computation_result(std::move(raw), ECM_ERROR,
-                                                           ecm_stage1_stop_requested() != 0);
+                result.fail(FailureSource::Preparation);
+                return result;
             }
         }
 
-        auto* factors = out->factors;
-        auto* array_found = out->array_found;
+        // The existing kernel Interface needs contiguous GMP/status arrays.
+        // Their owner is local; task only receives typed owned curve values.
+        ecm_edwards::Array values(curves);
+        std::vector<int> hits(curves, ECM_NO_FACTOR_FOUND);
+        auto* factors = values.data();
+        auto* array_found = hits.data();
 
         // Resolve saved sigma before invoking the generator in the runtime.
         uint64_t firstsigma64 = opt.identity.sigma_fixed ? opt.identity.fixed_sigma64 : 0;
@@ -115,8 +112,8 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
         float gputime = 0.0f;
         ecm_cuda_set_verbose(opt.execution.verbose);
         phase = FailureSource::Execution;
-        ConstructionCapture capture{N, &firstsigma64, out};
-        const auto run = execute_mont_batch(
+        ConstructionCapture capture{N, &firstsigma64, &result};
+        const auto run = execute_mont_batch(checkpoint,
             factors, array_found, N, batch_s, curves, &firstsigma64, opt.persistence.ckpt_ms,
             &gputime, opt.execution.verbose, opt.execution.selection.gpu_param,
             uint64_t(std::floor(B1 + 0.0001)),
@@ -126,47 +123,46 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
             capture_construction_factor, &capture, generate_sigma, &requested);
         int ret = run.code;
         // Collect: transfer the exact restored/generated identity and normalized values.
-        out->firstsigma = uint32_t(firstsigma64);
-        out->firstsigma64 = firstsigma64;
         for (uint32_t i = 0; i < curves; ++i)
-            out->sigmas[i] = firstsigma64 + i;
+            result.curves[i].sigma = firstsigma64 + i;
         if (ret == ECM_ERROR) {
             if (run.termination == Termination::Stopped)
-                out->stop();
+                result.stop();
             else if (run.termination == Termination::SampleLimit)
-                out->completion = LegacyExecutionResult::Completion::SampleLimit;
+                result.stop();
             else
-                out->fail(run.failure == Failure::Preparation   ? FailureSource::Preparation
-                          : run.failure == Failure::Device      ? FailureSource::Device
-                          : run.failure == Failure::Persistence ? FailureSource::Persistence
-                          : run.failure == Failure::Publication ? FailureSource::Publication
-                                                                : FailureSource::Execution);
+                result.fail(run.failure == Failure::Preparation   ? FailureSource::Preparation
+                            : run.failure == Failure::Device      ? FailureSource::Device
+                            : run.failure == Failure::Persistence ? FailureSource::Persistence
+                            : run.failure == Failure::Publication ? FailureSource::Publication
+                                                                  : FailureSource::Execution);
         }
         if (run.degenerate_curve < curves)
-            out->set_curve(run.degenerate_curve, LegacyExecutionResult::CurveKind::Degenerate,
-                           nullptr, firstsigma64 + run.degenerate_curve);
+            result.set_curve(run.degenerate_curve, CurveKind::Degenerate, nullptr,
+                             firstsigma64 + run.degenerate_curve);
         if (ret != ECM_ERROR)
-            for (uint32_t i = 0; i < curves; ++i)
-                out->set_curve(i,
-                               array_found[i] == ECM_NO_FACTOR_FOUND
-                                   ? LegacyExecutionResult::CurveKind::Stage2Point
-                                   : LegacyExecutionResult::CurveKind::Factor,
-                               factors[i], firstsigma64 + i);
-        if (ret != ECM_ERROR)
-            out->validate_curves(N);
+            for (uint32_t i = 0; i < curves; ++i) {
+                result.set_curve(i,
+                                 array_found[i] == ECM_NO_FACTOR_FOUND ? CurveKind::Stage2Point
+                                                                       : CurveKind::Factor,
+                                 nullptr, firstsigma64 + i);
+                mpz_swap(result.curves[i].value, factors[i]);
+            }
+        if (ret != ECM_ERROR) {
+            result.completion = ComputationResult::Completion::Completed;
+            result.validate(N);
+        }
         phase = FailureSource::Execution;
 
         std::cout << "GPU stage1 returned: " << ret << " gputime=" << gputime << " ms\n";
         if (ret != ECM_ERROR)
-            out->completion = LegacyExecutionResult::Completion::Completed;
-        out->ret = ret;
-        return ecm_stage1::take_computation_result(std::move(raw), ret,
-                                                   ecm_stage1_stop_requested() != 0);
+            result.completion = ComputationResult::Completion::Completed;
+        result.legacy_code = ret;
+        return result;
     } catch (const std::exception& error) {
-        out->fail(out->publish_failed ? FailureSource::Publication : phase);
+        result.fail(phase);
         std::cerr << "ERROR: GPU Montgomery Stage1: " << error.what() << std::endl;
-        return ecm_stage1::take_computation_result(std::move(raw), ECM_ERROR,
-                                                   ecm_stage1_stop_requested() != 0);
+        return result;
     }
 }
 

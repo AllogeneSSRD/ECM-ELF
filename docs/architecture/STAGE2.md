@@ -157,7 +157,7 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 
 ## 进度与文件机制的接口
 
-[stage2_progress.h](../../include/ecm/storage/queue/stage2_progress.h)公开任务身份和曲线进度数据及读写/回执声明；[stage2_progress.cpp](../../src/ecm/storage/queue/stage2_progress.cpp)实现 schema、原子落盘、完整结果行与 finished 回执检查。旧身份导入的匹配模板仍在 storage/queue 私有头，由实际任务解析提供数学一致性判断。单任务 pending/确认/封存/源行复核由父流程排序，文件模块不拥有另一个任务循环。
+[stage2_checkpoint.h](../../include/ecm/io/stage2_checkpoint.h)公开任务身份和曲线进度数据及读写/回执声明；[stage2_checkpoint.cpp](../../src/io/stage2_checkpoint.cpp)实现 schema、原子落盘、完整结果行与 finished 回执检查。旧身份解码和导入也在该实现内；任务层通过匹配回调提供数学一致性判断。单任务 pending/确认/封存/源行复核由父流程排序，文件模块不拥有另一个任务循环。
 
 [fingerprint.h](../../include/ecm/platform/fingerprint.h)是 SHA256 的普通 C++ 声明；Windows CNG 的动态库与句柄实现仅在 [fingerprint.cpp](../../src/ecm/platform/fingerprint.cpp)。两个模块不依赖 CUDA SDK，构建使用普通主机编译器；实际计算引擎仍保持自己的 CUDA runtime 依赖。
 

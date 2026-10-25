@@ -60,7 +60,7 @@ int ecm_backend_prepare(size_t n_log2, int verbose, int device_index,
                  0 = Suyama param0 (Prime95 sigma_type=1 / gmp-ecm -param 0, the
                  same curves the CPU path runs).  0 is CUDA-only for now: the
                  OpenCL backend rejects it instead of silently using param3. */
-int ecm_backend_stage1(mpz_t *factors, int *array_found,
+int ecm_backend_stage1(void* checkpoint_context, mpz_t *factors, int *array_found,
                        const mpz_t N, const mpz_t s,
                        uint32_t curves, uint64_t *sigma,
                        unsigned long checkpoint_interval_ms,

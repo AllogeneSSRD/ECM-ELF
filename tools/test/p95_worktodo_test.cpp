@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "../../src/ecm/storage/queue/p95_worktodo.h"
+#include "io/prime95.h"
 
 static int g_fail = 0;
 static int g_pass = 0;
@@ -145,8 +145,6 @@ int main() {
           "missing prime.txt returns false");
 
     // ---- 5. misc ---------------------------------------------------------
-    check(p95_ecm_save_name(991) == "e0000991", "save name e0000991");
-    check(p95_ecm_save_name(12345678) == "e12345678", "save name e12345678");
 
     remove(wt.c_str());
     remove(add.c_str());

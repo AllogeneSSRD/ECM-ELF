@@ -39,12 +39,12 @@ include/ecm/
 ├── application/configuration/       runtime.h：已解析运行环境
 ├── core/{stage1,stage2}/            选择、标量、概率模型
 ├── service/{stage1,execution}/       请求/拥有结果、链接后端接缝
-├── storage/{queue,save,results}/    曲线进度、保存范围、结果发布
+├── io/                             曲线进度、保存范围、结果发布
 └── platform/                       日志、进度、指纹、版本、process 请求
 src/
 ├── main.cpp                        Stage1 模式、唯一任务循环与收尾顺序
-├── io/                             cli、config、worktodo、normalize
-├── sync/                           原子文件发布、备份、P95 持久交接
+├── io/                             输入、文件、最终save、恢复容器、结果和格式适配
+├── sync/                           备份、P95 和 Stage2 持久交接
 └── ecm/                            计算、后端及阶段协作（下列展开）
 
 src/ecm/
@@ -64,9 +64,12 @@ src/ecm/
 │   ├── cpu/{stage1,stage2,arithmetic}/
 │   ├── cuda/{stage1,stage2,ntt,arithmetic,planning,runtime,dispatch}/
 │   └── opencl/{stage1,arithmetic,runtime,resources,diagnostics}/
-├── storage/{cache,checkpoint,save,queue,transfer,results,profile}/
-└── platform/                       文件发布、哈希、日志、进程与轻量默认值
+└── platform/                       停止、哈希、日志、进程与轻量默认值
 ```
+
+`src/io` 保持平铺：files 提供路径、持久写入、短锁与消费租约；save 管理最终文本格式、校验、批量发布及连续 Range；results 管理结果格式与发布；stage1_checkpoint 和 stage2_checkpoint 分别管理恢复容器与曲线进度。prime95/prime95_save 是外部队列与二进制格式适配，exponent_cache 遵循可重建的可选失败政策，json 提供共享的严格解析实现。只为生成物保留 generated 子目录。
+
+`src/sync` 的 p95 集中冻结 intent、文件交付、AID 处理、worktodo.add 发送及恢复；stage2 管理独立的本地交接 outbox；backup 只负责备份。两种队列格式不混用，短编辑锁与消费租约保持不同类型和粒度。后端数学 checkpoint codec 留在 backend，成本模型归 planning。
 
 顶层按职责，后端内部按技术再按曲线。CPU/CUDA/OpenCL 分别实现实际支持的曲线组合；没有统一所有点运算的虚函数层。算法差异、状态域、实例和 checkpoint 载荷仍属于具体后端。普通 CXX 的主机数学、文件编码和显示可独立修改；实际 CUDA 分配、发射、同步和回读继续依赖 CUDA。
 

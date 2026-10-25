@@ -1,10 +1,11 @@
+#include "sync/backup.h"
 #include "io/normalize.h"
 #include "ecm/application/cli/group_order.h"
 #include "io/cli.h"
-#include "sync/files.h"
+#include "io/files.h"
 #include "sync/p95.h"
 #include "ecm/platform/log_file.h"
-#include "ecm/storage/save/publication.h"
+#include "ecm/io/save.h"
 using ecm_stage1_app::get_exe_dir_local;
 using ecm_stage1_app::get_gp_executable;
 using ecm_stage1_app::normalize_path_local;
@@ -40,8 +41,7 @@ using ecm_stage1_app::stage1_task_error;
 #include <gmp.h>
 
 #include "ecm/service/execution/legacy_gpu.h"      /* GPU backend seam (OpenCL or CUDA glue) */
-#include "ecm/storage/checkpoint/ecm_checkpoint.h" /* opencl_ecm_set_work_dir */
-#include "ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "io/stage1_checkpoint.h"
 #include "ecm/core/stage1/selection.h"
 #include "ecm/service/stage1/execution_contract.h"
 #include "ecm/application/configuration/runtime.h"
@@ -49,11 +49,10 @@ using ecm_stage1_app::stage1_task_error;
 #include "ecm/platform/program_version.h"
 #include "io/config.h"
 #include "io/worktodo.h"
-#include "ecm/storage/transfer/ecm_stage2_transfer.h"
-#include "ecm/storage/queue/ecm_worker_list.h"
+#include "sync/stage2.h"
+#include "io/worktodo.h"
 #include "ecm/application/configuration/ecm_expr.h" /* shared exact integer expression parser */
-#include "ecm/storage/transfer/p95_transfer.h" /* finished task -> Prime95 worktodo.add (D4/§13) */
-#include "ecm/storage/cache/ecm_stage1_exp_cache.h" /* validated on-disk cache for that value */
+#include "sync/p95.h" /* finished task -> Prime95 worktodo.add (D4/§13) */
 #ifndef ECM_BUILD_ID
 #define ECM_BUILD_ID "development"
 #endif
@@ -73,8 +72,8 @@ using ecm_stage1::run_stage1_task;
 using ecm_stage1::Stage1Options;
 using ecm_stage1::TaskStatus;
 
-#include "ecm/storage/queue/owner_lease.h"
-#include "ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "io/files.h"
+#include "io/stage1_checkpoint.h"
 
 static void trim(std::string& s) {
     while (!s.empty() && isspace((unsigned char)s.back()))
@@ -217,8 +216,10 @@ static bool finish_record(const QueuePaths& paths) {
         ecm_ts_fprintf(stderr, "FATAL: %s\n", error.c_str());
         return false;
     }
-    if (!completed.checkpoint.empty())
-        ecm_stage1_remove_checkpoints(completed.checkpoint);
+    if (!completed.checkpoint.empty()) {
+        ecm_stage1_checkpoint::Context cleanup;
+        cleanup.remove(completed.checkpoint);
+    }
     std::error_code ec;
     std::filesystem::remove(receipt, ec);
     if (ec) {
@@ -442,8 +443,6 @@ static int run_worktodo(const CliInput& input) {
     const int worker = input.worker_index;
     const std::string raw_exe_dir = get_exe_dir_local();
     const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
-    /* Default home of the stage-1 exponent cache (overridable by --exp-cache / exp_cache). */
-    ecm_exp_cache_set_dir(exe_dir);
 
     // Resolve ini path (default: exe_dir/ecm.toml).
     std::string ini = ini_path;
@@ -485,7 +484,7 @@ static int run_worktodo(const CliInput& input) {
                        ini.c_str(), worker, cfg.log_file.c_str());
     }
 
-    opencl_ecm_set_work_dir(exe_dir.c_str());
+    ecm_io::set_work_dir(exe_dir.c_str());
 
     ecm_log_set_progress_color(cfg.progress_color.c_str());
     /* Progress cadence for the log FILE only (ini progress_log_seconds): a task running for
@@ -696,7 +695,6 @@ static int run_worktodo(const CliInput& input) {
 
     auto opt = normalize_options(cfg, exe_dir, ini_dir, worker);
     opt.persistence.retain_completed_checkpoint = true;
-    ecm_exp_cache_set_dir(cfg.exp_cache.empty() ? exe_dir : cfg.exp_cache);
     ecm_runtime_config().device_index = cfg.device;
     ecm_runtime_config().tpi = cfg.tpi;
     ecm_runtime_config().wg_size = cfg.wg_size;
@@ -970,14 +968,11 @@ int main(int argc, char** argv) {
     auto& p95_dir_ignored = input.p95_dir_ignored;
     auto& stop_handle = input.stop_handle;
     auto& pos = input.pos;
-    auto& exp_cache = input.exp_cache;
     auto& version = input.version;
     // Argv parsed: fold driver-level args into the runtime config (single source),
     // then install timestamped streams.
     ecm_runtime_config() = input.runtime;
     ecm_runtime_config().device_index = gpu_device_index;
-    if (!input.exp_cache.empty())
-        ecm_exp_cache_set_dir(input.exp_cache);
     if (!gp_bin_path.empty()) {
         ecm_runtime_config().gp_bin = gp_bin_path;
     }
@@ -1103,8 +1098,6 @@ int main(int argc, char** argv) {
     }
     const auto& opt = task.options;
     const auto B1 = task.b1;
-    if (ecm_exp_cache_get_dir().empty())
-        ecm_exp_cache_set_dir(get_exe_dir_local().empty() ? "." : get_exe_dir_local());
     if (!p95_dir_ignored.empty())
         std::cout
             << "Prime95 transfer path ignored: --p95-dir is obsolete; use TOML p95_worktodo_path."

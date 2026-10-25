@@ -28,13 +28,13 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 [公开请求与结果](../../include/ecm/service/stage1/task.h)只使用普通 C++ 和 GMP。Stage1Request 在同步调用期间借用模数、命名和已解析选项，选项分为执行偏好、身份和持久化策略三组。TaskResult 独立拥有逐曲线结果，禁止复制并允许移动，通过只读访问器取数；不保留请求引用，不公开原始分配或进度字段。状态区分完成、停止和失败，并记录准备、执行、持久化、发布或设备执行失败。CUDA 明确失败优先于同时收到的停止；CPU/OpenCL 的旧标记仍通过兼容映射接纳。设备执行失败使队列停止并保留原任务，不继续使用可能失效的设备 context。
 
-私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。计算结果以逐曲线拥有值保存；旧数组只在后端兼容适配中使用，转换时移动 GMP 值，不复制整批大整数。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
+task 在栈上直接拥有 `ecm_stage1_checkpoint::Context`。Context 实际保存 records、sigma、恢复候选、备份策略与批次独占锁，通过第三个参数借给同步后端；回调只借用本次 Context，没有进程级或 thread_local 的活跃批次。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。计时和总曲线数属于执行副本。目前生产流程仍是单进程单活跃任务。
 
 应用 [main.cpp](../../src/main.cpp)负责模式、进程启动、worker资源与队列循环。归一化当前任务后，通过 [select_stage1_entry](../../src/ecm/service/stage1/execution.cpp)选择一个普通函数入口；选择不执行CUDA，不改变任务。task随后直接调用选定入口，不经过另一层执行转发。构建身份、默认NAF和CUDA延迟验证能力仍由应用组装。
 
-[私有计算合同](../../src/ecm/service/stage1/execution_contract.h)以 ExecutionOptions 保存执行副本，以 ComputationResult 返回完成/停止/失败及来源、拥有的逐曲线结果。每条结果区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed。LegacyExecutionResult 仅适配旧CPU工作线程与设备数组，在后端返回前转成拥有值；task不从旧返回码、flags或数组猜测执行状态。TaskResult::State另保存最终发布状态、明确的save Range和队列尚未提交的checkpoint责任；计算完成与文件发布完成是两个事实。
+[私有计算合同](../../src/ecm/service/stage1/execution_contract.h)以 ExecutionOptions 保存执行副本，以 ComputationResult 返回完成/停止/失败及来源、拥有的逐曲线结果。每条结果区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed。CPU 与 CUDA workflow 直接构造拥有结果；Montgomery 设备数组仅在该 workflow 内适配并移动 GMP 值，LegacyExecutionResult 留给 OpenCL 兼容边界。task 不从旧返回码、flags 或数组猜测执行状态。TaskResult::State 另保存最终发布状态、明确的 save Range 和队列尚未提交的 checkpoint 责任；计算完成与文件发布完成是两个事实。
 
-任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 22 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 22 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [stage1_checkpoint.cpp](../../src/io/stage1_checkpoint.cpp)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
 ## 应用输入与队列编排
 
@@ -60,9 +60,9 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 ## CPU 执行与共享主机准备
 
-CPU 两条执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp)，通过同目录私有头的 run_edwards_stage1、run_mont_stage1 接收统一Stage1Request与执行副本，返回ComputationResult。线程/ISA选择、点状态、恢复、推进、逐曲线GCD与DONE仍集中在原有实现；兼容入口接纳旧数组，Montgomery在释放xs前移动末点，Edwards解码并校验DONE_V1中的归一化点/因子，空点记录转为CompletedWithoutPoint。最终save与结果文件由task发布，后端不提前删除完成材料。普通基线CXX不继承AVX512编译设置；应用归一化affinity，执行模块应用CPU集合。
+CPU 的 [Edwards workflow](../../src/ecm/backend/cpu/stage1/edwards/workflow.cpp) 和 [Montgomery workflow](../../src/ecm/backend/cpu/stage1/montgomery/workflow.cpp) 接收统一 Stage1Request、执行副本及借用的 Context，直接返回 ComputationResult。新计算不先编码 save 文本再解析；Edwards 只在恢复边界解码并校验兼容的 DONE_V1，空点记录转为 CompletedWithoutPoint。Montgomery 在释放局部数组前移动末点。共享 ISA 探测、CPU 绑定和进度显示位于 execution_support；线程寿命、GMP 临时量及进度条由作用域管理，工作线程异常传回 workflow。普通基线 CXX 不继承 AVX512 编译设置。最终 save 和结果由 task 发布。
 
-[preparation.cpp](../../src/ecm/service/stage1/preparation.cpp)集中 CPU/GPU 共用的标量缓存入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列已提取到各自普通 CXX。
+[preparation.cpp](../../src/ecm/service/stage1/preparation.cpp)集中 CPU/GPU 共用的标量准备入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。归一化将指数缓存目录固定到任务的 persistence 选项；空目录明确禁用缓存，不在执行时重新套默认值。CLI 或配置的 off/none/0/- 保留禁用语义，PRAC 默认计划目录使用同一显式目录。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列已提取到各自普通 CXX。
 
 各工作流负责计算与安全点DONE/checkpoint；任务层负责最终save、结果发布和批次关闭。实际设备同步和回读继续依赖 CUDA。
 
@@ -191,8 +191,8 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 ## 代码入口
 
 - [ecm_stage1_exp.cpp](../../src/ecm/core/stage1/ecm_stage1_exp.cpp)：指数生成和缓存。
-- [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp)、[ecm_stage1_binary.h](../../src/ecm/storage/checkpoint/ecm_stage1_binary.h)：二进制外壳、长度边界、CRC32C、锁及轮换恢复。
-- [ecm_stage1_legacy_gpu.h](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h)：旧 CUDA ladder V5 导入及逐 lane 模数校验。
+- [stage1_checkpoint.cpp](../../src/io/stage1_checkpoint.cpp)、[ecm_stage1_binary.h](../../src/io/stage1_binary.h)：二进制外壳、长度边界、CRC32C、锁及轮换恢复。
+- [ecm_stage1_legacy_gpu.h](../../src/ecm/service/stage1/legacy_gpu_checkpoint.h)：旧 CUDA ladder V5 导入及逐 lane 模数校验。
 - [checkpoint.cpp](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)：GPU Edwards 二进制/旧文本载荷及状态验证。
 - [runtime.cu](../../src/ecm/backend/cuda/stage1/montgomery/runtime.cu)：设备调度、同步及回读；[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)负责曲线布局与归一化，[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)负责保存点，output.cpp 负责输出。
 - [arithmetic.cuh](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh)、[instances.cuh](../../src/ecm/backend/cuda/stage1/montgomery/instances/instances.cuh)、[registry.cu](../../src/ecm/backend/cuda/stage1/montgomery/registry.cu)：设备 ladder、按组实例及薄发射器。

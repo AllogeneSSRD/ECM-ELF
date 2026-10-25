@@ -1,4 +1,5 @@
-﻿/* opencl_backend_glue.cpp — OpenCL implementation of the ECM backend seam.
+#include "io/stage1_checkpoint.h"
+/* opencl_backend_glue.cpp — OpenCL implementation of the ECM backend seam.
 
    Linked only into the `ecm` executable. Each hook forwards to the pre-existing
    OpenCL host functions, so the shared driver behaves exactly as before.
@@ -54,7 +55,7 @@ extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, int edward
     return ECM_BACKEND_QUERY_NOT_APPLICABLE;
 }
 
-extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
+extern "C" int ecm_backend_stage1(void* checkpoint_context, mpz_t *factors, int *array_found,
                                   const mpz_t N, const mpz_t s,
                                   uint32_t curves, uint64_t *sigma,
                                   unsigned long checkpoint_interval_ms,
@@ -63,6 +64,9 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
                                   const char *gpu_mul_path, const char *gpu_sqr_path,
                                   const char *gpu_add_path, const char *gpu_sub_path,
                                   const char *gpu_special_mult_path) {
+    if (!checkpoint_context) return -1;
+    auto& checkpoint = *static_cast<ecm_stage1_checkpoint::Context*>(checkpoint_context);
+
     /* gpu_param = 0 (Suyama param0) and 2 (param2 batch-2 / 6-torsion) exist for the
        CUDA/CGBN kernels only: the OpenCL .cl kernels still bake in the batch
        parametrization's fixed shape (P = (2:1), difference x = 2, a24 = the 32-bit d).
@@ -83,7 +87,7 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
         return ECM_ERROR;
     }
     uint32_t sigma32 = (uint32_t)*sigma;
-    const int rc = opencl_ecm_stage1(factors, array_found, N, s, curves, &sigma32,
+    const int rc = opencl_ecm_stage1(checkpoint_context, factors, array_found, N, s, curves, &sigma32,
                                      checkpoint_interval_ms, gputime, verbose,
                                      gpu_mul_path, gpu_sqr_path, gpu_add_path,
                                      gpu_sub_path, gpu_special_mult_path);

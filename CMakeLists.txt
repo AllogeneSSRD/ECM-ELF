@@ -137,7 +137,7 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
     string(APPEND _stage1_identity "${_stage1_hash}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
 endforeach()
-foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/results/ecm_result_json.h
+foreach(_source include/ecm/io/results.h src/io/json.h
                 src/ecm/core/group_order/group_order.h src/ecm/service/diagnostics/order_analysis.h
                 include/ecm/core/stage1/selection.h include/ecm/core/stage1/scalar.h include/ecm/service/stage1/task.h
                 src/ecm/service/stage1/execution_contract.h src/ecm/platform/generated/configuration_defaults.h
@@ -148,7 +148,7 @@ foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/result
                 src/ecm/backend/cuda/stage1/edwards/host_math.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_math.cpp src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp src/ecm/backend/cuda/stage1/montgomery/output.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp
-                src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
+                include/ecm/io/save.h include/ecm/core/integer.h include/ecm/platform/program_version.h
                 include/ecm/platform/stage1_progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
     string(APPEND _stage1_identity "${_stage1_hash}")

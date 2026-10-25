@@ -1,6 +1,6 @@
 #include "ui_state.h"
 #include "../gui/toml_file.h"
-#include "../../storage/results/ecm_result_json.h"
+#include "io/json.h"
 #include <windows.h>
 #include <shlobj.h>
 #include <fstream>

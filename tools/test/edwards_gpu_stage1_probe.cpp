@@ -1,7 +1,7 @@
 #include "../../src/ecm/backend/cuda/stage1/edwards/api.h"
 #include "../../src/ecm/backend/cuda/stage1/edwards/naf.h"
 #include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
-#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "ecm/io/save.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>

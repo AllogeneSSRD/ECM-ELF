@@ -24,9 +24,9 @@
 #include "ecm_stage2_runtime_tune.h"
 #include "../../core/stage2/ecm_stage2_geometry.h"
 #include "../../platform/ecm_stage2_logging.h"
-#include "ecm/storage/queue/stage2_progress.h"
-#include "../../storage/results/ecm_result_json.h"
-#include "ecm/storage/results/publication.h"
+#include "ecm/io/stage2_checkpoint.h"
+#include "io/json.h"
+#include "ecm/io/results.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>

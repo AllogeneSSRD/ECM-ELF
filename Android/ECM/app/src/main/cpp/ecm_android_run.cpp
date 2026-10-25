@@ -1,3 +1,4 @@
+#include "io/files.h"
 #include "ecm_android_run.h"
 
 #include "ecm_log_android.h"
@@ -35,9 +36,9 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 #else
 
 #include "../../../../../../src/ecm/application/configuration/ecm_expr.h"
-#include "../../../../../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
+#include "../../../../../../src/ecm/backend/opencl/stage1/montgomery/checkpoint.h"
 #include "../../../../../../src/ecm/backend/opencl/stage1/montgomery/entry.h"
-#include "../../../../../../src/ecm/storage/save/ecm_save.h"
+#include "ecm/io/save.h"
 
 #include "../../../../../../src/ecm/service/execution/ecm.h"
 #include "../../../../../../src/ecm/service/execution/cgbn_stage1.h"
@@ -166,14 +167,14 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 
     ecm_ts_fprintf(stdout, "Parsed N bit-size: %zu\n", mpz_sizeinbase(N, 2));
     ecm_ts_fprintf(stdout, "batch_s bit-size: %zu\n", mpz_sizeinbase(batch_s, 2));
-    if (const char *work_dir = opencl_ecm_get_work_dir(); work_dir != nullptr && work_dir[0] != '\0') {
+    if (const char *work_dir = ecm_io::work_dir(); work_dir != nullptr && work_dir[0] != '\0') {
         ecm_ts_fprintf(stdout, "Data work dir: %s\n", work_dir);
     }
-    ecm_ts_fprintf(stdout, "Checkpoint file: %s\n", opencl_ecm_checkpoint_filename(N));
+    ecm_ts_fprintf(stdout, "Checkpoint file: %s\n", opencl_ecm_checkpoint_filename(N).c_str());
 
     std::string resolved_save;
     if (!req.save_file.empty()) {
-        resolved_save = opencl_ecm_resolve_data_path(req.save_file.c_str());
+        resolved_save = ecm_io::resolve_data_path(req.save_file.c_str());
         if (!opencl_ecm_check_save_file_writable(resolved_save, req.save_append)) {
             mpz_clear(N);
             mpz_clear(batch_s);
@@ -240,8 +241,9 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
                    ECM_PARAM_BATCH_32BITS_D, firstsigma, firstsigma + curves - 1, curves);
 
     float gputime = 0.0f;
+    ecm_stage1_checkpoint::Context checkpoint;
     const int ret = opencl_ecm_stage1(
-        factors, array_found, N, params->batch_s, curves, &firstsigma,
+        &checkpoint, factors, array_found, N, params->batch_s, curves, &firstsigma,
         params->gpu_checkpoint_interval_ms, &gputime, params->verbose,
         params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
         params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,

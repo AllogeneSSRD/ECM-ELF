@@ -1,7 +1,7 @@
 #include "checkpoint.h"
 #include "construction.h"
 #include "../../runtime/cuda_ecm_shim.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "io/stage1_checkpoint.h"
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
@@ -14,14 +14,14 @@ namespace ecm_cuda_mont_host {
  * Get checkpoint filename for given N (more readable format)
  * Uses bit length and first/last few hex chars as identifier
  */
-std::string checkpoint_record() {
-  return ecm_stage1_checkpoint_path().empty()?std::string{}:ecm_stage1_curve_record(0);
+std::string checkpoint_record(ecm_stage1_checkpoint::Context& checkpoint) {
+  return checkpoint.path().empty()?std::string{}:ecm_stage1_curve_record(0);
 }
 
 /**
  * Save checkpoint to file
  */
-bool save_checkpoint(const char *filename,
+bool save_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const char *filename,
                     const checkpoint_header_t *header,
                     const uint32_t *data,
                     size_t data_size) {
@@ -30,7 +30,7 @@ bool save_checkpoint(const char *filename,
   std::string bytes(reinterpret_cast<const char *>(header),sizeof(*header));
   bytes.append(reinterpret_cast<const char *>(data),data_size);
   bytes.append(reinterpret_cast<const char *>(&sum),sizeof(sum));
-  if(!ecm_stage1_write_blob(filename,bytes))return false;
+  if(!checkpoint.write_blob(filename,bytes))return false;
   outputf(OUTPUT_VERBOSE, "Checkpoint saved: s_partial=%lu/%lu (%.1f%%)\n",
           header->s_partial, header->s_num_bits,
           100.0 * header->s_partial / header->s_num_bits);
@@ -75,13 +75,13 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &bytes,
 }
 
 #if ECM_CUDA_ENABLE_PRAC
-bool save_checkpoint(const std::string &path, ResidentCheckpoint h,
+bool save_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const std::string &path, ResidentCheckpoint h,
                                       const std::vector<uint32_t> &data) {
     h.checksum = ecm_prac_hash(data.data(), data.size() * sizeof(uint32_t));
     std::ostringstream out(std::ios::binary|std::ios::out);
     out.write(reinterpret_cast<const char *>(&h), sizeof(h));
     out.write(reinterpret_cast<const char *>(data.data()), h.bytes);
-    return out && ecm_stage1_write_blob(path,out.str());
+    return out && checkpoint.write_blob(path,out.str());
 }
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &saved,mpz_srcptr n,
     ResidentCheckpoint &h,std::vector<uint32_t> &data,bool prac) {

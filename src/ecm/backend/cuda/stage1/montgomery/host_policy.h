@@ -15,7 +15,7 @@ struct MontRequestedSpec {
         const auto found=values.find(key);return found==values.end()?nullptr:found->second.c_str();
     }
 };
-MontRequestedSpec capture_mont_request(const char *algorithm=nullptr);
+MontRequestedSpec capture_mont_request(const char *algorithm=nullptr, const std::string& default_cache_dir={});
 const char *stage1_algorithm(const MontRequestedSpec &);
 struct PracPolicy {
     int mode;

@@ -1,9 +1,9 @@
 #include "execution_contract.h"
-#include "../../storage/checkpoint/ecm_checkpoint.h"
-#include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "ecm/backend/opencl/stage1/montgomery/checkpoint.h"
+#include "io/stage1_checkpoint.h"
 #include "ecm/core/stage1/selection.h"
-#include "../../storage/save/ecm_edwards_io.h"
-#include "ecm/storage/results/publication.h"
+#include "ecm/io/save.h"
+#include "ecm/io/results.h"
 #include "../../platform/generated/configuration_defaults.h"
 #include "ecm/platform/logging.h"
 #include <chrono>
@@ -11,11 +11,10 @@
 #include <fstream>
 #include <mutex>
 #include "preparation.h"
-#include "../../storage/save/ecm_save.h"
 #include <sstream>
 #include <cstring>
 #include <cmath>
-#include "sync/files.h"
+#include "io/files.h"
 
 namespace ecm_stage1 {
 struct TaskResult::State {
@@ -108,11 +107,11 @@ static void stage1_copy_save_history(const Stage1Options& opt, const std::string
     if (opt.persistence.legacy_save_source.empty())
         return;
     const auto source =
-        opencl_ecm_resolve_data_path_buf(opt.persistence.legacy_save_source.c_str());
-    const auto target = opencl_ecm_resolve_data_path_buf(destination.c_str());
-    if (!opencl_ecm_ensure_parent_dir(target.c_str()))
+        ecm_io::resolve_data_path(opt.persistence.legacy_save_source.c_str());
+    const auto target = ecm_io::resolve_data_path(destination.c_str());
+    if (!ecm_io::ensure_parent_dir(target.c_str()))
         throw std::runtime_error("cannot create prefixed save directory");
-    ecm_sync::FileLock publication(target);
+    ecm_io::FileLock publication(target);
     if ((std::filesystem::exists(target) && std::filesystem::file_size(target)) ||
         !std::filesystem::exists(source) || !std::filesystem::file_size(source))
         return;
@@ -160,10 +159,10 @@ static void stage1_copy_save_history(const Stage1Options& opt, const std::string
         throw std::runtime_error("cannot read complete legacy save history");
     if (!records)
         return;
-    if (!opencl_ecm_ensure_parent_dir(target.c_str()))
+    if (!ecm_io::ensure_parent_dir(target.c_str()))
         throw std::runtime_error("cannot create prefixed save directory");
-    ecm_sync::write_atomic(std::filesystem::u8path(target),
-                           ecm_sync::read_file(std::filesystem::u8path(source)));
+    ecm_io::write_atomic(std::filesystem::u8path(target),
+                           ecm_io::read_file(std::filesystem::u8path(source)));
     ecm_ts_fprintf(
         stdout,
         "Stage1 save history copied: source=%s target=%s records=%llu original_retained=1\n",
@@ -223,7 +222,7 @@ static void validate_saved_batch(const ecm_save::Range& range, const Stage1Optio
 
 static std::string save_destination(const Stage1Request& request) {
     if (!request.save_file.empty())
-        return opencl_ecm_resolve_data_path_buf(request.save_file.c_str());
+        return ecm_io::resolve_data_path(request.save_file.c_str());
     const auto& opt = request.options;
     if (opt.execution.selection.curve == CurveModel::Montgomery &&
         (opt.execution.selection.target == ExecutionTarget::Gpu || opt.persistence.tmp_dir.empty()))
@@ -257,33 +256,6 @@ static std::string encode_saved_batch(const Stage1Request& request,
                                 ecm_save_modulus_expression(request.expression, request.modulus));
 }
 
-// Owns batch state/lock lifetime only; task sequencing stays in run_stage1_task.
-class Stage1TaskSession {
-    bool active_ = false;
-
-public:
-    Stage1TaskSession() = default;
-    Stage1TaskSession(const Stage1TaskSession&) = delete;
-    Stage1TaskSession& operator=(const Stage1TaskSession&) = delete;
-
-    ~Stage1TaskSession() {
-        close(false);
-    }
-
-    void begin(const std::string& identity, uint32_t curves, bool fixed, uint64_t sigma,
-               bool defer = false) {
-        active_ = true; // begin_batch may acquire its lock before throwing.
-        ecm_stage1_begin_batch(identity, curves, fixed, sigma, defer);
-    }
-
-    void close(bool completed) {
-        if (!active_)
-            return;
-        ecm_stage1_end_batch(completed);
-        active_ = false;
-    }
-};
-
 TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies& deps) {
     const auto N = request.modulus;
     const double B1 = request.b1, B2 = request.b2;
@@ -293,7 +265,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
     const Stage1Options& opt = request.options;
     TaskResult result;
     auto* out = result.data_.get(); // Private execution payload; caller receives an owner.
-    Stage1TaskSession session;
+    ecm_stage1_checkpoint::Context session;
     auto phase = FailureSource::Preparation;
     try {
         const auto base = stage1_submission(opt, N, uint64_t(B1));
@@ -337,8 +309,8 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                                     .string();
         if (!path.empty())
             std::filesystem::create_directories(opt.persistence.tmp_dir);
-        ecm_stage1_set_backup_limit(opt.persistence.ckpt_backups);
-        ecm_stage1_set_checkpoint_path(path);
+        session.set_backup_limit(opt.persistence.ckpt_backups);
+        session.set_path(path);
         ExecutionOptions execution(opt);
         {
             auto identity = ecm_edwards::hex(N) + "|" +
@@ -361,7 +333,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         stage1_copy_save_history(opt, savefilename);
         const auto begin = std::chrono::steady_clock::now();
         phase = FailureSource::Execution;
-        out->computation = deps.execute(request, execution);
+        out->computation = deps.execute(request, execution, session);
         auto& computed = out->computation;
         if (computed.completion != ComputationResult::Completion::Completed) {
             out->status = computed.completion == ComputationResult::Completion::Stopped
@@ -389,7 +361,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                                     (base.edwards ? "ed" : "mont" + std::to_string(base.param));
         for (const auto& curve : computed.curves)
             task_identity += "|" + std::to_string(curve.sigma);
-        const auto publication_task = std::to_string(ecm_edwards::hash(task_identity));
+        const auto publication_task = std::to_string(ecm_io::fingerprint(task_identity));
         const auto publication_when = ecm_results::utc_timestamp();
         for (uint32_t i = 0; i < computed.curves.size(); ++i) {
             auto r = base;

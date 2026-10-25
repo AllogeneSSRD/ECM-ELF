@@ -1,6 +1,6 @@
 #include "entry.h"
 
-int opencl_ecm_stage1(mpz_t *factors,
+int opencl_ecm_stage1(void* checkpoint_context, mpz_t *factors,
                       int *array_found,
                       const mpz_t n,
                       const mpz_t s,
@@ -23,7 +23,7 @@ int opencl_ecm_stage1(mpz_t *factors,
         return -2;
     }
 
-    return cgbn_ecm_stage1(factors,
+    return cgbn_ecm_stage1(checkpoint_context, factors,
                            array_found,
                            n,
                            s,

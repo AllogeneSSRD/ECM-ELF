@@ -1,6 +1,6 @@
-#include "../../src/ecm/storage/checkpoint/ecm_mont_ckpt.h"
-#include "../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
-#include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "ecm/backend/cpu/stage1/montgomery/checkpoint.h"
+#include "ecm/backend/opencl/stage1/montgomery/checkpoint.h"
+#include "io/stage1_checkpoint.h"
 
 #include <filesystem>
 #include <cstdlib>
@@ -19,12 +19,14 @@ static void check(bool value, const char *message) {
 }
 
 int main(int argc, char **argv) {
+    ecm_stage1_checkpoint::Context checkpoint;
+
     namespace fs = std::filesystem;
     const fs::path dir = argc > 1 ? fs::path(argv[1]) : fs::path("data/experiments/stage1_ckpt_test");
     fs::create_directories(dir);
     const std::string path = (dir / "rotation_c0000000.ckpt").string();
-    ecm_stage1_remove_checkpoints(path);
-    ecm_stage1_set_backup_limit(2);
+    checkpoint.remove(path);
+    checkpoint.set_backup_limit(2);
 
     mpz_t N;
     mpz_init_set_ui(N, 1019);
@@ -39,7 +41,7 @@ int main(int argc, char **argv) {
     mpz_set_ui(write_state.Z1, 1);
     for (size_t bit = 10; bit <= 40; bit += 10) {
         write_state.bitnum = bit;
-        check(mont_ckpt_write(path, N, &write_state) == 0, "checkpoint write failed");
+        check(mont_ckpt_write(checkpoint, path, N, &write_state) == 0, "checkpoint write failed");
     }
     check(fs::exists(path) && fs::exists(ecm_stage1_backup_path(path, 1)) &&
           fs::exists(ecm_stage1_backup_path(path, 2)), "missing rotated generation");
@@ -48,36 +50,36 @@ int main(int argc, char **argv) {
     // A torn primary must fall back to the latest complete backup (bit 30).
     { std::ofstream corrupt(path, std::ios::binary | std::ios::trunc); corrupt << "torn"; }
     std::string why;
-    check(mont_ckpt_read(path, N, 1000, 1, 100, &read_state, &why) == 1,
+    check(mont_ckpt_read(checkpoint, path, N, 1000, 1, 100, &read_state, &why) == 1,
           "corrupt primary did not fall back");
     check(read_state.bitnum == 30, "recovered the wrong backup generation");
     write_state.bitnum = 50;
-    check(mont_ckpt_write(path, N, &write_state) == 0,
+    check(mont_ckpt_write(checkpoint, path, N, &write_state) == 0,
           "write after backup recovery failed");
-    check(mont_ckpt_read(ecm_stage1_backup_path(path, 1), N, 1000, 1, 100,
+    check(mont_ckpt_read(checkpoint, ecm_stage1_backup_path(path, 1), N, 1000, 1, 100,
                          &read_state, &why) == 1 && read_state.bitnum == 30,
           "corrupt primary replaced the last good backup");
 
-    ecm_stage1_set_backup_limit(1);
+    checkpoint.set_backup_limit(1);
     write_state.bitnum = 60;
-    check(mont_ckpt_write(path, N, &write_state) == 0,
+    check(mont_ckpt_write(checkpoint, path, N, &write_state) == 0,
           "checkpoint write after reducing backup cap failed");
     check(!fs::exists(ecm_stage1_backup_path(path, 2)),
           "backup above the reduced cap remained");
-    ecm_stage1_set_backup_limit(0);
+    checkpoint.set_backup_limit(0);
     write_state.bitnum = 70;
-    check(mont_ckpt_write(path, N, &write_state) == 0 &&
+    check(mont_ckpt_write(checkpoint, path, N, &write_state) == 0 &&
           !fs::exists(ecm_stage1_backup_path(path, 1)),
           "zero backup cap did not remove backups");
 
     // Completion removes the primary and every retained generation.
-    ecm_stage1_remove_checkpoints(path);
+    checkpoint.remove(path);
     check(!fs::exists(path) && !fs::exists(ecm_stage1_backup_path(path, 1)) &&
           !fs::exists(ecm_stage1_backup_path(path, 2)), "completion left checkpoints");
 
     const std::string binary = (dir / ".ecm_ckpt_test.dat").string();
-    ecm_stage1_remove_checkpoints(binary);
-    ecm_stage1_set_backup_limit(2);
+    checkpoint.remove(binary);
+    checkpoint.set_backup_limit(2);
     opencl_ecm_checkpoint_header_t header{};
     header.magic = OPENCL_ECM_CHECKPOINT_MAGIC;
     header.version = OPENCL_ECM_CHECKPOINT_VERSION;
@@ -88,7 +90,7 @@ int main(int argc, char **argv) {
     uint32_t words[4] = {1, 2, 3, 4};
     for (unsigned bit : {10u, 20u, 30u}) {
         header.s_partial = bit;
-        check(opencl_ecm_checkpoint_save(binary.c_str(), &header, words, sizeof(words)) == 0,
+        check(opencl_ecm_checkpoint_save(checkpoint, binary.c_str(), &header, words, sizeof(words)) == 0,
               "binary checkpoint write failed");
     }
     // Keep the file length valid; only the checksum detects this bit flip.
@@ -100,14 +102,14 @@ int main(int argc, char **argv) {
     opencl_ecm_checkpoint_header_t loaded{};
     uint32_t *payload = nullptr;
     size_t payload_size = 0;
-    check(opencl_ecm_checkpoint_load(binary.c_str(), &loaded, &payload, &payload_size) != 0,
+    check(opencl_ecm_checkpoint_load(checkpoint, binary.c_str(), &loaded, &payload, &payload_size) != 0,
           "damaged binary checkpoint passed checksum");
     const auto backup = ecm_stage1_backup_path(binary, 1);
-    check(opencl_ecm_checkpoint_load(backup.c_str(), &loaded, &payload, &payload_size) == 0 &&
+    check(opencl_ecm_checkpoint_load(checkpoint, backup.c_str(), &loaded, &payload, &payload_size) == 0 &&
           loaded.s_partial == 20 && payload_size == sizeof(words),
           "binary backup recovery failed");
     free(payload);
-    ecm_stage1_remove_checkpoints(binary);
+    checkpoint.remove(binary);
     check(!fs::exists(binary) && !fs::exists(backup), "binary backup cleanup failed");
 
 #ifdef _WIN32

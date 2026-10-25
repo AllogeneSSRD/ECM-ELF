@@ -1,4 +1,4 @@
-﻿/* cgbn_stage1.h: header for CGBN (GPU) based ecm stage 1.
+/* cgbn_stage1.h: header for CGBN (GPU) based ecm stage 1.
 
 Copyright 2021 Seth Troisi
 
@@ -59,7 +59,7 @@ using namespace ecm_cuda_mont_host;
 // outputf/test_verbose shims, ECM_GPU_* constants, and pulls in the project's
 // ECM_* return codes (include/ecm.h).
 #include "../../runtime/cuda_ecm_shim.h"
-#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "io/stage1_checkpoint.h"
 #include "ecm/platform/stage1_progress.h"
 
 #include <time.h>
@@ -89,7 +89,7 @@ using namespace ecm_cuda_mont_host;
 #include "prac/runtime.h"
 #endif
 
-static int run_mont_runtime(mpz_t *factors, int *array_found,
+static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint64_t *sigma_ptr,
              unsigned long checkpoint_interval_ms,
@@ -115,7 +115,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       outputf(OUTPUT_ERROR, "GPU: resident/PRAC requires param0 and a Montgomery build\n");
       return ECM_ERROR;
     }
-    return run_mont_resident(factors, array_found, N, s, curves, sigma_ptr,
+    return run_mont_resident(checkpoint, factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
                                strcmp(algorithm, "prac") == 0,outcome,construction,generate_sigma,requested);
 #else
@@ -259,7 +259,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   size_t n_log2 = mpz_sizeinbase(N, 2);
   
   // ========== CHECKPOINT LOADING ==========
-  const auto ckpt_path=checkpoint_record();
+  const auto ckpt_path=checkpoint_record(checkpoint);
   const auto *ckpt_filename=ckpt_path.c_str();
   checkpoint_header_t ckpt_header{};
   std::vector<uint32_t> checkpoint_data;
@@ -270,7 +270,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
         throw ecm_stage1_checkpoint::Error(result.state,result.error);
     return result.restored();
   };
-  ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
+  checkpoint.validate_pending([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
     if(records.size()!=curves || sigmas.size()!=curves)return false;
     for(size_t i=1;i<records.size();++i)if(!records[i].empty())return false;
     if(records[0].empty())return true;
@@ -285,13 +285,13 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     for(uint32_t i=0;i<curves;++i)sigmas[i]=ckpt_header.sigma+i;
     ckpt_loaded=true;return true;
   });
-  if(!ckpt_loaded && !ckpt_path.empty())for(const auto &candidate:ecm_stage1_checkpoint_candidates(ckpt_path)) {
+  if(!ckpt_loaded && !ckpt_path.empty())for(const auto &candidate:checkpoint.candidates(ckpt_path)) {
     std::string bytes;
-    const auto read=ecm_stage1_read_checkpoint_blob(candidate,bytes);
+    const auto read=checkpoint.read_checkpoint_blob(candidate,bytes);
     if(read==ecm_stage1_checkpoint::BlobRead::IoFailure)
         throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::IoFailure,"cannot read Montgomery checkpoint");
     if(read==ecm_stage1_checkpoint::BlobRead::Missing || !decode(bytes))continue;
-    if(candidate!=ckpt_path)ecm_stage1_mark_bad_primary(ckpt_path);
+    if(candidate!=ckpt_path)checkpoint.mark_bad_primary(ckpt_path);
     ckpt_loaded=true;break;
   }
   if(ckpt_loaded) {
@@ -304,7 +304,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     s_partial=ckpt_header.s_partial;batches_complete=ckpt_header.batches_complete;
   } else {
     uint64_t saved=0;
-    if(ecm_stage1_saved_sigma(0,saved))sigma64=saved;
+    if(checkpoint.saved_sigma(0,saved))sigma64=saved;
     else if(generate_sigma)sigma64=generate_sigma(curves,gpu_param);
   }
   if(sigma64>UINT64_MAX-(curves-1ull) ||
@@ -312,13 +312,13 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       throw RunError(Failure::Preparation,"CUDA sigma range overflow");
   *sigma_ptr=sigma64;sigma32=uint32_t(sigma64);
   for(uint32_t i=0;i<curves;++i)
-      if(ecm_stage1_batch_sigma(i,sigma64+i)!=sigma64+i)
+      if(checkpoint.sigma(i,sigma64+i)!=sigma64+i)
           throw RunError(Failure::Preparation,"nonconsecutive Montgomery checkpoint sigmas");
 
   // If no checkpoint, proceed with normal initialization
   if (!ckpt_loaded) {
   std::string existing_checkpoint;
-  if (!ecm_stage1_checkpoint_path().empty() && ecm_stage1_read_blob(ckpt_filename,existing_checkpoint)) {
+  if (!checkpoint.path().empty() && checkpoint.read_blob(ckpt_filename,existing_checkpoint)) {
     outputf(OUTPUT_ERROR,"GPU: invalid or incompatible batch checkpoint payload\n");
     return ECM_ERROR;
   }
@@ -734,7 +734,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       header.timestamp = time(NULL);
       
       outcome.snapshot_cursor=s_partial;
-      const bool saved=ckpt_path.empty() || save_checkpoint(ckpt_filename,&header,data,data_size);
+      const bool saved=ckpt_path.empty() || save_checkpoint(checkpoint, ckpt_filename,&header,data,data_size);
       if(!saved)throw RunError(Failure::Persistence,"Montgomery checkpoint write failed");
       if(!ckpt_path.empty())outcome.durable_cursor=s_partial;
       last_checkpoint_time=std::chrono::steady_clock::now();
@@ -775,13 +775,13 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   return youpi;
 }
 
-ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_mont_batch(mpz_t *factors,int *found,
+ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_mont_batch(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *factors,int *found,
     mpz_srcptr n,mpz_srcptr scalar,uint32_t curves,uint64_t *sigma,unsigned long checkpoint_ms,
     float *milliseconds,int verbose,int param,uint64_t b1,uint32_t torsion,FactorSink sink,void *context,SigmaGenerator generate_sigma,const ecm_cuda_mont_host::MontRequestedSpec *requested) {
     RunResult result;
     try {
         MontRequestedSpec fallback;if(!requested){fallback=capture_mont_request();requested=&fallback;}
-        result.code=run_mont_runtime(factors,found,n,scalar,curves,sigma,checkpoint_ms,
+        result.code=run_mont_runtime(checkpoint, factors,found,n,scalar,curves,sigma,checkpoint_ms,
                                     milliseconds,verbose,param,b1,torsion,result,sink,context,generate_sigma,*requested);
         if(result.code!=-1){result.termination=Termination::Completed;result.failure=Failure::None;}
         else if(result.termination==Termination::Stopped || result.termination==Termination::SampleLimit)
@@ -803,7 +803,8 @@ ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_mont_batch(mpz_t *factors,in
 int cgbn_ecm_stage1(mpz_t *factors,int *found,mpz_srcptr n,mpz_srcptr scalar,
     uint32_t curves,uint64_t *sigma,unsigned long checkpoint_ms,float *milliseconds,
     int verbose,int param,uint64_t b1,uint32_t torsion) {
-    return ecm_cuda_stage1::execute_mont_batch(factors,found,n,scalar,curves,sigma,
+    ecm_stage1_checkpoint::Context checkpoint;
+    return ecm_cuda_stage1::execute_mont_batch(checkpoint, factors,found,n,scalar,curves,sigma,
         checkpoint_ms,milliseconds,verbose,param,b1,torsion).code;
 }
 

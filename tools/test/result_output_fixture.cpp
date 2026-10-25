@@ -6,9 +6,9 @@
 static std::filesystem::path data_ledger(const std::filesystem::path &p){return p.parent_path()/"data"/(p.filename().string()+".ecm-ledger");}
 static std::filesystem::path legacy_ledger(const std::filesystem::path &p){return std::filesystem::path(p.string()+".ecm-ledger");}
 static void fixture_text(const std::filesystem::path &p,const std::string &text){std::ofstream out(p,std::ios::binary|std::ios::trunc);out<<text;out.close();if(!out)throw std::runtime_error("cannot write fixture input");}
-#include "ecm/storage/results/publication.h"
-#include "ecm/storage/queue/stage2_progress.h"
-#include "../../src/ecm/storage/results/ecm_result_json.h"
+#include "ecm/io/results.h"
+#include "ecm/io/stage2_checkpoint.h"
+#include "io/json.h"
 #include <iostream>
 static void check(bool ok){if(!ok)throw std::runtime_error("result lifecycle assertion failed");}
 static std::string read_bytes(const std::filesystem::path &path) {

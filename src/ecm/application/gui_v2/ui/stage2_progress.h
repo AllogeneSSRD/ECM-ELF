@@ -1,6 +1,6 @@
 #pragma once
 #include "../../gui/worker_controller.h"
-#include "../../../storage/results/ecm_result_json.h"
+#include "io/json.h"
 #include <array>
 #include <filesystem>
 #include <fstream>

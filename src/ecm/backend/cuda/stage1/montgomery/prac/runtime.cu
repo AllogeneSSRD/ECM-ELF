@@ -1,3 +1,4 @@
+#include "io/stage1_checkpoint.h"
 #include "runtime.h"
 #include "../registry.cuh"
 #include "../resources.cuh"
@@ -14,7 +15,7 @@ using namespace ecm_cuda_mont_host;
 #include "launch.h"
 #include "ecm_prac_plan.h"
 #include "constants.h"
-#include "../../../../../storage/cache/ecm_stage1_exp_cache.h"
+#include "io/exponent_cache.h"
 #include <chrono>
 #include <memory>
 #include <fstream>
@@ -44,7 +45,7 @@ struct ResidentResources {
     }
 };
 #include "prac_window.inl"
-int ecm_cuda_stage1::run_mont_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
+int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
     uint32_t curves, uint64_t *sigma, unsigned long checkpoint_ms, float *gputime,
     uint64_t B1, uint32_t torsion, bool prac,ecm_cuda_stage1::RunResult &outcome,
     const ConstructionResults &construction,ecm_cuda_stage1::SigmaGenerator generate_sigma,const MontRequestedSpec &requested) {
@@ -92,10 +93,10 @@ int ecm_cuda_stage1::run_mont_resident(mpz_t *factors, int *found, mpz_srcptr N,
         ResidentCheckpoint h{0x31524d444d434545ull, B1, ecm_prac_hash_mpz(s), ecm_prac_hash_mpz(N),
             prac ? plan.identity : ecm_prac_hash_mpz(s), prac ? 0ull : 1ull, total, *sigma,
             bytes, 0, 1, prac ? 3u : 2u, 1, bits, tpi, curves, torsion, 0};
-        const auto path=checkpoint_record();
+        const auto path=checkpoint_record(checkpoint);
         std::vector<uint32_t> data(bytes / sizeof(uint32_t));
         bool resumed=false;
-        ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
+        checkpoint.validate_pending([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
             if(window.enabled())throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
                 "window sample cannot resume a production checkpoint");
             if(records.size()!=curves || sigmas.size()!=curves)return false;
@@ -111,7 +112,7 @@ int ecm_cuda_stage1::run_mont_resident(mpz_t *factors, int *found, mpz_srcptr N,
         });
         if(!resumed && !window.enabled() && !path.empty()) {
             std::string saved;
-            const auto read=ecm_stage1_read_checkpoint_blob(path,saved);
+            const auto read=checkpoint.read_checkpoint_blob(path,saved);
             if(read==ecm_stage1_checkpoint::BlobRead::IoFailure)
                 throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::IoFailure,"cannot read resident checkpoint");
             if(read==ecm_stage1_checkpoint::BlobRead::Read) {
@@ -126,13 +127,13 @@ int ecm_cuda_stage1::run_mont_resident(mpz_t *factors, int *found, mpz_srcptr N,
                 (unsigned long long)h.next,(unsigned long long)h.total,(unsigned long long)*sigma);
         } else {
             uint64_t saved=0;
-            if(ecm_stage1_saved_sigma(0,saved))*sigma=saved;
+            if(checkpoint.saved_sigma(0,saved))*sigma=saved;
             else if(generate_sigma)*sigma=generate_sigma(curves,0);
             h.sigma=*sigma;
         }
         if(*sigma>UINT64_MAX-(curves-1ull))throw RunError(Failure::Preparation,"resident sigma range overflow");
         for(uint32_t i=0;i<curves;++i)
-            if(ecm_stage1_batch_sigma(i,*sigma+i)!=*sigma+i)
+            if(checkpoint.sigma(i,*sigma+i)!=*sigma+i)
                 throw RunError(Failure::Preparation,"nonconsecutive resident checkpoint sigmas");
         {
             size_t initial_bytes = 0;
@@ -219,7 +220,7 @@ int ecm_cuda_stage1::run_mont_resident(mpz_t *factors, int *found, mpz_srcptr N,
                 CUDA_CHECK(cudaMemcpy(data.data(), gpu.data, bytes, cudaMemcpyDeviceToHost));
                 outcome.snapshot_cursor=h.next;
                 if(!path.empty()) {
-                    if(!save_checkpoint(path,h,data))throw RunError(Failure::Persistence,"resident checkpoint write failed");
+                    if(!save_checkpoint(checkpoint, path,h,data))throw RunError(Failure::Persistence,"resident checkpoint write failed");
                     outcome.durable_cursor=h.next;
                 }
                 outputf(OUTPUT_ALWAYS,path.empty()?"GPU: no checkpoint configured (next=%llu/%llu)\n":"GPU: checkpoint saved (Montgomery domain, next=%llu/%llu)\n",

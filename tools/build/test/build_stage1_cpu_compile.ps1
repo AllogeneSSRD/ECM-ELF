@@ -17,7 +17,7 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Ra
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output ".gitignore"),"*`n")
-$sources=@('src/ecm/service/stage1/execution_contract.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/legacy_executor.cpp')
+$sources=@('src/ecm/service/stage1/execution_contract.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/edwards/workflow.cpp','src/ecm/backend/cpu/stage1/montgomery/workflow.cpp','src/ecm/backend/cpu/stage1/execution_support.cpp')
 if($IncludeGpuHost){
     $sources+=@('src/ecm/service/stage1/execution.cpp',
         'src/ecm/backend/cuda/stage1/montgomery/workflow.cpp',
@@ -35,7 +35,7 @@ if($IncludeMontgomeryHost){
 if($IncludeOpenCLHost){$sources+='src/ecm/backend/opencl/stage1/montgomery/workflow.cpp'}
 if($IncludeQueueHost){
     $sources+=@('src/io/normalize.cpp','src/ecm/application/cli/group_order.cpp',
-        'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/sync/files.cpp')
+        'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/io/files.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}
 $definitions=if($IncludeGpuHost){' /DECM_HAS_CUDA_STAGE1=1'}else{''}

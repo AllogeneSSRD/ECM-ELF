@@ -207,7 +207,7 @@ def main():
                 completed=submission.read_bytes()
                 replay=[exe,'--curve','ed','--target','cpu','--impl','scalar','--stage1-threads',2,
                         '-sigma',20260922,'-gpucurves',4,'--tmp-dir',work,'--config',work/'ecm.toml',
-                        '-save',work/'points.save',1000,1000]
+                        '-savea',work/'points.save',1000,1000]
                 n=(1<<347)-1 if name=='ed_scalar' else 1009*((1<<127)-1)
                 call(name+'_stage1_replay',replay,work,str(n)+'\n')
                 assert submission.read_bytes()==completed
@@ -231,7 +231,7 @@ def main():
                     shutil.copy2(work/'points.save',pending_work/'points.save')
                     ini=pending_work/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n',encoding='utf-8')
                     pending_replay=list(replay)
-                    for option,value in (('--config',ini),('--tmp-dir',pending_work),('-save',pending_work/'points.save')):
+                    for option,value in (('--config',ini),('--tmp-dir',pending_work),('-savea',pending_work/'points.save')):
                         pending_replay[pending_replay.index(option)+1]=value
                     call('stage1_with_pending_stage2_nf',pending_replay,pending_work,str(n)+'\n')
                     assert pending.read_bytes()==before and not list(pending_ledger.rglob('*.batch'))

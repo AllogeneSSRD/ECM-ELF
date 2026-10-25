@@ -4,7 +4,7 @@
 #include <vector>
 #include <gmp.h>
 #include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
-#include "../../src/ecm/storage/save/ecm_edwards_save.h"
+#include "io/prime95_save.h"
 
 static void compute_s(mpz_t s, unsigned long B1) {
     mpz_set_ui(s, 48);
@@ -35,7 +35,7 @@ static int gen_progress(void *p, const edwards_checkpoint_t *cur) {
     cm.B1 = 1000000; cm.B2 = 0; cm.sigma = g->sigma;
     uint32_t expbuf = (uint32_t)mpz_sizeinbase(*g->s, 2);
     uint32_t dict = (uint32_t)1u << (edwards_get_naf_w() - 2);
-    ecm_edwards_write_stage1(g->path, cm, 2, expbuf, cur->bitnum, dict,
+    ecm_edwards_write_stage1(checkpoint, g->path, cm, 2, expbuf, cur->bitnum, dict,
                              Px, Py, cur->Rx, cur->Ry, cur->Rz);
     mpz_clears(d, Px, Py, NULL);
     printf("wrote STAGE1 checkpoint @ bitnum=%u\n", cur->bitnum);
