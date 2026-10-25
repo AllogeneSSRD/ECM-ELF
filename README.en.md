@@ -246,7 +246,14 @@ CUDA Stage1 and Stage2 each have **development, local production and release pro
 .\tools\build\build_stage2_release.ps1
 ```
 
-Release entry points target sm60, 70, 75, 86, 89 and 120 by default: sm60/70 use CUDA 12.6, while the other tiers use CUDA 13.3. Execution still needs a matching NVIDIA GPU, driver and validated CPU dependencies. Local/development builds default to a local Zen3 GMP; releases default to generic x64 GMP. A local DLL is not automatically suitable for redistribution. Production Stage1 defaults to the complete supported tiers/curve families and the ladder; PRAC/resident experiments require explicit build and runtime selection. Successful compilation is not a runtime qualification of every architecture. See [build and release](docs/usage/BUILD.md) and [launcher parameters](tools/build/README.md).
+**Choosing a CUDA release package (Windows x64):**
+
+- **cu11.8 legacy GPU package**: for Maxwell, Pascal and Volta, including the GTX 750/900/10 series and V100.
+- **cu13.3 modern package (recommended for newer GPUs)**: for Turing and later, including the GTX 16 and RTX 20/30/40/50 series.
+
+Your driver must also support the selected package. See the [GPU model and SM quick reference](docs/usage/BUILD.md#gpu-型号与发布包选择) for model mappings and compatibility limits.
+
+Local/development builds default to a local Zen3 GMP; releases default to generic x64 GMP. A local DLL is not automatically suitable for redistribution. Production Stage1 defaults to the complete supported tiers/curve families and the ladder; PRAC/resident experiments require explicit build and runtime selection. Successful compilation is not a runtime qualification of every architecture. See [build and release](docs/usage/BUILD.md) and [launcher parameters](tools/build/README.md).
 
 The OpenCL/CPU CMake project needs a suitable C++ toolchain, GMP, OpenCL runtime/headers and required build libraries; CUDA also needs compatible nvcc/MSVC. `ecm.exe` and OpenCL operator microbenchmarks can be built separately. Use the current [build guide](docs/usage/BUILD.md) and CMake options for Windows debug/release or a specific toolchain. The following microbenchmark entries are retained from the earlier README; actual targets and options depend on the build:
 

@@ -246,7 +246,14 @@ CUDA Stage1 与 Stage2 各有**开发、本机生产、发布生产**三组入�
 .\tools\build\build_stage2_release.ps1
 ```
 
-发布入口默认覆盖 sm60、70、75、86、89、120：sm60/70 使用 CUDA 12.6，其他档位使用 CUDA 13.3；实际执行仍需匹配的 NVIDIA GPU、驱动和 CPU 依赖验证。本机/开发默认以本地 Zen3 GMP 构建，发布默认使用通用 x64 GMP，不能把本机 DLL 直接视为通用发布依赖。生产 Stage1 默认完整位宽/曲线族与 ladder；PRAC/resident 实验需要显式构建和选择。构建成功并不代表全部架构已经运行验收。详见 [构建与发布](docs/usage/BUILD.md)、[脚本参数](tools/build/README.md)。
+**CUDA 发布包选择（Windows x64）：**
+
+- **cu11.8 旧显卡兼容包**：用于 Maxwell、Pascal、Volta，例如 GTX 750/900/10 系列及 V100。
+- **cu13.3 现代包（新显卡推荐）**：用于 Turing 及更新架构，例如 GTX 16、RTX 20/30/40/50 系列。
+
+驱动仍须与所选包兼容；具体型号、SM 和兼容边界见 [GPU 型号与 SM 速查表](docs/usage/BUILD.md#gpu-型号与发布包选择)。
+
+本机/开发默认以本地 Zen3 GMP 构建，发布默认使用通用 x64 GMP，不能把本机 DLL 直接视为通用发布依赖。生产 Stage1 默认完整位宽/曲线族与 ladder；PRAC/resident 实验需要显式构建和选择。构建成功并不代表全部架构已经运行验收。详见 [构建与发布](docs/usage/BUILD.md)、[脚本参数](tools/build/README.md)。
 
 OpenCL/CPU 的 CMake 工程需要相应 C++ 工具链、GMP、OpenCL 运行时/头文件及构建所需库；CUDA 工程还需要匹配的 nvcc/MSVC。OpenCL 构建中的 `ecm.exe` 和算子微基准可单独构建；Windows 调试、发布或特定工具链的命令应以当前 [构建说明](docs/usage/BUILD.md) 和 CMake 选项为准。下列微基准是原 README 的常用入口，实际可用目标和选项取决于构建：
 
