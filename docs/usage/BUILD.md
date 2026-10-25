@@ -52,6 +52,41 @@ Stage2 local/release 默认 `-KernelLayout grouped`：设备实现使用算术�
 
 Windows 旧包面向 Maxwell/Pascal：sm50/52 需要 PTX50 JIT；sm61 可使用 sm60 同大版本相容 SASS。452.39 是 CUDA11.x 小版本兼容条件，不能当成11.8 PTX 的最低驱动；522.06是11.8对应的Windows驱动，作为候选测试基线。实际旧卡、旧驱动尚须分别验证，显式加载不能修复不支持的 PTX ISA。[NVIDIA 11.8发布说明](https://docs.nvidia.com/cuda/archive/11.8.0/cuda-toolkit-release-notes/index.html)、[小版本兼容限制](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)。
 
+### GPU 型号与发布包选择
+
+Family 是微架构，Chip 是芯片代号，Compute Capability（CC）是设备计算能力。例如 RTX 4070 Ti 使用 AD104、CC 8.9，对应本机编译目标 `sm_89`；CC 数字与 CUDA Toolkit 版本号相互独立。型号、芯片及 SM 信息从本地 `.refactor/NVIDIA GPU Family_Chip_SM_CUDA速查表.html`（[上游速查表](https://jacocheung.github.io/visualization/cheatsheets/nv-gpu-family/)）提取，并于2026-10-25对照 [NVIDIA 当前 GPU 表](https://developer.nvidia.com/cuda/gpus)和[旧 GPU 表](https://developer.nvidia.com/cuda/gpus/legacy)核对。只保留构建选型需要的代表型号，移动版、OEM及同名不同芯片产品应按实际设备 CC 确认。
+
+下表的选路由当前发布目标与 NVIDIA 镜像兼容规则推导，前提是操作系统、驱动和运行库均兼容；它不表示这些实体显卡都已完成本项目验收。已测设备、驱动与待验证范围见[发布/JIT验证](../performance/RELEASE_JIT.md#兼容性边界与待验条件)。
+
+| 微架构 | 代表芯片 / 产品 | CC / 本机目标 | 对应发布包及默认镜像路径 |
+| --- | --- | --- | --- |
+| Maxwell | GM107；GTX 750 / 750 Ti | 5.0 / `sm_50` | cu11.8，PTX50 JIT |
+| Maxwell | GM200 / GM204 / GM206；桌面 GTX 950–980 Ti | 5.2 / `sm_52` | cu11.8，PTX50 JIT |
+| Pascal | GP100；Tesla P100 | 6.0 / `sm_60` | cu11.8，SASS60 |
+| Pascal | GP102 / GP104 / GP106 / GP107 / GP108；GTX 10系、GT 1030 | 6.1 / `sm_61` | cu11.8，兼容 SASS60 |
+| Volta | GV100；V100 / Titan V | 7.0 / `sm_70` | cu11.8，PTX50 JIT |
+| Turing | TU10x / TU11x；RTX 20系、GTX 16系、T4 | 7.5 / `sm_75` | cu13.3，PTX75 JIT |
+| Ampere | GA100；A100 / A30 | 8.0 / `sm_80` | cu13.3，SASS80 |
+| Ampere | GA10x；RTX 30系、A40 / A10 | 8.6 / `sm_86` | cu13.3，兼容 SASS80 |
+| Ada Lovelace | AD10x；RTX 40系、L4 / L40 / L40S | 8.9 / `sm_89` | cu13.3，兼容 SASS80 |
+| Hopper | GH100；H100 / H200 | 9.0 / `sm_90` | cu13.3，PTX75 JIT |
+| Blackwell 数据中心 | B200 / GB200 | 10.0 / `sm_100` | cu13.3，PTX75 JIT |
+| Blackwell Ultra | B300 / GB300 | 10.3 / `sm_103` | cu13.3，PTX75 JIT |
+| Blackwell 图形 / 工作站 | GB20x；RTX 50系、RTX PRO Blackwell | 12.0 / `sm_120` | cu13.3，PTX75 JIT |
+
+Kepler（CC 3.x）及更早设备低于两个包的 PTX 下限，当前 CUDA 包不提供对应镜像。Turing及更新设备优先选择现代包；旧包即使可通过 PTX 在新卡运行，也保留旧虚拟目标选出的算术路径，JIT 不会重新进行 C++ 条件编译。已有 sm89 上的性能原因与对照见[旧包算术后端](../performance/RELEASE_JIT.md#旧目标-ptx-在-ada-上的持续吞吐)。
+
+Jetson / ARM 平台单独选型：Orin 为 CC 8.7（`sm_87`），Jetson Thor 的 T4000/T5000 为 CC 11.0（`sm_110`），DGX Spark / GB10 为 CC 12.1（`sm_121`）。这些 CC 对照不意味着 Windows x64 发布包可以在 ARM/Jetson 上运行，也不将其纳入上表的 SASS 兼容推导。[NVIDIA GPU 表](https://developer.nvidia.com/cuda/gpus)
+
+### 原生编译、PTX 与驱动边界
+
+- CUDA13.0已移除 Maxwell、Pascal、Volta 的离线编译及库支持；为这些设备重新编译需使用仍支持对应目标的12.x或更早工具链。本项目保留 cu11.8 旧包，现代包最低虚拟目标为 compute75。[CUDA13.0发布说明](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html#deprecated-architectures)
+- Ada `sm_89` 与 Hopper `sm_90` 的原生编译从 CUDA11.8 开始；Blackwell `sm_100` / `sm_120` 从 CUDA12.8 开始；`sm_103` / `sm_103a` 和 `sm_121` 从 CUDA12.9 开始。这里是工具链接受目标的下限，不是旧 PTX 在新硬件上 JIT 的下限，也不是本项目所有依赖的最低版本。构建时仍由工具链解析器核对实际 nvcc 目标列表。[Ada兼容指南](https://docs.nvidia.com/cuda/ada-compatibility-guide/index.html)、[Hopper兼容指南](https://docs.nvidia.com/cuda/archive/11.8.0/hopper-compatibility-guide/index.html)、[CUDA12.8说明](https://developer.nvidia.com/blog/cuda-toolkit-12-8-delivers-nvidia-blackwell-support/)、[CUDA12.9发布说明](https://docs.nvidia.com/cuda/archive/12.9.0/cuda-toolkit-release-notes/index.html)
+- `compute_XX` 是虚拟编译目标，保留为 PTX 后由驱动 JIT；`sm_XX` 是原生 cubin/SASS 目标。普通 cubin 可在相同 CC 主版本、相同或更高次版本上使用，例如 sm80 → sm86/89；不能跨主版本推导到 sm90或sm120。普通 PTX可向更高 CC 前向编译，仍要求驱动识别编译器生成的 PTX ISA。[Blackwell兼容指南](https://docs.nvidia.com/cuda/blackwell-compatibility-guide/index.html#application-compatibility-on-blackwell-architecture)
+- `-gencode arch=compute_90,code=sm_90` 只保留 SASS。若要同时保留 PTX，须另外指定 `code=compute_90` 或在 `code` 列表中包含它；本项目发布脚本分别显式指定唯一 PTX 和唯一 SASS。`sm_90a` / `compute_90a` 等带 `a` 的架构专用目标不具有普通 PTX 的跨代前向兼容保证，不能替代当前发布回退目标。[NVCC目标保留规则与架构专用限制](https://docs.nvidia.com/cuda/blackwell-compatibility-guide/index.html)
+
+设备 CC、编译 Toolkit、驱动支持的 CUDA/PTX 能力需要分别检查。`nvidia-smi` 显示的 CUDA Version 不等于已安装的 Toolkit；本机 Toolkit 版本也不能单独判断某个发布 EXE 是否可运行。旧驱动、13.x小版本兼容及本项目实测边界统一见[发布/JIT验证](../performance/RELEASE_JIT.md#兼容性边界与待验条件)。OpenCL `ecm.exe` 使用另一套后端和驱动能力检查，CUDA SM 表不作为其支持列表。
+
 ## 完整发布与按需加载
 
 release入口先自动同步业务配置和GUI v2派生文件，再解析依赖和构建组件；任一生成步骤失败即停止。`-SkipBuild` 仅检查生成物，不自动更新它们；过期时需先正常构建。无内容变化的生成物不改时间戳。
