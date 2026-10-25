@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // Baby/giant generation, normalization, segment inverses and nonunit recovery.
 #include "points.h"
 #include "product.h"
@@ -185,18 +186,18 @@ void ladder_points(
         CK(cudaMalloc(&dz, n * nw * 8));
         cap_n = n;
     }
-    CK(cudaMemcpy(dn, C.hn.data(), nw * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dqx, C.hqx.data(), nw * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dqz, C.hqz.data(), nw * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(da24, C.ha24.data(), nw * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dmone, C.hmone.data(), nw * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(djs, js.data(), n * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dn, C.hn.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dqx, C.hqx.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dqz, C.hqz.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(da24, C.ha24.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dmone, C.hmone.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(djs, js.data(), n * 8, cudaMemcpyHostToDevice));
     S2G_DISPATCH((int)nw, s2g_launch_ladder, (int)nw, (int)n, dn, C.ninv, dqx, dqz, da24, dmone,
                  djs, dx, dz);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
-    CK(cudaMemcpy(outx.data(), dx, outx.size() * 8, cudaMemcpyDeviceToHost));
-    CK(cudaMemcpy(outz.data(), dz, outz.size() * 8, cudaMemcpyDeviceToHost));
+    CK(stage2_wait::copy(outx.data(), dx, outx.size() * 8, cudaMemcpyDeviceToHost));
+    CK(stage2_wait::copy(outz.data(), dz, outz.size() * 8, cudaMemcpyDeviceToHost));
 }
 
 bool S3Workspace::need_giant_base(unsigned long long d,mpz_srcptr modulus)
@@ -205,12 +206,12 @@ bool S3Workspace::need_giant_base(unsigned long long d,mpz_srcptr modulus)
     const double begin=now_s();const size_t nw=C->nw;
     if(!giant_base){CK(cudaMalloc(&giant_base,16*nw));bytes+=16*nw;}
     {
-        need_pts(1);CK(cudaMemcpy(djs,&d,8,cudaMemcpyHostToDevice));
+        need_pts(1);CK(stage2_wait::copy(djs,&d,8,cudaMemcpyHostToDevice));
         S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
                      djs,giant_base,giant_base+nw,false);
         CK(cudaGetLastError());++ladder_calls;++ladder_points_total;
         std::vector<unsigned long long> z(nw);
-        CK(cudaMemcpy(z.data(),giant_base+nw,8*nw,cudaMemcpyDeviceToHost));
+        CK(stage2_wait::copy(z.data(),giant_base+nw,8*nw,cudaMemcpyDeviceToHost));
         mpz_t value,gcd;mpz_inits(value,gcd,nullptr);
         words_to_mpz(value,z.data(),nw);mpz_gcd(gcd,value,modulus);
         giant_base_unit=mpz_cmp_ui(gcd,1)==0;mpz_clears(value,gcd,nullptr);
@@ -235,13 +236,13 @@ void ladder_points_ws(
     outz.assign(n * nw, 0ull);
     if (n == 0) return;
     W.need_pts(n);
-    CK(cudaMemcpy(W.djs, js.data(), n * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(W.djs, js.data(), n * 8, cudaMemcpyHostToDevice));
     S2G_DISPATCH((int)nw, s2g_launch_ladder, (int)nw, (int)n, W.dn, C.ninv, W.dqx, W.dqz,
                  W.da24, W.dmone, W.djs, W.dx, W.dz);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
-    CK(cudaMemcpy(outx.data(), W.dx, outx.size() * 8, cudaMemcpyDeviceToHost));
-    CK(cudaMemcpy(outz.data(), W.dz, outz.size() * 8, cudaMemcpyDeviceToHost));
+    CK(stage2_wait::copy(outx.data(), W.dx, outx.size() * 8, cudaMemcpyDeviceToHost));
+    CK(stage2_wait::copy(outz.data(), W.dz, outz.size() * 8, cudaMemcpyDeviceToHost));
     ++W.ladder_calls;
     W.ladder_points_total += n;
 }
@@ -278,13 +279,13 @@ void ResidentGiant::prepare(
         mpz_to_words(word,w,p);std::copy(word.begin(),word.end(),fix.begin()+j*w);
         mpz_mul(p,p,R);mpz_mod(p,p,L.N);
     }
-    CK(cudaMemcpy(group_fix,fix.data(),fix.size()*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(group_fix,fix.data(),fix.size()*8,cudaMemcpyHostToDevice));
     S2G_DISPATCH((int)w,s2g_launch_segprod,(int)w,ns,GROUP,ws.C->ninv,ws.dn,segments,groups_device,group_fix);
-    CK(cudaGetLastError());CK(cudaMemcpy(products.data(),groups_device,products.size()*8,cudaMemcpyDeviceToHost));
+    CK(cudaGetLastError());CK(stage2_wait::copy(products.data(),groups_device,products.size()*8,cudaMemcpyDeviceToHost));
     st.group_d2h_bytes+=products.size()*8;st.group_peak_bytes=std::max(st.group_peak_bytes,8ull*(ng+GROUP+1)*w);
     std::vector<unsigned long long> all_segments;
     if(device_gleaf_flag("NTT_DEVICE_GLEAF_CHECK")) {
-        all_segments.resize(ns*w);CK(cudaMemcpy(all_segments.data(),segments,all_segments.size()*8,cudaMemcpyDeviceToHost));
+        all_segments.resize(ns*w);CK(stage2_wait::copy(all_segments.data(),segments,all_segments.size()*8,cudaMemcpyDeviceToHost));
     }
     for(size_t h=0;h<ng;++h) {
         const size_t lo=h*GROUP,hi=std::min(ns,lo+GROUP);
@@ -299,12 +300,12 @@ void ResidentGiant::prepare(
             group_good[h]=1;mpz_mul(Ginv,Ginv,inv);mpz_mod(Ginv,Ginv,L.N);
             gamma_points+=std::min(n,hi*SEG)-lo*SEG;projective_segments+=hi-lo;st.good_segments+=hi-lo;
         } else {
-            ++st.bad_groups;CK(cudaMemcpy(gseg.data()+lo*w,segments+lo*w,(hi-lo)*w*8,cudaMemcpyDeviceToHost));
+            ++st.bad_groups;CK(stage2_wait::copy(gseg.data()+lo*w,segments+lo*w,(hi-lo)*w*8,cudaMemcpyDeviceToHost));
             st.bad_segment_d2h_bytes+=(hi-lo)*w*8;
             const size_t first=lo*SEG,count=std::min(n,hi*SEG)-first;
             bad_x[h].resize(count*w);bad_z[h].resize(count*w);
-            CK(cudaMemcpy(bad_x[h].data(),x+first*w,count*w*8,cudaMemcpyDeviceToHost));
-            CK(cudaMemcpy(bad_z[h].data(),z+first*w,count*w*8,cudaMemcpyDeviceToHost));
+            CK(stage2_wait::copy(bad_x[h].data(),x+first*w,count*w*8,cudaMemcpyDeviceToHost));
+            CK(stage2_wait::copy(bad_z[h].data(),z+first*w,count*w*8,cudaMemcpyDeviceToHost));
             st.bad_point_d2h_bytes+=count*w*16;
         }
     }
@@ -327,7 +328,7 @@ void giant_ladder_into(
     for(size_t offset=0;offset<points;offset+=scalars.size()) {
         const auto take=std::min(scalars.size(),points-offset);
         for(size_t i=0;i<take;++i)scalars[i]=(first+offset+i)*D;
-        CK(cudaMemcpy(ws.djs,scalars.data(),take*8,cudaMemcpyHostToDevice));
+        CK(stage2_wait::copy(ws.djs,scalars.data(),take*8,cudaMemcpyHostToDevice));
         S2G_DISPATCH((int)w,s2g_launch_ladder,(int)w,(int)take,ws.dn,C.ninv,
             ws.dqx,ws.dqz,ws.da24,ws.dmone,ws.djs,x+offset*w,z+offset*w);
         CK(cudaGetLastError());++ws.ladder_calls;ws.ladder_points_total+=take;
@@ -383,7 +384,7 @@ bool giant_chunk_chain(
             ++g_giant_seed.paired_chunks;g_giant_seed.paired_ladders+=blocks;
             g_giant_seed.scalar_h2d_avoided+=js.size()*8;
         } else {
-            CK(cudaMemcpy(W.djs,js.data(),js.size()*8,cudaMemcpyHostToDevice));
+            CK(stage2_wait::copy(W.djs,js.data(),js.size()*8,cudaMemcpyHostToDevice));
             S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,(int)js.size(),W.dn,C.ninv,
                          W.dqx,W.dqz,W.da24,W.dmone,W.djs,W.dx,W.dz,false);
         }
@@ -396,8 +397,8 @@ bool giant_chunk_chain(
         g_giant_seed.avoided_montmuls+=2*js.size();
         if(g_giant_seed_check) {
             lx.resize(js.size()*nw);lz.resize(js.size()*nw);
-            CK(cudaMemcpy(lx.data(),W.dx,lx.size()*8,cudaMemcpyDeviceToHost));
-            CK(cudaMemcpy(lz.data(),W.dz,lz.size()*8,cudaMemcpyDeviceToHost));
+            CK(stage2_wait::copy(lx.data(),W.dx,lx.size()*8,cudaMemcpyDeviceToHost));
+            CK(stage2_wait::copy(lz.data(),W.dz,lz.size()*8,cudaMemcpyDeviceToHost));
             std::vector<unsigned long long> cx,cz,expect(nw);
             ladder_points(C,js,cx,cz); // independent normal-output endpoint, not W's lease
             mpz_t old_z,new_z;mpz_inits(old_z,new_z,nullptr);
@@ -458,12 +459,12 @@ bool giant_chunk_chain(
     CK(cudaMalloc(&ddx, nw * 8));
     CK(cudaMalloc(&ddz, nw * 8));
 
-    CK(cudaMemcpy(ddsx, hdsx.data(), nseed * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(ddsz, hdsz.data(), nseed * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(desx, hesx.data(), nseed * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(desz, hesz.data(), nseed * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(ddx, hdx.data(), nw * 8, cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(ddz, hdz.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(ddsx, hdsx.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(ddsz, hdsz.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(desx, hesx.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(desz, hesz.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(ddx, hdx.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(ddz, hdz.data(), nw * 8, cudaMemcpyHostToDevice));
     }
     CK(cudaMalloc(&ox, (size_t)npts * nw * 8));
     CK(cudaMalloc(&oz, (size_t)npts * nw * 8));
@@ -483,8 +484,8 @@ bool giant_chunk_chain(
     CK(cudaDeviceSynchronize());
     if(!resident || check || g_gfinv_seg_check) {
         gx.assign((size_t)npts*nw,0);gz.assign((size_t)npts*nw,0);
-        CK(cudaMemcpy(gx.data(),ox,gx.size()*8,cudaMemcpyDeviceToHost));
-        CK(cudaMemcpy(gz.data(),oz,gz.size()*8,cudaMemcpyDeviceToHost));
+        CK(stage2_wait::copy(gx.data(),ox,gx.size()*8,cudaMemcpyDeviceToHost));
+        CK(stage2_wait::copy(gz.data(),oz,gz.size()*8,cudaMemcpyDeviceToHost));
     } else {std::vector<unsigned long long>().swap(gx);std::vector<unsigned long long>().swap(gz);}
     /* the per-segment z-products, while the point buffers are still on the device (section 42) */
     unsigned long long *dsp = nullptr;
@@ -502,7 +503,7 @@ bool giant_chunk_chain(
         }
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
-        if(!resident || g_gfinv_seg_check)CK(cudaMemcpy(gseg->data(),dsp,gseg->size()*8,cudaMemcpyDeviceToHost));
+        if(!resident || g_gfinv_seg_check)CK(stage2_wait::copy(gseg->data(),dsp,gseg->size()*8,cudaMemcpyDeviceToHost));
         if(!resident)cudaFree(dsp);
         if(g_gfinv_seg_check) {
             if(seg!=S2G_GFINV_SEG){std::fprintf(stderr,"FATAL: segment check grid mismatch\n");std::exit(3);}
@@ -643,12 +644,12 @@ bool device_baby_generate(
     for(auto *b:{&dn,&dqx,&dqz,&da,&dm})if(!b->allocate(w*8))return false;
     if(!dj.allocate(n*8) || !dx.allocate(n*w*8) || !dz.allocate(n*w*8) ||
        !tree.allocate(words*8) || !output.allocate(n*w*8) || !mask.allocate(groups))return false;
-    CK(cudaMemcpy(dn.ptr,C.hn.data(),w*8,cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dqx.ptr,C.hqx.data(),w*8,cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dqz.ptr,C.hqz.data(),w*8,cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(da.ptr,C.ha24.data(),w*8,cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dm.ptr,C.hmone.data(),w*8,cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dj.ptr,indices.data(),n*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dn.ptr,C.hn.data(),w*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dqx.ptr,C.hqx.data(),w*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dqz.ptr,C.hqz.data(),w*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(da.ptr,C.ha24.data(),w*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dm.ptr,C.hmone.data(),w*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(dj.ptr,indices.data(),n*8,cudaMemcpyHostToDevice));
     S2G_DISPATCH((int)w,s2g_launch_ladder,(int)w,(int)n,dn.words(),C.ninv,dqx.words(),dqz.words(),
                  da.words(),dm.words(),dj.words(),dx.words(),dz.words(),false);
     CK(cudaGetLastError());CK(cudaDeviceSynchronize());st.ladder_seconds=now_s()-begin;
@@ -659,7 +660,7 @@ bool device_baby_generate(
     }
     std::vector<unsigned long long> roots(groups*w),negative(n*w),word(w);
     std::vector<unsigned char> good(groups,0);
-    CK(cudaMemcpy(roots.data(),tree.words()+offset[8],roots.size()*8,cudaMemcpyDeviceToHost));
+    CK(stage2_wait::copy(roots.data(),tree.words()+offset[8],roots.size()*8,cudaMemcpyDeviceToHost));
     st.root_d2h_bytes=roots.size()*8;
     mpz_t R,ri,p,inv,X,Z,x,neg,g;mpz_inits(R,ri,p,inv,X,Z,x,neg,g,nullptr);
     words_to_mpz(R,C.hmone.data(),w);
@@ -673,8 +674,8 @@ bool device_baby_generate(
         } else {++st.bad_groups;std::fill(roots.begin()+k*w,roots.begin()+(k+1)*w,0);}
     }
     st.invert_seconds=now_s()-ti;
-    CK(cudaMemcpy(tree.words()+offset[8],roots.data(),roots.size()*8,cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(mask.ptr,good.data(),groups,cudaMemcpyHostToDevice));st.seed_h2d_bytes=roots.size()*8+groups;
+    CK(stage2_wait::copy(tree.words()+offset[8],roots.data(),roots.size()*8,cudaMemcpyHostToDevice));
+    CK(stage2_wait::copy(mask.ptr,good.data(),groups,cudaMemcpyHostToDevice));st.seed_h2d_bytes=roots.size()*8+groups;
     for(int l=8;l>=2;--l) {
         S2G_DISPATCH((int)w,s2g_launch_baby_inverse,(int)w,counts[l-1],tree.words()+offset[l],
                      tree.words()+offset[l-1],(const unsigned char*)mask.ptr,size_t(256)>>l,dn.words(),C.ninv);
@@ -682,15 +683,15 @@ bool device_baby_generate(
     }
     S2G_DISPATCH((int)w,s2g_launch_baby_leaf,(int)w,n,tree.words()+offset[1],dx.words(),dz.words(),
                  output.words(),(const unsigned char*)mask.ptr,dn.words(),C.ninv);
-    CK(cudaGetLastError());CK(cudaMemcpy(negative.data(),output.ptr,negative.size()*8,cudaMemcpyDeviceToHost));
+    CK(cudaGetLastError());CK(stage2_wait::copy(negative.data(),output.ptr,negative.size()*8,cudaMemcpyDeviceToHost));
     st.leaf_d2h_bytes=negative.size()*8;
     // Restore exactly the ordinary-coordinate fallback, including X for a nonunit
     // Z and x=0 for Z=0. GCD/cache order follows the original sorted baby indices.
     for(size_t k=0;k<groups;++k)if(!good[k]) {
         const size_t lo=k*256,count=std::min(size_t(256),n-lo);
         std::vector<unsigned long long> bx(count*w),bz(count*w);
-        CK(cudaMemcpy(bx.data(),dx.words()+lo*w,bx.size()*8,cudaMemcpyDeviceToHost));
-        CK(cudaMemcpy(bz.data(),dz.words()+lo*w,bz.size()*8,cudaMemcpyDeviceToHost));
+        CK(stage2_wait::copy(bx.data(),dx.words()+lo*w,bx.size()*8,cudaMemcpyDeviceToHost));
+        CK(stage2_wait::copy(bz.data(),dz.words()+lo*w,bz.size()*8,cudaMemcpyDeviceToHost));
         st.coordinate_d2h_bytes+=16*count*w;
         for(size_t j=0;j<count;++j) {
             words_to_mpz(X,bx.data()+j*w,w);mpz_mul(X,X,ri);mpz_mod(X,X,N);

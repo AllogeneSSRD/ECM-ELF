@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // Newton inverse, folds, scaled root and resident frontier/descent.
 #include "point_launch.h"
 #include "remainder.h"
@@ -365,7 +366,7 @@ bool FoldDeviceState::init(
     t=layout.t;q=layout.q;qb=layout.qb;
     upload(f,F);upload(inv,inverse);
     std::vector<unsigned long long> hn(W);mpz_to_words(hn,W,L.N);
-    CK(cudaMemcpy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
+    CK(stage2_wait::copy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
     st.saved_bytes=ecm_stage2::owner_bytes(P,W,0)-bytes;
     st.peak_bytes=bytes;st.enabled=active=true;st.t_setup=now_s()-begin;
     return true;
@@ -374,7 +375,7 @@ bool FoldDeviceState::init(
 void FoldDeviceState::upload(size_t offset,const std::vector<unsigned long long> &v)
 {
     if(v.empty())return;
-    const double begin=now_s();CK(cudaMemcpy(memory.data[0]+offset,v.data(),v.size()*8,cudaMemcpyHostToDevice));
+    const double begin=now_s();CK(stage2_wait::copy(memory.data[0]+offset,v.data(),v.size()*8,cudaMemcpyHostToDevice));
     stats->h2d_bytes+=v.size()*8;stats->t_upload+=now_s()-begin;
 }
 
@@ -389,7 +390,7 @@ void FoldDeviceState::digest_root(size_t offset,size_t words)
 
 void FoldDeviceState::read_digest()
 {
-    CK(cudaMemcpy(stats->root_digest,digest,16,cudaMemcpyDeviceToHost));stats->d2h_bytes+=16;
+    CK(stage2_wait::copy(stats->root_digest,digest,16,cudaMemcpyDeviceToHost));stats->d2h_bytes+=16;
 }
 
 void FoldDeviceState::accept_device_root(const unsigned long long *src,size_t count,bool seed_root)
@@ -403,7 +404,7 @@ void FoldDeviceState::accept_device_root(const unsigned long long *src,size_t co
     const double begin=now_s();const size_t dest=seed_root?h:g,words=count*W;
     std::vector<unsigned long long> expected;
     if(verify) {
-        expected.resize(words);CK(cudaMemcpy(expected.data(),src,words*8,cudaMemcpyDeviceToHost));
+        expected.resize(words);CK(stage2_wait::copy(expected.data(),src,words*8,cudaMemcpyDeviceToHost));
         stats->d2h_bytes+=words*8;
     }
     CK(cudaMemcpyAsync(memory.data[0]+dest,src,words*8,cudaMemcpyDeviceToDevice));
@@ -428,14 +429,14 @@ void FoldDeviceState::seed(const std::vector<unsigned long long> &H)
 std::vector<unsigned long long> FoldDeviceState::read(size_t offset,size_t count)
 {
     std::vector<unsigned long long> v(count*W);const double begin=now_s();
-    if(!v.empty())CK(cudaMemcpy(v.data(),memory.data[0]+offset,v.size()*8,cudaMemcpyDeviceToHost));
+    if(!v.empty())CK(stage2_wait::copy(v.data(),memory.data[0]+offset,v.size()*8,cudaMemcpyDeviceToHost));
     stats->d2h_bytes+=v.size()*8;stats->t_readback+=now_s()-begin;return v;
 }
 
 void FoldDeviceState::mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count)
 {
     unsigned long long metadata[3]={(unsigned long long)a,(unsigned long long)b,(unsigned long long)dest};
-    CK(cudaMemcpy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;
+    CK(stage2_wait::copy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;
     S4DeviceBatch batch{memory.data[0],map,memory.data[1],metadata,memory.words[0],memory.words[1],1,&memory};
     std::vector<unsigned long long> unused;
     const double begin=now_s();poly_mul_batch_modN(*layer,nullptr,nullptr,ma,mb,1,unused,BC_FOLD,nullptr,0,count,&batch);
@@ -480,7 +481,7 @@ void FoldDeviceState::step_loaded(size_t ng,const std::vector<unsigned long long
         const double begin=now_s();CK(cudaMemsetAsync(length,0,8));
         ecm_launch_fold_subtract_kernel(EcmCudaLaunch{(unsigned)((P+127)/128),128}, memory.data[1]+t,memory.data[1]+qb,
             modulus,(int)W,P,memory.data[0]+h,length);CK(cudaGetLastError());
-        unsigned long long n=0;CK(cudaMemcpy(&n,length,8,cudaMemcpyDeviceToHost));
+        unsigned long long n=0;CK(stage2_wait::copy(&n,length,8,cudaMemcpyDeviceToHost));
         hcount=std::max((size_t)1,(size_t)n);stats->d2h_bytes+=8;stats->sub_coeffs+=P;flat->sub_coeffs+=P;
         stats->t_subtract+=now_s()-begin;flat->t_subtract+=now_s()-begin;
     }
@@ -529,17 +530,17 @@ void FoldDeviceState::scaled_root(
         memory.data[0]+h,hcount,P,(int)W,memory.data[0]+reverse);
     CK(cudaGetLastError());
     unsigned long long metadata[3]={(unsigned long long)reverse,(unsigned long long)inv,(unsigned long long)t};
-    CK(cudaMemcpy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;st.h2d_bytes=24;
+    CK(stage2_wait::copy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;st.h2d_bytes=24;
     S4DeviceBatch batch{memory.data[0],map,memory.data[1],metadata,memory.words[0],memory.words[1],1,&memory};
     std::vector<unsigned long long> unused;
     poly_mul_batch_modN(*layer,nullptr,nullptr,P,P,1,unused,BC_DESCENT,nullptr,0,P,&batch);
     if(poison) {
-        unsigned long long v=0;CK(cudaMemcpy(&v,memory.data[1]+t,8,cudaMemcpyDeviceToHost));
-        v^=1;CK(cudaMemcpy(memory.data[1]+t,&v,8,cudaMemcpyHostToDevice));
+        unsigned long long v=0;CK(stage2_wait::copy(&v,memory.data[1]+t,8,cudaMemcpyDeviceToHost));
+        v^=1;CK(stage2_wait::copy(memory.data[1]+t,&v,8,cudaMemcpyHostToDevice));
         stats->d2h_bytes+=8;stats->h2d_bytes+=8;st.check_d2h_bytes+=8;st.h2d_bytes+=8;
     }
     if(!keep_resident || verify) {
-        root.resize(P*W);CK(cudaMemcpy(root.data(),memory.data[1]+t,P*W*8,cudaMemcpyDeviceToHost));
+        root.resize(P*W);CK(stage2_wait::copy(root.data(),memory.data[1]+t,P*W*8,cudaMemcpyDeviceToHost));
         stats->d2h_bytes+=P*W*8;st.d2h_bytes=P*W*8;
     } else root.clear();
     if(verify) {
@@ -915,17 +916,17 @@ void ScaledFrontierDevice::upload_siblings(
         size_t offset=0,turn=0;
         while(offset<words) {
             size_t i=turn++&1;if(!available[i])i^=1;
-            CK(cudaEventSynchronize(g_pin_ev[i]));
+            CK(stage2_wait::event_sync(g_pin_ev[i],stage2_wait::Kind::upload));
             const size_t take=std::min(words-offset,g_pin_out_cap[i]);
             copy(g_pin_out[i],offset,take);
             CK(cudaMemcpyAsync(dst+offset,g_pin_out[i],take*8,cudaMemcpyHostToDevice));
             CK(cudaEventRecord(g_pin_ev[i]));used[i]=true;offset+=take;
             pinned_borrow_peak_bytes=std::max(pinned_borrow_peak_bytes,8ull*take);
         }
-        for(int i=0;i<2;++i)if(used[i])CK(cudaEventSynchronize(g_pin_ev[i]));
+        for(int i=0;i<2;++i)if(used[i])CK(stage2_wait::event_sync(g_pin_ev[i],stage2_wait::Kind::upload));
     } else {
         std::vector<unsigned long long> packed(words);copy(packed.data(),0,words);
-        CK(cudaMemcpy(dst,packed.data(),words*8,cudaMemcpyHostToDevice));
+        CK(stage2_wait::copy(dst,packed.data(),words*8,cudaMemcpyHostToDevice));
         host_staging_peak_bytes=std::max(host_staging_peak_bytes,8ull*packed.capacity());
     }
     f_h2d_bytes+=8ull*words;upload_seconds+=now_s()-begin;
@@ -951,12 +952,12 @@ void ScaledFrontierDevice::run(
     const bool poison=gscale_flag("NTT_SCALED_FRONTIER_TEST_BAD");
     if(poison && !check){std::fprintf(stderr,"FATAL: scaled frontier poison requires GMP check\n");std::exit(3);}
     auto corrupt=[&](unsigned long long *dst) {
-        unsigned long long v=0;CK(cudaMemcpy(&v,dst,8,cudaMemcpyDeviceToHost));v^=1;
-        CK(cudaMemcpy(dst,&v,8,cudaMemcpyHostToDevice));check_d2h_bytes+=8;
+        unsigned long long v=0;CK(stage2_wait::copy(&v,dst,8,cudaMemcpyDeviceToHost));v^=1;
+        CK(stage2_wait::copy(dst,&v,8,cudaMemcpyHostToDevice));check_d2h_bytes+=8;
     };
     auto validate=[&](size_t base) {
         std::vector<unsigned long long> actual;
-        if(check){actual.resize(pw);CK(cudaMemcpy(actual.data(),cur,pw*8,cudaMemcpyDeviceToHost));check_d2h_bytes+=pw*8;}
+        if(check){actual.resize(pw);CK(stage2_wait::copy(actual.data(),cur,pw*8,cudaMemcpyDeviceToHost));check_d2h_bytes+=pw*8;}
         size_t words=0;
         for(size_t i=0;i<base;++i) {
             const size_t d=deg[base+i];
@@ -995,7 +996,7 @@ void ScaledFrontierDevice::run(
             std::vector<unsigned long long> map(3*nb);
             for(size_t s=0;s<nb;++s){map[s]=offsets[g.second[s].first];map[nb+s]=pw+s*mb*w;map[2*nb+s]=target[g.second[s].second];}
             upload_siblings(cur+pw,Ft,nbase,g.second,mb,w);
-            CK(cudaMemcpy(metadata,map.data(),map.size()*8,cudaMemcpyHostToDevice));metadata_h2d_bytes+=map.size()*8;
+            CK(stage2_wait::copy(metadata,map.data(),map.size()*8,cudaMemcpyHostToDevice));metadata_h2d_bytes+=map.size()*8;
             S4DeviceBatch batch{cur,metadata,next,map.data(),pw+nb*mb*w,pw,nb,&fold->memory,true};
             std::vector<unsigned long long> unused;
             poly_mul_batch_modN(L,nullptr,nullptr,ma,mb,nb,unused,cat,nullptr,b,a,&batch);
@@ -1005,7 +1006,7 @@ void ScaledFrontierDevice::run(
         if(poison && base==1)corrupt(next);
         std::swap(cur,next);offsets.swap(target);++st.levels;validate(nbase);
     }
-    std::vector<unsigned long long> leaves(pw);CK(cudaMemcpy(leaves.data(),cur,pw*8,cudaMemcpyDeviceToHost));leaf_d2h_bytes=pw*8;
+    std::vector<unsigned long long> leaves(pw);CK(stage2_wait::copy(leaves.data(),cur,pw*8,cudaMemcpyDeviceToHost));leaf_d2h_bytes=pw*8;
     values.assign(p,std::vector<unsigned long long>(w));size_t leaf=0;
     for(size_t i=0;i<pad;++i)if(deg[pad+i]) {
         if(deg[pad+i]!=1 || leaf>=p){std::fprintf(stderr,"FATAL: scaled frontier nonlinear leaf\n");std::exit(3);}

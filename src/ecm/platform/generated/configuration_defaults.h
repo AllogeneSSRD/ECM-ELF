@@ -81,6 +81,7 @@ inline constexpr char stage2_stage2_tune_profile[]="";
 inline constexpr bool stage2_stage2_tune_runtime=true;
 inline constexpr uint64_t stage2_stage2_tune_runtime_samples=10;
 inline constexpr bool stage2_stage2_short_ntt_batch_tune=false;
+inline constexpr bool stage2_stage2_low_cpu_wait=false;
 inline constexpr bool stage2_stage2_pack_zero=true;
 inline constexpr char stage2_stage1_tune_profile[]="";
 inline constexpr uint64_t stage2_stage2_auto_min_b2=0;

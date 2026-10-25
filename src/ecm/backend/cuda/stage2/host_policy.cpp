@@ -6,6 +6,19 @@
 #include <cstring>
 #include <iostream>
 namespace s2prod {
+void configure_host_wait(Options &o,const HostWaitDefaults *defaults) {
+    if(!o.portable_cli.count("--low-cpu-wait")) {
+        if(!defaults || !defaults->present)return;
+        o.low_cpu_wait=defaults->value;
+    }
+    const char *value=o.low_cpu_wait?"1":"0";
+    // Native blocking scheduling covers the existing synchronous copies more
+    // cheaply on the measured WDDM host. Poll only explicit completion events;
+    // pre-waiting every readback remains an independent experimental control.
+    if(_putenv_s("NTT_CUDA_WAIT_MODE",o.low_cpu_wait?"4":"0") ||
+       _putenv_s("NTT_HOST_EVENT_WAIT",value) || _putenv_s("NTT_HOST_READBACK_WAIT","0"))
+        throw std::runtime_error("cannot configure Stage2 host waiting");
+}
 void configure_pack_zero(Options &o,const PackZeroDefaults *s) {
     // Resolve once in the parent; every curve/tune child receives the value.
     // Legacy cprof has an exact PACK_ZERO=0 contract, including absent env.

@@ -1569,6 +1569,9 @@ std::string select_auto(Options &o,const Record &r,bool apply) {
         if(actual!=expected)throw std::runtime_error(std::string("cost profile configuration mismatch: ")+key);
     };
     require("NTT_CUDA_WAIT_MODE",0,0);
+    require("NTT_HOST_EVENT_WAIT",0,0);
+    require("NTT_HOST_READBACK_WAIT",0,0);
+    require("NTT_S4_TIMING_FIFO",0,1);
     for(const char *key:{"NTT_XADD6","NTT_BABY_DEVICE","NTT_POINT_MERSENNE","NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE",
         "NTT_GFINV_SEG_EXACT","NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_GROOT_DEVICE","NTT_SCALED_DESCENT",
         "NTT_S4_OUTPUT_WINDOW","NTT_S4_CHUNK_OUTPUT","NTT_DEVICE_GLEAF","NTT_GROOT_TO_FOLD","NTT_S4_ORACLE_ASYNC",

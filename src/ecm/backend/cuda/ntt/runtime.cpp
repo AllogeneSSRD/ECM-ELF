@@ -273,7 +273,7 @@ void ntt_bitrev_perm(unsigned long long *d, unsigned long long *scratch,
     const unsigned int blocks = (unsigned int)((n + threads - 1) / threads);
     ecm_launch_bitrev_kernel(EcmCudaLaunch(blocks, threads), d, scratch, (unsigned long long)k, n);
     CK(cudaGetLastError());
-    CK(cudaMemcpy(d, scratch, n * sizeof(unsigned long long), cudaMemcpyDeviceToDevice));
+    CK(ntt_host_copy(d, scratch, n * sizeof(unsigned long long), cudaMemcpyDeviceToDevice));
 }
 
 void ntt_forward(unsigned long long *d, unsigned long long n, int k,
@@ -1136,9 +1136,9 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     if (dump && nbatch == 1 && hfa && hfb) {
         hfa->assign(N, 0);
         hfb->assign(N, 0);
-        CK(cudaMemcpy(hfa->data(), dA, N * sizeof(unsigned long long),
+        CK(ntt_host_copy(hfa->data(), dA, N * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
-        CK(cudaMemcpy(hfb->data(), dB, N * sizeof(unsigned long long),
+        CK(ntt_host_copy(hfb->data(), dB, N * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
     }
     /* the pointwise product AND the 1/N scale are elementwise, so they ride along inside the
@@ -1153,7 +1153,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
 
     if (dump && nbatch == 1 && hPre) {
         hPre->assign(N, 0);
-        CK(cudaMemcpy(hPre->data(), dA, N * sizeof(unsigned long long),
+        CK(ntt_host_copy(hPre->data(), dA, N * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
     }
 
@@ -1214,7 +1214,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     r.digits = dDig;
     if (dump && nbatch == 1 && hPost) {
         hPost->assign(N, 0);
-        CK(cudaMemcpy(hPost->data(), dDig, N * sizeof(unsigned long long),
+        CK(ntt_host_copy(hPost->data(), dDig, N * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
     }
     r.t_slot = now_s() - t2;
@@ -1233,7 +1233,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         }
         CK(cudaGetLastError());
         r.hOut.assign((size_t)(out_slots * nbatch), 0);
-        CK(cudaMemcpy(r.hOut.data(), dOut, r.hOut.size() * sizeof(unsigned long long),
+        CK(ntt_host_copy(r.hOut.data(), dOut, r.hOut.size() * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
     } else {
         r.hOut.clear();
@@ -1281,7 +1281,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         return r;
     }
     const double tc0 = now_s();
-    CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
+    CK(ntt_host_copy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
                   cudaMemcpyDeviceToHost));
     r.t_check_d2h = now_s() - tc0;
     r.t_check_kernel = 0.0;
@@ -1404,9 +1404,9 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         CK(cudaMalloc(&dRes, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     }
     const double h2d0 = now_s();
-    CK(cudaMemcpy(dA, hA.data(), hA.size() * sizeof(unsigned long long),
+    CK(ntt_host_copy(dA, hA.data(), hA.size() * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dB, hB.data(), hB.size() * sizeof(unsigned long long),
+    CK(ntt_host_copy(dB, hB.data(), hB.size() * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
     const double t_h2d_batch = now_s() - h2d0;
     /* nbatch is a gridDim.y, and 65535 is the whole range of gridDim.y: a caller that asks for
@@ -1524,7 +1524,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         if (!arena || !arena->input_span(p,remaining)) return true;
         if ((size_t)(N*nbatch)>remaining) return false;
         saved.resize((size_t)(N*nbatch));
-        CK(cudaMemcpy(saved.data(),p,saved.size()*8,cudaMemcpyDeviceToHost));
+        CK(ntt_host_copy(saved.data(),p,saved.size()*8,cudaMemcpyDeviceToHost));
         ++arena->alias_snapshots; arena->alias_snapshot_bytes+=saved.size()*8;
         return true;
     };
@@ -1562,9 +1562,9 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         }
         CK(cudaGetLastError());
     } else {
-        CK(cudaMemcpy(dA, alias_a.empty() ? dAin : alias_a.data(), (size_t)N * nbatch * sizeof(unsigned long long),
+        CK(ntt_host_copy(dA, alias_a.empty() ? dAin : alias_a.data(), (size_t)N * nbatch * sizeof(unsigned long long),
                       alias_a.empty() ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice));
-        CK(cudaMemcpy(dB, alias_b.empty() ? dBin : alias_b.data(), (size_t)N * nbatch * sizeof(unsigned long long),
+        CK(ntt_host_copy(dB, alias_b.empty() ? dBin : alias_b.data(), (size_t)N * nbatch * sizeof(unsigned long long),
                       alias_b.empty() ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice));
     }
     const double t_copy = input ? 0.0 : now_s() - tcopy0;
@@ -1623,7 +1623,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         const double tr0 = now_s();
         if (!defer) {
             r.hRes.assign((size_t)(2 * nbatch), 0);
-            CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
+            CK(ntt_host_copy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
                           cudaMemcpyDeviceToHost));
         }
         for (unsigned long long ci = 0; ci < nchunk; ++ci)
@@ -1698,7 +1698,7 @@ int ntt_batch_carry_finish(NttArena *arena, unsigned long long N, unsigned long 
     }
     const double t0 = now_s();
     std::vector<unsigned long long> hRes((size_t)(2 * nbatch), 0);
-    if (cudaMemcpy(hRes.data(), arena->cur.dRes, hRes.size() * sizeof(unsigned long long),
+    if (ntt_host_copy(hRes.data(), arena->cur.dRes, hRes.size() * sizeof(unsigned long long),
                    cudaMemcpyDeviceToHost) != cudaSuccess) {
         std::fprintf(stderr, NTT_PROBE_NAME ": ntt_batch_carry_finish: the deferred readback "
                              "failed\n");
@@ -1793,8 +1793,8 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
         CK(cudaMalloc(&dRes, 2 * sizeof(unsigned long long)));
     }
     const double thb_h2d = now_s();
-    CK(cudaMemcpy(dA, hA.data(), N * sizeof(unsigned long long), cudaMemcpyHostToDevice));
-    CK(cudaMemcpy(dB, hB.data(), N * sizeof(unsigned long long), cudaMemcpyHostToDevice));
+    CK(ntt_host_copy(dA, hA.data(), N * sizeof(unsigned long long), cudaMemcpyHostToDevice));
+    CK(ntt_host_copy(dB, hB.data(), N * sizeof(unsigned long long), cudaMemcpyHostToDevice));
     NTT_HBS(t_h2d, thb_h2d);
 
     /* ---- the device passes (shared runner; nbatch == 1) --------------------------------- */
@@ -1904,7 +1904,7 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
     if (out_exact) {
         std::vector<unsigned long long> hDig(N, 0);
         double thb = now_s();
-        CK(cudaMemcpy(hDig.data(), dDig, N * sizeof(unsigned long long),
+        CK(ntt_host_copy(hDig.data(), dDig, N * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
         NTT_HBS(t_d2h, thb);
         thb = now_s();

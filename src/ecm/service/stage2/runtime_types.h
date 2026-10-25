@@ -36,6 +36,7 @@ struct Options {
     uint64_t submission_exponent=0;
     std::vector<std::string> submission_known;
     bool debug_log = false;
+    bool low_cpu_wait=ecm_config::defaults::stage2_stage2_low_cpu_wait;
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
     unsigned carrier_exponent=0;
     bool has_carrier=false;

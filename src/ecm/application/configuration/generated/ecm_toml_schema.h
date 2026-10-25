@@ -81,6 +81,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_tune_runtime","bool"},
     {"stage2","stage2_tune_runtime_samples","u64"},
     {"stage2","stage2_short_ntt_batch_tune","bool"},
+    {"stage2","stage2_low_cpu_wait","bool"},
     {"stage2","stage2_pack_zero","bool"},
     {"stage2","stage1_tune_profile","string"},
     {"stage2","stage2_auto_min_b2","u64"},

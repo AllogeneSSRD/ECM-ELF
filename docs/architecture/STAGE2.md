@@ -10,6 +10,7 @@
 - `product.cpp` 维护普通/批量多项式乘法、输入打包、输出窗口、驻留输入合同与 NTT/S4 计数；不负责树遍历或 GCD。有限的打包启动帮助函数在 `pack_launch.h`，位索引在 `src/ecm/backend/cuda/stage2/device/pack_index.cuh`。`remainder.cpp` 维护 Newton 逆、fold、scaled root/frontier 和下降。
 - `s4.cpp` 准备模数/shape 并执行归约 hook；`checks.cpp` 维护必需自检、GMP 抽样、异步快照、carry/归约检查及排空。`factors.cpp` 负责块积读回和目标 N 上的真因子记录。
 - `resources.cpp` 实现点、S4、fold/frontier owner 的分配、租约、事件和析构方法；类字段、默认值和接口分别声明在所属模块头中。`context.cpp` 提供共享编码与整数帮助函数。`options.cpp` 在一个翻译单元中先设置生产默认值，再按固定次序构造环境快照及共享状态，保持原来的解析时机。
+- `host_wait.cpp` 封装平台休眠资源；`host_wait.h` 统一完成等待和读回前等待，`host_wait_policy.h` 定义可独立验证的有界退避。
 - `diagnostics.cpp` 保留可选夹具、GMP 参考、转储、故障注入和崩溃报告；这些诊断仍由现有开关触发。`tune.cpp` 使用生产 NTT 运行时执行校准。
 
 诊断 TODO：`NTT_BABY_DEVICE_TEST` 自建模数的夹具在 M127 的活动梅森点上下文中会报 affine GMP mismatch，通用8193位输入下通过；修复前需核对并验证设备点模数状态的刷新及恢复。正常曲线与必需算术自检不依赖该合成夹具。
@@ -26,7 +27,7 @@
 
 NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/backend/cuda/ntt/`，设备变换和 carry 位于 `src/ecm/backend/cuda/ntt/device/`，域原语位于 `src/ecm/backend/cuda/arithmetic/goldilocks/`。主机持有缓冲、事件、错误检查和计时，设备模块提供薄启动接口；依赖方向为 ECM 编排 → NTT/算术接口 → 设备原语。NTT 不依赖 ECM 树、fold 或 GCD，详见 [NTT 代码入口](NTT.md#代码入口与依据)。
 
-生产源由 `STAGE2_PRODUCTION` 清单选择，其中 `STAGE2_ENGINE` 显式列出17个主机模块。生产闭包拒绝 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`；编译器发现的间接依赖也受同一检查。
+生产源由 `STAGE2_PRODUCTION` 清单选择，其中 `STAGE2_ENGINE` 显式列出18个主机模块。生产闭包拒绝 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`；编译器发现的间接依赖也受同一检查。
 
 实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h`，JSON 转义及纯设备原语仍可共享。
 
@@ -125,6 +126,22 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 必需自检、carry 精确性、系数 GMP 抽样、proper divisor 验证和检查排空属于计算合同；factor-only 只省可选命名。性能测量与额外逐节点/台账诊断分开，不能把诊断曲线当作普通速度样本。
 
 完整叶比较使用目标环：承载计算先将叶 v 投影为 v mod N，再与普通模数或其他点生成路线比较。Γ 的逆元只需满足目标 N 上的合同，不同投影坐标可产生不同的 M 代表元；原始 M 叶指纹适合检查同一路线的重复一致性。承载正确性仍须独立核对目标环完整叶、点生成、分段/分组与缩放，因子集合或最终 GCD 相同不能替代这些检查。
+
+## 主机等待与提交回收
+
+S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收已完成事件；最旧事件尚未完成时停止查询其后的事件。满环时只等待、累计并释放最旧一槽，保留其他在途工作。收尾仍完整排空，每对事件只累计一次。`NTT_S4_TIMING_FIFO=0` 供同二进制对照恢复满环全排空；生产默认 1。`ring_waits` 记录满环次数，回收粒度改变后不能仅用次数比较等待成本。
+
+`stage2_low_cpu_wait` 默认 false，命令行 `--low-cpu-wait 0|1` 可覆盖；配置支持 `[stage2]` 及 `[workers.N.stage2]`。显式开启选择 CUDA 设备阻塞调度（`NTT_CUDA_WAIT_MODE=4`）及事件退避等待（`NTT_HOST_EVENT_WAIT=1`），同步读回保留原生路径（`NTT_HOST_READBACK_WAIT=0`）。显式关闭选择自动调度0及原事件等待。父进程通过环境传给曲线及 ECM tune 子进程；未显式设置时保留专家环境覆盖。事件与读回前等待的环境开关均接受严格0/1，默认0。配置语法和优先级见 [TOML参考](../ECM_TOML_REFERENCE.md#stage2_low_cpu_wait)。
+
+事件退避策略先查询完成事件，已完成直接走原同步边界；只有 NotReady 进入休眠重试，其他 CUDA 错误立即返回。请求休眠按 32、64、128、256 µs 退避并封顶。Windows 使用每线程私有高精度 waitable timer，不更改全局定时器分辨率；创建或使用失败则退回原生 CUDA 等待。请求时长不是唤醒延迟保证，系统抖动可能增加完整耗时，因此该模式保留为可选项。
+
+既有阻塞 D2H 的计算等待也可能消耗 CPU。独立的 `NTT_HOST_READBACK_WAIT=1` 实验让选中的生产点生成、树、fold/下降及 NTT 读回在原读回前检查默认 stream：若尚有工作，记录可复用完成事件并按上述策略等待，之后仍执行原 cudaMemcpy。NTT 只调用可选、每线程的读回前回调，不依赖 Stage2 私有模块；引擎用作用域对象安装并恢复该回调。已有 pinned 双缓冲继续等待对应旧槽，不改成等待默认流最后一项。没有新增 GPU 数据数组、分块或 stream，也没有将等待插入 Graph capture。
+
+事件记录位置、GPU算术、自检、carry、GMP样本选择和最终排空保持原合同。预测与休眠不授权提前消费数据或复用缓冲；检查失败不能发布成功。必需自检中的设备同步、未接入的分配/释放及驱动内部背压仍可能消耗 CPU，低 CPU 模式不承诺进程完全休眠。新增元数据为每个 S4 shape 的 9 个 64-bit 提交序号，以及每线程计数器、一个主机定时器和至多一个完成事件；没有新增传输数据量；事件及驱动内部资源未单独测量容量。
+
+调试日志 `stage2_host_wait_stats` 记录调用、立即完成、待完成、查询、休眠、请求休眠总量、回退次数及各类等待墙钟。墙钟与正常阶段计时嵌套，不能再次相加；它也不是 CPU 时间，不能把 requested_sleep_us 当作实际休眠。NTT 独立 tune 的设备事件计时保持原入口，完整 ECM tune/正常观察将上述四个 NTT 环境开关记录为条件；旧严格 cprof 均要求 0。具体性能与覆盖范围见 [主机等待验证](../performance/STAGE2_HOST_WAIT.md)。
+
+代码入口：[等待策略](../../src/ecm/backend/cuda/stage2/host_wait_policy.h)、[完成与读回等待](../../src/ecm/backend/cuda/stage2/host_wait.h)、[平台定时器](../../src/ecm/backend/cuda/stage2/host_wait.cpp)、[S4计时槽](../../src/ecm/backend/cuda/stage2/s4.cpp)、[NTT读回接口](../../src/ecm/backend/cuda/ntt/runtime.h)。第三方原理见 [GPUOWL / PRPLL队列](../reference/GPUOWL_OPENCL_QUEUE.md)。
 
 ## 当前规划边界
 

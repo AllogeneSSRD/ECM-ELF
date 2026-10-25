@@ -34,6 +34,16 @@
     } while (0)
 
 struct FuseCtx;
+// Optional per-thread host scheduler hook, only at an existing blocking D2H
+// boundary. NTT owns neither the callback nor any application queue policy.
+inline thread_local cudaError_t (*ntt_before_readback)()=nullptr;
+inline cudaError_t ntt_host_copy(void *dst,const void *src,size_t bytes,cudaMemcpyKind kind) {
+    if(bytes && kind==cudaMemcpyDeviceToHost && ntt_before_readback) {
+        const auto status=ntt_before_readback();
+        if(status!=cudaSuccess)return status;
+    }
+    return cudaMemcpy(dst,src,bytes,kind);
+}
 struct FuseBaseStats;
 struct FuseCallGuard;
 struct NttWorkspacePolicy;

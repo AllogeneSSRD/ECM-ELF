@@ -121,6 +121,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
         else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
         else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--low-cpu-wait") {const auto n=num();if(n>1)throw std::runtime_error("low-cpu-wait must be 0 or 1");o.low_cpu_wait=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
         else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
         else if (a == "--tune-condition-tag") {o.condition_tag=value();o.portable_cli.insert(a);}
@@ -264,6 +265,7 @@ void help() {
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
+        "           --low-cpu-wait 0|1: reduce host busy waits, possibly at the cost of elapsed time.\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "           --tune-ntt-profile FILE (repeatable): attach checked NTT summaries to ECM tune/merge.\n"
@@ -338,6 +340,8 @@ int driver(Options o) {
     Settings s = stage2_ini(ini, o.worker);
     const PackZeroDefaults pack_defaults{s.has_pack_zero,s.pack_zero,s.cost_profile};
     configure_pack_zero(o,&pack_defaults);
+    const HostWaitDefaults wait_defaults{s.has_low_cpu_wait,s.low_cpu_wait};
+    configure_host_wait(o,&wait_defaults);
     if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
     if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;

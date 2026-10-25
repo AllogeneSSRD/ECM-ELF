@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // One saved curve, its setup/checks, relocation replay and final reporting.
 #include "engine.h"
 #include "options.h"
@@ -950,9 +951,16 @@ int ecm_cuda_stage2_run(
     const char *progress = std::getenv("NTT_NO_PROGRESS");
     if (progress && std::atoi(progress)) g_s4_batched_progress = false;
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    stage2_wait::reset();
+    struct ReadbackHook {
+        decltype(ntt_before_readback) previous=ntt_before_readback;
+        ReadbackHook(){ntt_before_readback=stage2_wait::runtime().readback?stage2_wait::before_readback:nullptr;}
+        ~ReadbackHook(){ntt_before_readback=previous;}
+    } readback_hook;
     Stage2Tail tail;
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
                               x_hex, &tail,carrier_exponent,a24_hex);
+    stage2_wait::report();
     if (code || tail.bad_factors) return code ? code : 1;
     if(metrics)*metrics=tail.metrics;
     std::string json = "\"hits\":" + std::to_string(tail.hits) +

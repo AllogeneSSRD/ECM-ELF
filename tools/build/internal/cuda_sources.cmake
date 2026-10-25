@@ -127,6 +127,7 @@ set(ECM_STAGE2_ENGINE_SOURCES
     src/ecm/backend/cuda/stage2/constants.cpp
     src/ecm/backend/cuda/ntt/module_dispatch.cpp
     src/ecm/backend/cuda/stage2/context.cpp
+    src/ecm/backend/cuda/stage2/host_wait.cpp
     src/ecm/backend/cuda/stage2/options.cpp
     src/ecm/backend/cuda/stage2/resources.cpp
     src/ecm/backend/cuda/stage2/plan.cpp

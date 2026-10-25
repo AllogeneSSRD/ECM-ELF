@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // Giant batches, fold/descent phases and factor scanning within one curve.
 #include "point_launch.h"
 #include "engine.h"
@@ -296,7 +297,7 @@ BatchedRun run_batched(
             gjs.resize(chi - clo + 1);
             for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
             if(device_leaf) {
-                ws.need_pts(npts);CK(cudaMemcpy(ws.djs,gjs.data(),npts*8,cudaMemcpyHostToDevice));
+                ws.need_pts(npts);CK(stage2_wait::copy(ws.djs,gjs.data(),npts*8,cudaMemcpyHostToDevice));
                 S2G_DISPATCH((int)W,s2g_launch_ladder,(int)W,(int)npts,ws.dn,C.ninv,ws.dqx,ws.dqz,ws.da24,ws.dmone,ws.djs,ws.dx,ws.dz);
                 CK(cudaGetLastError());++ws.ladder_calls;ws.ladder_points_total+=npts;
                 resident.x=ws.dx;resident.z=ws.dz;resident.n=npts;resident.w=W;
@@ -305,10 +306,10 @@ BatchedRun run_batched(
                 CK(cudaGetLastError());
                 if(g_gfinv_seg_check) {
                     gx.resize(npts*W);gz.resize(npts*W);
-                    CK(cudaMemcpy(gx.data(),ws.dx,gx.size()*8,cudaMemcpyDeviceToHost));
-                    CK(cudaMemcpy(gz.data(),ws.dz,gz.size()*8,cudaMemcpyDeviceToHost));
+                    CK(stage2_wait::copy(gx.data(),ws.dx,gx.size()*8,cudaMemcpyDeviceToHost));
+                    CK(stage2_wait::copy(gz.data(),ws.dz,gz.size()*8,cudaMemcpyDeviceToHost));
                     std::vector<unsigned long long> expected;gfinv_segprod_host(expected,npts,W,gz,L.N);
-                    CK(cudaMemcpy(gseg.data(),resident.segments,gseg.size()*8,cudaMemcpyDeviceToHost));
+                    CK(stage2_wait::copy(gseg.data(),resident.segments,gseg.size()*8,cudaMemcpyDeviceToHost));
                     if(expected!=gseg){std::fprintf(stderr,"FATAL: ladder device segment GMP mismatch\n");std::exit(3);}
                 } else {std::vector<unsigned long long>().swap(gx);std::vector<unsigned long long>().swap(gz);}
             } else {
@@ -342,9 +343,9 @@ BatchedRun run_batched(
                     CK(cudaGetLastError());
                     if(g_gfinv_seg_check) {
                         gx.resize(npts*W);gz.resize(npts*W);
-                        CK(cudaMemcpy(gx.data(),resident.x,gx.size()*8,cudaMemcpyDeviceToHost));
-                        CK(cudaMemcpy(gz.data(),resident.z,gz.size()*8,cudaMemcpyDeviceToHost));
-                        CK(cudaMemcpy(gseg.data(),resident.segments,gseg.size()*8,cudaMemcpyDeviceToHost));
+                        CK(stage2_wait::copy(gx.data(),resident.x,gx.size()*8,cudaMemcpyDeviceToHost));
+                        CK(stage2_wait::copy(gz.data(),resident.z,gz.size()*8,cudaMemcpyDeviceToHost));
+                        CK(stage2_wait::copy(gseg.data(),resident.segments,gseg.size()*8,cudaMemcpyDeviceToHost));
                         std::vector<unsigned long long> expected;gfinv_segprod_host(expected,npts,W,gz,L.N);
                         if(expected!=gseg){std::fprintf(stderr,"FATAL: wide-tail fallback segment GMP mismatch\n");std::exit(3);}
                     }
@@ -558,15 +559,15 @@ BatchedRun run_batched(
                 for(auto it=patches.begin();it!=patches.end();) {
                     const size_t start=it->first;size_t next=start;std::vector<unsigned long long> words;
                     while(it!=patches.end() && it->first==next) {words.insert(words.end(),it->second.begin(),it->second.end());++it;++next;}
-                    CK(cudaMemcpy(out+2*start*W,words.data(),words.size()*8,cudaMemcpyHostToDevice));
+                    CK(stage2_wait::copy(out+2*start*W,words.data(),words.size()*8,cudaMemcpyHostToDevice));
                     R.device_leaf.patch_words+=words.size();
                 }
                 if(device_gleaf_flag("NTT_DEVICE_GLEAF_TEST_BAD")){CK(cudaMemset(out,0xff,8));}
                 if(device_gleaf_flag("NTT_DEVICE_GLEAF_CHECK")) {
                     std::vector<unsigned long long> x(count*W),z(count*W),actual(count*2*W),expected(2*W);
-                    CK(cudaMemcpy(x.data(),resident.x+first*W,x.size()*8,cudaMemcpyDeviceToHost));
-                    CK(cudaMemcpy(z.data(),resident.z+first*W,z.size()*8,cudaMemcpyDeviceToHost));
-                    CK(cudaMemcpy(actual.data(),out,actual.size()*8,cudaMemcpyDeviceToHost));
+                    CK(stage2_wait::copy(x.data(),resident.x+first*W,x.size()*8,cudaMemcpyDeviceToHost));
+                    CK(stage2_wait::copy(z.data(),resident.z+first*W,z.size()*8,cudaMemcpyDeviceToHost));
+                    CK(stage2_wait::copy(actual.data(),out,actual.size()*8,cudaMemcpyDeviceToHost));
                     for(size_t i=0;i<count;++i) {
                         const auto patch=patches.find(i);
                         if(patch!=patches.end())expected=patch->second;
@@ -922,7 +923,7 @@ BatchedRun run_batched(
             std::vector<unsigned long long> flat((size_t)P * W, 0ull);
             for (size_t i = 0; i < P; ++i)
                 std::copy(values[i].begin(), values[i].end(), flat.begin() + (long)(i * W));
-            CK(cudaMemcpy(ws.dvals, flat.data(), flat.size() * 8, cudaMemcpyHostToDevice));
+            CK(stage2_wait::copy(ws.dvals, flat.data(), flat.size() * 8, cudaMemcpyHostToDevice));
         }
         dev_block_products(ws, (int)P, (int)BLOCK, bprod);
     }

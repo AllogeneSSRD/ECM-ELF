@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // Polynomial multiplication, packing, output windows and NTT/S4 accounting.
 #include "product.h"
 #include "options.h"
@@ -473,7 +474,7 @@ void poly_mul_batch_modN(
                 const cudaError_t ready = cudaEventQuery(g_pin_raw_ev[upload_slot]);
                 if (ready == cudaErrorNotReady) {
                     const double tw0 = now_s();
-                    CK(cudaEventSynchronize(g_pin_raw_ev[upload_slot]));
+                    CK(stage2_wait::event_sync(g_pin_raw_ev[upload_slot],stage2_wait::Kind::upload));
                     g_pin_raw_wait += now_s() - tw0;
                     ++g_pin_raw_waits;
                 } else CK(ready);
@@ -494,8 +495,8 @@ void poly_mul_batch_modN(
                 g_pin_raw_pending[upload_slot] = true;
                 ++g_pin_raw_used;
             } else {
-                CK(cudaMemcpy(C.d_rawA, wa + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
-                CK(cudaMemcpy(C.d_rawB, wb + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
+                CK(stage2_wait::copy(C.d_rawA, wa + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
+                CK(stage2_wait::copy(C.d_rawB, wb + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
                 if (g_s4_async) ++g_pin_fallbacks;
             }
             /* 2. ... packed into digits ON the device (both operands, one launch each) ... */
@@ -596,7 +597,7 @@ void poly_mul_batch_modN(
                and never correctness (and never a half-filled `out`) */
             const double td0 = now_s();
             std::vector<unsigned long long> all(out_words, 0ull);
-            if(out_words) CK(cudaMemcpy(all.data(), h2.out, out_words * sizeof(unsigned long long),
+            if(out_words) CK(stage2_wait::copy(all.data(), h2.out, out_words * sizeof(unsigned long long),
                                        cudaMemcpyDeviceToHost));
             for (unsigned long long s = 0; s < m; ++s)
                 std::copy(all.begin() + (long)((s * output_slots + host_first) * W),
@@ -618,7 +619,7 @@ void poly_mul_batch_modN(
            finish, so this wait is normally already satisfied */
         if (out_pending) {
             const double tw0 = now_s();
-            CK(cudaEventSynchronize(g_pin_ev[(ci - 1) & 1]));
+            CK(stage2_wait::event_sync(g_pin_ev[(ci - 1) & 1],stage2_wait::Kind::output));
             const unsigned long long *prev = g_pin_out[(ci - 1) & 1];
             for (unsigned long long s = 0; s < pend_m; ++s)
                 std::copy(prev + ((size_t)s * output_slots + host_first) * W,
@@ -635,7 +636,7 @@ void poly_mul_batch_modN(
     /* THE ONE DRAIN OF THE COEFFICIENT READBACK: the last chunk copied but not yet consumed */
     if (out_pending) {
         const double tw0 = now_s();
-        CK(cudaEventSynchronize(g_pin_ev[(ci - 1) & 1]));
+        CK(stage2_wait::event_sync(g_pin_ev[(ci - 1) & 1],stage2_wait::Kind::output));
         const unsigned long long *prev = g_pin_out[(ci - 1) & 1];
         for (unsigned long long s = 0; s < pend_m; ++s)
             std::copy(prev + ((size_t)s * output_slots + host_first) * W,
@@ -728,7 +729,7 @@ void poly_mul_batch_modN(
     if (g_s4_final_readback) {
         const double tfinal=now_s();
         std::vector<unsigned long long> all(need, 0ull);
-        if(need) CK(cudaMemcpy(all.data(), C.d_out, need * sizeof(unsigned long long),
+        if(need) CK(stage2_wait::copy(all.data(), C.d_out, need * sizeof(unsigned long long),
                                cudaMemcpyDeviceToHost));
         for (size_t s = 0; s < nbatch; ++s)
             std::copy(all.begin() + (long)((s * output_slots + host_first) * W),

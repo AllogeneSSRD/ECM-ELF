@@ -30,25 +30,20 @@ struct S4Reduce {
         unsigned long long selftest_cases = 0, selftest_bad = 0;
         long long selftest_first = -1;
         double t_reduce = 0.0;
-        /* ---- THE HOOK'S OWN TIMING MUST NOT DRAIN THE PIPELINE (docs section 41) ----------
-           A `cudaDeviceSynchronize()` used to sit right after the reduction kernel purely so
-           that `t_reduce` could be accumulated.  That made `t_reduce` a mixture of kernel time
-           and a full pipeline drain, and at the production shape it read 88.229 s out of the
-           252.300 s of `ntt_seconds` -- the largest single item on the books.  The marks are
-           CUDA events now, resolved on a LATER call once the device has caught up (so the host
-           never has to wait for work it just queued), which makes `t_reduce` the kernels' own
-           GPU time and `t_reduce_host` what the host actually paid.  The ring is bounded, so a
-           host that is more than DTRING calls ahead still blocks -- but on the OLDEST mark,
-           once, instead of once per call. */
+        // Deferred GPU timing, bounded independently for each shape. A full
+        // ring recycles only its oldest mark; newer submissions remain live.
         static const int DTRING = 8;
         cudaEvent_t dt_ev[DTRING][2] = {};
         bool dt_used[DTRING] = {};
+        unsigned long long dt_sequence[DTRING] = {}, dt_next_sequence = 1;
         double t_reduce_host = 0.0;
         unsigned long long dt_blocks = 0;
         ~Shape();
         void dt_destroy();
         /* resolve every mark the device has already passed; NEVER blocks */
         void dt_reap();
+        void dt_resolve(int slot);
+        int dt_oldest() const;
         /* take a slot for a new mark: reuse a resolved one, else wait for what is already
            queued.  The wait happens only when the host is a whole ring ahead of the device,
            which is the one place the deferred timing can still cost anything. */

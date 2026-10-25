@@ -514,6 +514,20 @@ stage2_log_level = -1
 # 中文：决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和
 # 中文：stage2_debug_log。
 
+# stage2_low_cpu_wait = false
+# EN: Opt-in low CPU policy: CUDA blocking device scheduling (4) and bounded event polling. Blocking reads
+# EN: keep their native path; elapsed time may increase.
+# EN: Default false selects auto scheduling (0) and native event waits. CLI --low-cpu-wait 0|1 overrides
+# EN: this key.
+# EN: An explicit key sets NTT_CUDA_WAIT_MODE and NTT_HOST_EVENT_WAIT, and clears NTT_HOST_READBACK_WAIT.
+# EN: Omission preserves expert environment overrides. FIFO recycling is independent.
+# 中文：可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。
+# 中文：默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。
+# 中文：显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。
+# 中文：未配置时保留专家环境覆盖；读回前休眠可单独实验。
+# EN: Uncommenting marks this value explicit; omission preserves implicit worker/path/environment behavior.
+# 中文：取消注释会将此值标记为显式设置；保留注释则沿用 worker、路径或环境变量的隐式规则。
+
 stage2_ntt_counts = false
 # EN: Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables
 # EN: collection and output. Counts mathematical transforms (two forwards and one inverse per

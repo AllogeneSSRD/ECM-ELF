@@ -205,6 +205,7 @@ struct Stage2Values {
     bool tune_runtime=true;
     uint64_t runtime_samples=10;
     bool short_batch_tune=false;
+    bool low_cpu_wait=false;
     bool pack_zero=true;
     std::string stage1_profile="";
     uint64_t auto_min=0;
@@ -230,6 +231,7 @@ struct Stage2Values {
     bool has_finished=false;
     bool has_log=false;
     bool has_owner=false;
+    bool has_low_cpu_wait=false;
     bool has_pack_zero=false;
 };
 inline const Binding<Stage2Values> stage2_bindings[]={
@@ -266,6 +268,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_tune_runtime",[](Stage2Values&c,const std::string&v){c.tune_runtime=boolean(v,"stage2_tune_runtime");}},
     {"stage2_tune_runtime_samples",[](Stage2Values&c,const std::string&v){c.runtime_samples=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_runtime_samples",2,1000));}},
     {"stage2_short_ntt_batch_tune",[](Stage2Values&c,const std::string&v){c.short_batch_tune=boolean(v,"stage2_short_ntt_batch_tune");}},
+    {"stage2_low_cpu_wait",[](Stage2Values&c,const std::string&v){c.low_cpu_wait=boolean(v,"stage2_low_cpu_wait");c.has_low_cpu_wait=true;}},
     {"stage2_pack_zero",[](Stage2Values&c,const std::string&v){c.pack_zero=boolean(v,"stage2_pack_zero");c.has_pack_zero=true;}},
     {"stage1_tune_profile",[](Stage2Values&c,const std::string&v){c.stage1_profile=v;}},
     {"stage2_auto_min_b2",[](Stage2Values&c,const std::string&v){c.auto_min=static_cast<uint64_t>(bounded_integer(v,"stage2_auto_min_b2",0,UINT64_MAX));}},

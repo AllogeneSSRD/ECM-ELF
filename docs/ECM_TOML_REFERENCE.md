@@ -944,6 +944,27 @@ Legacy console level: quiet, curve, phases, batches, and debug map to 0..4. Unse
 
 兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 stage2_debug_log。
 
+### stage2_low_cpu_wait
+
+```toml
+stage2_low_cpu_wait = false
+```
+
+Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
+
+显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
+
+Opt-in low CPU policy: CUDA blocking device scheduling (4) and bounded event polling. Blocking reads keep their native path; elapsed time may increase.
+Default false selects auto scheduling (0) and native event waits. CLI --low-cpu-wait 0|1 overrides this key.
+An explicit key sets NTT_CUDA_WAIT_MODE and NTT_HOST_EVENT_WAIT, and clears NTT_HOST_READBACK_WAIT. Omission preserves expert environment overrides. FIFO recycling is independent.
+
+可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。
+默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。
+显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。
+未配置时保留专家环境覆盖；读回前休眠可单独实验。
+
 ### stage2_ntt_counts
 
 ```toml

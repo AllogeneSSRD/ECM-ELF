@@ -9,13 +9,9 @@ logs/
 .tmp*
 /.bench_tmp
 
-# Build outputs. tools/build contains tracked build scripts.
-build/
-!/tools/build/
-/build_*/
-!/build_cuda/
-build_cuda/*
-!build_cuda/*.bat
+# Build folders use an internal .gitignore containing "*" (including itself).
+
+# Release packages and platform outputs.
 release/
 /dist/
 /test_edwards/

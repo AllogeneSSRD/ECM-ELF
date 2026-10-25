@@ -26,6 +26,9 @@ struct ProductionDefaults {
 #if defined(NTT_GL_FIXED_MODE) && NTT_GL_FIXED_MODE == 3
         set_default("NTT_POINT_MERSENNE", "1");
 #endif
+        set_default("NTT_HOST_EVENT_WAIT", "0");
+        set_default("NTT_HOST_READBACK_WAIT", "0");
+        set_default("NTT_S4_TIMING_FIFO", "1");
         set_default("NTT_FUSE_COOP_OUTER", "2");
         set_default("NTT_GIANT_BASE_CPU", "0");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");

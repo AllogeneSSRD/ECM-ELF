@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // Mandatory arithmetic checks, samples, asynchronous snapshots and draining.
 #include "checks.h"
 #include "options.h"
@@ -34,8 +35,8 @@ void s4_oracle_report()
 void s4_dbad_resolve(S4Reduce &R,bool wait)
 {
     if (!R.dbad_inflight) return;
-    if (wait) CK(cudaEventSynchronize(R.ev_dbad));
-    else if (cudaEventQuery(R.ev_dbad) != cudaSuccess) return;
+    if (wait) CK(stage2_wait::event_sync(R.ev_dbad,stage2_wait::Kind::canonical));
+    else {const auto status=cudaEventQuery(R.ev_dbad);if(status==cudaErrorNotReady)return;CK(status);}
     R.dbad_inflight = false;
     const unsigned long long hbad = *R.h_dbad;
     S4Reduce::Shape *S = R.dbad_shape;
@@ -556,7 +557,7 @@ bool s4_oracle_one(S4Reduce &R,bool wait)
     if (status == cudaErrorNotReady && !wait) return false;
     if (status == cudaErrorNotReady) {
         const double t0 = now_s();
-        CK(cudaEventSynchronize(slot.ready));
+        CK(stage2_wait::event_sync(slot.ready,stage2_wait::Kind::oracle));
         g_oracle.t_wait += now_s() - t0;
     } else CK(status);
     s4_compare_snapshot(R, slot.shape, slot.slice, slot.k0, slot.count, slot.out_slots,
@@ -580,7 +581,7 @@ void s4_oracle_drain(S4Reduce &R)
     const char *bad = std::getenv("NTT_S4_ORACLE_TEST_BAD");
     if (bad && std::atoi(bad) != 0 && g_oracle.head != g_oracle.tail) {
         S4OracleSlot &slot = g_oracle_slot[(g_oracle.tail - 1) % g_s4_oracle_ring];
-        CK(cudaEventSynchronize(slot.ready));
+        CK(stage2_wait::event_sync(slot.ready,stage2_wait::Kind::oracle));
         slot.reduced[0] ^= 1ull;
     }
     s4_oracle_reap(R, true);
@@ -612,7 +613,7 @@ void s4_oracle_block_ready()
     if (!g_oracle_block_ev) CK(cudaEventCreateWithFlags(&g_oracle_block_ev, cudaEventDisableTiming));
     CK(cudaEventRecord(g_oracle_block_ev));
     const double t0 = now_s();
-    CK(cudaEventSynchronize(g_oracle_block_ev));
+    CK(stage2_wait::event_sync(g_oracle_block_ev,stage2_wait::Kind::oracle));
     g_oracle.t_wait += now_s() - t0;
 }
 

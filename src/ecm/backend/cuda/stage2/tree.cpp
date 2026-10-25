@@ -1,3 +1,4 @@
+#include "host_wait.h"
 // F/G tree construction, layout, degree and root selection.
 #include "tree.h"
 #include "options.h"
@@ -248,7 +249,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
         while(offset<n) {
             size_t k=turn++&1;if(!available[k])k^=1;
             // The last D2H or our previous H2D must consume this pinned slot before CPU writes it.
-            CK(cudaEventSynchronize(g_pin_ev[k]));
+            CK(stage2_wait::event_sync(g_pin_ev[k],stage2_wait::Kind::upload));
             size_t take=std::min(n-offset,g_pin_out_cap[k]/(2*W));
             if(g_groot_leaf_chunk)take=std::min(take,g_groot_leaf_chunk);
             for(size_t i=0;i<take;++i)std::copy(leaf[offset+i].begin(),leaf[offset+i].end(),g_pin_out[k]+2*i*W);
@@ -260,19 +261,19 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
         }
         // Trace multiplies may grow/free output staging at entry: finish EVERY leaf H2D first.
         // n=1 has no multiply, so it also needs this explicit endpoint fence.
-        for(int k=0;k<2;++k)if(used[k])CK(cudaEventSynchronize(g_pin_ev[k]));
+        for(int k=0;k<2;++k)if(used[k])CK(stage2_wait::event_sync(g_pin_ev[k],stage2_wait::Kind::upload));
     } else {
         if(g_groot_leaf_staging)++g_gmemory.leaf_fallbacks;else ++g_gmemory.legacy_trees;
         std::vector<unsigned long long> initial(need);
         for(size_t i=0;i<n;++i)std::copy(leaf[i].begin(),leaf[i].end(),initial.begin()+2*i*W);
         g_gdevice.host_staging_peak_bytes=std::max(g_gdevice.host_staging_peak_bytes,8ull*initial.capacity());
-        CK(cudaMemcpy(C.d_rawA,initial.data(),need*8,cudaMemcpyHostToDevice));g_gmemory.pageable_words+=need;
+        CK(stage2_wait::copy(C.d_rawA,initial.data(),need*8,cudaMemcpyHostToDevice));g_gmemory.pageable_words+=need;
     }
     if(!fill){C.t_h2d_raw+=now_s()-upload;C.raw_words+=need;}
     g_gdevice.leaf_words+=need;
     if(check) {
         std::vector<unsigned long long> device_leaf;
-        if(fill){device_leaf.resize(need);CK(cudaMemcpy(device_leaf.data(),C.d_rawA,need*8,cudaMemcpyDeviceToHost));}
+        if(fill){device_leaf.resize(need);CK(stage2_wait::copy(device_leaf.data(),C.d_rawA,need*8,cudaMemcpyDeviceToHost));}
         expected.resize(2*pad);
         for(size_t i=0;i<pad;++i){expected[pad+i].assign(W,0);expected[pad+i][0]=1;}
         for(size_t i=0;i<n;++i) {
@@ -302,7 +303,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
     auto validate=[&](size_t base) {
         if(!check)return;
         std::vector<unsigned long long> words(cur_words);
-        CK(cudaMemcpy(words.data(),cur,cur_words*8,cudaMemcpyDeviceToHost));
+        CK(stage2_wait::copy(words.data(),cur,cur_words*8,cudaMemcpyDeviceToHost));
         for(size_t i=0;i<base;++i) {
             const size_t d=deg[base+i];++g_gdevice.checked_nodes;g_gdevice.checked_words+=(d+1)*W;
             if(d && !std::equal(expected[base+i].begin(),expected[base+i].end(),words.begin()+offsets[i])) {
@@ -345,7 +346,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
             if(meta.pinned) {
                 std::copy(map.begin(),map.end(),meta.pinned);
                 CK(cudaMemcpyAsync(meta.device,meta.pinned,map.size()*8,cudaMemcpyHostToDevice));
-            } else CK(cudaMemcpy(meta.device,map.data(),map.size()*8,cudaMemcpyHostToDevice));
+            } else CK(stage2_wait::copy(meta.device,map.data(),map.size()*8,cudaMemcpyHostToDevice));
             g_gdevice.metadata_words+=map.size();
             S4DeviceBatch batch{cur,meta.device,next,map.data(),cur_words,next_words,nb};
             std::vector<unsigned long long> unused;
@@ -368,7 +369,7 @@ std::vector<std::vector<unsigned long long>> build_groot_device(
         root_sink(cur,n+1);g_gdevice.root_words+=(n+1)*W;return tree;
     }
     tree[1].resize((n+1)*W);
-    const double tr=now_s();CK(cudaMemcpy(tree[1].data(),cur,tree[1].size()*8,cudaMemcpyDeviceToHost));
+    const double tr=now_s();CK(stage2_wait::copy(tree[1].data(),cur,tree[1].size()*8,cudaMemcpyDeviceToHost));
     L.t_d2h_coeff+=now_s()-tr;L.d2h_coeff_words+=tree[1].size();g_gdevice.root_words+=tree[1].size();
     fs.node_peak_bytes=fs.node_retained_bytes=8ull*tree[1].capacity();
     return tree;

@@ -1,5 +1,6 @@
 // S4 modulus/shape setup and reduction hooks.
 #include "s4.h"
+#include "host_wait.h"
 #include "options.h"
 #include "checks.h"
 #include "point_launch.h"
@@ -21,54 +22,68 @@ unsigned long long *pin_words(unsigned long long **slot,size_t *cap,size_t words
 
 void S4Reduce::Shape::dt_destroy()
 {
-        for (int i = 0; i < DTRING; ++i)
-            if (dt_used[i]) {
-                cudaEventDestroy(dt_ev[i][0]);
-                cudaEventDestroy(dt_ev[i][1]);
-                dt_ev[i][0] = dt_ev[i][1] = nullptr;
-                dt_used[i] = false;
-            }
+    for (int i=0;i<DTRING;++i) {
+        // Destruction also covers a partially created timing pair on failure.
+        for(auto &event:dt_ev[i])if(event){cudaEventDestroy(event);event=nullptr;}
+        dt_used[i]=false;
     }
+}
+
+void S4Reduce::Shape::dt_resolve(int slot)
+{
+    float ms=0;
+    CK(cudaEventElapsedTime(&ms,dt_ev[slot][0],dt_ev[slot][1]));
+    t_reduce+=(double)ms*1e-3;
+    for(auto &event:dt_ev[slot]) {CK(cudaEventDestroy(event));event=nullptr;}
+    dt_used[slot]=false;
+}
 
 void S4Reduce::Shape::dt_reap()
 {
-        float ms = 0.0f;
-        for (int i = 0; i < DTRING; ++i) {
-            if (!dt_used[i]) continue;
-            if (cudaEventQuery(dt_ev[i][1]) != cudaSuccess) continue;
-            if (cudaEventElapsedTime(&ms, dt_ev[i][0], dt_ev[i][1]) == cudaSuccess)
-                t_reduce += (double)ms * 1e-3;
-            cudaEventDestroy(dt_ev[i][0]);
-            cudaEventDestroy(dt_ev[i][1]);
-            dt_ev[i][0] = dt_ev[i][1] = nullptr;
-            dt_used[i] = false;
+    if(stage2_wait::timing_fifo()) {
+        // Marks of this shape are recorded in the same ordered stream. Once
+        // its oldest mark is pending, querying newer marks cannot reclaim any.
+        for(int slot=dt_oldest();slot>=0;slot=dt_oldest()) {
+            const auto status=cudaEventQuery(dt_ev[slot][1]);
+            if(status==cudaErrorNotReady)return;
+            CK(status);dt_resolve(slot);
         }
+        return;
     }
+    for(int i=0;i<DTRING;++i)if(dt_used[i]) {
+        const auto status=cudaEventQuery(dt_ev[i][1]);
+        if(status==cudaErrorNotReady)continue;
+        CK(status);
+        dt_resolve(i);
+    }
+}
+
+int S4Reduce::Shape::dt_oldest() const
+{
+    int oldest=-1;
+    for(int i=0;i<DTRING;++i)if(dt_used[i] && (oldest<0 || dt_sequence[i]<dt_sequence[oldest]))oldest=i;
+    return oldest;
+}
 
 int S4Reduce::Shape::dt_slot()
 {
-        dt_reap();
-        for (int i = 0; i < DTRING; ++i)
-            if (!dt_used[i]) return i;
-        ++dt_blocks;
-        dt_flush();
-        return 0;
-    }
+    dt_reap();
+    for(int i=0;i<DTRING;++i)if(!dt_used[i])return i;
+    ++dt_blocks;
+    if(!stage2_wait::timing_fifo()) {dt_flush();return 0;}
+    const int oldest=dt_oldest();
+    CK(stage2_wait::event_sync(dt_ev[oldest][1]));
+    dt_resolve(oldest);
+    return oldest;
+}
 
 void S4Reduce::Shape::dt_flush()
 {
-        for (int i = 0; i < DTRING; ++i) {
-            if (!dt_used[i]) continue;
-            cudaEventSynchronize(dt_ev[i][1]);
-            float ms = 0.0f;
-            if (cudaEventElapsedTime(&ms, dt_ev[i][0], dt_ev[i][1]) == cudaSuccess)
-                t_reduce += (double)ms * 1e-3;
-            cudaEventDestroy(dt_ev[i][0]);
-            cudaEventDestroy(dt_ev[i][1]);
-            dt_ev[i][0] = dt_ev[i][1] = nullptr;
-            dt_used[i] = false;
-        }
+    for(int i=0;i<DTRING;++i)if(dt_used[i]) {
+        CK(stage2_wait::event_sync(dt_ev[i][1]));
+        dt_resolve(i);
     }
+}
 
 S4Reduce::S4Reduce()
 { mpz_init(N); }
@@ -316,6 +331,7 @@ void s4_reduce_hook(
     CK(cudaGetLastError());
     CK(cudaEventRecord(S->dt_ev[dts][1]));
     S->dt_used[dts] = true;
+    S->dt_sequence[dts] = S->dt_next_sequence++;
     S->t_reduce_host += now_s() - t0;
     const double th0 = now_s();
     /* ---- THE DIAGNOSTIC READBACK MUST NOT DRAIN EITHER (objective 4, section 43) -----------

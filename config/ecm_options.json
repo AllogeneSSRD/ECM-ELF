@@ -1329,6 +1329,21 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_low_cpu_wait",
+      "field": "low_cpu_wait",
+      "type": "bool",
+      "default": false,
+      "domain": "[false|true]",
+      "fx": "Stage2_host_wait",
+      "parser": "strict",
+      "present": "has_low_cpu_wait",
+      "description": [
+        "Opt-in low CPU policy: CUDA blocking device scheduling (4) and bounded event polling. Blocking reads keep their native path; elapsed time may increase.\nDefault false selects auto scheduling (0) and native event waits. CLI --low-cpu-wait 0|1 overrides this key.\nAn explicit key sets NTT_CUDA_WAIT_MODE and NTT_HOST_EVENT_WAIT, and clears NTT_HOST_READBACK_WAIT. Omission preserves expert environment overrides. FIFO recycling is independent.",
+        "可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。\n默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。\n显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。\n未配置时保留专家环境覆盖；读回前休眠可单独实验。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_pack_zero",
       "field": "pack_zero",
       "type": "bool",
