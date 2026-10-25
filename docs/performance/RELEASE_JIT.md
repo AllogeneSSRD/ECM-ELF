@@ -63,7 +63,25 @@ Stage1两套完整CUDA队列各实际编译128个单元，8路并行。11.8队�
 
 采样在本轮功能测试结束后串行进行。GPU1仍有其他已有上下文，未干预；前后快照见`sampling_background_before.csv`、`sampling_background_after.csv`。未固定时钟/功耗，小样本只报告中位数及范围，不给稳定P95或吞吐提升结论。nvcc `--time`为离线编译计时，与运行JIT分开。
 
+## 旧目标 PTX 在 Ada 上的持续吞吐
+
+旧包的兼容目标会影响持续计算性能，不能只比较首次JIT耗时。CGBN在C++编译阶段按 `__CUDA_ARCH__` 默认选择三种整数乘加后端：小于500为IMAD，500到6xx为XMAD，700及以后为WMAD；上游Kepler构建目标为sm35。依据为 `third_party/cgbn/include/cgbn/cgbn.h:67` 和 `core/core.cu:315`。compute50 PTX已经包含XMAD实现，驱动生成sm89机器码时不会重新运行C++条件编译选择WMAD。[NVCC虚拟架构宏说明](https://docs.nvidia.com/cuda/archive/11.8.0/cuda-compiler-driver-nvcc/index.html#virtual-architecture-identification-macro)
+
+2026-10-25在RTX4070 Ti（GPU0、sm89、60 SM、驱动610.88）复现：输入 `(2^5323-1)/2372950817`、实际5292位/5632位容器、Montgomery param3、sigma26、960曲线、B1=20000、B2=0，关闭定时checkpoint及指数缓存。冻结cu11.8和cu13.3实际发布版0.52.3、本地sm89版0.52.2，分别第二次复用私有CUDA缓存运行；每个程序热样本1次。返回的阶段gputime为8.74327、3.74783、3.76254秒，旧包约为本地的2.32倍。该阶段计时包含主机/设备流程，不等同于纯内核event；首轮含JIT样本不混入比较。六次执行各960条保存记录的数学字段完全一致，仅TIME不同。
+
+同一CUDA11.8.89/MSVC14.16.27023编译的独立CGBN Montgomery乘法探针进一步隔离后端因素：相同模数、5632位/TPI16/TPB128、960组固定随机全宽操作数、每组50000次依赖乘法，加载与预热后用CUDA event计时，每变体5次。中位内核时间为：默认PTX50/XMAD 1701.755毫秒、sm89/WMAD 726.152毫秒、同sm89仅强制XMAD 1645.600毫秒、默认PTX75/WMAD 704.768毫秒。每变体另有4组独立GMP幂模核对，错误0。由同编译器、同sm89目标、只改变后端的对照可知，旧架构算术路径是主要差距来源，不能将其归因于CUDA11.8不支持WMAD。
+
+强制WMAD的sm50 SASS及PTX50也编译通过；PTX50在4070 Ti上JIT为sm89后，中位709.212毫秒（5次event）、4组GMP检查错误0。因此sm70是WMAD的默认启用分界，不能直接当作其硬性编译下限。此项不证明Maxwell/Pascal实体硬件的数学或性能已经通过，也不据此改变正式旧包后端。
+
+同一sm89探针交替WMAD/XMAD各运行3轮，每轮5次event，GPU利用率不低于95%的遥测样本分别22/51条：每轮忙时平均功耗再取三轮均值为202.134/261.866W，SM时钟相应约2802.946/2788.529MHz。该方向与用户报告的旧包高功耗、低吞吐一致；遥测是轮询样本，不将功耗数值直接当作完整任务平均能耗。全部试验未锁功耗/频率，存在桌面上下文，串行执行且不干预其他进程；这些小样本只定位本设备、本输入和冻结二进制的原因，不作为其他位宽、曲线或GPU的稳定加速比。
+
+证据根为 `data/experiments/release_jit_perf_20261025/`。`inputs.json` 保存三个EXE/GMP摘要及版本，`repro.json`、`math_comparison.json` 保存完整程序对照，`source_comparison.json` 核对对应源码归档与实际CGBN/生产算术模板字节相同，`probe_results.json`、`probe_wmad_result.json`、`power_ab.json` 和逐轮日志保存原始测量；`evidence_manifest.json` 保存探针二进制、脚本及汇总身份，`device-after.csv` 保存设备快照。nvcc编译计时仍与运行event分开保存。
+
+本例4070 Ti使用现有cu13.3现代包即可获得接近本地sm89的吞吐。若要旧包同时高效服务现代GPU，需另行验证现代目标镜像或后端分派；全局强制WMAD前须覆盖旧实体显卡。当前发布矩阵和按需模块要求保持不变。
+
 ## 兼容性边界与待验条件
+
+用户机器安装的Toolkit版本与运行所需驱动版本不同。实际cu13.3 Stage1/Stage2发布EXE的PE导入表没有外部cudart DLL依赖，使用静态CUDA runtime；运行不要求安装本机13.3 Toolkit。若驱动仅报告CUDA13.0—13.2，官方CUDA13.x小版本兼容机制允许在R580及以后驱动上使用受支持的SASS/既有功能，但PTX JIT及依赖新驱动的功能不在该保证内。当前现代包内置sm80 SASS，Ampere/Ada可使用同大版本兼容镜像；上述4070 Ti/610.88以 `CUDA_DISABLE_PTX_JIT=1` 完成960曲线且结果一致，见 `modern_sass_no_observer/result.json`。Turing及需要其他大版本镜像的设备可能必须回退到13.3生成的PTX75，不能仅凭R580条件宣称兼容。R580/R590/R595实体驱动尚未验收；支持完整13.3 PTX JIT应使用相应R610或更新驱动，不能通过安装Toolkit替代驱动升级。[CUDA小版本兼容条件](https://docs.nvidia.com/deploy/cuda-compatibility/610/minor-version-compatibility.html)、[13.3发布说明](https://docs.nvidia.com/cuda/archive/13.3.1/cuda-toolkit-release-notes/)
 
 旧包Maxwell sm50/52需要PTX50；Pascal sm61可使用sm60同大版本相容SASS。Windows452.39是11.x小版本兼容条件，不能保证11.8 PTX ISA被识别；522.06是11.8对应Windows驱动，可作候选测试基线。LAZY要求R515及以上用户态驱动；显式EAGER或缺少该能力的环境未获得按需范围资格。[11.8发布说明](https://docs.nvidia.com/cuda/archive/11.8.0/cuda-toolkit-release-notes/index.html)、[LAZY版本要求](https://docs.nvidia.com/cuda/archive/12.1.1/cuda-c-programming-guide/lazy-loading.html)。
 
