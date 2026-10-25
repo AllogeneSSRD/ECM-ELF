@@ -9,7 +9,14 @@ int main(int argc, char** argv) {
     std::string config; int worker = 1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--gui-queue-protocol") { std::fputs(ecm_queue::owner_protocol, stdout); return 0; }
+        if (arg == "--gui-queue-protocol") {
+            // Opt-in regression fixture: a real locking worker with no query API.
+            if (const char* probe = std::getenv("ECM_TEST_PROTOCOL_PROBE")) {
+                if (FILE* file = std::fopen(probe, "ab")) { std::fputs("probe\n", file); std::fclose(file); }
+                return 23;
+            }
+            std::fputs(ecm_queue::owner_protocol, stdout); return 0;
+        }
         if (arg == "--config" && i + 1 < argc) config = argv[++i];
         else if (arg == "--worker" && i + 1 < argc) worker = std::stoi(argv[++i]);
     }

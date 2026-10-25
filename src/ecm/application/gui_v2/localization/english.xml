@@ -275,7 +275,7 @@
       <Item id="language_chinese" name="中文" />
       <Item id="message.open_workflow" name="Open a workflow TOML to manage workers." />
       <Item id="message.stop_before_change_workflow" name="Stop all workers before changing workflow." />
-      <Item id="message.workflow_opened" name="Workflow opened; worker control requires queue-owner protocol 1." />
+      <Item id="message.workflow_opened" name="Workflow opened." />
       <Item id="message.save_before_start" name="Save or reload workflow changes before starting workers." />
       <Item id="message.stop_and_save_before_generate" name="Stop workers and save workflow before generating." />
       <Item id="message.invalid_target_worker" name="Select a valid target worker." />

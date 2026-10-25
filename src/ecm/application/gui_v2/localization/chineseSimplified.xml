@@ -275,7 +275,7 @@
       <Item id="language_chinese" name="中文" />
       <Item id="message.open_workflow" name="请在设置中打开工作流 TOML，再管理计算任务。" />
       <Item id="message.stop_before_change_workflow" name="请先停止所有任务，再切换工作流。" />
-      <Item id="message.workflow_opened" name="已打开工作流；计算程序须支持队列拥有权协议 1。" />
+      <Item id="message.workflow_opened" name="已打开工作流。" />
       <Item id="message.save_before_start" name="请先保存或重载工作流修改，再启动任务。" />
       <Item id="message.stop_and_save_before_generate" name="请先停止任务并保存工作流，再生成队列。" />
       <Item id="message.invalid_target_worker" name="请选择有效的目标 worker。" />

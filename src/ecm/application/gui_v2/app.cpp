@@ -15,9 +15,6 @@
 
 namespace ecmgui_v2 {
 namespace {
-// The existing Controller announces a stage change before spawning its child.
-// A typed refusal stops that dispatch without changing the legacy Controller.
-struct DispatchBlocked : std::runtime_error { using std::runtime_error::runtime_error; };
 std::string executable_path(const std::string& input, const std::string& base) {
     if (input.empty()) return {};
     auto path = std::filesystem::u8path(input);
@@ -46,9 +43,6 @@ App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log
     for(int i=0;i<3;++i)tab_known_[i]=tab_known_[i]||hidden[i];
     logs_visible=state.ui_logs&&(state.ui_page==0||state.ui_logs_keep_visible||(ui::pinned(state.ui_right_pages,0)&&state.ui_right_page==0));
     controller.set_sinks([this](const std::string& text) { trace(text); }, [this](const ecmgui::WorkerNotice& notice) {
-        if(notice.kind==ecmgui::WorkerNotice::Kind::StageChanged)
-            for(const auto& worker:controller.workers())if(worker.index==notice.worker&&!supports_owner(worker.exe))
-                throw DispatchBlocked(status);
         if (notices.size() == 32) notices.erase(notices.begin()); notices.push_back(notice);
         if (!notice.text.empty()) {status = notice.text;toast(notice.text,notice.kind==ecmgui::WorkerNotice::Kind::Error);}
     });
@@ -95,7 +89,7 @@ bool App::load_config(const std::string& input) {
         if (!candidate.load(path, error)) throw std::runtime_error(error);
         group_order_job.cancel();
         group_order_loaded=false;
-        config = std::move(candidate); config_path = path; leases_.clear(); verified_.clear();log_views_.clear();log_last_worker_=-1;
+        config = std::move(candidate); config_path = path; leases_.clear();log_views_.clear();log_last_worker_=-1;
         saved_clock_profiles.clear();saved_clock_automatic.clear();clock_drafts.clear();
         clock_profiles_valid=parse_clock_profiles(config.get("gui","gpu_clock_ranges"),saved_clock_profiles,&saved_clock_automatic);
         // Loading a different workflow does not replay startup commands. The
@@ -111,7 +105,7 @@ bool App::load_config(const std::string& input) {
         configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};result_view_dirty=true;
         ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
-        status = "Workflow opened; worker control requires queue-owner protocol 1."; trace("config=" + path);
+        status = "Workflow opened."; trace("config=" + path);
         return true;
     } catch (const std::exception& error) { status = error.what(); trace(status); return false; }
 }
@@ -135,25 +129,14 @@ void App::configure_workers() {
     std::snprintf(stage1_input, sizeof(stage1_input), "%s", workers.worker_exe.c_str());
     std::snprintf(stage2_input, sizeof(stage2_input), "%s", workers.stage2_exe.c_str());
 }
-bool App::supports_owner(const std::string& path) {
-    if (!std::filesystem::is_regular_file(std::filesystem::u8path(path))) { status = "Worker executable missing: " + path; return false; }
-    const auto stamp = std::filesystem::last_write_time(std::filesystem::u8path(path));
-    const auto found = verified_.find(path); if (found != verified_.end() && found->second == stamp) return true;
-    std::string output; int code = -1;
-    if (!ecmgui::run_capture('"' + path + "\" --gui-queue-protocol", output, code, 3000) || code != 0 || ecm_config::trim(output) != ecm_config::trim(ecm_queue::owner_protocol)) {
-        status = "Worker lacks queue ownership protocol 1; install the updated worker: " + path; trace(status); return false;
-    }
-    verified_[path] = stamp; return true;
-}
 bool App::start(int index) {
     if (!ready || controller.exit_phase() != ecmgui::WorkerController::ExitPhase::Idle) return false;
     if (config.dirty()) { status="Save or reload workflow changes before starting workers."; return false; }
     try {
         for (const auto& worker : controller.workers()) if (worker.index == index) {
             if (worker.running()) return true;
-            if (!supports_owner(controller.resolve_worker_exe(index))) return false;
-            // Only the selected engine is needed now. StageChanged validates any
-            // later dispatch before Controller can start the replacement child.
+            // Worker binaries are assumed to implement ownership. Keep the real
+            // GUI control lease and worker-lock collision check before dispatch.
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
             if (!controller.start(index, true)) return false;
@@ -169,12 +152,7 @@ void App::tick() {
         autostart_pending = false;
         for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);
     }
-    for(const auto& worker:controller.workers())
-        if(worker.state()==ecmgui::WorkerRunState::Restarting&&!supports_owner(worker.exe)){
-            controller.request_stop(worker.index);toast(status,true);
-        }
-    try { controller.tick(); }
-    catch(const DispatchBlocked& error) { status=error.what();toast(status,true); }
+    controller.tick();
     for (const auto& worker : controller.workers())
         if (!worker.running() && worker.state() != ecmgui::WorkerRunState::Restarting && worker.state() != ecmgui::WorkerRunState::Starting) leases_.erase(worker.index);
     const auto now = GetTickCount64();
@@ -392,6 +370,8 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     while(!toasts.empty()&&toasts.front().until<GetTickCount64())toasts.pop_front();
     const bool zh = fonts.chinese;
     if (ImGui::BeginMainMenuBar()) {
+        const float menu_y=ImGui::GetCursorPosY();
+        ImGui::SetCursorPosY(menu_y+2*active.scale);
         ImGui::Text("ECM-ELF %s", version); ImGui::Separator();
         view_menu_open=ImGui::BeginMenu(ecmgui_v2::ui::text("menu.view",zh));
         view_control={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
@@ -426,28 +406,51 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
             for (size_t i=begin;i<messages.size();++i) ImGui::TextUnformatted(messages[i].c_str());
             ImGui::PopTextWrapPos(); ImGui::EndPopup();
         }
+        // Restore the horizontal line origin too: caption controls stay put.
+        ImGui::SetCursorPosY(menu_y);
+        ImGui::GetCurrentWindow()->DC.CursorPosPrevLine.y=ImGui::GetCursorScreenPos().y;
         title_drag_min=title_drag_max={};
         if(state.window_title_bar){
             if(ImGui::GetMainViewport()->WorkSize.x>=1000*active.scale)ImGui::TextDisabled("%s",ui::message(status,zh).c_str());
         }else{
-            const float h=ImGui::GetFrameHeight(),spacing=ImGui::GetStyle().ItemSpacing.x;
-            const float right=ImGui::GetWindowWidth()-ImGui::GetStyle().WindowPadding.x-3*h-3*spacing;
+            const float h=ImGui::GetFrameHeight()+2*active.scale,width=h+12*active.scale;
+            const float spacing=active.scale; // Widen the hit areas, not the gaps between them.
+            const float right=ImGui::GetWindowWidth()-3*width-3*spacing;
             ImGui::InvisibleButton("window-drag",{std::max(4.f,right-ImGui::GetCursorPosX()),h});title_drag_min=ImGui::GetItemRectMin();title_drag_max=ImGui::GetItemRectMax();
             const auto viewport=ImGui::GetMainViewport();const auto hwnd=static_cast<HWND>(viewport->PlatformHandleRaw?viewport->PlatformHandleRaw:viewport->PlatformHandle);
             const char* labels[]{"##window-min","##window-max","##window-close"};
             const char* tips[]{ecmgui_v2::ui::text("window.minimize",zh),ecmgui_v2::ui::text("window.maximize_restore",zh),ecmgui_v2::ui::text("window.close",zh)};
-            for(int i=0;i<3;++i){ImGui::SameLine();if(i==2)ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ui::palette(active.light).danger);
-                if(ImGui::Button(labels[i],{h,h}))PostMessageW(hwnd,i==2?WM_CLOSE:WM_SYSCOMMAND,i==0?SC_MINIMIZE:i==1?(IsZoomed(hwnd)?SC_RESTORE:SC_MAXIMIZE):0,0);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,0.f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,ImVec2{spacing,ImGui::GetStyle().ItemSpacing.y});
+            ImGui::PushStyleColor(ImGuiCol_Button,ImVec4{0,0,0,0});
+            for(int i=0;i<3;++i){ImGui::SameLine();if(i==2){
+                    const auto danger=ui::palette(active.light).danger;
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,danger);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,ImVec4{danger.x*.85f,danger.y*.85f,danger.z*.85f,danger.w});
+                }
+                if(ImGui::Button(labels[i],{width,h}))PostMessageW(hwnd,i==2?WM_CLOSE:WM_SYSCOMMAND,i==0?SC_MINIMIZE:i==1?(IsZoomed(hwnd)?SC_RESTORE:SC_MAXIMIZE):0,0);
                 title_controls[i]={(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
-                const auto center=title_controls[i];const float r=4*active.scale;auto draw=ImGui::GetWindowDrawList();const auto ink=ImGui::GetColorU32(ImGuiCol_Text);
+                const auto center=title_controls[i];const float r=4.5f*active.scale;auto draw=ImGui::GetWindowDrawList();
+                const auto ink=i==2&&(ImGui::IsItemHovered()||ImGui::IsItemActive())?IM_COL32(255,255,255,255):ImGui::GetColorU32(ImGuiCol_Text);
                 if(i==0)draw->AddLine({center.x-r,center.y},{center.x+r,center.y},ink,active.scale);
                 else if(i==1)draw->AddRect({center.x-r,center.y-r},{center.x+r,center.y+r},ink,0,0,active.scale);
                 else{draw->AddLine({center.x-r,center.y-r},{center.x+r,center.y+r},ink,active.scale);draw->AddLine({center.x-r,center.y+r},{center.x+r,center.y-r},ink,active.scale);}
-                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tips[i]);if(i==2)ImGui::PopStyleColor();
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",tips[i]);if(i==2)ImGui::PopStyleColor(2);
             }
+            ImGui::PopStyleColor();ImGui::PopStyleVar(3);
         }
         ImGui::EndMainMenuBar();
     }
+    // Reserve a seamless strip between the full top bar and docked content.
+    // Viewport work insets keep every docked pane below it without rebuilding layout.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2{0,0});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg));
+    ImGui::BeginViewportSideBar("##v2.top-spacer",ImGui::GetMainViewport(),ImGuiDir_Up,8*active.scale,
+        ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::End();
+    ImGui::PopStyleColor();ImGui::PopStyleVar(2);
     sync_dock_tabs();update_logs_visibility();
     const auto dock = ImGui::DockSpaceOverViewport(ImGui::GetID("v2.dock"), ImGui::GetMainViewport());
     const bool wide = ImGui::GetMainViewport()->WorkSize.x >= 1100 * active.scale;

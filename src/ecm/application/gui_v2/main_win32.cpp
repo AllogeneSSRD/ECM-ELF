@@ -94,8 +94,31 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
     if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData &&
         ImGui_ImplWin32_WndProcHandler(hwnd, message, w, l)) return 1;
     switch (message) {
+    case WM_NCCALCSIZE:
+        if (!(GetWindowLongPtrW(hwnd,GWL_STYLE)&WS_CAPTION)) {
+            auto rect=w?&reinterpret_cast<NCCALCSIZE_PARAMS*>(l)->rgrc[0]:reinterpret_cast<RECT*>(l);
+            const auto top=rect->top;
+            const auto result=DefWindowProcW(hwnd,message,w,l);
+            // Keep native side/bottom resizing and maximized work-area insets.
+            // The restored window paints its own top edge instead of leaving
+            // the caption-less WS_THICKFRAME strip to the system background.
+            if(!IsZoomed(hwnd))rect->top=top;
+            return result;
+        }
+        break;
     case WM_NCHITTEST: {
         const auto hit=DefWindowProcW(hwnd,message,w,l);
+        if(hit==HTCLIENT&&!(GetWindowLongPtrW(hwnd,GWL_STYLE)&WS_CAPTION)&&!IsZoomed(hwnd)){
+            RECT rect{};GetWindowRect(hwnd,&rect);
+            const int x=static_cast<short>(LOWORD(l)),y=static_cast<short>(HIWORD(l));
+            const auto dpi=GetDpiForWindow(hwnd);
+            const int edge=GetSystemMetricsForDpi(SM_CYFRAME,dpi)+GetSystemMetricsForDpi(SM_CXPADDEDBORDER,dpi);
+            if(y>=rect.top&&y<rect.top+edge){
+                if(x<rect.left+edge)return HTTOPLEFT;
+                if(x>=rect.right-edge)return HTTOPRIGHT;
+                return HTTOP;
+            }
+        }
         if(hit==HTCLIENT&&current_app&&!current_app->state.window_title_bar){
             POINT p{static_cast<short>(LOWORD(l)),static_cast<short>(HIWORD(l))};
             if(!(ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable))ScreenToClient(hwnd,&p);

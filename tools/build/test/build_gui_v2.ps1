@@ -57,6 +57,7 @@ if (-not $VcVars) {
     $VcVars = $candidate.FullName
 }
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $BuildDir '.gitignore'), "*`n")
 $defs = @('-DCMAKE_BUILD_TYPE=Release')
 if ($GmpRoot) { $defs += "-DECM_GROUP_ORDER_GMP_ROOT=`"$GmpRoot`"" }
 if ($BasePetOnly) { $defs += '-DECM_GUI_V2_BASE_PET_ONLY=ON' } else { $defs += '-DECM_GUI_V2_BASE_PET_ONLY=OFF' }

@@ -14,6 +14,49 @@
 namespace fs=std::filesystem;
 static void write(const fs::path& p,const std::string& text){std::ofstream f(p,std::ios::binary);f<<text;assert(f.good());}
 static std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return {std::istreambuf_iterator<char>(f),{}};}
+// Run with a locking worker whose protocol-query API is deliberately disabled.
+static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"no-protocol";fs::create_directories(dir);
+    const auto probe=dir/"unexpected-probe.txt",queue=dir/"worktodo.txt",cfg=dir/"ecm.toml";
+    assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE",probe.u8string().c_str())==0);
+    const auto setup=[&](const std::string& args,bool autostart=false,const fs::path& exe=fs::path{}){
+        write(queue,"[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n");
+        write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=1\nexe=\""+(exe.empty()?fixture:exe).generic_u8string()+"\"\nstage2_exe=\""+fixture.generic_u8string()+"\"\n[workers.1]\nautostart="+(autostart?"1":"0")+"\nextra_args='"+args+"'\n");
+    };
+    const auto wait=[&](ecmgui_v2::App& app,const auto& done){
+        const auto deadline=GetTickCount64()+15000;
+        while(!done()&&GetTickCount64()<deadline){app.tick();Sleep(10);}assert(done());
+    };
+    const auto acquired=[](const ecmgui_v2::App& app){
+        for(const auto& line:app.controller.workers()[0].raw)if(line.find("queue_owner: acquired")!=line.npos)return true;
+        return false;
+    };
+    setup("--scenario v2-checkpoint-stop");
+    {ecmgui_v2::UiState state;state.path=dir/"manual.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
+     // A real worker owner blocks dispatch even without the query handshake.
+     {ecm_queue::OwnerLease owner(queue.u8string(),1);assert(!app.start(1));}
+     {ecm_queue::OwnerLease gui(queue.u8string(),1,".gui-control.lock");assert(!app.start(1));}
+     assert(app.start(1));wait(app,[&]{return acquired(app);});
+     ecmgui_v2::UiState second_state;second_state.path=dir/"second.ui.toml";ecmgui_v2::App second(second_state,stdout);second.initialize(cfg.u8string(),true);assert(!second.start(1));
+     app.controller.request_stop(1);wait(app,[&]{return !app.controller.busy();});}
+    setup("--scenario v2-checkpoint-stop",true);
+    {ecmgui_v2::UiState state;state.path=dir/"auto.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);app.tick();wait(app,[&]{return acquired(app);});
+     app.controller.request_stop(1);wait(app,[&]{return !app.controller.busy();});}
+    setup("--scenario ok --lines 0");
+    {ecmgui_v2::UiState state;state.path=dir/"switch.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(!app.controller.workers()[0].stage2);
+     write(queue,"[Worker #1]\nECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");
+     assert(app.start(1)&&app.controller.workers()[0].stage2);wait(app,[&]{return acquired(app)&&!app.controller.busy();});}
+    setup("--scenario crash-once --lines 0 --marker \""+(dir/"crashed-once").generic_u8string()+"\"");
+    {ecmgui_v2::UiState state;state.path=dir/"restart.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
+     wait(app,[&]{return app.controller.workers()[0].restarts()==1&&!app.controller.busy();});}
+    for(const auto& exe:{dir/"missing.exe",dir/"invalid.exe"}){
+        if(exe.filename()=="invalid.exe")write(exe,"not an executable");setup("",false,exe);
+        ecmgui_v2::UiState state;state.path=dir/"error.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
+        assert(!app.start(1)&&app.status.find("CreateProcessW failed")!=app.status.npos);
+    }
+    assert(!fs::exists(probe));assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE","")==0);
+    std::cout<<"{\"no_protocol_probe\":true,\"manual_autostart_restart_stage_switch\":true,\"queue_locks_preserved\":true,\"spawn_errors_preserved\":true}\n";
+}
 int main(int argc,char** argv){
     std::string localization_error;assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",localization_error));
     {ecmgui::WorkerView worker;worker.resume_pct=23.8;
@@ -122,7 +165,7 @@ int main(int argc,char** argv){
          io.AddKeyEvent(ImGuiKey_Space,true);const bool key_down=frame();io.AddKeyEvent(ImGuiKey_Space,false);const bool key_up=frame();assert((key_down||key_up)&&checked);
          frame(false,true);assert(metrics.mixed);
      }ImGui::DestroyContext(context);}
-    assert(argc==2);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
+    assert(argc==2||argc==3);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
     {using namespace ecmgui_v2::ui;
      auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
      auto timing=stage2_timing(previous,tuned,0);assert(timing.seconds[5]==20&&timing.sources[5]==1&&timing.seconds[2]==10&&timing.sources[2]==2);
@@ -257,5 +300,6 @@ int main(int argc,char** argv){
      copy();assert(copied=="Group order #E(F_p): 996\n    = 2^2 × 3 × 83\nPoint order ord(P): 249\n    = 3 × 83");
      const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
      ImGui::DestroyContext(context);}
+    if(argc==3)no_protocol_probe(root,fs::absolute(argv[2]));
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";
 }

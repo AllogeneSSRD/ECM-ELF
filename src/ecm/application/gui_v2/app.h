@@ -213,7 +213,6 @@ public:
 private:
     FILE* log_;
     std::map<int,std::unique_ptr<ecm_queue::OwnerLease>> leases_;
-    std::map<std::string,std::filesystem::file_time_type> verified_;
     bool layout_ready_ = false, layout_wide_ = false;
     bool focus_right_ = true;
     bool focus_settings_=false,place_settings_=true;
@@ -242,7 +241,6 @@ private:
     bool begin_window(const char* name, bool* open, const ui::Settings& active,ImGuiWindowFlags flags=0);
     void end_window();
     void shutdown_workers() noexcept;
-    bool supports_owner(const std::string& exe);
     void draw_workers(const ui::Settings& active, const ui::Fonts& fonts);
     void draw_worker_speed(const ui::Fonts& fonts);
     std::string worker_summary(const ecmgui::WorkerView& worker,bool zh)const;
