@@ -40,21 +40,23 @@ struct P95TransferConfig {
 };
 
 struct P95TransferResult {
-    bool enabled = false;         // false when p95_worktodo_path is empty
-    bool ok = false;              // the line is in worktodo.add
-    int worker = 0;               // section it went to (0 = appended without a header)
-    size_t added = 0;             // lines appended by THIS call
-    size_t pending_delivered = 0; // previously parked lines that went out with it
-    size_t pending_left = 0;      // lines still parked after this call
-    size_t recovered = 0;         // lines re-delivered because Prime95 had dropped them
-    bool aid_dropped = false;     // this line went over without its (rejected) AID
-    std::string add_path;         // worktodo.add that was written
-    std::string note;             // warning text (routing fell back), empty when clean
-    std::string error;            // failure reason, empty on success
+    bool enabled = false;               // false when p95_worktodo_path is empty
+    bool ok = false;                    // the line is in worktodo.add
+    bool publication_uncertain = false; // add published, but a later acknowledgement failed
+    int worker = 0;                     // section it went to (0 = appended without a header)
+    size_t added = 0;                   // lines appended by THIS call
+    size_t pending_delivered = 0;       // previously parked lines that went out with it
+    size_t pending_left = 0;            // lines still parked after this call
+    size_t recovered = 0;               // lines re-delivered because Prime95 had dropped them
+    bool aid_dropped = false;           // this line went over without its (rejected) AID
+    std::string add_path;               // worktodo.add that was written
+    std::string note;                   // warning text (routing fell back), empty when clean
+    std::string error;                  // failure reason, empty on success
 };
 
-// Deliver one completed task line. Never throws, never blocks longer than ~3 s (the
-// worktodo.add lock), and never modifies worktodo.txt.
+// Deliver one completed task line. Reports failures in the result and never
+// modifies worktodo.txt. Each gate has a bounded budget: pending is fail-fast,
+// add waits at most 3 s and ledger publication at most 5 s per operation.
 P95TransferResult p95_transfer_deliver(const P95TransferConfig& cfg, const std::string& line);
 
 // --- pieces the GUI/tests use to describe the state without delivering anything ---
@@ -70,7 +72,7 @@ std::string p95_transfer_pending_path(const std::string& exe_dir);
 // Path of the worktodo.add that goes with a given Prime95 worktodo.txt.
 std::string p95_transfer_add_path(const std::string& worktodo_path);
 
-// Number of lines waiting in the pending file (0 when it does not exist).
+// Number of lines waiting (0 when missing). Throws if an existing file is unreadable.
 size_t p95_transfer_pending_count(const std::string& pending_path);
 
 // Path of the delivered-lines ledger for a given driver executable directory.

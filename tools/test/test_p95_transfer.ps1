@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Acceptance test for the Prime95 handoff: canonical typed task fields are preserved in
@@ -19,9 +19,9 @@
       [5] invalid specs     : 2000 and "abc" -> warning + header-less append (never a throw)
       [6] verbatim          : AID and known-factors survive; the actual saved range and
                               absolute synchronized file are delivered for NF batches
-      [7] lock held         : a fresh worktodo.add.lock fails the delivery; the line is
+      [7] lock held         : an active worktodo.add.publish.lock fails the delivery; the line is
                               PARKED and the next task re-delivers it (then pending is gone)
-      [8] stale lock        : a lock older than 60 s is preempted instead of blocking
+      [8] retired marker    : an old pure marker is ignored; active kernel gates are never aged out
 
     ASCII only on purpose (Windows PowerShell 5.1 needs a BOM for non-ASCII .ps1).
 
@@ -139,18 +139,23 @@ function Invoke-Task {
     if ($iniExtra -ne '') { $iniLines += $iniExtra }
     Write-Text $ini (($iniLines -join "`r`n") + "`r`n")
 
-    $lockPath = $addPath + '.lock'
-    if ($lockAgeMinutes -ge 0) {
-        Set-Content -LiteralPath $lockPath -Value 'held by the test' -Encoding ASCII
-        if ($lockAgeMinutes -gt 0) {
-            (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-$lockAgeMinutes)
-        }
+    $lockPath = $addPath + $(if ($lockAgeMinutes -eq 0) { '.publish.lock' } else { '.lock' })
+    $heldLock = $null
+    if ($lockAgeMinutes -eq 0) {
+        $heldLock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    } elseif ($lockAgeMinutes -gt 0) {
+        Set-Content -LiteralPath $lockPath -Value 'retired marker; not a kernel lock' -Encoding ASCII
+        (Get-Item -LiteralPath $lockPath).LastWriteTime = (Get-Date).AddMinutes(-$lockAgeMinutes)
     }
 
     $p95Before = if (Test-Path $p95TodoPath) { Get-Content -LiteralPath $p95TodoPath -Raw } else { '' }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $out = (& cmd /c ('"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
-    $code = $LASTEXITCODE
+    try {
+        $out = (& cmd /c ('"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
+        $code = $LASTEXITCODE
+    } finally {
+        if ($null -ne $heldLock) { $heldLock.Dispose() }
+    }
     $sw.Stop()
     Write-Text (Join-Path $dir ('run_' + [Guid]::NewGuid().ToString('N') + '.log')) $out
     Check ($name + ' process completed') ($code -eq 0) ("exit=" + $code)
@@ -283,13 +288,13 @@ Check "both lines are in worktodo.add"      (@($r7b.add | Where-Object { $_ -mat
 Check "no handoff responsibility remains"   (@(Get-ChildItem -LiteralPath ($pending+'.handoff') -Filter '*.intent' -ErrorAction SilentlyContinue).Count -eq 0)
 
 # ------------------------------------------------------------------ [8] stale lock -------
-Write-Host "[8] a lock older than 60 s is preempted instead of waited on"
+Write-Host "[8] a retired marker does not impersonate an active kernel lock"
 $r8 = Invoke-Task -name 'stale' -task $task -workerSpec '1' -p95Todo $todoBoth -lockAgeMinutes 5
 Write-Host ("      elapsed={0:N1}s" -f $r8.seconds)
-Check "the stale lock was preempted"        ($null -ne (Get-Notice $r8.out 'ok'))
+Check "the retired marker did not block delivery"        ($null -ne (Get-Notice $r8.out 'ok'))
 Check "delivery was fast (no 3 s wait)"     ($r8.seconds -lt 2.5)
 Check "the line is in worktodo.add"         ($r8.add -contains $handoff)
-Check "the stale lock file is gone"         (-not (Test-Path $r8.lockPath))
+Check "the retired marker was not used as an active lock" (Test-Path $r8.lockPath)
 
 # ------------------------------------------------------------------ [9] rejected AID ----
 # The operator's production run (2026-09-29) showed the failure this guards against: a line

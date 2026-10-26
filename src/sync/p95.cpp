@@ -1,6 +1,8 @@
 #include "sync/p95.h"
 #include "ecm/platform/log_read.h"
+#include "io/files.h"
 #include "io/worktodo.h"
+#include <memory>
 
 #include "io/prime95.h"
 
@@ -30,12 +32,6 @@ namespace {
 
 // Prime95's own ceiling (MAX_NUM_WORKERS in commonc.h).
 const int kMaxP95Workers = 1024;
-
-// worktodo.add lock: wait up to this long for another writer, then park the line.
-const int kLockWaitMs = 3000;
-const int kLockRetryMs = 100;
-// A lock file older than this was left behind by a killed process: preempt it.
-const long long kLockStaleMs = 60000;
 
 std::string trim(const std::string& s) {
     size_t b = 0, e = s.size();
@@ -70,14 +66,6 @@ std::string join_path(const std::string& dir, const std::string& name) {
     return dir + "\\" + name;
 }
 
-void sleep_ms(int ms) {
-#ifdef _WIN32
-    Sleep((DWORD)ms);
-#else
-    usleep((useconds_t)ms * 1000);
-#endif
-}
-
 bool file_exists(const std::string& path) {
     struct stat st;
     return stat(path.c_str(), &st) == 0;
@@ -86,9 +74,18 @@ bool file_exists(const std::string& path) {
 // Lines of a text file, CR stripped, blanks dropped. A missing file is empty.
 std::vector<std::string> read_lines(const std::string& path) {
     std::vector<std::string> out;
-    std::ifstream in(path);
-    if (!in)
+    if (path.empty())
         return out;
+    std::error_code error;
+    const bool exists = std::filesystem::exists(std::filesystem::u8path(path), error);
+    if (error)
+        throw std::runtime_error("cannot inspect P95 responsibility file: " + path + ": " +
+                                 error.message());
+    if (!exists)
+        return out;
+    std::ifstream in(std::filesystem::u8path(path));
+    if (!in)
+        throw std::runtime_error("cannot read P95 responsibility file: " + path);
     std::string line;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r')
@@ -97,6 +94,8 @@ std::vector<std::string> read_lines(const std::string& path) {
             continue;
         out.push_back(line);
     }
+    if (in.bad())
+        throw std::runtime_error("incomplete P95 responsibility file: " + path);
     return out;
 }
 
@@ -104,120 +103,16 @@ std::vector<std::string> read_lines(const std::string& path) {
 // half-written pending list behind.
 bool write_lines_atomic(const std::string& path, const std::vector<std::string>& lines,
                         std::string& err) {
-    const std::string tmp = path + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::trunc | std::ios::binary);
-        if (!out) {
-            err = "cannot write " + tmp;
-            return false;
-        }
-        for (const std::string& l : lines)
-            out << l << "\n";
-        out.close();
-        if (out.fail()) {
-            err = "write failed: " + tmp;
-            remove(tmp.c_str());
-            return false;
-        }
-    }
-#ifdef _WIN32
-    if (!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        err = "cannot replace " + path;
-        remove(tmp.c_str());
+    try {
+        std::string bytes;
+        for (const auto& line : lines)
+            bytes += line + '\n';
+        ecm_io::write_atomic(std::filesystem::u8path(path), bytes);
+        return true;
+    } catch (const std::exception& failure) {
+        err = failure.what();
         return false;
     }
-#else
-    if (rename(tmp.c_str(), path.c_str()) != 0) {
-        err = "cannot replace " + path;
-        remove(tmp.c_str());
-        return false;
-    }
-#endif
-    return true;
-}
-
-// ── worktodo.add lock ────────────────────────────────────────────────────────────────
-// Our own writers are the only ones taking this lock; Prime95 never does. It exists so
-// two workers of this driver cannot interleave a read-modify-write of worktodo.add.
-
-bool lock_create(const std::string& path, std::string& err) {
-#ifdef _WIN32
-    HANDLE h = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        const DWORD e = GetLastError();
-        err = (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS) ? "held by another writer"
-                                                                    : "cannot create the lock file";
-        return false;
-    }
-    DWORD pid = GetCurrentProcessId();
-    DWORD written = 0;
-    (void)WriteFile(h, &pid, (DWORD)sizeof(pid), &written, nullptr);
-    CloseHandle(h);
-    return true;
-#else
-    const int fd = open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
-    if (fd < 0) {
-        err = (errno == EEXIST) ? "held by another writer" : "cannot create the lock file";
-        return false;
-    }
-    const long pid = (long)getpid();
-    if (write(fd, &pid, sizeof(pid)) < 0) { /* the pid is only informational */
-    }
-    close(fd);
-    return true;
-#endif
-}
-
-bool lock_age_ms(const std::string& path, long long& age_ms) {
-#ifdef _WIN32
-    WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &fad))
-        return false;
-    ULARGE_INTEGER t, n;
-    t.LowPart = fad.ftLastWriteTime.dwLowDateTime;
-    t.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-    FILETIME now;
-    GetSystemTimeAsFileTime(&now);
-    n.LowPart = now.dwLowDateTime;
-    n.HighPart = now.dwHighDateTime;
-    age_ms = (n.QuadPart > t.QuadPart) ? (long long)((n.QuadPart - t.QuadPart) / 10000ull) : 0;
-    return true;
-#else
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0)
-        return false;
-    const long long now_ms = (long long)time(nullptr) * 1000;
-    const long long mt_ms = (long long)st.st_mtime * 1000;
-    age_ms = (now_ms > mt_ms) ? (now_ms - mt_ms) : 0;
-    return true;
-#endif
-}
-
-bool lock_acquire(const std::string& path, std::string& err) {
-    int waited = 0;
-    for (;;) {
-        std::string why;
-        if (lock_create(path, why))
-            return true;
-
-        long long age = 0;
-        if (lock_age_ms(path, age) && age > kLockStaleMs) {
-            /* Left behind by a process that died mid-write. */
-            remove(path.c_str());
-            continue;
-        }
-        if (waited >= kLockWaitMs) {
-            err = why + " (waited " + std::to_string(kLockWaitMs) + " ms)";
-            return false;
-        }
-        sleep_ms(kLockRetryMs);
-        waited += kLockRetryMs;
-    }
-}
-
-void lock_release(const std::string& path) {
-    remove(path.c_str());
 }
 
 // ── routing ─────────────────────────────────────────────────────────────────────────
@@ -340,17 +235,22 @@ void park_lines(const P95TransferConfig& cfg, const std::vector<std::string>& li
 // One record per line:  "sent <line>"  /  "recovered <line>".
 // It exists so the driver can notice that Prime95 threw a delivered line away (rejected AID)
 // and hand it over again without the AID, instead of losing the stage-1 work silently.
-std::vector<std::string> read_ledger(const std::string& path) {
-    return read_lines(path);
-}
+std::vector<std::string> read_ledger(const std::string& path) { return read_lines(path); }
 
 void append_ledger(const std::string& path, const std::string& record) {
     if (path.empty() || record.empty())
         return;
-    std::ofstream out(path, std::ios::binary | std::ios::app);
-    if (!out)
+    const auto file = std::filesystem::u8path(path);
+    if (!file.parent_path().empty())
+        std::filesystem::create_directories(file.parent_path());
+    ecm_io::FileLock lock(path);
+    auto records = read_lines(path);
+    if (std::find(records.begin(), records.end(), record) != records.end())
         return;
-    out << record << "\n";
+    records.push_back(record);
+    std::string error;
+    if (!write_lines_atomic(path, records, error))
+        throw std::runtime_error(error);
 }
 
 // "sent"/"recovered" + the line (the line itself may contain spaces? no, but paths do).
@@ -553,6 +453,7 @@ std::vector<std::string> p95_transfer_recover_lines(const P95TransferConfig& cfg
 
 P95TransferResult p95_transfer_deliver(const P95TransferConfig& cfg, const std::string& line) {
     P95TransferResult r;
+    bool published = false;
     if (trim(cfg.worktodo_path).empty()) {
         r.enabled = false;
         r.ok = true;
@@ -560,120 +461,135 @@ P95TransferResult p95_transfer_deliver(const P95TransferConfig& cfg, const std::
         return r;
     }
     r.enabled = true;
-
-    std::string task = line;
-    if (!task.empty() && task.back() == '\r')
-        task.pop_back();
-    if (trim(task).empty()) {
-        r.ok = true;
-        r.note = "empty line, nothing to hand over";
-        return r;
-    }
-
-    const std::string todo_dir = dir_of(cfg.worktodo_path);
-    const std::string add_path = join_path(todo_dir, "worktodo.add");
-    r.add_path = add_path;
-
-    /* Lines parked by an earlier failure go out first, in order: a task whose handoff
-       failed must not be forgotten just because its queue line is already finished. */
-    std::vector<std::string> queued = read_lines(cfg.pending_path);
-    r.pending_delivered = queued.size();
-
-    /* Work Prime95 already dropped (rejected AID) is re-queued WITHOUT its AID: the stage-1
-       result is on disk, and Prime95 registers a fresh assignment when there is no key. */
-    std::vector<std::string> recovered = p95_transfer_recover_lines(cfg);
-    r.recovered = recovered.size();
-    for (const std::string& l : recovered)
-        queued.push_back(l);
-
-    /* An AID PrimeNet has already rejected must NOT be attached: Prime95 would report it and
-       delete the task (commonc.c:6550-6569). Everything else keeps its AID. */
-    const std::vector<std::string> rejected =
-        p95_rejected_aids(cfg.prime_log_path, cfg.results_txt_path);
-    const std::string task_aid = p95_line_aid(task);
-    if (!task_aid.empty() &&
-        std::find(rejected.begin(), rejected.end(), task_aid) != rejected.end()) {
-        r.aid_dropped = true;
-        task = p95_strip_aid(task);
-    } else if (!cfg.keep_aid && !task_aid.empty()) {
-        r.aid_dropped = true; // ini p95_keep_aid = 0
-        task = p95_strip_aid(task);
-    }
-    if (std::find(queued.begin(), queued.end(), task) == queued.end())
-        queued.push_back(task);
-
-    std::string note;
-    r.worker = choose_worker(cfg, todo_dir, add_path, note);
-    r.note = note;
-    if (r.aid_dropped) {
-        const std::string why = (!task_aid.empty() && std::find(rejected.begin(), rejected.end(),
-                                                                task_aid) != rejected.end())
-                                    ? std::string("PrimeNet rejected AID ") + task_aid
-                                    : std::string("p95_keep_aid = 0");
-        const std::string extra =
-            why + ": delivered without the AID so Prime95 registers the work itself "
-                  "(a rejected key makes Prime95 delete the task)";
-        r.note = r.note.empty() ? extra : (r.note + "; " + extra);
-    }
-    if (r.recovered > 0) {
-        const std::string extra = std::to_string(r.recovered) +
-                                  " line(s) Prime95 had dropped (rejected AID) were re-delivered "
-                                  "without their AID";
-        r.note = r.note.empty() ? extra : (r.note + "; " + extra);
-    }
-
-    const std::string lock = add_path + ".lock";
-    std::string err;
-    if (!lock_acquire(lock, err)) {
-        std::string park_err;
-        park_lines(cfg, queued, park_err);
-        r.ok = false;
-        r.error = "worktodo.add is locked: " + err;
-        if (!park_err.empty())
-            r.error += "; parking failed too: " + park_err;
-        r.pending_left = p95_transfer_pending_count(cfg.pending_path);
-        return r;
-    }
-
-    std::vector<std::pair<int, std::string>> assignments;
-    assignments.reserve(queued.size());
-    for (const std::string& l : queued)
-        assignments.push_back(std::make_pair(r.worker, l));
-
-    /* Our own temp suffix: the feeder may be writing the same directory at the same
-       moment, and two writers must not share one temp file. */
-    const bool wrote = p95_write_worktodo_add(add_path, assignments, true, err, ".ecm.tmp");
-    if (wrote) {
-        /* Ledger: what went out (so a line Prime95 later throws away can be recovered) and
-           which lines were recoveries themselves (so they are not recovered twice). */
-        if (!cfg.sent_ledger_path.empty()) {
-            for (const std::string& l : recovered)
-                append_ledger(cfg.sent_ledger_path, "recovered " + l);
-            if (!r.aid_dropped)
-                append_ledger(cfg.sent_ledger_path, "sent " + task);
-            else
-                append_ledger(cfg.sent_ledger_path, "sent " + task); // AID-free: nothing to recover
+    try {
+        // Serializes the complete pending snapshot/ack with other delivery attempts.
+        // The add writer has its own shared gate inside io/prime95 (also used by feeder).
+        std::unique_ptr<ecm_io::FileLock> pending;
+        if (!cfg.pending_path.empty()) {
+            const auto parent = std::filesystem::u8path(cfg.pending_path).parent_path();
+            if (!parent.empty())
+                std::filesystem::create_directories(parent);
+            pending = std::make_unique<ecm_io::FileLock>(cfg.pending_path,
+                                                         ecm_io::FileLockDomain::Publication, 0);
         }
-    }
-    lock_release(lock);
 
-    if (!wrote) {
-        std::string park_err;
-        park_lines(cfg, queued, park_err);
+        std::string task = line;
+        if (!task.empty() && task.back() == '\r')
+            task.pop_back();
+        if (trim(task).empty()) {
+            r.ok = true;
+            r.note = "empty line, nothing to hand over";
+            return r;
+        }
+
+        const std::string todo_dir = dir_of(cfg.worktodo_path);
+        const std::string add_path = join_path(todo_dir, "worktodo.add");
+        r.add_path = add_path;
+
+        /* Lines parked by an earlier failure go out first, in order: a task whose handoff
+           failed must not be forgotten just because its queue line is already finished. */
+        std::vector<std::string> queued = read_lines(cfg.pending_path);
+        r.pending_delivered = queued.size();
+
+        /* Work Prime95 already dropped (rejected AID) is re-queued WITHOUT its AID: the stage-1
+           result is on disk, and Prime95 registers a fresh assignment when there is no key. */
+        std::vector<std::string> recovered = p95_transfer_recover_lines(cfg);
+        r.recovered = recovered.size();
+        for (const std::string& l : recovered)
+            queued.push_back(l);
+
+        /* An AID PrimeNet has already rejected must NOT be attached: Prime95 would report it and
+           delete the task (commonc.c:6550-6569). Everything else keeps its AID. */
+        const std::vector<std::string> rejected =
+            p95_rejected_aids(cfg.prime_log_path, cfg.results_txt_path);
+        const std::string task_aid = p95_line_aid(task);
+        if (!task_aid.empty() &&
+            std::find(rejected.begin(), rejected.end(), task_aid) != rejected.end()) {
+            r.aid_dropped = true;
+            task = p95_strip_aid(task);
+        } else if (!cfg.keep_aid && !task_aid.empty()) {
+            r.aid_dropped = true; // ini p95_keep_aid = 0
+            task = p95_strip_aid(task);
+        }
+        if (std::find(queued.begin(), queued.end(), task) == queued.end())
+            queued.push_back(task);
+
+        std::string note;
+        r.worker = choose_worker(cfg, todo_dir, add_path, note);
+        r.note = note;
+        if (r.aid_dropped) {
+            const std::string why =
+                (!task_aid.empty() &&
+                 std::find(rejected.begin(), rejected.end(), task_aid) != rejected.end())
+                    ? std::string("PrimeNet rejected AID ") + task_aid
+                    : std::string("p95_keep_aid = 0");
+            const std::string extra =
+                why + ": delivered without the AID so Prime95 registers the work itself "
+                      "(a rejected key makes Prime95 delete the task)";
+            r.note = r.note.empty() ? extra : (r.note + "; " + extra);
+        }
+        if (r.recovered > 0) {
+            const std::string extra =
+                std::to_string(r.recovered) +
+                " line(s) Prime95 had dropped (rejected AID) were re-delivered "
+                "without their AID";
+            r.note = r.note.empty() ? extra : (r.note + "; " + extra);
+        }
+
+        std::string err;
+        // Keep the exact set of attempted lines until all acknowledgements are
+        // durable. A failed ledger write must not lose recovered assignments.
+        if (!cfg.pending_path.empty() && !write_lines_atomic(cfg.pending_path, queued, err))
+            throw std::runtime_error(err);
+        std::vector<std::pair<int, std::string>> assignments;
+        assignments.reserve(queued.size());
+        for (const std::string& l : queued)
+            assignments.push_back(std::make_pair(r.worker, l));
+
+        /* Our own temp suffix: the feeder may be writing the same directory at the same
+           moment, and two writers must not share one temp file. */
+        const bool wrote =
+            p95_write_worktodo_add(add_path, assignments, true, err, ".ecm.tmp", &published);
+        if (wrote) {
+            published = true;
+            /* Ledger: what went out (so a line Prime95 later throws away can be recovered) and
+               which lines were recoveries themselves (so they are not recovered twice). */
+            if (!cfg.sent_ledger_path.empty()) {
+                for (const std::string& l : recovered)
+                    append_ledger(cfg.sent_ledger_path, "recovered " + l);
+                if (!r.aid_dropped)
+                    append_ledger(cfg.sent_ledger_path, "sent " + task);
+                else
+                    append_ledger(cfg.sent_ledger_path,
+                                  "sent " + task); // AID-free: nothing to recover
+            }
+        }
+
+        if (!wrote) {
+            std::string park_err;
+            if (!published)
+                park_lines(cfg, queued, park_err);
+            r.ok = false;
+            r.publication_uncertain = published;
+            r.error = "cannot append to " + add_path + ": " + err;
+            if (!park_err.empty())
+                r.error += "; parking failed too: " + park_err;
+            r.pending_left = p95_transfer_pending_count(cfg.pending_path);
+            return r;
+        }
+
+        if (!queued.empty() && !cfg.pending_path.empty())
+            remove(cfg.pending_path.c_str());
+        r.ok = true;
+        r.added = queued.size();
+        r.pending_left = 0;
+        return r;
+    } catch (const std::exception& failure) {
         r.ok = false;
-        r.error = "cannot append to " + add_path + ": " + err;
-        if (!park_err.empty())
-            r.error += "; parking failed too: " + park_err;
-        r.pending_left = p95_transfer_pending_count(cfg.pending_path);
+        r.publication_uncertain = published;
+        r.error = failure.what();
         return r;
     }
-
-    if (!queued.empty() && !cfg.pending_path.empty())
-        remove(cfg.pending_path.c_str());
-    r.ok = true;
-    r.added = queued.size();
-    r.pending_left = 0;
-    return r;
 }
 
 std::string p95_transfer_quote(const std::string& s) {
@@ -694,12 +610,12 @@ std::string p95_transfer_quote(const std::string& s) {
 }
 
 // Durable handoff intent, file publication and restart reconciliation.
-#include "p95.h"
-#include "io/files.h"
-#include "io/worktodo.h"
 #include "ecm/io/save.h"
-#include "io/prime95.h"
 #include "ecm/platform/logging.h"
+#include "io/files.h"
+#include "io/prime95.h"
+#include "io/worktodo.h"
+#include "p95.h"
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -959,12 +875,17 @@ bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
             auto inflight = path;
             inflight += ".sending";
             const auto add = p95_transfer_add_path(intent.delivery.worktodo_path);
+            const auto ready = path.u8string() + ".ready";
+            for (const auto& line : read_lines(ready))
+                validate_ready(line);
             if (std::filesystem::exists(inflight)) {
                 // A previous process may have sent the task before crashing.
                 // Without evidence of delivery, stop instead of sending twice.
                 const bool known =
                     contains_line(add, intent.line) ||
+                    contains_line(add, p95_strip_aid(intent.line)) ||
                     contains_line(intent.delivery.worktodo_path, intent.line) ||
+                    contains_line(intent.delivery.worktodo_path, p95_strip_aid(intent.line)) ||
                     contains_line(intent.delivery.sent_ledger_path, intent.line, "sent ") ||
                     contains_line(intent.delivery.sent_ledger_path, p95_strip_aid(intent.line),
                                   "sent ");
@@ -972,6 +893,29 @@ bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
                     throw std::runtime_error("P95 delivery acknowledgement is ambiguous; retained "
                                              "intent requires inspection: " +
                                              path.u8string());
+                ecm_io::FileLock pending_ack(ready);
+                auto attempted = read_lines(ready);
+                if (attempted.empty() && std::filesystem::exists(std::filesystem::u8path(ready)))
+                    throw std::runtime_error("empty P95 attempted-delivery record: " + ready);
+                if (attempted.empty())
+                    attempted.push_back(intent.line); // Old sending records.
+                for (const auto& line : attempted) {
+                    const auto stripped = p95_strip_aid(line);
+                    const auto observed = [&](const std::string& actual) {
+                        return contains_line(add, actual) ||
+                               contains_line(intent.delivery.worktodo_path, actual) ||
+                               contains_line(intent.delivery.sent_ledger_path, actual, "sent ") ||
+                               contains_line(intent.delivery.sent_ledger_path, actual,
+                                             "recovered ");
+                    };
+                    const auto actual = observed(line) ? line : stripped;
+                    if (!observed(actual))
+                        throw std::runtime_error(
+                            "P95 pending delivery acknowledgement is ambiguous: " + ready);
+                    append_ledger(intent.delivery.sent_ledger_path, "sent " + actual);
+                    if (p95_line_aid(actual).empty())
+                        append_ledger(intent.delivery.sent_ledger_path, "recovered " + actual);
+                }
             } else {
                 ecm_io::write_atomic(inflight, encoded);
                 // Each intent owns its low-level retry file; another batch must
@@ -980,7 +924,8 @@ bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
                 delivery_config.pending_path = path.u8string() + ".ready";
                 const auto result = p95_transfer_deliver(delivery_config, intent.line);
                 if (!result.ok) {
-                    std::filesystem::remove(inflight);
+                    if (!result.publication_uncertain)
+                        std::filesystem::remove(inflight);
                     throw std::runtime_error(result.error);
                 }
                 ecm_ts_fprintf(stdout,
@@ -996,6 +941,7 @@ bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
             ecm_io::write_atomic(done, encoded);
             std::filesystem::remove(path);
             std::filesystem::remove(inflight);
+            std::filesystem::remove(std::filesystem::u8path(ready));
         }
         return true;
     } catch (const std::exception& e) {
@@ -1006,13 +952,11 @@ bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
 
 size_t pending_p95_count(const P95TransferConfig& cfg) {
     size_t count = p95_transfer_pending_count(cfg.pending_path);
-    std::error_code error;
     const auto folder = pending_dir(cfg);
-    if (!std::filesystem::exists(folder, error))
+    if (!std::filesystem::exists(folder))
         return count;
-    for (std::filesystem::directory_iterator it(folder, error), end; !error && it != end;
-         it.increment(error))
-        if (it->path().extension() == ".intent")
+    for (const auto& entry : std::filesystem::directory_iterator(folder))
+        if (entry.path().extension() == ".intent")
             ++count;
     return count;
 }

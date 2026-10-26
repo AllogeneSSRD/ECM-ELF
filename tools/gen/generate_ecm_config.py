@@ -197,7 +197,10 @@ def header(schema):
             out.append(f"    bool {flag}=false;")
         out.extend(["};", f"inline const Binding<{cls}> {owner}_bindings[]={{"])
         for o in opts:
-            out.append(f"    {{{literal(o['key'])},[]({cls}&c,const std::string&v){{{assignment(o)}}}}},")
+            copy = f"c.{o['field']}=v.{o['field']};"
+            if o.get("present"):
+                copy += f"c.{o['present']}=v.{o['present']};"
+            out.append(f"    {{{literal(o['key'])},[]({cls}&c,const std::string&v){{{assignment(o)}}},[]({cls}&c,const {cls}&v){{{copy}}}}},")
         out.extend(["};", f"inline {cls} read_{owner}(const Entries &entries){{{cls} c;apply(c,entries,{owner}_bindings);return c;}}"])
     out.append("} // namespace ecm_config")
     return "\n".join(out) + "\n"

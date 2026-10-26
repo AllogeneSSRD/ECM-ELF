@@ -73,7 +73,9 @@ src/ecm/
 
 顶层按职责，后端内部按技术再按曲线。CPU/CUDA/OpenCL 分别实现实际支持的曲线组合；没有统一所有点运算的虚函数层。算法差异、状态域、实例和 checkpoint 载荷仍属于具体后端。普通 CXX 的主机数学、文件编码和显示可独立修改；实际 CUDA 分配、发射、同步和回读继续依赖 CUDA。
 
-main → 解析三个来源 → normalize → main选择当前任务入口 → task直接调用完整后端流程。`src/io/cli.cpp` 保留显式选项和值的位置，不更改运行时单例、缓存或文件；`config.cpp` 读取带来源位置的配置，生成默认值和覆盖顺序在归一化时应用。共享 TOML 文法位于 `config_format.h`，供 GUI 的保真编辑和 Stage2 使用。`worktodo.cpp` 集中读取、CSV/worker 解析、选择、编辑锁、首条同文匹配、原子改写及完成恢复。
+main → parse_cli → read_config（一次启动快照）→ normalize_settings → direct / live worktodo → 冻结任务 → main 选择执行入口 → task 直接调用完整后端流程。`src/io/cli.cpp` 生成 `ParsedCli`：每次出现的选项立即转换和校验，保存 canonical presence、原始拼写与 argv 位置，不安装运行时单例或写文件。`config.cpp` 校验所有显式计算值，包括其他 worker 和被覆盖的值；`ParsedConfig` 保留原文位置、已解析的 worker scope、选择枚举和 affinity。生成绑定的 `copy` 投影已解析字段及显式标志，不再解析同一文本。
+
+`normalize_settings()` 从生成默认开始，投影全局与所选 worker，再应用显式 CLI，产生启动时的 `Stage1Settings`（配置、计算选项与运行环境）。main 只安装一次有效 runtime；不把结果回填 `ParsedCli`。`gpu-info` 复用相同投影，只取查询需要的字段，不构造虚拟任务。Stage2 接收端配置与 GUI worker 数使用同一启动快照。共享 TOML 文法位于 `config_format.h`，供 GUI 保真编辑和 Stage2 使用；`worktodo.cpp` 集中实时读取、CSV/worker 解析、选择、短编辑锁、首条同文匹配、原子改写及完成恢复。
 
 队列只有 worktodo 一个来源。main 持有 worker 消费租约，计算期间不持有队列编辑锁；每次完成重新读取文件，按当前 worker 中第一条完全相同的任务匹配，不依赖旧行号。`normalize_direct()`与`normalize_worktodo()`将CLI/stdin和两种worktodo语法收口为拥有N、字符串和选项的`NormalizedStage1Task`；main在归一化后不再补写计算字段。队列票据、原行和交接文本独立保存在`WorktodoStage1Task`，不会进入计算请求。
 
@@ -82,6 +84,20 @@ main → 解析三个来源 → normalize → main选择当前任务入口 → t
 日志镜像的寿命和外部日志逐行读取由日志 Module 管理，P95 业务解释仍由同步代码负责。`save_sync_dir_1/2` 是独立备份；P95 使用 `p95_sync_dir`，先持久记录交接责任，再验证和发布目标 save，最后发布 worktodo.add。跨进程消费确认的限制和恢复方式见 [Stage1 使用说明](../usage/STAGE1.md#prime95-持久交接)。Stage2 的父任务与曲线子进程职责保持，见 [Stage2](STAGE2.md#父任务与曲线子进程)。
 
 `tools/test/test_main_flow_boundaries.py` 检查当前项目内包含关系、公开/私有方向、旧目录和唯一入口；实际编译依赖与运行行为由构建及 worker 回归验证。编译影响验证使用 `test_host_incremental_boundaries.py`，须在无其他生产构建时运行，它保存并恢复原始源码字节。
+
+## 文件并发与持久责任
+
+`src/io/files.cpp` 的 `FileLock` 为合作写入者提供短 gate，覆盖完整读取、合并、替换或 append。worktodo 编辑使用 `<资源>.edit.lock`；save、结果、outbox、P95 pending/ledger 和 worktodo.add 发布使用 `<资源>.publish.lock`。Stage1 与 CPU/CUDA Stage2 的真实结果入口共用这一协议；显式共用 internal JSONL 时保留另一阶段的完整记录，仍严格验证校验和及阶段标记。Stage1 仅对本批按 sigma 排序，Stage2 继续逐条 append。
+
+资源身份解析绝对路径和已有父目录别名，再处理剩余路径；Windows 多资源使用大小写无关的固定顺序。最终文件是符号链接或具有多个硬链接时拒绝写入并提示使用实际路径，避免原子替换使别名与 gate 分离。internal/submission 等不同用途不得解析为同一资源。结果双文件按稳定身份排序取锁；P95 源 save 释放后再取得目标 save；outbox 在内部取得 queue edit，计算期间不持有这些短 gate。
+
+取得锁使用单调时钟：默认最多等待 5 秒；worktodo.add 发布最多 3 秒，GUI 编辑和低层 P95 pending gate 立即失败。多个资源的等待预算分别计算，不代表一次任务总上限；非占用类 I/O 错误立即返回，诊断包含资源、等待时间和系统错误码。Windows 短 gate 使用内核独占句柄并在关闭时删除载体；POSIX 使用 flock 并保留稳定载体，禁止 unlink 后重新创建竞争 inode。不能根据 mtime 或年龄抢占仍由活跃进程持有的锁。
+
+worker `OwnerLease` 和任务 checkpoint 锁属于长期拥有权，分别保持整个消费进程和任务寿命；它们不是每次读取的短锁。共享字节 owner 载体及已有独立 Stage2 worker gate 保持各自生命周期，残留文件名本身不证明仍被占用。P95 的旧 `worktodo.add.lock` 纯 marker 已不参与新协议，不依据其年龄删除或抢占；它与 intent、pending、ready、sending 等业务恢复材料不同。
+
+P95 发布前持久保存完整 attempted 行集，发布可见但确认失败时保留 `.sending` 和 intent；恢复逐条核对 add/活动队列/发送账本，先补齐 sent/recovered 账本，再写 done。责任文件存在但无法读完必须报错，不能当作空文件覆盖；无法计数的失败日志显示 `lines=unknown`。已经持久接管交付责任后允许源队列按既有合同推进，后续 flush 失败保留 intent，不回滚为重新计算。
+
+这些 gate 只约束参加协议的程序，Prime95 本身不参加，模糊状态仍需保留证据。升级时停止所有共享资源写入者，成组替换 Stage1、Stage2、feeder 与 GUI 后再启动；不支持新旧写入者混跑。save、checkpoint、结果和交接责任文件的读取兼容保留，不需要为本轮迁移业务数据。回归入口为 `tools/test/shared_writer_contract.cpp`、`stage1_host_io_contract.cpp` 和真实 worker 输入矩阵；本轮证据与未验证平台见[临时实施草稿](../web/stage1-fourth-refactor-review-20261025.html#implementation-result)。
 
 ## 主要接口的输入与输出
 

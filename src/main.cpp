@@ -1,11 +1,11 @@
-#include "sync/backup.h"
-#include "io/normalize.h"
 #include "ecm/application/cli/group_order.h"
+#include "ecm/io/save.h"
+#include "ecm/platform/log_file.h"
 #include "io/cli.h"
 #include "io/files.h"
+#include "io/normalize.h"
+#include "sync/backup.h"
 #include "sync/p95.h"
-#include "ecm/platform/log_file.h"
-#include "ecm/io/save.h"
 using ecm_stage1_app::get_exe_dir_local;
 using ecm_stage1_app::get_gp_executable;
 using ecm_stage1_app::normalize_path_local;
@@ -16,19 +16,19 @@ using ecm_stage1_app::stage1_result_settings;
 using ecm_stage1_app::stage1_save_construction;
 using ecm_stage1_app::stage1_selection_error;
 using ecm_stage1_app::stage1_task_error;
+#include <algorithm>
+#include <cctype>
+#include <climits>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <algorithm>
-#include <cmath>
-#include <climits>
-#include <cctype>
-#include <cstdlib>
-#include <ctime>
-#include <fstream>
-#include <cstdio>
-#include <cstring>
 
 #ifdef _WIN32
 #include <io.h>
@@ -40,19 +40,18 @@ using ecm_stage1_app::stage1_task_error;
 
 #include <gmp.h>
 
-#include "ecm/service/execution/legacy_gpu.h"      /* GPU backend seam (OpenCL or CUDA glue) */
-#include "io/stage1_checkpoint.h"
-#include "ecm/core/stage1/selection.h"
-#include "ecm/service/stage1/execution_contract.h"
+#include "ecm/application/configuration/ecm_expr.h" /* shared exact integer expression parser */
 #include "ecm/application/configuration/runtime.h"
+#include "ecm/core/stage1/selection.h"
 #include "ecm/platform/logging.h"
 #include "ecm/platform/program_version.h"
+#include "ecm/service/execution/legacy_gpu.h" /* GPU backend seam (OpenCL or CUDA glue) */
+#include "ecm/service/stage1/execution_contract.h"
 #include "io/config.h"
+#include "io/stage1_checkpoint.h"
 #include "io/worktodo.h"
-#include "sync/stage2.h"
-#include "io/worktodo.h"
-#include "ecm/application/configuration/ecm_expr.h" /* shared exact integer expression parser */
 #include "sync/p95.h" /* finished task -> Prime95 worktodo.add (D4/§13) */
+#include "sync/stage2.h"
 #ifndef ECM_BUILD_ID
 #define ECM_BUILD_ID "development"
 #endif
@@ -227,6 +226,20 @@ static bool finish_record(const QueuePaths& paths) {
         return false;
     }
     return true;
+}
+
+// Error reporting must not throw again while counting unreadable responsibility
+// files. Keep the original flush failure and report an unknown count explicitly.
+static void report_p95_pending(const P95TransferConfig& cfg, int worker, const std::string& error) {
+    std::string count = "unknown";
+    try {
+        count = std::to_string(ecm_sync::pending_p95_count(cfg));
+    } catch (const std::exception&) {
+    }
+    ecm_ts_fprintf(stderr, "p95_add: pending worker=%d lines=%s file=\"%s\" error=\"%s\"\n", worker,
+                   count.c_str(),
+                   p95_transfer_quote(p95_transfer_add_path(cfg.worktodo_path)).c_str(),
+                   p95_transfer_quote(error).c_str());
 }
 
 static bool run_one(const QueuePaths& paths, const QueueItem& item, int* processed) {
@@ -405,11 +418,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     if (p95 && !p95->worktodo_path.empty() && !found_factor) {
         std::string error;
         if (!ecm_sync::flush_p95(*p95, error))
-            ecm_ts_fprintf(stderr,
-                           "p95_add: pending worker=%d lines=%zu file=\"%s\" error=\"%s\"\n",
-                           worker, ecm_sync::pending_p95_count(*p95),
-                           p95_transfer_quote(p95_transfer_add_path(p95->worktodo_path)).c_str(),
-                           p95_transfer_quote(error).c_str());
+            report_p95_pending(*p95, worker, error);
     }
 
     if (processed) {
@@ -418,9 +427,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     return true;
 }
 
-static long long current_epoch_seconds() {
-    return static_cast<long long>(std::time(nullptr));
-}
+static long long current_epoch_seconds() { return static_cast<long long>(std::time(nullptr)); }
 
 static std::string p95_dir_of(const std::string& path) {
     const size_t s = path.find_last_of("\\/");
@@ -438,41 +445,12 @@ static std::string p95_join_path(const std::string& dir, const std::string& name
     return (last == '\\' || last == '/') ? (dir + name) : (dir + "\\" + name);
 }
 
-static int run_worktodo(const CliInput& input) {
-    const auto& ini_path = input.ini_path;
+static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
+                        const ParsedConfig& parsed_config, const InputPaths& input_paths,
+                        const std::string& ini) {
     const int worker = input.worker_index;
-    const std::string raw_exe_dir = get_exe_dir_local();
-    const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
-
-    // Resolve ini path (default: exe_dir/ecm.toml).
-    std::string ini = ini_path;
-    if (ini.empty()) {
-        ini = exe_dir + "/ecm.toml";
-    } else {
-        ini = resolve_rel_local(exe_dir, ini);
-    }
-
-    // Load config; on first run (missing ini), write a default template.
-    // `worker` selects the TOML worker projection over shared/stage defaults.
-    EcmQueueConfig cfg;
-    ParsedConfig parsed_config;
-    parsed_config.path = ini;
-    if (!read_config(ini, parsed_config)) {
-        if (access(ini.c_str(), 0) == 0) {
-            ecm_ts_fprintf(stderr, "FATAL: invalid or unreadable config %s\n", ini.c_str());
-            return 1;
-        }
-        if (!ecm_queue_config_write_default(ini)) {
-            ecm_ts_fprintf(stderr, "FATAL: cannot create default config %s\n", ini.c_str());
-            return 1;
-        }
-        ecm_ts_fprintf(stdout, "Created default config: %s\n", ini.c_str());
-    }
-    std::string normalization_error;
-    if (!normalize_config(parsed_config, input, cfg, normalization_error)) {
-        ecm_ts_fprintf(stderr, "%s\n", normalization_error.c_str());
-        return 1;
-    }
+    const auto& exe_dir = input_paths.exe;
+    auto& cfg = settings.config;
     // Several workers appending to one screen.log interleave their lines, so workers
     // 2..N get their own default log unless the ini set log_file explicitly.
     if (worker > 1 && !cfg.log_file_explicit &&
@@ -541,11 +519,7 @@ static int run_worktodo(const CliInput& input) {
             ecm_ts_fprintf(stderr, "FATAL: Stage2 receiver worker must be 1..1000000\n");
             return 1;
         }
-        std::vector<ecm_config::TomlLine> lines;
-        if (!ecm_config::read_toml(ini, lines, ecm_config::TomlReadMode::Computation)) {
-            ecm_ts_fprintf(stderr, "FATAL: cannot read Stage2 receiver configuration\n");
-            return 1;
-        }
+        const auto& lines = parsed_config.lines;
         const auto receiver_cfg =
             ecm_config::read_stage2(ecm_config::cli_entries(lines, receiver, true));
         stage2cfg.worktodo =
@@ -686,18 +660,12 @@ static int run_worktodo(const CliInput& input) {
         }
         std::string retry_error;
         if (!ecm_sync::flush_p95(p95cfg, retry_error))
-            ecm_ts_fprintf(stderr, "p95_add: pending worker=0 lines=%zu file=\"%s\" error=\"%s\"\n",
-                           ecm_sync::pending_p95_count(p95cfg),
-                           p95_transfer_quote(p95_transfer_add_path(p95cfg.worktodo_path)).c_str(),
-                           p95_transfer_quote(retry_error).c_str());
+            report_p95_pending(p95cfg, 0, retry_error);
         return &p95cfg;
     };
 
-    auto opt = normalize_options(cfg, exe_dir, ini_dir, worker);
+    auto opt = settings.options;
     opt.persistence.retain_completed_checkpoint = true;
-    ecm_runtime_config().device_index = cfg.device;
-    ecm_runtime_config().tpi = cfg.tpi;
-    ecm_runtime_config().wg_size = cfg.wg_size;
     // Validate semantic combinations per task, after applying any save prefix.
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
@@ -895,183 +863,92 @@ int main(int argc, char** argv) {
 
     // Timestamped-stream install is deferred until after argv parsing / config fill,
     // so --no-log-timestamp takes effect.
-    ecm_stage1_app::CliInput input;
+    ecm_stage1_app::ParsedCli input;
     if (ecm_stage1_app::parse_cli(argc, argv, input))
         return 1;
     if (input.version) {
         std::cout << ecm_program::name << ' ' << ecm_program::version << std::endl;
         return 0;
     }
-    try {
-        ecm_stage1_app::normalize_cli(input);
-    } catch (const std::exception& e) {
-        std::cerr << e.what() << "\n";
+    std::string error;
+    if (!ecm_stage1_app::validate_cli_mode(input, error)) {
+        std::cerr << error << "\n";
         return 1;
     }
-    if (input.pos.empty() && !input.show_gpu_info && !input.show_kernels) {
-        std::string error;
-        if (!ecm_stage1_app::validate_cli_mode(input, error)) {
-            std::cerr << error << "\n";
-            return 1;
-        }
-    }
-    EcmQueueConfig single_config;
-    const auto single_ini = std::filesystem::path(
-        input.ini_path.empty() ? get_exe_dir_local() + "/ecm.toml"
-                               : resolve_rel_local(get_exe_dir_local(), input.ini_path));
-    if (!input.pos.empty()) {
-        ParsedConfig parsed;
-        parsed.path = single_ini.string();
-        if (!read_config(single_ini.string(), parsed) &&
-            (!input.ini_path.empty() || std::filesystem::exists(single_ini)))
-            return 1;
-        std::string error;
-        if (!ecm_stage1_app::normalize_config(parsed, input, single_config, error)) {
-            std::cerr << error << "\n";
-            return 1;
-        }
-        ecm_stage1_app::normalize_cli(input, single_config);
-    }
-    auto& verbose = input.verbose;
-    auto& selection = input.selection;
-    auto& stage1_threads = input.stage1_threads;
-    auto& naf_w = input.naf_w;
-    auto& affinity_spec = input.affinity_spec;
-    auto& gpucurves = input.gpucurves;
-    auto& ckpt_seconds = input.ckpt_seconds;
-    auto& ckpt_set = input.ckpt_set;
-    auto& sigma_fixed = input.sigma_fixed;
-    auto& fixed_sigma64 = input.fixed_sigma64;
-    auto& gpu_device_index = input.gpu_device_index;
-    auto& device_set = input.device_set;
-    auto& gpu_param_cli = input.gpu_param_cli;
-    auto& gpu_param_set = input.gpu_param_set;
-    auto& sigma_param_claim = input.sigma_param_claim;
-    auto& sigma_param_set = input.sigma_param_set;
-    auto& print_group_order = input.print_group_order;
-    auto& go_settings = input.go_settings;
-    auto& savefilename = input.savefilename;
-    auto& saveappend = input.saveappend;
-    auto& gp_bin_path = input.gp_bin_path;
-    auto& gpu_mul_path = input.gpu_mul_path;
-    auto& gpu_sqr_path = input.gpu_sqr_path;
-    auto& gpu_add_path = input.gpu_add_path;
-    auto& gpu_sub_path = input.gpu_sub_path;
-    auto& gpu_special_mult_path = input.gpu_special_mult_path;
-    auto& show_kernels = input.show_kernels;
-    auto& show_gpu_info = input.show_gpu_info;
-    auto& curve_set = input.curve_set;
-    auto& gpu_info_bits = input.gpu_info_bits;
-    auto& ini_path = input.ini_path;
-    auto& worker_index = input.worker_index;
-    auto& tmp_dir = input.tmp_dir;
-    auto& p95_dir_ignored = input.p95_dir_ignored;
-    auto& stop_handle = input.stop_handle;
-    auto& pos = input.pos;
-    auto& version = input.version;
-    // Argv parsed: fold driver-level args into the runtime config (single source),
-    // then install timestamped streams.
-    ecm_runtime_config() = input.runtime;
-    ecm_runtime_config().device_index = gpu_device_index;
-    if (!gp_bin_path.empty()) {
-        ecm_runtime_config().gp_bin = gp_bin_path;
-    }
-    ecm_install_timestamped_iostreams();
-    ecm_enable_console_ansi();
-
-    if (show_kernels) {
+    // Kernel listing needs no configuration or task. Install its explicit runtime once.
+    if (input.show_kernels) {
+        ecm_runtime_config() = input.runtime;
+        ecm_install_timestamped_iostreams();
+        ecm_enable_console_ansi();
         ecm_backend_print_kernels(stdout);
         return 0;
     }
-
-    if (show_gpu_info) {
-        /* Effective settings resolve CLI > ini [Worker #N] > built-in, the same order the
-           queue path uses, so `-ini ecm.toml --gpu-info` reports what the workers will
-           actually run. The ini is read, never created (a missing one leaves the CLI
-           defaults alone and creates nothing). */
-        const std::string raw_exe_dir = get_exe_dir_local();
-        const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
-        std::string ini =
-            ini_path.empty() ? (exe_dir + "/ecm.toml") : resolve_rel_local(exe_dir, ini_path);
-        int eff_device = gpu_device_index;
-        int eff_param = gpu_param_set ? gpu_param_cli : ecm_config::defaults::stage1_gpu_param;
-        ecm_stage1::CurveModel eff_curve = selection.curve;
-        const char* ini_used = nullptr;
-        EcmQueueConfig info_cfg;
-        if (ecm_queue_config_load(ini, worker_index, info_cfg)) {
-            ini_used = ini.c_str();
-            if (!device_set)
-                eff_device = info_cfg.device;
-            if (!gpu_param_set)
-                eff_param = info_cfg.gpu_param;
-            if (!curve_set && !ecm_stage1::parse_curve_model(info_cfg.curve_model, eff_curve)) {
-                std::cerr << "Invalid curve in config: " << info_cfg.curve_model << std::endl;
-                return 1;
-            }
-        } else if (access(ini.c_str(), 0) == 0) {
-            std::cerr << "Invalid or unreadable config: " << ini << std::endl;
+    const auto raw_exe = get_exe_dir_local();
+    const auto exe = raw_exe.empty() ? std::string(".") : raw_exe;
+    const auto ini = input.ini_path.empty() ? resolve_rel_local(exe, "ecm.toml")
+                                            : resolve_rel_local(exe, input.ini_path);
+    const ecm_stage1_app::InputPaths paths{exe, std::filesystem::path(ini).parent_path().string(),
+                                           std::filesystem::current_path().string()};
+    const bool queue = input.pos.empty() && !input.show_gpu_info;
+    ParsedConfig parsed;
+    parsed.path = ini;
+    bool config_used = std::filesystem::exists(ini);
+    if (!config_used && queue) {
+        if (!ecm_queue_config_write_default(ini)) {
+            std::cerr << "FATAL: cannot create default config " << ini << "\n";
             return 1;
         }
-        return print_gpu_info(ini_used, worker_index, eff_device, eff_param,
-                              eff_curve == ecm_stage1::CurveModel::Edwards, gpu_info_bits);
+        std::cout << "Created default config: " << ini << "\n";
+        config_used = true;
     }
-
+    if (config_used) {
+        if (!read_config(ini, parsed))
+            return 1;
+    } else if (!input.ini_path.empty() && !input.show_gpu_info) {
+        std::cerr << "INPUT[config] cannot read explicit configuration " << ini << "\n";
+        return 1;
+    }
+    ecm_stage1_app::Stage1Settings settings;
+    if (!ecm_stage1_app::normalize_settings(parsed, input, paths, settings, error)) {
+        std::cerr << error << "\n";
+        return 1;
+    }
+    ecm_runtime_config() = settings.runtime;
+    ecm_install_timestamped_iostreams();
+    ecm_enable_console_ansi();
+    if (input.show_gpu_info) {
+        const auto& selection = settings.options.execution.selection;
+        return print_gpu_info(config_used ? ini.c_str() : nullptr, input.worker_index,
+                              settings.options.execution.device_index, selection.gpu_param,
+                              selection.curve == ecm_stage1::CurveModel::Edwards,
+                              input.gpu_info_bits);
+    }
+    const auto stop_handle = input.stop_handle;
     if (stop_handle && !ecm_stage1_set_stop_handle(stop_handle)) {
         std::cerr << "Invalid inherited Stage1 stop handle" << std::endl;
         return 1;
     }
     ecm_stage1_install_stop_handler();
 
-    if (pos.empty()) {
+    if (queue) {
         // No positional B1/B2 → queue-manager mode (reads ecm.toml + worktodo).
-        return ecm_stage1_app::run_worktodo(input);
+        return ecm_stage1_app::run_worktodo(input, settings, parsed, paths, ini);
     }
 
     ecm_ts_fprintf(stdout, "%s %s (Stage1)\n", ecm_program::name, ecm_program::version);
 
     // Diagnosis follows durable task publication; GP availability is not admission.
-    go_settings.gp = resolve_gp_path(get_gp_executable(gp_bin_path));
+    auto go_settings = input.go_settings;
+    go_settings.gp = resolve_gp_path(get_gp_executable(input.gp_bin_path));
     ecm_diagnostics::Session go_session(go_settings);
-
-    std::cout << "ecm driver starting" << std::endl;
-    std::cout << "  curve_model: " << ecm_stage1::curve_model_name(selection.curve)
-              << ", execution_target: " << ecm_stage1::execution_target_name(selection.target)
-              << ", gpucurves=" << gpucurves << ", ckpt="
-              << (ckpt_set ? ckpt_seconds : ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS / 1000.0) << "s"
-              << ", device=" << gpu_device_index
-              << ", group_order=" << (print_group_order ? "on" : "off");
-    if (!gpu_mul_path.empty()) {
-        std::cout << ", mul=" << gpu_mul_path;
-    }
-    if (!gpu_sqr_path.empty()) {
-        std::cout << ", sqr=" << gpu_sqr_path;
-    }
-    if (!gpu_add_path.empty()) {
-        std::cout << ", add=" << gpu_add_path;
-    }
-    if (!gpu_sub_path.empty()) {
-        std::cout << ", sub=" << gpu_sub_path;
-    }
-    if (!gpu_special_mult_path.empty()) {
-        std::cout << ", special_mult=" << gpu_special_mult_path;
-    }
-    if (!gp_bin_path.empty()) {
-        std::cout << ", gp=" << gp_bin_path;
-    }
-    if (ecm_runtime_config().gpu_local) {
-        std::cout << ", local";
-    }
-    if (ecm_runtime_config().wg_size > 0) {
-        std::cout << ", wg=" << ecm_runtime_config().wg_size;
-    }
-    std::cout << std::endl;
-    // if(!pos.empty()){
-    //     std::cout << "  B1=" << pos[0];
-    //     if(pos.size() >= 2){
-    //         std::cout << ", B2=" << pos[1];
-    //     }
-    //     std::cout << std::endl;
-    // }
+    const auto& execution = settings.options.execution;
+    std::cout << "ecm driver starting\n  curve_model: "
+              << ecm_stage1::curve_model_name(execution.selection.curve) << ", execution_target: "
+              << ecm_stage1::execution_target_name(execution.selection.target)
+              << ", gpucurves=" << input.gpucurves
+              << ", ckpt=" << settings.options.persistence.ckpt_ms / 1000.0
+              << "s, device=" << execution.device_index
+              << ", group_order=" << (input.print_group_order ? "on" : "off") << std::endl;
 
     // read N from stdin
     std::string nline;
@@ -1091,14 +968,13 @@ int main(int argc, char** argv) {
 
     ecm_stage1_app::NormalizedStage1Task task;
     std::string input_error;
-    if (!ecm_stage1_app::normalize_direct(input, single_config, nline, get_exe_dir_local(),
-                                          single_ini.parent_path().string(), task, input_error)) {
+    if (!ecm_stage1_app::normalize_direct(input, settings.options, nline, task, input_error)) {
         std::cerr << input_error << std::endl;
         return 1;
     }
     const auto& opt = task.options;
     const auto B1 = task.b1;
-    if (!p95_dir_ignored.empty())
+    if (!input.p95_dir_ignored.empty())
         std::cout
             << "Prime95 transfer path ignored: --p95-dir is obsolete; use TOML p95_worktodo_path."
             << std::endl;
@@ -1134,9 +1010,9 @@ int main(int argc, char** argv) {
                 if (opt.execution.selection.curve == ecm_stage1::CurveModel::Montgomery)
                     std::cout << " param=" << go_param;
                 std::cout << " curve_model=" << curve_token << " execution_target=" << target_token
-                          << " save=" << savefilename << "\n";
+                          << " save=" << task.save_file << "\n";
                 free(s);
-                if (print_group_order)
+                if (input.print_group_order)
                     print_group_order_factor(
                         result, i, go_param, go_session, B1,
                         opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards ? 48

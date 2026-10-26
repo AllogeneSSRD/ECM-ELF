@@ -2,6 +2,7 @@
 #include "input.h"
 #include "../../application/configuration/ecm_expr.h"
 #include "io/config_format.h"
+#include "io/files.h"
 #include "../../core/stage2/ecm_stage2_modulus.h"
 #include "ecm/io/save.h"
 #include "ecm/core/curve/ecm_edwards_curve.h"
@@ -217,6 +218,7 @@ QueueSelection queue_fields(std::string line) {
 }
 void append(const fs::path &path, const std::string &line) {
     if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
+    ecm_io::FileLock lock(path.u8string());
     bool separator=false;
     if(fs::exists(path) && fs::file_size(path)>0) {
         std::ifstream tail(path,std::ios::binary);tail.seekg(-1,std::ios::end);char last=0;

@@ -9,6 +9,9 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 namespace fs=std::filesystem;
 static void check(bool yes,const char *message){if(!yes)throw std::runtime_error(message);}
 static void put(const fs::path &p,const std::string &s){ecm_io::write_atomic(p,s);}
@@ -86,7 +89,54 @@ int main(int argc,char **argv)try {
     const auto bad_line="ECMSTAGE2=1,2,7,-1,\""+damaged.string()+"\",10000,0,1";
     check(!ecm_sync::park_p95(p95,bad_line,bad_range,error) && error.find("CHECKSUM")!=error.npos,"corrupt legacy checksum accepted for P95");
     check(get(root/"p95/worktodo.add")==delivered,"corrupt save exposed P95 work");
+    // An AID-free add may already be visible when the sent-ledger write fails.
+    // Retain .sending, then acknowledge the actual delivered spelling on retry.
+    auto uncertain=p95;
+    uncertain.pending_path=(root/"uncertain_pending.txt").string();
+    uncertain.sent_ledger_path=(root/"blocked_ledger").string();
+    uncertain.keep_aid=false;
+    fs::create_directory(uncertain.sent_ledger_path);
+    const auto keyed="ECMSTAGE2=ABCDEF0123456789ABCDEF0123456789,1,2,7,-1,\""+save.string()+"\",10000,2,3";
+    check(ecm_sync::park_p95(uncertain,keyed,original_range,error),"park uncertain delivery");
+    check(!ecm_sync::flush_p95(uncertain,error),"ledger failure reported success");
+    size_t sending=0;for(const auto& f:fs::directory_iterator(uncertain.pending_path+".handoff"))
+        if(f.path().extension()==".sending")++sending;
+    check(sending==1,"ledger failure discarded ambiguous-send evidence");
+    const auto before_retry=get(root/"p95/worktodo.add");
+#ifdef _WIN32
+    fs::path ready;
+    for(const auto& f:fs::directory_iterator(uncertain.pending_path+".handoff"))
+        if(f.path().extension()==".ready")ready=f.path();
+    check(!ready.empty(),"uncertain delivery lost attempted lines");
+    HANDLE unreadable=CreateFileW(ready.c_str(),GENERIC_WRITE,FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+                                 nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    check(unreadable!=INVALID_HANDLE_VALUE,"create unreadable ready fixture");
+    const bool refused_ready=!ecm_sync::flush_p95(uncertain,error);
+    CloseHandle(unreadable);
+    check(refused_ready && fs::exists(ready),"unreadable ready was acknowledged as empty");
+#endif
+    fs::remove(uncertain.sent_ledger_path);
+    put(uncertain.sent_ledger_path,"historic record\n");
+#ifdef _WIN32
+    unreadable=CreateFileW(fs::u8path(uncertain.sent_ledger_path).c_str(),GENERIC_WRITE,
+                          FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    check(unreadable!=INVALID_HANDLE_VALUE,"create unreadable ledger fixture");
+    const bool refused_ledger=!ecm_sync::flush_p95(uncertain,error);
+    CloseHandle(unreadable);
+    check(refused_ledger && get(uncertain.sent_ledger_path)=="historic record\n",
+          "unreadable ledger was replaced or acknowledged");
+#endif
+    check(ecm_sync::flush_p95(uncertain,error),error.c_str());
+    check(get(root/"p95/worktodo.add")==before_retry,"uncertain AID-free retry duplicated assignment");
+    check(get(fs::u8path(uncertain.sent_ledger_path)).find("sent ECMSTAGE2=")!=std::string::npos,
+          "uncertain retry acknowledged without repairing the sent ledger");
     const auto backup=root/"backup";
+    auto unreadable_count=p95;
+    unreadable_count.pending_path=(root/"count_probe").string();
+    put(unreadable_count.pending_path+".handoff","not a responsibility directory");
+    bool count_failed=false;
+    try{(void)ecm_sync::pending_p95_count(unreadable_count);}catch(const std::exception&){count_failed=true;}
+    check(count_failed,"unreadable handoff directory was reported as zero pending work");
     ecm_sync::backup_saves(root.string(),"",backup.string(),true,0);
     check(get(backup/save.filename())==get(save),"second backup destination lost save bytes");
     check(!fs::exists(backup/"opaque.jsonl"),"backup copied a non-save file");

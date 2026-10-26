@@ -81,12 +81,13 @@ int main(int argc,char **argv) {
   auto w=rows(wide);check(w[0].get("Edwards").get("sigma").text()=="2" &&
       w[2].get("Edwards").get("sigma").text()==std::to_string(UINT64_MAX),"uint64 ordering");
   const auto save=dir/"e_m29_20.save";
-  check(ecm_edwards::publish_save(save.string(),ecm_edwards::save_line(n.v,n.v,100,20,false)+
+  check(ecm_save::publish(save.string(),ecm_edwards::save_line(n.v,n.v,100,20,false)+
        ecm_edwards::save_line(n.v,n.v,3,20,false)+ecm_edwards::save_line(n.v,n.v,20,20,false),true),"save publication failed");
   auto saved=bytes(save);check(saved.find("SIGMA=3;")<saved.find("SIGMA=20;") && saved.find("SIGMA=20;")<saved.find("SIGMA=100;"),"save ordering");
   const auto json_save=dir/"cpu_stage2.jsonl";
-  check(ecm_edwards::publish_save(json_save.string(),"{\"sigma\":100}\n{\"sigma\":3}\n",true) &&
-      bytes(json_save)=="{\"sigma\":100}\n{\"sigma\":3}\n","CPU Stage2 append was reordered");
+  r::append_text_record(json_save,"{\"sigma\":100}");
+  r::append_text_record(json_save,"{\"sigma\":3}");
+  check(bytes(json_save)=="{\"sigma\":100}\n{\"sigma\":3}\n","CPU Stage2 append was reordered");
   r::Submission stage2;stage2.exponent=29;stage2.sigma=30;stage2.b1=20;stage2.b2=2000;
   stage2.publication_task="stage2-a";stage2.save_name="e_m29_20";
   const auto s2=dir/"stage2"/"results.json.txt";

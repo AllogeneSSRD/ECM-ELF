@@ -1,8 +1,8 @@
-#include "io/files.h"
 #include "ecm/io/results.h"
-#include "io/json.h"
 #include "ecm/core/integer.h"
+#include "io/files.h"
 #include "io/generated/p95_fft_reference.h"
+#include "io/json.h"
 
 #include "ecm/platform/program_version.h"
 #include <algorithm>
@@ -49,9 +49,7 @@ void append_text_record(const std::filesystem::path& path, const std::string& li
     ecm_io::write_atomic(path, bytes + line + '\n');
 }
 
-std::string quoted(const std::string& s) {
-    return json::quote(s);
-}
+std::string quoted(const std::string& s) { return json::quote(s); }
 
 std::string decimal(const mpz_t n) {
     std::vector<char> b(mpz_sizeinbase(n, 10) + 3);
@@ -222,6 +220,34 @@ static json::Value result_with_checksum(json::Value row) {
 
 std::string with_result_checksum(const std::string& line) {
     return result_with_checksum(json::parse(line)).dump();
+}
+
+// Internal Stage1/Stage2 streams may share a target. The engine marker identifies
+// the producer; Stage2 can legitimately report a factor found at saved Stage1 X.
+static bool stage2_internal_row(const json::Value& row) {
+    if (row.type != 'o' || row.get("program").get("name").text() != ecm_program::name ||
+        row.get("worktype").text() != "ECM" ||
+        row.has("stage1-engine") == row.has("stage2-engine") ||
+        row.get(row.has("stage2-engine") ? "stage2-engine" : "stage1-engine").type != 'o')
+        throw std::runtime_error("internal output is not an owned ECM result");
+    if (row.get("checksum").dump() != result_with_checksum(row).get("checksum").dump())
+        throw std::runtime_error("internal result checksum mismatch");
+    const bool stage2 = row.has("stage2-engine");
+    if (stage2 && row.has("stage1-publication"))
+        throw std::runtime_error("Stage2 row contains a Stage1 publication plan");
+    return stage2;
+}
+
+static bool internal_has_stage2(const std::filesystem::path& path) {
+    if (!std::filesystem::exists(path))
+        return false;
+    std::istringstream input(ecm_io::read_file(path));
+    std::string line;
+    bool stage2 = false;
+    while (std::getline(input, line))
+        if (!line.empty())
+            stage2 = stage2_internal_row(json::parse(line)) || stage2;
+    return stage2;
 }
 
 std::string submission_json(const Submission& r, const mpz_t n) {
@@ -433,47 +459,30 @@ void atomic_text(const fs::path& path, const std::string& text) {
 #endif
 }
 
-struct SubmissionLock {
-#ifdef _WIN32
-    HANDLE value = INVALID_HANDLE_VALUE;
-#else
-    int value = -1;
-#endif
-    explicit SubmissionLock(const fs::path& path) {
-        if (!path.parent_path().empty())
-            fs::create_directories(path.parent_path());
-        const auto lock = fs::path(path.string() + ".ecm-ledger.lock");
-#ifdef _WIN32
-        value = CreateFileW(lock.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
-                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-        if (value == INVALID_HANDLE_VALUE)
-            throw std::runtime_error("another writer owns the submission output");
-#else
-        value = ::open(lock.c_str(), O_CREAT | O_WRONLY, 0600);
-        if (value < 0)
-            throw std::runtime_error("cannot open result writer lock");
-        if (::flock(value, LOCK_EX | LOCK_NB)) {
-            ::close(value);
-            value = -1;
-            throw std::runtime_error("another writer owns the submission output");
-        }
-#endif
-    }
+// All result writers, including append-only Stage2 diagnostics, use the same
+// resource gate. Internal helpers below require that their caller owns it.
+ecm_io::FileLock lock_result(const fs::path& path) {
+    if (!path.parent_path().empty())
+        fs::create_directories(path.parent_path());
+    return ecm_io::FileLock(path.u8string());
+}
 
-    ~SubmissionLock() {
-#ifdef _WIN32
-        if (value != INVALID_HANDLE_VALUE)
-            CloseHandle(value);
-#else
-        if (value >= 0) {
-            ::flock(value, LOCK_UN);
-            ::close(value);
-        }
-#endif
+std::vector<std::unique_ptr<ecm_io::FileLock>> lock_result_pair(const fs::path& first,
+                                                                const fs::path& second) {
+    std::vector<std::string> identities{ecm_io::file_identity(first),
+                                        ecm_io::file_identity(second)};
+    std::sort(identities.begin(), identities.end(), ecm_io::file_identity_less);
+    if (!ecm_io::file_identity_less(identities[0], identities[1]))
+        throw std::runtime_error("result output paths must differ");
+    std::vector<std::unique_ptr<ecm_io::FileLock>> locks;
+    for (const auto& path : identities) {
+        const auto parent = fs::u8path(path).parent_path();
+        if (!parent.empty())
+            fs::create_directories(parent);
+        locks.push_back(std::make_unique<ecm_io::FileLock>(path));
     }
-
-    SubmissionLock(const SubmissionLock&) = delete;
-};
+    return locks;
+}
 
 struct SubmissionEntry {
     std::string key, group, json;
@@ -578,7 +587,7 @@ std::string publication_row_identity(const json::Value& row) {
 }
 } // namespace
 
-// The caller holds SubmissionLock. The durable publication history is written
+// The caller holds the result writer gate. The durable publication history is written
 // before appending: a retry can finish a partial append without reordering or
 // duplicating previously published bytes. Existing outputs seed the history.
 void append_submissions(const fs::path& path, const fs::path& ledger) {
@@ -681,7 +690,7 @@ uint64_t submission_order(const SubmissionEntry& entry) {
 
 void seal_submissions(const fs::path& path, int stage_filter, const std::string& task,
                       bool whole_task) {
-    SubmissionLock lock(path);
+    auto lock = lock_result(path);
     const auto ledger = migrate_result_ledger(path);
     if (!fs::exists(ledger / "format"))
         return;
@@ -777,7 +786,7 @@ void seal_submissions(const fs::path& path, int stage_filter, const std::string&
 }
 
 void refresh_submission_if_owned(const fs::path& path) {
-    SubmissionLock lock(path);
+    auto lock = lock_result(path);
     const auto ledger = migrate_result_ledger(path);
     if (!fs::exists(ledger / "format"))
         return;
@@ -785,7 +794,7 @@ void refresh_submission_if_owned(const fs::path& path) {
     append_submissions(path, ledger);
 }
 
-// The caller holds SubmissionLock, including while establishing ownership.
+// The caller holds the result writer gate, including while establishing ownership.
 fs::path prepare_submission_ledger(const fs::path& path) {
     const auto ledger = migrate_result_ledger(path);
     if (!fs::exists(ledger / "format")) {
@@ -801,14 +810,15 @@ fs::path prepare_submission_ledger(const fs::path& path) {
 }
 
 void ensure_submission_output(const fs::path& path) {
-    SubmissionLock lock(path);
+    auto lock = lock_result(path);
     append_submissions(path, prepare_submission_ledger(path));
 }
 
 void check_stage2_outputs(const fs::path& internal, const fs::path& submission, bool resumed) {
     if (has_result_ledger(submission))
         return;
-    if (resumed || (fs::exists(internal) && fs::file_size(internal)) ||
+    auto locks = lock_result_pair(internal, submission);
+    if (resumed || internal_has_stage2(internal) ||
         (fs::exists(submission) && fs::file_size(submission) &&
          !owned_stage1_submission(read_submission_bytes(submission))))
         throw std::runtime_error(
@@ -818,7 +828,7 @@ void check_stage2_outputs(const fs::path& internal, const fs::path& submission, 
 std::vector<uint64_t> legacy_stage2_bounds(const fs::path& submission) {
     if (!has_result_ledger(submission))
         return {};
-    SubmissionLock lock(submission);
+    auto lock = lock_result(submission);
     const auto ledger = migrate_result_ledger(submission);
     require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
     std::set<uint64_t> bounds;
@@ -836,7 +846,7 @@ bool has_stage2_attempt(const fs::path& submission, const std::string& task, uin
                         mpz_srcptr n, uint64_t sigma, uint64_t b1, bool edwards) {
     if (!has_result_ledger(submission))
         return false;
-    SubmissionLock lock(submission);
+    auto lock = lock_result(submission);
     const auto ledger = migrate_result_ledger(submission);
     require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
     const auto prefix = "T:" + task + ":O:" + std::to_string(order) + ':';
@@ -860,7 +870,7 @@ void publish_submission(const fs::path& path, const Submission& r, const mpz_t n
         throw std::runtime_error("submission ledger accepts individual completed curves");
     auto line = submission_json(r, n);
     line.pop_back();
-    SubmissionLock lock(path);
+    auto lock = lock_result(path);
     const auto ledger = prepare_submission_ledger(path);
     auto key = ecm_edwards::hex(n) + "|" + std::to_string(r.sigma) + "|" + std::to_string(r.b1) +
                "|" + std::to_string(r.b2) + "|" + std::to_string(r.stage) + "|" +
@@ -981,7 +991,7 @@ fs::path prepare_internal_ledger(const fs::path& path) {
 void publish_internal_batch(const fs::path& path,
                             const std::vector<std::pair<std::string, std::string>>& records,
                             bool render_now) {
-    SubmissionLock lock(path);
+    auto lock = lock_result(path);
     const auto ledger = prepare_internal_ledger(path);
     uint64_t next = 0;
     for (const auto& file : fs::directory_iterator(ledger))
@@ -1017,7 +1027,7 @@ void publish_internal(const fs::path& path, const std::string& key, const std::s
 }
 
 void refresh_internal(const fs::path& path) {
-    SubmissionLock lock(path);
+    auto lock = lock_result(path);
     const auto ledger = prepare_internal_ledger(path);
     render_internal(path, ledger);
 }
@@ -1031,11 +1041,11 @@ bool contains_stage1_output(const std::filesystem::path&, mpz_srcptr, uint64_t, 
 
 bool contains_stage1_curves(const std::filesystem::path& path, mpz_srcptr n, uint64_t b1,
                             bool edwards, unsigned param, const std::vector<uint64_t>& sigmas) {
+    if (!std::filesystem::exists(path) && !ecm_results::has_result_ledger(path))
+        return false;
+    auto lock = lock_result(path);
     if (std::filesystem::exists(path))
         return contains_stage1_output(path, n, b1, edwards, param, sigmas);
-    if (!ecm_results::has_result_ledger(path))
-        return false;
-    ecm_results::SubmissionLock lock(path);
     const auto ledger = ecm_results::prepare_internal_ledger(path);
     for (const auto sigma : sigmas) {
         const auto key = ecm_edwards::hex(n) + "|" +
@@ -1069,14 +1079,11 @@ size_t stage1_rows(const fs::path& path, const std::function<void(const json::Va
         if (line.empty())
             continue;
         auto row = json::parse(line);
-        if (row.type != 'o' || row.get("program").get("name").text() != ecm_program::name ||
-            !row.has("stage1-engine") ||
-            row.get("b1").text() != row.get("b2").text(row.get("b1").text()) ||
+        if (stage2_internal_row(row))
+            continue;
+        if (row.get("b1").text() != row.get("b2").text(row.get("b1").text()) ||
             row.get("stage").text() == "2")
             throw std::runtime_error("Stage1 internal output is not an owned Stage1 result");
-        const auto checked = result_with_checksum(row);
-        if (row.get("checksum").dump() != checked.get("checksum").dump())
-            throw std::runtime_error("Stage1 internal result checksum mismatch");
         ++count;
         if (visit)
             visit(row);
@@ -1218,6 +1225,7 @@ void check_stage1_outputs(const fs::path& internal, const fs::path& submission) 
         refresh_internal(internal);
     if (!fs::exists(submission) && has_result_ledger(submission))
         refresh_submission_if_owned(submission);
+    auto locks = lock_result_pair(internal, submission);
     // Early ownership check only. The complete history is checked once under
     // the writer locks when the finished batch is committed.
     const auto rows = stage1_rows(internal, {}, true);
@@ -1249,7 +1257,7 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
             row.get("factors").dump() != json::parse(submission_json(r, n)).get("factors").dump())
             throw std::runtime_error("Stage1 internal record differs from submission");
     }
-    SubmissionLock internal_lock(internal), submission_lock(submission);
+    auto locks = lock_result_pair(internal, submission);
     auto actual = read_submission_bytes(submission);
     const auto original = actual;
     // A prior Stage2 commit may have a partially appended export. Reading its

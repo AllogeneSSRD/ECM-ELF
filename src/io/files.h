@@ -3,16 +3,33 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 
 namespace ecm_io {
+enum class FileLockDomain { Publication, QueueEdit };
+
+// The replacement is visible, but its durable acknowledgement failed. Callers
+// must retain ambiguous-send evidence instead of assuming no write occurred.
+class PublicationUncertain : public std::runtime_error {
+  public:
+    using std::runtime_error::runtime_error;
+};
+
+// Stable path identity for atomic-replacement writers. File aliases that cannot
+// remain stable across replacement are rejected instead of getting another
+// gate.
+std::string file_identity(const std::filesystem::path&);
+bool file_identity_less(const std::string&, const std::string&);
+
 // A short cross-process publication lock. Never hold it across a GPU launch.
 class FileLock {
     struct State;
     State* state_ = nullptr;
 
-public:
-    explicit FileLock(const std::string& path);
+  public:
+    explicit FileLock(const std::string& path, FileLockDomain domain = FileLockDomain::Publication,
+                      uint32_t wait_ms = 5000);
     ~FileLock();
     FileLock(const FileLock&) = delete;
     FileLock& operator=(const FileLock&) = delete;
@@ -41,12 +58,13 @@ bool ensure_parent_dir(const char*);
 namespace ecm_queue {
 inline constexpr const char* owner_protocol = "ECM_QUEUE_OWNER=1\n";
 
-// A process-lifetime worker lease, distinct from FileLock's short publication lock.
+// A process-lifetime worker lease, distinct from FileLock's short publication
+// lock.
 class OwnerLease {
     struct State;
     State* state_ = nullptr;
 
-public:
+  public:
     OwnerLease() = default;
     OwnerLease(const std::string&, int worker, const char* suffix = ".owner.lock");
     ~OwnerLease();

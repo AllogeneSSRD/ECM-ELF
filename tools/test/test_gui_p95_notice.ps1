@@ -15,7 +15,7 @@
                                             even with no worker running)
       [B]  a real worker whose task is handed over with a fallback (p95_add_workers = 3 and
            no [Worker #3] in Prime95's worktodo.txt) -> yellow + the driver's note
-      [C]  a real worker whose delivery fails (a fresh worktodo.add.lock) -> red + parked=1,
+      [C]  a real worker whose delivery fails (an active worktodo.add.publish.lock) -> red + parked=1,
            and the parked line is really on disk
 
     The GUI is closed with WM_CLOSE and must exit 0; the parked file and the lock are
@@ -350,7 +350,7 @@ Check "worktodo.add really got the line"  ((Test-Path (Join-Path $p95Dir 'workto
                                            ([System.IO.File]::ReadAllText((Join-Path $p95Dir 'worktodo.add')) -match 'm521_1e3\.save'))
 
 # ------------------------------------------------------------------ [C] pending ---------
-Write-Host "[C] a real worker whose delivery fails (a fresh worktodo.add.lock)"
+Write-Host "[C] a real worker whose delivery fails (an active worktodo.add.publish.lock)"
 $dirC = Join-Path $Sandbox 'c'
 New-Item -ItemType Directory -Force -Path $dirC | Out-Null
 $todoC = Join-Path $dirC 'worktodo.txt'
@@ -361,14 +361,14 @@ Write-SandboxIni $iniC $p95Todo '1' $todoC $EcmCuda
 $iniCText = [System.IO.File]::ReadAllText($iniC)
 [System.IO.File]::WriteAllText($iniC, $iniCText + "autostart = 1`r`n", $enc)
 Remove-Item $realPending -ErrorAction SilentlyContinue
-Set-Content -LiteralPath (Join-Path $p95Dir 'worktodo.add.lock') -Value 'held by the test' -Encoding ASCII
+$heldAddLock = [IO.File]::Open((Join-Path $p95Dir 'worktodo.add.publish.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 try {
     # Wait for the queue to drain (NOT for the pending notice): the point is that the
     # failed handoff did not stop the task, which only QueueEmpty proves.
     $rC = Invoke-Gui 'c' $iniC $TimeoutSeconds 'worker 1: state QueueEmpty'
     $sC = Get-Strip $rC.trace
     Check "the worker reported the failure"  ($rC.trace -match 'worker 1: p95 pending')
-    Check "the reason mentions the lock"     ($rC.trace -match 'locked')
+    Check "the reason mentions the lock"     ($rC.trace -match 'lock|busy')
     Check "the strip turned red"             ($null -ne $sC -and $sC.Groups[1].Value -eq 'red') $(if ($sC) { $sC.Value })
     Check "the strip counts the parked line" ($null -ne $sC -and [int]$sC.Groups[2].Value -ge 1) $(if ($sC) { $sC.Groups[2].Value })
     Check "the line is really parked on disk" ((Test-Path $realPending) -and
@@ -376,7 +376,8 @@ try {
     Check "the task still left the queue"     (-not ([System.IO.File]::ReadAllText($todoC) -match 'ECMSTAGE1'))
     Check "no curve was lost to the failure"  ($rC.trace -match 'worker 1: state QueueEmpty')
 } finally {
-    Remove-Item (Join-Path $p95Dir 'worktodo.add.lock') -Force -ErrorAction SilentlyContinue
+    $heldAddLock.Dispose()
+    Remove-Item (Join-Path $p95Dir 'worktodo.add.publish.lock') -Force -ErrorAction SilentlyContinue
     Remove-Item $realPending -Force -ErrorAction SilentlyContinue
 }
 

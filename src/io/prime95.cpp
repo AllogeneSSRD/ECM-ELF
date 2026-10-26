@@ -215,51 +215,64 @@ size_t p95_total_handoff(const std::vector<P95WorkerSection>& sections) {
 
 bool p95_write_worktodo_add(const std::string& path,
                             const std::vector<std::pair<int, std::string>>& assignments,
-                            bool append, std::string& err, const char* tmp_suffix) {
-    std::vector<P95WorkerSection> sections;
-    if (append && !p95_read_worktodo(path, sections, err))
-        return false;
-    if (!append)
-        sections.clear();
-
-    for (const std::pair<int, std::string>& a : assignments) {
-        P95WorkerSection* target = nullptr;
-        for (P95WorkerSection& s : sections) {
-            if (s.worker == a.first) {
-                target = &s;
-                break;
-            }
-        }
-        if (!target) {
-            P95WorkerSection s;
-            s.worker = a.first;
-            sections.push_back(s);
-            target = &sections.back();
-        }
-        if (std::find(target->lines.begin(), target->lines.end(), a.second) == target->lines.end())
-            target->lines.push_back(a.second);
-    }
-
-    // Keep a deterministic, ascending worker order.
-    std::stable_sort(
-        sections.begin(), sections.end(),
-        [](const P95WorkerSection& a, const P95WorkerSection& b) { return a.worker < b.worker; });
-
-    std::ostringstream out;
-    bool first = true;
-    for (const auto& section : sections) {
-        if (!first)
-            out << "\n";
-        first = false;
-        if (section.worker > 0)
-            out << "[Worker #" << section.worker << "]\n";
-        for (const auto& line : section.lines)
-            out << line << "\n";
-    }
+                            bool append, std::string& err, const char* tmp_suffix,
+                            bool* publication_uncertain) {
+    if (publication_uncertain)
+        *publication_uncertain = false;
     try {
+        // The feeder and Stage1 delivery both enter here. Different temporary
+        // suffixes do not serialize their read-modify-write of worktodo.add.
+        ecm_io::FileLock writer(path, ecm_io::FileLockDomain::Publication, 3000);
+        std::vector<P95WorkerSection> sections;
+        if (append && !p95_read_worktodo(path, sections, err))
+            return false;
+        if (!append)
+            sections.clear();
+
+        for (const std::pair<int, std::string>& a : assignments) {
+            P95WorkerSection* target = nullptr;
+            for (P95WorkerSection& s : sections) {
+                if (s.worker == a.first) {
+                    target = &s;
+                    break;
+                }
+            }
+            if (!target) {
+                P95WorkerSection s;
+                s.worker = a.first;
+                sections.push_back(s);
+                target = &sections.back();
+            }
+            if (std::find(target->lines.begin(), target->lines.end(), a.second) ==
+                target->lines.end())
+                target->lines.push_back(a.second);
+        }
+
+        // Keep a deterministic, ascending worker order.
+        std::stable_sort(sections.begin(), sections.end(),
+                         [](const P95WorkerSection& a, const P95WorkerSection& b) {
+                             return a.worker < b.worker;
+                         });
+
+        std::ostringstream out;
+        bool first = true;
+        for (const auto& section : sections) {
+            if (!first)
+                out << "\n";
+            first = false;
+            if (section.worker > 0)
+                out << "[Worker #" << section.worker << "]\n";
+            for (const auto& line : section.lines)
+                out << line << "\n";
+        }
         ecm_io::write_atomic(std::filesystem::u8path(path), out.str(),
                              tmp_suffix ? tmp_suffix : ".feeder.tmp");
         return true;
+    } catch (const ecm_io::PublicationUncertain& e) {
+        if (publication_uncertain)
+            *publication_uncertain = true;
+        err = e.what();
+        return false;
     } catch (const std::exception& e) {
         err = e.what();
         return false;

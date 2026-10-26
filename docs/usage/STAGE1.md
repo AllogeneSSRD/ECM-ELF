@@ -102,13 +102,19 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 待交接记录位于程序目录的 `p95_add_pending.txt.handoff/`，`.intent` 表示仍由本程序承担交付责任，`.done` 保留批次去重依据。不要删除这些记录来清除 GUI 红色提示。旧 `p95_add_pending.txt` 中引用绝对 save 且范围、校验有效的 `ECMSTAGE2` 行会先转为新记录；无法证明保存范围的旧 `ECM/ECM2` 行保持原样并报错，需人工核对，不会猜测文件后继续投递。
 
-“投递成功”表示本程序已持久发布 drop box，不代表 Prime95 已完成接纳。Prime95 不参与本程序的写锁/完成确认，不能承诺跨进程恰好一次。崩溃若发生在发布与确认之间，恢复会检查 add、活动队列和发送账本；仍不能判定时保留 `.sending` 和 intent 并停止该交接，避免盲目重复。计算结果仍保留。不要让两个独立消费者同时修改 Prime95 活动 `worktodo.txt`。
+“投递成功”表示本程序已持久发布 drop box，不代表 Prime95 已完成接纳。Prime95 不参与本程序的写锁/完成确认，不能承诺跨进程恰好一次。崩溃若发生在发布与确认之间，恢复会检查 add、活动队列和发送账本；仍不能判定时保留 `.sending` 和 intent 并停止该交接，避免盲目重复。计算结果仍保留。`.ready` 保存本次实际尝试发布的完整行集；恢复会先修复发送账本再确认 done。责任文件不可读时保留材料并报错，不能当成空文件。不要让两个独立消费者同时修改 Prime95 活动 `worktodo.txt`。
 
 `edwards_stage2_transfer=1` 也可将无因子完成的 Edwards Stage1 任务投递到 `edwards_stage2_worker` 指定的 worker；0 沿用当前编号。它使用接收 worker 的共用 worktodo 配置。两项同时启用时由 `auto_stage2` 接管，通用的 worker 列表与目标文件设置见[自动交接](#自动交接到-stage2)。
 
 跨 worker 投递前先将记录写入队列旁的 `.stage2_pending_workerN`；目标不可写时保留待投递记录并在下次启动时重试。已经存在于活动队列或 Stage2 finished 的相同行不会重复入队。已有 pending 记录在关闭交接开关后仍会重试。
 
 待投递文件的新增、接收端选择和重试确认使用同一跨进程锁；新增责任持久发布后才允许推进源行，重试确认通过持久替换更新文件。目标队列已写入但确认失败时，原记录保留供去重重放，不覆盖并发新增的交接。
+
+## 共享文件锁与升级
+
+Stage1、Stage2、feeder 和 GUI 使用共同的短写入 gate，保护读改写全过程；Windows 关闭后删除短锁载体，进程退出会释放内核拥有权。owner/checkpoint 属于长期锁，计算期间继续持有，磁盘载体残留不代表仍被占用。不要按文件年龄清理活动锁。具体身份、锁顺序与等待规则见[文件并发与持久责任](../architecture/OVERVIEW.md#文件并发与持久责任)。
+
+升级到 0.53.3 时先停止共享资源的写入程序，再成组更新 Stage1、Stage2、feeder 与 GUI；不支持新旧程序同时写相同资源，旧业务文件继续读取兼容。最终文件的符号链接与多硬链接写入别名会被拒绝，请使用实际文件路径；父目录别名可归一化。旧纯 `worktodo.add.lock` marker 不再参与互斥；pending/intent/ready/sending/done 是恢复材料，不能当作残留锁删除。
 
 ## 算法与构建范围
 
@@ -125,7 +131,7 @@ Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并�
 
 ## 输入归一化与运行中编辑
 
-`src/io/cli.cpp`、`config.cpp`、`worktodo.cpp` 分别解释三个来源，`normalize.cpp` 应用默认、优先级和组合检查。原始输入保留显式值及来源位置；配置生成默认仍只以 `config/ecm_options.json` 为准。`ECM/ECM2` 省略曲线数时在归一化时补为 Prime95 的 100 条，空/零 sigma 表示未指定。无 B1/B2 位置参数时只有 worktodo 能提供任务；单次模式继续从 stdin 读取 N 或整数表达式。
+`src/io/cli.cpp`、`config.cpp`、`worktodo.cpp` 分别解释三个来源，`normalize.cpp` 应用默认、优先级和组合检查。CLI 每次出现只转换一次，TOML 一次启动快照保留已解析值，默认/覆盖仅生成一次有效启动设置，不回填 CLI。原始输入保留显式值及来源位置；配置生成默认仍只以 `config/ecm_options.json` 为准。`ECM/ECM2` 省略曲线数时在归一化时补为 Prime95 的 100 条，空/零 sigma 表示未指定。无 B1/B2 位置参数时只有 worktodo 能提供任务；单次模式继续从 stdin 读取 N 或整数表达式。
 
 队列模式拒绝 CLI 的 `--curve`、`--gpu-param`、`--lcm`、`-gpucurves`、`-save/-savea` 和单次群阶诊断选项；`--bits` 需用于 `--gpu-info`。任务结构由 worktodo/typed save 决定。显式设备、target、impl、reduction、线程、NAF、affinity、checkpoint、目录和内核偏好可覆盖 worker 配置。sigma 优先级为 worktodo > 显式 CLI > 配置 > 原有随机策略；队列 CLI 仅接受不带 param 前缀的 sigma。运行时调试/缓存标志继续作用于进程。`--p95-dir` 为旧兼容参数，不启用交接。
 

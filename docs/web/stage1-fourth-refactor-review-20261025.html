@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stage1 第四轮重构 · 0.53.3 实施与验收</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: #f4f5f1; color: #213332; font: 16px/1.75 system-ui, "Microsoft YaHei", sans-serif; }
+    main { max-width: 1160px; margin: auto; padding: 38px 24px 72px; }
+    h1 { font-size: 32px; line-height: 1.35; margin: 10px 0 18px; }
+    h2 { font-size: 23px; line-height: 1.45; margin: 12px 0; }
+    h3 { font-size: 17px; margin: 14px 0 8px; }
+    p { margin: 10px 0; }
+    a { color: #17634f; text-underline-offset: 3px; }
+    code, .files { font: 13px/1.75 Consolas, monospace; overflow-wrap: anywhere; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 6px 0; }
+    .meta, .small { color: #536661; font-size: 14px; }
+    .card { background: white; border: 1px solid #cddbd3; border-radius: 12px; padding: 25px 28px; margin-top: 25px; scroll-margin-top: 18px; }
+    .badge { display: inline-block; font-size: 13px; padding: 3px 11px; border-radius: 20px; color: #17533f; background: #dff0e5; margin: 0 7px 5px 0; }
+    .amber { color: #75500d; background: #fff0cb; }
+    .neutral { color: #536661; background: #edf1ee; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0; }
+    .flow { background: #f0f4f1; border-radius: 9px; padding: 16px; }
+    .caption { color: #52665f; font-size: 13px; margin-bottom: 12px; }
+    .node { background: white; border: 1px solid #aebfb6; border-radius: 5px; padding: 10px 13px; }
+    .node small { display: block; color: #576b61; }
+    .arrow { text-align: center; line-height: 1.3; margin: 4px; color: #657b70; }
+    .deep { background: #153f32; color: white; border: 2px solid #153f32; padding: 15px; }
+    .deep small { color: #cae3d6; }
+    .leak { border-color: #b97556; background: #fff2eb; }
+    .seam { border: 1px dashed #7e998a; padding: 10px; margin-top: 12px; border-radius: 5px; }
+    .note { background: #fff6e2; border-left: 4px solid #b28037; padding: 12px 17px; }
+    .wins { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 0; list-style: none; }
+    .wins li { background: #edf5ef; padding: 4px 10px; border-radius: 5px; font-size: 14px; }
+    .hero { background: #153f32; color: white; }
+    .hero a { color: #c4eed7; }
+    .hero .small { color: #cee2d6; }
+    .steps { display: flex; flex-wrap: wrap; gap: 9px; margin: 18px 0; }
+    .steps a { background: #e7eee8; border-radius: 5px; padding: 8px 13px; text-decoration: none; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { padding: 12px; border-bottom: 1px solid #dce5de; text-align: left; vertical-align: top; }
+    th { background: #edf3ed; }
+    details { border-top: 1px solid #dfe7e1; margin-top: 17px; padding-top: 12px; }
+    summary { cursor: pointer; color: #245c45; }
+    footer { font-size: 13px; color: #596d62; margin-top: 30px; }
+    @media (max-width: 760px) {
+      main { padding: 23px 14px 45px; }
+      h1 { font-size: 26px; }
+      .card { padding: 20px; }
+      .pair { grid-template-columns: 1fr; }
+      table { min-width: 670px; }
+    }
+    @media print { details > * { display: block; } .card { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="meta">ECM-ELF · 0.53.3 已实施 · 基线 ae77ea9 · 2026-10-26 · 实施与验收</p>
+    <h1>Stage1：输入归一化与锁优化候选</h1>
+    <p class="small">实线框 = Module；虚线框 = 保留的 Seam；浅红框 = 跨职责泄漏；深绿框 = 更深的 Module。原始候选基于 0.53.2；本轮锁与输入归一化已实施，测试和性能边界见页末实施结果，其他候选保留待规划。</p>
+    <div class="steps">
+      <a href="#progress">0 · 先验证进度缺陷</a>
+      <a href="#intake">1 · 输入只解释一次</a>
+      <a href="#intake-detail">输入流程与职责细化</a>
+      <a href="#result">2 · 收敛结果模型</a>
+      <a href="#ownership">3 · 合并与职责归属</a>
+      <a href="#outer">4 · 收口 main 的协议细节</a>
+      <a href="#locks">5 · 锁的覆盖与生命周期</a>
+      <a href="#implementation-contract">实施前合同</a>
+      <a href="#implementation-result">0.53.3 实施与验收</a>
+    </div>
+    <p class="small"><a href="stage1-next-refactor-review-20261025.html#implementation-result">上一轮实施与验收</a> · <a href="../architecture/STAGE1.md">当前 Stage1 说明</a> · <a href="../../CONTEXT.md">领域约定</a></p>
+  </header>
+
+  <section class="card hero" id="top-recommendation">
+    <h2>优先推荐：先验证锁覆盖缺口，架构主线收敛输入</h2>
+    <p><a href="#locks">候选 5</a>增加锁覆盖与生命周期评估：先核实 P95 写入入口未共用互斥、过期标志锁及条件性丢更新窗口，再讨论锁文件清理。<a href="#intake-detail">输入细化方案</a>删除配置回填 CLI、重复解析和字段复制。CPU 进度缺陷仍先用连续任务恢复用例核实；结果与文件归属可独立审查。</p>
+    <p class="small">保持已确认的两个最终输入适配入口、Montgomery 各 param 共用 workflow、task 统一最终发布，以及现有 worktodo 编辑与交接合同。本轮不设计新函数声明或通用 Runner。</p>
+  </section>
+
+  <article class="card" id="progress">
+    <span class="badge">Strong</span><span class="badge neutral">in-process · 缺陷候选优先验证</span>
+    <h2>0. CPU 进度 Module：让对象实际拥有本任务状态</h2>
+    <p class="files">src/ecm/backend/cpu/stage1/execution_support.cpp:15、30、95、120–161、274<br>src/ecm/backend/cpu/stage1/{edwards,montgomery}/workflow.cpp；Montgomery:726–729</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">当前 · 对象生命周期与状态生命周期不一致</div>
+        <div class="node">Stage1Progress<small>只拥有终端 widget</small></div>
+        <div class="arrow">↓ 回调访问</div>
+        <div class="node leak">全局速度计、完成数、widget 指针<br>static max_done / 日志计数 / 上次输出时间</div>
+        <div class="arrow">↓ 下一任务复用</div>
+        <div class="node">恢复任务从正进度开始<small>不会触发 done ≤ 0 的重置</small></div>
+      </div>
+      <div class="flow">
+        <div class="caption">建议 · 深化已有对象，不另加 Context</div>
+        <div class="node deep">本任务 Stage1Progress<small>初始化进度、单调值、采样、节流、widget 与同步</small></div>
+        <div class="seam">CPU Edwards / Montgomery Adapter<br>回调显式借用本任务进度对象</div>
+        <div class="arrow">↓ 结束或异常离开</div>
+        <div class="node">所有任务状态随对象释放</div>
+      </div>
+    </div>
+    <p><b>问题：</b>Montgomery 恢复时首次上报已完成曲线数，可以大于零；当前仅零进度重置速度计和最大值。同进程先完成一个任务，再恢复另一任务，可能继承上一任务最大完成数及速度样本。日志节流也未按任务重置。</p>
+    <p><b>方向：</b>把进度 Implementation 收进现有 Stage1Progress，缩小回调 Interface。它的 Depth 应覆盖整次任务的进度生命周期；CPU 两种曲线保留真实 Seam，使用各自 Adapter。</p>
+    <ul class="wins"><li>Locality：任务状态集中</li><li>Leverage：恢复与新任务同路</li><li>删除全局与静态进度状态</li></ul>
+    <details open>
+      <summary>证据限制与验证</summary>
+      <p>这是静态代码可解释的缺陷候选，尚未实测复现。建议用“任务 A 完成 1000 条 → 同进程恢复任务 B 的 150/960”核对首次日志；再测停止、连续两条正常任务及不同线程完成顺序。修复不改变数学结果或持久进度。</p>
+      <p>保持基线编译的 ISA 探测；不能为了合并 execution_support，把 CPU 探测带入要求 AVX512 的编译单元。CPU 与 GPU 的进度单位、采样窗口和计时区间仍有差异，不在本轮强行统一。</p>
+    </details>
+  </article>
+
+  <article class="card" id="intake">
+    <span class="badge">Strong · 下一轮架构主线</span><span class="badge neutral">in-process</span>
+    <h2>1. 输入归一化 Module：删除类型往返和双重解析</h2>
+    <p class="files">src/main.cpp:929–933、987–1016、1094<br>src/io/cli.cpp:177–363、409–489；config.cpp:20–53<br>src/io/normalize.cpp:163–218、274–386、411–489；normalize.h</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">当前 · 单次运行的同一批设置多次转换</div>
+        <div class="node">CLI 预检查 → CLI 再解析</div>
+        <div class="arrow">↓</div>
+        <div class="node leak">CliInput + TOML → EcmQueueConfig<br>→ 回填 CliInput → Stage1Options<br>→ 再逐字段覆盖</div>
+        <div class="arrow">↓</div>
+        <div class="node">冻结任务<small>gpu-info 另走配置投影</small></div>
+      </div>
+      <div class="flow">
+        <div class="caption">建议 · 来源保留，归一化一次产生有效设置</div>
+        <div class="node">CLI / TOML / worktodo Adapter<small>各自解释语法、值与来源位置</small></div>
+        <div class="arrow">↓</div>
+        <div class="node deep">归一化 Module<small>默认值、覆盖、组合约束和路径规则集中</small></div>
+        <div class="seam">direct / worktodo 两个入口<br>产生同一种冻结计算输入；队列票据独立</div>
+      </div>
+    </div>
+    <p><b>问题：</b>normalize_cli(cfg)、normalize_options 和 normalize_direct 手工复制同一批字段；CLI 预检查与实际赋值也重复解释同一值。调用者需要了解过多中间形态，Interface 接近 Implementation，Depth 不足。</p>
+    <p><b>方向：</b>CLI 一次解释即保存已校验值和来源；共享单值范围，归一化负责跨字段约束。删除有效配置回填“原始 CLI”的往返；主流程只取得有效设置，不新增 manager，也不合并三种来源的解析文件。</p>
+    <ul class="wins"><li>Locality：覆盖规则一处维护</li><li>Leverage：两入口复用规则</li><li>删除重复投影与赋值</li></ul>
+    <details open>
+      <summary>必须保留的语义与验证</summary>
+      <p>默认替换仍在归一化；配置内每个显式非法值仍报错，即使随后可能被 CLI 覆盖。错误继续给出来源、key、value、范围和修正方向。任务字段冲突显式拒绝，sigma 仍为 worktodo → CLI → 配置。</p>
+      <p>保留 direct 的 verbose/tmp_dir 缺省、相对路径基准、显式 cache=off、别名最后出现优先、负数及缺值诊断。通过真实 direct/queue/gpu-info 入口验证最终设置；不得只测转换 helper。</p>
+      <p>可随批收小 normalize.h：normalize_assignment、stage1_selection_error、stage1_task_error、stage1_result_settings 等仅在同一 CPP 使用的 Implementation 不必外露。ecm_queue_config_load 仍有 Stage2 调用者，不能随 Stage1 改造直接删除。</p>
+    </details>
+  </article>
+
+  <section class="card" id="intake-detail">
+    <span class="badge">输入归一化 · 候选细化，尚未实施</span>
+    <h2>输入调用流程：启动设置一次合并，任务逐条归一化</h2>
+    <p>“一次”指同一个值不重复解释、同一组设置不往返投影。启动时得到有效 worker 设置，每条 worktodo 任务仍须重新读取、解释并生成自己的冻结输入。无需新增输入目录、通用 Runner 或来源回调链。</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">direct · CLI + stdin</div>
+        <div class="node">main → cli.cpp<small>argv 文法、typed 值、原拼写与出现位置</small></div>
+        <div class="arrow">↓ 确定模式 / worker / 配置路径</div>
+        <div class="node">config.cpp<small>读取一份 TOML，校验所有显式计算值</small></div>
+        <div class="arrow">↓</div>
+        <div class="node deep">normalize.cpp<small>默认 → 配置投影 → 显式 CLI，得到有效设置</small></div>
+        <div class="arrow">↓ main 读取 stdin</div>
+        <div class="node">normalize_direct<small>N、B1/B2、curves、save 与身份；不再回填执行设置</small></div>
+        <div class="arrow">↓</div>
+        <div class="node">main 选执行函数 → task → 后端 workflow → CUDA 批次</div>
+      </div>
+      <div class="flow">
+        <div class="caption">queue · 启动一次，任务循环多次</div>
+        <div class="node">cli.cpp → config.cpp → normalize.cpp<small>拒绝 CLI 任务字段冲突，生成有效 worker 设置</small></div>
+        <div class="arrow">↓ main 安装日志、消费租约等资源</div>
+        <div class="node deep">每轮 worktodo.cpp 重新读当前任务<small>解释行文法，保留 worker、来源位置与原行票据</small></div>
+        <div class="arrow">↓</div>
+        <div class="node">normalize_worktodo<small>复制基础设置，应用任务身份、sigma 与最终约束</small></div>
+        <div class="arrow">↓ main 协调原有 claim / skip 修复</div>
+        <div class="node">冻结计算输入 + 独立队列元数据<br>main 选执行函数 → task → 后端 workflow</div>
+        <div class="arrow">↳ 完成后重新读取队列，不沿用旧行号</div>
+      </div>
+    </div>
+    <p><b>查询分支：</b><code>parse_cli → 同一配置读取与 worker/CLI 覆盖规则 → 提取 curve/param/device/bits → print_gpu_info</code>。查询不构造虚假的 N/B1/curves，不建队列、save 或 cache。共享相关字段的解释，不要求通过完整计算任务准入。help/version/showkernel/GUI 协议查询保留各自早退出语义。</p>
+    <p><b>副作用时机：</b>解析与归一化不更改 runtime 单例、不打开日志、不启动 GPU，也不修改 worktodo。main 在有效设置产生后安装现有日志、停止处理与运行环境；claim、save 行数复核及完成提交仍是队列编排。P95 资格仍在实际任务身份确定后判断。</p>
+
+    <h3>文件职责与允许的依赖</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>文件 / Module</th><th>负责</th><th>不应继续承担</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/io/cli.cpp/h</code></td><td>argv、别名顺序、typed 值、位置、缺值与非法值诊断；可将 CliInput 改名 ParsedCli，表达它是解析来源。</td><td>配置默认回填、有效 worker 配置、运行时单例和文件副作用；不新增独立 CLI validator 文件。</td></tr>
+        <tr><td><code>src/io/config.cpp/h</code></td><td>读取整份 TOML，保留 scope、位置及显式存在性；模板生成仍归此文件，由 main 决定是否调用。</td><td>为接收方 worker 再次打开同一 TOML；只检查覆盖后的有效值。</td></tr>
+        <tr><td><code>src/io/worktodo.cpp/h</code></td><td>worktodo 行文法、选择、实时读、短编辑事务、完成记录与恢复；保留首条同文匹配。</td><td>配置优先级、后端执行与 P95 文法；不拆成互相转发的 reader/writer。</td></tr>
+        <tr><td><code>src/io/normalize.cpp/h</code></td><td>有效设置唯一合并处；默认、覆盖、组合约束、来源相关路径及冻结任务。保留 direct/worktodo 两个真实 Adapter。</td><td>把有效配置写回 ParsedCli、claim 队列、打开日志、取得 GPU 资源。</td></tr>
+        <tr><td><code>src/main.cpp</code></td><td>模式与输入读取时机、资源生命周期、队列循环、claim/完成政策、执行选择。</td><td>逐字段重现配置投影、gpu-info 独立优先级、原始值二次解释。</td></tr>
+        <tr><td><code>config/ecm_options.json</code>、生成绑定、<code>config_format.h</code>、<code>selection.h</code></td><td>现有默认定义、共享值解释与文法能力；枚举沿用已有 selection 解释，适用范围复用生成规则。</td><td>各入口再维护一套范围；不手改生成物，不把 config_format 的真实复用塞回 config.cpp。</td></tr>
+      </tbody>
+    </table></div>
+    <p>不增加另一个逐字段复制的 EffectiveConfig。已有配置投影需要兼容 Stage2；可以限制 EcmQueueConfig 的作用或改善其名称，但先核查调用者。已有 Stage1Options / NormalizedStage1Task 继续表达有效计算设置与拥有输入；队列票据和交接元数据仍独立。</p>
+    <p><b>来源数据：</b>ParsedCli 按规范字段保存已解释值、显式存在性、原拼写与位置；device_set/curve_set/ckpt_set 等与 explicit_options 重复的存在标志可收敛，不把有效值里的 sigma_fixed 与来源存在性混为一谈。ParsedConfig 除原始行与位置外应保留已校验的计算值，worker 投影只选择它们；否则 read_config 校验后再 apply 原始文本，仍是二次解释。共享 TOML 文法与 GUI 保真行不需重写。</p>
+    <p>配置 domain 展示文字目前不等于全部可执行校验。单值规则应复用真实生成绑定或共享解释能力，不把人类可读 domain 字符串另做一套解析器；跨字段与后端限制仍由归一化负责。</p>
+
+    <h3>可以实际删除的重复逻辑</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>当前依据</th><th>删除 / 收敛</th><th>仍需保留的行为</th></tr></thead>
+      <tbody>
+        <tr><td><code>cli.cpp:177–363、409–489、510–560</code></td><td>validate_cli_token 后再次 stoul/stoi/stod、枚举和 sigma 解析；改为一次解释同时保存值与来源。</td><td>每次显式非法输入立即报错；后续合法重复值不能掩盖前一个错误。</td></tr>
+        <tr><td><code>normalize.cpp:274–328</code>；<code>main.cpp:933</code></td><td>整段“配置回填 CLI”的形态消失。</td><td>direct 特有 verbose/tmp_dir 缺省迁到唯一合并规则；不能直接删掉行为。</td></tr>
+        <tr><td><code>normalize.cpp:177–218、352–386</code></td><td>线程、NAF、affinity、device、kernel、sigma、checkpoint、cache 的重复映射。</td><td>direct 的 stdin/表达式、save/append、身份派生与来源特定冲突仍在 direct 归一化。</td></tr>
+        <tr><td><code>normalize.cpp:438–451</code></td><td>CLI 值转成文本 Entries 再解释；规范字段按 argv 顺序记录最后一次有效值，无需按别名 map 再排序。</td><td>保存原拼写和 argv 位置；sigma 的值与 param 声明分别保留，不能误当同一字段。</td></tr>
+        <tr><td><code>normalize.cpp:474–488、582–592</code></td><td>target/impl/reduction 等跨字段规则收为同一 Implementation。</td><td>有效配置与应用任务身份后的最终检查时点有区别；来源单值校验与最终组合校验仍是不同 Seam。</td></tr>
+        <tr><td><code>main.cpp:987–1016</code></td><td>gpu-info 自己加载投影和手工合并 device/curve/param。</td><td>查询只要求相关字段；不为复用计算输入而要求 N、B1 或完整任务。</td></tr>
+        <tr><td><code>main.cpp:460、545–577</code></td><td>Stage2 receiver / NumWorkers 再 read_toml；复用 parsed_config.lines。</td><td>配置只取同一次启动快照；不缓存 live worktodo。</td></tr>
+        <tr><td><code>normalize.h</code>；<code>main.cpp:935–971</code></td><td>仅同 CPP 使用的 helper 外露，以及已不用的输入引用。</td><td>隐藏 Implementation；不再为这些 helper 新建文件。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>默认、覆盖和错误的处理顺序</h3>
+    <ol>
+      <li><b>先解释来源。</b>每个 CLI 值、每个 TOML 显式计算值都要做单值合法性检查，包括非当前 worker 和稍后会被覆盖的配置。记录原始值、位置、scope，不通过反复解析来保留诊断。</li>
+      <li><b>再合并有效设置。</b>生成默认值 → 全局/对应 stage 配置 → 当前 worker → 显式 CLI；队列模式拒绝 curve、param、数量、save 等任务字段 CLI。别名按 argv 顺序，最后一次显式有效值优先。</li>
+      <li><b>再应用任务。</b>每条 worktodo 复制基础设置，任务非零 sigma → CLI → 配置非零 sigma → 现有随机策略；save 前缀决定该任务的 curve/param。ECM/ECM2 缺 curves 补 100，缺 B2 补 0。</li>
+      <li><b>最后检查组合与计算限制。</b>检查实际 curve/param/target、NAF、sigma 范围和后端资格，再冻结计算输入。非法任务仍标错跳过；配置/CLI 错误仍终止启动。</li>
+    </ol>
+    <p><b>显式禁用：</b>cache 空值表示现有默认，off/none/0/- 表示禁用，不得下一步再补默认。ckpt_seconds≤0 仍按既有规则禁用定期保存，不取消停止保存；不能只看 schema 展示文字就把负值改成非法。</p>
+    <p><b>静态缺口，待复现：</b>ckpt_backups 的定义为 0..16，但当前生成绑定只转 int，normalize 再 clamp，-1/99 可能被静默接纳。重复 sigma 从有 param 前缀切到无前缀时，旧 param claim 也可能残留。两者应列入输入验收，先复现再按已确认规则修复，不以“兼容重构”掩盖缺陷。</p>
+
+    <h3>路径与配置缺失：保持来源语义，不顺便统一</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>输入</th><th>当前基准 / 策略</th><th>规划</th></tr></thead>
+      <tbody>
+        <tr><td>CLI 指定配置路径</td><td>相对程序目录</td><td>main 取得路径上下文一次，再显式传入归一化。</td></tr>
+        <tr><td>worktodo / auto_stage2_worktodo / Stage2 receiver finished；Stage1 results/submission</td><td>TOML 目录</td><td>保留；使用同一解析快照投影所有接收 worker。</td></tr>
+        <tr><td>queue tmp/finished/log/backup/P95；任务显式 save</td><td>程序目录</td><td>保留；日志模块负责实际读写，normalize 只解释路径。</td></tr>
+        <tr><td>direct CLI -save / --tmp-dir</td><td>CWD；未设置 direct tmp_dir 是 .</td><td>保留；direct TOML 显式 tmp_dir 仍基于程序目录。</td></tr>
+        <tr><td>exp_cache</td><td>显式相对值基于 CWD；空值默认程序目录</td><td>保留禁用状态，不因换数据类型改变含义。</td></tr>
+        <tr><td>缺失 TOML</td><td>queue 创建模板；direct 缺默认文件可继续、缺显式文件报错；gpu-info 缺文件回默认且不创建</td><td>保留模式区别。gpu-info 显式缺失路径是否应报错属于另行行为变更。</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>验收：</b>通过真实 direct/queue/gpu-info 入口对照有效字段与诊断；覆盖被覆盖的非法值、别名顺序、sigma 前缀、cache off、负 checkpoint 间隔、配置缺失及不同路径基准。配置创建/日志写入/queue claim 不进入纯归一化。Locality 来自单处规则，Leverage 来自两个任务 Adapter 和查询共同复用；不靠增加文件或转发层实现。</p>
+  </section>
+
+  <article class="card" id="result">
+    <span class="badge">Strong</span><span class="badge neutral">ports &amp; adapters</span>
+    <h2>2. 计算结果 Module：让 OpenCL 完成收敛，外层移除旧数组语义</h2>
+    <p class="files">src/ecm/service/stage1/execution_contract.{h,cpp}<br>src/ecm/backend/opencl/stage1/montgomery/workflow.cpp:21–178<br>include/ecm/service/stage1/task.h:84–97；task.cpp:55–95<br>src/main.cpp:250–282、1106–1154；src/ecm/application/cli/group_order.cpp:222–228</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">当前 · 新拥有结果仍携带旧接口</div>
+        <div class="node">OpenCL 数组 / flags / 整数返回码</div>
+        <div class="arrow">↓ LegacyExecutionResult → conversion</div>
+        <div class="node">ComputationResult</div>
+        <div class="arrow">↓ task 最终发布</div>
+        <div class="node leak">TaskResult：typed status + 双整数<br>三项等价 has_* + first_sigma 回退</div>
+      </div>
+      <div class="flow">
+        <div class="caption">建议 · 兼容仅留在真实旧内核入口</div>
+        <div class="node">OpenCL Adapter<small>局部拥有内核所需数组，并映射错误</small></div>
+        <div class="arrow">↓ 与 CPU / CUDA 相同</div>
+        <div class="node deep">拥有的曲线结果 + 计算状态</div>
+        <div class="seam">task 的最终状态仍独立<br>计算完成后，发布仍可能失败</div>
+        <div class="arrow">↓</div>
+        <div class="node">外层按状态与曲线种类解释结果</div>
+      </div>
+    </div>
+    <p><b>问题：</b>LegacyExecutionResult 的生产使用者只剩 OpenCL，但通用结果头仍承担旧 flags 和多种状态。TaskResult 的 has_factors / has_found / has_sigmas 现在完全等价，均为 curves()!=0；direct 与 queue 还用不同方式判断任务成功。</p>
+    <p><b>方向：</b>OpenCL 直接构造拥有结果，旧数组限于其 Adapter；删除不再必要的通用 Legacy Implementation。外层 Interface 使用任务状态、失败来源及逐曲线身份，只有真正需要整数的程序出口做映射。Seam 保留，Depth 增加。</p>
+    <ul class="wins"><li>Locality：旧状态局限 OpenCL</li><li>Leverage：后端共享结果合同</li><li>删除无效 presence 分支</li></ul>
+    <details open>
+      <summary>不能合并的状态与验证</summary>
+      <p>计算状态和最终任务状态并非重复：结果发布失败必须保留独立含义。Stage1Entry / TaskDependencies 能替换计算并测试真实发布，是有效 Seam，应保留。</p>
+      <p>验证停止与失败优先级、设备准备失败、部分曲线、构造因子、全无 Stage2 点、逐曲线随机 sigma、group-order 与最终发布失败。旧 task fixture 应迁到当前 Interface；不能为了保留 fixture 留住无生产调用的结果模型。</p>
+      <p>OpenCL workflow 中 batch_d 只生成后销毁，从未传入 engine；可删除此无用运算及 gpu_compute_batch_d。它是确定的冗余，但没有测量它对总耗时的贡献。</p>
+    </details>
+  </article>
+
+  <article class="card" id="ownership">
+    <span class="badge">Strong · 旧档归属</span><span class="badge amber">Worth exploring · helper 合并</span>
+    <h2>3. 准备与旧档 Module：按真实职责合并现有文件</h2>
+    <p class="files">src/ecm/service/stage1/legacy_gpu_checkpoint.h:14–66<br>src/ecm/backend/cuda/stage1/montgomery/checkpoint.{h,cpp}；workflow.cpp:64<br>src/ecm/backend/opencl/stage1/montgomery/workflow.cpp:77–85<br>src/ecm/service/stage1/{preparation,ecm_gpu_common,gpu_common}；src/io/save.cpp</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">当前 · 通用位置隐藏后端专属实现</div>
+        <div class="node leak">通用 inline header：CUDA V5 旧档扫描与导入<small>CUDA 使用；OpenCL 包在永远不成立的分支中</small></div>
+        <div class="arrow">＋</div>
+        <div class="node leak">preparation：指数 / sigma / 命名 / mkdir / 时钟 / TTY</div>
+        <div class="arrow">↑</div>
+        <div class="node">io/normalize 为命名依赖执行准备</div>
+      </div>
+      <div class="flow">
+        <div class="caption">建议 · 深化现有 Module，不扩增目录</div>
+        <div class="node deep">CUDA Montgomery checkpoint<small>现行解码 + 旧档导入，共享可等价的格式检查</small></div>
+        <div class="arrow">＋</div>
+        <div class="node">io/save：保存名称规则<br>files / platform：已有通用能力<br>preparation：真实共享计算准备</div>
+        <div class="seam">Android / probes 的兼容 Adapter<br>按实际链接闭包保留</div>
+      </div>
+    </div>
+    <p><b>问题：</b>CUDA V5 importer 放在通用执行 header，OpenCL 也包含它；OpenCL 后端名称恒为 OpenCL，导入分支要求 CUDA/CGBN，因此不可达。preparation 的 Interface 同时暴露计算、命名和平台能力，调用者必须跨职责阅读。</p>
+    <p><b>方向：</b>旧档 importer 的 Implementation 并入已有 CUDA Montgomery checkpoint.cpp/h，删除独立 header 和 OpenCL 假路径。命名规则归入已有 save Module，避免其接收整个 Stage1Options。时钟、TTY、目录操作复用已有能力；以 Locality 与 Leverage 判断合并，避免每个 helper 再建文件。</p>
+    <ul class="wins"><li>删除一个完整实现头</li><li>Locality：同格式集中维护</li><li>Depth：调用者只见所需职责</li></ul>
+    <details open>
+      <summary>文件合并的条件</summary>
+      <p>旧 importer 接受 done==0，当前 decoder 拒绝零进度，两者资格检查并不完全相同。合并位置不等于直接用现行 decoder 替换旧 importer；应保留已支持行为，核对损坏、旧档保留、已发布批次去重与跨容器恢复。</p>
+      <p>gpu_common 现存两个函数，删除无用 batch_d 后仅剩 32-bit sigma 生成。可评估并入计算准备，但 Android 直接链接 ecm_gpu_common.cpp；若合并会迫使 Android 链接完整 task/cache/IO 闭包，收益不足，应保留窄 Adapter。此项不预先承诺删除两文件。</p>
+      <p>本轮不更换随机算法、sigma 分布或范围，不改变磁盘 schema。命名函数当前名为 mont_format_save_name，却实际也用于 Edwards，可在归属调整时一起修正语义。</p>
+    </details>
+  </article>
+
+  <article class="card" id="outer">
+    <span class="badge amber">Worth exploring · 后续小批次</span><span class="badge neutral">local-substitutable</span>
+    <h2>4. main 与持久协议 Module：收回协议细节，保留流程顺序</h2>
+    <p class="files">src/main.cpp:209–229、319–413、544–575、614–693<br>src/io/worktodo.cpp:1088–1148；src/sync/p95.cpp:498–548、584、875–998<br>src/sync/p95.h；src/io/config.{h,cpp}</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">当前 · main 参与协议 Implementation</div>
+        <div class="node leak">main<small>receipt 命名/提交/确认；P95 派生路径、拒绝 AID、丢失恢复</small></div>
+        <div class="arrow">↓ 调用一串需要严格排序的操作</div>
+        <div class="node">worktodo：完成记录恢复与队列写入</div>
+        <div class="node">sync/p95：intent、恢复、投递</div>
+      </div>
+      <div class="flow">
+        <div class="caption">建议 · 深化已有 Module，不套队列 Runner</div>
+        <div class="node">main：选任务、资格、时点与失败政策</div>
+        <div class="arrow">↓ 保留可读的提交顺序</div>
+        <div class="node deep">worktodo：完成记录自身协议<br>sync/p95：启动恢复与交接自身协议</div>
+        <div class="seam">本地队列 / 外部交接仍为不同 Seam<br>checkpoint 清理由拥有者协调</div>
+      </div>
+    </div>
+    <p><b>问题：</b>P95 Module 已实现恢复与投递，main 的约 80 行初始化仍了解 sent ledger、旧 pending、拒绝 AID 和派生路径。完成记录的协议也由 main 与 worktodo 共同完成，Interface 要求调用者记住内部机械步骤。</p>
+    <p><b>方向：</b>P95 启动恢复并回已有 sync/p95 Implementation；main 保留基于实际曲线的资格和调用时点。完成记录的命名、提交与确认协议向 worktodo 收口，但不把全部 Stage1 业务放入通用编辑器。保留真实 Adapter 差异，以更小 Interface 增加 Depth。</p>
+    <ul class="wins"><li>Locality：恢复协议集中</li><li>Leverage：启动与完成复用</li><li>main 保留政策可读性</li></ul>
+    <details open>
+      <summary>为何不建议本轮大拆 main</summary>
+      <p>task 发布、强制 fresh save 核验、park 交接责任、持久完成记录、写 finished / 推进队列、清理 checkpoint、ack、交接 flush 的顺序承载恢复保障。移动一个大函数并不会自动降低 Interface 复杂度。应分别审查 P95 初始化和完成记录，不做一个包办所有步骤的万能 Module。</p>
+      <p>main 为 Stage2 接收方再次 read_toml，可评估复用同次已解析配置快照；worktodo 的运行时重读必须保留，不能误当冗余缓存。P95 仍按实际任务懒初始化，空队列的既有待交接重试语义不变。</p>
+      <p>验证完整真实顺序上的失败恢复、首条同文匹配、任务重排与删除、模糊投递、被拒绝 AID，以及 GUI 协议。跨文件责任不能被宣称为一个普通原子文件事务；未测量重复扫描耗时，不能据此声称加速。</p>
+    </details>
+  </article>
+
+  <article class="card" id="locks">
+    <span class="badge">Strong · 新增优化候选</span><span class="badge neutral">跨进程文件协调</span>
+    <h2>5. 锁 Module：先补齐共同互斥，再整理残留与重复实现</h2>
+    <p class="files">src/io/files.cpp:44–80、301–389；worktodo.cpp:651–699；stage1_checkpoint.cpp:297–333、553–577<br>src/io/results.cpp:436–475、1252；src/sync/{p95,stage2,backup}.cpp<br>src/io/prime95.cpp:216–268；src/ecm/application/p95_feeder/ecm_p95feeder.cpp:538</p>
+    <div class="pair">
+      <div class="flow">
+        <div class="caption">当前 · 同后缀不代表同一种锁</div>
+        <div class="node">OS 句柄 / flock / 字节范围锁<small>关闭后释放，但 sidecar 通常保留</small></div>
+        <div class="arrow">＋</div>
+        <div class="node leak">P95 存在标志锁<small>创建后立即 close，靠文件存在占锁；60 秒回收</small></div>
+        <div class="arrow">＋</div>
+        <div class="node leak">部分共享 writer 未用同一 gate<small>不同 temp 文件不能避免最终文件丢更新</small></div>
+      </div>
+      <div class="flow">
+        <div class="caption">建议 · 一个资源的全部 writer 共用协议</div>
+        <div class="node deep">共享文件协调 Implementation<small>共同资源身份、取得/释放、超时和 OS 错误报告</small></div>
+        <div class="seam">长期消费 / 批次 lease<br>短读改写 gate / 一致快照<br>保留各自范围和失败政策</div>
+        <div class="arrow">↓</div>
+        <div class="node">Windows 独占锁可评估自动清理<br>POSIX 保留稳定载体；不按年龄盲删</div>
+      </div>
+    </div>
+    <p><b>结论：</b>文件存在、锁仍被持有、任务仍在运行是三个不同事实。多数残留是稳定的锁载体，并非程序退出没有释放句柄。当前 Windows checkpoint/ledger 已使用关闭时删除；FileLock、queue edit、owner 等仍保留载体，足以解释目录里同时出现多种 lock。</p>
+    <p class="small">本地 <code>build_stage1_local</code> 顶层可见 <code>worktodo.txt.owner.lock</code> 与 <code>worktodo.txt.edit.lock</code>，均为 0 字节；未探测其当前占用状态。这不代表其他输出/备份目录只有两种锁。</p>
+
+    <h3>当前锁清单：防什么竞态，持有多久</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>路径 / 实现</th><th>功能与必要性</th><th>持有期</th><th>退出后文件</th></tr></thead>
+      <tbody>
+        <tr><td><code>&lt;queue&gt;.owner.lock</code><br>files.cpp:301</td><td>同一 worker 不能被 Stage1/Stage2 重复消费。共享 gate 字节 + 独占 worker 字节；worker=0 是整队列 gate。</td><td>整个队列运行期，跨 GPU 计算。只在读队列时取得会允许两进程选中并计算同一任务。</td><td>Windows / POSIX 都保留；关闭句柄/描述符释放锁。</td></tr>
+        <tr><td><code>&lt;queue&gt;.gui-control.lock</code><br>gui_v2/app.cpp:140</td><td>防止两个 GUI 管理同一 worker；实际消费权另由 child 的 owner 获取。不同角色。</td><td>GUI 持有对应 worker 控制权至 child 完全停止。</td><td>保留；不是 owner 的简单重复。</td></tr>
+        <tr><td><code>&lt;queue 或 finished&gt;.edit.lock</code><br>worktodo.cpp:651、811、963、1067</td><td>多个 worker/追加者同时读改写同一整文件，防止覆盖别人的修改、去重判断失效。</td><td>重新读取 → 匹配/合并 → 原子替换的完整短事务；约 5 秒等待预算。</td><td>两平台都保留；当前不是整个任务持锁。</td></tr>
+        <tr><td><code>&lt;target&gt;.publish.lock</code><br>files.cpp:44</td><td>共享发布 gate，防并发读改写丢更新和同一临时文件冲突；用于 save、outbox、handoff、备份及部分结果。</td><td>对应一次发布/快照事务；100×50ms 等待，不跨 GPU 发射。</td><td>两平台都保留；文件存在不阻止下次正常取得内核锁。</td></tr>
+        <tr><td><code>&lt;stage1.ckpt&gt;.lock</code><br>stage1_checkpoint.cpp:297</td><td>防不同 queue/worker 同时恢复和改写同一物理批次；worker owner 不能替代它。</td><td>Context begin → 恢复/计算/发布 → close；竞争立即失败。</td><td>Windows DELETE_ON_CLOSE；POSIX 保留载体。</td></tr>
+        <tr><td><code>&lt;result&gt;.ecm-ledger.lock</code><br>results.cpp:436、1252</td><td>保护结果账本、receipt、导出及恢复。Stage1 同时锁 internal 与 submission；部分“读”会迁移/建立账本。</td><td>发布事务；包含历史扫描，竞争立即失败。不是纯读锁。</td><td>Windows DELETE_ON_CLOSE；POSIX 保留载体。</td></tr>
+        <tr><td><code>&lt;save&gt;.publish.lock</code><br>save.cpp:328、343、363</td><td>一致快照、范围复核、批量去重与发布。与其他 writer 使用同一 save gate。</td><td>verified_snapshot / inspect_range / publish_batch；使用 FileLock。</td><td>保留；可研究快照读完后把解析/校验移到锁外。</td></tr>
+        <tr><td><code>&lt;stage2_pending&gt;.publish.lock</code><br>sync/stage2.cpp:65、133</td><td>park 与 flush 不互相覆盖；flush 投递后确认删除必须与其他 park/flush 串行。</td><td>短 outbox 事务；锁序 outbox → 目标 queue edit，不跨 Stage1 计算。</td><td>保留；不能简单读完就释放、稍后无条件写 ack。</td></tr>
+        <tr><td><code>&lt;p95_pending&gt;.handoff.publish.lock</code><br>sync/p95.cpp:846、905</td><td>保护 intent/done/sending，防两个 flush 重复发送。源与目标 save 另取短 publish lock。</td><td>park 或整轮 flush；源 save 锁释放后才取目标 save 锁。</td><td>保留；源/目标可短持有，交接责任不能随意拆散。</td></tr>
+        <tr><td><code>worktodo.add.lock</code><br>sync/p95.cpp:143–220、625–658</td><td>CREATE_NEW / O_EXCL 存在标志。当前只协调遵守该协议的 ECM writer；Prime95 不取得该锁。</td><td>创建后 close；存在期间占资格。正常释放 remove，等待 3 秒，mtime 超 60 秒尝试清理。</td><td>正常删除；崩溃可残留。与 OS 句柄锁机制不同。</td></tr>
+        <tr><td>备份目标 <code>.publish.lock</code><br>sync/backup.cpp:22–36</td><td>串行目标替换和临时文件；源 save 当前直接读。</td><td>每个目标快照写入，非长期备份锁。</td><td>保留；每个历史目标会有自己的载体。</td></tr>
+        <tr><td><code>&lt;queue&gt;.workerN.stage2.lock</code><br>stage2/task.cpp:275–284</td><td>Stage2 旧 worker gate；新 OwnerLease 已覆盖新程序的同 worker 重复消费。</td><td>非 dry/plan 的整个 Stage2 队列运行期。</td><td>Windows 保留；能阻止只使用旧 gate 的旧二进制，删除有兼容条件。</td></tr>
+        <tr><td><code>&lt;stage2_progress&gt;.lock</code><br>stage2/task.cpp:387–403</td><td>同 task checkpoint 不被不同队列/worker 同时消费，不等同于 queue owner。</td><td>单任务循环。</td><td>Windows DELETE_ON_CLOSE。</td></tr>
+        <tr><td><code>&lt;profile&gt;.tune.lock</code><br>planning/stage2.cpp:129–134</td><td>Stage2 可复用调优文件的并发更新，不属于 Stage1 必经步骤。</td><td>调优更新事务。</td><td>Windows 保留。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>能否“仅在读取时生成，用完删除”</h3>
+    <ul>
+      <li><b>按需取得已经存在。</b>短 publish/edit 锁不是从启动持有到退出；首次使用时创建载体，每次事务结束释放 OS 锁。长期 owner/批次 lease 则必须覆盖消费责任，不只保护最初读取。</li>
+      <li><b>锁必须包住读改写。</b>A、B 都读到旧文件，分别合并再替换，即使只在读取时加锁，后写者仍会覆盖先写者。原子替换保证单次文件不撕裂，不保证两次更新都保留。</li>
+      <li><b>纯读可以细分。</b>若全部 writer 原子替换、单文件旧/新任一完整快照均可接受，可评估无锁读。需要 fresh save 范围、多文件一致性、读后写或账本迁移时，应保留相应事务 gate。先在锁内取得字节快照，再锁外解析，是缩短部分读锁的候选。</li>
+      <li><b>Windows 独占 gate 可评估自动删除。</b>现有 checkpoint/ledger 已示范 DELETE_ON_CLOSE；FileLock/QueueEditLock 的 share=0 独占实现可研究采用同策略。OwnerLease 是多个 worker 共用载体的字节范围锁，不能直接套“当前 worker 释放就删文件”。<a href="https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew">Microsoft CreateFileW 文档</a>说明关闭时删除及共享限制。</li>
+      <li><b>POSIX 不宜释放后直接 unlink。</b>已打开旧文件的等待者仍指向旧对象；删名重建后，新进程可能锁住另一个对象，两边同时进入。这个风险由 <a href="https://man7.org/linux/man-pages/man2/flock.2.html">flock 的打开文件描述语义</a>与 <a href="https://man7.org/linux/man-pages/man2/unlink.2.html">unlink 对已打开文件的语义</a>推导而来。稳定载体有实际作用，不能按年龄清理。</li>
+    </ul>
+    <p>程序自身退出，不代表其他 worker、GUI、feeder 或等待者都退出。全停机维护可以清理无用载体；运行时自动清理需要更强协调。将锁放进统一子目录能减少视觉干扰，却不减少逻辑锁数量，且所有参与程序必须采用同一资源映射，适合作为后续可选方案。</p>
+
+    <h3>优先候选：目前有比残留文件更值得处理的问题</h3>
+    <ol>
+      <li><b>P95 存在标志锁的回收协议。</b>仅凭 mtime&gt;60s 删除，无法区分崩溃与暂停/慢 I/O 的活跃 owner；旧 owner 退出时又无条件删除同名文件，可能误删后来者的标志。删除失败会立即 continue，绕过等待超时与 sleep，存在忙等风险。建议先做无 GPU 夹具，再以可靠 OS gate 替换内部 writer 资格。已确认相关程序成组升级，不支持新旧协议同时写同一资源。</li>
+      <li><b>P95 feeder 未加入共同 writer gate。</b>Stage1 在 sync/p95 外层取得 marker；feeder:538 直接调用无内部锁的 p95_write_worktodo_add，后者 prime95.cpp:216–268 是读、合并、替换。不同 .feeder.tmp / .ecm.tmp 只避免临时文件重名，仍存在最终 worktodo.add 丢更新窗口。应把共同互斥放到真实共享写入口，同时保留 save 先就绪、add 后发布及同步账本责任。Prime95 自身不参加此 gate 的限制仍须保留。</li>
+      <li><b>显式共用 internal results 路径的锁域不一致。</b>Stage1 用 .ecm-ledger.lock；CPU Stage2 append_text_record 用 .publish.lock；CUDA Stage2 input.cpp:217 的 append 仅靠目标本体写句柄排斥同时打开写者。默认输出不同；显式共用时存在读旧内容、另一方更新、再覆盖的窗口，以及 Windows rename 共享冲突。已确认继续允许显式共用，先用无 GPU 双 writer 复现，再统一同一输出 gate；不以拒绝此配置代替修复，不改变 Stage2 完成一条 append 一条的发布规则。</li>
+      <li><b>GUI 队列写入缺少共同 edit gate。</b>gui_v2/views/pages.cpp:125 仅租用选中 worker；gui/worktodo_gen.cpp:850–928 校验 stamp 后替换，不取 .edit.lock。外部其他 worker 可在最后校验与替换之间推进同一队列。建议共享 worktodo 写入口使用短 edit gate，预览 stamp 继续表达用户确认的版本，不能互相替代。</li>
+      <li><b>Stage2 的旧 worker gate 可列退役候选。</b>在全部采用 OwnerLease 的新消费者之间重复，但仍拦截只用旧 gate 的旧版 Stage2。只有明确兼容并行范围后才删除；单任务 progress lock 与 GUI control lease 不属于重复项。</li>
+    </ol>
+    <p class="note">以上竞态是已定位源码路径和触发条件的候选，尚未做并发复现；不代表默认配置必然发生。锁的重复/残留本身也不是 30 秒收尾延迟的证据。验证应分别记录 acquire 等待时间、持有时间、重试次数、操作和资源路径，再决定性能优化范围。</p>
+
+    <h3>推荐方案与约束</h3>
+    <p><b>推荐：</b>在已有 io/files 内收敛重复 OS 锁 Implementation；高层 Module 选择资源身份、短事务或长期 lease、等待/立即失败以及清理政策。先让同一资源的全部 writer 共用一个真实 Seam，再缩短允许缩短的临界区。Interface 提供明确错误，Locality 集中平台细节，Leverage 覆盖各真实 Adapter，不新增锁目录层级或转发类。</p>
+    <p><b>必须保留：</b>共享队列支持不同 worker 并行；计算期间不持有队列 edit gate；outbox→queue edit 的锁序；P95 源与目标不同时交叉持锁；保存/结果/队列责任的提交顺序。统一 Implementation 不能偷偷把 .edit.lock 改成 .publish.lock，或把 fail-fast 改为等待。切换 lock 路径、协议或目录必须处理旧二进制及 feeder/GUI 的实际参与方式。</p>
+    <p><b>验收：</b>双进程同 worker 拒绝、不同 worker 可并行；编辑与追加不丢行；park/flush 不丢责任；活跃 P95 超 60 秒不被偷锁、删除失败有界退出；feeder 与 handoff 两条任务均保留；条件性共用结果与 GUI 编辑竞态；终止后可重新取得 OS 锁。无 GPU 夹具优先，平台分别验证，避免用运行时批量删 lock 掩盖问题。</p>
+  </article>
+
+  <section class="card" id="file-actions">
+    <h2>文件合并清单：按职责判断，不按大小判断</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>对象</th><th>建议</th><th>删除检验 / 保留理由</th></tr></thead>
+        <tbody>
+          <tr><td><code>legacy_gpu_checkpoint.h</code></td><td>并入 CUDA Mont <code>checkpoint.cpp/h</code></td><td>只有 CUDA 路径实际执行；减少同一 V5 格式的跨文件知识。</td></tr>
+          <tr><td>OpenCL <code>entry.cpp</code> 与 <code>engine.cpp</code></td><td>可将入口校验并入 engine；保留兼容入口</td><td>entry 只校验并转发；Android 与桌面 factory 都是实际调用者。可少一个 CPP，不应直接删公开名字。</td></tr>
+          <tr><td><code>preparation.*</code> 的命名操作</td><td>并入已有 <code>io/save.*</code> 的命名职责</td><td>归一化不应为命名依赖执行准备；禁止让 IO 反向接收整个任务配置。</td></tr>
+          <tr><td><code>gpu_common.*</code></td><td>先删无用 batch_d，再按 Android 链接闭包决定</td><td>32-bit sigma 仍有独立目标调用，不能为少两个文件扩大其链接依赖。</td></tr>
+          <tr><td><code>execution.cpp/h</code></td><td>保留执行选择职责</td><td>它集中 CPU/CUDA/OpenCL 真实 Adapter 的选择和编译差异；删除会让 main 承担后端私有知识。</td></tr>
+          <tr><td><code>config_format.h</code>；<code>cli/config/worktodo</code></td><td>保留来源与复用 Seam</td><td>有 CLI、Stage2、GUI、生成绑定等实际调用者；应删重复解释，不合并不同文法。</td></tr>
+          <tr><td>CUDA <code>workflow/runtime/launch/instances</code></td><td>保留真实主机、设备与编译职责</td><td>NVCC 实例、按需设备加载和纯主机验证具有实际差异；不能按小文件数量合并。</td></tr>
+          <tr><td><code>io/save</code> 与 <code>io/results</code></td><td>保留独立 Module</td><td>保存区间与结果账本的提交职责不同；旧 append 入口仍被 Android 和 bench 使用。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="acceptance">
+    <h2>下一轮范围与验收建议</h2>
+    <ol>
+      <li><b>本轮先锁、后输入。</b>P95 共同 writer gate、过期标志锁及条件性结果/队列窗口用无 GPU 夹具核实并修复；锁门禁通过后，输入改造以最终请求及诊断合同作对照，保留来源位置、默认和显式禁用。CPU 进度等其余候选保留在后续批次。</li>
+      <li><b>再做结果与文件归属。</b>OpenCL 计算结果与 CPU/CUDA 一致；checkpoint importer 的搬迁和资格去重分开审查。兼容入口按真实调用者迁移，不因 src 内无调用就删除。</li>
+      <li><b>最后讨论 main 收口。</b>先 P95 初始化，再完成记录；每批都必须减少调用者需要知道的协议，而不是增加一层转发。</li>
+      <li><b>验证与性能分开。</b>先跑受影响的输入、任务、恢复、交接合同，再构建受影响目标。只有变更触及计算、内存转换或主机 I/O 时，才按相同输入与二进制身份测约 1000 曲线的小 B1、长历史与真实同步配置；不预设收益比例。</li>
+    </ol>
+    <p class="note">评估没有实施改动，也没有新增性能数据。用户已同意先锁竞态、后输入归一化；实施前约束见下节。上一轮未覆盖完整 Android、全部档位与 PRAC/resident 运行矩阵的限制仍有效；本次静态分析不能替代那些验收。</p>
+  </section>
+
+  <section class="card" id="implementation-contract">
+    <span class="badge">2026-10-26 · 实施前合同</span>
+    <h2>已确认两项兼容选择，其余补齐为实施约束</h2>
+    <p><b>用户已确认：</b>相关 Stage1 / Stage2 / feeder / GUI 程序成组升级，不支持新旧版本并发写同一资源；旧 save、checkpoint、结果、完成记录与交接责任文件继续读取兼容。Stage1 与 Stage2 仍可显式共用一个 internal JSONL，必须统一其所有真实写入入口的锁协议，默认输出路径不变。</p>
+
+    <h3>一、拆成两段，明确此次不顺带扩展的范围</h3>
+    <ol>
+      <li><b>锁竞态：</b>先冻结当前基线和夹具，再验证 P95 marker/feeder、结果共用路径、GUI 队列编辑窗口；对可复现问题修复，保留可失败于基线、通过于候选的证据。之后再收敛必要的重复 OS 锁实现。</li>
+      <li><b>输入归一化：</b>锁回归通过后再动 cli/config/normalize/main；先迁真实输入合同，再删除回填、重复解析和字段复制，避免把竞态修复与输入语义变化混在同批代码中。</li>
+      <li><b>其余候选：</b>CPU 进度、OpenCL 结果收敛、checkpoint importer 归属和更大范围 main 收口继续保留，后续独立推进。此次不同时修改数学、GPU 算法、设备布局或最终发布责任。</li>
+    </ol>
+
+    <h3>二、锁协议必须补齐的设计细节</h3>
+    <ul>
+      <li><b>资源身份与完整参与者：</b>列出每个共享文件的 Stage1、两种 Stage2、feeder 和 GUI 写入入口；同一资源使用同一身份和 gate。核对相对路径、大小写、符号链接及硬链接的现有处理；无法建立稳定身份时明确报错，不能静默分裂成两把锁。别名处理如需改变原有支持范围，单列说明。</li>
+      <li><b>唯一取得点与重入：</b>共享写入口覆盖完整读改写。上层已有 ledger/交接锁时，明确内部调用的持锁关系，避免外层锁住同一资源、内层再次获取导致自我等待。Module 内部隐藏需要已持锁的 Implementation，不向所有调用者暴露可绕过互斥的开关。</li>
+      <li><b>锁顺序：</b>列出 owner、checkpoint、outbox、queue edit、save、result 的实际嵌套。保留 outbox→queue edit、源 save 释放后再取目标 save；多结果路径按稳定顺序取得，避免重复取得同一身份。internal/submission 等不同用途指向同一资源的既有拒绝规则保持。计算期间不持有 queue edit/publish 短 gate。</li>
+      <li><b>等待与错误：</b>保留已有立即失败/有界等待政策，只有共享 writer 合同确有需要时再调整。用单调时钟预算，任何失败分支都受超时约束；区分被占用、权限、路径不存在与系统 I/O 错误，报告操作、资源、等待时长及系统原因。不能靠无限重试或吞错宣称成功。</li>
+      <li><b>释放与残留：</b>禁止按年龄清理活跃 OS 锁。Windows 独占 gate 的关闭删除、POSIX 稳定载体、共享 owner 的字节锁分别处理。锁清理和锁实现合并排在正确性之后；旧 Stage2 worker gate 的退役不是本轮通过的前提。</li>
+      <li><b>升级与恢复：</b>停止旧写入者后成组升级；旧纯 marker 的处理与业务 pending/intent 分开，不能删除后者。保留发送模糊状态的确认规则和旧档恢复能力；不要求用户手工迁移业务文件，不创建新的磁盘 schema。</li>
+    </ul>
+    <p>共同 gate 只协调参加本项目协议的程序。Prime95 自身不取得该 gate；仍按现有 worktodo.add 交接方式及确认限制运行，本轮不宣称实现跨外部程序的完整事务。</p>
+
+    <h3>三、明确失败后保留什么</h3>
+    <p>锁获取失败不得使受保护操作假装成功或绕过必要提交点；必要写入失败保留原任务、checkpoint、完成记录或交接 intent 中相应的恢复材料。save 先就绪、任务后可见，结果持久化、完成责任记录、finished/源行推进和交接确认保持既定顺序。已持久化交接责任之后，源队列可以按现有合同推进；随后 flush 占锁失败保留 intent 待重试，不能一律回滚或重复计算。模糊发送不能盲重试；cache、备份等可选失败仍按已有政策报告，不能伪装成交接成功。锁统一不改变 Stage1 批内 sigma 排序，也不改变 Stage2 逐条 append。</p>
+
+    <h3>四、输入重构中的缺陷与兼容清单</h3>
+    <ul>
+      <li><b>允许修复的输入缺陷：</b>先复现 ckpt_backups 越界被 clamp、重复 sigma 前缀残留。前者按已定义的 0..16 范围报错，附位置/键/值/范围；后者按最后一次 sigma 选项完整替换该选项携带的值与 param 声明，显式 --gpu-param 的独立冲突检查仍保留。每一次非法显式值都要报错。</li>
+      <li><b>保留合法转换：</b>负 ckpt_seconds 按零、cache 的空值与禁用标记、ECM/ECM2 缺省、任务字段冲突、sigma 优先级、路径基准与配置缺失策略均保持；不顺便收紧 gpu-info 显式缺失配置等行为。</li>
+      <li><b>冻结与实时性：</b>TOML 用一次启动快照，worker 基础设置冻结；worktodo 每轮重新读，当前任务计算字段冻结，后续任务仍可新增、删除、重排，完成按当前 worker 第一条同文匹配。claim/save 行数修复仍在有副作用的队列流程。</li>
+      <li><b>实现收敛：</b>沿用现有文件和真实 Adapter，不新增中转 manager；默认/范围只在现有配置定义维护，生成物随生成器同步。代码调整后核对文档、测试和来源诊断，不用放宽测试掩盖变化。</li>
+    </ul>
+
+    <h3>五、正式门禁与耗时记录</h3>
+    <ol>
+      <li><b>确定性交错：</b>用 barrier/事件在真实读、写、替换和确认点制造竞争，不依赖大量随机运行。基线失败、候选通过；跨进程用例覆盖正常退出、强制结束、占锁超时与重新取得。60 秒过期场景可控制时间/mtime，不必让每个用例实际等待一分钟。</li>
+      <li><b>并发结果：</b>同 worker 拒绝、不同 worker 可并行；feeder/handoff 两条任务均保留；GUI 编辑与 worker 完成不丢行、不复活旧行；Stage1 与两种 Stage2 共用 internal 时所有记录完整，单阶段排序/追加规则不变。</li>
+      <li><b>故障恢复：</b>覆盖权限/替换失败、进程在关键提交点结束、park/flush 交错及模糊确认，核对恢复后既不漏已完成工作，也不重复推进任务。测试不通过就不进入下一段输入迁移。</li>
+      <li><b>复用现有合同：</b>优先扩展 tools/test 的 storage_concurrency、stage1_host_io、worktodo/GUI ownership 和输入矩阵，测试代码仍在 src 外。锁关键用例不能只用同进程线程替代跨进程 OS 验证。</li>
+      <li><b>构建范围：</b>先做无 GPU host 验证；阶段性构建所有受共享 IO 改动影响的 Stage1 CUDA/OpenCL、CPU/CUDA Stage2、GUI 与 feeder；输入迁移后跑真实 direct/queue/gpu-info，再做少量必要 GPU/恢复冒烟。Windows 为当前可用正式门禁；POSIX/Android 无运行环境时明确列为未验证，不据源码编译推断运行通过。</li>
+      <li><b>性能：</b>记录构建/测试耗时、lock acquire 等待/持有与重试、约 1000 曲线小 B1 的 save→result→queue done 及独立进程峰值；有无长历史/同步配置分别测。同设备、输入、配置及二进制身份对照，不把组件峰值或嵌套计时相加，不预设提升比例。</li>
+    </ol>
+    <p>构建目录先生成内部 .gitignore；冻结样本、失败日志、二进制身份和计时证据放在 data/experiments，原始证据不改写。现有合同证明的规则继续保留，新增测试命中真实 Interface，提升 Locality 与 Leverage，避免建立另一套测试执行链。</p>
+
+    <h3>六、版本与交付安排</h3>
+    <p>建议这两段作为一个兼容修复/优化发布 <b>0.53.3</b>，锁修复与输入重构分为可独立审查的小批次；不因每次搬动或测试修补重复增加版本。若中途独立发布锁修复，再为后续发布安排版本。实施时重新核对 HEAD/工作区，同步正式主题说明及升级方式；本草稿继续保留，完成后提示用户处理。</p>
+    <p class="note">本节保留实施前合同；0.53.3 已按合同实施，当前验收与未验证范围见下方实施结果。</p>
+  </section>
+
+  <section class="card" id="implementation-result">
+    <span class="badge">2026-10-26 · 已实施 · 0.53.3</span>
+    <h2>锁竞态验证通过后完成输入归一化</h2>
+    <p>代码与正式说明已更新。本页为保留实施合同、复现和验收过程的临时草稿；其他候选继续待后续规划。当前正式职责见 <a href="../architecture/OVERVIEW.md">架构说明</a>、<a href="../architecture/CONFIGURATION.md">配置说明</a>和<a href="../usage/STAGE1.md">使用说明</a>。</p>
+    <h3>锁阶段：先复现，再修复</h3>
+    <p>基线 HEAD <code>ae77ea9</code> 已冻结为 <code>baseline_source.zip</code>。真实写入口的事件夹具连续两次复现 feeder/handoff 丢行、活跃 marker 被按年龄抢占、GUI 检查/替换窗口复活旧任务，以及 Stage1 覆盖 CPU/CUDA Stage2 追加记录；基线还会拒绝合法的混合阶段历史。修复后 9 组跨进程合同通过，再通过 host IO、storage 和真实 worker 输入回归后才进入输入迁移。</p>
+    <p>共同 gate 位于 <code>io/files</code>，worktodo 编辑用 edit 域，其他发布用 publish 域；writer 内部取得完整读改写锁。Windows 短 gate 关闭删除，POSIX 稳定载体不删除；owner/checkpoint 继续长期拥有。最终 symlink、多硬链接写入别名明确拒绝。结果双路径固定排序并判重；保留 Stage2 逐条 append、Stage1 批内 sigma 排序与另一阶段原字节。</p>
+    <p>验收补强：P95 发布前保存完整 attempted 集合；可见后确认失败保留 sending，逐行确认并修复账本后才 done。现存责任文件/目录不可读时报错，不能当作空；失败日志计数不可得显示 unknown。旧纯 marker 不参与新 gate，不按年龄抢占活跃内核锁。Prime95 自身不参加 gate，不能据此承诺外部恰好一次。</p>
+    <h3>输入阶段：一次来源解释，一次有效设置投影</h3>
+    <div class="flow"><div class="node">parse_cli → ParsedCli<br><small>一次转换；canonical presence + 原始拼写 / argv 位置</small></div><div class="arrow">↓</div><div class="node">read_config → ParsedConfig<br><small>所有显式值先校验；保留 typed worker scope 与原文位置</small></div><div class="arrow">↓</div><div class="node deep">normalize_settings → Stage1Settings<br><small>生成默认 → 全局 → worker → 显式 CLI；一次安装 runtime</small></div><div class="arrow">↓</div><div class="seam">direct / live worktodo 两个 Adapter</div><div class="arrow">↓</div><div class="node">NormalizedStage1Task → 执行入口</div></div>
+    <p>删除 CLI 预检后重复转换、两种 normalize_cli 回填、两种 normalize_config 文本往返、direct 再逐字段覆盖和 gpu-info 独立合并。配置通过生成 Binding::copy 投影已解析值；Stage2 receiver 复用启动快照。main/cli/config/normalize 四个实现文件合计 2706→2202 行，此数不含头文件、生成物和测试，不能作为独立质量结论。</p>
+    <p>已修复复现过的 ckpt_backups 越界静默截断和重复 sigma 前缀残留。保留负 checkpoint、cache 禁用、来源优先级、typed save 后资格判断、direct 空 tmp 继续 CWD 存档，以及 query 不做虚拟任务准入。worktodo 未来行仍可修改，完成仍按当前 worker 第一条完全同文匹配。</p>
+    <h3>验收覆盖</h3>
+    <ul><li>9 组跨进程共同 writer；所有基线失败证据保留。200 ms 占锁子进程的含启动 wall 约 250–266 ms；持锁 writer 的约 500 ms 事件窗口内另一入口不能进入。强制结束后可重新取锁。</li><li>host IO：实际保存范围、完成恢复、P95 模糊确认、拒读 ready/ledger、不可计数目录与重试不重复；storage 的 cache-race/cache-bounds/outbox-race/outbox-failures 全通过。</li><li>真实 CUDA 主程序 23 组输入/队列/交接合同通过；现有 P95 路由、占锁、旧 marker、AID 与恢复回归 103 项通过。GUI 生成器 110、结果 26、日志 85 项通过，GUI v2 state/app 和跨进程 owner 排他/分区/强制结束通过。</li><li>CUDA Montgomery PARAM0/2/3：各 2 条相同构造，保存字节与锁阶段基线相同。Montgomery 和 Edwards 各 8 条在 checkpoint 后停止、保留源行、恢复并 seal 成功。CPU/CUDA Stage2 各在已有 Stage1 结果上追加一条，Stage1 前缀原字节保留。</li><li>Stage1 CUDA/OpenCL、CPU/CUDA Stage2、GUI/GUI v2、feeder 均构建通过；OpenCL 二进制执行 CPU 任务与 GPU query 通过，本轮未运行 OpenCL 算术核。配置两组生成检查与依赖方向门禁通过：450 文件、1007 包含边、0 环、0 公开头指向私有头。</li></ul>
+    <h3>同设备收尾计时与进程峰值</h3>
+    <p>Windows，CPU AMD Ryzen AI 9 HX 370 w/ Radeon 890M，NVIDIA RTX 4070 Ti，driver 610.88，power limit 285 W；GPU 时钟、负载和功耗原始采样保存在 <code>gpu_during_final_timings.csv</code>。输入 N=2^p−1，B1=100，1000 曲线，固定 sigma=100000，Montgomery PARAM0 / Edwards，exp_cache=off，定期 checkpoint 关闭。每个格 2 个新进程样本，顺序为基线→候选→候选→基线；共 24 个计时样本，开始前所有构建和其他测试已结束。</p>
+    <p>基线是本次已通过锁修复的 0.53.3 构建，候选是完整归一化后的 0.53.3 构建，<b>不是与旧 30 秒问题版本比较</b>。精确身份：基线 <code>d7ab24f59ce44f1e05be8b4ddb345147bd1f7e9cc9f34b8a79625b5a9c26a49e</code>；候选 <code>99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8</code>。原始记录见 <a href="../../data/experiments/stage1_fourth_refactor_20261026/qualification_final/summary.json">qualification_final/summary.json</a>。</p>
+    <div class="scroll"><table><thead><tr><th>输出状态</th><th>曲线 / 位宽 p</th><th>基线 save→result / s</th><th>候选 save→result / s</th><th>候选 result→queue done / s</th><th>候选进程峰值 / MiB</th></tr></thead><tbody><tr><td>新结果文件</td><td>mont / 521</td><td>0.120–0.123</td><td>0.123–0.124</td><td>0.032–0.032</td><td>136.0–136.1</td></tr><tr><td>新结果文件</td><td>ed / 521</td><td>0.127–0.128</td><td>0.124–0.125</td><td>0.026–0.029</td><td>147.1–147.4</td></tr><tr><td>新结果文件</td><td>mont / 10267</td><td>0.141–0.142</td><td>0.140–0.140</td><td>0.032–0.036</td><td>180.0–180.1</td></tr><tr><td>新结果文件</td><td>ed / 10267</td><td>0.246–0.256</td><td>0.228–0.257</td><td>0.059–0.145</td><td>202.3–202.3</td></tr><tr><td>1 万历史 + 备份 + P95</td><td>mont / 521</td><td>0.279–0.284</td><td>0.276–0.277</td><td>0.237–0.266</td><td>143.4–143.4</td></tr><tr><td>1 万历史 + 备份</td><td>ed / 521</td><td>0.283–0.286</td><td>0.283–0.284</td><td>0.133–0.142</td><td>161.4–161.5</td></tr></tbody></table></div>
+    <p>边界为父进程收到 save 完成日志→收到 results 日志，以及 results→queue done；不是磁盘 syscall 的独立计时。进程峰值每 20 ms 读取 Windows PeakWorkingSetSize，不与 GPU payload 或其他进程峰值相加。长历史组先真实生成 10000 行，候选批次仍为 1000；Montgomery 配置备份和 P95，Edwards 配置备份。每个峰值独立，不相加嵌套跨度。</p>
+    <p>这些输入下收尾仍在亚秒范围；未观察到约 30 秒固定等待。新结果文件 save→result 为 0.123–0.257 s，长历史/同步为 0.276–0.284 s。样本少且有进程启动、I/O 和设备波动，不宣称本轮归一化有稳定的百分比提速，也不将冷启动差异归因于输入代码。</p>
+    <h3>构建与测试耗时边界</h3>
+    <p>下表为各构建目录内部 .gitignore 写入→exe 产出的文件时间差，近似 wall，n=1；包含准备和编译，不能作为纯编译峰值或相加成进程耗时。OpenCL 行是最终增量刷新；CUDA Stage1 编译 51 个 host、验证复用 31 个 CUDA 对象、重编译 1 个 CUDA 闭包；CUDA Stage2 重编译 42 个 host、验证复用 2 个对象、0 次 CUDA 编译。确定性 writer 运行约 4–5 s，host IO 不到 2 s，23 组功能矩阵约 7 s；完整数据组的逐进程计时另见 JSON。</p>
+    <div class="scroll"><table><thead><tr><th>目标</th><th>构建产物</th><th>近似 wall</th></tr></thead><tbody><tr><td>Stage1 CUDA</td><td><code>build_stage1_fourth_verified_delivery\ecm_cuda.exe</code></td><td>77.6 s</td></tr><tr><td>Stage1 OpenCL</td><td><code>build_stage1_fourth_opencl_final\ecm.exe</code></td><td>11.1 s</td></tr><tr><td>Stage2 CUDA</td><td><code>build_stage1_fourth_cuda_stage2\ecm_cuda_stage2.exe</code></td><td>118.3 s</td></tr><tr><td>Stage2 CPU</td><td><code>build_stage1_fourth_cpu_stage2_native\native\ecm_cpu_stage2.exe</code></td><td>22.0 s</td></tr><tr><td>GUI</td><td><code>build_stage1_fourth_gui\ecm_gui.exe</code></td><td>72.5 s</td></tr><tr><td>GUI v2</td><td><code>build_stage1_fourth_gui_v2\ecm_gui_v2.exe</code></td><td>123.5 s</td></tr><tr><td>feeder</td><td><code>build_stage1_fourth_feeder\ecm_p95feeder.exe</code></td><td>18.9 s</td></tr></tbody></table></div>
+    <h3>兼容范围与未验证项</h3>
+    <p>停止旧写入者，Stage1 / Stage2 / feeder / GUI 成组升级；不支持同资源新旧并发，旧业务文件读取兼容，不需手迁 schema。共享 internal JSONL 继续允许，两个不同用途的路径同一身份仍拒绝。POSIX/Android 本轮没有构建或运行环境，不能把 Windows 回归推断为这些平台已验收；完整 GUI 显示与 OpenCL 算术性能也不在本轮运行结论内。</p>
+    <p>CPU 全局进度、OpenCL 拥有结果收敛、CUDA checkpoint importer 与更大 main 收口仍是候选，未顺带实施。证据根目录 <code>data/experiments/stage1_fourth_refactor_20261026</code>；无效夹具、失败构建与探索样本保持原样，正式结论只采用上述完成的门禁。此临时草稿待用户决定整理或删除，未自动清理。</p>
+  </section>
+  <footer>
+    <p>当前实现与正式主题已同步为 0.53.3；原始规划与实施合同保留于本临时草稿。基线、失败与成功证据及冻结二进制身份保存在上述忽略目录；临时草稿按约定保留。</p>
+  </footer>
+</main>
+</body>
+</html>

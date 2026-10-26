@@ -1,5 +1,7 @@
 #include "worktodo_gen.h"
 #include "../../../io/config_format.h"
+#include "../../../io/files.h"
+#include <memory>
 
 #include <algorithm>
 #include <cctype>
@@ -851,6 +853,13 @@ bool apply_append(const std::string &path, const std::string &text, const FileSt
                   std::string &err, size_t *appended) {
     if (text.empty()) {
         err = "nothing to append (generate a preview first)";
+        return false;
+    }
+    std::unique_ptr<ecm_io::FileLock> edit;
+    try {
+        edit = std::make_unique<ecm_io::FileLock>(path, ecm_io::FileLockDomain::QueueEdit, 0);
+    } catch (const std::exception& failure) {
+        err = failure.what();
         return false;
     }
     FileStamp now;

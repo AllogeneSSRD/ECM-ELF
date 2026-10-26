@@ -597,12 +597,14 @@
       "default": 3,
       "domain": "<x:Z,0..16>",
       "fx": "checkpoint_generations(S1)",
-      "parser": "legacy",
+      "parser": "strict",
       "zero": "no_backups",
       "description": [
         "Maximum number of rotated Stage1 checkpoint backups. The primary checkpoint is additional; 0 keeps only the primary. Corrupt or unreadable generations are skipped on resume. A completed Stage1 task removes its primary checkpoint and all backups.",
         "Stage1 检查点轮换备份的最大份数；主存档另计，0 表示只保留主存档。恢复时跳过损坏或无法读取的代次；Stage1 完成后清理主存档及所有备份。"
-      ]
+      ],
+      "minimum": 0,
+      "maximum": 16
     },
     {
       "owner": "stage1",

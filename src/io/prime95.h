@@ -63,7 +63,8 @@ size_t p95_total_handoff(const std::vector<P95WorkerSection>& sections);
 // `err` on I/O failure.
 bool p95_write_worktodo_add(const std::string& path,
                             const std::vector<std::pair<int, std::string>>& assignments,
-                            bool append, std::string& err, const char* tmp_suffix = ".feeder.tmp");
+                            bool append, std::string& err, const char* tmp_suffix = ".feeder.tmp",
+                            bool* publication_uncertain = nullptr);
 
 // Read an integer key from a Prime95 prime.txt (e.g. MaxHighMemWorkers).
 // Accepts "Key=value" with surrounding whitespace; '#' comments are skipped.

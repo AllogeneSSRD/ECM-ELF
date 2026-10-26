@@ -1,19 +1,19 @@
 #include "io/normalize.h"
-#include "io/config.h"
-#include "io/cli.h"
-#include "io/worktodo.h"
-#include <cmath>
-#include <filesystem>
-#include <limits>
-#include "io/stage1_checkpoint.h"
-#include "ecm/service/stage1/preparation.h"
-#include <sstream>
-#include <regex>
 #include "ecm/application/configuration/ecm_expr.h"
 #include "ecm/service/execution/legacy_gpu.h"
+#include "ecm/service/stage1/preparation.h"
+#include "io/cli.h"
+#include "io/config.h"
+#include "io/stage1_checkpoint.h"
+#include "io/worktodo.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <filesystem>
 #include <iostream>
+#include <limits>
+#include <regex>
+#include <sstream>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -24,13 +24,18 @@
 #endif
 namespace ecm_stage1_app {
 
-// Resolve optional cache policy once. Empty input means the existing executable-directory default;
-// an explicit disable token remains empty and is never replaced again during execution.
-static std::string normalized_cache_dir(const std::string& value, const std::string& exe) {
+// Resolve optional cache policy once. Empty input means the existing
+// executable-directory default; an explicit disable token remains empty and is
+// never replaced again during execution.
+static std::string normalized_cache_dir(const std::string& value, const std::string& exe,
+                                        const std::string& cwd) {
     if (value == "off" || value == "none" || value == "0" || value == "-")
         return {};
     const auto path = value.empty() ? (exe.empty() ? std::string(".") : exe) : value;
-    return std::filesystem::absolute(std::filesystem::u8path(path)).lexically_normal().u8string();
+    // absolute also resolves Windows drive-relative spellings such as D:cache.
+    return std::filesystem::absolute(std::filesystem::u8path(cwd) / std::filesystem::u8path(path))
+        .lexically_normal()
+        .u8string();
 }
 
 void normalize_assignment(Ecm2Task& task) {
@@ -160,62 +165,23 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
     }
 }
 
-bool normalize_direct(const CliInput& input, const EcmQueueConfig& cfg,
-                      const std::string& expression, const std::string& exe,
-                      const std::string& base, NormalizedStage1Task& out, std::string& error) {
+bool normalize_direct(const ParsedCli& input, const ecm_stage1::Stage1Options& defaults,
+                      const std::string& expression, NormalizedStage1Task& out,
+                      std::string& error) {
     try {
         if (input.pos.empty())
             throw std::runtime_error("missing B1");
-        out.b1 = std::stod(input.pos[0]);
-        out.b2 = input.pos.size() > 1 ? std::stod(input.pos[1]) : 0;
+        out.b1 = input.b1;
+        out.b2 = input.b2;
         out.curves = input.gpucurves;
         out.expression = expression;
         if (expression.empty())
             throw std::runtime_error("No input number on stdin");
         if (!ecm_parse_expression(expression, out.modulus, &error))
             throw std::runtime_error("key=N value='" + expression + "'; " + error);
-        out.options = normalize_options(cfg, exe, base, input.worker_index);
+        out.options = defaults;
         auto& opt = out.options;
-        auto& selection = opt.execution.selection;
-        selection = input.selection;
-        selection.gpu_param = input.gpu_param_cli;
-        if (selection.curve == ecm_stage1::CurveModel::Edwards &&
-            selection.target == ecm_stage1::ExecutionTarget::Gpu &&
-            (input.gpu_param_set || input.sigma_param_set || input.print_group_order))
-            throw std::runtime_error(
-                "GPU Edwards uses an unprefixed sigma; --gpu-param and --go do not apply");
-        if (selection.target == ecm_stage1::ExecutionTarget::Cpu && input.gpu_param_set)
-            throw std::runtime_error("--gpu-param requires --target gpu");
-        if (selection.target == ecm_stage1::ExecutionTarget::Cpu && input.sigma_param_set &&
-            (selection.curve != ecm_stage1::CurveModel::Montgomery || input.sigma_param_claim != 0))
-            throw std::runtime_error(
-                "CPU accepts a parameterized sigma only for Montgomery PARAM0");
-        if (input.sigma_param_set &&
-            !ecm_stage1::resolve_gpu_param(selection.gpu_param, input.gpu_param_set,
-                                           input.sigma_param_claim, selection.gpu_param))
-            throw std::runtime_error("conflict between -sigma parametrization and --gpu-param");
-        opt.execution.stage1_threads = input.stage1_threads;
-        opt.execution.naf_w = input.naf_w;
-        opt.execution.affinity_cpus = ecm_config::affinity_indices(input.affinity_spec);
-        opt.execution.verbose = input.verbose;
-        opt.execution.device_index = input.gpu_device_index;
-        opt.execution.gpu_mul_path = input.gpu_mul_path;
-        opt.execution.gpu_sqr_path = input.gpu_sqr_path;
-        opt.execution.gpu_add_path = input.gpu_add_path;
-        opt.execution.gpu_sub_path = input.gpu_sub_path;
-        opt.execution.gpu_special_mult_path = input.gpu_special_mult_path;
-        opt.identity.sigma_fixed = input.sigma_fixed;
-        opt.identity.fixed_sigma64 = input.fixed_sigma64;
-        if (input.ckpt_set) {
-            const auto ms = input.ckpt_seconds * 1000.0;
-            opt.persistence.ckpt_ms = ms <= 0 ? 0
-                                      : ms >= double(ULONG_MAX)
-                                          ? ULONG_MAX
-                                          : static_cast<unsigned long>(std::llround(ms));
-        }
-        opt.persistence.tmp_dir = normalize_path_local(input.tmp_dir.empty() ? "." : input.tmp_dir);
-        opt.persistence.exponent_cache_dir =
-            normalized_cache_dir(input.exp_cache, get_exe_dir_local());
+        const auto& selection = opt.execution.selection;
         out.save_file = input.savefilename;
         out.append_save = input.saveappend;
         // Keep exact k*b^n+c metadata when the direct expression supplies it.
@@ -243,124 +209,12 @@ bool normalize_direct(const CliInput& input, const EcmQueueConfig& cfg,
     }
 }
 
-void normalize_cli(CliInput& input) {
-    const EcmQueueConfig defaults;
-    if (!input.device_set)
-        input.gpu_device_index = defaults.device;
-    if (!input.gpu_param_set)
-        input.gpu_param_cli = defaults.gpu_param;
-    if (!input.explicit_options.count("--stage1-threads"))
-        input.stage1_threads = defaults.stage1_threads;
-    if (!input.explicit_options.count("--naf-w"))
-        input.naf_w = defaults.naf_w;
-    if (input.pos.size() > 2)
-        throw std::runtime_error(
-            "INPUT[cli]: expected B1 [B2], received extra positional arguments");
-    for (size_t i = 0; i < input.pos.size(); ++i) {
-        const auto& raw = input.pos[i];
-        size_t used = 0;
-        double n = 0;
-        try {
-            n = std::stod(raw, &used);
-        } catch (...) {
-        }
-        if (used != raw.size() || !std::isfinite(n) || (i == 0 ? n <= 0 : n < 0))
-            throw std::runtime_error("INPUT[cli] key=" + std::string(i == 0 ? "B1" : "B2") +
-                                     " value='" + raw + "'; expected finite " +
-                                     (i == 0 ? "positive" : "nonnegative") + " bound");
-    }
-}
-
-void normalize_cli(CliInput& input, const EcmQueueConfig& cfg) {
-    const auto absent = [&](const char* key) { return !input.explicit_options.count(key); };
-    if (absent("-v"))
-        input.verbose =
-            (input.pos.empty() || cfg.config_keys.count("verbose")) ? cfg.verbose : false;
-    if (absent("--curve"))
-        ecm_stage1::parse_curve_model(cfg.curve_model, input.selection.curve);
-    if (absent("--target"))
-        ecm_stage1::parse_execution_target(cfg.execution_target, input.selection.target);
-    if (absent("--impl"))
-        ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation,
-                                             input.selection.cpu_implementation);
-    if (absent("--reduction"))
-        ecm_stage1::parse_simd_reduction(cfg.simd_reduction, input.selection.simd_reduction);
-    if (absent("--lcm"))
-        ecm_stage1::parse_scalar_construction(cfg.scalar_construction,
-                                              input.selection.scalar_construction);
-    if (!input.device_set)
-        input.gpu_device_index = cfg.device;
-    if (!input.gpu_param_set)
-        input.gpu_param_cli = cfg.gpu_param;
-    if (absent("--stage1-threads"))
-        input.stage1_threads = cfg.stage1_threads;
-    if (absent("--naf-w"))
-        input.naf_w = cfg.naf_w;
-    if (absent("--affinity"))
-        input.affinity_spec = cfg.affinity;
-    if (!input.ckpt_set) {
-        input.ckpt_seconds = cfg.ckpt_seconds;
-        input.ckpt_set = true;
-    }
-    if (!input.sigma_fixed && cfg.sigma) {
-        input.fixed_sigma64 = cfg.sigma;
-        input.sigma_fixed = true;
-    }
-    if (absent("--tmp-dir"))
-        input.tmp_dir = cfg.config_keys.count("tmp_dir")
-                            ? resolve_rel_local(get_exe_dir_local(), cfg.tmp_dir)
-                            : ".";
-    if (absent("--exp-cache"))
-        input.exp_cache = cfg.exp_cache;
-    if (absent("--mul"))
-        input.gpu_mul_path = cfg.kernel_mul;
-    if (absent("--sqr"))
-        input.gpu_sqr_path = cfg.kernel_sqr;
-    if (absent("--add"))
-        input.gpu_add_path = cfg.kernel_add;
-    if (absent("--sub"))
-        input.gpu_sub_path = cfg.kernel_sub;
-    if (absent("--special-mult"))
-        input.gpu_special_mult_path = cfg.kernel_special_mult;
-    if (absent("--tpi"))
-        input.runtime.tpi = cfg.tpi;
-    if (absent("--wg"))
-        input.runtime.wg_size = cfg.wg_size;
-}
-
-bool normalize_config(const ParsedConfig& parsed, const CliInput& input, EcmQueueConfig& cfg,
-                      std::string& error) {
-    try {
-        cfg = EcmQueueConfig{};
-        const auto entries = ecm_config::cli_entries(parsed.lines, input.worker_index);
-        ecm_config::apply(static_cast<ecm_config::Stage1Values&>(cfg), entries,
-                          ecm_config::stage1_bindings);
-        for (const auto& entry : entries)
-            cfg.config_keys.insert(entry.first);
-    } catch (const std::exception& e) {
-        error = "INPUT[config] " + parsed.path + " worker=" + std::to_string(input.worker_index) +
-                " " + e.what();
-        return false;
-    }
-    if (!normalize_config(cfg, input, error)) {
-        error = parsed.path + ": " + error;
-        return false;
-    }
-    return true;
-}
-
-ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg, const std::string& exe,
-                                            const std::string& base, int worker) {
+static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
+                                                   const std::string& exe, const std::string& base,
+                                                   const std::string& cwd, int worker) {
     ecm_stage1::Stage1Options opt;
-    auto& s = opt.execution.selection;
-    if (!ecm_stage1::parse_curve_model(cfg.curve_model, s.curve) ||
-        !ecm_stage1::parse_execution_target(cfg.execution_target, s.target) ||
-        !ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, s.cpu_implementation) ||
-        !ecm_stage1::parse_simd_reduction(cfg.simd_reduction, s.simd_reduction) ||
-        !ecm_stage1::parse_scalar_construction(cfg.scalar_construction, s.scalar_construction))
-        throw std::runtime_error("INPUT[normalize]: invalid execution selection");
-    s.gpu_param = cfg.gpu_param;
-    opt.execution.affinity_cpus = ecm_config::affinity_indices(cfg.affinity);
+    opt.execution.selection = cfg.selection;
+    opt.execution.affinity_cpus = cfg.affinity_cpus;
     opt.execution.stage1_threads = cfg.stage1_threads;
     opt.execution.naf_w = cfg.naf_w;
     opt.execution.verbose = cfg.verbose;
@@ -371,14 +225,13 @@ ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg, const std
     opt.execution.gpu_sub_path = cfg.kernel_sub;
     opt.execution.gpu_special_mult_path = cfg.kernel_special_mult;
     opt.persistence.save_name_pattern = cfg.save_name_pattern;
-    opt.persistence.exponent_cache_dir = normalized_cache_dir(cfg.exp_cache, exe);
+    opt.persistence.exponent_cache_dir = normalized_cache_dir(cfg.exp_cache, exe, cwd);
     const auto ms = cfg.ckpt_seconds * 1000.0;
     opt.persistence.ckpt_ms = ms <= 0 ? 0
                               : ms >= double(ULONG_MAX)
                                   ? ULONG_MAX
                                   : static_cast<unsigned long>(std::llround(ms));
-    opt.persistence.ckpt_backups =
-        static_cast<unsigned>(std::clamp(cfg.ckpt_backups, 0, int(ECM_STAGE1_MAX_BACKUPS)));
+    opt.persistence.ckpt_backups = static_cast<unsigned>(cfg.ckpt_backups);
     opt.persistence.tmp_dir = resolve_rel_local(exe, cfg.tmp_dir);
     opt.identity.sigma_fixed = cfg.sigma != 0;
     opt.identity.fixed_sigma64 = cfg.sigma;
@@ -386,7 +239,7 @@ ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg, const std
     return opt;
 }
 
-bool validate_cli_mode(const CliInput& input, std::string& error) {
+bool validate_cli_mode(const ParsedCli& input, std::string& error) {
     const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels;
     const std::vector<std::string> forbidden = {
         "--curve", "--gpu-param", "--lcm",        "-gpucurves",      "-save",
@@ -394,102 +247,140 @@ bool validate_cli_mode(const CliInput& input, std::string& error) {
     for (const auto& key : forbidden)
         if (queue && input.explicit_options.count(key)) {
             const auto& at = input.explicit_options.at(key);
-            error = "INPUT[conflict] argv[" + std::to_string(at.first) + "] key=" + key +
-                    " value='" + at.second +
-                    "'; task fields belong to worktodo in queue mode. Remove this CLI option and "
+            error = "INPUT[conflict] argv[" + std::to_string(at.argument) + "] key=" + key +
+                    " value='" + at.value +
+                    "'; task fields belong to worktodo in queue mode. Remove this "
+                    "CLI option and "
                     "edit the task/config instead.";
             return false;
         }
-    if (queue && input.sigma_param_set) {
-        error = "INPUT[conflict] key=sigma; queue mode accepts an unprefixed sigma only; "
+    if (queue && input.sigma_param_claim >= 0) {
+        error = "INPUT[conflict] key=sigma; queue mode accepts an unprefixed sigma "
+                "only; "
                 "curve/param belong to the task";
         return false;
     }
     return true;
 }
 
-bool normalize_config(EcmQueueConfig& cfg, const CliInput& input, std::string& error) {
+// Cross-field execution preferences have one rule shared by startup and task
+// admission.
+static bool execution_preferences_error(const ecm_stage1::Selection& s, std::string& error) {
+    if (s.target == ecm_stage1::ExecutionTarget::Gpu &&
+        (s.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
+         s.simd_reduction != ecm_stage1::SimdReduction::Auto)) {
+        error = "keys=target,impl,reduction; --impl and --reduction require "
+                "--target cpu";
+        return true;
+    }
+    if (s.target == ecm_stage1::ExecutionTarget::Cpu &&
+        s.simd_reduction != ecm_stage1::SimdReduction::Auto &&
+        s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd) {
+        error = "keys=impl,reduction; explicit --reduction requires --impl simd";
+        return true;
+    }
+    return false;
+}
+
+bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, const InputPaths& paths,
+                        Stage1Settings& out, std::string& error) {
     if (!validate_cli_mode(input, error))
         return false;
-    static const std::pair<const char*, const char*> keys[] = {
-        {"-v", "verbose"},
-        {"--target", "target"},
-        {"--impl", "impl"},
-        {"--reduction", "reduction"},
-        {"--stage1-threads", "stage1_threads"},
-        {"--naf-w", "naf_w"},
-        {"--affinity", "affinity"},
-        {"-d", "device"},
-        {"--ckpt", "ckpt_seconds"},
-        {"-gpuckpt", "ckpt_seconds"},
-        {"--tmp-dir", "tmp_dir"},
-        {"--exp-cache", "exp_cache"},
-        {"--mul", "kernel_mul"},
-        {"--sqr", "kernel_sqr"},
-        {"--add", "kernel_add"},
-        {"--sub", "kernel_sub"},
-        {"--special-mult", "kernel_special_mult"},
-        {"--tpi", "tpi"},
-        {"--wg", "wg_size"},
-        {"-sigma", "sigma"},
-        {"--sigma", "sigma"}};
     try {
-        ecm_config::Entries entries;
-        // CLI order matters for aliases; the last explicit spelling wins.
-        std::vector<std::pair<int, std::pair<std::string, std::string>>> ordered;
-        for (const auto& pair : keys)
-            if (input.explicit_options.count(pair.first)) {
-                const auto& at = input.explicit_options.at(pair.first);
-                auto value = std::string(pair.first) == "-v" ? "true" : at.second;
-                if (std::string(pair.second) == "sigma")
-                    value = std::to_string(input.fixed_sigma64);
-                ordered.push_back({at.first, {pair.second, value}});
-            }
-        std::sort(ordered.begin(), ordered.end(),
-                  [](const auto& a, const auto& b) { return a.first < b.first; });
-        for (const auto& entry : ordered)
-            ecm_config::replace_entry(entries, entry.second.first, entry.second.second);
-        ecm_config::apply(static_cast<ecm_config::Stage1Values&>(cfg), entries,
-                          ecm_config::stage1_bindings);
-        if (cfg.device < 0)
-            throw std::runtime_error("key=device value='" + std::to_string(cfg.device) +
-                                     "'; expected integer >=0");
-        if (cfg.naf_w != 0 && (cfg.naf_w < 2 || cfg.naf_w > 12))
-            throw std::runtime_error("key=naf_w; expected 0 (auto) or [2,12], CPU requires [3,12]");
-        if (cfg.tpi < 1 || cfg.tpi > 32 || (cfg.tpi & (cfg.tpi - 1)))
-            throw std::runtime_error("key=tpi; expected {1,2,4,8,16,32}");
-        if (cfg.wg_size < 0)
-            throw std::runtime_error("key=wg_size; expected integer >=0");
-        if (cfg.sync_mode != "incremental" && cfg.sync_mode != "full")
-            throw std::runtime_error("key=sync_mode value='" + cfg.sync_mode +
-                                     "'; expected incremental|full");
-        ecm_stage1::ExecutionTarget target;
-        ecm_stage1::CpuImplementation implementation;
-        ecm_stage1::SimdReduction reduction;
-        if (!ecm_stage1::parse_execution_target(cfg.execution_target, target) ||
-            !ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, implementation) ||
-            !ecm_stage1::parse_simd_reduction(cfg.simd_reduction, reduction))
-            throw std::runtime_error("invalid target/impl/reduction; expected cpu|gpu, "
-                                     "auto|simd|scalar, auto|montgomery|mersenne-fold");
-        if (target == ecm_stage1::ExecutionTarget::Gpu &&
-            (implementation != ecm_stage1::CpuImplementation::Auto ||
-             reduction != ecm_stage1::SimdReduction::Auto))
-            throw std::runtime_error("keys=target,impl,reduction values='" + cfg.execution_target +
-                                     "," + cfg.cpu_implementation + "," + cfg.simd_reduction +
-                                     "'; GPU requires impl=auto and reduction=auto; choose "
-                                     "target=cpu for CPU preferences");
-        if (target == ecm_stage1::ExecutionTarget::Cpu &&
-            reduction != ecm_stage1::SimdReduction::Auto &&
-            implementation != ecm_stage1::CpuImplementation::IfmaSimd)
-            throw std::runtime_error("keys=impl,reduction values='" + cfg.cpu_implementation + "," +
-                                     cfg.simd_reduction +
-                                     "'; explicit reduction requires impl=simd");
-        if (target == ecm_stage1::ExecutionTarget::Cpu && cfg.naf_w == 2)
-            throw std::runtime_error("key=naf_w value='2'; CPU requires 0 (auto) or [3,12]");
-        (void)ecm_config::affinity_indices(cfg.affinity);
+        auto& cfg = out.config;
+        project_stage1_config(parsed, input.worker_index, cfg);
+        const bool direct = !input.pos.empty() && !input.show_gpu_info;
+        // Typed CLI values overlay configuration once. Presence belongs to the
+        // source; no effective value is written back into ParsedCli.
+        if (input.has("-v"))
+            cfg.verbose = input.verbose;
+        else if (direct && !cfg.config_keys.count("verbose"))
+            cfg.verbose = false;
+        if (input.has("-d"))
+            cfg.device = input.gpu_device_index;
+        if (input.has("--stage1-threads"))
+            cfg.stage1_threads = input.stage1_threads;
+        if (input.has("--naf-w"))
+            cfg.naf_w = input.naf_w;
+        if (input.has("--affinity"))
+            cfg.affinity_cpus = input.affinity_cpus;
+        if (input.has("--ckpt"))
+            cfg.ckpt_seconds = input.ckpt_seconds;
+        if (input.has("--exp-cache"))
+            cfg.exp_cache = input.exp_cache;
+        if (input.has("--mul"))
+            cfg.kernel_mul = input.gpu_mul_path;
+        if (input.has("--sqr"))
+            cfg.kernel_sqr = input.gpu_sqr_path;
+        if (input.has("--add"))
+            cfg.kernel_add = input.gpu_add_path;
+        if (input.has("--sub"))
+            cfg.kernel_sub = input.gpu_sub_path;
+        if (input.has("--special-mult"))
+            cfg.kernel_special_mult = input.gpu_special_mult_path;
+        if (input.has("--tpi"))
+            cfg.tpi = input.runtime.tpi;
+        if (input.has("--wg"))
+            cfg.wg_size = input.runtime.wg_size;
+        if (input.has("-sigma"))
+            cfg.sigma = input.fixed_sigma64;
+        auto& s = cfg.selection;
+        if (input.has("--curve"))
+            s.curve = input.selection.curve;
+        if (input.has("--target"))
+            s.target = input.selection.target;
+        if (input.has("--impl"))
+            s.cpu_implementation = input.selection.cpu_implementation;
+        if (input.has("--reduction"))
+            s.simd_reduction = input.selection.simd_reduction;
+        if (input.has("--lcm"))
+            s.scalar_construction = input.selection.scalar_construction;
+        if (input.has("--gpu-param"))
+            s.gpu_param = input.gpu_param_cli;
+        if (direct) {
+            const bool prefixed = input.sigma_param_claim >= 0;
+            if (s.curve == ecm_stage1::CurveModel::Edwards &&
+                s.target == ecm_stage1::ExecutionTarget::Gpu &&
+                (input.has("--gpu-param") || prefixed || input.print_group_order))
+                throw std::runtime_error("GPU Edwards uses an unprefixed sigma; "
+                                         "--gpu-param and --go do not apply");
+            if (s.target == ecm_stage1::ExecutionTarget::Cpu && input.has("--gpu-param"))
+                throw std::runtime_error("--gpu-param requires --target gpu");
+            if (s.target == ecm_stage1::ExecutionTarget::Cpu && prefixed &&
+                (s.curve != ecm_stage1::CurveModel::Montgomery || input.sigma_param_claim != 0))
+                throw std::runtime_error(
+                    "CPU accepts a parameterized sigma only for Montgomery PARAM0");
+            if (prefixed && !ecm_stage1::resolve_gpu_param(s.gpu_param, input.has("--gpu-param"),
+                                                           input.sigma_param_claim, s.gpu_param))
+                throw std::runtime_error("conflict between -sigma parametrization and --gpu-param");
+        }
+        // A query shares projection and overrides, but does not invent a task or
+        // impose computation-only capability/combination checks.
+        if (!input.show_gpu_info && !input.show_kernels && execution_preferences_error(s, error))
+            throw std::runtime_error(error);
+        out.options = normalize_options(cfg, paths.exe, paths.config_directory, paths.cwd,
+                                        input.worker_index);
+        if (input.has("--tmp-dir"))
+            out.options.persistence.tmp_dir =
+                resolve_rel_local(direct ? paths.cwd : paths.exe,
+                                  direct && input.tmp_dir.empty() ? "." : input.tmp_dir);
+        else if (direct && !cfg.config_keys.count("tmp_dir"))
+            out.options.persistence.tmp_dir = paths.cwd;
+        if (direct && out.options.persistence.tmp_dir.empty())
+            out.options.persistence.tmp_dir = paths.cwd;
+        if (!input.show_gpu_info && s.target == ecm_stage1::ExecutionTarget::Cpu &&
+            stage1_task_error(out.options, 0, error))
+            throw std::runtime_error(error);
+        out.runtime = input.runtime;
+        out.runtime.device_index = out.options.execution.device_index;
+        out.runtime.tpi = cfg.tpi;
+        out.runtime.wg_size = cfg.wg_size;
+        if (!input.gp_bin_path.empty())
+            out.runtime.gp_bin = input.gp_bin_path;
         return true;
     } catch (const std::exception& e) {
-        error = "INPUT[normalize] worker=" + std::to_string(input.worker_index) + " " + e.what();
+        error = "INPUT[normalize] " + parsed.path +
+                " worker=" + std::to_string(input.worker_index) + " " + e.what();
         return false;
     }
 }
@@ -579,18 +470,8 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
         error = "Edwards uses its fixed 48*lcm(1..B1) scalar; --lcm 12 is unsupported";
         return true;
     }
-    if (selection.target == ecm_stage1::ExecutionTarget::Gpu &&
-        (selection.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
-         selection.simd_reduction != ecm_stage1::SimdReduction::Auto)) {
-        error = "--impl and --reduction require --target cpu";
+    if (execution_preferences_error(selection, error))
         return true;
-    }
-    if (selection.target == ecm_stage1::ExecutionTarget::Cpu &&
-        selection.simd_reduction != ecm_stage1::SimdReduction::Auto &&
-        selection.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd) {
-        error = "explicit --reduction requires --impl simd";
-        return true;
-    }
     if (selection.target != ecm_stage1::ExecutionTarget::Gpu ||
         selection.curve == ecm_stage1::CurveModel::Edwards)
         return false;

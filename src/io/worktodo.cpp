@@ -1,24 +1,25 @@
 #include "io/worktodo.h"
-#include "io/files.h"
 #include "io/config_format.h"
+#include "io/files.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <chrono>
+#include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <memory>
+#include <sstream>
 #include <thread>
-#include <chrono>
 #include <utility>
 #include <vector>
-#include <cerrno>
-#include <climits>
-#include <cmath>
-#include <limits>
-#include <sstream>
-#include <iomanip>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -358,7 +359,8 @@ bool ecm_parse_ecm2_line(const std::string& line, Ecm2Task& task, std::string& e
     }
 
     // Prime95 将 ECM= 与 ECM2= 视为等价 (commonc.c:2934)。
-    // 格式: [<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves>][,<sigma>][,"factors"]
+    // 格式:
+    // [<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves>][,<sigma>][,"factors"]
     std::string body;
     if (s.size() > 5 && s.compare(0, 5, "ECM2=") == 0) {
         body = s.substr(5);
@@ -441,7 +443,8 @@ bool ecm_parse_ecm2_line(const std::string& line, Ecm2Task& task, std::string& e
         task.B1 = v;
     }
 
-    // Optional positional fields (匹配 Prime95): B2 (默认 0), curves_to_run (默认 100), sigma, factors。
+    // Optional positional fields (匹配 Prime95): B2 (默认 0), curves_to_run (默认 100), sigma,
+    // factors。
     std::size_t p = idx + 5;
     task.B2 = 0.0;
     if (cols.size() > p) {
@@ -644,57 +647,22 @@ LineKind classify_line(const std::string& raw, int* section_out, int* header_out
     return LineKind::Task;
 }
 
-bool worker_matches(int section, int worker) {
-    return worker <= 0 || section == worker;
-}
+bool worker_matches(int section, int worker) { return worker <= 0 || section == worker; }
 
+// Preserve the legacy bool-returning queue interface; the platform gate is
+// shared with GUI editing, including the complete read-modify-write lifetime.
 struct QueueEditLock {
-#ifdef _WIN32
-    HANDLE handle = INVALID_HANDLE_VALUE;
-#else
-    int fd = -1;
-#endif
+    std::unique_ptr<ecm_io::FileLock> lock;
+    std::string error;
     explicit QueueEditLock(const std::string& path) {
-        const std::string name = path + ".edit.lock";
-        for (int attempt = 0; attempt < 100; ++attempt) {
-#ifdef _WIN32
-            const std::wstring wide = utf8_to_wide(name);
-            handle = CreateFileW(wide.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                 OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (handle != INVALID_HANDLE_VALUE)
-                break;
-#else
-            fd = open(name.c_str(), O_CREAT | O_RDWR, 0666);
-            if (fd >= 0 && flock(fd, LOCK_EX | LOCK_NB) == 0)
-                break;
-            if (fd >= 0) {
-                close(fd);
-                fd = -1;
-            }
-#endif
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        try {
+            lock = std::make_unique<ecm_io::FileLock>(path, ecm_io::FileLockDomain::QueueEdit);
+        } catch (const std::exception& failure) {
+            error = failure.what();
+            std::fprintf(stderr, "ERROR: %s\n", error.c_str());
         }
     }
-
-    bool valid() const {
-#ifdef _WIN32
-        return handle != INVALID_HANDLE_VALUE;
-#else
-        return fd >= 0;
-#endif
-    }
-
-    ~QueueEditLock() {
-#ifdef _WIN32
-        if (valid())
-            CloseHandle(handle);
-#else
-        if (valid()) {
-            flock(fd, LOCK_UN);
-            close(fd);
-        }
-#endif
-    }
+    bool valid() const { return bool(lock); }
 };
 
 } // namespace
@@ -962,7 +930,7 @@ bool ecm_worktodo_append_unique(const std::string& path, const std::string& fini
     }
     QueueEditLock lock(path);
     if (!lock.valid()) {
-        err = "cannot lock Stage2 queue: " + path;
+        err = lock.error;
         return false;
     }
 

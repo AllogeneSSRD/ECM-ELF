@@ -1,5 +1,5 @@
-#include <memory>
 #include <cstring>
+#include <memory>
 #ifdef _WIN32
 #include <direct.h>
 #else
@@ -41,30 +41,89 @@ struct FileLock::State {
 #endif
 };
 
-FileLock::FileLock(const std::string& name) {
-    auto state = new State;
-    const auto path = std::filesystem::u8path(name + ".publish.lock");
-    for (int attempt = 0; attempt < 100; ++attempt) {
+std::string file_identity(const std::filesystem::path& name) {
+    std::error_code error;
+    // Resolve existing directory aliases before removing '..': a symlink's
+    // parent may differ from the lexical parent of the spelling supplied.
+    const auto absolute = std::filesystem::absolute(name);
+    const auto status = std::filesystem::symlink_status(absolute, error);
+    if (error && error != std::errc::no_such_file_or_directory)
+        throw std::runtime_error("cannot inspect writer identity: " + name.u8string() + ": " +
+                                 error.message());
+    if (std::filesystem::is_symlink(status))
+        throw std::runtime_error("writer target is a symbolic link; use its actual path: " +
+                                 name.u8string());
+    if (std::filesystem::is_regular_file(status)) {
+        const auto links = std::filesystem::hard_link_count(absolute, error);
+        if (error || links > 1)
+            throw std::runtime_error("cannot establish unique writer identity (hard link or "
+                                     "inaccessible attributes): " +
+                                     name.u8string());
+    }
+    return std::filesystem::weakly_canonical(absolute).u8string();
+}
+
+bool file_identity_less(const std::string& first, const std::string& second) {
 #ifdef _WIN32
-        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    // A missing leaf retains its original spelling in weakly_canonical.
+    // Use the same case-insensitive order for fresh and existing resources.
+    const auto a = std::filesystem::u8path(first).wstring();
+    const auto b = std::filesystem::u8path(second).wstring();
+    const auto compared =
+        CompareStringOrdinal(a.c_str(), int(a.size()), b.c_str(), int(b.size()), TRUE);
+    if (!compared)
+        throw std::runtime_error("cannot compare writer identities");
+    return compared == CSTR_LESS_THAN;
+#else
+    return first < second;
+#endif
+}
+
+FileLock::FileLock(const std::string& name, FileLockDomain domain, uint32_t wait_ms) {
+    auto state = std::make_unique<State>();
+    const auto resource = file_identity(std::filesystem::u8path(name));
+    const auto path = std::filesystem::u8path(
+        resource + (domain == FileLockDomain::QueueEdit ? ".edit.lock" : ".publish.lock"));
+    const auto begin = std::chrono::steady_clock::now();
+    const auto deadline = begin + std::chrono::milliseconds(wait_ms);
+    unsigned long system_error = 0;
+    for (;;) {
+#ifdef _WIN32
+        state->handle =
+            CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
         if (state->handle != INVALID_HANDLE_VALUE) {
-            state_ = state;
+            state_ = state.release();
             return;
         }
+        system_error = GetLastError();
+        const bool busy =
+            system_error == ERROR_SHARING_VIOLATION || system_error == ERROR_LOCK_VIOLATION;
 #else
         state->fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
         if (state->fd >= 0 && ::flock(state->fd, LOCK_EX | LOCK_NB) == 0) {
-            state_ = state;
+            state_ = state.release();
             return;
         }
+        system_error = errno;
+        const bool busy =
+            system_error == EWOULDBLOCK || system_error == EAGAIN || system_error == EINTR;
         if (state->fd >= 0)
             ::close(state->fd);
 #endif
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const auto now = std::chrono::steady_clock::now();
+        if (!busy || now >= deadline) {
+            const auto waited =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - begin).count();
+            throw std::runtime_error(
+                std::string(busy ? "writer lock busy: " : "cannot open writer lock: ") + resource +
+                "; waited_ms=" + std::to_string(waited) +
+                "; system_error=" + std::to_string(system_error));
+        }
+        std::this_thread::sleep_for(
+            (std::min)(std::chrono::milliseconds(50),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)));
     }
-    delete state;
-    throw std::runtime_error("cannot acquire publication lock: " + name);
 }
 
 FileLock::~FileLock() {
@@ -142,11 +201,13 @@ void write_atomic(const std::filesystem::path& path, const std::string& bytes,
         path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
     const int dir = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
     if (dir < 0)
-        throw std::runtime_error("cannot open publication directory: " + parent.string());
+        throw PublicationUncertain("cannot open publication directory after replacement: " +
+                                   parent.string());
     const bool durable = ::fsync(dir) == 0;
     ::close(dir);
     if (!durable)
-        throw std::runtime_error("cannot flush publication directory: " + parent.string());
+        throw PublicationUncertain("cannot flush publication directory after replacement: " +
+                                   parent.string());
 #endif
 }
 } // namespace ecm_io
@@ -209,9 +270,7 @@ void ecm_io::set_work_dir(const char* dir) {
     trim_trailing_slashes(g_work_dir);
 }
 
-const char* ecm_io::work_dir() {
-    return g_work_dir.c_str();
-}
+const char* ecm_io::work_dir() { return g_work_dir.c_str(); }
 
 std::string ecm_io::resolve_data_path(const char* path) {
     if (path == nullptr || path[0] == '\0') {
@@ -294,9 +353,7 @@ OwnerLease::OwnerLease(const std::string& queue, int worker, const char* suffix)
     acquire(queue, worker, suffix);
 }
 
-OwnerLease::~OwnerLease() {
-    release();
-}
+OwnerLease::~OwnerLease() { release(); }
 
 void OwnerLease::acquire(const std::string& queue, int worker, const char* suffix) {
     auto incoming = std::make_unique<State>();
@@ -319,8 +376,8 @@ void OwnerLease::acquire(const std::string& queue, int worker, const char* suffi
         const bool ambiguous = !GetFileInformationByHandle(input, &info) || info.nNumberOfLinks > 1;
         CloseHandle(input);
         if (ambiguous)
-            throw std::runtime_error(
-                "cannot establish unique queue identity (hard link or inaccessible attributes)");
+            throw std::runtime_error("cannot establish unique queue identity (hard "
+                                     "link or inaccessible attributes)");
     }
     path += suffix;
     state->handle =

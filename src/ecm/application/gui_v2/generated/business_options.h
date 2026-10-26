@@ -38,7 +38,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","lcm","[1|12]","option_stage1_lcm","string",false,false,0,0},
     {"stage1","sigma","<x:Z,0..2^64-1>","option_stage1_sigma","u64",false,false,0,0},
     {"stage1","p95_dir","<dir>","option_stage1_p95_dir","string",false,false,0,0},
-    {"stage1","ckpt_backups","<x:Z,0..16>","option_stage1_ckpt_backups","int",false,false,0,0},
+    {"stage1","ckpt_backups","<x:Z,0..16>","option_stage1_ckpt_backups","int",true,true,0,16},
     {"stage1","ckpt_seconds","<x:R,finite,x>=0>","option_stage1_ckpt_seconds","double",false,false,0,0},
     {"stage1","device","<x:Z,0..device_count-1>","option_stage1_device","int",false,false,0,0},
     {"stage1","gpu_param","[0|2|3]","option_stage1_gpu_param","int",false,false,0,0},

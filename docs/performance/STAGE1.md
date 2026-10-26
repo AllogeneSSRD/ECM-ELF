@@ -376,3 +376,11 @@ normalized PRAC 按 ADD=A、DBL=D 统计：ADD=4M+2S，DBL=3M+2S；若平方与�
 PRAC表对应1800MHz/55W条件；GPU Edwards本轮条件见上文，保持分开记录。不同批次、驱动、采样窗口和构建的点不能直接拼成新的加速比。
 
 对通用默认的改变仍需更多位宽、曲线族、设备和完整 B1 验证；现阶段优化优先级及其他未完成工作见 [TODO](../TODO.md)。
+
+## 收尾与输入归一化
+
+0.53.3 的 Windows 实测 CPU 为 AMD Ryzen AI 9 HX 370 w/ Radeon 890M，GPU 为 RTX 4070 Ti、driver 610.88、285 W power limit；输入 N=2^p−1，p=521/10267，B1=100，1000 曲线，sigma=100000，Montgomery PARAM0 与 Edwards，exp_cache=off、定期 checkpoint 关闭。锁修复阶段构建与完整归一化构建分别每格 2 个新进程样本，采用 ABBA 顺序，共 24 个计时样本；完整二进制 SHA、原始逐进程数据、GPU 时钟/负载/功耗与构建方式见[验收记录](../web/stage1-fourth-refactor-review-20261025.html#implementation-result)及 `data/experiments/stage1_fourth_refactor_20261026/qualification_final/summary.json`。这不是与旧 30 秒问题版本的对照。
+
+父进程收到 save 完成行至 results 行，新结果文件为 0.123–0.257 s；在 10000 行历史、备份及 Montgomery P95 同步配置下为 0.276–0.284 s。results 至 queue done 单独记录；两段相邻，不重复累计内部嵌套计时。候选进程峰值约 136–202 MiB，每 20 ms 读取 Windows PeakWorkingSetSize；长历史组约 143–162 MiB，不与设备 payload 或其他进程相加。这些输入未出现约 30 秒固定收尾等待；小样本不足以证明归一化具有稳定百分比提速。
+
+门禁覆盖实际 worker 的 23 组输入/队列合同、P95 103 项回归、确定性跨进程 writer、两种 CUDA 曲线的停止恢复，以及 CPU/CUDA Stage2 在混合历史上的追加。OpenCL 完整构建及其 CPU/query 路径通过，本轮未测 OpenCL 算术核；POSIX/Android 运行未验收。

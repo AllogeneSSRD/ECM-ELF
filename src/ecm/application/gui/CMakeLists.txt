@@ -43,6 +43,9 @@ add_executable(ecm_gui WIN32
     worker_selftest.cpp
     worktodo_gen.cpp
     ${ECM_GUI_SOURCES})
+
+# Queue generation uses the same short edit gate as the workers.
+target_sources(ecm_gui PRIVATE "${CMAKE_SOURCE_DIR}/src/io/files.cpp")
 target_include_directories(ecm_gui PRIVATE
     ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -114,6 +117,7 @@ ecm_tool_output_root(ecm_gui_log_parse_test)
 # tools/test/test_gui_generator.ps1 can compare its output byte-for-byte with
 # tools/ecm_worktodo/ecm.py.
 add_executable(ecm_gui_gen_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tools/test/gui/gen_test.cpp" worktodo_gen.cpp)
+target_sources(ecm_gui_gen_test PRIVATE "${CMAKE_SOURCE_DIR}/src/io/files.cpp")
 target_include_directories(ecm_gui_gen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 target_compile_options(ecm_gui_gen_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_gen_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

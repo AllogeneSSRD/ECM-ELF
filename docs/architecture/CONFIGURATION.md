@@ -18,10 +18,14 @@
 
 [config_format.h](../../src/io/config_format.h) 提供共享 TOML 文法及标量解析，支持带引号的字符串、布尔值、整数、浮点数及窗口整数数组，允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/ecm/application/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
 
-Stage1 的 [config.cpp](../../src/io/config.cpp) 读取显式值、所在分区和源行，校验显式非法值，不补任务默认或改变运行时单例。[normalize.cpp](../../src/io/normalize.cpp) 从生成默认值开始应用全局、worker 与显式 CLI，保留配置键的指定状态，再生成拥有自身数据的任务输入。被高优先级值覆盖的非法配置仍会报错。启动所需的配置路径/worker 默认与完整任务归一化分开。Stage2 复用同一文法和配置读取，保留其现有执行编排。
+Stage1 的 [cli.cpp](../../src/io/cli.cpp) 一次转换每个显式选项并保留来源；别名按最后出现生效，非法的较早值不会因覆盖而消失。[config.cpp](../../src/io/config.cpp) 一次读取 TOML 并校验所有显式值，保留分区、源行与 typed scope，不补任务默认或改变运行时单例。生成绑定同时提供赋值和已解析字段复制，worker 投影不再往返文本。
+
+[normalize.cpp](../../src/io/normalize.cpp) 的 `normalize_settings()` 从生成默认开始，应用全局、worker 和显式 CLI，生成启动设置；main 安装一次 runtime。`normalize_direct()` 与 `normalize_worktodo()` 分别接收该设置，形成拥有自身数据的冻结任务。启动不回填 CLI，任务循环不重读 TOML；Stage2 接收端投影复用原始启动快照，worktodo 仍每轮重读。Stage2 保留其现有编排。
+
+`ckpt_backups` 的 0..16 范围由配置定义与生成绑定拒绝越界值，不静默截断；负 `ckpt_seconds` 仍归一化为禁用定期存档。重复 sigma 完整替换值和可选 param 声明；独立显式 `--gpu-param` 的矛盾检查继续保留。
 
 CLI/配置错误停止启动，诊断包含来源、键、原值和预期范围；选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
 
 ## 运行时限制
 
-JSON 中的静态范围与类型由生成绑定检查。设备存在性、路径冲突、save/任务匹配、D/NTT 形状及 Auto B2 标定资格依赖实际运行环境，由消费端验证。`worktodo` 与 Stage2 相对路径基于 TOML 所在目录，其他 Stage1 相对路径基于程序目录。具体键、默认值和 worker 覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。
+JSON 中的静态范围与类型由生成绑定检查。设备存在性、路径冲突、save/任务匹配、D/NTT 形状及 Auto B2 标定资格依赖实际运行环境，由消费端验证。队列的 worktodo、自动 Stage2 目标、结果/提交路径及 Stage2 接收端 finished 基于 TOML 目录；Stage1 tmp、finished、日志、备份/P95 与任务 save 基于程序目录。direct 的 CLI save/tmp 基于 CWD，省略或空 tmp 使用 CWD；direct 显式 TOML tmp 基于程序目录。显式相对 exp_cache 基于 CWD，空/省略值默认程序目录，off/none/0/- 保持禁用。配置路径基于程序目录。队列缺少配置时创建模板；direct 缺少默认配置使用默认值，显式缺失报错；gpu-info 缺少配置不创建文件，即使显式指定也保留查询默认。具体键、默认值和 worker 覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。

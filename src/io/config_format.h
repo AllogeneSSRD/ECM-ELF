@@ -2,8 +2,8 @@
 
 // Shared TOML reader. The supported value types are the scalar and integer-array
 // types used by the generated ECM schema. GUI edits retain untouched source lines.
-#include "io/json.h"
 #include "../ecm/application/configuration/generated/ecm_toml_schema.h"
+#include "io/json.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -491,9 +491,7 @@ inline int log_level(const std::string& s) {
     throw std::runtime_error("log level must be quiet|curve|phases|batches|debug or 0..4");
 }
 
-inline void assign_value(std::string& out, const std::string& v) {
-    out = v;
-}
+inline void assign_value(std::string& out, const std::string& v) { out = v; }
 
 inline void assign_value(int& out, const std::string& v) {
     size_t used = 0;
@@ -532,9 +530,7 @@ inline void assign_value(double& out, const std::string& v) {
     out = n;
 }
 
-inline void assign_value(bool& out, const std::string& v) {
-    out = boolean(v, "TOML boolean");
-}
+inline void assign_value(bool& out, const std::string& v) { out = boolean(v, "TOML boolean"); }
 
 inline int gui_integer(const std::string& v, int fallback, int low, int high) {
     if (v.empty())
@@ -592,6 +588,8 @@ inline void gui_rect(std::array<int, 4>& out, const std::string& v) {
 template <class C> struct Binding {
     const char* key;
     void (*assign)(C&, const std::string&);
+    // Project a previously parsed value without converting the source text again.
+    void (*copy)(C&, const C&);
 };
 
 template <class C, size_t N>
