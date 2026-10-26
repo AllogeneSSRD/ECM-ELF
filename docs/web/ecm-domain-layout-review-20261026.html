@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Stage1 / Stage2 领域目录归并规划 · ECM-ELF</title>
+  <title>Stage1 / Stage2 领域目录归并 · 0.53.4 验收</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root{color-scheme:light;--ink:#20313e;--muted:#586a77;--line:#d1dce3;--accent:#176e72}*{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:var(--ink);font:16px/1.85 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1200px;margin:auto;padding:40px 26px 70px}h1{font-size:34px;line-height:1.4;margin:12px 0}h2{font-size:23px;line-height:1.5;margin:14px 0}h3{font-size:18px;margin:20px 0 8px}p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}code,pre,.files{font:13px/1.8 Consolas,monospace}code{background:#edf2f5;border-radius:4px;padding:2px 4px;overflow-wrap:anywhere}pre{margin:0;overflow-x:auto;white-space:pre}.meta,.caption{font-size:13px;color:var(--muted)}.card{background:white;border:1px solid var(--line);border-radius:14px;padding:25px 28px;margin:23px 0;scroll-margin-top:16px}.top{border:2px solid #77a7a5;background:#f5fbfa}.badge{display:inline-block;font-size:12px;font-weight:700;background:#dff2ed;color:#0d6655;padding:2px 9px;border-radius:5px;margin:0 5px 4px 0}.amber{background:#fff0d5;color:#89580c}.gray{background:#edf0f4;color:#536070}.pair{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:15px 0}.flow{background:#f7f9fa;border:1px solid var(--line);border-radius:8px;padding:15px}.node{padding:11px 13px;margin:9px 0;background:white;border:1px solid #adbec9;border-radius:6px;text-align:center;line-height:1.6}.node small{display:block;font-size:12px;color:var(--muted);margin-top:3px}.deep{background:#214854;border:2px solid #214854;color:white}.deep small{color:#d1e6e5}.leak{border-color:#c89569;background:#fff8ef}.arrow{text-align:center;font-size:13px;color:#758693}.seam{border:1px dashed #7d9ba9;padding:9px 11px;border-radius:5px;font-size:13px}.note{padding:11px 15px;border-left:4px solid #bd9452;background:#fff9ee;margin:16px 0;font-size:14px}.good{border-left-color:#428a81;background:#edf7f4}.files{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.tree{background:#183642;color:#e0eded;border-radius:9px;padding:19px 23px;overflow-x:auto}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#eff4f6}ul,ol{padding-left:24px}li{margin:8px 0}nav{display:flex;gap:10px 20px;flex-wrap:wrap;margin:19px 0;font-size:14px}details{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}summary{cursor:pointer;font-weight:600}.wins{display:flex;list-style:none;gap:8px;flex-wrap:wrap;padding:0}.wins li{background:#edf5f3;font-size:13px;padding:3px 9px;border-radius:5px;margin:0}footer{font-size:13px;color:var(--muted)}@media(max-width:760px){main{padding:22px 14px}.card{padding:20px 17px}.pair{grid-template-columns:1fr}h1{font-size:27px}}@media print{.card{break-inside:avoid}nav{display:none}main{padding:0}.pair{grid-template-columns:1fr 1fr}}
@@ -12,10 +12,10 @@
 <body>
 <main>
   <header>
-    <div class="meta">ECM-ELF · 基线 0.53.3 / Git <code>6dad3d1</code> · 2026-10-26 · 目录与交付范围已确认 · 0.53.4 验收中（目录已迁移）</div>
+    <div class="meta">ECM-ELF · 基线 0.53.3 / Git <code>6dad3d1</code> · 2026-10-26 · 目录与交付范围已确认 · 0.53.4 已完成验收</div>
     <h1>按实际计算能力集中，消除 core / service 对同一阶段的重复切分</h1>
-    <div class="meta">0.53.3 基线已冻结，完整目录迁移和必要合并已落地；0.53.4 的 CUDA Stage1 全档与最终性能验收进行中。实线框为 Module，虚线为 Seam，深色框为集中后的 Implementation。</div>
-    <nav><a href="#implementation-contract">实施范围</a><a href="#layout">目录树</a><a href="#ownership">共享与私有</a><a href="#file-inventory">639 文件清单</a><a href="#merges">合并清单</a><a href="#dependent-files">构建与工具</a><a href="#migration">迁移顺序</a><a href="#acceptance">验收</a><a href="#preflight">实施前准备</a></nav>
+    <div class="meta">完整目录迁移、必要合并、IO 缺陷修复与最终验收已完成；当前版本 0.53.4。实线框为 Module，虚线为 Seam，深色框为集中后的 Implementation。</div>
+    <nav><a href="#implementation-result">实施结果</a><a href="#performance-result">耗时与资源</a><a href="#implementation-contract">实施范围</a><a href="#layout">目录树</a><a href="#ownership">共享与私有</a><a href="#file-inventory">639 文件清单</a><a href="#merges">合并清单</a><a href="#dependent-files">构建与工具</a><a href="#migration">迁移顺序</a><a href="#acceptance">验收</a><a href="#preflight">实施前准备</a></nav>
   </header>
 
   <section class="card top" id="recommendation">
@@ -24,13 +24,13 @@
     <p>采用“共同阶段流程 + 曲线阶段实现 + 真实共享支持”的组织方式。<code>edwards_stage1</code> 能表达完整执行能力；CPU / CUDA 作为其内部 Adapter。task、结果合同和标量等跨曲线内容集中到 <code>stage1</code>，而非各复制一份。</p>
     <p>当前 CUDA Stage2 接纳 PARAM0 与 Edwards，重建曲线系数后共用点生成和多项式引擎。因此保留一个 <code>stage2</code> Module，不建立两份对称的 edwards_stage2 / montgomery_stage2 引擎。</p>
     <div class="note good">这里的“抽象”是找出真实拥有者并收拢 Implementation，不增加基类、统一 Runner、Factory 链或新的配置系统。目录集中、文件合并、行为修复应分别审查；搬到一起本身不等于调用复杂度已经降低。</div>
-    <p class="meta">本页是下一轮范围、次序与文件去向的权威规划；<a href="stage1-fifth-refactor-review-20261026.html">候选评估页</a>保留问题依据与延期候选。当前实现仍以 <a href="../architecture/OVERVIEW.md">架构与术语</a>、<a href="../architecture/STAGE1.md">Stage1</a>和 <a href="../architecture/STAGE2.md">Stage2</a>为准，不将规划当成已实现状态。</p>
+    <p class="meta">本页保留本轮实施合同、文件去向和验收证据；<a href="stage1-fifth-refactor-review-20261026.html">候选评估页</a>保留问题依据与延期候选。当前实现以 <a href="../architecture/OVERVIEW.md">架构与术语</a>、<a href="../architecture/STAGE1.md">Stage1</a>和 <a href="../architecture/STAGE2.md">Stage2</a>为准；下方替代方案与迁移批次属于保留的开发草稿。</p>
   </section>
 
   <section class="card" id="implementation-contract">
-    <span class="badge">目录与范围已确认</span><span class="badge gray">实施中；不将中间批次视为完成</span>
+    <span class="badge">目录与范围已确认</span><span class="badge gray">P0–P6 已完成</span>
     <h2>本轮实施范围与兼容约束</h2>
-    <p><b>完整交付终点：</b>整套已同意的领域目录落地、保存／发布合同收口与下列必要文件合并。P1 / P2 只是实施批次，不将完成共同 Stage1 或 Edwards 视为整轮结束。预计实施版本为 <code>0.53.4</code>，按优化增加 z；本次不改版本头。</p>
+    <p><b>完整交付终点：</b>整套已同意的领域目录落地、保存／发布合同收口与下列必要文件合并。P1 / P2 只是实施批次，不将完成共同 Stage1 或 Edwards 视为整轮结束。实施版本为 <code>0.53.4</code>，按优化增加 z。</p>
     <div class="table-wrap"><table><thead><tr><th>本轮包含</th><th>明确延期，目录迁移不代表顺带实施</th></tr></thead><tbody>
       <tr><td>资源身份判重、历史导入单快照、持久替换合同的最小复现与修复；先回归再迁移</td><td>CPU 进度状态拥有权优化</td></tr>
       <tr><td>共同 Stage1、两个曲线阶段、Stage2、共享数学／设备支持及公开头的完整迁移</td><td>OpenCL 拥有结果、TaskResult getter / 双返回码模型收敛</td></tr>
@@ -39,15 +39,42 @@
     </tbody></table></div>
     <p><b>已确认无仓外旧路径依赖：</b>全部仓内调用一次切换，不保留旧路径转发头或旧实现副本。只在各批次中保留尚未迁移文件的真实位置；最终源拥有者唯一。</p>
     <p><b>兼容仍保留：</b>CLI / TOML 键和默认值、导出函数的符号与签名、save / checkpoint / 结果／责任文件格式、默认输出和部署资源路径。OpenCL 合并 entry 文件仍保留原 C 入口和检查；CPU Stage2 的第三方 libecm 与本地 legacy 类型隔离。</p>
-    <div class="note good">两项需要用户选择的事项——仓外源码兼容、整轮交付范围——均已确认。其余是实施者必须补齐的清单与验收责任，不再为目录名、常规 helper 归属或每批构建重复索取确认。用户已要求按规划实施；完整交付和最终版本验收仍待完成。</div>
+    <div class="note good">两项需要用户选择的事项——仓外源码兼容、整轮交付范围——均已确认。其余是实施者必须补齐的清单与验收责任，不再为目录名、常规 helper 归属或每批构建重复索取确认。用户已要求按规划实施；完整交付与最终版本验收已经完成。</div>
   </section>
 
   <section class="card" id="implementation-result">
-    <h2>实施状态：完整目录已落地，最终 Stage1 验收中</h2>
-    <p>基线 Git 6dad3d1 与四个计算程序已冻结，CUDA Stage1 基线 SHA256 为 <code>99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8</code>。源码归档、二进制身份和原始日志位于 <code>data/experiments/ecm_domain_refactor_20261026</code>。</p>
-    <p>P0 在真实 Windows 主机夹具中分别两次复现未创建大小写别名晚拒绝、历史校验与复制快照不同。系统调用观察确认旧结果替换前没有显式文件 flush；这是持久合同差异，不是断电丢结果实测。</p>
-    <p>修复后通过 25 个任务模式、4 个发布／恢复模式、9 组跨进程 writer 合同、host I/O 与结果批次回归。测试保留真实文件、锁和发布，仅替换调度或故障观察点。原生路径测试需要避开文件系统虚拟化；此前沙箱中路径提前拒绝的启动样本保留，未作为缺陷复现证据。</p>
-    <p>P1–P3 已迁移共同 Stage1、两种曲线的 CPU/CUDA/OpenCL、共享构造、群阶、诊断与停止／日志。保存命名和历史导入归 IO；时钟／TTY 归进度；V5 importer 归 CUDA Montgomery checkpoint；OpenCL 声明和 C 入口归 api/engine。25 个任务模式、4 个发布模式、4 组存储竞态、host I/O、无 SDK 编译、群阶和独立诊断已通过；六种执行组合、64 位 sigma 与冻结基线保存点相同。实际 CUDA 两曲线和 OpenCL PARAM3 停止／恢复通过，旧 V5／Edwards 导入保留原档与全坐标。阶段 CUDA 使用 512 位受限构建；当前完整目录覆盖 639 文件，475 个迁移来源已关闭，456 个迁移文件的计算 token 与基线相同。Stage2 176 个隔离设备模块／218 个总编译单元及默认聚合 44 单元均已通过构建，两个来源模型在基线／聚合／隔离三种二进制中结果一致；恢复覆盖 6 组检查。GUI、GUI v2、Android arm64 NDK、CPU libecm／GW 与 feeder 均构建通过。Stage1 最终全档及性能数据待完成。</p>
+    <span class="badge">P0–P6 完成 · 0.53.4</span>
+    <h2>实施结果：完整领域目录与必要合并已落地</h2>
+    <p>共同任务与合同集中到 stage1；曲线执行集中到 edwards_stage1、montgomery_stage1；续算集中到 stage2。真正共享的 CPU/CUDA/OpenCL 支持单独保留，旧 core / service / backend 目录及转发副本已清除。逐文件清单覆盖 639 文件，475 个迁移来源已关闭；456 个计算文件的 token、合并入口函数体和 CMake 编译次序／属性与冻结基线核对通过。</p>
+    <p>save 命名与历史接纳归 IO；目录助手归 files，时钟与 TTY 归 progress。V5 importer 归 Montgomery CUDA checkpoint；OpenCL API 声明与 entry 分别合并至 api/engine，保留原导出符号。结果发布的 12 个重复替换入口统一到持久 write_atomic，保留 .new、校验、排序与恢复合同。</p>
+    <h3>先修复并回归的缺陷</h3>
+    <p>两次原生复现大小写别名晚拒绝和历史校验／复制读取不同快照；改用共同资源身份、同一字节快照及发布前显式 flush。最后的动态队列矩阵又发现 Windows 删除待完成锁竞态：零访问属性观察句柄可保留已关闭载体，下一写入者收到错误 5。独立夹具两次复现后，按原有预算重试；修复后两次通过，永久权限错误仍有界失败。未放宽独占所有权，也不删除活跃锁。</p>
+    <h3>最终构建与行为验证</h3>
+    <ul><li>CUDA Stage1 全档：128 个 CUDA 单元、128 cubin、0 PTX；Stage2 隔离 176 设备模块／218 总单元及默认聚合 44 单元通过。OpenCL、CPU libecm／GW、GUI／GUI v2、feeder 和 Android arm64 NDK 构建通过。</li>
+    <li>六种 Stage1 CPU/CUDA 组合、Mont 64 位 sigma、OpenCL PARAM3 的数学保存点与 0.53.3 冻结二进制相同。实际两曲线 CUDA 与 OpenCL 停止／恢复通过；旧 checkpoint 兼容 33 项通过。Stage2 两种来源 × 基线／聚合／隔离共 6 例结果一致，6 组恢复覆盖检查通过。</li>
+    <li>25 个任务模式、2656 次选择策略比较、9 组共享写入、4 种发布故障／恢复、4 组存储竞态及 host IO 通过。最终真实输入矩阵 23 组／41 次进程运行、P95 交接 103 项通过。配置生成、依赖图、编译身份、公开头和当前文档源码链接通过。</li></ul>
+    <p>代码提交：<code>c8bce2b7</code>（先修 IO）、<code>063bb844</code>（Stage1 归并）、<code>357b68ad</code>（Stage2 与共享支持、0.53.4）。原始日志、失败复现、冻结源码与二进制身份保存在 <code>data/experiments/ecm_domain_refactor_20261026</code>，未改写失败证据。完整受测二进制 SHA256 记录于清单 implementation.final_artifacts。</p>
+    <div class="note">验证边界：Android 为 NDK 编译／链接，未做实体设备运行；POSIX 未运行，本轮不改变稳定 flock 载体协议。Stage2 changed-recovery 包含一次真实 GPU 续算，未重复剩余 150 曲线长测。完整 portable release 运行未重做，已通过构建／包布局／资源载荷合同。延期候选仍按本页合同保留。</div>
+  </section>
+  <section class="card" id="performance-result"><h2>1000 曲线任务：同条件收尾与资源观察</h2>
+    <p>输入为 1000 曲线、B1=100、sigma 起点 100000，Mont PARAM0／Edwards；新任务用 M521 和 M10267，历史路径先生成 10000 行，再运行新批并执行备份，Mont 额外启用 P95 交接。每个程序／场景 2 个新进程样本，基线与当前交错先后运行，共 24 个测量样本；表格为最小–最大值。</p>
+    <p>环境：Windows、Ryzen AI 9 HX 370（12 核／24 线程，RAM 33413771264 bytes）、RTX 4070 Ti 12 GB（设备 0）、驱动 610.88、功率上限 285 W、系统平衡电源；sm_89／CUDA 13.3／MSVC 14.51.36231。无并行编译或本轮其他 GPU 测试，未改变功率设置。</p>
+    <div class="table-wrap"><table><thead><tr><th>场景</th><th>版本</th><th>save→result 秒</th><th>result→queue done 秒</th><th>进程总秒</th><th>进程峰值工作集 MiB</th></tr></thead><tbody><tr><td>新任务 · M521 · Mont PARAM0</td><td>0.53.3</td><td>0.132–0.132</td><td>0.018–0.020</td><td>0.949–1.375</td><td>136.047–136.434</td></tr>
+<tr><td>新任务 · M521 · Mont PARAM0</td><td>0.53.4</td><td>0.133–0.139</td><td>0.018–0.018</td><td>1.509–2.093</td><td>130.953–131.316</td></tr>
+<tr><td>新任务 · M521 · Edwards</td><td>0.53.3</td><td>0.136–0.139</td><td>0.017–0.020</td><td>1.997–2.253</td><td>147.484–147.570</td></tr>
+<tr><td>新任务 · M521 · Edwards</td><td>0.53.4</td><td>0.136–0.137</td><td>0.018–0.024</td><td>2.007–2.084</td><td>131.023–131.445</td></tr>
+<tr><td>新任务 · M10267 · Mont PARAM0</td><td>0.53.3</td><td>0.148–0.148</td><td>0.030–0.046</td><td>2.303–2.930</td><td>180.000–180.027</td></tr>
+<tr><td>新任务 · M10267 · Mont PARAM0</td><td>0.53.4</td><td>0.151–0.152</td><td>0.030–0.031</td><td>2.262–2.884</td><td>175.383–175.434</td></tr>
+<tr><td>新任务 · M10267 · Edwards</td><td>0.53.3</td><td>0.317–0.330</td><td>0.069–0.069</td><td>8.159–8.635</td><td>201.277–202.363</td></tr>
+<tr><td>新任务 · M10267 · Edwards</td><td>0.53.4</td><td>0.314–0.328</td><td>0.069–0.070</td><td>8.226–8.798</td><td>186.328–186.344</td></tr>
+<tr><td>1 万行历史＋备份＋P95 · M521 · Mont PARAM0</td><td>0.53.3</td><td>0.295–0.296</td><td>0.190–0.213</td><td>2.379–2.440</td><td>143.391–143.465</td></tr>
+<tr><td>1 万行历史＋备份＋P95 · M521 · Mont PARAM0</td><td>0.53.4</td><td>0.299–0.301</td><td>0.188–0.228</td><td>2.311–2.395</td><td>138.215–138.227</td></tr>
+<tr><td>1 万行历史＋备份 · M521 · Edwards</td><td>0.53.3</td><td>0.300–0.300</td><td>0.074–0.091</td><td>2.266–2.760</td><td>161.305–161.418</td></tr>
+<tr><td>1 万行历史＋备份 · M521 · Edwards</td><td>0.53.4</td><td>0.304–0.305</td><td>0.074–0.086</td><td>2.138–2.259</td><td>145.324–145.352</td></tr></tbody></table></div>
+    <p>计时边界是父进程收到 save 完成日志→Stage1 results 日志，以及 results→queue done；进程总时间另计，不将嵌套区间重复相加。工作集每 20 ms 读取进程 OS 峰值计数器，不相加组件峰值。NVML 每 100 ms 观察整个设备，963 个样本，全设备已用显存 2515.8–2818.9 MiB；该值包含桌面和其他设备使用者，不能当作单进程峰值或据此归因版本差异。</p>
+    <p><b>总耗时异常的定向复核：</b>初始 M521 Mont 新任务中，基线总耗时 0.949–1.375 秒，当前 1.509–2.093 秒。保留原样本，追加每个程序 4 个新进程样本，并交替首个程序；基线变为 1.507–2.258 秒，当前 1.511–1.947 秒。固定的版本差异未持续复现，逐行父进程时间显示主要波动在 save 之前。结果与启动／装载／调度波动相符，但未进一步剖析为单一原因。补测 8 样本与逐行时间在 final_performance_mont521_recheck，未替换上表的原始 24 样本。</p>
+    <p>本轮没有以目录迁移宣称运行提速。小样本反映当前收尾范围，启动／缓存／调度波动仍存在，不做统计显著性结论。完整样本、命令、日志与边界在 final_performance/summary.json，GPU 原始观察在 final_performance_nvml.json。</p>
+    <p class="files">0.53.3 CUDA Stage1 SHA256: 99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8<br>0.53.4 CUDA Stage1 SHA256: 527efd543ff36340fd1bb126658c5f25541901fb8deb738ebe30c682ec3e478d</p>
   </section>
   <section class="card" id="options">
     <h2>组织方案：推荐曲线与阶段组合名</h2>
@@ -201,7 +228,7 @@
       <li><b>运行：</b>Stage1 两种入口、CPU/CUDA 两曲线、Mont 各 param、固定 64 位 sigma、旧 checkpoint、停止恢复、save 范围、结果排序与失败保留保持。OpenCL 需要实际设备算术，不能仅编译。</li>
       <li><b>Stage2：</b>PARAM0 / Edwards CUDA 共用引擎，CPU Edwards 的 GW / libecm 分别冒烟；现有 ckpt 进度恢复、worktodo 覆盖、逐曲线 append、进程终止和交接不变。</li>
       <li><b>依赖：</b>曲线 Stage1 不互相依赖；Stage2 不依赖 Stage1 私有 workflow；NTT 不依赖 ECM 任务 / 队列；纯数学 / 概率保持无 CUDA / Windows 依赖；进程和调优不复制共享日志状态。</li>
-      <li><b>证据：</b>首次迁移会使受影响目标重编，路径更浅不代表运行提速。保存真实依赖记录与回归证据，旧实验日志不改写；实施版本已定为 0.53.4；规划阶段不修改版本头。</li>
+      <li><b>证据：</b>首次迁移会使受影响目标重编，路径更浅不代表运行提速。保存真实依赖记录与回归证据，旧实验日志不改写；实施版本为 0.53.4。</li>
     </ul>
     <p>目录、整轮范围与源码路径兼容策略均已确认；现在已有完整逐文件清单。实施前只剩基线／环境核对、最小复现、证据冻结与逐批门禁准备，不存在必须继续向用户询问的业务选择。用户已授权开始实施，按下列批次继续推进。</p>
   </section>
@@ -716,7 +743,7 @@
 <tr data-source="src/ecm/backend/opencl/runtime/runtime.cpp" data-action="move"><td><a href="../../src/ecm/opencl/runtime/runtime.cpp"><code>src/ecm/backend/opencl/runtime/runtime.cpp</code></a></td><td>move</td><td><code>src/ecm/opencl/runtime/runtime.cpp</code></td><td>真实共享技术支持；OpenCL resources 整包迁移，部署路径保持</td></tr>
 </tbody></table></div></details>
 <details><summary>P6 · 完整回归、正式说明、版本；每批同步构建/测试依赖 · 1 文件</summary><div class="table-wrap"><table><thead><tr><th>源文件</th><th>动作</th><th>目标 / 原位置</th><th>职责与限制</th></tr></thead><tbody>
-<tr data-source="include/ecm/platform/program_version.h" data-action="edit"><td><a href="../../include/ecm/platform/program_version.h"><code>include/ecm/platform/program_version.h</code></a></td><td>edit</td><td><code>include/ecm/platform/program_version.h</code></td><td>正式实施完成时按优化更新至 0.53.4；本次仅规划不修改</td></tr>
+<tr data-source="include/ecm/platform/program_version.h" data-action="edit"><td><a href="../../include/ecm/platform/program_version.h"><code>include/ecm/platform/program_version.h</code></a></td><td>edit</td><td><code>include/ecm/platform/program_version.h</code></td><td>实施版本 0.53.4；优化增加 z</td></tr>
 </tbody></table></div></details>
 <details><summary>retain · 维持原位置；允许因新路径更新引用 · 156 文件</summary><div class="table-wrap"><table><thead><tr><th>源文件</th><th>动作</th><th>目标 / 原位置</th><th>职责与限制</th></tr></thead><tbody>
 <tr data-source="include/ecm/application/configuration/runtime.h" data-action="keep"><td><a href="../../include/ecm/application/configuration/runtime.h"><code>include/ecm/application/configuration/runtime.h</code></a></td><td>keep</td><td><code>include/ecm/application/configuration/runtime.h</code></td><td>位置保持；如引用被迁移文件则同步修改 include / 文档链接</td></tr>

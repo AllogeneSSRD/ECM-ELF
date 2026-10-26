@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "implementation-in-progress",
+  "status": "implemented",
   "baseline": "6dad3d1020ac08e09cd85fa1695406addedc99d7",
   "planned_program_version": "0.53.4",
   "approved": [
@@ -266,7 +266,7 @@
         "include/ecm/platform/program_version.h"
       ],
       "phase": "P6",
-      "note": "正式实施完成时按优化更新至 0.53.4；本次仅规划不修改"
+      "note": "实施版本 0.53.4；优化增加 z"
     },
     {
       "source": "include/ecm/platform/stage1_progress.h",
@@ -7040,7 +7040,7 @@
     ]
   },
   "implementation": {
-    "phase": "P0-P4 passed; complete P5 layout; final P6 CUDA Stage1 build/runtime/performance in progress",
+    "phase": "P0-P6 complete",
     "evidence": "data/experiments/ecm_domain_refactor_20261026",
     "baseline_native_failures": {
       "alias_save_internal": 2,
@@ -7137,12 +7137,566 @@
       "release_package_contracts": 9,
       "opencl_payload_unit_tests": 4,
       "opencl_real_math": true,
-      "opencl_real_stop_resume": true
+      "opencl_real_stop_resume": true,
+      "stage1_full_cuda_units": 128,
+      "stage1_cubin_entries": 128,
+      "stage1_ptx_entries": 0,
+      "stage1_input_groups": 23,
+      "stage1_input_process_runs": 41,
+      "legacy_checkpoint_checks": 33,
+      "p95_transfer_checks": 103,
+      "delete_pending_baseline_reproductions": 2,
+      "delete_pending_fixed_repetitions": 2,
+      "stage1_math_modes": 6,
+      "stage1_sigma64_modes": 2,
+      "performance_samples": 24
     },
     "additional_build_fixes": [
       "Android stale checkpoint/save helper calls",
       "Stage2 host compiler include root src",
       "Restored vendor angle include cgbn/cgbn.h"
-    ]
-  }
+    ],
+    "code_commits": [
+      "c8bce2b7",
+      "063bb844",
+      "357b68ad"
+    ],
+    "final_artifacts": {
+      "stage1_cuda": {
+        "path": "build_ecm_domain_final_cuda/ecm_cuda.exe",
+        "bytes": 27198464,
+        "sha256": "527efd543ff36340fd1bb126658c5f25541901fb8deb738ebe30c682ec3e478d"
+      },
+      "stage1_opencl": {
+        "path": "build_ecm_domain_final_opencl/ecm.exe",
+        "bytes": 1419264,
+        "sha256": "1ef9958774e7288ca72e3f0c9cd434839ee7207b410b9774552d5e38aff7b360"
+      },
+      "stage2_cuda_isolated": {
+        "path": "build_ecm_domain_final_stage2_isolated_v2/ecm_cuda_stage2.exe",
+        "bytes": 29084160,
+        "sha256": "b161e0505a48833ce82adc922837dce738e6560cd980249261b5a013a9b2b5b2"
+      },
+      "stage2_cuda_grouped": {
+        "path": "build_ecm_domain_final_stage2_grouped/ecm_cuda_stage2.exe",
+        "bytes": 5505024,
+        "sha256": "c39b01bafb502dc44a4cfcbd74b84e235aebb1def85c2d7ac89c7b384310e111"
+      },
+      "stage2_cpu_libecm": {
+        "path": "build_ecm_domain_p4_cpu/native/ecm_cpu_stage2.exe",
+        "bytes": 665088,
+        "sha256": "a6dfd85905293a4eed936e9924a01917982841df8ea569d68c1b1ca60415693b"
+      },
+      "stage2_cpu_gw": {
+        "path": "build_ecm_domain_p4_gw/native/ecm_cpu_stage2.exe",
+        "bytes": 25100288,
+        "sha256": "b88aaf7b22ebefffc679e0591072fdeb53c0dc6f5d6a1bfcb3713ea81a252912"
+      },
+      "android_arm64": {
+        "path": "build_ecm_domain_final_android/libecm.so",
+        "bytes": 15088936,
+        "sha256": "fca831d7d8fabe7438e0d4ad7ea6681b500c8558ae37182ec49772ee4ca14986"
+      }
+    },
+    "lock_fix": "Windows metadata observer can retain DELETE_ON_CLOSE state; retry ERROR_ACCESS_DENIED within existing budget, retain exclusive handle and system error diagnostics.",
+    "performance_evidence": "data/experiments/ecm_domain_refactor_20261026/final_performance/summary.json",
+    "performance": [
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.1320376000367105,
+        "result_to_queue_done_seconds": 0.01791689998935908,
+        "process_seconds": 1.3753750999458134,
+        "sampled_peak_working_set_bytes": 143060992
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.13889019994530827,
+        "result_to_queue_done_seconds": 0.018141200067475438,
+        "process_seconds": 2.092884900048375,
+        "sampled_peak_working_set_bytes": 137695232
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.1333542000502348,
+        "result_to_queue_done_seconds": 0.017574099940247834,
+        "process_seconds": 1.509043899946846,
+        "sampled_peak_working_set_bytes": 137314304
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.13209019997157156,
+        "result_to_queue_done_seconds": 0.020295399939641356,
+        "process_seconds": 0.9486375999404117,
+        "sampled_peak_working_set_bytes": 142655488
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.13928050000686198,
+        "result_to_queue_done_seconds": 0.017208300065249205,
+        "process_seconds": 1.9968784000957385,
+        "sampled_peak_working_set_bytes": 154648576
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.1364179999800399,
+        "result_to_queue_done_seconds": 0.017761699971742928,
+        "process_seconds": 2.0069231999805197,
+        "sampled_peak_working_set_bytes": 137830400
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.137229899992235,
+        "result_to_queue_done_seconds": 0.023626800044439733,
+        "process_seconds": 2.084408099995926,
+        "sampled_peak_working_set_bytes": 137388032
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.13630949996877462,
+        "result_to_queue_done_seconds": 0.020345100085251033,
+        "process_seconds": 2.2533155001001433,
+        "sampled_peak_working_set_bytes": 154738688
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "mont",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.14847649994771928,
+        "result_to_queue_done_seconds": 0.03049859998282045,
+        "process_seconds": 2.9297025999985635,
+        "sampled_peak_working_set_bytes": 188743680
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "mont",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.15143609989900142,
+        "result_to_queue_done_seconds": 0.029960500076413155,
+        "process_seconds": 2.883990900008939,
+        "sampled_peak_working_set_bytes": 183955456
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "mont",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.15177809994202107,
+        "result_to_queue_done_seconds": 0.03146590001415461,
+        "process_seconds": 2.2619145000353456,
+        "sampled_peak_working_set_bytes": 183902208
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "mont",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.1482683999929577,
+        "result_to_queue_done_seconds": 0.0455825999379158,
+        "process_seconds": 2.3028068999992684,
+        "sampled_peak_working_set_bytes": 188772352
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "ed",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.33042430004570633,
+        "result_to_queue_done_seconds": 0.06908909999765456,
+        "process_seconds": 8.634929799940437,
+        "sampled_peak_working_set_bytes": 211054592
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "ed",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.32821599999442697,
+        "result_to_queue_done_seconds": 0.06967609992716461,
+        "process_seconds": 8.226122500025667,
+        "sampled_peak_working_set_bytes": 195379200
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "current",
+        "curve": "ed",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.3144269000040367,
+        "result_to_queue_done_seconds": 0.0692572999978438,
+        "process_seconds": 8.79751999990549,
+        "sampled_peak_working_set_bytes": 195395584
+      },
+      {
+        "scenario": "fresh",
+        "history_rows": 0,
+        "backup": false,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "ed",
+        "bits": 10267,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.31654769997112453,
+        "result_to_queue_done_seconds": 0.06889380002394319,
+        "process_seconds": 8.159395099966787,
+        "sampled_peak_working_set_bytes": 212193280
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": true,
+        "binary": "baseline",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.2962399000534788,
+        "result_to_queue_done_seconds": 0.2133449000539258,
+        "process_seconds": 2.379218599991873,
+        "sampled_peak_working_set_bytes": 150433792
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": true,
+        "binary": "current",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.30095549998804927,
+        "result_to_queue_done_seconds": 0.22757679992355406,
+        "process_seconds": 2.3945251000113785,
+        "sampled_peak_working_set_bytes": 144941056
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": true,
+        "binary": "current",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.2992329999106005,
+        "result_to_queue_done_seconds": 0.18818310007918626,
+        "process_seconds": 2.3111177999526262,
+        "sampled_peak_working_set_bytes": 144928768
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": true,
+        "binary": "baseline",
+        "curve": "mont",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.2952603999292478,
+        "result_to_queue_done_seconds": 0.19040469999890774,
+        "process_seconds": 2.439587500062771,
+        "sampled_peak_working_set_bytes": 150355968
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.3003686999436468,
+        "result_to_queue_done_seconds": 0.07434299995657057,
+        "process_seconds": 2.2657807000214234,
+        "sampled_peak_working_set_bytes": 169140224
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": false,
+        "binary": "current",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 0,
+        "save_to_result_seconds": 0.3053776000160724,
+        "result_to_queue_done_seconds": 0.07363170001190156,
+        "process_seconds": 2.1379967000102624,
+        "sampled_peak_working_set_bytes": 152412160
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": false,
+        "binary": "current",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.3044342000503093,
+        "result_to_queue_done_seconds": 0.08593319996725768,
+        "process_seconds": 2.259077899972908,
+        "sampled_peak_working_set_bytes": 152383488
+      },
+      {
+        "scenario": "history_sync",
+        "history_rows": 10000,
+        "backup": true,
+        "p95": false,
+        "binary": "baseline",
+        "curve": "ed",
+        "bits": 521,
+        "b1": 100,
+        "curves": 1000,
+        "sample": 1,
+        "save_to_result_seconds": 0.29990270000416785,
+        "result_to_queue_done_seconds": 0.09085479995701462,
+        "process_seconds": 2.760251700063236,
+        "sampled_peak_working_set_bytes": 169259008
+      }
+    ],
+    "gpu_observation": {
+      "scope": "device 0 global used framebuffer, not process allocation",
+      "samples": 963,
+      "errors": [],
+      "power_limit_mw": 285000,
+      "min_global_used_bytes": 2638012416,
+      "max_global_used_bytes": 2955829248
+    },
+    "limits": [
+      "Windows x64 runtime; Android arm64 NDK build/link only, no physical-device runtime",
+      "POSIX runtime not validated this round; stable flock carrier protocol unchanged",
+      "Stage2 six changed-recovery checks include one real GPU continuation; long remaining 150 curves not repeated",
+      "Two fresh-process timing samples per binary/case; startup/cache/OS variance, no significance claim",
+      "NVML is whole-device memory across the matrix, not per-process allocation; no peak sums",
+      "Full portable release package runtime not rerun; release build/package and payload contracts validated"
+    ],
+    "performance_recheck": {
+      "scope": "M521 Montgomery PARAM0 fresh 1000 curves B1=100; four more samples per binary; alternating first binary",
+      "evidence": "data/experiments/ecm_domain_refactor_20261026/final_performance_mont521_recheck",
+      "samples": [
+        {
+          "binary": "current",
+          "sample": 0,
+          "seconds": 1.5229076000396162,
+          "events": {
+            "save": 0.8021316999802366,
+            "result": 0.9352273000404239,
+            "queue_done": 0.9523479000199586
+          },
+          "sha256": "527efd543ff36340fd1bb126658c5f25541901fb8deb738ebe30c682ec3e478d"
+        },
+        {
+          "binary": "baseline",
+          "sample": 0,
+          "seconds": 1.506605300004594,
+          "events": {
+            "save": 0.820956000010483,
+            "result": 0.9503145000198856,
+            "queue_done": 0.9899335000663996
+          },
+          "sha256": "99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8"
+        },
+        {
+          "binary": "baseline",
+          "sample": 1,
+          "seconds": 1.923051799996756,
+          "events": {
+            "save": 1.2627469000872225,
+            "result": 1.3943954000715166,
+            "queue_done": 1.4121634000912309
+          },
+          "sha256": "99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8"
+        },
+        {
+          "binary": "current",
+          "sample": 1,
+          "seconds": 1.9471832000417635,
+          "events": {
+            "save": 1.271113199996762,
+            "result": 1.404936600010842,
+            "queue_done": 1.4215814999770373
+          },
+          "sha256": "527efd543ff36340fd1bb126658c5f25541901fb8deb738ebe30c682ec3e478d"
+        },
+        {
+          "binary": "current",
+          "sample": 2,
+          "seconds": 1.5106264998903498,
+          "events": {
+            "save": 0.7670236999401823,
+            "result": 0.9254836000036448,
+            "queue_done": 0.9429500999394804
+          },
+          "sha256": "527efd543ff36340fd1bb126658c5f25541901fb8deb738ebe30c682ec3e478d"
+        },
+        {
+          "binary": "baseline",
+          "sample": 2,
+          "seconds": 2.0680500000016764,
+          "events": {
+            "save": 1.3383823001058772,
+            "result": 1.468483900069259,
+            "queue_done": 1.4848047000123188
+          },
+          "sha256": "99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8"
+        },
+        {
+          "binary": "baseline",
+          "sample": 3,
+          "seconds": 2.257755700033158,
+          "events": {
+            "save": 1.4977080000098795,
+            "result": 1.628193199983798,
+            "queue_done": 1.644886799971573
+          },
+          "sha256": "99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8"
+        },
+        {
+          "binary": "current",
+          "sample": 3,
+          "seconds": 1.8084758999757469,
+          "events": {
+            "save": 0.9765263999579474,
+            "result": 1.1097881000023335,
+            "queue_done": 1.1385800999123603
+          },
+          "sha256": "527efd543ff36340fd1bb126658c5f25541901fb8deb738ebe30c682ec3e478d"
+        }
+      ],
+      "conclusion": "Initial process-total separation did not persist; both versions vary before save, cause not uniquely profiled. Original samples retained."
+    }
+  },
+  "program_version": "0.53.4"
 }

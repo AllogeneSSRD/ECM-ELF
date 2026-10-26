@@ -93,7 +93,7 @@ worker `OwnerLease` 和任务 checkpoint 锁属于长期拥有权，分别保持
 
 P95 发布前持久保存完整 attempted 行集，发布可见但确认失败时保留 `.sending` 和 intent；恢复逐条核对 add/活动队列/发送账本，先补齐 sent/recovered 账本，再写 done。责任文件存在但无法读完必须报错，不能当作空文件覆盖；无法计数的失败日志显示 `lines=unknown`。已经持久接管交付责任后允许源队列按既有合同推进，后续 flush 失败保留 intent，不回滚为重新计算。
 
-这些 gate 只约束参加协议的程序，Prime95 本身不参加，模糊状态仍需保留证据。升级时停止所有共享资源写入者，成组替换 Stage1、Stage2、feeder 与 GUI 后再启动；不支持新旧写入者混跑。save、checkpoint、结果和交接责任文件的读取兼容保留，不需要为本轮迁移业务数据。回归入口为 `tools/test/shared_writer_contract.cpp`、`stage1_host_io_contract.cpp` 和真实 worker 输入矩阵；本轮证据与未验证平台见[临时实施草稿](../web/stage1-fourth-refactor-review-20261025.html#implementation-result)。
+这些 gate 只约束参加协议的程序，Prime95 本身不参加，模糊状态仍需保留证据。升级时停止所有共享资源写入者，成组替换 Stage1、Stage2、feeder 与 GUI 后再启动；不支持新旧写入者混跑。save、checkpoint、结果和交接责任文件的读取兼容保留，不需要为本轮迁移业务数据。回归入口为 `tools/test/shared_writer_contract.cpp`、`stage1_host_io_contract.cpp`、`file_lock_delete_pending.cpp` 和真实 worker 输入矩阵；共同锁协议的回归证据见[锁实施草稿](../web/stage1-fourth-refactor-review-20261025.html#implementation-result)，当前领域目录、删除待完成竞态与平台验证范围见[领域目录验收](../web/ecm-domain-layout-review-20261026.html#implementation-result)。
 
 ## 主要接口的输入与输出
 

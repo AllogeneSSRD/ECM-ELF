@@ -20,7 +20,7 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 `ECMSTAGE1` 作为 save 型 Stage1 输入时，文件名前缀决定该任务的曲线构造，末尾字段决定 B1；覆盖 TOML 后再校验后端能力和 sigma 范围。`ECMSTAGE2` 只由独立 Stage2 程序领取。每条 Stage1 任务复制基础选项，防止混合队列之间传播覆盖。Edwards 前缀同时恢复其固定标量约定；执行目标保持 TOML 设置。名称、旧 save 历史复制及交接合同见[队列输入](../usage/STAGE1.md#程序与输入)。
 
-这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核及各后端 checkpoint 保持各自职责；后端返回拥有的逐曲线结果；task 调用保存模块编码、发布并取得明确区间。入口见 [selection.h](../../include/ecm/stage1/selection.h)、[main.cpp](../../src/main.cpp) 和 [ecm_backend.h](../../include/ecm/stage1/gpu_backend.h)。
+这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核及各后端 checkpoint 保持各自职责；后端返回拥有的逐曲线结果；task 调用保存模块编码、发布并取得明确区间。入口见 [selection.h](../../include/ecm/stage1/selection.h)、[main.cpp](../../src/main.cpp) 和 [gpu_backend.h](../../include/ecm/stage1/gpu_backend.h)。
 
 ## 单任务编排与资源拥有权
 
