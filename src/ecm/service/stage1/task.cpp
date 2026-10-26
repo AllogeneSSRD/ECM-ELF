@@ -115,9 +115,10 @@ static void stage1_copy_save_history(const Stage1Options& opt, const std::string
     if ((std::filesystem::exists(target) && std::filesystem::file_size(target)) ||
         !std::filesystem::exists(source) || !std::filesystem::file_size(source))
         return;
-    std::ifstream input(source, std::ios::binary);
-    if (!input)
-        throw std::runtime_error("cannot read legacy save history");
+    // Validate and publish the same owned snapshot even if a retained source
+    // changes while this task is preparing its new, prefixed destination.
+    const auto bytes = ecm_io::read_file(std::filesystem::u8path(source));
+    std::istringstream input(bytes);
     std::string line;
     uint64_t records = 0;
     const bool ed = opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards;
@@ -161,8 +162,7 @@ static void stage1_copy_save_history(const Stage1Options& opt, const std::string
         return;
     if (!ecm_io::ensure_parent_dir(target.c_str()))
         throw std::runtime_error("cannot create prefixed save directory");
-    ecm_io::write_atomic(std::filesystem::u8path(target),
-                           ecm_io::read_file(std::filesystem::u8path(source)));
+    ecm_io::write_atomic(std::filesystem::u8path(target), bytes);
     ecm_ts_fprintf(
         stdout,
         "Stage1 save history copied: source=%s target=%s records=%llu original_retained=1\n",
@@ -270,14 +270,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
     try {
         const auto base = stage1_submission(opt, N, uint64_t(B1));
         (void)ecm_results::submission_json(base, N);
-        const auto same = [](const std::string& a, const std::string& b) {
-            if (a.empty() || b.empty())
-                return false;
-            std::error_code ec;
-            return std::filesystem::absolute(a).lexically_normal() ==
-                       std::filesystem::absolute(b).lexically_normal() ||
-                   std::filesystem::equivalent(a, b, ec);
-        };
+        const auto same = ecm_io::same_file_resource;
         if (same(opt.persistence.results_file, opt.persistence.submission_file) ||
             same(save_destination(request), opt.persistence.results_file) ||
             same(save_destination(request), opt.persistence.submission_file))

@@ -3,6 +3,7 @@ param([Parameter(Mandatory=$true)][string]$WorkerBuild,
       [Parameter(Mandatory=$true)][string]$Build,
       [switch]$QueueWorkflow,
       [switch]$MontgomeryPolicy,
+      [switch]$HistorySnapshot,
       [string]$PolicyBaseline='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -29,6 +30,11 @@ if($MontgomeryPolicy){
     $sources=@('src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
 }
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
+if($HistorySnapshot){
+    if($MontgomeryPolicy){throw 'HistorySnapshot is a task-only adapter'}
+    $sources=@($sources|Where-Object {$_ -ne 'src/ecm/service/stage1/task.cpp'})
+    $sources+=@('tools/test/adapters/stage1_history_snapshot.cpp')
+}
 $fixture=if($MontgomeryPolicy){'stage1_policy_contract'}elseif($QueueWorkflow){'stage1_queue_contract'}else{'stage1_task_contract'}
 $sources+=@('tools/test/'+$fixture+'.cpp')
 New-Item -ItemType Directory -Path $buildPath|Out-Null
@@ -38,6 +44,7 @@ foreach($source in $sources){
     $name=$source.Replace('/','_')+'.obj';$object=Join-Path $buildPath $name;$objects+=('"'+$object+'"')
     $commands+=('"'+$manifest.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MD /utf-8 /wd4819'+
         ' /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$manifest.gmp_root+'/include"'+
+        $(if($HistorySnapshot){' /DECM_TEST_HISTORY_SNAPSHOT=1'}else{''})+
         $(if($MontgomeryPolicy){' /I "'+$PolicyBaseline+'"'}else{''})+
         ' /c "'+$source+'" /Fo"'+$object+'" /sourceDependencies "'+$object+'.deps.json"')
     $commands+='if errorlevel 1 exit /b 1'

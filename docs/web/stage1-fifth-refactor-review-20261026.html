@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stage1 0.53.3 后续重构候选 · ECM-ELF</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root{color-scheme:light;--ink:#172c37;--muted:#52656e;--line:#cddadf;--accent:#076e62;--paper:#f4f7f6;--warn:#8c580c}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.8 "Segoe UI","Microsoft YaHei",sans-serif}
+    main{max-width:1180px;margin:auto;padding:44px 28px 72px}h1{font-size:34px;line-height:1.35;margin:10px 0 18px}h2{font-size:23px;line-height:1.5;margin:13px 0}h3{font-size:18px;margin:18px 0 8px}
+    p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}code,.files{font:13px/1.8 Consolas,monospace;overflow-wrap:anywhere}code{background:#edf2f2;padding:2px 4px;border-radius:3px}
+    .meta,.caption{color:var(--muted);font-size:13px}.eyebrow{letter-spacing:.12em;font-size:13px;color:var(--accent);font-weight:700}.card{background:white;border:1px solid var(--line);border-radius:15px;padding:25px 28px;margin:23px 0;scroll-margin-top:18px}
+    .badge{display:inline-block;background:#dff2e9;color:#086448;border-radius:5px;padding:2px 9px;margin:0 5px 5px 0;font-size:12px;font-weight:700}.amber{background:#fff0d5;color:var(--warn)}.gray{background:#eaf0f2;color:#4d5e67}
+    .pair,.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0}.flow{background:#f6f8f8;border:1px solid var(--line);border-radius:9px;padding:15px}.node{background:white;border:1px solid #aebfc5;border-radius:6px;padding:10px 12px;text-align:center;margin:8px 0;line-height:1.6}.node small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.deep{background:#153d42;color:white;border:2px solid #153d42}.deep small{color:#c5e0dd}.leak{border-color:#c98e6d;background:#fff8f1}.arrow{text-align:center;color:#6f8287;font-size:13px}.seam{border:1px dashed #769c99;border-radius:6px;padding:9px 11px;font-size:13px}.note{border-left:4px solid #bd8d36;padding:9px 14px;background:#fff9ed;margin:14px 0;font-size:14px}.good{border-left-color:var(--accent);background:#edf7f2}
+    .files{color:#49616b;font-size:12px}ul,ol{padding-left:23px}li{margin:7px 0}.wins{display:flex;flex-wrap:wrap;gap:7px;padding:0;list-style:none}.wins li{background:#edf5f2;border-radius:5px;padding:3px 9px;font-size:13px;margin:0}
+    table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th{background:#edf2f2}.table-wrap{overflow-x:auto}details{border-top:1px solid var(--line);margin-top:17px;padding-top:12px}summary{cursor:pointer;font-weight:600}nav{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:14px;margin:18px 0}.rule{height:1px;background:var(--line);margin:23px 0}.top{border:2px solid #6d9e94;background:#f5fbf8}footer{font-size:13px;color:var(--muted)}
+    @media(max-width:760px){main{padding:24px 14px 40px}.card{padding:20px 17px}.pair,.grid{grid-template-columns:1fr}h1{font-size:27px}h2{font-size:21px}}
+    @media print{main{max-width:none;padding:0}.card{break-inside:avoid;box-shadow:none}nav{display:none}body{font-size:12px}.pair{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">ECM-ELF · 下一轮重构评估 · 临时草稿</div>
+    <h1>Stage1：把保存、结果与恢复知识放回实际拥有它们的 Module</h1>
+    <div class="meta">2026-10-26 · 基线 0.53.3 / Git <code>6dad3d1</code> · 仅源码审查与规划，未实施、未运行新回归或性能测试</div>
+    <div class="meta">图例：实线框 = Module；虚线 = Seam；深色框 = 收拢后的 Implementation；浅橙框 = 知识泄漏或待验证风险。</div>
+    <nav>
+      <a href="#recommendation">推荐范围</a><a href="#io-contract">1 文件合同</a><a href="#save">2 save 归位</a><a href="#progress">3 CPU 进度</a><a href="#results">4 结果 / OpenCL</a><a href="#restore">5 准备 / 恢复</a><a href="#main">6 main</a><a href="#latency">7 耗时候选</a><a href="#files">文件合并清单</a><a href="#validation">验收建议</a>
+    </nav>
+  </header>
+
+  <section class="card top" id="recommendation">
+    <span class="badge">Top recommendation</span>
+    <h2>已整合：领域目录迁移 + 文件合同统一 + save 职责归位</h2>
+    <p>先验证资源别名、历史导入快照和持久确认三个风险，再把命名、历史接纳和重复文件发布 Implementation 收入现有 <code>io/files</code>、<code>io/save</code>。这些主要在普通 CXX 内完成，可减少 task、normalize、main 必须掌握的文件知识。</p>
+    <p>已确认下一轮完成整套领域目录与必要合并，范围和逐文件去向以 <a href="ecm-domain-layout-review-20261026.html#implementation-contract">实施规划</a>及其清单为准。CPU 进度拥有权、OpenCL 结果模型、Edwards 恢复深化、main 协议及 NF／备份优化明确延期；本页继续保留这些候选的依据。</p>
+    <div class="note good">0.53.3 的 typed CLI、TOML 启动快照、覆盖规则、共同 writer gate 已完成，本次不重新设计。当前 CUDA 执行链已经是普通函数选择 → task → 曲线 workflow → runtime；问题主要是 Interface 泄漏和职责散落，不能把函数调用次数本身当作缺陷。</div>
+    <p class="meta">本页的“事实”来自对应源文件；“风险”是静态推断，仍需最小复现；“收益”是候选目标，未声称已经提速。目录集中方案见 <a href="ecm-domain-layout-review-20261026.html">Stage1 / Stage2 领域目录专题</a>。前轮已实施内容见 <a href="stage1-fourth-refactor-review-20261025.html#implementation-result">0.53.3 实施与验收草稿</a>；当前语义以 <a href="../architecture/STAGE1.md">Stage1 架构</a>和 <a href="../usage/STAGE1.md">使用说明</a>为准。仓库目前没有 docs/adr 目录。</p>
+  </section>
+
+  <article class="card" id="io-contract">
+    <span class="badge">Strong · 优先验证</span><span class="badge gray">in-process / 文件发布</span>
+    <h2>1. 文件 Module：资源身份与持久替换各保留一个实现</h2>
+    <p class="files"><a href="../../src/ecm/service/stage1/task.cpp">task.cpp</a>:273–285 · <a href="../../src/main.cpp">main.cpp</a>:498–507<br><a href="../../src/io/files.cpp">io/files.cpp</a>:152–237 · <a href="../../src/io/files.h">files.h</a>:12–23、40–49 · <a href="../../src/io/results.cpp">results.cpp</a>:444–482、1390–1392</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · 同一资源知识由调用方各自解释</div><div class="node leak">task 的 same / main 的 same_path<small>不同的大小写、存在性和别名判断</small></div><div class="node leak">results::atomic_text<small>ofstream → close → replace</small></div><div class="node">files::file_identity / write_atomic<small>另有稳定资源规则、文件 flush 与目录确认</small></div></div>
+      <div class="flow"><div class="caption">建议 · 深化已有文件 Module</div><div class="node">task / main / results<small>只声明哪些资源必须不同、何时发布</small></div><div class="arrow">↓ 同一个 Seam</div><div class="node deep">io/files<small>资源身份、排序、持久替换、短重试及不确定确认</small></div><div class="seam">调用方保留自身失败恢复政策；不把所有错误变成 bool</div></div>
+    </div>
+    <p><b>事实：</b>results 的双路径锁已用 <code>file_identity</code>；task 与 main 仍各写一套判重。Stage1 两个最终结果用 <code>atomic_text</code>，没有像 <code>write_atomic</code> 那样显式执行文件 flush；POSIX 分支也没有同样的目录 fsync。</p>
+    <p><b>待验证风险：</b>Windows 上两个尚不存在、仅大小写不同的 save / JSONL 路径，可能绕过 task 的冲突检查。原子替换与耐久确认存在两套合同；这不等于已复现断电丢结果。</p>
+    <p><b>建议：</b>复用现有资源身份规则；在 files 内统一持久替换能力，删除 results 的私有重复写入。保留 Windows 有界共享冲突重试、临时后缀需求，以及“替换已可见但确认失败”的区别。</p>
+    <ul class="wins"><li>Locality：别名规则一处维护</li><li>Leverage：发布确认统一复用</li><li>删除重复 Implementation</li></ul>
+    <details><summary>删除测试、风险与验收</summary><p>删除局部路径比较和 atomic_text 后，复杂度集中到已有 files，而非分散到后端，符合深化方向。用无需 GPU 的真实 task 夹具测试未创建大小写别名、目录别名与 ..、既有同文件及不同文件；冲突必须在计算和写入之前拒绝。逐一注入写入、flush、替换、替换后确认失败；验证重启可重放，不能把 PublicationUncertain 当成“未写过”。POSIX 行为需独立运行验证，Windows 成功不能外推。</p></details>
+  </article>
+
+  <article class="card" id="save">
+    <span class="badge">Strong · 推荐架构主线</span><span class="badge gray">in-process / save</span>
+    <h2>2. save Module：合并命名、历史接纳和格式知识</h2>
+    <p class="files"><a href="../../src/ecm/service/stage1/preparation.cpp">preparation.cpp</a>:68–129 · <a href="../../src/io/normalize.cpp">normalize.cpp</a>:4<br><a href="../../src/ecm/service/stage1/task.cpp">task.cpp</a>:106–170、223–256 · <a href="../../src/io/save.cpp">save.cpp</a>:287–306、427 起</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · 理解一个 save 要跨多个 Module</div><div class="node">normalize → preparation<small>前缀和模板命名</small></div><div class="node leak">task 手拆 METHOD / PARAM<small>第一次读取做校验；第二次读取做复制</small></div><div class="node">io/save<small>另一套记录遍历与字段校验</small></div></div>
+      <div class="flow"><div class="caption">建议 · 文件解释归实际拥有者</div><div class="node">normalize / task<small>提供构造身份、来源、目标与命名输入</small></div><div class="arrow">↓</div><div class="node deep">io/save<small>命名 + 单快照历史接纳 + METHOD / Range</small></div><div class="seam">计算与最终发布顺序仍由 task 拥有</div></div>
+    </div>
+    <p><b>问题：</b><code>mont_format_save_name</code> 也服务 Edwards；normalize 为文件命名依赖执行准备。task 自行理解旧 save 文本，并在只锁目标时先扫描来源、再重新读取来源。</p>
+    <p><b>待验证风险：</b>另一进程在两次读取之间替换来源，可能出现“校验快照 A，复制快照 B”。应先用可控暂停与源文件替换验证，不能仅凭代码审查宣称已经造成错误。</p>
+    <p><b>建议：</b>合并到已有 save Implementation，以一次来源快照完成校验和复制；需要时在读取来源期间参加已有 gate，并避免源目标锁反向嵌套。不把整个 Stage1Options 传入 IO，也不把普通路径身份塞入曲线数学。</p>
+    <ul class="wins"><li>Locality：格式与命名集中</li><li>Leverage：输入与任务共用</li><li>删除 task 文本拆解</li></ul>
+    <details><summary>兼容与验收</summary><p>旧前缀、模板替换、默认文件名、原历史保留、已有目标不覆盖、curve / param 拒绝规则、连续 METHOD 计数均保持。历史导入与新批次校验要求不同，不能误把旧历史全部限制成当前 N / B1。两 worker 共享来源、读取时替换来源、目标已有历史、空文件及拒读均应通过真实发布入口验证。收尾的 fresh save 检查来自既定语义，不能以减少读取为由删除。</p></details>
+  </article>
+
+  <article class="card" id="progress">
+    <span class="badge">Strong · 独立小修候选</span><span class="badge gray">in-process / CPU</span>
+    <h2>3. CPU 进度 Module：对象应拥有本任务的全部显示状态</h2>
+    <p class="files"><a href="../../src/ecm/backend/cpu/stage1/execution_support.cpp">execution_support.cpp</a>:15–16、30、95、120–161、274–283 · <a href="../../src/ecm/backend/cpu/stage1/execution_support.h">execution_support.h</a>:20–30<br><a href="../../src/ecm/backend/cpu/stage1/montgomery/workflow.cpp">CPU Montgomery workflow.cpp</a>:726–729 · <a href="../../src/ecm/backend/cpu/stage1/edwards/workflow.cpp">CPU Edwards workflow.cpp</a>:865–869</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · 对象寿命与状态寿命不同</div><div class="node">Stage1Progress<small>只拥有终端 widget</small></div><div class="arrow">↘ 回调使用</div><div class="node leak">全局速度计 / 完成数 / widget 指针<small>静态 max_done、行数与上次输出时间</small></div><div class="node">Mont 恢复首次上报正进度</div></div>
+      <div class="flow"><div class="caption">建议 · 深化现有对象</div><div class="node deep">本任务的 Stage1Progress<small>初始进度、单调值、速度与节流状态共同初始化和释放</small></div><div class="seam">Montgomery / Edwards 回调借用同一个对象</div><div class="node">结束或异常返回<small>状态不传给下一任务</small></div></div>
+    </div>
+    <p><b>问题：</b>目前只有上报 <code>done ≤ 0</code> 才重置速度和 max_done。Montgomery 恢复不保证先上报 0，源码足以解释“任务 A 已完成，再恢复任务 B”继承 A 显示状态的风险；本次未实测复现。</p>
+    <p><b>建议：</b>改已有对象的实际拥有权，不另加 ProgressContext。保留多线程乱序上报时的单调性与输出同步。</p>
+    <ul class="wins"><li>Locality：任务状态集中</li><li>删除跨任务静态状态</li><li>恢复与新任务共用 Interface</li></ul>
+    <details><summary>验收限制</summary><p>同进程运行 A → 正进度恢复 B，检查首行进度、速率、ETA 与日志节奏；另测多线程乱序上报、TTY / pipe、停止及异常。CPU ISA 探测必须仍位于基线编译单元，不能随合并被带入要求 AVX512 的编译设置。CPU / GPU 工作单位不同，不强制共用全部进度 Implementation。</p></details>
+  </article>
+
+  <article class="card" id="results">
+    <span class="badge">Strong · 后续优先</span><span class="badge gray">真实 Adapter：CPU / CUDA / OpenCL</span>
+    <h2>4. 结果 Module：结束旧数组语义，压掉 OpenCL 同参转发</h2>
+    <p class="files"><a href="../../include/ecm/service/stage1/task.h">task.h</a>:85–98 · <a href="../../src/ecm/service/stage1/task.cpp">task.cpp</a>:55–95<br><a href="../../src/ecm/service/stage1/execution_contract.h">execution_contract.h</a>:22–58、105–106 · <a href="../../src/ecm/service/stage1/execution_contract.cpp">execution_contract.cpp</a>:16–173<br><a href="../../src/ecm/backend/opencl/stage1/montgomery/workflow.cpp">OpenCL workflow.cpp</a>:21、105–109、147–178 · <a href="../../src/ecm/backend/opencl/factory.cpp">factory.cpp</a>:58–95 · <a href="../../src/ecm/backend/opencl/stage1/montgomery/entry.cpp">entry.cpp</a>:3 起</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · 旧合同仍影响所有调用者</div><div class="node leak">main / 群阶诊断<small>双返回码、三个 has_*、first_sigma 回退</small></div><div class="node">TaskResult → ComputationResult<small>内部已有拥有的逐曲线结果</small></div><div class="node leak">OpenCL workflow → factory → entry → engine<small>旧数组与 flags 再转换；entry 只校验和转发</small></div></div>
+      <div class="flow"><div class="caption">建议 · 兼容只停留在真正需要处</div><div class="node">direct / queue / 群阶诊断<small>读取任务状态与逐曲线事实</small></div><div class="node deep">统一拥有的计算结果<small>CPU / CUDA / OpenCL 均直接形成</small></div><div class="seam">OpenCL workflow → 实际运行入口<br>如仍需 C 兼容入口，留作 Adapter</div></div>
+    </div>
+    <p><b>事实：</b>三个 <code>has_factors / has_found / has_sigmas</code> 现在完全相同，都只表示曲线数组非空；has_factors 不表示找到因子。first_sigma 截为 32 位，其唯一生产调用是群阶诊断中实际上不需要的回退。queue 使用 typed status，direct 仍解释两套整数返回码。</p>
+    <p><b>建议：</b>公共 Interface 只表达真实状态与拥有结果，删除等价 flags 和无效回退；同时收敛唯一仍使用 LegacyExecutionResult 的 OpenCL workflow。将 entry 的检查并入实际入口，可删除 <code>entry.cpp/h</code>，不再增加执行转发。</p>
+    <ul class="wins"><li>Locality：状态规则集中</li><li>Leverage：三后端同一结果</li><li>删除旧数组转换与分支</li></ul>
+    <details><summary>合并前提与验收</summary><p>OpenCL 的分配在 ownership 接管前仍为手工 malloc / mpz_init，异常与部分分配失败路径应一并验证；不能只改类型名称。保留 completed、stopped、failed 及失败来源、因子与无点结果差别，核对 direct 原有退出码、64 位 sigma、移动后对象和群阶诊断。</p><p>必须实际运行 OpenCL PARAM3 算术、恢复、停止和最终输出。0.53.3 的 OpenCL 构建、CPU 任务、GPU 查询不能代替设备算术验收。<code>service/execution/ecm.h</code> 仍被 OpenCL、CUDA shim 和 Android 使用，params init 也在 Stage1 / Android 构建中，不可整目录删除。CPU Stage2 使用第三方 libecm 的 <code>&lt;ecm.h&gt;</code>，并非这份本仓库头；两套同名入口不能混为一谈。C 兼容入口还要清点工具与仓外承诺。</p></details>
+  </article>
+
+  <article class="card" id="restore">
+    <span class="badge amber">Worth exploring · 分批处理</span><span class="badge gray">准备 / 曲线 checkpoint</span>
+    <h2>5. 准备与恢复 Module：拆散杂项，合并曲线自己的兼容知识</h2>
+    <p class="files"><a href="../../src/ecm/service/stage1/preparation.cpp">preparation.cpp</a>:28–158 · <a href="../../src/ecm/service/stage1/legacy_gpu_checkpoint.h">legacy_gpu_checkpoint.h</a>:13 起<br><a href="../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp">CUDA Mont workflow.cpp</a>:64 起 · <a href="../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp">CUDA Edwards workflow.cpp</a>:219–318<br><a href="../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp">Mont checkpoint.cpp</a> · <a href="../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp">Edwards checkpoint.cpp</a></p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · 共享名义下混放私有知识</div><div class="node leak">preparation<small>标量、随机数、save 命名、mkdir、时钟和 TTY</small></div><div class="node leak">通用目录的 CUDA V5 importer<small>解释 bits / TPI / param / checksum</small></div><div class="node leak">Edwards workflow 内联恢复与旧档迁移<small>重复复制候选批次状态</small></div></div>
+      <div class="flow"><div class="caption">建议 · 并回已有实际拥有者</div><div class="node">preparation 缩回数学准备<small>命名归 save；通用文件操作归 files</small></div><div class="node deep">各曲线的 checkpoint Module<small>旧载荷、候选解码、兼容与状态转移</small></div><div class="seam">workflow 保留恢复接纳顺序及执行选择<br>io/stage1_checkpoint 保留容器与持久责任</div></div>
+    </div>
+    <p><b>建议：</b>先删除 OpenCL 中要求后端名为 CUDA 的不可达 importer 分支，再把 V5 importer 并入 Montgomery checkpoint；Edwards 的旧档扫描及重复候选状态复制可内收至其 checkpoint。不是把两个曲线 codec 合成一个通用恢复框架。</p>
+    <p>preparation 中时钟 / TTY 先核对所有实际消费者，再并回已有进度或平台实现；数学准备继续集中。<code>gpu_common</code> 不能直接并入 preparation：Android 单独链接它，合并会引入 save/cache/task 依赖。</p>
+    <ul class="wins"><li>Locality：载荷兼容归曲线</li><li>删除通用目录 CUDA 私有头</li><li>workflow 展示真实阶段</li></ul>
+    <details><summary>先决条件、低风险清理与验收</summary><p>OpenCL workflow 中 batch_d 构造后从未读取；删除这一无效计算后，可清点唯一对应的 gpu_compute_batch_d。保留随机 sigma 算法、32 / 64 位约束与恢复优先顺序。旧 V5、Edwards 旧文本 / 二进制、容器 pending、seed-only、已完成去重、固定 sigma、损坏 / 不兼容 / 拒读必须保持。</p><p>环境输入另有小型候选：Mont host_policy.cpp:137–143 的采样秒数使用 atof，abc 可变为 0、1abc 可变为 1。应使用同 Module 已有的严格解析风格和自解释错误；不为环境选项新建 manager，不顺手改变未设置和显式空值语义。</p></details>
+  </article>
+
+  <article class="card" id="main">
+    <span class="badge amber">Worth exploring · 在文件合同稳定后</span><span class="badge gray">队列 / 持久交接</span>
+    <h2>6. main Module：留下流程，把协议细节还给 worktodo 与 sync</h2>
+    <p class="files"><a href="../../src/main.cpp">main.cpp</a>:208–228、332–422、498–665 · <a href="../../src/io/worktodo.cpp">worktodo.cpp</a>:1080–1116<br><a href="../../src/sync/p95.cpp">sync/p95.cpp</a> · <a href="../../src/sync/stage2.cpp">sync/stage2.cpp</a></p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · main 理解协议 Implementation</div><div class="node leak">P95 lazy 初始化<small>派生路径、旧责任统计、拒绝 AID、恢复、flush</small></div><div class="node leak">完成记录命名 / 保存 / 提交 / 删除<small>与 checkpoint 清理顺序交织</small></div><div class="node">main 的唯一队列循环</div></div>
+      <div class="flow"><div class="caption">建议 · 深化现有 Module</div><div class="node deep">sync/p95 + io/worktodo<small>各自拥有路径、责任文件和恢复 Implementation</small></div><div class="seam">main 明确协调调用时点和失败政策</div><div class="node">领取 → 运行 → 完成推进 → 重试交接<small>保持一个循环，不新增 Queue Runner</small></div></div>
+    </div>
+    <p><b>问题：</b>p95_for_task 不只是资格判断，还实现了大量初始化与恢复；完成记录的名字和确认细节也在 main。仅把整个 run_worktodo 搬到另一个文件不会降低 Interface 复杂度。</p>
+    <p><b>建议：</b>P95 派生路径与启动恢复内收至 sync/p95，完成记录命名 / 持久化 / 提交 / 确认内收至 io/worktodo。本地 Stage2 路由准备可在其现有同步 Module 收口；实际曲线资格、当前任务冻结、checkpoint 清理协调与唯一循环仍留给 main。</p>
+    <ul class="wins"><li>Locality：协议责任集中</li><li>删除 main 的协议细节</li><li>Leverage：真实恢复入口可测</li></ul>
+    <details><summary>顺序不能压平</summary><p>保持：task 最终发布 → fresh save 核验 → park 交接责任 → 持久完成记录 → finished / 源行推进 → checkpoint 清理 → 完成确认 → 备份与 flush。必须在每个持久步骤之间模拟中断恢复；不能因为 main 更短就认为正确。继续每轮读取 live worktodo；未来任务新增、删除、重排及同 worker 第一条完全同文匹配保持。P95 的外部模糊确认与本地 Stage2 接收不是同一种 Adapter，不合并成万能 outbox。</p></details>
+  </article>
+
+  <article class="card" id="latency">
+    <span class="badge amber">Worth exploring · 先测量</span><span class="badge gray">收尾成本</span>
+    <h2>7. 发布与备份：还有两处可解释额外等待的设计</h2>
+    <p class="files"><a href="../../src/io/results.cpp">results.cpp</a>:67–77、305–328、1257 起、1352–1364<br><a href="../../src/main.cpp">main.cpp</a>:399–401、705–707 · <a href="../../src/sync/backup.cpp">backup.cpp</a>:7–48</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 · 成本混在发布与任务收尾中</div><div class="node leak">相同 NF 正文碰撞<small>持双结果锁，每 20 ms 等时间戳变化；2 秒截止</small></div><div class="node leak">每任务遍历 save 目录<small>full 模式读取并重备份所有历史 save</small></div></div>
+      <div class="flow"><div class="caption">建议 · 先识别各自成本，再设计</div><div class="node deep">发布身份与展示时间分别评估<small>保留批次幂等性和外部去重语义</small></div><div class="seam">单独统计锁等待 / NF 等秒 / 文件读取 / 备份</div><div class="node">增量备份使用已完成路径作线索<small>保留 full 和本轮全部变化文件的合同</small></div></div>
+    </div>
+    <p><b>NF 事实：</b>外部 NF 报告不含 sigma，时间戳只有秒；相同正文已存在时，发布器在持有最终结果锁期间等待。这会让不同 sigma 的快速同规模批次依赖时钟前进，但本次未测实际发生率，也不能将其解释成此前的 30 秒问题。</p>
+    <p><b>建议：</b>先核对外部相同正文去重约束，再评估现有 batch identity / publication plan 能否承担更明确的身份职责；不能直接删等待、伪造时间戳或擅自改变提交协议。</p>
+    <p><b>备份事实：</b>目录历史增长会扩大 full 模式的收尾工作。增量模式可研究用 Range 路径缩小搜索，但“本轮修改的所有 save”和“只有当前 save”语义不同；未配置备份目录时当前已直接返回。</p>
+    <ul class="wins"><li>Locality：等待原因可定位</li><li>缩短持锁时间需证据</li><li>收益按完整流程验收</li></ul>
+    <details><summary>实验边界</summary><p>NF 测固定 / 回退时钟、同秒两个不同批次、不同 worker 共用输出及双文件中断恢复。备份分别测试关闭 / 增量 / full、两个目标、不同历史规模、目标拒写。测量必须分别报告 save→result 与 result→队列完成：当前备份发生在结果发布之后，不能把备份时间归入 save→result。记录设备、功耗、版本 / 二进制身份、样本数和原始证据；本页没有新增计时或性能收益结论。</p></details>
+  </article>
+
+  <section class="card" id="files">
+    <h2>文件合并与保留清单</h2>
+    <p>按删除测试判断：删除后是知识更集中，还是迫使多个调用者重复理解同一规则。文件短并不直接意味着没有 Depth。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>对象</th><th>建议去向 / 动作</th><th>条件与限制</th></tr></thead>
+      <tbody>
+        <tr><td>results::atomic_text</td><td>并入 files 的统一持久发布能力后删除</td><td>保留后缀、短重试和不确定确认语义</td></tr>
+        <tr><td>preparation 的 save 命名 + task 的旧历史导入</td><td>合并到已有 io/save</td><td>窄输入；不要求 IO 接收完整执行配置</td></tr>
+        <tr><td>OpenCL entry.cpp / entry.h</td><td>检查并入实际入口，删除同参转发文件</td><td>先清点全部调用与构建；保留错误码合同</td></tr>
+        <tr><td>LegacyExecutionResult / take_computation_result</td><td>OpenCL 接管拥有结果后删除旧类型与转换</td><td>不是删除整个 execution_contract 或 service/execution</td></tr>
+        <tr><td>service/stage1/legacy_gpu_checkpoint.h</td><td>并入 CUDA Montgomery checkpoint.cpp / h</td><td>先删除 OpenCL 不可达调用；旧档读取保留</td></tr>
+        <tr><td>Edwards workflow 内旧档扫描与批次复制</td><td>内收至该曲线现有 checkpoint Module</td><td>接纳顺序、显式布局与结果去重不可丢失</td></tr>
+        <tr><td>gpu_compute_batch_d</td><td>删除 OpenCL 未消费计算后清点并退役</td><td>gpu_pick_random_sigma 仍有实际用途；Android 链接需核对</td></tr>
+        <tr><td>execution.cpp / h</td><td><b>保留</b></td><td>是真实后端 Adapter 选择 Seam，删除会让 main 知道后端私有入口</td></tr>
+        <tr><td>task 与曲线 workflow</td><td><b>保留分工</b></td><td>最终发布与计算 / 安全点分别有真实职责</td></tr>
+        <tr><td>save / results / stage1_checkpoint</td><td><b>保留不同 Module</b></td><td>连续记录范围、结果协议和恢复容器不是相同概念</td></tr>
+        <tr><td>Mont host_math / checkpoint / output；CUDA 实例组</td><td><b>保留</b></td><td>数学、codec、显示与设备实例各有真实消费者和编译条件</td></tr>
+        <tr><td>stage1_binary.h、prime95_save、gpu_common</td><td><b>按实际共享和链接闭包保留</b></td><td>不是单一主流程专用；不能为少文件扩大依赖</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="card" id="validation">
+    <h2>下一轮范围已经确认，执行以整合规划为准</h2>
+    <p>本页是候选与证据说明；<a href="ecm-domain-layout-review-20261026.html#implementation-contract">领域目录实施规划</a>集中维护正式实施前的范围、批次、兼容约束、必要合并和门禁，<a href="../development/ECM_DOMAIN_REFACTOR_MANIFEST.json">逐文件清单</a>维护唯一文件去向。本轮包含全部已同意目录，不能在共享 Stage1 或 Edwards 迁完后默认为整轮完成。</p>
+    <p>先验证资源身份、来源快照和持久确认风险，通过回归再迁目录。只修复与本轮职责收口相关的行为；其余 Strong / Worth exploring 标签表示候选价值，不表示已加入本次实施。</p>
+    <div class="note good">保留 curve / param / sigma、fresh save 核验、唯一任务循环、live worktodo、Stage1 批内 sigma 排序与 Stage2 逐条 append，不增加通用 Runner，也不重新引入 Stage1 逐曲线回执。</div>
+    <p class="meta">用户已确认无仓外旧路径依赖与本轮范围。未开始代码实施、未改版本或作 Git 提交；规划草稿继续保留。</p>
+  </section>
+  <footer>源码依据固定于 Git 6dad3d1。后续实现发生变化时应重新核对行号与候选有效性；本页不作为当前生产行为的新增规范。</footer>
+</main>
+</body>
+</html>

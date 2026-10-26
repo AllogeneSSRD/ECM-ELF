@@ -441,24 +441,6 @@ bool has_result_ledger_directory(const std::filesystem::path& path) {
 namespace ecm_results {
 namespace fs = std::filesystem;
 
-void atomic_text(const fs::path& path, const std::string& text) {
-    const auto temp = fs::path(path.string() + ".new");
-    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-    if (!out)
-        throw std::runtime_error("cannot prepare submission output");
-    out << text;
-    out.close();
-    if (!out)
-        throw std::runtime_error("cannot finish submission output write");
-    if (!ecm_replace_file(temp, path))
-#ifdef _WIN32
-        throw std::runtime_error("cannot publish submission output; Windows error=" +
-                                 std::to_string(GetLastError()));
-#else
-        throw std::runtime_error("cannot publish submission output");
-#endif
-}
-
 // All result writers, including append-only Stage2 diagnostics, use the same
 // resource gate. Internal helpers below require that their caller owns it.
 ecm_io::FileLock lock_result(const fs::path& path) {
@@ -663,7 +645,7 @@ void append_submissions(const fs::path& path, const fs::path& ledger) {
         read_submission_entry(order_path).json != json::quote(ordered)) {
         const auto body =
             "ECM_SUBMISSION_V1\npublication-order\nORDER\n" + json::quote(ordered) + '\n';
-        atomic_text(order_path, body + std::to_string(ecm_io::fingerprint(body)) + '\n');
+        ecm_io::write_atomic(order_path, body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
     }
     if (actual.size() != ordered.size() || !fs::exists(path)) {
         std::ofstream out(path, std::ios::binary | std::ios::app);
@@ -777,8 +759,8 @@ void seal_submissions(const fs::path& path, int stage_filter, const std::string&
         }
         const auto key = std::to_string(ecm_io::fingerprint(ids));
         const auto body = "ECM_SUBMISSION_V1\n" + key + '\n' + ids + '\n' + json + '\n';
-        atomic_text(entries.front().directory / (key + ".batch"),
-                    body + std::to_string(ecm_io::fingerprint(body)) + '\n');
+        ecm_io::write_atomic(entries.front().directory / (key + ".batch"),
+                    body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
         lines.insert(json);
         append_submissions(path, ledger);
     }
@@ -803,7 +785,7 @@ fs::path prepare_submission_ledger(const fs::path& path) {
             throw std::runtime_error(
                 "submission file has no owned ledger; select a fresh output path");
         fs::create_directories(ledger);
-        atomic_text(ledger / "format", "ECM_SUBMISSION_LEDGER_V1\n");
+        ecm_io::write_atomic(ledger / "format", "ECM_SUBMISSION_LEDGER_V1\n", ".new");
     }
     require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
     return ledger;
@@ -930,7 +912,7 @@ void publish_submission(const fs::path& path, const Submission& r, const mpz_t n
             throw std::runtime_error("submission ledger identity collision");
     } else {
         const auto body = "ECM_SUBMISSION_V1\n" + key + '\n' + group_line + '\n' + line + '\n';
-        atomic_text(entry, body + std::to_string(ecm_io::fingerprint(body)) + '\n');
+        ecm_io::write_atomic(entry, body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
     }
     // Factors publish immediately; NF waits for whole-task completion.
     // Immutable batches prevent cumulative counts being credited twice.
@@ -964,7 +946,7 @@ void render_internal(const fs::path& path, const fs::path& ledger) {
     std::string output;
     for (const auto& r : rows)
         output += r.entry.json + '\n';
-    atomic_text(path, output);
+    ecm_io::write_atomic(path, output, ".new");
 }
 
 fs::path prepare_internal_ledger(const fs::path& path) {
@@ -974,7 +956,7 @@ fs::path prepare_internal_ledger(const fs::path& path) {
             throw std::runtime_error(
                 "internal result file has no owned ledger; select a fresh output path");
         fs::create_directories(ledger);
-        atomic_text(ledger / "format", "ECM_INTERNAL_LEDGER_V2\n");
+        ecm_io::write_atomic(ledger / "format", "ECM_INTERNAL_LEDGER_V2\n", ".new");
     }
     std::ifstream in(ledger / "format", std::ios::binary);
     std::string tag;
@@ -982,7 +964,7 @@ fs::path prepare_internal_ledger(const fs::path& path) {
     in.close();
     if (tag == "ECM_INTERNAL_LEDGER_V1") {
         require_ledger_format(ledger, tag);
-        atomic_text(ledger / "format", "ECM_INTERNAL_LEDGER_V2\n");
+        ecm_io::write_atomic(ledger / "format", "ECM_INTERNAL_LEDGER_V2\n", ".new");
     } else
         require_ledger_format(ledger, "ECM_INTERNAL_LEDGER_V2");
     return ledger;
@@ -1014,7 +996,7 @@ void publish_internal_batch(const fs::path& path,
         } else {
             const auto body =
                 "ECM_SUBMISSION_V1\n" + key + "\nI:" + std::to_string(next++) + '\n' + line + '\n';
-            atomic_text(entry, body + std::to_string(ecm_io::fingerprint(body)) + '\n');
+            ecm_io::write_atomic(entry, body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
         }
     }
     if (render_now)
@@ -1306,7 +1288,7 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
         if (std::find(covered.begin(), covered.end(), false) != covered.end())
             throw std::runtime_error("committed Stage1 internal batch is incomplete");
         if (actual != original || !fs::exists(submission))
-            atomic_text(submission, actual);
+            ecm_io::write_atomic(submission, actual, ".new");
         return;
     }
     std::vector<Stage1BatchRecord> fresh;
@@ -1319,7 +1301,7 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
             throw std::runtime_error(
                 "legacy submission export is missing; restore its owned ledger first");
         if (actual != original)
-            atomic_text(submission, actual);
+            ecm_io::write_atomic(submission, actual, ".new");
         return;
     }
     // Per-curve work and all aggregation stay in memory. NF remains one batch
@@ -1387,8 +1369,8 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
     // The first final file carries the tiny, checksummed batch commit plan.
     // A crash before the second replacement can therefore finish publication
     // from the existing final output, without per-curve receipts or a journal.
-    atomic_text(internal, output);
+    ecm_io::write_atomic(internal, output, ".new");
     actual += tail;
-    atomic_text(submission, actual);
+    ecm_io::write_atomic(submission, actual, ".new");
 }
 } // namespace ecm_results

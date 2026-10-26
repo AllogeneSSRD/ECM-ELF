@@ -3,6 +3,7 @@
 #include "io/stage1_checkpoint.h"
 #include "io/stage1_binary.h"
 #include "ecm/io/save.h"
+#include "io/files.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -23,6 +24,10 @@ static_assert(!std::is_copy_constructible_v<TaskResult>);
 static_assert(std::is_nothrow_move_constructible_v<TaskResult>);
 static_assert(std::is_nothrow_move_assignable_v<TaskResult>);
 namespace fs=std::filesystem;
+#ifdef ECM_TEST_HISTORY_SNAPSHOT
+void test_history_swap(const fs::path&, const std::string&);
+bool test_history_swapped();
+#endif
 static std::string mode;
 static int calls=0;
 static void require(bool ok,const char *message) {if(!ok)throw std::runtime_error(message);}
@@ -140,14 +145,35 @@ int main(int argc,char **argv) {
         options.persistence.tmp_dir=folder.string();options.persistence.results_file=(folder/"internal.jsonl").string();
         options.persistence.submission_file=(folder/"results.json.txt").string();options.identity.sigma_fixed=true;options.identity.fixed_sigma64=26;
         const auto save=(folder/"point.save").string();const std::string expression="10403";
+        if(mode=="alias_save_internal")options.persistence.results_file=(folder/"POINT.SAVE").string();
+        if(mode=="alias_save_submission")options.persistence.submission_file=(folder/"POINT.SAVE").string();
         const auto checkpoint=folder/((mode=="typed_partial_point" || mode=="typed_no_point")?".e_s1_bit14_20.ckpt":".m0_s1_bit14_20.ckpt");
         if(mode=="bad_begin") {std::ofstream damaged(checkpoint,std::ios::binary);damaged<<"damaged-container";}
         mpz_t n;mpz_init_set_ui(n,10403);
+#ifdef ECM_TEST_HISTORY_SNAPSHOT
+        if(mode=="history_snapshot") {
+            const auto source=folder/"legacy.save";
+            ecm_edwards::Integer x;mpz_set_ui(x.v,1);
+            std::ofstream(source)<<ecm_encode_mont_save(n,20,0,{{999,x.v}},expression);
+            options.persistence.legacy_save_source=source.string();
+            test_history_swap(source,ecm_edwards::save_line(n,x.v,888,20,false));
+        }
+#endif
         const TaskDependencies deps{execute,identity,window};
         auto result=run_stage1_task({n,20,20,2,save,false,expression,options},deps);
         mpz_clear(n); // Result factors/sigmas must not borrow the request's modulus.
         require(options.execution.stage1_threads==ecm_stage1::Stage1Options{}.execution.stage1_threads,"request changed");
-        if(mode=="concurrent_append" || mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot") {
+        if(mode=="alias_save_internal" || mode=="alias_save_submission") {
+            require(result.status()==TaskStatus::Failed && calls==0,"aliased save reached computation");
+            require(!fs::exists(save) && !fs::exists(options.persistence.submission_file),"alias rejection modified output");
+#ifdef ECM_TEST_HISTORY_SNAPSHOT
+        } else if(mode=="history_snapshot") {
+            require(test_history_swapped(),"source mutation point was not reached");
+            require(result.status()==TaskStatus::Failed && calls==0,"unvalidated source snapshot reached computation");
+            require(!fs::exists(save) || ecm_io::read_file(save).find("METHOD=ECM-EDWARDS-AM")==std::string::npos,
+                    "copied source bytes differ from validated history");
+#endif
+        } else if(mode=="concurrent_append" || mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot") {
             require(calls==1 && result.status()==TaskStatus::Completed,"completed status");
             require(result.failure_source()==FailureSource::None && result.task_return()==ECM_NO_FACTOR_FOUND,"completed code");
             require(result.curves()==2 && result.has_sigmas() && result.sigma(1)==27,"curve identity");

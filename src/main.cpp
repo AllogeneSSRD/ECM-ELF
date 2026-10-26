@@ -495,16 +495,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
 
     const std::string stage2_pending =
         worktodo_path + ".stage2_pending_worker" + std::to_string(worker);
-    const auto same_path = [](const std::string& a, const std::string& b) {
-        std::error_code ec;
-        if (std::filesystem::equivalent(a, b, ec) && !ec)
-            return true;
-#ifdef _WIN32
-        return ecm_stage1::lower_ascii(a) == ecm_stage1::lower_ascii(b);
-#else
-        return a == b;
-#endif
-    };
+    const auto same_path = ecm_io::same_file_resource;
     const auto auto_worktodo = resolve_rel_local(
         ini_dir, cfg.auto_stage2_worktodo.empty() ? cfg.worktodo : cfg.auto_stage2_worktodo);
     const bool auto_stage2_routed =

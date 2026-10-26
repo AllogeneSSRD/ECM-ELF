@@ -79,6 +79,13 @@ bool file_identity_less(const std::string& first, const std::string& second) {
 #endif
 }
 
+bool same_file_resource(const std::filesystem::path& first, const std::filesystem::path& second) {
+    if (first.empty() || second.empty())
+        return false;
+    const auto a = file_identity(first), b = file_identity(second);
+    return !file_identity_less(a, b) && !file_identity_less(b, a);
+}
+
 FileLock::FileLock(const std::string& name, FileLockDomain domain, uint32_t wait_ms) {
     auto state = std::make_unique<State>();
     const auto resource = file_identity(std::filesystem::u8path(name));
@@ -175,8 +182,7 @@ void write_atomic(const std::filesystem::path& path, const std::string& bytes,
     // A visible destination must already contain a complete, flushed snapshot.
     ok = ok && FlushFileBuffers(f);
     CloseHandle(f);
-    if (!ok || !MoveFileExW(temp.c_str(), path.c_str(),
-                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    if (!ok || !ecm_replace_file(temp, path))
         throw std::runtime_error("cannot flush/publish file: " + path.u8string());
 #else
     const int fd = ::open(temp.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
@@ -194,7 +200,7 @@ void write_atomic(const std::filesystem::path& path, const std::string& bytes,
     }
     ok = ok && ::fsync(fd) == 0;
     ::close(fd);
-    if (!ok || ::rename(temp.c_str(), path.c_str()))
+    if (!ok || !ecm_replace_file(temp, path))
         throw std::runtime_error("cannot flush/publish file: " + path.string());
     // POSIX durability also requires persisting the directory entry after rename.
     const auto parent =

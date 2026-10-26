@@ -21,6 +21,9 @@ class PublicationUncertain : public std::runtime_error {
 // gate.
 std::string file_identity(const std::filesystem::path&);
 bool file_identity_less(const std::string&, const std::string&);
+// Compare writable resources using exactly the lock identity rules. An empty
+// optional output names no resource; it must not become the current directory.
+bool same_file_resource(const std::filesystem::path&, const std::filesystem::path&);
 
 // A short cross-process publication lock. Never hold it across a GPU launch.
 class FileLock {

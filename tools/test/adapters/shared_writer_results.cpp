@@ -1,8 +1,11 @@
 #include "shared_writer_pause.h"
-bool scheduled_replace_file(const std::filesystem::path& from, const std::filesystem::path& to) {
-    shared_writer_before_publish(to);
-    return ecm_replace_file(from, to);
+namespace ecm_io {
+void scheduled_result_write(const std::filesystem::path& path, const std::string& text,
+                            const std::string& suffix = ".publish.tmp") {
+    shared_writer_before_publish(path);
+    write_atomic(path, text, suffix);
 }
-#define ecm_replace_file scheduled_replace_file
+}
+#define write_atomic scheduled_result_write
 #include "../../../src/io/results.cpp"
-#undef ecm_replace_file
+#undef write_atomic
