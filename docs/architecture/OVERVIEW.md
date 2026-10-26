@@ -67,6 +67,8 @@ src/
 
 `src/sync` 的 p95 集中冻结 intent、文件交付、AID 处理、worktodo.add 发送及恢复；stage2 管理独立的本地交接 outbox；backup 只负责备份。两种队列格式不混用，短编辑锁与消费租约保持不同类型和粒度。数学 checkpoint codec 留在对应曲线与后端目录，成本模型归 `stage2/planning`。
 
+Stage1共享文件按任务、计算合同、sigma、纯标量、进度和平台运行辅助组织；execution.h集中私有入口与结果合同，computation.cpp独立实现结果拥有权和验证。sigma集中抽样和范围规则，checkpoint仍拥有恢复状态；libecm_compat保留历史C类型与符号，Android保持独立窄链接。
+
 计算目录按曲线阶段聚合，每个曲线阶段内部再按执行技术组织。CPU/CUDA/OpenCL 分别实现实际支持的曲线组合；没有统一所有点运算的虚函数层。算法差异、状态域、实例和 checkpoint 载荷仍属于具体后端。普通 CXX 的主机数学、文件编码和显示可独立修改；实际 CUDA 分配、发射、同步和回读继续依赖 CUDA。
 
 main → parse_cli → read_config（一次启动快照）→ normalize_settings → direct / live worktodo → 冻结任务 → main 选择执行入口 → task 直接调用完整后端流程。`src/io/cli.cpp` 生成 `ParsedCli`：每次出现的选项立即转换和校验，保存 canonical presence、原始拼写与 argv 位置，不安装运行时单例或写文件。`config.cpp` 校验所有显式计算值，包括其他 worker 和被覆盖的值；`ParsedConfig` 保留原文位置、已解析的 worker scope、选择枚举和 affinity。生成绑定的 `copy` 投影已解析字段及显式标志，不再解析同一文本。

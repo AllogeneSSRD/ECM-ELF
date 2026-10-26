@@ -1,7 +1,8 @@
 // OpenCL ECM Stage 1 host (mirrors test/cgbn_stage1.cu)
 
 #include "api.h"
-#include "../../stage1/legacy.h"
+#include "../../stage1/libecm_compat.h"
+#include "../../stage1/sigma.h"
 #include "../../opencl/runtime/cgbn_opencl.h"
 #include "ecm/montgomery_stage1/opencl/checkpoint.h"
 #include "../../../io/stage1_checkpoint.h"
@@ -307,8 +308,7 @@ static void print_opencl_device_info(int device_index, double init_ms) {
     fflush(stdout);
 }
 
-// gpu_pick_random_sigma() and gpu_compute_batch_d() moved to
-// src/core/ecm_gpu_common.cpp (backend-neutral, shared by ecm and ecm_cuda).
+// Sigma selection is shared in stage1/sigma; curve arithmetic remains here.
 
 static uint32_t *allocate_and_set_s_bits(const mpz_t s, uint64_t *nbits) {
     uint64_t num_bits = *nbits = mpz_sizeinbase(s, 2);
@@ -780,7 +780,7 @@ extern "C" int cgbn_ecm_stage1(void* checkpoint_context, mpz_t *factors, int *ar
     auto& checkpoint = *static_cast<ecm_stage1_checkpoint::Context*>(checkpoint_context);
 
     uint32_t sigma = *sigma_ptr;
-    if (sigma == 0 || (uint64_t)sigma + curves > 0xFFFFFFFFull) {
+    if (!ecm_stage1::montgomery_sigma_batch_fits(sigma, curves, 3)) {
         ecm_ts_fprintf(stderr, "Invalid sigma/curves range\n");
         return ECM_ERROR;
     }

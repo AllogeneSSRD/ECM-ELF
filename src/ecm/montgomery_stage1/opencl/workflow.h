@@ -1,5 +1,5 @@
 #pragma once
-#include "../../stage1/execution_contract.h"
+#include "../../stage1/execution.h"
 
 // Own computation and checkpoint safe points; final file publication belongs to task.
 namespace ecm_opencl_stage1 {

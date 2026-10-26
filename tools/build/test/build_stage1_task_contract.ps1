@@ -16,14 +16,14 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/execution_contract.cpp','src/ecm/montgomery_stage1/opencl/checkpoint.cpp',
+$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/computation.cpp','src/ecm/montgomery_stage1/opencl/checkpoint.cpp',
     'src/io/stage1_checkpoint.cpp','src/ecm/platform/stop.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
     'src/ecm/stage1/scalar.cpp','src/ecm/stage1/progress.cpp')
 if($QueueWorkflow){
     & (Join-Path $PSScriptRoot 'build_stage1_host_io.ps1') -WorkerBuild $WorkerBuild -Build $Build
     return
 }
-if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/io/files.cpp','src/io/save.cpp','src/ecm/stage1/preparation.cpp','src/io/exponent_cache.cpp')}
+if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/io/files.cpp','src/io/save.cpp','src/io/exponent_cache.cpp')}
 if($MontgomeryPolicy){
     if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
     $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path

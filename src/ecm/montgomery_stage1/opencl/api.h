@@ -24,7 +24,6 @@
 #include <stdint.h>
 
 #include <gmp.h>
-#include "../../stage1/gpu_common.h"
 
 #ifdef __cplusplus
 extern "C" {

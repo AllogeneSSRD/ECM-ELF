@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stage1 checkpoint 跨后端互通方案 · ECM-ELF</title>
+  <style>
+    :root{color-scheme:light;--ink:#20343f;--muted:#5b6c78;--line:#d4dfe5;--green:#176f69;--amber:#986324}
+    *{box-sizing:border-box}body{margin:0;background:#f3f6f7;color:var(--ink);font:16px/1.85 "Segoe UI","Microsoft YaHei",sans-serif}
+    main{max-width:1220px;margin:auto;padding:35px 25px 70px}h1{font-size:34px;line-height:1.4}h2{font-size:24px;line-height:1.5;margin:8px 0 16px}h3{font-size:18px;margin:22px 0 7px}p{margin:10px 0}
+    a{color:var(--green);text-underline-offset:3px}code{font:13px/1.8 Consolas,monospace;background:#edf2f5;padding:2px 4px;border-radius:4px;overflow-wrap:anywhere}
+    .meta,.caption{font-size:13px;color:var(--muted)}.card{padding:25px 28px;background:white;border:1px solid var(--line);border-radius:14px;margin:23px 0;scroll-margin-top:16px}
+    .top{border:2px solid #85b2ac;background:#f4fbf9}.badge{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:700;background:#ddf0e9;color:#125f55;margin-right:7px}.amber{background:#fff0d5;color:var(--amber)}.gray{background:#eaf0f4;color:#526572}
+    nav{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:14px;margin:18px 0}.note{padding:12px 16px;background:#fff7e9;border-left:4px solid #be985c;margin:17px 0;font-size:14px}.good{background:#ebf6f2;border-left-color:#3b897d}
+    .pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.flow{background:#f5f8fa;border:1px solid var(--line);border-radius:9px;padding:17px}.node{background:white;border:1px solid #a5bbc8;border-radius:7px;padding:12px;text-align:center;margin:10px 0;line-height:1.65}.node small{display:block;font-size:12px;color:var(--muted)}.deep{background:#204957;color:white;border-color:#204957}.deep small{color:#d5e9e8}.leak{background:#fff7ed;border-color:#c89967}.arrow{text-align:center;color:#6a8791;font-size:14px}.seam{border:1px dashed #7297a1;border-radius:6px;padding:10px;text-align:center;font-size:13px}.formula{background:#edf4f6;padding:13px 18px;border-radius:7px;font:15px/1.9 Consolas,"Microsoft YaHei",monospace;overflow-x:auto}
+    .wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#edf3f6}.yes{color:#116d59;font-weight:600}.no{color:#91652b}ul,ol{padding-left:24px}li{margin:8px 0}details{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}summary{cursor:pointer;font-weight:600}footer{font-size:13px;color:var(--muted)}
+    @media(max-width:760px){main{padding:22px 13px}.card{padding:20px 16px}.pair{grid-template-columns:1fr}h1{font-size:27px}}@media print{nav{display:none}.card{break-inside:avoid}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="meta">ECM-ELF · 2026-10-26 · 源码基线 0.53.4 / Git 422a38e8 · 分析与实施建议，尚未实现</div>
+    <h1>同一曲线构造的 Stage1 checkpoint 跨后端互通</h1>
+    <p>统一保存可继续计算的数学状态，后端重新建立本地数组、字典、域表示和线程布局。互通范围由曲线构造与执行计划决定。</p>
+    <nav><a href="#recommendation">建议</a><a href="#coverage">能力范围</a><a href="#current">当前障碍</a><a href="#state">公共状态</a><a href="#math">数学条件</a><a href="#batch">曲线调度</a><a href="#options">方案取舍</a><a href="#files">文件职责</a><a href="#migration">实施顺序</a><a href="#verification">验证与成本</a></nav>
+  </header>
+
+  <section class="card top" id="recommendation">
+    <span class="badge">B · Strong</span><span class="badge gray">公共数学 checkpoint</span>
+    <h2>可行。建议统一数学格式，并冻结可恢复的执行计划</h2>
+    <p>保留一份外层批次文件，以每条曲线的普通域状态为恢复依据。CPU、CUDA、OpenCL 只负责把状态装入自己的 Implementation，停止时导出安全快照。设备、BITS/TPI、SIMD 实现和乘法内核可以变化；N、曲线族、param、sigma、B1、标量约定与执行计划的含义必须一致。</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前：共同容器包裹私有载荷</div><div class="node leak">CPU 文本 / Prime95 风格记录</div><div class="node leak">CUDA V5 / Edwards V3 / resident</div><div class="node leak">OpenCL V4</div><div class="seam">外层身份还绑定 cpu/gpu、实现或算法</div></div>
+      <div class="flow"><div class="caption">建议：共同恢复合同</div><div class="node">任务数学身份 + 批次计划</div><div class="arrow">↓</div><div class="node deep">每曲线普通域状态、游标、完成结果<small>单批文件、稳定曲线索引、一次快照发布</small></div><div class="arrow">↓</div><div class="seam">CPU / CUDA / OpenCL 导入与导出 Seam</div></div>
+    </div>
+    <p><b>建议的首个交付：</b>Montgomery param0 CPU↔CUDA、param3 CUDA↔OpenCL，以及 Edwards 的共同 NAF 计划 CPU↔CUDA；之后补齐 CPU param3，形成 Montgomery param3 三端互通。Edwards OpenCL 是缺少计算后端，不能由 checkpoint 重构补出。</p>
+    <p class="meta">本页为临时规划草稿。当前格式与限制仍以 <a href="../architecture/CHECKPOINT.md">CHECKPOINT</a>、完成点协议以 <a href="../architecture/SAVE.md">SAVE</a> 为准。本轮未修改程序、格式或版本。</p>
+  </section>
+
+  <section class="card" id="coverage">
+    <h2>先明确“同一曲线”：param 也是构造身份</h2>
+    <p>数字 sigma 相同不足以判定同一数学任务。还要保持实际 N、曲线族、Montgomery param、原始构造/基点及完整标量 S 一致。Mont 的 1·LCM 与 12·LCM、Edwards 固定的 48·LCM 需要明确编码。互通只发生在目标后端已有的构造能力中。</p>
+    <div class="wrap"><table><thead><tr><th>构造</th><th>CPU 当前</th><th>CUDA 当前</th><th>OpenCL 当前</th><th>统一状态后的可达范围</th></tr></thead><tbody>
+      <tr><td>Montgomery param0</td><td class="yes">scalar / SIMD</td><td class="yes">默认 ladder</td><td class="no">未实现</td><td>CPU↔CUDA；可选 resident ladder 另做适配</td></tr>
+      <tr><td>Montgomery param2</td><td class="no">未实现</td><td class="yes">默认 ladder</td><td class="no">未实现</td><td>先保持 CUDA 内可移植状态，不承诺跨端</td></tr>
+      <tr><td>Montgomery param3</td><td class="no">未实现</td><td class="yes">默认 ladder</td><td class="yes">binary ladder</td><td>CUDA↔OpenCL；增加 CPU param3 后三端连通</td></tr>
+      <tr><td>Edwards 48·LCM</td><td class="yes">NAF scalar / SIMD</td><td class="yes">binary / NAF</td><td class="no">未实现</td><td>CPU↔CUDA；binary、w=2 的完整覆盖另有适配工作</td></tr>
+    </tbody></table></div>
+    <p>若要求三端至少支持一种相同构造，优先增加 CPU param3。CPU xDBL/xADD 已接收 a24 和任意 affine xdiff，主要缺参数化初始化及身份/保存联动；OpenCL param0 要改目前固定的五槽布局、构造、差分点与常量乘法、64 位 sigma，以及多种设备内核。</p>
+    <p>CPU param3 的构造应复用共同数学实现：a24=σ·2⁻³² mod N、P=(2:1)、xdiff=2。仍遵守 param3 的种子范围。不能通过把任务 param0 改成 param3 来继续旧工作。</p>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/execution.cpp">后端选择</a>；<a href="../../src/ecm/opencl/factory.cpp">OpenCL 明确限制</a>；<a href="../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp">CPU 通用点运算</a>；<a href="../../src/ecm/montgomery_stage1/cuda/host_math.cpp">param3 构造</a>。</p>
+  </section>
+
+  <section class="card" id="current">
+    <h2>当前有四类障碍，格式只是其中一类</h2>
+    <div class="wrap"><table><thead><tr><th>障碍</th><th>当前实现</th><th>需要收敛的职责</th></tr></thead><tbody>
+      <tr><td>任务身份绑定执行方式</td><td>identity 含 cpu/gpu；CPU 还带窗口/实现枚举，GPU Mont 带算法文本；按字符串全等比较。</td><td>数学身份与计划、执行元数据分开；完整核对 N/param/标量，允许选择另一支持该计划的后端。</td></tr>
+      <tr><td>数值与载荷不同</td><td>CPU Mont 普通域每曲线文本；CUDA Mont V5 普通域整批数组；OpenCL V4 设备 Montgomery 域；CPU Edwards 仅 XYZ，CUDA 有 XYZT。</td><td>固定宽度小端字段、规范大整数、普通域投影坐标；旧格式仅作来源解码。</td></tr>
+      <tr><td>游标含义不同</td><td>Mont ladder 位数；Edwards binary 位与 NAF 列；PRAC 素数计划位置。</td><td>携带明确计划种类、版本、摘要和游标种类，拒绝用同一数字互相解释。</td></tr>
+      <tr><td>批次形状不同</td><td>CPU 每曲线进度可不同；GPU 大多只有整批游标，并推导 sigma0+i；CPU Edwards SIMD 对不一致 lane 可能重算。</td><td>按计划/游标组批，保存曲线索引和独立 sigma，完成曲线不再计算；禁止按最小/最大游标覆盖全批。</td></tr>
+    </tbody></table></div>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/task.cpp">外层 identity</a>、<a href="../../src/io/stage1_checkpoint.cpp">完整身份比较</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">连续 sigma 检查</a>、<a href="../../src/ecm/edwards_stage1/cpu/workflow.cpp">SIMD 恢复条件</a>。</p>
+  </section>
+
+  <section class="card" id="state">
+    <h2>公共状态：数学身份、批次计划、每曲线状态三部分</h2>
+    <p>建议定义新一代批次格式，暂称 V3；旧 V1/V2 外层及 native payload 继续可读。文件名可以保留现有不含后端的命名。一个任务保持一个 checkpoint 主文件和既有备份，不新增逐曲线磁盘文件。</p>
+    <p>首版保留“一批一种计划”：所有曲线使用相同标量与编码，只有 cursor 和完成状态可以不同，未开始的曲线也继承该计划。无需先建立多计划表或允许同一批同时运行不同窗口。param 字段仅用于 Montgomery，Edwards 使用自己的固定标量约定。</p>
+    <div class="wrap"><table><thead><tr><th>部分</th><th>必要内容</th><th>约束</th></tr></thead><tbody>
+      <tr><td>数学身份</td><td>完整实际 N、曲线族、param、构造版本、B1、LCM 倍数/固定标量约定、曲线总数；每条 sigma 与稳定 curve_index。</td><td>构造和原始基点须由版本唯一重建；必要时带规范基点摘要。曲线数量变更不并入本轮互通合同。</td></tr>
+      <tr><td>批次计划</td><td>规范 S 的位长与摘要、计划种类/版本、NAF window/编码约定、总步骤及计划摘要。</td><td>大整数用规范编码后求摘要；不使用 GMP 本机 limb 字节作为跨平台摘要。整批只保存一次，不逐曲线复制完整指数/字典。</td></tr>
+      <tr><td>未完成状态</td><td>Mont ladder：R0=(X0:Z0)、R1=(X1:Z1)；Edwards：X/Y/Z/T；引用计划及该曲线的 next cursor。</td><td>全部为普通域模 N 数值；保留投影形式，无需转 affine。源端必须在算法安全边界导出。</td></tr>
+      <tr><td>种子与完成状态</td><td>未开始/只有种子、计算中、已完成可用点、真因子、已完成无 Stage2 点。</td><td>完成结果有自己的类型与数据，不再借用游标表示；恢复只补发布，不能重跑完成曲线。</td></tr>
+      <tr><td>执行信息</td><td>来源 CPU/CUDA/OpenCL、BITS/TPI、ISA、倍点或乘法内核、计时资料。</td><td>用于诊断和装载。只要数学等价与目标能力验证通过，就不纳入任务相等条件。</td></tr>
+    </tbody></table></div>
+    <p><b>窗口属于计划，设备属于执行。</b>首次执行可按目标选择计划；已有进度后默认沿用所存计划。显式要求另一个不兼容窗口/算法时说明冲突。HWCD/2XY、CIOS/其他乘法实现等在已证明切片末尾状态相同后可自由选择，不应只因名称不同而拒绝。</p>
+    <p>V3 沿用整体和逐记录完整性校验、长度与上限检查、备份轮换及批次独占。校验和用于发现损坏；数学验证还需检查规范范围、构造、点关系、计划和游标。新格式不承诺旧程序可读，新旧写入者仍需成组升级。</p>
+    <p>尚未定义公共数学状态的 PRAC 等计划保留现有 native codec 与严格匹配条件，可用明确的 native 类型分支保留本后端读写；不能因外层身份放宽而直接跨端装载。它们只在独立数学合同和测试通过后转入公共状态，不为首版互通删除已有恢复功能。</p>
+  </section>
+
+  <section class="card" id="math">
+    <h2>两种曲线的数学恢复条件</h2>
+    <h3>Montgomery：同一 binary ladder 的相邻点对</h3>
+    <div class="formula">L=bit_length(S)，d=已消费的 MSB 位数<br>k<sub>d</sub>=⌊S / 2<sup>L−d</sup>⌋<br>R0=[k<sub>d</sub>]P，R1=[k<sub>d</sub>+1]P；下一步处理第 d 位。</div>
+    <p>CPU、默认 CUDA 和 OpenCL 的 ladder 都能在现有切片安全边界表示此状态。初始化通常已消费首位，d=1；d 不是点倍数 k。保存两个逻辑点及 d，恢复时重建 a24、原始差分点和剩余位序列即可。不能仅保存 R0 或百分比，也不能保留 GPU 临时 swap 的数组顺序。</p>
+    <p>普通域与设备 Montgomery 域的转换为 x̂=xR mod N，x=x̂R⁻¹ mod N，R=2<sup>BITS</sup>。新后端用自己的 R 重编码。N 为奇数时 R 为单位；容器位宽与 TPI 无需沿用来源。OpenCL 当前四坐标同乘 R，仅从投影数学看误认数值不必然换点，但不能据此绕过格式和域合同。常量、limb 布局和校验也必须正确转换。</p>
+    <p>resident ladder 可作为同一数学状态的另一 Adapter；PRAC 的 next 是素数计划位置，属于另一计划。PRAC 可在完整乘积边界研究 Q=[M]P、剩余 S/M 的续算合同，但现有 ladder 会重建原基点，仍需新增续算基点支持；任意 binary 前缀也不一定整除 S。本轮应保留 PRAC 同算法恢复，另列跨算法 TODO。</p>
+    <p class="meta">依据：<a href="../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp">CPU 位序列</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">CUDA 初始位游标</a>、<a href="../../src/ecm/opencl/resources/ecm_stage1.cl">OpenCL 位循环</a>、<a href="../../src/ecm/montgomery_stage1/opencl/montgomery.cpp">域转换</a>、<a href="../../src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernel.cuh">PRAC 计划执行</a>。</p>
+    <h3>Edwards：完整扩展坐标与完全一致的 NAF 计划</h3>
+    <p>CPU 与 CUDA 的同窗口 NAF 源码具有对应编码，可优先统一为一个明确版本的计划生成器和摘要；随后以真实互跑确认初始化、首列、负号、零串和最后一列的 cursor 完全一致。不同 window 的相同 done 数字没有同一含义。</p>
+    <div class="note">例：S=48·LCM(1..10)=120960。w=2/6/12 的 NAF 总列数分别为18/14/8，首列前缀分别为1/15/945。直接把 done=1 交给另一个窗口会继续错误的标量。固定 chunk 大小或恰好落在零串，均不能作为转换证明。</div>
+    <p>新状态直接导出内存中的 X/Y/Z/T。当前 CPU scalar 和 SIMD 都持有 T，但旧 codec 丢掉 T，恢复时求逆重建。新导入入口应直接接受完整普通域 XYZT，并验证 XY=ZT 和曲线方程，重新建立本地字典与表示。</p>
+    <p>旧 CPU XYZ 需先处理 gcd(Z,N)：等于1才可逆恢复 T；若为真因子，可转成已发现因子；若等于 N，则 XYZ 一般不足以唯一恢复原 T，应保留旧档并明确无法无损迁移，或选择经验证的旧代。不能任意填 T，也不能把 (XZ,YZ,Z²,XY) 当作对非单位 Z 的通用补救。</p>
+    <p>CPU 主流程目前接受 NAF auto 或3..12，GPU 另支持 w=2 和 binary。若承诺所有已有 Edwards GPU checkpoint 都可转 CPU，还需支持来源 w=2（避免 SIMD 自动改窗口）及 CPU binary 续算计划；共同 NAF3..12 的首轮不能称作任意 Edwards 算法互通。</p>
+    <p class="meta">依据：<a href="../../include/ecm/stage1/scalar.h">共同 NAF 约定</a>、<a href="../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp">CPU XYZ 恢复</a>、<a href="../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp">SIMD T 重建</a>、<a href="../../src/ecm/edwards_stage1/cuda/checkpoint.cpp">CUDA 计划/窗口验证</a>、<a href="../../src/io/normalize.cpp">CPU 窗口准入</a>。</p>
+  </section>
+
+  <section class="card" id="batch">
+    <h2>调度必须保留每曲线进度，最终仍只产生一批结果</h2>
+    <div class="flow"><div class="node">同一任务：完成 / 未开始 / 游标 d₁ / 游标 d₂ / …</div><div class="arrow">↓ 按计划与游标分组，保存逻辑索引及 sigma</div><div class="node deep">CPU SIMD / CUDA / OpenCL 执行子批<small>不同子批可顺序运行；不是新增 worktodo 任务</small></div><div class="arrow">↓ 汇总回原任务</div><div class="node">单份 checkpoint；整任务完成后一次 save / Stage1 结果发布</div></div>
+    <p>CPU→GPU 往往是部分曲线完成，其他曲线处于不同游标。建议按 (plan_id,next_cursor) 分组，再选择本地布局；保留完整总曲线数与原始 curve_index，完成结果直接并入汇总。不能统一取 min 游标而丢弃已有工作，也不能取 max 游标跳过计算。</p>
+    <p><b>sigma 必须显式带入。</b>当前 GPU Mont 构造、param3 kernel 和结果归属普遍假设 sigma0+i。CPU 随机种子或重组后不连续的种子会破坏该假设。建议 GPU API、构造和结果链路接收逐曲线 sigma/逻辑索引；param0 算术已有 a24/xdiff，可少改内核。param3 需 sigma 数组支持。只按连续 sigma 再拆组可作为过渡，但随机任务可能退化为大量单曲线启动。</p>
+    <p>恢复分组与现有 CPU Edwards 的“固定连续8 lane、进度不一就重跑”逻辑需要一起调整。不支持 SIMD 形状的尾组可使用 scalar；不支持某个有效计划时应给出能力诊断，不能悄悄改窗口或重算。</p>
+    <p>现有齐步 GPU 新任务仍可保持一个计算组。迁入不同曲线进度时，分组会增加启动和字典构建次数；若要求这些曲线仍在同一 GPU 组内并行，就需要每 lane 游标/掩码支持，改动和验证范围更大。建议先接受恢复时分组，同时保持整任务只发布一次结果。</p>
+    <p><b>一次快照只发布一次。</b>各后端先交付拥有的安全快照，再由现有 Context 串行提交整份批次。不要为1000条记录循环调用1000次现有 write_blob：它每次都会重写整份外层。CPU 可收集各曲线最近一次安全状态；不要求所有曲线停在同一游标。GPU 小组完成不单独发布最终 save/JSONL，也不改变 Stage1 批内按 sigma 排序的合同。</p>
+    <p>计算游标、安全快照游标与成功持久化游标继续分开；保存失败优先于“正常停止”。所有完成结果与发布恢复材料保留到最终输出及队列提交成功。checkpoint 继续持有同一个长期批次锁；互通不引入两端同时执行同一任务。</p>
+    <p class="meta">依据：<a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">逐曲线种子</a>、<a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">CPU Mont 游标分组</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">CUDA 连续种子限制</a>、<a href="../../src/io/stage1_checkpoint.cpp">整批序列化</a>。</p>
+  </section>
+
+  <section class="card" id="options">
+    <h2>方案取舍</h2>
+    <div class="wrap"><table><thead><tr><th>方案</th><th>优点</th><th>代价</th><th>建议</th></tr></thead><tbody>
+      <tr><td>A：两两转换 native checkpoint</td><td>一对后端的单一算法可较快打通，便于过渡验证。</td><td>转换器逐渐成网；身份、游标、域和批次语义分散；每新增格式均扩大互转矩阵，仍未解决异步进度。</td><td>仅作为旧格式的只读导入，不作为长期架构。</td></tr>
+      <tr><td>B：公共数学快照 + 精确计划</td><td>各后端只连接一个 Seam；数值与磁盘协议统一，内核和本地布局可保留。新旧 importer 有明确出口。</td><td>需改身份、每曲线记录、导入/导出和分组；计划支持范围必须明确。</td><td class="yes">推荐。一次设计合同，按真实构造能力分期交付。</td></tr>
+      <tr><td>C：所有后端强制同一算法/全局游标</td><td>游标和数组关系直接，首个 codec 容易实现。</td><td>可能限制 NAF/PRAC、浪费 CPU 已完成进度，或改变成熟内核；强制齐步/重算把运行成本转嫁给用户。</td><td>不作为默认路线。通用素数幂边界方案需另做算法与性能研究。</td></tr>
+    </tbody></table></div>
+    <p>方案 B 的 Locality：数学状态与验证按曲线集中，磁盘责任归 IO，布局转换归后端。Interface 是数学身份、计划、状态及失败语义；Implementation 中的 CGBN、SIMD、OpenCL 数组不向外泄漏。无需增加 Manager、Factory 链或独立转换守护程序。</p>
+  </section>
+
+  <section class="card" id="files">
+    <h2>文件职责与可合并清单</h2>
+    <p>沿用当前平坦目录。下列新增文件是有两种以上真实后端的共同 Seam；不再建立 checkpoint/core/service 目录树。具体函数签名在实施合同确认后设计。</p>
+    <div class="wrap"><table><thead><tr><th>文件/位置</th><th>建议职责</th><th>退出的重复逻辑</th></tr></thead><tbody>
+      <tr><td><a href="../../src/ecm/stage1/task.cpp">stage1/task.cpp</a></td><td>形成后端无关数学身份；保持整任务寿命与最终发布。</td><td>identity 中的 target/CPU impl/NAF 设置等执行拼接；CPU param 强制0仅在增加CPU param3时解除。</td></tr>
+      <tr><td>拟新增 include/ecm/stage1/checkpoint.h</td><td>拥有的数学快照、明确状态/计划/游标类型；无 CUDA/OpenCL SDK 类型。</td><td>后端借 void* 或私有 blob 向外解释数学状态的合同。</td></tr>
+      <tr><td><a href="../../src/io/stage1_checkpoint.cpp">io/stage1_checkpoint.cpp/h</a>、<a href="../../src/io/stage1_binary.h">stage1_binary.h</a></td><td>版本化批次编码、长度/CRC、备份、锁、快照批量提交；读取旧外壳。</td><td>后端各写一套新文件协议、逐曲线反复重写整批。既有独占与错误保留合同继续使用。</td></tr>
+      <tr><td>拟新增 ecm/montgomery_stage1/checkpoint.cpp/h</td><td>共同 ladder 状态/计划验证、旧 CPU/CUDA/OpenCL 数学解码与转换。</td><td>相同 N/S/游标/构造检查的重复；设备内存读取与域装载留在原后端。</td></tr>
+      <tr><td>拟新增 ecm/edwards_stage1/checkpoint.cpp/h</td><td>共同 XYZT 验证、计划匹配和旧 XYZ 导入资格；完成结果转换。</td><td>CPU/GPU 重复的数学状态资格判断；显式处理 Z 不可逆，保留错误证据。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/scalar.cpp">stage1/scalar.cpp/h</a></td><td>共享规范 S 摘要、NAF 计划版本/生成与摘要；若要共用分组工具，可在 stage1 的实际调度文件集中。</td><td>同窗口的独立 NAF 编码约定逐步合并；保留各后端字典与位平面装配。</td></tr>
+      <tr><td><a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">Mont CPU workflow</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">CUDA runtime</a>、<a href="../../src/ecm/montgomery_stage1/opencl/engine.cpp">OpenCL engine</a></td><td>按计划和游标组批，导入普通域状态，显式 sigma/逻辑索引，导出安全快照。</td><td>私有格式直写；全批唯一游标与 sigma0+i 对任务语义的绑定。</td></tr>
+      <tr><td><a href="../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp">Ed CPU scalar</a>、<a href="../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp">SIMD</a>、<a href="../../src/ecm/edwards_stage1/cuda/workflow.cpp">CUDA workflow</a></td><td>直接导出/导入 XYZT；来源计划续算；异步游标重组；binary/w2能力按范围补齐。</td><td>只存XYZ、强制求逆补T；lane进度不齐就从头跑。</td></tr>
+      <tr><td>各后端现有 checkpoint.cpp/h</td><td>新快照装配留在对应后端；旧磁盘解码逐步并入曲线共同文件。</td><td>完成迁移后退役重复新格式写入器；resident/PRAC 等真实私有格式和第三方兼容接口不机械删除。</td></tr>
+      <tr><td><a href="../../src/io/prime95_save.cpp">io/prime95_save.cpp</a></td><td>保留真正 Prime95 格式适配；CPU 私有恢复主流程改用共同状态。</td><td>CPU 新 checkpoint 依赖第三方风格包装；不删除仍被外部格式功能使用的接口。</td></tr>
+      <tr><td><a href="../../src/io/normalize.cpp">normalize.cpp</a>、<a href="../../include/ecm/stage1/selection.h">selection.h</a></td><td>目标能力诊断与所存计划优先规则；增加CPU param3时将内部param视为构造字段。</td><td>把 param 只视为 GPU 选项的假设；旧 CLI 名称如需调整应保留兼容别名。</td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section class="card" id="migration">
+    <h2>重构后的调用流程与实施顺序</h2>
+    <ol>
+      <li>main 完成原有归一化，冻结 N/curve/param/B1/sigma 等数学输入，选择现有 run_xx_stage1 入口。</li>
+      <li>task 建立数学身份和同一个批次锁；Context 识别新/旧格式并进行物理完整性检查。</li>
+      <li>曲线工作流生成或重建 S，读取所存计划；共同 checkpoint Module 核对构造、计划、各曲线状态与游标，成功前不提交来源种子。</li>
+      <li>目标后端按精确计划/游标组批，重建本地表示和字典，调用原有计算 Implementation；各子批结果映射回原始曲线。</li>
+      <li>周期/停止时收集安全快照，一次提交整个 checkpoint；全部计算完成后仍由 task 一次发布 save、Stage1 JSONL 和提交结果。</li>
+    </ol>
+    <div class="wrap"><table><thead><tr><th>批次</th><th>交付</th><th>完成条件</th></tr></thead><tbody>
+      <tr><td>P0</td><td>冻结当前样本；建立数学状态/游标 oracle，先写互转和真实续算验证。</td><td>区分预期不兼容与损坏；记录当前每种算法的首位、末位、完成状态。</td></tr>
+      <tr><td>P1</td><td>新公共格式、数学身份、批量快照；旧格式只读导入。</td><td>同后端 round trip、故障/备份/停止/发布恢复通过；旧文件不被错误覆盖。</td></tr>
+      <tr><td>P2</td><td>Mont0 CPU↔CUDA，Mont3 CUDA↔OpenCL；逐曲线 sigma/游标与逻辑索引。</td><td>双向及连续跨端恢复、随机/非连续 sigma、混合完成状态通过。</td></tr>
+      <tr><td>P3</td><td>Edwards 共同 NAF3..12、完整 XYZT；调整 CPU SIMD 恢复分组。</td><td>每个共同窗口双向中途恢复，退化点和不同游标不丢进度。</td></tr>
+      <tr><td>P4</td><td>若要完整承诺：CPU param3、Edwards来源w2与binary续算。</td><td>Mont3 三端双向覆盖；明确CPU scalar/SIMD可执行计划，不自动换算法。</td></tr>
+      <tr><td>后续</td><td>PRAC跨算法、OpenCL param0/2、Edwards OpenCL及任意NAF重编码。</td><td>各自数学转换证明与独立性能验收；不混入格式统一的默认承诺。</td></tr>
+    </tbody></table></div>
+    <p>旧文件读取应先校验外层，再按来源解析完整身份，验证对应数学字段，最后选择旧 payload decoder。不能简单删除 identity 的 cpu/gpu 子串放行。新格式首次成功写入之前保留原始档；不支持的计划、任务不匹配与损坏应给出不同诊断，不自动清空进度或随机换 sigma。</p>
+    <p>旧格式缺少的证明不能凭空补齐。CPU Edwards 导入要额外核对窗口对应的 dict_size、指数长度、原始基点与点关系；旧 Mont 没有规范 S 摘要时，只能按受支持版本的既定标量生成约定重建并核对现存字段。给重建的 S 新算摘要，不等于追溯证明旧文件当时保存了该 S；应明确这一兼容假设。</p>
+    <div class="note good">建议对外承诺：“在目标支持相同构造和 checkpoint 计划时，可停止后切换后端，无需重新计算已保存工作。”默认沿用所存计划；互通不要求两个程序同时持锁运行。完全改算法和任意调整 B1/曲线数属于另外的恢复合同。</div>
+  </section>
+
+  <section class="card" id="verification">
+    <h2>验证、耗时与内存评估</h2>
+    <p><b>本页为源码分析，未执行 CPU↔CUDA↔OpenCL 中途 checkpoint 实测。</b>现有 GPU probe 的“最终点与 CPU 比较”、各自停止恢复和旧格式迁移测试，并不能替代真实跨后端中途恢复。两种 Edwards NAF 编码的独立转录比较仅为辅助核对，不作为生产互通验收证据。</p>
+    <div class="wrap"><table><thead><tr><th>验证</th><th>必要样本与判定</th></tr></thead><tbody>
+      <tr><td>数学续算</td><td>Mont0 CPU scalar/SIMD↔CUDA；Mont3 CUDA↔OpenCL，增加CPU3后六个有向组合。Ed共同窗口3..12双向，补齐后再测w2/binary。保存→转端→再保存→转回，最终与不中断、独立参考一致。</td></tr>
+      <tr><td>边界与状态</td><td>初始种子、d=1、31/32/33、GPU切片非对齐、最后一步、已计算未发布；不同NAF首列/符号/零串；混合未开始、进行中、完成、因子、无点。</td></tr>
+      <tr><td>身份与几何</td><td>实际余因子N、LCM1/12、固定48LCM、param、64位Mont0 sigma、param3范围、随机/非连续sigma、不同BITS/TPI/ISA、不同曲线游标，保证原逻辑索引/结果身份正确。</td></tr>
+      <tr><td>错误与持久化</td><td>错S/计划/游标、点损坏、截断/CRC、错误身份、有效但不支持的计划、Z不可逆、备份恢复、写入/flush/替换失败、两文件发布恢复；验证失败保留来源，不静默重算。</td></tr>
+      <tr><td>比较方法</td><td>规范状态和计划核对；可逆时比较最终affine点，非可逆时检查gcd/真因子/无点语义；对投影点做方程与交叉乘积检查，但不能只靠复合模数下的交叉乘积或CRC证明计算正确。</td></tr>
+    </tbody></table></div>
+    <h3>可以先估算的成本</h3>
+    <p>若仅保存4个普通域坐标，每条最多4·ceil(bits(N)/8) bytes。1000条曲线、10267位N，坐标上界约5,136,000 bytes（4.90 MiB）；521位约264,000 bytes（0.252 MiB）。这只是坐标载荷估算，不含计划、索引、完成结果、临时编码、旧候选和设备副本，不能当作进程峰值。N与同一计划只保存一次；d/a24/基点可按构造重建。</p>
+    <p>Mont0 CPU与CUDA已有普通域快照，新增成本主要是结构验证/装配。OpenCL需在checkpoint边界转换四坐标，原执行期间继续保留设备域；不应为每个切片额外做主机转换。Edwards补存T约增加一个大整数/曲线，却避免新格式恢复时对每条曲线求逆。字典仍重建，不写成每条checkpoint的大数组。</p>
+    <div class="note">保留来源 NAF 窗口需要先做目标内存准入。当前 CUDA Edwards 字典约为 <b>4·C·2<sup>w−2</sup>·container_bytes</b>，同样 C/容器下，w12 的字典为 w6 的64倍。CPU w12 checkpoint 转 GPU 时，应先减少本次计算组的曲线数以适应预算，保持同一计划；不能遇到显存不足就改窗口并沿用旧游标。若最小组仍不支持，明确报错并保留 checkpoint。减少恢复逆运算也不会消除 CPU 仿射字典的重建成本。依据：<a href="../../src/ecm/edwards_stage1/cuda/runtime.cpp">字典分配</a>。</div>
+    <p>应实测：同端/跨端加载→首个有效批次、停止请求→持久提交、周期checkpoint耗时、进程峰值与GPU驻留、按游标碎片化的额外启动/字典成本，以及整任务吞吐。使用1000曲线、521/10267位N，分别测试统一与混合游标、连续与随机sigma；标注B1/窗口、硬件、功率、二进制、样本数和计时边界。当前没有数据支持具体毫秒数或加速百分比。</p>
+    <h3>建议的实施范围</h3>
+    <p>先采用 B，完成 P0–P3 作为可验证首轮；若目标明确包含 Montgomery 三端同构造和全部现有 Edwards 模式，则把 P4 一并列入完整交付范围。PRAC、缺少的计算后端及任意算法切换单列，不将它们隐含在“格式统一”中。进入实施前只需确定这一交付边界，后续接口和文件合并由上述职责推进。</p>
+  </section>
+  <footer>临时规划草稿保留，当前生产实现仍为 0.53.4。源码依据为本仓库现状；数学恢复等价性需以实际后端中途恢复测试完成验收。本页不修改现行格式规范或实施状态。</footer>
+</main></body>
+</html>

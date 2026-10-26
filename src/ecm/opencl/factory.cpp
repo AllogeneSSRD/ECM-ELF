@@ -6,7 +6,7 @@
 */
 
 #include "../../../include/ecm/stage1/gpu_backend.h"
-#include "../stage1/legacy.h"                    /* ECM_ERROR */
+#include "../stage1/libecm_compat.h"                    /* ECM_ERROR */
 
 #include "../montgomery_stage1/opencl/api.h"            /* gpu_prepare_opencl */
 #include "runtime/device.h"              /* configureOpenclDeviceIndex */

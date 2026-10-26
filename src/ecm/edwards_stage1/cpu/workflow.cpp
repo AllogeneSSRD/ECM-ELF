@@ -1,6 +1,6 @@
 #include "../../../io/files.h"
 #include "ecm/stage1/progress.h"
-#include "ecm/stage1/cpu_support.h"
+#include "ecm/stage1/cpu_runtime.h"
 #include <future>
 #include <memory>
 #include <iostream>
@@ -42,9 +42,9 @@
 
 #include <gmp.h>
 
-#include "ecm/stage1/cpu_execution.h"
+#include "ecm/stage1/execution.h"
 #include "ecm/curve/edwards.h"
-#include "ecm/stage1/preparation.h"
+#include "ecm/stage1/sigma.h"
 #include "ecm/io/save.h"
 #include "ecm/montgomery_stage1/opencl/checkpoint.h"
 #include "../../../io/stage1_checkpoint.h"
@@ -69,9 +69,8 @@ using ecm_stage1::CurveKind;
 using ecm_stage1::CurveOutcome;
 using ecm_io::ensure_dir;
 using ecm_stage1::ExecutionOptions;
-using ecm_stage1::fixed_sigma_batch_exceeds_prime95_range;
 using ecm_save::format_name;
-using ecm_stage1::random_sigma_u64;
+using ecm_stage1::select_curve_sigma;
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::Stage1Options;
 using ecm_stage1::stdout_is_tty_local;
@@ -805,7 +804,7 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         }
     }
 
-    // sigma 预生成: random_sigma_u64 使用全局 rand()/srand(), 非线程安全,
+    // 独立随机 sigma 使用全局 rand()/srand()，在启动工作线程前串行生成。
     // 因此全部在主线程生成后再分发给工作线程.
     //
     std::vector<uint64_t> sigmas(curves);
@@ -814,10 +813,12 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         // otherwise a fresh Prime95-style random sigma per curve -- 但若该曲线已有合格的
         // .ckpt 就**采用存档里的 sigma**（存档覆盖参数）。否则每轮都随机出新的 sigma,
         // 与存档永久不匹配, 自动续跑永远不会发生（这正是"不会自动从 saves/ 续跑"的根因）。
-        if (opt.identity.sigma_fixed) {
-            sigmas[i] = checkpoint.sigma(i, opt.identity.fixed_sigma64 + i);
-        } else {
-            sigmas[i] = checkpoint.sigma(i, random_sigma_u64());
+        uint64_t saved = 0;
+        checkpoint.saved_sigma(i, saved);
+        sigmas[i] = checkpoint.sigma(
+            i, select_curve_sigma(saved, opt.identity.sigma_fixed,
+                                  opt.identity.fixed_sigma64, i));
+        if (!opt.identity.sigma_fixed) {
             if (!opt.persistence.tmp_dir.empty()) {
                 const std::string cp = ecm_stage1_curve_record(i);
                 ecm_save_common rcm;

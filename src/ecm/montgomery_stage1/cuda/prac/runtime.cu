@@ -5,6 +5,7 @@
 #include "../checkpoint.h"
 #include "../host_policy.h"
 #include "../output.h"
+#include "../../../stage1/sigma.h"
 #include "../../../cuda/runtime/cuda_ecm_shim.h"
 #include <algorithm>
 #include "ecm/stage1/progress.h"
@@ -50,7 +51,8 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
     uint64_t B1, uint32_t torsion, bool prac,ecm_cuda_stage1::RunResult &outcome,
     const ConstructionResults &construction,ecm_cuda_stage1::SigmaGenerator generate_sigma,const MontRequestedSpec &requested) {
         using namespace ecm_cuda_stage1;
-        if (!curves || !sigma || *sigma > UINT64_MAX - curves || B1 < 2 || B1 > UINT32_MAX ||
+        if (!sigma || !ecm_stage1::montgomery_sigma_batch_fits(*sigma, curves, 0) ||
+            B1 < 2 || B1 > UINT32_MAX ||
             (torsion != 1 && torsion != 12)) throw std::runtime_error("invalid resident Stage1 parameters");
         uint32_t bits = 0, tpi = 0;
         const auto policy=read_prac_policy(requested,prac);
@@ -131,7 +133,8 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
             else if(generate_sigma)*sigma=generate_sigma(curves,0);
             h.sigma=*sigma;
         }
-        if(*sigma>UINT64_MAX-(curves-1ull))throw RunError(Failure::Preparation,"resident sigma range overflow");
+        if(!ecm_stage1::montgomery_sigma_batch_fits(*sigma,curves,0))
+            throw RunError(Failure::Preparation,"resident sigma range overflow");
         for(uint32_t i=0;i<curves;++i)
             if(checkpoint.sigma(i,*sigma+i)!=*sigma+i)
                 throw RunError(Failure::Preparation,"nonconsecutive resident checkpoint sigmas");

@@ -32,6 +32,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "construction.h"
 #include "output.h"
 #include "host_policy.h"
+#include "../../stage1/sigma.h"
 using namespace ecm_cuda_mont_host;
 
 #include <cassert>
@@ -307,8 +308,7 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
     if(checkpoint.saved_sigma(0,saved))sigma64=saved;
     else if(generate_sigma)sigma64=generate_sigma(curves,gpu_param);
   }
-  if(sigma64>UINT64_MAX-(curves-1ull) ||
-     (gpu_param!=0 && (sigma64>UINT32_MAX || curves>0x100000000ull-sigma64)))
+   if(!ecm_stage1::montgomery_sigma_batch_fits(sigma64,curves,gpu_param))
       throw RunError(Failure::Preparation,"CUDA sigma range overflow");
   *sigma_ptr=sigma64;sigma32=uint32_t(sigma64);
   for(uint32_t i=0;i<curves;++i)

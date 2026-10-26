@@ -17,7 +17,7 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Ra
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output ".gitignore"),"*`n")
-$sources=@('src/ecm/stage1/execution_contract.cpp','src/ecm/stage1/preparation.cpp','src/ecm/edwards_stage1/cpu/workflow.cpp','src/ecm/montgomery_stage1/cpu/workflow.cpp','src/ecm/stage1/cpu_support.cpp')
+$sources=@('src/ecm/stage1/computation.cpp','src/ecm/stage1/sigma.cpp','src/ecm/edwards_stage1/cpu/workflow.cpp','src/ecm/montgomery_stage1/cpu/workflow.cpp','src/ecm/stage1/cpu_runtime.cpp')
 if($IncludeGpuHost){
     $sources+=@('src/ecm/stage1/execution.cpp',
         'src/ecm/montgomery_stage1/cuda/workflow.cpp',

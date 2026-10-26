@@ -25,6 +25,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #define _ECM_H 1
 
 #include <stdio.h> /* for FILE */
+#include <stdint.h>
 #include <gmp.h>
 
 #undef ECM_VERSION
@@ -211,9 +212,11 @@ int pm1 (mpz_t, mpz_t, mpz_t, mpz_t, double *, double, mpz_t,
 /* Apple uses '\r' for newlines */
 #define IS_NEWLINE(c) (((c) == '\n') || ((c) == '\r'))
 
+/* Retained historical helper ABI; normal Stage1 no longer computes batch_d. */
+void gpu_compute_batch_d(mpz_t d_out, uint32_t sigma, mpz_srcptr n);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* _ECM_H */
-

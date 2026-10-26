@@ -18,7 +18,7 @@
 
 /* Project return codes: ECM_NO_FACTOR_FOUND, ECM_FACTOR_FOUND_STEP1,
    ECM_ERROR, ECM_PARAM_BATCH_32BITS_D, ... */
-#include "../../stage1/legacy.h"
+#include "../../stage1/libecm_compat.h"
 
 /* ── GMP-ECM verbosity levels (values must match GMP-ECM semantics) ────────
    outputf(level, ...) prints when the active verbose threshold >= level.

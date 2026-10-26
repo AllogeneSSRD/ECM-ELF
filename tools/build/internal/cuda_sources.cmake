@@ -8,10 +8,10 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/stage1/selection.cpp
     src/io/results.cpp
     src/ecm/stage1/task.cpp
-    src/ecm/stage1/execution_contract.cpp
-    src/ecm/stage1/preparation.cpp
+    src/ecm/stage1/computation.cpp
+    src/ecm/stage1/sigma.cpp
     src/ecm/stage1/execution.cpp
-    src/ecm/edwards_stage1/cpu/workflow.cpp src/ecm/montgomery_stage1/cpu/workflow.cpp src/ecm/stage1/cpu_support.cpp
+    src/ecm/edwards_stage1/cpu/workflow.cpp src/ecm/montgomery_stage1/cpu/workflow.cpp src/ecm/stage1/cpu_runtime.cpp
     src/io/normalize.cpp
     src/ecm/application/cli/group_order.cpp
     src/io/cli.cpp
@@ -20,10 +20,9 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/sync/p95.cpp
     src/io/save.cpp
     src/main.cpp
-    src/ecm/stage1/legacy.cpp
+    src/ecm/stage1/libecm_compat.cpp
     src/ecm/montgomery_stage1/opencl/checkpoint.cpp
     src/io/stage1_checkpoint.cpp src/ecm/platform/stop.cpp
-    src/ecm/stage1/gpu_common.cpp
     src/io/config.cpp
     src/io/worktodo.cpp
     src/sync/stage2.cpp

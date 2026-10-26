@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace ecm_save { struct Range; }
+namespace ecm_save { struct Range; struct Naming; }
 
 namespace ecm_stage1 {
 
@@ -99,5 +99,8 @@ public:
 };
 
 TaskResult run_stage1_task(const Stage1Request &,const TaskDependencies &);
+
+// Project the resolved task identity into the IO naming contract.
+ecm_save::Naming save_naming(const Stage1Options &);
 
 } // namespace ecm_stage1

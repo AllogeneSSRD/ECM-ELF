@@ -2,7 +2,7 @@
 #include "../../../io/stage1_checkpoint.h"
 
 
-#include "ecm/stage1/legacy.h"
+#include "ecm/stage1/libecm_compat.h"
 
 #include <gmp.h>
 

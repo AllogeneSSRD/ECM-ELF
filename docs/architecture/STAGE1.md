@@ -32,7 +32,7 @@ task 在栈上直接拥有 `ecm_stage1_checkpoint::Context`。Context 实际保�
 
 应用 [main.cpp](../../src/main.cpp)负责模式、进程启动、worker资源与队列循环。归一化当前任务后，通过 [select_stage1_entry](../../src/ecm/stage1/execution.cpp)选择一个普通函数入口；选择不执行CUDA，不改变任务。task随后直接调用选定入口，不经过另一层执行转发。构建身份、默认NAF和CUDA延迟验证能力仍由应用组装。
 
-[私有计算合同](../../src/ecm/stage1/execution_contract.h)以 ExecutionOptions 保存执行副本，以 ComputationResult 返回完成/停止/失败及来源、拥有的逐曲线结果。每条结果区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed。CPU 与 CUDA workflow 直接构造拥有结果；Montgomery 设备数组仅在该 workflow 内适配并移动 GMP 值，LegacyExecutionResult 留给 OpenCL 兼容边界。task 不从旧返回码、flags 或数组猜测执行状态。TaskResult::State 另保存最终发布状态、明确的 save Range 和队列尚未提交的 checkpoint 责任；计算完成与文件发布完成是两个事实。
+[私有计算合同](../../src/ecm/stage1/execution.h)以 ExecutionOptions 保存执行副本，以 ComputationResult 返回完成/停止/失败及来源、拥有的逐曲线结果。每条结果区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed。CPU 与 CUDA workflow 直接构造拥有结果；Montgomery 设备数组仅在该 workflow 内适配并移动 GMP 值，LegacyExecutionResult 留给 OpenCL 兼容边界。task 不从旧返回码、flags 或数组猜测执行状态。TaskResult::State 另保存最终发布状态、明确的 save Range 和队列尚未提交的 checkpoint 责任；计算完成与文件发布完成是两个事实。
 
 任务与真实持久化模块可通过普通 CXX 独立编译验证。25 个任务模式覆盖拥有权、失败／停止优先级、锁释放、资源别名和历史快照；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [stage1_checkpoint.cpp](../../src/io/stage1_checkpoint.cpp)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
@@ -52,7 +52,7 @@ task接收后端的拥有结果，调用纯编码器生成save，在发布后核
 
 [selection.h](../../include/ecm/stage1/selection.h)公开曲线/目标/CPU 实现/归约/标量构造类型，以及这些词汇的解析、合法组合和名称声明；11 个实际函数集中在 [selection.cpp](../../src/ecm/stage1/selection.cpp)。旧应用私有选择头已删除，不保留转发。字段、枚举值、ASCII 解析、sigma 参数冲突规则与名称保持。
 
-task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/configuration_defaults.h)获取同一 JSON 定义，不包含应用的 TOML 解析/完整绑定。准备模块也只依赖公共选择合同。应用完整生成绑定引用这份默认值，未复制默认值来源或新增配置服务。真实无 SDK 任务编译记录覆盖共享 selection 实现，且不包含 ecm_toml.h/ecm_config_generated.h。
+task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/configuration_defaults.h)获取同一 JSON 定义，不包含应用的 TOML 解析/完整绑定。任务准备也只依赖公共选择合同。应用完整生成绑定引用这份默认值，未复制默认值来源或新增配置服务。真实无 SDK 任务编译记录覆盖共享 selection 实现，且不包含 ecm_toml.h/ecm_config_generated.h。
 
 ## 标量和进度的实现隔离
 
@@ -64,15 +64,28 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 ## CPU 执行与共享主机准备
 
-CPU 的 [Edwards workflow](../../src/ecm/edwards_stage1/cpu/workflow.cpp) 和 [Montgomery workflow](../../src/ecm/montgomery_stage1/cpu/workflow.cpp) 接收统一 Stage1Request、执行副本及借用的 Context，直接返回 ComputationResult。新计算不先编码 save 文本再解析；Edwards 只在恢复边界解码并校验兼容的 DONE_V1，空点记录转为 CompletedWithoutPoint。Montgomery 在释放局部数组前移动末点。共享 ISA 探测、CPU 绑定和进度显示位于 execution_support；线程寿命、GMP 临时量及进度条由作用域管理，工作线程异常传回 workflow。普通基线 CXX 不继承 AVX512 编译设置。最终 save 和结果由 task 发布。
+CPU 的 [Edwards workflow](../../src/ecm/edwards_stage1/cpu/workflow.cpp) 和 [Montgomery workflow](../../src/ecm/montgomery_stage1/cpu/workflow.cpp) 接收统一 Stage1Request、执行副本及借用的 Context，直接返回 ComputationResult。新计算不先编码 save 文本再解析；Edwards 只在恢复边界解码并校验兼容的 DONE_V1，空点记录转为 CompletedWithoutPoint。Montgomery 在释放局部数组前移动末点。共享 ISA 探测、CPU 绑定和进度显示位于 [cpu_runtime](../../src/ecm/stage1/cpu_runtime.cpp)；线程寿命、GMP 临时量及进度条由作用域管理，工作线程异常传回 workflow。普通基线 CXX 不继承 AVX512 编译设置。最终 save 和结果由 task 发布。
 
-[preparation.cpp](../../src/ecm/stage1/preparation.cpp)集中 CPU/GPU 共用的标量准备入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。归一化将指数缓存目录固定到任务的 persistence 选项；空目录明确禁用缓存，不在执行时重新套默认值。CLI 或配置的 off/none/0/- 保留禁用语义，PRAC 默认计划目录使用同一显式目录。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列已提取到各自普通 CXX。
+[task.cpp](../../src/ecm/stage1/task.cpp)拥有共同的 `compute_batch_s` 标量/cache/log 编排，以及 `save_naming` 身份投影；纯 LCM/NAF 数学留在 scalar，缓存读写留在 exponent_cache，时钟/TTY 留在 progress。归一化将指数缓存目录固定到任务的 persistence 选项；空目录明确禁用缓存，不在执行时重新套默认值。CLI 或配置的 off/none/0/- 保留禁用语义，PRAC 默认计划目录使用同一显式目录。固定 sigma 的 Prime95 有符号范围提醒是 Montgomery CPU 的局部兼容警告，不是共同拒绝条件。
 
 各工作流负责计算与安全点DONE/checkpoint；任务层负责最终save、结果发布和批次关闭。实际设备同步和回读继续依赖 CUDA。
 
+## Sigma 生成与分配
+
+[sigma.cpp/h](../../src/ecm/stage1/sigma.h)集中随机生成、保存/固定/随机候选选择及批次范围，不依赖 task、文件读写或设备 SDK。调用方先完成原有 checkpoint 验证，再传入有效非零保存值；Module 不读取存档、不判定显式输入冲突，也不改变恢复格式或候选接纳规则。
+
+- `random_sigma53` 保留进程级 rand/srand 和部分平台的 rdtsc 混合，返回 6～2⁵³−1，不能理解为完整64位均匀抽样。CPU Montgomery、CPU Edwards、CUDA Edwards采用逐曲线独立抽样；CPU在启动工作线程前串行生成。
+- CUDA Montgomery PARAM0，包括 resident/PRAC，采用一个53位随机起点后连续展开。PARAM2/3与OpenCL采用32位有界起点后连续展开；PARAM2下界为2，PARAM3下界为1。
+- 显式固定输入仍按 base+i 展开；有效保存值优先，缺失时才产生候选。sigma 选择不会重抽已保存曲线，不进行自动去重或退化曲线替换。固定值和恢复值不受53位随机范围限制。
+- 共同范围按“最后一条仍可表示”检查：C>0 且 base≤max−(C−1)。PARAM2/3的max为UINT32_MAX，PARAM0/Edwards为UINT64_MAX；归一化、CUDA和OpenCL使用同一条件。固定PARAM2的sigma=1在设备准备前报告来源和值对应的下界错误。
+
+Android仍可单独链接sigma与libecm_compat；历史C符号 `gpu_pick_random_sigma` 保留其特殊输入返回值。`gpu_compute_batch_d` 的C实现位于 [libecm_compat.cpp](../../src/ecm/stage1/libecm_compat.cpp)，正常OpenCL流程不计算未使用的batch_d。两套随机引擎及逐曲线/连续批次策略均保留；没有跨worker唯一或随机序列跨后端一致的保证。
+
+checkpoint实现与恢复合同维持原样。Android原有native存档可以覆盖当前起点，显式固定sigma冲突与桌面保持一致仍为TODO，需要单独验证和授权；此次sigma Module不代替该恢复检查。
+
 ## 唯一执行分派与 GPU 主机流程
 
-[execution.cpp](../../src/ecm/stage1/execution.cpp)按实际任务的target与曲线选择入口，Montgomery各param均选择同一个run_mont_stage1。CUDA由构建显式定义ECM_HAS_CUDA_STAGE1；[execution.h](../../src/ecm/stage1/cuda_execution.h)声明两个同签名入口。两条workflow线性编排准备、恢复候选验证、布局接纳或新曲线构造、设备执行、结果收集；不拥有最终save/results发布或队列。
+[execution.cpp](../../src/ecm/stage1/execution.cpp)按实际任务的target与曲线选择入口，Montgomery各param均选择同一个run_mont_stage1。CUDA由构建显式定义ECM_HAS_CUDA_STAGE1；[execution.h](../../src/ecm/stage1/execution.h)声明两个同签名入口。两条workflow线性编排准备、恢复候选验证、布局接纳或新曲线构造、设备执行、结果收集；不拥有最终save/results发布或队列。
 
 [Montgomery workflow](../../src/ecm/montgomery_stage1/cuda/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/montgomery_stage1/cuda/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 

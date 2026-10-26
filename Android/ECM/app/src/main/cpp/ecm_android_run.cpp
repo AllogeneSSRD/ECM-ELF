@@ -40,14 +40,14 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 #include "../../../../../../src/ecm/montgomery_stage1/opencl/api.h"
 #include "ecm/io/save.h"
 
-#include "../../../../../../src/ecm/stage1/legacy.h"
+#include "../../../../../../src/ecm/stage1/libecm_compat.h"
 
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <vector>
 
-extern "C" uint32_t gpu_pick_random_sigma(uint32_t curves);
+#include "../../../../../../src/ecm/stage1/sigma.h"
 
 namespace {
 
@@ -223,7 +223,7 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
     }
 
     uint32_t firstsigma = req.sigma_fixed ? req.sigma : gpu_pick_random_sigma(curves);
-    if (static_cast<uint64_t>(firstsigma) + curves > 0x100000000ull) {
+    if (!ecm_stage1::montgomery_sigma_batch_fits(firstsigma, curves, 3)) {
         for (uint32_t i = 0; i < curves; ++i) {
             mpz_clear(factors[i]);
         }

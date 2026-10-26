@@ -1,7 +1,8 @@
 #include "io/normalize.h"
 #include "ecm/application/configuration/ecm_expr.h"
 #include "ecm/stage1/gpu_backend.h"
-#include "ecm/stage1/preparation.h"
+#include "ecm/stage1/sigma.h"
+#include "ecm/io/save.h"
 #include "io/cli.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
@@ -494,7 +495,7 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
         return true;
     }
     if (opt.identity.sigma_fixed && curves != 0 &&
-        static_cast<uint64_t>(curves - 1) > UINT64_MAX - opt.identity.fixed_sigma64) {
+        !ecm_stage1::sigma_batch_fits(opt.identity.fixed_sigma64, curves)) {
         error = "sigma + curve index exceeds 2^64-1";
         return true;
     }
@@ -506,7 +507,14 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
         error = "GPU batch sigma exceeds 2^32-1";
         return true;
     }
-    if (curves != 0 && curves > 0x100000000ull - opt.identity.fixed_sigma64) {
+    const uint64_t minimum = opt.execution.selection.gpu_param == 2 ? 2 : 1;
+    if (opt.identity.fixed_sigma64 < minimum) {
+        error = "GPU batch sigma must be >= " + std::to_string(minimum);
+        return true;
+    }
+    if (curves != 0 && !ecm_stage1::montgomery_sigma_batch_fits(
+                           opt.identity.fixed_sigma64, curves,
+                           opt.execution.selection.gpu_param)) {
         error = "GPU batch sigma + curves must be <= 2^32";
         return true;
     }

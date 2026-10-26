@@ -1,8 +1,9 @@
 #include "ecm/stage1/progress.h"
 #include "../../../io/files.h"
 #include "ecm/io/results.h"
-#include "../../stage1/cuda_execution.h"
-#include "../../stage1/preparation.h"
+#include "../../stage1/execution.h"
+#include "../../stage1/sigma.h"
+#include "ecm/io/save.h"
 #include "../../../io/stage1_checkpoint.h"
 #include "ecm/platform/logging.h"
 #include <algorithm>
@@ -15,7 +16,7 @@ using ecm_stage1::compute_batch_s;
 using ecm_stage1::CurveKind;
 using ecm_io::ensure_dir;
 using ecm_save::format_name;
-using ecm_stage1::random_sigma_u64;
+using ecm_stage1::select_curve_sigma;
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::Stage1Options;
 using ecm_stage1::stdout_is_tty_local;
@@ -326,10 +327,10 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             // Sigma selection and curve parameterization are separate operations.
             for (uint32_t i = 0; i < curves; ++i) {
                 uint64_t sigma = 0;
-                if (!checkpoint.saved_sigma(i, sigma))
-                    sigma = opt.identity.sigma_fixed ? opt.identity.fixed_sigma64 + i
-                                                     : random_sigma_u64();
-                batch.sigmas[i] = checkpoint.sigma(i, sigma);
+                checkpoint.saved_sigma(i, sigma);
+                batch.sigmas[i] = checkpoint.sigma(
+                    i, select_curve_sigma(sigma, opt.identity.sigma_fixed,
+                                          opt.identity.fixed_sigma64, i));
             }
             std::string error;
             uint32_t degenerate_curve = UINT32_MAX;

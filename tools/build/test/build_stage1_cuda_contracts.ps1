@@ -14,7 +14,8 @@ if(-not $m.compile_setup -or -not $m.host_compiler -or -not $m.cuda_root){throw 
 Initialize-EcmBuildDirectory $output
 $sources=@('src/ecm/montgomery_stage1/cuda/host_math.cpp',
     'src/ecm/edwards_stage1/cuda/runtime.cpp','src/ecm/stage1/scalar.cpp',
-    'src/ecm/stage1/execution_contract.cpp','tools/test/stage1_cuda_host_contract.cpp')
+    'src/ecm/stage1/computation.cpp','src/ecm/stage1/sigma.cpp',
+    'src/ecm/stage1/libecm_compat.cpp','tools/test/stage1_cuda_host_contract.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources){
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects+=('"'+$object+'"')

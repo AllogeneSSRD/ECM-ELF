@@ -1,6 +1,6 @@
 #include <cstdlib>
 #include <gmp.h>
-#include "legacy.h"
+#include "libecm_compat.h"
 
 extern "C" void ecm_init(ecm_params q)
 {
@@ -77,4 +77,18 @@ extern "C" void ecm_clear(ecm_params q)
     mpz_clear (q->E->a6);
     mpz_clear (q->E->sq[0]);
     free (q->E);
+}
+
+// Retained C ABI for consumers of the historical GPU helper.
+extern "C" void gpu_compute_batch_d(mpz_t d_out, uint32_t sigma, const mpz_t N) {
+    mpz_t pow2_32, inv;
+    mpz_init(pow2_32);
+    mpz_init(inv);
+    mpz_ui_pow_ui(pow2_32, 2, 32);
+    mpz_invert(inv, pow2_32, N);
+    mpz_set_ui(d_out, sigma);
+    mpz_mul(d_out, d_out, inv);
+    mpz_mod(d_out, d_out, N);
+    mpz_clear(pow2_32);
+    mpz_clear(inv);
 }

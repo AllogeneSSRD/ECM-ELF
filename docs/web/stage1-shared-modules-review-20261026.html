@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stage1 共享文件与sigma优化 · ECM-ELF</title>
+  <style>
+    :root{color-scheme:light;--ink:#20343f;--muted:#5c6d79;--line:#d3dfe5;--accent:#176d68}*{box-sizing:border-box}
+    body{margin:0;background:#f3f6f8;color:var(--ink);font:16px/1.85 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1220px;margin:auto;padding:35px 25px 70px}
+    h1{font-size:34px;line-height:1.4}h2{font-size:24px;line-height:1.5;margin:8px 0 15px}h3{font-size:18px;margin:22px 0 7px}p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}
+    code,pre{font:13px/1.8 Consolas,monospace}code{background:#edf2f5;border-radius:4px;padding:2px 4px;overflow-wrap:anywhere}pre{white-space:pre;margin:0;overflow-x:auto}.meta,.caption,.files{font-size:13px;color:var(--muted)}
+    nav{display:flex;flex-wrap:wrap;gap:8px 20px;margin:18px 0;font-size:14px}.card{background:white;border:1px solid var(--line);border-radius:14px;padding:25px 28px;margin:23px 0;scroll-margin-top:16px}.top{border:2px solid #84afa8;background:#f5fbf9}
+    .badge{display:inline-block;background:#ddefe8;color:#126458;border-radius:5px;font-size:12px;font-weight:700;padding:2px 9px;margin-right:7px}.amber{background:#fff0d6;color:#8b5d27}.gray{background:#eaf0f4;color:#526572}
+    .pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.flow{padding:16px;background:#f6f9fa;border:1px solid var(--line);border-radius:9px}.node{background:white;border:1px solid #a9bfca;border-radius:7px;text-align:center;padding:11px;margin:10px 0;line-height:1.6}.node small{display:block;font-size:12px;color:var(--muted)}.deep{background:#214b59;color:white;border-color:#214b59}.deep small{color:#d2e9e5}.leak{background:#fff7ec;border-color:#c89c69}.arrow{text-align:center;font-size:13px;color:#6b8792}.seam{border:1px dashed #7497a1;padding:11px;border-radius:6px;font-size:13px;text-align:center}
+    .wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#edf3f5}.note{border-left:4px solid #bd9654;background:#fff7e9;padding:12px 16px;margin:17px 0;font-size:14px}.good{border-left-color:#3d877d;background:#edf7f3}.tree{background:#183946;color:#dfeeed;border-radius:8px;padding:19px 22px}.yes{color:#116e57;font-weight:600}ul,ol{padding-left:24px}li{margin:8px 0}details{border-top:1px solid var(--line);padding-top:12px;margin-top:16px}summary{cursor:pointer;font-weight:600}footer{font-size:13px;color:var(--muted)}
+    @media(max-width:760px){main{padding:22px 13px}.card{padding:20px 16px}.pair{grid-template-columns:1fr}h1{font-size:27px}}@media print{nav{display:none}.card{break-inside:avoid}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="meta">ECM-ELF · 2026-10-26 · 当前版本 0.53.5 · 基线 Git 422a38e8 · 已实施并通过回归</div>
+    <h1>Stage1 共享文件与sigma优化</h1>
+    <p>重点核对 gpu_common、preparation，以及 execution 周围的薄头文件。补充各后端 sigma 生成、分配与恢复的完整盘点。按实际调用、链接闭包与格式责任归位；保留数学、设备编译和兼容 ABI 的真实 Seam。</p>
+    <nav><a href="#implementation-result">实施结果</a><a href="#recommendation">实施前分析</a><a href="#gpu-common">gpu_common</a><a href="#sigma-policies">各后端sigma</a><a href="#sigma-gaps">规则差异</a><a href="#sigma-consolidation">sigma收口建议</a><a href="#preparation">preparation</a><a href="#execution">执行头文件</a><a href="#naming">命名与保留项</a><a href="#layout">目标目录</a><a href="#inventory">完整盘点</a><a href="#followups">后续深化</a><a href="#validation">实施与验证</a></nav>
+  </header>
+
+  <section class="card top" id="implementation-result">
+    <span class="badge">0.53.5 · 已实施</span><span class="badge">回归通过</span>
+    <h2>共享文件收口，sigma生成与范围归一</h2>
+    <p>用户授权共享文件与sigma优化，并明确暂不修改checkpoint。本轮只改变共享实现的拥有者、sigma候选生成及整数范围；checkpoint外壳、数学载荷、版本、命名与候选接纳规则保持。当前权威说明见<a href="../architecture/STAGE1.md#sigma-生成与分配">Stage1架构</a>；下方保留0.53.4分析快照，不能据此判断当前未实施。</p>
+    <div class="pair"><div class="flow"><div class="caption">实施前：19个私有共享文件</div><div class="node leak">preparation / gpu_common<small>指数、随机、Naming、范围提醒与无效batch_d</small></div><div class="node leak">4个执行头 + 泛名support/legacy</div></div><div class="flow"><div class="caption">当前：14个私有共享文件，公开5头保持</div><div class="node deep">task / sigma / execution / computation</div><div class="node">cpu_runtime / libecm_compat<small>保留真实独立编译与链接合同</small></div><div class="seam">checkpoint保持原实现；sigma Module不依赖IO或SDK</div></div></div>
+    <div class="wrap"><table><thead><tr><th>当前文件</th><th>本轮结果</th></tr></thead><tbody>
+      <tr><td><a href="../../src/ecm/stage1/sigma.h">sigma.cpp/h</a></td><td>集中R53、R32、逐曲线/连续批次候选选择及范围条件。已接受的非零保存值不触发新抽样；保留两个随机引擎和三种随机分配策略。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/task.cpp">task.cpp</a></td><td>吸收原compute_batch_s与save_naming；标量、缓存键、日志、命名行为逐函数与0.53.4基线比较。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/execution.h">execution.h</a> / <a href="../../src/ecm/stage1/computation.cpp">computation.cpp</a></td><td>原四个执行头合一，结果拥有权/验证实现独立链接；不合并真实后端分派与结果TU。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/cpu_runtime.cpp">cpu_runtime.*</a> / <a href="../../src/ecm/stage1/libecm_compat.cpp">libecm_compat.*</a></td><td>准确改名；CPU ISA探测保留baseline编译。历史C符号保留，正常OpenCL删除未使用的batch_d计算。</td></tr>
+    </tbody></table></div>
+    <h3>明确的行为修复</h3>
+    <ul>
+      <li>共同条件为C&gt;0且base≤max−(C−1)。OpenCL允许最后一条恰好为UINT32_MAX，不再比外层少接受一个值。</li>
+      <li>PARAM2随机下界为2；固定sigma=1在归一化时明确拒绝，不自动替换用户输入。</li>
+      <li>resident入口与后续检查采用同一64位末条条件，移除多预留一个值的限制。</li>
+      <li>CPU及OpenCL已有Context接受种子时先使用种子，避免先生成无效候选。native载荷验证仍在原位置；没有重排恢复流程或实现后端互通。</li>
+    </ul>
+    <h3>验收记录</h3>
+    <p class="meta">原始证据：<code>data/experiments/stage1_shared_sigma_20261026/</code>；构建均在独立忽略目录，没有覆盖0.53.4基线。GPU设备0为NVIDIA GeForce RTX 4070 Ti / CC8.9；CUDA13.3、MSVC14.51.36231。数学对照不作为性能测量。</p>
+    <div class="wrap"><table><thead><tr><th>验证</th><th>状态与范围</th></tr></thead><tbody>
+      <tr><td>无SDK主机编译 / sigma与构造合同</td><td>通过。覆盖CPU/CUDA/OpenCL/队列主机代码、确定性的uint32端点、PARAM2下界、uint64溢出、保存/固定值不抽样及历史batch_d运算。</td></tr>
+      <tr><td>任务合同 / 目录依赖</td><td>22个真实任务/文件场景通过；include图无环、无公开→私有依赖；440个迁移文件保持冻结计算tokens，6个移动函数逐体等价。</td></tr>
+      <tr><td>OpenCL数学与边界</td><td>通过。M521、B1=1000、8曲线，起点1000及4294967288分别与0.53.4 CUDA PARAM3保存数学字段一致。</td></tr>
+      <tr><td>CUDA数学 / 随机策略 / resident与PRAC</td><td id="sigma-device-status">通过。M521六路CPU/CUDA固定sigma数学字段与0.53.4一致；M127/M521、两种标量构造、ladder/resident/PRAC及Edwards binary/NAF共16场景通过。七路随机策略、四种uint64末批执行及五个非法输入检查通过。最终构建启用384/768/1024位及PRAC。</td></tr>
+      <tr><td>停止与恢复</td><td>Montgomery PARAM3与Edwards真实算术停止/恢复通过；各8条，恢复后的数学保存字段与全新固定sigma任务一致。checkpoint实现和格式未改。</td></tr>
+      <tr><td>Android NDK</td><td>arm64-v8a / android-31重新构建通过；ecm_init、ecm_clear、gpu_pick_random_sigma、gpu_compute_batch_d四个C导出保留。未进行Android设备运行。</td></tr>
+    </tbody></table></div>
+    <p>沙箱内的Windows路径查询与MSVC最小编译检查曾失败；旧任务二进制同样失败。正常进程权限下任务回归和完整构建通过，没有为环境问题修改文件或checkpoint逻辑。原始失败与后续成功证据分别保留。</p>
+<p class="meta">本轮二进制SHA256：cuda <code>2a7348522a17a4a2246b5e3d5fbb9491e9b6bdc1e18e2a3b47d2f435b848e0de</code>；opencl <code>03524c80be78d0e6eaf07008430fcaf72d997583066a7e9dd6ebd09268fa734b</code>；android <code>c360e5de0c601f3e055d423e5c1f6afe6839459416396b8d40bfc7e35fd5f12a</code>。完整身份与证据入口：<code>data/experiments/stage1_shared_sigma_20261026/verification.json</code>。</p>
+    <h3>本轮保留项</h3>
+    <p>不实施跨后端checkpoint互通、存档格式变化、Android显式固定sigma冲突政策、随机引擎替换、CPU进度拥有权或OpenCL结果模型重写。Android原有native存档覆盖起点行为仍保留，需要后续单独讨论。没有计时证据支持本轮显著降低任务总耗时。</p>
+  </section>
+
+  <div class="card"><h2>实施前分析快照 · 0.53.4</h2><p>以下章节保留原调查、候选与取舍。文件名和问题描述以当时基线为准；链接指向当前拥有者，当前范围和结果以本页上方及正式架构说明为准。</p></div>
+
+  <section class="card top" id="recommendation">
+    <span class="badge">B · Strong</span><span class="badge gray">收口现有文件，不新增管理层</span>
+    <h2>建议取消两个泛名文件，并合并四个执行头</h2>
+    <p>当前 <code>src/ecm/stage1</code> 有19个文件，公开 <code>include/ecm/stage1</code> 有5个，共24个文件。问题集中在一个共享概念被拆在多处，以及 preparation/common 这类名字无法说明真实职责。文件短本身不是问题；独立链接、公开类型和 CUDA 编译隔离仍有必要。</p>
+    <ol>
+      <li><b>gpu_common.* 与 preparation.*：</b>随机 sigma 收入轻量 <code>sigma.cpp/h</code>；任务级指数/cache/log 编排和命名投影并回 task；单消费者范围提醒局部化；移除 OpenCL 未使用的 batch_d 运算。</li>
+      <li><b>execution 四头合一：</b><code>execution.h</code> 吸收 <code>execution_contract.h</code>、<code>cpu_execution.h</code>、<code>cuda_execution.h</code>。结果实现仍独立，原 contract.cpp 可改名 <code>computation.cpp</code>；后端选择仍在 execution.cpp。</li>
+      <li><b>名称反映职责：</b>cpu_support 可改 cpu_runtime；legacy 可改 libecm_compat。scalar、selection、progress 与真实 CUDA 运行状态合同保留独立，不把它们合成更大的 common。</li>
+    </ol>
+    <p>按上述范围，私有目录从19个文件收敛为14个，公开5个头保持，合计24→19。计数只说明文件跳转减少；实际收益是随机规则集中、命名投影不再牵连准备依赖、执行入口更容易查找。</p>
+    <div class="note good">这是新的候选方案，尚未获准实施。0.53.4 中“gpu_common 保持 Android 窄链接”的约束继续成立：新 sigma Module 仍须可单独链接。<a href="stage1-checkpoint-interop-review-20261026.html">checkpoint 互通草稿</a>是后续数学状态与调度深化，不能将本页的文件收口写成 checkpoint 已互通。</div>
+  </section>
+
+  <section class="card" id="gpu-common">
+    <span class="badge">Strong</span>
+    <h2>1. gpu_common：实际只有种子生成和一段无效运算</h2>
+    <p class="files"><a href="../../src/ecm/stage1/sigma.cpp">gpu_common.cpp</a>：67行；<a href="../../src/ecm/stage1/sigma.h">gpu_common.h</a>：7行。</p>
+    <div class="wrap"><table><thead><tr><th>函数</th><th>实际消费者与语义</th><th>建议</th></tr></thead><tbody>
+      <tr><td>gpu_pick_random_sigma</td><td>CUDA Mont、OpenCL Mont、Android。为连续批次选择32位起点，不使用GPU。正常输入范围为 [1,2³²−curves]；当前注释上界少1。</td><td>保留轻量独立实现，迁到stage1/sigma；保留当前随机算法、边界及C符号。修正说明。</td></tr>
+      <tr><td>gpu_compute_batch_d</td><td>仅OpenCL workflow调用；batch_d初始化、计算后只有clear，没有被读取或传给后端。</td><td>移除workflow无效计算及仅供它使用的firstsigma局部量。导出符号另按兼容合同保留。</td></tr>
+    </tbody></table></div>
+    <div class="pair"><div class="flow"><div class="caption">当前</div><div class="node leak">gpu_common<small>随机起点 + sigma/2³² mod N</small></div><div class="node leak">preparation<small>另一个随机sigma生成器</small></div><div class="seam">Android为一个随机函数单独链接gpu_common.cpp</div></div><div class="flow"><div class="caption">建议</div><div class="node deep">sigma.cpp/h<small>32位批次起点 + 53位旧随机种子</small></div><div class="seam">无task、save、cache和GPU SDK依赖</div><div class="node">OpenCL workflow 删除无效batch_d<small>兼容C符号归libecm_compat</small></div></div></div>
+    <h3>不能直接删除导出函数</h3>
+    <p>本轮只读检查当前 Android <code>build_ecm_domain_final_android/libecm.so</code>，<code>llvm-nm -D --defined-only</code> 确认同时导出 <code>gpu_pick_random_sigma</code> 和 <code>gpu_compute_batch_d</code>。因此“仓内结果未消费”只能支持删除调用计算，不能证明删除动态符号兼容。</p>
+    <p>推荐保留 <code>gpu_compute_batch_d</code> 的C实现/签名，归已有兼容实现；它不再处于正常主流程。随机函数的C符号也继续保留，Android改为包含真实sigma头，替代手写extern声明。若将来明确停止维护该ABI，再单独退役。</p>
+    <p class="meta">受检Android产物SHA256：<code>fca831d7d8fabe7438e0d4ad7ea6681b500c8558ae37182ec49772ee4ca14986</code>。仅作符号观察，不是设备运行或性能测试。</p>
+    <p><b>名字与范围：</b>推荐 <code>stage1/sigma</code>，因为现在的真实消费者都在Stage1种子准备。若未来其他阶段也实际生成sigma，再讨论放入curve；不把随机状态混进确定性的曲线构造头。</p>
+    <p class="meta">依据：<a href="../../src/ecm/montgomery_stage1/opencl/workflow.cpp">batch_d唯一调用</a>、<a href="../../src/ecm/montgomery_stage1/opencl/workflow.cpp">后端调用参数</a>、<a href="../../Android/ECM/app/src/main/cpp/CMakeLists.txt#L48">Android单独编译</a>、<a href="../../Android/ECM/app/src/main/cpp/ecm_android_run.cpp#L50">Android手写声明</a>。</p>
+  </section>
+
+  <section class="card" id="sigma-policies">
+    <span class="badge">源码审计</span><span class="badge gray">生成算法 ≠ 分配形态 ≠ 恢复规则</span>
+    <h2>各后端sigma：只有两套生成器，分配与恢复规则仍然分散</h2>
+    <p><b>生产代码有2套随机生成实现、3种随机分配策略和1种固定分配策略。</b>CPU、CUDA、OpenCL和Android已经复用了生成函数；主要可减少的是各执行路径重复选择固定值、保存值或随机值，以及各自维护范围检查。不能把不同分布和不同批次形态直接算作重复算法。</p>
+    <div class="wrap"><table><thead><tr><th>生成器</th><th>实现与状态</th><th>实际值域</th><th>使用约束</th></tr></thead><tbody>
+      <tr><td><a href="../../src/ecm/stage1/task.cpp">random_sigma_u64</a><br>本页简称R53</td><td>进程级srand/rand，首次按秒播种；MSVC x86/x64每次混入rdtsc。返回值不合格时重试。</td><td>6 ≤ sigma ≤ 2⁵³−1。函数名中的u64表示存储类型，不表示全64位均匀随机；也未证明在53位范围内均匀。</td><td>共享全局随机状态，当前CPU在启动工作线程前串行生成。不同平台的混合方式不同；不保证不同进程或worker不会重复。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/sigma.cpp">gpu_pick_random_sigma(C)</a><br>本页简称R32(C)</td><td>每次建立并销毁GMP RNG；用time、PID、高精度时钟组合播种，再做有界抽样。不执行GPU代码。</td><td>1 ≤ C &lt; UINT32_MAX时，起点位于[1,2³²−C]；连续展开后最后一条可为UINT32_MAX。C=0或UINT32_MAX时直接返回2，是另一个需要明确的特殊合同。</td><td>一次调用只生成一个起点。当前源码注释把正常上界写小1；特殊C返回值不能解释为已验证可执行批次。</td></tr>
+    </tbody></table></div>
+    <h3>同一个生成器可以形成不同的曲线集合</h3>
+    <p>设C为曲线数，i从0开始。三种随机策略分别为：每条独立R53、一个R53起点后按base+i展开、一个R32(C)起点后按base+i展开。固定输入统一采用显式base+i，但已保存sigma的验证时点与覆盖行为仍有差异。</p>
+    <p>例如C=3，CPU Montgomery随机模式可能得到[a,b,c]，CUDA Montgomery PARAM0得到[a,a+1,a+2]。即使把底层随机引擎换成同一种，两者也不会自动获得相同曲线集合。曲线、param、sigma已经确定后才是相同构造身份；不能为了统一Module而改变这些输入。</p>
+    <div class="wrap"><table><thead><tr><th>执行路径</th><th>全新随机批次</th><th>恢复时的实际顺序</th><th>固定输入与限制</th></tr></thead><tbody>
+      <tr><td><a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">CPU Montgomery</a><br>当前PARAM0；标量/SIMD共用</td><td>每曲线独立R53，C次。</td><td>先尝试有效native曲线记录，采用时不抽样。只有容器sigma、没有可采用native记录时，仍先抽候选，再由Context覆盖。</td><td>base+i，64位不回绕。超过Prime95有符号64位范围时只警告。</td></tr>
+      <tr><td><a href="../../src/ecm/edwards_stage1/cpu/workflow.cpp">CPU Edwards</a><br>标量/SIMD共用</td><td>每曲线独立R53，C次；主线程预生成。</td><td>随机模式先抽样，再采用Context保存值或有效曲线payload中的sigma；完整恢复也可能消耗C次抽样。</td><td>base+i，64位不回绕。没有实际调用上述Prime95范围警告。</td></tr>
+      <tr><td><a href="../../src/ecm/montgomery_stage1/cuda/workflow.cpp">CUDA Montgomery PARAM0</a><br>普通ladder</td><td>一个R53起点，base+i；1次。</td><td><a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">runtime</a>先验证payload或取已保存起点，只有缺失时调用生成回调；检查全批连续性。</td><td>base+i，最后一条≤UINT64_MAX。随机起点受R53限制，固定输入可以使用64位；后续lane不受R53生成范围约束。</td></tr>
+      <tr><td>CUDA Montgomery PARAM2/3<br>与PARAM0共用workflow回调</td><td>一个R32(C)起点，base+i；1次。</td><td>同上，保存值命中时不抽样；不允许将非连续保存数组修补成连续数组。</td><td>base+C≤2³²；PARAM2构造另要求起点≥2，现有R32生成器却允许1。</td></tr>
+      <tr><td><a href="../../src/ecm/montgomery_stage1/cuda/prac/runtime.cu">CUDA resident / PRAC PARAM0</a><br>可选编译路径</td><td>复用Montgomery回调，一个R53起点，base+i；1次。不是第三套生成器。</td><td>有效payload或已有起点优先，仅缺失时抽样；保持连续性。</td><td>通用末条范围检查外，入口还多留一个数值位置，见下节。</td></tr>
+      <tr><td><a href="../../src/ecm/edwards_stage1/cuda/workflow.cpp">CUDA Edwards</a><br>binary/NAF共用</td><td>每曲线独立R53；全新C次。</td><td>完整payload恢复不抽样；逐曲线先saved_sigma，仅为缺失项抽样。允许保存任意sigma数组。</td><td>base+i，64位不回绕；固定输入并不被R53随机范围限制。</td></tr>
+      <tr><td><a href="../../src/ecm/montgomery_stage1/opencl/workflow.cpp">桌面OpenCL Montgomery</a><br>实际仅PARAM3</td><td>一个R32(C)起点，base+i；1次。</td><td>先产生候选，再由Context覆盖，随后engine还能从native payload采用起点。</td><td>外层允许base+C≤2³²，engine实际更严格。workflow中的PARAM0/R53分支不是可用能力。</td></tr>
+      <tr><td><a href="../../Android/ECM/app/src/main/cpp/ecm_android_run.cpp#L225">Android OpenCL Montgomery</a><br>PARAM3</td><td>直接复用R32(C)，base+i；1次。</td><td>先生成候选，engine随后恢复旧checkpoint。此入口未启动桌面Context任务寿命。</td><td>显式起点为uint32；缺少桌面同等的显式固定值冲突校验，见下节。</td></tr>
+    </tbody></table></div>
+    <p class="meta">次数是“调用生成器”的次数，前提是任务已成功进入种子选择环节；不把内部PRNG步数或拒绝重试算成额外实现。OpenCL能力依据：<a href="../../src/ecm/opencl/factory.cpp">factory仅接受PARAM3</a>。</p>
+    <h3>重复数量的口径</h3>
+    <ul>
+      <li><b>算法实现2处：</b>preparation.cpp和gpu_common.cpp，算法、范围与状态生命周期不同，不能称为两份相同实现。</li>
+      <li><b>直接调用表达式8处：</b>R53五处、R32三处；其中OpenCL PARAM0分支不可达，可用路径共7处。resident/PRAC通过共同回调，不另计一套RNG。</li>
+      <li><b>选择编排7处：</b>CPU Mont、CPU Ed、CUDA Mont runtime、CUDA resident/PRAC、CUDA Ed、OpenCL workflow、Android。它们都处理某种“保存/固定/随机”选择，但恢复布局不同，不能整段机械替换。</li>
+      <li><b>保存形态2类：</b>任意逐曲线sigma数组与连续批次。当前Mont GPU计算/恢复依赖base+i，不能只在共同函数中改成任意数组。</li>
+    </ul>
+    <details><summary>不计入生产sigma生成器的其他随机代码</summary>
+      <p><a href="../../src/ecm/group_order/group_order.cpp">group_order</a>的固定种子随机状态用于群阶计算；<a href="../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp">SIMD自测</a>生成算术操作数；<a href="../../src/io/stage2_checkpoint.cpp">Stage2 checkpoint</a>生成随机token；<a href="../../src/ecm/stage1/libecm_compat.cpp">legacy params.rng</a>初始化本身没有构成第三条sigma抽样路径。Android Kotlin只是传入sigma文本；GUI随机行为、数学probe和数据集工具的显式sigma枚举也不计入。</p>
+    </details>
+  </section>
+
+  <section class="card" id="sigma-gaps">
+    <span class="badge amber">静态发现 · 待确定性回归</span>
+    <h2>可减少的重复背后，已经有范围与恢复规则不一致</h2>
+    <p>以下依据来自当前源码与整数条件比较，未进行真实GPU或Android设备复现。应先用最小回归固定期望行为，再修复；不得借整理文件静默改变数值范围或恢复语义。</p>
+    <div class="wrap"><table><thead><tr><th>候选问题</th><th>当前证据与影响</th><th>后续验证条件</th></tr></thead><tbody>
+      <tr><td>OpenCL上界少1</td><td><a href="../../src/io/normalize.cpp">归一化</a>、CUDA、OpenCL workflow及Android外层允许base+C≤2³²；<a href="../../src/ecm/montgomery_stage1/opencl/engine.cpp">OpenCL engine</a>要求base+C≤2³²−1。C=1、base=UINT32_MAX时，外层接受而engine拒绝。R32(C)的最大输出也会遇到此条件。</td><td>检查kernel展开所需真实范围；覆盖C=1及多曲线的最后一个合法值、越界值、固定输入与受控随机最大输出。外层/engine不能各自选不同规则。</td></tr>
+      <tr><td>PARAM2下界未传入生成器</td><td>R32(C)允许1，<a href="../../src/ecm/montgomery_stage1/cuda/host_math.cpp">set_p_2p_param2</a>拒绝sigma0&lt;2。当前没有抽到1再重抽的逻辑，因此随机候选不一定满足构造条件。</td><td>受控生成器返回1/2，验证参数诊断与正确候选范围。不要静默改写用户固定sigma；随机范围应按构造要求明确。</td></tr>
+      <tr><td>Android固定sigma可能被旧存档覆盖</td><td><a href="../../Android/ECM/app/src/main/cpp/ecm_android_run.cpp#L172">Android仅构造Context</a>，未调用begin；<a href="../../src/ecm/montgomery_stage1/opencl/engine.cpp">engine直接采用header.sigma</a>。桌面则由Context begin验证固定冲突，不能把桌面保证推广到Android。</td><td>相同任务下准备不同sigma的有效存档，测试随机恢复、显式匹配、显式冲突。若统一拒绝冲突，需要把“显式固定”信息带到实际验证入口。</td></tr>
+      <tr><td>resident早期检查多留一个值</td><td><a href="../../src/ecm/montgomery_stage1/cuda/prac/runtime.cu">入口</a>要求base≤UINT64_MAX−C；<a href="../../src/ecm/montgomery_stage1/cuda/prac/runtime.cu">后续</a>按UINT64_MAX−(C−1)检查。C=1、base=UINT64_MAX时两个条件不同。</td><td>先核对设备侧是否确实需要额外数值位置，再对相邻边界运行受控测试；不可直接把入口放宽当作纯搬移。</td></tr>
+      <tr><td>已经恢复仍先消耗随机候选</td><td><a href="../../src/io/stage1_checkpoint.cpp">Context::sigma</a>可以返回保存值，但函数实参先求值，无法取消已发生的random调用。CPU Ed、部分CPU Mont seed-only及OpenCL与CUDA顺序不同。</td><td>以可计数的随机来源覆盖完整恢复、seed-only、部分缺失与坏payload；采用保存值时是否零抽样要作为单独行为合同。</td></tr>
+      <tr><td>注释、名字及诊断分散</td><td>R32正常范围注释少1；random_sigma_u64没有表达53位随机范围。Prime95兼容提醒仅Mont CPU实际调用。</td><td>说明按实现修正；固定64位可用范围、随机抽样范围、外部格式提醒分别验证，不能把警告改成统一拒绝。</td></tr>
+    </tbody></table></div>
+    <div class="note">Context::sigma只负责“已有值优先/缺失时登记”，不独自承担完整冲突校验。桌面冲突检查位于<a href="../../src/io/stage1_checkpoint.cpp">begin</a>及延迟payload验证之后；旧候选导入也可能按既有规则跳过不匹配候选。共同Module必须使用已验证的保存值，保留“缺失、无效、不兼容”的差别。</div>
+  </section>
+
+  <section class="card" id="sigma-consolidation">
+    <span class="badge">Strong · 先集中责任</span><span class="badge amber">随机引擎更换另议</span>
+    <h2>建议：一个sigma Module，保留多种明确的分配策略</h2>
+    <div class="pair"><div class="flow"><div class="caption">当前：算法已共享，选择规则分散</div><div class="node">preparation：R53<br>gpu_common：R32</div><div class="arrow">7处选择编排</div><div class="node leak">各自抽样 / 覆盖 / 连续展开 / 查范围<small>恢复优先级与数值条件不完全一致</small></div><div class="node">构造、计算和checkpoint布局</div></div><div class="flow"><div class="caption">候选：集中规则，保留后端真实限制</div><div class="node">checkpoint拥有者验证保存状态</div><div class="arrow">已验证的sigma + 显式输入 + 构造限制</div><div class="node deep">stage1/sigma.cpp/h<small>保存/固定/随机选择、分配形态、统一整数范围</small></div><div class="node">各后端消费确定的曲线身份<small>连续批次或任意数组按能力保留</small></div></div></div>
+    <h3>A. 文件归位：风险小，建议先做</h3>
+    <p>将R53与R32集中到轻量sigma.cpp/h，删除分散归属；不更换算法、状态、调用顺序或随机分配形态。Android改为包含真实头，继续窄链接并保留C导出符号。这个范围把<b>两个分散的实现拥有者收成一个Module，仍保留两套算法</b>，并不声称消除后端的全部选择代码。</p>
+    <h3>B. 选择与范围归一：最有价值，单独明确行为</h3>
+    <p>在同一个Module集中固定连续、随机逐曲线、随机连续这几种已有策略，并统一批次溢出检查与构造范围。PARAM2下界等由构造规则决定，不能仅用“CPU/GPU”区分。checkpoint读写和数学payload验证留给现有拥有者，避免引入SigmaManager、额外注册层或对IO的反向依赖。</p>
+    <ol>
+      <li>先完成checkpoint与数学payload验证，特别是当前CUDA的pending验证；不能为统一入口就提前生成全部sigma。</li>
+      <li>显式固定输入按既有身份校验；正常保存值与显式输入冲突时应报错。旧候选导入维持候选筛选规则，不能混同最终任务冲突。</li>
+      <li>无显式输入时采用有效保存值；只为缺失项生成。任意数组保持索引，连续批次验证完整base+i，不能重抽或重排保存值来凑连续。</li>
+      <li>先检查C&gt;0，再按base≤最大值−(C−1)表达“末条不溢出”；若后端另有算法限制，应在同一规则中明确说明。</li>
+      <li>不引入自动去重或退化曲线重抽。因子发现、构造失败属于数学结果，不能通过替换sigma掩盖。</li>
+    </ol>
+    <p>这一阶段可删除多处“先随机、再覆盖”的模式及重复的base+i范围条件，但会改变恢复任务对随机状态的消耗，进而改变后续随机序列；Android显式冲突校验也是可见行为调整。应单独验证和说明，不能归入纯文件迁移。</p>
+    <h3>C. 单一随机引擎：可研究，不建议附带实施</h3>
+    <p>可以进一步改为任务拥有的一个随机引擎，加不同有界抽样规则，替代全局rand/TSC与每次创建的GMP RNG。优点是状态寿命、可控测试和平台语义更清楚；代价是随机来源、播种、分布与序列变化。即使采用同一引擎，逐曲线随机与连续批次仍应显式保留。</p>
+    <p>当前没有随机序列跨后端相同或跨worker唯一的保证。若需要避免不同任务重复曲线，那是可持久化的曲线分配规则，单独换随机引擎不能提供这种保证。</p>
+    <h3>预计收益与计时限制</h3>
+    <p>可以减少规则分散、无效候选抽样和边界漂移。R32初始化成本只出现在每次起点抽样；全新C条任务中CPU Mont抽C次、CUDA Mont只抽1次，但这不是两者Stage1总耗时的可比数据。本轮没有计时或设备测试，不承诺可感知提速，也不能据此解释此前约30秒的结果发布延迟。</p>
+    <p><b>推荐次序：</b>为上节差异补最小确定性回归，单独修复确认的缺陷；随后完成A；再按B统一选择规则。C留待确有随机来源或可复现需求时评估。A和B均可收在既有sigma文件对，不再增加后端通用包装文件。</p>
+  </section>
+
+  <section class="card" id="preparation">
+    <span class="badge">Strong</span>
+    <h2>2. preparation：四个函数属于四种责任</h2>
+    <p class="files"><a href="../../src/ecm/stage1/task.cpp">preparation.cpp</a>：74行；<a href="../../src/ecm/stage1/execution.h">preparation.h</a>：11行。当前已没有mkdir、时钟、TTY或实际文件名格式器，不能再按旧说明规划迁移这些内容。</p>
+    <div class="wrap"><table><thead><tr><th>函数</th><th>实际职责</th><th>建议归属</th><th>理由</th></tr></thead><tbody>
+      <tr><td>compute_batch_s</td><td>double B1规范化、范围、调用指数缓存、输出状态日志。4条workflow真调用。</td><td>task.cpp的共同任务准备；在现有内部执行头声明。</td><td>task已承担任务准备与IO/日志编排，可接纳这个窄入口。只移动实现，保留workflow当前调用点与日志时点；不增加独立scalar_prepare文件。</td></tr>
+      <tr><td>random_sigma_u64</td><td>共享进程级旧随机状态，返回&gt;5且&lt;2⁵³的sigma。</td><td>轻量sigma.cpp/h。</td><td>与32位函数集中，但不统一两种不同随机算法。名称/说明应明确53位范围。</td></tr>
+      <tr><td>fixed_sigma_batch_exceeds_prime95_range</td><td>检查固定批次是否超过有符号64位读取范围；只在Mont CPU输出警告。</td><td>Mont CPU workflow局部函数。</td><td>仅一个真实消费者；无需为警告连接整个P95交接Module，也不升级为拒绝计算。</td></tr>
+      <tr><td>save_naming</td><td>Stage1Options→ecm_save::Naming窄数据投影；供main、normalize、task使用。</td><td>task.cpp；由现有task.h声明并前置声明Naming。</td><td>任务身份到保存合同的适配属于任务侧；IO继续只接收Naming，不反向依赖Stage1Options。</td></tr>
+    </tbody></table></div>
+    <div class="pair"><div class="flow"><div class="caption">当前</div><div class="node leak">main / normalize → preparation.h<small>只为save_naming，间接看见其他准备函数</small></div><div class="node">CPU / CUDA / OpenCL workflow → preparation<small>指数、随机种子或范围警告</small></div></div><div class="flow"><div class="caption">建议</div><div class="node deep">task：任务准备与Naming投影</div><div class="node">sigma：轻量种子</div><div class="node">Mont CPU：本地兼容提醒</div><div class="seam">scalar保持纯数学；exponent_cache保持缓存实现</div></div></div>
+    <h3>为什么不整体并入scalar或cache</h3>
+    <p>scalar.cpp是纯LCM/NAF实现，被独立NAF测试与GPU probes以“测试代码+scalar+GMP”链接；cache已经调用scalar。把cache/log wrapper放进scalar会扩大这些链接闭包，并形成职责往返。把随机数或Stage1Options投影放进IO同样没有合适拥有者。</p>
+    <p>exponent_cache.cpp也有轻量存储竞态夹具直接包含，当前不链接日志TU。task本来已经组织保存、结果和日志，容纳约30行指数编排和约12行Naming投影更合理。保留的调用关系仍是 workflow→共同任务准备→cache→纯标量构造；该链的缓存/数学职责有实际作用，不必为减少调用次数展开成重复代码。</p>
+    <p>另一方案是把preparation改为只含指数包装的scalar_preparation；名称更准确，但仍是一个几十行、单一包装函数的独立文件对。除非需要独立链接这个编排，否则不作为首选。</p>
+    <h3>必须保持的现有行为</h3>
+    <ul>
+      <li>保留 <code>floor(B1+0.0001)</code>、范围和失败时输出参数的行为。compute_batch_s与底层builder对B1&lt;2、torsion=0和失败时s的处理并不完全相同，不能直接删包装换调用。</li>
+      <li>CPU Edwards请求t=1缓存后乘48，CUDA Edwards直接请求t=48；结果整数相同，缓存键不同。合并文件时不顺带统一缓存身份。</li>
+      <li>旧64位接口实际是53位范围，使用srand/rand并在部分平台混入rdtsc；32位生成器每次独立建立GMP RNG。保留随机状态、平台差异和调用顺序。</li>
+      <li>CPU Edwards/OpenCL有先生成候选再由checkpoint覆盖的调用；CUDA通常先查询已存sigma再生成。重排会影响后续随机序列，本轮不改变。</li>
+      <li>保留 <code>stage1 exponent built: cache hit</code> 等被bench脚本解析的文字；保留空缓存目录禁用、坏条目重建、可选缓存写失败不影响有效指数。</li>
+    </ul>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/task.cpp">指数编排</a>、<a href="../../src/ecm/stage1/task.cpp">Naming投影</a>、<a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">Prime95提醒唯一使用</a>、<a href="../../tools/build/test/build_edwards_naf_test.ps1#L13">纯数学链接</a>、<a href="../../tools/test/storage_concurrency_contract.cpp#L73">缓存夹具</a>。</p>
+  </section>
+
+  <section class="card" id="execution">
+    <span class="badge">Strong · 头文件收口</span><span class="badge amber">实现TU保留隔离</span>
+    <h2>3. execution：四个头可合成一个，两个实现文件仍有分开理由</h2>
+    <p>execution.h仅12行，cpu_execution.h/cuda_execution.h分别12/10行，各只有两个工作流声明；execution_contract.h有117行。寻找同一次执行的类型和入口要在四个私有头间跳转。这些头都不需要GPU SDK，可以集中声明。</p>
+    <div class="pair"><div class="flow"><div class="caption">当前</div><div class="node leak">execution.h → execution_contract.h<small>选择、执行选项、结果、依赖与兼容类型</small></div><div class="node leak">cpu_execution.h / cuda_execution.h<small>各两个同签名入口</small></div><div class="node">execution.cpp + execution_contract.cpp</div></div><div class="flow"><div class="caption">建议</div><div class="node deep">execution.h<small>内部执行/结果合同、四个入口及选择声明</small></div><div class="node">execution.cpp<small>真实后端选择</small></div><div class="node">computation.cpp<small>拥有结果、验证、状态映射与现存兼容实现</small></div></div></div>
+    <p>删除3个薄头，沿用execution.h，不为此再建立4个curve/backend workflow.h。公开task.h继续只暴露请求、选项和TaskResult；可变ExecutionOptions、Stage1Entry与装配依赖保留私有。</p>
+    <p><b>execution.cpp的25行仍有作用。</b>它根据CPU/GPU、曲线及ECM_HAS_CUDA_STAGE1选择真正入口，并拒绝OpenCL Edwards；不是可以无条件去掉的空转发。把选择散回main或各workflow会重新分散编译/能力知识。</p>
+    <p><b>结果实现不要机械并入路由TU。</b>task与CUDA host contract夹具现在有意只链接execution_contract.cpp，不链接全部真实workflow。合并.cpp会引入CPU/OpenCL/CUDA入口未定义引用，迫使轻量测试增加桩或链接计算实现。推荐只合头、把原contract.cpp准确改名为computation.cpp，保留这条真实链接Seam。</p>
+    <p>当前兼容类型仍在这份内部合同中，合头不等于结果语义已经收敛。OpenCL直接拥有现代结果后，再移除其旧兼容模型，详见后续候选。</p>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/execution.cpp">实际路由</a>、<a href="../../src/ecm/stage1/execution.h">内部合同</a>、<a href="../../tools/build/test/build_stage1_task_contract.ps1#L19">task轻量源清单</a>、<a href="../../tools/build/test/build_stage1_cuda_contracts.ps1#L17">CUDA host源清单</a>。</p>
+  </section>
+
+  <section class="card" id="naming">
+    <span class="badge amber">Worth exploring · 准确命名</span>
+    <h2>4. 其他文件：改清楚名字，保留真实职责边界</h2>
+    <div class="wrap"><table><thead><tr><th>当前</th><th>建议</th><th>为什么</th></tr></thead><tbody>
+      <tr><td>cpu_support.cpp/h</td><td>cpu_runtime.cpp/h，先不再拆。</td><td>两个CPU workflow共用ISA检测、affinity、IFMA选择映射和CPU进度寿命。286行集中在一个明确执行范围，拆成三对小文件只增加定位成本。</td></tr>
+      <tr><td>legacy.cpp/h</td><td>libecm_compat.cpp/h。</td><td>明确这是本地libecm风格params、宏、C入口的兼容层。仍有Android、OpenCL、CUDA shim使用；保留许可、符号和签名。与CPU Stage2的第三方&lt;ecm.h&gt;不同。</td></tr>
+      <tr><td>cuda_runtime.h</td><td>首轮保留；可在后续同批GPU头变更时改为cuda_run_result.h。</td><td>实际是RunResult/RunError/游标及分配边界合同，跨曲线与CXX/NVCC使用，不是CUDA SDK的&lt;cuda_runtime.h&gt;。不能合入带task/legacy的完整执行头扩大设备闭包。</td></tr>
+      <tr><td>selection.cpp/h</td><td>保留。</td><td>CLI/config/normalize及Stage2真实消费的纯选择类型与解析，不依赖GMP、task或后端链接。</td></tr>
+      <tr><td>scalar.cpp/h</td><td>保留纯数学。</td><td>LCM与NAF是同一标量准备领域，也确有独立链接需求。不要把缓存、随机状态、日志塞进来。</td></tr>
+      <tr><td>progress.cpp/h</td><td>保留；同步写清GPU输出、速度窗口及共同clock/TTY的实际范围。</td><td>GPU输出与CPU进度widget的状态模型不同；没有必要仅为名字统一就合并CPU/GPU状态或拆一个clock文件。</td></tr>
+      <tr><td>gpu_backend.h</td><td>保留独立C ABI。</td><td>链接后端的设备准备、查询、兼容数组入口不等于C++ workflow合同，不与execution.h合并。</td></tr>
+    </tbody></table></div>
+    <div class="pair"><div class="flow"><div class="caption">避免继续生成</div><div class="node leak">common / support / preparation<small>只表达“共用”“准备过了”，难以判断归属</small></div><div class="node leak">为每个函数建立一个新文件</div></div><div class="flow"><div class="caption">按真实拥有者保留</div><div class="node deep">task / computation / scalar / sigma</div><div class="node">cpu_runtime / libecm_compat<small>执行平台范围与兼容对象明确</small></div><div class="seam">可独立编译或链接的合同仍保留</div></div></div>
+    <p>普通基线CXX中的ISA检测不能移动到/arch:AVX512的SIMD TU：那会让编译器可能在检测前生成不支持的指令。CPU进度拥有权修复也不是改名附带动作，应另按已延期候选安排。</p>
+  </section>
+
+  <section class="card" id="layout">
+    <h2>建议目标：私有19→14，公开5个头保持</h2>
+    <div class="tree"><pre>src/ecm/stage1/
+  task.cpp                 任务寿命、共同准备、Naming适配、最终发布
+  execution.h              内部合同 + workflow入口 + 选择声明
+  execution.cpp            实际后端选择
+  computation.cpp          拥有结果、验证与状态转换（原contract.cpp）
+  selection.cpp            纯选择解析
+  scalar.cpp               纯LCM / NAF
+  sigma.cpp / sigma.h      轻量种子生成
+  progress.cpp             GPU显示协议及共享clock / TTY
+  cpu_runtime.cpp / .h     CPU执行辅助与进度寿命
+  cuda_runtime.h           窄CUDA运行结果合同
+  libecm_compat.cpp / .h    本地C兼容类型与入口
+
+include/ecm/stage1/
+  task.h / selection.h / scalar.h / progress.h / gpu_backend.h</pre></div>
+    <p>计数只针对本页共享文件收口，不把后续checkpoint、CPU param3或缺少的后端实现混入“减少文件”的统计。task增加约40余行已有编排；数学算法、命名实现与磁盘协议仍归原拥有者。</p>
+    <div class="wrap"><table><thead><tr><th>原文件/函数</th><th>去向</th><th>旧文件处理</th></tr></thead><tbody>
+      <tr><td>gpu_common.* + preparation::random_sigma_u64</td><td>sigma.cpp/h；gpu_compute_batch_d的兼容实现归libecm_compat。</td><td>旧gpu_common两文件删除；ABI函数不随之删除。</td></tr>
+      <tr><td>preparation::compute_batch_s / save_naming</td><td>task.cpp；指数准备在既有内部执行合同声明，Naming在task.h声明。</td><td>范围提醒局部化后，preparation两文件删除。</td></tr>
+      <tr><td>cpu_execution.h、cuda_execution.h、execution_contract.h</td><td>现有execution.h。</td><td>删除3个头，无转发头，不新增替代声明文件对。</td></tr>
+      <tr><td>execution_contract.cpp、cpu_support.*、legacy.*</td><td>computation.cpp、cpu_runtime.*、libecm_compat.*。</td><td>准确改名；实现内容和编译边界按批准范围保持。</td></tr>
+    </tbody></table></div>
+    <h3>三种范围选择</h3>
+    <p>A：只改名，容易审查但功能仍分散；B：本页推荐的职责归位与头收口，实际减少5个文件；C：连同旧结果模型、CPU进度拥有权和checkpoint计划一起深化，收益更大，但包含行为与恢复合同变更。建议先采用B，后续按具体候选推进C。</p>
+  </section>
+
+  <section class="card" id="inventory">
+    <h2>当前完整盘点</h2>
+    <p class="meta">行数来自当前工作树文本统计，只描述代码分布，不作为模块质量或性能指标。公开/私有同名头是目录边界的一部分，不直接视为重复。</p>
+    <details><summary>展开当前24文件的职责</summary><div class="wrap"><table><thead><tr><th>文件</th><th>行数</th><th>当前职责</th></tr></thead><tbody>
+      <tr><td><a href="../../src/ecm/stage1/execution.h"><code>src/ecm/stage1/cpu_execution.h</code></a></td><td>12</td><td>两个CPU工作流声明。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/cpu_runtime.cpp"><code>src/ecm/stage1/cpu_support.cpp</code></a></td><td>286</td><td>CPU ISA、线程绑定、IFMA映射与CPU进度实现。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/cpu_runtime.h"><code>src/ecm/stage1/cpu_support.h</code></a></td><td>31</td><td>CPU辅助、进度拥有者及共享状态声明。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/execution.h"><code>src/ecm/stage1/cuda_execution.h</code></a></td><td>10</td><td>两个CUDA工作流声明。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/cuda_runtime.h"><code>src/ecm/stage1/cuda_runtime.h</code></a></td><td>34</td><td>CUDA运行结果、失败、游标与分配边界合同。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/execution.cpp"><code>src/ecm/stage1/execution.cpp</code></a></td><td>25</td><td>真实CPU/CUDA/OpenCL路由选择。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/execution.h"><code>src/ecm/stage1/execution.h</code></a></td><td>12</td><td>路由声明与CUDA候选验证策略。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/computation.cpp"><code>src/ecm/stage1/execution_contract.cpp</code></a></td><td>219</td><td>执行选项构造、拥有结果、校验及旧结果转换实现。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/execution.h"><code>src/ecm/stage1/execution_contract.h</code></a></td><td>117</td><td>内部执行类型、现代与旧结果、工作流类型及任务装配。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/sigma.cpp"><code>src/ecm/stage1/gpu_common.cpp</code></a></td><td>67</td><td>32位批次随机sigma及batch_d数学函数。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/sigma.h"><code>src/ecm/stage1/gpu_common.h</code></a></td><td>7</td><td>两条后端无关C函数声明。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/libecm_compat.cpp"><code>src/ecm/stage1/legacy.cpp</code></a></td><td>80</td><td>本地libecm风格参数初始化与清理。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/libecm_compat.h"><code>src/ecm/stage1/legacy.h</code></a></td><td>219</td><td>本地兼容参数布局、常量及C声明。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/task.cpp"><code>src/ecm/stage1/preparation.cpp</code></a></td><td>74</td><td>LCM/cache/log编排、53位sigma、P95提醒与Naming投影。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/execution.h"><code>src/ecm/stage1/preparation.h</code></a></td><td>11</td><td>以上四个共享函数的声明。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/progress.cpp"><code>src/ecm/stage1/progress.cpp</code></a></td><td>59</td><td>GPU输出协议、速度窗口、共同clock和TTY。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/scalar.cpp"><code>src/ecm/stage1/scalar.cpp</code></a></td><td>422</td><td>纯LCM整数与NAF位平面构造。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/selection.cpp"><code>src/ecm/stage1/selection.cpp</code></a></td><td>83</td><td>纯选择解析、路由/param规则和枚举名称。</td></tr>
+<tr><td><a href="../../src/ecm/stage1/task.cpp"><code>src/ecm/stage1/task.cpp</code></a></td><td>337</td><td>TaskResult实现、checkpoint寿命、计算调用及最终发布。</td></tr>
+<tr><td><a href="../../include/ecm/stage1/gpu_backend.h"><code>include/ecm/stage1/gpu_backend.h</code></a></td><td>132</td><td>链接后端C ABI、能力与设备查询、兼容执行入口。</td></tr>
+<tr><td><a href="../../include/ecm/stage1/progress.h"><code>include/ecm/stage1/progress.h</code></a></td><td>26</td><td>无SDK的GPU显示、速度窗口及clock/TTY声明。</td></tr>
+<tr><td><a href="../../include/ecm/stage1/scalar.h"><code>include/ecm/stage1/scalar.h</code></a></td><td>19</td><td>纯LCM与NAF合同。</td></tr>
+<tr><td><a href="../../include/ecm/stage1/selection.h"><code>include/ecm/stage1/selection.h</code></a></td><td>35</td><td>无GMP/task依赖的选择类型与解析声明。</td></tr>
+<tr><td><a href="../../include/ecm/stage1/task.h"><code>include/ecm/stage1/task.h</code></a></td><td>103</td><td>公开请求、配置分组及TaskResult读取合同。</td></tr>
+    </tbody></table></div></details>
+  </section>
+
+  <section class="card" id="followups">
+    <span class="badge amber">Worth exploring · 行为深化另列</span>
+    <h2>文件收口之后，仍有三处值得真正简化</h2>
+    <h3>OpenCL旧结果模型</h3>
+    <p>LegacyExecutionResult唯一生产构造在OpenCL workflow。其原始数组、重复状态字段和转换方法仍污染共同内部合同；部分typed分支只由测试人工构造。等OpenCL直接产生ComputationResult时，可删除旧模型及转换，而非把它复制到新的result_adapter文件。</p>
+    <p>take_computation_result包含状态与失败优先级，并非无意义转发。深化前保留当前Preparation/Execution/Stopped区分、direct退出码及发布失败优先级；同时验证分配失败、部分初始化、停止和真实OpenCL PARAM3恢复。</p>
+    <h3>CPU进度状态的任务拥有权</h3>
+    <p>cpu_runtime中的meter、最大进度、节流、完成数与widget应最终归当前任务的Stage1Progress拥有；回调借用。不要为此另建ProgressManager。这个改动涉及连续任务状态、回调并发与日志协议，独立验证，不伪装成文件重命名。</p>
+    <h3>与checkpoint互通计划衔接</h3>
+    <p>已提出的公共数学checkpoint、固定标量/NAF计划和每曲线恢复分组，继续收在现有Stage1及两条曲线目录。本页先消除preparation杂项，不新增execution_context、restore_service或第二个准备流程。之后如果由task统一生成标量计划，再单独调整backend调用时点、缓存身份及日志；本轮函数归位不预先执行该行为变更。</p>
+    <p class="meta">这些深化项在<a href="ecm-domain-layout-review-20261026.html#implementation-contract">0.53.4合同</a>中明确延期，本页仅列候选；OpenCL entry合并和旧Mont importer归位已完成，不重复列作待实现。checkpoint方案见<a href="stage1-checkpoint-interop-review-20261026.html">独立草稿</a>。</p>
+  </section>
+
+  <section class="card" id="validation">
+    <h2>实施次序、影响与验证</h2>
+    <ol>
+      <li>冻结当前随机生成、固定sigma、名称、缓存和恢复样本；保留当前代码/二进制身份。</li>
+      <li>先清除OpenCL无效batch_d和闲置using/include；保留已确认的C导出符号。</li>
+      <li>建立轻量sigma文件，移动两个生成器；task接纳编排与Naming投影；删除两对泛名文件。</li>
+      <li>执行头收口，结果实现保留独立TU；cpu_runtime/libecm_compat改名同步全部消费者。</li>
+      <li>按真实编译闭包、符号、运行行为和正式说明验收，再推进后续结果或checkpoint深化。</li>
+    </ol>
+    <div class="wrap"><table><thead><tr><th>方面</th><th>需要核对</th></tr></thead><tbody>
+      <tr><td>构建/依赖</td><td>共同cuda_sources清单、根CMake身份输入、dev/local/release镜像、Android显式源、纯host契约与NAF/指数probe、公开/私有include图；不新增GPU SDK依赖。</td></tr>
+      <tr><td>增量影响</td><td>修改sigma.cpp仍只编译普通CXX，不能导致CUDA数学对象重编。CUDA共享头改名可能触发设备全量构建，应把必要头改动集中验收；不通过手改manifest绕过。</td></tr>
+      <tr><td>行为</td><td>固定/随机sigma范围与恢复顺序、普通及余因子目标名称、LCM1/12与固定48LCM、cache hit/miss/off/坏条目、日志字面量、正常停止与发布失败。</td></tr>
+      <tr><td>ABI/独立平台</td><td>Android NDK重新链接并比对导出C符号；OpenCL PARAM3真实算术/停止恢复，CUDA两曲线冒烟。文件移动不承诺运行提速。</td></tr>
+      <tr><td>文档与测试</td><td>同步host增量边界测试的源码定位及冻结映射；当前STAGE1说明对preparation的部分描述已过期，应按实际职责改写，旧原始证据不修改。</td></tr>
+    </tbody></table></div>
+    <div class="note">静态发现一个测试维护缺口：<a href="../../tools/test/stage1_cuda_host_contract.cpp#L69">stage1_cuda_host_contract.cpp</a>仍引用当前不存在的ExecutionResult，现有类型名为LegacyExecutionResult。实施前应核对并修正测试；这不是生产故障实测，本页未编译该夹具，也不把其脚本存在视作已通过。</div>
+    <h3>优先建议</h3>
+    <p>先做B：sigma集中、preparation撤销、执行头合并、兼容命名明确。它能在保持算法和磁盘格式的前提下减少查找与依赖噪声。OpenCL结果收敛和CPU进度拥有权作为下一批真实行为简化，checkpoint公共计划按独立合同推进。</p>
+    <p class="meta">本轮验证范围：源码、调用和构建清单只读审计；已构建Android产物只读符号检查；文档链接校验。没有修改程序或执行构建/数学回归，未更新版本。</p>
+  </section>
+  <footer>临时开发草稿保留，完成后待用户处理。当前版本0.53.5；checkpoint互通仍未实施。</footer>
+</main></body>
+</html>

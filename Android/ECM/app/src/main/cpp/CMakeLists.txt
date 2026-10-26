@@ -45,8 +45,8 @@ if(ECM_ANDROID_GMP_ROOT AND EXISTS "${_ECM_GMP_HEADER}" AND EXISTS "${_ECM_GMP_L
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
             "${MPA_ROOT}/src/ecm/application/configuration/ecm_expr.cpp"
             "${MPA_ROOT}/src/ecm/montgomery_stage1/opencl/engine.cpp"
-            "${MPA_ROOT}/src/ecm/stage1/gpu_common.cpp"
-            "${MPA_ROOT}/src/ecm/stage1/legacy.cpp"
+            "${MPA_ROOT}/src/ecm/stage1/sigma.cpp"
+            "${MPA_ROOT}/src/ecm/stage1/libecm_compat.cpp"
             "${MPA_ROOT}/src/ecm/montgomery_stage1/opencl/checkpoint.cpp"
             "${MPA_ROOT}/src/io/stage1_checkpoint.cpp"
             "${MPA_ROOT}/src/io/files.cpp"

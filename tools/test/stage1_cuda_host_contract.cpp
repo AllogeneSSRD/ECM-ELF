@@ -1,5 +1,6 @@
 #include "../../src/ecm/montgomery_stage1/cuda/host_math.h"
-#include "../../src/ecm/stage1/execution_contract.h"
+#include "../../src/ecm/stage1/execution.h"
+#include "../../src/ecm/stage1/sigma.h"
 #include "../../src/ecm/edwards_stage1/cuda/runtime.h"
 #include "../../src/ecm/edwards_stage1/cuda/edwards_internal.h"
 #include "../../src/ecm/curve/edwards.h"
@@ -18,6 +19,76 @@ bool accept(uint32_t lane,mpz_srcptr factor,void *) {
 }
 bool reject(uint32_t,mpz_srcptr,void *) {return false;}
 void require(bool value,const char *message){if(!value)throw std::runtime_error(message);}
+
+void sigma_contract() {
+    using namespace ecm_stage1;
+    require(sigma_batch_fits(UINT64_MAX, 1), "last u64 sigma rejected");
+    require(!sigma_batch_fits(UINT64_MAX, 2), "u64 batch wrapped");
+    require(!sigma_batch_fits(1, 0), "empty sigma batch accepted");
+    require(montgomery_sigma_batch_fits(UINT32_MAX, 1, 3), "last PARAM3 sigma rejected");
+    require(montgomery_sigma_batch_fits(UINT32_MAX - 7, 8, 3), "last PARAM3 batch rejected");
+    require(!montgomery_sigma_batch_fits(UINT32_MAX - 6, 8, 3), "PARAM3 batch wrapped");
+    require(!montgomery_sigma_batch_fits(1, 1, 2), "PARAM2 sigma=1 accepted");
+    require(montgomery_sigma_batch_fits(2, UINT32_MAX - 1, 2), "PARAM2 full range rejected");
+    require(!montgomery_sigma_batch_fits(2, UINT32_MAX, 2), "PARAM2 range overflow");
+    require(!montgomery_sigma_batch_fits(0, 1, 3), "PARAM3 sigma=0 accepted");
+
+    // Singleton ranges deterministically exercise both RNG endpoints. Small
+    // random samples cannot reliably hit these unsigned-width boundaries.
+    require(random_sigma32(1, UINT32_MAX) == UINT32_MAX, "u32 sampler lost its upper endpoint");
+    require(random_sigma32(UINT32_MAX - 1, 2) == 2, "PARAM2 sampler lost its lower endpoint");
+    require(random_sigma32(UINT32_MAX) == 1, "full PARAM3 interval changed");
+    require(gpu_pick_random_sigma(0) == 2 && gpu_pick_random_sigma(UINT32_MAX) == 2,
+            "historical C sampler ABI changed");
+    bool rejected = false;
+    try { (void)random_sigma32(0); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "empty sampler range accepted");
+    rejected = false;
+    try { (void)random_sigma32(UINT32_MAX, 2); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "invalid PARAM2 sampler interval accepted");
+
+    // Restored and explicit identities must not consume the process sampler.
+    std::srand(137);
+    const int next = std::rand();
+    std::srand(137);
+    require(select_curve_sigma(UINT64_MAX, false, 0, 7) == UINT64_MAX,
+            "restored curve identity replaced");
+    require(select_curve_sigma(0, true, UINT64_MAX, 0) == UINT64_MAX,
+            "explicit full-u64 identity narrowed");
+    require(select_batch_sigma(UINT64_MAX, false, 0, 1, 0) == UINT64_MAX,
+            "restored PARAM0 identity narrowed");
+    require(select_batch_sigma(0, true, UINT32_MAX - 7, 8, 3) == UINT32_MAX - 7,
+            "explicit PARAM3 batch changed");
+    require(std::rand() == next, "restored/fixed sigma consumed random state");
+    rejected = false;
+    try { (void)select_curve_sigma(0, true, UINT64_MAX, 1); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "fixed curve index overflow accepted");
+    rejected = false;
+    try { (void)select_batch_sigma(0, true, 1, 1, 2); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "invalid explicit PARAM2 seed silently changed");
+    require(select_batch_sigma(0, false, 0, UINT32_MAX - 1, 2) == 2,
+            "random PARAM2 batch did not apply construction minimum");
+    for (unsigned i = 0; i < 256; ++i) {
+        const auto sigma = select_curve_sigma(0, false, 0, i);
+        require(sigma > 5 && sigma < (uint64_t(1) << 53), "independent R53 range changed");
+        require(montgomery_sigma_batch_fits(select_batch_sigma(0, false, 0, 8, 2), 8, 2),
+                "random PARAM2 batch rejected by its own construction policy");
+    }
+
+    mpz_t n, d, product;
+    mpz_inits(n, d, product, nullptr);
+    mpz_set_ui(n, 101);
+    gpu_compute_batch_d(d, UINT32_MAX, n);
+    mpz_mul_2exp(product, d, 32);
+    mpz_mod(product, product, n);
+    require(mpz_cmp_ui(product, UINT32_MAX % 101) == 0, "historical batch_d ABI changed");
+    mpz_clears(n, d, product, nullptr);
+    std::puts("sigma_contract=PASS u32_endpoints=1 param2_minimum=1 u64_overflow=1 restored_no_draw=1 legacy_abi=1");
+}
 unsigned device_calls=0,dispatch_calls=0;bool reject_device=false;
 void edwards_runtime_contract() {
     using namespace ecm_cuda_stage1;using namespace ecm_edwards;
@@ -64,8 +135,9 @@ int main() {
     using namespace ecm_cuda_stage1;
     try {
         edwards_runtime_contract();
+        sigma_contract();
         {
-            using Result=ecm_stage1::ExecutionResult;using Kind=Result::CurveKind;
+            using Result=ecm_stage1::LegacyExecutionResult;using Kind=Result::CurveKind;
             mpz_t n,value;mpz_init_set_ui(n,77);mpz_init_set_ui(value,7);
             Result result;result.allocate_curves(3);
             result.set_curve(0,Kind::Factor,value,26);
@@ -82,7 +154,7 @@ int main() {
         }
         mpz_t prime,n;mpz_inits(prime,n,nullptr);mpz_ui_pow_ui(prime,2,127);mpz_sub_ui(prime,prime,1);
         for(int param:{0,2}) {
-            ecm_stage1::ExecutionResult result;result.allocate_curves(1);
+            ecm_stage1::LegacyExecutionResult result;result.allocate_curves(1);
             const uint32_t divisor=param?3:101,sigma=param?2:101;
             mpz_mul_ui(n,prime,divisor);size_t bytes=0;notifications=0;
             ConstructionResults sink{result.factors,result.array_found,accept,nullptr};
@@ -97,7 +169,7 @@ int main() {
             catch(const RunError &error){rejected=error.failure==Failure::Publication;}
             require(rejected,"construction publication failure classification");
         }
-        ecm_stage1::ExecutionResult result;result.allocate_curves(1);
+        ecm_stage1::LegacyExecutionResult result;result.allocate_curves(1);
         ConstructionResults sink{result.factors,result.array_found};size_t bytes=0;
         mpz_set_ui(n,101);bool degenerate=false;
         try {std::free(set_p_2p_suyama(n,1,101,384,&bytes,&sink));}

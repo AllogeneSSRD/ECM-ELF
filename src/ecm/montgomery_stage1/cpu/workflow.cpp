@@ -1,6 +1,6 @@
 #include "../../../io/files.h"
 #include "ecm/stage1/progress.h"
-#include "ecm/stage1/cpu_support.h"
+#include "ecm/stage1/cpu_runtime.h"
 #include <future>
 #include <memory>
 #include <iostream>
@@ -42,9 +42,9 @@
 
 #include <gmp.h>
 
-#include "ecm/stage1/cpu_execution.h"
+#include "ecm/stage1/execution.h"
 #include "ecm/curve/edwards.h"
-#include "ecm/stage1/preparation.h"
+#include "ecm/stage1/sigma.h"
 #include "ecm/io/save.h"
 #include "ecm/montgomery_stage1/opencl/checkpoint.h"
 #include "../../../io/stage1_checkpoint.h"
@@ -69,9 +69,17 @@ using ecm_stage1::CurveKind;
 using ecm_stage1::CurveOutcome;
 using ecm_io::ensure_dir;
 using ecm_stage1::ExecutionOptions;
-using ecm_stage1::fixed_sigma_batch_exceeds_prime95_range;
 using ecm_save::format_name;
-using ecm_stage1::random_sigma_u64;
+using ecm_stage1::select_curve_sigma;
+
+namespace {
+bool fixed_sigma_batch_exceeds_prime95_range(uint64_t sigma, uint32_t curves) {
+    return curves != 0 &&
+           (sigma > static_cast<uint64_t>(INT64_MAX) ||
+            static_cast<uint64_t>(curves - 1) > static_cast<uint64_t>(INT64_MAX) - sigma);
+}
+
+} // namespace
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::Stage1Options;
 using ecm_stage1::stdout_is_tty_local;
@@ -336,8 +344,11 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
             mont_ckpt_clear(&ck);
         }
         if (!adopted) {
-            sigmas[i] =
-                checkpoint.sigma(i, opt.identity.sigma_fixed ? fixed_sigma : random_sigma_u64());
+            uint64_t saved = 0;
+            checkpoint.saved_sigma(i, saved);
+            sigmas[i] = checkpoint.sigma(
+                i, select_curve_sigma(saved, opt.identity.sigma_fixed,
+                                      opt.identity.fixed_sigma64, i));
             if (use_ckpt) {
                 /* Seed record: pins the sigma before any ladder work happens, so a
                    run that is killed while this curve is still queued resumes the

@@ -1,7 +1,6 @@
-#include "../../stage1/cuda_execution.h"
-#include "../../stage1/preparation.h"
+#include "../../stage1/execution.h"
+#include "../../stage1/sigma.h"
 #include "ecm/stage1/gpu_backend.h"
-#include "../../stage1/gpu_common.h"
 #include "ecm/io/results.h"
 #include "ecm/io/save.h"
 #include "../../../io/stage1_checkpoint.h"
@@ -102,7 +101,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
         uint64_t firstsigma64 = opt.identity.sigma_fixed ? opt.identity.fixed_sigma64 : 0;
         const SigmaGenerator generate_sigma =
             opt.identity.sigma_fixed ? nullptr : +[](uint32_t count, int param) -> uint64_t {
-            return param == 0 ? random_sigma_u64() : uint64_t(gpu_pick_random_sigma(count));
+            return select_batch_sigma(0, false, 0, count, param);
         };
 
         std::cout << "Using B1=" << B1 << ", B2=" << B2 << " (" << curves << " curves, "

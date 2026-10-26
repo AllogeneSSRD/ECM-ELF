@@ -1,9 +1,6 @@
 #include "execution.h"
 #include <stdexcept>
-#include "cpu_execution.h"
-#if ECM_HAS_CUDA_STAGE1
-#include "cuda_execution.h"
-#else
+#if !ECM_HAS_CUDA_STAGE1
 #include "../montgomery_stage1/opencl/workflow.h"
 #endif
 

@@ -33,7 +33,7 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 
 [GUI worktodo 生成器](../usage/GUI.md#队列生成与交接)按所选曲线类型展开同一默认模式；它不链接 GMP，非梅森目标的 `bit` 位数使用估计值，涉及已知因子或位数边界时须核对预览。核心 Stage1 自动命名仍使用实际 N 位数。
 
-来源：[命名器](../../src/ecm/stage1/preparation.cpp)、[输入归一化与前缀规范](../../src/io/normalize.cpp)、[配置源](../../config/ecm_options.json)。
+来源：[命名器](../../src/ecm/stage1/task.cpp)、[输入归一化与前缀规范](../../src/io/normalize.cpp)、[配置源](../../config/ecm_options.json)。
 
 ### 2.2 Stage1 以 ECMSTAGE1 行作为输入
 

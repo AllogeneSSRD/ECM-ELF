@@ -46,7 +46,7 @@ using ecm_stage1_app::stage1_task_error;
 #include "ecm/platform/logging.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/gpu_backend.h" /* GPU backend seam (OpenCL or CUDA glue) */
-#include "ecm/stage1/execution_contract.h"
+#include "ecm/stage1/execution.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
 #include "io/worktodo.h"
@@ -62,7 +62,6 @@ using ecm_stage1_app::stage1_task_error;
 #include "ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
 
 #include "ecm/stage1/execution.h"
-#include "ecm/stage1/preparation.h"
 using ecm_save::prefixed_name;
 using ecm_stage1::save_naming;
 

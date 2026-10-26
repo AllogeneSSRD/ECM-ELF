@@ -1,6 +1,6 @@
 #include "ecm/io/results.h"
 #include "workflow.h"
-#include "../../stage1/preparation.h"
+#include "../../stage1/sigma.h"
 #include "ecm/stage1/gpu_backend.h"
 #include "api.h"
 #include "ecm/io/save.h"
@@ -99,21 +99,16 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
         array_found[i] = ECM_NO_FACTOR_FOUND;
     }
 
-    /* Curve index (sigma) of the first curve.
-       gpu_param = 3 : the batch parametrization carries d = sigma/2^32 as a 32-bit
-                       kernel parameter, so sigma must stay inside 2^32;
-       gpu_param = 0 : Suyama sigma is a 64-bit value on the CPU path too, so use the
-                       same 53-bit random generator there (Prime95's ECMSTAGE2 reader
-                       only accepts sigma < 2^63, and random_sigma_u64() is < 2^53). */
-    const bool gpu_param0 = (params->gpu_param == 0);
-    uint64_t firstsigma64 = opt.identity.sigma_fixed
-        ? opt.identity.fixed_sigma64
-        : (gpu_param0 ? random_sigma_u64() : (uint64_t)gpu_pick_random_sigma(curves));
-    firstsigma64=checkpoint.sigma(0,firstsigma64);
-    const uint32_t firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
-    if (!gpu_param0 &&
-        (firstsigma64 > 0xFFFFFFFFull || curves > 0x100000000ull - firstsigma64)) {
-        std::cerr << "sigma range overflows uint32 (sigma + curves > 2^32)" << std::endl;
+    // OpenCL implements PARAM3 only. Reuse validated seeds before sampling;
+    // the engine retains ownership of native payload restoration.
+    uint64_t firstsigma64 = 0;
+    try {
+        checkpoint.saved_sigma(0, firstsigma64);
+        firstsigma64 = checkpoint.sigma(
+            0, select_batch_sigma(firstsigma64, opt.identity.sigma_fixed,
+                                  opt.identity.fixed_sigma64, curves, 3));
+    } catch (const std::invalid_argument& error) {
+        std::cerr << error.what() << std::endl;
         for (uint32_t i = 0; i < curves; i++) mpz_clear(factors[i]);
         free(factors);
         free(array_found);
@@ -122,10 +117,6 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
         return ecm_stage1::take_computation_result(std::move(raw),ECM_ERROR,ecm_stage1_stop_requested()!=0);
     }
     for(uint32_t i=1;i<curves;++i)checkpoint.sigma(i,firstsigma64+i);
-    mpz_t batch_d;
-    mpz_init(batch_d);
-    /* batch_d is the batch parametrization's curve constant; only param3 uses it */
-    gpu_compute_batch_d(batch_d, firstsigma, N);
 
     // B1/B2 are fixed for this run. The *actual* sigma is printed by the backend
     // after it applies any checkpoint resume (the checkpoint may override the
@@ -150,7 +141,6 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request &r
     if(ret!=ECM_ERROR)for(uint32_t i=0;i<curves;++i)if(array_found[i]!=ECM_NO_FACTOR_FOUND &&
         !validate_stage1_factor(N,factors[i])){out->publish_failed=true;ret=ECM_ERROR;break;}
 
-    mpz_clear(batch_d);
     mpz_clear(batch_s);
     ecm_clear(params);
 

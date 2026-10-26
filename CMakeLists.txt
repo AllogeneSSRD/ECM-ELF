@@ -128,7 +128,7 @@ endforeach()
 foreach(_source include/ecm/io/results.h src/io/json.h
                 src/ecm/group_order/group_order.h src/ecm/diagnostics/order_analysis.h
                 include/ecm/stage1/selection.h include/ecm/stage1/scalar.h include/ecm/stage1/task.h
-                src/ecm/stage1/execution_contract.h src/ecm/platform/generated/configuration_defaults.h
+                src/ecm/stage1/execution.h src/ecm/platform/generated/configuration_defaults.h
                 src/ecm/montgomery_stage1/opencl/workflow.cpp
                 src/ecm/montgomery_stage1/cuda/workflow.cpp
                 src/ecm/edwards_stage1/cuda/workflow.cpp
