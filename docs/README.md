@@ -33,7 +33,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage1 下一轮重构候选](web/stage1-next-refactor-review-20261025.html)：包含 0.53.2 计算结果、checkpoint 拥有权及主机 IO 实施结果，保留后续候选与验收证据。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
 - [Stage1 checkpoint 跨后端方案草稿](web/stage1-checkpoint-interop-review-20261026.html)：公共数学状态、计划与游标、CPU/CUDA/OpenCL 能力范围、曲线重组、旧格式导入和验证建议；仅分析，尚未实施。
-- [Stage1 共享文件与sigma优化开发草稿](web/stage1-shared-modules-review-20261026.html#implementation-result)：0.53.5共享文件收口、各后端sigma生成与范围归一、执行头合并和Android符号约束；保留分析和验收证据，checkpoint互通未实施，草稿待用户处理。
+- [Stage1 共享文件与sigma优化开发草稿](web/stage1-shared-modules-review-20261026.html#implementation-result)：0.53.5共享文件收口、各后端sigma生成与范围归一、执行头合并和Android符号约束；[下一轮候选](web/stage1-shared-modules-review-20261026.html#next-candidates)分析CPU进度拥有权、OpenCL结果、已编译位宽选择与TaskResult读取接口，尚未实施。保留分析和验收证据，checkpoint互通未实施，草稿待用户处理。
 - [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。
 - [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量、CPU/GPU 分工及可选 relocation/原区间重放。
 - [NTT](architecture/NTT.md)：精确卷积、Goldilocks 算术、布局和设备归约。

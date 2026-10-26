@@ -18,10 +18,10 @@
 </head>
 <body><main>
   <header>
-    <div class="meta">ECM-ELF · 2026-10-26 · 当前版本 0.53.5 · 基线 Git 422a38e8 · 已实施并通过回归</div>
+    <div class="meta">ECM-ELF · 2026-10-26 · 当前版本 0.53.5 · 实施提交 3bb6b129 · 后续候选仅分析</div>
     <h1>Stage1 共享文件与sigma优化</h1>
     <p>重点核对 gpu_common、preparation，以及 execution 周围的薄头文件。补充各后端 sigma 生成、分配与恢复的完整盘点。按实际调用、链接闭包与格式责任归位；保留数学、设备编译和兼容 ABI 的真实 Seam。</p>
-    <nav><a href="#implementation-result">实施结果</a><a href="#recommendation">实施前分析</a><a href="#gpu-common">gpu_common</a><a href="#sigma-policies">各后端sigma</a><a href="#sigma-gaps">规则差异</a><a href="#sigma-consolidation">sigma收口建议</a><a href="#preparation">preparation</a><a href="#execution">执行头文件</a><a href="#naming">命名与保留项</a><a href="#layout">目标目录</a><a href="#inventory">完整盘点</a><a href="#followups">后续深化</a><a href="#validation">实施与验证</a></nav>
+    <nav><a href="#implementation-result">实施结果</a><a href="#next-candidates">下一轮候选</a><a href="#next-priority">建议顺序</a><a href="#recommendation">实施前分析</a><a href="#gpu-common">gpu_common</a><a href="#sigma-policies">各后端sigma</a><a href="#sigma-gaps">规则差异</a><a href="#sigma-consolidation">sigma收口建议</a><a href="#preparation">preparation</a><a href="#execution">执行头文件</a><a href="#naming">命名与保留项</a><a href="#layout">目标目录</a><a href="#inventory">完整盘点</a><a href="#followups">历史后续候选</a><a href="#validation">实施与验证</a></nav>
   </header>
 
   <section class="card top" id="implementation-result">
@@ -56,6 +56,98 @@
 <p class="meta">本轮二进制SHA256：cuda <code>2a7348522a17a4a2246b5e3d5fbb9491e9b6bdc1e18e2a3b47d2f435b848e0de</code>；opencl <code>03524c80be78d0e6eaf07008430fcaf72d997583066a7e9dd6ebd09268fa734b</code>；android <code>c360e5de0c601f3e055d423e5c1f6afe6839459416396b8d40bfc7e35fd5f12a</code>。完整身份与证据入口：<code>data/experiments/stage1_shared_sigma_20261026/verification.json</code>。</p>
     <h3>本轮保留项</h3>
     <p>不实施跨后端checkpoint互通、存档格式变化、Android显式固定sigma冲突政策、随机引擎替换、CPU进度拥有权或OpenCL结果模型重写。Android原有native存档覆盖起点行为仍保留，需要后续单独讨论。没有计时证据支持本轮显著降低任务总耗时。</p>
+  </section>
+
+  <section class="card top" id="next-candidates">
+    <span class="badge gray">0.53.5之后 · 仅分析</span>
+    <h2>下一轮：先修复状态与选择规则，再删除旧结果转换</h2>
+    <p>分析基线为<code>3bb6b129</code>。本轮已经完成共享文件与sigma优化；以下候选尚未实施，不重复规划已完成的目录迁移。继续暂缓checkpoint互通及格式修改。</p>
+    <div class="wrap"><table><thead><tr><th>候选</th><th>当前证据</th><th>建议</th></tr></thead><tbody>
+      <tr><td><a href="#next-tiers">C · 已编译位宽选择</a></td><td>同一二进制查询选择1024位，实际执行却因768位未编译而失败。</td><td>先做小范围正确性修复。</td></tr>
+      <tr><td><a href="#next-cpu-progress">A · CPU任务进度拥有权</a></td><td>进度对象只拥有终端控件，最大进度、速率和输出节奏仍在进程静态变量中。</td><td>首项结构重构；不增加管理层。</td></tr>
+      <tr><td><a href="#next-opencl-result">B · OpenCL结果与资源拥有权</a></td><td>仍手工维护数组、旧结果与转换；异常释放有缺口。</td><td>先workflow结果模型，再处理engine任务资源。</td></tr>
+      <tr><td><a href="#next-result-interface">D · TaskResult读取Interface</a></td><td>三个has判断实际同义，32位first_sigma回退在有效索引下不可达。</td><td>接在B之后的小范围清理。</td></tr>
+    </tbody></table></div>
+    <p class="meta">证据分级：C有同一产物的查询/执行对照；A、B、D为源码与调用链检查。A的连续任务显示问题、B的分配/异常失败路径仍需最小复现。本次未编译新产物，新增运行仅查询GPU信息，没有发出Stage1算术批次；没有新增性能结论。</p>
+  </section>
+
+  <article class="card" id="next-cpu-progress">
+    <span class="badge">A · Strong</span><span class="badge gray">in-process</span>
+    <h2>让现有Stage1Progress拥有本次CPU任务的完整显示状态</h2>
+    <p class="files">文件：<a href="../../src/ecm/stage1/cpu_runtime.h#L21">cpu_runtime.h</a>、<a href="../../src/ecm/stage1/cpu_runtime.cpp#L120">cpu_runtime.cpp</a>、<a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp#L739">Montgomery CPU workflow</a>、<a href="../../src/ecm/edwards_stage1/cpu/workflow.cpp#L868">Edwards CPU workflow</a>、<a href="../../src/ecm/stage1/execution.h#L14">execution.h</a>。</p>
+    <div class="pair"><div class="flow"><div class="caption">当前：调用者必须知道隐含初始化顺序</div><div class="node">Stage1Progress<small>仅创建/销毁终端控件</small></div><div class="node leak">全局/静态状态<small>完成数、速率窗口、最大进度、日志节奏</small></div><div class="node leak">两个CPU workflow分别归零<small>Mont恢复时第一条进度可以大于0</small></div></div><div class="flow"><div class="caption">建议：任务生命周期覆盖全部显示状态</div><div class="node deep">Stage1Progress Module<small>任务开始初始化；工作线程借用；结束释放</small></div><div class="node">标量/SIMD回调报告当前任务</div><div class="seam">保留进程级输出互斥；显示状态属于任务</div></div></div>
+    <p><b>问题：</b>仅<code>stage1_progress_set(done≤0)</code>重置速率与最大进度，构造/结束进度对象不重置它们；日志行计数与上次输出时间也不会按任务重置。</p>
+    <p><b>影响：</b>同一worktodo进程先完成64曲线，再启动已完成1/8的恢复任务，后者首报正值会被旧最大值抬成64，可能打印<code>100% · 64/8</code>并沿用旧速率/elapsed。这是源码可推出的路径，尚未做本轮运行复现；不是计算结果损坏的证据。</p>
+    <p><b>方案：</b>深化现有Stage1Progress，把计数、速率、最大值、控件和输出节奏收为每任务Implementation；回调通过已有任务上下文借用它，所有线程结束后再结束显示。</p>
+    <ul><li>Locality：两种曲线共用生命周期。</li><li>Interface取消“必须先报告0”。</li><li>Leverage：一次连续任务回归覆盖两路。</li></ul>
+    <details><summary>可删除逻辑、限制与验收</summary>
+      <ul>
+        <li>移除只写不读的<code>last_emitted</code>及其局部转换；<code>stage1_t0_ms</code>和Edwards回调中的<code>t0_ms</code>没有参与实际计时，可随拥有权收口删除。<code>stage1_curves</code>仍有真实读者，需先改回调上下文，不能直接删除。</li>
+        <li>归并Edwards重复的任务开始归零；将Montgomery成功终值报告放在显示结束前。继续保留实际输出互斥。</li>
+        <li>CPU的12样本速率窗口与GPU的50样本窗口有不同采样语义，不因同名概念就强行合并；Mont全lane汇总与Edwards回调的估计方式先保持。</li>
+        <li>测试以真实Module为对象，时钟/TTY/日志使用本地Adapter；连续两任务、第二任务首报正值、较小总数、停止/异常、重复结束与多线程乱序进度都需覆盖。64→1/8的最小场景不需要真实checkpoint或休眠。</li>
+        <li>正常流程会在对象退出前等待工作线程；本轮没有发现并证明生产路径的悬空控件访问。不要把可重入风险写成已发生的并发崩溃。</li>
+      </ul>
+    </details>
+  </article>
+
+  <article class="card" id="next-opencl-result">
+    <span class="badge">B · Strong</span><span class="badge gray">local-substitutable</span>
+    <h2>OpenCL直接返回拥有结果，分步收口任务资源</h2>
+    <p class="files">文件：<a href="../../src/ecm/montgomery_stage1/opencl/workflow.cpp#L15">OpenCL workflow.cpp</a>、<a href="../../src/ecm/stage1/execution.h#L22">execution.h</a>、<a href="../../src/ecm/stage1/computation.cpp#L142">computation.cpp</a>；第二步涉及<a href="../../src/ecm/montgomery_stage1/opencl/engine.cpp#L791">engine.cpp</a>。可复用<a href="../../include/ecm/integer.h#L8">Integer/Array</a>。</p>
+    <div class="pair"><div class="flow"><div class="caption">当前：一次计算跨越两套结果模型</div><div class="node leak">ecm_params + 手工GMP/标志数组</div><div class="arrow">C Interface调用；后端可能改写起点</div><div class="node leak">LegacyExecutionResult → 转换函数</div><div class="node">ComputationResult → task发布</div></div><div class="flow"><div class="caption">建议：保留真实C Seam，删旧结果Adapter</div><div class="node deep">OpenCL workflow Module<small>局部资源自动释放；解释完成状态；移交GMP值</small></div><div class="seam">C后端仍接收连续数组</div><div class="node">ComputationResult → task发布</div></div></div>
+    <p><b>问题：</b>workflow中的factors/found在转交旧结果之前由局部变量手工持有；分配后直接初始化且未检查空指针，sigma登记或后端异常可能绕过清理，末尾sigmas分配失败会形成缺失曲线的结果。</p>
+    <p><b>方案：</b>先用现有GMP拥有类型与标准容器管理workflow资源，直接构造ComputationResult；完成后移交值，sigma以C后端返回的实际起点为准。第二步再把engine的任务缓冲和cl_mem改为局部拥有，保持进程级OpenCL上下文与内核缓存。</p>
+    <ul><li>Depth：结果解释集中到workflow。</li><li>删除旧结果模型与转换。</li><li>Locality：退出路径统一释放。</li></ul>
+    <details><summary>迁移与合并清单、行为约束和验收</summary>
+      <ul>
+        <li>OpenCL是生产代码中LegacyExecutionResult的剩余消费者。切换后可删除execution.h中的旧类型/转换声明、computation.cpp约155行旧拥有/映射实现和仅供其使用的CurveKind::Legacy。computation.cpp仍承载真实现代结果行为，继续独立编译。</li>
+        <li>OpenCL workflow.h只有入口声明，可并入已有execution.h；不新增OpenCLResultManager。ecm_params在桌面workflow的中转可一并评估，但libecm兼容实现和Android所需C符号继续保留。</li>
+        <li>保留错误分类及队列政策：旧转换会把无停止/发布标志的普通ECM_ERROR视为Preparation；有停止时映射Stopped，发布失败优先。不能无意统一成Execution而改变队列是否终止。</li>
+        <li>checkpoint::Error继续由现有任务异常映射处理，不用catch-all吞掉Persistence分类。checkpoint格式、恢复语义和现有保存失败政策另议。</li>
+        <li>ecm_params还将verbose归一为0/1、截断算子路径文本；直接传完整字符串会改变行为，迁移时先保持或另行明确变更。C入口的参数校验与sigma回写继续保留，Android仅链接窄依赖。</li>
+        <li>engine的s_bits、ckpt_data、data与两个cl_mem仍有多处分支清理；准备失败和异常路径的清理缺口不会被workflow RAII自动修复。应分步修改，每次资源取得后立即建立拥有权，逐个检查buffer创建结果。</li>
+        <li>验收包括真实workflow接本地C Adapter的成功/因子/停止/普通错误/准备错误/非法因子/异常场景；资源故障注入检查恰好释放一次。保留22个任务场景，改写旧模型测试而不削减分类覆盖；再做OpenCL数学端点、uint32末值、停止恢复及NDK导出检查。</li>
+      </ul>
+    </details>
+  </article>
+
+  <article class="card" id="next-tiers">
+    <span class="badge">C · Strong</span><span class="badge gray">in-process · 已有运行证据</span>
+    <h2>查询与新任务执行共同选择实际已编译的位宽</h2>
+    <p class="files">文件：<a href="../../src/ecm/montgomery_stage1/cuda/registry.cu#L119">Montgomery registry.cu</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu#L329">CUDA runtime.cu</a>、<a href="../../src/ecm/montgomery_stage1/cuda/prac/runtime.cu#L62">PRAC runtime.cu</a>、<a href="../../src/ecm/cuda/factory.cpp#L269">CUDA factory.cpp</a>、<a href="../../src/ecm/edwards_stage1/cuda/runtime.cpp#L7">Edwards runtime.cpp</a>。位宽清单已有权威来源<a href="../../src/ecm/cuda/dispatch/tiers.def">tiers.def</a>。</p>
+    <div class="pair"><div class="flow"><div class="caption">当前：受限构建仅含384/1024位，输入521位</div><div class="node">查询：过滤编译宏 → 选择1024</div><div class="node leak">PARAM2/3执行：理论表 → 先选768</div><div class="node leak">768函数不存在 → 返回失败<small>即使更大已编译档位可用</small></div></div><div class="flow"><div class="caption">建议：规则在已有registry/dispatch内收口</div><div class="node deep">实际编译档位 + 首个适用规则</div><div class="node">查询与全新任务使用相同选择依据</div><div class="seam">恢复另按已保存BITS/TPI验证；占用率查询保持设备相关</div></div></div>
+    <p><b>证据：</b>0.53.5同一受限产物，编译位宽为384/1024，M521、PARAM2。<code>--gpu-info --curve mont --target gpu --gpu-param 2 --bits 521 -d 0</code>选择1024；此前该产物真实执行B1=1000、8曲线、sigma=1000，返回<code>CGBN kernel not found for 768 bits</code>。两份产物SHA256已确认相同；这是已有差异，不是本轮sigma修改引入的新回退。</p>
+    <p><b>根因：</b>registry中执行候选使用ALL_TIERS理论表，查询表遵循实际编译限制；runtime仅在PARAM0缺失时继续找更大档位，PARAM2/3直接失败。</p>
+    <p><b>方案：</b>让新任务与查询复用实际编译能力及适用档位规则，收在已有registry/dispatch Module内；区分理论支持、实际编译和设备占用率，不再添加另一份档位表或KernelPlanner。</p>
+    <ul><li>Leverage：同一规则服务查询/执行。</li><li>Locality：缺失档位处理集中。</li><li>受限构建避免错误拒绝。</li></ul>
+    <details><summary>必须保留的区别、验收与证据身份</summary>
+      <ul>
+        <li>Montgomery的carry余量与Edwards的一位余量不同，应共享编译信息，保留曲线适用条件。PARAM2禁用构建仍需明确拒绝。</li>
+        <li>PRAC会找存在的普通内核，再检查选中档位的显式TPI/寄存器政策；不能为了绕过政策不支持而偷偷切到更大位宽。既有checkpoint仍按记录的BITS/TPI验证，不能借此重定向布局或实现互通。</li>
+        <li>纯编译能力查询不应初始化设备或遍历JIT所有位宽；设备占用率仍在实际需要时查询。不要把完整gpu-info路径塞进输入归一化。</li>
+        <li>验收：受限384/1024构建下，521位PARAM0/2/3的查询与全新执行均选1024；完整构建保持首适用规则；没有适用档位时清楚失败；覆盖carry临界值、PARAM2禁用与旧checkpoint缺失档位拒绝。</li>
+      </ul>
+      <p class="meta">设备：NVIDIA GeForce RTX 4070 Ti / CC8.9 / device 0。产物：build_stage1_shared_worker_v2/ecm_cuda.exe，SHA256 <code>09e7d814c67b928bdd6053b496d2c2715e72d7da58b44e45e1186fee68fce1d5</code>。对照入口：<code>data/experiments/stage1_next_review_20261026/tier_mismatch.json</code>；查询日志同目录，先前执行日志为<code>data/experiments/stage1_shared_sigma_20261026/cuda_endpoints/gpu_mont2/current/run.log</code>。每路径1次观察，未测耗时/功耗，不作为性能证据。</p>
+    </details>
+  </article>
+
+  <article class="card" id="next-result-interface">
+    <span class="badge amber">D · Worth exploring</span><span class="badge gray">in-process</span>
+    <h2>删掉TaskResult中只表达“非空”的三种has判断</h2>
+    <p class="files">文件：<a href="../../include/ecm/stage1/task.h#L87">task.h</a>、<a href="../../src/ecm/stage1/task.cpp#L99">task.cpp</a>、<a href="../../src/main.cpp#L262">main.cpp</a>、<a href="../../src/ecm/application/cli/group_order.cpp#L228">group_order.cpp</a>。</p>
+    <div class="pair"><div class="flow"><div class="caption">当前：旧数组存在性进入公开Interface</div><div class="node leak">has_factors / has_found / has_sigmas<small>三者实际都等于curves()!=0</small></div><div class="node leak">group_order保留first_sigma+i回退<small>循环内的有效曲线不可能进入该分支</small></div></div><div class="flow"><div class="caption">建议：直接读取拥有曲线及其分类</div><div class="node deep">TaskResult Module<small>完成状态 + 每曲线kind/value/uint64 sigma</small></div><div class="node">main / group_order按真实结果消费</div></div></div>
+    <p><b>方案：</b>在OpenCL切换完成后，清理三个同义has、无活跃用途的32位first_sigma及调用处不可达回退；保留真正的状态、失败来源、曲线分类和拥有权语义。</p>
+    <ul><li>Interface减少重复概念。</li><li>删除不可达sigma回退。</li><li>无需新增文件。</li></ul>
+    <details><summary>限制与验收</summary><p>目前回退不可达，不能将它宣称为正在发生的64位sigma截断错误。task_return与legacy_return分别表达任务发布结果和计算返回值，确有不同用途，应保留。改写调用者后验证因子、Stage2点、无点完成、退化、停止/部分结果、发布失败、移动后对象与大于2⁵³/UINT64_MAX端点；GUI日志文本协议保持。</p></details>
+  </article>
+
+  <section class="card top" id="next-priority">
+    <span class="badge">建议顺序</span>
+    <h2>C小修 → A结构重构 → B分步替换 → D接口清理</h2>
+    <p>C已有真实错误对照，适合先独立修复并锁定回归；结构重构首选A，因为两路CPU都有真实消费者，深化已有任务对象即可消除跨任务状态。随后B分别处理workflow和engine，D作为结果统一后的收尾。</p>
+    <p>暂不合并scalar、sigma、progress与CUDA SDK运行状态为新common；它们有不同链接和采样合同。main中的保存区间、完成记录、队列提交和P95交接仍保留显式顺序，后续若深化，应先围绕真实完成协议补测试，避免仅搬函数增加跳转。</p>
+    <p class="meta">本页是开发草稿，保留实施前讨论；当前已实现功能以正式架构说明为准。上述候选均未改变生产代码、版本号或checkpoint。</p>
   </section>
 
   <div class="card"><h2>实施前分析快照 · 0.53.4</h2><p>以下章节保留原调查、候选与取舍。文件名和问题描述以当时基线为准；链接指向当前拥有者，当前范围和结果以本页上方及正式架构说明为准。</p></div>
