@@ -2,8 +2,8 @@
 // the default retains the independent legacy engine's existing shape query.
 #ifdef ECM_STAGE2_FROZEN_PRODUCTION_PROFILES
 #include "../../src/ecm/platform/compute_log.h"
-#include "../../src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h"
-#include "../../src/ecm/backend/cuda/ntt/runtime.h"
+#include "../../src/ecm/stage2/planning/initial_memory.h"
+#include "../../src/ecm/cuda/ntt/runtime.h"
 #include "../experiments/cuda/stage2_tree/d_model_profiles.h"
 #else
 #include "../experiments/cuda/ntt_variants/engine.cuh"

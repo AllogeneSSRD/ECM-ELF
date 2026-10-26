@@ -1,6 +1,6 @@
 #include "opencl_low_risk_tests.h"
 
-#include "ecm/backend/opencl/runtime/cgbn_opencl.h"
+#include "ecm/opencl/runtime/cgbn_opencl.h"
 
 #include <CL/cl.h>
 

@@ -1,5 +1,5 @@
 #include "ecm/montgomery_stage1/cuda/host_policy.h"
-#include "ecm/backend/cuda/runtime/cuda_ecm_shim.h"
+#include "ecm/cuda/runtime/cuda_ecm_shim.h"
 #include "io/exponent_cache.h"
 #include <cmath>
 #include <algorithm>

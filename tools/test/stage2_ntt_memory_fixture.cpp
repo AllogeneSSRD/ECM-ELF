@@ -1,6 +1,6 @@
 // The runner inserts the production arena source below. CUDA allocation is
 // replaced by an opaque CPU ledger; no driver, context or GPU work is invoked.
-#include "../../src/ecm/backend/cuda/planning/ecm_stage2_ntt_memory.h"
+#include "../../src/ecm/stage2/planning/ntt_memory.h"
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>

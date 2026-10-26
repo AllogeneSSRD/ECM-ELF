@@ -37,7 +37,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     (out/'collector.py').write_bytes(Path(__file__).read_bytes())
     tiers = list(map(int, re.findall(r'^ECM_CUDA_TIER\((\d+),',
-        (ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(), re.M)))
+        (ROOT/'src/ecm/cuda/dispatch/tiers.def').read_text(), re.M)))
     assert len(tiers) == 32 and len(set(tiers)) == 32
     assert read(a.preflight/'identity_preflight/result.json')['checks'] == 55
     assert read(a.preflight/'identity_preflight/result.json')['complete']
@@ -45,7 +45,7 @@ def main():
     assert tier_gate['complete'] and tier_gate['profiles'] == 16
     files = [a.stage1, a.stage2, a.edwards_probe, a.arithmetic_probe,
              a.baseline/'ecm_cuda.exe', a.baseline/'ecm_cuda_stage2.exe',
-             a.fixtures, a.small_save, ROOT/'src/ecm/backend/cuda/dispatch/tiers.def']
+             a.fixtures, a.small_save, ROOT/'src/ecm/cuda/dispatch/tiers.def']
     files += sorted({path.parent/'gmp-10.dll' for path in files[:6]})
     files += [a.stage1.parent/'stage1_local_manifest.json', a.stage2.parent/'build_manifest.json',
               a.edwards_probe.parent/'manifest.json', a.arithmetic_probe.parent/'manifest.json',

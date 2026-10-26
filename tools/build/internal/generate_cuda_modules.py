@@ -11,7 +11,22 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-CUDA = ROOT / 'src/ecm/backend/cuda'
+ECM = ROOT / 'src/ecm'
+ARITHMETIC = ECM / 'stage2/cuda/device'
+NTT = ECM / 'cuda/ntt/device'
+
+
+def resolve_include(owner, name):
+    # Match the production include search before choosing a generated mirror.
+    # A missing project header must not turn into a nonexistent absolute include.
+    roots = [owner.parent, ROOT/'src', ROOT/'include', ECM/'cuda',
+             ECM/'cuda/runtime', ROOT/'third_party/cgbn/include',
+             ROOT/'third_party/cgbn/include/cgbn']
+    for root in roots:
+        candidate = (root/name).resolve()
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f'{owner.relative_to(ROOT)}: unresolved quoted include {name!r}')
 
 
 def write(path, text):
@@ -48,7 +63,7 @@ def symbol(text):
 
 def generate(out, *, emit=True):
     out = out.resolve()
-    headers = sorted(set((CUDA / 'stage2/device').glob('*.cuh')) | set((CUDA / 'ntt/device').glob('*.cuh')))
+    headers = sorted(set(ARITHMETIC.glob('*.cuh')) | set(NTT.glob('*.cuh')))
     wrappers = {}
     edits = {}
     contents = {}
@@ -57,9 +72,9 @@ def generate(out, *, emit=True):
         if path in seen or not path.is_file():
             return False
         seen.add(path)
-        if path == CUDA / 'stage2/device/point.cuh':
+        if path == ARITHMETIC / 'point.cuh':
             return True
-        return any(uses_constants((path.parent / name).resolve(), seen)
+        return any(uses_constants(resolve_include(path, name), seen)
                    for name in re.findall(r'#include\s*"([^"\n]+)"', path.read_text(encoding='utf-8-sig')))
     kernel_pattern = re.compile(r'(?m)^__global__\s+(?:__launch_bounds__\([^\n]*\)\s*)?void\s+(\w+)\s*\(')
     wrapper_pattern = re.compile(r'(?m)^void\s+((?:ecm_launch_|ecm_ntt_tune_)\w+)\s*\(')
@@ -84,27 +99,27 @@ def generate(out, *, emit=True):
             if match[1] in wrappers:
                 raise ValueError(f'Duplicate wrapper: {match[1]}')
             wrappers[match[1]] = dict(kernel=key, header=path, templated=begin != match.start())
-            if uses_constants(path) or 'stage2/device' in path.as_posix():
+            if uses_constants(path) or path.parent == ARITHMETIC:
                 index = opening - begin + 1
                 body = body[:index] + '\n    ecm_stage2_bind_module_constants();' + body[index:]
             replacements.append((begin, end, f'#if defined(ECM_MODULE_{key})\n{body}\n#endif'))
         edits[path] = replacements
 
-    mirrors = {path: out / 'headers' / path.relative_to(CUDA) for path in headers}
+    mirrors = {path: out / 'headers' / path.relative_to(ECM) for path in headers}
     for path, text in contents.items():
         for begin, end, replacement in sorted(edits[path], reverse=True):
             text = text[:begin] + replacement + text[end:]
         def include(match):
-            target = (path.parent / match[1]).resolve()
+            target = resolve_include(path, match[1])
             return '#include "' + mirrors.get(target, target).as_posix() + '"'
         text = re.sub(r'#include\s*"([^"\n]+)"', include, text)
         if emit:write(mirrors[path], text)
 
     modules = []
-    for group, source in [('arithmetic', CUDA / 'stage2/device/arithmetic_kernels.cu'),
-                          ('ntt', CUDA / 'ntt/device/transform_kernels.cu')]:
+    for group, source in [('arithmetic', ARITHMETIC / 'arithmetic_kernels.cu'),
+                          ('ntt', NTT / 'transform_kernels.cu')]:
         original = source.read_text(encoding='utf-8-sig')
-        includes = [(source.parent / name).resolve() for name in re.findall(r'^#include "([^"]+)"', original, re.M)]
+        includes = [resolve_include(source, name) for name in re.findall(r'^#include "([^"]+)"', original, re.M)]
         instantiations = {}
         namespace = ''
         for line in original.splitlines():
@@ -117,7 +132,7 @@ def generate(out, *, emit=True):
                     line=line.replace('template void ','template void '+namespace+'::',1)
                 instantiations.setdefault(match[2], []).append((match[3], line))
         for name, wrapper in wrappers.items():
-            if (group == 'arithmetic') != ('stage2/device' in wrapper['header'].as_posix()):
+            if (group == 'arithmetic') != (wrapper['header'].parent == ARITHMETIC):
                 continue
             if wrapper['templated'] and name not in instantiations:
                 raise ValueError(f'Missing explicit instantiation: {name}')
@@ -137,10 +152,10 @@ def generate(out, *, emit=True):
         missing = set(instantiations) - set(wrappers)
         if missing:
             raise ValueError(f'Unresolved instantiation inventory: {missing}')
-    expected = sum(len(re.findall(r'^template void ', (CUDA / p).read_text(encoding='utf-8-sig'), re.M))
-                   for p in ['stage2/device/arithmetic_kernels.cu', 'ntt/device/transform_kernels.cu'])
+    expected = sum(len(re.findall(r'^template void ', source.read_text(encoding='utf-8-sig'), re.M))
+                   for source in [ARITHMETIC / 'arithmetic_kernels.cu', NTT / 'transform_kernels.cu'])
     assert sum(bool(m['arguments']) for m in modules) == expected, 'Instantiation membership changed'
-    inputs = set(headers) | {CUDA / 'stage2/device/arithmetic_kernels.cu', CUDA / 'ntt/device/transform_kernels.cu', Path(__file__).resolve()}
+    inputs = set(headers) | {ARITHMETIC / 'arithmetic_kernels.cu', NTT / 'transform_kernels.cu', Path(__file__).resolve()}
     manifest = dict(schema=1, modules=modules,
                     inputs_sha256={p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(inputs)})
     if emit:

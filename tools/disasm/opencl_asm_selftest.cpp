@@ -1,5 +1,5 @@
-#include "ecm/backend/opencl/runtime/device.h"
-#include "ecm/backend/opencl/runtime/cgbn_opencl.h"
+#include "ecm/opencl/runtime/device.h"
+#include "ecm/opencl/runtime/cgbn_opencl.h"
 
 #include <CL/cl.h>
 

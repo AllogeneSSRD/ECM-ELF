@@ -81,7 +81,7 @@ endfunction()
 # OpenCL backend library (static) for tests and later integration.
 # Includes the runtime-config TU so every linker of this lib gets ecm_runtime_config().
 add_library(cgbn_opencl STATIC
-    src/ecm/backend/opencl/runtime/runtime.cpp
+    src/ecm/opencl/runtime/runtime.cpp
     src/ecm/application/configuration/runtime.cpp
 )
 
@@ -105,7 +105,7 @@ endif()
 # objects. Keep the diagnostic Montgomery self-test in the same payload.
 add_custom_target(ecm_opencl_resources
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/resources"
+        "${CMAKE_SOURCE_DIR}/src/ecm/opencl/resources"
         "${CMAKE_BINARY_DIR}/opencl_resources"
     COMMENT "Syncing OpenCL production resources")
 add_dependencies(cgbn_opencl ecm_opencl_resources)
@@ -156,23 +156,23 @@ add_executable(ecm
     ${ECM_STAGE1_COMMON_SOURCES}
     src/ecm/montgomery_stage1/opencl/workflow.cpp
     src/ecm/montgomery_stage1/opencl/engine.cpp
-    src/ecm/backend/opencl/factory.cpp
-    src/ecm/backend/opencl/runtime/device.cpp
+    src/ecm/opencl/factory.cpp
+    src/ecm/opencl/runtime/device.cpp
     src/ecm/montgomery_stage1/opencl/debug_utils.cpp
     src/ecm/montgomery_stage1/opencl/montgomery.cpp
-    src/ecm/backend/opencl/arithmetic/path_registry.cpp
-    src/ecm/backend/opencl/diagnostics/selftest.cpp
+    src/ecm/opencl/arithmetic/path_registry.cpp
+    src/ecm/opencl/diagnostics/selftest.cpp
 )
 ecm_stage1_identity_sidecar(ecm)
 
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
 # (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
 if(MSVC)
-    set_source_files_properties(src/ecm/edwards_stage1/cpu/simd_edwards.cpp src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(src/ecm/edwards_stage1/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(src/ecm/edwards_stage1/cpu/simd_edwards.cpp src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(src/ecm/edwards_stage1/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
@@ -231,8 +231,8 @@ endif()
 #  Reuses the exact same driver / argument parsing / checkpoint / save / logging
 #  translation units as `ecm`, swapping only the GPU backend at link time via the
 #  ecm_backend_* seam (include/ecm/stage1/gpu_backend.h):
-#     - OpenCL: src/ecm/backend/opencl/factory.cpp  (in `ecm`)
-#     - CUDA:   src/ecm/backend/cuda/factory.cpp  (here)
+#     - OpenCL: src/ecm/opencl/factory.cpp  (in `ecm`)
+#     - CUDA:   src/ecm/cuda/factory.cpp  (here)
 #
 #  Auto-enabled when a CUDA toolkit is present; force off with -DECM_ENABLE_CUDA=OFF.
 #
@@ -314,9 +314,9 @@ if(ECM_ENABLE_CUDA)
     target_include_directories(ecm_cuda PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/src/ecm/backend/cuda/runtime
+        ${CMAKE_SOURCE_DIR}/src/ecm/cuda/runtime
         "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>"
-        ${CMAKE_SOURCE_DIR}/src/ecm/backend/cuda
+        ${CMAKE_SOURCE_DIR}/src/ecm/cuda
         ${CGBN_INCLUDE_DIR}
         ${CGBN_INCLUDE_DIR}/cgbn   # the .cu uses #include <cgbn.h>
         ${GMP_INCLUDE_DIR}

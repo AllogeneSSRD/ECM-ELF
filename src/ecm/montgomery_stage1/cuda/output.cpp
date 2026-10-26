@@ -21,7 +21,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "output.h"
 #include "host_policy.h"
 #include <stdexcept>
-#include "../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../cuda/runtime/cuda_ecm_shim.h"
 #include "ecm/stage1/progress.h"
 #include "ecm/platform/logging.h"
 #include <cstring>

@@ -1,6 +1,6 @@
 // Link the actual release runtime object; no OpenCL context or GPU is created.
 #include "ecm/application/configuration/runtime.h"
-#include "ecm/backend/opencl/runtime/cgbn_opencl.h"
+#include "ecm/opencl/runtime/cgbn_opencl.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>

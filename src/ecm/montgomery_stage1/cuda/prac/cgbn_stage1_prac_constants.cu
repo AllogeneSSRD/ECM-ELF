@@ -1,4 +1,4 @@
-#include "../../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../../cuda/arithmetic/cgbn/types.cuh"
 #include <cuda.h>
 #include "../arithmetic.cuh"
 #include "cgbn_stage1_prac_kernel.cuh"

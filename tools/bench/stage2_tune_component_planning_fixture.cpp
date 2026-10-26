@@ -1,7 +1,7 @@
 // Uses the exported production packing query. No device queries or curves.
-#include "../../src/ecm/service/planning/ecm_stage2_tune_components.h"
-#include "../../src/ecm/service/planning/ecm_stage2_tune_auto.h"
-#include "../../src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "../../src/ecm/stage2/planning/tune_components.h"
+#include "../../src/ecm/stage2/planning/tune_auto.h"
+#include "../../src/ecm/stage2/cuda/api.h"
 #include <chrono>
 #include <fstream>
 #include <iomanip>

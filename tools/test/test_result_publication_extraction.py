@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 from test_stage1_host_modules import normalize
+from source_layout import frozen_source
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -28,42 +29,43 @@ def body(text,name):
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
-    old=lambda name:subprocess.check_output(['git','show','e2ead4d:'+name],cwd=ROOT).decode('utf-8-sig')
-    read=lambda name:(ROOT/name).read_text(encoding='utf-8-sig')
-    folder='src/ecm/storage/results/'
-    impl=read(folder+'publication.cpp');public=read('include/ecm/storage/results/publication.h')
-    functions={
-        'ecm_result_submission.h':['quoted','decimal','normalized_integer','utc_timestamp','reference_fft','target_exponent','crc32','crc_hex','with_result_checksum','submission_json'],
-        'ecm_internal_result.h':['internal_json'],
-        'ecm_result_paths.h':['legacy_submission_ledger','submission_ledger','has_result_ledger','has_result_ledger_directory'],
-        'ecm_submission_writer.h':['atomic_text','read_submission_entry','migrate_result_ledger','stage1_factor_key','require_ledger_format','read_submission_bytes','append_submissions','submission_order','seal_submissions','refresh_submission_if_owned','prepare_submission_ledger','ensure_submission_output','publish_submission','render_internal','prepare_internal_ledger','publish_internal_batch','publish_internal','refresh_internal']}
-    checked={}
-    for file,names in functions.items():
-        previous=old(folder+file)
-        assert not (ROOT/folder/file).exists(),file
-        for name in names:
-            expected,actual=body(previous,name),body(impl,name);assert expected==actual,name
-            checked[name]=hashlib.sha256(actual.encode()).hexdigest()
-    def structure(s,first,last):return normalize(s[s.index(first):s.index(last,s.index(first))+len(last)])
-    assert structure(old(folder+'ecm_result_submission.h'),'struct Submission {','\n};')==structure(public,'struct Submission {','\n};')
-    assert structure(old(folder+'ecm_submission_writer.h'),'struct SubmissionLock {','\n};')==structure(impl,'struct SubmissionLock {','\n};')
-    assert structure(old(folder+'ecm_submission_writer.h'),'struct SubmissionEntry {','};')==structure(impl,'struct SubmissionEntry {','};')
-    expected=body(old('src/ecm/stage1/task.cpp'),'stage1_results_complete').replace('opt.persistence.results_file','path')
-    assert body(impl,'contains_stage1_curves')==expected
-    assert 'stage1_results_complete' not in read('src/ecm/stage1/task.cpp')
-    for name in ['src/ecm/montgomery_stage1/cuda/workflow.cpp','src/ecm/montgomery_stage1/opencl/workflow.cpp','src/ecm/edwards_stage1/cuda/workflow.cpp']:
-        s=read(name);assert 'ecm_results::contains_stage1_curves(opt.persistence.results_file,' in s
-    assert 'SubmissionLock' not in public and not re.search(r'#\s*include[^\n]*(?:windows|src/|cuda|cgbn)',public)
-    assert not re.search(r'inline |std::ofstream|std::ifstream|directory_iterator|mpz_gcd\(|WriteFile\(',public)
-    inventory=a.output/'inventory.json'
-    subprocess.run(['cmake','-DECM_CUDA_SOURCES_OUTPUT='+str(inventory),'-P',str(ROOT/'tools/build/internal/cuda_sources.cmake')],check=True)
-    groups=json.loads(inventory.read_text())['groups']
-    for group in ['STAGE1_COMMON','STAGE2_HOST']:assert groups[group].count(folder+'publication.cpp')==1
-    cpu=read('tools/build/internal/ecm_cpu_stage2.cmake');assert '"${_ecm_repo}/'+folder+'publication.cpp"' in cpu
-    result=dict(complete=True,baseline='e2ead4d',function_bodies=checked,unchanged_functions=len(checked),submission_layout_unchanged=True,lock_and_entry_layout_unchanged=True,complete_receipt_scan_moved_to_writer=True,public_os_handle_types=0,public_implementation_bodies=0,implementation_lines=len(impl.splitlines()),cuda_runs=0)
-    (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf8');print(json.dumps({k:v for k,v in result.items() if k!='function_bodies'}))
+    from test_stage2_planning_extraction import balanced
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--output', type=Path, required=True)
+    a = p.parse_args()
+    a.output.mkdir(parents=True, exist_ok=False)
+    before = frozen_source('6dad3d1', 'src/io/results.cpp')
+    after = (ROOT/'src/io/results.cpp').read_text(encoding='utf-8-sig')
+    # M1 removes only the redundant writer. Undo its twelve call-site changes
+    # before comparing every encoder, CRC, lock, ledger and ordering token.
+    start = before.index('void atomic_text(')
+    opening = before.index('{', start)
+    before = before[:start]+before[balanced(before, opening, '{', '}'):]
+    pattern = re.compile(r'ecm_io::write_atomic\s*\(')
+    changes = []
+    for match in pattern.finditer(after):
+        opening = after.index('(', match.start())
+        end = balanced(after, opening, '(', ')')
+        args = after[opening+1:end-1]
+        suffix = re.search(r',\s*"\.new"\s*$', args)
+        if not suffix:
+            continue  # The pre-existing append helper uses write_atomic's default suffix.
+        changes.append((match.start(), end, 'atomic_text('+args[:suffix.start()]+')'))
+    assert len(changes) == 12
+    for start, end, text in reversed(changes):
+        after = after[:start]+text+after[end:]
+    strip = lambda text: normalize(re.sub(r'(?m)^\s*#\s*include[^\n]*', '', text))
+    assert strip(before) == strip(after), 'result encoding/CRC/ledger/order changed'
+    public = (ROOT/'include/ecm/io/results.h').read_text(encoding='utf-8-sig')
+    assert strip(public) == strip(frozen_source('6dad3d1', 'include/ecm/io/results.h'))
+    assert not re.search(r'#\s*include[^\n]*(?:windows|src/|cuda|cgbn)', public)
+    assert not re.search(r'inline |std::ofstream|std::ifstream|directory_iterator|WriteFile\(', public)
+    report = dict(complete=True, baseline='6dad3d1', encoders_crc_ledger_order_unchanged=True,
+                  persistent_writer='ecm_io::write_atomic', compatibility_suffix='.new',
+                  redirected_call_sites=12, public_layout_unchanged=True, gpu_runs=0)
+    (a.output/'result.json').write_text(json.dumps(report, indent=2)+'\n')
+    print(json.dumps(report))
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()

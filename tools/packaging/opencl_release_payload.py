@@ -68,7 +68,7 @@ def freeze(build,snapshot):
     if not re.search(r'^ECM_OPENCL_PORTABLE_RESOURCES:[^=]+=ON$',cache,re.M) or not re.search(r'^ECM_ENABLE_CUDA:[^=]+=OFF$',cache,re.M):raise ValueError('OpenCL release requires portable resources and CUDA disabled')
     commands=read(build/'compile_commands.json')
     if not commands or any(Path(unit['file']).suffix!='.cpp' or 'nvcc' in unit['command'].lower() for unit in commands):raise ValueError('OpenCL release contains CUDA compile commands')
-    resources=ROOT/'src/ecm/backend/opencl/resources'
+    resources=ROOT/'src/ecm/opencl/resources'
     expected={p.relative_to(resources).as_posix():sha(p) for p in resources.rglob('*') if p.is_file()}
     actual={p.relative_to(build/'opencl_resources').as_posix():sha(p) for p in (build/'opencl_resources').rglob('*') if p.is_file()}
     if not expected or actual!=expected:raise ValueError('OpenCL resource deployment differs from source')
@@ -96,7 +96,7 @@ def verify(build,gmp):
     if Path(profile['fields']['gmp_root']).resolve()!=Path(gmp).resolve():raise ValueError('OpenCL GMP prefix differs from release')
     files=identity['files_sha256']
     if not {'ecm.exe',*RUNTIMES}<=files.keys() or not identity['resources']:raise ValueError('Incomplete OpenCL payload')
-    resource_root=ROOT/'src/ecm/backend/opencl/resources'
+    resource_root=ROOT/'src/ecm/opencl/resources'
     resources={p.relative_to(resource_root).as_posix():sha(p) for p in resource_root.rglob('*') if p.is_file()}
     if identity['resources']!=resources or {name[17:]:digest for name,digest in files.items() if name.startswith('opencl_resources/')}!=resources:raise ValueError('Incomplete OpenCL resource membership')
     for name,digest in files.items():

@@ -23,8 +23,8 @@ def main():
     files += ['tools/experiments/cuda/ntt_variants/carry_reference.cuh',
               'tools/experiments/cuda/ntt_variants/carry_cone.cuh',
               'tools/test/ntt_outer_fixture.cuh',
-              'src/ecm/backend/cuda/ntt/parameters.h','src/ecm/backend/cuda/ntt/launch.h',
-              'src/ecm/backend/cuda/runtime/launch.h','tools/build/internal/cuda_build_state.ps1']
+              'src/ecm/cuda/ntt/parameters.h','src/ecm/cuda/ntt/launch.h',
+              'src/ecm/cuda/runtime/launch.h','tools/build/internal/cuda_build_state.ps1']
     original={n:sha(ROOT/n) for n in files};edits={}
     for name in files:
         src=ROOT/name;raw=src.read_bytes();changes=[]

@@ -14,7 +14,7 @@ $gpuObj=Join-Path $Build 'edwards_gpu_point_probe.obj'
 $cpuObj=Join-Path $Build 'ecm_edwards_cpu.obj'
 $prefix="call `"$vcvars`" >nul 2>&1 && "
 $gpuCommand="nvcc -std=c++17 -O2 -arch=$Arch --pre-include=stdint.h -Xcompiler /utf-8 -Xcompiler /wd4819 "+
-    "-I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/ecm/backend/cuda -I src "+
+    "-I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/ecm/cuda -I src "+
     "-c tools/test/edwards_gpu_point_probe.cu -o `"$gpuObj`""
 $cpuCommand="cl /nologo /O2 /std:c++17 /EHsc /utf-8 /I third_party/gmp-zen3/dist/include "+
     "/I src /c src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp /Fo:`"$cpuObj`""
@@ -28,7 +28,7 @@ foreach($command in @($gpuCommand,$cpuCommand,$linkCommand)){
 }
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $sources=@('src/ecm/edwards_stage1/cuda/point.cuh','tools/test/edwards_gpu_point_probe.cu',
-           'src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp','src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h',
+           'src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp','src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h',
            'tools/build/test/build_edwards_gpu_point_probe.ps1')
 $hashes=[ordered]@{}
 foreach($source in $sources){$hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash}

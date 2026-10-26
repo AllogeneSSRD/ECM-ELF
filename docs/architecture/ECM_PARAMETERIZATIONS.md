@@ -63,17 +63,17 @@ GMP-ECM 的 `param` 枚举定义在 `ecm.h:179-189`。所有 Montgomery 形式�
 
 `Pₓ=h(4β−3)/(6β−5)`，`Pᵧ=h(t²+50t−2s³+27s²−104)/[(t+3s−2)(t+s+16)]`。
 
-以上除法均指模 `N` 的可逆元；[公共构造入口 `construct`](../../src/ecm/core/curve/ecm_edwards_curve.h#L37)以 Jacobian 坐标求辅助倍点、归一化一次，并检查各分母、`d(1−d)` 的单位性和 `P` 在曲线上。逆元不存在时求 GCD：真因子与退化构造分开报告；`σ=0` 直接视为退化。构造还输出 `a24=(A+2)/4=1/(1−d)`，供转成 Montgomery x-only 后使用；推导和 Prime95 `sigma_type=0` 的坐标约定见[Edwards 数学说明](../reference/ECM_EDWARDS_MATH.md#1-曲线构造atkin-morainsigma_type0)。
+以上除法均指模 `N` 的可逆元；[公共构造入口 `construct`](../../src/ecm/curve/edwards.h#L37)以 Jacobian 坐标求辅助倍点、归一化一次，并检查各分母、`d(1−d)` 的单位性和 `P` 在曲线上。逆元不存在时求 GCD：真因子与退化构造分开报告；`σ=0` 直接视为退化。构造还输出 `a24=(A+2)/4=1/(1−d)`，供转成 Montgomery x-only 后使用；推导和 Prime95 `sigma_type=0` 的坐标约定见[Edwards 数学说明](../reference/ECM_EDWARDS_MATH.md#1-曲线构造atkin-morainsigma_type0)。
 
-调用方接受固定的正 `uint64` σ；固定批次的第 `i` 条使用 `σ+i`，先检查 64 位回绕。未指定 σ 时，每条曲线分别取随机 σ（生成器排除 `σ≤5`）；保存/恢复记录每条曲线的完整 64 位值，不能用批次首值替代各条随机 σ。[CPU 批次](../../src/ecm/backend/cpu/stage1/edwards/workflow.cpp)、[CUDA 批次](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp#L197)和[输入校验](../../src/io/normalize.cpp)采用这套身份。固定 σ 可以取生成器不会随机选到的小正整数，但仍须通过构造与单位性检查。
+调用方接受固定的正 `uint64` σ；固定批次的第 `i` 条使用 `σ+i`，先检查 64 位回绕。未指定 σ 时，每条曲线分别取随机 σ（生成器排除 `σ≤5`）；保存/恢复记录每条曲线的完整 64 位值，不能用批次首值替代各条随机 σ。[CPU 批次](../../src/ecm/edwards_stage1/cpu/workflow.cpp)、[CUDA 批次](../../src/ecm/edwards_stage1/cuda/workflow.cpp#L197)和[输入校验](../../src/io/normalize.cpp)采用这套身份。固定 σ 可以取生成器不会随机选到的小正整数，但仍须通过构造与单位性检查。
 
 **现有 Edwards 执行路径共享上述同一构造，区别在点算术和标量执行：**
 
 | 路径 | 现有算法与约束 | 构造入口 |
 | --- | --- | --- |
-| CPU GMP 标量 | 扩展 Edwards 坐标、窗口 NAF；单曲线执行和恢复 | [CPU Stage 1](../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp#L597)调用 `construct` |
-| CPU AVX512-IFMA | 可用 ISA/构建条件下按最多 8 条曲线并行，尾部和异常曲线可走标量 | [SIMD 字典准备](../../src/ecm/backend/cpu/stage1/edwards/simd_edwards.cpp#L889)逐 lane 使用相同构造 |
-| CUDA CGBN | 默认窗口 NAF（默认窗口 6），可显式改用二进制标量路径；两者共用曲线批次 | [CUDA 初始化](../../src/ecm/backend/cuda/stage1/edwards/host_math.cpp#L3)调用 `construct` |
+| CPU GMP 标量 | 扩展 Edwards 坐标、窗口 NAF；单曲线执行和恢复 | [CPU Stage 1](../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp#L597)调用 `construct` |
+| CPU AVX512-IFMA | 可用 ISA/构建条件下按最多 8 条曲线并行，尾部和异常曲线可走标量 | [SIMD 字典准备](../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp#L889)逐 lane 使用相同构造 |
+| CUDA CGBN | 默认窗口 NAF（默认窗口 6），可显式改用二进制标量路径；两者共用曲线批次 | [CUDA 初始化](../../src/ecm/edwards_stage1/cuda/host_math.cpp#L3)调用 `construct` |
 | OpenCL | 当前不提供 Edwards Stage 1 | [Stage 1 能力说明](STAGE1.md#方法选择与输入校验) |
 
 三条可运行路径均使用 `48·lcm(1,…,B1)` 作为 Edwards Stage 1 标量；NAF 窗口、点表示、CPU SIMD 归约或 CUDA 倍点策略只改变执行方法，不改变固定 `(N, curve=ed, σ)` 的 `d` 与 `P`。CPU 与 CUDA 将完成点的 Edwards 投影坐标转为 Montgomery x-only `x_M=(Z+Y)/(Z−Y) mod N`，写入 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 的[文本 save](SAVE.md#5-edwards-save-version1)；[CUDA Stage 2](STAGE2.md#输入与表示)与 [CPU Stage 2](../usage/EDWARDS_CPU_STAGE2.md)按 σ 重构曲线。只比较设备域字数组或未归一化投影坐标，不能证明两条路径的数学点相同。
@@ -110,7 +110,7 @@ GMP-ECM 的 param 0–3 按 `parametrizations.c` 比较；本仓库 Edwards 按�
 
 上述 Montgomery 构造可按其公式讨论生成开销；Edwards 族的选点、模逆与退化处理不同，不能据“小 `d`”把 GKL17 family (iv) 插入同一个总成本排序。实际比较应同时计入构造、点运算和成功率。
 
-本仓库的 7 次模逆是[完整成功分支](../../src/ecm/core/curve/ecm_edwards_curve.h#L168)中辅助点归一化、`α`、`β`、`d`、`a24`、`Pₓ`、`Pᵧ` 的源码调用数；提前遇到因子或退化时会少于此数。辅助倍点使用 Jacobian 坐标，运算量随 `σ` 的有效位数及置位数增长，故不能把“64 位”误读成 64 次模逆。完成 Stage 1 后转换为 save 的 Montgomery `x_M` 还要另行处理 `(Z−Y)` 的逆元/GCD；这属于末点输出，不在上述构造成本内。CPU 标量、CPU IFMA 和 CUDA 均调用公共构造，批量 GPU 计时还包括字典、上传、核函数及回读。[Stage 1 性能页](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)提供同一构建下的完整批次成本，不能用单点公式代替。
+本仓库的 7 次模逆是[完整成功分支](../../src/ecm/curve/edwards.h#L168)中辅助点归一化、`α`、`β`、`d`、`a24`、`Pₓ`、`Pᵧ` 的源码调用数；提前遇到因子或退化时会少于此数。辅助倍点使用 Jacobian 坐标，运算量随 `σ` 的有效位数及置位数增长，故不能把“64 位”误读成 64 次模逆。完成 Stage 1 后转换为 save 的 Montgomery `x_M` 还要另行处理 `(Z−Y)` 的逆元/GCD；这属于末点输出，不在上述构造成本内。CPU 标量、CPU IFMA 和 CUDA 均调用公共构造，批量 GPU 计时还包括字典、上传、核函数及回读。[Stage 1 性能页](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)提供同一构建下的完整批次成本，不能用单点公式代替。
 
 ---
 
@@ -157,7 +157,7 @@ GMP-ECM 的 param 0–3 按 `parametrizations.c` 比较；本仓库 Edwards 按�
 
 论文中的加法律**强统一**；当 `d` 非平方时可满足相应完备条件。本仓库的 Atkin–Morain σ 映射没有逐素因子保证 `d` 非平方，不能据此把当前实现宣称为完备公式或推断侧信道性质。
 
-本仓库扩展坐标的[CPU 模域实现](../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp#L248)与[CUDA CGBN 实现](../../src/ecm/backend/cuda/stage1/edwards/point.cuh#L38)使用 `a=1` 的 HWCD 倍点：完整 `(X,Y,Z,T)` 输出为 **4M+4S**。CUDA NAF 在后续只倍点的列可省暂不需要的 `T`，该列为 **3M+4S**，加法或片边界前恢复 `T`；可选算法 5 将 `(X+Y)²−X²−Y²` 改写为 `2XY`，完整/省 `T` 分别是 **5M+3S / 4M+3S**。[NAF 倍点分支](../../src/ecm/backend/cuda/stage1/edwards/naf.cuh#L31)给出实际选择。通用扩展加法为 **10M**（9 次普通乘法和 1 次乘 `d`）；CPU 标量用预先归一化的仿射字典时，混合加法为 **8M**，另有字典生成及批量求逆成本。CPU IFMA 的 lane 约减与调度仍应按其实现和实测计时，不能将单条公式数直接乘以 8 得出耗时。
+本仓库扩展坐标的[CPU 模域实现](../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp#L248)与[CUDA CGBN 实现](../../src/ecm/edwards_stage1/cuda/point.cuh#L38)使用 `a=1` 的 HWCD 倍点：完整 `(X,Y,Z,T)` 输出为 **4M+4S**。CUDA NAF 在后续只倍点的列可省暂不需要的 `T`，该列为 **3M+4S**，加法或片边界前恢复 `T`；可选算法 5 将 `(X+Y)²−X²−Y²` 改写为 `2XY`，完整/省 `T` 分别是 **5M+3S / 4M+3S**。[NAF 倍点分支](../../src/ecm/edwards_stage1/cuda/naf.cuh#L31)给出实际选择。通用扩展加法为 **10M**（9 次普通乘法和 1 次乘 `d`）；CPU 标量用预先归一化的仿射字典时，混合加法为 **8M**，另有字典生成及批量求逆成本。CPU IFMA 的 lane 约减与调度仍应按其实现和实测计时，不能将单条公式数直接乘以 8 得出耗时。
 
 ### 4.4 论文模型与本仓库实现的比较
 
@@ -410,7 +410,7 @@ GKL17 表 2 的 family (iv) 行从辅助曲线 `C: y²=x³−x²−9x+9` 和 `Q=
 
 ### 7.3 与当前 ECM-ELF 的实现边界
 
-本仓库 [Edwards 构造](../../src/ecm/core/curve/ecm_edwards_curve.h#L6)采用 Atkin–Morain 的 `a=1` 模型，由 sigma 推导 `d` 与起点；[Stage 1](STAGE1.md)和[Stage 2](STAGE2.md)按该构造重建同一曲线。生产 CLI 当前未提供 GKL17 family (iv) / PrMers `-iv163` 的构造入口。引入该族意味着定义新的外部构造身份、`seed→m→(a,d,P)` 映射及存档重建规则，并验证 `a=−1` 点运算与 Stage 2 接口；不能只把 `d` 或一个现有 sigma 改成新值。
+本仓库 [Edwards 构造](../../src/ecm/curve/edwards.h#L6)采用 Atkin–Morain 的 `a=1` 模型，由 sigma 推导 `d` 与起点；[Stage 1](STAGE1.md)和[Stage 2](STAGE2.md)按该构造重建同一曲线。生产 CLI 当前未提供 GKL17 family (iv) / PrMers `-iv163` 的构造入口。引入该族意味着定义新的外部构造身份、`seed→m→(a,d,P)` 映射及存档重建规则，并验证 `a=−1` 点运算与 Stage 2 接口；不能只把 `d` 或一个现有 sigma 改成新值。
 
 当前对外构造身份按 `(curve, param, sigma)` 区分，`param` 仅用于 Montgomery；本仓库 Edwards 的逐 σ 映射和后端矩阵见 §2。[Stage 1 的能力与限制](STAGE1.md)及[Stage 2 输入合同](STAGE2.md#输入与表示)另列 Montgomery 各参数化的可运行范围。独立研究入口现已实现正 uint64 参数 `m` 直接取辅助点倍数，并具备 GMP a=−1 Stage1 与显式 a24 的 CUDA Stage2 接续，见[实验报告](../performance/ECM_FRIENDLY_IV.md)。该入口没有接入生产 sigma、save 或结果身份；生产 GPU Stage1 的 a=−1 内核尚未接入。
 

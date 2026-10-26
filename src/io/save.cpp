@@ -526,51 +526,58 @@ void validate_p95_batch(const Range& range, mpz_srcptr modulus) {
     }
 }
 
-} // namespace ecm_save
-
-namespace ecm_save {
 namespace {
 std::string lower_ascii(std::string text) {
-    for (auto& c : text)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    for (auto &c : text)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
     return text;
 }
-}
+} // namespace
 
 std::string curve_prefix(bool edwards, int param) {
     return edwards ? "e" : "m" + std::to_string(param);
 }
 
-std::string prefixed_name(const std::string &name,const std::string &prefix) {
-    const auto file=std::filesystem::path(name);auto leaf=file.filename().string();
-    if(leaf.rfind(prefix+"_",0)==0)return name;
-    const auto lower=lower_ascii(leaf);
-    for(const auto *old:{"ed_","e_","m0_","m2_","m3_"})
-        if(lower.rfind(old,0)==0){leaf.erase(0,std::strlen(old));break;}
-    return (file.parent_path()/(prefix+"_"+leaf)).string();
+std::string prefixed_name(const std::string &name, const std::string &prefix) {
+    const auto file = std::filesystem::path(name);
+    auto leaf = file.filename().string();
+    if (leaf.rfind(prefix + "_", 0) == 0)
+        return name;
+    const auto lower = lower_ascii(leaf);
+    for (const auto *old : {"ed_", "e_", "m0_", "m2_", "m3_"})
+        if (lower.rfind(old, 0) == 0) {
+            leaf.erase(0, std::strlen(old));
+            break;
+        }
+    return (file.parent_path() / (prefix + "_" + leaf)).string();
 }
 
 std::string format_name(const std::string &pattern, const mpz_t N, double B1,
-                                         const Naming& naming) {
+                        const Naming &naming) {
     /* {n} */
     std::string n_str;
     {
         mpz_t t;
         mpz_init(t);
         mpz_add_ui(t, N, 1);
-        if (mpz_popcount(t) == 1) n_str = std::to_string((unsigned long)mpz_scan1(t, 0));
-        else                      n_str = std::to_string((unsigned long)mpz_sizeinbase(N, 2));
+        if (mpz_popcount(t) == 1)
+            n_str = std::to_string((unsigned long)mpz_scan1(t, 0));
+        else
+            n_str = std::to_string((unsigned long)mpz_sizeinbase(N, 2));
         mpz_clear(t);
     }
-    bool mersenne=false;
-    if(naming.target_kbnc) {
-        n_str=std::to_string(naming.target_n);
-        mersenne=naming.mersenne;
+    bool mersenne = false;
+    if (naming.target_kbnc) {
+        n_str = std::to_string(naming.target_n);
+        mersenne = naming.mersenne;
     } else {
-        ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);mersenne=mpz_popcount(plus.v)==1;
+        ecm_edwards::Integer plus;
+        mpz_add_ui(plus.v, N, 1);
+        mersenne = mpz_popcount(plus.v) == 1;
     }
-    const auto curve=naming.curve;
-    const auto target=mersenne?"m"+n_str:"bit"+std::to_string(mpz_sizeinbase(N,2));
+    const auto curve = naming.curve;
+    const auto target = mersenne ? "m" + n_str : "bit" + std::to_string(mpz_sizeinbase(N, 2));
     /* {b1}: mantissa + 'e' + number of trailing zeros when there are >= 3 of them */
     std::string b1_str;
     {
@@ -578,7 +585,8 @@ std::string format_name(const std::string &pattern, const mpz_t N, double B1,
         snprintf(buf, sizeof(buf), "%.0f", B1);
         std::string digits(buf);
         size_t zeros = 0;
-        while (zeros < digits.size() && digits[digits.size() - 1 - zeros] == '0') zeros++;
+        while (zeros < digits.size() && digits[digits.size() - 1 - zeros] == '0')
+            zeros++;
         if (zeros >= 3 && zeros < digits.size())
             b1_str = digits.substr(0, digits.size() - zeros) + "e" + std::to_string(zeros);
         else
@@ -589,24 +597,21 @@ std::string format_name(const std::string &pattern, const mpz_t N, double B1,
         out.replace(p, 3, n_str);
     for (size_t p = out.find("{b1}"); p != std::string::npos; p = out.find("{b1}", p))
         out.replace(p, 4, b1_str);
-    for(const auto &entry:{std::pair<std::string,std::string>{"{curve}",curve},{"{target}",target}})
-        for(size_t p=out.find(entry.first);p!=std::string::npos;p=out.find(entry.first,p))
-            out.replace(p,entry.first.size(),entry.second);
-    if(out.find('{')!=std::string::npos || out.find('}')!=std::string::npos)
+    for (const auto &entry :
+         {std::pair<std::string, std::string>{"{curve}", curve}, {"{target}", target}})
+        for (size_t p = out.find(entry.first); p != std::string::npos; p = out.find(entry.first, p))
+            out.replace(p, entry.first.size(), entry.second);
+    if (out.find('{') != std::string::npos || out.find('}') != std::string::npos)
         throw std::runtime_error("unknown save_name_pattern token");
     // Old custom patterns still receive the mandatory curve/param prefix.
-    out=prefixed_name(out,curve);
+    out = prefixed_name(out, curve);
     return out;
 }
 
-} // namespace ecm_save
-
-namespace ecm_save {
-void copy_history(const std::string& legacy_source, const std::string& destination, int param) {
+void copy_history(const std::string &legacy_source, const std::string &destination, int param) {
     if (legacy_source.empty())
         return;
-    const auto source =
-        ecm_io::resolve_data_path(legacy_source.c_str());
+    const auto source = ecm_io::resolve_data_path(legacy_source.c_str());
     const auto target = ecm_io::resolve_data_path(destination.c_str());
     if (!ecm_io::ensure_parent_dir(target.c_str()))
         throw std::runtime_error("cannot create prefixed save directory");

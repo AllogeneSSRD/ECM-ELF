@@ -25,7 +25,7 @@
  * madds per batch mont_mul = n*(4n+3).
  * ------------------------------------------------------------------------- */
 
-#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
 
 /* MSVC's /arch:AVX512 is a single "AVX512" level and does not define
    __AVX512IFMA__ even though it does accept the vpmadd52 intrinsics, so only

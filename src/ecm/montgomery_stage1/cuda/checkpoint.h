@@ -4,6 +4,7 @@
 #include <ctime>
 #include <string>
 #include <vector>
+#include <functional>
 #include <gmp.h>
 #include "../../../io/stage1_checkpoint.h"
 #define CHECKPOINT_MAGIC 0x45555047
@@ -40,7 +41,6 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_s
 #endif
 }
 
-#include <functional>
 // Import validated V5 CUDA ladder snapshots, retaining the original file.
 bool ecm_stage1_import_legacy_gpu(ecm_stage1_checkpoint::Context& checkpoint, mpz_srcptr n,mpz_srcptr scalar,uint32_t curves,
                                         uint32_t param,bool fixed,uint64_t requested,

@@ -160,14 +160,14 @@ $state=Get-EcmCompileState $Repo $entry
     Check ([IO.File]::ReadAllText($fingerprintPath) -eq $current.fingerprint) 'same content fingerprint across PowerShell runtimes'
 }
 $inventory = Get-EcmCudaInventory $repo (Join-Path $out 'cuda_sources.json')
-$ntt=@('src/ecm/backend/cuda/ntt/shape.cpp','src/ecm/backend/cuda/ntt/runtime.cpp','src/ecm/backend/cuda/ntt/graph.cpp','src/ecm/backend/cuda/ntt/checks.cpp','src/ecm/backend/cuda/ntt/device/transform_kernels.cu')
+$ntt=@('src/ecm/cuda/ntt/shape.cpp','src/ecm/cuda/ntt/runtime.cpp','src/ecm/cuda/ntt/graph.cpp','src/ecm/cuda/ntt/checks.cpp','src/ecm/cuda/ntt/device/transform_kernels.cu')
 Check (@($inventory.groups.STAGE2_NTT).Count -eq 5 -and
     @(Compare-Object ($inventory.groups.STAGE2_NTT|Sort-Object) ($ntt|Sort-Object)).Count -eq 0 -and
     @($inventory.groups.STAGE2_ARITHMETIC).Count -eq 1 -and
-    $inventory.groups.STAGE2_ARITHMETIC[0] -eq 'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu') 'Stage2 arithmetic and NTT module membership'
+    $inventory.groups.STAGE2_ARITHMETIC[0] -eq 'src/ecm/stage2/cuda/device/arithmetic_kernels.cu') 'Stage2 arithmetic and NTT module membership'
 $expectedProduction=@($inventory.groups.STAGE2_ENGINE)+@($inventory.groups.STAGE2_ARITHMETIC)+@($inventory.groups.STAGE2_NTT)
-$engine=@('constants','context','host_wait','options','resources','plan','engine','batch','points','product','tree','remainder','s4','factors','checks','diagnostics','tune') | ForEach-Object { 'src/ecm/backend/cuda/stage2/'+$_+'.cpp' }
-$engine += 'src/ecm/backend/cuda/ntt/module_dispatch.cpp'
+$engine=@('constants','context','host_wait','options','resources','plan','engine','batch','points','product','tree','remainder','s4','factors','checks','diagnostics','tune') | ForEach-Object { 'src/ecm/stage2/cuda/'+$_+'.cpp' }
+$engine += 'src/ecm/cuda/ntt/module_dispatch.cpp'
 Check (@($inventory.groups.STAGE2_ENGINE).Count -eq 18 -and
     @(Compare-Object ($inventory.groups.STAGE2_ENGINE|Sort-Object) ($engine|Sort-Object)).Count -eq 0) 'Stage2 host module membership'
 $expectedProduction=@($expectedProduction|Where-Object {$_})
@@ -177,11 +177,11 @@ Check ($production.Count -eq $expectedProduction.Count -and
     @($inventory.groups.STAGE2_DEVELOPMENT).Count -eq 1 -and
     $inventory.groups.STAGE2_DEVELOPMENT[0] -eq 'tools/experiments/cuda/stage2_tree/worker.cu' -and
     @($production|Where-Object {$_ -like 'tools/*'}).Count -eq 0) 'production and development source groups separate'
-$set = Get-EcmStage2SourceSet $repo $inventory production @('include','src','src/ecm/backend/cuda')
+$set = Get-EcmStage2SourceSet $repo $inventory production @('include','src','src/ecm/cuda')
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'
 Check (@($set.Dependencies | Where-Object { $_ -like '*.def' }).Count -ge 2) 'Stage2 definition tables present in source identity'
 $stage1 = Get-Stage1ReleaseSources $repo
-foreach ($name in @('src/ecm/backend/cuda/dispatch/tiers.def','src/ecm/edwards_stage1/cuda/edwards_runtime.inl','src/ecm/edwards_stage1/cuda/workflow.cpp')) {
+foreach ($name in @('src/ecm/cuda/dispatch/tiers.def','src/ecm/edwards_stage1/cuda/edwards_runtime.inl','src/ecm/edwards_stage1/cuda/workflow.cpp')) {
     Check ($stage1.Contains($name)) "Stage1 release records $name"
 }
 $enabled = Get-Stage1ReleaseSources $repo -EnablePrac $true

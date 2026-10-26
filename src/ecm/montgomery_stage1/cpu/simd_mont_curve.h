@@ -18,7 +18,7 @@
 #ifndef SIMD_MONT_CURVE_H
 #define SIMD_MONT_CURVE_H
 
-#include "../../backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../cpu/arithmetic/ifma/simd_mont_ifma.h"
 #include <gmp.h>
 #include <stdint.h>
 

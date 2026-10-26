@@ -1,5 +1,5 @@
 // CPU-only solver/loader regression. Synthetic packing is not a CUDA gate.
-#include "../../src/ecm/service/planning/ecm_stage2_cost_profile.h"
+#include "../../src/ecm/stage2/planning/cost_profile.h"
 #include <cstring>
 #include <iostream>
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *n,uint64_t *out) {

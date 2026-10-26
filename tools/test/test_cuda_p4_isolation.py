@@ -39,7 +39,7 @@ def check_boundary(path, text):
         target=(path.parent/match[1]).resolve()
         assert target.suffix not in ('.cu','.cpp','.inl'), ('implementation inclusion',path,match[1])
         if 'tools/experiments/' in path.as_posix():
-            private=ROOT/'src/ecm/backend/cuda/stage2'
+            private=ROOT/'src/ecm/stage2/cuda'
             allowed={current_source(old).resolve() for old in LAYOUT['moved'] if not old.startswith('src/cuda/stage2/')}
             assert not target.is_relative_to(private) or target in allowed, ('experiment includes private Stage2 host',path,target)
 
@@ -82,7 +82,7 @@ def main():
                 check_boundary(path,path.read_text(encoding='utf-8-sig'));count+=1
     rejected=0
     for file,body in [
-        (ROOT/'tools/experiments/bad.cuh','#include "../../src/ecm/backend/cuda/stage2/scale_plain.cuh"'),
+        (ROOT/'tools/experiments/bad.cuh','#include "../../src/ecm/stage2/cuda/scale_plain.cuh"'),
         (ROOT/'tools/test/bad.cu','#include "../experiments/cuda/ntt_variants/main.cu"'),
         (ROOT/'tools/test/bad.cu','#include "../../src/ecm/edwards_stage1/cuda/edwards_runtime.inl"')]:
         try:check_boundary(file,body)

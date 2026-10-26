@@ -14,7 +14,7 @@
 #include <sstream>
 #include <omp.h>
 #ifdef ECM_CPU_HAVE_GWPOLY
-#include "../../backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.h"
+#include "../../stage2/cpu/gwpoly.h"
 #endif
 
 #ifndef ECM_BUILD_ID

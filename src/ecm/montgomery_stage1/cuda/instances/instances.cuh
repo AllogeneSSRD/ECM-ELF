@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../../cuda/arithmetic/cgbn/types.cuh"
 #include "../arithmetic.cuh"
 #define ECM_CUDA_MONT_ONLY
 #ifdef IS_DEV_BUILD
@@ -15,7 +15,7 @@ cgbn_stage1_kernel_fn ECM_MONT_FACTORY(uint32_t BITS,uint32_t *TPI_out) {
 #define ECM_MONT_KERNEL(A) kernel_double_add_suyama<cgbn_params_##A,true>
 #endif
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) static_assert(cgbn_params_##A::TPB==MT,"Montgomery block geometry"); if(BITS==W){*TPI_out=T;return ECM_MONT_KERNEL(A);}
-#include "../../../backend/cuda/dispatch/tiers.def"
+#include "../../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 #undef ECM_MONT_KERNEL
 #endif

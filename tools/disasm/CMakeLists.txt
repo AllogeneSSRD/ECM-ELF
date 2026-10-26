@@ -2,10 +2,10 @@
 #
 # Moved out of the root CMakeLists.txt (see tools/bench/CMakeLists.txt for the rationale
 # and for ecm_tool_output_root(), which keeps the executables in the build root).
-# All three share src/ecm/backend/opencl/runtime/device.cpp and the cgbn_opencl library.
+# All three share src/ecm/opencl/runtime/device.cpp and the cgbn_opencl library.
 
 add_executable(opencl_asm_selftest
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/runtime/device.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/opencl/runtime/device.cpp
     ${CMAKE_SOURCE_DIR}/tools/disasm/opencl_asm_selftest.cpp
 )
 
@@ -22,7 +22,7 @@ target_link_libraries(opencl_asm_selftest
 ecm_tool_output_root(opencl_asm_selftest)
 
 add_executable(opencl_mont_isa_export
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/runtime/device.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/opencl/runtime/device.cpp
     ${CMAKE_SOURCE_DIR}/tools/disasm/opencl_mont_isa_export.cpp
 )
 
@@ -39,7 +39,7 @@ target_link_libraries(opencl_mont_isa_export
 ecm_tool_output_root(opencl_mont_isa_export)
 
 add_executable(opencl_addsub_isa_export
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/runtime/device.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/opencl/runtime/device.cpp
     ${CMAKE_SOURCE_DIR}/tools/disasm/opencl_addsub_isa_export.cpp
     ${CMAKE_SOURCE_DIR}/tools/bench/opencl_ecm_addsub_manifest.cpp
 )

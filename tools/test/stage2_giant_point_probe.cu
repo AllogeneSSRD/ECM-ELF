@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "../../src/ecm/backend/cuda/stage2/launch.h"
+#include "../../src/ecm/stage2/cuda/launch.h"
 #include "../experiments/cuda/stage2_tree/giant_launch.h"
 using Word=unsigned long long;
 #define CK(x) do{auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA %s\n",cudaGetErrorString(e));exit(2);}}while(0)

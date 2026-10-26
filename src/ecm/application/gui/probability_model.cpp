@@ -1,5 +1,5 @@
 #include "probability_model.h"
-#include "ecm/core/stage2/probability.h"
+#include "ecm/stage2/probability.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>

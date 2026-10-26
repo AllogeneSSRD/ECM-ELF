@@ -30,7 +30,7 @@ def build():
                         '-P', str(ROOT / 'tools/build/internal/cuda_sources.cmake')],
                        cwd=ROOT, check=True, capture_output=True)
         groups = json.loads(inventory_path.read_text())['groups']
-    tier_source = (ROOT / 'src/ecm/backend/cuda/dispatch/tiers.def').read_text()
+    tier_source = (ROOT / 'src/ecm/cuda/dispatch/tiers.def').read_text()
     tiers = [dict(bits=int(row[0]), tpi=int(row[1]), group=int(row[2]),
                   montgomery=int(row[3]), development=int(row[4]))
              for row in re.findall(r'^ECM_CUDA_TIER\((\d+),(\d+),(\d+),(\d+),(\d+),', tier_source, re.M)]
@@ -60,7 +60,7 @@ def build():
         assert set(module['depends']) <= module_ids, module['id']
         module['ref'] = add_reference(module['path'], module.get('find', ''))
     for tier in tiers:
-        tier['ref'] = add_reference('src/ecm/backend/cuda/dispatch/tiers.def', f"ECM_CUDA_TIER({tier['bits']},")
+        tier['ref'] = add_reference('src/ecm/cuda/dispatch/tiers.def', f"ECM_CUDA_TIER({tier['bits']},")
     for flow in content['flows'].values():
         for step in flow['steps']:
             assert set(step['modules']) <= module_ids, step['title']

@@ -1,4 +1,4 @@
-"""Verify the complete planning TU, private layouts and exact Settings projection."""
+"""Verify current planning ownership and unchanged layouts against the migration baseline."""
 import argparse
 import json
 from pathlib import Path
@@ -7,6 +7,7 @@ import subprocess
 from test_result_publication_extraction import body
 from test_stage1_host_modules import normalize
 
+from source_layout import frozen_source
 ROOT=Path(__file__).resolve().parents[2]
 
 
@@ -31,44 +32,39 @@ def definitions(s):
     return found
 
 
+
+BASELINE = '6dad3d1020ac08e09cd85fa1695406addedc99d7'
+
+
+def verify_snapshot(paths):
+    # This round changes ownership paths, not Stage2 algorithms or protocols.
+    # Compare the complete token stream, including private layouts and ordering.
+    checked = {}
+    for name in paths:
+        original = frozen_source(BASELINE, name)
+        current = (ROOT/name).read_text(encoding='utf-8-sig')
+        strip = lambda text: normalize(re.sub(r'(?m)^\s*#\s*include[^\n]*', '', text))
+        assert strip(original) == strip(current), ('Stage2 implementation changed', name)
+        checked[name] = len(definitions(current))
+    return checked
+
+
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
-    old=lambda name:subprocess.check_output(['git','show','da9953d:'+name],cwd=ROOT).decode('utf-8-sig')
-    read=lambda name:(ROOT/name).read_text(encoding='utf-8-sig')
-    original=old('src/ecm/application/cuda_stage2/ecm_stage2_portable_driver.inl')
-    current=read('src/ecm/service/planning/stage2.cpp')
-    names=definitions(original);assert names==definitions(current)
-    for name in names:assert body(original,name)==body(current,name),name
-    # Includes and one enclosing namespace change; every private memo, scope,
-    # layout, initialization and helper remains in this single planning TU.
-    extracted=current[current.index('namespace pt=ecm_stage2::tune::portable;'):current.rfind('\n}')]
-    expected=original.replace('const Settings &settings','const TaskDefaults &settings')
-    expected=expected.replace('const std::vector<Record> &range={}','const std::vector<Record> &range')
-    assert normalize(expected)==normalize(extracted),'complete planning scope changed'
-    before=old('src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp')
-    main_source=read('src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp')
-    main_names=definitions(before);assert main_names==definitions(main_source)
-    for name in main_names:
-        after=body(main_source,name)
-        if name=='driver':after=after.replace(normalize('TaskDefaults{s.b2,s.arena,s.owner_mb}'),'s')
-        assert body(before,name)==after,name
-    types=read('src/ecm/service/stage2/runtime_types.h')
-    for name in ['TaskInputError','Big','Record','Options','QueueSelection','Handle','RuntimeTuneObservation']:
-        def structure(s):
-            start=s.index('struct '+name+' ');return s[start:balanced(s,s.index('{',start),'{','}')+1]
-        assert normalize(structure(before))==normalize(structure(types)),name
-    assert set(re.findall(r'\bini_settings\.(\w+)',before))=={'arena','owner_mb'}
-    assert set(re.findall(r'\bsettings\.(\w+)',original))=={'b2'}
-    assert main_source.count('TaskDefaults{s.b2,s.arena,s.owner_mb}')==3
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--output', type=Path, required=True)
+    a = p.parse_args()
+    a.output.mkdir(parents=True, exist_ok=False)
+    checked = verify_snapshot(['src/ecm/stage2/planning/planning.cpp',
+        'src/ecm/stage2/planning/planning.h', 'src/ecm/stage2/types.h'])
+    types = (ROOT/'src/ecm/stage2/types.h').read_text(encoding='utf-8-sig')
+    planner = (ROOT/'src/ecm/stage2/planning/planning.cpp').read_text(encoding='utf-8-sig')
     assert 'struct TaskDefaults {uint64_t b2,arena,owner_mb;};' in types
-    assert 'extern volatile LONG stop_requests;' in types and main_source.count('volatile LONG stop_requests = 0;')==1
-    assert not re.search(r'ecm_toml|ecm_queue_config|application/configuration|\bSettings\b',masked(current))
-    assert not (ROOT/'src/ecm/application/cuda_stage2/ecm_stage2_portable_driver.inl').exists()
-    result=dict(complete=True,baseline='da9953d',planning_functions_unchanged=len(names),main_functions_unchanged=len(main_names),
-                complete_planning_tu_unchanged=True,private_layouts_unchanged=7,settings_fields_passed=3,
-                original_console_budget_source=True,global_stop_owners=1,gpu_runs=0)
-    (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
+    assert not re.search(r'ecm_toml|ecm_queue_config|application/configuration|\bSettings\b', masked(planner))
+    report = dict(complete=True, baseline=BASELINE, complete_planning_tu_unchanged=True,
+                  private_layouts_unchanged=True, defaults_fields=3, functions=checked, gpu_runs=0)
+    (a.output/'result.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf8')
+    print(json.dumps(report))
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    main()

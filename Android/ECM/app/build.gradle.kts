@@ -84,7 +84,7 @@ val mpaRoot = rootProject.projectDir.parentFile.parentFile
 // Production Stage1 resources have one source owner under src/ecm. Android keeps
 // its existing logical asset root; standalone benchmark inputs remain tools data.
 tasks.register<Copy>("syncEcmStage1Kernels") {
-    from(mpaRoot.resolve("src/ecm/backend/opencl/resources"))
+    from(mpaRoot.resolve("src/ecm/opencl/resources"))
     from(mpaRoot.resolve("kernels/opencl")) {
         include("bench/**")
     }

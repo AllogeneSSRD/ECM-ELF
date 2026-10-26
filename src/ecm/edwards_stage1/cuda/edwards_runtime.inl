@@ -1,7 +1,7 @@
 // Host allocations, GMP packing, slicing, timers and publication.
 #pragma once
 #include <gmp.h>
-#include "../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../cuda/arithmetic/cgbn/types.cuh"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <chrono>
@@ -130,6 +130,6 @@ int run_##W(const Request &r) { \
     if(r.plan)return run_naf<HostParams<W,T>>(r.n,*r.plan,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.doubling,r.metrics,r.prepared,k); \
     return run<HostParams<W,T>>(r.n,r.scalar,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.prepared,k); \
 }
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 }

@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include "../../src/ecm/platform/compute_log.h"
-#include "../../src/ecm/backend/cuda/ntt/runtime.h"
+#include "../../src/ecm/cuda/ntt/runtime.h"
 #include <cuda_profiler_api.h>
 
 using Word=unsigned long long;

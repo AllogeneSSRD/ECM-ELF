@@ -39,7 +39,7 @@ IV 的 `16/3` 与通用族的 `14/3` 是跨好素数的平均 `v2(#E)`；它们�
 
 新构造取辅助曲线 `r²=s³−s²−9s+9` 上的 `[m](5,8)`，由 `t=(4s+4)/(r−4)` 使用论文表 1 第 4 行的有理函数生成 e 和起点，目标系数为 `a=−1,d=−e⁴`。`m` 直接使用正 uint64，不采用 PrMers 的 1…100 重映射，也不冒用旧 Edwards sigma。
 
-原生入口为 [ecm_gkl_iv_curve.h](../../src/ecm/core/curve/ecm_gkl_iv_curve.h)，精确有理参考为 [friendly_curves.py](../../tools/ecm_prob/friendly_curves.py)，独立 PARI 模型为 [friendly_curves.gp](../../tools/ecm_prob/friendly_curves.gp)。m=1 黄金值为 `t=6,e=15/8,P=(28/195,3152/3495)`。所有构造检查分母、非奇异性及曲线方程；模逆失败时区分真因子和退化，未硬编码论文表格的禁用参数集合。
+原生入口为 [ecm_gkl_iv_curve.h](../../src/ecm/curve/gkl_iv.h)，精确有理参考为 [friendly_curves.py](../../tools/ecm_prob/friendly_curves.py)，独立 PARI 模型为 [friendly_curves.gp](../../tools/ecm_prob/friendly_curves.gp)。m=1 黄金值为 `t=6,e=15/8,P=(28/195,3152/3495)`。所有构造检查分母、非奇异性及曲线方程；模逆失败时区分真因子和退化，未硬编码论文表格的禁用参数集合。
 
 原生辅助曲线采用整数同构 `x=9s−3,y=27r`，得到 `y²=x³−756x+4320` 和基点 `(42,216)`，通过 Jacobian 倍点避免辅助曲线每步求逆。目标曲线先转 Montgomery，再保留其 B 扭转身份转 Weierstrass；独立点阶计算没有擅自令 B=1。
 

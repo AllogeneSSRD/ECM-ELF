@@ -6,7 +6,7 @@
 #include "ecm/io/save.h"
 #include "../../../io/stage1_checkpoint.h"
 #include "ecm/montgomery_stage1/cuda/checkpoint.h"
-#include "../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../cuda/runtime/cuda_ecm_shim.h"
 #include "runtime.h"
 #include "host_policy.h"
 #include <cmath>

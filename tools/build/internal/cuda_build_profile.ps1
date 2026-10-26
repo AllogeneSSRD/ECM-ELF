@@ -79,7 +79,7 @@ function New-EcmStage2Profile([string]$Repo, [string]$Role, [string]$Engine, [st
     # Device TUs and the nvcc link command retain their existing flags/default stream.
     $hostCompile = "`"$($Vc.Compiler)`" /nologo /TP /std:c++17 /O2 /EHsc /MT /utf-8 /wd4819 " +
         "/DNTT_GL_FIXED_MODE=$mode /DNTT_OUTER_UNROLL_U=$OuterUnrollU /DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
-        "/I `"$gmpRoot/include`" /I `"$Repo/include`" /I `"$($Cuda.Root)/include`" /I `"$($Cuda.Root)/include/cccl`""
+        "/I `"$gmpRoot/include`" /I `"$Repo/include`" /I `"$Repo/src`" /I `"$($Cuda.Root)/include`" /I `"$($Cuda.Root)/include/cccl`""
     if ($KernelLayout -eq 'isolated') {
         $compile += ' -DECM_CUDA_ISOLATED_DEVICE=1'
         $hostCompile += ' /DECM_CUDA_ISOLATED_DEVICE=1'

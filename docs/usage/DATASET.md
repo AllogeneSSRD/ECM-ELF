@@ -27,7 +27,7 @@ Python 使用标准库；计算群阶/点阶及拆解因子需要 PARI/GP。显�
 
 ## Edwards群阶与点阶
 
-[独立入口](../../tools/ecm_dataset/edwards_order.py)接收已知素因子p和完整uint64 sigma，按[共享C++构造](../../src/ecm/core/curve/ecm_edwards_curve.h)重建Atkin-Morain曲线。GP先证明p素性、排除退化并核对基点，再通过等价Weierstrass模型计算群阶/点阶、完整分解及各因子的素性。Python核对Hasse界、分解乘积与点阶整除关系。数学映射及最小点阶验证见[固定参考](../reference/ECM_EDWARDS_MATH.md#41-在有限素域计算群阶与点阶)。
+[独立入口](../../tools/ecm_dataset/edwards_order.py)接收已知素因子p和完整uint64 sigma，按[共享C++构造](../../src/ecm/curve/edwards.h)重建Atkin-Morain曲线。GP先证明p素性、排除退化并核对基点，再通过等价Weierstrass模型计算群阶/点阶、完整分解及各因子的素性。Python核对Hasse界、分解乘积与点阶整除关系。数学映射及最小点阶验证见[固定参考](../reference/ECM_EDWARDS_MATH.md#41-在有限素域计算群阶与点阶)。
 
 ```powershell
 python tools/ecm_dataset/edwards_order.py `

@@ -7,7 +7,7 @@ import re
 import subprocess
 from source_layout import ROOT, LAYOUT, current_source
 
-BASE='8c6ba76'
+BASE='6dad3d1'
 
 
 def frozen(path):
@@ -33,7 +33,7 @@ def main():
     # These contracts must remain usable by ordinary host code. An actual MSVC
     # dependency-record test separately checks the real task collaborators.
     public=['include/ecm/stage1/task.h','include/ecm/stage1/selection.h',
-            'include/ecm/stage1/scalar.h','include/ecm/core/stage2/probability.h',
+            'include/ecm/stage1/scalar.h','include/ecm/stage2/probability.h',
             'include/ecm/platform/logging.h','include/ecm/platform/program_version.h',
             'include/ecm/application/configuration/runtime.h','include/ecm/stage1/gpu_backend.h']
     for name in public:
@@ -46,11 +46,12 @@ def main():
     assert '#include <ecm.h>' in main and not (ROOT/'include/ecm.h').exists()
     helper=(ROOT/'tools/build/internal/ecm_cpu_stage2.cmake').read_text(encoding='utf8')
     assert 'ecm_params_init.cpp' not in helper and 'service/execution/legacy' not in helper
-    names=['ecm_internal_result.h','ecm_result_submission.h','ecm_result_json.h','ecm_result_paths.h','ecm_submission_writer.h','ecm_program_version.h']
     loop=re.search(r'foreach\(_shared\s+([^)]*)\)',helper)[1].split()
-    assert loop==[LAYOUT['moved']['src/core/'+name] for name in names],'CPU identity list membership/order changed'
+    baseline_helper=frozen('tools/build/internal/ecm_cpu_stage2.cmake').decode('utf-8-sig')
+    expected=re.search(r'foreach\(_shared\s+([^)]*)\)',baseline_helper)[1].split()
+    assert loop==expected,'CPU identity list membership/order changed'
     assert '${_ecm_repo}/${_shared}' in helper and 'src/core/${_shared}' not in helper
-    assert 'target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include")' in helper
+    assert 'target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include" "${_ecm_repo}/src")' in helper
     result=dict(complete=True,generated_inputs=checked,public_host_headers=public,cpu_libecm_header_preserved=True,cpu_identity_inputs=loop,defaults_unchanged=True,gpu_runs=0)
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf8')
     print(json.dumps(dict(complete=True,generated_inputs=len(checked),public_host_headers=len(public),cpu_identity_inputs=len(loop))))

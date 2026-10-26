@@ -83,13 +83,13 @@ endif()
 
 # ---------------------------------------------------------------------------
 # simd_mont_gate: M1 gate bench for the AVX512-IFMA batched Montgomery kernel
-# (docs/architecture/STAGE1.md 13).  src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp is the ONLY file compiled
+# (docs/architecture/STAGE1.md 13).  src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp is the ONLY file compiled
 # with /arch:AVX512; the bench TU itself stays at the default baseline and the driver
 # must gate every call on runtime CPUID detection.
 # ---------------------------------------------------------------------------
 add_executable(simd_mont_gate
     ${CMAKE_CURRENT_SOURCE_DIR}/simd_mont_gate.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
 )
 
 target_include_directories(simd_mont_gate PRIVATE
@@ -105,10 +105,10 @@ ecm_tool_output_root(simd_mont_gate)
 # the preprocessor trips over the comment bytes.
 if(MSVC)
     target_compile_options(simd_mont_gate PRIVATE /utf-8)
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         TARGET_DIRECTORY simd_mont_gate PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         TARGET_DIRECTORY simd_mont_gate PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 
@@ -144,7 +144,7 @@ endif()
 add_executable(simd_edwards_bench
     ${CMAKE_CURRENT_SOURCE_DIR}/simd_edwards_bench.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp
 )
 
@@ -166,10 +166,10 @@ endif()
 # the baseline so the binary reports a clean error on a CPU without AVX512-IFMA instead of
 # executing illegal instructions.
 if(MSVC)
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         TARGET_DIRECTORY simd_edwards_bench PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         TARGET_DIRECTORY simd_edwards_bench PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 

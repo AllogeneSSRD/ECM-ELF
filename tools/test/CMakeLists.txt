@@ -6,7 +6,7 @@
 
 # ---------------------------------------------------------------------------
 # main: the older OpenCL low-risk test harness (tools/test/main_test.cpp +
-# tools/test/opencl_low_risk_tests.cpp, sharing src/ecm/backend/opencl/runtime/device.cpp with the other OpenCL tools).
+# tools/test/opencl_low_risk_tests.cpp, sharing src/ecm/opencl/runtime/device.cpp with the other OpenCL tools).
 # ---------------------------------------------------------------------------
 add_executable(stage1_selection_test stage1_selection_test.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/stage1/selection.cpp)
@@ -51,7 +51,7 @@ endif()
 ecm_tool_output_root(stage2_transfer_test)
 
 add_executable(main
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/runtime/device.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/opencl/runtime/device.cpp
     ${CMAKE_SOURCE_DIR}/tools/test/main_test.cpp
     ${CMAKE_SOURCE_DIR}/tools/test/opencl_low_risk_tests.cpp
 )

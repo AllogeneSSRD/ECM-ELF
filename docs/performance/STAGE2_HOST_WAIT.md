@@ -83,10 +83,10 @@
 
 ## 源码与复现入口
 
-- [S4 FIFO回收，s4.cpp:41](../../src/ecm/backend/cuda/stage2/s4.cpp#L41)：`dt_reap`、`dt_oldest`、`dt_slot`、`dt_flush`。
-- [退避及错误处理，host_wait_policy.h:13](../../src/ecm/backend/cuda/stage2/host_wait_policy.h#L13)：`complete_event`。
-- [事件及读回前等待，host_wait.h:37](../../src/ecm/backend/cuda/stage2/host_wait.h#L37)：`event_sync`、`before_readback`；[平台定时器](../../src/ecm/backend/cuda/stage2/host_wait.cpp)。
-- [配置优先级，host_policy.cpp:9](../../src/ecm/backend/cuda/stage2/host_policy.cpp#L9)：`configure_host_wait`；[NTT回调接口，runtime.h:37](../../src/ecm/backend/cuda/ntt/runtime.h#L37)。
+- [S4 FIFO回收，s4.cpp:41](../../src/ecm/stage2/cuda/s4.cpp#L41)：`dt_reap`、`dt_oldest`、`dt_slot`、`dt_flush`。
+- [退避及错误处理，host_wait_policy.h:13](../../src/ecm/stage2/cuda/host_wait_policy.h#L13)：`complete_event`。
+- [事件及读回前等待，host_wait.h:37](../../src/ecm/stage2/cuda/host_wait.h#L37)：`event_sync`、`before_readback`；[平台定时器](../../src/ecm/stage2/cuda/host_wait.cpp)。
+- [配置优先级，host_policy.cpp:9](../../src/ecm/stage2/cuda/host_policy.cpp#L9)：`configure_host_wait`；[NTT回调接口，runtime.h:37](../../src/ecm/cuda/ntt/runtime.h#L37)。
 - [基准工具](../../tools/bench/bench_stage2_event_wait.py)：输入既有matrix plan、二进制、指数列表、固定D/B2及新输出目录；`fifo`为默认控制，`hybrid`对应当前低CPU配置，`readback`为实验控制。工具记录自身副本、二进制/save哈希、完整CPU计数及GPU采样；同卡运行用命名互斥串行化。
 - [汇总/绘图工具](../../tools/bench/report_stage2_event_wait.py)：输入完整measurements.json，以 `--compare hybrid` 绘制用户模式；先复核日志哈希与工作量。输出目录应为空。
 - [CPU回归](../../tools/test/test_stage2_timing_ring.py)、[真实配置验证](../../tools/test/check_stage2_host_wait_config.py)、[失败不发布验证](../../tools/test/check_stage2_host_wait.py)。CPU编译使用正式构建的MSVC身份，产物写入新实验目录。

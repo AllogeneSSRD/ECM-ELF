@@ -7040,7 +7040,7 @@
     ]
   },
   "implementation": {
-    "phase": "P0-P3 passed; P4 pending",
+    "phase": "P0-P4 passed; complete P5 layout; final P6 CUDA Stage1 build/runtime/performance in progress",
     "evidence": "data/experiments/ecm_domain_refactor_20261026",
     "baseline_native_failures": {
       "alias_save_internal": 2,
@@ -7087,6 +7087,62 @@
       "legacy_container_contract": true,
       "no_sdk_host_compile": true,
       "include_graph": true
-    }
+    },
+    "p4_passed": {
+      "cpu_stage2_libecm_build": true,
+      "cpu_stage2_gw_build": true,
+      "cpu_stage2_real_curves_per_backend": 2,
+      "gw_selftest": true,
+      "no_sdk_host_implementations": 5,
+      "process_checks": 30,
+      "storage_checks": 40,
+      "module_membership": {
+        "arithmetic_templates": 103,
+        "ntt_templates": 44,
+        "modules": 176
+      },
+      "include_graph": true
+    },
+    "p5_audit": {
+      "inventory_files": 639,
+      "migrated_source_files": 475,
+      "unchanged_computation_files": 456,
+      "build_source_order_and_properties": true,
+      "include_graph": true,
+      "old_forwarding_headers": false,
+      "removed_empty_directories": 60
+    },
+    "final_passed": {
+      "stage2_isolated_units": 218,
+      "stage2_isolated_modules": 176,
+      "stage2_grouped_units": 44,
+      "stage2_math_layout_model_cases": 6,
+      "stage2_override_cases": 6,
+      "stage2_override_real_gpu_curves": 1,
+      "task_modes": 25,
+      "shared_writer_groups": 9,
+      "host_io": true,
+      "policy_comparisons": 2656,
+      "build_identity_checks": 54,
+      "profile_checks": 33,
+      "gui_selftest_checks": 33,
+      "gui_log_checks": 85,
+      "gui_result_checks": 26,
+      "gui_v2_build": true,
+      "android_ndk_arm64_build": true,
+      "android_exported_c_symbols": true,
+      "cpu_stage2_libecm_build": true,
+      "cpu_stage2_gw_build": true,
+      "release_build_contracts": 7,
+      "release_package_contracts": 9,
+      "opencl_payload_unit_tests": 4,
+      "opencl_real_math": true,
+      "opencl_real_stop_resume": true
+    },
+    "additional_build_fixes": [
+      "Android stale checkpoint/save helper calls",
+      "Stage2 host compiler include root src",
+      "Restored vendor angle include cgbn/cgbn.h"
+    ]
   }
 }

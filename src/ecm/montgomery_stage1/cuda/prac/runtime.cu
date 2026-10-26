@@ -5,7 +5,7 @@
 #include "../checkpoint.h"
 #include "../host_policy.h"
 #include "../output.h"
-#include "../../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../../cuda/runtime/cuda_ecm_shim.h"
 #include <algorithm>
 #include "ecm/stage1/progress.h"
 #include <cstring>

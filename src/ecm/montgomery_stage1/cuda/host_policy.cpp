@@ -1,5 +1,5 @@
 #include "host_policy.h"
-#include "../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../cuda/runtime/cuda_ecm_shim.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>

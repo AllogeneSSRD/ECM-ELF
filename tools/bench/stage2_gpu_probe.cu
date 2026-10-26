@@ -33,7 +33,7 @@
 */
 
 #include "../experiments/cuda/stage2_bsgs/cgbn_stage2_cuda.h"
-#include "../../src/ecm/backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../src/ecm/cuda/runtime/cuda_ecm_shim.h"
 
 #include <gmp.h>
 

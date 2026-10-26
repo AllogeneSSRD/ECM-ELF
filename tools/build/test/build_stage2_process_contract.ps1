@@ -11,7 +11,7 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'build_manifest.json') -Raw -Enco
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
-$sources=@('src/ecm/platform/process/stage2_curve_process.cpp')
+$sources=@('src/ecm/stage2/process.cpp')
 foreach($source in $sources){if($source -notin $inventory.groups.STAGE2_HOST){throw "Missing production collaborator: $source"}}
 $sources+=@('tools/test/stage2_process_contract.cpp')
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')

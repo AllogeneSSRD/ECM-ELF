@@ -1,6 +1,6 @@
 # 群阶、点阶与整数分解诊断
 
-共享诊断层位于 `src/ecm/service/diagnostics/`，供 Stage1、Stage2 与 GUI v2 使用。默认优先本地 PARI DLL，备选外部 GP；纯 CPU/GMP 算法保留为显式选项。`src/ecm/core/group_order/` 是独立 GMP 数学核心，负责曲线构造、验证和可选的有界分析。数据集脚本仍保持独立 GP 调用。共享接入的开发与验收记录见[临时草稿](../development/SHARED_PARI_DIAGNOSTICS_DRAFT.md)。
+共享诊断层位于 `src/ecm/diagnostics/`，供 Stage1、Stage2 与 GUI v2 使用。默认优先本地 PARI DLL，备选外部 GP；纯 CPU/GMP 算法保留为显式选项。`src/ecm/group_order/` 是独立 GMP 数学核心，负责曲线构造、验证和可选的有界分析。数据集脚本仍保持独立 GP 调用。共享接入的开发与验收记录见[临时草稿](../development/SHARED_PARI_DIAGNOSTICS_DRAFT.md)。
 
 数据集正确性和性能结果另有[HTML 阅读版](../web/cpu-group-order-validation-20261023.html)，数字以草稿中的验收记录和冻结证据为依据。
 
@@ -86,7 +86,7 @@ python tools/test/test_cpu_group_order.py --output data/experiments/cpu_group_or
 也可直接构建独立静态库与自测，不配置仓库主工程：
 
 ```powershell
-cmake -S src/ecm/core/group_order -B build_cpu_group_order_cmake
+cmake -S src/ecm/group_order -B build_cpu_group_order_cmake
 cmake --build build_cpu_group_order_cmake --config Release
 ctest --test-dir build_cpu_group_order_cmake -C Release --output-on-failure
 ```

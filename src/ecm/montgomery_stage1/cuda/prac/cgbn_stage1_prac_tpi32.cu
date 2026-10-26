@@ -1,5 +1,5 @@
 // Lightweight dispatch; heavy TPI32 instantiations live in four separate TUs.
-#include "../../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../../cuda/arithmetic/cgbn/types.cuh"
 #include <cuda_runtime.h>
 #include "../arithmetic.cuh"
 

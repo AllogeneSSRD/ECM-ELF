@@ -42,12 +42,12 @@ using namespace ecm_cuda_mont_host;
 
 // GMP import must proceed cgbn.h
 #include <gmp.h>
-#include "../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../cuda/arithmetic/cgbn/types.cuh"
 #include <cuda.h>
 
 #include "launch.h"  // device templates + per-TPI dispatch seam
 
-#include "../../backend/cuda/runtime/cudacommon.h"
+#include "../../cuda/runtime/cudacommon.h"
 #include "resources.cuh"
 #undef CUDA_CHECK
 #define CUDA_CHECK(action) ecm_cuda_stage1::check_cuda(action,#action)
@@ -58,7 +58,7 @@ using namespace ecm_cuda_mont_host;
 // MPA-OpenCl port: replaces GMP-ECM's "ecm.h"/"ecm-gpu.h". Provides OUTPUT_*,
 // outputf/test_verbose shims, ECM_GPU_* constants, and pulls in the project's
 // ECM_* return codes (include/ecm.h).
-#include "../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../cuda/runtime/cuda_ecm_shim.h"
 #include "../../../io/stage1_checkpoint.h"
 #include "ecm/stage1/progress.h"
 

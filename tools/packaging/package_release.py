@@ -248,7 +248,7 @@ def main(plan):
             print(f'  cuobjdump cache: reused {cache.hits}, inspected {cache.misses}',flush=True)
             module_report=read(report)
             if stage=='stage1':
-                rows=re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),',(ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(),re.M)
+                rows=re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),',(ROOT/'src/ecm/cuda/dispatch/tiers.def').read_text(),re.M)
                 expected_modules={f'edwards_{width}' for width,_ in rows}|{f'mont{param}_{width}' for width,mont in rows if mont=='1' for param in (0,2,3)}
                 if {m['label'] for m in module_report['modules']}!=expected_modules:raise ValueError('Incomplete Stage1 module membership')
             else:verify_stage2_membership(module_report,layout,catalog)

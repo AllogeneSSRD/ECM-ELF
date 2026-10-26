@@ -7,7 +7,7 @@
  *
  * build: cl /O2 /arch:AVX512 /I src\cpu mers_chain.cpp src\cpu\simd_mont_ifma.cpp
  */
-#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

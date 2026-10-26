@@ -1,7 +1,7 @@
 #include "ecm/application/gui/worktodo_gen.h"
 #include "ecm/integer.h"
 #include "ecm/io/results.h"
-#include "ecm/service/stage2/input.h"
+#include "ecm/stage2/input.h"
 #include "io/files.h"
 #include "io/json.h"
 #include "io/prime95.h"

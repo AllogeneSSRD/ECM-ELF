@@ -194,8 +194,8 @@ NTT模块full_peak在最大P项为3184.44→3169.38 MiB，少15.06 MiB；这是�
 - 完整曲线及结果：`data/experiments/stage2_outer_plan_20261015/ab/`；短控制复测为同级 `control/`，逐格MAD与内存为 `data/benchmarks/stage2_outer_plan_20261015/stage2.csv`。
 - 完整叶子诊断为同级 `leaf/`；Systems为 `nsys_off/`、`nsys_on/`，Compute为 `ncu_m4/`、`ncu_m6/`。所有插桩运行均排除性能统计。
 - 构建与复现：[工具说明](../../tools/bench/README_NTT_OUTER_PLANS.md)。
-- [shape.cpp](../../src/ecm/backend/cuda/ntt/shape.cpp)：pass 规划；[runtime.cpp](../../src/ecm/backend/cuda/ntt/runtime.cpp) 的 `fuse_outer_max` 为自动表，`fuse_describe` 同时供显存规划和执行使用，`ntt_arena_fuse` 按 m_max/coop 等身份复用。
-- [outer_coop.cuh](../../src/ecm/backend/cuda/ntt/device/outer_coop.cuh)：协作 outer；不新增完整数组缓冲。
+- [shape.cpp](../../src/ecm/cuda/ntt/shape.cpp)：pass 规划；[runtime.cpp](../../src/ecm/cuda/ntt/runtime.cpp) 的 `fuse_outer_max` 为自动表，`fuse_describe` 同时供显存规划和执行使用，`ntt_arena_fuse` 按 m_max/coop 等身份复用。
+- [outer_coop.cuh](../../src/ecm/cuda/ntt/device/outer_coop.cuh)：协作 outer；不新增完整数组缓冲。
 
 ## TODO
 

@@ -7,7 +7,7 @@ import re
 from test_cuda_p2_structure import mask, balanced
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = [ROOT/'src/ecm/backend/cuda/ntt/runtime.h', ROOT/'src/ecm/backend/cuda/ntt/runtime.cpp']
+FILES = [ROOT/'src/ecm/cuda/ntt/runtime.h', ROOT/'src/ecm/cuda/ntt/runtime.cpp']
 
 
 def declaration(text, name):

@@ -1,4 +1,4 @@
-#include "../../src/ecm/service/planning/ecm_stage2_tune_format.h"
+#include "../../src/ecm/stage2/planning/tune_format.h"
 #include <iostream>
 int main(int argc,char **argv) {
     try {

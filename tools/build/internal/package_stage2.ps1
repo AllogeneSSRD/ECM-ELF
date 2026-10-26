@@ -62,7 +62,7 @@ if ($manifest.role -ne 'release' -or $manifest.profile_sha256 -ne $buildProfile.
 }
 # Regenerate membership, rather than trusting a potentially incomplete old list.
 $inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
-$includeDirs = @((Join-Path $Gmp 'include'),'include','src','src/ecm/backend/cuda')
+$includeDirs = @((Join-Path $Gmp 'include'),'include','src','src/ecm/cuda')
 $sourceSet = Get-EcmStage2SourceSet $repo $inventory production $includeDirs
 Assert-EcmHashes $manifest.source_hashes (Get-EcmSourceHashes $repo $sourceSet.Dependencies) 'Build sources changed; rebuild before packaging'
 Assert-EcmBuildUnits $repo $Build $manifest $sourceSet.Sources $includeDirs -Production

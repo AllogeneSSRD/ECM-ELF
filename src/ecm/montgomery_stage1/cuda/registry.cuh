@@ -1,5 +1,5 @@
 #pragma once
-#include "../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../cuda/arithmetic/cgbn/types.cuh"
 #include "launch.h"
 #include <vector>
 

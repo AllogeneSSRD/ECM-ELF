@@ -1,6 +1,6 @@
 // Device arithmetic and thin launchers; no GMP, progress or checkpoint policy.
 #pragma once
-#include "../../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../../cuda/arithmetic/cgbn/types.cuh"
 #include "../launch.h"
 #include "../point.cuh"
 #include "../naf.cuh"
@@ -56,6 +56,6 @@ const Kernels &kernels_##W() { \
             edwards_naf_slice<P><<<(n+128/T-1)/(128/T),128>>>(static_cast<cgbn_error_report_t*>(r),static_cast<Mem*>(d),static_cast<Mem*>(q),static_cast<Mem*>(o),nz,c,b,a,z,e,w,n,dbl);} }; \
     return k; \
 }
-#include "../../../backend/cuda/dispatch/tiers.def"
+#include "../../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 }

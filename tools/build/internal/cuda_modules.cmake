@@ -3,7 +3,7 @@
 function(ecm_stage1_isolate_modules)
     set(_dir "${CMAKE_BINARY_DIR}/cuda_modules/stage1")
     file(MAKE_DIRECTORY "${_dir}")
-    file(STRINGS "${CMAKE_SOURCE_DIR}/src/ecm/backend/cuda/dispatch/tiers.def" _rows REGEX "^ECM_CUDA_TIER\\([0-9]+,")
+    file(STRINGS "${CMAKE_SOURCE_DIR}/src/ecm/cuda/dispatch/tiers.def" _rows REGEX "^ECM_CUDA_TIER\\([0-9]+,")
     set(_sources "${ECM_STAGE1_CUDA_SOURCES}")
     list(FILTER _sources EXCLUDE REGEX "/instances/[^/]+\\.cu$")
     foreach(_row IN LISTS _rows)

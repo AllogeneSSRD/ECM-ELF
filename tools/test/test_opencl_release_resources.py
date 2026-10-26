@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--build',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();build=args.build.resolve();out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     fields=read(build/'profile.json')['fields'];identity=verify(build,fields['gmp_root'])
-    obj=build/'CMakeFiles/cgbn_opencl.dir/src/ecm/backend/opencl/runtime/runtime.cpp.obj'
+    obj=build/'CMakeFiles/cgbn_opencl.dir/src/ecm/opencl/runtime/runtime.cpp.obj'
     assert identity['compiler_inputs_sha256'][str(obj)]==sha(obj)
     library=Path(fields['opencl_root'])/'lib/x64/OpenCL.lib'
     if not library.exists():library=Path(fields['opencl_root'])/'lib/OpenCL.lib'

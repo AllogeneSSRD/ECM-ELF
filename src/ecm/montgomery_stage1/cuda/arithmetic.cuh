@@ -240,7 +240,7 @@
 #endif
 
 #if ECM_MERS_FOLD_FUSED
-#include "../../backend/cuda/arithmetic/cgbn/cgbn_mers_fused_core.h"
+#include "../../cuda/arithmetic/cgbn/cgbn_mers_fused_core.h"
 #endif
 
 
@@ -1165,7 +1165,7 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
 #define ECM_DECLARE_MONT_1(W,T,A) typedef cgbn_params_t<T,W> cgbn_params_##A;
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) ECM_DECLARE_MONT_##M(W,T,A)
 #define ECM_CUDA_LEGACY_TYPE(W,T) typedef cgbn_params_t<T,W> cgbn_params_##W;
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_LEGACY_TYPE
 #undef ECM_CUDA_TIER
 #undef ECM_DECLARE_MONT_0

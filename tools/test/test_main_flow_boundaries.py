@@ -23,8 +23,8 @@ def main():
     files = sorted(p.resolve() for folder in ('include/ecm', 'src')
                    for p in (ROOT/folder).rglob('*') if p.suffix in SUFFIXES)
     source_set = set(files)
-    roots = [ROOT/p for p in ('include', 'src', 'src/ecm/backend/cuda',
-                             'src/ecm/backend/cuda/runtime')]
+    roots = [ROOT/p for p in ('include', 'src', 'src/ecm/cuda',
+                             'src/ecm/cuda/runtime')]
     graph = {}
     public = []
     edges = []
@@ -39,11 +39,13 @@ def main():
             implementation = ROOT/'src'/family if family.parts and family.parts[0] == 'io' else ROOT/'src/ecm'/family
             assert implementation.is_dir(), name
         graph[path] = []
-        for inc in re.findall(r'(?m)^\s*#\s*include\s*["<]([^">]+)[">]',
-                              path.read_text(encoding='utf-8-sig')):
+        for delimiter, inc in re.findall(r'(?m)^\s*#\s*include\s*(["<])([^">]+)[">]',
+                                         path.read_text(encoding='utf-8-sig')):
+            assert delimiter != '<' or not inc.startswith('.'), ('relative angle include', name, inc)
             assert not any(part in inc for part in ('tools/test/', 'tools/bench/',
                 'tools/experiments/', '.refactor/', 'kernels/cuda/')), (name, inc)
-            target = next((p.resolve() for p in [path.parent/inc]+[r/inc for r in roots]
+            search = ([path.parent/inc] if delimiter == '"' else [])+[r/inc for r in roots]
+            target = next((p.resolve() for p in search
                            if p.is_file()), None)
             if inc.startswith('ecm/'):
                 assert target is not None, (name, inc)

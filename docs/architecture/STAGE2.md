@@ -2,12 +2,12 @@
 
 ## CUDA 模块边界
 
-`src/ecm/backend/cuda/stage2/` 是生产 Stage2 的普通 C++ 主机模块，私有头声明模块间合同，不包含整段引擎实现。公共入口仍为 `src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h`。
+`src/ecm/stage2/cuda/` 是生产 Stage2 的普通 C++ 主机模块，私有头声明模块间合同，不包含整段引擎实现。公共入口仍为 `src/ecm/stage2/cuda/api.h`。
 
 - `engine.cpp` 接入一条存档曲线，编排初始化、relocation 试算/重放、检查收尾和结果；`batch.cpp` 执行单次区间的 giant 批循环、fold/下降阶段和因子扫描。
-- `plan.cpp` 维护 D 选择、设备/形状/请求/预算查询及计划报告。执行与查询复用 `prepare_stage2_plan`；查询直接使用模数上下文，不进入曲线入口或算术自检。`plan_runtime.h` 保存计划结果及其寿命；纯 giant 坐标分块公式位于 `src/ecm/backend/cuda/planning/ecm_stage2_giant_chunk.h`。D 扫描继续使用 `legacy_56_1` 公式；`NTT_D_MODEL` 的解析及禁用原因输出保留，冻结的候选速率表只供实验使用。规划仍在原边界预热实际 NTT 设备策略缓存。
+- `plan.cpp` 维护 D 选择、设备/形状/请求/预算查询及计划报告。执行与查询复用 `prepare_stage2_plan`；查询直接使用模数上下文，不进入曲线入口或算术自检。`plan_runtime.h` 保存计划结果及其寿命；纯 giant 坐标分块公式位于 `src/ecm/stage2/planning/giant_chunk.h`。D 扫描继续使用 `legacy_56_1` 公式；`NTT_D_MODEL` 的解析及禁用原因输出保留，冻结的候选速率表只供实验使用。规划仍在原边界预热实际 NTT 设备策略缓存。
 - `points.cpp` 维护 baby/giant 生成、分段与分组逆、单位性恢复及 baby 复用缓存。`tree.cpp` 维护 F/G 树布局、实际次数、空位、根选择和子节点释放。
-- `product.cpp` 维护普通/批量多项式乘法、输入打包、输出窗口、驻留输入合同与 NTT/S4 计数；不负责树遍历或 GCD。有限的打包启动帮助函数在 `pack_launch.h`，位索引在 `src/ecm/backend/cuda/stage2/device/pack_index.cuh`。`remainder.cpp` 维护 Newton 逆、fold、scaled root/frontier 和下降。
+- `product.cpp` 维护普通/批量多项式乘法、输入打包、输出窗口、驻留输入合同与 NTT/S4 计数；不负责树遍历或 GCD。有限的打包启动帮助函数在 `pack_launch.h`，位索引在 `src/ecm/stage2/cuda/device/pack_index.cuh`。`remainder.cpp` 维护 Newton 逆、fold、scaled root/frontier 和下降。
 - `s4.cpp` 准备模数/shape 并执行归约 hook；`checks.cpp` 维护必需自检、GMP 抽样、异步快照、carry/归约检查及排空。`factors.cpp` 负责块积读回和目标 N 上的真因子记录。
 - `resources.cpp` 实现点、S4、fold/frontier owner 的分配、租约、事件和析构方法；类字段、默认值和接口分别声明在所属模块头中。`context.cpp` 提供共享编码与整数帮助函数。`options.cpp` 在一个翻译单元中先设置生产默认值，再按固定次序构造环境快照及共享状态，保持原来的解析时机。
 - `host_wait.cpp` 封装平台休眠资源；`host_wait.h` 统一完成等待和读回前等待，`host_wait_policy.h` 定义可独立验证的有界退避。
@@ -19,19 +19,19 @@
 
 `S4ResidentOwner` 持有独立分配，`S4DeviceBatch` 显式携带 owner、范围和元数据，fold/frontier 只借用合同允许的存储。pinned 输入/输出槽及快照事件仍使用原有等待和释放顺序；资源拆分不增加同步。每个成功结果及 relocation 决策前排空检查，reducer 析构时先排空依赖 shape/N 的快照，再释放 shape、设备/主机缓冲和事件。
 
-`src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu` 维护点与系数算术的显式实例清单。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放；不使用 RDC。
+`src/ecm/stage2/cuda/device/arithmetic_kernels.cu` 维护点与系数算术的显式实例清单。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放；不使用 RDC。
 
-位宽清单仍由 `src/ecm/backend/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev/release默认使用算术与NTT两个聚合编译单元；支持的工具链通过nvcc内部并行优化。生产引擎可显式选择 `KernelLayout=isolated`，由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。两种布局通过编译参数和构建profile隔离。
+位宽清单仍由 `src/ecm/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev/release默认使用算术与NTT两个聚合编译单元；支持的工具链通过nvcc内部并行优化。生产引擎可显式选择 `KernelLayout=isolated`，由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。两种布局通过编译参数和构建profile隔离。
 
 聚合模式沿用各聚合单元的设备常量，不启用隔离宏及主机快照路径，不保证逐容量隔离JIT。隔离备选的每个算术模块持有自己的设备常量；`constants.cpp` 保存按设备区分的主机快照及修订号，更新快照不访问全部设备模块，被调用的薄启动器在修订号/设备变化时才向所属模块上传。NTT的 `module_dispatch.cpp` 只返回选定tile句柄；固定mode3无需广播归约模式。实际按需JIT资格须观察驱动加载模块，构建策略与旧驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
 
-NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/backend/cuda/ntt/`，设备变换和 carry 位于 `src/ecm/backend/cuda/ntt/device/`，域原语位于 `src/ecm/backend/cuda/arithmetic/goldilocks/`。主机持有缓冲、事件、错误检查和计时，设备模块提供薄启动接口；依赖方向为 ECM 编排 → NTT/算术接口 → 设备原语。NTT 不依赖 ECM 树、fold 或 GCD，详见 [NTT 代码入口](NTT.md#代码入口与依据)。
+NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/cuda/ntt/`，设备变换和 carry 位于 `src/ecm/cuda/ntt/device/`，域原语位于 `src/ecm/cuda/arithmetic/goldilocks/`。主机持有缓冲、事件、错误检查和计时，设备模块提供薄启动接口；依赖方向为 ECM 编排 → NTT/算术接口 → 设备原语。NTT 不依赖 ECM 树、fold 或 GCD，详见 [NTT 代码入口](NTT.md#代码入口与依据)。
 
 生产源由 `STAGE2_PRODUCTION` 清单选择，其中 `STAGE2_ENGINE` 显式列出18个主机模块。生产闭包拒绝 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`；编译器发现的间接依赖也受同一检查。
 
-实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h`，JSON 转义及纯设备原语仍可共享。
+实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/stage2/planning/initial_memory.h`，JSON 转义及纯设备原语仍可共享。
 
-`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/backend/cuda/stage1/edwards/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
+`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/edwards_stage1/cuda/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
 
 ## 输入与表示
 
@@ -45,7 +45,7 @@ save提供目标N、sigma、B1和归一化X，不自动推断承载指数。Suya
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/ecm/service/stage2/input.cpp)、[承载校验](../../src/ecm/core/stage2/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/ecm/backend/cuda/stage2/engine.cpp#L110)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/ecm/stage2/input.cpp)、[承载校验](../../src/ecm/stage2/modulus.h#L28)、[坐标接入](../../src/ecm/stage2/cuda/engine.cpp#L110)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
@@ -75,9 +75,9 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 
 差分 xADD 使用 6 次模乘，固定差点保证 chain 中的相邻点关系。相邻 seed 可同时得到 [iD]Q 与 [(i+1)D]Q，避免重复计算两个独立 ladder。短块、容量不足或非单位场景仍需保留正确回退。
 
-seed 和 chain 的宽位数核在 W>128 时使用 32 线程 CUDA 块，其他宽度仍为 64 线程；每条顺序 chain 仍生成 64 点。此处 CUDA 线程块大小与 chain 点数是两个独立参数。点坐标、Montgomery radix、seed 标量和回退条件保持同一合同。chain 核位于 `src/ecm/backend/cuda/stage2/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
+seed 和 chain 的宽位数核在 W>128 时使用 32 线程 CUDA 块，其他宽度仍为 64 线程；每条顺序 chain 仍生成 64 点。此处 CUDA 线程块大小与 chain 点数是两个独立参数。点坐标、Montgomery radix、seed 标量和回退条件保持同一合同。chain 核位于 `src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
 
-生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/ecm/core/stage2/ecm_stage2_geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
+生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/ecm/stage2/geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
 
 新接入的宽尾块先验证 [D]Q 的单位性。非单位基点直接使用逐点 ladder；若差分链生成后的分组乘积在目标 N 上非单位，则恢复此前的逻辑 Gamma，并在原坐标和分段缓冲区内用逐点 ladder 重做整个尾块。该回退保留原有因子集合及非仿射占位叶，避免将表示差异引入结果。已有大点块的路线保持原合同。缓冲区预留公式见 [Giant 组件](MEMORY.md#giant-组件)。
 
@@ -141,7 +141,7 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 
 调试日志 `stage2_host_wait_stats` 记录调用、立即完成、待完成、查询、休眠、请求休眠总量、回退次数及各类等待墙钟。墙钟与正常阶段计时嵌套，不能再次相加；它也不是 CPU 时间，不能把 requested_sleep_us 当作实际休眠。NTT 独立 tune 的设备事件计时保持原入口，完整 ECM tune/正常观察将上述四个 NTT 环境开关记录为条件；旧严格 cprof 均要求 0。具体性能与覆盖范围见 [主机等待验证](../performance/STAGE2_HOST_WAIT.md)。
 
-代码入口：[等待策略](../../src/ecm/backend/cuda/stage2/host_wait_policy.h)、[完成与读回等待](../../src/ecm/backend/cuda/stage2/host_wait.h)、[平台定时器](../../src/ecm/backend/cuda/stage2/host_wait.cpp)、[S4计时槽](../../src/ecm/backend/cuda/stage2/s4.cpp)、[NTT读回接口](../../src/ecm/backend/cuda/ntt/runtime.h)。第三方原理见 [GPUOWL / PRPLL队列](../reference/GPUOWL_OPENCL_QUEUE.md)。
+代码入口：[等待策略](../../src/ecm/stage2/cuda/host_wait_policy.h)、[完成与读回等待](../../src/ecm/stage2/cuda/host_wait.h)、[平台定时器](../../src/ecm/stage2/cuda/host_wait.cpp)、[S4计时槽](../../src/ecm/stage2/cuda/s4.cpp)、[NTT读回接口](../../src/ecm/cuda/ntt/runtime.h)。第三方原理见 [GPUOWL / PRPLL队列](../reference/GPUOWL_OPENCL_QUEUE.md)。
 
 ## 当前规划边界
 
@@ -149,10 +149,10 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 
 ## 代码依据
 
-- [生产引擎](../../src/ecm/backend/cuda/stage2/engine.cpp)：`run_real`、relocation 和 [完整计时输出](../../src/ecm/backend/cuda/stage2/engine.cpp#L607)；[批次流程](../../src/ecm/backend/cuda/stage2/batch.cpp)：`run_batched`；[规划](../../src/ecm/backend/cuda/stage2/plan.cpp)：`prepare_stage2_plan`、`ecm_cuda_stage2_plan`。
-- [模数上下文](../../src/ecm/core/stage2/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
-- [请求程序](../../src/ecm/backend/cuda/planning/ecm_stage2_requests.h#L78)：`request_program`；[F树组](../../src/ecm/core/stage2/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`；[G树布局/分组与选择](../../src/ecm/core/stage2/ecm_stage2_giant_tree.h)：`giant_tree_balanced`、`giant_tree_layout`、`giant_tree_multiply_groups`。
-- [点模乘](../../src/ecm/backend/cuda/stage2/device/point.cuh)、[梅森点算术](../../src/ecm/backend/cuda/stage2/device/point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。
+- [生产引擎](../../src/ecm/stage2/cuda/engine.cpp)：`run_real`、relocation 和 [完整计时输出](../../src/ecm/stage2/cuda/engine.cpp#L607)；[批次流程](../../src/ecm/stage2/cuda/batch.cpp)：`run_batched`；[规划](../../src/ecm/stage2/cuda/plan.cpp)：`prepare_stage2_plan`、`ecm_cuda_stage2_plan`。
+- [模数上下文](../../src/ecm/stage2/modulus.h#L28)：`configure`，目标/承载资格。
+- [请求程序](../../src/ecm/stage2/planning/requests.h#L78)：`request_program`；[F树组](../../src/ecm/stage2/geometry.h#L147)：`tree_multiply_groups`；[G树布局/分组与选择](../../src/ecm/stage2/giant_tree.h)：`giant_tree_balanced`、`giant_tree_layout`、`giant_tree_multiply_groups`。
+- [点模乘](../../src/ecm/stage2/cuda/device/point.cuh)、[梅森点算术](../../src/ecm/stage2/cuda/device/point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。
 - 固定资料：[多项式数学](../reference/ECM_STAGE2_MATH.md)、[Prime95 Poly](../reference/PRIME95_STAGE2.md)、[PrMers ECM](../reference/PRMERS_ECM.md)。
 
 ## 进度与文件机制的接口
@@ -163,7 +163,7 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 
 ## 主机规划实现
 
-[planning/stage2.cpp](../../src/ecm/service/planning/stage2.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型当前位于私有 service/stage2，不作为外部 API。
+[planning/stage2.cpp](../../src/ecm/stage2/planning/planning.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型当前位于私有 service/stage2，不作为外部 API。
 
 ## 父任务与曲线子进程
 
@@ -173,6 +173,6 @@ platform/process/stage2_curve_process.cpp 管理 Job、管道、进程、停止�
 
 ## 曲线进程协议
 
-[curve_process.h](../../include/ecm/platform/process/curve_process.h)只声明进程请求和同步执行入口。实际协议包括 49 项曲线/规划/发布参数，以及记录位置和 hash、save/日志/结果路径和显示预算；不包含完整 CLI Options 或配置解析类型。任务/校准共用一处协议投影；process 实现管理唯一进程循环和 OS 资源。
+[curve_process.h](../../include/ecm/stage2/curve_process.h)只声明进程请求和同步执行入口。实际协议包括 49 项曲线/规划/发布参数，以及记录位置和 hash、save/日志/结果路径和显示预算；不包含完整 CLI Options 或配置解析类型。任务/校准共用一处协议投影；process 实现管理唯一进程循环和 OS 资源。
 
 输出为退出码（0 成功、3 为不纳入计时的已验证因子、1 失败）、原控制台/日志和可选同步 selection 行回调。回调位于原输出时点、日志写入之前，由任务层验证并接纳 hints；异常按原时点传播。Windows Handle 仅在私有声明中。进程实现可脱离计算引擎、GMP 和 CUDA 独立编译/测试，真实计算仍在独立子进程中完成。

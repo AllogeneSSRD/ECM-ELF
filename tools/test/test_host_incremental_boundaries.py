@@ -51,7 +51,7 @@ def main():
         ('save', 'src/io/save.cpp', 'std::string build_who_field('),
         ('data', 'src/io/results.cpp', 'std::string internal_json('),
         ('result', 'src/io/results.cpp', 'std::string submission_json('),
-        ('tune_toml', 'src/ecm/service/planning/ecm_stage2_tune_format.h', 'inline std::string table('),
+        ('tune_toml', 'src/ecm/stage2/planning/tune_format.h', 'inline std::string table('),
         ('screen', 'src/ecm/stage1/progress.cpp', 'std::string line('),
     ]
     original = {name:(ROOT/name).read_bytes() for _,name,_ in probes}

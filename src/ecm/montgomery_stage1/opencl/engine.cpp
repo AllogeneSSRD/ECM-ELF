@@ -2,15 +2,15 @@
 
 #include "api.h"
 #include "../../stage1/legacy.h"
-#include "../../backend/opencl/runtime/cgbn_opencl.h"
+#include "../../opencl/runtime/cgbn_opencl.h"
 #include "ecm/montgomery_stage1/opencl/checkpoint.h"
 #include "../../../io/stage1_checkpoint.h"
 #include "debug_utils.h"
 #include "../../../../include/ecm/platform/logging.h"
 #include "montgomery.h"
-#include "../../backend/opencl/arithmetic/path_registry.h"
+#include "../../opencl/arithmetic/path_registry.h"
 #include "../../../../include/ecm/application/configuration/runtime.h"
-#include "../../backend/opencl/diagnostics/selftest.h"
+#include "../../opencl/diagnostics/selftest.h"
 
 #include <CL/cl.h>
 #include <gmp.h>

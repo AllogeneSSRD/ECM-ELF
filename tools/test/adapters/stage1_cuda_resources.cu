@@ -1,4 +1,4 @@
-#include "ecm/backend/cuda/arithmetic/cgbn/types.cuh"
+#include "ecm/cuda/arithmetic/cgbn/types.cuh"
 #include <cstdlib>
 #include <cstdio>
 #include <stdexcept>

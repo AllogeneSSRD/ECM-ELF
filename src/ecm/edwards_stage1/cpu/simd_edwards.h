@@ -29,7 +29,7 @@
 #include <stdint.h>
 #include <gmp.h>
 
-#include "../../backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../cpu/arithmetic/ifma/simd_mont_ifma.h"
 
 #ifdef __cplusplus
 extern "C" {

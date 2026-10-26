@@ -1,4 +1,4 @@
-#include "../../src/ecm/backend/cuda/planning/ecm_stage2_owner_memory.h"
+#include "../../src/ecm/stage2/planning/owner_memory.h"
 #include <cstdint>
 #include <iostream>
 #include <map>

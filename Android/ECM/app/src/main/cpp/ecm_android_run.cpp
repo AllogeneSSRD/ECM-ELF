@@ -41,7 +41,6 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 #include "ecm/io/save.h"
 
 #include "../../../../../../src/ecm/stage1/legacy.h"
-#include "../../../../../../src/ecm/montgomery_stage1/opencl/api.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -170,7 +169,9 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
     if (const char *work_dir = ecm_io::work_dir(); work_dir != nullptr && work_dir[0] != '\0') {
         ecm_ts_fprintf(stdout, "Data work dir: %s\n", work_dir);
     }
-    ecm_ts_fprintf(stdout, "Checkpoint file: %s\n", opencl_ecm_checkpoint_filename(N).c_str());
+    ecm_stage1_checkpoint::Context checkpoint;
+    ecm_ts_fprintf(stdout, "Checkpoint file: %s\n",
+                   opencl_ecm_checkpoint_filename(checkpoint, N).c_str());
 
     std::string resolved_save;
     if (!req.save_file.empty()) {
@@ -241,7 +242,6 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
                    ECM_PARAM_BATCH_32BITS_D, firstsigma, firstsigma + curves - 1, curves);
 
     float gputime = 0.0f;
-    ecm_stage1_checkpoint::Context checkpoint;
     const int ret = opencl_ecm_stage1(
         &checkpoint, factors, array_found, N, params->batch_s, curves, &firstsigma,
         params->gpu_checkpoint_interval_ms, &gputime, params->verbose,
@@ -270,7 +270,7 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 
     if (ret != ECM_ERROR && !resolved_save.empty()) {
         const std::string n_expr_save =
-            opencl_ecm_build_saved_n_expr(req.n_expr, N, curves, factors, array_found);
+            ecm_save_modulus_expression(req.n_expr, N);
         if (!opencl_ecm_append_save_lines(resolved_save, N, req.b1, firstsigma, curves, factors,
                                           n_expr_save)) {
             ecm_ts_fprintf(stderr, "Failed to append save lines into %s\n", resolved_save.c_str());

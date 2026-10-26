@@ -34,7 +34,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp
     src/io/prime95_save.cpp
     src/ecm/edwards_stage1/cpu/simd_edwards.cpp
-    src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
     src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp
     src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp
     src/ecm/montgomery_stage1/cpu/checkpoint.cpp
@@ -76,7 +76,7 @@ set(ECM_STAGE1_MONT_SOURCES
     src/ecm/montgomery_stage1/cuda/instances/instances_param2_g6.cu)
 set(ECM_STAGE1_CUDA_SOURCES
     src/ecm/application/configuration/runtime.cpp
-    src/ecm/backend/cuda/factory.cpp
+    src/ecm/cuda/factory.cpp
     src/ecm/montgomery_stage1/cuda/workflow.cpp
     src/ecm/edwards_stage1/cuda/workflow.cpp
     src/ecm/edwards_stage1/cuda/checkpoint.cpp
@@ -112,41 +112,41 @@ set(ECM_STAGE2_HOST_SOURCES
     src/io/results.cpp
     src/ecm/stage1/selection.cpp
     src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
-    src/ecm/service/planning/stage2.cpp
-    src/ecm/service/stage2/task.cpp
-    src/ecm/service/stage2/input.cpp
-    src/ecm/platform/process/stage2_curve_process.cpp
-    src/ecm/backend/cuda/stage2/host_policy.cpp
+    src/ecm/stage2/planning/planning.cpp
+    src/ecm/stage2/task.cpp
+    src/ecm/stage2/input.cpp
+    src/ecm/stage2/process.cpp
+    src/ecm/stage2/cuda/host_policy.cpp
     src/ecm/application/configuration/stage2_identity.cpp
     src/ecm/application/configuration/ecm_expr.cpp
     src/io/worktodo.cpp
     src/io/config.cpp)
-set(ECM_STAGE2_ARITHMETIC_SOURCES src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu)
+set(ECM_STAGE2_ARITHMETIC_SOURCES src/ecm/stage2/cuda/device/arithmetic_kernels.cu)
 set(ECM_STAGE2_NTT_SOURCES
-    src/ecm/backend/cuda/ntt/shape.cpp
-    src/ecm/backend/cuda/ntt/runtime.cpp
-    src/ecm/backend/cuda/ntt/graph.cpp
-    src/ecm/backend/cuda/ntt/checks.cpp
-    src/ecm/backend/cuda/ntt/device/transform_kernels.cu)
+    src/ecm/cuda/ntt/shape.cpp
+    src/ecm/cuda/ntt/runtime.cpp
+    src/ecm/cuda/ntt/graph.cpp
+    src/ecm/cuda/ntt/checks.cpp
+    src/ecm/cuda/ntt/device/transform_kernels.cu)
 set(ECM_STAGE2_ENGINE_SOURCES
-    src/ecm/backend/cuda/stage2/constants.cpp
-    src/ecm/backend/cuda/ntt/module_dispatch.cpp
-    src/ecm/backend/cuda/stage2/context.cpp
-    src/ecm/backend/cuda/stage2/host_wait.cpp
-    src/ecm/backend/cuda/stage2/options.cpp
-    src/ecm/backend/cuda/stage2/resources.cpp
-    src/ecm/backend/cuda/stage2/plan.cpp
-    src/ecm/backend/cuda/stage2/engine.cpp
-    src/ecm/backend/cuda/stage2/batch.cpp
-    src/ecm/backend/cuda/stage2/points.cpp
-    src/ecm/backend/cuda/stage2/product.cpp
-    src/ecm/backend/cuda/stage2/tree.cpp
-    src/ecm/backend/cuda/stage2/remainder.cpp
-    src/ecm/backend/cuda/stage2/s4.cpp
-    src/ecm/backend/cuda/stage2/factors.cpp
-    src/ecm/backend/cuda/stage2/checks.cpp
-    src/ecm/backend/cuda/stage2/diagnostics.cpp
-    src/ecm/backend/cuda/stage2/tune.cpp)
+    src/ecm/stage2/cuda/constants.cpp
+    src/ecm/cuda/ntt/module_dispatch.cpp
+    src/ecm/stage2/cuda/context.cpp
+    src/ecm/stage2/cuda/host_wait.cpp
+    src/ecm/stage2/cuda/options.cpp
+    src/ecm/stage2/cuda/resources.cpp
+    src/ecm/stage2/cuda/plan.cpp
+    src/ecm/stage2/cuda/engine.cpp
+    src/ecm/stage2/cuda/batch.cpp
+    src/ecm/stage2/cuda/points.cpp
+    src/ecm/stage2/cuda/product.cpp
+    src/ecm/stage2/cuda/tree.cpp
+    src/ecm/stage2/cuda/remainder.cpp
+    src/ecm/stage2/cuda/s4.cpp
+    src/ecm/stage2/cuda/factors.cpp
+    src/ecm/stage2/cuda/checks.cpp
+    src/ecm/stage2/cuda/diagnostics.cpp
+    src/ecm/stage2/cuda/tune.cpp)
 set(ECM_STAGE2_PRODUCTION_SOURCES
     ${ECM_STAGE2_ENGINE_SOURCES}
     ${ECM_STAGE2_ARITHMETIC_SOURCES}

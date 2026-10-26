@@ -32,14 +32,14 @@ if($Stage -eq 'stage1') {
     $name='edwards_gpu_stage1_probe.exe';$crt='/MD'
 } else {
     $gmp=$manifest.gmp_root
-    $dirs=@((Join-Path $gmp 'include'),'include','src','src/ecm/backend/cuda')
+    $dirs=@((Join-Path $gmp 'include'),'include','src','src/ecm/cuda')
     $set=Get-EcmStage2SourceSet $repo $inventory production $dirs $manifest.module_directory
     Assert-EcmBuildUnits $repo $record.build $manifest $set.Sources $dirs -Production
     foreach($property in $manifest.compile_units.PSObject.Properties) {
         $source=$property.Name.Replace('\','/')
         if($manifest.module_directory) {
             if($source -match '/arithmetic_[^/]+\.cu$|/stage2/constants\.cpp$'){$objects+=$property.Value.entry.output}
-        } elseif($source -eq 'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu') {$objects+=$property.Value.entry.output}
+        } elseif($source -eq 'src/ecm/stage2/cuda/device/arithmetic_kernels.cu') {$objects+=$property.Value.entry.output}
     }
     if(($manifest.module_directory -and $objects.Count -lt 2) -or (-not $manifest.module_directory -and $objects.Count -ne 1)){throw 'Selected arithmetic object set missing'}
     $sources=@('tools/test/cuda_stage2_arithmetic_probe.cpp');$name='probe.exe';$crt='/MT'

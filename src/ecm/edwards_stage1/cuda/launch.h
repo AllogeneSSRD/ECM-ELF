@@ -12,6 +12,6 @@ struct Kernels {
                 uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,int);
 };
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) const Kernels &kernels_##W();
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 }

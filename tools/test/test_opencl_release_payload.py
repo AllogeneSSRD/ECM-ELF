@@ -18,7 +18,7 @@ class PayloadTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(dir=base);self.root=Path(self.temp.name)
         self.build=self.root/'build';self.gmp=self.root/'gmp';self.ssl=self.root/'ssl'
         self.repo=self.root/'repo';self.source=self.put(self.repo/'source.cpp','source')
-        self.resource=self.put(self.repo/'src/ecm/backend/opencl/resources/test.cl','kernel')
+        self.resource=self.put(self.repo/'src/ecm/opencl/resources/test.cl','kernel')
         self.put(self.build/'opencl_resources/test.cl','kernel')
         self.put(self.build/'ecm.exe','worker')
         for name in payload.RUNTIMES:

@@ -33,8 +33,9 @@ class Contracts(unittest.TestCase):
     def test_module_membership_and_stable_generation(self):
         generator=module('generate_cuda_modules');generator.generate(self.out)
         inventory=json.loads((self.out/'modules.json').read_text())
-        templates=sum(len(re.findall(r'^template void ',(ROOT/'src/ecm/backend/cuda'/p).read_text(encoding='utf-8-sig'),re.M))
-                      for p in ['stage2/device/arithmetic_kernels.cu','ntt/device/transform_kernels.cu'])
+        templates=sum(len(re.findall(r'^template void ',(ROOT/p).read_text(encoding='utf-8-sig'),re.M))
+                      for p in ['src/ecm/stage2/cuda/device/arithmetic_kernels.cu',
+                                'src/ecm/cuda/ntt/device/transform_kernels.cu'])
         self.assertEqual(sum(bool(v['arguments']) for v in inventory['modules']),templates)
         self.assertEqual(len({v['label'] for v in inventory['modules']}),len(inventory['modules']))
         before={p:p.stat().st_mtime_ns for p in self.out.rglob('*') if p.is_file()}
@@ -52,7 +53,7 @@ class Contracts(unittest.TestCase):
         chain=next(v for v in inventory['modules'] if v['label'].endswith('s2g_chain_kernel_4_true'))
         text=Path(chain['source']).read_text(encoding='utf-8-sig')
         self.assertLess(text.index('/point.cuh'),text.index('/giant_chain.cuh'))
-        point=(self.out/'headers/stage2/device/point.cuh').read_text(encoding='utf-8-sig')
+        point=(self.out/'headers/stage2/cuda/device/point.cuh').read_text(encoding='utf-8-sig')
         self.assertIn('ecm_stage2_bind_module_constants();',point)
         pack=next(v for v in inventory['modules'] if v['label'].endswith('pack_zero_kernel_true_false'))
         self.assertIn('template void stage2_pack::ecm_launch_pack_zero_kernel<',Path(pack['source']).read_text(encoding='utf-8-sig'))
@@ -116,7 +117,7 @@ class Contracts(unittest.TestCase):
         import package_release
         subprocess.run(['git','init','-q',str(self.out)],check=True)
         (self.out/'.gitignore').write_text('/tools/test/_*\n/third_party/*\n')
-        for name in ['tools/test/_run/worktodo.txt','tools/test/new_gate.py','third_party/cgbn/include/cgbn.h','src/ecm/backend/opencl/resources/test.cl']:
+        for name in ['tools/test/_run/worktodo.txt','tools/test/new_gate.py','third_party/cgbn/include/cgbn.h','src/ecm/opencl/resources/test.cl']:
             path=self.out/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('fixture\n')
         original=package_release.ROOT
         try:
@@ -125,7 +126,7 @@ class Contracts(unittest.TestCase):
             self.assertNotIn('tools/test/_run/worktodo.txt',paths)
             self.assertIn('tools/test/new_gate.py',paths)
             self.assertIn('third_party/cgbn/include/cgbn.h',paths)
-            self.assertIn('src/ecm/backend/opencl/resources/test.cl',paths)
+            self.assertIn('src/ecm/opencl/resources/test.cl',paths)
             (self.out/'.gitignore').write_text('/third_party/*\n')
             paths={p.relative_to(self.out).as_posix() for p in package_release.source_paths()}
             self.assertNotIn('tools/test/_run/worktodo.txt',paths)

@@ -1,7 +1,7 @@
 // CPU-only conformance driver. Offline shape tables are frozen engine queries;
 // production callers must supply ecm_cuda_stage2_shape_query instead.
-#include "../../src/ecm/service/planning/ecm_stage2_tune_components.h"
-#include "../../src/ecm/service/planning/ecm_stage2_tune_ntt_profile.h"
+#include "../../src/ecm/stage2/planning/tune_components.h"
+#include "../../src/ecm/stage2/planning/tune_ntt_profile.h"
 #include <iostream>
 #include <iomanip>
 using namespace ecm_stage2;

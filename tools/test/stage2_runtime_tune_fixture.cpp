@@ -1,4 +1,4 @@
-#include "../../src/ecm/service/planning/ecm_stage2_runtime_tune.h"
+#include "../../src/ecm/stage2/planning/runtime_tune.h"
 #include <iostream>
 namespace p=ecm_stage2::tune::portable;
 using ecm_stage2::tune::Fields;

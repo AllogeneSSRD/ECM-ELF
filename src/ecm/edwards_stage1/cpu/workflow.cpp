@@ -52,7 +52,7 @@
 #include "ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
 #include "ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"
 #include "ecm/montgomery_stage1/cpu/simd_mont_curve.h"
-#include "ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
 #include "../../../io/prime95_save.h"
 #include "ecm/io/save.h"
 #include "ecm/platform/logging.h"

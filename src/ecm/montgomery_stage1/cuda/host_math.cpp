@@ -19,7 +19,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 */
 
 #include "host_math.h"
-#include "../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../cuda/runtime/cuda_ecm_shim.h"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>

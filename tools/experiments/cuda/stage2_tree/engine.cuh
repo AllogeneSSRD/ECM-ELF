@@ -86,8 +86,8 @@
  * ------------------------------------------------------------------------- */
 #define NTT_PROBE_NAME "stage2_tree_gpu"
 #include "../ntt_variants/engine.cuh"
-#include "../../../../src/ecm/core/stage2/ecm_stage2_geometry.h"
-#include "../../../../src/ecm/core/stage2/ecm_stage2_d_catalog.h"
+#include "../../../../src/ecm/stage2/geometry.h"
+#include "../../../../src/ecm/stage2/planning/d_catalog.h"
 
 #include <string>
 #include <utility>
@@ -7552,7 +7552,7 @@ __global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned 
     unsigned long long any=0;for(int j=0;j<W;++j)any|=out[j];
     if(any)atomicMax(length,(unsigned long long)i+1);
 }
-#include "../../../../src/ecm/backend/cuda/stage2/device/plain_scale.cuh"
+#include "../../../../src/ecm/stage2/cuda/device/plain_scale.cuh"
 #include "plain_scale.cuh"
 
 static bool gscale_flag(const char *key)

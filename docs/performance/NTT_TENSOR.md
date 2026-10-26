@@ -166,7 +166,7 @@ L=2¹⁸、batch=1、32次迭代的CT40范围，时钟约1792MHz；整数ALU峰�
 - 原始证据、冻结EXE/GMP/manifest/源码、SASS及各扫描目录：`data/experiments/ntt_tensor_length_20261015/`。`initial/`为开发检查，不混入正式122组。
 - 正式记录：`{native,graph_single,batch,cta,graph,small_graph}/{measurements.json,summary.csv,telemetry.csv}`；汇总为`data/benchmarks/ntt_tensor_length_20261015_report_analysis.json`。
 - [构建脚本](../../tools/build/test/build_ntt_tensor_length_probe.ps1)、[基准入口](../../tools/bench/benchmark_ntt_tensor_lengths.py)、[图表工具](../../tools/bench/plot_ntt_tensor_lengths.py)、[复现说明](../../tools/bench/README_NTT_TENSOR_LENGTHS.md)。
-- [完整算子计划](../../tools/bench/ntt_tensor_length_probe.cu#L43)、[GMP门禁](../../tools/bench/ntt_tensor_length_probe.cu#L90)、[计时与Graph](../../tools/bench/ntt_tensor_length_probe.cu#L120)；[signed精确累加](../../tools/experiments/cuda/ntt_tensor/goldilocks.cuh)、[真实tile](../../tools/experiments/cuda/ntt_tensor/goldilocks.cuh)。生产共用[forward](../../src/ecm/backend/cuda/ntt/runtime.cpp)及[inverse](../../src/ecm/backend/cuda/ntt/runtime.cpp)的outer实现。
+- [完整算子计划](../../tools/bench/ntt_tensor_length_probe.cu#L43)、[GMP门禁](../../tools/bench/ntt_tensor_length_probe.cu#L90)、[计时与Graph](../../tools/bench/ntt_tensor_length_probe.cu#L120)；[signed精确累加](../../tools/experiments/cuda/ntt_tensor/goldilocks.cuh)、[真实tile](../../tools/experiments/cuda/ntt_tensor/goldilocks.cuh)。生产共用[forward](../../src/ecm/cuda/ntt/runtime.cpp)及[inverse](../../src/ecm/cuda/ntt/runtime.cpp)的outer实现。
 
 ## 待推进
 

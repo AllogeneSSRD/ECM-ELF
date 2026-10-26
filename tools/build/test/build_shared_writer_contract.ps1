@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Path $output|Out-Null
 $sources=@('tools/test/shared_writer_contract.cpp','tools/test/adapters/shared_writer_prime95.cpp',
  'tools/test/adapters/shared_writer_results.cpp','tools/test/adapters/shared_writer_gui.cpp',
  'src/io/files.cpp','src/io/worktodo.cpp','src/io/save.cpp','src/sync/p95.cpp',
- 'src/ecm/service/stage2/input.cpp','src/ecm/application/configuration/ecm_expr.cpp',
+ 'src/ecm/stage2/input.cpp','src/ecm/application/configuration/ecm_expr.cpp',
  'src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources){

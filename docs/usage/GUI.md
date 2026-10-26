@@ -102,7 +102,7 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 - [app.cpp](../../src/ecm/application/gui/app.cpp)：界面；[worker_controller.cpp](../../src/ecm/application/gui/worker_controller.cpp)：唯一生命周期；[worker_proc.cpp](../../src/ecm/application/gui/worker_proc.cpp)：进程/Job/管道和重启策略。
 - [worktodo_gen.cpp](../../src/ecm/application/gui/worktodo_gen.cpp)、[results.cpp](../../src/ecm/application/gui/results.cpp)、[log_parse.cpp](../../src/ecm/application/gui/log_parse.cpp)：生成器、结果和进度。
 - [task_display.h](../../src/ecm/application/gui/task_display.h)：只用于显示的任务摘要与AID/因子替代；`log_parse.cpp::parse_stage2/Stage2Status`汇总阶段及完成曲线。
-- [probability_panel.cpp](../../src/ecm/application/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/ecm/application/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../include/ecm/core/stage2/probability.h)。
+- [probability_panel.cpp](../../src/ecm/application/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/ecm/application/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../include/ecm/stage2/probability.h)。
 - [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp)：GUI任务事件和继承的安全停止请求，队列/存档仍由原生驱动处理。
 - [gpu_monitor.cpp](../../src/ecm/application/gui/gpu_monitor.cpp)、[toml_file.cpp](../../src/ecm/application/gui/toml_file.cpp)：监控和配置。
 - 构建入口：`tools/build/build_gui.bat`；[构建说明](BUILD.md)。

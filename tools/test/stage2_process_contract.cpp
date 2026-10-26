@@ -1,5 +1,5 @@
-#include "ecm/platform/process/curve_process.h"
-#include "ecm/platform/process/stage2_curve_process.h"
+#include "ecm/stage2/curve_process.h"
+#include "ecm/stage2/process.h"
 #include <fstream>
 #include <iostream>
 #include <iterator>

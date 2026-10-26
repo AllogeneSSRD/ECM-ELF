@@ -45,7 +45,7 @@ def main():
     manifest=json.loads((a.build/'build_manifest.json').read_text(encoding='utf-8-sig'))
     assert manifest['complete'] and not manifest['cuda_compiler_enabled']
     assert manifest['executable_sha256'].lower()==sha(a.build/'ecm.exe')
-    resources={new.split('/resources/',1)[1]:ROOT/new for old,new in LAYOUT['moved'].items() if new.startswith('src/ecm/backend/opencl/resources/')}
+    resources={new.split('/resources/',1)[1]:ROOT/new for old,new in LAYOUT['moved'].items() if new.startswith('src/ecm/opencl/resources/')}
     assert len(resources)==172 and set(manifest['resources'])==set(resources)
     for name,source in resources.items():
         assert sha(source)==sha(a.build/'opencl_resources'/name)==manifest['resources'][name].lower(),name
@@ -68,7 +68,7 @@ def main():
     # The loader retains Android's logical asset root. Source/registry/cache
     # assembly is covered by the exhaustive relocation-body gate separately.
     gradle=(ROOT/'Android/ECM/app/build.gradle.kts').read_text(encoding='utf8')
-    assert 'from(mpaRoot.resolve("src/ecm/backend/opencl/resources"))' in gradle
+    assert 'from(mpaRoot.resolve("src/ecm/opencl/resources"))' in gradle
     assert 'src/main/assets/kernels/opencl' in gradle and 'include("bench/**")' in gradle
     result=dict(complete=True,resources=172,ordinary_cxx_commands=len(commands),cuda_compiler_invocations=0,curves=4,actual_runs_compared=2,cache_files=2,cache_hits=2,save_points_equal=True,results_equal=True,android_asset_contract_only=True,binary_sha256=sha(a.build/'ecm.exe'))
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf8')

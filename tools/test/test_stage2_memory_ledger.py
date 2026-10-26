@@ -49,7 +49,7 @@ def main():
     # bypasses the instrumented cudaMalloc/free entry points. Runtime overhead
     # outside these source calls is explicitly outside the payload contract.
     sources=identity['sources']
-    assert any(name in sources for name in ('src/ecm/backend/cuda/runtime/device_memory_ledger.h','src/cuda/common/device_memory_ledger.h','src/cuda/stage2/device_memory_ledger.cuh'))
+    assert any(name in sources for name in ('src/ecm/cuda/runtime/device_memory_ledger.h','src/cuda/common/device_memory_ledger.h','src/cuda/stage2/device_memory_ledger.cuh'))
     allocation_api=r'\b(cuda(?:Malloc|Free)\w*|cuMem(?:Alloc|Free)\w*)\s*\('
     for name in sources:
         if name.endswith(('.cu','.cuh','.cpp','.h')):

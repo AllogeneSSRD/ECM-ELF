@@ -14,8 +14,8 @@ if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain
 $inventory=Get-EcmCudaInventory $repo
 $sources=@('src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp',
     'src/ecm/application/configuration/stage2_identity.cpp',
-    'src/ecm/service/stage2/task.cpp','src/ecm/service/stage2/input.cpp',
-    'src/ecm/platform/process/stage2_curve_process.cpp')
+    'src/ecm/stage2/task.cpp','src/ecm/stage2/input.cpp',
+    'src/ecm/stage2/process.cpp')
 foreach($source in $sources){if($source -notin $inventory.groups.STAGE2_HOST){throw "Missing production source: $source"}}
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $output

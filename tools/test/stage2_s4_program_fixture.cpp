@@ -2,7 +2,7 @@
 #define main s4_component_main
 #include "fixture.cpp"
 #undef main
-#include "../../src/ecm/backend/cuda/planning/ecm_stage2_s4_program.h"
+#include "../../src/ecm/stage2/planning/s4_program.h"
 static Word program_cases=0,program_events=0;
 static bool synthetic_shape(Word operand,int bits,S4ShapeDescriptor &d) {
     d.n=1;while(d.n<4*operand)d.n*=2;

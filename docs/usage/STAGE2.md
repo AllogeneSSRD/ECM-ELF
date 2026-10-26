@@ -114,5 +114,5 @@ Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_fin
 
 - [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L175)：`records`；[队列字段](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L395)：`queue_fields`。
 - [Stage2 进度接口](../../include/ecm/io/stage2_checkpoint.h)与[存储实现](../../src/io/stage2_checkpoint.cpp)：原子进度和回执对账。
-- [ecm_stage2_console.h](../../src/ecm/platform/ecm_stage2_console.h)：阶段和内存摘要。
+- [ecm_stage2_console.h](../../src/ecm/stage2/console.h)：阶段和内存摘要。
 - [Stage2 管线](../architecture/STAGE2.md)、[Auto B2](../architecture/AUTO_B2.md)、[构建](BUILD.md)。

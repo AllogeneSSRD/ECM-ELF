@@ -1,7 +1,7 @@
-#include "../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../cuda/arithmetic/cgbn/types.cuh"
 #include "registry.cuh"
 #include "api.h"
-#include "../../backend/cuda/runtime/cuda_ecm_shim.h"
+#include "../../cuda/runtime/cuda_ecm_shim.h"
 #include <cuda_runtime.h>
 void cgbn_stage1_launch(cgbn_stage1_kernel_fn kernel,dim3 grid,dim3 block,
     cgbn_error_report_t *report,uint64_t scalar_bits,uint64_t start,uint64_t count,
@@ -17,7 +17,7 @@ void cgbn_stage1_launch(cgbn_stage1_kernel_fn kernel,dim3 grid,dim3 block,
 cgbn_stage1_kernel_fn ecm_mont_param0_w##W(uint32_t,uint32_t*); \
 cgbn_stage1_kernel_fn ecm_mont_param2_w##W(uint32_t,uint32_t*); \
 cgbn_stage1_kernel_fn ecm_mont_param3_w##W(uint32_t,uint32_t*);
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) \
 if (BITS == W) { \
@@ -25,7 +25,7 @@ if (BITS == W) { \
     if (param == 2) return ecm_mont_param2_w##W(BITS,TPI_out); \
     return ecm_mont_param3_w##W(BITS,TPI_out); }
 static cgbn_stage1_kernel_fn isolated_dispatch(int param,uint32_t BITS,uint32_t *TPI_out) {
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
     return nullptr;
 }
 #undef ECM_CUDA_TIER
@@ -124,7 +124,7 @@ void ecm_build_tier_list_default(std::vector<uint32_t> &out) {
 #else
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) if constexpr (M) out.push_back(W);
 #endif
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 #undef ECM_CUDA_ALL_TIERS
 #ifdef IS_DEV_BUILD
@@ -139,7 +139,7 @@ void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
   out.clear();
 #define ECM_CUDA_ALL_TIERS
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) if constexpr (M) out.push_back(W);
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 #undef ECM_CUDA_ALL_TIERS
 }
@@ -210,7 +210,7 @@ int ecm_cuda_tier_list(int param0, int param2, uint32_t want_bits,
 #endif
     static const Tier tiers[]={
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) {W,T},
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
         {0,0}};
 #undef ECM_CUDA_MONT_DEV_ONLY

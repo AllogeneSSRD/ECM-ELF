@@ -108,7 +108,7 @@ GPU memset共4391次，写入84,325,430,832 bytes（78.53GiB），累计0.298869
 
 `s4_pack_zero_stats`按进程累计：contiguous/gather计操作数批次调用次数（一次可含m个slice），reverse为gather子集；launches为实际融合kernel数，words为最终覆盖的digit数，avoided_memsets为替换掉的独立清零提交数。`replaced_memset_bytes=8·words`只是被替换清零操作的规模，不能当作避免的全部显存写入量，更不是PCIe流量。
 
-独立探针与生产共用[pack.cuh](../../src/ecm/backend/cuda/stage2/device/pack.cuh)中的原始及融合内核。663项GMP验证完整38,030,604 words，覆盖1–16384 bits、bpw1/7/19/31/62、普通/gather/reverse、空/单/多系数、非零metadata偏移、slot尾、NTT尾、脏目标、两侧guard及65535-slice边界；专用故障仅产生bad1并返回3。另有1,048,576组uint32商余数边界检查，包含sw1–65536、随机值及UINT32_MAX，bad0。
+独立探针与生产共用[pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)中的原始及融合内核。663项GMP验证完整38,030,604 words，覆盖1–16384 bits、bpw1/7/19/31/62、普通/gather/reverse、空/单/多系数、非零metadata偏移、slot尾、NTT尾、脏目标、两侧guard及65535-slice边界；专用故障仅产生bad1并返回3。另有1,048,576组uint32商余数边界检查，包含sw1–65536、随机值及UINT32_MAX，bad0。
 
 在本页相同GPU/工具链设置下，21个孤立准备形状每侧6样本、每样本8次、不丢弃预热，共252样本；设备事件包括默认memset+pack或完整融合kernel，排除源数据上传和结果检查。已测318/2203/4423/7995/12011 bits，P3/32/1024/5761/77761，batch1/4/64/512，三种输入路径耗时减少24.87%–73.63%。这是单操作数准备时间，不是NTT或完整Stage2收益。sm89探针的ptxas结果为新路径20 registers/thread、原路径38–40，均无spill；并不由寄存器数直接推断加速。
 
@@ -223,8 +223,8 @@ Compute2026.2.1以管理员采集新路径的一个热点gather实例，核对Sy
 - [工具入口](../../tools/bench/README_NTT_OUTER_PLANS.md)：联合扫描、完整曲线、管理员范围追踪与空隙分解。
 - 原始证据：`data/experiments/stage2_tile_sync_20261015/`，其中`nsys_all/`为常规全API追踪，`nsys_nvtx_off/`、`nsys_nvtx_on/`、`nsys_nvtx_full/`为CPU范围追踪。
 - 汇总：`data/benchmarks/stage2_tile_sync_20261015/gaps_nvtx_full.json`；剖析和正式性能使用独立的构建身份。
-- [host_trace.h](../../src/ecm/backend/cuda/ntt/host_trace.h)：默认关闭的范围标记；[runtime.cpp](../../src/ecm/backend/cuda/ntt/runtime.cpp)中的 `ntt_run_passes`、`ntt_poly_mul_batch_dev` 与 [shape.cpp](../../src/ecm/backend/cuda/ntt/shape.cpp) 的 `ntt_shape_plan` 为 NTT 范围入口。
-- [s4.cpp](../../src/ecm/backend/cuda/stage2/s4.cpp)：`s4_reduce_init`；[checks.cpp](../../src/ecm/backend/cuda/stage2/checks.cpp)：`s4_compare_snapshot`；[product.cpp](../../src/ecm/backend/cuda/stage2/product.cpp)：`poly_mul_batch_modN`、`s4_gather_final_input`、`s4_pack_final_input`；[tree.cpp](../../src/ecm/backend/cuda/stage2/tree.cpp)：`build_tree_flat`；[points.cpp](../../src/ecm/backend/cuda/stage2/points.cpp)：`giant_chunk_chain`。
-- [pack.cuh](../../src/ecm/backend/cuda/stage2/device/pack.cuh)：商余数修正及完整写入；[product.cpp](../../src/ecm/backend/cuda/stage2/product.cpp)：`stage2_pack::launch` 分段提交，gather和contiguous接入保留形状校验及不支持时的默认路径。
-- [配置解析](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp)、[子进程传递](../../src/ecm/platform/process/stage2_curve_process.cpp)；默认值/双语说明源为[ecm_options.json:1109](../../config/ecm_options.json#L1109)，经生成器同步TOML及参考。GPU0分配范围入口为[s4.cpp](../../src/ecm/backend/cuda/stage2/s4.cpp) 的 `pin_words`。
-- 同文件`stage2_init_begin`、`stage2_init_seconds`及`run_batched`返回处定义引擎计时；[ecm_stage2_phase_times.h](../../src/ecm/backend/cuda/stage2/ecm_stage2_phase_times.h)定义互斥阶段，不能将旧嵌套timer重新相加。
+- [host_trace.h](../../src/ecm/cuda/ntt/host_trace.h)：默认关闭的范围标记；[runtime.cpp](../../src/ecm/cuda/ntt/runtime.cpp)中的 `ntt_run_passes`、`ntt_poly_mul_batch_dev` 与 [shape.cpp](../../src/ecm/cuda/ntt/shape.cpp) 的 `ntt_shape_plan` 为 NTT 范围入口。
+- [s4.cpp](../../src/ecm/stage2/cuda/s4.cpp)：`s4_reduce_init`；[checks.cpp](../../src/ecm/stage2/cuda/checks.cpp)：`s4_compare_snapshot`；[product.cpp](../../src/ecm/stage2/cuda/product.cpp)：`poly_mul_batch_modN`、`s4_gather_final_input`、`s4_pack_final_input`；[tree.cpp](../../src/ecm/stage2/cuda/tree.cpp)：`build_tree_flat`；[points.cpp](../../src/ecm/stage2/cuda/points.cpp)：`giant_chunk_chain`。
+- [pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)：商余数修正及完整写入；[product.cpp](../../src/ecm/stage2/cuda/product.cpp)：`stage2_pack::launch` 分段提交，gather和contiguous接入保留形状校验及不支持时的默认路径。
+- [配置解析](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp)、[子进程传递](../../src/ecm/stage2/process.cpp)；默认值/双语说明源为[ecm_options.json:1109](../../config/ecm_options.json#L1109)，经生成器同步TOML及参考。GPU0分配范围入口为[s4.cpp](../../src/ecm/stage2/cuda/s4.cpp) 的 `pin_words`。
+- 同文件`stage2_init_begin`、`stage2_init_seconds`及`run_batched`返回处定义引擎计时；[ecm_stage2_phase_times.h](../../src/ecm/stage2/cuda/phase_times.h)定义互斥阶段，不能将旧嵌套timer重新相加。

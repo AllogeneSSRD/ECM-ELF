@@ -21,7 +21,7 @@
  * (a mont_t copy is ~1.3 KB; copying twice per bit would dominate the cost).
  * ------------------------------------------------------------------------- */
 #include "ecm_mont_cpu.h"
-#include "../../backend/cpu/arithmetic/scalar/ecm_edwards_mont.h"          /* generic MPN Montgomery layer */
+#include "../../cpu/arithmetic/scalar/ecm_edwards_mont.h"          /* generic MPN Montgomery layer */
 #include "ecm/stage1/scalar.h"
 #include "../../../io/exponent_cache.h"            /* s = torsion * lcm(1..B1), product tree */
 

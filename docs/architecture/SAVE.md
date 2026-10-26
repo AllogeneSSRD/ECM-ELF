@@ -33,7 +33,7 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 
 [GUI worktodo 生成器](../usage/GUI.md#队列生成与交接)按所选曲线类型展开同一默认模式；它不链接 GMP，非梅森目标的 `bit` 位数使用估计值，涉及已知因子或位数边界时须核对预览。核心 Stage1 自动命名仍使用实际 N 位数。
 
-来源：[命名器](../../src/ecm/service/stage1/preparation.cpp)、[输入归一化与前缀规范](../../src/io/normalize.cpp)、[配置源](../../config/ecm_options.json)。
+来源：[命名器](../../src/ecm/stage1/preparation.cpp)、[输入归一化与前缀规范](../../src/io/normalize.cpp)、[配置源](../../config/ecm_options.json)。
 
 ### 2.2 Stage1 以 ECMSTAGE1 行作为输入
 
@@ -54,7 +54,7 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 
 Stage2 消费时，以每条记录内部的 METHOD/PARAM/SIGMA/B1/N 为算术依据；只改文件名前缀不能将一条 Mont 记录转换为 Edwards，也不能改变已完成 B1。
 
-来源：[任务归一化](../../src/io/normalize.cpp)、[队列与收尾](../../src/main.cpp)、[旧历史复制](../../src/ecm/service/stage1/task.cpp)、[字段改写与 B1 提取](../../src/io/worktodo.cpp)。
+来源：[任务归一化](../../src/io/normalize.cpp)、[队列与收尾](../../src/main.cpp)、[旧历史复制](../../src/ecm/stage1/task.cpp)、[字段改写与 B1 提取](../../src/io/worktodo.cpp)。
 
 ## 3. 文本封装
 
@@ -100,7 +100,7 @@ CPU/GPU PARAM0 与 GPU PARAM2/3 均保存实际计算模数的表达式；缺少
 
 命中时的 X 是因子，没有点的继续意义。文本没有独立命中标志；消费者需据算术或其他结果判定。Stage1 结果账本是曲线结果的独立依据，见 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 
-来源：[模数表达式及 Montgomery 写入](../../src/io/save.cpp)、[CUDA 保存调用](../../src/ecm/backend/cuda/stage1/montgomery/workflow.cpp)、[保存字段校验](../../src/io/save.cpp)。
+来源：[模数表达式及 Montgomery 写入](../../src/io/save.cpp)、[CUDA 保存调用](../../src/ecm/montgomery_stage1/cuda/workflow.cpp)、[保存字段校验](../../src/io/save.cpp)。
 
 ## 5. Edwards save VERSION=1
 
@@ -132,7 +132,7 @@ PARAM 被禁止；默认不写 PROGRAM/WHO/TIME，也不写 Z。可选 Z 若提�
 
 CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且不超过2⁵³，并验证 FACTOR 严格大于1且整除 N。CUDA 读取器另受自身位宽上限约束；不能将两个入口的检查集合视为完全相同。
 
-来源：[save_line / save_checksum](../../include/ecm/io/save.h)、[坐标与状态判定](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)、[CPU 专用读取](../../include/ecm/io/save.h)。
+来源：[save_line / save_checksum](../../include/ecm/io/save.h)、[坐标与状态判定](../../src/ecm/edwards_stage1/cuda/workflow.cpp)、[CPU 专用读取](../../include/ecm/io/save.h)。
 
 ## 6. 写入、去重与发布
 
@@ -165,7 +165,7 @@ CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且
 
 追加旧文件 S bytes、新行 T bytes，单次合并约读 S、写 S+T；队列完成检查再读一次 S+T。P95 同步及普通备份另有复制开销。不能按“只追加 T bytes”估算磁盘工作量。主机保存文本和去重键，额外内存随历史增长；文件备份不属于 GPU 显存。
 
-来源：[save 发布与区间验证](../../src/io/save.cpp)、[持久原子文件操作](../../src/io/files.cpp)、[可写性预检](../../src/io/save.cpp)、[task 发布](../../src/ecm/service/stage1/task.cpp)、[队列收尾](../../src/main.cpp)。
+来源：[save 发布与区间验证](../../src/io/save.cpp)、[持久原子文件操作](../../src/io/files.cpp)、[可写性预检](../../src/io/save.cpp)、[task 发布](../../src/ecm/stage1/task.cpp)、[队列收尾](../../src/main.cpp)。
 
 ## 7. 消费者和交接能力
 

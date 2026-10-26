@@ -41,9 +41,9 @@ struct ProductionDefaults {
 
 // Reuse the experimental engine verbatim, including its exact NTT and checks.
 #include "engine.cuh"
-#include "../../../../src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "../../../../src/ecm/stage2/cuda/api.h"
 #include "../../../../src/ecm/platform/compute_log.h"
-#include "../../../../src/ecm/backend/cuda/ntt/device/tune_checks.cuh"
+#include "../../../../src/ecm/cuda/ntt/device/tune_checks.cuh"
 #include "tune.cuh"
 
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)

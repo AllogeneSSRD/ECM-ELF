@@ -34,7 +34,7 @@ Montgomery 原生运行日志直接记录卡名和 SM 数；Edwards 的 device 0
 | GPU Montgomery PARAM0 | `gputime` | 从 `global_start` 到末次切片 `stop` 的 CUDA event 区间；包含标量传输、曲线初始化、分配/准备及期间的主机提交间隙，排除末次结果回读、GCD、save 和结果发布 |
 | CPU Prime95 | `Stage 1 complete ... Total time` | 原生 Stage1 时间，包含字典等 Stage1 工作；排除 Stage2 及整进程启动 |
 
-实现依据为 Edwards 的 `src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl:96–123`、`workflow.cpp:225`，以及 Montgomery 的 `src/ecm/backend/cuda/stage1/montgomery/runtime.cu:194,673–674,763`。`GPU Edwards NAF` 汇总行是在主循环结束后输出，不能用它到 save 行的墙钟间隔代表主循环。CUDA event 区间不称 profiler 的纯 kernel 时间；嵌套的 `api_seconds` 不重复相加。
+实现依据为 Edwards 的 `src/ecm/edwards_stage1/cuda/edwards_runtime.inl:96–123`、`workflow.cpp:225`，以及 Montgomery 的 `src/ecm/montgomery_stage1/cuda/runtime.cu:194,673–674,763`。`GPU Edwards NAF` 汇总行是在主循环结束后输出，不能用它到 save 行的墙钟间隔代表主循环。CUDA event 区间不称 profiler 的纯 kernel 时间；嵌套的 `api_seconds` 不重复相加。
 
 按实测批量 C、B1 和所选计时 T 计算 `GPU秒/曲线@1e6 = T / C × (1e6/B1)`。后 11 组是线性外推。**Montgomery 的该折算会同时放大固定准备开销**，不是扣除初始化后的主循环成绩，也不是在目标 B1 重测的总时间；没有用日志秒级时间戳估计并扣除准备成本。
 
@@ -321,7 +321,7 @@ exe SHA256=`d853b4ce80c78853a4fdafa5f3ad3abc51cbe267cd5231c64d2a523e299f9a89`，
 
 ![窗口对完整进程、CUDA event 区间及字典分配的影响](../../data/figures/edwards_naf_20261016/windows.png)
 
-左、中面板按同位宽的 w6 中位数归一化，各用独立纵轴；event 面板放大局部差异，完整进程面板显示准备及启动离散。右面板为 M8191、128条曲线的**字典逻辑分配量**，由容器字节数×曲线数×4坐标×2^(w−2) 得到，依据为 [`run_naf`](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl) 第11行起的分配公式，不是进程显存峰值。窗口组分别采集，折线仅连接所测离散配置。[矢量图](../../data/figures/edwards_naf_20261016/windows.svg)。
+左、中面板按同位宽的 w6 中位数归一化，各用独立纵轴；event 面板放大局部差异，完整进程面板显示准备及启动离散。右面板为 M8191、128条曲线的**字典逻辑分配量**，由容器字节数×曲线数×4坐标×2^(w−2) 得到，依据为 [`run_naf`](../../src/ecm/edwards_stage1/cuda/edwards_runtime.inl) 第11行起的分配公式，不是进程显存峰值。窗口组分别采集，折线仅连接所测离散配置。[矢量图](../../data/figures/edwards_naf_20261016/windows.svg)。
 
 这批event区间以w10较小，不能据此宣称所有B1/批量的最佳窗口或全局改默认。M8191的w6/w10完整进程中位数为4.7432/4.5841秒，字典从8MiB增长到128MiB；w12为512MiB且完整进程升至5.1838秒。默认仍为6，允许显式2..12；生产B1和更多批次的标定仍待验证。
 

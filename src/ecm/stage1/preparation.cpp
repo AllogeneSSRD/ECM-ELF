@@ -12,8 +12,8 @@
 #endif
 
 namespace ecm_stage1 {
-bool compute_batch_s(mpz_t s, double B1, unsigned torsion, const std::string& cache_dir){
-    if(B1 < 2.0) {
+bool compute_batch_s(mpz_t s, double B1, unsigned torsion, const std::string &cache_dir) {
+    if (B1 < 2.0) {
         mpz_set_ui(s, torsion);
         return true;
     }
@@ -58,10 +58,12 @@ bool fixed_sigma_batch_exceeds_prime95_range(uint64_t sigma, uint32_t curves) {
             static_cast<uint64_t>(curves - 1) > static_cast<uint64_t>(INT64_MAX) - sigma);
 }
 
-ecm_save::Naming save_naming(const Stage1Options& opt) {
+ecm_save::Naming save_naming(const Stage1Options &opt) {
     ecm_save::Naming naming;
     naming.curve = ecm_save::curve_prefix(opt.execution.selection.curve == CurveModel::Edwards,
-        opt.execution.selection.target == ExecutionTarget::Gpu ? opt.execution.selection.gpu_param : 0);
+                                          opt.execution.selection.target == ExecutionTarget::Gpu
+                                              ? opt.execution.selection.gpu_param
+                                              : 0);
     naming.target_kbnc = opt.identity.target_kbnc;
     naming.target_n = opt.identity.handoff_n;
     naming.mersenne = opt.identity.handoff_k_str == "1" && opt.identity.handoff_b == 2 &&

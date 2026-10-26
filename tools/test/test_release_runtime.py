@@ -171,7 +171,7 @@ def main():
             if (folder/filename).exists():text+='\n'+(folder/filename).read_text(encoding='utf-8',errors='replace')
         return folder,text,dict(wall_seconds=seconds,entries=names,loaded_modules=loaded,image_kind=('derived_ptx_only' if binary!=original_binary else 'release'),executed_sha256=sha(binary),jit_activities=direct,jit_operation_seconds=operation_seconds,
             jit_measurement='CUPTI: 1 cache-load, 2 cache-store, 3 compile' if direct else 'not separately observed; wall includes initialization and loading')
-    tiers=[tuple(map(int,v)) for v in re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),', (ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(),re.M)]
+    tiers=[tuple(map(int,v)) for v in re.findall(r'^ECM_CUDA_TIER\((\d+),\d+,\d+,([01]),', (ROOT/'src/ecm/cuda/dispatch/tiers.def').read_text(),re.M)]
     if args.tiers=='representative':tiers=[v for v in tiers if v[0] in (128,2560,10240)]
     elif args.tiers=='smoke':tiers=[v for v in tiers if v[0]==512]
     if args.stage=='stage2' or args.sampling_only:tiers=[]

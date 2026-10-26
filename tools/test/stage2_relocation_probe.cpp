@@ -1,5 +1,5 @@
-#include "../../src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h"
-#include "../../src/ecm/core/stage2/ecm_stage2_relocation.h"
+#include "../../src/ecm/stage2/cuda/api.h"
+#include "../../src/ecm/stage2/relocation.h"
 #include <iostream>
 #include <stdexcept>
 #include <string>

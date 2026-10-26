@@ -1,6 +1,6 @@
 #pragma once
 #include "runtime.h"
-#include "../../backend/cuda/arithmetic/cgbn/types.cuh"
+#include "../../cuda/arithmetic/cgbn/types.cuh"
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstdio>

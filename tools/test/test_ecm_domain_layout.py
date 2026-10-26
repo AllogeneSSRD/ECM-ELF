@@ -66,6 +66,10 @@ def main():
         before = before.replace('using ecm_stage1::ensure_dir;', 'using ecm_io::ensure_dir;')
         before = before.replace('using ecm_stage1::mont_format_save_name;', 'using ecm_save::format_name;')
         before = before.replace('mont_format_save_name(', 'format_name(')
+        # Source-tree fallback follows the moved payload. Portable deployment
+        # still uses opencl_resources and is checked by package-layout tests.
+        if source == 'src/ecm/backend/opencl/runtime/runtime.cpp':
+            before = before.replace('src/ecm/backend/opencl/resources', 'src/ecm/opencl/resources')
         assert tokens(before) == tokens(after), ('computation tokens changed', source, targets[0])
         checked[targets[0]] = hashlib.sha256(after.encode()).hexdigest()
     # The two merged entry bodies keep their checks, ABI-facing arguments,

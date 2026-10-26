@@ -68,7 +68,7 @@ if ($KernelLayout -eq 'isolated') {
     & python (Join-Path $PSScriptRoot 'internal/generate_cuda_modules.py') --out $moduleDirectory
     if ($LASTEXITCODE) { throw 'CUDA module generation failed' }
 }
-$includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/ecm/backend/cuda')
+$includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/ecm/cuda')
 $sourceSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs $moduleDirectory
 $sources = @($sourceSet.Sources)
 $cudaSources = @($sourceSet.CudaSources)

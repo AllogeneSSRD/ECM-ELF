@@ -1,4 +1,4 @@
-#include "../../src/ecm/backend/cuda/stage2/host_wait_policy.h"
+#include "../../src/ecm/stage2/cuda/host_wait_policy.h"
 #include <stdexcept>
 #include <iostream>
 #include <vector>

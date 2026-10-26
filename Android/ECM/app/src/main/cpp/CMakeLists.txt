@@ -33,7 +33,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/CL"
         "${MPA_ROOT}/include"
         "${MPA_ROOT}/src"
-        "${MPA_ROOT}/src/ecm/backend/opencl/runtime")
+        "${MPA_ROOT}/src/ecm/opencl/runtime")
 
 set(_ECM_GMP_HEADER "${ECM_ANDROID_GMP_ROOT}/include/gmp.h")
 set(_ECM_GMP_LIB "${ECM_ANDROID_GMP_ROOT}/lib/libgmp.a")
@@ -54,11 +54,11 @@ if(ECM_ANDROID_GMP_ROOT AND EXISTS "${_ECM_GMP_HEADER}" AND EXISTS "${_ECM_GMP_L
             "${MPA_ROOT}/src/io/save.cpp"
             "${MPA_ROOT}/src/ecm/montgomery_stage1/opencl/debug_utils.cpp"
             "${MPA_ROOT}/src/ecm/montgomery_stage1/opencl/montgomery.cpp"
-            "${MPA_ROOT}/src/ecm/backend/opencl/arithmetic/limb24.cpp"
-            "${MPA_ROOT}/src/ecm/backend/opencl/arithmetic/path_registry.cpp"
+            "${MPA_ROOT}/src/ecm/opencl/arithmetic/limb24.cpp"
+            "${MPA_ROOT}/src/ecm/opencl/arithmetic/path_registry.cpp"
             "${MPA_ROOT}/src/ecm/application/configuration/runtime.cpp"
-            "${MPA_ROOT}/src/ecm/backend/opencl/diagnostics/selftest.cpp"
-            "${MPA_ROOT}/src/ecm/backend/opencl/runtime/runtime.cpp")
+            "${MPA_ROOT}/src/ecm/opencl/diagnostics/selftest.cpp"
+            "${MPA_ROOT}/src/ecm/opencl/runtime/runtime.cpp")
     target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${_ECM_GMP_LIB}")
 else()
     message(STATUS "ECM Android: GMP not found (header=${_ECM_GMP_HEADER})")

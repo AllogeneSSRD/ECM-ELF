@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parents[2]
 LAYOUT = json.loads(Path(__file__).with_name('main_flow_layout.json').read_text(encoding='utf8'))
@@ -15,6 +16,39 @@ LAYOUT = json.loads(Path(__file__).with_name('main_flow_layout.json').read_text(
 def current_source(relative):
     relative=str(relative)
     return ROOT / LAYOUT.get('current_overrides',{}).get(relative,LAYOUT['moved'].get(relative,relative))
+
+
+@lru_cache(None)
+def frozen_paths(revision):
+    return set(subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', revision],
+                                       cwd=ROOT).decode('utf8').splitlines())
+
+
+def frozen_source(revision, relative):
+    """Read a frozen identity even when a test now names its relocated target.
+
+    Never substitute current contents or guess between multiple merged sources.
+    Existing historical names always take precedence over reverse lookup.
+    """
+    relative = str(relative)
+    available = frozen_paths(revision)
+    name = relative
+    if name not in available:
+        manifest = json.loads((ROOT/'docs/development/ECM_DOMAIN_REFACTOR_MANIFEST.json').read_text(encoding='utf8'))
+        # A moved implementation retains its frozen identity when it absorbs an
+        # extra fragment. A target composed solely of multiple merges is ambiguous.
+        candidates = {entry['source'] for entry in manifest['files']
+                      if entry['action'] in ('move', 'move_split') and
+                      relative == entry['targets'][0] and entry['source'] in available}
+        if not candidates:
+            candidates = {entry['source'] for entry in manifest['files']
+                          if relative in entry['targets'] and entry['source'] in available}
+        if not candidates:
+            candidates = {old for old, new in {**LAYOUT['moved'], **LAYOUT.get('current_overrides', {})}.items()
+                          if new == relative and old in available}
+        assert len(candidates) == 1, ('ambiguous/missing frozen identity', revision, relative, sorted(candidates))
+        name = candidates.pop()
+    return subprocess.check_output(['git', 'show', revision+':'+name], cwd=ROOT).decode('utf-8-sig')
 
 
 def current_files(legacy_folder):
@@ -40,7 +74,7 @@ def relocation_text(relative):
             key=os.path.normpath(candidate).replace('\\','/')
             path=current_source(key)
             if path.is_file():expected.append(path.resolve())
-        active_roots=['include','src','src/ecm/backend/cuda/runtime','src/ecm/backend/cuda',
+        active_roots=['include','src','src/ecm/cuda/runtime','src/ecm/cuda',
                       'third_party/cgbn/include','third_party/cgbn/include/cgbn']
         actual=next((p.resolve() for p in [current_source(relative).parent/b[2]]+
                      [ROOT/base/b[2] for base in active_roots] if p.is_file()),None)

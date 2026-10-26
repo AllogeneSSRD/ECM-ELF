@@ -16,7 +16,7 @@ struct Request {
     EcmEdwardsPrepared prepared;
 };
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) int run_##W(const Request &request);
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
 void prepare_device(int device);
 }

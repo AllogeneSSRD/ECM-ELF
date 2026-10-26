@@ -10,4 +10,4 @@ ECM-ELF 提供多后端 Stage1、独立 CUDA 多项式 Stage2、Windows GUI 和�
 
 Stage1最终输入由CLI/stdin和worktodo两个适配入口产生，归一化后计算字段冻结，队列票据与交接元数据分离。main按当前任务选择普通执行函数，task直接调用，后端返回拥有的ComputationResult；task统一最终save与结果发布，保存区间显式返回。Montgomery各param共用一条workflow，param是构造身份，算法和设备布局受其约束。
 
-已确认、尚未实施的下一轮目录规划见 [领域目录实施规划](docs/web/ecm-domain-layout-review-20261026.html#implementation-contract)，逐文件清单见 [迁移清单](docs/development/ECM_DOMAIN_REFACTOR_MANIFEST.json)。父目录保留 `src/ecm`：`stage1` 表达跨曲线共同流程，`edwards_stage1`、`montgomery_stage1` 表达具体曲线阶段能力，`stage2` 保留共享续算引擎，`curve` 表达跨阶段构造；真实共享平台与设备支持继续独立。此处记录已确认的规划术语，不表示当前 0.53.3 源码已经迁移。本轮范围包含整套目录迁移、保存／发布合同收口与必要合并；其余候选延期，不保留旧源码路径转发头，CLI、导出符号和磁盘格式保持。
+计算目录按领域聚合：`src/ecm/stage1` 拥有跨曲线共同流程，`edwards_stage1`、`montgomery_stage1` 拥有各自完整的 CPU/CUDA/OpenCL 能力；`stage2` 拥有共享续算引擎和纯主机规划，`curve` 拥有跨阶段构造。真实共享的 `cpu`、`cuda`、`opencl` 技术支持继续独立。保存命名、旧历史快照和持久发布由 IO 拥有，IO 不依赖 Stage1Options。没有旧路径转发头，CLI、导出符号和磁盘格式保持兼容。目录、依赖和具体入口以[架构与术语](docs/architecture/OVERVIEW.md)为准。实施草稿与逐文件证据保留在[领域目录重构](docs/web/ecm-domain-layout-review-20261026.html#implementation-result)。

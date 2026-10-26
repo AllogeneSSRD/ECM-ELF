@@ -125,7 +125,7 @@ foreach($name in $names) {
                 $fields.'option/split_compile' -ne [string]$target.SplitCompile -or
                 $manifest.sha256 -ne (Get-FileHash -LiteralPath $record.exe).Hash){throw 'Stage2 production identity mismatch'}
             $inventory=Get-EcmCudaInventory $repo (Join-Path $record.build 'cuda_sources.json')
-            $includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/ecm/backend/cuda')
+            $includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/ecm/cuda')
             $set=Get-EcmStage2SourceSet $repo $inventory production $includeDirs $manifest.module_directory
             Assert-EcmHashes $manifest.source_hashes (Get-EcmSourceHashes $repo $set.Dependencies) 'Stage2 source identity changed'
             Assert-EcmBuildUnits $repo $record.build $manifest $set.Sources $includeDirs -Production -VerifyJobs $VerifyJobs

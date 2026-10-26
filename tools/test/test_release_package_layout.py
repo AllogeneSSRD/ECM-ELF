@@ -47,7 +47,7 @@ class ReleaseLayout(unittest.TestCase):
     def fixture(self,layout='grouped'):
         self.layout=layout
         self.put(self.repo/'include/ecm/platform/program_version.h','inline constexpr char version[] = "0.52.1";')
-        self.put(self.repo/'src/ecm/backend/cuda/dispatch/tiers.def','ECM_CUDA_TIER(512,4,128,1,0)\n')
+        self.put(self.repo/'src/ecm/cuda/dispatch/tiers.def','ECM_CUDA_TIER(512,4,128,1,0)\n')
         for name in ['.gitignore','CMakeLists.txt','LICENSE','docs/ECM_TOML_REFERENCE.md','tools/diag/ensure_bom.ps1',
                      'config/ecm.toml.example','assets/gui_v2/pet_ely.png','assets/gui_v2/pet_ely.json',
                      'assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt',

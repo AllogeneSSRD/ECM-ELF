@@ -9,13 +9,13 @@ struct Tier {int bits,tpi,group,mont,dev,mont_tpb,edwards_tpb;};
 #define ECM_CUDA_ALL_TIERS
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) {W,T,G,M,D,MT,ET},
 static const Tier all[]={
-#include "../../src/ecm/backend/cuda/dispatch/tiers.def"
+#include "../../src/ecm/cuda/dispatch/tiers.def"
 };
 #undef ECM_CUDA_TIER
 #undef ECM_CUDA_ALL_TIERS
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) W,
 static const int selected[]={0,
-#include "../../src/ecm/backend/cuda/dispatch/tiers.def"
+#include "../../src/ecm/cuda/dispatch/tiers.def"
 };
 #undef ECM_CUDA_TIER
 #define CAPACITY(NW,FN,...) NW,

@@ -1,5 +1,5 @@
 // Independent GMP oracle; links the actual production arithmetic object.
-#include "../../src/ecm/backend/cuda/stage2/launch.h"
+#include "../../src/ecm/stage2/cuda/launch.h"
 #include <gmp.h>
 #include <algorithm>
 #include <cstdio>

@@ -29,7 +29,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
 - [Stage1 主机重构开发草稿](web/stage1-intake-architecture-20261025.html)：首轮0.53.0提交、第二轮0.53.1输入与执行入口、拥有结果及统一发布；保留讨论和验收证据，待用户决定草稿处理。
 - [Stage1 第四轮重构开发草稿](web/stage1-fourth-refactor-review-20261025.html#implementation-result)：0.53.3 共同写锁、竞态复现、输入单次转换与归一化；保留实施合同和验收证据，完成后待用户处理草稿。
-- [下一轮领域目录实施规划](web/ecm-domain-layout-review-20261026.html#implementation-contract)：已确认整套目录集中、保存／发布合同与必要合并，尚未实施；包含 [逐文件迁移清单](development/ECM_DOMAIN_REFACTOR_MANIFEST.json)、阶段门禁及明确延期项。其他候选见 [评估页](web/stage1-fifth-refactor-review-20261026.html)。
+- [领域目录重构开发草稿](web/ecm-domain-layout-review-20261026.html#implementation-result)：0.53.4 的完整目录集中、保存／发布合同与必要合并；保留 [逐文件清单](development/ECM_DOMAIN_REFACTOR_MANIFEST.json)、复现和验收证据。当前目录以[架构与术语](architecture/OVERVIEW.md)为准，草稿保留待用户处理；延期候选见 [评估页](web/stage1-fifth-refactor-review-20261026.html)。
 - [Stage1 下一轮重构候选](web/stage1-next-refactor-review-20261025.html)：包含 0.53.2 计算结果、checkpoint 拥有权及主机 IO 实施结果，保留后续候选与验收证据。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
 - [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。

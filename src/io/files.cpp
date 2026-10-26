@@ -107,6 +107,10 @@ FileLock::FileLock(const std::string& name, FileLockDomain domain, uint32_t wait
         system_error = GetLastError();
         const bool busy =
             system_error == ERROR_SHARING_VIOLATION || system_error == ERROR_LOCK_VIOLATION;
+        // A zero-access metadata observer can keep a DELETE_ON_CLOSE marker
+        // delete-pending after its writer closes. Windows reports ACCESS_DENIED
+        // until that observer closes; retry within the same bounded budget.
+        const bool retryable = busy || system_error == ERROR_ACCESS_DENIED;
 #else
         state->fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
         if (state->fd >= 0 && ::flock(state->fd, LOCK_EX | LOCK_NB) == 0) {
@@ -116,11 +120,12 @@ FileLock::FileLock(const std::string& name, FileLockDomain domain, uint32_t wait
         system_error = errno;
         const bool busy =
             system_error == EWOULDBLOCK || system_error == EAGAIN || system_error == EINTR;
+        const bool retryable = busy;
         if (state->fd >= 0)
             ::close(state->fd);
 #endif
         const auto now = std::chrono::steady_clock::now();
-        if (!busy || now >= deadline) {
+        if (!retryable || now >= deadline) {
             const auto waited =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - begin).count();
             throw std::runtime_error(

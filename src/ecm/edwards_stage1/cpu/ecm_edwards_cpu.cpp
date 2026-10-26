@@ -18,7 +18,7 @@
 #include <gmp.h>
 
 #include "ecm_edwards_cpu.h"
-#include "../../backend/cpu/arithmetic/scalar/ecm_edwards_mont.h"
+#include "../../cpu/arithmetic/scalar/ecm_edwards_mont.h"
 #include "../../curve/edwards.h"
 
 // 标量乘算法开关: 1 = w-NAF + 仿射字典 (默认), 0 = double-and-add (基准).

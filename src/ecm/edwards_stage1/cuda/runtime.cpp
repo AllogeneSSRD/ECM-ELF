@@ -8,7 +8,7 @@ struct Tier {uint32_t bits,tpi;int (*execute)(const ecm_edwards_cuda_detail::Req
 const Tier *select_tier(size_t bits) {
     static const Tier tiers[]={
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) {W,T,ecm_edwards_cuda_detail::run_##W},
-#include "../../backend/cuda/dispatch/tiers.def"
+#include "../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
         {0,0,nullptr}
     };

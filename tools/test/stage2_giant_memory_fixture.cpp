@@ -1,7 +1,7 @@
 // Runner inserts the production S3 allocator. All allocations are opaque CPU
 // tokens. Arithmetic and kernel launches are stubbed, never tested by this file.
-#include "../../src/ecm/backend/cuda/planning/ecm_stage2_giant_memory.h"
-#include "../../src/ecm/backend/cuda/planning/ecm_stage2_giant_state.h"
+#include "../../src/ecm/stage2/planning/giant_memory.h"
+#include "../../src/ecm/stage2/planning/giant_state.h"
 #include <iostream>
 #include <string>
 #include <stdexcept>

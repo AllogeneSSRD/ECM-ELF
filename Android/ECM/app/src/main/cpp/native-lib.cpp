@@ -11,7 +11,7 @@
 #include "jni_utf8.h"
 #include "opencl_program_cache.h"
 #include "opencl_runtime.h"
-#include "../../../../../../src/ecm/backend/opencl/arithmetic/path_registry.h"
+#include "../../../../../../src/ecm/opencl/arithmetic/path_registry.h"
 
 #include "../../../../../../src/ecm/montgomery_stage1/opencl/checkpoint.h"
 

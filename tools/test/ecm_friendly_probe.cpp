@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 #ifdef ECM_FRIENDLY_WITH_STAGE2
-#include "ecm/backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "ecm/stage2/cuda/api.h"
 #endif
 
 using Integer=ecm_edwards::Integer;

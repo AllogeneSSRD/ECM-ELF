@@ -5,16 +5,16 @@
 | 模块 | 职责 | 主要入口 |
 | --- | --- | --- |
 | Stage1 应用 | 配置合并、输入、模式、依赖组装、展示和退出 | [main.cpp](../../src/main.cpp) |
-| Stage1 单任务 | 批次寿命、调用执行、逐曲线身份、发布与 seal | [task.cpp](../../src/ecm/service/stage1/task.cpp) |
+| Stage1 单任务 | 批次寿命、调用执行、逐曲线身份、发布与 seal | [task.cpp](../../src/ecm/stage1/task.cpp) |
 | Stage1 队列 | 领取任务、处理任务状态、finished、源行改写及跨阶段交接 | [main.cpp](../../src/main.cpp) |
-| CUDA Stage1 | CGBN 曲线批处理、实际设备资源、分档和点乘 | [Montgomery](../../src/ecm/backend/cuda/stage1/montgomery/)、[Edwards](../../src/ecm/backend/cuda/stage1/edwards/) |
-| CPU Stage1 | 完整 CPU 执行流程与 Montgomery/Edwards 算术 | [CPU 后端](../../src/ecm/backend/cpu/stage1/) |
-| OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [opencl_ecm_entry.cpp](../../src/ecm/backend/opencl/stage1/montgomery/entry.cpp) |
+| CUDA Stage1 | CGBN 曲线批处理、实际设备资源、分档和点乘 | [Montgomery](../../src/ecm/montgomery_stage1/cuda/)、[Edwards](../../src/ecm/edwards_stage1/cuda/) |
+| CPU Stage1 | 完整 CPU 执行流程与 Montgomery/Edwards 算术 | [Montgomery](../../src/ecm/montgomery_stage1/cpu/)、[Edwards](../../src/ecm/edwards_stage1/cpu/) |
+| OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [engine.cpp](../../src/ecm/montgomery_stage1/opencl/engine.cpp) |
 | Stage2 应用 | 配置、CLI、查询/调优/父任务/子进程模式和退出 | [main](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp) |
-| Stage2 服务 | 唯一父任务循环、完整曲线 worker、规划与调优协作 | [task.cpp](../../src/ecm/service/stage2/task.cpp)、[planning](../../src/ecm/service/planning/stage2.cpp) |
-| 进程适配 | 曲线子进程的启动、pipe、Job、停止与寿命 | [stage2_curve_process.cpp](../../src/ecm/platform/process/stage2_curve_process.cpp) |
-| CUDA Stage2 | 点生成、多项式树、NTT、归约、下降、GCD | [模块职责](STAGE2.md#cuda-模块边界)、[engine.cpp](../../src/ecm/backend/cuda/stage2/engine.cpp) |
-| CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [ecm_cpu_stage2_main.cpp](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[GW 后端](../../src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.cpp) |
+| Stage2 任务 | 唯一父任务循环、完整曲线 worker、规划与调优协作 | [task.cpp](../../src/ecm/stage2/task.cpp)、[planning](../../src/ecm/stage2/planning/planning.cpp) |
+| 进程适配 | 曲线子进程的启动、pipe、Job、停止与寿命 | [process.cpp](../../src/ecm/stage2/process.cpp) |
+| CUDA Stage2 | 点生成、多项式树、NTT、归约、下降、GCD | [模块职责](STAGE2.md#cuda-模块边界)、[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp) |
+| CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [ecm_cpu_stage2_main.cpp](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[GW 后端](../../src/ecm/stage2/cpu/gwpoly.cpp) |
 | GUI | App 绘制/交互；Controller 编排 worker；WorkerProc 管理本机进程 | [GUI](../../src/ecm/application/gui/) |
 | 工具 | 构建、参考计算、数据集、计时、剖析和图表 | [tools](../../tools/) |
 
@@ -22,56 +22,52 @@
 
 生产 Stage2 源码独立于 `tools/experiments/cuda/stage2_tree/` 实验引擎；开发 wrapper 位于该目录的 `worker.cu`。实验树、BSGS、NTT 变体和 Tensor 候选均使用独立源组，生产闭包拒绝实验和测试目录。具体职责及探针接口见 [Stage2 模块边界](STAGE2.md#cuda-模块边界)。
 
-生产 giant chain 核在 `src/ecm/backend/cuda/stage2/device/giant_chain.cuh`；Stage2 主机流程、算术和 NTT 的依赖方向见 [模块边界](STAGE2.md#cuda-模块边界)。G 根树的分块空位布局和压缩请求形状由 `src/ecm/core/stage2/ecm_stage2_giant_tree.h` 定义。它们分别服务点生成和根多项式调度，F 树及其有序下降仍由原布局控制。
+生产 giant chain 核在 `src/ecm/stage2/cuda/device/giant_chain.cuh`；Stage2 主机流程、算术和 NTT 的依赖方向见 [模块边界](STAGE2.md#cuda-模块边界)。G 根树的分块空位布局和压缩请求形状由 `src/ecm/stage2/giant_tree.h` 定义。它们分别服务点生成和根多项式调度，F 树及其有序下降仍由原布局控制。
 
 `ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/ecm/application/configuration/ecm_expr.cpp)与 [worktodo 读写](../../src/io/worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在 [cuda_sources.cmake](../../tools/build/internal/cuda_sources.cmake) 中维护，由根 CMake 消费；不同后端仍分别编译这些源文件。
 
-CUDA 实现集中在 `src/ecm/backend/cuda/`：Stage1 按曲线组织主机实现、设备算法及独立实例；可选 PRAC 属于 Montgomery 私有家族。发射头、CGBN 类型和 dispatch/tiers.def 为私有实现。公开请求与选择合同在 include/ecm/service 和 include/ecm/core；实际后端准备/执行合同留在 service/stage1 私有头，应用只在组装处消费。模块职责和位宽边界以 [Stage1](STAGE1.md#cuda-模块边界) 为准。
+Stage1 按曲线阶段组织，CPU/CUDA/OpenCL 实现在各自曲线目录下；共有任务、执行合同、标量、选择与进度位于 `stage1/`。`stage2/` 集中任务、输入、规划、进程及 CPU/CUDA 续算。`cpu/`、`cuda/`、`opencl/` 只保留实际跨阶段或跨曲线的技术支持；没有第二套隐藏的阶段执行流程。公开请求与选择合同在 `include/ecm/stage1/`，阶段私有协作头留在 `src/ecm/stage1/`。模块职责和位宽边界见 [Stage1](STAGE1.md#cuda-模块边界)。
 
 ## 目录与依赖
 
 Stage1 入口位于 `src/main.cpp`，主机输入与队列读写位于 `src/io/`，备份与 P95 同步位于 `src/sync/`；计算与后端实现位于 `src/ecm/`；公开接口在 `include/ecm/` 的对应家族。私有协作头、模板、设备发射和 OpenCL 运行资源均留在 src，不为每个实现文件制造一个公开头。
 
-目录最多五层，最深文件属于曲线实例组或 Montgomery PRAC；共享 Edwards GMP 构造位于 `core/curve/`。当前配置解析、执行兼容声明、规划与阶段协作文件直接放在所属家族；兼容函数、旧格式读取和诊断接口仍按各自合同保留。生成物、设备实现、第三方引擎与 OpenCL 资源目录各自表达维护来源或实现职责。
+共享 Edwards GMP 构造位于 `curve/`，供 Stage1、Stage2 和群阶计算复用。GKL 构造保留为实验资料，不接入生产曲线选择。生成物、设备实现、第三方引擎和 OpenCL 资源目录分别表达维护来源或实现职责。
 
 ```text
 include/ecm/
-├── application/configuration/       runtime.h：已解析运行环境
-├── core/{stage1,stage2}/            选择、标量、概率模型
-├── service/{stage1,execution}/       请求/拥有结果、链接后端接缝
-├── io/                             曲线进度、保存范围、结果发布
-└── platform/                       日志、进度、指纹、版本、process 请求
+├── integer.h                       共享 GMP 拥有类型
+├── stage1/                         请求/拥有结果、选择、标量、进度、链接后端接缝
+├── stage2/                         概率模型、曲线进程请求
+├── application/configuration/      runtime.h：已解析运行环境
+├── io/                             保存范围、恢复容器、结果发布
+└── platform/                       日志、停止、指纹和版本
 src/
 ├── main.cpp                        Stage1 模式、唯一任务循环与收尾顺序
-├── io/                             输入、文件、最终save、恢复容器、结果和格式适配
+├── io/                             输入、文件、命名、最终save、恢复容器和结果
 ├── sync/                           备份、P95 和 Stage2 持久交接
-└── ecm/                            计算、后端及阶段协作（下列展开）
-
-src/ecm/
-├── application/
-│   ├── cli/                        群阶诊断
-│   ├── configuration/              生成配置、表达式和 Stage2 身份
-│   ├── cuda_stage2/                CUDA Stage2 CLI 入口
-│   ├── cpu_stage2/                 CPU Stage2 CLI 入口
-│   └── gui/                        App、Controller、WorkerProc 和 GUI 模型
-├── service/
-│   ├── stage1/                     task、拥有权、准备与唯一执行分派
-│   ├── execution/                  libecm/C 执行类型与兼容声明，非第二个执行器
-│   ├── stage2/                     父任务、曲线 worker、输入与私有合同
-│   └── planning/                   Stage2 方案、校准、profile 与测量
-├── core/{curve,stage1,stage2}/      共享曲线构造、平台中立算法和数据模型
-├── backend/
-│   ├── cpu/{stage1,stage2,arithmetic}/
-│   ├── cuda/{stage1,stage2,ntt,arithmetic,planning,runtime,dispatch}/
-│   └── opencl/{stage1,arithmetic,runtime,resources,diagnostics}/
-└── platform/                       停止、哈希、日志、进程与轻量默认值
+└── ecm/
+    ├── application/                CLI入口、配置和GUI
+    ├── stage1/                     共同任务、合同、选择、标量、准备与进度
+    ├── edwards_stage1/{cpu,cuda}/   Edwards完整流程和设备实现
+    ├── montgomery_stage1/          Montgomery完整流程，共享param分派
+    │   └── {cpu,cuda,opencl}/
+    ├── stage2/                     任务、输入、几何、进程与控制台
+    │   └── {planning,cpu,cuda}/     纯主机规划和各后端续算
+    ├── curve/                      跨阶段共享曲线构造
+    ├── group_order/                群阶数学
+    ├── diagnostics/                PARI/GP诊断与独立host
+    ├── cpu/                        共享IFMA算术
+    ├── cuda/                       共享算术、NTT、运行时与tiers
+    ├── opencl/                     运行时、算术、诊断与源码资源包
+    └── platform/                   停止、哈希、日志和生成默认值
 ```
 
 `src/io` 保持平铺：files 提供路径、持久写入、短锁与消费租约；save 管理最终文本格式、校验、批量发布及连续 Range；results 管理结果格式与发布；stage1_checkpoint 和 stage2_checkpoint 分别管理恢复容器与曲线进度。prime95/prime95_save 是外部队列与二进制格式适配，exponent_cache 遵循可重建的可选失败政策，json 提供共享的严格解析实现。只为生成物保留 generated 子目录。
 
-`src/sync` 的 p95 集中冻结 intent、文件交付、AID 处理、worktodo.add 发送及恢复；stage2 管理独立的本地交接 outbox；backup 只负责备份。两种队列格式不混用，短编辑锁与消费租约保持不同类型和粒度。后端数学 checkpoint codec 留在 backend，成本模型归 planning。
+`src/sync` 的 p95 集中冻结 intent、文件交付、AID 处理、worktodo.add 发送及恢复；stage2 管理独立的本地交接 outbox；backup 只负责备份。两种队列格式不混用，短编辑锁与消费租约保持不同类型和粒度。数学 checkpoint codec 留在对应曲线与后端目录，成本模型归 `stage2/planning`。
 
-顶层按职责，后端内部按技术再按曲线。CPU/CUDA/OpenCL 分别实现实际支持的曲线组合；没有统一所有点运算的虚函数层。算法差异、状态域、实例和 checkpoint 载荷仍属于具体后端。普通 CXX 的主机数学、文件编码和显示可独立修改；实际 CUDA 分配、发射、同步和回读继续依赖 CUDA。
+计算目录按曲线阶段聚合，每个曲线阶段内部再按执行技术组织。CPU/CUDA/OpenCL 分别实现实际支持的曲线组合；没有统一所有点运算的虚函数层。算法差异、状态域、实例和 checkpoint 载荷仍属于具体后端。普通 CXX 的主机数学、文件编码和显示可独立修改；实际 CUDA 分配、发射、同步和回读继续依赖 CUDA。
 
 main → parse_cli → read_config（一次启动快照）→ normalize_settings → direct / live worktodo → 冻结任务 → main 选择执行入口 → task 直接调用完整后端流程。`src/io/cli.cpp` 生成 `ParsedCli`：每次出现的选项立即转换和校验，保存 canonical presence、原始拼写与 argv 位置，不安装运行时单例或写文件。`config.cpp` 校验所有显式计算值，包括其他 worker 和被覆盖的值；`ParsedConfig` 保留原文位置、已解析的 worker scope、选择枚举和 affinity。生成绑定的 `copy` 投影已解析字段及显式标志，不再解析同一文本。
 
@@ -91,7 +87,7 @@ main → parse_cli → read_config（一次启动快照）→ normalize_settings
 
 资源身份解析绝对路径和已有父目录别名，再处理剩余路径；Windows 多资源使用大小写无关的固定顺序。最终文件是符号链接或具有多个硬链接时拒绝写入并提示使用实际路径，避免原子替换使别名与 gate 分离。internal/submission 等不同用途不得解析为同一资源。结果双文件按稳定身份排序取锁；P95 源 save 释放后再取得目标 save；outbox 在内部取得 queue edit，计算期间不持有这些短 gate。
 
-取得锁使用单调时钟：默认最多等待 5 秒；worktodo.add 发布最多 3 秒，GUI 编辑和低层 P95 pending gate 立即失败。多个资源的等待预算分别计算，不代表一次任务总上限；非占用类 I/O 错误立即返回，诊断包含资源、等待时间和系统错误码。Windows 短 gate 使用内核独占句柄并在关闭时删除载体；POSIX 使用 flock 并保留稳定载体，禁止 unlink 后重新创建竞争 inode。不能根据 mtime 或年龄抢占仍由活跃进程持有的锁。
+取得锁使用单调时钟：默认最多等待 5 秒；worktodo.add 发布最多 3 秒，GUI 编辑和低层 P95 pending gate 立即失败。多个资源的等待预算分别计算，不代表一次任务总上限。Windows 的共享冲突、锁定冲突和访问拒绝按预算重试：零访问权限的属性观察句柄可能使已关闭的载体暂时处于待删除状态，此时也返回访问拒绝。真正的权限错误仍有界失败并保留原错误码；其他不可重试的 I/O 错误立即返回。诊断包含资源、等待时间和系统错误码。Windows 短 gate 使用内核独占句柄并在关闭时删除载体；POSIX 使用 flock 并保留稳定载体，禁止 unlink 后重新创建竞争 inode。不能根据 mtime 或年龄抢占仍由活跃进程持有的锁。
 
 worker `OwnerLease` 和任务 checkpoint 锁属于长期拥有权，分别保持整个消费进程和任务寿命；它们不是每次读取的短锁。共享字节 owner 载体及已有独立 Stage2 worker gate 保持各自生命周期，残留文件名本身不证明仍被占用。P95 的旧 `worktodo.add.lock` 纯 marker 已不参与新协议，不依据其年龄删除或抢占；它与 intent、pending、ready、sending 等业务恢复材料不同。
 

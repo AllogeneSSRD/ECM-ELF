@@ -25,7 +25,7 @@ Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器�
 
 Stage1 local/dev 默认 `-KernelLayout isolated`，与 release 共用按曲线/param/容器生成的独立编译单元，避免多个大位宽挤在同一组文件形成编译长尾；每个内核及其设备辅助函数仍一起编译。`-KernelLayout grouped` 保留分组备选。local 仍为单架构、压缩、无PTX，不改成发布镜像策略。布局进入构建身份，已有分组缓存不能当成隔离缓存复用；首次切换可指定新的 `-BuildDir build_stage1_local_isolated`，旧目录保留。
 
-位宽唯一清单为 `src/ecm/backend/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/backend/cuda/stage1/montgomery/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
+位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/montgomery_stage1/cuda/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
 
 新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该 worker 测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
 
@@ -210,7 +210,7 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 
 Stage1、Stage2 与 GUI v2 默认采用 PARI DLL → 外部 GP 的诊断顺序；GMP 分析仅显式选择。实际 ECM 运算后端不变。完整本机构建需要准备 `third_party/pari-2.17.3/`；准备命令为 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3目录> --archive <原始源码tar.gz>`，版本和文件摘要由 provenance 校验。
 
-共享助手的 CMake 入口为 `src/ecm/service/diagnostics/`，生成 `ecm_diagnostics_host.exe`。主工程 Stage1/OpenCL/CMake Stage2 的目标自动依赖它；独立 Stage2 队列构建调用同一目标，使用与 worker 一致的 GMP 安装前缀。测试入口为 `tools/build/test/build_diagnostics.ps1 -Build <独立目录>`；可显式构建 `ecm_diagnostics_probe` 进行协议与故障验收。GUI v2 使用相同目标，保留独立的合数输入协调助手 `ecm_group_order_ui.exe`。
+共享助手的 CMake 入口为 `src/ecm/diagnostics/`，生成 `ecm_diagnostics_host.exe`。主工程 Stage1/OpenCL/CMake Stage2 的目标自动依赖它；独立 Stage2 队列构建调用同一目标，使用与 worker 一致的 GMP 安装前缀。测试入口为 `tools/build/test/build_diagnostics.ps1 -Build <独立目录>`；可显式构建 `ecm_diagnostics_probe` 进行协议与故障验收。GUI v2 使用相同目标，保留独立的合数输入协调助手 `ecm_group_order_ui.exe`。
 
 本地输出附带助手、GMP、PARI DLL、`pari-data/seadata`、许可证和 `diagnostics-source.zip`，并生成逐文件及源码摘要的 `diagnostics_build_manifest.json`。Stage1/Stage2 发布打包核对该冻结身份，再将完整依赖纳入 ZIP，支持受限的相对目录路径；不打包用户配置、队列或日志。PARI 原始源码、配置头文件及 SEA 数据声明随包保留；没有 gp.exe。只复制计算 EXE 不构成完整的 DLL 诊断部署。
 

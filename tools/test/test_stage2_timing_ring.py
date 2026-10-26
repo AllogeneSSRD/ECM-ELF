@@ -11,7 +11,7 @@ from stage2_native_source import units
 from test_cuda_p2_structure import balanced, mask
 
 ROOT = Path(__file__).resolve().parents[2]
-STAGE2 = ROOT/'src/ecm/backend/cuda/stage2'
+STAGE2 = ROOT/'src/ecm/stage2/cuda'
 
 
 def main():

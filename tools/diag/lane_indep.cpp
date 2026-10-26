@@ -2,7 +2,7 @@
  * Computes the same lane-0 product three times with different garbage in lanes
  * 1..7 and compares lane 0 only.  A SIMD-8 kernel must be lane independent.
  */
-#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <string.h>
