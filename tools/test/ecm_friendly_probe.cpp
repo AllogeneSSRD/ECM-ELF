@@ -1,6 +1,6 @@
 // Native GMP research probe: production Atkin-Morain vs GKL(iv).
 // No production CLI/save dispatch is changed by linking this standalone probe.
-#include "ecm/core/curve/ecm_gkl_iv_curve.h"
+#include "ecm/curve/gkl_iv.h"
 #include "ecm/platform/program_version.h"
 #include <array>
 #include <chrono>

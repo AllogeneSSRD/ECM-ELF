@@ -17,7 +17,7 @@ $gpuCommand="nvcc -std=c++17 -O2 -arch=$Arch --pre-include=stdint.h -Xcompiler /
     "-I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/ecm/backend/cuda -I src "+
     "-c tools/test/edwards_gpu_point_probe.cu -o `"$gpuObj`""
 $cpuCommand="cl /nologo /O2 /std:c++17 /EHsc /utf-8 /I third_party/gmp-zen3/dist/include "+
-    "/I src /c src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp /Fo:`"$cpuObj`""
+    "/I src /c src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp /Fo:`"$cpuObj`""
 $linkCommand="nvcc -arch=$Arch `"$gpuObj`" `"$cpuObj`" -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`""
 '' | Set-Content -LiteralPath $log
 foreach($command in @($gpuCommand,$cpuCommand,$linkCommand)){
@@ -27,8 +27,8 @@ foreach($command in @($gpuCommand,$cpuCommand,$linkCommand)){
     if($LASTEXITCODE -ne 0){Get-Content $log -Tail 40;throw 'Edwards GPU point probe build failed'}
 }
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
-$sources=@('src/ecm/backend/cuda/stage1/edwards/point.cuh','tools/test/edwards_gpu_point_probe.cu',
-           'src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp','src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h',
+$sources=@('src/ecm/edwards_stage1/cuda/point.cuh','tools/test/edwards_gpu_point_probe.cu',
+           'src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp','src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h',
            'tools/build/test/build_edwards_gpu_point_probe.ps1')
 $hashes=[ordered]@{}
 foreach($source in $sources){$hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash}

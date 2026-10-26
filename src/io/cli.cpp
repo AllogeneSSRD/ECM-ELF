@@ -1,7 +1,7 @@
 #include "cli.h"
 #include "config_format.h"
 #include "ecm/platform/program_version.h"
-#include "ecm/service/execution/legacy_gpu.h"
+#include "ecm/stage1/gpu_backend.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>

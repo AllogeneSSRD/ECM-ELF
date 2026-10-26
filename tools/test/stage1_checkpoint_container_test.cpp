@@ -1,7 +1,7 @@
 #include "io/stage1_checkpoint.h"
-#include "ecm/service/stage1/legacy_gpu_checkpoint.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/checkpoint.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/host_math.h"
+#include "ecm/montgomery_stage1/cuda/checkpoint.h"
+#include "../../src/ecm/edwards_stage1/cuda/checkpoint.h"
+#include "../../src/ecm/edwards_stage1/cuda/host_math.h"
 #include "ecm/io/save.h"
 #include "io/stage1_binary.h"
 #include "io/files.h"
@@ -68,13 +68,13 @@ static void edwards(ecm_stage1_checkpoint::Context& checkpoint, const fs::path &
     using namespace ed_gpu_driver;fs::create_directories(dir);
     const auto p=(dir/".e_s1_test.ckpt").string();
     ecm_edwards::Integer n,scalar;
-    std::string identity,payload;uint32_t count=4;
+    std::string identity,payload;uint32_t count=4;uint64_t b1=1000;
     if(!audit.empty()) {
         std::istringstream source(read(audit));std::string line;std::getline(source,line);check(line=="ECM_STAGE1_BATCH_V1","audit V1");
         std::getline(source,identity);source>>count;uint64_t sigma,size;source>>sigma>>size;check(source.get()=='\n',"audit boundary");
         payload.resize(size);source.read(payload.data(),size);check(bool(source),"audit payload");
         std::istringstream data(payload);std::string tag,nh,sh;unsigned window,doubling;
-        data>>tag>>window>>doubling>>nh>>sh;check(tag=="ECM_GPU_EDWARDS_NAF_V2","audit codec");
+        data>>tag>>window>>doubling>>nh>>sh>>b1;check(tag=="ECM_GPU_EDWARDS_NAF_V2" && bool(data),"audit codec");
         check(!mpz_set_str(n.v,nh.c_str(),16) && !mpz_set_str(scalar.v,sh.c_str(),16),"audit GMP values");
     } else {
         mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,127);mpz_sub_ui(n.v,n.v,1);
@@ -88,7 +88,6 @@ static void edwards(ecm_stage1_checkpoint::Context& checkpoint, const fs::path &
         for(unsigned i=0;i<count;++i){old<<initial.sigmas[i]<<' '<<initial.hit[i]<<' '<<hex(initial.factors[i]);for(unsigned j=0;j<9;++j)old<<' '<<hex(initial.state[size_t(i)*9+j]);old<<'\n';}
         payload=old.str();payload+="CHECKSUM "+std::to_string(ecm_io::fingerprint(payload))+'\n';
     }
-    const uint64_t b1=audit.empty()?1000:260000000;
     std::vector<uint64_t> sigmas(count,0);std::vector<std::string> records(count);records[0]=payload;
     write(p,v1(identity,sigmas,records));checkpoint.set_path(p);checkpoint.begin(identity,count,false,0);
     Batch before(count);check(restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false,false,false,-1).restored(),"legacy Edwards restore");

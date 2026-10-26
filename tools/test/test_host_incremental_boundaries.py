@@ -42,17 +42,17 @@ def main():
     probes = [
         ('configuration_read', 'src/io/config_format.h', 'inline bool read_toml('),
         ('configuration_write', 'src/ecm/application/gui/toml_file.cpp', 'bool TomlFile::save('),
-        ('curve_cpu_math', 'src/ecm/backend/cuda/stage1/montgomery/host_math.cpp', 'void to_mpz('),
-        ('sigma_generation', 'src/ecm/service/stage1/preparation.cpp', 'uint64_t random_sigma_u64('),
-        ('curve_parameterization', 'src/ecm/backend/cuda/stage1/edwards/host_math.cpp', 'bool initialize('),
-        ('runtime_selection', 'src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp', 'const char *stage1_algorithm('),
-        ('curve_results', 'src/ecm/service/stage1/execution_contract.cpp', 'void LegacyExecutionResult::validate_curves('),
+        ('curve_cpu_math', 'src/ecm/montgomery_stage1/cuda/host_math.cpp', 'void to_mpz('),
+        ('sigma_generation', 'src/ecm/stage1/preparation.cpp', 'uint64_t random_sigma_u64('),
+        ('curve_parameterization', 'src/ecm/edwards_stage1/cuda/host_math.cpp', 'bool initialize('),
+        ('runtime_selection', 'src/ecm/montgomery_stage1/cuda/host_policy.cpp', 'const char *stage1_algorithm('),
+        ('curve_results', 'src/ecm/stage1/execution_contract.cpp', 'void LegacyExecutionResult::validate_curves('),
         ('checkpoint', 'src/io/stage1_checkpoint.cpp', 'bool Context::State::commit('),
         ('save', 'src/io/save.cpp', 'std::string build_who_field('),
         ('data', 'src/io/results.cpp', 'std::string internal_json('),
         ('result', 'src/io/results.cpp', 'std::string submission_json('),
         ('tune_toml', 'src/ecm/service/planning/ecm_stage2_tune_format.h', 'inline std::string table('),
-        ('screen', 'src/ecm/platform/stage1_progress.cpp', 'std::string line('),
+        ('screen', 'src/ecm/stage1/progress.cpp', 'std::string line('),
     ]
     original = {name:(ROOT/name).read_bytes() for _,name,_ in probes}
     report = dict(complete=False, categories=[], original_sha256={}, builds=[],

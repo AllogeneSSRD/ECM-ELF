@@ -43,11 +43,11 @@
   </section>
 
   <section class="card" id="implementation-result">
-    <h2>实施状态：P0 已通过，目录迁移待完成</h2>
+    <h2>实施状态：P0–P3 已通过，Stage2 迁移待完成</h2>
     <p>基线 Git 6dad3d1 与四个计算程序已冻结，CUDA Stage1 基线 SHA256 为 <code>99bc496d2c2b7fb170e82592acdfaca9a331e9dc838c098fd2b941068c1185b8</code>。源码归档、二进制身份和原始日志位于 <code>data/experiments/ecm_domain_refactor_20261026</code>。</p>
     <p>P0 在真实 Windows 主机夹具中分别两次复现未创建大小写别名晚拒绝、历史校验与复制快照不同。系统调用观察确认旧结果替换前没有显式文件 flush；这是持久合同差异，不是断电丢结果实测。</p>
     <p>修复后通过 25 个任务模式、4 个发布／恢复模式、9 组跨进程 writer 合同、host I/O 与结果批次回归。测试保留真实文件、锁和发布，仅替换调度或故障观察点。原生路径测试需要避开文件系统虚拟化；此前沙箱中路径提前拒绝的启动样本保留，未作为缺陷复现证据。</p>
-    <p>当前只确认 P0；P1–P6、设备算术、Android 及最终版本验收尚未完成。</p>
+    <p>P1–P3 已迁移共同 Stage1、两种曲线的 CPU/CUDA/OpenCL、共享构造、群阶、诊断与停止／日志。保存命名和历史导入归 IO；时钟／TTY 归进度；V5 importer 归 CUDA Montgomery checkpoint；OpenCL 声明和 C 入口归 api/engine。25 个任务模式、4 个发布模式、4 组存储竞态、host I/O、无 SDK 编译、群阶和独立诊断已通过；六种执行组合、64 位 sigma 与冻结基线保存点相同。实际 CUDA 两曲线和 OpenCL PARAM3 停止／恢复通过，旧 V5／Edwards 导入保留原档与全坐标。阶段 CUDA 使用 512 位受限构建，最终全档及 P4–P6 尚未完成。</p>
   </section>
   <section class="card" id="options">
     <h2>组织方案：推荐曲线与阶段组合名</h2>

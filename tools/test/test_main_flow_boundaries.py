@@ -36,7 +36,7 @@ def main():
             # Every exposed family has a corresponding implementation family;
             # header-only models need not invent a same-named .cpp.
             family = path.parent.relative_to(ROOT/'include/ecm')
-            implementation = ROOT/'src'/family if family.parts[0] == 'io' else ROOT/'src/ecm'/family
+            implementation = ROOT/'src'/family if family.parts and family.parts[0] == 'io' else ROOT/'src/ecm'/family
             assert implementation.is_dir(), name
         graph[path] = []
         for inc in re.findall(r'(?m)^\s*#\s*include\s*["<]([^">]+)[">]',
@@ -70,7 +70,7 @@ def main():
         visit(path)
     for old in ('kernels/cuda', 'src/core', 'src/cpu', 'src/cuda', 'src/gui'):
         assert not [p for p in (ROOT/old).rglob('*') if p.is_file()], old
-    task = (ROOT/'src/ecm/service/stage1/task.cpp').read_text(encoding='utf-8-sig')
+    task = (ROOT/'src/ecm/stage1/task.cpp').read_text(encoding='utf-8-sig')
     driver = (ROOT/'src/main.cpp').read_text(encoding='utf-8-sig')
     assert len(re.findall(r'^TaskResult run_stage1_task\(', task, re.M)) == 1
     assert len(re.findall(r'^static int run_worktodo\(', driver, re.M)) == 1

@@ -42,11 +42,11 @@ using ecm_stage1_app::stage1_task_error;
 
 #include "ecm/application/configuration/ecm_expr.h" /* shared exact integer expression parser */
 #include "ecm/application/configuration/runtime.h"
-#include "ecm/core/stage1/selection.h"
+#include "ecm/stage1/selection.h"
 #include "ecm/platform/logging.h"
 #include "ecm/platform/program_version.h"
-#include "ecm/service/execution/legacy_gpu.h" /* GPU backend seam (OpenCL or CUDA glue) */
-#include "ecm/service/stage1/execution_contract.h"
+#include "ecm/stage1/gpu_backend.h" /* GPU backend seam (OpenCL or CUDA glue) */
+#include "ecm/stage1/execution_contract.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
 #include "io/worktodo.h"
@@ -59,12 +59,12 @@ using ecm_stage1_app::stage1_task_error;
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
 // Application assembly still selects the CPU default NAF window.
-#include "ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
+#include "ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
 
-#include "ecm/service/stage1/execution.h"
-#include "ecm/service/stage1/preparation.h"
-using ecm_stage1::stage1_prefixed_save;
-using ecm_stage1::stage1_save_prefix;
+#include "ecm/stage1/execution.h"
+#include "ecm/stage1/preparation.h"
+using ecm_save::prefixed_name;
+using ecm_stage1::save_naming;
 
 using ecm_stage1::FailureSource;
 using ecm_stage1::run_stage1_task;
@@ -713,7 +713,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             auto actual = opt;
             if (!stage1_save_construction(task.save_name, actual, error))
                 continue;
-            const auto typed = stage1_prefixed_save(task.save_name, stage1_save_prefix(actual));
+            const auto typed = prefixed_name(task.save_name, save_naming(actual).curve);
             auto file = resolve_rel_local(exe_dir, typed);
             const auto legacy = resolve_rel_local(exe_dir, task.save_name);
             if ((!std::filesystem::exists(file) || std::filesystem::file_size(file) == 0) &&

@@ -17,22 +17,22 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Ra
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output ".gitignore"),"*`n")
-$sources=@('src/ecm/service/stage1/execution_contract.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/edwards/workflow.cpp','src/ecm/backend/cpu/stage1/montgomery/workflow.cpp','src/ecm/backend/cpu/stage1/execution_support.cpp')
+$sources=@('src/ecm/stage1/execution_contract.cpp','src/ecm/stage1/preparation.cpp','src/ecm/edwards_stage1/cpu/workflow.cpp','src/ecm/montgomery_stage1/cpu/workflow.cpp','src/ecm/stage1/cpu_support.cpp')
 if($IncludeGpuHost){
-    $sources+=@('src/ecm/service/stage1/execution.cpp',
-        'src/ecm/backend/cuda/stage1/montgomery/workflow.cpp',
-        'src/ecm/backend/cuda/stage1/edwards/workflow.cpp',
-        'src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp',
-        'src/ecm/backend/cuda/stage1/edwards/host_math.cpp',
-        'src/ecm/backend/cuda/stage1/edwards/runtime.cpp')
+    $sources+=@('src/ecm/stage1/execution.cpp',
+        'src/ecm/montgomery_stage1/cuda/workflow.cpp',
+        'src/ecm/edwards_stage1/cuda/workflow.cpp',
+        'src/ecm/edwards_stage1/cuda/checkpoint.cpp',
+        'src/ecm/edwards_stage1/cuda/host_math.cpp',
+        'src/ecm/edwards_stage1/cuda/runtime.cpp')
 }
 if($IncludeMontgomeryHost){
-    $sources+=@('src/ecm/backend/cuda/stage1/montgomery/host_math.cpp',
-        'src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp',
-        'src/ecm/backend/cuda/stage1/montgomery/output.cpp',
-        'src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
+    $sources+=@('src/ecm/montgomery_stage1/cuda/host_math.cpp',
+        'src/ecm/montgomery_stage1/cuda/checkpoint.cpp',
+        'src/ecm/montgomery_stage1/cuda/output.cpp',
+        'src/ecm/montgomery_stage1/cuda/host_policy.cpp')
 }
-if($IncludeOpenCLHost){$sources+='src/ecm/backend/opencl/stage1/montgomery/workflow.cpp'}
+if($IncludeOpenCLHost){$sources+='src/ecm/montgomery_stage1/opencl/workflow.cpp'}
 if($IncludeQueueHost){
     $sources+=@('src/io/normalize.cpp','src/ecm/application/cli/group_order.cpp',
         'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/io/files.cpp')

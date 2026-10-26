@@ -4,7 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 #include "ecm/io/stage2_checkpoint.h"
-#include "../../src/ecm/platform/ecm_stage2_logging.h"
+#include "../../src/ecm/platform/compute_log.h"
 #include <iostream>
 
 int main(int argc,char **argv) {

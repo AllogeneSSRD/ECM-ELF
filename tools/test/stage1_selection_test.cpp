@@ -1,4 +1,4 @@
-#include "ecm/core/stage1/selection.h"
+#include "ecm/stage1/selection.h"
 
 #include <cstdlib>
 #include <iostream>

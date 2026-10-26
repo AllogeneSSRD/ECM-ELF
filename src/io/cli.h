@@ -1,7 +1,7 @@
 #pragma once
 #include "ecm/application/configuration/runtime.h"
-#include "ecm/core/stage1/selection.h"
-#include "ecm/service/diagnostics/order_analysis.h"
+#include "ecm/stage1/selection.h"
+#include "ecm/diagnostics/order_analysis.h"
 #include <map>
 #include <vector>
 

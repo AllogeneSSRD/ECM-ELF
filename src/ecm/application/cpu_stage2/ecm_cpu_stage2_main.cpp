@@ -3,8 +3,8 @@
 #include <ecm.h>
 #include "ecm/io/save.h"
 #include "ecm/io/results.h"
-#include "ecm/core/curve/ecm_edwards_curve.h"
-#include "ecm/platform/stage1_stop.h"
+#include "ecm/curve/edwards.h"
+#include "ecm/platform/stop.h"
 #include "../configuration/generated/ecm_config_generated.h"
 #include <chrono>
 #include <charconv>

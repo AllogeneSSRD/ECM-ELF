@@ -1,7 +1,7 @@
 #include "io/normalize.h"
 #include "ecm/application/configuration/ecm_expr.h"
-#include "ecm/service/execution/legacy_gpu.h"
-#include "ecm/service/stage1/preparation.h"
+#include "ecm/stage1/gpu_backend.h"
+#include "ecm/stage1/preparation.h"
 #include "io/cli.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
@@ -128,8 +128,8 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
                                                "B2 (integer >=0 for saved Stage2 handoff)");
             out.save_file = resolve_rel_local(
                 out.options.persistence.tmp_dir,
-                ecm_stage1::mont_format_save_name(out.options.persistence.save_name_pattern,
-                                                  out.modulus, out.b1, &out.options));
+                ecm_save::format_name(out.options.persistence.save_name_pattern,
+                                                  out.modulus, out.b1, ecm_stage1::save_naming(out.options)));
             queue.stage2_line = saved_stage2_line(task, out.save_file);
             queue.published_line = queue.stage2_line;
             queue.published_line.replace(0, 10, "ECMSTAGE1=");
@@ -145,8 +145,8 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
             if (!stage1_save_construction(task.save_name, out.options, error))
                 return false;
             out.save_file = resolve_rel_local(
-                exe, ecm_stage1::stage1_prefixed_save(task.save_name,
-                                                      ecm_stage1::stage1_save_prefix(out.options)));
+                exe, ecm_save::prefixed_name(task.save_name,
+                                                      ecm_stage1::save_naming(out.options).curve));
             const auto original = resolve_rel_local(exe, task.save_name);
             if (out.save_file != original)
                 out.options.persistence.legacy_save_source = original;

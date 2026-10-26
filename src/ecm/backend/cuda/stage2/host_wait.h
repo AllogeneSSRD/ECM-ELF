@@ -1,6 +1,6 @@
 #pragma once
 #include "host_wait_policy.h"
-#include "../../../platform/ecm_stage2_logging.h"
+#include "../../../platform/compute_log.h"
 #include <cuda_runtime_api.h>
 #include <chrono>
 #include <cstdlib>

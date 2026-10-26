@@ -8,7 +8,7 @@ $vc=Resolve-EcmVcEnvironment $cuda
 $out=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
 if(Test-Path $out){throw 'Use a fresh evidence directory'}
 New-Item -ItemType Directory $out | Out-Null
-$headers='#include "'+($repo+'/src/ecm/platform/ecm_stage2_logging.h').Replace('\','/')+'"'+"`n"+
+$headers='#include "'+($repo+'/src/ecm/platform/compute_log.h').Replace('\','/')+'"'+"`n"+
     '#include "'+($repo+'/src/ecm/backend/cuda/runtime/device_memory_ledger.h').Replace('\','/')+'"'+"`n"
 foreach($name in @('a','b')){[IO.File]::WriteAllText((Join-Path $out "$name.cpp"),$headers+"int $name(){stage2_memory::Session session;stage2_memory::fixture();return 0;}`n")}
 [IO.File]::WriteAllText((Join-Path $out 'main.cpp'),"int a();int b();int main(){return a()+b();}`n")

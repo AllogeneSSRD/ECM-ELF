@@ -12,7 +12,7 @@
  *
  * usage: ecm_edwards_standalone <N-decimal> <sigma> <B1> [naf_w]
  * ------------------------------------------------------------------------- */
-#include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
+#include "../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
 
 #include <gmp.h>
 #include <stdio.h>

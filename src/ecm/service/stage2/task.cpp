@@ -7,7 +7,7 @@
 #include "../../backend/cuda/stage2/host_policy.h"
 #include "../../application/configuration/stage2_identity.h"
 #include "../../platform/process/stage2_curve_process.h"
-#include "../../platform/ecm_stage2_logging.h"
+#include "../../platform/compute_log.h"
 #include "../../core/stage2/ecm_stage2_modulus.h"
 #include "ecm_stage2_factorize.h"
 #include "ecm/io/stage2_checkpoint.h"

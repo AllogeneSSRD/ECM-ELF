@@ -1,5 +1,5 @@
-#include "ecm/service/stage1/task.h"
-#include "../../src/ecm/service/stage1/execution_contract.h"
+#include "ecm/stage1/task.h"
+#include "../../src/ecm/stage1/execution_contract.h"
 #include "io/stage1_checkpoint.h"
 #include "io/stage1_binary.h"
 #include "ecm/io/save.h"

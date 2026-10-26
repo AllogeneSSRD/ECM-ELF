@@ -1,5 +1,5 @@
-#include "ecm/backend/cpu/stage1/montgomery/checkpoint.h"
-#include "ecm/backend/opencl/stage1/montgomery/checkpoint.h"
+#include "ecm/montgomery_stage1/cpu/checkpoint.h"
+#include "ecm/montgomery_stage1/opencl/checkpoint.h"
 #include "io/stage1_checkpoint.h"
 
 #include <filesystem>

@@ -1,4 +1,4 @@
-#include "../../src/ecm/core/curve/ecm_edwards_curve.h"
+#include "../../src/ecm/curve/edwards.h"
 #include <fstream>
 #include <iterator>
 #include <stdexcept>

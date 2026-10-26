@@ -7040,7 +7040,7 @@
     ]
   },
   "implementation": {
-    "phase": "P0 passed; P1 pending",
+    "phase": "P0-P3 passed; P4 pending",
     "evidence": "data/experiments/ecm_domain_refactor_20261026",
     "baseline_native_failures": {
       "alias_save_internal": 2,
@@ -7054,6 +7054,39 @@
       "host_io": true,
       "result_batch": true
     },
-    "platform_note": "Native path/locking tests run outside filesystem virtualization; sandbox bootstrap failures were retained but not counted as bug evidence."
+    "platform_note": "Native path/locking tests run outside filesystem virtualization; sandbox bootstrap failures were retained but not counted as bug evidence.",
+    "p1_passed": {
+      "task_modes": 25,
+      "publication_modes": 4,
+      "storage_concurrency_groups": 4,
+      "host_io": true,
+      "no_cuda_sdk_host_compile": true,
+      "group_order_selftest": true,
+      "diagnostics_build": true,
+      "include_graph": true
+    },
+    "p2_passed": {
+      "restricted_cuda_build": "build_ecm_domain_p2_smoke",
+      "math_modes": [
+        "cpu_ed",
+        "gpu_ed"
+      ],
+      "baseline_equivalence": true,
+      "host_module_functions": 8
+    },
+    "p3_passed": {
+      "restricted_cuda_build": "build_ecm_domain_p3_smoke",
+      "opencl_build": "build_ecm_domain_p3_opencl",
+      "baseline_math_modes": 6,
+      "sigma64_modes": 2,
+      "real_stop_resume": [
+        "CUDA Montgomery",
+        "CUDA Edwards",
+        "OpenCL PARAM3"
+      ],
+      "legacy_container_contract": true,
+      "no_sdk_host_compile": true,
+      "include_graph": true
+    }
   }
 }

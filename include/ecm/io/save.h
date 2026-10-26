@@ -1,10 +1,25 @@
 #pragma once
-#include "ecm/core/integer.h"
+#include "ecm/integer.h"
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace ecm_save {
+// Filename policy data only: IO does not depend on Stage1Options.
+struct Naming {
+    std::string curve = "m0";
+    bool target_kbnc = false;
+    uint64_t target_n = 0;
+    bool mersenne = false;
+};
+std::string curve_prefix(bool edwards, int param);
+std::string prefixed_name(const std::string&, const std::string& prefix);
+std::string format_name(const std::string& pattern, mpz_srcptr, double b1,
+                        const Naming& naming = {});
+// Import one validated snapshot into an empty destination. param=-1 is Edwards.
+// Preserve the original source and any history already present at the destination.
+void copy_history(const std::string& source, const std::string& destination, int param);
+
 // METHOD records, not physical lines. Records are captured under the save lock;
 // recovery/deduplication may refer to an already published contiguous range.
 struct Range {

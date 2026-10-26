@@ -84,7 +84,7 @@ def main():
     for file,body in [
         (ROOT/'tools/experiments/bad.cuh','#include "../../src/ecm/backend/cuda/stage2/scale_plain.cuh"'),
         (ROOT/'tools/test/bad.cu','#include "../experiments/cuda/ntt_variants/main.cu"'),
-        (ROOT/'tools/test/bad.cu','#include "../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl"')]:
+        (ROOT/'tools/test/bad.cu','#include "../../src/ecm/edwards_stage1/cuda/edwards_runtime.inl"')]:
         try:check_boundary(file,body)
         except AssertionError:rejected+=1
     assert rejected==3

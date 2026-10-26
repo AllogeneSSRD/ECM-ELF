@@ -50,10 +50,10 @@ def main():
     assert structure(old(folder+'ecm_result_submission.h'),'struct Submission {','\n};')==structure(public,'struct Submission {','\n};')
     assert structure(old(folder+'ecm_submission_writer.h'),'struct SubmissionLock {','\n};')==structure(impl,'struct SubmissionLock {','\n};')
     assert structure(old(folder+'ecm_submission_writer.h'),'struct SubmissionEntry {','};')==structure(impl,'struct SubmissionEntry {','};')
-    expected=body(old('src/ecm/service/stage1/task.cpp'),'stage1_results_complete').replace('opt.persistence.results_file','path')
+    expected=body(old('src/ecm/stage1/task.cpp'),'stage1_results_complete').replace('opt.persistence.results_file','path')
     assert body(impl,'contains_stage1_curves')==expected
-    assert 'stage1_results_complete' not in read('src/ecm/service/stage1/task.cpp')
-    for name in ['src/ecm/backend/cuda/stage1/montgomery/workflow.cpp','src/ecm/backend/opencl/stage1/montgomery/workflow.cpp','src/ecm/backend/cuda/stage1/edwards/workflow.cpp']:
+    assert 'stage1_results_complete' not in read('src/ecm/stage1/task.cpp')
+    for name in ['src/ecm/montgomery_stage1/cuda/workflow.cpp','src/ecm/montgomery_stage1/opencl/workflow.cpp','src/ecm/edwards_stage1/cuda/workflow.cpp']:
         s=read(name);assert 'ecm_results::contains_stage1_curves(opt.persistence.results_file,' in s
     assert 'SubmissionLock' not in public and not re.search(r'#\s*include[^\n]*(?:windows|src/|cuda|cgbn)',public)
     assert not re.search(r'inline |std::ofstream|std::ifstream|directory_iterator|mpz_gcd\(|WriteFile\(',public)

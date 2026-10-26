@@ -2,6 +2,7 @@
 #include <memory>
 #ifdef _WIN32
 #include <direct.h>
+#include <io.h>
 #else
 #include <sys/stat.h>
 #endif
@@ -450,3 +451,21 @@ void OwnerLease::release() noexcept {
     state_ = nullptr;
 }
 } // namespace ecm_queue
+
+namespace ecm_io {
+bool ensure_dir(const std::string &dir) {
+    if (dir.empty()) return true;
+#ifdef _WIN32
+    if (_mkdir(dir.c_str()) == 0) return true;
+#else
+    if (mkdir(dir.c_str(), 0777) == 0) return true;
+#endif
+    // Preserve the legacy existence-only fallback, including existing non-directories.
+#ifdef _WIN32
+    return _access(dir.c_str(), 0) == 0;
+#else
+    return access(dir.c_str(), 0) == 0;
+#endif
+}
+
+}

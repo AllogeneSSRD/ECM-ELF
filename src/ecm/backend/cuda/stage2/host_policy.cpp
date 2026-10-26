@@ -1,7 +1,7 @@
 #include "host_policy.h"
 #include <cuda_runtime_api.h>
 #include "../../../service/planning/ecm_stage2_cost_profile.h"
-#include "../../../platform/ecm_stage2_logging.h"
+#include "../../../platform/compute_log.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>

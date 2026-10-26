@@ -1,6 +1,6 @@
-#include "../../src/ecm/backend/cuda/stage1/edwards/api.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/naf.h"
-#include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
+#include "../../src/ecm/edwards_stage1/cuda/api.h"
+#include "../../src/ecm/edwards_stage1/cuda/naf.h"
+#include "../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
 #include "ecm/io/save.h"
 #include <cstdio>
 #include <cstdlib>

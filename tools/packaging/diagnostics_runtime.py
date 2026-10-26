@@ -5,7 +5,7 @@ from gmp_payload import distribution
 ROOT=Path(__file__).resolve().parents[2]
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def sources():
-    roots=['src/ecm/service/diagnostics','src/ecm/core/group_order','src/ecm/core/curve','src/ecm/storage/results','include/ecm']
+    roots=['src/ecm/diagnostics','src/ecm/group_order','src/ecm/curve','src/ecm/storage/results','include/ecm']
     files={p for root in roots for p in (ROOT/root).rglob('*') if p.is_file()}
     files.update(ROOT/p for p in ['LICENSE','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1','tools/test/diagnostics_probe.cpp'])
     return sorted(files)
@@ -46,7 +46,7 @@ def freeze(binary,gmp,pari,without):
         for name in ['include/gmp.h','lib/gmp.lib','bin/gmp-10.dll']:
             out.write(gmp/name,'build-dependencies/gmp/'+name)
         out.writestr('SOURCE-BUILD.txt','Rebuild the diagnostic host from this extracted source root on Windows x64:\n'
-            'cmake -S src/ecm/service/diagnostics -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release -DECM_DIAGNOSTICS_LOCAL_PARI=OFF -DECM_DIAGNOSTICS_GMP_ROOT="<absolute-source-root>/build-dependencies/gmp"\n'
+            'cmake -S src/ecm/diagnostics -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release -DECM_DIAGNOSTICS_LOCAL_PARI=OFF -DECM_DIAGNOSTICS_GMP_ROOT="<absolute-source-root>/build-dependencies/gmp"\n'
             'cmake --build build\n'
             'This builds without bundling PARI. To execute PARI, copy the distributed libpari.dll and pari-data/ beside the rebuilt host, or rebuild PARI from the included original archive.\n')
         if not without:

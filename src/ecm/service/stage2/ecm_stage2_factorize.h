@@ -3,7 +3,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include "../diagnostics/order_analysis.h"
+#include "../../diagnostics/order_analysis.h"
 #include <gmp.h>
 #include <filesystem>
 #include <fstream>

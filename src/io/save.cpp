@@ -16,6 +16,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <utility>
 #include <sstream>
 #include <vector>
 
@@ -523,6 +524,145 @@ void validate_p95_batch(const Range& range, mpz_srcptr modulus) {
         if (!unique.insert(sigma).second)
             throw std::runtime_error("duplicate sigma in P95 curve range");
     }
+}
+
+} // namespace ecm_save
+
+namespace ecm_save {
+namespace {
+std::string lower_ascii(std::string text) {
+    for (auto& c : text)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return text;
+}
+}
+
+std::string curve_prefix(bool edwards, int param) {
+    return edwards ? "e" : "m" + std::to_string(param);
+}
+
+std::string prefixed_name(const std::string &name,const std::string &prefix) {
+    const auto file=std::filesystem::path(name);auto leaf=file.filename().string();
+    if(leaf.rfind(prefix+"_",0)==0)return name;
+    const auto lower=lower_ascii(leaf);
+    for(const auto *old:{"ed_","e_","m0_","m2_","m3_"})
+        if(lower.rfind(old,0)==0){leaf.erase(0,std::strlen(old));break;}
+    return (file.parent_path()/(prefix+"_"+leaf)).string();
+}
+
+std::string format_name(const std::string &pattern, const mpz_t N, double B1,
+                                         const Naming& naming) {
+    /* {n} */
+    std::string n_str;
+    {
+        mpz_t t;
+        mpz_init(t);
+        mpz_add_ui(t, N, 1);
+        if (mpz_popcount(t) == 1) n_str = std::to_string((unsigned long)mpz_scan1(t, 0));
+        else                      n_str = std::to_string((unsigned long)mpz_sizeinbase(N, 2));
+        mpz_clear(t);
+    }
+    bool mersenne=false;
+    if(naming.target_kbnc) {
+        n_str=std::to_string(naming.target_n);
+        mersenne=naming.mersenne;
+    } else {
+        ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);mersenne=mpz_popcount(plus.v)==1;
+    }
+    const auto curve=naming.curve;
+    const auto target=mersenne?"m"+n_str:"bit"+std::to_string(mpz_sizeinbase(N,2));
+    /* {b1}: mantissa + 'e' + number of trailing zeros when there are >= 3 of them */
+    std::string b1_str;
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.0f", B1);
+        std::string digits(buf);
+        size_t zeros = 0;
+        while (zeros < digits.size() && digits[digits.size() - 1 - zeros] == '0') zeros++;
+        if (zeros >= 3 && zeros < digits.size())
+            b1_str = digits.substr(0, digits.size() - zeros) + "e" + std::to_string(zeros);
+        else
+            b1_str = digits;
+    }
+    std::string out = pattern;
+    for (size_t p = out.find("{n}"); p != std::string::npos; p = out.find("{n}", p))
+        out.replace(p, 3, n_str);
+    for (size_t p = out.find("{b1}"); p != std::string::npos; p = out.find("{b1}", p))
+        out.replace(p, 4, b1_str);
+    for(const auto &entry:{std::pair<std::string,std::string>{"{curve}",curve},{"{target}",target}})
+        for(size_t p=out.find(entry.first);p!=std::string::npos;p=out.find(entry.first,p))
+            out.replace(p,entry.first.size(),entry.second);
+    if(out.find('{')!=std::string::npos || out.find('}')!=std::string::npos)
+        throw std::runtime_error("unknown save_name_pattern token");
+    // Old custom patterns still receive the mandatory curve/param prefix.
+    out=prefixed_name(out,curve);
+    return out;
+}
+
+} // namespace ecm_save
+
+namespace ecm_save {
+void copy_history(const std::string& legacy_source, const std::string& destination, int param) {
+    if (legacy_source.empty())
+        return;
+    const auto source =
+        ecm_io::resolve_data_path(legacy_source.c_str());
+    const auto target = ecm_io::resolve_data_path(destination.c_str());
+    if (!ecm_io::ensure_parent_dir(target.c_str()))
+        throw std::runtime_error("cannot create prefixed save directory");
+    if ((std::filesystem::exists(target) && std::filesystem::file_size(target)) ||
+        !std::filesystem::exists(source) || !std::filesystem::file_size(source))
+        return;
+    // Validate and publish the same owned snapshot even if a retained source
+    // changes while this task is preparing its new, prefixed destination.
+    const auto bytes = ecm_io::read_file(std::filesystem::u8path(source));
+    std::istringstream input(bytes);
+    std::string line;
+    uint64_t records = 0;
+    const bool ed = param == -1;
+    const auto trim = [](std::string s) {
+        const auto a = s.find_first_not_of(" \r\n\t"), b = s.find_last_not_of(" \r\n\t");
+        return a == s.npos ? std::string{} : s.substr(a, b - a + 1);
+    };
+    while (std::getline(input, line)) {
+        auto text = trim(line);
+        if (text.compare(0, 3, "\xef\xbb\xbf") == 0)
+            text.erase(0, 3);
+        if (text.empty() || text[0] == '#' || text[0] == ';')
+            continue;
+        std::string method, kind = "0";
+        size_t at = 0;
+        while (at < text.size()) {
+            const auto end = text.find(';', at);
+            const auto field = trim(text.substr(at, end == text.npos ? end : end - at));
+            at = end == text.npos ? text.size() : end + 1;
+            const auto eq = field.find('=');
+            if (eq == field.npos)
+                continue;
+            const auto key = trim(field.substr(0, eq)), value = trim(field.substr(eq + 1));
+            if (key == "METHOD")
+                method = value;
+            else if (key == "PARAM")
+                kind = value;
+        }
+        if ((ed && method != "ECM-EDWARDS-AM") ||
+            (!ed && (method != "ECM" || kind != std::to_string(param))))
+            throw std::runtime_error("legacy save belongs to another curve/parametrization; choose "
+                                     "a separate curve-prefixed save name");
+        ++records;
+    }
+    if (input.bad())
+        throw std::runtime_error("cannot read complete legacy save history");
+    if (!records)
+        return;
+    ecm_io::FileLock publication(target);
+    if (std::filesystem::exists(target) && std::filesystem::file_size(target))
+        return;
+    ecm_io::write_atomic(std::filesystem::u8path(target), bytes);
+    ecm_ts_fprintf(
+        stdout,
+        "Stage1 save history copied: source=%s target=%s records=%llu original_retained=1\n",
+        source.c_str(), target.c_str(), static_cast<unsigned long long>(records));
 }
 
 } // namespace ecm_save

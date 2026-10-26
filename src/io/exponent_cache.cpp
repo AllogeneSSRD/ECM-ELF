@@ -1,6 +1,6 @@
 /* ecm_stage1_exp_cache.cpp -- see the header for the contract and the validation rules. */
 #include "io/exponent_cache.h"
-#include "ecm/core/stage1/scalar.h" /* ecm_build_lcm_exponent(), the thing being cached */
+#include "ecm/stage1/scalar.h" /* ecm_build_lcm_exponent(), the thing being cached */
 
 #include <stddef.h>
 #include <stdio.h>

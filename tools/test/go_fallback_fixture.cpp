@@ -1,4 +1,4 @@
-#include "ecm/service/diagnostics/order_analysis.h"
+#include "ecm/diagnostics/order_analysis.h"
 #include <cstdlib>
 #include <fstream>
 #include <iostream>

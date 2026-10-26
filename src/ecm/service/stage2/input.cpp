@@ -5,7 +5,7 @@
 #include "io/files.h"
 #include "../../core/stage2/ecm_stage2_modulus.h"
 #include "ecm/io/save.h"
-#include "ecm/core/curve/ecm_edwards_curve.h"
+#include "ecm/curve/edwards.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>

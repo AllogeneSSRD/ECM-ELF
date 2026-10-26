@@ -8,8 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
-#include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/point.cuh"
+#include "../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
+#include "../../src/ecm/edwards_stage1/cuda/point.cuh"
 
 #define CU(call) do { cudaError_t e=(call); if(e!=cudaSuccess) { \
     fprintf(stderr,"CUDA %s at line %d\n",cudaGetErrorString(e),__LINE__); exit(2); \

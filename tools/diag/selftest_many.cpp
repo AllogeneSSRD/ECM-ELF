@@ -1,5 +1,5 @@
 /* selftest_many.cpp — run the SoA field/point selftests with many trials. */
-#include "../../src/ecm/backend/cpu/stage1/edwards/simd_edwards.h"
+#include "../../src/ecm/edwards_stage1/cpu/simd_edwards.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

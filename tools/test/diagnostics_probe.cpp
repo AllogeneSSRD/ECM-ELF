@@ -1,5 +1,5 @@
-#include "ecm/service/diagnostics/order_analysis.h"
-#include "ecm/service/diagnostics/pari_protocol.h"
+#include "ecm/diagnostics/order_analysis.h"
+#include "ecm/diagnostics/pari_protocol.h"
 #include <cstdlib>
 #include <fstream>
 #include <iostream>

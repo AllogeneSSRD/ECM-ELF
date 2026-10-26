@@ -1,6 +1,6 @@
 #pragma once
 #include "ecm/application/configuration/runtime.h"
-#include "ecm/service/stage1/task.h"
+#include "ecm/stage1/task.h"
 #include "io/config.h"
 #include <filesystem>
 #include <string>

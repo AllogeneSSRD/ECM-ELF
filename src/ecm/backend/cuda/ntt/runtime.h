@@ -1,5 +1,5 @@
 #pragma once
-#include "../../../platform/ecm_stage2_logging.h"
+#include "../../../platform/compute_log.h"
 #include "../runtime/device_memory_ledger.h"
 #include "parameters.h"
 #include "launch.h"

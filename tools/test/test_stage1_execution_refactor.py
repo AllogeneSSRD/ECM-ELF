@@ -69,7 +69,7 @@ def main():
         if name.startswith('src/ecm/core/') and path.suffix in ('.cpp','.h'):
             expected = old(name)
             if name.endswith('curve/ecm_edwards_curve.h'):
-                owner = read('include/ecm/core/integer.h')
+                owner = read('include/ecm/integer.h')
                 for marker in ('struct Integer {', 'class Array {'):
                     part = definition(expected,marker)
                     assert tokens(part) == tokens(definition(owner,marker)), ('integer owner changed',marker)
@@ -92,7 +92,7 @@ def main():
             assert 'LegacyExecutionResult' not in workflow and 'take_computation_result' not in workflow
             assert 'ComputationResult' in workflow
             assert 'publish_save(' not in workflow and 'append_save_lines' not in workflow
-    task = read('src/ecm/service/stage1/task.cpp')
+    task = read('src/ecm/stage1/task.cpp')
     assert 'ecm_stage1_checkpoint::Context session;' in task
     assert 'deps.execute(request, execution, session)' in task
     assert 'struct Context::State' in read('src/io/stage1_checkpoint.cpp')

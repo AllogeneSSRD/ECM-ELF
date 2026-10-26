@@ -8,7 +8,7 @@
  * usage: mont_standalone <N-decimal|expr> <sigma> <B1> [torsion]
  *        torsion default 1 = gmp-ecm convention (lcm(1..B1)); 12 = Prime95 choose12
  * ------------------------------------------------------------------------- */
-#include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"
+#include "../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"
 #include "ecm/io/save.h"
 
 #include <gmp.h>

@@ -26,7 +26,7 @@
 #include "../../service/planning/ecm_stage2_width_prediction.h"
 #include "../../service/planning/ecm_stage2_runtime_tune.h"
 #include "../../core/stage2/ecm_stage2_geometry.h"
-#include "../../platform/ecm_stage2_logging.h"
+#include "../../platform/compute_log.h"
 #include "ecm/io/save.h"
 #include "ecm/io/results.h"
 #include <algorithm>

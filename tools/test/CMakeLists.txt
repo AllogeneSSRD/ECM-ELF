@@ -9,16 +9,16 @@
 # tools/test/opencl_low_risk_tests.cpp, sharing src/ecm/backend/opencl/runtime/device.cpp with the other OpenCL tools).
 # ---------------------------------------------------------------------------
 add_executable(stage1_selection_test stage1_selection_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/core/stage1/selection.cpp)
+    ${CMAKE_SOURCE_DIR}/src/ecm/stage1/selection.cpp)
 target_include_directories(stage1_selection_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 ecm_tool_output_root(stage1_selection_test)
 
 add_executable(stage1_checkpoint_rotation_test
     stage1_checkpoint_rotation_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/backend/cpu/stage1/montgomery/checkpoint.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/opencl/checkpoint.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cpu/checkpoint.cpp
     ${CMAKE_SOURCE_DIR}/src/io/stage1_checkpoint.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/platform/stage1_stop.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/platform/stop.cpp
     ${CMAKE_SOURCE_DIR}/src/io/files.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/platform/logging.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/application/configuration/runtime.cpp)

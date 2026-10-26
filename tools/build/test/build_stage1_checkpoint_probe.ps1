@@ -13,8 +13,27 @@ Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'stage1_checkpoint_probe.exe'
 $fixture=if($Ownership){'stage1_checkpoint_ownership_test'}else{'stage1_checkpoint_container_test'}
 $script=Join-Path $Build 'build.cmd'
-$line="@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nif errorlevel 1 exit /b 1`r`n"+
-    "cl /nologo /O2 /std:c++17 /EHsc /MD /utf-8 /D NOMINMAX /I src /I include /I `"$($dependency.Root)/include`" tools/test/$fixture.cpp src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp src/ecm/backend/cuda/stage1/edwards/host_math.cpp src/io/stage1_checkpoint.cpp src/io/files.cpp src/io/save.cpp src/ecm/application/configuration/ecm_expr.cpp src/ecm/platform/stage1_stop.cpp src/ecm/core/stage1/ecm_stage1_exp.cpp src/ecm/platform/logging.cpp src/ecm/application/configuration/runtime.cpp /Fe:`"$exe`" /Fo:`"$Build/`" /link /LIBPATH:`"$($dependency.Root)/lib`" gmp.lib`r`nexit /b %errorlevel%`r`n"
+$sources=@("tools/test/$fixture.cpp",'src/ecm/edwards_stage1/cuda/checkpoint.cpp',
+    'src/ecm/edwards_stage1/cuda/host_math.cpp',
+    'src/io/stage1_checkpoint.cpp','src/io/files.cpp','src/io/save.cpp',
+    'src/ecm/application/configuration/ecm_expr.cpp','src/ecm/platform/stop.cpp',
+    'src/ecm/stage1/scalar.cpp','src/ecm/platform/logging.cpp',
+    'src/ecm/application/configuration/runtime.cpp')
+if(-not $Ownership){
+    $sources+=@('src/ecm/montgomery_stage1/cuda/checkpoint.cpp',
+                'tools/test/adapters/stage1_checkpoint_log.cpp')
+}
+$commands=@();$objects=@()
+foreach($source in $sources){
+    # Both curve families own checkpoint.cpp. Keep their object identities distinct.
+    $object=Join-Path $Build ($source.Replace('/','_')+'.obj')
+    $objects+=('"'+$object+'"')
+    $commands+=("cl /nologo /c /O2 /std:c++17 /EHsc /MD /utf-8 /D NOMINMAX /I src /I include /I `"$($dependency.Root)/include`" `"$source`" /Fo:`"$object`"")
+    $commands+='if errorlevel 1 exit /b 1'
+}
+$commands+=('cl /nologo '+($objects -join ' ')+" /Fe:`"$exe`" /link /LIBPATH:`"$($dependency.Root)/lib`" gmp.lib")
+$commands+='exit /b %errorlevel%'
+$line="@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nif errorlevel 1 exit /b 1`r`n"+($commands -join "`r`n")+"`r`n"
 [IO.File]::WriteAllText($script,$line,[Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c "`"$script`"" *> (Join-Path $Build 'build.log')
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 25;throw 'checkpoint probe build failed'}

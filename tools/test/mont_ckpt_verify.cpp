@@ -33,9 +33,9 @@
 #include <string>
 #include <vector>
 
-#include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"
-#include "ecm/backend/cpu/stage1/montgomery/checkpoint.h"
-#include "../../src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.h"
+#include "../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"
+#include "ecm/montgomery_stage1/cpu/checkpoint.h"
+#include "../../src/ecm/montgomery_stage1/cpu/simd_mont_curve.h"
 
 static int g_fail = 0;
 static int g_pass = 0;

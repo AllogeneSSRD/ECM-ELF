@@ -33,7 +33,7 @@ function Get-Stage1ReleaseSources([string]$Repo, [bool]$EnablePrac = $false, [st
         'tools/build/internal/parallel_nvcc.ps1','tools/build/internal/build_stage1_release_group.ps1',
         'tools/build/internal/split_stage1_release.ps1','tools/build/internal/package_stage1.ps1',
         'tools/build/internal/package_archive.ps1','tools/build/internal/release_payload.ps1',
-        'tools/build/internal/diagnostics_payload.ps1','src/ecm/service/diagnostics/CMakeLists.txt',
+        'tools/build/internal/diagnostics_payload.ps1','src/ecm/diagnostics/CMakeLists.txt',
         'tools/build/test/build_diagnostics.ps1','tools/packaging/diagnostics_runtime.py')
     return Get-EcmSourceHashes $Repo $paths
 }

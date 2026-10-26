@@ -8,6 +8,6 @@ if(-not $VcVars){$VcVars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Stud
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $Build
 $toggle=if($WithoutLocalPari){'OFF'}else{'ON'}
-$line="call `"$VcVars`" >nul 2>&1 && cmake -S `"$repo/src/ecm/service/diagnostics`" -B `"$Build`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release -DECM_DIAGNOSTICS_GMP_ROOT=`"$GmpRoot`" -DECM_DIAGNOSTICS_LOCAL_PARI=$toggle && cmake --build `"$Build`""
+$line="call `"$VcVars`" >nul 2>&1 && cmake -S `"$repo/src/ecm/diagnostics`" -B `"$Build`" -G `"NMake Makefiles`" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release -DECM_DIAGNOSTICS_GMP_ROOT=`"$GmpRoot`" -DECM_DIAGNOSTICS_LOCAL_PARI=$toggle && cmake --build `"$Build`""
 & cmd.exe /d /c $line
 if($LASTEXITCODE){throw 'Shared diagnostics build failed'}

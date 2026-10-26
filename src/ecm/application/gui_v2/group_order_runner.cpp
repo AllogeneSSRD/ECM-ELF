@@ -1,6 +1,6 @@
 #include "group_order_job.h"
 #include "group_order_result.h"
-#include "../../service/diagnostics/order_analysis.h"
+#include "../../diagnostics/order_analysis.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>

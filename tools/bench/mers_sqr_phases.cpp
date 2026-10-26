@@ -29,8 +29,8 @@
  * usage: mers_sqr_phases [k] [reps]        (N = 2^k-1, default k=3001, reps=20000)
  * ------------------------------------------------------------------------- */
 #include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
-#include "../../src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.h"      /* mont_soa_* : the real ladder, timed below */
-#include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"         /* mont_build_s / mont_expand_bits */
+#include "../../src/ecm/montgomery_stage1/cpu/simd_mont_curve.h"      /* mont_soa_* : the real ladder, timed below */
+#include "../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"         /* mont_build_s / mont_expand_bits */
 #include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp"
 
 #include <stdio.h>

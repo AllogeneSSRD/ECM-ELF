@@ -26,7 +26,7 @@ def main():
             if path.suffix not in {'.cpp','.cu','.h','.cuh'}:continue
             name=path.relative_to(ROOT).as_posix()
             previous=old(name)
-            if name in {'src/ecm/backend/cuda/stage1/montgomery/workflow.cpp','src/ecm/backend/opencl/stage1/montgomery/workflow.cpp'}:
+            if name in {'src/ecm/montgomery_stage1/cuda/workflow.cpp','src/ecm/montgomery_stage1/opencl/workflow.cpp'}:
                 # The independent M991/PARAM3 regression proves the former save
                 # expression invalidated its own checksum after finding a factor.
                 # Permit only this serialization fix; every computation byte stays.
@@ -40,8 +40,8 @@ def main():
                 publication_fixes.append(name)
             assert previous==read(name),('computation changed beyond the approved save serialization correction',name)
             checked[name]=hashlib.sha256(path.read_bytes()).hexdigest()
-    for name in ['src/ecm/service/stage1/execution.cpp','src/ecm/service/stage1/execution_contract.cpp',
-                 'src/ecm/service/stage1/execution_contract.h','src/ecm/service/stage1/preparation.cpp',
+    for name in ['src/ecm/stage1/execution.cpp','src/ecm/stage1/execution_contract.cpp',
+                 'src/ecm/stage1/execution_contract.h','src/ecm/stage1/preparation.cpp',
                  'src/ecm/application/cli/group_order.cpp']:
         assert old(name)==read(name),name
         checked[name]=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()

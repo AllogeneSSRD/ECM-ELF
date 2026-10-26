@@ -1,5 +1,5 @@
 #include "ecm_stage2_gwpoly.h"
-#include "../../../../core/curve/ecm_edwards_curve.h"
+#include "../../../../curve/edwards.h"
 extern "C" {
 #include <cpuid.h>
 #include <gwnum.h>

@@ -1,7 +1,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include "ecm/platform/stage1_progress.h"
+#include "ecm/stage1/progress.h"
 #include <cstdlib>
 #include <limits>
 

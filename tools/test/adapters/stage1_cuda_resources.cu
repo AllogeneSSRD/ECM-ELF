@@ -15,7 +15,7 @@ cudaError_t release_event(cudaEvent_t p){--event_live;delete reinterpret_cast<in
 #define cudaFree fixture::release
 #define cgbn_error_report_free fixture::release_report
 #define cudaEventDestroy fixture::release_event
-#include "ecm/backend/cuda/stage1/montgomery/resources.cuh"
+#include "ecm/montgomery_stage1/cuda/resources.cuh"
 #undef cudaFree
 #undef cgbn_error_report_free
 #undef cudaEventDestroy

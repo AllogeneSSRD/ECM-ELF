@@ -8,7 +8,7 @@ if(Test-Path -LiteralPath $output){throw 'Use a fresh build directory'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output '.gitignore'),"*`n")
 $sources=@('tools/test/storage_concurrency_contract.cpp','src/io/worktodo.cpp',
-    'src/io/files.cpp','src/ecm/core/stage1/ecm_stage1_exp.cpp')
+    'src/io/files.cpp','src/ecm/stage1/scalar.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources) {
     $object=Join-Path $output ($source.Replace('/','_')+'.obj')

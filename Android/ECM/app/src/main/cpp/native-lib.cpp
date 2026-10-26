@@ -13,7 +13,7 @@
 #include "opencl_runtime.h"
 #include "../../../../../../src/ecm/backend/opencl/arithmetic/path_registry.h"
 
-#include "../../../../../../src/ecm/backend/opencl/stage1/montgomery/checkpoint.h"
+#include "../../../../../../src/ecm/montgomery_stage1/opencl/checkpoint.h"
 
 #include <cstdint>
 

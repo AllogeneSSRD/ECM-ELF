@@ -32,7 +32,7 @@ def main():
     read=lambda name:(ROOT/name).read_text(encoding='utf-8-sig')
     old_naf=frozen('src/ecm/core/stage1/ecm_edwards_naf.h')
     old_progress=frozen('src/ecm/platform/legacy/ecm_stage1_gpu_progress.h')
-    scalar=read('src/ecm/core/stage1/ecm_stage1_exp.cpp');progress=read('src/ecm/platform/stage1_progress.cpp')
+    scalar=read('src/ecm/stage1/scalar.cpp');progress=read('src/ecm/stage1/progress.cpp')
     checked={}
     for before,after,names in [(old_naf,scalar,['read','EcmEdwardsNaf','digit']),(old_progress,progress,['line','add','speed','per_curve','remaining'])]:
         for name in names:
@@ -41,8 +41,9 @@ def main():
             checked[name]=hashlib.sha256(current.encode()).hexdigest()
     original=frozen('src/ecm/core/stage1/ecm_stage1_exp.cpp')
     prefix=scalar[:scalar.index('uint32_t EcmEdwardsNaf::read')].replace('#include <stdexcept>','')
-    assert normalize(original)==normalize(prefix),'LCM implementation changed'
-    nh=read('include/ecm/core/stage1/scalar.h');ph=read('include/ecm/platform/stage1_progress.h')
+    without_includes=lambda text:re.sub(r'(?m)^\s*#\s*include[^\n]*','',text)
+    assert normalize(without_includes(original))==normalize(without_includes(prefix)),'LCM implementation changed'
+    nh=read('include/ecm/stage1/scalar.h');ph=read('include/ecm/stage1/progress.h')
     old_fields=old_naf.split('struct EcmEdwardsNaf {',1)[1].split('static uint32_t read',1)[0]
     new_fields=nh.split('struct EcmEdwardsNaf {',1)[1].split('static uint32_t read',1)[0]
     assert normalize(old_fields)==normalize(new_fields),'NAF data layout changed'
@@ -58,14 +59,14 @@ def main():
     subprocess.run(['cmake','-DECM_CUDA_SOURCES_OUTPUT='+str(inventory),'-P',str(ROOT/'tools/build/internal/cuda_sources.cmake')],check=True)
     groups=json.loads(inventory.read_text())['groups']
     common=groups['STAGE1_COMMON']
-    assert common.count('src/ecm/core/stage1/ecm_stage1_exp.cpp')==1
-    assert common.count('src/ecm/platform/stage1_progress.cpp')==1
+    assert common.count('src/ecm/stage1/scalar.cpp')==1
+    assert common.count('src/ecm/stage1/progress.cpp')==1
     cmake=read('CMakeLists.txt')
     assert not re.search(r'set_property\(SOURCE src/ecm/backend/cuda/stage1/montgomery/adapter\.cu APPEND PROPERTY OBJECT_DEPENDS',cmake)
-    assert 'include/ecm/core/stage1/scalar.h' in cmake
+    assert 'include/ecm/stage1/scalar.h' in cmake
     for name in ['build_edwards_gpu_workers.ps1','build_edwards_gpu_stage1_probe.ps1']:
-        assert "@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/core/stage1/ecm_stage1_exp.cpp')" in read('tools/build/test/'+name)
-    assert "stage1/edwards/instances/'+$kernels[$Tier]" in read('tools/build/test/build_stage1_host_wait_probe.ps1')
+        assert "@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/stage1/scalar.cpp')" in read('tools/build/test/'+name)
+    assert "edwards_stage1/cuda/instances/'+$kernels[$Tier]" in read('tools/build/test/build_stage1_host_wait_probe.ps1')
     result=dict(complete=True,baseline=a.baseline,functions=checked,naf_layout_unchanged=True,speed_layout_unchanged=True,lcm_body_unchanged=True,new_implementation_tus=1,new_scalar_tus=0,cuda_runs=0)
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf8');print(json.dumps({'complete':True,'functions':len(checked),'data_layouts':2}))
 

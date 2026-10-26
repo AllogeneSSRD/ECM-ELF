@@ -50,7 +50,7 @@ def main():
     device_files={p.resolve() for p in current_files('kernels/cuda')+current_files('include/ecm/cuda')}
     # Extracted dispatch values were already part of launch.h/constants.h.
     # This single data-only header joins the closure; host policy bodies do not.
-    domain=ROOT/'src/ecm/backend/cuda/stage1/montgomery/prac/domain.h'
+    domain=ROOT/'src/ecm/montgomery_stage1/cuda/prac/domain.h'
     code=re.sub(r'/\*.*?\*/|//[^\n]*','',text(domain),flags=re.S)
     assert not re.search(r'#\s*include|\b(?:struct|class|inline|static)\b|\(',code)
     device_files.add(domain.resolve())

@@ -1,5 +1,5 @@
 #include "ecm/io/results.h"
-#include "ecm/core/integer.h"
+#include "ecm/integer.h"
 #include "io/files.h"
 #include <algorithm>
 #include <filesystem>

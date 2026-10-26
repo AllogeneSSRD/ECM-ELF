@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <gmp.h>
-#include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
+#include "../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
 
 static void compute_s(mpz_t s, unsigned long B1) {
     mpz_set_ui(s, 48);

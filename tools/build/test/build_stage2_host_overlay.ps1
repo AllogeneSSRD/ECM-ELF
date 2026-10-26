@@ -22,8 +22,8 @@ $link=$link.Substring($prefix.Length)
 $moves=@{'src/ecm/storage/queue/ecm_worktodo.cpp'='src/io/worktodo.cpp';
     'src/ecm/application/configuration/ecm_queue_config.cpp'='src/io/config.cpp'}
 $moves['src/ecm/storage/cache/ecm_stage1_exp_cache.cpp']='src/io/exponent_cache.cpp'
-$moves['src/ecm/storage/checkpoint/ecm_checkpoint.cpp']='src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp'
-$moves['src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp']='src/ecm/backend/cpu/stage1/montgomery/checkpoint.cpp'
+$moves['src/ecm/storage/checkpoint/ecm_checkpoint.cpp']='src/ecm/montgomery_stage1/opencl/checkpoint.cpp'
+$moves['src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp']='src/ecm/montgomery_stage1/cpu/checkpoint.cpp'
 $moves['src/ecm/storage/save/ecm_edwards_save.cpp']='src/io/prime95_save.cpp'
 $moves['src/ecm/storage/queue/p95_worktodo.cpp']='src/io/prime95.cpp'
 $moves['src/ecm/storage/queue/stage2_progress.cpp']='src/io/stage2_checkpoint.cpp'

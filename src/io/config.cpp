@@ -1,6 +1,6 @@
 #include "io/config.h"
 #include "ecm/application/configuration/generated/ecm_toml_template.h"
-#include "ecm/core/stage1/selection.h"
+#include "ecm/stage1/selection.h"
 #include <fstream>
 
 bool read_config(const std::string& path, ParsedConfig& parsed) {

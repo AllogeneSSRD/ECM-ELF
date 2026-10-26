@@ -1,6 +1,6 @@
 #pragma once
-#include "ecm/service/stage1/task.h"
-#include "ecm/service/diagnostics/order_analysis.h"
+#include "ecm/stage1/task.h"
+#include "ecm/diagnostics/order_analysis.h"
 #include <string>
 #include <vector>
 namespace ecm_stage1_app {

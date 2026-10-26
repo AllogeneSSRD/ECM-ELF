@@ -16,23 +16,23 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/io/results.cpp','src/ecm/core/stage1/selection.cpp','src/ecm/service/stage1/task.cpp','src/ecm/service/stage1/execution_contract.cpp','src/ecm/backend/opencl/stage1/montgomery/checkpoint.cpp',
-    'src/io/stage1_checkpoint.cpp','src/ecm/platform/stage1_stop.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
-    'src/ecm/core/stage1/ecm_stage1_exp.cpp','src/ecm/platform/stage1_progress.cpp')
+$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/execution_contract.cpp','src/ecm/montgomery_stage1/opencl/checkpoint.cpp',
+    'src/io/stage1_checkpoint.cpp','src/ecm/platform/stop.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
+    'src/ecm/stage1/scalar.cpp','src/ecm/stage1/progress.cpp')
 if($QueueWorkflow){
     & (Join-Path $PSScriptRoot 'build_stage1_host_io.ps1') -WorkerBuild $WorkerBuild -Build $Build
     return
 }
-if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/io/files.cpp','src/io/save.cpp','src/ecm/service/stage1/preparation.cpp','src/io/exponent_cache.cpp')}
+if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_expr.cpp','src/io/files.cpp','src/io/save.cpp','src/ecm/stage1/preparation.cpp','src/io/exponent_cache.cpp')}
 if($MontgomeryPolicy){
     if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
     $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path
-    $sources=@('src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
+    $sources=@('src/ecm/montgomery_stage1/cuda/host_policy.cpp')
 }
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
 if($HistorySnapshot){
     if($MontgomeryPolicy){throw 'HistorySnapshot is a task-only adapter'}
-    $sources=@($sources|Where-Object {$_ -ne 'src/ecm/service/stage1/task.cpp'})
+    $sources=@($sources|Where-Object {$_ -ne 'src/io/save.cpp'})
     $sources+=@('tools/test/adapters/stage1_history_snapshot.cpp')
 }
 $fixture=if($MontgomeryPolicy){'stage1_policy_contract'}elseif($QueueWorkflow){'stage1_queue_contract'}else{'stage1_task_contract'}

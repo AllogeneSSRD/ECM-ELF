@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <memory>
-#include "ecm/platform/stage1_stop.h"
+#include "ecm/platform/stop.h"
 #include <cstdint>
 #include <string>
 #include <vector>

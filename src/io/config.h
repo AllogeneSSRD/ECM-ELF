@@ -3,7 +3,7 @@
 // Defaults and input bindings are generated from config/ecm_options.json.
 // Worker override rules are shared with Stage2/GUI.
 #include "ecm/application/configuration/generated/ecm_config_generated.h"
-#include "ecm/core/stage1/selection.h"
+#include "ecm/stage1/selection.h"
 #include <map>
 
 struct EcmQueueConfig : ecm_config::Stage1Values {

@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # test_cuda_mers_fold.ps1 -- Mersenne fold domain for the CUDA suyama family
-# (ECM_MERS_FOLD build; see src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh and
+# (ECM_MERS_FOLD build; see src/ecm/montgomery_stage1/cuda/arithmetic.cuh and
 # docs/performance/STAGE1.md 9).
 #
 # For N = 2^k - 1 the fold replaces CGBN's Montgomery reduction (the Q*N half of

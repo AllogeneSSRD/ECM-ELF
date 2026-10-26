@@ -1,4 +1,4 @@
-#include "../../src/ecm/platform/ecm_stage2_logging.h"
+#include "../../src/ecm/platform/compute_log.h"
 #include "../../src/ecm/backend/cuda/ntt/runtime.h"
 
 using Word=unsigned long long;

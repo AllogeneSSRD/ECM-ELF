@@ -1,5 +1,5 @@
 #include "ecm/application/gui/worktodo_gen.h"
-#include "ecm/core/integer.h"
+#include "ecm/integer.h"
 #include "ecm/io/results.h"
 #include "ecm/service/stage2/input.h"
 #include "io/files.h"

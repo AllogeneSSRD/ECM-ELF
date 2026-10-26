@@ -20,7 +20,7 @@ $objects=@();$sources=@()
 if($Stage -eq 'stage1') {
     Assert-Stage1BuildIdentity $repo $record.build $manifest
     $gmp=$manifest.gmp
-    $wanted=@($inventory.groups.STAGE1_EDWARDS|Where-Object {$_ -notmatch '/instances/'} )+@('src/ecm/core/stage1/ecm_stage1_exp.cpp')
+    $wanted=@($inventory.groups.STAGE1_EDWARDS|Where-Object {$_ -notmatch '/instances/'} )+@('src/ecm/stage1/scalar.cpp')
     foreach($entry in @(Get-EcmTargetCompileEntries $record.build ecm_cuda)) {
         $key=Get-EcmSourceKey $repo $entry.file
         if($key -in $wanted -or $entry.file.Replace('\','/') -match '/cuda_modules/stage1/edwards_\d+\.cu$') {
@@ -28,7 +28,7 @@ if($Stage -eq 'stage1') {
         }
     }
     if(@($objects|Where-Object {$_ -match 'edwards_\d+\.cu\.obj$'}).Count -ne 32){throw 'Probe requires the complete32-tier release'}
-    $sources=@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp')
+    $sources=@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp')
     $name='edwards_gpu_stage1_probe.exe';$crt='/MD'
 } else {
     $gmp=$manifest.gmp_root

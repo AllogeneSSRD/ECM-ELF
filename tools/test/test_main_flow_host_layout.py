@@ -32,10 +32,10 @@ def main():
     assert generator==(ROOT/'tools/gen/generate_ecm_config.py').read_text(encoding='utf8'),'generator policy changed beyond output paths'
     # These contracts must remain usable by ordinary host code. An actual MSVC
     # dependency-record test separately checks the real task collaborators.
-    public=['include/ecm/service/stage1/task.h','include/ecm/core/stage1/selection.h',
-            'include/ecm/core/stage1/scalar.h','include/ecm/core/stage2/probability.h',
+    public=['include/ecm/stage1/task.h','include/ecm/stage1/selection.h',
+            'include/ecm/stage1/scalar.h','include/ecm/core/stage2/probability.h',
             'include/ecm/platform/logging.h','include/ecm/platform/program_version.h',
-            'include/ecm/application/configuration/runtime.h','include/ecm/service/execution/legacy_gpu.h']
+            'include/ecm/application/configuration/runtime.h','include/ecm/stage1/gpu_backend.h']
     for name in public:
         text=(ROOT/name).read_text(encoding='utf-8-sig')
         code=re.sub(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"','',text,flags=re.S)

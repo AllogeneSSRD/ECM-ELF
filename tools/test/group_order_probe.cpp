@@ -1,4 +1,4 @@
-#include "ecm/core/group_order/group_order.h"
+#include "ecm/group_order/group_order.h"
 #include <algorithm>
 #include <iomanip>
 #include <iostream>

@@ -1,8 +1,8 @@
-#include "../../src/ecm/backend/cuda/stage1/montgomery/host_math.h"
-#include "../../src/ecm/service/stage1/execution_contract.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/runtime.h"
-#include "../../src/ecm/backend/cuda/stage1/edwards/edwards_internal.h"
-#include "../../src/ecm/core/curve/ecm_edwards_curve.h"
+#include "../../src/ecm/montgomery_stage1/cuda/host_math.h"
+#include "../../src/ecm/stage1/execution_contract.h"
+#include "../../src/ecm/edwards_stage1/cuda/runtime.h"
+#include "../../src/ecm/edwards_stage1/cuda/edwards_internal.h"
+#include "../../src/ecm/curve/edwards.h"
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>

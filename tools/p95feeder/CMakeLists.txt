@@ -16,7 +16,7 @@ add_executable(ecm_p95feeder
     ${CMAKE_SOURCE_DIR}/src/io/worktodo.cpp
     ${CMAKE_SOURCE_DIR}/src/io/prime95_save.cpp
     ${CMAKE_SOURCE_DIR}/src/io/stage1_checkpoint.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/platform/stage1_stop.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/platform/stop.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/platform/logging.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/application/configuration/runtime.cpp
 )

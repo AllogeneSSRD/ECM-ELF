@@ -56,6 +56,8 @@ void set_work_dir(const char*);
 const char* work_dir();
 std::string resolve_data_path(const char*);
 bool ensure_parent_dir(const char*);
+// Empty is accepted; otherwise create a single directory or accept an existing path.
+bool ensure_dir(const std::string&);
 } // namespace ecm_io
 
 namespace ecm_queue {

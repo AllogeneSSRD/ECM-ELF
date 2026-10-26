@@ -21,8 +21,8 @@
 #include <chrono>
 #include <vector>
 
-#include "ecm/core/stage1/scalar.h"
-#include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"     /* mont_expand_bits */
+#include "ecm/stage1/scalar.h"
+#include "../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"     /* mont_expand_bits */
 
 static int g_fail = 0, g_pass = 0;
 

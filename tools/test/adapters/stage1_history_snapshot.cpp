@@ -2,7 +2,7 @@
 #include <fstream>
 #include <stdexcept>
 
-// Compile the complete production task and change only read scheduling.
+// Compile the complete production save module and change only read scheduling.
 namespace {
 std::filesystem::path history_source;
 std::string replacement;
@@ -35,5 +35,5 @@ std::string observed_history_read(const std::filesystem::path& path) {
 }
 
 #define read_file observed_history_read
-#include "../../../src/ecm/service/stage1/task.cpp"
+#include "../../../src/io/save.cpp"
 #undef read_file

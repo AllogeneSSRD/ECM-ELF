@@ -23,7 +23,7 @@
 #include "ecm_stage2_width_prediction.h"
 #include "ecm_stage2_runtime_tune.h"
 #include "../../core/stage2/ecm_stage2_geometry.h"
-#include "../../platform/ecm_stage2_logging.h"
+#include "../../platform/compute_log.h"
 #include "ecm/io/stage2_checkpoint.h"
 #include "io/json.h"
 #include "ecm/io/results.h"
