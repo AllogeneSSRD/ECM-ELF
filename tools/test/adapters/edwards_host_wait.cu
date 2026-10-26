@@ -1,6 +1,6 @@
 // Explicit diagnostic adapter: compile the unchanged production host template.
 // SDK substitutions stay within this TU. Production targets never link it.
-#include "../../../src/ecm/edwards_stage1/cuda/host_wait.h"
+#include "../../../src/ecm/stage1/edwards/cuda/host_wait.h"
 namespace {
 const ecm_cuda_diagnostics::HostWaitHooks *active_hooks=nullptr;
 cudaError_t hook_create(cudaEvent_t *event){return active_hooks->event_create(event);}
@@ -18,7 +18,7 @@ cudaError_t hook_elapsed(float *ms,cudaEvent_t start,cudaEvent_t stop){return ac
 #define cudaMemcpy hook_memcpy
 #define cudaGetLastError hook_last_error
 #define cudaEventElapsedTime hook_elapsed
-#include "../../../src/ecm/edwards_stage1/cuda/edwards_runtime.inl"
+#include "../../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl"
 #undef cudaEventCreate
 #undef cudaEventRecord
 #undef cudaEventSynchronize

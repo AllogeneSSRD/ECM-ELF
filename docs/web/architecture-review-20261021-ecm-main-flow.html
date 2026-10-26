@@ -839,7 +839,7 @@ for (auto curve : task.remaining_curves()) {
 checked(publisher.seal_task(task.identity()));
 checked(complete_stage2_source_after_recheck(task, queue_stores)); // workflow私有
 checked(task.remove_completed_progress());</code></pre>
-<p>子进程重读save并验证fingerprint后调用Stage2Executor；完成异步算术检查，再发布结果和receipt。exit=0不能替代receipt。非零退出沿用当前保留/报错，后续重启才按durable receipt恢复，不能悄悄改成当场成功。依据为 <a href="../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp">ecm_cuda_stage2_main.cpp</a> 第 617、898、914–920、1505–1508、1551–1585 行。</p>
+<p>子进程重读save并验证fingerprint后调用Stage2Executor；完成异步算术检查，再发布结果和receipt。exit=0不能替代receipt。非零退出沿用当前保留/报错，后续重启才按durable receipt恢复，不能悄悄改成当场成功。依据为 <a href="../../src/ecm/stage2/cuda/main.cpp">ecm_cuda_stage2_main.cpp</a> 第 617、898、914–920、1505–1508、1551–1585 行。</p>
 <p>CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/父子receipt。GUI的WorkerController负责configure→选择exe→启动/监管→事件归并→停止/重启→快照；视图只提交命令并读快照。Stage1安全点停止、Stage2当前曲线结束后停止和等待子进程退出的现有语义保留；看见checkpoint文件不表示可以强杀。GUI监管与Stage2父子编排可复用进程机制，不强行合成总Supervisor。</p>
 </section>
 <section class="plan-section" id="plan-map"><h2>现有文件到目标模块的迁移映射</h2>

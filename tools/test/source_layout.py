@@ -37,15 +37,18 @@ def frozen_source(revision, relative):
         manifest = json.loads((ROOT/'docs/development/ECM_DOMAIN_REFACTOR_MANIFEST.json').read_text(encoding='utf8'))
         # A moved implementation retains its frozen identity when it absorbs an
         # extra fragment. A target composed solely of multiple merges is ambiguous.
+        requested = current_source(relative).resolve()
         candidates = {entry['source'] for entry in manifest['files']
                       if entry['action'] in ('move', 'move_split') and
-                      relative == entry['targets'][0] and entry['source'] in available}
+                      requested == current_source(entry['targets'][0]).resolve() and
+                      entry['source'] in available}
         if not candidates:
             candidates = {entry['source'] for entry in manifest['files']
-                          if relative in entry['targets'] and entry['source'] in available}
+                          if any(requested == current_source(target).resolve()
+                                 for target in entry['targets']) and entry['source'] in available}
         if not candidates:
             candidates = {old for old, new in {**LAYOUT['moved'], **LAYOUT.get('current_overrides', {})}.items()
-                          if new == relative and old in available}
+                          if current_source(new).resolve() == requested and old in available}
         assert len(candidates) == 1, ('ambiguous/missing frozen identity', revision, relative, sorted(candidates))
         name = candidates.pop()
     return subprocess.check_output(['git', 'show', revision+':'+name], cwd=ROOT).decode('utf-8-sig')

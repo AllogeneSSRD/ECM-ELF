@@ -12,8 +12,8 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Ra
 if(-not $m.compile_setup -or -not $m.host_compiler -or -not $m.cuda_root){throw 'Formal local toolchain manifest required'}
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $output
-$sources=@('src/ecm/montgomery_stage1/cuda/host_math.cpp',
-    'src/ecm/edwards_stage1/cuda/runtime.cpp','src/ecm/stage1/scalar.cpp',
+$sources=@('src/ecm/stage1/montgomery/cuda/host_math.cpp',
+    'src/ecm/stage1/edwards/cuda/runtime.cpp','src/ecm/stage1/scalar.cpp',
     'src/ecm/stage1/computation.cpp','src/ecm/stage1/sigma.cpp',
     'src/ecm/stage1/libecm_compat.cpp','tools/test/stage1_cuda_host_contract.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}

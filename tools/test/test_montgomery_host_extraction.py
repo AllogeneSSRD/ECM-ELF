@@ -8,7 +8,7 @@ from test_ecm_domain_layout import tokens, definition_body
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = '6dad3d1020ac08e09cd85fa1695406addedc99d7'
-FOLDER = 'src/ecm/montgomery_stage1/cuda/'
+FOLDER = 'src/ecm/stage1/montgomery/cuda/'
 
 
 def main():

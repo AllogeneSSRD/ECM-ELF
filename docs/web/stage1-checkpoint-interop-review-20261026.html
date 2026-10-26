@@ -48,7 +48,7 @@
     </tbody></table></div>
     <p>若要求三端至少支持一种相同构造，优先增加 CPU param3。CPU xDBL/xADD 已接收 a24 和任意 affine xdiff，主要缺参数化初始化及身份/保存联动；OpenCL param0 要改目前固定的五槽布局、构造、差分点与常量乘法、64 位 sigma，以及多种设备内核。</p>
     <p>CPU param3 的构造应复用共同数学实现：a24=σ·2⁻³² mod N、P=(2:1)、xdiff=2。仍遵守 param3 的种子范围。不能通过把任务 param0 改成 param3 来继续旧工作。</p>
-    <p class="meta">依据：<a href="../../src/ecm/stage1/execution.cpp">后端选择</a>；<a href="../../src/ecm/opencl/factory.cpp">OpenCL 明确限制</a>；<a href="../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp">CPU 通用点运算</a>；<a href="../../src/ecm/montgomery_stage1/cuda/host_math.cpp">param3 构造</a>。</p>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/execution.cpp">后端选择</a>；<a href="../../src/ecm/opencl/factory.cpp">OpenCL 明确限制</a>；<a href="../../src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp">CPU 通用点运算</a>；<a href="../../src/ecm/stage1/montgomery/cuda/host_math.cpp">param3 构造</a>。</p>
   </section>
 
   <section class="card" id="current">
@@ -59,7 +59,7 @@
       <tr><td>游标含义不同</td><td>Mont ladder 位数；Edwards binary 位与 NAF 列；PRAC 素数计划位置。</td><td>携带明确计划种类、版本、摘要和游标种类，拒绝用同一数字互相解释。</td></tr>
       <tr><td>批次形状不同</td><td>CPU 每曲线进度可不同；GPU 大多只有整批游标，并推导 sigma0+i；CPU Edwards SIMD 对不一致 lane 可能重算。</td><td>按计划/游标组批，保存曲线索引和独立 sigma，完成曲线不再计算；禁止按最小/最大游标覆盖全批。</td></tr>
     </tbody></table></div>
-    <p class="meta">依据：<a href="../../src/ecm/stage1/task.cpp">外层 identity</a>、<a href="../../src/io/stage1_checkpoint.cpp">完整身份比较</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">连续 sigma 检查</a>、<a href="../../src/ecm/edwards_stage1/cpu/workflow.cpp">SIMD 恢复条件</a>。</p>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/task.cpp">外层 identity</a>、<a href="../../src/io/stage1_checkpoint.cpp">完整身份比较</a>、<a href="../../src/ecm/stage1/montgomery/cuda/runtime.cu">连续 sigma 检查</a>、<a href="../../src/ecm/stage1/edwards/cpu/workflow.cpp">SIMD 恢复条件</a>。</p>
   </section>
 
   <section class="card" id="state">
@@ -85,14 +85,14 @@
     <p>CPU、默认 CUDA 和 OpenCL 的 ladder 都能在现有切片安全边界表示此状态。初始化通常已消费首位，d=1；d 不是点倍数 k。保存两个逻辑点及 d，恢复时重建 a24、原始差分点和剩余位序列即可。不能仅保存 R0 或百分比，也不能保留 GPU 临时 swap 的数组顺序。</p>
     <p>普通域与设备 Montgomery 域的转换为 x̂=xR mod N，x=x̂R⁻¹ mod N，R=2<sup>BITS</sup>。新后端用自己的 R 重编码。N 为奇数时 R 为单位；容器位宽与 TPI 无需沿用来源。OpenCL 当前四坐标同乘 R，仅从投影数学看误认数值不必然换点，但不能据此绕过格式和域合同。常量、limb 布局和校验也必须正确转换。</p>
     <p>resident ladder 可作为同一数学状态的另一 Adapter；PRAC 的 next 是素数计划位置，属于另一计划。PRAC 可在完整乘积边界研究 Q=[M]P、剩余 S/M 的续算合同，但现有 ladder 会重建原基点，仍需新增续算基点支持；任意 binary 前缀也不一定整除 S。本轮应保留 PRAC 同算法恢复，另列跨算法 TODO。</p>
-    <p class="meta">依据：<a href="../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp">CPU 位序列</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">CUDA 初始位游标</a>、<a href="../../src/ecm/opencl/resources/ecm_stage1.cl">OpenCL 位循环</a>、<a href="../../src/ecm/montgomery_stage1/opencl/montgomery.cpp">域转换</a>、<a href="../../src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernel.cuh">PRAC 计划执行</a>。</p>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp">CPU 位序列</a>、<a href="../../src/ecm/stage1/montgomery/cuda/runtime.cu">CUDA 初始位游标</a>、<a href="../../src/ecm/opencl/resources/ecm_stage1.cl">OpenCL 位循环</a>、<a href="../../src/ecm/stage1/montgomery/opencl/montgomery.cpp">域转换</a>、<a href="../../src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernel.cuh">PRAC 计划执行</a>。</p>
     <h3>Edwards：完整扩展坐标与完全一致的 NAF 计划</h3>
     <p>CPU 与 CUDA 的同窗口 NAF 源码具有对应编码，可优先统一为一个明确版本的计划生成器和摘要；随后以真实互跑确认初始化、首列、负号、零串和最后一列的 cursor 完全一致。不同 window 的相同 done 数字没有同一含义。</p>
     <div class="note">例：S=48·LCM(1..10)=120960。w=2/6/12 的 NAF 总列数分别为18/14/8，首列前缀分别为1/15/945。直接把 done=1 交给另一个窗口会继续错误的标量。固定 chunk 大小或恰好落在零串，均不能作为转换证明。</div>
     <p>新状态直接导出内存中的 X/Y/Z/T。当前 CPU scalar 和 SIMD 都持有 T，但旧 codec 丢掉 T，恢复时求逆重建。新导入入口应直接接受完整普通域 XYZT，并验证 XY=ZT 和曲线方程，重新建立本地字典与表示。</p>
     <p>旧 CPU XYZ 需先处理 gcd(Z,N)：等于1才可逆恢复 T；若为真因子，可转成已发现因子；若等于 N，则 XYZ 一般不足以唯一恢复原 T，应保留旧档并明确无法无损迁移，或选择经验证的旧代。不能任意填 T，也不能把 (XZ,YZ,Z²,XY) 当作对非单位 Z 的通用补救。</p>
     <p>CPU 主流程目前接受 NAF auto 或3..12，GPU 另支持 w=2 和 binary。若承诺所有已有 Edwards GPU checkpoint 都可转 CPU，还需支持来源 w=2（避免 SIMD 自动改窗口）及 CPU binary 续算计划；共同 NAF3..12 的首轮不能称作任意 Edwards 算法互通。</p>
-    <p class="meta">依据：<a href="../../include/ecm/stage1/scalar.h">共同 NAF 约定</a>、<a href="../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp">CPU XYZ 恢复</a>、<a href="../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp">SIMD T 重建</a>、<a href="../../src/ecm/edwards_stage1/cuda/checkpoint.cpp">CUDA 计划/窗口验证</a>、<a href="../../src/io/normalize.cpp">CPU 窗口准入</a>。</p>
+    <p class="meta">依据：<a href="../../include/ecm/stage1/scalar.h">共同 NAF 约定</a>、<a href="../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp">CPU XYZ 恢复</a>、<a href="../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp">SIMD T 重建</a>、<a href="../../src/ecm/stage1/edwards/cuda/checkpoint.cpp">CUDA 计划/窗口验证</a>、<a href="../../src/io/normalize.cpp">CPU 窗口准入</a>。</p>
   </section>
 
   <section class="card" id="batch">
@@ -104,7 +104,7 @@
     <p>现有齐步 GPU 新任务仍可保持一个计算组。迁入不同曲线进度时，分组会增加启动和字典构建次数；若要求这些曲线仍在同一 GPU 组内并行，就需要每 lane 游标/掩码支持，改动和验证范围更大。建议先接受恢复时分组，同时保持整任务只发布一次结果。</p>
     <p><b>一次快照只发布一次。</b>各后端先交付拥有的安全快照，再由现有 Context 串行提交整份批次。不要为1000条记录循环调用1000次现有 write_blob：它每次都会重写整份外层。CPU 可收集各曲线最近一次安全状态；不要求所有曲线停在同一游标。GPU 小组完成不单独发布最终 save/JSONL，也不改变 Stage1 批内按 sigma 排序的合同。</p>
     <p>计算游标、安全快照游标与成功持久化游标继续分开；保存失败优先于“正常停止”。所有完成结果与发布恢复材料保留到最终输出及队列提交成功。checkpoint 继续持有同一个长期批次锁；互通不引入两端同时执行同一任务。</p>
-    <p class="meta">依据：<a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">逐曲线种子</a>、<a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">CPU Mont 游标分组</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">CUDA 连续种子限制</a>、<a href="../../src/io/stage1_checkpoint.cpp">整批序列化</a>。</p>
+    <p class="meta">依据：<a href="../../src/ecm/stage1/montgomery/cpu/workflow.cpp">逐曲线种子</a>、<a href="../../src/ecm/stage1/montgomery/cpu/workflow.cpp">CPU Mont 游标分组</a>、<a href="../../src/ecm/stage1/montgomery/cuda/runtime.cu">CUDA 连续种子限制</a>、<a href="../../src/io/stage1_checkpoint.cpp">整批序列化</a>。</p>
   </section>
 
   <section class="card" id="options">
@@ -127,8 +127,8 @@
       <tr><td>拟新增 ecm/montgomery_stage1/checkpoint.cpp/h</td><td>共同 ladder 状态/计划验证、旧 CPU/CUDA/OpenCL 数学解码与转换。</td><td>相同 N/S/游标/构造检查的重复；设备内存读取与域装载留在原后端。</td></tr>
       <tr><td>拟新增 ecm/edwards_stage1/checkpoint.cpp/h</td><td>共同 XYZT 验证、计划匹配和旧 XYZ 导入资格；完成结果转换。</td><td>CPU/GPU 重复的数学状态资格判断；显式处理 Z 不可逆，保留错误证据。</td></tr>
       <tr><td><a href="../../src/ecm/stage1/scalar.cpp">stage1/scalar.cpp/h</a></td><td>共享规范 S 摘要、NAF 计划版本/生成与摘要；若要共用分组工具，可在 stage1 的实际调度文件集中。</td><td>同窗口的独立 NAF 编码约定逐步合并；保留各后端字典与位平面装配。</td></tr>
-      <tr><td><a href="../../src/ecm/montgomery_stage1/cpu/workflow.cpp">Mont CPU workflow</a>、<a href="../../src/ecm/montgomery_stage1/cuda/runtime.cu">CUDA runtime</a>、<a href="../../src/ecm/montgomery_stage1/opencl/engine.cpp">OpenCL engine</a></td><td>按计划和游标组批，导入普通域状态，显式 sigma/逻辑索引，导出安全快照。</td><td>私有格式直写；全批唯一游标与 sigma0+i 对任务语义的绑定。</td></tr>
-      <tr><td><a href="../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp">Ed CPU scalar</a>、<a href="../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp">SIMD</a>、<a href="../../src/ecm/edwards_stage1/cuda/workflow.cpp">CUDA workflow</a></td><td>直接导出/导入 XYZT；来源计划续算；异步游标重组；binary/w2能力按范围补齐。</td><td>只存XYZ、强制求逆补T；lane进度不齐就从头跑。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/montgomery/cpu/workflow.cpp">Mont CPU workflow</a>、<a href="../../src/ecm/stage1/montgomery/cuda/runtime.cu">CUDA runtime</a>、<a href="../../src/ecm/stage1/montgomery/opencl/engine.cpp">OpenCL engine</a></td><td>按计划和游标组批，导入普通域状态，显式 sigma/逻辑索引，导出安全快照。</td><td>私有格式直写；全批唯一游标与 sigma0+i 对任务语义的绑定。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp">Ed CPU scalar</a>、<a href="../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp">SIMD</a>、<a href="../../src/ecm/stage1/edwards/cuda/workflow.cpp">CUDA workflow</a></td><td>直接导出/导入 XYZT；来源计划续算；异步游标重组；binary/w2能力按范围补齐。</td><td>只存XYZ、强制求逆补T；lane进度不齐就从头跑。</td></tr>
       <tr><td>各后端现有 checkpoint.cpp/h</td><td>新快照装配留在对应后端；旧磁盘解码逐步并入曲线共同文件。</td><td>完成迁移后退役重复新格式写入器；resident/PRAC 等真实私有格式和第三方兼容接口不机械删除。</td></tr>
       <tr><td><a href="../../src/io/prime95_save.cpp">io/prime95_save.cpp</a></td><td>保留真正 Prime95 格式适配；CPU 私有恢复主流程改用共同状态。</td><td>CPU 新 checkpoint 依赖第三方风格包装；不删除仍被外部格式功能使用的接口。</td></tr>
       <tr><td><a href="../../src/io/normalize.cpp">normalize.cpp</a>、<a href="../../include/ecm/stage1/selection.h">selection.h</a></td><td>目标能力诊断与所存计划优先规则；增加CPU param3时将内部param视为构造字段。</td><td>把 param 只视为 GPU 选项的假设；旧 CLI 名称如需调整应保留兼容别名。</td></tr>
@@ -170,7 +170,7 @@
     <h3>可以先估算的成本</h3>
     <p>若仅保存4个普通域坐标，每条最多4·ceil(bits(N)/8) bytes。1000条曲线、10267位N，坐标上界约5,136,000 bytes（4.90 MiB）；521位约264,000 bytes（0.252 MiB）。这只是坐标载荷估算，不含计划、索引、完成结果、临时编码、旧候选和设备副本，不能当作进程峰值。N与同一计划只保存一次；d/a24/基点可按构造重建。</p>
     <p>Mont0 CPU与CUDA已有普通域快照，新增成本主要是结构验证/装配。OpenCL需在checkpoint边界转换四坐标，原执行期间继续保留设备域；不应为每个切片额外做主机转换。Edwards补存T约增加一个大整数/曲线，却避免新格式恢复时对每条曲线求逆。字典仍重建，不写成每条checkpoint的大数组。</p>
-    <div class="note">保留来源 NAF 窗口需要先做目标内存准入。当前 CUDA Edwards 字典约为 <b>4·C·2<sup>w−2</sup>·container_bytes</b>，同样 C/容器下，w12 的字典为 w6 的64倍。CPU w12 checkpoint 转 GPU 时，应先减少本次计算组的曲线数以适应预算，保持同一计划；不能遇到显存不足就改窗口并沿用旧游标。若最小组仍不支持，明确报错并保留 checkpoint。减少恢复逆运算也不会消除 CPU 仿射字典的重建成本。依据：<a href="../../src/ecm/edwards_stage1/cuda/runtime.cpp">字典分配</a>。</div>
+    <div class="note">保留来源 NAF 窗口需要先做目标内存准入。当前 CUDA Edwards 字典约为 <b>4·C·2<sup>w−2</sup>·container_bytes</b>，同样 C/容器下，w12 的字典为 w6 的64倍。CPU w12 checkpoint 转 GPU 时，应先减少本次计算组的曲线数以适应预算，保持同一计划；不能遇到显存不足就改窗口并沿用旧游标。若最小组仍不支持，明确报错并保留 checkpoint。减少恢复逆运算也不会消除 CPU 仿射字典的重建成本。依据：<a href="../../src/ecm/stage1/edwards/cuda/runtime.cpp">字典分配</a>。</div>
     <p>应实测：同端/跨端加载→首个有效批次、停止请求→持久提交、周期checkpoint耗时、进程峰值与GPU驻留、按游标碎片化的额外启动/字典成本，以及整任务吞吐。使用1000曲线、521/10267位N，分别测试统一与混合游标、连续与随机sigma；标注B1/窗口、硬件、功率、二进制、样本数和计时边界。当前没有数据支持具体毫秒数或加速百分比。</p>
     <h3>建议的实施范围</h3>
     <p>先采用 B，完成 P0–P3 作为可验证首轮；若目标明确包含 Montgomery 三端同构造和全部现有 Edwards 模式，则把 P4 一并列入完整交付范围。PRAC、缺少的计算后端及任意算法切换单列，不将它们隐含在“格式统一”中。进入实施前只需确定这一交付边界，后续接口和文件合并由上述职责推进。</p>

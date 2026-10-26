@@ -20,7 +20,7 @@ Initialize-EcmBuildDirectory $objDir
 $inventory=Get-EcmCudaInventory $repo
 $workerSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/stage1/scalar.cpp')
 $sources=$workerSources+
-    @('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp')
+    @('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
 $worker=$null
 if($WorkerBuild){
     $WorkerBuild=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkerBuild)
@@ -32,7 +32,7 @@ if($WorkerBuild){
     if($local.kernel_layout -eq 'isolated') {
         $workerSources=@($workerSources|Where-Object{$_ -notmatch '/instances/'})+
             @($entries|Where-Object{$_.file.Replace('\','/') -match '/cuda_modules/stage1/edwards_\d+\.cu$'}|ForEach-Object{$_.file})
-        $sources=$workerSources+@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp')
+        $sources=$workerSources+@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
     }
     $worker=[pscustomobject]@{objects=[pscustomobject]@{}}
     foreach($entry in $entries){
@@ -63,7 +63,7 @@ foreach($source in $sources){
     } elseif(-not ($reuse -and $previous.objects.$source -and (Test-Path $obj) -and
         $previous.objects.$source -eq (Get-FileHash -LiteralPath $obj).Hash)) {
         $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
-            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I include -I src -I src -I src/ecm/edwards_stage1/cuda -c "'+$source+'" -o "'+$obj+'"'
+            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I include -I src -I src -I src/ecm/stage1/edwards/cuda -c "'+$source+'" -o "'+$obj+'"'
         if($Tiers){
             $definitions=' -DECM_TIERS_RESTRICTED'
             foreach($tier in $Tiers.Split(',')){
@@ -96,6 +96,6 @@ foreach($key in $hashes.Keys){if($hashes[$key] -ne (Get-FileHash -LiteralPath $k
 $objectHashes=[ordered]@{}
 foreach($source in $sources){$objectHashes[$source]=(Get-FileHash -LiteralPath $objectMap[$source]).Hash}
 [ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;tiers=$Tiers;worker_build=$WorkerBuild;objects=$objectHashes;
-    cuda_object_sha256=$objectHashes['src/ecm/edwards_stage1/cuda/edwards_runtime.cu'];sources=$hashes
+    cuda_object_sha256=$objectHashes['src/ecm/stage1/edwards/cuda/edwards_runtime.cu'];sources=$hashes
 }|ConvertTo-Json -Depth 5|Set-Content $manifestPath -Encoding utf8
 Write-Host "Built $exe"

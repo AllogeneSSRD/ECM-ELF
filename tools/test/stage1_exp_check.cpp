@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "ecm/stage1/scalar.h"
-#include "../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"     /* mont_expand_bits */
+#include "../../src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.h"     /* mont_expand_bits */
 
 static int g_fail = 0, g_pass = 0;
 

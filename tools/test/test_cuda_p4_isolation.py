@@ -71,20 +71,28 @@ def main():
     # These existing CPU-only studies/instrumentation are outside CUDA target
     # isolation. The allocator fixture includes generated CPU doubles, not a
     # GPU runtime or production build source fragment.
-    cpu_only={'tools/test/stage2_s4_program_fixture.cpp','tools/bench/mers_karatsuba.cpp','tools/bench/mers_sqr_phases.cpp'}
+    cpu_only={'tools/test/stage2_s4_program_fixture.cpp','tools/bench/mers_karatsuba.cpp','tools/bench/mers_sqr_phases.cpp',
+              'tools/test/storage_concurrency_contract.cpp','tools/test/adapters/publication_files.cpp',
+              'tools/test/adapters/shared_writer_gui.cpp','tools/test/adapters/shared_writer_prime95.cpp',
+              'tools/test/adapters/shared_writer_results.cpp','tools/test/adapters/stage1_history_snapshot.cpp',
+              'tools/test/gui_v2/fake_worker.cpp'}
     for folder in (('tools/experiments',) if a.experiments_only else ('tools/experiments','tools/test','tools/bench')):
         for path in (ROOT/folder).rglob('*'):
             if path.suffix in ('.cu','.cpp','.cuh','.h'):
                 # One explicit adapter owns the private Stage1 template. The
                 # probe itself sees only its finite diagnostic API.
                 if path==ROOT/'tools/test/adapters/edwards_host_wait.cu':continue
-                if path.relative_to(ROOT).as_posix() in cpu_only:continue
+                if path.relative_to(ROOT).as_posix() in cpu_only:
+                    # Host-only fault fixtures may include real IO bodies to
+                    # inject filesystem failures; they are not CUDA adapters.
+                    assert not re.search(r'__global__|__device__|<<<|#\s*include\s*[<"]cuda_runtime',path.read_text(encoding='utf-8-sig'))
+                    continue
                 check_boundary(path,path.read_text(encoding='utf-8-sig'));count+=1
     rejected=0
     for file,body in [
         (ROOT/'tools/experiments/bad.cuh','#include "../../src/ecm/stage2/cuda/scale_plain.cuh"'),
         (ROOT/'tools/test/bad.cu','#include "../experiments/cuda/ntt_variants/main.cu"'),
-        (ROOT/'tools/test/bad.cu','#include "../../src/ecm/edwards_stage1/cuda/edwards_runtime.inl"')]:
+        (ROOT/'tools/test/bad.cu','#include "../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl"')]:
         try:check_boundary(file,body)
         except AssertionError:rejected+=1
     assert rejected==3

@@ -2,7 +2,7 @@
  * non-canonical value (>= N)?  mpz_mod() in ifma_to_mpz_lane() hides that, but
  * the next multiplication then gets an operand >= N and produces garbage.
  */
-#include "../../src/ecm/edwards_stage1/cpu/simd_edwards.h"
+#include "../../src/ecm/stage1/edwards/cpu/simd_edwards.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <vector>

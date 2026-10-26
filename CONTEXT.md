@@ -10,6 +10,6 @@ ECM-ELF 提供多后端 Stage1、独立 CUDA 多项式 Stage2、Windows GUI 和�
 
 Stage1最终输入由CLI/stdin和worktodo两个适配入口产生，归一化后计算字段冻结，队列票据与交接元数据分离。main按当前任务选择普通执行函数，task直接调用，后端返回拥有的ComputationResult；task统一最终save与结果发布，保存区间显式返回。Montgomery各param共用一条workflow，param是构造身份，算法和设备布局受其约束。
 
-计算目录按领域聚合：`src/ecm/stage1` 拥有跨曲线共同流程，`edwards_stage1`、`montgomery_stage1` 拥有各自完整的 CPU/CUDA/OpenCL 能力；`stage2` 拥有共享续算引擎和纯主机规划，`curve` 拥有跨阶段构造。真实共享的 `cpu`、`cuda`、`opencl` 技术支持继续独立。保存命名、旧历史快照和持久发布由 IO 拥有，IO 不依赖 Stage1Options。没有旧路径转发头，CLI、导出符号和磁盘格式保持兼容。目录、依赖和具体入口以[架构与术语](docs/architecture/OVERVIEW.md)为准。实施草稿与逐文件证据保留在[领域目录重构](docs/web/ecm-domain-layout-review-20261026.html#implementation-result)。
+计算目录按阶段聚合：`src/ecm/stage1` 根目录拥有跨曲线共同流程，`stage1/edwards`、`stage1/montgomery` 分别拥有曲线的 CPU/CUDA/OpenCL 能力。`stage2` 拥有共享续算引擎和纯主机规划，CUDA共同程序入口位于`stage2/cuda/main.cpp`，仅接受Edwards存档的CPU程序入口位于`stage2/edwards/cpu/main.cpp`；GW CPU引擎仍接收通用N/x/a24。`curve` 拥有跨阶段构造，真实共享的 `cpu`、`cuda`、`opencl` 技术支持继续独立。保存命名、旧历史快照和持久发布由 IO 拥有，IO 不依赖 Stage1Options。没有旧路径转发头，CLI、导出符号和磁盘格式保持兼容。目录、依赖和具体入口以[架构与术语](docs/architecture/OVERVIEW.md)为准。阶段嵌套的逐文件映射保留在[迁移清单](docs/development/STAGE_LAYOUT_MIGRATION_MANIFEST.json)。
 
 Stage1 的 sigma Module 拥有随机生成、独立/连续分配和整数范围；各后端先按原合同验证 checkpoint，再消费确定的构造身份。共同标量/cache/log 编排和保存 Naming 投影归 task；纯 scalar、结果 computation、CPU runtime 与 libecm 兼容实现保持各自可独立链接的职责。

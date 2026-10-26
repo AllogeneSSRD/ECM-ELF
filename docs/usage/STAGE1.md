@@ -125,9 +125,9 @@ Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并�
 ## 代码入口
 
 - [main.cpp](../../src/main.cpp)：命令行、TOML、队列、进度和交接。
-- [runtime.cu](../../src/ecm/montgomery_stage1/cuda/runtime.cu)：CUDA 设备调度与资源；曲线构造与结果转换在同目录 host_math.cpp，进度和诊断输出在 output.cpp，checkpoint codec 在 checkpoint.cpp。
+- [runtime.cu](../../src/ecm/stage1/montgomery/cuda/runtime.cu)：CUDA 设备调度与资源；曲线构造与结果转换在同目录 host_math.cpp，进度和诊断输出在 output.cpp，checkpoint codec 在 checkpoint.cpp。
 - [ecm_stage1_exp.cpp](../../src/ecm/stage1/scalar.cpp)：指数生成与缓存。
-- CPU 实现：[Montgomery](../../src/ecm/montgomery_stage1/cpu/)、[Edwards](../../src/ecm/edwards_stage1/cpu/)；各自拥有曲线流程和数学 checkpoint codec。
+- CPU 实现：[Montgomery](../../src/ecm/stage1/montgomery/cpu/)、[Edwards](../../src/ecm/stage1/edwards/cpu/)；各自拥有曲线流程和数学 checkpoint codec。
 
 ## 输入归一化与运行中编辑
 

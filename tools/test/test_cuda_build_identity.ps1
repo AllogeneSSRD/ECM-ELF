@@ -181,11 +181,11 @@ $set = Get-EcmStage2SourceSet $repo $inventory production @('include','src','src
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'
 Check (@($set.Dependencies | Where-Object { $_ -like '*.def' }).Count -ge 2) 'Stage2 definition tables present in source identity'
 $stage1 = Get-Stage1ReleaseSources $repo
-foreach ($name in @('src/ecm/cuda/dispatch/tiers.def','src/ecm/edwards_stage1/cuda/edwards_runtime.inl','src/ecm/edwards_stage1/cuda/workflow.cpp')) {
+foreach ($name in @('src/ecm/cuda/dispatch/tiers.def','src/ecm/stage1/edwards/cuda/edwards_runtime.inl','src/ecm/stage1/edwards/cuda/workflow.cpp')) {
     Check ($stage1.Contains($name)) "Stage1 release records $name"
 }
 $enabled = Get-Stage1ReleaseSources $repo -EnablePrac $true
-Check ($enabled.Contains('src/ecm/montgomery_stage1/cuda/prac/ecm_prac_plan.cpp') -and -not $stage1.Contains('src/ecm/montgomery_stage1/cuda/prac/ecm_prac_plan.cpp')) 'PRAC source membership follows explicit feature flag'
+Check ($enabled.Contains('src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp') -and -not $stage1.Contains('src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp')) 'PRAC source membership follows explicit feature flag'
 Reject { Assert-Stage1ReleaseSources ([pscustomobject]@{}) $stage1 } 'Stage1 source changed' 'missing release source entries rejected'
 $moduleSource = Join-Path $fixture 'src/host_module.cpp'
 $moduleHeader = Join-Path $fixture 'src/module_private.inc'

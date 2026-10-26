@@ -11,7 +11,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/stage1/computation.cpp
     src/ecm/stage1/sigma.cpp
     src/ecm/stage1/execution.cpp
-    src/ecm/edwards_stage1/cpu/workflow.cpp src/ecm/montgomery_stage1/cpu/workflow.cpp src/ecm/stage1/cpu_runtime.cpp
+    src/ecm/stage1/edwards/cpu/workflow.cpp src/ecm/stage1/montgomery/cpu/workflow.cpp src/ecm/stage1/cpu_runtime.cpp
     src/io/normalize.cpp
     src/ecm/application/cli/group_order.cpp
     src/io/cli.cpp
@@ -21,7 +21,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/io/save.cpp
     src/main.cpp
     src/ecm/stage1/libecm_compat.cpp
-    src/ecm/montgomery_stage1/opencl/checkpoint.cpp
+    src/ecm/stage1/montgomery/opencl/checkpoint.cpp
     src/io/stage1_checkpoint.cpp src/ecm/platform/stop.cpp
     src/io/config.cpp
     src/io/worktodo.cpp
@@ -30,75 +30,75 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/io/prime95.cpp
     src/ecm/platform/logging.cpp
     src/ecm/stage1/progress.cpp
-    src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp
+    src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp
     src/io/prime95_save.cpp
-    src/ecm/edwards_stage1/cpu/simd_edwards.cpp
+    src/ecm/stage1/edwards/cpu/simd_edwards.cpp
     src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
-    src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp
-    src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp
-    src/ecm/montgomery_stage1/cpu/checkpoint.cpp
+    src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp
+    src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
+    src/ecm/stage1/montgomery/cpu/checkpoint.cpp
     src/ecm/stage1/scalar.cpp
     src/io/exponent_cache.cpp)
 set(ECM_STAGE1_EDWARDS_SOURCES
-    src/ecm/edwards_stage1/cuda/runtime.cpp
-    src/ecm/edwards_stage1/cuda/edwards_runtime.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi4.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi8.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi16_2560_4096.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi16_4608_6144.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi16_6656_8192.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi32_9216_12288.cu
-    src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi32_13312_17408.cu)
+    src/ecm/stage1/edwards/cuda/runtime.cpp
+    src/ecm/stage1/edwards/cuda/edwards_runtime.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi4.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi8.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_2560_4096.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_4608_6144.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_6656_8192.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi32_9216_12288.cu
+    src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi32_13312_17408.cu)
 set(ECM_STAGE1_MONT_SOURCES
-    src/ecm/montgomery_stage1/cuda/runtime.cu
-    src/ecm/montgomery_stage1/cuda/registry.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g0.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g1.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g2.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g3.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g4.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g5.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param3_g6.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g0.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g1.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g2.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g3.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g4.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g5.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param0_g6.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g0.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g1.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g2.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g3.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g4.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g5.cu
-    src/ecm/montgomery_stage1/cuda/instances/instances_param2_g6.cu)
+    src/ecm/stage1/montgomery/cuda/runtime.cu
+    src/ecm/stage1/montgomery/cuda/registry.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g0.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g1.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g2.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g3.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g4.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g5.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param3_g6.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g0.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g1.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g2.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g3.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g4.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g5.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param0_g6.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g0.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g1.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g2.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g3.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g4.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g5.cu
+    src/ecm/stage1/montgomery/cuda/instances/instances_param2_g6.cu)
 set(ECM_STAGE1_CUDA_SOURCES
     src/ecm/application/configuration/runtime.cpp
     src/ecm/cuda/factory.cpp
-    src/ecm/montgomery_stage1/cuda/workflow.cpp
-    src/ecm/edwards_stage1/cuda/workflow.cpp
-    src/ecm/edwards_stage1/cuda/checkpoint.cpp
-    src/ecm/edwards_stage1/cuda/host_math.cpp
-    src/ecm/montgomery_stage1/cuda/host_math.cpp
-    src/ecm/montgomery_stage1/cuda/checkpoint.cpp src/ecm/montgomery_stage1/cuda/output.cpp
-    src/ecm/montgomery_stage1/cuda/host_policy.cpp
+    src/ecm/stage1/montgomery/cuda/workflow.cpp
+    src/ecm/stage1/edwards/cuda/workflow.cpp
+    src/ecm/stage1/edwards/cuda/checkpoint.cpp
+    src/ecm/stage1/edwards/cuda/host_math.cpp
+    src/ecm/stage1/montgomery/cuda/host_math.cpp
+    src/ecm/stage1/montgomery/cuda/checkpoint.cpp src/ecm/stage1/montgomery/cuda/output.cpp
+    src/ecm/stage1/montgomery/cuda/host_policy.cpp
     ${ECM_STAGE1_EDWARDS_SOURCES}
     ${ECM_STAGE1_MONT_SOURCES})
 set(ECM_STAGE1_PRAC_SOURCES
-    src/ecm/montgomery_stage1/cuda/prac/runtime.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernels.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_small.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi16.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_alternate32.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_single_add.cu
-    src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_constants.cu
-    src/ecm/montgomery_stage1/cuda/prac/ecm_prac_plan.cpp)
+    src/ecm/stage1/montgomery/cuda/prac/runtime.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernels.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_small.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi16.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_alternate32.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cu
+    src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_constants.cu
+    src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
     src/io/files.cpp
     src/io/save.cpp
@@ -110,7 +110,7 @@ set(ECM_STAGE2_HOST_SOURCES
     src/io/stage2_checkpoint.cpp
     src/io/results.cpp
     src/ecm/stage1/selection.cpp
-    src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
+    src/ecm/stage2/cuda/main.cpp
     src/ecm/stage2/planning/planning.cpp
     src/ecm/stage2/task.cpp
     src/ecm/stage2/input.cpp

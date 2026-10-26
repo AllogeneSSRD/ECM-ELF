@@ -24,7 +24,7 @@ OpenCL 编译器对整数乘法和内联汇编的生成方式可能随驱动/设
 
 - [opencl_ecm_path_registry.h](../../src/ecm/opencl/arithmetic/path_registry.h)、[实现](../../src/ecm/opencl/arithmetic/path_registry.cpp)：路径元信息与选择。
 - [opencl_ecm_runtime_config.cpp](../../src/ecm/application/configuration/runtime.cpp)：设备和运行配置。
-- [opencl_ecm_stage1.cpp](../../src/ecm/montgomery_stage1/opencl/engine.cpp)、[impl_opencl.cpp](../../src/ecm/opencl/runtime/runtime.cpp)：主机/内核接线。
+- [opencl_ecm_stage1.cpp](../../src/ecm/stage1/montgomery/opencl/engine.cpp)、[impl_opencl.cpp](../../src/ecm/opencl/runtime/runtime.cpp)：主机/内核接线。
 - [生产资源](../../src/ecm/opencl/resources/)：公共原语、算子与 Stage1 kernel；纯工具资源仍在 kernels/opencl/bench。
 - [opencl_ecm_selftest.cpp](../../src/ecm/opencl/diagnostics/selftest.cpp)、[opencl_mont_isa_export.cpp](../../tools/disasm/opencl_mont_isa_export.cpp)：验证和 ISA 入口。
 

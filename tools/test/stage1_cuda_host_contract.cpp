@@ -1,8 +1,8 @@
-#include "../../src/ecm/montgomery_stage1/cuda/host_math.h"
+#include "../../src/ecm/stage1/montgomery/cuda/host_math.h"
 #include "../../src/ecm/stage1/execution.h"
 #include "../../src/ecm/stage1/sigma.h"
-#include "../../src/ecm/edwards_stage1/cuda/runtime.h"
-#include "../../src/ecm/edwards_stage1/cuda/edwards_internal.h"
+#include "../../src/ecm/stage1/edwards/cuda/runtime.h"
+#include "../../src/ecm/stage1/edwards/cuda/edwards_internal.h"
 #include "../../src/ecm/curve/edwards.h"
 #include <cstdio>
 #include <cstdlib>

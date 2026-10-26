@@ -31,7 +31,7 @@ NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/cuda/ntt/`，设�
 
 实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/stage2/planning/initial_memory.h`，JSON 转义及纯设备原语仍可共享。
 
-`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/edwards_stage1/cuda/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
+`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/stage1/edwards/cuda/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
 
 ## 输入与表示
 
@@ -163,13 +163,13 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 
 ## 主机规划实现
 
-[planning/stage2.cpp](../../src/ecm/stage2/planning/planning.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型当前位于私有 service/stage2，不作为外部 API。
+[planning/planning.cpp](../../src/ecm/stage2/planning/planning.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型位于 `src/ecm/stage2/types.h` 等私有头，不作为外部 API。
 
 ## 父任务与曲线子进程
 
-application/cuda_stage2 main 负责 CLI、配置合并、模式与退出。service/stage2/task.cpp 只有一条父任务循环：校验/恢复 → pending 落盘 → 子进程 → receipt 确认 → done → seal → 源行复核 → finished → 队列移除 → 进度清理。同文件的 curve_worker 保留重读 save/hash、规划、GCD/引擎和持久发布的完整顺序。
+`stage2/cuda/main.cpp` 负责 CLI、配置合并、模式与退出。`stage2/task.cpp` 只有一条父任务循环：校验/恢复 → pending 落盘 → 子进程 → receipt 确认 → done → seal → 源行复核 → finished → 队列移除 → 进度清理。同文件的 curve_worker 保留重读 save/hash、规划、GCD/引擎和持久发布的完整顺序。
 
-platform/process/stage2_curve_process.cpp 管理 Job、管道、进程、停止和 console 投影；Worker/Task 不重复管理这些资源。service/stage2/input.cpp 集中实际输入校验；普通配置 CPP 在发布处读取结果身份。父流程只接受具体路径/队列策略/默认值，无完整 Settings 依赖。私有 Options 仍是 executable 内部调用数据，不是公开计算 API；一个进程只有一个活跃曲线/引擎状态。
+`src/ecm/stage2/process.cpp` 管理 Job、管道、进程、停止和 console 投影；Worker/Task 不重复管理这些资源。`src/ecm/stage2/input.cpp` 集中实际输入校验；普通配置 CPP 在发布处读取结果身份。父流程只接受具体路径/队列策略/默认值，无完整 Settings 依赖。私有 Options 仍是 executable 内部调用数据，不是公开计算 API；一个进程只有一个活跃曲线/引擎状态。
 
 ## 曲线进程协议
 

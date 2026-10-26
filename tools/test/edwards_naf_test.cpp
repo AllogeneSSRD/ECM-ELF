@@ -1,5 +1,5 @@
 #include "ecm/stage1/scalar.h"
-#include "../../src/ecm/edwards_stage1/cuda/edwards_slice.h"
+#include "../../src/ecm/stage1/edwards/cuda/edwards_slice.h"
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>

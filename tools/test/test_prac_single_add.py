@@ -136,11 +136,11 @@ def main():
             assert single[0][0]*oracle[1]%n==oracle[0]*single[0][1]%n
             coverage.update(single[3]);steps+=len(single[1])+1
     assert all(coverage[k]>0 for k in ('0','1','2','3','final'))
-    source=Path('src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_single_add.cuh')
+    source=Path('src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cuh')
     report=dict(prime_d_pairs=len(pairs),sigmas=2,chains=2*len(pairs),point_role_steps=steps,
         models=['baseline','single-add','single-compact-v1','single-compact-disjoint','single-compact-sentinel','single-compact-shared-dbl'],model_chain_evaluations=12*len(pairs),
         rule_coverage=dict(coverage),modulus_bits=127,source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-        arithmetic_source_sha256=hashlib.sha256(Path('src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernel.cuh').read_bytes()).hexdigest(),
+        arithmetic_source_sha256=hashlib.sha256(Path('src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernel.cuh').read_bytes()).hexdigest(),
         scope='CPU point-role model; exact baseline intermediate/final XZ and independent ladder; not native GPU verification',passed=True)
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8');print(json.dumps(report))

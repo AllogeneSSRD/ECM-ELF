@@ -1,7 +1,7 @@
 #include "selftest.h"
 
 #include "../../../../include/ecm/platform/logging.h"
-#include "../../montgomery_stage1/opencl/montgomery.h"
+#include "../../stage1/montgomery/opencl/montgomery.h"
 
 #include <CL/cl.h>
 

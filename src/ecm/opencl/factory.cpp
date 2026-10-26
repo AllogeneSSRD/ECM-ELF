@@ -8,9 +8,9 @@
 #include "../../../include/ecm/stage1/gpu_backend.h"
 #include "../stage1/libecm_compat.h"                    /* ECM_ERROR */
 
-#include "../montgomery_stage1/opencl/api.h"            /* gpu_prepare_opencl */
+#include "../stage1/montgomery/opencl/api.h"            /* gpu_prepare_opencl */
 #include "runtime/device.h"              /* configureOpenclDeviceIndex */
-#include "../montgomery_stage1/opencl/api.h"       /* opencl_ecm_stage1 */
+#include "../stage1/montgomery/opencl/api.h"       /* opencl_ecm_stage1 */
 #include "arithmetic/path_registry.h" /* opencl_ecm_print_available_kernels */
 #include "../../../include/ecm/platform/logging.h"         /* ecm_ts_fprintf */
 

@@ -17,7 +17,7 @@ $file=Join-Path $Build 'build.cmd'
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 30;throw 'compile failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $hashes=[ordered]@{}
-foreach($source in @('tools/test/edwards_naf_test.cpp','include/ecm/stage1/scalar.h','src/ecm/stage1/scalar.cpp','src/ecm/edwards_stage1/cuda/edwards_slice.h','tools/build/test/build_edwards_naf_test.ps1')){
+foreach($source in @('tools/test/edwards_naf_test.cpp','include/ecm/stage1/scalar.h','src/ecm/stage1/scalar.cpp','src/ecm/stage1/edwards/cuda/edwards_slice.h','tools/build/test/build_edwards_naf_test.ps1')){
     $hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
 }
 [ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;sources=$hashes}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $Build 'manifest.json') -Encoding utf8

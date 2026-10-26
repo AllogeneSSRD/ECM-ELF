@@ -16,7 +16,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
-    paths = ['src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp',
+    paths = ['src/ecm/stage2/cuda/main.cpp',
         'src/ecm/stage2/input.cpp', 'src/ecm/stage2/task.cpp',
         'src/ecm/stage2/process.cpp', 'src/ecm/stage2/planning/planning.cpp',
         'src/ecm/stage2/cuda/host_policy.cpp', 'src/ecm/stage2/console.h',

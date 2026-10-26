@@ -70,6 +70,8 @@ def main():
         'src/ecm/montgomery_stage1/cuda/prac/runtime.cu': 'consistent last-lane overflow check',
         'src/io/normalize.cpp': 'same batch ranges as execution and parameter-specific minima',
     }
+    shared_changes = {current_source(name).relative_to(ROOT).as_posix(): reason
+                      for name, reason in shared_changes.items()}
     for item in manifest['files']:
         source, targets, action = item['source'], item['targets'], item['action']
         for target in targets:
@@ -107,7 +109,7 @@ def main():
         ('src/ecm/stage1/legacy.cpp', 'src/ecm/stage1/libecm_compat.cpp', 'ecm_clear'),
     ]:
         frozen = subprocess.check_output(['git', 'show', '422a38e8:'+old], cwd=ROOT).decode('utf-8-sig')
-        current = (ROOT/new).read_text(encoding='utf-8-sig')
+        current = current_source(new).read_text(encoding='utf-8-sig')
         current_name = 'random_sigma53' if name == 'random_sigma_u64' else name
         assert definition_body(frozen, name) == definition_body(current, current_name), name
     # The two merged entry bodies keep their checks, ABI-facing arguments,
@@ -119,7 +121,7 @@ def main():
          'src/ecm/montgomery_stage1/opencl/engine.cpp', 'opencl_ecm_stage1'),
     ]:
         frozen = subprocess.check_output(['git', 'show', baseline+':'+old], cwd=ROOT).decode('utf-8-sig')
-        current = (ROOT/new).read_text(encoding='utf-8-sig')
+        current = current_source(new).read_text(encoding='utf-8-sig')
         assert definition_body(frozen, name) == definition_body(current, name), ('merged function changed', name)
     result = dict(complete=True, baseline=baseline, inventory_files=len(manifest['files']),
                   unchanged_computation_files=len(checked), function_move_exceptions=exceptions,

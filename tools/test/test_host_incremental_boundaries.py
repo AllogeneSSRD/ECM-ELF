@@ -42,10 +42,10 @@ def main():
     probes = [
         ('configuration_read', 'src/io/config_format.h', 'inline bool read_toml('),
         ('configuration_write', 'src/ecm/application/gui/toml_file.cpp', 'bool TomlFile::save('),
-        ('curve_cpu_math', 'src/ecm/montgomery_stage1/cuda/host_math.cpp', 'void to_mpz('),
+        ('curve_cpu_math', 'src/ecm/stage1/montgomery/cuda/host_math.cpp', 'void to_mpz('),
         ('sigma_generation', 'src/ecm/stage1/sigma.cpp', 'uint64_t random_sigma53('),
-        ('curve_parameterization', 'src/ecm/edwards_stage1/cuda/host_math.cpp', 'bool initialize('),
-        ('runtime_selection', 'src/ecm/montgomery_stage1/cuda/host_policy.cpp', 'const char *stage1_algorithm('),
+        ('curve_parameterization', 'src/ecm/stage1/edwards/cuda/host_math.cpp', 'bool initialize('),
+        ('runtime_selection', 'src/ecm/stage1/montgomery/cuda/host_policy.cpp', 'const char *stage1_algorithm('),
         ('curve_results', 'src/ecm/stage1/computation.cpp', 'void LegacyExecutionResult::validate_curves('),
         ('checkpoint', 'src/io/stage1_checkpoint.cpp', 'bool Context::State::commit('),
         ('save', 'src/io/save.cpp', 'std::string build_who_field('),

@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from test_result_output_consistency import crc_valid
@@ -10,16 +11,19 @@ from test_result_output_consistency import crc_valid
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ('baseline', 'grouped', 'isolated', 'mont_save', 'ed_save', 'output'):
+    for name in ('baseline', 'grouped', 'mont_save', 'ed_save', 'output'):
         p.add_argument('--'+name.replace('_', '-'), type=Path, required=True)
+    p.add_argument('--isolated', type=Path, help='Also verify an independently built isolated target')
     p.add_argument('--device', type=int, default=0)
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    report = dict(complete=False, device=a.device, b2=4000, curves=2, cases=[])
+    identity = Path(__file__).resolve().parents[2]/'include/ecm/platform/program_version.h'
+    version = re.search(r'\bversion\[\]\s*=\s*"([^"]+)"', identity.read_text()).group(1)
+    report = dict(complete=False, device=a.device, b2=4000, curves=2, expected_version=version, cases=[])
     for model, source in [('mont', a.mont_save), ('ed', a.ed_save)]:
         expected = None
-        for label in ['baseline', 'grouped', 'isolated']:
+        for label in ['baseline', 'grouped']+(['isolated'] if a.isolated else []):
             exe = getattr(a, label).resolve()
             work = out/(model+'_'+label)
             work.mkdir()
@@ -37,7 +41,7 @@ def main():
             rows = [json.loads(line) for line in (work/'internal.jsonl').read_text().splitlines()]
             assert len(rows) == 2 and all(crc_valid(row) for row in rows)
             if label != 'baseline':
-                assert all(row['program']['version'] == '0.53.4' for row in rows)
+                assert all(row['program']['version'] == version for row in rows)
             sigma = lambda row: row.get('Edwards', {}).get('sigma', row.get('sigma'))
             assert [sigma(row) for row in rows] == [1000, 1001]
             assert all(('Edwards' in row) == (model == 'ed') for row in rows)

@@ -129,13 +129,13 @@ foreach(_source include/ecm/io/results.h src/io/json.h
                 src/ecm/group_order/group_order.h src/ecm/diagnostics/order_analysis.h
                 include/ecm/stage1/selection.h include/ecm/stage1/scalar.h include/ecm/stage1/task.h
                 src/ecm/stage1/execution.h src/ecm/platform/generated/configuration_defaults.h
-                src/ecm/montgomery_stage1/opencl/workflow.cpp
-                src/ecm/montgomery_stage1/cuda/workflow.cpp
-                src/ecm/edwards_stage1/cuda/workflow.cpp
-                src/ecm/edwards_stage1/cuda/checkpoint.cpp
-                src/ecm/edwards_stage1/cuda/host_math.cpp
-                src/ecm/montgomery_stage1/cuda/host_math.cpp src/ecm/montgomery_stage1/cuda/checkpoint.cpp src/ecm/montgomery_stage1/cuda/output.cpp
-                src/ecm/montgomery_stage1/cuda/host_policy.cpp
+                src/ecm/stage1/montgomery/opencl/workflow.cpp
+                src/ecm/stage1/montgomery/cuda/workflow.cpp
+                src/ecm/stage1/edwards/cuda/workflow.cpp
+                src/ecm/stage1/edwards/cuda/checkpoint.cpp
+                src/ecm/stage1/edwards/cuda/host_math.cpp
+                src/ecm/stage1/montgomery/cuda/host_math.cpp src/ecm/stage1/montgomery/cuda/checkpoint.cpp src/ecm/stage1/montgomery/cuda/output.cpp
+                src/ecm/stage1/montgomery/cuda/host_policy.cpp
                 include/ecm/io/save.h include/ecm/integer.h include/ecm/platform/program_version.h
                 include/ecm/stage1/progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
@@ -154,12 +154,12 @@ endfunction()
 
 add_executable(ecm
     ${ECM_STAGE1_COMMON_SOURCES}
-    src/ecm/montgomery_stage1/opencl/workflow.cpp
-    src/ecm/montgomery_stage1/opencl/engine.cpp
+    src/ecm/stage1/montgomery/opencl/workflow.cpp
+    src/ecm/stage1/montgomery/opencl/engine.cpp
     src/ecm/opencl/factory.cpp
     src/ecm/opencl/runtime/device.cpp
-    src/ecm/montgomery_stage1/opencl/debug_utils.cpp
-    src/ecm/montgomery_stage1/opencl/montgomery.cpp
+    src/ecm/stage1/montgomery/opencl/debug_utils.cpp
+    src/ecm/stage1/montgomery/opencl/montgomery.cpp
     src/ecm/opencl/arithmetic/path_registry.cpp
     src/ecm/opencl/diagnostics/selftest.cpp
 )
@@ -168,12 +168,12 @@ ecm_stage1_identity_sidecar(ecm)
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
 # (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
 if(MSVC)
-    set_source_files_properties(src/ecm/edwards_stage1/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
-        src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp
+    set_source_files_properties(src/ecm/stage1/edwards/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+        src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(src/ecm/edwards_stage1/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
-        src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp
+    set_source_files_properties(src/ecm/stage1/edwards/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+        src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 
@@ -413,7 +413,7 @@ if(ECM_ENABLE_CUDA)
     target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_CHAIN_W=${ECM_PROBE_CHAIN_W})
 
     # Kernel launch/occupancy tunables (docs/performance/STAGE1.md).  TPB must
-    # match the launch config in src/ecm/montgomery_stage1/cuda/runtime.cu, hence compile-time.  Defaults
+    # match the launch config in src/ecm/stage1/montgomery/cuda/runtime.cu, hence compile-time.  Defaults
     # are the MEASURED best from the 2026-09-25 sweep (M511/M761, 8192 curves, B1=1e5,
     # param3, GPU 1): the historical 256/4 measured 78.18 M curve-bits/s at M511, 128/1
     # measures 79.15 M, and blocks = curves/(TPB/TPI) is what actually drives throughput
@@ -433,8 +433,8 @@ if(ECM_ENABLE_CUDA)
     set(ECM_MAXRREG_SMALL "0" CACHE STRING "maxrregcount for the <=2048-bit kernel sources (0 = off)")
     if(NOT ECM_MAXRREG_SMALL STREQUAL "0")
         set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param3_g0.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param3_g1.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param3_g0.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param3_g1.cu
             PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SMALL}")
     endif()
 
@@ -455,20 +455,20 @@ if(ECM_ENABLE_CUDA)
     set(ECM_MAXRREG_SUYAMA "0" CACHE STRING "maxrregcount for the param0/Suyama + param2 kernel sources (0 = off)")
     if(NOT ECM_MAXRREG_SUYAMA STREQUAL "0")
         set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g0.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g1.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g2.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g3.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g4.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g5.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param0_g6.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g0.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g1.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g2.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g3.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g4.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g5.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cuda/instances/instances_param2_g6.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g0.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g1.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g2.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g3.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g4.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g5.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g6.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g0.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g1.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g2.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g3.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g4.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g5.cu
+            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g6.cu
             PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SUYAMA}")
     endif()
 
@@ -537,7 +537,7 @@ if(ECM_ENABLE_CUDA)
     #
     # This is a WHOLE-BUILD switch: a binary built with -DECM_MERS_FOLD=1 only carries fold
     # kernels, so it REFUSES any N that is not 2^k - 1 and refuses --gpu-param 3
-    # (src/ecm/montgomery_stage1/cuda/runtime.cu).  Default 0 keeps the historical Montgomery kernels.
+    # (src/ecm/stage1/montgomery/cuda/runtime.cu).  Default 0 keeps the historical Montgomery kernels.
     set(ECM_MERS_FOLD "0" CACHE STRING "1 = suyama family runs the Mersenne fold domain (N = 2^k-1 only)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_MERS_FOLD=${ECM_MERS_FOLD})
     if(ECM_MERS_FOLD)

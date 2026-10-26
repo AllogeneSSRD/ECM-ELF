@@ -36,8 +36,8 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 #else
 
 #include "../../../../../../src/ecm/application/configuration/ecm_expr.h"
-#include "../../../../../../src/ecm/montgomery_stage1/opencl/checkpoint.h"
-#include "../../../../../../src/ecm/montgomery_stage1/opencl/api.h"
+#include "../../../../../../src/ecm/stage1/montgomery/opencl/checkpoint.h"
+#include "../../../../../../src/ecm/stage1/montgomery/opencl/api.h"
 #include "ecm/io/save.h"
 
 #include "../../../../../../src/ecm/stage1/libecm_compat.h"

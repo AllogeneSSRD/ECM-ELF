@@ -18,8 +18,8 @@
  * Build: cmake --build build_vs18 --config Release --target simd_edwards_bench
  * ------------------------------------------------------------------------- */
 
-#include "../../src/ecm/edwards_stage1/cpu/simd_edwards.h"
-#include "../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
+#include "../../src/ecm/stage1/edwards/cpu/simd_edwards.h"
+#include "../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
 
 #include <gmp.h>
 #include <stdio.h>

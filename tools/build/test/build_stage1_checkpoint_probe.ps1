@@ -13,14 +13,14 @@ Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'stage1_checkpoint_probe.exe'
 $fixture=if($Ownership){'stage1_checkpoint_ownership_test'}else{'stage1_checkpoint_container_test'}
 $script=Join-Path $Build 'build.cmd'
-$sources=@("tools/test/$fixture.cpp",'src/ecm/edwards_stage1/cuda/checkpoint.cpp',
-    'src/ecm/edwards_stage1/cuda/host_math.cpp',
+$sources=@("tools/test/$fixture.cpp",'src/ecm/stage1/edwards/cuda/checkpoint.cpp',
+    'src/ecm/stage1/edwards/cuda/host_math.cpp',
     'src/io/stage1_checkpoint.cpp','src/io/files.cpp','src/io/save.cpp',
     'src/ecm/application/configuration/ecm_expr.cpp','src/ecm/platform/stop.cpp',
     'src/ecm/stage1/scalar.cpp','src/ecm/platform/logging.cpp',
     'src/ecm/application/configuration/runtime.cpp')
 if(-not $Ownership){
-    $sources+=@('src/ecm/montgomery_stage1/cuda/checkpoint.cpp',
+    $sources+=@('src/ecm/stage1/montgomery/cuda/checkpoint.cpp',
                 'tools/test/adapters/stage1_checkpoint_log.cpp')
 }
 $commands=@();$objects=@()

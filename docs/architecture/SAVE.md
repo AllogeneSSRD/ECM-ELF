@@ -100,7 +100,7 @@ CPU/GPU PARAM0 与 GPU PARAM2/3 均保存实际计算模数的表达式；缺少
 
 命中时的 X 是因子，没有点的继续意义。文本没有独立命中标志；消费者需据算术或其他结果判定。Stage1 结果账本是曲线结果的独立依据，见 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 
-来源：[模数表达式及 Montgomery 写入](../../src/io/save.cpp)、[CUDA 保存调用](../../src/ecm/montgomery_stage1/cuda/workflow.cpp)、[保存字段校验](../../src/io/save.cpp)。
+来源：[模数表达式及 Montgomery 写入](../../src/io/save.cpp)、[CUDA 保存调用](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)、[保存字段校验](../../src/io/save.cpp)。
 
 ## 5. Edwards save VERSION=1
 
@@ -132,7 +132,7 @@ PARAM 被禁止；默认不写 PROGRAM/WHO/TIME，也不写 Z。可选 Z 若提�
 
 CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且不超过2⁵³，并验证 FACTOR 严格大于1且整除 N。CUDA 读取器另受自身位宽上限约束；不能将两个入口的检查集合视为完全相同。
 
-来源：[save_line / save_checksum](../../include/ecm/io/save.h)、[坐标与状态判定](../../src/ecm/edwards_stage1/cuda/workflow.cpp)、[CPU 专用读取](../../include/ecm/io/save.h)。
+来源：[save_line / save_checksum](../../include/ecm/io/save.h)、[坐标与状态判定](../../src/ecm/stage1/edwards/cuda/workflow.cpp)、[CPU 专用读取](../../include/ecm/io/save.h)。
 
 ## 6. 写入、去重与发布
 
@@ -193,7 +193,7 @@ CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且
 
 这些检查不回算 Stage1，不检测任意一个满足范围的伪造 POINT 是否正确。Stage2 队列恢复使用整个 save 的 SHA256，见 [CHECKPOINT](CHECKPOINT.md#7-stage2-队列进度格式)。
 
-来源：[CUDA 记录解析](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L117)、[选定记录](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L193)、[队列数学目标检查](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L1360)、[CPU 文本入口](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp#L150)。
+来源：[CUDA 记录解析](../../src/ecm/stage2/cuda/main.cpp#L117)、[选定记录](../../src/ecm/stage2/cuda/main.cpp#L193)、[队列数学目标检查](../../src/ecm/stage2/cuda/main.cpp#L1360)、[CPU 文本入口](../../src/ecm/stage2/edwards/cpu/main.cpp#L150)。
 
 ### 7.3 Prime95、同步与错误
 

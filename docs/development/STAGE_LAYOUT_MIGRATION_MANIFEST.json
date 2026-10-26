@@ -1,0 +1,1226 @@
+{
+  "baseline": "00220c2e9f12ad06fba8500da61a640abbb6f84f",
+  "scope": "Stage1 curve nesting and Stage2 program entry relocation; no computation changes",
+  "files": [
+    {
+      "source": "src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp",
+      "target": "src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp",
+      "sha256": "2b4efd7962b777d26a28ef1cd8e4782cba982a0e5c0012872fdfb88a614fb9b4",
+      "git_sha256": "7022d8d07ea23e6054a0cfb48610e0f38092021dfedeab2f0ef6e5ed92b236c7",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h",
+      "target": "src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.h",
+      "sha256": "55032869b92f4c78d631eecb0ffae65f542135f32a4440549ebef89fa8b5ff03",
+      "git_sha256": "55032869b92f4c78d631eecb0ffae65f542135f32a4440549ebef89fa8b5ff03",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/simd_edwards.cpp",
+      "target": "src/ecm/stage1/edwards/cpu/simd_edwards.cpp",
+      "sha256": "9a0c98f763b2679eedae1fa26ce3cf4da402cc2eeb7d7ae01fce0576ddc2dd56",
+      "git_sha256": "b66bf90d210ad827c03dec9d9a8628245d61895928a2a576412650962d26ee3a",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/simd_edwards.h",
+      "target": "src/ecm/stage1/edwards/cpu/simd_edwards.h",
+      "sha256": "9e629abf87132d0dd9bcedf716efa089c58c5ee7d73addaf9f088e3361d456ca",
+      "git_sha256": "9e629abf87132d0dd9bcedf716efa089c58c5ee7d73addaf9f088e3361d456ca",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/workflow.cpp",
+      "target": "src/ecm/stage1/edwards/cpu/workflow.cpp",
+      "sha256": "abb8cf3d9d7d7df6e6135901669edb60ea3d7072156e669c327c27cdc2795ff4",
+      "git_sha256": "07b1f5b142b09acdca460270a7e4156b134b7998a254776f9b0b4fba2f6789aa",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/api.h",
+      "target": "src/ecm/stage1/edwards/cuda/api.h",
+      "sha256": "590f6c4fa42844c42c288217e6fbb1b35445fcd32f5ad0a81f530928a5a25606",
+      "git_sha256": "590f6c4fa42844c42c288217e6fbb1b35445fcd32f5ad0a81f530928a5a25606",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/batch.h",
+      "target": "src/ecm/stage1/edwards/cuda/batch.h",
+      "sha256": "fc280f5bdeabf61d595cf3779c7a0989bc13d5c11534588f20184788c290d7b1",
+      "git_sha256": "bd77bd9f7face3161b4743ab81097029ee6f9fffd64b64211b8718d2c27b802a",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/checkpoint.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/checkpoint.cpp",
+      "sha256": "11c659ad74a63a6c540862beec94028e61eeb03f48d38e951ba7a68d6bacc806",
+      "git_sha256": "a8c4bf00c6b95a131fcfb870499fd5fa539d2624f473a68b3d65e06486a691ca",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/checkpoint.h",
+      "target": "src/ecm/stage1/edwards/cuda/checkpoint.h",
+      "sha256": "3ff1f6e223052f6f1e9a1d8cfbd428d3207dac2ed62a890bedd0ba3b409d72c9",
+      "git_sha256": "ee9b2f6214372784a7f51795647507d02967639a724073c45fae9a3077f29bd5",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/edwards_internal.h",
+      "target": "src/ecm/stage1/edwards/cuda/edwards_internal.h",
+      "sha256": "531e576c40df0902d0392548c57f51ad301ed65806e73688c5e53a135fbc2035",
+      "git_sha256": "531e576c40df0902d0392548c57f51ad301ed65806e73688c5e53a135fbc2035",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/edwards_runtime.cu",
+      "target": "src/ecm/stage1/edwards/cuda/edwards_runtime.cu",
+      "sha256": "c4e838499e68bdc4c7b67290cc6be4cd58131e97d4605a4c2c78f94caca8a4a5",
+      "git_sha256": "c4e838499e68bdc4c7b67290cc6be4cd58131e97d4605a4c2c78f94caca8a4a5",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/edwards_runtime.inl",
+      "target": "src/ecm/stage1/edwards/cuda/edwards_runtime.inl",
+      "sha256": "6d5e3c803fc2f1802dca2928b10e2dea65c13e7ce5afba09fc7b384a5157f4f4",
+      "git_sha256": "67974737551e7bbc60449542e44512b3237412732143837100d2c38d56ce91c9",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/edwards_slice.h",
+      "target": "src/ecm/stage1/edwards/cuda/edwards_slice.h",
+      "sha256": "4df2e446422d9ce8e3c08e7c34fcc473ac4d36fe5eb71280a0f1e0b70bc71af8",
+      "git_sha256": "4df2e446422d9ce8e3c08e7c34fcc473ac4d36fe5eb71280a0f1e0b70bc71af8",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/host_math.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/host_math.cpp",
+      "sha256": "a2ebae2804a07815bf7ff33f109bd434aff0729b7547c11c1894f39211464927",
+      "git_sha256": "67ec136718a620b515e2d7ae7c8ac12f606b5f7484beaa7ad9f0cdedec296e4e",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/host_math.h",
+      "target": "src/ecm/stage1/edwards/cuda/host_math.h",
+      "sha256": "72d036d916439fbca5d71c605f8d1c649e55f8967012ce068a5b14b687140135",
+      "git_sha256": "2ce98f2feb74b7192e32f873707ef5402e294e8c6aa6de1462a274d42937758c",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/host_wait.h",
+      "target": "src/ecm/stage1/edwards/cuda/host_wait.h",
+      "sha256": "87ed1f22a97c202541faf5f11f2478b5931ac49e28631c6faa4399f34740b46b",
+      "git_sha256": "87ed1f22a97c202541faf5f11f2478b5931ac49e28631c6faa4399f34740b46b",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi16_2560_4096.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_2560_4096.cu",
+      "sha256": "e8648ebb148cf481ef559da134d949e915a916f8c0262a50c8eb27e0142301c5",
+      "git_sha256": "e8648ebb148cf481ef559da134d949e915a916f8c0262a50c8eb27e0142301c5",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi16_4608_6144.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_4608_6144.cu",
+      "sha256": "d0fd79f5bdd73e04e14206b8f6014b1e041b4daff2adda631ceb6386ab08e2f4",
+      "git_sha256": "d0fd79f5bdd73e04e14206b8f6014b1e041b4daff2adda631ceb6386ab08e2f4",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi16_6656_8192.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_6656_8192.cu",
+      "sha256": "e799b5db8b6c881cb0d4e25a6a0a07ab7c0806dd68c709fea599512e0b93f455",
+      "git_sha256": "e799b5db8b6c881cb0d4e25a6a0a07ab7c0806dd68c709fea599512e0b93f455",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi32_13312_17408.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi32_13312_17408.cu",
+      "sha256": "6a74db1073caced62a68067314b0350b7c9909e15c96d3c976773bdf2fd72c56",
+      "git_sha256": "6a74db1073caced62a68067314b0350b7c9909e15c96d3c976773bdf2fd72c56",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi32_9216_12288.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi32_9216_12288.cu",
+      "sha256": "5105e2a0f4b57e1e1fe062c01c85ee8475b07e59bf8bd2d2c72dcd2153155dc4",
+      "git_sha256": "5105e2a0f4b57e1e1fe062c01c85ee8475b07e59bf8bd2d2c72dcd2153155dc4",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi4.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi4.cu",
+      "sha256": "5a25d6673b08d0d81a270343233ae4006bdb8cb4a261cfedd9bced2448913fc4",
+      "git_sha256": "5a25d6673b08d0d81a270343233ae4006bdb8cb4a261cfedd9bced2448913fc4",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_tpi8.cu",
+      "target": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi8.cu",
+      "sha256": "5dc296b9db5aac2c8fcdfb4c20be1dc18b494d9696da1715cb72850ea8323952",
+      "git_sha256": "5dc296b9db5aac2c8fcdfb4c20be1dc18b494d9696da1715cb72850ea8323952",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/instances.cuh",
+      "target": "src/ecm/stage1/edwards/cuda/instances/instances.cuh",
+      "sha256": "92ac91db2ebb5a6f8dc37e547762cd76c33859442bfd04694c1d0c277000f1d4",
+      "git_sha256": "92ac91db2ebb5a6f8dc37e547762cd76c33859442bfd04694c1d0c277000f1d4",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/launch.h",
+      "target": "src/ecm/stage1/edwards/cuda/launch.h",
+      "sha256": "d56d2e1d4c68521afbc58807ffc98bad5fdaa144db3faa844584367832c467e8",
+      "git_sha256": "d56d2e1d4c68521afbc58807ffc98bad5fdaa144db3faa844584367832c467e8",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/naf.cuh",
+      "target": "src/ecm/stage1/edwards/cuda/naf.cuh",
+      "sha256": "f92655d1491637c3ff21e8db779a97b4ad9a81a3c7835e49394b6b87e91c52be",
+      "git_sha256": "f92655d1491637c3ff21e8db779a97b4ad9a81a3c7835e49394b6b87e91c52be",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/naf.h",
+      "target": "src/ecm/stage1/edwards/cuda/naf.h",
+      "sha256": "2b9e4c6a222fa93300d440ca335e06144b2b4945f7fb93e29bac36796c11d370",
+      "git_sha256": "2b9e4c6a222fa93300d440ca335e06144b2b4945f7fb93e29bac36796c11d370",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/point.cuh",
+      "target": "src/ecm/stage1/edwards/cuda/point.cuh",
+      "sha256": "3bf074b9f7dad425f214b18965814564ec82d9b7bd05525efe35977d880a94a6",
+      "git_sha256": "3bf074b9f7dad425f214b18965814564ec82d9b7bd05525efe35977d880a94a6",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/runtime.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/runtime.cpp",
+      "sha256": "2b3ea481558f365947f3c2a6e2b2773de65113791114242d3645d7f50409ce8f",
+      "git_sha256": "4a0689a17575ada295555a8e4624aa3ed39a577813b436b305fad93637f15a33",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/runtime.h",
+      "target": "src/ecm/stage1/edwards/cuda/runtime.h",
+      "sha256": "5e78c30666499207dbe5481ec2d5283960922c41dd295cacb2784ed5ad16181d",
+      "git_sha256": "5e78c30666499207dbe5481ec2d5283960922c41dd295cacb2784ed5ad16181d",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/workflow.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/workflow.cpp",
+      "sha256": "35400a90a1031b52923dbecd9accabf3fda06dafc07196f8caede50f890bbac8",
+      "git_sha256": "574ce41f5afafb48afb9a74b36be625b8e64d2b56f8557ba771d9e59183a15e3",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/checkpoint.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/checkpoint.cpp",
+      "sha256": "7f377a924e5a1051ca0f34bd424223e74e8d113d5292d8c2e5cd5cf988b7390d",
+      "git_sha256": "ae098c63287cb286bdc78d5ce14768f0d007e90ffcc3ab76187459d27f009773",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/checkpoint.h",
+      "target": "src/ecm/stage1/montgomery/cpu/checkpoint.h",
+      "sha256": "4e99c665051efac0c51fb1de4ce531d90b5a547fec75f9ffda33b29ed261a412",
+      "git_sha256": "45121c218c19c504b6fdc5c5b838c30554b3622e644ff0557d97ed8886e9922a",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp",
+      "sha256": "d2c0a89f68ae76edc6c84b4442228541120aa45c77c0c73475b21d072b83934c",
+      "git_sha256": "d5f48ada97fb83eaa075922475f29a79fa6e8422ae28b7815663b6944dce2bee",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h",
+      "target": "src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.h",
+      "sha256": "f4421a67f6ea95c7c16f1bf27ecd750451fc15f647aeb82f5919d5eb6ecff779",
+      "git_sha256": "1d0724180931afd15c18417df50e9db40eba9ab26647fd47a14d186bbbf94d7d",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/simd_mont_curve.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp",
+      "sha256": "ad7481a4be35fe71a490e06b7652d5ce4d987ca7da064df6ee1f6ed1aff268be",
+      "git_sha256": "ad7481a4be35fe71a490e06b7652d5ce4d987ca7da064df6ee1f6ed1aff268be",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/simd_mont_curve.h",
+      "target": "src/ecm/stage1/montgomery/cpu/simd_mont_curve.h",
+      "sha256": "0cad929aa550e8a9db6ca3ccf2cff955f5cb9678692572433253676d8b9d4f54",
+      "git_sha256": "0cad929aa550e8a9db6ca3ccf2cff955f5cb9678692572433253676d8b9d4f54",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/workflow.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/workflow.cpp",
+      "sha256": "775d7d3f444bad18717299af4e1237a88885eb4c5db62b181da5df30637dba05",
+      "git_sha256": "8c28c1b7efe582e28489d6cca06d3c02db5840c8f3eb1508e35e2c24eea63b42",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/api.h",
+      "target": "src/ecm/stage1/montgomery/cuda/api.h",
+      "sha256": "374317795a87baf0501bf68e1ab4bb5266a8f64581a3d8c0559c5135e42ad887",
+      "git_sha256": "374317795a87baf0501bf68e1ab4bb5266a8f64581a3d8c0559c5135e42ad887",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/arithmetic.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/arithmetic.cuh",
+      "sha256": "66afa9cdc4a5344721b622c4bbc6184d7f012c9252a879d5ed19da931fd3146c",
+      "git_sha256": "66afa9cdc4a5344721b622c4bbc6184d7f012c9252a879d5ed19da931fd3146c",
+      "bom": true
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/checkpoint.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/checkpoint.cpp",
+      "sha256": "70c0666500ce27eb97a9c8fb797e19457753177136d0d75c7bdac3833bb0f348",
+      "git_sha256": "70c0666500ce27eb97a9c8fb797e19457753177136d0d75c7bdac3833bb0f348",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/checkpoint.h",
+      "target": "src/ecm/stage1/montgomery/cuda/checkpoint.h",
+      "sha256": "7cfba65562155588f3d9d2af93ee37468250ee78f17902a5b8993787f462913e",
+      "git_sha256": "7cfba65562155588f3d9d2af93ee37468250ee78f17902a5b8993787f462913e",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/construction.h",
+      "target": "src/ecm/stage1/montgomery/cuda/construction.h",
+      "sha256": "c0fcc171a77dcac79626be6fd17152298c58d2e7f1882a82787f16c0e113d764",
+      "git_sha256": "d5635701a85c0dc2ee8a6c65bc817adae27d46e082acffe998a8d5820161c387",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/host_math.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/host_math.cpp",
+      "sha256": "c51485d6db448d89aa9603684430cd4b1e28703f981c657ec2719bc096766cde",
+      "git_sha256": "fa2767b995f3b36355428b50b84df712e9c848fbdb8a1baa959119ecdf9a2bd3",
+      "bom": true
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/host_math.h",
+      "target": "src/ecm/stage1/montgomery/cuda/host_math.h",
+      "sha256": "d943e6b76446e829482fdd97986d1b1aa5fd3b8e06f226ba115bb4ce0b0f53fb",
+      "git_sha256": "d943e6b76446e829482fdd97986d1b1aa5fd3b8e06f226ba115bb4ce0b0f53fb",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/host_policy.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/host_policy.cpp",
+      "sha256": "db7d019f28de39d106c413c016fed7c02138bd154cc0a19f156a4e522c3d84d2",
+      "git_sha256": "21caf4a805b2205958b7662aa1530bead46fd4d956d6174f297fac098f784906",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/host_policy.h",
+      "target": "src/ecm/stage1/montgomery/cuda/host_policy.h",
+      "sha256": "8ffc18c9fb50587031e4bb6c9d24d7bde100b57815f04f9c14af3278bfbce72d",
+      "git_sha256": "3924e5f869bc99d1323a938f78c27fa6aef4d26fe87bf3a4b889d47f93b007f5",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances.cuh",
+      "sha256": "72985375ae37793c5b16a2f88599760e66963e856ea4f08b7b03131e89627548",
+      "git_sha256": "72985375ae37793c5b16a2f88599760e66963e856ea4f08b7b03131e89627548",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g0.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g0.cu",
+      "sha256": "94b5657ca290b2ba004b0f2b1d3ca43ab32076f8df28936113cae8975224388b",
+      "git_sha256": "94b5657ca290b2ba004b0f2b1d3ca43ab32076f8df28936113cae8975224388b",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g1.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g1.cu",
+      "sha256": "862a888da45e4b10858c53cc526dfda7ccf77b6613f64aaeda691726d71c8968",
+      "git_sha256": "862a888da45e4b10858c53cc526dfda7ccf77b6613f64aaeda691726d71c8968",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g2.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g2.cu",
+      "sha256": "c86b5cf36f95b4f990f3c5946628b62b722ab8a5b6db0e36aedf8c3f82424941",
+      "git_sha256": "c86b5cf36f95b4f990f3c5946628b62b722ab8a5b6db0e36aedf8c3f82424941",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g3.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g3.cu",
+      "sha256": "ce8dbd584c37970b285c9fd7fc7c9defe5a89b8ac0a0268a3b290e555875b16f",
+      "git_sha256": "ce8dbd584c37970b285c9fd7fc7c9defe5a89b8ac0a0268a3b290e555875b16f",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g4.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g4.cu",
+      "sha256": "fdd37dba45fc40f89f5ffee0ad7818f5ee238713ad4ae69c89e76e6c9de3448f",
+      "git_sha256": "fdd37dba45fc40f89f5ffee0ad7818f5ee238713ad4ae69c89e76e6c9de3448f",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g5.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g5.cu",
+      "sha256": "64370546736f7271a141d012b850a4ffc988101b4c95b973eb79b53f8e512f34",
+      "git_sha256": "64370546736f7271a141d012b850a4ffc988101b4c95b973eb79b53f8e512f34",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param0_g6.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g6.cu",
+      "sha256": "dca9990e6365479f71b83a3746b4190a364d1208f02dfe6c73ea6eac5f00a468",
+      "git_sha256": "dca9990e6365479f71b83a3746b4190a364d1208f02dfe6c73ea6eac5f00a468",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g0.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g0.cu",
+      "sha256": "e1b7067fd11defabefc3e36d0670b16a029faf62956309eb73fdecd91eeb212b",
+      "git_sha256": "e1b7067fd11defabefc3e36d0670b16a029faf62956309eb73fdecd91eeb212b",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g1.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g1.cu",
+      "sha256": "3e9dd112b11498a509507faad3e2d5baa3ca6e97905db78bcc0c604a3e0f27d1",
+      "git_sha256": "3e9dd112b11498a509507faad3e2d5baa3ca6e97905db78bcc0c604a3e0f27d1",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g2.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g2.cu",
+      "sha256": "7571e7042d1e8016a539136e298c4d9edfdafb906e92c54713ae914d7cf5e7c0",
+      "git_sha256": "7571e7042d1e8016a539136e298c4d9edfdafb906e92c54713ae914d7cf5e7c0",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g3.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g3.cu",
+      "sha256": "9fcada1d7d508fa9f4e8a676d8fcd43112e9d3b5ea271ff4f21b682a496d831e",
+      "git_sha256": "9fcada1d7d508fa9f4e8a676d8fcd43112e9d3b5ea271ff4f21b682a496d831e",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g4.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g4.cu",
+      "sha256": "7d46249a8a5d961a3288c1a5bb46522d5ac12c0efd16813cc5b09eb939553bf9",
+      "git_sha256": "7d46249a8a5d961a3288c1a5bb46522d5ac12c0efd16813cc5b09eb939553bf9",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g5.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g5.cu",
+      "sha256": "a71973c87949fc25e07c443577cdec28e8e2d280260d6e6fbb22ffc55010664e",
+      "git_sha256": "a71973c87949fc25e07c443577cdec28e8e2d280260d6e6fbb22ffc55010664e",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param2_g6.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g6.cu",
+      "sha256": "d9346a4dde28dba6860160e4e02241b963cbdf02d0ef79f72488c4a28a80a4c4",
+      "git_sha256": "d9346a4dde28dba6860160e4e02241b963cbdf02d0ef79f72488c4a28a80a4c4",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g0.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g0.cu",
+      "sha256": "1dfac44a1f36f5d93732af502f34416f00bcc96958e327d3e498c69c286ca387",
+      "git_sha256": "1dfac44a1f36f5d93732af502f34416f00bcc96958e327d3e498c69c286ca387",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g1.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g1.cu",
+      "sha256": "64a4a4841448cdebf7a945755a3c8f812810e614158b458bcec8bff023305d06",
+      "git_sha256": "64a4a4841448cdebf7a945755a3c8f812810e614158b458bcec8bff023305d06",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g2.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g2.cu",
+      "sha256": "4608f5ac8784d31e2779c3d3cfc5f333d5643578f3c147019759ec762304b6d1",
+      "git_sha256": "4608f5ac8784d31e2779c3d3cfc5f333d5643578f3c147019759ec762304b6d1",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g3.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g3.cu",
+      "sha256": "6b0e6ab82c7b8084128cd8b8b367aca39df6a4cfbdfaf181eb70b3e1218bf929",
+      "git_sha256": "6b0e6ab82c7b8084128cd8b8b367aca39df6a4cfbdfaf181eb70b3e1218bf929",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g4.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g4.cu",
+      "sha256": "8962641b1f12313c5d94e2fbcc3c58a1f1742e426677ec6eff5b43e2f4ac800d",
+      "git_sha256": "8962641b1f12313c5d94e2fbcc3c58a1f1742e426677ec6eff5b43e2f4ac800d",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g5.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g5.cu",
+      "sha256": "4f95bf2802e598d7a3ff5abce0326507ee1d0f3444d9c91fafb81163ff652752",
+      "git_sha256": "4f95bf2802e598d7a3ff5abce0326507ee1d0f3444d9c91fafb81163ff652752",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances_param3_g6.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g6.cu",
+      "sha256": "e192ef583738da6e8622200cb77d9f53dff519361ceb1e87c36f02acee8ead16",
+      "git_sha256": "e192ef583738da6e8622200cb77d9f53dff519361ceb1e87c36f02acee8ead16",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/launch.h",
+      "target": "src/ecm/stage1/montgomery/cuda/launch.h",
+      "sha256": "c65303203e030d2517c6be5516c755cf641a7fba0ec36b26dde2fa933d01e6ea",
+      "git_sha256": "c65303203e030d2517c6be5516c755cf641a7fba0ec36b26dde2fa933d01e6ea",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/output.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/output.cpp",
+      "sha256": "fa6f4160f5ddf5cb3c1852b9fdaea5cff073501ff7f4bd943f71fbfb3d8bfe84",
+      "git_sha256": "ab684971c536e4a7e2a2c6e65c33bd6eb6ba0770a9e40fac8cde8dafd25a42b1",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/output.h",
+      "target": "src/ecm/stage1/montgomery/cuda/output.h",
+      "sha256": "039966d285de2d120d95a68a10fa53c20c9e6fb8b154bdf4d8517ad083195f68",
+      "git_sha256": "d9f2c762198d43966049413263c957b03bd131520649bd83a6d919bcf6446d08",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_alternate32.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_alternate32.cu",
+      "sha256": "1e8c0036bb729ed5057b03fadbb0d10f9dd313137e7ce5f5c24b09dbf7305688",
+      "git_sha256": "1e8c0036bb729ed5057b03fadbb0d10f9dd313137e7ce5f5c24b09dbf7305688",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_constants.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_constants.cu",
+      "sha256": "fe34ce21d380e8bf00bc8c6d8342afd03ecd43d5a58f0486108a2fa5db88369b",
+      "git_sha256": "fe34ce21d380e8bf00bc8c6d8342afd03ecd43d5a58f0486108a2fa5db88369b",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernel.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernel.cuh",
+      "sha256": "d8d10526c56d0182df4e91154c314c658b9634a1154cb76229323a4496a66809",
+      "git_sha256": "d8d10526c56d0182df4e91154c314c658b9634a1154cb76229323a4496a66809",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernels.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernels.cu",
+      "sha256": "44f4806f90e7b1dc4eaa277ea5e00022e706cc90d9f98cc906cd5c7c6c7ed85b",
+      "git_sha256": "44f4806f90e7b1dc4eaa277ea5e00022e706cc90d9f98cc906cd5c7c6c7ed85b",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_single_add.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cu",
+      "sha256": "1853d44383580ba00d91967c8e56b2ecb6b23cca67c4e7d4fe4fd811a1fe71a7",
+      "git_sha256": "1853d44383580ba00d91967c8e56b2ecb6b23cca67c4e7d4fe4fd811a1fe71a7",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_single_add.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cuh",
+      "sha256": "93dbf512e0abf3737177a3b43e9c3417c2bbfcca9e06d76fe291574fd029eee1",
+      "git_sha256": "93dbf512e0abf3737177a3b43e9c3417c2bbfcca9e06d76fe291574fd029eee1",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_small.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_small.cu",
+      "sha256": "89caaa2076bc95f17275009651a18928ae602deaf52d2670de332689d918a798",
+      "git_sha256": "89caaa2076bc95f17275009651a18928ae602deaf52d2670de332689d918a798",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi16.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi16.cu",
+      "sha256": "589eff0cb18780ced362702bfe0113fd4fae8ea3d9eaac895fcef9a8f8b8214a",
+      "git_sha256": "589eff0cb18780ced362702bfe0113fd4fae8ea3d9eaac895fcef9a8f8b8214a",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32.cu",
+      "sha256": "b724d228c3ac6aa42c4e34df5ae37070674de36c03721988ec5aa3c3263a4256",
+      "git_sha256": "b724d228c3ac6aa42c4e34df5ae37070674de36c03721988ec5aa3c3263a4256",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu",
+      "sha256": "a2d7f403d00aa36018b3eb023ff2d7305b7bc1d075fdd5722f0fe853c92fbdd8",
+      "git_sha256": "a2d7f403d00aa36018b3eb023ff2d7305b7bc1d075fdd5722f0fe853c92fbdd8",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu",
+      "sha256": "07b4bc0a53fc4f46dd628756612c665c6a0b0c174895147081513cc98dff821a",
+      "git_sha256": "07b4bc0a53fc4f46dd628756612c665c6a0b0c174895147081513cc98dff821a",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu",
+      "sha256": "5616166faafd3818ce3ee5076193e62306549ce1ab8399820cb3233816ee1f57",
+      "git_sha256": "5616166faafd3818ce3ee5076193e62306549ce1ab8399820cb3233816ee1f57",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu",
+      "sha256": "92639f62ff4fdbb3f0a6e2f66a799d6e58446e6f20f8237a0c0d7e80c5a72aa7",
+      "git_sha256": "92639f62ff4fdbb3f0a6e2f66a799d6e58446e6f20f8237a0c0d7e80c5a72aa7",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/constants.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/constants.h",
+      "sha256": "bcfb1cf727e492c094de93b609ea0df1fea6cedcb6a1c4e340c2bebeb8c070dc",
+      "git_sha256": "bcfb1cf727e492c094de93b609ea0df1fea6cedcb6a1c4e340c2bebeb8c070dc",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/descriptor.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/descriptor.h",
+      "sha256": "c2f200784a5839ce6d5dbc8ea46ca58ef77aa5dddfe95ada9e3d38d0237634d0",
+      "git_sha256": "c2f200784a5839ce6d5dbc8ea46ca58ef77aa5dddfe95ada9e3d38d0237634d0",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/domain.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/domain.h",
+      "sha256": "a59b0cf62ec27224da7e002399723ca4eed867a94ce5fe7507a86e015a6b0ff9",
+      "git_sha256": "a59b0cf62ec27224da7e002399723ca4eed867a94ce5fe7507a86e015a6b0ff9",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/ecm_prac_plan.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp",
+      "sha256": "6e545189d483cc6f6fe0c458dcf7fa99c7014ab359e69a7f454baf1a67a517d8",
+      "git_sha256": "6e545189d483cc6f6fe0c458dcf7fa99c7014ab359e69a7f454baf1a67a517d8",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/ecm_prac_plan.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.h",
+      "sha256": "0f52fe181cebd88cb13b343be4e6d27cb7e0579e7aee7d7c328b6f66ff537e6d",
+      "git_sha256": "0f52fe181cebd88cb13b343be4e6d27cb7e0579e7aee7d7c328b6f66ff537e6d",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/launch.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/launch.h",
+      "sha256": "2e7989562e6b7d1375f26408ebc10a368cbdaf76d5d4d5ecbe6f3709e4145503",
+      "git_sha256": "2e7989562e6b7d1375f26408ebc10a368cbdaf76d5d4d5ecbe6f3709e4145503",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/prac_window.inl",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/prac_window.inl",
+      "sha256": "a402341250459cd7363fd6f8444f098505c2322ca0daa9f4a774235168c8e67f",
+      "git_sha256": "a402341250459cd7363fd6f8444f098505c2322ca0daa9f4a774235168c8e67f",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/runtime.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/runtime.cu",
+      "sha256": "6c3d6b5c8d0389dc138cd874fec9f3d118b95fd247920454e86e32d01ee83f6b",
+      "git_sha256": "321e43a1fb86a19108426b425194274c36e4f5c0aad46488a745dcbe79f747b8",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/runtime.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/runtime.h",
+      "sha256": "6bba37240580f1b4e69c11ce7f544b630726a27f45388e6a54642d90670a7723",
+      "git_sha256": "bf688b093eebe136b6835157eec7e6bdeaa5d86275bd90ab884e707370fb5442",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/registry.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/registry.cu",
+      "sha256": "7ea2d1621981c06b60d545becbf53ddbe3a70f1986df2824a24f5f05e8b274b8",
+      "git_sha256": "5e9328dc3b11a61a6efccc36266812e194eb55bb2adda4acf5d4438c520ee2de",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/registry.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/registry.cuh",
+      "sha256": "e48bff61681a3fe7c692cd7b2f53d814f60d7ada8ac5fd6a137c13e6dd1e9fe4",
+      "git_sha256": "e48bff61681a3fe7c692cd7b2f53d814f60d7ada8ac5fd6a137c13e6dd1e9fe4",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/resources.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/resources.cuh",
+      "sha256": "368074eb5cdcabdc2ed64178b09cb5a9c45c8cefdd5d2c121f63fda3725ed769",
+      "git_sha256": "563ce665f11168f6c3d14753c17789e41b2358f35257295700ceed6dcca942f3",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/runtime.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/runtime.cu",
+      "sha256": "986777db9f3580cf7a1f98c2a7b70dcdecf127c9a733ba315701136dd8363f90",
+      "git_sha256": "6fc83ad8b50ed26569e51a7a7b36d52c9b593735663ff10df18cd386481bcd29",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/runtime.h",
+      "target": "src/ecm/stage1/montgomery/cuda/runtime.h",
+      "sha256": "3009e8fb3a9d15f187d303d8eee6073ed95746a6c2ad97d914151efeb65651a6",
+      "git_sha256": "b0bbee26c9e7c84fab9d49b50e550fdf287976d7d183b2b4b5ea7c89a68b174c",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/workflow.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/workflow.cpp",
+      "sha256": "955b90bd39eb42488ddbf0b64520378ccdf2946d2a597ccdbcbf25f4d636440d",
+      "git_sha256": "d09079fd3e7743ee32fee77971a3db85f6670ae5777b85839ede55ef6572a596",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/api.h",
+      "target": "src/ecm/stage1/montgomery/opencl/api.h",
+      "sha256": "68f5974d92aa74cd8afb14cbc6c777d08caa2e05dca3717efb03f97b7d13259b",
+      "git_sha256": "68f5974d92aa74cd8afb14cbc6c777d08caa2e05dca3717efb03f97b7d13259b",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/checkpoint.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/checkpoint.cpp",
+      "sha256": "fbd303a69e5744b7a760dbf991aea0688320b6359d7160d0068cc51c324f883e",
+      "git_sha256": "c5d6b7e6498846f4ec9d1c1d4fca2aa6f723df97c0039b7da77ee4d5683eae04",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/checkpoint.h",
+      "target": "src/ecm/stage1/montgomery/opencl/checkpoint.h",
+      "sha256": "39d730fbfaec016e6d9cb4c1c534f5bd9282766c7ebf842aa20a2532dca6f0bd",
+      "git_sha256": "88188c3badfbf8aa8a0ddf8fdd07bc43e4db51b44eb843f6240d50dbfb30bd06",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/debug_utils.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/debug_utils.cpp",
+      "sha256": "18abc99db2f071008c88a1228e75bed71e26942c647d0a9d01e14b43c88de687",
+      "git_sha256": "30fe35c41472c4b7dcee59edc87a8e4ea178941cba39fbf5857a3ca5fa9fdbde",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/debug_utils.h",
+      "target": "src/ecm/stage1/montgomery/opencl/debug_utils.h",
+      "sha256": "dc38283cc7cde01bd0e02f0198f3207a1956e4784b56148f1802cc0a90597c3c",
+      "git_sha256": "d7c771774e35e2d97ab656207ef2880217c366d7657a3bac54f7404a91719888",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/engine.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/engine.cpp",
+      "sha256": "bf94e111403b2d62b534251aecdc14716d70785a4d7b4e4fed7b2355785fe929",
+      "git_sha256": "0f2d6b22c88c755680a1c7ba19e1ee1c5e5a4d9fca065dadf230efa9480a877d",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/montgomery.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/montgomery.cpp",
+      "sha256": "98006e87a4bfeaeac6db44f363ec5bb89fa9df3fee02b1fc815c7c019905a42e",
+      "git_sha256": "84fdd83c6abff524c9a63f2ce1cd9bcda584fcb2dc62e000d195f8777c0cd82e",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/montgomery.h",
+      "target": "src/ecm/stage1/montgomery/opencl/montgomery.h",
+      "sha256": "c14e4b92c9d98e37729df76c0fe12069b8812597dd718bdca59a874c375003fa",
+      "git_sha256": "827f6ce68d70477dd22219961d8daeeaa809354776e760fc0c04464098f41cab",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/workflow.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/workflow.cpp",
+      "sha256": "c0497633aec20c957bf6de5ea3a5c6f1066bf57768708cf97551f747aae5a885",
+      "git_sha256": "10729c864e2d9d6d08abf14d2673f79129e0f279aff3395fed907c2cb1766ca1",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/workflow.h",
+      "target": "src/ecm/stage1/montgomery/opencl/workflow.h",
+      "sha256": "39da8667017b9bfcb216c52801f29528c66af4a0a3153aa9957ad9c99527756a",
+      "git_sha256": "12fed5d9d7e84428951d1976a410ed92160fc8816f85ee75c0cff22f004f64b8",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp",
+      "target": "src/ecm/stage2/edwards/cpu/main.cpp",
+      "sha256": "c048236a8579556c4beb13004679e45f6eecbd73ea14d12bfdae5c5a59240b08",
+      "git_sha256": "c048236a8579556c4beb13004679e45f6eecbd73ea14d12bfdae5c5a59240b08",
+      "bom": false
+    },
+    {
+      "source": "src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp",
+      "target": "src/ecm/stage2/cuda/main.cpp",
+      "sha256": "13e65978dfb1af1798d357cca50e0fa7a543a204d8d8d557632b32580f819ede",
+      "git_sha256": "13e65978dfb1af1798d357cca50e0fa7a543a204d8d8d557632b32580f819ede",
+      "bom": false
+    }
+  ],
+  "include_consumers": [
+    {
+      "source": "Android/ECM/app/src/main/cpp/ecm_android_run.cpp",
+      "target": "Android/ECM/app/src/main/cpp/ecm_android_run.cpp",
+      "sha256": "d1c61d30642278728636646d4a33127407b503c5912fadca57edc99a8a710c10"
+    },
+    {
+      "source": "Android/ECM/app/src/main/cpp/native-lib.cpp",
+      "target": "Android/ECM/app/src/main/cpp/native-lib.cpp",
+      "sha256": "4188fca496b8feef930732bc5305d45a11367dcd16df3d1a1bb2e4e04b49781f"
+    },
+    {
+      "source": "src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp",
+      "target": "src/ecm/stage2/edwards/cpu/main.cpp",
+      "sha256": "c048236a8579556c4beb13004679e45f6eecbd73ea14d12bfdae5c5a59240b08"
+    },
+    {
+      "source": "src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp",
+      "target": "src/ecm/stage2/cuda/main.cpp",
+      "sha256": "13e65978dfb1af1798d357cca50e0fa7a543a204d8d8d557632b32580f819ede"
+    },
+    {
+      "source": "src/ecm/cuda/factory.cpp",
+      "target": "src/ecm/cuda/factory.cpp",
+      "sha256": "7f177abb5f27af3812e1ee6b3b06b66b1458b3b94f123964ca0a6195324e82c3"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp",
+      "target": "src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp",
+      "sha256": "2b4efd7962b777d26a28ef1cd8e4782cba982a0e5c0012872fdfb88a614fb9b4"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/simd_edwards.h",
+      "target": "src/ecm/stage1/edwards/cpu/simd_edwards.h",
+      "sha256": "9e629abf87132d0dd9bcedf716efa089c58c5ee7d73addaf9f088e3361d456ca"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cpu/workflow.cpp",
+      "target": "src/ecm/stage1/edwards/cpu/workflow.cpp",
+      "sha256": "abb8cf3d9d7d7df6e6135901669edb60ea3d7072156e669c327c27cdc2795ff4"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/api.h",
+      "target": "src/ecm/stage1/edwards/cuda/api.h",
+      "sha256": "590f6c4fa42844c42c288217e6fbb1b35445fcd32f5ad0a81f530928a5a25606"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/batch.h",
+      "target": "src/ecm/stage1/edwards/cuda/batch.h",
+      "sha256": "fc280f5bdeabf61d595cf3779c7a0989bc13d5c11534588f20184788c290d7b1"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/checkpoint.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/checkpoint.cpp",
+      "sha256": "11c659ad74a63a6c540862beec94028e61eeb03f48d38e951ba7a68d6bacc806"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/checkpoint.h",
+      "target": "src/ecm/stage1/edwards/cuda/checkpoint.h",
+      "sha256": "3ff1f6e223052f6f1e9a1d8cfbd428d3207dac2ed62a890bedd0ba3b409d72c9"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/edwards_internal.h",
+      "target": "src/ecm/stage1/edwards/cuda/edwards_internal.h",
+      "sha256": "531e576c40df0902d0392548c57f51ad301ed65806e73688c5e53a135fbc2035"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/edwards_runtime.inl",
+      "target": "src/ecm/stage1/edwards/cuda/edwards_runtime.inl",
+      "sha256": "6d5e3c803fc2f1802dca2928b10e2dea65c13e7ce5afba09fc7b384a5157f4f4"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/instances/instances.cuh",
+      "target": "src/ecm/stage1/edwards/cuda/instances/instances.cuh",
+      "sha256": "92ac91db2ebb5a6f8dc37e547762cd76c33859442bfd04694c1d0c277000f1d4"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/launch.h",
+      "target": "src/ecm/stage1/edwards/cuda/launch.h",
+      "sha256": "d56d2e1d4c68521afbc58807ffc98bad5fdaa144db3faa844584367832c467e8"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/runtime.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/runtime.cpp",
+      "sha256": "2b3ea481558f365947f3c2a6e2b2773de65113791114242d3645d7f50409ce8f"
+    },
+    {
+      "source": "src/ecm/edwards_stage1/cuda/workflow.cpp",
+      "target": "src/ecm/stage1/edwards/cuda/workflow.cpp",
+      "sha256": "35400a90a1031b52923dbecd9accabf3fda06dafc07196f8caede50f890bbac8"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/checkpoint.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/checkpoint.cpp",
+      "sha256": "7f377a924e5a1051ca0f34bd424223e74e8d113d5292d8c2e5cd5cf988b7390d"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/checkpoint.h",
+      "target": "src/ecm/stage1/montgomery/cpu/checkpoint.h",
+      "sha256": "4e99c665051efac0c51fb1de4ce531d90b5a547fec75f9ffda33b29ed261a412"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp",
+      "sha256": "d2c0a89f68ae76edc6c84b4442228541120aa45c77c0c73475b21d072b83934c"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/simd_mont_curve.h",
+      "target": "src/ecm/stage1/montgomery/cpu/simd_mont_curve.h",
+      "sha256": "0cad929aa550e8a9db6ca3ccf2cff955f5cb9678692572433253676d8b9d4f54"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cpu/workflow.cpp",
+      "target": "src/ecm/stage1/montgomery/cpu/workflow.cpp",
+      "sha256": "775d7d3f444bad18717299af4e1237a88885eb4c5db62b181da5df30637dba05"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/arithmetic.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/arithmetic.cuh",
+      "sha256": "66afa9cdc4a5344721b622c4bbc6184d7f012c9252a879d5ed19da931fd3146c"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/checkpoint.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/checkpoint.cpp",
+      "sha256": "70c0666500ce27eb97a9c8fb797e19457753177136d0d75c7bdac3833bb0f348"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/checkpoint.h",
+      "target": "src/ecm/stage1/montgomery/cuda/checkpoint.h",
+      "sha256": "7cfba65562155588f3d9d2af93ee37468250ee78f17902a5b8993787f462913e"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/host_math.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/host_math.cpp",
+      "sha256": "c51485d6db448d89aa9603684430cd4b1e28703f981c657ec2719bc096766cde"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/host_policy.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/host_policy.cpp",
+      "sha256": "db7d019f28de39d106c413c016fed7c02138bd154cc0a19f156a4e522c3d84d2"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/instances/instances.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/instances/instances.cuh",
+      "sha256": "72985375ae37793c5b16a2f88599760e66963e856ea4f08b7b03131e89627548"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/output.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/output.cpp",
+      "sha256": "fa6f4160f5ddf5cb3c1852b9fdaea5cff073501ff7f4bd943f71fbfb3d8bfe84"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_alternate32.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_alternate32.cu",
+      "sha256": "1e8c0036bb729ed5057b03fadbb0d10f9dd313137e7ce5f5c24b09dbf7305688"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_constants.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_constants.cu",
+      "sha256": "fe34ce21d380e8bf00bc8c6d8342afd03ecd43d5a58f0486108a2fa5db88369b"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_kernels.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernels.cu",
+      "sha256": "44f4806f90e7b1dc4eaa277ea5e00022e706cc90d9f98cc906cd5c7c6c7ed85b"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_single_add.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cu",
+      "sha256": "1853d44383580ba00d91967c8e56b2ecb6b23cca67c4e7d4fe4fd811a1fe71a7"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_small.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_small.cu",
+      "sha256": "89caaa2076bc95f17275009651a18928ae602deaf52d2670de332689d918a798"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi16.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi16.cu",
+      "sha256": "589eff0cb18780ced362702bfe0113fd4fae8ea3d9eaac895fcef9a8f8b8214a"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32.cu",
+      "sha256": "b724d228c3ac6aa42c4e34df5ae37070674de36c03721988ec5aa3c3263a4256"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu",
+      "sha256": "a2d7f403d00aa36018b3eb023ff2d7305b7bc1d075fdd5722f0fe853c92fbdd8"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu",
+      "sha256": "07b4bc0a53fc4f46dd628756612c665c6a0b0c174895147081513cc98dff821a"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu",
+      "sha256": "5616166faafd3818ce3ee5076193e62306549ce1ab8399820cb3233816ee1f57"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu",
+      "sha256": "92639f62ff4fdbb3f0a6e2f66a799d6e58446e6f20f8237a0c0d7e80c5a72aa7"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/runtime.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/runtime.cu",
+      "sha256": "6c3d6b5c8d0389dc138cd874fec9f3d118b95fd247920454e86e32d01ee83f6b"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/prac/runtime.h",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/runtime.h",
+      "sha256": "6bba37240580f1b4e69c11ce7f544b630726a27f45388e6a54642d90670a7723"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/registry.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/registry.cu",
+      "sha256": "7ea2d1621981c06b60d545becbf53ddbe3a70f1986df2824a24f5f05e8b274b8"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/registry.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/registry.cuh",
+      "sha256": "e48bff61681a3fe7c692cd7b2f53d814f60d7ada8ac5fd6a137c13e6dd1e9fe4"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/resources.cuh",
+      "target": "src/ecm/stage1/montgomery/cuda/resources.cuh",
+      "sha256": "368074eb5cdcabdc2ed64178b09cb5a9c45c8cefdd5d2c121f63fda3725ed769"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/runtime.cu",
+      "target": "src/ecm/stage1/montgomery/cuda/runtime.cu",
+      "sha256": "986777db9f3580cf7a1f98c2a7b70dcdecf127c9a733ba315701136dd8363f90"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/runtime.h",
+      "target": "src/ecm/stage1/montgomery/cuda/runtime.h",
+      "sha256": "3009e8fb3a9d15f187d303d8eee6073ed95746a6c2ad97d914151efeb65651a6"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/cuda/workflow.cpp",
+      "target": "src/ecm/stage1/montgomery/cuda/workflow.cpp",
+      "sha256": "955b90bd39eb42488ddbf0b64520378ccdf2946d2a597ccdbcbf25f4d636440d"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/checkpoint.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/checkpoint.cpp",
+      "sha256": "fbd303a69e5744b7a760dbf991aea0688320b6359d7160d0068cc51c324f883e"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/checkpoint.h",
+      "target": "src/ecm/stage1/montgomery/opencl/checkpoint.h",
+      "sha256": "39d730fbfaec016e6d9cb4c1c534f5bd9282766c7ebf842aa20a2532dca6f0bd"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/debug_utils.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/debug_utils.cpp",
+      "sha256": "18abc99db2f071008c88a1228e75bed71e26942c647d0a9d01e14b43c88de687"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/engine.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/engine.cpp",
+      "sha256": "bf94e111403b2d62b534251aecdc14716d70785a4d7b4e4fed7b2355785fe929"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/montgomery.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/montgomery.cpp",
+      "sha256": "98006e87a4bfeaeac6db44f363ec5bb89fa9df3fee02b1fc815c7c019905a42e"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/workflow.cpp",
+      "target": "src/ecm/stage1/montgomery/opencl/workflow.cpp",
+      "sha256": "c0497633aec20c957bf6de5ea3a5c6f1066bf57768708cf97551f747aae5a885"
+    },
+    {
+      "source": "src/ecm/montgomery_stage1/opencl/workflow.h",
+      "target": "src/ecm/stage1/montgomery/opencl/workflow.h",
+      "sha256": "39da8667017b9bfcb216c52801f29528c66af4a0a3153aa9957ad9c99527756a"
+    },
+    {
+      "source": "src/ecm/opencl/arithmetic/path_registry.h",
+      "target": "src/ecm/opencl/arithmetic/path_registry.h",
+      "sha256": "18de79c0903dc8c2940121b14992eb85b413a162a923f1dfad7d83c9d5ce8923"
+    },
+    {
+      "source": "src/ecm/opencl/diagnostics/selftest.cpp",
+      "target": "src/ecm/opencl/diagnostics/selftest.cpp",
+      "sha256": "5aed2cd3872527d5536021504a615aafe2f888a66dfc9c795284533bb6d343dc"
+    },
+    {
+      "source": "src/ecm/opencl/factory.cpp",
+      "target": "src/ecm/opencl/factory.cpp",
+      "sha256": "e5086383f40865d320f7e2b626fb8a9215bc207925cb7bee405554ad438e6006"
+    },
+    {
+      "source": "src/ecm/stage1/execution.cpp",
+      "target": "src/ecm/stage1/execution.cpp",
+      "sha256": "7057799d06f22ff74b0ba21e5fc2defa4b006f98135ef9322bd8f92b57c94865"
+    },
+    {
+      "source": "src/main.cpp",
+      "target": "src/main.cpp",
+      "sha256": "5cf5b10f1cc91c29a7ce166f492e1ee7fe8e9037e76ec984ecba14c36d6ab3e0"
+    },
+    {
+      "source": "tools/bench/ecm_edwards_bench.cpp",
+      "target": "tools/bench/ecm_edwards_bench.cpp",
+      "sha256": "8e9a2d1d16f49f410af2dcec2ca789ebc4f340302ac709b2b4106e34090dc3d8"
+    },
+    {
+      "source": "tools/bench/ecm_edwards_speed.cpp",
+      "target": "tools/bench/ecm_edwards_speed.cpp",
+      "sha256": "020b1ab17024987dc9ff878044e7ff14479500c44c0793eb40e2318b4079b4b9"
+    },
+    {
+      "source": "tools/bench/ecm_edwards_standalone.cpp",
+      "target": "tools/bench/ecm_edwards_standalone.cpp",
+      "sha256": "0d5697f9553c568c5f56ff67e7e609baf3a65cdbc75f202ecc6feed43c6f0756"
+    },
+    {
+      "source": "tools/bench/mers_sqr_phases.cpp",
+      "target": "tools/bench/mers_sqr_phases.cpp",
+      "sha256": "309b736558a002d1276f687f25bd7819f182346bd8f9d57f9cb3563dbba5ac9e"
+    },
+    {
+      "source": "tools/bench/mont_ckpt_ab.cpp",
+      "target": "tools/bench/mont_ckpt_ab.cpp",
+      "sha256": "133edeb7e13bb303459dd414a396026630941da009546341eebd04171aa2e811"
+    },
+    {
+      "source": "tools/bench/mont_simd_verify.cpp",
+      "target": "tools/bench/mont_simd_verify.cpp",
+      "sha256": "b1f7564f5c5e6df6db43ab46dc10b524a87484e15b2a0ecd2d730c08278e5a01"
+    },
+    {
+      "source": "tools/bench/mont_standalone.cpp",
+      "target": "tools/bench/mont_standalone.cpp",
+      "sha256": "85a52ed62a1d71af9d8ef0f1dc7c7019d27893128b52335838f90e5ae4ff5f5d"
+    },
+    {
+      "source": "tools/bench/simd_edwards_bench.cpp",
+      "target": "tools/bench/simd_edwards_bench.cpp",
+      "sha256": "df264065076f20795878fd0c7b024ff17cac6f44f755790c29320ab0253cdb57"
+    },
+    {
+      "source": "tools/diag/helper_canary.cpp",
+      "target": "tools/diag/helper_canary.cpp",
+      "sha256": "9ecba29cf4f832575d97f266dc819d0a9aad821e897502d351534f586918c4e7"
+    },
+    {
+      "source": "tools/diag/selftest_many.cpp",
+      "target": "tools/diag/selftest_many.cpp",
+      "sha256": "a5b6724263b9df0a10a811ca0618273f8ecae17bf3438ad34bc51b1c5ddd38a5"
+    },
+    {
+      "source": "tools/test/adapters/edwards_host_wait.cu",
+      "target": "tools/test/adapters/edwards_host_wait.cu",
+      "sha256": "2076cc533c722725cf7ed504221b68573f7c0d1fa5defeff60e6bca861fab502"
+    },
+    {
+      "source": "tools/test/adapters/stage1_cuda_resources.cu",
+      "target": "tools/test/adapters/stage1_cuda_resources.cu",
+      "sha256": "23e118b567de2fd9b79f145362f85af81d3d96a57771c0c1cf16124f333c87d3"
+    },
+    {
+      "source": "tools/test/ecm_edwards_checkpoint_test.cpp",
+      "target": "tools/test/ecm_edwards_checkpoint_test.cpp",
+      "sha256": "78df43435d1fda2cc63db07a2adae50e1873e2558bd0095497e9e33fc0ab1c65"
+    },
+    {
+      "source": "tools/test/edwards_gpu_point_probe.cu",
+      "target": "tools/test/edwards_gpu_point_probe.cu",
+      "sha256": "f591aab74a2709d5e8e7003b50c4f331195b676bb1a213ce029e44a4ed7cf801"
+    },
+    {
+      "source": "tools/test/edwards_gpu_stage1_probe.cpp",
+      "target": "tools/test/edwards_gpu_stage1_probe.cpp",
+      "sha256": "3b98a446894c4551e84658ddecba1c47d47fe7336ee3ab7ec72315fd7d5221f8"
+    },
+    {
+      "source": "tools/test/edwards_naf_test.cpp",
+      "target": "tools/test/edwards_naf_test.cpp",
+      "sha256": "9eea179cd7ef4a557ecf8bf8f6cc7d764eaef40e0cb8026deed8886054a6756f"
+    },
+    {
+      "source": "tools/test/gen_ckpt.cpp",
+      "target": "tools/test/gen_ckpt.cpp",
+      "sha256": "4b600b75b68a9927c91d83fdc66074e17359bffc9fec733092c41bb7ca624e05"
+    },
+    {
+      "source": "tools/test/mont_ckpt_verify.cpp",
+      "target": "tools/test/mont_ckpt_verify.cpp",
+      "sha256": "943d46f3fc58d5ece97f2c0ede7a474edbc8ede35cd85af485e59a5af9dc8d33"
+    },
+    {
+      "source": "tools/test/stage1_checkpoint_container_test.cpp",
+      "target": "tools/test/stage1_checkpoint_container_test.cpp",
+      "sha256": "e5162f9e164691afe2f272c1a5f3643c14427be0d9cb3d87efc6dd7c958f7e34"
+    },
+    {
+      "source": "tools/test/stage1_checkpoint_rotation_test.cpp",
+      "target": "tools/test/stage1_checkpoint_rotation_test.cpp",
+      "sha256": "a7875b1d90c6b8df12d5ed4fbb70800b576ad5d2b8a8369898d62ba47260954d"
+    },
+    {
+      "source": "tools/test/stage1_cuda_host_contract.cpp",
+      "target": "tools/test/stage1_cuda_host_contract.cpp",
+      "sha256": "6561375e818a12ba6dd90fd04c4ed379fe6e43332dfe7b61e2315d48cad340b9"
+    },
+    {
+      "source": "tools/test/stage1_exp_check.cpp",
+      "target": "tools/test/stage1_exp_check.cpp",
+      "sha256": "edcab424b1fd5467314183b68a8df11297e988e487af86774c6e920f21c72f82"
+    },
+    {
+      "source": "tools/test/stage1_host_wait_probe.cu",
+      "target": "tools/test/stage1_host_wait_probe.cu",
+      "sha256": "87706ddb3a537aea451601ba8271b292f60a80f81c669f206bcb98e604e247af"
+    },
+    {
+      "source": "tools/test/stage1_policy_contract.cpp",
+      "target": "tools/test/stage1_policy_contract.cpp",
+      "sha256": "a6de2dd995d17f30ddbf7c0f49f7e6fefc5271739b53f646c5ba518f2ab7bec0"
+    }
+  ],
+  "include_roots": [
+    "src",
+    "include",
+    "src/ecm/cuda",
+    "src/ecm/cuda/runtime",
+    "third_party/cgbn/include",
+    "third_party/cgbn/include/cgbn"
+  ],
+  "version_change": false
+}

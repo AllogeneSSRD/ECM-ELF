@@ -12,7 +12,7 @@ from test_ecm_domain_layout import tokens
 
 ROOT = Path(__file__).resolve().parents[2]
 FROZEN_FOLDER = 'src/ecm/backend/cuda/stage1/montgomery/'
-CURRENT_FOLDER = 'src/ecm/montgomery_stage1/cuda/'
+CURRENT_FOLDER = 'src/ecm/stage1/montgomery/cuda/'
 
 
 def main():

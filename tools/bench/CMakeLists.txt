@@ -114,12 +114,12 @@ endif()
 
 # ---------------------------------------------------------------------------
 # ecm_edwards_standalone: one-curve stage-1 dump for cross-checking against Prime95 or an
-# independent reference ladder.  Uses only the public API of src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.h;
+# independent reference ladder.  Uses only the public API of src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.h;
 # it used to be a main() inside that production TU behind BUILD_ECM_EDWARDS_STANDALONE.
 # ---------------------------------------------------------------------------
 add_executable(ecm_edwards_standalone
     ${CMAKE_CURRENT_SOURCE_DIR}/ecm_edwards_standalone.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp
 )
 
 target_include_directories(ecm_edwards_standalone PRIVATE
@@ -138,14 +138,14 @@ endif()
 
 # ---------------------------------------------------------------------------
 # simd_edwards_bench: M2 verification + timing -- the batched Edwards stage-1
-# (src/ecm/edwards_stage1/cpu/simd_edwards.cpp) against the production scalar ladder
-# (src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp, without its standalone main).
+# (src/ecm/stage1/edwards/cpu/simd_edwards.cpp) against the production scalar ladder
+# (src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp, without its standalone main).
 # ---------------------------------------------------------------------------
 add_executable(simd_edwards_bench
     ${CMAKE_CURRENT_SOURCE_DIR}/simd_edwards_bench.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/stage1/edwards/cpu/simd_edwards.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp
 )
 
 target_include_directories(simd_edwards_bench PRIVATE
@@ -166,10 +166,10 @@ endif()
 # the baseline so the binary reports a clean error on a CPU without AVX512-IFMA instead of
 # executing illegal instructions.
 if(MSVC)
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/stage1/edwards/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         TARGET_DIRECTORY simd_edwards_bench PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/edwards_stage1/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/src/ecm/stage1/edwards/cpu/simd_edwards.cpp ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
         TARGET_DIRECTORY simd_edwards_bench PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 

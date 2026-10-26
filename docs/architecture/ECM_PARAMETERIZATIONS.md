@@ -65,15 +65,15 @@ GMP-ECM 的 `param` 枚举定义在 `ecm.h:179-189`。所有 Montgomery 形式�
 
 以上除法均指模 `N` 的可逆元；[公共构造入口 `construct`](../../src/ecm/curve/edwards.h#L37)以 Jacobian 坐标求辅助倍点、归一化一次，并检查各分母、`d(1−d)` 的单位性和 `P` 在曲线上。逆元不存在时求 GCD：真因子与退化构造分开报告；`σ=0` 直接视为退化。构造还输出 `a24=(A+2)/4=1/(1−d)`，供转成 Montgomery x-only 后使用；推导和 Prime95 `sigma_type=0` 的坐标约定见[Edwards 数学说明](../reference/ECM_EDWARDS_MATH.md#1-曲线构造atkin-morainsigma_type0)。
 
-调用方接受固定的正 `uint64` σ；固定批次的第 `i` 条使用 `σ+i`，先检查 64 位回绕。未指定 σ 时，每条曲线分别取随机 σ（生成器排除 `σ≤5`）；保存/恢复记录每条曲线的完整 64 位值，不能用批次首值替代各条随机 σ。[CPU 批次](../../src/ecm/edwards_stage1/cpu/workflow.cpp)、[CUDA 批次](../../src/ecm/edwards_stage1/cuda/workflow.cpp#L197)和[输入校验](../../src/io/normalize.cpp)采用这套身份。固定 σ 可以取生成器不会随机选到的小正整数，但仍须通过构造与单位性检查。
+调用方接受固定的正 `uint64` σ；固定批次的第 `i` 条使用 `σ+i`，先检查 64 位回绕。未指定 σ 时，每条曲线分别取随机 σ（生成器排除 `σ≤5`）；保存/恢复记录每条曲线的完整 64 位值，不能用批次首值替代各条随机 σ。[CPU 批次](../../src/ecm/stage1/edwards/cpu/workflow.cpp)、[CUDA 批次](../../src/ecm/stage1/edwards/cuda/workflow.cpp#L197)和[输入校验](../../src/io/normalize.cpp)采用这套身份。固定 σ 可以取生成器不会随机选到的小正整数，但仍须通过构造与单位性检查。
 
 **现有 Edwards 执行路径共享上述同一构造，区别在点算术和标量执行：**
 
 | 路径 | 现有算法与约束 | 构造入口 |
 | --- | --- | --- |
-| CPU GMP 标量 | 扩展 Edwards 坐标、窗口 NAF；单曲线执行和恢复 | [CPU Stage 1](../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp#L597)调用 `construct` |
-| CPU AVX512-IFMA | 可用 ISA/构建条件下按最多 8 条曲线并行，尾部和异常曲线可走标量 | [SIMD 字典准备](../../src/ecm/edwards_stage1/cpu/simd_edwards.cpp#L889)逐 lane 使用相同构造 |
-| CUDA CGBN | 默认窗口 NAF（默认窗口 6），可显式改用二进制标量路径；两者共用曲线批次 | [CUDA 初始化](../../src/ecm/edwards_stage1/cuda/host_math.cpp#L3)调用 `construct` |
+| CPU GMP 标量 | 扩展 Edwards 坐标、窗口 NAF；单曲线执行和恢复 | [CPU Stage 1](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp#L597)调用 `construct` |
+| CPU AVX512-IFMA | 可用 ISA/构建条件下按最多 8 条曲线并行，尾部和异常曲线可走标量 | [SIMD 字典准备](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L889)逐 lane 使用相同构造 |
+| CUDA CGBN | 默认窗口 NAF（默认窗口 6），可显式改用二进制标量路径；两者共用曲线批次 | [CUDA 初始化](../../src/ecm/stage1/edwards/cuda/host_math.cpp#L3)调用 `construct` |
 | OpenCL | 当前不提供 Edwards Stage 1 | [Stage 1 能力说明](STAGE1.md#方法选择与输入校验) |
 
 三条可运行路径均使用 `48·lcm(1,…,B1)` 作为 Edwards Stage 1 标量；NAF 窗口、点表示、CPU SIMD 归约或 CUDA 倍点策略只改变执行方法，不改变固定 `(N, curve=ed, σ)` 的 `d` 与 `P`。CPU 与 CUDA 将完成点的 Edwards 投影坐标转为 Montgomery x-only `x_M=(Z+Y)/(Z−Y) mod N`，写入 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 的[文本 save](SAVE.md#5-edwards-save-version1)；[CUDA Stage 2](STAGE2.md#输入与表示)与 [CPU Stage 2](../usage/EDWARDS_CPU_STAGE2.md)按 σ 重构曲线。只比较设备域字数组或未归一化投影坐标，不能证明两条路径的数学点相同。
@@ -157,7 +157,7 @@ GMP-ECM 的 param 0–3 按 `parametrizations.c` 比较；本仓库 Edwards 按�
 
 论文中的加法律**强统一**；当 `d` 非平方时可满足相应完备条件。本仓库的 Atkin–Morain σ 映射没有逐素因子保证 `d` 非平方，不能据此把当前实现宣称为完备公式或推断侧信道性质。
 
-本仓库扩展坐标的[CPU 模域实现](../../src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp#L248)与[CUDA CGBN 实现](../../src/ecm/edwards_stage1/cuda/point.cuh#L38)使用 `a=1` 的 HWCD 倍点：完整 `(X,Y,Z,T)` 输出为 **4M+4S**。CUDA NAF 在后续只倍点的列可省暂不需要的 `T`，该列为 **3M+4S**，加法或片边界前恢复 `T`；可选算法 5 将 `(X+Y)²−X²−Y²` 改写为 `2XY`，完整/省 `T` 分别是 **5M+3S / 4M+3S**。[NAF 倍点分支](../../src/ecm/edwards_stage1/cuda/naf.cuh#L31)给出实际选择。通用扩展加法为 **10M**（9 次普通乘法和 1 次乘 `d`）；CPU 标量用预先归一化的仿射字典时，混合加法为 **8M**，另有字典生成及批量求逆成本。CPU IFMA 的 lane 约减与调度仍应按其实现和实测计时，不能将单条公式数直接乘以 8 得出耗时。
+本仓库扩展坐标的[CPU 模域实现](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp#L248)与[CUDA CGBN 实现](../../src/ecm/stage1/edwards/cuda/point.cuh#L38)使用 `a=1` 的 HWCD 倍点：完整 `(X,Y,Z,T)` 输出为 **4M+4S**。CUDA NAF 在后续只倍点的列可省暂不需要的 `T`，该列为 **3M+4S**，加法或片边界前恢复 `T`；可选算法 5 将 `(X+Y)²−X²−Y²` 改写为 `2XY`，完整/省 `T` 分别是 **5M+3S / 4M+3S**。[NAF 倍点分支](../../src/ecm/stage1/edwards/cuda/naf.cuh#L31)给出实际选择。通用扩展加法为 **10M**（9 次普通乘法和 1 次乘 `d`）；CPU 标量用预先归一化的仿射字典时，混合加法为 **8M**，另有字典生成及批量求逆成本。CPU IFMA 的 lane 约减与调度仍应按其实现和实测计时，不能将单条公式数直接乘以 8 得出耗时。
 
 ### 4.4 论文模型与本仓库实现的比较
 

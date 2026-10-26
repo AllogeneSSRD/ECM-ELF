@@ -9,8 +9,8 @@
  *
  * usage: mont_simd_verify <N> <B1> <sigma0> [count] [torsion]
  * ------------------------------------------------------------------------- */
-#include "../../src/ecm/montgomery_stage1/cpu/simd_mont_curve.h"
-#include "../../src/ecm/montgomery_stage1/cpu/ecm_mont_cpu.h"
+#include "../../src/ecm/stage1/montgomery/cpu/simd_mont_curve.h"
+#include "../../src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.h"
 #include "ecm/io/save.h"
 
 #include <gmp.h>

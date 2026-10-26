@@ -12,7 +12,7 @@ execute_process(COMMAND git rev-parse --short=12 HEAD WORKING_DIRECTORY "${_ecm_
 if(NOT _ecm_build_id)
     set(_ecm_build_id development)
 endif()
-file(SHA256 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp" _ecm_source_id)
+file(SHA256 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp" _ecm_source_id)
 foreach(_shared
     include/ecm/io/results.h
     src/io/results.cpp
@@ -38,8 +38,8 @@ if(ECM_CPU_GW_POLY)
     string(SUBSTRING "${_ecm_gw_identity}" 0 12 _ecm_gw_identity)
     string(APPEND _ecm_build_id ".gw.${_ecm_gw_identity}")
 endif()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp")
-add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp"
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp")
+add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp"
     "${_ecm_repo}/src/io/results.cpp"
     "${_ecm_repo}/src/io/save.cpp"
     "${_ecm_repo}/src/io/files.cpp"

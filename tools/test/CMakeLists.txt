@@ -15,8 +15,8 @@ ecm_tool_output_root(stage1_selection_test)
 
 add_executable(stage1_checkpoint_rotation_test
     stage1_checkpoint_rotation_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/opencl/checkpoint.cpp
-    ${CMAKE_SOURCE_DIR}/src/ecm/montgomery_stage1/cpu/checkpoint.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/opencl/checkpoint.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cpu/checkpoint.cpp
     ${CMAKE_SOURCE_DIR}/src/io/stage1_checkpoint.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/platform/stop.cpp
     ${CMAKE_SOURCE_DIR}/src/io/files.cpp

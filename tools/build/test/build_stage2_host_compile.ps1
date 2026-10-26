@@ -12,7 +12,7 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'build_manifest.json') -Raw -Enco
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
-$sources=@('src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp',
+$sources=@('src/ecm/stage2/cuda/main.cpp',
     'src/ecm/application/configuration/stage2_identity.cpp',
     'src/ecm/stage2/task.cpp','src/ecm/stage2/input.cpp',
     'src/ecm/stage2/process.cpp')

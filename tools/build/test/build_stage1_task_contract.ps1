@@ -16,7 +16,7 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/computation.cpp','src/ecm/montgomery_stage1/opencl/checkpoint.cpp',
+$sources=@('src/io/results.cpp','src/ecm/stage1/selection.cpp','src/ecm/stage1/task.cpp','src/ecm/stage1/computation.cpp','src/ecm/stage1/montgomery/opencl/checkpoint.cpp',
     'src/io/stage1_checkpoint.cpp','src/ecm/platform/stop.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
     'src/ecm/stage1/scalar.cpp','src/ecm/stage1/progress.cpp')
 if($QueueWorkflow){
@@ -27,7 +27,7 @@ if(-not $MontgomeryPolicy){$sources+=@('src/ecm/application/configuration/ecm_ex
 if($MontgomeryPolicy){
     if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
     $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path
-    $sources=@('src/ecm/montgomery_stage1/cuda/host_policy.cpp')
+    $sources=@('src/ecm/stage1/montgomery/cuda/host_policy.cpp')
 }
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
 if($HistorySnapshot){

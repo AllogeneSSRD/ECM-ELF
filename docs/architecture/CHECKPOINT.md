@@ -154,7 +154,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、指数总长/进度及数组几何，并恢复保存的 BITS/TPI；相应内核须存在。原始 V5 自动导入另逐 lane 核对完整 N。保存整个指数不必要：当前任务重新生成相应指数。
 
-来源：[CUDA 头和读写](../../src/ecm/montgomery_stage1/cuda/checkpoint.cpp)、[CUDA 恢复布局](../../src/ecm/montgomery_stage1/cuda/runtime.cu)、[普通域写回](../../src/ecm/montgomery_stage1/cuda/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/montgomery_stage1/opencl/checkpoint.cpp)、[OpenCL 状态](../../src/ecm/montgomery_stage1/opencl/engine.cpp#L937)。
+来源：[CUDA 头和读写](../../src/ecm/stage1/montgomery/cuda/checkpoint.cpp)、[CUDA 恢复布局](../../src/ecm/stage1/montgomery/cuda/runtime.cu)、[普通域写回](../../src/ecm/stage1/montgomery/cuda/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/stage1/montgomery/opencl/checkpoint.cpp)、[OpenCL 状态](../../src/ecm/stage1/montgomery/opencl/engine.cpp#L937)。
 
 ### 4.2 GPU Edwards V3
 
@@ -192,7 +192,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 大小精确为 **68 + bytes(N) + 52C + Σbytes(fᵢ) + Σbytes(vᵢⱼ)**，j=0..8。外层仍须再加自身开销。NAF 字典、完整指数、GPU 内存布局均不在该公式内。
 
-来源：[V3 编码和恢复](../../src/ecm/edwards_stage1/cuda/checkpoint.cpp)、[GPU 驱动和安全边界](../../src/ecm/edwards_stage1/cuda/workflow.cpp)。
+来源：[V3 编码和恢复](../../src/ecm/stage1/edwards/cuda/checkpoint.cpp)、[GPU 驱动和安全边界](../../src/ecm/stage1/edwards/cuda/workflow.cpp)。
 
 ### 4.3 CPU Montgomery 文本记录 V1
 
@@ -211,7 +211,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 校验初值采用较短的 1469598103934665603。恢复要求 N/B1/TORSION/SBITS 一致，检查标记、结束行、校验和状态所需数据；上层同时核对曲线索引。标量和 SIMD 使用相同数学记录；实际批处理是否能继续还取决于 lane 进度等调用条件，不能仅根据 FIELD 文本推断可以切换实现。外层 CPU 实现身份也会限制切换。
 
-来源：[记录结构](../../src/ecm/montgomery_stage1/cpu/checkpoint.h)、[写入](../../src/ecm/montgomery_stage1/cpu/checkpoint.cpp)、[读取](../../src/ecm/montgomery_stage1/cpu/checkpoint.cpp)。
+来源：[记录结构](../../src/ecm/stage1/montgomery/cpu/checkpoint.h)、[写入](../../src/ecm/stage1/montgomery/cpu/checkpoint.cpp)、[读取](../../src/ecm/stage1/montgomery/cpu/checkpoint.cpp)。
 
 ### 4.4 CPU Edwards 二进制记录和完成记录
 
@@ -245,7 +245,7 @@ giant 为 u32 limb 数 m，随后 m 个低 limb 在前的 u32；当前写入零�
 
 CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存 sigma、返回码 0/1、十六进制 factor，以及带双引号/转义的完整文本 save 行；无可用点时该行可以为空。记录没有独立尾校验，依靠外层 CRC。保存已完成结果是为了发布失败或批次停止后不重复计算已完成曲线。
 
-来源：[CPU Edwards codec](../../src/io/prime95_save.cpp)、[CPU 批次执行与完成记录](../../src/ecm/edwards_stage1/cpu/workflow.cpp)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
+来源：[CPU Edwards codec](../../src/io/prime95_save.cpp)、[CPU 批次执行与完成记录](../../src/ecm/stage1/edwards/cpu/workflow.cpp)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
 
 ### 4.5 可选 CUDA resident / PRAC
 
@@ -263,7 +263,7 @@ CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存
 
 next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内层 checksum 仅为 data 的标准 FNV-1a 64，初值14695981039346656037；N/S 的 hash 按低 limb 到高 limb 的 GMP 本机 limb 字节计算，因此不构成跨 ABI 的规范数值摘要。模数、指数和计划身份通过头字段比对，外层 CRC 保护整个载荷。恢复要求版本、算法、域、N/S/计划 hash、B1、总长、BITS/TPI、曲线数及 torsion 等匹配。PRAC window 局部采样不产生完整 Stage1 save 或 checkpoint。
 
-来源：[ResidentCheckpoint 与恢复](../../src/ecm/montgomery_stage1/cuda/prac/runtime.cu#L18)、[window 范围](../../src/ecm/montgomery_stage1/cuda/prac/prac_window.inl#L70)。
+来源：[ResidentCheckpoint 与恢复](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu#L18)、[window 范围](../../src/ecm/stage1/montgomery/cuda/prac/prac_window.inl#L70)。
 
 ## 5. 写入、恢复和清理顺序
 
@@ -281,7 +281,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 `ckpt_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
 
-来源：[批次发布边界](../../src/ecm/stage1/task.cpp#L124)、[种子持久化](../../src/io/stage1_checkpoint.cpp)、[GPU Edwards 完成状态](../../src/ecm/edwards_stage1/cuda/workflow.cpp)。
+来源：[批次发布边界](../../src/ecm/stage1/task.cpp#L124)、[种子持久化](../../src/io/stage1_checkpoint.cpp)、[GPU Edwards 完成状态](../../src/ecm/stage1/edwards/cuda/workflow.cpp)。
 
 ### 5.2 原子替换和备份
 
@@ -312,7 +312,7 @@ CUDA Montgomery 的运行结果分别报告同步确认的计算游标、已回�
 
 原始独立 GPU 来源只读保留。若内部结果账本已经确认其全部 sigma 完成，则跳过自动导入；仅将旧文件复制到全新目录而不携带账本，无法从该旧文件得知它是否已在别处完成。当前非空算术载荷优先，不用独立旧档覆盖它。
 
-来源：[V1 外层读取](../../src/io/stage1_checkpoint.cpp)、[CUDA V5 导入](../../src/ecm/montgomery_stage1/cuda/checkpoint.cpp)、[Edwards 旧格式读取](../../src/ecm/edwards_stage1/cuda/checkpoint.cpp)、[独立 Edwards 导入](../../src/ecm/edwards_stage1/cuda/workflow.cpp)。
+来源：[V1 外层读取](../../src/io/stage1_checkpoint.cpp)、[CUDA V5 导入](../../src/ecm/stage1/montgomery/cuda/checkpoint.cpp)、[Edwards 旧格式读取](../../src/ecm/stage1/edwards/cuda/checkpoint.cpp)、[独立 Edwards 导入](../../src/ecm/stage1/edwards/cuda/workflow.cpp)。
 
 ## 7. Stage2 队列进度格式
 

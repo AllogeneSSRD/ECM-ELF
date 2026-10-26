@@ -17,22 +17,22 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Ra
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output ".gitignore"),"*`n")
-$sources=@('src/ecm/stage1/computation.cpp','src/ecm/stage1/sigma.cpp','src/ecm/edwards_stage1/cpu/workflow.cpp','src/ecm/montgomery_stage1/cpu/workflow.cpp','src/ecm/stage1/cpu_runtime.cpp')
+$sources=@('src/ecm/stage1/computation.cpp','src/ecm/stage1/sigma.cpp','src/ecm/stage1/edwards/cpu/workflow.cpp','src/ecm/stage1/montgomery/cpu/workflow.cpp','src/ecm/stage1/cpu_runtime.cpp')
 if($IncludeGpuHost){
     $sources+=@('src/ecm/stage1/execution.cpp',
-        'src/ecm/montgomery_stage1/cuda/workflow.cpp',
-        'src/ecm/edwards_stage1/cuda/workflow.cpp',
-        'src/ecm/edwards_stage1/cuda/checkpoint.cpp',
-        'src/ecm/edwards_stage1/cuda/host_math.cpp',
-        'src/ecm/edwards_stage1/cuda/runtime.cpp')
+        'src/ecm/stage1/montgomery/cuda/workflow.cpp',
+        'src/ecm/stage1/edwards/cuda/workflow.cpp',
+        'src/ecm/stage1/edwards/cuda/checkpoint.cpp',
+        'src/ecm/stage1/edwards/cuda/host_math.cpp',
+        'src/ecm/stage1/edwards/cuda/runtime.cpp')
 }
 if($IncludeMontgomeryHost){
-    $sources+=@('src/ecm/montgomery_stage1/cuda/host_math.cpp',
-        'src/ecm/montgomery_stage1/cuda/checkpoint.cpp',
-        'src/ecm/montgomery_stage1/cuda/output.cpp',
-        'src/ecm/montgomery_stage1/cuda/host_policy.cpp')
+    $sources+=@('src/ecm/stage1/montgomery/cuda/host_math.cpp',
+        'src/ecm/stage1/montgomery/cuda/checkpoint.cpp',
+        'src/ecm/stage1/montgomery/cuda/output.cpp',
+        'src/ecm/stage1/montgomery/cuda/host_policy.cpp')
 }
-if($IncludeOpenCLHost){$sources+='src/ecm/montgomery_stage1/opencl/workflow.cpp'}
+if($IncludeOpenCLHost){$sources+='src/ecm/stage1/montgomery/opencl/workflow.cpp'}
 if($IncludeQueueHost){
     $sources+=@('src/io/normalize.cpp','src/ecm/application/cli/group_order.cpp',
         'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/io/files.cpp')

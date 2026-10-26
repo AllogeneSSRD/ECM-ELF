@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stage1 CUDA 实例与编译排布评估 · ECM-ELF</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root{color-scheme:light;--ink:#20343f;--muted:#5c6d79;--line:#d3dfe5;--accent:#176d68}*{box-sizing:border-box}
+    body{margin:0;background:#f3f6f8;color:var(--ink);font:16px/1.85 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1220px;margin:auto;padding:35px 25px 70px}
+    h1{font-size:34px;font-weight:700;line-height:1.4;margin:14px 0}h2{font-size:24px;font-weight:700;line-height:1.5;margin:8px 0 15px}h3{font-size:18px;font-weight:700;margin:22px 0 7px}p{margin:10px 0}a{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+    code,pre{font:13px/1.8 Consolas,monospace}code{background:#edf2f5;border-radius:4px;padding:2px 4px;overflow-wrap:anywhere}pre{white-space:pre;margin:0;overflow-x:auto}.meta,.caption,.files{font-size:13px;color:var(--muted)}
+    nav{display:flex;flex-wrap:wrap;gap:8px 20px;margin:18px 0;font-size:14px}.card{background:white;border:1px solid var(--line);border-radius:14px;padding:25px 28px;margin:23px 0;scroll-margin-top:16px}.top{border:2px solid #84afa8;background:#f5fbf9}
+    .badge{display:inline-block;background:#ddefe8;color:#126458;border-radius:5px;font-size:12px;font-weight:700;padding:2px 9px;margin-right:7px}.amber{background:#fff0d6;color:#8b5d27}.gray{background:#eaf0f4;color:#526572}
+    .pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.flow{padding:16px;background:#f6f9fa;border:1px solid var(--line);border-radius:9px}.node{background:white;border:1px solid #a9bfca;border-radius:7px;text-align:center;padding:11px;margin:10px 0;line-height:1.6}.node small{display:block;font-size:12px;color:var(--muted)}.deep{background:#214b59;color:white;border-color:#214b59}.deep small{color:#d2e9e5}.leak{background:#fff7ec;border-color:#c89c69}.arrow{text-align:center;font-size:13px;color:#6b8792}.seam{border:1px dashed #7497a1;padding:11px;border-radius:6px;font-size:13px;text-align:center}
+    .wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#edf3f5}.note{border-left:4px solid #bd9654;background:#fff7e9;padding:12px 16px;margin:17px 0;font-size:14px}.tree{background:#183946;color:#dfeeed;border-radius:8px;padding:19px 22px}ul,ol{padding-left:24px;list-style:revert}li{margin:8px 0}details{border-top:1px solid var(--line);padding-top:12px;margin-top:16px}summary{cursor:pointer;font-weight:600}footer{font-size:13px;color:var(--muted)}
+    @media(max-width:760px){main{padding:22px 13px}.card{padding:20px 16px}.pair{grid-template-columns:1fr}h1{font-size:27px}}@media print{nav{display:none}.card{break-inside:avoid}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="meta">ECM-ELF · 2026-10-26 · 当前版本0.53.5 · 开发草稿 · 仅分析，未实施</div>
+    <h1>Stage1 CUDA 实例与编译排布</h1>
+    <p>建议选择<strong>完全由构建生成实例</strong>：算法源码按职责组织，实例排布只由一份声明清单决定，移除手写grouped入口及双布局选择。普通路径按曲线／param／容器生成，PRAC再区分确有独立编译价值的family。没有必要先追求每个核函数各一个文件。</p>
+    <nav><a href="#current">当前链路</a><a href="#inventory">数量与粒度</a><a href="#options">两种方案</a><a href="#granularity">实例排布</a><a href="#cleanup">迁移与删除</a><a href="#findings">已验证问题</a><a href="#contracts">必须保留</a><a href="#evidence">证据与耗时</a><a href="#validation">实施验收</a><a href="#recommendation">建议顺序</a></nav>
+  </header>
+
+  <section class="card" id="current">
+    <h2>当前有两套普通实例排布，PRAC另有一套手工排布</h2>
+    <p class="files">依据：<a href="../../tools/build/build_stage1_local.ps1#L41">local入口</a>、<a href="../../tools/build/internal/build_stage1_release_group.ps1#L68">release入口</a>、<a href="../../CMakeLists.txt#L291">CMake选择</a>、<a href="../../tools/build/internal/cuda_modules.cmake#L3">Stage1生成器</a>、<a href="../../tools/build/internal/cuda_sources.cmake#L41">源码清单</a>。</p>
+    <div class="pair">
+      <div class="flow"><div class="caption">当前 Implementation</div><div class="node">local/dev默认isolated；release固定isolated<small>直接CMake的选项默认却是OFF</small></div><div class="node leak">grouped：28个仓内实例入口<small>七组位宽 × 曲线／param</small></div><div class="node leak">isolated：从源码清单过滤这些入口，再生成125个<small>registry还有两套符号与分派链</small></div><div class="node leak">PRAC：独立OBJECT目标，12个CUDA TU<small>不参加上述isolated生成</small></div></div>
+      <div class="flow"><div class="caption">建议：单一实例排布 Module</div><div class="node deep">一份声明清单 + 算法模板<small>归一位宽、功能与支持的几何</small></div><div class="arrow">同一有效实例集合派生</div><div class="node">生成实例入口／分派声明／模块目录<small>只写宏、include和实例绑定，不改写算术正文</small></div><div class="node">正常编译 → 对象身份 → 链接／打包<small>保留现有Runtime API和内嵌fatbin</small></div><div class="seam">Interface缩为选择档位与功能；排布由Implementation拥有</div></div>
+    </div>
+    <p>源码按算法拆分和构建生成实例可以并存：前者组织数学实现，后者决定哪些模板实例落入哪个编译单元。要消除的是<strong>两份实例排布及选择分支</strong>，无需把所有算法正文并成一个大文件。</p>
+    <div class="note"><strong>另两种“拆分”要区分：</strong><code>generate_cuda_modules.py</code>是Stage2/NTT生成器，会解析函数及显式实例并产生选择头，不是当前Stage1生成器。NVCC的<code>--split-compile</code>则在一次编译内部并行优化，之后重新合并；不能代替独立对象／fatbin排布。见<a href="https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#split-compile-number-split-compile">NVIDIA说明</a>。</div>
+  </section>
+
+  <section class="card" id="inventory">
+    <h2>当前isolated按容器隔离，仍不是“每核独立”</h2>
+    <p class="meta">全档数量按ECM_CUDA_FULL_BUILD=ON、ECM_NO_PARAM2=0计算；PRAC数量另要求显式开启，不能套用于dev限制或PARAM2关闭的产物。</p>
+    <p class="files">依据：<a href="../../src/ecm/cuda/dispatch/tiers.def#L26">tiers.def</a>、<a href="../../src/ecm/stage1/edwards/cuda/instances/instances.cuh#L45">Edwards实例</a>、<a href="../../src/ecm/stage1/montgomery/cuda/instances/instances.cuh#L9">Montgomery实例</a>、<a href="../../tools/build/internal/cuda_sources.cmake#L88">PRAC清单</a>。</p>
+    <div class="wrap"><table><thead><tr><th>范围</th><th>仓内grouped实例入口</th><th>isolated实际实例TU</th><th>同一TU内的核</th></tr></thead><tbody>
+      <tr><td>Edwards，32档</td><td>7</td><td>32</td><td>binary slice、NAF prepare、NAF slice，共3个／档。</td></tr>
+      <tr><td>Montgomery，31档 × param0/2/3</td><td>21</td><td>93</td><td>每param／档一个ladder核。</td></tr>
+      <tr><td>基础路径合计</td><td>28</td><td>125</td><td>源码推导189个核实例；另有3个runtime／registry CUDA TU。</td></tr>
+      <tr><td>PRAC，显式启用</td><td colspan="2">当前固定加入12个CUDA TU，isolated不改变它们。</td><td>9个重实例TU、2个dispatcher、1个runtime；多个mode共处一个实例TU。</td></tr>
+    </tbody></table></div>
+    <p>全档且PRAC关闭：grouped为31个CUDA TU，isolated为128个。仅384/768/1024三档时，isolated为15个；启用PRAC后是27个。grouped仍保留28个实例入口，未选中的组也可能编译出空工厂。17408仅用于Edwards；兼容类型、sigma、NAF窗口及运行时倍点选择均不能作为新的实例维度。</p>
+    <p class="meta">上述TU数经实际CMake生成函数复核；核实例数由源码可达模板推导，不是本轮cuobjdump或GPU加载观测。</p>
+  </section>
+
+  <article class="card" id="options">
+    <h2>两种方案都可行，构建生成更适合当前重复程度</h2>
+    <div class="wrap"><table><thead><tr><th>方案</th><th>优点</th><th>代价／限制</th><th>结论</th></tr></thead><tbody>
+      <tr><td>A · 完全源码拆分</td><td>每个编译入口可直接浏览、设置编译属性；构建只选择源文件，不再生成。</td><td>保持当前粒度需维护125个基础入口，PRAC另列；增加机械文件、源码清单和分派声明重复。若坚持每核一文件，基础189＋PRAC161约350个入口，仍未计主机TU。</td><td><span class="badge amber">Worth exploring</span>适合明确要求所有编译入口必须入仓的项目；本仓库目前没有此要求。</td></tr>
+      <tr><td>B · 完全构建生成</td><td>移除28个grouped源码入口；新增位宽和受限构建从同一清单派生；分派、编译及打包成员可以核对同一集合，Locality更集中。</td><td>需维护一个小生成器，并让IDE／独立probe读取生成目录。生成器及输出同样需要身份与稳定写入检查。</td><td><span class="badge">Strong · 推荐</span>沿用当前简单CMake生成方式，逐步覆盖全部实例排布。</td></tr>
+      <tr><td>C · 单大CU＋NVCC内部拆分</td><td>源码入口最少；新工具链可用内部并行优化。</td><td>不提供当前曲线／param／位宽的独立镜像；不能替代旧CUDA的按TU寄存器设置；会丢失既有Stage1按需模块范围合同。</td><td>不作为本轮统一方案。它是编译调度手段，不是实例拥有方式。</td></tr>
+    </tbody></table></div>
+    <div class="pair"><div class="flow"><div class="caption">A：把现有隔离排布全部落入源码</div><div class="node">125个基础.cu + PRAC稀疏.cu</div><div class="node leak">人工同步源列表、符号、档位与编译属性</div></div><div class="flow"><div class="caption">B：排布只有一个拥有者</div><div class="node deep">声明清单 → 稳定生成</div><div class="node">同一集合供构建、分派与打包核对</div><div class="seam">Depth来自统一规则；不是增加通用代码解析框架</div></div></div>
+    <p>两者若使用相同模板、宏、编译参数和模块粒度，可以得到相近的编译工作量；“文件入仓”本身不构成加速理由。建议不引入Stage2式函数正文改写，也不把一个.cu重复塞进上百个OBJECT目标来绕过生成文件；后者会增加目标、对象身份和独立probe的处理复杂度。</p>
+  </article>
+
+  <article class="card" id="granularity">
+    <span class="badge">Strong · 稀疏实例排布</span>
+    <h2>普通路径保持当前隔离，PRAC按family和真实几何生成</h2>
+    <p><strong>第一步保留125个基础实例TU的现有粒度。</strong>Edwards同档共用binary／NAF是当前有效合同，先集中拥有权；没有冷启动／JIT收益证据时，不为形式上的“每核一个文件”增加64个TU。</p>
+    <div class="wrap"><table><thead><tr><th>Edwards排布选择</th><th>Edwards模块</th><th>加上93个Mont模块</th><th>适用条件</th></tr></thead><tbody>
+      <tr><td>当前按容器：三个核一起</td><td>32</td><td>125</td><td>推荐首轮；保持当前已验证的模块范围。</td></tr>
+      <tr><td>按算法：binary独立，NAF prepare＋slice一起</td><td>64</td><td>157</td><td>若证实不使用另一算法的代码仍造成明显加载／编译负担，再单独评估。</td></tr>
+      <tr><td>每核独立</td><td>96</td><td>189</td><td>隔离最细，重复解析、对象与核验数量也最多；NAF任务通常仍会调用prepare和slice。</td></tr>
+    </tbody></table></div>
+    <p><strong>PRAC避免param×位宽×全部mode的笛卡尔积。</strong>当前标准resident/PRAC属于Suyama路径；标准31种几何，alternate仅2560/TPI32、4608/TPI32，single-add和constants仅4608的特定几何。保留不可用返回和mode原值。</p>
+    <div class="pair"><div class="flow"><div class="caption">当前PRAC</div><div class="node leak">small：128..2048</div><div class="node leak">TPI16：2560..8192</div><div class="node">四个TPI32实例组 + 转发</div><div class="node">alternate／single-add／constants</div></div><div class="flow"><div class="caption">建议PRAC</div><div class="node deep">统一生成family × 实际geometry</div><div class="node">标准31；alternate2；single2；constants1<small>约36个重实例TU，允许各含多个核</small></div><div class="seam">候选family继续独立，修改候选头不重编全部标准PRAC</div></div></div>
+    <p class="files">复用<a href="../../src/ecm/cuda/dispatch/tiers.def#L365">既有ECM_CUDA_PRAC_VARIANT</a>，补齐目前尚未表达的稀疏family／mode事实；它现有4条声明尚无消费者。实际依据包括<a href="../../src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernel.cuh#L181">标准mode选择</a>、<a href="../../src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cu#L7">候选实例</a>和<a href="../../src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_constants.cu#L8">constants实例</a>。</p>
+    <p class="meta">36是全档、非dev限制、PRAC开启时按现有family／geometry的结构估算；每核独立则PRAC有161个源码可达实例：标准124＋NATURAL新增12＋4608/TPI16额外5＋alternate10＋single7＋constants3，NATURAL的别名不重复计数。旧NVCC若需保持不同mode的独立寄存器上限，还可能必须进一步按上限拆分，不能把36当作所有工具链固定的模块数。</p>
+  </article>
+
+  <section class="card" id="cleanup">
+    <h2>可合并、删除与保留的文件职责</h2>
+    <div class="wrap"><table><thead><tr><th>现有内容</th><th>建议处理</th><th>删除后的复杂度去向</th></tr></thead><tbody>
+      <tr><td>两曲线instances目录内28个分组.cu</td><td>删除；保留各曲线实例模板与数学头。</td><td>原有宏组合由统一生成器派生，仓内不再维护第二份分组排布。</td></tr>
+      <tr><td><a href="../../tools/build/internal/cuda_modules.cmake#L3">cuda_modules.cmake</a>的过滤再替换流程</td><td>改为直接枚举有效实例；使用简单模板及稳定写入，按曲线保留不同的实例绑定。</td><td>无需先列grouped源、再按路径正则删除；生成规则自身成为实例清单的Implementation。</td></tr>
+      <tr><td><a href="../../src/ecm/stage1/montgomery/cuda/registry.cu#L13">registry</a>两种布局分支及旧TPI转发</td><td>统一到按param／位宽查找；从同一清单派生必要声明，保留工厂实际可用性与occupancy。</td><td>删除group0..6链和只为它存在的声明；不新增KernelPlanner／dispatcher层。</td></tr>
+      <tr><td><a href="../../tools/build/internal/cuda_sources.cmake#L41">cuda_sources.cmake</a>手工实例清单</td><td>只列真实算法／主机TU及生成入口，实际实例集合由配置后清单输出。</td><td>配置前源码身份仍核对模板、清单、生成器；配置后核对真实target closure。</td></tr>
+      <tr><td>PRAC small／tpi16／tpi32_*及纯转发TU</td><td>第二步：用同一生成机制替代排布；首轮保留PRAC。single-add／constants的算法正文按family保留，必要时迁入相应模板实现头。</td><td>删除手写宽度区间和TPI32层层分派；候选修改仍具有Locality。</td></tr>
+      <tr><td>KernelLayout与ECM_CUDA_ISOLATE_TIERS双路径</td><td>最终只保留一种布局；local/dev/release及直接CMake统一。旧显式grouped请求需清楚拒绝或给迁移提示。</td><td>旧profile不改标为新profile；不长期保留一个内部双实现开关。</td></tr>
+      <tr><td>tiers.def的group过滤字段／宏</td><td>完成所有生产、probe和实验消费者盘点后删除无用分组逻辑。</td><td>兼容类型、Stage2容量、ALL_TIERS声明用途仍保留，不能整份简化掉。</td></tr>
+    </tbody></table></div>
+    <p>统一的是<strong>实例排布</strong>，不是把所有不同职责合并：curve算术、NAF、PRAC算法、host runtime和SDK-free主机文件继续分别拥有实现。对28个机械入口的Deletion test表明，删除后规则集中到已有生成器；对算法头做相同删除，只会把数学复杂度搬到其他文件，没有收益。</p>
+  </section>
+
+  <section class="card" id="findings">
+    <h2>本轮已验证的问题与待核实项</h2>
+    <div class="wrap"><table><thead><tr><th>发现</th><th>证据／影响</th><th>建议</th></tr></thead><tbody>
+      <tr><td>位宽输入解释不一致</td><td>直接运行真实生成函数：<code>384,1024</code>生成8个实例；<code>384, 1024</code>只生成384对应的4个。生成器未trim，而根CMake后续的宏生成执行STRIP。</td><td>先归一并校验，再供生成、宏、分派及身份使用。本轮未做完整链接失败复现，不扩大为已证实的运行损坏。</td></tr>
+      <tr><td>未知档位未在生成阶段拒绝</td><td><code>999</code>生成0个实例而函数成功退出；仅留下3个runtime／registry TU。</td><td>错误指出键、值及可用档位；重复档位归一去重，未知档位提前拒绝。空串仍代表全档，分隔后的空片段需明确诊断，规则一处定义。</td></tr>
+      <tr><td>功能过滤晚于排布</td><td>生成器枚举param0/2/3及全部行；dev限制和NO_PARAM2主要交给预处理，可能生成空工厂。正式脚本通常full build且PARAM2开启，因此不能称默认完整构建错误。</td><td>有效实例集合提前应用编译功能选择；缺失功能继续明确不可用。</td></tr>
+      <tr><td>寄存器覆盖项随布局不同</td><td><a href="../../CMakeLists.txt#L433">SMALL／SUYAMA</a>仍给旧grouped路径设置属性；isolated另在生成器处理旧CUDA固定上限。</td><td>明确当前默认、显式覆盖及工具链回退的优先级，不能静默忽略用户覆盖，也不能顺手改变已验证默认。</td></tr>
+      <tr><td>生成依赖与成员枚举还可收口</td><td>当前生成器依赖正则和文件路径；新增档位时还要保证CMake重新配置。此处为源码检查，未运行自动重配置故障复现。</td><td>将清单／模板纳入显式配置依赖；输出当前实际模块目录，不从旧生成目录glob成员。</td></tr>
+    </tbody></table></div>
+    <p class="meta">生成试验含全档、三档、两档、空格输入和未知档位五种配置；各重复一次，已有文件内容和mtime均保持。证据：<code>data/experiments/stage1_instance_layout_20261026/inventory.json</code>及同目录生成物。没有新NVCC编译或GPU运行。</p>
+  </section>
+
+  <section class="card" id="contracts">
+    <h2>实施时要保护的真实Seam</h2>
+    <ol>
+      <li><strong>旧CUDA寄存器控制：</strong><a href="../../src/ecm/cuda/arithmetic/cgbn/types.cuh#L3">NVCC&lt;12.6</a>会移除<code>__maxnreg__</code>；普通Mont isolated由生成器按位宽补56／128／255的TU级上限。PRAC不同mode的168／128／255不能在旧工具链中靠同一个TU上限同时表达，需明确现有限制及进一步拆分政策。</li>
+      <li><strong>实际可用性：</strong>理论档位、已编译实例和设备occupancy是三件事。声明可以读取完整类型表，可执行集合以真实工厂为准；纯元数据枚举继续不初始化设备。此前已列出的<a href="stage1-shared-modules-review-20261026.html#next-tiers">受限位宽查询／执行差异</a>仍作为独立正确性候选，不因删除双布局而顺手改变选档规则。既有checkpoint按保存的BITS／TPI验证，不借重排改变恢复布局。</li>
+      <li><strong>增量与身份：</strong>稳定命名和内容写入；完整记录模板、生成器、生成入口、编译命令、头依赖和对象。正常主机修改仍不触发设备重编；候选头仅影响相应family。缓存、配置、原产物不通过改写manifest伪装兼容。</li>
+      <li><strong>打包：</strong><a href="../../tools/packaging/package_release.py#L118">package_release.py</a>直接识别生成目录和<code>edwards_&lt;bits&gt;</code>／<code>montN_&lt;bits&gt;</code>名字，并核对曲线／param／容器。基础命名首轮可保持；PRAC／算法拆分扩展时同步模块目录和成员检查，不能只让编译通过。</li>
+      <li><strong>独立probe：</strong><a href="../../tools/build/test/build_edwards_gpu_stage1_probe.ps1#L21">Edwards Stage1 probe</a>无worker时直接消费旧源清单，复用worker时才识别生成入口。删除源码壳后两条路径都要接同一实例生成，不能未经确认改成必须有worker。</li>
+      <li><strong>算术与发布：</strong>不拆散kernel及其设备辅助函数，不因减少文件引入RDC／跨对象设备调用；维持原SASS／PTX目标、架构条件宏、PRAC可用模式与磁盘格式。源码文件名会影响匿名符号，SASS对照只允许明确的身份差异，不能放宽指令／模板几何核对。</li>
+    </ol>
+    <p>Lazy Loading仍须观察实际加载范围，不能仅凭125个源文件宣布通过；查询函数也可能提前触发加载。参见<a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/lazy-loading.html">NVIDIA Lazy Loading文档</a>。Stage2的grouped默认与隔离备选不在本轮改动范围。</p>
+  </section>
+
+  <section class="card" id="evidence">
+    <h2>已有编译记录只能帮助选验证点，不能证明新方案更快</h2>
+    <p>复查上一轮0.53.5构建：sm89、384/768/1024、PRAC开启、isolated、Jobs=6、CUDA13.3.73／MSVC14.51.36231，共27个CUDA TU全部编译。编译队列墙钟<strong>146.260秒</strong>；最长单元为PRAC small，<strong>128.921秒</strong>；Edwards单档最大<strong>60.022秒</strong>。这些区间并发重叠，不能相加，也不能把移除某单元的时间当作可节省墙钟。</p>
+    <p>这支持把<strong>PRAC的小位宽聚合长尾</strong>列为验证重点；它没有提供新旧排布的受控对照。源码改动和生成策略不等于编译工作量下降：更细粒度同时增加CGBN解析、编译器进程、对象和内容核验开销。</p>
+    <p class="meta">样本数1；只覆盖编译任务队列，排除configure、复用预检／复查、后续普通CXX主机TU编译、链接和打包；NVCC各TU自身的主机编译阶段仍计入队列。主机为本机Ryzen AI 9 HX370（本轮补读处理器标识，非编译时遥测）；GPU不参与编译。未记录该次CPU频率／功耗／进程树CPU及内存峰值，也未控制并发负载，因此不作为稳定性能结论。EXE SHA256：<code>cac4bcd690513fd15497990d69bce9f6056ba950252b7931d8bfa62e54de8803</code>。原记录：<code>build_stage_layout_cuda/par_nvcc/timings.json</code>与<code>stage1_local_manifest.json</code>；只读副本及摘要保存于本轮证据目录。</p>
+    <p>现有历史无改动release记录另表明，逐对象内容核验本身也有成本，见<a href="../usage/BUILD.md#完整发布与按需加载">构建说明</a>。本轮没有新的耗时／内存对照，不承诺“拆得越细越快”，不修改核验规则换取数字。</p>
+  </section>
+
+  <section class="card" id="validation">
+    <h2>建议的实施门禁与测量范围</h2>
+    <ol>
+      <li><strong>先冻结集合：</strong>保存当前完整／受限构建的实例成员、工厂、几何、可用mode及寄存器政策。无NVCC验证全档、dev、PARAM2关闭、PRAC关闭／开启和稀疏候选；覆盖非法值、空格、重复配置稳定mtime、删除档位后的目标成员及唯一符号。</li>
+      <li><strong>先统一基础路径：</strong>保持125模块及现有命名，只删除grouped源码壳、分派分支和重复源清单；独立probe及直接CMake一起迁移。生成器输出原样绑定模板，不解析改写算术正文。</li>
+      <li><strong>再统一PRAC排布：</strong>标准family先按几何生成，候选family保持隔离；只列当前支持的组合。明确旧工具链的寄存器约束后再决定是否需要按mode进一步拆分，最终也由同一生成机制管理。</li>
+      <li><strong>真实编译与资源测量：</strong>在独立忽略目录对同工具链、相同架构／宏／功能的基线与候选做冷构建、无改动复用和局部改动构建。先测384／4608／16384及Edwards17408、PRAC4608，再完成11.8／13.3发布覆盖；记录Jobs、内部线程数、CPU、RAM、功耗设置及并发负载，每个对照至少3轮并交错执行。</li>
+      <li><strong>分开计时：</strong>configure／生成、依赖核验、NVCC队列及各phase、链接／镜像检查、整入口墙钟分别记录。采集进程树CPU与同时刻工作集总量峰值；不能把各进程各自峰值相加充当进程树峰值。</li>
+      <li><strong>运行合同：</strong>两曲线和param0/2/3、binary／NAF、resident／PRAC逐点对照，包含受限档位选择、缺失功能、停止恢复和已完成补发布。检查发布镜像、寄存器／spill及冷／热PTX加载范围；布局变化不能只凭数学端点相同就宣称JIT资格相同。</li>
+    </ol>
+  </section>
+
+  <section class="card top" id="recommendation">
+    <span class="badge">Top recommendation</span>
+    <h2>选择B：一个实例清单，一种生成排布</h2>
+    <p>首轮保持当前普通路径粒度，合并配置选择和生成职责，删除28个手工分组入口及双分派；随后把PRAC的宽度分组换成同一机制生成的稀疏family／geometry。这样减少仓内机械文件和隐含规则，保留不同算法真正需要的独立编译。</p>
+    <p>暂不默认拆成每核一个模块，不合并Stage2生成器，不更改checkpoint。Edwards按算法细分、PRAC仅为性能而按mode细分，以实测编译资源／加载收益为条件。旧NVCC若必须同时兑现不同寄存器上限，按cap隔离属于实现约束；首轮冻结既有实际政策，不顺手新增旧PRAC尚未提供的保证。</p>
+    <p class="meta">与<a href="stage1-shared-modules-review-20261026.html#directory-priority">下一轮重构规划</a>关联。当前仍是建议；本轮仅新增分析文档和忽略目录中的生成试验，没有修改生产源码、构建脚本或版本号。开发草稿保留，后续由用户决定处理。</p>
+  </section>
+  <footer>代码基线：HEAD 00220c2e9f12ad06fba8500da61a640abbb6f84f，包含尚未提交的112文件阶段目录迁移。结论以本轮冻结的工作区输入摘要为准，不能仅用HEAD代替工作区身份。证据入口：data/experiments/stage1_instance_layout_20261026/inventory.json。</footer>
+</main></body>
+</html>

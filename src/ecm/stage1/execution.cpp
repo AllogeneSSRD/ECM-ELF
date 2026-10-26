@@ -1,7 +1,7 @@
 #include "execution.h"
 #include <stdexcept>
 #if !ECM_HAS_CUDA_STAGE1
-#include "../montgomery_stage1/opencl/workflow.h"
+#include "montgomery/opencl/workflow.h"
 #endif
 
 namespace ecm_stage1 {

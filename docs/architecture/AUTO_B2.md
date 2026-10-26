@@ -12,9 +12,9 @@ Auto B2 选择连续生成、处理新曲线的单位时间收益，计入 Stage
 
 非零 `--d` 锁定 D。`--carrier-exponent 0` 锁定普通运算，非零 p 锁定承载。`stage2_auto_carrier=1` 默认开启，CLI `--auto-carrier 0|1` 可覆盖：未锁定算术时，worktodo `ECMSTAGE2=1,2,p,-1,...` 先按已知因子重建实际 N，核对 save，再验证 **N 整除 2ᵖ−1**，将普通运算与梅森承载共同纳入选型。指数须满足 2≤p≤16384；非标准梅森表达式和单独读取 save 不猜测指数。
 
-`stage2_auto_carrier=0` 关闭自动加入承载候选，不影响显式 `--carrier-exponent p`。显式 0 始终锁定普通运算。父进程将最终开关传给曲线子进程；该开关不改变目标 N/B2，因此改变它不重置队列完成数。配置定义及双语说明见 [TOML 参考](../ECM_TOML_REFERENCE.md#stage2_auto_carrier)；入口为 `src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp::arguments/main`，候选与校准资格为 `src/ecm/stage2/planning/planning.cpp::portable_carriers/ensure_portable_calibration`。
+`stage2_auto_carrier=0` 关闭自动加入承载候选，不影响显式 `--carrier-exponent p`。显式 0 始终锁定普通运算。父进程将最终开关传给曲线子进程；该开关不改变目标 N/B2，因此改变它不重置队列完成数。配置定义及双语说明见 [TOML 参考](../ECM_TOML_REFERENCE.md#stage2_auto_carrier)；入口为 `src/ecm/stage2/cuda/main.cpp::arguments/main`，候选与校准资格为 `src/ecm/stage2/planning/planning.cpp::portable_carriers/ensure_portable_calibration`。
 
-当前代码依据：`config/ecm_options.json` 定义键及默认值；`application/cuda_stage2/ecm_cuda_stage2_main.cpp::arguments` 解析参数，`service/stage2/task.cpp::run_tasks/child_run` 识别任务和投影子进程请求；`include/ecm/io/stage2_checkpoint.h::Task` 定义曲线进度身份；`planning/stage2.cpp::portable_carriers/ensure_portable_calibration` 验证整除关系及短校准覆盖。规划在 `service/planning`，任务/子进程请求在 `service/stage2`，曲线进度合同在 `include/ecm/io`。
+当前代码依据：`config/ecm_options.json` 定义键及默认值；`stage2/cuda/main.cpp::arguments` 解析参数，`stage2/task.cpp::run_tasks/child_run` 识别任务和投影子进程请求；`include/ecm/io/stage2_checkpoint.h::Task` 定义曲线进度身份；`stage2/planning/planning.cpp::portable_carriers/ensure_portable_calibration` 验证整除关系及短校准覆盖。规划在 `stage2/planning`，任务/子进程请求在 `stage2`，曲线进度合同在 `include/ecm/io`。
 
 加入候选不等于启用承载。默认 `stage2_prediction_policy=model`：优先使用精确形状实测，其他输入分别预测普通和梅森算术的位宽区间成本，经过双侧误差保护及当前显存准入后选择。`paired`恢复精确目标位宽/B2/执行形状的配对实测门禁。承载只是扩大运算环，Stage1点、因子和GCD的目标仍为save中的N。
 
@@ -428,5 +428,5 @@ G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准�
 - [ecm_stage2_d_search.h:27](../../src/ecm/stage2/planning/d_search.h#L27)：`DSearch`负责改善方向延伸、比例细化和区间重启；[ecm_stage2_runtime_tune.h:34](../../src/ecm/stage2/planning/runtime_tune.h#L34)负责额外成本预算，[runtime_choice:56](../../src/ecm/stage2/planning/runtime_tune.h#L56)执行试跑/采用分离及合格运行均值排名。
 - [ecm_stage2_tune_portable.h:55](../../src/ecm/stage2/planning/tune_portable.h#L55)：`LocalSearch`用于显式D研究列表；[Profile:442](../../src/ecm/stage2/planning/tune_portable.h#L442)负责矩阵解析、排序与均值累计。
 - [ecm_stage1_cost_csv.h](../../src/ecm/stage2/planning/stage1_cost.h)、[ecm_stage2_probability.h](../../include/ecm/stage2/probability.h)：容器模型及概率。
-- [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp)：配置、验证与队列。
+- [ecm_cuda_stage2_main.cpp](../../src/ecm/stage2/cuda/main.cpp)：配置、验证与队列。
 - [配置参考](../ECM_TOML_REFERENCE.md)、[使用](../usage/STAGE2.md)、[工具](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。

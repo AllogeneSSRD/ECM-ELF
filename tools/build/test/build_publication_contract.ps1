@@ -11,7 +11,7 @@ New-Item -ItemType Directory -Path $output|Out-Null
 $sources=@('tools/test/publication_contract.cpp','tools/test/adapters/publication_files.cpp',
  'src/io/results.cpp','src/io/save.cpp','src/ecm/application/configuration/ecm_expr.cpp',
  'src/io/stage1_checkpoint.cpp','src/ecm/platform/stop.cpp',
- 'src/ecm/montgomery_stage1/opencl/checkpoint.cpp','src/ecm/platform/logging.cpp',
+ 'src/ecm/stage1/montgomery/opencl/checkpoint.cpp','src/ecm/platform/logging.cpp',
  'src/ecm/application/configuration/runtime.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources){

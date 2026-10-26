@@ -28,7 +28,7 @@ if($Stage -eq 'stage1') {
         }
     }
     if(@($objects|Where-Object {$_ -match 'edwards_\d+\.cu\.obj$'}).Count -ne 32){throw 'Probe requires the complete32-tier release'}
-    $sources=@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/edwards_stage1/cpu/ecm_edwards_cpu.cpp')
+    $sources=@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
     $name='edwards_gpu_stage1_probe.exe';$crt='/MD'
 } else {
     $gmp=$manifest.gmp_root

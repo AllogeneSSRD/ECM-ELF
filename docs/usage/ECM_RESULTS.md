@@ -88,7 +88,7 @@ CRC 使用标准反射 CRC-32/ISO-HDLC：宽度 32 位，初值 `0xFFFFFFFF`，�
 
 内部结果使用本行的实际 fft-length（libecm 为 0，gwpoly 为真实 GW 长度）和逐曲线 sigma；转换后提交文件使用正的参考 FFT、NF 模型标记和合并后的真实完成时间，必须从最终记录重新计算 CRC，不能拷贝内部旧值。版本、参与计算的字段或其表示改变时也须重算。单纯调整 JSON 键顺序、空格，以及移动 d/poly-size 不改变规范串。
 
-curves、d、poly-size、stage2-fft-length、status、stage、user、computer、aid、program.port 和 source-build 不在这 16 个槽位中；CRC 不保护这些字段。它也不是 Prime95 的 security-code/SEC5。第三方源码依据见 [PrMers CRC32 研究](../reference/ECM_RESULT_JSON.md#prmers-crc32)，本仓库入口为 [转换器 checksum](../../tools/ecm_report/rewrite_stage2_results.py) 与 [CPU result](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)；[独立按位校验](../../tools/test/test_stage2_result_rewrite.py) 用于复核库计算结果。真实运行产生的 checksum 值保留在忽略目录。
+curves、d、poly-size、stage2-fft-length、status、stage、user、computer、aid、program.port 和 source-build 不在这 16 个槽位中；CRC 不保护这些字段。它也不是 Prime95 的 security-code/SEC5。第三方源码依据见 [PrMers CRC32 研究](../reference/ECM_RESULT_JSON.md#prmers-crc32)，本仓库入口为 [转换器 checksum](../../tools/ecm_report/rewrite_stage2_results.py) 与 [CPU result](../../src/ecm/stage2/edwards/cpu/main.cpp)；[独立按位校验](../../tools/test/test_stage2_result_rewrite.py) 用于复核库计算结果。真实运行产生的 checksum 值保留在忽略目录。
 
 ## 去重、批次与恢复
 

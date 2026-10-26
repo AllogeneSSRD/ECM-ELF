@@ -59,7 +59,7 @@ using ecm_stage1_app::stage1_task_error;
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
 // Application assembly still selects the CPU default NAF window.
-#include "ecm/edwards_stage1/cpu/ecm_edwards_cpu.h"
+#include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
 
 #include "ecm/stage1/execution.h"
 using ecm_save::prefixed_name;

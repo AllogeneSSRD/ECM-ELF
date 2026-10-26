@@ -25,7 +25,7 @@ Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器�
 
 Stage1 local/dev 默认 `-KernelLayout isolated`，与 release 共用按曲线/param/容器生成的独立编译单元，避免多个大位宽挤在同一组文件形成编译长尾；每个内核及其设备辅助函数仍一起编译。`-KernelLayout grouped` 保留分组备选。local 仍为单架构、压缩、无PTX，不改成发布镜像策略。布局进入构建身份，已有分组缓存不能当成隔离缓存复用；省略 `-BuildDir` 时自动为不同 profile 选择独立目录；也可显式指定新的 `-BuildDir build_stage1_local_isolated`，旧目录保留。
 
-位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/montgomery_stage1/cuda/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
+位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/stage1/montgomery/cuda/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
 
 新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该 worker 测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
 

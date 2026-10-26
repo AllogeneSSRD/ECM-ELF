@@ -7,14 +7,14 @@
 | Stage1 应用 | 配置合并、输入、模式、依赖组装、展示和退出 | [main.cpp](../../src/main.cpp) |
 | Stage1 单任务 | 批次寿命、调用执行、逐曲线身份、发布与 seal | [task.cpp](../../src/ecm/stage1/task.cpp) |
 | Stage1 队列 | 领取任务、处理任务状态、finished、源行改写及跨阶段交接 | [main.cpp](../../src/main.cpp) |
-| CUDA Stage1 | CGBN 曲线批处理、实际设备资源、分档和点乘 | [Montgomery](../../src/ecm/montgomery_stage1/cuda/)、[Edwards](../../src/ecm/edwards_stage1/cuda/) |
-| CPU Stage1 | 完整 CPU 执行流程与 Montgomery/Edwards 算术 | [Montgomery](../../src/ecm/montgomery_stage1/cpu/)、[Edwards](../../src/ecm/edwards_stage1/cpu/) |
-| OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [engine.cpp](../../src/ecm/montgomery_stage1/opencl/engine.cpp) |
-| Stage2 应用 | 配置、CLI、查询/调优/父任务/子进程模式和退出 | [main](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp) |
+| CUDA Stage1 | CGBN 曲线批处理、实际设备资源、分档和点乘 | [Montgomery](../../src/ecm/stage1/montgomery/cuda/)、[Edwards](../../src/ecm/stage1/edwards/cuda/) |
+| CPU Stage1 | 完整 CPU 执行流程与 Montgomery/Edwards 算术 | [Montgomery](../../src/ecm/stage1/montgomery/cpu/)、[Edwards](../../src/ecm/stage1/edwards/cpu/) |
+| OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [engine.cpp](../../src/ecm/stage1/montgomery/opencl/engine.cpp) |
+| Stage2 应用 | 配置、CLI、查询/调优/父任务/子进程模式和退出 | [main](../../src/ecm/stage2/cuda/main.cpp) |
 | Stage2 任务 | 唯一父任务循环、完整曲线 worker、规划与调优协作 | [task.cpp](../../src/ecm/stage2/task.cpp)、[planning](../../src/ecm/stage2/planning/planning.cpp) |
 | 进程适配 | 曲线子进程的启动、pipe、Job、停止与寿命 | [process.cpp](../../src/ecm/stage2/process.cpp) |
 | CUDA Stage2 | 点生成、多项式树、NTT、归约、下降、GCD | [模块职责](STAGE2.md#cuda-模块边界)、[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp) |
-| CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [ecm_cpu_stage2_main.cpp](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[GW 后端](../../src/ecm/stage2/cpu/gwpoly.cpp) |
+| CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [CPU Edwards 入口](../../src/ecm/stage2/edwards/cpu/main.cpp)、[GW 后端](../../src/ecm/stage2/cpu/gwpoly.cpp) |
 | GUI | App 绘制/交互；Controller 编排 worker；WorkerProc 管理本机进程 | [GUI](../../src/ecm/application/gui/) |
 | 工具 | 构建、参考计算、数据集、计时、剖析和图表 | [tools](../../tools/) |
 
@@ -26,7 +26,7 @@
 
 `ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/ecm/application/configuration/ecm_expr.cpp)与 [worktodo 读写](../../src/io/worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在 [cuda_sources.cmake](../../tools/build/internal/cuda_sources.cmake) 中维护，由根 CMake 消费；不同后端仍分别编译这些源文件。
 
-Stage1 按曲线阶段组织，CPU/CUDA/OpenCL 实现在各自曲线目录下；共有任务、执行合同、标量、选择与进度位于 `stage1/`。`stage2/` 集中任务、输入、规划、进程及 CPU/CUDA 续算。`cpu/`、`cuda/`、`opencl/` 只保留实际跨阶段或跨曲线的技术支持；没有第二套隐藏的阶段执行流程。公开请求与选择合同在 `include/ecm/stage1/`，阶段私有协作头留在 `src/ecm/stage1/`。模块职责和位宽边界见 [Stage1](STAGE1.md#cuda-模块边界)。
+Stage1 在 `stage1/edwards/` 与 `stage1/montgomery/` 内按 CPU/CUDA/OpenCL 组织完整曲线实现；共有任务、执行合同、标量、选择与进度在 `stage1/` 根目录平铺。`stage2/` 集中任务、输入、规划、进程及 CPU/CUDA 续算；其 CUDA 程序入口属于跨曲线共同能力，CPU Edwards 程序入口属于 `stage2/edwards/cpu/`，通用 GW 引擎留在 `stage2/cpu/`。顶层 `cpu/`、`cuda/`、`opencl/` 保留共享技术支持；没有第二套隐藏的阶段执行流程。公开请求与选择合同在 `include/ecm/stage1/`，阶段私有协作头留在 `src/ecm/stage1/`。模块职责和位宽边界见 [Stage1](STAGE1.md#cuda-模块边界)。
 
 ## 目录与依赖
 
@@ -47,13 +47,16 @@ src/
 ├── io/                             输入、文件、命名、最终save、恢复容器和结果
 ├── sync/                           备份、P95 和 Stage2 持久交接
 └── ecm/
-    ├── application/                CLI入口、配置和GUI
-    ├── stage1/                     共同任务、合同、选择、标量、准备与进度
-    ├── edwards_stage1/{cpu,cuda}/   Edwards完整流程和设备实现
-    ├── montgomery_stage1/          Montgomery完整流程，共享param分派
-    │   └── {cpu,cuda,opencl}/
+    ├── application/                配置、GUI、群阶报告及独立辅助程序
+    ├── stage1/                     共同任务、合同、选择、标量与进度平铺
+    │   ├── edwards/{cpu,cuda}/      Edwards完整流程和设备实现
+    │   └── montgomery/             Montgomery完整流程，共享param分派
+    │       └── {cpu,cuda,opencl}/
     ├── stage2/                     任务、输入、几何、进程与控制台
-    │   └── {planning,cpu,cuda}/     纯主机规划和各后端续算
+    │   ├── edwards/cpu/main.cpp    CPU Edwards独立程序入口
+    │   ├── cpu/                    通用GW多项式续算
+    │   ├── cuda/                   共同CUDA入口和续算引擎
+    │   └── planning/               纯主机规划
     ├── curve/                      跨阶段共享曲线构造
     ├── group_order/                群阶数学
     ├── diagnostics/                PARI/GP诊断与独立host

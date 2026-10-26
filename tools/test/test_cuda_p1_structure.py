@@ -48,9 +48,16 @@ def main():
             assert candidate.resolve() in device_files, (path, relative)
             walk(candidate)
     device_files={p.resolve() for p in current_files('kernels/cuda')+current_files('include/ecm/cuda')}
+    # The current registry owns host dispatch, occupancy and a launch bridge.
+    # Its historical kernels/ location does not make the GMP-facing entry
+    # declarations a pure device-arithmetic dependency. Check that TU separately.
+    registry=current_source('kernels/cuda/stage1/montgomery/registry.cu').resolve()
+    registry_code=re.sub(r'/\*.*?\*/|//[^\n]*','',text(registry),flags=re.S)
+    assert not re.search(r'__global__|__device__|\bmpz_\w*|EcmEdwardsProgress|ecm_stage1_checkpoint',registry_code)
+    device_files.remove(registry)
     # Extracted dispatch values were already part of launch.h/constants.h.
     # This single data-only header joins the closure; host policy bodies do not.
-    domain=ROOT/'src/ecm/montgomery_stage1/cuda/prac/domain.h'
+    domain=ROOT/'src/ecm/stage1/montgomery/cuda/prac/domain.h'
     code=re.sub(r'/\*.*?\*/|//[^\n]*','',text(domain),flags=re.S)
     assert not re.search(r'#\s*include|\b(?:struct|class|inline|static)\b|\(',code)
     device_files.add(domain.resolve())
@@ -78,7 +85,7 @@ def main():
         normalize = lambda s: re.sub(r'\s+', '', re.sub(r'/\*.*?\*/|//[^\n]*', '', s, flags=re.S))
         assert normalize(before) == normalize(after), new
         evidence.append(dict(source=new, arithmetic_sha256=hashlib.sha256(normalize(after).encode()).hexdigest()))
-    result = dict(complete=True, device_closure_files=len(visited), arithmetic_bodies=evidence,
+    result = dict(complete=True, device_closure_files=len(visited), host_dispatch_files=1, arithmetic_bodies=evidence,
                   montgomery_groups=21, edwards_groups=7, gpu_runs=0)
     (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result))
