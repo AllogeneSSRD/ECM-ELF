@@ -17,6 +17,14 @@ function Get-EcmProfileHash($Fields) {
     finally { $sha.Dispose() }
 }
 
+function Get-EcmProfileDifferences($Before, $After) {
+    $oldNames = if ($Before -is [Collections.IDictionary]) { @($Before.Keys) } else { @($Before.PSObject.Properties.Name) }
+    $newNames = if ($After -is [Collections.IDictionary]) { @($After.Keys) } else { @($After.PSObject.Properties.Name) }
+    foreach ($name in @($oldNames + $newNames | Sort-Object -Unique)) {
+        if ($name -notin $oldNames -or $name -notin $newNames -or [string]$Before.$name -cne [string]$After.$name) { $name }
+    }
+}
+
 function New-EcmCudaProfile([string]$Repo,
         [ValidateSet('local','dev','release')][string]$Role,
         [ValidateSet('stage1','stage2')][string]$Stage,
@@ -100,6 +108,7 @@ function New-EcmStage2Profile([string]$Repo, [string]$Role, [string]$Engine, [st
 
 function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf = '', [string]$Root = '') {
     if ($Leaf -and $Root) { throw 'Specify a final build directory or a build root, not both' }
+    $automaticLocal = -not $Leaf -and -not $Root -and $buildProfile.Role -eq 'local'
     if (-not $Leaf) {
         if (-not $Root -and $buildProfile.Role -eq 'local') {
             $Leaf = "build_$($buildProfile.Stage)_local"
@@ -119,6 +128,20 @@ function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf =
         }
         if ($part -match '^build_(stage[12])_(?:local|dev|release)$' -and $Matches[1] -ne $buildProfile.Stage) {
             throw "Build directory belongs to another stage: $part; requested $($buildProfile.Stage)"
+        }
+    }
+    if ($automaticLocal -and (Test-Path -LiteralPath (Join-Path $leafPath 'profile.json'))) {
+        $existing = Get-Content -LiteralPath (Join-Path $leafPath 'profile.json') -Raw | ConvertFrom-Json
+        # Only a valid local marker for this source/stage may select a sibling.
+        # Damaged markers and explicit paths must still fail normal admission.
+        if ($existing.schema -eq 1 -and $existing.fields.role -eq 'local' -and
+            $existing.fields.stage -eq $buildProfile.Stage -and $existing.fields.source_root -ieq [IO.Path]::GetFullPath($Repo) -and
+            (Get-EcmProfileHash $existing.fields) -ceq $existing.profile_sha256 -and
+            $existing.profile_sha256 -cne $buildProfile.Hash) {
+            $changed = @(Get-EcmProfileDifferences $existing.fields $buildProfile.Fields) -join ', '
+            $leafPath += '_' + $buildProfile.Hash.Substring(0,16)
+            Write-Host "== Local $($buildProfile.Stage) profile changed: $changed =="
+            Write-Host "   Preserving the previous build; selected directory: $leafPath"
         }
     }
     if ($Root) {
@@ -198,7 +221,9 @@ function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly)
         $marker = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         if ($marker.schema -ne 1 -or $marker.profile_sha256 -cne $buildProfile.Hash -or
             (Get-EcmProfileHash $marker.fields) -cne $buildProfile.Hash) {
-            throw 'Build profile/role/engine differs; choose its matching leaf or a fresh directory'
+            $changed = @(Get-EcmProfileDifferences $marker.fields $buildProfile.Fields) -join ', '
+            if (-not $changed) { $changed = 'marker schema/content hash' }
+            throw "Build profile/role/engine differs; directory: $Leaf; changed fields: $changed; choose its matching leaf or a fresh directory"
         }
         Initialize-EcmBuildDirectory $Leaf
         return

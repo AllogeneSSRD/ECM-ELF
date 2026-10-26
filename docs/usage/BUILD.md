@@ -15,7 +15,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 cu13.3 聚合模式使用 `SplitCompile=8`，cu11.8及隔离备选使用1。构建入口不自动运行数学、GPU 或性能测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口优先使用短目录（已有不匹配但完整的同用途 profile 时，CUDA 入口自动选择带 profile key 的独立目录）：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -23,7 +23,7 @@ GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
-Stage1 local/dev 默认 `-KernelLayout isolated`，与 release 共用按曲线/param/容器生成的独立编译单元，避免多个大位宽挤在同一组文件形成编译长尾；每个内核及其设备辅助函数仍一起编译。`-KernelLayout grouped` 保留分组备选。local 仍为单架构、压缩、无PTX，不改成发布镜像策略。布局进入构建身份，已有分组缓存不能当成隔离缓存复用；首次切换可指定新的 `-BuildDir build_stage1_local_isolated`，旧目录保留。
+Stage1 local/dev 默认 `-KernelLayout isolated`，与 release 共用按曲线/param/容器生成的独立编译单元，避免多个大位宽挤在同一组文件形成编译长尾；每个内核及其设备辅助函数仍一起编译。`-KernelLayout grouped` 保留分组备选。local 仍为单架构、压缩、无PTX，不改成发布镜像策略。布局进入构建身份，已有分组缓存不能当成隔离缓存复用；省略 `-BuildDir` 时自动为不同 profile 选择独立目录；也可显式指定新的 `-BuildDir build_stage1_local_isolated`，旧目录保留。
 
 位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/edwards_stage1/cuda/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/montgomery_stage1/cuda/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
 
@@ -159,7 +159,9 @@ dev、local、release 和测试构建入口在写入产物前，为输出目录�
 
 目录行为与真实 Git 忽略检查使用 `tools/test/test_build_directory.ps1 -Output <新证据目录>`；它也检查补齐标记不会放宽 profile / SkipBuild 门禁。
 
-`profile.json` 保存完整 SHA256 及字段。CUDA local 默认使用 `build_stage1_local`、`build_stage2_local` 固定短目录；dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。固定 local 目录与任何显式叶目录都只容纳一个相容 profile；配置不匹配时拒绝，不改写 marker，也不自动清空目录。需要同时保留不同架构、tiers 或编译策略时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
+`profile.json` 保存完整 SHA256 及字段。CUDA local 优先使用 `build_stage1_local`、`build_stage2_local` 短目录；dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。每个叶目录只容纳一个相容 profile。省略 local 的目录参数时，若短目录已包含同源码根、同用途、同阶段且内容哈希完整的另一份 profile，自动选择同层 `build_stageN_local_<key>`，例如 `build_stage1_local_c869d1f184d3b595`；重跑由当前完整配置选定同一个目录，不扫描最新产物。日志报告变化字段和实际输出路径，旧目录、profile 与对象保留。首次使用新 profile 需要正常构建，`-HostOnly` 不会代替它建立 CUDA 缓存。
+
+显式 `-BuildDir` / `-Build` 仍是最终叶目录，不会自动改选；与该目录配置不匹配时拒绝，并报告目录和变化字段。标记损坏、跨用途/阶段或来源根不符时，不通过自动改选隐藏问题。脚本不会改写另一份 profile 或清空目录；GUI、运行命令和后续测试应使用本次输出的实际 exe 路径。需要自定义并存位置时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
 
 本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。公开 release 统一只接收 `-BuildRoot` 根目录，叶目录由完整 profile 派生。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
 

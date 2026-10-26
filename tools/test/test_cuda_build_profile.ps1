@@ -74,6 +74,43 @@ $stage1Options = [ordered]@{configure='-DCMAKE_BUILD_TYPE=Release -DECM_TIERS=38
 $stage1 = New-EcmCudaProfile $fixture local stage1 production 89 $cuda $vc $gmp $stage1Options
 Check ((Resolve-EcmBuildDirectory $fixture $stage1) -eq (Join-Path $fixture 'build_stage1_local')) 'local Stage1 has a separate fixed short default directory'
 Reject { Resolve-EcmBuildDirectory $fixture $stage1 $leaf } 'another stage' 'fixed Stage2 directory cannot be reused for Stage1'
+# Reproduce a default-policy update over a valid pre-isolation local cache.
+$oldStage1Leaf = Resolve-EcmBuildDirectory $fixture $stage1
+Assert-EcmBuildProfile $oldStage1Leaf $stage1
+$oldMarkerHash = (Get-FileHash -LiteralPath (Join-Path $oldStage1Leaf 'profile.json')).Hash
+$oldObject = Join-Path $oldStage1Leaf 'cached.obj'; Write-Fixture $oldObject 'old grouped object'
+$oldObjectHash = (Get-FileHash -LiteralPath $oldObject).Hash
+$splitOptions = [ordered]@{configure=($stage1Options.configure+' -DECM_CUDA_ISOLATE_TIERS=ON');tiers='384';enable_prac='0';extra=''}
+$splitStage1 = New-EcmCudaProfile $fixture local stage1 production 89 $cuda $vc $gmp $splitOptions
+$splitLeaf = Resolve-EcmBuildDirectory $fixture $splitStage1
+Check ($splitLeaf -eq ($oldStage1Leaf+'_'+$splitStage1.Key)) 'changed default Stage1 policy selects a deterministic separate directory'
+Assert-EcmBuildProfile $splitLeaf $splitStage1
+Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $splitLeaf) 'repeated default Stage1 build reuses its matching alternate profile'
+Assert-EcmBuildProfile $splitLeaf $splitStage1 -ReadOnly
+Check ((Get-FileHash -LiteralPath (Join-Path $oldStage1Leaf 'profile.json')).Hash -eq $oldMarkerHash -and
+    (Get-FileHash -LiteralPath $oldObject).Hash -eq $oldObjectHash) 'automatic selection preserves old marker and objects'
+Check ((Resolve-EcmBuildDirectory $fixture $splitStage1 $oldStage1Leaf) -eq $oldStage1Leaf) 'explicit Stage1 BuildDir never redirects'
+Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'option/configure' 'explicit profile mismatch reports the changed configuration field'
+$alternateStage2 = Profile -Split 4
+$alternateLeaf = Resolve-EcmBuildDirectory $fixture $alternateStage2
+Check ($alternateLeaf -eq ($leaf+'_'+$alternateStage2.Key)) 'Stage2 default policy changes also select a separate profile'
+Assert-EcmBuildProfile $alternateLeaf $alternateStage2
+Check ((Resolve-EcmBuildDirectory $fixture $a) -eq $leaf) 'matching original Stage2 profile keeps its short directory'
+$damaged = Get-Content -LiteralPath (Join-Path $oldStage1Leaf 'profile.json') -Raw | ConvertFrom-Json
+$damaged.fields.role = 'dev'
+Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ($damaged|ConvertTo-Json -Depth 5)
+Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $oldStage1Leaf) 'corrupt default marker cannot be hidden by automatic redirection'
+Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'profile/role/engine differs' 'corrupt default profile still fails closed'
+Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$stage1.Hash;fields=$stage1.Fields}|ConvertTo-Json -Depth 5)
+$foreign = New-EcmCudaProfile $fixture dev stage1 production 89 $cuda $vc $gmp $stage1Options
+Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$foreign.Hash;fields=$foreign.Fields}|ConvertTo-Json -Depth 5)
+Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $oldStage1Leaf) 'valid foreign-role marker cannot redirect a local default'
+Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'role' 'foreign-role default is refused without replacing its marker'
+Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$stage1.Hash;fields=$stage1.Fields}|ConvertTo-Json -Depth 5)
+Write-Fixture (Join-Path $splitLeaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$stage1.Hash;fields=$stage1.Fields}|ConvertTo-Json -Depth 5)
+Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $splitLeaf) 'alternate directory is deterministic even when occupied'
+Reject { Assert-EcmBuildProfile $splitLeaf $splitStage1 } 'option/configure' 'incompatible alternate cache is refused rather than overwritten'
+Write-Fixture (Join-Path $splitLeaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$splitStage1.Hash;fields=$splitStage1.Fields}|ConvertTo-Json -Depth 5)
 $legacy = Join-Path $fixture 'legacy_stage1'; New-Item -ItemType Directory -Path $legacy | Out-Null
 $legacyManifest = [ordered]@{identity_schema=1;architecture='89';tiers='384';enable_prac=$false
     cuda_root=$cuda.Root;toolkit=$cuda.VersionText;host_compiler=$vc.Compiler;host_version=$vc.Version

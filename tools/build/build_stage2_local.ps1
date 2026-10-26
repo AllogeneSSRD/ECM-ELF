@@ -3,9 +3,10 @@
 .SYNOPSIS
 Build the standalone CUDA Stage2 save/queue executable (MSVC + nvcc + GMP).
 .DESCRIPTION
-Local builds default to build_stage2_local. Build overrides the final directory;
+Local builds prefer build_stage2_local; an occupied incompatible local profile
+selects a deterministic build_stage2_local_<key> sibling. Build overrides the final directory;
 BuildRoot explicitly retains the profile hierarchy under the requested root.
-Incompatible profiles in a fixed directory are refused, never overwritten.
+Incompatible profiles in explicit directories are refused, never overwritten.
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -Arch sm_89
 #>
