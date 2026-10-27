@@ -1,11 +1,11 @@
 # sass_stats.ps1 -- export SASS for one kernel instantiation and report instruction statistics.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File tools\bench\sass_stats.ps1
-#          [-Obj <path to .obj>] [-Kernel <substring of the mangled name>] [-Top 12]
+#          -Obj <path to generated .obj> [-Kernel <substring of the mangled name>] [-Top 12]
 # Purpose (2026-09-25): check whether a register-capped build pays for occupancy with extra
 # instructions (spills = LDL/STL) and see the inner-loop opcode mix, per
 # docs/performance/STAGE1.md
 param(
-    [string]$Obj = 'build_cuda_cmake\CMakeFiles\ecm_cuda.dir\kernels\cuda\stage1\montgomery\instances_param3_g4.cu.obj',
+    [Parameter(Mandatory=$true)][string]$Obj,
     [string]$Kernel = 'kernel_double_addI13cgbn_params_tILj16ELj8192E',
     [int]$Top = 12
 )
@@ -14,7 +14,9 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not [System.IO.Path]::IsPathRooted($Obj)) { $Obj = Join-Path $repo $Obj }
 if (-not (Test-Path $Obj)) { Write-Host "no such object: $Obj"; exit 2 }
 
-$dump = Join-Path $repo '.bench_tmp\sass_dump.txt'
+$dumpDir = Join-Path $repo ('data/experiments/sass_stats/'+[Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dumpDir -Force | Out-Null
+$dump = Join-Path $dumpDir 'sass_dump.txt'
 cmd /c "cuobjdump -sass `"$Obj`" > `"$dump`" 2>&1" | Out-Null
 if (-not (Test-Path $dump)) { Write-Host 'cuobjdump failed'; exit 2 }
 

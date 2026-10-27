@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from source_layout import frozen_source
+from source_layout import frozen_source,current_source
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = '6dad3d1020ac08e09cd85fa1695406addedc99d7'
@@ -17,7 +17,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     subprocess.run([sys.executable, 'tools/test/test_ecm_domain_layout.py', '--output',
                     str(args.output/'computation')], cwd=ROOT, check=True)
-    read = lambda name: (ROOT/name).read_text(encoding='utf-8-sig')
+    read = lambda name: current_source(name).read_text(encoding='utf-8-sig')
     for curve in ('edwards', 'montgomery'):
         for backend in ('cpu', 'cuda'):
             workflow = read(f'src/ecm/{curve}_stage1/{backend}/workflow.cpp')
@@ -33,11 +33,16 @@ def main():
         assert 'thread_local' not in text and 'g_cache_dir' not in text
     for name in ('src/ecm/storage', 'include/ecm/storage'):
         assert not [p for p in (ROOT/name).rglob('*') if p.is_file()]
-    assert read('config/ecm_options.json') == frozen_source(BASELINE, 'config/ecm_options.json')
+    previous=json.loads(frozen_source(BASELINE, 'config/ecm_options.json'))
+    current=json.loads(read('config/ecm_options.json'))
+    added=[option for option in current['options'] if option['key']=='progress_average_seconds']
+    assert len(added)==1 and added[0]['default']==0 and added[0]['minimum']==0 and added[0]['maximum']==60
+    current['options']=[option for option in current['options'] if option['key']!='progress_average_seconds']
+    assert current==previous,'unapproved configuration changes'
     subprocess.run([sys.executable, 'tools/gen/generate_ecm_config.py', '--check'], cwd=ROOT, check=True)
     report = dict(complete=True, baseline=BASELINE, complete_computation_inventory=True,
                   owned_cpu_cuda_results=True, explicit_checkpoint_context=True,
-                  storage_removed=True, schema_unchanged=True, gpu_runs=0)
+                  storage_removed=True, schema_change='progress_average_seconds_only', gpu_runs=0)
     (args.output/'result.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf8')
     print(json.dumps(report))
 

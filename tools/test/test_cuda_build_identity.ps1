@@ -194,6 +194,8 @@ Write-Fixture $moduleHeader 'host module input'
 $entries += [ordered]@{file=$moduleSource;directory=$fixture;command='cl /FoCMakeFiles/host_module.dir/module.obj'}
 Write-Fixture (Join-Path $fixture 'build/compile_commands.json') ($entries | ConvertTo-Json)
 Write-Fixture (Join-Path $fixture 'build/cuda_target_graph.json') '{"schema":1,"targets":{"ecm_cuda":["ecm_cuda","cuda_kernels","host_module"]}}'
+New-Item -ItemType Directory -Path (Join-Path $fixture 'build/cuda_modules/stage1') -Force | Out-Null
+Write-Fixture (Join-Path $fixture 'build/cuda_modules/stage1/modules.json') '{"schema":1,"tiers":"","modules":[]}'
 $linked = Get-Stage1ReleaseSources $repo -BuildDir (Join-Path $fixture 'build')
 Check ($linked.Contains((Get-EcmSourceKey $repo $moduleHeader))) 'linked host-module private includes enter Stage1 release identity'
 Write-Fixture $moduleHeader 'changed host module input'

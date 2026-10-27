@@ -1,4 +1,8 @@
 ﻿cmake_minimum_required(VERSION 3.20)
+include("${CMAKE_CURRENT_SOURCE_DIR}/tools/build/internal/stage1_tiers.cmake")
+set(ECM_TIERS "" CACHE STRING "comma-separated Stage1 widths (empty = all)")
+ecm_stage1_normalize_tiers("${ECM_TIERS}" _ecm_normalized_tiers)
+set(ECM_TIERS "${_ecm_normalized_tiers}" CACHE STRING "comma-separated Stage1 widths (empty = all)" FORCE)
 project(main)
 
 # Config source, generated bindings, templates and reference must agree.
@@ -288,12 +292,11 @@ if(ECM_ENABLE_CUDA)
     option(ECM_CUDA_ENABLE_PRAC "Build experimental resident/PRAC Stage1 kernels (slow template compilation)" OFF)
 
     include("${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_timing.cmake")
-    option(ECM_CUDA_ISOLATE_TIERS "One device module per curve/param/container" OFF)
-    if(ECM_CUDA_ISOLATE_TIERS)
-        include("${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_modules.cmake")
-        ecm_stage1_isolate_modules()
-        add_compile_definitions(ECM_CUDA_ISOLATE_TIERS)
+    if(DEFINED ECM_CUDA_ISOLATE_TIERS AND NOT ECM_CUDA_ISOLATE_TIERS)
+        message(FATAL_ERROR "Stage1 grouped layout was removed; use generated modules in a new build directory")
     endif()
+    include("${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_modules.cmake")
+    ecm_stage1_generate_modules()
     add_executable(ecm_cuda
         ${ECM_STAGE1_COMMON_SOURCES}
         ${ECM_STAGE1_CUDA_SOURCES})
@@ -317,6 +320,7 @@ if(ECM_ENABLE_CUDA)
         ${CMAKE_SOURCE_DIR}/src/ecm/cuda/runtime
         "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>"
         ${CMAKE_SOURCE_DIR}/src/ecm/cuda
+        ${CMAKE_BINARY_DIR}/cuda_modules/stage1
         ${CGBN_INCLUDE_DIR}
         ${CGBN_INCLUDE_DIR}/cgbn   # the .cu uses #include <cgbn.h>
         ${GMP_INCLUDE_DIR}
@@ -422,67 +426,20 @@ if(ECM_ENABLE_CUDA)
     set(ECM_MAX_ROTATION "1" CACHE STRING "CGBN MAX_ROTATION (limb rotation in the multiply)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_TPB=${ECM_TPB} ECM_MAX_ROTATION=${ECM_MAX_ROTATION})
 
-    # Register cap for the SMALL-tier kernels only (<=2048 bits: the tpi4/tpi8 sources).
-    # Measured: capping 72 -> 56 registers raises occupancy from 7 to 9 blocks/SM and buys
-    # +4.7% at M511 and M761 (48 overflows and gives it back).  The >=2560-bit instantiations
-    # live in other sources and keep the compiler default, because their allocation is
-    # unmeasured and a 56-register cap there could spill badly.  Set to 0 to disable.
-    # DEFAULT 0: the per-tier __maxnreg__(cgbn_params_t::REG_TARGET) in the kernel header now
-    # encodes the register budget per bit width, which is strictly better than a per-file
-    # --maxrregcount.  Set this to a number only to override it as a blunt instrument.
-    set(ECM_MAXRREG_SMALL "0" CACHE STRING "maxrregcount for the <=2048-bit kernel sources (0 = off)")
-    if(NOT ECM_MAXRREG_SMALL STREQUAL "0")
-        set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param3_g0.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param3_g1.cu
-            PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SMALL}")
-    endif()
+    # These controls only applied to the removed grouped source files. Refuse an
+    # explicit request rather than silently ignoring it in generated modules.
+    foreach(_legacy ECM_MAXRREG_SMALL ECM_MAXRREG_SUYAMA)
+        set(${_legacy} "0" CACHE STRING "Removed grouped-only register override; must be 0")
+        if(NOT "${${_legacy}}" STREQUAL "0")
+            message(FATAL_ERROR "${_legacy}=${${_legacy}} requires the removed Stage1 grouped layout; generated modules preserve the per-kernel/default legacy-toolkit register policy")
+        endif()
+    endforeach()
 
-    # Same treatment for the param0 (Suyama) sources -- the *recommended* parametrization --
-    # and for the param2 family, which is the same kernel body instantiated with
-    # CONST_DIFF = true (it MUST be capped too: without the cap the param2 path measured
-    # 74.12 M curve-bits/s instead of the 79+ M its op count predicts).
-    # Measured 2026-09-25 at M511/8192 curves on the param0 path: cap 0 -> 71.07 M, 64 ->
-    # 71.68 M (+0.9%), 56 -> 71.25 M.  So param0 gains far less than param3 (+4.7%) because
-    # it executes 10 mont ops per bit instead of 8.2 and spills sooner -- its remaining gap
-    # to param3 (71.7 vs 82.0 M) is the op count, not occupancy.  64 is the measured best.
-    # NOTE: a per-source-file cap applies to EVERY tier in that file, including the
-    # >=2560-bit instantiations whose allocation is unmeasured -- flagged in
-    # docs/performance/STAGE1.md
-    # DEFAULT 0: a per-FILE cap also hits that file's >=2560-bit instantiations, which the
-    # measurement above shows should stay unconstrained (they want ~141 registers).  The
-    # <=2048-bit tiers inside these files are handled by the tier-aware MIN_BLOCKS instead.
-    set(ECM_MAXRREG_SUYAMA "0" CACHE STRING "maxrregcount for the param0/Suyama + param2 kernel sources (0 = off)")
-    if(NOT ECM_MAXRREG_SUYAMA STREQUAL "0")
-        set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g0.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g1.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g2.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g3.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g4.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g5.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param0_g6.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g0.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g1.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g2.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g3.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g4.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g5.cu
-            ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/cuda/instances/instances_param2_g6.cu
-            PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SUYAMA}")
-    endif()
-
-    # Tier filter for fast iteration (docs/performance/STAGE1.md).  On this machine
-    # every parallel generator fails (Ninja hangs in compiler ABI detection, MSBuild's CUDA
-    # 13.3 target cancels the build, jom breaks CMake's try_compile), so kernel builds stay
-    # serial and a full build costs ~20 min.  -DECM_TIERS=4096,8192 compiles ONLY those
-    # instantiations, turning the 12-tier tpi16 TU into a couple of seconds.  Empty = all.
-    set(ECM_TIERS "" CACHE STRING "comma-separated BITS list to compile (empty = all tiers)")
+    # ECM_TIERS was validated and normalized before source identity/configuration.
     if(NOT ECM_TIERS STREQUAL "")
         string(REPLACE "," ";" tier_list "${ECM_TIERS}")
         target_compile_definitions(ecm_cuda PRIVATE ECM_TIERS_RESTRICTED)
         foreach(tier IN LISTS tier_list)
-            string(STRIP "${tier}" tier)
             target_compile_definitions(ecm_cuda PRIVATE ECM_TIER_${tier})
             # The 512- and 1024-bit tiers are guarded by their CGBN TYPEDEF NAME, not by
             # their number (cgbn_params_small = 512, cgbn_params_medium = 1024), so

@@ -58,7 +58,7 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 [scalar.h](../../include/ecm/stage1/scalar.h)统一声明 LCM 标量与主机 NAF 位图；构造、位读取和 digit 方法全部在现有 [ecm_stage1_exp.cpp](../../src/ecm/stage1/scalar.cpp)，没有新增标量转发层或第二个实现 TU。NAF 的字段、布局、窗口范围和编码保持，设备只消费已有位图/数据合同。
 
-[stage1_progress.h](../../include/ecm/stage1/progress.h)只声明共享 GPU screen 格式及 SpeedWindow 方法；实现位于 [stage1_progress.cpp](../../src/ecm/stage1/progress.cpp)。50 样本窗口的布局、统计公式与 stdout 协议保持，不新增 Pimpl 分配。CUDA 包含声明；修改格式或速度统计函数体只需重编对应 CXX。Montgomery 对该头的多余显式 OBJECT_DEPENDS 已移除，真实 include 依赖仍正常校验。
+[progress.h](../../include/ecm/stage1/progress.h)声明共享 screen 格式和实时速度窗口，实现在 [progress.cpp](../../src/ecm/stage1/progress.cpp)。应用在 worker 配置归一化后设置 `progress_average_seconds`：默认0，以最近一次有效采样估计 s/curve 和剩余时间；正值为实际采样时长的滚动窗口，范围0–60秒，按已完成工作量／采样时长计算，最旧片段跨越边界时按比例截取。CPU 与 CUDA 复用同一个统计实现。无进度、零时长和非有限采样不进入窗口；恢复的既有进度不作为新工作。CUDA 采样保持排除准备和 checkpoint I/O，stdout 文本协议、刷新频率、最终任务计时保持。配置定义、默认与双语说明只在 [配置定义](../../config/ecm_options.json)维护。
 
 共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列读写已集中于主机读写 Module；Montgomery 环境策略、私有执行合同和应用 PARI 已收口。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
 
@@ -133,7 +133,7 @@ CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/cuda/` 内的�
 
 设备算术与薄发射器位于各曲线目录，独立实例放在对应 `instances/`。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。设备实例闭包不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `src/ecm/cuda/arithmetic/cgbn/types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
 
-local/dev/release默认启用 `ECM_CUDA_ISOLATE_TIERS`，由 `tools/build/internal/cuda_modules.cmake` 从同一 `tiers.def` 派生32个Edwards容器模块及31×3个Montgomery参数化/容器模块；local/dev可用 `-KernelLayout grouped` 保留七组实例备选。生成文件只选择曲线/param/容器，内核及设备辅助函数的实现仍在同一编译单元可见，不拆散算术调用链。全档枚举读取纯元数据，任务选定宽度后才调用对应工厂并查询occupancy，避免信息展示触及所有设备函数。Edwards binary/NAF共享该容器模块；sigma仍是运行时参数，不生成sigma专用实例。旧NVCC不支持每核 `__maxnreg__` 时，Montgomery隔离单元按当前位宽政策设置56/128/255的编译器寄存器预算。实际按需JIT范围及驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
+local/dev/release 只有构建生成这一种实例排布，由 `tools/build/internal/cuda_modules.cmake` 从 `tiers.def` 派生32个Edwards容器模块和31×3个Montgomery参数化/容器模块。PRAC 可选目标使用同一个生成器，按标准几何和 sparse family/geometry 生成入口与工厂表。源码只保留实际设备模板，内核及辅助函数在同一编译单元可见，普通 Montgomery 分派直接按 param/容器查找工厂。全档枚举读取纯元数据，任务选定宽度后才调用工厂并查询 occupancy。Edwards binary/NAF 共用容器模块，sigma 仍为运行时参数。旧 NVCC 的普通 Montgomery 编译单元保持56/128/255预算，PRAC 不增加此前不存在的旧工具链预算。生成清单、内容身份及按需 JIT 限制见[构建与发布](../usage/BUILD.md#默认策略)。
 
 依赖方向为：任务/旧执行适配 → CUDA 私有 API → CUDA 主机实现 → 私有发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码、主机计划与运行时统一位于 `src/ecm/stage1/montgomery/cuda/prac/`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `src/ecm/stage1/edwards/cuda/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
 

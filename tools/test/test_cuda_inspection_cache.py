@@ -16,6 +16,7 @@ import package_release as packaging
 class CacheTests(unittest.TestCase):
     def setUp(self):
         base=ROOT/'build_release_contract_tests';base.mkdir(exist_ok=True)
+        (base/'.gitignore').write_text('*\n')
         self.temp=tempfile.TemporaryDirectory(dir=base);self.root=Path(self.temp.name)
         self.cuda=self.root/'cuda';(self.cuda/'bin').mkdir(parents=True)
         self.tool=self.cuda/'bin/cuobjdump.exe';self.tool.write_bytes(b'tool')
@@ -68,6 +69,10 @@ class CacheTests(unittest.TestCase):
         source=build/'cuda_modules/stage1/edwards_512.cu'
         def commands(path):
             (build/'compile_commands.json').write_text(json.dumps([dict(file=str(path),directory=str(build),command=f'nvcc -o "{obj}"')]))
+            path.parent.mkdir(parents=True,exist_ok=True)
+            (path.parent/'modules.json').write_text(json.dumps(dict(schema=1,modules=[dict(
+                source=str(path),label=path.stem,curve='edwards',param=-1,bits=int(path.stem.split('_')[-1]),
+                tpi=4,family='binary_naf',modes=[])])))
         commands(source)
         entry=b'.version 7.8\n.target sm_50\n.visible .entry kernel_ParamsILj512ELj4E()\n'
         class Process:
@@ -90,6 +95,35 @@ class CacheTests(unittest.TestCase):
         def changed(path):return 'f'*64 if Path(path).name=='package_release.py' else real_sha(path)
         with patch('cuda_inspection_cache.sha',side_effect=changed):self.cache().get('test',self.binary,scan)
         self.assertEqual(len(calls),2)
+
+    def test_prac_catalog_checks_modes_tpi_and_missing_members(self):
+        build=self.root/'prac';folder=build/'cuda_modules/stage1';folder.mkdir(parents=True)
+        source=folder/'prac_standard_384_tpi4.cu';obj=build/'kernel.obj';obj.write_bytes(b'PRAC')
+        module=dict(label=source.stem,source=str(source),curve='montgomery',param=0,
+                    bits=384,tpi=4,family='prac_standard',modes=[0,1])
+        def catalog():
+            (folder/'modules.json').write_text(json.dumps(dict(schema=1,modules=[module])))
+        catalog()
+        commands=[dict(file=str(source),directory=str(build),command=f'nvcc -o "{obj}"')]
+        (build/'compile_commands.json').write_text(json.dumps(commands))
+        entry=b'.version 8.0\n.target sm_75\n'+b''.join(
+            f'.visible .entry _Z20kernel_suyama_domainI13cgbn_params_tILj4ELj384EELi{mode}EEv()\n'.encode()
+            for mode in (0,1))
+        class Process:
+            def __init__(self,*args,**kwargs):self.stdout=io.BytesIO(entry);self.stderr=io.BytesIO()
+            def wait(self):return 0
+        with patch.object(packaging.subprocess,'Popen',side_effect=Process) as process:
+            packaging.inspect_modules(self.cuda,build,'stage1',build/'report.json',self.cache())
+            module['modes']=[0,1,2];catalog()
+            with self.assertRaisesRegex(ValueError,'Incomplete PRAC mode membership'):
+                packaging.inspect_modules(self.cuda,build,'stage1',build/'report.json',self.cache())
+            module['tpi']=8;catalog()
+            with self.assertRaisesRegex(ValueError,'Unexpected curve/parameter/width'):
+                packaging.inspect_modules(self.cuda,build,'stage1',build/'report.json',self.cache())
+            self.assertEqual(process.call_count,1)
+        (build/'compile_commands.json').write_text('[]')
+        with self.assertRaisesRegex(ValueError,'Incomplete Stage1 compile module membership'):
+            packaging.inspect_modules(self.cuda,build,'stage1',build/'report.json',self.cache())
 
 
 if __name__=='__main__':unittest.main()

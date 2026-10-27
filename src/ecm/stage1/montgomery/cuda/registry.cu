@@ -8,7 +8,6 @@ void cgbn_stage1_launch(cgbn_stage1_kernel_fn kernel,dim3 grid,dim3 block,
     uint32_t *scalar,uint32_t *data,uint32_t curves,uint32_t sigma,uint32_t np0) {
     kernel<<<grid,block>>>(report,scalar_bits,start,count,scalar,data,curves,sigma,np0);
 }
-#ifdef ECM_CUDA_ISOLATE_TIERS
 #define ECM_CUDA_MONT_ONLY
 #ifdef IS_DEV_BUILD
 #define ECM_CUDA_MONT_DEV_ONLY
@@ -19,103 +18,27 @@ cgbn_stage1_kernel_fn ecm_mont_param2_w##W(uint32_t,uint32_t*); \
 cgbn_stage1_kernel_fn ecm_mont_param3_w##W(uint32_t,uint32_t*);
 #include "../../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
+#if ECM_NO_PARAM2
+#define ECM_MONT_PARAM2_LOOKUP(W) nullptr
+#else
+#define ECM_MONT_PARAM2_LOOKUP(W) ecm_mont_param2_w##W(BITS,TPI_out)
+#endif
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) \
 if (BITS == W) { \
     if (param == 0) return ecm_mont_param0_w##W(BITS,TPI_out); \
-    if (param == 2) return ecm_mont_param2_w##W(BITS,TPI_out); \
+    if (param == 2) return ECM_MONT_PARAM2_LOOKUP(W); \
     return ecm_mont_param3_w##W(BITS,TPI_out); }
-static cgbn_stage1_kernel_fn isolated_dispatch(int param,uint32_t BITS,uint32_t *TPI_out) {
+static cgbn_stage1_kernel_fn instance_dispatch(int param,uint32_t BITS,uint32_t *TPI_out) {
 #include "../../../cuda/dispatch/tiers.def"
     return nullptr;
 }
 #undef ECM_CUDA_TIER
+#undef ECM_MONT_PARAM2_LOOKUP
 #undef ECM_CUDA_MONT_DEV_ONLY
 #undef ECM_CUDA_MONT_ONLY
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t b,uint32_t *t) {return isolated_dispatch(3,b,t);}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t b,uint32_t *t) {return isolated_dispatch(0,b,t);}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t b,uint32_t *t) {return isolated_dispatch(2,b,t);}
-#else
-cgbn_stage1_kernel_fn ecm_mont_param3_g0(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param3_g1(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param3_g2(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param3_g3(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param3_g4(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param3_g5(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param3_g6(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi4(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param3_g0(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi8(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param3_g1(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi16(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param3_g2(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param3_g3(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param3_g4(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi32(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param3_g5(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param3_g6(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn ecm_mont_param0_g0(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param0_g1(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param0_g2(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param0_g3(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param0_g4(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param0_g5(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param0_g6(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi4(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param0_g0(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi8(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param0_g1(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi16(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param0_g2(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param0_g3(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param0_g4(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi32(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param0_g5(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param0_g6(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn ecm_mont_param2_g0(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param2_g1(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param2_g2(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param2_g3(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param2_g4(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param2_g5(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn ecm_mont_param2_g6(uint32_t,uint32_t*);
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi4(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param2_g0(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi8(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param2_g1(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi16(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param2_g2(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param2_g3(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param2_g4(bits,tpi))return fn;
-    return nullptr;
-}
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi32(uint32_t bits,uint32_t *tpi) {
-    if(auto fn=ecm_mont_param2_g5(bits,tpi))return fn;
-    if(auto fn=ecm_mont_param2_g6(bits,tpi))return fn;
-    return nullptr;
-}
-
-#endif
-
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t b,uint32_t *t) {return instance_dispatch(3,b,t);}
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t b,uint32_t *t) {return instance_dispatch(0,b,t);}
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t b,uint32_t *t) {return instance_dispatch(2,b,t);}
 void ecm_build_tier_list_default(std::vector<uint32_t> &out) {
   out.clear();
 #define ECM_CUDA_ALL_TIERS
@@ -146,41 +69,6 @@ void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
 
 
 
-#ifndef ECM_CUDA_ISOLATE_TIERS
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t BITS, uint32_t *TPI_out) {
-    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_tpi4(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_tpi8(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_tpi16(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_tpi32(BITS, TPI_out);
-    return k;
-}
-
-/* Suyama param0 kernel lookup (see cgbn_stage1_kernels_suyama.cu). */
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t BITS, uint32_t *TPI_out) {
-    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_suyama_tpi4(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_suyama_tpi8(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_suyama_tpi16(BITS, TPI_out);
-    if (k != nullptr) return k;
-    return cgbn_stage1_kernel_suyama_tpi32(BITS, TPI_out);
-}
-
-/* param2 kernel lookup (see cgbn_stage1_kernels_param2.cu). */
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t BITS, uint32_t *TPI_out) {
-    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_param2_tpi4(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_param2_tpi8(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_param2_tpi16(BITS, TPI_out);
-    if (k != nullptr) return k;
-    return cgbn_stage1_kernel_param2_tpi32(BITS, TPI_out);
-}
-
-#endif
 
 /* ── D4: kernel-tier query (ecm_cuda.exe --gpu-info) ─────────────────────────────
    Reports the tiers this build carries plus the TPB/TPI each one launches with, using the

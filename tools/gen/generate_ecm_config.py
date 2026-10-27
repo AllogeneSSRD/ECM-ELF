@@ -121,6 +121,8 @@ def assignment(o, key=None):
         code = f"{dst}=bounded_integer(v,{literal(key)},{lo},{hi});"
     elif kind == "positive":
         code = f"{dst}=positive(v,{literal(key)});"
+    elif kind == "bounded_real":
+        code = f"assign_value({dst},v);if({dst}<{lo}||{dst}>{hi})throw std::runtime_error({literal(key+' must be within ['+lo+','+hi+']')});"
     elif kind == "optional_integer":
         code = f"{dst}=v.empty()?0:static_cast<{TYPES[o['type']]}>(bounded_integer(v,{literal(key)},{lo},{hi}));"
     elif kind == "log_level":

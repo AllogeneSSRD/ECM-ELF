@@ -30,32 +30,18 @@ int to_ifma_field_mode(ecm_stage1::SimdReduction reduction) {
 static indicators::ProgressBar* g_stage1_bar = nullptr;
 
 /* ---------------------------------------------------------------------------
- * 速率显示 (对齐 src/cuda/stage1/montgomery.cu 的 print_progress)
- *
- * CUDA 那套的要点有两个, 这里都照做:
- *  1) 平均的是"速度样本"而不是时间: 每个采样点算 speed = delta_work/delta_t,
- *     放进环形窗口, avg = sum/count; 然后用 avg 反推 per_curve 与 remaining。
- *     这样并行批数/频率变化时显示不会乱跳 (直接平均时间就会跳)。
- *  2) TTY 与非 TTY 两种输出: 终端里原地 \r 更新; 重定向到日志时按衰减节奏打
+ * 速率显示使用与 CUDA 相同的时间窗口；work 单位为曲线，可为批内进度的小数。
+ * TTY 与非 TTY 两种输出: 终端里原地 \r 更新; 重定向到日志时按衰减节奏打
  *     整行 (前 3 次、之后 10/100/1000/10000 的倍数), 否则日志会被刷爆。
  * work 单位是"曲线"(可为小数, 批内按 bit 比例折算), 与总曲线数同一量纲。
  * ------------------------------------------------------------------------- */
-#define ED_SPEED_WINDOW 12
-
 struct EdSpeedMeter {
-    double ring[ED_SPEED_WINDOW];
-    int count, idx;
-    double sum;
-    double t_last, w_last, t0;
-    bool started; /* 第一个采样点只用来定基准, 不产生速度样本 */
-
-    EdSpeedMeter() : count(0), idx(0), sum(0.0), t_last(0.0), w_last(0.0), t0(0.0), started(false) {
-    }
+    ecm_stage1_gpu_progress::SpeedWindow speed;
+    double t_last=0, w_last=0, t0=0;
+    bool started=false; /* 第一个采样点只用来定基准, 不产生速度样本 */
 
     void reset() {
-        count = 0;
-        idx = 0;
-        sum = 0.0;
+        speed = ecm_stage1_gpu_progress::SpeedWindow();
         t_last = 0.0;
         w_last = 0.0;
         t0 = 0.0;
@@ -71,24 +57,15 @@ struct EdSpeedMeter {
             return;
         }
         const double dt = now - t_last, dw = work - w_last;
+        if (dt < 0.05 || dw <= 1e-12)
+            return; // Accumulate short intervals instead of losing their work.
         t_last = now;
         w_last = work;
-        if (dt < 0.05 || dw <= 1e-12)
-            return;                   /* 极小 dt (收尾跳变) 会造出虚高速度样本 */
-        const double speed = dw / dt; /* 曲线/秒 */
-        if (count < ED_SPEED_WINDOW) {
-            ring[count++] = speed;
-            sum += speed;
-        } else {
-            sum -= ring[idx];
-            ring[idx] = speed;
-            sum += speed;
-            idx = (idx + 1) % ED_SPEED_WINDOW;
-        }
+        speed.add(dw,dt*1000);
     }
 
     double avg_speed() const {
-        return count > 0 ? sum / (double)count : 0.0;
+        return speed.speed()*1000; // Curves per second.
     }
 };
 

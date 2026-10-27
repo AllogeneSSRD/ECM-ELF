@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <chrono>
+#include <stdexcept>
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -26,14 +27,48 @@ std::string line(double pct,uint64_t done,uint64_t delta,const char *unit,
     return text;
 }
 
-void SpeedWindow::add(uint64_t delta,double milliseconds) {
-    if(!delta || milliseconds<=0 || !std::isfinite(milliseconds))return;
-    const double speed=double(delta)/milliseconds;
-    if(!std::isfinite(speed))return;
-    if(count_<50)++count_;else sum_-=samples_[next_];
-    samples_[next_]=speed;sum_+=speed;next_=(next_+1)%50;
+namespace {
+double configured_average_seconds=0;
+double checked_seconds(double seconds) {
+    if(!std::isfinite(seconds) || seconds<0 || seconds>60)
+        throw std::invalid_argument("progress_average_seconds must be finite and within [0,60]");
+    return seconds;
 }
-double SpeedWindow::speed() const {return count_?sum_/count_:0;}
+}
+
+void set_average_seconds(double seconds) {configured_average_seconds=checked_seconds(seconds);}
+double average_seconds() {return configured_average_seconds;}
+SpeedWindow::SpeedWindow(double seconds):window_ms_(checked_seconds(seconds)*1000) {}
+
+void SpeedWindow::add(double delta,double milliseconds) {
+    if(delta<=0 || !std::isfinite(delta) || milliseconds<=0 || !std::isfinite(milliseconds))return;
+    if(!std::isfinite(delta/milliseconds))return;
+    if(window_ms_==0) {
+        work_=delta;milliseconds_=milliseconds;
+        return;
+    }
+    // A slice longer than the window represents the whole visible interval.
+    if(milliseconds>=window_ms_) {
+        samples_.clear();
+        delta*=window_ms_/milliseconds;milliseconds=window_ms_;
+        work_=milliseconds_=0;
+    }
+    samples_.push_back({delta,milliseconds});
+    work_+=delta;milliseconds_+=milliseconds;
+    while(milliseconds_>window_ms_ && !samples_.empty()) {
+        auto& oldest=samples_.front();
+        const double excess=milliseconds_-window_ms_;
+        if(oldest.milliseconds<=excess) {
+            work_-=oldest.work;milliseconds_-=oldest.milliseconds;
+            samples_.pop_front();
+        } else {
+            const double removed=oldest.work*(excess/oldest.milliseconds);
+            oldest.work-=removed;oldest.milliseconds-=excess;
+            work_-=removed;milliseconds_=window_ms_;
+        }
+    }
+}
+double SpeedWindow::speed() const {return milliseconds_>0?work_/milliseconds_:0;}
 double SpeedWindow::per_curve(uint64_t total,uint32_t curves) const {
     return speed()>0 && curves?double(total)/(speed()*curves*1000):0;
 }

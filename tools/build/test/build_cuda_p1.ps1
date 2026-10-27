@@ -24,13 +24,6 @@ if($Stage -eq 'stage1') {
         @('restricted','/DECM_TIERS_RESTRICTED /DECM_TIER_384 /DECM_TIER_small /DECM_TIER_medium /DECM_TIER_17408','384,512,1024,17408'),
         @('numeric_aliases','/DECM_TIERS_RESTRICTED /DECM_TIER_512 /DECM_TIER_1024','512,1024'),
         @('empty','/DECM_TIERS_RESTRICTED',''),
-        @('group0','/DECM_CUDA_TIER_GROUP=0','128,192,256,384,512'),
-        @('group1','/DECM_CUDA_TIER_GROUP=1','768,1024,1280,1536,1792,2048'),
-        @('group2','/DECM_CUDA_TIER_GROUP=2','2560,3072,3584,4096'),
-        @('group3','/DECM_CUDA_TIER_GROUP=3','4608,5120,5632,6144'),
-        @('group4','/DECM_CUDA_TIER_GROUP=4','6656,7168,7680,8192'),
-        @('group5','/DECM_CUDA_TIER_GROUP=5','9216,10240,11264,12288'),
-        @('group6','/DECM_CUDA_TIER_GROUP=6','13312,14336,15360,16384,17408'),
         @('prac_interval','/DECM_CUDA_MONT_ONLY /DECM_CUDA_TIER_MIN_BITS=9216 /DECM_CUDA_TIER_MAX_BITS=10240','9216,10240'),
         @('empty_intersection','/DECM_TIERS_RESTRICTED /DECM_TIER_384 /DECM_CUDA_TIER_MIN_BITS=9216',''),
         @('mont_tpb_override','/DECM_TPB=256',$all))

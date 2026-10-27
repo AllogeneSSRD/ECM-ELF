@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <string>
 
 namespace ecm_stage1_gpu_progress {
@@ -7,13 +8,19 @@ namespace ecm_stage1_gpu_progress {
 std::string line(double pct,uint64_t done,uint64_t delta,const char *unit,
                  double per_curve_s,double elapsed_s,double remaining_s);
 
-// Baseline starts after preparation; callers exclude checkpoint I/O.
+// Display policy is set once after worker configuration is resolved.
+void set_average_seconds(double seconds);
+double average_seconds();
+
+// Baseline starts after preparation; callers exclude checkpoint I/O. Samples
+// carry their measured duration: a time window never assumes a slice cadence.
 class SpeedWindow {
-    double samples_[50]{};
-    double sum_=0;
-    unsigned count_=0,next_=0;
+    struct Sample { double work, milliseconds; };
+    std::deque<Sample> samples_;
+    double window_ms_, work_=0, milliseconds_=0;
 public:
-    void add(uint64_t delta,double milliseconds);
+    explicit SpeedWindow(double seconds=average_seconds());
+    void add(double delta,double milliseconds);
     double speed() const;
     double per_curve(uint64_t total,uint32_t curves) const;
     double remaining(uint64_t total,uint64_t done) const;

@@ -231,6 +231,15 @@ p95_worktodo_path = ""
 # 中文：存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入
 # 中文：worktodo.add。
 
+progress_average_seconds = 0
+# EN: Time window for live Stage1 CPU/CUDA s/curve and remaining-time estimates. Zero uses the latest
+# EN: valid sample without averaging; positive values average completed work over measured sample time, up
+# EN: to 60 seconds. CUDA samples exclude preparation and checkpoint I/O. This does not change
+# EN: computation, slicing, final timing or log refresh frequency.
+# 中文：Stage1 CPU/CUDA 实时 s/curve 与剩余时间估计的平均窗口，单位为秒。0 使用最近一次有效采样，不做平均；
+# 中文：正值按采样时长累计已完成工作量，最多 60 秒。CUDA 采样排除准备和 checkpoint 写盘；不改变计算、切片、
+# 中文：最终计时或日志刷新频率。
+
 progress_color = "cyan"
 # EN: Color of the Stage1 console progress bar. none disables color. This does not change ordinary file
 # EN: logs or arithmetic.

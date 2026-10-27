@@ -56,8 +56,10 @@ def frozen_source(revision, relative):
 
 def current_files(legacy_folder):
     """Current files of one frozen family, without absorbing new subfamilies."""
-    return sorted(current_source(old) for old,new in LAYOUT['moved'].items()
-                  if old.startswith(legacy_folder.rstrip('/')+'/'))
+    from instance_refactor import is_retired
+    return sorted({current_source(old) for old,new in LAYOUT['moved'].items()
+                   if old.startswith(legacy_folder.rstrip('/')+'/') and
+                   not is_retired(current_source(old))})
 
 
 def relocation_text(relative):

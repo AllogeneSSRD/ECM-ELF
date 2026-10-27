@@ -43,6 +43,7 @@ using ecm_stage1_app::stage1_task_error;
 #include "ecm/application/configuration/ecm_expr.h" /* shared exact integer expression parser */
 #include "ecm/application/configuration/runtime.h"
 #include "ecm/stage1/selection.h"
+#include "ecm/stage1/progress.h"
 #include "ecm/platform/logging.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/gpu_backend.h" /* GPU backend seam (OpenCL or CUDA glue) */
@@ -468,6 +469,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
        hours would otherwise write a progress line into screen.log every 200 ms. The pipe
        keeps its cadence, and the 100% line always lands in the file. */
     ecm_log_set_progress_log_seconds(cfg.progress_log_seconds);
+    ecm_stage1_gpu_progress::set_average_seconds(cfg.progress_average_seconds);
 
     // Open the mirror log (screen.log by default).
     EcmLogMirror log;

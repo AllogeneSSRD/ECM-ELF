@@ -359,6 +359,23 @@
     },
     {
       "owner": "stage1",
+      "key": "progress_average_seconds",
+      "field": "progress_average_seconds",
+      "type": "double",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 60,
+      "domain": "[0..60]",
+      "fx": "live_speed_window",
+      "parser": "bounded_real",
+      "unit": "s",
+      "description": [
+        "Time window for live Stage1 CPU/CUDA s/curve and remaining-time estimates. Zero uses the latest valid sample without averaging; positive values average completed work over measured sample time, up to 60 seconds. CUDA samples exclude preparation and checkpoint I/O. This does not change computation, slicing, final timing or log refresh frequency.",
+        "Stage1 CPU/CUDA 实时 s/curve 与剩余时间估计的平均窗口，单位为秒。0 使用最近一次有效采样，不做平均；正值按采样时长累计已完成工作量，最多 60 秒。CUDA 采样排除准备和 checkpoint 写盘；不改变计算、切片、最终计时或日志刷新频率。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "verbose",
       "field": "verbose",
       "type": "bool",

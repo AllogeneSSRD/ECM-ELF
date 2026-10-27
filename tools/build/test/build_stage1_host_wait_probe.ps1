@@ -4,18 +4,22 @@ param([string]$Build='build_cuda_cmake/stage1_host_wait_probe',
       [ValidateSet(1280,5632,10240)][int]$Tier=1280)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
+. (Join-Path $PSScriptRoot '../internal/cuda_build_profile.ps1')
 . (Join-Path $PSScriptRoot '../internal/cuda_toolchain.ps1')
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $cuda=Resolve-EcmCudaToolkit -Archs $Arch;$vc=Resolve-EcmVcEnvironment $cuda
 $Build=Resolve-EcmSourcePath $repo $Build
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $Build
-$kernels=@{1280='cgbn_edwards_instances_tpi8.cu';5632='cgbn_edwards_instances_tpi16_4608_6144.cu';10240='cgbn_edwards_instances_tpi32_9216_12288.cu'}
+$catalog=Get-EcmStage1Modules $repo $Build ([string]$Tier) $cuda
+$instance=@($catalog.modules|Where-Object{$_.curve -eq 'edwards' -and $_.bits -eq $Tier})
+if($instance.Count -ne 1){throw 'Host-wait probe requires one selected Edwards instance'}
 $sources=@('tools/test/stage1_host_wait_probe.cu','tools/test/adapters/edwards_host_wait.cu',
-    ('src/ecm/stage1/edwards/cuda/instances/'+$kernels[$Tier]),'src/ecm/stage1/scalar.cpp')
-$dirs=@('include','third_party/cgbn/include','third_party/gmp-zen3/dist/include')
+    $instance[0].source,'src/ecm/stage1/scalar.cpp')
+$dirs=@('include','src','third_party/cgbn/include','third_party/gmp-zen3/dist/include')
 $deps=@(Get-EcmSourceClosure $repo $sources $dirs)+@('tools/build/test/build_stage1_host_wait_probe.ps1',
-    'tools/build/internal/cuda_build_state.ps1','tools/build/internal/cuda_toolchain.ps1')
+    'tools/build/internal/cuda_build_state.ps1','tools/build/internal/cuda_toolchain.ps1',
+    'tools/build/internal/cuda_modules.cmake','tools/build/internal/stage1_tiers.cmake','tools/build/internal/cuda_build_profile.ps1')
 $hashes=Get-EcmSourceHashes $repo $deps;$names=Get-EcmObjectNames $sources
 $commands=@();$objects=@()
 foreach($source in $sources) {

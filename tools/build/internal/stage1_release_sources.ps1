@@ -12,11 +12,11 @@ function Get-Stage1CudaObjects([string]$BuildDir) {
 
 function Get-Stage1ReleaseSources([string]$Repo, [bool]$EnablePrac = $false, [string]$BuildDir = '') {
     $inventory = Get-EcmCudaInventory $Repo
-    $sources = @($inventory.groups.STAGE1_COMMON) + @($inventory.groups.STAGE1_CUDA)
-    if ($EnablePrac) { $sources += @($inventory.groups.STAGE1_PRAC) }
+    $sources = @($inventory.groups.STAGE1_COMMON) + @($inventory.groups.STAGE1_CUDA) + @($inventory.groups.STAGE1_TEMPLATES)
+    if ($EnablePrac) { $sources += @($inventory.groups.STAGE1_PRAC) + @($inventory.groups.STAGE1_PRAC_TEMPLATES) }
     $buildInputs = @()
     if ($BuildDir) {
-        foreach ($name in @('compile_commands.json','cuda_target_graph.json')) {
+        foreach ($name in @('compile_commands.json','cuda_target_graph.json','cuda_modules/stage1/modules.json')) {
             $path = Join-Path $BuildDir $name
             if (-not (Test-Path -LiteralPath $path)) { throw "Stage1 target metadata missing; reconfigure: $name" }
             $buildInputs += Get-EcmSourceKey $Repo $path
@@ -27,6 +27,7 @@ function Get-Stage1ReleaseSources([string]$Repo, [bool]$EnablePrac = $false, [st
     }
     $dirs = @('include','src','src/ecm/cuda/runtime','src/ecm/cuda',
         'third_party/cgbn/include','third_party/cgbn/include/cgbn')
+    if ($BuildDir) { $dirs += Join-Path $BuildDir 'cuda_modules/stage1' }
     $paths = @(Get-EcmSourceClosure $Repo $sources $dirs -Production) + @($inventory.build_inputs) + $buildInputs
     $paths += @('tools/build/build_stage1_local.ps1','tools/build/build_stage1_dev.ps1',
         'tools/build/build_stage1_release.ps1','tools/build/internal/stage1_release_sources.ps1',

@@ -12,6 +12,7 @@
 #include <windows.h>
 #include "ecm/io/save.h"
 #include "ecm/stage1/scalar.h"
+#include "ecm/curve/edwards.h"
 
 static bool diagnostic_blocking_event=false;
 static unsigned diagnostic_pre_sync=0,diagnostic_event_flags=0;

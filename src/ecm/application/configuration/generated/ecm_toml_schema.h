@@ -25,6 +25,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","p95_recover_lost","bool","[0|1]"},
     {"stage1","progress_color","string","[none|red|green|yellow|blue|magenta|cyan|white|grey]"},
     {"stage1","progress_log_seconds","double","<x:R,finite>"},
+    {"stage1","progress_average_seconds","double","[0..60]"},
     {"stage1","verbose","bool","[0|1]"},
     {"stage1","curve","string","[mont|ed]"},
     {"stage1","target","string","[cpu|gpu]"},

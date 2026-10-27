@@ -32,6 +32,10 @@ def main():
             units=[unit for unit in packaging.read(build/'compile_commands.json') if Path(unit['file']).name in ('edwards_512.cu','mont0_512.cu')]
             assert len(units)==2
             (subset/'compile_commands.json').write_text(json.dumps(units),encoding='utf-8');build=subset
+            catalog=packaging.read(Path(record['build'])/'cuda_modules/stage1/modules.json')
+            catalog['modules']=[m for m in catalog['modules'] if Path(m['source']).name in ('edwards_512.cu','mont0_512.cu')]
+            (subset/'cuda_modules/stage1').mkdir(parents=True)
+            (subset/'cuda_modules/stage1/modules.json').write_text(json.dumps(catalog),encoding='utf-8')
         report=out/(stage+'.modules.json')
         cache=InspectionCache(out/'cache',cuda);start=time.perf_counter()
         images=packaging.images(cuda,binary,ptx,sass,cache)

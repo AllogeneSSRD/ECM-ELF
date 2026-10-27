@@ -15,7 +15,7 @@ using namespace ecm_cuda_mont_host;
 #define CGBN_CHECK(report) ecm_cuda_stage1::check_cgbn(report,__FILE__,__LINE__)
 #include "launch.h"
 #include "ecm_prac_plan.h"
-#include "constants.h"
+#include "domain.h"
 #include "../../../../../io/exponent_cache.h"
 #include <chrono>
 #include <memory>

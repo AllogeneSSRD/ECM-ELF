@@ -20,6 +20,7 @@ def module(name):
 class Contracts(unittest.TestCase):
     def setUp(self):
         root=ROOT/'build_release_contract_tests';root.mkdir(exist_ok=True)
+        (root/'.gitignore').write_text('*\n',encoding='utf-8')
         self.temporary=tempfile.TemporaryDirectory(dir=root);self.out=Path(self.temporary.name)
     def tearDown(self):self.temporary.cleanup()
 
@@ -97,7 +98,7 @@ class Contracts(unittest.TestCase):
         project=self.out/'CMakeLists.txt'
         project.write_text('cmake_minimum_required(VERSION 3.20)\nproject(modules NONE)\n'
             f'set(CMAKE_SOURCE_DIR "{ROOT.as_posix()}")\nset(CMAKE_CUDA_COMPILER_VERSION 13.3)\nset(ECM_TIERS "512,17408")\n'
-            f'include("{INTERNAL.as_posix()}/cuda_modules.cmake")\necm_stage1_isolate_modules()\n')
+            f'include("{INTERNAL.as_posix()}/cuda_modules.cmake")\necm_stage1_generate_modules()\n')
         result=subprocess.run(['cmake','-S',str(self.out),'-B',str(self.out/'build')],capture_output=True)
         self.assertEqual(result.returncode,0,(result.stdout+result.stderr).decode(errors='replace'))
         names={p.name for p in (self.out/'build/cuda_modules/stage1').glob('*.cu')}

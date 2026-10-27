@@ -19,14 +19,15 @@
 </head>
 <body><main>
   <header>
-    <div class="meta">ECM-ELF · 2026-10-26 · 当前版本0.53.5 · 开发草稿 · 仅分析，未实施</div>
+    <div class="meta">ECM-ELF · 2026-10-26 · 0.53.6 实施与验收草稿 · 保留首轮分析</div>
     <h1>Stage1 CUDA 实例与编译排布</h1>
-    <p>建议选择<strong>完全由构建生成实例</strong>：算法源码按职责组织，实例排布只由一份声明清单决定，移除手写grouped入口及双布局选择。普通路径按曲线／param／容器生成，PRAC再区分确有独立编译价值的family。没有必要先追求每个核函数各一个文件。</p>
+    <p>已采用<strong>完全由构建生成实例</strong>：先修复位宽归一化，再统一普通路径、删除 grouped 和重复分派，最后将 PRAC 纳入同一生成器。普通路径按曲线／param／容器生成，PRAC 按确有独立编译价值的 family／geometry 排布。算法正文、寄存器政策和 checkpoint 格式／进度语义保持。</p>
+    <p><a href="#implementation-result">查看实施结果与验证范围</a>。以下初始分析保留其0.53.5冻结条件；当前构建和运行方式以 <a href="../usage/BUILD.md">构建说明</a>、<a href="../architecture/STAGE1.md">Stage1架构</a> 为准。</p>
     <nav><a href="#current">当前链路</a><a href="#inventory">数量与粒度</a><a href="#options">两种方案</a><a href="#granularity">实例排布</a><a href="#cleanup">迁移与删除</a><a href="#findings">已验证问题</a><a href="#contracts">必须保留</a><a href="#evidence">证据与耗时</a><a href="#validation">实施验收</a><a href="#recommendation">建议顺序</a></nav>
   </header>
 
   <section class="card" id="current">
-    <h2>当前有两套普通实例排布，PRAC另有一套手工排布</h2>
+    <h2>初始评估：0.53.5 的两套普通排布与手工 PRAC 排布</h2>
     <p class="files">依据：<a href="../../tools/build/build_stage1_local.ps1#L41">local入口</a>、<a href="../../tools/build/internal/build_stage1_release_group.ps1#L68">release入口</a>、<a href="../../CMakeLists.txt#L291">CMake选择</a>、<a href="../../tools/build/internal/cuda_modules.cmake#L3">Stage1生成器</a>、<a href="../../tools/build/internal/cuda_sources.cmake#L41">源码清单</a>。</p>
     <div class="pair">
       <div class="flow"><div class="caption">当前 Implementation</div><div class="node">local/dev默认isolated；release固定isolated<small>直接CMake的选项默认却是OFF</small></div><div class="node leak">grouped：28个仓内实例入口<small>七组位宽 × 曲线／param</small></div><div class="node leak">isolated：从源码清单过滤这些入口，再生成125个<small>registry还有两套符号与分派链</small></div><div class="node leak">PRAC：独立OBJECT目标，12个CUDA TU<small>不参加上述isolated生成</small></div></div>
@@ -140,7 +141,43 @@
     <h2>选择B：一个实例清单，一种生成排布</h2>
     <p>首轮保持当前普通路径粒度，合并配置选择和生成职责，删除28个手工分组入口及双分派；随后把PRAC的宽度分组换成同一机制生成的稀疏family／geometry。这样减少仓内机械文件和隐含规则，保留不同算法真正需要的独立编译。</p>
     <p>暂不默认拆成每核一个模块，不合并Stage2生成器，不更改checkpoint。Edwards按算法细分、PRAC仅为性能而按mode细分，以实测编译资源／加载收益为条件。旧NVCC若必须同时兑现不同寄存器上限，按cap隔离属于实现约束；首轮冻结既有实际政策，不顺手新增旧PRAC尚未提供的保证。</p>
-    <p class="meta">与<a href="stage1-shared-modules-review-20261026.html#directory-priority">下一轮重构规划</a>关联。当前仍是建议；本轮仅新增分析文档和忽略目录中的生成试验，没有修改生产源码、构建脚本或版本号。开发草稿保留，后续由用户决定处理。</p>
+    <p class="meta">与<a href="stage1-shared-modules-review-20261026.html#directory-priority">下一轮重构规划</a>关联。本节为实施前的建议；开发草稿保留，后续由用户决定处理。</p>
+  </section>
+  <section class="card top" id="implementation-result">
+    <h2>0.53.6 实施结果</h2>
+    <p>开始前已提交既有目录重构及本规划：<code>bb95b740</code>。本轮生成器、配置、测试和说明纳入0.53.6，数学可视化的独立改动保持原状。</p>
+    <ol>
+      <li><strong>归一化在身份计算前完成：</strong>PowerShell 与 CMake 调用同一 <code>stage1_tiers.cmake</code>。去空白、去重、按唯一网格排序；非法位宽、空列表项、分号分隔均明确拒绝。原生 Windows 路径及空格路径生成有效 JSON。18项无 CUDA 契约通过；实际 <code>1024, 384,768,384</code> 输入命中相同 profile，HostOnly 核对20个CUDA单元全部复用，编译0单元，证据为 <code>canonical_host_only.log</code>。</li>
+      <li><strong>普通路径只有一个实例来源：</strong>删除28个手写 grouped 入口及普通分派的重复 TPI 层；保留两个实际设备模板。全档125个基础模块＋3个常规 CUDA TU，PARAM2关闭和受限档位按实际成员生成。</li>
+      <li><strong>PRAC 采用稀疏 family／geometry：</strong>全档31个标准模块＋5个稀疏候选模块，包含161个实际 kernel mode 实例。标准／alternate、single、constants 使用各自模板；新工厂表只包含当前选档成员。原 constants 核正文和属性逐 token 相同，9份数学源维持冻结摘要。共38个绑定／接口文件退休，另迁移核正文并重写主机分派；并非宣称删除了算法。</li>
+      <li><strong>独立消费者同步：</strong>Edwards、主机等待探针、构建身份、PTX模块检查和打包缓存均读取生成清单。Stage2的分组／隔离构建策略保持。生产对象实测表明 single-add 头仅影响3个稀疏候选 TU，标准和 alternate 不依赖它。</li>
+      <li><strong>新增实时速度配置：</strong><code>[stage1] progress_average_seconds = 0</code>，允许0–60秒小数。0关闭平均，使用最近一次有效采样；正值按实际样本时间加权，替代随切片时长变化的50样本窗口。CPU同样使用共享窗口。生成配置、worker覆盖和范围检查通过；不改变最终计时、算术、切片或持久化。</li>
+    </ol>
+    <h3>实际构建与正确性</h3>
+    <div class="wrap"><table><thead><tr><th>检查</th><th>实际覆盖及结果</th><th>证据目录</th></tr></thead><tbody>
+      <tr><td>分派与资源属性</td><td>冻结旧排布与新排布各3960组：33档（含非法宽度）、20个mode、6种请求TPI。33个可用kernel的可用性、TPI、别名关系、寄存器和local字节完全一致。CSV SHA256：<code>ede0f6f940d8cde1f57713505b92bafb9de01dbcd1ea112c793afb279e0962a9</code>。</td><td><code>catalog_baseline/</code>、<code>catalog_candidate/</code></td></tr>
+      <tr><td>Montgomery大容器</td><td>384／4608／16384，PARAM0／2／3；每组2曲线、B1=20，9组与冻结程序末点相同。</td><td><code>wide_math/</code></td></tr>
+      <tr><td>五条完整执行路径</td><td>M127／M521、B1=1000、4曲线；LCM／choose12 的 ladder、resident、PRAC，以及 Edwards binary／NAF，共16组通过独立 CPU 对照。</td><td><code>workflows/</code></td></tr>
+      <tr><td>PRAC候选策略</td><td>M4423、B1=1000、每组2曲线，19组自然／168／128预算、TPI16／32、compact／outline／single及三种constants策略，完整末点均与CPU相同。</td><td><code>prac_policy_math/</code></td></tr>
+      <tr><td>Edwards独立探针</td><td>384／4608／16384／17408四档，B1=20、每组1曲线，binary与NAF两种倍点，共12组CPU对照；同时验证固定切片／适应切片及分段恢复。</td><td><code>ed_probe_math/</code>、探针构建manifest</td></tr>
+      <tr><td>Checkpoint</td><td>五条CUDA路径的真实写失败／保留任务／恢复通过；冻结旧格式恢复33项通过。PRAC／resident完整末点、损坏主档的有效备份恢复及切片目标变化通过。</td><td><code>checkpoint_failures/</code>、<code>checkpoint_compat/</code>、<code>prac_wide_q_final/</code></td></tr>
+      <tr><td>实时窗口与主机边界</td><td>0／5／60秒、非等长样本、边界裁剪、非法值和worker覆盖通过；M347、B1=1e5、8曲线的binary／NAF实时输出及真实停止恢复通过。22项无CUDA SDK任务合同通过。</td><td><code>live_progress_default/</code>、<code>task_contract/</code></td></tr>
+    </tbody></table></div>
+    <p class="meta">证据统一位于 <code>data/experiments/stage1_generated_build_20261026/</code>。实际CUDA编译：CUDA13.3.73、MSVC14.51.36231、sm89、压缩、无PTX；主机为Ryzen AI9 HX370。执行测试为显式device1的RTX4060 Laptop；核属性查询为CUDA device0的RTX4070 Ti，二者不混为一份性能样本。没有锁定GPU功耗/频率，不据正确性测试推导性能。</p>
+    <h3>构建成本</h3>
+    <p id="build-measurement">三轮交错构建完成，顺序为旧／新、新／旧、旧／新。位宽384／768／1024，PRAC开启，Jobs=6；CUDA13.3.73、MSVC14.51.36231、sm89、压缩、无PTX、相同GMP。预先完成主机编译，每轮强制重编全部CUDA对象，普通CXX缓存保留，重新链接并执行身份核对。文件缓存已预热，不称为冷系统构建。以下为三次的中位数（最小–最大），百分比按两组中位数计算：</p>
+    <div class="wrap"><table><thead><tr><th>同一计时边界／指标</th><th>旧PRAC排布</th><th>构建生成排布</th><th>变化</th></tr></thead><tbody>
+      <tr><td>CUDA编译单元</td><td>27</td><td>20</td><td>−7</td></tr>
+      <tr><td>完整构建入口，秒</td><td>192.5（184.8–195.0）</td><td>172.5（171.1–174.2）</td><td>−10.4%</td></tr>
+      <tr><td>CUDA任务队列墙钟，秒</td><td>123.3（116.9–125.2）</td><td>109.3（107.9–109.4）</td><td>−11.4%</td></tr>
+      <tr><td>构建进程树累计CPU，秒</td><td>629.4（621.8–648.6）</td><td>553.3（551.7–554.1）</td><td>−12.1%</td></tr>
+      <tr><td>Job private commit峰值，GB</td><td>1.039（0.986–1.063）</td><td>0.967（0.966–1.008）</td><td>−6.9%</td></tr>
+      <tr><td>采样工作集同时求和峰值，GB</td><td>1.265（1.204–1.284）</td><td>1.196（1.195–1.196）</td><td>−5.5%</td></tr>
+    </tbody></table></div>
+    <p class="meta">CPU为Ryzen AI9 HX370、24逻辑处理器，采用机器当前电源计划，未锁功耗／频率，保留桌面活动，测量期间没有并行构建或GPU测试。GB=10⁹字节。Windows Job分别记录user＋kernel CPU及整个Job的private commit峰值；工作集每0.25秒读取成员后求和，包含各进程共享页的重复计量，不等于唯一物理内存峰值。CUDA队列是完整入口的子区间，两者不相加；并发TU耗时之和也不是墙钟。三次样本不构成置信区间。</p>
+    <p class="meta">基线源码冻结在“普通路径已生成、位宽输入已修复、PRAC仍手工排布”的0.53.6；候选另包含本轮实时速度窗口。两者不是0.53.5与0.53.6全部改动的隔离比较。原始六次命令、完整输出、source／object／EXE身份、逐TU计时、Job采样及摘要在 <code>build_pairs_final/</code>，汇总为 <code>summary.json</code>、<code>statistics.json</code>；两次监控脚本启动失败保留在 <code>build_pairs/</code>、<code>build_pairs_v2/</code>，没有计入六个有效样本。</p>
+    <p>大位宽仅有探索性单次观察：384／4608／16384／17408、PRAC开启、Jobs=6，旧排布28个CUDA TU的队列为619.0秒，新排布25个TU为635.2秒。样本各1次、未控制其他负载；取最初CUDA编译阶段，不包含后续普通CXX、链接或复用封存，且早于实时窗口修改。原始输出为 <code>prac_baseline_build_retry.log</code>、<code>prac_candidate_build.log</code>。这组数据不证明稳定退化，也不支持把三档小位宽收益外推到大位宽或全档发布。全档开启PRAC时CUDA TU从140变为166，前端开销和并行长尾仍有权衡。</p>
+    <div class="note"><strong>资格范围：</strong>本轮原生编译覆盖代表档位及稀疏候选，完整网格以生成器和冻结算术门禁核对。尚未完成两套全档发布包、旧NVCC原生重编及全部JIT隔离资格；不把本机SASS构建当成发布认证。Stage2保持原有成员和策略，176模块生成及打包合同检查通过。</div>
   </section>
   <footer>代码基线：HEAD 00220c2e9f12ad06fba8500da61a640abbb6f84f，包含尚未提交的112文件阶段目录迁移。结论以本轮冻结的工作区输入摘要为准，不能仅用HEAD代替工作区身份。证据入口：data/experiments/stage1_instance_layout_20261026/inventory.json。</footer>
 </main></body>

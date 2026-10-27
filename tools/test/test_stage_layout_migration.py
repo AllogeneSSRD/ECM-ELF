@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from instance_refactor import audit_bytes, handoff_record, is_retired, verify_handoff
 
 ROOT = Path(__file__).resolve().parents[2]
 INCLUDE = re.compile(r'(?m)^(\s*#\s*include\s*["<])([^">\r\n]+)([">])')
@@ -26,6 +27,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
+    handoff = verify_handoff()
     manifest = json.loads((ROOT/'docs/development/STAGE_LAYOUT_MIGRATION_MANIFEST.json').read_text(encoding='utf-8'))
     baseline = manifest['baseline']
     moves = {item['source']: item['target'] for item in manifest['files']}
@@ -37,7 +39,7 @@ def main():
         candidates = ([Path(owner).parent/name] if quoted else []) + [Path(p)/name for p in manifest['include_roots']]
         for candidate in candidates:
             key = os.path.normpath(candidate).replace('\\', '/')
-            if (key in frozen_paths if frozen else (ROOT/key).is_file()):
+            if (key in frozen_paths if frozen else ((ROOT/key).is_file() or handoff_record(key))):
                 return key
         return None
 
@@ -46,9 +48,22 @@ def main():
     checked, edges = {}, []
     for old, new in paths.items():
         before_bytes = subprocess.check_output(['git', 'show', baseline+':'+old], cwd=ROOT)
-        after_bytes = (ROOT/new).read_bytes()
+        after_bytes = audit_bytes(new)
         assert before_bytes.startswith(b'\xef\xbb\xbf') == after_bytes.startswith(b'\xef\xbb\xbf'), ('BOM changed', old)
-        before, after = before_bytes.decode('utf-8-sig'), after_bytes.decode('utf-8-sig')
+        before, after = (data.decode('utf-8-sig').replace('\r\n','\n') for data in (before_bytes,after_bytes))
+        if new == 'src/main.cpp':
+            # Authorized display configuration adds exactly one include and one
+            # assignment; historical relocation rules still cover everything else.
+            addition='#include "ecm/stage1/progress.h"\n'
+            policy='    ecm_stage1_gpu_progress::set_average_seconds(cfg.progress_average_seconds);\n'
+            assert after.count(addition)==1 and after.count(policy)==1
+            after=after.replace(addition,'').replace(policy,'')
+        if new in ('tools/test/edwards_gpu_stage1_probe.cpp','tools/test/stage1_host_wait_probe.cu'):
+            # The public GPU API no longer exposes host curve arithmetic.
+            # Diagnostic oracles now declare that existing dependency directly.
+            addition='#include "ecm/curve/edwards.h"\n'
+            assert after.count(addition)==1 and addition not in before
+            after=after.replace(addition,'')
         original, current = list(INCLUDE.finditer(before)), list(INCLUDE.finditer(after))
         assert len(original) == len(current), ('include count changed', old)
         restored = after
@@ -66,9 +81,10 @@ def main():
             restored = restored[:b.start(2)] + a[2] + restored[b.end(2):]
         assert tokens(before) == tokens(restored), ('tokens changed beyond include paths', old)
         checked[new] = {'source': old, 'before_sha256': digest(before_bytes),
-                        'after_sha256': digest(after_bytes), 'token_sha256': digest(tokens(before).encode())}
+                        'after_sha256': digest(after_bytes), 'token_sha256': digest(tokens(before).encode()),
+                        'audit_owner': 'bb95b740 handoff' if handoff_record(new) else 'working tree'}
     for old, new in moves.items():
-        assert not (ROOT/old).exists() and (ROOT/new).is_file(), ('move incomplete', old, new)
+        assert not (ROOT/old).exists() and ((ROOT/new).is_file() or handoff_record(new)), ('move incomplete', old, new)
     for old in ('src/ecm/edwards_stage1', 'src/ecm/montgomery_stage1',
                 'src/ecm/application/cpu_stage2', 'src/ecm/application/cuda_stage2'):
         assert not (ROOT/old).exists(), ('old directory remains', old)
@@ -79,12 +95,17 @@ def main():
     affected_aliases = 0
     for alias, target in previous.items():
         expected = moves.get(target, target)
+        entry = handoff_record(expected)
+        if entry and entry['target']:
+            expected = entry['target']
         assert current_source(alias) == ROOT/expected, ('alias changed identity', alias, expected)
         if target in moves:
-            assert current_source(alias).is_file(), ('moved alias is unresolved', alias)
+            assert current_source(alias).is_file() or is_retired(current_source(alias)), ('moved alias is unresolved', alias)
             affected_aliases += 1
     for old, new in moves.items():
-        assert current_source(old) == ROOT/new, ('migration alias missing', old, new)
+        entry = handoff_record(new)
+        expected = entry['target'] if entry and entry['target'] else new
+        assert current_source(old) == ROOT/expected, ('migration alias missing', old, new)
     # The OpenCL engine absorbed an entry TU in an earlier refactor. Reverse
     # lookup must retain the original implementation owner instead of choosing
     # between merged aliases. A newer frozen revision has the intermediate name.
@@ -99,8 +120,14 @@ def main():
         frozen = subprocess.check_output(['git', 'show', revision+':'+original], cwd=ROOT).decode('utf-8-sig')
         assert frozen_source(revision, current) == frozen, ('reverse frozen identity changed', revision, current)
     result = {'complete': True, 'baseline': baseline, 'moved_files': len(moves),
-              'unchanged_computation_files': len(checked), 'include_edges': len(edges),
+              'unchanged_computation_files': sum(v['audit_owner'] == 'working tree' for v in checked.values()),
+              'prior_migration_verified_files': len(checked),
+              'historical_handoff_files': sum(v['audit_owner'] != 'working tree' for v in checked.values()),
+              'instance_handoff': handoff, 'include_edges': len(edges),
               'business_exceptions': 0, 'affected_historical_aliases': affected_aliases,
+              'approved_display_policy_setup': ['src/main.cpp: progress_average_seconds'],
+              'approved_explicit_probe_includes': ['tools/test/edwards_gpu_stage1_probe.cpp: ecm/curve/edwards.h',
+                                                    'tools/test/stage1_host_wait_probe.cu: ecm/curve/edwards.h'],
               'frozen_reverse_identity_checks': len(reverse_checks),
               'sources': checked, 'edges': edges}
     (args.output/'result.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')

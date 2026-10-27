@@ -33,6 +33,7 @@ int main(int argc,char **argv) {
         const auto defaults2=ecm_config::read_stage2(ecm_config::cli_entries(lines,1));
         expect(defaults1.gpu_param==3,
                "Stage1 generated default differs from TOML");
+        expect(defaults1.progress_average_seconds==0,"speed averaging must default to off");
         expect(defaults2.device==-1,
                "Stage2 inheritance sentinel differs from TOML");
         expect(!defaults1.log_file_explicit&&!defaults1.has_submission&&!defaults1.has_results&&
@@ -40,6 +41,17 @@ int main(int argc,char **argv) {
                !defaults2.has_owner&&!defaults2.has_pack_zero,
                "template disabled an implicit worker or environment default");
         const std::filesystem::path temp=argv[2];
+        for(const auto *value:{"0","0.25","5","60"}) {
+            write(temp,std::string("[stage1]\nprogress_average_seconds=")+value+
+                       "\n[workers.2.stage1]\nprogress_average_seconds=2.5\n");
+            expect(ecm_config::read_toml(temp.string(),lines),"speed-window TOML unavailable");
+            expect(ecm_config::read_stage1(ecm_config::cli_entries(lines,1)).progress_average_seconds==std::stod(value),
+                   "speed-window value lost");
+            expect(ecm_config::read_stage1(ecm_config::cli_entries(lines,2)).progress_average_seconds==2.5,
+                   "worker speed-window override lost");
+        }
+        for(const auto *value:{"-0.01","60.01","nan","inf","'5'"})
+            rejected(temp,std::string("[stage1]\nprogress_average_seconds=")+value+"\n");
         write(temp,"[shared]\nworktodo = 'queue#1.txt' # comment\n"
                    "[stage1]\ndevice = 0\n[workers.2]\ngpucurves = 16\n"
                    "[workers.2.stage1]\ndevice = 1\n");

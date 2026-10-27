@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from instance_refactor import verify_handoff
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -19,12 +20,22 @@ def main():
     subprocess.run(['cmake', '-DECM_CUDA_SOURCES_OUTPUT='+str(inventory), '-P',
                     str(ROOT/'tools/build/internal/cuda_sources.cmake')], check=True)
     groups = json.loads(inventory.read_text())['groups']
+    handoff = verify_handoff()
     sources = groups['STAGE1_CUDA']+groups['STAGE1_PRAC']
     assert len(sources) == len(set(sources))
     assert all((ROOT/s).is_file() for s in sources)
-    for family in (0, 2, 3):
-        assert len([s for s in sources if f'instances_param{family}_g' in s]) == 7
-    assert len([s for s in sources if 'cgbn_edwards_instances_' in s]) == 7
+    generated = out/'generated'
+    subprocess.run(['cmake', '-DECM_STAGE1_MODULES_OUTPUT='+generated.resolve().as_posix(),
+                    '-DECM_CUDA_FULL_BUILD=ON', '-DECM_CUDA_ENABLE_PRAC=ON',
+                    '-DCMAKE_CUDA_COMPILER_VERSION=13.3', '-P',
+                    str(ROOT/'tools/build/internal/cuda_modules.cmake')], check=True)
+    modules = json.loads((generated/'cuda_modules/stage1/modules.json').read_text())['modules']
+    assert len(modules) == 161 and len({m['label'] for m in modules}) == 161
+    assert sum(m['curve'] == 'edwards' for m in modules) == 32
+    assert sum(m['family'] == 'ladder' for m in modules) == 93
+    assert sum(m['family'].startswith('prac_') for m in modules) == 36
+    sources += groups['STAGE1_TEMPLATES']+groups['STAGE1_PRAC_TEMPLATES']
+    sources += [m['source'] for m in modules]
     visited = set()
 
     def text(path): return path.read_text(encoding='utf-8-sig')
@@ -32,7 +43,6 @@ def main():
         path = path.resolve()
         if path in visited: return
         visited.add(path); body = text(path)
-        relative = path.relative_to(ROOT).as_posix()
         if path == current_source('include/ecm/cuda/cgbn_types.cuh').resolve():
             # Upstream requires GMP only while parsing its host templates.
             assert '#if !defined(__CUDA_ARCH__)\n#include <gmp.h>\n#endif' in body
@@ -48,6 +58,8 @@ def main():
             assert candidate.resolve() in device_files, (path, relative)
             walk(candidate)
     device_files={p.resolve() for p in current_files('kernels/cuda')+current_files('include/ecm/cuda')}
+    device_files.update((ROOT/s).resolve() for s in groups['STAGE1_TEMPLATES']+groups['STAGE1_PRAC_TEMPLATES'])
+    device_files.update(Path(m['source']).resolve() for m in modules)
     # The current registry owns host dispatch, occupancy and a launch bridge.
     # Its historical kernels/ location does not make the GMP-facing entry
     # declarations a pure device-arithmetic dependency. Check that TU separately.
@@ -55,6 +67,10 @@ def main():
     registry_code=re.sub(r'/\*.*?\*/|//[^\n]*','',text(registry),flags=re.S)
     assert not re.search(r'__global__|__device__|\bmpz_\w*|EcmEdwardsProgress|ecm_stage1_checkpoint',registry_code)
     device_files.remove(registry)
+    dispatcher=ROOT/'src/ecm/stage1/montgomery/cuda/prac/dispatch.cu'
+    dispatcher_code=re.sub(r'/\*.*?\*/|//[^\n]*','',text(dispatcher),flags=re.S)
+    assert not re.search(r'__global__|__device__|\bmpz_\w*',dispatcher_code)
+    device_files.remove(dispatcher.resolve())
     # Extracted dispatch values were already part of launch.h/constants.h.
     # This single data-only header joins the closure; host policy bodies do not.
     domain=ROOT/'src/ecm/stage1/montgomery/cuda/prac/domain.h'
@@ -85,8 +101,8 @@ def main():
         normalize = lambda s: re.sub(r'\s+', '', re.sub(r'/\*.*?\*/|//[^\n]*', '', s, flags=re.S))
         assert normalize(before) == normalize(after), new
         evidence.append(dict(source=new, arithmetic_sha256=hashlib.sha256(normalize(after).encode()).hexdigest()))
-    result = dict(complete=True, device_closure_files=len(visited), host_dispatch_files=1, arithmetic_bodies=evidence,
-                  montgomery_groups=21, edwards_groups=7, gpu_runs=0)
+    result = dict(complete=True, device_closure_files=len(visited), host_dispatch_files=2, arithmetic_bodies=evidence,
+                  generated_modules=len(modules), retired_binding_handoff=handoff, gpu_runs=0)
     (out/'result.json').write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result))
 

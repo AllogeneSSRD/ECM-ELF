@@ -1,9 +1,8 @@
+#pragma once
 #include "../../../../cuda/arithmetic/cgbn/types.cuh"
-#include <cuda.h>
 #include "../arithmetic.cuh"
 #include "cgbn_stage1_prac_kernel.cuh"
 #include "cgbn_stage1_prac_single_add.cuh"
-#include "constants.h"
 
 // Match the single-compact/cap168 body, with a runtime control in the same TU.
 // INIT/EXPORT remain the ordinary kernels: R, layout and checkpoint ABI agree.
@@ -44,19 +43,19 @@ __global__ void __maxnreg__(168) kernel_suyama_constants(
     cgbn_store(c._env, mem + 3, ax); cgbn_store(c._env, mem + 4, az);
 }
 
-cgbn_stage1_kernel_fn cgbn_stage1_domain_constants(uint32_t bits, uint32_t *tpi, int mode) {
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_4608)
-    if (bits == 4608) {
-        *tpi = 16;
-        switch (mode) {
-        case ECM_DOMAIN_PRAC_CONSTANT_RUNTIME:
-            return kernel_suyama_constants<cgbn_params_t<16,4608>, ECM_DOMAIN_PRAC_CONSTANT_RUNTIME>;
-        case ECM_DOMAIN_PRAC_CONSTANT_NP0:
-            return kernel_suyama_constants<cgbn_params_t<16,4608>, ECM_DOMAIN_PRAC_CONSTANT_NP0>;
-        case ECM_DOMAIN_PRAC_CONSTANT_M4423:
-            return kernel_suyama_constants<cgbn_params_t<16,4608>, ECM_DOMAIN_PRAC_CONSTANT_M4423>;
-        }
+cgbn_stage1_kernel_fn ECM_PRAC_FACTORY(uint32_t bits, uint32_t *tpi, int mode) {
+    if (bits != ECM_PRAC_BITS) {
+        *tpi = 0;
+        return nullptr;
     }
-#endif
-    *tpi = 0; return nullptr;
+    *tpi = ECM_PRAC_TPI;
+    using P = cgbn_params_t<ECM_PRAC_TPI, ECM_PRAC_BITS>;
+    if (mode == ECM_DOMAIN_PRAC_CONSTANT_RUNTIME)
+        return kernel_suyama_constants<P, ECM_DOMAIN_PRAC_CONSTANT_RUNTIME>;
+    if (mode == ECM_DOMAIN_PRAC_CONSTANT_NP0)
+        return kernel_suyama_constants<P, ECM_DOMAIN_PRAC_CONSTANT_NP0>;
+    if (mode == ECM_DOMAIN_PRAC_CONSTANT_M4423)
+        return kernel_suyama_constants<P, ECM_DOMAIN_PRAC_CONSTANT_M4423>;
+    *tpi = 0;
+    return nullptr;
 }

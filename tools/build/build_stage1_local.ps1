@@ -21,7 +21,7 @@
 .PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120". Empty (default) = every tier.
 .PARAMETER FullRebuild  Delete the CUDA objects first (forces a clean kernel compile).
 .PARAMETER EnablePrac  Include experimental resident/PRAC kernels (default OFF).
-.PARAMETER KernelLayout  Isolated modules by default; grouped retains the aggregate source layout.
+.PARAMETER KernelLayout  Compatibility spelling; only generated isolated modules are supported.
 .PARAMETER HostOnly    Verify all CUDA objects and refuse any CUDA compilation.
 .PARAMETER RelinkOnly  Removed unsafe bypass; use verified reuse or HostOnly instead.
 .PARAMETER Gmp / OpenSslRoot  Override the dependency paths when they are not the defaults.
@@ -38,7 +38,7 @@ param(
     [string]$Arch = "89",
     [int]$Jobs = 8,
     [string]$Tiers = "",
-    [ValidateSet('isolated','grouped')][string]$KernelLayout = 'isolated',
+    [ValidateSet('isolated')][string]$KernelLayout = 'isolated',
     [switch]$EnablePrac,       # experimental resident/PRAC kernels; excluded by default
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
@@ -65,6 +65,7 @@ if (-not $OpenSslRoot) { $OpenSslRoot = "D:/code/vcpkg/installed/x64-windows" }
 . (Join-Path $PSScriptRoot 'internal/cuda_toolchain.ps1')
 . (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
 . (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
+$Tiers = Get-EcmStage1Tiers $Tiers
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 $VcVars = $vc.VcVars
@@ -75,7 +76,6 @@ $configureOptions = @(
     "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
     "-DCMAKE_CXX_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
     "-DECM_ENABLE_CUDA=ON",
-    "-DECM_CUDA_ISOLATE_TIERS=$(if ($KernelLayout -eq 'isolated') { 'ON' } else { 'OFF' })",
     "-DECM_CUDA_FULL_BUILD=ON",
     "-DECM_CUDA_ENABLE_PRAC=$(if ($EnablePrac) { 'ON' } else { 'OFF' })",
     "-DECM_CUDA_ARCHITECTURES=$Arch",

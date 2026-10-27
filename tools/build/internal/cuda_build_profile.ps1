@@ -1,5 +1,25 @@
 . (Join-Path $PSScriptRoot 'build_directory.ps1')
 
+function Get-EcmStage1Modules([string]$Repo, [string]$Build, [string]$Tiers, $Cuda) {
+    Initialize-EcmBuildDirectory $Build
+    $version = [regex]::Match($Cuda.VersionText, 'release\s+(\d+\.\d+)')
+    if (-not $version.Success) { throw 'Cannot identify CUDA version for Stage1 instance generation' }
+    & cmake "-DECM_STAGE1_MODULES_OUTPUT=$Build" "-DECM_TIERS=$Tiers" '-DECM_CUDA_FULL_BUILD=ON' `
+        "-DCMAKE_CUDA_COMPILER_VERSION=$($version.Groups[1].Value)" `
+        -P (Join-Path $PSScriptRoot 'cuda_modules.cmake')
+    if ($LASTEXITCODE -ne 0) { throw 'Stage1 instance generation failed' }
+    return Get-Content -LiteralPath (Join-Path $Build 'cuda_modules/stage1/modules.json') -Raw | ConvertFrom-Json
+}
+
+function Get-EcmStage1Tiers([string]$Tiers) {
+    $normalizer = Join-Path $PSScriptRoot 'stage1_tiers.cmake'
+    $result = @(& cmake '-DECM_STAGE1_TIERS_QUERY=ON' "-DECM_TIERS=$Tiers" -P $normalizer 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw ($result -join [Environment]::NewLine) }
+    $line = @($result | Where-Object { [string]$_ -like 'ECM_STAGE1_TIERS=*' })
+    if ($line.Count -ne 1) { throw 'Stage1 tier normalizer returned no unique canonical value' }
+    return ([string]$line[0]).Substring('ECM_STAGE1_TIERS='.Length)
+}
+
 # Configuration compatibility is distinct from source/TU and executable identity.
 # Values are flat strings so PS 5.1 and PS 7 produce the same framed digest.
 function Get-EcmProfileHash($Fields) {

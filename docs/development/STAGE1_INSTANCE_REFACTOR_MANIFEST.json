@@ -1,0 +1,281 @@
+{
+  "baseline": "bb95b7400e2291f418f0b1c3780ce7dddfdfafac",
+  "scope": "Approved generated-only Stage1 instance layout; exact handoff from earlier frozen relocation gates",
+  "files": [
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_2560_4096.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "e8648ebb148cf481ef559da134d949e915a916f8c0262a50c8eb27e0142301c5"
+    },
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_4608_6144.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "d0fd79f5bdd73e04e14206b8f6014b1e041b4daff2adda631ceb6386ab08e2f4"
+    },
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi16_6656_8192.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "e799b5db8b6c881cb0d4e25a6a0a07ab7c0806dd68c709fea599512e0b93f455"
+    },
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi32_13312_17408.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "6a74db1073caced62a68067314b0350b7c9909e15c96d3c976773bdf2fd72c56"
+    },
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi32_9216_12288.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "5105e2a0f4b57e1e1fe062c01c85ee8475b07e59bf8bd2d2c72dcd2153155dc4"
+    },
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi4.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "5a25d6673b08d0d81a270343233ae4006bdb8cb4a261cfedd9bced2448913fc4"
+    },
+    {
+      "source": "src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_tpi8.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "5dc296b9db5aac2c8fcdfb4c20be1dc18b494d9696da1715cb72850ea8323952"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g0.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "94b5657ca290b2ba004b0f2b1d3ca43ab32076f8df28936113cae8975224388b"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g1.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "862a888da45e4b10858c53cc526dfda7ccf77b6613f64aaeda691726d71c8968"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g2.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "c86b5cf36f95b4f990f3c5946628b62b722ab8a5b6db0e36aedf8c3f82424941"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g3.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "ce8dbd584c37970b285c9fd7fc7c9defe5a89b8ac0a0268a3b290e555875b16f"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g4.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "fdd37dba45fc40f89f5ffee0ad7818f5ee238713ad4ae69c89e76e6c9de3448f"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g5.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "64370546736f7271a141d012b850a4ffc988101b4c95b973eb79b53f8e512f34"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param0_g6.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "dca9990e6365479f71b83a3746b4190a364d1208f02dfe6c73ea6eac5f00a468"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g0.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "e1b7067fd11defabefc3e36d0670b16a029faf62956309eb73fdecd91eeb212b"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g1.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "3e9dd112b11498a509507faad3e2d5baa3ca6e97905db78bcc0c604a3e0f27d1"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g2.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "7571e7042d1e8016a539136e298c4d9edfdafb906e92c54713ae914d7cf5e7c0"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g3.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "9fcada1d7d508fa9f4e8a676d8fcd43112e9d3b5ea271ff4f21b682a496d831e"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g4.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "7d46249a8a5d961a3288c1a5bb46522d5ac12c0efd16813cc5b09eb939553bf9"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g5.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "a71973c87949fc25e07c443577cdec28e8e2d280260d6e6fbb22ffc55010664e"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param2_g6.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "d9346a4dde28dba6860160e4e02241b963cbdf02d0ef79f72488c4a28a80a4c4"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g0.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "1dfac44a1f36f5d93732af502f34416f00bcc96958e327d3e498c69c286ca387"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g1.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "64a4a4841448cdebf7a945755a3c8f812810e614158b458bcec8bff023305d06"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g2.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "4608f5ac8784d31e2779c3d3cfc5f333d5643578f3c147019759ec762304b6d1"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g3.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "6b0e6ab82c7b8084128cd8b8b367aca39df6a4cfbdfaf181eb70b3e1218bf929"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g4.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "8962641b1f12313c5d94e2fbcc3c58a1f1742e426677ec6eff5b43e2f4ac800d"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g5.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "4f95bf2802e598d7a3ff5abce0326507ee1d0f3444d9c91fafb81163ff652752"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/instances/instances_param3_g6.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "e192ef583738da6e8622200cb77d9f53dff519361ceb1e87c36f02acee8ead16"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_small.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "5db6c9000343abb7e82e661e935e813f4f1ed73a5e81d8896dbc3266c9c2f35c"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi16.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "ef93c37070a3f40f58c49c4e7fc880f981f07ce7d7628e82766d329c0b44810e"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "2cb234e4c5b0db023895c479389cc86ed8d07698ebf6e0fa49987b99149f68ef"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_9216_10240.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "756fd883a54f4deb70fdea47df5896df80504c3fc104b088603c154549cd7a88"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_11264_12288.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "1ce1bd13e771365e940d748a0565675fd3cbe99aeafdb1c79be4ac5e4ebdfc51"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_13312_14336.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "fdd902c4e7f1b2e69487b11f9ef46626b05c4e4dbe5076f5a69fdc22760031ec"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_tpi32_15360_16384.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "7c381ebd1820bc59281e96ecf256317dcb55b09c4c9226bce93c9cfc9ee1e3d7"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_alternate32.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "ef8bdf0a3de42d4f04de7fea543e346a1472834a3fa7e87fd45fcdd0a3fa9520"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cu",
+      "kind": "retired_binding",
+      "target": null,
+      "git_sha256": "0334a0018ce257c474dc172f765fa21dc1057842a4a0b9e7f5cef3f078a0cf25"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/constants.h",
+      "kind": "retired_interface",
+      "target": null,
+      "git_sha256": "bcfb1cf727e492c094de93b609ea0df1fea6cedcb6a1c4e340c2bebeb8c070dc"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_constants.cu",
+      "kind": "body_move",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/constants.cuh",
+      "git_sha256": "09c0704fcaa5b12207b67e73a968ab7cfb7df1e89ee7c9e97df0c608e6e93da5"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernels.cu",
+      "kind": "dispatch_rewrite",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/dispatch.cu",
+      "git_sha256": "24416c59120fe41ed14c13a7411e0d838d8321102a1bc0b5ef4c09c2ca0acb2f"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/registry.cu",
+      "kind": "dispatch_rewrite",
+      "target": "src/ecm/stage1/montgomery/cuda/registry.cu",
+      "git_sha256": "e7a7d9c4026bea93d1a0b2c8e041f1fbcaf43ea554983f308ca87ca18be3d347"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/launch.h",
+      "kind": "declarations_rewrite",
+      "target": "src/ecm/stage1/montgomery/cuda/launch.h",
+      "git_sha256": "c65303203e030d2517c6be5516c755cf641a7fba0ec36b26dde2fa933d01e6ea"
+    },
+    {
+      "source": "src/ecm/stage1/montgomery/cuda/prac/runtime.cu",
+      "kind": "include_rewrite",
+      "target": "src/ecm/stage1/montgomery/cuda/prac/runtime.cu",
+      "git_sha256": "9b10e27d4b34a426d0731d6135f82aec57491348dc0cffd2e410a11ee5290cda"
+    },
+    {
+      "source": "src/ecm/cuda/dispatch/tiers.def",
+      "kind": "metadata",
+      "target": "src/ecm/cuda/dispatch/tiers.def",
+      "git_sha256": "0ca6a07236b54cf182bcf4719ddbe946b2875e5688ce7ff4cdf49722976b5d03"
+    }
+  ],
+  "unchanged_math": {
+    "src/ecm/stage1/edwards/cuda/point.cuh": "6ca3ea10b4de9da97e14f9d81e610291e406635e7977010856bed9a814547494",
+    "src/ecm/stage1/edwards/cuda/naf.cuh": "2f992d84e902c5e3c0f63df4702e5999a563c10dcacda9782368d475c6a68775",
+    "src/ecm/stage1/edwards/cuda/instances/instances.cuh": "92aa2bde118cbb3186205959dca7f6374fd7391f5801983ac7781251f47ab881",
+    "src/ecm/stage1/montgomery/cuda/arithmetic.cuh": "f169d88856935e7e725761cadbe060a6327d2a9111c7ba6d933c3cb5cfcca11f",
+    "src/ecm/stage1/montgomery/cuda/instances/instances.cuh": "2f0880f666b79d3f797227053d404e0ebb5a8370db049b2cf881b4d682e60fe0",
+    "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_kernel.cuh": "97e5c6951b3aa58fd330c0b3680318f00f5f87791826f997e8c43f9b47c42203",
+    "src/ecm/stage1/montgomery/cuda/prac/cgbn_stage1_prac_single_add.cuh": "fb8b04a6f53e68d6f6d19bd35930d37eb93d5f28721f10e980b50b3e7354c62d",
+    "src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp": "49c22fb8f39ad1a3891fd1ecc5389809b3a75ad12ee3ab737397449117421bd7",
+    "src/ecm/stage1/montgomery/cuda/prac/descriptor.h": "26b81674a505ad138c88627d9ff509a414b6cf56fe2e14daaee5e84f31fc0f8a"
+  }
+}

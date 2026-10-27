@@ -34,7 +34,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
 - [Stage1 checkpoint 跨后端方案草稿](web/stage1-checkpoint-interop-review-20261026.html)：公共数学状态、计划与游标、CPU/CUDA/OpenCL 能力范围、曲线重组、旧格式导入和验证建议；仅分析，尚未实施。
 - [Stage1 共享文件与sigma优化开发草稿](web/stage1-shared-modules-review-20261026.html#implementation-result)：0.53.5共享文件收口、sigma归一和执行头合并；[阶段目录归位](web/stage1-shared-modules-review-20261026.html#stage-nesting)已完成112文件迁移及CPU/CUDA/OpenCL/Stage2回归及Android NDK构建与导出验证，版本保持0.53.5。[下一轮候选](web/stage1-shared-modules-review-20261026.html#next-candidates)及platform/群阶集中尚未实施。保留讨论与验收证据，checkpoint互通未实施，草稿待用户处理。
-- [Stage1 CUDA实例与编译排布评估](web/stage1-cuda-instance-layout-review-20261026.html)：盘点grouped／isolated／PRAC三套排布，比较完全源码拆分与统一构建生成；建议单一实例清单和稀疏family／geometry生成，含位宽输入问题、迁移清单和验证范围。仅分析，未实施。
+- [Stage1 CUDA实例与编译排布草稿](web/stage1-cuda-instance-layout-review-20261026.html#implementation-result)：0.53.6统一构建生成的实施、位宽归一化、PRAC稀疏实例、实时速度窗口及实际验收；保留初始评估和性能测量条件。
 - [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。
 - [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量、CPU/GPU 分工及可选 relocation/原区间重放。
 - [NTT](architecture/NTT.md)：精确卷积、Goldilocks 算术、布局和设备归约。

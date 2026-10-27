@@ -25,6 +25,7 @@ inline constexpr bool stage1_p95_keep_aid=true;
 inline constexpr bool stage1_p95_recover_lost=true;
 inline constexpr char stage1_progress_color[]="cyan";
 inline constexpr double stage1_progress_log_seconds=60;
+inline constexpr double stage1_progress_average_seconds=0;
 inline constexpr bool stage1_verbose=true;
 inline constexpr char stage1_curve[]="mont";
 inline constexpr char stage1_target[]="gpu";

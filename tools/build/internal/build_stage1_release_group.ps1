@@ -30,6 +30,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+. (Join-Path $PSScriptRoot 'cuda_build_profile.ps1')
+$Tiers = Get-EcmStage1Tiers $Tiers
 . (Join-Path $PSScriptRoot 'cuda_toolchain.ps1')
 $cuda = Resolve-EcmCudaToolkit -Archs $Archs -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
@@ -65,7 +67,6 @@ foreach ($name in @('include/gmp.h','lib/gmp.lib','bin/gmp-10.dll')) {
         "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
         "-DCMAKE_CXX_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
         "-DECM_ENABLE_CUDA=ON",
-        "-DECM_CUDA_ISOLATE_TIERS=ON",
         "-DECM_CUDA_FULL_BUILD=ON",
         "-DECM_CUDA_ENABLE_PRAC=$(if ($EnablePrac) { 'ON' } else { 'OFF' })",
         "-DECM_CUDA_ARCHITECTURES=`"$($Archs -replace ',', ';')`"",
@@ -83,7 +84,6 @@ foreach ($name in @('include/gmp.h','lib/gmp.lib','bin/gmp-10.dll')) {
         "-DGMP_LIBRARY=$($Gmp -replace '\\','/')/lib/gmp.lib",
         "-DOPENSSL_ROOT_DIR=$OpenSslRoot"
     ) -join ' '
-. (Join-Path $PSScriptRoot 'cuda_build_profile.ps1')
 $buildProfile = New-EcmCudaProfile $repo release stage1 production $Archs $cuda $vc $gmpDependency ([ordered]@{
     configure = $configureOptions; tiers = $Tiers; enable_prac = $(if ($EnablePrac) { '1' } else { '0' }); extra = '' })
 $rootArgument = if ($BuildDir) { '' } else { $BuildRoot }

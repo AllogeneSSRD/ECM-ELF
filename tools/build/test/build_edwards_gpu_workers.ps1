@@ -11,9 +11,11 @@ $root=Split-Path -Parent $PSScriptRoot
 if($Stage -ne 'stage2') {
     Set-Location (Split-Path -Parent (Split-Path -Parent $root))
     . (Join-Path $root 'internal/cuda_build_state.ps1')
+    . (Join-Path $root 'internal/cuda_build_profile.ps1')
+    $Tiers=Get-EcmStage1Tiers $Tiers
     $repo=(Get-Location).Path
     $inventory=Get-EcmCudaInventory $repo
-    $edwardsSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/stage1/scalar.cpp')
+    $edwardsSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/stage1/scalar.cpp','src/ecm/stage1/edwards/cuda/instances/instances.cuh')
     $sourcePaths=@(Get-EcmSourceClosure $repo $edwardsSources @('include','src','third_party/cgbn/include'))+@('CMakeLists.txt')
     $hashes=Get-EcmSourceHashes $repo $sourcePaths
     if($RelinkOnly){
@@ -23,9 +25,13 @@ if($Stage -ne 'stage2') {
     }
     if($LASTEXITCODE -ne 0){throw 'Edwards Stage1 worker build failed'}
     foreach($source in $sourcePaths){if($hashes[$source] -ne (Get-FileHash -LiteralPath $source).Hash){throw "source changed during build: $source"}}
+    $catalog=Get-Content "$Build/stage1/cuda_modules/stage1/modules.json" -Raw|ConvertFrom-Json
+    $edwardsSources+=@($catalog.modules|Where-Object{$_.curve -eq 'edwards'}|ForEach-Object{$_.source})
+    $sourcePaths=@(Get-EcmSourceClosure $repo $edwardsSources @('include','src','third_party/cgbn/include'))+@('CMakeLists.txt')
+    $hashes=Get-EcmSourceHashes $repo $sourcePaths
     $objects=[ordered]@{}
     $commands=Get-Content "$Build/stage1/compile_commands.json" -Raw|ConvertFrom-Json
-    foreach($entry in $commands|Where-Object{(Get-EcmSourceKey $repo $_.file) -in $edwardsSources}){
+    foreach($entry in $commands|Where-Object{(Get-EcmSourceKey $repo $_.file) -in $edwardsSources -or $_.file -in $edwardsSources}){
         $obj=Get-EcmObjectPath $entry (Resolve-EcmSourcePath $repo "$Build/stage1")
         $objects[$entry.file]=[ordered]@{path=$obj;sha256=(Get-FileHash -LiteralPath $obj).Hash}
     }

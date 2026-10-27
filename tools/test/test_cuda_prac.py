@@ -12,6 +12,12 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from stage1_checkpoint_decode import batch,progressed
+
+
+def checkpoints(folder):
+    """Active task containers and the retained direct-runtime legacy format."""
+    return [p for p in folder.glob('*.ckpt') if '.bak' not in p.name and '.bad' not in p.name] + list(folder.glob('.ecm_ckpt_*'))
 
 
 def rows(folder):
@@ -107,10 +113,10 @@ def target_edges(exe, root, device):
     text = run(exe, folder, *settings, 'prac', device, sample=0.000001,
                registers=168, target_ms=100)
     assert 'sample limit reached' in text and not rows(folder)
-    assert len(list(folder.glob('.ecm_ckpt_*'))) == 1
+    assert len(checkpoints(folder)) == 1
     text = run(exe, folder, *settings, 'prac', device, registers=168, target_ms=10)
     assert 'checkpoint resumed' in text and rows(folder) == expected
-    assert not list(folder.glob('.ecm_ckpt_*'))
+    assert not checkpoints(folder)
     results.append(dict(case='resume_changed_target', sample_target_ms=100,
                         resume_target_ms=10, Q=8, passed=True))
     print('PASS target bounds and checkpoint target 100 -> 10', flush=True)
@@ -182,8 +188,10 @@ def main():
                        registers=args.registers if algo == 'prac' else 0,
                        variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms, constants=args.constants)
             assert 'sample limit reached' in text and not rows(folder), 'Partial Stage1 was published'
-            files = list(folder.glob('.ecm_ckpt_*'))
+            files = checkpoints(folder)
             assert len(files) == 1, f'Missing checkpoint: {folder}'
+            task_container=files[0].suffix=='.ckpt'
+            if task_container:assert progressed(batch(files[0])[1]), 'Checkpoint has no arithmetic progress'
             if corrupt:
                 payload = bytearray(files[0].read_bytes()); payload[-1] ^= 1; files[0].write_bytes(payload)
                 if algo == 'prac':
@@ -192,10 +200,13 @@ def main():
             text = run(exe, folder, *settings, algo, args.device, tpi=args.tpi,
                        registers=args.registers if algo == 'prac' else 0,
                        variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms, constants=args.constants)
-            assert ('mismatch/corruption' if corrupt else 'checkpoint resumed') in text
+            if corrupt and task_container:
+                assert 'Stage1 batch resume:' in text and '.bak.ckpt' in text, 'Corrupt primary did not recover a validated backup'
+            else:
+                assert ('mismatch/corruption' if corrupt else 'checkpoint resumed') in text
             if corrupt and algo == 'prac': assert 'PRAC plan built' in text, 'Corrupt plan cache was accepted'
             assert rows(folder) == expected, f'{algo}: resume/corruption full Q mismatch'
-            assert not list(folder.glob('.ecm_ckpt_*')), 'Completed checkpoint was not removed'
+            assert not checkpoints(folder), 'Completed checkpoint was not removed'
             results.append(dict(case='checkpoint', algorithm=algo, corruption=corrupt, Q=len(expected), passed=True))
             print(f'PASS checkpoint/{algo}/corrupt={corrupt}: full Q matches', flush=True)
     results.extend(result_edges(exe, root / 'results', args.device))
@@ -205,7 +216,10 @@ def main():
         text = run(exe, folder, '(2^4423-1)', 1000, 8, 26, 'lcm', 'prac', args.device,
                    expect_records=False, target_ms=invalid, registers=0)
         assert 'ECM_PRAC_TARGET_MS must be finite and in [10,500]' in text
-        assert not rows(folder) and not list(folder.glob('.ecm_ckpt_*'))
+        assert not rows(folder)
+        # Task admission may create a seed-only batch before a runtime policy
+        # is rejected. It must never contain completed arithmetic or results.
+        assert all(path.suffix=='.ckpt' and not progressed(batch(path)[1]) for path in checkpoints(folder))
         results.append(dict(case='invalid_target', value=invalid, Q=0, passed=True))
     metadata = dict(exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),
                     prac_registers=args.registers, bits=args.bits, device=args.device,

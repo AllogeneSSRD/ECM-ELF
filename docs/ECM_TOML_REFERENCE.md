@@ -442,6 +442,18 @@ Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU P
 
 用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入 worktodo.add。
 
+### progress_average_seconds
+
+```toml
+progress_average_seconds = 0
+```
+
+Type / 类型: `double`; range / 范围: `[0..60]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Time window for live Stage1 CPU/CUDA s/curve and remaining-time estimates. Zero uses the latest valid sample without averaging; positive values average completed work over measured sample time, up to 60 seconds. CUDA samples exclude preparation and checkpoint I/O. This does not change computation, slicing, final timing or log refresh frequency.
+
+Stage1 CPU/CUDA 实时 s/curve 与剩余时间估计的平均窗口，单位为秒。0 使用最近一次有效采样，不做平均；正值按采样时长累计已完成工作量，最多 60 秒。CUDA 采样排除准备和 checkpoint 写盘；不改变计算、切片、最终计时或日志刷新频率。
+
 ### progress_color
 
 ```toml

@@ -23,9 +23,13 @@ GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
-Stage1 local/dev 默认 `-KernelLayout isolated`，与 release 共用按曲线/param/容器生成的独立编译单元，避免多个大位宽挤在同一组文件形成编译长尾；每个内核及其设备辅助函数仍一起编译。`-KernelLayout grouped` 保留分组备选。local 仍为单架构、压缩、无PTX，不改成发布镜像策略。布局进入构建身份，已有分组缓存不能当成隔离缓存复用；省略 `-BuildDir` 时自动为不同 profile 选择独立目录；也可显式指定新的 `-BuildDir build_stage1_local_isolated`，旧目录保留。
+Stage1 local/dev/release 统一使用构建生成的实例入口。`-KernelLayout isolated` 仅保留为兼容写法，`grouped` 已删除；CMake 的 `ECM_CUDA_ISOLATE_TIERS=OFF` 会明确报错。local 保持单架构、压缩、无 PTX。已有缓存必须通过完整 profile、编译命令、依赖和对象内容核对；省略 `-BuildDir` 时，为不相容 profile 选择独立目录，旧目录保留。
 
-位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/stage1/edwards/cuda/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/stage1/montgomery/cuda/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标；默认完整发布不启用PRAC。
+位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。`-Tiers` 在构建身份和 CMake 选档前通过同一归一化器处理：去除空白、去重、按清单排序；空字符串为全档，未知位宽、空列表项和分号分隔会报错。`"1024, 384,384"` 与 `"384,1024"` 产生相同选档身份。Edwards binary/NAF 共用32个容器入口，Montgomery PARAM0/2/3 各31个，共125个基础模块。容器边界仍按 Edwards 一位余量、Montgomery 六位余量判断，见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。
+
+实例入口、PRAC 工厂表和 `cuda_modules/stage1/modules.json` 由 `tools/build/internal/cuda_modules.cmake` 在构建目录生成，内容不变时不更新时间戳。PRAC 显式启用时，另生成31个标准几何及5个稀疏候选模块，仍链接到 `ecm_cuda_prac` 对象目标；默认完整发布不启用 PRAC。标准/alternate、single、constants 分别包含自己的设备模板，候选头变化不会进入标准核的依赖闭包。独立 Edwards 与主机等待探针共用这个生成器。
+
+Montgomery 普通核保留原有分档寄存器策略，旧 NVCC 的独立编译单元继续使用56/128/255预算；PRAC 保留原有每核属性及旧工具链行为，不额外增加 TU 上限。已无作用的 grouped 专用 `ECM_MAXRREG_SMALL` / `ECM_MAXRREG_SUYAMA` 非零设置会报错；统一上限和算术环境策略保持原规则。
 
 新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该 worker 测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
 

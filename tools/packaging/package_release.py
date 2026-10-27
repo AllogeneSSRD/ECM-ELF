@@ -118,13 +118,25 @@ def inspect_modules(cuda,build,stage,report,cache=None):
     if stage=='stage1':
         units=read(build/'compile_commands.json')
         units=[u for u in units if '/cuda_modules/stage1/' in u['file'].replace('\\','/')]
+        catalog=read(build/'cuda_modules/stage1/modules.json')
+        if catalog.get('schema')!=1:raise ValueError('Unsupported Stage1 module catalog')
+        modules={Path(m['source']).resolve():m for m in catalog['modules']}
+        if not modules or len(modules)!=len(catalog['modules']):raise ValueError('Invalid Stage1 module catalog membership')
+        seen=set()
         for unit in units:
-            match=re.search(r'(edwards|mont[023])_(\d+)\.cu$',unit['file'])
-            if not match:raise ValueError('Unexpected isolated Stage1 module')
+            source=Path(unit['file']).resolve()
+            if source not in modules or source in seen:raise ValueError('Unexpected or repeated Stage1 compile module')
+            seen.add(source);module=modules[source]
             obj=re.search(r'(?:^|\s)(?:-o\s+|/Fo)(?:"([^"]+)"|(\S+))',unit['command'])
             if not obj:raise ValueError('Module object path missing')
             path=Path(obj[1] or obj[2]);path=path if path.is_absolute() else Path(unit['directory'])/path
-            records.append(dict(label=Path(unit['file']).stem,object=str(path),curve=match[1],capacity=int(match[2])))
+            if module['family'].startswith('prac_'):curve='prac'
+            elif module['curve']=='edwards' and module['family']=='binary_naf':curve='edwards'
+            elif module['curve']=='montgomery' and module['family']=='ladder' and module['param'] in (0,2,3):curve='mont'+str(module['param'])
+            else:raise ValueError('Unknown Stage1 instance family')
+            records.append(dict(label=module['label'],object=str(path),curve=curve,capacity=module['bits'],
+                                tpi=module['tpi'],family=module['family'],modes=module['modes']))
+        if seen!=set(modules):raise ValueError('Incomplete Stage1 compile module membership')
     else:
         manifest=read(build/'build_manifest.json')
         if manifest['module_directory']:
@@ -157,16 +169,24 @@ def inspect_modules(cuda,build,stage,report,cache=None):
         entries=metadata['entries']
         if not entries:raise ValueError(f'Isolated device module has no entry: {record["label"]}')
         if stage=='stage1':
+            observed_modes=[]
             for entry in entries:
                 if record['curve']=='edwards':
-                    width=re.search(r'ParamsILj(\d+)ELj\d+E',entry)
-                    valid=width and int(width[1])==record['capacity']
+                    width=re.search(r'ParamsILj(\d+)ELj(\d+)E',entry)
+                    valid=width and (int(width[1]),int(width[2]))==(record['capacity'],record['tpi'])
+                elif record['curve']=='prac':
+                    signature=re.search(r'kernel_suyama_(domain|constants)I13cgbn_params_tILj(\d+)ELj(\d+)EELi(\d+)E',entry)
+                    kind='constants' if record['family']=='prac_constants' else 'domain'
+                    valid=signature and signature[1]==kind and (int(signature[2]),int(signature[3]))==(record['tpi'],record['capacity'])
+                    if valid:observed_modes.append(int(signature[4]))
                 else:
-                    width=re.search(r'cgbn_params_tILj\d+ELj(\d+)E',entry)
+                    width=re.search(r'cgbn_params_tILj(\d+)ELj(\d+)E',entry)
                     param=int(record['curve'][-1])
-                    valid=width and int(width[1])==record['capacity']
+                    valid=width and (int(width[1]),int(width[2]))==(record['tpi'],record['capacity'])
                     valid=valid and (('kernel_double_add_suyama' in entry and ('ELb1E' in entry)==(param==2)) if param in (0,2) else ('kernel_double_add' in entry and 'suyama' not in entry))
                 if not valid:raise ValueError(f'Unexpected curve/parameter/width inside {record["label"]}: {entry}')
+            if record['curve']=='prac' and Counter(observed_modes)!=Counter(record['modes']):
+                raise ValueError(f'Incomplete PRAC mode membership inside {record["label"]}')
         elif 'kernel' in record and (len(entries)!=1 or record['kernel'] not in entries[0]):
             raise ValueError(f'Unexpected entry membership inside {record["label"]}: {entries}')
         record.update(metadata,sha256=digest)

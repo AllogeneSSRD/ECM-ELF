@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from instance_refactor import audit_bytes, is_retired, handoff_record, verify_handoff
 from test_stage1_host_modules import normalize
 from test_stage2_planning_extraction import balanced
 from source_layout import current_source
@@ -72,10 +73,13 @@ def main():
     }
     shared_changes = {current_source(name).relative_to(ROOT).as_posix(): reason
                       for name, reason in shared_changes.items()}
+    handoff = verify_handoff()
+    handoff_files = []
+    display_policy_files = []
     for item in manifest['files']:
         source, targets, action = item['source'], item['targets'], item['action']
         for target in targets:
-            assert current_source(target).is_file(), ('missing approved target', source, target)
+            assert current_source(target).is_file() or is_retired(current_source(target)), ('missing approved target', source, target)
         if action in ('move', 'move_split', 'merge'):
             assert not (ROOT/source).is_file(), ('old path retained', source)
         if action != 'move' or source in exceptions or Path(source).suffix not in {'.h', '.hpp', '.cuh', '.cu', '.cpp', '.inl', '.cl'}:
@@ -85,7 +89,7 @@ def main():
         if live_name in shared_changes:
             continue
         frozen = subprocess.check_output(['git', 'show', baseline+':'+source], cwd=ROOT)
-        current = live_target.read_bytes()
+        current = audit_bytes(live_target)
         assert frozen.startswith(b'\xef\xbb\xbf') == current.startswith(b'\xef\xbb\xbf'), ('BOM changed', source)
         before = frozen.decode('utf-8-sig')
         after = current.decode('utf-8-sig')
@@ -97,8 +101,21 @@ def main():
         # still uses opencl_resources and is checked by package-layout tests.
         if source == 'src/ecm/backend/opencl/runtime/runtime.cpp':
             before = before.replace('src/ecm/backend/opencl/resources', 'src/ecm/opencl/resources')
+        if live_name == 'src/ecm/stage1/cpu_runtime.cpp':
+            # Only the display sampler changed. Keep every CPU execution,
+            # synchronization, checkpoint and output statement outside it frozen.
+            def without_meter(text):
+                text=re.sub(r'^#define ED_SPEED_WINDOW 12\s*$', '', text, flags=re.M)
+                first=text.index('struct EdSpeedMeter {')
+                last=text.index('static EdSpeedMeter g_speed;')
+                return text[:first]+text[last:]
+            assert tokens(without_meter(before))==tokens(without_meter(after)), 'CPU logic outside display sampler changed'
+            display_policy_files.append(live_name)
+            continue
         assert tokens(before) == tokens(after), ('computation tokens changed', source, targets[0])
         checked[live_name] = hashlib.sha256(after.encode()).hexdigest()
+        if handoff_record(live_target):
+            handoff_files.append(live_name)
     # These moves retain their exact behavior despite their new file owners.
     for old, new, name in [
         ('src/ecm/stage1/preparation.cpp', 'src/ecm/stage1/task.cpp', 'compute_batch_s'),
@@ -124,7 +141,10 @@ def main():
         current = current_source(new).read_text(encoding='utf-8-sig')
         assert definition_body(frozen, name) == definition_body(current, name), ('merged function changed', name)
     result = dict(complete=True, baseline=baseline, inventory_files=len(manifest['files']),
-                  unchanged_computation_files=len(checked), function_move_exceptions=exceptions,
+                  unchanged_computation_files=len(checked)-len(handoff_files),
+                  prior_migration_verified_files=len(checked), historical_handoff_files=handoff_files,
+                  approved_display_sampler_files=display_policy_files,
+                  instance_handoff=handoff, function_move_exceptions=exceptions,
                   approved_shared_changes=shared_changes, shared_baseline='422a38e8',
                   sources=checked)
     (args.output/'result.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf8')

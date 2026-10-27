@@ -8,6 +8,8 @@ param([string]$Build='build_cuda_cmake/edwards_gpu_stage1_probe',
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
+. (Join-Path $PSScriptRoot '../internal/cuda_build_profile.ps1')
+$Tiers=Get-EcmStage1Tiers $Tiers
 . (Join-Path $PSScriptRoot '../internal/cuda_toolchain.ps1')
 $cuda=Resolve-EcmCudaToolkit -Archs $Arch
 $vc=Resolve-EcmVcEnvironment $cuda
@@ -19,8 +21,11 @@ Initialize-EcmBuildDirectory $objDir
 . (Join-Path $PSScriptRoot '../internal/stage1_release_sources.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $workerSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/stage1/scalar.cpp')
+$probeSources=@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp',
+    'src/io/save.cpp','src/io/files.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/ecm_expr.cpp',
+    'src/ecm/application/configuration/runtime.cpp')
 $sources=$workerSources+
-    @('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
+    $probeSources
 $worker=$null
 if($WorkerBuild){
     $WorkerBuild=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkerBuild)
@@ -29,20 +34,22 @@ if($WorkerBuild){
     if($local.tiers -ne $Tiers){throw 'worker tier selection mismatch'}
     Assert-Stage1BuildIdentity $repo $WorkerBuild $local
     $entries=@(Get-EcmTargetCompileEntries $WorkerBuild ecm_cuda)
-    if($local.kernel_layout -eq 'isolated') {
-        $workerSources=@($workerSources|Where-Object{$_ -notmatch '/instances/'})+
-            @($entries|Where-Object{$_.file.Replace('\','/') -match '/cuda_modules/stage1/edwards_\d+\.cu$'}|ForEach-Object{$_.file})
-        $sources=$workerSources+@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
-    }
+    $catalog=Get-Content (Join-Path $WorkerBuild 'cuda_modules/stage1/modules.json') -Raw|ConvertFrom-Json
+    $workerSources+=@($catalog.modules|Where-Object{$_.curve -eq 'edwards'}|ForEach-Object{$_.source})
+    $sources=$workerSources+$probeSources
     $worker=[pscustomobject]@{objects=[pscustomobject]@{}}
     foreach($entry in $entries){
         if((Get-EcmSourceKey $repo $entry.file) -notin $workerSources -and $entry.file -notin $workerSources){continue}
         $path=Get-EcmObjectPath $entry $WorkerBuild
         $worker.objects|Add-Member -NotePropertyName $entry.file -NotePropertyValue ([pscustomobject]@{path=$path;sha256=(Get-FileHash $path).Hash})
     }
+} else {
+    $catalog=Get-EcmStage1Modules $repo $Build $Tiers $cuda
+    $workerSources+=@($catalog.modules|Where-Object{$_.curve -eq 'edwards'}|ForEach-Object{$_.source})
+    $sources=$workerSources+$probeSources
 }
 $deps=@(Get-EcmSourceClosure $repo $sources @('include','src','third_party/cgbn/include'))+
-    @('tools/build/test/build_edwards_gpu_stage1_probe.ps1')
+    @('tools/build/test/build_edwards_gpu_stage1_probe.ps1','tools/build/internal/cuda_modules.cmake','tools/build/internal/stage1_tiers.cmake','tools/build/internal/cuda_build_profile.ps1')
 $hashes=[ordered]@{}
 foreach($source in ($sources+$deps|Select-Object -Unique)){$hashes[$source]=(Get-FileHash -LiteralPath (Resolve-EcmSourcePath $repo $source)).Hash}
 $previous=$null;$manifestPath=Join-Path $Build 'manifest.json'
@@ -72,7 +79,7 @@ foreach($source in $sources){
             }
             $command+=$definitions
         }
-        $commands += [ordered]@{directory=$repo;file=(Join-Path $repo $source);command=$command}
+        $commands += [ordered]@{directory=$repo;file=(Resolve-EcmSourcePath $repo $source);command=$command}
     } else {Write-Host "Reused unchanged object: $source"}
     $objects+=$obj;$objectMap[$source]=$obj
 }
