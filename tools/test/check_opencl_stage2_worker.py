@@ -172,6 +172,26 @@ def main():
     assert int(values['effective'])<=int(values['cap']) and int(values['effective'])%int(values['G_batch'])==0
     assert statistic(reference,'ntt_lengths')==statistic(capped,'ntt_lengths')
     case('invalid_point_window',line,expect=2,environment={'ECM_OPENCL_POINT_WINDOW':'65537'})
+    # Real wider-than-512-bit points exercise the adaptive call site, not only
+    # its arithmetic policy. The same G batches must retain all their checks.
+    adaptive_line=save_line((1<<607)-1)
+    case('point_auto_reference',adaptive_line,b2=2600000,d=2310,
+        environment={'ECM_OPENCL_POINT_AUTO':'0'})
+    case('point_auto',adaptive_line,b2=2600000,d=2310,
+        environment={'ECM_OPENCL_POINT_AUTO':'1'})
+    ref_auto=(a.out/'point_auto_reference/worker.log').read_text(encoding='utf-8-sig')
+    auto=(a.out/'point_auto/worker.log').read_text(encoding='utf-8-sig')
+    assert statistic(ref_auto,'ntt_lengths')==statistic(auto,'ntt_lengths')
+    assert statistic(ref_auto,'opencl_checks')==statistic(auto,'opencl_checks')
+    eligible='name=NVIDIA' in auto and 'point_backend=opencl' in auto
+    assert ('enabled=1' if eligible else 'enabled=0') in statistic(auto,'opencl_point_plan')
+    case('point_auto_carrier',adaptive_line,b2=2600000,d=2310,
+        extra=['--carrier-exponent',1214],environment={'ECM_OPENCL_POINT_AUTO':'1'})
+    case('point_auto_manual_lock',adaptive_line,b2=2600000,d=2310,
+        environment={'ECM_OPENCL_POINT_AUTO':'1','ECM_OPENCL_POINT_CHUNK':'64'})
+    locked=(a.out/'point_auto_manual_lock/worker.log').read_text(encoding='utf-8-sig')
+    assert 'enabled=0' in statistic(locked,'opencl_point_plan')
+    case('invalid_point_auto',line,expect=2,environment={'ECM_OPENCL_POINT_AUTO':'2'})
     lifted,_=case('mersenne',line,extra=['--carrier-exponent',127])
     assert ordinary[0].get('factors',[])==lifted[0].get('factors',[])==[]
     target=((1<<41)-1)//13367

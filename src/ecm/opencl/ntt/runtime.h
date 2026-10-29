@@ -18,7 +18,7 @@ struct DeviceInfo {
     std::string platform, name, vendor, version, driver, profile;
     Word global_bytes = 0, max_allocation_bytes = 0, local_bytes = 0;
     std::size_t max_work_group = 0;
-    unsigned address_bits = 0;
+    unsigned address_bits = 0, compute_units = 0;
     bool little_endian = false, compiler = false, available = false;
     bool supported = false;
     std::string reason;

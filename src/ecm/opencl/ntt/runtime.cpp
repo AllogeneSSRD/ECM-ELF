@@ -57,6 +57,7 @@ std::vector<Device> enumerate_devices() {
             v.local_bytes=info<cl_ulong>(d,CL_DEVICE_LOCAL_MEM_SIZE);
             v.max_work_group=info<std::size_t>(d,CL_DEVICE_MAX_WORK_GROUP_SIZE);
             v.address_bits=info<cl_uint>(d,CL_DEVICE_ADDRESS_BITS);
+            v.compute_units=info<cl_uint>(d,CL_DEVICE_MAX_COMPUTE_UNITS);
             v.little_endian=info<cl_bool>(d,CL_DEVICE_ENDIAN_LITTLE)!=0;
             v.available=info<cl_bool>(d,CL_DEVICE_AVAILABLE)!=0;
             v.compiler=info<cl_bool>(d,CL_DEVICE_COMPILER_AVAILABLE)!=0;

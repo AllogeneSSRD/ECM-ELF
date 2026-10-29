@@ -118,6 +118,9 @@ stage2_log_file="worker.log"
                             text = (folder / 'worker.log').read_text(encoding='utf-8-sig')
                             results = [json.loads(s) for s in (folder / 'results.jsonl').read_text(encoding='utf-8-sig').splitlines() if s.strip()]
                             full = fields(text, 'stage2_full_wall')
+                            runtime = fields(text, 'stage2_opencl')
+                            if not runtime or int(runtime['target_bits']) != bits:
+                                raise RuntimeError('Input filename bit label differs from the actual saved N')
                             shape = re.search(r'real_shape: D=(\d+) P=phi\(D\)/2=(\d+)', text)
                             if not full or not shape or int(shape[1]) != a.d or len(results) != 1 or results[0].get('factors', []):
                                 raise RuntimeError(f'Not a matching complete NF curve: {folder}')
@@ -128,6 +131,7 @@ stage2_log_file="worker.log"
                                    'points': {**fields(text, 'opencl_points'), **fields(text, 'opencl_point_io')},
                                    'point_command': fields(text, 'opencl_point_command'),
                                    'point_window': fields(text, 'opencl_point_window'),
+                                   'point_plan': fields(text, 'opencl_point_plan'),
                                    'checks': fields(text, 'opencl_checks'), 'payload': fields(text, 'opencl_payload'),
                                    'ntt_lengths': next((s for s in text.splitlines() if s.startswith('ntt_lengths:')), ''),
                                    'split': {**fields(text, 'opencl_split'), **fields(text, 'opencl_tail')},

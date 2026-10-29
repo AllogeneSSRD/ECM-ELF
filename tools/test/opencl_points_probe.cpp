@@ -1,4 +1,5 @@
 #include "ecm/stage2/opencl/points.h"
+#include "ecm/stage2/opencl/point_plan.h"
 #include "ecm/stage2/opencl/tree.h"
 #include "opencl_stage2_oracle.h"
 #include "cuda_points_reference.h"
@@ -20,6 +21,19 @@ using Word=ntt::Word;
 namespace {
 Word checked=0,guards=0,curves=0,qualification_rejections=0;
 std::size_t ladder_group=0;
+void check_point_plan(){
+    cl2::PointPlan p(256,32,24,true);
+    if(p.chunk(14)!=256||p.window(240,11184)!=3840||p.window(2880,11184)!=8640||p.window(240,300)!=240)
+        throw std::runtime_error("point seed/window planning");
+    p.observe(.4,10,16);if(p.samples)throw std::runtime_error("partial group trained point plan");
+    p.observe(.4,10,256);if(p.chunk(14)!=768||p.chunk(40)!=256)throw std::runtime_error("point bit-length promotion");
+    if(p.admit(768,1000,300)!=300||p.admit(768,17,1000)!=17||p.admit(768,1000,200)!=256)
+        throw std::runtime_error("point live-budget promotion admission");
+    p.observe(1.2,14,768);if(p.chunk(14)!=256)throw std::runtime_error("slow point command did not suppress growth");
+    cl2::PointPlan locked(256,32,24,false);
+    locked.observe(.01,10,256);if(locked.chunk(10)!=256||locked.window(240,11184)!=240)throw std::runtime_error("manual point plan changed");
+    guards+=6;
+}
 std::string quote(const std::string&s){std::string o="\"";for(char c:s){if(c=='\\'||c=='\"')o+='\\';if(c=='\n')o+="\\n";else if(c=='\r')o+="\\r";else o+=c;}return o+'"';}
 void same(const std::vector<Word>&a,const std::vector<Word>&b,const char*where){if(a!=b){std::size_t i=0;while(i<std::min(a.size(),b.size())&&a[i]==b[i])++i;throw std::runtime_error(std::string(where)+" mismatch word="+std::to_string(i)+(i<a.size()&&i<b.size()?" actual="+std::to_string(a[i])+" expected="+std::to_string(b[i]):" size"));}checked+=a.size();}
 template<class F>void rejects(F f){try{f();}catch(const std::invalid_argument&){++guards;return;}throw std::runtime_error("missing invalid argument rejection");}
@@ -135,7 +149,7 @@ int main(int argc,char**argv){std::string output,resource,cuda_path;std::size_t 
     std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
     try{for(int i=1;i<argc;++i){const std::string a=argv[i];auto value=[&]{if(++i>=argc)throw std::runtime_error("missing option value");return std::string(argv[i]);};
         if(a=="--device")device=std::stoull(value());else if(a=="--output")output=value();else if(a=="--resource-root")resource=value();else if(a=="--cuda-dll")cuda_path=value();else if(a=="--cuda-device")cuda_device=std::stoi(value());else if(a=="--ladder-group")ladder_group=std::stoull(value());else if(a=="--only-bits")only_bits=unsigned(std::stoul(value()));else if(a=="--bench")benchmark=true;else if(a!="--verify")throw std::runtime_error("unknown option "+a);}
-        if(output.empty()||std::filesystem::exists(output))throw std::runtime_error("output must be a new file");ntt::Options o;o.device=device;o.resource_root=resource;ntt::Runtime runtime(o);Cuda cuda(cuda_path);std::ostringstream rows;
+        if(output.empty()||std::filesystem::exists(output))throw std::runtime_error("output must be a new file");check_point_plan();ntt::Options o;o.device=device;o.resource_root=resource;ntt::Runtime runtime(o);Cuda cuda(cuda_path);std::ostringstream rows;
         if(benchmark)bench(runtime,cuda,cuda_device,rows);else{
             const std::vector<unsigned> grid=only_bits?std::vector<unsigned>{only_bits}:std::vector<unsigned>{31,64,65,127,512,2203,4423,8191,16384};
             for(unsigned bits:grid){if(bits<5||bits>16384)throw std::runtime_error("only-bits outside fixture range 5..16384");std::cout<<"opencl_points_begin: bits="<<bits<<'\n';ref::Big n;mpz_setbit(n.v,bits);mpz_sub_ui(n.v,n.v,1);

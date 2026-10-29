@@ -7,6 +7,7 @@
 #include "engine.h"
 #include "tree.h"
 #include "points.h"
+#include "point_plan.h"
 #include "../cuda/api.h"
 #include "../modulus.h"
 #include "../planning/d_catalog.h"
@@ -37,6 +38,8 @@ struct Big {
 using Values=std::vector<Big>;
 double now(){return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 Word setting(const char*key,Word fallback){const char*s=std::getenv(key);if(!s||!*s)return fallback;char*end=nullptr;const auto n=std::strtoull(s,&end,10);if(*s=='-'||*end)throw std::runtime_error(std::string("invalid ")+key);return n;}
+bool overridden(const char*key){const char*s=std::getenv(key);return s&&*s;}
+unsigned scalar_bits(Word value){unsigned bits=0;do{++bits;}while(value>>=1);return bits;}
 std::string decimal(mpz_srcptr v){std::string s(mpz_sizeinbase(v,10)+2,'\0');mpz_get_str(s.data(),10,v);s.resize(s.find('\0'));return s;}
 std::vector<Word> flatten(const Values&a,std::size_t w){std::vector<Word> out(a.size()*w);for(std::size_t i=0;i<a.size();++i){std::size_t n=0;mpz_export(out.data()+i*w,&n,-1,8,0,0,a[i].v);if(n>w)throw std::runtime_error("coefficient width overflow");}return out;}
 Values import(const std::vector<Word>&a,std::size_t w){if(a.size()%w)throw std::runtime_error("coordinate width");Values out(a.size()/w);for(std::size_t i=0;i<out.size();++i)mpz_import(out[i].v,w,-1,8,0,0,a.data()+i*w);return out;}
@@ -96,10 +99,13 @@ struct PointGenerator {
     double kernel_seconds=0,kernel_max_seconds=0,coordinate_seconds=0,check_seconds=0,normalize_seconds=0,seed_seconds=0;
     Word launches=0,points=0,upload_bytes=0,download_bytes=0;
     std::size_t chunk=0,group=0;
+    cls::PointPlan plan{256,32,0,false};Word promoted_launches=0,max_command_points=0,budget_clamps=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
     PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
         const auto&v=r.device().vendor;const bool amd=v.find("Advanced Micro Devices")!=v.npos||v=="AMD";
         const bool nvidia=v.find("NVIDIA")!=v.npos;
+        const auto automatic=setting("ECM_OPENCL_POINT_AUTO",1);
+        if(automatic>1)throw std::runtime_error("ECM_OPENCL_POINT_AUTO must be 0 or 1");
         // The existing wide-AMD point qualification guard remains intact.
         // CPU points still feed the same native OpenCL polynomial pipeline.
         const char* mode=std::getenv("ECM_OPENCL_POINTS");
@@ -109,6 +115,11 @@ struct PointGenerator {
         const std::size_t default_chunk=w<=8?1024:(nvidia&&w<=128)?256:w<=32?256:w<=64?128:w<=128?64:16;
         chunk=std::size_t(setting("ECM_OPENCL_POINT_CHUNK",default_chunk));
         if(!chunk||chunk>4096)throw std::runtime_error("ECM_OPENCL_POINT_CHUNK must be 1..4096");
+        // Respect manual chunk/group plans and keep the existing wide/vendor
+        // qualification guards. Only ordinary useful commands train the plan.
+        const bool adaptive=automatic&&device&&nvidia&&w>8&&w<=128&&group==32&&
+            !overridden("ECM_OPENCL_POINT_CHUNK")&&!overridden("ECM_OPENCL_POINT_GROUP");
+        plan=cls::PointPlan(chunk,group,r.device().compute_units,adaptive);
         const auto use=setting("ECM_OPENCL_GIANT_BASE",1);if(use>1)throw std::runtime_error("ECM_OPENCL_GIANT_BASE must be 0 or 1");use_giant_base=use!=0;
     }
     Big BigValue(){Big value;mpz_set(value.v,n);return value;}
@@ -129,18 +140,25 @@ struct PointGenerator {
         }
         const auto&work=reduced.empty()?scalars:reduced;
         points+=scalars.size();const auto begin=now();Values x,z;if(device){
+            const auto bits=scalar_bits(*std::max_element(work.begin(),work.end()));
             // Bound each scalar-ladder submission on display GPUs. Wide scalar
             // kernels are slow; a whole production giant batch can otherwise
             // become a single multi-second command. This is separate from the
             // polynomial batch size and is not a calibrated watchdog guarantee.
-            for(std::size_t first=0;first<scalars.size();first+=chunk){const auto last=std::min(first+chunk,scalars.size());
+            for(std::size_t first=0;first<scalars.size();){const auto wanted=plan.chunk(bits),remaining=scalars.size()-first;
+                const auto mem=runtime.memory();const auto available=(mem.budget_bytes-mem.live_bytes)/(8*(2*w+1));
+                const auto count=plan.admit(wanted,remaining,std::size_t(available)),last=first+count;
+                budget_clamps+=count<std::min(wanted,remaining);
                 std::vector<Word> slice(work.begin()+first,work.begin()+last);
                 auto points=device->ladder(flatten({origin->x},w),flatten({origin->z},w),flatten({a24},w),slice);
                 kernel_seconds+=device->timing().kernel_seconds;upload_bytes+=device->timing().upload_bytes;++launches;
                 kernel_max_seconds=std::max(kernel_max_seconds,device->timing().kernel_seconds);
+                plan.observe(device->timing().kernel_seconds,scalar_bits(*std::max_element(slice.begin(),slice.end())),slice.size());
+                promoted_launches+=slice.size()>chunk;max_command_points=std::max(max_command_points,Word(slice.size()));
                 auto xx=import(device->download(points.x),w),zz=import(device->download(points.z),w);
                 download_bytes+=2*slice.size()*w*8;
                 x.insert(x.end(),xx.begin(),xx.end());z.insert(z.end(),zz.begin(),zz.end());
+                first=last;
             }
         }else{for(auto scalar:work){auto p=ladder(*origin,scalar,a24,n);x.push_back(p.x);z.push_back(p.z);}}
         coordinate_seconds+=now()-begin;
@@ -207,6 +225,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             stage2_log::print(stage2_log::phases,"opencl_points: points=%llu launches=%llu coordinates=%.6f kernel=%.6f sample_checks=%.6f normalize=%.6f seed=%.6f\n",generator.points,generator.launches,generator.coordinate_seconds,generator.kernel_seconds,generator.check_seconds,generator.normalize_seconds,generator.seed_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_io: h2d_bytes=%llu d2h_bytes=%llu (kernel nested in coordinates; point timings nested in baby/giant)\n",generator.upload_bytes,generator.download_bytes);
             stage2_log::print(stage2_log::phases,"opencl_point_command: max_kernel_seconds=%.6f chunk=%llu group=%llu\n",generator.kernel_max_seconds,Word(generator.chunk),Word(generator.group));
+            stage2_log::print(stage2_log::phases,"opencl_point_plan: enabled=%d compute_units=%u seed_chunk=%llu ceiling=%llu samples=%llu promotions=%llu max_points=%llu budget_clamps=%llu target_seconds=%.3f seconds_per_bit=%.6f\n",int(generator.plan.enabled),runtime.device().compute_units,Word(generator.chunk),Word(generator.plan.ceiling),Word(generator.plan.samples),generator.promoted_launches,generator.max_command_points,generator.budget_clamps,cls::PointPlan::target_seconds,generator.plan.seconds_per_bit);
             stage2_log::print(stage2_log::phases,"opencl_split: baby=%.6f ftree_inverse=%.6f giant=%.6f gtree_fold=%.6f\n",result.phases.seconds[2],result.phases.seconds[3],result.giant_seconds,result.gtrees_seconds);
             stage2_log::print(stage2_log::phases,"opencl_tail: leaf_oracle=%.6f descent=%.6f accum=%.6f\n",sentinel_seconds,result.descent_seconds,result.accum_seconds);
             const auto programs=runtime.programs();stage2_log::print(stage2_log::phases,"opencl_programs: builds=%llu hits=%llu build_seconds=%.6f cache=%d scope=context\n",programs.builds,programs.hits,programs.build_seconds,int(options.cache_programs));
@@ -220,9 +239,10 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         // The point window may span several G batches. Keep G boundaries
         // unchanged and admit the host coordinate staging independently.
         const auto window_cap=(setting("NTT_S4_BATCH_MB",64)<<20)/(6*m.W*8);
-        const auto admitted_window=std::min(requested_window,window_cap);
+        const auto window_request=overridden("ECM_OPENCL_POINT_WINDOW")?requested_window:generator.plan.window(s.chunk,window_cap);
+        const auto admitted_window=std::min(window_request,window_cap);
         const auto point_window=std::max(s.chunk,(admitted_window/s.chunk)*s.chunk);
-        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu\n",requested_window,point_window,window_cap,s.chunk);
+        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu source=%s\n",requested_window,point_window,window_cap,s.chunk,overridden("ECM_OPENCL_POINT_WINDOW")?"explicit":generator.plan.enabled?"adaptive":"default");
         stage2_log::phase("Giant points, G trees and fold");const double loop=now();Word batches=0;
         for(Word first=1;first<=s.giants;){const auto amount=std::min(point_window,s.giants-first+1);indices.resize(amount);for(Word k=0;k<amount;++k)indices[k]=(first+k)*s.d;
             t=now();auto window=generator.generate(indices,factors,result.checked,s.d,std::size_t(s.chunk));result.giant_seconds+=now()-t;

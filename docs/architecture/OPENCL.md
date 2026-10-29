@@ -96,9 +96,13 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 
 AMD点模块超过512 bits的资格限制保持不变；生产引擎显式使用CPU点生成，而F/G/NTT/S4/下降仍在OpenCL设备上。不可逆分母逐点定位真因子；仅出现模N饱和、无法形成仿射根且未得到真因子时失败，不用伪造零根发布NF。
 
-NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。≤512 bits每次至多1024点，513～8192 bits至多256点，更宽至多16点。其他厂商保留运行时工作组及原有位宽分块。此上限是提交策略，不是所有显示设备/标量长度的超时保证；`opencl_point_command.max_kernel_seconds`记录实测最长点命令。
+NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。初始化chunk为≤512 bits:1024、513～8192 bits:256、更宽:16。其他厂商保留运行时工作组及原有位宽分块。`ECM_OPENCL_POINT_AUTO=1`为默认；仅NVIDIA、9…128 limbs、无显式chunk/group覆盖时启用反馈计划，其他路径维持资格与初始分块。实际命令时长由`opencl_point_command.max_kernel_seconds`记录，chunk字段仍表示初始化值。
 
-giant坐标窗口可显式跨越多个G批，默认0仍采用一个G批。有效窗口按已有batch坐标额度裁剪，向下对齐G批且至少保留一个G批；设备每条命令仍受独立chunk限制。窗口只改变点生成、暂存和归一化组织；随后按原边界构造G树，保留每个G批的首／中／末原始标量GMP样本，以及完整giant范围的叶哨兵。末尾不足一批和种子非单位路径不跳过验证。入口为[engine.cpp](../../src/ecm/stage2/opencl/engine.cpp#L220)，开关见[Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
+[PointPlan](../../src/ecm/stage2/opencl/point_plan.h)从有用点命令的事件时间学习，不预热或重复生成校准点。计算单元数来自OpenCL标准设备查询；升档目标为CU×32并限4096，目标不高于seed时保留seed。它以标量位数和估算提交轮数归一化，保留历史最大单位成本，给预测增加15%裕量；预计一轮不超过1秒才升档。迟缓样本会抑制后续升档，每条曲线重新学习。小于一个完整工作组的样本不训练模型。该模型只控制升档，首条及回退命令仍用原批量，不承诺1秒硬时限，也不自动切换CPU点。
+
+升档另外检查实时owned-buffer余额，按scalar索引及X/Z两向量的payload裁剪；不会因升级请求让原批量本可容纳的点分配超出账本预算。此检查不估算驱动私有资源或全卡free memory。手动chunk/group锁定原计划；CPU点、AMD与更宽NVIDIA不应用该模型。`opencl_point_plan`单独汇总反馈、升档、实际最大点数和预算裁剪。
+
+giant坐标窗口可跨越多个G批。自动计划优先选择G批与点上限的最小公倍数，无法容纳时选坐标额度内的整G批；其他路径默认一个G批。显式窗口0锁定原G批，正值按请求裁剪。窗口至多65536点，按已有batch坐标额度准入；设备每条命令仍受独立chunk及实时账本余量限制。随后按原边界构造G树，保留每个G批的首／中／末原始标量GMP样本，以及完整giant范围的叶哨兵。末尾短批和种子非单位路径不跳过验证。入口为[engine.cpp](../../src/ecm/stage2/opencl/engine.cpp#L239)，开关见[Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
 
 当前生产ABI每次执行一条曲线，主机日志、部分计数及Runtime可变kernel参数不支持对同一引擎直接多线程重入。多曲线吞吐实验使用独立进程、独立save和结果目录，不消费生产队列，也没有新增自动并行调度。每条曲线的owned-buffer预算独立，不能充当多worker的全卡显存总预算。实测和共享context批处理的后续要求见[性能报告](../performance/OPENCL_STAGE2.md#点提交组织与多曲线吞吐)。
 
