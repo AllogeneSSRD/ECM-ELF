@@ -14,7 +14,7 @@ struct PointState;
 class Points {
     std::unique_ptr<PointState> state_;
 public:
-    Points(ntt::Runtime &,const std::vector<Word> &modulus);
+    Points(ntt::Runtime &,const std::vector<Word> &modulus,std::size_t ladder_group=0);
     ~Points();
     Points(const Points&)=delete;
     Points& operator=(const Points&)=delete;

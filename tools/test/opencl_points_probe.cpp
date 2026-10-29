@@ -19,6 +19,7 @@ namespace ntt=ecm_opencl::ntt;
 using Word=ntt::Word;
 namespace {
 Word checked=0,guards=0,curves=0,qualification_rejections=0;
+std::size_t ladder_group=0;
 std::string quote(const std::string&s){std::string o="\"";for(char c:s){if(c=='\\'||c=='\"')o+='\\';if(c=='\n')o+="\\n";else if(c=='\r')o+="\\r";else o+=c;}return o+'"';}
 void same(const std::vector<Word>&a,const std::vector<Word>&b,const char*where){if(a!=b){std::size_t i=0;while(i<std::min(a.size(),b.size())&&a[i]==b[i])++i;throw std::runtime_error(std::string(where)+" mismatch word="+std::to_string(i)+(i<a.size()&&i<b.size()?" actual="+std::to_string(a[i])+" expected="+std::to_string(b[i]):" size"));}checked+=a.size();}
 template<class F>void rejects(F f){try{f();}catch(const std::invalid_argument&){++guards;return;}throw std::runtime_error("missing invalid argument rejection");}
@@ -33,7 +34,7 @@ ref::Poly cpu_normalize(const ref::Poly&xs,const ref::Poly&zs,const ref::Big&n,s
     return out;
 }
 ref::Poly cpu_products(const ref::Poly&v,const ref::Big&n,std::size_t block){ref::Poly out;for(std::size_t lo=0;lo<v.size();lo+=block){ref::Big a(1);for(std::size_t j=lo;j<std::min(lo+block,v.size());++j)a=ref::mul(a,v[j],n);out.push_back(a);}return out;}
-void check_points(ntt::Runtime&r,const ref::Big&n,const std::vector<Word>&ks){const auto nw=(mpz_sizeinbase(n.v,2)+63)/64;cl2::Points p(r,flat(n,nw));
+void check_points(ntt::Runtime&r,const ref::Big&n,const std::vector<Word>&ks){const auto nw=(mpz_sizeinbase(n.v,2)+63)/64;cl2::Points p(r,flat(n,nw),ladder_group);
     // Separate SOS, binary GCD and inverse-normalization seams before ladder.
     // Includes a multi-limb inverse and maximal canonical residue.
     ref::Poly edge{ref::Big(0),ref::Big(1),ref::Big(3),ref::sub(n,ref::Big(1),n)};auto edge_view=p.upload(ref::flatten(edge,nw));
@@ -133,7 +134,7 @@ void bench(ntt::Runtime&r,Cuda&cuda,int cuda_device,std::ostringstream&json){boo
 int main(int argc,char**argv){std::string output,resource,cuda_path;std::size_t device=1;int cuda_device=1;unsigned only_bits=0;bool benchmark=false;
     std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
     try{for(int i=1;i<argc;++i){const std::string a=argv[i];auto value=[&]{if(++i>=argc)throw std::runtime_error("missing option value");return std::string(argv[i]);};
-        if(a=="--device")device=std::stoull(value());else if(a=="--output")output=value();else if(a=="--resource-root")resource=value();else if(a=="--cuda-dll")cuda_path=value();else if(a=="--cuda-device")cuda_device=std::stoi(value());else if(a=="--only-bits")only_bits=unsigned(std::stoul(value()));else if(a=="--bench")benchmark=true;else if(a!="--verify")throw std::runtime_error("unknown option "+a);}
+        if(a=="--device")device=std::stoull(value());else if(a=="--output")output=value();else if(a=="--resource-root")resource=value();else if(a=="--cuda-dll")cuda_path=value();else if(a=="--cuda-device")cuda_device=std::stoi(value());else if(a=="--ladder-group")ladder_group=std::stoull(value());else if(a=="--only-bits")only_bits=unsigned(std::stoul(value()));else if(a=="--bench")benchmark=true;else if(a!="--verify")throw std::runtime_error("unknown option "+a);}
         if(output.empty()||std::filesystem::exists(output))throw std::runtime_error("output must be a new file");ntt::Options o;o.device=device;o.resource_root=resource;ntt::Runtime runtime(o);Cuda cuda(cuda_path);std::ostringstream rows;
         if(benchmark)bench(runtime,cuda,cuda_device,rows);else{
             const std::vector<unsigned> grid=only_bits?std::vector<unsigned>{only_bits}:std::vector<unsigned>{31,64,65,127,512,2203,4423,8191,16384};

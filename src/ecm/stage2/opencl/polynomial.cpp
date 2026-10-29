@@ -85,16 +85,14 @@ PolynomialPlan::PolynomialPlan(ntt::Runtime &runtime,const PolynomialOptions &o)
     runtime.upload(p.modulus,o.modulus.data(),p.nw);runtime.upload(p.normalized,ns.data(),p.nw);
     const std::filesystem::path root=Native::resource_root(runtime);
     const auto source=read(root/"goldilocks.clh")+"\n#line 1 \"polynomial.cl\"\n"+read(root.parent_path()/"stage2/polynomial.cl");
-    const char *text=source.c_str();const auto bytes=source.size();cl_int code=0;
-    p.program=clCreateProgramWithSource(Native::context(runtime),1,&text,&bytes,&code);check(code,"polynomial program");
+    cl_int code=0;
     const auto options="-cl-std=CL1.2 -DECM_S4_NW="+std::to_string(p.nw)+" -DECM_S4_BITS="+std::to_string(bits)+
         " -DECM_S4_MERSENNE="+std::to_string(o.mersenne?1:0)+" -DECM_CARRY_GROUP="+std::to_string(p.group)+
         " -DECM_NTT_SPLIT_MUL="+std::to_string(plan.split_multiply?1:0);
-    const auto device=Native::device(runtime);const auto built=clBuildProgram(p.program,1,&device,options.c_str(),nullptr,nullptr);
+    const auto device=Native::device(runtime);p.program=Native::program(runtime,source,options);
     std::size_t log_size=0;check(clGetProgramBuildInfo(p.program,device,CL_PROGRAM_BUILD_LOG,0,nullptr,&log_size),"polynomial log size");
     std::string log(log_size,'\0');if(log_size)check(clGetProgramBuildInfo(p.program,device,CL_PROGRAM_BUILD_LOG,log_size,log.data(),nullptr),"polynomial log");
     while(!log.empty() && log.back()=='\0')log.pop_back();p.log=options+"\n"+log;
-    if(built!=CL_SUCCESS)throw std::runtime_error("OpenCL polynomial compilation failed: "+std::to_string(built)+"\n"+p.log);
     const std::array<const char*,7> names={"ecm_poly_pack","ecm_poly_inputs","ecm_carry_local","ecm_carry_blocks","ecm_carry_finish","ecm_poly_reduce","ecm_poly_pack"};
     for(std::size_t i=0;i<names.size();++i){p.kernels[i]=clCreateKernel(p.program,names[i],&code);check(code,names[i]);
         std::size_t limit=0;cl_ulong local=0;check(clGetKernelWorkGroupInfo(p.kernels[i],device,CL_KERNEL_WORK_GROUP_SIZE,sizeof(limit),&limit,nullptr),"polynomial group limit");

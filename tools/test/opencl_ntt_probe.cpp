@@ -3,6 +3,7 @@
 #endif
 #include <CL/cl.h>
 #include "ecm/opencl/ntt/runtime.h"
+#include "ecm/opencl/ntt/native.h"
 #include "ecm/platform/program_version.h"
 #include <gmp.h>
 #include <algorithm>
@@ -95,6 +96,24 @@ __kernel void arithmetic(__global const ulong *a,__global const ulong *b,__globa
 }
 
 template<class F>void rejects(const char *name,F action,Counts &counts){try{action();}catch(const std::exception&){++counts.guards;return;}throw std::runtime_error(std::string("missing rejection: ")+name);}
+
+void program_cache(const ntt::Options&options,Counts&counts){
+    // Exercise the real program-creation seam, including both key components
+    // and context isolation. All transform tests still check actual outputs.
+    const std::string source="__kernel void cache_probe(__global ulong*x){x[get_global_id(0)]+=1UL;}";
+    const std::string flags="-cl-std=CL1.2";
+    struct Owners{std::vector<cl_program> values;~Owners(){for(auto p:values)clReleaseProgram(p);}} owners;
+    auto get=[&](ntt::Runtime&r,const std::string&s,const std::string&o){auto p=ntt::NativeAccess::program(r,s,o);owners.values.push_back(p);return p;};
+    ntt::Runtime r(options);const auto first=get(r,source,flags);
+    if(get(r,source,flags)!=first)throw std::runtime_error("identical program was not reused");
+    if(get(r,source+"\n// different source",flags)==first)throw std::runtime_error("program cache ignored source");
+    if(get(r,source,flags+" -DCACHE_VARIANT=1")==first)throw std::runtime_error("program cache ignored options");
+    const auto stats=r.programs();if(stats.builds!=3||stats.hits!=1)throw std::runtime_error("program cache accounting");
+    ntt::Runtime other(options);if(get(other,source,flags)==first||other.programs().builds!=1||other.programs().hits)throw std::runtime_error("program escaped its context");
+    auto disabled=options;disabled.cache_programs=false;ntt::Runtime uncached(disabled);
+    get(uncached,source,flags);get(uncached,source,flags);if(uncached.programs().builds!=2||uncached.programs().hits)throw std::runtime_error("disabled program cache reused a program");
+    counts.guards+=6;
+}
 void unchanged_padding(const std::vector<Word> &before,const std::vector<Word> &after,
                        std::size_t n,std::size_t batch,std::size_t stride,std::size_t offset) {
     for(std::size_t i=0;i<before.size();++i){const auto local=i>=offset?(i-offset)%stride:stride;
@@ -168,6 +187,7 @@ int main(int argc,char **argv) {
         Counts counts;const auto started=std::chrono::steady_clock::now();
         for(bool split:{false,true})arithmetic(device,resources,split,counts);
         ntt::Options options;options.device=device;options.budget_bytes=budget_mb<<20;options.resource_root=resources;
+        program_cache(options,counts);
         ntt::Runtime runtime(options);
         for(bool split:{false,true})for(unsigned k:std::vector<unsigned>{1,2,3,4,5,8,10,12,16,20}){
             if(k>max_log2)continue;for(std::size_t batch:{std::size_t(1),std::size_t(3)})ntt_case(runtime,k,batch,128,8,split,counts);

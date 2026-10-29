@@ -138,6 +138,11 @@ def main():
         return rows,log
     rows,_=case('stage2_hit',save_line(257000771,6))
     assert rows[0].get('factors')==['257']
+    # A factor may first appear while constructing [D]Q. Rebasing must publish
+    # that proper factor, rather than dropping it or inventing an affine root.
+    rows,log=case('giant_seed_hit',save_line(257000771,6),d=46)
+    assert rows[0].get('factors')==['257']
+    assert 'Giant points, G trees and fold' in log and 'Normalize fold and descend' not in log
     prime=(1<<127)-1
     line=save_line(prime)
     ordinary,_=case('no_factor',line)

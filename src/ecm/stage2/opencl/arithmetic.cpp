@@ -58,11 +58,9 @@ Arithmetic::Arithmetic(ntt::Runtime &r,const ArithmeticOptions &o):state_(std::m
     if(o.reuse_workspace)p.workspace=std::make_shared<PolynomialWorkspace>();
     p.modulus=r.allocate(p.nw);r.upload(p.modulus,o.product.modulus.data(),p.nw);p.stats.upload_bytes+=p.nw*8;
     const std::filesystem::path root=Native::resource_root(r);
-    const auto source=read(root.parent_path()/"stage2/coefficients.cl");const char *s=source.c_str();const auto len=source.size();cl_int code=0;
-    p.program=clCreateProgramWithSource(Native::context(r),1,&s,&len,&code);check(code,"coefficient program");
-    const auto device=Native::device(r);const auto options="-cl-std=CL1.2 -DECM_COEFF_NW="+std::to_string(p.nw);
-    code=clBuildProgram(p.program,1,&device,options.c_str(),nullptr,nullptr);
-    if(code!=CL_SUCCESS){std::size_t n=0;clGetProgramBuildInfo(p.program,device,CL_PROGRAM_BUILD_LOG,0,nullptr,&n);std::string log(n,'\0');clGetProgramBuildInfo(p.program,device,CL_PROGRAM_BUILD_LOG,n,log.data(),nullptr);throw std::runtime_error("coefficient compile: "+log);}
+    const auto source=read(root.parent_path()/"stage2/coefficients.cl");cl_int code=0;
+    const auto options="-cl-std=CL1.2 -DECM_COEFF_NW="+std::to_string(p.nw);
+    p.program=Native::program(r,source,options);
     unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
 }
 Arithmetic::~Arithmetic()=default;

@@ -6,9 +6,11 @@
 #include "native.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -33,7 +35,7 @@ std::string platform_text(cl_platform_id p) {
     while(!out.empty() && out.back()=='\0')out.pop_back();return out;
 }
 struct Device {cl_platform_id platform;cl_device_id device;DeviceInfo description;};
-std::vector<Device> inventory() {
+std::vector<Device> enumerate_devices() {
     cl_uint count=0;const auto status=clGetPlatformIDs(0,nullptr,&count);
     if(status==-1001)return {}; // CL_PLATFORM_NOT_FOUND_KHR; no ICD installed.
     checked(status,"clGetPlatformIDs");
@@ -73,6 +75,11 @@ std::vector<Device> inventory() {
     }
     return result;
 }
+const std::vector<Device>& inventory() {
+    // Stable indices within one process. Curve workers are isolated processes;
+    // driver/device errors still propagate through context/command creation.
+    static const auto snapshot=enumerate_devices();return snapshot;
+}
 std::string read_source(const std::filesystem::path &p) {
     std::ifstream f(p,std::ios::binary);if(!f)throw std::runtime_error("cannot read OpenCL resource: "+p.string());
     return {std::istreambuf_iterator<char>(f),std::istreambuf_iterator<char>()};
@@ -108,9 +115,13 @@ struct RuntimeState {
     cl_command_queue queue=nullptr;
     MemoryInfo memory;
     bool profiling=false;
+    bool cache_programs=true;
+    ProgramInfo programs;
+    std::map<std::pair<std::string,std::string>,cl_program> program_cache;
     std::string source,resource_root;
     ~RuntimeState() {
         if(queue){(void)clFinish(queue);clReleaseCommandQueue(queue);}
+        for(const auto& entry:program_cache)clReleaseProgram(entry.second);
         if(context)clReleaseContext(context);
     }
 };
@@ -183,7 +194,7 @@ struct CompletionState {
     }
 };
 
-std::vector<DeviceInfo> devices() {std::vector<DeviceInfo> out;for(auto &d:inventory())out.push_back(std::move(d.description));return out;}
+std::vector<DeviceInfo> devices() {std::vector<DeviceInfo> out;for(const auto &d:inventory())out.push_back(d.description);return out;}
 Buffer::Buffer(std::shared_ptr<BufferState> s):state_(std::move(s)){}
 std::size_t Buffer::words()const{return state_?state_->count:0;}
 Completion::Completion(std::shared_ptr<CompletionState> s):state_(std::move(s)){}
@@ -196,11 +207,12 @@ double Completion::seconds()const {
     if(end<begin)throw std::runtime_error("nonmonotonic OpenCL profiling timestamps");return double(end-begin)*1e-9;
 }
 Runtime::Runtime(const Options &o):state_(std::make_shared<RuntimeState>()) {
-    const auto list=inventory();if(o.device>=list.size())throw std::out_of_range("OpenCL device index unavailable");
+    const auto& list=inventory();if(o.device>=list.size())throw std::out_of_range("OpenCL device index unavailable");
     const auto &d=list[o.device];if(!d.description.supported)throw std::runtime_error(d.description.reason);
     if(!o.budget_bytes)throw std::invalid_argument("OpenCL payload budget must be positive");
     const Word endian=1;if(*reinterpret_cast<const unsigned char*>(&endian)!=1)throw std::runtime_error("little-endian host required");
     state_->device=d.description;state_->id=d.device;state_->profiling=o.profiling;
+    state_->cache_programs=o.cache_programs;
     state_->memory.budget_bytes=std::min(o.budget_bytes,d.description.global_bytes);
     cl_int code=0;const cl_context_properties properties[]={CL_CONTEXT_PLATFORM,reinterpret_cast<cl_context_properties>(d.platform),0};
     state_->context=clCreateContext(properties,1,&d.device,nullptr,nullptr,&code);checked(code,"clCreateContext");
@@ -216,6 +228,7 @@ Runtime::Runtime(const Options &o):state_(std::make_shared<RuntimeState>()) {
 }
 const DeviceInfo &Runtime::device()const{return state_->device;}
 MemoryInfo Runtime::memory()const{return state_->memory;}
+ProgramInfo Runtime::programs()const{return state_->programs;}
 Buffer Runtime::allocate(std::size_t words){return Buffer(ntt::allocate(state_,words));}
 void Runtime::upload(const Buffer &b,const Word *p,std::size_t n,std::size_t offset) {
     span(b.state_,state_,n,offset);transfer(b.state_,const_cast<Word*>(p),n,offset,true);
@@ -232,6 +245,25 @@ cl_mem NativeAccess::memory(const Buffer &b){if(!b.state_)throw std::invalid_arg
 bool NativeAccess::same_owner(const Buffer &a,const Buffer &b){return a.state_==b.state_;}
 void NativeAccess::span(const Runtime &r,const Buffer &b,std::size_t n,std::size_t offset){ntt::span(b.state_,r.state_,n,offset);}
 std::string NativeAccess::resource_root(const Runtime &r){return r.state_->resource_root;}
+cl_program NativeAccess::program(const Runtime &r,const std::string &source,const std::string &options) {
+    auto& state=*r.state_;const auto key=std::make_pair(source,options);
+    if(state.cache_programs){const auto found=state.program_cache.find(key);
+        if(found!=state.program_cache.end()){checked(clRetainProgram(found->second),"retain cached program");++state.programs.hits;return found->second;}}
+    const auto start=std::chrono::steady_clock::now();const char*text=source.c_str();const auto bytes=source.size();cl_int code=0;
+    auto program=clCreateProgramWithSource(state.context,1,&text,&bytes,&code);checked(code,"clCreateProgramWithSource");
+    const auto built=clBuildProgram(program,1,&state.id,options.c_str(),nullptr,nullptr);
+    state.programs.build_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();++state.programs.builds;
+    if(built!=CL_SUCCESS){std::size_t log_bytes=0;clGetProgramBuildInfo(program,state.id,CL_PROGRAM_BUILD_LOG,0,nullptr,&log_bytes);std::string log(log_bytes,'\0');
+        if(log_bytes)clGetProgramBuildInfo(program,state.id,CL_PROGRAM_BUILD_LOG,log_bytes,log.data(),nullptr);clReleaseProgram(program);
+        throw std::runtime_error("OpenCL program compilation failed: "+std::to_string(built)+"\n"+options+"\n"+log);}
+    if(state.cache_programs){
+        // The cache takes the initial reference, the caller takes a second one.
+        // Roll back on host allocation failure without leaking the new program.
+        try{state.program_cache.emplace(key,program);}catch(...){clReleaseProgram(program);throw;}
+        checked(clRetainProgram(program),"retain new cached program");
+    }
+    return program;
+}
 
 Plan::Plan(Runtime &r,const PlanOptions &o):state_(std::make_shared<PlanState>()) {
     auto &p=*state_;p.runtime=r.state_;
@@ -247,13 +279,10 @@ Plan::Plan(Runtime &r,const PlanOptions &o):state_(std::make_shared<PlanState>()
     if((Word(8)<<p.tile_bits)>r.device().local_bytes)throw std::invalid_argument("NTT tile exceeds local memory");
     const std::string options="-cl-std=CL1.2 -DECM_NTT_TILE_BITS="+std::to_string(p.tile_bits)+
         " -DECM_NTT_SPLIT_MUL="+std::to_string(o.split_multiply?1:0);
-    const char *source=p.runtime->source.c_str();const auto source_size=p.runtime->source.size();cl_int code=0;
-    p.program=clCreateProgramWithSource(p.runtime->context,1,&source,&source_size,&code);checked(code,"clCreateProgramWithSource");
-    const auto built=clBuildProgram(p.program,1,&p.runtime->id,options.c_str(),nullptr,nullptr);
+    cl_int code=0;p.program=NativeAccess::program(r,p.runtime->source,options);
     std::size_t log_size=0;checked(clGetProgramBuildInfo(p.program,p.runtime->id,CL_PROGRAM_BUILD_LOG,0,nullptr,&log_size),"build log size");
     std::string log(log_size,'\0');if(log_size)checked(clGetProgramBuildInfo(p.program,p.runtime->id,CL_PROGRAM_BUILD_LOG,log_size,log.data(),nullptr),"build log");
     while(!log.empty() && log.back()=='\0')log.pop_back();p.log=options+"\n"+log;
-    if(built!=CL_SUCCESS)throw std::runtime_error("OpenCL NTT compilation failed: "+std::to_string(built)+"\n"+p.log);
     p.global=clCreateKernel(p.program,"ecm_ntt_global",&code);checked(code,"global kernel");
     p.tile=clCreateKernel(p.program,"ecm_ntt_tile",&code);checked(code,"tile kernel");
     for(auto k:{p.global,p.tile}) {

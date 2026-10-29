@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -30,6 +31,8 @@ def main():
     parser.add_argument('--d',type=int,default=2310)
     parser.add_argument('--cuda-device',type=int,default=1)
     parser.add_argument('--opencl-device',type=int,default=1)
+    parser.add_argument('--allow-version-difference',action='store_true',
+                        help='Explicitly compare an identified frozen version with a newer implementation')
     a=parser.parse_args()
     if a.out.exists() or not 1<=a.repeats<=20:
         raise SystemExit('Choose a new directory and repeats=1..20')
@@ -49,13 +52,15 @@ def main():
         if not version.startswith('ECM-ELF '):
             raise RuntimeError(f'{backend}: unexpected version {version}')
         versions[backend]=version
-    if len(set(versions.values()))!=1:
+    if len(set(versions.values()))!=1 and not a.allow_version_difference:
         raise RuntimeError('A/B requires the same public version: '+str(versions))
     runs=[]
     manifest={'started_utc':dt.datetime.now(dt.timezone.utc).isoformat(),
               'kind':'production_save_fixed_D_AB','warmup':0,'repeats':a.repeats,
               'gpu_settings_changed':False,'D':a.d,
               'versions':versions,
+              'allow_version_difference':a.allow_version_difference,
+              'inherited_ntt_environment':{k:v for k,v in os.environ.items() if k.startswith(('ECM_OPENCL_','NTT_'))},
               'boundaries':'engine total and full parent process; Stage1 excluded',
               'binaries':{k:{'path':str(v),'sha256':sha(v)} for k,v in binaries.items()},
               'telemetry_before':subprocess.check_output(['nvidia-smi','--query-gpu=index,name,uuid,driver_version,clocks.current.graphics,power.draw,utilization.gpu','--format=csv'],text=True)}

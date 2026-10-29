@@ -29,6 +29,7 @@ struct Options {
     std::size_t device = 0;
     Word budget_bytes = 512ULL << 20; // Owned payload, not device free memory.
     bool profiling = true;
+    bool cache_programs = true; // Context-local exact source/options key; no disk cache.
     std::string resource_root;       // Directory containing goldilocks.clh/transform.cl.
 };
 struct PlanOptions {
@@ -38,6 +39,7 @@ struct PlanOptions {
     bool split_multiply = false;
 };
 struct MemoryInfo { Word live_bytes = 0, peak_bytes = 0, budget_bytes = 0; };
+struct ProgramInfo { Word builds=0,hits=0;double build_seconds=0; };
 struct RuntimeState;
 struct BufferState;
 struct CompletionState;
@@ -73,6 +75,7 @@ public:
     explicit Runtime(const Options &);
     const DeviceInfo &device() const;
     MemoryInfo memory() const;
+    ProgramInfo programs() const;
     Buffer allocate(std::size_t words);
     void upload(const Buffer &, const Word *, std::size_t words, std::size_t offset = 0);
     void download(const Buffer &, Word *, std::size_t words, std::size_t offset = 0);

@@ -14,5 +14,8 @@ struct NativeAccess {
     static bool same_owner(const Buffer &, const Buffer &);
     static void span(const Runtime &, const Buffer &, std::size_t words, std::size_t offset);
     static std::string resource_root(const Runtime &);
+    // Returns a retained program. Each caller still creates private mutable
+    // kernels; a cache hit must never share clSetKernelArg state between plans.
+    static cl_program program(const Runtime &,const std::string &source,const std::string &options);
 };
 } // namespace ecm_opencl::ntt

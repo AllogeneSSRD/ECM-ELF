@@ -14,6 +14,22 @@
 
 NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续使用OpenCL多项式流水线。归一化和最终GCD由CPU/GMP完成。功能边界见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)，构建与性能见 [OpenCL Stage2性能](../performance/OPENCL_STAGE2.md)。
 
+### OpenCL 性能对照开关
+
+以下为当前OpenCL worker的专家环境开关，供同二进制对照；不写入TOML，不影响CUDA。正式运行可全部不设。环境须传给启动器及其曲线子进程；不要把调试覆盖留在后续性能样本中。
+
+| 环境变量 | 默认 | 合法值与作用 |
+|---|---|---|
+| `ECM_OPENCL_POINTS` | `device` | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
+| `ECM_OPENCL_POINT_GROUP` | NVIDIA=`32`，其他=`0` | `0`由运行时选择；正整数须≤设备与点kernel上限。每组点线程数 |
+| `ECM_OPENCL_POINT_CHUNK` | 按目标N位宽/厂商 | `1..4096`；每次点ladder的最多点数，独立于多项式batch；默认表见下文 |
+| `ECM_OPENCL_GIANT_BASE` | `1` | `0\|1`；复用[D]Q，把每点标量iD缩为i。0保留原完整标量对照 |
+| `ECM_OPENCL_CACHE_PROGRAMS` | `1` | `0\|1`；同一context内按完整源代码/选项复用program。关闭后每次计划分别build |
+
+默认点chunk按真实目标N的64-bit limb数w选择：NVIDIA在w≤8时1024、9≤w≤128时256、w>128时16；其他厂商依次为w≤8:1024、w≤32:256、w≤64:128、w≤128:64、其余16。AMD宽位CPU回退不提交点kernel，chunk此时不构成设备性能参数。
+
+`stage2_log_level="phases"`开启点内核、CPU检查/归一化、树阶段与程序缓存的汇总；默认批进度级别不新增这些明细。日志字段与嵌套计时见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)。
+
 ## CUDA 入口
 
 `ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。

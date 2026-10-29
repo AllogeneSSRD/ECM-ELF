@@ -35,7 +35,7 @@ API 接受 log2_length=1..29、tile_bits=1..12 的合法计划，仍须通过预
 
 当前 `multiply` 是同步检查边界：所有设备步骤在同一有序队列提交，步骤间没有主机逐层等待；末尾下载 verdict 和 carry 摘要并等待完成。数值结果保留在设备。任何异常都使该次输出无效，不能用于后续树节点或发布结果。队列错误路径也等待在途命令；尚未注入设备丢失等全部异常情形。
 
-入口依据为 [形状与计划](../../src/ecm/stage2/opencl/polynomial.cpp#L38)、[提交与检查](../../src/ecm/stage2/opencl/polynomial.cpp#L108)、[pack／carry／S4 内核](../../src/ecm/opencl/resources/stage2/polynomial.cl)。原生句柄通过私有 [native.h](../../src/ecm/opencl/ntt/native.h) 在设备算子之间共享，任务层不接触 OpenCL 对象。
+入口依据为 [形状与计划](../../src/ecm/stage2/opencl/polynomial.cpp#L38)、[提交与检查](../../src/ecm/stage2/opencl/polynomial.cpp#L106)、[pack／carry／S4 内核](../../src/ecm/opencl/resources/stage2/polynomial.cl)。原生句柄通过私有 [native.h](../../src/ecm/opencl/ntt/native.h) 在设备算子之间共享，任务层不接触 OpenCL 对象。
 
 一次请求所需的临时 payload 为 8B[2n+3(n/g)+(a+c)+(a+c−1)] bytes，其中 B 是 batch，g 是 carry 工作组，a、c 是两个输入的系数数；包含两份 NTT 数组、三个工作组摘要区与逐系数 verdict。另有两份模数数组、NTT 根表和调用者输入／输出。该公式只统计请求的缓冲需求，不包含驱动、program 或 context。`PolynomialWorkspace` 可由同一 Runtime、单个主机提交线程下的多个计划共用；各缓冲保留容量高水位，因此实际拥有量以 Runtime 账本为准。直接构造的乘法计划默认使用请求级缓冲，`Arithmetic` 默认复用共享工作区。明确的 payload 预算不足可回收空闲 scratch 后按原请求重试一次；不驱逐 F/H 或在途结果，尚未根据预算自动缩减 D 或 batch。
 
@@ -63,7 +63,7 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 
 [Points](../../src/ecm/stage2/opencl/points.h) 是独立于多项式树的设备算子；其 [实现](../../src/ecm/stage2/opencl/points.cpp) 和 [内核](../../src/ecm/opencl/resources/stage2/points.cl) 不依赖 GMP。接受最短小端 limb 表示的奇数目标模数 N≥3，容量上限为 16384 bits；每个 Runtime 由一个主机线程提交。容量不等于全部组合已验收：AMD 当前在构造时拒绝超过 512 位的点算术，包括梅森模数；Intel 未实机验收。该资格门禁只作用于 Points，不限制单独验证的 OpenCL NTT/S4。各方法等待本次 kernel 完成，归一化和 GCD 另排空逐段／逐项 verdict。结果保留设备所有权，跨方法不必下载点或叶子。
 
-点生成对每个无符号 64 位标量独立执行 Montgomery ladder。xDBL 使用 5 次模乘，xADD 使用 CUDA 的 6 次模乘公式及半和／半差，使输出投影缩放也与 CUDA XADD6 一致。SOS 乘法采用完整乘积及 Montgomery 消去；私有容量固定、循环采用运行时 limb 数，限制首次 JIT 的展开。该点模块目前没有专用梅森快速归约，也没有 giant seed/chain。普通表示的输入 X/Z/a24 在设备转换；输出是规范普通表示的 X/Z，k=0 返回无穷远点 (1:0)。同一 Runtime 下的点坐标／叶子标量视图支持 offset 和 stride，不能把不同模数的普通剩余类直接当作同一模数的输入。
+点生成对每个无符号 64 位标量独立执行 Montgomery ladder。xDBL 使用 5 次模乘，xADD 使用 CUDA 的 6 次模乘公式及半和／半差，使输出投影缩放也与 CUDA XADD6 一致。SOS 乘法采用完整乘积及 Montgomery 消去；私有容量固定、循环采用运行时 limb 数，限制首次 JIT 的展开。Points算子没有专用梅森快速归约或差分giant chain；生产引擎的GMP基点复用见下文。普通表示的输入 X/Z/a24 在设备转换；输出是规范普通表示的 X/Z，k=0 返回无穷远点 (1:0)。同一 Runtime 下的点坐标／叶子标量视图支持 offset 和 stride，不能把不同模数的普通剩余类直接当作同一模数的输入。
 
 归一化按段计算 Z 的前缀积，每段一次二进制扩展 GCD 求逆，再反向求各 Z 的逆。段积不可逆时逐点重算，以保留不同 Z 上的互补因子。结果同时返回 affine X 和 gcd(Z,N)：单位点的 GCD 为 1；非单位点的 X 占位为 0，调用者必须先处理对应 GCD，不能直接把占位点用于有效曲线。迭代边界或设备错误使整个调用失败；N 本身不是严格因子，也不能作为命中发布。
 
@@ -72,6 +72,14 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 梅森承载时，先在真实目标 N 上生成、归一化，再将规范代表元提升至 M，且需证明 N 整除 M。不能要求被剥离因子上的 Z 也可逆。生产引擎按M的limb宽度显式扩宽根，在M中计算，最终向N投影后做块积/GCD；独立算子夹具另覆盖同宽零拷贝提升。自动比较普通/承载路线尚未接入。
 
 构建入口增加 `opencl_points_probe.exe`，`--verify` 检查设备点至树／fold／下降／GCD 的小曲线闭环；`--bench` 比较单线程 GMP 与 OpenCL，附加 `--cuda-dll` 可调用独立的现有 CUDA 内核对照。CUDA DLL 由 [build_cuda_points_reference.ps1](../../tools/build/test/build_cuda_points_reference.ps1) 构建；OpenCL 库和默认探针构建不要求 nvcc。计时、操作数、内存／传输公式及资格限制见 [点算子实验记录](../web/opencl-stage2-port-plan-20261027.html#points-closure)。设备GCD不压缩命中结果；生产尾部采用CPU/GMP，不调用该实验设备GCD。
+
+### 程序复用与设备准备
+
+每个Runtime/context维护程序缓存，键为完整源代码和完整编译选项。NTT长度、模数和树节点计划各自保留参数与根表；编译条件相同的计划复用program，每个计划另建独立kernel，避免共享可变参数。缓存不跨context、设备或进程，不写磁盘，也不缓存失败的编译。program和驱动内存不属于owned-buffer账本；`opencl_programs`分别记录实际build、命中与编译API墙钟时间。
+
+设备列表在进程内保持一次枚举快照，稳定编号并减少重复ICD查询。设备热插拔或驱动切换后应重启worker刷新列表；失效设备的context创建、提交、等待错误仍使曲线失败。生产每曲线子进程的资源隔离不变。
+
+依据为 [Runtime与program接口](../../src/ecm/opencl/ntt/runtime.cpp)、[私有算子桥接](../../src/ecm/opencl/ntt/native.h)。缓存键、禁用开关、context隔离与实际NTT输出由 [NTT探针](../../tools/test/opencl_ntt_probe.cpp) 检查。
 
 ## 生产 Stage2 入口
 
@@ -82,11 +90,15 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 1. 验证target N及可选承载M；读取OpenCL设备与owned-payload预算，固定D或从共享D表按基本模型选型。
 2. 创建原生有序队列，执行设备多项式乘法启动检查。
 3. 生成baby点，CPU每256个分母一次批量求逆，上传规范根并构造F树与逆多项式。
-4. 分批生成giant点，按相同边界归一化，构造G树并fold。设备ladder每次提交的点数按位宽限制，独立于多项式batch；尚无giant chain。
-5. 执行scaled下降并读回叶子；每条曲线选三个baby位置，以全giant范围的独立GMP乘积核对叶子，GPU点另按批取样核对。
+4. 先用GMP计算一次Qᴅ=[D]Q并检查其分母，再按[i]Qᴅ生成giant点，按相同边界归一化，构造G树并fold。种子出现真因子直接正常发布；饱和且没有真因子则失败。设备ladder每次提交点数独立于多项式batch；尚无逐点差分giant chain。
+5. 执行scaled下降并读回叶子；每条曲线选三个baby位置，以全giant范围的独立GMP乘积核对叶子。设备点和重标定后的CPU点另按批取样，始终从原始Q及完整iD标量重新ladder，不能用Qᴅ充当独立oracle。
 6. CPU每64叶子归并并做GCD；饱和块继续检查单叶。因子须严格整除target N，设备排空及检查全部成功后才回调生产发布流程。
 
 AMD点模块超过512 bits的资格限制保持不变；生产引擎显式使用CPU点生成，而F/G/NTT/S4/下降仍在OpenCL设备上。不可逆分母逐点定位真因子；仅出现模N饱和、无法形成仿射根且未得到真因子时失败，不用伪造零根发布NF。
+
+NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。≤512 bits每次至多1024点，513～8192 bits至多256点，更宽至多16点。其他厂商保留运行时工作组及原有位宽分块。此上限是提交策略，不是所有显示设备/标量长度的超时保证；`opencl_point_command.max_kernel_seconds`记录实测最长点命令。
+
+诊断细节仅在phases及以上日志级别输出。`opencl_points.coordinates`含点分配、提交、等待、坐标回读与GMP导入；`kernel`是其中嵌套的设备事件总时长。sample_checks、normalize、seed分别计时；这些点明细包含于baby/giant。`opencl_split`区分baby、F/逆、giant、G/fold，`opencl_tail`单列叶子oracle、下降、积/GCD，禁止将嵌套字段重复相加。专家对照开关见 [Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
 
 OpenCL使用独立的保守owned-buffer模型与runtime硬预算，不能把设备global memory当作free。arena=0时默认预算为global的一半与1GiB中的较小值；显式arena为payload上限，F树、结果、临时区和根表共同计账。基本准入模型还保留32MiB固定裕量，可能拒绝本可容纳的极小预算。失败不会自动放宽预算，也不推进完成收据。
 

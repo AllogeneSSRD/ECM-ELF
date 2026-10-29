@@ -18,7 +18,7 @@ void double_mod(std::vector<Word>&a,const std::vector<Word>&n){Word c=0;for(auto
     if(c||ge(a.data(),n)){Word borrow=0;for(std::size_t i=0;i<a.size();++i){const Word x=a[i]-n[i],b1=a[i]<n[i],y=x-borrow,b2=x<borrow;a[i]=y;borrow=b1|b2;}}}
 }
 struct PointState {
-    ntt::Runtime runtime;std::vector<Word> n;std::size_t nw;Word ninv=0;
+    ntt::Runtime runtime;std::vector<Word> n;std::size_t nw,ladder_group=0;Word ninv=0;
     ntt::Buffer constants;cl_program program=nullptr;std::array<cl_kernel,5> kernels{};PointTiming timing;
     PointState(ntt::Runtime&r,const std::vector<Word>&v):runtime(r),n(v),nw(v.size()){}
     ~PointState(){try{runtime.finish();}catch(...){}for(auto k:kernels)if(k)clReleaseKernel(k);if(program)clReleaseProgram(program);}
@@ -34,8 +34,9 @@ struct PointState {
     Word stride(const Polynomial&p)const{return p.size>1?nw:p.stride;}
     void canonical(const std::vector<Word>&v)const {if(v.empty()||v.size()%nw)throw std::invalid_argument("point limb shape");
         for(std::size_t i=0;i<v.size();i+=nw)if(ge(v.data()+i,n))throw std::invalid_argument("noncanonical point input");}
-    void launch(cl_kernel k,std::size_t count){cl_event event=nullptr;
-        check(clEnqueueNDRangeKernel(Native::queue(runtime),k,1,nullptr,&count,nullptr,0,nullptr,&event),"point launch");
+    void launch(cl_kernel k,std::size_t count,std::size_t group=0){cl_event event=nullptr;
+        const auto global=group?((count+group-1)/group)*group:count;
+        check(clEnqueueNDRangeKernel(Native::queue(runtime),k,1,nullptr,&global,group?&group:nullptr,0,nullptr,&event),"point launch");
         // Always drain before local buffer owners leave scope, including errors.
         const auto code=clWaitForEvents(1,&event);cl_int status=0;const auto query=clGetEventInfo(event,CL_EVENT_COMMAND_EXECUTION_STATUS,sizeof(status),&status,nullptr);
         cl_ulong start=0,end=0;const auto ps=clGetEventProfilingInfo(event,CL_PROFILING_COMMAND_START,sizeof(start),&start,nullptr);
@@ -46,7 +47,7 @@ struct PointState {
     void verdict(const ntt::Buffer&bad,std::size_t count,bool recovery=false){std::vector<Word>v(count);runtime.download(bad,v.data(),count);timing.download_bytes+=8*count;
         if(std::any_of(v.begin(),v.end(),[&](Word w){return w!=0&&!(recovery&&w==2);}))throw std::runtime_error("device binary GCD iteration bound");}
 };
-Points::Points(ntt::Runtime&r,const std::vector<Word>&n):state_(std::make_unique<PointState>(r,n)){
+Points::Points(ntt::Runtime&r,const std::vector<Word>&n,std::size_t ladder_group):state_(std::make_unique<PointState>(r,n)){
     auto&p=*state_;if(n.empty()||n.size()>256||!n.back()||!(n[0]&1)||(n.size()==1&&n[0]<3))throw std::invalid_argument("point modulus must be odd, minimal, 3..16384 bits");
     const auto&vendor=r.device().vendor;const bool amd=vendor.find("Advanced Micro Devices")!=std::string::npos||vendor=="AMD";
     // Qualification is narrower than integer capacity. Wide AMD inverse/GCD
@@ -61,11 +62,12 @@ Points::Points(ntt::Runtime&r,const std::vector<Word>&n):state_(std::make_unique
     p.constants=r.allocate(c.size());r.upload(p.constants,c.data(),c.size());
     const auto path=std::filesystem::path(Native::resource_root(r)).parent_path()/"stage2/points.cl";
     std::ifstream f(path,std::ios::binary);if(!f)throw std::runtime_error("cannot read "+path.string());const std::string source{std::istreambuf_iterator<char>(f),{}};
-    const auto*s=source.c_str();const auto len=source.size();cl_int code=0;p.program=clCreateProgramWithSource(Native::context(r),1,&s,&len,&code);check(code,"point program");
-    const auto device=Native::device(r);const auto opts="-cl-std=CL1.2 -DECM_POINT_NW="+std::to_string(p.nw);code=clBuildProgram(p.program,1,&device,opts.c_str(),nullptr,nullptr);
-    if(code!=CL_SUCCESS){std::size_t bytes=0;clGetProgramBuildInfo(p.program,device,CL_PROGRAM_BUILD_LOG,0,nullptr,&bytes);std::string log(bytes,'\0');clGetProgramBuildInfo(p.program,device,CL_PROGRAM_BUILD_LOG,bytes,log.data(),nullptr);throw std::runtime_error("point compile: "+log);}
+    cl_int code=0;const auto device=Native::device(r);const auto opts="-cl-std=CL1.2 -DECM_POINT_NW="+std::to_string(p.nw);p.program=Native::program(r,source,opts);
     unsigned i=0;const cl_int nw=static_cast<cl_int>(p.nw);
     for(const char*name:{"point_ladder","point_normalize","point_products","point_gcd","point_recover"}){auto k=clCreateKernel(p.program,name,&code);p.kernels[i++]=k;check(code,name);check(clSetKernelArg(k,0,sizeof(nw),&nw),"point runtime width");}
+    std::size_t limit=0;check(clGetKernelWorkGroupInfo(p.kernels[0],device,CL_KERNEL_WORK_GROUP_SIZE,sizeof(limit),&limit,nullptr),"point ladder group limit");
+    if(ladder_group>limit||ladder_group>r.device().max_work_group)throw std::invalid_argument("point ladder group exceeds device/kernel limit");
+    p.ladder_group=ladder_group;
 }
 Points::~Points()=default;
 std::size_t Points::words()const{return state_->nw;}
@@ -80,7 +82,7 @@ ProjectivePoints Points::ladder(const std::vector<Word>&x,const std::vector<Word
     auto ks=p.runtime.allocate(scalars.size());p.runtime.upload(ks,scalars.data(),scalars.size());std::vector<Word>base=x;base.insert(base.end(),z.begin(),z.end());base.insert(base.end(),a24.begin(),a24.end());
     p.runtime.upload(p.constants,base.data(),base.size(),3*p.nw);p.timing.upload_bytes=8*(base.size()+scalars.size());ProjectivePoints out{p.allocate(scalars.size()),p.allocate(scalars.size())};
     auto k=p.kernels[0];const auto c=Native::memory(p.constants),s=Native::memory(ks),ox=Native::memory(out.x.buffer),oz=Native::memory(out.z.buffer);
-    arg(k,0,c);arg(k,1,p.ninv);arg(k,2,s);arg(k,3,count);arg(k,4,ox);arg(k,5,oz);p.launch(k,scalars.size());return out;
+    arg(k,0,c);arg(k,1,p.ninv);arg(k,2,s);arg(k,3,count);arg(k,4,ox);arg(k,5,oz);p.launch(k,scalars.size(),p.ladder_group);return out;
 }
 AffinePoints Points::normalize(const ProjectivePoints&a,std::size_t segment){auto&p=*state_;p.timing={};const Word count=p.validate(a.x);
     if(!segment||p.validate(a.z)!=count||a.x.offset!=a.z.offset||p.stride(a.x)!=p.stride(a.z))throw std::invalid_argument("normalization point layout/segment");
