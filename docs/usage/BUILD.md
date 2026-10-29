@@ -6,6 +6,8 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 ## 构建入口
 
+原生OpenCL Stage2本机入口为 `tools/build/build_stage2_opencl_local.ps1/.bat`，生成 `build_stage2_opencl_local/ecm_opencl_stage2.exe`、GMP DLL与随附 `opencl_resources/{ntt,stage2}`。只需C++、OpenCL头/导入库与GMP，不需要nvcc；可指定 `-Build`、`-OpenClRoot`、`-Gmp`、`-VcVars`，目录由内部忽略文件保护并核对用途。根CMake另提供 `ECM_BUILD_OPENCL_STAGE2=ON`。当前不包含在自动CUDA release拆包中，资源须与EXE一并保留。
+
 独立 CPU Edwards Stage2 使用新功能入口 `tools/build/test/build_cpu_stage2.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
 
 | 程序 | 开发 | 本机生产 | 发布生产 |

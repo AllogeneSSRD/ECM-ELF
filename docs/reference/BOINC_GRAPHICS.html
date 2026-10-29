@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BOINC 图形与屏保机制 · 固定参考</title>
+<style>
+:root{color-scheme:light;--ink:#20343f;--muted:#526a78;--line:#d4dfe5;--green:#176f69}*{box-sizing:border-box}body{margin:0;background:#f3f6f7;color:var(--ink);font:16px/1.85 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1000px;margin:auto;padding:30px 24px 65px}h1{font-size:32px;line-height:1.5}h2{font-size:23px;margin-top:30px}a{color:var(--green);text-underline-offset:3px}.meta,small{font-size:13px;color:var(--muted)}.wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:12px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th{background:#e5eef1}.note{background:#e4f2ed;border-left:3px solid var(--green);padding:12px 18px}li{margin:9px 0}code{font:14px Consolas,monospace;background:#e5edf0;padding:2px 4px;overflow-wrap:anywhere}@media(max-width:600px){main{padding:20px 16px}h1{font-size:26px}th,td{min-width:140px}}
+</style></head><body><main>
+<div class="meta">固定第三方参考 · 查阅日期 2026-10-26 · 不声明 ECM-ELF 已实现相关能力</div>
+<h1>BOINC 图形与屏保机制</h1>
+<p>研究范围为 BOINC 现行图形 API 文档、example_app 样例，以及 SETI@home、Rosetta@home 和 Einstein@Home 的公开图形说明。项目画面包含科学数据摘要、任务背景与装饰动画，三者需要分别解释。</p>
+<p>本仓库的当前可行性与动态概念示意见<a href="../web/gpu-stage1-visualization-20261026.html">GPU Stage1 可视化分析</a>；本页只保留上游机制与研究边界。</p>
+<h2>进程、数据与绘制分开</h2>
+<p>BOINC 的<a href="https://github.com/BOINC/boinc/wiki/Graphics-apps">Graphics apps</a>说明图形由独立程序提供，可作为普通窗口或全屏屏保，允许多个实例并可随时终止。窗口生命周期与科学计算分开。该页显示最近编辑于 2026-03-18。</p>
+<p><a href="https://github.com/BOINC/boinc/wiki/API-for-graphics-apps">图形 API</a>提供 OpenGL 绘制循环以及共享内存、状态文件通信。项目自定义数据可以和进度、CPU 时间、暂停状态及心跳一起发布；文档建议约每秒更新这些状态，并避免无人观看时进行昂贵的数据整理。</p>
+<ol>
+<li>科学程序决定数据何时具有可发布的一致性；图形程序按自己的绘制节奏读取摘要。</li>
+<li>共享内存中的复合状态需要同步，不能假定读者总能看到完整更新。多个图形实例也可能同时存在。</li>
+<li>心跳用于区分科学程序存活与退出；暂停状态应明确显示。心跳与“完成了多少数学工作”是不同信息。</li>
+<li>文档给出 countdown 需求标志：观察器周期性续期，计算侧只在有观察需求时更新昂贵数据。这是样例机制，不是对任意多读者并发都完备的协议。</li>
+</ol>
+<h2>样例源码核对</h2>
+<p>在 2026-10-26 读取的 <a href="https://github.com/BOINC/boinc/blob/master/samples/example_app/uc2.cpp">uc2.cpp</a> 中，update_shmem 先更新心跳，再按 countdown 判断是否整理其他状态。配对的 <a href="https://github.com/BOINC/boinc/blob/master/samples/example_app/uc2_graphics.cpp">uc2_graphics.cpp</a> 在绘制时尝试附加共享内存、续期需求标志，并根据状态显示暂停或心跳超时。该图形还绘制自主运动的几何体：可见“画面持续运动”不等于每帧都发生了新的科学计算。</p>
+<p class="meta">版本边界：源码链接为 master 在查阅日的内容，未固定到提交 SHA；用于解释样例行为，不作为字节级可复现实验或所有项目的实现保证。</p>
+<h2>代表项目的画面语义</h2>
+<div class="wrap"><table><thead><tr><th>项目与一手资料</th><th>科学信息</th><th>视觉组织与边界</th></tr></thead><tbody>
+<tr><td><a href="https://setiathome.berkeley.edu/sah_graphics.php">SETI@home 图形说明</a></td><td>数据分析、候选信号和账户信息。</td><td>星空、旋转面板、配色与不同布局；提供最大帧率及图形 CPU 占用设置。其关于开销很小的历史说明不能推及另一种满载 GPU 程序。</td></tr>
+<tr><td><a href="https://boinc.bakerlab.org/rosetta/rah/rah_graphics.php">Rosetta@home 图形说明</a></td><td>搜索中、已接受、最低能量和已知天然结构；能量与 RMSD 图。</td><td>显示搜索轨迹已有的结构状态和统计量；已知天然结构只在已知时展示。算法摘要比底层指令更适合观看。</td></tr>
+<tr><td><a href="https://ligo.org/wp-content/uploads/2024/06/LIGO-magazine-issue-7.pdf">LIGO Magazine，2015 年第 7 期，第 19 页</a></td><td>Einstein@Home 的当前搜索天区与计算信息。</td><td>经典天球、星座、已知脉冲星和超新星遗迹作为背景，当前搜索点是任务信息；不是在显示计算机中的粒子运动。</td></tr>
+</tbody></table></div>
+<h2>研究条件与不确定性</h2>
+<ul>
+<li>各项目图形能力会随应用、CPU/GPU 路径、操作系统和版本变化。本页列出代表性公开说明，不宣称所有当前任务都有同一种屏保。</li>
+<li>Einstein@Home 主站在本次检索中拒绝抓取，因此采用 LIGO 项目自身的公开资料；结论限于其中描述的经典画面，不推断当前二进制实现。</li>
+<li>没有在本机安装或运行这些 BOINC 应用，也没有测量其 CPU/GPU 开销。不能从屏幕流畅程度推断科学计算吞吐未受影响。</li>
+<li>没有证据表明项目图形通常展示了每个 GPU 线程或每次算术操作；采样、降维和科学摘要与持续绘制是兼容的。</li>
+</ul>
+<div class="note">可迁移的原则：计算拥有真实状态，图形消费可丢弃的快照；科学采样频率、绘制帧率和装饰运动各有含义。</div>
+</main></body></html>

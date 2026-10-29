@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GPUOWL／PRPLL 与 PrMers：OpenCL 内核如何编译为 CUDA</title>
+<style>
+:root{color-scheme:light;--bg:#f4f6f8;--ink:#203248;--muted:#5c6d80;--line:#dce4ec;--green:#176759;--soft:#e8f4ef;--amber:#fff3d7}*{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--bg);font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1180px;margin:auto;padding:35px 24px 75px}header,section{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin-bottom:22px}h1{font-size:32px;line-height:1.4;margin:10px 0 16px}h2{font-size:23px;margin:0 0 17px}h3{font-size:18px;margin:23px 0 8px}p{margin:8px 0 15px}a{color:var(--green)}ul,ol{padding-left:24px}li{margin:6px 0}.meta,.evidence{font-size:13px;color:var(--muted)}.lead{font-size:20px}.badge{display:inline-block;border-radius:20px;background:var(--soft);color:var(--green);font-size:13px;padding:3px 12px;margin-right:6px}.callout{background:var(--soft);border-left:4px solid var(--green);padding:15px 18px;margin:18px 0}.warn{background:var(--amber);border-left-color:#c18d1c}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#eef3f6}code,.path{font:13px/1.7 Consolas,monospace;overflow-wrap:anywhere}code{background:#eef3f6;padding:1px 4px;border-radius:3px}.flow{display:grid;grid-template-columns:1fr 30px 1fr 30px 1fr;gap:7px;margin:20px 0}.node{border:1px solid var(--line);border-radius:10px;background:#f7f9fb;padding:17px}.node b{display:block;color:var(--green)}.arrow{align-self:center;text-align:center;color:var(--muted);font-size:25px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{padding:18px;border:1px solid var(--line);border-radius:10px;background:#f8fafb}pre{padding:15px;background:#f1f5f8;border-radius:8px;overflow:auto;font:13px/1.7 Consolas,monospace}.small{font-size:14px}nav{display:flex;flex-wrap:wrap;gap:6px 17px;font-size:14px}footer{font-size:13px;color:var(--muted)}@media(max-width:800px){main{padding:18px 12px 40px}header,section{padding:20px}h1{font-size:27px}.flow,.pair{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}table{min-width:730px}}@media print{body{background:white}main{padding:0;max-width:none}header,section{border-radius:0;break-inside:avoid}nav{display:none}.scroll{overflow:visible}table{min-width:0}}
+</style></head><body><main>
+<header>
+<div class="meta">固定第三方源码资料 · 核对日期 2026-10-27 · 本地 GPUOWL／PRPLL 与 PrMers/Aevum 副本</div>
+<h1>一份 .cl 内核，如何走 OpenCL 和 CUDA 两条编译路线</h1>
+<p class="lead">核心是“受约束的源码转换＋设备兼容头＋主机运行时适配”。CUDA 路线将 OpenCL 风格源码转成 CUDA C++，由 NVRTC 编译，再通过 CUDA Driver API 加载和运行。</p>
+<span class="badge">共享设备算法源码</span><span class="badge">NVRTC 运行时编译</span><span class="badge">有限 OpenCL 子集</span>
+<div class="callout"><b>三个名称对应的对象：</b>本地 <code>.refactor/gpuowl/</code> README 自称 PRPLL；PrMers 的 Marin／内部 NTT 路线仍使用原生 OpenCL；PrMers 的 CUDA 路线来自 <code>third_party/aevum/</code> 的 PRPLL 派生引擎。它们不能合称为“PrMers 的所有 OpenCL 内核都自动支持 CUDA”。</div>
+<nav><a href="#pipeline">编译链</a><a href="#translation">源码转换</a><a href="#runtime">主机适配</a><a href="#prmers">PrMers 路由</a><a href="#comparison">实现差异</a><a href="#limits">适用范围</a><a href="#adaptation">Stage2 启示</a><a href="#identity">源码身份</a></nav>
+</header>
+
+<section id="pipeline"><h2>1. 实际编译链</h2>
+<div class="flow"><div class="node"><b>同一批 .cl 文件</b>数学函数、NTT、carry<br>编译宏与形状参数<br>打包为主机字符串</div><div class="arrow">→</div><div class="node"><b>两条前端路线</b>OpenCL：驱动编译器<br>CUDA：源码转换＋兼容头<br>交给 NVRTC 的已是 CUDA C++</div><div class="arrow">→</div><div class="node"><b>各自加载和运行</b>OpenCL program / kernel / queue<br>CUDA module / function / stream<br>共享上层数学流程</div></div>
+<p>NVIDIA 官方将 NVRTC 定义为 CUDA C++ 运行时编译库；因此这里的“编译 OpenCL 内核”依靠项目自己先适配源语言。NVRTC 的输出可以是 PTX 或 CUBIN，再交给 Driver API 加载。见 <a href="https://docs.nvidia.com/cuda/nvrtc/index.html">NVIDIA NVRTC 说明</a>。</p>
+<ol>
+<li><b>构建主机程序：</b>PRPLL 的 Makefile 用普通 C++ 编译器构建主机。<code>make CUDA=1</code> 选择 CUDA 兼容实现并链接 NVRTC、CUDA Driver；<code>CUDA=0</code> 使用 OpenCL。这里没有要求用 nvcc 逐个离线编译 .cl。</li>
+<li><b>打包资源：</b><code>genbundle.sh</code> 将 .cl 与兼容头变为字符串。兼容头在 bundle 中必须排第一：CUDA 编译传入它，原生 OpenCL 编译跳过它。</li>
+<li><b>组装一次具体编译：</b><code>KernelCompiler::build</code> 创建包含目标 .cl 的程序，连同虚拟头和形状宏调用名为 clCompileProgram 的入口。CUDA 构建中这个名字指向本地适配函数。</li>
+<li><b>转换语言：</b>主源码和各虚拟 .cl 头经过 <code>preprocessOpenCL</code>，注入 <code>opencl_compat.cuh</code>。转换后源码作为 prpll_kernel.cu 等 CUDA C++ 编译单元提交。</li>
+<li><b>NVRTC 编译：</b><code>nvrtcCreateProgram → nvrtcCompileProgram → nvrtcGetPTX</code>；当前本地 PRPLL 还尝试获取匹配 sm 的 CUBIN。</li>
+<li><b>加载与启动：</b><code>cuModuleLoadDataEx → cuModuleGetFunction → cuLaunchKernel</code>。缓存命中时跳过源码编译，但依然需要加载设备模块。</li>
+</ol>
+<p class="evidence">PRPLL：Makefile:22–43、111；src/KernelCompiler.cpp:340–365；src/cuda/clwrap_cuda.cpp:362–479；src/cuda/cudawrap.cpp:448–503。模块和启动语义分别见 <a href="https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__MODULE.html">Driver Module API</a>、<a href="https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__EXEC.html">Driver Execution API</a>。</p>
+</section>
+
+<section id="translation"><h2>2. 源码转换：预处理器与兼容头各做一半</h2>
+<p><code>preprocessOpenCL</code> 是按已知源码写法扫描和改写的转换器；兼容头负责类型、函数和宏。两者配合很重要，例如不能把 OpenCL 的 __global 直接宏定义为空，否则容易误伤 CUDA 的 __global__。</p>
+<div class="scroll"><table><thead><tr><th>OpenCL 写法或行为</th><th>CUDA 路线</th><th>注意点</th></tr></thead><tbody>
+<tr><td>kernel / __kernel</td><td>extern "C" __global__</td><td>保留可按原名字查询的导出内核，避免 C++ 名字改编。</td></tr>
+<tr><td>普通助手函数</td><td>NVRTC 的 -default-device</td><td>不必给每个原 OpenCL 函数补写 __device__。</td></tr>
+<tr><td>global / __global 指针</td><td>扫描器移除地址空间限定</td><td>这是 OpenCL 指针限定符，与 CUDA 内核函数限定符不是同一语义。</td></tr>
+<tr><td>local 固定数组</td><td>改写为 __shared__ 数组</td><td>local 函数参数则移除限定；处理依赖源码模式，动态 local 参数需单独实现。</td></tr>
+<tr><td>constant 指针</td><td>const 指针</td><td>不等同于把数据放入 CUDA __constant__ 符号；缓存策略取决于实际生成代码。</td></tr>
+<tr><td>KERNEL(WG)／reqd_work_group_size</td><td>extern "C"、__global__ 与 __launch_bounds__</td><td>CUDA launch bounds 主要描述上限／资源约束；精确工作组要求仍须由启动端保证。</td></tr>
+<tr><td>overloadable 属性</td><td>移除，使用 C++ 重载</td><td>只处理转换器认识的属性。</td></tr>
+<tr><td>ulong、long2、ulong2</td><td>显式 64 位标量／CUDA longlong 向量类型</td><td>Windows 的 C++ long 通常为 32 位。代码使用 i64 避免直接映射裸 long。</td></tr>
+<tr><td>向量构造、算术和位重解释</td><td>make_type2、运算符重载及 as_type 助手</td><td>覆盖项目用到的类型和形态，不是全部 OpenCL 向量语言。</td></tr>
+<tr><td>get_*_id／size</td><td>threadIdx、blockIdx、blockDim、gridDim</td><td>本地实现存在一维或部分二维假设，详见适用范围。</td></tr>
+<tr><td>mul_hi(ulong, ulong)</td><td>__umul64hi</td><td>按整数高半乘法接入 CUDA 指令；不涉及浮点近似。</td></tr>
+<tr><td>barrier／sub_group_broadcast</td><td>__syncthreads／__shfl_sync</td><td>工作组与 warp 范围不同，调用者必须满足各自参与条件。</td></tr>
+<tr><td>OPENCL pragma、部分 PTX 约束</td><td>删除 pragma；针对已知写法调整 asm 操作数约束</td><td>属于源码适配规则，不能据此保证任意 OpenCL／汇编都可转换。</td></tr>
+</tbody></table></div>
+<h3>为什么转换后仍可高效</h3>
+<p>设备端最终是编译器可见的 CUDA C++，类型助手与数学函数能够内联。内核执行时没有“逐个 OpenCL 指令解释”的过程；额外编译与主机适配成本主要在启动和提交侧。生成代码可能与原生 CUDA 接近，也可能因写法、资源与计划不同而更慢，不能只凭这种架构推导加速比例。</p>
+<p>同一份 .cl 还可以通过 HAS_PTX、CUDA_BACKEND、厂商能力分支使用特定优化。本地 PRPLL 的 math.cl 本身已有 PTX 分支，兼容头选择 NVIDIA 路径；“共享源码”并不要求所有厂商执行完全相同的机器指令。</p>
+<p class="evidence">PRPLL：cudawrap.cpp:221–437；opencl_compat.cuh:16–103、121–247、269–317；cl/math.cl:312–350。</p>
+</section>
+
+<section id="runtime"><h2>3. 主机侧仍需要适配：只改内核语法不够</h2>
+<p>PRPLL 用 <code>tinycuda.h</code> 定义 cl_mem、cl_kernel 等不透明句柄包装，再由 clwrap_cuda.cpp 实现它实际使用的 cl* 子集。上层 Queue、Kernel、Gpu 保留既有调用形式；CUDA 运行时真正管理的是 CUdeviceptr、CUfunction、CUstream 和 CUevent。</p>
+<div class="scroll"><table><thead><tr><th>上层职责</th><th>CUDA 适配</th><th>关键语义</th></tr></thead><tbody>
+<tr><td>clCreateBuffer</td><td>cuMemAlloc＋句柄包装</td><td>cl_mem 主机句柄本身不是设备地址。</td></tr>
+<tr><td>clSetKernelArg</td><td>将已登记 cl_mem 转换为 CUdeviceptr，保存其他标量参数</td><td>本地使用“大小＋对象登记表”判断缓冲参数；新项目可直接使用显式类型，避免隐式猜测。</td></tr>
+<tr><td>command queue</td><td>非阻塞 CUDA stream</td><td>同一 stream 内保持顺序；non-blocking 不代表主机等待自动低 CPU。</td></tr>
+<tr><td>NDRange kernel</td><td>global/local size 换算 grid/block，cuLaunchKernel</td><td>维度、偏移、等待列表和尾组语义必须按支持范围核对。</td></tr>
+<tr><td>读写、复制</td><td>同一 stream 的异步 memcpy；阻塞要求时同步</td><td>不能混入默认流复制并假定会等待非阻塞 stream。主机缓冲寿命仍需保证。</td></tr>
+<tr><td>marker／finish／event</td><td>cuEventRecord、cuStreamWaitEvent、cuStreamSynchronize 等</td><td>设备依赖、完成查询、错误传播和最终排空都是主机适配的一部分。</td></tr>
+</tbody></table></div>
+<p>CUDA 路线中名为 clLinkProgram 的适配主要加载已经由 NVRTC 形成的模块，并不等于实现了所有 OpenCL 分离编译和多程序链接语义。</p>
+<p class="evidence">PRPLL：tinycuda.h:21–61；clwrap_cuda.cpp:507、648、759、799、853、898、985、1061。这些是本地应用子集，不是完整或经过认证的 OpenCL 实现。</p>
+</section>
+
+<section id="prmers"><h2>4. PrMers：Aevum 插件复用同一路线</h2>
+<div class="pair"><div class="card"><h3>Marin／内部 NTT</h3><p>由 PrMers 的 OpenCL 路径组装、创建和编译 program，内核包含 Marin 等来源。已确认的入口仍为真实 clCreateProgramWithSource／clBuildProgram。</p><p class="evidence">include/marin/ocl.h:484–522；include/marin/engine_gpu.h:1336；src/opencl/NttEngine.cpp:20。</p></div><div class="card"><h3>Aevum OpenCL／CUDA</h3><p>同一引擎源码分别构建 OpenCL 插件与 CUDA 插件。CUDA 插件内部使用 .cl 转换器、兼容头、NVRTC 和 Driver API；PrMers 通过 aevum_engine_* C 接口访问它。</p><p class="evidence">third_party/aevum/Makefile:43、94–107；src/EngineApi.h:12–58；scripts/build_aevum_cuda.sh:84–103。</p></div></div>
+<h3>构建与运行选择分开</h3>
+<ul>
+<li>PrMers Makefile 的普通 make 先保证 OpenCL 构建，再按 SDK 检测决定是否构建 CUDA 插件；make aevum-dual 是要求 CUDA 构建成功的入口。</li>
+<li>两个插件使用不同对象输出目录。Linux 共享库使用隐藏可见性和本地符号绑定等措施，减少同名兼容函数与真实 OpenCL 符号互相干扰。</li>
+<li>运行时 EngineAevum 用 LoadLibrary／dlopen 加载插件，通过 C ABI 获取构造、乘法、平方、读写和同步入口。PrMers 主程序仍能使用原生 OpenCL；CUDA 插件并不意味着主程序完全移除了 OpenCL 依赖。</li>
+<li>先把用户所选 OpenCL 设备映射到同一物理 NVIDIA CUDA 设备，不能假定两个设备序号一致。</li>
+<li>当前 choose_api 对两个后端运行相同 workload 探针，核对 residue；auto 模式需要 CUDA 探针每操作时间小于 OpenCL 的 97% 才选 CUDA。显式 cuda 模式可以跳过 3% 收益门槛，但仍要求探针对照一致；不可用或失败时回退。</li>
+</ul>
+<p>这里的 3% 是该适配器的选择门槛，不是 CUDA 比 OpenCL 固定快 3%；探针相同也不构成完整 ECM 任务已经逐项验收的证据。</p>
+<p class="evidence">PrMers：Makefile:126–153；scripts/build_aevum_cuda.sh:87–103；src/aevum/EngineAevum.cpp:72、102、328–348、357、536–603。SDK 与宿主平台的具体构建条件以这些本地文件为准。</p>
+</section>
+
+<section id="comparison"><h2>5. 两份本地副本并非完全相同</h2>
+<div class="scroll"><table><thead><tr><th>项目</th><th>本地 GPUOWL／PRPLL</th><th>本地 PrMers/Aevum</th></tr></thead><tbody>
+<tr><td>设备编译</td><td>NVRTC，可取 PTX 和匹配 sm 的 CUBIN；优先加载 CUBIN，拒绝后尝试 PTX。</td><td>所查 compile 路径返回 PTX，由 Driver 加载／JIT。</td></tr>
+<tr><td>目标架构</td><td>查询 NVRTC 支持列表；匹配时选 sm，否则尝试不高于设备的 compute 目标。</td><td>所查编译入口直接按设备 major/minor 生成 sm 目标，需核对所带 NVRTC 是否支持。</td></tr>
+<tr><td>资源参数</td><td>寄存器限制可以从编译参数中分离，在 PTX 加载路径处理。</td><td>可传 maxrregcount；转换 KERNEL 宏支持 CUDA_MIN_BLOCKS，部分加载限制另有实现。</td></tr>
+<tr><td>厂商变体</td><td>兼容头选择 NVIDIA／PTX 分支。</td><td>编译选项额外将 FFT_VARIANT 的某些 AMD W/H 变体改为 NVIDIA 通用变体。</td></tr>
+<tr><td>NDRange／内建维度</td><td>启动处理 x/y；get_group_id 和 get_local_size 部分处理第二维，其他函数仍有一维写法。</td><td>所查启动主路径及多数 get_* 宏以第一维为主，Graph 子路径还显式拒绝部分维度／依赖情况。</td></tr>
+<tr><td>事件查询失败</td><td>所查 clGetEventInfo 只把 NOT_READY 改为运行，其他查询错误在该分支可能继续报告完成。</td><td>通过 cuda_error_map::eventStatusFromCu 把查询失败映射为负执行状态，避免当作完成。</td></tr>
+<tr><td>选择方式</td><td>常规 Makefile 用 CUDA=0/1 选择构建后端。</td><td>PrMers 可以在同一宿主进程中加载两个引擎插件并按探针选用。</td></tr>
+</tbody></table></div>
+<p class="evidence">PRPLL：clwrap_cuda.cpp:268–291、340、362、898、1099；KernelCompiler.cpp:479–506。Aevum：clwrap_cuda.cpp:242、284–310、713、922；cudawrap.cpp:222、447；EngineAevum.cpp:536。它们的不同实现不在本轮修改范围内。</p>
+</section>
+
+<section id="limits"><h2>6. 对“任意 OpenCL 内核都能编译为 CUDA”的限制</h2>
+<ol>
+<li><b>语法转换不是通用编译器。</b>扫描规则识别特定类型、属性、数组声明和向量构造；它没有完整 OpenCL AST／类型系统。新增内核写法可能需要扩展规则，纯字符串替换也要防止误改注释、字面量或不相关语句。</li>
+<li><b>维度和索引并未完整覆盖。</b>例如 get_global_id(d) 在所查头中仍以 x 计算，部分索引被转为 32 位。不能原样承载我们 Stage2 的 batch 第二维和大偏移。</li>
+<li><b>等待列表不是每个入口都实现。</b>PRPLL 的 clEnqueueNDRangeKernel 参数明确忽略 globalOffset、nWaits、waits；marker 入口却实现了 stream wait。上层必须使用它实际支持的依赖表达，不能把函数名当作完整 OpenCL 合同。</li>
+<li><b>原子与内存模型特化。</b>兼容头将若干 C11 atomic 操作简化为 volatile load/store 与调用者 fence；这是为特定 carry 发布协议设计的实现，不是通用 acquire/release／scope 的完整仿真。新增跨 block 协议必须重新证明可见性与进展。</li>
+<li><b>local、constant、subgroup 各有范围。</b>固定 shared 数组与动态 local 参数不同；const 指针不等于 CUDA constant storage；全 mask shuffle 要求对应线程参与，不能替代任意 subgroup collective。</li>
+<li><b>计时不是完整时间轴。</b>两个兼容实现的部分 profiling 时间戳采用相对起点和 CUDA elapsed time 构造，不能直接用于跨事件绝对时间重建。</li>
+<li><b>编译器、驱动和设备架构仍需匹配。</b>本地 PRPLL 另有 PTX_VERSION 重标号入口；修改 PTX 文本版本号并不能一般性证明旧驱动支持其指令和语义，不应照搬为通用发行兼容方案。</li>
+</ol>
+<p class="evidence">PRPLL：opencl_compat.cuh:35–40、285–317；clwrap_cuda.cpp:250–265、898、1118。Aevum：opencl_compat.cuh:35–40、273–302；clwrap_cuda.cpp:713、944。以上属于源码合同审查，没有通过运行实验宣称这些局限已造成某个用户故障。</p>
+</section>
+
+<section id="adaptation"><h2>7. 对 ECM-ELF OpenCL Stage2 规划的启示</h2>
+<div class="callout"><b>值得采用的是“共享受约束的设备源码”。</b>精确域算术、NTT 索引、pack/carry 和归约主体尽量共用；CUDA PTX／shuffle 与 OpenCL local／subgroup 差异集中在明确原语和少数内核变体。主机侧继续使用自己拥有的设备资源与队列。</div>
+<p>这比维护两套独立 NTT 数学实现更容易核对一致性。它也不要求把 ECM-ELF 的所有 CUDA API 全部伪装成 OpenCL：PRPLL 的 cl* 适配服务于其已有上层调用，ECM-ELF 可以直接在自己的批量运算入口调用 CUDA 或 OpenCL，实现显式的缓冲类型和依赖。</p>
+<ul>
+<li><b>共享层：</b>固定宽度类型、Goldilocks 公式、槽与 carry 合同、索引、数学请求。第一版采用能被两种编译器接受的受限 C 风格表达。</li>
+<li><b>设备原语层：</b>高半乘法、加减进位、工作组存储、同步、subgroup、可选 PTX。接口描述范围与参与条件，避免暗含 warp32。</li>
+<li><b>编译层：</b>OpenCL 用设备驱动编译；CUDA 可选 NVRTC，或由构建期生成等价 CUDA C++ 再离线编译。共享源码与是否运行时编译是两个独立选择。</li>
+<li><b>保留 CUDA 性能控制：</b>现有已验证 PTX 和特化 tile 可以作为 CUDA 专属变体保留；共享化逐算子推进，先固定 D 对照，不能因“统一”就替换已验证的最快路径。</li>
+<li><b>缓存身份：</b>至少包括主体源码、适配头／转换器版本、编译选项、编译器、目标架构及设备／驱动信息；OpenCL binary、CUDA PTX/CUBIN 与性能数据分别标明来源。</li>
+<li><b>首个探针：</b>同一数学主体分别形成 OpenCL kernel 和 CUDA kernel，比较 Goldilocks 边界、正逆 NTT、卷积与 S4 结果，再对比完整吞吐。不能只验证“编译成功”。</li>
+</ul>
+<p>具体实施建议属于 <a href="../web/opencl-stage2-port-plan-20261027.html">OpenCL Stage2 规划草稿</a>，本固定资料不声明 ECM-ELF 已实现双后端共享内核。本轮没有编译或运行这些第三方工程，也没有修改生产程序。</p>
+</section>
+
+<section id="identity"><h2>8. 固定研究身份与定位入口</h2>
+<p>核对的是本地副本，不是实时上游 HEAD。PrMers/Aevum 的 UPSTREAM.md 记录导入基准为 gwoltman/gpuowl 的 <code>294cc485ac8cf53c8b69144a3039832eda573849</code>；它不是当前修改后源码的提交身份。Aevum Makefile 默认版本字符串为 <code>v0.3.108-pass5-prp-max</code>。PRPLL 独立提交身份未在本轮确认，使用下列文件哈希固定关键实现。</p>
+<div class="scroll"><table><thead><tr><th>相对仓库根目录的文件</th><th>关键行</th><th>SHA256 前 16 位</th></tr></thead><tbody>
+<tr><td><a href="../../.refactor/gpuowl/src/cuda/opencl_compat.cuh">.refactor/gpuowl/src/cuda/opencl_compat.cuh</a></td><td>16、35、44、95、269、285、317</td><td><code>5C53B483A09E3CB2</code></td></tr>
+<tr><td><a href="../../.refactor/gpuowl/src/cuda/cudawrap.cpp">.refactor/gpuowl/src/cuda/cudawrap.cpp</a></td><td>221、448、459、469、489、497</td><td><code>021C5DDD5237036B</code></td></tr>
+<tr><td><a href="../../.refactor/gpuowl/src/cuda/clwrap_cuda.cpp">.refactor/gpuowl/src/cuda/clwrap_cuda.cpp</a></td><td>278、340、362、648、759、898、1099</td><td><code>577A43E141CE2A7F</code></td></tr>
+<tr><td><a href="../../.refactor/PrMers/third_party/aevum/src/cuda/opencl_compat.cuh">.refactor/PrMers/third_party/aevum/src/cuda/opencl_compat.cuh</a></td><td>16、35、95、273</td><td><code>6C5768FC3400A805</code></td></tr>
+<tr><td><a href="../../.refactor/PrMers/third_party/aevum/src/cuda/cudawrap.cpp">.refactor/PrMers/third_party/aevum/src/cuda/cudawrap.cpp</a></td><td>222、244、447、458、467、487</td><td><code>24CE2AD6C4F41C3C</code></td></tr>
+<tr><td><a href="../../.refactor/PrMers/third_party/aevum/src/cuda/clwrap_cuda.cpp">.refactor/PrMers/third_party/aevum/src/cuda/clwrap_cuda.cpp</a></td><td>242、284、625、684、713、922</td><td><code>E4BBB31A76D7446B</code></td></tr>
+<tr><td><a href="../../.refactor/PrMers/src/aevum/EngineAevum.cpp">.refactor/PrMers/src/aevum/EngineAevum.cpp</a></td><td>328、357、536–603</td><td><code>3432FA9D89D4ADB6</code></td></tr>
+</tbody></table></div>
+<p>其他入口：<a href="../../.refactor/gpuowl/src/KernelCompiler.cpp">PRPLL KernelCompiler.cpp</a>、<a href="../../.refactor/gpuowl/src/cuda/tinycuda.h">tinycuda.h</a>、<a href="../../.refactor/gpuowl/Makefile">PRPLL Makefile</a>、<a href="../../.refactor/PrMers/scripts/build_aevum_cuda.sh">PrMers CUDA 构建脚本</a>、<a href="../../.refactor/PrMers/third_party/aevum/src/EngineApi.h">Aevum C ABI</a>、<a href="../../.refactor/PrMers/third_party/aevum/UPSTREAM.md">导入来源</a>。</p>
+<p>公开参考：<a href="https://github.com/gwoltman/gpuowl">gwoltman/gpuowl</a> 与 <a href="https://github.com/preda/gpuowl">原 GPUOWL</a>。本报告的行为判断以列出的本地源码为准；外部链接不能替代副本身份。NVIDIA 在线规范核对日期为 2026-10-27，页面显示 NVRTC／Driver API 13.4；不据此推断本机安装版本。</p>
+</section>
+<footer>数学与第三方源码固定资料；允许保留转换示例、接口名称和研究条件。已有队列研究与本报告的行号针对不同冻结副本，引用时应分别核对。</footer>
+</main></body></html>

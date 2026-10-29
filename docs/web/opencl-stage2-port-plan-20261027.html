@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenCL Stage2：可行性与实施规划</title>
+<style>
+:root{color-scheme:light;--bg:#f3f5f8;--ink:#203047;--muted:#596a7f;--line:#dbe3eb;--accent:#176b60;--soft:#e8f4ef;--warn:#fff3d9}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1160px;margin:auto;padding:36px 24px 80px}header,section{background:white;border:1px solid var(--line);border-radius:15px;padding:26px 30px;margin-bottom:22px}h1{font-size:32px;line-height:1.35;margin:10px 0 18px}h2{font-size:23px;line-height:1.5;margin:0 0 16px}h3{font-size:18px;margin:23px 0 8px}p{margin:8px 0 15px}a{color:#176b60}ul,ol{padding-left:24px}li{margin:6px 0}.meta,.evidence{font-size:13px;color:var(--muted)}.lead{font-size:19px}.tag{display:inline-block;background:var(--soft);color:var(--accent);border-radius:20px;padding:3px 11px;margin:3px 6px 3px 0;font-size:13px}.notice{border-left:4px solid #c59229;background:var(--warn);padding:14px 18px;margin:18px 0}.good{border-left-color:var(--accent);background:var(--soft)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:#f6f8fa;border:1px solid var(--line);padding:17px;border-radius:10px}.card b{display:block;margin-bottom:7px}.flow{display:grid;grid-template-columns:1fr 34px 1fr 34px 1fr;align-items:stretch;gap:6px;margin:18px 0}.arrow{align-self:center;text-align:center;font-size:24px;color:var(--muted)}.node{padding:17px;border:1px solid var(--line);border-radius:10px;background:#f7f9fa}.node strong{display:block;color:var(--accent)}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;vertical-align:top;padding:11px 12px;border-bottom:1px solid var(--line)}th{background:#eef3f5}code,.path{font:13px/1.7 Consolas,monospace;overflow-wrap:anywhere}code{background:#eef2f6;padding:1px 4px;border-radius:4px}.formula{padding:15px;background:#f1f5f8;border-radius:9px;font:15px/1.9 Consolas,"Microsoft YaHei",monospace;overflow-wrap:anywhere}.phase{border-left:3px solid var(--accent);padding:0 0 0 20px;margin:22px 0}.phase h3{margin-top:0}.small{font-size:14px}nav{display:flex;flex-wrap:wrap;gap:7px 18px;font-size:14px}footer{color:var(--muted);font-size:13px}@media(max-width:800px){main{padding:20px 12px 45px}header,section{padding:20px}.grid,.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}h1{font-size:27px}table{min-width:760px}}@media print{body{background:white}main{max-width:none;padding:0}header,section{border-radius:0;break-inside:avoid}nav{display:none}.scroll{overflow:visible}table{min-width:0}}
+</style>
+</head>
+<body><main>
+<header>
+<div class="meta">ECM-ELF · 2026-10-27～28 · 源码基线 0.53.6 / 58685253 · 开发草稿：原生 NTT、多项式管线、设备点与 GCD 小闭环</div>
+<h1>将现有 CUDA Stage2 移植为 OpenCL</h1>
+<p class="lead">目标已确认：AMD／Intel 也能运行，优先跨厂商兼容。算法继续采用现有精确 NTT、多项式树与梅森承载路线；先建立通用实现，再针对设备增加优化。</p>
+<span class="tag">保留现有数学算法</span><span class="tag">原生 OpenCL</span><span class="tag">NVIDIA / AMD 基础正确性通过</span><span class="tag">完整 Stage2 待接入</span>
+<div class="notice good"><b>建议立项，但先做有退出条件的小闭环：</b>Goldilocks 算术 → NTT → carry → 普通／梅森 S4 归约。这个闭环验证通过后，再移植驻留树与点生成。现有 OpenCL Stage1 并没有 Stage2 NTT 引擎，不能仅改主程序调用就完成。</div>
+<nav><a href="#ntt-foundation">NTT 验证</a><a href="#s4-closure">整数／S4 验证</a><a href="#tree-closure">驻留树与小曲线</a><a href="#points-closure">点／GCD 与 CPU/CUDA 对比</a><a href="#current">仓库现状</a><a href="#architecture">代码组织</a><a href="#arithmetic">算术与 NTT</a><a href="#memory">内存与队列</a><a href="#tune">选型与 tune</a><a href="#roadmap">实施顺序</a><a href="#validation">验收</a><a href="#sources">源码依据</a></nav>
+</header>
+
+<section id="ntt-foundation">
+<h2>原生 NTT 基础：实施范围与验证</h2>
+<p>用户确认保留现有算法，先实现原生 OpenCL，暂不实现 .cl→CUDA 转换器；本轮另获授权运行正确性验证，完整 Stage2 性能矩阵留待后续。当前完成独立能力/资源基础与 NTT 数学闭环，并未完成 P0 中生产任务解耦、纯形状提取，也未完成 P1 的生产长度性能资格。</p>
+<div class="grid"><div class="card"><b>已经实现</b>Goldilocks64规范算术、mul_hi/32位拆分、DIF/DIT、local tile、全局 radix2、真正二维batch、根表、异步完成资源寿命和显式预算。</div><div class="card"><b>已经验证</b>4060LP和AMD gfx1150：GMP原语、直接DFT、dense round-trip、稀疏循环卷积全结果、偏移/stride和输入拒绝。整数／S4 扩展见下一节。</div><div class="card"><b>仍待接入</b>baby/giant、驻留树/fold/下降、生产task、选型/tune与Intel实机。</div></div>
+<h3>保持的算法与当前实现</h3>
+<p>q=2⁶⁴−2³²+1和单位根生成方式保持。正变换按DIF输出位反序频谱，逆变换按DIT返回自然序；逐点乘法和n⁻¹缩放放在逆tile读取处，不引入额外全长排列缓冲。local tile内使用工作组屏障，外层先采用已有基础算法的全局radix2 pass，不把它称作已完成CUDA生产coop/多radix的性能移植。</p>
+<p>根表保存ω的低/高指数幂，蝶形按指数组合，不进行每蝶形通用幂运算。根表正逆各一份、跨batch共享；默认最大低指数表为4096项。两种高半乘法显式选择，暂不自动调优。该模块不链接CUDA、NVRTC或源码转换器，现有CUDA数学与执行文件未修改。</p>
+<h3>可复现入口</h3>
+<p><a href="../../tools/build/test/build_opencl_stage2_ntt.ps1">tools/build/test/build_opencl_stage2_ntt.ps1</a>建立独立CXX/OpenCL构建。默认产物为 <span class="path">build_opencl_stage2_ntt/opencl_ntt_probe.exe</span>，可用 <code>--list</code> 枚举，或 <code>--verify --device N --max-log2 20 --output FILE</code> 校验。输出文件必须未存在，避免失败后误读旧的通过结果；批次/尺寸/资源属于显式参数。</p>
+<p>构建目录首先写入内部.gitignore。构建记录源码前后SHA256、编译器/CMake/OpenCL/GMP身份和EXE哈希；普通CXX编译，不调用nvcc。当前验证用NVIDIA SDK 11.8提供的OpenCL头/导入库，其API级别不代表运行时驱动版本。可传通用OpenCL SDK根，不要求CUDA内核编译器。NTT库只依赖OpenCL；GMP仅用于独立验证探针。</p>
+<h3>冻结身份与输入</h3>
+<p>日期2026-10-27；主机MSVC19.51.36260、本机GMP；探针显示仓库基线0.53.6，未修改生产版本号。最终EXE SHA256为 <code>6A0AF732410DF783187624CE00386A0BF3DAB8ED0B4740215CA74AB6E57E69B1</code>。证据为 <span class="path">data/experiments/opencl_stage2_ntt_20261027/final/</span>，包含源码快照、二进制、GMP DLL、build_manifest、构建日志和各设备JSON/日志，全部由Git忽略。</p>
+<p>设备1为RTX4060 Laptop、驱动610.88、OpenCL 3.0；设备2为AMD gfx1150、驱动3640.0 (PAL,LC)、OpenCL 2.0。测试只要求OpenCL C1.2，不要求FP64/subgroup/64位原子。NVIDIA设备枚举存在重复项，当前index按平台顺序，不是稳定物理UUID。没有Intel设备；忙碌的4070Ti未运行验证。</p>
+<p>k∈{1,2,3,4,5,8,10,12,16,20}、batch=1/3；两种高半乘法，默认group128/tile8，另测k8和k12的group64/tile5，小长度tile自动限制到k。输入为固定随机种子、q附近边界和64位进位；小长度直接DFT检查位反序位置，大长度检查dense round-trip与稀疏循环卷积的全部输出。stride=n+7、offset=3，周围word作为保护区。</p>
+<div class="scroll"><table><thead><tr><th>每台设备</th><th>检查数量</th><th>结果</th></tr></thead><tbody><tr><td>两种算术路径的GMP比较</td><td>84,810个值</td><td>0错误</td></tr><tr><td>NTT计划组合</td><td>44组</td><td>全部通过</td></tr><tr><td>round-trip／循环卷积</td><td>各8,982,512个word</td><td>逐字一致，保护区未改变</td></tr><tr><td>直接DFT</td><td>496个word</td><td>值与位反序位置一致</td></tr><tr><td>输入/容量/资源边界</td><td>229项</td><td>拒绝非法范围，完成票据保持buffer和plan寿命</td></tr></tbody></table></div>
+<p>payload账本峰值为50,399,696 bytes，约48.07 MiB，表示本模块同时拥有的NTT输入和根表；不含驱动/context/program、测试fixture的其他context或进程内存。该值不是全进程显存峰。测试payload预算256MiB，先检查单对象上限再检查拥有量预算；目前只明确拒绝，不自动减少batch/D。</p>
+<p>本轮是正确性样本，每组合一次；未固定或完整采集AMD频率/功耗，GPU0有外部工作，4060LP查询时1500MHz，本轮没有修改设备设置。日志中的convolution_event_seconds覆盖两次forward及融合inverse，是诊断字段；编译/缓存/主机提交影响未作性能控制，因此不据此比较两卡、CUDA/OpenCL或两种乘法速度，也不推导Stage2加速比。</p>
+<h3>诊断与保留证据</h3>
+<p>run01保留OpenCL编译失败：half是OpenCL保留类型名，移植变量名后解决。run02保留越界夹具错误：很短NTT时，增加一批仍可能落在已经分配的保护区内；修正测试所构造的越界范围，没有放宽实现检查。run03为扩展容量检查前的通过记录，不和最终数量混计。</p>
+<p>MSVC空程序在沙箱内出现C1902，相同命令沙箱外通过；AMD探针沙箱内在算术结果前返回1，相同探针沙箱外通过。本轮只能确认环境相关，未定位到具体PDB通信或AMD驱动内部原因。AMD最终验收在沙箱外进行，不将沙箱退出解释为数学错误，也没有更改全局驱动/电源设置。</p>
+<h3>下一步</h3>
+<p>整数形状、pack→NTT→carry、普通／梅森 S4 已继续完成，见<a href="#s4-closure">算术闭环</a>。下一项是完整小 B2 曲线及树／fold／下降；生产task/planning/tune与更大NTT另做门禁。</p>
+<p>尚未故障注入所有OpenCL事件/设备丢失/释放失败路径；尚无应用层持久程序缓存；2²¹及以上、Intel、长期运行、最终完整Stage2和性能资格均未完成。当前状态以 <a href="../architecture/OPENCL.md#原生-stage2-ntt-基础模块实验">OpenCL架构</a> 为准，本草稿保留实施与失败记录，完成后由用户决定处理。</p>
+</section>
+
+<section id="s4-closure">
+<h2>整数 pack → NTT → carry → S4：实施与正确性</h2>
+<p>该阶段保留 CUDA 的 Kronecker 槽合同、Goldilocks 精确性上界、reciprocal 长除法与梅森折叠。新增的是原生 OpenCL C 内核及设备提交，未实现 .cl→CUDA 转换，也未修改生产 CUDA 算法。接口为 <a href="../../src/ecm/stage2/opencl/polynomial.h">PolynomialPlan</a>，当前只是多项式模乘算子，尚不能消费 worktodo/save。</p>
+<div class="flow"><div class="node"><strong>输入检查与 pack</strong>limb → b-bit digits<br>槽间补零，第二维为 batch</div><div class="arrow">→</div><div class="node"><strong>精确卷积与 carry</strong>2 forward + inverse<br>cone／组内前缀／组间摘要</div><div class="arrow">→</div><div class="node"><strong>S4 与 verdict</strong>普通长除法／梅森折叠<br>设备结果，主机末尾排空检查</div></div>
+<h3>形状、队列与资源</h3>
+<p>S 是当前算术模数位宽，P 是任一输入的系数容量，B 是 batch，b 是 digit 位数，s 是一个槽的 digit 数，n 是 NTT 长度，g 是 carry 工作组。形状入口 <a href="../../src/ecm/stage2/opencl/polynomial.cpp#L38">integer_shape</a> 用精确整数除法替代 GMP 依赖，但遵循现有 <a href="../../src/ecm/cuda/ntt/shape.cpp#L282">CUDA ntt_shape_query</a> 的相同公式。当前保留两份实现，以独立 GMP 夹具检查一致；共享纯规划模块仍待提取。</p>
+<div class="formula">K = 2S + max(1, ceil(log₂P)); s = ceil(K/b); L = Ps<br>L(2ᵇ−1)² &lt; q ⇔ L ≤ floor(floor((q−1)/(2ᵇ−1))/(2ᵇ−1))<br>选择最大的合格 b；n = 最小二次幂 ≥ 2Ps+1，n ≤ 2²⁹</div>
+<p>整数检查支持2≤S≤16384，实际 digit 最大32位。carry 的 R=⌈64/b⌉ 轮 cone 把每个位置缩到0≤x≤2ᵇ；x=2ᵇ产生进位，x=2ᵇ−1传播，其余终止。工作组用 local memory 做前缀扫描，再由每个 batch 的一个工作项扫描组摘要。末端额外检查 R+1 个零扩展位置，避免 cone 预传播掩盖越界高位；有效输出之后的非零 digit 也拒绝。此实现不要求 warp、subgroup 或64位原子。</p>
+<p>B频谱在卷积之后借作carry scratch，不新增第三份全长数组。两份模数数组、根表和调用方输入/输出另计；请求临时payload为 <b>8B[2n+3n/g+(a+c)+(a+c−1)] bytes</b>，a、c分别为两输入的实际系数数。预算限制由共同Runtime账本和单对象上限执行，没有生产arena或自动缩小D/batch。</p>
+<p>所有步骤同队列有序提交，步骤间不插入主机等待。当前 multiply 末尾阻塞下载逐系数 verdict／carry 摘要，再返回成功；输出数值留在设备。输入位宽、槽高位、carry尾部、归约修复失败、结果不在[0,N)均拒绝；异常时该次输出无效。它尚不是跨树层延迟排空的生产接口。</p>
+<p>普通模式输出模N的普通整数表示；梅森模式要求模数自身等于2ˢ−1，输出模M的普通表示。真实任务的N整除M判断、余因子承载选择与最终投影仍属于待接入的任务流程，不能据此宣布生产OpenCL已支持自动承载。</p>
+<h3>入口与冻结证据</h3>
+<p>构建仍用 <a href="../../tools/build/test/build_opencl_stage2_ntt.ps1">build_opencl_stage2_ntt.ps1</a>，同时生成 <span class="path">opencl_ntt_probe.exe</span> 和 <span class="path">opencl_s4_probe.exe</span>。后者使用 <code>--verify --device N --output FILE</code>，可用 <code>--max-bits</code> 缩小算术检查范围；不运行完整Stage2性能矩阵。两个独立目标均复制GMP DLL，算子库自身不依赖GMP。</p>
+<p>最终证据目录 <span class="path">data/experiments/opencl_stage2_s4_20261027/final/</span>，含源码快照、OpenCL资源、EXE、GMP DLL、build_manifest、verification_manifest、原始日志和四份设备结果JSON。S4探针SHA256为 <code>3FB7B7958FC9F643AB9603ACCF153D605F315AC661C200E7CFC4F743372A48A9</code>；内核SHA256为 <code>E2CF84FBC79851173876BF8B9A54AE0116D19CF0BF249FEDC79B967AE402F5AD</code>。源码版本仍为0.53.6，构建及设备条件与本页NTT基础记录相同，当前算术源码/资源及二进制身份按manifest核对。</p>
+<h3>输入与验收口径</h3>
+<p>两卡分别运行同一套检查；4060LP驱动610.88、查询时1500MHz；AMD gfx1150驱动3640.0，未控制频率/功耗。GPU0有外部负载，未运行测试。两卡检查并发，因此不作速度对比。本轮没有修改GPU设置，AMD按已确认的驱动运行条件在沙箱外执行。</p>
+<p>主闭环位宽为{2,31,63,64,65,127,128,129,503,512,1009,2203,4423,8191,8192,16384}；每个位宽普通/梅森各一条路径。mul_hi与32位拆分、group128/tile8与group64/tile5在网格中交替；batch=3，offset=3，输入/输出有不同stride和保护区。四种数据含全零、全上限、固定种子随机和模数/稀疏边界。另有容量1、默认stride/batch和forced bpw=1夹具。</p>
+<p>原始S4检查位宽{64,65,503,4423,8192,16384}，每种普通/梅森×两种高半乘法，各128个输入，包含零、1、模数、全上限及随机数；输入可达2NW+2个64位limb，比生产槽的典型上界更宽。另在512位/P=8192与4423位/P=1024、两种归约下检查2²⁰长度NTT的完整输出；长变换使用稀疏系数，不能代替dense性能测试。</p>
+<div class="scroll"><table><thead><tr><th>每台设备的一套检查</th><th>数量</th><th>判定</th></tr></thead><tbody>
+<tr><td>CPU形状公式，含forced bpw与越界拒绝</td><td>3969组</td><td>与独立GMP/CUDA公式一致</td></tr>
+<tr><td>carry，含跨工作组长链与尾部拒绝</td><td>114,688个word</td><td>与GMP逐digit相同</td></tr>
+<tr><td>S4前完整整数卷积</td><td>174个整数系数</td><td>dense 64-bit输入，与GMP精确整数一致</td></tr>
+<tr><td>原始普通/梅森S4</td><td>238,080个输出word</td><td>0错误</td></tr>
+<tr><td>模多项式乘法</td><td>134次；792,836个主要输出word</td><td>0错误，输出保护区保持</td></tr>
+<tr><td>拒绝/边界/恢复与释放检查</td><td>2819项，包含形状拒绝</td><td>全部通过，payload归零</td></tr>
+<tr><td>原有NTT基础回归</td><td>44组计划；round-trip/卷积各8,982,512个word</td><td>原有229项边界检查及算术/DFT全部通过</td></tr>
+</tbody></table></div>
+<p>S4探针的Runtime payload峰值为19,400,760 bytes≈18.50MiB；NTT探针为50,399,696 bytes≈48.07MiB。两者来自不同进程/输入，不能相加作为进程显存峰。测试预算256MiB，数值包含该Runtime拥有的缓冲，不含驱动/context/program。verification_wall_seconds含GMP、分配、JIT和回读，只作运行记录，不是Stage2吞吐量。</p>
+<h3>保留的失败样本</h3>
+<p>run01的极端carry夹具触发尾部检查错误：保留区digit一致，但cone预传播可把高位推进到区间外，原本只检查最后digit的二进制进位不足。修复为检查零扩展尾部，未放宽GMP oracle或错误门限。run02为512位以内的通过样本，run03、run04为扩充夹具和构建打包规则前的通过记录；均保留原始日志，不与final重复计数。</p>
+<h3>下一阶段</h3>
+<ol><li>提取最小多项式树/逆多项式/fold/下降调用，使用CPU参考点与CPU GCD建立小B2完整曲线闭环，中间系数继续对照。</li><li>把算术模数、设备所有权、预算和任务/选型接口分开，再接生产save/worktodo；本阶段不更改CUDA默认路径。</li><li>按寿命复用workspace，评估减少verdict回读；Intel、2²¹以上、长期运行与设备丢失/事件错误注入另做门禁。</li></ol>
+<p class="evidence">本开发草稿保留失败与实施记录；完整移植完成后提示用户处理，不自动删除。当前有效合同集中在<a href="../architecture/OPENCL.md#整数多项式乘法与-s4">OpenCL架构</a>。</p>
+</section>
+
+<section id="tree-closure">
+<h2>驻留多项式管线与完整小 B2 数学闭环</h2>
+<p>2026-10-28继续推进P2的小曲线与P3的驻留管线。当前设备执行F/G树、Newton逆多项式、fold、scaled root和scaled descent；CPU参考生成Stage1/baby/giant点并计算最终GCD。没有接入生产worktodo/save，没有移植GPU点生成或配置/选型分派，不能将该探针称为生产OpenCL Stage2。</p>
+<h3>代码边界与保留的算法</h3>
+<div class="scroll"><table><thead><tr><th>模块</th><th>职责</th><th>入口</th></tr></thead><tbody>
+<tr><td>域层</td><td>Goldilocks64、DIF/DIT、batch、资源/完成票据</td><td><a href="../../src/ecm/opencl/ntt/runtime.h">runtime.h</a></td></tr>
+<tr><td>整数乘法</td><td>pack、NTT、carry、S4、逐项verdict；只读A/B可共用owner</td><td><a href="../../src/ecm/stage2/opencl/polynomial.cpp#L108">PolynomialPlan::multiply</a></td></tr>
+<tr><td>系数与所有权</td><td>规范系数、window/stride、设备复制/借用、反转/补零/减法、共享scratch及计划缓存</td><td><a href="../../src/ecm/stage2/opencl/arithmetic.cpp">Arithmetic</a>；<a href="../../src/ecm/opencl/resources/stage2/coefficients.cl">coefficients.cl</a></td></tr>
+<tr><td>多项式流程</td><td>不均匀树、分组、Newton逆、fold和scaled下降；不读回完整中间多项式</td><td><a href="../../src/ecm/stage2/opencl/tree.cpp">tree.cpp</a></td></tr>
+<tr><td>独立夹具</td><td>GMP学校式乘法/长除、三角递推求逆、Horner/直接差积、Suyama param0参考点与GCD</td><td><a href="../../tools/test/opencl_stage2_oracle.h">oracle</a>；<a href="../../tools/test/opencl_stage2_probe.cpp">probe</a></td></tr>
+</tbody></table></div>
+<p>F=∏(X−bᵢ)，Gₖ=∏(X−gⱼ)，H初值为1，每块H←HGₖ mod F。逆级数常数项固定为1，使用Newton更新g(2−ag)，复合模数下不对任意非单位系数求逆。下降使用现有CUDA的scaled recurrence；没有替换为逐点Horner或每个节点重新除多项式。Horner和学校式多项式仅存在于独立GMP oracle。</p>
+<p>补齐叶子是常数1，次数为0；非二次幂叶数不会引入额外零根。分组只合并同层同形状的独立请求；F树保留下降节点，G树结构只保留根。规则切片用buffer/offset/stride借用同一层allocation，不规则切片才复制。低层pack分别写A/B digit数组，允许只读同源输入，输出仍禁止与源owner相同。</p>
+<p>所有系数kernel/copy都向同一有序队列提交。pending lease在实际排空前保留输入/输出buffer，因此payload账本不会把在途使用提前释放；末端strided叶子由一次设备打包和一次D2H完成。小型乘法检查仍同步排空，尚未实现跨多层的延迟verdict合并。</p>
+<h3>预算边界</h3>
+<p>多个计划共用一份PolynomialWorkspace。发生明确的owned-payload预算不足时，只回收已空闲scratch，按同一形状、batch和精确性条件重试一次；不吞掉其他OpenCL错误，不降低数学工作量。系数输出分配同样可回收空闲scratch；F树、H、结果和pending lease不被驱逐。仍无自动减小D/P或batch的生产预算规划。</p>
+<p>压力夹具使用96KiB预算，在P=33/batch=1与P=1/batch=32之间切换，并填充到仅余400 bytes。新形状需要更大的摘要和更小的verdict，必须清理不匹配的旧容量才能通过。另有4KiB总预算的真实拒绝与释放检查；合法请求和确实不够预算的请求分开判定。</p>
+<h3>正确性范围</h3>
+<p>离散网格(bits,P)={(31,1),(63,3),(127,5),(512,17),(2203,33),(4423,7),(8191,3),(16384,3)}，各测普通和梅森；另测127位/P=5的逐节点路线。每例逐节点对照F树、独立三角逆级数、每批G/fold余式和最终scaled叶子。GMP最终值同时用Horner与完整差积核对。输入包含0、重复根、固定种子随机根、非二次幂P与尾块；覆盖同源平方、非法窗口/系数、无子树下降、预算拒绝/回收和资源归零。</p>
+<p>完整小曲线使用B1=20、B2=300、D=30、P=4、12个giant点；GMP在主机生成Suyama param0和lcm(1..B1)的Stage1点。逐个检查(B1,B2]内素数有giant±baby表示；真实Stage2命中同时由独立[prime]Q检查。giant范围与CUDA一样保守地取1..⌊B2/D⌋+2，因此差积可能包含B2边界外的额外覆盖，不能反推精确的最小B2。</p>
+<div class="scroll"><table><thead><tr><th>目标N</th><th>算术模数</th><th>点生成/归一化模数</th><th>检查结果</th></tr></thead><tbody>
+<tr><td>257000771 = 257 × 1000003</td><td>N，28 bits</td><td>N</td><td>σ=6；Stage1未命中，Stage2 GCD=257</td></tr>
+<tr><td>2¹²⁷−1</td><td>N：普通／梅森各一例</td><td>N</td><td>σ=26；两条路线GCD=1，全部叶子一致</td></tr>
+<tr><td>164511353 = (2⁴¹−1)/13367</td><td>N与M=2⁴¹−1配对</td><td>分别在N与M上计算，分母均为单位</td><td>σ=6；投影一致，GCD=1</td></tr>
+<tr><td>19495118728903626376364161 = (2⁹¹−1)/127</td><td>N，85 bits；M=2⁹¹−1，91 bits</td><td>两例均在目标N上生成/归一化，梅森例提升代表元</td><td>σ=6；两例GCD=7462001，投影一致</td></tr>
+</tbody></table></div>
+<p>每卡17组树、55次fold、7个曲线/承载用例、90,642个系数word及103项边界/恢复检查通过；S4回归仍包含134次乘法、792,836个主要输出word、174个完整整数系数和2²⁰长度闭环。这里只代表所列网格与夹具，不覆盖全部输入或GPU异常情形。</p>
+<h3>承载归一化的失败样本与处理</h3>
+<p>run01尝试在整个M=2⁹¹−1上求仿射逆，找不到所需的unit-normalized配对。对其因子127的独立小域诊断显示，σ=6..59共有50条Stage1已归零，余下4条的[30]Q归零；全部无法作为整个M的单位分母。该失败保留在run01，未放宽GPU oracle。run02验证可归一化的M41配对；run03和final保留切片/预算完善前的中间通过结果。</p>
+<p>正确的多项式承载不要求点的分母在M的每个额外因子上可逆：当N整除M时，可在目标N上归一化，然后将规范代表元交给模M的加减乘，最终投影回N。这个处理已在CPU参考夹具中验证；生产GPU点阶段的批量逆、非单位恢复和Gamma等仍未移植，不能据此宣称这些GPU功能已实现。</p>
+<h3>少量快速性能对比</h3>
+<p>两个固定数据集：512和2203 bits、N=2ˢ−33、P=32、67个giant根；普通归约，固定随机种子、稠密系数。这些是合成多项式根，不是生产ECM点；benchmark报告中的cpu_points/cpu_gcd描述曲线入口的职责边界，计时中没有ECM点生成或GCD。比较serial（逐节点，共享scratch、借用视图）、batched_transient（分组、请求级scratch、借用）、batched_copy（分组、共享scratch、复制）、batched_reuse（分组、共享scratch、借用）。所有设置的逻辑乘法对数相同，结果均对照GMP。</p>
+<p>每设置显式准备一次后测3次，报告中位数及min/max。这里“稳态”仅指计划已建立，不表示GPU频率/热状态已经稳定。准备轮不属于生产tune，也不影响默认无warmup规则。计时包含F/逆多项式、G/fold、下降、verdict和最终回读；CPU点生成/GCD、Runtime/Arithmetic初始化、初始根上传不在区间。phase_mean_seconds为三个互不重叠段的均值，不能再与总时间相加。H2D/D2H计数是稳态算法流量，不包括计时外计划建表；avoided_copy_bytes仅表示gather复制的避免量，不等于所有kernel访存的减少量。</p>
+<p>该固定流程的逻辑乘法数为31（F树）+64（G树，32/32/3三块）+12（6轮Newton）+9（fold）+1（scaled root）+62（下降）=179。逐节点提交179次，分组后44次，数学工作量不变。按当前形状公式，512位/P+1=33的最大请求为2¹²，2203位为2¹⁴；这是短NTT的管线实验，不能外推到生产2²³等大变换或把总时间换算成单长度NTT Conv/s。</p>
+<div class="scroll"><table><thead><tr><th>设备</th><th>bits</th><th>serial ms</th><th>batched transient ms</th><th>batched copy ms</th><th>batched reuse ms</th><th>serial/reuse</th></tr></thead><tbody id="opencl-tree-bench-rows">
+<tr><td>4060LP</td><td>512</td><td>108.99</td><td>56.22</td><td>66.94</td><td>54.45</td><td>2.00×</td></tr>
+<tr><td>4060LP</td><td>2203</td><td>226.67</td><td>100.00</td><td>113.99</td><td>101.07</td><td>2.24×</td></tr>
+<tr><td>gfx1150 首轮</td><td>512</td><td>93.21</td><td>22.90</td><td>23.88</td><td>36.16</td><td>2.58×</td></tr>
+<tr><td>gfx1150 首轮</td><td>2203</td><td>112.08</td><td>33.12</td><td>41.18</td><td>30.90</td><td>3.63×</td></tr>
+<tr><td>gfx1150 复测</td><td>512</td><td>113.98</td><td>22.03</td><td>24.38</td><td>23.41</td><td>4.87×</td></tr>
+<tr><td>gfx1150 复测</td><td>2203</td><td>94.22</td><td>36.19</td><td>31.94</td><td>31.69</td><td>2.97×</td></tr>
+</tbody></table></div>
+<p><img src="../../data/figures/opencl_stage2_tree_20261028.png" alt="原生 OpenCL 小型 Stage2 多项式流程快速 A/B" style="display:block;width:100%;height:auto"></p>
+<p id="opencl-tree-bench-conclusion"><b>较可靠的方向是同层批处理。</b>4060LP两组约2.00×/2.24×；借用切片相对复制再减少18.7%/11.3%时间，device copy命令346→124。scratch单项为+3.1%/−1.1%，不足以声称普遍加速。AMD两轮都支持批处理收益，但512位借用/复用首轮21.8～45.0ms、复测20.0～24.8ms；复测中相对复制只有4.0%/0.8%差异，不能把首轮回退或某个更快样本解释为稳定的厂商规律。原始两轮均保留，<a href="../../data/figures/opencl_stage2_tree_20261028_amd_retest.png">AMD复测图</a>单列。</p>
+<p>稳态H2D分别768/3360 bytes，D2H分别57,120/140,496 bytes，各设置一致。改善来自更少的请求/检查边界、更好的独立工作并行和更少copy命令，不能解释为少做数学或减少了验证字节。4060LP借用/复用时三段均值比例约为：F/逆34%～37%、G/fold39%～42%、下降/回读21%～28%。首次流程为4060LP约6.9～11.8s、AMD约15.6～21.3s，远大于稳态；这个差额包括按形状建计划、编译、建表/分配与首次执行，尚未拆分到足以全部归因于JIT。后续应优先测量这些准备项。</p>
+<p>设备为RTX4060 Laptop（驱动610.88）及AMD gfx1150（3640.0）；4060启动前查询1200MHz，但500ms遥测168个样本覆盖210～1200MHz（含较长准备间隔），功耗1.59～6.99W，不能据此声称全程锁频；也无法凭此采样精确切分每个很短样本。AMD未控制频率/功耗。GPU0有外部工作，本轮不使用它。正确性检查可跨两设备并发，性能两卡串行且不同时运行本任务的其他GPU探针；跨硬件绝对速度不作归因。结果只用于小型管线方向判断，不是CUDA/Prime95对比，也不证明大B2生产性能。</p>
+<h3>复现、身份与后续</h3>
+<p>构建 <a href="../../tools/build/test/build_opencl_stage2_ntt.ps1">build_opencl_stage2_ntt.ps1</a>，执行 <code>opencl_stage2_probe.exe --verify --device N --output FILE</code> 或 <code>--bench --device N --output FILE</code>。<code>--smoke</code>限制代数网格至127位，仍保留真实小曲线与边界检查；不是完整验收。输出文件必须不存在。图表脚本为 <a href="../../tools/experiments/opencl/report_stage2_probe.py">report_stage2_probe.py</a>，读取两个benchmark JSON，检查二进制身份、设置完整性和逻辑工作量，生成忽略目录中的汇总/图表。</p>
+<p>最新冻结证据为 <span class="path">data/experiments/opencl_stage2_tree_20261028/validated/</span>，含源码/资源、三种EXE、GMP、构建身份、各设备验证/benchmark日志、JSON与遥测。基线0.53.6 / 58685253300207aaa25c545ed30a9f3963ea86b4；实验模块未接生产，不改变生产版本号。Stage2探针SHA256为 <code>00846A8D5E69CF52F9CF10C9B552C2A47B75EAAC07A2247D97B35A2007962B30</code>，完整身份与结果见verification_manifest.json。树/曲线探针的Runtime峰值为1,240,728 bytes≈1.18MiB，S4主Runtime峰值19,400,760 bytes≈18.50MiB；另有独立预算压力context，均非进程显存峰，不能相加。S4当前回归包含2820项边界/资源检查；域NTT源码与前次完整验证一致。全部原始样本保留。</p>
+<ol><li>点阶段：独立ladder、归一化与设备GCD见本页点算子小节；giant seed/chain和生产入口仍待迁移。</li><li>生产任务：接save/worktodo与共同规则，拆分CUDA设备查询；预算模型继续考虑实际驻留与NTT边界，尚未自动缩小D/P或batch。</li><li>提交与准备：拆分首次计划/编译/建表，考虑有界program缓存、常量上传缓存、verdict排空和设备索引gather。当前每次乘法仍归约全部结果系数，逻辑窗口没有减少S4工作；可在保留所有源槽检查的前提下移植CUDA的输出窗口。扩大到真实规模之前保留独立数学门禁。</li><li>资格：Intel、长期运行、2²¹以上、大B2、设备丢失注入与CUDA固定D对照分别验收。本草稿继续保留，由用户在完整移植后决定处理。</li></ol>
+</section>
+
+<section id="points-closure">
+<h2>点生成、归一化与 GCD：设备闭环与成本</h2>
+<p>独立 <a href="../../src/ecm/stage2/opencl/points.h">Points</a> 算子承接普通表示的 Stage1 X/Z/a24 和64位标量列表，原生OpenCL执行ladder、分段前缀积／逆元／反向归一化、块积与二进制GCD。<a href="../../src/ecm/stage2/opencl/points.cpp">主机适配</a>不依赖GMP；<a href="../../src/ecm/opencl/resources/stage2/points.cl">内核</a>沿用CUDA的SOS Montgomery、5乘xDBL与6乘xADD。尚未迁移giant seed/chain、生产save/worktodo、跨limb承载扩宽与自动选择。</p>
+<p>目标N和承载M分开：点生成与求逆在N上，验证N整除M后提升代表元用于多项式；最终gcd以N为准。非单位Z返回单点gcd和无效X占位，任务层必须处理；N本身不是严格因子。当前小曲线使用同limb数的N/M，设备点直接进入F/G树、fold、下降，再接设备GCD。对M剩余类直接逐叶GCD正确；块积必须先投影到N，当前没有通用跨模数投影接口。</p>
+<h3>计算量与流量合同</h3>
+<p>令S为实际目标位数，w=⌈S/64⌉，C为点数，s为归一化段长，L=⌈C/s⌉，b为块积长度，K=⌈C/b⌉。以下是当前普通模数基线的操作计数，不是硬件周期估计；GPU时钟、整数指令调度和private spill会改变时间。</p>
+<div class="formula">一次SOS Montgomery = 2w² 次64×64 MAC；另有进位传播（最坏O(w²)）及O(w)比较／校正<br>k&gt;0、ℓ=bitlength(k)：ladder = 5 + 11(ℓ−1) 次模乘；OpenCL另有3次输入转换、2次输出转换<br>全部点：MAC主项 ≈ 2w² Σ[10+11(ℓᵢ−1)]；k=0只需5次转换模乘<br>正常分段归一化：L次扩展二进制GCD／求逆 + (8C+2L) 次Montgomery<br>块积：2C+K次Montgomery；GCD：每项O(Sw) limb级移位／比较／减法</div>
+<p>归一化段积不可逆时，以独立kernel逐点恢复该段，额外最多C次逆元／GCD；零Z和互补因子仍可区分。当前每次归一化提交热路径和恢复kernel，各自等待完成，再下载检查状态；尚未合并事件等待。二进制GCD不是CPU/GMP的高性能多精度GCD算法，不能仅按操作数预测GPU更快。</p>
+<div class="scroll"><table><thead><tr><th>阶段</th><th>拥有的主要设备payload</th><th>必要主机流量</th></tr></thead><tbody>
+<tr><td>ladder</td><td>常量48w；标量8C；输出X/Z共16Cw bytes</td><td>每次H2D=8C+24w；结果保留设备，验证才下载16Cw</td></tr>
+<tr><td>归一化</td><td>输入16Cw；prefix8Cw；输出X/GCD共16Cw；状态8(C+L) bytes</td><td>检查D2H=8(C+L)；不下载X/Z；常量另计</td></tr>
+<tr><td>块积</td><td>输入8Cw；输出8Kw bytes</td><td>设备衔接时0；CPU/GMP尾部读取块积8Kw</td></tr>
+<tr><td>设备GCD</td><td>输入8Kw；输出8Kw；状态8K bytes</td><td>检查8K；读取完整GCD另需8Kw</td></tr>
+</tbody></table></div>
+<p>这些是各阶段容量合同，不能直接相加当进程峰值；Runtime账本包含仍被调用者持有的旧输出，不含驱动、program或context。设备GCD当前不压缩命中，因此并不减少完整结果的D2H字节数。对少量块积，CPU/GMP尾部仍可能更省成本；需要用实测决定边界。</p>
+<h3>验证与性能证据</h3>
+<div id="points-results">
+<p>最终源码在RTX4060 Laptop上通过31/64/65/127/512/2203/4423/8191/16384位的精确梅森模数网格：65,070个word、29项边界检查、4个小曲线闭环，bad=0。普通512/2203/4423位模数另在性能探针中检查1,491,939个word，含OpenCL/CUDA原始X/Z逐word一致及GMP参考。小曲线B1=20、B2=300、D=30、P=4；28位目标得到257，127位未命中，85位余因子及91位承载均得到7462001。容量范围不等于所有模数和生产组合已验收。</p>
+<p>AMD gfx1150（3640.0 PAL/LC）最终允许31/64/65/127/512位网格和相同4个小曲线，共1,989个word、22项检查，bad=0；4个宽位请求被门禁拒绝，不计作数学通过。宽位普通模数失败后，重复梅森网格也发现不一致，因此超过512位的AMD点算术全部暂停使用。没有完整有效的宽位AMD性能结果，也不影响独立NTT/S4的原有资格。</p>
+<h3>4060LP：CPU、OpenCL 与 CUDA</h3>
+<p>RTX4060 Laptop／驱动610.88；CPU为Ryzen AI 9 HX 370，单线程GMP Zen3构建；版本基线0.53.6，实验探针未接生产。每项n=3，CPU列为三次均值，GPU列为三次中位数。单位均为ms；输入与边界见下方复现说明。</p>
+<div class="scroll"><table><thead><tr><th>S bits</th><th>CPU ladder</th><th>OpenCL ladder kernel</th><th>OpenCL ladder call</th><th>CUDA ladder kernel</th><th>CPU归一化</th><th>OpenCL归一化call</th></tr></thead><tbody><tr><td>512</td><td>52.401</td><td>10.148</td><td>10.459</td><td>6.590</td><td>1.462</td><td>9.418</td></tr><tr><td>2203</td><td>230.095</td><td>300.701</td><td>301.117</td><td>77.950</td><td>8.589</td><td>137.199</td></tr><tr><td>4423</td><td>619.615</td><td>1346.630</td><td>1347.100</td><td>298.776</td><td>24.269</td><td>496.019</td></tr></tbody></table></div><div class="scroll"><table><thead><tr><th>S bits</th><th>CPU块积</th><th>OpenCL块积kernel</th><th>CUDA块积kernel</th><th>OpenCL块积回读</th><th>首次Points构造</th></tr></thead><tbody><tr><td>512</td><td>0.251</td><td>1.918</td><td>0.769</td><td>0.056</td><td>67.826</td></tr><tr><td>2203</td><td>1.758</td><td>30.943</td><td>10.279</td><td>0.103</td><td>9.882</td></tr><tr><td>4423</td><td>5.248</td><td>121.670</td><td>39.129</td><td>0.156</td><td>11.264</td></tr></tbody></table></div><div class="scroll"><table><thead><tr><th>S bits</th><th>16项GCD CPU</th><th>16项GCD OpenCL call</th><th>1024项GCD CPU</th><th>1024项GCD OpenCL call</th></tr></thead><tbody><tr><td>512</td><td>0.042</td><td>2.372</td><td>3.691</td><td>3.155</td></tr><tr><td>2203</td><td>0.296</td><td>27.149</td><td>18.520</td><td>61.221</td></tr><tr><td>4423</td><td>0.638</td><td>92.506</td><td>40.148</td><td>350.388</td></tr></tbody></table></div><p>GCD的OpenCL call含分配、kernel与verdict排空，不含最终GCD数组下载；输入预先驻留设备。CUDA生产尾部没有对应GPU GCD，其CPU/GMP职责由CPU列表示。块积只有16个独立任务，GPU并行度低，不能外推到生产数千块。</p>
+<p><b>表示法影响工作量：</b>OpenCL普通输入块积为2C+K=2064次Montgomery；CUDA预先准备Montgomery输入，生产kernel为C−K=1008次，差距包含转换成本。OpenCL ladder每点多3次基点转换；主要O(w²)计算相同，但调用／私有存储／编译组织不同，尚未剖析出单一原因。CUDA容量8/64/128 limbs，实际w=8/35/70；这是Stage2每点单工作项基线，与Stage1 CGBN TPI无关。</p>
+<p><b>结论：</b>512位OpenCL ladder优于单线程参考，2203/4423位落后于GMP与CUDA。归一化和少量GCD的CPU成本明显更低。512位1024项GCD设备call略快于CPU，其余已测大位宽仍落后，不能默认全部卸载。优先迁移连续点seed/chain，保留CPU少量逆元／GCD尾部，再减少转换与私有数组开销。</p>
+<p><img src="../../data/figures/opencl_points_20261028.png" alt="点生成与GCD的CPU/OpenCL/CUDA比较" style="width:100%;height:auto"></p>
+<p>本轮500ms遥测36个样本，频率1200～1200MHz，功耗6.85～10.92W。没有修改设备设置，采样不能排除短时变化；GPU0的4070 Ti有外部负载，不参与测试。CPU未锁频：保留初轮4423位CPU均值868.45ms，本轮619.62ms；GPU OpenCL约1337→1347ms、CUDA约299ms。该波动不是CPU算法收益。结果不是Prime95或完整Stage2吞吐量，也不是能耗测量。</p><p>首次Points构造不含Runtime/context及可能的首次kernel懒编译；显式准备另行执行，所以不代表完全冷驱动JIT时间。宽位验证的长等待未拆分编译和执行，不报告编译加速比。验证Runtime payload峰值：NVIDIA 190,656、AMD 9,824 bytes；性能探针峰值4,034,848 bytes≈3.85MiB，不含CUDA context、驱动与private scratch，不是进程总峰。CPU参考主存Θ(Cw)，GMP分配器峰值未测。</p><p class="evidence">冻结证据：data/experiments/opencl_points_20261028/verified/，含源码／资源、EXE／DLL、GMP、构建身份、验证和计时JSON／日志、遥测与verification_manifest.json。EXE SHA256：0A5FB1F3EC468B676277B32DA61C242A754AD7554243DE23DB3D297EA12BF88E；CUDA DLL：D95874567BE55EC901CA862D32346F5AB9DE010050AAA635BBD741759487E27C。汇总：data/benchmarks/opencl_points_20261028.json；失败及初轮样本保留在同主题其他子目录。结束时各探针Runtime拥有payload归零。</p></div>
+<h3>复现与待推进</h3>
+<p>原生构建使用 <a href="../../tools/build/test/build_opencl_stage2_ntt.ps1">build_opencl_stage2_ntt.ps1</a>。<code>opencl_points_probe.exe --verify --device N --output FILE</code> 为完整离散网格；<code>--only-bits 2203</code>缩小到一个模数位宽及恢复夹具，不代表完整验收。<code>--bench --device N --output FILE</code>计时；额外<code>--cuda-dll PATH --cuda-device 1</code>调用现有CUDA内核。DLL由<a href="../../tools/build/test/build_cuda_points_reference.ps1">独立CUDA构建</a>生成，不是OpenCL库的依赖。</p>
+<p>图表／汇总由 <a href="../../tools/experiments/opencl/report_points_probe.py">report_points_probe.py</a>生成。实验数据集为nextprime(2ˢ⁻¹+1337)、X=17、Z=3、a24=7，1024个分散的约20位标量；归一化s=32，块积b=64，GCD批量为1/16/256/1024，普通单位样本。每项3次，显式一次基准准备；与生产tune默认无warmup无关。CPU为单线程GMP参考，未用Prime95；CUDA为生产point.cuh的ladder和block_prod，未改生产内核。</p>
+<p>性能分开记录kernel事件、OpenCL方法墙钟、输出下载和首次Points构造。OpenCL方法墙钟含本次分配、输入上传和等待，不含单独输出下载；CUDA adapter墙钟含分配、上传、内核和结果下载，结束于临时资源析构前，所以两者墙钟不能直接相除。CUDA预先准备Montgomery基点和块积输入；OpenCL在设备内转换普通输入，两者kernel工作量存在少量转换差异。CPU行是三次均值，GPU为三次样本及中位数。性能两设备串行，不与本任务的其他GPU探针并发；GPU0外部任务不受影响。</p>
+<ul><li>优先迁移giant seed/chain，使连续点从逐点O(log k)降为主要一次xADD；再做设备Montgomery坐标常驻和归一化转换融合。</li><li>保持热路径／非单位恢复分离；缩减verdict和等待开销，并评估CPU逆元／GCD尾部的混合策略。</li><li>AMD超过512位的点算术尚不稳定，当前入口直接拒绝。local=1、补齐私有数组、取消noinline及关闭编译优化均未形成可靠通用修复；曾通过的宽位梅森网格在重复运行中仍有失败。全部证据保留在opencl_points_20261028的诊断／候选目录，不能以单次成功声明资格。Intel与其他AMD驱动未验收；NTT/S4原有资格单独保留。</li><li>生产接入、跨limb N/M提升、承载投影块积、命中压缩、长期稳定性和大B2仍为TODO；本草稿保留供用户后续处理。</li></ul>
+</section>
+
+<section id="current">
+<h2>1. 当前实现与可复用范围</h2>
+<p>当前 Stage2 的任务流程已经集中，但仍依赖 CUDA：共享类型引用 CUDA 引擎头，task 直接调用 CUDA，planning 直接查询 CUDA 设备和显存。多项式层同时持有算法状态、设备裸指针、NTT arena 和事件。因此需要拆开少量真实职责，不能把这些文件原样加入 OpenCL 构建。</p>
+<div class="scroll"><table>
+<thead><tr><th>部分</th><th>复用判断</th><th>必要工作</th></tr></thead>
+<tbody>
+<tr><td>worktodo、save、曲线进度、结果发布</td><td>大部分主机规则可复用</td><td>移除共享类型与调用点的 CUDA 依赖；沿用单条曲线子进程、检查完成后发布和既有保存范围。</td></tr>
+<tr><td>D 候选、请求拓扑、B2、成功概率</td><td>数学规划可复用</td><td>设备准入和成本查询换成 OpenCL；同一 D 表继续作为唯一来源。</td></tr>
+<tr><td>目标 N／承载 M、因子语义</td><td>可直接复用主机合同</td><td>验证 N 整除 2<sup>p</sup>−1；算术使用 M，逆元、退化判断和最终 GCD 仍以目标 N 为准。</td></tr>
+<tr><td>F/G 树、逆多项式、fold、下降</td><td>算法和请求组织可复用</td><td>拆开 CUDA owner 与多项式操作；驻留视图和寿命需要 OpenCL 实现，不能只复制主机循环。</td></tr>
+<tr><td>Goldilocks NTT、pack、carry、S4</td><td>数学可复用，设备实现必须移植</td><td>重写 PTX、CUDA 内建函数、启动方式、local memory 与同步。</td></tr>
+<tr><td>baby／giant 点生成和批量归一化</td><td>公式可复用</td><td>新增 Stage2 点内核；现有 OpenCL Stage1 算子不是现成的 Stage2 点引擎。</td></tr>
+<tr><td>OpenCL context、资源加载、程序缓存</td><td>有可复用实现</td><td>扩充能力查询、事件、缓冲账本与资源子目录；运行时选择兼容的队列创建入口。</td></tr>
+</tbody></table></div>
+<p class="evidence">依据：types.h:18；task.cpp:165、233；planning/planning.cpp:4、77、205；cuda/context.h:14、20；cuda/product.h:21、57；opencl/runtime/runtime.cpp:90、145、208。</p>
+<p><b>save 接口保持现有支持范围。</b>按普通仿射 X 和已验证的 a24 接入，继续接受当前支持的 Suyama PARAM0／Edwards 保存点。OpenCL Stage1 支持哪些构造方式，不能自动推出 OpenCL Stage2 首版也支持全部方式；需要分别核对输入验证与等价曲线表示。</p>
+</section>
+
+<section id="architecture">
+<h2>2. 推荐代码组织：共享数学流程，设备资源各自拥有</h2>
+<div class="flow">
+<div class="node"><strong>共享任务与数学规划</strong>save / worktodo / D / B2<br>请求拓扑、因子与发布规则</div><div class="arrow">→</div>
+<div class="node"><strong>批量计算职责</strong>点生成、多项式请求<br>驻留视图、检查完成合同</div><div class="arrow">→</div>
+<div class="node"><strong>具体设备实现</strong>CUDA：现有实现<br>OpenCL：新增实现</div>
+</div>
+<ul>
+<li><b>首先建立引擎级入口：</b>运行、规划、形状查询、设备能力与校准。共享 task 不再直接依赖 cuda/api.h；设备类型与性能计时记录也从 CUDA 专属头中分离。</li>
+<li><b>计算内部按批量操作复用：</b>树层请求、批量多项式乘法、根交接、fold 与下降保留共同数学规则。以一次批量请求为单位接入设备实现，避免每个蝶形或 limb 都经过主机虚调用。</li>
+<li><b>OpenCL 视图表达 buffer＋offset＋长度：</b>cl_mem 是不透明对象，不能模拟 CUDA 裸指针运算。拥有者负责释放，借用视图必须附带范围与完成条件；内核显式接收偏移。</li>
+<li><b>形状与执行分离：</b>从 cuda/ntt/shape.cpp 提取纯整数选择与 exactness；设备 pass 计划独立。现有内存描述符可以复用计算方法，但不能直接充当 OpenCL 分配清单。</li>
+<li><b>首版采用独立程序：</b>建议 ecm_opencl_stage2.exe，与 CUDA 版使用同一任务规则和配置定义。由构建绑定引擎即可；运行时加载多个 GPU 后端、跨平台进程改造可以另行推进。</li>
+</ul>
+<p class="small">拟新增位置：<span class="path">src/ecm/stage2/opencl/</span>（设备流程与 owner）、<span class="path">src/ecm/opencl/ntt/</span>（通用精确变换）、<span class="path">src/ecm/opencl/resources/stage2/</span> 与 <span class="path">resources/ntt/</span>（内核）。具体共享文件只随已完成闭环提取，保持现有 CUDA 生产路径可独立构建。</p>
+<div class="notice">不建议建立“把所有 cudaXxx 改写为 clXxx”的兼容层。不同的内存视图、异步读回寿命、事件语义和分配限制会使这种替换掩盖实际约束。设备源码可以另外共享：参考 <a href="../reference/OPENCL_KERNEL_CUDA_COMPILATION.html">PRPLL／PrMers 的 .cl → CUDA 编译分析</a>，将受限 C 风格数学主体分别交给 OpenCL 编译器与 CUDA 适配路径，主机保持各自拥有的资源实现。</div>
+</section>
+
+<section id="arithmetic">
+<h2>3. 算术与 NTT：功能可行，性能的首要风险</h2>
+<h3>3.1 保留 Goldilocks64 与当前精确打包</h3>
+<div class="formula">q = 2<sup>64</sup> − 2<sup>32</sup> + 1<br>2<sup>64</sup> ≡ 2<sup>32</sup> − 1 (mod q)<br>n<sub>terms</sub> · (2<sup>b</sup> − 1)<sup>2</sup> &lt; q</div>
+<p>继续使用同一个 q、根约定、digit 宽 b、槽宽和精确性判定。n<sub>terms</sub> 是一个整数卷积系数的累加项上界，不是随意代入的多项式次数；执行形状必须由共享 shape query 给出。</p>
+<p>OpenCL 的 ulong 低半乘积与 mul_hi 可组成完整 128 位乘积，也可以显式拆成 32 位部分积和进位。先实现可移植、规范范围为 [0,q) 的加减乘，再比较两种写法；不要依赖设备 C 编译器提供 __int128，也不要把 ulong2 当成自动处理进位的 128 位整数。类型与整数函数依据 <a href="https://registry.khronos.org/OpenCL/specs/unified/html/OpenCL_C.html#integer-functions">Khronos OpenCL C 规范</a>。</p>
+<p><b>不要求 FP64。</b>本方案是精确整数 NTT。AMD／Intel 的 64 位整数乘法实际生成与吞吐需要实测，支持 ulong 并不意味着与 32 位乘法同速。若原生高半乘法生成较差，优先比较显式 32 位拆分；只有测出结构性瓶颈后，才另立多素数 NTT＋CRT 方案并重新证明容量、重构和误差合同。</p>
+<h3>3.2 通用 NTT 先按工作组实现</h3>
+<p><b>设备源码维护建议：</b>Goldilocks 公式、NTT 索引、pack/carry 与 S4 主体尽量共享，工作项索引、local/shared、同步和高半乘法通过明确原语接入。CUDA 已验证的 PTX／warp 优化保留为专属变体。可按 PRPLL 的思路用 NVRTC 编译共享源码，也可在构建期生成 CUDA C++；两种方式都需要证明适配语义与完整性能，尚未选定为正式实现。</p>
+<ul>
+<li>功能探针先用简单 radix2；完整性能路径采用 local memory 内融合 tile、全局 outer passes 与根表缓存。</li>
+<li>首版不要求 subgroup。CUDA warp32 shuffle、__syncwarp 及 launch bounds 需要重新组织；work-group barrier 必须由整组一致到达，不能机械替换位于部分线程分支中的 warp 同步。</li>
+<li>现有 outer_coop 是一个 CUDA block 内协作，不是整张 grid 的同步。可按工作组映射其索引与 radix 结构；跨工作组依赖仍以独立 kernel 和队列次序表达。</li>
+<li>工作组和 tile 根据设备及具体 kernel 的资源上限选择。不能照搬 CUDA 的 512-thread tile；建议先比较工作组 64／128／256、多个合法 tile 和 batch。</li>
+<li>subgroup 版本后置，按实际支持的 subgroup 大小与操作选择，保留通用回退。不把 AMD、Intel 的执行宽度写成固定厂商常量。</li>
+</ul>
+<p class="evidence">依据：goldilocks_ptx.cuh:6、40；stage2_scalar.cuh:3、25、49；tile.cuh:209；outer_coop.cuh:1、15；parameters.h:7。同步范围见 <a href="https://registry.khronos.org/OpenCL/specs/unified/html/OpenCL_C.html#synchronization-functions">OpenCL C 同步规范</a>。</p>
+<h3>3.3 carry、S4 与点算术</h3>
+<p>carry 保留精确收敛、残余检查和越槽检测；通用 S4 保留 reciprocal 长除法和商校正；梅森路径保留折叠归约。诊断计数可以先用“每工作组输出＋后续归并”，避免把 64 位原子扩展设为准入条件；部分和范围与最终计数仍需证明，不能因兼容性降低检查强度。</p>
+<p>Stage1 OpenCL 主路径使用 uint limbs，Stage2 当前使用 64 位 words。第一版 Stage2 建议维持 64 位规范数据布局，减少 pack／slot／树之间的转换；点内核先移植标量参考算术。若后续复用 Stage1 的 32 位点算术，应显式转换 limb、容器与 Montgomery R，先核对普通域值再接回 Stage2，不能仅强制转换缓冲指针。</p>
+</section>
+
+<section id="memory">
+<h2>4. 显存与低 CPU 队列必须同时设计</h2>
+<h3>4.1 容量预算包含单对象限制</h3>
+<p>CUDA 版使用 cudaMemGetInfo；OpenCL 核心设备查询没有等价的通用“当前可用显存”承诺。建议使用显式 arena／fold／reserve 预算、本进程实际拥有量、可用的厂商查询以及真实分配结果联合准入。集显共享内存、其他进程和驱动保留空间都使“总内存−本进程占用”不等于可分配空间。</p>
+<div class="formula">每个 Goldilocks 向量：8 · L · B bytes<br>A/B 两份工作区：16 · L · B bytes<br>L=2<sup>27</sup>、B=1：每份 1024 MiB，A/B 合计 2048 MiB<br>tile 原始 local 数组约 8 · 2<sup>t</sup> bytes，另加 padding 与临时量</div>
+<p>这里 B 是同一请求并行处理的卷积数量；公式仅描述对应工作区，不是全进程峰值。carry 是否借用 B、根表、raw、S4 输出、fold、frontier 与暂存都要按寿命分别入账。</p>
+<p>除总预算，还需检查每次分配是否超过 CL_DEVICE_MAX_MEM_ALLOC_SIZE。即使总显存足够，单个 NTT 向量也可能放不下；sub-buffer 不能绕过父对象大小。优先减 batch 或选更小 P/D；batch=1 仍放不下时降低变换规模。跨多个内存对象分片访问属于另一个内核方案，首版不隐式启用。限制依据 <a href="https://registry.khronos.org/OpenCL/specs/unified/html/OpenCL_API.html#device-queries">Khronos 设备查询规范</a>。</p>
+<h3>4.2 队列与等待</h3>
+<ol>
+<li>默认一条有序队列。pack、NTT、carry、S4 与下一层设备请求连续提交，依赖层间不插主机 clFinish。</li>
+<li>按有限提交窗口或待回收事件节流；准备纯查询／休眠前明确 clFlush。仅等待最早必须回收的资源，不把所有后续工作一起排空。</li>
+<li>非阻塞上传和读回的主机缓冲必须活到事件完成；GPU owner、根表、常量和 oracle 快照同样按事件寿命复用。第一版可用简单稳定暂存，之后才测 map／unmap 与主机分配选项。</li>
+<li>计时、完成与错误事件分别处理；负执行状态为失败终态。最终 native wait／读回完成及所有 oracle 排空成功后才能发布。</li>
+<li>不要假设 clWaitForEvents 或 clFinish 在所有驱动都低 CPU。比较原生等待和有界退避，记录进程 CPU 时间与墙钟；先复用已验证的等待原则，再做两个 GPU 时间窗口。</li>
+</ol>
+<p>clFlush 保证提交而不保证完成，跨队列事件还需保证生产队列已提交；见 <a href="https://registry.khronos.org/OpenCL/specs/unified/html/OpenCL_API.html#flush-and-finish">Flush / Finish 规范</a>。本地 GPUOWL／PRPLL 的队列可作组织参考，不能复制其固定计数阈值当作 ECM 的时间预算。</p>
+<p><b>不把 Graph 作为首版依赖。</b>cl_khr_command_buffer 是可选扩展，能力与参数更新需查询；先跑通普通提交路径，再评估固定形状重放。<a href="https://registry.khronos.org/OpenCL/specs/unified/html/OpenCL_API.html#command-buffers">Khronos command buffer 规范</a>。</p>
+</section>
+
+<section id="tune">
+<h2>5. D/P、承载与 tune 如何复用</h2>
+<p>继续共用 D 候选表、P=φ(D)/2、请求拓扑与普通／承载比较。需要替换的是设备能力、可执行 pass 描述、显存准入和成本；不能用 CUDA 的耗时表直接宣称 OpenCL 实测最优。</p>
+<div class="formula">近似：giant ≈ B2/D，G 树数 J ≈ ceil(giant/P)<br>T(D) ≈ T<sub>baby+F+inverse</sub>(P,S) + J·T<sub>G</sub>(P,S) + (J−1)·T<sub>fold</sub>(P,S) + T<sub>descent+GCD</sub>(P,S)</div>
+<p>上式只解释权衡；真实 B1、relocation、尾批与非均匀树必须消费共享 planner 的请求集合。各请求成本再由本后端的 length／batch／tile 实测、S4 成本与传输成本估计。</p>
+<ul>
+<li><b>保留用户批准的宽松复用策略：</b>同一算法实现家族内，设备／驱动等匹配仍可配置忽略。扩展时新增明确的 backend-family、field、packing、计时口径和 kernel-plan 身份。</li>
+<li><b>建议 OpenCL 使用独立 profile 文件或命名空间。</b>CUDA 表可以作为候选先验并标记来源；OpenCL 需要少量点短校准后建立自己的成本比例，不能把外部样本改标为本机 measured。</li>
+<li>不因迁移改变 B1 不必精确匹配的现有原则；普通和承载分别按实际算术位宽、请求形状、驻留／回退路径建模。</li>
+<li>基于模型的 D 邻域搜索、NTT 拐点跳跃、预算内重启继续复用，但显存边界采用本设备真实限制；运行与 tune 必须读同一能力和计划描述。</li>
+<li>普通／承载候选只在验证 N 整除 M 后加入；跨路径性能比较以同一目标 N 和保存点为基准，目标位宽与承载位宽分别记录。</li>
+</ul>
+<div class="notice">当前 Ignore 默认会忽略 backend 等字段，而且 backend 比较实际仍是 CUDA 的 gl_fixed_mode／outer_unroll_u／add_sub_mask。新增 OpenCL 时要先补齐身份语义和来源隔离；否则宽松配置可能把不可比数据当成同类测量。此处是待实施建议，本轮没有改变现有配置规则。</div>
+<p class="evidence">依据：planning/tune_portable.h:299–330；planning/planning.cpp:77、141、179；planning/d_catalog.h:13、1124；modulus.h:33。</p>
+</section>
+
+<section id="roadmap">
+<h2>6. 分阶段交付与进入下一步的条件</h2>
+<div class="phase"><h3>P0 · 最小主机解耦与设备能力</h3><p>分离引擎入口、纯形状、设备能力、公开指标；增加 OpenCL 探针构建与完整 build log、资源身份。运行时查询 OpenCL C／设备版本、64 位整数／地址、local memory、工作组与单对象容量，保存编译日志和程序缓存身份。</p><p class="small"><b>完成条件：</b>CUDA 行为保持；OpenCL 探针不链接 CUDA runtime；不支持的能力明确拒绝。构建文件夹先建立内部 .gitignore。只补必要入口，不进行全仓库 GPU 框架重写。</p></div>
+<div class="phase"><h3>P1 · Goldilocks 与批量 NTT 小闭环</h3><p>完成规范加减乘、根与正逆变换；先 radix2 正确性，再 local tile／outer；比较 ulong 高半乘法与显式 32 位拆分。覆盖小长度、生产长度、batch 与尾批，记录完整卷积吞吐。</p><p class="small"><b>完成条件：</b>边界算术和 GMP／CPU 对照通过，完整卷积正确；至少一台 AMD 与一台 Intel 设备完成各自资格验证后，才声明对应设备支持。若暂缺设备，只能声明已测设备通过。</p></div>
+<div class="phase"><h3>P2 · S4 精确乘法与首条完整曲线</h3><p>接 pack/zero、carry、普通长除法与梅森折叠，保留所有强制检查。以 CPU 参考生成点、OpenCL 多项式运算和 CPU GCD 跑通小 B2 的完整曲线；这是临时验证入口。</p><p class="small"><b>完成条件：</b>中间系数与最终因子正确，失败不发布；真实 save、worktodo 曲线数与进度继续由共同任务流程处理。CPU 点生成、主机暂存必须在日志标明，不能用这个版本声称完整 GPU 移植或生产性能达标。</p></div>
+<div class="phase"><h3>P3 · 驻留多项式管线</h3><p>把 F/G 树、逆多项式、root handoff、fold 和 scaled descent 的设备 owner 接入；实现 buffer＋offset 视图、工作区借用、预算回退和有界 oracle 读回。</p><p class="small"><b>完成条件：</b>相同输入／D／P／内存路径下数学工作量一致；对照层间 H2D／D2H 字节量和实际 owner 寿命。不能退化成每次多项式乘法都下载整个结果。</p></div>
+<div class="phase"><h3>P4 · 点生成与实际运行性能</h3><p>移植 baby、giant seed／chain、批量逆与归一化、非单位元素回退；完整点阶段转入 OpenCL。比较标量 64 位点算术与可选 32 位／协作实现，低 CPU 等待也在完整曲线中验收。</p><p class="small"><b>完成条件：</b>两个曲线族已支持 save 的普通／承载完整运行，正确性与 GPU 资源稳定；可与 CUDA 在同一 NVIDIA 卡固定 D 作配对诊断。AMD／Intel 分别采集，不将跨硬件差异归因于后端。</p></div>
+<div class="phase"><h3>P5 · OpenCL tune、GUI 和发布资格</h3><p>加入后端成本表与短校准，复用 D/P 搜索及实际样本反馈。统一配置源生成选项；GUI 按后端路由程序，使用稳定设备身份而非假定 CUDA/OpenCL 的数字编号相同。补 dev/local/release 入口、资源打包与缓存失效。</p><p class="small"><b>完成条件：</b>OpenCL 构建不要求安装 CUDA Toolkit；缺少 ICD／驱动时可读报错；新旧后端 profile 不混写，不支持选项明确拒绝。独立程序路由完成后，再评估合并可执行文件。</p></div>
+<p><b>当前推进位置：</b>原生NTT、整数／S4、驻留树/fold/scaled下降、设备点/归一化/块积/GCD小曲线已接通，见<a href="#points-closure">点算子验证与成本</a>。下一步为giant seed/chain、AMD宽位算术问题、共同任务接入和准备开销收口。生产主机解耦、Intel实机与性能资格继续按各阶段条件完成；算子对比不等于完整生产Stage2性能。</p>
+</section>
+
+<section id="validation">
+<h2>7. 实施时的验证与性能协议</h2>
+<div class="grid">
+<div class="card"><b>数学正确性</b>q 附近、全进位／借位、零和最大 digit；NTT round-trip 与独立卷积；长除法商校正与梅森非 64 对齐；退化点、非单位元素、carrier 投影和因子验证。</div>
+<div class="card"><b>资源与失败</b>尾批、batch 减半、单对象超限、内存不足、owner 回退、事件错误、异步源释放、最终检查失败；取消不提前复用设备对象，失败不发布成功。</div>
+<div class="card"><b>真实完整运行</b>普通／承载、两类已支持保存点、命中／无命中、剩余曲线不足、顺序变化后的续跑；共同队列与发布行为保持。</div>
+</div>
+<p>位宽沿用 512～16384 范围，先选 512／2048／4096／8192／12288／16384 的代表输入并标出实际位宽，再补容器与 NTT 交界。B1 用有效小保存点，B2 先固定在几秒至数十秒可完成的档位；D/P 固定做实现对照，另测自动选型。生产级大 B2 在驻留与预算验证后加入。</p>
+<p>算子长度建议先小范围精确检查，再覆盖 2<sup>16</sup>～2<sup>27</sup> 中设备预算允许的长度及 batch 1／2／4／8，不把所有组合强制跑完。每个候选记录两次 forward＋pointwise／scale／inverse 的卷积时间，以及包含 pack/carry/S4 的请求时间。Conv/s=批量独立卷积数÷对应时间；短 NTT 的独立卷积吞吐不能替代完整 Stage2 时间。</p>
+<p>性能试验固定设备运行条件、相同输入和工作量，交替顺序，先每格 3 次；冷编译／缓存加载单列，默认不加隐藏 warmup。记录引擎 init+main、进程墙钟／CPU、各阶段、NTT 长度工作量、传输量与按寿命观察的内存峰。GPU 计时需启用 queue profiling 并等待相应事件；不同阶段的重叠计时不得重复相加。</p>
+<p><b>验收分开：</b>同卡 CUDA 主机解耦要求已有矩阵总耗时不增加，明显回退复测；OpenCL 首版以正确运行和兼容资格为准，性能另报。AMD 与 Intel 的实际性能目标应在 P1/P2 数据出来后制定，不预设与型号不同的 NVIDIA 等速。</p>
+</section>
+
+<section>
+<h2>8. 第三方实现如何参考</h2>
+<p><b>本地 GPUOWL／PRPLL：</b>可参考其 OpenCL kernel 组织、资源缓存、队列节流和按厂商选择路径。但其 NTT 存在 GF(31-bit)<sup>2</sup>、GF(61-bit)<sup>2</sup> 与混合重构路线，不是本项目 Goldilocks64＋Kronecker 槽，不能直接替换 NTT 后接现有 carry。移植时先保留本项目域与布局，减少同时变化的数学合同。</p>
+<p class="evidence">本次查看 .refactor/gpuowl/src/cl/base.cl:372–375、math.cl:202、334、src/Queue.cpp:63、96。该工作副本已变化，旧研究文档中的固定阈值／行号只用于其冻结条件，不据此宣称本次副本完全相同。固定资料见 <a href="../reference/GPUOWL_NTT.md">GPUOWL NTT</a> 与 <a href="../reference/GPUOWL_OPENCL_QUEUE.md">队列研究</a>。</p>
+<p>CUDA NTT 库可以参考 pass 分解、批处理和内存组织；它们不提供自动跨厂商移植。Tensor Core／厂商矩阵扩展、SVM、乱序多队列和 command buffer 均放在通用基线之后，分别验证，避免把可选硬件能力变成兼容性门槛。</p>
+</section>
+
+<section id="sources">
+<h2>9. 主要源码依据</h2>
+<p class="meta">行号针对 2026-10-27 查看时的 0.53.6 源码。以下路径均相对仓库根目录；它们是定位入口，不表示相应目录已经具备 OpenCL Stage2。</p>
+<div class="scroll"><table><thead><tr><th>文件与行</th><th>本规划关注内容</th></tr></thead><tbody>
+<tr><td><a href="../../src/ecm/stage2/types.h">src/ecm/stage2/types.h:18</a>；<a href="../../src/ecm/stage2/task.cpp">task.cpp:165、233</a></td><td>共享类型引用 CUDA，运行调用与结果后端名称。</td></tr>
+<tr><td><a href="../../src/ecm/stage2/planning/planning.cpp">planning/planning.cpp:4、77、205</a>；<a href="../../src/ecm/stage2/cuda/plan.cpp">cuda/plan.cpp:60、70</a></td><td>规划与 CUDA 设备、显存查询的结合。</td></tr>
+<tr><td><a href="../../src/ecm/stage2/planning/d_catalog.h">planning/d_catalog.h:13、1124</a>；<a href="../../src/ecm/stage2/planning/requests.h">requests.h:23</a></td><td>统一 D 表和批量数学请求。</td></tr>
+<tr><td><a href="../../src/ecm/stage2/modulus.h">src/ecm/stage2/modulus.h:12、33</a></td><td>目标／承载分别拥有，整除准入和 16384-bit 范围。</td></tr>
+<tr><td><a href="../../src/ecm/stage2/cuda/api.h">cuda/api.h:18、43</a>；<a href="../../src/ecm/stage2/cuda/context.h">context.h:14、20</a></td><td>引擎调用合同、当前 PTX 专属条件。</td></tr>
+<tr><td><a href="../../src/ecm/stage2/cuda/product.h">cuda/product.h:21、57、139、150</a>；<a href="../../src/ecm/stage2/cuda/remainder.h">remainder.h:36、70</a></td><td>S4、PolyLayer、驻留 owner、fold 和下降视图。</td></tr>
+<tr><td><a href="../../src/ecm/cuda/ntt/shape.cpp">cuda/ntt/shape.cpp:2、97、283</a>；<a href="../../src/ecm/cuda/ntt/runtime.h">runtime.h:202、299、422</a></td><td>精确形状、FuseCtx、arena 和当前类型耦合。</td></tr>
+<tr><td><a href="../../src/ecm/cuda/arithmetic/goldilocks/goldilocks_ptx.cuh">goldilocks_ptx.cuh:6、40</a>；<a href="../../src/ecm/stage2/cuda/stage2_scalar.cuh">stage2_scalar.cuh:3、25、49</a></td><td>128 位乘积、域归约、2-by-1 与长除法。</td></tr>
+<tr><td><a href="../../src/ecm/cuda/ntt/device/outer_coop.cuh">outer_coop.cuh:15</a>；<a href="../../src/ecm/cuda/ntt/device/tile.cuh">tile.cuh:209</a>；<a href="../../src/ecm/cuda/ntt/device/carry.cuh">carry.cuh:40</a></td><td>工作组协作、warp 专属同步与诊断归并。</td></tr>
+<tr><td><a href="../../src/ecm/opencl/runtime/runtime.cpp">opencl/runtime/runtime.cpp:90、145、208</a></td><td>设备／驱动／源与选项缓存，context、队列和程序编译。</td></tr>
+<tr><td><a href="../../src/ecm/opencl/resources/common/mp_priv.h.cl">opencl/resources/common/mp_priv.h.cl:18</a>；<a href="../../src/ecm/stage1/montgomery/opencl/engine.cpp">stage1/montgomery/opencl/engine.cpp:1115、1121</a></td><td>32 位 limb 表示；Stage1 分段提交后有 clFinish，不能直接用作细粒度 Stage2 调度。</td></tr>
+<tr><td><a href="../../src/ecm/stage2/planning/tune_portable.h">planning/tune_portable.h:299、312</a></td><td>宽松匹配与目前仍以 CUDA 字段描述的后端身份。</td></tr>
+<tr><td><a href="../../tools/build/build_opencl_local.ps1">tools/build/build_opencl_local.ps1:1</a>；<a href="../../tools/build/internal/cuda_sources.cmake">internal/cuda_sources.cmake:83、94、107</a></td><td>现有 OpenCL Stage1 构建入口、Stage2 与 NTT 源清单。</td></tr>
+</tbody></table></div>
+</section>
+<footer>该页面为开发草稿；已同步原生NTT基础的实现和正确性范围，完整Stage2与Intel/性能验收仍待推进。当前不修改生产版本号，未实现OpenCL→CUDA转换代码。草稿保留，最终由用户决定处理。</footer>
+</main></body></html>

@@ -1,7 +1,9 @@
 // Stage2 selection, calibration and profile publication; one complete planning TU.
 #define NOMINMAX
 #include <windows.h>
+#ifndef ECM_STAGE2_OPENCL
 #include <cuda_runtime_api.h>
+#endif
 #include "../cuda/api.h"
 #include "../modulus.h"
 #include "../../../io/worktodo.h"
@@ -201,9 +203,15 @@ bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &p
     return true;
 }
 pt::RuntimeMemorySnapshot portable_memory_snapshot(int device) {
+#ifdef ECM_STAGE2_OPENCL
+    EcmStage2DeviceInfo info;
+    if(ecm_cuda_stage2_device_info(device,&info))return {};
+    return {info.free_bytes,info.total_bytes};
+#else
     size_t free=0,total=0;
     if(cudaSetDevice(device)!=cudaSuccess || cudaMemGetInfo(&free,&total)!=cudaSuccess)return {};
     return {uint64_t(free),uint64_t(total)};
+#endif
 }
 bool portable_plan_context(const Options &o,const Record &r,std::string &scope,bool include_sigma=true) {
     std::ostringstream out;out<<"worker-plan-v2 "<<o.device<<' '<<(include_sigma?r.sigma:0)<<' '<<r.b1<<' '<<o.b2<<' '
@@ -806,6 +814,9 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
     return protected_default("default_planner_protected_no_measured_win");
 }
 std::string select_tuned(Options &o,const Record &r){
+#ifdef ECM_STAGE2_OPENCL
+    (void)o;(void)r;return {}; // The OpenCL engine owns its basic D/budget planner.
+#else
     auto result=portable_select(o,r,false);
     if(!(o.has_d && o.d) && (result.empty() || result.find("\"selected\":false")!=result.npos)) {
         const auto planned=result.find("\"default_D\":")==result.npos?std::string{}:plan_scalar(result,"default_D");
@@ -816,6 +827,7 @@ std::string select_tuned(Options &o,const Record &r){
         result+=",\"default_model\":\"ntt_ceiling_plateau_v1\"}";
     }
     return result;
+#endif
 }
 std::string select_auto_tuned(Options &o,const Record &r){return portable_select(o,r,true);}
 std::string select_runtime_tuned(Options &o,const Record &r) {

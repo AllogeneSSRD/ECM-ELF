@@ -1,6 +1,6 @@
 # ECM 项目文档
 
-本仓库提供 CUDA/OpenCL GPU Stage1、CPU Stage1、独立 CUDA 多项式 Stage2、GWNUM/polymult 与 libecm CPU Edwards Stage2，以及 Windows 图形前端和数据集工具。文档描述当前源码；本机已有发布包是否包含某功能，应核对其构建身份。
+本仓库提供 CUDA/OpenCL GPU Stage1、CPU Stage1、独立 CUDA/OpenCL 多项式 Stage2、GWNUM/polymult 与 libecm CPU Edwards Stage2，以及 Windows 图形前端和数据集工具。文档描述当前源码；本机已有发布包是否包含某功能，应核对其构建身份。
 
 CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；使用、存档身份、检查点和当前限制见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)。
 
@@ -33,6 +33,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage1 下一轮重构候选](web/stage1-next-refactor-review-20261025.html)：包含 0.53.2 计算结果、checkpoint 拥有权及主机 IO 实施结果，保留后续候选与验收证据。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
 - [Stage1 checkpoint 跨后端方案草稿](web/stage1-checkpoint-interop-review-20261026.html)：公共数学状态、计划与游标、CPU/CUDA/OpenCL 能力范围、曲线重组、旧格式导入和验证建议；仅分析，尚未实施。
+- [GPU Stage1 数学可视化分析](web/gpu-stage1-visualization-20261026.html)：真实小整数算例的有限域点、ladder 双点、点阶覆盖与因子提取，以及生产数学快照接入建议；尚未连接真实 worker。
 - [Stage1 共享文件与sigma优化开发草稿](web/stage1-shared-modules-review-20261026.html#implementation-result)：0.53.5共享文件收口、sigma归一和执行头合并；[阶段目录归位](web/stage1-shared-modules-review-20261026.html#stage-nesting)已完成112文件迁移及CPU/CUDA/OpenCL/Stage2回归及Android NDK构建与导出验证，版本保持0.53.5。[下一轮候选](web/stage1-shared-modules-review-20261026.html#next-candidates)及platform/群阶集中尚未实施。保留讨论与验收证据，checkpoint互通未实施，草稿待用户处理。
 - [Stage1 CUDA实例与编译排布草稿](web/stage1-cuda-instance-layout-review-20261026.html#implementation-result)：0.53.6统一构建生成的实施、位宽归一化、PRAC稀疏实例、实时速度窗口及实际验收；保留初始评估和性能测量条件。
 - [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。
@@ -41,7 +42,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [内存与规划](architecture/MEMORY.md)：容量公式、生命周期模型、准入边界和证据。
 - [Auto B2 / tune](architecture/AUTO_B2.md)：收益目标、profile合同、正常运行累计采样、承载优先试跑、实测波动选型与标定资格。
 - [配置维护](architecture/CONFIGURATION.md)：定义、生成物、解析器与构建一致性。
-- [OpenCL 算子](architecture/OPENCL.md)：路径注册、内核组装和设备约束。
+- [OpenCL Stage1 与 Stage2](architecture/OPENCL.md)：原生NTT/多项式流水线、生产save/队列接入、CPU尾部及设备资格；[点算子实验](web/opencl-stage2-port-plan-20261027.html#points-closure)。
 
 ## 性能与后续工作
 
@@ -61,6 +62,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [NTT outer 性能](performance/NTT_OUTER.md)：自动 radix 表、中段 M6 候选、精确门禁和固定 D 对照。
 - [Stage2 主机等待](performance/STAGE2_HOST_WAIT.md)：FIFO 回收、可选低 CPU 模式、固定 D 的耗时与 CPU 对照。
 - [Stage2 准备与同步](performance/STAGE2_PREPARATION.md)：CPU范围、GPU空隙、真实拷贝与等待、pack/补零融合及计时边界。
+- [Stage2 CPU尾部成本](performance/STAGE2_CPU_TAIL.md)：CUDA归一化、少量GCD、块乘积的CPU/GPU对照，完整曲线占比及收益上限。
+- [OpenCL Stage2性能](performance/OPENCL_STAGE2.md)：同版本、相同save/D/B2的完整CUDA/OpenCL A/B，资格与未覆盖范围。
 - [算法参考](reference/ECM_ALGORITHMS.md)：论文、Prime95、PrMers 和开源 NTT 的适配要点。
 - [固定数学与第三方源码资料](reference/README.md)：保留完整推导、引用代码、伪代码及研究条件，独立于本仓库实现状态。
 - [TODO](TODO.md)：尚未完成或需要重新验证的工作。

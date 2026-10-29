@@ -1,6 +1,7 @@
 #include "../../io/files.h"
 // Unique parent task/queue pipeline and complete isolated curve worker.
 #include "task.h"
+#include "backend.h"
 #include "input.h"
 #include "planning/planning.h"
 #include "planning/runtime_cache.h"
@@ -230,7 +231,7 @@ int curve_worker(Options o) {
         factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
     }
     stage2_log::phase("Publish result");
-    std::string engine="{\"name\":\"cuda-ntt\",\"status\":"+json_string(status)+
+    std::string engine="{\"name\":"+json_string(stage2_backend::name)+",\"status\":"+json_string(status)+
         ",\"save\":"+json_string(o.save)+",\"record\":"+std::to_string(o.index)+
         ",\"record_hash\":"+json_string(std::to_string(o.hash))+",\"worker\":"+std::to_string(o.worker)+
         ",\"device\":"+std::to_string(o.device)+",\"seconds\":"+std::to_string(seconds)+

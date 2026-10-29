@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>让 GPU Stage1 变得可见 · ECM-ELF</title>
+<style>
+:root{color-scheme:dark;--bg:#091119;--panel:#101e2a;--ink:#e5eff5;--muted:#a8bdca;--line:#2c4352;--mint:#77ddbe;--gold:#ffd18b;--blue:#85bff4}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1180px;margin:auto;padding:32px 28px 70px}a{color:var(--mint);text-underline-offset:4px}h1{font-size:42px;line-height:1.35;letter-spacing:-1px;margin:16px 0}h2{font-size:25px;line-height:1.5;margin:0 0 14px}h3{font-size:18px;color:var(--mint);margin:22px 0 8px}p{margin:10px 0}small,.meta,.caption{font-size:13px;color:var(--muted)}.eyebrow{font:12px/1.7 Consolas,monospace;letter-spacing:2px;color:var(--mint)}.lead{font-size:19px;max-width:850px;color:#c5d7e2}.tag{display:inline-block;padding:2px 9px;background:#223744;color:var(--mint);font-size:12px;border-radius:5px}.tag.warn{color:var(--gold)}nav{display:flex;gap:8px 24px;flex-wrap:wrap;margin:24px 0;font-size:14px}section{padding:30px 0;border-top:1px solid var(--line);scroll-margin-top:16px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:26px}.note{border-left:3px solid var(--mint);padding:10px 18px;background:#102724;margin:20px 0}.note.warn{border-color:var(--gold);background:#292318}.wrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:13px 12px}th{color:var(--mint);font-weight:500}code{font:13px/1.8 Consolas,"Microsoft YaHei",monospace;background:#1b2c38;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}li{margin:7px 0}ul,ol{padding-left:23px}.flow{display:flex;align-items:stretch;gap:12px;margin:24px 0}.flow>div{flex:1;padding:18px;background:var(--panel);border-top:2px solid var(--mint)}.flow b{font-size:16px}.flow small{display:block}.arrow{align-self:center;color:var(--mint)}.source{font:13px/1.8 Consolas,"Microsoft YaHei",monospace}.formula{font:16px/1.9 Consolas,"Microsoft YaHei",monospace;padding:16px 20px;background:var(--panel);overflow:auto}details{margin-top:18px}summary{cursor:pointer;color:var(--mint)}button,select,input{font:inherit}button,select{border:1px solid #446172;border-radius:6px;background:#1b3040;color:var(--ink);padding:7px 13px;cursor:pointer}button[aria-pressed="true"]{background:#2c6557;border-color:var(--mint)}button:disabled{opacity:.55;cursor:default}.baseline{color:var(--gold)}footer{padding-top:26px;font-size:13px;color:var(--muted)}
+@media(max-width:760px){main{padding:22px 16px 45px}h1{font-size:30px}.lead{font-size:17px}.pair{grid-template-columns:1fr}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}th,td{min-width:130px;padding:10px 8px}}
+@media print{body{background:white;color:#142f40}.demo,nav,.controls{display:none}a{color:#176859}section{break-inside:avoid}.pair{display:block}.meta,.caption,small{color:#465f70}}
+</style>
+<style>
+.math-demo{padding:22px;background:linear-gradient(145deg,#102533,#0a1721);border:1px solid #345361;border-radius:12px}.math-head{display:flex;justify-content:space-between;align-items:start;gap:20px}.math-head b{color:var(--mint);font-size:18px}.math-controls{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:18px 0}.math-controls label{font-size:14px}.math-plots{display:grid;grid-template-columns:1fr 1fr;gap:24px}.field-title{display:flex;justify-content:space-between;align-items:center}.field-title h3{margin:8px 0}.field-title small{font-variant-numeric:tabular-nums}.field-equation{font:14px/1.8 Consolas,monospace;color:#c8dce6;overflow-wrap:anywhere}.field-svg{display:block;width:100%;height:auto;aspect-ratio:1;overflow:visible}.field-readout{font:14px/1.8 Consolas,"Microsoft YaHei",monospace;min-height:54px}.r0{color:var(--mint)}.r1{color:var(--blue)}.bitstrip{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.bitstrip button{font:16px Consolas,monospace;min-width:36px}.bitstrip button.past{border-color:#65ad97}.math-machine{border-top:1px solid var(--line);margin-top:18px;padding-top:18px}.math-equation{font:19px/1.7 Consolas,"Microsoft YaHei",monospace;overflow-wrap:anywhere}.math-operations{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:14px 0}.math-operations>div{padding:12px 15px;background:#152d3a}.math-numbers{display:flex;flex-wrap:wrap;gap:8px 28px;font:15px/1.8 Consolas,"Microsoft YaHei",monospace}.math-outcome{margin-top:18px;border-left:3px solid var(--mint);padding:12px 18px;background:#15322e}.math-outcome.saturated{border-color:var(--gold);background:#302819}.math-outcome.none{border-color:var(--blue);background:#182c3a}.order-proof{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin:14px 0}.order-proof>div{font-size:14px}.missing{color:var(--gold)}.covered{color:var(--mint)}.big-result{font:24px/1.5 Consolas,"Microsoft YaHei",monospace}.math-demo .caption{margin-top:10px}.math-controls button{min-height:40px}.field-svg text{font:12px "Segoe UI","Microsoft YaHei",sans-serif;fill:#b9ceda}.field-svg .axis-title{font-size:13px;fill:#d5e7ef}.field-svg .tick{fill:#9db5c4}.math-subtitle{font-size:14px;color:var(--muted)}
+@media(max-width:760px){.math-demo{padding:14px}.math-plots{grid-template-columns:1fr;gap:20px}.math-head{display:block}.math-controls{gap:8px}.math-operations,.order-proof{grid-template-columns:1fr;gap:9px}.math-equation{font-size:16px}.big-result{font-size:20px}.field-readout{font-size:13px}.field-title small{font-size:12px}}
+</style>
+</head>
+<body><main>
+<header>
+<div class="eyebrow">ECM-ELF / SCIENCE IN MOTION</div>
+<div class="meta">2026-10-26 · 源码 0.53.5 · Git 3bb6b129 · 可行性分析草稿，尚未接入计算程序</div>
+<h1>让 GPU Stage1 变得可见</h1>
+<p class="lead">展示 Stage1 在数学上做了什么：标量由哪些素数幂组成，ladder 如何用倍点和差分加法更新点，以及同一次模 N 运算为什么能暴露一个因子。进度与速度继续由现有 GUI 负责。</p>
+<p><span class="tag">真实小整数运算</span> <span class="tag warn">教学算例，未连接生产 GPU</span></p>
+<nav aria-label="页面章节"><a href="#demo">看概念效果</a><a href="#boinc">BOINC 怎么做</a><a href="#available">我们已有的数据</a><a href="#math">数学上能画什么</a><a href="#design">接入方式</a><a href="#cost">性能与验收</a><a href="#sources">依据</a></nav>
+</header>
+
+<section id="demo">
+<h2>同一次运算，在两个素数域里有不同结局</h2>
+<p>取 N = 1139 = 17 × 67，Montgomery / Suyama param0 / sigma = 6。画面逐步计算 [s]P；两个坐标图是同一算例对真实因子 17 和 67 的约化，不是把生产任务投影到任意小素数。</p>
+<div class="math-demo" id="math-demo">
+  <div class="math-head"><div><b>ECM · 数学演算台</b><div class="math-subtitle">教学实例 · BigInt 精确模运算 · 普通域 X:Z</div></div><div class="meta">N = 1139 · sigma = 6<br>310y² ≡ x³ + 503x² + x (mod N)</div></div>
+  <div class="math-controls">
+    <label for="bound">光滑界 B1 <select id="bound"><option value="3">3 · 点阶尚未被消去</option><option value="5" selected>5 · 暴露非平凡因子</option><option value="9">9 · 末点 GCD 饱和</option></select></label>
+    <button type="button" id="play" aria-pressed="false">自动演算</button><button type="button" id="previous">上一步</button><button type="button" id="next">下一步</button><button type="button" id="reset">回到起点</button>
+  </div>
+  <div class="math-equation" id="scalar-equation">s = lcm(1,…,5) = 2² × 3 × 5 = 60</div>
+  <div class="order-proof"><div id="order-p"></div><div id="order-q"></div></div>
+  <div class="math-plots">
+    <div><div class="field-title"><h3>模 17 的世界</h3><small>点阶 12 · 群阶 24</small></div><div class="field-equation">4y² ≡ x³ + 10x² + x (mod 17)</div><svg class="field-svg" id="field-p" role="img" aria-labelledby="title-p desc-p"><title id="title-p">模 17 曲线的有限域点</title><desc id="desc-p">离散曲线点与 ladder 双点，O 独立显示。</desc><g id="plot-p"></g></svg><div class="field-readout"><span class="r0" id="point-p0"></span><br><span class="r1" id="point-p1"></span></div></div>
+    <div><div class="field-title"><h3>模 67 的世界</h3><small>点阶 36 · 群阶 72</small></div><div class="field-equation">42y² ≡ x³ + 34x² + x (mod 67)</div><svg class="field-svg" id="field-q" role="img" aria-labelledby="title-q desc-q"><title id="title-q">模 67 曲线的有限域点</title><desc id="desc-q">离散曲线点与 ladder 双点，O 独立显示。</desc><g id="plot-q"></g></svg><div class="field-readout"><span class="r0" id="point-q0"></span><br><span class="r1" id="point-q1"></span></div></div>
+  </div>
+  <p class="caption"><span class="r0">● R0 = [k]P</span>　<span class="r1">■ R1 = [k+1]P</span>　·　同色空心标记是负点，x-only 运算不能区分 ±P。O 是无穷远点，单独列出。坐标离散跳转，不插值为连续曲线。</p>
+  <div class="math-machine"><div class="math-subtitle">共享标量的二进制表示 · 点击某一位可停在对应数学状态</div><div class="bitstrip" id="bits" role="group" aria-label="逐位 ladder 状态"></div><div class="math-equation" id="prefix-equation"></div>
+    <div class="math-operations"><div><small>倍点 xDBL</small><div class="math-equation" id="double-operation"></div></div><div><small>差分加法 xADD，固定差点 P</small><div class="math-equation" id="add-operation"></div></div></div>
+    <p class="caption" id="operation-detail"></p><div class="math-numbers"><span id="xz0"></span><span id="xz1"></span></div><div class="math-numbers" id="crt-z"></div>
+  </div>
+  <div class="math-outcome" id="outcome" role="status"><div class="big-result" id="gcd-result"></div><div id="outcome-explanation"></div></div>
+</div>
+<p class="caption">完整坐标图通过小素数域仿射群运算独立核对 x-only 结果。为给出有符号的 y，选择 y(P)=1，并由 x(P) 固定等价的 Montgomery 扭曲代表 B；生产 GPU 不需要这些 y。教学标量明确采用 s=lcm(1,…,B1)，不额外乘 12 或 48。</p>
+</section>
+
+<section id="boinc">
+<h2>BOINC 的做法：科学数据 + 视觉包装</h2>
+<p>固定第三方研究集中在<a href="../reference/BOINC_GRAPHICS.html">BOINC 图形与屏保机制</a>，包含 SETI、Rosetta、Einstein 的画面语义、一手资料与版本边界。对本项目最有用的原则是：低频发布科学状态，独立绘制连续画面，区分真实数据和装饰运动。</p>
+<div class="flow" aria-label="BOINC 图形架构"><div><b>科学计算进程</b><small>继续独立执行，低频更新状态</small></div><span class="arrow">→</span><div><b>共享内存 / 状态文件</b><small>进度、心跳、暂停状态及项目自定义数据</small></div><span class="arrow">→</span><div><b>图形进程</b><small>按自己的帧率绘制窗口或全屏画面</small></div></div>
+<p>由此推导的工程建议是：将可视化作为随时可关闭的观察器，让 GPU 计算继续独立执行。该建议是对本仓库的设计判断，不代表 BOINC 的某个项目实现可以直接移植。</p>
+</section>
+
+<section id="available">
+<h2>GPU Stage1 已经提供了哪些入口</h2>
+<div class="wrap"><table><thead><tr><th>路径</th><th>现在能拿到的状态</th><th>接入判断</th></tr></thead><tbody>
+<tr><td>CUDA Montgomery ladder</td><td>同步完成切片后的 bit 游标和共享标量计划；当前进度日志不含双点的数学状态。</td><td>游标可解释已执行的标量前缀；展示真实 R0/R1 需要在安全边界采样 X:Z。</td></tr>
+<tr><td>CUDA resident / PRAC</td><td>PRAC 有素数链与重复次数，计划游标 next/total 与加权工作量不同；曲线点通常留在显存。</td><td>从计划导出当前素数幂与加法链依赖关系；点值在已有检查点或新增少量安全采样中取得。</td></tr>
+<tr><td>CUDA Edwards binary / NAF</td><td>binary / NAF 计划、奇倍点字典，以及每片回读的点状态。</td><td>可展示“倍点 + 选择正负奇倍点”的关系，并复用已有回读；仍需计入转换与发布成本。</td></tr>
+<tr><td>OpenCL Montgomery</td><td>每片已有标量游标和可选状态回读，当前日志协议与 CUDA 不同。</td><td>需要适配数学快照，不能把已有进度条当作点轨迹。</td></tr>
+<tr><td>GUI / GUI v2</td><td>已有任务、进度、速度、命中事件与设备监控。</td><td>继续负责运行监控；数学演示需要额外的计划与点状态，不能只消费 WorkerView 的百分比。</td></tr>
+</tbody></table></div>
+<div class="note">展示主体是“标量 → 点运算关系 → 数学状态 → 因子判定”。仅绘制计划关系可以在主机完成；要显示生产曲线的当前坐标，还需数学快照，不能由进度日志反推。</div>
+<p>上面的算例使用浏览器端 x-only 模运算，不依赖生产 GPU。真实接入应区分“控制计划重建的关系”和“设备采样确认的点值”，不能把切片结束时的快照伪装成每条 GPU 指令的实时跟踪。</p>
+</section>
+
+<section id="math">
+<h2>ECM 的可视化边界</h2>
+<div class="pair"><div><h3>适合成为主画面</h3><ul><li>标量的素数幂分解及额外乘子；为什么需要覆盖点阶中的完整素数幂。</li><li>ladder 的相邻双点、PRAC 的差分加法依赖、NAF 的正负奇倍点选择。</li><li>已采样的投影坐标及其表示约定；不能只把随机颜色叫作曲线。</li><li>末点 GCD 与非平凡因子、未命中、饱和的区别。</li></ul></div><div><h3>不能据此推断</h3><ul><li>未知因子对应的小素数域曲线；上图只因教学 N 已知分解而能画出。</li><li>“离发现因子还有多远”或单条曲线成功率随运算上升。</li><li>相同构造在不同算法下有完全相同的中间轨迹。</li><li>把旋转椭圆、星轨或颜色起伏解释成真实椭圆曲线运动。</li></ul></div></div>
+<p>生产计算在模合数 N 的环上进行，并使用投影坐标及可能的 Montgomery 域表示；屏幕上的实数椭圆不是它的几何图像。将大整数取低位、做哈希或归一化到 [0,1) 可以得到漂亮的纹理，但相邻帧的距离没有“趋近因子”的数学含义。投影缩放与后端表示还会改变原始坐标，不能承诺同一构造在各算法下产生相同的残数画面。</p>
+<p>教学模式已用 N=17×67 的同一条曲线展示两个真实约化，点阶分别为 12 和 36。B1=3 时 s=6、末点 GCD=1；B1=5 时 s=60、GCD=17；B1=9 时 s=2520、GCD=N。此处只在末点取 GCD；生产实现可能还有构造期检查与其他验证边界。</p>
+<div class="note warn">因子亮起必须由验证结果驱动。以 Montgomery 末点为例，只有 1 &lt; gcd(Z,N) &lt; N 才是非平凡因子；gcd = N 是饱和 / 退化，不能庆祝为成功。Edwards 需按其实际转换与退化判定处理。通常在构造或末端验证时才确认因子，不应为了动画频繁插入 GCD。</div>
+</section>
+
+<section id="design">
+<h2>建议的接入顺序</h2>
+<h3>先做单条曲线的数学状态与运算依赖图</h3>
+<p>为所选曲线导出构造身份、实际标量约定、计划游标、数学寄存器名称和少量坐标。展示层根据实际计划画出 ladder 的 R0/R1、PRAC 的差点关系或 NAF 的奇倍点字典；正在回放的局部关系与最近一次设备端点采样分开标注。完整微操作轨迹若未采集，就只画已知的计划关系，不虚构指令实时性。</p>
+<p>先在已有安全边界、约 0.2～1 s 发布少量数学状态，绘制帧率独立限制；这些是待测建议。数学点保持离散跳转，视觉强调当前算子、依赖边与实际坐标。生产 N 的因子未知时，主画面采用代数关系图与投影坐标，不能套用教学算例的两个有限域点阵。</p>
+<h3>再增加独立观察器与 Windows 屏保入口</h3>
+<p>计算进程在现有完成切片边界形成轻量快照；发布器提供有界、非阻塞的“最新状态”。观察器慢时覆盖旧快照，主计算不等它，因子及结果仍走现有可靠发布流程。GUI 消费同一模型，全屏观察器退出或崩溃不改变 worker 生命周期。真正的 <code>.scr</code> 入口再负责系统预览、退出输入、多显示器和会话边界。</p>
+<p>不用为了采用这种架构引入 BOINC runtime。共享内存适合同机快照，文件适合先做低频原型；若选择文件，需原子替换、限定频率并避免 UI 逐帧轮询。多实例读者、worker 重启和批次切换都要能分辨。</p>
+<div class="wrap"><table><thead><tr><th>建议快照字段</th><th>含义与约束</th></tr></thead><tbody>
+<tr><td>版本、长度、序号、采样时间</td><td>避免读取半份状态；时间使用单调时钟并声明时基。共享内存需要跨进程同步协议，不能只加 volatile。</td></tr>
+<tr><td>worker、运行代次、批次代次、数学身份</td><td>运行代次只服务观察器关联，不创建新的 worktodo 业务任务 ID。曲线族、param 适用性与 sigma 显式表示；N 可用摘要关联。</td></tr>
+<tr><td>phase、heartbeat、last_work_update</td><td>进程存活与数学工作推进分开。长内核没有新进度不能直接判定进程死亡；暂停 / 准备状态不能继续假装推进。</td></tr>
+<tr><td>实际标量、计划身份、游标与局部算子</td><td>保留 lcm 与额外乘子、PRAC 当前素数幂或 NAF 字典索引 / 符号；区分主机计划回放与设备状态。</td></tr>
+<tr><td>数学寄存器与点关系</td><td>例如 R0=[k]P、R1=[k+1]P，或差分加法中的 P、Q、P−Q。系数可用计划表达式，不需逐帧传巨大整数。</td></tr>
+<tr><td>点坐标、domain、sample_cursor、验证结果</td><td>说明普通域 / Montgomery 域、投影坐标与采样边界；少量固定曲线按需发布，不改变 sigma、算法计划或检查点格式。因子结果来自现有验证。</td></tr>
+</tbody></table></div>
+<h3>让数学关系驱动美观，而不只给残数加特效</h3>
+<p>可把一次 xDBL 画成一个输入点分叉为平方、相加和模乘的关系，再收敛到输出点；xADD 明确绘制第三个差点输入；NAF 展示从奇倍点字典选择正点或负点。运算节点和边都有明确含义。残数位纹理可作为坐标的辅助编码，不能取代这些关系。Edwards 可复用已有回读；Montgomery 仍需评估少量导出与回读成本。</p>
+</section>
+
+<section id="cost">
+<h2>性能：能控制开销，不能先承诺零损失</h2>
+<p>主机上的标量计划可直接生成数学关系图；生产端点采样会增加整理、转换或回读成本。还需要测量画面和满载 CUDA 是否竞争同一块 GPU 的调度、显存带宽、功率及热预算；独立进程和低优先级不保证消除竞争。若有核显，可尝试让展示使用核显。</p>
+<div class="formula">采样载荷示例：32 曲线 × 4 坐标 × (4096 / 8) 字节 = 64 KiB / 次<br>若每秒 1 次，仅原始坐标载荷约 64 KiB/s；不含同步、导出核、域转换、GMP、IPC 和绘制成本。</div>
+<p>以上是容量估算，不是带宽或性能测量。第一版以少量曲线的数学关系为主，限制图的节点数、状态采样频率与绘制帧率，隐藏和最小化时停止绘制。以配对测量决定是否允许同卡动态模式，以及需要的自动降帧条件。</p>
+<ul>
+<li><b>结果一致：</b>固定 N、曲线族、param、sigma、B1、实际标量与执行选项，关闭 / 仅快照 / 动画三种模式比较因子、最终点与可恢复状态；不同投影表示按数学等价验证。</li>
+<li><b>吞吐成本：</b>覆盖 Montgomery ladder / PRAC 与 Edwards NAF、代表位宽和批大小。建议至少 5 组交错配对，记录设备、驱动、功耗限制、程序身份、预热与计时边界，给出中位数和波动。完整批次墙钟与 kernel 时间分别报告。</li>
+<li><b>运行可靠：</b>观察器关闭、慢读、多实例、worker 重启、暂停、恢复、长内核无进度、GCD=N、保存失败和批次切换。快照不能替代 checkpoint。</li>
+<li><b>资源边界：</b>测 CPU、设备 / 进程显存与整机或设备功耗；不将互相嵌套的时间相加，不将不同组件峰值相加成进程峰值。</li>
+</ul>
+<p class="baseline">已实现：小整数教学例的模运算、有限域点阵、ladder 双点、点阶覆盖与三种末点 GCD 结果。TODO：真实 worker 数学快照、PRAC/NAF 关系视图、独立 IPC、全屏 / .scr、同卡吞吐及功耗验收。本页未修改生产程序或给出实测开销。</p>
+</section>
+
+<section id="sources">
+<h2>源码依据与外部资料</h2>
+<p class="caption">源码行号基于 3bb6b129 / 0.53.5；后续移动文件时应重新核对。外部网页于 2026-10-26 查阅；BOINC 架构页显示最近编辑 2026-03-18，样例源码引用 master 的当日内容。</p>
+<ul class="source">
+<li><a href="gpu-stage1-math.js">演示精确数学模块</a> / <a href="gpu-stage1-math-view.js">展示逻辑</a>；<a href="../reference/ECM_STAGE1_GPU_MATH.md#可验证的小型-stage1-示例">小型算例的固定数学说明</a>；<a href="https://hyperelliptic.org/EFD/g1p/auto-montgom-xz.html">EFD Montgomery XZ 公式</a>。</li>
+<li><a href="../../include/ecm/stage1/progress.h">progress.h</a> / <a href="../../src/ecm/stage1/progress.cpp">progress.cpp</a>：统一 CUDA 进度文本与 SpeedWindow。</li>
+<li><a href="../../src/ecm/stage1/montgomery/cuda/runtime.cu">Montgomery runtime.cu</a>：约 596、641–709 行，切片、自适应、同步与进度；约 715 行起检查点回读。</li>
+<li><a href="../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu">PRAC runtime.cu</a>：约 185–246 行，M-equiv、计划游标、切片和检查点。</li>
+<li><a href="../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl">Edwards runtime</a>：约 51–65、106–120 行，每片回读后回调；<a href="../../src/ecm/stage1/edwards/cuda/edwards_slice.h">slice</a>：约 6–25 行，100 ms 自适应目标。</li>
+<li><a href="../../src/ecm/stage1/edwards/cuda/workflow.cpp">Edwards workflow</a>：约 65–80、115–161 行，进度节奏与计时边界；约 409–438 行，末点 GCD 与结果。</li>
+<li><a href="../../src/ecm/stage1/montgomery/opencl/engine.cpp">OpenCL engine</a>：约 1121–1133、1194–1207 行，同步 / 可选回读和 indicators 输出。</li>
+<li><a href="../../src/ecm/application/gui/log_parse.h">GUI ProgressInfo</a>、<a href="../../src/ecm/application/gui/log_parse.cpp">log parser</a>：约 439–492 行；<a href="../../src/ecm/application/gui/worker_controller.cpp">controller</a>：约 302–370 行，进度与历史。</li>
+<li><a href="../../src/ecm/application/gui/gpu_monitor.h">GpuMonitor</a>；<a href="../usage/GUI_V2.md">GUI v2 当前后端与验证限制</a>；<a href="../reference/ECM_STAGE1_GPU_MATH.md">Stage1 固定数学参考</a>。</li>
+<li><a href="https://github.com/BOINC/boinc/wiki/Graphics-apps">BOINC · Graphics apps</a>；<a href="https://github.com/BOINC/boinc/wiki/API-for-graphics-apps">API for graphics apps</a>；<a href="https://github.com/BOINC/boinc/blob/master/samples/example_app/uc2.cpp">uc2.cpp</a> / <a href="https://github.com/BOINC/boinc/blob/master/samples/example_app/uc2_graphics.cpp">uc2_graphics.cpp</a>：共享内存、心跳和观察器需求的样例。</li>
+</ul>
+</section>
+<footer>这是分析与展示草稿，不构成新增实现或性能承诺。作为非主程序文档示意，本次不调整版本号。</footer>
+</main>
+<script src="gpu-stage1-math.js"></script>
+<script src="gpu-stage1-math-view.js"></script>
+</body>
+</html>

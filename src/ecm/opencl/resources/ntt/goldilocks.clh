@@ -1,0 +1,38 @@
+// Canonical Goldilocks arithmetic. Same 2^64 == 2^32-1 identity as the CUDA
+// reducer; portable integer expressions, without PTX or source translation.
+#define ECM_GL_Q ((ulong)0xffffffff00000001UL)
+#define ECM_GL_EPSILON ((ulong)0xffffffffUL)
+#ifndef ECM_NTT_SPLIT_MUL
+#define ECM_NTT_SPLIT_MUL 0
+#endif
+
+inline ulong ecm_gl_reduce(ulong lo, ulong hi) {
+    const ulong minus = lo - (hi >> 32);
+    const ulong a = minus - (minus > lo ? ECM_GL_EPSILON : (ulong)0);
+    const ulong low = hi & ECM_GL_EPSILON;
+    const ulong b = (low << 32) - low;
+    const ulong sum = a + b;
+    const ulong value = sum + (sum < a ? ECM_GL_EPSILON : (ulong)0);
+    return value >= ECM_GL_Q ? value - ECM_GL_Q : value;
+}
+inline ulong ecm_gl_add(ulong a, ulong b) {
+    const ulong sum = a + b;
+    return sum < a || sum >= ECM_GL_Q ? sum - ECM_GL_Q : sum;
+}
+inline ulong ecm_gl_sub(ulong a, ulong b) {
+    return a >= b ? a - b : a + (ECM_GL_Q - b);
+}
+inline ulong ecm_gl_product_hi(ulong a, ulong b) {
+#if ECM_NTT_SPLIT_MUL
+    const ulong a0 = (uint)a, a1 = a >> 32;
+    const ulong b0 = (uint)b, b1 = b >> 32;
+    const ulong p00 = a0*b0, p01 = a0*b1, p10 = a1*b0;
+    const ulong middle = (p00 >> 32) + (uint)p01 + (ulong)(uint)p10;
+    return a1*b1 + (p01 >> 32) + (p10 >> 32) + (middle >> 32);
+#else
+    return mul_hi(a,b);
+#endif
+}
+inline ulong ecm_gl_mul(ulong a, ulong b) {
+    return ecm_gl_reduce(a*b, ecm_gl_product_hi(a,b));
+}

@@ -3,6 +3,10 @@
 #define NOMINMAX
 #include <windows.h>
 #include "api.h"
+#include "../backend.h"
+#ifdef ECM_STAGE2_OPENCL
+#include "../opencl/engine.h"
+#endif
 #include "../modulus.h"
 #include "../../application/configuration/ecm_expr.h"
 #include "../../../io/config.h"
@@ -237,6 +241,18 @@ Settings stage2_ini(const fs::path &path,int worker) {
 // The schedule bits affect CPU waits, not kernel ordering or arithmetic.
 
 void help() {
+#ifdef ECM_STAGE2_OPENCL
+    std::cout<<"ecm_opencl_stage2 - native OpenCL Stage2 using the production save/queue driver\n"
+        "  --list-devices (OpenCL indices; not CUDA indices or UUIDs)\n"
+        "  --save FILE --b2 B2 [--d D] [--curves N] [--skip-curves N]\n"
+        "  --config ecm.toml [--worktodo FILE] [--worker N] [--once]\n"
+        "  --device N --arena-mb MB --batch-mb MB --carrier-exponent P\n"
+        "  --plan-only --dry-run --results FILE --submission FILE --ntt-counts 0|1\n"
+        "D=0 uses the OpenCL basic model and hard owned-payload budget.\n"
+        "Queue receipts/checkpoints, curve limits, result validation and stop policy are shared.\n"
+        "Explicit B2 required; CUDA tune/Auto B2/relocation/Graph policies are not consumed.\n"
+        "CPU batch normalization/GCD; guarded wide AMD points use CPU with OpenCL polynomials.\n";
+#else
     std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
         "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
         "  ecm_cuda_stage2 [--config ecm.toml] [--worktodo FILE] [--worker N] [--once]\n"
@@ -293,6 +309,7 @@ void help() {
         "D=0 chooses automatically; count/curves=0 means all remaining; shortages are clamped.\n"
         "Queue only: resumes completed curves. Ctrl+C finishes current curve; twice stops now.\n"
         "Missing implicit TOML uses defaults. Worker overrides use [workers.N.stage2].\n";
+#endif
 }
 
 // Access known scalar fields in the engine's trusted structured output. Nested
@@ -300,6 +317,12 @@ void help() {
 
 int driver(Options o) {
     if (o.help) { help(); return 0; }
+#ifdef ECM_STAGE2_OPENCL
+    if(!o.tune.empty() || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.short_batch_tune || o.relocation ||
+       (o.portable_cli.count("--auto-carrier")&&o.auto_carrier))
+        throw std::runtime_error("OpenCL supports explicit B2, D or its basic planner; CUDA tune/Auto B2/relocation profiles are not applicable");
+    o.tune_runtime=false;o.auto_carrier=false;
+#endif
     if (o.child) return curve_worker(o);
     if(o.stop_handle) {
         inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));
@@ -393,6 +416,13 @@ int driver(Options o) {
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
     else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
     else if(o.cost_profile.empty())o.tune_profile=absolute_from(base,"stage2_ecm_tune.toml").string();
+#ifdef ECM_STAGE2_OPENCL
+    // Shared TOML may contain CUDA tuning defaults. Never consume or overwrite
+    // those profiles under a different engine identity.
+    if(o.relocation || !o.cost_profile.empty() || !o.tune.empty())
+        throw std::runtime_error("OpenCL requires explicit B2 and does not support CUDA Auto B2/relocation/tune");
+    o.tune_profile.clear();o.tune_runtime=false;o.short_batch_tune=false;o.auto_carrier=false;o.auto_b2=false;
+#endif
     if(!o.stage1_csv.empty())o.stage1_csv=absolute_from(cwd,o.stage1_csv).string();
     else if(!s.stage1_csv.empty())o.stage1_csv=absolute_from(base,s.stage1_csv).string();
     if(!o.stage1_profile.empty())o.stage1_profile=absolute_from(cwd,o.stage1_profile).string();
@@ -514,7 +544,11 @@ int driver(Options o) {
 
 #include "ecm/platform/cuda_loading.h"
 int main(int argc, char **argv) {
+#ifndef ECM_STAGE2_OPENCL
     ecm_cuda_default_module_loading();
+#else
+    for(int i=1;i<argc;++i)if(std::string(argv[i])=="--list-devices")return ecm_opencl_stage2_list_devices();
+#endif
     for (int i=1;i<argc;++i) if (std::string(argv[i])=="--version") {
         std::cout<<ecm_program::name<<' '<<ecm_program::version<<std::endl;return 0;
     }
@@ -523,7 +557,7 @@ int main(int argc, char **argv) {
     }
     try { return s2prod::driver(s2prod::arguments(argc, argv)); }
     catch (const std::exception &e) {
-        const std::string message=std::string("ecm_cuda_stage2: ")+e.what();
+        const std::string message=std::string(stage2_backend::executable)+": "+e.what();
         std::cerr<<message<<std::endl;
         try {if(!s2prod::fatal_log.empty())s2prod::append(s2prod::fatal_log,message);}catch(...){}
         return 2;

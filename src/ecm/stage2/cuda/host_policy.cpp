@@ -1,5 +1,7 @@
 #include "host_policy.h"
+#ifndef ECM_STAGE2_OPENCL
 #include <cuda_runtime_api.h>
+#endif
 #include "../planning/cost_profile.h"
 #include "../../platform/compute_log.h"
 #include <cstdlib>
@@ -34,6 +36,7 @@ void configure_pack_zero(Options &o,const PackZeroDefaults *s) {
         throw std::runtime_error("cannot configure Stage2 pack/zero fusion");
 }
 void configure_cuda_wait(int device) {
+#ifndef ECM_STAGE2_OPENCL
     const char *value=std::getenv("NTT_CUDA_WAIT_MODE");
     if(!value)return;
     const uint64_t mode=ecm_stage2::cost::integer(value);
@@ -49,5 +52,8 @@ void configure_cuda_wait(int device) {
         throw std::runtime_error("CUDA wait flags did not match requested context state");
     if(stage2_log::enabled(stage2_log::debug))std::cout<<"stage2_cuda_wait: device="<<device<<" requested="<<mode
              <<" before="<<before<<" after="<<after<<std::endl;
+#else
+    (void)device; // OpenCL uses checked blocking transfers/events on its queue.
+#endif
 }
 }

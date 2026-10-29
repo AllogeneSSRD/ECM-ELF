@@ -139,6 +139,8 @@
 
 ## 分项分析
 
+CUDA归一化、少量GCD与尾部块乘积的CPU/GPU同输入对照、传输边界和收益上限见 [CPU尾部成本报告](STAGE2_CPU_TAIL.md)。生产默认已将组根求逆和最终GCD交给CPU；不能把OpenCL算子差异直接当作CUDA增量收益。
+
 ### 初始化与主计算
 
 ![完整 Stage2 的互斥 init/main 占比](attachments/stage2-runtime-0.39.3-phases.png)

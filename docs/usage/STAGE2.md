@@ -1,6 +1,20 @@
 # Stage2 使用
 
-本页说明 CUDA Stage2。CPU Edwards 续算入口、GW 多线程多项式与 libecm 后端选择见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两份结果文件及提交字段规则统一见 [ECM 结果输出](ECM_RESULTS.md)。
+本页说明CUDA与原生OpenCL Stage2，OpenCL支持边界见下节。CPU Edwards 续算入口、GW 多线程多项式与 libecm 后端选择见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两份结果文件及提交字段规则统一见 [ECM 结果输出](ECM_RESULTS.md)。
+
+## 原生 OpenCL 入口
+
+`ecm_opencl_stage2.exe` 共用本页的文本save、ECMSTAGE2任务、TOML、Worker、数量夹限、队列进度、结果发布与停止策略。CUDA默认程序不会自动切换为OpenCL。先运行 `ecm_opencl_stage2.exe --list-devices`，再选择OpenCL编号；它可能因ICD平台重复枚举，不能直接当作CUDA编号。
+
+直接续算可用 `ecm_opencl_stage2.exe --config ecm.toml --save FILE --device N --b2 B2 --d D`；队列入口为 `ecm_opencl_stage2.exe --config ecm.toml --worker N --once`。D=0使用独立基本模型和owned-payload预算。支持显式 `--carrier-exponent P`，先验证N整除2^P−1；不自动比较承载路线。
+
+须提供非零B2：来自CLI、worktodo、`stage2_b2`或共同 `b2_ratio`。首版不支持Auto B2/tune、relocation与CUDA成本profile；不会读取或更新CUDA tune文件。共享配置中的自动tune/自动承载默认不应用于OpenCL，显式请求不支持的CLI选项会拒绝。OpenCL自身采用阻塞传输/事件等待，CUDA `low_cpu_wait` flags不控制其设备调度。
+
+`stage2_arena_mb` 是整个OpenCL owned-buffer硬预算，包含F树、结果、NTT临时区和表；它与CUDA arena口径不同。0表示自动payload预算；`opencl_payload`日志记录本模块实际账本峰值，不是进程显存峰或设备空闲显存。预算不足会失败并保留队列，不自动放宽。
+
+NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续使用OpenCL多项式流水线。归一化和最终GCD由CPU/GMP完成。功能边界见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)，构建与性能见 [OpenCL Stage2性能](../performance/OPENCL_STAGE2.md)。
+
+## CUDA 入口
 
 `ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 

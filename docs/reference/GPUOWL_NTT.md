@@ -17,6 +17,8 @@ CUDA 后端也不是另一套 NTT 算法。它通过 `src/cuda/opencl_compat.cuh
 兼容层，以及 `src/cuda/clwrap_cuda.cpp` 中的 NVRTC 编译流程，复用 `.cl` 内核。
 只有在脱离现有兼容层、实现纯 CUDA 内核时，才需要重新实现本文列出的算术和布局。
 
+源码转换、设备兼容头、主机调用适配，以及本地 PRPLL 与 PrMers/Aevum 副本的差异，见 [OpenCL 内核编译为 CUDA](OPENCL_KERNEL_CUDA_COMPILATION.html)。该资料另列 2026-10-27 所查副本的关键文件哈希，不将本文原始研究的源码行号用于新副本。
+
 
 ## 2. 域、类型与数据组合
 
