@@ -2,7 +2,7 @@
 
 ## 当前结论
 
-0.54.1提供独立 `ecm_opencl_stage2.exe`，支持现有文本save、ECMSTAGE2队列、曲线级进度与结果发布。默认保留设备点生成；AMD目标超过512 bits保留CPU点资格回退。OpenCL仍为显式入口，不替换默认CUDA。
+0.54.2提供独立 `ecm_opencl_stage2.exe`，支持现有文本save、ECMSTAGE2队列、曲线级进度与结果发布。默认保留设备点生成；AMD目标超过512 bits保留CPU点资格回退。可显式启用有界giant坐标窗口，默认提交策略保持。OpenCL仍为显式入口，不替换默认CUDA。
 
 **已确认的大差距首先来自点生成的计算与提交组织，不能全部归因于NTT。** 当前默认启用NVIDIA显式32线程工作组、宽位256点提交、giant基点复用和同context程序缓存；独立GMP检查、因子验证、队列行为和多项式算法保持。
 
@@ -112,14 +112,131 @@ CUDA同属单线程多精度SOS ladder，当前矩阵的giant seed统计为0；�
 
 均为各字段n=3中位数，不要求分项中位数加和等于总时间中位数。CPU未定频、宿主仍有外部负载，准备成本波动保留。7995-bit本小P条件下CPU模式进一步缩短约43.5%，证明分流值得推进；该表不是大P或多worker下的吞吐模型，尚不自动改默认。证据为 `hybrid_wide/`，不混入前述48次默认A/B。
 
+## 点提交组织与多曲线吞吐
+
+本节为独立的1500MHz实验，不能与上文1200MHz矩阵直接混算。主要结论是：**小P的CPU点分流适合并行多曲线；重复开启GPU点进程收益很小或倒退；优先改善单曲线点提交组织，通常比增加GPU worker更有效。** 更大的P已有2²³ NTT对照，但生产大B2、不同厂商的最佳并发度仍未确定。
+
+### 输入与证据口径
+
+- 设备仍为4060 Laptop，驱动610.88、同CPU与GMP。未修改GPU设置；GPU0有外部负载，不参与计算。小P重复矩阵1377条250ms遥测中1375条1500MHz，另2条1890MHz均为0%利用率／0MiB；所有非零利用率样本为1500MHz。大P筛选412条均为1500MHz。采样不等于逐周期频率保证。
+- 完整多曲线采用实际N=4667/7995 bits，从原save只取N，独立生成有效PARAM0、sigma26…29、B1=20的小存档；不同sigma共享N，后端间使用完全相同save。此处不是重复执行一条曲线假装多条曲线。
+- 小P：D2310、P240、B2=2600000、giant1127，每组固定4条曲线，最大并发C=1或4，各组n=3。共144条完整NF。C=2的初筛另存，不与这组重复合并。
+- 大P：D30030、P2880、B2=26000000、giant867，最大NTT=2²³，每组固定2条曲线，C=1或2，**各组仅n=1筛选**，共12条NF。arena1536 MiB；小P为512 MiB，batch64、fold640 MiB。
+- 多曲线采用冻结OpenCL0.54.1与CUDA0.54.0二进制，SHA见上文；程序每曲线仍创建隔离进程。吞吐定义为完成条数／整组墙钟，覆盖进程启动、JIT/准备、强制检查、结果发布与子进程排空；不含预先生成Stage1 save。无额外warmup，不丢首轮，驱动磁盘缓存未清空。
+- Windows Job统计整组进程树CPU时间与同时存在的commit峰值。CPU核当量=Job CPU秒／整组墙钟；commit既非物理内存也非显存。NVML设备used采用250ms样本最大值，包含驱动等设备占用，可能漏过短峰，不等于owned-buffer账本或进程精确峰值。各字段均分别取组间中位数，不相加。
+
+### 多开进程能否提高吞吐
+
+单位curves/s；小P每格n=3个固定4曲线组，中位数。倍率为同模式C4/C1。
+
+| N bits | 点生成／多项式 | C1 | C4 | 吞吐倍率 |
+|---:|---|---:|---:|---:|
+| 4667 | OpenCL GPU／OpenCL | 0.4683 | 0.5022 | 1.07× |
+| 4667 | CPU GMP／OpenCL | 0.6002 | 1.5689 | 2.61× |
+| 4667 | CUDA | 0.6238 | 0.8936 | 1.43× |
+| 7995 | OpenCL GPU／OpenCL | 0.2094 | 0.1900 | 0.91× |
+| 7995 | CPU GMP／OpenCL | 0.3374 | 0.7829 | 2.32× |
+| 7995 | CUDA | 0.3156 | 0.3121 | 0.99× |
+
+7995-bit的GPU点C4单曲线进程中位延迟约21.00 s，而C1约4.74 s；不能把多曲线吞吐与单曲线加速混为一谈。CPU点C4延迟约4.99 s，亦高于C1约2.97 s，但整组结束更早。该结果支持CPU点生成、准备与GPU多项式的重叠，不能证明不同context的GPU内核在SM上同时执行。
+
+资源代价以7995 bits为例，表内C1→C4，各为n=3组间中位数：
+
+| 模式 | CPU核当量 | Job commit MiB | NVML采样设备used峰值 MiB |
+|---|---:|---:|---:|
+| OpenCL GPU点 | 0.92→3.90 | 1029→3749 | 741→2949 |
+| OpenCL CPU点 | 0.90→3.48 | 387→1541 | 197→755 |
+| CUDA | 0.92→3.77 | 1116→4003 | 746→2981 |
+
+OpenCL两种点路径的owned-buffer峰都仅约22.1MiB。它与GPU点模式741MiB的NVML采样值差距很大：工作区账本不包含program、context及驱动私有资源。CPU点单worker少约544MiB设备采样占用，但尚未把这部分逐项归因于stack或驱动堆。不能用owned-buffer预算乘worker数预测进程显存，也不能将表中两类内存相加。
+
+![小P多曲线吞吐与资源](../../data/figures/opencl_curve_concurrency_small_p_resources_20261029.png)
+
+各列分别为两种位宽；从上到下是吞吐、CPU核当量、同时Job commit、NVML采样设备占用。上排误差棒为3组min/max；连线只连接已测C1和C4，没有测量中间点的曲线形状。
+
+大P的n=1筛选：GPU点C1→C2为0.0732→0.0593 curves/s；CPU点为0.1158→0.1734，约1.50×；CUDA为0.2295→0.2175。CPU点仍可改善吞吐，但收益缩小，且未追上该输入的单worker CUDA。不能据此默认4 workers或承诺生产B2下收益。
+
+![大P并发筛选](../../data/figures/opencl_curve_concurrency_large_p_resources_20261029.png)
+
+OpenCL规范允许多队列独立提交，但不保证work-group物理并行；不同队列的依赖也需显式同步。[Khronos OpenCL API规范](https://registry.khronos.org/OpenCL/specs/unified/html/OpenCL_API.html)。NVIDIA对CUDA明确区分同context并发与多个context的时间片；这是CUDA的规则，不能直接当作所有OpenCL实现的保证。[NVIDIA CUDA Best Practices：Concurrent Kernel Execution / Multiple Contexts](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#concurrent-kernel-execution)。本实验只证明这些进程组合的实际吞吐，不据事件重叠推断SM并发。
+
+### 单曲线点批量为何更有效
+
+CL查询本卡compute units=24。group32下，256点命令只有8个work-groups；P240时一个G批也只有8组。仅增大点chunk会被G批截断，不能增加单次有效点数。新的坐标窗口让多批点先生成，再按原G边界进入G树；G批、NTT工作和每批原始标量校验均保持。
+
+同二进制比较：0.54.2默认与 `POINT_WINDOW=4080, POINT_CHUNK=768`；四位宽、两B2、每格n=3，并另跑冻结0.54.1，共72条NF。B1=50000、原始Edwards save与上文矩阵相同；本节1500MHz。八格均核对NTT长度计数、点总数、坐标下载量、save身份及GMP checked_words相同。较高B2的结果如下：
+
+| N bits | 默认点kernel s | 窗口点kernel s | 默认引擎 s | 窗口引擎 s | 引擎减少 |
+|---:|---:|---:|---:|---:|---:|
+| 318 | 0.007360 | 0.003970 | 0.588833 | 0.543267 | 7.7% |
+| 1939 | 0.206541 | 0.114919 | 0.876159 | 0.740925 | 15.4% |
+| 4667 | 1.106824 | 0.605121 | 1.887931 | 1.348631 | 28.6% |
+| 7995 | 3.228669 | 1.757417 | 4.463823 | 3.058093 | 31.5% |
+
+各字段是n=3中位数，分项不要求相加等于总时间中位数。7995-bit点提交由6次减至3次，坐标下载仍2734000 bytes；收益不是少算点或跳过校验。窗口+chunk的8格引擎中位数之和9.532801 s，默认11.681403 s，约减少18.4%。低B2只需一批giant，点内核基本不变；318/1939-bit完整引擎分别有约1.9%/3.7%的反向波动，不能声称逐格收益。冻结0.54.1之和12.462553 s，但默认新旧点kernel基本相同，初始化波动不能归为算法优化。
+
+![单曲线点窗口完整矩阵](../../data/figures/opencl_point_windows_20261029.png)
+
+更大的P使用大P筛选中的sigma26有效Mont save，B1=20，同D/B2/arena，n=3：
+
+| 点提交设置 | 点kernel s | 完整引擎 s | 最长点命令 s | owned-buffer峰 MiB |
+|---|---:|---:|---:|---:|
+| 默认chunk256、窗口0 | 10.440042 | 13.375935 | 0.764792 | 262.75 |
+| 仅chunk768、窗口0 | 3.967499 | 6.899059 | 0.765206 | 262.75 |
+| chunk768、窗口4080 | 3.967338 | 6.903580 | 0.765233 | 262.75 |
+
+这里giant867<P2880，窗口没有合并多批G的机会；收益由chunk填充带来，不能都归为跨批窗口。点提交16→6次，引擎约减少48.4%，NTT和检查相同。最长命令没有按点数线性变长，符合更好利用SM的解释，尚未测实际occupancy。窗口不是异步双缓冲，也没有实现点／NTT同时执行。
+
+768也不是通用最优值：固定窗口的7995-bit小P初筛，chunk512/768/1024/1536引擎约3.459/2.945/3.698/3.176 s，各n=1。更大的命令还取决于私有内存、波数与标量长度。默认仍保留保守chunk与窗口0，尚未把该本机值推广为所有位宽、显示设备和驱动的默认值。
+
+### 私有算术、等待与NTT还剩什么
+
+独立点探针使用相同7995-bit N、240个11-bit标量，所有输出逐点对照Python ladder，OpenCL/CUDA XADD6投影坐标逐word一致，每项n=3，无丢弃预热：
+
+| 实现 | group | kernel中位数 s |
+|---|---:|---:|
+| OpenCL原SOS循环 | 64 | 1.258895 |
+| CUDA现有SOS | 64 | 0.444175 |
+| OpenCL原SOS循环 | 32 | 0.471022 |
+| OpenCL内层展开4 | 32 | 0.378311 |
+
+相同group64时OpenCL约2.83倍；改group32后大幅缩小差距。微基准的group32与CUDA group64不能当作编译器单变量比较。内层展开4在该group32输入约减少19.7%，但未接入生产默认。首次本进程build API约1.25→2.23 s，always_inline+展开2约7.27 s；驱动缓存会显著改变build成本，group64后续编译只有约0.01 s，这些不是冷编译保证。微基准处于1500MHz会话，未单独连续记录频率。
+
+OpenCL报告private bytes=19024；CUDA NW128的cuobjdump为64 registers、stack16400 bytes。它们不是同一指标，不能直接计算spill差值；PTX虚拟寄存器亦不是硬件寄存器。已确认宽位private资源与组织方式敏感，实际cache miss、spill流量和占用率仍待硬件剖析。
+
+同一group32点探针只改变等待方式：直接clWait的进程CPU中位数0.468750 s；flush后每1ms查询事件并休眠为0.031250 s，约减少93.3%，kernel均约0.471 s，调用墙钟约0.47165→0.47281 s。此处CPU计时有15.625ms量化，且仅代表这次长点命令。**阻塞API不等于宿主一定休眠；降低等待CPU也不等于减少设备计算。** 实验未把1ms等待推广到全部短NTT边界，未修改生产等待方式。
+
+多项式侧仍在每次乘法后回读verdict/carry并等待完成；NTT是两次正向加一次融合乘积逆向，每层树已按shape批处理。令长度L=2ᵏ、tile=2ᵗ，当前一次卷积批调用的NTT kernel数为3(k−t+1)，不是3×batch；逻辑变换数才是3×batch。默认t=min(8,k)，L=2²³时48次NTT提交，另有pack/carry/S4。NTT主数组每slice的逻辑读写量约 `[48(k−t+1)+8]×L` bytes，不含根表、pack/S4且不等同实际DRAM流量。大NTT有充分计算时，继续加曲线主要增加资源竞争；短NTT／CPU准备间隙才更值得合并提交。
+
+点成本也有算法差距。令w=ceil(N_bits/64)、I=floor(B2/D)+2，当前每个非零设备ladder标量k约需 `10+11 floor(log₂k)` 次Montgomery乘法（含输入/输出转换），每次SOS主项2w²次64-bit MAC。重标定后的giant总成本因此为O(w² I log I)。CUDA已有分段差分chain，段内新giant一次xADD，主体降至O(w²I)，另加种子与异常恢复。此处小P测试的CUDA实际未启用chain，不能把已测差额全部归于chain；生产大I时才需单独比较。OpenCL承载当前只改变多项式算术，点仍在真实N上计算，不能期待承载自动消除这项成本。
+
+### 后续实现优先级
+
+1. **先完善单曲线点执行计划**：基于w、标量位数、SM数、点数校准group/chunk/窗口，控制最长命令与坐标额度。把当前同卡收益扩展到长标量、16384 bits、AMD/Intel后再改变默认；不能只填一个更大常数。
+2. **推进分段giant chain**：复用现有六模乘xADD和原始[iD]Q oracle，先完成种子非单位、段内无穷远／退化恢复及全叶哨兵，再比较生产I范围。必要时研究按真实N投影的梅森快速点算术，不能借用多项式承载资格代替验证。
+3. **CPU点分流配合有界多曲线**：按点数、位宽和CPU负载短校准，分别估算单曲线延迟与整组吞吐；小P优先试2～4曲线，大P先1～2。先建立全卡总预算、独立曲线进度／错误隔离，不能让每条曲线都独占同一份“可用显存”。
+4. **共享context的跨曲线批处理**：相同N/算术形状可共享program、根表和只读模数；F/G/逆、workspace与结果按曲线隔离。把相同长度就绪卷积合入现有batch维，或使用独立queue/kernel及显式事件。不能直接并行调用当前全局ABI；共享不可变program与共享可变kernel参数是不同问题。吞吐须超过已测CPU分流和单曲线优化基线，才值得引入调度复杂度。
+5. **有界NTT verdict窗口与tile/outer组织**：先让检查、工作区租约、借用所有权与失败排空跨少量操作保持有效，再批量检查；不能删除verdict换速度。长点命令低CPU等待可单独推进，短NTT采用自适应等待，避免逐次增加1ms延迟。SOS小展开保留为按设备校准候选。
+
+### 代码与复现
+
+- 点窗口／原始取样：[engine.cpp](../../src/ecm/stage2/opencl/engine.cpp#L115)、[G批调度](../../src/ecm/stage2/opencl/engine.cpp#L220)。SOS及ladder：[points.cl](../../src/ecm/opencl/resources/stage2/points.cl#L21)；同步等待：[points.cpp](../../src/ecm/stage2/opencl/points.cpp#L37)。
+- NTT pass组织：[runtime.cpp](../../src/ecm/opencl/ntt/runtime.cpp#L342)；强制乘法检查：[polynomial.cpp](../../src/ecm/stage2/opencl/polynomial.cpp#L151)；树内shape批处理：[arithmetic.cpp](../../src/ecm/stage2/opencl/arithmetic.cpp#L128)。CUDA chain：[giant_chain.cuh](../../src/ecm/stage2/cuda/device/giant_chain.cuh#L6)、[调度入口](../../src/ecm/stage2/cuda/points.cpp#L338)。
+- [多曲线测量脚本](../../tools/bench/bench_opencl_curve_concurrency.py)：`--opencl-build DIR --cuda-build DIR --out NEW --exponents 5003,8011 --parallel 1,4 --curves 4 --repeats 3`。大P另设`--d 30030 --b2 26000000 --arena-mb 1536 --exponents 8011 --parallel 1,2 --curves 2`。脚本隔离任务，未实现生产队列自动并发。
+- [统计和图](../../tools/bench/report_opencl_curve_concurrency.py)：`--run DIR --out NEW --figure NEW.png`，先核对冻结二进制、输入、原日志及结果摘要。Job计账：[stage2_windows_job.py](../../tools/bench/stage2_windows_job.py)。
+- [点编译／等待探针](../../tools/experiments/opencl/point_codegen.py)：`--save FILE --out NEW --device 1 --group 32 --repeats 3`；可选`--variants baseline,unroll4`、`--wait sleep`、`--cuda-dll FILE`。仅修改实验源副本，不改生产内核；PTX中local字段为程序范围静态信息，不是动态访存计数。
+- 原始证据：`data/experiments/opencl_concurrency_20261029/`。主要目录为`small_p_repeat/`、`large_p_screen/`、`window_matrix/`、`large_window_matrix/`、`large_chunk_only/`、`codegen7995/`、`codegen7995_group64/`、`quiet7995/`。初筛及测试工具失败记录另存，未覆盖或并入最终样本。派生表／图为`data/benchmarks/opencl_concurrency_20261029/`与本节图。
+- 窗口计时二进制0.54.2 SHA256=`b6c24966b1bab1925f22b4e48421269b44a3df739df461b0d735174fe47c02f2`，资源与GMP身份均随每组manifest冻结。CUDA点DLL SHA256=`d95874567be55ec901ca862d32346f5ab9de010050aaa635bbd741759487e27c`。0.54.1/CUDA0.54.0身份见上文，未替换生产目录。
+
 ## 正确性与适用范围
 
+- 0.54.2在RTX4060 Laptop默认设备点、显式CPU点、AMD gfx1150各通过18项生产门禁，共54项。新增窗口末尾短批、非整G批请求对齐、batch额度裁剪、非法窗口拒绝；对照要求NTT计数和原始点GMP覆盖完全相同。正式证据在`opencl_concurrency_20261029/verification_window_{gpu1_final,cpu_gpu1,amd}/`。AMD仍保留宽位CPU点资格限制。
 - 最终0.54.1二进制在RTX4060 Laptop、AMD gfx1150各通过14项生产门禁：正因子257、普通NF、梅森/余因子承载、非法承载、预算、checksum、基本D、plan-only、队列停止与重排续跑等。
 - RTX4060 Laptop显式CPU点模式另通过相同14项生产门禁，环境覆盖与证据保存在 `verification_cpu_gpu1/`。
 - 新增种子非单位回归使用N=257000771、sigma6、B1=20、B2=300、D46。测试要求到达giant阶段、得到257且尚未下降，确实覆盖[D]Q种子分母路径，不能以baby阶段命中替代。
 - 两卡NTT检查各包含84810个域算术值、8982512个roundtrip word与同量卷积word、235个门禁；覆盖程序键的源码/选项、context隔离与缓存关闭。GPU1另通过普通/梅森S4至16384-bit、2820门禁，树代数90642 words/7小曲线，以及8191-bit显式group32点运算16522 words。
 - AMD1939/7995-bit真实Edwards save通过CPU点回退加OpenCL多项式NF，并使用原始[iD]Q校验重标定后的CPU点；没有取消宽位AMD设备点资格限制。
-- 本轮48条NF与有限正命中不代表全部曲线、Intel、其他驱动、设备丢失、长队列或大B2资格。最大NTT为2^19；不能据此评价常见大P的2^23及以上。CUDA默认路径未修改，OpenCL尚未接入Auto B2/tune、自动承载比较或release自动拆包。
+- 上文1200MHz的48条NF与有限正命中不代表全部曲线、Intel、其他驱动、设备丢失、长队列或大B2资格；其最大NTT为2^19。本节1500MHz研究另覆盖P2880／2²³，但仍未形成生产大B2性能矩阵。CUDA默认路径未修改，OpenCL尚未接入Auto B2/tune、自动承载比较或release自动拆包。
 
 ## 代码与复现
 
@@ -145,8 +262,4 @@ CUDA同属单线程多精度SOS ladder，当前矩阵的giant seed统计为0；�
 
 ## TODO
 
-1. 宽位点运算优先：在当前标量基点重用上，研究差分chain、分段退化恢复、减少SOS依赖链与私有数组访存；以原始完整标量oracle验收。
-2. 比较CPU点分流与设备批量；分流模型需同时考虑位宽、点数、标量长度及CPU负载，不能只按N阈值或单个样本切换默认。
-3. 为短NTT的verdict设计有界提交窗口，证明workspace与结果寿命，再推进tile/outer联合组织；保持检查和异常传播。
-4. 小任务进一步拆分ICD/context/build固定成本；缓存须保留设备/驱动/完整源码与选项身份，不能共享可变kernel参数。
-5. 扩展大P、2^23以上NTT、16384-bit真实生产save与更大B2；验证点chunk/命令时长和显存边界后再校准OpenCL D模型。
+按[后续实现优先级](#后续实现优先级)推进点执行计划、giant chain、CPU分流及跨曲线批处理、NTT提交窗口。生产大B2、16384-bit长标量、更多厂商及设备丢失恢复仍需验证；不能从已测小任务外推默认并发度或全卡显存边界。[研究草稿](../development/OPENCL_STAGE2_CONCURRENCY_DRAFT.md)保留待用户处理。

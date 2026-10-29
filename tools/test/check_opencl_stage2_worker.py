@@ -5,7 +5,9 @@ from ctypes import wintypes as wt
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -65,11 +67,13 @@ def records(folder):
     path=folder/'results.jsonl'
     return [json.loads(x) for x in path.read_text(encoding='utf-8-sig').splitlines() if x.strip()] if path.exists() else []
 
-def run(exe,folder,args,label='run',expect=0):
+def run(exe,folder,args,label='run',expect=0,environment=None):
     cmd=[str(exe),'--config',str((folder/'ecm.toml').resolve()),*map(str,args)]
     (folder/(label+'.command.json')).write_text(json.dumps(cmd,indent=2),encoding='utf-8')
     with (folder/(label+'.log')).open('w',encoding='utf-8') as log:
-        p=subprocess.run(cmd,cwd=folder,stdout=log,stderr=subprocess.STDOUT,timeout=240)
+        env=os.environ.copy()
+        env.update(environment or {})
+        p=subprocess.run(cmd,cwd=folder,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=240)
     if (expect==0 and p.returncode) or (expect!=0 and not p.returncode):
         raise AssertionError(f'{label}: exit {p.returncode}, expected {expect}; {folder}')
     return (folder/(label+'.log')).read_text(encoding='utf-8')
@@ -123,11 +127,11 @@ def main():
     exe=(frozen/'ecm_opencl_stage2.exe').resolve()
     tests=[]
     start=time.perf_counter()
-    def case(name,line,b2=300,d=30,extra=(),expect=0,arena=512):
+    def case(name,line,b2=300,d=30,extra=(),expect=0,arena=512,environment=None):
         folder=a.out/name
         config(folder,a.device,arena)
         (folder/'input.save').write_text(line,encoding='utf-8')
-        log=run(exe,folder,['--save',str((folder/'input.save').resolve()),'--b2',b2,'--d',d,'--curves',1,'--factor-only','--ntt-counts',1,*extra],expect=expect)
+        log=run(exe,folder,['--save',str((folder/'input.save').resolve()),'--b2',b2,'--d',d,'--curves',1,'--factor-only','--ntt-counts',1,*extra],expect=expect,environment=environment)
         rows=records(folder)
         if expect:
             assert not rows,'failure published result'
@@ -146,6 +150,28 @@ def main():
     prime=(1<<127)-1
     line=save_line(prime)
     ordinary,_=case('no_factor',line)
+    # Widen point generation over several G batches, with a final partial
+    # window and a point chunk not divisible by the G degree. NTT work and
+    # independent point-check coverage must remain identical to the baseline.
+    case('point_window_reference',line,b2=960,
+        environment={'ECM_OPENCL_POINT_WINDOW':'0','ECM_OPENCL_POINT_CHUNK':'7'})
+    case('point_window_partial',line,b2=960,
+        environment={'ECM_OPENCL_POINT_WINDOW':'18','ECM_OPENCL_POINT_CHUNK':'7'})
+    # Diagnostic summaries belong to the file log, not the readable console.
+    reference=(a.out/'point_window_reference/worker.log').read_text(encoding='utf-8-sig')
+    window=(a.out/'point_window_partial/worker.log').read_text(encoding='utf-8-sig')
+    def statistic(text,prefix):
+        return next(s for s in text.splitlines() if s.startswith(prefix+':'))
+    assert statistic(reference,'ntt_lengths')==statistic(window,'ntt_lengths')
+    assert statistic(reference,'opencl_checks')==statistic(window,'opencl_checks')
+    assert 'requested=18 effective=16' in window
+    case('point_window_budget_cap',line,b2=960,
+        environment={'ECM_OPENCL_POINT_WINDOW':'65536','ECM_OPENCL_POINT_CHUNK':'7','NTT_S4_BATCH_MB':'1'})
+    capped=(a.out/'point_window_budget_cap/worker.log').read_text(encoding='utf-8-sig')
+    values=dict(re.findall(r'(requested|effective|cap|G_batch)=(\d+)',statistic(capped,'opencl_point_window')))
+    assert int(values['effective'])<=int(values['cap']) and int(values['effective'])%int(values['G_batch'])==0
+    assert statistic(reference,'ntt_lengths')==statistic(capped,'ntt_lengths')
+    case('invalid_point_window',line,expect=2,environment={'ECM_OPENCL_POINT_WINDOW':'65537'})
     lifted,_=case('mersenne',line,extra=['--carrier-exponent',127])
     assert ordinary[0].get('factors',[])==lifted[0].get('factors',[])==[]
     target=((1<<41)-1)//13367

@@ -37,6 +37,7 @@ def main():
     p.add_argument('--exponents', default='503,2003,5003,8011')
     p.add_argument('--b2', default='260000,2600000')
     p.add_argument('--d', type=int, default=2310)
+    p.add_argument('--arena-mb', type=int, default=512)
     p.add_argument('--repeats', type=int, default=3)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--telemetry-device', type=int, default=1)
@@ -48,7 +49,7 @@ def main():
         p.error('Need unique named variants')
     a.out.mkdir(parents=True)
     manifest = {'started_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'variants': [],
-                'D': a.d, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
+                'D': a.d, 'arena_mb': a.arena_mb, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
                 'gpu_settings_changed': False, 'inherited_ntt_environment': {
                     k: v for k, v in os.environ.items() if k.startswith(('ECM_OPENCL_', 'NTT_'))}}
     for spec in specs:
@@ -89,12 +90,12 @@ def main():
                             folder = a.out / f'm{exponent}_b{b2}_r{repeat}_{spec["name"]}'
                             folder.mkdir()
                             config = folder / 'ecm.toml'
-                            config.write_text('''[stage2]
+                            config.write_text(f'''[stage2]
 stage2_log_level="phases"
 stage2_auto_carrier=false
 stage2_tune_runtime=false
 stage2_short_calibration=false
-stage2_arena_mb=512
+stage2_arena_mb={a.arena_mb}
 stage2_batch_mb=64
 stage2_fold_mb=640
 stage2_results_file="results.jsonl"
@@ -125,6 +126,10 @@ stage2_log_file="worker.log"
                             row = {'variant': spec['name'], 'exponent': exponent, 'bits': bits, 'B2': b2,
                                    'D': a.d, 'P': int(shape[2]), 'repeat': repeat, 'full': full,
                                    'points': {**fields(text, 'opencl_points'), **fields(text, 'opencl_point_io')},
+                                   'point_command': fields(text, 'opencl_point_command'),
+                                   'point_window': fields(text, 'opencl_point_window'),
+                                   'checks': fields(text, 'opencl_checks'), 'payload': fields(text, 'opencl_payload'),
+                                   'ntt_lengths': next((s for s in text.splitlines() if s.startswith('ntt_lengths:')), ''),
                                    'split': {**fields(text, 'opencl_split'), **fields(text, 'opencl_tail')},
                                    'programs': fields(text, 'opencl_programs'),
                                    'process_seconds': seconds, 'save_sha256': sha(frozen), 'binary_sha256': spec['sha256'],

@@ -23,10 +23,13 @@ NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续
 | `ECM_OPENCL_POINTS` | `device` | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
 | `ECM_OPENCL_POINT_GROUP` | NVIDIA=`32`，其他=`0` | `0`由运行时选择；正整数须≤设备与点kernel上限。每组点线程数 |
 | `ECM_OPENCL_POINT_CHUNK` | 按目标N位宽/厂商 | `1..4096`；每次点ladder的最多点数，独立于多项式batch；默认表见下文 |
+| `ECM_OPENCL_POINT_WINDOW` | `0` | `0..65536`；0按原G批生成giant。正值请求跨批坐标窗口，经batch预算裁剪并向下对齐G批；不改变G树边界、NTT次数和逐G批GMP取样 |
 | `ECM_OPENCL_GIANT_BASE` | `1` | `0\|1`；复用[D]Q，把每点标量iD缩为i。0保留原完整标量对照 |
 | `ECM_OPENCL_CACHE_PROGRAMS` | `1` | `0\|1`；同一context内按完整源代码/选项复用program。关闭后每次计划分别build |
 
 默认点chunk按真实目标N的64-bit limb数w选择：NVIDIA在w≤8时1024、9≤w≤128时256、w>128时16；其他厂商依次为w≤8:1024、w≤32:256、w≤64:128、w≤128:64、其余16。AMD宽位CPU回退不提交点kernel，chunk此时不构成设备性能参数。
+
+窗口是主机坐标暂存范围，chunk是单次设备命令上限，两者需配合。小P时仅增大chunk仍受原G批点数限制。窗口有效值至少为一个G批，额外坐标准入按 `6×算术limbs×8×点数≤batch MiB` 估算；这不是包含GMP分配器开销的主机内存硬上限。`opencl_point_window`打印请求、有效点数、估算cap与G批大小。4060 Laptop的已测样例见[点提交组织与多曲线](../performance/OPENCL_STAGE2.md#点提交组织与多曲线吞吐)；尚无跨设备默认选型。更大的chunk不保证更快，也不保证显示设备的长标量命令时限。
 
 `stage2_log_level="phases"`开启点内核、CPU检查/归一化、树阶段与程序缓存的汇总；默认批进度级别不新增这些明细。日志字段与嵌套计时见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)。
 

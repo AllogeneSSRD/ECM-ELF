@@ -112,7 +112,7 @@ struct PointGenerator {
         const auto use=setting("ECM_OPENCL_GIANT_BASE",1);if(use>1)throw std::runtime_error("ECM_OPENCL_GIANT_BASE must be 0 or 1");use_giant_base=use!=0;
     }
     Big BigValue(){Big value;mpz_set(value.v,n);return value;}
-    Values generate(const std::vector<Word>&scalars,std::set<std::string>&f,Word&checked,Word step=1){
+    Values generate(const std::vector<Word>&scalars,std::set<std::string>&f,Word&checked,Word step=1,std::size_t sample_span=0){
         if(scalars.empty())throw std::runtime_error("empty point generation");
         const Point* origin=&base;std::vector<Word> reduced;
         if(step>1&&use_giant_base){
@@ -147,7 +147,11 @@ struct PointGenerator {
         // Always compare rebased points with the original [iD]Q ladder,
         // including the CPU fallback. This oracle does not reuse giant_base.
         if(device||origin!=&base){const auto check_begin=now();
-            for(auto k:std::set<std::size_t>{0,scalars.size()/2,scalars.size()-1}){const auto oracle=ladder(base,scalars[k],a24,n);auto cross=sub(mul(x[k],oracle.z,n),mul(z[k],oracle.x,n),n);if(mpz_sgn(cross.v))throw std::runtime_error("OpenCL ladder GMP mismatch");checked+=w*2;}
+            // A wider generation window must preserve the three original
+            // samples of EVERY G batch, including the final short batch.
+            const auto span=sample_span?sample_span:scalars.size();
+            for(std::size_t lo=0;lo<scalars.size();lo+=span){const auto count=std::min(span,scalars.size()-lo);
+                for(auto k:std::set<std::size_t>{lo,lo+count/2,lo+count-1}){const auto oracle=ladder(base,scalars[k],a24,n);auto cross=sub(mul(x[k],oracle.z,n),mul(z[k],oracle.x,n),n);if(mpz_sgn(cross.v))throw std::runtime_error("OpenCL ladder GMP mismatch");checked+=w*2;}}
             check_seconds+=now()-check_begin;
         }
         const auto norm_begin=now();auto out=normalize(x,z,n,f);normalize_seconds+=now()-norm_begin;return out;
@@ -181,6 +185,8 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         const double begin=now();ecm_stage2::ModulusContext m;std::string error;if(!m.configure(n,16,carrier,error))throw std::runtime_error(error);
         Big saved;if(mpz_set_str(saved.v,x,16)||mpz_sgn(saved.v)<0||mpz_cmp(saved.v,m.target())>=0)throw std::runtime_error("invalid Stage1 X");
         auto ds=cln::devices();if(index<0||size_t(index)>=ds.size()||!ds[index].supported)throw std::runtime_error("unsupported OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[index]));
+        const auto requested_window=setting("ECM_OPENCL_POINT_WINDOW",0);
+        if(requested_window>65536)throw std::runtime_error("ECM_OPENCL_POINT_WINDOW must be 0..65536");
         EcmStage2Metrics result;result.d=s.d;result.p=s.p;result.giant_points=s.giants;result.giant_last=s.giants;result.phases.seconds[0]=now()-begin;
         stage2_log::phase("Initialize OpenCL arithmetic and validate");
         cln::Options options;options.device=index;options.budget_bytes=budget(ds[index]);options.resource_root=resources();
@@ -211,11 +217,22 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         stage2_log::phase("Generate and normalize baby points");double t=now();std::vector<Word> indices;indices.reserve(s.p);for(Word j=1;j<=s.d/2;++j)if(std::gcd(j,s.d)==1)indices.push_back(j);if(indices.size()!=s.p)throw std::runtime_error("D/phi baby count");auto babies=generator.generate(indices,factors,result.checked);result.phases.seconds[2]=now()-t;if(!factors.empty())return finish();
         stage2_log::phase("Build baby-point F tree and polynomial inverse");t=now();cls::Resultant tree(field,field.upload(flatten(babies,m.W),babies.size()));result.phases.seconds[3]=now()-t;
         std::vector<std::size_t> sentinels;for(auto k:std::set<std::size_t>{0,std::size_t(s.p/2),std::size_t(s.p-1)})sentinels.push_back(k);Values expected(sentinels.size(),Big(1));
+        // The point window may span several G batches. Keep G boundaries
+        // unchanged and admit the host coordinate staging independently.
+        const auto window_cap=(setting("NTT_S4_BATCH_MB",64)<<20)/(6*m.W*8);
+        const auto admitted_window=std::min(requested_window,window_cap);
+        const auto point_window=std::max(s.chunk,(admitted_window/s.chunk)*s.chunk);
+        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu\n",requested_window,point_window,window_cap,s.chunk);
         stage2_log::phase("Giant points, G trees and fold");const double loop=now();Word batches=0;
-        for(Word first=1;first<=s.giants;){const auto count=std::min(s.chunk,s.giants-first+1);indices.resize(count);for(Word k=0;k<count;++k)indices[k]=(first+k)*s.d;t=now();auto giants=generator.generate(indices,factors,result.checked,s.d);result.giant_seconds+=now()-t;if(!factors.empty()){result.phases.seconds[6]=now()-loop;return finish();}
-            t=now();for(std::size_t k=0;k<sentinels.size();++k)for(const auto&g:giants)expected[k]=mul(expected[k],sub(babies[sentinels[k]],g,m.target()),m.target());
-            sentinel_seconds+=now()-t;t=now();tree.append(field.upload(flatten(giants,m.W),giants.size()));result.gtrees_seconds+=now()-t;++batches;first+=count;
-            if(stage2_log::enabled(stage2_log::batches))std::cout<<"batched_progress: batch="<<batches<<'/'<<(s.giants+s.chunk-1)/s.chunk<<" points="<<first-1<<'/'<<s.giants<<" backend=opencl\n";
+        for(Word first=1;first<=s.giants;){const auto amount=std::min(point_window,s.giants-first+1);indices.resize(amount);for(Word k=0;k<amount;++k)indices[k]=(first+k)*s.d;
+            t=now();auto window=generator.generate(indices,factors,result.checked,s.d,std::size_t(s.chunk));result.giant_seconds+=now()-t;
+            if(!factors.empty()){result.phases.seconds[6]=now()-loop;return finish();}
+            for(Word offset=0;offset<amount;){const auto count=std::min(s.chunk,amount-offset);
+                Values giants(window.begin()+std::size_t(offset),window.begin()+std::size_t(offset+count));
+                t=now();for(std::size_t k=0;k<sentinels.size();++k)for(const auto&g:giants)expected[k]=mul(expected[k],sub(babies[sentinels[k]],g,m.target()),m.target());
+                sentinel_seconds+=now()-t;t=now();tree.append(field.upload(flatten(giants,m.W),giants.size()));result.gtrees_seconds+=now()-t;++batches;first+=count;offset+=count;
+                if(stage2_log::enabled(stage2_log::batches))std::cout<<"batched_progress: batch="<<batches<<'/'<<(s.giants+s.chunk-1)/s.chunk<<" points="<<first-1<<'/'<<s.giants<<" backend=opencl\n";
+            }
         }result.phases.seconds[6]=now()-loop;
         stage2_log::phase("Normalize fold and descend F tree");t=now();const auto leaves=import(field.download(tree.values()),m.W);result.descent_seconds=now()-t;result.phases.seconds[7]=result.descent_seconds;
         for(std::size_t k=0;k<sentinels.size();++k){Big v;mpz_mod(v.v,leaves[sentinels[k]].v,m.target());if(mpz_cmp(v.v,expected[k].v))throw std::runtime_error("OpenCL full-range leaf sentinel mismatch");result.checked+=m.W;}

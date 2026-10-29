@@ -98,6 +98,10 @@ AMD点模块超过512 bits的资格限制保持不变；生产引擎显式使用
 
 NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。≤512 bits每次至多1024点，513～8192 bits至多256点，更宽至多16点。其他厂商保留运行时工作组及原有位宽分块。此上限是提交策略，不是所有显示设备/标量长度的超时保证；`opencl_point_command.max_kernel_seconds`记录实测最长点命令。
 
+giant坐标窗口可显式跨越多个G批，默认0仍采用一个G批。有效窗口按已有batch坐标额度裁剪，向下对齐G批且至少保留一个G批；设备每条命令仍受独立chunk限制。窗口只改变点生成、暂存和归一化组织；随后按原边界构造G树，保留每个G批的首／中／末原始标量GMP样本，以及完整giant范围的叶哨兵。末尾不足一批和种子非单位路径不跳过验证。入口为[engine.cpp](../../src/ecm/stage2/opencl/engine.cpp#L220)，开关见[Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
+
+当前生产ABI每次执行一条曲线，主机日志、部分计数及Runtime可变kernel参数不支持对同一引擎直接多线程重入。多曲线吞吐实验使用独立进程、独立save和结果目录，不消费生产队列，也没有新增自动并行调度。每条曲线的owned-buffer预算独立，不能充当多worker的全卡显存总预算。实测和共享context批处理的后续要求见[性能报告](../performance/OPENCL_STAGE2.md#点提交组织与多曲线吞吐)。
+
 诊断细节仅在phases及以上日志级别输出。`opencl_points.coordinates`含点分配、提交、等待、坐标回读与GMP导入；`kernel`是其中嵌套的设备事件总时长。sample_checks、normalize、seed分别计时；这些点明细包含于baby/giant。`opencl_split`区分baby、F/逆、giant、G/fold，`opencl_tail`单列叶子oracle、下降、积/GCD，禁止将嵌套字段重复相加。专家对照开关见 [Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
 
 OpenCL使用独立的保守owned-buffer模型与runtime硬预算，不能把设备global memory当作free。arena=0时默认预算为global的一半与1GiB中的较小值；显式arena为payload上限，F树、结果、临时区和根表共同计账。基本准入模型还保留32MiB固定裕量，可能拒绝本可容纳的极小预算。失败不会自动放宽预算，也不推进完成收据。
