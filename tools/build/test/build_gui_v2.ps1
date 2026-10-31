@@ -11,6 +11,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+# Synchronize before collecting input hashes: generated headers/XML are frozen inputs too.
+foreach ($generator in @('generate_ecm_config.py','generate_gui_v2_state.py')) {
+    Write-Host "== GUI v2 configuration: synchronize $generator =="
+    & python (Join-Path $repo "tools/gen/$generator")
+    if ($LASTEXITCODE -ne 0) { throw "GUI v2 configuration synchronization failed: $generator" }
+}
 if (-not [IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 if ($GmpRoot) { $GmpRoot = [IO.Path]::GetFullPath($GmpRoot) }
@@ -24,6 +30,8 @@ $catalog = @('src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/app
     'src/ecm/platform/generated','src/ecm/group_order','src/ecm/curve','src/ecm/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1')
 if (-not $GmpRoot) { $catalog += 'third_party/gmp-zen3/dist' }
 $catalog += @('tools/build/test/build_gui_v2.ps1','tools/build/internal/check_gui_v2_config.cmake',
+    'tools/gen/generate_ecm_config.py','tools/gen/generate_gui_v2_state.py',
+    'config/ecm_options.json','config/ecm_config.generated.json',
     'config/gui_v2_localization.generated.json','config/gui_v2_state.generated.json')
 $inputs = @($catalog | ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $repo $_) -File -Recurse })
 if($BasePetOnly) {

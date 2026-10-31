@@ -46,6 +46,18 @@ add_library(ecm_gui_v2_models STATIC "${_old}/worker_controller.cpp" "${_old}/wo
     "${_old}/toml_file.cpp" "${_old}/log_parse.cpp" "${_old}/platform_win32.cpp"
     "${_old}/results.cpp" "${_old}/worktodo_gen.cpp" "${_old}/probability_model.cpp" "${_old}/gpu_monitor.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ui/localization_xml.cpp")
 target_sources(ecm_gui_v2_models PRIVATE "${ECM_GUI_V2_ROOT}/src/io/files.cpp")
+# Keep generated configuration visible to incremental builds even in old caches
+# whose localized MSVC include scan did not record header dependencies.
+get_target_property(_gui_config_sources ecm_gui_v2 SOURCES)
+get_target_property(_gui_model_sources ecm_gui_v2_models SOURCES)
+set_property(SOURCE ${_gui_config_sources} ${_gui_model_sources} APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/ui_values.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/business_options.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/localization_aliases.h"
+    "${ECM_GUI_V2_ROOT}/src/ecm/application/configuration/generated/ecm_config_generated.h"
+    "${ECM_GUI_V2_ROOT}/src/ecm/application/configuration/generated/ecm_toml_schema.h"
+    "${ECM_GUI_V2_ROOT}/src/ecm/application/configuration/generated/ecm_toml_template.h"
+    "${ECM_GUI_V2_ROOT}/src/ecm/platform/generated/configuration_defaults.h")
 target_include_directories(ecm_gui_v2_models PUBLIC "${ECM_GUI_V2_ROOT}/include" "${ECM_GUI_V2_ROOT}/src" "${_old}")
 target_compile_features(ecm_gui_v2_models PUBLIC cxx_std_17)
 target_compile_definitions(ecm_gui_v2_models PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

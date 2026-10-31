@@ -4,6 +4,10 @@ GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.53.0
 
 ## 构建与启动
 
+GUI v2 独立 BAT、dev 包装和测试构建共用 `tools/build/test/build_gui_v2.ps1`。入口先依次运行 `generate_ecm_config.py`、`generate_gui_v2_state.py`，同步业务配置、GUI 侧车、业务选项头文件及选项 XML，再冻结源码/配置摘要并配置 CMake；任一步失败即停止。无内容变化的生成物保留时间戳。CMake 的过期检查及构建后源码身份复查继续生效；直接调用 CMake 时须自行先完成这两个生成步骤。
+
+GUI 与模型源文件显式依赖业务/GUI 配置生成头文件，确保生成内容变化时重编译，包括旧缓存未正确记录 MSVC 本地化头文件依赖的情况。没有变化的生成物不会因此触发重编译；这不替代其他普通头文件的编译器依赖跟踪。
+
 完整 CUDA 发布由 `tools/build/build_release.ps1/.bat` 构建，使用独立 `gui-v2-release` 目录、统一 vcpkg 通用 GMP，并只启用基础 Classic ELY 注册项和资源。两个 CUDA 包各自包含完整 GUI v2、群阶/诊断助手和相邻计算 worker。发布不会直接拾取已有 local GUI 候选；入口核对 GMP头/库/DLL、源码和程序身份。下面的独立 local/GUI-only 入口保留完整皮肤候选及其本地依赖条件，完整发布的目录、工具链和载荷以[构建与发布](BUILD.md)为准。
 
 运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、群阶分析助手 `ecm_group_order_ui.exe`、`gmp-10.dll`、本地 `libpari.dll` 及 `pari-data/`。准备本地PARI依赖时，运行 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3安装目录> --archive <原始源码tar.gz>`，脚本验证固定源码摘要、复制Win64库/已配置头文件/SEA数据并记录身份；默认位置 `third_party/pari-2.17.3` 由Git忽略。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。独立 helper 默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
