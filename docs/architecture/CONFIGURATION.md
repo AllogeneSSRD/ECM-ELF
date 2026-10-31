@@ -24,7 +24,7 @@ Stage1 的 [cli.cpp](../../src/io/cli.cpp) 一次转换每个显式选项并保�
 
 `ckpt_backups` 的 0..16 范围由配置定义与生成绑定拒绝越界值，不静默截断；负 `ckpt_seconds` 仍归一化为禁用定期存档。重复 sigma 完整替换值和可选 param 声明；独立显式 `--gpu-param` 的矛盾检查继续保留。
 
-CLI/配置错误停止启动，诊断包含来源、键、原值和预期范围；选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
+CLI/配置错误停止启动。TOML 诊断由 [config_format.h](../../src/io/config_format.h) 的 `config_diagnostic()` 统一排版：`INPUT[config]`、`file=路径:行号`、`worker=`、`key=`、`value=`、错误原因和 `expected 类型 范围` 各占一行。`value` 保留填写的原始右值；`worker=0` 表示全局分区，其他数字表示发生错误的 worker 覆盖分区。布尔类型只能填写 `true` 或 `false`，不能使用整数 `0`、`1`。选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
 
 ## 运行时限制
 

@@ -24,9 +24,24 @@ static void rejected(const std::filesystem::path &path,const std::string &body,
     catch(const std::exception &) {return;}
     throw std::runtime_error("invalid TOML was accepted: "+body);
 }
+static void boolean_diagnostic(const std::filesystem::path &path, bool worker) {
+    write(path, std::string(worker ? "[workers.2.stage2]" : "[stage2]") +
+                "\nstage2_giant_tail_balance = 1\n");
+    std::vector<ecm_config::TomlLine> lines;
+    std::string diagnostic;
+    try { ecm_config::read_toml(path.string(), lines); }
+    catch (const std::exception &e) { diagnostic = e.what(); }
+    const auto expected = "INPUT[config]\nfile=" + path.string() + ":2\nworker=" +
+        (worker ? "2" : "0") + "\nkey=stage2_giant_tail_balance\nvalue=1\n" +
+        "wrong TOML value type for stage2_giant_tail_balance\nexpected bool [false|true]";
+    expect(diagnostic == expected, "TOML diagnostic must put each field on a separate line");
+}
 int main(int argc,char **argv) {
     try {
         expect(argc==3,"usage: fixture DEFAULT_TOML TEMP_TOML");
+        const auto *tail_meta=ecm_config::toml_option("stage2","stage2_giant_tail_balance");
+        expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true]",
+            "boolean error hint advertises non-TOML literals");
         std::vector<ecm_config::TomlLine> lines;
         expect(ecm_config::read_toml(argv[1],lines),"default TOML unavailable");
         const auto defaults1=ecm_config::read_stage1(ecm_config::cli_entries(lines,1));
@@ -41,6 +56,13 @@ int main(int argc,char **argv) {
                !defaults2.has_owner&&!defaults2.has_pack_zero,
                "template disabled an implicit worker or environment default");
         const std::filesystem::path temp=argv[2];
+        boolean_diagnostic(temp, false);
+        boolean_diagnostic(temp, true);
+        write(temp, "[stage2]\nstage2_giant_tail_balance = true\nstage2_b2_round_chain = false\n");
+        expect(ecm_config::read_toml(temp.string(), lines), "TOML boolean literals unavailable");
+        const auto booleans = ecm_config::read_stage2(ecm_config::cli_entries(lines, 2));
+        expect(booleans.giant_tail_balance && !booleans.b2_round_chain,
+               "TOML boolean values lost during projection");
         for(const auto *value:{"0","0.25","5","60"}) {
             write(temp,std::string("[stage1]\nprogress_average_seconds=")+value+
                        "\n[workers.2.stage1]\nprogress_average_seconds=2.5\n");

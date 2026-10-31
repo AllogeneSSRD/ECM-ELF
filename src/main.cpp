@@ -593,10 +593,10 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         if (p95_initialized)
             return &p95cfg;
         if (!cfg.p95_worktodo_path.empty() && cfg.p95_sync_dir.empty())
-            throw std::runtime_error(
-                "INPUT[config] " + ini + " worker=" + std::to_string(worker) +
-                " key=p95_sync_dir value=''; expected save destination directory for supported "
-                "Prime95 handoff; configure p95_sync_dir (backup paths are independent)");
+            throw std::runtime_error(ecm_config::config_diagnostic(
+                ini, 0, worker, "p95_sync_dir", "\"\"", "missing Prime95 save destination",
+                "save destination directory for supported Prime95 handoff; configure "
+                "p95_sync_dir (backup paths are independent)"));
         p95_initialized = true;
         p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
         p95cfg.sync_dir = resolve_rel_local(exe_dir, cfg.p95_sync_dir);

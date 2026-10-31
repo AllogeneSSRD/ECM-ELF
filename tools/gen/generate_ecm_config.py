@@ -60,6 +60,8 @@ def load_schema():
             raise ValueError(f"invalid C++ field: {field}")
         if o["owner"] not in schema["owners"]:
             raise ValueError(f"invalid owner: {key}")
+        if o["type"] == "bool" and o.get("domain") != "[false|true]":
+            raise ValueError(f"TOML boolean requires domain [false|true]: {key}")
         seen.add(key)
         fields.add(field)
     if schema.get("aliases"):
@@ -210,7 +212,7 @@ def header(schema):
 
 def annotation(o):
     default = o.get("default_display", o.get("effective_default", o["default"]))
-    if o.get("parser_override") == "integer_bool" or (isinstance(default, bool) and o["domain"] == "[0|1]"):
+    if o.get("parser_override") == "integer_bool" and o["type"] != "bool":
         default = int(default)
     if "implicit" in o:
         default = "@" + o["implicit"]

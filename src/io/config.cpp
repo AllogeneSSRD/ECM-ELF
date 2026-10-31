@@ -83,12 +83,10 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                                 break;
                             }
                 } catch (const std::exception& e) {
-                    throw std::runtime_error(
-                        "INPUT[config] " + path + ":" + std::to_string(line.line_number) +
-                        " worker=" + std::to_string(line.worker_scope) + " key=" + line.key +
-                        " value='" + line.value + "'; expected " +
-                        (meta ? meta->domain : "documented scalar") + "; " + e.what() +
-                        ". Correct this value and retry.");
+                    throw std::runtime_error(ecm_config::config_diagnostic(
+                        path, line.line_number, line.worker_scope, line.key,
+                        ecm_config::trim(line.raw.substr(line.raw.find('=') + 1)), e.what(),
+                        meta ? std::string(meta->type) + " " + meta->domain : "documented scalar"));
                 }
             }
         return true;
@@ -149,7 +147,8 @@ bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& 
         project_stage1_config(parsed, worker, cfg);
         return true;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "INPUT[config] %s worker=%d: %s\n", path.c_str(), worker, e.what());
+        std::fprintf(stderr, "%s\n",
+                     ecm_config::config_diagnostic(path, 0, worker, {}, {}, e.what()).c_str());
         return false;
     }
 }

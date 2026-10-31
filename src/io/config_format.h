@@ -154,6 +154,22 @@ inline const TomlOptionMeta* toml_option(const std::string& section, const std::
     return nullptr;
 }
 
+// Keep syntax/type and semantic errors in the same readable format. A source
+// value is the original RHS (including quotes), not the decoded runtime value.
+inline std::string config_diagnostic(const std::string& path, size_t line, int worker,
+                                     const std::string& key, const std::string& value,
+                                     const std::string& reason,
+                                     const std::string& expected = {}) {
+    auto message = "INPUT[config]\nfile=" + path;
+    if (line)
+        message += ":" + std::to_string(line);
+    message += "\nworker=" + std::to_string(worker) + "\nkey=" + key + "\nvalue=" + value +
+               "\n" + reason;
+    if (!expected.empty())
+        message += "\nexpected " + expected;
+    return message;
+}
+
 inline std::string toml_value(const std::string& source, char& kind) {
     bool basic = false, literal = false, escape = false;
     size_t comment = source.npos;
@@ -254,6 +270,7 @@ inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
         l.worker_scope = toml_worker(section);
         l.line_number = number;
         const auto t = trim(raw);
+        std::string diagnostic_value = t;
         try {
             if (t.empty())
                 l.kind = TomlLine::Kind::Blank;
@@ -276,6 +293,7 @@ inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
                 if (eq == t.npos || section.empty())
                     throw std::runtime_error("TOML key needs a table and value");
                 l.key = trim(t.substr(0, eq));
+                diagnostic_value = trim(t.substr(eq + 1));
                 if (l.key.empty() ||
                     !(std::isalpha(static_cast<unsigned char>(l.key.front())) ||
                       l.key.front() == '_') ||
@@ -321,12 +339,10 @@ inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
             }
         } catch (const std::exception& e) {
             const auto* meta = toml_option(section, l.key);
-            throw std::runtime_error(
-                "INPUT[config] " + path + ":" + std::to_string(number) +
-                " worker=" + std::to_string(l.worker_scope) + " key=" + l.key + " value='" + raw +
-                "'; " + e.what() +
-                (meta ? std::string("; expected ") + meta->type + " " + meta->domain
-                      : "; use a documented key in this table"));
+            throw std::runtime_error(config_diagnostic(
+                path, number, l.worker_scope, l.key, diagnostic_value, e.what(),
+                meta ? std::string(meta->type) + " " + meta->domain
+                     : "a documented key in this table"));
         }
         lines.push_back(std::move(l));
     }
