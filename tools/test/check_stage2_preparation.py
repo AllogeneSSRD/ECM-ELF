@@ -14,6 +14,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bench'))
+from gpu_telemetry import TelemetryRecorder
+
 if hasattr(sys, 'set_int_max_str_digits'):
     sys.set_int_max_str_digits(20000)
 
@@ -77,19 +80,15 @@ def main():
         start = time.perf_counter()
         monitor = None
         if a.execute and shutil.which('nvidia-smi'):
-            monitor = subprocess.Popen(['nvidia-smi', '-i', str(a.device),
-                '--query-gpu=timestamp,index,driver_version,clocks.current.sm,clocks.current.memory,pstate,power.draw,temperature.gpu,utilization.gpu',
-                '--format=csv', '-lms', '500', '-f', str(run_dir / 'telemetry.csv')],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            monitor = TelemetryRecorder(a.device,run_dir/'telemetry.jsonl')
         try:
             with (run_dir / 'console.log').open('wb') as log:
                 result = subprocess.run(command, cwd=run_dir, env=env, stdout=log,
                                         stderr=subprocess.STDOUT, timeout=1800 if a.execute else 300)
+            elapsed = time.perf_counter() - start
         finally:
             if monitor is not None:
-                monitor.terminate(); monitor.wait(timeout=10)
-        elapsed = time.perf_counter() - start
+                monitor.close()
         text = (run_dir / 'console.log').read_text(encoding='utf-8', errors='replace')
         if result.returncode:
             raise RuntimeError(f'cache={mode}, exit={result.returncode}: {text[-3000:]}')

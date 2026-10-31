@@ -8,6 +8,21 @@
 #include <cstring>
 #include <iostream>
 namespace s2prod {
+void configure_groot_experiment(Options &o) {
+    const char *value=std::getenv("NTT_GROOT_BALANCED");if(!value)return;
+#ifdef ECM_STAGE2_OPENCL
+    throw std::runtime_error("NTT_GROOT_BALANCED is a CUDA-only fixed-shape experiment");
+#else
+    if(std::strcmp(value,"0") && std::strcmp(value,"1"))
+        throw std::runtime_error("NTT_GROOT_BALANCED must be 0 or 1");
+    if(!o.d || o.auto_b2 || o.auto_carrier || o.tune_runtime || o.short_calibration ||
+       o.short_batch_tune || !o.tune.empty() || !o.cost_profile.empty())
+        throw std::runtime_error("G-root layout experiments require fixed D, explicit B2, auto-carrier=0, tune-runtime=0, short-calibration=0 and short-ntt-batch-tune=0");
+    // Older profile rows identify the legacy layout. Until layout is an
+    // explicit profile shape field, never read or write them for this override.
+    o.tune_profile.clear();
+#endif
+}
 void configure_host_wait(Options &o,const HostWaitDefaults *defaults) {
     if(!o.portable_cli.count("--low-cpu-wait")) {
         if(!defaults || !defaults->present)return;

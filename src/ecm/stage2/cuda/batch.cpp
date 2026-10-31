@@ -36,8 +36,9 @@ BatchedRun run_batched(
     R.giant_points = imax;
     R.giant_first=range.first;R.giant_last=range.last;
     stage2_log::print(stage2_log::debug,
-        "groot_layout: balanced=%d words=%llu points=%llu P=%llu full_groups=%llu policy=wide_repeated_v1\n",
-        (int)balanced_groot,(unsigned long long)W,imax,(unsigned long long)P,imax/P);
+        "groot_layout: balanced=%d words=%llu points=%llu P=%llu full_groups=%llu policy=%s\n",
+        (int)balanced_groot,(unsigned long long)W,imax,(unsigned long long)P,imax/P,
+        std::getenv("NTT_GROOT_BALANCED")?"fixed_shape_experiment":"wide_repeated_v1");
     R.dbg_progress = true;                  /* one line per G-tree batch: gate-able, machine-readable */
     L.cost.S = (long)L.S;                              /* (already set by the caller) */
 

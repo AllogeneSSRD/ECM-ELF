@@ -447,6 +447,7 @@ int driver(Options o) {
     const int device = o.device < 0 ? (s.device<0?cfg.device:s.device) : o.device;
     const uint64_t d = o.has_d ? o.d : s.d;
     o.device=device;o.d=d;o.has_d=d!=0;
+    configure_groot_experiment(o);
     if (device < 0 || (d && (d < 6 || d % 2))) throw std::runtime_error("device must be >=0; D must be even and >=6");
     const uint64_t batch = o.has_batch ? o.batch : s.batch, arena = o.has_arena ? o.arena : s.arena;
     o.arena=arena;

@@ -30,4 +30,4 @@ T 是二次幂，S≤128。将真实叶按原顺序分成 M 个块，每块 T �
 
 ## 本仓库依据与验证边界
 
-实现入口为 [giant_tree.h](../../src/ecm/stage2/giant_tree.h) 的 `giant_tree_layout`、`giant_tree_multiply_groups`，以及 [tree.cpp](../../src/ecm/stage2/cuda/tree.cpp) 的 `build_groot_device`。固定资料保留数学和布局条件；当前启用范围、GPU 验证和性能数据以 [Stage2 管线](../architecture/STAGE2.md) 与 [Edwards 性能](../performance/EDWARDS_STAGE2.md) 为准。
+实现入口为 [giant_tree.h](../../src/ecm/stage2/giant_tree.h) 的 `giant_tree_layout`、`giant_tree_multiply_groups`，以及 [tree.cpp](../../src/ecm/stage2/cuda/tree.cpp) 的 `build_groot_device`。固定资料保留数学和布局条件；当前启用范围、GPU 验证和性能数据以 [Stage2 管线](../architecture/STAGE2.md) 与 [G树性能](../performance/STAGE2_GTREE_LAYOUT.md) 为准。

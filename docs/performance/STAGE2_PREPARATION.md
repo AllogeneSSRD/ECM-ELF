@@ -109,7 +109,7 @@ G树、F树、求逆、fold和下降都是多项式流水线墙钟，包含NTT�
 
 ### 准备复用的验证结果
 
-验证输入为上述生产第364条保存点的隔离副本：5700-bit余因子、承载5987、B1=260000000、B2=1300000000000、sigma=3668336656946893。测试没有改动生产队列、配置、性能文件或GPU设置。GPU1为RTX4060 Laptop，驱动610.88、CUDA13.3、SM89/PTX、add/sub=1、outer=0；完整曲线遥测中利用率≥50%的样本均为SM1500MHz，显存8001MHz，活动功耗均值约38～39 W、采样峰值约52 W。功耗是实测draw，不是重新设置的限制值。
+验证输入为上述生产第364条保存点的隔离副本：5700-bit余因子、承载5987、B1=260000000、B2=1300000000000、sigma=3668336656946893。测试没有改动生产队列、配置、性能文件或GPU设置。GPU1为RTX4060 Laptop，驱动610.88、CUDA13.3、SM89/PTX、add/sub=1、outer=0；保存的遥测中利用率≥50%的样本均为SM1500MHz，显存8001MHz，活动功耗均值约38～39 W、采样峰值约52 W。该批`nvidia-smi -f`文件存在未刷新的尾部，只覆盖部分队列，不能据此保证全程时钟或推算完整能耗。功耗是实测draw，不是重新设置的限制值。
 
 基线为当前源码优化前的0.54.4，EXE SHA256 `443ac27ff097c7782779786e168f1fbc2ee7443b6eb98912f1b5231097dff0ad`；优化版为0.54.5，SHA256 `deeaca58b7e0e9688775bab934286f5c82e39f07672a804950ec8b9ac36dc75b`。优化版经host overlay链接，两个CUDA设备对象的输入与对象摘要均核验后原样复用；本轮没有NTT或点生成kernel修改。身份依据是本轮构建清单及实际EXE，不借用生产目录中过期的manifest。
 
@@ -141,7 +141,7 @@ G树、F树、求逆、fold和下降都是多项式流水线墙钟，包含NTT�
 
 证据在`data/experiments/stage2_preparation_20261031/`：`full_ab/`包含完整原始日志、命令、结果、遥测和前后输入摘要，`final_plan_measured/`为串行连续规划，`final_plan_ab/`为同二进制开关检查。CPU合同为`d_search_final/`（2288项）及`model_cpu04/`；OpenCL共享worker的32项命中/NF/队列合同为`opencl_worker/`。派生汇总为`data/benchmarks/stage2_preparation_20261031/summary.json`和`curves.csv`。这些忽略目录需要另外归档，不能仅依赖Git恢复证据。
 
-复现入口：[隔离准备检查](../../tools/test/check_stage2_preparation.py)，参数为`--exe`、`--baseline-exe`、`--profile`、`--save`、`--record`、`--exponent`、`--b2`、`--device`、`--curves`、`--cache`、`--output`；默认只重放规划，`--execute`才运行完整曲线并记录遥测。样本未饱和而发生采样写回时检查会拒绝“冻结性能文件”口径，应另外按学习实验计量。
+复现入口：[隔离准备检查](../../tools/test/check_stage2_preparation.py)，参数为`--exe`、`--baseline-exe`、`--profile`、`--save`、`--record`、`--exponent`、`--b2`、`--device`、`--curves`、`--cache`、`--output`；默认只重放规划，`--execute`才运行完整曲线。当前采集器使用[逐行刷新的NVML记录](../../tools/bench/gpu_telemetry.py)，输出`telemetry.jsonl`；测量后停止采样并等待线程退出，保留完整的已采集尾部。样本未饱和而发生采样写回时检查会拒绝“冻结性能文件”口径，应另外按学习实验计量。
 
 ### 既有证据支持的优化顺序
 

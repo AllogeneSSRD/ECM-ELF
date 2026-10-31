@@ -124,6 +124,12 @@ Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_fin
 
 正常离线计算不需要监听网络。Windows Compute Sanitizer 的注入通信可按目标 exe 名称触发防火墙提示；测试工具在 Windows 子进程使用 named pipes。该行为不表示 Stage2 算法需要网络权限。
 
+## 固定参数G树实验
+
+CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局；不设置时沿用默认规则。只允许固定D和B2，关闭Auto B2、自动承载、运行时采样、短校准和短NTT调优；不与正式tune或旧cost profile混用。实验不读取或更新已有ECM tune行，不能用它收集当前格式的生产性能文件。OpenCL不接受此变量。
+
+不同形状有收益也有回退，结果与受控复现入口见[G树性能](../performance/STAGE2_GTREE_LAYOUT.md)。
+
 ## 规划与依据
 
 `--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖TOML，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。

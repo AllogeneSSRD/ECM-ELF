@@ -6,4 +6,5 @@ void configure_pack_zero(Options &o,const PackZeroDefaults *s=nullptr);
 void configure_cuda_wait(int device);
 struct HostWaitDefaults {bool present,value;};
 void configure_host_wait(Options &o,const HostWaitDefaults *defaults=nullptr);
+void configure_groot_experiment(Options &o);
 }

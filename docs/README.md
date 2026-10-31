@@ -62,6 +62,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [NTT outer 性能](performance/NTT_OUTER.md)：自动 radix 表、中段 M6 候选、精确门禁和固定 D 对照。
 - [Stage2 主机等待](performance/STAGE2_HOST_WAIT.md)：FIFO 回收、可选低 CPU 模式、固定 D 的耗时与 CPU 对照。
 - [Stage2 准备与同步](performance/STAGE2_PREPARATION.md)：CPU范围、GPU空隙、真实拷贝与等待、pack/补零融合及计时边界。
+- [Stage2 G树布局](performance/STAGE2_GTREE_LAYOUT.md)：固定D/P的NTT长度、收益与回退、算术检查及当前自动资格；[实验草稿](development/STAGE2_GTREE_LAYOUT_DRAFT.md)保留实施与失败证据说明。
 - [Stage2 CPU尾部成本](performance/STAGE2_CPU_TAIL.md)：CUDA归一化、少量GCD、块乘积的CPU/GPU对照，完整曲线占比及收益上限。
 - [OpenCL Stage2性能](performance/OPENCL_STAGE2.md)：13位宽普通／承载与CUDA快速矩阵、0.54.4默认宽位反馈、显式巨步递推的固定D及固定提交对照、阶段成本和未覆盖范围。
 - [算法参考](reference/ECM_ALGORITHMS.md)：论文、Prime95、PrMers 和开源 NTT 的适配要点。

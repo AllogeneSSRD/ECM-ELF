@@ -95,6 +95,7 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     return run_curve_process(request);
 }
 int curve_worker(Options o) {
+    configure_groot_experiment(o);
     configure_host_wait(o);
     configure_pack_zero(o);
     // Children ignore the first console interrupt; the parent owns stop policy.

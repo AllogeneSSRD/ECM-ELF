@@ -28,9 +28,10 @@ def main():
     if out.exists() and any(out.iterdir()):
         raise ValueError('use a fresh output directory')
     out.mkdir(parents=True, exist_ok=True)
+    (out/'.gitignore').write_text('*\n', encoding='ascii')
     template = Path(__file__).with_name('stage2_ntt_memory_fixture.cpp')
-    files = [*FILES, ROOT/'tools/test/ntt_native_fixture.py', template, Path(__file__).resolve(), ROOT/'src/core/ecm_stage2_ntt_memory.h',
-             ROOT/'src/core/ecm_stage2_requests.h', ROOT/'src/core/ecm_stage2_geometry.h',ROOT/'src/core/ecm_stage2_giant_tree.h',
+    files = [*FILES, ROOT/'tools/test/ntt_native_fixture.py', template, Path(__file__).resolve(), ROOT/'src/ecm/stage2/planning/ntt_memory.h',
+             ROOT/'src/ecm/stage2/planning/requests.h', ROOT/'src/ecm/stage2/geometry.h',ROOT/'src/ecm/stage2/giant_tree.h',
              ROOT/'tools/test/stage2_request_program_fixture.cpp']
     identities = {str(p.relative_to(ROOT)): sha(p) for p in files}
     native = arena_source()
@@ -38,8 +39,8 @@ def main():
     # The template normally lives in tools/test; generated fixture has an
     # absolute include so ignored output directories may be anywhere in the repo.
     fixture = template.read_text(encoding='utf-8').replace(
-        '"../../src/core/ecm_stage2_ntt_memory.h"',
-        '"'+(ROOT/'src/core/ecm_stage2_ntt_memory.h').as_posix()+'"')
+        '"../../src/ecm/stage2/planning/ntt_memory.h"',
+        '"'+(ROOT/'src/ecm/stage2/planning/ntt_memory.h').as_posix()+'"')
     cpp.write_text(fixture.replace('// @NATIVE_ARENA@', native), encoding='utf-8')
     command = out/'compile.cmd'
     command.write_text('@echo off\ncall "'+str(args.vcvars)+'" >nul 2>&1\n'

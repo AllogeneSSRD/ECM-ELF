@@ -1,11 +1,15 @@
 #pragma once
 #include "geometry.h"
 #include <vector>
+#include <cstdlib>
 
 namespace ecm_stage2 {
 // Shape/reducer setup and extra copies need repeated wide polynomial work to
 // amortize. Retain the dense layout for narrow or short Stage2 executions.
 inline bool giant_tree_balanced(Word words,Word points,Word p) {
+    // Fixed-shape experiments only: the frontend disables profile selection
+    // and sampling. Native memory planning and execution share this override.
+    if(const char *forced=std::getenv("NTT_GROOT_BALANCED"))return forced[0]=='1';
     return words>128 && p && points/p>=4;
 }
 // Keep dense power-of-two tiles at the bottom, distributing at most 128 tiles
