@@ -192,6 +192,47 @@ def main():
     locked=(a.out/'point_auto_manual_lock/worker.log').read_text(encoding='utf-8-sig')
     assert 'enabled=0' in statistic(locked,'opencl_point_plan')
     case('invalid_point_auto',line,expect=2,environment={'ECM_OPENCL_POINT_AUTO':'2'})
+    wide_line=save_line((1<<9941)-1)
+    case('wide_auto_reference',wide_line,b2=960,environment={'ECM_OPENCL_WIDE_AUTO':'0','ECM_OPENCL_POINT_AUTO':'1'})
+    case('wide_auto',wide_line,b2=960,environment={'ECM_OPENCL_WIDE_AUTO':'1','ECM_OPENCL_POINT_AUTO':'1'})
+    wide_ref=(a.out/'wide_auto_reference/worker.log').read_text(encoding='utf-8-sig')
+    wide_log=(a.out/'wide_auto/worker.log').read_text(encoding='utf-8-sig')
+    assert statistic(wide_ref,'ntt_lengths')==statistic(wide_log,'ntt_lengths')
+    assert statistic(wide_ref,'opencl_checks')==statistic(wide_log,'opencl_checks')
+    wide_eligible='name=NVIDIA' in wide_log and 'point_backend=opencl' in wide_log
+    assert ('wide_ramp=1' if wide_eligible else 'wide_ramp=0') in statistic(wide_log,'opencl_point_plan')
+    if wide_eligible:
+        assert int(re.search(r'max_points=(\d+)',statistic(wide_log,'opencl_point_plan'))[1])>16
+    case('invalid_wide_auto',line,expect=2,environment={'ECM_OPENCL_WIDE_AUTO':'2'})
+    case('giant_chain_reference',adaptive_line,b2=2600000,d=2310,
+        environment={'ECM_OPENCL_GIANT_CHAIN':'0'})
+    case('giant_chain',adaptive_line,b2=2600000,d=2310,
+        environment={'ECM_OPENCL_GIANT_CHAIN':'1'})
+    chain_ref=(a.out/'giant_chain_reference/worker.log').read_text(encoding='utf-8-sig')
+    chain_log=(a.out/'giant_chain/worker.log').read_text(encoding='utf-8-sig')
+    assert statistic(chain_ref,'ntt_lengths')==statistic(chain_log,'ntt_lengths')
+    assert statistic(chain_ref,'opencl_checks')==statistic(chain_log,'opencl_checks')
+    counters=dict(re.findall(r'(enabled|points|seed_pairs)=(\d+)',statistic(chain_log,'opencl_giant_chain')))
+    if 'point_backend=opencl' in chain_log:
+        assert counters['enabled']=='1' and int(counters['points'])==1127
+        assert 0<int(counters['seed_pairs'])<int(counters['points'])
+    else:
+        assert counters['enabled']=='0'
+    case('giant_chain_partial',line,b2=960,environment={'ECM_OPENCL_GIANT_CHAIN':'1','ECM_OPENCL_POINT_WINDOW':'18'})
+    case('giant_chain_manual_chunk',line,b2=960,
+        environment={'ECM_OPENCL_GIANT_CHAIN':'1','ECM_OPENCL_POINT_WINDOW':'18','ECM_OPENCL_POINT_CHUNK':'7'})
+    manual_chain=(a.out/'giant_chain_manual_chunk/worker.log').read_text(encoding='utf-8-sig')
+    assert statistic(reference,'ntt_lengths')==statistic(manual_chain,'ntt_lengths')
+    assert statistic(reference,'opencl_checks')==statistic(manual_chain,'opencl_checks')
+    if 'point_backend=opencl' in manual_chain:
+        assert int(re.search(r'launches=(\d+)',statistic(manual_chain,'opencl_giant_chain'))[1])==7
+    case('invalid_giant_chain',line,expect=2,environment={'ECM_OPENCL_GIANT_CHAIN':'2'})
+    rows,_=case('giant_chain_nonunit_recovery',save_line(257000771,6),b2=2000,
+        environment={'ECM_OPENCL_GIANT_CHAIN':'1'})
+    assert rows[0].get('factors')==['257']
+    recovery_log=(a.out/'giant_chain_nonunit_recovery/worker.log').read_text(encoding='utf-8-sig')
+    if 'point_backend=opencl' in recovery_log:
+        assert int(re.search(r'recovery_commands=(\d+)',statistic(recovery_log,'opencl_giant_chain'))[1])>0
     lifted,_=case('mersenne',line,extra=['--carrier-exponent',127])
     assert ordinary[0].get('factors',[])==lifted[0].get('factors',[])==[]
     target=((1<<41)-1)//13367

@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import statistics as st
 import sys
+from bench_edwards_gpu_stage1 import integer_expression
 
 if hasattr(sys, 'set_int_max_str_digits'):
     sys.set_int_max_str_digits(0)
@@ -27,6 +28,7 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--figure', type=Path, required=True)
     p.add_argument('--plot-d', type=int, default=2310)
+    p.add_argument('--log-time', action='store_true', help='Logarithmic time axes for widely separated widths')
     a = p.parse_args()
     if a.out.exists() or a.figure.exists():
         p.error('Use new derived paths')
@@ -42,6 +44,13 @@ def main():
                 if sha(root / file) != digest:
                     raise RuntimeError('Frozen binary/resource changed')
         rows = [json.loads(s) for s in (folder / 'measurements.jsonl').read_text(encoding='utf-8').splitlines()]
+        if 'matrix_plan' in manifest:
+            plan = manifest['matrix_plan']
+            expected = {(e, b, repeat, variant) for e in plan['exponents'] for b in plan['B2']
+                        for repeat in range(manifest['repeats']) for variant in binaries}
+            actual = {(r['exponent'], r['B2'], r['repeat'], r['variant']) for r in rows}
+            if actual != expected or len(rows) != len(expected):
+                raise RuntimeError('Complete variant matrix differs from its plan')
         run_groups = defaultdict(int)
         for r in rows:
             run_groups[r['bits'], r['B2'], r['D'], r['P'], r['variant']] += 1
@@ -58,8 +67,20 @@ def main():
                 raise RuntimeError('Reported width differs from the actual saved N')
             result = json.loads((log.parent / 'results.jsonl').read_text(encoding='utf-8-sig'))
             if (result['source-build'].lower() != binaries[r['variant']]['sha256'] or result['status'] != 'NF'
-                    or result['d'] != r['D'] or result['b2'] != r['B2'] or r['checks']['bad'] != 0):
+                    or result['d'] != r['D'] or result['b2'] != r['B2'] or r['checks']['bad'] != 0
+                    or result.get('factors', []) or result['errors']['invariant'] or result['stage2-engine']['bad_factors']
+                    or result['stage2-engine']['carrier_exponent'] != 0 or r['checks']['startup_cases'] < 1
+                    or r['checks']['checked_words'] < 1):
                 raise RuntimeError('Binary, geometry or verdict mismatch')
+            saved = folder / 'inputs' / Path(result['stage2-engine']['save']).name
+            if sha(saved) != r['save_sha256']:
+                raise RuntimeError('Frozen save changed')
+            line = next(s for s in saved.read_text(encoding='utf-8-sig').splitlines() if 'SIGMA=' in s)
+            point = dict(part.strip().split('=', 1) for part in line.split(';') if part.strip())
+            if int(result['N']) != integer_expression(point['N']) or result['b1'] != int(float(point['B1'])):
+                raise RuntimeError('Result differs from the exact saved N/B1')
+            if point['METHOD'] == 'ECM-EDWARDS-AM' and result.get('Edwards', {}).get('sigma') != int(point['SIGMA']):
+                raise RuntimeError('Saved Edwards curve identity differs')
             key = r['bits'], r['B2'], r['D'], r['P']
             geometry[key].add((r['save_sha256'], r['ntt_lengths'], r['checks']['checked_words'],
                                r['points']['points'], r['points']['d2h_bytes']))
@@ -73,6 +94,13 @@ def main():
         cell = {'bits': bits, 'B2': b2, 'D': d, 'P': degree, 'variant': variant, 'n': len(rows)}
         for name, extract in [('engine_s', lambda r: r['full']['total']), ('process_s', lambda r: r['process_seconds']),
                 ('point_kernel_s', lambda r: r['points']['kernel']), ('point_launches', lambda r: r['points']['launches']),
+                ('giant_s', lambda r: r['split']['giant']),
+                ('chain_points', lambda r: r.get('giant_chain',{}).get('points',0)),
+                ('chain_seed_pairs', lambda r: r.get('giant_chain',{}).get('seed_pairs',0)),
+                ('chain_recoveries', lambda r: r.get('giant_chain',{}).get('recovery_commands',0)),
+                ('chain_guard_s', lambda r: r.get('giant_chain',{}).get('guard_and_recovery_seconds',0)),
+                ('giant_kernel_s', lambda r: r.get('giant_chain',{}).get('giant_kernel',0)),
+                ('chain_max_command_s', lambda r: r.get('giant_chain',{}).get('max_kernel_seconds',0)),
                 ('max_command_s', lambda r: r['point_command']['max_kernel_seconds']),
                 ('owned_peak_bytes', lambda r: r['payload']['peak_bytes'])]:
             values = [extract(r) for r in rows]
@@ -107,10 +135,12 @@ def main():
         axes[0, column].set_title(f'D={a.plot_d}; B2={b2:g}')
         for row in range(2):
             axes[row, column].set_xticks(x, bits); axes[row, column].set_xlabel('Actual target N bits')
+            if a.log_time:
+                axes[row, column].set_yscale('log')
             axes[row, column].grid(axis='y', alpha=.2)
     axes[0, 0].set_ylabel('Complete engine (s)'); axes[1, 0].set_ylabel('Nested point kernels (s)')
     axes[0, 0].legend(fontsize=8)
-    fig.suptitle('Point execution plan: median, min/max; no discarded warmup\nSame saves, NTT work, points and independent GMP coverage')
+    fig.suptitle('Point execution plan: median, min/max; no discarded warmup'+(' | log time' if a.log_time else '')+'\nSame saves, NTT work, points and independent GMP coverage')
     fig.tight_layout(rect=(0, 0, 1, .92))
     a.figure.parent.mkdir(parents=True, exist_ok=True); fig.savefig(a.figure, dpi=170); plt.close(fig)
     print(json.dumps(cells, indent=2))

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from stage2_windows_job import WindowsJob
 
 if hasattr(sys, 'set_int_max_str_digits'):
     sys.set_int_max_str_digits(0)
@@ -39,17 +40,27 @@ def main():
     p.add_argument('--d', type=int, default=2310)
     p.add_argument('--arena-mb', type=int, default=512)
     p.add_argument('--repeats', type=int, default=3)
+    p.add_argument('--timeout', type=float, default=3600,
+                   help='Per-curve wall limit; drain this invocation and its descendants on failure')
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--telemetry-device', type=int, default=1)
     a = p.parse_args()
-    if a.out.exists() or not 1 <= a.repeats <= 20:
-        p.error('Choose a new output directory and repeats=1..20')
+    exponents = list(map(int, a.exponents.split(',')))
+    bounds = list(map(int, a.b2.split(',')))
+    if (not exponents or not bounds or min(exponents + bounds) <= 0 or a.d <= 0 or a.arena_mb <= 0
+            or len(set(exponents)) != len(exponents) or len(set(bounds)) != len(bounds)):
+        p.error('Need distinct positive exponents/B2, a positive D and arena budget')
+    if a.out.exists() or not 1 <= a.repeats <= 20 or a.timeout <= 0:
+        p.error('Choose a new output directory, repeats=1..20 and a positive timeout')
     specs = json.loads(a.variants.read_text(encoding='utf-8-sig'))
     if not specs or len({v['name'] for v in specs}) != len(specs):
         p.error('Need unique named variants')
     a.out.mkdir(parents=True)
+    shutil.copy2(__file__, a.out / 'bench_script.py')
     manifest = {'started_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'variants': [],
                 'D': a.d, 'arena_mb': a.arena_mb, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
+                'timeout': a.timeout,
+                'matrix_plan': {'exponents': exponents, 'B2': bounds},
                 'gpu_settings_changed': False, 'inherited_ntt_environment': {
                     k: v for k, v in os.environ.items() if k.startswith(('ECM_OPENCL_', 'NTT_'))}}
     for spec in specs:
@@ -58,6 +69,7 @@ def main():
         build = Path(spec['build'])
         dest = a.out / 'bin' / spec['name']
         dest.mkdir(parents=True)
+        (dest / '.gitignore').write_text('*\n', encoding='utf-8')
         for name in ('ecm_opencl_stage2.exe', 'gmp-10.dll', 'build_manifest.json'):
             shutil.copy2(build / name, dest / name)
         shutil.copytree(build / 'opencl_resources', dest / 'opencl_resources')
@@ -75,7 +87,7 @@ def main():
                                  '--format=csv', '-lms', '500'], stdout=telemetry,
                                 stderr=subprocess.DEVNULL, creationflags=flags)
         try:
-            for exponent in map(int, a.exponents.split(',')):
+            for exponent in exponents:
                 saves = list(a.inputs.glob(f'm{exponent}_n*_s*.save'))
                 if len(saves) != 1:
                     raise RuntimeError(f'Need exactly one save for M{exponent}')
@@ -83,7 +95,7 @@ def main():
                 frozen.parent.mkdir(exist_ok=True)
                 shutil.copy2(saves[0], frozen)
                 bits = int(re.search(r'_n(\d+)_', frozen.name)[1])
-                for b2 in map(int, a.b2.split(',')):
+                for b2 in bounds:
                     for repeat in range(a.repeats):
                         order = specs if repeat % 2 == 0 else list(reversed(specs))
                         for spec in order:
@@ -109,9 +121,19 @@ stage2_log_file="worker.log"
                             env.update({k: str(v) for k, v in spec.get('environment', {}).items()})
                             (folder / 'command.json').write_text(json.dumps({'cmd': cmd, 'environment': spec.get('environment', {})}, indent=2), encoding='utf-8')
                             start = time.perf_counter()
-                            with (folder / 'stdout.log').open('w', encoding='utf-8') as log:
-                                result = subprocess.run(cmd, cwd=folder, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                                        timeout=300, creationflags=flags)
+                            job = WindowsJob()
+                            try:
+                                with (folder / 'stdout.log').open('w', encoding='utf-8') as log:
+                                    result = subprocess.Popen(cmd, cwd=folder, env=env, stdout=log,
+                                                              stderr=subprocess.STDOUT, creationflags=flags)
+                                    try:
+                                        job.assign(result)
+                                        result.wait(timeout=a.timeout)
+                                        account = job.drain()
+                                    except BaseException:
+                                        job.terminate(); result.wait(); job.drain(); raise
+                            finally:
+                                job.close()
                             seconds = time.perf_counter() - start
                             if result.returncode:
                                 raise RuntimeError(f'{folder}: exit {result.returncode}')
@@ -132,11 +154,13 @@ stage2_log_file="worker.log"
                                    'point_command': fields(text, 'opencl_point_command'),
                                    'point_window': fields(text, 'opencl_point_window'),
                                    'point_plan': fields(text, 'opencl_point_plan'),
+                                   'giant_chain': fields(text, 'opencl_giant_chain'),
                                    'checks': fields(text, 'opencl_checks'), 'payload': fields(text, 'opencl_payload'),
                                    'ntt_lengths': next((s for s in text.splitlines() if s.startswith('ntt_lengths:')), ''),
                                    'split': {**fields(text, 'opencl_split'), **fields(text, 'opencl_tail')},
                                    'programs': fields(text, 'opencl_programs'),
                                    'process_seconds': seconds, 'save_sha256': sha(frozen), 'binary_sha256': spec['sha256'],
+                                   'accounting': account,
                                    'log': str(folder / 'worker.log'), 'log_sha256': sha(folder / 'worker.log'),
                                    'result_sha256': sha(folder / 'results.jsonl')}
                             with (a.out / 'measurements.jsonl').open('a', encoding='utf-8') as f:

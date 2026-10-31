@@ -37,6 +37,28 @@ int main(int argc,char **argv) {
         auto before=model.runtime_statistics(old),after=model.runtime_statistics(fast);
         require(before.count==10 && after.count==2 && before.stddev>0 && after.stddev>0,"actual dispersion not accumulated");
         p::WidthPredictor predictor(model);p::WidthEstimate estimate;
+        p::Estimator uncached(profile,profile.conditions.at(0),p::Ignore::parse(""),query,false);
+        p::WidthPredictor uncached_predictor(uncached);
+        // Replay the real ranking pattern: different D share NTT shapes, while
+        // each predicted/admitted shape is requested repeatedly. Memoization
+        // must return the original doubles and retain B1 lookup semantics.
+        for(const auto &entry:ecm_stage2::d_catalog::entries())if(entry.p>=512) {
+            auto shape=old;shape.d=entry.d;
+            p::Work a,b;require(model.cached_work(shape,a)==uncached.cached_work(shape,b),"cached work validity changed");
+            require(a.ntt==b.ntt && a.reduce==b.reduce && a.calls==b.calls,"cached NTT model changed work");
+            p::WidthEstimate left,right;
+            require(predictor.predict(shape,left)==uncached_predictor.predict(shape,right),"cached prediction validity changed");
+            require(left.seconds==right.seconds && left.rank==right.rank && left.stddev==right.stddev &&
+                left.relative_error==right.relative_error && std::string(left.model)==right.model,"cached prediction changed ranking");
+            require(predictor.predict(shape,left)==uncached_predictor.predict(shape,right) && left.rank==right.rank,"repeated prediction changed ranking");
+        }
+        require(model.ntt_cost_hits>model.ntt_cost_evaluations && model.ntt_cost_evaluations<uncached.ntt_cost_evaluations,
+            "D ranking still resolves every repeated NTT cost");
+        require(predictor.prediction_hits>0 && predictor.prediction_evaluations<uncached_predictor.prediction_evaluations,
+            "D ranking still repeats width prediction");
+        auto changed_b1=old;changed_b1.b1*=2;
+        require(model.runtime_statistics(changed_b1).count==before.count && model.runtime_statistics(changed_b1,true).count==0,
+            "statistics cache confused complete B1 identity with runtime lookup");
         require(predictor.predict(fast,estimate) && estimate.exact && estimate.runtime_samples==2 &&
             std::string(estimate.model)=="runtime_shape_mean_v2","runtime samples still treated as uncertain extrapolation");
         std::vector<p::RuntimeCandidate> routes{{old,before,1},{fast,after,2}};
@@ -60,8 +82,9 @@ int main(int argc,char **argv) {
         auto historical=profile;historical.samples[1]["program_version"]="\"0.0.1\"";
         p::Estimator reused(historical,historical.conditions.at(0),p::Ignore::parse(""),query);
         require(reused.runtime_statistics(fast).count==2,"older program version blocked statistics reuse");
-        model.condition["uuid_hex"]="\"another-device\"";
-        require(model.runtime_statistics(fast).count==0,"different device treated as exact");
+        auto foreign_condition=model.condition;foreign_condition["uuid_hex"]="\"another-device\"";
+        p::Estimator foreign_model(profile,foreign_condition,p::Ignore::parse(""),query);
+        require(foreign_model.runtime_statistics(fast).count==0,"different device treated as exact");
         p::Profile bounded;bounded.condition(profile.conditions.at(0));
         auto legacy=sample(1,690690,52.8);legacy.erase("runtime_sample_id");
         require(bounded.update(legacy,2) && !bounded.update(legacy,2) && bounded.update(sample(30,690690,53),2) &&
@@ -119,9 +142,14 @@ int main(int argc,char **argv) {
         const auto older=p::Profile::load(path);require(older.ntt.size()==2,"older version NTT rows lost");
         require(p::text(older.ntt.front(),"program_version")=="0.0.1","source version was rewritten to current version");
         require(!older.conditions.at(0).count("program_version"),"version still stored in condition");
+        p::Estimator table(field,current,p::Ignore::parse(""),query),plain_table(field,current,p::Ignore::parse(""),query,false);
+        for(unsigned repeat=0;repeat<3;++repeat)for(unsigned power=3;power<=26;++power)for(unsigned batch:{1u,2u,3u,8u})
+            require(table.ntt_cost(1ull<<power,batch)==plain_table.ntt_cost(1ull<<power,batch),"measured/interpolated NTT cache changed cost");
+        require(table.ntt_cost_evaluations==24*4 && table.ntt_cost_hits==2*24*4,"NTT cost reuse not keyed by length/batch");
         std::cout<<"{\"complete\":true,\"retains_slower_samples\":true,\"cap\":10,\"independent_samples\":12,"
             "\"observed_D_win\":true,\"fastest_mean\":true,\"carrier_first\":true,\"deduplication\":true,"
             "\"cross_version_reuse\":true,\"matrix_roundtrip\":true,\"mean_variance_reference\":true,"
-            "\"snapshot_deduplication\":true,\"partial_overlap_rejected\":true,\"ntt_parameter_rows\":true,\"CUDA_calls\":0}\n";
+            "\"snapshot_deduplication\":true,\"partial_overlap_rejected\":true,\"ntt_parameter_rows\":true,"
+            "\"model_memoization\":true,\"ntt_cost_evaluations\":"<<model.ntt_cost_evaluations<<",\"ntt_cost_cache_hits\":"<<model.ntt_cost_hits<<",\"CUDA_calls\":0}\n";
     } catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

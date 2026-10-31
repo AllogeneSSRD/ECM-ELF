@@ -47,6 +47,8 @@ inline void print(int required,const char *format,...) {
 // forwards these to the console while retaining batch statistics in the log.
 inline void phase(const char *name) {
     if(phase_silence)return;
+    static std::string current;
+    if(current==name)return;
     static const auto start=std::chrono::steady_clock::now();
     static auto previous=start;
     const auto now=std::chrono::steady_clock::now();
@@ -54,5 +56,6 @@ inline void phase(const char *name) {
           std::chrono::duration<double>(now-previous).count(),
           std::chrono::duration<double>(now-start).count());
     previous=now;
+    current=name;
 }
 }

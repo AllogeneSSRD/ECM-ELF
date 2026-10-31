@@ -110,19 +110,28 @@ struct RuntimeStatistics {
 class Estimator {
 public:
     using Query=std::function<bool(Word,int,Word*,Word*)>;
-    const Profile &profile;Fields condition;Ignore ignore;Query query;
+    const Profile &profile;const Fields condition;const Ignore ignore;Query query;
     std::map<std::pair<Word,Word>,double> ntt;
     ShortNttBatchPolicy short_ntt;
-    // Each estimator requires an immutable profile while ranking. A caller
-    // that updates the profile constructs a new estimator before using caches.
+    // Each estimator requires an immutable profile and NTT policy while ranking.
+    // New observations/conditions require a fresh estimator, never stale ranks.
     mutable std::map<std::array<Word,18>,std::pair<bool,Work>> work_cache;
     std::set<const Fields*> profile_samples;
     mutable std::map<const Fields*,Shape> sample_shapes;
     mutable std::map<Word,bool> matching_conditions;
+    const bool memoize_costs;
+    mutable Word ntt_cost_evaluations=0,ntt_cost_hits=0;
+    mutable std::map<std::pair<Word,Word>,double> ntt_cost_cache;
+    mutable std::map<Shape::Key,RuntimeStatistics> runtime_cache;
+    std::vector<const Fields*> runtime_samples;
     struct Fit {bool valid=false;B2Features coefficients{};double error=0;Word low=0,high=0;};
     mutable std::map<std::array<Word,13>,Fit> fit_cache;
-    Estimator(const Profile &p,Fields current,Ignore ign,Query q):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)) {
-        for(const auto &s:p.samples)profile_samples.insert(&s);
+    Estimator(const Profile &p,Fields current,Ignore ign,Query q,bool memoize=true):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)),memoize_costs(memoize) {
+        for(const auto &s:p.samples) {
+            profile_samples.insert(&s);
+            if(runtime_observation(s) && measured(s) &&
+                matches(p.conditions.at(uint(s,"condition")),condition,Ignore::parse("")))runtime_samples.push_back(&s);
+        }
         for(const auto &s:p.ntt)if(ntt_matches(p.conditions.at(uint(s,"condition")),condition,ignore)) {
             const auto key=ntt_scope(s);const double v=real(s,"mean_seconds");
             auto i=ntt.find(key);if(i==ntt.end() || v<i->second)ntt[key]=v;
@@ -130,6 +139,18 @@ public:
         }
     }
     double ntt_cost(Word n,Word batch)const {
+        const auto key=std::make_pair(n,batch);
+        if(memoize_costs)if(const auto at=ntt_cost_cache.find(key);at!=ntt_cost_cache.end()) {
+            ++ntt_cost_hits;return at->second;
+        }
+        ++ntt_cost_evaluations;
+        const double result=resolve_ntt_cost(n,batch);
+        if(memoize_costs)ntt_cost_cache.emplace(key,result);
+        return result;
+    }
+    // Tables and profile are immutable for this estimator's lifetime. Reuse the
+    // original double, not a rounded rank or an assumed linear batch cost.
+    double resolve_ntt_cost(Word n,Word batch)const {
         auto exact=ntt.find({n,batch});if(exact!=ntt.end())return exact->second;
         if(const double short_cost=short_ntt.cost(n,batch))return short_cost;
         double distance=std::numeric_limits<double>::infinity(),result=0;
@@ -177,10 +198,11 @@ public:
         return true;
     }
     RuntimeStatistics runtime_statistics(const Shape &x,bool complete_parameters=false)const {
+        auto key=x.key();if(!complete_parameters)key[3]=0;
+        if(memoize_costs)if(const auto at=runtime_cache.find(key);at!=runtime_cache.end())return at->second;
         RuntimeStatistics out;
         double m2=0;
-        for(const auto &s:profile.samples)if(runtime_observation(s) && measured(s) &&
-            matches(profile.conditions.at(uint(s,"condition")),condition,Ignore::parse(""))) {
+        for(const auto sample:runtime_samples) {const auto &s=*sample;
             const auto a=shape(s);auto left=a.key(),right=x.key();if(!complete_parameters)left[3]=right[3]=0;
             if(left!=right)continue;
             const auto n=uint(s,"repeats");const double delta=real(s,"mean_seconds")-out.seconds;
@@ -189,7 +211,8 @@ public:
             out.seconds+=delta*double(n)/double(out.count+n);out.count+=n;
             out.preferred_order=std::max(out.preferred_order,optional_uint(s,"preferred_order"));
         }
-        out.stddev=out.count>1?std::sqrt(std::max(0.,m2/double(out.count-1))):0;return out;
+        out.stddev=out.count>1?std::sqrt(std::max(0.,m2/double(out.count-1))):0;
+        if(memoize_costs)runtime_cache.emplace(key,out);return out;
     }
     bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
         const std::array<Word,13> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),

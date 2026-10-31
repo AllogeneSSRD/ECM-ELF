@@ -16,10 +16,11 @@ def main():
         r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat'))
     args = parser.parse_args()
     out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
+    (out/'.gitignore').write_text('*\n', encoding='ascii')
     gmp = ROOT / 'third_party/gmp-zen3/dist'; exe = out / 'fixture.exe'
     command = out / 'compile.cmd'
     command.write_text('@echo off\ncall "' + str(args.vcvars) + '" >nul 2>&1\nif errorlevel 1 exit /b 1\n'
-        'cl /nologo /std:c++17 /EHsc /O2 /utf-8 /I"' + str(gmp / 'include') + '" "' +
+        'cl /nologo /std:c++17 /EHsc /O2 /utf-8 /I"' + str(ROOT/'include') + '" /I"' + str(ROOT/'src') + '" /I"' + str(gmp / 'include') + '" "' +
         str(ROOT / 'tools/test/stage2_d_search_fixture.cpp') + '" /Fe:"' + str(exe) +
         '" /Fo:"' + str(out / 'fixture.obj') + '" /link /LIBPATH:"' + str(gmp / 'lib') + '" gmp.lib\n', encoding='utf-8')
     compiled = subprocess.run(['cmd', '/c', str(command)], capture_output=True, text=True, errors='replace', timeout=120)
@@ -33,9 +34,10 @@ def main():
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
     report = json.loads(result.stdout)
-    sources = ['src/core/ecm_stage2_d_search.h', 'src/core/ecm_stage2_runtime_tune.h', 'src/core/ecm_stage2_runtime_cache.h',
-               'src/core/ecm_stage2_tune_portable.h', 'src/core/ecm_stage2_portable_model.h',
-               'src/core/ecm_stage2_tune_components.h', 'src/core/ecm_program_version.h',
+    sources = ['src/ecm/stage2/planning/d_search.h', 'src/ecm/stage2/planning/runtime_tune.h', 'src/ecm/stage2/planning/runtime_cache.h',
+               'src/ecm/stage2/planning/tune_portable.h', 'src/ecm/stage2/planning/portable_model.h',
+               'src/ecm/stage2/planning/tune_components.h', 'include/ecm/platform/program_version.h',
+               'src/ecm/stage2/planning/width_prediction.h', 'src/ecm/stage2/planning/d_catalog.h',
                'tools/test/stage2_d_search_fixture.cpp',
                'tools/test/test_stage2_d_search.py']
     report['sources'] = {}

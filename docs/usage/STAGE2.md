@@ -21,18 +21,22 @@ NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续
 | 环境变量 | 默认 | 合法值与作用 |
 |---|---|---|
 | `ECM_OPENCL_POINTS` | `device` | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
-| `ECM_OPENCL_POINT_AUTO` | `1` | `0\|1`；NVIDIA、513～8192 bits、无显式chunk/group覆盖时，根据真实点命令反馈规划批量与坐标窗口。0保留原批量；不自动切换CPU点 |
+| `ECM_OPENCL_POINT_AUTO` | `1` | `0\|1`；NVIDIA、513～16384 bits、无显式chunk/group覆盖时，根据真实点命令反馈规划批量与坐标窗口。0保留原批量；不自动切换CPU点 |
+| `ECM_OPENCL_WIDE_AUTO` | `1` | `0\|1`；扩展POINT_AUTO到NVIDIA、8193～16384 bits。先从16点尝试完整组，再渐进升档；0保留宽位原批量。显式chunk/group继续锁定计划 |
 | `ECM_OPENCL_POINT_GROUP` | NVIDIA=`32`，其他=`0` | `0`由运行时选择；正整数须≤设备与点kernel上限。每组点线程数 |
 | `ECM_OPENCL_POINT_CHUNK` | 按目标N位宽/厂商初始化 | `1..4096`；显式设置会锁定手动计划。未设置时，符合资格的自动计划可升档；独立于多项式batch |
 | `ECM_OPENCL_POINT_WINDOW` | 自动计划／`0` | `0..65536`；显式0锁定原G批，正值请求跨批窗口。未设置时由自动计划选择；不改变G树边界、NTT次数和逐G批GMP取样 |
 | `ECM_OPENCL_GIANT_BASE` | `1` | `0\|1`；复用[D]Q，把每点标量iD缩为i。0保留原完整标量对照 |
+| `ECM_OPENCL_GIANT_CHAIN` | `0` | `0\|1`；实验性连续巨步递推，要求设备点且GIANT_BASE=1。不替换baby算法；非单位分母触发从原Q重算。显式chunk仍限制单条链命令 |
 | `ECM_OPENCL_CACHE_PROGRAMS` | `1` | `0\|1`；同一context内按完整源代码/选项复用program。关闭后每次计划分别build |
 
-点chunk的初始化值按真实目标N的64-bit limb数w选择：NVIDIA在w≤8时1024、9≤w≤128时256、w>128时16；其他厂商依次为w≤8:1024、w≤32:256、w≤64:128、w≤128:64、其余16。自动模式从实际首条命令学习，不另做warmup；升档目标为compute units×32且不超过4096，目标不高于初始值时保留初始值。它根据标量长度、历史最慢样本和当前owned-buffer余额决定是否升档。1秒是带15%裕量的升档门限，不是命令时长硬保证；不会将原批量进一步缩小。AMD宽位CPU回退不提交点kernel。
+点chunk的初始化值按真实目标N的64-bit limb数w选择：NVIDIA在w≤8时1024、9≤w≤128时256、w>128时16；其他厂商依次为w≤8:1024、w≤32:256、w≤64:128、w≤128:64、其余16。自动模式从实际首条命令学习，不另做warmup。9～128 limbs的升档目标为compute units×32且不超过4096，目标不高于初始值时保留初始值；1秒是带15%裕量的升档门限，不是命令时长硬保证。129～256 limbs采用下述渐进策略，最多256点。两者保留当前owned-buffer余额检查；AMD宽位CPU回退不提交点kernel。
 
 窗口是主机坐标暂存范围，chunk是单次设备命令上限，两者需配合。小P时仅增大chunk仍受原G批点数限制。自动窗口优先取G批与点上限的最小公倍数，预算不足则取预算内的整G批；至多65536点。额外坐标准入按 `6×算术limbs×8×点数≤batch MiB` 估算，不包含GMP分配器开销。`opencl_point_window`打印请求、有效点数、估算cap、G批及来源；`opencl_point_plan`打印资格、设备CU、初始／最大chunk、有效反馈数、实际升档和预算裁剪。对照时用`ECM_OPENCL_POINT_AUTO=0`关闭自动计划；显式窗口0只锁定窗口，仍允许符合资格的baby批量升档。实测与范围见[自动点执行计划](../performance/OPENCL_STAGE2.md#自动点执行计划)。
 
 `stage2_log_level="phases"`开启点内核、CPU检查/归一化、树阶段与程序缓存的汇总；默认批进度级别不新增这些明细。日志字段与嵌套计时见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)。
+
+宽位升档默认开启，巨步递推默认关闭，可以分别关闭／开启做联合对照。宽位计划最多256点，完整32点组的单位点／bit成本超过16点seed的1.10倍时退回seed；其后每bit命令成本增加超过35%时拒绝升档并停止增长。它没有1秒硬时限。巨步递推的提交点数与段长另受设备规模、预算和手动chunk限制；不能由POINT_AUTO的1秒门限推断其最长命令。两者保持原G批、NTT工作和独立检查，CPU／AMD宽位资格回退不变。
 
 ## CUDA 入口
 

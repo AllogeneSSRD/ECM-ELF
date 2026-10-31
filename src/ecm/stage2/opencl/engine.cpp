@@ -100,12 +100,20 @@ struct PointGenerator {
     Word launches=0,points=0,upload_bytes=0,download_bytes=0;
     std::size_t chunk=0,group=0;
     cls::PointPlan plan{256,32,0,false};Word promoted_launches=0,max_command_points=0,budget_clamps=0;
+    bool chain_requested=false,chain_enabled=false;
+    Word chain_launches=0,chain_points=0,chain_seeds=0,chain_recoveries=0;
+    double chain_recovery_seconds=0,chain_kernel_seconds=0,chain_max_seconds=0,giant_kernel_seconds=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
     PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
         const auto&v=r.device().vendor;const bool amd=v.find("Advanced Micro Devices")!=v.npos||v=="AMD";
         const bool nvidia=v.find("NVIDIA")!=v.npos;
         const auto automatic=setting("ECM_OPENCL_POINT_AUTO",1);
         if(automatic>1)throw std::runtime_error("ECM_OPENCL_POINT_AUTO must be 0 or 1");
+        // The bounded ramp is qualified separately from giant chains. Its
+        // actual eligibility below still requires NVIDIA device points and
+        // honors explicit chunk/group plans and POINT_AUTO=0.
+        const auto wide_auto=setting("ECM_OPENCL_WIDE_AUTO",1);
+        if(wide_auto>1)throw std::runtime_error("ECM_OPENCL_WIDE_AUTO must be 0 or 1");
         // The existing wide-AMD point qualification guard remains intact.
         // CPU points still feed the same native OpenCL polynomial pipeline.
         const char* mode=std::getenv("ECM_OPENCL_POINTS");
@@ -117,10 +125,17 @@ struct PointGenerator {
         if(!chunk||chunk>4096)throw std::runtime_error("ECM_OPENCL_POINT_CHUNK must be 1..4096");
         // Respect manual chunk/group plans and keep the existing wide/vendor
         // qualification guards. Only ordinary useful commands train the plan.
-        const bool adaptive=automatic&&device&&nvidia&&w>8&&w<=128&&group==32&&
+        const bool wide_ramp=wide_auto&&w>128&&w<=256;
+        const bool adaptive=automatic&&device&&nvidia&&w>8&&(w<=128||wide_ramp)&&group==32&&
             !overridden("ECM_OPENCL_POINT_CHUNK")&&!overridden("ECM_OPENCL_POINT_GROUP");
-        plan=cls::PointPlan(chunk,group,r.device().compute_units,adaptive);
+        plan=cls::PointPlan(chunk,group,r.device().compute_units,adaptive,wide_ramp);
         const auto use=setting("ECM_OPENCL_GIANT_BASE",1);if(use>1)throw std::runtime_error("ECM_OPENCL_GIANT_BASE must be 0 or 1");use_giant_base=use!=0;
+        const auto chain=setting("ECM_OPENCL_GIANT_CHAIN",0);if(chain>1)throw std::runtime_error("ECM_OPENCL_GIANT_CHAIN must be 0 or 1");
+        chain_requested=chain!=0;chain_enabled=chain_requested&&device&&use_giant_base;
+    }
+    Word chain_capacity()const {
+        if(overridden("ECM_OPENCL_POINT_CHUNK"))return chunk; // Manual command bounds also govern chains.
+        return std::max(Word(chunk),std::min(Word(4096),std::max(Word(1),Word(runtime.device().compute_units))*std::max(Word(1),Word(group))*4));
     }
     Big BigValue(){Big value;mpz_set(value.v,n);return value;}
     Values generate(const std::vector<Word>&scalars,std::set<std::string>&f,Word&checked,Word step=1,std::size_t sample_span=0){
@@ -139,24 +154,42 @@ struct PointGenerator {
             for(auto scalar:scalars){if(scalar%step)throw std::runtime_error("nonmultiple giant scalar");reduced.push_back(scalar/step);}
         }
         const auto&work=reduced.empty()?scalars:reduced;
+        const bool chained=chain_enabled&&step>1&&!reduced.empty()&&work.size()>1;
+        if(chained)for(std::size_t i=1;i<work.size();++i)if(work[i-1]==std::numeric_limits<Word>::max()||work[i]!=work[i-1]+1)throw std::runtime_error("nonconsecutive giant chain scalars");
         points+=scalars.size();const auto begin=now();Values x,z;if(device){
             const auto bits=scalar_bits(*std::max_element(work.begin(),work.end()));
             // Bound each scalar-ladder submission on display GPUs. Wide scalar
             // kernels are slow; a whole production giant batch can otherwise
             // become a single multi-second command. This is separate from the
             // polynomial batch size and is not a calibrated watchdog guarantee.
-            for(std::size_t first=0;first<scalars.size();){const auto wanted=plan.chunk(bits),remaining=scalars.size()-first;
+            for(std::size_t first=0;first<scalars.size();){const auto wanted=chained?std::size_t(chain_capacity()):plan.chunk(bits),remaining=scalars.size()-first;
                 const auto mem=runtime.memory();const auto available=(mem.budget_bytes-mem.live_bytes)/(8*(2*w+1));
-                const auto count=plan.admit(wanted,remaining,std::size_t(available)),last=first+count;
+                const auto count=chained?std::min(remaining,std::max(std::min(chunk,remaining),std::min(wanted,std::size_t(available)))):plan.admit(wanted,remaining,std::size_t(available)),last=first+count;
                 budget_clamps+=count<std::min(wanted,remaining);
                 std::vector<Word> slice(work.begin()+first,work.begin()+last);
-                auto points=device->ladder(flatten({origin->x},w),flatten({origin->z},w),flatten({a24},w),slice);
+                const auto lanes=std::max(Word(1),Word(runtime.device().compute_units))*std::max(Word(1),Word(group));
+                const auto segment=std::size_t(std::clamp((Word(count)+lanes-1)/lanes,Word(2),Word(32)));
+                auto points=chained?device->consecutive(flatten({origin->x},w),flatten({origin->z},w),flatten({a24},w),slice.front(),count,segment):device->ladder(flatten({origin->x},w),flatten({origin->z},w),flatten({a24},w),slice);
                 kernel_seconds+=device->timing().kernel_seconds;upload_bytes+=device->timing().upload_bytes;++launches;
+                if(step>1)giant_kernel_seconds+=device->timing().kernel_seconds;
                 kernel_max_seconds=std::max(kernel_max_seconds,device->timing().kernel_seconds);
-                plan.observe(device->timing().kernel_seconds,scalar_bits(*std::max_element(slice.begin(),slice.end())),slice.size());
-                promoted_launches+=slice.size()>chunk;max_command_points=std::max(max_command_points,Word(slice.size()));
+                if(chained){++chain_launches;chain_points+=count;chain_seeds+=1+(count-1)/segment;
+                    chain_kernel_seconds+=device->timing().kernel_seconds;chain_max_seconds=std::max(chain_max_seconds,device->timing().kernel_seconds);}
+                else{plan.observe(device->timing().kernel_seconds,scalar_bits(*std::max_element(slice.begin(),slice.end())),slice.size());
+                    promoted_launches+=slice.size()>chunk;max_command_points=std::max(max_command_points,Word(slice.size()));}
                 auto xx=import(device->download(points.x),w),zz=import(device->download(points.z),w);
                 download_bytes+=2*slice.size()*w*8;
+                if(chained){
+                    // A differential chain may acquire a nonunit projective
+                    // scale on a composite target. Never interpret that scale
+                    // as a factor: recompute the entire affected command from
+                    // the ORIGINAL Q and full iD before normalization/oracles.
+                    const auto recovery_begin=now();Big product(1),g;
+                    for(const auto&v:zz)product=mul(product,v,n);
+                    mpz_gcd(g.v,product.v,n);
+                    if(mpz_cmp_ui(g.v,1)){++chain_recoveries;for(std::size_t j=0;j<count;++j){auto p=ladder(base,scalars[first+j],a24,n);xx[j]=p.x;zz[j]=p.z;}}
+                    chain_recovery_seconds+=now()-recovery_begin;
+                }
                 x.insert(x.end(),xx.begin(),xx.end());z.insert(z.end(),zz.begin(),zz.end());
                 first=last;
             }
@@ -225,7 +258,8 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             stage2_log::print(stage2_log::phases,"opencl_points: points=%llu launches=%llu coordinates=%.6f kernel=%.6f sample_checks=%.6f normalize=%.6f seed=%.6f\n",generator.points,generator.launches,generator.coordinate_seconds,generator.kernel_seconds,generator.check_seconds,generator.normalize_seconds,generator.seed_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_io: h2d_bytes=%llu d2h_bytes=%llu (kernel nested in coordinates; point timings nested in baby/giant)\n",generator.upload_bytes,generator.download_bytes);
             stage2_log::print(stage2_log::phases,"opencl_point_command: max_kernel_seconds=%.6f chunk=%llu group=%llu\n",generator.kernel_max_seconds,Word(generator.chunk),Word(generator.group));
-            stage2_log::print(stage2_log::phases,"opencl_point_plan: enabled=%d compute_units=%u seed_chunk=%llu ceiling=%llu samples=%llu promotions=%llu max_points=%llu budget_clamps=%llu target_seconds=%.3f seconds_per_bit=%.6f\n",int(generator.plan.enabled),runtime.device().compute_units,Word(generator.chunk),Word(generator.plan.ceiling),Word(generator.plan.samples),generator.promoted_launches,generator.max_command_points,generator.budget_clamps,cls::PointPlan::target_seconds,generator.plan.seconds_per_bit);
+            stage2_log::print(stage2_log::phases,"opencl_point_plan: enabled=%d compute_units=%u seed_chunk=%llu ceiling=%llu samples=%llu promotions=%llu max_points=%llu budget_clamps=%llu target_seconds=%.3f seconds_per_bit=%.6f wide_ramp=%d ramp_stopped=%d growth_limit=%.3f ramp_accepted=%llu ramp_next=%llu seed_efficiency_limit=%.3f\n",int(generator.plan.enabled),runtime.device().compute_units,Word(generator.chunk),Word(generator.plan.ceiling),Word(generator.plan.samples),generator.promoted_launches,generator.max_command_points,generator.budget_clamps,generator.plan.wide_ramp?0.:cls::PointPlan::target_seconds,generator.plan.seconds_per_bit,int(generator.plan.wide_ramp),int(generator.plan.ramp_stopped),cls::PointPlan::growth_limit,Word(generator.plan.accepted),Word(generator.plan.proposed),cls::PointPlan::seed_efficiency_limit);
+            stage2_log::print(stage2_log::phases,"opencl_giant_chain: requested=%d enabled=%d launches=%llu points=%llu seed_pairs=%llu recovery_commands=%llu guard_and_recovery_seconds=%.6f kernel=%.6f max_kernel_seconds=%.6f giant_kernel=%.6f\n",int(generator.chain_requested),int(generator.chain_enabled),generator.chain_launches,generator.chain_points,generator.chain_seeds,generator.chain_recoveries,generator.chain_recovery_seconds,generator.chain_kernel_seconds,generator.chain_max_seconds,generator.giant_kernel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_split: baby=%.6f ftree_inverse=%.6f giant=%.6f gtree_fold=%.6f\n",result.phases.seconds[2],result.phases.seconds[3],result.giant_seconds,result.gtrees_seconds);
             stage2_log::print(stage2_log::phases,"opencl_tail: leaf_oracle=%.6f descent=%.6f accum=%.6f\n",sentinel_seconds,result.descent_seconds,result.accum_seconds);
             const auto programs=runtime.programs();stage2_log::print(stage2_log::phases,"opencl_programs: builds=%llu hits=%llu build_seconds=%.6f cache=%d scope=context\n",programs.builds,programs.hits,programs.build_seconds,int(options.cache_programs));
@@ -239,10 +273,11 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         // The point window may span several G batches. Keep G boundaries
         // unchanged and admit the host coordinate staging independently.
         const auto window_cap=(setting("NTT_S4_BATCH_MB",64)<<20)/(6*m.W*8);
-        const auto window_request=overridden("ECM_OPENCL_POINT_WINDOW")?requested_window:generator.plan.window(s.chunk,window_cap);
+        auto window_request=overridden("ECM_OPENCL_POINT_WINDOW")?requested_window:generator.plan.window(s.chunk,window_cap);
+        if(!overridden("ECM_OPENCL_POINT_WINDOW")&&generator.chain_enabled)window_request=std::max(window_request,std::min(window_cap,generator.chain_capacity()));
         const auto admitted_window=std::min(window_request,window_cap);
         const auto point_window=std::max(s.chunk,(admitted_window/s.chunk)*s.chunk);
-        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu source=%s\n",requested_window,point_window,window_cap,s.chunk,overridden("ECM_OPENCL_POINT_WINDOW")?"explicit":generator.plan.enabled?"adaptive":"default");
+        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu source=%s\n",requested_window,point_window,window_cap,s.chunk,overridden("ECM_OPENCL_POINT_WINDOW")?"explicit":generator.chain_enabled?"chain":generator.plan.enabled?"adaptive":"default");
         stage2_log::phase("Giant points, G trees and fold");const double loop=now();Word batches=0;
         for(Word first=1;first<=s.giants;){const auto amount=std::min(point_window,s.giants-first+1);indices.resize(amount);for(Word k=0;k<amount;++k)indices[k]=(first+k)*s.d;
             t=now();auto window=generator.generate(indices,factors,result.checked,s.d,std::size_t(s.chunk));result.giant_seconds+=now()-t;

@@ -60,13 +60,38 @@ int inverse(int nw,word*inv,word*g,const word*a,const word*n,int extended){
 }
 void load(int nw,word*r,__global const word*a){for(int i=0;i<nw;++i)r[i]=a[i];}
 void store(int nw,__global word*r,const word*a){for(int i=0;i<nw;++i)r[i]=a[i];}
+// One ladder supplies BOTH adjacent seeds. All values here are Montgomery
+// images; the caller converts only the coordinates it actually publishes.
+// Inline this small control wrapper, retaining the shared noinline SOS body.
+__attribute__((always_inline))
+void ladder_pair(int nw,word*ax,word*az,word*bx,word*bz,const word*x,const word*z,const word*a24,const word*n,word ni,const word*mone,word k){
+    if(!k){cp(nw,ax,mone);zero(nw,az);cp(nw,bx,x);cp(nw,bz,z);return;}
+    cp(nw,ax,x);cp(nw,az,z);dbl(nw,bx,bz,x,z,a24,n,ni);int top=63;while(!((k>>top)&1UL))--top;
+    for(int bit=top-1;bit>=0;--bit){if((k>>bit)&1UL){xadd(nw,ax,az,ax,az,bx,bz,x,z,n,ni);dbl(nw,bx,bz,bx,bz,a24,n,ni);}else{xadd(nw,bx,bz,ax,az,bx,bz,x,z,n,ni);dbl(nw,ax,az,ax,az,a24,n,ni);}}
+}
 __kernel void point_ladder(int nw,__global const word*c,word ni,__global const word*ks,word count,__global word*ox,__global word*oz){
     word id=get_global_id(0);if(id>=count)return;word n[W],mone[W],r2[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],plain[W];
     load(nw,n,c);load(nw,mone,c+nw);load(nw,r2,c+2*nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
     mont(nw,x,x,r2,n,ni);mont(nw,z,z,r2,n,ni);mont(nw,a24,a24,r2,n,ni);word k=ks[id];
-    if(!k){cp(nw,ax,mone);zero(nw,az);}else{cp(nw,ax,x);cp(nw,az,z);dbl(nw,bx,bz,x,z,a24,n,ni);int top=63;while(!((k>>top)&1UL))--top;
-        for(int bit=top-1;bit>=0;--bit){if((k>>bit)&1UL){xadd(nw,ax,az,ax,az,bx,bz,x,z,n,ni);dbl(nw,bx,bz,bx,bz,a24,n,ni);}else{xadd(nw,bx,bz,ax,az,bx,bz,x,z,n,ni);dbl(nw,ax,az,ax,az,a24,n,ni);}}}
+    ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k);
     zero(nw,plain);plain[0]=1;mont(nw,ax,ax,plain,n,ni);mont(nw,az,az,plain,n,ni);store(nw,ox+id*nw,ax);store(nw,oz+id*nw,az);
+}
+__kernel void point_chain(int nw,__global const word*c,word ni,word first,word count,word segment,__global word*ox,__global word*oz){
+    word lo=get_global_id(0)*segment;if(lo>=count)return;word hi=lo+min(segment,count-lo),k=first+lo;
+    word n[W],mone[W],r2[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],tx[W],tz[W],plain[W];
+    load(nw,n,c);load(nw,mone,c+nw);load(nw,r2,c+2*nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
+    mont(nw,x,x,r2,n,ni);mont(nw,z,z,r2,n,ni);mont(nw,a24,a24,r2,n,ni);zero(nw,plain);plain[0]=1;
+    ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k);
+    mont(nw,tx,ax,plain,n,ni);mont(nw,tz,az,plain,n,ni);store(nw,ox+lo*nw,tx);store(nw,oz+lo*nw,tz);
+    if(lo+1<hi){mont(nw,tx,bx,plain,n,ni);mont(nw,tz,bz,plain,n,ni);store(nw,ox+(lo+1)*nw,tx);store(nw,oz+(lo+1)*nw,tz);}
+    for(word j=lo+2;j<hi;++j){
+        // [k+1]Q + Q has difference [k]Q, not Q. Starting at zero
+        // needs a doubling because differential addition cannot double Q.
+        if(k==0&&j==lo+2)dbl(nw,tx,tz,bx,bz,a24,n,ni);
+        else xadd(nw,tx,tz,bx,bz,x,z,ax,az,n,ni);
+        cp(nw,ax,bx);cp(nw,az,bz);cp(nw,bx,tx);cp(nw,bz,tz);
+        mont(nw,tx,bx,plain,n,ni);mont(nw,tz,bz,plain,n,ni);store(nw,ox+j*nw,tx);store(nw,oz+j*nw,tz);
+    }
 }
 __kernel void point_normalize(int nw,__global const word*c,word ni,__global const word*xs,__global const word*zs,word offset,word stride,word count,word segment,
     __global word*prefix,__global word*out,__global word*gs,__global word*bad){

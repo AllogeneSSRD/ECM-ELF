@@ -96,15 +96,21 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 
 AMD点模块超过512 bits的资格限制保持不变；生产引擎显式使用CPU点生成，而F/G/NTT/S4/下降仍在OpenCL设备上。不可逆分母逐点定位真因子；仅出现模N饱和、无法形成仿射根且未得到真因子时失败，不用伪造零根发布NF。
 
-NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。初始化chunk为≤512 bits:1024、513～8192 bits:256、更宽:16。其他厂商保留运行时工作组及原有位宽分块。`ECM_OPENCL_POINT_AUTO=1`为默认；仅NVIDIA、9…128 limbs、无显式chunk/group覆盖时启用反馈计划，其他路径维持资格与初始分块。实际命令时长由`opencl_point_command.max_kernel_seconds`记录，chunk字段仍表示初始化值。
+NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。初始化chunk为≤512 bits:1024、513～8192 bits:256、更宽:16。其他厂商保留运行时工作组及原有位宽分块。`ECM_OPENCL_POINT_AUTO=1`、`ECM_OPENCL_WIDE_AUTO=1`为默认；NVIDIA的9…128 limbs使用常规反馈，129…256 limbs使用宽位渐进反馈；显式chunk/group锁定手动计划，其他路径维持资格与初始分块。实际命令时长由`opencl_point_command.max_kernel_seconds`记录，chunk字段仍表示初始化值。
 
-[PointPlan](../../src/ecm/stage2/opencl/point_plan.h)从有用点命令的事件时间学习，不预热或重复生成校准点。计算单元数来自OpenCL标准设备查询；升档目标为CU×32并限4096，目标不高于seed时保留seed。它以标量位数和估算提交轮数归一化，保留历史最大单位成本，给预测增加15%裕量；预计一轮不超过1秒才升档。迟缓样本会抑制后续升档，每条曲线重新学习。小于一个完整工作组的样本不训练模型。该模型只控制升档，首条及回退命令仍用原批量，不承诺1秒硬时限，也不自动切换CPU点。
+[PointPlan](../../src/ecm/stage2/opencl/point_plan.h)从有用点命令的事件时间学习，不预热或重复生成校准点。对9…128 limbs，计算单元数来自OpenCL标准设备查询；升档目标为CU×32并限4096，目标不高于seed时保留seed。它以标量位数和估算提交轮数归一化，保留历史最大单位成本，给预测增加15%裕量；预计一轮不超过1秒才升档。迟缓样本会抑制后续升档，每条曲线重新学习。小于一个完整工作组的样本不训练常规模型。该模型只控制升档，首条及回退命令仍用原批量，不承诺1秒硬时限，也不自动切换CPU点。
+
+`ECM_OPENCL_WIDE_AUTO=1`默认将反馈扩展到NVIDIA的129～256 limbs；设0保留宽位原批量。它从16点尝试完整32工作项组；完整组的单位点／bit成本若超过seed的1.10倍，则退回16点并停止探测。否则按32、64、128、256逐步增加，受CU×工作组及256点上限约束；后续每bit命令耗时超过前一合格档的1.35倍时，拒绝升档或减小已接受档，随后停止增长。尾批和预算裁剪不足请求点数的命令不训练。宽位策略是相对成本控制，没有1秒硬时限；手动chunk/group及CPU／厂商资格仍优先。
+
+`ECM_OPENCL_GIANT_CHAIN=1`可实验性地使用`Points::consecutive`，默认0。仅设备点且复用[D]Q时，对连续巨步标量分段：一次ladder保留相邻两点，段内按xADD递推；标量0种子使用特殊倍点，避免以无穷远差分求倍点。主机对每条命令的Z积求GCD；遇到非单位投影尺度时，从原Q及完整iD重算整条命令，再进入原来的取样、归一化和因子验证。原始链的非单位不直接作为因子发布。点窗口可跨G批，但原G边界、NTT工作、每G批取样和完整叶哨兵保持。
+
+递推提交容量最多4096点，参考CU×工作组×4并受owned余额约束；显式chunk优先。段长按提交点数与CU×工作组选2～32点；底层算子接受2～64，拒绝空区间和uint64越界。段数减少也会减少并行工作项，因此不能仅凭模乘数推断收益。`opencl_giant_chain`单列种子段数、恢复命令、GCD／重算成本、链事件及最长命令；这些计时嵌套于giant及点coordinates。宽位反馈不将链事件作为ladder样本。
 
 升档另外检查实时owned-buffer余额，按scalar索引及X/Z两向量的payload裁剪；不会因升级请求让原批量本可容纳的点分配超出账本预算。此检查不估算驱动私有资源或全卡free memory。手动chunk/group锁定原计划；CPU点、AMD与更宽NVIDIA不应用该模型。`opencl_point_plan`单独汇总反馈、升档、实际最大点数和预算裁剪。
 
 giant坐标窗口可跨越多个G批。自动计划优先选择G批与点上限的最小公倍数，无法容纳时选坐标额度内的整G批；其他路径默认一个G批。显式窗口0锁定原G批，正值按请求裁剪。窗口至多65536点，按已有batch坐标额度准入；设备每条命令仍受独立chunk及实时账本余量限制。随后按原边界构造G树，保留每个G批的首／中／末原始标量GMP样本，以及完整giant范围的叶哨兵。末尾短批和种子非单位路径不跳过验证。入口为[engine.cpp](../../src/ecm/stage2/opencl/engine.cpp#L239)，开关见[Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
 
-当前生产ABI每次执行一条曲线，主机日志、部分计数及Runtime可变kernel参数不支持对同一引擎直接多线程重入。多曲线吞吐实验使用独立进程、独立save和结果目录，不消费生产队列，也没有新增自动并行调度。每条曲线的owned-buffer预算独立，不能充当多worker的全卡显存总预算。实测和共享context批处理的后续要求见[性能报告](../performance/OPENCL_STAGE2.md#点提交组织与多曲线吞吐)。
+当前生产ABI每次执行一条曲线，主机日志、部分计数及Runtime可变kernel参数不支持对同一引擎直接多线程重入。多曲线吞吐实验使用独立进程、独立save和结果目录，不消费生产队列，也没有新增自动并行调度。每条曲线的owned-buffer预算独立，不能充当多worker的全卡显存总预算。实测版本及共享context批处理的后续要求见[性能报告](../performance/OPENCL_STAGE2.md#cpu分流与多曲线的适用范围)。
 
 诊断细节仅在phases及以上日志级别输出。`opencl_points.coordinates`含点分配、提交、等待、坐标回读与GMP导入；`kernel`是其中嵌套的设备事件总时长。sample_checks、normalize、seed分别计时；这些点明细包含于baby/giant。`opencl_split`区分baby、F/逆、giant、G/fold，`opencl_tail`单列叶子oracle、下降、积/GCD，禁止将嵌套字段重复相加。专家对照开关见 [Stage2使用](../usage/STAGE2.md#opencl-性能对照开关)。
 

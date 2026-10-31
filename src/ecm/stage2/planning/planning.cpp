@@ -278,6 +278,15 @@ bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,st
     if(admitted)try {reported=u64(plan_scalar(plan,"free_bytes"),"plan free snapshot");}catch(const std::runtime_error &){}
     const auto after=portable_memory_snapshot(o.device);
     memo.put(key,Value{shape,plan},before,reported,after,admitted);
+    if(!admitted && route_scope && !plan.empty())try {
+        const auto memory=curve_memory_record(plan);
+        // Unsupported/incomplete/error plans must never become cached rejects.
+        if(plan_scalar(memory,"valid")=="true" && plan_scalar(memory,"finished")=="true" &&
+            plan_scalar(memory,"initial_free_snapshot_fits")=="false")
+            portable_runtime_routes.hints.rejected.put(shape.d,shape.carrier,before,
+                u64(plan_scalar(plan,"free_bytes"),"plan free snapshot"),
+                u64(plan_scalar(memory,"required_free_bytes"),"required free snapshot"),after);
+    }catch(const std::runtime_error &){}
     if(route_scope)portable_runtime_routes.hints.put(portable_route(shape,before),
         admitted && pt::runtime_plan_may_reuse(before,reported,after),after);
     return admitted;
@@ -286,7 +295,7 @@ uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     RuntimeTuneObservation result;
     const auto profile=portable_read(o.tune_profile);result.condition=portable_condition(o);
-    pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
     pt::WidthPredictor predictor(engine);
     // Selection normally fixes D. A protected legacy fallback may leave it 0.
     const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
@@ -408,8 +417,12 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
     if((pt::DSearch(existing,reference.d).explored()>=initial_budget.candidates && !partial) ||
        !initial_budget.remaining || (o.runtime_remaining && o.runtime_remaining<4))return {};
     std::string pause_key;
-    if(o.runtime_prepare_cache && !pause_context.empty()) {
-        pause_key=ecm_stage2::sha256_text(pt::runtime_pause_scope(pause_context,reference,candidates));
+    const bool rejection_cache=o.runtime_prepare_cache && portable_route_scope(o,r);
+    const auto search_memory=rejection_cache?portable_memory_snapshot(o.device):pt::RuntimeMemorySnapshot{};
+    if(rejection_cache && search_memory.valid() && !pause_context.empty()) {
+        const auto context=pause_context+'\n'+portable_runtime_routes.hints.scope_key+'\n'+
+            std::to_string(search_memory.free)+','+std::to_string(search_memory.total);
+        pause_key=ecm_stage2::sha256_text(pt::runtime_pause_scope(context,reference,candidates));
         pt::RuntimePauseHints incoming;incoming.assign(o.runtime_prepare_hints);
         if(incoming.contains(pause_key)) {
             outgoing.add(pause_key);
@@ -441,7 +454,7 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
     auto budget=pt::runtime_search_budget(nodes,reference.d,o.runtime_samples);
     pt::RuntimeSearchAttempts attempts(nodes.size());auto &native_admissions=attempts.admissions;
     const char *reason="admission_attempt_limit";uint64_t proposed=0;double scale=0;
-    unsigned model_rejected=0,budget_rejected=0,memory_rejected=0;
+    unsigned model_rejected=0,budget_rejected=0,memory_rejected=0,memory_cache_hits=0;
     std::string memory_rejection="null";
     // Cheap model rejections must not consume the native-admission allowance:
     // otherwise every new worker can get stuck on the same first 16 rejects.
@@ -456,6 +469,9 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         if(!budget.permits(estimates[i].seconds*(1+estimates[i].relative_error)+2*estimates[i].stddev,
                            nodes[i].samples,o.runtime_remaining)) {
             ++budget_rejected;nodes[i].rejected=true;reason="exploration_budget";continue;
+        }
+        if(rejection_cache && portable_runtime_routes.hints.rejected.contains(s.d,s.carrier,portable_memory_snapshot(o.device))) {
+            ++memory_cache_hits;nodes[i].rejected=true;reason="cached_memory_admission";continue;
         }
         ++native_admissions;
         if(!portable_runtime_admit(o,r,s,plan)) {
@@ -491,7 +507,8 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         }
         if(!present)candidates.push_back({s,stats,3,true});proposed=s.d;break;
     }
-    const bool cacheable=!proposed && !native_admissions && !pause_key.empty();
+    const bool cacheable=!proposed && !native_admissions && !pause_key.empty() &&
+        search_memory==portable_memory_snapshot(o.device);
     if(cacheable)outgoing.add(pause_key);
     const auto center=pt::DSearch(nodes,reference.d).center();
     std::set<pt::DSearchRegion> measured_regions;
@@ -513,6 +530,7 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         <<",\"forward_model_seconds\":"<<(forward<nodes.size()?estimates[forward].seconds:0)
         <<",\"model_rejected\":"<<model_rejected<<",\"budget_rejected\":"<<budget_rejected
         <<",\"memory_rejected\":"<<memory_rejected<<",\"last_memory_rejection\":"<<memory_rejection
+        <<",\"memory_rejection_cache_hits\":"<<memory_cache_hits
         <<",\"ranked_shapes\":"<<nodes.size()<<",\"rank_seconds\":"<<rank_seconds
         <<",\"native_admission_calls\":"<<native_admissions<<",\"cached_pause\":false,\"pause_cacheable\":"
         <<(cacheable?"true":"false")<<'}';
@@ -598,13 +616,15 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         <<",\"search_seconds\":"<<search_seconds<<",\"native_plan_seconds\":"<<plan_metrics.seconds
         <<",\"native_plan_calls\":"<<plan_metrics.calls<<",\"plan_cache_hits\":"<<plan_metrics.cache_hits
         <<",\"route_cache_hits\":"<<plan_metrics.route_hits
+        <<",\"ntt_cost_evaluations\":"<<engine.ntt_cost_evaluations<<",\"ntt_cost_cache_hits\":"<<engine.ntt_cost_hits
+        <<",\"prediction_evaluations\":"<<predictor.prediction_evaluations<<",\"prediction_cache_hits\":"<<predictor.prediction_hits
         <<",\"distinct_D_carrier\":"<<plan_metrics.d_carriers.size()
         <<",\"total_seconds\":"<<std::chrono::duration<double>(std::chrono::steady_clock::now()-prepare_start).count()<<'}';
     return out.str()+'}';
 }
 std::string portable_width_select(Options &o,const Record &r) {
     const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
-    pt::Estimator engine(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::Estimator engine(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
     pt::WidthPredictor predictor(engine);
     const auto runtime=portable_runtime_select(o,r,engine,predictor);if(!runtime.empty())return runtime;
     const auto carriers=portable_carriers(o,r);const unsigned initial=carriers.front();
@@ -679,7 +699,7 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
         return "{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"missing_profile\"}";
     }
     const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
-    pt::Estimator estimator(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::Estimator estimator(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
     pt::WidthPredictor width_predictor(estimator);
     double t1=o.stage1_seconds;std::string t1_source="provided_per_curve";
     Big n;mpz_set_str(n.z,r.n.c_str(),16);const unsigned bits=unsigned(mpz_sizeinbase(n.z,2));
@@ -833,7 +853,7 @@ std::string select_auto_tuned(Options &o,const Record &r){return portable_select
 std::string select_runtime_tuned(Options &o,const Record &r) {
     if(o.prediction_policy!="model")return {};
     const auto profile=portable_read(o.tune_profile);
-    pt::Estimator engine(profile,portable_condition(o),pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::Estimator engine(profile,portable_condition(o),pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
     pt::WidthPredictor predictor(engine);return portable_runtime_select(o,r,engine,predictor);
 }
 
@@ -899,7 +919,7 @@ bool portable_measure(Options o,const TaskDefaults &settings,const PortableInput
     condition=profile.condition(portable_condition(o));
     auto shape=portable_shape(o,input.record,b2,d,carrier);std::string plan;
     if(!portable_admit(o,input.record,shape,plan))return false;
-    pt::Estimator before_model(profile,profile.conditions.at(condition),pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::Estimator before_model(profile,profile.conditions.at(condition),pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
     pt::WidthPredictor before_predictor(before_model);pt::WidthEstimate prediction;
     const bool predicted=before_predictor.predict(shape,prediction);
     const std::string stem="measure_"+std::to_string(profile.revision)+"_"+std::to_string(GetTickCount64());
@@ -1289,7 +1309,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
             if(!portable_admit(o,target.input.record,shape,plan))continue;
             const auto p=ecm_stage2::cost::phi(d)/2,points=b/d+2;
             if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches))continue;
-            pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+            pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
             const auto prior=estimator.observed(shape);
             if(prior && et::uint(*prior,"repeats")>=grid.repeats){++skipped;++paired_references;continue;}
             unsigned completed=0;
@@ -1300,7 +1320,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
             if(changed)portable_publish(destination,profile);
             if(completed>=grid.repeats) {
                 ++paired_references;
-                pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
                 reference_samples[{target_index,updated.shape(formal_sample).key()}]=std::move(formal_sample);
             }
         }
@@ -1349,7 +1369,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                 if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches) ||
                    !pt::work(shape,portable_query,[](uint64_t n,uint64_t batch){return double(n)*batch;},topology) ||
                    !admit(d,shape)) {result.state=Outcome::Rejected;++skipped;return outcomes[d]=result;}
-                pt::Estimator model(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                pt::Estimator model(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
                 const auto prior=model.observed(shape);
                 const auto reference=reference_samples.find({target_index,shape.key()});
                 const bool reuse_current=reference!=reference_samples.end();
@@ -1366,7 +1386,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                     if(completed)++measured;
                     if(changed)portable_publish(destination,profile);
                 } else ++skipped;
-                pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
                 const auto observation=updated.observed(shape);
                 if(!observation || (!reuse && completed<grid.repeats))return outcomes[d]=result;
                 result.state=Outcome::Tested;
@@ -1391,7 +1411,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
             std::map<pt::NttInterval,std::vector<Node>> groups;
             auto reference=portable_shape(o,r,b,baseline,carrier);pt::Work reference_work;
             if(admissions.count(baseline) && admissions.at(baseline).first)reference=admissions.at(baseline).second;
-            pt::Estimator guide(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+            pt::Estimator guide(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
             pt::WidthPredictor reusable_guide(guide);
             const bool reference_ok=guide.cached_work(reference,reference_work);
             pt::WidthEstimate reference_estimate;
@@ -1433,7 +1453,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                 const auto base=outcomes.find(baseline);
                 if(base!=outcomes.end() && base->second.state==Outcome::Tested) {
                     pt::LocalSearch::Timing best=base->second.time;
-                    pt::Estimator observed(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                    pt::Estimator observed(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
                     for(size_t i=0;i<nodes.size();++i) {
                         if(budget.expired() || stop_requests){complete=false;break;}
                         auto shape=portable_shape(o,r,b,nodes[i].d,carrier);
@@ -1514,7 +1534,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
     }
     // Persist only final candidate summaries. Estimates cannot replace measured
     // measured values; their source and validation state remain explicit.
-    pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache);
     std::ostringstream evidence_key;
     for(const auto &s:profile.samples)if(pt::measured(s))evidence_key<<pt::scope(s)<<et::required(s,"mean_seconds")<<';';
     for(const auto &s:profile.ntt)evidence_key<<et::required(s,"condition")<<':'<<et::required(s,"length")<<':'

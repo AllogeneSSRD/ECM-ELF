@@ -22,6 +22,11 @@ public:
     const PointTiming &timing()const; // Last operation only; excludes construction.
     ProjectivePoints ladder(const std::vector<Word>&x,const std::vector<Word>&z,
         const std::vector<Word>&a24,const std::vector<Word>&scalars);
+    // Consecutive [first+i]Q, seeded independently per bounded segment. On a
+    // composite target the caller must recover nonunit denominators through
+    // independent ladders before interpreting them as factors/affine roots.
+    ProjectivePoints consecutive(const std::vector<Word>&x,const std::vector<Word>&z,
+        const std::vector<Word>&a24,Word first,std::size_t count,std::size_t segment);
     // One inversion per segment in the normal case; a nonunit segment retries
     // its points independently so one bad Z never hides the other point factors.
     AffinePoints normalize(const ProjectivePoints &,std::size_t segment=32);

@@ -19,7 +19,7 @@ namespace cl2=ecm_opencl::stage2;
 namespace ntt=ecm_opencl::ntt;
 using Word=ntt::Word;
 namespace {
-Word checked=0,guards=0,curves=0,qualification_rejections=0;
+Word checked=0,guards=0,curves=0,qualification_rejections=0,chain_nonunits=0;
 std::size_t ladder_group=0;
 void check_point_plan(){
     cl2::PointPlan p(256,32,24,true);
@@ -33,6 +33,20 @@ void check_point_plan(){
     cl2::PointPlan locked(256,32,24,false);
     locked.observe(.01,10,256);if(locked.chunk(10)!=256||locked.window(240,11184)!=240)throw std::runtime_error("manual point plan changed");
     guards+=6;
+    cl2::PointPlan wide(16,32,24,true,true);
+    if(wide.chunk(10)!=16||wide.ceiling!=256)throw std::runtime_error("wide ramp seed/cap");
+    wide.observe(.1,10,8);if(wide.samples)throw std::runtime_error("wide short tail trained ramp");
+    wide.observe(.4,10,16);if(wide.chunk(10)!=32)throw std::runtime_error("wide full-group probe");
+    wide.observe(.6,10,32);if(wide.chunk(10)!=64)throw std::runtime_error("wide first growth");
+    wide.observe(.6,10,64);if(wide.chunk(10)!=128)throw std::runtime_error("wide second growth");
+    wide.observe(.7,10,128);if(wide.chunk(10)!=256)throw std::runtime_error("wide ceiling growth");
+    wide.observe(1.2,10,256);if(wide.chunk(10)!=128||!wide.ramp_stopped)throw std::runtime_error("wide rejected growth");
+    wide.observe(.5,10,128);if(wide.chunk(10)!=128)throw std::runtime_error("wide stopped ramp restarted");
+    cl2::PointPlan expensive_group(16,32,24,true,true);
+    expensive_group.observe(.4,10,16);expensive_group.observe(1.2,10,32);
+    if(expensive_group.chunk(10)!=16||!expensive_group.ramp_stopped)throw std::runtime_error("wide inefficient full group accepted");
+    expensive_group.observe(.3,10,16);if(expensive_group.chunk(10)!=16)throw std::runtime_error("wide rejected group reprobed");
+    guards+=10;
 }
 std::string quote(const std::string&s){std::string o="\"";for(char c:s){if(c=='\\'||c=='\"')o+='\\';if(c=='\n')o+="\\n";else if(c=='\r')o+="\\r";else o+=c;}return o+'"';}
 void same(const std::vector<Word>&a,const std::vector<Word>&b,const char*where){if(a!=b){std::size_t i=0;while(i<std::min(a.size(),b.size())&&a[i]==b[i])++i;throw std::runtime_error(std::string(where)+" mismatch word="+std::to_string(i)+(i<a.size()&&i<b.size()?" actual="+std::to_string(a[i])+" expected="+std::to_string(b[i]):" size"));}checked+=a.size();}
@@ -48,6 +62,35 @@ ref::Poly cpu_normalize(const ref::Poly&xs,const ref::Poly&zs,const ref::Big&n,s
     return out;
 }
 ref::Poly cpu_products(const ref::Poly&v,const ref::Big&n,std::size_t block){ref::Poly out;for(std::size_t lo=0;lo<v.size();lo+=block){ref::Big a(1);for(std::size_t j=lo;j<std::min(lo+block,v.size());++j)a=ref::mul(a,v[j],n);out.push_back(a);}return out;}
+void check_chain(ntt::Runtime&r,const ref::Big&n){
+    const auto nw=(mpz_sizeinbase(n.v,2)+63)/64;cl2::Points p(r,flat(n,nw),ladder_group);
+    ref::Point base{ref::Big(17),ref::Big(3)};ref::Big a24(7);
+    const bool prime_fixture=mpz_probab_prime_p(n.v,25)!=0;
+    struct Range {Word first;std::size_t count,segment;};
+    // Short tails, the zero seed, segment transitions and the uint64 edge.
+    // Large widths retain a small grid so qualification is not a long benchmark.
+    std::vector<Range> ranges{{0,7,3},{17,7,2},{255,7,64},{~Word(0)-2,3,2}};
+    if(nw<=2)ranges.push_back({5,65,16});
+    for(const auto&v:ranges){auto out=p.consecutive(flat(base.x,nw),flat(base.z,nw),flat(a24,nw),v.first,v.count,v.segment);
+        const auto xs=split(p.download(out.x),nw),zs=split(p.download(out.z),nw);
+        for(std::size_t i=0;i<v.count;++i){auto q=ref::ladder(base,ref::Big(v.first+i),a24,n);
+            if(mpz_sgn(xs[i].v)<0||mpz_cmp(xs[i].v,n.v)>=0||mpz_sgn(zs[i].v)<0||mpz_cmp(zs[i].v,n.v)>=0)throw std::runtime_error("chain residue range");
+            if(ref::unit(zs[i],n)){
+                if(!ref::unit(q.z,n)||mpz_cmp(ref::mul(q.x,zs[i],n).v,ref::mul(q.z,xs[i],n).v))throw std::runtime_error("chain unit projective mismatch");
+                checked+=2*nw;
+            }else{
+                if(prime_fixture&&ref::unit(q.z,n))throw std::runtime_error("chain lost a finite prime-field point");
+                // Raw nonunits are deliberately NOT accepted as affine roots
+                // or factors. The production engine retries the full command
+                // from original Q; its recovery branch has a worker fixture.
+                ++chain_nonunits;
+            }
+        }
+    }
+    for(auto pair:{std::make_pair(std::size_t(0),std::size_t(2)),std::make_pair(std::size_t(1),std::size_t(1)),std::make_pair(std::size_t(1),std::size_t(65))})
+        rejects([&]{p.consecutive(flat(base.x,nw),flat(base.z,nw),flat(a24,nw),1,pair.first,pair.second);});
+    rejects([&]{p.consecutive(flat(base.x,nw),flat(base.z,nw),flat(a24,nw),~Word(0),2,2);});
+}
 void check_points(ntt::Runtime&r,const ref::Big&n,const std::vector<Word>&ks){const auto nw=(mpz_sizeinbase(n.v,2)+63)/64;cl2::Points p(r,flat(n,nw),ladder_group);
     // Separate SOS, binary GCD and inverse-normalization seams before ladder.
     // Includes a multi-limb inverse and maximal canonical residue.
@@ -155,11 +198,11 @@ int main(int argc,char**argv){std::string output,resource,cuda_path;std::size_t 
             for(unsigned bits:grid){if(bits<5||bits>16384)throw std::runtime_error("only-bits outside fixture range 5..16384");std::cout<<"opencl_points_begin: bits="<<bits<<'\n';ref::Big n;mpz_setbit(n.v,bits);mpz_sub_ui(n.v,n.v,1);
                 const auto&vendor=runtime.device().vendor;const bool amd=vendor.find("Advanced Micro Devices")!=std::string::npos||vendor=="AMD";
                 if(amd&&bits>512){rejects([&]{cl2::Points unsupported(runtime,flat(n,(bits+63)/64));});++qualification_rejections;std::cout<<"opencl_points_unqualified: bits="<<bits<<" rejected=1\n";continue;}
-                check_points(runtime,n,{0,1,2,3,17,255,65537,~Word(0)});}
+                check_points(runtime,n,{0,1,2,3,17,255,65537,~Word(0)});check_chain(runtime,n);}
             recovery(runtime);const auto&vendor=runtime.device().vendor;if(vendor.find("Advanced Micro Devices")!=std::string::npos||vendor=="AMD"){
                 std::vector<Word>ordinary(9);ordinary[0]=13;ordinary.back()=1;rejects([&]{cl2::Points unsupported(runtime,ordinary);});}
             if(!only_bits){auto hit=ref::curve(ref::Big(257000771),6,20,300,30);full_curve(runtime,hit,hit.modulus);ref::Big m;mpz_setbit(m.v,127);mpz_sub_ui(m.v,m.v,1);auto miss=ref::curve(m,26,20,300,30);full_curve(runtime,miss,m);
             mpz_set_ui(m.v,0);mpz_setbit(m.v,91);mpz_sub_ui(m.v,m.v,1);ref::Big target;mpz_divexact_ui(target.v,m.v,127);auto cofactor=ref::curve(target,6,20,300,30);full_curve(runtime,cofactor,target);full_curve(runtime,cofactor,m);}rows<<"[]";}
-        if(runtime.memory().live_bytes)throw std::runtime_error("point resources still live");std::ofstream f(output);f<<"{\"status\":\"passed\",\"device\":"<<quote(runtime.device().name)<<",\"driver\":"<<quote(runtime.device().driver)<<",\"cuda_comparison\":"<<(cuda.run?"true":"false")<<",\"checked_words\":"<<checked<<",\"guards\":"<<guards<<",\"curves\":"<<curves<<",\"qualification_rejections\":"<<qualification_rejections<<",\"peak_payload_bytes\":"<<runtime.memory().peak_bytes<<",\"bad\":0,\"production_queue\":false,\"rows\":"<<rows.str()<<"}\n";if(!f)throw std::runtime_error("cannot write evidence");std::cout<<"opencl_points_passed: words="<<checked<<" guards="<<guards<<" curves="<<curves<<" unqualified="<<qualification_rejections<<" bad=0\n";return 0;
+        if(runtime.memory().live_bytes)throw std::runtime_error("point resources still live");std::ofstream f(output);f<<"{\"status\":\"passed\",\"device\":"<<quote(runtime.device().name)<<",\"driver\":"<<quote(runtime.device().driver)<<",\"cuda_comparison\":"<<(cuda.run?"true":"false")<<",\"checked_words\":"<<checked<<",\"guards\":"<<guards<<",\"curves\":"<<curves<<",\"chain_nonunits_require_recovery\":"<<chain_nonunits<<",\"qualification_rejections\":"<<qualification_rejections<<",\"peak_payload_bytes\":"<<runtime.memory().peak_bytes<<",\"bad\":0,\"production_queue\":false,\"rows\":"<<rows.str()<<"}\n";if(!f)throw std::runtime_error("cannot write evidence");std::cout<<"opencl_points_passed: words="<<checked<<" guards="<<guards<<" curves="<<curves<<" unqualified="<<qualification_rejections<<" bad=0\n";return 0;
     }catch(const std::exception&e){std::cerr<<"opencl_points_failed: "<<e.what()<<'\n';return 1;}
 }

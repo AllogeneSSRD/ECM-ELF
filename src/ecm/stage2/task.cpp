@@ -129,6 +129,11 @@ int curve_worker(Options o) {
     EcmStage2Metrics tune_metrics;
     const uint64_t requested_d=o.d,requested_b2=o.b2;
     const unsigned requested_carrier=o.carrier_exponent;
+#ifdef ECM_STAGE2_OPENCL
+    stage2_log::phase("Plan Stage2 bounds and OpenCL payload");
+#else
+    stage2_log::phase("Plan Stage2 bounds and memory");
+#endif
     const auto start = std::chrono::steady_clock::now();
     std::string auto_json;
     configure_short_ntt_batches(o);

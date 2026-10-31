@@ -163,13 +163,20 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 运行队列只在当前父进程内传递准备提示；重启后从空状态开始，不创建缓存文件，也不改变只记录曲线进度的checkpoint。
 
-- **模型暂停**：每个算术家族最多一项。只有本次没有提议D、且没有进入原生准入时才能复用；完整性能文件、任务N/B1/B2、条件、实际候选及统计组成键。新观察或执行路径改变即重新排名。资源拒绝不作为可复用的模型暂停。
+- **模型暂停**：每个算术家族最多一项。只有本次没有提议D、没有进入原生准入且搜索期间显存快照稳定时才能复用；完整性能文件、任务N/B1/B2、条件、实际候选及统计、完整规划环境和实时free/total组成键。新观察、执行路径或显存变化即重新排名。不能因一轮达到16次准入上限而暂停后续探索。
 - **成功几何计划**：最多32项。只记D、算术家族及fold/frontier、giant分块、chain阈值等资源路线。任务N/B1/B2、程序版本、设备身份、预算、完整环境和相关选项必须相同，每次复用前重新查询设备free/total并要求精确相等。保存前后内存快照不稳定、原生规划失败、提示损坏或条件改变时回到原生规划。跨曲线不保存点、F/G树或任何算术状态；sigma不影响无曲线运算的几何规划，实际save验证和曲线执行仍分别进行。
 - **worker内计划**：以完整请求Shape、sigma及规划条件为键，复用同曲线选择与观察准备的重复成功准入；同样检查实时free/total，失败结果不缓存。
+- **显存失败提示**：仅接受原生计划有效、完成且明确因`required_free_bytes > free_bytes`而拒绝的候选；准入前、计划报告及准入后的free必须一致，total也必须一致。不缓存不支持、未完成或其他错误。提示以共享D表索引的位图保存，最多两个算术家族，不保存完整失败计划；free/total、规划作用域或父进程改变即失效。命中的失败项不消耗16次原生准入额度，搜索继续向后推进，仍受候选数、区域及额外引擎时间预算约束。
+
+单次选型的估计器还复用NTT长度/batch成本、完整Shape的运行统计和位宽预测，保存原始双精度结果，不量化排名。严格条件匹配的运行样本在估计器构造时筛选；profile、条件或NTT策略改变后新建估计器。此类数学缓存没有设备分配和算术状态。
 
 两条路径的默认D仍实时规划；实际引擎初始化、分配失败处理、承载整除验证及数学检查继续执行。提示附在现有`tune_selection`事件中，父进程仅在内存保留，带长度检查和SHA256校验；校验用于发现损坏，不作为权限机制。完整几何计划不写入tune矩阵。内部A/B开关`--runtime-prepare-cache 0|1`默认1，可一次关闭上述复用；它不改变测量身份或采用门限。
 
-`tune_selection.runtime_prepare`给出默认规划、候选准备、搜索及总时间，另列原生调用数和缓存命中数。`runtime_search.native_admission_calls`是含缓存命中的逻辑准入请求数，`runtime_prepare.native_plan_calls`才是真正调用原生规划器的次数。`native_plan_seconds`嵌套在这些阶段内，不能重复相加；`selection_seconds`还包括外层配置准备，`observation_prepare_seconds`单列观察准备。这些均在`stage2_full_wall`外；性能需同时比较引擎与队列墙钟。缓存实现为`src/ecm/stage2/planning/runtime_cache.h`，接入点为`planning/stage2.cpp::portable_runtime_admit/portable_runtime_search`和`service/stage2/task.cpp::child_run/curve_worker`。验证范围见[Stage2性能](../performance/STAGE2.md#有界d搜索的验证范围)。
+`tune_selection.runtime_prepare`给出默认规划、候选准备、搜索及总时间，另列原生调用数和缓存命中数。`runtime_search.native_admission_calls`是含成功计划缓存命中的逻辑准入请求数，不含位图跳过；`memory_rejection_cache_hits`单列位图命中，`runtime_prepare.native_plan_calls`才是真正调用原生规划器的次数。`ntt_cost_evaluations`与`ntt_cost_cache_hits`计估计器内NTT成本求值及复用，`prediction_evaluations`与`prediction_cache_hits`计位宽预测求值及复用。
+
+`native_plan_seconds`嵌套在准备阶段内，不能重复相加；`selection_seconds`还包括外层配置准备，`observation_prepare_seconds`单列观察准备。这些均在`stage2_full_wall`外；性能需同时比较引擎与队列墙钟。读取、save解析/校验后即打印规划阶段，自动选型和观察准备归入规划；相同阶段的连续标记合并，不重复切断计时。
+
+缓存实现为[runtime_cache.h](../../src/ecm/stage2/planning/runtime_cache.h)、[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)和[width_prediction.h](../../src/ecm/stage2/planning/width_prediction.h)，接入点为[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)的`portable_runtime_admit/portable_runtime_search`和[task.cpp](../../src/ecm/stage2/task.cpp)的`child_run/curve_worker`。验证范围见[准备开销](../performance/STAGE2_PREPARATION.md)与[Stage2性能](../performance/STAGE2.md#有界d搜索的验证范围)。
 
 ### 验证与持久化
 

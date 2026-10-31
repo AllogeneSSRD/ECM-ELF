@@ -19,7 +19,7 @@ void double_mod(std::vector<Word>&a,const std::vector<Word>&n){Word c=0;for(auto
 }
 struct PointState {
     ntt::Runtime runtime;std::vector<Word> n;std::size_t nw,ladder_group=0;Word ninv=0;
-    ntt::Buffer constants;cl_program program=nullptr;std::array<cl_kernel,5> kernels{};PointTiming timing;
+    ntt::Buffer constants;cl_program program=nullptr;std::array<cl_kernel,6> kernels{};PointTiming timing;
     PointState(ntt::Runtime&r,const std::vector<Word>&v):runtime(r),n(v),nw(v.size()){}
     ~PointState(){try{runtime.finish();}catch(...){}for(auto k:kernels)if(k)clReleaseKernel(k);if(program)clReleaseProgram(program);}
     Polynomial allocate(std::size_t count){if(!count)throw std::invalid_argument("empty point request");return {runtime.allocate(times(count,nw)),1,count,0,nw};}
@@ -83,6 +83,22 @@ ProjectivePoints Points::ladder(const std::vector<Word>&x,const std::vector<Word
     p.runtime.upload(p.constants,base.data(),base.size(),3*p.nw);p.timing.upload_bytes=8*(base.size()+scalars.size());ProjectivePoints out{p.allocate(scalars.size()),p.allocate(scalars.size())};
     auto k=p.kernels[0];const auto c=Native::memory(p.constants),s=Native::memory(ks),ox=Native::memory(out.x.buffer),oz=Native::memory(out.z.buffer);
     arg(k,0,c);arg(k,1,p.ninv);arg(k,2,s);arg(k,3,count);arg(k,4,ox);arg(k,5,oz);p.launch(k,scalars.size(),p.ladder_group);return out;
+}
+ProjectivePoints Points::consecutive(const std::vector<Word>&x,const std::vector<Word>&z,const std::vector<Word>&a24,Word first,std::size_t count,std::size_t segment){
+    auto&p=*state_;p.timing={};for(auto*v:{&x,&z,&a24}){if(v->size()!=p.nw)throw std::invalid_argument("chain base limb shape");p.canonical(*v);}
+    if(!count||segment<2||segment>64||first>std::numeric_limits<Word>::max()-(count-1))throw std::invalid_argument("chain scalar range/segment");
+    // Keep the unused experimental kernel out of the ordinary constructor.
+    if(!p.kernels[5]){cl_int code=0;p.kernels[5]=clCreateKernel(p.program,"point_chain",&code);check(code,"point_chain");
+        const cl_int nw=static_cast<cl_int>(p.nw);check(clSetKernelArg(p.kernels[5],0,sizeof(nw),&nw),"chain runtime width");
+        std::size_t limit=0;const auto device=Native::device(p.runtime);
+        check(clGetKernelWorkGroupInfo(p.kernels[5],device,CL_KERNEL_WORK_GROUP_SIZE,sizeof(limit),&limit,nullptr),"point chain group limit");
+        if(p.ladder_group>limit){clReleaseKernel(p.kernels[5]);p.kernels[5]=nullptr;throw std::invalid_argument("point chain group exceeds kernel limit");}}
+    auto k=p.kernels[5];
+    std::vector<Word>base=x;base.insert(base.end(),z.begin(),z.end());base.insert(base.end(),a24.begin(),a24.end());
+    p.runtime.upload(p.constants,base.data(),base.size(),3*p.nw);p.timing.upload_bytes=8*base.size();
+    ProjectivePoints out{p.allocate(count),p.allocate(count)};const auto c=Native::memory(p.constants),ox=Native::memory(out.x.buffer),oz=Native::memory(out.z.buffer);
+    const Word n=count,seg=segment;arg(k,0,c);arg(k,1,p.ninv);arg(k,2,first);arg(k,3,n);arg(k,4,seg);arg(k,5,ox);arg(k,6,oz);
+    p.launch(k,1+(count-1)/segment,p.ladder_group);return out;
 }
 AffinePoints Points::normalize(const ProjectivePoints&a,std::size_t segment){auto&p=*state_;p.timing={};const Word count=p.validate(a.x);
     if(!segment||p.validate(a.z)!=count||a.x.offset!=a.z.offset||p.stride(a.x)!=p.stride(a.z))throw std::invalid_argument("normalization point layout/segment");

@@ -17,6 +17,7 @@ class WidthPredictor {
     struct Anchor {const Fields *sample;Shape shape;Work work;double correction;};
     using Region=std::array<Word,13>;
     mutable std::map<Region,std::vector<Anchor>> regions;
+    mutable std::map<Shape::Key,std::pair<bool,WidthEstimate>> predictions;
     static double ratio(double a,double b){return b>0?a/b:1.;}
     static Shape reference(const WidthReference &r) {
         Shape s;s.target_bits=r.target_bits;s.arithmetic_bits=r.arithmetic_bits;
@@ -53,6 +54,7 @@ class WidthPredictor {
             r.descent*poly(RequestDescent)+r.accum*ratio(w.accum,ref.accum)+r.loop*loop;
     }
 public:
+    mutable Word prediction_evaluations=0,prediction_hits=0;
     explicit WidthPredictor(Estimator &e,const Fields *omit=nullptr):engine(e),excluded(omit){}
     bool has_width_measurement(const Shape &s)const {
         Work current;if(!engine.cached_work(s,current) || current.p<512 || !current.exact_topology)return false;
@@ -77,6 +79,15 @@ public:
         return std::exp((1-fraction)*std::log(first)+fraction*std::log(last));
     }
     bool predict(const Shape &s,WidthEstimate &out)const {
+        const auto key=s.key();
+        if(engine.memoize_costs)if(const auto at=predictions.find(key);at!=predictions.end()) {
+            ++prediction_hits;out=at->second.second;return at->second.first;
+        }
+        ++prediction_evaluations;const bool ok=calculate(s,out);
+        if(engine.memoize_costs)predictions.emplace(key,std::make_pair(ok,out));return ok;
+    }
+private:
+    bool calculate(const Shape &s,WidthEstimate &out)const {
         out=WidthEstimate{};Work w;if(!engine.cached_work(s,w))return false;
         const auto runtime=engine.runtime_statistics(s);
         if(runtime.count>=2 && w.p>=512 && w.exact_topology) {
@@ -161,6 +172,7 @@ public:
         out.rank=out.seconds*(1+out.relative_error)+2*out.stddev;
         return out.seconds>0 && std::isfinite(out.rank);
     }
+public:
     static double lower(const WidthEstimate &e){return std::max(0.,e.seconds*(1-e.relative_error)-2*e.stddev);}
     static bool improves(const WidthEstimate &a,const WidthEstimate &b) {
         return a.region_covered && b.region_covered && a.rank<.98*lower(b);

@@ -224,6 +224,28 @@ int main() {
         require(decoded.entries.size()==32 && decoded.text().size()<8192,"parent route cache is unbounded");
         p::RuntimeRouteHints unscoped;
         require(!unscoped.put(route,true,memory),"unscoped route proof accepted");
+        p::RuntimeMemoryRejections rejected;
+        require(rejected.put(180180,0,memory,100,101,memory) && rejected.contains(180180,0,memory),"memory rejection not retained");
+        require(!rejected.contains(180180,2003,memory),"ordinary rejection leaked into carrier route");
+        require(!rejected.put(180180,0,memory,99,101,memory),"wrong reported snapshot cached as rejection");
+        require(!rejected.put(210210,0,memory,100,100,memory) && !rejected.contains(210210,0,memory),"fitting plan cached as rejection");
+        require(!rejected.put(210210,0,memory,100,101,{101,200}),"changing memory cached as rejection");
+        require(!rejected.contains(180180,0,memory),"memory movement retained a stale rejection");
+        for(const auto &entry:ecm_stage2::d_catalog::entries())
+            require(rejected.put(entry.d,0,memory,100,101,memory),"catalogue rejection bit lost");
+        require(rejected.text().size()<1024,"catalogue rejection encoding is unbounded");
+        p::RuntimeMemoryRejections restored_rejects;
+        require(restored_rejects.assign(rejected.text()),"rejection bitmap roundtrip failed");
+        for(const auto &entry:ecm_stage2::d_catalog::entries())
+            require(restored_rejects.contains(entry.d,0,memory),"rejection bitmap reordered D");
+        const auto rejection_text=rejected.text();
+        require(!restored_rejects.assign(rejection_text+';'),"torn rejection payload accepted");
+        require(!restored_rejects.assign(rejection_text+';'+rejection_text.substr(rejection_text.find(';')+1)),"duplicate rejection route accepted");
+        require(!restored_rejects.assign("18446744073709551616,200;0,"+std::string(p::RuntimeMemoryRejections::digits,'0')),"overflow rejection snapshot accepted");
+        route_hints.rejected=rejected;
+        require(decoded.assign(route_hints.text()) && decoded.rejected.contains(180180,0,memory),"parent rejected-route roundtrip failed");
+        decoded.scope(c);require(!decoded.rejected.contains(180180,0,memory),"new scope retained memory rejects");
+        require(!rejected.contains(180180,0,{101,200}),"increased free memory did not reopen rejected candidates");
         std::cout<<"{\"complete\":true,\"checks\":"<<checks<<",\"scaled_steps\":true,\"threshold_escape\":true,"
             "\"region_restarts\":true,\"reconstruction\":true,\"candidate_budget\":true,\"extra_time_budget\":true,"
             "\"runtime_fastest_mean\":true,\"improving_edge\":true,\"CUDA_calls\":0}\n";
