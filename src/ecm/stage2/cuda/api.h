@@ -33,7 +33,7 @@ struct EcmStage2Metrics {
     double giant_seconds=0,gtrees_seconds=0,fold_seconds=0,descent_seconds=0;
     double inverse_seconds=0,accum_seconds=0;
     ecm_stage2::timing::PhaseTimes phases;
-    bool clean=false,fold_resident=false,frontier_resident=false;
+    bool clean=false,fold_resident=false,frontier_resident=false,groot_balanced=false;
 };
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,

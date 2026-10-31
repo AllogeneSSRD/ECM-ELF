@@ -3,7 +3,7 @@
 No GPU work. Accepts the N-scaling collector's verified no-factor formal runs;
 warmups, factor-producing controls and incomplete studies are not timing anchors.
 Also accepts new production results containing checked tune_observation receipts.
-The output is an intermediate format-8 profile; the native --tune-merge command
+The output is an intermediate format-10 profile; the native --tune-merge command
 validates, compacts and merges repeat-weighted mean/variance when combining this evidence.
 """
 import argparse
@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
 from result_format import normalize_result
-from stage2_tune_matrix import aggregate, write_profile
+from stage2_tune_matrix import aggregate, write_profile, sample_groot_layout
 import re
 import statistics
 import tomllib
@@ -84,11 +84,14 @@ def import_study(path, condition, audit):
         kind = 'mersenne' if ((n+1) & n) == 0 or result['carrier_exponent'] else 'generic'
         fold = int(row['stats']['real_batched_folddevice']['enabled'])
         frontier = int(row['stats']['scaled_frontier_device']['enabled'])
-        key = (row['bits'], row['B1'], row['B2'], row['D'], result['carrier_exponent'], kind, fold, frontier)
+        layout = re.search(r'^groot_layout:.*?\bbalanced=(\d+)', text, re.M)
+        layout = int(layout[1]) if layout else sample_groot_layout(dict(target_bits=row['bits'],
+            carrier_exponent=result['carrier_exponent'], b2=row['B2'], d=row['D']))
+        key = (row['bits'], row['B1'], row['B2'], row['D'], result['carrier_exponent'], kind, fold, frontier, layout)
         groups.setdefault(key, []).append((row, int(chunk[1])))
     samples = []
     for key, runs in groups.items():
-        bits, b1, b2, d, carrier, kind, fold, frontier = key
+        bits, b1, b2, d, carrier, kind, fold, frontier, layout = key
         chunks = {chunk for _, chunk in runs}
         if len(chunks) != 1:
             raise ValueError('Mixed giant routes in one candidate')
@@ -96,7 +99,7 @@ def import_study(path, condition, audit):
         mean = statistics.fmean(times)
         samples.append(dict(condition=0, target_bits=bits, arithmetic_bits=carrier or bits,
             carrier_exponent=carrier, modulus_kind=kind, b1=b1, b2=b2, d=d, p=runs[0][0]['P'],
-            fold_resident=fold, frontier_resident=frontier,
+            fold_resident=fold, frontier_resident=frontier, groot_balanced=layout,
             execution_path='resident' if fold and frontier else 'host_frontier' if fold else 'host_fold_frontier',
             program_version=runs[-1][0].get('result',{}).get('program',{}).get('version',condition.get('program_version','')),
             source='measured', benchmark_kind='frozen_full_curve_benchmark', clean=1, bad=0, hits=0,
@@ -152,10 +155,13 @@ def import_runtime(paths, sample_limit=10):
             if condition not in conditions:
                 conditions.append(condition)
             sample['condition'] = conditions.index(condition)
+            sample['groot_balanced'] = sample_groot_layout(sample)
+            sample.setdefault('giant_tail_balance',0)
+            sample.setdefault('giant_chain_block',64)
             group = tuple(sample.get(k) for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
                                            'modulus_kind', 'b1', 'b2', 'd', 'fold_resident',
                                            'frontier_resident', 'execution_path', 'giant_chunk_points',
-                                           'giant_chain_min', 'giant_force_ladder'))
+                                           'giant_chain_min', 'giant_force_ladder', 'groot_balanced', 'giant_tail_balance', 'giant_chain_block'))
             sample.setdefault('runtime_sample_id', row.get('queue_receipt') or hashlib.sha256(line).hexdigest())
             sample.setdefault('runtime_probe', 1)
             key = group + (sample['runtime_sample_id'],)

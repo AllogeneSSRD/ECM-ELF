@@ -20,14 +20,14 @@ struct RuntimePauseHints {
         for(const auto &old:keys)if(old==key)return true;return false;
     }
     void add(const std::string &key) {
-        if(valid_key(key) && !contains(key) && keys.size()<2)keys.push_back(key);
+        if(valid_key(key) && !contains(key) && keys.size()<4)keys.push_back(key);
     }
     bool assign(const std::string &text) {
-        keys.clear();if(text.empty())return true;if(text.size()>129)return false;
+        keys.clear();if(text.empty())return true;if(text.size()>259)return false;
         size_t begin=0;
         for(;;) {
             const auto end=text.find(',',begin);const auto key=text.substr(begin,end==text.npos?end:end-begin);
-            if(!valid_key(key) || keys.size()==2){keys.clear();return false;}
+            if(!valid_key(key) || keys.size()==4){keys.clear();return false;}
             add(key);if(end==text.npos)break;begin=end+1;
         }
         return true;
@@ -59,16 +59,18 @@ struct RuntimeMemoryRejections {
         if(!now.valid() || !(memory==now)){masks.clear();memory=now;}
         return now.valid();
     }
-    bool contains(uint64_t d,uint64_t carrier,const RuntimeMemorySnapshot &now) {
+    bool contains(uint64_t d,uint64_t carrier,const RuntimeMemorySnapshot &now,uint64_t layout=0) {
+        carrier=2*carrier+layout;
         if(!refresh(now))return false;
         const auto i=index(d);const auto at=masks.find(carrier);
         return i<d_catalog::count && at!=masks.end() && (nibble(at->second[i/4])&(1u<<(i%4)));
     }
     bool put(uint64_t d,uint64_t carrier,const RuntimeMemorySnapshot &before,uint64_t reported_free,
-             uint64_t required,const RuntimeMemorySnapshot &after) {
+             uint64_t required,const RuntimeMemorySnapshot &after,uint64_t layout=0) {
+        carrier=2*carrier+layout;
         refresh(after);const auto i=index(d);
         if(!before.valid() || !(before==after) || reported_free!=before.free || required<=reported_free ||
-            i==d_catalog::count || !carrier_valid(carrier) || (!masks.count(carrier) && masks.size()==2))return false;
+            i==d_catalog::count || !carrier_valid(carrier/2) || (!masks.count(carrier) && masks.size()==4))return false;
         auto &mask=masks[carrier];if(mask.empty())mask.assign(digits,'0');
         mask[i/4]="0123456789abcdef"[nibble(mask[i/4])|(1u<<(i%4))];return true;
     }
@@ -88,9 +90,9 @@ struct RuntimeMemoryRejections {
             }
             return pos>begin && pos<text.size() && text[pos++]==delimiter;
         };
-        if(text.size()>2*digits+128 || !number(memory.free,',') || !number(memory.total,';') || !memory.valid())return fail();
+        if(text.size()>4*digits+256 || !number(memory.free,',') || !number(memory.total,';') || !memory.valid())return fail();
         while(pos<text.size()) {
-            uint64_t carrier=0;if(!number(carrier,',') || !carrier_valid(carrier) || masks.count(carrier) || masks.size()==2)return fail();
+            uint64_t carrier=0;if(!number(carrier,',') || !carrier_valid(carrier/2) || masks.count(carrier) || masks.size()==4)return fail();
             const auto mask=text.substr(pos,digits);pos+=digits;
             if(mask.size()!=digits || mask.find_first_not_of("0123456789abcdef")!=mask.npos ||
                 (d_catalog::count%4 && nibble(mask.back())>=(1u<<(d_catalog::count%4))))return fail();
@@ -101,12 +103,12 @@ struct RuntimeMemoryRejections {
     }
 };
 struct RuntimeRouteHint {
-    uint64_t d=0,carrier=0,free=0,total=0,fold=0,frontier=0,chunk=0,chain_min=0,ladder=0;
-    std::array<uint64_t,9> values()const{return {d,carrier,free,total,fold,frontier,chunk,chain_min,ladder};}
+    uint64_t d=0,carrier=0,free=0,total=0,fold=0,frontier=0,chunk=0,chain_min=0,ladder=0,layout=0;
+    std::array<uint64_t,10> values()const{return {d,carrier,free,total,fold,frontier,chunk,chain_min,ladder,layout};}
     bool valid()const {
         return d>=6 && !(d%2) && (carrier==0 || (carrier>=2 && carrier<=16384)) &&
             free && RuntimeMemorySnapshot{free,total}.valid() && fold<=1 && frontier<=1 &&
-            (!frontier || fold) && chunk && ladder<=1;
+            (!frontier || fold) && chunk && ladder<=1 && layout<=1;
     }
 };
 // Passed only between children of the same live parent. The owning frontend
@@ -119,16 +121,16 @@ struct RuntimeRouteHints {
     void scope(const std::string &key) {
         if(key!=scope_key){entries.clear();rejected={};scope_key=key;}
     }
-    bool find(uint64_t d,uint64_t carrier,const RuntimeMemorySnapshot &memory,RuntimeRouteHint &out) {
+    bool find(uint64_t d,uint64_t carrier,const RuntimeMemorySnapshot &memory,RuntimeRouteHint &out,uint64_t layout=0) {
         if(!RuntimePauseHints::valid_key(scope_key)){entries.clear();return false;}
-        for(auto i=entries.begin();i!=entries.end();++i)if(i->d==d && i->carrier==carrier) {
+        for(auto i=entries.begin();i!=entries.end();++i)if(i->d==d && i->carrier==carrier && i->layout==layout) {
             if(!memory.valid() || i->free!=memory.free || i->total!=memory.total){entries.erase(i);return false;}
             out=*i;return true;
         }
         return false;
     }
     bool put(RuntimeRouteHint entry,bool admitted,const RuntimeMemorySnapshot &after) {
-        for(auto i=entries.begin();i!=entries.end();++i)if(i->d==entry.d && i->carrier==entry.carrier){entries.erase(i);break;}
+        for(auto i=entries.begin();i!=entries.end();++i)if(i->d==entry.d && i->carrier==entry.carrier && i->layout==entry.layout){entries.erase(i);break;}
         if(!RuntimePauseHints::valid_key(scope_key) || !admitted || !entry.valid() || !after.valid() || entry.free!=after.free || entry.total!=after.total)return false;
         if(entries.size()>=capacity)entries.erase(entries.begin());entries.push_back(entry);return true;
     }
@@ -152,7 +154,7 @@ struct RuntimeRouteHints {
         size_t start=65;
         while(start<text.size()) {
             const auto end=text.find(';',start);const auto row=text.substr(start,end==text.npos?end:end-start);
-            std::array<uint64_t,9> values{};size_t p=0;
+            std::array<uint64_t,10> values{};size_t p=0;
             for(size_t field=0;field<values.size();++field) {
                 if(p==row.size() || row[p]<'0' || row[p]>'9')return fail();
                 while(p<row.size() && row[p]>='0' && row[p]<='9') {
@@ -163,9 +165,9 @@ struct RuntimeRouteHints {
                 if(field+1<values.size()){if(p==row.size() || row[p++]!=',')return fail();}
             }
             if(p!=row.size() || entries.size()>=capacity)return fail();
-            RuntimeRouteHint entry{values[0],values[1],values[2],values[3],values[4],values[5],values[6],values[7],values[8]};
+            RuntimeRouteHint entry{values[0],values[1],values[2],values[3],values[4],values[5],values[6],values[7],values[8],values[9]};
             if(!entry.valid())return fail();
-            for(const auto &old:entries)if(old.d==entry.d && old.carrier==entry.carrier)return fail();
+            for(const auto &old:entries)if(old.d==entry.d && old.carrier==entry.carrier && old.layout==entry.layout)return fail();
             entries.push_back(entry);if(end==text.npos)break;start=end+1;if(start==text.size())return fail();
         }
         return true;

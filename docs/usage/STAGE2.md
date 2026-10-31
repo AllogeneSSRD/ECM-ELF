@@ -130,6 +130,12 @@ CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局�
 
 不同形状有收益也有回退，结果与受控复现入口见[G树性能](../performance/STAGE2_GTREE_LAYOUT.md)。
 
+## CUDA点块与链长选项
+
+可用 `stage2_giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。`stage2_b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。
+
+`stage2_giant_chain` 可固定32或64，或以auto在正常任务中对当前最优项补有限32/64对照。默认保留原点块和64链；这些CUDA选项尚未获得全设备／全位宽默认启用资格。配置取值见[生成参考](../ECM_TOML_REFERENCE.md)，完整约束及回退见[点策略](../architecture/STAGE2.md#完整区间点块策略)，实测见[固定D报告](../performance/STAGE2_PREPARATION.md#完整尾块平衡b2凑整与3264生产选项)。
+
 ## 规划与依据
 
 `--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖TOML，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。

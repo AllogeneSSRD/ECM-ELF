@@ -387,9 +387,11 @@ int ecm_cuda_stage2_check_configuration()
         {"NTT_FUSE_COMPACT_SCRATCH", "1"},
         {"NTT_S4_GROOT_ONLY", "1"},
         {"NTT_S5_REDDUMP", "0"},
-        {"NTT_GIANT_CHAIN_BLOCK", "64"},
         {"NTT_GIANT_CHAIN_MIN", "32768"},
     };
+    if(const char *v=std::getenv("NTT_GIANT_CHAIN_BLOCK"))if(std::strcmp(v,"32") && std::strcmp(v,"64")) {
+        std::fprintf(stderr,"production Stage2 chain length must be 32 or 64\n");return 2;
+    }
     for(const auto &option:options) {
         const char *value=std::getenv(option.key);
         if(value && std::strcmp(value,option.value)) {

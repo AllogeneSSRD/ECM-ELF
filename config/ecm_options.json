@@ -1055,6 +1055,54 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_giant_tail_balance",
+      "field": "giant_tail_balance",
+      "type": "bool",
+      "default": false,
+      "domain": "[0|1]",
+      "fx": "rebalance_point_tail(S2)",
+      "parser": "strict",
+      "parser_override": "integer_bool",
+      "minimum": 0,
+      "maximum": 1,
+      "description": [
+        "Balance the last two giant point chunks on whole-P boundaries, keeping B2, capacity, point coverage and chunk count. Both must meet the chain threshold. Hit or target-N nonunit replays the legacy full interval before publishing. Default 0 keeps legacy scheduling. CLI --giant-tail-balance overrides this worker TOML. A tail that already meets the chain threshold keeps its original chunk schedule.",
+        "按整P边界平衡最后两个giant点块，保持B2、容量、覆盖点数与块数，两块均须达到chain门槛。命中或目标N非单位时，发布前按旧策略重放完整区间。默认0沿用原调度，CLI --giant-tail-balance覆盖当前worker配置。 尾块已经达到chain门槛时，保持原点块调度。"
+      ]
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_b2_round_chain",
+      "field": "b2_round_chain",
+      "type": "bool",
+      "default": false,
+      "domain": "[0|1]",
+      "fx": "ceil_B2_to_chain_P(S2)",
+      "parser": "strict",
+      "parser_override": "integer_bool",
+      "minimum": 0,
+      "maximum": 1,
+      "description": [
+        "After choosing D and arithmetic, increase B2 to the smallest whole-P giant count whose last point chunk can use a chain. Logs/results keep requested and actual B2. Default 0 preserves bounds; overflow is rejected. AutoB2 maximum remains a hard cap. Explicit ECM calibration does not support rounding. CLI --b2-round-chain overrides this worker TOML.",
+        "选定D和算术后，将B2向上补到最小整P点数且尾点块可走chain。日志与结果分别保留请求和实际B2。默认0保持界限，溢出报错；AutoB2上限仍为硬限制，显式ECM标定不支持凑整。CLI --b2-round-chain覆盖当前worker配置。"
+      ]
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_giant_chain",
+      "field": "giant_chain",
+      "type": "string",
+      "default": "64",
+      "domain": "[64|32|auto]",
+      "fx": "points_per_chain(S2)",
+      "parser": "strict",
+      "description": [
+        "Points per sequential CUDA thread chain, independent of CUDA block size. 64 preserves the baseline; 32 explicitly selects shorter chains. auto retains 64 until stage2_tune_min_repeats admitted runtime observations support 32, with bounded useful-curve probes. Policies have separate tune identities. Hit/nonunit replays the legacy 64-point full interval. CLI --giant-chain overrides this worker TOML.",
+        "每条CUDA线程链连续生成的点数，与CUDA线程块大小无关。64保留基线，32显式使用短链；auto在满足stage2_tune_min_repeats门槛的准入实测支持32前保留64，并进行有界正常曲线探测。各策略具有独立tune身份。命中或非单位时按旧64点链重放完整区间。CLI --giant-chain覆盖当前worker配置。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_relocation",
       "field": "relocation",
       "type": "bool",
@@ -1327,8 +1375,24 @@
       "fx": "bounded_runtime_sampling_and_path_selection",
       "parser": "strict",
       "description": [
-        "Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. At least two observations enable comparison with switching hysteresis. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes.",
-        "按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；至少两次观察后按均值、标准差及切换余量比较。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。"
+        "Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes.",
+        "按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。"
+      ]
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_tune_min_repeats",
+      "field": "tune_min_repeats",
+      "type": "u64",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 1000,
+      "domain": "[1..1000]",
+      "fx": "minimum_checked_ecm_observations_for_selection",
+      "parser": "strict",
+      "description": [
+        "Minimum checked observations required before runtime D, layout and chain candidates are compared or adopted. Also sets the minimum ECM calibration repeat count; --tune-repeats may request more. Default 2; 1 enables faster screening with no measured dispersion. Must not exceed stage2_tune_runtime_samples. Existing observations are retained; increasing this minimum requires additional evidence. Arithmetic validation is unchanged. CLI: --tune-min-repeats N.",
+        "运行时D、布局与链长候选比较和采用所需的最少已校验观察数，同时作为ECM校准最小重复次数；--tune-repeats可要求更多。默认2；设为1用于快速筛查，但无法测得离散程度。不得超过stage2_tune_runtime_samples；已有观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。"
       ]
     },
     {
@@ -1337,14 +1401,14 @@
       "field": "runtime_samples",
       "type": "u64",
       "default": 10,
-      "minimum": 2,
+      "minimum": 1,
       "maximum": 1000,
-      "domain": "[2..1000]",
+      "domain": "[1..1000]",
       "fx": "bounded_independent_runtime_observations",
       "parser": "strict",
       "description": [
-        "Maximum independent runtime NF observations per identical complete parameters (including B1) and matching device/environment/arithmetic/path, including slower observations and compatible software versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix rows. Different parameter rows are retained. At least two observations enable measured selection. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.",
-        "完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少两次用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。"
+        "Maximum independent runtime NF observations per identical complete parameters (including B1) and matching device/environment/arithmetic/path, including slower observations and compatible software versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix rows. Different parameter rows are retained. Selection requires stage2_tune_min_repeats observations. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.",
+        "完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。达到stage2_tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。"
       ]
     },
     {

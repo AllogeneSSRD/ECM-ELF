@@ -1,5 +1,5 @@
 #pragma once
-#include "../geometry.h"
+#include "../giant_schedule.h"
 #include <vector>
 
 // Giant component lifetimes only. No NTT, S4 raw/output, fold owner, physical
@@ -20,6 +20,7 @@ struct GiantMemoryPolicy {
     Word segment=16,group=64,resident_limit_bytes=512ull<<20,initial_points=0,accumulation_block=64;
     bool force_ladder=false,seed_device=true,seed_pair=true;
     bool wide_tail_chain=false;
+    bool tail_balance=false;
     bool exact_segments=true,resident_requested=true,resident_eligible=true;
     bool compact_products=true;
 };
@@ -94,11 +95,12 @@ inline bool giant_memory_plan(Word p,Word points,Word w,Word chunk_points,
         plan.peak_bytes=std::max(plan.peak_bytes,std::max(c.prepare_bytes,c.tree_bytes));
         plan.chunks.push_back(c);return true;
     };
-    const Word full=points/chunk_points,tail=points%chunk_points;
-    if((full && !chunk(chunk_points,full)) || (tail && !chunk(tail,1))) {
+    const auto schedule=giant_schedule(points,chunk_points,p,policy.chain_min,policy.tail_balance && !policy.force_ladder);
+    if(!schedule.valid)return false;
+    for(const auto &run:schedule.runs)if(!chunk(run.points,run.repeat)) {
         plan.reason="payload_overflow";return false;
     }
-    plan.point_chunks=full+(tail!=0);plan.final_point_capacity=capacity;
+    plan.point_chunks=schedule.count;plan.final_point_capacity=capacity;
     const Word products=policy.compact_products?ceil_ratio(p,policy.accumulation_block):p;
     if(!giant_workspace_bytes(w,capacity,0,0,segfix,base,plan.after_giant_bytes) ||
        !giant_workspace_bytes(w,capacity,p,products,segfix,base,plan.accumulation_bytes) ||

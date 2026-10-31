@@ -64,7 +64,7 @@ public:
     bool chunk_begin() {
         if(!started || chunk_remaining || consumed_points>=policy.points){reason="invalid_chunk_boundary";return false;}
         const auto &c=policy.component;
-        const Word n=std::min(policy.chunk_points,policy.points-consumed_points);
+        const Word n=giant_chunk_take(policy.points-consumed_points,policy.chunk_points,policy.p,c.chain_min,c.tail_balance && !c.force_ladder);
         const bool chain=!c.force_ladder && n>=c.chain_min;
         const Word block=chain?giant_chain_block(n,c.chain_block,c.short_block,c.short_max):0;
         const Word chains=chain?ceil_ratio(n,block):0;
@@ -114,9 +114,14 @@ public:
         for(unsigned i=0;i<GiantSiteCount;++i)if(slots[i]!=o.slots[i])return false;
         return true; // Absolute progress is checked separately before skipping.
     }
+    Word repeatable_full_chunks()const {
+        const auto schedule=giant_schedule(policy.points-consumed_points,policy.chunk_points,policy.p,
+            policy.component.chain_min,policy.component.tail_balance && !policy.component.force_ladder);
+        return schedule.valid?schedule.repeatable(policy.points-consumed_points):0;
+    }
     bool skip_full_chunks(Word count) {
         Word points=0;
-        if(chunk_remaining || !multiply(count,policy.chunk_points,points) ||
+        if(chunk_remaining || count>repeatable_full_chunks() || !multiply(count,policy.chunk_points,points) ||
            points>policy.points-consumed_points || !add(chunks,count,chunks)) {
             reason="invalid_giant_skip";return false;
         }

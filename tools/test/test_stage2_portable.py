@@ -22,11 +22,12 @@ def main():
     a = ap.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
+    (out/'.gitignore').write_text('*\n', encoding='ascii')
     gmp = ROOT/'third_party/gmp-zen3/dist'
     exe = out/'fixture.exe'
     cmd = out/'compile.cmd'
     cmd.write_text('@echo off\ncall "'+str(a.vcvars)+'" >nul 2>&1\nif errorlevel 1 exit /b 1\n'
-        'cl /nologo /std:c++17 /EHsc /O2 /utf-8 /I"'+str(gmp/'include')+'" "'+
+        'cl /nologo /std:c++17 /EHsc /O2 /utf-8 /I"'+str(ROOT/'include')+'" /I"'+str(ROOT/'src')+'" /I"'+str(gmp/'include')+'" "'+
         str(ROOT/'tools/test/stage2_portable_fixture.cpp')+'" /Fe:"'+str(exe)+'" /Fo:"'+
         str(out/'fixture.obj')+'" /link /LIBPATH:"'+str(gmp/'lib')+'" gmp.lib\n', encoding='utf-8')
     proc = subprocess.run(['cmd', '/c', str(cmd)], capture_output=True, text=True, errors='replace', timeout=60)
@@ -90,7 +91,7 @@ matrix = [
     [2, 0.1],
 ]
 '''
-    version=re.search(r'inline constexpr char version\[\] = "([^"]+)"', (ROOT/'src/core/ecm_program_version.h').read_text())[1]
+    version=re.search(r'inline constexpr char version\[\] = "([^"]+)"', (ROOT/'include/ecm/platform/program_version.h').read_text())[1]
     base=base.replace('program_version = "0.37.1"', f'program_version = "{version}"')
     original = out/'base.toml'
     original.write_text(base, encoding='utf-8')

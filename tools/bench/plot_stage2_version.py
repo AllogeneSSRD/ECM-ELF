@@ -385,7 +385,11 @@ def main():
     p.add_argument('--publish',type=Path)
     p.add_argument('--references-only',action='store_true')
     p.add_argument('--runtime-study',type=Path,help='Complete queue-learning matrix; add best measured profile means as a fourth curve')
+    p.add_argument('--layout-study',type=Path,help='Bounded lower-B2 layout/tune study with frozen-profile independent validation')
     a=p.parse_args();plan=load(a.study/'plan.json')
+    if a.layout_study:
+        from stage2_layout_matrix_plot import plot
+        plot(a);return
     if a.references_only and a.runtime_study:p.error('--runtime-study requires the complete comparison')
     # Refuse incomplete studies before writing any public attachment copies.
     if not a.references_only:audit(a.study)

@@ -78,7 +78,8 @@ def main():
     isolated=tomllib.loads(run('--update',old,separate))
     assert len(isolated['condition'])==2 and len(summaries(isolated))==2
     # Conflict between D/B2 and carrier order, plus source and stable ties.
-    assert [name for name,_ in ROW_ORDER['ecm']]==['condition','b2','d','carrier_exponent','b1','source']
+    assert [name for name,_ in ROW_ORDER['ecm']]==['condition','b2','d','carrier_exponent','groot_balanced',
+                                               'giant_tail_balance','giant_chain_block','b1','source']
     changes=[dict(condition=1),dict(b2=1400000000000,d=210),dict(b1=260000001),
         dict(carrier_exponent=5003),dict(d=210,carrier_exponent=5003),
         dict(d=210,source='model',fold_resident=0),dict(d=210),

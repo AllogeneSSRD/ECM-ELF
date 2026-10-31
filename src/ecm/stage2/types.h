@@ -46,6 +46,10 @@ struct Options {
     int log_level = -1;
     bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
     bool relocation=ecm_config::defaults::stage2_stage2_relocation;
+    bool giant_tail_balance=ecm_config::defaults::stage2_stage2_giant_tail_balance;
+    bool b2_round_chain=ecm_config::defaults::stage2_stage2_b2_round_chain;
+    std::string giant_chain=ecm_config::defaults::stage2_stage2_giant_chain;
+    unsigned selected_chain=64;
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
@@ -83,11 +87,13 @@ struct Options {
     std::string tune_ignore="gpu,driver,cuda,backend,environment",stage1_csv,condition_tag;
     uint64_t tune_budget=1800,short_budget=10,stage1_mhz=0,factor_bits=0;
     unsigned inferred_carrier=0;
+    int groot_layout=-1;
     bool short_calibration=true;
     bool short_batch_tune=false;
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
+    uint64_t tune_min_repeats=ecm_config::defaults::stage2_stage2_tune_min_repeats;
     bool runtime_probe=false;
     uint64_t runtime_remaining=0; // Parent queue hint; not part of a measurement identity.
     bool runtime_prepare_cache=true; // Diagnostic A/B switch; not an arithmetic or timing-data identity.

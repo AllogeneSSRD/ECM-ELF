@@ -2,13 +2,33 @@
 
 ## 当前结论
 
-分块空位布局在两组NTT长度下降的形状中有收益，在未下降的4423-bit对照中回退。当前自动条件仍是W>128且giant区间至少4个完整G批次；窄位宽不全局启用。固定参数的CUDA实验可用`NTT_GROOT_BALANCED=0|1`分别选择左侧连续／分块空位布局。
+分块空位布局在两组NTT长度下降的形状中有收益，在未下降的4423-bit对照中回退。CUDA自动选择保留W>128且至少4个完整G批次的宽位资格，并仅在根NTT长度下降、全G树NTT工作代理至少下降10%、输出系数工作量增幅不超过10%时扩展到其他位宽。少于4个完整G批次或未跨NTT拐点的窄位输入保持连续布局。
 
-该实验入口要求固定D、显式B2、关闭Auto B2、自动承载、运行时采样、短校准和短NTT调优，不与`--tune`或旧cost profile混用。它清空本次tune读取路径，不读取或写入旧布局的性能行。自动选择、profile行和运行时搜索尚未具有独立布局身份；在补齐这些合同前，不将实验结果直接纳入普通生产tune。
+布局已进入完整Shape、TOML行及运行时搜索身份。正式tune自动补齐自动布局与旧默认的配对，运行时用正常曲线学习；均值、缓存和显存准入按布局区分。`--groot-layout 0|1`或`NTT_GROOT_BALANCED=0|1`可固定布局；当前生产规则、旧行解释和20%承载优势配额见[调优说明](../architecture/AUTO_B2.md#g树布局身份与自动选择)。下述0.54.6数据是限定输入的冻结布局比较，不能当作所有输入的自动选型保证。
 
 数学和空位含义见[G树固定资料](../reference/ECM_STAGE2_G_TREE_LAYOUT.md)。两种布局都消费相同真实叶，B1/B2、D/P、giant覆盖和F树不变；空位表示常数1。逻辑多项式乘法数不变，但操作数形状、NTT长度及抽查位置可以改变。
 
+0.54.7已补齐13位宽、名义B2=2.6×10¹⁰的默认筛查、有限学习及冻结后独立n=3复测。同二进制、固定D且布局发生变化的14格筛查中，完整引擎合计减少2.53%、G树减少10.42%；旧布局各n=1，不代表逐格显著提速。自动tune的独立均值之和148.447 s，较本轮默认两类型逐格较快的事后参考少7.89%。完整条件、单项回退、阶段占比及点分块线索统一见[小B2矩阵](STAGE2.md#当前cuda小档b2的布局与运行时tune)。大档B2尚未扩展本次矩阵。
+
 ## 输入与构建
+
+### 布局调优与自动选择验收
+
+0.54.7固定D性能验收所用CUDA二进制为`build_stage2_layout_tune_final_20261031/ecm_cuda_stage2.exe`，SHA256 `3f022c52d5a92e669bbb7a87f7ad67f66db18c27949a7d6f277536ece3a4f6f0`。host overlay核验并复用相同设备对象，42个主机单元重新编译。原始证据位于`data/experiments/stage2_layout_tune_20261031/`；测试不改生产文件和GPU设置。
+
+固定D完整对照使用同一个M5987余因子保存点：实际5700 bits、承载5987 bits、B1=260000000、sigma=3668336656946893、D570570、P51840、B2=147821563890、giant259079、5个G批次。GPU1 RTX4060 Laptop、CUDA13.3/SM89、驱动610.88，batch64、arena自动、fold960 MiB。按连续／自动／自动／连续顺序运行，各n=2，无额外warmup、不丢首轮；没有并行编译，GPU0仍有外部负载。NVML的114个利用率≥50%样本均为1500MHz，功耗不由测试设置。
+
+自动均选择分块布局，根最大NTT从2²⁶降为2²⁵。算术均值：G树 **3.9755→3.3580 s（−15.53%）**，完整引擎 **16.9280→16.2757 s（−3.85%）**，进程墙钟 **18.0078→17.5202 s（−2.71%）**。引擎边界为init+main，日志shape单列，不再次加到total；进程墙钟含启动和退出，嵌套G树时间不与引擎相加。4次均为NF、clean=1、GMP检查bad=0，两个布局的fold根摘要一致。证据`final_ab/summary.json`及各运行的命令、结果、日志和逐样本遥测。此为限定输入验证，不能推及全矩阵。
+
+正式tune用相同小B2完成普通／承载×连续／分块四组，每组n=2，各自保留均值与标准差。该轮与主机编译重叠，只用于功能验证，不作为性能比较；最终二进制读取副本时`measured=0`，没有重跑已有测量。证据`formal/`、`formal_reuse_final/`。
+
+私有队列另用B2=1300000000000、D1141140验证正常曲线学习：新布局1独立累计n=2、均值48.5628949 s，后续只读选择保留已有布局0的48.39395351 s。旧成绩没有被重新标记为新布局，自动资格也没有覆盖较快实测。该队列的普通／承载保守差距25.5%，触发普通候选额度收紧。证据`queue2/`；该轮执行二进制及全部源输入摘要见其summary，不与上述同二进制A/B混合统计。
+
+最终原生规划检查还覆盖未跨拐点的M4423保持布局0、5872-bit普通归约跨拐点选择布局1、短G区间保持布局0，以及model/paired读取正式配对均选中较快布局。GMP节点与错误注入、32项OpenCL功能回归通过。证据`native_plans/`、`gmp_final/`、`opencl/`。自动学习检查工具为[layout tune验证](../../tools/test/check_stage2_layout_tune.py)，固定对照工具支持`--order 0,-1,-1,0`，其中−1表示不覆盖自动布局。
+
+布局格式验证使用的format 9构建为`build_stage2_layout_tune_format9_20261031/ecm_cuda_stage2.exe`，SHA256 `be599bb90aeba1417be92f4096886a2722a2039d83a983508496134ac4d6e636`，采用相同布局及设备运算实现。格式8配对读取后不重复测量并写出9；旧0.54.6显式拒绝格式9。独立GMP/故障、五项原生规划、旧运行成绩回放、32项OpenCL回归及一条自动布局完整Stage2均通过；单条smoke不加入前述n=2性能比较。证据`formal_format9/`、`old_reader/`、`gmp_format9/`、`native_plans_format9/`、`replay_format9/`、`opencl_format9/`和`format9_smoke/`。Python/C++列顺序、旧条件迁移、排序、去重、均值方差及格式往返见`provenance_format9_2/`、`portable_format9_2/`、`cpu_format9/`。
+
+### 冻结布局比较的条件
 
 测试日期2026-10-31，GPU1 RTX4060 Laptop、8GiB、驱动610.88；CUDA13.3、SM89、Goldilocks PTX、add/sub=1、outer=0。GPU0有外部负载，不参加计时；CPU未定频。测试不修改显卡频率、功耗、驱动或生产队列。batch64、arena自动、实际fold预算960 MiB，两布局完全相同。960来自CLI；日志`mem`分母仍按INI口径显示默认640，不能据它反推实际CLI预算。
 
@@ -66,7 +86,7 @@ NTT模块`full_peak`分别约3183.585→3184.077 MiB、3186.231→3186.262 MiB�
 
 20次完整性能运行全部NF、clean=1、错误0；每个固定输入两布局的fold根摘要一致，原有GMP自检及抽查均为正且bad=0。布局改变请求形状和抽查位置，抽查word数可以不同；采样策略、谓词和门限没有修改。大树比较是摘要与原有抽查，不声称逐系数独立GMP重算。
 
-另有48项独立GMP小树/节点检查，覆盖非monic、零、常数1、空树、单叶和padding；注入错误会拒绝并停止发布。诊断fixture按原合同标记clean=0，不计入性能样本。8项前端隔离门禁覆盖非法值、自动D、采样、自动承载、校准、短batch、Auto B2和正式tune；传入不可解析的TOML哨兵仍可完成固定实验，文件摘要不变，对应前端已清空profile路径。CPU检查包含681389项arena记账和8539662项请求/布局检查；共享OpenCL worker构建及32项功能回归通过。没有实验开关时的默认规划仍选已有最快承载路线。
+另有48项独立GMP小树/节点检查，覆盖非monic、零、常数1、空树、单叶和padding；注入错误会拒绝并停止发布。诊断fixture按原合同标记clean=0，不计入性能样本。当前前端拒绝非法布局值及相互冲突的CLI/环境覆盖；布局完整身份允许自动选择和tune共同使用。CPU检查覆盖681389项arena记账、布局的独立统计/矩阵往返、旧行还原、NTT拐点、缓存隔离和优势配额恢复。固定布局工具关闭采样时不会创建性能文件，不消费生产队列。
 
 ## 复现与后续
 
@@ -74,6 +94,6 @@ NTT模块`full_peak`分别约3183.585→3184.077 MiB、3186.231→3186.262 MiB�
 
 原始证据：`data/experiments/stage2_gtree_layout_20261031/`。`m5987_ab/`、`m4423_control/`、`n5872_ordinary/`为先行重复；三个`*_nvml_confirm/`为完整遥测复核；`geometry/`和`geometry_exact/`保存直接取自生产packing实现的CPU查询；`gmp_guards_final03/`、`cpu_memory_topology/`、`opencl_regression/`、`default_planning/`为验收。失败的链接、fixture和CLI测试保持原样，不计作性能结果。派生汇总为`data/benchmarks/stage2_gtree_layout_20261031/summary.json`和`runs.csv`，两类测量分别标识。
 
-代码入口：[统一布局策略](../../src/ecm/stage2/giant_tree.h#L9)、[前端实验隔离](../../src/ecm/stage2/cuda/host_policy.cpp#L11)、[执行与日志](../../src/ecm/stage2/cuda/batch.cpp#L26)、[树构建](../../src/ecm/stage2/cuda/tree.cpp#L198)、[请求规划](../../src/ecm/stage2/planning/requests.h#L148)。
+代码入口：[统一布局策略](../../src/ecm/stage2/giant_tree.h)、[覆盖参数检查](../../src/ecm/stage2/cuda/host_policy.cpp)、[执行与日志](../../src/ecm/stage2/cuda/batch.cpp#L26)、[树构建](../../src/ecm/stage2/cuda/tree.cpp#L198)、[请求规划](../../src/ecm/stage2/planning/requests.h)、[观察身份与搜索预算](../../src/ecm/stage2/planning/runtime_tune.h)。
 
-TODO：布局成为完整Shape、TOML行及运行时搜索身份，并准确重建旧行对应的布局；在此基础上按原生NTT请求成本与显存准入比较候选，保留默认及已有实测最快路线。NTT最大长度下降只作候选筛选，仍需扩大输入、预算边界和设备验证后决定自动资格。
+TODO：扩大自动布局的P、尾批、显存边界、大档B2及两卡验证；必要时对14格筛查的单项做独立重复。核对工作代理门限对完整Stage2时间的预测误差，并以固定D试验分离点分块的影响。NTT最大长度下降只作候选筛选，不能据此声称完整曲线一定更快。

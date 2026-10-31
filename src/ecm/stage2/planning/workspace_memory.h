@@ -259,7 +259,7 @@ template<class Query,class Describe> bool workspace_memory_plan(
                     if(ntt.same_allocations(cycle->ntt) && s4.same_allocations(cycle->s4) &&
                        owner.same_allocations(cycle->owner) && giant.same_allocations(cycle->giant)) {
                         const Word count=std::min(remaining/cycle->blocks,
-                            (giant_policy->points-giant.consumed_points)/giant_policy->chunk_points);
+                            giant.repeatable_full_chunks());
                         Word skipped=0;
                         if(!multiply(count,cycle->blocks,skipped) || !add(plan.skipped_blocks,skipped,plan.skipped_blocks) ||
                            !giant.skip_full_chunks(count))return fail("invalid_joint_cycle_skip");

@@ -1,4 +1,4 @@
-"""Format-8 scalar matrices. Full receipts remain in the original JSONL."""
+"""Layout-aware format-10 matrices. Full receipts stay in the original JSONL."""
 import json
 import math
 import re
@@ -6,8 +6,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 SHAPE = ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent', 'modulus_kind',
-         'b1', 'b2', 'd', 'fold_resident', 'frontier_resident', 'execution_path',
-         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder')
+         'b1', 'b2', 'd', 'groot_balanced', 'fold_resident', 'frontier_resident', 'execution_path',
+         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder', 'giant_tail_balance', 'giant_chain_block')
 PHASES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
           'giant_loop', 'descent', 'accum', 'finalize')
 KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_kind', 'verified', 'repeats', 'mean_seconds',
@@ -17,7 +17,7 @@ KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_
 
 
 def matrix_column_order(section='ecm'):
-    path=Path(__file__).resolve().parents[2]/'src/core/ecm_stage2_tune_columns.def'
+    path=Path(__file__).resolve().parents[2]/'src/ecm/stage2/planning/tune_columns.def'
     result={'ecm':[], 'ntt':[]}
     for line in path.read_text(encoding='utf-8').splitlines():
         line=line.strip()
@@ -33,7 +33,7 @@ COLUMN_ORDER=matrix_column_order()
 NTT_COLUMN_ORDER=matrix_column_order('ntt')
 
 def matrix_row_order():
-    path=Path(__file__).resolve().parents[2]/'src/core/ecm_stage2_tune_rows.def'
+    path=Path(__file__).resolve().parents[2]/'src/ecm/stage2/planning/tune_rows.def'
     result={'ecm':[], 'ntt':[]}
     for line in path.read_text(encoding='utf-8').splitlines():
         line=line.strip()
@@ -104,10 +104,39 @@ def decode_ids(value):
     return result
 
 
+def sample_groot_layout(row):
+    if 'groot_balanced' in row:
+        value = int(row['groot_balanced'])
+        if value not in (0, 1):
+            raise ValueError('Invalid G-root layout')
+        return value
+    # Historical rows predate automatic NTT-cliff selection. Infer their actual
+    # legacy policy rather than relabeling them with the new planner.
+    d = int(row['d'])
+    if d < 6:
+        raise ValueError('Invalid D')
+    n, phi, prime = d, d, 2
+    while prime * prime <= n:
+        if n % prime == 0:
+            phi -= phi // prime
+            while n % prime == 0:
+                n //= prime
+        prime += 1
+    if n > 1:
+        phi -= phi // n
+    bits = int(row.get('arithmetic_bits') or row.get('carrier_exponent') or row['target_bits'])
+    return int((bits + 63) // 64 > 128 and (int(row['b2']) // d + 2) // (phi // 2) >= 4)
+
+
 def aggregate(samples):
     groups = {}
     for original in samples:
         row = {k:v for k,v in original.items() if k in KEEP}
+        row['groot_balanced'] = sample_groot_layout(original)
+        row['giant_tail_balance'] = int(original.get('giant_tail_balance',0))
+        row['giant_chain_block'] = int(original.get('giant_chain_block',64))
+        if row['giant_tail_balance'] not in (0,1) or row['giant_chain_block'] not in (32,64):
+            raise ValueError('Invalid point policy')
         if not row.get('updated_at') and original.get('runtime_completed_ns'):
             row['updated_at']=utc_updated_at(original['runtime_completed_ns'])
         validate_provenance(row)
@@ -158,7 +187,7 @@ def aggregate(samples):
 
 def write_profile(conditions, samples):
     lines = ['# Stage2 mean timings; identical parameters share one repeated measurement row.',
-             '[profile]', 'format = 8', 'unit = "full_stage2"']
+             '[profile]', 'format = 10', 'unit = "full_stage2"']
     canonical=[];remap={};prepared=[]
     for i,c in enumerate(conditions):
         condition={k:v for k,v in c.items() if k not in ('program_version','updated_at')}

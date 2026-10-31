@@ -11,7 +11,7 @@ namespace ecm_stage2 { namespace tune { namespace portable {
 inline bool d_search_improves(double a,double sa,double b,double sb) {
     return a>0 && b>0 && a+2*sa < .98*b-2*sb;
 }
-using DSearchRegion=std::array<Word,8>;
+using DSearchRegion=std::array<Word,9>;
 struct DSearchNode {
     Word d=0,p=0;DSearchRegion region{};
     double rank=0,seconds=0,stddev=0;Word samples=0;

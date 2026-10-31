@@ -89,6 +89,10 @@ Options arguments(int argc, char **argv) {
         else if (a == "--stage2-stop-handle") o.stop_handle=num();
         else if (a == "--gui-events") o.gui_events=true;
         else if (a == "--b2") o.b2 = num();
+        else if (a == "--giant-chain") {o.giant_chain=value();o.portable_cli.insert(a);}
+        else if (a == "--giant-tail-balance") {const auto n=num();if(n>1)throw std::runtime_error("giant-tail-balance must be 0 or 1");o.giant_tail_balance=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--b2-round-chain") {const auto n=num();if(n>1)throw std::runtime_error("b2-round-chain must be 0 or 1");o.b2_round_chain=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--groot-layout") {const auto n=num();if(n>1)throw std::runtime_error("groot-layout must be 0 or 1");o.groot_layout=int(n);}
         else if (a == "--d") { o.d = num(); o.has_d = true; }
         else if (a == "--carrier-exponent") {
             const auto p=num();
@@ -116,7 +120,8 @@ Options arguments(int argc, char **argv) {
         else if (a == "--cost-profile") o.cost_profile=value();
         else if (a == "--tune-profile") o.tune_profile=value();
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
-        else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<2 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 2..1000");o.portable_cli.insert(a);}
+        else if (a == "--tune-min-repeats") {o.tune_min_repeats=num();if(!o.tune_min_repeats || o.tune_min_repeats>1000)throw std::runtime_error("tune-min-repeats must be 1..1000");o.portable_cli.insert(a);}
+        else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<1 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 1..1000");o.portable_cli.insert(a);}
         else if (a == "--runtime-remaining-curves") {o.runtime_remaining=num();}
         else if (a == "--runtime-prepare-cache") {const auto n=num();if(n>1)throw std::runtime_error("runtime-prepare-cache must be 0 or 1");o.runtime_prepare_cache=n!=0;}
         else if (a == "--runtime-prepare-hints") {ecm_stage2::tune::portable::RuntimePauseHints hints;hints.assign(value());o.runtime_prepare_hints=hints.text();}
@@ -248,6 +253,7 @@ void help() {
         "  --config ecm.toml [--worktodo FILE] [--worker N] [--once]\n"
         "  --device N --arena-mb MB --batch-mb MB --carrier-exponent P\n"
         "  --plan-only --dry-run --results FILE --submission FILE --ntt-counts 0|1\n"
+        "  --giant-tail-balance 0|1 --b2-round-chain 0|1 --giant-chain 64|32|auto\n"
         "D=0 uses the OpenCL basic model and hard owned-payload budget.\n"
         "Queue receipts/checkpoints, curve limits, result validation and stop policy are shared.\n"
         "Explicit B2 required; CUDA tune/Auto B2/relocation/Graph policies are not consumed.\n"
@@ -261,6 +267,7 @@ void help() {
         "         --ntt-counts 0|1 (per-curve NTT length table; TOML stage2_ntt_counts)\n"
         "         --relocation 0|1 (optional conservative suffix, original-range replay on hits/nonunits)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
+        "         --giant-tail-balance 0|1 --b2-round-chain 0|1 --giant-chain 64|32|auto\n"
         "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
         "      ECM: configured worktodo by default; --tune-worktodo FILE or --tune-exponents bits,...\n"
@@ -272,12 +279,13 @@ void help() {
         "           TOML format 7: matrices with column names in the first row; regenerate older files.\n"
         "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
         "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
-        "             Separate measurement conditions; only a strictly faster median replaces measured data.\n"
+        "             Preserve conditions; merge independent measurements using counts, means and sample variance.\n"
         "Selection: --tune-profile FILE.toml --tune-ignore gpu,driver,cuda,backend,environment\n"
         "           B1 never gates reuse; unmeasured widths/B2 retain estimate/uncertainty labels.\n"
         "           --prediction-policy model|paired (default model); model supplies a no-tune basic prior.\n"
         "           --tune-runtime 0|1 (default 1): accumulate checked NF curves and test legal carriers first.\n"
-        "           --tune-runtime-samples N (2..1000, default 10): per-condition/path observation cap.\n"
+        "           --tune-min-repeats N (1..1000, default 2): minimum verified ECM observations.\n"
+        "           --tune-runtime-samples N (1..1000, default 10): per-condition/path observation cap.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
@@ -370,6 +378,8 @@ int driver(Options o) {
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;
     if(!o.portable_cli.count("--tune-runtime"))o.tune_runtime=s.tune_runtime;
     if(!o.portable_cli.count("--tune-runtime-samples"))o.runtime_samples=s.runtime_samples;
+    if(!o.portable_cli.count("--tune-min-repeats"))o.tune_min_repeats=s.tune_min_repeats;
+    if(o.tune_min_repeats>o.runtime_samples)throw std::runtime_error("tune-min-repeats exceeds tune-runtime-samples");
     if(o.prediction_policy!="model" && o.prediction_policy!="paired")throw std::runtime_error("prediction-policy must be model or paired");
     if(o.tune_arithmetic!="both" && o.tune_arithmetic!="generic" && o.tune_arithmetic!="mersenne")throw std::runtime_error("tune-arithmetic must be both, generic or mersenne");
     if(!o.portable_cli.count("--tune-ignore"))o.tune_ignore=s.tune_ignore;
@@ -380,6 +390,11 @@ int driver(Options o) {
     if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
     if(!o.portable_cli.count("--ntt-counts"))o.ntt_counts=s.ntt_counts;
     if(!o.portable_cli.count("--relocation"))o.relocation=s.relocation;
+    if(!o.portable_cli.count("--giant-chain"))o.giant_chain=s.giant_chain;
+    if(!o.portable_cli.count("--giant-tail-balance"))o.giant_tail_balance=s.giant_tail_balance;
+    if(!o.portable_cli.count("--b2-round-chain"))o.b2_round_chain=s.b2_round_chain;
+    configure_giant_policy(o);
+    if(o.b2_round_chain && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("B2 rounding is not an ECM calibration grid; disable --b2-round-chain for tune");
     if(o.relocation && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("relocation does not collect legacy ECM tune samples; use --relocation 0 for --tune ecm");
     if(!o.portable_cli.count("--tune-error-limit"))o.tune_error=s.tune_error;
     if(!o.portable_cli.count("--stage1-cost-mhz"))o.stage1_mhz=s.stage1_mhz;

@@ -1,6 +1,7 @@
 """Check benchmark GPU-context filtering without invoking CUDA or a GPU tool."""
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -23,7 +24,20 @@ def main():
     neighbor = dict(gpu_uuid='GPU1', pid='5', process_name=str(Path(str(out) + '_another') / 'worker.exe'))
     assert foreign_gpu_processes(rows + [neighbor], 'GPU1', out) == [neighbor]
     assert foreign_gpu_processes([], 'GPU1', out) == []
-    report = dict(complete=True, checks=4, other_GPU_ignored=True, own_workers_allowed=True,
+    ui=dict(gpu_uuid='GPU1',pid='42',process_name=r'C:\Apps\ChatGPT.exe')
+    allowed=[dict(pid='42',process_name=r'C:\Apps\ChatGPT.exe')]
+    assert foreign_gpu_processes([ui], 'GPU1', out)==[ui]
+    assert foreign_gpu_processes([ui], 'GPU1', out, allowed)==[]
+    reused=ui|dict(process_name=r'C:\Apps\other.exe')
+    assert foreign_gpu_processes([reused], 'GPU1', out, allowed)==[reused]
+    other=ui|dict(pid='43')
+    assert foreign_gpu_processes([other], 'GPU1', out, allowed)==[other]
+    previous=Path.cwd()
+    try:
+        os.chdir(out)
+        assert foreign_gpu_processes([unknown], 'GPU1', out)==[unknown]
+    finally:os.chdir(previous)
+    report = dict(complete=True, checks=9, explicit_PID_and_path_only=True, other_GPU_ignored=True, own_workers_allowed=True,
                   foreign_and_unknown_rejected=True, sibling_prefix_rejected=True, CUDA_calls=0)
     (out / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report))

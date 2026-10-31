@@ -1,3 +1,4 @@
+#include "../giant_policy.h"
 #include "host_wait.h"
 // One saved curve, its setup/checks, relocation replay and final reporting.
 #include "engine.h"
@@ -539,12 +540,18 @@ int run_real(
         const double t0 = now_s();
         const auto relocation=ecm_stage2::giant_range(B2,D,g_relocation_enabled);
         const bool baby_nonunit=baby_nonunit_seen || baby_noninv!=0 || !baby_deg.empty();
-        const bool attempted=relocation.active && !baby_nonunit;
+        const bool point_policy=ecm_stage2::giant_tail_balance_requested() || ecm_stage2::giant_chain_points()!=64;
+        const bool attempted=(relocation.active || point_policy) && !baby_nonunit;
         double probe_seconds=0,replay_seconds=0,final_begin=t0;
-        bool replayed=relocation.active && baby_nonunit;
+        bool replayed=(relocation.active || point_policy) && baby_nonunit;
         ecm_stage2::timing::PhaseTimes probe_phases;
-        BatchedRun BR=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,
-                                  attempted?&relocation:nullptr);
+        BatchedRun BR;
+        {
+            ecm_stage2::GiantPolicyScope early(point_policy && baby_nonunit?0:-1,
+                point_policy && baby_nonunit?64:0);
+            BR=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,
+                           attempted?&relocation:nullptr);
+        }
         if(attempted) {
             s4_oracle_drain(red); // an unchecked probe cannot authorize NF or replay
             const double end=now_s();probe_seconds=end-t0;
@@ -554,7 +561,9 @@ int run_real(
                 probe_phases=ecm_stage2::timing::partition(bounds);
                 if(!probe_phases.complete){std::fprintf(stderr,"FATAL: incomplete relocation probe timing\n");std::exit(3);}
                 final_begin=end;
-                stage2_log::print(stage2_log::phases,"stage2_relocation_replay: reason=hit_or_nonunit first=1 last=%llu\n",relocation.last);
+                stage2_log::print(stage2_log::phases,"%s: reason=hit_or_nonunit first=1 last=%llu\n",
+                    g_relocation_enabled?"stage2_relocation_replay":"stage2_point_replay",relocation.last);
+                ecm_stage2::GiantPolicyScope legacy_points(0,64);
                 BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr);
                 s4_oracle_drain(red);replay_seconds=now_s()-end;
                 original.t_giant+=BR.t_giant;original.t_gtrees+=BR.t_gtrees;original.t_fold+=BR.t_fold;
@@ -562,6 +571,8 @@ int run_real(
                 BR=std::move(original);
             }
         } else if(replayed)replay_seconds=now_s()-t0;
+        if(point_policy)stage2_log::print(stage2_log::phases,
+            "stage2_point_policy: requested=1 replayed=%d legacy_chain=64 legacy_tail_balance=0\n",(int)replayed);
         stage2_log::phase("Validate arithmetic and finalize factors");
         s4_oracle_drain(red);    /* validation must finish BEFORE elapsed and success */
         /* merge the factors that degenerate BABY points revealed (objective 3): each already
@@ -579,8 +590,8 @@ int run_real(
             auto &m=saved_result->metrics;
             m.d=D;m.p=P_baby;m.giant_points=BR.giant_points;
             m.giant_first=BR.giant_first;m.giant_last=BR.giant_last;
-            m.relocation=g_relocation_enabled;m.relocation_replayed=replayed;
-            m.relocation_points=attempted?relocation.points:0;m.relocation_prime=relocation.missing;
+            m.relocation=g_relocation_enabled;m.relocation_replayed=g_relocation_enabled && replayed;
+            m.relocation_points=g_relocation_enabled && attempted?relocation.points:0;m.relocation_prime=relocation.missing;
             m.relocation_probe_seconds=probe_seconds;m.relocation_replay_seconds=replay_seconds;
             m.init_seconds=stage2_init_seconds;m.main_seconds=el;m.total_seconds=stage2_init_seconds+el;
             m.giant_seconds=BR.t_giant;m.gtrees_seconds=BR.t_gtrees;m.fold_seconds=BR.t_fold;
@@ -595,7 +606,7 @@ int run_real(
                 for(size_t i=4;i<ecm_stage2::timing::count;++i)m.phases.seconds[i]+=probe_phases.seconds[i];
             }
             m.clean=!stage2_extra_fixtures;
-            m.fold_resident=BR.fold_device.enabled;
+            m.fold_resident=BR.fold_device.enabled;m.groot_balanced=BR.groot_balanced;
         }
         BR.t_return_finalize = t0 + el - BR.t_post_end;
         BR.t_post_loop += BR.t_return_finalize;

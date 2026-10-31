@@ -1,7 +1,7 @@
 """Fixed-shape CUDA G-tree layout A/B with mandatory arithmetic checks.
 
-Uses one binary and copied Stage1 points; no tune rows or production queue edits.
-The override is deliberately excluded from automatic selection and calibration.
+Uses one binary and copied Stage1 points; no production queue edits.
+Layout identity also permits calibration; these fixed-shape runs disable it.
 """
 import argparse
 import hashlib
@@ -50,8 +50,8 @@ def main():
     if a.device < 0 or a.carrier < 0 or a.carrier > 16384:
         p.error('device >= 0 and carrier in 0..16384')
     order = [int(x) for x in a.order.split(',')]
-    if not order or any(x not in (0,1) for x in order):
-        p.error('order must contain 0/1')
+    if not order or any(x not in (-1,0,1) for x in order):
+        p.error('order must contain -1 (auto), 0 or 1')
     out = a.out.resolve(); out.mkdir(parents=True, exist_ok=False)
     shutil.copy2(__file__,out/'collector_snapshot.py')
     identities = {str(a.exe.resolve()):sha(a.exe)}
@@ -79,9 +79,8 @@ def main():
         (directory/'point.save').write_text(point,encoding='utf-8')
         (directory/'ecm.toml').write_text('[stage2]\nstage2_auto_carrier=false\nstage2_auto_b2=false\n'
             'stage2_tune_runtime=false\nstage2_short_calibration=false\n',encoding='utf-8')
-        sentinel=directory/'unused_tune.toml'; sentinel.write_text('must never be parsed or rewritten\n',encoding='utf-8')
-        original=sha(sentinel)
-        env=base|{'NTT_GROOT_BALANCED':str(layout)}
+        sentinel=directory/'unused_tune.toml'
+        env=base|({'NTT_GROOT_BALANCED':str(layout)} if layout>=0 else {})
         if a.fixtures:
             env.update(NTT_GROOT_DEVICE_TEST='1',NTT_GROOT_DEVICE_CHECK='1',NTT_GROOT_DEVICE_TEST_BAD=str(fault))
         command=[str(a.exe.resolve()),'--config',str(directory/'ecm.toml'),
@@ -109,7 +108,7 @@ def main():
             text+='\n'+(directory/'engine.log').read_text(encoding='utf-8',errors='replace')
         if (directory/'debug.log').exists():
             text+='\n'+(directory/'debug.log').read_text(encoding='utf-8',errors='replace')
-        assert sha(sentinel)==original,'experiment touched tune profile'
+        assert not sentinel.exists(),'fixed run unexpectedly wrote tune profile'
         row=dict(label=label,layout=layout,wall_seconds=elapsed,exit=result.returncode,fault=bool(fault))
         if monitor is not None:
             row.update(telemetry_identity=monitor.identity,telemetry_samples=monitor.samples)
@@ -123,7 +122,8 @@ def main():
             row.update(engine=fields(text,'stage2_full_wall'),split=fields(text,'real_batched_split'),
                 layout_info=fields(text,'groot_layout'),checks=fields(text,'s4_multiply_stats'),
                 root=fields(text,'real_batched_rootfold'))
-            assert int(row['layout_info']['balanced'])==layout
+            if layout>=0:
+                assert int(row['layout_info']['balanced'])==layout
             # Diagnostic fixture arithmetic is intentionally not eligible as a
             # clean performance/tune observation, even when all checks pass.
             assert row['engine']['clean']==('0' if a.fixtures else '1')
@@ -135,38 +135,25 @@ def main():
         (out/'summary.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
         print(json.dumps(dict(label=label,wall=elapsed,exit=result.returncode,split=row.get('split'))),flush=True)
     if a.fixtures:
-        # Reject incompatible uses before any calibration/profile access. The
-        # invalid TOML sentinel also proves fixed-layout runs do not read rows
-        # whose shape identity still describes the legacy layout.
+        # Both explicit controls must agree; malformed values fail before work.
+        # Automatic D/calibration/runtime learning now accept layout identity.
         report['guards']=[]
         for name,changes,extra,value in [
-            ('bad_value',{},[],'2'),('automatic_D',{'--d':'0'},[],'1'),
-            ('sampling',{'--tune-runtime':'1'},[],'1'),
-            ('auto_carrier',{'--auto-carrier':'1'},[],'1'),
-            ('calibration',{'--short-calibration':'1'},[],'1'),
-            ('short_batch',{'--short-ntt-batch-tune':'1'},[],'1'),
-            ('auto_B2',{'--b2':'0'},['--auto-b2'],'1'),('tune',{},['--tune','ecm'],'1')]:
+            ('bad_value',{},[],'2'),('conflicting',{},['--groot-layout','0'],'1')]:
             guard=out/('guard_'+name);guard.mkdir()
-            for item in ('point.save','ecm.toml','unused_tune.toml'):
+            for item in ('point.save','ecm.toml'):
                 shutil.copy2(directory/item,guard/item)
             guard_command=[arg.replace(str(directory),str(guard)) for arg in command]+extra
             for flag,new_value in changes.items():
                 guard_command[guard_command.index(flag)+1]=new_value
-            if name=='tune':
-                # A formal tune cannot accept save/curve CLI arguments. Use its
-                # valid grammar and a fixed TOML D to reach the layout guard.
-                with (guard/'ecm.toml').open('a',encoding='utf-8') as config:
-                    config.write('stage2_d=2310\n')
-                guard_command=[str(a.exe.resolve()),'--config',str(guard/'ecm.toml'),
-                    '--device',str(a.device),'--tune','ecm']
             rejected=subprocess.run(guard_command,cwd=guard,env=base|{'NTT_GROOT_BALANCED':value},
                 capture_output=True,timeout=30)
             text=(rejected.stdout+rejected.stderr).decode('utf-8',errors='replace')
             (guard/'console.log').write_text(text,encoding='utf-8')
             (guard/'command.json').write_text(json.dumps(guard_command,indent=2),encoding='utf-8')
             assert rejected.returncode and not (guard/'internal.jsonl').exists(),name
-            assert ('NTT_GROOT_BALANCED must be 0 or 1' if name=='bad_value' else 'G-root layout experiments require') in text,name
-            assert sha(guard/'unused_tune.toml')==original,name
+            assert ('NTT_GROOT_BALANCED must be 0 or 1' if name=='bad_value' else 'conflicting G-root layout overrides') in text,name
+            assert not (guard/'unused_tune.toml').exists(),name
             report['guards'].append(name)
     if not a.fixtures:
         digests={(r['root']['digest_words'],r['root']['digest_sum'],r['root']['digest_xor']) for r in report['runs']}

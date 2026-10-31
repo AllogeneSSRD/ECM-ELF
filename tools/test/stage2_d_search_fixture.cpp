@@ -168,9 +168,10 @@ int main() {
         require(p::runtime_choice(routes,false).index==2,"overlapping alternatives displaced the successful incumbent");
         p::RuntimePauseHints hints;const std::string a(64,'a'),b(64,'b'),c(64,'c');
         require(hints.assign(a+","+b) && hints.contains(a) && hints.contains(b),"parent pause roundtrip failed");
-        hints.add(c);require(hints.keys.size()==2,"parent pause hints are unbounded");
+        hints.add(c);hints.add(std::string(64,'d'));hints.add(std::string(64,'e'));
+        require(hints.keys.size()==4,"parent pause hints are unbounded");
         require(!hints.assign(a+",broken") && hints.keys.empty(),"bad hint did not fail open");
-        require(!hints.assign(a+","+b+","+c) && hints.keys.empty(),"oversized hint accepted");
+        require(!hints.assign(a+","+b+","+c+","+a+","+b) && hints.keys.empty(),"oversized hint accepted");
         require(hints.assign(a+","+a) && hints.keys.size()==1,"duplicate pause hints not deduplicated");
         require(!hints.assign(a+",") && hints.keys.empty(),"torn parent hint accepted");
         p::Shape reference;reference.d=180180;
@@ -208,6 +209,10 @@ int main() {
         require(route_hints.put(route,true,memory) && route_hints.find(180180,2003,memory,restored) && restored.values()==route.values(),
             "approved route hint not restored");
         const auto encoded=route_hints.text();p::RuntimeRouteHints decoded;
+        auto tiled_route=route;tiled_route.layout=1;
+        require(route_hints.put(tiled_route,true,memory) && route_hints.entries.size()==2 &&
+            route_hints.find(180180,2003,memory,restored,1) && restored.layout==1,
+            "different layouts reused one admitted route");
         require(decoded.assign(encoded) && decoded.find(180180,2003,memory,restored),"route hint roundtrip failed");
         require(!decoded.find(180180,2003,{101,200},restored) && !decoded.find(180180,2003,memory,restored),"changed live free memory reused a parent route");
         decoded.assign(encoded);decoded.scope(b);
@@ -227,6 +232,7 @@ int main() {
         p::RuntimeMemoryRejections rejected;
         require(rejected.put(180180,0,memory,100,101,memory) && rejected.contains(180180,0,memory),"memory rejection not retained");
         require(!rejected.contains(180180,2003,memory),"ordinary rejection leaked into carrier route");
+        require(!rejected.contains(180180,0,memory,1),"dense rejection leaked into blocked layout");
         require(!rejected.put(180180,0,memory,99,101,memory),"wrong reported snapshot cached as rejection");
         require(!rejected.put(210210,0,memory,100,100,memory) && !rejected.contains(210210,0,memory),"fitting plan cached as rejection");
         require(!rejected.put(210210,0,memory,100,101,{101,200}),"changing memory cached as rejection");

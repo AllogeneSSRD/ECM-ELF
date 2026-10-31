@@ -12,6 +12,7 @@ def main():
     p.add_argument('--vcvars',type=Path,default=Path(
         r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat'))
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
+    (out/'.gitignore').write_text('*\n',encoding='ascii')
     exe=out/'fixture.exe';script=out/'compile.cmd'
     script.write_text('@echo off\ncall "'+str(a.vcvars)+'" >nul 2>&1\nif errorlevel 1 exit /b 1\n'
         'cl /nologo /std:c++17 /EHsc /O2 /utf-8 "'+str(ROOT/'tools/test/stage2_workspace_memory_fixture.cpp')+

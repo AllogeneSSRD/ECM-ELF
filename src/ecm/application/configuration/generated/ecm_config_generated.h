@@ -22,6 +22,10 @@ inline constexpr int64_t stage2_stage2_device_minimum=-1;
 inline constexpr int64_t stage2_stage2_device_maximum=2147483647;
 inline constexpr int64_t stage2_stage2_ntt_counts_minimum=0;
 inline constexpr int64_t stage2_stage2_ntt_counts_maximum=1;
+inline constexpr int64_t stage2_stage2_giant_tail_balance_minimum=0;
+inline constexpr int64_t stage2_stage2_giant_tail_balance_maximum=1;
+inline constexpr int64_t stage2_stage2_b2_round_chain_minimum=0;
+inline constexpr int64_t stage2_stage2_b2_round_chain_maximum=1;
 inline constexpr int64_t stage2_stage2_relocation_minimum=0;
 inline constexpr int64_t stage2_stage2_relocation_maximum=1;
 inline constexpr int64_t stage2_stage2_batch_mb_minimum=1;
@@ -38,7 +42,9 @@ inline constexpr int64_t stage2_stage2_auto_b2_minimum=0;
 inline constexpr int64_t stage2_stage2_auto_b2_maximum=1;
 inline constexpr int64_t stage2_stage2_factor_timeout_minimum=1;
 inline constexpr int64_t stage2_stage2_factor_timeout_maximum=600;
-inline constexpr int64_t stage2_stage2_tune_runtime_samples_minimum=2;
+inline constexpr int64_t stage2_stage2_tune_min_repeats_minimum=1;
+inline constexpr int64_t stage2_stage2_tune_min_repeats_maximum=1000;
+inline constexpr int64_t stage2_stage2_tune_runtime_samples_minimum=1;
 inline constexpr int64_t stage2_stage2_tune_runtime_samples_maximum=1000;
 inline constexpr int64_t stage2_stage1_batch_minimum=1;
 inline constexpr int64_t stage2_stage1_batch_maximum=1048576;
@@ -194,6 +200,9 @@ struct Stage2Values {
     int device=-1;
     int log_level=-1;
     bool ntt_counts=false;
+    bool giant_tail_balance=false;
+    bool b2_round_chain=false;
+    std::string giant_chain="64";
     bool relocation=false;
     uint64_t b2=0;
     uint64_t d=0;
@@ -211,6 +220,7 @@ struct Stage2Values {
     std::string tune_arithmetic="both";
     std::string tune_profile="";
     bool tune_runtime=true;
+    uint64_t tune_min_repeats=2;
     uint64_t runtime_samples=10;
     bool short_batch_tune=false;
     bool low_cpu_wait=false;
@@ -257,6 +267,9 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_device",[](Stage2Values&c,const std::string&v){c.device=signed_integer(v,"stage2_device",-1,2147483647);},[](Stage2Values&c,const Stage2Values&v){c.device=v.device;}},
     {"stage2_log_level",[](Stage2Values&c,const std::string&v){c.log_level=log_level(v);},[](Stage2Values&c,const Stage2Values&v){c.log_level=v.log_level;}},
     {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=boolean(v,"stage2_ntt_counts");},[](Stage2Values&c,const Stage2Values&v){c.ntt_counts=v.ntt_counts;}},
+    {"stage2_giant_tail_balance",[](Stage2Values&c,const std::string&v){c.giant_tail_balance=boolean(v,"stage2_giant_tail_balance");},[](Stage2Values&c,const Stage2Values&v){c.giant_tail_balance=v.giant_tail_balance;}},
+    {"stage2_b2_round_chain",[](Stage2Values&c,const std::string&v){c.b2_round_chain=boolean(v,"stage2_b2_round_chain");},[](Stage2Values&c,const Stage2Values&v){c.b2_round_chain=v.b2_round_chain;}},
+    {"stage2_giant_chain",[](Stage2Values&c,const std::string&v){c.giant_chain=v;},[](Stage2Values&c,const Stage2Values&v){c.giant_chain=v.giant_chain;}},
     {"stage2_relocation",[](Stage2Values&c,const std::string&v){c.relocation=boolean(v,"stage2_relocation");},[](Stage2Values&c,const Stage2Values&v){c.relocation=v.relocation;}},
     {"stage2_b2",[](Stage2Values&c,const std::string&v){c.b2=static_cast<uint64_t>(bounded_integer(v,"stage2_b2",0,UINT64_MAX));},[](Stage2Values&c,const Stage2Values&v){c.b2=v.b2;}},
     {"stage2_d",[](Stage2Values&c,const std::string&v){c.d=static_cast<uint64_t>(bounded_integer(v,"stage2_d",0,UINT64_MAX));},[](Stage2Values&c,const Stage2Values&v){c.d=v.d;}},
@@ -274,7 +287,8 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_tune_arithmetic",[](Stage2Values&c,const std::string&v){c.tune_arithmetic=v;},[](Stage2Values&c,const Stage2Values&v){c.tune_arithmetic=v.tune_arithmetic;}},
     {"stage2_tune_profile",[](Stage2Values&c,const std::string&v){c.tune_profile=v;},[](Stage2Values&c,const Stage2Values&v){c.tune_profile=v.tune_profile;}},
     {"stage2_tune_runtime",[](Stage2Values&c,const std::string&v){c.tune_runtime=boolean(v,"stage2_tune_runtime");},[](Stage2Values&c,const Stage2Values&v){c.tune_runtime=v.tune_runtime;}},
-    {"stage2_tune_runtime_samples",[](Stage2Values&c,const std::string&v){c.runtime_samples=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_runtime_samples",2,1000));},[](Stage2Values&c,const Stage2Values&v){c.runtime_samples=v.runtime_samples;}},
+    {"stage2_tune_min_repeats",[](Stage2Values&c,const std::string&v){c.tune_min_repeats=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_min_repeats",1,1000));},[](Stage2Values&c,const Stage2Values&v){c.tune_min_repeats=v.tune_min_repeats;}},
+    {"stage2_tune_runtime_samples",[](Stage2Values&c,const std::string&v){c.runtime_samples=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_runtime_samples",1,1000));},[](Stage2Values&c,const Stage2Values&v){c.runtime_samples=v.runtime_samples;}},
     {"stage2_short_ntt_batch_tune",[](Stage2Values&c,const std::string&v){c.short_batch_tune=boolean(v,"stage2_short_ntt_batch_tune");},[](Stage2Values&c,const Stage2Values&v){c.short_batch_tune=v.short_batch_tune;}},
     {"stage2_low_cpu_wait",[](Stage2Values&c,const std::string&v){c.low_cpu_wait=boolean(v,"stage2_low_cpu_wait");c.has_low_cpu_wait=true;},[](Stage2Values&c,const Stage2Values&v){c.low_cpu_wait=v.low_cpu_wait;c.has_low_cpu_wait=v.has_low_cpu_wait;}},
     {"stage2_pack_zero",[](Stage2Values&c,const std::string&v){c.pack_zero=boolean(v,"stage2_pack_zero");c.has_pack_zero=true;},[](Stage2Values&c,const Stage2Values&v){c.pack_zero=v.pack_zero;c.has_pack_zero=v.has_pack_zero;}},

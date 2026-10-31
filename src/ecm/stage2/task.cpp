@@ -10,6 +10,8 @@
 #include "process.h"
 #include "../platform/compute_log.h"
 #include "modulus.h"
+#include "giant_tree.h"
+#include "giant_policy.h"
 #include "factorize.h"
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/io/save.h"
@@ -59,12 +61,16 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     request.ratio_adjust=o.ratio_adjust;
     request.receipt=o.receipt;
     request.relocation=o.relocation;
+    request.giant_tail_balance=o.giant_tail_balance;request.b2_round_chain=o.b2_round_chain;
+    request.giant_chain=o.giant_chain;
     request.runtime_prepare_cache=o.runtime_prepare_cache;
     request.runtime_prepare_hints=o.runtime_prepare_hints;
     request.runtime_remaining=o.runtime_remaining;
     request.runtime_route_hints=o.runtime_route_hints;
     request.runtime_samples=o.runtime_samples;
+    request.tune_min_repeats=o.tune_min_repeats;
     request.short_batch_tune=o.short_batch_tune;
+    request.groot_layout=o.groot_layout;
     request.stage1_batch=o.stage1_batch;
     request.stage1_csv=o.stage1_csv;
     request.stage1_exponent=o.stage1_exponent;
@@ -95,6 +101,7 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     return run_curve_process(request);
 }
 int curve_worker(Options o) {
+    configure_giant_policy(o);
     configure_groot_experiment(o);
     configure_host_wait(o);
     configure_pack_zero(o);
@@ -141,6 +148,8 @@ int curve_worker(Options o) {
     if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
     o.has_d=requested_d!=0;
     auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
+    round_giant_bounds(o,r);
+    ecm_stage2::GiantPolicyScope point_execution(o.giant_tail_balance?1:0,o.selected_chain);
     const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
@@ -169,6 +178,7 @@ int curve_worker(Options o) {
         if(stage2_log::enabled(stage2_log::curve))std::cout << "saved_X_factor: " << number(gcd.z, 10) << '\n';
     } else {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
+        ecm_stage2::GrootLayoutScope layout_scope(o.groot_layout);
         configure_cuda_wait(o.device);
         if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
@@ -244,6 +254,7 @@ int curve_worker(Options o) {
         ",\"carrier_exponent\":"+std::to_string(o.carrier_exponent)+
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
         ",\"requested_D\":"+std::to_string(requested_d)+",\"requested_B2\":"+std::to_string(requested_b2)+
+        ",\"giant_tail_balance\":"+std::string(o.giant_tail_balance?"true":"false")+",\"giant_chain_block\":"+std::to_string(o.selected_chain)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
         (o.factor_only?",\"requested_factor_only\":true":"")+
@@ -485,12 +496,15 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                 Options local=o;local.b2=b2;local.has_d=d!=0;
                 configure_short_ntt_batches(local);
                 if(o.auto_b2&&!b2){
-                    std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;
-                    const auto tuned=select_runtime_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;
+                    std::cout<<select_auto(local,r,false)<<std::endl;
+                    if(!o.tune_profile.empty()){const auto tuned=select_runtime_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
                 }
                 else {const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
+                round_giant_bounds(local,r);
+                ecm_stage2::GiantPolicyScope point_scope(local.giant_tail_balance?1:0,local.selected_chain);
                 std::string result;
                 if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
+                ecm_stage2::GrootLayoutScope layout_scope(local.groot_layout);
                 const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,local.b2,local.d,device,
                     [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);
                 if(code||result.empty())throw std::runtime_error("Stage2 planning failed");

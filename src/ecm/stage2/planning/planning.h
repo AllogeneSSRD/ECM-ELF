@@ -12,6 +12,7 @@ std::string curve_memory_record(const std::string &json);
 std::string giant_memory_record(const std::string &json);
 void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m);
 void configure_short_ntt_batches(const Options &o);
+void round_giant_bounds(Options &o,const Record &r);
 void ensure_portable_calibration(Options &o,const Record &r,const TaskDefaults &settings,const std::vector<Record> &range={});
 void merge_portable_tune(const Options &o,const fs::path &destination);
 std::vector<Record> portable_queue_range(const fs::path &worktodo,int worker,const fs::path &save_dir);

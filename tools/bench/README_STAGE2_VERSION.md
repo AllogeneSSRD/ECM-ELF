@@ -59,6 +59,37 @@ python tools/bench/plot_stage2_version.py `
 
 ## 正常运行时选型矩阵
 
+### 布局与旧tune的有界验证
+
+`bench_stage2_layout_matrix.py`复用已完成的默认矩阵及旧性能文件，当前验证范围限定为较小的名义B2=26000000000档：13份精确余因子、普通/承载默认26格，各n=1筛查，明显回退单项补测。默认矩阵若按用户要求中途缩减范围，须保留明确的`authorized_scope_stop.json`及边界计划；新研究只提取已完整验收的小B2格，不改写原始记录。
+
+每个位宽先对旧性能文件中最快合格几何的**当前自动布局**重测2条真实曲线，再解锁D、算术和布局，用正常worktodo继续学习。合计至多8次完整调用；原生停止事件保留至多1条已经开始的额外调用。继承48条计划队列，避免剩余曲线不足4条而禁用搜索。旧文件的条件、时间和来源不重标记；本机资格仍由生产选择器检查。达到3次新非probe调用也可提前结束，不声称搜索穷尽。
+
+全部学习完成后冻结性能文件，用生产只规划入口核对已准入重复均值的最快选择，然后每格独立续算3条，关闭写回。主成绩只使用这39条新复测，学习调用和旧时间不加入成绩。原始命令、NF回执、GMP检查、实际布局、阶段与逐样本NVML全部保留。
+
+入口为`bench_stage2_layout_matrix.py --defaults <已完成小B2的默认研究> --seed-profile <旧tune> --output <新目录>`，`--max-queues 1`可检查首格，随后`--resume --output <目录>`继续。`--allow-gpu-pid <PID>`只用于用户明确允许的界面上下文，同时绑定PID与完整程序路径，仍拒绝其他外部进程；不等同于允许任意共享设备。
+
+绘图沿用`plot_stage2_version.py`，添加`--layout-study <研究目录>`；`--study`指向该研究的`defaults/`，其他输出/图片/公开附件参数不变。先重读回执核对三波测量、D/P、布局、NF、自检、进程协议及冻结身份，再生成本轮独立均值、旧学习均值对照和阶段占比堆积图。Baby从init拆出，剩余init标为F树/初始化余项；main的求逆、giant点、G树、fold、下降和累乘分别计入，残差闭合引擎时钟，不叠加嵌套NTT/S4计时。
+
+`rescreen_stage2_matrix.py --study <研究目录> --reference <旧默认研究>`筛出同时超过旧中位数5%及20ms的默认格，再各跑2遍，保留原首轮，生成`rescreens/`。加`--legacy-controls`则只重跑当前自动布局与旧策略不同的格，每格1遍、固定原D及旧布局，生成`legacy_controls/`。两者使用相同冻结二进制和精确输入，不启用学习；布局对照强制检查非空根摘要并比较。输出目录必须不存在，已有证据不覆盖。少量单遍对照不替代n=3因果矩阵。
+
+当前详细百分比图额外拆出`real_batched_wall.gleaves`（Giant叶准备／同步）；旧日志缺此项，因此另绘共同分项图，旧叶准备保留在main余项。主机范围计时可能把异步设备工作记在下一处阻塞边界，不能直接解释为孤立GPU核函数时间或纯CPU求逆时间。默认成绩取中位数；分项秒数及百分比采用各次均值，图注区分口径。
+
+以下只重读已完成的0.54.7小档证据并重绘，不启动GPU测试。新输出目录须不存在；正式报告引用相邻attachments公开副本。
+
+```powershell
+python tools/bench/plot_stage2_version.py `
+  --study data/experiments/stage2_layout_matrix_20261031/low_warm2/defaults `
+  --layout-study data/experiments/stage2_layout_matrix_20261031/low_warm2 `
+  --output data/benchmarks/stage2_layout_matrix_20261031/low_final `
+  --figures data/figures/stage2_layout_matrix_20261031/low_final `
+  --publish docs/performance/attachments
+```
+
+输出包括`summary.json`、`cells.csv`、`report_fragment.md`及绘图器快照，四组PNG/SVG分别为绝对耗时、当前细分阶段、跨版本共同阶段、曲线墙钟分项。工具拒绝不完整波次、混合B2、重复调用、身份改变、算术检查缺失或不同布局根摘要不一致；不会把范围缩减后的半份双档矩阵标为全范围通过。
+
+### 从空白性能文件学习
+
 当前矩阵使用 `build_cuda_cmake/stage2_d_search_0_39_3/` 的 ECM-ELF 0.39.3，保留 0.38.4 完整默认矩阵作参考。`bench_stage2_runtime_matrix.py` 冻结指定 EXE/GMP、13 份已独立验证的原始 Stage1 点。每个实际 N/B2 条件提供一条 **上限 48 曲线的连续 worktodo 队列**，共 26 条队列；当当前最快合格参数组完成第 3 个入账观察时，提前结束该条件。相同保存点重放仅测量耗时和选型，不增加独立 ECM 覆盖。
 
 ```powershell

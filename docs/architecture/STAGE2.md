@@ -75,7 +75,7 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 
 差分 xADD 使用 6 次模乘，固定差点保证 chain 中的相邻点关系。相邻 seed 可同时得到 [iD]Q 与 [(i+1)D]Q，避免重复计算两个独立 ladder。短块、容量不足或非单位场景仍需保留正确回退。
 
-seed 和 chain 的宽位数核在 W>128 时使用 32 线程 CUDA 块，其他宽度仍为 64 线程；每条顺序 chain 仍生成 64 点。此处 CUDA 线程块大小与 chain 点数是两个独立参数。点坐标、Montgomery radix、seed 标量和回退条件保持同一合同。chain 核位于 `src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
+seed 和 chain 的宽位数核在 W>128 时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用 `stage2_giant_chain=32|64|auto` 选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。chain核位于 `src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
 
 生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/ecm/stage2/geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
 
@@ -84,6 +84,14 @@ seed 和 chain 的宽位数核在 W>128 时使用 32 线程 CUDA 块，其他宽
 `device_gleaf.chunks` 记录实际准备次数，`retry_chunks` 记录重做次数；分组、检查和传输计数包含重做工作，`coord_peak_bytes`/`group_peak_bytes` 仍为各自同时占用峰。数学上的唯一覆盖由 `real_batched_projective` 的 `leaves=gamma_points` 校验，不能从准备次数推导曲线数。
 
 分块求逆以积换取少量主机逆：可逆集合使用前缀/积树传播，遇到非单位先在目标 N 上判定和求 GCD。不能在承载 M 上的单位性替代 N 上的单位性。Gamma 保存使用齐次叶引入的累计缩放，在最终下降前校正。
+
+### 完整区间点块策略
+
+CUDA完整索引区间为1…I，I=⌊B2/D⌋+2。`stage2_giant_tail_balance` 默认false；开启后保持原坐标容量C、I及G树边界，只在末两块能同时走chain时，从倒数第二块借出整P点。设短尾r=I mod C、有效chain门槛T，借出m=P⌈(T−r)/P⌉，末两块成为C−m、r+m；两者均须在[T,C]内。没有短尾、强制ladder、驻留资格不足或无法借块时保留原划分。压缩调度、工作量和内存生命周期共用 [giant_schedule.h](../../src/ecm/stage2/giant_schedule.h)，最多三个重复区间，不随巨大B2展开点表。
+
+`stage2_b2_round_chain` 默认false。开启后，在选定D后将I补到最小的P整数倍，再使末点块达到T；不补满整个坐标块。实际边界取 max(请求B2,(I′−2)D)，日志 `stage2_bounds` 记录两者，结果与覆盖记录使用实际B2。凑整前后均检查原生显存准入，并受Auto B2上限约束；溢出或无法形成chain块时报错。该开关仅支持完整区间，不能与relocation或正式ECM校准同时开启。B2改变后，G树/fold数可以增加，不能把凑整时间当作相同覆盖量的纯算法对照。
+
+新点策略遇到非单位[D]Q或分组乘积时复用原坐标回退；整段探测遇到因子或非单位时，在发布前关闭平衡、恢复64链并重做原完整区间。已有非单位baby点直接执行原策略。必需算术检查排空后才能发布NF或重放结果。这里的恢复只覆盖当前策略，不是checkpoint。
 
 ## 多项式与 scaled 下降
 
@@ -127,6 +135,8 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 
 必需自检、carry 精确性、系数 GMP 抽样、proper divisor 验证和检查排空属于计算合同；factor-only 只省可选命名。性能测量与额外逐节点/台账诊断分开，不能把诊断曲线当作普通速度样本。
 
+块乘积GCD大于1时检查块内叶，包含块GCD=N的情形；不同叶可能分离出不同真因子。GCD=1才可直接跳过整个块。若某个叶自己的GCD=N，它不直接成为可发布因子；更细的单叶碰撞分离仍属于后续工作。
+
 完整叶比较使用目标环：承载计算先将叶 v 投影为 v mod N，再与普通模数或其他点生成路线比较。Γ 的逆元只需满足目标 N 上的合同，不同投影坐标可产生不同的 M 代表元；原始 M 叶指纹适合检查同一路线的重复一致性。承载正确性仍须独立核对目标环完整叶、点生成、分段/分组与缩放，因子集合或最终 GCD 相同不能替代这些检查。
 
 ## 主机等待与提交回收
@@ -166,6 +176,8 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 ## 主机规划实现
 
 [planning/planning.cpp](../../src/ecm/stage2/planning/planning.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型位于 `src/ecm/stage2/types.h` 等私有头，不作为外部 API。
+
+G树布局由`giant_tree.h::select_groot_layout`统一选择。完整Shape及ECM矩阵记录`groot_balanced`；原生计划、曲线子进程与执行度量必须一致，匹配失败不写入性能行。规划缓存及跨子进程的正/负准入提示按D、算术家族和布局区分；两个布局仍共用本家族的探索与额外时间预算。自动资格、旧行解释及承载优势下的额度收紧见[调优规则](AUTO_B2.md#g树布局身份与自动选择)。
 
 ## 父任务与曲线子进程
 

@@ -15,20 +15,21 @@ class WidthPredictor {
     Estimator &engine;
     const Fields *excluded=nullptr;
     struct Anchor {const Fields *sample;Shape shape;Work work;double correction;};
-    using Region=std::array<Word,13>;
+    using Region=std::array<Word,16>;
     mutable std::map<Region,std::vector<Anchor>> regions;
     mutable std::map<Shape::Key,std::pair<bool,WidthEstimate>> predictions;
     static double ratio(double a,double b){return b>0?a/b:1.;}
     static Shape reference(const WidthReference &r) {
         Shape s;s.target_bits=r.target_bits;s.arithmetic_bits=r.arithmetic_bits;
         s.carrier=r.mersenne?r.arithmetic_bits:0;s.mersenne=r.mersenne;
-        s.b1=r.b1;s.b2=r.b2;s.d=r.d;s.giant_chunk=r.giant_chunk;s.batch_bytes=r.batch_bytes;return s;
+        s.b1=r.b1;s.b2=r.b2;s.d=r.d;s.giant_chunk=r.giant_chunk;s.batch_bytes=r.batch_bytes;
+        s.groot_balanced=legacy_groot_layout((s.arithmetic_bits+63)/64,s.b2/s.d+2,d_catalog::degree(s.d));return s;
     }
     static Region region(const Shape &s,const Work &w) {
         Region out{};const auto topology=interval(s,w).key;
         std::copy(topology.begin(),topology.end(),out.begin());
-        out[8]=s.mersenne;out[9]=s.physical;out[10]=s.buffers;
-        out[11]=s.short_batch_tune;out[12]=s.short_batch_hash;return out;
+        out[9]=s.mersenne;out[10]=s.physical;out[11]=s.buffers;
+        out[12]=s.short_batch_tune;out[13]=s.short_batch_hash;out[14]=s.tail_balance;out[15]=s.chain_block;return out;
     }
     static double geometry_distance(const Work &a,const Work &b) {
         return std::abs(std::log2(double(a.p)/b.p))+
@@ -90,12 +91,12 @@ private:
     bool calculate(const Shape &s,WidthEstimate &out)const {
         out=WidthEstimate{};Work w;if(!engine.cached_work(s,w))return false;
         const auto runtime=engine.runtime_statistics(s);
-        if(runtime.count>=2 && w.p>=512 && w.exact_topology) {
+        if(runtime.count>=engine.minimum_repeats && w.p>=512 && w.exact_topology) {
             out.seconds=runtime.seconds;out.stddev=runtime.timing().stddev;
             out.runtime_samples=runtime.count;out.exact=out.region_covered=true;
             out.anchors=runtime.count;out.arithmetic_low=out.arithmetic_high=s.arithmetic_bits;
             out.relative_error=0;out.rank=out.seconds+2*out.stddev;
-            out.model="runtime_shape_mean_v2";out.uncertainty="observed_runtime_stddev";return true;
+            out.model="runtime_shape_mean_v2";out.uncertainty=runtime.count>1?"observed_runtime_stddev":"single_runtime_observation";return true;
         }
         if(const auto measured=engine.observed(s,excluded)) {
             out.seconds=real(*measured,"mean_seconds");out.stddev=real(*measured,"stddev_seconds");

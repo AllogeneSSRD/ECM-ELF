@@ -39,12 +39,16 @@ struct CurveProcessRequest {
     double ratio_adjust=0;
     std::string receipt{};
     bool relocation=0;
+    bool giant_tail_balance=false,b2_round_chain=false;
+    std::string giant_chain="64";
     bool runtime_prepare_cache=0;
     std::string runtime_prepare_hints{};
     uint64_t runtime_remaining=0;
     std::string runtime_route_hints{};
     uint64_t runtime_samples=0;
+    uint64_t tune_min_repeats=2;
     bool short_batch_tune=0;
+    int groot_layout=-1;
     uint64_t stage1_batch=0;
     std::string stage1_csv{};
     std::string stage1_exponent{};

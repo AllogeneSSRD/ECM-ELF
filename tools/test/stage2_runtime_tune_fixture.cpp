@@ -34,6 +34,19 @@ int main(int argc,char **argv) {
             *slots=2*m-1;*n=8;while(*n<*slots*ecm_stage2::Word((bits+23)/24))*n*=2;return true;};
         p::Estimator model(profile,profile.conditions.at(0),p::Ignore::parse(""),query);
         auto old=model.shape(profile.samples[0]),fast=model.shape(profile.samples[1]);
+        auto protected_point=old;protected_point.giant_chunk=4*ecm_stage2::d_catalog::degree(old.d);
+        p::Work default_work,new_work;ecm_stage2::GiantWork legacy_work;ecm_stage2::GiantPointWork point_work;
+        require(model.cached_work(protected_point,default_work) &&
+            ecm_stage2::giant_work(protected_point.b2/protected_point.d+2,protected_point.d,protected_point.giant_chunk,
+                protected_point.chain_min,false,legacy_work),"default point work unavailable");
+        const double point_words=(protected_point.arithmetic_bits+63)/64.;
+        require(default_work.giant==point_words*point_words*(6.*legacy_work.chain_points+12.*legacy_work.ladder_steps),
+            "default D point-cost prior changed without matrix qualification");
+        protected_point.chain_block=32;
+        require(model.cached_work(protected_point,new_work) &&
+            ecm_stage2::giant_point_work(protected_point.b2/protected_point.d+2,protected_point.d,protected_point.giant_chunk,
+                protected_point.chain_min,false,32,ecm_stage2::d_catalog::degree(old.d),false,point_work) &&
+            new_work.giant==point_words*point_words*point_work.modmuls(),"new policy omitted seed cost");
         auto before=model.runtime_statistics(old),after=model.runtime_statistics(fast);
         require(before.count==10 && after.count==2 && before.stddev>0 && after.stddev>0,"actual dispersion not accumulated");
         p::WidthPredictor predictor(model);p::WidthEstimate estimate;
@@ -146,7 +159,116 @@ int main(int argc,char **argv) {
         for(unsigned repeat=0;repeat<3;++repeat)for(unsigned power=3;power<=26;++power)for(unsigned batch:{1u,2u,3u,8u})
             require(table.ntt_cost(1ull<<power,batch)==plain_table.ntt_cost(1ull<<power,batch),"measured/interpolated NTT cache changed cost");
         require(table.ntt_cost_evaluations==24*4 && table.ntt_cost_hits==2*24*4,"NTT cost reuse not keyed by length/batch");
-        std::cout<<"{\"complete\":true,\"retains_slower_samples\":true,\"cap\":10,\"independent_samples\":12,"
+        // A layout is part of arithmetic topology, not a new timing population
+        // for the same shape. Historical rows retain their legacy identity.
+        auto legacy_narrow=sample(201,1141140,70);legacy_narrow["arithmetic_bits"]="5987";
+        legacy_narrow["carrier_exponent"]="5987";legacy_narrow["modulus_kind"]="\"mersenne\"";
+        auto blocked=legacy_narrow;blocked["groot_balanced"]="1";blocked["mean_seconds"]="55";
+        blocked["runtime_sample_id"]="\"blocked-201\"";
+        auto legacy_wide=legacy_narrow;legacy_wide["arithmetic_bits"]="9000";
+        require(!p::sample_groot_layout(legacy_narrow) && p::sample_groot_layout(legacy_wide),"historical layout was reinterpreted");
+        p::Profile layouts;layouts.condition(current);layouts.update(legacy_narrow);layouts.update(blocked);
+        p::Estimator lm(layouts,current,p::Ignore::parse(""),query);
+        const auto dense=lm.shape(layouts.samples[0]),tiled=lm.shape(layouts.samples[1]);
+        require(layouts.samples.size()==2 && dense.key()!=tiled.key() && lm.runtime_statistics(dense).seconds==70 &&
+            lm.runtime_statistics(tiled).seconds==55,"different layouts pooled their timings");
+        require(p::runtime_group(layouts.samples[0])!=p::runtime_group(layouts.samples[1]),"layout absent from runtime identity");
+        {std::ofstream out(path);out<<layouts.serialize();}
+        require(p::Profile::load(path).serialize()==layouts.serialize(),"layout identity lost in matrix roundtrip");
+        auto compatible=layouts.serialize();
+        compatible.replace(compatible.find("format = 10"),11,"format = 8");
+        {std::ofstream out(path);out<<compatible;}
+        require(p::Profile::load(path).serialize()==layouts.serialize(),"format-8 migration changed measurement identity");
+        auto forced=sample(202,1141140,1);forced["groot_balanced"]="2";
+        bool invalid=false;try{layouts.update(forced);}catch(const std::exception&){invalid=true;}
+        require(invalid,"invalid layout accepted");
+        p::Profile points;points.condition(current);
+        auto original=sample(211,1141140,70),balanced=sample(212,1141140,60),shorter=sample(213,1141140,50);
+        balanced["giant_tail_balance"]="1";shorter["giant_chain_block"]="32";
+        points.update(original);points.update(balanced);points.update(shorter);
+        require(points.samples.size()==3,"point policies pooled their measurements");
+        p::Estimator pm(points,current,p::Ignore::parse("environment"),query);
+        const auto legacy_point=pm.shape(points.samples[0]),balanced_point=pm.shape(points.samples[1]),short_point=pm.shape(points.samples[2]);
+        require(pm.runtime_statistics(legacy_point).seconds==70 && pm.runtime_statistics(balanced_point).seconds==60 &&
+            pm.runtime_statistics(short_point).seconds==50,"point policy absent from exact lookup");
+        require(!pm.eligible(points.samples[1],legacy_point) && !pm.eligible(points.samples[2],legacy_point),"ignore environment crossed point policy");
+        {std::ofstream out(path);out<<points.serialize();}
+        require(p::Profile::load(path).serialize()==points.serialize(),"point policy roundtrip changed");
+        std::vector<p::RuntimeCandidate> chains{{legacy_point,{2,0,70,0},1,true},
+            {balanced_point,{2,0,60,0},2,true}};
+        for(auto &c:chains)c.shape.giant_chunk=2*ecm_stage2::d_catalog::degree(c.shape.d);
+        auto trials=p::runtime_chain_trials(chains);
+        require(trials.size()==1 && trials[0].chain_block==32 && trials[0].tail_balance,"chain search expanded all D/layouts");
+        chains.push_back({trials[0],{1,0,50,0},2,true});
+        require(p::runtime_chain_trials(chains).empty(),"partial chain pair was reproposed");
+        require(p::runtime_choice(chains).index==2 && p::runtime_choice(chains).probe,"partial chain pair not completed");
+        chains.back().statistics.count=2;
+        require(p::runtime_choice(chains,false).index==2 && !p::runtime_choice(chains,false).probe,"faster repeated chain not selected");
+        chains.back().statistics.seconds=100;
+        require(p::runtime_choice(chains,false).index==1,"slower chain displaced protected incumbent");
+        auto single=chains;for(auto &c:single)c.statistics.count=1;
+        require(!p::runtime_choice(single,false).available,"default minimum accepted one observation");
+        require(p::runtime_choice(single,false,1).index==1,"minimum one did not adopt fastest observation");
+        require(p::runtime_choice(single,true,3).probe,"higher minimum did not request more evidence");
+        single.resize(1);
+        require(p::runtime_chain_trials(single,1).size()==1 && p::runtime_chain_trials(single,2).empty(),"chain reference minimum ignored");
+        p::RuntimeSearchBudget one_budget;one_budget.reference=10;one_budget.minimum=1;
+        require(one_budget.permits(11,0,2) && !one_budget.permits(11,0,1),"queue budget ignored configured repeats");
+        p::Profile capped;capped.condition(current);
+        require(capped.update(sample(221,1141140,12),1),"one observation cap rejected first evidence");
+        require(!capped.update(sample(222,1141140,1),1),"one observation cap discarded its boundary");
+        p::Estimator one_model(capped,current,p::Ignore::parse(""),query,true,1);
+        p::WidthPredictor one_predictor(one_model);p::WidthEstimate one_estimate;
+        require(one_predictor.predict(one_model.shape(capped.samples[0]),one_estimate) && one_estimate.runtime_samples==1,
+            "exact runtime prediction ignored minimum one");
+        require(std::string(one_estimate.uncertainty)=="single_runtime_observation","one sample claimed measured dispersion");
+        p::Profile formal_profile;formal_profile.condition(current);auto formal_one=sample(223,1141140,12);
+        formal_one["benchmark_kind"]="\"save\"";formal_one.erase("runtime_sample_id");
+        formal_one["measurement_ids"]=p::encoded_ids({"formal-one"});formal_profile.update(formal_one);
+        p::Estimator formal_min1(formal_profile,current,p::Ignore::parse(""),query,true,1);
+        p::Estimator formal_min2(formal_profile,current,p::Ignore::parse(""),query,true,2);
+        const auto formal_shape=formal_min1.shape(formal_profile.samples[0]);
+        require(formal_min1.observed(formal_shape) && !formal_min2.observed(formal_shape),"formal exact lookup bypassed minimum");
+        p::Estimate formal_estimate;require(formal_min2.predict(formal_shape,formal_estimate) && !formal_estimate.exact,
+            "one formal sample remained exact after raising minimum");
+        std::vector<p::DSearchNode> one_nodes{{1141140,103680,{},1,12,0,1},{1381380,124416,{},2,0,0,0}};
+        require(p::DSearch(one_nodes,1141140,1).next().index==1 && p::DSearch(one_nodes,1141140,2).next().index==0,
+            "D search ignored configured minimum");
+        auto cliff=[](ecm_stage2::Word m,int,ecm_stage2::Word *n,ecm_stage2::Word *slots){
+            *slots=2*m-1;*n=8;while(*n<m*1024)*n*=2;return true;};
+        require(ecm_stage2::select_groot_layout(94,1250000,103680,5987,cliff),"NTT cliff was not selected");
+        auto flat=[](ecm_stage2::Word,int,ecm_stage2::Word *n,ecm_stage2::Word *slots){*n=1ull<<26;*slots=1;return true;};
+        require(!ecm_stage2::select_groot_layout(70,1250000,103680,4423,flat),"layout enabled without an NTT cliff");
+        require(!ecm_stage2::select_groot_layout(94,300000,103680,5987,cliff),"short curve enabled extra layout setup");
+        {ecm_stage2::GrootLayoutScope scope(0);require(!ecm_stage2::select_groot_layout(94,1250000,103680,5987,cliff),"layout scope ignored");}
+        std::vector<p::RuntimeCandidate> families(2);families[0].shape=dense;families[0].shape.carrier=0;
+        families[1].shape=tiled;families[0].statistics={};families[1].statistics={};
+        families[0].statistics.count=families[1].statistics.count=2;
+        families[0].statistics.seconds=100;families[1].statistics.seconds=75;
+        families[1].statistics.seconds=80;
+        require(p::runtime_allocation(families).ordinary_reduced,"exact 20 percent boundary lost to cancellation");
+        families[1].statistics.seconds=75;
+        require(p::runtime_allocation(families).ordinary_reduced,"clear carrier advantage did not reduce exploration");
+        families[1].statistics.count=1;require(!p::runtime_allocation(families).ordinary_reduced,"single observation throttled exploration");
+        families[1].statistics.count=2;families[1].statistics.stddev=4;
+        require(!p::runtime_allocation(families).ordinary_reduced,"uncertain advantage throttled exploration");
+        families[1].statistics.stddev=0;families[1].statistics.seconds=85;
+        require(!p::runtime_allocation(families).ordinary_reduced,"shrinking advantage did not restore exploration");
+        families[0].statistics.seconds=70;
+        require(p::runtime_choice(families,false).index==0,"throttling discarded a faster ordinary incumbent");
+        families[0].statistics.seconds=100;families[1].statistics.seconds=75;
+        auto extra=families[0];extra.shape.groot_balanced=!extra.shape.groot_balanced;
+        extra.statistics.seconds=110;families.push_back(extra);
+        const auto allocation=p::runtime_allocation(families);
+        const auto shared=p::runtime_family_budget(families,families[0].shape,10,allocation);
+        require(shared.candidates==1 && shared.spent==20 && shared.remaining==100,
+            "alternate layout received a duplicate candidate/time budget");
+        families[0].statistics.count=0;families[0].priority=2;
+        families[1].statistics.count=0;families[1].priority=2;families.pop_back();
+        require(p::runtime_choice(families).index==1,"equal-priority layout probe did not prefer carrier");
+        families[0].statistics.count=1;
+        require(p::runtime_choice(families).index==0,"partial ordinary pair was abandoned");
+        std::cout<<"{\"layout_identity\":true,\"ntt_cliff_selection\":true,\"carrier_allocation\":true,\"complete\":true,\"retains_slower_samples\":true,\"cap\":10,\"independent_samples\":12,"
             "\"observed_D_win\":true,\"fastest_mean\":true,\"carrier_first\":true,\"deduplication\":true,"
             "\"cross_version_reuse\":true,\"matrix_roundtrip\":true,\"mean_variance_reference\":true,"
             "\"snapshot_deduplication\":true,\"partial_overlap_rejected\":true,\"ntt_parameter_rows\":true,"

@@ -54,14 +54,14 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [GKL family (iv) 曲线实验](performance/ECM_FRIENDLY_IV.md)：有理挠群、约 420 万组独立群阶/点阶、条件 D_eff、GMP NAF 及 GPU Stage2 因子接续与性能边界。
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
-- [Stage2 性能](performance/STAGE2.md)：0.38.4 完整 GPU 矩阵、普通/承载、版本对照、分项分析与 Montgomery 全范围参考。
+- [Stage2 性能](performance/STAGE2.md)：0.54.7小B2全位宽独立tune复测、布局及阶段占比；冻结双档GPU矩阵、Prime95与Montgomery参考。
 - [Stage2 精确输入与 Prime95 / CPU 参考](performance/EDWARDS_STAGE2.md)：13 个精确余因子、两档实际 B2、Prime95 两曲线族全范围和保留的 libecm 样本。
 - [CPU GW 多项式 Stage2](performance/CPU_GWPOLY_STAGE2.md)：4 GHz、相同精确输入的 Prime95 对照、1/4 线程实测和进程内存。
 - [Tensor NTT 性能](performance/NTT_TENSOR.md)：精确Tensor64/40/N96r64、长度/batch、同卡CUDA/Tensor并发及硬件计数器。
 - [短NTT Graph性能](performance/NTT_GRAPH.md)：缓存生命周期、固定D完整曲线、batch吞吐及管理员Nsight分析。
 - [NTT outer 性能](performance/NTT_OUTER.md)：自动 radix 表、中段 M6 候选、精确门禁和固定 D 对照。
 - [Stage2 主机等待](performance/STAGE2_HOST_WAIT.md)：FIFO 回收、可选低 CPU 模式、固定 D 的耗时与 CPU 对照。
-- [Stage2 准备与同步](performance/STAGE2_PREPARATION.md)：CPU范围、GPU空隙、真实拷贝与等待、pack/补零融合及计时边界。
+- [Stage2 准备与同步](performance/STAGE2_PREPARATION.md)：CPU范围、GPU空隙、拷贝与等待、pack/补零融合；固定D短尾／宽位链长实验、点核并行度及访存瓶颈。
 - [Stage2 G树布局](performance/STAGE2_GTREE_LAYOUT.md)：固定D/P的NTT长度、收益与回退、算术检查及当前自动资格；[实验草稿](development/STAGE2_GTREE_LAYOUT_DRAFT.md)保留实施与失败证据说明。
 - [Stage2 CPU尾部成本](performance/STAGE2_CPU_TAIL.md)：CUDA归一化、少量GCD、块乘积的CPU/GPU对照，完整曲线占比及收益上限。
 - [OpenCL Stage2性能](performance/OPENCL_STAGE2.md)：13位宽普通／承载与CUDA快速矩阵、0.54.4默认宽位反馈、显式巨步递推的固定D及固定提交对照、阶段成本和未覆盖范围。

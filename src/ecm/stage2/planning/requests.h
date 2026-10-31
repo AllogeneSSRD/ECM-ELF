@@ -145,7 +145,7 @@ template<class Query,class Describe> bool request_plan(Word p,Word giant_points,
         Word chunk_max,bool pool,RequestPlan &plan,const ShortNttBatchPolicy *short_ntt=nullptr) {
     plan=RequestPlan{};
     if(bits<2 || bits>max_input_bits || (buffers!=2 && buffers!=3) ||
-       !request_program(p,giant_points,plan.program,giant_tree_balanced((bits+63)/64,giant_points,p)))return false;
+       !request_program(p,giant_points,plan.program,select_groot_layout((bits+63)/64,giant_points,p,bits,query)))return false;
     if(!plan.program.supported)return true;
     const Word w=(bits+63)/64;
     std::map<std::pair<Word,Word>,Word> digits,bigs;

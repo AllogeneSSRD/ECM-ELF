@@ -38,19 +38,51 @@ def stamp():
     return datetime.now(timezone.utc).isoformat()
 
 
-def foreign_gpu_processes(rows, uuid, workspace):
+def shape_fields(text):
+    """Read both historical single-line and current two-line real_shape logs."""
+    result = {}
+    for line in text.splitlines():
+        if line.startswith('real_shape:'):
+            result.update(fields(line, 'real_shape'))
+    if not result:
+        raise ValueError('Missing real_shape')
+    for old, new in [('giant_points', 'giant'), ('num_poly_g', 'poly_g'), ('baby_points', 'baby')]:
+        if old not in result and new in result:
+            result[old] = result.pop(new)
+    return result
+
+
+def shape_records(text):
+    """One geometry per curve, independent of the real_shape line layout."""
+    result=[]; current=[]
+    for line in text.splitlines():
+        if not line.startswith('real_shape:'):
+            continue
+        current.append(line)
+        row=shape_fields('\n'.join(current))
+        if all(k in row for k in ('B1','B2','S_bits','D','P','giant_points','num_poly_g')):
+            result.append(row);current=[]
+    if current:
+        raise ValueError('Incomplete real_shape record')
+    return result
+
+
+def foreign_gpu_processes(rows, uuid, workspace, allowed=()):
     prefix = os.path.normcase(str(Path(workspace).resolve())) + os.sep
+    permitted = {(str(r['pid']), os.path.normcase(r['process_name'])) for r in allowed}
     return [r for r in rows if r['gpu_uuid'].strip() == uuid and
-            not os.path.normcase(os.path.abspath(r['process_name'].strip())).startswith(prefix)]
+            not (os.path.isabs(r['process_name'].strip()) and
+                 os.path.normcase(os.path.abspath(r['process_name'].strip())).startswith(prefix)) and
+            (r['pid'].strip(), os.path.normcase(r['process_name'].strip())) not in permitted]
 
 
-def check_gpu_processes(monitor, workspace, evidence, allow_shared=False):
+def check_gpu_processes(monitor, workspace, evidence, allow_shared=False, allowed=()):
     text = subprocess.check_output(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid,process_name',
                                     '--format=csv'], text=True, encoding='utf-8', errors='replace')
     rows = list(csv.DictReader(io.StringIO(text), skipinitialspace=True))
-    foreign = foreign_gpu_processes(rows, monitor.identity['uuid'], workspace)
+    foreign = foreign_gpu_processes(rows, monitor.identity['uuid'], workspace, allowed)
     write(evidence, dict(utc=stamp(), uuid=monitor.identity['uuid'], processes=rows, foreign=foreign,
-                         shared_allowed=allow_shared))
+                         shared_allowed=allow_shared, allowed_processes=list(allowed)))
     if foreign and not allow_shared:
         raise RuntimeError('Another process uses the measured GPU; retained process snapshot: ' + str(evidence))
 
@@ -107,7 +139,10 @@ def prepare(args, out):
             excluded='Stage1, process startup, outer selection and preflight point checks',
             settings='GPU1 only, no power/clock/priority changes; no concurrent task-owned compilation',
             gpu_process_checks='Before/after each invocation, reject foreign contexts on the selected UUID; snapshots do not cover every instant',
-            shared_device_allowed=args.allow_shared_device))
+            shared_device_allowed=args.allow_shared_device,
+            allowed_processes=[dict(pid=str(pid),process_name=subprocess.check_output(
+                ['powershell','-NoProfile','-Command',f'(Get-Process -Id {pid}).Path'],text=True).strip())
+                for pid in args.allow_gpu_pid]))
     write(out/'plan.json', report)
     return report
 
@@ -121,8 +156,8 @@ def run(args):
         raise ValueError('Collector changed; preserve this study and start a new one')
     if report['failures']:
         raise ValueError('Recorded failures require review')
-    ini = out/'bench.ini'
-    ini.write_text('user=\ncomputer=\nstage2_tune_runtime=0\nstage2_auto_carrier=0\nstage2_ntt_counts=0\n', encoding='utf-8')
+    ini = out/'bench.toml'
+    ini.write_text('[stage2]\nstage2_tune_runtime=false\nstage2_auto_carrier=false\nstage2_ntt_counts=false\n', encoding='utf-8')
     runs = out/'runs'
     runs.mkdir(exist_ok=True)
     cells = []
@@ -152,7 +187,7 @@ def run(args):
                     if prefix.with_suffix('.driver.log').exists():
                         raise ValueError('Unrecorded invocation exists; preserve evidence: '+tag)
                     carrier = case['exponent'] if mode=='gpu-carrier' else 0
-                    command = [report['exe'], '--ini', str(ini), '--save', case['save'],
+                    command = [report['exe'], '--config', str(ini), '--save', case['save'],
                         '--b2', str(ref['b2']), '--curves', '1', '--exponent', str(case['exponent']),
                         '--results', str(prefix.with_suffix('.jsonl')), '--submission', str(prefix.with_suffix('.json.txt')),
                         '--device', '1', '--d', '0', '--short-calibration', '0', '--tune-runtime', '0',
@@ -164,7 +199,7 @@ def run(args):
                     for factor in case['known']:
                         command += ['--known-factor', str(factor)]
                     print('RUN', len(report['runs'])+1, '/', 26*2*report['repeats'], tag, flush=True)
-                    check_gpu_processes(monitor, out, prefix.with_suffix('.processes_before.json'), args.allow_shared_device)
+                    check_gpu_processes(monitor, out, prefix.with_suffix('.processes_before.json'), args.allow_shared_device, report['protocol'].get('allowed_processes',()))
                     started = stamp()
                     start = time.perf_counter()
                     observations = []
@@ -177,7 +212,7 @@ def run(args):
                             time.sleep(.25)
                     wall = time.perf_counter()-start
                     write(prefix.with_suffix('.telemetry.json'), observations)
-                    check_gpu_processes(monitor, out, prefix.with_suffix('.processes_after.json'), args.allow_shared_device)
+                    check_gpu_processes(monitor, out, prefix.with_suffix('.processes_after.json'), args.allow_shared_device, report['protocol'].get('allowed_processes',()))
                     if process.returncode:
                         raise ValueError('Worker failed: '+tag)
                     result = normalize_result(load(prefix.with_suffix('.jsonl')))
@@ -195,13 +230,13 @@ def run(args):
                     if prefix.with_suffix('.debug.log').exists():
                         text += '\n'+prefix.with_suffix('.debug.log').read_text(encoding='utf-8')
                     phase = fields(text, 'stage2_full_wall')
-                    shape = fields(text, 'real_shape')
+                    shape = shape_fields(text)
                     s4 = fields(text, 's4_multiply_stats')
                     if phase['clean']!='1' or abs(float(phase['total'])-float(phase['init'])-float(phase['main']))>.003:
                         raise ValueError('Unclosed timing ledger')
                     if not int(s4['gmp_selftest_cases']) or not int(s4['gmp_checked']) or int(s4['gmp_selftest_bad']) or int(s4['gmp_check_bad']):
                         raise ValueError('Missing or failed arithmetic verification')
-                    labels = ['real_baby','real_batched_split','real_batched_prepare','real_batched_wall',
+                    labels = ['real_baby','groot_layout','real_batched_split','real_batched_prepare','real_batched_wall',
                               'real_giant_base','real_giant_chain','scaled_frontier_device','scaled_root_device',
                               'ntt_workspace_stats','real_init','real_f','real_finv','stage2_phase_wall']
                     row = dict(id=tag, case=case['id'], engine=mode, repeat=repeat,
@@ -238,6 +273,7 @@ if __name__=='__main__':
     parser.add_argument('--max-runs',type=int,default=0)
     parser.add_argument('--timeout',type=float,default=7200)
     parser.add_argument('--allow-shared-device',action='store_true',help='Explicitly allow other processes on the measured GPU; timings may be contended')
+    parser.add_argument('--allow-gpu-pid',type=int,action='append',default=[],help='Explicit approved PID; freeze its executable path and keep rejecting every other foreign process')
     args=parser.parse_args()
     if not args.resume and not (args.exe and args.reference):
         parser.error('New study needs --exe and --reference')

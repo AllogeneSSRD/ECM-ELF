@@ -1,7 +1,7 @@
-"""Read format-8 mean-time matrices for assertions and analysis."""
+"""Read format-8/9/10 mean-time matrices for assertions and analysis."""
 def summaries(document, kind='sample'):
-    if document.get('profile',{}).get('format')!=8:
-        raise ValueError('This reader requires a format-8 mean-time profile')
+    if document.get('profile',{}).get('format') not in (8,9,10):
+        raise ValueError('This reader requires a format-8/9/10 mean-time profile')
     result=[]
     for key, table in document.get('width' if kind=='sample' else 'ntt',{}).items():
         columns,*rows=table['matrix']

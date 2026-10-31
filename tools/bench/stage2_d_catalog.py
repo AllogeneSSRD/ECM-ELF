@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / 'src/core/ecm_stage2_d_catalog.h'
+HEADER = ROOT / 'src/ecm/stage2/planning/d_catalog.h'
 REFERENCE_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47)
 
 

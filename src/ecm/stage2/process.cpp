@@ -49,10 +49,12 @@ int run_curve_process(const CurveProcessRequest &o) {
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
+    if(o.groot_layout>=0)arg(L"--groot-layout",uint64_t(o.groot_layout));
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     arg(L"--pack-zero",o.pack_zero?1:0);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     arg(L"--tune-runtime-samples",o.runtime_samples);
+    arg(L"--tune-min-repeats",o.tune_min_repeats);
     arg(L"--runtime-remaining-curves",o.runtime_remaining);
     arg(L"--runtime-prepare-cache",o.runtime_prepare_cache?1:0);
     if(o.runtime_prepare_cache && !o.runtime_prepare_hints.empty())
@@ -73,6 +75,9 @@ int run_curve_process(const CurveProcessRequest &o) {
     arg(L"--log-level", static_cast<uint64_t>(o.log_level));
     arg(L"--ntt-counts",o.ntt_counts?1:0);
     arg(L"--relocation",o.relocation?1:0);
+    arg(L"--giant-tail-balance",o.giant_tail_balance?1:0);
+    arg(L"--b2-round-chain",o.b2_round_chain?1:0);
+    cmd+=L" --giant-chain "+quote(std::wstring(o.giant_chain.begin(),o.giant_chain.end()));
     cmd += L" --results " + quote(results.wstring());
     if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
     if(!o.submission_ini.empty())cmd+=L" --config "+quote(fs::path(o.submission_ini).wstring());

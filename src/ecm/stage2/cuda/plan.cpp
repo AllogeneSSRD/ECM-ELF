@@ -1,3 +1,4 @@
+#include "../giant_policy.h"
 // Bounds, D selection, memory/request queries and plan reporting. No curve execution.
 #include "plan.h"
 #include "options.h"
@@ -322,7 +323,7 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
             },memory_policy,s4_policy,*p.resident_workspace_memory,true,{},&owner_policy))return 3;
         ecm_stage2::GiantMemoryPolicy giant_policy;
         giant_policy.compact_products=s3_compact_products_requested();
-        giant_policy.chain_block=std::min(1ull<<20,std::max(4ull,fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)));
+        giant_policy.chain_block=ecm_stage2::giant_chain_points();
         giant_policy.short_block=fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0);
         if(giant_policy.short_block)giant_policy.short_block=std::min(64ull,std::max(4ull,giant_policy.short_block));
         giant_policy.short_max=std::min(1ull<<20,fuse_env_ull("NTT_GIANT_CHAIN_SMALL_MAX",8192));
@@ -367,6 +368,9 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
             }
             const auto giant_chunk=stage2_giant_chunk::plan(P_baby,nw,point_bytes,
                 fold_device_flag("NTT_GIANT_CHUNK_FLOOR"));
+            giant_policy.tail_balance=ecm_stage2::giant_tail_balance_requested() && !giant_policy.force_ladder &&
+                giant_policy.seed_device && giant_policy.resident_requested && giant_policy.resident_eligible &&
+                giant_policy.exact_segments && giant_chunk.coordinate_bytes<=giant_policy.resident_limit_bytes;
             if(!giant_chunk.valid || !ecm_stage2::giant_memory_plan(P_baby,p.giant_points,nw,
                 giant_chunk.points,giant_policy,*p.giant_memory))return 3;
         }
@@ -467,10 +471,12 @@ int ecm_cuda_stage2_plan(
     const int code=query_stage2_plan(n_hex,sigma,b1,b2,d,p,carrier_exponent);
     if(code)return code;
     const auto &g=p.geometry;
+    const bool groot_balanced=ecm_stage2::select_groot_layout(g.words,p.giant_points,g.p,g.bits,
+        [](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){return ntt_shape_query(m,bits,n,nullptr,nullptr,nullptr,nullptr,slots);});
     const auto relocation=ecm_stage2::giant_range(p.b2,p.d,g_relocation_enabled);
     std::ostringstream json;json<<std::setprecision(17)
         <<"{\"type\":\"stage2_plan\",\"schema\":1,\"curves_executed\":0,\"bits\":"<<g.bits
-        <<",\"target_bits\":"<<p.target_bits<<",\"carrier_exponent\":"<<p.carrier_exponent
+        <<",\"target_bits\":"<<p.target_bits<<",\"carrier_exponent\":"<<p.carrier_exponent<<",\"groot_balanced\":"<<int(groot_balanced)
         <<",\"words\":"<<g.words<<",\"workspace_buffers\":"<<g.workspace_buffers<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
         <<",\"relocation\":"<<int(g_relocation_enabled)<<",\"relocation_first\":"<<relocation.first
@@ -694,6 +700,7 @@ int ecm_cuda_stage2_plan(
             <<",\"value_bytes\":"<<m.value_bytes<<",\"product_bytes\":"<<m.product_bytes
             <<",\"final_point_capacity\":"<<m.final_point_capacity
             <<",\"policy\":{\"chain_block\":"<<v.chain_block<<",\"short_block\":"<<v.short_block
+            <<",\"tail_balance\":"<<(v.tail_balance?"true":"false")
             <<",\"short_max\":"<<v.short_max<<",\"chain_min\":"<<v.chain_min
             <<",\"wide_tail_chain\":"<<(v.wide_tail_chain?"true":"false")
             <<",\"segment\":"<<v.segment<<",\"group\":"<<v.group

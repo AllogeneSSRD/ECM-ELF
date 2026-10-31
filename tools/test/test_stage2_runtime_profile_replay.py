@@ -60,7 +60,7 @@ def main():
     report = dict(identities=identities, timing_scope='planning only; no Stage2 kernels or timing claim')
 
     def call(label, exe, explore):
-        command = [str(exe.resolve()), '--ini', str(ini), '--device', str(a.device),
+        command = [str(exe.resolve()), '--config', str(ini), '--device', str(a.device),
                    '--worktodo', str(out / ('four.txt' if explore else 'one.txt')), '--once', '--plan-only',
                    '--b2', str(a.b2), '--batch-mb', str(a.batch_mb), '--arena-mb', str(a.arena_mb),
                    '--owner-budget-mb', str(a.fold_mb), '--short-calibration', '0',

@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-from bench_stage2_version import ROOT, load, write, stamp, validate, check_gpu_processes
+from bench_stage2_version import ROOT, load, write, stamp, validate, check_gpu_processes, shape_records
 from bench_stage2_n_scaling import Monitor, fields, number
 from result_format import normalize_result
 sys.path.insert(0,str(ROOT/'tools/test'))
@@ -36,11 +36,12 @@ def observation_key(sample):
         'fold_resident','frontier_resident','giant_chunk_points','giant_chain_min','giant_force_ladder'))
 
 
-def queue_rows(folder,case,cell,version,count,planned_count=None,allow_unfinished_tail=False):
+def queue_rows(folder,case,cell,version,count,planned_count=None,allow_unfinished_tail=False,requested_d=0):
     raw=[json.loads(line) for line in (folder/'result.jsonl').read_text(encoding='utf-8-sig').splitlines() if line.strip()]
     text=(folder/'engine.log').read_text(encoding='utf-8')
     labels=['stage2_full_wall','s4_multiply_stats','real_shape','real_batched_split','ntt_workspace_stats']
     logs={k:log_rows(text,k) for k in labels}
+    logs['real_shape']=shape_records(text)
     parent=re.findall(r'curve_done:.*?\bwall=([\d.]+)',(folder/'console.log').read_text(encoding='utf-8'))
     valid_logs=all(count<=len(v)<=count+int(allow_unfinished_tail) for v in logs.values())
     if len(raw)!=count or len(parent)!=count or not valid_logs:
@@ -54,7 +55,7 @@ def queue_rows(folder,case,cell,version,count,planned_count=None,allow_unfinishe
         if record['status']!='NF' or row['status']!='stage2_completed' or row['factors'] or row['bad_factors']:
             raise ValueError('Need complete, mathematically checked NF records')
         choice=row['tune_plan'];d,p=number(shape['D']),number(shape['P']);carrier=row['carrier_exponent']
-        if row['requested_D']!=0 or carrier not in (0,case['exponent']) or (d,p,carrier)!=(choice['D'],choice['P'],choice['carrier_exponent']):
+        if row['requested_D']!=requested_d or carrier not in (0,case['exponent']) or (d,p,carrier)!=(choice['D'],choice['P'],choice['carrier_exponent']):
             raise ValueError('Executed geometry differs from automatic choice')
         if choice['model']!='runtime_shape_mean_v2' or (not choice['runtime_probe'] and choice['reason']!='runtime_measured_fastest'):
             raise ValueError('Expected the current runtime selector')

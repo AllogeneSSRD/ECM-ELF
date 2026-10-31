@@ -1,3 +1,4 @@
+#include "../giant_policy.h"
 #include "host_wait.h"
 // Giant batches, fold/descent phases and factor scanning within one curve.
 #include "point_launch.h"
@@ -23,13 +24,14 @@ BatchedRun run_batched(
     const unsigned long long imax = range.points;
     const double t_entry = now_s();
     const size_t P = Fdeg[1];                            /* deg F = the baby count = poly_size */
-    const bool balanced_groot=ecm_stage2::giant_tree_balanced(W,imax,P);
+    const bool balanced_groot=ecm_stage2::select_groot_layout(W,imax,P,int(L.S),
+        [](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){return ntt_shape_query(m,bits,n,nullptr,nullptr,nullptr,nullptr,slots);});
     if(!L.s4) {
         std::fprintf(stderr,"%s: FATAL: scaled descent needs S4 and cannot be combined with S5\n",NTT_PROBE_NAME);
         std::exit(3);
     }
     const bool fold_flat_enabled=g_fold_flat && L.s4;
-    BatchedRun R;
+    BatchedRun R;R.groot_balanced=balanced_groot;
     R.fold_device.root_requested=fold_device_flag("NTT_GROOT_TO_FOLD");
     R.fold_flat.enabled=fold_flat_enabled;
     R.P = P;
@@ -38,7 +40,7 @@ BatchedRun run_batched(
     stage2_log::print(stage2_log::debug,
         "groot_layout: balanced=%d words=%llu points=%llu P=%llu full_groups=%llu policy=%s\n",
         (int)balanced_groot,(unsigned long long)W,imax,(unsigned long long)P,imax/P,
-        std::getenv("NTT_GROOT_BALANCED")?"fixed_shape_experiment":"wide_repeated_v1");
+        std::getenv("NTT_GROOT_BALANCED")?"forced":ecm_stage2::groot_layout_override>=0?"selected":"ntt_cliff_v2");
     R.dbg_progress = true;                  /* one line per G-tree batch: gate-able, machine-readable */
     L.cost.S = (long)L.S;                              /* (already set by the caller) */
 
@@ -190,6 +192,8 @@ BatchedRun run_batched(
         "coordinate_cap_bytes=%llu minimum_over_budget=%d estimated_chunks=%llu\n",
         point_floor,point_kb*1024,(unsigned long long)P,(unsigned long long)C.nw,pts_per_chunk,
         (unsigned long long)point_plan.coordinate_bytes,point_plan.minimum_over_budget,point_chunks);
+    stage2_log::print(stage2_log::debug,"giant_point_policy: tail_balance=%d chain_block=%llu\n",
+        (int)ecm_stage2::giant_tail_balance_requested(),ecm_stage2::giant_chain_points());
     unsigned long long actual_point_chunks=0;
     // One continuous interval includes chunk-local destruction between iterations.
     stage2_log::phase("Giant points, G trees and fold");
@@ -209,7 +213,7 @@ BatchedRun run_batched(
         fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768);
     for (unsigned long long c0 = 0; c0 < imax;) {
         ++actual_point_chunks;
-        const auto take=ecm_stage2::giant_chunk_take(imax-c0,pts_per_chunk,P,rebalance_min,range.active);
+        const auto take=ecm_stage2::giant_chunk_take(imax-c0,pts_per_chunk,P,rebalance_min,(range.active || ecm_stage2::giant_tail_balance_requested()) && rebalance_resident && !fold_device_flag("NTT_GIANT_LADDER"));
         const unsigned long long c1=c0+take;
         const size_t clo=(size_t)(range.first+c0),chi=(size_t)(range.first+c1-1);
         if(range.active)stage2_log::print(stage2_log::debug,
@@ -220,8 +224,8 @@ BatchedRun run_batched(
         /* THE CHAIN BY DEFAULT (see s2g_chain_kernel): one differential addition per giant point
            instead of a full ladder.  NTT_GIANT_LADDER=1 forces the old per-point ladder (kept as
            the oracle), NTT_GIANT_CHAIN_CHECK=1 runs BOTH and compares the affine x values,
-           NTT_GIANT_CHAIN_BLOCK=n sets the points per thread (default 256: at the real shape that
-           is 786 blocks per chunk, one seed launch, and ~10-30 ms of chain work per chunk). */
+           NTT_GIANT_CHAIN_BLOCK=n sets points per thread (production: 64). The paired seed launch
+           initializes each chain; its grid size and cost depend on the actual point chunk. */
         /* NTT_GIANT_CHAIN_BLOCK: points per thead.  The default is deliberately SMALL (64) even
            though a larger block is cheaper in arithmetic: a chain that passes through a point
            with Z not invertible mod N (i.e. a point that is the identity modulo one of N's
@@ -233,13 +237,7 @@ BatchedRun run_batched(
            64/128/200/512/1000).  A small block bounds that damage; the seed cost is 2 ladder
            points per block, i.e. ~18 Montgomery multiplications per point at 64 (still ~32x less
            than the ladder's ~574).  Set NTT_GIANT_CHAIN_BLOCK to trade the two. */
-        static const unsigned long long chain_block = [] {
-            const char *e = std::getenv("NTT_GIANT_CHAIN_BLOCK");
-            unsigned long long v = (e && *e) ? std::strtoull(e, nullptr, 10) : 64ull;
-            if (v < 4) v = 4;
-            if (v > 1u << 20) v = 1u << 20;
-            return v;
-        }();
+        const auto chain_block=ecm_stage2::giant_chain_points();
         /* Opt-in short-chunk policy: more independent chains, shorter serial
            xADD loops. The global block remains unchanged for large chunks. */
         static const unsigned long long short_chain_block = [] {
@@ -288,7 +286,8 @@ BatchedRun run_batched(
             16ull*npts*W<=maxbytes;
         const auto chain_min=device_leaf && g_giant_seed_device?
             ecm_stage2::giant_chain_minimum(W,configured_chain_min,maxbytes):configured_chain_min;
-        const bool wide_tail=g_giant_seed_device && npts<configured_chain_min && chain_min<configured_chain_min;
+        const bool wide_tail=g_giant_seed_device && ((npts<configured_chain_min && chain_min<configured_chain_min) ||
+            ecm_stage2::giant_tail_balance_requested() || chain_block!=64);
         if(requested && !device_leaf)++R.device_leaf.fallback_chunks;
         gseg.assign(((size_t)npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG * (size_t)C.nw, 0ull);
         const unsigned long long effective_chain_block=ecm_stage2::giant_chain_block(
@@ -973,7 +972,9 @@ BatchedRun run_batched(
         words_to_mpz(bv, bprod[b].data(), W);
         mpz_gcd(bg, bv, L.target());
         if(mpz_cmp_ui(bg,1)>0)R.tail.nonunit=true; // includes gcd=N before the legacy extraction gate
-        if (mpz_cmp_ui(bg, 1) > 0 && mpz_cmp(bg, L.target()) < 0) {
+        // gcd(block,N)==N can still contain leaves with proper divisors.
+        // Inspect those leaves too; only gcd==1 proves this entire block clean.
+        if (mpz_cmp_ui(bg, 1) > 0) {
             ++R.hit_blocks;                             /* a real hit: only NOW do we look at
                                                            the individual leaf values */
 

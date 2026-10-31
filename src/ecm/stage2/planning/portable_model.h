@@ -10,11 +10,12 @@ struct Shape {
     bool short_batch_tune=false;
     Word short_batch_hash=0;
     Word giant_chunk=0,chain_min=32768;bool force_ladder=false;
-    using Key=std::array<Word,18>;
+    bool groot_balanced=false,tail_balance=false;Word chain_block=64;
+    using Key=std::array<Word,21>;
     Key key()const {
         return {target_bits,arithmetic_bits,carrier,b1,b2,d,batch_bytes,chunk_max,buffers,
             Word(physical),Word(fold),Word(frontier),Word(mersenne),Word(short_batch_tune),
-            short_batch_hash,giant_chunk,chain_min,Word(force_ladder)};
+            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block};
     }
 };
 struct Work {
@@ -32,7 +33,7 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
        s.b1<2 || s.b2<=s.b1 || s.d<6 || s.d%2 || !s.batch_bytes)return false;
     out.p=d_catalog::degree(s.d);out.points=s.b2/s.d+2;
     RequestProgram program;if(!request_program(out.p,std::max(out.points,out.p+1),program,
-        giant_tree_balanced((s.arithmetic_bits+63)/64,out.points,out.p)))return false;
+        s.groot_balanced))return false;
     if(out.points<=out.p) {
         // G=1 has a local root division/inverse. Use a conservative full-degree
         // cost surrogate, without claiming the resident request topology.
@@ -66,26 +67,31 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
         if(host)out.transfer[r.phase]+=pairs*(r.ma+r.mb+r.count)*words*8;
     }
     out.baby=out.p*words*words*std::log2(double(s.d));
-    GiantWork route;
-    if(s.giant_chunk && giant_work(out.points,s.d,s.giant_chunk,s.chain_min,s.force_ladder,route))
-        out.giant=words*words*(6.*route.chain_points+12.*route.ladder_steps);
+    GiantWork legacy;GiantPointWork route;
+    // Keep qualified default D predictions unchanged. The seed-aware prior is
+    // opt-in with the new point policies until a full matrix qualifies it.
+    if(!s.tail_balance && s.chain_block==64 && s.giant_chunk &&
+       giant_work(out.points,s.d,s.giant_chunk,s.chain_min,s.force_ladder,legacy))
+        out.giant=words*words*(6.*legacy.chain_points+12.*legacy.ladder_steps);
+    else if(s.giant_chunk && giant_point_work(out.points,s.d,s.giant_chunk,s.chain_min,s.force_ladder,s.chain_block,out.p,s.tail_balance,route))
+        out.giant=words*words*route.modmuls();
     else out.giant=out.points*words*words*12.*std::log2(double(s.b2));
     out.accum=out.p*target_words*target_words;
     return true;
 }
 // Coarse regions, not an identity for all requests or a memory admission proof.
 struct NttInterval {
-    std::array<Word,8> key{};
+    std::array<Word,9> key{};
     bool operator<(const NttInterval &other)const{return key<other.key;}
 };
 inline NttInterval interval(const Shape &s,const Work &w) {
     Word levels=0,pad=1;while(pad<w.p){pad*=2;++levels;}
     GiantWork giant;Word route=0;
-    if(s.giant_chunk && giant_work(w.points,s.d,s.giant_chunk,s.chain_min,s.force_ladder,giant))
+    if(s.giant_chunk && giant_work(w.points,s.d,s.giant_chunk,s.chain_min,s.force_ladder,giant,w.p,s.tail_balance))
         route=giant.chain_points?(giant.ladder_steps?2:1):3;
     return {{w.largest_phase_ntt[RequestFold],w.largest_phase_ntt[RequestInverse],
         w.largest_phase_ntt[RequestFtree],levels,Word(s.fold),Word(s.frontier),route,
-        w.largest_phase_ntt[RequestDescent]}};
+        w.largest_phase_ntt[RequestDescent],w.largest_phase_ntt[RequestGtrees]}};
 }
 inline double relative_work(const Work &a,const Work &b) {
     auto ratio=[](double x,double y){return y>0?x/y:1.;};
@@ -115,18 +121,20 @@ public:
     ShortNttBatchPolicy short_ntt;
     // Each estimator requires an immutable profile and NTT policy while ranking.
     // New observations/conditions require a fresh estimator, never stale ranks.
-    mutable std::map<std::array<Word,18>,std::pair<bool,Work>> work_cache;
+    mutable std::map<Shape::Key,std::pair<bool,Work>> work_cache;
     std::set<const Fields*> profile_samples;
     mutable std::map<const Fields*,Shape> sample_shapes;
     mutable std::map<Word,bool> matching_conditions;
     const bool memoize_costs;
+    const Word minimum_repeats;
     mutable Word ntt_cost_evaluations=0,ntt_cost_hits=0;
     mutable std::map<std::pair<Word,Word>,double> ntt_cost_cache;
     mutable std::map<Shape::Key,RuntimeStatistics> runtime_cache;
     std::vector<const Fields*> runtime_samples;
     struct Fit {bool valid=false;B2Features coefficients{};double error=0;Word low=0,high=0;};
     mutable std::map<std::array<Word,13>,Fit> fit_cache;
-    Estimator(const Profile &p,Fields current,Ignore ign,Query q,bool memoize=true):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)),memoize_costs(memoize) {
+    Estimator(const Profile &p,Fields current,Ignore ign,Query q,bool memoize=true,Word minimum=2):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)),memoize_costs(memoize),minimum_repeats(minimum) {
+        if(!minimum || minimum>1000)throw std::runtime_error("tune minimum repeats must be 1..1000");
         for(const auto &s:p.samples) {
             profile_samples.insert(&s);
             if(runtime_observation(s) && measured(s) &&
@@ -177,6 +185,8 @@ public:
         x.fold=uint(s,"fold_resident")!=0;x.frontier=uint(s,"frontier_resident")!=0;x.mersenne=text(s,"modulus_kind")=="mersenne";
         x.giant_chunk=optional_uint(s,"giant_chunk_points");x.chain_min=optional_uint(s,"giant_chain_min",32768);
         x.force_ladder=optional_uint(s,"giant_force_ladder")!=0;
+        x.tail_balance=optional_uint(s,"giant_tail_balance")!=0;x.chain_block=optional_uint(s,"giant_chain_block",64);
+        x.groot_balanced=sample_groot_layout(s);
         const auto &c=profile.conditions.at(uint(s,"condition"));
         x.batch_bytes=optional_uint(c,"env_s4_batch_mb",64)*1048576;
         x.buffers=optional_uint(c,"env_workspace_reuse_bq")?2:3;
@@ -188,6 +198,7 @@ public:
         if(profile_samples.count(&s))sample_shapes.emplace(&s,x);return x;
     }
     bool eligible(const Fields &s,const Shape &x)const {
+        if(optional_uint(s,"giant_tail_balance")!=Word(x.tail_balance) || optional_uint(s,"giant_chain_block",64)!=x.chain_block)return false;
         if(!measured(s))return false;
         const auto id=uint(s,"condition");auto at=matching_conditions.find(id);
         if(at==matching_conditions.end())at=matching_conditions.emplace(id,matches(profile.conditions.at(id),condition,ignore)).first;
@@ -304,10 +315,10 @@ public:
         }
         if(!out.anchor)return false;
         const auto &a=*out.anchor;const auto sh=shape(a);
-        out.exact=!runtime_observation(a) && x.target_bits==sh.target_bits && x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d &&
+        out.exact=!runtime_observation(a) && uint(a,"repeats")>=minimum_repeats && x.target_bits==sh.target_bits && x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d &&
             x.b2==sh.b2 && x.batch_bytes==sh.batch_bytes && x.buffers==sh.buffers &&
             x.physical==sh.physical && x.chunk_max==sh.chunk_max && x.giant_chunk==sh.giant_chunk &&
-            x.chain_min==sh.chain_min && x.force_ladder==sh.force_ladder &&
+            x.chain_min==sh.chain_min && x.force_ladder==sh.force_ladder && x.groot_balanced==sh.groot_balanced && x.tail_balance==sh.tail_balance && x.chain_block==sh.chain_block &&
             x.fold==sh.fold && x.frontier==sh.frontier &&
             x.short_batch_tune==sh.short_batch_tune && x.short_batch_hash==sh.short_batch_hash &&
             matches(profile.conditions.at(uint(a,"condition")),condition,Ignore::parse(""));
@@ -323,7 +334,7 @@ public:
                 if(sh.target_bits==x.target_bits && sh.arithmetic_bits==x.arithmetic_bits && sh.d==x.d &&
                    sh.batch_bytes==x.batch_bytes && sh.buffers==x.buffers && sh.chunk_max==x.chunk_max &&
                    sh.physical==x.physical && sh.giant_chunk==x.giant_chunk && sh.chain_min==x.chain_min &&
-                   sh.force_ladder==x.force_ladder && sh.fold==x.fold && sh.frontier==x.frontier &&
+                   sh.force_ladder==x.force_ladder && sh.groot_balanced==x.groot_balanced && sh.tail_balance==x.tail_balance && sh.chain_block==x.chain_block && sh.fold==x.fold && sh.frontier==x.frontier &&
                    sh.short_batch_tune==x.short_batch_tune && sh.short_batch_hash==x.short_batch_hash)same.push_back(&s);
             }
             std::sort(same.begin(),same.end(),[](const Fields *a,const Fields *b){return uint(*a,"b2")<uint(*b,"b2");});
@@ -353,12 +364,12 @@ public:
         for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
             // A single production curve calibrates a width region. It does not
             // establish an exact paired benchmark with zero dispersion.
-            if(runtime_observation(s))continue;
+            if(runtime_observation(s) || uint(s,"repeats")<minimum_repeats)continue;
             const auto a=shape(s);
             if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits || a.carrier!=x.carrier || a.d!=x.d ||
                a.b2!=x.b2 || a.batch_bytes!=x.batch_bytes || a.physical!=x.physical ||
                a.buffers!=x.buffers || a.chunk_max!=x.chunk_max || a.giant_chunk!=x.giant_chunk ||
-               a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min ||
+               a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min || a.groot_balanced!=x.groot_balanced || a.tail_balance!=x.tail_balance || a.chain_block!=x.chain_block ||
                a.fold!=x.fold || a.frontier!=x.frontier || a.short_batch_tune!=x.short_batch_tune ||
                a.short_batch_hash!=x.short_batch_hash)continue;
             if(!best || real(s,"mean_seconds")<real(*best,"mean_seconds"))best=&s;

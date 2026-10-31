@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'bench'))
-from bench_stage2_version import foreign_gpu_processes, load, validate
+from bench_stage2_version import foreign_gpu_processes, load, validate, shape_fields
 from bench_stage2_n_scaling import fields, number
 from result_format import normalize_result
 
@@ -22,8 +22,10 @@ def audit(study, expected_repeats=3):
     cases = {c['id']: c for c in plan['cases']}
     original_cases = {c['id']:c for c in load(Path(plan['reference'])/'plan.json')['cases']}
     refs = [r for r in plan['prime95_rows'] if r['curve_type']=='Edwards' and r['benchmark_eligible']]
-    if len(refs) != 26:
-        raise ValueError('Need 26 exact Edwards reference conditions')
+    bounds=plan.get('matrix_bounds',[26000000000,260000000000])
+    refs=[r for r in refs if r['b2_requested'] in bounds]
+    if len(refs) != 13*len(bounds):
+        raise ValueError('Missing exact Edwards reference conditions in declared B2 scope')
     expected = set()
     for case in cases.values():
         original_case = original_cases[case['id']]
@@ -44,14 +46,14 @@ def audit(study, expected_repeats=3):
         if points[0][1] != 'POINT':
             raise ValueError('Stage1 input is incomplete')
         matched = [r for r in refs if r['N_hex']==case['N_hex'] and int(r['s'])==case['sigma'] and r['b1']==case['b1']]
-        if len(matched) != 2 or len({r['b2_requested'] for r in matched}) != 2:
+        if len(matched) != len(bounds) or len({r['b2_requested'] for r in matched}) != len(bounds):
             raise ValueError('Missing or duplicate reference bound')
         for ref in matched:
             for mode in ('gpu', 'gpu-carrier'):
                 for repeat in range(1,expected_repeats+1):
                     expected.add(f'{case["id"]}_b{ref["b2"]}_{mode}_r{repeat}')
     ids = Counter(r['id'] for r in plan['runs'])
-    if set(ids) != expected or any(n != 1 for n in ids.values()) or len(expected) != 52*expected_repeats:
+    if set(ids) != expected or any(n != 1 for n in ids.values()) or len(expected) != 26*len(bounds)*expected_repeats:
         raise ValueError('Missing, duplicate or extra invocation')
     checked = selftests = 0
     geometries = {}; process_snapshots = 0; selected_uuid = None
@@ -78,7 +80,7 @@ def audit(study, expected_repeats=3):
         text += '\n'+prefix.with_suffix('.debug.log').read_text(encoding='utf-8')
         phase = fields(text, 'stage2_full_wall')
         s4 = fields(text, 's4_multiply_stats')
-        shape = fields(text, 'real_shape')
+        shape = shape_fields(text)
         if phase != run['phase_seconds'] or shape != run['shape'] or s4 != run['s4']:
             raise ValueError('Recorded metrics differ from raw logs')
         if phase['clean'] != '1' or abs(float(phase['total'])-float(phase['init'])-float(phase['main'])) > .003:
@@ -137,7 +139,10 @@ def audit(study, expected_repeats=3):
                 selected_uuid = uuid
                 if snapshot['shared_allowed'] != plan['protocol']['shared_device_allowed']:
                     raise ValueError('GPU sharing protocol differs')
-                foreign = foreign_gpu_processes(snapshot['processes'], uuid, study)
+                allowed=plan['protocol'].get('allowed_processes',[])
+                if snapshot.get('allowed_processes',[])!=allowed:
+                    raise ValueError('GPU process allowlist changed')
+                foreign = foreign_gpu_processes(snapshot['processes'], uuid, study,allowed)
                 if foreign != snapshot['foreign'] or (foreign and not snapshot['shared_allowed']):
                     raise ValueError('Foreign GPU context in a retained process snapshot')
                 process_snapshots += 1

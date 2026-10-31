@@ -1,5 +1,5 @@
 #pragma once
-#include "geometry.h"
+#include "giant_schedule.h"
 
 namespace ecm_stage2 {
 // Preserve the complete original grid, including guard coverage. Relocation
@@ -21,21 +21,4 @@ inline GiantRange giant_range(Word b2,Word d,bool enabled) {
     }
     return r;
 }
-// Borrow whole G batches from the penultimate point chunk. Preserve capacity,
-// point count and chunk count; never turn either of the two chunks into a ladder.
-inline Word giant_tail_borrow(Word points,Word capacity,Word p,Word minimum,bool rebalance) {
-    if(!rebalance || !capacity || !p || capacity%p || points<=capacity || !minimum)return 0;
-    const Word tail=points%capacity;
-    if(!tail || tail>=minimum)return 0;
-    const Word deficit=minimum-tail;
-    Word borrow=0;
-    if(!multiply(deficit/p+(deficit%p!=0),p,borrow) || borrow>=capacity ||
-       capacity-borrow<minimum || tail>capacity-borrow)return 0;
-    return borrow;
-}
-inline Word giant_chunk_take(Word remaining,Word capacity,Word p,Word minimum,bool rebalance) {
-    if(remaining<=capacity)return remaining;
-    const auto borrow=giant_tail_borrow(remaining,capacity,p,minimum,rebalance);
-    return borrow && remaining/capacity==1 ? capacity-borrow : capacity;
-}
-}
+} // namespace ecm_stage2

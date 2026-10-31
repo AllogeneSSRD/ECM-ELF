@@ -4,13 +4,15 @@
 #include "ecm/stage2/probability.h"
 #include "ecm/stage2/planning/stage1_cost.h"
 #include "d_search.h"
+#include "../giant_tree.h"
 #include <chrono>
 #include <charconv>
 #include <ctime>
 #include "ecm/platform/program_version.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=8;
+constexpr unsigned format=10;
+inline bool supported_format(Word value){return value==8 || value==9 || value==format;}
 inline constexpr const char *matrix_column_order[]={
 #define ECM_STAGE2_TUNE_COLUMN(name) #name,
 #define ECM_STAGE2_TUNE_NTT_COLUMN(name)
@@ -230,6 +232,12 @@ inline void validate_ntt_summary(const Fields &s) {
 inline void strip_ntt_auxiliary_timing(Fields &s) {
     for(const char *key:{"setup_seconds","warmup_seconds","verification_seconds"})s.erase(key);
 }
+inline bool sample_groot_layout(const Fields &s) {
+    if(s.count("groot_balanced"))return uint(s,"groot_balanced")!=0;
+    const auto bits=optional_uint(s,"arithmetic_bits",optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"));
+    const auto d=uint(s,"d");if(d<6)throw std::runtime_error("invalid layout D");
+    return legacy_groot_layout((bits+63)/64,uint(s,"b2")/d+2,cost::phi(d)/2);
+}
 inline std::string runtime_group(const Fields &s) {
     std::string key;
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
@@ -238,7 +246,8 @@ inline std::string runtime_group(const Fields &s) {
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"}) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
-    return key;
+    key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
+    return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
 inline std::string scope(const Fields &s) {
     // Formal calibration and production timing remain distinct populations.
@@ -250,9 +259,12 @@ inline std::string scope(const Fields &s) {
     }
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"})
         key+=std::string(field)+'='+std::to_string(optional_uint(s,field, std::string(field)=="giant_chain_min"?32768:0))+';';
-    return key;
+    key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
+    return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
 inline void validate(const Fields &s) {
+    if(optional_uint(s,"giant_tail_balance")>1 || (optional_uint(s,"giant_chain_block",64)!=32 && optional_uint(s,"giant_chain_block",64)!=64))throw std::runtime_error("invalid point policy");
+    if(optional_uint(s,"groot_balanced")>1)throw std::runtime_error("invalid G-root layout");
     validate_provenance(s);
     const auto bits=uint(s,"target_bits"),arithmetic=uint(s,"arithmetic_bits"),carrier=uint(s,"carrier_exponent");
     const auto b1=uint(s,"b1"),b2=uint(s,"b2"),d=uint(s,"d");
@@ -363,6 +375,9 @@ inline std::string compact_literal(const std::string &value) {
 }
 
 inline Fields compact_sample(Fields s) {
+    if(!s.count("groot_balanced"))s["groot_balanced"]=sample_groot_layout(s)?"1":"0";
+    if(!s.count("giant_tail_balance"))s["giant_tail_balance"]="0";
+    if(!s.count("giant_chain_block"))s["giant_chain_block"]="64";
     validate(s);
     if(measured(s)) {
         s["verified"]="1";s["measurement_ids"]=encoded_ids(measurement_ids(s));
@@ -370,7 +385,7 @@ inline Fields compact_sample(Fields s) {
     }
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
-        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder",
+        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
@@ -437,6 +452,9 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
             {"p",std::to_string(cost::phi(uint(s,"d"))/2)},
             {"execution_path",ecm_stage2::tune::portable::quoted(uint(s,"fold_resident")?(uint(s,"frontier_resident")?"resident":"host_frontier"):"host_fold_frontier")}};
         for(const auto &f:derived){if(s.count(f.first) && s.at(f.first)!=f.second)throw std::runtime_error("inconsistent derived tune field");s[f.first]=f.second;}
+        if(!s.count("groot_balanced"))s["groot_balanced"]=sample_groot_layout(s)?"1":"0";
+        if(!s.count("giant_tail_balance"))s["giant_tail_balance"]="0";
+        if(!s.count("giant_chain_block"))s["giant_chain_block"]="64";
     }
 }
 struct Profile {
@@ -455,7 +473,7 @@ struct Profile {
         sample=compact_sample(std::move(sample));
         const auto key=scope(sample);
         if(runtime_observation(sample)) {
-            if(runtime_limit<2 || runtime_limit>1000)throw std::runtime_error("runtime sample limit must be 2..1000");
+            if(runtime_limit<1 || runtime_limit>1000)throw std::runtime_error("runtime sample limit must be 1..1000");
         }
         for(auto &old:samples)if(scope(old)==key) {
             if(measured(old) && !measured(sample))return false;
@@ -555,12 +573,12 @@ struct Profile {
                 if(!value.empty() && value.front()=='[')throw std::runtime_error("sampling arrays are not tune summaries");
                 const auto parsed=fields("{\""+key+"\":"+value+"}");
                 if(!table->emplace(key,parsed.at(key)).second)throw std::runtime_error("duplicate tune field");
-                if(table==&out.metadata && key=="format" && uint(out.metadata,"format")!=format)
+                if(table==&out.metadata && key=="format" && !supported_format(uint(out.metadata,"format")))
                     throw UnsupportedFormat();
             }
         }
         finish();
-        if(!in.eof() || uint(out.metadata,"format")!=format || required(out.metadata,"unit")!="\"full_stage2\"" ||
+        if(!in.eof() || !supported_format(uint(out.metadata,"format")) || required(out.metadata,"unit")!="\"full_stage2\"" ||
            out.conditions.empty())
             throw std::runtime_error("invalid tune header");
         std::set<std::string> scopes;

@@ -153,6 +153,20 @@ int main() {
         check(fallback.valid && fallback.finished && fallback.transient_peak_bytes>0 && fallback.released_bytes==0);
         check(compressed_cases>0 && noncoincident>0);
         check(giant_compressed>0);
+        // Borrowed penultimate chunks are not repeatable full-chunk cycles.
+        // Compare event-by-event execution with compression after many full
+        // chunks, for both finite chain lengths and both balancing settings.
+        for(bool balance:{false,true})for(Word length:{32ull,64ull}) {
+            RequestProgram tail;check(request_program(13,9*78+1,tail));
+            GiantTimelinePolicy tg{13,9*78+1,2,78,{}};
+            tg.component.chain_min=30;tg.component.chain_block=length;tg.component.tail_balance=balance;
+            NttMemoryPolicy tn;S4ProgramPolicy ts;ts.buffers=3;ts.batch_bytes=1ull<<20;
+            OwnerMemoryPolicy to{13,2,1ull<<30,3};WorkspaceMemoryPlan full,compact;
+            check(workspace_memory_plan(tail,127,shape,layout,tn,ts,full,false,{},&to,&tg));
+            check(workspace_memory_plan(tail,127,shape,layout,tn,ts,compact,true,{},&to,&tg));
+            check(full.finished && compact.finished && full.peak_bytes==compact.peak_bytes &&
+                full.final_bytes==compact.final_bytes && compact.points_consumed==9*78+1 && compact.point_chunks==10);
+        }
         // Enormous B2 must collapse complete point-chunk cycles, preserving a
         // ladder tail whose larger seed capacity changes the final allocation.
         check(request_program(13,1300000000001ull,program));

@@ -4,13 +4,21 @@
 #include <cstdlib>
 
 namespace ecm_stage2 {
-// Shape/reducer setup and extra copies need repeated wide polynomial work to
-// amortize. Retain the dense layout for narrow or short Stage2 executions.
-inline bool giant_tree_balanced(Word words,Word points,Word p) {
-    // Fixed-shape experiments only: the frontend disables profile selection
-    // and sampling. Native memory planning and execution share this override.
-    if(const char *forced=std::getenv("NTT_GROOT_BALANCED"))return forced[0]=='1';
+inline thread_local int groot_layout_override=-1;
+struct GrootLayoutScope {
+    int previous=groot_layout_override;
+    explicit GrootLayoutScope(int layout){groot_layout_override=layout;}
+    ~GrootLayoutScope(){groot_layout_override=previous;}
+};
+inline bool legacy_groot_layout(Word words,Word points,Word p) {
     return words>128 && p && points/p>=4;
+}
+// Override/legacy resolver. New automatic planning also evaluates NTT cliffs.
+inline bool giant_tree_balanced(Word words,Word points,Word p) {
+    // Explicit controls, native memory planning and execution share one layout.
+    if(const char *forced=std::getenv("NTT_GROOT_BALANCED"))return forced[0]=='1';
+    if(groot_layout_override>=0)return groot_layout_override!=0;
+    return legacy_groot_layout(words,points,p);
 }
 // Keep dense power-of-two tiles at the bottom, distributing at most 128 tiles
 // across the upper complete tree. Only G roots use this layout; the F tree and
@@ -48,5 +56,35 @@ template<class Visit> bool giant_tree_multiply_groups(Word n,Visit visit) {
         for(const auto &g:groups)if(!visit(g.first.first,g.first.second,g.second))return false;
     }
     return true;
+}
+// Preserve qualified wide defaults. Narrow additions need an actual root NTT
+// cliff and >=10% less complete G-tree N*log2(N) work, with <=10% extra output
+// coefficients. No arithmetic/memory admission is replaced by this cost gate.
+template<class Query> bool select_groot_layout(Word words,Word points,Word p,int bits,Query query) {
+    if(std::getenv("NTT_GROOT_BALANCED") || groot_layout_override>=0)
+        return giant_tree_balanced(words,points,p);
+    const bool legacy=legacy_groot_layout(words,points,p);
+    if(legacy || !p || points/p<4)return legacy;
+    GiantTreeLayout layout;if(!giant_tree_layout(p,layout) || p==layout.pad)return false;
+    Word left=0;
+    for(Word i=0;i<layout.tiles;++i)if(i*layout.slots/layout.tiles<layout.slots/2)
+        left+=std::min(layout.tile,p-i*layout.tile);
+    Word before=0,after=0,slots=0;
+    if(!query(layout.pad/2+1,bits,&before,&slots) ||
+       !query(std::max(left,p-left)+1,bits,&after,&slots) || after>=before)return false;
+    auto cost=[&](bool balanced,double &ntt,double &coeff) {
+        ntt=coeff=0;
+        auto tree=[&](Word count,Word repeat) {
+            auto visit=[&](Word a,Word b,Word pairs) {
+                Word n=0,out=0;if(!query(std::max(a,b),bits,&n,&out) || !n)return false;
+                ntt+=double(repeat)*pairs*n*std::log2(double(n));
+                coeff+=double(repeat)*pairs*(a+b-1);return true;
+            };
+            return balanced?giant_tree_multiply_groups(count,visit):tree_multiply_groups(count,visit);
+        };
+        return tree(p,points/p) && (!(points%p) || tree(points%p,1));
+    };
+    double a=0,b=0,ca=0,cb=0;
+    return cost(false,a,ca) && cost(true,b,cb) && b<=.90*a && cb<=1.10*ca;
 }
 } // namespace ecm_stage2
