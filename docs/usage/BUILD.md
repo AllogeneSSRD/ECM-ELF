@@ -43,6 +43,8 @@ Stage2：独立生产 CUDA 引擎，固定 Goldilocks PTX 后端、canonical 减
 
 Stage2 local/release 默认 `-KernelLayout grouped`：设备实现使用算术和NTT两个聚合CU，支持的工具链通过 `SplitCompile` 在单次nvcc内并行优化。完整发布使用 `-Stage2KernelLayout isolated`、阶段发布使用 `-KernelLayout isolated` 可启用176模块隔离备选；该备选仅适用于生产引擎。聚合与隔离使用不同profile和清单，`-SkipBuild` 不接受布局混用。CUDA11.8没有 `--split-compile`，旧包固定1，不传入不支持的选项。
 
+本机Windows CUDA13.3.73的ptxas在严格句柄检查环境中使用文件内部并行可能报`0xC0000008 / INVALID_HANDLE`。保持`SplitCompile=8`时从沙盒外运行正式脚本；沙盒内可显式使用`-SplitCompile 1`，并选择独立构建目录。不要为这一已确认的环境问题改动算术或关闭系统检查；具体证据见[诊断资料](../development/PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)。
+
 ## 工具链与架构
 
 完整发布默认生成两个 CUDA profile；PTX 与 SASS 独立指定，公开 release 入口不再接收旧 `Archs/PtxArch` 参数。

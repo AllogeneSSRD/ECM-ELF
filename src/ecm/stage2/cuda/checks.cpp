@@ -713,10 +713,15 @@ int mont_selftest(
     const int enabled_bits=requested && exact_shape ? bits : 0;
     CK(ecm_stage2_copy_constants(&enabled_bits,sizeof(enabled_bits),
                           offsetof(S2GDeviceConstants, point_mersenne_bits)));
+    const int square_enabled=fuse_env_ull("NTT_POINT_SQUARE",0)!=0;
+    CK(ecm_stage2_copy_constants(&square_enabled,sizeof(square_enabled),
+                          offsetof(S2GDeviceConstants,point_square)));
     stage2_log::print(stage2_log::debug, "point_mersenne_mode: requested=%d enabled=%d bits=%d nw=%llu reduction=fold_rotate\n",
                 (int)requested,enabled_bits!=0,bits,(unsigned long long)nw);
     stage2_log::print(stage2_log::debug, "point_arithmetic: xadd6=%d xadd_mont_muls=%d coordinate_scale=legacy_exact\n",
                 (int)g_xadd6,g_xadd6 ? 6 : 8);
+    stage2_log::print(stage2_log::debug,"point_square_mode: enabled=%d nw=%llu product=symmetric_upper_diagonal\n",
+                square_enabled,(unsigned long long)nw);
     const int cases = 2048;
     std::vector<unsigned long long> ha((size_t)cases * nw, 0ull), hb((size_t)cases * nw, 0ull);
     uint64_t s = 0x2468ace13579bdfull;
@@ -749,7 +754,6 @@ int mont_selftest(
     CK(cudaDeviceSynchronize());
     std::vector<unsigned long long> ho(ha.size(), 0ull);
     CK(cudaMemcpy(ho.data(), dout, ho.size() * 8, cudaMemcpyDeviceToHost));
-    cudaFree(da); cudaFree(db); cudaFree(dn); cudaFree(dout);
 
     unsigned long long bad = 0, first = 0;
     mpz_t am, bm, acc, rinv, want;
@@ -764,11 +768,38 @@ int mont_selftest(
         words_to_mpz(want, &ho[(size_t)i * nw], nw);
         if (mpz_cmp(acc, want) != 0) { if (!bad) first = (unsigned long long)i; ++bad; }
     }
+    // Reuse the existing device buffers; retain all 2048 multiplication cases.
+    // Extra square cases exercise the exact production wrapper and r==a.
+    unsigned long long square_bad=0;
+    if(square_enabled) {
+        constexpr int square_cases=128;
+        std::vector<unsigned long long> input((size_t)square_cases*nw),output(input.size());
+        for(int i=0;i<square_cases;++i) {
+            words_to_mpz(am,ha.data()+(size_t)i*nw,nw);
+            if(i==0)mpz_set_ui(am,0);
+            else if(i==1)mpz_set_ui(am,1);
+            else if(i==2 || i==3)mpz_sub_ui(am,N,i-1);
+            else if(i<68){mpz_set_ui(am,1);mpz_mul_2exp(am,am,(i-4)%(64*nw));mpz_mod(am,am,N);}
+            std::vector<unsigned long long> word(nw);mpz_to_words(word,nw,am);
+            std::copy(word.begin(),word.end(),input.begin()+(size_t)i*nw);
+        }
+        CK(cudaMemcpy(da,input.data(),input.size()*8,cudaMemcpyHostToDevice));
+        S2G_DISPATCH((int)nw,s2g_launch_mont_test,(int)nw,square_cases,da,da,dn,ninv,da);
+        CK(cudaGetLastError());CK(cudaMemcpy(output.data(),da,output.size()*8,cudaMemcpyDeviceToHost));
+        for(int i=0;i<square_cases;++i) {
+            words_to_mpz(am,input.data()+(size_t)i*nw,nw);
+            mpz_mul(acc,am,am);mpz_mul(acc,acc,rinv);mpz_mod(acc,acc,N);
+            words_to_mpz(want,output.data()+(size_t)i*nw,nw);
+            if(mpz_cmp(acc,want))++square_bad;
+        }
+        stage2_log::print(stage2_log::debug,"square_selftest: cases=%d mismatches=%llu in_place=1\n",square_cases,square_bad);
+    }
+    cudaFree(da); cudaFree(db); cudaFree(dn); cudaFree(dout);
     mpz_clears(am, bm, acc, rinv, want, x, nullptr);
     stage2_log::print(stage2_log::debug, "mont_selftest: cases=%d mismatches=%llu first_bad=%llu "
                 "(device Mont(a,b) vs GMP a*b*R^-1 mod N, nw=%llu)\n",
                 cases, bad, first, (unsigned long long)nw);
-    return bad ? 1 : 0;
+    return bad || square_bad ? 1 : 0;
 }
 
 int xadd_selftest(

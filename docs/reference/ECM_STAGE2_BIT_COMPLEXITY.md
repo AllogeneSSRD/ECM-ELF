@@ -30,9 +30,25 @@ M_{mersenne}(W)&=W^2+O(W).
 \end{aligned}
 $$
 
-这是主导部分积／MAC的计数，不是GPU周期公式；加减、进位、地址计算、私有数组访问和同步另计。两条路径都仍为\(\Theta(W^2)\)。当前实现入口为[point.cuh](../../src/ecm/stage2/cuda/device/point.cuh)106行的`s2g_mont_mul`及[point_mersenne.cuh](../../src/ecm/stage2/cuda/device/point_mersenne.cuh)6行的`s2g_mersenne_mont_reduce`。schoolbook的乘法复杂度也可对照[GMP基例乘法](https://gmplib.org/manual/Basecase-Multiplication)。
+这是主导部分积／MAC的计数，不是GPU周期公式；加减、进位、地址计算、私有数组访问和同步另计。两条路径都仍为\(\Theta(W^2)\)。当前实现入口为[point.cuh](../../src/ecm/stage2/cuda/device/point.cuh)140行的`s2g_mont_mul`及[point_mersenne.cuh](../../src/ecm/stage2/cuda/device/point_mersenne.cuh)6行的`s2g_mersenne_mont_reduce`。schoolbook的乘法复杂度也可对照[GMP基例乘法](https://gmplib.org/manual/Basecase-Multiplication)。
 
-当前六模乘xADD包含4次一般乘法、2次平方；xdbl包含3次一般乘法、2次平方。一个普通ladder位步合计7M+4S，当前S仍调用一般模乘。加减及保持齐次尺度的halfmod为线性工作。
+当前六模乘xADD包含4次一般乘法、2次平方；xdbl包含3次一般乘法、2次平方。一个普通ladder位步合计7M+4S。关闭专用平方时S调用一般模乘；启用`NTT_POINT_SQUARE=1`时，`point_square.cuh::s2g_mont_sqr`只计算严格上三角、统一倍增后加入对角线，完整乘积部分积数为W(W+1)/2，原归约保持不变：
+
+$$
+S_{ordinary}(W)=\tfrac32W^2+O(W),\qquad
+S_{mersenne}(W)=\tfrac12W^2+O(W).
+$$
+
+这些仍为\(\Theta(W^2)\)的MAC工作，不是周期数或完整Stage2的加速比。加减及保持齐次尺度的halfmod为线性工作。启用范围、默认状态与实测条件由[位宽报告](../performance/STAGE2_BIT_SCALING.md)说明。
+
+其精确性来自二进制基\(B=2^{64}\)下的恒等式
+
+$$
+a^2=2\sum_{0\le i<j<W}a_i a_jB^{i+j}
++\sum_{i=0}^{W-1}a_i^2B^{2i}.
+$$
+
+严格上三角先形成完整多字乘积，再统一左移一位；不能直接把每个128-bit交叉乘积左移而丢掉第129位。对角线每项占相邻两个limb，按序携带加法进位；乘积完成后才覆盖输出，因而允许输出与输入别名。普通／梅森两条路径共享与一般模乘相同的归约入口。
 
 ## 3. Baby、有限giant链与短尾
 
@@ -161,4 +177,4 @@ $$
 
 上述加法是工作模型：若\(F_{MAC,eff}\)或\(F_{NTT,eff}\)直接采用包含local、带宽和同步等待的实测kernel吞吐量，相应延迟已在分母中，不能再作为独立时间加一遍。互斥阶段和嵌套设备事件的计量边界必须分别保持。
 
-专用平方可降低schoolbook的常数；单层Karatsuba也只是降低二次项常数。只有递归Karatsuba才有\(O(W^{\log_2 3})\)的乘法上界，普通Montgomery归约若仍保持平方，整体模乘仍不会因此变为次平方。相关递推及常数取舍见[GMP Karatsuba说明](https://gmplib.org/manual/Karatsuba-Multiplication)。这些是候选原理，不代表仓库已经实现专用平方或Karatsuba点模乘。
+专用平方降低schoolbook的常数；单层Karatsuba也只是降低二次项常数。只有递归Karatsuba才有\(O(W^{\log_2 3})\)的乘法上界，普通Montgomery归约若仍保持平方，整体模乘仍不会因此变为次平方。相关递推及常数取舍见[GMP Karatsuba说明](https://gmplib.org/manual/Karatsuba-Multiplication)。仓库提供可选schoolbook专用平方，尚未实现Karatsuba点模乘。

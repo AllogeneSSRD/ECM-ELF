@@ -9,6 +9,7 @@ inline constexpr int ecm_stage2_capacity_max=ecm_stage2_capacities[sizeof(ecm_st
 struct S2GDeviceConstants {
     unsigned long long divisor[ecm_stage2_capacity_max];
     int point_mersenne_bits;
+    int point_square;
 };
 static_assert(offsetof(S2GDeviceConstants,divisor)==0,"divisor must lead constant storage");
 cudaError_t ecm_stage2_copy_constants(const void *source,size_t bytes,size_t offset=0,cudaMemcpyKind kind=cudaMemcpyHostToDevice);

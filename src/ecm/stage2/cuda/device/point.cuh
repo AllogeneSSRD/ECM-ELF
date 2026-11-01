@@ -102,26 +102,15 @@ __device__ __constant__ S2GDeviceConstants g_s2g_device_constants={};
 #endif
 #include "point_mersenne.cuh"
 
+// Both full multiplication and symmetric squaring produce the same 2*nw-limb
+// product. Keep one reducer so the odd-modulus and exact-Mersenne contracts,
+// canonical subtraction and in-place output behavior cannot drift apart.
 template <int NW>
-__device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
-                                             const unsigned long long *a,
-                                             const unsigned long long *b,
-                                             const unsigned long long *n,
-                                             unsigned long long ninv, int nw)
+__device__ __forceinline__ void s2g_mont_reduce(unsigned long long *r,
+                                                unsigned long long *t,
+                                                const unsigned long long *n,
+                                                unsigned long long ninv, int nw)
 {
-    unsigned long long t[2 * NW + 2];
-    for (int i = 0; i < 2 * nw + 2; ++i) t[i] = 0;
-    for (int i = 0; i < nw; ++i) {
-        unsigned long long c = 0;
-        const unsigned long long bi = b[i];
-        for (int j = 0; j < nw; ++j) {
-            unsigned long long lo, hi;
-            s2g_mac(a[j], bi, t[i + j], c, lo, hi);
-            t[i + j] = lo;
-            c = hi;
-        }
-        t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
-    }
     unsigned long long out[NW];
     const int mersenne_bits=g_s2g_device_constants.point_mersenne_bits;
     if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits,out);return;}
@@ -148,6 +137,40 @@ __device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
 }
 
 template <int NW>
+__device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
+                                             const unsigned long long *a,
+                                             const unsigned long long *b,
+                                             const unsigned long long *n,
+                                             unsigned long long ninv, int nw)
+{
+    unsigned long long t[2 * NW + 2];
+    for (int i = 0; i < 2 * nw + 2; ++i) t[i] = 0;
+    for (int i = 0; i < nw; ++i) {
+        unsigned long long c = 0;
+        const unsigned long long bi = b[i];
+        for (int j = 0; j < nw; ++j) {
+            unsigned long long lo, hi;
+            s2g_mac(a[j], bi, t[i + j], c, lo, hi);
+            t[i + j] = lo;
+            c = hi;
+        }
+        t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
+    }
+    s2g_mont_reduce<NW>(r,t,n,ninv,nw);
+}
+
+#include "point_square.cuh"
+
+template<int NW>
+__device__ __forceinline__ void s2g_point_square(unsigned long long *r,
+    const unsigned long long *a,const unsigned long long *n,
+    unsigned long long ninv,int nw)
+{
+    if(g_s2g_device_constants.point_square)s2g_mont_sqr<NW>(r,a,n,ninv,nw);
+    else s2g_mont_mul<NW>(r,a,a,n,ninv,nw);
+}
+
+template <int NW>
 __device__ __forceinline__ void s2g_xdbl(unsigned long long *rx, unsigned long long *rz,
                                          const unsigned long long *px, const unsigned long long *pz,
                                          const unsigned long long *a24, const unsigned long long *n,
@@ -156,8 +179,8 @@ __device__ __forceinline__ void s2g_xdbl(unsigned long long *rx, unsigned long l
     unsigned long long t1[NW], t2[NW], t3[NW], t4[NW];
     s2g_addmod<NW>(t1, px, pz, n, nw);
     s2g_submod<NW>(t2, px, pz, n, nw);
-    s2g_mont_mul<NW>(t3, t1, t1, n, ninv, nw);            /* (X+Z)^2 */
-    s2g_mont_mul<NW>(t4, t2, t2, n, ninv, nw);            /* (X-Z)^2 */
+    s2g_point_square<NW>(t3, t1, n, ninv, nw);            /* (X+Z)^2 */
+    s2g_point_square<NW>(t4, t2, n, ninv, nw);            /* (X-Z)^2 */
     s2g_mont_mul<NW>(rx, t3, t4, n, ninv, nw);            /* X2 = (X+Z)^2 (X-Z)^2 */
     s2g_submod<NW>(t1, t3, t4, n, nw);                    /* 4XZ */
     s2g_mont_mul<NW>(t2, a24, t1, n, ninv, nw);
@@ -202,8 +225,8 @@ __device__ __forceinline__ void s2g_xadd(unsigned long long *rx, unsigned long l
         s2g_addmod<NW>(tx,a,b,n,nw); s2g_submod<NW>(tz,a,b,n,nw);
         // Halves recover the old coordinate scale exactly; the Z sign is squared.
         s2g_halfmod<NW>(tx,tx,n,nw); s2g_halfmod<NW>(tz,tz,n,nw);
-        s2g_mont_mul<NW>(tx,tx,tx,n,ninv,nw);
-        s2g_mont_mul<NW>(tz,tz,tz,n,ninv,nw);
+        s2g_point_square<NW>(tx,tx,n,ninv,nw);
+        s2g_point_square<NW>(tz,tz,n,ninv,nw);
         s2g_mont_mul<NW>(a,dz,tx,n,ninv,nw);
         s2g_mont_mul<NW>(b,dx,tz,n,ninv,nw);
         // Delay both writes, including when the output aliases the difference.
@@ -213,12 +236,12 @@ __device__ __forceinline__ void s2g_xadd(unsigned long long *rx, unsigned long l
     s2g_mont_mul<NW>(a, px, qx, n, ninv, nw);
     s2g_mont_mul<NW>(b, pz, qz, n, ninv, nw);
     s2g_submod<NW>(a, a, b, n, nw);                /* X_P X_Q - Z_P Z_Q */
-    s2g_mont_mul<NW>(a, a, a, n, ninv, nw);
+    s2g_point_square<NW>(a, a, n, ninv, nw);
     s2g_mont_mul<NW>(tx, dz, a, n, ninv, nw);
     s2g_mont_mul<NW>(a, px, qz, n, ninv, nw);
     s2g_mont_mul<NW>(b, pz, qx, n, ninv, nw);
     s2g_submod<NW>(a, a, b, n, nw);                /* X_P Z_Q - Z_P X_Q */
-    s2g_mont_mul<NW>(a, a, a, n, ninv, nw);
+    s2g_point_square<NW>(a, a, n, ninv, nw);
     s2g_mont_mul<NW>(tz, dx, a, n, ninv, nw);
     for (int i = 0; i < nw; ++i) { rx[i] = tx[i]; rz[i] = tz[i]; }
 }
@@ -290,7 +313,8 @@ __global__ void s2g_mont_test_kernel(const unsigned long long *a, const unsigned
     unsigned long long r[NW];
     /* the caller's arrays are packed with stride nw (not NW: NW is only the template's
        upper bound, chosen from the word-count dispatch) */
-    s2g_mont_mul<NW>(r, a + (size_t)t * nw, b + (size_t)t * nw, n, ninv, nw);
+    if(a==b)s2g_point_square<NW>(r,a+(size_t)t*nw,n,ninv,nw);
+    else s2g_mont_mul<NW>(r, a + (size_t)t * nw, b + (size_t)t * nw, n, ninv, nw);
     for (int i = 0; i < nw; ++i) out[(size_t)t * nw + i] = r[i];
 }
 

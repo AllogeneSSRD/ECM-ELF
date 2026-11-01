@@ -63,6 +63,14 @@ python tools/bench/plot_stage2_version.py `
 
 分析器核对主矩阵52次回执及程序／profile／save哈希、非单位／错误状态、实际NTT分布；固定D控制核对156条CUDA的日志和回执哈希及每格3次完整性。主统计取off侧每格n=1，on侧仅作同工作量敏感性核对；固定D旧构建单独拟合，不合并到当前矩阵。输出保留CSV、JSON、分析器快照、图和样本边界，经验幂指数不是算法复杂度证明。解释见[位宽性能](../../docs/performance/STAGE2_BIT_SCALING.md)。
 
+## 点专用平方验证
+
+构建入口`tools/build/test/build_stage2_point_square_probe.ps1`，输出目录使用内部`.gitignore`。`bench_stage2_point_square.py --exe <probe> --output <新目录> --suite correctness|performance --device 1`直接测试生产头中的原语；`--bits`指定逗号分隔位宽，`--recurrence`控制依赖平方次数，性能候选默认是生产包装mode2。正确性覆盖独立／原地输出及三类模数，并要求故障注入被拒绝；全部事件样本保留，元数据查询在事件计时之外。
+
+完整曲线入口`bench_stage2_square_curves.py --summary <位宽分析summary.json> --exe <候选> --stock <旧版> --output <新目录>`复用冻结save、实际B2和D／布局／chain；默认只取10232／12285／16272，可用`--bits`扩宽。`--diagnostic`改用B2=2600000、D2310及完整叶检查，不纳入正常速度。各调用保存二进制／DLL、命令、配置、save、日志、结果、GPU门禁和遥测；只允许通过`--allow-gpu-pid`明确授权并绑定路径的界面上下文。
+
+离线入口`analyze_stage2_square.py --study <完成的正常研究> --output <新统计目录> --figures <新图目录>`，可用`--extra`合并独立复测，按每格中位数汇总，不把学习或诊断混入；`--public-figures`复制公开PNG。样本数、计时边界和限制见[位宽性能报告](../../docs/performance/STAGE2_BIT_SCALING.md)。所有实验默认写`data/`，不修改设备设置或真实生产队列。
+
 ## 正常运行时选型矩阵
 
 ### 布局与旧tune的有界验证
