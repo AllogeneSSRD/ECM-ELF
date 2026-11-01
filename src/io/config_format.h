@@ -325,6 +325,18 @@ inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
                 char kind = 0;
                 l.value = toml_value(t.substr(eq + 1), kind);
                 const std::string type = option->type;
+                // Numeric aliases apply only to schema-declared booleans.
+                // Keep l.raw for editing/diagnostics; consumers receive the
+                // same canonical value as a literal true/false setting.
+                if ((type == "bool" || type == "bool|string") && kind == 'i') {
+                    if (l.value == "1" || l.value == "+1")
+                        l.value = "true";
+                    else if (l.value == "0" || l.value == "+0" || l.value == "-0")
+                        l.value = "false";
+                    else
+                        throw std::runtime_error("integer boolean must be 0 or 1 for " + l.key);
+                    kind = 'b';
+                }
                 const bool allowed =
                     (type == "string" && kind == 's') || (type == "bool" && kind == 'b') ||
                     (type == "bool|string" && (kind == 'b' || kind == 's')) ||
@@ -472,16 +484,16 @@ inline bool boolean(const std::string& s, const char* key) {
         return true;
     if (v == "0" || v == "false" || v == "no" || v == "off")
         return false;
-    throw std::runtime_error(std::string(key) + " must be true or false");
+    throw std::runtime_error(std::string(key) + " must be true, false, 0 or 1");
 }
 
-// TOML uses literal booleans or the quoted string "auto". CLI numeric aliases
-// are translated by its caller, so integers remain invalid TOML values.
+// TOML normalizes integer aliases before projection; GUI/CLI callers may also
+// pass the numeric spelling directly. "auto" remains a distinct string value.
 inline int automatic_boolean(const std::string& s, const char* key) {
     if (s == "auto") return -1;
-    if (s == "true") return 1;
-    if (s == "false") return 0;
-    throw std::runtime_error(std::string(key) + " must be auto, true or false");
+    if (s == "true" || s == "1") return 1;
+    if (s == "false" || s == "0") return 0;
+    throw std::runtime_error(std::string(key) + " must be auto, true, false, 0 or 1");
 }
 inline std::string automatic_boolean_text(const std::string& s, const char* key) {
     const auto mode = automatic_boolean(s, key);

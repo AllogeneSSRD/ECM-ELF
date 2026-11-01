@@ -1,6 +1,8 @@
 # GENERATED from config/ecm_options.json / 由 config/ecm_options.json 生成
 # See ECM_TOML_REFERENCE.md for ranges and worker overrides.
 # 取值范围和 worker 覆盖规则见 ECM_TOML_REFERENCE.md。
+# Booleans accept true/false or integer 1/0; 1=true, 0=false.
+# 布尔键支持 true/false 或整数 1/0；1=true，0=false。
 
 [shared]
 

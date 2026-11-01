@@ -2,9 +2,9 @@
 
 <!-- GENERATED: config/ecm_options.json; do not edit. -->
 
-Stage1, Stage2 and the GUI read the same `ecm.toml` file. Strings are quoted, booleans are `true`/`false`, and `window` is an integer array.
+Stage1, Stage2 and the GUI read the same `ecm.toml` file. Strings are quoted; booleans accept `true`/`false` or integer `1`/`0` (`1=true`, `0=false`). Automatic booleans also accept the quoted string `"auto"`. Other integers and floating-point boolean values are rejected. `window` is an integer array.
 
-Stage1、Stage2 和 GUI 共用 `ecm.toml`。字符串须加引号，布尔值使用 `true`/`false`，`window` 使用整数数组。
+Stage1、Stage2 和 GUI 共用 `ecm.toml`。字符串须加引号；布尔键支持 `true`/`false` 或整数 `1`/`0`（`1=true`、`0=false`），自动布尔键另支持字符串 `"auto"`。其他整数和小数不能用作布尔值。`window` 使用整数数组。
 
 ## Tables and precedence / 分区与优先级
 
@@ -204,7 +204,7 @@ Zero-based GPU device ID for Stage1. Stage2 inherits it unless stage2_device is 
 edwards_stage2_transfer = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
 When enabled, a completed Edwards Stage1 task is delivered as ECMSTAGE2 to the receiving worker section of the shared worktodo. Published saves use absolute paths; failed delivery remains pending for retry. auto_stage2 takes precedence when both are set.
 
@@ -400,7 +400,7 @@ Legacy compatibility setting. A nonempty value only produces an optional hint; i
 p95_keep_aid = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
 Keep PrimeNet assignment IDs in handoffs: 1 retains IDs not known to be invalid; 0 strips all IDs. IDs confirmed invalid by Prime95 logs are always removed to prevent repeated rejection.
 
@@ -412,7 +412,7 @@ Keep PrimeNet assignment IDs in handoffs: 1 retains IDs not known to be invalid;
 p95_recover_lost = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
 Recover handoffs deleted by Prime95 because of invalid assignment IDs. 1 checks handoff records and Prime95 logs, then reposts confirmed lost assignments without an ID; 0 disables recovery. Only confirmed prior handoffs qualify.
 
@@ -636,7 +636,7 @@ OpenCL threads per integer, subject to limb-layout constraints. CUDA selects TPI
 verbose = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
 Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries; stage2_debug_log independently controls debug logging. Stage1 uses the selected backend's normal verbosity behavior.
 
@@ -734,7 +734,7 @@ Stage2 large-workspace budget in MiB, used to plan available NTT shapes. 0 uses 
 stage2_auto_b2 = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time including Stage1 cost; 0 disables. Requires usable Stage2 costs and positive Stage1 s/curve. B1 never gates tune reuse; stage2_tune_ignore controls other conditions. Memory and carrier divisibility are checked on the current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its original qualification checks.
 
@@ -746,7 +746,7 @@ Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time
 stage2_auto_carrier = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Add M=2^p-1 for validated ECMSTAGE2=1,2,p,-1 saves when N divides M and 2<=p<=16384. Compare ordinary cost at target_bits with Mersenne cost at arithmetic_bits=p, using stage2_prediction_policy. Full M_p already has native Mersenne arithmetic. Explicit carrier options take priority; a cofactor save needs a matching task to infer p.
 
@@ -794,7 +794,7 @@ Stage2 upper bound when neither CLI nor task supplies a nonzero B2. 0 defers to 
 stage2_b2_round_chain = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 After choosing D and arithmetic, increase B2 to the smallest whole-P giant count whose last point chunk can use a chain. Logs/results keep requested and actual B2. Default 0 preserves bounds; overflow is rejected. AutoB2 maximum remains a hard cap. Explicit ECM calibration does not support rounding. CLI --b2-round-chain overrides this worker TOML.
 
@@ -842,7 +842,7 @@ Manual Stage2 step D. 0 selects the shape automatically. Explicit values must be
 stage2_debug_log = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Write Stage2 debug details to a separate log: true enables and false disables. verbose=true does not enable debug logging; enabling this option does not send all debug details to the console.
 
@@ -878,7 +878,7 @@ Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择
 stage2_factor_only = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic policy. This does not disable decomposition or change stage2_factorize_hits.
 
@@ -902,7 +902,7 @@ Timeout in seconds for each external GP fallback decomposition call. Local PARI 
 stage2_factorize_hits = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Further decompose found factors: 1 uses the shared diagnostic service (local PARI DLL first, external GP second); GMP is never selected automatically. 0 keeps only factors extracted and verified by Stage2. Only complete, proven decomposition sets factorization_complete. Unfinished diagnostics preserve the original factor and successful curve status.
 
@@ -958,7 +958,7 @@ Points per sequential CUDA thread chain, independent of CUDA block size. 64 pres
 stage2_giant_tail_balance = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Allow the last two giant point chunks to borrow whole P batches so both can use chains. B2, capacity, coverage and chunk count are unchanged. Default false. No actual borrow keeps the original cost/cache identity and avoids extra replay or synchronization. Actual borrowing keeps an independent tune identity and replays the original interval on a hit/nonunit; that replay may need more workspace. CLI --giant-tail-balance overrides this worker TOML.
 
@@ -982,7 +982,7 @@ External PARI/GP fallback executable for optional factor decomposition. The loca
 stage2_groot_balanced = "auto"
 ```
 
-Type / 类型: `bool|string`; range / 范围: `[auto|false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool|string`; range / 范围: `[auto|false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 G-root polynomial layout. "auto" uses the qualified NTT-cliff model and measured tuning; true forces the balanced tile layout, false forces the contiguous layout. Default "auto". This does not rebalance giant point chunks or change B2/D/P. CUDA only; OpenCL accepts "auto". CLI --groot-layout auto|true|false overrides this worker TOML; numeric CLI aliases 0/1 remain supported. Tune rows store the resolved layout as 0/1.
 
@@ -1022,7 +1022,7 @@ Legacy console level: quiet, curve, phases, batches, and debug map to 0..4. Unse
 stage2_low_cpu_wait = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
@@ -1043,7 +1043,7 @@ An explicit key sets NTT_CUDA_WAIT_MODE and NTT_HOST_EVENT_WAIT, and clears NTT_
 stage2_ntt_counts = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables collection and output. Counts mathematical transforms (two forwards and one inverse per convolution), including polynomial initialization and main work, excluding Stage1 and independent arithmetic selftests. Shared by Edwards and Montgomery; no GPU counters or extra synchronization. CLI --ntt-counts overrides the selected worker TOML.
 
@@ -1055,7 +1055,7 @@ Print a per-curve NTT length count table at the end of production Stage2: 1 enab
 stage2_pack_zero = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
@@ -1119,7 +1119,7 @@ Multiplier applied to Stage2 time in the Auto B2 model. 1 leaves it unchanged; g
 stage2_relocation = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Optional production GPU Stage2 conservative relocation. Keeps B2 and the original giant endpoint, uses a shorter suffix for clean NF, and replays the original interval on any hit or target-N nonunit (including GCD=N). Rebalances short point chunks on whole G boundaries. Default 0 preserves the original algorithm. CLI --relocation overrides this worker TOML. D/AutoB2 and memory admission use original-interval estimates; relocation does not collect ECM tune samples or run startup ECM calibration, and explicit --tune ecm is unavailable in this mode. Pure NTT samples remain reusable.
 
@@ -1155,7 +1155,7 @@ Directory searched for saves referenced by Stage2 assignments. Empty inherits tm
 stage2_short_calibration = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Calibrate once when no suitable ECM tune file exists, required components are missing, or the task has no reusable calibrated width coverage. Partial coverage permits estimates.
 
@@ -1179,7 +1179,7 @@ Short calibration measurement budget, excluding first CUDA initialization; finis
 stage2_short_ntt_batch_tune = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Experimental short NTT batch selection from stage2_tune_profile, for lengths up to 2^19. Minimizes estimated convolution time including the tail, within the current chunk budget; requires at least two measured batch sizes and a predicted gain above 10%. Does not tune kernel configuration. Pure NTT gains do not guarantee faster full Stage2; default false pending full-engine validation.
 
@@ -1303,7 +1303,7 @@ Format-7 final ECM matrix TOML. Arithmetic-family lookup uses arithmetic_bits; g
 stage2_tune_runtime = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes.
 
@@ -1327,7 +1327,7 @@ Maximum independent runtime NF observations per identical complete parameters (i
 stage2_tune_warmup = false
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 0 starts formal ECM/NTT tuning and startup calibration without a discarded warmup. 1 runs one checked warmup per shape before formal repeats; it consumes the same budget and is excluded from the median/MAD. CLI --tune-warmup 0|1 overrides this key. Mandatory arithmetic checks are always performed.
 
@@ -1413,7 +1413,7 @@ GUI font size in pixels; fractional values are accepted. auto or empty selects 1
 font_snap = true
 ```
 
-Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `no / 不支持`.
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `no / 不支持`.
 
 Snap glyphs to the pixel grid: 1 enables, 0 disables. Compare clarity at fractional sizes or different DPI scales. off, false, and no also disable; other values enable. String matching is case-sensitive.
 

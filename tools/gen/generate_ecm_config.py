@@ -60,8 +60,10 @@ def load_schema():
             raise ValueError(f"invalid C++ field: {field}")
         if o["owner"] not in schema["owners"]:
             raise ValueError(f"invalid owner: {key}")
-        if o["type"] == "bool" and o.get("domain") != "[false|true]":
-            raise ValueError(f"TOML boolean requires domain [false|true]: {key}")
+        if o["type"] == "bool" and o.get("domain") != "[false|true|0|1]":
+            raise ValueError(f"TOML boolean requires domain [false|true|0|1]: {key}")
+        if o["type"] == "bool|string" and o.get("domain") != "[auto|false|true|0|1]":
+            raise ValueError(f"TOML automatic boolean requires domain [auto|false|true|0|1]: {key}")
         seen.add(key)
         fields.add(field)
     if schema.get("aliases"):
@@ -254,7 +256,9 @@ def toml_literal(option):
 def toml_template(schema, example):
     out = ["# GENERATED from config/ecm_options.json / 由 config/ecm_options.json 生成",
            "# See ECM_TOML_REFERENCE.md for ranges and worker overrides.",
-           "# 取值范围和 worker 覆盖规则见 ECM_TOML_REFERENCE.md。", ""]
+           "# 取值范围和 worker 覆盖规则见 ECM_TOML_REFERENCE.md。",
+           "# Booleans accept true/false or integer 1/0; 1=true, 0=false.",
+           "# 布尔键支持 true/false 或整数 1/0；1=true，0=false。", ""]
     originals = [o for o in schema["options"] if not o.get("_mirror")]
     for table in ("shared", "stage1", "stage2", "gui", "workers.1"):
         out.extend([f"[{table}]", ""])
@@ -288,8 +292,8 @@ def toml_template(schema, example):
 def toml_reference(schema):
     out = ["# ecm.toml Reference / ecm.toml 配置参考", "",
            "<!-- GENERATED: config/ecm_options.json; do not edit. -->", "",
-           "Stage1, Stage2 and the GUI read the same `ecm.toml` file. Strings are quoted, booleans are `true`/`false`, and `window` is an integer array.", "",
-           "Stage1、Stage2 和 GUI 共用 `ecm.toml`。字符串须加引号，布尔值使用 `true`/`false`，`window` 使用整数数组。", "",
+           "Stage1, Stage2 and the GUI read the same `ecm.toml` file. Strings are quoted; booleans accept `true`/`false` or integer `1`/`0` (`1=true`, `0=false`). Automatic booleans also accept the quoted string `\"auto\"`. Other integers and floating-point boolean values are rejected. `window` is an integer array.", "",
+           "Stage1、Stage2 和 GUI 共用 `ecm.toml`。字符串须加引号；布尔键支持 `true`/`false` 或整数 `1`/`0`（`1=true`、`0=false`），自动布尔键另支持字符串 `\"auto\"`。其他整数和小数不能用作布尔值。`window` 使用整数数组。", "",
            "## Tables and precedence / 分区与优先级", "",
            "- `[shared]`: settings used by both stages. / 两阶段共用。",
            "- `[stage1]`, `[stage2]`: stage-specific settings. / 阶段专用。",

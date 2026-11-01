@@ -22,7 +22,8 @@ def main():
     cases=[('default','',[],0),('auto','"auto"',[],0),('true','true',[],1),('false','false',[],0),
         ('cli_auto','true',['--groot-layout','auto'],0),('cli_true','false',['--groot-layout','true'],1),
         ('cli_false','true',['--groot-layout','false'],0),('cli_one','false',['--groot-layout','1'],1),
-        ('cli_zero','true',['--groot-layout','0'],0),('toml_integer','1',[],None),
+        ('cli_zero','true',['--groot-layout','0'],0),('toml_one','1',[],1),('toml_zero','0',[],0),
+        ('toml_two','2',[],None),('toml_float','1.0',[],None),
         ('bad_cli','"auto"',['--groot-layout','2'],None)]
     report=dict(complete=False,exe_sha256=identity,cases=[])
 
@@ -38,7 +39,7 @@ def main():
         config=out/(name+'.toml')
         setting=('stage2_groot_balanced='+value+'\n') if value else ''
         config.write_text('[stage2]\n'+setting+'stage2_device='+str(a.device)+'\n'
-            'stage2_tune_runtime=false\nstage2_short_calibration=false\n',encoding='utf-8')
+            'stage2_tune_runtime=0\nstage2_short_calibration=0\n',encoding='utf-8')
         command=[str(exe),'--config',str(config),'--save',str(saved),'--b2','13230','--d','210',
                  '--device',str(a.device),'--plan-only',*extra]
         code,text=invoke(name,command)
@@ -53,7 +54,7 @@ def main():
     # the child silently reapplies this forced-true TOML setting.
     queue=out/'worktodo.txt';queue.write_text('ECMSTAGE2=1,2,127,-1,"prime127.save",13230,0,1\n',encoding='utf-8')
     config=out/'queue.toml';config.write_text('[shared]\nworktodo='+json.dumps(str(queue))+'\n'
-        '[stage2]\nstage2_groot_balanced=true\nstage2_tune_runtime=false\nstage2_short_calibration=false\n',encoding='utf-8')
+        '[stage2]\nstage2_groot_balanced=1\nstage2_tune_runtime=0\nstage2_short_calibration=0\n',encoding='utf-8')
     results=out/'queue_results.jsonl';debug=out/'queue_debug.log';log=out/'queue_engine.log'
     code,text=invoke('queue_auto',[str(exe),'--config',str(config),'--device',str(a.device),
         '--worker','1','--once','--d','210','--groot-layout','auto','--results',str(results),
@@ -67,7 +68,7 @@ def main():
     report['cases'].append(dict(name='queue_auto',returncode=code,layout=0))
     report['complete']=True
     (out/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
-    print('PASS: 11 public CLI/TOML cases and a real queue-child auto override')
+    print(f'PASS: {len(cases)} public CLI/TOML cases and a real queue-child auto override')
 
 
 if __name__=='__main__':main()

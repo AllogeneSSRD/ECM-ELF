@@ -18,13 +18,15 @@
 
 [config_format.h](../../src/io/config_format.h) 提供共享 TOML 文法及标量解析，支持带引号的字符串、布尔值、整数、浮点数及窗口整数数组，允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/ecm/application/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
 
+所有布尔键接受 `true`／`false` 或整数 `1`／`0`，含各worker覆盖；`1=true`、`0=false`。带自动模式的布尔键另接受字符串 `"auto"`。共享读取器仅对schema中声明的布尔类型归一化数值别名，业务投影统一收到true／false，原行继续保留以供错误定位及GUI原样保存。其他整数、小数及数组不能作为布尔值；整数配置键也不会因此接受布尔字面量。GUI读取数值别名时显示相应开关状态，修改后写为true／false；值未改变则保留原来的数字、注释和排版。默认模板仍使用布尔字面量。
+
 Stage1 的 [cli.cpp](../../src/io/cli.cpp) 一次转换每个显式选项并保留来源；别名按最后出现生效，非法的较早值不会因覆盖而消失。[config.cpp](../../src/io/config.cpp) 一次读取 TOML 并校验所有显式值，保留分区、源行与 typed scope，不补任务默认或改变运行时单例。生成绑定同时提供赋值和已解析字段复制，worker 投影不再往返文本。
 
 [normalize.cpp](../../src/io/normalize.cpp) 的 `normalize_settings()` 从生成默认开始，应用全局、worker 和显式 CLI，生成启动设置；main 安装一次 runtime。`normalize_direct()` 与 `normalize_worktodo()` 分别接收该设置，形成拥有自身数据的冻结任务。启动不回填 CLI，任务循环不重读 TOML；Stage2 接收端投影复用原始启动快照，worktodo 仍每轮重读。Stage2 保留其现有编排。
 
 `ckpt_backups` 的 0..16 范围由配置定义与生成绑定拒绝越界值，不静默截断；负 `ckpt_seconds` 仍归一化为禁用定期存档。重复 sigma 完整替换值和可选 param 声明；独立显式 `--gpu-param` 的矛盾检查继续保留。
 
-CLI/配置错误停止启动。TOML 诊断由 [config_format.h](../../src/io/config_format.h) 的 `config_diagnostic()` 统一排版：`INPUT[config]`、`file=路径:行号`、`worker=`、`key=`、`value=`、错误原因和 `expected 类型 范围` 各占一行。`value` 保留填写的原始右值；`worker=0` 表示全局分区，其他数字表示发生错误的 worker 覆盖分区。布尔类型只能填写 `true` 或 `false`，不能使用整数 `0`、`1`。选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
+CLI/配置错误停止启动。TOML 诊断由 [config_format.h](../../src/io/config_format.h) 的 `config_diagnostic()` 统一排版：`INPUT[config]`、`file=路径:行号`、`worker=`、`key=`、`value=`、错误原因和 `expected 类型 范围` 各占一行。`value` 保留填写的原始右值；`worker=0` 表示全局分区，其他数字表示发生错误的 worker 覆盖分区。布尔范围同时列出true／false和0／1。选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
 
 ## 运行时限制
 

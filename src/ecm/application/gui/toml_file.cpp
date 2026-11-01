@@ -73,22 +73,22 @@ void TomlFile::set(const std::string &section, const std::string &key,
                   const std::string &value) {
     const auto *option=ecm_config::toml_option(section,key);
     if(!option)throw std::runtime_error("unknown TOML option: "+section+"."+key);
-    std::string encoded=value;
+    std::string encoded=value,canonical=value;
     const std::string type=option->type;
     if(type=="string"||type=="int|string"||type=="float|string")
         encoded=ecm_results::json::quote(value);
     else if(type=="rect")encoded="["+value+"]";
-    else if(type=="bool")encoded=(value=="1"||value=="true")?"true":"false";
+    else if(type=="bool")canonical=encoded=ecm_config::boolean(value,key.c_str())?"true":"false";
     else if(type=="bool|string") {
-        const auto canonical=ecm_config::automatic_boolean_text(value,key.c_str());
+        canonical=ecm_config::automatic_boolean_text(value,key.c_str());
         encoded=canonical=="auto"?ecm_results::json::quote(canonical):canonical;
     }
     // Replace the LAST occurrence (that is the effective one) and drop nothing else.
     for (std::size_t i = lines_.size(); i-- > 0;) {
         Line &l = lines_[i];
         if (l.kind == Line::Kind::KeyValue && l.section == section && l.key == key) {
-            if (l.value == value) return;                 // no change -> not dirty
-            l.value = value;
+            if (l.value == canonical) return;             // no semantic change -> not dirty
+            l.value = canonical;
             l.raw = key + " = " + encoded;
             dirty_ = true;
             return;
@@ -99,7 +99,7 @@ void TomlFile::set(const std::string &section, const std::string &key,
     nl.kind = Line::Kind::KeyValue;
     nl.section = section;
     nl.key = key;
-    nl.value = value;
+    nl.value = canonical;
     nl.raw = key + " = " + encoded;
     const auto refresh_scopes=[this]() {
         int scope=0;

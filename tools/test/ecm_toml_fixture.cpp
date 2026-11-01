@@ -27,22 +27,55 @@ static void rejected(const std::filesystem::path &path,const std::string &body,
 }
 static void boolean_diagnostic(const std::filesystem::path &path, bool worker) {
     write(path, std::string(worker ? "[workers.2.stage2]" : "[stage2]") +
-                "\nstage2_giant_tail_balance = 1\n");
+                "\nstage2_giant_tail_balance = 1.0\n");
     std::vector<ecm_config::TomlLine> lines;
     std::string diagnostic;
     try { ecm_config::read_toml(path.string(), lines); }
     catch (const std::exception &e) { diagnostic = e.what(); }
     const auto expected = "INPUT[config]\nfile=" + path.string() + ":2\nworker=" +
-        (worker ? "2" : "0") + "\nkey=stage2_giant_tail_balance\nvalue=1\n" +
-        "wrong TOML value type for stage2_giant_tail_balance\nexpected bool [false|true]";
+        (worker ? "2" : "0") + "\nkey=stage2_giant_tail_balance\nvalue=1.0\n" +
+        "wrong TOML value type for stage2_giant_tail_balance\nexpected bool [false|true|0|1]";
     expect(diagnostic == expected, "TOML diagnostic must put each field on a separate line");
+}
+static size_t boolean_aliases(const std::filesystem::path &path) {
+    size_t checks=0;
+    for(const auto &option:ecm_config::toml_options) {
+        const std::string type=option.type,table=option.table;
+        if(type!="bool" && type!="bool|string")continue;
+        for(const bool worker:{false,true}) {
+            if(worker && table=="gui")continue;
+            const auto section=worker?"workers.2."+table:table;
+            for(const auto *value:{"false","true","0","1","+0","+1","-0"}) {
+                const std::string expected=(std::string(value)=="true" || std::string(value)=="1" ||
+                    std::string(value)=="+1")?"true":"false";
+                const auto body="["+section+"]\n"+option.key+"="+value+" # keep numeric spelling\n";
+                write(path,body);std::vector<ecm_config::TomlLine> lines;
+                expect(ecm_config::read_toml(path.string(),lines),"boolean alias TOML unavailable");
+                expect(lines.back().value==expected && lines.back().raw.find(value)!=std::string::npos,
+                       "boolean alias lost its value or original source spelling");
+                const auto values=ecm_config::cli_entries(lines,worker?2:1);
+                (void)ecm_config::read_stage1(values);(void)ecm_config::read_stage2(values);
+                if(table=="gui")(void)ecm_config::read_gui(ecm_config::section_entries(lines,table));
+                else {
+                    expect(ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Computation),
+                           "computation reader rejected a boolean alias");
+                    expect(lines.back().value==expected,"computation reader changed a boolean alias");
+                }
+                ++checks;
+            }
+            for(const auto *value:{"2","-1","1.0","0.0","[1]","yes"}) {
+                rejected(path,"["+section+"]\n"+option.key+"="+value+"\n");++checks;
+            }
+        }
+    }
+    expect(checks>0,"schema has no boolean options");return checks;
 }
 int main(int argc,char **argv) {
     try {
         expect(argc==3,"usage: fixture DEFAULT_TOML TEMP_TOML");
         const auto *tail_meta=ecm_config::toml_option("stage2","stage2_giant_tail_balance");
-        expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true]",
-            "boolean error hint advertises non-TOML literals");
+        expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true|0|1]",
+            "boolean error hint omits accepted aliases");
         std::vector<ecm_config::TomlLine> lines;
         expect(ecm_config::read_toml(argv[1],lines),"default TOML unavailable");
         const auto defaults1=ecm_config::read_stage1(ecm_config::cli_entries(lines,1));
@@ -58,26 +91,31 @@ int main(int argc,char **argv) {
                !defaults2.has_owner&&!defaults2.has_pack_zero,
                "template disabled an implicit worker or environment default");
         const std::filesystem::path temp=argv[2];
-        for (const auto *value : {"\"auto\"", "true", "false"}) {
+        const auto alias_checks=boolean_aliases(temp);
+        for (const auto *value : {"\"auto\"", "true", "false", "1", "0"}) {
             write(temp, std::string("[stage2]\nstage2_groot_balanced=")+value+
-                        "\n[workers.2.stage2]\nstage2_groot_balanced=false\n");
+                        "\n[workers.2.stage2]\nstage2_groot_balanced=0\n");
             expect(ecm_config::read_toml(temp.string(),lines), "G-root tri-state TOML unavailable");
             const auto global=ecm_config::read_stage2(ecm_config::cli_entries(lines,1));
-            expect(global.groot_balanced==(value==std::string("\"auto\"")?"auto":value),
+            const auto canonical=value==std::string("\"auto\"")?std::string("auto"):
+                ecm_config::automatic_boolean_text(value,"groot fixture");
+            expect(global.groot_balanced==canonical,
                    "G-root tri-state value lost");
             expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).groot_balanced=="false",
                    "G-root worker override lost");
         }
-        for (const auto *value : {"1", "0", "\"invalid\""})
+        for (const auto *value : {"2", "1.0", "\"invalid\""})
             rejected(temp,std::string("[stage2]\nstage2_groot_balanced=")+value+"\n");
         write(temp,"# preserve this comment\n[stage2]\nstage2_groot_balanced=\"auto\"\n");
         ecmgui::TomlFile editor;std::string editor_error;
         expect(editor.load(temp.string(),editor_error),"GUI editor cannot load tri-state option");
-        for (const auto *value : {"true", "false", "auto"}) {
+        for (const auto *value : {"true", "false", "1", "0", "auto"}) {
             editor.set("stage2","stage2_groot_balanced",value);
+            const auto canonical=ecm_config::automatic_boolean_text(value,"groot fixture");
+            expect(editor.get("stage2","stage2_groot_balanced")==canonical,"GUI kept a noncanonical boolean alias");
             expect(editor.save(editor_error),"GUI editor cannot save tri-state option");
             expect(ecm_config::read_toml(temp.string(),lines),"GUI wrote invalid tri-state TOML");
-            expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).groot_balanced==value,
+            expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).groot_balanced==canonical,
                    "GUI tri-state roundtrip changed value");
             for(const auto &line:lines)if(line.key=="stage2_groot_balanced") {
                 char kind=0;ecm_config::toml_value(line.raw.substr(line.raw.find('=')+1),kind);
@@ -85,6 +123,23 @@ int main(int argc,char **argv) {
             }
             expect(lines.front().raw=="# preserve this comment","GUI changed an unrelated source line");
         }
+        write(temp,"# keep this spelling\n[stage2]\nstage2_giant_tail_balance = 1 # enabled\n");
+        expect(editor.load(temp.string(),editor_error),"GUI cannot load numeric boolean");
+        expect(editor.get("stage2","stage2_giant_tail_balance")=="true","GUI loaded 1 as false");
+        editor.set("stage2","stage2_giant_tail_balance","true");
+        expect(editor.lines().back().raw=="stage2_giant_tail_balance = 1 # enabled",
+               "GUI rewrote a semantically unchanged numeric boolean");
+        for(const auto *value:{"0","1","false","true"}) {
+            editor.set("stage2","stage2_giant_tail_balance",value);
+            expect(editor.save(editor_error),"GUI cannot save numeric boolean");
+            expect(ecm_config::read_toml(temp.string(),lines),"GUI wrote invalid boolean");
+            const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,1));
+            expect(settings.giant_tail_balance==ecm_config::boolean(value,"tail fixture"),"GUI boolean alias changed value");
+        }
+        bool invalid_editor=false;
+        try {editor.set("stage2","stage2_giant_tail_balance","2");}
+        catch(const std::exception &){invalid_editor=true;}
+        expect(invalid_editor,"GUI silently converted an invalid boolean to false");
         boolean_diagnostic(temp, false);
         boolean_diagnostic(temp, true);
         write(temp, "[stage2]\nstage2_giant_tail_balance = true\nstage2_b2_round_chain = false\n");
@@ -118,7 +173,11 @@ int main(int argc,char **argv) {
         rejected(temp,"device = 1\n");
         rejected(temp,"[stage1]\ndevice = 0\ndevice = 1\n");
         rejected(temp,"[stage1]\ndevice = '0'\n");
-        rejected(temp,"[stage2]\nstage2_pack_zero = 1\n");
+        rejected(temp,"[stage1]\ndevice = true\n");
+        rejected(temp,"[stage1]\ncurve = 1\n");
+        rejected(temp,"[stage2]\nstage2_pack_zero = \"1\"\n");
+        rejected(temp,"[stage2]\nstage2_pack_zero = 2\n");
+        rejected(temp,"[stage2]\nstage2_pack_zero = 2\n[workers.2.stage2]\nstage2_pack_zero = 0\n");
         rejected(temp,"[workers.2.stage1]\nstage2_device = 1\n");
         rejected(temp,"[stage1]\nsigma = 18446744073709551616\n");
         rejected(temp,"[gui]\nfuture_style = true\n");
@@ -144,7 +203,7 @@ int main(int argc,char **argv) {
             rejected(temp,invalid,ecm_config::TomlReadMode::Computation);
         std::filesystem::remove(temp);
         std::filesystem::remove(temp.string()+".bak");
-        std::cout<<"TOML parser and generated defaults: PASS\n";
+        std::cout<<"TOML parser and generated defaults: PASS; boolean alias checks="<<alias_checks<<"\n";
         return 0;
     } catch(const std::exception &e) {std::cerr<<e.what()<<'\n';return 1;}
 }
