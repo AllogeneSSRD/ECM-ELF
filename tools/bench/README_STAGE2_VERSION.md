@@ -57,6 +57,12 @@ python tools/bench/plot_stage2_version.py `
 
 `--publish` 只复制选定 PNG 到指定 attachments 目录；原始结果、账户字段、运行校验值、EXE、遥测和全部数据只在忽略的 data 目录。公开提交只包含工具、文档和审查过的图。
 
+## 位宽复杂度的离线重读
+
+`analyze_stage2_bit_complexity.py`只读已有冻结结果，不运行GPU。主输入为`--study data/experiments/stage2_point_matrix_20261031/min1_full03`，固定D控制为`--fixed-study data/experiments/opencl_full_matrix_20261030/quick_13`；显式指定新的`--output`和`--figures`目录，默认不修改docs。可选`--html docs/web/stage2-bit-complexity-20261101.html`生成自包含SVG阅读页；`--public-figures docs/performance/attachments`复制三张公开PNG。
+
+分析器核对主矩阵52次回执及程序／profile／save哈希、非单位／错误状态、实际NTT分布；固定D控制核对156条CUDA的日志和回执哈希及每格3次完整性。主统计取off侧每格n=1，on侧仅作同工作量敏感性核对；固定D旧构建单独拟合，不合并到当前矩阵。输出保留CSV、JSON、分析器快照、图和样本边界，经验幂指数不是算法复杂度证明。解释见[位宽性能](../../docs/performance/STAGE2_BIT_SCALING.md)。
+
 ## 正常运行时选型矩阵
 
 ### 布局与旧tune的有界验证
