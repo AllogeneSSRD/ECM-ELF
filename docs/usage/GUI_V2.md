@@ -1,12 +1,12 @@
 # GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，当前候选版本0.56.2，默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，版本直接使用`include/ecm/platform/program_version.h`中的公共程序版本，不维护独立版本号。默认使用DX11，Vulkan仅保留为显式选择的诊断后端。两种后端共用同一套现代布局、控件、图表、语言与宠物。原GUI的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
 ## 构建与启动
 
 GUI v2 独立 BAT、`internal/build_gui_v2.ps1` 包装和测试构建共用 `tools/build/test/build_gui_v2.ps1`。入口先依次运行 `generate_ecm_config.py`、`generate_gui_v2_state.py`，同步业务配置、GUI 侧车、业务选项头文件及选项 XML，再冻结源码/配置摘要并配置 CMake；任一步失败即停止。无内容变化的生成物保留时间戳。CMake 的过期检查及构建后源码身份复查继续生效；直接调用 CMake 时须自行先完成这两个生成步骤。
 
-GUI 与模型源文件显式依赖业务/GUI 配置生成头文件，确保生成内容变化时重编译，包括旧缓存未正确记录 MSVC 本地化头文件依赖的情况。没有变化的生成物不会因此触发重编译；这不替代其他普通头文件的编译器依赖跟踪。
+GUI 与模型源文件显式依赖业务/GUI 配置生成头文件及公共版本头，确保生成内容或版本变化时重编译，包括旧缓存未正确记录 MSVC 本地化头文件依赖的情况。构建入口在产出后执行不打开窗口的`--version`，核对公共版本并将横幅和版本写入构建清单；不一致时构建失败。没有变化的生成物不会因此触发重编译；这不替代其他普通头文件的编译器依赖跟踪。
 
 完整 CUDA 发布由 `tools/build/build_release.ps1/.bat` 构建，使用独立 `gui-v2-release` 目录、统一 vcpkg 通用 GMP，并只启用基础 Classic ELY 注册项和资源。两个 CUDA 包各自包含完整 GUI v2、群阶/诊断助手和相邻计算 worker。发布不会直接拾取已有 local GUI 候选；入口核对 GMP头/库/DLL、源码和程序身份。下面的独立 local/GUI-only 入口保留完整皮肤候选及其本地依赖条件，完整发布的目录、工具链和载荷以[构建与发布](BUILD.md)为准。
 
@@ -15,6 +15,8 @@ GUI 与模型源文件显式依赖业务/GUI 配置生成头文件，确保生�
 运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。
 
 未传`--config`时，自动查找并载入`ecm_gui_v2.exe`同目录的`ecm.toml`，不受快捷方式“起始位置”或当前工作目录影响。不存在时保持GUI打开并提示选择工作流；存在但内容有误时显示加载错误。显式`--config`优先，指定文件失效时不会退回旁边的另一份配置。工作流路径确定后再选择对应的UI侧车，自动发现和显式打开同一配置使用相同身份。按该配置的`workers.N.autostart`执行自动启动。
+
+首次加载失败时，Workers页保留并直接显示读取器的文件、行号、键和值等诊断，提供设置入口；打开正确工作流后清除错误。修改工作流失败时保留此前成功加载的worker。`stage2_tune_profile`属于`[stage2]`或`[workers.N.stage2]`，不能放在`[workers.N.stage1]`或`[workers.N]`；各worker的独立路径和优先级见[Stage2使用说明](STAGE2.md#cuda-入口)。配置加载失败不代表GUI不支持该版本，也不会启动或删除计算任务。
 
 常用参数：
 
@@ -28,7 +30,7 @@ GUI 与模型源文件显式依赖业务/GUI 配置生成头文件，确保生�
 - `--single-viewport`：保持所有 ImGui 面板在主窗口内，当前默认模式。
 - `--multi-viewport`：显式启用可移出主窗口的原生独立面板；设置中也可启用，重启生效。
 - `--renderer vulkan --trace-render --diagnostics <文件>`：可选记录Vulkan等待/提交/呈现的进入和返回、单调时钟与UTC对应；逐调用写盘有额外开销，不用于性能门禁。
-- `--diagnostics <文件>`、`--version`：诊断路径与独立前端版本。
+- `--diagnostics <文件>`、`--version`：诊断路径与公共程序版本；查询版本不打开窗口。各worker仍展示其实际运行二进制报告的版本。
 
 设置从导航底部的固定齿轮入口、顶栏“设置”或`Ctrl+,`打开，不替换当前中央页面，不参与页面拖动排序或右侧标签。它是主窗口内独立的非停靠ImGui弹窗，保持DX11单窗口默认模式；可拖动、调整尺寸、最大化/还原，通过右上角关闭、“完成”或非文本输入时的Esc关闭。弹窗位置和大小在会话中保留，重新启动不自动打开；读取旧侧车的页面5时兼容打开弹窗并回到实际中央页，旧右侧设置位自动移除。
 

@@ -85,7 +85,7 @@ function Invoke-Compiler([string]$Command, [string]$Log) {
     $output -split "`r?`n" | Where-Object { $_ -match 'gui_v2:|Built target|error|warning' } | Write-Host
 }
 Invoke-Compiler $configure 'configure.log'
-$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test ecm_gui_v2_native_timeout_fixture' } else { 'ecm_gui_v2' }
+$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_config_identity_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test ecm_gui_v2_native_timeout_fixture' } else { 'ecm_gui_v2' }
 Invoke-Compiler "cmake --build `"$BuildDir`" --target $targets" 'build.log'
 foreach ($key in $inputHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $repo $key) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $inputHashes[$key]) {
@@ -93,6 +93,14 @@ foreach ($key in $inputHashes.Keys) {
     }
 }
 $binary = Join-Path $BuildDir 'ecm_gui_v2.exe'
+$versionHeader = [IO.File]::ReadAllText((Join-Path $repo 'include/ecm/platform/program_version.h'))
+if ($versionHeader -notmatch 'version\[\]\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"') { throw 'Public program version not found' }
+$programVersion = $Matches[1]
+$versionBanner = (& $binary --version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $versionBanner -notmatch ('^ECM-ELF GUI v2 ' + [regex]::Escape($programVersion) + ' ')) {
+    throw "GUI v2 version mismatch: expected $programVersion; actual $versionBanner"
+}
+Write-Host "GUI v2 version: $programVersion"
 if ($gmpIdentity) {
     foreach ($name in $gmpIdentity.Hashes.Keys) {
         if ((Get-FileHash -LiteralPath (Join-Path $GmpRoot $name)).Hash -ne $gmpIdentity.Hashes[$name]) { throw "GUI GMP dependency changed during build: $name" }
@@ -103,7 +111,7 @@ if (Test-Path -LiteralPath (Join-Path $repo '.git')) { $sourceCommit = & git -C 
 elseif (Test-Path -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json')) {
     $sourceCommit = (Get-Content -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json') -Raw -Encoding UTF8 | ConvertFrom-Json).source_commit
 }
-[ordered]@{schema=1;exe_sha256=(Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant();
+[ordered]@{schema=1;program_version=$programVersion;version_banner=$versionBanner;exe_sha256=(Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant();
     diagnostics_host_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_diagnostics_host.exe')).Hash.ToLowerInvariant();
     group_order_helper_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_group_order_ui.exe')).Hash.ToLowerInvariant();
     group_order_runtime_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'gmp-10.dll')).Hash.ToLowerInvariant();

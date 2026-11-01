@@ -58,6 +58,10 @@ set_property(SOURCE ${_gui_config_sources} ${_gui_model_sources} APPEND PROPERTY
     "${ECM_GUI_V2_ROOT}/src/ecm/application/configuration/generated/ecm_toml_schema.h"
     "${ECM_GUI_V2_ROOT}/src/ecm/application/configuration/generated/ecm_toml_template.h"
     "${ECM_GUI_V2_ROOT}/src/ecm/platform/generated/configuration_defaults.h")
+# The displayed version is used by the native entry point only.
+set_property(SOURCE main_win32.cpp APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/version.h"
+    "${ECM_GUI_V2_ROOT}/include/ecm/platform/program_version.h")
 target_include_directories(ecm_gui_v2_models PUBLIC "${ECM_GUI_V2_ROOT}/include" "${ECM_GUI_V2_ROOT}/src" "${_old}")
 target_compile_features(ecm_gui_v2_models PUBLIC cxx_std_17)
 target_compile_definitions(ecm_gui_v2_models PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -106,6 +110,10 @@ target_link_libraries(ecm_gui_v2_owner_probe PRIVATE ecm_gui_v2_models)
 target_compile_features(ecm_gui_v2_owner_probe PRIVATE cxx_std_17)
 target_compile_options(ecm_gui_v2_owner_probe PRIVATE /utf-8 /EHsc)
 add_executable(ecm_gui_v2_state_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/state_test.cpp" ui_state.cpp pet/window.cpp)
+
+add_executable(ecm_gui_v2_config_identity_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/config_identity_test.cpp")
+target_link_libraries(ecm_gui_v2_config_identity_test PRIVATE ecm_gui_v2_models)
+target_compile_options(ecm_gui_v2_config_identity_test PRIVATE /utf-8 /EHsc)
 target_link_libraries(ecm_gui_v2_state_test PRIVATE ecm_gui_v2_models gdiplus ole32)
 target_compile_options(ecm_gui_v2_state_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 add_executable(ecm_gui_v2_app_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/app_test.cpp"

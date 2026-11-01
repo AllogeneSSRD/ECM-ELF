@@ -79,6 +79,7 @@ void App::initialize(const std::string& path, bool disable_nvml) {
 }
 bool App::load_config(const std::string& input) {
     if (controller.busy()) { status = "Stop all workers before changing workflow."; return false; }
+    std::snprintf(config_input,sizeof(config_input),"%s",input.c_str());
     try {
         const auto path = std::filesystem::weakly_canonical(std::filesystem::absolute(std::filesystem::u8path(input))).u8string();
         std::error_code same_error;
@@ -105,9 +106,9 @@ bool App::load_config(const std::string& input) {
         configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};result_view_dirty=true;
         ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
-        status = "Workflow opened."; trace("config=" + path);
+        workflow_load_error.clear();status = "Workflow opened."; trace("config=" + path);
         return true;
-    } catch (const std::exception& error) { status = error.what(); trace(status); return false; }
+    } catch (const std::exception& error) { workflow_load_error=status=error.what();trace(status);return false; }
 }
 void App::configure_workers() {
     auto settings = ecm_config::read_gui(ecm_config::section_entries(config.lines(), "gui"));
@@ -591,7 +592,12 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,{6*active.scale,6*active.scale});
     fonts.push(ui::FontRole::Primary);ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(ecmgui_v2::ui::text("worker.title",zh));ImGui::PopFont();
     if(ImGui::IsItemHovered()&&!config_path.empty())ImGui::SetTooltip("%s",config_path.c_str());
-    if(!ready){ui::secondary_text(ecmgui_v2::ui::text("worker.open_workflow_hint",zh));ImGui::PopStyleVar(2);return;}
+    if(!ready){
+        if(!workflow_load_error.empty())ImGui::TextWrapped("%s",workflow_load_error.c_str());
+        ui::secondary_text(ecmgui_v2::ui::text("worker.open_workflow_hint",zh));
+        if(ImGui::Button(ui::text("settings",zh)))open_settings(4);
+        ImGui::PopStyleVar(2);return;
+    }
     const auto title_end=ImGui::GetItemRectMax();
     const char* start_label=ui::text("action.start_all",zh);const char* stop_label=ui::text("action.stop_safely",zh);
     const float stop_width=ImGui::CalcTextSize(stop_label).x+ImGui::GetFontSize()*19/15,stop_height=ImGui::GetFontSize();

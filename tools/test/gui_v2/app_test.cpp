@@ -78,6 +78,20 @@ static void stage2_raw_times(const fs::path& root,const fs::path& fixture){
      assert(legacy.workers()[0].hist_s_per_curve==(std::vector<float>{10,20,15}));}
     std::cout<<"{\"stage2_raw_history\":true,\"raw_display_and_eta\":true,\"legacy_average_preserved\":true}\n";
 }
+static void workflow_errors(const fs::path& root){
+    const auto path=root/"workflow-error.toml";
+    write(path,"[workers.1.stage1]\nstage2_tune_profile=\"gpu0.toml\"\n");
+    ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(path.u8string(),true);
+    assert(!app.ready&&app.workflow_load_error.find("stage2_tune_profile")!=std::string::npos);
+    assert(app.workflow_load_error.find(":2")!=std::string::npos&&std::string(app.config_input)==path.u8string());
+    const auto error=app.workflow_load_error;app.status="unrelated UI notification";
+    assert(app.workflow_load_error==error); // The Workers view keeps the diagnostic.
+    write(path,"[gui]\nNumWorkers=2\n[workers.1]\nautostart=0\n[workers.1.stage2]\nstage2_tune_profile=\"gpu0.toml\"\n"
+        "[workers.2]\nautostart=0\n[workers.2.stage2]\nstage2_tune_profile=\"gpu1.toml\"\n");
+    assert(app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&app.workflow_load_error.empty());
+    write(path,"[workers.1.stage1]\nstage2_tune_profile=\"gpu0.toml\"\n");
+    assert(!app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&!app.workflow_load_error.empty());
+}
 int main(int argc,char** argv){
     {ecmgui::WorkerView worker;worker.stage2=true;auto& status=worker.stage2_status;
      const auto apply=[&](const char* line){status.apply(ecmgui::parse_line(line).stage2);};
@@ -202,6 +216,7 @@ int main(int argc,char** argv){
          frame(false,true);assert(metrics.mixed);
      }ImGui::DestroyContext(context);}
     assert(argc==2||argc==3);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
+    workflow_errors(root);
     {using namespace ecmgui_v2::ui;
      auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
      auto timing=stage2_timing(previous,tuned,0);assert(timing.seconds[5]==20&&timing.sources[5]==1&&timing.seconds[2]==10&&timing.sources[2]==2);
