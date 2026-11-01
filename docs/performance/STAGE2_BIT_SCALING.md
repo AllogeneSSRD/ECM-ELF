@@ -728,7 +728,7 @@ TPI32每warp仅处理一个标量，使该标量的位分支在warp内一致；�
 
 图中横轴为独立输入格，标签同时给出实际B2；相邻点连线只辅助阅读，不表示固定B2的位宽趋势。下排相对同输入的标量对照计算节省比例。
 
-本机最终EXE为0.57.6，SHA256 `35691aa62a8c5ca9e67c3d4367d17ca8ec09ad477fba31c76695d07c7f1c577f`，17048064 B；255项构建输入和46个目标文件核验通过，4个CUDA目标文件与冻结0.57.5逐字节相同。这轮改变配置、选型及计时身份，没有更换设备算术。GMP DLL SHA256 `969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。
+本节验收EXE为0.57.6，SHA256 `35691aa62a8c5ca9e67c3d4367d17ca8ec09ad477fba31c76695d07c7f1c577f`，17048064 B；255项构建输入和46个目标文件核验通过，4个CUDA目标文件与冻结0.57.5逐字节相同。这轮改变配置、选型及计时身份，没有更换设备算术。GMP DLL SHA256 `969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。
 
 代码依据：[host_policy.cpp](../../src/ecm/stage2/cuda/host_policy.cpp)21行配置优先级；[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)30／59行区域配对及单后端候选；[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)620／1094行运行时选择与显式校准；[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp)109行点启动检查计时；[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)8行Shape与后端身份。
 

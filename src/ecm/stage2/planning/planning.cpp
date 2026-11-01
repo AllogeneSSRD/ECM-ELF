@@ -1161,6 +1161,9 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
         // Optional warmup consumes the same budget; never start after expiry.
         if(budget.expired() || stop_requests) {if(trials.empty())return paired_changed;break;}
         Options worker=o;worker.tune_child=true;worker.auto_b2=false;worker.factor_only=false;worker.factorize_hits=false;
+        // Calibration times exactly the admitted D/B2. Production rounding is
+        // a request policy, not permission to change a calibration's identity.
+        worker.b2_round_chain=false;
         worker.carrier_exponent=carrier;worker.has_carrier=true;worker.log_level=stage2_log::quiet;
         worker.debug_log=false;worker.debug_file.clear();worker.tune_profile.clear();
         const auto base=stem+"_"+std::to_string(repeat);
@@ -1182,7 +1185,13 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
             throw std::runtime_error("portable calibration failed arithmetic/curve checks; inspect "+log.string());
         std::ifstream in(result);std::string row,extra;if(!std::getline(in,row) || std::getline(in,extra))throw std::runtime_error("invalid calibration receipt");
         auto f=et::fields(row);if(et::uint(f,"d")!=d || et::uint(f,"giant_points")!=b2/d+2 || et::uint(f,"bad") ||
-            !et::uint(f,"clean") || !et::uint(f,"selftest_cases") || !et::uint(f,"checked"))throw std::runtime_error("invalid completed calibration shape");
+            !et::uint(f,"clean") || !et::uint(f,"selftest_cases") || !et::uint(f,"checked"))
+            throw std::runtime_error("invalid completed calibration shape\nexpected_D="+std::to_string(d)+
+                "\nexpected_B2="+std::to_string(b2)+"\nexpected_giant_points="+std::to_string(b2/d+2)+
+                "\nactual_D="+std::to_string(et::uint(f,"d"))+"\nactual_giant_points="+std::to_string(et::uint(f,"giant_points"))+
+                "\nclean="+std::to_string(et::uint(f,"clean"))+"\nbad="+std::to_string(et::uint(f,"bad"))+
+                "\nselftest_cases="+std::to_string(et::uint(f,"selftest_cases"))+"\nchecked="+std::to_string(et::uint(f,"checked"))+
+                "\nevidence="+result.string());
         if(pt::optional_uint(f,"point_policy_replayed"))throw std::runtime_error("calibration replayed the original point policy; timing is not eligible");
         if(bool(et::uint(f,"fold_resident"))!=shape.fold || bool(et::uint(f,"frontier_resident"))!=shape.frontier ||
            bool(pt::optional_uint(f,"giant_tail_balance"))!=shape.tail_balance ||

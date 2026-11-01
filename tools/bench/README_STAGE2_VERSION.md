@@ -107,6 +107,10 @@ TPI32及分档对照使用`--coop-tpi 32 --coop-middle`，每格测旧版默认�
 
 ## 正常运行时选型矩阵
 
+### 启动短校准与生产凑整隔离
+
+`tools/test/test_stage2_calibration_rounding_gpu.py --stage2 <EXE> --save <B1=20的NF成本探测点> --output <新目录> --allow-gpu-pid <已授权界面PID>`用空性能文件验证五种配置。`--expect-bug`记录修复前短校准被凑整的失败及两个通过对照；默认要求短校准保持D210／B2=42020／202点，正常规划仍保留生产凑整，显式ECM tune仍拒绝凑整但接受CLI关闭。`--run-curve`将short_on继续执行为一条真实Stage2，核对NF、实际B2及GMP零错误。该工具不消费生产队列，不修改源保存点；原始输入与程序、逐调用进程门禁及遥测均独立冻结。此为功能回归，不计入性能矩阵。
+
 ### 布局与旧tune的有界验证
 
 `bench_stage2_layout_matrix.py`复用已完成的默认矩阵及旧性能文件，当前验证范围限定为较小的名义B2=26000000000档：13份精确余因子、普通/承载默认26格，各n=1筛查，明显回退单项补测。默认矩阵若按用户要求中途缩减范围，须保留明确的`authorized_scope_stop.json`及边界计划；新研究只提取已完整验收的小B2格，不改写原始记录。

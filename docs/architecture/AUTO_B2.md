@@ -346,6 +346,10 @@ paired策略及保留的采样摘要估算器可用跨D非负拟合分别估计�
 
 默认 `stage2_short_calibration=1`，独立预算10秒。没有合适文件、必要NTT组件缺失，或当前worktodo范围完全不在可复用已测位宽覆盖内时触发；部分覆盖时不因首项宽度外推反复校准。直接读save以该目标作为单项范围。
 
+启动成本探测固定使用已准入的D/B2，校准子进程不继承生产`stage2_b2_round_chain`凑整许可。保存B1≥20时，D=210、probe_B2=42020、giant点数为202；正常任务及`--plan-only`之后仍按其生产配置凑整B2。这两个边界分别处理，不把扩大后的探测记成原边界的成绩。显式`--tune ecm`仍拒绝开启凑整，需用`--b2-round-chain 0`关闭。
+
+校准回执必须匹配预期D、giant点数、执行路径和算术检查。失败时保留证据并报告预期D/B2/点数、实际D/点数、clean、bad、自检数及证据路径；不得放宽校验接纳改变了边界的成绩。复现入口为[凑整隔离回归工具](../../tools/test/test_stage2_calibration_rounding_gpu.py)，实现入口为`src/ecm/stage2/planning/planning.cpp::portable_measure`。
+
 使用已验证save中的N、sigma及仿射点，做D=210、probe_B1=min(保存B1,20)、probe_B2=probe_B1+42000的完整引擎成本探测及少数NTT测量；所需承载缺摘要时补测。探测仅复用曲线上的有效点，不声称重新执行了probe_B1的Stage1；原B1与探测B1另存证据，用户save及生产B1/B2不变。这样生产B1增大不会扩大启动探测的巨步范围。短校准发现因子且全部算术检查通过时，保留证据、跳过该性能样本并继续正常任务；不将因子命中写入无因子性能表。算术检查失败仍中止。结果供后续tune利用，不消费队列，不代表生产B2精度验收；缺少完整引擎锚点时，固定B2可回退原生规划，Auto B2仍需可用成本。plan-only也可能触发校准并更新性能文件。`--short-calibration 0`可关闭；关闭后model策略缺文件使用内置基础成本，paired固定B2保留原生规划；Auto B2仍要求可用成本及正的T1。
 
 [复合数启动回归工具](../../tools/test/test_stage2_startup_composite_gpu.py)验证M2003/sigma27/B1=20保存点的因子4007探测不进入性能表、正常Stage2仍完成；另对经独立GMP核对的真实M521/B1=10e6保存点验证probe_B2保持42020。[当前功能证据](../../data/experiments/stage2_n_scaling_20261011_2400/calibration_final_gate/regression_report.json)与[全位宽性能扫描](../performance/STAGE2.md)分别保留，功能回归计时不混入性能矩阵。
