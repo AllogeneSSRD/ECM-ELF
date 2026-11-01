@@ -238,10 +238,10 @@ FlatInputStats g_flat_input;
 
 long long g_name_max = -1;
 
-bool giant_coop_requested()
+int giant_coop_tpi()
 {
     const char *value=std::getenv("NTT_GIANT_COOP");
-    return value && !std::strcmp(value,"16");
+    return value && !std::strcmp(value,"32") ? 32 : value && !std::strcmp(value,"16") ? 16 : 0;
 }
 
 void ladder_cap_init(void)
@@ -339,8 +339,8 @@ int ecm_cuda_stage2_set_log_level(int level)
 
 int ecm_cuda_stage2_check_configuration()
 {
-    if(const char *v=std::getenv("NTT_GIANT_COOP"))if(std::strcmp(v,"0") && std::strcmp(v,"16")) {
-        std::fprintf(stderr,"NTT_GIANT_COOP must be 0 or 16\n");return 2;
+    if(const char *v=std::getenv("NTT_GIANT_COOP"))if(std::strcmp(v,"0") && std::strcmp(v,"16") && std::strcmp(v,"32")) {
+        std::fprintf(stderr,"NTT_GIANT_COOP must be 0, 16 or 32\n");return 2;
     }
     if(const char *v=std::getenv("NTT_POINT_SQUARE"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
         std::fprintf(stderr,"NTT_POINT_SQUARE must be 0 or 1\n");return 2;

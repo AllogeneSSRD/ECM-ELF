@@ -65,9 +65,9 @@ def main():
     if a.check == 'giant-coop':
         key = 'NTT_GIANT_COOP'
         cases = [('default', None, 0, False), ('off', '0', 0, False), ('on', '16', 16, False),
-                 ('invalid_one', '1', None, False), ('invalid_tpi', '32', None, False),
+                 ('on32', '32', 32, False), ('invalid_one', '1', None, False), ('invalid_tpi', '64', None, False),
                  ('invalid_negative', '-1', None, False), ('invalid_float', '16.0', None, False),
-                 ('queue_default', None, 0, True), ('queue_on', '16', 16, True)]
+                 ('queue_default', None, 0, True), ('queue_on', '16', 16, True), ('queue_on32', '32', 32, True)]
     try:
         for name, value, expected, queued in cases:
             directory = out / name

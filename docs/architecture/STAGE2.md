@@ -21,6 +21,8 @@
 
 `src/ecm/stage2/cuda/device/arithmetic_kernels.cu` 维护点与系数算术的显式实例清单。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放；不使用 RDC。
 
+可选协作giant链由`point_coop_kernels.cu`独立实例化，host启动接口仍在`cuda/launch.h`。`point_coop_chain.cuh`复用`point_coop_field.cuh`的CGBN适配与规范余数合同；`point_coop_plan.h`集中定义有限容量分档，执行日志与必需自检使用同一分档。公共CGBN入口为`include/ecm/cuda/cgbn.h`，第三方实现保持在`third_party/cgbn/`。
+
 位宽清单仍由 `src/ecm/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev/release默认使用算术与NTT两个聚合编译单元；支持的工具链通过nvcc内部并行优化。生产引擎可显式选择 `KernelLayout=isolated`，由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。两种布局通过编译参数和构建profile隔离。
 
 聚合模式沿用各聚合单元的设备常量，不启用隔离宏及主机快照路径，不保证逐容量隔离JIT。隔离备选的每个算术模块持有自己的设备常量；`constants.cpp` 保存按设备区分的主机快照及修订号，更新快照不访问全部设备模块，被调用的薄启动器在修订号/设备变化时才向所属模块上传。NTT的 `module_dispatch.cpp` 只返回选定tile句柄；固定mode3无需广播归约模式。实际按需JIT资格须观察驱动加载模块，构建策略与旧驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
@@ -31,7 +33,7 @@ NTT 主机规划、运行时、Graph 和校验位于 `src/ecm/cuda/ntt/`，设�
 
 实验实现集中在 `tools/experiments/cuda/`：`stage2_tree/worker.cu` 是开发 wrapper，`main.cu` 是独立树入口，`engine.cuh` 与 `tune.cuh` 维护实验树和校准；该引擎拥有自己的 plain-scale 主机适配，不包含生产 Stage2 私有流程头。`stage2_bsgs/` 保存旧 CGBN BSGS 候选，`ntt_variants/` 保存独立 NTT/carry/outer/cuFFT 候选，`ntt_tensor/` 保存 Tensor 算法候选。它们通过独立源组显式构建，不进入生产目标。baby payload 的纯尺寸公式位于 `src/ecm/stage2/planning/initial_memory.h`，JSON 转义及纯设备原语仍可共享。
 
-`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针通过中立接口链接实际生产算术/NTT 对象，不包含 `.cu` 或截取实现正文。giant 探针的已注册普通 chain 使用生产对象；旋转候选及160/192字控制组使用独立 `giant_variant.cu`。Edwards host-wait 通过 `src/ecm/stage1/edwards/cuda/host_wait.h` 和唯一显式测试适配连接实际 Stage1 运行时。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
+`tools/test/` 保存 GMP oracle、夹具和诊断适配，`tools/bench/` 保存测量入口。探针直接实例化共享算术头，或通过中立接口链接实际生产算术/NTT对象，不包含 `.cu` 或复制算法正文。协作chain探针直接使用`point_coop_chain.cuh`，每个构建固定一种TPI／容量。另一个giant探针的已注册普通chain使用生产对象；旋转候选及160/192字控制组使用独立`giant_variant.cu`。Edwards host-wait通过`src/ecm/stage1/edwards/cuda/host_wait.h`和唯一显式测试适配连接实际Stage1运行时。CPU内存模型测试的源码提取仅用于CUDA测试替身，不参与产品构建。
 
 ## 输入与表示
 
@@ -69,13 +71,15 @@ D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。默认 giant 数 I=�
 | 12. 累积与 GCD | 设备每 64 叶求块积；CPU GCD 提取真因子；relocation 遇到非平凡 GCD 时重放原区间 | GPU 产品、CPU GMP |
 | 13. 验证与结果 | 排空算术检查，验证因子；可选命名/GP 分解；写入成功回执 | CPU 与检查收尾 |
 
-Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务。每曲线 init 包括 baby 集合枚举、baby/F 树和引擎内 NTT/S4 检查，main 包括 inverse、批循环、下降、GCD 和检查收尾。日志中的 shape 是 baby 集合枚举，已包含在 init 中，不能再次求和。引擎时间为 init+main；Stage1、外层 D 选型、计时前的 Montgomery/xADD 预检和进程启动另计。性能比较使用相同边界，进程墙钟单独记录。
+Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务。每曲线 init 包括 baby 集合枚举、baby/F 树和引擎内 NTT/S4 检查，main 包括 inverse、批循环、下降、GCD 和检查收尾。日志中的 shape 是 baby 集合枚举，已包含在 init 中，不能再次求和。引擎时间为 init+main；Stage1、外层 D 选型、计时前的点模乘／平方／协作及xADD预检和进程启动另计。性能比较使用相同边界，进程墙钟单独记录。
 
 ## 点生成与归一化
 
 差分 xADD 使用 6 次模乘，固定差点保证 chain 中的相邻点关系。相邻 seed 可同时得到 [iD]Q 与 [(i+1)D]Q，避免重复计算两个独立 ladder。短块、容量不足或非单位场景仍需保留正确回退。
 
-seed 和 chain 的宽位数核在 W>128 时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用 `stage2_giant_chain=32|64|auto` 选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。chain核位于 `src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
+默认标量seed和chain宽位核在W>128时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用`stage2_giant_chain=32|64|auto`选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。标量chain核位于`src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
+
+实验环境变量`NTT_GIANT_COOP=0|16|32`默认0；非零仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Baby、seed和非单位ladder恢复仍走原路线。该变量进入ECM tune环境快照，不参与现有TPI自动搜索；资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
 
 生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/ecm/stage2/geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
 

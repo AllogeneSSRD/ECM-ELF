@@ -1,4 +1,4 @@
-// Full xADD chains, exact scalar coordinate scale, fixed 16k CGBN capacity.
+// Full xADD chains, exact scalar coordinate scale, one CGBN capacity per build.
 #include <gmp.h>
 #include <cgbn/cgbn.h>
 #include <cuda_runtime.h>
@@ -15,6 +15,12 @@
 #include "../../src/ecm/stage2/cuda/device/giant_chain.cuh"
 #include "../../src/ecm/stage2/cuda/device/point_coop_chain.cuh"
 using Word=unsigned long long;
+#ifndef ECM_CHAIN_TPI
+#define ECM_CHAIN_TPI 16
+#endif
+#ifndef ECM_CHAIN_WORDS
+#define ECM_CHAIN_WORDS 256
+#endif
 #define CK(x) do{const auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA: %s\n",cudaGetErrorString(e));exit(2);}}while(0)
 void pack(Word *p,int nw,mpz_srcptr x){std::fill(p,p+nw,0);size_t z=0;mpz_export(p,&z,-1,8,0,0,x);}
 void unpack(mpz_ptr x,const Word *p,int nw){mpz_import(x,nw,-1,8,0,0,p);}
@@ -31,8 +37,8 @@ int main(int argc,char **argv) {
     if(argc!=9&&argc!=11){fprintf(stderr,"bits chains length tpi threads device kind samples [tail stride]\n");return 2;}
     const int bits=atoi(argv[1]),chains=atoi(argv[2]),length=atoi(argv[3]),tpi=atoi(argv[4]),
         threads=atoi(argv[5]),device=atoi(argv[6]),kind=atoi(argv[7]),samples=atoi(argv[8]);
-    if(bits<8193||bits>16384||chains<1||chains>8192||length<2||length>64||
-       (tpi!=0&&tpi!=16)||(threads!=32&&threads!=64&&threads!=128)||kind<0||kind>2||samples<1||samples>9)return 2;
+    if(bits<8193||bits>64*ECM_CHAIN_WORDS||chains<1||chains>8192||length<2||length>64||
+       (tpi!=0&&tpi!=ECM_CHAIN_TPI)||(threads!=32&&threads!=64&&threads!=128)||kind<0||kind>2||samples<1||samples>9)return 2;
     const int tail=argc==11?atoi(argv[9]):length,stride=argc==11?atoi(argv[10]):1;
     if(tail<1||tail>length||(stride!=1&&stride!=2))return 2;
     const int nw=(bits+63)/64;const size_t points=(size_t)(chains-1)*length+tail;
@@ -54,10 +60,10 @@ int main(int argc,char **argv) {
         ezoff=stride==2?szoff+1:3+(size_t)chains*3;
     auto *sz=di+szoff*nw,*ex=di+exoff*nw,*ez=di+ezoff*nw;
     cudaFuncAttributes attr{};
-    if(tpi)CK(cudaFuncGetAttributes(&attr,stage2_coop_chain<256,16>));
+    if(tpi)CK(cudaFuncGetAttributes(&attr,stage2_coop_chain<ECM_CHAIN_WORDS,ECM_CHAIN_TPI>));
     else CK(cudaFuncGetAttributes(&attr,s2g_chain_kernel<256,true>));
     auto run=[&](){
-        if(tpi)stage2_coop_chain<256,16><<<(chains*tpi+threads-1)/threads,threads>>>(dn,ninv,nw,dx,dz,sx,sz,ex,ez,chains,points,length,stride,kind==1?bits:0,doo,doo+points*nw);
+        if(tpi)stage2_coop_chain<ECM_CHAIN_WORDS,ECM_CHAIN_TPI><<<(chains*tpi+threads-1)/threads,threads>>>(dn,ninv,nw,dx,dz,sx,sz,ex,ez,chains,points,length,stride,kind==1?bits:0,doo,doo+points*nw);
         else s2g_chain_kernel<256,true><<<(chains+threads-1)/threads,threads>>>(dn,ninv,nw,dx,dz,sx,sz,ex,ez,points,length,chains,doo,doo+points*nw,stride);
         CK(cudaGetLastError());
     };
@@ -80,8 +86,8 @@ int main(int argc,char **argv) {
         }
     }
     auto sorted=timings;std::sort(sorted.begin(),sorted.end());
-    printf("point_coop_chain: bits=%d nw=%d chains=%d length=%d tail=%d seed_stride=%d tpi=%d threads=%d kind=%d bad=%zu checked_words=%zu output_words=%zu median_ms=%.6f registers=%d local_bytes=%zu sha256=%s samples_ms=",
-        bits,nw,chains,length,tail,stride,tpi,threads,kind,bad,checked,output.size(),sorted[sorted.size()/2],attr.numRegs,attr.localSizeBytes,digest(output).c_str());
+    printf("point_coop_chain: bits=%d nw=%d capacity_bits=%d chains=%d length=%d tail=%d seed_stride=%d tpi=%d threads=%d kind=%d bad=%zu checked_words=%zu output_words=%zu median_ms=%.6f registers=%d local_bytes=%zu sha256=%s samples_ms=",
+        bits,nw,tpi?64*ECM_CHAIN_WORDS:16384,chains,length,tail,stride,tpi,threads,kind,bad,checked,output.size(),sorted[sorted.size()/2],attr.numRegs,attr.localSizeBytes,digest(output).c_str());
     for(size_t i=0;i<timings.size();++i)printf("%s%.6f",i?",":"",timings[i]);puts("");
     CK(cudaEventDestroy(begin));CK(cudaEventDestroy(end));CK(cudaFree(di));CK(cudaFree(doo));
     for(auto &x:px)mpz_clear(x);for(auto &x:next)mpz_clear(x);mpz_clears(n,a,rinv,r,u,v,got,nullptr);gmp_randclear(rng);return bad?1:0;

@@ -3,6 +3,7 @@
 #include "checks.h"
 #include "options.h"
 #include "point_launch.h"
+#include "point_coop_plan.h"
 
 void s4_oracle_reset(S4Reduce &R)
 {
@@ -722,9 +723,10 @@ int mont_selftest(
                 (int)g_xadd6,g_xadd6 ? 6 : 8);
     stage2_log::print(stage2_log::debug,"point_square_mode: enabled=%d nw=%llu product=symmetric_upper_diagonal\n",
                 square_enabled,(unsigned long long)nw);
-    const bool coop_enabled=giant_coop_requested() && nw>128 && nw<=256;
-    stage2_log::print(stage2_log::debug,"giant_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=16384\n",
-        giant_coop_requested()?16:0,(int)coop_enabled,(unsigned long long)nw);
+    const int coop_tpi=giant_coop_tpi();
+    const bool coop_enabled=coop_tpi && nw>128 && nw<=256;
+    stage2_log::print(stage2_log::debug,"giant_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=%d\n",
+        coop_tpi,(int)coop_enabled,(unsigned long long)nw,64*s2g_coop_capacity_words((int)nw,coop_tpi));
     const int cases = 2048;
     std::vector<unsigned long long> ha((size_t)cases * nw, 0ull), hb((size_t)cases * nw, 0ull);
     uint64_t s = 0x2468ace13579bdfull;
@@ -775,7 +777,8 @@ int mont_selftest(
     if(coop_enabled) {
         constexpr int cooperative_cases=64;
         for(int square=0;square<2;++square) {
-            ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch{8,128},da,db,dn,ninv,(int)nw,
+            const unsigned int grid=(cooperative_cases*coop_tpi+127)/128;
+            ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch{grid,128},coop_tpi,da,db,dn,ninv,(int)nw,
                 cooperative_cases,enabled_bits,square!=0,dout);
             CK(cudaGetLastError());
             CK(cudaMemcpy(ho.data(),dout,(size_t)cooperative_cases*nw*8,cudaMemcpyDeviceToHost));
@@ -787,7 +790,7 @@ int mont_selftest(
                 if(mpz_cmp(acc,want))++coop_bad;
             }
         }
-        stage2_log::print(stage2_log::debug,"coop_selftest: tpi=16 multiplications=64 squares=64 mismatches=%llu\n",coop_bad);
+        stage2_log::print(stage2_log::debug,"coop_selftest: tpi=%d multiplications=64 squares=64 mismatches=%llu\n",coop_tpi,coop_bad);
     }
     // Reuse the existing device buffers; retain all 2048 multiplication cases.
     // Extra square cases exercise the production wrapper with equal inputs and

@@ -55,9 +55,9 @@ template<int NW>
 void ecm_launch_s2g_plain_scale_kernel(EcmCudaLaunch cfg, unsigned long long *h, size_t count, const unsigned long long *factor_mont, const unsigned long long *n, unsigned long long ninv, int nw);
 template<int NW,bool XADD6=false>
 void ecm_launch_s2g_chain_kernel(EcmCudaLaunch cfg, const unsigned long long *dn, unsigned long long ninv, int nw, const unsigned long long *ddx, const unsigned long long *ddz, const unsigned long long *dsx, const unsigned long long *dsz, const unsigned long long *esx, const unsigned long long *esz, unsigned long long npts, unsigned long long per_block, unsigned long long blocks, unsigned long long *out_x, unsigned long long *out_z, size_t seed_stride);
-void ecm_launch_s2g_coop_chain_kernel(EcmCudaLaunch cfg,const unsigned long long *n,unsigned long long ninv,int nw,
+void ecm_launch_s2g_coop_chain_kernel(EcmCudaLaunch cfg,int tpi,const unsigned long long *n,unsigned long long ninv,int nw,
     const unsigned long long *dx,const unsigned long long *dz,const unsigned long long *sx,const unsigned long long *sz,
     const unsigned long long *ex,const unsigned long long *ez,unsigned long long chains,unsigned long long points,
     unsigned long long length,size_t seed_stride,int mersenne_bits,unsigned long long *out_x,unsigned long long *out_z);
-void ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch cfg,const unsigned long long *a,const unsigned long long *b,
+void ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch cfg,int tpi,const unsigned long long *a,const unsigned long long *b,
     const unsigned long long *n,unsigned long long ninv,int nw,int cases,int mersenne_bits,bool square,unsigned long long *out);

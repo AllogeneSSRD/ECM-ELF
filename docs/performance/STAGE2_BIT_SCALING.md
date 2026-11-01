@@ -12,7 +12,7 @@
 | 主矩阵参数 | B1=50000，sigma26（M2003为27）；实际B2=27015978990，M6011为27567389850。固定已选D／G树布局／32或64链，batch256、arena6300、fold640 MiB；两侧实际点调度和NTT工作量相同 |
 | 固定D控制 | CUDA0.54.0，SHA256 `e24de9c753d50ad8642bc69984374e768da60b6f4235f955358fcee7bf28b5e0`；同13位宽，两档B2=260000／2600000，D2310／P240，普通／承载每格n=3，共156次CUDA调用。不与主矩阵合并，不使用同批OpenCL成绩作CUDA拟合 |
 | 设备与时钟 | RTX4060 Laptop、24SM／8GiB，驱动610.88、CUDA13.3。两份原研究以SM1500MHz为目标；主矩阵繁忙遥测2823条中2809条为1500MHz，另有1425–1485MHz。未在本轮调整显卡设置，功耗不是恒定值 |
-| 计时 | `stage2_full_wall.total=init+main`，包括引擎内必需检查，排除Stage1、读档、选型、进程启动与发布。固定D小工作量控制仍含每次必需自检，不代表生产长曲线的纯kernel效率 |
+| 计时 | `stage2_full_wall.total=init+main`，包括S4形状检查，排除启动点算术自检、Stage1、读档、选型、进程启动与发布。固定D小工作量控制仍含每次必需自检，不代表生产长曲线的纯kernel效率 |
 
 原始主矩阵为`data/experiments/stage2_point_matrix_20261031/min1_full03/`；固定D控制为`data/experiments/opencl_full_matrix_20261030/quick_13/`的CUDA子集。两者都保留原字节。它们用于解释相应算法工作量，不能将旧构建成绩标成当前版本的新GPU测量。
 
@@ -25,6 +25,7 @@
 | \(\mathcal N,t\) | 待分解目标及其实际位数，\(t=\lfloor\log_2\mathcal N\rfloor+1\)；避免把模数数值N与位数混用 |
 | \(\mathcal M,p,s\) | 算术模数、承载指数和算术位数；普通\(\mathcal M=\mathcal N,s=t\)，梅森承载\(\mathcal M=2^p-1,s=p\) |
 | \(W,W_{cap}\) | 64-bit limb数\(W=\lceil s/64\rceil\)；\(W_{cap}\)是4／8／16／32／64／128／256中不小于W的最小模板容量 |
+| \(W_c,u,q_c\) | 协作容器的64-bit词数、每整数线程数、每线程32-bit字数\(q_c=2W_c/u\)；与标量\(W_{cap}\)分开计 |
 | \(R\) | 点Montgomery表示的radix \(2^{64W}\)；不是NTT素数，也不是多项式的系数个数 |
 | \(B1,B2,B2_{req}\) | 已完成的Stage1界、实际执行的Stage2界及用户请求界；向上凑整开启时以实际B2计算下面的工作量 |
 | \(D,P,J\) | giant步长，\(P=\varphi(D)/2\)；baby索引集\(J=\{1\le j\le D/2:\gcd(j,D)=1\}\)，\(\lvert J\rvert=P\) |
@@ -308,7 +309,7 @@ $$
 +96\sum_{j=1}^{K_S}\mathcal R_j(W).
 $$
 
-\(M_C,S_C\)是固定16384-bit协作容器的成本，当前协作平方调用一般乘法。另加对应CPU参考计算、GMP抽样、carry检查及排空。协作检查额外D2H为\(1024W\) bytes，没有额外H2D或显式设备数组。形状数不等于NTT长度数，冷／热缓存也会改变初始化成本。发布、可选因子分解主要与结果数量和因子本身有关，没有仅凭B2／位宽就能可靠确定的固定复杂度。
+\(M_C,S_C\)按实际\(W_c,u\)计；当前协作平方调用一般乘法。点算术启动自检在engine.cpp的init_begin之前；S4形状检查位于引擎内，不能把二者都加到init+main。另加对应CPU参考计算、GMP抽样、carry检查及排空。协作检查额外D2H为\(1024W\) bytes，没有额外H2D或显式设备数组。形状数不等于NTT长度数，冷／热缓存也会改变初始化成本。发布、可选因子分解主要与结果数量和因子本身有关，没有仅凭B2／位宽就能可靠确定的固定复杂度。
 
 ## 7. 分阶段内存与数据量
 
@@ -361,7 +362,7 @@ $$
 
 本地`third_party/cgbn/include/cgbn/impl_cuda.cu:518/526/1027/1032`中，`sqr_wide(a)`调用`mul_wide(a,a)`，`mont_sqr(a)`调用`mont_mul(a,a)`；IMAD实现`core/core_mul_imad.cu:81`、`core/core_mont_imad.cu:28`是循环的部分积与消元，没有递归Karatsuba。令n为总32-bit limb数、TPI固定，跨所有协作线程的工作量仍为\(\Theta(n^2)\)；不能把单线程分摊的约\(n^2/TPI\)误称为整个算法次平方。
 
-因此CGBN或自写小TPI协作可能降低每线程私有状态和串行依赖，让少量宽位chain获得更多可执行线程。代价包括shuffle／同步、每SM能驻留的独立点数下降、编译体积与容器padding。第11节已验证可选TPI16链；尚未比较TPI32完整链，不能套用Stage1的最优TPI。sm89协作探针实际使用的WMAD及规范余数合同，另见[固定资料第8节](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#8-协作容器与原montgomery尺度)。
+因此CGBN或自写小TPI协作可能降低每线程私有状态和串行依赖，让少量宽位chain获得更多可执行线程。代价包括shuffle／同步、每SM能驻留的独立点数下降、编译体积与容器padding。第11节记录可选TPI16／32链及容量分档，不能套用Stage1的最优TPI。sm89协作探针实际使用的WMAD及规范余数合同，另见[固定资料第8节](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#8-协作容器与原montgomery尺度)。
 
 对承载尤其要保留当前线性梅森归约；直接改用通用CGBN `mont_mul`会重新引入普通Montgomery消元。当前可选协作链采用“协作完整乘积＋专用梅森归约”，普通路径保留CGBN REDC。普通模数若仅将完整乘积换成Karatsuba、REDC不变，完整模乘的渐近平方项仍存在。[Karatsuba递推](https://gmplib.org/manual/Karatsuba-Multiplication)
 
@@ -438,7 +439,7 @@ CUDA生产点原语提供`NTT_POINT_SQUARE=0|1`同二进制开关，0.57.2默认
 
 验证条件：RTX4060 Laptop、GPU1、CUDA13.3／MSVC14.51.36231／sm89、Goldilocks PTX3／addsub1，SM目标1500MHz，不调整频率或功耗。GPU0保留其外部任务；逐次进程门禁仅允许GPU1的实验程序与已授权Codex界面。预算arena6300／fold640／batch256 MiB。旧控制为0.56.4，SHA256 `e2f8891da7d717f7df8c32d41974c4710aeb3aad693b4fe2158e39fe5d3e0dfd`；候选0.57.1为`7e06c3ea78587153dd0476a4595707b1d616f754cf2229792a69fe5be79f525c`。
 
-正常性能矩阵复用本页13个实际目标位宽、B1=50000和相同Stage1点，实际B2约2.70…2.76×10¹⁰，逐格固定原D／布局／链长。每格旧版、同二进制off、on各n=1；最高位宽另作相反顺序的off/on独立复测，共82次进程。下表汇总逐格中位数，最高位宽off/on为n=2，其余仍n=1，旧版均n=1。不丢弃预热，时长为引擎init+main，包含新增自检，不包括外层读档／规划／启动／发布。没有使用诊断时间替代正常性能。
+正常性能矩阵复用本页13个实际目标位宽、B1=50000和相同Stage1点，实际B2约2.70…2.76×10¹⁰，逐格固定原D／布局／链长。每格旧版、同二进制off、on各n=1；最高位宽另作相反顺序的off/on独立复测，共82次进程。下表汇总逐格中位数，最高位宽off/on为n=2，其余仍n=1，旧版均n=1。不丢弃预热，时长为引擎init+main，包括S4形状检查，不包括启动点模乘／平方自检及外层读档／规划／启动／发布。没有使用诊断时间替代正常性能。
 
 | 路径／13格合计 | 旧版，s | 候选off，s | 候选on，s | on较旧版减少 |
 |---|---:|---:|---:|---:|
@@ -462,25 +463,25 @@ CUDA生产点原语提供`NTT_POINT_SQUARE=0|1`同二进制开关，0.57.2默认
 
 原始证据为`data/experiments/stage2_point_square_20261101/`下的`curves_low_full/`、`curves_high_recheck/`、`curve_diagnostics/`、`correctness_full/`、`correctness_single_step/`、`default_0_57_2/`、`initial_memory_fixed/`及`resource_comparison.json`、`final_default_object_audit.json`。汇总／图为`data/benchmarks/stage2_point_square_20261101/qualified/`、`data/figures/stage2_point_square_20261101/qualified/`。复现工具为[原语探针构建](../../tools/build/test/build_stage2_point_square_probe.ps1)、[原语采集](../../tools/bench/bench_stage2_point_square.py)、[完整曲线采集](../../tools/bench/bench_stage2_square_curves.py)、[默认与子进程检查](../../tools/test/test_stage2_point_square_native.py)、[离线汇总与绘图](../../tools/bench/analyze_stage2_square.py)。程序和脚本的冻结副本／构建清单保留在各研究目录。
 
-## 11. 可选TPI16协作giant链
+## 11. 可选协作giant链
 
 ### 11.1 分派、表示与边界
 
-ECM-ELF0.57.3提供`NTT_GIANT_COOP=0|16`环境变量，默认0。16仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。Baby、seed-pair、归一化、NTT及GCD均不切换。当前没有同名TOML键，也没有根据tune自动选择TPI。
+ECM-ELF0.57.4提供`NTT_GIANT_COOP=0|16|32`环境变量，默认0。非零模式仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。Baby、seed-pair、归一化、NTT及GCD均不切换。当前没有同名TOML键，也没有根据tune自动选择TPI。
 
-协作链固定16384-bit容量、每整数16线程，每个64线程块处理4条链：块数为\(\lceil16K_a/64\rceil\)。前述2048链示例由64个标量块变为512个协作块，共32768个有效线程。TPI16允许一个warp同时执行两个整数；它不是整卡只使用16线程，也不保证比TPI32更快。实际同时驻留的实例还受寄存器、栈和SM数量限制。
+16保留固定16384-bit容量，每个64线程块处理4条链；32按实际W选择不小于它的160／192／224／256词容量，每块处理2条链。块数为\(\lceil uK_a/64\rceil\)。前述2048链示例由64个标量块变为TPI16的512块／32768线程，或TPI32的1024块／65536线程。这是提交规模，实际同时驻留的实例仍受寄存器、栈和SM数量限制；TPI16允许一个warp同时执行两个整数，不是整卡只使用16线程。
 
-设备输入／输出仍为实际W个64-bit词，支持分离／交错seed与1／2点短尾，不新增扩大到容器宽度的全局坐标数组。适配器保留原\(R_a=2^{64W}\)：普通乘积在固定容器REDC前校正radix，梅森乘积保留线性折叠／旋转；规范化到\([0,\mathcal M)\)。xADD保持既有6次模乘、尺度及差分坐标别名合同。完整证明见[协作表示合同](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#8-协作容器与原montgomery尺度)。总工作量仍为二次；约10k位也使用16k容器，padding不能忽略。
+设备输入／输出仍为实际W个64-bit词，支持分离／交错seed与1／2点短尾，不新增扩大到容器宽度的全局坐标数组。适配器保留原\(R_a=2^{64W}\)：普通乘积在容器REDC前校正radix，梅森乘积保留线性折叠／旋转；规范化到\([0,\mathcal M)\)。xADD保持既有6次模乘、尺度及差分坐标别名合同。完整证明见[协作表示合同](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#8-协作容器与原montgomery尺度)。总工作量仍为二次，padding按所选\(W_c\)计；32模式的容量边界只看实际算术W，承载时须使用p的位宽，不能按余因子t选容器。
 
 变量随队列子进程继承，进入现有ECM tune的NTT环境快照；严格environment匹配可区分开关，配置忽略environment时仍允许复用旧数据。旧二进制绑定的cost-profile要求0。本节固定D验证没有重新学习协作路径的D／链长，因此不能声明已有默认选型模型已针对它校准。
 
-### 11.2 完整Stage2：宽位有收益，暂不默认启用
+### 11.2 TPI16完整Stage2资格
 
 设备为RTX4060 Laptop、24SM／8GiB、驱动610.88、CUDA13.3／MSVC14.51.36231／sm89，SM目标1500MHz。34次正常调用中GPU利用率≥50%的遥测3549条均为1500MHz；功耗随负载变化，没有调整频率或功耗。GPU0外部任务保持运行，GPU1逐次门禁只允许本研究和已授权界面。预算arena6300／fold640／batch256 MiB。
 
 旧版0.57.2的EXE SHA256为`0fec5f4ffc2a09a51867ed66c7413f01231ebbe9c14a08e21c45f70552f4bc2e`；0.57.3为`1083a51c3fa568b202ec33f1a314bf7146de85f7782126001ff2717f70215db0`。新旧均启用专用平方；协作链内部平方使用CGBN一般乘法，不能将上一节平方收益再次相加。
 
-范围为目标318／1939／10232／12285／16272 bits，普通／承载共10格。B1=50000、sigma26（1939-bit目标为27），实际B2=27015978990；复用同一已验证Stage1点，逐格固定原D／布局／32或64链。旧版／新off／新on各n=1，最高位宽off/on追加相反顺序复测至n=2，共34次。计时为引擎init+main，包含必需自检；不丢弃预热，不含外层读档／选型／进程启动／发布。以下为逐格中位数之和，**不是13位宽完整矩阵**。
+范围为目标318／1939／10232／12285／16272 bits，普通／承载共10格。B1=50000、sigma26（1939-bit目标为27），实际B2=27015978990；复用同一已验证Stage1点，逐格固定原D／布局／32或64链。旧版／新off／新on各n=1，最高位宽off/on追加相反顺序复测至n=2，共34次。计时为引擎init+main，包括S4形状检查；启动点模乘／平方／协作自检在此之前，计入curve_done.wall。不丢弃预热，不含外层读档／选型／进程启动／发布。以下为逐格中位数之和，**不是13位宽完整矩阵**。
 
 | 5格合计 | 0.57.2，s | 0.57.3 off，s | TPI16，s | 较旧版减少 |
 |---|---:|---:|---:|---:|
@@ -494,7 +495,7 @@ ECM-ELF0.57.3提供`NTT_GIANT_COOP=0|16`环境变量，默认0。16仅替换实�
 
 所有正常调用NF、bad_factors=0，GMP检查通过；NTT长度分布、S4归约系数数和G根摘要相同。独立完整叶诊断另有12条，不纳入速度。多数格仍n=1筛查，没有统计置信区间；其他GPU、大B2、更多位宽及不同D／链长未形成资格，因此保持默认0。
 
-### 11.3 原语吞吐量、链延迟与NCU
+### 11.3 TPI16原语吞吐量、链延迟与NCU
 
 字段探针比较TPI4／8／16及各自二进制中的标量控制，分别覆盖至4096／8192／16381算术bits。独立实例数为1／2048／8192，每实例8次依赖运算，每次进程保留全部5个事件样本，再对两次相反顺序进程取中位数，共288次调用。count=1特意使用0边界输入，**不能用于代表随机整数单次延迟**；下面仅展示大批量。
 
@@ -532,14 +533,77 @@ local读取sector减少35.33%、写入减少98.16%。这些是缓存事务计数
 
 当前入口及行号：
 
-- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：479行宽位分派，保留既有非单位恢复；[options.cpp](../../src/ecm/stage2/cuda/options.cpp)：33行默认值、241行请求判定、342行值验证。
+- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：480行宽位分派，保留既有非单位恢复；[options.cpp](../../src/ecm/stage2/cuda/options.cpp)：33行默认值、241行请求判定、342行值验证。
 - [point_coop_chain.cuh](../../src/ecm/stage2/cuda/device/point_coop_chain.cuh)：7行固定容器适配器、16行radix校正乘法、53行xADD、80行协作链、108行自检；[point_coop_field.cuh](../../src/ecm/stage2/cuda/device/point_coop_field.cuh)：13行规范化、19行梅森折叠。
-- [point_coop_kernels.cu](../../src/ecm/stage2/cuda/device/point_coop_kernels.cu)：6／17行独立host启动器；[checks.cpp](../../src/ecm/stage2/cuda/checks.cpp)：725行资格、776行64＋64组必需GMP检查。
+- [point_coop_kernels.cu](../../src/ecm/stage2/cuda/device/point_coop_kernels.cu)：20／31行独立host启动器；[checks.cpp](../../src/ecm/stage2/cuda/checks.cpp)：727行资格、778行64＋64组必需GMP检查；[point_coop_plan.h](../../src/ecm/stage2/cuda/point_coop_plan.h)：5行有限容量选择器。
+
+### 11.5 TPI32与容量分档的链核资格
+
+该实现借鉴[Oancea／Watt论文](https://arxiv.org/html/2405.14642v1)的每线程固定小段与私有工作集控制，不直接移植其低半截断乘法或FFT。每线程字数为\(q_c=2W_c/u\)，总乘积工作量仍为\(\Theta(W_c^2)\)。普通路径在\(R_c=R_a\)时直接使用融合的CGBN Montgomery乘法，否则仍需完整乘积／radix校正／宽REDC。因此缩容既减少零填充，也可能进入已有的融合分支，不能把全部收益都解释为占用率上升。
+
+0.57.4／sm89最终生产二进制资源如下；栈为编译器静态记录，不是local累计事务或进程峰：
+
+| TPI | 容量bits／64-bit词 | 每线程32-bit字 | 寄存器／线程 | 栈B／线程 |
+|---:|---:|---:|---:|---:|
+| 16 | 16384／256 | 32 | 255 | 1504 |
+| 32 | 10240／160 | 10 | 161 | 352 |
+| 32 | 12288／192 | 12 | 189 | 408 |
+| 32 | 14336／224 | 14 | 211 | 464 |
+| 32 | 16384／256 | 16 | 250 | 520 |
+
+链探针在10232／10267／12285／12511／14328／14401／16319算术bits、近radix普通奇数与精确梅森、2048链×32点、seed stride2下隔离变量。每组合两个进程，控制采用正反顺序；每进程保留全部5个事件，不丢预热。共84次调用／42格，事件仅含链kernel；相同输入的各方案完整坐标SHA一致，大批量GMP检查首末链。保持16k容器只改TPI时，TPI32时间为TPI16的0.669…0.703；容量分档后的最小比例约0.248。它们不是包含seed、树和归一化的完整Stage2倍率。
+
+![固定线程数与容量的链核对照](attachments/stage2-chain-plans.png)
+
+例如普通10232-bit由TPI16／16k的526.24ms，降到TPI32／16k的367.68ms，再降到TPI32／10k的130.60ms；普通12285-bit为535.09→367.97→199.90ms。精确梅森10267-bit为约302→204.15→139.37ms。普通／承载真实任务必须各按自身算术位宽选容器：目标12285 bits的普通路径W192，可用12k；相应承载p12511、W196，使用14k。
+
+管理员NCU2026.2.1另有三份新捕获，clock/cache control均none，均通过原程序输出／GMP与未剖析指纹核对；结合上一节冻结的TPI16捕获作诊断。所有比较均为2048×32点、61440次xADD，计数按每对相同模数解释，不把剖析时间作为性能样本：
+
+| p／方案 | 寄存器实际分配／thread | 活跃warp | issue active | local load sectors | local store sectors |
+|---|---:|---:|---:|---:|---:|
+| 16319，16／16k | 256 | 16.665% | 38.093% | 6,642,204,672 | 96,199,234 |
+| 16319，32／16k | 256 | 16.297% | 56.878% | 6,988,726,272 | 87,087,937 |
+| 10267，32／16k | 256 | 16.298% | 57.096% | 6,983,948,416 | 83,190,312 |
+| 10267，32／12k | 192 | 16.248% | 50.015% | 4,109,185,632 | 66,377,086 |
+
+![TPI与容量分档的NCU诊断](attachments/stage2-chain-plans-ncu.png)
+
+固定16k改TPI32时，local读取反而增加约5.22%，占用率未升，但发射率改善、kernel更快；不能将收益归因于更少的读取。固定TPI32缩到12k时，local读取／写入减少41.16%／20.21%；NCU仍报告寄存器限制为4块／SM，实测占用率没有跃升。**更小工作量、发射效率、访存与驻留是不同指标，不以最高占用率代替计时。**sector不是显存传输字节。
+
+### 11.6 TPI32完整Stage2资格与剩余瓶颈
+
+设备、编译器、预算沿用11.2节，全部构建结束后串行计时。0.57.3默认控制为SHA256 `1083a51c3fa568b202ec33f1a314bf7146de85f7782126001ff2717f70215db0`；0.57.4为`ddf42ee8a94fea56927990d17ef46c61fe55f7fcbb437b185371429634fe8b3b`。SM目标1500MHz，正常曲线中GPU利用率≥50%的4331条遥测均为1500MHz，没有改频或功耗设置。
+
+范围为5目标位宽318／1939／10232／12285／16272、普通／承载10格，B1=50000、实际B2=27015978990，sigma、Stage1点及逐格D／P／布局／32或64链保持与11.2节一致。四组为旧默认、新默认0、固定16k的16、分档32。首轮40次，最高位16／32追加4次逆序；318-bit外层墙钟波动另补16次正反顺序，共60次正常曲线。小位全部组n=3，最高位16／32为n=2，其余n=1；不丢弃首轮，不作为13位宽完整矩阵或统计置信区间。
+
+| 10格中位数合计，s | 0.57.3默认 | 0.57.4默认0 | TPI16 | 分档TPI32 |
+|---|---:|---:|---:|---:|
+| 引擎init+main | 196.939 | 196.648 | 187.426 | 184.738 |
+| 完整curve_done.wall | 204.623 | 204.201 | 195.083 | 192.616 |
+
+引擎包含shape、baby／树、S4形状检查与main，**排除启动点乘／平方／协作自检**；curve_done.wall另包含这些检查、读档、规划、子进程及发布，不包括外部采集器轮询。新默认引擎合计较旧默认减少0.15%，未发现超过5%且20ms的引擎回退格。分档32较新默认减少6.06%，较16再减少1.43%；完整曲线墙钟分别减少5.67%／1.26%。
+
+![TPI32与标量／TPI16的引擎对照](attachments/stage2-coop32-curves.png)
+
+![包含启动检查的完整曲线墙钟](attachments/stage2-coop32-curves-curve-wall.png)
+
+普通10232／12285-bit，16→32为22.704→21.865s（−3.70%）、34.837→33.860s（−2.80%）。最高位普通59.696→59.151s（−0.91%），承载31.417→31.264s（−0.49%）；逆序单独也保持方向。承载12285-bit为20.135→20.177s，接近持平，不能宣称逐格都加速。
+
+318-bit承载的三次外层墙钟中位数，旧默认1.054s、新默认1.093s、16为1.073s、32为1.155s；32配置的外层差异仍需低位队列复测定位。该输入算术仅503 bits，各模式都使用相同标量路径，不是协作kernel的速度结果。全部样本保留，不能因引擎合计更快而删除此项或宣称所有外层指标无回退。默认保持0，其他GPU／大B2／更多链数资格仍未完成。
+
+最高位32模式两次分项均值：普通baby ladder15.913s、giant范围9.727s；承载8.594s、5.404s。相对16，giant范围只减少约3.73%／3.25%，远小于独立链kernel约30%的减少。该范围还含未改的seed和准备，baby也未协作。baby＋affine＋giant＋叶准备约占完整引擎48.0%／50.4%；这些是主机范围分组，不能当作各kernel事件时间。接下来应分离并优化baby／seed，而不是继续把链核倍率套到整个点组；普通系数归约及NTT树仍是另一大项。
+
+正确性：本轮短链／32、64点递推共648次、116,847,720个64-bit词全部GMP一致，覆盖三类模数、各容器上下边界、两种seed布局和1／2点尾。完整叶诊断24条覆盖三种宽位、普通／承载、四组，所有目标叶指纹与xADD／S4检查一致；正常曲线全部NF、bad_factors=0，NTT分布、系数归约数与G根摘要一致。原生配置／队列11例、原平方开关7例、初始化内存50组／4556检查及变异拒绝通过。
+
+协作自检仍为64乘＋64平方，按实际TPI计算提交网格，复用原四个显式设备数组；没有新增坐标H2D／D2H或容器补齐全局数组。最高位0.2s整卡NVML采样峰约5556.4…5558.4 MiB，含已授权界面及上下文，不能据此推导精确进程峰或声称节省显存。EXE为14,134,784 B；容量模板带来代码体积，不等于常驻工作区。
+
+证据根`data/experiments/stage2_point_register_20261101/`，包括`correct*`、`deep*`、各`wide/extra/tight*`、`native_switch`、`initial_memory`、`curve_diagnostics`、`curves_fixed/recheck`、`small_recheck_*`、`ncu_*`、`resources.txt`。汇总与PNG/SVG为`data/benchmarks/stage2_point_register_20261101/chain_qualified/`、`curves_qualified/`及同名figures目录。复现入口见[测量工具](../../tools/bench/README_STAGE2_VERSION.md#协作点算术与giant链验证)。当前分档入口为`cuda/point_coop_plan.h::s2g_coop_capacity_words`，实际启动由`device/point_coop_kernels.cu`统一分派，点与自检使用相同计划。
 
 ## TODO
 
-- 先比较更贴近实际W的协作容器与TPI32，降低固定16k容器在约10k位的padding和255寄存器限制；保留实际radix及规范余数检查，不预先承诺TPI32更快。
-- Baby／seed尚未协作；先隔离其依赖与吞吐量，再决定是否替换。对既有可选协作链补其他GPU、大B2／更多D／链长资格，资格不足前默认关闭；点成本改变后的D模型须独立校准。
+- Baby／seed尚未协作；优先隔离其依赖与吞吐量，再验证协作生成的完整收益。补其他GPU、大B2／更多D／链数资格；资格不足前默认关闭，点成本改变后的D模型须独立校准。
+- 继续比较表示修正融合及普通／梅森编译分工。已完成[延后表示因子的代数核查](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#10-齐次点公式中的表示因子可延后合并)，尚无对应GPU实现或性能数据；保留完整乘积、规范残数与原radix。
+- 定位低位外层启动差异；在更长队列中核对配置、检查、进程／I/O分项，不将同一标量kernel的外层差异误判为CGBN算术收益或回退。
 - 专用平方已通过小档完整矩阵及单步／依赖递推检查；补充其他GPU与大B2资格。浅层Karatsuba／融合短NTT尚未实现，仍须独立GMP及固定D验证；失败与回退样本全部保留。
 - 给NTT设备时间建立与S4／host等待分离的完整分项，确认长变换是算术、带宽还是批量台阶，不依靠阶段名称推断。
 - 将当前报告的工作代理接入离线模型验证；在独立持出矩阵通过前不替换默认选型或放宽性能保护。
@@ -555,5 +619,5 @@ local读取sector减少35.33%、写入减少98.16%。这些是缓存事务计数
 - [stage2_scalar.cuh](../../src/ecm/stage2/cuda/stage2_scalar.cuh)：45行普通长除法、102行梅森系数折叠；[shape.cpp](../../src/ecm/cuda/ntt/shape.cpp)：97行`choose_cfg`、283行`ntt_shape_query`，包含精确packing、digit与长度选择。行号按本报告对应的源码核对，后续修改以入口名定位。
 - [product.cpp](../../src/ecm/stage2/cuda/product.cpp)：`print_ntt_lengths`的逻辑变换／蝶形计数；[phase_times.h](../../src/ecm/stage2/cuda/phase_times.h)：引擎互斥计时边界。外层读档／选型不在此拟合中。
 - [requests.h](../../src/ecm/stage2/planning/requests.h)：59／68／78行的树、fold和完整请求拓扑；[initial_memory.h](../../src/ecm/stage2/planning/initial_memory.h)：12行`baby_memory_layout`；[geometry.h](../../src/ecm/stage2/geometry.h)：`fold_owner_layout`与分块策略。
-- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：626行baby生成／目标环求逆、261行驻留giant准备、338行chain；[remainder.cpp](../../src/ecm/stage2/cuda/remainder.cpp)：122行级数逆、`descent_scaled`及fold；[batch.cpp](../../src/ecm/stage2/cuda/batch.cpp)：52行小素数复用、922行积块／GCD。
+- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：628行baby生成／目标环求逆、262行驻留giant准备、339行chain；[remainder.cpp](../../src/ecm/stage2/cuda/remainder.cpp)：122行级数逆、`descent_scaled`及fold；[batch.cpp](../../src/ecm/stage2/cuda/batch.cpp)：52行小素数复用、922行积块／GCD。
 - 本地[CGBN实现](../../third_party/cgbn/include/cgbn/impl_cuda.cu)：518／526／1027／1032行乘法和平方入口；[IMAD乘法](../../third_party/cgbn/include/cgbn/core/core_mul_imad.cu)：81行；[IMAD Montgomery](../../third_party/cgbn/include/cgbn/core/core_mont_imad.cu)：28行。

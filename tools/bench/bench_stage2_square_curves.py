@@ -44,7 +44,13 @@ def main():
     p.add_argument('--diagnostic',action='store_true')
     p.add_argument('--diagnostic-b2',type=int,default=0,help='Override diagnostic bound; cooperative default reaches the chain path')
     p.add_argument('--experiment',choices=('square','giant-coop'),default='square')
+    p.add_argument('--coop-tpi',type=int,choices=(16,32),default=16)
+    p.add_argument('--coop-control',type=int,choices=(0,16),default=0,
+                   help='0: default guard; 16: paired previous cooperative backend')
+    p.add_argument('--coop-middle',action='store_true',help='Also time fixed-container TPI16 between scalar and candidate')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
+    if a.experiment!='giant-coop' and (a.coop_middle or a.coop_control or a.coop_tpi!=16):
+        p.error('Cooperative options require --experiment giant-coop')
     diagnostic_b2=a.diagnostic_b2 or (26000000 if a.experiment=='giant-coop' else 2600000)
     desired=set(map(int,a.bits.split(',')))
     cells=[r for r in load(a.summary)['rows'] if not r['tail_permission'] and r['target_bits'] in desired]
@@ -65,6 +71,7 @@ def main():
         if len(names)!=1 or not Path(next(iter(names))).is_absolute():raise ValueError('Cannot bind allowed process')
         allowed.append(dict(pid=pid,process_name=next(iter(names))))
     report=dict(complete=False,started_utc=stamp(),variants=variants,diagnostic=a.diagnostic,experiment=a.experiment,
+                coop_tpi=a.coop_tpi,coop_control=a.coop_control,coop_middle=a.coop_middle,
                 source_summary=str(a.summary),allowed_processes=allowed,rows=[],failures=[])
     write(out/'results.json',report)
     env={k:v for k,v in os.environ.items() if not k.startswith(('NTT_','ECM_')) and
@@ -78,7 +85,7 @@ def main():
         for round in range(a.rounds):
             for cell in cells:
                 source=Path(cell['evidence']);key=f"n{cell['target_bits']}_{cell['family']}"
-                treatments=['off','on']
+                treatments=['off','middle','on'] if a.coop_middle else ['off','on']
                 if a.stock and round==0:treatments=['stock',*treatments]
                 if (round+int(a.reverse_first))%2:treatments.reverse()
                 for treatment in treatments:
@@ -95,8 +102,9 @@ def main():
                     expected_d=2310 if a.diagnostic else cell['D']
                     expected_b2=diagnostic_b2 if a.diagnostic else cell['B2']
                     flag='NTT_POINT_SQUARE' if a.experiment=='square' else 'NTT_GIANT_COOP'
-                    on_value='1' if a.experiment=='square' else '16'
-                    runenv=env|{flag:on_value if treatment=='on' else '0'}
+                    on_value='1' if a.experiment=='square' else str(a.coop_tpi)
+                    off_value='0' if a.experiment=='square' else str(a.coop_control)
+                    runenv=env|{flag:on_value if treatment=='on' else '16' if treatment=='middle' else off_value}
                     write(directory/'command.json',dict(argv=command,overrides={k:v for k,v in runenv.items() if k.startswith('NTT_')}))
                     telemetry=TelemetryRecorder(1,directory/'telemetry.jsonl',interval=.2)
                     started=time.perf_counter()
@@ -126,12 +134,13 @@ def main():
                     if treatment=='on' and int(fields(text,'square_selftest')['mismatches']):raise ValueError('Square selftest failed')
                     if a.experiment=='giant-coop' and name=='candidate':
                         coop=fields(text,'giant_coop_mode')
-                        if int(coop['requested'])!=(16 if treatment=='on' else 0):raise ValueError('Wrong cooperative mode')
-                        eligible=treatment=='on' and int(mode['nw'])>128
+                        expected_tpi=a.coop_tpi if treatment=='on' else 16 if treatment=='middle' else a.coop_control
+                        if int(coop['requested'])!=expected_tpi:raise ValueError('Wrong cooperative mode')
+                        eligible=expected_tpi!=0 and int(mode['nw'])>128
                         if bool(int(coop['eligible']))!=eligible:raise ValueError('Wrong cooperative eligibility')
                         if eligible:
                             if int(fields(text,'coop_selftest')['mismatches']):raise ValueError('Cooperative arithmetic check failed')
-                            if not re.search(r'^giant_coop: tpi=16 ',text,re.M):raise ValueError('Cooperative chain was not exercised')
+                            if not re.search(r'^giant_coop: tpi='+str(expected_tpi)+' ',text,re.M):raise ValueError('Cooperative chain was not exercised')
                     if a.diagnostic:
                         digest=fields(text,'target_descent_values');signature=(digest['words'],digest['hash'])
                         leaf=fields(text,'device_gleaf')
@@ -145,8 +154,12 @@ def main():
                     signature=(*signature,counts[0],check['coeffs_reduced'])
                     if key in signatures and signatures[key]!=signature:raise ValueError('Output/workload differs')
                     signatures[key]=signature
+                    console=(directory/'console.log').read_text(encoding='utf-8')
+                    curve_walls=re.findall(r'^curve_done: .* wall=([0-9.]+) s$',console,re.M)
+                    if len(curve_walls)!=1:raise ValueError('Missing complete curve wall timer')
                     row=dict(key=key,family=cell['family'],bits=cell['target_bits'],round=round,treatment=treatment,
                              directory=str(directory),seconds=float(clock['total']),clock=clock,s4=check,
+                             curve_wall_seconds=float(curve_walls[0]),
                              wall_seconds=time.perf_counter()-started,signature=signature,
                              stats={k:fields(text,k) for k in ('real_baby','real_batched_split','real_batched_wall')})
                     report['rows'].append(row);write(out/'results.json',report)

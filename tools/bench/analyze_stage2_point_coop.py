@@ -36,6 +36,8 @@ def ncu_summary(study):
         local_store_sectors=number('l1tex__t_sectors_pipe_lsu_mem_local_op_st.sum'),
         long_scoreboard_ratio=number('smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio'),
         registers_per_thread=number('launch__registers_per_thread'),
+        allocated_registers_per_thread=number('launch__registers_per_thread_allocated'),
+        register_block_limit=number('launch__occupancy_limit_registers'),
         blocks=number('launch__grid_size'),threads_per_block=number('launch__block_size'))
     unit = units['gpu__time_duration.sum']
     metrics['diagnostic_seconds'] = number('gpu__time_duration.sum')*{'s':1,'ms':.001,'us':.000001}[unit]
