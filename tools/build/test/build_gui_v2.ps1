@@ -1,6 +1,6 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param(
-    [string]$BuildDir = 'build_gui_v2_test',
+    [string]$BuildDir = 'build_dev/build_gui_v2_test',
     [string]$VcVars = '',
     [string]$VulkanRoot = '',
     [string]$BackendRoot = '',

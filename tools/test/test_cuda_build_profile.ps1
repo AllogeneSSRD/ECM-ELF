@@ -5,7 +5,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repo 'tools/build/internal/cuda_build_profile.ps1')
 $out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
 if (Test-Path -LiteralPath $out) { throw 'Use a fresh output directory' }
-New-Item -ItemType Directory -Path $out | Out-Null
+Initialize-EcmBuildDirectory $out
 $checks = New-Object 'System.Collections.Generic.List[string]'
 function Check([bool]$Valid, [string]$Name) {
     if (-not $Valid) { throw "FAIL: $Name" }
@@ -93,8 +93,30 @@ Check ((Resolve-EcmBuildDirectory $fixture $splitStage1 $oldStage1Leaf) -eq $old
 Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'option/configure' 'explicit profile mismatch reports the changed configuration field'
 $alternateStage2 = Profile -Split 4
 $alternateLeaf = Resolve-EcmBuildDirectory $fixture $alternateStage2
-Check ($alternateLeaf -eq ($leaf+'_'+$alternateStage2.Key)) 'Stage2 default policy changes also select a separate profile'
-Assert-EcmBuildProfile $alternateLeaf $alternateStage2
+Check ($alternateLeaf -eq $leaf) 'Stage2 always keeps its fixed default directory after a profile change'
+Reject { Assert-EcmBuildProfile $alternateLeaf $alternateStage2 } 'profile/role/engine differs' 'explicit Stage2 profile mismatch is still refused'
+Reject { Assert-EcmBuildProfile $alternateLeaf $alternateStage2 -ReadOnly -ArchiveLocalStage2 } 'profile/role/engine differs' 'read-only admission cannot archive a profile'
+$stage2Object = Join-Path $leaf 'cached.obj'; Write-Fixture $stage2Object 'old Stage2 object'
+$stage2MarkerHash = (Get-FileHash -LiteralPath (Join-Path $leaf 'profile.json')).Hash
+$stage2ObjectHash = (Get-FileHash -LiteralPath $stage2Object).Hash
+Assert-EcmBuildProfile $alternateLeaf $alternateStage2 -ArchiveLocalStage2
+Assert-EcmBuildProfile $leaf $alternateStage2 -ReadOnly
+$archiveRoot = Join-Path $fixture 'build_dev/stage2_local_profiles'
+$archives = @(Get-ChildItem -LiteralPath $archiveRoot -Directory)
+Check ($archives.Count -eq 1) 'default Stage2 profile change archives exactly one old build'
+Check ((Get-FileHash -LiteralPath (Join-Path $archives[0].FullName 'profile.json')).Hash -eq $stage2MarkerHash -and
+    (Get-FileHash -LiteralPath (Join-Path $archives[0].FullName 'cached.obj')).Hash -eq $stage2ObjectHash) 'archiving retains old Stage2 metadata and object bytes'
+Check (-not (Test-Path -LiteralPath $stage2Object)) 'new profile cannot inherit an old object at the fixed output path'
+Assert-EcmBuildProfile $leaf $alternateStage2 -ArchiveLocalStage2
+Check (@(Get-ChildItem -LiteralPath $archiveRoot -Directory).Count -eq 1) 'matching Stage2 profile never archives or moves the cache'
+Reject { Assert-EcmBuildProfile $explicit $a -ArchiveLocalStage2 } 'fixed local Stage2' 'automatic archiving cannot target an arbitrary explicit leaf'
+$stage2Marker = Join-Path $leaf 'profile.json'
+$validStage2Marker = [IO.File]::ReadAllBytes($stage2Marker)
+$badStage2 = Get-Content -LiteralPath $stage2Marker -Raw | ConvertFrom-Json
+$badStage2.fields.role = 'dev'
+Write-Fixture $stage2Marker ($badStage2 | ConvertTo-Json -Depth 5)
+Reject { Assert-EcmBuildProfile $leaf $a -ArchiveLocalStage2 } 'profile/role/engine differs' 'corrupt Stage2 marker cannot be hidden by archiving'
+[IO.File]::WriteAllBytes($stage2Marker, $validStage2Marker)
 Check ((Resolve-EcmBuildDirectory $fixture $a) -eq $leaf) 'matching original Stage2 profile keeps its short directory'
 $damaged = Get-Content -LiteralPath (Join-Path $oldStage1Leaf 'profile.json') -Raw | ConvertFrom-Json
 $damaged.fields.role = 'dev'

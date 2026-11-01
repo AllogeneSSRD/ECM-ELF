@@ -11,7 +11,7 @@
 # Or via the .bat launcher (handles ExecutionPolicy):  build_and_run.bat -Reconfigure
 # =============================================================================
 param(
-    [string]$BuildDir    = "build_rel",
+    [string]$BuildDir    = 'build_dev/build_rel',
     [string]$BuildConfig = "Release",
     [string]$Target      = "ecm",
     [string]$Toolchain   = "D:/code/vcpkg/scripts/buildsystems/vcpkg.cmake",
@@ -32,6 +32,8 @@ param(
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $buildPath = Join-Path $root $BuildDir
+. (Join-Path $root 'tools/build/internal/build_directory.ps1')
+if (-not $SkipBuild) { Initialize-EcmBuildDirectory $buildPath }
 Write-Host "============================================================"
 Write-Host " ECM build + run"
 Write-Host " Root       = $root"

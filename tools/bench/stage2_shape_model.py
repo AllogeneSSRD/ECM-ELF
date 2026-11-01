@@ -239,7 +239,7 @@ def main():
                     help="use stage2_tree_ref.exe --model-only (validated against the "
                          "multiplications that code actually executes) instead of this "
                          "script's own tree_cost, which undercharges the trees ~1.25x")
-    ap.add_argument("--ref-exe", default="build_cuda_cmake/stage2_tree_ref.exe")
+    ap.add_argument("--ref-exe", default='build_dev/build_cuda_cmake/stage2_tree_ref.exe')
     ap.add_argument("--mem-cap-mb", type=float, default=2048.0)
     ap.add_argument("--ns-per-bit", type=float, default=0.278,
                     help="measured figure of merit; 0.278 = fp64 cuFFT at P=8192")

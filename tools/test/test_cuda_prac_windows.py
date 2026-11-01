@@ -118,7 +118,7 @@ def rejected(exe, folder, cache, settings, message, device, bits=4423):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--exe',type=Path,default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
+    p.add_argument('--exe',type=Path,default=Path('build_dev/build_cuda_cmake/prac/ecm_cuda.exe'))
     p.add_argument('--cache',type=Path)
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--output',type=Path,required=True)

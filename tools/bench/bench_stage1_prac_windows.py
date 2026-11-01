@@ -97,7 +97,7 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--exe', type=Path, default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
+    p.add_argument('--exe', type=Path, default=Path('build_dev/build_cuda_cmake/prac/ecm_cuda.exe'))
     p.add_argument('--bits', type=int, nargs='+', default=[4423])
     p.add_argument('--b1', type=int, nargs='+', default=[10000000, 260000000])
     p.add_argument('--curves', type=int, default=1536)

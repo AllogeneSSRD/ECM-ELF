@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/gui_checkpoint_scan_20261017')
+param([string]$Build='build_dev/build_cuda_cmake/gui_checkpoint_scan_20261017')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
 $vcvars=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars64.bat'|Select-Object -First 1).FullName

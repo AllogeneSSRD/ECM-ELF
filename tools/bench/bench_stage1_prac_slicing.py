@@ -12,7 +12,7 @@ from bench_stage1_prac_windows import sample
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--exe',type=Path,default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
+    p.add_argument('--exe',type=Path,default=Path('build_dev/build_cuda_cmake/prac/ecm_cuda.exe'))
     p.add_argument('--b1',type=int,nargs='+',default=[260000000])
     p.add_argument('--curves',type=int,nargs='+',default=[384,768,1536])
     p.add_argument('--chunks',type=int,nargs='+',default=[4,8,16,32])

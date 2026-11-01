@@ -16,8 +16,8 @@ from dataset import connect, import_catalog, ingest, gp_path, digest
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--gp',type=Path,nargs='?',const=None);p.add_argument('--stage1',type=Path,default=ROOT/'build_cuda_cmake/ecm_cuda.exe')
-    p.add_argument('--stage2',type=Path,default=ROOT/'build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe')
+    p.add_argument('--gp',type=Path,nargs='?',const=None);p.add_argument('--stage1',type=Path,default=ROOT/'build_dev/build_cuda_cmake/ecm_cuda.exe')
+    p.add_argument('--stage2',type=Path,default=ROOT/'build_dev/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('Use a fresh test directory')
     gp=gp_path(a.gp);db=connect(out/'database.sqlite');import_catalog(db,ROOT/'.refactor/Mersenne_exponent_factor_1-9999.html')

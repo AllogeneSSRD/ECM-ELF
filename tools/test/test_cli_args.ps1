@@ -25,7 +25,7 @@
 # usage: powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cli_args.ps1
 #          [-CudaExe build_cuda_cmake\ecm_cuda.exe] [-Device 1]
 param(
-    [string]$CudaExe = 'build_cuda_cmake\ecm_cuda.exe',
+    [string]$CudaExe = 'build_dev/build_cuda_cmake/ecm_cuda.exe',
     [int]$Device = 1
 )
 

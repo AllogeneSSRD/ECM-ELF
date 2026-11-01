@@ -24,8 +24,8 @@
 #   build_vs18\Release\ecm.exe      (OpenCL backend)
 # ---------------------------------------------------------------------------
 param(
-    [string]$CudaExe = 'build_cuda_cmake\ecm_cuda.exe',
-    [string]$CpuExe  = 'build_vs18\Release\ecm.exe',
+    [string]$CudaExe = 'build_dev/build_cuda_cmake/ecm_cuda.exe',
+    [string]$CpuExe  = 'build_dev/build_vs18/Release/ecm.exe',
     [string]$GmpEcmExe = 'D:\code\GIMPS\gmp-ecm\ecm-2025.10.28-win.multiarch\ecm-zen3.exe',
     [switch]$SkipSlow
 )

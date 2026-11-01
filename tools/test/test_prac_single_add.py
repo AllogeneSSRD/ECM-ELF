@@ -110,7 +110,7 @@ def chain_shared_dbl(p,r,seed,a24,n):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--cache',type=Path,default=Path('build_cuda_cmake/prac'))
+    ap.add_argument('--cache',type=Path,default=Path('build_dev/build_cuda_cmake/prac'))
     ap.add_argument('--output',type=Path,required=True)
     args=ap.parse_args();pairs=set()
     for p in primes(10000):

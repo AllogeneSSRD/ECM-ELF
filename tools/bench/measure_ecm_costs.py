@@ -29,7 +29,7 @@ def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--stage2',type=Path,required=True)
-    p.add_argument('--stage1',type=Path,default=ROOT/'build_cuda_cmake/ecm_cuda.exe')
+    p.add_argument('--stage1',type=Path,default=ROOT/'build_dev/build_cuda_cmake/ecm_cuda.exe')
     p.add_argument('--save-dir',type=Path,required=True,help='Verified m2203/m4423/m8191.save inputs, B1=1000 sigma26')
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--bits',type=int,nargs='+',default=[2203,4423,8191])

@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # Experimental target; compile complete modules with recursive source identity.
-param([string]$Build='build_cuda_cmake/point_mersenne_probe',
+param([string]$Build='build_dev/build_cuda_cmake/point_mersenne_probe',
       [ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89',
       [switch]$Rebuild)
 $ErrorActionPreference='Stop'

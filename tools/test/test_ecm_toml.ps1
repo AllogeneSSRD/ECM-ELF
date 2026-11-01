@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='tools/test/_run/toml_config')
+param([string]$Build='build_dev/toml_config')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo

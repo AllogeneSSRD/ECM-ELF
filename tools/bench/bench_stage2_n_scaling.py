@@ -463,7 +463,7 @@ def run(args, out, monitor, plan):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--db', type=Path, default=ROOT / 'tools/ecm_dataset/ecm_stage2_dataset.sqlite')
-    p.add_argument('--exe', type=Path, default=ROOT / 'build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe')
+    p.add_argument('--exe', type=Path, default=ROOT / 'build_dev/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe')
     p.add_argument('--gmp-ecm', type=Path, default=Path('D:/code/GIMPS/gmp-ecm/ecm-7.0.5-znver3/ecm.exe'))
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--exponents', type=int, nargs='+', default=EXPONENTS)

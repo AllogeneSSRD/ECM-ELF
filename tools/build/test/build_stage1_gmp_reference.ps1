@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # Host-only independent Stage1 point oracle. Use a fresh build directory.
-param([string]$Build='build_cuda_cmake/stage1_gmp_reference', [string]$Gmp='', [string]$VcVars='')
+param([string]$Build='build_dev/build_cuda_cmake/stage1_gmp_reference', [string]$Gmp='', [string]$VcVars='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

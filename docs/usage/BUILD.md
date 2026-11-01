@@ -17,7 +17,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 cu13.3 聚合模式使用 `SplitCompile=8`，cu11.8及隔离备选使用1。构建入口不自动运行数学、GPU 或性能测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口优先使用短目录（已有不匹配但完整的同用途 profile 时，CUDA 入口自动选择带 profile key 的独立目录）：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 固定为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。Stage1 配置不匹配时可选择带 profile key 的独立目录；Stage2 默认入口将有效旧构建归档到 `build_dev/stage2_local_profiles/` 后继续使用固定目录。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -165,13 +165,15 @@ dev、local、release 和测试构建入口在写入产物前，为输出目录�
 
 目录行为与真实 Git 忽略检查使用 `tools/test/test_build_directory.ps1 -Output <新证据目录>`；它也检查补齐标记不会放宽 profile / SkipBuild 门禁。
 
-`profile.json` 保存完整 SHA256 及字段。CUDA local 优先使用 `build_stage1_local`、`build_stage2_local` 短目录；dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。每个叶目录只容纳一个相容 profile。省略 local 的目录参数时，若短目录已包含同源码根、同用途、同阶段且内容哈希完整的另一份 profile，自动选择同层 `build_stageN_local_<key>`，例如 `build_stage1_local_c869d1f184d3b595`；重跑由当前完整配置选定同一个目录，不扫描最新产物。日志报告变化字段和实际输出路径，旧目录、profile 与对象保留。首次使用新 profile 需要正常构建，`-HostOnly` 不会代替它建立 CUDA 缓存。
+测试与实验构建默认放在 `build_dev/` 下，例如 `build_dev/build_cuda_cmake/`；正式 local/release 目录保留各自入口。`tools/build/test/move_root_test_builds.ps1` 默认只生成迁移计划，传 `-Apply` 后按绝对路径逐目录移动，保留已跟踪脚本与正式目录。`-PromoteStage2 <明确的旧后缀目录>` 可验证 profile 和 EXE 摘要后将指定本机产物提升至固定 Stage2 目录，原固定目录先归档；不按时间戳自动选程序。迁移清单保存在忽略的 `build_dev/migrations/`。缓存内的原绝对路径保留作证据，重新编译时须通过正常依赖／对象／链接校验；CMake 缓存可能需要重新配置。迁移、忽略及路径边界由 `tools/test/test_build_migration.ps1` 验证。
 
-显式 `-BuildDir` / `-Build` 仍是最终叶目录，不会自动改选；与该目录配置不匹配时拒绝，并报告目录和变化字段。标记损坏、跨用途/阶段或来源根不符时，不通过自动改选隐藏问题。脚本不会改写另一份 profile 或清空目录；GUI、运行命令和后续测试应使用本次输出的实际 exe 路径。需要自定义并存位置时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
+`profile.json` 保存完整 SHA256 及字段。Stage1 local 优先使用 `build_stage1_local`；Stage2 local 始终使用 `build_stage2_local`，不添加 key 后缀。dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。每个叶目录只容纳一个相容 profile。Stage1 省略目录参数且遇到有效旧 profile 时，仍可选择同层 `build_stage1_local_<key>`。Stage2 默认入口遇到同源码根、local/stage2 且哈希有效的旧 profile 时，将整个旧目录移入 `build_dev/stage2_local_profiles/`，随后在固定目录创建新 profile；匹配时直接复用，损坏或外来标记仍拒绝。日志报告变化字段、归档位置与实际输出路径。首次使用新 profile 需要正常构建，`-HostOnly` 在归档之前先要求已有匹配 profile，不会为新配置搬移旧缓存。
+
+显式 `-BuildDir` / `-Build` 仍是最终叶目录，不会自动改选；与该目录配置不匹配时拒绝，并报告目录和变化字段。标记损坏、跨用途/阶段或来源根不符时，不通过自动改选隐藏问题。显式目录不会改写另一份 profile 或清空目录；GUI、运行命令和后续测试应使用本次输出的实际 exe 路径。需要自定义并存位置时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
 
 本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。公开 release 统一只接收 `-BuildRoot` 根目录，叶目录由完整 profile 派生。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
 
-旧目录不自动移动或复制。显式指定旧目录时，仅对已有正式清单、工具链/GMP/架构/策略相符的目录原位核对并建立 marker；未知非空目录拒绝。`-SkipBuild` 要求已有正确 marker，仍需通过原有构建和打包身份检查。路径消费者需使用入口打印的精确叶目录或显式配置，不选择扫描结果中的“最新”程序。
+除上述 Stage2 默认入口的有效旧 profile 归档外，其他旧目录不自动移动或复制。显式指定旧目录时，仅对已有正式清单、工具链/GMP/架构/策略相符的目录原位核对并建立 marker；未知非空目录拒绝。`-SkipBuild` 要求已有正确 marker，仍需通过原有构建和打包身份检查。路径消费者需使用入口打印的精确叶目录或显式配置，不选择扫描结果中的“最新”程序。
 
 CPU-only 身份检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_profile_paths.py`；双 profile/生成边界/计时合同使用 `test_release_build_contracts.py`。`test_cuda_p5_release.py`、`test_cuda_p5_images.py`保留为原六架构阶段的显式冻结验收工具，不用于认定当前双 CUDA 完整包。路径检查不等于运行资格。
 

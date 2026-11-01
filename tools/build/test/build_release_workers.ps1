@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 param([ValidateSet('cu11.8','cu13.3')][string]$Profile='cu13.3',
     [ValidateSet('stage1','stage2','both')][string]$Stage='both',
-    [string]$BuildRoot='build_release_test',[string]$Tiers='', [int]$Jobs=8,
+    [string]$BuildRoot='build_dev/build_release_test',[string]$Tiers='', [int]$Jobs=8,
     [string]$Gmp='', [string]$CudaRoot='', [string]$VcVars='', [switch]$SkipBuild)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))

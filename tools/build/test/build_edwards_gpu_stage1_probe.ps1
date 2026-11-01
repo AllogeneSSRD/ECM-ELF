@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/edwards_gpu_stage1_probe',
+param([string]$Build='build_dev/build_cuda_cmake/edwards_gpu_stage1_probe',
       [ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89',
       [int]$Jobs=8,
       [string]$Tiers='',

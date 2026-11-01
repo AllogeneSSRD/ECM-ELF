@@ -1,6 +1,6 @@
 #Requires -Version 5.1
-param([string]$CpuBuild='build_cpu_stage2',
-      [string]$GpuBuild='build_cuda_cmake/edwards_gpu_workers/stage2',
+param([string]$CpuBuild='build_dev/build_cpu_stage2',
+      [string]$GpuBuild='build_dev/build_cuda_cmake/edwards_gpu_workers/stage2',
       [switch]$GpuHostOnly)
 $ErrorActionPreference='Stop'
 & (Join-Path $PSScriptRoot 'build_cpu_stage2.ps1') -Build $CpuBuild

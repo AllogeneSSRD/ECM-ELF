@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/atomic_publish',[Parameter(Mandatory=$true)][string]$Evidence)
+param([string]$Build='build_dev/build_cuda_cmake/atomic_publish',[Parameter(Mandatory=$true)][string]$Evidence)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

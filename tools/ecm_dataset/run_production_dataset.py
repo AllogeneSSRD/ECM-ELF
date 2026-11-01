@@ -67,8 +67,8 @@ def main():
     p.add_argument('--prepare-only',action='store_true');p.add_argument('--resume',action='store_true')
     p.add_argument('--allow-cofactors',action='store_true',help='Verify and remove native Stage1 factors before the target Stage2')
     p.add_argument('--exponents',type=int,nargs='+',default=[223,431,1367,2657,4933,6977,8171])
-    p.add_argument('--stage1',type=Path,default=ROOT/'build_cuda_cmake/ecm_cuda.exe')
-    p.add_argument('--stage2',type=Path,default=ROOT/'build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe')
+    p.add_argument('--stage1',type=Path,default=ROOT/'build_dev/build_cuda_cmake/ecm_cuda.exe')
+    p.add_argument('--stage2',type=Path,default=ROOT/'build_dev/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe')
     p.add_argument('--factorize-hits',action='store_true');p.add_argument('--gp',type=Path,nargs='?',const=None,
         help='GP path/name; omitted or bare --gp searches PATH')
     p.add_argument('--device',type=int,choices=(1,),default=1)

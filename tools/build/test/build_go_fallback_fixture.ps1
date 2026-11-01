@@ -1,5 +1,5 @@
-﻿#Requires -Version 5.1
-param([string]$Build='build_go_fallback_fixture')
+#Requires -Version 5.1
+param([string]$Build='build_dev/build_go_fallback_fixture')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
 $vc=(Get-ChildItem 'C:/Program Files*/Microsoft Visual Studio/*/*/VC/Auxiliary/Build/vcvars64.bat'|Sort-Object FullName -Descending|Select-Object -First 1).FullName

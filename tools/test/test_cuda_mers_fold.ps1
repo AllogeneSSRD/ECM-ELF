@@ -26,9 +26,9 @@
 #   -Tiers "1024,3328,4608,5120" -Extra "-DECM_MERS_FOLD=1")
 # ---------------------------------------------------------------------------
 param(
-    [string]$CudaExe = 'build_cuda_cmake\ecm_cuda.exe',   # Montgomery reference build
-    [string]$FoldExe = 'build_cuda_fold\ecm_cuda.exe',    # -DECM_MERS_FOLD=1 build
-    [string]$CpuExe  = 'build_vs18\Release\ecm.exe',
+    [string]$CudaExe = 'build_dev/build_cuda_cmake/ecm_cuda.exe',   # Montgomery reference build
+    [string]$FoldExe = 'build_dev/build_cuda_fold/ecm_cuda.exe',    # -DECM_MERS_FOLD=1 build
+    [string]$CpuExe  = 'build_dev/build_vs18/Release/ecm.exe',
     [int]$Device = 1,
     [int]$AbCurves = 768,        # throughput-A/B batch size (see section F)
     [switch]$SkipSlow,

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/stage1_host_wait_probe',
+param([string]$Build='build_dev/build_cuda_cmake/stage1_host_wait_probe',
       [ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89',
       [ValidateSet(1280,5632,10240)][int]$Tier=1280)
 $ErrorActionPreference='Stop'

@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 param([ValidateSet('stage1','stage2','tiers')][string]$Stage='stage1',
-      [string]$Build='build_cuda_cmake/cuda_structure_p1',
+      [string]$Build='build_dev/build_cuda_cmake/cuda_structure_p1',
       [string]$Tiers='384',[int]$Jobs=8,[switch]$EnablePrac)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))

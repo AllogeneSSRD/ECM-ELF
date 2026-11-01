@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cpu_group_order',[string]$GmpRoot='third_party/gmp-zen3/dist')
+param([string]$Build='build_dev/build_cpu_group_order',[string]$GmpRoot='third_party/gmp-zen3/dist')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

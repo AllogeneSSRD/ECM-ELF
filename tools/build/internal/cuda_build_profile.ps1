@@ -150,7 +150,8 @@ function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf =
             throw "Build directory belongs to another stage: $part; requested $($buildProfile.Stage)"
         }
     }
-    if ($automaticLocal -and (Test-Path -LiteralPath (Join-Path $leafPath 'profile.json'))) {
+    if ($automaticLocal -and $buildProfile.Stage -ne 'stage2' -and
+        (Test-Path -LiteralPath (Join-Path $leafPath 'profile.json'))) {
         $existing = Get-Content -LiteralPath (Join-Path $leafPath 'profile.json') -Raw | ConvertFrom-Json
         # Only a valid local marker for this source/stage may select a sibling.
         # Damaged markers and explicit paths must still fail normal admission.
@@ -235,7 +236,16 @@ function Assert-EcmLegacyProfile([string]$Leaf, $buildProfile) {
     }
 }
 
-function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly) {
+function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly,
+                               [switch]$ArchiveLocalStage2) {
+    if ($ArchiveLocalStage2) {
+        $sourceRoot = [IO.Path]::GetFullPath($buildProfile.Fields.source_root).TrimEnd('\','/')
+        $fixed = Join-Path $sourceRoot 'build_stage2_local'
+        if ($buildProfile.Role -ne 'local' -or $buildProfile.Stage -ne 'stage2' -or
+            [IO.Path]::GetFullPath($Leaf).TrimEnd('\','/') -ine $fixed) {
+            throw 'Automatic archiving is restricted to the fixed local Stage2 directory'
+        }
+    }
     $path = Join-Path $Leaf 'profile.json'
     if (Test-Path -LiteralPath $path) {
         $marker = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
@@ -243,6 +253,23 @@ function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly)
             (Get-EcmProfileHash $marker.fields) -cne $buildProfile.Hash) {
             $changed = @(Get-EcmProfileDifferences $marker.fields $buildProfile.Fields) -join ', '
             if (-not $changed) { $changed = 'marker schema/content hash' }
+            # An implicit local build keeps one stable output path. Preserve a
+            # valid older cache before admitting a different profile; never
+            # relabel old objects or bypass damaged/foreign marker checks.
+            if ($ArchiveLocalStage2 -and -not $ReadOnly -and $marker.schema -eq 1 -and
+                $marker.fields.role -eq 'local' -and $marker.fields.stage -eq 'stage2' -and
+                $marker.fields.source_root -ieq $sourceRoot -and
+                (Get-EcmProfileHash $marker.fields) -ceq $marker.profile_sha256) {
+                $archiveRoot = Join-Path $sourceRoot 'build_dev/stage2_local_profiles'
+                $archiveName = $marker.profile_sha256.Substring(0,16) + '_' + [Guid]::NewGuid().ToString('N')
+                $archive = Join-Path $archiveRoot $archiveName
+                Move-EcmBuildDirectory $sourceRoot $Leaf $archive
+                Write-Host "== Local Stage2 profile changed: $changed =="
+                Write-Host "   Previous build archived: $archive"
+                Write-Host "   Fixed output directory : $Leaf"
+                Assert-EcmBuildProfile $Leaf $buildProfile
+                return
+            }
             throw "Build profile/role/engine differs; directory: $Leaf; changed fields: $changed; choose its matching leaf or a fresh directory"
         }
         Initialize-EcmBuildDirectory $Leaf

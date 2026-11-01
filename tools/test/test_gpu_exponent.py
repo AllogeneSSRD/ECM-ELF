@@ -11,7 +11,7 @@ from pathlib import Path
 
 repo = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--exe', type=Path, default=repo / 'build_cuda_cmake/ecm_cuda.exe')
+parser.add_argument('--exe', type=Path, default=repo / 'build_dev/build_cuda_cmake/ecm_cuda.exe')
 parser.add_argument('--device', type=int, default=1)
 parser.add_argument('--output', type=Path)
 parser.add_argument('--normalization-only', action='store_true', help='Check the original lcm path without choose12 integration')

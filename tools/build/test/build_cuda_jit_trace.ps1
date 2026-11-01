@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_jit_trace')
+param([string]$Build='build_dev/build_cuda_jit_trace')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 . (Join-Path $PSScriptRoot '../internal/cuda_toolchain.ps1')

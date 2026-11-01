@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/stage1_checkpoint_probe_20261017',
+param([string]$Build='build_dev/build_cuda_cmake/stage1_checkpoint_probe_20261017',
       [switch]$Ownership)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))

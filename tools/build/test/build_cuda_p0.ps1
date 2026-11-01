@@ -1,6 +1,6 @@
 # Isolated native build entry for the CUDA source/dependency identity milestone.
 param([ValidateSet('stage1','stage2','development')][string]$Stage = 'stage1',
-      [string]$Build = 'build_cuda_cmake/cuda_structure_p0',
+      [string]$Build = 'build_dev/build_cuda_cmake/cuda_structure_p0',
       [string]$Tiers = '384', [int]$Jobs = 8,
       [ValidateRange(1,64)][int]$SplitCompile = 8)
 $ErrorActionPreference = 'Stop'

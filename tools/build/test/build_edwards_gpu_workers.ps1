@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 param([ValidateSet('stage1','stage2','both')][string]$Stage='both',
-      [string]$Build='build_cuda_cmake/edwards_gpu_workers',
+      [string]$Build='build_dev/build_cuda_cmake/edwards_gpu_workers',
       [string]$Arch='89',
       [string]$Tiers='1024',
       [int]$Jobs=8,

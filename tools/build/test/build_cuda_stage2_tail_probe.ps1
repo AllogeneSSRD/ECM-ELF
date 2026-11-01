@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_stage2_tail_probe',
+param([string]$Build='build_dev/build_cuda_stage2_tail_probe',
     [string]$Cuda='C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3',
     [string]$VcVars='')
 $ErrorActionPreference='Stop'

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cpu_stage2',[int]$Jobs=8,[string]$VcVars='',[switch]$GwPoly)
+param([string]$Build='build_dev/build_cpu_stage2',[int]$Jobs=8,[string]$VcVars='',[switch]$GwPoly)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

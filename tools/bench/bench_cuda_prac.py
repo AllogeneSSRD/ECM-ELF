@@ -128,7 +128,7 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--exe', type=Path, default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
+    parser.add_argument('--exe', type=Path, default=Path('build_dev/build_cuda_cmake/prac/ecm_cuda.exe'))
     parser.add_argument('--bits', nargs='+', type=int, default=[2203, 4423, 8191])
     parser.add_argument('--b1', nargs='+', type=int, default=[10_000_000])
     parser.add_argument('--algorithms', nargs='+', choices=['ladder', 'resident', 'prac'], default=['ladder', 'resident', 'prac'])

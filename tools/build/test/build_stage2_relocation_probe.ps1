@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/relocation_0_36_0_candidate01/stage2')
+param([string]$Build='build_dev/build_cuda_cmake/relocation_0_36_0_candidate01/stage2')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

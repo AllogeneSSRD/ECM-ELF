@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # Standalone native OpenCL field/integer/S4 correctness probes. No CUDA compiler or production worker.
-param([string]$Build='build_opencl_stage2_ntt', [string]$OpenClRoot='',
+param([string]$Build='build_dev/build_opencl_stage2_ntt', [string]$OpenClRoot='',
       [string]$Gmp='', [string]$VcVars='', [switch]$WorkerOnly)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))

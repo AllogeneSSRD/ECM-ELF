@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/edwards_gpu_point_probe',
+param([string]$Build='build_dev/build_cuda_cmake/edwards_gpu_point_probe',
       [ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))

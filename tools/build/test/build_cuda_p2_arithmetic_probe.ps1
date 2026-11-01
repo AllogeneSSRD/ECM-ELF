@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 param([Parameter(Mandatory=$true)][string]$WorkerBuild,
-      [string]$Build='build_cuda_cmake/cuda_p2_arithmetic_probe')
+      [string]$Build='build_dev/build_cuda_cmake/cuda_p2_arithmetic_probe')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_go_fallback_stage1')
+param([string]$Build='build_dev/build_go_fallback_stage1')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo

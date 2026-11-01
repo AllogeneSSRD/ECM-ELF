@@ -9,7 +9,7 @@ from pathlib import Path
 
 repo = Path(__file__).resolve().parents[2]
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('--exe', type=Path, default=repo/'build_cuda_cmake/stage2_tree_gpu.exe')
+p.add_argument('--exe', type=Path, default=repo/'build_dev/build_cuda_cmake/stage2_tree_gpu.exe')
 p.add_argument('--device', type=int, default=1)
 p.add_argument('--output', type=Path, required=True)
 args = p.parse_args()

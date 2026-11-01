@@ -85,7 +85,7 @@ out = {'cases': cases, 'states': checked_states, 'leaves': checked_leaves,
                 'every state checked by independent long division and every real leaf by Horner. '
                 'No CUDA implementation, projective normalization, GMP fixture or production speed claim.'}
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--output', type=Path, default=Path('build_cuda_cmake/_scaled_contract/summary.json'))
+parser.add_argument('--output', type=Path, default=Path('build_dev/build_cuda_cmake/_scaled_contract/summary.json'))
 output = parser.parse_args().output
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(

@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_diagnostics_test',[string]$GmpRoot='third_party/gmp-zen3/dist',[string]$VcVars='', [switch]$WithoutLocalPari)
+param([string]$Build='build_dev/build_diagnostics_test',[string]$GmpRoot='third_party/gmp-zen3/dist',[string]$VcVars='', [switch]$WithoutLocalPari)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 if(-not [IO.Path]::IsPathRooted($Build)){$Build=Join-Path $repo $Build}

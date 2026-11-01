@@ -3,8 +3,8 @@
 .SYNOPSIS
 Build the standalone CUDA Stage2 save/queue executable (MSVC + nvcc + GMP).
 .DESCRIPTION
-Local builds prefer build_stage2_local; an occupied incompatible local profile
-selects a deterministic build_stage2_local_<key> sibling. Build overrides the final directory;
+Local builds always use build_stage2_local. A valid incompatible default profile
+is archived under build_dev before rebuilding. Build overrides the final directory;
 BuildRoot explicitly retains the profile hierarchy under the requested root.
 Incompatible profiles in explicit directories are refused, never overwritten.
 .EXAMPLE
@@ -45,8 +45,10 @@ $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 . (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
 $buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency $PtxArch $KernelLayout
+$fixedLocal = $BuildRole -eq 'local' -and -not $Build -and -not $BuildRoot
 $Build = Resolve-EcmBuildDirectory $repo $buildProfile $Build $BuildRoot
-Assert-EcmBuildProfile $Build $buildProfile
+if ($fixedLocal -and $HostOnly) { Assert-EcmBuildProfile $Build $buildProfile -ReadOnly }
+Assert-EcmBuildProfile $Build $buildProfile -ArchiveLocalStage2:$fixedLocal
 Write-Host '== Stage2 build =='
 Write-Host "   engine    : $Engine"
 Write-Host "   GPU       : $Arch"

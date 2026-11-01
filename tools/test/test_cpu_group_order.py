@@ -115,7 +115,7 @@ def performance(values):
 def main():
     started = datetime.now().astimezone()
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--probe', type=Path, default=ROOT/'build_cpu_group_order/group_order_probe.exe')
+    ap.add_argument('--probe', type=Path, default=ROOT/'build_dev/build_cpu_group_order/group_order_probe.exe')
     ap.add_argument('--db', type=Path, default=ROOT/'tools/ecm_dataset/ecm_stage2_dataset.sqlite')
     ap.add_argument('--reference', type=Path, default=ROOT/'data/experiments/edwards_group_order_20261016/reference_03')
     ap.add_argument('--gp', default=shutil.which('gp.exe') or shutil.which('gp'))

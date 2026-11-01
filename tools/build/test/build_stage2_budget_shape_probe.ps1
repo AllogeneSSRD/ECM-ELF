@@ -1,6 +1,6 @@
 #Requires -Version 5.1
-param([string]$Build='build_cuda_cmake/stage2_budget_shape_probe',
-      [string]$SourceRoot='build_cuda_cmake/_point_scratch_20261005/native_calibrated/sources',
+param([string]$Build='build_dev/build_cuda_cmake/stage2_budget_shape_probe',
+      [string]$SourceRoot='build_dev/build_cuda_cmake/_point_scratch_20261005/native_calibrated/sources',
       [ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89')
 $ErrorActionPreference='Stop';$repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)

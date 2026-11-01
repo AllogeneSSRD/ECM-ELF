@@ -70,7 +70,7 @@ def breakpoint(bits, k, limit):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--prime95-source', type=Path, default=Path('.refactor/p95v3106b01.source/ecm.cpp'))
-    p.add_argument('--profile', type=Path, default=Path('build_cuda_cmake/production_stage2/stage2_ecm_tune.toml'))
+    p.add_argument('--profile', type=Path, default=Path('build_dev/build_cuda_cmake/production_stage2/stage2_ecm_tune.toml'))
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--figures', type=Path, help='Figure prefix; default data/figures/<output name>')
     p.add_argument('--d-limit', type=int, default=200000000)

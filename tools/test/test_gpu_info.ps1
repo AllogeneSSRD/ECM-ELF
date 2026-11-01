@@ -17,7 +17,7 @@
 # usage: powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_gpu_info.ps1
 #          [-Exe build_cuda_cmake\ecm_cuda.exe] [-OpenClExe build_reltest\ecm.exe]
 param(
-    [string]$Exe = 'build_cuda_cmake\ecm_cuda.exe',
+    [string]$Exe = 'build_dev/build_cuda_cmake/ecm_cuda.exe',
     [string]$OpenClExe = '',
     [int]$Device = 0,
     [string]$Work = ''
