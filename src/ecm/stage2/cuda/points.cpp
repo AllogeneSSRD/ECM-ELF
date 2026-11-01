@@ -476,6 +476,18 @@ bool giant_chunk_chain(
         seed_points=0;
         stage2_log::print(stage2_log::debug,"wide_tail_ladder_fallback: points=%llu reason=nonunit_base index_capacity=%llu\n",
             npts,(unsigned long long)W.pt_cap);
+    } else if(giant_coop_requested() && nw>128 && nw<=256 && per_block>=2 && per_block<=64) {
+        // The capacity may be wider than the actual modulus. The cooperative
+        // field keeps R=2^(64*nw), including interleaved seeds and short tails.
+        const int bits=(int)mpz_sizeinbase(L.N,2);
+        const int mersenne_bits=fuse_env_ull("NTT_POINT_MERSENNE",0) &&
+            mpz_popcount(L.N)==(mp_bitcnt_t)bits ? bits : 0;
+        const unsigned int threads=64,grid=(unsigned int)((blocks*16+threads-1)/threads);
+        ecm_launch_s2g_coop_chain_kernel(EcmCudaLaunch{grid,threads},W.dn,C.ninv,(int)nw,ddx,ddz,
+            ddsx,ddsz,desx,desz,blocks,npts,per_block,g_giant_seed_device?2:1,mersenne_bits,ox,oz);
+        stage2_log::print(stage2_log::debug,"giant_coop: tpi=16 nw=%llu radix_bits=%llu capacity_bits=16384 "
+            "mersenne_bits=%d points=%llu chains=%llu length=%llu seed_stride=%d\n",
+            (unsigned long long)nw,(unsigned long long)nw*64,mersenne_bits,npts,blocks,per_block,g_giant_seed_device?2:1);
     } else {
         S2G_DISPATCH((int)nw, s2g_launch_chain, (int)nw, blocks, npts, per_block, C.ninv, W.dn, ddx,
                      ddz, ddsx, ddsz, desx, desz, ox, oz,g_giant_seed_device?2:1);

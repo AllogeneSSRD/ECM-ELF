@@ -42,7 +42,10 @@ def main():
     p.add_argument('--reverse-first',action='store_true',help='Reverse treatments on the first pass for independent retests')
     p.add_argument('--allow-gpu-pid',type=int,action='append',default=[])
     p.add_argument('--diagnostic',action='store_true')
+    p.add_argument('--diagnostic-b2',type=int,default=0,help='Override diagnostic bound; cooperative default reaches the chain path')
+    p.add_argument('--experiment',choices=('square','giant-coop'),default='square')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
+    diagnostic_b2=a.diagnostic_b2 or (26000000 if a.experiment=='giant-coop' else 2600000)
     desired=set(map(int,a.bits.split(',')))
     cells=[r for r in load(a.summary)['rows'] if not r['tail_permission'] and r['target_bits'] in desired]
     if len(cells)!=2*len(desired):raise ValueError('Need both families for every width')
@@ -61,12 +64,13 @@ def main():
         names={line.split(',',2)[2].strip() for line in text.splitlines() if line.split(',')[1].strip()==str(pid)}
         if len(names)!=1 or not Path(next(iter(names))).is_absolute():raise ValueError('Cannot bind allowed process')
         allowed.append(dict(pid=pid,process_name=next(iter(names))))
-    report=dict(complete=False,started_utc=stamp(),variants=variants,diagnostic=a.diagnostic,
+    report=dict(complete=False,started_utc=stamp(),variants=variants,diagnostic=a.diagnostic,experiment=a.experiment,
                 source_summary=str(a.summary),allowed_processes=allowed,rows=[],failures=[])
     write(out/'results.json',report)
     env={k:v for k,v in os.environ.items() if not k.startswith(('NTT_','ECM_')) and
          k not in ('CUDA_VISIBLE_DEVICES','CUDA_LAUNCH_BLOCKING')}
     env['NTT_NO_PROGRESS']='1'
+    if a.experiment=='giant-coop':env['NTT_POINT_SQUARE']='1'
     if a.diagnostic:
         env.update(NTT_TARGET_LEAF_HASH='1',NTT_DEVICE_GLEAF_CHECK='1',NTT_S4_CARRY_TRACE='1',NTT_XADD6_TEST='1')
     signatures={}
@@ -87,10 +91,12 @@ def main():
                         ('--log',directory/'engine.log'),('--debug-log-file',directory/'debug.log'),
                         ('--tune-profile',directory/'absent_tune.toml')]:option(command,flag,value)
                     if a.diagnostic:
-                        option(command,'--d',2310);option(command,'--b2',2600000)
+                        option(command,'--d',2310);option(command,'--b2',diagnostic_b2)
                     expected_d=2310 if a.diagnostic else cell['D']
-                    expected_b2=2600000 if a.diagnostic else cell['B2']
-                    runenv=env|{'NTT_POINT_SQUARE':'1' if treatment=='on' else '0'}
+                    expected_b2=diagnostic_b2 if a.diagnostic else cell['B2']
+                    flag='NTT_POINT_SQUARE' if a.experiment=='square' else 'NTT_GIANT_COOP'
+                    on_value='1' if a.experiment=='square' else '16'
+                    runenv=env|{flag:on_value if treatment=='on' else '0'}
                     write(directory/'command.json',dict(argv=command,overrides={k:v for k,v in runenv.items() if k.startswith('NTT_')}))
                     telemetry=TelemetryRecorder(1,directory/'telemetry.jsonl',interval=.2)
                     started=time.perf_counter()
@@ -115,8 +121,17 @@ def main():
                     if any(int(check[k]) for k in ('gmp_check_bad','gmp_selftest_bad')) or min(int(check[k]) for k in ('gmp_checked','gmp_selftest_cases'))<=0:
                         raise ValueError('Arithmetic checks failed/missing')
                     mode=fields(text,'point_square_mode',False)
-                    if name=='candidate' and int(mode['enabled'])!=int(treatment=='on'):raise ValueError('Wrong square mode')
+                    expected_square=1 if a.experiment=='giant-coop' else int(treatment=='on')
+                    if name=='candidate' and int(mode['enabled'])!=expected_square:raise ValueError('Wrong square mode')
                     if treatment=='on' and int(fields(text,'square_selftest')['mismatches']):raise ValueError('Square selftest failed')
+                    if a.experiment=='giant-coop' and name=='candidate':
+                        coop=fields(text,'giant_coop_mode')
+                        if int(coop['requested'])!=(16 if treatment=='on' else 0):raise ValueError('Wrong cooperative mode')
+                        eligible=treatment=='on' and int(mode['nw'])>128
+                        if bool(int(coop['eligible']))!=eligible:raise ValueError('Wrong cooperative eligibility')
+                        if eligible:
+                            if int(fields(text,'coop_selftest')['mismatches']):raise ValueError('Cooperative arithmetic check failed')
+                            if not re.search(r'^giant_coop: tpi=16 ',text,re.M):raise ValueError('Cooperative chain was not exercised')
                     if a.diagnostic:
                         digest=fields(text,'target_descent_values');signature=(digest['words'],digest['hash'])
                         leaf=fields(text,'device_gleaf')

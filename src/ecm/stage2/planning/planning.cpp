@@ -1749,6 +1749,7 @@ std::string select_auto(Options &o,const Record &r,bool apply) {
     require("NTT_HOST_READBACK_WAIT",0,0);
     require("NTT_S4_TIMING_FIFO",0,1);
     require("NTT_POINT_SQUARE",0,0); // Legacy measured MAC costs use generic squares.
+    require("NTT_GIANT_COOP",0,0); // Cooperative point costs need their own measurements.
     for(const char *key:{"NTT_XADD6","NTT_BABY_DEVICE","NTT_POINT_MERSENNE","NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE",
         "NTT_GFINV_SEG_EXACT","NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_GROOT_DEVICE","NTT_SCALED_DESCENT",
         "NTT_S4_OUTPUT_WINDOW","NTT_S4_CHUNK_OUTPUT","NTT_DEVICE_GLEAF","NTT_GROOT_TO_FOLD","NTT_S4_ORACLE_ASYNC",

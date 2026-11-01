@@ -19,6 +19,7 @@ bool device_gleaf_flag(const char *name);
 bool small_prime_flag(const char *name);
 
 bool initial_memory_diagnostics_requested();
+bool giant_coop_requested();
 
 extern ecm_stage2::ShortNttBatchPolicy g_short_ntt_batches;
 

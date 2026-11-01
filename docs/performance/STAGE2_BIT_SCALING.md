@@ -4,7 +4,7 @@
 
 ## 数据范围与可比较性
 
-复杂度拟合重读下列冻结矩阵的回执、阶段日志、算术检查、输入／程序／性能文件哈希和NTT分布；点专用平方另有第10节的新GPU对照，两个数据范围分开：
+复杂度拟合重读下列冻结矩阵的回执、阶段日志、算术检查、输入／程序／性能文件哈希和NTT分布；点专用平方和协作giant链另有第10／11节的GPU对照，各数据范围分开：
 
 | 数据 | 条件与用途 |
 |---|---|
@@ -107,7 +107,13 @@ on侧的完整引擎指数为2.097／1.820，未改变上述判断。将窗口�
 
 ## 3. 8192-bit容量、并行度和NTT台阶
 
-当前Stage2点算术按实际W选择4／8／16／32／64／128／256-limb模板；超过8192算术bits进入NW256。这与Stage1的容器预留和TPI选择不同。链核每线程处理一条大整数点链，W>128时CUDA块使用32线程，否则64线程；32线程块不等于TPI32协作运算。baby ladder块仍为64线程。
+默认Stage2点算术按实际W选择4／8／16／32／64／128／256-limb模板；超过8192算术bits进入NW256。这与Stage1的容器预留和TPI选择不同。默认链核每线程处理一条大整数点链，W>128时CUDA块使用32线程，否则64线程；32线程块不等于TPI32协作运算。baby ladder块仍为64线程。可选的宽位TPI16协作链见第11节。
+
+当前单次点模乘的limb乘积、进位与归约由一个线程执行，整个点阶段则同时运行多个点／链。Baby每次launch最多处理8192个点；Giant的第a个物理点块包含\(K_a=\lceil n_a/c\rceil\)条独立链，CUDA块数为\(Q_a=\lceil K_a/\tau\rceil\)，\(\tau\)是32或64的线程块大小。链内下一点依赖前两点，不能把\(n_a\)个点都视为独立线程。
+
+例如65536点、c=32、W>128时，有2048条链／有效线程、64个32线程块；在24SM上只有平均约2.67个块／SM可分配。这是提交规模，不是实测驻留率；寄存器、local、时钟和不均匀调度还会限制执行。上面的Baby8192点则有128个64线程块。小块、长链以及单次大整数内部串行可以同时限制giant，单纯增大TPB不会凭空增加独立链。
+
+CGBN的TPI16／32表示每个整数实例使用16／32线程；一个warp因此分别容纳2／1个整数实例，多个warp／块／SM仍并发处理其他实例。若将同一组\(K_a\)条链分配给TPI=u的协作内核，其有效线程数可为\(uK_a\)，但总MAC不因此减少，还会增加通信并改变寄存器／local需求。第11节的可选路径采用这种分派；默认仍为标量。不能以“单次只用16线程”推断整卡利用率，也不能只凭线程增加保证加速。NTT的蝶形并行和逐系数归约并行属于另外两种调度，不与点模乘混计。
 
 静态资源基线为0.56.4本机二进制，SHA256 `e2f8891da7d717f7df8c32d41974c4710aeb3aad693b4fe2158e39fe5d3e0dfd`。`cuobjdump --dump-resource-usage`给出；专用平方的资源变化见第10节：
 
@@ -295,7 +301,14 @@ $$
 
 总变换数为\(3Q_{poly}\)，但各自长度不同；总蝶形仍须逐请求累加。示例P20160、I128521、G7、\(H_P=15\)：F20159、G128514、inverse30、fold18、根／下降40319，合计**189040对卷积、567120次逻辑变换**，与本批最高位普通日志的长度分布总数一致。该计数没有包含必需自检。
 
-当前基础点模乘自检保留2048组；专用平方启用时另加128组平方，复用原有设备缓冲。S4每个新\((h,u,b)\)形状有96窗口自检。若遇到\(K_S\)个新S4形状，自检工作约为\(2048M(W)+128\mathbf1_{square}S(W)+96\sum_{j=1}^{K_S}\mathcal R_j(W)\)，另加对应CPU参考计算、GMP抽样、carry检查及排空。形状数不等于NTT长度数，冷／热缓存也会改变初始化成本。发布、可选因子分解主要与结果数量和因子本身有关，没有仅凭B2／位宽就能可靠确定的固定复杂度。
+当前基础点模乘自检保留2048组；专用平方启用时另加128组平方。协作链请求且位宽合格时，再加64组协作乘法及64组协作平方，三类检查复用原有设备缓冲。S4每个新\((h,u,b)\)形状有96窗口自检。若遇到\(K_S\)个新S4形状，自检工作约为
+
+$$
+2048M(W)+128\mathbf1_{square}S(W)+64\mathbf1_{coop}(M_C+S_C)
++96\sum_{j=1}^{K_S}\mathcal R_j(W).
+$$
+
+\(M_C,S_C\)是固定16384-bit协作容器的成本，当前协作平方调用一般乘法。另加对应CPU参考计算、GMP抽样、carry检查及排空。协作检查额外D2H为\(1024W\) bytes，没有额外H2D或显式设备数组。形状数不等于NTT长度数，冷／热缓存也会改变初始化成本。发布、可选因子分解主要与结果数量和因子本身有关，没有仅凭B2／位宽就能可靠确定的固定复杂度。
 
 ## 7. 分阶段内存与数据量
 
@@ -348,9 +361,9 @@ $$
 
 本地`third_party/cgbn/include/cgbn/impl_cuda.cu:518/526/1027/1032`中，`sqr_wide(a)`调用`mul_wide(a,a)`，`mont_sqr(a)`调用`mont_mul(a,a)`；IMAD实现`core/core_mul_imad.cu:81`、`core/core_mont_imad.cu:28`是循环的部分积与消元，没有递归Karatsuba。令n为总32-bit limb数、TPI固定，跨所有协作线程的工作量仍为\(\Theta(n^2)\)；不能把单线程分摊的约\(n^2/TPI\)误称为整个算法次平方。
 
-因此CGBN或自写小TPI协作仍值得作为对照：它可能降低每线程私有状态和串行依赖，让少量宽位chain获得更多可执行线程。代价包括shuffle／同步、每SM能驻留的独立点数下降、编译体积与容器padding。生产Stage2尚未证明哪种TPI更优，不能套用Stage1的最优TPI。
+因此CGBN或自写小TPI协作可能降低每线程私有状态和串行依赖，让少量宽位chain获得更多可执行线程。代价包括shuffle／同步、每SM能驻留的独立点数下降、编译体积与容器padding。第11节已验证可选TPI16链；尚未比较TPI32完整链，不能套用Stage1的最优TPI。sm89协作探针实际使用的WMAD及规范余数合同，另见[固定资料第8节](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#8-协作容器与原montgomery尺度)。
 
-对承载尤其要保留当前线性梅森归约；直接改用通用CGBN `mont_mul`会重新引入普通Montgomery消元。可探测“协作完整乘积＋专用梅森归约”，并同时比较普通CGBN整套路径。普通模数若仅将完整乘积换成Karatsuba、REDC不变，完整模乘的渐近平方项仍存在。[Karatsuba递推](https://gmplib.org/manual/Karatsuba-Multiplication)
+对承载尤其要保留当前线性梅森归约；直接改用通用CGBN `mont_mul`会重新引入普通Montgomery消元。当前可选协作链采用“协作完整乘积＋专用梅森归约”，普通路径保留CGBN REDC。普通模数若仅将完整乘积换成Karatsuba、REDC不变，完整模乘的渐近平方项仍存在。[Karatsuba递推](https://gmplib.org/manual/Karatsuba-Multiplication)
 
 若要让普通模乘也获得次平方的工作量，须把归约一并改为与快速乘法匹配的方案，例如基于预计算倒数的Barrett或快速Montgomery归约。它们会增加乘法、窗口／carry及修正，不能在NTT成本对照中省略；同一模数可复用的倒数和常量频谱则是潜在收益。此处是后续研究范围，当前点后端仍使用既有REDC。
 
@@ -445,14 +458,89 @@ CUDA生产点原语提供`NTT_POINT_SQUARE=0|1`同二进制开关，0.57.2默认
 
 最终默认构建0.57.2为SHA256 `0fec5f4ffc2a09a51867ed66c7413f01231ebbe9c14a08e21c45f70552f4bc2e`，两份CUDA目标文件与计时候选完全一致；本段不是一次重新标记版本的全矩阵计时。独立M127、sigma26／B1=20／B2=13230／D210的完整小算例确认默认开启、显式0、显式1和真实worktodo子进程均正确；另三项2／−1／1.0的非法环境值均清晰拒绝。7项行为检查全部通过。
 
-平方减少常数，没有改变点算术的二次复杂度。最高档on的点分组中位数中，baby ladder／affine＋giant生成＋giant叶准备合计普通32.829s／51.5%，承载18.221s／54.3%；这是主机范围计时的点生成与准备分组，不是纯平方核函数时间。其余主要工作仍是F/G树、fold、下降及系数归约。因此下一项点优化应比较小TPI协作乘法／平方、实际W下的依赖延迟及local访问，并固定相同D/P复测；NTT优化须另测完整卷积和归约，不能把本次整条收益归因于NTT。
+平方减少常数，没有改变点算术的二次复杂度。最高档on的点分组中位数中，baby ladder／affine＋giant生成＋giant叶准备合计普通32.829s／51.5%，承载18.221s／54.3%；这是主机范围计时的点生成与准备分组，不是纯平方核函数时间。其余主要工作仍是F/G树、fold、下降及系数归约。小TPI协作的独立对照与固定D整条结果见第11节；NTT优化须另测完整卷积和归约，不能把点算术收益归因于NTT。
 
 原始证据为`data/experiments/stage2_point_square_20261101/`下的`curves_low_full/`、`curves_high_recheck/`、`curve_diagnostics/`、`correctness_full/`、`correctness_single_step/`、`default_0_57_2/`、`initial_memory_fixed/`及`resource_comparison.json`、`final_default_object_audit.json`。汇总／图为`data/benchmarks/stage2_point_square_20261101/qualified/`、`data/figures/stage2_point_square_20261101/qualified/`。复现工具为[原语探针构建](../../tools/build/test/build_stage2_point_square_probe.ps1)、[原语采集](../../tools/bench/bench_stage2_point_square.py)、[完整曲线采集](../../tools/bench/bench_stage2_square_curves.py)、[默认与子进程检查](../../tools/test/test_stage2_point_square_native.py)、[离线汇总与绘图](../../tools/bench/analyze_stage2_square.py)。程序和脚本的冻结副本／构建清单保留在各研究目录。
 
+## 11. 可选TPI16协作giant链
+
+### 11.1 分派、表示与边界
+
+ECM-ELF0.57.3提供`NTT_GIANT_COOP=0|16`环境变量，默认0。16仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。Baby、seed-pair、归一化、NTT及GCD均不切换。当前没有同名TOML键，也没有根据tune自动选择TPI。
+
+协作链固定16384-bit容量、每整数16线程，每个64线程块处理4条链：块数为\(\lceil16K_a/64\rceil\)。前述2048链示例由64个标量块变为512个协作块，共32768个有效线程。TPI16允许一个warp同时执行两个整数；它不是整卡只使用16线程，也不保证比TPI32更快。实际同时驻留的实例还受寄存器、栈和SM数量限制。
+
+设备输入／输出仍为实际W个64-bit词，支持分离／交错seed与1／2点短尾，不新增扩大到容器宽度的全局坐标数组。适配器保留原\(R_a=2^{64W}\)：普通乘积在固定容器REDC前校正radix，梅森乘积保留线性折叠／旋转；规范化到\([0,\mathcal M)\)。xADD保持既有6次模乘、尺度及差分坐标别名合同。完整证明见[协作表示合同](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#8-协作容器与原montgomery尺度)。总工作量仍为二次；约10k位也使用16k容器，padding不能忽略。
+
+变量随队列子进程继承，进入现有ECM tune的NTT环境快照；严格environment匹配可区分开关，配置忽略environment时仍允许复用旧数据。旧二进制绑定的cost-profile要求0。本节固定D验证没有重新学习协作路径的D／链长，因此不能声明已有默认选型模型已针对它校准。
+
+### 11.2 完整Stage2：宽位有收益，暂不默认启用
+
+设备为RTX4060 Laptop、24SM／8GiB、驱动610.88、CUDA13.3／MSVC14.51.36231／sm89，SM目标1500MHz。34次正常调用中GPU利用率≥50%的遥测3549条均为1500MHz；功耗随负载变化，没有调整频率或功耗。GPU0外部任务保持运行，GPU1逐次门禁只允许本研究和已授权界面。预算arena6300／fold640／batch256 MiB。
+
+旧版0.57.2的EXE SHA256为`0fec5f4ffc2a09a51867ed66c7413f01231ebbe9c14a08e21c45f70552f4bc2e`；0.57.3为`1083a51c3fa568b202ec33f1a314bf7146de85f7782126001ff2717f70215db0`。新旧均启用专用平方；协作链内部平方使用CGBN一般乘法，不能将上一节平方收益再次相加。
+
+范围为目标318／1939／10232／12285／16272 bits，普通／承载共10格。B1=50000、sigma26（1939-bit目标为27），实际B2=27015978990；复用同一已验证Stage1点，逐格固定原D／布局／32或64链。旧版／新off／新on各n=1，最高位宽off/on追加相反顺序复测至n=2，共34次。计时为引擎init+main，包含必需自检；不丢弃预热，不含外层读档／选型／进程启动／发布。以下为逐格中位数之和，**不是13位宽完整矩阵**。
+
+| 5格合计 | 0.57.2，s | 0.57.3 off，s | TPI16，s | 较旧版减少 |
+|---|---:|---:|---:|---:|
+| 普通 | 125.603 | 125.281 | 119.905 | 4.54% |
+| 承载 | 71.596 | 71.348 | 68.124 | 4.85% |
+| 总计 | 197.199 | 196.629 | 188.028 | 4.65% |
+
+新off较旧版合计减少0.29%，没有同时超过5%及20ms的默认回退格。TPI16较同二进制off合计减少4.37%；10232-bit普通为22.704→22.755s，基本持平，承载14.019→13.970s；12285-bit普通36.124→34.664s（−4.04%），承载21.162→20.069s（−5.16%）；16272-bit普通63.926→59.978s（−6.18%），承载33.717→31.621s（−6.22%）。最高位逆序单独为63.983→59.935s及33.689→31.712s，收益方向一致。小位宽未进入协作核，其微小差异属于整条运行波动。
+
+![协作giant链完整Stage2对照](attachments/stage2-giant-coop-curves.png)
+
+所有正常调用NF、bad_factors=0，GMP检查通过；NTT长度分布、S4归约系数数和G根摘要相同。独立完整叶诊断另有12条，不纳入速度。多数格仍n=1筛查，没有统计置信区间；其他GPU、大B2、更多位宽及不同D／链长未形成资格，因此保持默认0。
+
+### 11.3 原语吞吐量、链延迟与NCU
+
+字段探针比较TPI4／8／16及各自二进制中的标量控制，分别覆盖至4096／8192／16381算术bits。独立实例数为1／2048／8192，每实例8次依赖运算，每次进程保留全部5个事件样本，再对两次相反顺序进程取中位数，共288次调用。count=1特意使用0边界输入，**不能用于代表随机整数单次延迟**；下面仅展示大批量。
+
+![2048个实例的原语时间比例](attachments/stage2-point-coop-2048.png)
+
+![8192个实例的原语时间比例](attachments/stage2-point-coop-8192.png)
+
+纵轴为候选时间／本二进制标量时间，越低越快；不是完整Stage2速度。2048实例时，TPI16普通乘法／平方约快10.84…17.34／7.25…15.28倍，梅森乘法／平方约快9.59…10.84／5.07…8.07倍；8192实例降为5.25…6.65／4.45…4.81及3.48…5.60／2.59…2.74倍。批量变化会改变标量可隐藏的延迟，不能将某个较大的倍率外推到所有点数。
+
+使用**生产协作头**的真实链递推另测p=16319、W255、2048链×32点、交错seed，总65536点／61440次xADD。两个相反顺序进程各保留5次事件，标量中位数1495.813ms、TPI16为306.247ms，约4.88倍；全部输出SHA256一致，首末链GMP通过。它是链核对照，仍不包括seed、baby、树与归一化。
+
+管理员Nsight Compute2026.2.1对同一链探针选取第二次kernel，禁用工具改频和cache清理，分别重放19／17 passes；程序输出与未剖析参考一致。NCU时间不纳入上面的性能验收。
+
+| NCU指标 | 标量 | TPI16 |
+|---|---:|---:|
+| 提交块数／每块线程 | 64／32 | 512／64 |
+| 寄存器／线程 | 64 | 255 |
+| 活跃warp占峰值 | 5.571% | 16.665% |
+| 调度器issue active | 11.590% | 38.093% |
+| eligible warps／active cycle | 0.116 | 0.449 |
+| local load sectors | 10,270,990,020 | 6,642,204,672 |
+| local store sectors | 5,241,958,971 | 96,199,234 |
+
+![协作链的并行度与local访问诊断](attachments/stage2-point-coop-ncu.png)
+
+local读取sector减少35.33%、写入减少98.16%。这些是缓存事务计数，不能当成VRAM传输字节或进程显存。TPI16的寄存器分配已把理论驻留限制到4个64线程块／SM，即8 warp／SM；在此24SM／每SM48 warp设备上约16.67%，实测接近此上限。**占用率仍不高，但更多可发射warp与更少local访问足以改善本例延迟**；活跃warp也不等于所有算术单元的利用率。此诊断来自同一生产头的独立探针，没有证明完整曲线每一阶段都有相同比例变化。
+
+### 11.4 正确性、内存与证据
+
+独立字段验证共312次合法调用、1,477,632个64-bit输出词，覆盖三类模数、非对齐边界、别名及单步／三次递推；3次故障注入均被拒绝。生产链头的294次合法调用、76,908,204词由GMP全部核对，覆盖8193／12285／16272／16319／16384 bits、32／64链、1／2点尾、单链／37链及两类seed布局；两后端共同覆盖的形状另要求完整坐标SHA256相同。完整Stage2诊断覆盖7995／16272目标bits的普通／承载，旧版／off／on目标环全叶指纹一致，full leaf、xADD及S4检查通过。
+
+默认／显式0／16、非法值、小位宽回退、真实队列继承9例通过；原平方开关7例回归通过。初始化分配50组、4556项检查和容量变异门禁通过；协作自检复用原4个显式设备数组。最终二进制静态chain资源为64→255寄存器／thread、26640→1504 B栈帧／thread，不是累计local字节。最高位正常调用的0.2s整卡NVML采样峰，旧版／off为5556.4 MiB、on为5558.4 MiB；包含上下文及已允许界面，不是精确进程峰，也不能证明采样间没有更高瞬时值。
+
+原始证据保留`data/experiments/stage2_point_coop_20261101/`，包括`canonical_correct4/8/16`、`native_chain_edges/deep/single`、`native_chain_perf`、`native_switch`、`square_regression`、`curve_diagnostics`、`curves_fixed`、`curves_recheck`、`initial_memory`、`production_resources.txt`及`ncu_scalar/coop`。早期失败、构建中断及探索性成绩独立保留，不进入合格统计。派生结果为`data/benchmarks/stage2_point_coop_20261101/final/`与`curves_final/`；同名figures目录保留PNG/SVG。脚本入口见[复现说明](../../tools/bench/README_STAGE2_VERSION.md#协作点算术与giant链验证)。临时[实验草稿](../development/STAGE2_COOPERATIVE_POINTS_DRAFT.md)保留探索记录，尚未清理。
+
+当前入口及行号：
+
+- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：479行宽位分派，保留既有非单位恢复；[options.cpp](../../src/ecm/stage2/cuda/options.cpp)：33行默认值、241行请求判定、342行值验证。
+- [point_coop_chain.cuh](../../src/ecm/stage2/cuda/device/point_coop_chain.cuh)：7行固定容器适配器、16行radix校正乘法、53行xADD、80行协作链、108行自检；[point_coop_field.cuh](../../src/ecm/stage2/cuda/device/point_coop_field.cuh)：13行规范化、19行梅森折叠。
+- [point_coop_kernels.cu](../../src/ecm/stage2/cuda/device/point_coop_kernels.cu)：6／17行独立host启动器；[checks.cpp](../../src/ecm/stage2/cuda/checks.cpp)：725行资格、776行64＋64组必需GMP检查。
+
 ## TODO
 
-- 为高位点核建立实际W、模板容量、链数／SM及local访问的独立探针；不预先承诺TPI32更快。
-- 专用平方已通过小档完整矩阵及单步／依赖递推检查；补充其他GPU与大B2资格。协作算术／浅层Karatsuba仍须独立GMP、固定D验证；失败与回退样本全部保留。
+- 先比较更贴近实际W的协作容器与TPI32，降低固定16k容器在约10k位的padding和255寄存器限制；保留实际radix及规范余数检查，不预先承诺TPI32更快。
+- Baby／seed尚未协作；先隔离其依赖与吞吐量，再决定是否替换。对既有可选协作链补其他GPU、大B2／更多D／链长资格，资格不足前默认关闭；点成本改变后的D模型须独立校准。
+- 专用平方已通过小档完整矩阵及单步／依赖递推检查；补充其他GPU与大B2资格。浅层Karatsuba／融合短NTT尚未实现，仍须独立GMP及固定D验证；失败与回退样本全部保留。
 - 给NTT设备时间建立与S4／host等待分离的完整分项，确认长变换是算术、带宽还是批量台阶，不依靠阶段名称推断。
 - 将当前报告的工作代理接入离线模型验证；在独立持出矩阵通过前不替换默认选型或放宽性能保护。
 
@@ -467,5 +555,5 @@ CUDA生产点原语提供`NTT_POINT_SQUARE=0|1`同二进制开关，0.57.2默认
 - [stage2_scalar.cuh](../../src/ecm/stage2/cuda/stage2_scalar.cuh)：45行普通长除法、102行梅森系数折叠；[shape.cpp](../../src/ecm/cuda/ntt/shape.cpp)：97行`choose_cfg`、283行`ntt_shape_query`，包含精确packing、digit与长度选择。行号按本报告对应的源码核对，后续修改以入口名定位。
 - [product.cpp](../../src/ecm/stage2/cuda/product.cpp)：`print_ntt_lengths`的逻辑变换／蝶形计数；[phase_times.h](../../src/ecm/stage2/cuda/phase_times.h)：引擎互斥计时边界。外层读档／选型不在此拟合中。
 - [requests.h](../../src/ecm/stage2/planning/requests.h)：59／68／78行的树、fold和完整请求拓扑；[initial_memory.h](../../src/ecm/stage2/planning/initial_memory.h)：12行`baby_memory_layout`；[geometry.h](../../src/ecm/stage2/geometry.h)：`fold_owner_layout`与分块策略。
-- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：614行baby生成／目标环求逆、261行驻留giant准备、338行chain；[remainder.cpp](../../src/ecm/stage2/cuda/remainder.cpp)：122行级数逆、`descent_scaled`及fold；[batch.cpp](../../src/ecm/stage2/cuda/batch.cpp)：52行小素数复用、922行积块／GCD。
+- [points.cpp](../../src/ecm/stage2/cuda/points.cpp)：626行baby生成／目标环求逆、261行驻留giant准备、338行chain；[remainder.cpp](../../src/ecm/stage2/cuda/remainder.cpp)：122行级数逆、`descent_scaled`及fold；[batch.cpp](../../src/ecm/stage2/cuda/batch.cpp)：52行小素数复用、922行积块／GCD。
 - 本地[CGBN实现](../../third_party/cgbn/include/cgbn/impl_cuda.cu)：518／526／1027／1032行乘法和平方入口；[IMAD乘法](../../third_party/cgbn/include/cgbn/core/core_mul_imad.cu)：81行；[IMAD Montgomery](../../third_party/cgbn/include/cgbn/core/core_mont_imad.cu)：28行。

@@ -1,7 +1,7 @@
 # Complete experimental targets with content identities; no source extraction.
 function Invoke-EcmExperimentBuild {
     param([string]$Repo,[string]$Build,[string]$Arch,[string[]]$Sources,[string]$Name,
-          [string[]]$Defines=@(),[switch]$Rebuild)
+          [string[]]$Defines=@(),[ValidateRange(1,64)][int]$SplitCompile=1,[switch]$Rebuild)
     . (Join-Path $PSScriptRoot 'cuda_toolchain.ps1')
     . (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
     $cuda=Resolve-EcmCudaToolkit -Archs $Arch
@@ -20,7 +20,7 @@ function Invoke-EcmExperimentBuild {
     foreach($source in $Sources) {
         $obj=Join-Path $Build ($names[$source]+'.obj');$objects+=$obj
         $commands+=('"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 -arch='+$Arch+
-            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 '+
+            ' --split-compile='+$SplitCompile+' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 '+
             (($dirs|ForEach-Object {'-I "'+(Resolve-EcmSourcePath $Repo $_)+'"'}) -join ' ')+' '+
             (($Defines|ForEach-Object {'-D'+$_}) -join ' ')+' -c "'+$source+'" -o "'+$obj+'"')
         $commands+='if errorlevel 1 exit /b 1'

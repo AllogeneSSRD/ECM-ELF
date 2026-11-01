@@ -178,3 +178,36 @@ $$
 上述加法是工作模型：若\(F_{MAC,eff}\)或\(F_{NTT,eff}\)直接采用包含local、带宽和同步等待的实测kernel吞吐量，相应延迟已在分母中，不能再作为独立时间加一遍。互斥阶段和嵌套设备事件的计量边界必须分别保持。
 
 专用平方降低schoolbook的常数；单层Karatsuba也只是降低二次项常数。只有递归Karatsuba才有\(O(W^{\log_2 3})\)的乘法上界，普通Montgomery归约若仍保持平方，整体模乘仍不会因此变为次平方。相关递推及常数取舍见[GMP Karatsuba说明](https://gmplib.org/manual/Karatsuba-Multiplication)。仓库提供可选schoolbook专用平方，尚未实现Karatsuba点模乘。
+
+## 8. 协作容器与原Montgomery尺度
+
+实际模数占W个64-bit limbs，而协作容器占\(W_c\ge W\)。记
+
+$$
+R_a=2^{64W},\qquad R_c=2^{64W_c},\qquad \delta=64(W_c-W).
+$$
+
+不能只把零填充后的输入交给另一radix的Montgomery乘法；\(abR_c^{-1}\)通常不等于所需的\(abR_a^{-1}\)，连续点公式还会累积表示尺度差异。
+
+对于普通奇数模数，可先求完整乘积并左移\(\delta\)位，再用容器的REDC：
+
+$$
+\operatorname{REDC}_{R_c}(ab\,2^\delta)
+\equiv ab\,2^\delta R_c^{-1}
+\equiv abR_a^{-1}\pmod N.
+$$
+
+当\(0\le a,b<N<R_a\)时，\(ab2^\delta<N R_c\)，仍满足宽REDC的输入界；完整分子也小于\(R_c^2\)。补齐只增加宽移位，不需要为每个点反复做输入／输出表示转换。容器本身仍可能增加乘法工作，必须按\(W_c\)而非W计。
+
+对于\(M=2^p-1\)，若容器已有\(v=abR_c^{-1}\bmod M\)，则所需结果为
+
+$$
+v2^\delta\bmod M
+=\operatorname{rotl}_{p}(v,\delta\bmod p).
+$$
+
+该旋转可与梅森折叠的旋转组织合并。这里的旋转是p-bit环上的操作，不能使用完整容器位宽的普通循环移位替代。
+
+还须独立核对后端的规范余数合同。本地WMAD `core_mont_wmad.cu:175`起的Montgomery乘法尾部按radix进位条件减N，可能返回\([N,2N)\)内的同余表示；要求\([0,N)\)的调用方需再比较／条件减N。这不表示该库所有算术入口都使用相同范围。点加法中“一次减N即可”的界通常依赖输入均小于N，不能仅因最终取模同余就忽略规范化。
+
+本地WMAD宽乘入口为`core_mul_wmad.cu:142`，仍是循环部分积；`impl_cuda.cu:526/1032`的平方复用一般乘法。协作改变分工与执行效率，不因此把总工作量变为Karatsuba复杂度。以上两份WMAD文件SHA256分别为`c4b975c54a7a3ae7e695dee9d93ffc4d9be71a2cad7d0fc9e41a7e844803d181`与`f11bd15a1d4d43fbb0bdcde30249cb2acd3cbf5ec409f6c496bc87827627e38a`。

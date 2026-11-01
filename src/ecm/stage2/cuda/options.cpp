@@ -30,6 +30,7 @@ struct ProductionDefaults {
         set_default("NTT_HOST_READBACK_WAIT", "0");
         set_default("NTT_S4_TIMING_FIFO", "1");
         set_default("NTT_POINT_SQUARE", "1"); // Qualified fixed-D ordinary/carrier matrix.
+        set_default("NTT_GIANT_COOP", "0"); // Opt-in until complete-curve qualification.
         set_default("NTT_FUSE_COOP_OUTER", "2");
         set_default("NTT_GIANT_BASE_CPU", "0");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");
@@ -237,6 +238,12 @@ FlatInputStats g_flat_input;
 
 long long g_name_max = -1;
 
+bool giant_coop_requested()
+{
+    const char *value=std::getenv("NTT_GIANT_COOP");
+    return value && !std::strcmp(value,"16");
+}
+
 void ladder_cap_init(void)
 {
     const char *e = std::getenv("NTT_LADDER_CAP");
@@ -332,6 +339,9 @@ int ecm_cuda_stage2_set_log_level(int level)
 
 int ecm_cuda_stage2_check_configuration()
 {
+    if(const char *v=std::getenv("NTT_GIANT_COOP"))if(std::strcmp(v,"0") && std::strcmp(v,"16")) {
+        std::fprintf(stderr,"NTT_GIANT_COOP must be 0 or 16\n");return 2;
+    }
     if(const char *v=std::getenv("NTT_POINT_SQUARE"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
         std::fprintf(stderr,"NTT_POINT_SQUARE must be 0 or 1\n");return 2;
     }

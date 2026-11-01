@@ -1,4 +1,4 @@
-"""Check the production square default, override, validation and queue child.
+"""Check production point-arithmetic defaults, validation and queue children.
 
 Use an independent sigma=26, B1=20 M127 save. Each valid case runs a complete
 small Stage2; this is a correctness test, not a performance measurement.
@@ -30,6 +30,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--allow-gpu-pid', type=int, action='append', default=[])
+    p.add_argument('--check', choices=('square', 'giant-coop'), default='square')
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -60,6 +61,13 @@ def main():
     cases = [('default', None, 1, False), ('off', '0', 0, False), ('on', '1', 1, False),
              ('invalid_two', '2', None, False), ('invalid_negative', '-1', None, False),
              ('invalid_float', '1.0', None, False), ('queue_default', None, 1, True)]
+    key = 'NTT_POINT_SQUARE'
+    if a.check == 'giant-coop':
+        key = 'NTT_GIANT_COOP'
+        cases = [('default', None, 0, False), ('off', '0', 0, False), ('on', '16', 16, False),
+                 ('invalid_one', '1', None, False), ('invalid_tpi', '32', None, False),
+                 ('invalid_negative', '-1', None, False), ('invalid_float', '16.0', None, False),
+                 ('queue_default', None, 0, True), ('queue_on', '16', 16, True)]
     try:
         for name, value, expected, queued in cases:
             directory = out / name
@@ -80,8 +88,8 @@ def main():
                 '--save', str(directory / 'prime127.save'), '--curves', '1', '--b2', '13230', '--factor-only']
             runenv = env.copy()
             if value is not None:
-                runenv['NTT_POINT_SQUARE'] = value
-            write(directory / 'command.json', dict(argv=command, square=value))
+                runenv[key] = value
+            write(directory / 'command.json', dict(argv=command, environment_key=key, value=value))
             check_gpu_processes(telemetry.monitor, out, directory / 'before.json', allowed=allowed)
             assert sha(exe) == identity, 'Frozen binary changed'
             result = subprocess.run(command, cwd=directory, env=runenv, capture_output=True, timeout=60)
@@ -89,14 +97,19 @@ def main():
             (directory / 'console.log').write_text(text, encoding='utf-8')
             check_gpu_processes(telemetry.monitor, out, directory / 'after.json', allowed=allowed)
             if expected is None:
-                assert result.returncode != 0 and 'NTT_POINT_SQUARE' in text, text
+                assert result.returncode != 0 and key in text, text
             else:
                 assert result.returncode == 0, text
                 trace = text + '\n' + (directory / 'debug.log').read_text(encoding='utf-8')
                 modes = re.findall(r'point_square_mode: enabled=([01])', trace)
-                assert modes and set(modes) == {str(expected)}, modes
+                expected_square = expected if a.check == 'square' else 1
+                assert modes and set(modes) == {str(expected_square)}, modes
                 squares = re.findall(r'square_selftest: cases=(\d+) mismatches=(\d+)', trace)
-                assert (bool(squares) == bool(expected)) and all(x == ('128', '0') for x in squares), squares
+                assert (bool(squares) == bool(expected_square)) and all(x == ('128', '0') for x in squares), squares
+                if a.check == 'giant-coop':
+                    coop = re.findall(r'giant_coop_mode: requested=(\d+) eligible=(\d+)', trace)
+                    assert coop and set(coop) == {(str(expected), '0')}, coop
+                    assert 'coop_selftest:' not in trace  # M127 retains the scalar path.
                 assert re.search(r'mont_selftest:.*mismatches=0', trace), trace
                 records = [json.loads(line) for line in (directory / 'results.jsonl').read_text(
                     encoding='utf-8-sig').splitlines() if line.strip()]

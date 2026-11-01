@@ -73,6 +73,22 @@ python tools/bench/plot_stage2_version.py `
 
 离线入口`analyze_stage2_square.py --study <完成的正常研究> --output <新统计目录> --figures <新图目录>`，可用`--extra`合并独立复测，按每格中位数汇总，不把学习或诊断混入；`--public-figures`复制公开PNG。样本数、计时边界和限制见[位宽性能报告](../../docs/performance/STAGE2_BIT_SCALING.md)。所有实验默认写`data/`，不修改设备设置或真实生产队列。
 
+## 协作点算术与giant链验证
+
+`tools/build/test/build_stage2_point_coop_probe.ps1 -Tpi 4|8|16 -MaxWords 64|128|256`构建一种TPI的字段探针；小TPI可限制容量以控制模板编译量。`build_stage2_point_coop_chain_probe.ps1`构建引用生产协作头的真实链探针。这两个入口默认SplitCompile8，在受限环境外运行；受限环境内显式`-SplitCompile 1`，避免已知并行编译INVALID_HANDLE。输出目录先创建内部`.gitignore`，不改根忽略规则。
+
+`bench_stage2_point_coop.py --exe <probe> --output <新目录> --device 1 --suite correctness|performance`冻结EXE／GMP／manifest、保存采集器快照，逐次检查GPU进程与0.2s遥测。`--probe field`默认测试乘法／平方；`--tpis 0,16 --bits 4096,8192,16381 --counts 1,2048,8192 --rounds 2 --recurrence 8`为字段性能示例，0为本二进制标量控制。count1为0边界，不把它标为随机单次延迟。正确性配合`--kinds 0,1,2`覆盖三类模数、别名、单步／递推和强制故障拒绝。
+
+链测试添加`--probe chain --tpis 0,16 --bits 16319 --counts 2048 --lengths 32 --tails 0 --seed-strides 2 --rounds 2`，0尾长表示完整链。正确性可用`--correct-count 37 --tails 0,1,2 --seed-strides 1,2`；37及以下链全部GMP核对，大批量只核对首末链，并要求两种后端完整输出SHA256一致。它不是每次中间状态都回读的检查。`--exploratory`显式标记探索性采集，离线分析拒绝将其列入合格性能。
+
+`bench_stage2_square_curves.py`通过`--experiment giant-coop`复用固定D／布局／链长的正常曲线协议，将POINT_SQUARE固定1、GIANT_COOP设0／16，旧版使用0。`--diagnostic`在此模式默认B2=26000000、D2310/P240，使giant点数达到chain准入，不沿用平方模式的较小诊断B2。正常／诊断均核对模式资格、实际协作launch、自检及数学工作量。独立复测使用`--reverse-first`并保留原样本；离线仍使用`analyze_stage2_square.py`，由研究元数据识别模式，拒绝混合实验，输出`stage2-giant-coop-curves.png`。原平方模式是默认，保留旧命令行为。
+
+原生开关检查使用`tools/test/test_stage2_point_square_native.py --check giant-coop`，配合同一M127／sigma26／B1=20的有效保存点，验证默认、小位宽回退、显式0／16、非法值和队列继承；不充当性能数据。
+
+管理员采集入口`profile_stage2_point_coop.py --reference <已完成的GPU1链call目录> --output <新目录> --run-admin`，可带显式授权的`--allow-gpu-pid`。仅支持本协议GPU1，自动冻结探针及工具身份，以隐藏管理员进程运行NCU2026.2.1；clock/cache控制均none。按kernel名称选第二次提交，检查剖析后的GMP／全输出SHA与参考一致。CSV与报告保留哈希；诊断时间永不混入正常成绩。没有`--run-admin`时只生成具体脚本，可稍后用`--collect-only`汇总已完成采集。
+
+`analyze_stage2_point_coop.py --study <字段性能研究> --extra <其他TPI研究> --output <新统计目录> --figures <新图目录>`只读已完成证据。可配对添加`--ncu-scalar <目录> --ncu-coop <目录>`，核对相同工作／输出及报告哈希后生成NCU图。正式结果、二进制身份、样本边界和默认策略见[位宽报告第11节](../../docs/performance/STAGE2_BIT_SCALING.md#11-可选tpi16协作giant链)。
+
 ## 正常运行时选型矩阵
 
 ### 布局与旧tune的有界验证

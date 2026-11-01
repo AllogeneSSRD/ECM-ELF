@@ -722,6 +722,9 @@ int mont_selftest(
                 (int)g_xadd6,g_xadd6 ? 6 : 8);
     stage2_log::print(stage2_log::debug,"point_square_mode: enabled=%d nw=%llu product=symmetric_upper_diagonal\n",
                 square_enabled,(unsigned long long)nw);
+    const bool coop_enabled=giant_coop_requested() && nw>128 && nw<=256;
+    stage2_log::print(stage2_log::debug,"giant_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=16384\n",
+        giant_coop_requested()?16:0,(int)coop_enabled,(unsigned long long)nw);
     const int cases = 2048;
     std::vector<unsigned long long> ha((size_t)cases * nw, 0ull), hb((size_t)cases * nw, 0ull);
     uint64_t s = 0x2468ace13579bdfull;
@@ -768,6 +771,24 @@ int mont_selftest(
         words_to_mpz(want, &ho[(size_t)i * nw], nw);
         if (mpz_cmp(acc, want) != 0) { if (!bad) first = (unsigned long long)i; ++bad; }
     }
+    unsigned long long coop_bad=0;
+    if(coop_enabled) {
+        constexpr int cooperative_cases=64;
+        for(int square=0;square<2;++square) {
+            ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch{8,128},da,db,dn,ninv,(int)nw,
+                cooperative_cases,enabled_bits,square!=0,dout);
+            CK(cudaGetLastError());
+            CK(cudaMemcpy(ho.data(),dout,(size_t)cooperative_cases*nw*8,cudaMemcpyDeviceToHost));
+            for(int i=0;i<cooperative_cases;++i) {
+                words_to_mpz(am,ha.data()+(size_t)i*nw,nw);
+                words_to_mpz(bm,(square?ha:hb).data()+(size_t)i*nw,nw);
+                mpz_mul(acc,am,bm);mpz_mul(acc,acc,rinv);mpz_mod(acc,acc,N);
+                words_to_mpz(want,ho.data()+(size_t)i*nw,nw);
+                if(mpz_cmp(acc,want))++coop_bad;
+            }
+        }
+        stage2_log::print(stage2_log::debug,"coop_selftest: tpi=16 multiplications=64 squares=64 mismatches=%llu\n",coop_bad);
+    }
     // Reuse the existing device buffers; retain all 2048 multiplication cases.
     // Extra square cases exercise the production wrapper with equal inputs and
     // an in-place kernel output; the standalone probe also aliases the primitive.
@@ -800,7 +821,7 @@ int mont_selftest(
     stage2_log::print(stage2_log::debug, "mont_selftest: cases=%d mismatches=%llu first_bad=%llu "
                 "(device Mont(a,b) vs GMP a*b*R^-1 mod N, nw=%llu)\n",
                 cases, bad, first, (unsigned long long)nw);
-    return bad || square_bad ? 1 : 0;
+    return bad || square_bad || coop_bad ? 1 : 0;
 }
 
 int xadd_selftest(
