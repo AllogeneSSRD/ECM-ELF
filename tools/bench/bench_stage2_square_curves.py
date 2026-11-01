@@ -39,6 +39,7 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--bits',default='10232,12285,16272')
     p.add_argument('--rounds',type=int,default=1)
+    p.add_argument('--reverse-first',action='store_true',help='Reverse treatments on the first pass for independent retests')
     p.add_argument('--allow-gpu-pid',type=int,action='append',default=[])
     p.add_argument('--diagnostic',action='store_true')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
@@ -75,7 +76,7 @@ def main():
                 source=Path(cell['evidence']);key=f"n{cell['target_bits']}_{cell['family']}"
                 treatments=['off','on']
                 if a.stock and round==0:treatments=['stock',*treatments]
-                if round%2:treatments.reverse()
+                if (round+int(a.reverse_first))%2:treatments.reverse()
                 for treatment in treatments:
                     directory=out/f'{len(report["rows"]):03d}_{key}_{treatment}';directory.mkdir()
                     name='stock' if treatment=='stock' else 'candidate'

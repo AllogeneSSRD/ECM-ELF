@@ -769,7 +769,8 @@ int mont_selftest(
         if (mpz_cmp(acc, want) != 0) { if (!bad) first = (unsigned long long)i; ++bad; }
     }
     // Reuse the existing device buffers; retain all 2048 multiplication cases.
-    // Extra square cases exercise the exact production wrapper and r==a.
+    // Extra square cases exercise the production wrapper with equal inputs and
+    // an in-place kernel output; the standalone probe also aliases the primitive.
     unsigned long long square_bad=0;
     if(square_enabled) {
         constexpr int square_cases=128;

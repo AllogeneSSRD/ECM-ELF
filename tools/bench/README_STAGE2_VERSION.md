@@ -69,6 +69,8 @@ python tools/bench/plot_stage2_version.py `
 
 完整曲线入口`bench_stage2_square_curves.py --summary <位宽分析summary.json> --exe <候选> --stock <旧版> --output <新目录>`复用冻结save、实际B2和D／布局／chain；默认只取10232／12285／16272，可用`--bits`扩宽。`--diagnostic`改用B2=2600000、D2310及完整叶检查，不纳入正常速度。各调用保存二进制／DLL、命令、配置、save、日志、结果、GPU门禁和遥测；只允许通过`--allow-gpu-pid`明确授权并绑定路径的界面上下文。
 
+独立复测可省略`--stock`并指定`--reverse-first`，先on后off，与首轮顺序相反；原始观察保留，不替换首轮。默认值／显式0／显式1／非法值及真实队列子进程由`tools/test/test_stage2_point_square_native.py --exe <生产程序> --save <sigma26、B1=20的独立M127保存点> --output <新目录> --device 1`检查。这是完整小算例的行为测试，不充当性能样本；使用相同进程门禁和显式PID白名单。
+
 离线入口`analyze_stage2_square.py --study <完成的正常研究> --output <新统计目录> --figures <新图目录>`，可用`--extra`合并独立复测，按每格中位数汇总，不把学习或诊断混入；`--public-figures`复制公开PNG。样本数、计时边界和限制见[位宽性能报告](../../docs/performance/STAGE2_BIT_SCALING.md)。所有实验默认写`data/`，不修改设备设置或真实生产队列。
 
 ## 正常运行时选型矩阵
