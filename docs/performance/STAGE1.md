@@ -335,7 +335,7 @@ exe SHA256=`d853b4ce80c78853a4fdafa5f3ad3abc51cbe267cd5231c64d2a523e299f9a89`，
 
 原始证据根目录为 `data/experiments/edwards_naf_20261016/`；汇总为 `data/benchmarks/edwards_naf_20261016/final_02/summary.json` 和 `initial.csv`。共192个完整批次：144个正式样本、48个预热；采集器冒烟和缺档失败不计入。每份数据保存exe/GMP摘要、源快照、编译命令、设备信息、遥测、日志及save摘要；采集核对每条记录/重复稳定性，首尾曲线用独立整数梯形核对，同曲线的binary/NAF整批记录逐条相等。审计重查范围、样本数、文件/源身份、几何形状、窗口/倍点选择、原日志计时与嵌套关系；四种私有元数据损坏均拒绝，原始证据未修改。
 
-复现工具为[完整批次采集](../../tools/bench/bench_edwards_gpu_stage1.py)、[冻结原算法构建](../../tools/build/test/build_edwards_initial_baseline.ps1)及[证据审计](../../tools/bench/analyze_edwards_gpu_stage1.py)。NAF全档、V1/V2恢复、大B1及Stage2交接正确性见[验收记录](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)。B1=1e6/1e7只有正确性验收，本表不外推生产B1、其他设备、连续队列吞吐或Auto B2成本资格。
+复现工具为[完整批次采集](../../tools/bench/bench_edwards_gpu_stage1.py)、本机冻结原算法构建脚本 `tools/build/dev/build_edwards_initial_baseline.ps1`（不随仓库分发）及[证据审计](../../tools/bench/analyze_edwards_gpu_stage1.py)。NAF全档、V1/V2恢复、大B1及Stage2交接正确性见[验收记录](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)。B1=1e6/1e7只有正确性验收，本表不外推生产B1、其他设备、连续队列吞吐或Auto B2成本资格。
 
 四组图由[绘图脚本](../../tools/bench/plot_edwards_gpu_stage1.py)直接读取上述审计汇总生成，没有重新采集 GPU 数据。需要 Python 3.10+ 和 matplotlib，从仓库根目录执行：
 

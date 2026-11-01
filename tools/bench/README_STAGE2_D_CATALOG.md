@@ -65,7 +65,7 @@ python tools/bench/analyze_stage2_d_catalog.py `
 
 ### 有界搜索实现验证
 
-`tools/build/test/build_stage2_d_search.ps1`在独立目录构建主机选型改动，复用并由正式构建器逐项核验原CUDA对象/依赖；默认基于`build_cuda_cmake/local_stage2_0_38_4`，可用`-BaseBuild`、`-Build`覆盖。
+`tools/build/dev/build_stage2_d_search.ps1`在独立目录构建主机选型改动，复用并由正式构建器逐项核验原CUDA对象/依赖；默认基于`build_cuda_cmake/local_stage2_0_38_4`，可用`-BaseBuild`、`-Build`覆盖。
 
 `tools/test/test_stage2_d_search.py --output data/experiments/<新目录>`执行共享搜索器CPU门禁。`test_stage2_d_search_gpu.py --exe <EXE> --save <已核验save> --output data/experiments/<新目录>`在GPU1重放保存点，检查自动D/承载、多尺度探索、后续轮次、采样与显式锁；`--exponent`、`--b2`、`--curves`可覆盖。它保存冻结EXE/DLL、构建输入和日志，属于功能验证，不代表新增ECM覆盖或性能提升。
 

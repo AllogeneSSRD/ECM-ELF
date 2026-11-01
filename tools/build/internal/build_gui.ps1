@@ -48,13 +48,13 @@
     Also run tools\test\test_gui_smoke.ps1 (a real window appears for a few seconds).
 
 .EXAMPLE
-    powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\build_gui.ps1
 .EXAMPLE
     # clean rebuild plus the self-test
-    powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1 -Clean -Selftest
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\build_gui.ps1 -Clean -Selftest
 .EXAMPLE
     # an IDE-friendly project instead
-    powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1 -Generator "Visual Studio 17 2022"
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\build_gui.ps1 -Generator "Visual Studio 17 2022"
 #>
 param(
     [string]$BuildDir = "build_gui_local",

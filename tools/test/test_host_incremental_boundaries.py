@@ -81,7 +81,7 @@ def main():
         elif kind == 'stage2':
             script, flags = 'build_stage2_local.ps1', ['-Build', s2, '-HostOnly']
         else:
-            script, flags = 'dev/build_gui.ps1', ['-BuildDir', args.gui_build.resolve()]
+            script, flags = 'internal/build_gui.ps1', ['-BuildDir', args.gui_build.resolve()]
         command = list(map(str, ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                                 '-File', ROOT/'tools/build'/script, *flags]))
         log = out/(phase+'_'+kind+'.log')

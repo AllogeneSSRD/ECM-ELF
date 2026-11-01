@@ -15,7 +15,7 @@ def main():
     cmake=(ROOT/'src/ecm/application/gui/CMakeLists.txt').read_text()
     for target in ['fake_worker','results_test','log_parse_test','gen_test']:
         assert f'add_executable(ecm_gui_{target} EXCLUDE_FROM_ALL "${{CMAKE_SOURCE_DIR}}/tools/test/gui/' in cmake
-    script=(ROOT/'tools/build/dev/build_gui.ps1').read_text()
+    script=(ROOT/'tools/build/internal/build_gui.ps1').read_text()
     assert '[string]$BuildDir = "build_gui_local"' in script and "[string[]]$Targets = @('ecm_gui')" in script
     assert not (ROOT/'src/gui').exists()
     report=dict(complete=True,baseline='7b64e76',relocated_files=len(m),content_or_include_only=len(verified),test_fixtures=4,

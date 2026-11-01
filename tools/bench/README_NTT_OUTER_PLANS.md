@@ -4,7 +4,7 @@
 
 ## 构建和精确门禁
 
-构建入口：`tools/build/test/build_ntt_outer_plan_probe.ps1 -Build <独立目录> -Arch sm_89`。记录二进制、源码、CUDA、MSVC、GMP 身份，构建不运行测试。
+构建入口：`tools/build/dev/build_ntt_outer_plan_probe.ps1 -Build <独立目录> -Arch sm_89`。记录二进制、源码、CUDA、MSVC、GMP 身份，构建不运行测试。
 
 探针入口：
 

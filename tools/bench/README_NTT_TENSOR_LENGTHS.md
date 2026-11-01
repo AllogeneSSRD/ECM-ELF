@@ -4,7 +4,7 @@
 
 ## 工具
 
-- `tools/build/test/build_ntt_tensor_length_probe.ps1`：编译sm80+探针，默认sm89；固定PTX3、当前生产规范减法、per-thread默认流，生成源码/EXE/GMP身份。per-thread流用于Graph捕获，所有路线都在同一主机线程顺序运行。
+- `tools/build/dev/build_ntt_tensor_length_probe.ps1`：编译sm80+探针，默认sm89；固定PTX3、当前生产规范减法、per-thread默认流，生成源码/EXE/GMP身份。per-thread流用于Graph捕获，所有路线都在同一主机线程顺序运行。
 - `ntt_tensor_length_probe.cu`：GMP全变换门禁、故意损坏门禁、完整算子计时、全部A/B输出设备端比较、资源与容量报告。
 - `benchmark_ntt_tensor_lengths.py`：顺序运行不同length/batch/CTA，检查二进制/源码/DLL身份、每模式样本数、全部输出及释放，保存原日志、CSV/JSON与500ms遥测。
 - `plot_ntt_tensor_lengths.py`：从上述结果生成时间/速度比与短batch图。若输入含重复形状，主图采用命令行靠前数据；汇总JSON仍保留全部记录。默认图放调用者指定位置，汇总放仓库`data/benchmarks/`。
@@ -14,7 +14,7 @@
 在仓库根目录构建：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/test/build_ntt_tensor_length_probe.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/dev/build_ntt_tensor_length_probe.ps1
 ```
 
 完成独立GMP门禁及native长度扫描，输出目录必须为空：

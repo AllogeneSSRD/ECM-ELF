@@ -4,7 +4,7 @@
 
 ## 构建与门禁
 
-入口为 `tools/build/test/build_ntt_tensor_concurrency_probe.ps1 -Build <独立目录> -Arch sm_89`。要求sm80+；默认sm89，per-thread默认流，固定PTX3/canonical减法，记录EXE、GMP与源码身份。构建不自动运行测试。
+入口为 `tools/build/dev/build_ntt_tensor_concurrency_probe.ps1 -Build <独立目录> -Arch sm_89`。要求sm80+；默认sm89，per-thread默认流，固定PTX3/canonical减法，记录EXE、GMP与源码身份。构建不自动运行测试。
 
 `ntt_tensor_concurrency_probe.exe <device> --check` 核对CUDA、Tensor64、Tensor40、N96r64的完整GMP forward/inverse/卷积，再核对串行和并发的完整小形状输出。`--fault` 故意翻转一个N96r64输出，预期bad=1且退出码3。
 

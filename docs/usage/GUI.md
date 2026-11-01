@@ -109,7 +109,7 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 
 ## 构建与独立验证
 
-生产源码位于 `src/ecm/application/gui/`。统一入口 `tools/build/build_gui.bat` 不分构建版本，将参数与退出码交给 `dev/build_gui.ps1`，默认输出 `build_gui_local/ecm_gui.exe`，只构建 GUI；`-Selftest` 可在构建后自检。fake worker、日志/结果/生成器测试位于 `tools/test/gui/`，CMake 标记 EXCLUDE_FROM_ALL，需要用 `-Targets` 显式选择。GUI 与本地计算 worker 使用各自输出目录，GUI 不链接计算引擎。
+生产源码位于 `src/ecm/application/gui/`。统一入口 `tools/build/build_gui.bat` 不分构建版本，将参数与退出码交给 `internal/build_gui.ps1`，默认输出 `build_gui_local/ecm_gui.exe`，只构建 GUI；`-Selftest` 可在构建后自检。fake worker、日志/结果/生成器测试位于 `tools/test/gui/`，CMake 标记 EXCLUDE_FROM_ALL，需要用 `-Targets` 显式选择。GUI 与本地计算 worker 使用各自输出目录，GUI 不链接计算引擎。
 
 `--selftest --config FILE.toml` 执行无窗口检查；`--worker-selftest --fake FILE.exe` 使用实际 Job/管道/停止事件测试进程 Adapter。后者不等于 GUI Controller 的混合阶段与关闭策略验收。测试必须使用当前 `--config` 和 TOML 分区/引号类型，worktodo 的 `[Worker #N]` 分区仍保持原格式。
 

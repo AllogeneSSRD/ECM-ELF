@@ -11,7 +11,7 @@ from win32_probe import window, capture, close, process_sample, user
 
 ROOT = Path(__file__).resolve().parents[3]
 PROTECTED = ['src/ecm/application/gui', 'third_party/imgui', 'tools/test/gui',
-             'tools/build/build_gui.bat', 'tools/build/dev/build_gui.ps1', 'config/ecm_options.json']
+             'tools/build/build_gui.bat', 'tools/build/internal/build_gui.ps1', 'config/ecm_options.json']
 
 
 def hashes():

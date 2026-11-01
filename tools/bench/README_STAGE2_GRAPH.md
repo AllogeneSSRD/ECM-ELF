@@ -5,7 +5,7 @@
 ## 构建与正确性
 
 - 完整程序：`tools/build/build_stage2_local.ps1 -Engine production -Build <独立目录> -Arch sm_89 -SplitCompile 8`。
-- 独立门禁：`tools/build/test/build_ntt_graph_probe.ps1 -Build <独立目录> -Arch sm_89`；输出程序 `ntt_graph_probe.exe <device>`。`--fault` 故意翻转一个输出 digit，预期恰好一个 GMP 错误且返回非零。
+- 独立门禁：`tools/build/dev/build_ntt_graph_probe.ps1 -Build <独立目录> -Arch sm_89`；输出程序 `ntt_graph_probe.exe <device>`。`--fault` 故意翻转一个输出 digit，预期恰好一个 GMP 错误且返回非零。
 - 门禁使用实际生产 pack→NTT→carry 路径，对完整多项式大整数乘积做 GMP 对照；覆盖不同位宽、batch 尾部、Q 借用 B、表驱逐、工作区释放和重建。
 
 ## 同二进制完整 A/B

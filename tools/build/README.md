@@ -29,15 +29,15 @@ local BAT/PowerShell 优先输出为 `build_stage1_local/ecm_cuda.exe`、`build_
 
 ## 子目录
 
-- `dev/`：GUI、CMake辅助、独立树实验驱动及显式实验构建。
-- `test/`：NTT/点运算探针、CPU树参考和数学门禁构建。
-- `internal/`：CUDA 权威源清单与依赖身份、并行 nvcc、配置一致性、工具链选择、Stage1 拆分及两阶段打包。
+- `dev/`：本机开发与性能实验辅助，包括 NTT 变体、cuFFT、独立 Stage2 树原型和冻结算法基准构建。由本目录的 `.gitignore` 排除，已有脚本保留在本机；新克隆不附带这些入口。正式入口不得依赖这里的文件。
+- `test/`：受版本控制的数学正确性、构建身份、发布资格、主机合同测试，以及共享 PARI 诊断、GUI v2、OpenCL 等正式构建依赖；此目录不忽略。
+- `internal/`：原 GUI 与 GUI v2 的正式 PowerShell 包装、CUDA 权威源清单与依赖身份、并行 nvcc、配置一致性、工具链选择、Stage1 拆分及两阶段打包。
 
 CUDA 源组在 `internal/cuda_sources.cmake` 维护，构建目录中的 JSON 由它生成；不要在脚本中另抄源文件列表。递归包含、编译命令和对象身份由 `internal/cuda_build_state.ps1` 校验；复用规则和测试入口见 [CUDA 源清单与依赖身份](../../docs/usage/BUILD.md#cuda-源清单与依赖身份)。
 
 Stage1 的位宽与实例分组由 `src/ecm/cuda/dispatch/tiers.def` 统一维护；主机驱动和设备实例职责见 [CUDA 模块边界](../../docs/architecture/STAGE1.md#cuda-模块边界)。`test/build_cuda_p1.ps1` 提供清单配置、Stage1 和 Stage2 的分步构建入口。
 
-Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/STAGE2.md#cuda-模块边界)。`test/build_cuda_p2_arithmetic_probe.ps1` 与 `test/build_ntt_graph_probe.ps1` 可复用通过身份校验的生产对象；使用生产 NTT 的其他探针统一通过 `internal/cuda_ntt_probe.ps1` 编译显式源清单，并保留各自的默认流模式。
+Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/STAGE2.md#cuda-模块边界)。`test/build_cuda_p2_arithmetic_probe.ps1` 与本机实验入口 `dev/build_ntt_graph_probe.ps1` 可复用通过身份校验的生产对象；使用生产 NTT 的其他探针统一通过 `internal/cuda_ntt_probe.ps1` 编译显式源清单，并保留各自的默认流模式。
 
 本机完整位宽验收入口为 `tools/test/test_cuda_p5_native.py`。双 CUDA 发布使用 `tools/test/test_release_build_contracts.py`、`tools/test/test_release_runtime.py`；后者显式指定基线、CUPTI观察器、设备及证据目录。`test/build_cuda_jit_trace.ps1` 构建观察器，不随发布分发。原 `test_cuda_p5_release.py` 和 `test_cuda_p5_images.py` 保留六架构阶段的冻结检查，不能替代当前矩阵。所有测试和性能入口须显式运行，实际覆盖以对应证据为准。
 
@@ -49,7 +49,7 @@ Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/
 
 OpenCL Stage1 的本机入口为 build_opencl_local.ps1；默认使用隔离的 build_opencl_local/stage1/&lt;key&gt; 叶目录、普通 CXX 及随附生产资源，不启用 CUDA。支持 -BuildDir、-Gmp、-OpenSslRoot、-OpenClRoot、-VcVars。完整发布入口以 `-BuildRole release` 调用它，构建 `<BuildRoot>/opencl-release/ecm.exe`，附带资源、OpenSSL及许可，并与其他组件共用通用vcpkg GMP。两套CUDA包均包含相同OpenCL程序；其内核统一JIT。完整入口也接收 `-OpenSslRoot`、`-OpenClRoot`。资源与加载合同见 [OpenCL](../../docs/architecture/OPENCL.md#资源与-local-构建)。
 
-GUI 统一使用 `build_gui.bat`，不区分 dev/local/release；它把参数和退出码交给现有 `dev/build_gui.ps1`，后者仍是默认参数来源。无参数双击构建完成后暂停；有参数调用直接返回。默认输出 `build_gui_local/`，只构建 `ecm_gui`，可传 `-Selftest` 构建后自检。测试 helper 在 `tools/test/gui/`，必须显式指定 `-Targets`，不会进入默认构建；详见 [GUI 构建与验证](../../docs/usage/GUI.md#构建与独立验证)。
+GUI 统一使用 `build_gui.bat`，不区分 dev/local/release；它把参数和退出码交给现有 `internal/build_gui.ps1`，后者仍是默认参数来源。无参数双击构建完成后暂停；有参数调用直接返回。默认输出 `build_gui_local/`，只构建 `ecm_gui`，可传 `-Selftest` 构建后自检。测试 helper 在 `tools/test/gui/`，必须显式指定 `-Targets`，不会进入默认构建；详见 [GUI 构建与验证](../../docs/usage/GUI.md#构建与独立验证)。
 
 GUI v2 独立入口 `build_gui_v2.bat` 默认生成 `build_gui_v2_local/ecm_gui_v2.exe`，默认使用DX11，`--renderer vulkan`保留诊断路径，不修改原GUI。共用测试构建入口在冻结输入摘要前自动同步业务配置和GUI派生文件；生成失败时停止，CMake过期检查继续保留。`package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新目录>`创建GUI-only候选包及校验清单，不附计算worker。要求构建输出的源目录身份清单与exe哈希相符。当前运行条件和待验门禁见 [GUI v2](../../docs/usage/GUI_V2.md)。
 

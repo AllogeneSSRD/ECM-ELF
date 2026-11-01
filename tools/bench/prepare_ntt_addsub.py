@@ -19,7 +19,7 @@ def main():
            'tools/experiments/cuda/ntt_variants/engine.cuh','tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh',
            'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh',
            'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_addsub.cuh',
-           'tools/build/test/build_ntt_outer_v_probe.ps1']
+           'tools/build/dev/build_ntt_outer_v_probe.ps1']
     files += ['tools/experiments/cuda/ntt_variants/carry_reference.cuh',
               'tools/experiments/cuda/ntt_variants/carry_cone.cuh',
               'tools/test/ntt_outer_fixture.cuh',
@@ -40,7 +40,7 @@ def main():
             changes=[(b'for(int mask:{0,1,3,2,1,2,0,3,2,3,1,0,3,0,2,1})',b'for(int mask:{0,0,0,0,0,0,0,0})'),
                 (b'    int device=argc>1 ? std::atoi(argv[1]) : 1;CK(cudaSetDevice(device));',
                  b'    int device=argc>1 ? std::atoi(argv[1]) : 1;CK(cudaSetDevice(device));\n    std::printf("ntt_addsub_mask: value=%d\\n",NTT_GL_ADD_SUB_MASK);')]
-        if name=='tools/build/test/build_ntt_outer_v_probe.ps1':
+        if name=='tools/build/dev/build_ntt_outer_v_probe.ps1':
             changes=[(b"'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh',",b"'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_addsub.cuh',"),
                 (b'-DNTT_GL_FIXED_MODE=3',f'-DNTT_GL_ADD_SUB_MASK={a.mask} -DNTT_GL_FIXED_MODE=3'.encode())]
         before=raw
