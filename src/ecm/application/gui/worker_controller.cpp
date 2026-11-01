@@ -140,7 +140,7 @@ void WorkerController::configure(const WorkerSettings &settings) {
     if(busy())throw std::runtime_error("cannot reconfigure running or restarting workers");
     ini_path_=settings.ini_path;worker_exe_=settings.worker_exe;stage2_exe_=settings.stage2_exe;
     priority_=settings.priority;exit_confirm_=settings.exit_confirm;num_workers_=settings.num_workers;
-    graceful_stop_ms_=settings.graceful_stop_ms;
+    graceful_stop_ms_=settings.graceful_stop_ms;stage2_average_=settings.stage2_average;
     workers_.clear();resolved_stage2_exe_.clear();
     for(int i=1;i<=num_workers_;++i)workers_.push_back(make_worker(i));
     refresh_device_warnings();
@@ -330,7 +330,7 @@ void WorkerController::tick() {
         if(!d.application_version.empty())w.application_version=d.application_version;
         w.progress_lines += d.progress_lines;
         if (d.last_progress.valid) {
-            w.progress = d.last_progress;
+            w.progress = !stage2_average_&&w.stage2&&d.stage2.valid?d.stage2.progress(false):d.last_progress;
             // Sample for the chart. The driver emits progress lines at a decaying rate, so
             // every line is worth keeping when it carries new information. The series holds
             // SECONDS PER CURVE (see WorkerView::hist_s_per_curve).

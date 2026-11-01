@@ -57,7 +57,43 @@ static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
     assert(!fs::exists(probe));assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE","")==0);
     std::cout<<"{\"no_protocol_probe\":true,\"manual_autostart_restart_stage_switch\":true,\"queue_locks_preserved\":true,\"spawn_errors_preserved\":true}\n";
 }
+static void stage2_raw_times(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"stage2-raw";fs::create_directories(dir);
+    const auto cfg=dir/"ecm.toml";
+    write(dir/"worktodo.txt","[Worker #1]\nECMSTAGE2=1,2,137,-1,\"fixture.save\",0,0,4\n");
+    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[gui]\nNumWorkers=1\nstage2_exe=\""+fixture.generic_u8string()+"\"\n[workers.1]\nautostart=0\nextra_args=\"--scenario v2-stage2-raw-times\"\n");
+    const auto drain=[](auto& controller,const auto& tick){
+        const auto deadline=GetTickCount64()+5000;
+        while(controller.busy()&&GetTickCount64()<deadline){tick();Sleep(10);}assert(!controller.busy());
+    };
+    {ecmgui_v2::UiState state;state.path=dir/"ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
+     drain(app.controller,[&]{app.tick();});const auto& worker=app.controller.workers()[0];
+     assert(worker.hist_s_per_curve==(std::vector<float>{10,30,5}));
+     assert(worker.progress.s_per_curve==5&&worker.progress.eta_s==5);
+     const auto shown=ecmgui_v2::ui::worker_progress(worker,false);assert(shown.speed=="5.00"&&shown.eta=="5 s");}
+    // The original GUI retains its existing presentation policy.
+    {ecmgui::TomlFile config;std::string error;assert(config.load(cfg.u8string(),error));ecmgui::WorkerController legacy(config);
+     ecmgui::WorkerSettings settings;settings.ini_path=cfg.u8string();settings.stage2_exe=fixture.u8string();settings.num_workers=1;
+     legacy.configure(settings);legacy.suppress_autostart();assert(legacy.start(1));drain(legacy,[&]{legacy.tick();});
+     assert(legacy.workers()[0].hist_s_per_curve==(std::vector<float>{10,20,15}));}
+    std::cout<<"{\"stage2_raw_history\":true,\"raw_display_and_eta\":true,\"legacy_average_preserved\":true}\n";
+}
 int main(int argc,char** argv){
+    {ecmgui::WorkerView worker;worker.stage2=true;auto& status=worker.stage2_status;
+     const auto apply=[&](const char* line){status.apply(ecmgui::parse_line(line).stage2);};
+     apply("stage2_plan: save=f.save requested=5 available=5 completed=2 B2=1000 D=210");
+     assert(ecmgui_v2::ui::worker_progress(worker,false).speed=="--");
+     apply("curve_start: 3/5 record=3 sigma=17 B1=20");
+     apply("stage2_full_wall: init=1 main=9 total=10");apply("curve_done: 3/5 record=3 wall=100");
+     assert(status.progress(false).s_per_curve==10&&status.progress(false).eta_s==20);
+     apply("curve_start: 4/5 record=4 sigma=18 B1=20");assert(status.progress(false).s_per_curve==10);
+     apply("curve_done: 4/5 record=4 wall=30");
+     assert(status.progress().s_per_curve==20&&status.progress(false).s_per_curve==30);
+     auto shown=ecmgui_v2::ui::worker_progress(worker,false);assert(shown.speed=="30.00"&&shown.eta=="30 s");
+     apply("curve_start: 5/5 record=5 sigma=19 B1=20");apply("curve_done: 5/5 record=5 wall=0");
+     assert(status.progress(false).s_per_curve==0&&ecmgui_v2::ui::worker_progress(worker,false).speed=="--");
+     apply("stage2_plan: save=next.save requested=5 available=5 completed=0 B2=1000 D=210");
+     assert(status.progress(false).s_per_curve==0&&status.measured_curves==0);}
     std::string localization_error;assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",localization_error));
     {ecmgui::WorkerView worker;worker.resume_pct=23.8;
      auto display=ecmgui_v2::ui::worker_progress(worker,false);assert(display.label=="23.8% (resumed)"&&display.eta=="--"&&display.fraction>.237f&&display.fraction<.239f);
@@ -300,6 +336,6 @@ int main(int argc,char** argv){
      copy();assert(copied=="Group order #E(F_p): 996\n    = 2^2 × 3 × 83\nPoint order ord(P): 249\n    = 3 × 83");
      const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
      ImGui::DestroyContext(context);}
-    if(argc==3)no_protocol_probe(root,fs::absolute(argv[2]));
+    if(argc==3){no_protocol_probe(root,fs::absolute(argv[2]));stage2_raw_times(root,fs::absolute(argv[2]));}
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";
 }

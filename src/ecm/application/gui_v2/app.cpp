@@ -112,6 +112,7 @@ bool App::load_config(const std::string& input) {
 void App::configure_workers() {
     auto settings = ecm_config::read_gui(ecm_config::section_entries(config.lines(), "gui"));
     ecmgui::WorkerSettings workers;
+    workers.stage2_average=false;
     workers.ini_path = config_path; workers.num_workers = std::clamp(settings.NumWorkers, 1, 1024);
     if(state.worker_count>0)workers.num_workers=state.worker_count;
     const auto base = ecmgui::path_dir(config_path);

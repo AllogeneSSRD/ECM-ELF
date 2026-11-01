@@ -30,7 +30,7 @@ inline std::string eta_text(double seconds,bool detail=false) {
     return result;
 }
 inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) {
-    WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress():worker.progress;
+    WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress(false):worker.progress;
     char text[128];
     if(p.valid&&std::isfinite(p.pct)) {
         const double pct=std::clamp(p.pct,0.,100.);out.fraction=static_cast<float>(pct/100.);

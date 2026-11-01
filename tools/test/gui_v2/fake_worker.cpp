@@ -68,6 +68,17 @@ int main(int argc, char** argv) {
             if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
             out("Checkpoint saved: presentation stop worker=%d\n",worker);return 1;
         }
+        if(arg_value("--scenario")=="v2-stage2-raw-times"){
+            out("stage2_plan: save=fixture.save requested=4 available=4 completed=0 B2=1000 D=210\n");
+            int curve=0;
+            for(double seconds:{10.,30.,5.}){
+                ++curve;out("curve_start: %d/4 record=%d sigma=17 B1=20 checksum=verified curve_model=ed\n",curve,curve);
+                if(curve<3)out("stage2_full_wall: init=1 main=%.1f total=%.1f\n",seconds-1,seconds);
+                out("curve_done: %d/4 record=%d wall=%.1f\n",curve,curve,curve<3?seconds+100:seconds);
+                Sleep(250);
+            }
+            out("===== queue done, 1 task(s) processed =====\n");return 0;
+        }
         if(arg_value("--scenario")=="v2-stage2-phases"){
             out("START: ECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");
             out("stage2_plan: save=ed_m137.save requested=10 available=10 completed=0 B2=1300000000000 D=1381380\n");

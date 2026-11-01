@@ -86,6 +86,7 @@ private:
 };
 struct WorkerSettings {
     std::string ini_path,worker_exe,stage2_exe,priority,exit_confirm;
+    bool stage2_average=true; // In-process presentation policy; v2 uses raw curve times.
     int num_workers=ecm_config::defaults::gui_NumWorkers;
     unsigned long long graceful_stop_ms=static_cast<unsigned long long>(ecm_config::defaults::gui_graceful_stop_ms);
 };
@@ -128,6 +129,7 @@ private:
     int num_workers_=ecm_config::defaults::gui_NumWorkers;
     unsigned long long graceful_stop_ms_=static_cast<unsigned long long>(ecm_config::defaults::gui_graceful_stop_ms);
     unsigned long long exit_deadline_ms_=0,last_tick_ms_=0;
+    bool stage2_average_=true;
     bool autostart_done_=false,quit_requested_=false;
     ExitPhase exit_phase_=ExitPhase::Idle;
     std::function<void(const std::string &)> trace_;

@@ -241,16 +241,17 @@ void Stage2Status::apply(const Stage2Event &e) {
     else if(e.kind==Kind::CurveDone) {
         total=e.total;done=std::min(e.done,total);current=done;record=e.record;
         const auto seconds=engine_seconds>0?engine_seconds:e.seconds;
-        if(seconds>0 && std::isfinite(seconds)){seconds_sum+=seconds;++measured_curves;}
+        last_curve_seconds=seconds>0&&std::isfinite(seconds)?seconds:0;
+        if(last_curve_seconds>0){seconds_sum+=seconds;++measured_curves;}
         batch=batches=0;batch_left=0;phase="curve_done";
     } else if(e.kind==Kind::TaskDone){done=total;phase="task_done";}
     else if(e.kind==Kind::Complete)phase="complete";
 }
-ProgressInfo Stage2Status::progress()const {
+ProgressInfo Stage2Status::progress(bool average)const {
     ProgressInfo out;out.valid=valid && total>0;out.gpu=true;
     out.curves_done=done;out.curves_total=total;out.pct=total?100.*done/total:0;out.elapsed_s=elapsed;
     out.bits=bits;
-    out.s_per_curve=measured_curves?seconds_sum/measured_curves:0;
+    out.s_per_curve=average?(measured_curves?seconds_sum/measured_curves:0):last_curve_seconds;
     out.eta_s=(total>done?total-done:0)*out.s_per_curve;return out;
 }
 HitInfo Stage2Status::factor_hit(const std::string &factor)const {
