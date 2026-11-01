@@ -106,8 +106,10 @@ int run_real(
     mpz_mul(tmp, a24, R);
     mpz_mod(tmp, tmp, L.N);
     mpz_to_words(ha24, nw, tmp);
+    const double point_check_begin=now_s();
     if (mont_selftest(hn, nw, ninv, L.N, R) != 0) return 1;
     if (xadd_selftest(hn,nw,ninv,L.N,R) != 0) return 1;
+    const double point_check_seconds=now_s()-point_check_begin;
 
     /* A Stage1 text save contains ordinary affine X. Do not regenerate the
        exponent or apply the optional Stage1 torsion multiplier on resume. */
@@ -351,6 +353,7 @@ int run_real(
     stage2_log::phase("Generate and normalize baby points");
     stage2_memory::snapshot("before_baby");
     SmallPrimeBabyCache small_cache;
+    unsigned actual_baby_coop=0;
     const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
     if(reuse_small)small_cache.begin(C,D,B1,B2,baby_j);
     {
@@ -363,6 +366,7 @@ int run_real(
         const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
         const bool baby_used=baby_requested && device_baby_generate(C,L.target(),baby_j,leaf,
             reuse_small?&small_cache:nullptr,baby_deg,noninv,bs);
+        actual_baby_coop=baby_used?bs.cooperative_tpi:0;
         if(baby_used && bs.bad_groups)baby_nonunit_seen=true;
         if(!baby_used)ladder_points(C,baby_j,bx,bz);
         const double tb1=baby_used?tb0+bs.ladder_seconds:now_s();
@@ -590,6 +594,8 @@ int run_real(
         if(saved_result) {
             auto &m=saved_result->metrics;
             m.d=D;m.p=P_baby;m.giant_points=BR.giant_points;
+            m.baby_coop=actual_baby_coop;m.giant_coop=g_giant_seed.cooperative_tpi;
+            m.point_check_seconds=point_check_seconds;
             m.giant_first=BR.giant_first;m.giant_last=BR.giant_last;
             m.relocation=g_relocation_enabled;m.relocation_replayed=g_relocation_enabled && replayed;
             m.giant_tail_balance=BR.giant_tail_balance;

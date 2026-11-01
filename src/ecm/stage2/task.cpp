@@ -63,6 +63,10 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     request.relocation=o.relocation;
     request.giant_tail_balance=o.giant_tail_balance;request.b2_round_chain=o.b2_round_chain;
     request.giant_chain=o.giant_chain;
+    // Useful queue curves resolve auto in the child, after the save is read.
+    // Explicit calibration already selected a concrete arithmetic identity.
+    request.baby_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_baby_coop):o.baby_backend;
+    request.giant_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_giant_coop):o.giant_backend;
     request.runtime_prepare_cache=o.runtime_prepare_cache;
     request.runtime_prepare_hints=o.runtime_prepare_hints;
     request.runtime_remaining=o.runtime_remaining;
@@ -101,6 +105,7 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     return run_curve_process(request);
 }
 int curve_worker(Options o) {
+    configure_point_backends(o);
     configure_giant_policy(o);
     configure_groot_experiment(o);
     configure_host_wait(o);
@@ -149,6 +154,7 @@ int curve_worker(Options o) {
     o.has_d=requested_d!=0;
     auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
     round_giant_bounds(o,r);
+    apply_point_backends(o);
     ecm_stage2::GiantPolicyScope point_execution(o.giant_tail_balance?1:0,o.selected_chain);
     const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
@@ -258,6 +264,7 @@ int curve_worker(Options o) {
         ",\"giant_tail_balance_requested\":"+std::string(o.giant_tail_balance?"true":"false")+
         ",\"point_policy_replayed\":"+std::string(tune_metrics.point_policy_replayed?"true":"false")+
         ",\"giant_chain_block\":"+std::to_string(o.selected_chain)+
+        ",\"baby_coop\":"+std::to_string(tune_metrics.baby_coop)+",\"giant_coop\":"+std::to_string(tune_metrics.giant_coop)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
         (o.factor_only?",\"requested_factor_only\":true":"")+

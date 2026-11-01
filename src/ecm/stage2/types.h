@@ -50,6 +50,9 @@ struct Options {
     bool b2_round_chain=ecm_config::defaults::stage2_stage2_b2_round_chain;
     std::string giant_chain=ecm_config::defaults::stage2_stage2_giant_chain;
     unsigned selected_chain=64;
+    std::string baby_backend=ecm_config::defaults::stage2_stage2_baby_backend;
+    std::string giant_backend=ecm_config::defaults::stage2_stage2_giant_backend;
+    unsigned selected_baby_coop=0,selected_giant_coop=0;
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;

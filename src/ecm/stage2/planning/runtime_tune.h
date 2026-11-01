@@ -24,6 +24,52 @@ struct RuntimeChoice {
     size_t index=0;
     bool available=false,probe=false;
 };
+struct BabyBackendChoice {bool available=false;unsigned mode=0;double distance=0;};
+// A paired comparison within one backend-width/point-batch region is reusable
+// across neighboring D. Never compare an unpaired fast D against another D.
+inline BabyBackendChoice qualified_baby_backend(const Estimator &engine,const Shape &reference,Word minimum=2) {
+    std::map<Shape::Key,std::array<const Fields*,2>> pairs;
+    const auto cap=optional_uint(engine.condition,"env_ladder_cap",8192);
+    const auto bucket=point_batch_bucket(d_catalog::degree(reference.d),cap);
+    for(const auto &row:engine.profile.samples)if(measured(row) && uint(row,"repeats")>=minimum &&
+        matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
+        auto s=engine.shape(row);
+        if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
+           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.giant_coop!=reference.giant_coop ||
+           s.chain_block!=reference.chain_block || (s.baby_coop!=0 && s.baby_coop!=32) ||
+           point_batch_bucket(d_catalog::degree(s.d),cap)!=bucket)continue;
+        const auto mode=s.baby_coop;s.baby_coop=0;auto key=s.key();key[3]=0;
+        auto &pair=pairs[key];const auto at=mode==32?1:0;
+        if(!pair[at] || uint(row,"repeats")>uint(*pair[at],"repeats"))pair[at]=&row;
+    }
+    BabyBackendChoice result;
+    for(const auto &entry:pairs)if(entry.second[0] && entry.second[1]) {
+        const auto &a=*entry.second[0],&b=*entry.second[1];
+        const double distance=std::abs(std::log2(double(d_catalog::degree(uint(a,"d")))/d_catalog::degree(reference.d)));
+        if(!result.available || distance<result.distance) {
+            result.available=true;result.distance=distance;
+            result.mode=real(b,"mean_seconds")+optional_real(b,"point_check_seconds")<
+                real(a,"mean_seconds")+optional_real(a,"point_check_seconds")?32:0;
+        }
+    }
+    return result;
+}
+// One alternative at the fastest repeated scalar incumbent per arithmetic
+// family. Keep D/layout/chain fixed, rather than multiplying the D catalogue.
+inline std::vector<Shape> runtime_baby_trials(const std::vector<RuntimeCandidate> &all,Word minimum=2) {
+    std::map<unsigned,const RuntimeCandidate*> best;
+    for(const auto &c:all)if(!c.shape.baby_coop && cooperative_point_width(c.shape.arithmetic_bits) && d_catalog::degree(c.shape.d)>=512 &&
+        c.statistics.count>=minimum && c.statistics.seconds>0) {
+        auto &at=best[c.shape.carrier];if(!at || c.statistics.seconds<at->statistics.seconds)at=&c;
+    }
+    std::vector<Shape> out;
+    for(const auto &entry:best) {
+        auto s=entry.second->shape;s.baby_coop=32;
+        bool found=false;for(const auto &c:all)found|=c.shape.key()==s.key();
+        if(!found)out.push_back(s);
+    }
+    return out;
+}
 // At most one new chain trial per arithmetic family: the fastest repeated
 // 64-point incumbent, keeping its D/layout/residency fixed. Never expand the
 // D catalogue by chain length. Full-engine measurements include seed cost and
@@ -128,7 +174,7 @@ inline RuntimeChoice runtime_choice(const std::vector<RuntimeCandidate> &candida
     // full-shape tie break so candidate iteration order never changes the route.
     auto better=[&](size_t a,size_t b) {
         const auto &x=candidates[a],&y=candidates[b];
-        if(x.statistics.seconds!=y.statistics.seconds)return x.statistics.seconds<y.statistics.seconds;
+        if(x.statistics.comparison_seconds()!=y.statistics.comparison_seconds())return x.statistics.comparison_seconds()<y.statistics.comparison_seconds();
         if(x.statistics.preferred_order!=y.statistics.preferred_order)
             return x.statistics.preferred_order>y.statistics.preferred_order;
         return x.shape.key()<y.shape.key();

@@ -99,9 +99,11 @@ TPI32及分档对照使用`--coop-tpi 32 --coop-middle`，每格测旧版默认�
 
 `tools/build/test/build_stage2_point_coop_ladder_probe.ps1 -Words 160|192|224|256`构建单档TPI32及标量控制，直接实例化生产`point_coop_ladder.cuh`，默认SplitCompile8，在受限环境外构建。`bench_stage2_point_coop.py --probe ladder --suite correctness --bits <列表> --tpis 0,32 --kinds 0,1,2`覆盖0／1／64-bit标量边界、三类模数、Montgomery／普通输出；GMP用独立齐次公式验证全部输出，并注入一次主机读回损坏。小批量正确性时间不作为吞吐量成绩。
 
-性能使用`--suite performance --probe ladder --counts 8192 --scalar-bits 17 --operations 0 --tpis 0,32 --rounds 2`；这里operations的0／1表示内部／普通输出，scalar-bits仅用于性能输入。保留每进程全部5次事件，两进程反转顺序；大批量每次GMP抽查17个固定分布点，全部输出SHA跨后端比较，不把抽查称为全量复算。`analyze_stage2_ladders.py --study <目录> [--study <另一档>] --output <新汇总目录> --figures <新图目录>`核对二进制、完整输出SHA、GMP覆盖数与样本边界；全量GMP资格由独立correctness研究提供。
+性能使用`--suite performance --probe ladder --counts 8192 --scalar-bits 17 --operations 0 --tpis 0,32 --rounds 2`；这里operations的0／1表示内部／普通输出，scalar-bits仅用于性能输入。保留每进程全部事件，默认5次，可用`--event-samples 1|3|5`缩短ladder边界筛查，两进程反转顺序；大批量每次GMP抽查17个固定分布点，全部输出SHA跨后端比较，不把抽查称为全量复算。`analyze_stage2_ladders.py --study <目录> [--study <另一档>] --output <新汇总目录> --figures <新图目录>`核对二进制、完整输出SHA、GMP覆盖数与样本边界；全量GMP资格由独立correctness研究提供。
 
-完整曲线使用`bench_stage2_square_curves.py --experiment baby-coop`：固定`NTT_POINT_SQUARE=1`、`NTT_GIANT_COOP=32`，仅比较baby0／32；可用`--stock`加入0.57.4控制。此处off是baby关闭、giant32，不能称为程序字面默认。`--diagnostic`另跑完整叶校验；正常计时继续核对G根摘要、NTT分布及S4工作量。使用`analyze_stage2_square.py --stem stage2-baby-coop-curves`生成引擎和完整曲线墙钟两图。原生开关与低位队列回退由`test_stage2_point_square_native.py --check baby-coop`验证。
+完整曲线使用`bench_stage2_square_curves.py --experiment baby-coop`：固定`NTT_POINT_SQUARE=1`，仅比较baby0／32；`--giant-fixed 0|32`默认32，设0可独立测baby，`--stock`加入冻结旧版标量控制。`--families ordinary,carrier`可限制已有矩阵家族，输入仍须有正常NF参考。此处off为强制baby标量控制，不代表所有运行默认；分析器禁止混合不同giant模式。`--diagnostic`另跑完整叶校验；正常计时继续核对G根摘要、NTT分布及S4工作量。使用`analyze_stage2_square.py --stem <新名称>`生成引擎和完整曲线墙钟两图。计时前完成编译和CPU重验证，若与测量重叠则保留原记录、另建串行研究验收。
+
+`test_stage2_point_backends_gpu.py --scope configuration|formal|giant|unpaired|fallback --exe <程序> --save <保存点> --output <新目录> --allow-gpu-pid <已授权界面PID>`验证实际worker协议。configuration覆盖优先级、非法值、预算回退、六条有效曲线的自动学习和只读复用；formal检查当前D配对、邻D只用胜者、增量不重测；giant检查三种后端及短块回退；unpaired检查只有强制协作成绩时auto仍保留标量。这四组用宽位NF保存点，fallback用M127等低位点核对三种请求均实际回退标量。程序、GMP、输入、进程门禁和遥测逐项冻结。CPU身份与模型验证使用`test_stage2_runtime_tune.py --fixture point-backends`，TOML枚举／worker覆盖见`test_ecm_toml.ps1`；原有低位队列回退继续由`test_stage2_point_square_native.py --check baby-coop`验证。
 
 ## 正常运行时选型矩阵
 

@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
 from result_format import normalize_result
-from stage2_tune_matrix import aggregate, write_profile, sample_groot_layout
+from stage2_tune_matrix import aggregate, write_profile, sample_groot_layout, hydrate_point_backends
 import re
 import statistics
 import tomllib
@@ -158,10 +158,12 @@ def import_runtime(paths, sample_limit=10):
             sample['groot_balanced'] = sample_groot_layout(sample)
             sample.setdefault('giant_tail_balance',0)
             sample.setdefault('giant_chain_block',64)
+            hydrate_point_backends(sample,condition)
             group = tuple(sample.get(k) for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
                                            'modulus_kind', 'b1', 'b2', 'd', 'fold_resident',
                                            'frontier_resident', 'execution_path', 'giant_chunk_points',
-                                           'giant_chain_min', 'giant_force_ladder', 'groot_balanced', 'giant_tail_balance', 'giant_chain_block'))
+                                           'giant_chain_min', 'giant_force_ladder', 'groot_balanced', 'giant_tail_balance', 'giant_chain_block',
+                                           'baby_coop', 'giant_coop'))
             sample.setdefault('runtime_sample_id', row.get('queue_receipt') or hashlib.sha256(line).hexdigest())
             sample.setdefault('runtime_probe', 1)
             key = group + (sample['runtime_sample_id'],)

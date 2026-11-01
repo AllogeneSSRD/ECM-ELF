@@ -1,11 +1,14 @@
 """Exercise real matrix aggregation/import identity without running GPU work."""
 from pathlib import Path
+import json
 import sys
 import tomllib
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
 from stage2_tune_matrix import aggregate, sample_groot_layout, write_profile
+import import_stage2_benchmark_tune as importer
 
 
 class LayoutIdentity(unittest.TestCase):
@@ -50,6 +53,25 @@ class LayoutIdentity(unittest.TestCase):
                          {(0,64,70),(1,64,60),(0,32,50)})
         for changes in ({'giant_tail_balance':2},{'giant_chain_block':128}):
             with self.assertRaises(ValueError):aggregate([self.row('bad',1,**changes)])
+
+    def test_runtime_import_cap_is_per_actual_backend(self):
+        receipts=[]
+        for i,mode in enumerate((0,0,32,32,32,32)):
+            sample=self.row(str(i),10,target_bits=9216,arithmetic_bits=9216,carrier_exponent=0,
+                modulus_kind='generic',groot_balanced=0,baby_coop=mode,giant_coop=0,
+                clean=1,bad=0,hits=0,selftest_cases=1,checked=1,predicted_seconds=10,
+                measured_model_ratio=1,prediction_basis='before_measurement',
+                phase_accounting='exclusive_engine_v1',init_seconds=10,main_seconds=0)
+            for phase in ('shape','setup','baby','ftree','main_setup','inverse_setup','giant_loop','descent','accum','finalize'):
+                sample['phase_'+phase+'_seconds']=10 if phase=='baby' else 0
+            receipts.append(dict(status='stage2_completed',hits=0,bad_factors=0,factors=[],
+                N_hex=format((1<<9215)+1,'x'),carrier_exponent=0,B1=sample['b1'],B2=sample['b2'],
+                tune_observation=dict(condition={'uuid_hex':'fixture'},sample=sample)))
+        payload=''.join(json.dumps(row)+'\n' for row in receipts).encode('utf-8')
+        # Exercise the real import quota, replacing only input I/O/normalization.
+        with patch.object(Path,'read_bytes',return_value=payload),patch.object(importer,'normalize_result',side_effect=lambda row:row):
+            _,rows,_=importer.import_runtime([Path('fixture-receipts.jsonl')],sample_limit=2)
+        self.assertEqual({r['baby_coop']:r['repeats'] for r in rows},{0:2,32:2})
 
 
 if __name__ == '__main__':

@@ -36,7 +36,7 @@ def main():
                 busy_clocks.add(sample['sm_clock_mhz']);busy_samples+=1
         for row in data['rows']:
             f=row['fields'];samples=list(map(float,f['samples_ms'].split(',')))
-            if row['fault'] or row['returncode'] or int(f['bad']) or len(samples)!=5 or min(samples)<=0:
+            if row['fault'] or row['returncode'] or int(f['bad']) or len(samples)!=data['conditions'].get('event_samples',5) or min(samples)<=0:
                 raise ValueError('Invalid sample/checks')
             checked_points=min(17,int(f['points'])) if int(f['points'])>37 else int(f['points'])
             if int(f['checked_words'])!=checked_points*2*int(f['nw']):raise ValueError('Incomplete distributed GMP coverage')
@@ -58,9 +58,23 @@ def main():
     if not cells or len(devices)!=1:raise ValueError('Need nonempty single-device study')
     a.output.mkdir(parents=True,exist_ok=False);a.figures.mkdir(parents=True,exist_ok=False)
     result=dict(complete=True,identities=identities,cells=cells,busy_sm_clocks_mhz=sorted(busy_clocks),busy_samples=busy_samples,
-                timing='All five CUDA events retained per process; medians across opposite-order processes; allocation/GMP/readback excluded',
+                timing='All configured CUDA events retained per process; medians across opposite-order processes; allocation/GMP/readback excluded',
                 verification='17 distributed points per throughput call (all if <=37); complete output SHA compared across treatments; full GMP correctness separately')
     (a.output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
+    if len(cells)>8:
+        fig,axes=plt.subplots(1,2,figsize=(13,4),sharey=True)
+        for kind,ax in enumerate(axes):
+            for count in sorted({c['points'] for c in cells}):
+                rows=[c for c in cells if c['kind']==kind and c['points']==count]
+                ax.plot(range(len(rows)),[c['ratio'] for c in rows],'.-',label=f'{count} points')
+            ax.axhline(1,color='gray',ls=':');ax.grid(alpha=.25);ax.legend()
+            ax.set_title('Mersenne' if kind else 'ordinary');ax.set_xlabel('Arithmetic bits (boundary samples)')
+            bits=sorted({c['bits'] for c in cells})
+            ax.set_xticks(range(len(bits)),bits);ax.tick_params(axis='x',rotation=60)
+            ax.set_yscale('log');ax.set_ylim(.002,1.2);ax.set_ylabel('TPI32 / scalar event time (log)')
+        fig.suptitle('Production-header ladder | '+next(iter(devices))[1]);fig.tight_layout()
+        fig.savefig(a.figures/'stage2-baby-ladder-ratios.png',dpi=160);plt.close(fig)
+        shutil.copy2(__file__,a.output/'analyzer_snapshot.py');print(json.dumps(result,indent=2));return
     fig,ax=plt.subplots(figsize=(10,4));labels=[]
     for i,cell in enumerate(cells):
         labels.append(f"{cell['bits']}b / {'Mersenne' if cell['kind']==1 else 'ordinary'}")

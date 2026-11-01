@@ -36,6 +36,7 @@ def main():
     p.add_argument('--seed-strides', default='1', help='1: separate seed arrays; 2: interleaved production layout')
     p.add_argument('--correct-count', type=int, choices=(1,37), default=37)
     p.add_argument('--rounds', type=int, default=1)
+    p.add_argument('--event-samples',type=int,choices=(1,3,5),default=5,help='Retained CUDA event samples per ladder performance process')
     p.add_argument('--recurrence', type=int, default=4)
     p.add_argument('--scalar-bits',type=int,default=18,help='Ladder performance scalars; correctness uses 0 and 64-bit boundaries')
     p.add_argument('--threads', type=int, default=64)
@@ -77,7 +78,7 @@ def main():
         if a.probe == 'field':
             values = (bits, count, repeats, tpi, operation, alias, a.threads, a.device, kind, fault, 5)
         elif a.probe == 'ladder':
-            values=(bits,count,tpi,repeats,kind,operation,5 if a.suite=='performance' else 1,a.device,fault)
+            values=(bits,count,tpi,repeats,kind,operation,a.event_samples if a.suite=='performance' else 1,a.device,fault)
         else:
             values = (bits, count, repeats, tpi, a.threads if tpi else a.scalar_threads, a.device, kind, 5)
             tail = tail or repeats

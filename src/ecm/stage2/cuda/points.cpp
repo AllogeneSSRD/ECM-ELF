@@ -485,6 +485,7 @@ bool giant_chunk_chain(
         const int mersenne_bits=fuse_env_ull("NTT_POINT_MERSENNE",0) &&
             mpz_popcount(L.N)==(mp_bitcnt_t)bits ? bits : 0;
         const int tpi=giant_coop_tpi(),capacity_bits=64*s2g_coop_capacity_words((int)nw,tpi);
+        g_giant_seed.cooperative_tpi=unsigned(tpi);
         const unsigned int threads=64,grid=(unsigned int)((blocks*tpi+threads-1)/threads);
         ecm_launch_s2g_coop_chain_kernel(EcmCudaLaunch{grid,threads},tpi,W.dn,C.ninv,(int)nw,ddx,ddz,
             ddsx,ddsz,desx,desz,blocks,npts,per_block,g_giant_seed_device?2:1,mersenne_bits,ox,oz);
@@ -666,6 +667,7 @@ bool device_baby_generate(
     CK(stage2_wait::copy(dm.ptr,C.hmone.data(),w*8,cudaMemcpyHostToDevice));
     CK(stage2_wait::copy(dj.ptr,indices.data(),n*8,cudaMemcpyHostToDevice));
     if(baby_coop_tpi() && w>128 && w<=256) {
+        st.cooperative_tpi=32;
         int mersenne_bits=0;
         if(fuse_env_ull("NTT_POINT_MERSENNE",0)) {
             // N below is the GCD target; identify the actual arithmetic modulus

@@ -147,6 +147,20 @@ int main(int argc,char **argv) {
         const auto booleans = ecm_config::read_stage2(ecm_config::cli_entries(lines, 2));
         expect(booleans.giant_tail_balance && !booleans.b2_round_chain,
                "TOML boolean values lost during projection");
+        for(const auto *baby:{"auto","scalar","coop32"})for(const auto *giant:{"scalar","coop16","coop32"}) {
+            write(temp,std::string("[stage2]\nstage2_baby_backend=\"")+baby+"\"\nstage2_giant_backend=\""+giant+
+                "\"\n[workers.2.stage2]\nstage2_baby_backend=\"coop32\"\nstage2_giant_backend=\"coop16\"\n");
+            expect(ecm_config::read_toml(temp.string(),lines),"point backend TOML unavailable");
+            const auto global=ecm_config::read_stage2(ecm_config::cli_entries(lines,1));
+            const auto worker=ecm_config::read_stage2(ecm_config::cli_entries(lines,2));
+            expect(global.has_baby_backend && global.has_giant_backend && global.baby_backend==baby && global.giant_backend==giant,
+                "point backend values lost");
+            expect(worker.baby_backend=="coop32" && worker.giant_backend=="coop16","point backend worker override lost");
+        }
+        for(const auto *value:{"\"coop16\"","\"wrong\"","32"})
+            rejected(temp,std::string("[stage2]\nstage2_baby_backend=")+value+"\n");
+        for(const auto *value:{"\"auto\"","\"wrong\"","32"})
+            rejected(temp,std::string("[stage2]\nstage2_giant_backend=")+value+"\n");
         for(const auto *value:{"0","0.25","5","60"}) {
             write(temp,std::string("[stage1]\nprogress_average_seconds=")+value+
                        "\n[workers.2.stage1]\nprogress_average_seconds=2.5\n");

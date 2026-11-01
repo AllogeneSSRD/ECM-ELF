@@ -41,6 +41,7 @@ struct CurveProcessRequest {
     bool relocation=0;
     bool giant_tail_balance=false,b2_round_chain=false;
     std::string giant_chain="64";
+    std::string baby_backend="scalar",giant_backend="scalar";
     bool runtime_prepare_cache=0;
     std::string runtime_prepare_hints{};
     uint64_t runtime_remaining=0;

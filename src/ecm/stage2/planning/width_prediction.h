@@ -15,7 +15,7 @@ class WidthPredictor {
     Estimator &engine;
     const Fields *excluded=nullptr;
     struct Anchor {const Fields *sample;Shape shape;Work work;double correction;};
-    using Region=std::array<Word,16>;
+    using Region=std::array<Word,20>;
     mutable std::map<Region,std::vector<Anchor>> regions;
     mutable std::map<Shape::Key,std::pair<bool,WidthEstimate>> predictions;
     static double ratio(double a,double b){return b>0?a/b:1.;}
@@ -29,7 +29,9 @@ class WidthPredictor {
         Region out{};const auto topology=interval(s,w).key;
         std::copy(topology.begin(),topology.end(),out.begin());
         out[9]=s.mersenne;out[10]=s.physical;out[11]=s.buffers;
-        out[12]=s.short_batch_tune;out[13]=s.short_batch_hash;out[14]=s.tail_balance;out[15]=s.chain_block;return out;
+        out[12]=s.short_batch_tune;out[13]=s.short_batch_hash;out[14]=s.tail_balance;out[15]=s.chain_block;
+        out[16]=s.baby_coop;out[17]=s.giant_coop;
+        out[18]=point_backend_capacity(s.arithmetic_bits,s.baby_coop);out[19]=point_backend_capacity(s.arithmetic_bits,s.giant_coop);return out;
     }
     static double geometry_distance(const Work &a,const Work &b) {
         return std::abs(std::log2(double(a.p)/b.p))+
@@ -51,7 +53,11 @@ class WidthPredictor {
         const double nested=r.giant+r.trees+r.fold;
         const double loop=nested>0?(r.giant*ratio(w.giant,ref.giant)+r.trees*poly(RequestGtrees)+r.fold*poly(RequestFold))/nested:
             poly(RequestGtrees);
-        return fixed+extra_transfer+r.baby*ratio(w.baby,ref.baby)+r.ftree*poly(RequestFtree)+r.inverse*poly(RequestInverse)+
+        // Conservative analytic prior for the ladder part only. Do not apply
+        // a whole-curve speedup to NTT, reduction or CPU normalization.
+        const double capacity=s.baby_coop==32?double(point_backend_capacity(s.arithmetic_bits,32))/((s.arithmetic_bits+63)/64):1.;
+        const double baby_scale=s.baby_coop==32?.15+.85*.5*capacity*capacity:1.;
+        return fixed+extra_transfer+r.baby*ratio(w.baby,ref.baby)*baby_scale+r.ftree*poly(RequestFtree)+r.inverse*poly(RequestInverse)+
             r.descent*poly(RequestDescent)+r.accum*ratio(w.accum,ref.accum)+r.loop*loop;
     }
 public:
@@ -122,6 +128,7 @@ private:
         if(!out.arithmetic_high)out.arithmetic_high=out.arithmetic_low;
         out.model="basic_stage2_width_v1";out.extrapolated=true;
         out.relative_error=std::min(.8,.25+.12*distance+.04*geometry);
+        if(s.baby_coop || s.giant_coop){out.relative_error=std::max(.5,out.relative_error);out.uncertainty="cooperative_point_analytic_prior";}
         auto at=regions.find(region(s,w));
         if(at==regions.end()) {
             std::vector<Anchor> anchors;

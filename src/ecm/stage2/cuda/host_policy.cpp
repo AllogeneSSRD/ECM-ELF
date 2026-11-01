@@ -3,11 +3,50 @@
 #include <cuda_runtime_api.h>
 #endif
 #include "../planning/cost_profile.h"
+#include "../point_backend.h"
 #include "../../platform/compute_log.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 namespace s2prod {
+void apply_point_backends(const Options &o) {
+#ifndef ECM_STAGE2_OPENCL
+    if(_putenv_s("NTT_BABY_COOP",std::to_string(o.selected_baby_coop).c_str()) ||
+       _putenv_s("NTT_GIANT_COOP",std::to_string(o.selected_giant_coop).c_str()))
+        throw std::runtime_error("cannot configure Stage2 point backends");
+#else
+    (void)o;
+#endif
+}
+void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
+    const bool baby_cli=o.portable_cli.count("--baby-backend"),giant_cli=o.portable_cli.count("--giant-backend");
+#ifndef ECM_STAGE2_OPENCL
+    const auto overrides=ecm_cuda_stage2_point_environment_overrides();
+    if(!baby_cli) {
+        if(defaults && defaults->baby_present)o.baby_backend=defaults->baby;
+        else if(overrides&1) {
+            const std::string value=std::getenv("NTT_BABY_COOP");
+            if(value!="0" && value!="32")throw std::runtime_error("NTT_BABY_COOP must be 0 or 32");
+            o.baby_backend=value=="32"?"coop32":"scalar";
+        }
+    }
+    if(!giant_cli) {
+        if(defaults && defaults->giant_present)o.giant_backend=defaults->giant;
+        else if(overrides&2) {
+            const std::string value=std::getenv("NTT_GIANT_COOP");
+            if(value!="0" && value!="16" && value!="32")throw std::runtime_error("NTT_GIANT_COOP must be 0, 16 or 32");
+            o.giant_backend=ecm_stage2::point_backend_name(unsigned(std::stoul(value)));
+        }
+    }
+#endif
+    const auto baby=ecm_stage2::baby_backend(o.baby_backend);
+    o.selected_baby_coop=baby<0?0:unsigned(baby);
+    o.selected_giant_coop=ecm_stage2::giant_backend(o.giant_backend);
+#ifdef ECM_STAGE2_OPENCL
+    if(o.selected_baby_coop || o.selected_giant_coop)throw std::runtime_error("cooperative point backends are CUDA-only");
+#endif
+    apply_point_backends(o);
+}
 void configure_giant_policy(Options &o) {
     if(o.giant_chain!="64" && o.giant_chain!="32" && o.giant_chain!="auto")
         throw std::runtime_error("giant-chain must be 64, 32 or auto");

@@ -149,6 +149,9 @@ def assignment(o, key=None):
             code = f"gui_rect({dst},v);"
         else:
             code = f"{dst}=v;"
+    elif kind == "enum":
+        valid="&&".join("v!="+literal(x) for x in o["values"])
+        code=f"if({valid})throw std::runtime_error({literal(key+' must be '+o['domain'])});{dst}=v;"
     elif kind == "strict":
         if o["type"] == "string":
             code = f"{dst}=v;"

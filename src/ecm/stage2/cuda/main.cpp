@@ -90,6 +90,8 @@ Options arguments(int argc, char **argv) {
         else if (a == "--gui-events") o.gui_events=true;
         else if (a == "--b2") o.b2 = num();
         else if (a == "--giant-chain") {o.giant_chain=value();o.portable_cli.insert(a);}
+        else if (a == "--baby-backend") {o.baby_backend=value();o.portable_cli.insert(a);}
+        else if (a == "--giant-backend") {o.giant_backend=value();o.portable_cli.insert(a);}
         else if (a == "--giant-tail-balance") {const auto n=num();if(n>1)throw std::runtime_error("giant-tail-balance must be 0 or 1");o.giant_tail_balance=n!=0;o.portable_cli.insert(a);}
         else if (a == "--b2-round-chain") {const auto n=num();if(n>1)throw std::runtime_error("b2-round-chain must be 0 or 1");o.b2_round_chain=n!=0;o.portable_cli.insert(a);}
         else if (a == "--groot-layout") {
@@ -294,6 +296,7 @@ void help() {
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
+        "           --baby-backend auto|scalar|coop32 --giant-backend scalar|coop16|coop32\n"
         "           --low-cpu-wait 0|1: reduce host busy waits, possibly at the cost of elapsed time.\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
@@ -378,6 +381,8 @@ int driver(Options o) {
     configure_pack_zero(o,&pack_defaults);
     const HostWaitDefaults wait_defaults{s.has_low_cpu_wait,s.low_cpu_wait};
     configure_host_wait(o,&wait_defaults);
+    const PointBackendDefaults point_defaults{s.has_baby_backend,s.has_giant_backend,s.baby_backend,s.giant_backend};
+    configure_point_backends(o,&point_defaults);
     if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
     if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;

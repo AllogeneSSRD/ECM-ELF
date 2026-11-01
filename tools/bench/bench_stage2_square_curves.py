@@ -38,6 +38,9 @@ def main():
     p.add_argument('--stock',type=Path)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--bits',default='10232,12285,16272')
+    p.add_argument('--families',default='ordinary,carrier',help='Comma-separated existing matrix families')
+    p.add_argument('--giant-fixed',type=int,choices=(0,32),default=32,
+                   help='Hold giant backend fixed for the baby A/B; 0 measures baby alone')
     p.add_argument('--rounds',type=int,default=1)
     p.add_argument('--reverse-first',action='store_true',help='Reverse treatments on the first pass for independent retests')
     p.add_argument('--allow-gpu-pid',type=int,action='append',default=[])
@@ -54,8 +57,10 @@ def main():
     if a.experiment=='baby-coop':a.coop_tpi=32
     diagnostic_b2=a.diagnostic_b2 or (26000000 if a.experiment!='square' else 2600000)
     desired=set(map(int,a.bits.split(',')))
-    cells=[r for r in load(a.summary)['rows'] if not r['tail_permission'] and r['target_bits'] in desired]
-    if len(cells)!=2*len(desired):raise ValueError('Need both families for every width')
+    families=set(a.families.split(','))
+    if not families or not families<={'ordinary','carrier'}:p.error('Unknown matrix family')
+    cells=[r for r in load(a.summary)['rows'] if not r['tail_permission'] and r['target_bits'] in desired and r['family'] in families]
+    if len(cells)!=len(families)*len(desired):raise ValueError('Need every requested family for every width')
     variants={}
     for name,path in [('candidate',a.exe),('stock',a.stock)]:
         if path is None:continue
@@ -73,6 +78,7 @@ def main():
         allowed.append(dict(pid=pid,process_name=next(iter(names))))
     report=dict(complete=False,started_utc=stamp(),variants=variants,diagnostic=a.diagnostic,experiment=a.experiment,
                 coop_tpi=a.coop_tpi,coop_control=a.coop_control,coop_middle=a.coop_middle,
+                giant_fixed=a.giant_fixed if a.experiment=='baby-coop' else None,
                 source_summary=str(a.summary),allowed_processes=allowed,rows=[],failures=[])
     write(out/'results.json',report)
     env={k:v for k,v in os.environ.items() if not k.startswith(('NTT_','ECM_')) and
@@ -80,7 +86,7 @@ def main():
     env['NTT_NO_PROGRESS']='1'
     if a.experiment!='square':env['NTT_POINT_SQUARE']='1'
     # Hold the previously qualified giant backend constant in the baby A/B.
-    if a.experiment=='baby-coop':env['NTT_GIANT_COOP']='32'
+    if a.experiment=='baby-coop':env['NTT_GIANT_COOP']=str(a.giant_fixed)
     if a.diagnostic:
         env.update(NTT_TARGET_LEAF_HASH='1',NTT_DEVICE_GLEAF_CHECK='1',NTT_S4_CARRY_TRACE='1',NTT_XADD6_TEST='1')
     signatures={}
@@ -137,7 +143,7 @@ def main():
                     if treatment=='on' and int(fields(text,'square_selftest')['mismatches']):raise ValueError('Square selftest failed')
                     if a.experiment!='square' and name=='candidate':
                         coop=fields(text,'giant_coop_mode')
-                        expected_tpi=32 if a.experiment=='baby-coop' else a.coop_tpi if treatment=='on' else 16 if treatment=='middle' else a.coop_control
+                        expected_tpi=a.giant_fixed if a.experiment=='baby-coop' else a.coop_tpi if treatment=='on' else 16 if treatment=='middle' else a.coop_control
                         if int(coop['requested'])!=expected_tpi:raise ValueError('Wrong cooperative mode')
                         eligible=expected_tpi!=0 and int(mode['nw'])>128
                         if bool(int(coop['eligible']))!=eligible:raise ValueError('Wrong cooperative eligibility')
@@ -167,6 +173,7 @@ def main():
                     curve_walls=re.findall(r'^curve_done: .* wall=([0-9.]+) s$',console,re.M)
                     if len(curve_walls)!=1:raise ValueError('Missing complete curve wall timer')
                     row=dict(key=key,family=cell['family'],bits=cell['target_bits'],round=round,treatment=treatment,
+                             input={k:normalized[k] for k in ('B1','B2','carrier_exponent')},D=expected_d,P=phi(expected_d)//2,
                              directory=str(directory),seconds=float(clock['total']),clock=clock,s4=check,
                              curve_wall_seconds=float(curve_walls[0]),
                              wall_seconds=time.perf_counter()-started,signature=signature,

@@ -48,6 +48,22 @@ CUDA自动布局保留上述宽位资格。其他位宽须同时满足：至少4
 
 B2凑整在当前D选择之后执行。开启凑整时不启动运行时候选探索，避免反复试验仅在不同实际覆盖量下测过的参数；合法运行观察按实际B2存储。显式指定该实际B2的后续任务可以复用，不能把它归入原请求B2的均值。尚未实现把凑整成本纳入D联合搜索。配置和覆盖合同见[完整区间点块策略](STAGE2.md#完整区间点块策略)。
 
+## 协作点后端选型
+
+`stage2_baby_backend`默认auto，可强制scalar／coop32；`stage2_giant_backend`默认scalar，可强制coop16／coop32。本轮不自动搜索giant TPI。CLI `--baby-backend`／`--giant-backend`优先于当前worker TOML，显式TOML优先于环境；省略新键时兼容显式`NTT_BABY_COOP`／`NTT_GIANT_COOP`。普通曲线向子进程传递策略，子进程读档后才决定具体后端；校准曲线传递已经选定的后端。OpenCL仅接受baby auto／scalar和giant scalar。
+
+资格按**实际算术位宽**判定：8193…16384 bits，承载时取p。Baby设备预算回退或位宽不支持时实际为标量；giant没有合格chain时也记录标量。矩阵的`baby_coop`为0／32，`giant_coop`为0／16／32，0表示实际标量。这些字段参与聚合、精确查找、模型、缓存和默认保护；即使忽略environment，也不跨后端合并。协作容器160／192／224／256词分档参与区间复用，不跨容量边界套用实测。NTT吞吐表继续共享。
+
+Baby auto先积累R次标量观察，R为`stage2_tune_min_repeats`。实际P≥512、尚有至少2R条队列工作时，对每个算术家族当前最快的已重复标量项，只增加一个coop32对照，固定D、布局、链长与驻留策略。先完成该对照，再恢复D与32／64链长搜索；不将全部D候选乘上后端数。达到R次后选已准入项的最快平均耗时，方差只作诊断，不否决较快均值。关闭运行时学习时只读复用已合格观察；缺少数据仍使用标量。
+
+显式ECM tune同样支持auto。在当前D先测一组scalar／coop32；同一实际位宽、算术家族、B2、固定giant后端、链长及点批量区域内，相邻D可复用严格环境下的配对胜者，不重复展开后端网格。点批量区域按⌊log₂min(P,K)⌋划分，K为规范化后的ladder分段上限，默认8192；容量档位或批量区域变化需要新的证据。不同D之间的两个快慢记录不构成后端配对。满足重复数的已有校准不再重测，默认无warmup。
+
+`mean_seconds`仍是引擎init＋main，排除启动点算术自检。新增`point_check_seconds`记录必需点检查耗时；后端比较采用两者之和，避免遗漏额外TPI检查。外层读档、选型、进程及发布另计，不混入该字段；完整曲线墙钟用于性能验收。旧记录缺少此字段时按0保守保留参考。旧条件仅有非零环境开关、缺少实际后端证据时，新字段填255（未知）；保留原数据，但不用于选型或拟合，不能据请求开关猜测实际执行路线。
+
+无协作实测时，基础模型仅对baby部分使用保守容量先验，给出至少50%的相对误差许可；不把ladder核倍率施加到整条曲线，也不据此绕过auto的配对要求。标量默认D先验保持不变。其他GPU、大B2和不同点批量仍需实测。
+
+代码入口：`stage2/point_backend.h`定义选项及容量／批量区域；`cuda/host_policy.cpp`解析优先级；`task.cpp::child_run/curve_worker`处理父子进程；`planning/runtime_tune.h::runtime_baby_trials/qualified_baby_backend`与`planning.cpp::portable_measure/portable_runtime_select`限制配对范围；`portable_model.h`、`width_prediction.h`隔离后端统计和模型。区间补测与完整曲线边界见[性能报告](../performance/STAGE2_BIT_SCALING.md#126-区间资格与自动选型)。
+
 ## 算术位宽区间预测
 
 普通路径查`generic[bit_length(N)]`，承载路径查`mersenne[p]`。索引按实际算术位宽建立；不要求采样的目标N位宽、具体N或carrier_exponent相同。目标位宽另用于投影、叶乘积和GCD成本；完整梅森数可校准余因子承载。整除验证仍不可省略。

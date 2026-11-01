@@ -246,6 +246,7 @@ inline std::string runtime_group(const Fields &s) {
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"}) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
+    key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
     return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
@@ -259,14 +260,22 @@ inline std::string scope(const Fields &s) {
     }
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"})
         key+=std::string(field)+'='+std::to_string(optional_uint(s,field, std::string(field)=="giant_chain_min"?32768:0))+';';
+    key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
     return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
 inline void validate(const Fields &s) {
+    const auto baby=optional_uint(s,"baby_coop"),giant=optional_uint(s,"giant_coop");
+    if((baby!=0 && baby!=32 && baby!=255) || (giant!=0 && giant!=16 && giant!=32 && giant!=255))
+        throw std::runtime_error("invalid point arithmetic backend");
     if(optional_uint(s,"giant_tail_balance")>1 || (optional_uint(s,"giant_chain_block",64)!=32 && optional_uint(s,"giant_chain_block",64)!=64))throw std::runtime_error("invalid point policy");
     if(optional_uint(s,"groot_balanced")>1)throw std::runtime_error("invalid G-root layout");
     validate_provenance(s);
     const auto bits=uint(s,"target_bits"),arithmetic=uint(s,"arithmetic_bits"),carrier=uint(s,"carrier_exponent");
+    if(((baby && baby!=255) || (giant && giant!=255)) && arithmetic<=8192)
+        throw std::runtime_error("cooperative point sample has unsupported arithmetic width");
+    if(s.count("point_check_seconds") && !(real(s,"point_check_seconds")>=0))
+        throw std::runtime_error("invalid point startup check time");
     const auto b1=uint(s,"b1"),b2=uint(s,"b2"),d=uint(s,"d");
     if(bits<2 || bits>16384 || arithmetic<bits || arithmetic>16384 || (carrier && carrier!=arithmetic) ||
        (!carrier && bits!=arithmetic) || b1<2 || b2<=b1 || b2>Word(INT64_MAX)-8192 ||
@@ -332,7 +341,8 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
         // actually happened. Old profiles also stored this redundant request
         // in their environment. Do not split unchanged schedules on that flag.
         auto relevant=[](const std::string &key) {
-            return key.compare(0,4,"env_")==0 && key!="env_giant_tail_balance";
+            return key.compare(0,4,"env_")==0 && key!="env_giant_tail_balance" &&
+                key!="env_baby_coop" && key!="env_giant_coop";
         };
         for(const auto &f:old)if(relevant(f.first) && !same(f.first.c_str()))return false;
         for(const auto &f:current)if(relevant(f.first) && !same(f.first.c_str()))return false;
@@ -391,12 +401,12 @@ inline Fields compact_sample(Fields s) {
     }
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
-        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block",
+        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
         "phase_inverse_setup_seconds","phase_giant_loop_seconds","phase_descent_seconds","phase_accum_seconds","phase_finalize_seconds",
-        "giant_seconds","gtrees_seconds","fold_seconds","model_relative_error_allowance"};
+        "giant_seconds","gtrees_seconds","fold_seconds","point_check_seconds","model_relative_error_allowance"};
     for(auto i=s.begin();i!=s.end();)if(!keep.count(i->first))i=s.erase(i);else ++i;
     return s;
 }
@@ -418,6 +428,7 @@ inline bool combine(Fields &old,const Fields &sample,Word limit=1000000000) {
     const double a=real(old,"mean_seconds"),b=real(sample,"mean_seconds"),delta=b-a;
     const double x=real(old,"stddev_seconds"),y=real(sample,"stddev_seconds");
     const double m2=double(n-1)*x*x+double(m-1)*y*y+delta*delta*double(n)*double(m)/double(n+m);
+    if(sample.count("point_check_seconds") && !old.count("point_check_seconds"))old["point_check_seconds"]="0";
     for(auto &f:old)if(f.first!="stddev_seconds" && f.first.size()>=8 &&
         f.first.compare(f.first.size()-8,8,"_seconds")==0 && sample.count(f.first))
         f.second=numeric(real(old,f.first.c_str())+(real(sample,f.first.c_str())-real(old,f.first.c_str()))*double(m)/double(n+m));
@@ -453,6 +464,13 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
             s["passes_forward"]=std::to_string(remaining/radix+(remaining%radix!=0)+(uint(s,"tile")!=0));
         }
     } else {
+        // Legacy opt-in snapshots describe a request, not an observed device
+        // route. Keep these rows as unknown rather than assigning false costs.
+        for(const char *key:{"baby_coop","giant_coop"})if(!s.count(key)) {
+            const auto env=std::string("env_")+key;
+            const auto bits=optional_uint(s,"arithmetic_bits",optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"));
+            s[key]=optional_uint(condition,env.c_str()) && bits>8192 && bits<=16384?"255":"0";
+        }
         const auto d=uint(s,"d");if(d<6 || d>200000000 || d%2)throw std::runtime_error("invalid tune D");
         const Fields derived={{"arithmetic_bits",std::to_string(optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"))},
             {"p",std::to_string(cost::phi(uint(s,"d"))/2)},
@@ -476,6 +494,7 @@ struct Profile {
     }
     bool update(Fields sample,Word runtime_limit=10) {
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown measurement condition");
+        hydrate(sample,conditions.at(uint(sample,"condition")));
         sample=compact_sample(std::move(sample));
         const auto key=scope(sample);
         if(runtime_observation(sample)) {

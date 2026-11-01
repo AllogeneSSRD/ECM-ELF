@@ -800,6 +800,22 @@ After choosing D and arithmetic, increase B2 to the smallest whole-P giant count
 
 选定D和算术后，将B2向上补到最小整P点数且尾点块可走chain。日志与结果分别保留请求和实际B2。默认0保持界限，溢出报错；AutoB2上限仍为硬限制，显式ECM标定不支持凑整。CLI --b2-round-chain覆盖当前worker配置。
 
+### stage2_baby_backend
+
+```toml
+stage2_baby_backend = "auto"
+```
+
+Type / 类型: `string`; range / 范围: `[auto|scalar|coop32]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
+
+显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
+
+Baby point arithmetic: auto retains the scalar baseline until checked runtime comparisons qualify coop32; scalar forces one thread per point; coop32 requests 32 cooperating CUDA threads for arithmetic widths 8193..16384 bits. Unsupported widths or device-baby fallback use scalar. Runtime tuning compares one backend alternative at fixed D/layout/chain before expanding D. CLI --baby-backend overrides this worker key; an omitted key preserves an explicit NTT_BABY_COOP override. OpenCL accepts auto/scalar only.
+
+Baby点算术：auto在有效运行时对照达到最少重复数前保留标量基线；scalar强制每点一线程；coop32请求在实际算术8193..16384 bits使用32线程协作。不支持的位宽或设备baby预算回退仍用标量。运行时先固定D/布局/链长比较一个后端候选，再继续D搜索。CLI --baby-backend覆盖当前worker配置；省略此键时保留显式NTT_BABY_COOP。OpenCL仅支持auto/scalar。
+
 ### stage2_batch_mb
 
 ```toml
@@ -939,6 +955,22 @@ Writing this key explicitly can override implicit worker suffixes, paths or envi
 Budget in MiB for keeping fold accumulators on the GPU. 0 disables this residency. Exceeding the budget may fall back to batching, substantially increasing processing and transfer costs. Independent of arena and batch budgets; not a total VRAM limit.
 
 设置 fold 累积结果驻留 GPU 的预算，单位为 MiB。0 关闭这部分驻留；所需空间超过预算时可退回分批路径，可能显著增加处理和传输开销。此预算与大工作区、批次缓冲分别控制，不是总显存限制。
+
+### stage2_giant_backend
+
+```toml
+stage2_giant_backend = "scalar"
+```
+
+Type / 类型: `string`; range / 范围: `[scalar|coop16|coop32]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
+
+显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
+
+Giant chain arithmetic: scalar is the default; coop16 uses the fixed 16384-bit cooperative container; coop32 uses width-matched cooperative containers. Cooperative modes require CUDA arithmetic widths 8193..16384 bits and an eligible chain; seeds and [D]Q retain their existing implementation. This key fixes the giant backend rather than expanding runtime search. CLI --giant-backend overrides this worker key; omission preserves explicit NTT_GIANT_COOP. OpenCL accepts scalar only.
+
+Giant链算术：默认scalar；coop16使用固定16384-bit协作容器，coop32使用按位宽分档的协作容器。协作模式要求CUDA实际算术8193..16384 bits且存在合格chain；seed及[D]Q保持现有实现。此键固定giant后端，不扩张运行时搜索。CLI --giant-backend覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持scalar。
 
 ### stage2_giant_chain
 

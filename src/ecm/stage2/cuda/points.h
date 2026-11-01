@@ -7,6 +7,7 @@ struct PolyLayer;
 struct SmallPrimeBabyCache;
 
 struct GiantSeedStats {
+    unsigned cooperative_tpi=0;
     unsigned long long chunks=0,points=0,avoided_d2h_bytes=0,avoided_h2d_bytes=0;
     unsigned long long avoided_cpu_modmuls=0,avoided_montmuls=0,checked_words=0;
     unsigned long long segments=0,segment_checks=0,segment_fix_muls=0,fix_table_peak_bytes=0;
@@ -88,6 +89,7 @@ struct ResidentGiant {
 };
 
 struct DeviceBabyStats {
+    unsigned cooperative_tpi=0;
     size_t points=0,groups=0,bad_groups=0,payload_bytes=0,coordinate_d2h_bytes=0,
         root_d2h_bytes=0,leaf_d2h_bytes=0,seed_h2d_bytes=0,checked_words=0;
     double ladder_seconds=0,invert_seconds=0,total_seconds=0;

@@ -1055,6 +1055,48 @@
     },
     {
       "owner": "stage2",
+      "type": "string",
+      "parser": "strict",
+      "key": "stage2_baby_backend",
+      "field": "baby_backend",
+      "present": "has_baby_backend",
+      "default": "auto",
+      "domain": "[auto|scalar|coop32]",
+      "fx": "baby_point_arithmetic",
+      "description": [
+        "Baby point arithmetic: auto retains the scalar baseline until checked runtime comparisons qualify coop32; scalar forces one thread per point; coop32 requests 32 cooperating CUDA threads for arithmetic widths 8193..16384 bits. Unsupported widths or device-baby fallback use scalar. Runtime tuning compares one backend alternative at fixed D/layout/chain before expanding D. CLI --baby-backend overrides this worker key; an omitted key preserves an explicit NTT_BABY_COOP override. OpenCL accepts auto/scalar only.",
+        "Baby点算术：auto在有效运行时对照达到最少重复数前保留标量基线；scalar强制每点一线程；coop32请求在实际算术8193..16384 bits使用32线程协作。不支持的位宽或设备baby预算回退仍用标量。运行时先固定D/布局/链长比较一个后端候选，再继续D搜索。CLI --baby-backend覆盖当前worker配置；省略此键时保留显式NTT_BABY_COOP。OpenCL仅支持auto/scalar。"
+      ],
+      "values": [
+        "auto",
+        "scalar",
+        "coop32"
+      ],
+      "parser_override": "enum"
+    },
+    {
+      "owner": "stage2",
+      "type": "string",
+      "parser": "strict",
+      "key": "stage2_giant_backend",
+      "field": "giant_backend",
+      "present": "has_giant_backend",
+      "default": "scalar",
+      "domain": "[scalar|coop16|coop32]",
+      "fx": "giant_chain_arithmetic",
+      "description": [
+        "Giant chain arithmetic: scalar is the default; coop16 uses the fixed 16384-bit cooperative container; coop32 uses width-matched cooperative containers. Cooperative modes require CUDA arithmetic widths 8193..16384 bits and an eligible chain; seeds and [D]Q retain their existing implementation. This key fixes the giant backend rather than expanding runtime search. CLI --giant-backend overrides this worker key; omission preserves explicit NTT_GIANT_COOP. OpenCL accepts scalar only.",
+        "Giant链算术：默认scalar；coop16使用固定16384-bit协作容器，coop32使用按位宽分档的协作容器。协作模式要求CUDA实际算术8193..16384 bits且存在合格chain；seed及[D]Q保持现有实现。此键固定giant后端，不扩张运行时搜索。CLI --giant-backend覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持scalar。"
+      ],
+      "values": [
+        "scalar",
+        "coop16",
+        "coop32"
+      ],
+      "parser_override": "enum"
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_groot_balanced",
       "field": "groot_balanced",
       "type": "bool|string",

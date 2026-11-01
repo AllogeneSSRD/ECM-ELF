@@ -30,11 +30,12 @@ def main():
     p.add_argument('--figures',type=Path,required=True)
     p.add_argument('--public-figures',type=Path)
     p.add_argument('--stem',help='Figure filename stem; preserves a separate qualified comparison')
-    a=p.parse_args();groups=defaultdict(lambda:defaultdict(list));identities=[];experiments=set();tpis=set()
+    a=p.parse_args();groups=defaultdict(lambda:defaultdict(list));identities=[];experiments=set();tpis=set();giants=set()
     for study in [a.study,*a.extra]:
         data=load(study/'results.json')
         experiments.add(data.get('experiment','square'))
         tpis.add(data.get('coop_tpi',16))
+        if data.get('experiment')=='baby-coop':giants.add(data.get('giant_fixed',32))
         if not data['complete'] or data['failures'] or data['diagnostic']:raise ValueError('Need clean completed curves')
         for name,binary in data['variants'].items():
             if sha(Path(binary['exe']))!=binary['sha256']:raise ValueError('Frozen binary changed')
@@ -49,6 +50,7 @@ def main():
     if len(experiments)!=1:raise ValueError('Do not mix different arithmetic experiments')
     experiment=experiments.pop()
     if len(tpis)!=1:raise ValueError('Candidate TPIs differ')
+    if len(giants)>1:raise ValueError('Fixed giant backends differ')
     coop_tpi=tpis.pop()
     middle=any('middle' in variants for variants in groups.values())
     cells=[]
@@ -58,6 +60,8 @@ def main():
         signatures={tuple(r['signature']) for rows in variants.values() for r in rows}
         if len(signatures)!=1:raise ValueError('Workload/root mismatch: '+key)
         ref=variants['on'][0];values={}
+        if 'input' in ref and any(r.get('input')!=ref['input'] for rows in variants.values() for r in rows):
+            raise ValueError('Different input bounds: '+key)
         for name,rows in variants.items():
             times=[r['seconds'] for r in rows]
             curve_walls=[]
@@ -72,7 +76,7 @@ def main():
             values[name]=dict(n=len(rows),median_seconds=statistics.median(times),min_seconds=min(times),max_seconds=max(times),
                               median_curve_wall_seconds=statistics.median(curve_walls),
                               median_point_seconds=statistics.median(points),evidence=[r['directory'] for r in rows])
-        cells.append(dict(key=key,family=ref['family'],bits=ref['bits'],variants=values,
+        cells.append(dict(key=key,family=ref['family'],bits=ref['bits'],input=ref.get('input'),D=ref.get('D'),P=ref.get('P'),variants=values,
                           on_vs_stock=values['on']['median_seconds']/values['stock']['median_seconds'],
                           on_vs_off=values['on']['median_seconds']/values['off']['median_seconds']))
     names=('stock','off','middle','on') if middle else ('stock','off','on')
@@ -92,20 +96,22 @@ def main():
         for c in cells:c['on_vs_middle']=c['variants']['on']['median_seconds']/c['variants']['middle']['median_seconds']
     if experiment=='baby-coop':
         result['control_regressions']=result.pop('default_regressions')
-        result['control_route']='NTT_GIANT_COOP=32, NTT_BABY_COOP=0 (not literal program default)'
+        result['control_route']=f'NTT_GIANT_COOP={next(iter(giants))}, NTT_BABY_COOP=0 (forced scalar control)'
     a.output.mkdir(parents=True,exist_ok=False);a.figures.mkdir(parents=True,exist_ok=False)
     (a.output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     stem=a.stem or {'square':'stage2-square-curves','giant-coop':'stage2-giant-coop-curves','baby-coop':'stage2-baby-coop-curves'}[experiment]
     labels={'stock':'stock reference','off':'candidate scalar default','middle':'candidate fixed-16k TPI16',
             'on':f'candidate cooperative TPI{coop_tpi}'} if experiment=='giant-coop' else {'stock':'0.56.4 stock','off':'0.57.1 square off','on':'0.57.1 square on'}
     if experiment=='baby-coop':
-        labels={'stock':'0.57.4 baby scalar','off':'0.57.5 baby scalar','on':'0.57.5 baby TPI32'}
+        labels={'stock':'frozen stock, baby scalar','off':'candidate baby scalar','on':'candidate baby TPI32'}
+    mixed_bounds=len({c['input']['B2'] for c in cells if c.get('input')})>1
     colors={'stock':'#777777','off':'#df8a32','middle':'#729845','on':'#247fae'}
     for metric,suffix,title in [('median_seconds','','Engine init + main'),
                                  ('median_curve_wall_seconds','-curve-wall','Complete curve wall')]:
         fig,axes=plt.subplots(2,2,figsize=(13,8),sharex='col')
         for column,family in enumerate(('ordinary','carrier')):
-            rows=[c for c in cells if c['family']==family];x=[c['bits'] for c in rows]
+            rows=[c for c in cells if c['family']==family]
+            x=list(range(len(rows))) if mixed_bounds else [c['bits'] for c in rows]
             for name in names:
                 axes[0,column].plot(x,[c['variants'][name][metric] for c in rows],'.-',label=labels[name],color=colors[name])
             axes[0,column].set_title(family);axes[0,column].set_ylabel(title+' (s)');axes[0,column].set_ylim(bottom=0)
@@ -114,11 +120,14 @@ def main():
                 gain=[100*(1-c['variants']['on'][metric]/c['variants'][ref][metric]) for c in rows]
                 axes[1,column].plot(x,gain,'.--',label='Time decrease vs '+label,color=color)
             axes[1,column].axhline(0,color='gray',linestyle=':');axes[1,column].set_ylabel(title+' decrease (%)')
-            axes[1,column].set_xlabel('Target modulus bits');axes[1,column].legend(fontsize=9)
+            axes[1,column].set_xlabel('Input case (different B2)' if mixed_bounds else 'Target modulus bits');axes[1,column].legend(fontsize=9)
             for row in range(2):
-                ax=axes[row,column];ax.grid(alpha=.25);ax.xaxis.set_major_locator(MultipleLocator(2000));ax.tick_params(axis='x',rotation=45)
-        fig.suptitle('RTX 4060 Laptop | 1500 MHz target | fixed D/layout/chain | small B2'+
-                     (' | giant TPI32 fixed' if experiment=='baby-coop' else '')+'\n'+
+                ax=axes[row,column];ax.grid(alpha=.25)
+                if mixed_bounds:ax.set_xticks(x,[f"{c['bits']}b\nB2={c['input']['B2']:.3g}" for c in rows])
+                else:ax.xaxis.set_major_locator(MultipleLocator(2000))
+                ax.tick_params(axis='x',rotation=0 if mixed_bounds else 45)
+        fig.suptitle('RTX 4060 Laptop | 1500 MHz target | fixed D/layout/chain | '+('case-specific B2' if mixed_bounds else 'small B2')+
+                     ((' | giant scalar fixed' if next(iter(giants))==0 else ' | giant TPI32 fixed') if experiment=='baby-coop' else '')+'\n'+
                      'Independent processes; per-cell medians; n in summary (screening n=1, retests retained)',fontsize=12)
         fig.tight_layout(rect=(0,0,1,.92));png=a.figures/(stem+suffix+'.png');fig.savefig(png,dpi=160)
         fig.savefig(a.figures/(stem+suffix+'.svg'));plt.close(fig)

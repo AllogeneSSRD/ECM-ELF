@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 
 SHAPE = ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent', 'modulus_kind',
          'b1', 'b2', 'd', 'groot_balanced', 'fold_resident', 'frontier_resident', 'execution_path',
-         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder', 'giant_tail_balance', 'giant_chain_block')
+         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder', 'giant_tail_balance', 'giant_chain_block', 'baby_coop', 'giant_coop')
 PHASES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
           'giant_loop', 'descent', 'accum', 'finalize')
 KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_kind', 'verified', 'repeats', 'mean_seconds',
     'stddev_seconds', 'measurement_ids', 'preferred_order', 'validation_count',
     'validation_max_relative_error', 'giant_seconds', 'gtrees_seconds', 'fold_seconds',
-    'model_relative_error_allowance'} | {f'phase_{p}_seconds' for p in PHASES}
+    'model_relative_error_allowance', 'point_check_seconds'} | {f'phase_{p}_seconds' for p in PHASES}
 
 
 def matrix_column_order(section='ecm'):
@@ -135,6 +135,16 @@ def aggregate(samples):
         row['groot_balanced'] = sample_groot_layout(original)
         row['giant_tail_balance'] = int(original.get('giant_tail_balance',0))
         row['giant_chain_block'] = int(original.get('giant_chain_block',64))
+        row['baby_coop']=int(original.get('baby_coop',0))
+        row['giant_coop']=int(original.get('giant_coop',0))
+        if any(type(original.get(k,0)) is not int for k in ('baby_coop','giant_coop')):
+            raise ValueError('Point backend must be an integer')
+        if row['baby_coop'] not in (0,32,255) or row['giant_coop'] not in (0,16,32,255):
+            raise ValueError('Invalid point backend')
+        if any(row[k] not in (0,255) for k in ('baby_coop','giant_coop')) and int(row['arithmetic_bits'])<=8192:
+            raise ValueError('Unsupported cooperative arithmetic width')
+        if 'point_check_seconds' in row and not (math.isfinite(row['point_check_seconds']) and row['point_check_seconds']>=0):
+            raise ValueError('Invalid point startup check time')
         if row['giant_tail_balance'] not in (0,1) or row['giant_chain_block'] not in (32,64):
             raise ValueError('Invalid point policy')
         if not row.get('updated_at') and original.get('runtime_completed_ns'):
@@ -168,6 +178,7 @@ def aggregate(samples):
         n, m = old['repeats'], row['repeats']
         delta = row['mean_seconds']-old['mean_seconds']
         m2 = (n-1)*old['stddev_seconds']**2+(m-1)*row['stddev_seconds']**2+delta**2*n*m/(n+m)
+        if 'point_check_seconds' in row and 'point_check_seconds' not in old:old['point_check_seconds']=0.
         for k in old.keys() & row.keys():
             if k.endswith('_seconds') and k != 'stddev_seconds':
                 old[k] += (row[k]-old[k])*m/(n+m)
@@ -185,6 +196,13 @@ def aggregate(samples):
     return list(groups.values())
 
 
+def hydrate_point_backends(row,condition):
+    bits=int(row.get('arithmetic_bits') or row.get('carrier_exponent') or row['target_bits'])
+    for key in ('baby_coop','giant_coop'):
+        if key not in row:
+            row[key]=255 if int(condition.get('env_'+key,0)) and 8192<bits<=16384 else 0
+
+
 def write_profile(conditions, samples):
     lines = ['# Stage2 mean timings; identical parameters share one repeated measurement row.',
              '[profile]', 'format = 10', 'unit = "full_stage2"']
@@ -197,6 +215,7 @@ def write_profile(conditions, samples):
         row=dict(s);old=int(row['condition'])
         if not row.get('program_version') and conditions[old].get('program_version'):
             row['program_version']=conditions[old]['program_version']
+        hydrate_point_backends(row,conditions[old])
         row['condition']=remap[old];prepared.append(row)
     for i,condition in enumerate(canonical):
         lines += [f'\n[condition.{i}]']
