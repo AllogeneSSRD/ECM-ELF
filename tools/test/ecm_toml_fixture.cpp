@@ -161,6 +161,14 @@ int main(int argc,char **argv) {
             rejected(temp,std::string("[stage2]\nstage2_baby_backend=")+value+"\n");
         for(const auto *value:{"\"auto\"","\"wrong\"","32"})
             rejected(temp,std::string("[stage2]\nstage2_giant_backend=")+value+"\n");
+        write(temp,"[stage2]\nstage2_tune_profile=\"profiles/shared.toml\"\n"
+            "[workers.1.stage2]\nstage2_tune_profile=\"profiles/gpu0.toml\"\n"
+            "[workers.2.stage2]\nstage2_tune_profile=\"profiles/gpu1.toml\"\n");
+        expect(ecm_config::read_toml(temp.string(),lines),"worker tune paths unavailable");
+        expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).tune_profile=="profiles/gpu0.toml" &&
+            ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).tune_profile=="profiles/gpu1.toml" &&
+            ecm_config::read_stage2(ecm_config::cli_entries(lines,3)).tune_profile=="profiles/shared.toml",
+            "worker tune profiles leaked or lost global fallback");
         for(const auto *value:{"0","0.25","5","60"}) {
             write(temp,std::string("[stage1]\nprogress_average_seconds=")+value+
                        "\n[workers.2.stage1]\nprogress_average_seconds=2.5\n");

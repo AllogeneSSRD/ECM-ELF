@@ -194,22 +194,30 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     return s;
 }
 bool portable_admit(const Options&,const Record&,pt::Shape&,std::string&);
+bool portable_runtime_candidate_admit(const Options&,const Record&,pt::Shape&,std::string&,bool *hit=nullptr);
+ecm_stage2::Word portable_runtime_bound_limit(const Options &o) {
+    return o.auto_b2 && o.auto_max?o.auto_max:ecm_stage2::Word(INT64_MAX)-8192;
+}
+bool portable_runtime_bounds(const Options &o,pt::Shape &shape) {
+    if(!pt::runtime_bounds(shape,o.b2,o.b2_round_chain,portable_runtime_bound_limit(o)))return false;
+    if(o.b2_round_chain) {
+        // A short requested interval may have no chain until it is rounded.
+        shape.giant_coop=ecm_stage2::cooperative_point_width(shape.arithmetic_bits)?o.selected_giant_coop:0;
+        portable_point_backends(shape);
+    }
+    return true;
+}
 void round_giant_bounds(Options &o,const Record &r) {
     if(!o.b2_round_chain)return;
     if(!o.d)throw std::runtime_error("B2 rounding requires a selected D");
     auto shape=portable_shape(o,r,o.b2,o.d,o.carrier_exponent);
     std::string admitted;
-    if(!portable_admit(o,r,shape,admitted))throw std::runtime_error("B2 rounding requires an admitted Stage2 shape");
-    const auto p=ecm_stage2::cost::phi(o.d)/2;unsigned long long actual=o.b2;
-    if(shape.force_ladder || !ecm_stage2::giant_round_b2(o.b2,o.d,p,shape.giant_chunk,shape.chain_min,1,actual))
-        throw std::runtime_error("B2 cannot be rounded to a resident chain-capable point chunk");
-    if(actual>(uint64_t)INT64_MAX-8192)throw std::runtime_error("rounded B2 overflows the Stage2 bound limit");
-    if(o.auto_b2 && o.auto_max && actual>o.auto_max)throw std::runtime_error("rounded B2 exceeds AutoB2 maximum");
-    std::cout<<"stage2_bounds: requested_B2="<<o.b2<<" actual_B2="<<actual<<" D="<<o.d<<" P="<<p
-        <<" rounding=chain_P giant_points="<<actual/o.d+2<<std::endl;
-    shape.b2=actual;
-    if(!portable_admit(o,r,shape,admitted))throw std::runtime_error("rounded B2 exceeds the live memory budget");
-    o.b2=actual;
+    if(!portable_runtime_candidate_admit(o,r,shape,admitted))
+        throw std::runtime_error("B2 rounding cannot satisfy the chain, live memory or AutoB2 bound limit");
+    std::cout<<"stage2_bounds: requested_B2="<<o.b2<<" actual_B2="<<shape.b2<<" D="<<o.d<<" P="<<ecm_stage2::cost::phi(o.d)/2
+        <<" rounding=chain_P giant_points="<<shape.b2/o.d+2<<std::endl;
+    o.b2=shape.b2;o.groot_layout=int(shape.groot_balanced);o.selected_chain=unsigned(shape.chain_block);
+    o.selected_baby_coop=shape.baby_coop;o.selected_giant_coop=shape.giant_coop;
 }
 struct PortablePlanMetrics {
     uint64_t calls=0,cache_hits=0,route_hits=0;double seconds=0;
@@ -280,9 +288,9 @@ pt::RuntimeMemorySnapshot portable_memory_snapshot(int device) {
 #endif
 }
 bool portable_plan_context(const Options &o,const Record &r,std::string &scope,bool include_sigma=true) {
-    std::ostringstream out;out<<"worker-plan-v2 "<<o.device<<' '<<(include_sigma?r.sigma:0)<<' '<<r.b1<<' '<<o.b2<<' '
+    std::ostringstream out;out<<"worker-plan-v3 "<<o.device<<' '<<(include_sigma?r.sigma:0)<<' '<<r.b1<<' '<<o.b2<<' '
         <<o.batch<<' '<<o.arena<<' '<<o.owner_mb<<' '<<o.log_level<<' '<<o.debug_log<<' '<<o.ntt_counts<<' '
-        <<o.relocation<<' '<<o.giant_tail_balance<<' '<<o.giant_chain<<' '<<o.factor_only<<' '<<r.n<<'\n';
+        <<o.relocation<<' '<<o.giant_tail_balance<<' '<<o.giant_chain<<' '<<o.b2_round_chain<<' '<<o.factor_only<<' '<<r.n<<'\n';
     // This local memo uses the complete environment, including diagnostic flags
     // excluded from statistical compatibility. It never crosses curve workers.
     const auto block=GetEnvironmentStringsA();if(!block)return false;
@@ -309,7 +317,7 @@ pt::RuntimeRouteHint portable_route(const pt::Shape &s,const pt::RuntimeMemorySn
     return {s.d,s.carrier,memory.free,memory.total,uint64_t(s.fold),uint64_t(s.frontier),s.giant_chunk,s.chain_min,uint64_t(s.force_ladder),uint64_t(s.groot_balanced)};
 }
 std::string runtime_route_event(const Options &o) {
-    return o.runtime_prepare_cache?seal_runtime_routes(portable_runtime_routes.hints):std::string{};
+    return o.runtime_prepare_cache && !o.b2_round_chain?seal_runtime_routes(portable_runtime_routes.hints):std::string{};
 }
 bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,std::string &plan,bool *hit=nullptr) {
     portable_point_backends(shape);
@@ -323,12 +331,12 @@ bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,st
         shape=cached->shape;plan=cached->plan;if(hit)*hit=true;
         if(portable_plan_metrics)++portable_plan_metrics->cache_hits;
         std::string route_context;
-        if(pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block) &&
+        if(!o.b2_round_chain && pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block) &&
            portable_route_scope(o,r) && portable_plan_context(o,r,route_context,false) && route_context==portable_runtime_routes.context)
             portable_runtime_routes.hints.put(portable_route(shape,before),true,before);
         return true;
     }
-    const bool route_scope=pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block) && portable_route_scope(o,r);
+    const bool route_scope=!o.b2_round_chain && pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block) && portable_route_scope(o,r);
     pt::RuntimeRouteHint route;
     if(route_scope && portable_runtime_routes.hints.find(shape.d,shape.carrier,before,route,shape.groot_balanced)) {
         const auto after=portable_memory_snapshot(o.device);
@@ -361,6 +369,21 @@ bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,st
         portable_runtime_routes.hints.put(portable_route(shape,before),
         admitted && pt::runtime_plan_may_reuse(before,reported,after),after);
     return admitted;
+}
+bool portable_runtime_candidate_admit(const Options &o,const Record &r,pt::Shape &shape,std::string &plan,bool *hit) {
+    if(!o.b2_round_chain)return portable_runtime_admit(o,r,shape,plan,hit);
+    // Actual B2 can change the native capacity. Require a stable admitted
+    // fixed point, with a hard attempt bound; never relabel a stale plan.
+    bool all_cached=true;
+    for(unsigned attempt=0;attempt<4;++attempt) {
+        shape.giant_coop=ecm_stage2::cooperative_point_width(shape.arithmetic_bits)?o.selected_giant_coop:0;
+        bool cached=false;
+        if(!portable_runtime_admit(o,r,shape,plan,&cached))return false;
+        all_cached&=cached;const auto admitted_b2=shape.b2;
+        if(!portable_runtime_bounds(o,shape))return false;
+        if(shape.b2==admitted_b2){if(hit)*hit=all_cached;return true;}
+    }
+    return false;
 }
 uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan);
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
@@ -481,7 +504,7 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
 std::string portable_runtime_search(const Options &o,const Record &r,const pt::Shape &reference,
         pt::Estimator &engine,pt::WidthPredictor &predictor,std::vector<pt::RuntimeCandidate> &candidates,
         const std::string &pause_context,pt::RuntimePauseHints &outgoing,const pt::RuntimeAllocation &allocation) {
-    if(!o.tune_runtime || o.b2_round_chain || (o.has_d && o.d))return {};
+    if(!o.tune_runtime || (o.has_d && o.d))return {};
     std::vector<pt::DSearchNode> existing;bool partial=false;
     for(const auto &c:candidates)if(c.shape.carrier==reference.carrier && c.shape.groot_balanced==reference.groot_balanced && c.shape.chain_block==reference.chain_block && c.shape.same_point_backend(reference)) {
         existing.push_back({c.shape.d,ecm_stage2::d_catalog::degree(c.shape.d),{},1,
@@ -492,7 +515,7 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
     if((pt::DSearch(existing,reference.d,unsigned(o.tune_min_repeats)).explored()>=initial_budget.candidates && !partial) ||
        !initial_budget.remaining || (o.runtime_remaining && o.runtime_remaining<2*o.tune_min_repeats))return {};
     std::string pause_key;
-    const bool rejection_cache=o.runtime_prepare_cache && portable_route_scope(o,r);
+    const bool rejection_cache=o.runtime_prepare_cache && !o.b2_round_chain && portable_route_scope(o,r);
     const auto search_memory=rejection_cache?portable_memory_snapshot(o.device):pt::RuntimeMemorySnapshot{};
     if(rejection_cache && search_memory.valid() && !pause_context.empty()) {
         const auto context=pause_context+'\n'+portable_runtime_routes.hints.scope_key+'\n'+
@@ -521,7 +544,7 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
            !ecm_stage2::legacy_groot_layout((s.arithmetic_bits+63)/64,s.b2/s.d+2,ecm_stage2::d_catalog::degree(d)))continue;
         s.groot_balanced=reference.groot_balanced;s.chain_block=reference.chain_block;
         s.baby_coop=reference.baby_coop;s.giant_coop=reference.giant_coop;pt::WidthEstimate e;
-        if(!engine.cached_work(s,w) || w.p<512 || !w.exact_topology || !predictor.predict(s,e))continue;
+        if(!portable_runtime_bounds(o,s) || !engine.cached_work(s,w) || w.p<512 || !w.exact_topology || !predictor.predict(s,e))continue;
         // Reuse the admitted shape of existing candidates; predicted chunk and
         // residency are not a substitute for their exact runtime identity.
         for(const auto &c:candidates)if(c.shape.d==d && c.shape.carrier==reference.carrier && c.shape.groot_balanced==reference.groot_balanced && c.shape.chain_block==reference.chain_block && c.shape.same_point_backend(reference)){s=c.shape;break;}
@@ -555,7 +578,7 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
             ++memory_cache_hits;nodes[i].rejected=true;reason="cached_memory_admission";continue;
         }
         ++native_admissions;
-        if(!portable_runtime_admit(o,r,s,plan)) {
+        if(!portable_runtime_candidate_admit(o,r,s,plan)) {
             ++memory_rejected;nodes[i].rejected=true;reason="memory_admission";
             memory_rejection="{\"D\":"+std::to_string(s.d)+"}";
             if(!plan.empty())try {
@@ -633,7 +656,8 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         if(!center)continue;
         const auto candidate_start=std::chrono::steady_clock::now();
         if(!carrier || !ordinary_default)ordinary_default=center;
-        const auto original=portable_shape(o,r,o.b2,center,carrier);
+        auto original=portable_shape(o,r,o.b2,center,carrier);
+        if(!portable_runtime_bounds(o,original))continue;
         const bool legacy=ecm_stage2::legacy_groot_layout((original.arithmetic_bits+63)/64,original.b2/center+2,ecm_stage2::d_catalog::degree(center));
         const bool protected_layout=o.groot_layout>=0?original.groot_balanced:legacy;
         std::map<std::pair<uint64_t,bool>,unsigned> ds{{{center,protected_layout},carrier?0u:1u}};
@@ -646,7 +670,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             if(shape.baby_coop==ecm_stage2::point_backend_unknown || shape.giant_coop==ecm_stage2::point_backend_unknown ||
                (o.baby_backend!="auto" && shape.baby_coop!=original.baby_coop) || shape.giant_coop!=original.giant_coop)continue;
             if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
-               shape.carrier!=carrier || shape.b2!=o.b2 ||
+               shape.carrier!=carrier || !pt::runtime_bound_matches(shape,o.b2,o.b2_round_chain,portable_runtime_bound_limit(o)) ||
                (o.giant_chain!="auto" && shape.chain_block!=original.chain_block) || (o.has_d && o.d && shape.d!=o.d) ||
                (o.groot_layout>=0 && shape.groot_balanced!=bool(o.groot_layout)))continue;
             // Check only this target family, not every row of a wide profile.
@@ -668,19 +692,19 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             auto shape=portable_shape(o,r,o.b2,entry.first.first,carrier);shape.groot_balanced=entry.first.second;
             if(o.baby_backend=="auto")shape.baby_coop=preferred_baby;
             pt::Work w;std::string plan;
-            if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_runtime_admit(o,r,shape,plan))continue;
+            if(!portable_runtime_bounds(o,shape) || !engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_runtime_candidate_admit(o,r,shape,plan))continue;
             const auto stats=engine.runtime_statistics(shape);
             candidates.push_back({shape,stats,entry.second,shape.d==center || (o.has_d && o.d)});
             if(o.baby_backend=="auto" && ecm_stage2::cooperative_point_width(shape.arithmetic_bits)) {
                 auto other=shape;other.baby_coop=shape.baby_coop?0:32;portable_point_backends(other);
                 const auto previous=engine.runtime_statistics(other);
                 const bool reference_ready=shape.baby_coop || stats.count>=o.tune_min_repeats;
-                if(reference_ready && other.key()!=shape.key() && previous.count && portable_runtime_admit(o,r,other,plan))
+                if(reference_ready && other.key()!=shape.key() && previous.count && portable_runtime_candidate_admit(o,r,other,plan))
                     candidates.push_back({other,engine.runtime_statistics(other),2,true});
             }
             if(o.giant_chain=="auto") {
                 auto other=shape;other.chain_block=32;const auto previous=engine.runtime_statistics(other);
-                if(previous.count && portable_runtime_admit(o,r,other,plan))
+                if(previous.count && portable_runtime_candidate_admit(o,r,other,plan))
                     candidates.push_back({other,engine.runtime_statistics(other),2,true});
             }
             if(shape.d==center) {
@@ -691,10 +715,10 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         candidate_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-candidate_start).count();
     }
     bool backend_pending=false;
-    if(o.baby_backend=="auto" && o.tune_runtime && !o.b2_round_chain && (!o.runtime_remaining || o.runtime_remaining>=2*o.tune_min_repeats)) {
+    if(o.baby_backend=="auto" && o.tune_runtime && (!o.runtime_remaining || o.runtime_remaining>=2*o.tune_min_repeats)) {
         for(auto shape:pt::runtime_baby_trials(candidates,o.tune_min_repeats)) {
             std::string plan;
-            if(portable_runtime_admit(o,r,shape,plan) && shape.baby_coop==32)
+            if(portable_runtime_candidate_admit(o,r,shape,plan) && shape.baby_coop==32)
                 candidates.push_back({shape,engine.runtime_statistics(shape),1,true});
         }
         for(auto &c:candidates)if(c.shape.baby_coop==32 && c.statistics.count<o.tune_min_repeats) {
@@ -708,10 +732,10 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
            c.shape.chain_block==reference.chain_block && c.statistics.count>=o.tune_min_repeats &&
            c.statistics.seconds>0 && c.statistics.comparison_seconds()<engine.runtime_statistics(reference).comparison_seconds())
             reference=c.shape;
-    if(!backend_pending && o.giant_chain=="auto" && o.tune_runtime && !o.b2_round_chain && (!o.runtime_remaining || o.runtime_remaining>=2*o.tune_min_repeats))
+    if(!backend_pending && o.giant_chain=="auto" && o.tune_runtime && (!o.runtime_remaining || o.runtime_remaining>=2*o.tune_min_repeats))
         for(auto shape:pt::runtime_chain_trials(candidates,o.tune_min_repeats)) {
             std::string plan;
-            if(portable_runtime_admit(o,r,shape,plan))candidates.push_back({shape,engine.runtime_statistics(shape),2,true});
+            if(portable_runtime_candidate_admit(o,r,shape,plan))candidates.push_back({shape,engine.runtime_statistics(shape),2,true});
         }
     const auto allocation=pt::runtime_allocation(candidates,o.tune_min_repeats);
     if(allocation.ordinary_reduced) {
@@ -731,7 +755,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         if(!search.empty())searches.push_back(search);
     }
     search_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-search_start).count();
-    const auto choice=pt::runtime_choice(candidates,o.tune_runtime && !o.b2_round_chain,o.tune_min_repeats);if(!choice.available)return {};
+    const auto choice=pt::runtime_choice(candidates,o.tune_runtime,o.tune_min_repeats);if(!choice.available)return {};
     const auto &chosen=candidates[choice.index];const auto &shape=chosen.shape;
     o.d=shape.d;o.carrier_exponent=shape.carrier;o.groot_layout=int(shape.groot_balanced);o.selected_chain=unsigned(shape.chain_block);o.runtime_probe=choice.probe;
     o.selected_baby_coop=shape.baby_coop;o.selected_giant_coop=shape.giant_coop;
@@ -739,7 +763,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         "runtime_probe_carrier_first":chosen.priority==1?"runtime_probe_reference":"runtime_probe_candidate";
     std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"policy\":\"model\""
         <<",\"reason\":"<<json_string(reason)<<",\"default_D\":"<<ordinary_default
-        <<",\"B1\":"<<r.b1<<",\"B2\":"<<o.b2<<",\"D\":"<<shape.d
+        <<",\"B1\":"<<r.b1<<",\"B2\":"<<shape.b2<<",\"requested_B2\":"<<o.b2<<",\"b2_round_chain\":"<<(o.b2_round_chain?"true":"false")<<",\"D\":"<<shape.d
         <<",\"P\":"<<ecm_stage2::d_catalog::degree(shape.d)<<",\"target_bits\":"<<shape.target_bits
         <<",\"arithmetic_bits\":"<<shape.arithmetic_bits<<",\"carrier_exponent\":"<<shape.carrier
         <<",\"groot_balanced\":"<<int(shape.groot_balanced)<<",\"giant_chain_block\":"<<shape.chain_block
@@ -752,7 +776,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
     out<<",\"runtime_candidates\":[";
     for(size_t i=0;i<candidates.size();++i) {
         if(i)out<<',';const auto &c=candidates[i];
-        out<<"{\"D\":"<<c.shape.d<<",\"carrier_exponent\":"<<c.shape.carrier
+        out<<"{\"D\":"<<c.shape.d<<",\"B2\":"<<c.shape.b2<<",\"carrier_exponent\":"<<c.shape.carrier
             <<",\"groot_balanced\":"<<int(c.shape.groot_balanced)<<",\"giant_chain_block\":"<<c.shape.chain_block<<",\"priority\":"<<c.priority<<",\"samples\":"<<c.statistics.count;
         out<<",\"baby_coop\":"<<c.shape.baby_coop<<",\"giant_coop\":"<<c.shape.giant_coop;
         if(c.statistics.count)out<<",\"mean_seconds\":"<<c.statistics.seconds<<",\"stddev_seconds\":"<<c.statistics.stddev

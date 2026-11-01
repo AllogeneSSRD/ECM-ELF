@@ -46,6 +46,22 @@ NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续
 
 CUDA点算术使用`[stage2]`或`[workers.N.stage2]`中的`stage2_baby_backend="auto"`、`stage2_giant_backend="scalar"`默认配置。Baby可强制scalar／coop32，giant可强制coop16／coop32；CLI为`--baby-backend`／`--giant-backend`。协作仅支持实际算术8193…16384 bits，承载时按承载位宽判断。auto先保留标量，在有效队列上积累并比较少量曲线后选择，受`stage2_tune_min_repeats`控制；短队列或关闭运行时探索时不会为收集数据额外重复任务。配置范围见[TOML参考](../ECM_TOML_REFERENCE.md#stage2_baby_backend)，学习、回退和性能文件复用见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
 
+同一工作目录的多GPU可在每个worker的Stage2分区指定性能文件；使用现有`stage2_tune_profile`键：
+
+```toml
+[workers.1.stage2]
+stage2_device = 0
+stage2_tune_profile = "stage2_gpu0.toml"
+
+[workers.2.stage2]
+stage2_device = 1
+stage2_tune_profile = "stage2_gpu1.toml"
+```
+
+路径相对`ecm.toml`所在目录解析，不随启动cwd变化；绝对路径也可用。各worker只读取、锁定和更新其最终选定的文件。未提供worker覆盖时继承全局`[stage2]`值，CLI `--tune-profile`优先于TOML。示例GPU编号按实际设备调整；显式路径不自动添加worker后缀。
+
+`stage2_b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
+
 ## 直接读档
 
 基本参数为 `--save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；具体名字以当前 `--help` 为准。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 开启共享诊断层的附加分解，优先本地 PARI DLL，备选外部 GP，不自动使用 GMP。原始因子先发布，附加诊断未完成不改变成功状态；仅完整且全部已证素才标为分解完成。内部结果保留后端、概率素性及余因子，详见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。

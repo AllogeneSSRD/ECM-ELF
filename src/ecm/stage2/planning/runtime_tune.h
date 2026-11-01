@@ -1,5 +1,6 @@
 #pragma once
 #include "width_prediction.h"
+#include "runtime_bounds.h"
 #include "runtime_cache.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {

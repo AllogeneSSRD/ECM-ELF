@@ -286,9 +286,12 @@ def toml_template(schema, example):
                     "# [workers.1.stage1]", "# device = 0",
                     "# EN: Worker 1 uses GPU device 0 for Stage1.",
                     "# 中文：worker 1 的 Stage1 使用 GPU 设备 0。", "",
-                    "# [workers.1.stage2]", "# stage2_device = 1",
-                    "# EN: Worker 1 uses GPU device 1 for Stage2.",
-                    "# 中文：worker 1 的 Stage2 使用 GPU 设备 1。", ""])
+                    "# [workers.1.stage2]", "# stage2_device = 0", "# stage2_tune_profile = \"stage2_gpu0.toml\"",
+                    "# EN: Worker 1 uses GPU 0 and its own tune file beside ecm.toml.",
+                    "# 中文：worker 1 使用 GPU 0，独立性能文件位于 ecm.toml 旁。", "",
+                    "# [workers.2.stage2]", "# stage2_device = 1", "# stage2_tune_profile = \"stage2_gpu1.toml\"",
+                    "# EN: Worker 2 uses GPU 1 and a separate tune file.",
+                    "# 中文：worker 2 使用 GPU 1，分别读取和更新自己的性能文件。", ""])
     return "\n".join(out).rstrip() + "\n\n"
 
 

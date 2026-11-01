@@ -730,7 +730,7 @@ TPI32每warp仅处理一个标量，使该标量的位分支在warp内一致；�
 
 本节验收EXE为0.57.6，SHA256 `35691aa62a8c5ca9e67c3d4367d17ca8ec09ad477fba31c76695d07c7f1c577f`，17048064 B；255项构建输入和46个目标文件核验通过，4个CUDA目标文件与冻结0.57.5逐字节相同。这轮改变配置、选型及计时身份，没有更换设备算术。GMP DLL SHA256 `969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。
 
-代码依据：[host_policy.cpp](../../src/ecm/stage2/cuda/host_policy.cpp)21行配置优先级；[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)30／59行区域配对及单后端候选；[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)620／1094行运行时选择与显式校准；[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp)109行点启动检查计时；[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)8行Shape与后端身份。
+代码依据：[host_policy.cpp](../../src/ecm/stage2/cuda/host_policy.cpp)21行配置优先级；[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)31／60行区域配对及单后端候选；[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)643／1118行运行时选择与显式校准；[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp)109行点启动检查计时；[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)8行Shape与后端身份。
 
 证据根为`data/experiments/stage2_baby_policy_20261101/`：`boundary_w160/w192/w224/w256`为探针，`final_gpu_configuration/unpaired/formal/giant/fallback`为原生回归，`small_final/wide_final`为独立计时，`final_curve_conditions.json`为频率审计，`binary_audit/summary.json`绑定最终构建；失败和编译重叠的探索输出同根保留，不用于正式性能结论。汇总分别为`data/benchmarks/stage2_baby_policy_20261101/boundary_final/`和`curves_report/`，图在对应figures目录。复现工具见[测量协议](../../tools/bench/README_STAGE2_VERSION.md#协作baby-ladder验证)。
 

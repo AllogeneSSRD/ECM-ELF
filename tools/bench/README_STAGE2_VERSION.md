@@ -111,6 +111,12 @@ TPI32及分档对照使用`--coop-tpi 32 --coop-middle`，每格测旧版默认�
 
 `tools/test/test_stage2_calibration_rounding_gpu.py --stage2 <EXE> --save <B1=20的NF成本探测点> --output <新目录> --allow-gpu-pid <已授权界面PID>`用空性能文件验证五种配置。`--expect-bug`记录修复前短校准被凑整的失败及两个通过对照；默认要求短校准保持D210／B2=42020／202点，正常规划仍保留生产凑整，显式ECM tune仍拒绝凑整但接受CLI关闭。`--run-curve`将short_on继续执行为一条真实Stage2，核对NF、实际B2及GMP零错误。该工具不消费生产队列，不修改源保存点；原始输入与程序、逐调用进程门禁及遥测均独立冻结。此为功能回归，不计入性能矩阵。
 
+### B2凑整与有限运行时搜索
+
+`tools/test/test_stage2_rounded_runtime_gpu.py --stage2 <EXE> --save <NF保存点> --case wide|workers|default --output <新目录> --allow-gpu-pid <已授权界面PID>`验证实际曲线及性能文件。wide用8440-bit等协作范围输入，固定D6006／请求B2=26000000，8条曲线完成baby与32链比较，另跑一条关闭学习的只读复用。workers用M127输入，两worker在不同cwd各执行10条自动D曲线，性能路径来自同一ecm.toml下的两个worker覆盖，检查全局文件不被创建、第二个worker不改第一个文件，以及不同D按各自实际B2采样。两worker顺序使用同一空闲测试GPU，不作为双GPU性能证据。
+
+default另需`--baseline <冻结旧EXE>`，关闭凑整和采样，比较完整曲线的GMP、NTT分布、归约量与G根摘要；这是工作量／算术控制，不代表全矩阵性能验收。`test_stage2_runtime_tune.py --fixture bounds`覆盖边界、幂等、AutoB2上限及默认身份；生成的fixture可用`--profile <冻结生产tune> <请求B2>`在原记录条件下核对实际覆盖平台和已有观察数，不调用GPU。
+
 ### 布局与旧tune的有界验证
 
 `bench_stage2_layout_matrix.py`复用已完成的默认矩阵及旧性能文件，当前验证范围限定为较小的名义B2=26000000000档：13份精确余因子、普通/承载默认26格，各n=1筛查，明显回退单项补测。默认矩阵若按用户要求中途缩减范围，须保留明确的`authorized_scope_stop.json`及边界计划；新研究只提取已完整验收的小B2格，不改写原始记录。

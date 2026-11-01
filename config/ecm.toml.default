@@ -434,12 +434,15 @@ stage2_b2 = 0
 # 中文：。
 
 stage2_b2_round_chain = false
-# EN: After choosing D and arithmetic, increase B2 to the smallest whole-P giant count whose last point
-# EN: chunk can use a chain. Logs/results keep requested and actual B2. Default 0 preserves bounds;
-# EN: overflow is rejected. AutoB2 maximum remains a hard cap. Explicit ECM calibration does not support
-# EN: rounding. CLI --b2-round-chain overrides this worker TOML.
-# 中文：选定D和算术后，将B2向上补到最小整P点数且尾点块可走chain。日志与结果分别保留请求和实际B2。默认0保持界
-# 中文：限，溢出报错；AutoB2上限仍为硬限制，显式ECM标定不支持凑整。CLI --b2-round-chain覆盖当前worker配置。
+# EN: For each runtime candidate D and arithmetic, increase B2 to the smallest whole-P giant count whose
+# EN: last point chunk can use a chain. Runtime tuning includes that candidate's actual work; measurements
+# EN: remain keyed by actual B2. Logs/results keep requested and actual B2. Default 0 preserves bounds.
+# EN: Overflow, live memory and the AutoB2 maximum remain hard limits. Startup cost probes keep fixed
+# EN: bounds; explicit ECM calibration still requires rounding off. CLI --b2-round-chain overrides this
+# EN: worker TOML.
+# 中文：对各运行时D及算术候选，将B2向上补到最小整P点数且尾块可走chain；自动调优按各候选实际工作量比较，实测
+# 中文：仍按实际B2分开存储。日志与结果分别保留请求和实际B2。默认0保持界限；整数、实时显存及AutoB2上限仍为硬
+# 中文：限制。启动成本探测固定边界，显式ECM标定仍须关闭凑整。CLI --b2-round-chain覆盖当前worker配置。
 
 # stage2_baby_backend = "auto"
 # EN: Baby point arithmetic: auto retains the scalar baseline until checked runtime comparisons qualify
@@ -777,14 +780,14 @@ stage2_tune_min_repeats = 2
 # 中文：观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。
 
 stage2_tune_profile = ""
-# EN: Format-7 final ECM matrix TOML. Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne
-# EN: data are independent, and native full-Mersenne data can calibrate carriers. target_bits and
-# EN: carrier_exponent retain the measurement identity. stage2_prediction_policy controls estimated
-# EN: replacement. Missing data permits the basic model; B1 never gates reuse. Empty selects adjacent
-# EN: stage2_ecm_tune.toml unless a legacy cost profile is supplied.
-# 中文：格式7最终ECM矩阵TOML。按arithmetic_bits分别查询通用、梅森算术数据，原生完整梅森数数据也可校准承载；
-# 中文：target_bits和carrier_exponent保留测量身份。估算替换遵循stage2_prediction_policy，缺数据可使用基础模
-# 中文：型；B1不作为复用门槛。留空且未指定旧成本配置时使用相邻stage2_ecm_tune.toml。
+# EN: ECM tune matrix TOML. Set a different path in each [workers.N.stage2] to keep GPU timing files
+# EN: independent; relative paths resolve beside ecm.toml. CLI --tune-profile takes priority.
+# EN: Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne data remain independent. B1
+# EN: never gates reuse. Missing data permits the basic model. Empty selects stage2_ecm_tune.toml beside
+# EN: ecm.toml unless a legacy cost profile is supplied.
+# 中文：ECM调优矩阵TOML。可在各[workers.N.stage2]填写不同路径，让多GPU分别读取并更新自己的性能文件；相对路径
+# 中文：以ecm.toml所在目录为基准，CLI --tune-profile优先。按arithmetic_bits分别查询通用、梅森算术；B1不作为
+# 中文：复用门槛，缺数据可使用基础模型。留空且未指定旧成本配置时使用ecm.toml旁的stage2_ecm_tune.toml。
 
 stage2_tune_runtime = true
 # EN: Accumulate checked no-factor production timings by device, environment and execution shape.
