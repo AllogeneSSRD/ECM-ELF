@@ -21,9 +21,9 @@
 
 `src/ecm/stage2/cuda/device/arithmetic_kernels.cu` 维护点与系数算术的显式实例清单。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放；不使用 RDC。
 
-可选协作giant链由`point_coop_kernels.cu`独立实例化，host启动接口仍在`cuda/launch.h`。`point_coop_chain.cuh`复用`point_coop_field.cuh`的CGBN适配与规范余数合同；`point_coop_plan.h`集中定义有限容量分档，执行日志与必需自检使用同一分档。公共CGBN入口为`include/ecm/cuda/cgbn.h`，第三方实现保持在`third_party/cgbn/`。
+可选协作giant链由`point_coop_kernels.cu`独立实例化，host启动接口仍在`cuda/launch.h`。可选baby ladder由`point_coop_ladder_kernels.cu`实例化，经`point_coop_ladder_launch.h`接入。两者共享`point_coop_field.cuh`的CGBN适配、原Montgomery radix与规范余数合同；`point_coop_plan.h`集中定义有限容量分档，执行日志与必需自检使用同一分档。公共CGBN入口为`include/ecm/cuda/cgbn.h`，第三方实现保持在`third_party/cgbn/`。
 
-位宽清单仍由 `src/ecm/cuda/dispatch/tiers.def` 统一维护。Stage2 容量为 4/8/16/32/64/128/256 个 64-bit 字，按实际 W 选择最小可容纳档；循环、Montgomery radix 和梅森尾位使用实际 W/S。local/dev/release默认使用算术与NTT两个聚合编译单元；支持的工具链通过nvcc内部并行优化。生产引擎可显式选择 `KernelLayout=isolated`，由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。两种布局通过编译参数和构建profile隔离。
+位宽清单仍由 `src/ecm/cuda/dispatch/tiers.def` 统一维护。标量Stage2容量为4/8/16/32/64/128/256个64-bit字，按实际W选择最小可容纳档；循环、Montgomery radix和梅森尾位使用实际W/S。local/dev/release默认聚合标量算术与NTT，协作点核使用独立翻译单元；支持的工具链通过nvcc内部并行优化。生产引擎可显式选择 `KernelLayout=isolated`，由 `tools/build/internal/generate_cuda_modules.py` 从原显式实例、设备定义和薄启动器派生176个独立模块，不改写算术表达式或另建容量表。两种布局通过编译参数和构建profile隔离。
 
 聚合模式沿用各聚合单元的设备常量，不启用隔离宏及主机快照路径，不保证逐容量隔离JIT。隔离备选的每个算术模块持有自己的设备常量；`constants.cpp` 保存按设备区分的主机快照及修订号，更新快照不访问全部设备模块，被调用的薄启动器在修订号/设备变化时才向所属模块上传。NTT的 `module_dispatch.cpp` 只返回选定tile句柄；固定mode3无需广播归约模式。实际按需JIT资格须观察驱动加载模块，构建策略与旧驱动限制见[构建与发布](../usage/BUILD.md#完整发布与按需加载)。
 
@@ -79,7 +79,11 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 
 默认标量seed和chain宽位核在W>128时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用`stage2_giant_chain=32|64|auto`选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。标量chain核位于`src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
 
-实验环境变量`NTT_GIANT_COOP=0|16|32`默认0；非零仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Baby、seed和非单位ladder恢复仍走原路线。该变量进入ECM tune环境快照，不参与现有TPI自动搜索；资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
+实验环境变量`NTT_GIANT_COOP=0|16|32`默认0；非零仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Seed、giant短尾及非单位ladder恢复仍走原路线。资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
+
+`NTT_BABY_COOP=0|32`独立控制`device_baby_generate`的ladder，默认0。32仅对128<W≤256生效，每点32线程、每块64线程，复用上述四档容量；以现有`g_ladder_cap`分段，在同一输出数组生成相同二进制ladder坐标。模数识别使用点上下文的实际算术模数，承载时不能误用较小的GCD目标N；后续归一化与非单位恢复不变。设备baby路径因预算回退时不启用协作ladder。没有新增坐标缓冲、补齐数组或H2D／D2H。
+
+两项环境变量随队列子进程继承并进入ECM tune环境快照，不参与现有TPI自动搜索。旧cost-profile要求两者均为0；启用任意合格协作路径时，必需自检对每种实际TPI各执行一次64乘＋64平方，复用原有四个设备数组。若giant16／baby32同时启用，则分别检查16和32；同为32时只检查一次。每份协作自检新增两次64W词读回，共1024W bytes；输入复用已有设备数据，不增加该自检的输入上传或分配。这不是baby主路径坐标传输。
 
 生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/ecm/stage2/geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
 

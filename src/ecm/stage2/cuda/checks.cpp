@@ -727,6 +727,9 @@ int mont_selftest(
     const bool coop_enabled=coop_tpi && nw>128 && nw<=256;
     stage2_log::print(stage2_log::debug,"giant_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=%d\n",
         coop_tpi,(int)coop_enabled,(unsigned long long)nw,64*s2g_coop_capacity_words((int)nw,coop_tpi));
+    const bool baby_enabled=baby_coop_tpi() && nw>128 && nw<=256;
+    stage2_log::print(stage2_log::debug,"baby_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=%d\n",
+        baby_coop_tpi(),(int)baby_enabled,(unsigned long long)nw,64*s2g_coop_capacity_words((int)nw,32));
     const int cases = 2048;
     std::vector<unsigned long long> ha((size_t)cases * nw, 0ull), hb((size_t)cases * nw, 0ull);
     uint64_t s = 0x2468ace13579bdfull;
@@ -774,11 +777,13 @@ int mont_selftest(
         if (mpz_cmp(acc, want) != 0) { if (!bad) first = (unsigned long long)i; ++bad; }
     }
     unsigned long long coop_bad=0;
-    if(coop_enabled) {
+    for(int tested_tpi:{16,32}) {
+        if(!(coop_enabled && coop_tpi==tested_tpi) && !(baby_enabled && tested_tpi==32))continue;
+        unsigned long long local_bad=0;
         constexpr int cooperative_cases=64;
         for(int square=0;square<2;++square) {
-            const unsigned int grid=(cooperative_cases*coop_tpi+127)/128;
-            ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch{grid,128},coop_tpi,da,db,dn,ninv,(int)nw,
+            const unsigned int grid=(cooperative_cases*tested_tpi+127)/128;
+            ecm_launch_s2g_coop_mont_test_kernel(EcmCudaLaunch{grid,128},tested_tpi,da,db,dn,ninv,(int)nw,
                 cooperative_cases,enabled_bits,square!=0,dout);
             CK(cudaGetLastError());
             CK(cudaMemcpy(ho.data(),dout,(size_t)cooperative_cases*nw*8,cudaMemcpyDeviceToHost));
@@ -787,10 +792,11 @@ int mont_selftest(
                 words_to_mpz(bm,(square?ha:hb).data()+(size_t)i*nw,nw);
                 mpz_mul(acc,am,bm);mpz_mul(acc,acc,rinv);mpz_mod(acc,acc,N);
                 words_to_mpz(want,ho.data()+(size_t)i*nw,nw);
-                if(mpz_cmp(acc,want))++coop_bad;
+                if(mpz_cmp(acc,want))++local_bad;
             }
         }
-        stage2_log::print(stage2_log::debug,"coop_selftest: tpi=%d multiplications=64 squares=64 mismatches=%llu\n",coop_tpi,coop_bad);
+        coop_bad+=local_bad;
+        stage2_log::print(stage2_log::debug,"coop_selftest: tpi=%d multiplications=64 squares=64 mismatches=%llu\n",tested_tpi,local_bad);
     }
     // Reuse the existing device buffers; retain all 2048 multiplication cases.
     // Extra square cases exercise the production wrapper with equal inputs and

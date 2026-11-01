@@ -467,7 +467,7 @@ CUDA生产点原语提供`NTT_POINT_SQUARE=0|1`同二进制开关，0.57.2默认
 
 ### 11.1 分派、表示与边界
 
-ECM-ELF0.57.4提供`NTT_GIANT_COOP=0|16|32`环境变量，默认0。非零模式仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。Baby、seed-pair、归一化、NTT及GCD均不切换。当前没有同名TOML键，也没有根据tune自动选择TPI。
+`NTT_GIANT_COOP=0|16|32`默认0。非零模式仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。该开关不切换baby、seed-pair、归一化、NTT及GCD；baby的独立开关见第12节。当前没有同名TOML键，也没有根据tune自动选择TPI。
 
 16保留固定16384-bit容量，每个64线程块处理4条链；32按实际W选择不小于它的160／192／224／256词容量，每块处理2条链。块数为\(\lceil uK_a/64\rceil\)。前述2048链示例由64个标量块变为TPI16的512块／32768线程，或TPI32的1024块／65536线程。这是提交规模，实际同时驻留的实例仍受寄存器、栈和SM数量限制；TPI16允许一个warp同时执行两个整数，不是整卡只使用16线程。
 
@@ -599,9 +599,92 @@ local读取sector减少35.33%、写入减少98.16%。这些是缓存事务计数
 
 证据根`data/experiments/stage2_point_register_20261101/`，包括`correct*`、`deep*`、各`wide/extra/tight*`、`native_switch`、`initial_memory`、`curve_diagnostics`、`curves_fixed/recheck`、`small_recheck_*`、`ncu_*`、`resources.txt`。汇总与PNG/SVG为`data/benchmarks/stage2_point_register_20261101/chain_qualified/`、`curves_qualified/`及同名figures目录。复现入口见[测量工具](../../tools/bench/README_STAGE2_VERSION.md#协作点算术与giant链验证)。当前分档入口为`cuda/point_coop_plan.h::s2g_coop_capacity_words`，实际启动由`device/point_coop_kernels.cu`统一分派，点与自检使用相同计划。
 
+## 12. 可选协作baby ladder
+
+### 12.1 执行范围与计算量
+
+`NTT_BABY_COOP=0|32`默认0，与giant开关独立。32仅替换`device_baby_generate`内实际128<W≤256的二进制ladder；每点32线程、每块64线程，按W取160／192／224／256词CGBN容器。保持实际Montgomery radix、规范残数、相同标量、xADD／xDBL公式与最终坐标。承载模数从点上下文读取，不能用较小余因子识别梅森快速归约。设备baby因预算回退、较小位宽、giant短尾及seed-pair均保留原路线。
+
+设K为现有ladder分段上限，通常8192，n_j为第j段点数。提交次数仍为⌈P/K⌉，块数由∑⌈n_j/64⌉变为∑⌈32n_j/64⌉。P20160时仍是8192／8192／3776三个提交，315块变为10080块；这不是32倍吞吐量保证。每个标量k>0仍执行一次初始xDBL，以及⌊log₂k⌋次xADD＋xDBL；k=0保留无穷点。点数、模乘／平方逻辑次数和后续NTT工作不变；协作内部平方按完整乘积实现，没有利用标量专用平方的上三角优化。容器padding也会影响实际limb工作量，总工作复杂度仍为O(P log D·W_c²)，没有实现Karatsuba或点整数NTT。
+
+全局坐标仍按实际W存储，复用现有分段和X/Z数组，不新增补齐缓冲或坐标传输。协作自检对每种实际TPI各做64乘＋64平方，同为32只做一次，giant16／baby32则分别检查；继续复用原四个设备数组。每新增一份协作自检会多读回1024W bytes，非baby坐标传输；本节完整A/B固定giant32，baby开启不增加自检份数。自检在engine计时前执行，完整curve_done.wall包含它。
+
+### 12.2 为什么先选择baby
+
+管理员Nsight Systems2026.1.3对0.57.4／giant32的最高位承载任务作一条完整轨迹：目标16272 bits、p16319、W255、B1=50000、B2=27015978990、D210210／P20160、布局1／chain32，设备与预算同11.2节。三个baby ladder的GPU事件合计8.549s，两个paired seed合计3.663s，另有构建[D]Q的单点ladder1.039s。后者grid=1，与`S3Workspace::need_giant_base`及base一次构建对应；80640／47881点的两个giant块均走chain，日志明确ladder_chunks=0。不能把所有ladder都归入baby，也不能将G树最后一个多项式的不足P叶数误当成点块ladder回退。baby仍是最值得先优化的单项点核。
+
+该进程kernel／copy／memset首尾窗口31.064s，事件并集28.350s，无自有事件区间2.714s／8.735%。它不是整张显卡的空闲比例，也不是curve墙钟；CUDA等待API与GPU执行重叠，不再与kernel秒数相加。剖析开销不纳入正常性能成绩。轨迹程序输出、G根摘要、NTT分布及GMP状态均与冻结参考核对。
+
+### 12.3 正确性与资源边界
+
+四档生产头探针共132次合法调用、1923408个64-bit输出词全部GMP一致，6次主机读回数据损坏均被拒绝。三类模数为近radix普通奇数、精确梅森及随机奇数；覆盖8193…16384-bit各档边界、0／1／跨32-bit与64-bit标量、内部Montgomery与普通输出。GMP使用独立齐次公式验证最终X/Z，不把最终一致称为逐次中间值都已回读。低批量正确性时间不作为吞吐量数据。
+
+独立M127 save的默认0、显式0／32、四种非法值和两种真实队列共9例通过，小位宽保持标量回退；50组原生初始化、4556项内存检查及容量变异门禁通过。0.57.5的标量算术与NTT目标文件SHA与0.57.4一致。
+
+四档协作ladder的每线程静态寄存器数／栈字节分别为168／552、187／648、255／752、254／840；原NW256标量ladder为72／32784。协作每点用32线程，不能把每线程栈减少直接换算为每点或进程显存同比减少，也不据静态数值推断实测occupancy。
+
+代码依据：[points.cpp](../../src/ecm/stage2/cuda/points.cpp)668行baby分派；[point_coop_ladder.cuh](../../src/ecm/stage2/cuda/device/point_coop_ladder.cuh)7行`stage2_coop_ladder_pair`、26行核；[point_coop_field.cuh](../../src/ecm/stage2/cuda/device/point_coop_field.cuh)111行`Stage2PaddedCoopField::xdbl`；[checks.cpp](../../src/ecm/stage2/cuda/checks.cpp)730／780行资格与按TPI自检；[options.cpp](../../src/ecm/stage2/cuda/options.cpp)34／248／349行默认、读取与校验。复现入口见[测量协议](../../tools/bench/README_STAGE2_VERSION.md#协作baby-ladder验证)。
+
+### 12.4 固定D完整Stage2对照
+
+设备、编译器及预算同11.2节，SM目标1500MHz；46次正常调用中利用率≥50%的3060条遥测均为1500MHz。范围为目标318／1939／10232／12285／16272 bits、普通／承载10格，B1=50000、实际B2=27015978990，复用相同Stage1点及逐格D／P／布局／chain。先各跑旧版／新off／新on，最高位off／on逆序追加至n=2；318-bit三组正反顺序补至n=3，其余n=1。没有丢弃首轮或热身，不是13位宽完整矩阵或统计置信区间。
+
+**三组均固定GIANT32，仅切换BABY0／32。**off是baby关闭的性能控制，不能称为程序字面默认。旧0.57.4 EXE SHA256为`ddf42ee8a94fea56927990d17ef46c61fe55f7fcbb437b185371429634fe8b3b`；计时0.57.5候选为`9ac67ef4d56c3a2b7260a8bb4b816b985260b85c6649436ee87c1abd78966f10`。当前本机0.57.5构建为`fa770330cb2cf61aa4e338f5fa263ef91f8fc5ba6c3f625b47396532447fe760`，两协作CU的完整设备ELF与计时候选逐字节相同，其他44个目标文件未变，254个源码哈希已核对；证据为`binary_audit/summary.json`。以下为各格中位数之和；引擎含S4形状检查、baby／F树及main，排除启动点算术自检；完整curve_done.wall另外包含启动检查、读档、规划、子进程及发布，不含采集器轮询。
+
+| 10格合计，s | 0.57.4 baby标量 | 0.57.5 baby off | 0.57.5 baby32 |
+|---|---:|---:|---:|
+| 引擎普通 | 117.462 | 117.397 | 92.259 |
+| 引擎承载 | 66.859 | 66.661 | 54.320 |
+| 引擎总计 | 184.322 | 184.057 | 146.579 |
+| 完整曲线墙钟总计 | 191.427 | 190.832 | 153.457 |
+
+新off引擎合计较旧控制减少0.14%；baby32较同二进制off减少20.36%，完整曲线墙钟减少19.59%。没有同时超过5%与20ms的引擎回退格。低位均未进入协作核，微小差异不作为算术收益。318-bit承载首轮off为0.620s、旧控制0.527s；保留全部补测后中位数为0.536／0.532s，不以首轮波动下结论。
+
+| 目标bits／路径 | baby off引擎，s | baby32引擎，s | 减少 |
+|---|---:|---:|---:|
+| 10232／普通 | 21.614 | 16.533 | 23.51% |
+| 10232／承载 | 13.458 | 11.289 | 16.12% |
+| 12285／普通 | 33.982 | 26.483 | 22.07% |
+| 12285／承载 | 19.842 | 16.230 | 18.20% |
+| 16272／普通 | 59.343 | 46.776 | 21.18% |
+| 16272／承载 | 31.025 | 24.441 | 21.22% |
+
+最高位逆序单独仍为普通59.427→46.731s、承载31.001→24.533s。最高位baby ladder主机范围的中位数普通15.920→3.420s、承载8.586→1.867s，约少78%；它包括该路径分配／上传等准备，不能直接称为纯kernel事件。giant范围约9.744→9.802s、5.420→5.462s，基本未变，符合仅替换baby的范围。
+
+![协作baby的引擎对照](attachments/stage2-baby-coop-curves.png)
+
+![协作baby的完整曲线墙钟](attachments/stage2-baby-coop-curves-curve-wall.png)
+
+全部正常曲线NF、bad_factors=0，NTT长度分布、S4归约系数数及完整G根摘要一致，GMP检查通过；独立30条完整叶诊断的目标叶指纹也一致，其中12条使用当前本机构建。当前构建另通过9项原生开关／队列检查。baby单独启用、giant16／baby32双自检、baby预算回退均通过；生产版禁止关闭`NTT_POINT_MERSENNE`的组合被明确拒绝。此项拒绝不是算术失败，普通模数完整Stage2与独立普通字段验证均正常。
+
+NVML整卡0.2s采样峰三组都约5556.45 MiB，包含已授权界面／上下文，不能推导精确进程峰，也不能将每线程栈变小解释为进程显存同比减少。EXE约16.2MiB，有限模板增加代码体积，没有扩大baby全局坐标payload。
+
+默认仍为0：其他GPU、大B2、不同分块、更多D及队列资格尚不足，也尚未针对新点成本重校D模型。正常计时和复测证据为`data/experiments/stage2_baby_coop_20261101/curves_fixed`、`curves_recheck`、`small_recheck_a/b`；完整诊断、原语、独立路径、构建和轨迹均保留同一研究根。正式汇总／图在`data/benchmarks/stage2_baby_coop_20261101/curves_qualified/`及同名figures目录。
+
+### 12.5 独立吞吐量与剩余成本
+
+生产头ladder探针使用8192点、合成17-bit标量、随机规范坐标／a24，内部Montgomery输出。近radix普通模数为2ˢ−189，梅森为2ˢ−1；这不是具体save重放。每组合两个相反顺序进程，每进程保留全部5次CUDA事件，再对进程中位数取中位数，共16次正常性能调用；分配、上传、读回、SHA及GMP均在事件外。利用率≥50%的1061条遥测均1500MHz。
+
+| 算术s／模数 | 标量，ms | TPI32，ms | 标量／TPI32 |
+|---|---:|---:|---:|
+| 12285／普通 | 4370.387 | 720.095 | 6.07 |
+| 12285／梅森 | 2217.305 | 473.851 | 4.68 |
+| 16319／普通 | 7791.498 | 1501.977 | 5.19 |
+| 16319／梅森 | 4184.709 | 814.670 | 5.14 |
+
+每次大批量GMP核对17个固定分布点，全部坐标SHA跨后端相同；不能称为每次8192点都被GMP复算。全量资格由12.3节独立提供。首个全量CPU复算版本与预算停止记录保留，不混入合格成绩。性能探针EXE／GMP身份、全部事件与验证词数见`ladders_qualified/summary.json`及`perf_sampled_w192/w256`。
+
+![协作ladder的独立事件比例](attachments/stage2-baby-ladder-ratios.png)
+
+TPI32每warp仅处理一个标量，使该标量的位分支在warp内一致；标量路线每warp包含多个k，可能出现位分支发散。固定小段、完整乘积并行、局部访存、分支与有效并行度都可能影响结果。尚未用NCU分别量化这些原因，不将倍率只归因于栈缩小或occupancy提高；合成输入倍率也不能代替完整Stage2的20.36%。
+
+同一最高位承载任务的新管理员轨迹中，baby三个事件合计1.858s，paired seed仍3.667s，构建[D]Q仍1.039s。点块仍全部走chain，无giant点块ladder回退。自有GPU事件窗口31.064→24.275s，事件并集28.350→21.675s，无自有事件绝对时间2.714→2.600s；其比例反而8.735%→10.710%，原因是总窗口缩短，不能据此认为CPU准备变慢或整卡更空闲。两条轨迹均校验输出与工作量，证据为`nsys_baseline`、`nsys_candidate`及`systems_comparison_v2.json`；剖析时间不进入正常性能表。
+
+最高位baby32的主机范围中位数：普通G树12.070s、giant9.802s、fold6.128s、下降5.665s；承载分别4.646／5.462／2.976／3.065s。它们是含NTT、归约、准备及等待的阶段，不能当作纯NTT或CPU独占时间。接下来优先将协作ladder用于paired seed，单独比较[D]Q的CPU／协作计算，再验证完整曲线；NTT／S4仍须独立剖析。当前没有启用这些后续优化。
+
 ## TODO
 
-- Baby／seed尚未协作；优先隔离其依赖与吞吐量，再验证协作生成的完整收益。补其他GPU、大B2／更多D／链数资格；资格不足前默认关闭，点成本改变后的D模型须独立校准。
+- Seed-pair、[D]Q及giant恢复ladder尚未协作；优先核对前两者的输入尺度、邻点输出、单位性及延迟，再验证完整曲线。Baby／giant协作补其他GPU、大B2／更多D／链数资格，资格不足前默认关闭，点成本改变后的D模型须独立校准。
 - 继续比较表示修正融合及普通／梅森编译分工。已完成[延后表示因子的代数核查](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#10-齐次点公式中的表示因子可延后合并)，尚无对应GPU实现或性能数据；保留完整乘积、规范残数与原radix。
 - 定位低位外层启动差异；在更长队列中核对配置、检查、进程／I/O分项，不将同一标量kernel的外层差异误判为CGBN算术收益或回退。
 - 专用平方已通过小档完整矩阵及单步／依赖递推检查；补充其他GPU与大B2资格。浅层Karatsuba／融合短NTT尚未实现，仍须独立GMP及固定D验证；失败与回退样本全部保留。

@@ -90,11 +90,16 @@ def main():
     if middle:
         result['on_vs_middle']=totals['on']/totals['middle']
         for c in cells:c['on_vs_middle']=c['variants']['on']['median_seconds']/c['variants']['middle']['median_seconds']
+    if experiment=='baby-coop':
+        result['control_regressions']=result.pop('default_regressions')
+        result['control_route']='NTT_GIANT_COOP=32, NTT_BABY_COOP=0 (not literal program default)'
     a.output.mkdir(parents=True,exist_ok=False);a.figures.mkdir(parents=True,exist_ok=False)
     (a.output/'summary.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
-    stem=a.stem or ('stage2-square-curves' if experiment=='square' else 'stage2-giant-coop-curves')
+    stem=a.stem or {'square':'stage2-square-curves','giant-coop':'stage2-giant-coop-curves','baby-coop':'stage2-baby-coop-curves'}[experiment]
     labels={'stock':'stock reference','off':'candidate scalar default','middle':'candidate fixed-16k TPI16',
             'on':f'candidate cooperative TPI{coop_tpi}'} if experiment=='giant-coop' else {'stock':'0.56.4 stock','off':'0.57.1 square off','on':'0.57.1 square on'}
+    if experiment=='baby-coop':
+        labels={'stock':'0.57.4 baby scalar','off':'0.57.5 baby scalar','on':'0.57.5 baby TPI32'}
     colors={'stock':'#777777','off':'#df8a32','middle':'#729845','on':'#247fae'}
     for metric,suffix,title in [('median_seconds','','Engine init + main'),
                                  ('median_curve_wall_seconds','-curve-wall','Complete curve wall')]:
@@ -112,7 +117,8 @@ def main():
             axes[1,column].set_xlabel('Target modulus bits');axes[1,column].legend(fontsize=9)
             for row in range(2):
                 ax=axes[row,column];ax.grid(alpha=.25);ax.xaxis.set_major_locator(MultipleLocator(2000));ax.tick_params(axis='x',rotation=45)
-        fig.suptitle('RTX 4060 Laptop | 1500 MHz target | fixed D/layout/chain | small B2\n'
+        fig.suptitle('RTX 4060 Laptop | 1500 MHz target | fixed D/layout/chain | small B2'+
+                     (' | giant TPI32 fixed' if experiment=='baby-coop' else '')+'\n'+
                      'Independent processes; per-cell medians; n in summary (screening n=1, retests retained)',fontsize=12)
         fig.tight_layout(rect=(0,0,1,.92));png=a.figures/(stem+suffix+'.png');fig.savefig(png,dpi=160)
         fig.savefig(a.figures/(stem+suffix+'.svg'));plt.close(fig)

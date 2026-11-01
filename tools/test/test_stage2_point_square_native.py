@@ -30,7 +30,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--allow-gpu-pid', type=int, action='append', default=[])
-    p.add_argument('--check', choices=('square', 'giant-coop'), default='square')
+    p.add_argument('--check', choices=('square', 'giant-coop', 'baby-coop'), default='square')
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -68,6 +68,12 @@ def main():
                  ('on32', '32', 32, False), ('invalid_one', '1', None, False), ('invalid_tpi', '64', None, False),
                  ('invalid_negative', '-1', None, False), ('invalid_float', '16.0', None, False),
                  ('queue_default', None, 0, True), ('queue_on', '16', 16, True), ('queue_on32', '32', 32, True)]
+    if a.check == 'baby-coop':
+        key='NTT_BABY_COOP'
+        cases=[('default',None,0,False),('off','0',0,False),('on','32',32,False),
+               ('invalid_one','1',None,False),('invalid_tpi','16',None,False),
+               ('invalid_negative','-1',None,False),('invalid_float','32.0',None,False),
+               ('queue_default',None,0,True),('queue_on','32',32,True)]
     try:
         for name, value, expected, queued in cases:
             directory = out / name
@@ -106,8 +112,8 @@ def main():
                 assert modes and set(modes) == {str(expected_square)}, modes
                 squares = re.findall(r'square_selftest: cases=(\d+) mismatches=(\d+)', trace)
                 assert (bool(squares) == bool(expected_square)) and all(x == ('128', '0') for x in squares), squares
-                if a.check == 'giant-coop':
-                    coop = re.findall(r'giant_coop_mode: requested=(\d+) eligible=(\d+)', trace)
+                if a.check in ('giant-coop','baby-coop'):
+                    coop = re.findall(('baby' if a.check=='baby-coop' else 'giant')+r'_coop_mode: requested=(\d+) eligible=(\d+)', trace)
                     assert coop and set(coop) == {(str(expected), '0')}, coop
                     assert 'coop_selftest:' not in trace  # M127 retains the scalar path.
                 assert re.search(r'mont_selftest:.*mismatches=0', trace), trace

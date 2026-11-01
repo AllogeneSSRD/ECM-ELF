@@ -43,7 +43,7 @@ def main():
     p.add_argument('--allow-gpu-pid',type=int,action='append',default=[])
     p.add_argument('--diagnostic',action='store_true')
     p.add_argument('--diagnostic-b2',type=int,default=0,help='Override diagnostic bound; cooperative default reaches the chain path')
-    p.add_argument('--experiment',choices=('square','giant-coop'),default='square')
+    p.add_argument('--experiment',choices=('square','giant-coop','baby-coop'),default='square')
     p.add_argument('--coop-tpi',type=int,choices=(16,32),default=16)
     p.add_argument('--coop-control',type=int,choices=(0,16),default=0,
                    help='0: default guard; 16: paired previous cooperative backend')
@@ -51,7 +51,8 @@ def main():
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     if a.experiment!='giant-coop' and (a.coop_middle or a.coop_control or a.coop_tpi!=16):
         p.error('Cooperative options require --experiment giant-coop')
-    diagnostic_b2=a.diagnostic_b2 or (26000000 if a.experiment=='giant-coop' else 2600000)
+    if a.experiment=='baby-coop':a.coop_tpi=32
+    diagnostic_b2=a.diagnostic_b2 or (26000000 if a.experiment!='square' else 2600000)
     desired=set(map(int,a.bits.split(',')))
     cells=[r for r in load(a.summary)['rows'] if not r['tail_permission'] and r['target_bits'] in desired]
     if len(cells)!=2*len(desired):raise ValueError('Need both families for every width')
@@ -77,7 +78,9 @@ def main():
     env={k:v for k,v in os.environ.items() if not k.startswith(('NTT_','ECM_')) and
          k not in ('CUDA_VISIBLE_DEVICES','CUDA_LAUNCH_BLOCKING')}
     env['NTT_NO_PROGRESS']='1'
-    if a.experiment=='giant-coop':env['NTT_POINT_SQUARE']='1'
+    if a.experiment!='square':env['NTT_POINT_SQUARE']='1'
+    # Hold the previously qualified giant backend constant in the baby A/B.
+    if a.experiment=='baby-coop':env['NTT_GIANT_COOP']='32'
     if a.diagnostic:
         env.update(NTT_TARGET_LEAF_HASH='1',NTT_DEVICE_GLEAF_CHECK='1',NTT_S4_CARRY_TRACE='1',NTT_XADD6_TEST='1')
     signatures={}
@@ -101,8 +104,8 @@ def main():
                         option(command,'--d',2310);option(command,'--b2',diagnostic_b2)
                     expected_d=2310 if a.diagnostic else cell['D']
                     expected_b2=diagnostic_b2 if a.diagnostic else cell['B2']
-                    flag='NTT_POINT_SQUARE' if a.experiment=='square' else 'NTT_GIANT_COOP'
-                    on_value='1' if a.experiment=='square' else str(a.coop_tpi)
+                    flag={'square':'NTT_POINT_SQUARE','giant-coop':'NTT_GIANT_COOP','baby-coop':'NTT_BABY_COOP'}[a.experiment]
+                    on_value='1' if a.experiment=='square' else '32' if a.experiment=='baby-coop' else str(a.coop_tpi)
                     off_value='0' if a.experiment=='square' else str(a.coop_control)
                     runenv=env|{flag:on_value if treatment=='on' else '16' if treatment=='middle' else off_value}
                     write(directory/'command.json',dict(argv=command,overrides={k:v for k,v in runenv.items() if k.startswith('NTT_')}))
@@ -129,18 +132,24 @@ def main():
                     if any(int(check[k]) for k in ('gmp_check_bad','gmp_selftest_bad')) or min(int(check[k]) for k in ('gmp_checked','gmp_selftest_cases'))<=0:
                         raise ValueError('Arithmetic checks failed/missing')
                     mode=fields(text,'point_square_mode',False)
-                    expected_square=1 if a.experiment=='giant-coop' else int(treatment=='on')
+                    expected_square=1 if a.experiment!='square' else int(treatment=='on')
                     if name=='candidate' and int(mode['enabled'])!=expected_square:raise ValueError('Wrong square mode')
                     if treatment=='on' and int(fields(text,'square_selftest')['mismatches']):raise ValueError('Square selftest failed')
-                    if a.experiment=='giant-coop' and name=='candidate':
+                    if a.experiment!='square' and name=='candidate':
                         coop=fields(text,'giant_coop_mode')
-                        expected_tpi=a.coop_tpi if treatment=='on' else 16 if treatment=='middle' else a.coop_control
+                        expected_tpi=32 if a.experiment=='baby-coop' else a.coop_tpi if treatment=='on' else 16 if treatment=='middle' else a.coop_control
                         if int(coop['requested'])!=expected_tpi:raise ValueError('Wrong cooperative mode')
                         eligible=expected_tpi!=0 and int(mode['nw'])>128
                         if bool(int(coop['eligible']))!=eligible:raise ValueError('Wrong cooperative eligibility')
                         if eligible:
                             if int(fields(text,'coop_selftest')['mismatches']):raise ValueError('Cooperative arithmetic check failed')
                             if not re.search(r'^giant_coop: tpi='+str(expected_tpi)+' ',text,re.M):raise ValueError('Cooperative chain was not exercised')
+                    if a.experiment=='baby-coop' and name=='candidate':
+                        baby=fields(text,'baby_coop_mode');expected_tpi=32 if treatment=='on' else 0
+                        if int(baby['requested'])!=expected_tpi:raise ValueError('Wrong baby cooperative mode')
+                        eligible=bool(expected_tpi and 128<int(mode['nw'])<=256)
+                        if bool(int(baby['eligible']))!=eligible:raise ValueError('Wrong baby cooperative eligibility')
+                        if eligible and not re.search(r'^baby_coop: tpi=32 ',text,re.M):raise ValueError('Baby cooperative ladder was not exercised')
                     if a.diagnostic:
                         digest=fields(text,'target_descent_values');signature=(digest['words'],digest['hash'])
                         leaf=fields(text,'device_gleaf')

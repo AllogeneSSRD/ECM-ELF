@@ -91,7 +91,8 @@ set(ECM_STAGE2_HOST_SOURCES
     src/io/config.cpp)
 set(ECM_STAGE2_ARITHMETIC_SOURCES
     src/ecm/stage2/cuda/device/arithmetic_kernels.cu
-    src/ecm/stage2/cuda/device/point_coop_kernels.cu)
+    src/ecm/stage2/cuda/device/point_coop_kernels.cu
+    src/ecm/stage2/cuda/device/point_coop_ladder_kernels.cu)
 set(ECM_STAGE2_NTT_SOURCES
     src/ecm/cuda/ntt/shape.cpp
     src/ecm/cuda/ntt/runtime.cpp

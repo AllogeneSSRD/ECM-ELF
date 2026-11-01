@@ -1,4 +1,4 @@
-"""Frozen serial scalar/CGBN field experiment, with GMP and GPU process gates."""
+"""Frozen serial scalar/CGBN field, chain or ladder experiment with GMP gates."""
 import argparse
 import hashlib
 import json
@@ -24,12 +24,12 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--allow-gpu-pid', type=int, action='append', default=[])
     p.add_argument('--suite', choices=('correctness', 'performance'), required=True)
-    p.add_argument('--probe', choices=('field', 'chain'), default='field')
+    p.add_argument('--probe', choices=('field', 'chain', 'ladder'), default='field')
     p.add_argument('--bits', default='4096,8192,16381')
     p.add_argument('--tpis', default='0,16', help='0: production scalar; match the probe build TPI')
     p.add_argument('--counts', default='24,4096')
     p.add_argument('--kinds', default='0,1')
-    p.add_argument('--operations', default='0,1', help='0: multiply; 1: square')
+    p.add_argument('--operations', default='0,1', help='Field: 0 multiply / 1 square; ladder: 0 internal / 1 normal output')
     p.add_argument('--lengths', default='32,64', help='Complete point-chain lengths')
     p.add_argument('--scalar-threads', type=int, default=32, help='Production wide chain reference block size')
     p.add_argument('--tails', default='0', help='0: full last chain; otherwise its point count')
@@ -37,6 +37,7 @@ def main():
     p.add_argument('--correct-count', type=int, choices=(1,37), default=37)
     p.add_argument('--rounds', type=int, default=1)
     p.add_argument('--recurrence', type=int, default=4)
+    p.add_argument('--scalar-bits',type=int,default=18,help='Ladder performance scalars; correctness uses 0 and 64-bit boundaries')
     p.add_argument('--threads', type=int, default=64)
     p.add_argument('--exploratory', action='store_true', help='Exclude from qualification, e.g. while CPU builds run')
     a = p.parse_args()
@@ -75,6 +76,8 @@ def main():
         directory.mkdir()
         if a.probe == 'field':
             values = (bits, count, repeats, tpi, operation, alias, a.threads, a.device, kind, fault, 5)
+        elif a.probe == 'ladder':
+            values=(bits,count,tpi,repeats,kind,operation,5 if a.suite=='performance' else 1,a.device,fault)
         else:
             values = (bits, count, repeats, tpi, a.threads if tpi else a.scalar_threads, a.device, kind, 5)
             tail = tail or repeats
@@ -94,10 +97,10 @@ def main():
         report['rows'].append(row)
         if result.returncode != int(bool(fault)) or 'bad' not in fields or bool(int(fields['bad'])) != bool(fault):
             raise RuntimeError('Arithmetic/process failure: ' + str(directory))
-        if a.probe == 'chain':
+        if a.probe in ('chain','ladder') and not fault:
             if a.suite == 'correctness' and int(fields['checked_words']) != int(fields['output_words']):
-                raise ValueError('Incomplete GMP chain coverage')
-            key = (bits, count, repeats, kind, tail, stride)
+                raise ValueError('Incomplete GMP point coverage')
+            key = (bits,count,repeats,kind,operation) if a.probe=='ladder' else (bits, count, repeats, kind, tail, stride)
             if key in signatures and signatures[key] != fields['sha256']:
                 raise ValueError('Complete point outputs differ from scalar control')
             signatures[key] = fields['sha256']
@@ -107,7 +110,13 @@ def main():
                   f'tpi={tpi} operation={operation} kind={kind} ms={fields["median_ms"]}', flush=True)
 
     try:
-        if a.probe == 'chain' and a.suite == 'correctness':
+        if a.probe=='ladder' and a.suite=='correctness':
+            for bits in integers(a.bits):
+                for kind in integers(a.kinds):
+                    for normal in (0,1):
+                        for tpi in integers(a.tpis):call(bits,37,0,tpi,normal,0,kind)
+            call(integers(a.bits)[0],1,0,integers(a.tpis)[-1],0,0,1,fault=1)
+        elif a.probe == 'chain' and a.suite == 'correctness':
             for bits in integers(a.bits):
                 for kind in integers(a.kinds):
                     for length in integers(a.lengths):
@@ -133,10 +142,10 @@ def main():
                 for bits in integers(a.bits):
                     for count in integers(a.counts):
                         for kind in integers(a.kinds):
-                            for operation in integers(a.operations if a.probe == 'field' else a.lengths):
-                                for stride in integers('1' if a.probe == 'field' else a.seed_strides):
+                            for operation in integers(a.operations if a.probe in ('field','ladder') else a.lengths):
+                                for stride in integers(a.seed_strides if a.probe=='chain' else '1'):
                                     for tpi in tpis:
-                                        call(bits, count, a.recurrence if a.probe == 'field' else operation,
+                                        call(bits, count, a.scalar_bits if a.probe=='ladder' else a.recurrence if a.probe == 'field' else operation,
                                              tpi, operation, 1, kind, stride=stride)
         report['complete'] = True
         report['finished_utc'] = stamp()

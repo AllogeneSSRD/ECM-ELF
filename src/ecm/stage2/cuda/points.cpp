@@ -6,6 +6,7 @@
 #include "checks.h"
 #include "point_launch.h"
 #include "point_coop_plan.h"
+#include "point_coop_ladder_launch.h"
 #include "stage2_baby_launch.h"
 
 bool affine_x_gmp_checked(mpz_t out,const mpz_t X,const mpz_t Z,const mpz_t N)
@@ -664,8 +665,31 @@ bool device_baby_generate(
     CK(stage2_wait::copy(da.ptr,C.ha24.data(),w*8,cudaMemcpyHostToDevice));
     CK(stage2_wait::copy(dm.ptr,C.hmone.data(),w*8,cudaMemcpyHostToDevice));
     CK(stage2_wait::copy(dj.ptr,indices.data(),n*8,cudaMemcpyHostToDevice));
-    S2G_DISPATCH((int)w,s2g_launch_ladder,(int)w,(int)n,dn.words(),C.ninv,dqx.words(),dqz.words(),
-                 da.words(),dm.words(),dj.words(),dx.words(),dz.words(),false);
+    if(baby_coop_tpi() && w>128 && w<=256) {
+        int mersenne_bits=0;
+        if(fuse_env_ull("NTT_POINT_MERSENNE",0)) {
+            // N below is the GCD target; identify the actual arithmetic modulus
+            // from C.hn so a carrier is never classified by its smaller cofactor.
+            mpz_t arithmetic;mpz_init(arithmetic);words_to_mpz(arithmetic,C.hn.data(),w);
+            const int bits=(int)mpz_sizeinbase(arithmetic,2);
+            if(mpz_popcount(arithmetic)==(mp_bitcnt_t)bits)mersenne_bits=bits;
+            mpz_clear(arithmetic);
+        }
+        for(size_t first=0;first<n;first+=(size_t)g_ladder_cap) {
+            const int count=(int)std::min(n-first,(size_t)g_ladder_cap);
+            const unsigned int threads=64,grid=(unsigned int)(((size_t)count*32+threads-1)/threads);
+            ecm_launch_s2g_coop_ladder_kernel(EcmCudaLaunch{grid,threads},dn.words(),C.ninv,(int)w,
+                dqx.words(),dqz.words(),da.words(),dm.words(),dj.words()+first,count,mersenne_bits,false,
+                dx.words()+first*w,dz.words()+first*w);
+            CK(cudaGetLastError());
+        }
+        stage2_log::print(stage2_log::debug,"baby_coop: tpi=32 nw=%llu capacity_bits=%d mersenne_bits=%d points=%llu chunks=%llu normal_output=0\n",
+            (unsigned long long)w,64*s2g_coop_capacity_words((int)w,32),mersenne_bits,
+            (unsigned long long)n,(unsigned long long)((n+g_ladder_cap-1)/g_ladder_cap));
+    } else {
+        S2G_DISPATCH((int)w,s2g_launch_ladder,(int)w,(int)n,dn.words(),C.ninv,dqx.words(),dqz.words(),
+                     da.words(),dm.words(),dj.words(),dx.words(),dz.words(),false);
+    }
     CK(cudaGetLastError());CK(cudaDeviceSynchronize());st.ladder_seconds=now_s()-begin;
     for(int l=1;l<=8;++l) {
         const auto *in=l==1?dz.words():tree.words()+offset[l-1];
