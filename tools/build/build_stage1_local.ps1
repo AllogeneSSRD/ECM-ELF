@@ -76,6 +76,7 @@ $configureOptions = @(
     "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
     "-DCMAKE_CXX_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
     "-DECM_ENABLE_CUDA=ON",
+    "-DECM_CUDA_ISOLATE_TIERS=ON",
     "-DECM_CUDA_FULL_BUILD=ON",
     "-DECM_CUDA_ENABLE_PRAC=$(if ($EnablePrac) { 'ON' } else { 'OFF' })",
     "-DECM_CUDA_ARCHITECTURES=$Arch",

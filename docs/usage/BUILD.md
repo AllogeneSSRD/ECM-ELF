@@ -25,7 +25,7 @@ GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
-Stage1 local/dev/release 统一使用构建生成的实例入口。`-KernelLayout isolated` 仅保留为兼容写法，`grouped` 已删除；CMake 的 `ECM_CUDA_ISOLATE_TIERS=OFF` 会明确报错。local 保持单架构、压缩、无 PTX。已有缓存必须通过完整 profile、编译命令、依赖和对象内容核对；省略 `-BuildDir` 时，为不相容 profile 选择独立目录，旧目录保留。
+Stage1 local/dev/release 统一使用构建生成的实例入口。`-KernelLayout isolated` 仅保留为兼容写法，`grouped` 已删除；CMake 的 `ECM_CUDA_ISOLATE_TIERS=OFF` 会明确报错。正式 Stage1 入口显式传入 `ECM_CUDA_ISOLATE_TIERS=ON` 并纳入 profile 身份，避免与未记录布局的旧 grouped 配置发生身份重合。local 保持单架构、压缩、无 PTX。已有缓存必须通过完整 profile、编译命令、依赖和对象内容核对；省略 `-BuildDir` 时，为不相容 profile 选择独立目录，旧目录保留。
 
 位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。`-Tiers` 在构建身份和 CMake 选档前通过同一归一化器处理：去除空白、去重、按清单排序；空字符串为全档，未知位宽、空列表项和分号分隔会报错。`"1024, 384,384"` 与 `"384,1024"` 产生相同选档身份。Edwards binary/NAF 共用32个容器入口，Montgomery PARAM0/2/3 各31个，共125个基础模块。容器边界仍按 Edwards 一位余量、Montgomery 六位余量判断，见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。
 
