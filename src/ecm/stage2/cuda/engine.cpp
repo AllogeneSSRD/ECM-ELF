@@ -540,18 +540,19 @@ int run_real(
         const double t0 = now_s();
         const auto relocation=ecm_stage2::giant_range(B2,D,g_relocation_enabled);
         const bool baby_nonunit=baby_nonunit_seen || baby_noninv!=0 || !baby_deg.empty();
-        const bool point_policy=ecm_stage2::giant_tail_balance_requested() || ecm_stage2::giant_chain_points()!=64;
-        const bool attempted=(relocation.active || point_policy) && !baby_nonunit;
+        const bool point_requested=ecm_stage2::giant_tail_balance_requested() || ecm_stage2::giant_chain_points()!=64;
         double probe_seconds=0,replay_seconds=0,final_begin=t0;
-        bool replayed=(relocation.active || point_policy) && baby_nonunit;
+        bool replayed=(relocation.active || point_requested) && baby_nonunit;
         ecm_stage2::timing::PhaseTimes probe_phases;
         BatchedRun BR;
         {
-            ecm_stage2::GiantPolicyScope early(point_policy && baby_nonunit?0:-1,
-                point_policy && baby_nonunit?64:0);
+            ecm_stage2::GiantPolicyScope early(point_requested && baby_nonunit?0:-1,
+                point_requested && baby_nonunit?64:0);
             BR=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,
-                           attempted?&relocation:nullptr);
+                           relocation.active?&relocation:nullptr);
         }
+        const bool point_policy=BR.giant_tail_balance || ecm_stage2::giant_chain_points()!=64;
+        const bool attempted=(relocation.active || point_policy) && !baby_nonunit;
         if(attempted) {
             s4_oracle_drain(red); // an unchecked probe cannot authorize NF or replay
             const double end=now_s();probe_seconds=end-t0;
@@ -591,6 +592,8 @@ int run_real(
             m.d=D;m.p=P_baby;m.giant_points=BR.giant_points;
             m.giant_first=BR.giant_first;m.giant_last=BR.giant_last;
             m.relocation=g_relocation_enabled;m.relocation_replayed=g_relocation_enabled && replayed;
+            m.giant_tail_balance=BR.giant_tail_balance;
+            m.point_policy_replayed=point_policy && attempted && replayed;
             m.relocation_points=g_relocation_enabled && attempted?relocation.points:0;m.relocation_prime=relocation.missing;
             m.relocation_probe_seconds=probe_seconds;m.relocation_replay_seconds=replay_seconds;
             m.init_seconds=stage2_init_seconds;m.main_seconds=el;m.total_seconds=stage2_init_seconds+el;

@@ -28,6 +28,7 @@ struct EcmStage2Metrics {
     uint64_t d=0,p=0,giant_points=0,selftest_cases=0,checked=0,bad=0;
     uint64_t giant_first=1,giant_last=0,relocation_points=0,relocation_prime=0;
     bool relocation=false,relocation_replayed=false;
+    bool giant_tail_balance=false,point_policy_replayed=false;
     double relocation_probe_seconds=0,relocation_replay_seconds=0;
     double total_seconds=0,init_seconds=0,main_seconds=0;
     double giant_seconds=0,gtrees_seconds=0,fold_seconds=0,descent_seconds=0;

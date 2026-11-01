@@ -10,6 +10,7 @@
 
 struct BatchedRun {
     bool groot_balanced=false;
+    bool giant_tail_balance=false;
     ecm_stage2::timing::Boundaries phase_boundaries;
     DeviceGLeafStats device_leaf;
     FoldFlatStats fold_flat;

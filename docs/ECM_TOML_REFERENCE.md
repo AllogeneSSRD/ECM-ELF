@@ -960,9 +960,9 @@ stage2_giant_tail_balance = false
 
 Type / 类型: `bool`; range / 范围: `[false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Balance the last two giant point chunks on whole-P boundaries, keeping B2, capacity, point coverage and chunk count. Both must meet the chain threshold. Hit or target-N nonunit replays the legacy full interval before publishing. Default 0 keeps legacy scheduling. CLI --giant-tail-balance overrides this worker TOML. A tail that already meets the chain threshold keeps its original chunk schedule.
+Allow the last two giant point chunks to borrow whole P batches so both can use chains. B2, capacity, coverage and chunk count are unchanged. Default false. No actual borrow keeps the original cost/cache identity and avoids extra replay or synchronization. Actual borrowing keeps an independent tune identity and replays the original interval on a hit/nonunit; that replay may need more workspace. CLI --giant-tail-balance overrides this worker TOML.
 
-按整P边界平衡最后两个giant点块，保持B2、容量、覆盖点数与块数，两块均须达到chain门槛。命中或目标N非单位时，发布前按旧策略重放完整区间。默认0沿用原调度，CLI --giant-tail-balance覆盖当前worker配置。 尾块已经达到chain门槛时，保持原点块调度。
+允许完整giant区间的末两点块借整P批次，使两块均可走chain；不改变B2、容量、覆盖及块数。默认false。未实际借块时沿用原成本及缓存身份，不增加重放或同步；实际借块独立记录tune，命中或非单位时重放原区间，重放可能需要更大工作区。CLI --giant-tail-balance覆盖当前worker配置。
 
 ### stage2_gp
 
@@ -975,6 +975,18 @@ Type / 类型: `string`; range / 范围: `<exe>`; worker override / worker 覆�
 External PARI/GP fallback executable for optional factor decomposition. The local PARI DLL is tried first. gp.exe follows Windows executable search rules; a full path is accepted. GP failure preserves partial PARI results and never enables GMP automatically. Dataset scripts retain their separate --gp resolution rules.
 
 指定附加因子分解的外部 PARI/GP 备选程序，默认先使用本地 PARI DLL。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 失败保留 PARI 部分结果，不自动使用 GMP；数据集脚本继续使用各自的 --gp 路径规则。
+
+### stage2_groot_balanced
+
+```toml
+stage2_groot_balanced = "auto"
+```
+
+Type / 类型: `bool|string`; range / 范围: `[auto|false|true]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+G-root polynomial layout. "auto" uses the qualified NTT-cliff model and measured tuning; true forces the balanced tile layout, false forces the contiguous layout. Default "auto". This does not rebalance giant point chunks or change B2/D/P. CUDA only; OpenCL accepts "auto". CLI --groot-layout auto|true|false overrides this worker TOML; numeric CLI aliases 0/1 remain supported. Tune rows store the resolved layout as 0/1.
+
+G根多项式布局："auto"按已验证的NTT拐点模型及实测tune选型，true强制分块均衡布局，false强制连续布局，默认"auto"。不改变giant点块划分或B2/D/P。仅CUDA支持强制布局，OpenCL接受"auto"。CLI --groot-layout auto|true|false覆盖当前worker配置，并保留CLI 0/1别名；tune行记录实际布局0/1。
 
 ### stage2_log_file
 

@@ -9,6 +9,11 @@
 #include "d_catalog.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
+// The compact cross-worker hint does not encode alternate point schedules.
+// Unchanged schedules may reuse it even when borrowing was permitted.
+inline bool runtime_point_route_cacheable(bool tail_balance,uint64_t chain_block) {
+    return !tail_balance && chain_block==64;
+}
 // Cost-search hints cross curve workers, never arithmetic or allocations.
 // A new parent starts empty; hints are not checkpoint or tune-file data.
 struct RuntimePauseHints {

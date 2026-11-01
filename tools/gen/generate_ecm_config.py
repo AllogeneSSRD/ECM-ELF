@@ -19,7 +19,7 @@ SCHEMA = ROOT / "config/ecm_options.json"
 SELF = Path(__file__).resolve()
 TYPES = {"string": "std::string", "int": "int", "u32": "uint32_t",
          "u64": "uint64_t", "i64": "int64_t", "double": "double",
-         "float": "float", "bool": "bool", "rect": "std::array<int,4>"}
+         "float": "float", "bool": "bool", "bool|string": "std::string", "rect": "std::array<int,4>"}
 
 
 def literal(value):
@@ -117,6 +117,8 @@ def assignment(o, key=None):
         code = f"assign_value({dst},v);if({valid}){{std::fprintf(stderr,\"[ecm] WARNING: {key}=%d unsupported; using {o['default']}\\n\",{dst});{dst}={o['default']};}}"
     elif kind == "integer_bool":
         code = f"{dst}=boolean(v,{literal(key)});"
+    elif kind == "auto_bool":
+        code = f"{dst}=automatic_boolean_text(v,{literal(key)});"
     elif kind == "signed_integer":
         code = f"{dst}=signed_integer(v,{literal(key)},{lo},{hi});"
     elif kind == "nonnegative":
@@ -164,7 +166,7 @@ def defaults_header(schema):
            "#pragma once", "#include <cstdint>", "#include <array>", "namespace ecm_config { namespace defaults {"]
     for o in schema["options"]:
         name=f"{o['owner']}_{o['key']}"
-        if o["type"] == "string":
+        if o["type"] in ("string", "bool|string"):
             out.append(f"inline constexpr char {name}[]={literal(o.get('effective_default',o['default']))};")
         else:
             out.append(f"inline constexpr {TYPES[o['type']]} {name}={literal(o['default'])};")
@@ -240,7 +242,7 @@ def config_table(option):
 
 def toml_literal(option):
     value = option["default"]
-    if option["type"] == "string":
+    if option["type"] in ("string", "bool|string"):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, bool):
         return "true" if value else "false"

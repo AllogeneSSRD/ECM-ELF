@@ -200,6 +200,7 @@ struct Stage2Values {
     int device=-1;
     int log_level=-1;
     bool ntt_counts=false;
+    std::string groot_balanced="auto";
     bool giant_tail_balance=false;
     bool b2_round_chain=false;
     std::string giant_chain="64";
@@ -267,6 +268,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_device",[](Stage2Values&c,const std::string&v){c.device=signed_integer(v,"stage2_device",-1,2147483647);},[](Stage2Values&c,const Stage2Values&v){c.device=v.device;}},
     {"stage2_log_level",[](Stage2Values&c,const std::string&v){c.log_level=log_level(v);},[](Stage2Values&c,const Stage2Values&v){c.log_level=v.log_level;}},
     {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=boolean(v,"stage2_ntt_counts");},[](Stage2Values&c,const Stage2Values&v){c.ntt_counts=v.ntt_counts;}},
+    {"stage2_groot_balanced",[](Stage2Values&c,const std::string&v){c.groot_balanced=automatic_boolean_text(v,"stage2_groot_balanced");},[](Stage2Values&c,const Stage2Values&v){c.groot_balanced=v.groot_balanced;}},
     {"stage2_giant_tail_balance",[](Stage2Values&c,const std::string&v){c.giant_tail_balance=boolean(v,"stage2_giant_tail_balance");},[](Stage2Values&c,const Stage2Values&v){c.giant_tail_balance=v.giant_tail_balance;}},
     {"stage2_b2_round_chain",[](Stage2Values&c,const std::string&v){c.b2_round_chain=boolean(v,"stage2_b2_round_chain");},[](Stage2Values&c,const Stage2Values&v){c.b2_round_chain=v.b2_round_chain;}},
     {"stage2_giant_chain",[](Stage2Values&c,const std::string&v){c.giant_chain=v;},[](Stage2Values&c,const Stage2Values&v){c.giant_chain=v.giant_chain;}},

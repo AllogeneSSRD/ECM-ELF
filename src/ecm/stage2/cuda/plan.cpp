@@ -370,7 +370,9 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
                 fold_device_flag("NTT_GIANT_CHUNK_FLOOR"));
             giant_policy.tail_balance=ecm_stage2::giant_tail_balance_requested() && !giant_policy.force_ladder &&
                 giant_policy.seed_device && giant_policy.resident_requested && giant_policy.resident_eligible &&
-                giant_policy.exact_segments && giant_chunk.coordinate_bytes<=giant_policy.resident_limit_bytes;
+                giant_policy.exact_segments && giant_chunk.coordinate_bytes<=giant_policy.resident_limit_bytes &&
+                ecm_stage2::giant_tail_borrow(p.giant_points,giant_chunk.points,P_baby,giant_policy.chain_min,true)!=0;
+            giant_policy.wide_tail_chain=giant_policy.wide_tail_chain || giant_policy.tail_balance || giant_policy.chain_block!=64;
             if(!giant_chunk.valid || !ecm_stage2::giant_memory_plan(P_baby,p.giant_points,nw,
                 giant_chunk.points,giant_policy,*p.giant_memory))return 3;
         }

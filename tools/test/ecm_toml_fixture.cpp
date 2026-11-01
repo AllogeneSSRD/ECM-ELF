@@ -1,4 +1,5 @@
 #include "../../src/ecm/application/configuration/generated/ecm_config_generated.h"
+#include "../../src/ecm/application/gui/toml_file.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -46,6 +47,7 @@ int main(int argc,char **argv) {
         expect(ecm_config::read_toml(argv[1],lines),"default TOML unavailable");
         const auto defaults1=ecm_config::read_stage1(ecm_config::cli_entries(lines,1));
         const auto defaults2=ecm_config::read_stage2(ecm_config::cli_entries(lines,1));
+        expect(defaults2.groot_balanced=="auto", "G-root layout default must be automatic");
         expect(defaults1.gpu_param==3,
                "Stage1 generated default differs from TOML");
         expect(defaults1.progress_average_seconds==0,"speed averaging must default to off");
@@ -56,6 +58,33 @@ int main(int argc,char **argv) {
                !defaults2.has_owner&&!defaults2.has_pack_zero,
                "template disabled an implicit worker or environment default");
         const std::filesystem::path temp=argv[2];
+        for (const auto *value : {"\"auto\"", "true", "false"}) {
+            write(temp, std::string("[stage2]\nstage2_groot_balanced=")+value+
+                        "\n[workers.2.stage2]\nstage2_groot_balanced=false\n");
+            expect(ecm_config::read_toml(temp.string(),lines), "G-root tri-state TOML unavailable");
+            const auto global=ecm_config::read_stage2(ecm_config::cli_entries(lines,1));
+            expect(global.groot_balanced==(value==std::string("\"auto\"")?"auto":value),
+                   "G-root tri-state value lost");
+            expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).groot_balanced=="false",
+                   "G-root worker override lost");
+        }
+        for (const auto *value : {"1", "0", "\"invalid\""})
+            rejected(temp,std::string("[stage2]\nstage2_groot_balanced=")+value+"\n");
+        write(temp,"# preserve this comment\n[stage2]\nstage2_groot_balanced=\"auto\"\n");
+        ecmgui::TomlFile editor;std::string editor_error;
+        expect(editor.load(temp.string(),editor_error),"GUI editor cannot load tri-state option");
+        for (const auto *value : {"true", "false", "auto"}) {
+            editor.set("stage2","stage2_groot_balanced",value);
+            expect(editor.save(editor_error),"GUI editor cannot save tri-state option");
+            expect(ecm_config::read_toml(temp.string(),lines),"GUI wrote invalid tri-state TOML");
+            expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).groot_balanced==value,
+                   "GUI tri-state roundtrip changed value");
+            for(const auto &line:lines)if(line.key=="stage2_groot_balanced") {
+                char kind=0;ecm_config::toml_value(line.raw.substr(line.raw.find('=')+1),kind);
+                expect(kind==(std::string(value)=="auto"?'s':'b'),"GUI wrote the wrong TOML scalar type");
+            }
+            expect(lines.front().raw=="# preserve this comment","GUI changed an unrelated source line");
+        }
         boolean_diagnostic(temp, false);
         boolean_diagnostic(temp, true);
         write(temp, "[stage2]\nstage2_giant_tail_balance = true\nstage2_b2_round_chain = false\n");
@@ -114,6 +143,7 @@ int main(int argc,char **argv) {
                  "[gui]\nfuture_style=true\nfuture_style=false\n"})
             rejected(temp,invalid,ecm_config::TomlReadMode::Computation);
         std::filesystem::remove(temp);
+        std::filesystem::remove(temp.string()+".bak");
         std::cout<<"TOML parser and generated defaults: PASS\n";
         return 0;
     } catch(const std::exception &e) {std::cerr<<e.what()<<'\n';return 1;}

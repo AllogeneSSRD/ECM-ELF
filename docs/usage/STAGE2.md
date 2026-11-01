@@ -126,13 +126,15 @@ Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_fin
 
 ## 固定参数G树实验
 
+生产配置 `stage2_groot_balanced = "auto"` 默认为自动选择；`true`强制分块均衡布局，`false`强制左侧连续布局。CLI `--groot-layout auto|true|false`覆盖当前worker配置，保留0/1别名；auto也会传给曲线子进程，以免重新读取TOML强制值。tune矩阵的 `groot_balanced` 仍记录实际布局0/1，不记录第三种auto布局。OpenCL接受auto，强制布局限于CUDA。
+
 CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局；不设置时沿用默认规则。只允许固定D和B2，关闭Auto B2、自动承载、运行时采样、短校准和短NTT调优；不与正式tune或旧cost profile混用。实验不读取或更新已有ECM tune行，不能用它收集当前格式的生产性能文件。OpenCL不接受此变量。
 
 不同形状有收益也有回退，结果与受控复现入口见[G树性能](../performance/STAGE2_GTREE_LAYOUT.md)。
 
 ## CUDA点块与链长选项
 
-可用 `stage2_giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。`stage2_b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。
+可用 `stage2_giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。未实际借块时继续使用原执行与缓存身份，不增加策略重放或额外同步；日志及结果分别保留请求和实际值。默认仍为false，真实借块的原分块重放预算尚待完整扩展。`stage2_b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。
 
 `stage2_giant_chain` 可固定32或64，或以auto在正常任务中对当前最优项补有限32/64对照。默认保留原点块和64链；这些CUDA选项尚未获得全设备／全位宽默认启用资格。配置取值见[生成参考](../ECM_TOML_REFERENCE.md)，完整约束及回退见[点策略](../architecture/STAGE2.md#完整区间点块策略)，实测见[固定D报告](../performance/STAGE2_PREPARATION.md#完整尾块平衡b2凑整与3264生产选项)。
 

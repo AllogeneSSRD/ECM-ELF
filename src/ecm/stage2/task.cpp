@@ -254,7 +254,10 @@ int curve_worker(Options o) {
         ",\"carrier_exponent\":"+std::to_string(o.carrier_exponent)+
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
         ",\"requested_D\":"+std::to_string(requested_d)+",\"requested_B2\":"+std::to_string(requested_b2)+
-        ",\"giant_tail_balance\":"+std::string(o.giant_tail_balance?"true":"false")+",\"giant_chain_block\":"+std::to_string(o.selected_chain)+
+        ",\"giant_tail_balance\":"+std::string(tune_metrics.giant_tail_balance?"true":"false")+
+        ",\"giant_tail_balance_requested\":"+std::string(o.giant_tail_balance?"true":"false")+
+        ",\"point_policy_replayed\":"+std::string(tune_metrics.point_policy_replayed?"true":"false")+
+        ",\"giant_chain_block\":"+std::to_string(o.selected_chain)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
         (o.factor_only?",\"requested_factor_only\":true":"")+

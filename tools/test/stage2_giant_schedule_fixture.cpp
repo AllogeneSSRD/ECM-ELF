@@ -64,5 +64,15 @@ int main(){try{
     {GiantPolicyScope x(1,32);check(giant_tail_balance_requested() && giant_chain_points()==32);
      {GiantPolicyScope y(0,64);check(!giant_tail_balance_requested() && giant_chain_points()==64);}
      check(giant_tail_balance_requested() && giant_chain_points()==32);}
+    // The policy recorded in a plan is effective, not just permission to borrow.
+    GiantMemoryPolicy permission;permission.tail_balance=true;
+    GiantMemoryPlan identity;
+    check(giant_memory_plan(20736,130213,126,145152,permission,identity));
+    check(!identity.policy.tail_balance);
+    check(giant_memory_plan(17280,149940,126,138240,permission,identity));
+    check(identity.policy.tail_balance);
+    permission.force_ladder=true;
+    check(giant_memory_plan(17280,149940,126,138240,permission,identity));
+    check(!identity.policy.tail_balance);
     std::cout<<"giant_schedule: checks="<<checks<<" bad=0\n";return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 2;}}

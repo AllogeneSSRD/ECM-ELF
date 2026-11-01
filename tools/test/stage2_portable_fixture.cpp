@@ -87,6 +87,15 @@ int main(int argc,char **argv) {
                std::string(prediction.model)!="portable_nonnegative_v1" ||
                std::abs(prediction.seconds-seconds(w))>1e-5*seconds(w) || prediction.relative_error>1e-5)
                 throw std::runtime_error("qualified nonnegative model did not recover fixed cost");
+            // A qualified fit for the original policy cannot authorize an
+            // unmeasured borrowed schedule or a different finite chain.
+            auto unmeasured=target;unmeasured.tail_balance=!target.tail_balance;
+            p::Work other;double alternative=0,uncertainty=0;
+            if(!p::work(unmeasured,query,cost,other) || model.fitted(unmeasured,other,alternative,uncertainty))
+                throw std::runtime_error("unmeasured point policy inherited a qualified fit");
+            unmeasured=target;unmeasured.chain_block=target.chain_block==64?32:64;
+            if(!p::work(unmeasured,query,cost,other) || model.fitted(unmeasured,other,alternative,uncertainty))
+                throw std::runtime_error("unmeasured chain inherited a qualified fit");
             profile.samples[4]["mean_seconds"]=p::numeric(2*ecm_stage2::tune::real(profile.samples[4],"mean_seconds"));
             p::Estimator damaged(profile,profile.conditions.begin()->second,p::Ignore{},query);
             double value=0,error=0;if(damaged.fitted(target,w,value,error))throw std::runtime_error("bad holdout model qualified");

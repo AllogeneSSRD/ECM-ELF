@@ -327,6 +327,7 @@ inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
                 const std::string type = option->type;
                 const bool allowed =
                     (type == "string" && kind == 's') || (type == "bool" && kind == 'b') ||
+                    (type == "bool|string" && (kind == 'b' || kind == 's')) ||
                     (type == "rect" && kind == 'a') ||
                     ((type == "int" || type == "u32" || type == "u64" || type == "i64") &&
                      kind == 'i') ||
@@ -472,6 +473,19 @@ inline bool boolean(const std::string& s, const char* key) {
     if (v == "0" || v == "false" || v == "no" || v == "off")
         return false;
     throw std::runtime_error(std::string(key) + " must be true or false");
+}
+
+// TOML uses literal booleans or the quoted string "auto". CLI numeric aliases
+// are translated by its caller, so integers remain invalid TOML values.
+inline int automatic_boolean(const std::string& s, const char* key) {
+    if (s == "auto") return -1;
+    if (s == "true") return 1;
+    if (s == "false") return 0;
+    throw std::runtime_error(std::string(key) + " must be auto, true or false");
+}
+inline std::string automatic_boolean_text(const std::string& s, const char* key) {
+    const auto mode = automatic_boolean(s, key);
+    return mode < 0 ? "auto" : mode ? "true" : "false";
 }
 
 inline uint64_t bounded_integer(const std::string& s, const char* key, uint64_t low,

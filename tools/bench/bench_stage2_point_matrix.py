@@ -109,6 +109,15 @@ def invoke(plan,out,folder,cmd,stop_second=False):
     return time.perf_counter()-started
 
 
+def point_policy_values(engine):
+    # Old receipts store permission only. Do not reinterpret them as proof that
+    # borrowing occurred; new receipts record both treatment and actual schedule.
+    requested=bool(engine.get('giant_tail_balance_requested',engine.get('giant_tail_balance',False)))
+    effective=bool(engine['giant_tail_balance']) if 'giant_tail_balance_requested' in engine else None
+    if effective and not requested:raise ValueError('Borrowing occurred without permission')
+    return requested,effective
+
+
 def records(plan,folder,case,cell):
     raw=completed_records(folder/'result.jsonl');text=(folder/'engine.log').read_text(encoding='utf-8')
     debug=(folder/'debug.log').read_text(encoding='utf-8');rows=[]
@@ -131,8 +140,9 @@ def records(plan,folder,case,cell):
         while offset<len(policies) and count<cell['B2']//cell['D']+2:
             p=policies[offset];route.append(p);count+=int(p['npts']);offset+=1
         if count!=cell['B2']//cell['D']+2:raise ValueError('Incomplete point schedule')
+        requested,effective=point_policy_values(engine)
         rows.append(dict(seconds=float(clock['total']),clock=clock,s4=check,policies=route,
-            chain=engine['giant_chain_block'],balance=engine['giant_tail_balance'],
+            chain=engine['giant_chain_block'],balance=requested,effective_balance=effective,
             selection=engine.get('tune_plan'),sample=r.get('tune_observation'),
             stats={k:data[k][i] for k in labels[2:]}))
     if offset!=len(policies):raise ValueError('Unexpected replay in NF timing')

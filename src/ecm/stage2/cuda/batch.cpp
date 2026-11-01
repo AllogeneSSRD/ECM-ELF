@@ -192,8 +192,6 @@ BatchedRun run_batched(
         "coordinate_cap_bytes=%llu minimum_over_budget=%d estimated_chunks=%llu\n",
         point_floor,point_kb*1024,(unsigned long long)P,(unsigned long long)C.nw,pts_per_chunk,
         (unsigned long long)point_plan.coordinate_bytes,point_plan.minimum_over_budget,point_chunks);
-    stage2_log::print(stage2_log::debug,"giant_point_policy: tail_balance=%d chain_block=%llu\n",
-        (int)ecm_stage2::giant_tail_balance_requested(),ecm_stage2::giant_chain_points());
     unsigned long long actual_point_chunks=0;
     // One continuous interval includes chunk-local destruction between iterations.
     stage2_log::phase("Giant points, G trees and fold");
@@ -211,9 +209,15 @@ BatchedRun run_batched(
         ecm_stage2::giant_chain_minimum(W,fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768),
             fuse_env_ull("NTT_DEVICE_GLEAF_MAX_MB",512)*1048576ull):
         fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768);
+    const auto borrow=ecm_stage2::giant_tail_borrow(imax,pts_per_chunk,P,rebalance_min,
+        (range.active || ecm_stage2::giant_tail_balance_requested()) && rebalance_resident && !fold_device_flag("NTT_GIANT_LADDER"));
+    const bool balance_active=borrow!=0;
+    R.giant_tail_balance=balance_active && !range.active;
+    stage2_log::print(stage2_log::debug,"giant_point_policy: tail_balance=%d chain_block=%llu requested_tail_balance=%d borrow_points=%llu\n",
+        (int)R.giant_tail_balance,ecm_stage2::giant_chain_points(),(int)ecm_stage2::giant_tail_balance_requested(),borrow);
     for (unsigned long long c0 = 0; c0 < imax;) {
         ++actual_point_chunks;
-        const auto take=ecm_stage2::giant_chunk_take(imax-c0,pts_per_chunk,P,rebalance_min,(range.active || ecm_stage2::giant_tail_balance_requested()) && rebalance_resident && !fold_device_flag("NTT_GIANT_LADDER"));
+        const auto take=ecm_stage2::giant_chunk_take(imax-c0,pts_per_chunk,P,rebalance_min,balance_active);
         const unsigned long long c1=c0+take;
         const size_t clo=(size_t)(range.first+c0),chi=(size_t)(range.first+c1-1);
         if(range.active)stage2_log::print(stage2_log::debug,
@@ -287,7 +291,7 @@ BatchedRun run_batched(
         const auto chain_min=device_leaf && g_giant_seed_device?
             ecm_stage2::giant_chain_minimum(W,configured_chain_min,maxbytes):configured_chain_min;
         const bool wide_tail=g_giant_seed_device && ((npts<configured_chain_min && chain_min<configured_chain_min) ||
-            ecm_stage2::giant_tail_balance_requested() || chain_block!=64);
+            balance_active || chain_block!=64);
         if(requested && !device_leaf)++R.device_leaf.fallback_chunks;
         gseg.assign(((size_t)npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG * (size_t)C.nw, 0ull);
         const unsigned long long effective_chain_block=ecm_stage2::giant_chain_block(

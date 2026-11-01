@@ -64,6 +64,7 @@ inline constexpr bool stage2_stage2_debug_log=false;
 inline constexpr int stage2_stage2_device=-1;
 inline constexpr int stage2_stage2_log_level=-1;
 inline constexpr bool stage2_stage2_ntt_counts=false;
+inline constexpr char stage2_stage2_groot_balanced[]="auto";
 inline constexpr bool stage2_stage2_giant_tail_balance=false;
 inline constexpr bool stage2_stage2_b2_round_chain=false;
 inline constexpr char stage2_stage2_giant_chain[]="64";

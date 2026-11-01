@@ -328,8 +328,14 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
     if(!ignore.cuda && !same("cuda_runtime"))return false;
     if(!ignore.backend && (!same("gl_fixed_mode") || !same("outer_unroll_u") || !same("add_sub_mask")))return false;
     if(!ignore.environment) {
-        for(const auto &f:old)if(f.first.compare(0,4,"env_")==0 && !same(f.first.c_str()))return false;
-        for(const auto &f:current)if(f.first.compare(0,4,"env_")==0 && !same(f.first.c_str()))return false;
+        // The request permits borrowing; the row/Shape records whether it
+        // actually happened. Old profiles also stored this redundant request
+        // in their environment. Do not split unchanged schedules on that flag.
+        auto relevant=[](const std::string &key) {
+            return key.compare(0,4,"env_")==0 && key!="env_giant_tail_balance";
+        };
+        for(const auto &f:old)if(relevant(f.first) && !same(f.first.c_str()))return false;
+        for(const auto &f:current)if(relevant(f.first) && !same(f.first.c_str()))return false;
     }
     // Memory equality is checked against each actual candidate's execution_path,
     // not raw batch/arena/fold budget numbers stored in the condition.

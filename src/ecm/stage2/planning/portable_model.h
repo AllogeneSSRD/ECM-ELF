@@ -11,6 +11,11 @@ struct Shape {
     Word short_batch_hash=0;
     Word giant_chunk=0,chain_min=32768;bool force_ladder=false;
     bool groot_balanced=false,tail_balance=false;Word chain_block=64;
+    void canonicalize_point_policy() {
+        const Word p=d_catalog::degree(d);
+        if(tail_balance && d && p && giant_chunk)
+            tail_balance=!force_ladder && giant_tail_borrow(b2/d+2,giant_chunk,p,chain_min,true)!=0;
+    }
     using Key=std::array<Word,21>;
     Key key()const {
         return {target_bits,arithmetic_bits,carrier,b1,b2,d,batch_bytes,chunk_max,buffers,
@@ -132,7 +137,7 @@ public:
     mutable std::map<Shape::Key,RuntimeStatistics> runtime_cache;
     std::vector<const Fields*> runtime_samples;
     struct Fit {bool valid=false;B2Features coefficients{};double error=0;Word low=0,high=0;};
-    mutable std::map<std::array<Word,13>,Fit> fit_cache;
+    mutable std::map<std::array<Word,15>,Fit> fit_cache;
     Estimator(const Profile &p,Fields current,Ignore ign,Query q,bool memoize=true,Word minimum=2):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)),memoize_costs(memoize),minimum_repeats(minimum) {
         if(!minimum || minimum>1000)throw std::runtime_error("tune minimum repeats must be 1..1000");
         for(const auto &s:p.samples) {
@@ -226,9 +231,12 @@ public:
         if(memoize_costs)runtime_cache.emplace(key,out);return out;
     }
     bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
-        const std::array<Word,13> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),
+        // eligible() selects a separate timing population for each actual
+        // point policy, so its fitted coefficients must use the same identity.
+        const std::array<Word,15> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),
             Word(x.physical),x.batch_bytes,x.buffers,x.chunk_max,Word(x.fold),Word(x.frontier),
-            x.short_batch_hash,Word(x.short_batch_tune),Word(reinterpret_cast<std::uintptr_t>(omit))};
+            x.short_batch_hash,Word(x.short_batch_tune),Word(x.tail_balance),x.chain_block,
+            Word(reinterpret_cast<std::uintptr_t>(omit))};
         auto encode=[](const Work &w) {
             double ntt=0,reduce=0;
             for(unsigned ph=0;ph<RequestPhaseCount;++ph){ntt+=w.ntt[ph];reduce+=w.reduce[ph];}

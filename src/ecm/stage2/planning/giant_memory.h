@@ -97,6 +97,8 @@ inline bool giant_memory_plan(Word p,Word points,Word w,Word chunk_points,
     };
     const auto schedule=giant_schedule(points,chunk_points,p,policy.chain_min,policy.tail_balance && !policy.force_ladder);
     if(!schedule.valid)return false;
+    // Permission without an actual borrow is the original execution identity.
+    plan.policy.tail_balance=schedule.borrow!=0;
     for(const auto &run:schedule.runs)if(!chunk(run.points,run.repeat)) {
         plan.reason="payload_overflow";return false;
     }

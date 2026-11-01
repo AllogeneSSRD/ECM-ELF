@@ -92,7 +92,10 @@ Options arguments(int argc, char **argv) {
         else if (a == "--giant-chain") {o.giant_chain=value();o.portable_cli.insert(a);}
         else if (a == "--giant-tail-balance") {const auto n=num();if(n>1)throw std::runtime_error("giant-tail-balance must be 0 or 1");o.giant_tail_balance=n!=0;o.portable_cli.insert(a);}
         else if (a == "--b2-round-chain") {const auto n=num();if(n>1)throw std::runtime_error("b2-round-chain must be 0 or 1");o.b2_round_chain=n!=0;o.portable_cli.insert(a);}
-        else if (a == "--groot-layout") {const auto n=num();if(n>1)throw std::runtime_error("groot-layout must be 0 or 1");o.groot_layout=int(n);}
+        else if (a == "--groot-layout") {
+            auto mode=value();if(mode=="0")mode="false";else if(mode=="1")mode="true";
+            o.groot_layout=ecm_config::automatic_boolean(mode,"groot-layout");o.portable_cli.insert(a);
+        }
         else if (a == "--d") { o.d = num(); o.has_d = true; }
         else if (a == "--carrier-exponent") {
             const auto p=num();
@@ -254,6 +257,7 @@ void help() {
         "  --device N --arena-mb MB --batch-mb MB --carrier-exponent P\n"
         "  --plan-only --dry-run --results FILE --submission FILE --ntt-counts 0|1\n"
         "  --giant-tail-balance 0|1 --b2-round-chain 0|1 --giant-chain 64|32|auto\n"
+        "  --groot-layout auto|true|false (numeric aliases: 0|1)\n"
         "D=0 uses the OpenCL basic model and hard owned-payload budget.\n"
         "Queue receipts/checkpoints, curve limits, result validation and stop policy are shared.\n"
         "Explicit B2 required; CUDA tune/Auto B2/relocation/Graph policies are not consumed.\n"
@@ -268,6 +272,7 @@ void help() {
         "         --relocation 0|1 (optional conservative suffix, original-range replay on hits/nonunits)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --giant-tail-balance 0|1 --b2-round-chain 0|1 --giant-chain 64|32|auto\n"
+        "         --groot-layout auto|true|false (numeric aliases: 0|1)\n"
         "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
         "      ECM: configured worktodo by default; --tune-worktodo FILE or --tune-exponents bits,...\n"
@@ -392,6 +397,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--relocation"))o.relocation=s.relocation;
     if(!o.portable_cli.count("--giant-chain"))o.giant_chain=s.giant_chain;
     if(!o.portable_cli.count("--giant-tail-balance"))o.giant_tail_balance=s.giant_tail_balance;
+    if(!o.portable_cli.count("--groot-layout"))o.groot_layout=ecm_config::automatic_boolean(s.groot_balanced,"stage2_groot_balanced");
     if(!o.portable_cli.count("--b2-round-chain"))o.b2_round_chain=s.b2_round_chain;
     configure_giant_policy(o);
     if(o.b2_round_chain && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("B2 rounding is not an ECM calibration grid; disable --b2-round-chain for tune");

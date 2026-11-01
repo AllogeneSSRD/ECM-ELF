@@ -167,6 +167,7 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     const auto k=kb*1024/(w*16);
     const bool floor=et::environment_uint(env,"giant_chunk_floor",0)!=0;
     s.giant_chunk=std::max(uint64_t(1),k/p+uint64_t(!floor && k%p))*p;
+    s.canonicalize_point_policy();
     {ecm_stage2::GrootLayoutScope layout(o.groot_layout);
 #ifndef ECM_STAGE2_OPENCL
      s.groot_balanced=ecm_stage2::select_groot_layout(w,b2/d+2,p,int(s.arithmetic_bits),portable_query);}
@@ -225,7 +226,9 @@ int portable_native_plan(const Options &o,const Record &r,uint64_t b2,uint64_t d
     return code;
 }
 bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &plan) {
-    ecm_stage2::GiantPolicyScope point_scope(s.tail_balance?1:0,s.chain_block);
+    // Native admission can choose a different chunk from the coarse estimate.
+    // Keep permission until that final geometry has been checked.
+    ecm_stage2::GiantPolicyScope point_scope(o.giant_tail_balance?1:0,s.chain_block);
     const int code=portable_native_plan(o,r,s.b2,s.d,s.carrier,plan,int(s.groot_balanced));
     if(code==3)return false;
     if(code)
@@ -274,7 +277,6 @@ struct PortableRuntimeRoutes {
 PortableRuntimeRoutes portable_runtime_routes;
 bool portable_route_scope(const Options &o,const Record &r) {
     auto &state=portable_runtime_routes;
-    if(o.giant_tail_balance || o.giant_chain!="64")return false;
     if(!state.initialized){open_runtime_routes(o.runtime_route_hints,state.hints);state.initialized=true;}
     std::string context;if(!portable_plan_context(o,r,context,false)){state.hints={};state.context.clear();return false;}
     if(context==state.context && !state.hints.scope_key.empty())return true;
@@ -302,17 +304,20 @@ bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,st
         shape=cached->shape;plan=cached->plan;if(hit)*hit=true;
         if(portable_plan_metrics)++portable_plan_metrics->cache_hits;
         std::string route_context;
-        if(portable_route_scope(o,r) && portable_plan_context(o,r,route_context,false) && route_context==portable_runtime_routes.context)
+        if(pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block) &&
+           portable_route_scope(o,r) && portable_plan_context(o,r,route_context,false) && route_context==portable_runtime_routes.context)
             portable_runtime_routes.hints.put(portable_route(shape,before),true,before);
         return true;
     }
-    const bool route_scope=portable_route_scope(o,r);
+    const bool route_scope=pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block) && portable_route_scope(o,r);
     pt::RuntimeRouteHint route;
     if(route_scope && portable_runtime_routes.hints.find(shape.d,shape.carrier,before,route,shape.groot_balanced)) {
         const auto after=portable_memory_snapshot(o.device);
-        if(after.valid() && after==before) {
-            shape.fold=route.fold!=0;shape.frontier=route.frontier!=0;shape.giant_chunk=route.chunk;
-            shape.chain_min=route.chain_min;shape.force_ladder=route.ladder!=0;plan.clear();if(hit)*hit=true;
+        auto routed=shape;routed.fold=route.fold!=0;routed.frontier=route.frontier!=0;routed.giant_chunk=route.chunk;
+        routed.chain_min=route.chain_min;routed.force_ladder=route.ladder!=0;
+        routed.tail_balance=o.giant_tail_balance;routed.canonicalize_point_policy();
+        if(after.valid() && after==before && pt::runtime_point_route_cacheable(routed.tail_balance,routed.chain_block)) {
+            shape=routed;plan.clear();if(hit)*hit=true;
             memo.put(key,Value{shape,plan},before,route.free,after,true);
             if(portable_plan_metrics){++portable_plan_metrics->cache_hits;++portable_plan_metrics->route_hits;}
             return true;
@@ -333,7 +338,8 @@ bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,st
                 u64(plan_scalar(plan,"free_bytes"),"plan free snapshot"),
                 u64(plan_scalar(memory,"required_free_bytes"),"required free snapshot"),after,shape.groot_balanced);
     }catch(const std::runtime_error &){}
-    if(route_scope)portable_runtime_routes.hints.put(portable_route(shape,before),
+    if(route_scope && pt::runtime_point_route_cacheable(shape.tail_balance,shape.chain_block))
+        portable_runtime_routes.hints.put(portable_route(shape,before),
         admitted && pt::runtime_plan_may_reuse(before,reported,after),after);
     return admitted;
 }
@@ -371,11 +377,12 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
 }
 void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m) {
     const auto &s=observation.shape;
-    if(!m.clean || m.bad || !m.checked || !m.selftest_cases || !m.phases.complete ||
+    if(!m.clean || m.bad || !m.checked || !m.selftest_cases || !m.phases.complete || m.point_policy_replayed ||
        !(m.total_seconds>0) || m.d!=s.d || m.p!=ecm_stage2::cost::phi(s.d)/2 ||
-       m.giant_points!=s.b2/s.d+2 || m.fold_resident!=s.fold || m.frontier_resident!=s.frontier || m.groot_balanced!=s.groot_balanced)
+       m.giant_points!=s.b2/s.d+2 || m.fold_resident!=s.fold || m.frontier_resident!=s.frontier ||
+       m.groot_balanced!=s.groot_balanced || m.giant_tail_balance!=s.tail_balance)
         throw std::runtime_error("curve is incomplete, unchecked, or changed its planned execution path");
-    auto metrics=et::fields(tune_metrics_json(m));metrics.erase("total_seconds");
+    auto metrics=et::fields(tune_metrics_json(m));metrics.erase("total_seconds");metrics.erase("point_policy_replayed");
     for(const auto &field:metrics)observation.sample[field.first]=field.second;
     auto &sample=observation.sample;
     sample["mean_seconds"]=pt::numeric(m.total_seconds);sample["min_seconds"]=sample["max_seconds"]=sample["mean_seconds"];
@@ -522,7 +529,8 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
                            nodes[i].samples,o.runtime_remaining)) {
             ++budget_rejected;nodes[i].rejected=true;reason="exploration_budget";continue;
         }
-        if(rejection_cache && portable_runtime_routes.hints.rejected.contains(s.d,s.carrier,portable_memory_snapshot(o.device),s.groot_balanced)) {
+        if(rejection_cache && pt::runtime_point_route_cacheable(s.tail_balance,s.chain_block) &&
+           portable_runtime_routes.hints.rejected.contains(s.d,s.carrier,portable_memory_snapshot(o.device),s.groot_balanced)) {
             ++memory_cache_hits;nodes[i].rejected=true;reason="cached_memory_admission";continue;
         }
         ++native_admissions;
@@ -614,7 +622,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             pt::matches(engine.profile.conditions.at(et::uint(sample,"condition")),engine.condition,engine.ignore)) {
             const auto shape=engine.shape(sample);
             if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
-               shape.carrier!=carrier || shape.b2!=o.b2 || shape.tail_balance!=original.tail_balance ||
+               shape.carrier!=carrier || shape.b2!=o.b2 ||
                (o.giant_chain!="auto" && shape.chain_block!=original.chain_block) || (o.has_d && o.d && shape.d!=o.d) ||
                (o.groot_layout>=0 && shape.groot_balanced!=bool(o.groot_layout)))continue;
             auto &best=historical[shape.groot_balanced];
@@ -1073,9 +1081,12 @@ bool portable_measure(Options o,const TaskDefaults &settings,const PortableInput
         std::ifstream in(result);std::string row,extra;if(!std::getline(in,row) || std::getline(in,extra))throw std::runtime_error("invalid calibration receipt");
         auto f=et::fields(row);if(et::uint(f,"d")!=d || et::uint(f,"giant_points")!=b2/d+2 || et::uint(f,"bad") ||
             !et::uint(f,"clean") || !et::uint(f,"selftest_cases") || !et::uint(f,"checked"))throw std::runtime_error("invalid completed calibration shape");
+        if(pt::optional_uint(f,"point_policy_replayed"))throw std::runtime_error("calibration replayed the original point policy; timing is not eligible");
         if(bool(et::uint(f,"fold_resident"))!=shape.fold || bool(et::uint(f,"frontier_resident"))!=shape.frontier ||
+           bool(pt::optional_uint(f,"giant_tail_balance"))!=shape.tail_balance ||
            bool(et::uint(f,"groot_balanced"))!=shape.groot_balanced)
             throw std::runtime_error("calibration execution path differs from planned path; evidence retained");
+        f.erase("point_policy_replayed");
         if(repeat)trials.push_back(std::move(f));
         std::cout<<"ecm_tune_progress: N="<<shape.target_bits<<" D="<<d<<" B2="<<b2<<" repeat="<<repeat<<'/'<<repeats
             <<" arithmetic_bits="<<shape.arithmetic_bits<<" kind="<<(shape.mersenne?"mersenne":"generic")
@@ -1804,6 +1815,7 @@ std::string tune_metrics_json(const EcmStage2Metrics &m) {
         <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
         <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
         <<",\"groot_balanced\":"<<int(m.groot_balanced)
+        <<",\"giant_tail_balance\":"<<int(m.giant_tail_balance)<<",\"point_policy_replayed\":"<<int(m.point_policy_replayed)
         <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
     for(size_t i=0;i<ecm_stage2::timing::count;++i)
         out<<",\"phase_"<<ecm_stage2::timing::names[i]<<"_seconds\":"<<m.phases.seconds[i];
@@ -1817,6 +1829,9 @@ ecm_stage2::tune::Fields tune_environment() {
         const auto key=row.substr(0,eq),value=row.substr(eq+1);
         // D is explicit during tune; logging and audits are not runtime knobs.
         if(key=="NTT_D_MODEL" || key=="NTT_NO_PROGRESS" || key=="NTT_MEMORY_AUDIT" || key=="NTT_REQUEST_AUDIT")continue;
+        // Actual borrowing is a row/Shape identity, not an environment request.
+        // The full native-plan memo still binds the complete environment.
+        if(key=="NTT_GIANT_TAIL_BALANCE")continue;
         if(value.find_first_not_of("0123456789.eE+-")!=value.npos) {
             FreeEnvironmentStringsA(block);throw std::runtime_error("ECM tune cannot describe nonnumeric policy: "+key);
         }

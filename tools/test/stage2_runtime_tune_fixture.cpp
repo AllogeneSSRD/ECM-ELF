@@ -189,9 +189,32 @@ int main(int argc,char **argv) {
         require(points.samples.size()==3,"point policies pooled their measurements");
         p::Estimator pm(points,current,p::Ignore::parse("environment"),query);
         const auto legacy_point=pm.shape(points.samples[0]),balanced_point=pm.shape(points.samples[1]),short_point=pm.shape(points.samples[2]);
+        auto noop=legacy_point;noop.d=207480;noop.b2=uint64_t(130213-2)*noop.d;
+        noop.giant_chunk=145152;noop.chain_min=32768;noop.force_ladder=false;noop.chain_block=64;noop.tail_balance=false;
+        auto permitted=noop;permitted.tail_balance=true;permitted.canonicalize_point_policy();
+        require(!permitted.tail_balance && permitted.key()==noop.key(),"no-op borrowing split the complete shape identity");
+        require(p::runtime_point_route_cacheable(permitted.tail_balance,64),"no-op borrowing disabled route hints");
+        permitted.d=180180;permitted.b2=uint64_t(149940-2)*permitted.d;permitted.giant_chunk=138240;permitted.tail_balance=true;
+        permitted.canonicalize_point_policy();
+        require(permitted.tail_balance && !p::runtime_point_route_cacheable(permitted.tail_balance,64),"active borrowing reused an incomplete route hint");
+        require(!p::runtime_point_route_cacheable(false,32),"short chains reused a legacy route hint");
+        permitted.force_ladder=true;permitted.canonicalize_point_policy();
+        require(!permitted.tail_balance,"forced ladder kept a fictitious balanced schedule");
         require(pm.runtime_statistics(legacy_point).seconds==70 && pm.runtime_statistics(balanced_point).seconds==60 &&
             pm.runtime_statistics(short_point).seconds==50,"point policy absent from exact lookup");
         require(!pm.eligible(points.samples[1],legacy_point) && !pm.eligible(points.samples[2],legacy_point),"ignore environment crossed point policy");
+        auto request0=current,request1=current;
+        request0["env_giant_tail_balance"]="0";request1["env_giant_tail_balance"]="1";
+        require(p::matches(request0,request1,p::Ignore::parse("")) && p::matches(request0,current,p::Ignore::parse("")),
+            "redundant request environment split the actual point-policy identity");
+        p::Profile old_requests;old_requests.condition(request0);old_requests.update(original);old_requests.update(balanced);
+        p::Estimator request_model(old_requests,request1,p::Ignore::parse(""),query);
+        require(request_model.runtime_statistics(legacy_point).seconds==70 &&
+            request_model.runtime_statistics(balanced_point).seconds==60 &&
+            !request_model.eligible(old_requests.samples[1],legacy_point),
+            "old request metadata blocked no-op reuse or pooled a different actual schedule");
+        request1["env_giant_chain_min"]="16384";
+        require(!p::matches(request0,request1,p::Ignore::parse("")),"unrelated environment constraints were relaxed");
         {std::ofstream out(path);out<<points.serialize();}
         require(p::Profile::load(path).serialize()==points.serialize(),"point policy roundtrip changed");
         std::vector<p::RuntimeCandidate> chains{{legacy_point,{2,0,70,0},1,true},

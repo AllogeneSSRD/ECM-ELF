@@ -79,6 +79,10 @@ void TomlFile::set(const std::string &section, const std::string &key,
         encoded=ecm_results::json::quote(value);
     else if(type=="rect")encoded="["+value+"]";
     else if(type=="bool")encoded=(value=="1"||value=="true")?"true":"false";
+    else if(type=="bool|string") {
+        const auto canonical=ecm_config::automatic_boolean_text(value,key.c_str());
+        encoded=canonical=="auto"?ecm_results::json::quote(canonical):canonical;
+    }
     // Replace the LAST occurrence (that is the effective one) and drop nothing else.
     for (std::size_t i = lines_.size(); i-- > 0;) {
         Line &l = lines_[i];

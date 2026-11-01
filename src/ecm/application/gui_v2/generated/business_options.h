@@ -64,6 +64,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage2","stage2_device","[-1|0..2^31-1]","option_stage2_stage2_device","int",true,true,-1,2147483647},
     {"stage2","stage2_log_level","[quiet|curve|phases|batches|debug|0..4]","option_stage2_stage2_log_level","int",false,false,0,0},
     {"stage2","stage2_ntt_counts","[false|true]","option_stage2_stage2_ntt_counts","bool",true,true,0,1},
+    {"stage2","stage2_groot_balanced","[auto|false|true]","option_stage2_stage2_groot_balanced","bool|string",false,false,0,0},
     {"stage2","stage2_giant_tail_balance","[false|true]","option_stage2_stage2_giant_tail_balance","bool",true,true,0,1},
     {"stage2","stage2_b2_round_chain","[false|true]","option_stage2_stage2_b2_round_chain","bool",true,true,0,1},
     {"stage2","stage2_giant_chain","[64|32|auto]","option_stage2_stage2_giant_chain","string",false,false,0,0},

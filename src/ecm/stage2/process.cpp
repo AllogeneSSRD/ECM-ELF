@@ -50,6 +50,7 @@ int run_curve_process(const CurveProcessRequest &o) {
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
     if(o.groot_layout>=0)arg(L"--groot-layout",uint64_t(o.groot_layout));
+    else cmd+=L" --groot-layout auto"; // Preserve explicit auto over a forced TOML value.
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     arg(L"--pack-zero",o.pack_zero?1:0);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
