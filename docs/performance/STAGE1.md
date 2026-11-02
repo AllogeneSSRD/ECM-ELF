@@ -4,6 +4,8 @@
 
 CUDA Montgomery 默认 ladder、TPB128、按容器选择 TPI，分档寄存器；PRAC 默认不编译。GPU Edwards 默认窗口 NAF。已测局部最佳不能扩大到其他位宽/设备或直接替换默认。
 
+共享CGBN专用平方处于算子实验阶段，普通Montgomery模平方尚无替换资格，Stage1生产平方保持原实现；4060 Laptop的完整宽平方、模平方、GMP与NCU结果见[专用平方验证](CGBN_SQUARE.md)。
+
 完整曲线 wall、GPU kernel 时间、批量摊销 s/curve 和短时投影分别报告。生产 B1=10e6…260e6 的短时采样按完整/窗口工作比投影，排除冷准备、最终归一化/save；checkpoint 不算已完成曲线。
 
 重复实验采用预热及相反/交错顺序，并保留完整矩阵、失败和原始日志；下列单次 GPU 矩阵按用户指定不重复，不提供波动估计。管理员 NCU 会重放，采集时间不作吞吐；Nsight Systems 的自身事件间隙不等于整卡空闲比例。
