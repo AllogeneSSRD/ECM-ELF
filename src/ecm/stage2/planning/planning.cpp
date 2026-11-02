@@ -202,7 +202,7 @@ bool portable_runtime_bounds(const Options &o,pt::Shape &shape) {
     if(!pt::runtime_bounds(shape,o.b2,o.b2_round_chain,portable_runtime_bound_limit(o)))return false;
     if(o.b2_round_chain) {
         // A short requested interval may have no chain until it is rounded.
-        shape.giant_coop=ecm_stage2::cooperative_point_width(shape.arithmetic_bits)?o.selected_giant_coop:0;
+        if(o.giant_backend!="auto")shape.giant_coop=ecm_stage2::cooperative_point_width(shape.arithmetic_bits)?o.selected_giant_coop:0;
         portable_point_backends(shape);
     }
     return true;
@@ -211,6 +211,9 @@ void round_giant_bounds(Options &o,const Record &r) {
     if(!o.b2_round_chain)return;
     if(!o.d)throw std::runtime_error("B2 rounding requires a selected D");
     auto shape=portable_shape(o,r,o.b2,o.d,o.carrier_exponent);
+    // The short request can have no chain, while its rounded execution does.
+    // Preserve the selector's backend until actual-bound admission resolves it.
+    shape.giant_coop=o.selected_giant_coop;
     std::string admitted;
     if(!portable_runtime_candidate_admit(o,r,shape,admitted))
         throw std::runtime_error("B2 rounding cannot satisfy the chain, live memory or AutoB2 bound limit");
@@ -375,8 +378,9 @@ bool portable_runtime_candidate_admit(const Options &o,const Record &r,pt::Shape
     // Actual B2 can change the native capacity. Require a stable admitted
     // fixed point, with a hard attempt bound; never relabel a stale plan.
     bool all_cached=true;
+    const auto requested_backend=o.giant_backend=="auto"?shape.giant_coop:o.selected_giant_coop;
     for(unsigned attempt=0;attempt<4;++attempt) {
-        shape.giant_coop=ecm_stage2::cooperative_point_width(shape.arithmetic_bits)?o.selected_giant_coop:0;
+        shape.giant_coop=ecm_stage2::cooperative_point_width(shape.arithmetic_bits)?requested_backend:0;
         bool cached=false;
         if(!portable_runtime_admit(o,r,shape,plan,&cached))return false;
         all_cached&=cached;const auto admitted_b2=shape.b2;
@@ -394,7 +398,7 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     // Selection normally fixes D. A protected legacy fallback may leave it 0.
     const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
     auto shape=portable_shape(o,r,o.b2,d,o.carrier_exponent);pt::Work work;
-    if(!engine.cached_work(shape,work) || work.p<512 || !work.exact_topology)return result;
+    if(!engine.cached_work(shape,work) || (work.p<512 && !(o.has_d && o.d)) || !work.exact_topology)return result;
     std::string plan;bool cache_hit=false;
     const bool admitted=portable_runtime_admit(o,r,shape,plan,&cache_hit);result.plan_cache_hits=cache_hit?1:0;
     if(!admitted || engine.runtime_statistics(shape,true).count>=o.runtime_samples)return result;
@@ -663,24 +667,25 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         std::map<std::pair<uint64_t,bool>,unsigned> ds{{{center,protected_layout},carrier?0u:1u}};
         if(original.groot_balanced!=protected_layout)ds[{center,original.groot_balanced}]=2;
         std::map<bool,const et::Fields*> historical;
-        unsigned preferred_baby=o.selected_baby_coop;double preferred_seconds=std::numeric_limits<double>::infinity();
+        unsigned preferred_baby=o.selected_baby_coop,preferred_giant=o.selected_giant_coop;
+        double preferred_seconds=std::numeric_limits<double>::infinity();
         for(const auto &sample:engine.profile.samples)if(pt::measured(sample) &&
             pt::matches(engine.profile.conditions.at(et::uint(sample,"condition")),engine.condition,engine.ignore)) {
             const auto shape=engine.shape(sample);
             if(shape.baby_coop==ecm_stage2::point_backend_unknown || shape.giant_coop==ecm_stage2::point_backend_unknown ||
-               (o.baby_backend!="auto" && shape.baby_coop!=original.baby_coop) || shape.giant_coop!=original.giant_coop)continue;
+               (o.baby_backend!="auto" && shape.baby_coop!=original.baby_coop) ||
+               (o.giant_backend!="auto" && shape.giant_coop!=original.giant_coop))continue;
             if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
                shape.carrier!=carrier || !pt::runtime_bound_matches(shape,o.b2,o.b2_round_chain,portable_runtime_bound_limit(o)) ||
                (o.giant_chain!="auto" && shape.chain_block!=original.chain_block) || (o.has_d && o.d && shape.d!=o.d) ||
                (o.groot_layout>=0 && shape.groot_balanced!=bool(o.groot_layout)))continue;
             // Check only this target family, not every row of a wide profile.
             // A forced-coop result alone does not prove an automatic benefit.
-            if(o.baby_backend=="auto" && shape.baby_coop==32 &&
-               !pt::qualified_baby_backend(engine,shape,o.tune_min_repeats).available)continue;
-            if(o.baby_backend=="auto") {
+            if(!pt::qualified_point_backends(engine,shape,o.baby_backend=="auto",o.giant_backend=="auto",o.tune_min_repeats))continue;
+            if(o.baby_backend=="auto" || o.giant_backend=="auto") {
                 const auto measured=engine.runtime_statistics(shape);
                 if(measured.count>=o.tune_min_repeats && measured.seconds>0 && measured.comparison_seconds()<preferred_seconds) {
-                    preferred_seconds=measured.comparison_seconds();preferred_baby=shape.baby_coop;
+                    preferred_seconds=measured.comparison_seconds();preferred_baby=shape.baby_coop;preferred_giant=shape.giant_coop;
                 }
             }
             auto &best=historical[shape.groot_balanced];
@@ -691,8 +696,10 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         for(const auto &entry:ds) {
             auto shape=portable_shape(o,r,o.b2,entry.first.first,carrier);shape.groot_balanced=entry.first.second;
             if(o.baby_backend=="auto")shape.baby_coop=preferred_baby;
+            if(o.giant_backend=="auto")shape.giant_coop=preferred_giant;
             pt::Work w;std::string plan;
-            if(!portable_runtime_bounds(o,shape) || !engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_runtime_candidate_admit(o,r,shape,plan))continue;
+            if(!portable_runtime_bounds(o,shape) || !engine.cached_work(shape,w) ||
+               (w.p<512 && !(o.has_d && o.d)) || !w.exact_topology || !portable_runtime_candidate_admit(o,r,shape,plan))continue;
             const auto stats=engine.runtime_statistics(shape);
             candidates.push_back({shape,stats,entry.second,shape.d==center || (o.has_d && o.d)});
             if(o.baby_backend=="auto" && ecm_stage2::cooperative_point_width(shape.arithmetic_bits)) {
@@ -700,6 +707,13 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
                 const auto previous=engine.runtime_statistics(other);
                 const bool reference_ready=shape.baby_coop || stats.count>=o.tune_min_repeats;
                 if(reference_ready && other.key()!=shape.key() && previous.count && portable_runtime_candidate_admit(o,r,other,plan))
+                    candidates.push_back({other,engine.runtime_statistics(other),2,true});
+            }
+            if(o.giant_backend=="auto" && pt::giant_backend_bucket(shape))for(auto mode:{0u,32u,16u}) {
+                if(mode==shape.giant_coop)continue;
+                auto other=shape;other.giant_coop=mode;const auto previous=engine.runtime_statistics(other);
+                if(previous.count && (shape.giant_coop || stats.count>=o.tune_min_repeats) &&
+                   portable_runtime_candidate_admit(o,r,other,plan))
                     candidates.push_back({other,engine.runtime_statistics(other),2,true});
             }
             if(o.giant_chain=="auto") {
@@ -722,6 +736,19 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
                 candidates.push_back({shape,engine.runtime_statistics(shape),1,true});
         }
         for(auto &c:candidates)if(c.shape.baby_coop==32 && c.statistics.count<o.tune_min_repeats) {
+            c.priority=1;backend_pending=true;
+        }
+    }
+    if(!backend_pending && o.giant_backend=="auto" && o.tune_runtime && (!o.runtime_remaining || o.runtime_remaining>=2*o.tune_min_repeats)) {
+        for(auto shape:pt::runtime_giant_trials(candidates,o.tune_min_repeats)) {
+            // A paired region already determines this backend; only the winner
+            // needs measurement at a neighboring D, not both losing alternatives.
+            if(pt::qualified_giant_backend(engine,shape,o.tune_min_repeats,shape.giant_coop).available)continue;
+            std::string plan;
+            if(portable_runtime_candidate_admit(o,r,shape,plan) && shape.giant_coop)
+                candidates.push_back({shape,engine.runtime_statistics(shape),1,true});
+        }
+        for(auto &c:candidates)if(c.shape.giant_coop && c.statistics.count<o.tune_min_repeats) {
             c.priority=1;backend_pending=true;
         }
     }
@@ -1100,7 +1127,8 @@ PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenn
     append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+hex+"; X=0x"+x+"; Z=1;");
     return {save,records(save,0,1).at(0),mersenne?"mersenne_small_factor_stripped_band":"probable_prime_gmp_nextprime"};
 }
-bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned repeats,bool pair,bool auto_baby=false) {
+bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned repeats,bool pair,bool auto_baby=false,bool auto_giant=false) {
+    if(auto_giant)shape.giant_coop=0;
     if(auto_baby && ecm_stage2::cooperative_point_width(shape.arithmetic_bits) && ecm_stage2::d_catalog::degree(shape.d)>=512) {
         auto trial=shape;trial.baby_coop=32;portable_point_backends(trial);
         if(trial.baby_coop==32) {
@@ -1108,6 +1136,12 @@ bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned rep
             if(!choice.available)return false;
             shape.baby_coop=choice.mode;
         }
+    }
+    if(auto_giant && pt::giant_backend_bucket(shape)) {
+        const auto choice=pt::qualified_giant_backend(model,shape,repeats);
+        if(!choice.available || !pt::qualified_giant_backend(model,shape,repeats,16).available ||
+           !pt::qualified_giant_backend(model,shape,repeats,32).available)return false;
+        shape.giant_coop=choice.mode;
     }
     const auto complete=[&](const pt::Shape &s){const auto row=model.observed(s);return row && et::uint(*row,"repeats")>=repeats;};
     if(!complete(shape))return false;
@@ -1126,6 +1160,54 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
     // Store that legacy policy in its actual condition, never label it as tuned.
     o.short_batch_tune=false;configure_short_ntt_batches(o);
     condition=profile.condition(portable_condition(o));
+    if(o.giant_backend=="auto") {
+        auto reference=portable_shape(o,input.record,b2,d,carrier);reference.giant_coop=0;std::string admitted;
+        if(!portable_admit(o,input.record,reference,admitted))return false;
+        if(pt::giant_backend_bucket(reference)) {
+            pt::Estimator known(profile,profile.conditions.at(condition),pt::Ignore::parse(o.tune_ignore),portable_query,true,repeats);
+            bool baby_ready=true;
+            if(o.baby_backend=="auto") {
+                auto trial=reference;trial.baby_coop=32;portable_point_backends(trial);
+                if(trial.baby_coop==32 && ecm_stage2::d_catalog::degree(d)>=512) {
+                    const auto baby=pt::qualified_baby_backend(known,reference,repeats);
+                    baby_ready=baby.available;if(baby_ready)reference.baby_coop=baby.mode;
+                } else reference.baby_coop=0;
+            }
+            const auto choice=baby_ready?pt::qualified_giant_backend(known,reference,repeats):pt::PointBackendChoice{};
+            if(choice.available && pt::qualified_giant_backend(known,reference,repeats,16).available &&
+               pt::qualified_giant_backend(known,reference,repeats,32).available) {
+                requested.selected_baby_coop=o.selected_baby_coop=reference.baby_coop;
+                requested.selected_giant_coop=o.selected_giant_coop=choice.mode;
+                o.baby_backend=ecm_stage2::point_backend_name(reference.baby_coop);
+                o.giant_backend=ecm_stage2::point_backend_name(choice.mode);
+            } else {
+                // Settle baby once against scalar giant, then try the two giant
+                // alternatives with that baby fixed. Neighboring D reuse this
+                // paired region instead of repeating a Cartesian grid.
+                Options scalar=o;scalar.giant_backend="scalar";scalar.selected_giant_coop=0;
+                unsigned count=0;et::Fields best;
+                bool changed=portable_measure(scalar,settings,input,b2,d,carrier,repeats,budget,evidence,profile,condition,
+                    skip_verified_factor,&count,&best);
+                if(count>=repeats)for(auto mode:{32u,16u}) {
+                    Options trial=o;trial.baby_backend=ecm_stage2::point_backend_name(unsigned(et::uint(best,"baby_coop")));
+                    trial.selected_baby_coop=unsigned(et::uint(best,"baby_coop"));
+                    trial.giant_backend=ecm_stage2::point_backend_name(mode);trial.selected_giant_coop=mode;
+                    unsigned n=0;et::Fields row;
+                    changed=portable_measure(trial,settings,input,b2,d,carrier,repeats,budget,evidence,profile,condition,
+                        skip_verified_factor,&n,&row) || changed;
+                    if(n>=repeats && et::real(row,"mean_seconds")+pt::optional_real(row,"point_check_seconds")<
+                        et::real(best,"mean_seconds")+pt::optional_real(best,"point_check_seconds")){best=row;count=n;}
+                }
+                if(!best.empty()) {
+                    requested.selected_baby_coop=unsigned(et::uint(best,"baby_coop"));
+                    requested.selected_giant_coop=unsigned(et::uint(best,"giant_coop"));
+                    if(completed_repeats)*completed_repeats=count;
+                    if(completed_sample)*completed_sample=best;
+                }
+                return changed;
+            }
+        } else {o.giant_backend="scalar";requested.selected_giant_coop=o.selected_giant_coop=0;}
+    }
     if(o.baby_backend=="auto") {
         auto reference=portable_shape(o,input.record,b2,d,carrier),trial=reference;
         trial.baby_coop=32;portable_point_backends(trial);
@@ -1585,7 +1667,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
             if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches))continue;
             pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
             const auto prior=estimator.observed(shape);
-            if(portable_layouts_complete(estimator,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto")){++skipped;++paired_references;continue;}
+            if(portable_layouts_complete(estimator,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto")){++skipped;++paired_references;continue;}
             unsigned completed=0;
             et::Fields formal_sample;
             const bool changed=portable_measure(o,settings,target.input,b,d,carrier,grid.repeats,
@@ -1647,7 +1729,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                 const auto prior=model.observed(shape);
                 const auto reference=reference_samples.find({target_index,shape.key()});
                 const bool reuse_current=reference!=reference_samples.end();
-                const bool reuse=portable_layouts_complete(model,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto");
+                const bool reuse=portable_layouts_complete(model,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto");
                 unsigned completed=0;
                 et::Fields formal_sample;
                 if(!reuse) {

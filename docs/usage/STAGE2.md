@@ -44,7 +44,7 @@ NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续
 
 直接读档和队列运行启动时均输出 `ECM-ELF x.y.z (Stage2)` 版本横幅，包括 `--dry-run` 和 `--plan-only`；GUI 从这个横幅读取实际 worker 版本。只输出机器数据的内部辅助入口保持其原有格式。
 
-CUDA点算术使用`[stage2]`或`[workers.N.stage2]`中的`stage2_baby_backend="auto"`、`stage2_giant_backend="scalar"`默认配置。Baby可强制scalar／coop32，giant可强制coop16／coop32；CLI为`--baby-backend`／`--giant-backend`。协作仅支持实际算术8193…16384 bits，承载时按承载位宽判断。auto先保留标量，在有效队列上积累并比较少量曲线后选择，受`stage2_tune_min_repeats`控制；短队列或关闭运行时探索时不会为收集数据额外重复任务。配置范围见[TOML参考](../ECM_TOML_REFERENCE.md#stage2_baby_backend)，学习、回退和性能文件复用见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
+CUDA点算术使用`[stage2]`或`[workers.N.stage2]`中的`stage2_baby_backend="auto"`、`stage2_giant_backend="auto"`默认配置。Baby可强制scalar／coop32，giant可强制scalar／coop16／coop32；CLI为`--baby-backend`／`--giant-backend`。协作仅支持实际算术8193…16384 bits，承载时按承载位宽判断；giant还需真实chain。auto先保留标量，在当前D／布局／链长上先比较baby、再逐项比较giant，受`stage2_tune_min_repeats`控制；达到重复数后选最快合格均值，再继续D与链长搜索。短队列或关闭运行时探索时不会为收集数据额外重复任务。配置范围见[TOML参考](../ECM_TOML_REFERENCE.md#stage2_giant_backend)，学习、回退和性能文件复用见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
 
 同一工作目录的多GPU可在每个worker的Stage2分区指定性能文件；使用现有`stage2_tune_profile`键：
 

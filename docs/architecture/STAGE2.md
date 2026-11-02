@@ -79,7 +79,7 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 
 默认标量seed和chain宽位核在W>128时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用`stage2_giant_chain=32|64|auto`选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。标量chain核位于`src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
 
-`stage2_giant_backend=scalar|coop16|coop32`默认scalar；协作仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Seed、giant短尾及非单位ladder恢复仍走原路线。资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
+`stage2_giant_backend=auto|scalar|coop16|coop32`默认auto，先保留标量，再按[配对选型规则](AUTO_B2.md#协作点后端选型)学习。协作仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Seed、giant短尾及非单位ladder恢复仍走原路线。资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
 
 `stage2_baby_backend=auto|scalar|coop32`独立控制`device_baby_generate`的ladder，默认auto。auto缺乏合格观察时保留标量，通过有限配对学习选择；coop32显式请求协作。32仅对128<W≤256生效，每点32线程、每块64线程，复用上述四档容量；以现有`g_ladder_cap`分段，在同一输出数组生成相同二进制ladder坐标。模数识别使用点上下文的实际算术模数，承载时不能误用较小的GCD目标N；后续归一化与非单位恢复不变。设备baby路径因预算回退时不启用协作ladder。没有新增坐标缓冲、补齐数组或H2D／D2H。
 

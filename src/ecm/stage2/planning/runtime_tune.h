@@ -25,10 +25,10 @@ struct RuntimeChoice {
     size_t index=0;
     bool available=false,probe=false;
 };
-struct BabyBackendChoice {bool available=false;unsigned mode=0;double distance=0;};
+struct PointBackendChoice {bool available=false;unsigned mode=0;double distance=0;};
 // A paired comparison within one backend-width/point-batch region is reusable
 // across neighboring D. Never compare an unpaired fast D against another D.
-inline BabyBackendChoice qualified_baby_backend(const Estimator &engine,const Shape &reference,Word minimum=2) {
+inline PointBackendChoice qualified_baby_backend(const Estimator &engine,const Shape &reference,Word minimum=2) {
     std::map<Shape::Key,std::array<const Fields*,2>> pairs;
     const auto cap=optional_uint(engine.condition,"env_ladder_cap",8192);
     const auto bucket=point_batch_bucket(d_catalog::degree(reference.d),cap);
@@ -43,7 +43,7 @@ inline BabyBackendChoice qualified_baby_backend(const Estimator &engine,const Sh
         auto &pair=pairs[key];const auto at=mode==32?1:0;
         if(!pair[at] || uint(row,"repeats")>uint(*pair[at],"repeats"))pair[at]=&row;
     }
-    BabyBackendChoice result;
+    PointBackendChoice result;
     for(const auto &entry:pairs)if(entry.second[0] && entry.second[1]) {
         const auto &a=*entry.second[0],&b=*entry.second[1];
         const double distance=std::abs(std::log2(double(d_catalog::degree(uint(a,"d")))/d_catalog::degree(reference.d)));
@@ -54,6 +54,55 @@ inline BabyBackendChoice qualified_baby_backend(const Estimator &engine,const Sh
         }
     }
     return result;
+}
+// Giant parallelism is the number of independent chains, not total points.
+// Require a real chain route and retain occupancy/capacity boundaries on reuse.
+inline Word giant_backend_bucket(const Shape &s) {
+    GiantWork work;
+    if(!cooperative_point_width(s.arithmetic_bits) || !s.d || !s.chain_block ||
+       !giant_work(s.b2/s.d+2,s.d,s.giant_chunk,s.chain_min,s.force_ladder,work,
+                   d_catalog::degree(s.d),s.tail_balance) || !work.chain_points)return 0;
+    return point_batch_bucket((std::min(s.b2/s.d+2,s.giant_chunk)+s.chain_block-1)/s.chain_block,1ull<<24);
+}
+inline PointBackendChoice qualified_giant_backend(const Estimator &engine,const Shape &reference,Word minimum=2,
+                                                unsigned required=point_backend_unknown) {
+    const auto bucket=giant_backend_bucket(reference);if(!bucket)return {};
+    std::map<Shape::Key,std::array<const Fields*,3>> pairs;
+    for(const auto &row:engine.profile.samples)if(measured(row) && uint(row,"repeats")>=minimum &&
+        matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
+        auto s=engine.shape(row);
+        if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
+           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop ||
+           s.chain_block!=reference.chain_block || s.fold!=reference.fold || s.frontier!=reference.frontier ||
+           s.groot_balanced!=reference.groot_balanced || s.tail_balance!=reference.tail_balance ||
+           (s.giant_coop!=0 && s.giant_coop!=16 && s.giant_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
+        const auto at=s.giant_coop==32?2:s.giant_coop==16?1:0;s.giant_coop=0;
+        auto key=s.key();key[3]=0;auto &pair=pairs[key];
+        if(!pair[at] || uint(row,"repeats")>uint(*pair[at],"repeats"))pair[at]=&row;
+    }
+    PointBackendChoice result;
+    for(const auto &entry:pairs) {
+        const auto &pair=entry.second;if(!pair[0] || (!pair[1] && !pair[2]))continue;
+        if(required!=point_backend_unknown && required && !pair[required==32?2:1])continue;
+        unsigned best=0;
+        const auto seconds=[](const Fields *r){return real(*r,"mean_seconds")+optional_real(*r,"point_check_seconds");};
+        for(unsigned i=1;i<3;++i)if(pair[i] && seconds(pair[i])<seconds(pair[best]))best=i;
+        const double distance=std::abs(std::log2(double(d_catalog::degree(uint(*pair[0],"d")))/d_catalog::degree(reference.d)));
+        if(!result.available || distance<result.distance) {
+            result.available=true;result.distance=distance;result.mode=best==2?32:best==1?16:0;
+        }
+    }
+    return result;
+}
+// Coordinate comparisons can establish 0/0 -> baby32/0 -> baby32/giant32.
+// Accept that measured path without requiring an exhaustive 2x3 grid, while
+// still rejecting a lone forced cooperative observation.
+inline bool qualified_point_backends(const Estimator &engine,const Shape &s,bool baby_auto,bool giant_auto,Word minimum) {
+    bool baby=!baby_auto || !s.baby_coop || qualified_baby_backend(engine,s,minimum).available;
+    bool giant=!giant_auto || !s.giant_coop || qualified_giant_backend(engine,s,minimum,s.giant_coop).available;
+    if(!baby && giant && giant_auto) {auto base=s;base.giant_coop=0;baby=qualified_baby_backend(engine,base,minimum).available;}
+    if(!giant && baby && baby_auto) {auto base=s;base.baby_coop=0;giant=qualified_giant_backend(engine,base,minimum,s.giant_coop).available;}
+    return baby && giant;
 }
 // One alternative at the fastest repeated scalar incumbent per arithmetic
 // family. Keep D/layout/chain fixed, rather than multiplying the D catalogue.
@@ -68,6 +117,24 @@ inline std::vector<Shape> runtime_baby_trials(const std::vector<RuntimeCandidate
         auto s=entry.second->shape;s.baby_coop=32;
         bool found=false;for(const auto &c:all)found|=c.shape.key()==s.key();
         if(!found)out.push_back(s);
+    }
+    return out;
+}
+// Try one giant alternative at a time at the fastest repeated scalar-giant
+// incumbent. TPI32 first, then fixed-container TPI16; never multiply the D grid.
+inline std::vector<Shape> runtime_giant_trials(const std::vector<RuntimeCandidate> &all,Word minimum=2) {
+    std::map<unsigned,const RuntimeCandidate*> best;
+    for(const auto &c:all)if(!c.shape.giant_coop && giant_backend_bucket(c.shape) &&
+        c.statistics.count>=minimum && c.statistics.seconds>0) {
+        auto &at=best[c.shape.carrier];
+        if(!at || c.statistics.comparison_seconds()<at->statistics.comparison_seconds())at=&c;
+    }
+    std::vector<Shape> out;
+    for(const auto &entry:best)for(auto mode:{32u,16u}) {
+        auto s=entry.second->shape;s.giant_coop=mode;
+        const RuntimeCandidate *found=nullptr;for(const auto &c:all)if(c.shape.key()==s.key()){found=&c;break;}
+        if(found && found->statistics.count<minimum)break;
+        if(!found){out.push_back(s);break;}
     }
     return out;
 }

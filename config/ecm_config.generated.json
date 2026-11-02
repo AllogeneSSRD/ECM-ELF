@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "d68d65a24bfa3c286187830f01b4aa0705c8b9f89ebada24aee1013004a10933",
-    "src/ecm/platform/generated/configuration_defaults.h": "100fe2412e1d7a8105f0521a808d48efe6fa946087480dfb35e402e20b58c7d8",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "3d7dbe0120235a3146605a132c47e27e35fa19fb76f1ddff33e6a6be09b99a34",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "b6ab19b3111d4ac6788b72f56b41c643f5ac7dc4e2b211138a90d137f8d3c363",
-    "config/ecm.toml.default": "9b9e30ecb79e33f67bc2a2b991465232becd2cf7ca1b8418a30ec4b6eea42aa5",
-    "config/ecm.toml.example": "6aa465dd16f1064c5d3a6cad811b6f1e3ae24cd61faf66f83fb0bc30da1f6e4f",
-    "docs/ECM_TOML_REFERENCE.md": "e1925775ab973bc53a5d7adab7651b996a11bd0999fc0e3dac0b8bdd0d86a35a",
-    "config/ecm_options.json": "269ccd8ea672636622ab20e8e98fda4c52f741e0a3fe247d8e60c96d25f6252f",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "d7e2c9f67a654975cb3ad2c3d45a43f2d29ede15105dc0a55e6f4daa7a0fd6cc",
+    "src/ecm/platform/generated/configuration_defaults.h": "afdceb677da22a21d24adfc4fdbc60d50d243e862111c352a4c5c53c9e610443",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "d162af11f2b5bc5f2ba69834da3993487c4901a58cf0380537faa139333db6f3",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "80b9b713435ce02c2c31ac082aac7a909ebbf1bece00e49c26f5f83c4c004475",
+    "config/ecm.toml.default": "fc578e4acab1b4fe2d4f6e25c25167156860cfc5f5d763691a9763e980c97989",
+    "config/ecm.toml.example": "05e1579296e6b1922231f27d927fb8c2b23be3201551def6bc9b2a7c0979130d",
+    "docs/ECM_TOML_REFERENCE.md": "725ecd3351a2cd477b3b9cd8bfa4de706462df8e5ed07adc996f86a7db6709e0",
+    "config/ecm_options.json": "98478aacfeec626c30927d17f120468e320093ad2bfec3721f1de851b499e56d",
     "tools/gen/generate_ecm_config.py": "147411d7be9d1dc57063508d0b8d88ea5d97be7657e47459d28679296a0b9260"
   }
 }

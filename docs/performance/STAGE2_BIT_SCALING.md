@@ -467,7 +467,7 @@ CUDA生产点原语提供`NTT_POINT_SQUARE=0|1`同二进制开关，0.57.2默认
 
 ### 11.1 分派、表示与边界
 
-`stage2_giant_backend=scalar|coop16|coop32`默认scalar，也兼容环境开关`NTT_GIANT_COOP=0|16|32`。非零模式仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。该开关不切换baby、seed-pair、归一化、NTT及GCD；baby的独立配置见第12节。Giant后端固定选择，不自动扩张TPI搜索。
+`stage2_giant_backend=auto|scalar|coop16|coop32`默认auto，也兼容环境开关`NTT_GIANT_COOP=0|16|32`；自动学习合同见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。本节0.57.4实验均显式固定后端，不混入后续auto学习成绩。非零模式仅替换实际\(128<W\le256\)、链长2…64的giant链核；小位宽、非单位基点的ladder恢复仍走标量。该开关不切换baby、seed-pair、归一化、NTT及GCD；baby的独立配置见第12节。
 
 16保留固定16384-bit容量，每个64线程块处理4条链；32按实际W选择不小于它的160／192／224／256词容量，每块处理2条链。块数为\(\lceil uK_a/64\rceil\)。前述2048链示例由64个标量块变为TPI16的512块／32768线程，或TPI32的1024块／65536线程。这是提交规模，实际同时驻留的实例仍受寄存器、栈和SM数量限制；TPI16允许一个warp同时执行两个整数，不是整卡只使用16线程。
 
@@ -697,7 +697,7 @@ TPI32每warp仅处理一个标量，使该标量的位分支在warp内一致；�
 
 横轴为依次排列的边界样本，**不是等距位宽轴**；纵轴为事件时间比的对数坐标，小于1表示协作更快。跨10240→10241、12288→12289、14336→14337时，CGBN容器增加一级，比例上升，但本设备全部仍低于1。批量和容器边界因此都进入调优复用条件，而不是只设一个全局位宽开关。
 
-默认baby为auto，缺乏证据时保留标量。只增加当前有效D的一组后端对照，达到最少重复数后比较引擎时间加点启动检查；先完成此比较，再恢复D／链长搜索。Giant保持显式固定后端。TOML、CLI优先级、只读复用、未知旧记录和模型限制的权威规则见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
+Baby和giant默认均为auto，缺乏证据时保留标量。先在当前有效D比较baby，再逐项比较giant32／16，达到最少重复数后按引擎时间加点启动检查选择，再恢复D／链长搜索；仍可分别强制后端。本节0.57.6数据固定giant标量，只表示相应baby实验，不作为联合auto的新测量。0.57.9普通／承载26格的联合后端独立对照、阶段占比及Prime95参考集中在[Stage2性能](STAGE2.md)，不与本节不同B2的四格合并拟合。TOML、CLI优先级、只读复用、未知旧记录和模型限制的权威规则见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
 
 四组原生回归核对配置优先级与worker覆盖、非法值、预算及短块回退、giant三种实际后端、连续队列、未配对保护和增量ECM tune。R=2的六条正常曲线实际baby后端为0／0／32／32／32／32；关闭学习后继续选32，强制scalar能覆盖。仅有两次强制coop32成绩时，auto仍保持标量且不改写只读性能文件。R=1显式tune在D6006先测scalar／coop32，D6930只测胜者；再次运行不重复完成的测量。正常输出为NF，GMP状态、NTT分布及G根摘要一致；这些回归调用不用于性能均值。
 
@@ -730,13 +730,13 @@ TPI32每warp仅处理一个标量，使该标量的位分支在warp内一致；�
 
 本节验收EXE为0.57.6，SHA256 `35691aa62a8c5ca9e67c3d4367d17ca8ec09ad477fba31c76695d07c7f1c577f`，17048064 B；255项构建输入和46个目标文件核验通过，4个CUDA目标文件与冻结0.57.5逐字节相同。这轮改变配置、选型及计时身份，没有更换设备算术。GMP DLL SHA256 `969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。
 
-代码依据：[host_policy.cpp](../../src/ecm/stage2/cuda/host_policy.cpp)21行配置优先级；[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)31／60行区域配对及单后端候选；[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)643／1118行运行时选择与显式校准；[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp)109行点启动检查计时；[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)8行Shape与后端身份。
+代码依据：[host_policy.cpp](../../src/ecm/stage2/cuda/host_policy.cpp)21行配置优先级；[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)31／67行baby／giant区域配对，109／125行有限后端候选；[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)647／1152行运行时选择与显式校准；[engine.cpp](../../src/ecm/stage2/cuda/engine.cpp)109行点启动检查计时；[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)8行Shape与后端身份。
 
 证据根为`data/experiments/stage2_baby_policy_20261101/`：`boundary_w160/w192/w224/w256`为探针，`final_gpu_configuration/unpaired/formal/giant/fallback`为原生回归，`small_final/wide_final`为独立计时，`final_curve_conditions.json`为频率审计，`binary_audit/summary.json`绑定最终构建；失败和编译重叠的探索输出同根保留，不用于正式性能结论。汇总分别为`data/benchmarks/stage2_baby_policy_20261101/boundary_final/`和`curves_report/`，图在对应figures目录。复现工具见[测量协议](../../tools/bench/README_STAGE2_VERSION.md#协作baby-ladder验证)。
 
 ## TODO
 
-- Seed-pair、[D]Q及giant恢复ladder尚未协作；优先核对前两者的输入尺度、邻点输出、单位性及延迟，再验证完整曲线。Baby／giant协作补其他GPU、大B2／更多D／链数资格；baby auto缺少配对时保留标量，giant默认scalar，点成本改变后的D模型须独立校准。
+- Seed-pair、[D]Q及giant恢复ladder尚未协作；优先核对前两者的输入尺度、邻点输出、单位性及延迟，再验证完整曲线。Baby／giant协作补其他GPU、大B2／更多D／链数资格；两项auto缺少配对时保留标量，点成本改变后的D模型须独立校准。
 - 继续比较表示修正融合及普通／梅森编译分工。已完成[延后表示因子的代数核查](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#10-齐次点公式中的表示因子可延后合并)，尚无对应GPU实现或性能数据；保留完整乘积、规范残数与原radix。
 - 定位低位外层启动差异；在更长队列中核对配置、检查、进程／I/O分项，不将同一标量kernel的外层差异误判为CGBN算术收益或回退。
 - 专用平方已通过小档完整矩阵及单步／依赖递推检查；补充其他GPU与大B2资格。浅层Karatsuba／融合短NTT尚未实现，仍须独立GMP及固定D验证；失败与回退样本全部保留。

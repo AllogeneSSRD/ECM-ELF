@@ -27,7 +27,7 @@ from stage2_tune_tables import summaries
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('exe','save','output'):p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--scope',choices=('configuration','formal','giant','unpaired','fallback'),default='configuration')
+    p.add_argument('--scope',choices=('configuration','formal','giant','giant-auto','giant-small','giant-formal','unpaired','fallback'),default='configuration')
     p.add_argument('--allow-gpu-pid',type=int,action='append',default=[])
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     binary=out/'bin';binary.mkdir();(binary/'.gitignore').write_text('*\n')
@@ -67,10 +67,12 @@ def main():
         else:
             assert result.returncode==0,console
             records=completed_records(directory/'result.jsonl');assert len(records)==len(expected_modes)
-            for raw,mode in zip(records,expected_modes):
+            giant_modes=list(expected_giant) if isinstance(expected_giant,(list,tuple)) else [expected_giant]*len(records)
+            assert len(giant_modes)==len(records)
+            for raw,mode,giant in zip(records,expected_modes,giant_modes):
                 normal=normalize_result(raw);engine=raw['stage2-engine']
                 assert raw['status']=='NF' and raw['source-build'].lower()==identity and not normal['factors'] and not normal['bad_factors']
-                assert engine['baby_coop']==mode and engine['giant_coop']==expected_giant,engine
+                assert engine['baby_coop']==mode and (giant is None or engine['giant_coop']==giant),engine
             trace=(directory/'engine.log').read_text(encoding='utf-8')+(directory/'debug.log').read_text(encoding='utf-8')
             check=fields(trace,'s4_multiply_stats');assert not int(check['gmp_check_bad']) and not int(check['gmp_selftest_bad'])
             digest=fields(trace,'real_batched_rootfold');counts=re.findall(r'^ntt_length_counts: log2_length:num_of_ntt (.*)$',trace,re.M)
@@ -86,6 +88,34 @@ def main():
         return row
 
     try:
+        if a.scope in ('giant-auto','giant-small'):
+            queue=out/'ten_curves.save';queue.write_bytes(saved.read_bytes()*10);saved=queue
+            for name,extra in ([] if a.scope=='giant-small' else [('fixed',('--b2','51879828')),('rounded',('--b2-round-chain','1'))]):
+                profile=out/(name+'.toml')
+                call(name,'stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',extra=extra,
+                    profile=profile,runtime=True,expected=[0,0,32,32,32,32,32,32,32,32],expected_giant=[0,0,0,0,32,32,16,16,None,None])
+                measured=[r for r in summaries(tomllib.loads(profile.read_text())) if r['source']=='measured']
+                assert len(measured)==4 and all(r['repeats']>=2 for r in measured) and sum(r['repeats'] for r in measured)==10,measured
+                best=min(measured,key=lambda r:float(r['mean_seconds'])+float(r.get('point_check_seconds',0)))
+                before=sha(profile)
+                call(name+'_readonly','stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',extra=extra,
+                    profile=profile,expected=int(best['baby_coop']),expected_giant=int(best['giant_coop']))
+                assert sha(profile)==before
+            # Small baby degree must not disable an independently eligible
+            # giant chain when the user explicitly fixes D.
+            call('small_baby_degree','stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',
+                extra=('--d','2310'),profile=out/'small_P.toml',runtime=True,
+                expected=[0]*8,expected_giant=[0,0,32,32,16,16,None,None])
+            if a.scope=='giant-small':report['complete']=True;return
+            profile=out/'giant_unpaired.toml'
+            for i in range(2):
+                call('forced_giant_'+str(i),'stage2_baby_backend="coop32"\nstage2_giant_backend="coop32"\n',
+                    extra=('--b2','51879828'),profile=profile,runtime=True,expected=32,expected_giant=32)
+            before=sha(profile)
+            call('unpaired_auto','stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',
+                extra=('--b2','51879828'),profile=profile)
+            assert sha(profile)==before
+            report['complete']=True;return
         if a.scope=='fallback':
             for mode in ('auto','scalar','coop32'):
                 call('low_'+mode,'stage2_baby_backend="'+mode+'"\nstage2_giant_backend="coop32"\n')
@@ -107,16 +137,17 @@ def main():
             call('short_fallback','stage2_giant_backend="coop32"\n')
             report['complete']=True
             return
-        if a.scope=='formal':
+        if a.scope in ('formal','giant-formal'):
+            giant_auto=a.scope=='giant-formal';neighbor=5460 if giant_auto else 6930
             profile=out/'formal.toml'
             config=out/'formal_config.toml';config.write_text('[stage2]\nstage2_short_calibration=false\n')
             snapshots=[]
-            for name,d in [('paired',6006),('neighbor',6930),('incremental',6006)]:
+            for name,d in [('paired',6006),('neighbor',neighbor),('incremental',6006)]:
                 directory=out/name;directory.mkdir()
                 command=[str(exe),'--config',str(config),'--device','1','--tune','ecm','--tune-save',str(saved),
-                    '--tune-d',str(d),'--tune-b2','26000000','--tune-repeats','1','--tune-min-repeats','1',
+                    '--tune-d',str(d),'--tune-b2',('51879828' if giant_auto else '26000000'),'--tune-repeats','1','--tune-min-repeats','1',
                     '--tune-file',str(profile),'--tune-budget-seconds','90','--baby-backend','auto',
-                    '--giant-backend','scalar','--groot-layout','0','--auto-carrier','0','--tune-arithmetic','generic']
+                    '--giant-backend',('auto' if giant_auto else 'scalar'),'--groot-layout','0','--auto-carrier','0','--tune-arithmetic','generic']
                 write(directory/'command.json',command)
                 check_gpu_processes(telemetry.monitor,out,directory/'before.json',allowed=allowed)
                 with (directory/'console.log').open('wb') as log:
@@ -129,7 +160,11 @@ def main():
                 assert all(r['repeats']==1 and float(r['point_check_seconds'])>0 for r in measured)
                 modes={(int(r['d']),int(r['baby_coop'])) for r in measured}
                 assert {(6006,0),(6006,32)}<=modes,modes
-                if name!='paired':assert (6930,32) in modes and (6930,0) not in modes,modes
+                if giant_auto:
+                    triples={(int(r['d']),int(r['baby_coop']),int(r['giant_coop'])) for r in measured}
+                    assert {(6006,0,0),(6006,32,0),(6006,32,32),(6006,32,16)}<=triples,triples
+                    if name!='paired':assert sum(d==neighbor for d,b,g in triples)==1,triples
+                elif name!='paired':assert (neighbor,32) in modes and (neighbor,0) not in modes,modes
                 snapshots.append(measured);report['cases'].append(dict(name=name,modes=sorted(modes)))
                 write(out/'summary.json',report);print('PASS:',name,flush=True)
             assert snapshots[1]==snapshots[2],'Completed formal measurements repeated'

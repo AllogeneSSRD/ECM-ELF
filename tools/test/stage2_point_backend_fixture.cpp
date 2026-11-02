@@ -18,6 +18,45 @@ static Fields sample(unsigned id,unsigned mode,double seconds,double checks) {
         {"runtime_sample_id",p::quoted("backend-"+std::to_string(id))},
         {"program_version",p::quoted(ecm_program::version)},{"updated_at",p::quoted(p::utc_updated_at(1700000000000000000ull+id))}};
 }
+static void giant_tests() {
+    p::Profile profile;profile.condition({{"uuid_hex","\"giant-device\""},{"sm_major","8"},{"sm_minor","9"},
+        {"cuda_driver","13030"},{"cuda_runtime","13030"},{"gl_fixed_mode","3"},{"outer_unroll_u","0"},{"add_sub_mask","1"}});
+    unsigned id=100;
+    for(const auto &mode:std::vector<std::array<unsigned,3>>{{0,0,10},{32,0,8},{32,32,6},{32,16,7}})
+        for(unsigned i=0;i<2;++i) {
+            auto row=sample(id++,mode[0],mode[2]+i*.1,.1);
+            row["b2"]="51879828";row["giant_chunk_points"]="8640";row["giant_chain_min"]="8192";
+            row["giant_coop"]=std::to_string(mode[1]);require(profile.update(row),"giant backend sample");
+        }
+    p::Estimator engine(profile,profile.conditions.at(0),p::Ignore::parse(""),{});
+    auto scalar=engine.shape(profile.samples[1]),coop=engine.shape(profile.samples[2]);
+    const auto choice=p::qualified_giant_backend(engine,scalar,2);
+    if(!choice.available || choice.mode!=32)throw std::runtime_error("giant choice: available="+std::to_string(choice.available)+
+        " mode="+std::to_string(choice.mode)+" baby="+std::to_string(scalar.baby_coop)+" giant="+std::to_string(scalar.giant_coop)+
+        " B2="+std::to_string(scalar.b2)+" chunk="+std::to_string(scalar.giant_chunk)+" bucket="+std::to_string(p::giant_backend_bucket(scalar)));
+    require(p::qualified_point_backends(engine,coop,true,true,2),"coordinate proof rejected without exhaustive grid");
+    auto nearby=scalar;nearby.d=5460;nearby.b1=1000000;
+    require(p::qualified_giant_backend(engine,nearby,2).mode==32,"paired giant region not reused across D/B1");
+    nearby.giant_chunk=4096;require(!p::qualified_giant_backend(engine,nearby,2).available,"chain boundary crossed");
+    nearby=scalar;nearby.frontier=false;require(!p::qualified_giant_backend(engine,nearby,2).available,"residency boundary crossed");
+    nearby=scalar;nearby.chain_block=32;require(!p::qualified_giant_backend(engine,nearby,2).available,"chain length identity crossed");
+    p::Profile unpaired=profile;
+    unpaired.samples.erase(std::remove_if(unpaired.samples.begin(),unpaired.samples.end(),[](const auto &row){return !ecm_stage2::tune::uint(row,"giant_coop");}),unpaired.samples.end());
+    p::Estimator alone(unpaired,unpaired.conditions.at(0),p::Ignore::parse(""),{});
+    require(!p::qualified_point_backends(alone,coop,true,true,2),"forced cooperative data treated as automatic proof");
+    std::vector<p::RuntimeCandidate> candidates{{scalar,engine.runtime_statistics(scalar),1,true}};
+    auto trials=p::runtime_giant_trials(candidates,2);require(trials.size()==1 && trials[0].giant_coop==32,"giant search not bounded to one alternative");
+    auto partial=engine.runtime_statistics(coop);partial.count=1;candidates.push_back({coop,partial,1,true});
+    require(p::runtime_giant_trials(candidates,2).empty(),"second giant trial started before first completed");
+    candidates.back().statistics.count=2;trials=p::runtime_giant_trials(candidates,2);
+    require(trials.size()==1 && trials[0].giant_coop==16,"TPI16 alternative not considered");
+    auto fixed=scalar;fixed.giant_coop=16;candidates.push_back({fixed,engine.runtime_statistics(fixed),1,true});
+    require(p::runtime_giant_trials(candidates,2).empty(),"completed giant alternatives repeated");
+    require(p::runtime_choice(candidates,false,2).index==1,"giant measured winner not selected");
+    for(auto &row:profile.samples)if(ecm_stage2::tune::uint(row,"giant_coop")==32)row["point_check_seconds"]="5";
+    p::Estimator startup(profile,profile.conditions.at(0),p::Ignore::parse(""),{});
+    require(p::qualified_giant_backend(startup,scalar,2).mode==16,"giant startup checks omitted from comparison");
+}
 int main(int argc,char **argv) {
     try {
         if(argc==4 && std::string(argv[1])=="--make-save") {
@@ -29,6 +68,7 @@ int main(int argc,char **argv) {
             require(bool(out),"save write failed");std::cout<<"generated probable-prime Stage1 fixture "<<bits<<" bits\n";return 0;
         }
         require(argc==2,"need output directory");
+        giant_tests();
         p::Profile profile;
         profile.condition({{"uuid_hex","\"device\""},{"sm_major","8"},{"sm_minor","9"},{"cuda_driver","13030"},
             {"cuda_runtime","13030"},{"gl_fixed_mode","3"},{"outer_unroll_u","0"},{"add_sub_mask","1"}});
@@ -68,7 +108,7 @@ int main(int argc,char **argv) {
         const auto file=std::filesystem::path(argv[1])/"profile.toml";std::ofstream(file)<<profile.serialize();
         auto restored=p::Profile::load(file);require(restored.samples.size()==3,"backend profile roundtrip");
         require(ecm_stage2::baby_backend("auto")==-1 && ecm_stage2::baby_backend("coop32")==32 &&
-            ecm_stage2::giant_backend("coop16")==16,"backend option parsing");
+            ecm_stage2::giant_backend("coop16")==16 && ecm_stage2::giant_backend("auto")==-1,"backend option parsing");
         bool rejected=false;try{ecm_stage2::baby_backend("coop16");}catch(...){rejected=true;}require(rejected,"invalid baby backend accepted");
         require(!ecm_stage2::cooperative_point_width(8192) && ecm_stage2::cooperative_point_width(8193),"arithmetic width boundary");
         require(ecm_stage2::point_batch_bucket(720,0)==512 && ecm_stage2::point_batch_bucket(1ull<<28,1ull<<30)==(1ull<<24),"ladder batch cap normalization");

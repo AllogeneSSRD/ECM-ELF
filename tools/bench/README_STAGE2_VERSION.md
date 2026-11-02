@@ -107,6 +107,16 @@ TPI32及分档对照使用`--coop-tpi 32 --coop-middle`，每格测旧版默认�
 
 ## 正常运行时选型矩阵
 
+### Baby／giant自动后端的小B2矩阵
+
+`bench_stage2_backend_matrix.py --study <完整的点策略研究> --exe <本机EXE> --reference-layout <已审计的布局/Prime95汇总> --output <新目录> --allow-gpu-pid <已授权界面PID>`复用13份精确Edwards余因子及普通／承载26格，固定来源中已选D、布局、链长和实际B2。默认标注0.57.9，也可用`--version`指定；实际回执版本须与标签一致。仅小档，实际B2约270.16亿，M6011约275.67亿。GPU1串行，batch256、arena6300、fold640 MiB，无warmup，不修改显卡设置或真实队列。
+
+每格使用独立空性能文件，最少观察数2；提供16条重复保存点的计划，在所需后端对照完成后请求原生停止，保留已开始的额外曲线。重复同一点只测成本，不增加独立ECM覆盖。冻结性能文件后，以相反交错顺序各测一次当前标量／标量和auto胜者；学习时间不加入成绩。自动项同时超过当前标量或历史参考5%及20ms时，两侧各追加2次，保留首轮并取中位数。每个输入的最终普通／承载路径由冻结训练成绩决定，不从独立复测中挑最小值。
+
+`--max-cells 1`可验证首格后用`--resume --output <目录>`继续；采集器、程序、输入和性能文件冻结，脚本变化不能继续写入同一研究。逐调用保留进程门禁、NVML、命令、回执、完整日志及SHA256。`analyze_stage2_backend_matrix.py --study <完整研究> --output <新统计目录> --figures <新图目录> --publish docs/performance/attachments`重新解析全部证据，核对NF、GMP、G根摘要、NTT分布、归约量、固定调度及只读性能文件，生成耗时曲线、完整曲线墙钟、阶段秒数／百分比堆积图和CSV。绝对耗时分别输出线性／对数纵轴，N位宽横轴间隔1000；阶段柱图按输入等距排列。阴影范围为原样本min/max，不是置信区间。
+
+原生功能回归见`test_stage2_point_backends_gpu.py --scope giant-auto|giant-small|giant-formal`：固定／凑整B2上的三后端学习、只读复用、未配对保护、显式小P及邻D／增量ECM tune。完整后端队列需留足剩余曲线；最少观察数2时使用10条计划，覆盖四组主要比较及后续复用。该回归使用独立宽位NF输入，全部为功能证据，不加入上述性能矩阵。
+
 ### 启动短校准与生产凑整隔离
 
 `tools/test/test_stage2_calibration_rounding_gpu.py --stage2 <EXE> --save <B1=20的NF成本探测点> --output <新目录> --allow-gpu-pid <已授权界面PID>`用空性能文件验证五种配置。`--expect-bug`记录修复前短校准被凑整的失败及两个通过对照；默认要求短校准保持D210／B2=42020／202点，正常规划仍保留生产凑整，显式ECM tune仍拒绝凑整但接受CLI关闭。`--run-curve`将short_on继续执行为一条真实Stage2，核对NF、实际B2及GMP零错误。该工具不消费生产队列，不修改源保存点；原始输入与程序、逐调用进程门禁及遥测均独立冻结。此为功能回归，不计入性能矩阵。

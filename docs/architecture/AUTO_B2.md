@@ -48,7 +48,7 @@ CUDA自动布局保留上述宽位资格。其他位宽须同时满足：至少4
 
 新点策略的工作量包含seed-pair的5+11⌊log₂i⌋次模乘、每次差分xADD的6次模乘、独立ladder的5+11⌊log₂(iD)⌋次模乘；不把模乘数当作GPU周期或胜者判据。默认不平衡且64链时保留原有D成本先验，避免未经全矩阵验证就改变默认排名；精确计数可用于独立解释实际路线。真实并行效率、seed增加和段积等待由完整实测决定。大B2的seed位步数按压缩点块与二进制边界计数，不枚举每个seed。
 
-B2凑整可与运行时D、baby后端及有限链长搜索共同使用。请求B2是最低覆盖合同，每个候选D先估算自己的实际凑整B2并计入模型；仅对有限候选进行原生显存／点块准入。实际B2可能改变点块容量，至多4步检查凑整与准入是否稳定，不稳定、溢出、超过AutoB2上限或显存不足时拒绝候选。只有最终稳定且已准入的形状可执行和采样，不能先选未凑整的便宜模型，再将另一覆盖量当作其成绩。
+B2凑整可与运行时D、baby／giant后端及有限链长搜索共同使用。请求B2是最低覆盖合同，每个候选D先估算自己的实际凑整B2并计入模型；仅对有限候选进行原生显存／点块准入。实际B2可能改变点块容量，至多4步检查凑整与准入是否稳定，不稳定、溢出、超过AutoB2上限或显存不足时拒绝候选。只有最终稳定且已准入的形状可执行和采样，不能先选未凑整的便宜模型，再将另一覆盖量当作其成绩。
 
 比较目标是完成至少覆盖请求B2的曲线所需时间，保留原先的重复数、搜索与额外时间预算；达到门槛的已准入项按含点启动检查的均值选优。性能行仍按**实际B2**分开；已有行只有在其实际B2等于当前请求按该D／容量凑整得到的结果时才可精确复用。同一实际覆盖平台内的多个请求可共享成绩，不同实际B2不能合并。`tune_selection`同时打印requested_B2与被选实际B2，runtime_candidates逐项打印实际B2。
 
@@ -60,19 +60,25 @@ B2凑整可与运行时D、baby后端及有限链长搜索共同使用。请求B
 
 ## 协作点后端选型
 
-`stage2_baby_backend`默认auto，可强制scalar／coop32；`stage2_giant_backend`默认scalar，可强制coop16／coop32。本轮不自动搜索giant TPI。CLI `--baby-backend`／`--giant-backend`优先于当前worker TOML，显式TOML优先于环境；省略新键时兼容显式`NTT_BABY_COOP`／`NTT_GIANT_COOP`。普通曲线向子进程传递策略，子进程读档后才决定具体后端；校准曲线传递已经选定的后端。OpenCL仅接受baby auto／scalar和giant scalar。
+`stage2_baby_backend`默认auto，可强制scalar／coop32；`stage2_giant_backend`默认auto，可强制scalar／coop16／coop32。CLI `--baby-backend`／`--giant-backend`优先于当前worker TOML，显式TOML优先于环境；省略新键时兼容显式`NTT_BABY_COOP`／`NTT_GIANT_COOP`。普通曲线向子进程传递策略，子进程读档后才决定具体后端；校准曲线传递已经选定的后端。OpenCL的两项均仅接受auto／scalar，实际使用标量。
 
-资格按**实际算术位宽**判定：8193…16384 bits，承载时取p。Baby设备预算回退或位宽不支持时实际为标量；giant没有合格chain时也记录标量。矩阵的`baby_coop`为0／32，`giant_coop`为0／16／32，0表示实际标量。这些字段参与聚合、精确查找、模型、缓存和默认保护；即使忽略environment，也不跨后端合并。协作容器160／192／224／256词分档参与区间复用，不跨容量边界套用实测。NTT吞吐表继续共享。
+资格按**实际算术位宽**判定：8193…16384 bits，承载时取p。Baby设备预算回退或位宽不支持时实际为标量；giant没有合格chain时也记录标量。矩阵的`baby_coop`为0／32，`giant_coop`为0／16／32，0表示实际标量。这些字段参与聚合、精确查找、模型、缓存和默认保护；即使忽略environment，也不跨后端合并。Baby32／giant32使用160／192／224／256词分档，giant16固定256词；不跨容量边界套用实测。NTT吞吐表继续共享。
 
-Baby auto先积累R次标量观察，R为`stage2_tune_min_repeats`。实际P≥512、尚有至少2R条队列工作时，对每个算术家族当前最快的已重复标量项，只增加一个coop32对照，固定D、布局、链长与驻留策略。先完成该对照，再恢复D与32／64链长搜索；不将全部D候选乘上后端数。达到R次后选已准入项的最快平均耗时，方差只作诊断，不否决较快均值。关闭运行时学习时只读复用已合格观察；缺少数据仍使用标量。
+Baby auto先积累R次标量观察，R为`stage2_tune_min_repeats`。实际P≥512、尚有至少2R条队列工作时，对每个算术家族当前最快的已重复标量项，只增加一个coop32对照，固定D、布局、链长与驻留策略。先完成baby对照，giant也为auto时继续比较giant，随后恢复D与32／64链长搜索；不将全部D候选乘上后端数。达到R次后选已准入项的最快平均耗时，方差只作诊断，不否决较快均值。关闭运行时学习时只读复用已合格观察；缺少数据仍使用标量。
 
-显式ECM tune同样支持auto。在当前D先测一组scalar／coop32；同一实际位宽、算术家族、B2、固定giant后端、链长及点批量区域内，相邻D可复用严格环境下的配对胜者，不重复展开后端网格。点批量区域按⌊log₂min(P,K)⌋划分，K为规范化后的ladder分段上限，默认8192；容量档位或批量区域变化需要新的证据。不同D之间的两个快慢记录不构成后端配对。满足重复数的已有校准不再重测，默认无warmup。
+Giant auto以当前最快且达到R次的标量giant项为参考，先试coop32，再试coop16，每次只新增一个后端。每项与对应标量参考均需达到R次，已合格项按含点检查的均值选优；尚未完成的另一项不否决现有胜者。两项同时auto时可形成标量／标量→baby32／标量→baby32／giant32或16的有效对照路径，不要求每个D遍历全部2×3组合，也不能凭单独强制协作记录启用auto。队列剩余不足2R时不开启新的后端对照；已有观察及正在完成的曲线保留。
+
+Giant配对复用要求当前设备／环境条件、目标与算术位宽、算术家族、实际B2、baby后端、链长、布局与驻留路径匹配。并行区域按⌊log₂⌈min(I,C)/c⌉⌋划分，I为giant点数、C为点块容量、c为链长；必须存在真实chain。位宽、链长、并行区域或显存路径跨界需要新对照。普通与承载分别学习。自动D搜索继续保留P≥512；显式锁定更小D时允许运行观察及合格giant对照，baby小P仍保持标量。
+
+B2凑整保持已选择的后端请求，直到实际B2和原生容量完成稳定准入；不能因未凑整区间暂时没有chain而丢掉选择。采样与回执记录最终实际后端，准入或执行回退不能冒充协作成绩。
+
+显式ECM tune同样支持两项auto：先在标量giant下完成baby对照，再固定选中的baby比较两种giant协作项。同一合格区域内，相邻D只测配对胜者，不重复展开后端网格。Baby区域按⌊log₂min(P,K)⌋划分，K为规范化后的ladder分段上限，默认8192；giant区域另按独立链数划分。不同D之间的两个快慢记录不构成后端配对。满足重复数的已有校准不再重测，默认无warmup。
 
 `mean_seconds`仍是引擎init＋main，排除启动点算术自检。新增`point_check_seconds`记录必需点检查耗时；后端比较采用两者之和，避免遗漏额外TPI检查。外层读档、选型、进程及发布另计，不混入该字段；完整曲线墙钟用于性能验收。旧记录缺少此字段时按0保守保留参考。旧条件仅有非零环境开关、缺少实际后端证据时，新字段填255（未知）；保留原数据，但不用于选型或拟合，不能据请求开关猜测实际执行路线。
 
 无协作实测时，基础模型仅对baby部分使用保守容量先验，给出至少50%的相对误差许可；不把ladder核倍率施加到整条曲线，也不据此绕过auto的配对要求。标量默认D先验保持不变。其他GPU、大B2和不同点批量仍需实测。
 
-代码入口：`stage2/point_backend.h`定义选项及容量／批量区域；`cuda/host_policy.cpp`解析优先级；`task.cpp::child_run/curve_worker`处理父子进程；`planning/runtime_tune.h::runtime_baby_trials/qualified_baby_backend`与`planning.cpp::portable_measure/portable_runtime_select`限制配对范围；`portable_model.h`、`width_prediction.h`隔离后端统计和模型。区间补测与完整曲线边界见[性能报告](../performance/STAGE2_BIT_SCALING.md#126-区间资格与自动选型)。
+代码入口：`stage2/point_backend.h`定义选项及容量／批量区域；`cuda/host_policy.cpp`解析优先级；`task.cpp::child_run/curve_worker`处理父子进程；`planning/runtime_tune.h::runtime_baby_trials/runtime_giant_trials/qualified_point_backends`及`qualified_baby_backend/qualified_giant_backend`限制配对范围，`planning.cpp::portable_measure/portable_runtime_select/round_giant_bounds`负责准入与执行；`portable_model.h`、`width_prediction.h`隔离后端统计和模型。区间补测与完整曲线边界见[位宽资格](../performance/STAGE2_BIT_SCALING.md#126-区间资格与自动选型)，当前联合后端的完整矩阵见[Stage2性能](../performance/STAGE2.md)。
 
 ## 算术位宽区间预测
 

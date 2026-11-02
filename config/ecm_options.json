@@ -1081,14 +1081,15 @@
       "key": "stage2_giant_backend",
       "field": "giant_backend",
       "present": "has_giant_backend",
-      "default": "scalar",
-      "domain": "[scalar|coop16|coop32]",
+      "default": "auto",
+      "domain": "[auto|scalar|coop16|coop32]",
       "fx": "giant_chain_arithmetic",
       "description": [
-        "Giant chain arithmetic: scalar is the default; coop16 uses the fixed 16384-bit cooperative container; coop32 uses width-matched cooperative containers. Cooperative modes require CUDA arithmetic widths 8193..16384 bits and an eligible chain; seeds and [D]Q retain their existing implementation. This key fixes the giant backend rather than expanding runtime search. CLI --giant-backend overrides this worker key; omission preserves explicit NTT_GIANT_COOP. OpenCL accepts scalar only.",
-        "Giant链算术：默认scalar；coop16使用固定16384-bit协作容器，coop32使用按位宽分档的协作容器。协作模式要求CUDA实际算术8193..16384 bits且存在合格chain；seed及[D]Q保持现有实现。此键固定giant后端，不扩张运行时搜索。CLI --giant-backend覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持scalar。"
+        "Giant chain arithmetic: auto keeps scalar until checked comparisons qualify coop32 or coop16, then selects the fastest measured route including point startup checks. At fixed D/layout/chain, try one alternative at a time after baby selection; reuse paired regions by arithmetic width, chain occupancy and memory route before extending D. coop16 uses a fixed 16384-bit container; coop32 uses width-matched containers. Cooperative modes require CUDA arithmetic widths 8193..16384 bits and an eligible chain; seeds and [D]Q are unchanged. Explicit scalar/coop16/coop32 locks the backend. CLI --giant-backend overrides this worker key; omission preserves explicit NTT_GIANT_COOP. OpenCL accepts auto/scalar only.",
+        "Giant链算术：默认auto，在有效对照达到最少重复数前保留scalar，再按含点启动检查的实测耗时选择coop32／coop16或标量。先完成baby选型，在固定D/布局/链长上逐个比较giant候选；按算术位宽、并行链数区间和内存路径复用配对后再扩展D。coop16使用固定16384-bit容器，coop32按位宽分档。协作要求CUDA实际算术8193..16384 bits及合格chain；seed和[D]Q不变。显式scalar/coop16/coop32固定后端。CLI --giant-backend覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持auto/scalar。"
       ],
       "values": [
+        "auto",
         "scalar",
         "coop16",
         "coop32"

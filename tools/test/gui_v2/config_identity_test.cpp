@@ -33,16 +33,17 @@ int main(int argc,char** argv) {
         ecmgui::TomlFile config;config.reset(path.u8string());
         config.set("gui","NumWorkers","2");
         config.set("stage2","stage2_baby_backend","auto");
-        config.set("stage2","stage2_giant_backend","coop32");
+        config.set("stage2","stage2_giant_backend","auto");
         config.set("stage2","stage2_groot_balanced","auto");
         config.set("stage2","stage2_b2_round_chain","1");
         config.set("workers.1.stage2","stage2_tune_profile","profiles/gpu0.toml");
         config.set("workers.2.stage2","stage2_tune_profile","profiles/gpu1.toml");
+        config.set("workers.2.stage2","stage2_giant_backend","coop16");
         std::string error;if(!config.save(error))throw std::runtime_error(error);
         ecmgui::TomlFile loaded;if(!loaded.load(path.u8string(),error))throw std::runtime_error(error);
         const auto first=ecm_config::read_stage2(ecm_config::cli_entries(loaded.lines(),1));
         const auto second=ecm_config::read_stage2(ecm_config::cli_entries(loaded.lines(),2));
-        require(first.baby_backend=="auto" && first.giant_backend=="coop32" && first.groot_balanced=="auto" && first.b2_round_chain,
+        require(first.baby_backend=="auto" && first.giant_backend=="auto" && second.giant_backend=="coop16" && first.groot_balanced=="auto" && first.b2_round_chain,
                 "Stage2 options changed during GUI edit/save/reload");
         require(first.tune_profile=="profiles/gpu0.toml" && second.tune_profile=="profiles/gpu1.toml","worker profile overrides lost");
         const auto invalid=out/"wrong-table.toml";

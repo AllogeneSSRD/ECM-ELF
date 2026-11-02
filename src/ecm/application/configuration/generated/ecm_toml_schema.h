@@ -65,7 +65,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_log_level","int|string","[quiet|curve|phases|batches|debug|0..4]"},
     {"stage2","stage2_ntt_counts","bool","[false|true|0|1]"},
     {"stage2","stage2_baby_backend","string","[auto|scalar|coop32]"},
-    {"stage2","stage2_giant_backend","string","[scalar|coop16|coop32]"},
+    {"stage2","stage2_giant_backend","string","[auto|scalar|coop16|coop32]"},
     {"stage2","stage2_groot_balanced","bool|string","[auto|false|true|0|1]"},
     {"stage2","stage2_giant_tail_balance","bool","[false|true|0|1]"},
     {"stage2","stage2_b2_round_chain","bool","[false|true|0|1]"},
