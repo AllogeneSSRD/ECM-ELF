@@ -42,6 +42,7 @@ struct CurveProcessRequest {
     bool giant_tail_balance=false,b2_round_chain=false;
     std::string giant_chain="64";
     std::string baby_backend="scalar",giant_backend="scalar",seed_backend="scalar",reduce_backend="scalar";
+    unsigned reduce_threads=128,reduce_kernel=0;
     bool runtime_prepare_cache=0;
     std::string runtime_prepare_hints{};
     uint64_t runtime_remaining=0;

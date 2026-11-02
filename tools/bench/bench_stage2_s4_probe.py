@@ -22,12 +22,14 @@ def main():
     p.add_argument('--kinds',type=int,nargs='+',default=[0,1,2,3])
     p.add_argument('--backends',type=int,nargs='+',default=[0,32])
     p.add_argument('--threads',type=int,default=128)
+    p.add_argument('--device',type=int,default=1)
     p.add_argument('--repeats',type=int,default=1)
     p.add_argument('--reverse',action='store_true',help='Retain a second call in reverse backend order')
     p.add_argument('--batches',type=int,default=1)
     p.add_argument('--fault',type=int,choices=(0,1,2),default=0)
     p.add_argument('--modulus-hex',type=Path)
     p.add_argument('--allow-gpu-pid',type=int,action='append',default=[])
+    p.add_argument('--background-snapshot',type=Path)
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     binary=out/'bin';binary.mkdir();(binary/'.gitignore').write_text('*\n')
     manifest=json.loads((a.exe.parent/'manifest.json').read_text(encoding='utf-8-sig'))
@@ -49,7 +51,13 @@ def main():
         allowed.append(dict(pid=pid,process_name=next(iter(paths))))
     report=dict(complete=False,exe_sha256=sha(exe),started_utc=stamp(),rows=[],failures=[],allowed_processes=allowed,
                 modulus_sha256=sha(modulus) if modulus else None)
-    monitor=TelemetryRecorder(1,out/'telemetry.jsonl',interval=.2);report['device']=monitor.identity
+    monitor=TelemetryRecorder(a.device,out/'telemetry.jsonl',interval=.2);report['device']=monitor.identity
+    if a.background_snapshot:
+        background=json.loads(a.background_snapshot.read_text(encoding='utf-8-sig'))
+        if not background.get('approved_background_by_user') or background['device']!=a.device or background['uuid']!=monitor.identity['uuid']:
+            monitor.close();raise ValueError('Background authorization is for a different device')
+        allowed.extend(background['allowed_processes']);shutil.copy2(a.background_snapshot,out/'background_snapshot.json')
+        report['approved_background_snapshot']=background
     env={k:v for k,v in os.environ.items() if not k.startswith(('NTT_','ECM_')) and k not in ('CUDA_VISIBLE_DEVICES','CUDA_LAUNCH_BLOCKING')}
     hashes={}
     try:
@@ -61,7 +69,7 @@ def main():
                         for order in orders:
                             for backend in order:
                                 folder=out/('call_%04d'%len(report['rows']));folder.mkdir()
-                                cmd=[str(exe),*map(str,(bits,count,kind,bpw,backend,a.repeats,a.threads,1))]
+                                cmd=[str(exe),*map(str,(bits,count,kind,bpw,backend,a.repeats,a.threads,a.device))]
                                 if modulus or a.fault or a.batches!=1:cmd.append(str(modulus) if modulus else '-')
                                 if a.fault or a.batches!=1:cmd.append(str(a.fault))
                                 if a.batches!=1:cmd.append(str(a.batches))

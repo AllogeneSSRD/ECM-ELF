@@ -19,7 +19,7 @@ from result_format import normalize_result
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for k in ('study','exe','output'):p.add_argument('--'+k,type=Path,required=True)
-    p.add_argument('--reduce-backend',choices=('scalar','coop32'),default='scalar')
+    p.add_argument('--reduce-backend',choices=('auto','scalar','coop32'),default='scalar')
     a=p.parse_args();source=load(a.study/'plan.json');case=next(c for c in source['cases'] if c['bits']>8192)
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     import shutil

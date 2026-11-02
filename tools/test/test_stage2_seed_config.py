@@ -87,7 +87,7 @@ def main():
     counts={0:0,32:0}
     for row in summaries(profile):
         if row['source']=='measured':
-            policy=int(row['seed_coop']) if a.component=='seed' else int(profile['condition'][str(row['condition'])].get('env_s4_coop_reduce',0))
+            policy=int(row['seed_coop']) if a.component=='seed' else int(row['reduce_coop'])
             counts[policy]+=row['repeats']
     if counts!={0:1,32:2}:raise ValueError('ECM observations crossed actual seed backends: '+str(counts))
     report['tune_repeats_by_'+a.component+'_policy']=counts

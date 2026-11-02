@@ -680,19 +680,20 @@ stage2_ratio_adjust = 1
 # 中文：将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜
 # 中文：；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。
 
-# stage2_reduce_backend = "scalar"
-# EN: Ordinary S4 coefficient reduction: scalar keeps the default long division. coop32 uses one CUDA warp
-# EN: per coefficient and shared remainders at arithmetic widths 8193..16384 bits; smaller widths and
-# EN: exact Mersenne reduction keep their existing kernels. No NTT, D/P/B2 or output window changes.
-# EN: Default scalar preserves the qualified production baseline; cooperative performance is device and
-# EN: width dependent. CLI --reduce-backend overrides this worker setting; omission preserves explicit
-# EN: NTT_S4_COOP_REDUCE=0|32. ECM cost rows require the same reduction policy even when environment
-# EN: matching is ignored; standalone NTT tables remain reusable. OpenCL accepts scalar only.
-# 中文：普通S4逐系数归约：scalar保持默认长除法；coop32在CUDA实际算术8193..16384 bits时每个系数使用一个warp及
-# 中文：共享余数。较小位宽和精确梅森归约保留原内核，不改变NTT、D/P/B2及输出窗口。默认scalar保留已验证的生产
-# 中文：基线；协作收益取决于设备和位宽。CLI --reduce-backend覆盖当前worker；省略时保留显式
-# 中文：NTT_S4_COOP_REDUCE=0|32。即使忽略environment，ECM耗时资料也必须匹配归约策略，独立NTT表继续复用。
-# 中文：OpenCL仅接受scalar。
+# stage2_reduce_backend = "auto"
+# EN: Ordinary S4 coefficient reduction: auto keeps scalar until repeated same-shape comparisons qualify
+# EN: coop32, then uses the fastest checked total including point startup checks. At fixed
+# EN: D/layout/chain/point backends, it adds at most one missing cooperative variant at a time (two-pass
+# EN: or merged), then extends D after checked comparisons. CUDA arithmetic widths 8193..16384 bits can
+# EN: use shared warp remainders; smaller widths and exact Mersenne reduction keep their kernels. Actual
+# EN: reduce_coop, threads and kernel identity stay separate in ECM timing rows even if environment
+# EN: matching is ignored; standalone NTT tables remain reusable. CLI --reduce-backend overrides this
+# EN: worker key; omission preserves explicit NTT_S4_COOP_REDUCE=0|32. OpenCL uses scalar.
+# 中文：普通S4逐系数归约：默认auto，在同形状重复对照合格前保留scalar，再按含点启动检查的实测总耗时选择最快项
+# 中文：。每个算术家族固定D／布局／链长／点后端，每次仅增加一个缺少的协作变体（两遍／合并），完成有效对照后
+# 中文：再继续D搜索。CUDA实际算术8193..16384 bits可使用共享余数；较小位宽和精确梅森归约保持原内核。实际
+# 中文：reduce_coop、线程块与内核身份按ECM每行独立记账，即使忽略environment也不混合，独立NTT表继续复用。CLI
+# 中文：--reduce-backend覆盖当前worker；省略时保留显式NTT_S4_COOP_REDUCE=0|32。OpenCL实际为scalar。
 # EN: Uncommenting marks this value explicit; omission preserves implicit worker/path/environment behavior.
 # 中文：取消注释会将此值标记为显式设置；保留注释则沿用 worker、路径或环境变量的隐式规则。
 

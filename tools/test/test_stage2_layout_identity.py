@@ -41,7 +41,7 @@ class LayoutIdentity(unittest.TestCase):
     def test_writer_requires_layout_aware_reader(self):
         document = tomllib.loads(write_profile([dict(uuid_hex='fixture')],
             [self.row('old', 70), self.row('new', 50, groot_balanced=1)]))
-        self.assertEqual(document['profile']['format'], 12)
+        self.assertEqual(document['profile']['format'], 13)
         columns, *rows = document['width']['5700']['matrix']
         self.assertEqual({row[columns.index('groot_balanced')] for row in rows}, {0, 1})
 
@@ -54,13 +54,15 @@ class LayoutIdentity(unittest.TestCase):
         for changes in ({'giant_tail_balance':2},{'giant_chain_block':128}):
             with self.assertRaises(ValueError):aggregate([self.row('bad',1,**changes)])
 
-    def test_s4_cost_conditions_stay_separate(self):
+    def test_s4_actual_rows_stay_separate(self):
         conditions=[dict(uuid_hex='fixture'),dict(uuid_hex='fixture',env_s4_coop_reduce=32)]
-        document=tomllib.loads(write_profile(conditions,[self.row('scalar',10),self.row('shared',3,condition=1)]))
-        self.assertEqual(len(document['condition']),2)
-        columns,*rows=document['width']['5700']['matrix']
-        self.assertEqual({r[columns.index('condition')] for r in rows},{0,1})
-        self.assertEqual({r[columns.index('mean_seconds')] for r in rows},{3,10})
+        wide=dict(target_bits=9216,arithmetic_bits=9216,carrier_exponent=0,modulus_kind='generic')
+        rows=[self.row('scalar',10,reduce_coop=0,**wide),self.row('old-request',8,condition=1,**wide)]
+        rows += [self.row('observed-'+str(k),7-k,condition=1,reduce_coop=32,reduce_threads=128,reduce_kernel=k,**wide) for k in (1,2)]
+        document=tomllib.loads(write_profile(conditions,rows))
+        self.assertEqual(len(document['condition']),1)
+        columns,*rows=document['width']['9216']['matrix']
+        self.assertEqual({(r[columns.index('reduce_coop')],r[columns.index('reduce_kernel')]) for r in rows},{(0,0),(255,0),(32,1),(32,2)})
 
     def test_seed_rows_and_legacy_requests_stay_separate(self):
         document=tomllib.loads(write_profile([dict(uuid_hex='fixture',env_giant_seed_coop=32),dict(uuid_hex='fixture')],

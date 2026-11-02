@@ -28,6 +28,29 @@ __device__ __forceinline__ unsigned s4_warp_sub_product(unsigned long long *t,co
     return carry;
 }
 
+// Form one word of q*N with an addition prefix, then subtract it with a
+// borrow prefix. This preserves the full product while loading/storing each
+// remainder word once instead of twice. Product carry and subtraction borrow
+// are distinct one-bit chains; the high product word is part of both prefixes.
+__device__ __forceinline__ unsigned s4_warp_sub_product_merged(unsigned long long *t,
+    const unsigned long long *ns,int nw,int j,unsigned long long q,int lane) {
+    unsigned product_carry=0,borrow=0;
+    for(int base=0;base<=nw;base+=32) {
+        const int i=base+lane;const bool live=i<=nw;
+        const auto lo=i<nw?q*ns[i]:0ull,hi=i>0 && i<=nw?__umul64hi(q,ns[i-1]):0ull,sum=lo+hi;
+        const auto g=__ballot_sync(0xffffffffu,sum<lo),p=__ballot_sync(0xffffffffu,sum==~0ull);
+        const auto incoming=s4_warp_prefix_in(g,p,product_carry,lane);
+        const auto word=sum+incoming;
+        product_carry=__shfl_sync(0xffffffffu,unsigned(sum<lo || (sum==~0ull && incoming)),31);
+        const auto a=live?t[j+i]:0ull;
+        const auto bg=__ballot_sync(0xffffffffu,a<word),bp=__ballot_sync(0xffffffffu,a==word);
+        const auto input_borrow=s4_warp_prefix_in(bg,bp,borrow,lane);
+        if(live)t[j+i]=a-word-input_borrow;
+        borrow=__shfl_sync(0xffffffffu,unsigned(a<word || (a==word && input_borrow)),31);
+    }
+    return borrow;
+}
+
 __device__ __forceinline__ unsigned s4_warp_add_divisor(unsigned long long *t,const unsigned long long *ns,
     int nw,int j,int lane) {
     unsigned carry=0;
@@ -58,7 +81,7 @@ __device__ __forceinline__ unsigned long long s4_warp_packed_word(const unsigned
     return value;
 }
 
-template<int NW>
+template<int NW,bool MERGED=false>
 __global__ void s4_warp_reduce_kernel(const unsigned long long *digits,unsigned long long n,
     int bpw,unsigned long long slot_words,unsigned long long out_slots,unsigned long long nbatch,
     int nw,int div_shift,unsigned long long div_recip,unsigned long long first,unsigned long long count,
@@ -104,8 +127,12 @@ __global__ void s4_warp_reduce_kernel(const unsigned long long *digits,unsigned 
         // q*N = low products + the high products shifted by one limb. Each
         // pass uses an exact warp borrow prefix. Their sum fits nw+1 limbs,
         // so at most one whole-window underflow can occur across both passes.
-        unsigned under=s4_warp_sub_product<false>(t,ns,nw,j,q,lane);__syncwarp();
-        under|=s4_warp_sub_product<true>(t,ns,nw,j,q,lane);__syncwarp();
+        unsigned under;
+        if constexpr(MERGED) {under=s4_warp_sub_product_merged(t,ns,nw,j,q,lane);__syncwarp();}
+        else {
+            under=s4_warp_sub_product<false>(t,ns,nw,j,q,lane);__syncwarp();
+            under|=s4_warp_sub_product<true>(t,ns,nw,j,q,lane);__syncwarp();
+        }
         for(int correction=0;under && correction<2;++correction) {
             under=!s4_warp_add_divisor(t,ns,nw,j,lane);__syncwarp();
         }

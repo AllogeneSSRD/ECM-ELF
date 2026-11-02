@@ -44,9 +44,9 @@ Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认�
 
 M=2ˢ−1 时使用 2ˢ≡1 mod M 的折叠归约；点 Montgomery 乘法还需处理 R⁻¹ 对应的旋转/表示转换。承载模式保证 M 能被目标 N 整除，所有因子语义仍在 N 上处理。
 
-普通S4另提供`stage2_reduce_backend=coop32`，默认scalar。8193…16384实际算术bits可由一个warp协作处理一个系数：共享归一化除数和余数，分别对商乘积的低／高词执行借位前缀，保留相同2-by-1商估计、商校正、全源槽位检查和紧凑输出。小位宽、精确梅森归约保留原内核。乘积工作量仍为平方复杂度，没有减少NTT长度、系数数或商位数，也没有新增显式设备数组或传输。
+普通S4提供`stage2_reduce_backend=auto|scalar|coop32`，默认auto。8193…16384实际算术bits可由一个warp协作处理一个系数：共享归一化除数和余数，可分别减去商乘积的低／高词，或先合并qN对应字及乘积进位，再一次执行余数借位前缀。两者保留相同2-by-1商估计、商校正、全源槽位检查和紧凑输出；auto以配对完整曲线选择。小位宽、精确梅森归约保留原内核。乘积工作量仍为平方复杂度，没有减少NTT长度、系数数或商位数，也没有新增显式设备数组或传输。
 
-动态共享内存为`8[W+(T/32)(2W+4)]` bytes／block，T为线程块大小；生产T=128。它属于SM片上资源，不是NTT arena预算。ECM成本强制隔离归约策略、NTT表共用；性能与边界见[S4归约报告](../performance/STAGE2_S4_REDUCTION.md)，推导见[数学资料](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#11-精确长除法的-warp-协作组织)。
+动态共享内存为`8[W+(T/32)(2W+4)]` bytes／block，T为线程块大小；默认T=128，可诊断64／96／128。它属于SM片上资源，不是NTT arena预算。ECM成本强制隔离实际后端、线程块和内核身份，NTT表共用；性能与边界见[S4归约报告](../performance/STAGE2_S4_REDUCTION.md)，推导见[数学资料](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#11-精确长除法的-warp-协作组织)。
 
 S4 形状常量按 slot_bits/slot_words/b 缓存，不能只用 slot_bits 作为身份。首次形状强制验证 96 窗口；普通批次的 canonical counter 和异步 oracle 路径必须排空，错误不可被日志等级屏蔽。
 

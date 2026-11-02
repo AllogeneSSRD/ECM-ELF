@@ -596,6 +596,8 @@ int run_real(
             m.d=D;m.p=P_baby;m.giant_points=BR.giant_points;
             m.baby_coop=actual_baby_coop;m.giant_coop=g_giant_seed.cooperative_tpi;
             m.seed_coop=std::max(g_giant_seed.seed_cooperative_tpi,g_giant_seed.base_cooperative_tpi);
+            const bool reduce_coop=red.reduce_calls && red.nw>128 && !red.mersenne_bits && ecm_stage2_s4_coop_mode()==32;
+            m.reduce_coop=reduce_coop?32:0;m.reduce_threads=reduce_coop?ecm_stage2_s4_coop_threads():0;m.reduce_kernel=reduce_coop?ecm_stage2_s4_coop_kernel():0;
             m.point_check_seconds=point_check_seconds;
             m.giant_first=BR.giant_first;m.giant_last=BR.giant_last;
             m.relocation=g_relocation_enabled;m.relocation_replayed=g_relocation_enabled && replayed;

@@ -13,7 +13,10 @@ void apply_point_backends(const Options &o) {
 #ifndef ECM_STAGE2_OPENCL
     if(_putenv_s("NTT_BABY_COOP",std::to_string(o.selected_baby_coop).c_str()) ||
        _putenv_s("NTT_GIANT_COOP",std::to_string(o.selected_giant_coop).c_str()) ||
-       _putenv_s("NTT_GIANT_SEED_COOP",std::to_string(o.selected_seed_coop).c_str()))
+       _putenv_s("NTT_GIANT_SEED_COOP",std::to_string(o.selected_seed_coop).c_str()) ||
+       _putenv_s("NTT_S4_COOP_REDUCE",std::to_string(o.selected_reduce_coop).c_str()) ||
+       _putenv_s("NTT_S4_COOP_TPB",std::to_string(o.reduce_threads).c_str()) ||
+       _putenv_s("NTT_S4_COOP_KERNEL",std::to_string(o.selected_reduce_kernel?o.selected_reduce_kernel:(o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current)).c_str()))
         throw std::runtime_error("cannot configure Stage2 point backends");
 #else
     (void)o;
@@ -68,11 +71,16 @@ void configure_s4_backend(Options &o,bool present,const std::string &value) {
             o.reduce_backend=std::strcmp(env,"32")==0?"coop32":"scalar";
         }
     }
-    if(o.reduce_backend!="scalar" && o.reduce_backend!="coop32")throw std::runtime_error("reduce-backend must be scalar or coop32");
+    const auto mode=ecm_stage2::reduce_backend(o.reduce_backend);o.selected_reduce_coop=mode<0?0:unsigned(mode);
+    const auto setting=[&](const char *cli,const char *env,unsigned &target) {
+        if(!o.portable_cli.count(cli))if(const char *text=std::getenv(env)){const auto n=ecm_stage2::cost::integer(text);if(n>128)throw std::runtime_error("invalid S4 variant override");target=unsigned(n);}
+    };
+    setting("--reduce-threads","NTT_S4_COOP_TPB",o.reduce_threads);
+    setting("--reduce-kernel","NTT_S4_COOP_KERNEL",o.reduce_kernel);
+    if(!ecm_stage2::valid_reduce_variant(o.reduce_threads,o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current))throw std::runtime_error("S4 threads must be 64, 96 or 128 and kernel 1 or 2");
+    o.selected_reduce_threads=o.selected_reduce_coop?o.reduce_threads:0;o.selected_reduce_kernel=o.selected_reduce_coop?(o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current):0;
 #ifdef ECM_STAGE2_OPENCL
-    if(o.reduce_backend!="scalar")throw std::runtime_error("cooperative S4 reduction is CUDA-only");
-#else
-    if(_putenv_s("NTT_S4_COOP_REDUCE",o.reduce_backend=="coop32"?"32":"0"))throw std::runtime_error("cannot configure S4 reduction");
+    if(o.selected_reduce_coop)throw std::runtime_error("cooperative S4 reduction is CUDA-only");
 #endif
 }
 void configure_giant_policy(Options &o) {

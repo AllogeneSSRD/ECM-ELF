@@ -1,4 +1,4 @@
-"""Layout-aware format-12 matrices. Full receipts stay in the original JSONL."""
+"""Layout-aware format-13 matrices. Full receipts stay in the original JSONL."""
 import json
 import math
 import re
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 SHAPE = ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent', 'modulus_kind',
          'b1', 'b2', 'd', 'groot_balanced', 'fold_resident', 'frontier_resident', 'execution_path',
-         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder', 'giant_tail_balance', 'giant_chain_block', 'baby_coop', 'giant_coop', 'seed_coop')
+         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder', 'giant_tail_balance', 'giant_chain_block', 'baby_coop', 'giant_coop', 'seed_coop', 'reduce_coop', 'reduce_threads', 'reduce_kernel')
 PHASES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
           'giant_loop', 'descent', 'accum', 'finalize')
 KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_kind', 'verified', 'repeats', 'mean_seconds',
@@ -60,7 +60,7 @@ def utc_updated_at(nanoseconds):
 def merge_provenance(target, source):
     a,b=target.get('updated_at',''),source.get('updated_at','')
     if b>a or (b==a and not target.get('program_version')):
-        for k in ('program_version','updated_at','env_giant_seed_coop'):
+        for k in ('program_version','updated_at','env_giant_seed_coop','env_s4_coop_reduce','env_s4_coop_tpb','env_s4_coop_kernel'):
             if k in source:target[k]=source[k]
             else:target.pop(k,None)
 
@@ -138,6 +138,12 @@ def aggregate(samples):
         row['baby_coop']=int(original.get('baby_coop',0))
         row['giant_coop']=int(original.get('giant_coop',0))
         row['seed_coop']=int(original.get('seed_coop',0))
+        for k in ('reduce_coop','reduce_threads','reduce_kernel'):row[k]=int(original.get(k,0))
+        m,t,v=(row[k] for k in ('reduce_coop','reduce_threads','reduce_kernel'))
+        if m not in (0,32,255) or (m==32 and (t not in (64,96,128) or v not in (1,2))) or (m!=32 and (t or v)):
+            raise ValueError('Invalid S4 backend')
+        if m==32 and (int(row['arithmetic_bits'])<=8192 or row['modulus_kind']=='mersenne'):
+            raise ValueError('Unsupported cooperative S4 width/modulus')
         if any(type(original.get(k,0)) is not int for k in ('baby_coop','giant_coop','seed_coop')):
             raise ValueError('Point backend must be an integer')
         if row['baby_coop'] not in (0,32,255) or row['giant_coop'] not in (0,16,32,255) or row['seed_coop'] not in (0,32,255):
@@ -203,14 +209,18 @@ def hydrate_point_backends(row,condition):
         if key not in row:
             row[key]=255 if int(condition.get('env_'+key,0)) and 8192<bits<=16384 else 0
     if 'seed_coop' not in row:row['seed_coop']=255 if int(condition.get('env_giant_seed_coop',0)) else 0
+    if 'reduce_coop' not in row:
+        possible=8192<bits<=16384 and (row['modulus_kind']!='mersenne' or not int(condition.get('env_s4_mersenne',1)))
+        row['reduce_coop']=255 if int(condition.get('env_s4_coop_reduce',0)) and possible else 0
+    row.setdefault('reduce_threads',0);row.setdefault('reduce_kernel',0)
 
 
 def write_profile(conditions, samples):
     lines = ['# Stage2 mean timings; identical parameters share one repeated measurement row.',
-             '[profile]', 'format = 12', 'unit = "full_stage2"']
+             '[profile]', 'format = 13', 'unit = "full_stage2"']
     canonical=[];remap={};prepared=[]
     for i,c in enumerate(conditions):
-        condition={k:v for k,v in c.items() if k not in ('program_version','updated_at','env_giant_seed_coop')}
+        condition={k:v for k,v in c.items() if k not in ('program_version','updated_at','env_giant_seed_coop','env_s4_coop_reduce','env_s4_coop_tpb','env_s4_coop_kernel')}
         if condition not in canonical:canonical.append(condition)
         remap[i]=canonical.index(condition)
     for s in samples:

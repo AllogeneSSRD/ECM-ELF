@@ -18,24 +18,48 @@ static Fields sample(unsigned id,unsigned mode,double seconds,double checks) {
         {"runtime_sample_id",p::quoted("backend-"+std::to_string(id))},
         {"program_version",p::quoted(ecm_program::version)},{"updated_at",p::quoted(p::utc_updated_at(1700000000000000000ull+id))}};
 }
-static void s4_policy_tests() {
-    const auto ignore=p::Ignore::parse("gpu,driver,cuda,backend,environment,memory");
-    Fields old,scalar{{"env_s4_coop_reduce","0"}},coop{{"env_s4_coop_reduce","32"}};
-    require(p::matches(old,scalar,ignore),"legacy scalar S4 costs lost");
-    require(!p::matches(old,coop,ignore) && !p::matches(coop,scalar,ignore),"ignored environment crossed S4 arithmetic");
-    require(p::ntt_matches(old,coop,ignore),"S4 policy invalidated standalone NTT table");
-    p::Profile profile;profile.condition(old);const auto id=profile.condition(coop);
-    auto a=sample(700,0,10,0),b=sample(701,0,3,0);b["condition"]=std::to_string(id);
-    require(profile.update(a) && profile.update(b),"S4 profile samples missing");
-    p::Estimator engine(profile,coop,ignore,{});const auto shape=engine.shape(profile.samples[1]);
-    require(!engine.eligible(profile.samples[0],shape),"scalar sample entered cooperative S4 estimator");
-    auto x=shape;x.target_bits=x.arithmetic_bits=10176;
-    require(engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==5,"within-tile S4 sharing rejected");
-    x.target_bits=x.arithmetic_bits=10240;
-    require(!engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==6,"S4 high-word tile boundary crossed");
-    x.target_bits=x.arithmetic_bits=8192;
-    require(!engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==0,"S4 scalar boundary crossed");
-    x=shape;x.mersenne=true;require(!engine.s4_coop_tiles(x),"Mersenne reduction mistaken for shared division");
+static void s4_policy_tests(const std::filesystem::path &out) {
+    Fields old{{"uuid_hex","\"S4-device\""},{"sm_major","8"},{"sm_minor","9"},{"cuda_driver","13030"},
+        {"cuda_runtime","13030"},{"gl_fixed_mode","3"},{"outer_unroll_u","0"},{"add_sub_mask","1"}};
+    auto coop_condition=old;coop_condition["env_s4_coop_reduce"]="32";
+    require(p::matches(old,coop_condition,p::Ignore::parse("")),"S4 request still splits actual row identity");
+    require(p::ntt_matches(old,coop_condition,p::Ignore::parse("")),"S4 invalidated standalone NTT");
+    p::Profile profile;profile.condition(old);const auto id=profile.condition(coop_condition);
+    for(unsigned mode=0;mode<3;++mode)for(unsigned repeat=0;repeat<2;++repeat) {
+        auto row=sample(700+mode*2+repeat,0,10.-2*mode,0);
+        row["condition"]=std::to_string(mode?id:0);row["reduce_coop"]=mode?"32":"0";
+        row["reduce_threads"]=mode?"128":"0";row["reduce_kernel"]=std::to_string(mode);
+        require(profile.update(row),"S4 sample missing");
+    }
+    const auto query=[](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){*slots=2*m-1;*n=8;while(*n<*slots*ecm_stage2::Word((bits+19)/20))*n*=2;return true;};
+    p::Estimator engine(profile,old,p::Ignore::parse(""),query);
+    auto scalar=engine.shape(profile.samples[0]),warp=engine.shape(profile.samples[1]),merged=engine.shape(profile.samples[2]);
+    require(!engine.eligible(profile.samples[0],warp) && !engine.eligible(profile.samples[1],merged),"S4 variants merged");
+    const auto choice=p::qualified_reduce_backend(engine,scalar,2);
+    require(choice.available && choice.mode==32 && choice.kernel==2 && choice.threads==128,"S4 fastest repeated variant not selected");
+    require(p::qualified_point_backends(engine,merged,false,false,2,false,true),"S4 checked edge rejected");
+    require(!p::qualified_reduce_backend(engine,scalar,3).available,"S4 repeat threshold ignored");
+    auto nearby=scalar;nearby.d=6930;require(p::qualified_reduce_backend(engine,nearby,2).available,"same NTT interval reuse rejected");
+    nearby.d=30030;require(!p::qualified_reduce_backend(engine,nearby,2).available,"S4 crossed NTT cliff without pair");
+    auto x=warp;x.target_bits=x.arithmetic_bits=10176;
+    require(engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==5,"within-tile sharing rejected");
+    x.target_bits=x.arithmetic_bits=10240;require(!engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==6,"high-word tile boundary crossed");
+    x=warp;x.reduce_threads=96;require(!engine.eligible(profile.samples[1],x),"S4 thread identity crossed");
+    profile.samples[2]["point_check_seconds"]="5";
+    p::Estimator checks(profile,old,p::Ignore::parse(""),query);require(p::qualified_reduce_backend(checks,scalar,2).kernel==1,"S4 ignored startup checks");
+    profile.samples[2]["point_check_seconds"]="0";
+    p::Profile unpaired=profile;unpaired.samples.erase(unpaired.samples.begin());p::Estimator alone(unpaired,old,p::Ignore::parse(""),query);
+    require(!p::qualified_reduce_backend(alone,warp,2).available,"unpaired S4 treated as qualified");
+    std::vector<p::RuntimeCandidate> all{{scalar,{2,0,10,0,0},1,true},{warp,{2,0,8,0,0},1,true}};
+    auto trials=p::runtime_reduce_trials(all,2);require(trials.size()==1 && trials[0].reduce_kernel==2,"merged S4 trial not bounded");
+    all.push_back({merged,{2,0,6,0,0},1,true});require(p::runtime_reduce_trials(all,2).empty(),"completed S4 repeated");
+    auto next=scalar;next.d=30030;all.push_back({next,{2,0,12,0,0},2,true});trials=p::runtime_reduce_trials(all,2);
+    require(trials.size()==1 && trials[0].d==30030 && trials[0].reduce_kernel==1,"completed old D starved new interval");
+    std::ofstream(out/"s4.toml")<<profile.serialize();auto loaded=p::Profile::load(out/"s4.toml");
+    p::Estimator restored(loaded,old,p::Ignore::parse(""),query);
+    require(loaded.samples.size()==3 && p::qualified_reduce_backend(restored,scalar,2).kernel==2,"S4 variants lost through serialized profile");
+    auto legacy=sample(790,0,3,0);legacy["condition"]=std::to_string(id);require(profile.update(legacy),"legacy S4 lost");
+    require(p::optional_uint(profile.samples.back(),"reduce_coop")==255,"unobserved legacy S4 relabelled");
 }
 static void giant_tests() {
     p::Profile profile;profile.condition({{"uuid_hex","\"giant-device\""},{"sm_major","8"},{"sm_minor","9"},
@@ -127,16 +151,23 @@ static void seed_policy_tests() {
 }
 int main(int argc,char **argv) {
     try {
-        if(argc==4 && std::string(argv[1])=="--make-save") {
-            const unsigned bits=unsigned(std::stoul(argv[2]));require(bits>=8193 && bits<=16384,"invalid fixture width");
-            mpz_t n;mpz_init_set_ui(n,1);mpz_mul_2exp(n,n,bits-1);mpz_add_ui(n,n,12345);mpz_nextprime(n,n);
+        if(argc==4 && (std::string(argv[1])=="--make-save" || std::string(argv[1])=="--make-save-from-modulus")) {
+            mpz_t n;mpz_init(n);
+            if(std::string(argv[1])=="--make-save") {
+                const unsigned requested=unsigned(std::stoul(argv[2]));require(requested>=8193 && requested<=16384,"invalid fixture width");
+                mpz_set_ui(n,1);mpz_mul_2exp(n,n,requested-1);mpz_add_ui(n,n,12345);mpz_nextprime(n,n);
+            } else {
+                std::ifstream input(argv[2]);std::string modulus;input>>modulus;
+                require(bool(input) && mpz_set_str(n,modulus.c_str(),16)==0,"invalid fixture modulus");
+            }
+            const unsigned bits=unsigned(mpz_sizeinbase(n,2));require(bits>=8193 && bits<=16384 && mpz_odd_p(n),"invalid fixture modulus width/parity");
             std::vector<char> buffer(bits/4+4);mpz_get_str(buffer.data(),16,n);const std::string hex=buffer.data();mpz_clear(n);
             const auto x=ecm_stage2::tune::benchmark_point(hex);
             std::ofstream out(argv[3]);out<<"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"<<hex<<"; X=0x"<<x<<"; Z=1;\n";
-            require(bool(out),"save write failed");std::cout<<"generated probable-prime Stage1 fixture "<<bits<<" bits\n";return 0;
+            require(bool(out),"save write failed");std::cout<<"generated Montgomery Stage1 fixture "<<bits<<" bits\n";return 0;
         }
         require(argc==2,"need output directory");
-        s4_policy_tests();
+        s4_policy_tests(argv[1]);
         giant_tests();seed_policy_tests();
         p::Profile profile;
         profile.condition({{"uuid_hex","\"device\""},{"sm_major","8"},{"sm_minor","9"},{"cuda_driver","13030"},

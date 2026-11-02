@@ -11,8 +11,8 @@
 #include "ecm/platform/program_version.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=12;
-inline bool supported_format(Word value){return value==8 || value==9 || value==10 || value==11 || value==format;}
+constexpr unsigned format=13;
+inline bool supported_format(Word value){return value==8 || value==9 || value==10 || value==11 || value==12 || value==format;}
 inline constexpr const char *matrix_column_order[]={
 #define ECM_STAGE2_TUNE_COLUMN(name) #name,
 #define ECM_STAGE2_TUNE_NTT_COLUMN(name)
@@ -247,6 +247,7 @@ inline std::string runtime_group(const Fields &s) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
     key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";seed_coop="+std::to_string(optional_uint(s,"seed_coop"))+";";
+    for(const char *field:{"reduce_coop","reduce_threads","reduce_kernel"})key+=std::string(field)+"="+std::to_string(optional_uint(s,field))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
     return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
@@ -261,10 +262,16 @@ inline std::string scope(const Fields &s) {
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"})
         key+=std::string(field)+'='+std::to_string(optional_uint(s,field, std::string(field)=="giant_chain_min"?32768:0))+';';
     key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";seed_coop="+std::to_string(optional_uint(s,"seed_coop"))+";";
+    for(const char *field:{"reduce_coop","reduce_threads","reduce_kernel"})key+=std::string(field)+"="+std::to_string(optional_uint(s,field))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
     return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
 inline void validate(const Fields &s) {
+    const auto reduce=optional_uint(s,"reduce_coop"),threads=optional_uint(s,"reduce_threads"),kernel=optional_uint(s,"reduce_kernel");
+    if((reduce!=0 && reduce!=32 && reduce!=255) || (reduce==32 &&
+        ((threads!=64 && threads!=96 && threads!=128) || (kernel!=1 && kernel!=2))) || (reduce!=32 && (threads || kernel)))
+        throw std::runtime_error("invalid S4 arithmetic backend");
+    if(reduce==32 && (uint(s,"arithmetic_bits")<=8192 || text(s,"modulus_kind")=="mersenne"))throw std::runtime_error("unsupported cooperative S4 sample");
     const auto baby=optional_uint(s,"baby_coop"),giant=optional_uint(s,"giant_coop"),seed=optional_uint(s,"seed_coop");
     if((baby!=0 && baby!=32 && baby!=255) || (giant!=0 && giant!=16 && giant!=32 && giant!=255) || (seed!=0 && seed!=32 && seed!=255))
         throw std::runtime_error("invalid point arithmetic backend");
@@ -336,7 +343,7 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
     // requested environment policy in legacy condition tables.
     // S4 cost populations cannot cross arithmetic policies. Missing means the
     // scalar legacy baseline; NTT tables erase this separate policy below.
-    if(optional_uint(old,"env_s4_coop_reduce")!=optional_uint(current,"env_s4_coop_reduce"))return false;
+    // Actual reduction mode and variant are row/Shape identities.
     if(!ignore.gpu && (!same("uuid_hex") || !same("sm_major") || !same("sm_minor")))return false;
     if(!ignore.driver && !same("cuda_driver"))return false;
     if(!ignore.cuda && !same("cuda_runtime"))return false;
@@ -347,7 +354,7 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
         // in their environment. Do not split unchanged schedules on that flag.
         auto relevant=[](const std::string &key) {
             return key.compare(0,4,"env_")==0 && key!="env_giant_tail_balance" &&
-                key!="env_s4_coop_reduce" && key!="env_baby_coop" && key!="env_giant_coop" && key!="env_giant_seed_coop";
+                key!="env_s4_coop_reduce" && key!="env_s4_coop_tpb" && key!="env_s4_coop_kernel" && key!="env_baby_coop" && key!="env_giant_coop" && key!="env_giant_seed_coop";
         };
         for(const auto &f:old)if(relevant(f.first) && !same(f.first.c_str()))return false;
         for(const auto &f:current)if(relevant(f.first) && !same(f.first.c_str()))return false;
@@ -358,7 +365,7 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
 }
 inline bool ntt_matches(Fields old,Fields current,const Ignore &ignore) {
     // S4 scheduling changes do not change the standalone field benchmark.
-    for(const char *key:{"env_s4_short_batch_tune","env_s4_short_batch_hash","env_giant_seed_coop","env_s4_coop_reduce"}) {old.erase(key);current.erase(key);}
+    for(const char *key:{"env_s4_short_batch_tune","env_s4_short_batch_hash","env_giant_seed_coop","env_s4_coop_reduce","env_s4_coop_tpb","env_s4_coop_kernel"}) {old.erase(key);current.erase(key);}
     return matches(old,current,ignore);
 }
 // Restricted TOML arrays contain scalar table cells, never trial samples.
@@ -406,7 +413,7 @@ inline Fields compact_sample(Fields s) {
     }
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
-        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop",
+        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop","reduce_coop","reduce_threads","reduce_kernel",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
@@ -477,6 +484,13 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
             s[key]=optional_uint(condition,env.c_str()) && bits>8192 && bits<=16384?"255":"0";
         }
         if(!s.count("seed_coop"))s["seed_coop"]=optional_uint(condition,"env_giant_seed_coop")?"255":"0";
+        if(!s.count("reduce_coop")) {
+            const auto bits=optional_uint(s,"arithmetic_bits",optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"));
+            const bool possible=bits>8192 && bits<=16384 && (text(s,"modulus_kind")!="mersenne" || !optional_uint(condition,"env_s4_mersenne",1));
+            s["reduce_coop"]=optional_uint(condition,"env_s4_coop_reduce") && possible?"255":"0";
+        }
+        if(!s.count("reduce_threads"))s["reduce_threads"]="0";
+        if(!s.count("reduce_kernel"))s["reduce_kernel"]="0";
         const auto d=uint(s,"d");if(d<6 || d>200000000 || d%2)throw std::runtime_error("invalid tune D");
         const Fields derived={{"arithmetic_bits",std::to_string(optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"))},
             {"p",std::to_string(cost::phi(uint(s,"d"))/2)},
@@ -631,7 +645,7 @@ struct Profile {
         // Legacy format-8 conditions included a program version. Transfer it
         // to rows, then merge conditions that now describe the same hardware.
         Profile normalized;normalized.metadata=out.metadata;std::map<Word,Word> remap;
-        for(const auto &c:out.conditions) {auto fields=c.second;fields.erase("env_giant_seed_coop");remap[c.first]=normalized.condition(fields);}
+        for(const auto &c:out.conditions) {auto fields=c.second;for(const char *key:{"env_giant_seed_coop","env_s4_coop_reduce","env_s4_coop_tpb","env_s4_coop_kernel"})fields.erase(key);remap[c.first]=normalized.condition(fields);}
         std::map<std::string,size_t> merged;
         for(auto s:out.samples) {
             s["condition"]=std::to_string(remap.at(uint(s,"condition")));const auto key=scope(s);

@@ -22,15 +22,18 @@ from stage2_d_catalog import phi
 
 def collect(out, folder, case, cell, plan, mode, checks):
     cmd=command(out,folder,case,cell,folder/'unused_tune.toml',str(cell['chain']),False)
+    cmd[cmd.index('--device')+1]=str(plan['protocol']['device'])
     seed_mode=mode if plan.get('component','seed')=='seed' else 'coop32'
     cmd+=['--baby-backend','coop32','--giant-backend','coop32','--seed-backend',seed_mode]
-    if plan.get('component')=='reduce':cmd+=['--reduce-backend',mode]
+    if plan.get('component')=='reduce':
+        cmd+=['--reduce-backend',mode]
+        if plan.get('reduce_kernel'):cmd+=['--reduce-kernel',str(plan['reduce_kernel'])]
     env=environment()
     if checks:
         env.update(NTT_GIANT_SEED_CHECK='1',NTT_DEVICE_GLEAF_CHECK='1',
                    NTT_S4_CARRY_TRACE='1',NTT_TARGET_LEAF_HASH='1')
     write(folder/'command.json',cmd)
-    monitor=TelemetryRecorder(1,folder/'telemetry.jsonl',interval=.2)
+    monitor=TelemetryRecorder(plan['protocol']['device'],folder/'telemetry.jsonl',interval=.2)
     start=time.perf_counter()
     try:
         check_gpu_processes(monitor.monitor,out,folder/'before.json',allowed=plan['allowed_processes'])
@@ -45,7 +48,7 @@ def collect(out, folder, case, cell, plan, mode, checks):
     if len(raw)!=1:raise ValueError('Expected one complete curve')
     r=raw[0];value=normalize_result(r)
     expected=dict(N_hex=case['N_hex'],sigma=case['sigma'],B1=case['b1'],B2=cell['B2'],
-                  carrier_exponent=cell['carrier'],curve='ed')
+                  carrier_exponent=cell['carrier'],curve=case.get('curve','ed'))
     if any(value[k]!=v for k,v in expected.items()) or r['source-build']!=plan['exe_sha256'] or \
        r['status']!='NF' or value['factors'] or value['bad_factors']:
         raise ValueError('Input, arithmetic result or binary identity differs')
@@ -67,8 +70,14 @@ def collect(out, folder, case, cell, plan, mode, checks):
     if plan.get('component')=='reduce':
         actual_reduce=32 if mode=='coop32' and not cell['carrier'] and case['bits']>8192 else 0
         reduce=stats['s4_coop_reduce_mode']
-        if int(reduce['enabled'])!=actual_reduce or int(reduce['requested'])!=(32 if mode=='coop32' else 0):
+        modern='reduce_coop' in r['stage2-engine']
+        requested=actual_reduce if modern else (32 if mode=='coop32' else 0)
+        if int(reduce['enabled'])!=actual_reduce or int(reduce['requested'])!=requested:
             raise ValueError('Unexpected S4 reduction policy')
+        if modern:
+            expected_kernel=plan.get('reduce_kernel') or 1
+            if tuple(r['stage2-engine'][k] for k in ('reduce_coop','reduce_threads','reduce_kernel'))!=(actual_reduce,128 if actual_reduce else 0,expected_kernel if actual_reduce else 0):
+                raise ValueError('Unexpected actual S4 variant')
     if int(stats['groot_layout']['balanced'])!=cell['layout']:raise ValueError('Layout changed')
     if checks:
         leaf=stats['device_gleaf']
@@ -78,12 +87,15 @@ def collect(out, folder, case, cell, plan, mode, checks):
     counts=[s for s in text.splitlines() if s.startswith(('ntt_length_counts:','ntt_convolution_counts:'))]
     if not counts:raise ValueError('Missing NTT workload counts')
     return dict(cell=cell['id'],mode=mode,folder=str(folder),seconds=float(clock['total']),clock=clock,
-                process_seconds=time.perf_counter()-start,stats=stats,ntt_counts=counts)
+                process_seconds=time.perf_counter()-start,stats=stats,ntt_counts=counts,device_identity=monitor.identity)
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--component',choices=('seed','reduce'),default='seed')
+    p.add_argument('--device',type=int,default=1)
+    p.add_argument('--background-snapshot',type=Path)
+    p.add_argument('--reduce-kernel',type=int,choices=(1,2))
     p.add_argument('--arithmetic',choices=('both','ordinary','carrier'),default='both')
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--exe',type=Path,required=True)
@@ -117,12 +129,21 @@ def main():
     for c in cells:
         if a.d:c.update(D=a.d,P=phi(a.d)//2)
         if a.b2:c['B2']=a.b2
-    plan=dict(complete=False,component=a.component,started_utc=stamp(),source_study=str(a.study.resolve()),
+    plan=dict(complete=False,component=a.component,reduce_kernel=a.reduce_kernel,started_utc=stamp(),source_study=str(a.study.resolve()),
               exe_sha256=sha(binary/a.exe.name),dll_sha256=sha(binary/'gmp-10.dll'),
               source_matrix_sha256=sha(a.study/'plan.json'),allowed_processes=source['allowed_processes'],
               cases=cases,cells=cells,runs=[],failures=[],diagnostic=a.checks,
-              protocol=dict(device=1,repeats=a.repeats,warmups=0,learning=False,arithmetic=a.arithmetic,
+              protocol=dict(device=a.device,repeats=a.repeats,warmups=0,learning=False,arithmetic=a.arithmetic,
                             batch_mb=256,arena_mb=6300,fold_mb=640))
+    if a.background_snapshot:
+        bg=load(a.background_snapshot)
+        if not bg.get('approved_background_by_user') or bg['device']!=a.device:raise ValueError('Wrong background authorization')
+        probe=TelemetryRecorder(a.device,out/'identity_telemetry.jsonl',interval=.2)
+        try:
+            if probe.identity['uuid']!=bg['uuid']:raise ValueError('Background UUID mismatch')
+        finally:probe.close()
+        plan['allowed_processes']=plan['allowed_processes']+bg['allowed_processes']
+        plan['approved_background_snapshot']=bg;shutil.copy2(a.background_snapshot,out/'background_snapshot.json')
     write(out/'summary.json',plan)
     try:
         for ci,cell in enumerate(cells):

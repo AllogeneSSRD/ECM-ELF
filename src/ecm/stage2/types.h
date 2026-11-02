@@ -17,6 +17,7 @@
 #include "../../io/worktodo.h"
 #include "cuda/api.h"
 #include "planning/portable_model.h"
+#include "reduce_backend.h"
 namespace s2prod {
 namespace fs=std::filesystem;
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -55,6 +56,8 @@ struct Options {
     std::string seed_backend=ecm_config::defaults::stage2_stage2_seed_backend;
     std::string reduce_backend=ecm_config::defaults::stage2_stage2_reduce_backend;
     unsigned selected_baby_coop=0,selected_giant_coop=0,selected_seed_coop=0;
+    unsigned selected_reduce_coop=0,selected_reduce_threads=0,selected_reduce_kernel=0;
+    unsigned reduce_threads=ecm_stage2::reduce_default_threads,reduce_kernel=0; // 0 permits the bounded old/merged comparison in auto.
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;

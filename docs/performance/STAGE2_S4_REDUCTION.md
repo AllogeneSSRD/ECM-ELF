@@ -1,8 +1,8 @@
 # 普通高位宽 S4 归约性能
 
-当前CUDA提供`stage2_reduce_backend=scalar|coop32`，默认scalar。coop32对8193…16384实际算术bits的普通系数归约使用一个warp处理一个系数，余数放在共享内存；小位宽和精确梅森归约保留原内核。CLI为`--reduce-backend`，worker覆盖和环境回退见[配置参考](../ECM_TOML_REFERENCE.md#stage2_reduce_backend)。它与seed／baby／giant的auto独立，当前不自动搜索S4后端。
+当前CUDA提供`stage2_reduce_backend=auto|scalar|coop32`，默认auto。coop32对8193…16384实际算术bits的普通系数归约使用一个warp处理一个系数，余数放在共享内存；小位宽和精确梅森归约保留原内核。CLI为`--reduce-backend`，worker覆盖和环境回退见[配置参考](../ECM_TOML_REFERENCE.md#stage2_reduce_backend)。auto先完成点后端对照，再固定几何比较标量、warp两遍乘减和warp合并乘减，按完整引擎加启动算术检查成本选优；无合格配对时保留标量。
 
-RTX4060 Laptop固定D的小档B2四个普通输入，完整引擎合计113.389→94.091s（减少17.02%），完整曲线墙钟119.029→98.686s（减少17.09%）。最高位S4设备事件累计15.681→7.939s，约减半；不是整条Stage2快一倍。保持默认scalar，跨设备、大B2及更多D尚需独立资格。
+RTX4060 Laptop固定D的小档B2四个普通输入，0.57.13标量／warp两遍参考的完整引擎合计113.389→94.091s（减少17.02%），完整曲线墙钟119.029→98.686s（减少17.09%）。最高位S4设备事件累计15.681→7.939s，约减半；不是整条Stage2快一倍。固定后端成绩不等于auto或新D的收益承诺，后者须独立资格与持出。
 
 ## 输入、设备和计时
 
@@ -82,24 +82,92 @@ long scoreboard表示等待L1TEX相关操作，不等于已经证明DRAM带宽�
 
 真实Worker #2验证worker覆盖、CLI优先、环境回退和非法coop16拒绝；协作S4条件下另有28条NF验证seed auto的重复门槛、只读胜者、未配对保护及baby／giant／seed／32与64链长联合学习。CPU运行时、边界、后端资格以及Python聚合／生成物检查通过。
 
-ECM格式12强制区分`env_s4_coop_reduce=0|32`，不因忽略environment合并；旧标量条件缺该键仍按0兼容。NTT表继续共用。协作宽度模型以ceil((W+1)/32)隔离额外高词组台阶，不跨W160／192／224／256直接平滑复用；无协作实测时仍是保守先验。S4默认scalar，seed默认auto；不能把固定后端A/B当成新D或新S4后端已自动选优。
+ECM格式13以实际`reduce_coop/threads/kernel`区分成本，不因忽略environment合并；请求设置不再分裂NTT条件。旧非零请求且缺实际执行证据时保留为未知255，不参与选型。协作宽度模型以ceil((W+1)/32)隔离额外高词组台阶，不跨W160／192／224／256直接平滑复用；无协作实测时仍是保守先验。
+
+auto默认128线程，有限比较kernel1两遍和kernel2合并；诊断CLI允许`--reduce-threads 64|96|128`及`--reduce-kernel 0|1|2`，0表示auto允许两项。kernel2合并qN的低／高词及乘积进位后，一次读写余数字；乘法和商位数不变。资格限定硬件、位宽、NTT区间、实际B2、驻留、点后端、布局及链长；不要求B1相同。同一区间相邻D可复用胜者，未覆盖的NTT拐点先建立标量参考。配置的最小重复次数适用于两项，已经开始的比较会完成，剩余曲线不足不再启动新比较。
+
+## 两卡字长边界与大B2资格
+
+0.57.14的性能EXE为`0502832a97a2705e4e48d7b233e490ced3cff022803d4fba1fabac205f4d732f`，258项构建输入及46个目标文件冻结核验。使用相同sm89／CUDA13.3／GMP依赖、batch／arena／fold预算256／6300／640MiB。无warmup，不改变时钟或功耗。GPU1的1176条利用率≥50%记录均为1500MHz，忙碌功耗9.408…48.727W；GPU0的1362条均为2595MHz，忙碌功耗30.237…203.864W。两卡不按频率归一化，也不跨卡比较绝对倍率。GPU0按用户授权保留桌面背景；新增生产GUI经管理员路径核实后另存背景快照，所有前后门禁与遥测保留。
+
+边界测试为Montgomery param0／sigma26、B1=20的合成算术资格点，目标bits为8193／10176／10240／16258／16382，对应W129／159／160／255／256。前三个为确定生成的probable prime，后两个为已知大梅森素数的乘积／平方，不能当作生产余因子分布。固定D30030/P2880、请求／实际B2=300750450、layout1、chain32、点后端32，正常算术检查开启。两项warp各自与标量配对；每格n=1，GPU0/W129两遍首轮初始化明显偏长，追加反序两次，三次中位数含首轮。比较的是完整引擎，不是单个kernel。
+
+| W／实际bits | 4060两遍减少 | 4060合并减少 | 4070 Ti两遍减少 | 4070 Ti合并减少 |
+|---|---:|---:|---:|---:|
+| 129／8193 | 2.15% | 5.29% | 16.48% | 8.23% |
+| 159／10176 | 6.30% | 8.46% | 13.99% | 13.36% |
+| 160／10240 | 6.63% | 7.77% | 15.47% | 9.95% |
+| 255／16258 | 19.81% | 20.47% | 19.83% | 24.07% |
+| 256／16382 | 18.63% | 19.17% | 24.24% | 25.89% |
+
+![两卡S4字长边界对照](attachments/stage2_s4_auto_boundary.png)
+
+图中W为分类边界，间隔不代表数值距离；两组结果各用自己的标量对照。两遍／合并没有跨场景稳定的单一胜者，较低边界收益也较小，因此采用配对auto，不设置仅凭位宽就强制替换的阈值。
+
+大B2使用真实16272-bit余因子、Edwards／sigma26／B1=50000及p16319承载，固定D360360/P34560、请求／实际B2=80000000000，其余预算及点策略同上。普通比较标量与合并warp；承载两种请求的实际S4均为0/0/0，属于回退控制。GPU0普通追加两次反序复测，采用全部三次中位数；其他格n=1。
+
+| 设备／路线 | 每后端n | 完整引擎 scalar→合并请求，s | 耗时减少 | S4事件，s |
+|---|---:|---:|---:|---:|
+| 4060／普通 | 1 | 75.065→56.249 | 25.07% | 28.136→13.882 |
+| 4070 Ti／普通 | 3 | 44.369→30.385 | 31.52% | 17.131→4.133 |
+| 4060／承载 | 1 | 33.653→34.353 | −2.08% | 1.608→1.607 |
+| 4070 Ti／承载 | 1 | 21.145→21.771 | −2.96% | 0.925→0.948 |
+
+承载的约2%～3%外层波动不归因于S4优化。该资格不覆盖全部GPU、全部D或原26格自动选型矩阵，也不证明更大B2的同等收益。
+
+最终生产分派的180次GMP比较覆盖上述W边界、四类模数、digit1／26／64及三batch，共3625020个输出／哨兵词；另32次空窗口、32次源padding破坏和32次输出破坏拒绝均通过。16382-bit完整独立诊断的2880叶／737280词摘要一致。运行时15条曲线验证R=2顺序、只读、相邻D、NTT拐点、强制执行及未配对保护；真实worker覆盖／CLI优先／环境回退通过，联合点策略28条曲线及正式tune三项配对、相邻D只测胜者、重复跳过均通过。
+
+## 线程块与共享读写实证
+
+管理员NCU使用相同真实16272-bit模数、20608源系数／20606有效输出、digit26、GPU1、无clock/cache控制。每项独立GMP检查5255040词，输出摘要一致；重放计时不纳入完整曲线。128线程两遍／合并的内核分别46.803／45.595ms；合并64／96线程为50.234／48.162ms，均慢于128。寄存器40→42，local仍为0。合并128线程的issue59.10%→57.82%，short-scoreboard/issue1.140→1.311，但实际耗时减少，不能单凭这些指标定输赢。
+
+另一次同输入直接计数的128线程两遍／合并为46.807／45.581ms：共享load wavefronts为353022701→280655872（−20.50%），store为170344194→97860564（−42.55%）。load bank conflicts86205→72284，store218719→129695；与相应wavefront总量相比很小，没有证据将主要瓶颈归因于bank冲突。计数是片上事务，不是DRAM字节。减少余数数组读写确有体现，但除数字读、进位／借位和商依赖仍在，故不是访存或耗时减半。
+
+## 树阶段：纯NTT、S4及主机等待
+
+管理员Nsight Systems在GPU1分别诊断普通／承载真实输入，D210210/P20160、B2=27015978990、点后端32、普通两遍warp；0.57.14 EXE如上。两次NF、保存点、D/P、NTT分布、归约次数及GMP检查与各自冻结参考一致。以下为诊断数据，不纳入普通计时矩阵。
+
+利用CPU的`Tree.host_driver`、`GTree.build`范围及进程限定的CUDA关联ID归属内核；按提交API归属，而非按内核执行时刻切片，避免异步越界误分。两次trace均无无法关联的GPU事件。纯NTT含transform、pointwise、位逆序及scale，carry／pack／表构建归其他内核。F树范围1次，G树范围7次。
+
+| 路线／树 | 主机范围，s | 纯NTT，s | S4，s | 其他kernel，s | 同步API驻留，s | CUDA API外主机范围，s |
+|---|---:|---:|---:|---:|---:|---:|
+| 普通／F | 3.534 | 0.518 | 0.775 | 0.155 | 1.054 | 1.591 |
+| 承载／F | 1.921 | 0.518 | 0.096 | 0.156 | 0.594 | 0.824 |
+| 普通／G | 9.227 | 3.012 | 4.998 | 0.947 | 8.660 | 0.291 |
+| 承载／G | 4.655 | 3.012 | 0.519 | 0.951 | 4.318 | 0.191 |
+
+CPU范围、API驻留与GPU时间重叠，不能横向相加；API外范围也包含调度和OS等待，不是测得的CPU指令时间。普通／承载G树的`cudaMemcpy`主机驻留8.487／4.206s，但DMA仅0.010／0.010s，主要在等待此前的GPU工作，不能据此宣称PCIe瓶颈。G树自身GPU活动并集8.968／4.493s，接近主机范围9.227／4.655s，主机准备余量有限。普通仍以S4为最大内核组；承载的纯NTT约占G树主机范围65%，另有约0.95s的carry／pack等，优先级应相应变化。
+
+F树仍有显著主机准备和pinned分配成本：普通的`cudaHostAlloc`／`cudaFreeHost`API驻留0.211／0.520s，承载0.094／0.338s。是否预留或改变增长策略需另做总墙钟和host峰值对照，不能把开销移出引擎计时后声称加速，也不能减少必需GMP检查来制造收益。
+
+## 新S4成本下的D/P保护
+
+GPU0、同一真实输入及小B2、合并warp成本，普通／承载分别校准D210210/P20160、240240/P23040、300300/P28800，再冻结选择并独立持出。普通学习耗时17.612／16.843／29.734s，承载13.490／13.460／17.851s，均推荐240240。独立持出普通为基线16.871／候选17.623s，承载14.401／14.482s；两项没有通过不增时保护，因此保持210210，不将学习样本的最小值当作生产收益。
+
+D更大并不必然更快，P=28800这档的树／NTT成本明显增加；该实验没有改变默认D表或批准全局模型收益。S4身份进入新的模型和配对行后，继续依靠已验证候选与默认保护，不能沿用标量时期的D收益承诺。
 
 ## 证据、源码与后续工作
 
 完整曲线EXE为0.57.13，SHA256 `1f14235e6e25f7003d99b1268f954e8a831272382720cab8ba155b12c31f5c6e`，19624448B；257项构建输入和46个目标文件核验一致。GMP DLL为`969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。旧标量保护EXE0.57.12为`3f01cc3da82a87cb26fdd3112659f26534a064ed2c1e0c20e30c45c7fd0b68cc`；NCU旧0.57.11为`0137ba813e1305e57b38947b48e2e53714132e4a574a7860091b20ba0d724157`。探针EXE为`9391d6f62d3aeb07669d774732052848b00d7a8511e4dda132970be8b8f4bcb9`，使用同一生产S4头。
 
-原始证据根`data/experiments/stage2_s4_20261102/`：`production_correct01`／`production_empty01`／`production_fault1/2`、`production_perf01`、`curves01`／`carrier_retest01`、`native_checks01`／`s4_config01`／`seed_auto_s4_01`、`low_fallback01`／`default_guard01`、`ncu_baseline_200`／`ncu_warp_200`和`s4_release`／`s4_final_audit.json`。功耗查询保留于`power_identity.txt`；初期探针输入padding错误和编译类型错误均保留，修正测试生成器／启动转换，未放宽生产guard。
+0.57.13原始证据根`data/experiments/stage2_s4_20261102/`：`production_correct01`／`production_empty01`／`production_fault1/2`、`production_perf01`、`curves01`／`carrier_retest01`、`native_checks01`／`s4_config01`／`seed_auto_s4_01`、`low_fallback01`／`default_guard01`、`ncu_baseline_200`／`ncu_warp_200`和`s4_release`／`s4_final_audit.json`。功耗查询保留于`power_identity.txt`；初期探针输入padding错误和编译类型错误均保留，修正测试生成器／启动转换，未放宽生产guard。
+
+0.57.14证据根`data/experiments/stage2_s4_auto_20261102/`：`release14`／`release14_audit.json`，`production_correct01`／`production_empty01`／`production_fault1/2`，`boundary_gpu{0,1}_k{1,2}`及`boundary_gpu0_k1_retest`，`merged_leaf_check`，`big80_gpu{0,1}_k2`／`big80_gpu0_retest`，`native_auto05`／`native_config05`／`native_combined03`／`formal01`，`ncu_merged01`／`ncu_shared01`，`nsys_ordinary01`／`nsys_carrier01`和`d_holdout02`。新汇总、CSV及分类图位于`data/benchmarks/stage2_s4_auto_20261102/final02`和同名figures目录；`final01`线图也保留。失败原始记录与临时草稿不删除。
+
+最终本机构建仅更正自动轴数的一行注释后重建，EXE为`4ee77139494b427e3e64eb9e48f9d45eef9c2e19948c5b7e599e2320b3b35f0c`；258项输入及46个目标核验，`.text`、`.data`、异常表与CUDA镜像均与测量版相同，链接元数据不同。最终真实worker复验通过；冻结位置`release14_final_v3`、`native_final_config02`和`final_audit.json`。
 
 汇总、CSV和图位于`data/benchmarks/stage2_s4_20261102/{curves_final,probe01,ncu01}`及同名figures目录。`curves01`原始汇总和图也保留；`curves_final`明确纳入两档承载复测。复现入口见[测量协议](../../tools/bench/README_STAGE2_VERSION.md#s4普通归约验证)；`analyze_stage2_s4_ncu.py`绑定输入、二进制、GMP覆盖、NTT工作及CSV单位，不运行GPU。
 
 源码依据：
 
-- [s4_warp_reduce.cuh:6](../../src/ecm/stage2/cuda/device/s4_warp_reduce.cuh#L6)借位前缀，12／31行乘减与加回，62行kernel及全源检查；[s4_reduce.cuh:88](../../src/ecm/stage2/cuda/device/s4_reduce.cuh#L88)生产分派和合法空窗口。
-- [s4.cpp:195](../../src/ecm/stage2/cuda/s4.cpp#L195)实际启用／共享字节诊断；[host_policy.cpp:63](../../src/ecm/stage2/cuda/host_policy.cpp#L63)配置优先级，`process.cpp::run_curve_process`显式转发子进程。
-- [tune_portable.h:339](../../src/ecm/stage2/planning/tune_portable.h#L339)硬成本身份，361行NTT复用；[portable_model.h:213](../../src/ecm/stage2/planning/portable_model.h#L213)位宽台阶，`width_prediction.h::region`隔离模型区域。
+- [s4_warp_reduce.cuh:6](../../src/ecm/stage2/cuda/device/s4_warp_reduce.cuh#L6)借位前缀，35行合并乘减，84行kernel及全源检查；[s4_reduce.cuh:89](../../src/ecm/stage2/cuda/device/s4_reduce.cuh#L89)生产分派和合法空窗口。
+- [s4.cpp:194](../../src/ecm/stage2/cuda/s4.cpp#L194)实际启用／共享字节诊断；[host_policy.cpp:66](../../src/ecm/stage2/cuda/host_policy.cpp#L66)配置优先级，`process.cpp::run_curve_process`显式转发子进程。
+- [runtime_tune.h:131](../../src/ecm/stage2/planning/runtime_tune.h#L131)配对资格、243行有限S4候选；`planning.cpp::portable_runtime_select`、`portable_measure`负责运行时与正式tune。`tune_portable.h::hydrate`／`compact_summary`保留实际身份，`portable_model.h::s4_coop_tiles`及`width_prediction.h::region`隔离成本区域。
+- `tools/bench/profile_stage2_tree_trace.py`采集并验证完整曲线，`analyze_stage2_tree_trace.py::analyze`按提交关联树阶段，`tools/test/test_stage2_tree_trace.py`覆盖异步跨界、进程ID隔离及重叠等待并集。
 
 TODO：
 
-- 补其他GPU、大B2和W129／159／160／255／256附近的完整曲线资格，再评估S4的auto／默认策略；保留当前默认保护。
-- 依据新NCU比较64／96／128线程块与两遍乘减的共享读写合并，保留精确借位及商校正；不凭occupancy或stall名称直接选型。
-- 给普通／承载树阶段分离纯NTT、S4及host等待，优化新暴露的NTT／准备关键路径；新S4成本下的D/P需独立校准与持出，不沿用标量收益承诺。
+- 扩展非SM89设备、更多生产模数／D／更大B2的资格，特别是NTT和驻留边界；保留auto标量参考与默认D保护。
+- 在同几何持出下优化承载G树的纯NTT和carry／pack；普通路线继续分析商位依赖，不单凭stall或occupancy改默认。
+- 评估F树pinned增长／复用及主机准备，记录完整墙钟、host峰值与全部GMP覆盖，避免计时外移。
+- 新S4 D/P继续按每条算术家族独立校准、足够重复并持出；当前三D单次学习结果未批准替换默认。

@@ -36,7 +36,7 @@ inline PointBackendChoice qualified_baby_backend(const Estimator &engine,const S
         matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
         auto s=engine.shape(row);
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
-           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.giant_coop!=reference.giant_coop || s.seed_coop!=reference.seed_coop ||
+           !s.same_reduce_backend(reference) || s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.giant_coop!=reference.giant_coop || s.seed_coop!=reference.seed_coop ||
            s.chain_block!=reference.chain_block || (s.baby_coop!=0 && s.baby_coop!=32) ||
            point_batch_bucket(d_catalog::degree(s.d),cap)!=bucket)continue;
         const auto mode=s.baby_coop;s.baby_coop=0;auto key=s.key();key[3]=0;
@@ -72,7 +72,7 @@ inline PointBackendChoice qualified_giant_backend(const Estimator &engine,const 
         matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
         auto s=engine.shape(row);
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
-           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop || s.seed_coop!=reference.seed_coop ||
+           !s.same_reduce_backend(reference) || s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop || s.seed_coop!=reference.seed_coop ||
            s.chain_block!=reference.chain_block || s.fold!=reference.fold || s.frontier!=reference.frontier ||
            s.groot_balanced!=reference.groot_balanced || s.tail_balance!=reference.tail_balance ||
            (s.giant_coop!=0 && s.giant_coop!=16 && s.giant_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
@@ -103,7 +103,7 @@ inline PointBackendChoice qualified_seed_backend(const Estimator &engine,const S
         matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
         auto s=engine.shape(row);
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
-           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop ||
+           !s.same_reduce_backend(reference) || s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop ||
            s.giant_coop!=reference.giant_coop || s.chain_block!=reference.chain_block ||
            s.fold!=reference.fold || s.frontier!=reference.frontier || s.groot_balanced!=reference.groot_balanced ||
            s.tail_balance!=reference.tail_balance || (s.seed_coop!=0 && s.seed_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
@@ -122,13 +122,50 @@ inline PointBackendChoice qualified_seed_backend(const Estimator &engine,const S
     }
     return result;
 }
+inline void set_reduce_backend(Shape &s,unsigned mode,unsigned threads=reduce_default_threads,unsigned kernel=reduce_kernel_current) {
+    s.reduce_coop=mode;s.reduce_threads=mode?threads:0;s.reduce_kernel=mode?kernel:0;s.canonicalize_reduce_policy();
+}
+struct ReduceBackendChoice {bool available=false;unsigned mode=0,threads=0,kernel=0;double distance=0;};
+// Compare the whole checked curve at identical geometry. Reuse only inside the
+// same NTT cliffs/residency and exact arithmetic width, not just a nearby D.
+inline ReduceBackendChoice qualified_reduce_backend(const Estimator &engine,const Shape &reference,Word minimum=2,
+    unsigned threads=reduce_default_threads,unsigned required_kernel=0) {
+    if(!cooperative_reduce_width(reference.arithmetic_bits,reference.mersenne))return {};
+    Work rw;if(!engine.query || !engine.cached_work(reference,rw))return {};
+    std::map<Shape::Key,std::array<const Fields*,3>> pairs;
+    for(const auto &row:engine.profile.samples)if(measured(row) && uint(row,"repeats")>=minimum &&
+        matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
+        auto s=engine.shape(row);
+        if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
+           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || !s.same_point_backend(reference) ||
+           s.chain_block!=reference.chain_block || s.fold!=reference.fold || s.frontier!=reference.frontier ||
+           s.groot_balanced!=reference.groot_balanced || s.tail_balance!=reference.tail_balance ||
+           (s.reduce_coop!=0 && s.reduce_coop!=32) || (s.reduce_coop && s.reduce_threads!=threads))continue;
+        Work w;if(!engine.cached_work(s,w) || interval(s,w).key!=interval(reference,rw).key)continue;
+        const unsigned at=s.reduce_coop?s.reduce_kernel:0;if(at>2)continue;
+        set_reduce_backend(s,0);auto key=s.key();key[3]=0;auto &pair=pairs[key];
+        if(!pair[at] || uint(row,"repeats")>uint(*pair[at],"repeats"))pair[at]=&row;
+    }
+    ReduceBackendChoice result;
+    for(const auto &entry:pairs) {
+        const auto &pair=entry.second;if(!pair[0] || (!pair[1] && !pair[2]) || (required_kernel && !pair[required_kernel]))continue;
+        auto seconds=[](const Fields *s){return real(*s,"mean_seconds")+optional_real(*s,"point_check_seconds");};
+        unsigned best=0;for(unsigned i=1;i<=2;++i)if(pair[i] && (!required_kernel || i==required_kernel) && seconds(pair[i])<seconds(pair[best]))best=i;
+        const double distance=std::abs(std::log2(double(d_catalog::degree(uint(*pair[0],"d")))/d_catalog::degree(reference.d)));
+        if(!result.available || distance<result.distance)result={true,best?32u:0u,best?threads:0u,best,distance};
+    }
+    return result;
+}
 // A checked coordinate path establishes the automatic modes. Walk back at
-// most three axes to the scalar reference; no exhaustive 2x3x2 grid is needed.
+// most four axes to the scalar reference; no exhaustive product grid is needed.
 inline bool qualified_point_backends(const Estimator &engine,const Shape &s,bool baby_auto,bool giant_auto,Word minimum,
-                                     bool seed_auto=false) {
+                                     bool seed_auto=false,bool reduce_auto=false) {
     const auto checked=[&](const auto &self,Shape x)->bool {
-        const bool baby=baby_auto && x.baby_coop,giant=giant_auto && x.giant_coop,seed=seed_auto && x.seed_coop;
-        if(!baby && !giant && !seed)return true;
+        const bool baby=baby_auto && x.baby_coop,giant=giant_auto && x.giant_coop,seed=seed_auto && x.seed_coop,reduce=reduce_auto && x.reduce_coop;
+        if(!baby && !giant && !seed && !reduce)return true;
+        if(reduce && qualified_reduce_backend(engine,x,minimum,x.reduce_threads,x.reduce_kernel).available) {
+            auto base=x;set_reduce_backend(base,0);if(self(self,base))return true;
+        }
         if(baby && qualified_baby_backend(engine,x,minimum).available) {
             auto base=x;base.baby_coop=0;if(self(self,base))return true;
         }
@@ -198,6 +235,32 @@ inline std::vector<Shape> runtime_seed_trials(const std::vector<RuntimeCandidate
         auto s=entry.second->shape;s.seed_coop=32;
         bool found=false;for(const auto &c:all)found|=c.shape.key()==s.key();
         if(!found)out.push_back(s);
+    }
+    return out;
+}
+// Bounded coordinate search: at most one missing reduction variant per
+// family, after its scalar reference has repeated. Never multiply the D grid.
+inline std::vector<Shape> runtime_reduce_trials(const std::vector<RuntimeCandidate> &all,Word minimum,
+    unsigned threads=reduce_default_threads,unsigned kernel=0) {
+    std::map<unsigned,const RuntimeCandidate*> best;
+    for(const auto &c:all)if(!c.shape.reduce_coop && cooperative_reduce_width(c.shape.arithmetic_bits,c.shape.mersenne) &&
+        c.statistics.count>=minimum && c.statistics.seconds>0) {
+        bool unfinished=false;
+        for(unsigned k=1;k<=2;++k)if(!kernel || kernel==k) {
+            auto trial=c.shape;set_reduce_backend(trial,32,threads,k);const RuntimeCandidate *found=nullptr;
+            for(const auto &old:all)if(old.shape.key()==trial.key()){found=&old;break;}
+            unfinished|=!found || found->statistics.count<minimum;
+        }
+        if(!unfinished)continue; // Finished old D must not starve a new interval.
+        auto &at=best[c.shape.carrier];if(!at || c.statistics.comparison_seconds()<at->statistics.comparison_seconds())at=&c;
+    }
+    std::vector<Shape> out;
+    for(const auto &entry:best)for(unsigned k=1;k<=2;++k) {
+        if(kernel && k!=kernel)continue;
+        auto s=entry.second->shape;set_reduce_backend(s,32,threads,k);
+        const RuntimeCandidate *found=nullptr;for(const auto &c:all)if(c.shape.key()==s.key()){found=&c;break;}
+        if(found && found->statistics.count<minimum)break;
+        if(!found){out.push_back(s);break;}
     }
     return out;
 }

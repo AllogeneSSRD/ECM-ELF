@@ -85,7 +85,7 @@ et::Fields portable_condition(const Options &o) {
         {"outer_unroll_u",std::to_string(info.outer_unroll_u)},{"add_sub_mask",std::to_string(NTT_GL_ADD_SUB_MASK)},
         {"batch_mb",std::to_string(o.batch)},{"arena_mb",std::to_string(o.arena)},{"fold_mb",std::to_string(o.owner_mb)},
         {"env_condition_tag",json_string(o.condition_tag)}};
-    for(const auto &e:tune_environment())if(e.first!="giant_seed_coop")f["env_"+e.first]=e.second;
+    for(const auto &e:tune_environment())if(e.first!="giant_seed_coop" && e.first!="s4_coop_reduce" && e.first!="s4_coop_tpb" && e.first!="s4_coop_kernel")f["env_"+e.first]=e.second;
     return f;
 }
 void configure_short_ntt_batches(const Options &o) {
@@ -146,8 +146,9 @@ bool portable_query(ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::
     if(n)*n=at->second.n;if(slots)*slots=at->second.slots;return at->second.ok;
 }
 void portable_point_backends(pt::Shape &s) {
+    s.canonicalize_reduce_policy();
 #ifdef ECM_STAGE2_OPENCL
-    s.baby_coop=s.giant_coop=s.seed_coop=0;return;
+    s.baby_coop=s.giant_coop=s.seed_coop=s.reduce_coop=s.reduce_threads=s.reduce_kernel=0;return;
 #endif
     if(!ecm_stage2::cooperative_point_width(s.arithmetic_bits)){s.baby_coop=s.giant_coop=s.seed_coop=0;return;}
     const auto env=tune_environment();const auto p=ecm_stage2::cost::phi(s.d)/2;const uint64_t w=(s.arithmetic_bits+63)/64;
@@ -165,6 +166,7 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     pt::Shape s;s.target_bits=unsigned(mpz_sizeinbase(n.z,2));s.arithmetic_bits=carrier?carrier:s.target_bits;
     s.carrier=carrier;s.b1=r.b1;s.b2=b2;s.d=d;s.mersenne=carrier || mpz_popcount(plus.z)==1;
     s.baby_coop=o.selected_baby_coop;s.giant_coop=o.selected_giant_coop;s.seed_coop=o.selected_seed_coop;
+    pt::set_reduce_backend(s,o.selected_reduce_coop,o.reduce_threads,o.selected_reduce_kernel?o.selected_reduce_kernel:(o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current));
     const auto packing=et::ntt_packing_policy(tune_environment());
     s.batch_bytes=et::uint(packing,"batch_bytes");s.buffers=unsigned(et::uint(packing,"buffers"));
     s.physical=et::uint(packing,"physical_chunks")!=0;s.chunk_max=et::uint(packing,"chunk_max");
@@ -223,6 +225,7 @@ void round_giant_bounds(Options &o,const Record &r) {
         <<" rounding=chain_P giant_points="<<shape.b2/o.d+2<<std::endl;
     o.b2=shape.b2;o.groot_layout=int(shape.groot_balanced);o.selected_chain=unsigned(shape.chain_block);
     o.selected_baby_coop=shape.baby_coop;o.selected_giant_coop=shape.giant_coop;o.selected_seed_coop=shape.seed_coop;
+    o.selected_reduce_coop=shape.reduce_coop;o.selected_reduce_threads=shape.reduce_threads;o.selected_reduce_kernel=shape.reduce_kernel;
 }
 struct PortablePlanMetrics {
     uint64_t calls=0,cache_hits=0,route_hits=0;double seconds=0;
@@ -419,6 +422,7 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     s["groot_balanced"]=shape.groot_balanced?"1":"0";
     s["giant_tail_balance"]=shape.tail_balance?"1":"0";s["giant_chain_block"]=std::to_string(shape.chain_block);
     s["baby_coop"]=std::to_string(shape.baby_coop);s["giant_coop"]=std::to_string(shape.giant_coop);s["seed_coop"]=std::to_string(shape.seed_coop);
+    s["reduce_coop"]=std::to_string(shape.reduce_coop);s["reduce_threads"]=std::to_string(shape.reduce_threads);s["reduce_kernel"]=std::to_string(shape.reduce_kernel);
     s["predicted_seconds"]=pt::numeric(prediction.seconds);s["prediction_model"]=pt::quoted(prediction.model);
     s["prediction_basis"]="\"before_measurement\"";
     s["program_version"]=pt::quoted(ecm_program::version);
@@ -431,7 +435,7 @@ void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Me
     if(!m.clean || m.bad || !m.checked || !m.selftest_cases || !m.phases.complete || m.point_policy_replayed ||
        !(m.total_seconds>0) || m.d!=s.d || m.p!=ecm_stage2::cost::phi(s.d)/2 ||
        m.giant_points!=s.b2/s.d+2 || m.fold_resident!=s.fold || m.frontier_resident!=s.frontier ||
-       m.groot_balanced!=s.groot_balanced || m.giant_tail_balance!=s.tail_balance || m.baby_coop!=s.baby_coop || m.giant_coop!=s.giant_coop || m.seed_coop!=s.seed_coop)
+       m.groot_balanced!=s.groot_balanced || m.giant_tail_balance!=s.tail_balance || m.baby_coop!=s.baby_coop || m.giant_coop!=s.giant_coop || m.seed_coop!=s.seed_coop || m.reduce_coop!=s.reduce_coop || m.reduce_threads!=s.reduce_threads || m.reduce_kernel!=s.reduce_kernel)
         throw std::runtime_error("curve is incomplete, unchecked, or changed its planned execution path");
     auto metrics=et::fields(tune_metrics_json(m));metrics.erase("total_seconds");metrics.erase("point_policy_replayed");
     for(const auto &field:metrics)observation.sample[field.first]=field.second;
@@ -551,7 +555,12 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         if(reference.groot_balanced && !preferred && o.groot_layout<0 &&
            !ecm_stage2::legacy_groot_layout((s.arithmetic_bits+63)/64,s.b2/s.d+2,ecm_stage2::d_catalog::degree(d)))continue;
         s.groot_balanced=reference.groot_balanced;s.chain_block=reference.chain_block;
-        s.baby_coop=reference.baby_coop;s.giant_coop=reference.giant_coop;s.seed_coop=reference.seed_coop;pt::WidthEstimate e;
+        s.baby_coop=reference.baby_coop;s.giant_coop=reference.giant_coop;s.seed_coop=reference.seed_coop;s.reduce_coop=reference.reduce_coop;s.reduce_threads=reference.reduce_threads;s.reduce_kernel=reference.reduce_kernel;
+        if(o.reduce_backend=="auto") {
+            const auto qualified=pt::qualified_reduce_backend(engine,s,o.tune_min_repeats,o.reduce_threads,o.reduce_kernel);
+            pt::set_reduce_backend(s,qualified.available?qualified.mode:0,qualified.threads,qualified.kernel);
+        }
+        pt::WidthEstimate e;
         if(!portable_runtime_bounds(o,s) || !engine.cached_work(s,w) || w.p<512 || !w.exact_topology || !predictor.predict(s,e))continue;
         // Reuse the admitted shape of existing candidates; predicted chunk and
         // residency are not a substitute for their exact runtime identity.
@@ -665,6 +674,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         const auto candidate_start=std::chrono::steady_clock::now();
         if(!carrier || !ordinary_default)ordinary_default=center;
         auto original=portable_shape(o,r,o.b2,center,carrier);
+        if(o.reduce_backend=="auto")pt::set_reduce_backend(original,0);
         if(!portable_runtime_bounds(o,original))continue;
         const bool legacy=ecm_stage2::legacy_groot_layout((original.arithmetic_bits+63)/64,original.b2/center+2,ecm_stage2::d_catalog::degree(center));
         const bool protected_layout=o.groot_layout>=0?original.groot_balanced:legacy;
@@ -672,25 +682,29 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         if(original.groot_balanced!=protected_layout)ds[{center,original.groot_balanced}]=2;
         std::map<bool,const et::Fields*> historical;
         unsigned preferred_baby=o.selected_baby_coop,preferred_giant=o.selected_giant_coop,preferred_seed=o.selected_seed_coop;
+        unsigned preferred_reduce=original.reduce_coop,preferred_reduce_threads=original.reduce_threads,preferred_reduce_kernel=original.reduce_kernel;
         double preferred_seconds=std::numeric_limits<double>::infinity();
         for(const auto &sample:engine.profile.samples)if(pt::measured(sample) &&
             pt::matches(engine.profile.conditions.at(et::uint(sample,"condition")),engine.condition,engine.ignore)) {
             const auto shape=engine.shape(sample);
-            if(shape.baby_coop==ecm_stage2::point_backend_unknown || shape.giant_coop==ecm_stage2::point_backend_unknown || shape.seed_coop==ecm_stage2::point_backend_unknown ||
+            if(shape.baby_coop==ecm_stage2::point_backend_unknown || shape.giant_coop==ecm_stage2::point_backend_unknown || shape.seed_coop==ecm_stage2::point_backend_unknown || shape.reduce_coop==ecm_stage2::point_backend_unknown ||
                (o.baby_backend!="auto" && shape.baby_coop!=original.baby_coop) ||
                (o.giant_backend!="auto" && shape.giant_coop!=original.giant_coop) ||
-               (o.seed_backend!="auto" && shape.seed_coop!=original.seed_coop))continue;
+               (o.seed_backend!="auto" && shape.seed_coop!=original.seed_coop) ||
+               (o.reduce_backend!="auto" && !shape.same_reduce_backend(original)) ||
+               (shape.reduce_coop && (shape.reduce_threads!=o.reduce_threads || (o.reduce_kernel && shape.reduce_kernel!=o.reduce_kernel))))continue;
             if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
                shape.carrier!=carrier || !pt::runtime_bound_matches(shape,o.b2,o.b2_round_chain,portable_runtime_bound_limit(o)) ||
                (o.giant_chain!="auto" && shape.chain_block!=original.chain_block) || (o.has_d && o.d && shape.d!=o.d) ||
                (o.groot_layout>=0 && shape.groot_balanced!=bool(o.groot_layout)))continue;
             // Check only this target family, not every row of a wide profile.
             // A forced-coop result alone does not prove an automatic benefit.
-            if(!pt::qualified_point_backends(engine,shape,o.baby_backend=="auto",o.giant_backend=="auto",o.tune_min_repeats,o.seed_backend=="auto"))continue;
-            if(o.baby_backend=="auto" || o.giant_backend=="auto" || o.seed_backend=="auto") {
+            if(!pt::qualified_point_backends(engine,shape,o.baby_backend=="auto",o.giant_backend=="auto",o.tune_min_repeats,o.seed_backend=="auto",o.reduce_backend=="auto"))continue;
+            if(o.baby_backend=="auto" || o.giant_backend=="auto" || o.seed_backend=="auto" || o.reduce_backend=="auto") {
                 const auto measured=engine.runtime_statistics(shape);
                 if(measured.count>=o.tune_min_repeats && measured.seconds>0 && measured.comparison_seconds()<preferred_seconds) {
                     preferred_seconds=measured.comparison_seconds();preferred_baby=shape.baby_coop;preferred_giant=shape.giant_coop;preferred_seed=shape.seed_coop;
+                    preferred_reduce=shape.reduce_coop;preferred_reduce_threads=shape.reduce_threads;preferred_reduce_kernel=shape.reduce_kernel;
                 }
             }
             auto &best=historical[shape.groot_balanced];
@@ -703,9 +717,14 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             if(o.baby_backend=="auto")shape.baby_coop=preferred_baby;
             if(o.giant_backend=="auto")shape.giant_coop=preferred_giant;
             if(o.seed_backend=="auto")shape.seed_coop=preferred_seed;
+            if(o.reduce_backend=="auto")pt::set_reduce_backend(shape,preferred_reduce,preferred_reduce_threads,preferred_reduce_kernel);
             pt::Work w;std::string plan;
             if(!portable_runtime_bounds(o,shape) || !engine.cached_work(shape,w) ||
                (w.p<512 && !(o.has_d && o.d)) || !w.exact_topology || !portable_runtime_candidate_admit(o,r,shape,plan))continue;
+            if(o.reduce_backend=="auto") {
+                const auto known=pt::qualified_reduce_backend(engine,shape,o.tune_min_repeats,o.reduce_threads,o.reduce_kernel);
+                if(known.available)pt::set_reduce_backend(shape,known.mode,known.threads,known.kernel);
+            }
             const auto stats=engine.runtime_statistics(shape);
             candidates.push_back({shape,stats,entry.second,shape.d==center || (o.has_d && o.d)});
             if(o.baby_backend=="auto" && ecm_stage2::cooperative_point_width(shape.arithmetic_bits)) {
@@ -728,6 +747,26 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
                 if(previous.count && (shape.seed_coop || stats.count>=o.tune_min_repeats) &&
                    portable_runtime_candidate_admit(o,r,other,plan))
                     candidates.push_back({other,engine.runtime_statistics(other),2,true});
+            }
+            if(o.reduce_backend=="auto" && ecm_stage2::cooperative_reduce_width(shape.arithmetic_bits,shape.mersenne)) {
+                for(unsigned k=0;k<=2;++k) {
+                    if(k && o.reduce_kernel && k!=o.reduce_kernel)continue;
+                    auto other=shape;pt::set_reduce_backend(other,k?32:0,o.reduce_threads,k);
+                    if(other.key()==shape.key())continue;
+                    const auto previous=engine.runtime_statistics(other);
+                    auto scalar=other;pt::set_reduce_backend(scalar,0);
+                    const bool resumable=o.tune_runtime && previous.count<o.tune_min_repeats &&
+                        engine.runtime_statistics(scalar).count>=o.tune_min_repeats &&
+                        pt::qualified_point_backends(engine,scalar,o.baby_backend=="auto",o.giant_backend=="auto",
+                            o.tune_min_repeats,o.seed_backend=="auto",true);
+                    // Forced-only observations may be reused by forced mode,
+                    // but auto needs the same checked scalar comparison as the
+                    // historical-incumbent path above. New trials are admitted
+                    // separately after the scalar reference has enough repeats.
+                    if(previous.count && (resumable || pt::qualified_point_backends(engine,other,o.baby_backend=="auto",o.giant_backend=="auto",
+                           o.tune_min_repeats,o.seed_backend=="auto",true)) && portable_runtime_candidate_admit(o,r,other,plan))
+                        candidates.push_back({other,engine.runtime_statistics(other),2,true});
+                }
             }
             if(o.giant_chain=="auto") {
                 auto other=shape;other.chain_block=32;const auto previous=engine.runtime_statistics(other);
@@ -776,8 +815,28 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             c.priority=1;backend_pending=true;
         }
     }
+    if(!backend_pending && o.reduce_backend=="auto" && o.tune_runtime && (!o.runtime_remaining || o.runtime_remaining>=2*o.tune_min_repeats)) {
+        for(auto shape:pt::runtime_reduce_trials(candidates,o.tune_min_repeats,o.reduce_threads,o.reduce_kernel)) {
+            // A paired region can skip the first variant, but the merged
+            // alternative still needs its own completed reference comparison.
+            const auto paired=pt::qualified_reduce_backend(engine,shape,o.tune_min_repeats,shape.reduce_threads,shape.reduce_kernel);
+            if(paired.available)continue;
+            std::string plan;
+            if(portable_runtime_candidate_admit(o,r,shape,plan) && shape.reduce_coop==32)
+                candidates.push_back({shape,engine.runtime_statistics(shape),1,true});
+        }
+        for(auto &c:candidates)if(c.shape.reduce_coop && c.statistics.count<o.tune_min_repeats) {
+            c.priority=1;backend_pending=true;
+        }
+    }
     // Follow the fastest measured backend before growing either D or chain
     // length. Existing scalar candidates remain the protected reference.
+    // Finish an already started comparison even when fewer than 2R curves
+    // remain. The remaining-curve gate only controls starting new variants.
+    if(o.reduce_backend=="auto" && o.tune_runtime)for(auto &c:candidates)
+        if(c.shape.reduce_coop && c.statistics.count && c.statistics.count<o.tune_min_repeats) {
+            c.priority=1;backend_pending=true;
+        }
     for(auto &reference:references)for(const auto &c:candidates)
         if(c.shape.carrier==reference.carrier && c.shape.groot_balanced==reference.groot_balanced &&
            c.shape.chain_block==reference.chain_block && c.statistics.count>=o.tune_min_repeats &&
@@ -810,6 +869,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
     const auto &chosen=candidates[choice.index];const auto &shape=chosen.shape;
     o.d=shape.d;o.carrier_exponent=shape.carrier;o.groot_layout=int(shape.groot_balanced);o.selected_chain=unsigned(shape.chain_block);o.runtime_probe=choice.probe;
     o.selected_baby_coop=shape.baby_coop;o.selected_giant_coop=shape.giant_coop;o.selected_seed_coop=shape.seed_coop;
+    o.selected_reduce_coop=shape.reduce_coop;o.selected_reduce_threads=shape.reduce_threads;o.selected_reduce_kernel=shape.reduce_kernel;
     const char *reason=!choice.probe?"runtime_measured_fastest":chosen.priority==0?
         "runtime_probe_carrier_first":chosen.priority==1?"runtime_probe_reference":"runtime_probe_candidate";
     std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"policy\":\"model\""
@@ -818,7 +878,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         <<",\"P\":"<<ecm_stage2::d_catalog::degree(shape.d)<<",\"target_bits\":"<<shape.target_bits
         <<",\"arithmetic_bits\":"<<shape.arithmetic_bits<<",\"carrier_exponent\":"<<shape.carrier
         <<",\"groot_balanced\":"<<int(shape.groot_balanced)<<",\"giant_chain_block\":"<<shape.chain_block
-        <<",\"baby_coop\":"<<shape.baby_coop<<",\"giant_coop\":"<<shape.giant_coop<<",\"seed_coop\":"<<shape.seed_coop
+        <<",\"baby_coop\":"<<shape.baby_coop<<",\"giant_coop\":"<<shape.giant_coop<<",\"seed_coop\":"<<shape.seed_coop<<",\"reduce_coop\":"<<shape.reduce_coop<<",\"reduce_threads\":"<<shape.reduce_threads<<",\"reduce_kernel\":"<<shape.reduce_kernel
         <<",\"source\":"<<json_string(choice.probe?"runtime_trial":"measured")
         <<",\"model\":\"runtime_shape_mean_v2\",\"runtime_probe\":"<<(choice.probe?"true":"false")
         <<",\"runtime_samples\":"<<chosen.statistics.count<<",\"runtime_sample_limit\":"<<o.runtime_samples<<",\"runtime_min_repeats\":"<<o.tune_min_repeats;
@@ -829,7 +889,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         if(i)out<<',';const auto &c=candidates[i];
         out<<"{\"D\":"<<c.shape.d<<",\"B2\":"<<c.shape.b2<<",\"carrier_exponent\":"<<c.shape.carrier
             <<",\"groot_balanced\":"<<int(c.shape.groot_balanced)<<",\"giant_chain_block\":"<<c.shape.chain_block<<",\"priority\":"<<c.priority<<",\"samples\":"<<c.statistics.count;
-        out<<",\"baby_coop\":"<<c.shape.baby_coop<<",\"giant_coop\":"<<c.shape.giant_coop<<",\"seed_coop\":"<<c.shape.seed_coop;
+        out<<",\"baby_coop\":"<<c.shape.baby_coop<<",\"giant_coop\":"<<c.shape.giant_coop<<",\"seed_coop\":"<<c.shape.seed_coop<<",\"reduce_coop\":"<<c.shape.reduce_coop<<",\"reduce_threads\":"<<c.shape.reduce_threads<<",\"reduce_kernel\":"<<c.shape.reduce_kernel;
         if(c.statistics.count)out<<",\"mean_seconds\":"<<c.statistics.seconds<<",\"stddev_seconds\":"<<c.statistics.stddev
             <<",\"point_check_seconds\":"<<c.statistics.point_check_seconds<<",\"comparison_seconds\":"<<c.statistics.comparison_seconds();
         out<<'}';
@@ -920,6 +980,7 @@ std::string portable_width_select(Options &o,const Record &r) {
     const bool selected=chosen.d!=baseline.d || chosen.carrier!=baseline.carrier || chosen.groot_balanced!=baseline.groot_balanced;
     o.d=chosen.d;o.carrier_exponent=chosen.carrier;o.groot_layout=int(chosen.groot_balanced);o.selected_chain=unsigned(chosen.chain_block);
     o.selected_baby_coop=chosen.baby_coop;o.selected_giant_coop=chosen.giant_coop;o.selected_seed_coop=chosen.seed_coop;
+    o.selected_reduce_coop=chosen.reduce_coop;o.selected_reduce_threads=chosen.reduce_threads;o.selected_reduce_kernel=chosen.reduce_kernel;
     auto details=describe(chosen,prediction);details.erase(details.begin());
     return "{\"type\":\"tune_selection\",\"selected\":"+std::string(selected?"true":"false")+
         ",\"reason\":"+json_string(selected?"arithmetic_width_cost_win":"default_protected_by_prediction_uncertainty")+
@@ -1062,6 +1123,7 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
         if(shape.fold!=candidate.shape.fold || shape.frontier!=candidate.shape.frontier){++rejected;continue;}
         o.b2=shape.b2;o.d=shape.d;o.carrier_exponent=shape.carrier;o.groot_layout=int(shape.groot_balanced);o.selected_chain=unsigned(shape.chain_block);
         o.selected_baby_coop=shape.baby_coop;o.selected_giant_coop=shape.giant_coop;o.selected_seed_coop=shape.seed_coop;
+    o.selected_reduce_coop=shape.reduce_coop;o.selected_reduce_threads=shape.reduce_threads;o.selected_reduce_kernel=shape.reduce_kernel;
         std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":"<<json_string(automatic?"auto_b2":"tune_selection")
             <<",\"selected\":true,\"model\":"<<json_string(e.model)<<",\"B1\":"<<r.b1<<",\"B2\":"<<shape.b2
             <<",\"D\":"<<shape.d<<",\"P\":"<<ecm_stage2::cost::phi(shape.d)/2<<",\"carrier_exponent\":"<<shape.carrier
@@ -1151,7 +1213,8 @@ PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenn
     append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+hex+"; X=0x"+x+"; Z=1;");
     return {save,records(save,0,1).at(0),mersenne?"mersenne_small_factor_stripped_band":"probable_prime_gmp_nextprime"};
 }
-bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned repeats,bool pair,bool auto_baby=false,bool auto_giant=false,bool auto_seed=false) {
+bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned repeats,bool pair,bool auto_baby=false,bool auto_giant=false,bool auto_seed=false,bool auto_reduce=false,unsigned reduce_threads=128,unsigned reduce_kernel=0) {
+    if(auto_reduce)pt::set_reduce_backend(shape,0);
     if(auto_seed)shape.seed_coop=0;
     if(auto_giant)shape.giant_coop=0;
     if(auto_baby && ecm_stage2::cooperative_point_width(shape.arithmetic_bits) && ecm_stage2::d_catalog::degree(shape.d)>=512) {
@@ -1173,6 +1236,15 @@ bool portable_layouts_complete(pt::Estimator &model,pt::Shape shape,unsigned rep
         if(!choice.available)return false;
         shape.seed_coop=choice.mode;
     }
+    if(auto_reduce && ecm_stage2::cooperative_reduce_width(shape.arithmetic_bits,shape.mersenne)) {
+        for(unsigned k=1;k<=2;++k) {
+            if(reduce_kernel && k!=reduce_kernel)continue;
+            if(!pt::qualified_reduce_backend(model,shape,repeats,reduce_threads,k).available)return false;
+        }
+        const auto choice=pt::qualified_reduce_backend(model,shape,repeats,reduce_threads,reduce_kernel);
+        if(!choice.available)return false;
+        pt::set_reduce_backend(shape,choice.mode,choice.threads,choice.kernel);
+    }
     const auto complete=[&](const pt::Shape &s){const auto row=model.observed(s);return row && et::uint(*row,"repeats")>=repeats;};
     if(!complete(shape))return false;
     const bool legacy=ecm_stage2::legacy_groot_layout((shape.arithmetic_bits+63)/64,shape.b2/shape.d+2,ecm_stage2::d_catalog::degree(shape.d));
@@ -1190,6 +1262,56 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
     // Store that legacy policy in its actual condition, never label it as tuned.
     o.short_batch_tune=false;configure_short_ntt_batches(o);
     condition=profile.condition(portable_condition(o));
+    if(o.reduce_backend=="auto") {
+        auto reference=portable_shape(o,input.record,b2,d,carrier);pt::set_reduce_backend(reference,0);
+        if(o.seed_backend=="auto")reference.seed_coop=0;
+        if(o.giant_backend=="auto")reference.giant_coop=0;
+        if(o.baby_backend=="auto")reference.baby_coop=0;
+        pt::Estimator known(profile,profile.conditions.at(condition),pt::Ignore::parse(o.tune_ignore),portable_query,true,repeats);
+        bool ready=true;
+        if(o.baby_backend=="auto" && ecm_stage2::d_catalog::degree(d)>=512 && ecm_stage2::cooperative_point_width(reference.arithmetic_bits)) {
+            const auto c=pt::qualified_baby_backend(known,reference,repeats);ready=c.available;if(ready)reference.baby_coop=c.mode;
+        }
+        if(ready && o.giant_backend=="auto" && pt::giant_backend_bucket(reference)) {
+            const auto c=pt::qualified_giant_backend(known,reference,repeats);ready=c.available;if(ready)reference.giant_coop=c.mode;
+        }
+        if(ready && o.seed_backend=="auto" && pt::giant_backend_bucket(reference)) {
+            const auto c=pt::qualified_seed_backend(known,reference,repeats);ready=c.available;if(ready)reference.seed_coop=c.mode;
+        }
+        auto bind=[&](Options &dst,const pt::Shape &s) {
+            dst.selected_baby_coop=s.baby_coop;dst.baby_backend=ecm_stage2::point_backend_name(s.baby_coop);
+            dst.selected_giant_coop=s.giant_coop;dst.giant_backend=ecm_stage2::point_backend_name(s.giant_coop);
+            dst.selected_seed_coop=s.seed_coop;dst.seed_backend=ecm_stage2::point_backend_name(s.seed_coop);
+            dst.selected_reduce_coop=s.reduce_coop;dst.selected_reduce_threads=s.reduce_threads;dst.selected_reduce_kernel=s.reduce_kernel;
+            dst.reduce_backend=ecm_stage2::point_backend_name(s.reduce_coop);
+        };
+        bool paired=ready;
+        if(ecm_stage2::cooperative_reduce_width(reference.arithmetic_bits,reference.mersenne))for(unsigned k=1;k<=2;++k)
+            if(!o.reduce_kernel || k==o.reduce_kernel)paired&=pt::qualified_reduce_backend(known,reference,repeats,o.reduce_threads,k).available;
+        if(paired) {
+            const auto c=pt::qualified_reduce_backend(known,reference,repeats,o.reduce_threads,o.reduce_kernel);
+            pt::set_reduce_backend(reference,c.available?c.mode:0,c.threads,c.kernel);bind(o,reference);
+            requested.selected_baby_coop=o.selected_baby_coop;requested.selected_giant_coop=o.selected_giant_coop;requested.selected_seed_coop=o.selected_seed_coop;
+            requested.selected_reduce_coop=o.selected_reduce_coop;requested.selected_reduce_threads=o.selected_reduce_threads;requested.selected_reduce_kernel=o.selected_reduce_kernel;
+        } else {
+            Options baseline=o;baseline.reduce_backend="scalar";baseline.selected_reduce_coop=baseline.selected_reduce_threads=baseline.selected_reduce_kernel=0;
+            unsigned count=0;et::Fields best;
+            bool changed=portable_measure(baseline,settings,input,b2,d,carrier,repeats,budget,evidence,profile,condition,skip_verified_factor,&count,&best);
+            if(count>=repeats && ecm_stage2::cooperative_reduce_width(reference.arithmetic_bits,reference.mersenne))for(unsigned k=1;k<=2;++k) {
+                if(o.reduce_kernel && k!=o.reduce_kernel)continue;
+                Options trial=baseline;auto s=known.shape(best);pt::set_reduce_backend(s,32,o.reduce_threads,k);bind(trial,s);
+                unsigned n=0;et::Fields row;
+                changed=portable_measure(trial,settings,input,b2,d,carrier,repeats,budget,evidence,profile,condition,skip_verified_factor,&n,&row) || changed;
+                if(n>=repeats && et::real(row,"mean_seconds")+pt::optional_real(row,"point_check_seconds")<et::real(best,"mean_seconds")+pt::optional_real(best,"point_check_seconds")){best=row;count=n;}
+            }
+            if(!best.empty()) {
+                const auto s=known.shape(best);requested.selected_baby_coop=s.baby_coop;requested.selected_giant_coop=s.giant_coop;requested.selected_seed_coop=s.seed_coop;
+                requested.selected_reduce_coop=s.reduce_coop;requested.selected_reduce_threads=s.reduce_threads;requested.selected_reduce_kernel=s.reduce_kernel;
+                if(completed_repeats)*completed_repeats=count;if(completed_sample)*completed_sample=best;
+            }
+            return changed;
+        }
+    }
     if(o.seed_backend=="auto") {
         auto reference=portable_shape(o,input.record,b2,d,carrier);reference.seed_coop=0;
         if(o.giant_backend=="auto")reference.giant_coop=0;
@@ -1378,7 +1500,7 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
         if(pt::optional_uint(f,"point_policy_replayed"))throw std::runtime_error("calibration replayed the original point policy; timing is not eligible");
         if(bool(et::uint(f,"fold_resident"))!=shape.fold || bool(et::uint(f,"frontier_resident"))!=shape.frontier ||
            bool(pt::optional_uint(f,"giant_tail_balance"))!=shape.tail_balance ||
-           bool(et::uint(f,"groot_balanced"))!=shape.groot_balanced || pt::optional_uint(f,"baby_coop")!=shape.baby_coop || pt::optional_uint(f,"giant_coop")!=shape.giant_coop || pt::optional_uint(f,"seed_coop")!=shape.seed_coop)
+           bool(et::uint(f,"groot_balanced"))!=shape.groot_balanced || pt::optional_uint(f,"baby_coop")!=shape.baby_coop || pt::optional_uint(f,"giant_coop")!=shape.giant_coop || pt::optional_uint(f,"seed_coop")!=shape.seed_coop || pt::optional_uint(f,"reduce_coop")!=shape.reduce_coop || pt::optional_uint(f,"reduce_threads")!=shape.reduce_threads || pt::optional_uint(f,"reduce_kernel")!=shape.reduce_kernel)
             throw std::runtime_error("calibration execution path differs from planned path; evidence retained");
         f.erase("point_policy_replayed");
         if(repeat)trials.push_back(std::move(f));
@@ -1744,7 +1866,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
             if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches))continue;
             pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
             const auto prior=estimator.observed(shape);
-            if(portable_layouts_complete(estimator,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto")){++skipped;++paired_references;continue;}
+            if(portable_layouts_complete(estimator,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto",o.reduce_backend=="auto",o.reduce_threads,o.reduce_kernel)){++skipped;++paired_references;continue;}
             unsigned completed=0;
             et::Fields formal_sample;
             const bool changed=portable_measure(o,settings,target.input,b,d,carrier,grid.repeats,
@@ -1806,7 +1928,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
                 const auto prior=model.observed(shape);
                 const auto reference=reference_samples.find({target_index,shape.key()});
                 const bool reuse_current=reference!=reference_samples.end();
-                const bool reuse=portable_layouts_complete(model,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto");
+                const bool reuse=portable_layouts_complete(model,shape,grid.repeats,o.groot_layout<0,o.baby_backend=="auto",o.giant_backend=="auto",o.seed_backend=="auto",o.reduce_backend=="auto",o.reduce_threads,o.reduce_kernel);
                 unsigned completed=0;
                 et::Fields formal_sample;
                 if(!reuse) {
@@ -2115,7 +2237,7 @@ std::string tune_metrics_json(const EcmStage2Metrics &m) {
         <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
         <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
         <<",\"groot_balanced\":"<<int(m.groot_balanced)
-        <<",\"baby_coop\":"<<m.baby_coop<<",\"giant_coop\":"<<m.giant_coop<<",\"seed_coop\":"<<m.seed_coop<<",\"point_check_seconds\":"<<m.point_check_seconds
+        <<",\"baby_coop\":"<<m.baby_coop<<",\"giant_coop\":"<<m.giant_coop<<",\"seed_coop\":"<<m.seed_coop<<",\"reduce_coop\":"<<m.reduce_coop<<",\"reduce_threads\":"<<m.reduce_threads<<",\"reduce_kernel\":"<<m.reduce_kernel<<",\"point_check_seconds\":"<<m.point_check_seconds
         <<",\"giant_tail_balance\":"<<int(m.giant_tail_balance)<<",\"point_policy_replayed\":"<<int(m.point_policy_replayed)
         <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
     for(size_t i=0;i<ecm_stage2::timing::count;++i)

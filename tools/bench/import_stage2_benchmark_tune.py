@@ -3,7 +3,7 @@
 No GPU work. Accepts the N-scaling collector's verified no-factor formal runs;
 warmups, factor-producing controls and incomplete studies are not timing anchors.
 Also accepts new production results containing checked tune_observation receipts.
-The output is an intermediate format-12 profile; the native --tune-merge command
+The output is an intermediate format-13 profile; the native --tune-merge command
 validates, compacts and merges repeat-weighted mean/variance when combining this evidence.
 """
 import argparse

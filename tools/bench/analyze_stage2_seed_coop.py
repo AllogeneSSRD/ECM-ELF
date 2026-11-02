@@ -37,9 +37,10 @@ def main():
     extras=[]
     for path in a.retest:
         other=json.loads((path/'summary.json').read_text())
-        if not other['complete'] or other['diagnostic'] or other['failures'] or other.get('component','seed')!=d.get('component','seed') or any(other[k]!=d[k] for k in
+        if not other['complete'] or other['diagnostic'] or other['failures'] or other.get('component','seed')!=d.get('component','seed') or other.get('reduce_kernel')!=d.get('reduce_kernel') or any(other[k]!=d[k] for k in
             ('exe_sha256','dll_sha256','source_matrix_sha256')):raise ValueError('Incompatible retest')
-        if any(other['protocol'][k]!=d['protocol'][k] for k in ('batch_mb','arena_mb','fold_mb')):raise ValueError('Retest changed memory budgets')
+        if any(other['protocol'].get(k,1 if k=='device' else None)!=d['protocol'].get(k,1 if k=='device' else None)
+               for k in ('device','batch_mb','arena_mb','fold_mb')):raise ValueError('Retest changed device or memory budgets')
         for cell in other['cells']:
             original=next((c for c in d['cells'] if c['id']==cell['id']),None)
             if original is None or any(cell[k]!=original[k] for k in ('D','P','B2','carrier','layout','chain')):
@@ -71,7 +72,13 @@ def main():
             scalar_curve_seconds=curve_means['scalar'],coop_curve_seconds=curve_means['coop32'],
             reduction_percent=100*(1-means['coop32']/means['scalar']),phases=phase_means))
     totals={m:sum(r[m+'_seconds'] for r in rows) for m in ('scalar','coop')}
+    device=d['protocol'].get('device',1)
+    first_log=(Path(d['runs'][0]['folder'])/'debug.log').read_text(encoding='utf-8')
+    device_name=re.search(r'stage2_real: device=\d+ \(([^)]+)\)',first_log)
+    device_label='GPU'+str(device)+(' / '+device_name[1] if device_name else '')
+    if d.get('approved_background_snapshot'):device_label+=' / desktop background'
     result=dict(complete=True,source=str(a.study.resolve()),retests=[str(p.resolve()) for p in a.retest],statistic='median' if extras else 'mean',exe_sha256=d['exe_sha256'],totals=totals,
+                device=device,device_label=device_label,reduce_kernel=d.get('reduce_kernel'),protocol=d['protocol'],
                 reduction_percent=100*(1-totals['coop']/totals['scalar']),rows=rows)
     result['curve_totals']={m:sum(r[m+'_curve_seconds'] for r in rows) for m in ('scalar','coop')}
     result['curve_reduction_percent']=100*(1-result['curve_totals']['coop']/result['curve_totals']['scalar'])
@@ -95,7 +102,7 @@ def main():
         ax.xaxis.set_major_locator(MultipleLocator(1000));ax.grid(alpha=.2);ax.legend()
     sample_counts=sorted({r['samples_per_backend'] for r in rows})
     fig.suptitle('Fixed D/layout/chain; baby32/giant32'+('/seed32' if component=='reduce' else '')+
-        '\nRTX 4060 Laptop, 1500 MHz; n='+','.join(map(str,sample_counts))+('; medians with retests' if extras else ''))
+        '\n'+device_label+'; clocks in telemetry; n='+','.join(map(str,sample_counts))+('; medians with retests' if extras else ''))
     names=[]
     for suffix in ('png','svg'):
         name=prefix+'_times.'+suffix;fig.savefig(a.figures/name,dpi=180);names.append(name)

@@ -192,9 +192,10 @@ int s4_reduce_init(
     stage2_log::print(stage2_log::debug, "s4_mersenne_mode: requested=%d eligible=%d bits=%d enabled=%d\n",(int)g_s4_mersenne,
                 (int)exact_mersenne,R.mersenne_bits,(int)(R.mersenne_bits && !s4_tail_mont_mode()));
     const bool shared_reduce=ecm_stage2_s4_coop_mode()==32 && R.nw>128 && !R.mersenne_bits;
-    stage2_log::print(stage2_log::debug,"s4_coop_reduce_mode: requested=%d enabled=%d nw=%d shared_bytes=%zu\n",
-        ecm_stage2_s4_coop_mode(),shared_reduce?32:0,R.nw,
-        shared_reduce?sizeof(unsigned long long)*(R.nw+4*(2*R.nw+4)):size_t(0));
+    const unsigned threads=shared_reduce?ecm_stage2_s4_coop_threads():0,kernel=shared_reduce?ecm_stage2_s4_coop_kernel():0;
+    stage2_log::print(stage2_log::debug,"s4_coop_reduce_mode: requested=%d enabled=%d nw=%d threads=%u kernel=%u shared_bytes=%zu\n",
+        ecm_stage2_s4_coop_mode(),shared_reduce?32:0,R.nw,threads,kernel,
+        shared_reduce?sizeof(unsigned long long)*(R.nw+(threads/32)*(2*R.nw+4)):size_t(0));
     const char *fixture=std::getenv("NTT_S4_MERSENNE_TEST");
     if(fixture && std::atoi(fixture))s4_mersenne_check();
     return 0;

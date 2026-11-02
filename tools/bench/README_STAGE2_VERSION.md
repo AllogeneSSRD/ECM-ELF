@@ -220,10 +220,16 @@ python tools/bench/plot_stage2_version.py `
 
 生产长除法与warp协作共用`src/ecm/stage2/cuda/device/s4_warp_reduce.cuh`。`tools/build/test/build_stage2_s4_warp_probe.ps1`构建独立GMP探针；`bench_stage2_s4_probe.py --exe ... --output ... --bits ...`默认比较scalar／coop32，支持digit宽度、四类模数、多batch、真实模数文件、空输出窗口及两种故障注入。每调用冻结EXE／DLL／manifest和全部编译源文件，逐词核对所有输出和未使用缓冲哨兵；所有源槽的padding检查包含被省略的系数。`--coeffs 2`为合法空窗口，`--fault 1|2`分别要求输入padding或输出破坏被拒绝，不能将这些调用计入性能均值。
 
-`--backends 0 8192 32 --repeats 3 --reverse`比较原标量、仅探针中的8192系数缓存窗口和生产warp；全部首轮与事件保留，无warmup，缓存窗口没有生产配置。`analyze_stage2_s4_probe.py --study ... --output ... --figures ...`按每进程事件中位数汇总，拒绝故障或未完成研究；原语吞吐不能换算成完整Stage2加速。
+`--backends 0 32 33 --repeats 3 --reverse`比较原标量、生产warp两遍和生产warp合并乘减；两种warp均调用生产分派，33是探针的合并版标识。`--threads 64|96|128`筛查块大小；`--device`指定卡。8192等缓存窗口值仅供旧实验，不是生产配置。全部首轮与事件保留，无warmup。`analyze_stage2_s4_probe.py --study ... --output ... --figures ...`按每进程事件中位数汇总，拒绝故障或未完成研究；原语吞吐不能换算成完整Stage2加速。
 
-完整固定几何对照使用`bench_stage2_seed_coop.py --component reduce`，固定baby32／giant32／seed32，只改变S4策略。`--arithmetic both|ordinary|carrier`可定向复测，默认both；`--checks`单独执行GMP叶检查和完整目标叶摘要比较，不进入正常计时。`analyze_stage2_seed_coop.py`自动识别reduce并使用独立图名及S4设备事件字段，防止覆盖seed图。Worker配置优先级用`test_stage2_seed_config.py --component reduce`验证，seed自动学习可用`test_stage2_seed_auto_gpu.py --reduce-backend coop32`验证独立条件。
+完整固定几何对照使用`bench_stage2_seed_coop.py --component reduce`，固定baby32／giant32／seed32，只改变S4策略。`--reduce-kernel 1|2`指定warp版本，默认两遍；`--device`指定卡。`--arithmetic both|ordinary|carrier`可定向复测，默认both；`--checks`单独执行GMP叶检查和完整目标叶摘要比较，不进入正常计时。`analyze_stage2_seed_coop.py`自动识别reduce并使用独立图名及S4设备事件字段，防止覆盖seed图。Worker配置优先级用`test_stage2_seed_config.py --component reduce`验证。`test_stage2_reduce_auto_gpu.py`检查重复门槛、实际身份、相邻D、NTT拐点、强制及未配对保护；`test_stage2_seed_auto_gpu.py --reduce-backend auto`检查各自动后端与链长联合学习。
+
+桌面卡只有获得用户明确授权后才可使用`--background-snapshot`：快照须含`approved_background_by_user`、device、UUID及绑定的PID／路径。采集器复制快照、记录完整遥测，并拒绝新增进程。此类结果须标明桌面背景，不等同独占设备成绩；不关闭桌面程序或改变GPU设置。`stage2_point_backend_fixture --make-save-from-modulus`可为明确给定的高位宽奇模数生成Montgomery B1=20测试点；合成资格输入与生产余因子计时分别汇总。
 
 管理员NCU必须在无其他GPU1任务时串行运行，clock/cache control为none；选定NW256普通归约、跳过200次同类调用后采3次，保留命令、`.ncu-rep`、CSV单位行、进程门禁与遥测。核对版本／输入／检查／工作量后，比较两种内核的对应调用；不将重放后的程序墙钟当作基准，不把sectors当作DRAM字节，也不把每issue的stall ratio当百分比。完整证据与命令位置见[S4性能报告](../../docs/performance/STAGE2_S4_REDUCTION.md)。
 
-`analyze_stage2_seed_coop.py --retest <追加矩阵目录>`可追加同二进制、同组件／输入矩阵／显存预算／D几何的配对复测；保留首轮，采用全部样本中位数。阶段图取中间真实调用的阶段向量，偶数时平均中间两个，避免独立求各阶段中位数后不能相加。`analyze_stage2_s4_ncu.py --baseline ... --candidate ... --output ...`校验对应真实调用、输入和完整检查／工作量，导出带原始单位依据的诊断摘要。
+树阶段时间线使用`profile_stage2_tree_trace.py`，提供`--reference`已完成调用目录、`--exe`带manifest与冻结sources的程序、`--study`来源矩阵及不存在的`--output`。它开启已有CPU NVTX范围，以管理员Nsight Systems记录CUDA／NVTX，复制配置和保存点，并核对NF、数学输入、D/P、GMP及NTT工作量后导出SQLite。诊断时间不入性能矩阵。
+
+`analyze_stage2_tree_trace.py --trace <trace.sqlite> --device <index> --output <new.json>`按进程限定的提交关联ID归属树内核，支持异步执行跨过CPU范围边界。结果分纯NTT／pointwise、S4、其他kernel与DMA，并单列CPU范围、CUDA API驻留并集和同步API驻留。主机与设备可重叠，嵌套范围也不能相加；同步拷贝API驻留不等于PCIe耗时，API外范围不等于CPU指令时间。单元回归使用内存SQLite构造跨界、同关联ID不同进程和重叠等待，防止错误归因。
+
+`analyze_stage2_seed_coop.py --retest <追加矩阵目录>`可追加同二进制、同设备、同内核版本、同组件／输入矩阵／显存预算／D几何的配对复测；保留首轮，采用全部样本中位数。阶段图取中间真实调用的阶段向量，偶数时平均中间两个，避免独立求各阶段中位数后不能相加。`analyze_stage2_s4_ncu.py --baseline ... --candidate ... --output ...`校验对应真实调用、输入和完整检查／工作量，导出带原始单位依据的诊断摘要。

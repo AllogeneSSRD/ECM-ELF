@@ -68,7 +68,8 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     request.baby_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_baby_coop):o.baby_backend;
     request.giant_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_giant_coop):o.giant_backend;
     request.seed_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_seed_coop):o.seed_backend;
-    request.reduce_backend=o.reduce_backend;
+    request.reduce_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_reduce_coop):o.reduce_backend;
+    request.reduce_threads=o.reduce_threads;request.reduce_kernel=o.tune_child && o.selected_reduce_coop?o.selected_reduce_kernel:o.reduce_kernel;
     request.runtime_prepare_cache=o.runtime_prepare_cache;
     request.runtime_prepare_hints=o.runtime_prepare_hints;
     request.runtime_remaining=o.runtime_remaining;
@@ -107,6 +108,9 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     return run_curve_process(request);
 }
 int curve_worker(Options o) {
+    // Internal children bypass the public TOML setup. Bind the forwarded S4
+    // request before point setup publishes the per-curve environment.
+    configure_s4_backend(o,false,{});
     configure_point_backends(o);
     configure_giant_policy(o);
     configure_groot_experiment(o);
@@ -267,6 +271,7 @@ int curve_worker(Options o) {
         ",\"point_policy_replayed\":"+std::string(tune_metrics.point_policy_replayed?"true":"false")+
         ",\"giant_chain_block\":"+std::to_string(o.selected_chain)+
         ",\"baby_coop\":"+std::to_string(tune_metrics.baby_coop)+",\"giant_coop\":"+std::to_string(tune_metrics.giant_coop)+",\"seed_coop\":"+std::to_string(tune_metrics.seed_coop)+
+        ",\"reduce_coop\":"+std::to_string(tune_metrics.reduce_coop)+",\"reduce_threads\":"+std::to_string(tune_metrics.reduce_threads)+",\"reduce_kernel\":"+std::to_string(tune_metrics.reduce_kernel)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
         (o.factor_only?",\"requested_factor_only\":true":"")+
