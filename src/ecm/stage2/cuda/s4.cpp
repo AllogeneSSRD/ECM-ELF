@@ -4,20 +4,26 @@
 #include "options.h"
 #include "checks.h"
 #include "point_launch.h"
+#include "pinned_reserve.h"
 
-unsigned long long *pin_words(unsigned long long **slot,size_t *cap,size_t words)
+namespace {
+bool pinned_allocate(unsigned long long *&out,size_t n) {
+    void *q=nullptr;
+    if(cudaHostAlloc(&q,n*sizeof(unsigned long long),cudaHostAllocDefault)!=cudaSuccess) {
+        (void)cudaGetLastError();return false;
+    }
+    out=static_cast<unsigned long long*>(q);return true;
+}
+void pinned_release(unsigned long long *p){(void)cudaFreeHost(p);}
+}
+unsigned long long *pin_words(unsigned long long **slot,size_t *cap,size_t words,size_t quantum)
 {
     stage2_trace::Range trace("host.pinned_reserve");
-    if (*slot && *cap >= words) return *slot;
-    if (*slot) { (void)cudaFreeHost(*slot); *slot = nullptr; *cap = 0; }
-    void *q = nullptr;
-    if (cudaHostAlloc(&q, words * sizeof(unsigned long long), cudaHostAllocDefault) != cudaSuccess) {
-        (void)cudaGetLastError();       /* no pinned memory: the caller keeps the blocking path */
-        return nullptr;
-    }
-    *slot = (unsigned long long *)q;
-    *cap = words;
-    return *slot;
+    return stage2_pinned::reserve(*slot,*cap,words,quantum,pinned_allocate,pinned_release);
+}
+stage2_pinned::SnapshotReserve pin_snapshot(S4OracleSlot &slot,size_t digits,size_t reduced,bool pool,size_t quantum) {
+    stage2_trace::Range trace("host.pinned_reserve");
+    return stage2_pinned::reserve_snapshot(slot,digits,reduced,pool,quantum,pinned_allocate,pinned_release);
 }
 
 void S4Reduce::Shape::dt_destroy()

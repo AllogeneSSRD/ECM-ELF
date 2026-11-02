@@ -1,6 +1,7 @@
 #pragma once
 
 #include "context.h"
+#include "snapshot_pinned.h"
 
 struct S4Reduce {
     /* the modulus (shared by every shape of the run) */
@@ -73,9 +74,7 @@ struct S4Reduce {
     Shape *find(unsigned long long slot_bits, unsigned long long slot_words, int bpw) const;
 };
 
-struct S4OracleSlot {
-    unsigned long long *digits = nullptr, *reduced = nullptr;
-    size_t digcap = 0, redcap = 0;
+struct S4OracleSlot : stage2_pinned::SnapshotBuffers {
     cudaEvent_t ready = nullptr;
     S4Reduce::Shape *shape = nullptr;
     unsigned long long slice = 0, k0 = 0, count = 0, out_slots = 0;
@@ -85,12 +84,15 @@ struct S4OracleStats {
     unsigned long long selected = 0, queued = 0, compared = 0, samples = 0;
     unsigned long long head = 0, tail = 0, ring_waits = 0, fallbacks = 0;
     unsigned long long signature = 1469598103934665603ull, pinned_peak = 0;
+    unsigned long long pin_grows = 0;
+    unsigned long long pin_pool_fallbacks = 0;
     double t_wait = 0.0, t_copy = 0.0, t_gmp = 0.0, t_alloc = 0.0;
     double t_capture = 0.0, t_reap = 0.0, t_drain = 0.0;
     double t_num = 0.0, t_mod = 0.0;
 };
 
-unsigned long long *pin_words(unsigned long long **slot, size_t *cap, size_t words);
+unsigned long long *pin_words(unsigned long long **slot, size_t *cap, size_t words,size_t quantum=1);
+stage2_pinned::SnapshotReserve pin_snapshot(S4OracleSlot &slot,size_t digits,size_t reduced,bool pool,size_t quantum);
 
 int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
                           const std::vector<unsigned long long> &hn, unsigned long long ninv);

@@ -901,10 +901,12 @@ void ScaledFrontierDevice::upload_siblings(
     size_t mb,
     size_t w)
 {
+    stage2_trace::Range trace("Frontier.upload_siblings");
     const double begin=now_s();const size_t slice=mb*w,words=group.size()*slice;
     bool available[2]={false,false},used[2]={false,false};
     if(g_s4_async)for(int i=0;i<2;++i)available[i]=g_pin_out[i] && g_pin_out_cap[i] && g_pin_ev[i];
     auto copy=[&](unsigned long long *out,size_t first,size_t count) {
+        stage2_trace::Range pack_trace("Frontier.pack_host");
         while(count) {
             const size_t s=first/slice,offset=first%slice,take=std::min(count,slice-offset);
             const auto &f=Ft[(nbase+group[s].second)^1];
@@ -916,14 +918,24 @@ void ScaledFrontierDevice::upload_siblings(
         size_t offset=0,turn=0;
         while(offset<words) {
             size_t i=turn++&1;if(!available[i])i^=1;
-            CK(stage2_wait::event_sync(g_pin_ev[i],stage2_wait::Kind::upload));
+            {
+                stage2_trace::Range wait_trace("Frontier.wait_slot");
+                CK(stage2_wait::event_sync(g_pin_ev[i],stage2_wait::Kind::upload));
+            }
             const size_t take=std::min(words-offset,g_pin_out_cap[i]);
             copy(g_pin_out[i],offset,take);
-            CK(cudaMemcpyAsync(dst+offset,g_pin_out[i],take*8,cudaMemcpyHostToDevice));
-            CK(cudaEventRecord(g_pin_ev[i]));used[i]=true;offset+=take;
+            {
+                stage2_trace::Range submit_trace("Frontier.H2D_submit");
+                CK(cudaMemcpyAsync(dst+offset,g_pin_out[i],take*8,cudaMemcpyHostToDevice));
+                CK(cudaEventRecord(g_pin_ev[i]));
+            }
+            used[i]=true;offset+=take;
             pinned_borrow_peak_bytes=std::max(pinned_borrow_peak_bytes,8ull*take);
         }
-        for(int i=0;i<2;++i)if(used[i])CK(stage2_wait::event_sync(g_pin_ev[i],stage2_wait::Kind::upload));
+        for(int i=0;i<2;++i)if(used[i]) {
+            stage2_trace::Range wait_trace("Frontier.wait_upload");
+            CK(stage2_wait::event_sync(g_pin_ev[i],stage2_wait::Kind::upload));
+        }
     } else {
         std::vector<unsigned long long> packed(words);copy(packed.data(),0,words);
         CK(stage2_wait::copy(dst,packed.data(),words*8,cudaMemcpyHostToDevice));

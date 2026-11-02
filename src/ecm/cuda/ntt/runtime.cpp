@@ -109,9 +109,9 @@ void NttArena::print_workspace_stats() const {
                     (unsigned long long)bytes,(unsigned long long)cap_bytes,(unsigned long long)measured.total,(int)(bytes!=measured.total));
         stage2_log::print(stage2_log::debug,"ntt_phase_cache_stats: evictions=%llu evicted_bytes=%llu\n",
             phase_fuse_evictions,phase_fuse_evicted_bytes);
-        stage2_log::print(stage2_log::debug, "ntt_carry_check_stats: requested=%d fused_calls=%llu skipped_calls=%llu refusals=%llu grows=%llu scratch_bytes=%llu scratch_peak_bytes=%llu\n",
+        stage2_log::print(stage2_log::debug, "ntt_carry_check_stats: requested=%d fused_calls=%llu skipped_calls=%llu refusals=%llu grows=%llu scratch_bytes=%llu scratch_peak_bytes=%llu residual_mode=%d\n",
                     (int)ntt_carry_check_requested(),carry_fused_calls,carry_skipped_calls,carry_refusals,carry_grows,
-                    (unsigned long long)carry_scratch_bytes,(unsigned long long)carry_scratch_peak);
+                    (unsigned long long)carry_scratch_bytes,(unsigned long long)carry_scratch_peak,ecm_ntt_carry_residual_mode());
         size_t big=workspace.words*8, small=carry_scratch_bytes, table=0, base=0;
         for (const auto &b : bigs) big+=b.words*8;
         for (const auto &b : smalls) small+=b.words*8;
@@ -306,6 +306,13 @@ void ntt_inverse(unsigned long long *d, unsigned long long n, int k,
 bool ntt_carry_check_requested()
 {
     const char *e=std::getenv("NTT_CARRY_CHECK_FUSED");return e && std::atoi(e)!=0;
+}
+
+int ecm_ntt_carry_residual_mode() {
+    const char *v=std::getenv("NTT_CARRY_RESIDUAL_MODE");
+    if(!v || !std::strcmp(v,"0"))return 0;
+    if(!std::strcmp(v,"1"))return 1;
+    throw std::runtime_error("NTT_CARRY_RESIDUAL_MODE must be 0 or 1");
 }
 
 void ntt_tile_attributes(bool warp, int smem, bool preferred)

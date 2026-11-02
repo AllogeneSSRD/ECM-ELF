@@ -71,7 +71,11 @@ def collect(out, folder, case, cell, plan, mode, checks):
         actual_reduce=32 if mode=='coop32' and not cell['carrier'] and case['bits']>8192 else 0
         reduce=stats['s4_coop_reduce_mode']
         modern='reduce_coop' in r['stage2-engine']
-        requested=actual_reduce if modern else (32 if mode=='coop32' else 0)
+        # Diagnostic native-plan refusal can retain the explicit request even
+        # though the verified Mersenne reducer correctly falls back to mode 0.
+        # Keep checking the actual receipt/variant independently below.
+        unbound=r.get('stage2-engine',{}).get('tune_plan',{}).get('reason')=='default_prediction_or_memory_unavailable'
+        requested=actual_reduce if modern and not unbound else (32 if mode=='coop32' else 0)
         if int(reduce['enabled'])!=actual_reduce or int(reduce['requested'])!=requested:
             raise ValueError('Unexpected S4 reduction policy')
         if modern:

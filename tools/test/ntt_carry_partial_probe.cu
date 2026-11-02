@@ -6,23 +6,47 @@
 #include <string>
 #include <vector>
 #define CK(call) do{auto e=(call);if(e!=cudaSuccess){std::fprintf(stderr,"CUDA %s: %s\n",#call,cudaGetErrorString(e));std::exit(2);}}while(0)
+#ifdef ECM_CARRY_PRODUCTION
+#include "../../src/ecm/cuda/ntt/launch.h"
+#else
 #include "../experiments/cuda/ntt_variants/carry_reference.cuh"
 #include "../experiments/cuda/ntt_variants/carry_cone.cuh"
 #include "../experiments/cuda/ntt_variants/ntt_carry_partial.cuh"
+#endif
 using U=unsigned long long;
+static void finish(const unsigned int *partial,U blocks,U *out,U batch) {
+#ifdef ECM_CARRY_PRODUCTION
+    ecm_launch_carry_partial_finish_kernel(EcmCudaLaunch((unsigned int)batch,256),partial,blocks,out);
+#else
+    carry_partial_finish_kernel<<<(unsigned int)batch,256>>>(partial,blocks,out);
+#endif
+}
 static void launch(int mode,const U *c,U n,int bpw,unsigned int *partial,U *out,U stride,U batch){
     const auto blocks=(unsigned int)((n+255)/256);
+#ifdef ECM_CARRY_PRODUCTION
+    if(mode){ecm_launch_carry_partial_kernel(EcmCudaLaunch(dim3(blocks,(unsigned int)batch),256),c,n,bpw,partial,stride);
+        finish(partial,blocks,out,batch);}
+    else ecm_launch_carry_residual_kernel(EcmCudaLaunch(dim3(blocks,(unsigned int)batch),256),c,n,bpw,out,stride);
+#else
     if(mode){carry_partial_kernel<<<dim3(blocks,(unsigned int)batch),256>>>(c,n,bpw,partial,stride);
-        carry_partial_finish_kernel<<<(unsigned int)batch,256>>>(partial,blocks,out);}
+        finish(partial,blocks,out,batch);}
     else carry_residual_kernel<<<dim3(blocks,(unsigned int)batch),256>>>(c,n,bpw,out,stride);
+#endif
     CK(cudaGetLastError());
 }
 static unsigned height(U v){unsigned n=0;while(v){++n;v>>=1;}return n;}
 template<int R> static void cone(int mode,const U *c,U *digits,U n,int bpw,unsigned int *partial,U *out,U stride,U batch){
     const auto blocks=(unsigned int)((n+255)/256);const dim3 grid(blocks,(unsigned int)batch);
+#ifdef ECM_CARRY_PRODUCTION
+    if(mode){ecm_launch_carry_cone_check_kernel<R>(EcmCudaLaunch(grid,256),c,digits,n,bpw,stride,partial);
+        finish(partial,blocks,out,batch);}
+    else {ecm_launch_carry_cone_kernel<R>(EcmCudaLaunch(grid,256),c,digits,n,bpw,stride);
+        ecm_launch_carry_residual_kernel(EcmCudaLaunch(grid,256),digits,n,bpw,out,stride);}
+#else
     if(mode){carry_cone_check_kernel<R><<<grid,256>>>(c,digits,n,bpw,stride,partial);
-        carry_partial_finish_kernel<<<(unsigned int)batch,256>>>(partial,blocks,out);}
+        finish(partial,blocks,out,batch);}
     else {carry_cone_kernel<R><<<grid,256>>>(c,digits,n,bpw,stride);carry_residual_kernel<<<grid,256>>>(digits,n,bpw,out,stride);}
+#endif
     CK(cudaGetLastError());
 }
 template<int R> static U cone_gate(int bpw){
@@ -75,7 +99,7 @@ static int gate(){
     // A corrupt partial must propagate through the final diagnostic.
     unsigned int *part=nullptr;U *out=nullptr;CK(cudaMalloc(&part,8));CK(cudaMalloc(&out,16));
     unsigned int poisoned[2]={1,26};CK(cudaMemcpy(part,poisoned,8,cudaMemcpyHostToDevice));CK(cudaMemset(out,0,16));
-    carry_partial_finish_kernel<<<1,256>>>(part,1,out);U got[2];CK(cudaMemcpy(got,out,16,cudaMemcpyDeviceToHost));
+    finish(part,1,out,1);U got[2];CK(cudaMemcpy(got,out,16,cudaMemcpyDeviceToHost));
     const bool fault=got[0]==1 && got[1]==26;bad+=!fault;CK(cudaFree(part));CK(cudaFree(out));
     std::printf("carry_partial_gate: cases=%llu words=%llu bad=%llu fault_propagated=%d\n",cases,words,bad,(int)fault);
     U cone_bad=cone_gate<10>(7)+cone_gate<5>(13)+cone_gate<3>(26)+cone_gate<5>(26)+cone_gate<6>(26)+cone_gate<2>(32)+cone_gate<2>(62)
@@ -123,9 +147,14 @@ static int bench(int k,U batch,int poison){
 }
 template<class T> static void resource(const char *name,T kernel){cudaFuncAttributes a{};int blocks=0;CK(cudaFuncGetAttributes(&a,kernel));CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks,kernel,256,0));std::printf("carry_partial_resource: name=%s regs=%d shared=%zu local=%zu capacity=%d\n",name,a.numRegs,a.sharedSizeBytes,a.localSizeBytes,blocks);}
 int main(int argc,char **argv){if(argc<2)return 2;const int device=std::atoi(argv[1]);CK(cudaSetDevice(device));std::printf("carry_partial_device: %d\n",device);
+#ifndef ECM_CARRY_PRODUCTION
     resource("reference",carry_residual_kernel);resource("partial",carry_partial_kernel);resource("finish",carry_partial_finish_kernel);
     resource("cone5",carry_cone_kernel<5>);resource("cone_check5",carry_cone_check_kernel<5>);
     resource("cone6",carry_cone_kernel<6>);resource("cone_check6",carry_cone_check_kernel<6>);
+#else
+    std::printf("carry_partial_resource_scope: production_modules attributes_not_collected=1\n");
+    std::printf("carry_residual_policy: mode=%d\n",ecm_ntt_carry_residual_mode());
+#endif
     if(argc==2)return gate();if(argc==6 && std::string(argv[2])=="--bench")return bench(std::atoi(argv[3]),std::strtoull(argv[4],nullptr,10),std::atoi(argv[5]));
     if((argc==5 || argc==6) && std::string(argv[2])=="--bench-cone"){
         const int rounds=argc==6 ? std::atoi(argv[5]) : 5;

@@ -13,8 +13,8 @@ void s4_oracle_reset(S4Reduce &R)
     }
     g_oracle_owner = &R;
     g_oracle = S4OracleStats{};
-    stage2_log::print(stage2_log::debug, "s4_oracle_mode: async=%d ring=%d pack=%d (same samples and GMP predicate)\n",
-                (int)g_s4_oracle_async, g_s4_oracle_ring, (int)g_s4_oracle_pack);
+    stage2_log::print(stage2_log::debug, "s4_oracle_mode: async=%d ring=%d pack=%d pin_kb=%u pin_pool=%d (same samples and GMP predicate)\n",
+                (int)g_s4_oracle_async, g_s4_oracle_ring, (int)g_s4_oracle_pack,s4_oracle_pin_kb(),int(s4_oracle_pin_pool()));
 }
 
 void s4_oracle_report()
@@ -23,14 +23,15 @@ void s4_oracle_report()
                 "pending=%llu ring_waits=%llu fallbacks=%llu signature=%016llx pinned_peak=%llu "
                 "t_wait=%.6f t_copy_host=%.6f t_gmp=%.6f t_alloc=%.6f "
                 "t_capture=%.6f t_reap=%.6f t_drain=%.6f host_total=%.6f "
-                "pack=%d t_num=%.6f t_mod=%.6f\n",
+                "pack=%d t_num=%.6f t_mod=%.6f pin_kb=%u pin_grows=%llu pin_pool=%d pin_pool_fallbacks=%llu\n",
                 (int)g_s4_oracle_async, g_oracle.selected, g_oracle.queued, g_oracle.compared,
                 g_oracle.samples, g_oracle.tail - g_oracle.head, g_oracle.ring_waits,
                 g_oracle.fallbacks, g_oracle.signature, g_oracle.pinned_peak,
                 g_oracle.t_wait, g_oracle.t_copy, g_oracle.t_gmp, g_oracle.t_alloc,
                 g_oracle.t_capture, g_oracle.t_reap, g_oracle.t_drain,
                 g_oracle.t_capture + g_oracle.t_reap + g_oracle.t_drain,
-                (int)g_s4_oracle_pack, g_oracle.t_num, g_oracle.t_mod);
+                (int)g_s4_oracle_pack, g_oracle.t_num, g_oracle.t_mod,s4_oracle_pin_kb(),g_oracle.pin_grows,
+                int(s4_oracle_pin_pool()),g_oracle.pin_pool_fallbacks);
 }
 
 void s4_dbad_resolve(S4Reduce &R,bool wait)
@@ -599,8 +600,7 @@ void s4_oracle_release(S4Reduce &R)
     if (g_oracle_owner != &R) return;
     s4_oracle_drain(R);
     for (S4OracleSlot &slot : g_oracle_slot) {
-        if (slot.digits) CK(cudaFreeHost(slot.digits));
-        if (slot.reduced) CK(cudaFreeHost(slot.reduced));
+        stage2_pinned::release_snapshot(slot,[](unsigned long long *p){CK(cudaFreeHost(p));});
         if (slot.ready) CK(cudaEventDestroy(slot.ready));
         slot = S4OracleSlot{};
     }
@@ -665,11 +665,13 @@ void s4_check_reduced(
             }
             S4OracleSlot &slot = g_oracle_slot[g_oracle.tail % g_s4_oracle_ring];
             const double ta0 = now_s();
-            auto *dig = pin_words(&slot.digits, &slot.digcap, ndig);
-            auto *red = pin_words(&slot.reduced, &slot.redcap, nred);
+            const size_t quantum=size_t(s4_oracle_pin_kb())*1024/sizeof(unsigned long long);
+            const auto allocation=pin_snapshot(slot,ndig,nred,s4_oracle_pin_pool(),quantum);
+            auto *dig=allocation.ready?slot.digits:nullptr,*red=allocation.ready?slot.reduced:nullptr;
+            g_oracle.pin_grows+=allocation.grows;g_oracle.pin_pool_fallbacks+=allocation.pool_fallbacks;
             g_oracle.t_alloc += now_s() - ta0;
             unsigned long long bytes = 0;
-            for (const auto &q : g_oracle_slot) bytes += 8ull * (q.digcap + q.redcap);
+            for (const auto &q : g_oracle_slot) bytes += 8ull * q.pinned_words();
             g_oracle.pinned_peak = std::max(g_oracle.pinned_peak, bytes);
             if (dig && red) {
                 if (!slot.ready) CK(cudaEventCreateWithFlags(&slot.ready, cudaEventDisableTiming));

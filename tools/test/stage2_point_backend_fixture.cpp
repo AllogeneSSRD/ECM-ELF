@@ -24,6 +24,11 @@ static void s4_policy_tests(const std::filesystem::path &out) {
     auto coop_condition=old;coop_condition["env_s4_coop_reduce"]="32";
     require(p::matches(old,coop_condition,p::Ignore::parse("")),"S4 request still splits actual row identity");
     require(p::ntt_matches(old,coop_condition,p::Ignore::parse("")),"S4 invalidated standalone NTT");
+    for(const char *key:{"env_s4_oracle_pin_kb","env_s4_oracle_pin_pool","env_carry_residual_mode"}) {
+        auto check_condition=old;check_condition[key]="1";
+        require(!p::matches(old,check_condition,p::Ignore::parse("")),"Strict ECM environment lost checker identity");
+        require(p::ntt_matches(old,check_condition,p::Ignore::parse("")),"Non-transform checking invalidated standalone NTT");
+    }
     p::Profile profile;profile.condition(old);const auto id=profile.condition(coop_condition);
     for(unsigned mode=0;mode<3;++mode)for(unsigned repeat=0;repeat<2;++repeat) {
         auto row=sample(700+mode*2+repeat,0,10.-2*mode,0);

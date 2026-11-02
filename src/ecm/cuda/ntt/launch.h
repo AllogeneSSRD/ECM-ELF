@@ -3,6 +3,7 @@
 #include "parameters.h"
 const void *ecm_ntt_tile_handle(bool inverse,bool warp);
 cudaError_t ecm_ntt_copy_reduce_mode(unsigned int enabled);
+int ecm_ntt_carry_residual_mode(); // Host-only checker policy; no shape change.
 void ecm_launch_pointwise_twiddle_kernel(EcmCudaLaunch cfg, unsigned long long *a, const unsigned long long *b, unsigned long long n, unsigned long long omega, unsigned long long exp_scale);
 void ecm_launch_dit_stage_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long half, unsigned long long exp_step, unsigned long long omega, unsigned long long n);
 void ecm_launch_ntt_stage_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long half, unsigned long long exp_step, unsigned long long omega, unsigned long long n);

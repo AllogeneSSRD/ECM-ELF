@@ -123,6 +123,8 @@ extern unsigned long long g_pin_raw_used, g_pin_out_used, g_pin_fallbacks;
 extern const bool g_s4_oracle_async;
 
 extern const bool g_s4_oracle_pack;
+unsigned s4_oracle_pin_kb();
+bool s4_oracle_pin_pool();
 
 extern const int g_s4_oracle_ring;
 

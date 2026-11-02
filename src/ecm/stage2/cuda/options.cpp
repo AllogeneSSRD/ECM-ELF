@@ -212,6 +212,14 @@ const bool g_s4_oracle_async = [] {
 
 const bool g_s4_oracle_pack = !opt_off("NTT_S4_ORACLE_PACK");
 
+unsigned s4_oracle_pin_kb() {
+    const char *e=std::getenv("NTT_S4_ORACLE_PIN_KB");
+    return e?unsigned(std::atoi(e)):0;
+}
+bool s4_oracle_pin_pool() {
+    const char *e=std::getenv("NTT_S4_ORACLE_PIN_POOL");return e && std::strcmp(e,"1")==0;
+}
+
 const int g_s4_oracle_ring = [] {
     const char *e = std::getenv("NTT_S4_ORACLE_RING");
     return e && *e ? std::max(1, std::min(8, std::atoi(e))) : 4;
@@ -367,6 +375,15 @@ int ecm_cuda_stage2_set_log_level(int level)
 
 int ecm_cuda_stage2_check_configuration()
 {
+    if(const char *v=std::getenv("NTT_CARRY_RESIDUAL_MODE"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
+        std::fprintf(stderr,"NTT_CARRY_RESIDUAL_MODE must be 0 or 1\n");return 2;
+    }
+    if(const char *v=std::getenv("NTT_S4_ORACLE_PIN_POOL"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
+        std::fprintf(stderr,"NTT_S4_ORACLE_PIN_POOL must be 0 or 1\n");return 2;
+    }
+    if(const char *v=std::getenv("NTT_S4_ORACLE_PIN_KB"))if(std::strcmp(v,"0") && std::strcmp(v,"64") && std::strcmp(v,"256")) {
+        std::fprintf(stderr,"NTT_S4_ORACLE_PIN_KB must be 0, 64 or 256\n");return 2;
+    }
     if(const char *v=std::getenv("NTT_BABY_COOP"))if(std::strcmp(v,"0") && std::strcmp(v,"32")) {
         std::fprintf(stderr,"NTT_BABY_COOP must be 0 or 32\n");return 2;
     }

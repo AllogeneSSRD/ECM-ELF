@@ -20,6 +20,14 @@
 
 独立生产程序默认使用pack/zero融合：`stage2_pack_zero=true`，可用false或`--pack-zero 0`关闭；共享/Worker TOML、CLI和环境覆盖见[配置参考](../ECM_TOML_REFERENCE.md#stage2_pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)。
 
+## Carry 的完整 digit 检查
+
+Carry 后仍读取全部 digit，累加超出基数的数量，并维护最大 digit 位高；前面异步调用留下的非零诊断不能清空。检查不改变 carry 轮数、NTT长度、数学乘法或GMP样本。
+
+块内汇总提供标量64位共享原子控制和32位warp／块分层归约。生产每块256线程；每块坏值数最多256，位高最多64，局部32位精确足够，最终全局累加和最大值仍为64位。后者使用256 bytes静态共享内存、一次块同步，没有新增设备全局数组或主机传输。内部诊断变量`NTT_CARRY_RESIDUAL_MODE=0|1`分别选择控制／紧凑汇总，默认0；它不属于TOML配置。数学边界见[检查归约](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#12-carry完整检查的局部汇总)。
+
+独立NTT吞吐表只测变换及pointwise，不测carry检查，因此上述选择不拆分NTT性能表。严格环境匹配下完整ECM测量保留该环境身份。算术资格、完整曲线及默认策略统一见[carry与oracle准备](../performance/STAGE2_PREPARATION.md#carry检查与oracle快照准备)。
+
 ## 当前算术与调度
 
 生产使用固定 PTX Goldilocks 归约和 canonical 减法。2⁶⁴≡2³²−1 mod q 将 128-bit 乘积折成少量显式进位链；规范范围保证专用减法成立。后端由编译身份确定；可移植tune摘要默认允许忽略backend条件复用，跨后端时间不能据此声明为本机实测。旧.cprof保持独立的严格后端合同。

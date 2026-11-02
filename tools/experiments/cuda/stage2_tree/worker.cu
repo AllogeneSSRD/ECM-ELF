@@ -1,6 +1,9 @@
 #include <cstdlib>
 
 namespace {
+// Capture explicit requests before the experiment's defaults modify the env.
+const unsigned original_point_environment=(std::getenv("NTT_BABY_COOP")?1u:0u)|
+    (std::getenv("NTT_GIANT_COOP")?2u:0u)|(std::getenv("NTT_GIANT_SEED_COOP")?4u:0u);
 // Set before the engine's static flag snapshots. Explicit environment overrides
 // remain available for comparison with the experiment executable.
 struct ProductionDefaults {
@@ -45,6 +48,8 @@ struct ProductionDefaults {
 #include "../../../../src/ecm/platform/compute_log.h"
 #include "../../../../src/ecm/cuda/ntt/device/tune_checks.cuh"
 #include "tune.cuh"
+
+unsigned ecm_cuda_stage2_point_environment_overrides() { return original_point_environment; }
 
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)
 {

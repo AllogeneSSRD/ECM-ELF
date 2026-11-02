@@ -79,8 +79,41 @@ __global__ void carry_residual_kernel(const unsigned long long *c, unsigned long
 }
 }
 
+namespace {
+// Production launch uses full warps (256 threads).
+__global__ void carry_residual_compact_kernel(const unsigned long long *c,unsigned long long n,
+    int bpw,unsigned long long *out,unsigned long long stride) {
+    c+=(size_t)blockIdx.y*stride;out+=2*(size_t)blockIdx.y;
+    const auto i=blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x;
+    const unsigned long long v=i<n?c[i]:0;
+    // A block has at most 1024 bad digits; each height is in [0,64].
+    // Keep global accumulation 64-bit, including earlier deferred failures.
+    unsigned bad=i<n && v>=(1ull<<bpw),mx=v?64-__clzll((long long)v):0;
+    for(int off=16;off;off>>=1) {
+        bad+=__shfl_down_sync(0xffffffffu,bad,off);
+        mx=max(mx,__shfl_down_sync(0xffffffffu,mx,off));
+    }
+    __shared__ unsigned counts[32],heights[32];
+    if((threadIdx.x&31u)==0){counts[threadIdx.x/32]=bad;heights[threadIdx.x/32]=mx;}
+    __syncthreads();
+    if(threadIdx.x<32) {
+        const unsigned warps=blockDim.x/32;
+        bad=threadIdx.x<warps?counts[threadIdx.x]:0;mx=threadIdx.x<warps?heights[threadIdx.x]:0;
+        for(int off=16;off;off>>=1) {
+            bad+=__shfl_down_sync(0xffffffffu,bad,off);
+            mx=max(mx,__shfl_down_sync(0xffffffffu,mx,off));
+        }
+        if(threadIdx.x==0) {
+            if(bad)atomicAdd(out,(unsigned long long)bad);
+            atomicMax(out+1,(unsigned long long)mx);
+        }
+    }
+}
+}
 void ecm_launch_carry_residual_kernel(EcmCudaLaunch cfg, const unsigned long long *c, unsigned long long n, int bpw, unsigned long long *out, unsigned long long stride) {
-    carry_residual_kernel<<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(c,n,bpw,out,stride);
+    const auto mode=ecm_ntt_carry_residual_mode();
+    if(mode==1)carry_residual_compact_kernel<<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(c,n,bpw,out,stride);
+    else carry_residual_kernel<<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(c,n,bpw,out,stride);
 }
 
 namespace {
