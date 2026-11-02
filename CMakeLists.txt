@@ -478,6 +478,15 @@ if(ECM_ENABLE_CUDA)
     set(ECM_STEP_VARIANT "1" CACHE STRING "1 = double_add_v2 (historical), 2 = explicit-prep variant")
     target_compile_definitions(ecm_cuda PRIVATE ECM_STEP_VARIANT=${ECM_STEP_VARIANT})
 
+    set(ECM_CGBN_SQUARE_BACKEND "0" CACHE STRING "Stage1 square experiment: 0 = original CGBN, 1 = carry-save square/REDC")
+    if(NOT ECM_CGBN_SQUARE_BACKEND MATCHES "^[01]$")
+        message(FATAL_ERROR "ECM_CGBN_SQUARE_BACKEND must be 0 or 1")
+    endif()
+    if(ECM_CGBN_SQUARE_BACKEND STREQUAL "1")
+        target_compile_definitions(ecm_cuda PRIVATE ECM_CGBN_SQUARE_BACKEND=1)
+        message(STATUS "ecm_cuda: experimental carry-save square/REDC ENABLED")
+    endif()
+
     # param2 is a SECOND FULL COPY of every tier (2560..16384 included), i.e. a large slice of
     # the kernel compile time, and it is still opt-in at runtime (--gpu-param 2).  Set this to 1
     # to skip those instantiations entirely while working on the param0/param3 paths;

@@ -239,6 +239,8 @@
 #define ECM_MERS_FOLD_FUSED 0
 #endif
 
+#include "../../../cuda/arithmetic/cgbn/stage1_square.cuh"
+
 #if ECM_MERS_FOLD_FUSED
 #include "../../../cuda/arithmetic/cgbn/cgbn_mers_fused_core.h"
 #endif
@@ -357,7 +359,7 @@ class curve_t {
 
   __device__ FORCE_INLINE void mont_sqr_normalized(
           bn_t &r, const bn_t &a, const bn_t &modulus, uint32_t np0) {
-      cgbn_mont_sqr(_env, r, a, modulus, np0);
+      ecm_cgbn::stage1_mont_square_raw(_env, r, a, modulus, np0);
       normalize_addition(r, modulus);
   }
 

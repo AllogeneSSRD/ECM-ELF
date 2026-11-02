@@ -2,6 +2,7 @@
 // the exact wide product and the existing Montgomery contract against GMP.
 #include <gmp.h>
 #include "../../src/ecm/cuda/arithmetic/cgbn/square.cuh"
+#include "../../src/ecm/cuda/arithmetic/cgbn/square_redc.cuh"
 #include "../experiments/cuda/cgbn_square/column.cuh"
 #include "../experiments/cuda/cgbn_square/karatsuba.cuh"
 #include "../../src/ecm/stage2/cuda/device/point_coop_field.cuh"
@@ -16,7 +17,7 @@
 #define ECM_SQUARE_TPI 16
 #endif
 #ifndef ECM_SQUARE_MODE_MASK
-#define ECM_SQUARE_MODE_MASK 32767
+#define ECM_SQUARE_MODE_MASK 131071
 #endif
 #define CK(x) do{auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA: %s\n",cudaGetErrorString(e));exit(2);}}while(0)
 constexpr int BITS=ECM_SQUARE_BITS,TPI=ECM_SQUARE_TPI,TPB=128;
@@ -27,7 +28,7 @@ using Context=cgbn_context_t<TPI,ProbeParameters>;
 using Env=cgbn_env_t<Context,BITS>;
 using Bn=typename Env::cgbn_t;
 using Mem=cgbn_mem_t<BITS>;
-template<int MODE> constexpr bool is_mont=MODE<3 || MODE==5 || MODE==7 || MODE==9 || MODE==11 || MODE==13 || MODE==14;
+template<int MODE> constexpr bool is_mont=MODE<3 || MODE==5 || MODE==7 || MODE==9 || MODE==11 || MODE==13 || MODE==14 || MODE==15 || MODE==16;
 template<int MODE> __global__ void square_probe(Mem *input,Mem *modulus,Mem *output,
     int count,int repeats,bool alias,uint32_t np0,int fault,int mersenne_bits) {
     const int i=(blockIdx.x*blockDim.x+threadIdx.x)/TPI;if(i>=count)return;
@@ -51,6 +52,9 @@ template<int MODE> __global__ void square_probe(Mem *input,Mem *modulus,Mem *out
             constexpr unsigned depth=MODE==5?1:2;
             if(alias)ecm_cgbn::mont_square_split<depth>(e,x,x,n,np0);
             else {ecm_cgbn::mont_square_split<depth>(e,v,x,n,np0);cgbn_set(e,x,v);}
+        } else if constexpr(MODE==15 || MODE==16) {
+            if(alias)ecm_cgbn::mont_square_carrysave<2,Env,MODE==15>(e,x,x,n,np0);
+            else {ecm_cgbn::mont_square_carrysave<2,Env,MODE==15>(e,v,x,n,np0);cgbn_set(e,x,v);}
         } else if constexpr(MODE==9 || MODE==11) {
             constexpr unsigned depth=MODE==9?1:2;
             if(alias)ecm_cgbn::mont_square_karatsuba<depth>(e,x,x,n,np0);
@@ -157,7 +161,7 @@ template<int MODE> int run(int device,int count,int repeats,int alias,int kind,i
     if(bad){printf("cgbn_square_bad: mode=%d immutable_or_guard_words=%zu\n",MODE,bad);return 3;}
     auto sorted=times;std::sort(sorted.begin(),sorted.end());
     unsigned depth=0;
-    if constexpr(((MODE>=5 && MODE<=8)||MODE==14) && ecm_cgbn::square_split_eligible<Env>())depth=std::min(unsigned(MODE<7?1:2),unsigned(TPI==8?1:TPI==16?2:3));
+    if constexpr(((MODE>=5 && MODE<=8)||MODE==14||MODE==15||MODE==16) && ecm_cgbn::square_split_eligible<Env>())depth=std::min(unsigned(MODE<7?1:2),unsigned(TPI==8?1:TPI==16?2:3));
     if constexpr(MODE>=9 && MODE<=12 && ecm_cgbn::square_karatsuba_eligible<Env>()) {
         unsigned levels=0,l=Env::LIMBS;while(l && !(l&1)){++levels;l/=2;}
         depth=std::min(unsigned(MODE<11?1:2),levels);
@@ -171,9 +175,9 @@ template<int MODE> int run(int device,int count,int repeats,int alias,int kind,i
 int main(int argc,char **argv) {
     if(argc!=9){fprintf(stderr,"device count repeats mode alias kind samples fault\n");return 2;}
     const int device=atoi(argv[1]),count=atoi(argv[2]),repeats=atoi(argv[3]),mode=atoi(argv[4]),alias=atoi(argv[5]),kind=atoi(argv[6]),samples=atoi(argv[7]),fault=atoi(argv[8]);
-    if(count<1||count>16384||repeats<1||repeats>128||mode<0||mode>14||alias<0||alias>1||kind<0||kind>3||samples<1||samples>9||fault<0||fault>2)return 2;
+    if(count<1||count>16384||repeats<1||repeats>128||mode<0||mode>16||alias<0||alias>1||kind<0||kind>3||samples<1||samples>9||fault<0||fault>2)return 2;
     if(fault==2 && (repeats<2 || (mode!=3 && mode!=4 && mode!=6 && mode!=8 && mode!=10 && mode!=12)))return 2;
     if((mode==13 || mode==14) && ((kind!=1 && kind!=3) || Env::BITS!=Env::UNPADDED_BITS))return 2;
 #define CASE(M) case M:if constexpr(ECM_SQUARE_MODE_MASK&(1<<M))return run<M>(device,count,repeats,alias,kind,samples,fault);else return 2
-    switch(mode){CASE(0);CASE(1);CASE(2);CASE(3);CASE(4);CASE(5);CASE(6);CASE(7);CASE(8);CASE(9);CASE(10);CASE(11);CASE(12);CASE(13);CASE(14);}return 2;
+    switch(mode){CASE(0);CASE(1);CASE(2);CASE(3);CASE(4);CASE(5);CASE(6);CASE(7);CASE(8);CASE(9);CASE(10);CASE(11);CASE(12);CASE(13);CASE(14);CASE(15);CASE(16);}return 2;
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../cuda/arithmetic/cgbn/stage1_square.cuh"
 
 // Extended Edwards arithmetic for a=1: x^2+y^2=1+d*x^2*y^2.
 // All coordinates and d are canonical CGBN Montgomery residues modulo odd n.
@@ -31,7 +32,7 @@ struct cgbn_edwards_field {
         if (cgbn_compare(env, r, n) >= 0) cgbn_sub(env, r, r, n);
     }
     __device__ __forceinline__ void sqr(bn &r, const bn &a) const {
-        cgbn_mont_sqr(env, r, a, n, np0);
+        ecm_cgbn::stage1_mont_square_raw(env, r, a, n, np0);
         if (cgbn_compare(env, r, n) >= 0) cgbn_sub(env, r, r, n);
     }
 

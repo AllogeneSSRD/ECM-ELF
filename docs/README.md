@@ -54,7 +54,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [GKL family (iv) 曲线实验](performance/ECM_FRIENDLY_IV.md)：有理挠群、约 420 万组独立群阶/点阶、条件 D_eff、GMP NAF 及 GPU Stage2 因子接续与性能边界。
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
-- [CGBN专用平方](performance/CGBN_SQUARE.md)：共享分块原语、4060 Laptop宽平方／普通及梅森模平方对照、GMP和容器回退边界；生产路径未启用。数学和CGBN源码依据见[专用平方资料](reference/CGBN_SQUARE.md)。
+- [CGBN专用平方](performance/CGBN_SQUARE.md)：共享分块原语、装配／REDC融合、4060 Laptop算子吞吐及Mont0／Edwards真实Stage1对照、GMP与点核NCU；默认保持原CGBN。数学和CGBN源码依据见[专用平方资料](reference/CGBN_SQUARE.md)。
 - [Stage2 性能](performance/STAGE2.md)：0.54.7小B2全位宽独立tune复测、布局及阶段占比；冻结双档GPU矩阵、Prime95与Montgomery参考。
 - [Stage2 位宽增长与优化](performance/STAGE2_BIT_SCALING.md)：26格主矩阵及固定D控制的经验指数、各阶段占比、NTT与平方工作量、宽位点核资源；[复杂度推导](reference/ECM_STAGE2_BIT_COMPLEXITY.md)和[离线图表](web/stage2-bit-complexity-20261101.html)。
 - [普通S4归约性能](performance/STAGE2_S4_REDUCTION.md)：高位宽长除法的warp协作、GMP资格、NCU、固定D整曲线对照及默认保护。
