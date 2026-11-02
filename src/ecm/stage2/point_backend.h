@@ -21,6 +21,11 @@ inline int giant_backend(const std::string &value) {
     if(value=="coop32")return 32;
     throw std::runtime_error("giant backend must be auto, scalar, coop16 or coop32");
 }
+inline unsigned seed_backend(const std::string &value) {
+    if(value=="scalar")return 0;
+    if(value=="coop32")return 32;
+    throw std::runtime_error("seed backend must be scalar or coop32");
+}
 inline const char *point_backend_name(unsigned value) {
     return value==32?"coop32":value==16?"coop16":value==point_backend_unknown?"legacy_unknown":"scalar";
 }

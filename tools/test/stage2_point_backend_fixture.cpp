@@ -57,6 +57,23 @@ static void giant_tests() {
     p::Estimator startup(profile,profile.conditions.at(0),p::Ignore::parse(""),{});
     require(p::qualified_giant_backend(startup,scalar,2).mode==16,"giant startup checks omitted from comparison");
 }
+static void seed_policy_tests() {
+    const auto ignore=p::Ignore::parse("gpu,driver,cuda,backend,environment");
+    Fields old{{"env_giant_seed_coop","0"}},current{{"env_giant_seed_coop","32"}};
+    require(!p::matches(old,current,ignore),"ignored environment mixed seed arithmetic costs");
+    require(p::ntt_matches(old,current,ignore),"seed arithmetic split unchanged NTT tables");
+    Fields legacy;require(p::matches(legacy,old,ignore),"legacy scalar condition not retained");
+    require(!p::matches(legacy,current,ignore),"legacy scalar costs relabelled cooperative");
+    // Strict matching still accepts an omitted scalar policy in old profiles.
+    Fields strict{{"uuid_hex","\"seed-device\""},{"sm_major","8"},{"sm_minor","9"},
+        {"cuda_driver","13030"},{"cuda_runtime","13030"},{"gl_fixed_mode","3"},
+        {"outer_unroll_u","0"},{"add_sub_mask","1"}};
+    auto explicit_scalar=strict;explicit_scalar["env_giant_seed_coop"]="0";
+    require(p::matches(strict,explicit_scalar,p::Ignore::parse("")),"strict legacy scalar condition lost");
+    require(ecm_stage2::seed_backend("scalar")==0 && ecm_stage2::seed_backend("coop32")==32,"seed option parsing");
+    bool rejected=false;try{ecm_stage2::seed_backend("auto");}catch(...){rejected=true;}
+    require(rejected,"unqualified automatic seed policy accepted");
+}
 int main(int argc,char **argv) {
     try {
         if(argc==4 && std::string(argv[1])=="--make-save") {
@@ -68,7 +85,7 @@ int main(int argc,char **argv) {
             require(bool(out),"save write failed");std::cout<<"generated probable-prime Stage1 fixture "<<bits<<" bits\n";return 0;
         }
         require(argc==2,"need output directory");
-        giant_tests();
+        giant_tests();seed_policy_tests();
         p::Profile profile;
         profile.condition({{"uuid_hex","\"device\""},{"sm_major","8"},{"sm_minor","9"},{"cuda_driver","13030"},
             {"cuda_runtime","13030"},{"gl_fixed_mode","3"},{"outer_unroll_u","0"},{"add_sub_mask","1"}});

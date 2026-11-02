@@ -7,7 +7,7 @@ struct PolyLayer;
 struct SmallPrimeBabyCache;
 
 struct GiantSeedStats {
-    unsigned cooperative_tpi=0;
+    unsigned cooperative_tpi=0,seed_cooperative_tpi=0,base_cooperative_tpi=0;
     unsigned long long chunks=0,points=0,avoided_d2h_bytes=0,avoided_h2d_bytes=0;
     unsigned long long avoided_cpu_modmuls=0,avoided_montmuls=0,checked_words=0;
     unsigned long long segments=0,segment_checks=0,segment_fix_muls=0,fix_table_peak_bytes=0;

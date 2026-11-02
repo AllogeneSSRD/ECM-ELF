@@ -332,6 +332,9 @@ struct Ignore {
 };
 inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore) {
     auto same=[&](const char *key){auto a=old.find(key),b=current.find(key);return a!=old.end() && b!=current.end() && a->second==b->second;};
+    // Seed arithmetic changes ECM cost independently of hardware/environment
+    // compatibility. Old conditions omitted this policy and mean scalar (0).
+    if(optional_uint(old,"env_giant_seed_coop")!=optional_uint(current,"env_giant_seed_coop"))return false;
     if(!ignore.gpu && (!same("uuid_hex") || !same("sm_major") || !same("sm_minor")))return false;
     if(!ignore.driver && !same("cuda_driver"))return false;
     if(!ignore.cuda && !same("cuda_runtime"))return false;
@@ -342,7 +345,7 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
         // in their environment. Do not split unchanged schedules on that flag.
         auto relevant=[](const std::string &key) {
             return key.compare(0,4,"env_")==0 && key!="env_giant_tail_balance" &&
-                key!="env_baby_coop" && key!="env_giant_coop";
+                key!="env_baby_coop" && key!="env_giant_coop" && key!="env_giant_seed_coop";
         };
         for(const auto &f:old)if(relevant(f.first) && !same(f.first.c_str()))return false;
         for(const auto &f:current)if(relevant(f.first) && !same(f.first.c_str()))return false;
@@ -353,7 +356,7 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
 }
 inline bool ntt_matches(Fields old,Fields current,const Ignore &ignore) {
     // S4 scheduling changes do not change the standalone field benchmark.
-    for(const char *key:{"env_s4_short_batch_tune","env_s4_short_batch_hash"}) {old.erase(key);current.erase(key);}
+    for(const char *key:{"env_s4_short_batch_tune","env_s4_short_batch_hash","env_giant_seed_coop"}) {old.erase(key);current.erase(key);}
     return matches(old,current,ignore);
 }
 // Restricted TOML arrays contain scalar table cells, never trial samples.

@@ -80,6 +80,12 @@ B2凑整保持已选择的后端请求，直到实际B2和原生容量完成稳�
 
 代码入口：`stage2/point_backend.h`定义选项及容量／批量区域；`cuda/host_policy.cpp`解析优先级；`task.cpp::child_run/curve_worker`处理父子进程；`planning/runtime_tune.h::runtime_baby_trials/runtime_giant_trials/qualified_point_backends`及`qualified_baby_backend/qualified_giant_backend`限制配对范围，`planning.cpp::portable_measure/portable_runtime_select/round_giant_bounds`负责准入与执行；`portable_model.h`、`width_prediction.h`隔离后端统计和模型。区间补测与完整曲线边界见[位宽资格](../performance/STAGE2_BIT_SCALING.md#126-区间资格与自动选型)，当前联合后端的完整矩阵见[Stage2性能](../performance/STAGE2.md)。
 
+### Giant seed的固定协作策略
+
+`stage2_seed_backend`默认scalar，可显式选coop32；CLI `--seed-backend`覆盖worker TOML，省略键时兼容显式`NTT_GIANT_SEED_COOP=0|32`。支持的CUDA算术位宽为8193…16384 bits，按160／192／224／256词分档；范围外仍走标量。它同时控制GPU构建[D]Q和paired seed，不改变后续giant链的auto／scalar／coop16／coop32选择，也不将非单位基点改走另一因子路径。
+
+ECM成本按seed策略隔离，NTT表继续共享；切换策略后可能需要积累新的ECM观察。标量是默认保护路径，现有性能文件不会因新增显式0条件而丢失。该选项尚未加入自动后端对照；完整曲线验证范围和瓶颈见[协作seed性能](../performance/STAGE2_BIT_SCALING.md#13-可选协作paired-seed与dq)。
+
 ## 算术位宽区间预测
 
 普通路径查`generic[bit_length(N)]`，承载路径查`mersenne[p]`。索引按实际算术位宽建立；不要求采样的目标N位宽、具体N或carrier_exponent相同。目标位宽另用于投影、叶乘积和GCD成本；完整梅森数可校准余因子承载。整除验证仍不可省略。
@@ -162,6 +168,7 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 格式8每个实际目标位宽只有一个 `[width.<bits>]`，内容为列对齐的 `matrix`。不同条件、D、B1/B2、普通/承载及giant执行参数保留为不同的行，不因可选字段不同再分表。表外仅有格式/计时单位、模型误差设置和确定的设备、环境条件。矩阵中可选值缺失用空字符串表示。
 
 - `condition` 指向 `[condition.<id>]`，保存设备、驱动/工具链、后端及实际环境设置。程序版本不参与条件匹配、统计分组、采样上限或选型资格；软件升级不自动使可兼容缓存失效。
+- `env_giant_seed_coop` 是固定seed算术策略的成本身份：缺失或0表示scalar，32表示coop32。即使忽略environment，也不跨此策略复用ECM均值、模型观察或后端资格；旧标量条件仍可与显式0匹配。NTT独立吞吐表忽略这一字段，继续复用。该字段不是matrix中的新搜索轴，运行时不会自动切换seed策略。
 - `program_version`、`updated_at` 位于ECM和NTT的matrix行内，仅记录来源。实测行保存最近一次有可靠时间且已纳入统计的观察/测量批次；模型行保存生成该估算的版本和时间。时间采用UTC `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`。旧数据缺少可靠采样时间时留空，不能用读取、导入或格式化时间代替。去重忽略的观察不刷新来源；双方时间均未知时保留已有版本。合并行不展开逐次版本历史，原始来源保留在JSONL或冻结证据。
 - 位宽由表名确定；`carrier_exponent=0` 表示按save的N运算，非零p表示2ᵖ−1承载。算术位宽自动由表名和承载指数恢复。`modulus_kind` 区分generic/mersenne；完整梅森N允许carrier_exponent=0。
 - `d` 为D，P=φ(D)/2自动恢复；fold/frontier列自动恢复驻留路径名称。giant分块、chain门槛和ladder开关影响执行形状，保留在matrix中。

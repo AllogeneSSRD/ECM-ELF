@@ -1181,6 +1181,22 @@ Directory searched for saves referenced by Stage2 assignments. Empty inherits tm
 
 指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。
 
+### stage2_seed_backend
+
+```toml
+stage2_seed_backend = "scalar"
+```
+
+Type / 类型: `string`; range / 范围: `[scalar|coop32]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
+
+显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
+
+Giant paired-seed and GPU [D]Q arithmetic: scalar preserves the default; coop32 uses width-matched cooperative containers for CUDA arithmetic widths 8193..16384 bits. It keeps the same coordinates, buffers and nonunit fallback; other widths remain scalar. This is a fixed policy, independent of baby/giant-chain auto selection. ECM tune observations are isolated by seed policy even when environment matching is ignored; NTT tables remain reusable. CLI --seed-backend overrides this worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL accepts scalar only.
+
+Giant相邻seed及GPU构建[D]Q的算术：默认scalar；coop32对CUDA实际算术8193..16384 bits使用按位宽分档的协作容器，其他位宽仍为标量。保持相同坐标、缓冲及非单位回退。这是独立于baby／giant链auto的固定策略；ECM调优始终按seed策略隔离，即使忽略environment也不合并，NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL仅支持scalar。
+
 ### stage2_short_calibration
 
 ```toml

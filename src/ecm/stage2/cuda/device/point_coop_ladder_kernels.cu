@@ -19,3 +19,21 @@ void ecm_launch_s2g_coop_ladder_kernel(EcmCudaLaunch cfg,const unsigned long lon
     }
 #undef S2G_LADDER_RUN
 }
+
+void ecm_launch_s2g_coop_seed_pair_kernel(EcmCudaLaunch cfg,const unsigned long long *n,
+    unsigned long long ninv,int nw,const unsigned long long *hx,const unsigned long long *hz,
+    const unsigned long long *a24,const unsigned long long *mone,unsigned long long clo,
+    unsigned long long npts,unsigned long long per_block,unsigned long long blocks,
+    unsigned long long offset,unsigned long long count,int mersenne_bits,
+    unsigned long long *out_x,unsigned long long *out_z)
+{
+#define S2G_SEED_RUN(W) stage2_coop_seed_pair<W,32><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>( \
+    n,ninv,nw,hx,hz,a24,mone,clo,npts,per_block,blocks,offset,count,mersenne_bits,out_x,out_z)
+    switch(s2g_coop_capacity_words(nw,32)) {
+        case 160:S2G_SEED_RUN(160);break;
+        case 192:S2G_SEED_RUN(192);break;
+        case 224:S2G_SEED_RUN(224);break;
+        default:S2G_SEED_RUN(256);break;
+    }
+#undef S2G_SEED_RUN
+}

@@ -196,3 +196,17 @@ python tools/bench/plot_stage2_version.py `
 审计要求完整 26 个条件、每条实际执行的唯一完整 NF，核对提前停止的触发观察、原生退出确认及队列剩余状态，同时核对点重放、输入、版本、原始计时、数学检查及覆盖；用 JSONL 的完整精度观察独立重算各组均值/方差，六位小数文本计时另按舍入精度对照。保留队列另与导入前的原始计划逐项核对。最终只规划输出须与被选性能行和原始观察对应。
 
 `stage2_ecm_tune.toml` 为活动文件，最终完全相同的 `stage2_ecm_tune_frozen.toml` 可通过 `stage2_tune_profile` / `--tune-profile` 复用。它们留在忽略的 data 目录，不公开设备身份或运行去重标识。学习队列的引擎、队列和进程时间分别报告，不与最优成绩重复相加；计时边界见 [准备结果的复用](../../docs/architecture/AUTO_B2.md#准备结果的复用)。
+
+## 协作paired seed验证
+
+`stage2_point_coop_seed_probe.cu`直接包含生产scalar／cooperative算术头；独立GMP多项式oracle核对Montgomery坐标及相邻点布局。通过`tools/build/test/build_stage2_point_coop_seed_probe.ps1 -Words 160|192|224|256`分别构建；构建必须完成后再计时。
+
+`bench_stage2_seed_coop_probe.py`接受`--exe`、`--bits`（空格分隔）、`--suite correctness|performance`、`--output`与可选`--allow-gpu-pid`。正确性覆盖三类模数、分批offset、0／大起点、1／2点尾和预期故障拒绝；性能采用2048链、32点链、两种相反顺序，每进程保留3个CUDA事件，无warmup。每调用都核对GMP抽查及跨后端全部输出摘要，正确性模式还要求全量GMP词覆盖。保留exit code、命令、输出、EXE／GMP／manifest、采集器快照及0.2s遥测。
+
+完整曲线工具`bench_stage2_seed_coop.py`复用已完成自动后端矩阵的save、D／布局／链长；默认只取>8192目标bits，显式baby32／giant32，对比seed scalar／coop32。`--case`可重复，`--repeats 1|2|3`控制每后端次数；顺序按格和重复交替。`--checks`另开seed投影、全部设备叶的GMP及目标叶摘要检查，标记diagnostic，不纳入正常计时。`--d`／`--b2`只用于显式固定几何的资格；不在此工具搜索参数。
+
+普通计时与诊断目录必须分开。工具冻结官方build_manifest及EXE／GMP、核对各编译目标、save和原矩阵身份；每格验证NF、N／B1／B2／sigma、真实seed／[D]Q后端、D／P／布局、必需GMP与相同NTT／S4工作量。只读使用不存在的性能文件，关闭学习、短校准、NTT短批调优、relocation、凑整和尾块平衡。保留全部首轮与失败，明显回退另建目录复测；不覆盖原样本。
+
+例如完整小B2对照使用`python tools/bench/bench_stage2_seed_coop.py --study data/experiments/stage2_giant_auto_20261101/matrix01 --exe build_stage2_local/ecm_cuda_stage2.exe --output data/experiments/NEW_STUDY/curves`。运行前核对GPU空闲和准确白名单；不为实验修改时钟或功耗。有效配置和tune分组另由`tools/test/test_stage2_seed_config.py`通过真实Worker #2子进程验证；`test_stage2_runtime_tune.py --fixture point-backends`验证旧标量条件、策略隔离及NTT表复用。
+
+`analyze_stage2_seed_coop.py --study ... --output data/benchmarks/... --figures data/figures/...`拒绝未完成或诊断研究，输出逐格CSV／JSON、完整引擎时间曲线及最高位的互斥阶段堆积图。另从原始console提取`curve_done.wall`，与引擎分别汇总；不把进程墙钟、点检查、S4设备事件或[D]Q嵌套范围重复相加。`--publish docs/performance/attachments`只发布静态PNG；原始证据继续由data忽略规则管理。

@@ -9,6 +9,15 @@
 #include "point_coop_ladder_launch.h"
 #include "stage2_baby_launch.h"
 
+// Classify the arithmetic ring, never the smaller GCD target of a carrier.
+static int point_mersenne_bits(const LadderCtx& C) {
+    if(!fuse_env_ull("NTT_POINT_MERSENNE",0))return 0;
+    mpz_t arithmetic;mpz_init(arithmetic);words_to_mpz(arithmetic,C.hn.data(),C.nw);
+    const int bits=(int)mpz_sizeinbase(arithmetic,2);
+    const int result=mpz_popcount(arithmetic)==(mp_bitcnt_t)bits?bits:0;
+    mpz_clear(arithmetic);return result;
+}
+
 bool affine_x_gmp_checked(mpz_t out,const mpz_t X,const mpz_t Z,const mpz_t N)
 {
     if (mpz_cmp_ui(Z, 0) == 0 || (mpz_cmp(Z,N)>=0 && mpz_divisible_p(Z,N))) {
@@ -209,8 +218,14 @@ bool S3Workspace::need_giant_base(unsigned long long d,mpz_srcptr modulus)
     if(!giant_base){CK(cudaMalloc(&giant_base,16*nw));bytes+=16*nw;}
     {
         need_pts(1);CK(stage2_wait::copy(djs,&d,8,cudaMemcpyHostToDevice));
-        S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
-                     djs,giant_base,giant_base+nw,false);
+        if(seed_coop_tpi() && nw>128 && nw<=256) {
+            ecm_launch_s2g_coop_ladder_kernel(EcmCudaLaunch{1,64},dn,C->ninv,(int)nw,dqx,dqz,da24,dmone,
+                djs,1,point_mersenne_bits(*C),false,giant_base,giant_base+nw);
+            g_giant_seed.base_cooperative_tpi=32;
+        } else {
+            S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
+                         djs,giant_base,giant_base+nw,false);
+        }
         CK(cudaGetLastError());++ladder_calls;++ladder_points_total;
         std::vector<unsigned long long> z(nw);
         CK(stage2_wait::copy(z.data(),giant_base+nw,8*nw,cudaMemcpyDeviceToHost));
@@ -381,8 +396,19 @@ bool giant_chunk_chain(
         ladder_fallback=wide_tail && !paired;
         if(!ladder_fallback) {
         if(paired) {
-            S2G_DISPATCH((int)nw,s2g_launch_seed_pair,(int)nw,clo,npts,per_block,blocks,
-                         W.dn,C.ninv,W.giant_base,W.giant_base+nw,W.da24,W.dmone,W.dx,W.dz);
+            if(seed_coop_tpi() && nw>128 && nw<=256) {
+                const int mersenne_bits=point_mersenne_bits(C);
+                for(unsigned long long offset=0;offset<blocks;offset+=g_ladder_cap) {
+                    const auto count=std::min(blocks-offset,(unsigned long long)g_ladder_cap);
+                    ecm_launch_s2g_coop_seed_pair_kernel(EcmCudaLaunch{unsigned((count*32+63)/64),64},W.dn,C.ninv,(int)nw,
+                        W.giant_base,W.giant_base+nw,W.da24,W.dmone,clo,npts,per_block,blocks,offset,count,
+                        mersenne_bits,W.dx,W.dz);
+                }
+                g_giant_seed.seed_cooperative_tpi=32;
+            } else {
+                S2G_DISPATCH((int)nw,s2g_launch_seed_pair,(int)nw,clo,npts,per_block,blocks,
+                             W.dn,C.ninv,W.giant_base,W.giant_base+nw,W.da24,W.dmone,W.dx,W.dz);
+            }
             ++g_giant_seed.paired_chunks;g_giant_seed.paired_ladders+=blocks;
             g_giant_seed.scalar_h2d_avoided+=js.size()*8;
         } else {
@@ -668,15 +694,7 @@ bool device_baby_generate(
     CK(stage2_wait::copy(dj.ptr,indices.data(),n*8,cudaMemcpyHostToDevice));
     if(baby_coop_tpi() && w>128 && w<=256) {
         st.cooperative_tpi=32;
-        int mersenne_bits=0;
-        if(fuse_env_ull("NTT_POINT_MERSENNE",0)) {
-            // N below is the GCD target; identify the actual arithmetic modulus
-            // from C.hn so a carrier is never classified by its smaller cofactor.
-            mpz_t arithmetic;mpz_init(arithmetic);words_to_mpz(arithmetic,C.hn.data(),w);
-            const int bits=(int)mpz_sizeinbase(arithmetic,2);
-            if(mpz_popcount(arithmetic)==(mp_bitcnt_t)bits)mersenne_bits=bits;
-            mpz_clear(arithmetic);
-        }
+        const int mersenne_bits=point_mersenne_bits(C);
         for(size_t first=0;first<n;first+=(size_t)g_ladder_cap) {
             const int count=(int)std::min(n-first,(size_t)g_ladder_cap);
             const unsigned int threads=64,grid=(unsigned int)(((size_t)count*32+threads-1)/threads);

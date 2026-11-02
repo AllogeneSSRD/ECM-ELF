@@ -712,8 +712,9 @@ int run_real(
                     g_giant_seed.avoided_d2h_bytes,g_giant_seed.avoided_h2d_bytes,g_giant_seed.avoided_cpu_modmuls,
                     g_giant_seed.avoided_montmuls,g_giant_seed.checked_words,g_giant_seed.segments,
                     g_giant_seed.segment_checks,g_giant_seed.segment_fix_muls,g_giant_seed.fix_table_peak_bytes);
-        stage2_log::print(stage2_log::debug, "real_giant_seed_pair: requested=%d base_builds=%llu base_nonunits=%llu chunks=%llu paired_ladders=%llu scalar_h2d_avoided=%llu base_d2h_bytes=%llu\n",
-                    (int)g_giant_seed_pair,g_giant_seed.base_builds,g_giant_seed.base_nonunits,
+        stage2_log::print(stage2_log::debug, "real_giant_seed_pair: requested=%d seed_backend=%u base_backend=%u base_builds=%llu base_nonunits=%llu chunks=%llu paired_ladders=%llu scalar_h2d_avoided=%llu base_d2h_bytes=%llu\n",
+                    (int)g_giant_seed_pair,g_giant_seed.seed_cooperative_tpi,g_giant_seed.base_cooperative_tpi,
+                    g_giant_seed.base_builds,g_giant_seed.base_nonunits,
                     g_giant_seed.paired_chunks,g_giant_seed.paired_ladders,
                     g_giant_seed.scalar_h2d_avoided,g_giant_seed.base_d2h_bytes);
         stage2_log::print(stage2_log::phases, "real_giant_base: cpu_requested=%d cpu_builds=%llu gpu_builds=%llu h2d_bytes=%llu checked_words=%llu cpu_seconds=%.6f build_seconds=%.6f\n",

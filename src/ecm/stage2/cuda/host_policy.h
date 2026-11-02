@@ -8,7 +8,7 @@ struct HostWaitDefaults {bool present,value;};
 void configure_host_wait(Options &o,const HostWaitDefaults *defaults=nullptr);
 void configure_groot_experiment(Options &o);
 void configure_giant_policy(Options &o);
-struct PointBackendDefaults {bool baby_present,giant_present;std::string baby,giant;};
+struct PointBackendDefaults {bool baby_present,giant_present;std::string baby,giant;bool seed_present=false;std::string seed="scalar";};
 void configure_point_backends(Options &o,const PointBackendDefaults *defaults=nullptr);
 void apply_point_backends(const Options &o);
 }

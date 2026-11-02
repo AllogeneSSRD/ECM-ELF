@@ -62,6 +62,8 @@ stage2_tune_profile = "stage2_gpu1.toml"
 
 `stage2_b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
 
+CUDA还可在同一配置节设置`stage2_seed_backend="coop32"`，或使用`--seed-backend coop32`，将8193…16384实际算术bits的paired seed及GPU构建[D]Q交给TPI32；默认scalar，其他位宽保持标量。该选项独立于baby／giant链auto，尚不自动探测；ECM性能文件按策略隔离，已有NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.md#stage2_seed_backend)与[成本身份](../architecture/AUTO_B2.md#giant-seed的固定协作策略)。
+
 ## 直接读档
 
 基本参数为 `--save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；具体名字以当前 `--help` 为准。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 开启共享诊断层的附加分解，优先本地 PARI DLL，备选外部 GP，不自动使用 GMP。原始因子先发布，附加诊断未完成不改变成功状态；仅完整且全部已证素才标为分解完成。内部结果保留后端、概率素性及余因子，详见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。

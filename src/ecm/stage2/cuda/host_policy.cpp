@@ -12,7 +12,8 @@ namespace s2prod {
 void apply_point_backends(const Options &o) {
 #ifndef ECM_STAGE2_OPENCL
     if(_putenv_s("NTT_BABY_COOP",std::to_string(o.selected_baby_coop).c_str()) ||
-       _putenv_s("NTT_GIANT_COOP",std::to_string(o.selected_giant_coop).c_str()))
+       _putenv_s("NTT_GIANT_COOP",std::to_string(o.selected_giant_coop).c_str()) ||
+       _putenv_s("NTT_GIANT_SEED_COOP",std::to_string(o.selected_seed_coop).c_str()))
         throw std::runtime_error("cannot configure Stage2 point backends");
 #else
     (void)o;
@@ -38,13 +39,23 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
             o.giant_backend=ecm_stage2::point_backend_name(unsigned(std::stoul(value)));
         }
     }
+    if(!o.portable_cli.count("--seed-backend")) {
+        if(defaults && defaults->seed_present)o.seed_backend=defaults->seed;
+        else if(overrides&4) {
+            const std::string value=std::getenv("NTT_GIANT_SEED_COOP");
+            if(value!="0" && value!="32")throw std::runtime_error("NTT_GIANT_SEED_COOP must be 0 or 32");
+            o.seed_backend=value=="32"?"coop32":"scalar";
+        }
+    }
+
 #endif
     const auto baby=ecm_stage2::baby_backend(o.baby_backend);
     o.selected_baby_coop=baby<0?0:unsigned(baby);
     const auto giant=ecm_stage2::giant_backend(o.giant_backend);
     o.selected_giant_coop=giant<0?0:unsigned(giant);
+    o.selected_seed_coop=ecm_stage2::seed_backend(o.seed_backend);
 #ifdef ECM_STAGE2_OPENCL
-    if(o.selected_baby_coop || o.selected_giant_coop)throw std::runtime_error("cooperative point backends are CUDA-only");
+    if(o.selected_baby_coop || o.selected_giant_coop || o.selected_seed_coop)throw std::runtime_error("cooperative point backends are CUDA-only");
 #endif
     apply_point_backends(o);
 }

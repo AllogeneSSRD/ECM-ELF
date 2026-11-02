@@ -728,6 +728,7 @@ int mont_selftest(
     stage2_log::print(stage2_log::debug,"giant_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=%d\n",
         coop_tpi,(int)coop_enabled,(unsigned long long)nw,64*s2g_coop_capacity_words((int)nw,coop_tpi));
     const bool baby_enabled=baby_coop_tpi() && nw>128 && nw<=256;
+    const bool seed_enabled=seed_coop_tpi() && nw>128 && nw<=256;
     stage2_log::print(stage2_log::debug,"baby_coop_mode: requested=%d eligible=%d nw=%llu capacity_bits=%d\n",
         baby_coop_tpi(),(int)baby_enabled,(unsigned long long)nw,64*s2g_coop_capacity_words((int)nw,32));
     const int cases = 2048;
@@ -778,7 +779,7 @@ int mont_selftest(
     }
     unsigned long long coop_bad=0;
     for(int tested_tpi:{16,32}) {
-        if(!(coop_enabled && coop_tpi==tested_tpi) && !(baby_enabled && tested_tpi==32))continue;
+        if(!(coop_enabled && coop_tpi==tested_tpi) && !((baby_enabled || seed_enabled) && tested_tpi==32))continue;
         unsigned long long local_bad=0;
         constexpr int cooperative_cases=64;
         for(int square=0;square<2;++square) {

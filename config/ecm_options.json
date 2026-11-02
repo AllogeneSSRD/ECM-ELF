@@ -1098,6 +1098,26 @@
     },
     {
       "owner": "stage2",
+      "type": "string",
+      "parser": "strict",
+      "key": "stage2_seed_backend",
+      "field": "seed_backend",
+      "present": "has_seed_backend",
+      "default": "scalar",
+      "domain": "[scalar|coop32]",
+      "fx": "giant_seed_arithmetic",
+      "description": [
+        "Giant paired-seed and GPU [D]Q arithmetic: scalar preserves the default; coop32 uses width-matched cooperative containers for CUDA arithmetic widths 8193..16384 bits. It keeps the same coordinates, buffers and nonunit fallback; other widths remain scalar. This is a fixed policy, independent of baby/giant-chain auto selection. ECM tune observations are isolated by seed policy even when environment matching is ignored; NTT tables remain reusable. CLI --seed-backend overrides this worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL accepts scalar only.",
+        "Giant相邻seed及GPU构建[D]Q的算术：默认scalar；coop32对CUDA实际算术8193..16384 bits使用按位宽分档的协作容器，其他位宽仍为标量。保持相同坐标、缓冲及非单位回退。这是独立于baby／giant链auto的固定策略；ECM调优始终按seed策略隔离，即使忽略environment也不合并，NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL仅支持scalar。"
+      ],
+      "values": [
+        "scalar",
+        "coop32"
+      ],
+      "parser_override": "enum"
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_groot_balanced",
       "field": "groot_balanced",
       "type": "bool|string",
@@ -1141,8 +1161,8 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-          "For each runtime candidate D and arithmetic, increase B2 to the smallest whole-P giant count whose last point chunk can use a chain. Runtime tuning includes that candidate's actual work; measurements remain keyed by actual B2. Logs/results keep requested and actual B2. Default 0 preserves bounds. Overflow, live memory and the AutoB2 maximum remain hard limits. Startup cost probes keep fixed bounds; explicit ECM calibration still requires rounding off. CLI --b2-round-chain overrides this worker TOML.",
-          "对各运行时D及算术候选，将B2向上补到最小整P点数且尾块可走chain；自动调优按各候选实际工作量比较，实测仍按实际B2分开存储。日志与结果分别保留请求和实际B2。默认0保持界限；整数、实时显存及AutoB2上限仍为硬限制。启动成本探测固定边界，显式ECM标定仍须关闭凑整。CLI --b2-round-chain覆盖当前worker配置。"
+        "For each runtime candidate D and arithmetic, increase B2 to the smallest whole-P giant count whose last point chunk can use a chain. Runtime tuning includes that candidate's actual work; measurements remain keyed by actual B2. Logs/results keep requested and actual B2. Default 0 preserves bounds. Overflow, live memory and the AutoB2 maximum remain hard limits. Startup cost probes keep fixed bounds; explicit ECM calibration still requires rounding off. CLI --b2-round-chain overrides this worker TOML.",
+        "对各运行时D及算术候选，将B2向上补到最小整P点数且尾块可走chain；自动调优按各候选实际工作量比较，实测仍按实际B2分开存储。日志与结果分别保留请求和实际B2。默认0保持界限；整数、实时显存及AutoB2上限仍为硬限制。启动成本探测固定边界，显式ECM标定仍须关闭凑整。CLI --b2-round-chain覆盖当前worker配置。"
       ]
     },
     {
@@ -1419,8 +1439,8 @@
       "parser": "strict",
       "empty": "legacy_selection",
       "description": [
-          "ECM tune matrix TOML. Set a different path in each [workers.N.stage2] to keep GPU timing files independent; relative paths resolve beside ecm.toml. CLI --tune-profile takes priority. Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne data remain independent. B1 never gates reuse. Missing data permits the basic model. Empty selects stage2_ecm_tune.toml beside ecm.toml unless a legacy cost profile is supplied.",
-          "ECM调优矩阵TOML。可在各[workers.N.stage2]填写不同路径，让多GPU分别读取并更新自己的性能文件；相对路径以ecm.toml所在目录为基准，CLI --tune-profile优先。按arithmetic_bits分别查询通用、梅森算术；B1不作为复用门槛，缺数据可使用基础模型。留空且未指定旧成本配置时使用ecm.toml旁的stage2_ecm_tune.toml。"
+        "ECM tune matrix TOML. Set a different path in each [workers.N.stage2] to keep GPU timing files independent; relative paths resolve beside ecm.toml. CLI --tune-profile takes priority. Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne data remain independent. B1 never gates reuse. Missing data permits the basic model. Empty selects stage2_ecm_tune.toml beside ecm.toml unless a legacy cost profile is supplied.",
+        "ECM调优矩阵TOML。可在各[workers.N.stage2]填写不同路径，让多GPU分别读取并更新自己的性能文件；相对路径以ecm.toml所在目录为基准，CLI --tune-profile优先。按arithmetic_bits分别查询通用、梅森算术；B1不作为复用门槛，缺数据可使用基础模型。留空且未指定旧成本配置时使用ecm.toml旁的stage2_ecm_tune.toml。"
       ]
     },
     {
