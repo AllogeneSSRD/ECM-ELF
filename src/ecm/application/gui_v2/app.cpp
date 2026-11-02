@@ -126,8 +126,8 @@ void App::configure_workers() {
     workers.graceful_stop_ms = static_cast<unsigned long long>(settings.graceful_stop_ms);
     controller.configure(workers); controller.suppress_autostart();
     worker_b2_ratios_.clear();
-    for(const auto& worker:controller.workers())for(const auto& entry:ecm_config::cli_entries(config.lines(),worker.index))if(entry.first=="b2_ratio")
-        worker_b2_ratios_[worker.index]=ecm_config::read_stage2(ecm_config::Entries{entry}).b2_ratio;
+    for(const auto& worker:controller.workers())for(const auto& entry:ecm_config::preview_entries(config.lines(),worker.index))if(entry.first=="b2_ratio")
+        worker_b2_ratios_[worker.index]=ecmgui::preview_stage2(ecm_config::Entries{entry}).b2_ratio;
     std::snprintf(stage1_input, sizeof(stage1_input), "%s", workers.worker_exe.c_str());
     std::snprintf(stage2_input, sizeof(stage2_input), "%s", workers.stage2_exe.c_str());
 }

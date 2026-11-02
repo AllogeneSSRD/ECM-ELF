@@ -41,15 +41,36 @@ int main(int argc,char** argv) {
         config.set("workers.2.stage2","stage2_giant_backend","coop16");
         std::string error;if(!config.save(error))throw std::runtime_error(error);
         ecmgui::TomlFile loaded;if(!loaded.load(path.u8string(),error))throw std::runtime_error(error);
-        const auto first=ecm_config::read_stage2(ecm_config::cli_entries(loaded.lines(),1));
-        const auto second=ecm_config::read_stage2(ecm_config::cli_entries(loaded.lines(),2));
+        const auto first=ecm_config::read_stage2(ecm_config::preview_entries(loaded.lines(),1));
+        const auto second=ecm_config::read_stage2(ecm_config::preview_entries(loaded.lines(),2));
         require(first.baby_backend=="auto" && first.giant_backend=="auto" && second.giant_backend=="coop16" && first.groot_balanced=="auto" && first.b2_round_chain,
                 "Stage2 options changed during GUI edit/save/reload");
         require(first.tune_profile=="profiles/gpu0.toml" && second.tune_profile=="profiles/gpu1.toml","worker profile overrides lost");
+        const auto future=out/"future-compute.toml";
+        {std::ofstream f(future);f<<"[gui]\nNumWorkers=2\n[stage1]\nfuture_stage1=true\ncurve=\"future\"\n"
+            "[stage2]\nfuture_stage2=7\nstage2_giant_backend=\"future\"\n[workers.2.stage2]\nfuture_worker_value=42\n";}
+        if(!loaded.load(future.u8string(),error))throw std::runtime_error("GUI rejected another executable's parameters: "+error);
         const auto invalid=out/"wrong-table.toml";
         {std::ofstream f(invalid);f<<"[workers.1.stage1]\nstage2_tune_profile=\"profiles/gpu0.toml\"\n";}
-        require(!loaded.load(invalid.u8string(),error) && error.find("stage2_tune_profile")!=error.npos,
-                "misplaced Stage2 key accepted or unexplained");
+        require(loaded.load(invalid.u8string(),error),"GUI must defer a misplaced compute key to its worker");
+        std::vector<ecm_config::TomlLine> strict;
+        bool rejected=false;
+        try { ecm_config::read_toml(invalid.u8string(),strict,ecm_config::TomlReadMode::Stage1); }
+        catch(const std::exception& e) { rejected=std::string(e.what()).find("stage2_tune_profile")!=std::string::npos; }
+        require(rejected,"Stage1 must reject a misplaced key in its own table");
+        require(loaded.load(future.u8string(),error),"future config reload failed");
+        const auto preview=ecmgui::preview_stage2(ecm_config::preview_entries(loaded.lines(),2));
+        require(preview.giant_backend=="auto","unsupported compute enum blocked GUI preview");
+        loaded.set_int("gui","NumWorkers",3);require(loaded.save(error),"GUI save failed");
+        std::ifstream saved(future);const std::string body((std::istreambuf_iterator<char>(saved)),{});
+        require(body.find("future_stage1=true")!=body.npos && body.find("stage2_giant_backend=\"future\"")!=body.npos &&
+                body.find("future_worker_value=42")!=body.npos,"GUI save removed or rewrote deferred parameters");
+        const auto own=out/"invalid-owned.toml";
+        for(const auto* input:{"[shared]\nb2_ratio=-1\n","[gui]\nNumWorkers=\"future\"\n","[workers.2]\nfuture_owned_key=true\n"}) {
+            {std::ofstream f(own);f<<input;}
+            require(!loaded.load(own.u8string(),error) && error.find("INPUT[config]")!=error.npos,
+                    "GUI silently defaulted an invalid shared/owned field");
+        }
         std::cout<<"GUI identity and current Stage2 configuration: PASS; compute_started=0\n";
     } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

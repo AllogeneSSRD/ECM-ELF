@@ -1,4 +1,5 @@
 #include "results.h"
+#include "toml_file.h"
 #include "io/json.h"
 #include <algorithm>
 #include <cctype>
@@ -84,9 +85,9 @@ std::vector<std::string> result_paths(const std::vector<ecm_config::TomlLine> &l
     std::vector<std::string> paths;std::set<std::string> seen;
     const auto base=fs::u8path(normalized_path(config_path)).parent_path();
     for(int worker=1;worker<=workers;++worker) {
-        const auto entries=ecm_config::cli_entries(lines,worker);
-        const auto first=ecm_config::read_stage1(entries);
-        const auto second=ecm_config::read_stage2(entries);
+        const auto entries=ecm_config::preview_entries(lines,worker);
+        const auto first=ecmgui::preview_stage1(entries);
+        const auto second=ecmgui::preview_stage2(entries);
         for(const auto &name:{first.has_submission?first.submission:ecm_config::worker_file(first.submission,worker),
                              second.has_submission?second.submission:ecm_config::worker_file(second.submission,worker)}) {
             if(name.empty())throw std::runtime_error("empty submission path");

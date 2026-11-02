@@ -14,13 +14,13 @@ Stage1、Stage2 和 GUI 共用 `ecm.toml`。字符串须加引号；布尔键支
 - `[workers.N]`: GUI settings for worker N (1..1000000). / 第 N 个 GUI worker 的设置。
 - `[workers.N.shared]`, `[workers.N.stage1]`, `[workers.N.stage2]`: worker overrides for the matching table. / 对应分区的 worker 覆盖。
 
-Precedence: built-in default < global table < matching worker table < CLI. A key may appear only once in a table; unknown tables, duplicate keys and invalid TOML values are errors. `worktodo.txt` retains its separate `[Worker #N]` queue sections. INI files are not read.
+Precedence: built-in default < global table < matching worker table < CLI. Duplicate keys/tables, unknown tables, missing values and unclosed strings are errors. Schema validation is scoped to each consumer. `worktodo.txt` retains its separate `[Worker #N]` sections. INI files are not read.
 
-优先级：内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。同一分区中的键不能重复；未知分区、重复键和无效 TOML 值会报错。`worktodo.txt` 继续使用独立的 `[Worker #N]` 队列分区。程序不读取 INI。
+优先级：内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。重复键或表、未知分区、缺失值及未闭合字符串会报错；schema校验按程序职责分开。`worktodo.txt` 继续使用独立的 `[Worker #N]` 分区。程序不读取 INI。
 
-Compute programs skip GUI-only values in `[gui]` and `[workers.N]`, warning about unknown keys in those tables. The exception is `gui.NumWorkers`: it remains validated and available as the Stage1 routing fallback when a destination queue has no worker sections. Unknown compute keys/tables, invalid compute types, malformed TOML and duplicate keys are still errors. GUI readers retain strict schema validation. This compatibility boundary does not permit arbitrary unknown tables or unsupported TOML value syntax.
+Stage1 checks shared/Stage1 settings; Stage2 checks shared/Stage2 settings. Foreign stage keys, enums and types are deferred without warnings, including worker overrides. Stage1 still checks gui.NumWorkers for routing and receiver paths when handing off work. Stage2 checks only legacy Stage1 defaults it actually inherits (device/tmp_dir/verbose/lcm/finished); explicit Stage2/CLI overrides bypass unused defaults. GUI checks shared/GUI/worker settings, preserves Stage1/Stage2 lines and previews recognized compute values best-effort; only a deliberately edited field is validated when editing. Workers receive the original file and validate their own settings. Details: [configuration ownership](architecture/CONFIGURATION.md#按程序职责读取).
 
-计算程序跳过 `[gui]` 和 `[workers.N]` 中的纯界面值，对其中未知键给出警告。例外是 `gui.NumWorkers`：目标队列没有 worker 分区时，Stage1 分发用它作为后备数量，仍保留并校验。计算键和分区未知、计算值类型错误、TOML 语法错误和重复键仍拒绝；GUI 读取器继续严格校验 schema。兼容范围不包括任意未知分区或尚不支持的 TOML 值语法。
+Stage1校验shared／Stage1，Stage2校验shared／Stage2；另一阶段的新键、未知枚举及类型变化连同worker覆盖原样保留，不刷警告。Stage1仍校验路由用的gui.NumWorkers，移交时只读取接收路径。Stage2只校验实际继承的Stage1旧默认值device／tmp_dir／verbose／lcm／finished；已有Stage2或CLI覆盖时跳过无用默认。GUI校验shared／GUI／worker设置，保留Stage1／Stage2原行，计算预览仅尽力解析认识的值；编辑时只校验本次修改项。worker读取原配置，自行校验本阶段参数。详见[配置读取职责](architecture/CONFIGURATION.md#按程序职责读取)。
 
 The shared worktodo path and Stage2 relative paths use the TOML directory; other Stage1 relative paths use the executable directory. CLI relative paths use the current directory.
 

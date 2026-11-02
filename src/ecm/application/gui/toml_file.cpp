@@ -36,7 +36,23 @@ bool replace_file_atomic(const std::string &tmp, const std::string &dst, std::st
 bool TomlFile::load(const std::string &path, std::string &err) {
     path_=path;lines_.clear();loaded_=false;dirty_=false;
     try {
-        if(!ecm_config::read_toml(path,lines_)){err="cannot open "+path;return false;}
+        if(!ecm_config::read_toml(path,lines_,ecm_config::TomlReadMode::Gui)){err="cannot open "+path;return false;}
+        // Only foreign computation is advisory. Keep the generated validation
+        // and normalization for owned fields, especially shared queue settings.
+        for(const auto& line:lines_)if(line.kind==Line::Kind::KeyValue && !line.deferred) {
+            try {
+                const ecm_config::Entries entry{{line.key,line.value}};
+                if(line.section=="gui")ecm_config::read_gui(entry);
+                else if(line.worker_scope>0 && line.section=="workers."+std::to_string(line.worker_scope))
+                    ecm_config::read_worker(entry);
+                else { ecm_config::read_stage1(entry);ecm_config::read_stage2(entry); }
+            } catch(const std::exception& e) {
+                const auto* meta=ecm_config::toml_option(line.section,line.key);
+                throw std::runtime_error(ecm_config::config_diagnostic(path,line.line_number,line.worker_scope,
+                    line.key,ecm_config::trim(line.raw.substr(line.raw.find('=')+1)),e.what(),
+                    std::string(meta->type)+" "+meta->domain));
+            }
+        }
     } catch(const std::exception &e) {err=e.what();return false;}
     loaded_=true;return true;
 }

@@ -7,23 +7,15 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
     try {
         parsed = ParsedConfig{};
         parsed.path = path;
-        std::vector<std::string> ignored_gui;
-        if (!ecm_config::read_toml(path, parsed.lines, ecm_config::TomlReadMode::Computation,
-                                   &ignored_gui))
+        if (!ecm_config::read_toml(path, parsed.lines, ecm_config::TomlReadMode::Stage1))
             return false;
-        for (const auto& key : ignored_gui)
-            std::fprintf(stderr, "[ecm] WARNING: ignoring unknown GUI-only TOML key: %s\n",
-                         key.c_str());
         for (const auto& line : parsed.lines)
-            if (line.kind == ecm_config::TomlLine::Kind::KeyValue) {
+            if (line.kind == ecm_config::TomlLine::Kind::KeyValue && !line.deferred) {
                 const auto* meta = ecm_config::toml_option(line.section, line.key);
                 try {
                     ecm_config::Stage1Values scratch;
                     ecm_config::apply(scratch, {{line.key, line.value}},
                                       ecm_config::stage1_bindings);
-                    ecm_config::Stage2Values stage2_scratch;
-                    ecm_config::apply(stage2_scratch, {{line.key, line.value}},
-                                      ecm_config::stage2_bindings);
                     ecm_stage1::Selection s;
                     std::vector<unsigned> affinity;
                     bool valid = true;
@@ -139,16 +131,26 @@ bool ecm_queue_config_load(const std::string& path, EcmQueueConfig& cfg) {
     return ecm_queue_config_load(path, 1, cfg);
 }
 
-bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& cfg) {
-    ParsedConfig parsed;
-    if (!read_config(path, parsed))
-        return false;
+bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& cfg,
+                           const std::vector<const char*>& inherited_fields) {
     try {
-        project_stage1_config(parsed, worker, cfg);
+        std::vector<ecm_config::TomlLine> lines;
+        if(!ecm_config::read_toml(path,lines,ecm_config::TomlReadMode::Stage2))return false;
+        // Stage2 still consumes these legacy defaults. Do not validate unrelated
+        // Stage1 arithmetic just to inherit device, paths and scalar convention.
+        std::vector<const char*> fields={"b2_ratio","priority","skip","worktodo"};
+        fields.insert(fields.end(),inherited_fields.begin(),inherited_fields.end());
+        const auto entries=ecm_config::selected_entries(lines,worker,fields,path);
+        cfg=EcmQueueConfig{};
+        static_cast<ecm_config::Stage1Values&>(cfg)=ecm_config::read_stage1(entries);
+        if(cfg.device<0)throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"device",
+            std::to_string(cfg.device),"invalid inherited Stage1 device","integer >= 0"));
+        if(!ecm_stage1::parse_scalar_construction(cfg.scalar_construction,cfg.selection.scalar_construction))
+            throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"lcm",
+                cfg.scalar_construction,"invalid inherited Stage1 scalar convention","1|12"));
         return true;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s\n",
-                     ecm_config::config_diagnostic(path, 0, worker, {}, {}, e.what()).c_str());
+        std::fprintf(stderr, "%s\n", e.what());
         return false;
     }
 }

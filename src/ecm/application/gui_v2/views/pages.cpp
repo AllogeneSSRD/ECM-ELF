@@ -301,9 +301,10 @@ bool App::edit_business(const std::string& table,const std::string& key,const st
         if(type=="u64")ecm_config::unsigned_integer(value,key.c_str());
         if(type=="float"||type=="double"){double n=0;ecm_config::assign_value(n,value);}
         for(const auto& line:candidate.lines())if(line.kind==ecm_config::TomlLine::Kind::KeyValue&&line.section==table&&line.key==key){char kind=0;ecm_config::toml_value(line.raw.substr(line.raw.find('=')+1),kind);}
-        // Use the same generated assignment contracts as the unchanged GUI/worker.
-        ecm_config::read_stage1(ecm_config::cli_entries(candidate.lines(),ecm_config::toml_worker(table)));
-        ecm_config::read_stage2(ecm_config::cli_entries(candidate.lines(),ecm_config::toml_worker(table)));
+        // Validate this edit only. Another executable's future/invalid fields
+        // must not block saving an unrelated setting.
+        ecm_config::read_stage1(ecm_config::Entries{{key,value}});
+        ecm_config::read_stage2(ecm_config::Entries{{key,value}});
         config=std::move(candidate);gen_valid=false;status="Unsaved workflow edit";return true;
     }catch(const std::exception& error){status=error.what();return false;}
 }

@@ -307,8 +307,8 @@ bool App::select_workflow_ini(const std::string &path) {
     try {
         const auto gui=ecm_config::read_gui(ecm_config::section_entries(selected.lines(),"gui"));
         for(int i=1;i<=gui.NumWorkers;++i) {
-            const auto entries=ecm_config::cli_entries(selected.lines(),i,true);
-            ecm_config::read_stage1(entries);ecm_config::read_stage2(entries);
+            const auto entries=ecm_config::preview_entries(selected.lines(),i,true);
+            ecmgui::preview_stage1(entries);ecmgui::preview_stage2(entries);
         }
         capture_layout();if(!ini_.save(error)){status_=error;return false;}
         if(selected.has("gui","exe"))worker_exe_=gui.exe;
@@ -2480,8 +2480,8 @@ void App::draw_worker_panes() {
         ImGui::SameLine();
         if (ImGui::SmallButton((loc_.t("workers", "open_saves") + "##" +
                                 std::to_string(w.index)).c_str())) {
-            const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(ini_.lines(),w.index,true));
-            const auto save_dir=w.stage2?path_resolve(path_dir(ini_path_),settings.save_dir.empty()?ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),w.index,true)).tmp_dir:settings.save_dir):w.working_dir;
+            const auto settings=ecmgui::preview_stage2(ecm_config::preview_entries(ini_.lines(),w.index,true));
+            const auto save_dir=w.stage2?path_resolve(path_dir(ini_path_),settings.save_dir.empty()?ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),w.index,true)).tmp_dir:settings.save_dir):w.working_dir;
             open_in_explorer(save_dir);
         }
         ImGui::SameLine();

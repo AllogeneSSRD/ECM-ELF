@@ -1,5 +1,6 @@
 #include "../../src/ecm/application/configuration/generated/ecm_config_generated.h"
 #include "../../src/ecm/application/gui/toml_file.h"
+#include "../../src/io/config.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -70,6 +71,56 @@ static size_t boolean_aliases(const std::filesystem::path &path) {
     }
     expect(checks>0,"schema has no boolean options");return checks;
 }
+static void role_isolation(const std::filesystem::path& path) {
+    using Mode=ecm_config::TomlReadMode;
+    std::vector<ecm_config::TomlLine> lines;
+    for(const auto& table:{"stage2","workers.2.stage2"}) {
+        write(path,"[shared]\nworktodo=\"queue.txt\"\n["+std::string(table)+
+            "]\nfuture_key=[\"a\",\"b\"]\nstage2_giant_backend=42\nstage2_finished=\"receiver.finished\"\n");
+        ParsedConfig parsed;expect(read_config(path.string(),parsed),"Stage1 validated foreign Stage2");
+        expect(ecm_config::read_stage1(ecm_config::cli_entries(parsed.lines,2)).worktodo=="queue.txt","shared routing lost");
+        const auto receiver=ecm_config::read_stage2(ecm_config::selected_entries(parsed.lines,2,
+            {"worktodo","stage2_finished"},path.string()));
+        expect(receiver.finished=="receiver.finished","Stage1 handoff lost receiver path");
+        rejected(path,"["+std::string(table)+"]\nfuture_key=1\n",Mode::Stage2);
+    }
+    for(const auto& table:{"stage1","workers.2.stage1"}) {
+        write(path,"[shared]\nworktodo=\"queue.txt\"\n["+std::string(table)+
+            "]\nfuture_key=true\ncurve=\"future\"\nsigma=\"future\"\n[gui]\nNumWorkers=\"future\"\n");
+        EcmQueueConfig inherited;
+        expect(ecm_queue_config_load(path.string(),2,inherited),"Stage2 compatibility loader validated foreign Stage1");
+        expect(inherited.worktodo=="queue.txt","Stage2 shared worktodo lost");
+        expect(ecm_config::read_toml(path.string(),lines,Mode::Stage2),"Stage2 parser rejected foreign table");
+        expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).worktodo=="queue.txt","Stage2 projection failed");
+        rejected(path,"["+std::string(table)+"]\nfuture_key=true\n",Mode::Stage1);
+    }
+    write(path,"[stage1]\ndevice=1\ntmp_dir=\"saves\"\nlcm=\"12\"\nfuture_key=true\n"
+        "[workers.2.stage1]\ndevice=0\n[workers.2.stage2]\nstage2_device=1\n");
+    EcmQueueConfig inherited;expect(ecm_queue_config_load(path.string(),2,inherited),"Stage2 inheritance failed");
+    expect(inherited.device==0 && inherited.tmp_dir=="saves" && inherited.scalar_construction=="12","Stage2 legacy defaults changed");
+    write(path,"[stage1]\ndevice=\"future\"\n[workers.2.stage1]\ndevice=1\n"
+        "[workers.3.stage1]\ndevice=\"future\"\n");
+    expect(ecm_queue_config_load(path.string(),2,inherited) && inherited.device==1,"unused foreign worker/default blocked inheritance");
+    write(path,"[stage2]\nstage2_giant_backend=\"future\"\n");
+    expect(ecm_config::read_toml(path.string(),lines,Mode::Stage2),"enum parse failed before consumer");
+    bool bad=false;try{ecm_config::read_stage2(ecm_config::cli_entries(lines,2));}catch(...){bad=true;}
+    expect(bad,"Stage2 accepted unknown own enum");
+    write(path,"[stage1]\ndevice=\"future\"\ncurve=\"future\"\nlcm=\"future\"\n");
+    ParsedConfig own_stage1;expect(!read_config(path.string(),own_stage1),"Stage1 ignored its own bad input");
+    expect(ecm_queue_config_load(path.string(),2,inherited,{}),"unused legacy defaults blocked Stage2");
+    for(auto mode:{Mode::Stage1,Mode::Stage2,Mode::Gui}) {
+        rejected(path,"[shared]\nfuture_shared=true\n",mode);
+        rejected(path,"[shared]\nworktodo=123\n",mode);
+        rejected(path,"[stage1]\nfuture_key=\"unterminated\n",mode);
+        rejected(path,"[stage2]\nfuture_key=1\nfuture_key=2\n",mode);
+    }
+    write(path,"[gui]\nNumWorkers=\"future\"\n");
+    ParsedConfig invalid_routing;expect(!read_config(path.string(),invalid_routing),"Stage1 routing count must remain checked");
+    write(path,"[stage2]\nstage2_finished=123\n");
+    ParsedConfig parsed;expect(read_config(path.string(),parsed),"unused receiver path blocked Stage1");
+    bad=false;try{ecm_config::selected_entries(parsed.lines,2,{"stage2_finished"},path.string());}catch(...){bad=true;}
+    expect(bad,"consumed Stage2 receiver path type was not checked");
+}
 int main(int argc,char **argv) {
     try {
         expect(argc==3,"usage: fixture DEFAULT_TOML TEMP_TOML");
@@ -91,6 +142,7 @@ int main(int argc,char **argv) {
                !defaults2.has_owner&&!defaults2.has_pack_zero,
                "template disabled an implicit worker or environment default");
         const std::filesystem::path temp=argv[2];
+        role_isolation(temp);
         const auto alias_checks=boolean_aliases(temp);
         for (const auto *value : {"\"auto\"", "true", "false", "1", "0"}) {
             write(temp, std::string("[stage2]\nstage2_groot_balanced=")+value+

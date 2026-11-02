@@ -513,7 +513,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         }
         const auto& lines = parsed_config.lines;
         const auto receiver_cfg =
-            ecm_config::read_stage2(ecm_config::cli_entries(lines, receiver, true));
+            ecm_config::read_stage2(ecm_config::selected_entries(lines, receiver, {"worktodo", "stage2_finished"}, ini));
         stage2cfg.worktodo =
             cfg.auto_stage2 ? auto_worktodo : resolve_rel_local(ini_dir, receiver_cfg.worktodo);
         stage2cfg.finished = resolve_rel_local(ini_dir, receiver_cfg.finished);
@@ -532,13 +532,13 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             }
             stage2cfg.configured_workers =
                 ecm_config::read_gui(ecm_config::section_entries(lines, "gui")).NumWorkers;
-            const auto global = ecm_config::read_stage2(ecm_config::cli_entries(lines, 0, true));
+            const auto global = ecm_config::read_stage2(ecm_config::selected_entries(lines, 0, {"worktodo", "stage2_finished"}, ini));
             stage2cfg.finished = resolve_rel_local(ini_dir, global.finished);
             for (const auto& entry : lines)
                 if (entry.worker_scope > 0 &&
                     !stage2cfg.finished_by_worker.count(entry.worker_scope)) {
                     const auto selected = ecm_config::read_stage2(
-                        ecm_config::cli_entries(lines, entry.worker_scope, true));
+                        ecm_config::selected_entries(lines, entry.worker_scope, {"worktodo", "stage2_finished"}, ini));
                     stage2cfg.finished_by_worker[entry.worker_scope] =
                         resolve_rel_local(ini_dir, selected.finished);
                 }

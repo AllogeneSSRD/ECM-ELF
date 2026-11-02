@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <regex>
 #include <set>
@@ -112,6 +113,7 @@ struct TomlLine {
     std::string raw, section, key, value;
     int worker_scope = 0;
     size_t line_number = 0;
+    bool deferred = false; // Owned by another executable; retain the source for editing/routing.
 };
 
 inline int toml_worker(const std::string& section) {
@@ -244,7 +246,51 @@ inline std::string toml_value(const std::string& source, char& kind) {
             result += c;
     return result;
 }
-enum class TomlReadMode { Strict, Computation };
+// Only the consuming executable enforces a key's schema type.
+inline std::string checked_toml_value(const std::string& source, const TomlOptionMeta& option) {
+    char kind = 0;
+    auto value = toml_value(source, kind);
+    const std::string type = option.type;
+    // Numeric aliases apply only to schema-declared booleans.
+    // Keep the source for editing/diagnostics; consumers receive the
+    // same canonical value as a literal true/false setting.
+    if ((type == "bool" || type == "bool|string") && kind == 'i') {
+        if (value == "1" || value == "+1")
+            value = "true";
+        else if (value == "0" || value == "+0" || value == "-0")
+            value = "false";
+        else
+            throw std::runtime_error(std::string("integer boolean must be 0 or 1 for ") + option.key);
+        kind = 'b';
+    }
+    const bool allowed =
+        (type == "string" && kind == 's') || (type == "bool" && kind == 'b') ||
+        (type == "bool|string" && (kind == 'b' || kind == 's')) ||
+        (type == "rect" && kind == 'a') ||
+        ((type == "int" || type == "u32" || type == "u64" || type == "i64") &&
+         kind == 'i') ||
+        ((type == "float" || type == "double") && (kind == 'i' || kind == 'f')) ||
+        ((type == "int|string" || type == "float|string") &&
+         (kind == 's' || kind == 'i' || kind == 'f'));
+    if (!allowed)
+        throw std::runtime_error(std::string("wrong TOML value type for ") + option.key);
+    return value;
+}
+
+enum class TomlReadMode { Strict, Computation, Stage1, Stage2, Gui };
+inline bool deferred_toml(TomlReadMode mode, const std::string& section, const std::string& key) {
+    auto table = section;
+    if(toml_worker(section)>0) {
+        const auto dot=section.find('.',8);
+        table=dot==section.npos?"workers":section.substr(dot+1);
+    }
+    if(mode==TomlReadMode::Stage1)
+        return table!="shared" && table!="stage1" && !(table=="gui" && key=="NumWorkers");
+    if(mode==TomlReadMode::Stage2)return table!="shared" && table!="stage2";
+    if(mode==TomlReadMode::Gui)return table!="shared" && table!="gui" && table!="workers";
+    return false;
+}
+
 
 inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
                       TomlReadMode mode = TomlReadMode::Strict,
@@ -320,34 +366,28 @@ inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
                     lines.push_back(std::move(l));
                     continue;
                 }
+                if (deferred_toml(mode, section, l.key)) {
+                    // Foreign enum/type extensions must not gate this program.
+                    // Decode supported scalars for optional previews; opaque values
+                    // remain verbatim. Missing values/unclosed strings still fail.
+                    l.deferred = true;
+                    char kind = 0;
+                    try { l.value = option ? checked_toml_value(t.substr(eq+1),*option) : toml_value(t.substr(eq+1),kind); }
+                    catch(const std::exception&) {
+                        try { l.value = toml_value(t.substr(eq+1),kind); }
+                        catch(const std::exception& e) {
+                            const std::string reason=e.what();
+                            if(reason=="unterminated TOML string" || reason=="missing TOML value")throw;
+                            l.value = diagnostic_value;
+                        }
+                    }
+                    l.kind = TomlLine::Kind::KeyValue;
+                    lines.push_back(std::move(l));
+                    continue;
+                }
                 if (!option)
                     throw std::runtime_error("unknown TOML key or invalid table: " + l.key);
-                char kind = 0;
-                l.value = toml_value(t.substr(eq + 1), kind);
-                const std::string type = option->type;
-                // Numeric aliases apply only to schema-declared booleans.
-                // Keep l.raw for editing/diagnostics; consumers receive the
-                // same canonical value as a literal true/false setting.
-                if ((type == "bool" || type == "bool|string") && kind == 'i') {
-                    if (l.value == "1" || l.value == "+1")
-                        l.value = "true";
-                    else if (l.value == "0" || l.value == "+0" || l.value == "-0")
-                        l.value = "false";
-                    else
-                        throw std::runtime_error("integer boolean must be 0 or 1 for " + l.key);
-                    kind = 'b';
-                }
-                const bool allowed =
-                    (type == "string" && kind == 's') || (type == "bool" && kind == 'b') ||
-                    (type == "bool|string" && (kind == 'b' || kind == 's')) ||
-                    (type == "rect" && kind == 'a') ||
-                    ((type == "int" || type == "u32" || type == "u64" || type == "i64") &&
-                     kind == 'i') ||
-                    ((type == "float" || type == "double") && (kind == 'i' || kind == 'f')) ||
-                    ((type == "int|string" || type == "float|string") &&
-                     (kind == 's' || kind == 'i' || kind == 'f'));
-                if (!allowed)
-                    throw std::runtime_error("wrong TOML value type for " + l.key);
+                l.value = checked_toml_value(t.substr(eq + 1), *option);
                 l.kind = TomlLine::Kind::KeyValue;
             }
         } catch (const std::exception& e) {
@@ -372,7 +412,7 @@ inline void replace_entry(Entries& values, std::string key, const std::string& v
 }
 
 inline Entries cli_entries(const std::vector<TomlLine>& lines, int worker,
-                           bool insensitive = false) {
+                           bool insensitive = false, bool preview = false) {
     Entries values;
     (void)insensitive;
     // The worker table follows its matching global table. Other tables cannot
@@ -389,9 +429,45 @@ inline Entries cli_entries(const std::vector<TomlLine>& lines, int worker,
             if (pass == 1 && (worker <= 0 || l.worker_scope != worker ||
                               l.section == "workers." + std::to_string(worker)))
                 continue;
-            replace_entry(values, l.key, l.value);
+            if(l.deferred) {
+                if(!preview)continue;
+                const auto* meta=toml_option(l.section,l.key);
+                if(!meta)continue;
+                try { replace_entry(values,l.key,checked_toml_value(l.raw.substr(l.raw.find('=')+1),*meta)); }
+                catch(const std::exception&) {} // Display defaults; the worker owns rejection.
+            } else replace_entry(values, l.key, l.value);
         }
     return values;
+}
+
+// A GUI preview is advisory. It neither validates nor rewrites computation input.
+inline Entries preview_entries(const std::vector<TomlLine>& lines, int worker, bool = false) {
+    return cli_entries(lines, worker, false, true);
+}
+
+// Stage1 handoff consumes only these requested receiver fields, not Stage2 arithmetic.
+inline Entries selected_entries(const std::vector<TomlLine>& lines, int worker,
+                                const std::vector<const char*>& keys, const std::string& path) {
+    std::vector<const TomlLine*> selected;
+    for(int pass=0;pass<2;++pass)for(const auto& l:lines) {
+        if(l.kind!=TomlLine::Kind::KeyValue ||
+           !std::any_of(keys.begin(),keys.end(),[&](const char* key){return l.key==key;}))continue;
+        if(pass==0 && l.section!="shared" && l.section!="stage1" && l.section!="stage2")continue;
+        if(pass==1 && (worker<=0 || l.worker_scope!=worker || l.section=="workers."+std::to_string(worker)))continue;
+        if(!toml_option(l.section,l.key))continue;
+        selected.erase(std::remove_if(selected.begin(),selected.end(),[&](const auto* prior){return prior->key==l.key;}),selected.end());
+        selected.push_back(&l);
+    }
+    Entries result;
+    for(const auto* line:selected) {
+        const auto& l=*line;const auto* meta=toml_option(l.section,l.key);
+        try { replace_entry(result,l.key,checked_toml_value(l.raw.substr(l.raw.find('=')+1),*meta)); }
+        catch(const std::exception& e) {
+            throw std::runtime_error(config_diagnostic(path,l.line_number,l.worker_scope,l.key,
+                trim(l.raw.substr(l.raw.find('=')+1)),e.what(),std::string(meta->type)+" "+meta->domain));
+        }
+    }
+    return result;
 }
 
 inline Entries section_entries(const std::vector<TomlLine>& lines, const std::string& section) {

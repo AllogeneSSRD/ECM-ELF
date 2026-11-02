@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--stage2', type=Path, required=True)
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--version', default='0.49.10')
+    parser.add_argument('--version', default='0.57.10')
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -65,20 +65,51 @@ def main():
         'unknown-worker': '[workers.1]\nfuture_label="GUI-only"\n',
         'routing-gui-extension': 'NumWorkers=3\nfuture_label="GUI-only"\n'
                                  '[stage1]\nauto_stage2=1\nauto_stage2_workers="auto"\n',
+        'routing-stage2-extension': 'NumWorkers=3\n[stage1]\nauto_stage2=1\nauto_stage2_workers="auto"\n'
+                                    '[stage2]\nfuture_stage2_key=123\nstage2_giant_backend="future"\n'
+                                    'stage2_finished="handoff.finished"\n[workers.2.stage2]\n'
+                                    'future_worker=7\nstage2_finished="worker2.finished"\n',
         'unknown-compute': '[stage1]\nfuture_compute_key=1\n',
+        'unknown-stage1-worker': '[workers.1.stage1]\nfuture_compute_key=1\n',
+        'stage1-enum': '[stage1]\ncurve="future"\n',
+        'unknown-stage2': '[stage2]\nfuture_stage2_key=1\n',
+        'unknown-stage2-worker': '[workers.1.stage2]\nfuture_stage2_key=1\n',
+        'stage2-enum': '[stage2]\nstage2_giant_backend="future"\n',
+        'stage2-type': '[stage2]\nstage2_giant_backend=42\n',
+        'unknown-shared': '[workers.1.shared]\nfuture_shared_key=1\n',
+        'overridden-device': '[stage1]\ndevice="future"\n[stage2]\nstage2_device=0\n',
+        'overridden-verbose': '[stage1]\nverbose="future"\n[stage2]\nstage2_log_level=1\n',
+        'overridden-lcm': '[stage1]\nlcm="future"\n',
         'compute-type': '[stage1]\ndevice="0"\n',
         'unknown-table': '[future_compute]\nvalue=1\n',
         'malformed-gui': 'future_label="unterminated\n',
         'duplicate-gui': 'future_label=true\nfuture_label=false\n',
         'routing-type': 'NumWorkers="3"\n',
     }
-    errors = {
-        'unknown-compute': 'unknown TOML key or invalid table: future_compute_key',
+    shared_errors = {
         'compute-type': 'wrong TOML value type for device',
+        'unknown-shared': 'unknown TOML key or invalid table: future_shared_key',
         'unknown-table': 'unknown or duplicate TOML table: future_compute',
         'malformed-gui': 'unterminated TOML string',
         'duplicate-gui': 'duplicate TOML key: future_label',
-        'routing-type': 'wrong TOML value type for NumWorkers',
+    }
+    errors = {
+        'stage1': dict(shared_errors, **{
+            'unknown-compute': 'unknown TOML key or invalid table: future_compute_key',
+            'unknown-stage1-worker': 'unknown TOML key or invalid table: future_compute_key',
+            'stage1-enum': 'value is outside the supported domain',
+            'routing-type': 'wrong TOML value type for NumWorkers',
+            'overridden-device': 'wrong TOML value type for device',
+            'overridden-verbose': 'wrong TOML value type for verbose',
+            'overridden-lcm': 'value is outside the supported domain',
+        }),
+        'stage2': dict(shared_errors, **{
+            'routing-stage2-extension': 'unknown TOML key or invalid table: future_stage2_key',
+            'unknown-stage2': 'unknown TOML key or invalid table: future_stage2_key',
+            'unknown-stage2-worker': 'unknown TOML key or invalid table: future_stage2_key',
+            'stage2-enum': 'stage2_giant_backend',
+            'stage2-type': 'wrong TOML value type for stage2_giant_backend',
+        }),
     }
     for name, profile in profiles.items():
         case = portable / name
@@ -90,21 +121,21 @@ def main():
         # Stage1 defaults already disable automatic handoff. Keep the section
         # available for the negative fixtures without creating duplicate tables.
         config.write_text('[shared]\nworktodo="worktodo.txt"\n'
-                          '[stage2]\nstage2_log_level=1\n'
                           '[gui]\n' + profile, encoding='utf-8')
         config_hash = sha256(config)
         for role, worker in workers.items():
-            code, text = run(role + '-' + name, worker,
-                             ['--config', str(config), '--worker', '1'])
-            if name in errors:
-                assert code != 0 and errors[name] in text, (role, name, code, text)
+            arguments=['--config', str(config), '--worker', '1']
+            if role=='stage2' and name=='overridden-lcm':arguments+=['--lcm','1']
+            code, text = run(role + '-' + name, worker, arguments)
+            if name in errors[role]:
+                assert code != 0 and errors[role][name] in text, (role, name, code, text)
             else:
                 assert code == 0, (role, name, code, text)
                 if name in {'unknown-gui', 'unknown-worker', 'routing-gui-extension'}:
-                    assert text.count('WARNING: ignoring unknown GUI-only TOML key:') == 1, (role, name, text)
+                    assert 'WARNING: ignoring unknown GUI-only TOML key:' not in text, (role, name, text)
                 if role == 'stage1':
                     assert '0 task(s) processed' in text, text
-                    if name == 'routing-gui-extension':
+                    if name in {'routing-gui-extension','routing-stage2-extension'}:
                         assert 'stage2_transfer: ready source_worker=1 receiver=auto' in text, text
                 else:
                     assert 'ECM-ELF ' + args.version + ' (Stage2)' in text, text

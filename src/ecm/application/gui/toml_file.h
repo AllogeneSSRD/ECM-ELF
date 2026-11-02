@@ -6,9 +6,29 @@
 
 #include <string>
 #include <vector>
-#include "../../../io/config_format.h"
+#include "../configuration/generated/ecm_config_generated.h"
 
 namespace ecmgui {
+
+// Computation previews are advisory. Reject only the field edited by the user;
+// unknown or invalid worker values stay in the TOML for its executable to check.
+template<class Values, size_t N>
+inline Values preview_values(const ecm_config::Entries& entries,
+                             const ecm_config::Binding<Values> (&bindings)[N]) {
+    Values result;
+    for(const auto& entry:entries) {
+        auto candidate=result;
+        try { ecm_config::apply(candidate,{entry},bindings);result=std::move(candidate); }
+        catch(const std::exception&) {}
+    }
+    return result;
+}
+inline ecm_config::Stage1Values preview_stage1(const ecm_config::Entries& entries) {
+    return preview_values(entries,ecm_config::stage1_bindings);
+}
+inline ecm_config::Stage2Values preview_stage2(const ecm_config::Entries& entries) {
+    return preview_values(entries,ecm_config::stage2_bindings);
+}
 
 class TomlFile {
 public:

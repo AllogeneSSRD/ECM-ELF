@@ -242,7 +242,7 @@ using Settings=ecm_config::Stage2Values;
 
 Settings stage2_ini(const fs::path &path,int worker) {
     std::vector<ecm_config::TomlLine> lines;
-    ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Computation);
+    ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Stage2);
     return ecm_config::read_stage2(ecm_config::cli_entries(lines,worker,true));
 }
 
@@ -373,10 +373,16 @@ int driver(Options o) {
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
-    EcmQueueConfig cfg;
-    if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && (!o.ini.empty() || fs::exists(ini)))
-        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
+    std::vector<const char*> inherited;
+    if(o.save.empty())inherited.push_back("finished"); // Queue collision protection.
+    if(o.device<0 && s.device<0)inherited.push_back("device");
+    if(s.save_dir.empty())inherited.push_back("tmp_dir");
+    if(o.log_level<0 && s.log_level<0)inherited.push_back("verbose");
+    if(!o.has_stage1_exponent)inherited.push_back("lcm");
+    EcmQueueConfig cfg;
+    if (!ecm_queue_config_load(ini.string(), o.worker, cfg, inherited) && (!o.ini.empty() || fs::exists(ini)))
+        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
     const PackZeroDefaults pack_defaults{s.has_pack_zero,s.pack_zero,s.cost_profile};
     configure_pack_zero(o,&pack_defaults);
     const HostWaitDefaults wait_defaults{s.has_low_cpu_wait,s.low_cpu_wait};

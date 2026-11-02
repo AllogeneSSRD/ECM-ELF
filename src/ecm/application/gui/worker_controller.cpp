@@ -187,7 +187,7 @@ std::string WorkerController::resolve_stage2_exe() const {
     return resolved_stage2_exe_;
 }
 bool WorkerController::worker_stage2(int worker_index) const {
-    const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),worker_index,true));
+    const auto cfg=ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),worker_index,true));
     const auto path=path_resolve(path_dir(ini_path_),cfg.worktodo);
     const auto task=queue_task(path,worker_index,cfg.worktodo_priority,cfg.worktodo_skip);
     return task.compare(0,10,"ECMSTAGE2=")==0;
@@ -211,8 +211,8 @@ WorkerView WorkerController::make_worker(int index) const {
         const auto token=w.name.find("{N}");
         if(token!=w.name.npos)w.name.replace(token,3,std::to_string(index));
     }
-    const auto entries=ecm_config::cli_entries(ini_.lines(),index,true);
-    const auto stage1=ecm_config::read_stage1(entries);
+    const auto entries=ecm_config::preview_entries(ini_.lines(),index,true);
+    const auto stage1=ecmgui::preview_stage1(entries);
     w.device=stage1.device;w.stage1_device=stage1.device;
     w.curve_model=stage1.curve_model;w.execution_target=stage1.execution_target;
     w.stage1_target=stage1.execution_target;w.gpu_param=stage1.gpu_param;
@@ -222,7 +222,7 @@ WorkerView WorkerController::make_worker(int index) const {
         ecm_config::worker_file(stage1.log_file,index):stage1.log_file;
     w.log_file=path_resolve(w.working_dir,log);
     if(w.stage2) {
-        const auto stage2=ecm_config::read_stage2(entries);
+        const auto stage2=ecmgui::preview_stage2(entries);
         w.execution_target="gpu";
         if(stage2.device>=0)w.device=stage2.device;
         w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
@@ -364,7 +364,7 @@ void WorkerController::tick() {
         if(d.stage2.valid) {
             w.stage2_status=d.stage2;
             if(d.last_start_line.empty() && (d.stage2_task_started || w.task.empty())) {
-                const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),w.index,true));
+                const auto cfg=ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),w.index,true));
                 w.task=queue_task(w.worktodo,w.index,cfg.worktodo_priority,cfg.worktodo_skip);
             }
         }
@@ -436,7 +436,7 @@ void WorkerController::tick() {
         }
         if(before!=WorkerRunState::QueueEmpty && w.proc->state()==WorkerRunState::QueueEmpty &&
            !w.stop_requested && exit_phase_==ExitPhase::Idle) {
-            const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),w.index,true));
+            const auto cfg=ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),w.index,true));
             const auto next=queue_task(w.worktodo,w.index,cfg.worktodo_priority,cfg.worktodo_skip);
             if(!next.empty() && (next.compare(0,10,"ECMSTAGE2=")==0)!=w.stage2) {
                 refresh_worker_for_queue(w);
@@ -457,7 +457,7 @@ std::string WorkerController::effective_config_text(int worker_index) const {
     std::set<std::string> keys;
     for(const auto &binding:ecm_config::stage1_bindings)keys.insert(binding.key);
     for(const auto &binding:ecm_config::stage2_bindings)keys.insert(binding.key);
-    const auto entries=ecm_config::cli_entries(ini_.lines(),worker_index,true);
+    const auto entries=ecm_config::preview_entries(ini_.lines(),worker_index,true);
     for(const auto &entry:entries)if(keys.count(entry.first)) {
         bool overridden=false;
         for(const auto &line:ini_.lines())if(line.kind==TomlFile::Line::Kind::KeyValue &&

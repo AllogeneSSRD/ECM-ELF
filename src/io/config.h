@@ -32,15 +32,14 @@ struct ParsedConfig {
 // reparsed.
 void project_stage1_config(const ParsedConfig&, int worker, EcmQueueConfig&);
 
-// No defaults, projection or file writes. Every explicit compute value is
-// checked.
+// Stage1 validates its own/shared fields. Foreign stage values remain in the
+// startup snapshot for narrow receiver-path projection when handoff is enabled.
 bool read_config(const std::string& path, ParsedConfig& parsed);
 
-// Compute keys/tables are strict. GUI-only values are skipped; unknown GUI keys
-// produce warnings. NumWorkers remains available/validated for Stage1 routing.
-// TOML syntax and duplicate checks apply to every table.
-// Matching [workers.N.*] tables override the global stage/shared tables.
-// Key names are case sensitive. worker is 1-based (<=0: globals only).
+// Stage2 validates its own/shared fields, plus only the legacy Stage1 defaults
+// requested by the caller. Omit overridden defaults from inherited_fields.
 bool ecm_queue_config_load(const std::string& path, EcmQueueConfig& cfg);
-bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& cfg);
+bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& cfg,
+                          const std::vector<const char*>& inherited_fields =
+                              {"device","tmp_dir","verbose","lcm","finished"});
 bool ecm_queue_config_write_default(const std::string& path);

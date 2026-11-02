@@ -80,16 +80,21 @@ static void stage2_raw_times(const fs::path& root,const fs::path& fixture){
 }
 static void workflow_errors(const fs::path& root){
     const auto path=root/"workflow-error.toml";
-    write(path,"[workers.1.stage1]\nstage2_tune_profile=\"gpu0.toml\"\n");
+    write(path,"[gui]\nNumWorkers=\"invalid\"\n");
     ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(path.u8string(),true);
-    assert(!app.ready&&app.workflow_load_error.find("stage2_tune_profile")!=std::string::npos);
+    assert(!app.ready&&app.workflow_load_error.find("NumWorkers")!=std::string::npos);
     assert(app.workflow_load_error.find(":2")!=std::string::npos&&std::string(app.config_input)==path.u8string());
     const auto error=app.workflow_load_error;app.status="unrelated UI notification";
     assert(app.workflow_load_error==error); // The Workers view keeps the diagnostic.
     write(path,"[gui]\nNumWorkers=2\n[workers.1]\nautostart=0\n[workers.1.stage2]\nstage2_tune_profile=\"gpu0.toml\"\n"
         "[workers.2]\nautostart=0\n[workers.2.stage2]\nstage2_tune_profile=\"gpu1.toml\"\n");
     assert(app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&app.workflow_load_error.empty());
-    write(path,"[workers.1.stage1]\nstage2_tune_profile=\"gpu0.toml\"\n");
+    write(path,read(path)+"[stage1]\nfuture_stage1=true\ncurve=\"future\"\n[stage2]\n"
+        "stage2_giant_backend=\"future\"\nfuture_stage2=[\"future\"]\n");
+    assert(app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2);
+    assert(app.edit_business("shared","b2_ratio","40")&&app.save_business());
+    assert(read(path).find("stage2_giant_backend=\"future\"")!=std::string::npos);
+    write(path,"[gui]\nNumWorkers=\"invalid\"\n");
     assert(!app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&!app.workflow_load_error.empty());
 }
 int main(int argc,char** argv){
