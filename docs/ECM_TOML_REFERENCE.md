@@ -1145,6 +1145,22 @@ Multiplier applied to Stage2 time in the Auto B2 model. 1 leaves it unchanged; g
 
 将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。
 
+### stage2_reduce_backend
+
+```toml
+stage2_reduce_backend = "scalar"
+```
+
+Type / 类型: `string`; range / 范围: `[scalar|coop32]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
+
+显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
+
+Ordinary S4 coefficient reduction: scalar keeps the default long division. coop32 uses one CUDA warp per coefficient and shared remainders at arithmetic widths 8193..16384 bits; smaller widths and exact Mersenne reduction keep their existing kernels. No NTT, D/P/B2 or output window changes. Default scalar preserves the qualified production baseline; cooperative performance is device and width dependent. CLI --reduce-backend overrides this worker setting; omission preserves explicit NTT_S4_COOP_REDUCE=0|32. ECM cost rows require the same reduction policy even when environment matching is ignored; standalone NTT tables remain reusable. OpenCL accepts scalar only.
+
+普通S4逐系数归约：scalar保持默认长除法；coop32在CUDA实际算术8193..16384 bits时每个系数使用一个warp及共享余数。较小位宽和精确梅森归约保留原内核，不改变NTT、D/P/B2及输出窗口。默认scalar保留已验证的生产基线；协作收益取决于设备和位宽。CLI --reduce-backend覆盖当前worker；省略时保留显式NTT_S4_COOP_REDUCE=0|32。即使忽略environment，ECM耗时资料也必须匹配归约策略，独立NTT表继续复用。OpenCL仅接受scalar。
+
 ### stage2_relocation
 
 ```toml

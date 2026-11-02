@@ -738,7 +738,7 @@ Baby和giant默认均为auto，缺乏证据时保留标量。先在当前有效D
 
 ### 执行与计算量
 
-CUDA提供独立的`stage2_seed_backend=scalar|coop32`，默认auto，未完成配对前保持scalar；也可强制后端。8193…16384实际算术bits可选TPI32、160／192／224／256词容器；承载按p判断。每组32线程处理一条独立seed ladder，同时返回相邻两点；GPU构建[D]Q也复用协作ladder。0起点、单点尾链、Montgomery radix和规范残数保持原语义；[D]Q在目标环非单位时继续原来的独立ladder／因子恢复路径。
+CUDA提供独立的`stage2_seed_backend=auto|scalar|coop32`，默认auto，未完成配对前保持scalar；也可强制后端。8193…16384实际算术bits可选TPI32、160／192／224／256词容器；承载按p判断。每组32线程处理一条独立seed ladder，同时返回相邻两点；GPU构建[D]Q也复用协作ladder。0起点、单点尾链、Montgomery radix和规范残数保持原语义；[D]Q在目标环非单位时继续原来的独立ladder／因子恢复路径。
 
 第6.5节的点数、链数及M／S次数公式不变，仍是schoolbook乘积与相依ladder，渐近复杂度未下降。改变的是整数内的并行组织和线程私有状态。没有新增显式设备缓冲或坐标传输；paired seeds仍占16W(2Kₐ+1) bytes，[D]Q仍占16W bytes。静态属性中的每线程local由标量22544 B变为协作592／696／800／936 B；协作每整数占32线程，这些数不能直接当作整卡显存节省。协作寄存器报告193／255／255／255，不能据此声称占用率提高。
 
@@ -769,13 +769,17 @@ RTX4060 Laptop／GPU1、目标1500MHz，CUDA13.3、sm89、GMP依赖同完整曲�
 
 普通S4设备事件累计15.638→15.670s，新seed没有改变归约工作；占新引擎约38.27%。承载对应0.907s、约4.17%。两路线均有3159402个归约系数、189040次逻辑多项式乘积；固定后端对照中NTT长度分布、S4次数和系数数均相同。设备事件围住归约kernel范围，host提交计时另约2.088／0.897s，不能与事件时间或外层树阶段相加。
 
-因此普通路线优先剖析逐系数长除法的相依MAC、私有数组与协作归约交叉点；承载路线优先分离树／下降中的NTT设备时间、S4与提交等待。先按NTT长度和批量定位，再评估融合与布局，不能根据阶段名称直接认定Tensor Core适用。更便宜的seed也会改变D／P平衡；已有NTT拐点、显存边界和默认保护继续保留，新seed条件下的D模型需要独立校准与持出验证。
+普通路线长除法的相依MAC、私有数组与协作归约已有独立[NCU与完整曲线验证](STAGE2_S4_REDUCTION.md)；承载路线仍需分离树／下降中的NTT设备时间、S4与提交等待。先按NTT长度和批量定位，再评估融合与布局，不能根据阶段名称直接认定Tensor Core适用。更便宜的seed也会改变D／P平衡；已有NTT拐点、显存边界和默认保护继续保留，新seed条件下的D模型需要独立校准与持出验证。
 
 ### 证据与入口
 
 完整曲线EXE为0.57.11，SHA256 `0137ba813e1305e57b38947b48e2e53714132e4a574a7860091b20ba0d724157`；GMP为`969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。构建输入与目标文件另由最终审计绑定。证据根`data/experiments/stage2_seed_coop_20261102/`：`correct03_w*`、`perf_w*`、`native_checks02`、`curves01`、`native_config01`、`nonunit02`及`default_guard01`。早期权限／采集缺项／生产guard拒绝证据保留，不进入成绩。汇总、CSV和PNG／SVG在同名benchmarks／figures目录，公开图在本页attachments。
 
 源码入口：[point_coop_ladder.cuh:47](../../src/ecm/stage2/cuda/device/point_coop_ladder.cuh#L47)相邻seed；[points.cpp:214](../../src/ecm/stage2/cuda/points.cpp#L214)构建／单位性验证、399行分派；[host_policy.cpp:42](../../src/ecm/stage2/cuda/host_policy.cpp#L42)配置优先级；[tune_portable.h:333](../../src/ecm/stage2/planning/tune_portable.h#L333)成本身份与NTT复用；[s4.cpp:328](../../src/ecm/stage2/cuda/s4.cpp#L328)归约事件边界。复现工具见[测量协议](../../tools/bench/README_STAGE2_VERSION.md#协作paired-seed验证)。
+
+## 普通S4的协作归约
+
+当前普通系数归约可选scalar／coop32，默认scalar。一个warp协作一个系数，余数改为动态共享内存；完整乘积和商位数未减少，渐近工作仍为平方复杂度。管理员NCU及全量GMP、四档固定D完整曲线和计时边界统一见[S4归约性能](STAGE2_S4_REDUCTION.md)，不与点算术的历次收益相加。seed默认auto的功能资格和上述0.57.11固定后端性能证据继续分别保留。
 
 ## TODO
 

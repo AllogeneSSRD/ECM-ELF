@@ -11,4 +11,5 @@ void configure_giant_policy(Options &o);
 struct PointBackendDefaults {bool baby_present,giant_present;std::string baby,giant;bool seed_present=false;std::string seed="scalar";};
 void configure_point_backends(Options &o,const PointBackendDefaults *defaults=nullptr);
 void apply_point_backends(const Options &o);
+void configure_s4_backend(Options &o,bool present,const std::string &value);
 }

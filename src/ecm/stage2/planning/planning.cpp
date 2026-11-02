@@ -2060,6 +2060,7 @@ std::string select_auto(Options &o,const Record &r,bool apply) {
     require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.
     require("NTT_GIANT_SEED_PAIR",0,0); // Paired/rebased seeds require new measured costs.
     require("NTT_GIANT_SEED_COOP",0,0);
+    require("NTT_S4_COOP_REDUCE",0,0);
     require("NTT_GIANT_BASE_CPU",0,0);
     require("NTT_GSCALE_DEVICE",0,0); // GPU Gamma correction requires new costs.
     require("NTT_SCALED_ROOT_DEVICE",0,0); // Resident root preparation needs new costs.

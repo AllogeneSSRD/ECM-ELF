@@ -1,6 +1,10 @@
 #pragma once
 #include "../launch.h"
 #include "../stage2_scalar.cuh"
+#include "s4_warp_reduce.cuh"
+
+// Host policy is dynamic: worker configuration is applied after static startup.
+int ecm_stage2_s4_coop_mode();
 template <int NW>
 __global__ void s4_mersenne_fixture_kernel(const unsigned long long *input,int stride,
     const int *lengths,int cases,int nw,int bits,unsigned long long *out,int *counts)
@@ -82,5 +86,18 @@ void ecm_launch_s4_mersenne_fixture_kernel(EcmCudaLaunch cfg, const unsigned lon
 
 template<int NW,bool MERSENNE>
 void ecm_launch_s4_reduce_kernel(EcmCudaLaunch cfg, const unsigned long long *digits, unsigned long long n, int bpw, unsigned long long slot_words, unsigned long long out_slots, unsigned long long nbatch, const unsigned long long *dn, unsigned long long ninv, int nw, int L, const unsigned long long *dy, unsigned long long w, unsigned long long *out, unsigned long long slot_bits, unsigned long long *bad, unsigned long long *s4_dbg, int tail_mont, int div_shift, unsigned long long div_recip, unsigned long long first, unsigned long long count, int mersenne_bits) {
+    if constexpr(NW>128 && !MERSENNE) {
+        if(nw>128 && ecm_stage2_s4_coop_mode()==32) {
+            // One warp per compact output; the kernel also checks every source
+            // slot, including omitted coefficients. No NTT work is truncated.
+            const auto threads=cfg.block.x;
+            // Empty output windows still validate all source padding.
+            const auto blocks=count?(count*nbatch*32+threads-1)/threads:1;
+            const size_t shared=sizeof(unsigned long long)*(nw+(threads/32)*(2*nw+4));
+            s4_warp_reduce_kernel<NW><<<blocks,threads,shared,cfg.stream>>>(digits,n,bpw,slot_words,
+                out_slots,nbatch,nw,div_shift,div_recip,first,count,w,out,bad,slot_bits);
+            return;
+        }
+    }
     s4_reduce_kernel<NW,MERSENNE><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(digits,n,bpw,slot_words,out_slots,nbatch,dn,ninv,nw,L,dy,w,out,slot_bits,bad,s4_dbg,tail_mont,div_shift,div_recip,first,count,mersenne_bits);
 }

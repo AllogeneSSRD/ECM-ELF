@@ -68,6 +68,7 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     request.baby_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_baby_coop):o.baby_backend;
     request.giant_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_giant_coop):o.giant_backend;
     request.seed_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_seed_coop):o.seed_backend;
+    request.reduce_backend=o.reduce_backend;
     request.runtime_prepare_cache=o.runtime_prepare_cache;
     request.runtime_prepare_hints=o.runtime_prepare_hints;
     request.runtime_remaining=o.runtime_remaining;

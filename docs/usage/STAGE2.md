@@ -64,6 +64,8 @@ stage2_tune_profile = "stage2_gpu1.toml"
 
 CUDA的`stage2_seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-backend`。它控制8193…16384实际算术bits的paired seed及GPU构建[D]Q，其他情况仍为标量。运行时先完成同形状、R=`stage2_tune_min_repeats`次的标量／协作对照，再选最快合格均值；正式tune可复用配对区域。只读模式继续采用已有合格胜者，单独强制协作的未配对记录不足以启用auto。实际`seed_coop`按行记账，NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.md#stage2_seed_backend)与[自动选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)。
 
+普通高位宽S4可显式设置`stage2_reduce_backend="coop32"`，CLI为`--reduce-backend coop32`；默认`scalar`。仅CUDA实际算术8193…16384 bits的普通归约启用协作，小位宽和梅森归约继续原内核。它与seed／baby／giant的auto独立；ECM性能文件分开记录两种归约策略，独立NTT表可共用。当前设备资格、固定D收益和限制见[S4性能](../performance/STAGE2_S4_REDUCTION.md)与[配置参考](../ECM_TOML_REFERENCE.md#stage2_reduce_backend)。
+
 ## 直接读档
 
 基本参数为 `--save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；具体名字以当前 `--help` 为准。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 开启共享诊断层的附加分解，优先本地 PARI DLL，备选外部 GP，不自动使用 GMP。原始因子先发布，附加诊断未完成不改变成功状态；仅完整且全部已证素才标为分解完成。内部结果保留后端、概率素性及余因子，详见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。

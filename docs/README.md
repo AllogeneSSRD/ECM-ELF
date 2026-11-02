@@ -56,6 +56,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
 - [Stage2 性能](performance/STAGE2.md)：0.54.7小B2全位宽独立tune复测、布局及阶段占比；冻结双档GPU矩阵、Prime95与Montgomery参考。
 - [Stage2 位宽增长与优化](performance/STAGE2_BIT_SCALING.md)：26格主矩阵及固定D控制的经验指数、各阶段占比、NTT与平方工作量、宽位点核资源；[复杂度推导](reference/ECM_STAGE2_BIT_COMPLEXITY.md)和[离线图表](web/stage2-bit-complexity-20261101.html)。
+- [普通S4归约性能](performance/STAGE2_S4_REDUCTION.md)：高位宽长除法的warp协作、GMP资格、NCU、固定D整曲线对照及默认保护。
 - [Stage2 精确输入与 Prime95 / CPU 参考](performance/EDWARDS_STAGE2.md)：13 个精确余因子、两档实际 B2、Prime95 两曲线族全范围和保留的 libecm 样本。
 - [CPU GW 多项式 Stage2](performance/CPU_GWPOLY_STAGE2.md)：4 GHz、相同精确输入的 Prime95 对照、1/4 线程实测和进程内存。
 - [Tensor NTT 性能](performance/NTT_TENSOR.md)：精确Tensor64/40/N96r64、长度/batch、同卡CUDA/Tensor并发及硬件计数器。

@@ -213,4 +213,17 @@ python tools/bench/plot_stage2_version.py `
 
 ### Seed auto资格
 
-`tools/test/test_stage2_seed_auto_gpu.py --study <完成的矩阵目录> --exe <当前Stage2> --output <新证据目录>`复用已验证Stage1输入，顺序验证R2／R1、双方同几何对照、只读复用、未配对保护、baby／giant／seed与有限链长auto。所有曲线保留；这是行为验证，不能当作独立性能矩阵。`test_stage2_seed_config.py`验证真实Worker #2的覆盖／CLI优先／环境回退，并按实际seed_coop核对增量统计。旧文件的非零请求不能作为实际协作证据；格式11写入实际后端，C++／Python加载和聚合均保留未知255。
+`tools/test/test_stage2_seed_auto_gpu.py --study <完成的矩阵目录> --exe <当前Stage2> --output <新证据目录>`复用已验证Stage1输入，顺序验证R2／R1、双方同几何对照、只读复用、未配对保护、baby／giant／seed与有限链长auto。所有曲线保留；这是行为验证，不能当作独立性能矩阵。`test_stage2_seed_config.py`验证真实Worker #2的覆盖／CLI优先／环境回退，并按实际seed_coop核对增量统计。旧文件的非零请求不能作为实际协作证据；格式12写入实际后端，C++／Python加载和聚合均保留未知255。
+
+
+## S4普通归约验证
+
+生产长除法与warp协作共用`src/ecm/stage2/cuda/device/s4_warp_reduce.cuh`。`tools/build/test/build_stage2_s4_warp_probe.ps1`构建独立GMP探针；`bench_stage2_s4_probe.py --exe ... --output ... --bits ...`默认比较scalar／coop32，支持digit宽度、四类模数、多batch、真实模数文件、空输出窗口及两种故障注入。每调用冻结EXE／DLL／manifest和全部编译源文件，逐词核对所有输出和未使用缓冲哨兵；所有源槽的padding检查包含被省略的系数。`--coeffs 2`为合法空窗口，`--fault 1|2`分别要求输入padding或输出破坏被拒绝，不能将这些调用计入性能均值。
+
+`--backends 0 8192 32 --repeats 3 --reverse`比较原标量、仅探针中的8192系数缓存窗口和生产warp；全部首轮与事件保留，无warmup，缓存窗口没有生产配置。`analyze_stage2_s4_probe.py --study ... --output ... --figures ...`按每进程事件中位数汇总，拒绝故障或未完成研究；原语吞吐不能换算成完整Stage2加速。
+
+完整固定几何对照使用`bench_stage2_seed_coop.py --component reduce`，固定baby32／giant32／seed32，只改变S4策略。`--arithmetic both|ordinary|carrier`可定向复测，默认both；`--checks`单独执行GMP叶检查和完整目标叶摘要比较，不进入正常计时。`analyze_stage2_seed_coop.py`自动识别reduce并使用独立图名及S4设备事件字段，防止覆盖seed图。Worker配置优先级用`test_stage2_seed_config.py --component reduce`验证，seed自动学习可用`test_stage2_seed_auto_gpu.py --reduce-backend coop32`验证独立条件。
+
+管理员NCU必须在无其他GPU1任务时串行运行，clock/cache control为none；选定NW256普通归约、跳过200次同类调用后采3次，保留命令、`.ncu-rep`、CSV单位行、进程门禁与遥测。核对版本／输入／检查／工作量后，比较两种内核的对应调用；不将重放后的程序墙钟当作基准，不把sectors当作DRAM字节，也不把每issue的stall ratio当百分比。完整证据与命令位置见[S4性能报告](../../docs/performance/STAGE2_S4_REDUCTION.md)。
+
+`analyze_stage2_seed_coop.py --retest <追加矩阵目录>`可追加同二进制、同组件／输入矩阵／显存预算／D几何的配对复测；保留首轮，采用全部样本中位数。阶段图取中间真实调用的阶段向量，偶数时平均中间两个，避免独立求各阶段中位数后不能相加。`analyze_stage2_s4_ncu.py --baseline ... --candidate ... --output ...`校验对应真实调用、输入和完整检查／工作量，导出带原始单位依据的诊断摘要。

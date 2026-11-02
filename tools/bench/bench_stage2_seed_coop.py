@@ -22,7 +22,9 @@ from stage2_d_catalog import phi
 
 def collect(out, folder, case, cell, plan, mode, checks):
     cmd=command(out,folder,case,cell,folder/'unused_tune.toml',str(cell['chain']),False)
-    cmd+=['--baby-backend','coop32','--giant-backend','coop32','--seed-backend',mode]
+    seed_mode=mode if plan.get('component','seed')=='seed' else 'coop32'
+    cmd+=['--baby-backend','coop32','--giant-backend','coop32','--seed-backend',seed_mode]
+    if plan.get('component')=='reduce':cmd+=['--reduce-backend',mode]
     env=environment()
     if checks:
         env.update(NTT_GIANT_SEED_CHECK='1',NTT_DEVICE_GLEAF_CHECK='1',
@@ -52,16 +54,21 @@ def collect(out, folder, case, cell, plan, mode, checks):
     clock=fields(text,'stage2_full_wall');validate_clock(clock,checks)
     labels=('s4_multiply_stats','real_batched_split','real_batched_wall','real_baby',
             'real_giant_seed_pair','real_giant_base','real_giant_seed','device_gleaf',
-            'groot_layout','target_descent_values','real_batched_rootfold')
+            'groot_layout','target_descent_values','real_batched_rootfold','s4_coop_reduce_mode')
     stats={key:fields(text,key,False) for key in labels}
     s4=stats['s4_multiply_stats']
     if min(int(s4[k]) for k in ('gmp_checked','gmp_selftest_cases'))<=0 or \
        any(int(s4[k]) for k in ('gmp_check_bad','gmp_selftest_bad')):
         raise ValueError('Mandatory GMP check missing or failed')
-    actual=32 if mode=='coop32' and (cell['carrier'] or case['bits'])>8192 else 0
+    actual=32 if seed_mode=='coop32' and (cell['carrier'] or case['bits'])>8192 else 0
     pair=stats['real_giant_seed_pair']
     if int(pair['seed_backend'])!=actual or int(pair['base_backend'])!=actual or int(pair['base_nonunits']):
         raise ValueError('Unexpected seed/base arithmetic or nonunit fallback')
+    if plan.get('component')=='reduce':
+        actual_reduce=32 if mode=='coop32' and not cell['carrier'] and case['bits']>8192 else 0
+        reduce=stats['s4_coop_reduce_mode']
+        if int(reduce['enabled'])!=actual_reduce or int(reduce['requested'])!=(32 if mode=='coop32' else 0):
+            raise ValueError('Unexpected S4 reduction policy')
     if int(stats['groot_layout']['balanced'])!=cell['layout']:raise ValueError('Layout changed')
     if checks:
         leaf=stats['device_gleaf']
@@ -76,6 +83,8 @@ def collect(out, folder, case, cell, plan, mode, checks):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--component',choices=('seed','reduce'),default='seed')
+    p.add_argument('--arithmetic',choices=('both','ordinary','carrier'),default='both')
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--exe',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
@@ -103,15 +112,16 @@ def main():
         save=out/'inputs'/Path(c['save']).name;shutil.copy2(c['save'],save)
         if sha(save)!=c['save_sha256']:raise ValueError('Changed Stage1 input')
         c['save']=str(save)
-    cells=[dict(c) for c in source['cells'] if c['case'] in {x['id'] for x in cases}]
+    cells=[dict(c) for c in source['cells'] if c['case'] in {x['id'] for x in cases} and
+           (a.arithmetic=='both' or bool(c['carrier'])==(a.arithmetic=='carrier'))]
     for c in cells:
         if a.d:c.update(D=a.d,P=phi(a.d)//2)
         if a.b2:c['B2']=a.b2
-    plan=dict(complete=False,started_utc=stamp(),source_study=str(a.study.resolve()),
+    plan=dict(complete=False,component=a.component,started_utc=stamp(),source_study=str(a.study.resolve()),
               exe_sha256=sha(binary/a.exe.name),dll_sha256=sha(binary/'gmp-10.dll'),
               source_matrix_sha256=sha(a.study/'plan.json'),allowed_processes=source['allowed_processes'],
               cases=cases,cells=cells,runs=[],failures=[],diagnostic=a.checks,
-              protocol=dict(device=1,repeats=a.repeats,warmups=0,learning=False,
+              protocol=dict(device=1,repeats=a.repeats,warmups=0,learning=False,arithmetic=a.arithmetic,
                             batch_mb=256,arena_mb=6300,fold_mb=640))
     write(out/'summary.json',plan)
     try:
@@ -129,7 +139,7 @@ def main():
                     if baseline is not None and signature!=baseline:raise ValueError('A/B work or normalized leaves differ')
                     baseline=signature;row['repeat']=repeat;plan['runs'].append(row)
                     write(out/'summary.json',plan)
-                    print('seed_curve:',cell['id'],repeat,mode,row['seconds'],flush=True)
+                    print(a.component+'_curve:',cell['id'],repeat,mode,row['seconds'],flush=True)
         if sha(a.exe)!=plan['exe_sha256']:raise ValueError('Source binary changed during experiment')
         plan.update(complete=True,finished_utc=stamp())
     except Exception as e:

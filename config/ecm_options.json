@@ -1119,6 +1119,26 @@
     },
     {
       "owner": "stage2",
+      "type": "string",
+      "parser": "strict",
+      "key": "stage2_reduce_backend",
+      "field": "reduce_backend",
+      "present": "has_reduce_backend",
+      "default": "scalar",
+      "domain": "[scalar|coop32]",
+      "fx": "S4_modular_reduction",
+      "description": [
+        "Ordinary S4 coefficient reduction: scalar keeps the default long division. coop32 uses one CUDA warp per coefficient and shared remainders at arithmetic widths 8193..16384 bits; smaller widths and exact Mersenne reduction keep their existing kernels. No NTT, D/P/B2 or output window changes. Default scalar preserves the qualified production baseline; cooperative performance is device and width dependent. CLI --reduce-backend overrides this worker setting; omission preserves explicit NTT_S4_COOP_REDUCE=0|32. ECM cost rows require the same reduction policy even when environment matching is ignored; standalone NTT tables remain reusable. OpenCL accepts scalar only.",
+        "普通S4逐系数归约：scalar保持默认长除法；coop32在CUDA实际算术8193..16384 bits时每个系数使用一个warp及共享余数。较小位宽和精确梅森归约保留原内核，不改变NTT、D/P/B2及输出窗口。默认scalar保留已验证的生产基线；协作收益取决于设备和位宽。CLI --reduce-backend覆盖当前worker；省略时保留显式NTT_S4_COOP_REDUCE=0|32。即使忽略environment，ECM耗时资料也必须匹配归约策略，独立NTT表继续复用。OpenCL仅接受scalar。"
+      ],
+      "values": [
+        "scalar",
+        "coop32"
+      ],
+      "parser_override": "enum"
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_groot_balanced",
       "field": "groot_balanced",
       "type": "bool|string",

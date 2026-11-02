@@ -92,6 +92,12 @@ Auto以R=`stage2_tune_min_repeats`为重复门槛。先完成baby／giant的已�
 
 验证范围为GPU1 RTX4060 Laptop、目标1500MHz／55W。28条有效曲线覆盖R=2的`0,0,32,32`学习顺序、R=1承载、只读复用、未配对保护、三个点后端及32／64链长联合auto；真实Worker #2验证覆盖／CLI优先／环境回退，正式tune在D30030建立两项对照、D27300只增加胜者一项，再次执行不追加测量。此为功能资格，不是完整位宽性能矩阵。证据在`data/experiments/stage2_s4_20261102/auto_native_final`、`auto_config_final`、`auto_formal_final`；算法和固定D成绩见[协作seed性能](../performance/STAGE2_BIT_SCALING.md#13-可选协作paired-seed与dq)。
 
+### S4归约策略的成本身份
+
+`stage2_reduce_backend=scalar|coop32`是固定归约策略，默认scalar；它不属于seed自动对照轴。格式12的ECM条件以`env_s4_coop_reduce=0|32`强制隔离成本，即使忽略environment也不能交叉使用；旧条件缺失该键等同scalar。当前读取器兼容格式8…11的标量资料，新文件写12，旧程序不能借用新的归约成本。独立NTT性能表忽略此键，继续共用。
+
+选择coop32时，只有普通实际算术8193…16384 bits启用协作S4，较小位宽及梅森归约仍回退原内核。宽度模型另以`ceil((W+1)/32)`划分协作归约区间，不把W=160／192／224／256处新增高词组的成本平滑穿过边界；工作代理仍按平方乘积计算。没有新策略的实测锚点时只提供保守基础估计，不把标量旧表当作新策略实测。配置、数学及验收范围见[S4报告](../performance/STAGE2_S4_REDUCTION.md)。
+
 ## 算术位宽区间预测
 
 普通路径查`generic[bit_length(N)]`，承载路径查`mersenne[p]`。索引按实际算术位宽建立；不要求采样的目标N位宽、具体N或carrier_exponent相同。目标位宽另用于投影、叶乘积和GCD成本；完整梅森数可校准余因子承载。整除验证仍不可省略。
@@ -171,7 +177,7 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 
 ### TOML 中的算术路径
 
-格式11每个实际目标位宽只有一个 `[width.<bits>]`，内容为列对齐的 `matrix`。不同条件、D、B1/B2、普通/承载及giant执行参数保留为不同的行，不因可选字段不同再分表。表外仅有格式/计时单位、模型误差设置和确定的设备、环境条件。矩阵中可选值缺失用空字符串表示。
+格式12每个实际目标位宽只有一个 `[width.<bits>]`，内容为列对齐的 `matrix`。不同条件、D、B1/B2、普通/承载及giant执行参数保留为不同的行，不因可选字段不同再分表。表外仅有格式/计时单位、模型误差设置和确定的设备、环境条件。矩阵中可选值缺失用空字符串表示。
 
 - `condition` 指向 `[condition.<id>]`，保存设备、驱动/工具链、后端及实际环境设置。程序版本不参与条件匹配、统计分组、采样上限或选型资格；软件升级不自动使可兼容缓存失效。
 - `seed_coop`是实际seed／[D]Q算术，取0／32／255（未知）。它与`baby_coop`、`giant_coop`共同参与ECM统计、模型和缓存身份，不受environment忽略设置影响。旧条件的`env_giant_seed_coop`只用于兼容加载缺字段的记录：0或缺失可确定为标量，非零请求保留未知；不能推断成已执行协作。NTT吞吐表与seed后端独立。

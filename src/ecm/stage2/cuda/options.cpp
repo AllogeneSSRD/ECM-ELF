@@ -253,6 +253,10 @@ int baby_coop_tpi()
     return value && !std::strcmp(value,"32") ? 32 : 0;
 }
 
+int ecm_stage2_s4_coop_mode() {
+    const char *value=std::getenv("NTT_S4_COOP_REDUCE");return value && std::atoi(value)==32?32:0;
+}
+
 int seed_coop_tpi()
 {
     const char *value=std::getenv("NTT_GIANT_SEED_COOP");

@@ -18,6 +18,25 @@ static Fields sample(unsigned id,unsigned mode,double seconds,double checks) {
         {"runtime_sample_id",p::quoted("backend-"+std::to_string(id))},
         {"program_version",p::quoted(ecm_program::version)},{"updated_at",p::quoted(p::utc_updated_at(1700000000000000000ull+id))}};
 }
+static void s4_policy_tests() {
+    const auto ignore=p::Ignore::parse("gpu,driver,cuda,backend,environment,memory");
+    Fields old,scalar{{"env_s4_coop_reduce","0"}},coop{{"env_s4_coop_reduce","32"}};
+    require(p::matches(old,scalar,ignore),"legacy scalar S4 costs lost");
+    require(!p::matches(old,coop,ignore) && !p::matches(coop,scalar,ignore),"ignored environment crossed S4 arithmetic");
+    require(p::ntt_matches(old,coop,ignore),"S4 policy invalidated standalone NTT table");
+    p::Profile profile;profile.condition(old);const auto id=profile.condition(coop);
+    auto a=sample(700,0,10,0),b=sample(701,0,3,0);b["condition"]=std::to_string(id);
+    require(profile.update(a) && profile.update(b),"S4 profile samples missing");
+    p::Estimator engine(profile,coop,ignore,{});const auto shape=engine.shape(profile.samples[1]);
+    require(!engine.eligible(profile.samples[0],shape),"scalar sample entered cooperative S4 estimator");
+    auto x=shape;x.target_bits=x.arithmetic_bits=10176;
+    require(engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==5,"within-tile S4 sharing rejected");
+    x.target_bits=x.arithmetic_bits=10240;
+    require(!engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==6,"S4 high-word tile boundary crossed");
+    x.target_bits=x.arithmetic_bits=8192;
+    require(!engine.eligible(profile.samples[1],x) && engine.s4_coop_tiles(x)==0,"S4 scalar boundary crossed");
+    x=shape;x.mersenne=true;require(!engine.s4_coop_tiles(x),"Mersenne reduction mistaken for shared division");
+}
 static void giant_tests() {
     p::Profile profile;profile.condition({{"uuid_hex","\"giant-device\""},{"sm_major","8"},{"sm_minor","9"},
         {"cuda_driver","13030"},{"cuda_runtime","13030"},{"gl_fixed_mode","3"},{"outer_unroll_u","0"},{"add_sub_mask","1"}});
@@ -117,6 +136,7 @@ int main(int argc,char **argv) {
             require(bool(out),"save write failed");std::cout<<"generated probable-prime Stage1 fixture "<<bits<<" bits\n";return 0;
         }
         require(argc==2,"need output directory");
+        s4_policy_tests();
         giant_tests();seed_policy_tests();
         p::Profile profile;
         profile.condition({{"uuid_hex","\"device\""},{"sm_major","8"},{"sm_minor","9"},{"cuda_driver","13030"},

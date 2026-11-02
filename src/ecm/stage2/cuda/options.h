@@ -22,6 +22,7 @@ bool initial_memory_diagnostics_requested();
 int giant_coop_tpi();
 int baby_coop_tpi();
 int seed_coop_tpi();
+int ecm_stage2_s4_coop_mode();
 
 extern ecm_stage2::ShortNttBatchPolicy g_short_ntt_batches;
 

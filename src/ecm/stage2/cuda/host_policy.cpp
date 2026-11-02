@@ -60,6 +60,21 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
 #endif
     apply_point_backends(o);
 }
+void configure_s4_backend(Options &o,bool present,const std::string &value) {
+    if(!o.portable_cli.count("--reduce-backend")) {
+        if(present)o.reduce_backend=value;
+        else if(const char *env=std::getenv("NTT_S4_COOP_REDUCE")) {
+            if(std::strcmp(env,"0") && std::strcmp(env,"32"))throw std::runtime_error("NTT_S4_COOP_REDUCE must be 0 or 32");
+            o.reduce_backend=std::strcmp(env,"32")==0?"coop32":"scalar";
+        }
+    }
+    if(o.reduce_backend!="scalar" && o.reduce_backend!="coop32")throw std::runtime_error("reduce-backend must be scalar or coop32");
+#ifdef ECM_STAGE2_OPENCL
+    if(o.reduce_backend!="scalar")throw std::runtime_error("cooperative S4 reduction is CUDA-only");
+#else
+    if(_putenv_s("NTT_S4_COOP_REDUCE",o.reduce_backend=="coop32"?"32":"0"))throw std::runtime_error("cannot configure S4 reduction");
+#endif
+}
 void configure_giant_policy(Options &o) {
     if(o.giant_chain!="64" && o.giant_chain!="32" && o.giant_chain!="auto")
         throw std::runtime_error("giant-chain must be 64, 32 or auto");

@@ -210,6 +210,11 @@ public:
         // only records owned by this estimator's immutable profile.
         if(profile_samples.count(&s))sample_shapes.emplace(&s,x);return x;
     }
+    Word s4_coop_tiles(const Shape &x)const {
+        // Include the high division word: W=160/192/224/256 adds a warp tile.
+        return optional_uint(condition,"env_s4_coop_reduce")==32 && !x.mersenne && x.arithmetic_bits>8192?
+            ((x.arithmetic_bits+63)/64+1+31)/32:0;
+    }
     bool eligible(const Fields &s,const Shape &x)const {
         if(optional_uint(s,"baby_coop")!=x.baby_coop || optional_uint(s,"giant_coop")!=x.giant_coop || optional_uint(s,"seed_coop")!=x.seed_coop)return false;
         if(optional_uint(s,"giant_tail_balance")!=Word(x.tail_balance) || optional_uint(s,"giant_chain_block",64)!=x.chain_block)return false;
@@ -218,7 +223,7 @@ public:
         if(at==matching_conditions.end())at=matching_conditions.emplace(id,matches(profile.conditions.at(id),condition,ignore)).first;
         if(!at->second)return false;
         const auto a=shape(s);
-        if(a.mersenne!=x.mersenne)return false;
+        if(a.mersenne!=x.mersenne || s4_coop_tiles(a)!=s4_coop_tiles(x))return false;
         if(point_backend_capacity(a.arithmetic_bits,a.baby_coop)!=point_backend_capacity(x.arithmetic_bits,x.baby_coop) ||
            point_backend_capacity(a.arithmetic_bits,a.giant_coop)!=point_backend_capacity(x.arithmetic_bits,x.giant_coop) ||
            point_backend_capacity(a.arithmetic_bits,a.seed_coop)!=point_backend_capacity(x.arithmetic_bits,x.seed_coop))return false;

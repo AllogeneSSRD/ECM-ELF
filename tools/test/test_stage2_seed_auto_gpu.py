@@ -19,6 +19,7 @@ from result_format import normalize_result
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for k in ('study','exe','output'):p.add_argument('--'+k,type=Path,required=True)
+    p.add_argument('--reduce-backend',choices=('scalar','coop32'),default='scalar')
     a=p.parse_args();source=load(a.study/'plan.json');case=next(c for c in source['cases'] if c['bits']>8192)
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     import shutil
@@ -31,6 +32,7 @@ def main():
         cmd=command(out,folder,case,cell,profile,chain,False)
         point=(folder/'points.save').read_text();(folder/'points.save').write_text(point*curves)
         for flag,value in (('--curves',curves),('--tune-min-repeats',minimum),('--tune-runtime',int(learn))):cmd[cmd.index(flag)+1]=str(value)
+        cmd+=['--reduce-backend',a.reduce_backend]
         cmd+=['--baby-backend','auto' if all_auto else 'coop32','--giant-backend','auto' if all_auto else 'coop32','--seed-backend',backend]
         m=TelemetryRecorder(1,folder/'telemetry.jsonl',interval=.2)
         try:

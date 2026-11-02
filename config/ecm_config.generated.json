@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "2573cb409e8f25abfaa52241cee90f231c778f9e7bed5e7b5da3cf7bafa31c80",
-    "src/ecm/platform/generated/configuration_defaults.h": "1a6aed0d630a67a70e73b38b023069c892792af132b5e7449433aada5c1378ca",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "8cac66f95577660335c17efcdc1acc66c3952d0178d565de77b7c0de966fdbc4",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "7c797fa9bb44b93029d96cf9ceaf666edaac52fa9f847da18f27963f2b692cdb",
-    "config/ecm.toml.default": "996e257a09e11aa71d08136ee4e9d60b410d0b96fb8647a78c34a0a07e8ebf18",
-    "config/ecm.toml.example": "b6dfbf2352632b04de84b17169299cc353b4299f109b28b2d8e552b8a67e75b6",
-    "docs/ECM_TOML_REFERENCE.md": "6e31fcae9c830ab4a300ce4b1e3ecc06217de6a594b0b04b2c83a5a207eb347e",
-    "config/ecm_options.json": "285b1443b8abfc9578d1ec516c39da881ba09d0c05df0d82d08606b357b5e047",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "61c16832bd89b1f4313e6d1932123f4f368a2996044ca210f4060b6a4e34fffc",
+    "src/ecm/platform/generated/configuration_defaults.h": "d786951d8eb90d1aa3f2d36a025fa1876e6f0037743e0c4d62d0ad26d8c5a5d4",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "30741b3b238a3ac0242f5db4f1698db451c941364a4eb4e5fa3dba8f7c4f9b36",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "41df0d84ccffc416851b65cf7b4d8648b47a361cc25cfb7f61407a5040a6a4e9",
+    "config/ecm.toml.default": "a328d3e21cbcacbd8528e8419e4244bdf5e6fdff420315c99f6f9f1a18cd03eb",
+    "config/ecm.toml.example": "2a75c00337ebffdc6a1b9c4ba8d39738abb88f6390363be57b3adf4b1ee44d1b",
+    "docs/ECM_TOML_REFERENCE.md": "d6b6dd78ea51b0d3dcf28faf5c50639313e907663b46d00f262bf9118dfa18df",
+    "config/ecm_options.json": "5c870da151449f3fdc8fa1a2c4897d223f87f461301e0e9f6eaf88f8d0d287e6",
     "tools/gen/generate_ecm_config.py": "d1f3751fc6cef2563466fd486fa1c4da6056b0598e2501a0f8ba6e4bd4d09e44"
   }
 }

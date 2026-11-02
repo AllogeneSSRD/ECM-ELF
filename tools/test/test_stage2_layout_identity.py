@@ -41,7 +41,7 @@ class LayoutIdentity(unittest.TestCase):
     def test_writer_requires_layout_aware_reader(self):
         document = tomllib.loads(write_profile([dict(uuid_hex='fixture')],
             [self.row('old', 70), self.row('new', 50, groot_balanced=1)]))
-        self.assertEqual(document['profile']['format'], 11)
+        self.assertEqual(document['profile']['format'], 12)
         columns, *rows = document['width']['5700']['matrix']
         self.assertEqual({row[columns.index('groot_balanced')] for row in rows}, {0, 1})
 
@@ -53,6 +53,14 @@ class LayoutIdentity(unittest.TestCase):
                          {(0,64,70),(1,64,60),(0,32,50)})
         for changes in ({'giant_tail_balance':2},{'giant_chain_block':128}):
             with self.assertRaises(ValueError):aggregate([self.row('bad',1,**changes)])
+
+    def test_s4_cost_conditions_stay_separate(self):
+        conditions=[dict(uuid_hex='fixture'),dict(uuid_hex='fixture',env_s4_coop_reduce=32)]
+        document=tomllib.loads(write_profile(conditions,[self.row('scalar',10),self.row('shared',3,condition=1)]))
+        self.assertEqual(len(document['condition']),2)
+        columns,*rows=document['width']['5700']['matrix']
+        self.assertEqual({r[columns.index('condition')] for r in rows},{0,1})
+        self.assertEqual({r[columns.index('mean_seconds')] for r in rows},{3,10})
 
     def test_seed_rows_and_legacy_requests_stay_separate(self):
         document=tomllib.loads(write_profile([dict(uuid_hex='fixture',env_giant_seed_coop=32),dict(uuid_hex='fixture')],

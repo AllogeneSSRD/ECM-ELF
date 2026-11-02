@@ -20,6 +20,7 @@ from stage2_tune_tables import summaries
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--component',choices=('seed','reduce'),default='seed')
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--exe',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
@@ -30,9 +31,12 @@ def main():
     for name in ('ecm_cuda_stage2.exe','gmp-10.dll'):shutil.copy2(a.exe.parent/name,out/'bin'/name)
     shutil.copy2(__file__,out/'test_snapshot.py')
     identity=sha(out/'bin/ecm_cuda_stage2.exe')
-    report=dict(complete=False,exe_sha256=identity,calls=[])
+    report=dict(complete=False,component=a.component,exe_sha256=identity,calls=[])
+    key='stage2_'+('seed_backend' if a.component=='seed' else 'reduce_backend')
+    cli='--'+('seed-backend' if a.component=='seed' else 'reduce-backend')
+    env_key='NTT_GIANT_SEED_COOP' if a.component=='seed' else 'NTT_S4_COOP_REDUCE'
     settings=(('worker','scalar','coop32','0',[],32),
-              ('cli','scalar','coop32','32',['--seed-backend','scalar'],0),
+              ('cli','scalar','coop32','32',[cli,'scalar'],0),
               ('environment',None,None,'32',[],32),
               ('invalid','coop16',None,'0',[],None))
     for name,global_mode,worker_mode,override,extra,expected in settings:
@@ -49,9 +53,9 @@ def main():
               '--giant-backend','coop32',*extra]
         config=folder/'ecm.toml'
         config.write_text('[stage2]\nstage2_short_calibration=false\n'+
-            (('stage2_seed_backend='+json.dumps(global_mode)+'\n') if global_mode else '')+
-            (('[workers.2.stage2]\nstage2_seed_backend='+json.dumps(worker_mode)+'\n') if worker_mode else ''))
-        env=environment();env['NTT_GIANT_SEED_COOP']=override
+            ((key+'='+json.dumps(global_mode)+'\n') if global_mode else '')+
+            (('[workers.2.stage2]\n'+key+'='+json.dumps(worker_mode)+'\n') if worker_mode else ''))
+        env=environment();env[env_key]=override
         monitor=TelemetryRecorder(1,folder/'telemetry.jsonl',interval=.2)
         try:
             check_gpu_processes(monitor.monitor,out,folder/'before.json',allowed=source['allowed_processes'])
@@ -61,7 +65,7 @@ def main():
             check_gpu_processes(monitor.monitor,out,folder/'after.json',allowed=source['allowed_processes'])
         finally:monitor.close()
         if expected is None:
-            if result.returncode==0 or 'stage2_seed_backend' not in text:raise ValueError('Invalid enum accepted')
+            if result.returncode==0 or key not in text:raise ValueError('Invalid enum accepted')
         else:
             if result.returncode:raise ValueError('Worker failed: '+str(folder))
             records=completed_records(folder/'result.jsonl')
@@ -69,19 +73,24 @@ def main():
             r=records[0];n=normalize_result(r)
             if r['status']!='NF' or r['source-build']!=identity or n['N_hex']!=case['N_hex'] or n['factors'] or n['bad_factors']:
                 raise ValueError('Queue identity or arithmetic changed')
-            pair=fields((folder/'debug.log').read_text(encoding='utf-8'),'real_giant_seed_pair')
-            if {int(pair[k]) for k in ('seed_backend','base_backend')}!={expected}:raise ValueError('Policy lost in child')
+            debug=(folder/'debug.log').read_text(encoding='utf-8')
+            if a.component=='seed':
+                pair=fields(debug,'real_giant_seed_pair')
+                if {int(pair[k]) for k in ('seed_backend','base_backend')}!={expected}:raise ValueError('Policy lost in child')
+            else:
+                reduce=fields(debug,'s4_coop_reduce_mode')
+                if int(reduce['enabled'])!=expected:raise ValueError('S4 policy lost in child')
         report['calls'].append(dict(name=name,returncode=result.returncode,backend=expected))
-        write(out/'summary.json',report);print('PASS seed_config:',name,flush=True)
+        write(out/'summary.json',report);print('PASS '+a.component+'_config:',name,flush=True)
     if sha(a.exe)!=identity:raise ValueError('Binary changed')
     profile=tomllib.loads((out/'profile.toml').read_text(encoding='utf-8-sig'))
     counts={0:0,32:0}
     for row in summaries(profile):
         if row['source']=='measured':
-            policy=int(row['seed_coop'])
+            policy=int(row['seed_coop']) if a.component=='seed' else int(profile['condition'][str(row['condition'])].get('env_s4_coop_reduce',0))
             counts[policy]+=row['repeats']
     if counts!={0:1,32:2}:raise ValueError('ECM observations crossed actual seed backends: '+str(counts))
-    report['tune_repeats_by_seed_policy']=counts
+    report['tune_repeats_by_'+a.component+'_policy']=counts
     report['complete']=True;write(out/'summary.json',report)
 
 
