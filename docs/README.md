@@ -82,4 +82,6 @@ CUDA 目录与模块重构的冻结实施记录和验证证据见 [CUDA 结构�
 
 原论文、译述与论文分析保留在 `docs/paper/`；外部源码与上游工程资料在 `.refactor/`。项目的文档维护规则见根目录 [AGENTS.md](../AGENTS.md)。
 
+- 中等位数整数 GPU 加乘论文：[中文译文](paper/GPU%20Implementations%20for%20Midsize%20Integer%20Addition%20and%20Multiplication_中文译文.md)与[技术分析](paper/GPU%20Implementations%20for%20Midsize%20Integer%20Addition%20and%20Multiplication_技术分析.md)。分析包含扫描边界、单素域 FFT 精确恢复条件、A100 性能表的比较范围及 ECM-ELF 适配边界。
+
 - [CUDA Stage1 统一架构实施草稿](development/CUDA_STAGE1_UNIFICATION_DRAFT.md)：获批方案、分阶段状态及验收证据。

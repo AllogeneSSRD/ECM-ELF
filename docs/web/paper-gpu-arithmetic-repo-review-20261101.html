@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GPU 整数加乘论文与 ECM-ELF 算术优化评估</title>
+<style>:root{color-scheme:light dark;--bg:#f4f6fa;--fg:#172237;--card:#fff;--line:#d6deea;--muted:#526178;--accent:#215ccc}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1180px;margin:auto;padding:40px 28px 80px}h1{font-size:32px;line-height:1.3}h2{margin-top:42px;border-bottom:1px solid var(--line);padding-bottom:10px}h3{margin-top:28px}a{color:var(--accent)}p{max-width:960px}header,.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px;margin:18px 0}.meta{color:var(--muted);font-size:14px}nav{display:flex;flex-wrap:wrap;gap:8px 22px}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:14px;background:var(--card)}th,td{border:1px solid var(--line);padding:12px;text-align:left;vertical-align:top}th{background:#e9effb;color:#172237}.formula{font-family:ui-monospace,Consolas,monospace;background:var(--card);border-left:4px solid var(--accent);padding:14px;overflow:auto;white-space:pre-wrap}code{font-size:.92em;overflow-wrap:anywhere}.tag{font-size:13px;font-weight:700;color:var(--accent)}li{margin:7px 0}.note{color:var(--muted)}@media(prefers-color-scheme:dark){:root{--bg:#111823;--fg:#e0e7f3;--card:#192435;--line:#34445b;--muted:#a6b7ce;--accent:#83b2ff}}@media(max-width:650px){main{padding:22px 14px}h1{font-size:25px}}
+</style></head><body><main>
+<header><div class="tag">只读代码评估 · 2026-11-01</div><h1>GPU 整数加乘论文与 ECM-ELF 算术优化评估</h1>
+<p>优先研究 <b>Stage1 的真正专用平方</b>及 <b>Stage2 宽位点算术的小规模协作与私有状态缩减</b>。保留现有 CGBN 和 Goldilocks NTT 主体；单点短 NTT 作为后续宽位实验，不直接移植论文的完整方案。</p>
+<p class="meta">代码快照：ECM-ELF 0.57.2，HEAD 2e1d8b7c。工作区已有协作点算术探针及相关文档改动；这些是实验状态，不作为已接入生产或已取得收益的依据。本评估没有修改程序、构建配置或测试，也没有运行 GPU 实验。</p>
+<nav><a href="#overview">优先级</a><a href="#stage1">Stage1</a><a href="#points">Stage2 点算术</a><a href="#ntt">Stage2 NTT</a><a href="#benefit">收益口径</a><a href="#order">验证顺序</a><a href="#sources">依据</a></nav></header>
+
+<h2 id="overview">优先级与收益性质</h2><div class="scroll"><table><thead><tr><th>方向</th><th>适配判断</th><th>收益依据</th><th>顺序</th></tr></thead><tbody>
+<tr><td>Stage1 对称平方，保留 CGBN 线程分组</td><td>当前 mont_sqr 实际仍为 mont_mul(a,a)，存在未利用的平方对称性</td><td>模型：若模平方耗时少 10–20%，Montgomery 主循环约少 4–10%；不是实测预测</td><td>优先</td></tr>
+<tr><td>Stage1 小段寄存器处理、缩短临时量存活</td><td>CGBN 已有每线程多字和 warp 通信；应局部优化，不能把 shared 方案视为升级</td><td>没有新的量化结论；先看寄存器、spill、发射瓶颈</td><td>随平方一起评估</td></tr>
+<tr><td>Stage2 再增加专用平方</td><td>0.57.2 已默认启用，不能重复列为未来收益</td><td>已有 13 格普通/承载合计引擎时间少约 4.37%；多数格 n=1</td><td>保留当前基线</td></tr>
+<tr><td>Stage2 点乘小 TPI 协作、按系数归属分工</td><td>宽位单线程数组和长依赖是明确候选，保留对称平方与梅森归约</td><td>尚无合格新收益；若点组整体快 1.25 倍，旧矩阵约少 11–12% 引擎时间</td><td>优先宽位原语</td></tr>
+<tr><td>Stage2 普通系数 S4 归约协作</td><td>普通模数的另一项二次成本，不能用 NTT 优化掩盖</td><td>旧最高档 S4 约占引擎 24%；若整体快 1.25 倍，理想少约 4.8%</td><td>普通路径优先级高</td></tr>
+<tr><td>NTT 增大每线程寄存器小块、调整融合层数</td><td>当前 outer/tile 已有同类优化，还需权衡 shared 与寄存器</td><td>已有联合表相对中段 M6 仅约 0.19% 完整矩阵收益，不能承诺两位数</td><td>按实测热点微调</td></tr>
+<tr><td>NTT carry 的分层 scan 与邻域复用</td><td>当前已有 cone、ballot 和精确跨 warp 处理；优先减少重复读取</td><td>必须先分离 carry 的当前占比；没有可靠新增百分比</td><td>次优先</td></tr>
+<tr><td>单点短 NTT/浅层 Karatsuba</td><td>可能适合 8k–16k 宽位，尤其线性梅森归约；普通 REDC 仍可能主导</td><td>交叉点未知，论文没有证明本项目在 16k 以内就获益</td><td>协作基线稳定后</td></tr>
+</tbody></table></div>
+<p class="note">表中“若”表示条件推演，不是性能承诺。旧矩阵中点组包含归一化/叶准备，不能把某个模乘原语的加速直接当作整个点组的加速。</p>
+
+<h2 id="stage1">Stage1 的 CGBN 路径</h2>
+<h3>现有实现已经具备哪些论文思想</h3>
+<p>Montgomery 主循环的 <a href="../../src/ecm/stage1/montgomery/cuda/arithmetic.cuh#L419">double_add_v2</a>、<a href="../../src/ecm/stage1/montgomery/cuda/arithmetic.cuh#L816">double_add_v2_suyama</a> 在内核内融合倍点、差分加法及模运算。Edwards 的 <a href="../../src/ecm/stage1/edwards/cuda/naf.cuh#L46">edwards_naf_slice</a> 在同一内核内遍历 NAF 切片，并把坐标保持在 Montgomery 域。它们已经避免每次整数加乘单独启动内核。</p>
+<p><a href="../../src/ecm/cuda/dispatch/tiers.def#L105">tiers.def</a> 按容器使用 TPI4/8/16/32；例如 2048 为 TPI8、2560–8192 为 TPI16、9216 起为 TPI32。每线程本来就处理多个 32 位字。论文的“高效顺序化”和“融合中间运算”并不是这里尚未采用的整套新方案。论文对 CGBN 的明显优势主要发生在更宽整数，其 FFT 与经典 CUDA 实现的采样交叉位于约 32k–64k，而本仓库现有代表矩阵最高目标约 16k 位。</p>
+
+<h3>最值得研究的是专用平方</h3>
+<p>项目入口为 <a href="../../src/ecm/stage1/montgomery/cuda/arithmetic.cuh#L358">mont_sqr_normalized</a> 与 Edwards 的 <a href="../../src/ecm/stage1/edwards/cuda/point.cuh#L33">cgbn_edwards_field::sqr</a>。本地 CGBN 的 <a href="../../third_party/cgbn/include/cgbn/impl_cuda.cu#L1032">mont_sqr</a> 直接调用 <code>mont_mul(a,a)</code>，<a href="../../third_party/cgbn/include/cgbn/impl_cuda.cu#L526">sqr_wide</a> 同样复用一般乘法。接口名称没有带来对称部分积优势。</p>
+<p>可借鉴论文“输出系数由线程独占、用少量寄存器累加”的组织方式，另写项目内的协作平方后端，保留 CGBN 分组及表示。平方只计算上三角与对角线，交叉项加倍；其大整数乘积部分由 n² 项降为 n(n+1)/2 项。该平方对称性是整数算法的通用优化，论文提供的是适合 GPU 的分工和存储思路，不宜把对称平方本身称为论文的新贡献。</p>
+<p>在普通模数下，如果 REDC 仍约花 n² 的部分积，则模平方从约 2n² 降到约 1.5n²：理想主导部分积减少 25%，不是模平方时间减半。Suyama PARAM0 的每位约 6M+4S，PARAM3 的核心为 4M+4S 另加小常数乘。对应理想主导工作减少约 10% 和不足 12.5%；若实际单次模平方仅减少 10–20% 耗时，PARAM0 主循环约减少 4–8%，PARAM3 约减少 5–10%，还应扣除加减、取标量位、检查及其他固定成本。</p>
+<p>Edwards 默认 HWCD 的 <a href="../../src/ecm/stage1/edwards/cuda/naf.cuh#L31">edwards_naf_double</a> 每步为 4S+3M，按需生成 T 再加 1M；稀疏加点约为 10M。因此平方也值得优先研究，但要按窗口和非零密度统计实际平方占比。当前 2XY 算法 5 用 1M 替换第 4 次平方；如果专用平方变快，HWCD 与算法 5 的相对次序可能变化，不能沿用旧选择结论。</p>
+<p>实现风险在于 CGBN 已将乘积与 Montgomery 消元交错：现代架构默认由 <a href="../../third_party/cgbn/include/cgbn/cgbn.h#L68">cgbn.h</a> 选择 WMAD，底层见 <a href="../../third_party/cgbn/include/cgbn/core/core_mont_wmad.cu#L28">core_mont_wmad.cu</a>。不能把独立完整平方再加通用 REDC 当成必然更快的替代，它会拉长双宽数组存活期、增大寄存器压力，并可能破坏原有指令交错。先做保持分组的小后端，不直接修改第三方通用库。</p>
+
+<h3>寄存器布局值得借鉴，整块扫描不宜全面替换</h3>
+<p><a href="../../src/ecm/stage1/montgomery/cuda/arithmetic.cuh#L248">cgbn_params_t</a> 已有分档寄存器目标：≤2048 为 56、至 5120 为 128、更宽为 255。现有 <a href="../performance/STAGE1.md">Stage1 性能资料</a> 还指出增加驻留率可能只消除末波浪费，并不总提升计算吞吐。因此值得比较小 Q、累加器数量、别名安全的临时量复用和指令级并行，而不是把线程数或占用率最大化。</p>
+<p>论文的 block scan 对当前 CGBN warp 内进位未必更便宜；跨 warp 会引入 shared 访问和同步，且减少每块独立曲线数。原来的 <code>normalize_addition</code> 与借位补回保证规范残数；不能为减少比较而删除它们。可预期收益目前只宜表达为少量百分比的调度优化目标，实际结果可能为零或回退，须有新 SASS/计时才能量化。</p>
+
+<h2 id="points">Stage2 的点乘与平方</h2>
+<h3>当前已不是用普通乘法执行所有平方</h3>
+<p><a href="../../src/ecm/stage2/cuda/device/point.cuh#L140">s2g_mont_mul</a> 仍是单线程 64 位 schoolbook 完整乘积，再调用 <a href="../../src/ecm/stage2/cuda/device/point.cuh#L109">s2g_mont_reduce</a>。但 <a href="../../src/ecm/stage2/cuda/device/point_square.cuh#L7">s2g_mont_sqr</a> 已使用上三角、交叉项整体左移、对角线累加；<a href="../../src/ecm/stage2/cuda/device/point.cuh#L165">s2g_point_square</a> 是生产分派，<a href="../../src/ecm/stage2/cuda/options.cpp#L32">NTT_POINT_SQUARE</a> 默认 1。普通模数走一般 REDC，精确梅森走 <a href="../../src/ecm/stage2/cuda/device/point_mersenne.cuh#L6">线性折叠及 R⁻¹ 旋转</a>。</p>
+<p>已有资格数据见 <a href="../performance/STAGE2_BIT_SCALING.md#L428">位宽报告第 10 节</a>：RTX4060 Laptop、目标 SM1500MHz、不修改功耗/频率，13 个目标宽度 318–16272 bits，普通/承载两条路径，固定各格 D、布局、链长、Stage1 点和约 2.7×10¹⁰ 的 B2。0.57.1 显式 on 的引擎 init+main 相比 0.56.4，普通合计少 3.24%、承载少 6.18%、合计少 4.37%；0.57.2 默认启用对应设备对象。最高目标位宽分别少 3.58%/7.67%。多数格 n=1，最高档另有逆序复测；不能保证其他设备和工作量具有相同收益，也不能再作为本轮待做收益。</p>
+
+<h3>最值得借鉴的是宽位协作和小片段寄存器累加</h3>
+<p>当前 <a href="../../src/ecm/stage2/cuda/device/point.cuh#L278">ladder_kernel</a> 一线程做一个点，<a href="../../src/ecm/stage2/cuda/device/giant_chain.cuh#L6">chain_kernel</a> 一线程做一条链。一个 NW256 线程需要多个坐标数组和约 2NW 的乘积临时数组，动态索引使“写成线程私有数组”不等于“存入寄存器”。旧构建记录 chain 栈约 26640 B、ladder 约 32784 B；这些是静态容量而非累计访存量。</p>
+<p>论文方法应转化为小 TPI 协作：先比较 4/8/16 个线程分摊一个点整数，每线程仅维护固定 Q 个字或输出系数，用 shuffle 或少量 shared 交换摘要。宽位、独立链较少时有望降低每线程串行跨度和局部工作集；大量独立 baby 点时则可能因每点占用更多线程而失去吞吐，必须分别测量。</p>
+<p>按结果分工也要调整：论文主体是低 M 字截断乘积，而本项目 REDC 和梅森折叠都要完整 2W 字乘积。完整卷积 C₀…C₂W₋₂ 两端对称的项数相同，直接镜像配对不会负载均衡。一般乘法可配对 Cₖ 与 Cₖ₊W（0≤k&lt;W，令 C₂W₋₁=0），两者合计 W 个部分积，再按平方的上三角权重单独设计分工。不能丢掉高半积。</p>
+<p>对于承载路径，必须保留当前线性梅森归约。若直接用 CGBN <code>mont_mul</code> 替代，会重新引入二次 REDC；若直接用其 <code>mont_sqr</code>，还会失去现有对称平方。应对照“协作乘积/专用平方＋当前梅森归约”，不能只更换库名。</p>
+<p>工作区已有 <a href="../../tools/test/stage2_point_coop.cuh">stage2_point_coop.cuh</a> 和 <a href="../development/STAGE2_COOPERATIVE_POINTS_DRAFT.md">协作点算术草稿</a>，目前说明仍是独立原语实验，尚无生产完整点链收益资格。本评估不重复创建或修改这些实现。</p>
+
+<h3>普通模数还应关注归约，短 NTT 放在后面</h3>
+<p>点 REDC 本身有约 W² 的循环。单把完整乘积换为论文卷积或浅层 Karatsuba，普通模乘总体仍保留平方项；梅森折叠为 O(W)，更容易暴露乘积优化的价值。普通多项式系数的 <a href="../../src/ecm/stage2/cuda/device/s4_reduce.cuh#L17">s4_reduce_kernel</a> 调用 <a href="../../src/ecm/stage2/cuda/stage2_scalar.cuh#L45">s4_div_rem</a>，同样是一线程长除法与修正；它是 NTT 之外的独立候选，不应称为“NTT 乘法太慢”。</p>
+<p>单点短 NTT 数学上可行：采用 Goldilocks 域、b=27 的 digit，4k/8k/16k 位输入分别约需 152/304/607 个 digit，完整线性卷积取 512/1024/2048 点；平方只需一次正向和一次逆向变换，乘法需两正向加一逆向。必须同时满足 T(2ᵇ−1)²&lt;q 和补零长度约束。还要计入域算术、carry、重组、模归约及共享空间；它不是直接调用现有巨大多项式 NTT API 就能消除这些成本。</p>
+<p>该候选须在设备内与点运算融合，不能每次模乘都由主机提交短变换。优先测试 8k–16k 和梅森路径，并与已经优化的对称平方、小 TPI schoolbook 及单层 Karatsuba 比较。现阶段不能给出可靠数值收益或自动切换阈值。</p>
+
+<h2 id="ntt">Stage2 多项式 NTT 的借鉴边界</h2>
+<h3>主体已经比论文朴素 FFT 使用了更多专门优化</h3>
+<ul>
+<li><a href="../../src/ecm/cuda/arithmetic/goldilocks/goldilocks.cuh#L54">gl_mul</a> 使用 64×64 高低积及固定 Goldilocks 归约；不是论文的通用双宽取模。论文提出未来采用 Montgomery 表示，不构成这里应改域表示的证据。</li>
+<li><a href="../../src/ecm/cuda/ntt/runtime.cpp#L1079">ntt_run_passes</a> 使用 DIF 正向和 DIT 逆向，已经消除显式位逆序，并批量处理卷积。</li>
+<li><a href="../../src/ecm/cuda/ntt/device/tile.cuh#L158">tile_kernel</a> 已在 shared 中融合多层，含 radix4 和 warp tail；pointwise 与逆归一化已进入逆向 tile，避免额外整数组 pass。</li>
+<li><a href="../../src/ecm/cuda/ntt/device/tile.cuh#L57">outer_fwd_kernel</a> 的 x[2ᴹ] 是每线程多元素处理；<a href="../../src/ecm/cuda/ntt/device/outer_coop.cuh#L15">outer_coop_kernel</a> 则在 shared 里展开 radix 轴，控制寄存器爆炸。两者体现了论文顺序化思想的不同权衡。</li>
+<li><a href="../../src/ecm/stage2/cuda/device/pack.cuh#L9">pack_zero_kernel</a> 已融合输入打包和补零；常量根表和执行计划也已有缓存。</li>
+</ul>
+<p>值得继续做的是在特定 tile/outer 热点中比较每线程 Q=2/4 的固定寄存器小块、共享交换频率、根表复用和融合层数，而不是把整个变换挤入一个线程块。实际 Stage2 主矩阵有 2²⁵–2²⁷ 点变换，单线程块无法容纳。</p>
+<p>已有 <a href="../performance/NTT_OUTER.md">outer 计划资格报告</a> 表明，更激进的联合表相对中段 M6 的固定 D 全矩阵仅少约 0.19%，未默认启用。这是已有特定实验的结果，不代表所有新内核只有这个收益；但足以说明“继续融合几层就能再快几十个百分点”没有依据。该实验的设备、二进制、样本数和计时边界应沿原报告核对，不能与点平方的数据混合。</p>
+
+<h3>carry 的扫描思路仍有局部价值</h3>
+<p><a href="../../src/ecm/cuda/ntt/device/carry.cuh#L141">carry_cone_value</a> 对邻域执行有限轮进位；<a href="../../src/ecm/cuda/ntt/device/carry.cuh#L158">carry_cone_kernel</a> 已通过 ballot 找到生成/停止位置，warp 的 lane0 在必要时向前寻找跨 warp 进位。融合检查路径见 <a href="../../src/ecm/cuda/ntt/device/carry_partial.cuh">carry_partial.cuh</a>，分派见 <a href="../../src/ecm/cuda/ntt/runtime.cpp#L1162">ntt_run_passes 的 carry 部分</a>。</p>
+<p>论文可借鉴的是把固定小段先局部处理、再扫描段摘要，从而复用相邻线程重复读取的数据，并用分层摘要限制全最大 digit 长链的跨边界扫描。初始卷积系数的进位可能大于 1，不能把论文的布尔进位运算直接套到原始 NTT 系数；应先证明归一化到二值进位状态，或使用更一般的进位传递函数。</p>
+<p>对长变换，跨块扫描需要额外摘要 pass 和全局有序依赖，可能比当前局部 cone 更贵。新增收益应写为 fcarry·(1−1/gcarry)，先从当前曲线取得 fcarry；没有这项剖析，不应填一个虚构的百分比。论文图 2 的分段 exclusive scan 还存在段首处理疑点，不能照搬其伪代码。</p>
+
+<h2 id="benefit">如何把局部优化换算成完整收益</h2>
+<div class="formula">当前范围中候选占比 f，候选加速 g 倍：
+新时间 / 旧时间 = (1 − f) + f / g
+耗时减少比例 = f × (1 − 1/g)
+整体加速倍数 = 1 / [(1 − f) + f/g]</div>
+<p>冻结的 0.56.0 主矩阵在最高宽度的点组占比为普通 53.90%、承载 58.76%。如果优化真的让整个点组快 1.25 倍，则引擎耗时理想减少 10.78%/11.75%；若整个点组快 2 倍，则减少 26.95%/29.38%，对应约 1.369/1.416 倍加速。它们是旧矩阵的预算模型，专用平方启用后必须重新测 f；点组中的归一化、等待和叶准备也未必被模乘优化加速。</p>
+<p>同一旧矩阵中普通 S4 占引擎 24.03%，承载仅 2.56%。假定让整个 S4 快 1.25 倍，理想引擎耗时分别少约 4.81%/0.51%。这是为什么普通系数归约更值得单独研究，承载路径则应先把资源放在完整点乘上。S4 时间嵌套于多项式阶段，不再相加到完整时间。</p>
+<p>这组冻结矩阵使用 RTX4060 Laptop、目标 SM1500MHz、CUDA13.3、普通/承载 13 格、B1=50000、sigma26（M2003 为27），实际 B2=27015978990（M6011 为27567389850），每格 off 侧 n=1，计时为引擎 init+main。二进制 SHA256 为 <code>9e2eba5821ac8593b897c7d56cfc7e76324717214a51fef73369e8c286f1a282</code>，原始证据根 <code>data/experiments/stage2_point_matrix_20261031/min1_full03/</code>。这些工况不代表现在工作区的一次新测量。</p>
+
+<h2 id="order">建议的验证顺序</h2>
+<ol>
+<li><b>Stage1：</b>先做保持 TPI 的对称平方原语，分别测试依赖链与足量实例吞吐；再放进 PARAM0/PARAM3 ladder 和 Edwards HWCD NAF，测寄存器、local、完整切片与整条曲线。不先全面替换 CGBN。</li>
+<li><b>Stage2：</b>以 0.57.2 专用平方为基线，完成已有协作原语实验；W=128/129/160/192/255、普通/精确梅森分别比较，保留当前 Montgomery radix 和规范残数。原语通过后再测试完整 xADD、seed、chain、baby ladder。</li>
+<li><b>普通归约：</b>单独统计 S4 与点 REDC，尝试小规模协作或分块累计。更复杂的快速 Barrett/Montgomery 归约应作为完整算法研究，不能在成本表中省略。</li>
+<li><b>NTT：</b>只针对剖析确认的 tile、outer、carry 瓶颈比较固定小 Q 或分层摘要。变更融合层数后重新计算 shared/寄存器及 arena 计划，不改变 digit 精确性门限。</li>
+<li><b>后续算法：</b>已有协作 schoolbook 基线后，再比较浅层 Karatsuba 与设备内短 NTT。最终固定 Stage1 点、D、P、布局和链长测完整 Stage2；不同候选收益不能简单相加。</li>
+</ol>
+<p>所有候选都应与 GMP 核对边界输入、别名、长进位链及完整输出；曲线/param/sigma 固定时保持相同数学结果和因子行为。NTT 使用 <a href="../../src/ecm/cuda/ntt/shape.cpp#L2">exact_ok_terms</a> 与 <a href="../../src/ecm/cuda/ntt/shape.cpp#L97">choose_cfg</a> 的当前精确性合同，不使用论文参数替代上界检查。</p>
+
+<h2 id="sources">依据与范围</h2>
+<p>论文：Cosmin E. Oancea、Stephen M. Watt，<a href="https://arxiv.org/html/2405.14642v1">GPU Implementations for Midsize Integer Addition and Multiplication</a>，arXiv:2405.14642v1，2024-05-23。论文 CC BY-SA 4.0；本分析中的原文改编内容同样按 <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a> 提供。作者的 A100 截断加乘与融合程序不等同于本项目完整模乘或椭圆曲线链。</p>
+<p>本地权威性能说明：<a href="../performance/STAGE1.md">Stage1 性能</a>、<a href="../performance/STAGE2_BIT_SCALING.md">Stage2 位宽与平方资格</a>、<a href="../performance/STAGE2_PREPARATION.md">Stage2 点核剖析与准备</a>、<a href="../performance/NTT_OUTER.md">NTT outer 计划</a>。项目 NTT 合同见 <a href="../architecture/NTT.md">精确 NTT 与系数归约</a>；CGBN 对外说明见 <a href="https://github.com/NVlabs/CGBN">NVlabs/CGBN</a>，具体平方行为以本地代码为准。</p>
+<p class="note">本页是指定日期与代码快照的评估；不替代性能说明中的运行身份和原始证据。工作区已有未提交协作实验，后续若获得完整数据，应按实际结果重写对应候选结论。本轮仅新增本分析页面。</p>
+</main></body></html>
