@@ -24,7 +24,7 @@ from gpu_telemetry import TelemetryRecorder
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def freeze(build,dest,repo):
+def freeze(build,dest,repo,source_archive=None):
     manifest=load(build/'stage1_local_manifest.json')
     assert sha(build/'ecm_cuda.exe')==manifest['executable_sha256'].lower()
     for path,digest in manifest['objects'].items():assert sha(build/path)==digest.lower(),path
@@ -34,12 +34,20 @@ def freeze(build,dest,repo):
         shutil.copy2(source,dest/source.name)
     # Capture the source contract declared by the formal builder. Generated
     # modules may live under the build leaf and are kept with their identities.
-    with zipfile.ZipFile(dest/'sources.zip','w',zipfile.ZIP_DEFLATED) as archive:
-        for name,digest in manifest['source_hashes'].items():
-            source=Path(name) if Path(name).is_absolute() else repo/name
-            assert sha(source)==digest.lower(),source
-            label=source.relative_to(repo).as_posix() if source.is_relative_to(repo) else source.name
-            archive.write(source,label)
+    def source_path(name):return Path(name) if Path(name).is_absolute() else repo/name
+    def label(path):return path.relative_to(repo).as_posix() if path.is_relative_to(repo) else path.name
+    if source_archive is not None:
+        # Explicit frozen baseline: verify every declared dependency from its
+        # archive, not from a newer working tree. Exe/objects stay hash-checked.
+        with zipfile.ZipFile(source_archive) as archive:
+            for name,digest in manifest['source_hashes'].items():
+                assert hashlib.sha256(archive.read(label(source_path(name)))).hexdigest()==digest.lower(),name
+        shutil.copy2(source_archive,dest/'sources.zip')
+    else:
+        with zipfile.ZipFile(dest/'sources.zip','w',zipfile.ZIP_DEFLATED) as archive:
+            for name,digest in manifest['source_hashes'].items():
+                source=source_path(name);assert sha(source)==digest.lower(),source
+                archive.write(source,label(source))
     return dict(exe_sha256=sha(dest/'ecm_cuda.exe'),sources_sha256=sha(dest/'sources.zip'),
         profile_sha256=manifest['profile_sha256'],files={p.name:sha(p) for p in dest.iterdir() if p.is_file()})
 
@@ -49,6 +57,9 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--baseline',type=Path,required=True)
     p.add_argument('--candidate',type=Path,required=True)
+    p.add_argument('--baseline-source-archive',type=Path,help='Explicit verified source snapshot for a frozen baseline')
+    p.add_argument('--candidate-source-archive',type=Path)
+    p.add_argument('--candidate-layout',type=int,choices=(0,1,2,3),default=0)
     p.add_argument('--input-plan',type=Path,default=Path('data/experiments/stage2_point_matrix_20261031/min1_full03/plan.json'))
     p.add_argument('--exponents',type=int,nargs='+',default=[4001,8011,16319])
     p.add_argument('--models',nargs='+',choices=('mont0','ed'),default=['mont0','ed'])
@@ -62,10 +73,12 @@ def main():
     repo=Path(__file__).resolve().parents[2];out=a.output.resolve();out.mkdir(exist_ok=False,parents=True)
     allowed=load(a.process_policy)['allowed_processes']
     bins=out/'bin';bins.mkdir();identity={}
-    for name,build in [('baseline',a.baseline.resolve()),('carrysave',a.candidate.resolve())]:
+    for name,build,archive in [('baseline',a.baseline.resolve(),a.baseline_source_archive),('carrysave',a.candidate.resolve(),a.candidate_source_archive)]:
         cache=(build/'CMakeCache.txt').read_text(encoding='utf-8')
         assert re.search(r'^ECM_CGBN_SQUARE_BACKEND:STRING='+('0' if name=='baseline' else '1')+r'$',cache,re.M),build
-        identity[name]=freeze(build,bins/name,repo)
+        layout=re.search(r'^ECM_CGBN_SQUARE_LAYOUT:STRING=(\d+)$',cache,re.M)
+        if name=='carrysave':assert int(layout[1] if layout else 0)==a.candidate_layout,build
+        identity[name]=freeze(build,bins/name,repo,archive)
     plan=load(a.input_plan);cases=[c for c in plan['cases'] if c['exponent'] in a.exponents]
     assert {c['exponent'] for c in cases}==set(a.exponents)
     for c in cases:
@@ -75,7 +88,8 @@ def main():
     config=out/'minimal.toml'
     config.write_text('[shared]\n[stage1]\nauto_stage2 = 0\nedwards_stage2_transfer = 0\n',encoding='utf-8')
     report=dict(complete=False,started_utc=stamp(),identity=identity,device=a.device,
-        b1=a.b1,sigma=a.sigma,warmups=0,rounds=a.rounds,runs=[],failures=[],allowed_processes=allowed,
+        b1=a.b1,sigma=a.sigma,warmups=0,rounds=a.rounds,candidate_layout=a.candidate_layout,
+        runs=[],failures=[],allowed_processes=allowed,
         timing='complete process wall; Mont GPU event includes preparation; Ed loop excludes dictionary; oracle excluded')
     write(out/'summary.json',report);signatures={};oracle={}
     try:

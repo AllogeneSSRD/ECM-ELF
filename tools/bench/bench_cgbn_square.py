@@ -6,6 +6,10 @@ Modes 5/7: finite-depth split Montgomery square, 6/8: its exact wide product.
 Modes 9/11: finite-depth Karatsuba Montgomery square, 10/12: its wide product.
 Modes 13/14: existing Stage2 Mersenne reducer with generic / split wide product.
 Modes 15/16: carry-save WMAD REDC, streamed / precombined high half.
+Modes 17/18/19: carry-save with diagonal transpose / both transposes / cross-first.
+Modes 20/21: complete wide square with cross-first / both transposes.
+Mode 22: Stage2 Mersenne reducer with cross-first wide square.
+Mode 23: probe-only carry-save producer that joins before loading cross inputs.
 """
 import argparse
 import hashlib
@@ -42,7 +46,7 @@ def main():
     a=p.parse_args();repo=Path(__file__).resolve().parents[2]
     if a.suite=='sanitizer' and (a.sanitizer is None or not a.sanitizer.is_file()):
         p.error('--suite sanitizer requires --sanitizer PATH')
-    modes=[int(s) for s in a.modes.split(',')];assert modes and all(0<=m<=16 for m in modes)
+    modes=[int(s) for s in a.modes.split(',')];assert modes and all(0<=m<=23 for m in modes)
     build=a.build.resolve();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     binary=out/'bin';binary.mkdir();(binary/'.gitignore').write_text('*\n')
     m=load(build/'manifest.json');assert sha(build/'cgbn_square_probe.exe')==m['sha256'].lower()
@@ -101,7 +105,7 @@ def main():
             assert len(values)==samples and all(v>0 for v in values)
             row=dict(fields=fields,samples_ms=values,median_ms=statistics.median(values),
                 mode=mode,count=count,recurrence=rec,alias=alias,kind=kind,folder=str(folder),device_identity=identity)
-            row['feedback']=fields.get('feedback','modular' if mode in (0,1,2,5,7,9,11,13,14,15,16) else 'legacy_low_half')
+            row['feedback']=fields.get('feedback','modular' if mode in (0,1,2,5,7,9,11,13,14,15,16,17,18,19,22,23) else 'legacy_low_half')
         report['runs'].append(row);write(out/'summary.json',report)
         print(a.suite,bits,tpi,count,rec,mode,row.get('median_ms','fault-rejected'),flush=True)
         return row
@@ -114,15 +118,15 @@ def main():
         elif a.suite=='correctness':
             for rec in (1,3):
                 for mode in modes:
-                    for kind in ((a.kind,) if a.kind is not None else (1,3) if mode in (13,14) else (0,1,2)):
+                    for kind in ((a.kind,) if a.kind is not None else (1,3) if mode in (13,14,22) else (0,1,2)):
                         for alias in (0,1):run(67,rec,mode,alias,kind)
             for count in (1,33):
-                for mode in modes:run(count,3,mode,1,1 if mode in (13,14) else 0)
+                for mode in modes:run(count,3,mode,1,1 if mode in (13,14,22) else 0)
             for mode in modes:
                 if mode not in (0,1,3):run(33,1,mode,1,1,fault=1)
             if xor_feedback:
                 for mode in modes:
-                    if mode in (3,4,6,8,10,12):run(33,3,mode,1,1,fault=2)
+                    if mode in (3,4,6,8,10,12,20,21):run(33,3,mode,1,1,fault=2)
         else:
             assert a.rounds>=2
             # Query the real SM count from a checked native control, not a

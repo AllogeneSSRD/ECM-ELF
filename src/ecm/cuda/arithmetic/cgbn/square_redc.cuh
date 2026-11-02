@@ -26,7 +26,7 @@ namespace ecm_cgbn {
 // B=2^(BITS/2). Feed low(C)/2^32 into the unaligned accumulator and stream
 // high(C) separately. No full-width addition of D+C or its carry propagation
 // is needed. The original Montgomery radix and final canonicalisation remain.
-template<unsigned Depth,class Env,bool StreamHigh=false,bool Canonical=true>
+template<unsigned Depth,class Env,bool StreamHigh=false,bool Canonical=true,unsigned Layout=0>
 __device__ __forceinline__ void mont_square_carrysave(const Env &env,
     typename Env::cgbn_t &r,const typename Env::cgbn_t &a,
     const typename Env::cgbn_t &n,uint32_t np0) {
@@ -45,7 +45,7 @@ __device__ __forceinline__ void mont_square_carrysave(const Env &env,
         constexpr unsigned bits=0xffffffffu>>(32-T);
         const unsigned mask=bits<<base;
         typename Env::cgbn_wide_t diagonal;typename S::CrossWide cross;
-        square_split_parts<Depth>(env,diagonal,cross,a);
+        square_split_parts<Depth,Env,Layout>(env,diagonal,cross,a);
         XC xc(cgbn_no_checks);XE xe(xc);
         const unsigned low_bit=__shfl_sync(mask,cross._low._limbs[J-1],T-1,T)>>31;
         const unsigned high_bit=__shfl_sync(mask,cross._high._limbs[J-1],T-1,T)>>31;
