@@ -738,11 +738,11 @@ Baby和giant默认均为auto，缺乏证据时保留标量。先在当前有效D
 
 ### 执行与计算量
 
-CUDA提供独立的`stage2_seed_backend=scalar|coop32`，默认scalar。8193…16384实际算术bits可选TPI32、160／192／224／256词容器；承载按p判断。每组32线程处理一条独立seed ladder，同时返回相邻两点；GPU构建[D]Q也复用协作ladder。0起点、单点尾链、Montgomery radix和规范残数保持原语义；[D]Q在目标环非单位时继续原来的独立ladder／因子恢复路径。
+CUDA提供独立的`stage2_seed_backend=scalar|coop32`，默认auto，未完成配对前保持scalar；也可强制后端。8193…16384实际算术bits可选TPI32、160／192／224／256词容器；承载按p判断。每组32线程处理一条独立seed ladder，同时返回相邻两点；GPU构建[D]Q也复用协作ladder。0起点、单点尾链、Montgomery radix和规范残数保持原语义；[D]Q在目标环非单位时继续原来的独立ladder／因子恢复路径。
 
 第6.5节的点数、链数及M／S次数公式不变，仍是schoolbook乘积与相依ladder，渐近复杂度未下降。改变的是整数内的并行组织和线程私有状态。没有新增显式设备缓冲或坐标传输；paired seeds仍占16W(2Kₐ+1) bytes，[D]Q仍占16W bytes。静态属性中的每线程local由标量22544 B变为协作592／696／800／936 B；协作每整数占32线程，这些数不能直接当作整卡显存节省。协作寄存器报告193／255／255／255，不能据此声称占用率提高。
 
-Baby／giant链auto独立工作，seed策略暂不自动对照。ECM成本以`condition.env_giant_seed_coop`隔离，即使忽略environment也不混合；NTT独立吞吐表仍共享。配置、父子进程及缓存合同见[固定seed策略](../architecture/AUTO_B2.md#giant-seed的固定协作策略)。
+Baby／giant链auto独立工作，seed在既有对照后只增加一个固定几何coop32项。ECM按实际`seed_coop`矩阵轴隔离，即使忽略environment也不混合；NTT独立吞吐表仍共享。R次门槛、未配对保护、有限链长资格路径、父子进程及缓存合同见[seed自动选型](../architecture/AUTO_B2.md#giant-seed自动选型)。
 
 ### 独立算术与真实流程资格
 
@@ -763,7 +763,7 @@ RTX4060 Laptop／GPU1、目标1500MHz，CUDA13.3、sm89、GMP依赖同完整曲�
 
 ### 完整曲线与剩余瓶颈
 
-八格固定D小B2对照及图表的权威数据见[Stage2性能](STAGE2.md#可选协作seed固定几何对照)。这不是新D选型、13位宽自动学习或大B2资格。完整引擎合计202.983→174.530s，减少14.02%；默认标量保护保留。
+0.57.11固定后端的八格小B2对照及图表的权威数据见[Stage2性能](STAGE2.md#可选协作seed固定几何对照)。这不是新D选型、13位宽自动学习或大B2资格。完整引擎合计202.983→174.530s，减少14.02%；默认标量保护保留。
 
 16272目标bits的普通／承载算术为16272／16319 bits。Giant加叶准备由11.747→3.999s、6.581→2.263s；其中[D]Q的主机构建范围由1.731→0.025771s、1.075→0.015823s。它们嵌套在giant范围，不能重复相加。G树／fold／下降的合计占比由51.70%→62.02%、46.30%→54.43%，其绝对时间基本保持同一量级；仍包含NTT、S4、提交和等待，不称为纯NTT。
 
@@ -779,7 +779,7 @@ RTX4060 Laptop／GPU1、目标1500MHz，CUDA13.3、sm89、GMP依赖同完整曲�
 
 ## TODO
 
-- Seed-pair／[D]Q已提供独立可选协作路径；补其他GPU、大B2、容量边界与更多D／链数后再评估自动选型。giant恢复ladder仍是标量；新seed成本下的D模型须独立校准。Baby／giant auto缺少配对时继续保留标量。
+- Seed-pair／[D]Q支持有界auto和强制后端；补其他GPU、大B2、容量边界与更多D／链数的性能资格。giant恢复ladder仍是标量；新seed成本下的D模型须独立校准。Baby／giant auto缺少配对时继续保留标量。
 - 继续比较表示修正融合及普通／梅森编译分工。已完成[延后表示因子的代数核查](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#10-齐次点公式中的表示因子可延后合并)，尚无对应GPU实现或性能数据；保留完整乘积、规范残数与原radix。
 - 定位低位外层启动差异；在更长队列中核对配置、检查、进程／I/O分项，不将同一标量kernel的外层差异误判为CGBN算术收益或回退。
 - 专用平方已通过小档完整矩阵及单步／依赖递推检查；补充其他GPU与大B2资格。浅层Karatsuba／融合短NTT尚未实现，仍须独立GMP及固定D验证；失败与回退样本全部保留。

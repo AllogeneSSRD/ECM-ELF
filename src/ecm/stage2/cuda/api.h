@@ -28,7 +28,7 @@ int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *samples
 // Legacy component timers overlap. phases partitions the existing engine total;
 // startup/planning/Stage1 remain outside that boundary.
 struct EcmStage2Metrics {
-    unsigned baby_coop=0,giant_coop=0;
+    unsigned baby_coop=0,giant_coop=0,seed_coop=0;
     uint64_t d=0,p=0,giant_points=0,selftest_cases=0,checked=0,bad=0;
     uint64_t giant_first=1,giant_last=0,relocation_points=0,relocation_prime=0;
     bool relocation=false,relocation_replayed=false;

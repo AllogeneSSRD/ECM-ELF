@@ -62,7 +62,7 @@ stage2_tune_profile = "stage2_gpu1.toml"
 
 `stage2_b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
 
-CUDA还可在同一配置节设置`stage2_seed_backend="coop32"`，或使用`--seed-backend coop32`，将8193…16384实际算术bits的paired seed及GPU构建[D]Q交给TPI32；默认scalar，其他位宽保持标量。该选项独立于baby／giant链auto，尚不自动探测；ECM性能文件按策略隔离，已有NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.md#stage2_seed_backend)与[成本身份](../architecture/AUTO_B2.md#giant-seed的固定协作策略)。
+CUDA的`stage2_seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-backend`。它控制8193…16384实际算术bits的paired seed及GPU构建[D]Q，其他情况仍为标量。运行时先完成同形状、R=`stage2_tune_min_repeats`次的标量／协作对照，再选最快合格均值；正式tune可复用配对区域。只读模式继续采用已有合格胜者，单独强制协作的未配对记录不足以启用auto。实际`seed_coop`按行记账，NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.md#stage2_seed_backend)与[自动选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)。
 
 ## 直接读档
 

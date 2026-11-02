@@ -12,18 +12,18 @@ struct Shape {
     Word short_batch_hash=0;
     Word giant_chunk=0,chain_min=32768;bool force_ladder=false;
     bool groot_balanced=false,tail_balance=false;Word chain_block=64;
-    unsigned baby_coop=0,giant_coop=0;
-    bool same_point_backend(const Shape &other)const {return baby_coop==other.baby_coop && giant_coop==other.giant_coop;}
+    unsigned baby_coop=0,giant_coop=0,seed_coop=0;
+    bool same_point_backend(const Shape &other)const {return baby_coop==other.baby_coop && giant_coop==other.giant_coop && seed_coop==other.seed_coop;}
     void canonicalize_point_policy() {
         const Word p=d_catalog::degree(d);
         if(tail_balance && d && p && giant_chunk)
             tail_balance=!force_ladder && giant_tail_borrow(b2/d+2,giant_chunk,p,chain_min,true)!=0;
     }
-    using Key=std::array<Word,23>;
+    using Key=std::array<Word,24>;
     Key key()const {
         return {target_bits,arithmetic_bits,carrier,b1,b2,d,batch_bytes,chunk_max,buffers,
             Word(physical),Word(fold),Word(frontier),Word(mersenne),Word(short_batch_tune),
-            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block,baby_coop,giant_coop};
+            short_batch_hash,giant_chunk,chain_min,Word(force_ladder),Word(groot_balanced),Word(tail_balance),chain_block,baby_coop,giant_coop,seed_coop};
     }
 };
 struct Work {
@@ -37,8 +37,8 @@ struct Work {
 template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost ntt_cost,Work &out,
         const ShortNttBatchPolicy *short_ntt=nullptr) {
     out=Work{};
-    if(s.baby_coop==point_backend_unknown || s.giant_coop==point_backend_unknown)return false;
-    if((s.baby_coop || s.giant_coop) && !cooperative_point_width(s.arithmetic_bits))return false;
+    if(s.baby_coop==point_backend_unknown || s.giant_coop==point_backend_unknown || s.seed_coop==point_backend_unknown)return false;
+    if((s.baby_coop || s.giant_coop || s.seed_coop) && !cooperative_point_width(s.arithmetic_bits))return false;
     if(s.target_bits<2 || s.arithmetic_bits<s.target_bits || s.arithmetic_bits>16384 ||
        s.b1<2 || s.b2<=s.b1 || s.d<6 || s.d%2 || !s.batch_bytes)return false;
     out.p=d_catalog::degree(s.d);out.points=s.b2/s.d+2;
@@ -144,7 +144,7 @@ public:
     mutable std::map<Shape::Key,RuntimeStatistics> runtime_cache;
     std::vector<const Fields*> runtime_samples;
     struct Fit {bool valid=false;B2Features coefficients{};double error=0;Word low=0,high=0;};
-    mutable std::map<std::array<Word,17>,Fit> fit_cache;
+    mutable std::map<std::array<Word,18>,Fit> fit_cache;
     Estimator(const Profile &p,Fields current,Ignore ign,Query q,bool memoize=true,Word minimum=2):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)),memoize_costs(memoize),minimum_repeats(minimum) {
         if(!minimum || minimum>1000)throw std::runtime_error("tune minimum repeats must be 1..1000");
         for(const auto &s:p.samples) {
@@ -199,7 +199,7 @@ public:
         x.force_ladder=optional_uint(s,"giant_force_ladder")!=0;
         x.tail_balance=optional_uint(s,"giant_tail_balance")!=0;x.chain_block=optional_uint(s,"giant_chain_block",64);
         x.groot_balanced=sample_groot_layout(s);
-        x.baby_coop=unsigned(optional_uint(s,"baby_coop"));x.giant_coop=unsigned(optional_uint(s,"giant_coop"));
+        x.baby_coop=unsigned(optional_uint(s,"baby_coop"));x.giant_coop=unsigned(optional_uint(s,"giant_coop"));x.seed_coop=unsigned(optional_uint(s,"seed_coop"));
         const auto &c=profile.conditions.at(uint(s,"condition"));
         x.batch_bytes=optional_uint(c,"env_s4_batch_mb",64)*1048576;
         x.buffers=optional_uint(c,"env_workspace_reuse_bq")?2:3;
@@ -211,7 +211,7 @@ public:
         if(profile_samples.count(&s))sample_shapes.emplace(&s,x);return x;
     }
     bool eligible(const Fields &s,const Shape &x)const {
-        if(optional_uint(s,"baby_coop")!=x.baby_coop || optional_uint(s,"giant_coop")!=x.giant_coop)return false;
+        if(optional_uint(s,"baby_coop")!=x.baby_coop || optional_uint(s,"giant_coop")!=x.giant_coop || optional_uint(s,"seed_coop")!=x.seed_coop)return false;
         if(optional_uint(s,"giant_tail_balance")!=Word(x.tail_balance) || optional_uint(s,"giant_chain_block",64)!=x.chain_block)return false;
         if(!measured(s))return false;
         const auto id=uint(s,"condition");auto at=matching_conditions.find(id);
@@ -220,7 +220,8 @@ public:
         const auto a=shape(s);
         if(a.mersenne!=x.mersenne)return false;
         if(point_backend_capacity(a.arithmetic_bits,a.baby_coop)!=point_backend_capacity(x.arithmetic_bits,x.baby_coop) ||
-           point_backend_capacity(a.arithmetic_bits,a.giant_coop)!=point_backend_capacity(x.arithmetic_bits,x.giant_coop))return false;
+           point_backend_capacity(a.arithmetic_bits,a.giant_coop)!=point_backend_capacity(x.arithmetic_bits,x.giant_coop) ||
+           point_backend_capacity(a.arithmetic_bits,a.seed_coop)!=point_backend_capacity(x.arithmetic_bits,x.seed_coop))return false;
         if(!ignore.memory && (a.fold!=x.fold || a.frontier!=x.frontier))return false;
         return true;
     }
@@ -245,10 +246,10 @@ public:
     bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
         // eligible() selects a separate timing population for each actual
         // point policy, so its fitted coefficients must use the same identity.
-        const std::array<Word,17> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),
+        const std::array<Word,18> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),
             Word(x.physical),x.batch_bytes,x.buffers,x.chunk_max,Word(x.fold),Word(x.frontier),
             x.short_batch_hash,Word(x.short_batch_tune),Word(x.tail_balance),x.chain_block,
-            Word(reinterpret_cast<std::uintptr_t>(omit)),x.baby_coop,x.giant_coop};
+            Word(reinterpret_cast<std::uintptr_t>(omit)),x.baby_coop,x.giant_coop,x.seed_coop};
         auto encode=[](const Work &w) {
             double ntt=0,reduce=0;
             for(unsigned ph=0;ph<RequestPhaseCount;++ph){ntt+=w.ntt[ph];reduce+=w.reduce[ph];}

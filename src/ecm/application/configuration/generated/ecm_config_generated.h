@@ -202,7 +202,7 @@ struct Stage2Values {
     bool ntt_counts=false;
     std::string baby_backend="auto";
     std::string giant_backend="auto";
-    std::string seed_backend="scalar";
+    std::string seed_backend="auto";
     std::string groot_balanced="auto";
     bool giant_tail_balance=false;
     bool b2_round_chain=false;
@@ -276,7 +276,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=boolean(v,"stage2_ntt_counts");},[](Stage2Values&c,const Stage2Values&v){c.ntt_counts=v.ntt_counts;}},
     {"stage2_baby_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_baby_backend must be [auto|scalar|coop32]");c.baby_backend=v;c.has_baby_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.baby_backend=v.baby_backend;c.has_baby_backend=v.has_baby_backend;}},
     {"stage2_giant_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop16"&&v!="coop32")throw std::runtime_error("stage2_giant_backend must be [auto|scalar|coop16|coop32]");c.giant_backend=v;c.has_giant_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.giant_backend=v.giant_backend;c.has_giant_backend=v.has_giant_backend;}},
-    {"stage2_seed_backend",[](Stage2Values&c,const std::string&v){if(v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_seed_backend must be [scalar|coop32]");c.seed_backend=v;c.has_seed_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.seed_backend=v.seed_backend;c.has_seed_backend=v.has_seed_backend;}},
+    {"stage2_seed_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_seed_backend must be [auto|scalar|coop32]");c.seed_backend=v;c.has_seed_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.seed_backend=v.seed_backend;c.has_seed_backend=v.has_seed_backend;}},
     {"stage2_groot_balanced",[](Stage2Values&c,const std::string&v){c.groot_balanced=automatic_boolean_text(v,"stage2_groot_balanced");},[](Stage2Values&c,const Stage2Values&v){c.groot_balanced=v.groot_balanced;}},
     {"stage2_giant_tail_balance",[](Stage2Values&c,const std::string&v){c.giant_tail_balance=boolean(v,"stage2_giant_tail_balance");},[](Stage2Values&c,const Stage2Values&v){c.giant_tail_balance=v.giant_tail_balance;}},
     {"stage2_b2_round_chain",[](Stage2Values&c,const std::string&v){c.b2_round_chain=boolean(v,"stage2_b2_round_chain");},[](Stage2Values&c,const Stage2Values&v){c.b2_round_chain=v.b2_round_chain;}},

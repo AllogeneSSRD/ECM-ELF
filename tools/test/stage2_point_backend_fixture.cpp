@@ -60,19 +60,51 @@ static void giant_tests() {
 static void seed_policy_tests() {
     const auto ignore=p::Ignore::parse("gpu,driver,cuda,backend,environment");
     Fields old{{"env_giant_seed_coop","0"}},current{{"env_giant_seed_coop","32"}};
-    require(!p::matches(old,current,ignore),"ignored environment mixed seed arithmetic costs");
-    require(p::ntt_matches(old,current,ignore),"seed arithmetic split unchanged NTT tables");
-    Fields legacy;require(p::matches(legacy,old,ignore),"legacy scalar condition not retained");
-    require(!p::matches(legacy,current,ignore),"legacy scalar costs relabelled cooperative");
-    // Strict matching still accepts an omitted scalar policy in old profiles.
-    Fields strict{{"uuid_hex","\"seed-device\""},{"sm_major","8"},{"sm_minor","9"},
-        {"cuda_driver","13030"},{"cuda_runtime","13030"},{"gl_fixed_mode","3"},
-        {"outer_unroll_u","0"},{"add_sub_mask","1"}};
-    auto explicit_scalar=strict;explicit_scalar["env_giant_seed_coop"]="0";
-    require(p::matches(strict,explicit_scalar,p::Ignore::parse("")),"strict legacy scalar condition lost");
-    require(ecm_stage2::seed_backend("scalar")==0 && ecm_stage2::seed_backend("coop32")==32,"seed option parsing");
-    bool rejected=false;try{ecm_stage2::seed_backend("auto");}catch(...){rejected=true;}
-    require(rejected,"unqualified automatic seed policy accepted");
+    require(p::matches(old,current,ignore) && p::ntt_matches(old,current,ignore),"legacy requests split actual row identities");
+    require(ecm_stage2::seed_backend("auto")==-1 && ecm_stage2::seed_backend("scalar")==0 &&
+            ecm_stage2::seed_backend("coop32")==32,"seed option parsing");
+    bool rejected=false;try{ecm_stage2::seed_backend("coop16");}catch(...){rejected=true;}
+    require(rejected,"unsupported seed option accepted");
+    p::Profile profile;profile.condition({{"uuid_hex","\"seed-device\""},{"sm_major","8"},{"sm_minor","9"},
+        {"cuda_driver","13030"},{"cuda_runtime","13030"},{"gl_fixed_mode","3"},{"outer_unroll_u","0"},{"add_sub_mask","1"}});
+    unsigned id=200;
+    for(const auto &mode:std::vector<std::array<unsigned,4>>{{0,0,0,10},{32,0,0,8},{32,32,0,6},{32,32,32,4}})
+        for(unsigned i=0;i<2;++i) {
+            auto row=sample(id++,mode[0],mode[3]+i*.1,.1);row["giant_coop"]=std::to_string(mode[1]);
+            row["seed_coop"]=std::to_string(mode[2]);row["b2"]="51879828";row["giant_chunk_points"]="8640";row["giant_chain_min"]="8192";
+            require(profile.update(row),"seed coordinate sample");
+        }
+    p::Estimator engine(profile,profile.conditions.at(0),ignore,{});
+    auto scalar=engine.shape(profile.samples[2]),coop=engine.shape(profile.samples[3]);
+    require(scalar.key()!=coop.key() && !engine.eligible(profile.samples[2],coop),"ignored environment mixed actual seeds");
+    require(p::qualified_seed_backend(engine,scalar,2).mode==32,"paired seed winner not selected");
+    require(p::qualified_point_backends(engine,coop,true,true,2,true),"three-axis coordinate path requires Cartesian grid");
+    auto nearby=scalar;nearby.d=5460;nearby.b1=1000000;
+    require(p::qualified_seed_backend(engine,nearby,2).mode==32,"seed region not reused across D/B1");
+    nearby.giant_chunk=4096;require(!p::qualified_seed_backend(engine,nearby,2).available,"seed reused across chain occupancy boundary");
+    p::Profile unpaired=profile;unpaired.samples.erase(unpaired.samples.begin());
+    p::Estimator alone(unpaired,unpaired.conditions.at(0),ignore,{});
+    require(!p::qualified_point_backends(alone,coop,true,true,2,true),"unproved scalar prefix accepted as automatic path");
+    std::vector<p::RuntimeCandidate> candidates{{scalar,engine.runtime_statistics(scalar),1,true}};
+    auto trials=p::runtime_seed_trials(candidates,2);require(trials.size()==1 && trials[0].seed_coop==32 &&
+        trials[0].baby_coop==32 && trials[0].giant_coop==32 && trials[0].d==scalar.d,"seed trial expanded geometry/backends");
+    candidates.push_back({coop,engine.runtime_statistics(coop),1,true});
+    require(p::runtime_seed_trials(candidates,2).empty(),"completed seed trial repeated");
+    require(p::runtime_choice(candidates,false,2).index==1,"fastest checked seed not selected");
+    candidates.back().statistics.point_check_seconds=5;
+    require(p::runtime_choice(candidates,false,2).index==0,"seed startup check cost omitted");
+    auto chain=coop;chain.chain_block=32;
+    for(unsigned i=0;i<2;++i) {
+        auto row=sample(id++,32,3+i*.1,.1);row["giant_coop"]=row["seed_coop"]="32";
+        row["b2"]="51879828";row["giant_chunk_points"]="8640";row["giant_chain_min"]="8192";row["giant_chain_block"]="32";
+        require(profile.update(row),"measured chain coordinate sample");
+        p::Estimator next(profile,profile.conditions.at(0),ignore,{});
+        require(p::qualified_point_backends(next,chain,true,true,2,true)==(i==1),"chain winner lost or premature chain proof");
+    }
+    auto legacy=sample(id++,0,1,0);legacy.erase("seed_coop");auto condition=profile.conditions.at(0);
+    condition["env_giant_seed_coop"]="32";legacy["condition"]=std::to_string(profile.condition(condition));
+    require(profile.update(legacy),"legacy seed observation lost");
+    require(ecm_stage2::tune::uint(profile.samples.back(),"seed_coop")==255,"legacy request guessed as observed seed arithmetic");
 }
 int main(int argc,char **argv) {
     try {

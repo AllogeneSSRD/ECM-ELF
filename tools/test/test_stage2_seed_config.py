@@ -34,7 +34,7 @@ def main():
     settings=(('worker','scalar','coop32','0',[],32),
               ('cli','scalar','coop32','32',['--seed-backend','scalar'],0),
               ('environment',None,None,'32',[],32),
-              ('invalid','auto',None,'0',[],None))
+              ('invalid','coop16',None,'0',[],None))
     for name,global_mode,worker_mode,override,extra,expected in settings:
         folder=out/name;folder.mkdir()
         cell=dict(B2=300750450,D=30030,P=2880,carrier=0,layout=1)
@@ -78,9 +78,9 @@ def main():
     counts={0:0,32:0}
     for row in summaries(profile):
         if row['source']=='measured':
-            policy=int(profile['condition'][str(row['condition'])].get('env_giant_seed_coop',0))
+            policy=int(row['seed_coop'])
             counts[policy]+=row['repeats']
-    if counts!={0:1,32:2}:raise ValueError('ECM observations crossed seed policies: '+str(counts))
+    if counts!={0:1,32:2}:raise ValueError('ECM observations crossed actual seed backends: '+str(counts))
     report['tune_repeats_by_seed_policy']=counts
     report['complete']=True;write(out/'summary.json',report)
 

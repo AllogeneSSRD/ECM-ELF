@@ -595,6 +595,7 @@ int run_real(
             auto &m=saved_result->metrics;
             m.d=D;m.p=P_baby;m.giant_points=BR.giant_points;
             m.baby_coop=actual_baby_coop;m.giant_coop=g_giant_seed.cooperative_tpi;
+            m.seed_coop=std::max(g_giant_seed.seed_cooperative_tpi,g_giant_seed.base_cooperative_tpi);
             m.point_check_seconds=point_check_seconds;
             m.giant_first=BR.giant_first;m.giant_last=BR.giant_last;
             m.relocation=g_relocation_enabled;m.relocation_replayed=g_relocation_enabled && replayed;

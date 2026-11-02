@@ -41,7 +41,7 @@ class LayoutIdentity(unittest.TestCase):
     def test_writer_requires_layout_aware_reader(self):
         document = tomllib.loads(write_profile([dict(uuid_hex='fixture')],
             [self.row('old', 70), self.row('new', 50, groot_balanced=1)]))
-        self.assertEqual(document['profile']['format'], 10)
+        self.assertEqual(document['profile']['format'], 11)
         columns, *rows = document['width']['5700']['matrix']
         self.assertEqual({row[columns.index('groot_balanced')] for row in rows}, {0, 1})
 
@@ -53,6 +53,16 @@ class LayoutIdentity(unittest.TestCase):
                          {(0,64,70),(1,64,60),(0,32,50)})
         for changes in ({'giant_tail_balance':2},{'giant_chain_block':128}):
             with self.assertRaises(ValueError):aggregate([self.row('bad',1,**changes)])
+
+    def test_seed_rows_and_legacy_requests_stay_separate(self):
+        document=tomllib.loads(write_profile([dict(uuid_hex='fixture',env_giant_seed_coop=32),dict(uuid_hex='fixture')],
+            [self.row('legacy-request',3),self.row('observed-scalar',2,condition=1,seed_coop=0)]))
+        self.assertEqual(len(document['condition']),1)
+        columns,*rows=document['width']['5700']['matrix']
+        self.assertEqual({r[columns.index('seed_coop')] for r in rows},{0,255})
+        wide=dict(target_bits=9216,arithmetic_bits=9216,carrier_exponent=0,modulus_kind='generic')
+        result=aggregate([self.row('scalar',10,seed_coop=0,**wide),self.row('cooperative',5,seed_coop=32,**wide)])
+        self.assertEqual(len(result),2)
 
     def test_runtime_import_cap_is_per_actual_backend(self):
         receipts=[]

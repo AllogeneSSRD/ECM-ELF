@@ -2,7 +2,7 @@
 
 本页集中展示完整Stage2的性能，再分析初始化、主循环和内存。当前CUDA主结果为 **ECM-ELF0.57.9、小档B2、13位宽普通／承载26格的自动点后端矩阵**：固定既有优选D／布局／链长，学习后冻结，每格独立复测1次，明显回退补至3次。D／布局的独立基准为0.54.7；两档B2全范围保留0.38.4默认n=3及0.39.3学习期参考，未复测的大档不写成当前成绩。OpenCL包含0.54.3三遍基准及0.54.4默认／显式递推验证，均对照冻结CUDA0.54.0。输入与Prime95参考见[精确输入基准](EDWARDS_STAGE2.md)，CPU后端见[GW性能](CPU_GWPOLY_STAGE2.md)。功能、算法和选型合同见[Stage2使用](../usage/STAGE2.md)、[管线](../architecture/STAGE2.md)与[Auto B2／tune](../architecture/AUTO_B2.md)。
 
-0.57.11另提供可选协作seed／[D]Q；八格固定几何资格见下节，不替代上述13位宽自动选型矩阵。
+0.57.12提供seed／[D]Q有界auto，功能资格见[选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)；下节0.57.11八格固定后端数据仍是性能依据，不替代上述13位宽自动选型矩阵。
 
 高位宽的当前解释及优化顺序集中在[位宽增长分析](STAGE2_BIT_SCALING.md)：重读52条主矩阵和156条固定D控制，区分点模乘平方项、普通系数归约平方项、NTT长度台阶及线程私有栈；不把经验拟合指数等同于算法O()。
 
@@ -104,7 +104,7 @@ TODO：在新点成本下校准D／P模型并做独立持出；补其他GPU、�
 
 ## 可选协作seed：固定几何对照
 
-0.57.11新增CUDA `stage2_seed_backend="coop32"`，将高位宽paired seed和GPU构建[D]Q改为TPI32，复用按位宽分档的binary ladder。默认仍是scalar；不改变点数、坐标布局、NTT工作量或非单位回退。baby／giant链后端独立配置，本项尚不自动探索。算法、内存及正确性细节见[位宽增长分析第13节](STAGE2_BIT_SCALING.md#13-可选协作paired-seed与dq)。
+0.57.11新增CUDA `stage2_seed_backend="coop32"`，将高位宽paired seed和GPU构建[D]Q改为TPI32，复用按位宽分档的binary ladder。该固定对照使用scalar／coop32显式开关；不改变点数、坐标布局、NTT工作量或非单位回退。当前seed默认auto，缺少对照保持scalar，达到R次后选最快合格后端；baby／giant链后端独立配置。算法、内存及正确性细节见[位宽增长分析第13节](STAGE2_BIT_SCALING.md#13-可选协作paired-seed与dq)。
 
 ### 条件与完整曲线
 
@@ -139,7 +139,7 @@ TODO：在新点成本下校准D／P模型并做独立持出；补其他GPU、�
 
 EXE为0.57.11，SHA256 `0137ba813e1305e57b38947b48e2e53714132e4a574a7860091b20ba0d724157`；GMP同本页0.57.9基准。原始证据在`data/experiments/stage2_seed_coop_20261102/`，汇总、CSV、绘图器快照及PNG／SVG在对应benchmarks／figures的`final02/`，公开PNG位于attachments。复现入口为[协作paired seed验证](../../tools/bench/README_STAGE2_VERSION.md#协作paired-seed验证)。
 
-TODO：补其他GPU、大B2、容量切换边界及更多D／链数的资格；在新seed策略下校准D模型并独立持出，再决定自动选型或默认启用。当前八格只证明本设备、固定几何和小B2的结果，不证明所有输入普遍加速。
+TODO：补其他GPU、大B2、容量切换边界及更多D／链数的资格；在新seed策略下校准D模型并独立持出，补足跨区域auto的性能资格。当前八格只证明本设备、固定几何和小B2的结果，不证明所有输入普遍加速。
 
 ## D／布局选型参考：0.54.7小档B2
 

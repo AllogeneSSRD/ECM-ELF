@@ -67,6 +67,7 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     // Explicit calibration already selected a concrete arithmetic identity.
     request.baby_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_baby_coop):o.baby_backend;
     request.giant_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_giant_coop):o.giant_backend;
+    request.seed_backend=o.tune_child?ecm_stage2::point_backend_name(o.selected_seed_coop):o.seed_backend;
     request.runtime_prepare_cache=o.runtime_prepare_cache;
     request.runtime_prepare_hints=o.runtime_prepare_hints;
     request.runtime_remaining=o.runtime_remaining;
@@ -264,7 +265,7 @@ int curve_worker(Options o) {
         ",\"giant_tail_balance_requested\":"+std::string(o.giant_tail_balance?"true":"false")+
         ",\"point_policy_replayed\":"+std::string(tune_metrics.point_policy_replayed?"true":"false")+
         ",\"giant_chain_block\":"+std::to_string(o.selected_chain)+
-        ",\"baby_coop\":"+std::to_string(tune_metrics.baby_coop)+",\"giant_coop\":"+std::to_string(tune_metrics.giant_coop)+
+        ",\"baby_coop\":"+std::to_string(tune_metrics.baby_coop)+",\"giant_coop\":"+std::to_string(tune_metrics.giant_coop)+",\"seed_coop\":"+std::to_string(tune_metrics.seed_coop)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
         (o.factor_only?",\"requested_factor_only\":true":"")+

@@ -210,3 +210,7 @@ python tools/bench/plot_stage2_version.py `
 例如完整小B2对照使用`python tools/bench/bench_stage2_seed_coop.py --study data/experiments/stage2_giant_auto_20261101/matrix01 --exe build_stage2_local/ecm_cuda_stage2.exe --output data/experiments/NEW_STUDY/curves`。运行前核对GPU空闲和准确白名单；不为实验修改时钟或功耗。有效配置和tune分组另由`tools/test/test_stage2_seed_config.py`通过真实Worker #2子进程验证；`test_stage2_runtime_tune.py --fixture point-backends`验证旧标量条件、策略隔离及NTT表复用。
 
 `analyze_stage2_seed_coop.py --study ... --output data/benchmarks/... --figures data/figures/...`拒绝未完成或诊断研究，输出逐格CSV／JSON、完整引擎时间曲线及最高位的互斥阶段堆积图。另从原始console提取`curve_done.wall`，与引擎分别汇总；不把进程墙钟、点检查、S4设备事件或[D]Q嵌套范围重复相加。`--publish docs/performance/attachments`只发布静态PNG；原始证据继续由data忽略规则管理。
+
+### Seed auto资格
+
+`tools/test/test_stage2_seed_auto_gpu.py --study <完成的矩阵目录> --exe <当前Stage2> --output <新证据目录>`复用已验证Stage1输入，顺序验证R2／R1、双方同几何对照、只读复用、未配对保护、baby／giant／seed与有限链长auto。所有曲线保留；这是行为验证，不能当作独立性能矩阵。`test_stage2_seed_config.py`验证真实Worker #2的覆盖／CLI优先／环境回退，并按实际seed_coop核对增量统计。旧文件的非零请求不能作为实际协作证据；格式11写入实际后端，C++／Python加载和聚合均保留未知255。

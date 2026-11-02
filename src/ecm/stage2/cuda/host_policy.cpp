@@ -53,7 +53,8 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
     o.selected_baby_coop=baby<0?0:unsigned(baby);
     const auto giant=ecm_stage2::giant_backend(o.giant_backend);
     o.selected_giant_coop=giant<0?0:unsigned(giant);
-    o.selected_seed_coop=ecm_stage2::seed_backend(o.seed_backend);
+    const auto seed=ecm_stage2::seed_backend(o.seed_backend);
+    o.selected_seed_coop=seed<0?0:unsigned(seed);
 #ifdef ECM_STAGE2_OPENCL
     if(o.selected_baby_coop || o.selected_giant_coop || o.selected_seed_coop)throw std::runtime_error("cooperative point backends are CUDA-only");
 #endif

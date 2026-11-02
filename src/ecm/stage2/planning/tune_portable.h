@@ -11,8 +11,8 @@
 #include "ecm/platform/program_version.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=10;
-inline bool supported_format(Word value){return value==8 || value==9 || value==format;}
+constexpr unsigned format=11;
+inline bool supported_format(Word value){return value==8 || value==9 || value==10 || value==format;}
 inline constexpr const char *matrix_column_order[]={
 #define ECM_STAGE2_TUNE_COLUMN(name) #name,
 #define ECM_STAGE2_TUNE_NTT_COLUMN(name)
@@ -246,7 +246,7 @@ inline std::string runtime_group(const Fields &s) {
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"}) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
-    key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";";
+    key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";seed_coop="+std::to_string(optional_uint(s,"seed_coop"))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
     return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
@@ -260,19 +260,19 @@ inline std::string scope(const Fields &s) {
     }
     for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"})
         key+=std::string(field)+'='+std::to_string(optional_uint(s,field, std::string(field)=="giant_chain_min"?32768:0))+';';
-    key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";";
+    key+="baby_coop="+std::to_string(optional_uint(s,"baby_coop"))+";giant_coop="+std::to_string(optional_uint(s,"giant_coop"))+";seed_coop="+std::to_string(optional_uint(s,"seed_coop"))+";";
     key+="tail_balance="+std::to_string(optional_uint(s,"giant_tail_balance"))+";chain_block="+std::to_string(optional_uint(s,"giant_chain_block",64))+";";
     return key+"groot_balanced="+(sample_groot_layout(s)?"1;":"0;");
 }
 inline void validate(const Fields &s) {
-    const auto baby=optional_uint(s,"baby_coop"),giant=optional_uint(s,"giant_coop");
-    if((baby!=0 && baby!=32 && baby!=255) || (giant!=0 && giant!=16 && giant!=32 && giant!=255))
+    const auto baby=optional_uint(s,"baby_coop"),giant=optional_uint(s,"giant_coop"),seed=optional_uint(s,"seed_coop");
+    if((baby!=0 && baby!=32 && baby!=255) || (giant!=0 && giant!=16 && giant!=32 && giant!=255) || (seed!=0 && seed!=32 && seed!=255))
         throw std::runtime_error("invalid point arithmetic backend");
     if(optional_uint(s,"giant_tail_balance")>1 || (optional_uint(s,"giant_chain_block",64)!=32 && optional_uint(s,"giant_chain_block",64)!=64))throw std::runtime_error("invalid point policy");
     if(optional_uint(s,"groot_balanced")>1)throw std::runtime_error("invalid G-root layout");
     validate_provenance(s);
     const auto bits=uint(s,"target_bits"),arithmetic=uint(s,"arithmetic_bits"),carrier=uint(s,"carrier_exponent");
-    if(((baby && baby!=255) || (giant && giant!=255)) && arithmetic<=8192)
+    if(((baby && baby!=255) || (giant && giant!=255) || (seed && seed!=255)) && arithmetic<=8192)
         throw std::runtime_error("cooperative point sample has unsupported arithmetic width");
     if(s.count("point_check_seconds") && !(real(s,"point_check_seconds")>=0))
         throw std::runtime_error("invalid point startup check time");
@@ -332,9 +332,8 @@ struct Ignore {
 };
 inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore) {
     auto same=[&](const char *key){auto a=old.find(key),b=current.find(key);return a!=old.end() && b!=current.end() && a->second==b->second;};
-    // Seed arithmetic changes ECM cost independently of hardware/environment
-    // compatibility. Old conditions omitted this policy and mean scalar (0).
-    if(optional_uint(old,"env_giant_seed_coop")!=optional_uint(current,"env_giant_seed_coop"))return false;
+    // Actual point arithmetic is a row/Shape identity, independent of the
+    // requested environment policy in legacy condition tables.
     if(!ignore.gpu && (!same("uuid_hex") || !same("sm_major") || !same("sm_minor")))return false;
     if(!ignore.driver && !same("cuda_driver"))return false;
     if(!ignore.cuda && !same("cuda_runtime"))return false;
@@ -404,7 +403,7 @@ inline Fields compact_sample(Fields s) {
     }
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
-        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop",
+        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
@@ -474,6 +473,7 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
             const auto bits=optional_uint(s,"arithmetic_bits",optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"));
             s[key]=optional_uint(condition,env.c_str()) && bits>8192 && bits<=16384?"255":"0";
         }
+        if(!s.count("seed_coop"))s["seed_coop"]=optional_uint(condition,"env_giant_seed_coop")?"255":"0";
         const auto d=uint(s,"d");if(d<6 || d>200000000 || d%2)throw std::runtime_error("invalid tune D");
         const Fields derived={{"arithmetic_bits",std::to_string(optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"))},
             {"p",std::to_string(cost::phi(uint(s,"d"))/2)},
@@ -628,7 +628,7 @@ struct Profile {
         // Legacy format-8 conditions included a program version. Transfer it
         // to rows, then merge conditions that now describe the same hardware.
         Profile normalized;normalized.metadata=out.metadata;std::map<Word,Word> remap;
-        for(const auto &c:out.conditions)remap[c.first]=normalized.condition(c.second);
+        for(const auto &c:out.conditions) {auto fields=c.second;fields.erase("env_giant_seed_coop");remap[c.first]=normalized.condition(fields);}
         std::map<std::string,size_t> merged;
         for(auto s:out.samples) {
             s["condition"]=std::to_string(remap.at(uint(s,"condition")));const auto key=scope(s);

@@ -176,7 +176,8 @@ int main(int argc,char **argv) {
         {std::ofstream out(path);out<<layouts.serialize();}
         require(p::Profile::load(path).serialize()==layouts.serialize(),"layout identity lost in matrix roundtrip");
         auto compatible=layouts.serialize();
-        compatible.replace(compatible.find("format = 10"),11,"format = 8");
+        const auto current_format="format = "+std::to_string(p::format);
+        compatible.replace(compatible.find(current_format),current_format.size(),"format = 8");
         {std::ofstream out(path);out<<compatible;}
         require(p::Profile::load(path).serialize()==layouts.serialize(),"format-8 migration changed measurement identity");
         auto forced=sample(202,1141140,1);forced["groot_balanced"]="2";

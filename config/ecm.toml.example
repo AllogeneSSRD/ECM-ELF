@@ -705,17 +705,21 @@ stage2_save_dir = ""
 # 中文：指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径
 # 中文：。程序读取并验证源 save，不修改其内容。
 
-# stage2_seed_backend = "scalar"
-# EN: Giant paired-seed and GPU [D]Q arithmetic: scalar preserves the default; coop32 uses width-matched
-# EN: cooperative containers for CUDA arithmetic widths 8193..16384 bits. It keeps the same coordinates,
-# EN: buffers and nonunit fallback; other widths remain scalar. This is a fixed policy, independent of
-# EN: baby/giant-chain auto selection. ECM tune observations are isolated by seed policy even when
+# stage2_seed_backend = "auto"
+# EN: Giant paired-seed and GPU [D]Q arithmetic: auto keeps scalar until checked, repeated same-shape
+# EN: comparisons qualify coop32, then selects the fastest measured route including point startup checks.
+# EN: At fixed D/layout/chain/baby/giant arithmetic, try one alternative per family before extending D;
+# EN: reuse paired regions by arithmetic width, chain occupancy and memory route. Cooperative arithmetic
+# EN: requires CUDA widths 8193..16384 bits and a real chain; other cases remain scalar, preserving
+# EN: coordinates and nonunit fallback. Actual seed_coop is part of each ECM timing row even when
 # EN: environment matching is ignored; NTT tables remain reusable. CLI --seed-backend overrides this
-# EN: worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL accepts scalar only.
-# 中文：Giant相邻seed及GPU构建[D]Q的算术：默认scalar；coop32对CUDA实际算术8193..16384 bits使用按位宽分档的协
-# 中文：作容器，其他位宽仍为标量。保持相同坐标、缓冲及非单位回退。这是独立于baby／giant链auto的固定策略；ECM
-# 中文：调优始终按seed策略隔离，即使忽略environment也不合并，NTT表仍可复用。CLI --seed-backend覆盖当前worker
-# 中文：；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL仅支持scalar。
+# EN: worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL uses scalar.
+# 中文：Giant相邻seed及GPU构建[D]Q的算术：默认auto，在同形状有效对照达到最少重复数前保留scalar，再按含点启动
+# 中文：检查的实测耗时选择最快合格项。固定D／布局／链长／baby及giant算术后，每个家族只增加一个coop32对照，按
+# 中文：算术位宽、链并行区间及显存路径复用，随后继续D搜索。协作要求CUDA实际算术8193..16384 bits及真实chain；
+# 中文：其他情况保持标量、坐标布局和非单位回退。实际seed_coop独立记入ECM每行，即使忽略environment也不合并；
+# 中文：NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL实际
+# 中文：为scalar。
 # EN: Uncommenting marks this value explicit; omission preserves implicit worker/path/environment behavior.
 # 中文：取消注释会将此值标记为显式设置；保留注释则沿用 worker、路径或环境变量的隐式规则。
 

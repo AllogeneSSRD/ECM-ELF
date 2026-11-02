@@ -1184,18 +1184,18 @@ Directory searched for saves referenced by Stage2 assignments. Empty inherits tm
 ### stage2_seed_backend
 
 ```toml
-stage2_seed_backend = "scalar"
+stage2_seed_backend = "auto"
 ```
 
-Type / 类型: `string`; range / 范围: `[scalar|coop32]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `string`; range / 范围: `[auto|scalar|coop32]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
 显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
 
-Giant paired-seed and GPU [D]Q arithmetic: scalar preserves the default; coop32 uses width-matched cooperative containers for CUDA arithmetic widths 8193..16384 bits. It keeps the same coordinates, buffers and nonunit fallback; other widths remain scalar. This is a fixed policy, independent of baby/giant-chain auto selection. ECM tune observations are isolated by seed policy even when environment matching is ignored; NTT tables remain reusable. CLI --seed-backend overrides this worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL accepts scalar only.
+Giant paired-seed and GPU [D]Q arithmetic: auto keeps scalar until checked, repeated same-shape comparisons qualify coop32, then selects the fastest measured route including point startup checks. At fixed D/layout/chain/baby/giant arithmetic, try one alternative per family before extending D; reuse paired regions by arithmetic width, chain occupancy and memory route. Cooperative arithmetic requires CUDA widths 8193..16384 bits and a real chain; other cases remain scalar, preserving coordinates and nonunit fallback. Actual seed_coop is part of each ECM timing row even when environment matching is ignored; NTT tables remain reusable. CLI --seed-backend overrides this worker key; omission preserves explicit NTT_GIANT_SEED_COOP=0|32. OpenCL uses scalar.
 
-Giant相邻seed及GPU构建[D]Q的算术：默认scalar；coop32对CUDA实际算术8193..16384 bits使用按位宽分档的协作容器，其他位宽仍为标量。保持相同坐标、缓冲及非单位回退。这是独立于baby／giant链auto的固定策略；ECM调优始终按seed策略隔离，即使忽略environment也不合并，NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL仅支持scalar。
+Giant相邻seed及GPU构建[D]Q的算术：默认auto，在同形状有效对照达到最少重复数前保留scalar，再按含点启动检查的实测耗时选择最快合格项。固定D／布局／链长／baby及giant算术后，每个家族只增加一个coop32对照，按算术位宽、链并行区间及显存路径复用，随后继续D搜索。协作要求CUDA实际算术8193..16384 bits及真实chain；其他情况保持标量、坐标布局和非单位回退。实际seed_coop独立记入ECM每行，即使忽略environment也不合并；NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32。OpenCL实际为scalar。
 
 ### stage2_short_calibration
 

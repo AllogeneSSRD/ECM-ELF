@@ -81,6 +81,7 @@ int run_curve_process(const CurveProcessRequest &o) {
     cmd+=L" --giant-chain "+quote(std::wstring(o.giant_chain.begin(),o.giant_chain.end()));
     cmd+=L" --baby-backend "+quote(std::wstring(o.baby_backend.begin(),o.baby_backend.end()));
     cmd+=L" --giant-backend "+quote(std::wstring(o.giant_backend.begin(),o.giant_backend.end()));
+    cmd+=L" --seed-backend "+quote(std::wstring(o.seed_backend.begin(),o.seed_backend.end()));
     cmd += L" --results " + quote(results.wstring());
     if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
     if(!o.submission_ini.empty())cmd+=L" --config "+quote(fs::path(o.submission_ini).wstring());

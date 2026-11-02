@@ -298,7 +298,7 @@ void help() {
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
         "           --baby-backend auto|scalar|coop32 --giant-backend auto|scalar|coop16|coop32\n"
-        "           --seed-backend scalar|coop32 (paired seeds and GPU [D]Q, >8192 bits)\n"
+        "           --seed-backend auto|scalar|coop32 (paired seeds and GPU [D]Q, >8192 bits)\n"
         "           --low-cpu-wait 0|1: reduce host busy waits, possibly at the cost of elapsed time.\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"

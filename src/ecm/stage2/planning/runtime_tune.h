@@ -36,7 +36,7 @@ inline PointBackendChoice qualified_baby_backend(const Estimator &engine,const S
         matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
         auto s=engine.shape(row);
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
-           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.giant_coop!=reference.giant_coop ||
+           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.giant_coop!=reference.giant_coop || s.seed_coop!=reference.seed_coop ||
            s.chain_block!=reference.chain_block || (s.baby_coop!=0 && s.baby_coop!=32) ||
            point_batch_bucket(d_catalog::degree(s.d),cap)!=bucket)continue;
         const auto mode=s.baby_coop;s.baby_coop=0;auto key=s.key();key[3]=0;
@@ -72,7 +72,7 @@ inline PointBackendChoice qualified_giant_backend(const Estimator &engine,const 
         matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
         auto s=engine.shape(row);
         if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
-           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop ||
+           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop || s.seed_coop!=reference.seed_coop ||
            s.chain_block!=reference.chain_block || s.fold!=reference.fold || s.frontier!=reference.frontier ||
            s.groot_balanced!=reference.groot_balanced || s.tail_balance!=reference.tail_balance ||
            (s.giant_coop!=0 && s.giant_coop!=16 && s.giant_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
@@ -94,15 +94,61 @@ inline PointBackendChoice qualified_giant_backend(const Estimator &engine,const 
     }
     return result;
 }
-// Coordinate comparisons can establish 0/0 -> baby32/0 -> baby32/giant32.
-// Accept that measured path without requiring an exhaustive 2x3 grid, while
-// still rejecting a lone forced cooperative observation.
-inline bool qualified_point_backends(const Estimator &engine,const Shape &s,bool baby_auto,bool giant_auto,Word minimum) {
-    bool baby=!baby_auto || !s.baby_coop || qualified_baby_backend(engine,s,minimum).available;
-    bool giant=!giant_auto || !s.giant_coop || qualified_giant_backend(engine,s,minimum,s.giant_coop).available;
-    if(!baby && giant && giant_auto) {auto base=s;base.giant_coop=0;baby=qualified_baby_backend(engine,base,minimum).available;}
-    if(!giant && baby && baby_auto) {auto base=s;base.baby_coop=0;giant=qualified_giant_backend(engine,base,minimum,s.giant_coop).available;}
-    return baby && giant;
+// Seed and [D]Q share one actual backend. Reuse a paired comparison only
+// within a real-chain occupancy region, holding baby/chain arithmetic fixed.
+inline PointBackendChoice qualified_seed_backend(const Estimator &engine,const Shape &reference,Word minimum=2) {
+    const auto bucket=giant_backend_bucket(reference);if(!bucket)return {};
+    std::map<Shape::Key,std::array<const Fields*,2>> pairs;
+    for(const auto &row:engine.profile.samples)if(measured(row) && uint(row,"repeats")>=minimum &&
+        matches(engine.profile.conditions.at(uint(row,"condition")),engine.condition,Ignore::parse(""))) {
+        auto s=engine.shape(row);
+        if(s.target_bits!=reference.target_bits || s.arithmetic_bits!=reference.arithmetic_bits || s.carrier!=reference.carrier ||
+           s.mersenne!=reference.mersenne || s.b2!=reference.b2 || s.baby_coop!=reference.baby_coop ||
+           s.giant_coop!=reference.giant_coop || s.chain_block!=reference.chain_block ||
+           s.fold!=reference.fold || s.frontier!=reference.frontier || s.groot_balanced!=reference.groot_balanced ||
+           s.tail_balance!=reference.tail_balance || (s.seed_coop!=0 && s.seed_coop!=32) || giant_backend_bucket(s)!=bucket)continue;
+        const auto at=s.seed_coop?1:0;s.seed_coop=0;auto key=s.key();key[3]=0;auto &pair=pairs[key];
+        if(!pair[at] || uint(row,"repeats")>uint(*pair[at],"repeats"))pair[at]=&row;
+    }
+    PointBackendChoice result;
+    for(const auto &entry:pairs)if(entry.second[0] && entry.second[1]) {
+        const auto &a=*entry.second[0],&b=*entry.second[1];
+        const double distance=std::abs(std::log2(double(d_catalog::degree(uint(a,"d")))/d_catalog::degree(reference.d)));
+        if(!result.available || distance<result.distance) {
+            result.available=true;result.distance=distance;
+            result.mode=real(b,"mean_seconds")+optional_real(b,"point_check_seconds")<
+                real(a,"mean_seconds")+optional_real(a,"point_check_seconds")?32:0;
+        }
+    }
+    return result;
+}
+// A checked coordinate path establishes the automatic modes. Walk back at
+// most three axes to the scalar reference; no exhaustive 2x3x2 grid is needed.
+inline bool qualified_point_backends(const Estimator &engine,const Shape &s,bool baby_auto,bool giant_auto,Word minimum,
+                                     bool seed_auto=false) {
+    const auto checked=[&](const auto &self,Shape x)->bool {
+        const bool baby=baby_auto && x.baby_coop,giant=giant_auto && x.giant_coop,seed=seed_auto && x.seed_coop;
+        if(!baby && !giant && !seed)return true;
+        if(baby && qualified_baby_backend(engine,x,minimum).available) {
+            auto base=x;base.baby_coop=0;if(self(self,base))return true;
+        }
+        if(giant && qualified_giant_backend(engine,x,minimum,x.giant_coop).available) {
+            auto base=x;base.giant_coop=0;if(self(self,base))return true;
+        }
+        if(seed && qualified_seed_backend(engine,x,minimum).available) {
+            auto base=x;base.seed_coop=0;if(self(self,base))return true;
+        }
+        // A finite 64->32 chain trial keeps the point arithmetic fixed. Its
+        // repeated full-curve comparison is another checked coordinate edge;
+        // disabling new trials must not discard that measured winner.
+        if(x.chain_block==32) {
+            auto base=x;base.chain_block=64;
+            if(engine.runtime_statistics(x).count>=minimum && engine.runtime_statistics(base).count>=minimum &&
+               self(self,base))return true;
+        }
+        return false;
+    };
+    return checked(checked,s);
 }
 // One alternative at the fastest repeated scalar incumbent per arithmetic
 // family. Keep D/layout/chain fixed, rather than multiplying the D catalogue.
@@ -135,6 +181,23 @@ inline std::vector<Shape> runtime_giant_trials(const std::vector<RuntimeCandidat
         const RuntimeCandidate *found=nullptr;for(const auto &c:all)if(c.shape.key()==s.key()){found=&c;break;}
         if(found && found->statistics.count<minimum)break;
         if(!found){out.push_back(s);break;}
+    }
+    return out;
+}
+// At most one paired seed alternative per family, at its fastest repeated
+// scalar-seed incumbent. Keep D/layout/chain/baby/giant unchanged.
+inline std::vector<Shape> runtime_seed_trials(const std::vector<RuntimeCandidate> &all,Word minimum=2) {
+    std::map<unsigned,const RuntimeCandidate*> best;
+    for(const auto &c:all)if(!c.shape.seed_coop && giant_backend_bucket(c.shape) &&
+        c.statistics.count>=minimum && c.statistics.seconds>0) {
+        auto &at=best[c.shape.carrier];
+        if(!at || c.statistics.comparison_seconds()<at->statistics.comparison_seconds())at=&c;
+    }
+    std::vector<Shape> out;
+    for(const auto &entry:best) {
+        auto s=entry.second->shape;s.seed_coop=32;
+        bool found=false;for(const auto &c:all)found|=c.shape.key()==s.key();
+        if(!found)out.push_back(s);
     }
     return out;
 }
