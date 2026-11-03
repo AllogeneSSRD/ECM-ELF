@@ -460,6 +460,7 @@ void FoldDeviceState::step(const std::vector<unsigned long long> &G)
 
 void FoldDeviceState::step_loaded(size_t ng,const std::vector<unsigned long long> *host_G)
 {
+    stage2_trace::Range trace("Fold.resident_step");
     ++stats->folds;++flat->folds;
     std::vector<unsigned long long> expected;
     if(check) {

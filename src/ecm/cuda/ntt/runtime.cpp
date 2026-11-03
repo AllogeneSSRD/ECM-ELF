@@ -1094,6 +1094,12 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     bool need_hout, bool defer_res, NttArena *arena)
 {
     stage2_trace::Range trace("NTT.submit");
+    // Physical batch after chunking. Keep the existing submit range for
+    // consumers of older traces; format the inner label only when tracing.
+    char shape_label[80]{};
+    if(stage2_trace::enabled())
+        std::snprintf(shape_label,sizeof(shape_label),"NTT.shape %llu %llu",sh.N,nbatch);
+    stage2_trace::Range shape_trace(shape_label);
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
     const unsigned int threads = 256;

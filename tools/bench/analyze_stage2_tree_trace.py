@@ -13,7 +13,7 @@ import sqlite3
 
 from bench_stage2_point_routes import sha
 
-TREE_NAMES={'Tree.host_driver','GTree.build'}
+TREE_NAMES={'Tree.host_driver','GTree.build','Fold.resident_step'}
 NTT=re.compile(r'\b(?:tile_kernel|outer_fwd_kernel|outer_inv_kernel|outer_coop_kernel|pointwise_kernel|pointwise_twiddle_kernel|dit_stage_kernel|ntt_stage_kernel|bitrev_swap_kernel|scale_kernel)\b')
 S4=re.compile(r'\bs4_(?:warp_)?reduce_kernel\b')
 SYNCHRONOUS=re.compile(r'^(?:cuda(?:Event|Stream|Device)Synchronize|cudaMemcpy(?:_v\d+)?$)')
@@ -39,10 +39,16 @@ def analyze(connection,device):
     connection.text_factory=lambda b:b.decode('utf-8','replace')
     names=dict(connection.execute('select id,value from StringIds'))
     ranges=collections.defaultdict(list)
+    shapes=collections.defaultdict(list)
     for raw in connection.execute('select * from NVTX_EVENTS where end is not null'):
         r=dict(raw);name=r.get('text') or names.get(r.get('textId'),'')
         if name in TREE_NAMES and r['end']>=r['start']:
             r['name']=name;ranges[r['globalTid']].append(r)
+        match=re.fullmatch(r'NTT\.shape (\d+) (\d+)',name)
+        if match:
+            shapes[r['globalTid']].append((r['start'],r['end'],int(match[1]),int(match[2])))
+    for values in shapes.values():values.sort()
+    shape_starts={tid:[x[0] for x in v] for tid,v in shapes.items()}
     if not ranges:raise ValueError('No instrumented CPU tree ranges')
     for values in ranges.values():values.sort(key=lambda r:r['start'])
     starts={tid:[r['start'] for r in v] for tid,v in ranges.items()}
@@ -59,6 +65,7 @@ def analyze(connection,device):
     host_spans=collections.defaultdict(list);api_spans=collections.defaultdict(list);sync_spans=collections.defaultdict(list)
     api_duration=collections.defaultdict(collections.Counter);kernel_duration=collections.defaultdict(collections.Counter)
     gpu_spans=collections.defaultdict(list);api={}
+    shape_times=collections.Counter()
     for tid,values in ranges.items():
         for r in values:
             host_spans[r['name'],tid].append((r['start'],r['end']));result[r['name']]['host_range_count']+=1
@@ -87,6 +94,13 @@ def analyze(connection,device):
                 if table.endswith('KERNEL'):
                     label=names.get(r['demangledName'],'unknown');group=kernel_group(label)
                     result[name]['kernel_counts'][group]+=1;kernel_duration[name][label]+=duration
+                    tid=launch['globalTid'];t=launch['start']
+                    i=bisect.bisect_right(shape_starts.get(tid,()),t)-1
+                    if i>=0:
+                        _,end,length,batch=shapes[tid][i]
+                        if t<end:
+                            family=re.search(r'\b(\w+_kernel)\b',label)
+                            shape_times[name,length,batch,family[1] if family else label]+=duration
                 else:group='Memcpy' if table.endswith('MEMCPY') else 'Memset'
                 result[name]['gpu_seconds'][group]+=duration/1e9
     for name,row in result.items():
@@ -99,7 +113,8 @@ def analyze(connection,device):
         row['gpu_active_union_seconds']=union_ns(gpu_spans[name])/1e9
         row['api_by_name']={k:v/1e9 for k,v in api_duration[name].most_common()}
         row['kernel_by_name']={k:v/1e9 for k,v in kernel_duration[name].most_common()}
-    return dict(trees=result,unmatched_activity=dict(unmatched),outside_tree_activity=dict(outside),
+    return dict(trees=result,ntt_shapes=[dict(phase=p,length=n,batch=b,kernel=k,seconds=v/1e9)
+        for (p,n,b,k),v in shape_times.most_common()],unmatched_activity=dict(unmatched),outside_tree_activity=dict(outside),
         scope='CPU tree scope; GPU work belongs to the process-qualified launch API, not execution timestamp. '
               'NTT includes transform and pointwise kernels, excludes carry/pack/table construction. '
               'API residence includes CPU/driver work and waits; synchronous API residence is not pure GPU wait. '

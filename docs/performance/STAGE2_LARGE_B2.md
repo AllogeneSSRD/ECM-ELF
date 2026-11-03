@@ -171,6 +171,37 @@ D表的保守默认子集和尾块默认值保持不变。正常运行的阶段�
 
 源码入口为[s4_warp_reduce.cuh](../../src/ecm/stage2/cuda/device/s4_warp_reduce.cuh#L136)的两组除数寄存器，以及[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h#L315)的`permits`。当前搜索对剩余曲线使用2R门槛，对试跑使用累计额外秒数预算。上述短队列收益采用引擎时间与独立单样本外推，队列墙钟还包括准备等成本。
 
+## 固定D的承载追踪与大B2准入
+
+4060 Laptop、SM89/CUDA13.3、驱动610.88，生产EXE为 `b3e9730cd644371fa505ce7737eefa42efc4a8f8348e5c184183d2fc794ead2b`。两条管理员Systems追踪各回放一次已核对的NF曲线，输入和几何取上面的两个承载优选D，逐项核对NTT计数、S4工作量和GMP。设备时间按提交所属NVTX范围归因，异步执行跨越CPU范围结束时仍归属提交阶段。表中的秒数为诊断时钟。
+
+| 承载bits / D | 范围与次数 | 主机墙钟 | GPU活动并集 | 变换与逐点 | S4 | 其他kernel |
+|---|---|---:|---:|---:|---:|---:|
+|12511 / 510510|G树 ×12|17.77|17.35|11.96|1.64|3.72|
+|12511 / 510510|驻留fold ×11|5.90|5.88|4.29|0.43|1.16|
+|16319 / 395010|G树 ×18|25.93|25.29|17.12|2.84|5.29|
+|16319 / 395010|驻留fold ×17|9.11|9.07|6.51|0.72|1.83|
+
+两条曲线的tile时间按真实长度和物理batch合并，最多的组合为2²⁷ × 1，合计4.109s，来自驻留fold。G树中最重的短组合为2¹³ × 1215，单在16319-bit就占1.533s。由此分别筛查大变换和短批量变换。每种形状在两个独立进程中比较17个tile/outer计划，各进程每种计划测3次完整Goldilocks卷积。保留独立GMP、故障注入、逐次完整输出校验，计时排除建表、输入填充和校验。
+
+在2²⁷ × 1上，生产计划为tile12、outer 7+8，共3遍。两进程的默认卷积时间分别为128.87和128.94ms。相同分解的显式计划与默认相差约0.01%，最快的其他分解在两次扫描中分别慢3.23%和3.18%。这档fold延用生产计划。
+
+2¹³ × 1215 的默认分解为tile12加一个1位outer。首次扫描选出tile10加一个3位outer，完整卷积由5.807降到5.612ms。冻结该请求后的独立复测由5.805降到5.621ms（−3.18%），两种分解均走两遍。16319-bit 的G树在这个精确组合上花费约2.366s执行tile和outer。如果实际曲线能兑现同一百分比，该组合的时间量级约为每条0.075s。这是按追踪时间估算的局部机会，完整曲线尚未验证这个分解。算子探针及Python入口按 `length × batch ≤ 2²⁷` 约束总词数，覆盖实测短批形状。
+
+### 相邻D与fold预算
+
+M10267 的10232-bit Edwards余因子使用同一保存点和10267-bit梅森承载，B1=50000、B2=2600000000000、sigma26。两种相邻D均保持最大NTT为2²⁷，layout1、chain32、batch预算256MiB。frontier的独立预算设为1MiB，实际三格均回退到主机。对两种D，arena设为6300MiB时原生规划需要超过11GiB的空闲显存。1536MiB时仍需要7504/7524MiB，超过现场7106MiB。768MiB时分别需要6736/6756MiB，允许执行。下表各格一个独立进程，全部NF并通过必需GMP检查。4067条利用率≥50%的遥测中4047条为1500MHz，功耗范围7.90…46.49W。
+
+| D / P | fold预算，MiB | 实际fold | G树批数 | G树 / fold，s | 引擎，s | 完整曲线墙钟，s |
+|---|---:|---|---:|---:|---:|---:|
+|513240 / 52992|640|驻留|96|130.04 / 84.33|282.13|284.07|
+|510510 / 46080|640|驻留|111|139.38 / 97.92|299.31|300.85|
+|510510 / 46080|396|预算回退|111|139.41 / 123.30|330.46|332.15|
+
+同预算下，D只增加0.53%，P增加15%，G树批数减少15个，引擎少17.18s（5.74%）。固定D时，396MiB刚低于所需的415466344字节，回退使引擎多31.15s（10.41%），其中fold增加25.38s。这个差异包含驻留路径的树根交接、数据移动和执行准备。三格共有偏小的arena，两个驻留格各记录585和674次overflow，结论适用于该预算和host frontier。证据为 `b2_boundary_v3`。汇总在 `data/benchmarks/stage2_s4_capacity_20261103/final.json`。
+
+原始曲线、追踪、按物理形状归属的时间与算子结果均位于 `data/experiments/stage2_s4_capacity_20261103/`。追踪范围见 [runtime.cpp](../../src/ecm/cuda/ntt/runtime.cpp#L1096) 和 [remainder.cpp](../../src/ecm/stage2/cuda/remainder.cpp#L461)，汇总由 [analyze_stage2_tree_trace.py](../../tools/bench/analyze_stage2_tree_trace.py) 生成。
+
 ## 证据与复现
 
 原始研究为`data/experiments/stage2_large_b2_20261103/`，`baseline_v2`是完整基线，`paired`是同二进制kernel2/3对照；独立GMP、完整叶值及NCU范围见S4主题。`packing_geometry_check.json`保存26格最大长度的整数核对。实验首样本、慢样本和失败证据均保留，不将失败准备过程当作可丢弃warmup。
@@ -180,8 +211,8 @@ D表的保守默认子集和尾块默认值保持不变。正常运行的阶段�
 TODO按优先级：
 
 - 在NTT区间/实际预算内继续联合D/P、布局与短尾/seed成本；同位宽阶段先验只取得两格定向资格，跨区间及有效尾块策略变化仍需单独校准，再完成全矩阵性能保护。
-- 普通S4按实际W验证缩小静态缓存容量，减少当前9组寄存器的浪费；不凭occupancy或单个stall名称推广kernel3。
+- 普通S4的按W分派已有GPU1两格完整曲线与算子结果，下一步仅在新的设备/区间有独立整曲线收益时评估扩大资格。见[S4容量实验](STAGE2_S4_REDUCTION.md#按实际除数位宽选择缓存容量)。
 - 承载路线分离NTT/carry/pack并校准大长度tile/outer；F树准备需同时验证完整墙钟、host峰值及检查覆盖。
-- 扩展2.6e12、fold回退边界和其他GPU，并补记CPU有效频率；算子或两格结果不直接变成全局默认。
+- 在更多位宽和生产frontier预算下复测2.6e12的驻留边界，补测其他GPU及CPU有效频率。
 
 源码依据：[shape.cpp:283](../../src/ecm/cuda/ntt/shape.cpp#L283)为原生packing查询，[geometry.h:234](../../src/ecm/stage2/geometry.h#L234)为几何和预算估计，[portable_model.h:42](../../src/ecm/stage2/planning/portable_model.h#L42)按完整请求图计NTT/归约/传输工作；[s4_warp_reduce.cuh:59](../../src/ecm/stage2/cuda/device/s4_warp_reduce.cuh#L59)为缓存乘减，[runtime_tune.h:131](../../src/ecm/stage2/planning/runtime_tune.h#L131)保留auto配对保护。`profile_stage2_tree_trace.py`/`analyze_stage2_tree_trace.py`负责树阶段剖析及进程/提交归属审计。

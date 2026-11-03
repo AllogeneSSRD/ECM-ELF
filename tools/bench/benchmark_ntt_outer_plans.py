@@ -32,8 +32,8 @@ def main():
     parser.add_argument('--iterations', type=int, default=8)
     parser.add_argument('--joint', action='store_true', help='tile10..13 x M5..8 plus production baseline')
     args = parser.parse_args()
-    if not all(16 <= k <= 27 for k in args.lengths) or not all(1 <= b <= 8 for b in args.batches) or any((1 << k)*b > 1 << 27 for k in args.lengths for b in args.batches):
-        parser.error('lengths 16..27, batches 1..8 and length*batch<=2^27 required')
+    if not all(13 <= k <= 27 for k in args.lengths) or min(args.batches)<1 or any((1 << k)*b > 1 << 27 for k in args.lengths for b in args.batches):
+        parser.error('log2 lengths 13..27, positive batches and length*batch<=2^27 required')
     if not all(op in (0, 1, 2) for op in args.operations) or not 1 <= args.repeats <= 101 or not 1 <= args.iterations <= 128:
         parser.error('invalid operation/repeat/iteration')
     out = args.output.resolve()

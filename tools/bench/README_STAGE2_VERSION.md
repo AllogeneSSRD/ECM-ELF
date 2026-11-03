@@ -246,6 +246,12 @@ python tools/bench/plot_stage2_version.py `
 
 `analyze_stage2_seed_coop.py --retest <追加矩阵目录>`可追加同二进制、同设备、同内核版本、同组件／输入矩阵／显存预算／D几何的配对复测；保留首轮，采用全部样本中位数。阶段图取中间真实调用的阶段向量，偶数时平均中间两个，避免独立求各阶段中位数后不能相加。`analyze_stage2_s4_ncu.py --baseline ... --candidate ... --output ...`校验对应真实调用、输入和完整检查／工作量，导出带原始单位依据的诊断摘要。
 
+## S4容量、树追踪与队列回放
+
+容量实验使用S4探针的`--backends 34 35`比较固定九组与按实际W分派的除数缓存，生产固定D对照使用显式coop32及`--reduce-kernel 3`、`--reduce-kernel 4`。树时间线额外输出`Fold.resident_step`和`ntt_shapes`，后者以提交线程上最内层物理NTT长度、batch和kernel名汇总设备时间；旧追踪缺少形状标记时此表为空。形状时间嵌套于所属阶段内。
+
+`replay_stage2_queue_budget.py --plan <完整运行矩阵plan.json> --output <新json>`在同族、同布局已有至少三个合格D的组中回放剩余2、5、20条曲线。共享一个已测基线，最多试前四个备选。首次备选固定允许，后续使用该步原始的测前预测及可选`--allowance`（默认0.25）估计剩余收益，一旦停止即不使用后续预测。试跑取最早R条的父进程墙钟，稳定曲线按该D记录的平均墙钟估算。此回放比较两种有限策略，不重建生产程序的跨族选型、显存准入和120秒预算。
+
 ## 同位宽阶段预测的CPU验证
 
 `tools/test/test_stage2_runtime_tune.py --fixture phase-model --output data/experiments/NEW_STUDY/cpu`验证阶段守恒、缺失阶段、硬件与实际策略隔离、NTT拐点、精确测量优先和默认选型隔离，不调用CUDA。独立GMP整数界查询用于CPU打包参考，不替代生产原生准入。

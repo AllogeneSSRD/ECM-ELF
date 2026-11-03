@@ -229,7 +229,8 @@ int main(int argc,char **argv) {
         const int k=std::atoi(argv[3]),batch=std::atoi(argv[4]),repeats=std::atoi(argv[5]),iterations=std::atoi(argv[6]),op=std::atoi(argv[7]);
         const int profile=profiling ? std::atoi(argv[8]) : -1;
         if(profiling && profile<0)return 2;
-        if(k>=16 && k<=27 && batch>=1 && batch<=8 && ((1ull<<k)*batch<=(1ull<<27)) && repeats>=1 && repeats<=101 && iterations>=1 && iterations<=128 && op>=0 && op<=2 && profile>=-1 && profile<(joint ? 17 : 5))
+        // Bound total storage, including for short, wide batches observed in G trees.
+        if(k>=13 && k<=27 && batch>=1 && ((1ull<<k)*batch<=(1ull<<27)) && repeats>=1 && repeats<=101 && iterations>=1 && iterations<=128 && op>=0 && op<=2 && profile>=-1 && profile<(joint ? 17 : 5))
             return bench(k,batch,repeats,iterations,op,profile,joint);
     }
     return 2;

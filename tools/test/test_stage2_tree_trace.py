@@ -21,7 +21,8 @@ class TreeTraceTest(unittest.TestCase):
           create table CUPTI_ACTIVITY_KIND_MEMCPY(start integer,end integer,globalPid integer,correlationId integer,deviceId integer);
         ''')
         pid=7<<24;tid=pid+1;other=8<<24
-        c.executemany('insert into NVTX_EVENTS values(?,?,?,?,?)',[(0,100,'Tree.host_driver',None,tid),(110,200,'GTree.build',None,tid)])
+        c.executemany('insert into NVTX_EVENTS values(?,?,?,?,?)',[(0,100,'Tree.host_driver',None,tid),(110,200,'GTree.build',None,tid),
+            (9,15,'NTT.shape 1048576 4',None,tid)])
         c.executemany('insert into CUPTI_ACTIVITY_KIND_RUNTIME values(?,?,?,?,?)',
             [(10,12,1,tid,11),(120,121,1,other+1,11),(130,132,1,tid,12),
              (150,180,2,tid,14),(170,195,3,tid,13)])
@@ -30,6 +31,10 @@ class TreeTraceTest(unittest.TestCase):
         c.execute('insert into CUPTI_ACTIVITY_KIND_MEMCPY values(177,189,?,?,1)',(pid,13))
         r=analyze(c,1);f=r['trees']['Tree.host_driver'];g=r['trees']['GTree.build']
         self.assertAlmostEqual(f['gpu_seconds']['NTT_transform_pointwise'],30e-9)
+        self.assertEqual(len(r['ntt_shapes']),1)
+        shape=r['ntt_shapes'][0]
+        self.assertEqual((shape['phase'],shape['length'],shape['batch'],shape['kernel']),('Tree.host_driver',1048576,4,'tile_kernel'))
+        self.assertAlmostEqual(shape['seconds'],30e-9)
         self.assertNotIn('NTT_transform_pointwise',g['gpu_seconds'])
         self.assertAlmostEqual(g['gpu_seconds']['S4'],40e-9)
         self.assertAlmostEqual(g['gpu_seconds']['Memcpy'],12e-9)
