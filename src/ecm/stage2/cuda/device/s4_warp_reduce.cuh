@@ -51,6 +51,33 @@ __device__ __forceinline__ unsigned s4_warp_sub_product_merged(unsigned long lon
     return borrow;
 }
 
+// The divisor is immutable for every quotient digit. Keep the two aligned
+// views in registers instead of rereading shared ns[i]/ns[i-1] for each q.
+// Fixed tile indices are essential: a dynamic private subscript spills these
+// small arrays back to local memory and defeats the intended data placement.
+template<int NW>
+__device__ __forceinline__ unsigned s4_warp_sub_product_cached(unsigned long long *t,
+    const unsigned long long (&lo_n)[(NW+32)/32],const unsigned long long (&hi_n)[(NW+32)/32],
+    int nw,int j,unsigned long long q,int lane) {
+    unsigned product_carry=0,borrow=0;
+    #pragma unroll
+    for(int tile=0;tile<(NW+32)/32;++tile) {
+        const int base=tile*32;if(base>nw)break;
+        const int i=base+lane;const bool live=i<=nw;
+        const auto lo=q*lo_n[tile],hi=__umul64hi(q,hi_n[tile]),sum=lo+hi;
+        const auto g=__ballot_sync(0xffffffffu,sum<lo),p=__ballot_sync(0xffffffffu,sum==~0ull);
+        const auto incoming=s4_warp_prefix_in(g,p,product_carry,lane);
+        const auto word=sum+incoming;
+        product_carry=__shfl_sync(0xffffffffu,unsigned(sum<lo || (sum==~0ull && incoming)),31);
+        const auto a=live?t[j+i]:0ull;
+        const auto bg=__ballot_sync(0xffffffffu,a<word),bp=__ballot_sync(0xffffffffu,a==word);
+        const auto input_borrow=s4_warp_prefix_in(bg,bp,borrow,lane);
+        if(live)t[j+i]=a-word-input_borrow;
+        borrow=__shfl_sync(0xffffffffu,unsigned(a<word || (a==word && input_borrow)),31);
+    }
+    return borrow;
+}
+
 __device__ __forceinline__ unsigned s4_warp_add_divisor(unsigned long long *t,const unsigned long long *ns,
     int nw,int j,int lane) {
     unsigned carry=0;
@@ -81,7 +108,7 @@ __device__ __forceinline__ unsigned long long s4_warp_packed_word(const unsigned
     return value;
 }
 
-template<int NW,bool MERGED=false>
+template<int NW,bool MERGED=false,bool CACHE_DIVISOR=false>
 __global__ void s4_warp_reduce_kernel(const unsigned long long *digits,unsigned long long n,
     int bpw,unsigned long long slot_words,unsigned long long out_slots,unsigned long long nbatch,
     int nw,int div_shift,unsigned long long div_recip,unsigned long long first,unsigned long long count,
@@ -106,6 +133,15 @@ __global__ void s4_warp_reduce_kernel(const unsigned long long *digits,unsigned 
     const auto batch=gid/count,k=first+gid%count;
     if(k>=out_slots || (k+1)*slot_words>n) {if(!lane && bad)atomicAdd(bad,1ull);return;}
     const auto *d=digits+batch*n+k*slot_words;
+    unsigned long long lo_n[(NW+32)/32],hi_n[(NW+32)/32];
+    if constexpr(CACHE_DIVISOR) {
+        #pragma unroll
+        for(int tile=0;tile<(NW+32)/32;++tile) {
+            const int i=tile*32+lane;
+            lo_n[tile]=i<nw?ns[i]:0ull;
+            hi_n[tile]=i>0 && i<=nw?ns[i-1]:0ull;
+        }
+    }
     const int limbs=int((slot_words*(unsigned long long)bpw+63)/64);
     for(int i=lane;i<limbs+(div_shift!=0);i+=32) {
         const auto a=s4_warp_packed_word(d,slot_words,bpw,i);
@@ -128,7 +164,8 @@ __global__ void s4_warp_reduce_kernel(const unsigned long long *digits,unsigned 
         // pass uses an exact warp borrow prefix. Their sum fits nw+1 limbs,
         // so at most one whole-window underflow can occur across both passes.
         unsigned under;
-        if constexpr(MERGED) {under=s4_warp_sub_product_merged(t,ns,nw,j,q,lane);__syncwarp();}
+        if constexpr(CACHE_DIVISOR) {under=s4_warp_sub_product_cached<NW>(t,lo_n,hi_n,nw,j,q,lane);__syncwarp();}
+        else if constexpr(MERGED) {under=s4_warp_sub_product_merged(t,ns,nw,j,q,lane);__syncwarp();}
         else {
             under=s4_warp_sub_product<false>(t,ns,nw,j,q,lane);__syncwarp();
             under|=s4_warp_sub_product<true>(t,ns,nw,j,q,lane);__syncwarp();

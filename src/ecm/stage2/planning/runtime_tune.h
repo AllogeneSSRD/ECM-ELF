@@ -130,6 +130,9 @@ struct ReduceBackendChoice {bool available=false;unsigned mode=0,threads=0,kerne
 // same NTT cliffs/residency and exact arithmetic width, not just a nearby D.
 inline ReduceBackendChoice qualified_reduce_backend(const Estimator &engine,const Shape &reference,Word minimum=2,
     unsigned threads=reduce_default_threads,unsigned required_kernel=0) {
+    // Experimental kernel 3 requires an explicit backend request until full
+    // curves qualify it. Do not index the automatic 0/1/2 comparison with it.
+    if(required_kernel>2)return {};
     if(!cooperative_reduce_width(reference.arithmetic_bits,reference.mersenne))return {};
     Work rw;if(!engine.query || !engine.cached_work(reference,rw))return {};
     std::map<Shape::Key,std::array<const Fields*,3>> pairs;

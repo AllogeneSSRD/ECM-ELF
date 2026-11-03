@@ -16,13 +16,13 @@ def main():
     groups={}
     for r in d['rows']:
         if int(r['bad']) or int(r['gpu_bad']):raise ValueError('Fault injection is not a performance sample')
-        key=tuple(int(r[k]) for k in ('bits','coeffs','kind','bpw','batches','backend'))
+        key=tuple(int(r[k]) for k in ('bits','coeffs','kind','bpw','batches','backend','threads'))
         groups.setdefault(key,[]).append(r)
     rows=[]
     for key,values in sorted(groups.items()):
         times=[float(v) for r in values for v in r['samples_ms'].split(',') if v]
         medians=[float(r['median_ms']) for r in values]
-        row=dict(zip(('bits','coeffs','kind','bpw','batches','backend'),key))
+        row=dict(zip(('bits','coeffs','kind','bpw','batches','backend','threads'),key))
         row.update(processes=len(values),events=len(times),median_ms=statistics.median(medians),
                    min_event_ms=min(times),max_event_ms=max(times),
                    checked_words=sum(int(r['checked_words']) for r in values),
@@ -40,17 +40,20 @@ def main():
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    labels={0:'Scalar',8192:'Scalar, 8192-coefficient windows',32:'Warp / shared remainder'}
+    labels={0:'Scalar',8192:'Scalar, 8192-coefficient windows',32:'Warp / two-pass',
+            33:'Warp / merged',34:'Warp / merged + divisor cache'}
     for bits in sorted({r['bits'] for r in rows}):
         selected=[r for r in rows if r['bits']==bits]
         if len({(r['kind'],r['bpw'],r['batches']) for r in selected})!=1:
             raise ValueError('Separate modulus/digit/batch configurations before plotting throughput')
         fig,axes=plt.subplots(1,2,figsize=(11,4),constrained_layout=True)
-        for backend in sorted({r['backend'] for r in selected}):
-            group=sorted((r for r in selected if r['backend']==backend),key=lambda r:r['coeffs'])
+        mixed_threads=len({r['threads'] for r in selected})>1
+        for backend,threads in sorted({(r['backend'],r['threads']) for r in selected}):
+            group=sorted((r for r in selected if (r['backend'],r['threads'])==(backend,threads)),key=lambda r:r['coeffs'])
             x=[r['coeffs']-2 for r in group];y=[r['median_ms'] for r in group]
-            axes[0].plot(x,y,'o-',label=labels.get(backend,str(backend)))
-            axes[1].plot(x,[r['coefficients_per_s']/1000 for r in group],'o-',label=labels.get(backend,str(backend)))
+            label=labels.get(backend,str(backend))+(f' / T{threads}' if mixed_threads else '')
+            axes[0].plot(x,y,'o-',label=label)
+            axes[1].plot(x,[r['coefficients_per_s']/1000 for r in group],'o-',label=label)
         for ax in axes:
             ax.set_xlabel('Active coefficients per batch');ax.grid(alpha=.2);ax.legend(fontsize=8)
         axes[0].set_ylabel('CUDA event milliseconds');axes[1].set_ylabel('Thousand coefficients / second')

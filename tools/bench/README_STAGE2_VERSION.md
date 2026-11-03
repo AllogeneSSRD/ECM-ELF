@@ -57,6 +57,18 @@ python tools/bench/plot_stage2_version.py `
 
 `--publish` 只复制选定 PNG 到指定 attachments 目录；原始结果、账户字段、运行校验值、EXE、遥测和全部数据只在忽略的 data 目录。公开提交只包含工具、文档和审查过的图。
 
+## 大档B2的固定几何S4对照
+
+`bench_stage2_large_matrix.py`复用自动点后端矩阵的13份精确Edwards save、有限链长和进程白名单，从Edwards/Prime95参考中按完整N及B1取得名义2.6e11档的实际B2。默认每格一次；普通与承载共26格。显式请求baby/giant/seed coop32及S4 coop32，记录低位／承载的实际回退；关闭warmup、学习、短校准、凑整、relocation及尾块平衡。这是归约实验的固定后端矩阵，不等于生产auto选型成绩。
+
+首次`--exe <path> --output <new-directory>`冻结二进制、GMP、目标文件哈希和构建输入归档，按当前基础模型选D/布局一次。随后用`--baseline <completed-directory> --exe <candidate> --kernels 2,3 --output <new-directory>`冻结相同D/P/layout/chain进行交替顺序A/B；逐格核对NTT分布、G根摘要、点块策略及S4/GMP工作数。显著回退（同时>3%和50ms）保留首轮并将双方补到三次。`--wide-repeats 3`可将四个受影响的高位普通格全部补到三次；不能在另一计时仍运行时启动续跑。
+
+`--resume --output <directory>`校验冻结采集器和EXE；改变源文件、输入或已有失败时使用新目录。`--max-runs`用于完整曲线边界停止。原始日志、遥测和调用命令保留在研究目录；独立GMP/逐叶诊断及NCU重放不加入正常计时。核验实验kernel3可使用`bench_stage2_s4_probe.py --backends 33 34`；完整诊断入口为`bench_stage2_seed_coop.py --component reduce --reduce-kernel 3 --checks`，其scalar/coop32对照与kernel2/3比较是不同实验，不混算。
+
+`analyze_stage2_large_matrix.py --baseline <directory> --paired <directory> --output data/benchmarks/<name> --figures data/figures/<name>`重新核对save、回执、日志哈希、GMP覆盖和计时闭合，输出CSV/JSON、线性/对数耗时图及互斥阶段百分比堆积图。每侧n=3取全部样本中位数，并使用该实际调用的阶段分项保持闭合；阴影为样本min/max，不是置信区间。S4设备事件嵌套于树/fold/下降，不加入堆积总和。Prime95线为相同N/B1/实际B2的历史单次参考，不按频率或线程外推。
+
+可选`--geometry <study> --tail-study <study>`重读定向D/P与尾块研究，核对正常回执和完整点块计数，另生成geometry.csv及带样本范围的独立图，不替换固定26格成绩。`bench_stage2_seed_coop.py --tail-balance`在其两侧使用相同的既有尾块平衡配置；诊断调用保留`--checks`，不能混入普通计时。
+
 ## 位宽复杂度的离线重读
 
 `analyze_stage2_bit_complexity.py`只读已有冻结结果，不运行GPU。主输入为`--study data/experiments/stage2_point_matrix_20261031/min1_full03`，固定D控制为`--fixed-study data/experiments/opencl_full_matrix_20261030/quick_13`；显式指定新的`--output`和`--figures`目录，默认不修改docs。可选`--html docs/web/stage2-bit-complexity-20261101.html`生成自包含SVG阅读页；`--public-figures docs/performance/attachments`复制三张公开PNG。

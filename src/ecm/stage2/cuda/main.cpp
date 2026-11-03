@@ -94,7 +94,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--seed-backend") {o.seed_backend=value();o.portable_cli.insert(a);}
         else if (a == "--reduce-backend") {o.reduce_backend=value();o.portable_cli.insert(a);}
         else if (a == "--reduce-threads") {const auto n=num();if(n>128)throw std::runtime_error("invalid S4 threads");o.reduce_threads=unsigned(n);o.portable_cli.insert(a);}
-        else if (a == "--reduce-kernel") {const auto n=num();if(n>2)throw std::runtime_error("invalid S4 kernel");o.reduce_kernel=unsigned(n);o.portable_cli.insert(a);}
+        else if (a == "--reduce-kernel") {const auto n=num();if(n>3)throw std::runtime_error("invalid S4 kernel");o.reduce_kernel=unsigned(n);o.portable_cli.insert(a);}
         else if (a == "--giant-backend") {o.giant_backend=value();o.portable_cli.insert(a);}
         else if (a == "--giant-tail-balance") {const auto n=num();if(n>1)throw std::runtime_error("giant-tail-balance must be 0 or 1");o.giant_tail_balance=n!=0;o.portable_cli.insert(a);}
         else if (a == "--b2-round-chain") {const auto n=num();if(n>1)throw std::runtime_error("b2-round-chain must be 0 or 1");o.b2_round_chain=n!=0;o.portable_cli.insert(a);}

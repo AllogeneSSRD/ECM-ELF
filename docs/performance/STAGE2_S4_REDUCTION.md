@@ -84,7 +84,7 @@ long scoreboard表示等待L1TEX相关操作，不等于已经证明DRAM带宽�
 
 ECM格式13以实际`reduce_coop/threads/kernel`区分成本，不因忽略environment合并；请求设置不再分裂NTT条件。旧非零请求且缺实际执行证据时保留为未知255，不参与选型。协作宽度模型以ceil((W+1)/32)隔离额外高词组台阶，不跨W160／192／224／256直接平滑复用；无协作实测时仍是保守先验。
 
-auto默认128线程，有限比较kernel1两遍和kernel2合并；诊断CLI允许`--reduce-threads 64|96|128`及`--reduce-kernel 0|1|2`，0表示auto允许两项。kernel2合并qN的低／高词及乘积进位后，一次读写余数字；乘法和商位数不变。资格限定硬件、位宽、NTT区间、实际B2、驻留、点后端、布局及链长；不要求B1相同。同一区间相邻D可复用胜者，未覆盖的NTT拐点先建立标量参考。配置的最小重复次数适用于两项，已经开始的比较会完成，剩余曲线不足不再启动新比较。
+auto默认128线程，有限比较kernel1两遍和kernel2合并；诊断CLI允许`--reduce-threads 64|96|128`及`--reduce-kernel 0|1|2|3`，0表示auto允许前两项，3是下述显式实验。kernel2合并qN的低／高词及乘积进位后，一次读写余数字；乘法和商位数不变。资格限定硬件、位宽、NTT区间、实际B2、驻留、点后端、布局及链长；不要求B1相同。同一区间相邻D可复用胜者，未覆盖的NTT拐点先建立标量参考。配置的最小重复次数适用于自动比较，已经开始的比较会完成，剩余曲线不足不再启动新比较。
 
 ## 两卡字长边界与大B2资格
 
@@ -146,6 +146,53 @@ GPU0、同一真实输入及小B2、合并warp成本，普通／承载分别校�
 
 D更大并不必然更快，P=28800这档的树／NTT成本明显增加；该实验没有改变默认D表或批准全局模型收益。S4身份进入新的模型和配对行后，继续依靠已验证候选与默认保护，不能沿用标量时期的D收益承诺。
 
+## 除数缓存与有限组展开：显式实验
+
+kernel3在合并乘减中预装两种对齐的除数字视图，静态展开有限32词组，避免每个商位都从shared读取相同除数。完整qN、乘积进位、精确借位、最多两次加回、反归一化及所有源槽的padding检查均保留，工作仍为O(JW)。缓存和展开共同变化，不能把全部收益单独归因于缓存；一般公式见[复杂度资料](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#不变除数的寄存器缓存)。
+
+使用`--reduce-backend coop32 --reduce-kernel 3 --reduce-threads 128`显式启用；实际身份`reduce_kernel=3`可在tune中保存和往返读取。自动配对、候选生成仍限0/1/2，实验行不能绕过此保护进入auto。小位宽及梅森承载仍实际回退0，没有新增NTT工作区、全局临时数组或主机/设备拷贝。当前宽位模板容量256词，缓存9组，实际W较小时也可能保留多余寄存器。
+
+2026-11-03，RTX4060 Laptop、目标1500MHz、同一16272-bit真实模数、26-bit digits、单batch；各后端3个独立进程，每进程5个事件，交换顺序、无warmup，全部输出及哨兵由GMP核对。表取每进程事件中位数，再取三个进程中位数；不是完整Stage2成绩。
+
+| 线程块 | 源/有效系数 | 合并kernel2，ms | 缓存kernel3，ms | 耗时减少 |
+|---:|---:|---:|---:|---:|
+| 128 | 8192/8190 | 18.4863 | 16.5703 | 10.36% |
+| 128 | 20608/20606 | 45.6468 | 40.9723 | 10.24% |
+| 128 | 32768/32766 | 72.3067 | 64.8796 | 10.27% |
+| 96 | 20608/20606 | 48.1638 | 42.9281 | 10.87% |
+| 64 | 20608/20606 | 50.2661 | 44.5317 | 11.41% |
+
+128线程的绝对耗时更低，因此保持该对照配置；不能因64线程的相对改进百分比更大而选它。两侧静态local均0、动态shared均18488B/block；寄存器42→78/thread。管理员NCU2026.2.1、相同20608系数单次归约，clock/cache control均none：
+
+| 指标 | kernel2 | kernel3 |
+|---|---:|---:|
+| shared读取wavefronts | 280655196 | 136580983 |
+| shared写入wavefronts | 97861263 | 97887471 |
+| shared读取bank conflicts | 71616 | 35165 |
+| shared写入bank conflicts | 129737 | 147695 |
+| 执行warp指令 | 3768534796 | 3294590928 |
+| local读/写sectors | 0/0 | 0/0 |
+| NCU设备duration，ms | 45.5621 | 40.9303 |
+
+shared读取减少51.34%，指令减少12.58%；写入基本不变，写冲突略增但绝对量远小于写wavefronts。不能据单项冲突数或寄存器增加判断整体快慢。NCU重放下应用事件显著变长，未加入上面的正常计时。
+
+W129/159/160/191/192/223/224/255/256、四类模数、digit1/26/64、三batch共216次探针通过，两侧共核对4508280词；另10次空窗口、各10次padding/输出破坏检出通过。真实16272-bit保存点的普通/承载诊断，D30030/P2880、B2=300750450，两内核各734400个归一化叶值词摘要一致，NTT及归约工作相同。完整大B2资格与阶段分项见[大B2矩阵](STAGE2_LARGE_B2.md)，不能把算子约10%的改进直接用于完整曲线或其他GPU。
+
+大档B2约2.7e11、固定D/P/layout/chain及全部点后端，普通宽位各三次，保留首样本后取中位数。S4事件与引擎分别取中位数，两者仍是嵌套计时，不相加：
+
+| 目标bits | S4事件kernel2→3，s | 完整引擎kernel2→3，s | 引擎减少 |
+|---:|---:|---:|---:|
+| 10232 | 12.414→12.054 | 48.348→47.227 | 2.32% |
+| 12285 | 18.197→17.087 | 69.431→68.710 | 1.04% |
+| 14328 | 31.472→28.473 | 103.775→102.275 | 1.45% |
+| 16272 | 38.926→35.384 | 124.763→121.101 | 2.94% |
+
+四格引擎合计346.316→339.314s，减少2.02%；S4事件合计101.009→92.998s，减少7.93%。最高位kernel2样本123.473…134.822s、kernel3样本120.988…124.644s，准备阶段有显著波动，不能把三个样本当作普遍收益或置信区间。全26格新二进制对照合计915.158→906.602s；其中22个实际回退0的格不能归因于缓存。初始独立基线906.033s与新二进制control也有差距，完整默认不增时资格不能仅凭这组数据声明通过。kernel3继续显式保留，不进入auto。
+
+小档B2=27015978990的四个普通保护格各n=1、同D/P和点后端：10232-bit为13.848→13.535s（D240240/P23040），12285-bit为20.223→19.198s（同D/P），14328-bit为25.001→24.701s（D210210/P20160），16272-bit为32.238→32.705s（同D/P）。合计91.310→90.139s，最高位单格反而慢1.45%；这些结果不支持一个“超过某位宽便总有收益”的默认阈值。NTT工作与G根摘要一致，原始数据为`small_guard`。
+
+证据为`data/experiments/stage2_large_b2_20261103/`下`cache_gate/cache_gate_middle`、`cache_empty`、`cache_fault1/2`、`cache_perf_t*_r*`、`cache_ncu`、`cache_full_checks`及`paired`；探针EXE SHA256为`2c5ec5e0f01dade3e0861c4a874090a69598ac0dffc107b89ec936a2f148789f`。三个进程的汇总在`data/benchmarks/stage2_large_b2_20261103/probe/`，原始首事件与失败证据均保留。
+
 ## 证据、源码与后续工作
 
 完整曲线EXE为0.57.13，SHA256 `1f14235e6e25f7003d99b1268f954e8a831272382720cab8ba155b12c31f5c6e`，19624448B；257项构建输入和46个目标文件核验一致。GMP DLL为`969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。旧标量保护EXE0.57.12为`3f01cc3da82a87cb26fdd3112659f26534a064ed2c1e0c20e30c45c7fd0b68cc`；NCU旧0.57.11为`0137ba813e1305e57b38947b48e2e53714132e4a574a7860091b20ba0d724157`。探针EXE为`9391d6f62d3aeb07669d774732052848b00d7a8511e4dda132970be8b8f4bcb9`，使用同一生产S4头。
@@ -160,9 +207,9 @@ D更大并不必然更快，P=28800这档的树／NTT成本明显增加；该实
 
 源码依据：
 
-- [s4_warp_reduce.cuh:6](../../src/ecm/stage2/cuda/device/s4_warp_reduce.cuh#L6)借位前缀，35行合并乘减，84行kernel及全源检查；[s4_reduce.cuh:89](../../src/ecm/stage2/cuda/device/s4_reduce.cuh#L89)生产分派和合法空窗口。
+- [s4_warp_reduce.cuh:6](../../src/ecm/stage2/cuda/device/s4_warp_reduce.cuh#L6)借位前缀，35行合并乘减，59行缓存视图，112行kernel及全源检查；[s4_reduce.cuh:90](../../src/ecm/stage2/cuda/device/s4_reduce.cuh#L90)生产分派和合法空窗口。
 - [s4.cpp:194](../../src/ecm/stage2/cuda/s4.cpp#L194)实际启用／共享字节诊断；[host_policy.cpp:66](../../src/ecm/stage2/cuda/host_policy.cpp#L66)配置优先级，`process.cpp::run_curve_process`显式转发子进程。
-- [runtime_tune.h:131](../../src/ecm/stage2/planning/runtime_tune.h#L131)配对资格、243行有限S4候选；`planning.cpp::portable_runtime_select`、`portable_measure`负责运行时与正式tune。`tune_portable.h::hydrate`／`compact_summary`保留实际身份，`portable_model.h::s4_coop_tiles`及`width_prediction.h::region`隔离成本区域。
+- [runtime_tune.h:131](../../src/ecm/stage2/planning/runtime_tune.h#L131)配对资格、246行有限S4候选；`planning.cpp::portable_runtime_select`、`portable_measure`负责运行时与正式tune。`tune_portable.h::hydrate`／`compact_summary`保留实际身份，`portable_model.h::s4_coop_tiles`及`width_prediction.h::region`隔离成本区域。
 - `tools/bench/profile_stage2_tree_trace.py`采集并验证完整曲线，`analyze_stage2_tree_trace.py::analyze`按提交关联树阶段，`tools/test/test_stage2_tree_trace.py`覆盖异步跨界、进程ID隔离及重叠等待并集。
 
 TODO：

@@ -21,7 +21,7 @@ from stage2_d_catalog import phi
 
 
 def collect(out, folder, case, cell, plan, mode, checks):
-    cmd=command(out,folder,case,cell,folder/'unused_tune.toml',str(cell['chain']),False)
+    cmd=command(out,folder,case,cell,folder/'unused_tune.toml',str(cell['chain']),bool(plan['protocol'].get('tail_balance',False)))
     cmd[cmd.index('--device')+1]=str(plan['protocol']['device'])
     seed_mode=mode if plan.get('component','seed')=='seed' else 'coop32'
     cmd+=['--baby-backend','coop32','--giant-backend','coop32','--seed-backend',seed_mode]
@@ -99,7 +99,7 @@ def main():
     p.add_argument('--component',choices=('seed','reduce'),default='seed')
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--background-snapshot',type=Path)
-    p.add_argument('--reduce-kernel',type=int,choices=(1,2))
+    p.add_argument('--reduce-kernel',type=int,choices=(1,2,3))
     p.add_argument('--arithmetic',choices=('both','ordinary','carrier'),default='both')
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--exe',type=Path,required=True)
@@ -107,6 +107,7 @@ def main():
     p.add_argument('--case',action='append',default=[])
     p.add_argument('--repeats',type=int,choices=(1,2,3),default=1)
     p.add_argument('--checks',action='store_true')
+    p.add_argument('--tail-balance',action='store_true',help='Use the same balanced giant policy in both arms')
     p.add_argument('--d',type=int)
     p.add_argument('--b2',type=int)
     a=p.parse_args();source=load(a.study/'plan.json')
@@ -137,7 +138,7 @@ def main():
               exe_sha256=sha(binary/a.exe.name),dll_sha256=sha(binary/'gmp-10.dll'),
               source_matrix_sha256=sha(a.study/'plan.json'),allowed_processes=source['allowed_processes'],
               cases=cases,cells=cells,runs=[],failures=[],diagnostic=a.checks,
-              protocol=dict(device=a.device,repeats=a.repeats,warmups=0,learning=False,arithmetic=a.arithmetic,
+              protocol=dict(device=a.device,repeats=a.repeats,warmups=0,learning=False,arithmetic=a.arithmetic,tail_balance=a.tail_balance,
                             batch_mb=256,arena_mb=6300,fold_mb=640))
     if a.background_snapshot:
         bg=load(a.background_snapshot)

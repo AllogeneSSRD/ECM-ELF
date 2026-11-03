@@ -65,6 +65,18 @@ static void s4_policy_tests(const std::filesystem::path &out) {
     require(loaded.samples.size()==3 && p::qualified_reduce_backend(restored,scalar,2).kernel==2,"S4 variants lost through serialized profile");
     auto legacy=sample(790,0,3,0);legacy["condition"]=std::to_string(id);require(profile.update(legacy),"legacy S4 lost");
     require(p::optional_uint(profile.samples.back(),"reduce_coop")==255,"unobserved legacy S4 relabelled");
+    p::Profile experimental=loaded;
+    auto cached=sample(880,0,.1,0);cached["condition"]=std::to_string(experimental.condition(coop_condition));
+    cached["reduce_coop"]="32";cached["reduce_threads"]="128";cached["reduce_kernel"]="3";
+    require(experimental.update(cached),"experimental S4 identity rejected");
+    cached["runtime_sample_id"]=p::quoted("cache-2");require(experimental.update(cached),"experimental S4 repeat rejected");
+    p::Estimator guarded(experimental,old,p::Ignore::parse(""),query);
+    require(p::qualified_reduce_backend(guarded,scalar,2).kernel==2,"unqualified cache entered auto");
+    require(!p::qualified_reduce_backend(guarded,scalar,2,128,3).available,"experimental cache indexed automatic pair");
+    require(!p::qualified_point_backends(guarded,guarded.shape(experimental.samples.back()),false,false,2,false,true),
+            "forced cache admitted through automatic coordinate path");
+    std::ofstream(out/"s4-cache.toml")<<experimental.serialize();auto cache_loaded=p::Profile::load(out/"s4-cache.toml");
+    require(p::optional_uint(cache_loaded.samples.back(),"reduce_kernel")==3,"cache identity lost through serialization");
 }
 static void giant_tests() {
     p::Profile profile;profile.condition({{"uuid_hex","\"giant-device\""},{"sm_major","8"},{"sm_minor","9"},
