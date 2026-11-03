@@ -21,10 +21,10 @@ int main(int argc,char **argv) {
     const int bits=atoi(argv[1]),coeffs=atoi(argv[2]),kind=atoi(argv[3]),bpw=atoi(argv[4]),mode=atoi(argv[5]),
         repeats=atoi(argv[6]),threads=atoi(argv[7]),device=atoi(argv[8]),nw=(bits+63)/64;
     if(bits<65 || bits>16384 || coeffs<2 || coeffs>32768 || kind<0 || kind>3 || bpw<1 || bpw>64 ||
-       (mode!=0 && mode!=32 && mode!=33 && mode!=34 && mode!=4096 && mode!=8192 && mode!=16384) || repeats<1 || repeats>5 || threads<32 || threads>256 || threads%32)return 2;
+       (mode!=0 && mode!=32 && mode!=33 && mode!=34 && mode!=35 && mode!=4096 && mode!=8192 && mode!=16384) || (mode==35 && nw<=128) || repeats<1 || repeats>5 || threads<32 || threads>256 || threads%32)return 2;
     const int fault=argc>=11?atoi(argv[10]):0,batches=argc==12?atoi(argv[11]):1;
     if(fault<0 || fault>2 || batches<1 || batches>4)return 2;
-    probe_policy=(mode>=32 && mode<=34)?32:0;probe_kernel=mode==34?3:mode==33?2:1;
+    probe_policy=(mode>=32 && mode<=35)?32:0;probe_kernel=mode==35?4:mode==34?3:mode==33?2:1;
     CK(cudaSetDevice(device));
     mpz_t n,v,normalized,reciprocal,radix,expected;mpz_inits(n,v,normalized,reciprocal,radix,expected,nullptr);
     gmp_randstate_t rng;gmp_randinit_mt(rng);gmp_randseed_ui(rng,0x571300+bits+kind);
@@ -65,11 +65,12 @@ int main(int argc,char **argv) {
     CK(cudaMemset(dbad,0,8));
     const size_t shared=(nw+(threads/32)*(2*nw+4))*8;
     cudaFuncAttributes attr{};
-    if(mode==34)CK(cudaFuncGetAttributes(&attr,s4_warp_reduce_kernel<256,true,true>));else if(mode==33)CK(cudaFuncGetAttributes(&attr,s4_warp_reduce_kernel<256,true>));else if(mode==32)CK(cudaFuncGetAttributes(&attr,s4_warp_reduce_kernel<256>));else CK(cudaFuncGetAttributes(&attr,s4_reduce_kernel<256,false>));
+    auto sized=s4_sized_cached_kernel(nw);
+    if(mode==35)CK(cudaFuncGetAttributes(&attr,sized));else if(mode==34)CK(cudaFuncGetAttributes(&attr,s4_warp_reduce_kernel<256,true,true>));else if(mode==33)CK(cudaFuncGetAttributes(&attr,s4_warp_reduce_kernel<256,true>));else if(mode==32)CK(cudaFuncGetAttributes(&attr,s4_warp_reduce_kernel<256>));else CK(cudaFuncGetAttributes(&attr,s4_reduce_kernel<256,false>));
     cudaEvent_t start,end;CK(cudaEventCreate(&start));CK(cudaEventCreate(&end));std::vector<float> times;
     for(int repeat=0;repeat<repeats;++repeat) {
         CK(cudaEventRecord(start));
-        if(mode>=32 && mode<=34)ecm_launch_s4_reduce_kernel<256,false>(EcmCudaLaunch{dim3(unsigned((coeffs*batches+threads-1)/threads)),dim3(unsigned(threads))},di,slots*coeffs,bpw,slots,coeffs,batches,nullptr,0,nw,nw,nullptr,nw,doo,2ull*bits+17,dbad,nullptr,0,shift,recip,first,count,0);
+        if(mode>=32 && mode<=35)ecm_launch_s4_reduce_kernel<256,false>(EcmCudaLaunch{dim3(unsigned((coeffs*batches+threads-1)/threads)),dim3(unsigned(threads))},di,slots*coeffs,bpw,slots,coeffs,batches,nullptr,0,nw,nw,nullptr,nw,doo,2ull*bits+17,dbad,nullptr,0,shift,recip,first,count,0);
         else if(!mode)s4_reduce_kernel<256,false><<<(coeffs*batches+threads-1)/threads,threads>>>(di,slots*coeffs,bpw,slots,coeffs,batches,nullptr,0,nw,nw,nullptr,nw,doo,2ull*bits+17,dbad,nullptr,0,shift,recip,first,count,0);
         else for(int batch=0;batch<batches;++batch)for(Word offset=0;offset<count;) {
             const Word take=std::min(count-offset,mode?Word(mode):count);
@@ -84,7 +85,7 @@ int main(int argc,char **argv) {
     for(size_t i=0;i<output.size();++i){bad+=output[i]!=want[i];hash=(hash^output[i])*1099511628211ull;}
     auto sorted=times;std::sort(sorted.begin(),sorted.end());
     printf("s4_warp_probe: bits=%d nw=%d kind=%d bpw=%d coeffs=%d batches=%d active=%llu backend=%d threads=%d shared=%zu bad=%zu gpu_bad=%llu checked_words=%zu regs=%d local=%zu median_ms=%.6f hash=%016llx samples_ms=",
-        bits,nw,kind,bpw,coeffs,batches,count*batches,mode,threads,(mode>=32 && mode<=34)?shared:0,bad,gpu_bad,output.size(),attr.numRegs,attr.localSizeBytes,sorted[sorted.size()/2],hash);
+        bits,nw,kind,bpw,coeffs,batches,count*batches,mode,threads,(mode>=32 && mode<=35)?shared:0,bad,gpu_bad,output.size(),attr.numRegs,attr.localSizeBytes,sorted[sorted.size()/2],hash);
     for(size_t i=0;i<times.size();++i)printf("%s%.6f",i?",":"",times[i]);puts("");
     CK(cudaFree(di));CK(cudaFree(doo));CK(cudaFree(dbad));CK(cudaEventDestroy(start));CK(cudaEventDestroy(end));
     mpz_clears(n,v,normalized,reciprocal,radix,expected,nullptr);gmp_randclear(rng);return bad || gpu_bad?1:0;

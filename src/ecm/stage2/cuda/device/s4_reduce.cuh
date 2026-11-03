@@ -96,7 +96,11 @@ void ecm_launch_s4_reduce_kernel(EcmCudaLaunch cfg, const unsigned long long *di
             // Empty output windows still validate all source padding.
             const auto blocks=count?(count*nbatch*32+threads-1)/threads:1;
             const size_t shared=sizeof(unsigned long long)*(nw+(threads/32)*(2*nw+4));
-            if(ecm_stage2_s4_coop_kernel()==3)
+            if(ecm_stage2_s4_coop_kernel()==4) {
+                auto kernel=s4_sized_cached_kernel(nw);
+                kernel<<<blocks,threads,shared,cfg.stream>>>(digits,n,bpw,slot_words,out_slots,nbatch,nw,div_shift,
+                    div_recip,first,count,w,out,bad,slot_bits);
+            } else if(ecm_stage2_s4_coop_kernel()==3)
                 s4_warp_reduce_kernel<NW,true,true><<<blocks,threads,shared,cfg.stream>>>(digits,n,bpw,slot_words,
                     out_slots,nbatch,nw,div_shift,div_recip,first,count,w,out,bad,slot_bits);
             else if(ecm_stage2_s4_coop_kernel()==2)

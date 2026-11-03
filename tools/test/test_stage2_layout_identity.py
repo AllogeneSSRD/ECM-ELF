@@ -58,11 +58,11 @@ class LayoutIdentity(unittest.TestCase):
         conditions=[dict(uuid_hex='fixture'),dict(uuid_hex='fixture',env_s4_coop_reduce=32)]
         wide=dict(target_bits=9216,arithmetic_bits=9216,carrier_exponent=0,modulus_kind='generic')
         rows=[self.row('scalar',10,reduce_coop=0,**wide),self.row('old-request',8,condition=1,**wide)]
-        rows += [self.row('observed-'+str(k),7-k,condition=1,reduce_coop=32,reduce_threads=128,reduce_kernel=k,**wide) for k in (1,2)]
+        rows += [self.row('observed-'+str(k),7-k,condition=1,reduce_coop=32,reduce_threads=128,reduce_kernel=k,**wide) for k in (1,2,3,4)]
         document=tomllib.loads(write_profile(conditions,rows))
         self.assertEqual(len(document['condition']),1)
         columns,*rows=document['width']['9216']['matrix']
-        self.assertEqual({(r[columns.index('reduce_coop')],r[columns.index('reduce_kernel')]) for r in rows},{(0,0),(255,0),(32,1),(32,2)})
+        self.assertEqual({(r[columns.index('reduce_coop')],r[columns.index('reduce_kernel')]) for r in rows},{(0,0),(255,0),(32,1),(32,2),(32,3),(32,4)})
 
     def test_seed_rows_and_legacy_requests_stay_separate(self):
         document=tomllib.loads(write_profile([dict(uuid_hex='fixture',env_giant_seed_coop=32),dict(uuid_hex='fixture')],

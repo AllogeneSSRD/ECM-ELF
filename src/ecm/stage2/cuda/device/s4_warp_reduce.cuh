@@ -178,3 +178,13 @@ __global__ void s4_warp_reduce_kernel(const unsigned long long *digits,unsigned 
     for(unsigned long long i=lane;i<w;i+=32)
         out[gid*w+i]=i<(unsigned)nw?(div_shift?(t[i]>>div_shift)|(i+1<(unsigned)nw?t[i+1]<<(64-div_shift):0):t[i]):0;
 }
+
+// The quotient consumes limb nw as well as the nw divisor limbs. Widths at
+// multiples of 32 therefore need one more warp tile than the divisor alone.
+static inline auto s4_sized_cached_kernel(int nw) {
+    if(nw<160)return &s4_warp_reduce_kernel<159,true,true>;
+    if(nw<192)return &s4_warp_reduce_kernel<191,true,true>;
+    if(nw<224)return &s4_warp_reduce_kernel<223,true,true>;
+    if(nw<256)return &s4_warp_reduce_kernel<255,true,true>;
+    return &s4_warp_reduce_kernel<256,true,true>;
+}

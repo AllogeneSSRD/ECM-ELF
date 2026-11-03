@@ -99,7 +99,7 @@ def main():
     p.add_argument('--component',choices=('seed','reduce'),default='seed')
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--background-snapshot',type=Path)
-    p.add_argument('--reduce-kernel',type=int,choices=(1,2,3))
+    p.add_argument('--reduce-kernel',type=int,choices=(1,2,3,4))
     p.add_argument('--arithmetic',choices=('both','ordinary','carrier'),default='both')
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--exe',type=Path,required=True)

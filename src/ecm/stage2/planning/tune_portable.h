@@ -269,7 +269,7 @@ inline std::string scope(const Fields &s) {
 inline void validate(const Fields &s) {
     const auto reduce=optional_uint(s,"reduce_coop"),threads=optional_uint(s,"reduce_threads"),kernel=optional_uint(s,"reduce_kernel");
     if((reduce!=0 && reduce!=32 && reduce!=255) || (reduce==32 &&
-        ((threads!=64 && threads!=96 && threads!=128) || (kernel<1 || kernel>3))) || (reduce!=32 && (threads || kernel)))
+        ((threads!=64 && threads!=96 && threads!=128) || (kernel<1 || kernel>4))) || (reduce!=32 && (threads || kernel)))
         throw std::runtime_error("invalid S4 arithmetic backend");
     if(reduce==32 && (uint(s,"arithmetic_bits")<=8192 || text(s,"modulus_kind")=="mersenne"))throw std::runtime_error("unsupported cooperative S4 sample");
     const auto baby=optional_uint(s,"baby_coop"),giant=optional_uint(s,"giant_coop"),seed=optional_uint(s,"seed_coop");

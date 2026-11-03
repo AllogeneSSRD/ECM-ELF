@@ -140,7 +140,7 @@ def aggregate(samples):
         row['seed_coop']=int(original.get('seed_coop',0))
         for k in ('reduce_coop','reduce_threads','reduce_kernel'):row[k]=int(original.get(k,0))
         m,t,v=(row[k] for k in ('reduce_coop','reduce_threads','reduce_kernel'))
-        if m not in (0,32,255) or (m==32 and (t not in (64,96,128) or v not in (1,2))) or (m!=32 and (t or v)):
+        if m not in (0,32,255) or (m==32 and (t not in (64,96,128) or v not in (1,2,3,4))) or (m!=32 and (t or v)):
             raise ValueError('Invalid S4 backend')
         if m==32 and (int(row['arithmetic_bits'])<=8192 or row['modulus_kind']=='mersenne'):
             raise ValueError('Unsupported cooperative S4 width/modulus')

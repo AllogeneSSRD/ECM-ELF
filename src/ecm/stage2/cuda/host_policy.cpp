@@ -77,7 +77,7 @@ void configure_s4_backend(Options &o,bool present,const std::string &value) {
     };
     setting("--reduce-threads","NTT_S4_COOP_TPB",o.reduce_threads);
     setting("--reduce-kernel","NTT_S4_COOP_KERNEL",o.reduce_kernel);
-    if(!ecm_stage2::valid_reduce_variant(o.reduce_threads,o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current))throw std::runtime_error("S4 threads must be 64, 96 or 128 and kernel 1, 2 or experimental 3");
+    if(!ecm_stage2::valid_reduce_variant(o.reduce_threads,o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current))throw std::runtime_error("S4 threads must be 64, 96 or 128 and kernel 1, 2 or experimental 3/4");
     o.selected_reduce_threads=o.selected_reduce_coop?o.reduce_threads:0;o.selected_reduce_kernel=o.selected_reduce_coop?(o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current):0;
 #ifdef ECM_STAGE2_OPENCL
     if(o.selected_reduce_coop)throw std::runtime_error("cooperative S4 reduction is CUDA-only");

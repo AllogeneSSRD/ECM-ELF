@@ -77,6 +77,15 @@ static void s4_policy_tests(const std::filesystem::path &out) {
             "forced cache admitted through automatic coordinate path");
     std::ofstream(out/"s4-cache.toml")<<experimental.serialize();auto cache_loaded=p::Profile::load(out/"s4-cache.toml");
     require(p::optional_uint(cache_loaded.samples.back(),"reduce_kernel")==3,"cache identity lost through serialization");
+    auto sized=cached;sized["reduce_kernel"]="4";
+    require(experimental.update(sized),"sized cache merged with full cache");
+    std::ofstream(out/"s4-sized.toml")<<experimental.serialize();
+    const auto sized_loaded=p::Profile::load(out/"s4-sized.toml");
+    p::Estimator sized_model(sized_loaded,old,p::Ignore::parse(""),query);
+    require(sized_loaded.samples.size()==experimental.samples.size() &&
+        p::optional_uint(sized_loaded.samples.back(),"reduce_kernel")==4,"sized cache identity lost");
+    require(!p::qualified_reduce_backend(sized_model,scalar,2,128,4).available &&
+        p::qualified_reduce_backend(sized_model,scalar,2).kernel==2,"sized cache entered auto");
 }
 static void giant_tests() {
     p::Profile profile;profile.condition({{"uuid_hex","\"giant-device\""},{"sm_major","8"},{"sm_minor","9"},
