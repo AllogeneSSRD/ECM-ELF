@@ -18,6 +18,7 @@
 - [BOINC 图形与屏保机制](BOINC_GRAPHICS.html)：独立图形进程、状态通信、按需采样及 SETI/Rosetta/Einstein 的画面语义；固定第三方参考，不表示本项目已实现。
 - [ELYTerminal 桌宠行为](ELY_PET_BEHAVIOR.md)：固定版本的情绪、微动作时间表、点击及睡眠条件，区分上游矢量动作与图集适配。
 - [GPUOWL NTT](GPUOWL_NTT.md)：保留 `DEV_GPUOWL_NTT_NOTES.md` §§1–10 的域运算、IBDWT、twiddle、CRT、carry 与源码索引。
+- [GPUOWL 近期优化](GPUOWL_RECENT_OPTIMIZATIONS.md)：2026-11-02固定快照的scratch消除、地址/根存活期、PFA置换合并、域约减和调优；[HTML阅读版](../web/gpuowl-optimizations-20261102.html)。
 - [GPUOWL / PRPLL OpenCL队列](GPUOWL_OPENCL_QUEUE.md)：异步有序提交、两窗口marker背压、查询后休眠、辅助队列、CPU后台任务及驱动边界。
 - [GPUOWL CUDA FFT](GPUOWL_FFT.md)：共享内核、浮点/整数/混合路径和权重布局。
 - [Prime95 Poly Stage2](PRIME95_STAGE2.md)：D/B2/内存、F/G/倒数、截断 fold、共享变换、scaled 下降与源码行号。
