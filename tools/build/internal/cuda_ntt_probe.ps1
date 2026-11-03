@@ -3,9 +3,10 @@
 function Invoke-EcmNttProbeBuild {
     param([string]$Repo,[string]$Build,[string]$Arch,[string]$Source,[string]$Name,
           [ValidateSet('legacy','per-thread')][string]$DefaultStream='legacy',
-          [string]$WorkerBuild='',[string]$Gmp='third_party/gmp-zen3/dist',
+          [string]$WorkerBuild='',[string]$ModuleBuild='',[string]$Gmp='third_party/gmp-zen3/dist',
           [ValidateSet('STAGE2_NTT','STAGE2_ARITHMETIC')][string]$ModuleGroup='STAGE2_NTT',
-          [string[]]$AdditionalProductionSources=@(),[string[]]$ExtraSources=@(),[string[]]$Defines=@())
+          [string[]]$AdditionalProductionSources=@(),[string[]]$ExtraSources=@(),[string[]]$Defines=@(),
+          [string[]]$LocalDefines=@(),[ValidateRange(1,64)][int]$SplitCompile=1)
     . (Join-Path $PSScriptRoot 'cuda_toolchain.ps1')
     . (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
     $cuda=Resolve-EcmCudaToolkit -Archs $Arch
@@ -30,7 +31,34 @@ function Invoke-EcmNttProbeBuild {
     $hashes=Get-EcmSourceHashes $Repo $deps
     . (Join-Path $PSScriptRoot 'build_directory.ps1')
     Initialize-EcmBuildDirectory $Build
-    $objects=@();$objectHashes=[ordered]@{};$compile=@();$watch=[Diagnostics.Stopwatch]::StartNew()
+    $objects=@();$objectHashes=[ordered]@{};$moduleObjects=[ordered]@{};$compile=@();$watch=[Diagnostics.Stopwatch]::StartNew()
+    if($WorkerBuild -and $ModuleBuild){throw 'Choose WorkerBuild or ModuleBuild, not both'}
+    if($ModuleBuild) {
+        # Reuse an independently built, explicitly mapped module set. Local
+        # probe defines never affect these objects; all module dependencies,
+        # common defines, ABI and object bytes must still match current input.
+        $ModuleBuild=Resolve-EcmSourcePath $Repo $ModuleBuild
+        $cached=Get-Content (Join-Path $ModuleBuild 'manifest.json') -Raw|ConvertFrom-Json
+        if($cached.ntt_abi_schema -ne 1 -or $cached.architecture -ne $Arch -or
+           $cached.default_stream -ne $DefaultStream -or $cached.gl_fixed_mode -ne 3 -or
+           $cached.production_module_group -ne $ModuleGroup -or
+           (@($cached.ntt_defines) -join "`n") -ne (@($Defines) -join "`n") -or
+           (@($cached.production_sources) -join "`n") -ne ($moduleSources -join "`n") -or
+           $cached.gmp_dll_sha256 -ne (Get-FileHash (Join-Path $Gmp 'bin/gmp-10.dll')).Hash) {throw 'Cached module ABI differs'}
+        $moduleDeps=Get-EcmSourceClosure $Repo $moduleSources $dirs
+        foreach($dep in $moduleDeps) {
+            if(-not $cached.sources.$dep -or $cached.sources.$dep -ne $hashes[$dep]){throw "Cached module dependency changed: $dep"}
+        }
+        foreach($src in $moduleSources) {
+            $obj=$cached.module_objects.$src
+            $digest=$cached.compiled_objects.$obj
+            if(-not $digest){$digest=$cached.production_objects.$obj}
+            if(-not $obj -or -not $digest -or -not (Test-Path -LiteralPath $obj) -or
+               (Get-FileHash -LiteralPath $obj).Hash -ne $digest){throw "Cached module object changed: $src"}
+            $objects+=('"'+$obj+'"');$objectHashes[$obj]=$digest;$moduleObjects[$src]=$obj
+        }
+        $sources=@($Source)+$ExtraSources
+    }
     if($WorkerBuild) {
         if($DefaultStream -ne 'legacy'){throw 'Production objects use the legacy default stream'}
         $WorkerBuild=Resolve-EcmSourcePath $Repo $WorkerBuild
@@ -42,16 +70,18 @@ function Invoke-EcmNttProbeBuild {
         foreach($src in $moduleSources) {
             $obj=$worker.compile_units.$src.entry.output
             if(-not $obj){throw "Missing production module object: $src"}
-            $objects+=('"'+$obj+'"');$objectHashes[$obj]=(Get-FileHash $obj).Hash
+            $objects+=('"'+$obj+'"');$objectHashes[$obj]=(Get-FileHash $obj).Hash;$moduleObjects[$src]=$obj
         }
         $sources=@($Source)+$ExtraSources
     }
     $names=Get-EcmObjectNames $sources
     foreach($src in $sources) {
         $obj=Join-Path $Build ($names[$src]+'.obj')
+        $unitDefines=@($Defines)
+        if($src -notin $moduleSources){$unitDefines+=@($LocalDefines)}else{$moduleObjects[$src]=$obj}
         $compile+=('"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 --default-stream '+$DefaultStream+
-            ' -arch='+$Arch+' -DNTT_GL_FIXED_MODE=3 -DNTT_GL_ADD_SUB_MASK=1 -DNTT_OUTER_UNROLL_U=0'+
-            ' '+(($Defines|ForEach-Object {'-D'+$_}) -join ' ')+
+            ' --split-compile='+$SplitCompile+' -arch='+$Arch+' -DNTT_GL_FIXED_MODE=3 -DNTT_GL_ADD_SUB_MASK=1 -DNTT_OUTER_UNROLL_U=0'+
+            ' '+(($unitDefines|ForEach-Object {'-D'+$_}) -join ' ')+
             ' -I "'+$Repo+'/include" -I "'+$Gmp+'/include" -Xcompiler /utf-8 -Xcompiler /wd4819 -c "'+$src+'" -o "'+$obj+'"')
         $compile+='if errorlevel 1 exit /b 1';$objects+=('"'+$obj+'"')
     }
@@ -77,7 +107,8 @@ function Invoke-EcmNttProbeBuild {
         build_seconds=$watch.Elapsed.TotalSeconds;toolkit=$cuda.VersionText;msvc=$vc.Version;
         gmp_dll_sha256=(Get-FileHash (Join-Path $Build 'gmp-10.dll')).Hash;sources=$hashes;
         production_sources=$moduleSources;extra_sources=$ExtraSources;defines=$Defines;
-        production_objects=$objectHashes;compiled_objects=$compiledObjects;worker=$WorkerBuild} |
+        ntt_abi_schema=1;ntt_defines=@($Defines);local_defines=@($LocalDefines);module_objects=$moduleObjects;
+        production_objects=$objectHashes;compiled_objects=$compiledObjects;worker=$WorkerBuild;module_build=$ModuleBuild} |
         ConvertTo-Json -Depth 6 | Set-Content (Join-Path $Build 'manifest.json') -Encoding utf8
     Write-Host "built $exe"
 }

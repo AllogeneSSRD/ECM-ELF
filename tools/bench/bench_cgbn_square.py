@@ -10,6 +10,7 @@ Modes 17/18/19: carry-save with diagonal transpose / both transposes / cross-fir
 Modes 20/21: complete wide square with cross-first / both transposes.
 Mode 22: Stage2 Mersenne reducer with cross-first wide square.
 Mode 23: probe-only carry-save producer that joins before loading cross inputs.
+Mode 24: probe-only triangular-row square fused with two-word WMAD REDC.
 """
 import argparse
 import hashlib
@@ -46,7 +47,7 @@ def main():
     a=p.parse_args();repo=Path(__file__).resolve().parents[2]
     if a.suite=='sanitizer' and (a.sanitizer is None or not a.sanitizer.is_file()):
         p.error('--suite sanitizer requires --sanitizer PATH')
-    modes=[int(s) for s in a.modes.split(',')];assert modes and all(0<=m<=23 for m in modes)
+    modes=[int(s) for s in a.modes.split(',')];assert modes and all(0<=m<=24 for m in modes)
     build=a.build.resolve();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     binary=out/'bin';binary.mkdir();(binary/'.gitignore').write_text('*\n')
     m=load(build/'manifest.json');assert sha(build/'cgbn_square_probe.exe')==m['sha256'].lower()
@@ -105,7 +106,7 @@ def main():
             assert len(values)==samples and all(v>0 for v in values)
             row=dict(fields=fields,samples_ms=values,median_ms=statistics.median(values),
                 mode=mode,count=count,recurrence=rec,alias=alias,kind=kind,folder=str(folder),device_identity=identity)
-            row['feedback']=fields.get('feedback','modular' if mode in (0,1,2,5,7,9,11,13,14,15,16,17,18,19,22,23) else 'legacy_low_half')
+            row['feedback']=fields.get('feedback','modular' if mode in (0,1,2,5,7,9,11,13,14,15,16,17,18,19,22,23,24) else 'legacy_low_half')
         report['runs'].append(row);write(out/'summary.json',report)
         print(a.suite,bits,tpi,count,rec,mode,row.get('median_ms','fault-rejected'),flush=True)
         return row

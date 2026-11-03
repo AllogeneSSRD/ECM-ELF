@@ -194,9 +194,26 @@ Compute Sanitizer对8192-bit分块宽平方的memcheck／synccheck、同档分�
 
 证据根目录为`data/experiments/cgbn_square_layout_20261102/`，`check*`／`joinfirst_check*`为算术资格、`perf*`／`raw*`／`joinfirst_perf*`为算子、`stage1_layout0`／`stage1_layout3`为真实Stage1、`ncu8192`及`sanitizer_*`为仪器化检查；静态资源在`stage1_resources.json`及对应cuobjdump原文。工具`tools/bench/analyze_cgbn_square_layout.py`从这些证据生成`data/benchmarks/cgbn_square_layout_20261102/`和`data/figures/cgbn_square_layout_20261102/`。实验提交不增加主版本；构建身份仍按冻结清单区分。
 
+## 逐行三角形平方与REDC扫描
+
+隔离原型`tools/experiments/cuda/cgbn_square/triangular_redc.cuh`的`mont_square_triangular`把每行的对角线及上三角贡献直接送入双词WMAD REDC，不先物化完整宽平方。全a倍增后修正对角线／首个后继词；额外最高位在两步归约后注入，保持原R和规范返回。数学边界见[逐行扫描资料](../reference/CGBN_SQUARE.md#逐行对称融合的研究边界)。它是探针模式24，不是生产构建后端或INI键。
+
+2026-11-02至03、GPU1 RTX4060 Laptop、CUDA13.3／sm89，TPB128、MAX_ROTATION1，普通模数为容器减6bits。三进程轮次、各5个event样本、无预热；原生批量每整数32次递推。当前结果如下，单位ms／批：
+
+| 容器／TPI／原生批量 | 原CGBN→逐行 | 时间变化 | 每线程寄存器：原→逐行 |
+|---|---:|---:|---:|
+| 512／8／768 | 0.097280→0.107648 | +10.7% | 32→52 |
+| 8192／16／384 | 1.662880→2.254432 | +35.6% | 94→158 |
+
+8192单整数依赖延迟回退约27.2%，4096批量回退约31.8%。管理员NCU另测8192／384整数／4次递推，原／逐行warp指令8,561,430／16,044,618（约+87.4%），寄存器94／158，两侧无寄存器溢出读写指令；仪器化时间不参加正式表。
+
+原因边界明确：数学上只保留上三角，但当前映射仍对完整行／lane执行MAC，将无贡献操作数选择为零；没有把GPU发射的乘法工作减半，还增加倍增、比较和选择。这是正确的融合扫描原型，性能尚不合格，未继续构建完整Stage1候选，默认不变。
+
+512／8192共56次GMP／保护区检查通过、2次故障注入正确拒绝；覆盖原地／非原地、近R模数、最高位与多次递推。8192模式24的memcheck／synccheck均0错误。原证据位于`data/experiments/cgbn_ntt_crossover_20261103/triangular_*`及`ncu_triangular8192`；与整数NTT实验合计正式遥测4993条均为1500MHz，完整设备条件和并行批量的解释见[NTT／CGBN乘法比较](CGBN_NTT_MULTIPLY.md)。
+
 ## 待验证
 
-- 针对普通模平方实现真正的逐行对称部分积／REDC扫描；先解决三角形工作在lane之间的分配与进位，再做同R的GMP和端到端资格。
+- 重新分配逐行三角形工作，实际减少发射MAC或重叠依赖链；当前置零映射没有性能资格。先验证同R的GMP和算子，再考虑完整点核。
 - 分块重排／顺序变体已无合格端到端收益。若继续该方向，需先提出可减少总执行工作或实际溢出的新映射，再以原CGBN和完整Stage1验收，不增加只有指标下降的运行时选项。
 - 对梅森轻归约中的宽平方收益，继续验证完整xDBL／ladder及Stage2固定D整曲线；不能把普通REDC实验或独立宽平方成绩替代这些资格。
 - 扩大TPI／位宽邻域及其他设备覆盖；检查不同模数余量、梅森位数和padded适配器R修正，不按单一位宽阈值自动启用。

@@ -17,7 +17,7 @@
 #define ECM_SQUARE_TPI 16
 #endif
 #ifndef ECM_SQUARE_MODE_MASK
-#define ECM_SQUARE_MODE_MASK 16777215
+#define ECM_SQUARE_MODE_MASK 33554431
 #endif
 #define CK(x) do{auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA: %s\n",cudaGetErrorString(e));exit(2);}}while(0)
 constexpr int BITS=ECM_SQUARE_BITS,TPI=ECM_SQUARE_TPI,TPB=128;
@@ -33,7 +33,8 @@ using Mem=cgbn_mem_t<BITS>;
 #include "../experiments/cuda/cgbn_square/join_first.cuh"
 #undef ECM_SQUARE_TEST_ENV
 #endif
-template<int MODE> constexpr bool is_mont=MODE<3 || MODE==5 || MODE==7 || MODE==9 || MODE==11 || MODE==13 || MODE==14 || (MODE>=15 && MODE<=19) || MODE==22 || MODE==23;
+#include "../experiments/cuda/cgbn_square/triangular_redc.cuh"
+template<int MODE> constexpr bool is_mont=MODE<3 || MODE==5 || MODE==7 || MODE==9 || MODE==11 || MODE==13 || MODE==14 || (MODE>=15 && MODE<=19) || MODE==22 || MODE==23 || MODE==24;
 template<int MODE> __global__ void square_probe(Mem *input,Mem *modulus,Mem *output,
     int count,int repeats,bool alias,uint32_t np0,int fault,int mersenne_bits) {
     const int i=(blockIdx.x*blockDim.x+threadIdx.x)/TPI;if(i>=count)return;
@@ -57,6 +58,9 @@ template<int MODE> __global__ void square_probe(Mem *input,Mem *modulus,Mem *out
             constexpr unsigned depth=MODE==5?1:2;
             if(alias)ecm_cgbn::mont_square_split<depth>(e,x,x,n,np0);
             else {ecm_cgbn::mont_square_split<depth>(e,v,x,n,np0);cgbn_set(e,x,v);}
+        } else if constexpr(MODE==24) {
+            if(alias)ecm_cgbn::mont_square_triangular(e,x,x,n,np0);
+            else {ecm_cgbn::mont_square_triangular(e,v,x,n,np0);cgbn_set(e,x,v);}
         } else if constexpr((MODE>=15 && MODE<=19) || MODE==23) {
             constexpr unsigned layout=MODE==23?4:MODE>=17?MODE-16:0;
             if(alias)ecm_cgbn::mont_square_carrysave<2,Env,MODE==15,true,layout>(e,x,x,n,np0);
@@ -183,9 +187,9 @@ template<int MODE> int run(int device,int count,int repeats,int alias,int kind,i
 int main(int argc,char **argv) {
     if(argc!=9){fprintf(stderr,"device count repeats mode alias kind samples fault\n");return 2;}
     const int device=atoi(argv[1]),count=atoi(argv[2]),repeats=atoi(argv[3]),mode=atoi(argv[4]),alias=atoi(argv[5]),kind=atoi(argv[6]),samples=atoi(argv[7]),fault=atoi(argv[8]);
-    if(count<1||count>16384||repeats<1||repeats>128||mode<0||mode>23||alias<0||alias>1||kind<0||kind>3||samples<1||samples>9||fault<0||fault>2)return 2;
+    if(count<1||count>16384||repeats<1||repeats>128||mode<0||mode>24||alias<0||alias>1||kind<0||kind>3||samples<1||samples>9||fault<0||fault>2)return 2;
     if(fault==2 && (repeats<2 || (mode!=3 && mode!=4 && mode!=6 && mode!=8 && mode!=10 && mode!=12 && mode!=20 && mode!=21)))return 2;
     if((mode==13 || mode==14 || mode==22) && ((kind!=1 && kind!=3) || Env::BITS!=Env::UNPADDED_BITS))return 2;
 #define CASE(M) case M:if constexpr(ECM_SQUARE_MODE_MASK&(1<<M))return run<M>(device,count,repeats,alias,kind,samples,fault);else return 2
-    switch(mode){CASE(0);CASE(1);CASE(2);CASE(3);CASE(4);CASE(5);CASE(6);CASE(7);CASE(8);CASE(9);CASE(10);CASE(11);CASE(12);CASE(13);CASE(14);CASE(15);CASE(16);CASE(17);CASE(18);CASE(19);CASE(20);CASE(21);CASE(22);CASE(23);}return 2;
+    switch(mode){CASE(0);CASE(1);CASE(2);CASE(3);CASE(4);CASE(5);CASE(6);CASE(7);CASE(8);CASE(9);CASE(10);CASE(11);CASE(12);CASE(13);CASE(14);CASE(15);CASE(16);CASE(17);CASE(18);CASE(19);CASE(20);CASE(21);CASE(22);CASE(23);CASE(24);}return 2;
 }
