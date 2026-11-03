@@ -216,6 +216,12 @@ NTT表只测Goldilocks有限域卷积，不含大整数carry和模N归约，不�
 
 成本模型接受原生打包查询支持的NTT长度，再通过当前显存规划准入；不把NTT单独测量网格的`2^27`上限当作生产形状上限。未测长变换使用明确标注的外推成本，不视为实测，也不保证能驻留或更快。
 
+运行时D探测另有`same_width_phase_projection_v1`先验：在相同目标/算术位宽、实际后端、链长、有效尾块策略、布局、驻留及NTT/树/巨步路线区间内，优先使用几何最接近的完整阶段观测。P和巨步点数分别限定为观测值的½…2倍；设备、驱动、CUDA、后端、环境条件严格匹配，不能用`tune_ignore`放宽此类阶段投影。条件不满足时，保留原区间模型。它仅用于正常运行的有界试跑排序和预算，关闭运行采集后的模型选型、冷启动默认D及Auto B2收益模型不启用该投影。
+
+阶段投影要求十项互斥阶段均值非负且总和等于引擎均值；不从嵌套的giant/G树/fold计时反推出总阶段。固定准备与收尾保持固定，Baby和累乘分别按自己的工作量缩放；多项式阶段的工作比率为`0.55×NTT + 0.40×归约 + 0.03×传输 + 0.02×调用数`，各项先除以锚点对应工作量。主循环用嵌套giant/G树/fold占比加权这些工作比率，乘回完整互斥主循环阶段。这些权重是显式先验，不能视为通过拟合辨认出的设备吞吐率。实现复用[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)的`Estimator::scaled`，而非维护第二套阶段计时边界。
+
+预测误差余量为`15% + 4%×g`，其中`g=|log₂(P/P₀)|+¼|log₂(I/I₀)|`，I为巨步点数。它不是统计置信区间或独立验证误差。该先验保持`exact=false`、`validated=false`，不增加repeats或生成测量行；达到R次的精确运行观察和正式测量仍优先。稳定采用依旧经过完整曲线、自检、NF和当前内存准入。实现入口为[width_prediction.h](../../src/ecm/stage2/planning/width_prediction.h)的`phase_anchor/calculate`；定向资格见[大档B2性能](../performance/STAGE2_LARGE_B2.md)。
+
 候选先做廉价排名，只有少量待试项进入当前原生显存/执行计划准入；实际分块和驻留路线改变时重新核对成本与观察身份。显式D锁、关闭运行采集及`paired`策略不展开新D搜索。统计充分且达到候选上限时不再每曲线重排全表；搜索不保存逐曲线调优历史，TOML继续按参数合并均值/标准差/次数。日志`tune_selection.runtime_search`记录各家族与布局的额度、已探索数量、额外成本估算、提议D及原因，`runtime_allocation`给出承载保守优势及收紧状态；不新增逐候选控制台刷屏。
 
 显式D锁限制候选D；显式`--carrier-exponent 0|p`锁定算术。关闭`stage2_auto_carrier`时不自动加入承载。独立save不从文件名或位数猜指数；合法worktodo提供并验证p。`paired`策略仍使用正式配对调优规则。Auto B2先选择覆盖上界，再允许在同一实际B2下进行上述正常运行比较。
@@ -265,7 +271,7 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 生产JSONL的`tune_observation`可由[导入工具](../../tools/bench/import_stage2_benchmark_tune.py)的`--runtime-results FILE --runtime-samples 10`恢复，再经原生`--tune-merge`汇集。重复导入同一观察不增加计数；导入保留上限内的独立较慢样本，不只保留最快一条。原始曲线、日志和失败证据放在忽略目录；TOML仅保存合并统计、必要组件均值及去重身份。
 
-实现入口为`planning/stage2.cpp::portable_runtime_select/prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune`，统计在`ecm_stage2_portable_model.h::runtime_statistics`，切换规则在`ecm_stage2_runtime_tune.h::runtime_choice`，规划实现位于 `src/ecm/stage2/planning/`，纯模型位于其 `legacy/` 子目录。CPU门禁、GPU生产流程及离线恢复脚本为`tools/test/test_stage2_runtime_tune.py`、`test_stage2_runtime_selection_gpu.py`、`test_stage2_runtime_task.py`和`test_stage2_runtime_import.py`；各脚本要求新的`--output data/experiments/<目录>`。
+实现入口为[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)的`portable_runtime_select/prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune`，统计在[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)的`runtime_statistics`，切换规则在[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)的`runtime_choice`。CPU门禁、GPU生产流程及离线恢复脚本为`tools/test/test_stage2_runtime_tune.py`、`test_stage2_runtime_selection_gpu.py`、`test_stage2_runtime_task.py`和`test_stage2_runtime_import.py`；各脚本要求新的`--output data/experiments/<目录>`。
 
 固定配置的独立基准扫描应设置`stage2_tune_runtime=false`并冻结性能文件。此时仍可使用该文件已有的合格实测组；若需要完全固定D/算术，应同时显式锁定它们。检验正常运行时选型的矩阵则保留该开关，单独记录学习和候选试跑；稳定性能须核对无新试跑、文件未变化，并对相同D/P/算术重复测量。若直接报告性能文件的最佳合格均值，则须注明实际样本数和波动，明确这些观察也参与了选型，不冒充独立的选型后验证。两种口径不混合，复现方法见[运行时矩阵](../../tools/bench/README_STAGE2_VERSION.md#正常运行时选型矩阵)。
 

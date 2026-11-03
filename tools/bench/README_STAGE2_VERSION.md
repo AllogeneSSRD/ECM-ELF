@@ -245,3 +245,9 @@ python tools/bench/plot_stage2_version.py `
 `analyze_stage2_tree_trace.py --trace <trace.sqlite> --device <index> --output <new.json>`按进程限定的提交关联ID归属树内核，支持异步执行跨过CPU范围边界。结果分纯NTT／pointwise、S4、其他kernel与DMA，并单列CPU范围、CUDA API驻留并集和同步API驻留。主机与设备可重叠，嵌套范围也不能相加；同步拷贝API驻留不等于PCIe耗时，API外范围不等于CPU指令时间。单元回归使用内存SQLite构造跨界、同关联ID不同进程和重叠等待，防止错误归因。
 
 `analyze_stage2_seed_coop.py --retest <追加矩阵目录>`可追加同二进制、同设备、同内核版本、同组件／输入矩阵／显存预算／D几何的配对复测；保留首轮，采用全部样本中位数。阶段图取中间真实调用的阶段向量，偶数时平均中间两个，避免独立求各阶段中位数后不能相加。`analyze_stage2_s4_ncu.py --baseline ... --candidate ... --output ...`校验对应真实调用、输入和完整检查／工作量，导出带原始单位依据的诊断摘要。
+
+## 同位宽阶段预测的CPU验证
+
+`tools/test/test_stage2_runtime_tune.py --fixture phase-model --output data/experiments/NEW_STUDY/cpu`验证阶段守恒、缺失阶段、硬件与实际策略隔离、NTT拐点、精确测量优先和默认选型隔离，不调用CUDA。独立GMP整数界查询用于CPU打包参考，不替代生产原生准入。
+
+可追加`--profile <仅含一条测量行的tune.toml>`，输出同一训练锚点下的`seconds/rank`和原整曲线修正的`prior_seconds/prior_rank`。结果是D候选的模型审计，不是实测成绩或显存可行性证明；输出保存输入/模型/fixture身份。生产几何仍须使用真实`--plan-only`或完整曲线验证。阶段模型适用条件见[Auto B2与运行时选型](../../docs/architecture/AUTO_B2.md#正常运行累计采样与候选试跑)。

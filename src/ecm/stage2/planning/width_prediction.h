@@ -14,6 +14,7 @@ struct WidthEstimate : Estimate {
 class WidthPredictor {
     Estimator &engine;
     const Fields *excluded=nullptr;
+    const bool phase_nomination;
     struct Anchor {const Fields *sample;Shape shape;Work work;double correction;};
     using Region=std::array<Word,26>;
     mutable std::map<Region,std::vector<Anchor>> regions;
@@ -37,6 +38,26 @@ class WidthPredictor {
     static double geometry_distance(const Work &a,const Work &b) {
         return std::abs(std::log2(double(a.p)/b.p))+
             .25*std::abs(std::log2(double(a.points)/b.points));
+    }
+    bool phase_anchor(const Anchor &a,const Shape &s,const Work &w)const {
+        // Compact profiles retain the exclusive phase means, but omit the
+        // original receipt's accounting label. Require all phases and their
+        // conservation identity; never reconstruct phases from nested timers.
+        if(a.shape.target_bits!=s.target_bits || a.shape.arithmetic_bits!=s.arithmetic_bits ||
+           a.shape.groot_balanced!=s.groot_balanced || a.shape.fold!=s.fold || a.shape.frontier!=s.frontier ||
+           a.shape.batch_bytes!=s.batch_bytes || a.shape.chunk_max!=s.chunk_max ||
+           a.work.p*2<w.p || w.p*2<a.work.p || a.work.points*2<w.points || w.points*2<a.work.points ||
+           !matches(engine.profile.conditions.at(uint(*a.sample,"condition")),engine.condition,Ignore::parse("")))return false;
+        double sum=0;
+        for(const auto name:timing::names) {
+            const auto key=std::string("phase_")+name+"_seconds";
+            if(!a.sample->count(key))return false;
+            const double value=real(*a.sample,key.c_str());
+            if(!std::isfinite(value) || value<0)return false;
+            sum+=value;
+        }
+        const double total=real(*a.sample,"mean_seconds");
+        return std::abs(sum-total)<=1e-6*std::max(1.,total);
     }
     // Positive operation mixture, not a fitted or independently validated rate.
     double basic_from(const Shape &s,const Work &w,const WidthReference &r)const {
@@ -63,7 +84,8 @@ class WidthPredictor {
     }
 public:
     mutable Word prediction_evaluations=0,prediction_hits=0;
-    explicit WidthPredictor(Estimator &e,const Fields *omit=nullptr):engine(e),excluded(omit){}
+    explicit WidthPredictor(Estimator &e,const Fields *omit=nullptr,bool phases=false):
+        engine(e),excluded(omit),phase_nomination(phases){}
     bool has_width_measurement(const Shape &s)const {
         Work current;if(!engine.cached_work(s,current) || current.p<512 || !current.exact_topology)return false;
         for(const auto &sample:engine.profile.samples)if(engine.eligible(sample,s)) {
@@ -177,6 +199,23 @@ private:
                         Ignore::parse("environment,memory")) ||
                !matches(engine.profile.conditions.at(uint(*b->sample,"condition")),engine.condition,
                         Ignore::parse("environment,memory")))out.relative_error=std::min(.8,out.relative_error+.15);
+        }
+        const Anchor *phases=nullptr;
+        if(phase_nomination)for(const auto &a:at->second)if(phase_anchor(a,s,w) && better(a,phases))phases=&a;
+        if(phases) {
+            // The arithmetic/NTT region and actual policies already match in
+            // regions[]. Transfer each measured phase by its own work ratio,
+            // instead of scaling the historical whole-curve phase mixture.
+            // This is a nomination prior, not a measured replacement or a fit.
+            const double seconds=engine.scaled(*phases->sample,s,w);
+            if(seconds>0 && std::isfinite(seconds)) {
+                out.seconds=seconds;out.anchor=phases->sample;
+                out.arithmetic_low=out.arithmetic_high=s.arithmetic_bits;
+                out.region_covered=true;out.extrapolated=true;
+                out.relative_error=.15+.04*geometry_distance(w,phases->work);
+                out.stddev=real(*phases->sample,"stddev_seconds")*seconds/real(*phases->sample,"mean_seconds");
+                out.model="same_width_phase_projection_v1";out.uncertainty="phase_work_prior";
+            }
         }
         out.rank=out.seconds*(1+out.relative_error)+2*out.stddev;
         return out.seconds>0 && std::isfinite(out.rank);

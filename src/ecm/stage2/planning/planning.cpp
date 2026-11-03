@@ -912,8 +912,9 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
 std::string portable_width_select(Options &o,const Record &r) {
     const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
     pt::Estimator engine(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
+    pt::WidthPredictor runtime_predictor(engine,nullptr,true);
+    const auto runtime=portable_runtime_select(o,r,engine,runtime_predictor);if(!runtime.empty())return runtime;
     pt::WidthPredictor predictor(engine);
-    const auto runtime=portable_runtime_select(o,r,engine,predictor);if(!runtime.empty())return runtime;
     const auto carriers=portable_carriers(o,r);const unsigned initial=carriers.front();
     const auto default_d=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,initial);
     auto baseline=portable_shape(o,r,o.b2,default_d,initial);std::string baseline_plan;
@@ -1160,7 +1161,7 @@ std::string select_runtime_tuned(Options &o,const Record &r) {
     if(o.prediction_policy!="model")return {};
     const auto profile=portable_read(o.tune_profile);
     pt::Estimator engine(profile,portable_condition(o),pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
-    pt::WidthPredictor predictor(engine);return portable_runtime_select(o,r,engine,predictor);
+    pt::WidthPredictor predictor(engine,nullptr,true);return portable_runtime_select(o,r,engine,predictor);
 }
 
 struct PortableInput {fs::path save;Record record;std::string kind;};
