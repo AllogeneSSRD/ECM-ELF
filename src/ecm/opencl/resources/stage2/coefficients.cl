@@ -35,3 +35,10 @@ __kernel void ecm_poly_linear(__global const ulong *roots,ulong offset,ulong cou
         out[(2*k+1)*ECM_COEFF_NW+w]=w==0?1:0;
     }
 }
+// Copy one strided lane of coefficient rows. Source pitch zero broadcasts a
+// repeated parent. No index list or temporary device allocation is required.
+__kernel void ecm_poly_gather_rows(__global const ulong *src,ulong first,ulong pitch,
+    __global ulong *dst,ulong out_first,ulong out_pitch) {
+    const size_t word=get_global_id(0),row=get_global_id(1);
+    dst[out_first+row*out_pitch+word]=src[first+row*pitch+word];
+}

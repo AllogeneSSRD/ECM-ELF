@@ -16,12 +16,14 @@ struct ArithmeticOptions {
     bool reuse_workspace=true;
     bool group_batches=true;
     bool borrow_contiguous=true; // Read-only regular slices need no gather copy.
+    bool batch_gathers=false;
 };
 struct ArithmeticStats {
     std::map<unsigned,Word> ntt_transforms; // Three transforms per convolution pair.
     Word multiply_calls=0,multiply_pairs=0,coefficient_launches=0,device_copies=0;
     Word upload_bytes=0,download_bytes=0,device_copy_bytes=0;
     Word borrowed_gathers=0,avoided_copy_bytes=0;
+    Word gather_kernels=0,gather_rows=0;
 };
 struct ArithmeticState;
 class Arithmetic {

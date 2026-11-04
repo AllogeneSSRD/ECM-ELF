@@ -27,15 +27,17 @@ void check_tree(cl2::Arithmetic&a,const cl2::ProductTree&t,const ref::Poly&roots
     for(std::size_t i=t.padded;i-->1;)oracle[i]=ref::multiply(oracle[2*i],oracle[2*i+1],n);
     for(std::size_t i=1;i<oracle.size();++i)same(a,t.nodes[i],oracle[i],c,"tree node");++c.trees;
 }
-void algebra(ntt::Runtime&r,unsigned bits,std::size_t count,bool mersenne,bool grouped,Counts&c){
+void algebra(ntt::Runtime&r,unsigned bits,std::size_t count,bool mersenne,bool grouped,Counts&c,bool batch_gathers=false){
     const auto limbs=modulus(bits,mersenne);const auto n=ref::import(limbs);Word seed=0xb1d21836a09fe734ULL+bits+count;
-    auto babies=random_roots(n,count,seed),giants=random_roots(n,2*count+3,seed);cl2::Arithmetic a(r,options(limbs,mersenne,grouped));
+    auto babies=random_roots(n,count,seed),giants=random_roots(n,2*count+3,seed);
+    auto config=options(limbs,mersenne,grouped);config.batch_gathers=batch_gathers;cl2::Arithmetic a(r,config);
     auto roots=a.upload(ref::flatten(babies,a.words()),babies.size());cl2::Resultant resultant(a,roots);check_tree(a,resultant.tree(),babies,n,c);
     auto f=ref::roots(babies,n),reverse=f;std::reverse(reverse.begin(),reverse.end());same(a,resultant.inverse(),ref::inverse(reverse,count+1,n),c,"inverse");
     ref::Poly h{ref::Big(1)};auto gs=a.upload(ref::flatten(giants,a.words()),giants.size());
     for(std::size_t at=0;at<giants.size();at+=count){const auto end=std::min(at+count,giants.size());ref::Poly block(giants.begin()+at,giants.begin()+end);
         resultant.append(a.window(gs,at,end-at));h=ref::remainder(ref::multiply(h,ref::roots(block,n),n),f,n);same(a,resultant.fold(),h,c,"fold");++c.folds;}
     const auto values=resultant.values();same(a,values,ref::direct_values(babies,giants,n),c,"scaled leaves");
+    if(batch_gathers && !a.stats().gather_kernels)throw std::runtime_error("strided gather not exercised");
     ref::Poly horner;for(const auto &b:babies)horner.push_back(ref::evaluate(h,b,n));same(a,values,horner,c,"Horner leaves");
     rejects("window",[&]{a.window(roots,count,1);},c);rejects("noncanonical",[&]{a.upload(ref::flatten({n},a.words()),1);},c);
     rejects("a(0)=1",[&]{a.inverse_series(a.constant(2),4);},c);
@@ -112,6 +114,7 @@ int main(int argc,char**argv){std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
         ntt::Options ro;ro.device=device;ro.resource_root=root;ro.budget_bytes=256ULL<<20;ntt::Runtime runtime(ro);Counts counts;const auto start=ref::now();
         if(verify){const std::array<std::pair<unsigned,std::size_t>,8> grid={{{31,1},{63,3},{127,5},{512,17},{2203,33},{4423,7},{8191,3},{16384,3}}};
             for(const auto &spec:grid){if(smoke && spec.first>127)continue;for(bool mersenne:{false,true})algebra(runtime,spec.first,spec.second,mersenne,true,counts);}
+            for(bool mersenne:{false,true})algebra(runtime,127,65,mersenne,true,counts,true);
             algebra(runtime,127,5,false,false,counts);auto hit=hit_fixture();curve_case(runtime,hit,hit.modulus,false,counts);
             ref::Big prime;mpz_set_ui(prime.v,1);mpz_mul_2exp(prime.v,prime.v,127);mpz_sub_ui(prime.v,prime.v,1);auto curve=ref::curve(prime,26,20,300,30);curve_case(runtime,curve,prime,false,counts);curve_case(runtime,curve,prime,true,counts);
             // A unit-normalized cofactor pair. A separate negative fixture keeps

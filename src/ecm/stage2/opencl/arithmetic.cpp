@@ -22,7 +22,7 @@ Polynomial Polynomial::element(std::size_t i)const {
 struct ArithmeticState {
     ntt::Runtime runtime;ArithmeticOptions options;ArithmeticStats stats;
     std::size_t nw=0;ntt::Buffer modulus;
-    cl_program program=nullptr;std::array<cl_kernel,3> kernels{};
+    cl_program program=nullptr;std::array<cl_kernel,4> kernels{};
     std::shared_ptr<PolynomialWorkspace> workspace;
     std::map<std::size_t,std::unique_ptr<PolynomialPlan>> products;
     // Commands retain OpenCL objects, but the payload ledger follows Buffer
@@ -61,7 +61,7 @@ Arithmetic::Arithmetic(ntt::Runtime &r,const ArithmeticOptions &o):state_(std::m
     const auto source=read(root.parent_path()/"stage2/coefficients.cl");cl_int code=0;
     const auto options="-cl-std=CL1.2 -DECM_COEFF_NW="+std::to_string(p.nw);
     p.program=Native::program(r,source,options);
-    unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
+    unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear","ecm_poly_gather_rows"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
 }
 Arithmetic::~Arithmetic()=default;
 std::size_t Arithmetic::words()const{return state_->nw;}
@@ -109,9 +109,36 @@ Polynomial Arithmetic::gather(const std::vector<Polynomial> &a) {
             ++p.stats.borrowed_gathers;p.stats.avoided_copy_bytes+=times(times(a.size(),a[0].size),p.nw)*8;return borrowed;}
     }
     auto out=p.allocate(a[0].size,a.size());p.hold(out);const auto dst=Native::memory(out.buffer);
-    for(std::size_t i=0;i<a.size();++i){p.hold(a[i]);const auto bytes=a[i].size*p.nw*8;
-        check(clEnqueueCopyBuffer(Native::queue(p.runtime),Native::memory(a[i].buffer),dst,a[i].offset*8,i*bytes,bytes,0,nullptr,nullptr),"coefficient gather copy");
-        ++p.stats.device_copies;p.stats.device_copy_bytes+=bytes;}
+    // Scaled descent requests parents in duplicate and siblings in swapped
+    // pairs. Within either parity the source is usually a regular level view.
+    // Break the run at a different owner or pitch (e.g. the ragged tree edge).
+    const size_t words=out.stride;
+    const size_t lanes=p.options.batch_gathers && a.size()>=16?2:1;
+    for(size_t lane=0;lane<lanes;++lane){
+        for(size_t i=lane;i<a.size();){
+            size_t rows=1,pitch=0;
+            if(lanes==2 && i+lanes<a.size() && a[i+lanes].offset>=a[i].offset){
+                pitch=a[i+lanes].offset-a[i].offset;
+                for(size_t j=i+lanes;j<a.size();j+=lanes){
+                    if(!Native::same_owner(a[i].buffer,a[j].buffer) || a[j].offset<a[j-lanes].offset ||
+                       a[j].offset-a[j-lanes].offset!=pitch)break;
+                    ++rows;
+                }
+            }
+            p.hold(a[i]);const auto src=Native::memory(a[i].buffer);
+            if(rows>=4){
+                const Word first=a[i].offset,step=pitch,dest=i*words,dest_step=lanes*words;
+                auto k=p.kernels[3];arg(k,0,src);arg(k,1,first);arg(k,2,step);arg(k,3,dst);arg(k,4,dest);arg(k,5,dest_step);
+                p.launch(k,words,rows);++p.stats.gather_kernels;p.stats.gather_rows+=rows;
+            }else{
+                rows=1;
+                check(clEnqueueCopyBuffer(Native::queue(p.runtime),src,dst,a[i].offset*8,i*words*8,words*8,0,nullptr,nullptr),"coefficient gather copy");
+                ++p.stats.device_copies;
+            }
+            i+=lanes*rows;
+        }
+    }
+    p.stats.device_copy_bytes+=words*a.size()*8;
     return out;
 }
 Polynomial Arithmetic::subtract(const Polynomial &a,const Polynomial &b) {

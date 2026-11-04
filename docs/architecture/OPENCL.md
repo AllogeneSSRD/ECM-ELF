@@ -47,7 +47,7 @@ API 接受 log2_length=1..29、tile_bits=1..12 的合法计划，仍须通过预
 
 设备代码分层，均不依赖 GMP：域卷积在 `opencl/ntt/`；[Arithmetic](../../src/ecm/stage2/opencl/arithmetic.h) 管理规范系数视图、计划缓存、共享工作区和小型系数操作；[tree.h](../../src/ecm/stage2/opencl/tree.h) 管理乘积树与 `Resultant` 状态；Points 管理点算术及实验设备GCD。构建生成 `ecm_opencl_ntt`、`ecm_opencl_stage2_ops` 两个库；生产引擎和独立探针在库外引入GMP。
 
-`Arithmetic` 的上传边界要求系数处于 [0,N)。低层 S4 乘法的 S 位输入规则仍保留。多项式窗口保存 buffer、offset、stride、系数数与 batch；不以主机裸指针描述设备对象。规则、互不重叠且来自同一 owner 的切片直接表示为只读 strided batch；不规则切片才在设备内 gather。末端 strided 叶子先由一个设备 kernel 打包，再一次性回读，避免逐叶阻塞传输。
+`Arithmetic` 的上传边界要求系数处于 [0,N)。低层 S4 乘法的 S 位输入规则仍保留。多项式窗口保存 buffer、offset、stride、系数数与 batch；不以主机裸指针描述设备对象。规则、互不重叠且来自同一 owner 的切片直接表示为只读 strided batch；不规则切片才在设备内 gather。下降时每个父状态被两个孩子读取，兄弟多项式以相邻互换的次序读取。4060 Laptop 在 P≥32768 时默认把至少 16 行的 gather 按输出奇偶位置分开；同一源缓冲、等步长的连续四行以上用一个复制内核，其余行各自复制。每行的源、目的偏移与 limb 数保持原样，无设备索引表。显式对照使用 `ECM_OPENCL_BATCH_GATHERS=0|1`；`opencl_gathers` 报告内核数、合并行数、剩余单项复制数和总复制字节。末端 strided 叶子先由一个设备 kernel 打包，再一次性回读，避免逐叶阻塞传输。
 
 F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法；不跨依赖层分组。补齐到二次幂的叶子是常数 1，实际次数按非空叶子守恒，不能将补齐叶子当作零根。F 树保留下降所需节点；G 树仅在树结构中保留根。在途 copy 和系数 kernel 的输入／输出另由 lease 保留至乘法检查、阻塞传输或显式 finish 确认真正完成，账本不会提前释放其容量。
 
