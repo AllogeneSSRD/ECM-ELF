@@ -208,7 +208,7 @@ def main():
     if wide_eligible:
         assert int(re.search(r'max_points=(\d+)',statistic(wide_log,'opencl_point_plan'))[1])>16
     case('invalid_wide_auto',line,expect=2,environment={'ECM_OPENCL_WIDE_AUTO':'2'})
-    case('short_scalar_plan',wide_line,b2=260000,d=2310)
+    case('short_scalar_plan',wide_line,b2=260000,d=2310,environment={'ECM_OPENCL_POINTS':'device'})
     compact=(a.out/'short_scalar_plan/worker.log').read_text(encoding='utf-8-sig')
     eligible=('name=NVIDIA GeForce RTX 4060 Laptop GPU ' in compact and 'wide_ramp=1' in compact)
     assert f'short_scalar_batch={int(eligible)}' in statistic(compact,'opencl_point_plan')
@@ -294,6 +294,36 @@ def main():
     arows=[r for r in rows if r['stage2-engine']['save'].endswith('a.save')]
     assert sorted(r['stage2-engine']['record'] for r in arows)==[1,2,3]
     tests.append('queue_stop_reorder_resume')
+    # Shared CUDA settings must not leak into the native point timing profile.
+    tuning=a.out/'point_runtime_tune'
+    ini=config(tuning,a.device)
+    with ini.open('a',encoding='utf-8') as out:
+        out.write('stage2_reduce_backend="coop32"\nstage2_giant_chain="32"\n'
+                  'stage2_tune_profile="cuda.toml"\n[workers.2.stage2]\n'
+                  'stage2_opencl_tune_profile="native.toml"\nstage2_tune_min_repeats=1\n')
+    (tuning/'cuda.toml').write_text('# retained CUDA profile\n',encoding='utf-8')
+    (tuning/'real.save').write_text(adaptive_line,encoding='utf-8')
+    job=['--worker',2,'--save',str((tuning/'real.save').resolve()),'--b2',260000,'--d',2310,'--curves',1,'--factor-only']
+    for i in range(4):
+        run(exe,tuning,job+['--tune-runtime',1],f'trial{i}')
+    native=tuning/'native.toml'
+    if 'NVIDIA' in auto and not os.getenv('ECM_OPENCL_POINTS'):
+        import tomllib
+        profile=native.read_bytes()
+        data=tomllib.loads(profile.decode())
+        rows=[value for key,value in data.items() if key.startswith('g_')]
+        assert len(rows)==1 and set(rows[0])=={'device','cpu','chain'}
+        assert all(count==1 and mean>0 for count,mean in rows[0].values())
+        best=min(rows[0],key=lambda p:rows[0][p][1])
+        selections=re.findall(r'opencl_point_tune: plan=(\w+) collect=(\d)',(tuning/'worker.log').read_text(encoding='utf-8-sig'))
+        assert selections[-1]==(best,'0')
+        run(exe,tuning,job+['--tune-runtime',0],'no_learning')
+        assert native.read_bytes()==profile
+        native.write_text('# unrelated TOML\n',encoding='utf-8')
+        run(exe,tuning,job+['--tune-runtime',1],'foreign_profile')
+        assert native.read_text(encoding='utf-8')=='# unrelated TOML\n'
+    assert (tuning/'cuda.toml').read_text(encoding='utf-8')=='# retained CUDA profile\n'
+    tests.append('opencl_worker_runtime_profile')
     out={'status':'passed','tests':tests,'seconds':time.perf_counter()-start,
          'device':a.device,'binary_sha256':sha(exe),'files':{str(p.relative_to(a.out)):sha(p) for p in a.out.rglob('*') if p.is_file()}}
     (a.out/'verification.json').write_text(json.dumps(out,indent=2),encoding='utf-8')

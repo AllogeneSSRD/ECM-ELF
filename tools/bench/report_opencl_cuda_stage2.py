@@ -10,6 +10,7 @@ import statistics as st
 import re
 import sys
 from bench_edwards_gpu_stage1 import integer_expression
+from bench_opencl_cuda_stage2 import matches_target
 
 if hasattr(sys,'set_int_max_str_digits'):
     sys.set_int_max_str_digits(0)
@@ -27,6 +28,7 @@ def main():
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--figure',type=Path,required=True)
     parser.add_argument('--linear',action='store_true',help='Linear engine-time axis; ratios always remain linear')
+    parser.add_argument('--reference',type=Path,help='Prior audited summary.json; overlay matching OpenCL cells')
     a=parser.parse_args()
     phase_figure=a.figure.with_name(a.figure.stem+'_phases.png')
     if a.out.exists() or a.figure.exists() or phase_figure.exists():
@@ -56,7 +58,7 @@ def main():
         results=[json.loads(s) for s in (path.parent/'results.jsonl').read_text(encoding='utf-8-sig').splitlines() if s.strip()]
         if (len(results)!=1 or results[0]['status']!='NF' or results[0].get('factors',[])
             or results[0]['stage2-engine']['bad_factors'] or results[0]['errors']['invariant']
-            or int(results[0]['N']).bit_length()!=row['bits'] or results[0]['d']!=row['D']
+            or results[0]['d']!=row['D']
             or results[0]['b2']!=row['B2'] or results[0]['poly-size']!=row['P']
             or results[0]['stage2-engine']['carrier_exponent']!=row.get('carrier_exponent',0)
             or results[0]['source-build'].lower()!=row['source_build'].lower()):
@@ -66,12 +68,13 @@ def main():
             raise RuntimeError('Modified input: '+str(frozen))
         saved=next(s for s in frozen.read_text(encoding='utf-8-sig').splitlines() if 'SIGMA=' in s)
         point=dict(part.strip().split('=',1) for part in saved.split(';') if part.strip())
-        if int(results[0]['N'])!=integer_expression(point['N']) or results[0]['b1']!=int(float(point['B1'])):
+        target=integer_expression(point['N'])
+        if not matches_target(results[0],target) or target.bit_length()!=row['bits'] or results[0]['b1']!=int(float(point['B1'])):
             raise RuntimeError('Result is not the exact saved N/B1')
         if point['METHOD']=='ECM-EDWARDS-AM' and results[0].get('Edwards',{}).get('sigma')!=int(point['SIGMA']):
             raise RuntimeError('Saved Edwards curve identity differs')
         carrier=row.get('carrier_exponent',0)
-        if carrier and ((1<<carrier)-1)%int(results[0]['N']):
+        if carrier and ((1<<carrier)-1)%target:
             raise RuntimeError('Target does not divide the claimed carrier')
         full=counters(path.read_text(encoding='utf-8-sig'),'stage2_full_wall')
         if (abs(full['total']-full['init']-full['main'])>.003
@@ -98,7 +101,7 @@ def main():
             or len({(r['D'],r['P']) for r in samples})!=1):
             raise RuntimeError('Wrong sample count or changing input')
         cells.append(dict(bits=bits,exponent=exponent,B2=b2,backend=backend,mode=mode,carrier_exponent=samples[0].get('carrier_exponent',0),n=len(samples),D=samples[0]['D'],P=samples[0]['P'],save_sha256=samples[0]['save_sha256'],
-            engine_seconds=st.median(r['engine_seconds'] for r in samples),
+            point_source=backend,engine_seconds=st.median(r['engine_seconds'] for r in samples),
             min_engine_seconds=min(r['engine_seconds'] for r in samples),max_engine_seconds=max(r['engine_seconds'] for r in samples),
             process_seconds=st.median(r['process_seconds'] for r in samples),
             job_cpu_seconds=st.median(r['accounting']['cpu_seconds'] for r in samples) if all('accounting' in r for r in samples) else None,
@@ -107,8 +110,11 @@ def main():
             init_seconds=st.median(r['init_seconds'] for r in samples),main_seconds=st.median(r['main_seconds'] for r in samples)))
         if backend=='opencl':
             metrics=[]
+            point_sources=set()
             for row in samples:
                 text=Path(row['log']).read_text(encoding='utf-8-sig')
+                match=re.search(r'^stage2_opencl:.*?\bpoint_backend=(\w+)',text,re.M)
+                if match:point_sources.add(match[1])
                 point=counters(text,'opencl_points');split=counters(text,'opencl_split');tail=counters(text,'opencl_tail')
                 stages=dict(baby=split['baby'],ftree_inverse=split['ftree_inverse'],giant=split['giant'],
                     gtree_fold=split['gtree_fold'],descent=tail['descent'],leaf_oracle=tail['leaf_oracle'],accum=tail['accum'])
@@ -125,6 +131,7 @@ def main():
                     **{name+'_fraction':value/row['engine_seconds'] for name,value in stages.items()}))
             components.append(dict(bits=bits,exponent=exponent,B2=b2,mode=mode,n=len(samples),
                 **{k:st.median(v[k] for v in metrics) for k in metrics[0]}))
+            cells[-1]['point_source']='/'.join(sorted(point_sources)) or 'unknown'
             phase_shares.append(dict(bits=bits,exponent=exponent,B2=b2,mode=mode,n=len(samples),
                 **{name:100*st.mean(v[name+'_fraction'] for v in metrics) for name in stages}))
     lookup={(r['bits'],r['exponent'],r['B2'],r['backend'],r['mode']):r for r in cells}
@@ -136,7 +143,7 @@ def main():
         if (r['D'],r['P'],r['exponent'],r['save_sha256'])!=(cuda['D'],cuda['P'],cuda['exponent'],cuda['save_sha256']):
             raise RuntimeError('Backends do not use the same input and shape')
         paired.append(dict(bits=r['bits'],exponent=r['exponent'],B2=r['B2'],D=r['D'],P=r['P'],mode=r['mode'],carrier_exponent=r['carrier_exponent'],
-            cuda_seconds=cuda['engine_seconds'],opencl_seconds=r['engine_seconds'],
+            cuda_seconds=cuda['engine_seconds'],opencl_seconds=r['engine_seconds'],opencl_points=r['point_source'],
             opencl_over_cuda=r['engine_seconds']/cuda['engine_seconds'],
             cuda_process_seconds=cuda['process_seconds'],opencl_process_seconds=r['process_seconds'],
             process_ratio=r['process_seconds']/cuda['process_seconds']))
@@ -162,6 +169,16 @@ def main():
         'sum_medians':{b:sum(r['engine_seconds'] for r in cells if r['backend']==b) for b in ['cuda','opencl']},
         'sum_medians_by_mode':{m:{b:sum(r['engine_seconds'] for r in cells if r['backend']==b and r['mode']==m) for b in ['cuda','opencl']} for m in sorted({r['mode'] for r in cells})},
         'sum_process_medians':{b:sum(r['process_seconds'] for r in cells if r['backend']==b) for b in ['cuda','opencl']}}
+    reference={}
+    if a.reference:
+        previous=json.loads(a.reference.read_text(encoding='utf-8'))
+        reference={(r['bits'],r['B2'],r['mode']):r for r in previous['cells'] if r['backend']=='opencl'}
+        for cell in (r for r in cells if r['backend']=='opencl'):
+            old=reference[(cell['bits'],cell['B2'],cell['mode'])]
+            if any(old[k]!=cell[k] for k in ('exponent','D','P','carrier_exponent','save_sha256')):
+                raise RuntimeError('Different inputs or geometry in reference OpenCL cells')
+        old_label=f"OpenCL {previous['manifest']['versions']['opencl'].removeprefix('ECM-ELF ')} (n={previous['manifest']['repeats']})"
+        result['reference']={'sha256':sha(a.reference),'label':old_label}
     (a.out/'summary.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     os.environ.setdefault('MPLCONFIGDIR',str(a.out/'matplotlib'))
     import matplotlib
@@ -172,11 +189,17 @@ def main():
     fig,axes=plt.subplots(2*len(modes),len(bounds),figsize=(6.5*len(bounds),7*len(modes)),squeeze=False,layout='constrained')
     for mi,col in ((i,j) for i in range(len(modes)) for j in range(len(bounds))):
         mode=modes[mi];b2=bounds[col];ax=axes[2*mi,col]
+        if reference:
+            xx=sorted(r['bits'] for r in cells if r['backend']=='opencl' and r['B2']==b2 and r['mode']==mode)
+            ax.plot(xx,[reference[x,b2,mode]['engine_seconds'] for x in xx],ls='--',color='#777',label=old_label)
         for backend,color in [('cuda','#2563eb'),('opencl','#ea580c')]:
             line=sorted((r for r in cells if r['B2']==b2 and r['backend']==backend and r['mode']==mode),key=lambda x:x['bits'])
             x=[r['bits'] for r in line];y=[r['engine_seconds'] for r in line]
             version=manifest['versions'][backend].removeprefix('ECM-ELF ')
             ax.errorbar(x,y,yerr=[[r['engine_seconds']-r['min_engine_seconds'] for r in line],[r['max_engine_seconds']-r['engine_seconds'] for r in line]],marker='o',label=f'{backend.upper()} {version}',color=color,capsize=4)
+            hybrid=[r for r in line if r.get('point_source')=='cpu_gmp']
+            if hybrid:ax.scatter([r['bits'] for r in hybrid],[r['engine_seconds'] for r in hybrid],
+                                 marker='D',color='#632c0b',label='OpenCL with GMP points',zorder=4)
         ax.set(title=f'{mode} | B2 = {b2:,}; D = {manifest["D"]:,}',ylabel='Full engine seconds'+('' if a.linear else ' (log scale)'),yscale='linear' if a.linear else 'log',xlabel='Actual cofactor bits')
         if a.linear:ax.set_ylim(bottom=0)
         ticks=range(0,max(r['bits'] for r in cells)+1000,1000)
@@ -193,9 +216,9 @@ def main():
         if manifest['versions']['opencl']=='ECM-ELF 0.54.3' and max(x)>8192:
             ax.axvline(8192,color='#777',ls=':',alpha=.6)
     observed='/'.join(map(str,sorted(active_clocks)))+' MHz active samples'
-    fig.suptitle(f'Native OpenCL vs frozen CUDA Stage2 | RTX 4060 Laptop | {observed} | n={manifest["repeats"]}\nIdentical save/D/B2; no extra warmup; initialization and mandatory checks included')
+    fig.suptitle(f'Native OpenCL vs frozen CUDA Stage2 | RTX 4060 Laptop\n{observed} | n={manifest["repeats"]} | same save, D and B2\nEngine includes initialization and checks; no extra warmup',fontsize=12)
     a.figure.parent.mkdir(parents=True,exist_ok=True)
-    fig.savefig(a.figure,dpi=170);plt.close(fig)
+    fig.savefig(a.figure,dpi=170,bbox_inches='tight');plt.close(fig)
     # Means of per-run shares close to 100%; nested point/program counters are
     # deliberately absent. They must not be stacked on their parent phases.
     fig,axes=plt.subplots(len(modes),len(bounds),figsize=(7*len(bounds),4.5*len(modes)),squeeze=False)
@@ -216,7 +239,7 @@ def main():
     handles,legend_labels=axes[0,0].get_legend_handles_labels()
     fig.legend(handles,legend_labels,loc='upper center',bbox_to_anchor=(.5,.955),ncol=4)
     fig.suptitle(f'OpenCL {manifest["versions"]["opencl"].removeprefix("ECM-ELF ")} phase shares | mean of per-run percentages | n={manifest["repeats"]}',y=.99)
-    fig.savefig(phase_figure,dpi=170);plt.close(fig)
+    fig.savefig(phase_figure,dpi=170,bbox_inches='tight');plt.close(fig)
     print(json.dumps({'samples':len(rows),'sum_medians':result['sum_medians'],'sum_process_medians':result['sum_process_medians'],'telemetry':result['telemetry'],'pairs':paired},ensure_ascii=False))
 
 if __name__=='__main__':

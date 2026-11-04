@@ -38,6 +38,7 @@ def main():
     p.add_argument('--inputs', type=Path, default=Path('data/experiments/opencl_production_20261029/ab01/inputs'))
     p.add_argument('--exponents', default='503,2003,5003,8011')
     p.add_argument('--b2', default='260000,2600000')
+    p.add_argument('--carrier-mode', choices=['ordinary','mersenne'], default='ordinary')
     p.add_argument('--d', type=int, default=2310)
     p.add_argument('--arena-mb', type=int, default=512)
     p.add_argument('--repeats', type=int, default=3)
@@ -66,7 +67,7 @@ def main():
     manifest = {'started_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'variants': [],
                 'D': a.d, 'arena_mb': a.arena_mb, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
                 'timeout': a.timeout,
-                'matrix_plan': {'exponents': exponents, 'B2': bounds},
+                'matrix_plan': {'exponents': exponents, 'B2': bounds, 'carrier_mode':a.carrier_mode},
                 'gpu_settings_changed': False, 'allowed_processes': allowed, 'inherited_ntt_environment': {
                     k: v for k, v in os.environ.items() if k.startswith(('ECM_OPENCL_', 'NTT_'))}}
     for spec in specs:
@@ -97,6 +98,7 @@ def main():
                                 stderr=subprocess.DEVNULL, creationflags=flags)
         try:
             for exponent in exponents:
+                carrier=exponent if a.carrier_mode=='mersenne' else 0
                 saves = list(a.inputs.glob(f'm{exponent}_n*_s*.save'))
                 if len(saves) != 1:
                     raise RuntimeError(f'Need exactly one save for M{exponent}')
@@ -125,7 +127,7 @@ stage2_log_file="worker.log"
 ''', encoding='utf-8')
                             cmd = [spec['exe'], '--config', str(config.resolve()), '--save', str(frozen.resolve()),
                                    '--device', str(a.device), '--b2', str(b2), '--d', str(a.d), '--curves', '1',
-                                   '--factor-only', '--carrier-exponent', '0', '--auto-carrier', '0',
+                                   '--factor-only', '--carrier-exponent', str(carrier), '--auto-carrier', '0',
                                    '--tune-runtime', '0', '--short-calibration', '0', '--ntt-counts', '1']
                             env = os.environ.copy()
                             env.update({k: str(v) for k, v in spec.get('environment', {}).items()})
@@ -162,11 +164,12 @@ stage2_log_file="worker.log"
                             engine = result['stage2-engine']
                             if (result['status'] != 'NF' or result['errors']['invariant'] or engine['bad_factors']
                                     or int(result['b2']) != b2 or not matches_target(result,target)
-                                    or engine['name'] != 'opencl-ntt' or engine['carrier_exponent'] != 0):
+                                    or engine['name'] != 'opencl-ntt' or engine['carrier_exponent'] != carrier):
                                 raise RuntimeError(f'Unexpected result or backend for {folder}')
                             if results[0]['source-build'].lower() != spec['sha256']:
                                 raise RuntimeError('Result binary identity mismatch')
                             row = {'variant': spec['name'], 'exponent': exponent, 'bits': bits, 'B2': b2,
+                                   'mode':a.carrier_mode,'carrier_exponent':carrier,
                                    'D': a.d, 'P': int(shape[2]), 'repeat': repeat, 'full': full,
                                    'points': {**fields(text, 'opencl_points'), **fields(text, 'opencl_point_io')},
                                    'point_command': fields(text, 'opencl_point_command'),

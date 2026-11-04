@@ -64,6 +64,7 @@ void configure_point_backends(Options &o,const PointBackendDefaults *defaults) {
     apply_point_backends(o);
 }
 void configure_s4_backend(Options &o,bool present,const std::string &value) {
+#ifndef ECM_STAGE2_OPENCL
     if(!o.portable_cli.count("--reduce-backend")) {
         if(present)o.reduce_backend=value;
         else if(const char *env=std::getenv("NTT_S4_COOP_REDUCE")) {
@@ -71,12 +72,15 @@ void configure_s4_backend(Options &o,bool present,const std::string &value) {
             o.reduce_backend=std::strcmp(env,"32")==0?"coop32":"scalar";
         }
     }
+#endif
     const auto mode=ecm_stage2::reduce_backend(o.reduce_backend);o.selected_reduce_coop=mode<0?0:unsigned(mode);
+#ifndef ECM_STAGE2_OPENCL
     const auto setting=[&](const char *cli,const char *env,unsigned &target) {
         if(!o.portable_cli.count(cli))if(const char *text=std::getenv(env)){const auto n=ecm_stage2::cost::integer(text);if(n>128)throw std::runtime_error("invalid S4 variant override");target=unsigned(n);}
     };
     setting("--reduce-threads","NTT_S4_COOP_TPB",o.reduce_threads);
     setting("--reduce-kernel","NTT_S4_COOP_KERNEL",o.reduce_kernel);
+#endif
     if(!ecm_stage2::valid_reduce_variant(o.reduce_threads,o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current))throw std::runtime_error("S4 threads must be 64, 96 or 128 and kernel 1, 2 or experimental 3/4");
     o.selected_reduce_threads=o.selected_reduce_coop?o.reduce_threads:0;o.selected_reduce_kernel=o.selected_reduce_coop?(o.reduce_kernel?o.reduce_kernel:ecm_stage2::reduce_kernel_current):0;
 #ifdef ECM_STAGE2_OPENCL

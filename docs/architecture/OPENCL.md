@@ -100,9 +100,27 @@ AMD点模块超过512 bits的资格限制保持不变；生产引擎显式使用
 
 NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，内核保留真实count边界。初始化chunk为≤512 bits:1024、513～8192 bits:256、更宽:16。其他厂商保留运行时工作组及原有位宽分块。`ECM_OPENCL_POINT_AUTO=1`、`ECM_OPENCL_WIDE_AUTO=1`为默认；NVIDIA的9…128 limbs使用常规反馈，129…256 limbs使用宽位渐进反馈；显式chunk/group锁定手动计划，其他路径维持资格与初始分块。实际命令时长由`opencl_point_command.max_kernel_seconds`记录，chunk字段仍表示初始化值。
 
-[PointPlan](../../src/ecm/stage2/opencl/point_plan.h)从有用点命令的事件时间学习，不预热或重复生成校准点。对9…128 limbs，计算单元数来自OpenCL标准设备查询；升档目标为CU×32并限4096，目标不高于seed时保留seed。它以标量位数和估算提交轮数归一化，保留历史最大单位成本，给预测增加15%裕量；预计一轮不超过1秒才升档。迟缓样本会抑制后续升档，每条曲线重新学习。小于一个完整工作组的样本不训练常规模型。该模型只控制升档，首条及回退命令仍用原批量，不承诺1秒硬时限，也不自动切换CPU点。
+[PointPlan](../../src/ecm/stage2/opencl/point_plan.h)从有用点命令的事件时间学习，不预热或重复生成校准点。对9…128 limbs，计算单元数来自OpenCL标准设备查询；升档目标为CU×32并限4096，目标不高于seed时保留seed。它以标量位数和估算提交轮数归一化，保留历史最大单位成本，给预测增加15%裕量；预计一轮不超过1秒才升档。迟缓样本会抑制后续升档，每条曲线重新学习。小于一个完整工作组的样本不训练常规模型。该模型只控制升档，首条及回退命令仍用原批量，不承诺1秒硬时限，也设备内部分块反馈独立于上层点来源选择。
 
 `ECM_OPENCL_WIDE_AUTO=1`默认将反馈扩展到NVIDIA的129～256 limbs；设0保留宽位原批量。它从16点尝试完整32工作项组；完整组的单位点／bit成本若超过seed的1.10倍，则退回16点并停止探测。否则按32、64、128、256逐步增加，受CU×工作组及256点上限约束；后续每bit命令耗时超过前一合格档的1.35倍时，拒绝升档或减小已接受档，随后停止增长。尾批和预算裁剪不足请求点数的命令不训练。宽位策略是相对成本控制，没有1秒硬时限；手动chunk/group及CPU／厂商资格仍优先。
+
+### OpenCL 运行时点计划
+
+一次 Stage2 仍由 OpenCL worker 执行。在 `stage2_opencl_point_plan="cpu"` 时，CPU/GMP 生成 baby 和 giant，OpenCL 设备负责 F/G 树、求逆、fold、下降及其 NTT 和系数归约；归一化与最后的 GCD 本就由 CPU 执行。`device` 选择已验证的设备点计划，`chain` 请求基于 [D]Q 的连续 giant 种子。`auto` 从本机适用的默认计划开始。AMD 真实目标超过 512 位时仍只能使用 CPU 点，Intel 尚无实机性能资格。
+
+| 项目 | CUDA | 原生 OpenCL |
+|---|---|---|
+| D、P、显式 B2、承载指数 | 定义相同；CUDA 可探测 D、布局和普通／承载 | 当前在固定的 D/P、目标和算术模数上比较点计划。D=0 仍走 OpenCL 自己的预算模型 |
+| 点运算 | scalar、coop16/32、32/64 链及布局 | 比较设备工作项的 ladder、连续 giant 种子、CPU/GMP 点；设备 chunk、group、window 分别限制命令、工作组、坐标暂存 |
+| 多项式 | CUDA NTT 长度、tile/radix、Graph、S4 线程块等参与相应 CUDA 策略 | 原生 OpenCL NTT 与归约独立实现。CUDA 的 kernel 编号、FFT/NTT 吞吐表及协作宽度均不参与选型 |
+| 内存与计时 | arena 约束 CUDA NTT 工作区，fold 有独立预算 | arena 约束 OpenCL 所有受管缓冲；batch 影响 G 批和窗口。相同 MiB 不表示相同分配 |
+| 文件与控制 | `stage2_tune_profile`，支持 CUDA 专用离线校准 | `stage2_opencl_tune_profile`，默认在配置旁的 `stage2_opencl_tune.toml`；生产曲线直接提供样本。两者共用启停、最少重复数与样本预算的 TOML 键 |
+
+本机的免调优规则和精确测量见[全位宽小 B2 矩阵](../performance/OPENCL_STAGE2.md#全位宽小-b2-与运行时调优)。仅在自动点计划、完整短标量形状（32≤P≤256，D/2<2048，32≤giant≤1152）和设备资格允许时，才使用存储的比较。CPU/GMP 也从原 Q 取样检查，每个 G 批及整范围的叶校验继续执行。固定点计划、手动点命令参数或设置 `stage2_tune_runtime=false` 均不采集；后者使用免调优默认。
+
+免调优混合路径仅对已测 Ryzen AI 9 HX 370 + RTX 4060 Laptop 组合启用。真实目标 W=31…255 个 64-bit limbs，144≤P≤240，100≤giant≤114，且 D/2<2048 时优先 CPU 点；这是快速小 B2、可并行点数有限时的选型。较大窗口及其他主机采用设备基线或各自的实测结果。已验证本机混合默认形状只试 CPU 和设备两路，避免重复试跑已无明显收益的递推；其他可用短形状在 NVIDIA 上可加测连续 giant。其他厂商仅在原有设备点资格内比较 CPU 与设备，实际性能仍需本机验证。
+
+同一身份内先跑默认方案，在**不同的有效任务曲线**之间轮换候选。对于相同 save 的显式重放也可以采样，不能计作更多数学覆盖。每个候选达到 `stage2_tune_min_repeats` 后按完整引擎平均耗时选择，后续直接复用。三个候选放不下时按 `stage2_tune_runtime_samples` 剪去尾项；不足两个完整候选时采用默认。只有通过全部检查的完整无因子曲线计入；正因子或提前结束的耗时不参加比较。OpenCL 格式版本 1 以 `[曲线数, 平均秒]` 保存每种计划，身份含设备及驱动、CPU/GMP、程序版本、两个模数的 limb 数、D、giant 数、承载指数、arena/batch 及 program 缓存设置。文件加锁并原子替换；无法识别的文件不会被覆盖。[选型入口](../../src/ecm/stage2/opencl/engine.cpp) · [计时文件](../../src/ecm/stage2/opencl/point_tune.h)
 
 RTX 4060 Laptop 的短标量计划按真实目标宽度和本条曲线的点数选择。条件为 W=129…160 个 64-bit limbs，32≤P≤256，D/2<2048，32≤giant 点数≤1152，且已启用设备点、宽位自动计划和 [D]Q 重标定。此时 baby 点直接成批做独立 ladder，giant 用相邻种子递推，两者仍按可用预算裁剪。显式指定 chunk、group、point window 或 giant chain 会让手动方案优先。设置 `ECM_OPENCL_SHORT_POINT_BATCH=0` 可单独关闭这项选择；日志 `opencl_point_plan.short_scalar_batch` 表示是否选中，`opencl_giant_chain` 的 launches 和 seed_pairs 记录实际递推工作。计时对照见[性能报告](../performance/OPENCL_STAGE2.md)。
 

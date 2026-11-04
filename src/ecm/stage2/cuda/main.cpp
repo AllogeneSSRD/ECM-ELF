@@ -7,6 +7,7 @@
 #include "ecm/platform/gpu_worker.h"
 #ifdef ECM_STAGE2_OPENCL
 #include "../opencl/engine.h"
+#include "io/files.h"
 #endif
 #include "../modulus.h"
 #include "../../application/configuration/ecm_expr.h"
@@ -269,8 +270,8 @@ void help() {
         "  --config ecm.toml [--worktodo FILE] [--worker N] [--once]\n"
         "  --device N --arena-mb MB --batch-mb MB --carrier-exponent P\n"
         "  --plan-only --dry-run --results FILE --submission FILE --ntt-counts 0|1\n"
-        "  --giant-tail-balance 0|1 --b2-round-chain 0|1 --giant-chain 64|32|auto\n"
-        "  --groot-layout auto|true|false (numeric aliases: 0|1)\n"
+        "  --tune-runtime 0|1 --tune-min-repeats N --tune-runtime-samples N\n"
+        "  TOML: stage2_opencl_point_plan=auto|device|chain|cpu, stage2_opencl_tune_profile\n"
         "D=0 uses the OpenCL basic model and hard owned-payload budget.\n"
         "Queue receipts/checkpoints, curve limits, result validation and stop policy are shared.\n"
         "Explicit B2 required; CUDA tune/Auto B2/relocation/Graph policies are not consumed.\n"
@@ -349,7 +350,8 @@ static void bind_engine_options(Options &o) {
     if(!o.tune.empty() || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.short_batch_tune || o.relocation ||
        (o.portable_cli.count("--auto-carrier")&&o.auto_carrier))
         throw std::runtime_error("OpenCL supports explicit B2, D or its basic planner; CUDA tune/Auto B2/relocation profiles are not applicable");
-    o.tune_runtime=false;o.auto_carrier=false;
+    if(o.child)o.tune_runtime=false; // CUDA profile machinery is disabled in the child.
+    o.auto_carrier=false;
 #endif
 }
 
@@ -430,11 +432,13 @@ int driver(Options o) {
     if(!o.portable_cli.count("--short-calibration"))o.short_calibration=s.short_calibration;
     if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
     if(!o.portable_cli.count("--ntt-counts"))o.ntt_counts=s.ntt_counts;
+#ifndef ECM_STAGE2_OPENCL
     if(!o.portable_cli.count("--relocation"))o.relocation=s.relocation;
     if(!o.portable_cli.count("--giant-chain"))o.giant_chain=s.giant_chain;
     if(!o.portable_cli.count("--giant-tail-balance"))o.giant_tail_balance=s.giant_tail_balance;
     if(!o.portable_cli.count("--groot-layout"))o.groot_layout=ecm_config::automatic_boolean(s.groot_balanced,"stage2_groot_balanced");
     if(!o.portable_cli.count("--b2-round-chain"))o.b2_round_chain=s.b2_round_chain;
+#endif
     configure_giant_policy(o);
     if(o.b2_round_chain && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("B2 rounding is not an ECM calibration grid; disable --b2-round-chain for tune");
     if(o.relocation && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("relocation does not collect legacy ECM tune samples; use --relocation 0 for --tune ecm");
@@ -476,8 +480,28 @@ int driver(Options o) {
 #ifdef ECM_STAGE2_OPENCL
     // Shared TOML may contain CUDA tuning defaults. Never consume or overwrite
     // those profiles under a different engine identity.
-    if(o.relocation || !o.cost_profile.empty() || !o.tune.empty())
-        throw std::runtime_error("OpenCL requires explicit B2 and does not support CUDA Auto B2/relocation/tune");
+    // Set these only in the actual OpenCL queue owner. Its isolated children
+    // inherit the chosen worker's settings, including explicit CLI tune flags.
+    auto point_env=[](const char* name,const std::string& value){
+        if(_putenv_s(name,value.c_str()))throw std::runtime_error(std::string("cannot configure ")+name);
+    };
+    point_env("ECM_OPENCL_CONFIG_PLAN",s.opencl_point_plan);
+    if(s.opencl_point_chunk)point_env("ECM_OPENCL_POINT_CHUNK",std::to_string(s.opencl_point_chunk));
+    if(s.opencl_point_group)point_env("ECM_OPENCL_POINT_GROUP",std::to_string(s.opencl_point_group));
+    if(s.opencl_point_window)point_env("ECM_OPENCL_POINT_WINDOW",std::to_string(s.opencl_point_window));
+    if(!s.opencl_short_point_batch)point_env("ECM_OPENCL_SHORT_POINT_BATCH","0");
+    fs::path native_profile;
+    if(o.tune_runtime && !s.opencl_tune_profile.empty() && s.opencl_point_plan=="auto"){
+        native_profile=absolute_from(base,s.opencl_tune_profile);
+        if(native_profile.extension()!=".toml" ||
+           ecm_io::same_file_resource(native_profile,ini) ||
+           (!o.tune_profile.empty() && ecm_io::same_file_resource(native_profile,fs::u8path(o.tune_profile))))
+            throw std::runtime_error("OpenCL tune requires its own .toml profile");
+    }
+    if(_wputenv_s(L"ECM_OPENCL_RUNTIME_PROFILE",native_profile.c_str()))throw std::runtime_error("cannot configure OpenCL tune profile");
+    point_env("ECM_OPENCL_RUNTIME_REPEATS",std::to_string(o.tune_min_repeats));
+    point_env("ECM_OPENCL_RUNTIME_BUDGET",std::to_string(o.runtime_samples));
+    o.cost_profile.clear();o.relocation=false;
     o.tune_profile.clear();o.tune_runtime=false;o.short_batch_tune=false;o.auto_carrier=false;o.auto_b2=false;
 #endif
     if(!o.stage1_csv.empty())o.stage1_csv=absolute_from(cwd,o.stage1_csv).string();

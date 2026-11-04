@@ -1105,6 +1105,78 @@ Print a per-curve NTT length count table at the end of production Stage2: 1 enab
 
 生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。
 
+### stage2_opencl_point_chunk
+
+```toml
+stage2_opencl_point_chunk = 0
+```
+
+Type / 类型: `u64`; range / 范围: `[0..4096]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Maximum points per OpenCL command. Zero uses automatic sizing. A positive value locks the chunk and disables runtime plan trials.
+
+每条 OpenCL 命令的点数。0 自动；正值锁定分块并关闭运行时计划试探。
+
+### stage2_opencl_point_group
+
+```toml
+stage2_opencl_point_group = 0
+```
+
+Type / 类型: `u64`; range / 范围: `[0..4096]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Local OpenCL point work-group size. Zero uses the backend default. Positive sizes must fit both device and kernel limits.
+
+OpenCL 点工作组大小。0 使用后端默认；正值必须符合设备与内核上限。
+
+### stage2_opencl_point_plan
+
+```toml
+stage2_opencl_point_plan = "auto"
+```
+
+Type / 类型: `string`; range / 范围: `[auto|device|chain|cpu]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+OpenCL point generation. Auto starts with the qualified plan and can learn from complete curves. Device selects the device ladder plan (including its qualified short batches); chain requests consecutive giant seeds; cpu uses GMP points with OpenCL trees. Manual settings bypass runtime exploration.
+
+OpenCL 点生成。auto 从已验证的默认计划起步，可用完整曲线继续调优。device 使用设备点计划（含已验证短批次）；chain 选择连续巨步种子；cpu 使用 GMP 点及 OpenCL 树。手动计划跳过运行时探索。
+
+### stage2_opencl_point_window
+
+```toml
+stage2_opencl_point_window = 0
+```
+
+Type / 类型: `u64`; range / 范围: `[0..65536]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Giant coordinate staging window in points. Zero uses the backend plan; positive requests are clipped by the budget and G batch boundaries.
+
+巨步坐标暂存窗口点数。0 由后端选型；正值按预算和 G 批次边界调整。
+
+### stage2_opencl_short_point_batch
+
+```toml
+stage2_opencl_short_point_batch = true
+```
+
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Allow qualified short device batches. False disables batched baby ladders and paired giants from the short-batch policy.
+
+允许已验证的短设备批次。关闭后不使用该策略合并 baby 提交及配对 giant。
+
+### stage2_opencl_tune_profile
+
+```toml
+stage2_opencl_tune_profile = "stage2_opencl_tune.toml"
+```
+
+Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Native OpenCL point timing profile. Relative to ecm.toml, with per-worker overrides. Empty disables profile learning. Uses stage2_tune_runtime, stage2_tune_min_repeats and stage2_tune_runtime_samples.
+
+原生 OpenCL 点计划计时文件。相对 ecm.toml，可按 worker 覆盖；空路径关闭学习。共用 stage2_tune_runtime、stage2_tune_min_repeats 和 stage2_tune_runtime_samples。
+
 ### stage2_pack_zero
 
 ```toml
@@ -1393,9 +1465,9 @@ stage2_tune_runtime = true
 
 Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes.
+Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.
 
-按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。
+按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。 OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。
 
 ### stage2_tune_runtime_samples
 

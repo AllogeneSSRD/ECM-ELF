@@ -8,6 +8,11 @@
 #include "tree.h"
 #include "points.h"
 #include "point_plan.h"
+#include "point_tune.h"
+#include "ecm/platform/program_version.h"
+#if defined(_M_X64) || defined(_M_IX86)
+#include <intrin.h>
+#endif
 #include "../cuda/api.h"
 #include "../modulus.h"
 #include "../planning/d_catalog.h"
@@ -39,6 +44,16 @@ using Values=std::vector<Big>;
 double now(){return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 Word setting(const char*key,Word fallback){const char*s=std::getenv(key);if(!s||!*s)return fallback;char*end=nullptr;const auto n=std::strtoull(s,&end,10);if(*s=='-'||*end)throw std::runtime_error(std::string("invalid ")+key);return n;}
 bool overridden(const char*key){const char*s=std::getenv(key);return s&&*s;}
+std::string cpu_name(){
+#if defined(_M_X64) || defined(_M_IX86)
+    int words[12]={};__cpuid(words,static_cast<int>(0x80000000u));
+    if(static_cast<unsigned>(words[0])>=0x80000004u){
+        for(unsigned i=0;i<3;++i)__cpuid(words+4*i,static_cast<int>(0x80000002u+i));
+        const char* text=reinterpret_cast<const char*>(words);return std::string(text,strnlen(text,sizeof(words)));
+    }
+#endif
+    return "unknown";
+}
 unsigned scalar_bits(Word value){unsigned bits=0;do{++bits;}while(value>>=1);return bits;}
 std::string decimal(mpz_srcptr v){std::string s(mpz_sizeinbase(v,10)+2,'\0');mpz_get_str(s.data(),10,v);s.resize(s.find('\0'));return s;}
 std::vector<Word> flatten(const Values&a,std::size_t w){std::vector<Word> out(a.size()*w);for(std::size_t i=0;i<a.size();++i){std::size_t n=0;mpz_export(out.data()+i*w,&n,-1,8,0,0,a[i].v);if(n>w)throw std::runtime_error("coefficient width overflow");}return out;}
@@ -71,6 +86,46 @@ Values normalize(const Values&x,const Values&z,mpz_srcptr n,std::set<std::string
 std::string resources(){std::vector<wchar_t> p(32768);auto n=GetModuleFileNameW(nullptr,p.data(),DWORD(p.size()));if(!n||n==p.size())throw std::runtime_error("executable path");return (std::filesystem::path(std::wstring(p.data(),n)).parent_path()/"opencl_resources/ntt").string();}
 Word budget(const cln::DeviceInfo&d){const auto kb=setting("NTT_ARENA_CAP_KB",0);if(kb>std::numeric_limits<Word>::max()/1024)throw std::runtime_error("arena budget overflow");return kb?kb*1024:std::min(Word(1024)<<20,d.global_bytes/2);}
 struct Shape {Word d=0,p=0,giants=0,chunk=0,bytes=0;double score=0;};
+cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_t w,size_t arithmetic_words,
+                             unsigned carrier,Word arena) {
+    cls::PointTrial trial;
+    const char* config=std::getenv("ECM_OPENCL_CONFIG_PLAN");
+    trial.plan=config?config:"auto";
+    if(trial.plan!="auto")return trial;
+    const auto host=cpu_name();
+    const bool short_shape=s.p>=32 && s.p<=256 && s.d/2<2048 && s.giants>=32 && s.giants<=1152;
+    const bool qualified_device=device.name=="NVIDIA GeForce RTX 4060 Laptop GPU";
+    trial.plan="device";
+    if(overridden("ECM_OPENCL_POINTS")){trial.plan=std::getenv("ECM_OPENCL_POINTS");return trial;}
+    for(auto key:{"ECM_OPENCL_GIANT_CHAIN","ECM_OPENCL_POINT_CHUNK","ECM_OPENCL_POINT_GROUP",
+                  "ECM_OPENCL_POINT_WINDOW","ECM_OPENCL_POINT_AUTO","ECM_OPENCL_WIDE_AUTO",
+                  "ECM_OPENCL_SHORT_POINT_BATCH","ECM_OPENCL_GIANT_BASE"})
+        if(overridden(key))return trial;
+    // CPU performance is part of this policy: other hosts start from device points.
+    const bool hybrid_default=qualified_device && host.find("Ryzen AI 9 HX 370")!=std::string::npos &&
+        short_shape && s.p>=144 && s.p<=240 && s.giants>=100 && s.giants<=114 && w>=31 && w<=255;
+    if(hybrid_default)trial.plan="cpu";
+    const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
+    const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
+    if(!path || !*path || !short_shape || (amd && w>8))return trial;
+    trial.path=path;
+    const std::string identity=device.platform+"|"+device.name+"|"+device.driver+"|"+std::to_string(device.index)+
+        "|"+host+"|"+gmp_version+"|"+ecm_program::version;
+    std::ostringstream key;
+    key<<"g_"<<std::hex<<ecm_io::fingerprint(identity)<<std::dec<<"_w"<<w<<"_a"<<arithmetic_words
+       <<"_d"<<s.d<<"_i"<<s.giants<<"_c"<<carrier<<"_m"<<arena<<"_b"<<setting("NTT_S4_BATCH_MB",64)
+       <<"_j"<<setting("ECM_OPENCL_CACHE_PROGRAMS",1);
+    trial.key=key.str();
+    trial.repeats=static_cast<unsigned>(setting("ECM_OPENCL_RUNTIME_REPEATS",2));
+    std::vector<std::string> candidates{trial.plan,trial.plan=="cpu"?"device":"cpu"};
+    // On compact shapes with a qualified paired GPU plan, a separate chain trial
+    // would only revert baby batching. Other devices can measure chain directly.
+    if(device.vendor.find("NVIDIA")!=std::string::npos && w>8 && !hybrid_default &&
+       !(qualified_device && w>128 && w<=160))candidates.push_back("chain");
+    try{trial.select(candidates,static_cast<unsigned>(setting("ECM_OPENCL_RUNTIME_BUDGET",10)));}
+    catch(const std::exception&e){std::cerr<<"opencl_point_tune: "<<e.what()<<'\n';}
+    return trial;
+}
 Shape shape(Word d,Word b2,unsigned bits,Word limit){
     Shape s;s.d=d;s.p=ecm_stage2::d_catalog::degree(d);s.giants=b2/d+2;
     const auto batch_mb=setting("NTT_S4_BATCH_MB",64);
@@ -105,7 +160,7 @@ struct PointGenerator {
     Word chain_launches=0,chain_points=0,chain_seeds=0,chain_recoveries=0;
     double chain_recovery_seconds=0,chain_kernel_seconds=0,chain_max_seconds=0,giant_kernel_seconds=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
-    PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a,const Shape&shape):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
+    PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a,const Shape&shape,const std::string& point_plan):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
         const auto&v=r.device().vendor;const bool amd=v.find("Advanced Micro Devices")!=v.npos||v=="AMD";
         const bool nvidia=v.find("NVIDIA")!=v.npos;
         const auto automatic=setting("ECM_OPENCL_POINT_AUTO",1);
@@ -120,7 +175,7 @@ struct PointGenerator {
         const char* mode=std::getenv("ECM_OPENCL_POINTS");
         if(mode&&std::string(mode)!="cpu"&&std::string(mode)!="device")throw std::runtime_error("ECM_OPENCL_POINTS must be cpu or device");
         group=std::size_t(setting("ECM_OPENCL_POINT_GROUP",nvidia?32:0));
-        if((!mode||std::string(mode)!="cpu")&&(!amd||w<=8))device=std::make_unique<cls::Points>(runtime,flatten({BigValue()},w),group);
+        if(point_plan!="cpu"&&(!amd||w<=8))device=std::make_unique<cls::Points>(runtime,flatten({BigValue()},w),group);
         const std::size_t default_chunk=w<=8?1024:(nvidia&&w<=128)?256:w<=32?256:w<=64?128:w<=128?64:16;
         chunk=std::size_t(setting("ECM_OPENCL_POINT_CHUNK",default_chunk));
         if(!chunk||chunk>4096)throw std::runtime_error("ECM_OPENCL_POINT_CHUNK must be 1..4096");
@@ -136,12 +191,12 @@ struct PointGenerator {
         if(short_batch>1)throw std::runtime_error("ECM_OPENCL_SHORT_POINT_BATCH must be 0 or 1");
         // Qualify on actual point work, independent of polynomial carrier width.
         // Outside these short-scalar command sizes keep the measured wide ramp.
-        short_scalar_batch=short_batch && plan.wide_ramp && w<=160 && use_giant_base &&
+        short_scalar_batch=point_plan!="chain" && short_batch && plan.wide_ramp && w<=160 && use_giant_base &&
             r.device().name=="NVIDIA GeForce RTX 4060 Laptop GPU" &&
             shape.p>=32 && shape.p<=256 && shape.d/2<2048 &&
             shape.giants>=32 && shape.giants<=1152 &&
             !overridden("ECM_OPENCL_GIANT_CHAIN") && !overridden("ECM_OPENCL_POINT_WINDOW");
-        chain_requested=chain!=0;
+        chain_requested=chain!=0 || point_plan=="chain";
         chain_enabled=(chain_requested||short_scalar_batch)&&device&&use_giant_base;
     }
     Word chain_capacity()const {
@@ -214,7 +269,7 @@ struct PointGenerator {
         coordinate_seconds+=now()-begin;
         // Always compare rebased points with the original [iD]Q ladder,
         // including the CPU fallback. This oracle does not reuse giant_base.
-        if(device||origin!=&base){const auto check_begin=now();
+        {const auto check_begin=now();
             // A wider generation window must preserve the three original
             // samples of EVERY G batch, including the final short batch.
             const auto span=sample_span?sample_span:scalars.size();
@@ -261,7 +316,9 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         const auto cache=setting("ECM_OPENCL_CACHE_PROGRAMS",1);if(cache>1)throw std::runtime_error("ECM_OPENCL_CACHE_PROGRAMS must be 0 or 1");options.cache_programs=cache!=0;cln::Runtime runtime(options);
         cls::ArithmeticOptions arithmetic;Big modulus;mpz_set(modulus.v,m.N);arithmetic.product.modulus=flatten({modulus},m.W);arithmetic.product.mersenne=carrier!=0;
         cls::Arithmetic field(runtime,arithmetic);std::set<std::string> factors;Big a;if(a24){if(mpz_set_str(a.v,a24,16)||mpz_sgn(a.v)<0||mpz_cmp(a.v,m.target())>=0)throw std::runtime_error("invalid curve a24");}else a=curve_a24(sigma,m.target(),factors);
-        PointGenerator generator(runtime,m.target(),saved,a,s);double sentinel_seconds=0;
+        auto trial=choose_points(ds[index],s,(m.target_bits()+63)/64,m.W,carrier,options.budget_bytes);
+        PointGenerator generator(runtime,m.target(),saved,a,s,trial.plan);double sentinel_seconds=0;
+        if(!trial.key.empty())stage2_log::print(stage2_log::curve,"opencl_point_tune: plan=%s collect=%d key=%s\n",trial.plan.c_str(),int(trial.collect),trial.key.c_str());
         // Real device multiply, independently checked with GMP before any result.
         const auto self=field.download(field.multiply(field.upload(flatten({Big(1),Big(2)},m.W),2),field.upload(flatten({Big(3),Big(1)},m.W),2)));
         auto check=import(self,m.W);for(std::size_t k=0;k<3;++k){Big v(k==0?3:k==1?7:2);mpz_mod(v.v,v.v,m.N);if(mpz_cmp(v.v,check[k].v))throw std::runtime_error("OpenCL polynomial startup selftest");}result.selftest_cases=1;result.checked+=self.size();
@@ -283,6 +340,10 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             const auto programs=runtime.programs();stage2_log::print(stage2_log::phases,"opencl_programs: builds=%llu hits=%llu build_seconds=%.6f cache=%d scope=context\n",programs.builds,programs.hits,programs.build_seconds,int(options.cache_programs));
             stage2_log::print(stage2_log::phases,"opencl_checks: startup_cases=%llu checked_words=%llu bad=0 point_samples=GMP leaf_sentinels=GMP factors=divisibility\n",result.selftest_cases,result.checked);
             if(counts_enabled){std::cout<<"ntt_lengths:";for(const auto&entry:field.stats().ntt_transforms)std::cout<<' '<<entry.first<<':'<<entry.second;std::cout<<" backend=opencl scope=transforms\n";}
+            if(factors.empty()){
+                try{trial.record(result.total_seconds);}
+                catch(const std::exception&e){std::cerr<<"opencl_point_tune: observation not saved: "<<e.what()<<'\n';}
+            }
             if(metrics)*metrics=result;const auto json=result_json(factors);report(json.c_str(),ctx);return 0;};
         if(!factors.empty())return finish();
         stage2_log::phase("Generate and normalize baby points");double t=now();std::vector<Word> indices;indices.reserve(s.p);for(Word j=1;j<=s.d/2;++j)if(std::gcd(j,s.d)==1)indices.push_back(j);if(indices.size()!=s.p)throw std::runtime_error("D/phi baby count");auto babies=generator.generate(indices,factors,result.checked);result.phases.seconds[2]=now()-t;if(!factors.empty())return finish();

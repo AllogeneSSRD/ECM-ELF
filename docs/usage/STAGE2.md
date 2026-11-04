@@ -4,23 +4,25 @@
 
 ## 原生 OpenCL 入口
 
-`ecm_opencl_stage2.exe` 共用本页的文本save、ECMSTAGE2任务、TOML、Worker、数量夹限、队列进度、结果发布与停止策略。CUDA默认程序不会自动切换为OpenCL。先运行 `ecm_opencl_stage2.exe --list-devices`，再选择OpenCL编号；它可能因ICD平台重复枚举，不能直接当作CUDA编号。
+`ecm_opencl_stage2.exe` 共用本页的文本save、ECMSTAGE2任务、TOML、Worker、数量夹限、队列进度、结果发布与停止策略。同目录安装两套 worker 时，由 stage2_backend 选择实际后端，auto 优先可见的 CUDA 设备。先运行 `ecm_opencl_stage2.exe --list-devices`，再选择OpenCL编号；它可能因ICD平台重复枚举，不能直接当作CUDA编号。
 
 直接续算可用 `ecm_opencl_stage2.exe --config ecm.toml --save FILE --device N --b2 B2 --d D`；队列入口为 `ecm_opencl_stage2.exe --config ecm.toml --worker N --once`。D=0使用独立基本模型和owned-payload预算。支持显式 `--carrier-exponent P`，先验证N整除2^P−1；不自动比较承载路线。
 
-须提供非零B2：来自CLI、worktodo、`stage2_b2`或共同 `b2_ratio`。首版不支持Auto B2/tune、relocation与CUDA成本profile；不会读取或更新CUDA tune文件。共享配置中的自动tune/自动承载默认不应用于OpenCL，显式请求不支持的CLI选项会拒绝。OpenCL自身采用阻塞传输/事件等待，CUDA `low_cpu_wait` flags不控制其设备调度。
+须提供非零B2：来自CLI、worktodo、`stage2_b2`或共同 `b2_ratio`。OpenCL 支持本后端的运行时点计划调优，需要明确 B2；CUDA 的离线 NTT/ECM tune、Auto B2、自动承载比较及 relocation 仍限定 CUDA。两个后端分别维护实测文件，显式请求不支持的选项会报错。OpenCL自身采用阻塞传输/事件等待，CUDA `low_cpu_wait` flags不控制其设备调度。
 
 `stage2_arena_mb` 是整个OpenCL owned-buffer硬预算，包含F树、结果、NTT临时区和表；它与CUDA arena口径不同。0表示自动payload预算；`opencl_payload`日志记录本模块实际账本峰值，不是进程显存峰或设备空闲显存。预算不足会失败并保留队列，不自动放宽。
 
-NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续使用OpenCL多项式流水线。归一化和最终GCD由CPU/GMP完成。功能边界见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)，构建与性能见 [OpenCL Stage2性能](../performance/OPENCL_STAGE2.md)。
+NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512 bits使用CPU点生成，继续使用OpenCL多项式流水线。归一化和最终GCD由CPU/GMP完成。功能边界见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)，构建与性能见 [OpenCL Stage2性能](../performance/OPENCL_STAGE2.md)。
 
 ### OpenCL 性能对照开关
 
 以下为当前OpenCL worker的专家环境开关，供同二进制对照；不写入TOML，不影响CUDA。正式运行可全部不设。环境须传给启动器及其曲线子进程；不要把调试覆盖留在后续性能样本中。
 
+生产 TOML 可在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_opencl_point_plan="auto"`、`stage2_opencl_tune_profile="stage2_opencl_tune.toml"`。打开 `stage2_tune_runtime` 后通过真实任务学习；`stage2_tune_min_repeats=1` 可快速试用，默认 2。使用独立路径可分离各 worker。非零的 `stage2_opencl_point_chunk`、`stage2_opencl_point_group`、`stage2_opencl_point_window`会锁定对应参数；设备短批次另由 `stage2_opencl_short_point_batch` 控制。完整键名、取值及默认值见[配置参考](../ECM_TOML_REFERENCE.md#stage2_opencl_point_plan)，CUDA 与 OpenCL 的区别见[运行时点计划](../architecture/OPENCL.md#opencl-运行时点计划)。
+
 | 环境变量 | 默认 | 合法值与作用 |
 |---|---|---|
-| `ECM_OPENCL_POINTS` | `device` | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
+| `ECM_OPENCL_POINTS` | 未设置时自动 | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
 | `ECM_OPENCL_POINT_AUTO` | `1` | `0\|1`；NVIDIA、513～16384 bits、无显式chunk/group覆盖时，根据真实点命令反馈规划批量与坐标窗口。0保留原批量；不自动切换CPU点 |
 | `ECM_OPENCL_WIDE_AUTO` | `1` | `0\|1`；扩展POINT_AUTO到NVIDIA、8193～16384 bits。一般从16点尝试完整组，再渐进升档；符合短标量条件时直接成批提交；0保留宽位原批量。显式chunk/group继续锁定计划 |
 | `ECM_OPENCL_POINT_GROUP` | NVIDIA=`32`，其他=`0` | `0`由运行时选择；正整数须≤设备与点kernel上限。每组点线程数 |
@@ -37,7 +39,7 @@ NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续
 
 `stage2_log_level="phases"`开启点内核、CPU检查/归一化、树阶段与程序缓存的汇总；默认批进度级别不新增这些明细。日志字段与嵌套计时见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)。
 
-宽位升档默认开启，巨步递推默认关闭，可以分别关闭／开启做联合对照。宽位计划最多256点，完整32点组的单位点／bit成本超过16点seed的1.10倍时退回seed；其后每bit命令成本增加超过35%时拒绝升档并停止增长。它没有1秒硬时限。巨步递推的提交点数与段长另受设备规模、预算和手动chunk限制；不能由POINT_AUTO的1秒门限推断其最长命令。两者保持原G批、NTT工作和独立检查，CPU／AMD宽位资格回退不变。
+设备点路径默认开启宽位升档；符合短标量计划时自动启用巨步递推，其余形状可显式开启递推对照。宽位计划最多256点，完整32点组的单位点／bit成本超过16点seed的1.10倍时退回seed；其后每bit命令成本增加超过35%时拒绝升档并停止增长。它没有1秒硬时限。巨步递推的提交点数与段长另受设备规模、预算和手动chunk限制；不能由POINT_AUTO的1秒门限推断其最长命令。两者保持原G批、NTT工作和独立检查，CPU／AMD宽位资格回退不变。
 
 ## CUDA 入口
 

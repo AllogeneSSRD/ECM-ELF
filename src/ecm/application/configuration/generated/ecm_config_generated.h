@@ -22,6 +22,12 @@ inline constexpr int64_t stage2_stage2_device_minimum=-1;
 inline constexpr int64_t stage2_stage2_device_maximum=2147483647;
 inline constexpr int64_t stage2_stage2_ntt_counts_minimum=0;
 inline constexpr int64_t stage2_stage2_ntt_counts_maximum=1;
+inline constexpr int64_t stage2_stage2_opencl_point_chunk_minimum=0;
+inline constexpr int64_t stage2_stage2_opencl_point_chunk_maximum=4096;
+inline constexpr int64_t stage2_stage2_opencl_point_group_minimum=0;
+inline constexpr int64_t stage2_stage2_opencl_point_group_maximum=4096;
+inline constexpr int64_t stage2_stage2_opencl_point_window_minimum=0;
+inline constexpr int64_t stage2_stage2_opencl_point_window_maximum=65536;
 inline constexpr int64_t stage2_stage2_giant_tail_balance_minimum=0;
 inline constexpr int64_t stage2_stage2_giant_tail_balance_maximum=1;
 inline constexpr int64_t stage2_stage2_b2_round_chain_minimum=0;
@@ -203,6 +209,12 @@ struct Stage2Values {
     int log_level=-1;
     bool ntt_counts=false;
     std::string gpu_backend="auto";
+    std::string opencl_point_plan="auto";
+    uint64_t opencl_point_chunk=0;
+    uint64_t opencl_point_group=0;
+    uint64_t opencl_point_window=0;
+    bool opencl_short_point_batch=true;
+    std::string opencl_tune_profile="stage2_opencl_tune.toml";
     std::string baby_backend="auto";
     std::string giant_backend="auto";
     std::string seed_backend="auto";
@@ -280,6 +292,12 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_log_level",[](Stage2Values&c,const std::string&v){c.log_level=log_level(v);},[](Stage2Values&c,const Stage2Values&v){c.log_level=v.log_level;}},
     {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=boolean(v,"stage2_ntt_counts");},[](Stage2Values&c,const Stage2Values&v){c.ntt_counts=v.ntt_counts;}},
     {"stage2_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="cuda"&&v!="opencl")throw std::runtime_error("stage2_backend must be [auto|cuda|opencl]");c.gpu_backend=v;},[](Stage2Values&c,const Stage2Values&v){c.gpu_backend=v.gpu_backend;}},
+    {"stage2_opencl_point_plan",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="device"&&v!="chain"&&v!="cpu")throw std::runtime_error("stage2_opencl_point_plan must be [auto|device|chain|cpu]");c.opencl_point_plan=v;},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_plan=v.opencl_point_plan;}},
+    {"stage2_opencl_point_chunk",[](Stage2Values&c,const std::string&v){c.opencl_point_chunk=static_cast<uint64_t>(bounded_integer(v,"stage2_opencl_point_chunk",0,4096));},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_chunk=v.opencl_point_chunk;}},
+    {"stage2_opencl_point_group",[](Stage2Values&c,const std::string&v){c.opencl_point_group=static_cast<uint64_t>(bounded_integer(v,"stage2_opencl_point_group",0,4096));},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_group=v.opencl_point_group;}},
+    {"stage2_opencl_point_window",[](Stage2Values&c,const std::string&v){c.opencl_point_window=static_cast<uint64_t>(bounded_integer(v,"stage2_opencl_point_window",0,65536));},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_window=v.opencl_point_window;}},
+    {"stage2_opencl_short_point_batch",[](Stage2Values&c,const std::string&v){c.opencl_short_point_batch=boolean(v,"stage2_opencl_short_point_batch");},[](Stage2Values&c,const Stage2Values&v){c.opencl_short_point_batch=v.opencl_short_point_batch;}},
+    {"stage2_opencl_tune_profile",[](Stage2Values&c,const std::string&v){c.opencl_tune_profile=v;},[](Stage2Values&c,const Stage2Values&v){c.opencl_tune_profile=v.opencl_tune_profile;}},
     {"stage2_baby_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_baby_backend must be [auto|scalar|coop32]");c.baby_backend=v;c.has_baby_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.baby_backend=v.baby_backend;c.has_baby_backend=v.has_baby_backend;}},
     {"stage2_giant_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop16"&&v!="coop32")throw std::runtime_error("stage2_giant_backend must be [auto|scalar|coop16|coop32]");c.giant_backend=v;c.has_giant_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.giant_backend=v.giant_backend;c.has_giant_backend=v.has_giant_backend;}},
     {"stage2_seed_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_seed_backend must be [auto|scalar|coop32]");c.seed_backend=v;c.has_seed_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.seed_backend=v.seed_backend;c.has_seed_backend=v.has_seed_backend;}},
