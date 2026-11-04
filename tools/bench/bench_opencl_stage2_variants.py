@@ -41,6 +41,7 @@ def main():
     p.add_argument('--carrier-mode', choices=['ordinary','mersenne'], default='ordinary')
     p.add_argument('--d', type=int, default=2310)
     p.add_argument('--arena-mb', type=int, default=512)
+    p.add_argument('--batch-mb', type=int, default=64, help='Production point/G batch budget in MiB')
     p.add_argument('--repeats', type=int, default=3)
     p.add_argument('--timeout', type=float, default=3600,
                    help='Per-curve wall limit; drain this invocation and its descendants on failure')
@@ -54,7 +55,7 @@ def main():
         p.error('Expected an absolute path for each allowed GPU process')
     exponents = list(map(int, a.exponents.split(',')))
     bounds = list(map(int, a.b2.split(',')))
-    if (not exponents or not bounds or min(exponents + bounds) <= 0 or a.d <= 0 or a.arena_mb <= 0
+    if (not exponents or not bounds or min(exponents + bounds) <= 0 or a.d <= 0 or a.arena_mb <= 0 or a.batch_mb <= 0
             or len(set(exponents)) != len(exponents) or len(set(bounds)) != len(bounds)):
         p.error('Need distinct positive exponents/B2, a positive D and arena budget')
     if a.out.exists() or not 1 <= a.repeats <= 20 or a.timeout <= 0:
@@ -65,7 +66,7 @@ def main():
     a.out.mkdir(parents=True)
     shutil.copy2(__file__, a.out / 'bench_script.py')
     manifest = {'started_utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'variants': [],
-                'D': a.d, 'arena_mb': a.arena_mb, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
+                'D': a.d, 'arena_mb': a.arena_mb, 'batch_mb': a.batch_mb, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
                 'timeout': a.timeout,
                 'matrix_plan': {'exponents': exponents, 'B2': bounds, 'carrier_mode':a.carrier_mode},
                 'gpu_settings_changed': False, 'allowed_processes': allowed, 'inherited_ntt_environment': {
@@ -120,7 +121,7 @@ stage2_auto_carrier=false
 stage2_tune_runtime=false
 stage2_short_calibration=false
 stage2_arena_mb={a.arena_mb}
-stage2_batch_mb=64
+stage2_batch_mb={a.batch_mb}
 stage2_fold_mb=640
 stage2_results_file="results.jsonl"
 stage2_log_file="worker.log"

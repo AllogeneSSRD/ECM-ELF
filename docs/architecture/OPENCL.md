@@ -53,6 +53,8 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 
 设 F(X)=∏(X−bᵢ)，Gₖ(X)=∏(X−gⱼ)。`Resultant` 缓存 reverse(F) 的 P+1 项逆级数，采用 Newton 更新 g←g(2−ag) mod Xᵏ；逆级数常数项必须为 1，所以复合模数下不需要求任意系数的逆。每批执行 H←HGₖ mod F，以最高系数反转、逆级数乘法和 qF 乘减求余；H 保持 P 个系数，尾零不要求传回主机修剪。
 
+只保留根的 G 树可以从二次因子起步。相邻根 a、b 通过交错只读视图交给单系数 NTT/S4 计算 ab，设备再组装系数 [ab, −a−b mod N, 1]。奇数尾根仍使用一次因子，补齐节点仍取常数 1。从这一层向上复用原乘积树和 fold，F 树保留供下降使用的所有一次叶。一次乘法仍有三个变换，底层变换的长度可以缩短。`opencl_g_leaves.quadratic_pairs` 记录实际组合的根对数。[树构造](../../src/ecm/stage2/opencl/tree.cpp#L16) · [系数组装](../../src/ecm/opencl/resources/stage2/coefficients.cl#L48)
+
 下降保持 CUDA 的 scaled remainder 公式：根状态为 lowₚ(reverseₚ₋₁(H)·reverseₚ(F)⁻¹)。次数 a 的子节点、次数 b 的兄弟节点，从 parent·reverseᵦ(F_sibling) 中取第 b 至 b+a−1 项。每层按 (a,b) 分组；不为每个子节点重复求逆或长除多项式。最终叶子给出 H(bᵢ)，等于全部 Gₖ(bᵢ) 的乘积。
 
 实验入口为 `opencl_stage2_probe.exe --verify --device N --output FILE`；`--bench` 使用固定输入比较逐节点、分组批处理、请求级／共享工作区与复制／借用切片。每种设置显式执行一次准备流程，再测三次，所有结果继续对照 GMP；这与生产 tune 的 warmup 配置无关。计时从点已就绪、Arithmetic 已建立后开始，包含 F/逆多项式、G/fold、下降、检查及叶子回读；不含 CPU 点生成、CPU GCD、初始输入传输或队列任务逻辑。首次流程另记计划创建与可能的 JIT，不混入稳态中位数。

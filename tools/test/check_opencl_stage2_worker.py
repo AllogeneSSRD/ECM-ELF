@@ -142,6 +142,10 @@ def main():
         return rows,log
     rows,_=case('stage2_hit',save_line(257000771,6))
     assert rows[0].get('factors')==['257']
+    rows,_=case('quadratic_g_hit',save_line(257000771,6),environment={'ECM_OPENCL_QUADRATIC_G_LEAVES':'1'})
+    assert rows[0].get('factors')==['257']
+    paired=(a.out/'quadratic_g_hit/worker.log').read_text(encoding='utf-8-sig')
+    assert 'opencl_g_leaves: quadratic_pairs=6' in paired
     # A factor may first appear while constructing [D]Q. Rebasing must publish
     # that proper factor, rather than dropping it or inventing an affine root.
     rows,log=case('giant_seed_hit',save_line(257000771,6),d=46)

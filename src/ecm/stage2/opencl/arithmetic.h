@@ -17,6 +17,7 @@ struct ArithmeticOptions {
     bool group_batches=true;
     bool borrow_contiguous=true; // Read-only regular slices need no gather copy.
     bool batch_gathers=false;
+    bool quadratic_g_leaves=false;
 };
 struct ArithmeticStats {
     std::map<unsigned,Word> ntt_transforms; // Three transforms per convolution pair.
@@ -24,6 +25,7 @@ struct ArithmeticStats {
     Word upload_bytes=0,download_bytes=0,device_copy_bytes=0;
     Word borrowed_gathers=0,avoided_copy_bytes=0;
     Word gather_kernels=0,gather_rows=0;
+    Word quadratic_pairs=0;
 };
 struct ArithmeticState;
 class Arithmetic {
@@ -35,6 +37,7 @@ public:
     Arithmetic& operator=(const Arithmetic&)=delete;
     std::size_t words()const;
     bool group_batches()const;
+    bool quadratic_g_leaves()const;
     const ArithmeticStats &stats()const;
     Polynomial upload(const std::vector<Word> &,std::size_t count,std::size_t batch=1);
     std::vector<Word> download(const Polynomial &);
@@ -44,6 +47,7 @@ public:
     Polynomial gather(const std::vector<Polynomial> &); // Equal-sized, batch=1 windows.
     Polynomial subtract(const Polynomial &,const Polynomial &);
     Polynomial linear_factors(const Polynomial &roots);
+    Polynomial quadratic_factors(const Polynomial &roots); // Consecutive complete pairs.
     Polynomial multiply(const Polynomial &,const Polynomial &,
         std::size_t first=0,std::size_t count=std::numeric_limits<std::size_t>::max());
     // a(0)=1. Used with the reverse of a monic polynomial over composite N.

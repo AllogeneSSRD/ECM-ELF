@@ -121,7 +121,7 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
     const bool hybrid_default=production_hybrid || (local_hybrid && (small_hybrid || wide_point_chains(s,w)));
     if(hybrid_default)trial.plan="cpu";
     if(overridden("ECM_OPENCL_CPU_CHAINS") || overridden("ECM_OPENCL_BATCH_GATHERS") ||
-       overridden("ECM_OPENCL_GIANT_CPU_THREADS"))return trial;
+       overridden("ECM_OPENCL_GIANT_CPU_THREADS") || overridden("ECM_OPENCL_QUADRATIC_G_LEAVES"))return trial;
     const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
     const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
     if(!path || !*path || (!short_shape && !production_hybrid) || (amd && w>8))return trial;
@@ -412,6 +412,12 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         const auto batch_gathers=setting("ECM_OPENCL_BATCH_GATHERS",production_gathers);
         if(batch_gathers>1)throw std::runtime_error("ECM_OPENCL_BATCH_GATHERS must be 0 or 1");
         arithmetic.batch_gathers=batch_gathers!=0;
+        const bool paired_shape=(m.W==31 && s.p==80640) || (m.W==192 && s.p==13440);
+        const bool paired_default=!carrier && paired_shape && s.chunk>=4096 &&
+            ds[index].name=="NVIDIA GeForce RTX 4060 Laptop GPU";
+        const auto paired=setting("ECM_OPENCL_QUADRATIC_G_LEAVES",paired_default);
+        if(paired>1)throw std::runtime_error("ECM_OPENCL_QUADRATIC_G_LEAVES must be 0 or 1");
+        arithmetic.quadratic_g_leaves=paired!=0;
         cls::Arithmetic field(runtime,arithmetic);std::set<std::string> factors;Big a;if(a24){if(mpz_set_str(a.v,a24,16)||mpz_sgn(a.v)<0||mpz_cmp(a.v,m.target())>=0)throw std::runtime_error("invalid curve a24");}else a=curve_a24(sigma,m.target(),factors);
         auto trial=choose_points(ds[index],s,(m.target_bits()+63)/64,m.W,carrier,options.budget_bytes);
         PointGenerator generator(runtime,m.target(),saved,a,s,trial.plan);double sentinel_seconds=0;
@@ -438,6 +444,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             stage2_log::print(stage2_log::phases,"opencl_tail: leaf_oracle=%.6f descent=%.6f accum=%.6f\n",sentinel_seconds,result.descent_seconds,result.accum_seconds);
             const auto programs=runtime.programs();stage2_log::print(stage2_log::phases,"opencl_programs: builds=%llu hits=%llu build_seconds=%.6f cache=%d scope=context\n",programs.builds,programs.hits,programs.build_seconds,int(options.cache_programs));
             stage2_log::print(stage2_log::phases,"opencl_gathers: batched=%d row_kernels=%llu rows=%llu single_copies=%llu copy_bytes=%llu borrowed=%llu\n",int(arithmetic.batch_gathers),field.stats().gather_kernels,field.stats().gather_rows,field.stats().device_copies,field.stats().device_copy_bytes,field.stats().borrowed_gathers);
+            if(arithmetic.quadratic_g_leaves)stage2_log::print(stage2_log::phases,"opencl_g_leaves: quadratic_pairs=%llu\n",field.stats().quadratic_pairs);
             stage2_log::print(stage2_log::phases,"opencl_checks: startup_cases=%llu checked_words=%llu bad=0 point_samples=GMP leaf_sentinels=GMP factors=divisibility\n",result.selftest_cases,result.checked);
             if(counts_enabled){std::cout<<"ntt_lengths:";for(const auto&entry:field.stats().ntt_transforms)std::cout<<' '<<entry.first<<':'<<entry.second;std::cout<<" backend=opencl scope=transforms\n";}
             if(factors.empty()){

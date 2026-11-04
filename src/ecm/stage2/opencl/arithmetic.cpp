@@ -22,7 +22,7 @@ Polynomial Polynomial::element(std::size_t i)const {
 struct ArithmeticState {
     ntt::Runtime runtime;ArithmeticOptions options;ArithmeticStats stats;
     std::size_t nw=0;ntt::Buffer modulus;
-    cl_program program=nullptr;std::array<cl_kernel,4> kernels{};
+    cl_program program=nullptr;std::array<cl_kernel,5> kernels{};
     std::shared_ptr<PolynomialWorkspace> workspace;
     std::map<std::size_t,std::unique_ptr<PolynomialPlan>> products;
     // Commands retain OpenCL objects, but the payload ledger follows Buffer
@@ -61,11 +61,12 @@ Arithmetic::Arithmetic(ntt::Runtime &r,const ArithmeticOptions &o):state_(std::m
     const auto source=read(root.parent_path()/"stage2/coefficients.cl");cl_int code=0;
     const auto options="-cl-std=CL1.2 -DECM_COEFF_NW="+std::to_string(p.nw);
     p.program=Native::program(r,source,options);
-    unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear","ecm_poly_gather_rows"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
+    unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear","ecm_poly_gather_rows","ecm_poly_quadratic"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
 }
 Arithmetic::~Arithmetic()=default;
 std::size_t Arithmetic::words()const{return state_->nw;}
 bool Arithmetic::group_batches()const{return state_->options.group_batches;}
+bool Arithmetic::quadratic_g_leaves()const{return state_->options.quadratic_g_leaves && group_batches();}
 const ArithmeticStats &Arithmetic::stats()const{return state_->stats;}
 void Arithmetic::finish(){state_->runtime.finish();state_->pending.clear();}
 Polynomial Arithmetic::upload(const std::vector<Word> &v,std::size_t count,std::size_t batch) {
@@ -152,6 +153,20 @@ Polynomial Arithmetic::linear_factors(const Polynomial &roots) {
     auto &p=*state_;p.validate(roots);if(roots.batch!=1)throw std::invalid_argument("root list must have batch=1");
     auto out=p.allocate(2,roots.size);p.hold(roots);p.hold(out);auto k=p.kernels[2];const auto src=Native::memory(roots.buffer),mod=Native::memory(p.modulus),dst=Native::memory(out.buffer);
     const Word offset=roots.offset,count=roots.size;arg(k,0,src);arg(k,1,offset);arg(k,2,count);arg(k,3,mod);arg(k,4,dst);p.launch(k,roots.size,1);return out;
+}
+Polynomial Arithmetic::quadratic_factors(const Polynomial &roots) {
+    auto &p=*state_;p.validate(roots);
+    if(roots.batch!=1 || roots.size<2)throw std::invalid_argument("paired roots require at least two coefficients");
+    // Adjacent roots form a strided batch of constant products a*b. Shorten
+    // the NTT operands from two coefficients to one; keep the normal S4 checks.
+    auto left=window(roots,0,1),right=window(roots,1,1);
+    left.batch=right.batch=roots.size/2;left.stride=right.stride=2*p.nw;
+    auto products=multiply(left,right);
+    auto out=p.allocate(3,left.batch);p.hold(roots);p.hold(products);p.hold(out);
+    auto k=p.kernels[4];const Word first=roots.offset;
+    arg(k,0,Native::memory(roots.buffer));arg(k,1,first);arg(k,2,Native::memory(products.buffer));
+    arg(k,3,Native::memory(p.modulus));arg(k,4,Native::memory(out.buffer));p.launch(k,left.batch,1);
+    p.stats.quadratic_pairs+=left.batch;return out;
 }
 Polynomial Arithmetic::multiply(const Polynomial &a,const Polynomial &b,std::size_t first,std::size_t count) {
     auto &p=*state_;p.validate(a);p.validate(b);if(a.batch!=b.batch)throw std::invalid_argument("polynomial multiply batch");

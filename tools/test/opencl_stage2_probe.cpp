@@ -30,7 +30,14 @@ void check_tree(cl2::Arithmetic&a,const cl2::ProductTree&t,const ref::Poly&roots
 void algebra(ntt::Runtime&r,unsigned bits,std::size_t count,bool mersenne,bool grouped,Counts&c,bool batch_gathers=false){
     const auto limbs=modulus(bits,mersenne);const auto n=ref::import(limbs);Word seed=0xb1d21836a09fe734ULL+bits+count;
     auto babies=random_roots(n,count,seed),giants=random_roots(n,2*count+3,seed);
-    auto config=options(limbs,mersenne,grouped);config.batch_gathers=batch_gathers;cl2::Arithmetic a(r,config);
+    auto config=options(limbs,mersenne,grouped);config.batch_gathers=batch_gathers;config.quadratic_g_leaves=grouped;
+    // Exercise canonical zero, exact N, and negative N-a-b including a borrow
+    // across the highest limb. The rest of each block retains random roots.
+    if(giants.size()>=6){
+        giants[0]=giants[1]=ref::Big(0);giants[2]=ref::Big(1);
+        mpz_sub_ui(giants[3].v,n.v,1);giants[4]=giants[5]=giants[3];
+    }
+    cl2::Arithmetic a(r,config);
     auto roots=a.upload(ref::flatten(babies,a.words()),babies.size());cl2::Resultant resultant(a,roots);check_tree(a,resultant.tree(),babies,n,c);
     auto f=ref::roots(babies,n),reverse=f;std::reverse(reverse.begin(),reverse.end());same(a,resultant.inverse(),ref::inverse(reverse,count+1,n),c,"inverse");
     ref::Poly h{ref::Big(1)};auto gs=a.upload(ref::flatten(giants,a.words()),giants.size());
@@ -43,6 +50,7 @@ void algebra(ntt::Runtime&r,unsigned bits,std::size_t count,bool mersenne,bool g
     rejects("a(0)=1",[&]{a.inverse_series(a.constant(2),4);},c);
     rejects("exceeds baby",[&]{resultant.append(gs);},c);
     auto root_only=cl2::product_tree(a,roots,false);same(a,root_only.nodes[1],f,c,"root-only tree");
+    if(grouped && count>=2 && !a.stats().quadratic_pairs)throw std::runtime_error("quadratic G leaves not exercised");
     for(std::size_t i=2;i<root_only.nodes.size();++i)if(root_only.nodes[i].buffer.words())throw std::runtime_error("G tree retained a child");++c.guards;
     if(count>1)rejects("retained children",[&]{cl2::evaluate_scaled(a,root_only,resultant.fold(),resultant.inverse());},c);
     auto scalar=a.constant(2);same(a,a.multiply(scalar,scalar),{ref::Big(4)},c,"same-source square");

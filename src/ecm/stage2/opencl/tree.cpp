@@ -18,9 +18,18 @@ ProductTree product_tree(Arithmetic &a,const Polynomial &roots,bool keep_childre
     ProductTree t;t.leaves=roots.size;t.padded=1;
     if(t.leaves>(std::size_t(1)<<27))throw std::invalid_argument("product tree too large");
     while(t.padded<t.leaves)t.padded*=2;t.nodes.resize(2*t.padded);
-    auto factors=a.linear_factors(roots),one=a.constant(1);
-    for(std::size_t i=0;i<t.padded;++i)t.nodes[t.padded+i]=i<t.leaves?factors.element(i):one;
-    for(std::size_t base=t.padded/2;base;base/=2) {
+    auto one=a.constant(1);
+    auto level=t.padded;
+    if(!keep_children && roots.size>=2 && a.quadratic_g_leaves()){
+        level/=2;
+        auto pairs=a.quadratic_factors(roots);
+        for(std::size_t i=0;i<level;++i)t.nodes[level+i]=i<pairs.batch?pairs.element(i):one;
+        if(roots.size%2)t.nodes[level+pairs.batch]=a.linear_factors(a.window(roots,roots.size-1,1));
+    }else{
+        auto factors=a.linear_factors(roots);
+        for(std::size_t i=0;i<level;++i)t.nodes[level+i]=i<t.leaves?factors.element(i):one;
+    }
+    for(std::size_t base=level/2;base;base/=2) {
         std::map<std::pair<std::size_t,std::size_t>,Group> groups;
         for(std::size_t i=base;i<2*base;++i){const auto left=t.nodes[2*i].size,right=t.nodes[2*i+1].size;
             if(left==1)t.nodes[i]=t.nodes[2*i+1];else if(right==1)t.nodes[i]=t.nodes[2*i];else groups[{left,right}].push_back(i);}

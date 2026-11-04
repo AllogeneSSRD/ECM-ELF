@@ -239,7 +239,7 @@ tune沿用了旧成果，只为每格增加8条学习调用，已实现矩阵合
 
 ## OpenCL 与 CUDA：生产 B2
 
-[生产范围同几何实测与阶段占比图](OPENCL_STAGE2.md#生产-b2-的同几何采样)覆盖 B2=2600 亿与 2.6 万亿。普通 1939 bits、D=870870 的 OpenCL 0.58.7 从 46.597／362.662 s 降至 25.773／170.651 s，同 D 的 CUDA 为 6.624／25.292 s。大档 G 树与 fold 占 OpenCL 完整墙钟 48.7%。普通 12285 bits、D=129360 的低档生产 B2，显式 GMP 点的 OpenCL 为 1434.251 s，CUDA 为 392.964 s；OpenCL 中 giant 占 45.7%、G 树与 fold 占 40.1%。各格为同一 save 的单次完整引擎计时。
+[生产范围同几何实测与阶段占比图](OPENCL_STAGE2.md#生产-b2-的同几何采样)覆盖 B2=2600 亿与 2.6 万亿。普通 1939 bits、D=870870，0.58.9 两档 OpenCL 墙钟为 21.563／128.901 s，CUDA 为 6.624／25.292 s；大档 G 树／fold 占 OpenCL 的 64.3%。普通 12285 bits、D=129360、B2=2600 亿，显式 GMP 点的 OpenCL 为 904.074 s（同形状串行 GMP 基准 1434.251 s），CUDA 为 392.964 s；OpenCL 的 G 树／fold 占 54.3%、giant 占 23.2%、叶哨兵占 20.0%。[giant 与 G 树的独立开关 A/B、预算及样本数](OPENCL_STAGE2.md#giant-点生成与-g-树)
 
 ## OpenCL 与 CUDA：全位宽快速矩阵
 

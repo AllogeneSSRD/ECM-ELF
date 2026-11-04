@@ -42,3 +42,28 @@ __kernel void ecm_poly_gather_rows(__global const ulong *src,ulong first,ulong p
     const size_t word=get_global_id(0),row=get_global_id(1);
     dst[out_first+row*out_pitch+word]=src[first+row*pitch+word];
 }
+
+// (X-a)(X-b) = ab - (a+b)X + X^2. Compute N-a-b with two limb
+// borrows so the sum a+b never needs a spare bit, even at full width.
+__kernel void ecm_poly_quadratic(__global const ulong *roots,ulong first,
+    __global const ulong *products,__global const ulong *modulus,__global ulong *out) {
+    const size_t pair=get_global_id(0),i=first+2*pair*ECM_COEFF_NW,j=3*pair*ECM_COEFF_NW;
+    ulong borrow_a=0,borrow_b=0,any=0;
+    for(int w=0;w<ECM_COEFF_NW;++w){
+        const ulong a=roots[i+w],b=roots[i+ECM_COEFF_NW+w],n=modulus[w];
+        const ulong t=n-a,u=t-borrow_a;borrow_a=(n<a)||(t<borrow_a);
+        const ulong v=u-b,r=v-borrow_b;borrow_b=(u<b)||(v<borrow_b);
+        any|=a|b;
+        out[j+w]=products[pair*ECM_COEFF_NW+w];out[j+ECM_COEFF_NW+w]=r;
+        out[j+2*ECM_COEFF_NW+w]=(w==0);
+    }
+    // The exact result lies in (-N,N]. Map both negative and N to [0,N).
+    if(borrow_b || !any){
+        ulong carry=0;
+        for(int w=0;w<ECM_COEFF_NW;++w){
+            const size_t k=j+ECM_COEFF_NW+w;
+            const ulong a=out[k],t=a+modulus[w],v=t+carry;
+            carry=(t<a)||(v<t);out[k]=any?v:0;
+        }
+    }
+}
