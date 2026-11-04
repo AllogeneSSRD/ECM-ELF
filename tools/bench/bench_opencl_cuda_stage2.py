@@ -38,7 +38,15 @@ def main():
     parser.add_argument('--opencl-device',type=int,default=1)
     parser.add_argument('--allow-version-difference',action='store_true',
                         help='Explicitly compare an identified frozen version with a newer implementation')
+    parser.add_argument('--allow-gpu-process',nargs=2,action='append',default=[],metavar=('PID','FULL_PATH'),
+                        help='Check the CUDA device before every curve; allow only these exact external PID/path pairs')
     a=parser.parse_args()
+    allowed=[{'pid':int(pid),'process_name':path} for pid,path in a.allow_gpu_process]
+    if any(not os.path.isabs(p['process_name']) for p in allowed):
+        parser.error('A GPU process exemption requires its absolute path')
+    if allowed:
+        from bench_stage2_version import Monitor,check_gpu_processes
+        monitor=Monitor(a.cuda_device)
     exponents=list(map(int,a.exponents.split(',')))
     bounds=list(map(int,a.b2.split(',')))
     modes=a.carrier_modes.split(',')
@@ -74,7 +82,7 @@ def main():
     runs=[]
     manifest={'started_utc':dt.datetime.now(dt.timezone.utc).isoformat(),
               'kind':'production_save_fixed_D_AB','warmup':0,'repeats':a.repeats,
-              'gpu_settings_changed':False,'D':a.d,'arena_mb':a.arena_mb,
+              'allowed_processes':allowed,'gpu_settings_changed':False,'D':a.d,'arena_mb':a.arena_mb,
               'matrix_plan':{'exponents':exponents,'B2':bounds,'carrier_modes':modes,'timeout':a.timeout,'cuda_device':a.cuda_device,'opencl_device':a.opencl_device},
               'versions':versions,
               'allow_version_difference':a.allow_version_difference,
@@ -92,6 +100,7 @@ def main():
             if manifest[key]!=previous.get(key):
                 raise RuntimeError('Resume configuration/build mismatch: '+key)
         manifest=previous
+        if previous.get('allowed_processes',[])!=allowed:raise RuntimeError('Resume process policy changed')
         runs=[json.loads(s) for s in (a.out/'measurements.jsonl').read_text(encoding='utf-8').splitlines()]
         for row in runs:
             log=Path(row['log'])
@@ -156,6 +165,8 @@ stage2_log_file="worker.log"
                                  '--device',str(device),'--b2',str(b2),'--d',str(a.d),'--curves','1','--factor-only',
                                  '--carrier-exponent',str(carrier),'--auto-carrier','0','--tune-runtime','0','--short-calibration','0','--ntt-counts','1']
                             (folder/'command.json').write_text(json.dumps(cmd,indent=2),encoding='utf-8')
+                            if allowed:
+                                check_gpu_processes(monitor,a.out/'bin',folder/'gpu_processes.json',allowed=allowed)
                             start=time.perf_counter()
                             job=WindowsJob()
                             try:
@@ -196,6 +207,7 @@ stage2_log_file="worker.log"
         finally:
             poll.terminate()
             poll.wait()
+            if allowed:monitor.close()
     manifest['complete']=True
     if {(r['exponent'],r['B2'],r['repeat'],r['backend'],r.get('carrier_exponent',0)) for r in runs}!=expected:
         raise RuntimeError('Matrix is missing planned measurements')

@@ -37,11 +37,14 @@ void dbl(int nw,word*rx,word*rz,const word*x,const word*z,const word*a24,const w
     word a[W],b[W],e[W],tx[W],tz[W];addmod(nw,a,x,z,n);submod(nw,b,x,z,n);mont(nw,a,a,a,n,ni);mont(nw,b,b,b,n,ni);
     submod(nw,e,a,b,n);mont(nw,tx,a,b,n,ni);mont(nw,tz,a24,e,n,ni);addmod(nw,tz,b,tz,n);mont(nw,tz,e,tz,n,ni);cp(nw,rx,tx);cp(nw,rz,tz);
 }
-void xadd(int nw,word*rx,word*rz,const word*x,const word*z,const word*y,const word*w,const word*dx,const word*dz,const word*n,word ni){
+void xadd(int nw,word*rx,word*rz,const word*x,const word*z,const word*y,const word*w,const word*dx,const word*dz,const word*n,word ni,int affine_difference){
     // Half sums preserve the exact projective scaling of CUDA XADD6.
     word a[W],b[W],u[W],v[W],tx[W],tz[W];addmod(nw,a,x,z,n);submod(nw,b,y,w,n);mont(nw,u,a,b,n,ni);
     submod(nw,a,x,z,n);addmod(nw,b,y,w,n);mont(nw,v,a,b,n,ni);addmod(nw,tx,u,v,n);submod(nw,tz,u,v,n);halfmod(nw,tx,n);halfmod(nw,tz,n);
-    mont(nw,tx,tx,tx,n,ni);mont(nw,tz,tz,tz,n,ni);mont(nw,tx,tx,dz,n,ni);mont(nw,tz,tz,dx,n,ni);cp(nw,rx,tx);cp(nw,rz,tz);
+    mont(nw,tx,tx,tx,n,ni);mont(nw,tz,tz,tz,n,ni);// Saved and rebased ladder origins normally have Z=1. In Montgomery
+    // representation multiplying by R mod N leaves tx exactly unchanged.
+    if(!affine_difference)mont(nw,tx,tx,dz,n,ni);
+    mont(nw,tz,tz,dx,n,ni);cp(nw,rx,tx);cp(nw,rz,tz);
 }
 // Binary extended GCD: u == a*x (mod N), v == a*y (mod N).
 // Both operands are nonnegative; every shift/subtraction reduces u or v.
@@ -64,31 +67,37 @@ void store(int nw,__global word*r,const word*a){for(int i=0;i<nw;++i)r[i]=a[i];}
 // images; the caller converts only the coordinates it actually publishes.
 // Inline this small control wrapper, retaining the shared noinline SOS body.
 __attribute__((always_inline))
-void ladder_pair(int nw,word*ax,word*az,word*bx,word*bz,const word*x,const word*z,const word*a24,const word*n,word ni,const word*mone,word k){
+void ladder_pair(int nw,word*ax,word*az,word*bx,word*bz,const word*x,const word*z,const word*a24,const word*n,word ni,const word*mone,word k,int affine_difference){
     if(!k){cp(nw,ax,mone);zero(nw,az);cp(nw,bx,x);cp(nw,bz,z);return;}
     cp(nw,ax,x);cp(nw,az,z);dbl(nw,bx,bz,x,z,a24,n,ni);int top=63;while(!((k>>top)&1UL))--top;
-    for(int bit=top-1;bit>=0;--bit){if((k>>bit)&1UL){xadd(nw,ax,az,ax,az,bx,bz,x,z,n,ni);dbl(nw,bx,bz,bx,bz,a24,n,ni);}else{xadd(nw,bx,bz,ax,az,bx,bz,x,z,n,ni);dbl(nw,ax,az,ax,az,a24,n,ni);}}
+    for(int bit=top-1;bit>=0;--bit){if((k>>bit)&1UL){xadd(nw,ax,az,ax,az,bx,bz,x,z,n,ni,affine_difference);dbl(nw,bx,bz,bx,bz,a24,n,ni);}else{xadd(nw,bx,bz,ax,az,bx,bz,x,z,n,ni,affine_difference);dbl(nw,ax,az,ax,az,a24,n,ni);}}
 }
 __kernel void point_ladder(int nw,__global const word*c,word ni,__global const word*ks,word count,__global word*ox,__global word*oz){
     word id=get_global_id(0);if(id>=count)return;word n[W],mone[W],r2[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],plain[W];
     load(nw,n,c);load(nw,mone,c+nw);load(nw,r2,c+2*nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
-    mont(nw,x,x,r2,n,ni);mont(nw,z,z,r2,n,ni);mont(nw,a24,a24,r2,n,ni);word k=ks[id];
-    ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k);
+    const int affine_difference=one(nw,z); // Test the input before conversion.
+    mont(nw,x,x,r2,n,ni);
+    if(affine_difference)cp(nw,z,mone);else mont(nw,z,z,r2,n,ni);
+    mont(nw,a24,a24,r2,n,ni);word k=ks[id];
+    ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k,affine_difference);
     zero(nw,plain);plain[0]=1;mont(nw,ax,ax,plain,n,ni);mont(nw,az,az,plain,n,ni);store(nw,ox+id*nw,ax);store(nw,oz+id*nw,az);
 }
 __kernel void point_chain(int nw,__global const word*c,word ni,word first,word count,word segment,__global word*ox,__global word*oz){
     word lo=get_global_id(0)*segment;if(lo>=count)return;word hi=lo+min(segment,count-lo),k=first+lo;
     word n[W],mone[W],r2[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],tx[W],tz[W],plain[W];
     load(nw,n,c);load(nw,mone,c+nw);load(nw,r2,c+2*nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
-    mont(nw,x,x,r2,n,ni);mont(nw,z,z,r2,n,ni);mont(nw,a24,a24,r2,n,ni);zero(nw,plain);plain[0]=1;
-    ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k);
+    const int affine_difference=one(nw,z); // Test the input before conversion.
+    mont(nw,x,x,r2,n,ni);
+    if(affine_difference)cp(nw,z,mone);else mont(nw,z,z,r2,n,ni);
+    mont(nw,a24,a24,r2,n,ni);zero(nw,plain);plain[0]=1;
+    ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k,affine_difference);
     mont(nw,tx,ax,plain,n,ni);mont(nw,tz,az,plain,n,ni);store(nw,ox+lo*nw,tx);store(nw,oz+lo*nw,tz);
     if(lo+1<hi){mont(nw,tx,bx,plain,n,ni);mont(nw,tz,bz,plain,n,ni);store(nw,ox+(lo+1)*nw,tx);store(nw,oz+(lo+1)*nw,tz);}
     for(word j=lo+2;j<hi;++j){
         // [k+1]Q + Q has difference [k]Q, not Q. Starting at zero
         // needs a doubling because differential addition cannot double Q.
         if(k==0&&j==lo+2)dbl(nw,tx,tz,bx,bz,a24,n,ni);
-        else xadd(nw,tx,tz,bx,bz,x,z,ax,az,n,ni);
+        else xadd(nw,tx,tz,bx,bz,x,z,ax,az,n,ni,0); // The rolling difference is projective.
         cp(nw,ax,bx);cp(nw,az,bz);cp(nw,bx,tx);cp(nw,bz,tz);
         mont(nw,tx,bx,plain,n,ni);mont(nw,tz,bz,plain,n,ni);store(nw,ox+j*nw,tx);store(nw,oz+j*nw,tz);
     }
