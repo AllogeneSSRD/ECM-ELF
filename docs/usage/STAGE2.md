@@ -22,12 +22,13 @@ NVIDIA使用OpenCL点生成；AMD目标超过512 bits使用CPU点生成，继续
 |---|---|---|
 | `ECM_OPENCL_POINTS` | `device` | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
 | `ECM_OPENCL_POINT_AUTO` | `1` | `0\|1`；NVIDIA、513～16384 bits、无显式chunk/group覆盖时，根据真实点命令反馈规划批量与坐标窗口。0保留原批量；不自动切换CPU点 |
-| `ECM_OPENCL_WIDE_AUTO` | `1` | `0\|1`；扩展POINT_AUTO到NVIDIA、8193～16384 bits。先从16点尝试完整组，再渐进升档；0保留宽位原批量。显式chunk/group继续锁定计划 |
+| `ECM_OPENCL_WIDE_AUTO` | `1` | `0\|1`；扩展POINT_AUTO到NVIDIA、8193～16384 bits。一般从16点尝试完整组，再渐进升档；符合短标量条件时直接成批提交；0保留宽位原批量。显式chunk/group继续锁定计划 |
 | `ECM_OPENCL_POINT_GROUP` | NVIDIA=`32`，其他=`0` | `0`由运行时选择；正整数须≤设备与点kernel上限。每组点线程数 |
 | `ECM_OPENCL_POINT_CHUNK` | 按目标N位宽/厂商初始化 | `1..4096`；显式设置会锁定手动计划。未设置时，符合资格的自动计划可升档；独立于多项式batch |
 | `ECM_OPENCL_POINT_WINDOW` | 自动计划／`0` | `0..65536`；显式0锁定原G批，正值请求跨批窗口。未设置时由自动计划选择；不改变G树边界、NTT次数和逐G批GMP取样 |
 | `ECM_OPENCL_GIANT_BASE` | `1` | `0\|1`；复用[D]Q，把每点标量iD缩为i。0保留原完整标量对照 |
-| `ECM_OPENCL_GIANT_CHAIN` | `0` | `0\|1`；实验性连续巨步递推，要求设备点且GIANT_BASE=1。不替换baby算法；非单位分母触发从原Q重算。显式chunk仍限制单条链命令 |
+| `ECM_OPENCL_SHORT_POINT_BATCH` | `1` | `0\|1`；在已验证的 RTX 4060 Laptop 短标量范围自动合并 baby 提交并使用 giant 递推。设 0 恢复原分块；范围见 [OpenCL 架构](../architecture/OPENCL.md#点生成归一化与-gcd) |
+| `ECM_OPENCL_GIANT_CHAIN` | 未设置时按短标量计划 | `0\|1`；显式固定 giant 独立 ladder 或连续递推，优先于联合自动计划。递推要求设备点及 GIANT_BASE=1；非单位分母从原 Q 重算 |
 | `ECM_OPENCL_CACHE_PROGRAMS` | `1` | `0\|1`；同一context内按完整源代码/选项复用program。关闭后每次计划分别build |
 
 点chunk的初始化值按真实目标N的64-bit limb数w选择：NVIDIA在w≤8时1024、9≤w≤128时256、w>128时16；其他厂商依次为w≤8:1024、w≤32:256、w≤64:128、w≤128:64、其余16。自动模式从实际首条命令学习，不另做warmup。9～128 limbs的升档目标为compute units×32且不超过4096，目标不高于初始值时保留初始值；1秒是带15%裕量的升档门限，不是命令时长硬保证。129～256 limbs采用下述渐进策略，最多256点。两者保留当前owned-buffer余额检查；AMD宽位CPU回退不提交点kernel。

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from stage2_windows_job import WindowsJob
+from bench_opencl_cuda_stage2 import saved_target, matches_target
 
 if hasattr(sys, 'set_int_max_str_digits'):
     sys.set_int_max_str_digits(0)
@@ -44,7 +45,12 @@ def main():
                    help='Per-curve wall limit; drain this invocation and its descendants on failure')
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--telemetry-device', type=int, default=1)
+    p.add_argument('--allow-gpu-process', nargs=2, action='append', default=[], metavar=('PID','FULL_PATH'),
+                   help='Before each curve verify that only these exact external processes use the telemetry GPU')
     a = p.parse_args()
+    allowed = [dict(pid=int(pid), process_name=path) for pid, path in a.allow_gpu_process]
+    if any(not os.path.isabs(item['process_name']) for item in allowed):
+        p.error('Expected an absolute path for each allowed GPU process')
     exponents = list(map(int, a.exponents.split(',')))
     bounds = list(map(int, a.b2.split(',')))
     if (not exponents or not bounds or min(exponents + bounds) <= 0 or a.d <= 0 or a.arena_mb <= 0
@@ -61,7 +67,7 @@ def main():
                 'D': a.d, 'arena_mb': a.arena_mb, 'repeats': a.repeats, 'warmup': 0, 'device': a.device,
                 'timeout': a.timeout,
                 'matrix_plan': {'exponents': exponents, 'B2': bounds},
-                'gpu_settings_changed': False, 'inherited_ntt_environment': {
+                'gpu_settings_changed': False, 'allowed_processes': allowed, 'inherited_ntt_environment': {
                     k: v for k, v in os.environ.items() if k.startswith(('ECM_OPENCL_', 'NTT_'))}}
     for spec in specs:
         if not re.fullmatch(r'[A-Za-z0-9_-]+', spec['name']):
@@ -81,6 +87,9 @@ def main():
     manifest['opencl_devices'] = subprocess.check_output([specs[0]['exe'], '--list-devices'], text=True)
     (a.out / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+    if allowed:
+        from bench_stage2_version import Monitor, check_gpu_processes
+        monitor = Monitor(a.telemetry_device)
     with (a.out / 'gpu.csv').open('w', encoding='utf-8') as telemetry:
         poll = subprocess.Popen(['nvidia-smi', f'--id={a.telemetry_device}',
                                  '--query-gpu=timestamp,clocks.current.graphics,power.draw,utilization.gpu',
@@ -95,6 +104,7 @@ def main():
                 frozen.parent.mkdir(exist_ok=True)
                 shutil.copy2(saves[0], frozen)
                 bits = int(re.search(r'_n(\d+)_', frozen.name)[1])
+                target = saved_target(frozen)
                 for b2 in bounds:
                     for repeat in range(a.repeats):
                         order = specs if repeat % 2 == 0 else list(reversed(specs))
@@ -120,6 +130,8 @@ stage2_log_file="worker.log"
                             env = os.environ.copy()
                             env.update({k: str(v) for k, v in spec.get('environment', {}).items()})
                             (folder / 'command.json').write_text(json.dumps({'cmd': cmd, 'environment': spec.get('environment', {})}, indent=2), encoding='utf-8')
+                            if allowed:
+                                check_gpu_processes(monitor, a.out/'bin', folder/'gpu_processes.json', allowed=allowed)
                             start = time.perf_counter()
                             job = WindowsJob()
                             try:
@@ -146,6 +158,12 @@ stage2_log_file="worker.log"
                             shape = re.search(r'real_shape: D=(\d+) P=phi\(D\)/2=(\d+)', text)
                             if not full or not shape or int(shape[1]) != a.d or len(results) != 1 or results[0].get('factors', []):
                                 raise RuntimeError(f'Not a matching complete NF curve: {folder}')
+                            result = results[0]
+                            engine = result['stage2-engine']
+                            if (result['status'] != 'NF' or result['errors']['invariant'] or engine['bad_factors']
+                                    or int(result['b2']) != b2 or not matches_target(result,target)
+                                    or engine['name'] != 'opencl-ntt' or engine['carrier_exponent'] != 0):
+                                raise RuntimeError(f'Unexpected result or backend for {folder}')
                             if results[0]['source-build'].lower() != spec['sha256']:
                                 raise RuntimeError('Result binary identity mismatch')
                             row = {'variant': spec['name'], 'exponent': exponent, 'bits': bits, 'B2': b2,
@@ -169,6 +187,8 @@ stage2_log_file="worker.log"
         finally:
             poll.terminate()
             poll.wait()
+            if allowed:
+                monitor.close()
     (a.out / 'completed.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
 
 

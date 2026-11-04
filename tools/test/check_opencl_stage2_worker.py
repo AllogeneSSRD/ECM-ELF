@@ -208,6 +208,20 @@ def main():
     if wide_eligible:
         assert int(re.search(r'max_points=(\d+)',statistic(wide_log,'opencl_point_plan'))[1])>16
     case('invalid_wide_auto',line,expect=2,environment={'ECM_OPENCL_WIDE_AUTO':'2'})
+    case('short_scalar_plan',wide_line,b2=260000,d=2310)
+    compact=(a.out/'short_scalar_plan/worker.log').read_text(encoding='utf-8-sig')
+    eligible=('name=NVIDIA GeForce RTX 4060 Laptop GPU ' in compact and 'wide_ramp=1' in compact)
+    assert f'short_scalar_batch={int(eligible)}' in statistic(compact,'opencl_point_plan')
+    if eligible:
+        assert 'launches=2 ' in statistic(compact,'opencl_points')
+        assert 'points=114 ' in statistic(compact,'opencl_giant_chain')
+    case('short_scalar_manual',wide_line,b2=260000,d=2310,environment={'ECM_OPENCL_GIANT_CHAIN':'0'})
+    manual=(a.out/'short_scalar_manual/worker.log').read_text(encoding='utf-8-sig')
+    assert 'short_scalar_batch=0' in statistic(manual,'opencl_point_plan')
+    assert 'enabled=0' in statistic(manual,'opencl_giant_chain')
+    assert statistic(compact,'ntt_lengths')==statistic(manual,'ntt_lengths')
+    assert statistic(compact,'opencl_checks')==statistic(manual,'opencl_checks')
+    case('invalid_short_scalar_batch',line,expect=2,environment={'ECM_OPENCL_SHORT_POINT_BATCH':'2'})
     case('giant_chain_reference',adaptive_line,b2=2600000,d=2310,
         environment={'ECM_OPENCL_GIANT_CHAIN':'0'})
     case('giant_chain',adaptive_line,b2=2600000,d=2310,

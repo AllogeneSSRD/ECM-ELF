@@ -104,7 +104,9 @@ NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，
 
 `ECM_OPENCL_WIDE_AUTO=1`默认将反馈扩展到NVIDIA的129～256 limbs；设0保留宽位原批量。它从16点尝试完整32工作项组；完整组的单位点／bit成本若超过seed的1.10倍，则退回16点并停止探测。否则按32、64、128、256逐步增加，受CU×工作组及256点上限约束；后续每bit命令耗时超过前一合格档的1.35倍时，拒绝升档或减小已接受档，随后停止增长。尾批和预算裁剪不足请求点数的命令不训练。宽位策略是相对成本控制，没有1秒硬时限；手动chunk/group及CPU／厂商资格仍优先。
 
-`ECM_OPENCL_GIANT_CHAIN=1`可实验性地使用`Points::consecutive`，默认0。仅设备点且复用[D]Q时，对连续巨步标量分段：一次ladder保留相邻两点，段内按xADD递推；标量0种子使用特殊倍点，避免以无穷远差分求倍点。主机对每条命令的Z积求GCD；遇到非单位投影尺度时，从原Q及完整iD重算整条命令，再进入原来的取样、归一化和因子验证。原始链的非单位不直接作为因子发布。点窗口可跨G批，但原G边界、NTT工作、每G批取样和完整叶哨兵保持。
+RTX 4060 Laptop 的短标量计划按真实目标宽度和本条曲线的点数选择。条件为 W=129…160 个 64-bit limbs，32≤P≤256，D/2<2048，32≤giant 点数≤1152，且已启用设备点、宽位自动计划和 [D]Q 重标定。此时 baby 点直接成批做独立 ladder，giant 用相邻种子递推，两者仍按可用预算裁剪。显式指定 chunk、group、point window 或 giant chain 会让手动方案优先。设置 `ECM_OPENCL_SHORT_POINT_BATCH=0` 可单独关闭这项选择；日志 `opencl_point_plan.short_scalar_batch` 表示是否选中，`opencl_giant_chain` 的 launches 和 seed_pairs 记录实际递推工作。计时对照见[性能报告](../performance/OPENCL_STAGE2.md)。
+
+连续巨步使用 `Points::consecutive`，可由短标量计划选择，也可用 `ECM_OPENCL_GIANT_CHAIN=1` 单独开启。仅设备点且复用[D]Q时，对连续巨步标量分段：一次ladder保留相邻两点，段内按xADD递推；标量0种子使用特殊倍点，避免以无穷远差分求倍点。主机对每条命令的Z积求GCD；遇到非单位投影尺度时，从原Q及完整iD重算整条命令，再进入原来的取样、归一化和因子验证。原始链的非单位不直接作为因子发布。点窗口可跨G批，但原G边界、NTT工作、每G批取样和完整叶哨兵保持。
 
 递推提交容量最多4096点，参考CU×工作组×4并受owned余额约束；显式chunk优先。段长按提交点数与CU×工作组选2～32点；底层算子接受2～64，拒绝空区间和uint64越界。段数减少也会减少并行工作项，因此不能仅凭模乘数推断收益。`opencl_giant_chain`单列种子段数、恢复命令、GCD／重算成本、链事件及最长命令；这些计时嵌套于giant及点coordinates。宽位反馈不将链事件作为ladder样本。
 

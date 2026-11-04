@@ -20,6 +20,19 @@ if hasattr(sys,'set_int_max_str_digits'):
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
+def saved_target(path):
+    match=re.search(r'\bN=(0x[0-9A-Fa-f]+|[0-9]+)(?=[;\s]|$)', path.read_text(encoding='utf-8-sig'))
+    if not match:
+        raise ValueError(f'Missing modulus in {path}')
+    value=match[1]
+    return int(value,16 if value.startswith('0x') else 10)
+
+def matches_target(result,n):
+    if 'N' in result:
+        return int(result['N'])==n
+    # Full Mersenne targets use the compact exponent field in results.jsonl.
+    return result.get('exponent')==n.bit_length() and n==(1<<n.bit_length())-1
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--opencl-build',type=Path,required=True)
@@ -135,6 +148,7 @@ def main():
                         raise RuntimeError('Resume input changed: '+str(frozen))
                 else:
                     shutil.copy2(saves[0],frozen)
+                target=saved_target(frozen)
                 for b2 in bounds:
                     for repeat in range(a.repeats):
                         backends=['cuda','opencl'] if repeat%2==0 else ['opencl','cuda']
@@ -192,7 +206,7 @@ stage2_log_file="worker.log"
                             if (not full or not shape or int(shape[1])!=a.d or not actual_bits or int(actual_bits[1])!=bits
                                 or len(rows)!=1 or rows[0].get('factors',[]) or rows[0]['stage2-engine']['bad_factors']
                                 or rows[0].get('status')!='NF' or rows[0]['errors']['invariant']
-                                or int(rows[0]['N']).bit_length()!=bits or rows[0]['d']!=a.d or rows[0]['b2']!=b2
+                                or not matches_target(rows[0],target) or rows[0]['d']!=a.d or rows[0]['b2']!=b2
                                 or rows[0]['poly-size']!=int(shape[2])
                                 or rows[0]['stage2-engine']['carrier_exponent']!=carrier
                                 or rows[0]['source-build'].lower()!=manifest['binaries'][backend]['sha256'].lower()):

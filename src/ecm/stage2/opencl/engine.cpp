@@ -101,11 +101,11 @@ struct PointGenerator {
     Word base_prepares=0,base_bytes=0;double base_kernel_seconds=0;
     std::size_t chunk=0,group=0;
     cls::PointPlan plan{256,32,0,false};Word promoted_launches=0,max_command_points=0,budget_clamps=0;
-    bool chain_requested=false,chain_enabled=false;
+    bool chain_requested=false,chain_enabled=false,short_scalar_batch=false;
     Word chain_launches=0,chain_points=0,chain_seeds=0,chain_recoveries=0;
     double chain_recovery_seconds=0,chain_kernel_seconds=0,chain_max_seconds=0,giant_kernel_seconds=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
-    PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
+    PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a,const Shape&shape):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
         const auto&v=r.device().vendor;const bool amd=v.find("Advanced Micro Devices")!=v.npos||v=="AMD";
         const bool nvidia=v.find("NVIDIA")!=v.npos;
         const auto automatic=setting("ECM_OPENCL_POINT_AUTO",1);
@@ -132,7 +132,17 @@ struct PointGenerator {
         plan=cls::PointPlan(chunk,group,r.device().compute_units,adaptive,wide_ramp);
         const auto use=setting("ECM_OPENCL_GIANT_BASE",1);if(use>1)throw std::runtime_error("ECM_OPENCL_GIANT_BASE must be 0 or 1");use_giant_base=use!=0;
         const auto chain=setting("ECM_OPENCL_GIANT_CHAIN",0);if(chain>1)throw std::runtime_error("ECM_OPENCL_GIANT_CHAIN must be 0 or 1");
-        chain_requested=chain!=0;chain_enabled=chain_requested&&device&&use_giant_base;
+        const auto short_batch=setting("ECM_OPENCL_SHORT_POINT_BATCH",1);
+        if(short_batch>1)throw std::runtime_error("ECM_OPENCL_SHORT_POINT_BATCH must be 0 or 1");
+        // Qualify on actual point work, independent of polynomial carrier width.
+        // Outside these short-scalar command sizes keep the measured wide ramp.
+        short_scalar_batch=short_batch && plan.wide_ramp && w<=160 && use_giant_base &&
+            r.device().name=="NVIDIA GeForce RTX 4060 Laptop GPU" &&
+            shape.p>=32 && shape.p<=256 && shape.d/2<2048 &&
+            shape.giants>=32 && shape.giants<=1152 &&
+            !overridden("ECM_OPENCL_GIANT_CHAIN") && !overridden("ECM_OPENCL_POINT_WINDOW");
+        chain_requested=chain!=0;
+        chain_enabled=(chain_requested||short_scalar_batch)&&device&&use_giant_base;
     }
     Word chain_capacity()const {
         if(overridden("ECM_OPENCL_POINT_CHUNK"))return chunk; // Manual command bounds also govern chains.
@@ -163,7 +173,11 @@ struct PointGenerator {
             // kernels are slow; a whole production giant batch can otherwise
             // become a single multi-second command. This is separate from the
             // polynomial batch size and is not a calibrated watchdog guarantee.
-            for(std::size_t first=0;first<scalars.size();){const auto wanted=chained?std::size_t(chain_capacity()):plan.chunk(bits),remaining=scalars.size()-first;
+            // The qualified baby list fits in one command. Short-batch giants
+            // use adjacent seeds instead, avoiding one long independent ladder launch.
+            const bool batch_babies=short_scalar_batch && step==1;
+            for(std::size_t first=0;first<scalars.size();){const auto remaining=scalars.size()-first;
+                const auto wanted=chained?std::size_t(chain_capacity()):batch_babies?remaining:plan.chunk(bits);
                 const auto mem=runtime.memory();const auto available=(mem.budget_bytes-mem.live_bytes)/(8*(2*w+1));
                 const auto count=chained?std::min(remaining,std::max(std::min(chunk,remaining),std::min(wanted,std::size_t(available)))):plan.admit(wanted,remaining,std::size_t(available)),last=first+count;
                 budget_clamps+=count<std::min(wanted,remaining);
@@ -178,7 +192,7 @@ struct PointGenerator {
                 kernel_max_seconds=std::max(kernel_max_seconds,device->timing().kernel_seconds);
                 if(chained){++chain_launches;chain_points+=count;chain_seeds+=1+(count-1)/segment;
                     chain_kernel_seconds+=device->timing().kernel_seconds;chain_max_seconds=std::max(chain_max_seconds,device->timing().kernel_seconds);}
-                else{plan.observe(device->timing().kernel_seconds,scalar_bits(*std::max_element(slice.begin(),slice.end())),slice.size());
+                else{if(!batch_babies)plan.observe(device->timing().kernel_seconds,scalar_bits(*std::max_element(slice.begin(),slice.end())),slice.size());
                     promoted_launches+=slice.size()>chunk;max_command_points=std::max(max_command_points,Word(slice.size()));}
                 auto xx=import(device->download(points.x),w),zz=import(device->download(points.z),w);
                 download_bytes+=2*slice.size()*w*8;
@@ -247,7 +261,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         const auto cache=setting("ECM_OPENCL_CACHE_PROGRAMS",1);if(cache>1)throw std::runtime_error("ECM_OPENCL_CACHE_PROGRAMS must be 0 or 1");options.cache_programs=cache!=0;cln::Runtime runtime(options);
         cls::ArithmeticOptions arithmetic;Big modulus;mpz_set(modulus.v,m.N);arithmetic.product.modulus=flatten({modulus},m.W);arithmetic.product.mersenne=carrier!=0;
         cls::Arithmetic field(runtime,arithmetic);std::set<std::string> factors;Big a;if(a24){if(mpz_set_str(a.v,a24,16)||mpz_sgn(a.v)<0||mpz_cmp(a.v,m.target())>=0)throw std::runtime_error("invalid curve a24");}else a=curve_a24(sigma,m.target(),factors);
-        PointGenerator generator(runtime,m.target(),saved,a);double sentinel_seconds=0;
+        PointGenerator generator(runtime,m.target(),saved,a,s);double sentinel_seconds=0;
         // Real device multiply, independently checked with GMP before any result.
         const auto self=field.download(field.multiply(field.upload(flatten({Big(1),Big(2)},m.W),2),field.upload(flatten({Big(3),Big(1)},m.W),2)));
         auto check=import(self,m.W);for(std::size_t k=0;k<3;++k){Big v(k==0?3:k==1?7:2);mpz_mod(v.v,v.v,m.N);if(mpz_cmp(v.v,check[k].v))throw std::runtime_error("OpenCL polynomial startup selftest");}result.selftest_cases=1;result.checked+=self.size();
@@ -262,7 +276,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             stage2_log::print(stage2_log::phases,"opencl_point_base: prepares=%llu h2d_bytes=%llu kernel=%.6f (included in coordinates)\n",generator.base_prepares,generator.base_bytes,generator.base_kernel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_io: h2d_bytes=%llu d2h_bytes=%llu (kernel nested in coordinates; point timings nested in baby/giant)\n",generator.upload_bytes,generator.download_bytes);
             stage2_log::print(stage2_log::phases,"opencl_point_command: max_kernel_seconds=%.6f chunk=%llu group=%llu\n",generator.kernel_max_seconds,Word(generator.chunk),Word(generator.group));
-            stage2_log::print(stage2_log::phases,"opencl_point_plan: enabled=%d compute_units=%u seed_chunk=%llu ceiling=%llu samples=%llu promotions=%llu max_points=%llu budget_clamps=%llu target_seconds=%.3f seconds_per_bit=%.6f wide_ramp=%d ramp_stopped=%d growth_limit=%.3f ramp_accepted=%llu ramp_next=%llu seed_efficiency_limit=%.3f\n",int(generator.plan.enabled),runtime.device().compute_units,Word(generator.chunk),Word(generator.plan.ceiling),Word(generator.plan.samples),generator.promoted_launches,generator.max_command_points,generator.budget_clamps,generator.plan.wide_ramp?0.:cls::PointPlan::target_seconds,generator.plan.seconds_per_bit,int(generator.plan.wide_ramp),int(generator.plan.ramp_stopped),cls::PointPlan::growth_limit,Word(generator.plan.accepted),Word(generator.plan.proposed),cls::PointPlan::seed_efficiency_limit);
+            stage2_log::print(stage2_log::phases,"opencl_point_plan: enabled=%d compute_units=%u seed_chunk=%llu ceiling=%llu samples=%llu promotions=%llu max_points=%llu budget_clamps=%llu target_seconds=%.3f seconds_per_bit=%.6f wide_ramp=%d ramp_stopped=%d growth_limit=%.3f ramp_accepted=%llu ramp_next=%llu seed_efficiency_limit=%.3f short_scalar_batch=%d\n",int(generator.plan.enabled),runtime.device().compute_units,Word(generator.chunk),Word(generator.plan.ceiling),Word(generator.plan.samples),generator.promoted_launches,generator.max_command_points,generator.budget_clamps,generator.plan.wide_ramp?0.:cls::PointPlan::target_seconds,generator.plan.seconds_per_bit,int(generator.plan.wide_ramp),int(generator.plan.ramp_stopped),cls::PointPlan::growth_limit,Word(generator.plan.accepted),Word(generator.plan.proposed),cls::PointPlan::seed_efficiency_limit,int(generator.short_scalar_batch));
             stage2_log::print(stage2_log::phases,"opencl_giant_chain: requested=%d enabled=%d launches=%llu points=%llu seed_pairs=%llu recovery_commands=%llu guard_and_recovery_seconds=%.6f kernel=%.6f max_kernel_seconds=%.6f giant_kernel=%.6f\n",int(generator.chain_requested),int(generator.chain_enabled),generator.chain_launches,generator.chain_points,generator.chain_seeds,generator.chain_recoveries,generator.chain_recovery_seconds,generator.chain_kernel_seconds,generator.chain_max_seconds,generator.giant_kernel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_split: baby=%.6f ftree_inverse=%.6f giant=%.6f gtree_fold=%.6f\n",result.phases.seconds[2],result.phases.seconds[3],result.giant_seconds,result.gtrees_seconds);
             stage2_log::print(stage2_log::phases,"opencl_tail: leaf_oracle=%.6f descent=%.6f accum=%.6f\n",sentinel_seconds,result.descent_seconds,result.accum_seconds);
