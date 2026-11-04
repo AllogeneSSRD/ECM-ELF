@@ -86,6 +86,10 @@ Values normalize(const Values&x,const Values&z,mpz_srcptr n,std::set<std::string
 std::string resources(){std::vector<wchar_t> p(32768);auto n=GetModuleFileNameW(nullptr,p.data(),DWORD(p.size()));if(!n||n==p.size())throw std::runtime_error("executable path");return (std::filesystem::path(std::wstring(p.data(),n)).parent_path()/"opencl_resources/ntt").string();}
 Word budget(const cln::DeviceInfo&d){const auto kb=setting("NTT_ARENA_CAP_KB",0);if(kb>std::numeric_limits<Word>::max()/1024)throw std::runtime_error("arena budget overflow");return kb?kb*1024:std::min(Word(1024)<<20,d.global_bytes/2);}
 struct Shape {Word d=0,p=0,giants=0,chunk=0,bytes=0;double score=0;};
+bool wide_point_chains(const Shape& shape,size_t words) {
+    return words>=160 && words<=255 && shape.p>=144 && shape.p<=240 &&
+        shape.d/2<2048 && shape.giants>=716 && shape.giants<=1127;
+}
 cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_t w,size_t arithmetic_words,
                              unsigned carrier,Word arena) {
     cls::PointTrial trial;
@@ -103,8 +107,10 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
         if(overridden(key))return trial;
     // CPU performance is part of this policy: other hosts start from device points.
     const bool hybrid_default=qualified_device && host.find("Ryzen AI 9 HX 370")!=std::string::npos &&
-        short_shape && s.p>=144 && s.p<=240 && s.giants>=100 && s.giants<=114 && w>=31 && w<=255;
+        ((short_shape && s.p>=144 && s.p<=240 && s.giants>=100 && s.giants<=114 && w>=31 && w<=255) ||
+         wide_point_chains(s,w));
     if(hybrid_default)trial.plan="cpu";
+    if(overridden("ECM_OPENCL_CPU_CHAINS"))return trial;
     const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
     const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
     if(!path || !*path || !short_shape || (amd && w>8))return trial;
@@ -158,6 +164,8 @@ struct PointGenerator {
     cls::PointPlan plan{256,32,0,false};Word promoted_launches=0,max_command_points=0,budget_clamps=0;
     bool chain_requested=false,chain_enabled=false,short_scalar_batch=false;
     Word chain_launches=0,chain_points=0,chain_seeds=0,chain_recoveries=0;
+    bool cpu_chains=false;
+    Word cpu_chain_babies=0,cpu_chain_giants=0,cpu_chain_recoveries=0;
     double chain_recovery_seconds=0,chain_kernel_seconds=0,chain_max_seconds=0,giant_kernel_seconds=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
     PointGenerator(cln::Runtime&r,mpz_srcptr modulus,const Big&x,const Big&a,const Shape&shape,const std::string& point_plan):runtime(r),n(modulus),a24(a),base{x,Big(1)},w((mpz_sizeinbase(n,2)+63)/64){
@@ -198,12 +206,42 @@ struct PointGenerator {
             !overridden("ECM_OPENCL_GIANT_CHAIN") && !overridden("ECM_OPENCL_POINT_WINDOW");
         chain_requested=chain!=0 || point_plan=="chain";
         chain_enabled=(chain_requested||short_scalar_batch)&&device&&use_giant_base;
+        const auto cpu_chain=setting("ECM_OPENCL_CPU_CHAINS",wide_point_chains(shape,w));
+        if(cpu_chain>1)throw std::runtime_error("ECM_OPENCL_CPU_CHAINS must be 0 or 1");
+        cpu_chains=!device && cpu_chain;
     }
     Word chain_capacity()const {
         if(overridden("ECM_OPENCL_POINT_CHUNK"))return chunk; // Manual command bounds also govern chains.
         return std::max(Word(chunk),std::min(Word(4096),std::max(Word(1),Word(runtime.device().compute_units))*std::max(Word(1),Word(group))*4));
     }
     Big BigValue(){Big value;mpz_set(value.v,n);return value;}
+    // xADD needs the difference. For adjacent giants it is the previous
+    // multiple of [D]Q. Baby residues of an even D are all odd, so walking
+    // with [2]Q can skip storing non-coprime indices without another ladder.
+    void cpu_progression(const Point& origin,const std::vector<Word>& work,Word stride,Values& x,Values& z) {
+        Point delta=stride==1?origin:twice(origin,a24,n);
+        Point prev=ladder(origin,work.front(),a24,n);
+        Word at=work.front()+stride;
+        Point curr=ladder(origin,at,a24,n);
+        x.push_back(prev.x);z.push_back(prev.z);
+        for(size_t j=1;j<work.size();++j){
+            while(at<work[j]){
+                Point next=sum(curr,delta,prev,n);
+                prev=curr;curr=next;at+=stride;
+            }
+            x.push_back(curr.x);z.push_back(curr.z);
+        }
+    }
+    // A chain may introduce a nonunit projective scale. Only the original
+    // full-scalar ladders may supply a factor in this case.
+    bool restore_nonunit(Values& x,Values& z,const Word* scalars) {
+        Big product(1),g;
+        for(const auto& v:z)product=mul(product,v,n);
+        mpz_gcd(g.v,product.v,n);
+        if(mpz_cmp_ui(g.v,1)==0)return false;
+        for(size_t j=0;j<z.size();++j){auto p=ladder(base,scalars[j],a24,n);x[j]=p.x;z[j]=p.z;}
+        return true;
+    }
     Values generate(const std::vector<Word>&scalars,std::set<std::string>&f,Word&checked,Word step=1,std::size_t sample_span=0){
         if(scalars.empty())throw std::runtime_error("empty point generation");
         const Point* origin=&base;std::vector<Word> reduced;
@@ -256,15 +294,18 @@ struct PointGenerator {
                     // scale on a composite target. Never interpret that scale
                     // as a factor: recompute the entire affected command from
                     // the ORIGINAL Q and full iD before normalization/oracles.
-                    const auto recovery_begin=now();Big product(1),g;
-                    for(const auto&v:zz)product=mul(product,v,n);
-                    mpz_gcd(g.v,product.v,n);
-                    if(mpz_cmp_ui(g.v,1)){++chain_recoveries;for(std::size_t j=0;j<count;++j){auto p=ladder(base,scalars[first+j],a24,n);xx[j]=p.x;zz[j]=p.z;}}
+                    const auto recovery_begin=now();
+                    chain_recoveries+=restore_nonunit(xx,zz,scalars.data()+first);
                     chain_recovery_seconds+=now()-recovery_begin;
                 }
                 x.insert(x.end(),xx.begin(),xx.end());z.insert(z.end(),zz.begin(),zz.end());
                 first=last;
             }
+        }else if(cpu_chains && work.size()>1 && (step==1 || !reduced.empty())){
+            x.reserve(work.size());z.reserve(work.size());
+            cpu_progression(*origin,work,step==1?2:1,x,z);
+            cpu_chain_recoveries+=restore_nonunit(x,z,scalars.data());
+            (step==1?cpu_chain_babies:cpu_chain_giants)+=work.size();
         }else{for(auto scalar:work){auto p=ladder(*origin,scalar,a24,n);x.push_back(p.x);z.push_back(p.z);}}
         coordinate_seconds+=now()-begin;
         // Always compare rebased points with the original [iD]Q ladder,
@@ -330,6 +371,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             const auto mem=runtime.memory();stage2_log::print(stage2_log::curve,"stage2_full_wall: curve=1 shape=%.6f init=%.6f main=%.6f total=%.6f backend=opencl-ntt (planning/JIT/selftest included; Stage1 excluded)\n",result.phases.seconds[0],result.init_seconds,result.main_seconds,result.total_seconds);
             stage2_log::print(stage2_log::phases,"opencl_payload: live_bytes=%llu peak_bytes=%llu budget_bytes=%llu scope=owned_buffers\n",mem.live_bytes,mem.peak_bytes,mem.budget_bytes);
             stage2_log::print(stage2_log::phases,"opencl_points: points=%llu launches=%llu coordinates=%.6f kernel=%.6f sample_checks=%.6f normalize=%.6f seed=%.6f\n",generator.points,generator.launches,generator.coordinate_seconds,generator.kernel_seconds,generator.check_seconds,generator.normalize_seconds,generator.seed_seconds);
+            if(generator.cpu_chains)stage2_log::print(stage2_log::phases,"opencl_cpu_chain: baby_points=%llu giant_points=%llu recovery_windows=%llu\n",generator.cpu_chain_babies,generator.cpu_chain_giants,generator.cpu_chain_recoveries);
             stage2_log::print(stage2_log::phases,"opencl_point_base: prepares=%llu h2d_bytes=%llu kernel=%.6f (included in coordinates)\n",generator.base_prepares,generator.base_bytes,generator.base_kernel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_io: h2d_bytes=%llu d2h_bytes=%llu (kernel nested in coordinates; point timings nested in baby/giant)\n",generator.upload_bytes,generator.download_bytes);
             stage2_log::print(stage2_log::phases,"opencl_point_command: max_kernel_seconds=%.6f chunk=%llu group=%llu\n",generator.kernel_max_seconds,Word(generator.chunk),Word(generator.group));

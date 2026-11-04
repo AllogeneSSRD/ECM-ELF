@@ -251,6 +251,16 @@ def main():
     recovery_log=(a.out/'giant_chain_nonunit_recovery/worker.log').read_text(encoding='utf-8-sig')
     if 'point_backend=opencl' in recovery_log:
         assert int(re.search(r'recovery_commands=(\d+)',statistic(recovery_log,'opencl_giant_chain'))[1])>0
+    cpu_chains={'ECM_OPENCL_POINTS':'cpu','ECM_OPENCL_CPU_CHAINS':'1'}
+    case('cpu_chains',line,b2=960,environment={**cpu_chains,'ECM_OPENCL_POINT_WINDOW':'18'})
+    cpu_log=(a.out/'cpu_chains/worker.log').read_text(encoding='utf-8-sig')
+    assert 'baby_points=4 giant_points=34' in statistic(cpu_log,'opencl_cpu_chain')
+    assert statistic(reference,'ntt_lengths')==statistic(cpu_log,'ntt_lengths')
+    assert statistic(reference,'opencl_checks')==statistic(cpu_log,'opencl_checks')
+    rows,_=case('cpu_chain_nonunit',save_line(257000771,6),b2=2000,environment=cpu_chains)
+    assert rows[0].get('factors')==['257']
+    recovery=(a.out/'cpu_chain_nonunit/worker.log').read_text(encoding='utf-8-sig')
+    assert int(re.search(r'recovery_windows=(\d+)',statistic(recovery,'opencl_cpu_chain'))[1])>0
     lifted,_=case('mersenne',line,extra=['--carrier-exponent',127])
     assert ordinary[0].get('factors',[])==lifted[0].get('factors',[])==[]
     target=((1<<41)-1)//13367
