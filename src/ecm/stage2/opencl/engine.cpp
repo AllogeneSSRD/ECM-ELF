@@ -98,6 +98,7 @@ struct PointGenerator {
     cln::Runtime &runtime;mpz_srcptr n;Big a24;Point base;std::size_t w;std::unique_ptr<cls::Points> device;
     double kernel_seconds=0,kernel_max_seconds=0,coordinate_seconds=0,check_seconds=0,normalize_seconds=0,seed_seconds=0;
     Word launches=0,points=0,upload_bytes=0,download_bytes=0;
+    Word base_prepares=0,base_bytes=0;double base_kernel_seconds=0;
     std::size_t chunk=0,group=0;
     cls::PointPlan plan{256,32,0,false};Word promoted_launches=0,max_command_points=0,budget_clamps=0;
     bool chain_requested=false,chain_enabled=false;
@@ -170,6 +171,8 @@ struct PointGenerator {
                 const auto lanes=std::max(Word(1),Word(runtime.device().compute_units))*std::max(Word(1),Word(group));
                 const auto segment=std::size_t(std::clamp((Word(count)+lanes-1)/lanes,Word(2),Word(32)));
                 auto points=chained?device->consecutive(flatten({origin->x},w),flatten({origin->z},w),flatten({a24},w),slice.front(),count,segment):device->ladder(flatten({origin->x},w),flatten({origin->z},w),flatten({a24},w),slice);
+                if(device->timing().base_upload_bytes){++base_prepares;base_bytes+=device->timing().base_upload_bytes;}
+                base_kernel_seconds+=device->timing().prepare_seconds;
                 kernel_seconds+=device->timing().kernel_seconds;upload_bytes+=device->timing().upload_bytes;++launches;
                 if(step>1)giant_kernel_seconds+=device->timing().kernel_seconds;
                 kernel_max_seconds=std::max(kernel_max_seconds,device->timing().kernel_seconds);
@@ -256,6 +259,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             const auto mem=runtime.memory();stage2_log::print(stage2_log::curve,"stage2_full_wall: curve=1 shape=%.6f init=%.6f main=%.6f total=%.6f backend=opencl-ntt (planning/JIT/selftest included; Stage1 excluded)\n",result.phases.seconds[0],result.init_seconds,result.main_seconds,result.total_seconds);
             stage2_log::print(stage2_log::phases,"opencl_payload: live_bytes=%llu peak_bytes=%llu budget_bytes=%llu scope=owned_buffers\n",mem.live_bytes,mem.peak_bytes,mem.budget_bytes);
             stage2_log::print(stage2_log::phases,"opencl_points: points=%llu launches=%llu coordinates=%.6f kernel=%.6f sample_checks=%.6f normalize=%.6f seed=%.6f\n",generator.points,generator.launches,generator.coordinate_seconds,generator.kernel_seconds,generator.check_seconds,generator.normalize_seconds,generator.seed_seconds);
+            stage2_log::print(stage2_log::phases,"opencl_point_base: prepares=%llu h2d_bytes=%llu kernel=%.6f (included in coordinates)\n",generator.base_prepares,generator.base_bytes,generator.base_kernel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_io: h2d_bytes=%llu d2h_bytes=%llu (kernel nested in coordinates; point timings nested in baby/giant)\n",generator.upload_bytes,generator.download_bytes);
             stage2_log::print(stage2_log::phases,"opencl_point_command: max_kernel_seconds=%.6f chunk=%llu group=%llu\n",generator.kernel_max_seconds,Word(generator.chunk),Word(generator.group));
             stage2_log::print(stage2_log::phases,"opencl_point_plan: enabled=%d compute_units=%u seed_chunk=%llu ceiling=%llu samples=%llu promotions=%llu max_points=%llu budget_clamps=%llu target_seconds=%.3f seconds_per_bit=%.6f wide_ramp=%d ramp_stopped=%d growth_limit=%.3f ramp_accepted=%llu ramp_next=%llu seed_efficiency_limit=%.3f\n",int(generator.plan.enabled),runtime.device().compute_units,Word(generator.chunk),Word(generator.plan.ceiling),Word(generator.plan.samples),generator.promoted_launches,generator.max_command_points,generator.budget_clamps,generator.plan.wide_ramp?0.:cls::PointPlan::target_seconds,generator.plan.seconds_per_bit,int(generator.plan.wide_ramp),int(generator.plan.ramp_stopped),cls::PointPlan::growth_limit,Word(generator.plan.accepted),Word(generator.plan.proposed),cls::PointPlan::seed_efficiency_limit);

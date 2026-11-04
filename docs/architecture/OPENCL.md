@@ -63,7 +63,9 @@ F/G 树均按实际子树长度分组，同一组中的独立节点一起乘法�
 
 [Points](../../src/ecm/stage2/opencl/points.h) 是独立于多项式树的设备算子；其 [实现](../../src/ecm/stage2/opencl/points.cpp) 和 [内核](../../src/ecm/opencl/resources/stage2/points.cl) 不依赖 GMP。接受最短小端 limb 表示的奇数目标模数 N≥3，容量上限为 16384 bits；每个 Runtime 由一个主机线程提交。容量不等于全部组合已验收：AMD 当前在构造时拒绝超过 512 位的点算术，包括梅森模数；Intel 未实机验收。该资格门禁只作用于 Points，不限制单独验证的 OpenCL NTT/S4。各方法等待本次 kernel 完成，归一化和 GCD 另排空逐段／逐项 verdict。结果保留设备所有权，跨方法不必下载点或叶子。
 
-点生成对每个无符号 64 位标量独立执行 Montgomery ladder。xDBL 使用 5 次模乘，xADD 使用 CUDA 的 6 次模乘公式及半和／半差，使输出投影缩放也与 CUDA XADD6 一致。SOS 乘法采用完整乘积及 Montgomery 消去；私有容量固定、循环采用运行时 limb 数，限制首次 JIT 的展开。Points算子没有专用梅森快速归约或差分giant chain；生产引擎的GMP基点复用见下文。普通表示的输入 X/Z/a24 在设备转换；输出是规范普通表示的 X/Z，k=0 返回无穷远点 (1:0)。同一 Runtime 下的点坐标／叶子标量视图支持 offset 和 stride，不能把不同模数的普通剩余类直接当作同一模数的输入。
+默认对每个无符号 64 位标量执行 Montgomery ladder。xDBL 用 5 次模乘，xADD 采用与 CUDA 相同的半和／半差公式：一般差分点用 6 次，固定差分点 Z=1 时用 5 次，投影缩放相同。显式连续巨步模式复用相邻种子，递推中的变化差分点使用完整公式。点乘在真实目标模数上执行 SOS 完整乘积和 Montgomery 消去。输出为规范普通表示的 X/Z，k=0 返回无穷远点 (1:0)。同一 Runtime 下的点坐标／叶子视图支持 offset 和 stride。
+
+每个 Points 实例保存一个基点。主机按全部 limbs 比较普通表示的 (X,Z,A24)，改变时上传三个值，用一次设备命令将它们原地转成 Montgomery 表示。同一基点跨分块、ladder 和 chain 复用。通常 baby 用 Q，giant 用归一化后的 [D]Q，因此一条完整曲线只准备两次。令 W 为真实模数的 64-bit limb 数，每次准备上传 24W bytes、执行三次 Montgomery 乘法；缓存复用时这两项均为零。复用现有设备常量区，主机保留 24W bytes 的有效键数据。日志 `opencl_point_base` 单列准备次数、基点上传量和设备准备耗时，其字节数已计入 `opencl_point_io`，时间包含在坐标生成阶段。[设备接口](../../src/ecm/stage2/opencl/points.cpp) · [设备内核](../../src/ecm/opencl/resources/stage2/points.cl)
 
 归一化按段计算 Z 的前缀积，每段一次二进制扩展 GCD 求逆，再反向求各 Z 的逆。段积不可逆时逐点重算，以保留不同 Z 上的互补因子。结果同时返回 affine X 和 gcd(Z,N)：单位点的 GCD 为 1；非单位点的 X 占位为 0，调用者必须先处理对应 GCD，不能直接把占位点用于有效曲线。迭代边界或设备错误使整个调用失败；N 本身不是严格因子，也不能作为命中发布。
 

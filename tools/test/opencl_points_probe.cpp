@@ -119,6 +119,26 @@ void check_points(ntt::Runtime&r,const ref::Big&n,const std::vector<Word>&ks){co
         ref::Poly want;for(const auto&x:pair.second)want.push_back(ref::gcd(x,n));same(p.download(p.gcd(pair.first)),ref::flatten(want,nw),"gcd");
         for(std::size_t block:{1u,2u,64u})same(p.download(p.products(pair.first,block)),ref::flatten(cpu_products(pair.second,n,block),nw),"products");}
     rejects([&]{p.normalize(projective,0);});rejects([&]{p.products(v,0);});rejects([&]{p.upload(flat(n,nw));});
+    if(mpz_sizeinbase(n.v,2)==127){
+        // Data is already cached by the ladder above. Exercise each part of the
+        // key independently, including a projective Z whose low limb is one.
+        auto check_base=[&](bool changed){
+            auto q=p.ladder(flat(base.x,nw),flat(base.z,nw),flat(a24,nw),{17});
+            if(p.timing().base_upload_bytes!=(changed?3*nw*sizeof(Word):0))
+                throw std::runtime_error("point base cache upload mismatch");
+            auto affine=p.normalize(q);
+            auto expected=ref::ladder(base,ref::Big(17),a24,n);
+            same(p.download(affine.gcd),flat(ref::Big(1),nw),"rebound point gcd");
+            same(p.download(affine.x),flat(ref::mul(expected.x,ref::invert(expected.z,n),n),nw),"rebound affine point");
+        };
+        check_base(false);
+        mpz_add_ui(base.x.v,base.x.v,1);check_base(true);
+        mpz_set_ui(base.z.v,1);check_base(true);
+        mpz_setbit(base.z.v,64);check_base(true);
+        mpz_add_ui(a24.v,a24.v,1);check_base(true);
+        rejects([&]{p.ladder(flat(n,nw),flat(base.z,nw),flat(a24,nw),{17});});
+        check_base(false);
+    }
     std::cout<<"opencl_points_verified: bits="<<mpz_sizeinbase(n.v,2)<<" scalars="<<ks.size()<<" bad=0\n";
 }
 void recovery(ntt::Runtime&r){ref::Big n(257*263);cl2::Points p(r,flat(n,1));ref::Poly xs(5,ref::Big(1)),zs{ref::Big(257),ref::Big(263),ref::Big(0),ref::Big(2),ref::Big(1)};

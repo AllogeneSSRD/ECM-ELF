@@ -164,6 +164,10 @@ def main():
         return next(s for s in text.splitlines() if s.startswith(prefix+':'))
     assert statistic(reference,'ntt_lengths')==statistic(window,'ntt_lengths')
     assert statistic(reference,'opencl_checks')==statistic(window,'opencl_checks')
+    for log in (reference, window):
+        # 127-bit fixture: two limbs per value, three values per origin.
+        prepares = (2 if 'giant_base=1' in log else 1) if 'point_backend=opencl' in log else 0
+        assert f'prepares={prepares} h2d_bytes={48*prepares} ' in statistic(log, 'opencl_point_base')
     assert 'requested=18 effective=16' in window
     case('point_window_budget_cap',line,b2=960,
         environment={'ECM_OPENCL_POINT_WINDOW':'65536','ECM_OPENCL_POINT_CHUNK':'7','NTT_S4_BATCH_MB':'1'})

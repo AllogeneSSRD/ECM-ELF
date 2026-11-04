@@ -72,24 +72,26 @@ void ladder_pair(int nw,word*ax,word*az,word*bx,word*bz,const word*x,const word*
     cp(nw,ax,x);cp(nw,az,z);dbl(nw,bx,bz,x,z,a24,n,ni);int top=63;while(!((k>>top)&1UL))--top;
     for(int bit=top-1;bit>=0;--bit){if((k>>bit)&1UL){xadd(nw,ax,az,ax,az,bx,bz,x,z,n,ni,affine_difference);dbl(nw,bx,bz,bx,bz,a24,n,ni);}else{xadd(nw,bx,bz,ax,az,bx,bz,x,z,n,ni,affine_difference);dbl(nw,ax,az,ax,az,a24,n,ni);}}
 }
-__kernel void point_ladder(int nw,__global const word*c,word ni,__global const word*ks,word count,__global word*ox,__global word*oz){
-    word id=get_global_id(0);if(id>=count)return;word n[W],mone[W],r2[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],plain[W];
-    load(nw,n,c);load(nw,mone,c+nw);load(nw,r2,c+2*nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
-    const int affine_difference=one(nw,z); // Test the input before conversion.
-    mont(nw,x,x,r2,n,ni);
-    if(affine_difference)cp(nw,z,mone);else mont(nw,z,z,r2,n,ni);
-    mont(nw,a24,a24,r2,n,ni);word k=ks[id];
+// The three base constants stay in Montgomery form until the host changes
+// (X,Z,A24). Each work-item owns one disjoint slot in the existing buffer.
+__kernel void point_prepare_base(int nw,__global word*c,word ni){
+    const size_t slot=get_global_id(0);
+    word n[W],v[W],r2[W];
+    load(nw,n,c);load(nw,r2,c+2*nw);load(nw,v,c+(3+slot)*nw);
+    mont(nw,v,v,r2,n,ni);store(nw,c+(3+slot)*nw,v);
+}
+__kernel void point_ladder_prepared(int nw,__global const word*c,word ni,__global const word*ks,word count,__global word*ox,__global word*oz,int affine_difference){
+    word id=get_global_id(0);if(id>=count)return;word n[W],mone[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],plain[W];
+    load(nw,n,c);load(nw,mone,c+nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
+    word k=ks[id];
     ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k,affine_difference);
     zero(nw,plain);plain[0]=1;mont(nw,ax,ax,plain,n,ni);mont(nw,az,az,plain,n,ni);store(nw,ox+id*nw,ax);store(nw,oz+id*nw,az);
 }
-__kernel void point_chain(int nw,__global const word*c,word ni,word first,word count,word segment,__global word*ox,__global word*oz){
+__kernel void point_chain_prepared(int nw,__global const word*c,word ni,word first,word count,word segment,__global word*ox,__global word*oz,int affine_difference){
     word lo=get_global_id(0)*segment;if(lo>=count)return;word hi=lo+min(segment,count-lo),k=first+lo;
-    word n[W],mone[W],r2[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],tx[W],tz[W],plain[W];
-    load(nw,n,c);load(nw,mone,c+nw);load(nw,r2,c+2*nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
-    const int affine_difference=one(nw,z); // Test the input before conversion.
-    mont(nw,x,x,r2,n,ni);
-    if(affine_difference)cp(nw,z,mone);else mont(nw,z,z,r2,n,ni);
-    mont(nw,a24,a24,r2,n,ni);zero(nw,plain);plain[0]=1;
+    word n[W],mone[W],x[W],z[W],a24[W],ax[W],az[W],bx[W],bz[W],tx[W],tz[W],plain[W];
+    load(nw,n,c);load(nw,mone,c+nw);load(nw,x,c+3*nw);load(nw,z,c+4*nw);load(nw,a24,c+5*nw);
+    zero(nw,plain);plain[0]=1;
     ladder_pair(nw,ax,az,bx,bz,x,z,a24,n,ni,mone,k,affine_difference);
     mont(nw,tx,ax,plain,n,ni);mont(nw,tz,az,plain,n,ni);store(nw,ox+lo*nw,tx);store(nw,oz+lo*nw,tz);
     if(lo+1<hi){mont(nw,tx,bx,plain,n,ni);mont(nw,tz,bz,plain,n,ni);store(nw,ox+(lo+1)*nw,tx);store(nw,oz+(lo+1)*nw,tz);}

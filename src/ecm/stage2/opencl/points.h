@@ -6,7 +6,7 @@ struct ProjectivePoints { Polynomial x,z; }; // Ordinary canonical residues.
 struct AffinePoints {
     Polynomial x,gcd; // x=0 for nonunits; gcd(Z,N) identifies each such point.
 };
-struct PointTiming { double kernel_seconds=0; Word upload_bytes=0,download_bytes=0; };
+struct PointTiming { double kernel_seconds=0,prepare_seconds=0; Word upload_bytes=0,download_bytes=0,base_upload_bytes=0; };
 struct PointState;
 // Experimental, synchronous device operators. One host thread and one Runtime.
 // The odd target modulus is independent of a possible polynomial carrier: first

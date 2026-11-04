@@ -145,7 +145,12 @@ def main():
     report = {'device': cl.name, 'vendor': cl.vendor, 'driver': cl.driver, 'bits': n.bit_length(), 'count': a.count,
               'scalar_bits': a.scalar_bits, 'group': a.group, 'repeats': a.repeats,
               'save_sha256': hashlib.sha256(a.save.read_bytes()).hexdigest(), 'wait': a.wait, 'rows': []}
-    constants = cl.buffer(words(n) + words(r) + words(r * r % n) + words(x) + words(1) + words(a24))
+    original = a.source.read_text(encoding='utf-8')
+    # Frozen pre-0.58.2 sources take ordinary inputs. The current operator
+    # measures a ladder on a resident Montgomery base, excluding preparation.
+    prepared = '__kernel void point_ladder_prepared(' in original
+    base = (x * r % n, r, a24 * r % n) if prepared else (x, 1, a24)
+    constants = cl.buffer(words(n) + words(r) + words(r * r % n) + [w for v in base for w in words(v)])
     ks = cl.buffer(scalars); ox = cl.buffer(a.count * nw); oz = cl.buffer(a.count * nw)
     baseline = None
     def verify(xx, zz):
@@ -155,7 +160,6 @@ def main():
             if (px * rz - pz * rx) % n or math.gcd(pz, n) != math.gcd(rz, n) or (px == pz == 0 and (rx or rz)):
                 raise RuntimeError(f'Projective/GCD oracle mismatch at {i}')
     try:
-        original = a.source.read_text(encoding='utf-8')
         for variant in a.variants.split(','):
             if variant not in ('baseline', 'inline', 'unroll2', 'unroll4', 'inline2'):
                 raise ValueError('Unknown variant')
@@ -182,7 +186,8 @@ def main():
                 log = ct.create_string_buffer(size.value); cl.cl.clGetProgramBuildInfo(program, cl.device, 0x1183, size, log, None)
                 (a.out / (variant + '.build.log')).write_bytes(log.value)
                 check(code, 'build')
-                kernel = cl.cl.clCreateKernel(program, b'point_ladder', ct.byref(error)); check(error.value, 'kernel')
+                name = b'point_ladder_prepared' if prepared else b'point_ladder'
+                kernel = cl.cl.clCreateKernel(program, name, ct.byref(error)); check(error.value, 'kernel')
                 resources = {}
                 for key, name in [(0x11b0, 'max_group'), (0x11b2, 'local_bytes'), (0x11b3, 'preferred_group_multiple'), (0x11b4, 'private_bytes')]:
                     value = U64(); check(cl.cl.clGetKernelWorkGroupInfo(kernel, cl.device, key, 8, ct.byref(value), None), name); resources[name] = value.value
@@ -199,6 +204,8 @@ def main():
                 resources.update(binary_bytes=len(binary), ptx_local_declarations=re.findall(r'(?m)^\s*\.local[^;]*;', decoded),
                                  ptx_ld_local=len(re.findall(r'ld\.local', decoded)), ptx_st_local=len(re.findall(r'st\.local', decoded)))
                 args = [ct.c_int(nw), HANDLE(constants), U64(ninv), HANDLE(ks), U64(a.count), HANDLE(ox), HANDLE(oz)]
+                if prepared:
+                    args.append(ct.c_int(1))  # The probe uses normalized Z=1.
                 for i, value in enumerate(args):
                     check(cl.cl.clSetKernelArg(kernel, i, ct.sizeof(value), ct.byref(value)), 'argument')
                 samples = []
