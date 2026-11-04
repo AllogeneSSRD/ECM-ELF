@@ -538,6 +538,18 @@ Initial curve sigma. 0 chooses a random value; consecutive curves use sigma+i wi
 
 曲线起始 sigma；0 表示随机生成，连续曲线使用 sigma+i 且不得在 64 位处回绕。CUDA PARAM0 接受完整 64 位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是 Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。
 
+### stage1_backend
+
+```toml
+stage1_backend = "auto"
+```
+
+Type / 类型: `string`; range / 范围: `[auto|cuda|opencl]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device indices belong to the selected backend. Override with --gpu-backend.
+
+Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
+
 ### stage1_results_file
 
 ```toml
@@ -815,6 +827,18 @@ Writing this key explicitly can override implicit worker suffixes, paths or envi
 Baby point arithmetic: auto retains the scalar baseline until checked runtime comparisons qualify coop32; scalar forces one thread per point; coop32 requests 32 cooperating CUDA threads for arithmetic widths 8193..16384 bits. Unsupported widths or device-baby fallback use scalar. Runtime tuning compares one backend alternative at fixed D/layout/chain before expanding D. CLI --baby-backend overrides this worker key; an omitted key preserves an explicit NTT_BABY_COOP override. OpenCL accepts auto/scalar only.
 
 Baby点算术：auto在有效运行时对照达到最少重复数前保留标量基线；scalar强制每点一线程；coop32请求在实际算术8193..16384 bits使用32线程协作。不支持的位宽或设备baby预算回退仍用标量。运行时先固定D/布局/链长比较一个后端候选，再继续D搜索。CLI --baby-backend覆盖当前worker配置；省略此键时保留显式NTT_BABY_COOP。OpenCL仅支持auto/scalar。
+
+### stage2_backend
+
+```toml
+stage2_backend = "auto"
+```
+
+Type / 类型: `string`; range / 范围: `[auto|cuda|opencl]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device indices belong to the selected backend. Override with --gpu-backend.
+
+Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
 ### stage2_batch_mb
 

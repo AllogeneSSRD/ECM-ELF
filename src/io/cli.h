@@ -35,7 +35,7 @@ struct ParsedCli {
     bool show_kernels = false;
     bool show_gpu_info = false; // --gpu-info: report tiers/occupancy and exit
     uint32_t gpu_info_bits = 0; // --bits N: only the tier that N would pick (0 = all)
-    std::string ini_path;
+    std::string ini_path, gpu_backend;
     int worker_index = 1;        // --worker N: ini + worktodo section (see the flag's parse site)
     std::string tmp_dir;         // 本地 stage-1 落盘目录
     std::string p95_dir_ignored; // 兼容旧脚本: 现在由 ecm_p95feeder 处理

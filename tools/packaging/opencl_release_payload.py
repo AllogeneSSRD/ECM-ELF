@@ -72,7 +72,7 @@ def freeze(build,snapshot):
     expected={p.relative_to(resources).as_posix():sha(p) for p in resources.rglob('*') if p.is_file()}
     actual={p.relative_to(build/'opencl_resources').as_posix():sha(p) for p in (build/'opencl_resources').rglob('*') if p.is_file()}
     if not expected or actual!=expected:raise ValueError('OpenCL resource deployment differs from source')
-    payload={name:sha(build/name) for name in ('ecm.exe',*RUNTIMES)}
+    payload={name:sha(build/name) for name in ('ecm.exe','ecm_opencl_stage2.exe',*RUNTIMES)}
     payload.update({'opencl_resources/'+name:value for name,value in actual.items()})
     license=build/'licenses/OpenSSL.txt';license.parent.mkdir(exist_ok=True)
     shutil.copy2(Path(fields['openssl_root'])/'share/openssl/copyright',license)
@@ -95,7 +95,7 @@ def verify(build,gmp):
     if not identity.get('compiler_inputs_sha256') or identity['compiler_inputs_sha256']!=compiler_inputs(build):raise ValueError('OpenCL compiler dependency/object identity changed')
     if Path(profile['fields']['gmp_root']).resolve()!=Path(gmp).resolve():raise ValueError('OpenCL GMP prefix differs from release')
     files=identity['files_sha256']
-    if not {'ecm.exe',*RUNTIMES}<=files.keys() or not identity['resources']:raise ValueError('Incomplete OpenCL payload')
+    if not {'ecm.exe','ecm_opencl_stage2.exe',*RUNTIMES}<=files.keys() or not identity['resources']:raise ValueError('Incomplete OpenCL payload')
     resource_root=ROOT/'src/ecm/opencl/resources'
     resources={p.relative_to(resource_root).as_posix():sha(p) for p in resource_root.rglob('*') if p.is_file()}
     if identity['resources']!=resources or {name[17:]:digest for name,digest in files.items() if name.startswith('opencl_resources/')}!=resources:raise ValueError('Incomplete OpenCL resource membership')

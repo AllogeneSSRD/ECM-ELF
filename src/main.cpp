@@ -1,3 +1,4 @@
+#include "ecm/platform/gpu_worker.h"
 #include "ecm/application/cli/group_order.h"
 #include "ecm/io/save.h"
 #include "ecm/platform/log_file.h"
@@ -904,6 +905,14 @@ int main(int argc, char** argv) {
     if (!ecm_stage1_app::normalize_settings(parsed, input, paths, settings, error)) {
         std::cerr << error << "\n";
         return 1;
+    }
+    if (settings.options.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
+        try {
+            const auto routed = ecm_gpu::route(exe, false, ECM_HAS_CUDA_STAGE1 != 0,
+                input.gpu_backend.empty() ? settings.config.gpu_backend : input.gpu_backend,
+                settings.options.execution.device_index);
+            if (routed) return *routed;
+        } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     }
     ecm_runtime_config() = settings.runtime;
     ecm_install_timestamped_iostreams();

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build the desktop OpenCL Stage1 worker in an isolated local profile.
+    Build the desktop OpenCL Stage1 and Stage2 workers in an isolated local profile.
 .DESCRIPTION
     Uses ordinary CXX, the existing /MD optimized local policy, and native
     dependency tracking. Does not enable CUDA, GUI, tools or CPU Stage2.
@@ -77,10 +77,10 @@ if($BuildRole -eq 'release'){
     if($LASTEXITCODE){throw 'Cannot freeze OpenCL release inputs'}
 }
 $unix={param($path) $path.Replace('\','/')}
-$configure='"{0}" -S "{1}" -B "{2}" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_COMPILER="{3}" -DCMAKE_CXX_COMPILER="{3}" -DCMAKE_CUDA_COMPILER=NOTFOUND -DECM_ENABLE_CUDA=OFF -DECM_BUILD_GUI=OFF -DECM_BUILD_TOOLS=OFF -DECM_BUILD_CPU_STAGE2=OFF -DECM_WINDOWS_GMP_ROOT="{4}" -DOPENSSL_ROOT_DIR="{5}" -DOpenCL_INCLUDE_DIR="{6}/include" -DOpenCL_LIBRARY="{7}"' -f $cmake,(&$unix $repo),(&$unix $BuildDir),(&$unix $compiler),(&$unix $Gmp),(&$unix $OpenSslRoot),(&$unix $OpenClRoot),(&$unix $openClLibrary)
+$configure='"{0}" -S "{1}" -B "{2}" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_COMPILER="{3}" -DCMAKE_CXX_COMPILER="{3}" -DCMAKE_CUDA_COMPILER=NOTFOUND -DECM_ENABLE_CUDA=OFF -DECM_BUILD_GUI=OFF -DECM_BUILD_TOOLS=OFF -DECM_BUILD_OPENCL_STAGE2=ON -DECM_BUILD_CPU_STAGE2=OFF -DECM_WINDOWS_GMP_ROOT="{4}" -DOPENSSL_ROOT_DIR="{5}" -DOpenCL_INCLUDE_DIR="{6}/include" -DOpenCL_LIBRARY="{7}"' -f $cmake,(&$unix $repo),(&$unix $BuildDir),(&$unix $compiler),(&$unix $Gmp),(&$unix $OpenSslRoot),(&$unix $OpenClRoot),(&$unix $openClLibrary)
 if($BuildRole -eq 'release'){$configure+=' -DECM_OPENCL_PORTABLE_RESOURCES=ON'}
 $batch=Join-Path $BuildDir 'build.cmd'
-$commands=@('@echo off',('call "{0}" -vcvars_ver={1} >nul 2>&1' -f $VcVars,$tools.Name),'if errorlevel 1 exit /b 1','echo == OpenCL: configure CMake ==',$configure,'if errorlevel 1 exit /b 1','echo == OpenCL: compile and link ecm ==',('"{0}" --build "{1}" --target ecm' -f $cmake,$BuildDir),'if errorlevel 1 exit /b 1')
+$commands=@('@echo off',('call "{0}" -vcvars_ver={1} >nul 2>&1' -f $VcVars,$tools.Name),'if errorlevel 1 exit /b 1','echo == OpenCL: configure CMake ==',$configure,'if errorlevel 1 exit /b 1','echo == OpenCL: compile and link ecm ==',('"{0}" --build "{1}" --target ecm ecm_opencl_stage2' -f $cmake,$BuildDir),'if errorlevel 1 exit /b 1')
 [IO.File]::WriteAllText($batch,($commands -join "`r`n")+"`r`n",[Text.UTF8Encoding]::new($false))
 $savedPreference=$ErrorActionPreference
 $ErrorActionPreference='Continue'
@@ -107,4 +107,4 @@ if($BuildRole -eq 'release'){
     & python $payloadTool --build $BuildDir --freeze $snapshot
     if($LASTEXITCODE){throw 'OpenCL release freeze failed'}
 }
-Write-Host "done: $BuildDir/ecm.exe (OpenCL $BuildRole; CUDA disabled)"
+Write-Host "done: $BuildDir/ecm.exe + ecm_opencl_stage2.exe (OpenCL $BuildRole; CUDA disabled)"

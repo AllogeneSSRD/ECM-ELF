@@ -82,6 +82,7 @@ void print_usage(const char* prog) {
                  "Edwards, CPU Montgomery;\n"
               << "                       default: 600, 0 = no autosave -- Ctrl+C still "
                  "saves)\n"
+              << "  --gpu-backend MODE   auto|cuda|opencl (Windows GPU worker)\n"
               << "  -d <index>           " << ecm_backend_name() << " device index (default: 0)\n"
               << "  --gpu-param <0|2|3>  GPU curve parametrization (ini: gpu_param):\n"
               << "                       0 = Suyama param0 (same curves as CPU "
@@ -215,6 +216,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                    "--help",
                                                    "/?"};
     static const std::set<std::string> values = {"--affinity",
+                                                 "--gpu-backend",
                                                  "--stage1-threads",
                                                  "--impl",
                                                  "--reduction",
@@ -330,6 +332,10 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 expected = "mont|ed";
                 if (!ecm_stage1::parse_curve_model(value, selection.curve))
                     reject();
+            } else if (key == "--gpu-backend") {
+                expected = "auto|cuda|opencl";
+                if (value != "auto" && value != "cuda" && value != "opencl") reject();
+                input.gpu_backend = value;
             } else if (key == "--target") {
                 expected = "cpu|gpu";
                 if (!ecm_stage1::parse_execution_target(value, selection.target))

@@ -119,8 +119,12 @@ void App::configure_workers() {
     const auto base = ecmgui::path_dir(config_path);
     auto first = state.worker_stage1_exe.empty() ? settings.exe : state.worker_stage1_exe;
     auto second = state.worker_stage2_exe.empty() ? settings.stage2_exe : state.worker_stage2_exe;
-    if (first.empty()) first = "ecm_cuda.exe";
-    if (second.empty()) second = "ecm_cuda_stage2.exe";
+    auto installed = [&](const char* cuda, const char* opencl) {
+        if (ecmgui::file_exists(executable_path(cuda, base))) return cuda;
+        return ecmgui::file_exists(executable_path(opencl, base)) ? opencl : cuda;
+    };
+    if (first.empty()) first = installed("ecm_cuda.exe", "ecm.exe");
+    if (second.empty()) second = installed("ecm_cuda_stage2.exe", "ecm_opencl_stage2.exe");
     workers.worker_exe = executable_path(first, base); workers.stage2_exe = executable_path(second, base);
     workers.priority = settings.priority; workers.exit_confirm = settings.exit_confirm;
     workers.graceful_stop_ms = static_cast<unsigned long long>(settings.graceful_stop_ms);

@@ -43,6 +43,7 @@ struct Options {
     unsigned carrier_exponent=0;
     bool has_carrier=false;
     bool auto_carrier=ecm_config::defaults::stage2_stage2_auto_carrier;
+    std::string gpu_backend;
     int device = -1, worker = 1;
     int log_level = -1;
     bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;

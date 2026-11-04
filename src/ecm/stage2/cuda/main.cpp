@@ -4,6 +4,7 @@
 #include <windows.h>
 #include "api.h"
 #include "../backend.h"
+#include "ecm/platform/gpu_worker.h"
 #ifdef ECM_STAGE2_OPENCL
 #include "../opencl/engine.h"
 #endif
@@ -73,6 +74,11 @@ Options arguments(int argc, char **argv) {
         };
         auto num = [&]() { return u64(value(), a.c_str()); };
         if (a == "--help" || a == "-h") o.help = true;
+        else if (a == "--gpu-backend") {
+            o.gpu_backend=value();
+            if(o.gpu_backend!="auto" && o.gpu_backend!="cuda" && o.gpu_backend!="opencl")
+                throw std::runtime_error("--gpu-backend requires auto|cuda|opencl");
+        }
         else if (a == "--config") o.ini = value();
         else if (a == "--save") o.save = value();
         else if (a == "--worktodo") o.worktodo = value();
@@ -255,6 +261,7 @@ Settings stage2_ini(const fs::path &path,int worker) {
 // The schedule bits affect CPU waits, not kernel ordering or arithmetic.
 
 void help() {
+    std::cout<<"GPU worker: --gpu-backend auto|cuda|opencl (worker TOML: stage2_backend)\n";
 #ifdef ECM_STAGE2_OPENCL
     std::cout<<"ecm_opencl_stage2 - native OpenCL Stage2 using the production save/queue driver\n"
         "  --list-devices (OpenCL indices; not CUDA indices or UUIDs)\n"
@@ -337,15 +344,21 @@ void help() {
 // Access known scalar fields in the engine's trusted structured output. Nested
 // records are sliced first; keys are never obtained from external profile text.
 
-int driver(Options o) {
-    if (o.help) { help(); return 0; }
+static void bind_engine_options(Options &o) {
 #ifdef ECM_STAGE2_OPENCL
     if(!o.tune.empty() || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.short_batch_tune || o.relocation ||
        (o.portable_cli.count("--auto-carrier")&&o.auto_carrier))
         throw std::runtime_error("OpenCL supports explicit B2, D or its basic planner; CUDA tune/Auto B2/relocation profiles are not applicable");
     o.tune_runtime=false;o.auto_carrier=false;
 #endif
-    if (o.child) return curve_worker(o);
+}
+
+int driver(Options o) {
+    if (o.help) { help(); return 0; }
+    if (o.child) {
+        bind_engine_options(o);
+        return curve_worker(o);
+    }
     if(o.stop_handle) {
         inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));
         if(WaitForSingleObject(inherited_stop_event,0)==WAIT_FAILED)throw std::runtime_error("invalid inherited Stage2 stop event");
@@ -360,10 +373,27 @@ int driver(Options o) {
     }
     if(o.tune_child)throw std::runtime_error("ecm-tune-worker requires the internal curve-worker mode");
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
+    const fs::path cwd = fs::current_path();
+    const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
+    Settings s = stage2_ini(ini, o.worker);
+    std::vector<const char*> inherited;
+    if(o.save.empty())inherited.push_back("finished"); // Queue collision protection.
+    if(o.device<0 && s.device<0)inherited.push_back("device");
+    if(s.save_dir.empty())inherited.push_back("tmp_dir");
+    if(o.log_level<0 && s.log_level<0)inherited.push_back("verbose");
+    if(!o.has_stage1_exponent)inherited.push_back("lcm");
+    EcmQueueConfig cfg;
+    if (!ecm_queue_config_load(ini.string(), o.worker, cfg, inherited) && (!o.ini.empty() || fs::exists(ini)))
+        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
+    const int selected_device=o.device<0?(s.device<0?cfg.device:s.device):o.device;
+    if (auto routed=ecm_gpu::route(executable().parent_path(),true,!stage2_backend::opencl,
+                                  o.gpu_backend.empty()?s.gpu_backend:o.gpu_backend,selected_device))
+        return *routed;
+    bind_engine_options(o);
     if(o.cost_device_info) {
         if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2||o.has_carrier||!o.tune_profile.empty())
             throw std::runtime_error("--cost-device-info is independent of curve/queue options");
-        EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device<0?0:o.device,&info))throw std::runtime_error("cannot query cost-profile device");
+        EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(selected_device,&info))throw std::runtime_error("cannot query cost-profile device");
         std::cout<<"{\"type\":\"cost_device\",\"uuid_hex\":\""<<info.uuid_hex<<"\",\"major\":"<<info.major<<",\"minor\":"<<info.minor
             <<",\"runtime\":"<<info.runtime<<",\"driver\":"<<info.driver<<",\"fixed_mode\":"<<info.fixed_mode<<",\"outer_unroll_u\":"<<info.outer_unroll_u
             <<",\"free_bytes\":"<<info.free_bytes<<",\"total_bytes\":"<<info.total_bytes<<"}"<<std::endl;return 0;
@@ -377,18 +407,6 @@ int driver(Options o) {
     if(o.tune=="ecm" && o.has_tune_slices)throw std::runtime_error("tune-slices requires --tune ntt");
     if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
-    const fs::path cwd = fs::current_path();
-    const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
-    Settings s = stage2_ini(ini, o.worker);
-    std::vector<const char*> inherited;
-    if(o.save.empty())inherited.push_back("finished"); // Queue collision protection.
-    if(o.device<0 && s.device<0)inherited.push_back("device");
-    if(s.save_dir.empty())inherited.push_back("tmp_dir");
-    if(o.log_level<0 && s.log_level<0)inherited.push_back("verbose");
-    if(!o.has_stage1_exponent)inherited.push_back("lcm");
-    EcmQueueConfig cfg;
-    if (!ecm_queue_config_load(ini.string(), o.worker, cfg, inherited) && (!o.ini.empty() || fs::exists(ini)))
-        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
     const PackZeroDefaults pack_defaults{s.has_pack_zero,s.pack_zero,s.cost_profile};
     configure_pack_zero(o,&pack_defaults);
     const HostWaitDefaults wait_defaults{s.has_low_cpu_wait,s.low_cpu_wait};
@@ -483,7 +501,7 @@ int driver(Options o) {
     const fs::path legacy_progress=s.progress.empty()?fs::path(worktodo.string()+suffix+".progress"):absolute_from(base,s.progress);
     const fs::path progress_dir=!s.progress_dir.empty()?absolute_from(base,s.progress_dir):
         !s.progress.empty()?legacy_progress.parent_path():worktodo.parent_path();
-    const int device = o.device < 0 ? (s.device<0?cfg.device:s.device) : o.device;
+    const int device = selected_device;
     const uint64_t d = o.has_d ? o.d : s.d;
     o.device=device;o.d=d;o.has_d=d!=0;
     configure_groot_experiment(o);

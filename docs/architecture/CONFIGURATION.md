@@ -20,6 +20,14 @@
 
 所有布尔键接受 `true`／`false` 或整数 `1`／`0`，含各worker覆盖；`1=true`、`0=false`。带自动模式的布尔键另接受字符串 `"auto"`。共享读取器仅对schema中声明的布尔类型归一化数值别名，业务投影统一收到true／false，原行继续保留以供错误定位及GUI原样保存。其他整数、小数及数组不能作为布尔值；整数配置键也不会因此接受布尔字面量。GUI读取数值别名时显示相应开关状态，修改后写为true／false；值未改变则保留原来的数字、注释和排版。默认模板仍使用布尔字面量。
 
+## GPU 后端与 worker
+
+Windows 下 `[stage1] stage1_backend` 与 `[stage2] stage2_backend` 分别取 `"auto" | "cuda" | "opencl"`，两个阶段均默认 `"auto"`。例如在 `[workers.2.stage2]` 设置 `stage2_backend = "opencl"` 和 `stage2_device = 1`，只改变 worker 2 的 Stage2。命令行 `--gpu-backend` 优先于对应 worker 和全局配置。Stage1 的 `target = "cpu"` 直接走 CPU。
+
+将同一版本的两个后端放在同目录；Stage1 文件名为 `ecm_cuda.exe`、`ecm.exe`，Stage2 为 `ecm_cuda_stage2.exe`、`ecm_opencl_stage2.exe`。只有一个已安装时 auto 使用该程序。两者均已安装时，auto 先检查指定编号的 CUDA 设备是否对驱动可见，其次选 OpenCL。设备序号属于实际后端，混合厂商系统应按各自的设备清单设置 worker。显式选择缺少的程序会在计算前报错。后端在任务开始前确定，计算、校验、预算或驱动错误沿原路径报告；任务没有隐式重跑。跨后端切换保留命令行、工作目录、标准流、GUI 停止句柄和进程退出码。队列、曲线记录和结果仍由实际计算程序维护。
+
+OpenCL Stage2 支持固定 B2、基本 D 规划和显式梅森承载；CUDA tune、Auto B2 及 CUDA 专用内核参数的支持范围见 [OpenCL 生产入口](OPENCL.md#生产-stage2-入口)。
+
 ## 按程序职责读取
 
 各程序按分区承担校验责任，不以键名前缀猜测所属阶段；对应`workers.N.*`遵守同样规则。

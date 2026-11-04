@@ -295,6 +295,13 @@ sigma = 0
 # 中文：位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是
 # 中文：Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。
 
+stage1_backend = "auto"
+# EN: Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the selected
+# EN: index, then OpenCL. Explicit selection requires that worker beside the executable. Device indices
+# EN: belong to the selected backend. Override with --gpu-backend.
+# 中文：Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要
+# 中文：求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
+
 # stage1_results_file = "stage1_results.jsonl"
 # EN: Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from
 # EN: submission output.
@@ -457,6 +464,13 @@ stage2_b2_round_chain = false
 # 中文：。OpenCL仅支持auto/scalar。
 # EN: Uncommenting marks this value explicit; omission preserves implicit worker/path/environment behavior.
 # 中文：取消注释会将此值标记为显式设置；保留注释则沿用 worker、路径或环境变量的隐式规则。
+
+stage2_backend = "auto"
+# EN: Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the selected
+# EN: index, then OpenCL. Explicit selection requires that worker beside the executable. Device indices
+# EN: belong to the selected backend. Override with --gpu-backend.
+# 中文：Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要
+# 中文：求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
 stage2_batch_mb = 64
 # EN: Stage2 S4 batch-buffer budget in MiB. Larger budgets may reduce batching overhead but consume more

@@ -222,8 +222,9 @@ def main(plan):
     opencl_identity=verify_opencl(opencl,gmp)
     gmp_sources,gmp_licenses=distribution(gmp)
     version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'include/ecm/platform/program_version.h').read_text())[1]
-    banner=subprocess.check_output([str(opencl/'ecm.exe'),'--version'],stderr=subprocess.STDOUT).decode(errors='replace')
-    if version not in banner:raise ValueError('OpenCL worker version differs from release')
+    for name in ('ecm.exe','ecm_opencl_stage2.exe'):
+        banner=subprocess.check_output([str(opencl/name),'--version'],stderr=subprocess.STDOUT).decode(errors='replace')
+        if banner.strip()!=f'ECM-ELF {version}':raise ValueError(f'{name} version differs from release')
     outputs=[path for profile in plan['profiles'] for path in release_paths(out,version,profile)]
     assert_outputs_available(outputs)
     staging=build/'_packages'/uuid.uuid4().hex;staging.mkdir(parents=True)

@@ -213,6 +213,14 @@ int main(int argc,char **argv) {
             rejected(temp,std::string("[stage2]\nstage2_baby_backend=")+value+"\n");
         for(const auto *value:{"\"coop8\"","\"wrong\"","32"})
             rejected(temp,std::string("[stage2]\nstage2_giant_backend=")+value+"\n");
+        write(temp,"[stage1]\nstage1_backend=\"opencl\"\n[stage2]\nstage2_backend=\"cuda\"\n"
+            "[workers.2.stage2]\nstage2_backend=\"opencl\"\n");
+        expect(ecm_config::read_toml(temp.string(),lines),"GPU backend TOML unavailable");
+        expect(ecm_config::read_stage1(ecm_config::cli_entries(lines,2)).gpu_backend=="opencl" &&
+            ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).gpu_backend=="cuda" &&
+            ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).gpu_backend=="opencl",
+            "stage/worker GPU backend selection leaked");
+        rejected(temp,"[stage2]\nstage2_backend=\"cpu\"\n");
         write(temp,"[stage2]\nstage2_tune_profile=\"profiles/shared.toml\"\n"
             "[workers.1.stage2]\nstage2_tune_profile=\"profiles/gpu0.toml\"\n"
             "[workers.2.stage2]\nstage2_tune_profile=\"profiles/gpu1.toml\"\n");

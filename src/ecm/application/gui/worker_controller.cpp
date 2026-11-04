@@ -24,6 +24,7 @@ std::string resolve_gui_exe(const std::string &value) {
 }
 std::string adjacent_stage2_exe() {
     const auto direct=path_join(exe_dir(),"ecm_cuda_stage2.exe");if(file_exists(direct))return direct;
+    const auto opencl=path_join(exe_dir(),"ecm_opencl_stage2.exe");if(file_exists(opencl))return opencl;
     std::vector<std::string> candidates;std::error_code error;
     for(const auto &item:std::filesystem::directory_iterator(std::filesystem::u8path(exe_dir()),error)) {
         if(error)break;

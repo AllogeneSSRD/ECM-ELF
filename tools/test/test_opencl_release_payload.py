@@ -21,6 +21,7 @@ class PayloadTests(unittest.TestCase):
         self.resource=self.put(self.repo/'src/ecm/opencl/resources/test.cl','kernel')
         self.put(self.build/'opencl_resources/test.cl','kernel')
         self.put(self.build/'ecm.exe','worker')
+        self.put(self.build/'ecm_opencl_stage2.exe','worker2')
         for name in payload.RUNTIMES:
             self.put((self.gmp if name=='gmp-10.dll' else self.ssl)/'bin'/name,name)
             self.put(self.build/name,name)
@@ -45,12 +46,12 @@ class PayloadTests(unittest.TestCase):
 
     def test_freeze_and_verify_complete_payload(self):
         self.freeze();identity=payload.verify(self.build,self.gmp)
-        self.assertEqual(set(identity['files_sha256']),{'ecm.exe',*payload.RUNTIMES,'opencl_resources/test.cl','licenses/OpenSSL.txt'})
+        self.assertEqual(set(identity['files_sha256']),{'ecm.exe','ecm_opencl_stage2.exe',*payload.RUNTIMES,'opencl_resources/test.cl','licenses/OpenSSL.txt'})
         self.assertIn(str(self.header.resolve()),identity['compiler_inputs_sha256'])
 
     def test_changed_source_header_object_resource_and_worker_rejected(self):
         self.freeze()
-        for path in (self.source,self.header,self.obj,self.build/'opencl_resources/test.cl',self.build/'ecm.exe'):
+        for path in (self.source,self.header,self.obj,self.build/'opencl_resources/test.cl',self.build/'ecm.exe',self.build/'ecm_opencl_stage2.exe'):
             with self.subTest(path=path):
                 before=path.read_bytes();path.write_bytes(b'changed')
                 try:
