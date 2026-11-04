@@ -121,7 +121,7 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
     const bool hybrid_default=production_hybrid || (local_hybrid && (small_hybrid || wide_point_chains(s,w)));
     if(hybrid_default)trial.plan="cpu";
     if(overridden("ECM_OPENCL_CPU_CHAINS") || overridden("ECM_OPENCL_BATCH_GATHERS") ||
-       overridden("ECM_OPENCL_GIANT_CPU_THREADS") || overridden("ECM_OPENCL_QUADRATIC_G_LEAVES"))return trial;
+       overridden("ECM_OPENCL_FULL_G_BATCH") || overridden("ECM_OPENCL_GIANT_CPU_THREADS") || overridden("ECM_OPENCL_QUADRATIC_G_LEAVES"))return trial;
     const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
     const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
     if(!path || !*path || (!short_shape && !production_hybrid) || (amd && w>8))return trial;
@@ -166,7 +166,15 @@ Shape choose(Word requested,Word b2,unsigned bits,Word limit){
     if(!best.d)throw std::runtime_error("no OpenCL D fits the payload budget");return best;
 }
 bool counts_enabled=false;
-void print_shape(const Shape&s,Word b1,Word b2,unsigned bits){stage2_log::print(stage2_log::phases,"real_shape: D=%llu P=phi(D)/2=%llu baby_points=%llu giant_points=%llu num_poly_g=%llu loops=%llu B1=%llu B2=%llu S_bits=%u\n",s.d,s.p,s.p,s.giants,(s.giants+s.chunk-1)/s.chunk,(s.giants+s.chunk-1)/s.chunk-1,b1,b2,bits);}
+Word g_batch_size(const Shape& s,const cln::DeviceInfo& dev,size_t w,unsigned carrier){
+    // Group after D selection. Keep point-generator windows and their original oracles.
+    const bool local=dev.name=="NVIDIA GeForce RTX 4060 Laptop GPU" && !carrier &&
+        w==31 && s.p==80640 && s.chunk==45100 && budget(dev)>=(Word(5120)<<20);
+    const auto full=setting("ECM_OPENCL_FULL_G_BATCH",local);
+    if(full>1)throw std::runtime_error("ECM_OPENCL_FULL_G_BATCH must be 0 or 1");
+    return full?s.p:s.chunk;
+}
+void print_shape(const Shape&s,Word b1,Word b2,unsigned bits,Word g_batch){stage2_log::print(stage2_log::phases,"real_shape: D=%llu P=phi(D)/2=%llu baby_points=%llu giant_points=%llu num_poly_g=%llu loops=%llu B1=%llu B2=%llu S_bits=%u\n",s.d,s.p,s.p,s.giants,(1+(s.giants-1)/g_batch),(1+(s.giants-1)/g_batch)-1,b1,b2,bits);}
 struct PointGenerator {
     cln::Runtime &runtime;mpz_srcptr n;Big a24;Point base;std::size_t w;std::unique_ptr<cls::Points> device;
     double kernel_seconds=0,kernel_max_seconds=0,coordinate_seconds=0,check_seconds=0,normalize_seconds=0,seed_seconds=0;
@@ -284,7 +292,7 @@ struct PointGenerator {
         for(size_t j=0;j<z.size();++j){auto p=ladder(base,scalars[j],a24,n);x[j]=p.x;z[j]=p.z;}
         return true;
     }
-    Values generate(const std::vector<Word>&scalars,std::set<std::string>&f,Word&checked,Word step=1,std::size_t sample_span=0){
+    Values generate(const std::vector<Word>&scalars,std::set<std::string>&f,Word&checked,Word step=1,std::size_t sample_span=0,Word regroup=0,Word total_giants=0){
         if(scalars.empty())throw std::runtime_error("empty point generation");
         const Point* origin=&base;std::vector<Word> reduced;
         if(step>1&&use_giant_base){
@@ -365,8 +373,18 @@ struct PointGenerator {
             // A wider generation window must preserve the three original
             // samples of EVERY G batch, including the final short batch.
             const auto span=sample_span?sample_span:scalars.size();
+            std::set<std::size_t> samples;
             for(std::size_t lo=0;lo<scalars.size();lo+=span){const auto count=std::min(span,scalars.size()-lo);
-                for(auto k:std::set<std::size_t>{lo,lo+count/2,lo+count-1}){const auto oracle=ladder(base,scalars[k],a24,n);auto cross=sub(mul(x[k],oracle.z,n),z.empty()?oracle.x:mul(z[k],oracle.x,n),n);if(mpz_sgn(cross.v))throw std::runtime_error("OpenCL ladder GMP mismatch");checked+=w*2;}}
+                samples.insert({lo,lo+count/2,lo+count-1});}
+            if(regroup){
+                // Also check the actual polynomial blocks (including the final short one).
+                const Word first=scalars.front()/step-1,end=first+scalars.size();
+                for(Word lo=first-first%regroup;lo<end;){const Word count=std::min(regroup,total_giants-lo);
+                    for(Word at:{lo,lo+count/2,lo+count-1})if(at>=first && at<end)samples.insert(size_t(at-first));
+                    lo+=count;
+                }
+            }
+            for(auto k:samples){const auto oracle=ladder(base,scalars[k],a24,n);auto cross=sub(mul(x[k],oracle.z,n),z.empty()?oracle.x:mul(z[k],oracle.x,n),n);if(mpz_sgn(cross.v))throw std::runtime_error("OpenCL ladder GMP mismatch");checked+=w*2;}
             check_seconds+=now()-check_begin;
         }
         if(z.empty())return x; // Segment inversions already produced affine coordinates.
@@ -390,7 +408,7 @@ int ecm_cuda_stage2_device_info(int index,EcmStage2DeviceInfo*info,const char*ex
     // identity token, not a hardware UUID and never a free-memory promise.
     Word a=14695981039346656037ull,b=1099511628211ull;for(unsigned char c:d.platform+d.vendor+d.name+d.driver+std::to_string(index)){a=(a^c)*1099511628211ull;b=(b^c)*1099511628211ull;}
     std::snprintf(info->uuid_hex,sizeof(info->uuid_hex),"%016llx%016llx",a,b);return expected&&std::string(expected)!=info->uuid_hex?2:0;}catch(...){return 2;}}
-int ecm_cuda_stage2_plan(const char*n, uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int device,void(*report)(const char*,void*),void*ctx,unsigned carrier){try{ecm_stage2::ModulusContext m;std::string error;if(!m.configure(n,16,carrier,error))throw std::runtime_error(error);auto ds=cln::devices();if(device<0||size_t(device)>=ds.size())throw std::runtime_error("OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[device]));print_shape(s,b1,b2,unsigned(m.S));std::ostringstream text;text<<"{\"backend\":\"opencl-ntt\",\"D\":"<<s.d<<",\"P\":"<<s.p<<",\"estimated_payload_bytes\":"<<s.bytes<<",\"payload_budget_bytes\":"<<budget(ds[device])<<",\"live_free_memory_known\":false}";report(text.str().c_str(),ctx);return 0;}catch(const std::exception&e){std::cerr<<"OpenCL plan: "<<e.what()<<'\n';return 2;}}
+int ecm_cuda_stage2_plan(const char*n, uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int device,void(*report)(const char*,void*),void*ctx,unsigned carrier){try{ecm_stage2::ModulusContext m;std::string error;if(!m.configure(n,16,carrier,error))throw std::runtime_error(error);auto ds=cln::devices();if(device<0||size_t(device)>=ds.size())throw std::runtime_error("OpenCL device index");const auto s=choose(d,b2,unsigned(m.S),budget(ds[device]));print_shape(s,b1,b2,unsigned(m.S),g_batch_size(s,ds[device],m.W,carrier));std::ostringstream text;text<<"{\"backend\":\"opencl-ntt\",\"D\":"<<s.d<<",\"P\":"<<s.p<<",\"estimated_payload_bytes\":"<<s.bytes<<",\"payload_budget_bytes\":"<<budget(ds[device])<<",\"live_free_memory_known\":false}";report(text.str().c_str(),ctx);return 0;}catch(const std::exception&e){std::cerr<<"OpenCL plan: "<<e.what()<<'\n';return 2;}}
 int ecm_cuda_stage2_tune_ntt(int,int,int,int,uint64_t,void(*)(const char*,void*),void*,bool){return 2;}
 int ecm_cuda_stage2_tune_ntt_batches(int,int,int,int,uint64_t,const uint64_t*,size_t,void(*)(const char*,void*),void*,bool){return 2;}
 
@@ -420,14 +438,16 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         arithmetic.quadratic_g_leaves=paired!=0;
         cls::Arithmetic field(runtime,arithmetic);std::set<std::string> factors;Big a;if(a24){if(mpz_set_str(a.v,a24,16)||mpz_sgn(a.v)<0||mpz_cmp(a.v,m.target())>=0)throw std::runtime_error("invalid curve a24");}else a=curve_a24(sigma,m.target(),factors);
         auto trial=choose_points(ds[index],s,(m.target_bits()+63)/64,m.W,carrier,options.budget_bytes);
-        PointGenerator generator(runtime,m.target(),saved,a,s,trial.plan);double sentinel_seconds=0;
+        PointGenerator generator(runtime,m.target(),saved,a,s,trial.plan);double sentinel_seconds=0;cls::GTreeTiming tree_timing;
+        const bool time_tree=stage2_log::enabled(stage2_log::phases);
         if(!trial.key.empty())stage2_log::print(stage2_log::curve,"opencl_point_tune: plan=%s collect=%d key=%s\n",trial.plan.c_str(),int(trial.collect),trial.key.c_str());
         // Real device multiply, independently checked with GMP before any result.
         const auto self=field.download(field.multiply(field.upload(flatten({Big(1),Big(2)},m.W),2),field.upload(flatten({Big(3),Big(1)},m.W),2)));
         auto check=import(self,m.W);for(std::size_t k=0;k<3;++k){Big v(k==0?3:k==1?7:2);mpz_mod(v.v,v.v,m.N);if(mpz_cmp(v.v,check[k].v))throw std::runtime_error("OpenCL polynomial startup selftest");}result.selftest_cases=1;result.checked+=self.size();
         result.phases.seconds[1]=now()-begin-result.phases.seconds[0];
         std::cout<<"stage2_opencl: device="<<index<<" name="<<ds[index].name<<" target_bits="<<m.target_bits()<<" arithmetic_bits="<<m.S<<" carrier="<<carrier<<" point_backend="<<(generator.device?"opencl":"cpu_gmp")<<" point_chunk="<<generator.chunk<<" point_group="<<generator.group<<" giant_base="<<generator.use_giant_base<<" normalization=cpu_batch256 gcd=cpu_gmp payload_budget_bytes="<<options.budget_bytes<<" free_memory_known=0\n";
-        print_shape(s,b1,b2,unsigned(m.S));
+        const auto g_batch=g_batch_size(s,ds[index],m.W,carrier);
+        print_shape(s,b1,b2,unsigned(m.S),g_batch);
         auto finish=[&](){field.finish();runtime.finish();for(const auto&f:factors){Big v;if(mpz_set_str(v.v,f.c_str(),10))throw std::runtime_error("factor encoding");if(mpz_cmp_ui(v.v,1)<=0||mpz_cmp(v.v,m.target())>=0||!mpz_divisible_p(m.target(),v.v))throw std::runtime_error("factor validation");}
             const double tail=now()-begin-result.phases.total();result.phases.seconds[9]=std::max(0.,tail);result.phases.complete=true;result.total_seconds=result.phases.total();result.init_seconds=0;for(unsigned k=0;k<4;++k)result.init_seconds+=result.phases.seconds[k];result.main_seconds=result.total_seconds-result.init_seconds;result.clean=true;result.fold_resident=true;result.frontier_resident=true;
             const auto mem=runtime.memory();stage2_log::print(stage2_log::curve,"stage2_full_wall: curve=1 shape=%.6f init=%.6f main=%.6f total=%.6f backend=opencl-ntt (planning/JIT/selftest included; Stage1 excluded)\n",result.phases.seconds[0],result.init_seconds,result.main_seconds,result.total_seconds);
@@ -444,6 +464,11 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             stage2_log::print(stage2_log::phases,"opencl_tail: leaf_oracle=%.6f descent=%.6f accum=%.6f\n",sentinel_seconds,result.descent_seconds,result.accum_seconds);
             const auto programs=runtime.programs();stage2_log::print(stage2_log::phases,"opencl_programs: builds=%llu hits=%llu build_seconds=%.6f cache=%d scope=context\n",programs.builds,programs.hits,programs.build_seconds,int(options.cache_programs));
             stage2_log::print(stage2_log::phases,"opencl_gathers: batched=%d row_kernels=%llu rows=%llu single_copies=%llu copy_bytes=%llu borrowed=%llu\n",int(arithmetic.batch_gathers),field.stats().gather_kernels,field.stats().gather_rows,field.stats().device_copies,field.stats().device_copy_bytes,field.stats().borrowed_gathers);
+            if(time_tree && tree_timing.build>0){
+                stage2_log::print(stage2_log::phases,"opencl_gtree_wall: build=%.6f fold_product=%.6f remainder=%.6f quotient=%.6f qF=%.6f (host seconds, nested in gtree_fold)\n",tree_timing.build,tree_timing.fold_product,tree_timing.remainder,tree_timing.division.quotient,tree_timing.division.product);
+                std::ostringstream levels;for(size_t i=0;i<tree_timing.level.size();++i)if(tree_timing.level[i]>0)levels<<' '<<i<<':'<<std::fixed<<std::setprecision(4)<<tree_timing.level[i];
+                stage2_log::print(stage2_log::phases,"opencl_gtree_levels:%s\n",levels.str().c_str());
+            }
             if(arithmetic.quadratic_g_leaves)stage2_log::print(stage2_log::phases,"opencl_g_leaves: quadratic_pairs=%llu\n",field.stats().quadratic_pairs);
             stage2_log::print(stage2_log::phases,"opencl_checks: startup_cases=%llu checked_words=%llu bad=0 point_samples=GMP leaf_sentinels=GMP factors=divisibility\n",result.selftest_cases,result.checked);
             if(counts_enabled){std::cout<<"ntt_lengths:";for(const auto&entry:field.stats().ntt_transforms)std::cout<<' '<<entry.first<<':'<<entry.second;std::cout<<" backend=opencl scope=transforms\n";}
@@ -463,16 +488,29 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         if(!overridden("ECM_OPENCL_POINT_WINDOW")&&generator.chain_enabled)window_request=std::max(window_request,std::min(window_cap,generator.chain_capacity()));
         const auto admitted_window=std::min(window_request,window_cap);
         const auto point_window=std::max(s.chunk,(admitted_window/s.chunk)*s.chunk);
-        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu source=%s\n",requested_window,point_window,window_cap,s.chunk,overridden("ECM_OPENCL_POINT_WINDOW")?"explicit":generator.chain_enabled?"chain":generator.plan.enabled?"adaptive":"default");
-        stage2_log::phase("Giant points, G trees and fold");const double loop=now();Word batches=0;
+        stage2_log::print(stage2_log::phases,"opencl_point_window: requested=%llu effective=%llu cap=%llu G_batch=%llu source=%s\n",requested_window,point_window,window_cap,g_batch,overridden("ECM_OPENCL_POINT_WINDOW")?"explicit":generator.chain_enabled?"chain":generator.plan.enabled?"adaptive":"default");
+        stage2_log::phase("Giant points, G trees and fold");const double loop=now();Word batches=0,filled=0;cls::Polynomial roots;
         for(Word first=1;first<=s.giants;){const auto amount=std::min(point_window,s.giants-first+1);indices.resize(amount);for(Word k=0;k<amount;++k)indices[k]=(first+k)*s.d;
-            t=now();auto window=generator.generate(indices,factors,result.checked,s.d,std::size_t(s.chunk));result.giant_seconds+=now()-t;
+            t=now();auto window=generator.generate(indices,factors,result.checked,s.d,std::size_t(s.chunk),g_batch!=s.chunk?g_batch:0,s.giants);result.giant_seconds+=now()-t;
             if(!factors.empty()){result.phases.seconds[6]=now()-loop;return finish();}
-            for(Word offset=0;offset<amount;){const auto count=std::min(s.chunk,amount-offset);
+            for(Word offset=0;offset<amount;){
+                const auto target=std::min(g_batch,filled+(s.giants-first+1));
+                const auto count=std::min(target-filled,amount-offset);
                 Values giants(window.begin()+std::size_t(offset),window.begin()+std::size_t(offset+count));
                 t=now();for(std::size_t k=0;k<sentinels.size();++k)for(const auto&g:giants)expected[k]=mul(expected[k],sub(babies[sentinels[k]],g,m.target()),m.target());
-                sentinel_seconds+=now()-t;t=now();tree.append(field.upload(flatten(giants,m.W),giants.size()));result.gtrees_seconds+=now()-t;++batches;first+=count;offset+=count;
-                if(stage2_log::enabled(stage2_log::batches))std::cout<<"batched_progress: batch="<<batches<<'/'<<(s.giants+s.chunk-1)/s.chunk<<" points="<<first-1<<'/'<<s.giants<<" backend=opencl\n";
+                sentinel_seconds+=now()-t;t=now();
+                auto packed=flatten(giants,m.W);
+                if(count==target)roots=field.upload(packed,count);
+                else{
+                    if(!filled)roots=field.allocate_roots(target);
+                    field.write_roots(field.window(roots,filled,count),packed);
+                }
+                first+=count;offset+=count;filled+=count;
+                if(filled==target){
+                    tree.append(roots,time_tree?&tree_timing:nullptr);roots={};filled=0;++batches;
+                    if(stage2_log::enabled(stage2_log::batches))std::cout<<"batched_progress: batch="<<batches<<'/'<<(1+(s.giants-1)/g_batch)<<" points="<<first-1<<'/'<<s.giants<<" backend=opencl\n";
+                }
+                result.gtrees_seconds+=now()-t;
             }
         }result.phases.seconds[6]=now()-loop;
         stage2_log::phase("Normalize fold and descend F tree");t=now();const auto leaves=import(field.download(tree.values()),m.W);result.descent_seconds=now()-t;result.phases.seconds[7]=result.descent_seconds;

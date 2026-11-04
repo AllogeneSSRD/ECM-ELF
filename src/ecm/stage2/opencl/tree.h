@@ -1,12 +1,19 @@
 #pragma once
 #include "arithmetic.h"
+#include <array>
 
 namespace ecm_opencl::stage2 {
 struct ProductTree {
     std::size_t leaves=0,padded=0;
     std::vector<Polynomial> nodes; // Heap order; padded leaves are polynomial 1.
 };
-ProductTree product_tree(Arithmetic &,const Polynomial &roots,bool keep_children=true);
+// Host intervals, including the existing product verdict waits. No extra device drains.
+struct GTreeTiming {
+    RemainderTiming division;
+    double build=0, fold_product=0, remainder=0;
+    std::array<double,29> level{}; // Level 0 initializes leaves; level 1 combines pairs.
+};
+ProductTree product_tree(Arithmetic &,const Polynomial &roots,bool keep_children=true,GTreeTiming* timing=nullptr);
 // Scaled remainder descent: identical root transform and sibling middle-product
 // recurrence to the CUDA engine. No per-node polynomial inversions.
 Polynomial evaluate_scaled(Arithmetic &,const ProductTree &,const Polynomial &h,const Polynomial &inverse);
@@ -20,7 +27,7 @@ class Resultant {
     std::size_t blocks_=0;
 public:
     Resultant(Arithmetic &,const Polynomial &baby_roots);
-    void append(const Polynomial &giant_roots); // 1..P roots, supports partial tail.
+    void append(const Polynomial &giant_roots,GTreeTiming* timing=nullptr); // 1..P roots, supports partial tail.
     Polynomial values();                       // H evaluated at each baby root.
     const ProductTree &tree()const{return tree_;}
     const Polynomial &inverse()const{return inverse_;}

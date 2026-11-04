@@ -27,6 +27,7 @@ struct ArithmeticStats {
     Word gather_kernels=0,gather_rows=0;
     Word quadratic_pairs=0;
 };
+struct RemainderTiming {double quotient=0, product=0;};
 struct ArithmeticState;
 class Arithmetic {
     std::unique_ptr<ArithmeticState> state_;
@@ -41,6 +42,8 @@ public:
     const ArithmeticStats &stats()const;
     Polynomial upload(const std::vector<Word> &,std::size_t count,std::size_t batch=1);
     std::vector<Word> download(const Polynomial &);
+    Polynomial allocate_roots(std::size_t count);
+    void write_roots(const Polynomial &slice,const std::vector<Word> &words);
     Polynomial constant(Word value);
     Polynomial window(const Polynomial &,std::size_t first,std::size_t count)const;
     Polynomial reshape(const Polynomial &,std::size_t count,std::size_t first=0,bool reverse=false);
@@ -53,7 +56,7 @@ public:
     // a(0)=1. Used with the reverse of a monic polynomial over composite N.
     Polynomial inverse_series(const Polynomial &a,std::size_t count);
     // b monic, inverse = reverse(b)^-1 mod X^k, k >= a.size-b.degree.
-    Polynomial remainder(const Polynomial &a,const Polynomial &b,const Polynomial &inverse);
+    Polynomial remainder(const Polynomial &a,const Polynomial &b,const Polynomial &inverse,RemainderTiming* timing=nullptr);
     void finish(); // Drains async coefficient operations and releases their leases.
 };
 } // namespace ecm_opencl::stage2

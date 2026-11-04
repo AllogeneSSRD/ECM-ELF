@@ -142,6 +142,26 @@ def main():
         return rows,log
     rows,_=case('stage2_hit',save_line(257000771,6))
     assert rows[0].get('factors')==['257']
+    # The 624-point window cuts across both P=960 polynomial boundaries.
+    for streamed in (0,1):
+        label=f'full_g_stream_{streamed}'
+        rows,_=case(label,save_line((1<<2203)-1),b2=20000000,d=9240,extra=['--batch-mb','1'],
+                    environment={'ECM_OPENCL_FULL_G_BATCH':str(streamed),'ECM_OPENCL_POINTS':'cpu','ECM_OPENCL_CPU_CHAINS':'1'})
+        assert rows[0]['status']=='NF'
+        trace=(a.out/label/'worker.log').read_text(encoding='utf-8-sig')
+        assert 'effective=624 cap=624' in trace
+        assert f'num_poly_g={3 if streamed else 4} ' in trace
+        checked=int(re.search(r'opencl_checks: .*?checked_words=(\d+)',trace)[1])
+        if streamed:
+            def positions(span):
+                result=set()
+                for lo in range(0,2166,span):
+                    count=min(span,2166-lo)
+                    result.update((lo,lo+count//2,lo+count-1))
+                return result
+            assert checked==original_checked+70*len(positions(960)-positions(624))
+        else:original_checked=checked
+    case('invalid_full_g',save_line((1<<127)-1),expect=2,environment={'ECM_OPENCL_FULL_G_BATCH':'2'})
     rows,_=case('quadratic_g_hit',save_line(257000771,6),environment={'ECM_OPENCL_QUADRATIC_G_LEAVES':'1'})
     assert rows[0].get('factors')==['257']
     paired=(a.out/'quadratic_g_hit/worker.log').read_text(encoding='utf-8-sig')

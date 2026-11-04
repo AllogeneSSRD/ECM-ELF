@@ -2,6 +2,7 @@
 #include "ecm/opencl/ntt/native.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -46,6 +47,15 @@ struct ArithmeticState {
         }
         return {buffer,count,batch,0,stride};
     }
+    void write_dense(const Polynomial &out,const std::vector<Word> &v){
+        // Both whole polynomials and streamed slices must contain canonical residues.
+        for(std::size_t k=0;k<v.size();k+=nw){int cmp=0;
+            for(std::size_t j=nw;j>0 && !cmp;--j)if(v[k+j-1]!=options.product.modulus[j-1])
+                cmp=v[k+j-1]<options.product.modulus[j-1]?-1:1;
+            if(cmp>=0)throw std::invalid_argument("noncanonical coefficient upload");
+        }
+        runtime.upload(out.buffer,v.data(),v.size(),out.offset);pending.clear();stats.upload_bytes+=v.size()*8;
+    }
     void hold(const Polynomial &p){pending.push_back(p.buffer);}
     void launch(cl_kernel k,std::size_t count,std::size_t batch){const std::size_t global[]={count,batch};
         check(clEnqueueNDRangeKernel(Native::queue(runtime),k,2,nullptr,global,nullptr,0,nullptr,nullptr),"coefficient launch");++stats.coefficient_launches;}
@@ -71,11 +81,13 @@ const ArithmeticStats &Arithmetic::stats()const{return state_->stats;}
 void Arithmetic::finish(){state_->runtime.finish();state_->pending.clear();}
 Polynomial Arithmetic::upload(const std::vector<Word> &v,std::size_t count,std::size_t batch) {
     auto &p=*state_;if(!count || !batch || v.size()!=times(times(count,batch),p.nw))throw std::invalid_argument("coefficient upload shape");
-    // The small coefficient operators assume canonical inputs. Check at the
-    // public host boundary; device products preserve the invariant thereafter.
-    for(std::size_t k=0;k<count*batch;++k){int cmp=0;for(std::size_t j=p.nw;j>0;--j)if(!cmp && v[k*p.nw+j-1]!=p.options.product.modulus[j-1])cmp=v[k*p.nw+j-1]<p.options.product.modulus[j-1]?-1:1;
-        if(cmp>=0)throw std::invalid_argument("noncanonical coefficient upload");}
-    auto out=p.allocate(count,batch);p.runtime.upload(out.buffer,v.data(),v.size());p.pending.clear();p.stats.upload_bytes+=v.size()*8;return out;
+    auto out=p.allocate(count,batch);p.write_dense(out,v);return out;
+}
+Polynomial Arithmetic::allocate_roots(std::size_t count){return state_->allocate(count,1);}
+void Arithmetic::write_roots(const Polynomial &slice,const std::vector<Word> &words){
+    auto &p=*state_;p.validate(slice);
+    if(slice.batch!=1 || words.size()!=times(slice.size,p.nw))throw std::invalid_argument("root upload size");
+    p.write_dense(slice,words);
 }
 std::vector<Word> Arithmetic::download(const Polynomial &a) {
     auto &p=*state_;p.validate(a);auto packed=a;
@@ -187,13 +199,17 @@ Polynomial Arithmetic::inverse_series(const Polynomial &a,std::size_t count) {
         ag=reshape(ag,next);auto h=subtract(constant(2),ag);g=multiply(g,h,0,next);g=reshape(g,next);}
     return g;
 }
-Polynomial Arithmetic::remainder(const Polynomial &a,const Polynomial &b,const Polynomial &inverse) {
+Polynomial Arithmetic::remainder(const Polynomial &a,const Polynomial &b,const Polynomial &inverse,RemainderTiming* timing) {
     if(a.batch!=1 || b.batch!=1 || inverse.batch!=1 || b.size<2)throw std::invalid_argument("monic remainder shape");
     const auto degree=b.size-1;if(a.size<=degree)return reshape(a,degree);
     const auto k=a.size-degree;if(inverse.size<k)throw std::invalid_argument("short monic inverse");
     // q = reverse(low_k(reverse(a) * inverse(reverse(b)))); r = low_d(a-q*b).
+    using Clock=std::chrono::steady_clock;auto mark=timing?Clock::now():Clock::time_point{};
     auto ra=reshape(a,k,a.size-1,true),qr=multiply(ra,window(inverse,0,k),0,k);
-    auto q=reshape(qr,k,k-1,true),qb=multiply(q,b,0,degree);
+    auto q=reshape(qr,k,k-1,true);
+    if(timing){const auto t=Clock::now();timing->quotient+=std::chrono::duration<double>(t-mark).count();mark=t;}
+    auto qb=multiply(q,b,0,degree);
+    if(timing)timing->product+=std::chrono::duration<double>(Clock::now()-mark).count();
     return window(subtract(reshape(a,degree),reshape(qb,degree)),0,degree);
 }
 } // namespace ecm_opencl::stage2

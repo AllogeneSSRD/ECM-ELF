@@ -1,10 +1,13 @@
 #include "tree.h"
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <stdexcept>
 
 namespace ecm_opencl::stage2 {
 namespace {
+using Clock=std::chrono::steady_clock;
+double elapsed(Clock::time_point start){return std::chrono::duration<double>(Clock::now()-start).count();}
 using Group=std::vector<std::size_t>;
 // One dispatcher controls both the batched path and the serial A/B reference.
 // Dependence order is unchanged; only independent nodes within a level group.
@@ -13,7 +16,8 @@ template<class Visit>void chunks(Arithmetic &a,const Group &group,Visit visit) {
     for(std::size_t at=0;at<group.size();at+=width)visit(at,std::min(width,group.size()-at));
 }
 }
-ProductTree product_tree(Arithmetic &a,const Polynomial &roots,bool keep_children) {
+ProductTree product_tree(Arithmetic &a,const Polynomial &roots,bool keep_children,GTreeTiming* timing) {
+    auto mark=timing?Clock::now():Clock::time_point{};
     if(!roots.size || roots.batch!=1)throw std::invalid_argument("product tree root shape");
     ProductTree t;t.leaves=roots.size;t.padded=1;
     if(t.leaves>(std::size_t(1)<<27))throw std::invalid_argument("product tree too large");
@@ -29,6 +33,8 @@ ProductTree product_tree(Arithmetic &a,const Polynomial &roots,bool keep_childre
         auto factors=a.linear_factors(roots);
         for(std::size_t i=0;i<level;++i)t.nodes[level+i]=i<t.leaves?factors.element(i):one;
     }
+    unsigned depth=level==t.padded?0:1;
+    if(timing){timing->level[depth]+=elapsed(mark);mark=Clock::now();}
     for(std::size_t base=level/2;base;base/=2) {
         std::map<std::pair<std::size_t,std::size_t>,Group> groups;
         for(std::size_t i=base;i<2*base;++i){const auto left=t.nodes[2*i].size,right=t.nodes[2*i+1].size;
@@ -41,6 +47,7 @@ ProductTree product_tree(Arithmetic &a,const Polynomial &roots,bool keep_childre
             for(std::size_t j=0;j<count;++j)t.nodes[g.second[at+j]]=product.element(j);
         });
         if(!keep_children)for(std::size_t i=2*base;i<4*base;++i)t.nodes[i]={};
+        ++depth;if(timing){timing->level[depth]+=elapsed(mark);mark=Clock::now();}
     }
     return t;
 }
@@ -77,11 +84,15 @@ Resultant::Resultant(Arithmetic &a,const Polynomial &roots):arithmetic_(a),tree_
     const auto &f=tree_.nodes[1];auto reversed=a.reshape(f,f.size,f.size-1,true);
     inverse_=a.inverse_series(reversed,roots.size+1);fold_=a.constant(1);
 }
-void Resultant::append(const Polynomial &roots) {
+void Resultant::append(const Polynomial &roots,GTreeTiming* timing) {
     if(!roots.size || roots.size>tree_.leaves || roots.batch!=1)throw std::invalid_argument("giant block exceeds baby degree");
-    auto g=product_tree(arithmetic_,roots,false).nodes[1];
+    auto mark=timing?Clock::now():Clock::time_point{};
+    auto g=product_tree(arithmetic_,roots,false,timing).nodes[1];
+    if(timing){timing->build+=elapsed(mark);mark=Clock::now();}
     auto product=arithmetic_.multiply(fold_,g);
-    fold_=arithmetic_.remainder(product,tree_.nodes[1],inverse_);++blocks_;
+    if(timing){timing->fold_product+=elapsed(mark);mark=Clock::now();}
+    fold_=arithmetic_.remainder(product,tree_.nodes[1],inverse_,timing?&timing->division:nullptr);++blocks_;
+    if(timing)timing->remainder+=elapsed(mark);
 }
 Polynomial Resultant::values(){return evaluate_scaled(arithmetic_,tree_,fold_,inverse_);}
 } // namespace ecm_opencl::stage2
