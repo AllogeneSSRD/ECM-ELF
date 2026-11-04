@@ -124,6 +124,8 @@ NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，
 
 CPU 路径在上述宽位短形状和较大的密集形状（P≥4096、D/2≤6P、giant≥P）使用差分递推。后者在显式选择 `stage2_opencl_point_plan="cpu"` 时也适用。baby 从 Q 沿 [2]Q 遍历奇数索引，只保留与 D 互素的目标；每个 giant 窗口从两个 ladder 种子开始，沿 [D]Q 递推。输出的分母乘积若与真实 N 不互素，则从原 Q 和完整标量重算该窗口，再进入取样核对与归一化。选择 GMP 点后可用 `ECM_OPENCL_CPU_CHAINS=0|1` 对照独立 ladder 与递推；仅开此变量不会强制改选 CPU。
 
+在 HX 370／4060 Laptop 的密集 GMP 点计划上，真实目标 W=31 或 192、窗口至少 4096 个 giant 时，按连续索引分至最多四个 CPU 线程。每段用两个独立 ladder 种子启动，同一段内每 256 点批量求逆；逆存在即证明这批分母全是单位。任一段求逆失败，整个窗口从原 Q、原标量重算后才允许提取因子。每个原始 G 批的首、中、末点仍用原 Q 独立检查。并行只影响 giant，baby 保留原路径。`opencl_cpu_giants.affine_wall` 是包含归一化的主机墙钟，已计入 `opencl_points.coordinates`。
+
 同一身份内先跑默认方案，在**不同的有效任务曲线**之间轮换候选。对于相同 save 的显式重放也可以采样，不能计作更多数学覆盖。每个候选达到 `stage2_tune_min_repeats` 后按完整引擎平均耗时选择，后续直接复用。三个候选放不下时按 `stage2_tune_runtime_samples` 剪去尾项；不足两个完整候选时采用默认。只有通过全部检查的完整无因子曲线计入；正因子或提前结束的耗时不参加比较。OpenCL 格式版本 1 以 `[曲线数, 平均秒]` 保存每种计划，身份含设备及驱动、CPU/GMP、程序版本、两个模数的 limb 数、D、giant 数、承载指数、arena/batch 及 program 缓存设置。文件加锁并原子替换；无法识别的文件不会被覆盖。[选型入口](../../src/ecm/stage2/opencl/engine.cpp) · [计时文件](../../src/ecm/stage2/opencl/point_tune.h)
 
 RTX 4060 Laptop 的短标量计划按真实目标宽度和本条曲线的点数选择。条件为 W=129…160 个 64-bit limbs，32≤P≤256，D/2<2048，32≤giant 点数≤1152，且已启用设备点、宽位自动计划和 [D]Q 重标定。此时 baby 点直接成批做独立 ladder，giant 用相邻种子递推，两者仍按可用预算裁剪。显式指定 chunk、group、point window 或 giant chain 会让手动方案优先。设置 `ECM_OPENCL_SHORT_POINT_BATCH=0` 可单独关闭这项选择；日志 `opencl_point_plan.short_scalar_batch` 表示是否选中，`opencl_giant_chain` 的 launches 和 seed_pairs 记录实际递推工作。计时对照见[性能报告](../performance/OPENCL_STAGE2.md)。

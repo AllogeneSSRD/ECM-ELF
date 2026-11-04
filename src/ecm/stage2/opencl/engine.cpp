@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -69,17 +70,19 @@ void factor(std::set<std::string>&f,mpz_srcptr v,mpz_srcptr n){if(mpz_cmp_ui(v,1
 
 // A batch of 256 projective denominators needs one GMP inverse.
 // On inverse failure inspect every denominator before accepting any result.
-Values normalize(const Values&x,const Values&z,mpz_srcptr n,std::set<std::string>&f){
+// With no factor sink, a nonunit rejects the whole speculative chain segment.
+Values normalize(const Values&x,const Values&z,mpz_srcptr n,std::set<std::string>*f){
     Values out(x.size()),prefix(257);Big inv,t,g;
     for(std::size_t lo=0;lo<x.size();lo+=256){const auto count=std::min(std::size_t(256),x.size()-lo);mpz_set_ui(prefix[0].v,1);
         for(std::size_t j=0;j<count;++j)prefix[j+1]=mul(prefix[j],z[lo+j],n);
         if(mpz_invert(inv.v,prefix[count].v,n)){
             for(std::size_t j=count;j-->0;){t=mul(inv,prefix[j],n);inv=mul(inv,z[lo+j],n);out[lo+j]=mul(x[lo+j],t,n);}
         }else{
+            if(!f)return {};
             bool saturated=false;
-            for(std::size_t j=0;j<count;++j){if(mpz_invert(inv.v,z[lo+j].v,n))out[lo+j]=mul(x[lo+j],inv,n);else{mpz_gcd(g.v,z[lo+j].v,n);factor(f,g.v,n);saturated|=mpz_cmp(g.v,n)==0;}}
+            for(std::size_t j=0;j<count;++j){if(mpz_invert(inv.v,z[lo+j].v,n))out[lo+j]=mul(x[lo+j],inv,n);else{mpz_gcd(g.v,z[lo+j].v,n);factor(*f,g.v,n);saturated|=mpz_cmp(g.v,n)==0;}}
             // Never manufacture an affine root for the point at infinity.
-            if(saturated&&f.empty())throw std::runtime_error("saturated projective denominator; no affine Stage2 result can be published");
+            if(saturated&&f->empty())throw std::runtime_error("saturated projective denominator; no affine Stage2 result can be published");
         }
     }return out;
 }
@@ -117,7 +120,8 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
     const bool small_hybrid=short_shape && s.p>=144 && s.p<=240 && s.giants>=100 && s.giants<=114 && w>=31 && w<=255;
     const bool hybrid_default=production_hybrid || (local_hybrid && (small_hybrid || wide_point_chains(s,w)));
     if(hybrid_default)trial.plan="cpu";
-    if(overridden("ECM_OPENCL_CPU_CHAINS") || overridden("ECM_OPENCL_BATCH_GATHERS"))return trial;
+    if(overridden("ECM_OPENCL_CPU_CHAINS") || overridden("ECM_OPENCL_BATCH_GATHERS") ||
+       overridden("ECM_OPENCL_GIANT_CPU_THREADS"))return trial;
     const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
     const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
     if(!path || !*path || (!short_shape && !production_hybrid) || (amd && w>8))return trial;
@@ -173,6 +177,8 @@ struct PointGenerator {
     bool chain_requested=false,chain_enabled=false,short_scalar_batch=false;
     Word chain_launches=0,chain_points=0,chain_seeds=0,chain_recoveries=0;
     bool cpu_chains=false;
+    size_t cpu_threads=1,parallel_min_points=4096;
+    Word parallel_windows=0;double parallel_seconds=0;
     Word cpu_chain_babies=0,cpu_chain_giants=0,cpu_chain_recoveries=0;
     double chain_recovery_seconds=0,chain_kernel_seconds=0,chain_max_seconds=0,giant_kernel_seconds=0;
     Word giant_step=0;Point giant_base;bool use_giant_base=false;
@@ -220,6 +226,11 @@ struct PointGenerator {
         const auto cpu_chain=setting("ECM_OPENCL_CPU_CHAINS",wide_point_chains(shape,w) || dense_cpu);
         if(cpu_chain>1)throw std::runtime_error("ECM_OPENCL_CPU_CHAINS must be 0 or 1");
         cpu_chains=!device && cpu_chain;
+        const bool local=cpu_chains && dense_cpu && (w==31 || w==192) &&
+            r.device().name=="NVIDIA GeForce RTX 4060 Laptop GPU" && cpu_name().find("Ryzen AI 9 HX 370")!=std::string::npos;
+        cpu_threads=setting("ECM_OPENCL_GIANT_CPU_THREADS",local?4:1);
+        if(!cpu_threads || cpu_threads>4)throw std::runtime_error("ECM_OPENCL_GIANT_CPU_THREADS must be 1..4");
+        if(overridden("ECM_OPENCL_GIANT_CPU_THREADS"))parallel_min_points=2;
     }
     Word chain_capacity()const {
         if(overridden("ECM_OPENCL_POINT_CHUNK"))return chunk; // Manual command bounds also govern chains.
@@ -229,19 +240,39 @@ struct PointGenerator {
     // xADD needs the difference. For adjacent giants it is the previous
     // multiple of [D]Q. Baby residues of an even D are all odd, so walking
     // with [2]Q can skip storing non-coprime indices without another ladder.
-    void cpu_progression(const Point& origin,const std::vector<Word>& work,Word stride,Values& x,Values& z) {
+    void cpu_progression(const Point& origin,const Word* work,size_t count,Word stride,Values& x,Values& z) const {
         Point delta=stride==1?origin:twice(origin,a24,n);
-        Point prev=ladder(origin,work.front(),a24,n);
-        Word at=work.front()+stride;
+        Point prev=ladder(origin,work[0],a24,n);
+        Word at=work[0]+stride;
         Point curr=ladder(origin,at,a24,n);
         x.push_back(prev.x);z.push_back(prev.z);
-        for(size_t j=1;j<work.size();++j){
+        for(size_t j=1;j<count;++j){
             while(at<work[j]){
                 Point next=sum(curr,delta,prev,n);
                 prev=curr;curr=next;at+=stride;
             }
             x.push_back(curr.x);z.push_back(curr.z);
         }
+    }
+    Values parallel_giants(const Point& origin,const std::vector<Word>& work) const {
+        const size_t parts=std::min(cpu_threads,work.size());
+        auto segment=[&](size_t i){
+            const auto lo=work.size()*i/parts,count=work.size()*(i+1)/parts-lo;
+            Values x,z;x.reserve(count);z.reserve(count);
+            cpu_progression(origin,work.data()+lo,count,1,x,z);
+            // Successful batch inversion proves every denominator is a unit.
+            return normalize(x,z,n,nullptr);
+        };
+        std::vector<std::future<Values>> jobs;
+        for(size_t i=1;i<parts;++i)jobs.push_back(std::async(std::launch::async,segment,i));
+        Values affine=segment(0);
+        if(affine.empty())return {}; // Futures join before references expire.
+        affine.reserve(work.size());
+        for(auto& job:jobs){
+            auto next=job.get();if(next.empty())return {};
+            for(auto& value:next){affine.emplace_back();mpz_swap(affine.back().v,value.v);}
+        }
+        return affine;
     }
     // A chain may introduce a nonunit projective scale. Only the original
     // full-scalar ladders may supply a factor in this case.
@@ -261,7 +292,7 @@ struct PointGenerator {
                 const auto start=now();auto seed=ladder(base,step,a24,n);
                 // Nonunit [D]Q is already one of the required giant points.
                 // Inspect it before changing the base; never hide its factor.
-                auto affine=normalize({seed.x},{seed.z},n,f);seed_seconds+=now()-start;
+                auto affine=normalize({seed.x},{seed.z},n,&f);seed_seconds+=now()-start;
                 if(!f.empty())return {};
                 giant_base={affine[0],Big(1)};giant_step=step;
             }
@@ -312,9 +343,18 @@ struct PointGenerator {
                 x.insert(x.end(),xx.begin(),xx.end());z.insert(z.end(),zz.begin(),zz.end());
                 first=last;
             }
+        }else if(cpu_chains && cpu_threads>1 && !reduced.empty() && work.size()>=parallel_min_points){
+            x=parallel_giants(*origin,work);
+            parallel_seconds+=now()-begin;++parallel_windows;cpu_chain_giants+=work.size();
+            if(x.empty()){
+                // No chain-generated factor is admissible. Recover the entire
+                // original window before the point checks and factor extraction.
+                ++cpu_chain_recoveries;
+                for(auto scalar:scalars){auto p=ladder(base,scalar,a24,n);x.push_back(p.x);z.push_back(p.z);}
+            }
         }else if(cpu_chains && work.size()>1 && (step==1 || !reduced.empty())){
             x.reserve(work.size());z.reserve(work.size());
-            cpu_progression(*origin,work,step==1?2:1,x,z);
+            cpu_progression(*origin,work.data(),work.size(),step==1?2:1,x,z);
             cpu_chain_recoveries+=restore_nonunit(x,z,scalars.data());
             (step==1?cpu_chain_babies:cpu_chain_giants)+=work.size();
         }else{for(auto scalar:work){auto p=ladder(*origin,scalar,a24,n);x.push_back(p.x);z.push_back(p.z);}}
@@ -326,10 +366,11 @@ struct PointGenerator {
             // samples of EVERY G batch, including the final short batch.
             const auto span=sample_span?sample_span:scalars.size();
             for(std::size_t lo=0;lo<scalars.size();lo+=span){const auto count=std::min(span,scalars.size()-lo);
-                for(auto k:std::set<std::size_t>{lo,lo+count/2,lo+count-1}){const auto oracle=ladder(base,scalars[k],a24,n);auto cross=sub(mul(x[k],oracle.z,n),mul(z[k],oracle.x,n),n);if(mpz_sgn(cross.v))throw std::runtime_error("OpenCL ladder GMP mismatch");checked+=w*2;}}
+                for(auto k:std::set<std::size_t>{lo,lo+count/2,lo+count-1}){const auto oracle=ladder(base,scalars[k],a24,n);auto cross=sub(mul(x[k],oracle.z,n),z.empty()?oracle.x:mul(z[k],oracle.x,n),n);if(mpz_sgn(cross.v))throw std::runtime_error("OpenCL ladder GMP mismatch");checked+=w*2;}}
             check_seconds+=now()-check_begin;
         }
-        const auto norm_begin=now();auto out=normalize(x,z,n,f);normalize_seconds+=now()-norm_begin;return out;
+        if(z.empty())return x; // Segment inversions already produced affine coordinates.
+        const auto norm_begin=now();auto out=normalize(x,z,n,&f);normalize_seconds+=now()-norm_begin;return out;
     }
 };
 Big curve_a24(Word sigma,mpz_srcptr n,std::set<std::string>&f){Big s(sigma),u=sub(mul(s,s,n),Big(5),n),v=mul(Big(4),s,n);auto u3=mul(mul(u,u,n),u,n),d=sub(v,u,n);auto numerator=mul(mul(mul(d,d,n),d,n),add(mul(Big(3),u,n),v,n),n),den=mul(Big(16),mul(u3,v,n),n);Big inv,g;if(!mpz_invert(inv.v,den.v,n)){mpz_gcd(g.v,den.v,n);factor(f,g.v,n);if(f.empty())throw std::runtime_error("degenerate Suyama curve");return {}; }return mul(numerator,inv,n);}
@@ -387,6 +428,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
             stage2_log::print(stage2_log::phases,"opencl_payload: live_bytes=%llu peak_bytes=%llu budget_bytes=%llu scope=owned_buffers\n",mem.live_bytes,mem.peak_bytes,mem.budget_bytes);
             stage2_log::print(stage2_log::phases,"opencl_points: points=%llu launches=%llu coordinates=%.6f kernel=%.6f sample_checks=%.6f normalize=%.6f seed=%.6f\n",generator.points,generator.launches,generator.coordinate_seconds,generator.kernel_seconds,generator.check_seconds,generator.normalize_seconds,generator.seed_seconds);
             if(generator.cpu_chains)stage2_log::print(stage2_log::phases,"opencl_cpu_chain: baby_points=%llu giant_points=%llu recovery_windows=%llu\n",generator.cpu_chain_babies,generator.cpu_chain_giants,generator.cpu_chain_recoveries);
+            if(generator.parallel_windows)stage2_log::print(stage2_log::phases,"opencl_cpu_giants: threads=%zu windows=%llu affine_wall=%.6f (included in coordinates)\n",generator.cpu_threads,generator.parallel_windows,generator.parallel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_base: prepares=%llu h2d_bytes=%llu kernel=%.6f (included in coordinates)\n",generator.base_prepares,generator.base_bytes,generator.base_kernel_seconds);
             stage2_log::print(stage2_log::phases,"opencl_point_io: h2d_bytes=%llu d2h_bytes=%llu (kernel nested in coordinates; point timings nested in baby/giant)\n",generator.upload_bytes,generator.download_bytes);
             stage2_log::print(stage2_log::phases,"opencl_point_command: max_kernel_seconds=%.6f chunk=%llu group=%llu\n",generator.kernel_max_seconds,Word(generator.chunk),Word(generator.group));

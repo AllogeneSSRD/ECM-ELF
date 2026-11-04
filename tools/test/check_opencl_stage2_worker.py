@@ -261,6 +261,16 @@ def main():
     assert rows[0].get('factors')==['257']
     recovery=(a.out/'cpu_chain_nonunit/worker.log').read_text(encoding='utf-8-sig')
     assert int(re.search(r'recovery_windows=(\d+)',statistic(recovery,'opencl_cpu_chain'))[1])>0
+    threaded={**cpu_chains,'ECM_OPENCL_GIANT_CPU_THREADS':'4','ECM_OPENCL_POINT_WINDOW':'18'}
+    case('parallel_cpu_giants',line,b2=960,environment=threaded)
+    parallel=(a.out/'parallel_cpu_giants/worker.log').read_text(encoding='utf-8-sig')
+    assert 'threads=4' in statistic(parallel,'opencl_cpu_giants')
+    assert statistic(reference,'opencl_checks')==statistic(parallel,'opencl_checks')
+    rows,_=case('parallel_cpu_nonunit',save_line(257000771,6),b2=2000,environment=threaded)
+    assert rows[0].get('factors')==['257']
+    restored=(a.out/'parallel_cpu_nonunit/worker.log').read_text(encoding='utf-8-sig')
+    assert 'threads=4' in statistic(restored,'opencl_cpu_giants')
+    assert int(re.search(r'recovery_windows=(\d+)',statistic(restored,'opencl_cpu_chain'))[1])>0
     lifted,_=case('mersenne',line,extra=['--carrier-exponent',127])
     assert ordinary[0].get('factors',[])==lifted[0].get('factors',[])==[]
     target=((1<<41)-1)//13367
