@@ -116,11 +116,13 @@ NVIDIA生产点ladder显式使用32线程工作组；global范围向上补齐，
 | 内存与计时 | arena 约束 CUDA NTT 工作区，fold 有独立预算 | arena 约束 OpenCL 所有受管缓冲；batch 影响 G 批和窗口。相同 MiB 不表示相同分配 |
 | 文件与控制 | `stage2_tune_profile`，支持 CUDA 专用离线校准 | `stage2_opencl_tune_profile`，默认在配置旁的 `stage2_opencl_tune.toml`；生产曲线直接提供样本。两者共用启停、最少重复数与样本预算的 TOML 键 |
 
-本机的免调优规则和精确测量见[全位宽双档快速矩阵](../performance/OPENCL_STAGE2.md#全位宽双档-b2-与运行时调优)。仅在自动点计划、完整短标量形状（32≤P≤256，D/2<2048，32≤giant≤1152）和设备资格允许时，才使用存储的比较。CPU/GMP 也从原 Q 取样检查，每个 G 批及整范围的叶校验继续执行。固定点计划、手动点命令参数或设置 `stage2_tune_runtime=false` 均不采集；后者使用免调优默认。
+自动点计划在两类形状上可以使用本机实测：设备支持的短标量形状（32≤P≤256，D/2<2048，32≤giant≤1152），以及下述通过资格测试的生产形状。CPU/GMP 也从原 Q 取样检查，每个 G 批及整范围的叶校验继续执行。固定点计划、手动点命令参数或设置 `stage2_tune_runtime=false` 均不采集；后者使用免调优默认。
 
 免调优混合路径仅对已测 Ryzen AI 9 HX 370 + RTX 4060 Laptop 组合启用。真实目标 W=31…255 个 64-bit limbs，144≤P≤240，100≤giant≤114，且 D/2<2048 时优先 CPU 点。在同一主机、相同 P 与短标量条件下，716…1127 个 giant 且 W=160…255 时也从 CPU 点起步。其他自动选择继续采用该设备的基线或本机实测。已验证的本机混合默认形状只试 CPU 和设备两路，避免重复试跑已无明显收益的递推；其他可用短形状在 NVIDIA 上可加测连续 giant。其他厂商仅在原有设备点资格内比较 CPU 与设备，实际性能仍需本机验证。
 
-CPU 路径在这组较宽、较长的形状中可用差分递推生成点。baby 从 Q 沿 [2]Q 遍历奇数索引，只保留与 D 互素的目标；每个 giant 窗口从两个 ladder 种子开始，沿 [D]Q 递推。输出的分母乘积若与真实 N 不互素，则从原 Q 和完整标量重算该窗口，再进入取样核对与归一化。显式选择 GMP 点后可用 `ECM_OPENCL_CPU_CHAINS=0|1` 对照独立 ladder 与递推；仅开此变量不会强制改选 CPU。
+在同一 CPU/GPU 组合上，生产形状按真实目标的 W 与点密度准入。W=31（1921…1984 bits）、51840≤P≤80640、D/2≤6P、3P≤giant≤38P 时，默认先用 CPU/GMP 递推。启用运行时调优后比较 `cpu` 与设备 giant 递推 `chain`，承载与普通分别记录。实测输入为 1939 bits，其他满足边界的位宽沿用同一 limb 数的预测。[生产 B2 实测](../performance/OPENCL_STAGE2.md#生产-b2-的同几何采样)
+
+CPU 路径在上述宽位短形状和较大的密集形状（P≥4096、D/2≤6P、giant≥P）使用差分递推。后者在显式选择 `stage2_opencl_point_plan="cpu"` 时也适用。baby 从 Q 沿 [2]Q 遍历奇数索引，只保留与 D 互素的目标；每个 giant 窗口从两个 ladder 种子开始，沿 [D]Q 递推。输出的分母乘积若与真实 N 不互素，则从原 Q 和完整标量重算该窗口，再进入取样核对与归一化。选择 GMP 点后可用 `ECM_OPENCL_CPU_CHAINS=0|1` 对照独立 ladder 与递推；仅开此变量不会强制改选 CPU。
 
 同一身份内先跑默认方案，在**不同的有效任务曲线**之间轮换候选。对于相同 save 的显式重放也可以采样，不能计作更多数学覆盖。每个候选达到 `stage2_tune_min_repeats` 后按完整引擎平均耗时选择，后续直接复用。三个候选放不下时按 `stage2_tune_runtime_samples` 剪去尾项；不足两个完整候选时采用默认。只有通过全部检查的完整无因子曲线计入；正因子或提前结束的耗时不参加比较。OpenCL 格式版本 1 以 `[曲线数, 平均秒]` 保存每种计划，身份含设备及驱动、CPU/GMP、程序版本、两个模数的 limb 数、D、giant 数、承载指数、arena/batch 及 program 缓存设置。文件加锁并原子替换；无法识别的文件不会被覆盖。[选型入口](../../src/ecm/stage2/opencl/engine.cpp) · [计时文件](../../src/ecm/stage2/opencl/point_tune.h)
 

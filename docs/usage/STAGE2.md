@@ -20,6 +20,8 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 生产 TOML 可在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_opencl_point_plan="auto"`、`stage2_opencl_tune_profile="stage2_opencl_tune.toml"`。打开 `stage2_tune_runtime` 后通过真实任务学习；`stage2_tune_min_repeats=1` 可快速试用，默认 2。使用独立路径可分离各 worker。非零的 `stage2_opencl_point_chunk`、`stage2_opencl_point_group`、`stage2_opencl_point_window`会锁定对应参数；设备短批次另由 `stage2_opencl_short_point_batch` 控制。完整键名、取值及默认值见[配置参考](../ECM_TOML_REFERENCE.md#stage2_opencl_point_plan)，CUDA 与 OpenCL 的区别见[运行时点计划](../architecture/OPENCL.md#opencl-运行时点计划)。
 
+在已验证的 HX 370／RTX 4060 Laptop 生产形状上，`auto` 从 GMP 点递推开始，启用调优后与设备 giant 递推对照。日志中的 `stage2_opencl.point_backend` 给出实际执行位置，`opencl_cpu_chain` 给出 CPU 递推的点数与恢复窗口数。其他形状可显式选择 `"cpu"` 做整曲线对照；多项式运算仍使用 OpenCL。[生产实测与边界](../performance/OPENCL_STAGE2.md#生产-b2-的同几何采样)
+
 | 环境变量 | 默认 | 合法值与作用 |
 |---|---|---|
 | `ECM_OPENCL_POINTS` | 未设置时自动 | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |

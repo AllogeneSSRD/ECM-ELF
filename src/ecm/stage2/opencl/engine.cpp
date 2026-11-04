@@ -90,6 +90,12 @@ bool wide_point_chains(const Shape& shape,size_t words) {
     return words>=160 && words<=255 && shape.p>=144 && shape.p<=240 &&
         shape.d/2<2048 && shape.giants>=716 && shape.giants<=1127;
 }
+// On the qualified host, production G batches can amortize a GMP recurrence.
+// Limit the default to measured per-point width, density and workload.
+bool production_cpu_points(const Shape& s,size_t w) {
+    return w==31 && s.p>=51840 && s.p<=80640 && s.d/2<=6*s.p &&
+        s.giants>=3*s.p && s.giants<=38*s.p;
+}
 cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_t w,size_t arithmetic_words,
                              unsigned carrier,Word arena) {
     cls::PointTrial trial;
@@ -106,14 +112,15 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
                   "ECM_OPENCL_SHORT_POINT_BATCH","ECM_OPENCL_GIANT_BASE"})
         if(overridden(key))return trial;
     // CPU performance is part of this policy: other hosts start from device points.
-    const bool hybrid_default=qualified_device && host.find("Ryzen AI 9 HX 370")!=std::string::npos &&
-        ((short_shape && s.p>=144 && s.p<=240 && s.giants>=100 && s.giants<=114 && w>=31 && w<=255) ||
-         wide_point_chains(s,w));
+    const bool local_hybrid=qualified_device && host.find("Ryzen AI 9 HX 370")!=std::string::npos;
+    const bool production_hybrid=local_hybrid && production_cpu_points(s,w);
+    const bool small_hybrid=short_shape && s.p>=144 && s.p<=240 && s.giants>=100 && s.giants<=114 && w>=31 && w<=255;
+    const bool hybrid_default=production_hybrid || (local_hybrid && (small_hybrid || wide_point_chains(s,w)));
     if(hybrid_default)trial.plan="cpu";
     if(overridden("ECM_OPENCL_CPU_CHAINS") || overridden("ECM_OPENCL_BATCH_GATHERS"))return trial;
     const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
     const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
-    if(!path || !*path || !short_shape || (amd && w>8))return trial;
+    if(!path || !*path || (!short_shape && !production_hybrid) || (amd && w>8))return trial;
     trial.path=path;
     const std::string identity=device.platform+"|"+device.name+"|"+device.driver+"|"+std::to_string(device.index)+
         "|"+host+"|"+gmp_version+"|"+ecm_program::version;
@@ -124,6 +131,7 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
     trial.key=key.str();
     trial.repeats=static_cast<unsigned>(setting("ECM_OPENCL_RUNTIME_REPEATS",2));
     std::vector<std::string> candidates{trial.plan,trial.plan=="cpu"?"device":"cpu"};
+    if(production_hybrid)candidates[1]="chain"; // Measured device alternative at production scale.
     // On compact shapes with a qualified paired GPU plan, a separate chain trial
     // would only revert baby batching. Other devices can measure chain directly.
     if(device.vendor.find("NVIDIA")!=std::string::npos && w>8 && !hybrid_default &&
@@ -206,7 +214,10 @@ struct PointGenerator {
             !overridden("ECM_OPENCL_GIANT_CHAIN") && !overridden("ECM_OPENCL_POINT_WINDOW");
         chain_requested=chain!=0 || point_plan=="chain";
         chain_enabled=(chain_requested||short_scalar_batch)&&device&&use_giant_base;
-        const auto cpu_chain=setting("ECM_OPENCL_CPU_CHAINS",wide_point_chains(shape,w));
+        // A user who explicitly selects GMP can use the recurrence on larger
+        // dense workloads without forcing an experimental environment switch.
+        const bool dense_cpu=point_plan=="cpu" && shape.p>=4096 && shape.d/2<=6*shape.p && shape.giants>=shape.p;
+        const auto cpu_chain=setting("ECM_OPENCL_CPU_CHAINS",wide_point_chains(shape,w) || dense_cpu);
         if(cpu_chain>1)throw std::runtime_error("ECM_OPENCL_CPU_CHAINS must be 0 or 1");
         cpu_chains=!device && cpu_chain;
     }
