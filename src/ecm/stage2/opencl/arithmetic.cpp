@@ -23,7 +23,8 @@ Polynomial Polynomial::element(std::size_t i)const {
 struct ArithmeticState {
     ntt::Runtime runtime;ArithmeticOptions options;ArithmeticStats stats;
     std::size_t nw=0;ntt::Buffer modulus;
-    cl_program program=nullptr;std::array<cl_kernel,5> kernels{};
+    cl_program program=nullptr;std::array<cl_kernel,6> kernels{};
+    std::array<bool,17> monic_degree{};
     std::shared_ptr<PolynomialWorkspace> workspace;
     std::map<std::size_t,std::unique_ptr<PolynomialPlan>> products;
     // Commands retain OpenCL objects, but the payload ledger follows Buffer
@@ -65,13 +66,18 @@ Arithmetic::Arithmetic(ntt::Runtime &r,const ArithmeticOptions &o):state_(std::m
     p.options.product.workspace.reset();
     // Validate modulus/NTT options once, even before the first multiplication.
     auto initial=o.product;initial.capacity=1;initial.workspace.reset();PolynomialPlan validation(r,initial);p.nw=validation.coefficient_words();
+    if(o.monic_g_levels && o.group_batches && !o.product.forced_digit_bits){
+        const auto bits=validation.shape().coefficient_bits;
+        for(std::size_t d=2;d<p.monic_degree.size();d*=2)
+            p.monic_degree[d]=integer_shape(bits,d).length<integer_shape(bits,d+1).length;
+    }
     if(o.reuse_workspace)p.workspace=std::make_shared<PolynomialWorkspace>();
     p.modulus=r.allocate(p.nw);r.upload(p.modulus,o.product.modulus.data(),p.nw);p.stats.upload_bytes+=p.nw*8;
     const std::filesystem::path root=Native::resource_root(r);
     const auto source=read(root.parent_path()/"stage2/coefficients.cl");cl_int code=0;
     const auto options="-cl-std=CL1.2 -DECM_COEFF_NW="+std::to_string(p.nw);
     p.program=Native::program(r,source,options);
-    unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear","ecm_poly_gather_rows","ecm_poly_quadratic"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
+    unsigned i=0;for(const char *name:{"ecm_poly_view","ecm_poly_sub","ecm_poly_linear","ecm_poly_gather_rows","ecm_poly_quadratic","ecm_poly_monic_join"}){p.kernels[i++]=clCreateKernel(p.program,name,&code);check(code,name);}
 }
 Arithmetic::~Arithmetic()=default;
 std::size_t Arithmetic::words()const{return state_->nw;}
@@ -179,6 +185,19 @@ Polynomial Arithmetic::quadratic_factors(const Polynomial &roots) {
     arg(k,0,Native::memory(roots.buffer));arg(k,1,first);arg(k,2,Native::memory(products.buffer));
     arg(k,3,Native::memory(p.modulus));arg(k,4,Native::memory(out.buffer));p.launch(k,left.batch,1);
     p.stats.quadratic_pairs+=left.batch;return out;
+}
+Polynomial Arithmetic::multiply_g_nodes(const Polynomial &a,const Polynomial &b){
+    auto &p=*state_;const auto d=a.size-1;
+    if(a.size!=b.size || d>=p.monic_degree.size() || !p.monic_degree[d])return multiply(a,b);
+    // A=X^d+a0, B=X^d+b0. Omit the two known leading ones only at
+    // a shorter NTT length. Windows preserve the interleaved batch strides.
+    auto low=multiply(window(a,0,d),window(b,0,d));
+    auto out=p.allocate(2*d+1,a.batch);p.hold(a);p.hold(b);p.hold(low);p.hold(out);
+    const Word ao=a.offset,ast=a.stride,bo=b.offset,bst=b.stride,degree=d;
+    auto k=p.kernels[5];arg(k,0,Native::memory(a.buffer));arg(k,1,ao);arg(k,2,ast);
+    arg(k,3,Native::memory(b.buffer));arg(k,4,bo);arg(k,5,bst);arg(k,6,Native::memory(low.buffer));
+    arg(k,7,Native::memory(p.modulus));arg(k,8,Native::memory(out.buffer));arg(k,9,degree);
+    p.launch(k,out.size,a.batch);p.stats.monic_pairs+=a.batch;return out;
 }
 Polynomial Arithmetic::multiply(const Polynomial &a,const Polynomial &b,std::size_t first,std::size_t count) {
     auto &p=*state_;p.validate(a);p.validate(b);if(a.batch!=b.batch)throw std::invalid_argument("polynomial multiply batch");

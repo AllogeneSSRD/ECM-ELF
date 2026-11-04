@@ -162,6 +162,7 @@ def main():
             assert checked==original_checked+70*len(positions(960)-positions(624))
         else:original_checked=checked
     case('invalid_full_g',save_line((1<<127)-1),expect=2,environment={'ECM_OPENCL_FULL_G_BATCH':'2'})
+    case('invalid_monic_levels',save_line((1<<127)-1),expect=2,environment={'ECM_OPENCL_MONIC_G_LEVELS':'2'})
     rows,_=case('quadratic_g_hit',save_line(257000771,6),environment={'ECM_OPENCL_QUADRATIC_G_LEAVES':'1'})
     assert rows[0].get('factors')==['257']
     paired=(a.out/'quadratic_g_hit/worker.log').read_text(encoding='utf-8-sig')

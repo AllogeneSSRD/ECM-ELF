@@ -43,7 +43,7 @@ ProductTree product_tree(Arithmetic &a,const Polynomial &roots,bool keep_childre
             std::vector<Polynomial> left,right;left.reserve(count);right.reserve(count);
             for(std::size_t j=0;j<count;++j){const auto node=g.second[at+j];left.push_back(t.nodes[2*node]);right.push_back(t.nodes[2*node+1]);}
             auto packed_left=a.gather(left),packed_right=a.gather(right);
-            auto product=a.multiply(packed_left,packed_right);
+            auto product=keep_children?a.multiply(packed_left,packed_right):a.multiply_g_nodes(packed_left,packed_right);
             for(std::size_t j=0;j<count;++j)t.nodes[g.second[at+j]]=product.element(j);
         });
         if(!keep_children)for(std::size_t i=2*base;i<4*base;++i)t.nodes[i]={};

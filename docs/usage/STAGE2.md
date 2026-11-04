@@ -26,6 +26,7 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 |---|---|---|
 | `ECM_OPENCL_POINTS` | 未设置时自动 | `device\|cpu`；CPU只替换点生成，多项式仍在OpenCL。AMD >512 bits始终保留CPU资格回退，不能强制越过门禁 |
 | `ECM_OPENCL_GIANT_CPU_THREADS` | 合资格的密集 GMP 形状为 4，其他为 1 | `1..4`；1 使用串行点链。2…4 在 GMP giant 路径上并行生成坐标与归一化。显式设置允许小窗口对照并暂停点计划学习。多个 worker 共享 CPU 时可分别设置进程环境。|
+| `ECM_OPENCL_MONIC_G_LEVELS` | RTX 4060 Laptop 普通路径、W=192、P=13440、点批上限 ≥4096 时开启 | `0\|1`。1 允许 G 树同次数子节点在 NTT 可缩短时省去首一项，适用于次数 2、4、8、16；0 强制通用乘法。显式设置暂停点计划学习。|
 | `ECM_OPENCL_FULL_G_BATCH` | 已验证的生产形状为 1，其他为 0 | `0\|1`；1 在 GPU 上拼接至 P 个根再建 G 树，最终尾块按实际点数处理。0 沿用点批边界。显式设置暂停点计划学习；额外的根缓冲计入 arena。|
 | `ECM_OPENCL_QUADRATIC_G_LEAVES` | 根据设备、算术位宽与 G 批选取 | `0\|1`；1 用相邻根组成二次因子，0 从一次因子建 G 树。显式设置暂停点计划学习。自动启用范围是 RTX 4060 Laptop 普通模数、计划 G 批至少 4096 点，且 (64-bit limbs, P) 为 (31, 80640) 或 (192, 13440)。|
 | `ECM_OPENCL_POINT_AUTO` | `1` | `0\|1`；NVIDIA、513～16384 bits、无显式chunk/group覆盖时，根据真实点命令反馈规划批量与坐标窗口。0保留原批量；不自动切换CPU点 |

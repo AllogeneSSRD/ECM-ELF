@@ -121,7 +121,7 @@ cls::PointTrial choose_points(const cln::DeviceInfo& device,const Shape& s,size_
     const bool hybrid_default=production_hybrid || (local_hybrid && (small_hybrid || wide_point_chains(s,w)));
     if(hybrid_default)trial.plan="cpu";
     if(overridden("ECM_OPENCL_CPU_CHAINS") || overridden("ECM_OPENCL_BATCH_GATHERS") ||
-       overridden("ECM_OPENCL_FULL_G_BATCH") || overridden("ECM_OPENCL_GIANT_CPU_THREADS") || overridden("ECM_OPENCL_QUADRATIC_G_LEAVES"))return trial;
+       overridden("ECM_OPENCL_MONIC_G_LEVELS") || overridden("ECM_OPENCL_FULL_G_BATCH") || overridden("ECM_OPENCL_GIANT_CPU_THREADS") || overridden("ECM_OPENCL_QUADRATIC_G_LEAVES"))return trial;
     const wchar_t* path=_wgetenv(L"ECM_OPENCL_RUNTIME_PROFILE");
     const bool amd=device.vendor=="AMD" || device.vendor.find("Advanced Micro Devices")!=std::string::npos;
     if(!path || !*path || (!short_shape && !production_hybrid) || (amd && w>8))return trial;
@@ -436,6 +436,9 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
         const auto paired=setting("ECM_OPENCL_QUADRATIC_G_LEAVES",paired_default);
         if(paired>1)throw std::runtime_error("ECM_OPENCL_QUADRATIC_G_LEAVES must be 0 or 1");
         arithmetic.quadratic_g_leaves=paired!=0;
+        const auto monic=setting("ECM_OPENCL_MONIC_G_LEVELS",paired_default && m.W==192);
+        if(monic>1)throw std::runtime_error("ECM_OPENCL_MONIC_G_LEVELS must be 0 or 1");
+        arithmetic.monic_g_levels=monic!=0;
         cls::Arithmetic field(runtime,arithmetic);std::set<std::string> factors;Big a;if(a24){if(mpz_set_str(a.v,a24,16)||mpz_sgn(a.v)<0||mpz_cmp(a.v,m.target())>=0)throw std::runtime_error("invalid curve a24");}else a=curve_a24(sigma,m.target(),factors);
         auto trial=choose_points(ds[index],s,(m.target_bits()+63)/64,m.W,carrier,options.budget_bytes);
         PointGenerator generator(runtime,m.target(),saved,a,s,trial.plan);double sentinel_seconds=0;cls::GTreeTiming tree_timing;
@@ -469,6 +472,7 @@ int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uin
                 std::ostringstream levels;for(size_t i=0;i<tree_timing.level.size();++i)if(tree_timing.level[i]>0)levels<<' '<<i<<':'<<std::fixed<<std::setprecision(4)<<tree_timing.level[i];
                 stage2_log::print(stage2_log::phases,"opencl_gtree_levels:%s\n",levels.str().c_str());
             }
+            if(arithmetic.monic_g_levels)stage2_log::print(stage2_log::phases,"opencl_g_monic: pairs=%llu\n",field.stats().monic_pairs);
             if(arithmetic.quadratic_g_leaves)stage2_log::print(stage2_log::phases,"opencl_g_leaves: quadratic_pairs=%llu\n",field.stats().quadratic_pairs);
             stage2_log::print(stage2_log::phases,"opencl_checks: startup_cases=%llu checked_words=%llu bad=0 point_samples=GMP leaf_sentinels=GMP factors=divisibility\n",result.selftest_cases,result.checked);
             if(counts_enabled){std::cout<<"ntt_lengths:";for(const auto&entry:field.stats().ntt_transforms)std::cout<<' '<<entry.first<<':'<<entry.second;std::cout<<" backend=opencl scope=transforms\n";}

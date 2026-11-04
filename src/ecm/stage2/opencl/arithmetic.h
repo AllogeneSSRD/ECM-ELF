@@ -18,6 +18,7 @@ struct ArithmeticOptions {
     bool borrow_contiguous=true; // Read-only regular slices need no gather copy.
     bool batch_gathers=false;
     bool quadratic_g_leaves=false;
+    bool monic_g_levels=false;
 };
 struct ArithmeticStats {
     std::map<unsigned,Word> ntt_transforms; // Three transforms per convolution pair.
@@ -25,7 +26,7 @@ struct ArithmeticStats {
     Word upload_bytes=0,download_bytes=0,device_copy_bytes=0;
     Word borrowed_gathers=0,avoided_copy_bytes=0;
     Word gather_kernels=0,gather_rows=0;
-    Word quadratic_pairs=0;
+    Word quadratic_pairs=0,monic_pairs=0;
 };
 struct RemainderTiming {double quotient=0, product=0;};
 struct ArithmeticState;
@@ -51,6 +52,7 @@ public:
     Polynomial subtract(const Polynomial &,const Polynomial &);
     Polynomial linear_factors(const Polynomial &roots);
     Polynomial quadratic_factors(const Polynomial &roots); // Consecutive complete pairs.
+    Polynomial multiply_g_nodes(const Polynomial &,const Polynomial &); // Both nodes monic.
     Polynomial multiply(const Polynomial &,const Polynomial &,
         std::size_t first=0,std::size_t count=std::numeric_limits<std::size_t>::max());
     // a(0)=1. Used with the reverse of a monic polynomial over composite N.

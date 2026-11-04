@@ -30,7 +30,7 @@ void check_tree(cl2::Arithmetic&a,const cl2::ProductTree&t,const ref::Poly&roots
 void algebra(ntt::Runtime&r,unsigned bits,std::size_t count,bool mersenne,bool grouped,Counts&c,bool batch_gathers=false){
     const auto limbs=modulus(bits,mersenne);const auto n=ref::import(limbs);Word seed=0xb1d21836a09fe734ULL+bits+count;
     auto babies=random_roots(n,count,seed),giants=random_roots(n,2*count+3,seed);
-    auto config=options(limbs,mersenne,grouped);config.batch_gathers=batch_gathers;config.quadratic_g_leaves=grouped;
+    auto config=options(limbs,mersenne,grouped);config.batch_gathers=batch_gathers;config.quadratic_g_leaves=grouped;config.monic_g_levels=grouped;
     // Exercise canonical zero, exact N, and negative N-a-b including a borrow
     // across the highest limb. The rest of each block retains random roots.
     if(giants.size()>=6){
@@ -50,6 +50,7 @@ void algebra(ntt::Runtime&r,unsigned bits,std::size_t count,bool mersenne,bool g
     rejects("a(0)=1",[&]{a.inverse_series(a.constant(2),4);},c);
     rejects("exceeds baby",[&]{resultant.append(gs);},c);
     auto root_only=cl2::product_tree(a,roots,false);same(a,root_only.nodes[1],f,c,"root-only tree");
+    if((bits==12285 || bits==12288) && count>=32 && !a.stats().monic_pairs)throw std::runtime_error("monic join not exercised");
     if(grouped && count>=2 && !a.stats().quadratic_pairs)throw std::runtime_error("quadratic G leaves not exercised");
     for(std::size_t i=2;i<root_only.nodes.size();++i)if(root_only.nodes[i].buffer.words())throw std::runtime_error("G tree retained a child");++c.guards;
     if(count>1)rejects("retained children",[&]{cl2::evaluate_scaled(a,root_only,resultant.fold(),resultant.inverse());},c);
@@ -122,7 +123,9 @@ int main(int argc,char**argv){std::cout<<std::unitbuf;std::cerr<<std::unitbuf;
         ntt::Options ro;ro.device=device;ro.resource_root=root;ro.budget_bytes=256ULL<<20;ntt::Runtime runtime(ro);Counts counts;const auto start=ref::now();
         if(verify){const std::array<std::pair<unsigned,std::size_t>,8> grid={{{31,1},{63,3},{127,5},{512,17},{2203,33},{4423,7},{8191,3},{16384,3}}};
             for(const auto &spec:grid){if(smoke && spec.first>127)continue;for(bool mersenne:{false,true})algebra(runtime,spec.first,spec.second,mersenne,true,counts);}
-            for(bool mersenne:{false,true})algebra(runtime,127,65,mersenne,true,counts,true);
+            for(bool mersenne:{false,true}){algebra(runtime,127,65,mersenne,true,counts,true);
+                if(!smoke)algebra(runtime,12285,35,mersenne,true,counts);}
+            if(!smoke)algebra(runtime,12288,35,false,true,counts);
             algebra(runtime,127,5,false,false,counts);auto hit=hit_fixture();curve_case(runtime,hit,hit.modulus,false,counts);
             ref::Big prime;mpz_set_ui(prime.v,1);mpz_mul_2exp(prime.v,prime.v,127);mpz_sub_ui(prime.v,prime.v,1);auto curve=ref::curve(prime,26,20,300,30);curve_case(runtime,curve,prime,false,counts);curve_case(runtime,curve,prime,true,counts);
             // A unit-normalized cofactor pair. A separate negative fixture keeps

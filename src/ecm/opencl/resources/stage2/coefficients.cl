@@ -67,3 +67,38 @@ __kernel void ecm_poly_quadratic(__global const ulong *roots,ulong first,
         }
     }
 }
+
+// Add two canonical residues; tracking the last unequal limb compares the
+// whole unsigned sum to N. A carry also forces one subtraction modulo 2^W.
+inline void ecm_coeff_add(__global ulong *out,__global const ulong *a,
+    __global const ulong *b,__global const ulong *modulus){
+    ulong carry=0;int cmp=0;
+    for(int w=0;w<ECM_COEFF_NW;++w){
+        const ulong x=a[w],t=x+b[w],v=t+carry;carry=(t<x)||(v<t);
+        out[w]=v;if(v!=modulus[w])cmp=v<modulus[w]?-1:1;
+    }
+    if(carry || cmp>=0){
+        ulong borrow=0;
+        for(int w=0;w<ECM_COEFF_NW;++w){
+            const ulong x=out[w],t=x-modulus[w];out[w]=t-borrow;
+            borrow=(x<modulus[w])||(t<borrow);
+        }
+    }
+}
+
+__kernel void ecm_poly_monic_join(__global const ulong *a,ulong ao,ulong ast,
+    __global const ulong *b,ulong bo,ulong bst,__global const ulong *low,
+    __global const ulong *modulus,__global ulong *out,ulong d){
+    const ulong k=get_global_id(0),row=get_global_id(1);
+    __global ulong *dst=out+(row*(2*d+1)+k)*ECM_COEFF_NW;
+    const ulong low_offset=(row*(2*d-1)+k)*ECM_COEFF_NW;
+    if(k<d){
+        for(int w=0;w<ECM_COEFF_NW;++w)dst[w]=low[low_offset+w];
+    }else if(k==2*d){
+        for(int w=0;w<ECM_COEFF_NW;++w)dst[w]=(w==0);
+    }else{
+        const ulong j=(k-d)*ECM_COEFF_NW;
+        ecm_coeff_add(dst,a+ao+row*ast+j,b+bo+row*bst+j,modulus);
+        if(k<2*d-1)ecm_coeff_add(dst,dst,low+low_offset,modulus);
+    }
+}
