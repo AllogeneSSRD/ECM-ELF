@@ -22,24 +22,14 @@ def counters(text,prefix):
     line=next((s for s in text.splitlines() if s.startswith(prefix+':')),'')
     return {k:float(v) for k,v in re.findall(r'(\w+)=([0-9]+(?:\.[0-9]+)?)',line)}
 
-def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run',type=Path,required=True)
-    parser.add_argument('--out',type=Path,required=True)
-    parser.add_argument('--figure',type=Path,required=True)
-    parser.add_argument('--linear',action='store_true',help='Linear engine-time axis; ratios always remain linear')
-    parser.add_argument('--reference',type=Path,help='Prior audited summary.json; overlay matching OpenCL cells')
-    a=parser.parse_args()
-    phase_figure=a.figure.with_name(a.figure.stem+'_phases.png')
-    if a.out.exists() or a.figure.exists() or phase_figure.exists():
-        raise SystemExit('Choose new derived output paths')
-    manifest=json.loads((a.run/'completed.json').read_text(encoding='utf-8'))
+def read_run(run):
+    manifest=json.loads((run/'completed.json').read_text(encoding='utf-8'))
     if not manifest['complete']:
         raise RuntimeError('Incomplete matrix')
     for name,digest in manifest.get('frozen_files',{}).items():
-        if sha(a.run/name)!=digest:
+        if sha(run/name)!=digest:
             raise RuntimeError('Modified frozen build: '+name)
-    rows=[json.loads(s) for s in (a.run/'measurements.jsonl').read_text(encoding='utf-8').splitlines()]
+    rows=[json.loads(s) for s in (run/'measurements.jsonl').read_text(encoding='utf-8').splitlines()]
     if len(rows)!=manifest['runs']:
         raise RuntimeError('Measurement count does not match completion manifest')
     if 'matrix_plan' in manifest:
@@ -63,7 +53,7 @@ def main():
             or results[0]['stage2-engine']['carrier_exponent']!=row.get('carrier_exponent',0)
             or results[0]['source-build'].lower()!=row['source_build'].lower()):
             raise RuntimeError('Not a matching verified NF: '+str(path))
-        frozen=a.run/'inputs'/Path(results[0]['stage2-engine']['save']).name
+        frozen=run/'inputs'/Path(results[0]['stage2-engine']['save']).name
         if sha(frozen)!=row['save_sha256']:
             raise RuntimeError('Modified input: '+str(frozen))
         saved=next(s for s in frozen.read_text(encoding='utf-8-sig').splitlines() if 'SIGMA=' in s)
@@ -94,6 +84,57 @@ def main():
                 or checks.get('gmp_selftest_bad',1) or checks.get('gmp_check_bad',1)):
                 raise RuntimeError('Missing/failed CUDA verification')
         groups[(row['bits'],row['exponent'],row['B2'],row['backend'],row.get('mode','ordinary'))].append(row)
+    return manifest, groups
+
+def combined_manifest(runs, manifests):
+    if len(manifests)==1:
+        return manifests[0]
+    # B2 can differ; all other experimental controls and the frozen build must match.
+    first=manifests[0]
+    fields=('kind','warmup','repeats','D','arena_mb','versions','boundaries','allowed_processes',
+            'gpu_settings_changed','inherited_ntt_environment','opencl_devices','frozen_files')
+    common_plan={k:v for k,v in first['matrix_plan'].items() if k!='B2'}
+    def gpu_identity(m):
+        rows=csv.DictReader(m['telemetry_before'].splitlines(),skipinitialspace=True)
+        return next((r['uuid'],r['driver_version']) for r in rows if int(r['index'])==common_plan['cuda_device'])
+    bounds=set()
+    sources=[]
+    for run,m in zip(runs,manifests):
+        if any(m[key]!=first[key] for key in fields) or gpu_identity(m)!=gpu_identity(first):
+            raise ValueError('Matrix controls, device or build differ: '+str(run))
+        if common_plan!={k:v for k,v in m['matrix_plan'].items() if k!='B2'}:
+            raise ValueError('Matrix plans differ beyond B2: '+str(run))
+        if bounds.intersection(m['matrix_plan']['B2']):
+            raise ValueError('Overlapping B2 ranges: '+str(run))
+        bounds.update(m['matrix_plan']['B2'])
+        sources.append({'path':str(run.resolve()),'sha256':sha(run/'completed.json'),
+                        'B2':m['matrix_plan']['B2'],'runs':m['runs']})
+    return {**{k:first[k] for k in fields},'sources':sources,'complete':True,
+            'runs':sum(m['runs'] for m in manifests),'matrix_plan':{**common_plan,'B2':sorted(bounds)}}
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--run',type=Path,required=True,action='append',
+                        help='Completed matrix; repeat for separately measured B2 ranges')
+    parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--figure',type=Path,required=True)
+    parser.add_argument('--linear',action='store_true',help='Linear engine-time axis; ratios always remain linear')
+    parser.add_argument('--reference',type=Path,help='Prior audited summary.json; overlay matching OpenCL cells')
+    a=parser.parse_args()
+    phase_figure=a.figure.with_name(a.figure.stem+'_phases.png')
+    if a.out.exists() or a.figure.exists() or phase_figure.exists():
+        raise SystemExit('Choose new derived output paths')
+    parts=[read_run(run) for run in a.run]
+    manifest=combined_manifest(a.run,[m for m,_ in parts])
+    groups={}
+    inputs={}
+    for _,part in parts:
+        for key,samples in part.items():
+            exponent=key[1]
+            save=samples[0]['save_sha256']
+            if inputs.setdefault(exponent,save)!=save:
+                raise ValueError(f'Different Stage1 save for M{exponent}')
+        groups.update(part)
     cells=[];components=[];phase_shares=[]
     for (bits,exponent,b2,backend,mode),samples in sorted(groups.items()):
         if (len(samples)!=manifest['repeats'] or len({r['save_sha256'] for r in samples})!=1
@@ -152,7 +193,7 @@ def main():
         with (a.out/(name+'.csv')).open('w',newline='',encoding='utf-8') as file:
             writer=csv.DictWriter(file,fieldnames=list(data[0]));writer.writeheader();writer.writerows(data)
     telemetry=[]
-    telemetry_files=sorted(a.run.glob('gpu*.csv'))
+    telemetry_files=[path for run in a.run for path in sorted(run.glob('gpu*.csv'))]
     for path in telemetry_files:
         with path.open(encoding='utf-8-sig',newline='') as file:
             telemetry.extend(csv.DictReader(file,skipinitialspace=True))
@@ -164,11 +205,17 @@ def main():
             clocks[int(clock[0])]+=1
             if utilization and int(utilization[0])>0:
                 active_clocks[int(clock[0])]+=1
-    result={'manifest':manifest,'samples':len(rows),'cells':cells,'pairs':paired,'opencl_components':components,'phase_shares':phase_shares,
-        'telemetry':{'samples':len(telemetry),'unparsed_clock_samples':len(telemetry)-sum(clocks.values()),'clock_mhz_counts':dict(clocks),'nonzero_utilization_clock_mhz_counts':dict(active_clocks),'files_sha256':{p.name:sha(p) for p in telemetry_files}},
+    result={'manifest':manifest,'samples':manifest['runs'],'cells':cells,'pairs':paired,'opencl_components':components,'phase_shares':phase_shares,
+        'telemetry':{'samples':len(telemetry),'unparsed_clock_samples':len(telemetry)-sum(clocks.values()),'clock_mhz_counts':dict(clocks),'nonzero_utilization_clock_mhz_counts':dict(active_clocks),'files_sha256':{(p.name if len(a.run)==1 else str(p.resolve())):sha(p) for p in telemetry_files}},
         'sum_medians':{b:sum(r['engine_seconds'] for r in cells if r['backend']==b) for b in ['cuda','opencl']},
         'sum_medians_by_mode':{m:{b:sum(r['engine_seconds'] for r in cells if r['backend']==b and r['mode']==m) for b in ['cuda','opencl']} for m in sorted({r['mode'] for r in cells})},
         'sum_process_medians':{b:sum(r['process_seconds'] for r in cells if r['backend']==b) for b in ['cuda','opencl']}}
+    totals_by_bound={}
+    for row in cells:
+        bucket=totals_by_bound.setdefault(row['B2'],{}).setdefault(row['mode'],{})
+        backend=row['backend']
+        bucket[backend]=bucket.get(backend,0.)+row['engine_seconds']
+    result['sum_medians_by_bound']=totals_by_bound
     reference={}
     if a.reference:
         previous=json.loads(a.reference.read_text(encoding='utf-8'))
@@ -186,7 +233,7 @@ def main():
     import matplotlib.pyplot as plt
     bounds=sorted({r['B2'] for r in cells})
     modes=sorted({r['mode'] for r in cells},key=lambda m:m!='ordinary')
-    fig,axes=plt.subplots(2*len(modes),len(bounds),figsize=(6.5*len(bounds),7*len(modes)),squeeze=False,layout='constrained')
+    fig,axes=plt.subplots(2*len(modes),len(bounds),figsize=(6.5*len(bounds),7*len(modes)),sharey='row',squeeze=False,layout='constrained')
     for mi,col in ((i,j) for i in range(len(modes)) for j in range(len(bounds))):
         mode=modes[mi];b2=bounds[col];ax=axes[2*mi,col]
         if reference:
@@ -240,7 +287,7 @@ def main():
     fig.legend(handles,legend_labels,loc='upper center',bbox_to_anchor=(.5,.955),ncol=4)
     fig.suptitle(f'OpenCL {manifest["versions"]["opencl"].removeprefix("ECM-ELF ")} phase shares | mean of per-run percentages | n={manifest["repeats"]}',y=.99)
     fig.savefig(phase_figure,dpi=170,bbox_inches='tight');plt.close(fig)
-    print(json.dumps({'samples':len(rows),'sum_medians':result['sum_medians'],'sum_process_medians':result['sum_process_medians'],'telemetry':result['telemetry'],'pairs':paired},ensure_ascii=False))
+    print(json.dumps({'samples':manifest['runs'],'sum_medians':result['sum_medians'],'sum_process_medians':result['sum_process_medians'],'telemetry':result['telemetry'],'pairs':paired},ensure_ascii=False))
 
 if __name__=='__main__':
     main()

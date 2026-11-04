@@ -1,6 +1,6 @@
 # Stage2 性能
 
-本页集中展示完整Stage2的性能，再分析初始化、主循环和内存。当前CUDA结果分为 **0.57.9小档B2自动点后端矩阵**与 **0.57.17大档B2固定后端S4对照**，均覆盖13位宽普通／承载26格；后者不冒充auto重新选型成绩。小档固定既有优选D／布局／链长，学习后冻结，独立复测并补明显回退。大档固定全部几何与点后端，宽位归约每侧三次。D／布局的独立基准为0.54.7；两档B2还保留0.38.4默认n=3及0.39.3学习期参考。OpenCL 的[全位宽快速矩阵](OPENCL_STAGE2.md#全位宽小-b2-与运行时调优)比较 0.58.4 默认和同机 CUDA 0.58.0。该矩阵的小 B2 为 260000，与 CUDA 生产规模矩阵的 260 亿分开。输入与Prime95参考见[精确输入基准](EDWARDS_STAGE2.md)，CPU后端见[GW性能](CPU_GWPOLY_STAGE2.md)。功能、算法和选型合同见[Stage2使用](../usage/STAGE2.md)、[管线](../architecture/STAGE2.md)与[Auto B2／tune](../architecture/AUTO_B2.md)。
+本页集中展示完整Stage2的性能，再分析初始化、主循环和内存。当前CUDA结果分为 **0.57.9小档B2自动点后端矩阵**与 **0.57.17大档B2固定后端S4对照**，均覆盖13位宽普通／承载26格；后者不冒充auto重新选型成绩。小档固定既有优选D／布局／链长，学习后冻结，独立复测并补明显回退。大档固定全部几何与点后端，宽位归约每侧三次。D／布局的独立基准为0.54.7；两档B2还保留0.38.4默认n=3及0.39.3学习期参考。OpenCL 的[全位宽快速矩阵](OPENCL_STAGE2.md#全位宽双档-b2-与运行时调优)比较 0.58.4 默认和同机 CUDA 0.58.0。该矩阵的 B2 为 26 万和 260 万，与 CUDA 生产规模矩阵的 260 亿分开。输入与Prime95参考见[精确输入基准](EDWARDS_STAGE2.md)，CPU后端见[GW性能](CPU_GWPOLY_STAGE2.md)。功能、算法和选型合同见[Stage2使用](../usage/STAGE2.md)、[管线](../architecture/STAGE2.md)与[Auto B2／tune](../architecture/AUTO_B2.md)。
 
 0.57.12提供seed／[D]Q有界auto，功能资格见[选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)；下节0.57.11八格固定后端数据仍是性能依据，不替代上述13位宽自动选型矩阵。
 
@@ -239,12 +239,16 @@ tune沿用了旧成果，只为每格增加8条学习调用，已实现矩阵合
 
 ## OpenCL 与 CUDA：全位宽快速矩阵
 
-**B2=260000，13 位宽，普通和承载各三遍。** RTX 4060 Laptop 上，固定 D=2310/P=240 的普通引擎中位数合计为 OpenCL 0.58.4 **10.053 s**、CUDA 0.58.0 **29.555 s**；承载为 **8.090／17.036 s**。两个最小位宽用设备点，其余 11 档用单线程 GMP 点配合 OpenCL 多项式。普通路线在 4667 bits 首次快于同轮 CUDA。生产规模的小档 B2=260 亿使用不同几何，耗时单列于本页 CUDA 章节。
+RTX 4060 Laptop、固定 D=2310/P=240，13 位宽、普通和承载、每后端各三遍。以下为完整引擎的 13 格中位数之和，单位秒。小档的中高位宽使用 GMP 点，大档的 1127 个 giant 使默认计划回到设备点，多项式部分两档均使用 OpenCL GPU。
 
-![小B2全位宽默认与CUDA同轮对照](attachments/opencl_tune_0584_small.png)
+| 快速 B2 | 普通 OpenCL / CUDA | 承载 OpenCL / CUDA |
+|---:|---:|---:|
+| 260000 | 10.053 / 29.555 | 8.090 / 17.036 |
+| 2600000 | **115.389 / 36.081** | **111.377 / 20.089** |
 
-[逐格数据、阶段占比及默认依据](OPENCL_STAGE2.md#全位宽小-b2-与运行时调优) · [线性图](attachments/opencl_tune_0584_small_linear.png) · [阶段堆积图](attachments/opencl_tune_0584_small_phases.png)。
+![全位宽双档默认与 CUDA 同轮对照](attachments/opencl_tune_0584_bounds.png)
 
+[逐位宽矩阵、阶段解释与测量口径](OPENCL_STAGE2.md#全位宽双档-b2-与运行时调优) · [线性图](attachments/opencl_tune_0584_bounds_linear.png) · [阶段百分比堆积图](attachments/opencl_tune_0584_bounds_phases.png)。生产规模的 B2 与自动 D/P 结果见本页 CUDA 章节。
 
 ### 冻结 0.54.4 双档与显式递推验证
 
