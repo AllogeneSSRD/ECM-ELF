@@ -11,9 +11,16 @@ namespace ecm_save { struct Range; struct Naming; }
 namespace ecm_stage1 {
 
 // Resolved per-task values, separated by the responsibilities that consume them.
+struct Stage1NttOptions {
+    unsigned length = 0, bpw = 0, tile = 0, outer_max = 0;
+    unsigned profile = 0;
+    int window = -1, warp_tail = -1;
+};
+
 struct Stage1ExecutionPreferences {
     Stage1ExecutionPreferences();
     Selection selection{};
+    Stage1NttOptions ntt;
     uint32_t stage1_threads;
     std::vector<unsigned> affinity_cpus;
     int naf_w;

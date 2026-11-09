@@ -313,6 +313,7 @@ if(ECM_ENABLE_CUDA)
         add_library(ecm_cuda_prac OBJECT ${ECM_STAGE1_PRAC_SOURCES})
         target_sources(ecm_cuda PRIVATE $<TARGET_OBJECTS:ecm_cuda_prac>)
     endif()
+    target_compile_definitions(ecm_cuda PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
     target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_STAGE1=1 ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
     # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
     # that transitive include; keep the compatibility fix in our tracked build.

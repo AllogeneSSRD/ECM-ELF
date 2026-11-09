@@ -19,7 +19,7 @@ SCHEMA = ROOT / "config/ecm_options.json"
 SELF = Path(__file__).resolve()
 TYPES = {"string": "std::string", "int": "int", "u32": "uint32_t",
          "u64": "uint64_t", "i64": "int64_t", "double": "double",
-         "float": "float", "bool": "bool", "bool|string": "std::string", "rect": "std::array<int,4>"}
+         "float": "float", "bool": "bool", "bool|string": "std::string", "int|string": "std::string", "rect": "std::array<int,4>"}
 
 
 def literal(value):
@@ -171,7 +171,7 @@ def defaults_header(schema):
            "#pragma once", "#include <cstdint>", "#include <array>", "namespace ecm_config { namespace defaults {"]
     for o in schema["options"]:
         name=f"{o['owner']}_{o['key']}"
-        if o["type"] in ("string", "bool|string"):
+        if o["type"] in ("string", "bool|string", "int|string"):
             out.append(f"inline constexpr char {name}[]={literal(o.get('effective_default',o['default']))};")
         else:
             out.append(f"inline constexpr {TYPES[o['type']]} {name}={literal(o['default'])};")
@@ -247,7 +247,7 @@ def config_table(option):
 
 def toml_literal(option):
     value = option["default"]
-    if option["type"] in ("string", "bool|string"):
+    if option["type"] in ("string", "bool|string", "int|string"):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, bool):
         return "true" if value else "false"

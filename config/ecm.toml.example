@@ -130,6 +130,12 @@ finished = "worktodo.finished.txt"
 # EN: intermediate curve checkpoint.
 # 中文：指定 Stage1 已完成任务的记录文件。用于保留原任务行和处理结果，不是曲线计算的中间存档。
 
+gpu_algorithm = "cgbn"
+# EN: Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full
+# EN: Mersenne modulus, and 1–8 curves.
+# 中文：GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8
+# 中文：条曲线。
+
 gpu_param = 3
 # EN: GPU Stage1 curve parametrization. CUDA Stage2 consumes param0 saves; select 0 for that handoff.
 # EN: OpenCL uses param3. The default is 3.
@@ -190,6 +196,37 @@ naf_w = 0
 # 中文：设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主
 # 中文：循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此
 # 中文：设置。
+
+ntt_bpw = 0
+# EN: Bits per digit. Zero selects the widest exact packing; explicit values must satisfy the Goldilocks
+# EN: coefficient bound.
+# 中文：每个数字的位数。0 选取能精确计算的最宽表示；指定值须满足 Goldilocks 系数界。
+
+ntt_length = 0
+# EN: Transform length. Zero derives the minimum safe length from the modulus and digit width.
+# 中文：变换长度。0 根据模数和数字宽度推导最小安全长度。
+
+ntt_outer_max = 0
+# EN: Maximum fused radix-2 layers per outer pass. Zero uses the profile.
+# 中文：每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。
+
+ntt_profile = 0
+# EN: Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10
+# EN: bits). Explicit tile and outer overrides take precedence.
+# 中文：按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设
+# 中文：置优先。
+
+ntt_tile = 0
+# EN: Fused tile width in radix-2 layers. Zero uses the profile.
+# 中文：融合 tile 的 radix-2 层数。0 使用所选配置。
+
+ntt_warp_tail = "auto"
+# EN: Enable warp shuffles for the local tail of the tile transform. Auto uses the selected profile.
+# 中文：用 warp shuffle 处理 tile 变换的局部尾部。auto 使用所选配置。
+
+ntt_window = -1
+# EN: Ladder bits per CUDA Graph replay. -1 uses the profile; 0 uses direct launches.
+# 中文：每次 CUDA Graph 重放处理的阶梯位数。-1 使用所选配置，0 使用直接启动。
 
 p95_add_workers = ""
 # EN: Prime95 workers eligible to receive handoffs: one ID, a comma list, or ranges. The shortest eligible

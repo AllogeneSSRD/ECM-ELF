@@ -439,18 +439,20 @@ int fuse_outer_max(int t,int k,bool &coop)
 }
 
 void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
-                      unsigned long long omega_inv, bool compact)
+                      unsigned long long omega_inv, bool compact, const FuseOverrides* overrides)
 {
     ntt_gl_reduce_configure();
     c.n = n;
     c.k = k;
-    int t = (int)fuse_env_ull("NTT_FUSE_T", 12);
-    if (t > k) t = k;
-    if (t < 0) t = 0;
-    t=fuse_selected_tile(k,t);
+    const int t = overrides ? overrides->tile :
+        fuse_selected_tile(k,std::clamp((int)fuse_env_ull("NTT_FUSE_T", 12),0,k));
     c.t = t;
-    c.warp_tail = fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
-    c.m_max=fuse_outer_max(t,k,c.coop_outer);
+    c.warp_tail = overrides ? overrides->warp_tail : fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
+    c.coop_outer = false;
+    c.m_max = overrides ? overrides->outer_max : fuse_outer_max(t,k,c.coop_outer);
+    if (overrides && (t < 1 || t > k || c.m_max < 1 || c.m_max > FUSE_MAX_M ||
+                      k - t > c.m_max * FUSE_MAX_PASSES))
+        throw std::invalid_argument("NTT tile and outer width require more than eight outer passes");
     c.compact_scratch=compact;
     fuse_plan_stages(c, k - t);
 
@@ -487,9 +489,9 @@ size_t fuse_planned_base_words(const FuseCtx &c)
 }
 
 void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
-                      unsigned long long omega_inv, bool compact)
+                      unsigned long long omega_inv, bool compact, const FuseOverrides* overrides)
 {
-    fuse_describe(c,n,k,omega,omega_inv,compact);
+    fuse_describe(c,n,k,omega,omega_inv,compact,overrides);
     const int t=c.t;
     fuse_base_allocate(&c.tblF,(size_t)(1ull << t));
     fuse_base_allocate(&c.tblI,(size_t)(1ull << t));

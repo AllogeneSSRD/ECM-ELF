@@ -54,7 +54,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [GKL family (iv) 曲线实验](performance/ECM_FRIENDLY_IV.md)：有理挠群、约 420 万组独立群阶/点阶、条件 D_eff、GMP NAF 及 GPU Stage2 因子接续与性能边界。
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
-- [少曲线全宽 NTT Stage1](performance/STAGE1_MERSENNE_NTT.md)：GPU1 的单／四曲线梅森模数实验、完整末点与因子验证、CGBN 延迟和吞吐对照。
+- [少曲线全宽 NTT Stage1](performance/STAGE1_MERSENNE_NTT.md)：CUDA Stage1 NTT 选型、GPU1 全宽梅森数基准、末点与因子验证，以及 CGBN 延迟和吞吐对照。
 - [CGBN专用平方](performance/CGBN_SQUARE.md)：共享分块原语、装配／REDC融合、4060 Laptop算子吞吐及Mont0／Edwards真实Stage1对照、GMP与点核NCU；默认保持原CGBN。数学和CGBN源码依据见[专用平方资料](reference/CGBN_SQUARE.md)。
 - [整数NTT／CGBN交叉点](performance/CGBN_NTT_MULTIPLY.md)：4K～128K完整乘积／普通模乘、单整数和批量吞吐、Graph、指令／local访问及适用范围；不改变生产点算术。
 - [Stage2 性能](performance/STAGE2.md)：小B2自动点后端、大B2固定归约对照、布局及阶段占比；Prime95与Montgomery参考。

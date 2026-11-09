@@ -13,8 +13,8 @@ struct ExecutionOptions : Stage1Options {
     explicit ExecutionOptions(const Stage1Options& options);
     long long stage1_t0_ms = 0;
     uint32_t stage1_curves = 0;
-    // Same owned selection is used by task identity and the CUDA workflow.
-    std::string gpu_algorithm;
+    // CGBN ladder/resident/PRAC request used by the task identity and CGBN workflow.
+    std::string cgbn_algorithm;
 };
 
 enum class CurveKind { Legacy, Factor, Stage2Point, CompletedWithoutPoint, Degenerate, Failed };

@@ -44,6 +44,14 @@
       <Item id="option_stage1_ckpt_seconds" name="设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。" />
       <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
       <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
+      <Item id="option_stage1_gpu_algorithm" name="GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8 条曲线。" />
+      <Item id="option_stage1_ntt_length" name="变换长度。0 根据模数和数字宽度推导最小安全长度。" />
+      <Item id="option_stage1_ntt_bpw" name="每个数字的位数。0 选取能精确计算的最宽表示；指定值须满足 Goldilocks 系数界。" />
+      <Item id="option_stage1_ntt_profile" name="按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设置优先。" />
+      <Item id="option_stage1_ntt_tile" name="融合 tile 的 radix-2 层数。0 使用所选配置。" />
+      <Item id="option_stage1_ntt_outer_max" name="每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。" />
+      <Item id="option_stage1_ntt_window" name="每次 CUDA Graph 重放处理的阶梯位数。-1 使用所选配置，0 使用直接启动。" />
+      <Item id="option_stage1_ntt_warp_tail" name="用 warp shuffle 处理 tile 变换的局部尾部。auto 使用所选配置。" />
       <Item id="option_stage1_tpi" name="设置 OpenCL 每个大整数使用的线程数，需满足有效 TPI 与整数 limb 数的布局约束。CUDA 后端自行按位宽选择 TPI，不使用此键；不要用它调整 CUDA 的线程块大小。" />
       <Item id="option_stage1_wg_size" name="设置 OpenCL 工作组大小，0 由后端自动选择。显式值必须满足当前设备和内核的限制；CUDA 后端不使用此设置。" />
       <Item id="option_stage1_kernel_mul" name="指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。CUDA 后端忽略此键。" />

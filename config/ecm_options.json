@@ -703,6 +703,130 @@
     },
     {
       "owner": "stage1",
+      "key": "gpu_algorithm",
+      "field": "gpu_algorithm",
+      "type": "int|string",
+      "default": "cgbn",
+      "domain": "[1|2|cgbn|ntt]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "description": [
+        "Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full Mersenne modulus, and 1–8 curves.",
+        "GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8 条曲线。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_length",
+      "field": "ntt_length",
+      "type": "int",
+      "default": 0,
+      "domain": "0 or power of two [8,65536]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 65536,
+      "description": [
+        "Transform length. Zero derives the minimum safe length from the modulus and digit width.",
+        "变换长度。0 根据模数和数字宽度推导最小安全长度。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_bpw",
+      "field": "ntt_bpw",
+      "type": "int",
+      "default": 0,
+      "domain": "0 or [16,31]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 31,
+      "description": [
+        "Bits per digit. Zero selects the widest exact packing; explicit values must satisfy the Goldilocks coefficient bound.",
+        "每个数字的位数。0 选取能精确计算的最宽表示；指定值须满足 Goldilocks 系数界。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_profile",
+      "field": "ntt_profile",
+      "type": "int",
+      "default": 0,
+      "domain": "[0|1|2]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 2,
+      "description": [
+        "Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10 bits). Explicit tile and outer overrides take precedence.",
+        "按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设置优先。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_tile",
+      "field": "ntt_tile",
+      "type": "int",
+      "default": 0,
+      "domain": "[0,12]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 12,
+      "description": [
+        "Fused tile width in radix-2 layers. Zero uses the profile.",
+        "融合 tile 的 radix-2 层数。0 使用所选配置。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_outer_max",
+      "field": "ntt_outer_max",
+      "type": "int",
+      "default": 0,
+      "domain": "[0,4]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 4,
+      "description": [
+        "Maximum fused radix-2 layers per outer pass. Zero uses the profile.",
+        "每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_window",
+      "field": "ntt_window",
+      "type": "int",
+      "default": -1,
+      "domain": "[-1,64]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": -1,
+      "maximum": 64,
+      "description": [
+        "Ladder bits per CUDA Graph replay. -1 uses the profile; 0 uses direct launches.",
+        "每次 CUDA Graph 重放处理的阶梯位数。-1 使用所选配置，0 使用直接启动。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_warp_tail",
+      "field": "ntt_warp_tail",
+      "type": "bool|string",
+      "default": "auto",
+      "domain": "[auto|false|true|0|1]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "description": [
+        "Enable warp shuffles for the local tail of the tile transform. Auto uses the selected profile.",
+        "用 warp shuffle 处理 tile 变换的局部尾部。auto 使用所选配置。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "tpi",
       "field": "tpi",
       "type": "u32",

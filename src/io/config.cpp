@@ -30,6 +30,15 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                         valid = ecm_stage1::parse_simd_reduction(v, s.simd_reduction);
                     else if (key == "lcm")
                         valid = ecm_stage1::parse_scalar_construction(v, s.scalar_construction);
+                    else if (key == "gpu_algorithm")
+                        valid = ecm_stage1::parse_gpu_algorithm(v, s.gpu_algorithm);
+                    else if (key == "ntt_warp_tail")
+                        valid = v == "auto" || v == "true" || v == "false" || v == "0" || v == "1";
+                    else if (key == "ntt_length")
+                        valid = scratch.ntt_length == 0 || (scratch.ntt_length >= 8 &&
+                            !(scratch.ntt_length & (scratch.ntt_length - 1)));
+                    else if (key == "ntt_bpw")
+                        valid = scratch.ntt_bpw == 0 || scratch.ntt_bpw >= 16;
                     else if (key == "gpu_param")
                         valid = v == "0" || v == "2" || v == "3";
                     else if (key == "device")
@@ -123,6 +132,7 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
         if (worker <= 0)
             break;
     }
+    ecm_stage1::parse_gpu_algorithm(cfg.gpu_algorithm, cfg.selection.gpu_algorithm);
     cfg.selection.gpu_param = cfg.gpu_param;
 }
 

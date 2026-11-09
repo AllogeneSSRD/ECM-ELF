@@ -283,7 +283,8 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                                                                : deps.default_naf_window()) +
                             "|" + std::to_string(int(opt.execution.selection.cpu_implementation));
             else if (!base.edwards) {
-                identity += "|" + execution.gpu_algorithm;
+                identity += execution.execution.selection.gpu_algorithm == GpuAlgorithm::Ntt
+                    ? "|ntt-v1" : "|" + execution.cgbn_algorithm;
             }
             session.begin(identity, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&

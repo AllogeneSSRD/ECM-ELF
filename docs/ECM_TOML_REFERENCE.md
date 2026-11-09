@@ -246,6 +246,18 @@ Stage1 completed-task record, containing original assignments and results. This 
 
 指定 Stage1 已完成任务的记录文件。用于保留原任务行和处理结果，不是曲线计算的中间存档。
 
+### gpu_algorithm
+
+```toml
+gpu_algorithm = "cgbn"
+```
+
+Type / 类型: `int|string`; range / 范围: `[1|2|cgbn|ntt]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full Mersenne modulus, and 1–8 curves.
+
+GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8 条曲线。
+
 ### gpu_param
 
 ```toml
@@ -369,6 +381,90 @@ Type / 类型: `int`; range / 范围: `[0|2..12]; CPU: [0|3..12]`; worker overri
 Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.
 
 设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此设置。
+
+### ntt_bpw
+
+```toml
+ntt_bpw = 0
+```
+
+Type / 类型: `int`; range / 范围: `0 or [16,31]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Bits per digit. Zero selects the widest exact packing; explicit values must satisfy the Goldilocks coefficient bound.
+
+每个数字的位数。0 选取能精确计算的最宽表示；指定值须满足 Goldilocks 系数界。
+
+### ntt_length
+
+```toml
+ntt_length = 0
+```
+
+Type / 类型: `int`; range / 范围: `0 or power of two [8,65536]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Transform length. Zero derives the minimum safe length from the modulus and digit width.
+
+变换长度。0 根据模数和数字宽度推导最小安全长度。
+
+### ntt_outer_max
+
+```toml
+ntt_outer_max = 0
+```
+
+Type / 类型: `int`; range / 范围: `[0,4]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Maximum fused radix-2 layers per outer pass. Zero uses the profile.
+
+每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。
+
+### ntt_profile
+
+```toml
+ntt_profile = 0
+```
+
+Type / 类型: `int`; range / 范围: `[0|1|2]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10 bits). Explicit tile and outer overrides take precedence.
+
+按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设置优先。
+
+### ntt_tile
+
+```toml
+ntt_tile = 0
+```
+
+Type / 类型: `int`; range / 范围: `[0,12]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Fused tile width in radix-2 layers. Zero uses the profile.
+
+融合 tile 的 radix-2 层数。0 使用所选配置。
+
+### ntt_warp_tail
+
+```toml
+ntt_warp_tail = "auto"
+```
+
+Type / 类型: `bool|string`; range / 范围: `[auto|false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Enable warp shuffles for the local tail of the tile transform. Auto uses the selected profile.
+
+用 warp shuffle 处理 tile 变换的局部尾部。auto 使用所选配置。
+
+### ntt_window
+
+```toml
+ntt_window = -1
+```
+
+Type / 类型: `int`; range / 范围: `[-1,64]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Ladder bits per CUDA Graph replay. -1 uses the profile; 0 uses direct launches.
+
+每次 CUDA Graph 重放处理的阶梯位数。-1 使用所选配置，0 使用直接启动。
 
 ### p95_add_workers
 

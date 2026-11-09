@@ -1,6 +1,8 @@
 #include "execution.h"
 #include <stdexcept>
-#if !ECM_HAS_CUDA_STAGE1
+#if ECM_HAS_CUDA_STAGE1
+#include "montgomery/cuda/ntt/workflow.h"
+#else
 #include "montgomery/opencl/workflow.h"
 #endif
 
@@ -11,6 +13,8 @@ Stage1Entry select_stage1_entry(const Selection& selection) {
         return selection.curve == CurveModel::Edwards ? ecm_cpu_stage1::run_edwards_stage1
                                                       : ecm_cpu_stage1::run_mont_stage1;
 #if ECM_HAS_CUDA_STAGE1
+    if (selection.gpu_algorithm == GpuAlgorithm::Ntt)
+        return ecm_cuda_stage1::run_mont_ntt_stage1;
     return selection.curve == CurveModel::Edwards ? ecm_cuda_stage1::run_edwards_stage1
                                                   : ecm_cuda_stage1::run_mont_stage1;
 #else

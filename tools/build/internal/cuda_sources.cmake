@@ -45,7 +45,19 @@ set(ECM_STAGE1_EDWARDS_SOURCES
 set(ECM_STAGE1_MONT_SOURCES
     src/ecm/stage1/montgomery/cuda/runtime.cu
     src/ecm/stage1/montgomery/cuda/registry.cu)
+set(ECM_CUDA_NTT_SOURCES
+    src/ecm/cuda/ntt/shape.cpp
+    src/ecm/cuda/ntt/runtime.cpp
+    src/ecm/cuda/ntt/graph.cpp
+    src/ecm/cuda/ntt/checks.cpp
+    src/ecm/cuda/ntt/device/transform_kernels.cu)
+
+set(ECM_STAGE2_NTT_SOURCES ${ECM_CUDA_NTT_SOURCES})
+
 set(ECM_STAGE1_CUDA_SOURCES
+    ${ECM_CUDA_NTT_SOURCES}
+    src/ecm/stage1/montgomery/cuda/ntt/ladder.cu
+    src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp
     src/ecm/application/configuration/runtime.cpp
     src/ecm/cuda/factory.cpp
     src/ecm/stage1/montgomery/cuda/workflow.cpp
@@ -93,12 +105,7 @@ set(ECM_STAGE2_ARITHMETIC_SOURCES
     src/ecm/stage2/cuda/device/arithmetic_kernels.cu
     src/ecm/stage2/cuda/device/point_coop_kernels.cu
     src/ecm/stage2/cuda/device/point_coop_ladder_kernels.cu)
-set(ECM_STAGE2_NTT_SOURCES
-    src/ecm/cuda/ntt/shape.cpp
-    src/ecm/cuda/ntt/runtime.cpp
-    src/ecm/cuda/ntt/graph.cpp
-    src/ecm/cuda/ntt/checks.cpp
-    src/ecm/cuda/ntt/device/transform_kernels.cu)
+
 set(ECM_STAGE2_ENGINE_SOURCES
     src/ecm/stage2/cuda/constants.cpp
     src/ecm/cuda/ntt/module_dispatch.cpp
@@ -121,7 +128,7 @@ set(ECM_STAGE2_ENGINE_SOURCES
 set(ECM_STAGE2_PRODUCTION_SOURCES
     ${ECM_STAGE2_ENGINE_SOURCES}
     ${ECM_STAGE2_ARITHMETIC_SOURCES}
-    ${ECM_STAGE2_NTT_SOURCES})
+    ${ECM_CUDA_NTT_SOURCES})
 set(ECM_STAGE2_DEVELOPMENT_SOURCES tools/experiments/cuda/stage2_tree/worker.cu)
 set(ECM_EXPERIMENT_STAGE2_BSGS_SOURCES
     tools/experiments/cuda/stage2_bsgs/cgbn_stage2.cu
@@ -133,7 +140,7 @@ set(ECM_EXPERIMENT_CUFFT_SOURCES tools/experiments/cuda/ntt_variants/cufft_probe
 set(ECM_EXPERIMENT_GIANT_SOURCES tools/experiments/cuda/stage2_tree/giant_variant.cu)
 set(ECM_CUDA_SOURCE_GROUPS
     STAGE1_COMMON STAGE1_CUDA STAGE1_EDWARDS STAGE1_MONT STAGE1_PRAC STAGE1_TEMPLATES STAGE1_PRAC_TEMPLATES
-    STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT
+    STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT CUDA_NTT
     EXPERIMENT_STAGE2_BSGS EXPERIMENT_STAGE2_TREE EXPERIMENT_NTT EXPERIMENT_CUFFT EXPERIMENT_GIANT)
 set(ECM_CUDA_BUILD_INPUTS
     tools/build/internal/build_directory.ps1

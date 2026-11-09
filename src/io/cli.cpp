@@ -116,6 +116,7 @@ void print_usage(const char* prog) {
                  "only)\n"
               << "  --showkernel         List available " << ecm_backend_name()
               << " kernel paths and exit\n"
+              << "  --gpu-algorithm <1|2|cgbn|ntt>  Select the Stage1 GPU algorithm.\n"
               << "  --gpu-info           Report the device this build would use and, "
                  "per kernel\n"
               << "                       tier, the curves a full GPU needs; no curve "
@@ -229,6 +230,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                  "-gpuckpt",
                                                  "--stage1-stop-handle",
                                                  "--exp-cache",
+                                                 "--gpu-algorithm",
                                                  "--gpu-param",
                                                  "-d",
                                                  "-sigma",
@@ -331,6 +333,10 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
             } else if (key == "--curve") {
                 expected = "mont|ed";
                 if (!ecm_stage1::parse_curve_model(value, selection.curve))
+                    reject();
+            } else if (key == "--gpu-algorithm") {
+                expected = "1|2|cgbn|ntt";
+                if (!ecm_stage1::parse_gpu_algorithm(value, selection.gpu_algorithm))
                     reject();
             } else if (key == "--gpu-backend") {
                 expected = "auto|cuda|opencl";

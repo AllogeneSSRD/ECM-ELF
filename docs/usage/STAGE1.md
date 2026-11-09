@@ -4,7 +4,7 @@
 
 正常计算/队列启动输出公共程序名和版本；`--version` 只输出版本后退出，不启动计算。`--gpu-info` 等机器查询保持原输出结构。
 
-`ecm_cuda.exe` 使用 NVIDIA CUDA/CGBN 并行处理曲线。`ecm.exe` 提供 CPU 和 OpenCL 路径；CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.md) 为准。
+`ecm_cuda.exe` 默认使用 NVIDIA CUDA/CGBN 并行处理曲线，也可选择少曲线全宽 NTT。`ecm.exe` 提供 CPU 和 OpenCL 路径；CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.md) 为准。
 
 `--go` 是命中后的可选群阶诊断：默认优先本地 PARI DLL，备选外部 GP，不自动使用 GMP 算法。`--go-backend auto|pari|gp|gmp` 可选择后端，`native` 保留为 `pari` 的兼容别名，`--go-gp-timeout 1..600` 设置 GP 截止秒数（默认 30）；诊断未完成不影响因子存档、结果和主计算退出码。输出区分旧群阶界限与新增点阶界限，资源和素性证明范围见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。GPU Edwards 的既有 `--go` 限制保留。
 
@@ -17,6 +17,28 @@ Stage1 启动器也接受 `ECMSTAGE1=` 队列：从 save 文件名末尾的 `_B1
 Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)，不接受 `lcm=12`。`ecm_cuda.exe` 可用 `--curve ed --target gpu` 或同名 TOML 键运行 GPU Edwards；OpenCL 不支持该组合。CUDA PARAM0 和 Edwards 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
 
 GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` 和 `--go`。已知素因子的Edwards群阶、点阶及分解可用[独立PARI入口](DATASET.md#edwards群阶与点阶)计算。默认使用窗口 NAF，`--naf-w 0` 在 GPU 选择窗口 6，显式允许 2..12；切片会根据设备执行时间调整到约 100 ms，CPU 使用阻塞等待，并负责构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。批次内的 GPU 二进制状态会按保存的算法恢复；显式选择与检查点不符时会报错并保留进度。自动文件名使用共用模式中的 e 前缀，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 CUDA Stage2 或 [CPU Stage2](EDWARDS_CPU_STAGE2.md) 读取。
+
+## CUDA 全宽 NTT
+
+`[stage1] gpu_algorithm = 2` 或 `"ntt"` 启用 NTT；`1` 或 `"cgbn"` 选择默认后端，字符串不区分大小写。CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持完整 `2^p−1`（`32 ≤ p ≤ 262144`）、Montgomery PARAM0、每批 1–8 条曲线，以及 `lcm = 1` 或 `12`。剥除已知因子的余因子不能使用本路径。队列任务使用 `m0_` save 前缀或显式配置 `gpu_param = 0`，按任务行控制曲线数。
+
+```toml
+[stage1]
+target = "gpu"
+curve = "mont"
+gpu_param = 0
+gpu_algorithm = "NTT"
+device = 1
+ntt_profile = 0
+```
+
+```powershell
+'2^8191-1' | .\ecm_cuda.exe --config .\ecm.toml -sigma 26 -gpucurves 2 -save m0_m8191_256.save 256
+```
+
+`ntt_profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt_length`、`ntt_bpw`、`ntt_tile` 和 `ntt_outer_max` 的 0 值使用自动值。`ntt_window = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt_warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
+
+运行时的 `stage1_ntt_plan` 输出长度、每 digit 的位数、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点使用同一批次文件命名，保存当前标量位置和两组 X/Z，可换 NTT 参数续跑；CGBN 与 NTT 的检查点各自只能由对应后端续跑。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 
 ## 共用 TOML 与 worker
 

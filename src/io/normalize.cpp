@@ -157,7 +157,7 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
             queue.stage2_line.replace(0, 10, "ECMSTAGE2=");
         }
         if (stage1_selection_error(out.options.execution.selection, error) ||
-            stage1_task_error(out.options, out.curves, error))
+            stage1_task_error(out.options, out.curves, error, out.modulus))
             return false;
         return true;
     } catch (const std::exception& e) {
@@ -201,7 +201,7 @@ bool normalize_direct(const ParsedCli& input, const ecm_stage1::Stage1Options& d
                 id.handoff_c = int32_t(c);
             }
         }
-        if (stage1_selection_error(selection, error) || stage1_task_error(opt, out.curves, error))
+        if (stage1_selection_error(selection, error) || stage1_task_error(opt, out.curves, error, out.modulus))
             return false;
         return true;
     } catch (const std::exception& e) {
@@ -220,6 +220,10 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     opt.execution.naf_w = cfg.naf_w;
     opt.execution.verbose = cfg.verbose;
     opt.execution.device_index = cfg.device;
+    opt.execution.ntt = {unsigned(cfg.ntt_length), unsigned(cfg.ntt_bpw), unsigned(cfg.ntt_tile),
+                         unsigned(cfg.ntt_outer_max), unsigned(cfg.ntt_profile), cfg.ntt_window,
+                         cfg.ntt_warp_tail == "auto" ? -1 :
+                         int(cfg.ntt_warp_tail == "true" || cfg.ntt_warp_tail == "1")};
     opt.execution.gpu_mul_path = cfg.kernel_mul;
     opt.execution.gpu_sqr_path = cfg.kernel_sqr;
     opt.execution.gpu_add_path = cfg.kernel_add;
@@ -326,6 +330,8 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         if (input.has("-sigma"))
             cfg.sigma = input.fixed_sigma64;
         auto& s = cfg.selection;
+        if (input.has("--gpu-algorithm"))
+            s.gpu_algorithm = input.selection.gpu_algorithm;
         if (input.has("--curve"))
             s.curve = input.selection.curve;
         if (input.has("--target"))
@@ -462,6 +468,14 @@ bool stage1_save_construction(const std::string& name, Stage1Options& opt, std::
 }
 
 bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string& error) {
+    if (selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
+        if (!ECM_HAS_CUDA_STAGE1 || selection.target != ecm_stage1::ExecutionTarget::Gpu ||
+            selection.curve != ecm_stage1::CurveModel::Montgomery || selection.gpu_param != 0) {
+            error = "Stage1 NTT requires CUDA GPU Montgomery param0";
+            return true;
+        }
+        return execution_preferences_error(selection, error);
+    }
     if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_STAGE1 != 0)) {
         error = "GPU Edwards requires the CUDA backend";
         return true;
@@ -487,7 +501,21 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
     return false;
 }
 
-bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error) {
+bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error,
+                       mpz_srcptr modulus) {
+    if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
+        if (curves > 8) {
+            error = "Stage1 NTT supports at most 8 curves per batch";
+            return true;
+        }
+        if (modulus) {
+            const auto bits = mpz_sizeinbase(modulus, 2);
+            if (bits < 32 || bits > 262144 || mpz_sgn(modulus) <= 0 || mpz_scan0(modulus, 0) != bits) {
+                error = "Stage1 NTT requires a full 2^p-1 with 32 <= p <= 262144";
+                return true;
+            }
+        }
+    }
     if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
         opt.execution.naf_w != 0 && (opt.execution.naf_w < 3 || opt.execution.naf_w > 12)) {
         error = "key=naf_w value='" + std::to_string(opt.execution.naf_w) +

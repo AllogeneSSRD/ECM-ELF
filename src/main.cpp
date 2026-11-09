@@ -686,7 +686,10 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         /* The GPU implementation is chosen at LINK time (ecm.exe = OpenCL glue,
            ecm_cuda.exe = CUDA backend), so ask the backend instead of hardcoding
            "OpenCL" -- the CUDA build used to print "gpu (OpenCL)" here. */
-        if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards)
+        if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt)
+            ecm_ts_fprintf(stdout, "gpu backend : CUDA/NTT, Montgomery param0, device %d\n",
+                           opt.execution.device_index);
+        else if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards)
             ecm_ts_fprintf(stdout, "gpu backend : %s, Edwards Atkin-Morain, device %d\n",
                            ecm_backend_name(), opt.execution.device_index);
         else
@@ -908,8 +911,12 @@ int main(int argc, char** argv) {
     }
     if (settings.options.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
         try {
-            const auto routed = ecm_gpu::route(exe, false, ECM_HAS_CUDA_STAGE1 != 0,
-                input.gpu_backend.empty() ? settings.config.gpu_backend : input.gpu_backend,
+            auto backend = input.gpu_backend.empty() ? settings.config.gpu_backend : input.gpu_backend;
+            if (settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
+                if (backend == "opencl") throw std::invalid_argument("Stage1 NTT requires CUDA");
+                backend = "cuda";
+            }
+            const auto routed = ecm_gpu::route(exe, false, ECM_HAS_CUDA_STAGE1 != 0, backend,
                 settings.options.execution.device_index);
             if (routed) return *routed;
         } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
@@ -936,6 +943,14 @@ int main(int argc, char** argv) {
         return ecm_stage1_app::run_worktodo(input, settings, parsed, paths, ini);
     }
 
+    EcmLogMirror direct_log;
+    if (settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt &&
+        !settings.config.log_file.empty() &&
+        !direct_log.open(resolve_rel_local(exe, settings.config.log_file))) {
+        ecm_ts_fprintf(stderr, "FATAL: cannot open Stage1 log file %s\n",
+                       settings.config.log_file.c_str());
+        return 1;
+    }
     ecm_ts_fprintf(stdout, "%s %s (Stage1)\n", ecm_program::name, ecm_program::version);
 
     // Diagnosis follows durable task publication; GP availability is not admission.

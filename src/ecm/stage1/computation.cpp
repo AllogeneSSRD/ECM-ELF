@@ -8,9 +8,9 @@
 namespace ecm_stage1 {
 ExecutionOptions::ExecutionOptions(const Stage1Options& options) : Stage1Options(options) {
     if (const auto* algorithm = std::getenv("ECM_GPU_STAGE1_ALGO"))
-        gpu_algorithm = algorithm;
-    if (gpu_algorithm.empty())
-        gpu_algorithm = "ladder";
+        cgbn_algorithm = algorithm;
+    if (cgbn_algorithm.empty())
+        cgbn_algorithm = "ladder";
 }
 
 LegacyExecutionResult::LegacyExecutionResult(LegacyExecutionResult&& other) noexcept {

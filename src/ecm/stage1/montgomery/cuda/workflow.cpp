@@ -43,7 +43,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
         result.curves.resize(curves);
 
         // Prepare: freeze the algorithm request before checkpoint inspection.
-        const auto requested = ecm_cuda_mont_host::capture_mont_request(opt.gpu_algorithm.c_str(), opt.persistence.exponent_cache_dir);
+        const auto requested = ecm_cuda_mont_host::capture_mont_request(opt.cgbn_algorithm.c_str(), opt.persistence.exponent_cache_dir);
 
         ecm_edwards::Integer owned_scalar;
         auto* batch_s = owned_scalar.v;
@@ -58,7 +58,7 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
         }
         // Restore candidates are inspected before fresh sigma generation.
         {
-            const auto& algorithm = opt.gpu_algorithm;
+            const auto& algorithm = opt.cgbn_algorithm;
             if (std::string(ecm_backend_name()) == "CUDA/CGBN" && algorithm == "ladder")
                 ecm_stage1_import_legacy_gpu(checkpoint,
                     N, batch_s, curves, uint32_t(opt.execution.selection.gpu_param),

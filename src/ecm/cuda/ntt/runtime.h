@@ -16,6 +16,14 @@
 #include <vector>
 #include <algorithm>
 #include "host_trace.h"
+inline void ntt_cuda_check_failed(cudaError_t error) {
+#if defined(ECM_HAS_CUDA_STAGE1) && ECM_HAS_CUDA_STAGE1
+    throw std::runtime_error(cudaGetErrorString(error));
+#else
+    (void)error;
+    std::exit(2);
+#endif
+}
 #define CK(x)                                                                        \
     do {                                                                             \
         const cudaError_t e_ = (x);                                                  \
@@ -29,7 +37,7 @@
                          (double)ck_free_ / 1048576.0, (double)ck_total_ / 1048576.0, \
                          (double)(ck_total_ - ck_free_) / 1048576.0);                 \
             std::fflush(stderr);                                                      \
-            std::exit(2);                                                            \
+            ntt_cuda_check_failed(e_);                                               \
         }                                                                            \
     } while (0)
 
@@ -81,12 +89,18 @@ bool fuse_shape_policy_supported(int t);
 bool fuse_joint_policy_supported();
 int fuse_selected_tile(int k,int requested);
 int fuse_outer_max(int t,int k,bool &coop);
+struct FuseOverrides {
+    int tile, outer_max;
+    bool warp_tail;
+};
 void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
-                      unsigned long long omega_inv, bool compact=fuse_compact_scratch());
+                      unsigned long long omega_inv, bool compact=fuse_compact_scratch(),
+                      const FuseOverrides* overrides=nullptr);
 unsigned long long fuse_planned_table_words(const FuseCtx &c);
 size_t fuse_planned_base_words(const FuseCtx &c);
 void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
-                      unsigned long long omega_inv, bool compact=fuse_compact_scratch());
+                      unsigned long long omega_inv, bool compact=fuse_compact_scratch(),
+                      const FuseOverrides* overrides=nullptr);
 void fuse_release(FuseCtx &c);
 size_t fuse_base_words(const FuseCtx &c);
 void ntt_fuse_cache_tables(FuseCtx &c, unsigned long long omega,

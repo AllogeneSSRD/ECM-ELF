@@ -1,4 +1,5 @@
 #include "ladder.h"
+#include "profiles.h"
 #include "../../../../cuda/ntt/runtime.h"
 #include <stdexcept>
 
@@ -14,7 +15,12 @@ enum Slot : unsigned {
 struct Indices { unsigned x[5]; };
 struct Sums { Indices left, right, out; unsigned subtract; };
 struct Shape { unsigned p, words, curves, length, bpw, digits; };
-struct Cursor { const uint8_t* bits; const unsigned* start; unsigned offset; };
+struct Cursor { const uint32_t* bits; const unsigned* start; unsigned offset, count; };
+
+__device__ unsigned scalar_bit(Cursor cursor) {
+    const unsigned i = cursor.count - 1 - (*cursor.start + cursor.offset);
+    return (cursor.bits[i / 32] >> (i % 32)) & 1u;
+}
 
 template<class T> struct Buffer {
     T* data = nullptr;
@@ -102,7 +108,7 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
     const unsigned out = ops.out.x[op];
     unsigned a = ops.left.x[op], b = ops.right.x[op];
     if constexpr(Select) {
-        const unsigned swap = 2u * cursor.bits[*cursor.start+cursor.offset];
+        const unsigned swap = 2u * scalar_bit(cursor);
         a ^= swap; b ^= swap;
     }
     const unsigned stride = (s.words+threads-1)/threads;
@@ -147,7 +153,7 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
 __global__ void route(uint32_t* state, Shape s, Cursor cursor) {
     const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= s.words) return;
-    const unsigned curve = blockIdx.y, bit = cursor.bits[*cursor.start+cursor.offset];
+    const unsigned curve = blockIdx.y, bit = scalar_bit(cursor);
     state[limb(s,2*bit,curve,j)] = state[limb(s,XD,curve,j)];
     state[limb(s,2*bit+1,curve,j)] = state[limb(s,ZD,curve,j)];
     state[limb(s,2*(1-bit),curve,j)] = state[limb(s,XA,curve,j)];
@@ -156,11 +162,14 @@ __global__ void route(uint32_t* state, Shape s, Cursor cursor) {
 __global__ void advance(unsigned* start, unsigned window) { *start += window; }
 } // namespace
 
-Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
-           const std::vector<uint8_t>& bits, unsigned window, unsigned samples) {
-    if (p < 32 || p > 262144 || !curves || curves > 8 || window > 64 || !samples || samples > 20 ||
-        bits.empty() || bits.size() > UINT32_MAX-64 ||
-        std::any_of(bits.begin(), bits.end(), [](auto b) { return b > 1; }))
+static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+                      const std::vector<uint32_t>& scalar_words, unsigned count,
+                      const ecm_stage1::Stage1NttOptions& options, const Control* control,
+                      unsigned samples) {
+    if (p < 32 || p > 262144 || !curves || curves > 8 || options.window < -1 || options.window > 64 ||
+        !samples || samples > 20 || count > UINT32_MAX - 64 ||
+        scalar_words.size() < (size_t(count) + 31) / 32 ||
+        (control && control->resume > count))
         throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");
     Shape s{p, (p+31)/32, curves, 0, 0, 0};
     const size_t stride = size_t(s.words)*curves;
@@ -172,31 +181,72 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
                 [](auto x) { return x == UINT32_MAX; })))
             throw std::invalid_argument("noncanonical Stage1 initial residue");
     }
-    for (int b=31; b>=16; --b) {
-        const unsigned c=(p+b-1)/b;
-        if (exact_ok_terms(c,b)) { s.bpw=b; s.digits=c; break; }
+    const unsigned first_bpw = options.bpw ? options.bpw : 31;
+    const unsigned last_bpw = options.bpw ? options.bpw : 16;
+    for (unsigned b = first_bpw; b >= last_bpw && b >= 16 && b <= 31; --b) {
+        const unsigned digits = (p + b - 1) / b;
+        if (exact_ok_terms(digits, b)) {
+            s.bpw = b;
+            s.digits = digits;
+            break;
+        }
     }
-    if (!s.bpw) throw std::runtime_error("no exact Goldilocks digit width");
-    unsigned log=0; s.length=1;
-    while (s.length < 2*s.digits+1) { s.length*=2; ++log; }
-    const auto prep=now_s();
+    if (!s.bpw) throw std::invalid_argument("digit width exceeds the exact Goldilocks coefficient bound");
+    s.length = options.length ? options.length : 1;
+    if (!options.length)
+        while (s.length < 2 * s.digits + 1) s.length *= 2;
+    if ((s.length & (s.length - 1)) || s.length < 2 * s.digits + 1 || s.length > 65536)
+        throw std::invalid_argument("NTT length must be a power of two covering 2*digits+1, at most 65536");
+    int log = 0;
+    for (unsigned n = s.length; n > 1; n >>= 1) ++log;
+    if (options.tile > unsigned(log) || options.tile > 12 ||
+        options.outer_max > 4 || options.profile > 2)
+        throw std::invalid_argument("NTT tile, outer width or profile is out of range for this length");
+    const auto prep = now_s();
     CK(cudaSetDevice(device));
+    auto profile = default_profile(log, options.profile);
+    if (control && !options.profile) {
+        cudaDeviceProp prop{};
+        CK(cudaGetDeviceProperties(&prop, device));
+        if (prop.major == 8 && prop.minor == 9 && prop.multiProcessorCount == 24 &&
+            std::string_view(prop.name).find("RTX 4060 Laptop") != std::string_view::npos)
+            profile = laptop_4060_profile(log, curves);
+    }
+    const unsigned window = options.window >= 0 ? unsigned(options.window) : profile.window;
+    const FuseOverrides overrides{options.tile ? int(options.tile) : profile.tile,
+        options.outer_max ? int(options.outer_max) : profile.outer,
+        options.warp_tail >= 0 ? options.warp_tail != 0 : profile.warp_tail};
     Stream stream; const auto q=stream.value;
     const U omega=gl_pow_host(7,(GL_P-1)/s.length), inv=gl_pow_host(omega,GL_P-2);
     const U scale=gl_pow_host(s.length,GL_P-2);
     Tables tables;
     auto& ctx=tables.ctx;
-    fuse_init(ctx,s.length,log,omega,inv,true);
+    fuse_init(ctx,s.length,log,omega,inv,true,control ? &overrides : nullptr);
+    if (control && control->describe) {
+        const auto join = [](std::string& stages, int width) {
+            if (!stages.empty()) stages += '+';
+            stages += std::to_string(width);
+        };
+        Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
+                  FUSE_TILE_THREADS, FUSE_OUTER_THREADS, unsigned(ctx.passes_fwd),
+                  ctx.warp_tail && ctx.t >= 5, profile.source, {}, {}};
+        for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
+        join(plan.forward, ctx.t);
+        join(plan.inverse, ctx.t);
+        for (int i = ctx.nms; i > 0; --i) join(plan.inverse, ctx.ms[i-1]);
+        control->describe(plan);
+    }
     ntt_fuse_cache_tables(ctx,omega,inv);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
     Buffer<unsigned> start(1);
-    Buffer<uint8_t> scalar(bits.size());
+    Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
     Buffer<U> left(size_t(4)*curves*s.length), right(size_t(4)*curves*s.length);
     const auto grid=[&](unsigned ops) { return dim3((s.length+threads-1)/threads, ops*curves); };
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
-    CK(cudaMemcpyAsync(scalar.data,bits.data(),bits.size(),cudaMemcpyHostToDevice,q));
+    if (!scalar_words.empty())
+        CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
     pack<<<grid(2),threads,0,q>>>(state.data,fixed.data,s,{{A24,Base}});
     ntt_forward_fused(fixed.data,ctx,omega,2*curves,q);
     CK(cudaStreamSynchronize(q));
@@ -209,7 +259,7 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
         combine<true,false><<<outputs*curves,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
     };
     auto step=[&](unsigned i) {
-        const Cursor cursor{scalar.data,start.data,i};
+        const Cursor cursor{scalar.data,start.data,i,count};
         combine<false,true><<<4*curves,threads,0,q>>>(state.data,nullptr,s,
             {{X0,X0,X1,X1},{Z0,Z0,Z1,Z1},{A,B,C,D},0b1010},cursor);
         mul(4,4,{A,B,C,D},{0,1,3,2},{0,1,0,1},{AA,BB,DA,CB});
@@ -230,10 +280,11 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
         CK(cudaGraphInstantiate(&graph.exec,graph.graph,0));
         CK(cudaGraphUpload(graph.exec,q));
     };
-    const unsigned count=static_cast<unsigned>(bits.size());
-    if (window && count >= window) capture(full,window);
-    if (window && count%window) capture(tail,count%window);
-    Event begin,end;
+    const unsigned resume = control ? control->resume : 0;
+    const unsigned remaining = count - resume;
+    if (window && remaining >= window) capture(full,window);
+    if (window && remaining % window) capture(tail,remaining % window);
+    Event begin,end,boundary;
     CK(cudaStreamSynchronize(q));
     Run result;
     result.length=s.length; result.digit_bits=s.bpw; result.passes=ctx.passes_fwd; result.tile=ctx.t;
@@ -241,14 +292,39 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
     result.points.resize(4*stride);
     for (unsigned sample=0; sample<samples; ++sample) {
         CK(cudaMemcpyAsync(state.data,initial.data(),4*stride*4,cudaMemcpyHostToDevice,q));
-        CK(cudaMemsetAsync(start.data,0,sizeof(unsigned),q));
+        CK(cudaMemcpyAsync(start.data,&resume,sizeof(unsigned),cudaMemcpyHostToDevice,q));
         CK(cudaStreamSynchronize(q));
         const double wall=now_s();
         CK(cudaEventRecord(begin.value,q));
-        if (window) {
-            for (unsigned i=0;i<count/window;++i) CK(cudaGraphLaunch(full.exec,q));
-            if (tail.exec) CK(cudaGraphLaunch(tail.exec,q));
-        } else for (unsigned i=0;i<count;++i) step(i);
+        unsigned cursor = resume;
+        unsigned next_poll = resume;
+        while (cursor < count) {
+            if (control && control->poll && cursor >= next_poll) {
+                CK(cudaEventRecord(boundary.value,q));
+                CK(cudaEventSynchronize(boundary.value));
+                const auto action = control->poll(cursor);
+                if (action.save && control->checkpoint) {
+                    CK(cudaMemcpy(result.points.data(),state.data,result.points.size()*4,cudaMemcpyDeviceToHost));
+                    control->checkpoint(cursor, result.points);
+                }
+                if (action.stop) {
+                    result.stopped = true;
+                    break;
+                }
+                next_poll = cursor + (window ? std::max(window, 128u) : 128u);
+            }
+            if (!window) {
+                step(cursor - resume);
+                ++cursor;
+            } else if (count - cursor >= window) {
+                CK(cudaGraphLaunch(full.exec,q));
+                cursor += window;
+            } else {
+                CK(cudaGraphLaunch(tail.exec,q));
+                cursor = count;
+            }
+        }
+        result.completed_bits = cursor;
         CK(cudaEventRecord(end.value,q));
         CK(cudaEventSynchronize(end.value));
         result.wall_ms.push_back((now_s()-wall)*1000);
@@ -262,5 +338,25 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
         result.points=std::move(got);
     }
     return result;
+}
+Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+           const std::vector<uint32_t>& scalar, unsigned count,
+           const ecm_stage1::Stage1NttOptions& options, const Control& control) {
+    return run_ladder(device, p, curves, initial, scalar, count, options, &control, 1);
+}
+
+Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+           const std::vector<uint8_t>& bits, unsigned window, unsigned samples) {
+    if (bits.empty() || bits.size() > UINT32_MAX - 64)
+        throw std::invalid_argument("invalid probe scalar size");
+    std::vector<uint32_t> packed((bits.size()+31)/32);
+    for (size_t i = 0; i < bits.size(); ++i) {
+        if (bits[i] > 1) throw std::invalid_argument("invalid probe scalar bit");
+        const size_t j = bits.size() - 1 - i;
+        packed[j / 32] |= uint32_t(bits[i]) << (j % 32);
+    }
+    ecm_stage1::Stage1NttOptions options;
+    options.window = window;
+    return run_ladder(device, p, curves, initial, packed, unsigned(bits.size()), options, nullptr, samples);
 }
 } // namespace ecm_mersenne_ntt

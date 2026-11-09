@@ -46,6 +46,14 @@ bool parse_simd_reduction(std::string_view value, SimdReduction &out) {
     return true;
 }
 
+bool parse_gpu_algorithm(std::string_view value, GpuAlgorithm& out) {
+    const auto v = lower_ascii(value);
+    if (v == "1" || v == "+1" || v == "cgbn") out = GpuAlgorithm::Cgbn;
+    else if (v == "2" || v == "+2" || v == "ntt") out = GpuAlgorithm::Ntt;
+    else return false;
+    return true;
+}
+
 bool parse_scalar_construction(std::string_view value, ScalarConstruction &out) {
     const std::string v = lower_ascii(value);
     if (v == "1") out = ScalarConstruction::PrimePowerLcm;
