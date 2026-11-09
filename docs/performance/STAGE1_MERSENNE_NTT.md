@@ -1,8 +1,8 @@
 # 少曲线全宽 NTT Stage1
 
-CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Montgomery PARAM0 Stage1。所有点坐标在 GPU 驻留，一条曲线也会将同层的独立乘法一起提交。GPU1 RTX 4060 Laptop 上，8191／16001 位的单曲线设备阶段短于本机 CGBN 对照；把 CGBN 批量提高到 192 条后，CGBN 的吞吐仍更高。新路径通过了 131071 位的整条曲线验算，超过所用生产 CGBN 对照的位宽范围。
+CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Montgomery PARAM0 和 Atkin–Morain Edwards。两种曲线共用设备上的 x-only 阶梯，一条曲线也会将同层的独立乘法一起提交。GPU1 RTX 4060 Laptop 上，8191／16001 位的 PARAM0 单曲线设备阶段短于本机 CGBN 对照。该对照的 CGBN 批量提高到 192 条后，CGBN 的吞吐更高。
 
-生产入口由 `gpu_algorithm = "ntt"` 启用，接受完整 `2^p−1`、PARAM0、`lcm(1…B1)` 或 `12·lcm(1…B1)` 和 1–32 条曲线。独立算术探针仍可输出未归一化的 X/Z，用于与 GMP 对拍。生产入口复用曲线构造、save、结果账本和 Stage2 交接。配置见 [Stage1 用法](../usage/STAGE1.md#cuda-全宽-ntt)。
+生产入口由 `gpu_algorithm = "ntt"` 启用，接受完整 `2^p−1` 和 1–32 条曲线。PARAM0 使用 `lcm(1…B1)` 或 `12·lcm(1…B1)`，Edwards 使用 `48·lcm(1…B1)` 并在 Montgomery 模型上计算。独立算术探针仍可输出未归一化的 X/Z，用于与 GMP 对拍。生产入口复用曲线构造、save、结果账本和 Stage2 交接。配置见 [Stage1 用法](../usage/STAGE1.md#cuda-全宽-ntt)。
 
 ## 批量调优与显存
 
@@ -40,7 +40,9 @@ M4423、B1=32 的 16／32 条 PARAM0 保存点在两个后端均通过独立 Pyt
 
 78 个批次的实际计划与 tune 一致，逐组比较的三份存档中 sigma、B1、末点或因子及校验值均相同。对全部存档重算校验值，逐一确认日志中的因子整除对应梅森数且与存档一致。抽查首条曲线，M127 和 M7001 的末点与 ECM-ELF CPU scalar 一致，M262139 的末点与 GMP-ECM 7.0.5 一致。
 
-原始调优表、三轮运行日志、save、遥测和汇总保存在 `data/experiments/stage1_ntt_best_matrix_0599/`（M7001 起的运行在 `continuation/`），绘图汇总保存在 `data/figures/stage1_ntt_best_matrix_0599/`。复测可运行 `python tools/bench/bench_stage1_ntt_best.py --exe <ecm_cuda.exe> --device 1 --output <新实验目录>`。绘图脚本接收该实验的 `summary.json`，以及 `data/benchmarks/stage1_gpu_0_52_2_20261024/mont0_4070ti_02/summary.json`。见 [矩阵采集脚本](../../tools/bench/bench_stage1_ntt_best.py)、[绘图脚本](../../tools/bench/plot_stage1_ntt_best.py) 和 [三后端比较图](STAGE2.md#stage1-ntt-与-cgbn-和-prime95-对比)。
+Edwards 用 0.60.0 在同一 GPU 上复用这 26 组实测计划，各跑三次。三轮存档逐组一致，全部校验值和因子整除关系均通过复核。折算中位数为 3.36–147.24 秒/曲线，各位宽与 PARAM0 的中位数相差至多 0.75%。262139 位在 B1=1024 实测 0.15077 秒/曲线。GPU 利用率至少 50% 的样本中，SM 为 1500 MHz，整卡功耗为 2.85–34.76 W（中位数 16.72 W），温度为 41–52 °C。原始运行与计划位于 `data/experiments/stage1_unified_4060_0600/ed_ntt/`。
+
+原始调优表、三轮运行日志、save、遥测和汇总保存在 `data/experiments/stage1_ntt_best_matrix_0599/`（M7001 起的运行在 `continuation/`）。复测可运行 `python tools/bench/bench_stage1_ntt_best.py --exe <ecm_cuda.exe> --device 1 --output <新实验目录>`。Edwards 可传入 `--curve ed --reuse-tune <同一设备的 NTT 汇总>`，在原有阶梯参数下独立测量真实曲线。图表按曲线构造分别配对同设备的 CGBN。见 [矩阵采集脚本](../../tools/bench/bench_stage1_ntt_best.py)、[绘图脚本](../../tools/bench/plot_stage1_ntt_best.py) 和 [三后端比较图](STAGE1.md#stage1-ntt-与-cgbn-和-prime95-对比)。
 
 ## 实现与正确性
 
@@ -185,7 +187,7 @@ NTT event 包含驻留点乘、打包、变换、进位、折叠及 Graph 窗口
 
 - Prime95 31.06b01 的 `ecm.cpp`（约 1982–2156 行）利用延迟 FFT、变换保留和融合乘加减少点公式的重复 FFT；可借鉴调度与数据流，不能直接套用它的浮点时序。当前 NTT 实现把每个产品归一化后再进入下一层，后续可测量归约与下一次打包或变换的融合收益。
 - GPUOWL 本地 `.refactor/gpuowl/src/fftbpw.h` 和 `src/cl/carryutil.cl` 用有效位宽、舍入误差门槛和进位来约束 iBDWT。加权循环后端已采用单 Goldilocks 域和整数系数界。可在相同 ECM 输入上继续验证混合 radix 与变换状态复用，再比较其他数域或浮点重构。
-- 完整梅森模数才可直接按第 p 位回卷。对已剔除因子的余因子，可研究把模余因子构造的值提升到完整梅森承载环，再按实际余因子验证/GCD；通用整数则需要非二次复杂度归约。两者均未接入。PRAC 或 Edwards 的整曲线成本还需分别评估。
+- 完整梅森模数可直接按第 p 位回卷。对已剔除因子的余因子，可研究把模余因子构造的值提升到完整梅森承载环，再按实际余因子验证/GCD。通用整数需要独立归约。PRAC 的整曲线成本仍待评估。
 
 ## 复现
 

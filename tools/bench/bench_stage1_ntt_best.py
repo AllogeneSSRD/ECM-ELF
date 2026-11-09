@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tune full Mersenne Stage1 shapes, freeze winners, then time real PARAM0 batches."""
+"""Tune full Mersenne Stage1 shapes, freeze winners, then time real GPU batches."""
 import argparse
 import json
 from pathlib import Path
@@ -13,6 +13,10 @@ from bench_stage1_ntt_production import EXPONENTS, GPU_FIELDS, records
 HISTORICAL_EXPONENTS = (503, 1009, 2003, 3001, 4001, 5003, 6011, 7001, 8011, 10267, 12511, 14401, 16319)
 
 
+class IncompleteBatch(RuntimeError):
+    pass
+
+
 def run(exe, work, config, flags, expression=None):
     work.mkdir()
     cfg = work / "ecm.toml"
@@ -22,6 +26,8 @@ def run(exe, work, config, flags, expression=None):
     log = work / "driver.log"
     log.write_text(result.stdout + result.stderr, encoding="utf-8")
     if result.returncode:
+        if "degenerate Atkin-Morain construction" in result.stderr:
+            raise IncompleteBatch(f"Degenerate Edwards construction. See {log}")
         raise RuntimeError(f"Stage1 failed. See {log}")
     return result.stdout
 
@@ -46,7 +52,10 @@ def measure(exe, work, config, p, b1, sigma, winner):
     fixed += "".join(f"ntt_{key} = {winner[field]}\n" for key, field in options.items())
     flags = ["-sigma", str(sigma), "-gpucurves", str(batch), "-save", "point.save", str(b1), str(b1)]
     log = run(exe, work, fixed, flags, f"2^{p}-1\n")
-    plan = dict(re.findall(r"(\w+)=([^ ]+)", re.search(r"stage1_ntt_plan: ([^\r\n]+)", log)[1]))
+    plan_line = re.search(r"stage1_ntt_plan: ([^\r\n]+)", log)
+    plan = dict(re.findall(r"(\w+)=([^ ]+)", plan_line[1])) if plan_line else {}
+    if int(plan.get("curves", 0)) < batch:
+        raise IncompleteBatch(f"Some lanes ended before the ladder. See {work / 'driver.log'}")
     if int(plan["curves"]) != batch or plan["convolution"] != mode:
         raise RuntimeError(f"Actual plan differs from the frozen batch. See {work / 'driver.log'}")
     expected = {"length": winner["length"], "bpw": winner["bpw"], "tile_layers": winner["tile"],
@@ -59,6 +68,10 @@ def measure(exe, work, config, p, b1, sigma, winner):
                        r" setup_ms=([.\d]+) readback_ms=([.\d]+) stopped=0", log)
     sample = dict(zip(("steps", "device_ms", "wall_ms", "setup_ms", "readback_ms"), map(float, fields.groups())))
     save = records(work / "point.save")
+    for identity in map(int, re.findall(r"Edwards identity: sigma=(\d+)", log)):
+        if identity in save:
+            raise RuntimeError(f"Unexpected save for Edwards identity {identity}")
+        save[identity] = (str(b1), "identity", "")
     if set(save) != set(range(sigma, sigma + batch)):
         raise RuntimeError(f"Missing saved curves. See {work / 'driver.log'}")
     return sample, save
@@ -69,6 +82,8 @@ def main():
     parser.add_argument("--exe", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", default=1, type=int)
+    parser.add_argument("--curve", choices=("mont", "ed"), default="mont")
+    parser.add_argument("--reuse-tune", type=Path, help="Use measured plans from a summary for the same GPU")
     parser.add_argument("--rounds", default=3, type=int)
     parser.add_argument("--sigma", default=20260922, type=int)
     parser.add_argument("--exponents", nargs="+", type=int, default=sorted(set(EXPONENTS + HISTORICAL_EXPONENTS)))
@@ -78,9 +93,18 @@ def main():
     exe, out = args.exe.resolve(strict=True), args.output.resolve()
     out.mkdir(parents=True)
     version = subprocess.check_output([str(exe), "--version"], cwd=out, text=True, timeout=30).strip()
-    config = f'[stage1]\ndevice = {args.device}\ngpu_algorithm = "ntt"\ncurve = "mont"\ngpu_param = 0\n' \
+    gpu_model = subprocess.check_output(["nvidia-smi", "-i", str(args.device), "--query-gpu=name",
+                                         "--format=csv,noheader"], text=True, timeout=10).strip()
+    plans = {}
+    if args.reuse_tune:
+        previous = json.loads(args.reuse_tune.read_text(encoding="utf-8"))
+        if previous["gpu_model"] != gpu_model or previous["device"] != args.device:
+            parser.error("reuse summary must match the selected GPU")
+        plans = {group["p"]: group["tune"] for group in previous["groups"]}
+    config = f'[stage1]\ndevice = {args.device}\ngpu_algorithm = "ntt"\ncurve = "{args.curve}"\ngpu_param = 0\n' \
              'lcm = "1"\nexp_cache = "off"\nlog_file = ""\nckpt_seconds = 0\n'
-    report = dict(version=version, device=args.device, sigma=args.sigma, rounds=args.rounds,
+    report = dict(version=version, device=args.device, gpu_model=gpu_model, curve=args.curve,
+                  sigma=args.sigma, rounds=args.rounds,
                   exponents=args.exponents, reference_b1=1000000, groups=[])
     with (out / "telemetry.csv").open("w", encoding="utf-8") as log:
         telemetry = subprocess.Popen(
@@ -90,19 +114,28 @@ def main():
             for p in args.exponents:
                 group = out / f"p{p}"
                 group.mkdir()
-                winner = tune(exe, group / "tune", config, p)
+                winner = plans.get(p) or tune(exe, group / "tune", config, p)
                 b1 = 1024 if p > 20000 or p < 128 else 10000
-                samples, reference = [], None
-                for index in range(args.rounds):
-                    sample, save = measure(exe, group / f"repeat{index + 1}", config, p, b1, args.sigma, winner)
-                    if reference is None:
-                        reference = save
+                batch = winner["batch"]
+                for attempt in range(8):
+                    sigma = args.sigma + batch * attempt
+                    run_group = group if attempt == 0 else group / f"seed{sigma}"
+                    run_group.mkdir(exist_ok=True)
+                    try:
+                        sample, reference = measure(exe, run_group / "repeat1", config, p, b1, sigma, winner)
+                    except IncompleteBatch:
+                        if args.curve != "ed" or attempt == 7:
+                            raise
+                        continue
+                    break
+                samples = [sample]
+                for index in range(2, args.rounds + 1):
+                    sample, save = measure(exe, run_group / f"repeat{index}", config, p, b1, sigma, winner)
                     if reference != save:
                         raise RuntimeError(f"Stage1 save differs across repeats for M{p}")
                     samples.append(sample)
-                batch = winner["batch"]
                 seconds = [s["device_ms"] / (1000 * batch) for s in samples]
-                report["groups"].append(dict(p=p, b1=b1, batch=batch, tune=winner, samples=samples,
+                report["groups"].append(dict(p=p, b1=b1, batch=batch, sigma=sigma, tune=winner, samples=samples,
                     measured_seconds_per_curve=statistics.median(seconds),
                     projected_seconds_per_curve_1e6=[s * report["reference_b1"] / b1 for s in seconds]))
                 (out / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

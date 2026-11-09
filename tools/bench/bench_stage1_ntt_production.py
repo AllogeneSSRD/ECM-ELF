@@ -29,7 +29,7 @@ def records(path):
     saved = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         fields = dict(part.strip().split("=", 1) for part in line.split(";") if "=" in part)
-        if fields.get("METHOD") == "ECM":
+        if fields.get("METHOD") in ("ECM", "ECM-EDWARDS-AM"):
             sigma = int(fields["SIGMA"])
             if sigma in saved:
                 raise ValueError(f"duplicate save sigma {sigma}: {path}")

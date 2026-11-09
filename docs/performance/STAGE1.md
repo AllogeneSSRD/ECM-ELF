@@ -10,6 +10,38 @@ CUDA Montgomery 默认 ladder、TPB128、按容器选择 TPI，分档寄存器�
 
 重复实验采用预热及相反/交错顺序，并保留完整矩阵、失败和原始日志；下列单次 GPU 矩阵按用户指定不重复，不提供波动估计。管理员 NCU 会重放，采集时间不作吞吐；Nsight Systems 的自身事件间隙不等于整卡空闲比例。
 
+## Stage1 NTT 与 CGBN 和 Prime95 对比
+
+Montgomery PARAM0 和 Edwards 分开绘图。横轴是各后端实际使用的算术位宽，纵轴是折算到 B1=1,000,000 的批量摊销秒/曲线。每张图左侧放大 16500 位以内的范围，右侧显示 NTT 的完整范围。
+
+### Montgomery PARAM0
+
+![Stage1 NTT、CGBN 和 Prime95 的秒每曲线对比，对数坐标](attachments/stage1-ntt-best-cgbn-prime95-log.png)
+
+![相同数据的线性坐标图](attachments/stage1-ntt-best-cgbn-prime95-linear.png)
+
+M16319 折算后，NTT 为 **8.67 秒/曲线**，CGBN PARAM0 在对应的 16272 位余因子上为 **7.52 秒/曲线**，Prime95 单核为 **12.95 秒/曲线**。
+
+### Edwards
+
+![Edwards Stage1 的 NTT、CGBN 与 Prime95 秒每曲线对比，对数坐标](attachments/stage1-edwards-ntt-cgbn-prime95-log.png)
+
+![Edwards Stage1 的相同数据，线性坐标](attachments/stage1-edwards-ntt-cgbn-prime95-linear.png)
+
+M16319 折算后，NTT 为 **8.68 秒/曲线**，CGBN NAF 在对应的 16272 位余因子上为 **6.30 秒/曲线**，Prime95 单核为 **11.65 秒/曲线**。完整 M262139 的 NTT 在 B1=1024 时实测 **0.15077 秒/曲线**，折算至 B1=1,000,000 为 **147.24 秒/曲线**。
+
+### 样本与计时
+
+- **NTT** 使用 GPU1 RTX 4060 Laptop，覆盖 26 个完整梅森模数，跨度为 61–262139 位。Montgomery 使用 0.59.9，各指数选取短调优中吞吐最高的配置。Edwards 使用 0.60.0，在同一设备复用已测的阶梯计划。两者每指数各跑三次真实 Stage1，取 ladder 的 CUDA event，不含准备、回读和发布。
+- **CGBN** 于 2026-11-09 使用 GPU1 RTX 4060 Laptop 和 ECM-ELF 0.60.0（CUDA 13.3、sm89、驱动 610.88），分别在相同的 13 个 318–16272 位余因子上测一批。每 SM 发射两个 block，B1 按 TPI 取 1,000,000／200,000／50,000／10,000，对应 1536／768／384／192 条曲线。Edwards 使用 NAF w6／HWCD，计时取 `loop_gpu_ms`。Montgomery PARAM0 取包含设备准备的全局 `gputime`。
+- **Prime95** 使用历史 4.0 GHz 单核、每指数三次 B1=1,000,000 的原生 Stage1 计时。Prime95 31.06b01 参考源码的 `setN` 将已知因子从因子检查目标剥除，主循环的 `gwsetup` 仍用原始 `k,b,n,c`，图中按完整梅森指数定位。历史日志未记录精确程序版本。源码位置见 [历史 Stage1 工况](#输入与工况)。
+
+GPU 用实际批次时间除以曲线数，再乘 `1,000,000 / B1`。图中阴影为 NTT 和 Prime95 三次样本的最小／最大值。两类曲线的 CGBN 批量摊销耗时在全部 13 个共有指数上低于 NTT。模数、批量与计时边界随路径变化。计时和复现见 [NTT 最佳配置全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 与 [历史 Prime95 单核基准](#prime95-单核基准与-b1-外推)。
+
+CGBN 采集期间 GPU1 利用率至少 50% 的 2512 个遥测点中，SM 频率中位数为 1500 MHz（范围 210–1500 MHz），功耗为 1.68–25.34 W（中位数 23.22 W），温度为 47–56 °C。原始日志、save 与分曲线汇总在 `data/experiments/stage1_unified_4060_0600/cgbn/`，绘图 CSV 在 `data/figures/stage1_unified_4060_0600/`。
+
+复测可用 [CGBN 工作行生成器](../../tools/bench/prepare_stage1_gpu_matrix.py) 的 `--device 1` 生成两类曲线的完整队列，再用 [基准分析](../../tools/bench/analyze_stage1_gpu.py) 分别匹配 Prime95 数据。绘图脚本要求 CGBN 和 NTT 的 GPU 型号及曲线构造一致。见 [三路径绘图](../../tools/bench/plot_stage1_ntt_best.py)。
+
 ## RTX4070 Ti 全范围 Stage1 对比
 
 2026-10-24 的测量覆盖同一组 **13 个梅森余因子、318–16272 bits**。GPU Edwards 为 **ECM-ELF 0.52.0**，Montgomery PARAM0 为 **0.52.2**，每模型、每输入各测一批（n=1）；Prime95 两类构造各有 **39 个有效单核样本**（每输入 n=3），CPU 由用户确认固定为 4.0 GHz。
@@ -22,7 +54,7 @@ Edwards 继续使用独立的主循环计时。新增 Montgomery 日志只有**�
 
 ### 输入与工况
 
-GPU START 工作行中的已知因子逐项通过整除验证，计算出的实际 N 位宽与原生 GPU 输出相符，并与 CPU 原工作行的分解目标一致。本节历史图的横轴使用目标余因子位宽。Prime95 的 ECM 参考源码用 `setN` 剥除已知因子以确定因子检查目标，GWNUM 的主循环仍按原始 `k,b,n,c` 建立 FFT。因此实际算术位宽对比图将 Prime95 放在完整梅森指数处。CPU screen 日志未记录已知因子列表及精确二进制版本。参见本地 Prime95 31.06b01 `ecm.cpp:1199,1220,6885,7208` 和 [按算术位宽对比](STAGE2.md#stage1-ntt-与-cgbn-和-prime95-对比)。
+GPU START 工作行中的已知因子逐项通过整除验证，计算出的实际 N 位宽与原生 GPU 输出相符，并与 CPU 原工作行的分解目标一致。本节历史图的横轴使用目标余因子位宽。Prime95 的 ECM 参考源码用 `setN` 剥除已知因子以确定因子检查目标，GWNUM 的主循环仍按原始 `k,b,n,c` 建立 FFT。因此实际算术位宽对比图将 Prime95 放在完整梅森指数处。CPU screen 日志未记录已知因子列表及精确二进制版本。参见本地 Prime95 31.06b01 `ecm.cpp:1199,1220,6885,7208` 和 [按算术位宽对比](#stage1-ntt-与-cgbn-和-prime95-对比)。
 
 两次 GPU 测量均使用 device 0、RTX4070 Ti、60 SM、TPB128、120 个 block，即发射 2 block/SM；实际驻留仍受资源约束。Edwards 为 NAF w6、HWCD 倍点，Montgomery 为 Suyama PARAM0。TPI4/8/16/32 对应 B1=1e6/2e5/5e4/1e4，批量为 3840/1920/960/480。不同构造使用各自的进位余量，容器不强制相同：M1009 的 Edwards/Montgomery 为 **384/512 bits**，M12511 为 **12288/13312 bits**；不能把这些点的差异全部归因于点运算公式。
 

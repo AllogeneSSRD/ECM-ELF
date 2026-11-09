@@ -36,6 +36,12 @@ def exact_modulus(exponent, factors):
     return n
 
 
+def saved_batches(segment, legacy):
+    current = re.findall(r"Stage1 save: (.+?) \((\d+) saved curves\)", segment)
+    return [(path.replace("\\", "/").rsplit("/", 1)[-1], int(count))
+            for path, count in (current or legacy)]
+
+
 def parse_batches(text, references, sm_count):
     lines = text.splitlines()
     versions = re.findall(r"ECM-ELF ([0-9]+\.[0-9]+\.[0-9]+) \(Stage1\)", text)
@@ -91,8 +97,9 @@ def parse_batches(text, references, sm_count):
             raise ValueError("Expected NAF w6 / HWCD")
         if int(metrics["dictionary_bytes"]) != curves * (container // 8) * 4 * (1 << (window - 2)):
             raise ValueError("Dictionary allocation disagrees with geometry")
-        saves = re.findall(r"Edwards Stage1 save: (\S+) \((\d+) curves\)", segment)
-        if saves != [(f[4], str(curves))] or segment.count("Stage1 results: ") != 1:
+        saves = saved_batches(segment, re.findall(r"Edwards Stage1 save: (\S+) \((\d+) curves\)", segment))
+        identities = len(re.findall(r"Edwards identity: sigma=\d+", segment))
+        if saves != [(f[4], curves - identities)] or segment.count("Stage1 results: ") != 1:
             excluded.append(dict(exponent=exponent, start_line=start + 1,
                                  reason="batch save/publication completion not recorded"))
             continue
@@ -168,23 +175,22 @@ def parse_mont_batches(text, references, sm_count):
         n = exact_modulus(exponent, f[8].split(","))
         if n != exact_modulus(exponent, cpu["intended_known_factors"]):
             raise ValueError("CPU/GPU target integers differ")
-        if len(re.findall(r"queue_save: curve=mont param=0 B1=" + str(b1) + r"\b", segment)) != 1:
-            raise ValueError("Expected PARAM0 task")
         if segment.count("GPU: parametrization = Suyama param0") != 1:
             raise ValueError("Expected native Suyama PARAM0 confirmation")
         geometry = re.findall(r"GPU: CGBN<(\d+),\s*(\d+)> kernel, N is (\d+) bits \((\d+) blocks x (\d+) threads\)", segment)
         devices = re.findall(r"GPU: will use device (\d+): (.+), compute capability [\d.]+, (\d+) MPs\.", segment)
         times = re.findall(r"GPU stage1 returned: (\d+) gputime=([\d.]+) ms", segment)
-        saves = re.findall(r"Saved (\d+) Montgomery curve line\(s\) to (\S+)", segment)
+        saves = saved_batches(segment, [(path, count) for count, path in re.findall(
+            r"Saved (\d+) Montgomery curve line\(s\) to (\S+)", segment)])
         if len(geometry) != 1 or len(devices) != 1:
             raise ValueError("Missing or duplicated Montgomery geometry/device record")
         if len(times) != 1 or len(saves) != 1 or segment.count("Stage1 results: ") != 1:
             excluded.append(dict(exponent=exponent, start_line=start + 1,
                                  reason="batch timing/save/publication completion not recorded"))
             continue
-        if int(times[0][0]) != 0 or re.search(r"\bERROR\b|CGBN.*error|Stage1 stopped|checkpoint restored", segment, re.I):
+        if int(times[0][0]) not in (0, 1) or re.search(r"\bERROR\b|CGBN.*error|Stage1 stopped|checkpoint restored", segment, re.I):
             raise ValueError("Failed/stopped/restored batch cannot be a complete timing sample")
-        if int(saves[0][0]) != curves or saves[0][1].replace("\\", "/").rsplit("/", 1)[-1] != f[4]:
+        if saves[0] != (f[4], curves):
             raise ValueError("Completed save does not match task")
         tpi, container, bits, blocks, tpb = map(int, geometry[0])
         device, native_model, native_sms = devices[0]

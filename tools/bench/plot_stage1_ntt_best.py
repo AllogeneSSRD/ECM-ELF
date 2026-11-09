@@ -18,6 +18,9 @@ def make_points(ntt, historical):
         raise ValueError("benchmark B1 projections differ")
     if sorted(g["p"] for g in ntt["groups"]) != sorted(ntt["exponents"]):
         raise ValueError("NTT benchmark is incomplete")
+    cgbn_exponents = [row["exponent"] for row in historical["rows"]]
+    if not cgbn_exponents or len(set(cgbn_exponents)) != len(cgbn_exponents) or historical.get("missing_cpu_reference_exponents"):
+        raise ValueError("CGBN and Prime95 reference conditions are incomplete or repeated")
     for group in ntt["groups"]:
         samples = group["projected_seconds_per_curve_1e6"]
         points["ntt"].append((group["p"], group["p"], statistics.median(samples), min(samples), max(samples)))
@@ -30,15 +33,17 @@ def make_points(ntt, historical):
     return {key: sorted(rows, key=lambda r: r[1]) for key, rows in points.items()}
 
 
-def plot(points, output, logarithmic):
+def plot(points, output, logarithmic, curve, device):
+    label = "Edwards" if curve == "ed" else "Montgomery"
+    scheme = "Edwards" if curve == "ed" else "PARAM0"
     styles = {
-        "ntt": ("NTT PARAM0 · RTX 4060 Laptop · full Mersenne", "#176fa5", "o"),
-        "cgbn": ("CGBN PARAM0 · RTX 4070 Ti · cofactor", "#cb6719", "s"),
-        "prime95": ("Prime95 Montgomery · 1 core at 4 GHz · full-M FFT", "#72459a", "^"),
+        "ntt": (f"NTT {scheme} · {device} · full Mersenne", "#176fa5", "o"),
+        "cgbn": (f"CGBN {scheme}{' NAF' if curve == 'ed' else ''} · {device} · cofactor", "#cb6719", "s"),
+        "prime95": (f"Prime95 {label} · 1 core at 4 GHz · full-M FFT", "#72459a", "^"),
     }
     with plt.style.context("seaborn-v0_8-whitegrid"):
         fig, axes = plt.subplots(1, 2, figsize=(12, 5.25), layout="constrained")
-        fig.suptitle("Stage1 Montgomery cost per curve by arithmetic width", fontweight="bold")
+        fig.suptitle(f"Stage1 {label} cost per curve by arithmetic width", fontweight="bold")
         for i, ax in enumerate(axes):
             ax.set_title(("Historical width range (≤ 16,500 bits)", "Full NTT measurement range")[i])
             for key, rows in points.items():
@@ -68,14 +73,19 @@ def plot(points, output, logarithmic):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ntt", required=True, type=Path)
-    parser.add_argument("--historical", required=True, type=Path)
+    parser.add_argument("--comparison", "--historical", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    ntt, old = (json.loads(p.read_text(encoding="utf-8-sig")) for p in (args.ntt, args.historical))
-    points = make_points(ntt, old)
+    ntt, comparison = (json.loads(p.read_text(encoding="utf-8-sig")) for p in (args.ntt, args.comparison))
+    curve = ntt["curve"]
+    if ntt["gpu_model"] != comparison["gpu_model"] or comparison["model"] != ("ed" if curve == "ed" else "mont0"):
+        parser.error("CGBN and NTT must use the same GPU model and curve construction")
+    device = ntt["gpu_model"].removeprefix("NVIDIA GeForce ").removesuffix(" GPU")
+    points = make_points(ntt, comparison)
     args.output.mkdir(parents=True, exist_ok=True)
+    prefix = "stage1-edwards-ntt-cgbn-prime95" if curve == "ed" else "stage1-ntt-best-cgbn-prime95"
     for suffix in ("log", "linear"):
-        plot(points, args.output / f"stage1-ntt-best-cgbn-prime95-{suffix}.png", suffix == "log")
+        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device)
     with (args.output / "comparison.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(("series", "mersenne_exponent", "arithmetic_bits", "median_s_per_curve_at_1e6",
