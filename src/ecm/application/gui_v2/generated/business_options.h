@@ -113,6 +113,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage2","stage2_short_ntt_batch_tune","[false|true|0|1]","option_stage2_stage2_short_ntt_batch_tune","bool",false,false,0,0},
     {"stage2","stage2_low_cpu_wait","[false|true|0|1]","option_stage2_stage2_low_cpu_wait","bool",false,false,0,0},
     {"stage2","stage2_pack_zero","[false|true|0|1]","option_stage2_stage2_pack_zero","bool",false,false,0,0},
+    {"stage2","stage2_weighted_ntt","[false|true|0|1]","option_stage2_stage2_weighted_ntt","bool",false,false,0,0},
     {"stage2","stage1_tune_profile","<path>","option_stage2_stage1_tune_profile","string",false,false,0,0},
     {"stage2","stage2_auto_min_b2","<x:Z,0..2^63-8193>","option_stage2_stage2_auto_min_b2","u64",false,false,0,0},
     {"stage2","stage2_auto_max_b2","<x:Z,0..2^63-8193>","option_stage2_stage2_auto_max_b2","u64",false,false,0,0},

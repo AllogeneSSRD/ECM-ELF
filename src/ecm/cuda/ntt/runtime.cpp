@@ -601,8 +601,32 @@ void fuse_mark(const char *tag, double &t0)
     t0 = t1;
 }
 
+template<bool SquareBase>
+static void launch_forward_outer(bool coop, int M, unsigned long long *d,
+    unsigned long long n, int L, const unsigned long long *scr, const unsigned long long *scr2,
+    unsigned long long nbatch, unsigned long long stride, cudaStream_t stream)
+{
+    const unsigned long long groups=n>>M;
+    const unsigned long long gpb=1024;
+    const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
+    dim3 gr(g, (unsigned int)nbatch);
+    if(coop && M>=5) {
+        launch_outer_coop<false,SquareBase>(M,d,n,L,scr,scr2,nbatch,stride,stream);
+        return;
+    }
+    switch (M) {
+        case 1: ecm_launch_outer_fwd_kernel<1,SquareBase>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
+        case 2: ecm_launch_outer_fwd_kernel<2,SquareBase>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
+        case 3: ecm_launch_outer_fwd_kernel<3,SquareBase>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
+        case 4: ecm_launch_outer_fwd_kernel<4,SquareBase>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
+        case 5: ecm_launch_outer_fwd_kernel<5,SquareBase>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
+        case 6: if constexpr(!SquareBase)ecm_launch_outer_fwd_kernel<6>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
+        default: std::fprintf(stderr, NTT_PROBE_NAME ": bad outer radix M=%d\n", M); std::exit(3);
+    }
+}
+
 void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
-                              unsigned long long omega, unsigned long long nbatch, cudaStream_t stream)
+                              unsigned long long omega, unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage)
 {
     unsigned long long n = c.n;
     const unsigned long long stride = n;
@@ -611,8 +635,6 @@ void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
     for (int p = 0; p < c.nms; ++p) {
         const int M = c.ms[p];
         const unsigned long long S = n >> (L + M);
-        const unsigned long long groups = n >> M;
-        const unsigned long long gpb = 1024;
         /* cached tables (S3): the same kernel wrote them once per SHAPE instead of once per
            pass of every multiply; when tables_cached is false this is exactly the old path */
         unsigned long long *scr = c.scr, *scr2 = c.scr2;
@@ -624,32 +646,25 @@ void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
             ecm_launch_build_radix_table_kernel(EcmCudaLaunch(1, (1 << M), 0, stream), scr2, M, baseW, 0);
             CK(cudaGetLastError());
         }
-        const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
-        dim3 gr(g, (unsigned int)nbatch);
-        if(c.coop_outer && M>=5)
-            launch_outer_coop<false>(M,d,n,L,scr,scr2,nbatch,stride,stream);
-        else {
-        switch (M) {
-            case 1: ecm_launch_outer_fwd_kernel<1>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
-            case 2: ecm_launch_outer_fwd_kernel<2>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
-            case 3: ecm_launch_outer_fwd_kernel<3>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
-            case 4: ecm_launch_outer_fwd_kernel<4>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
-            case 5: ecm_launch_outer_fwd_kernel<5>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
-            case 6: ecm_launch_outer_fwd_kernel<6>(EcmCudaLaunch(gr, FUSE_OUTER_THREADS, 0, stream), d, n, L, scr, scr2, gpb, stride); break;
-            default: std::fprintf(stderr, NTT_PROBE_NAME ": bad outer radix M=%d\n", M); std::exit(3);
-        }
+        if (packed_first_stage && p==0) {
+            // The packer emitted [a[j], a[j]*omega^j]. The remaining
+            // radix uses the next radix-table row and squares the coarse root.
+            if (M>1) launch_forward_outer<true>(c.coop_outer,M-1,d,n,1,scr,scr2+(1ull<<(M-1)),nbatch,stride,stream);
+        } else {
+            launch_forward_outer<false>(c.coop_outer,M,d,n,L,scr,scr2,nbatch,stride,stream);
         }
         CK(cudaGetLastError());
         fuse_mark("fwd outer pass", ft0);
         L += M;
     }
-    if (c.t > 0) {
-        const unsigned int blocks = (unsigned int)(n >> c.t);
-        const int smem = (int)(1ull << c.t) * (int)sizeof(unsigned long long);
+    const int tile = c.t - (packed_first_stage && c.nms==0 ? 1 : 0);
+    if (tile > 0) {
+        const unsigned int blocks = (unsigned int)(n >> tile);
+        const int smem = (int)(1ull << tile) * (int)sizeof(unsigned long long);
         dim3 gr(blocks, (unsigned int)nbatch);
-        if(c.warp_tail && c.t>=5)
-            ecm_launch_tile_kernel<false,true>(EcmCudaLaunch(gr, FUSE_TILE_THREADS, smem, stream), d,nullptr,n,c.k,c.t,c.tblF,0ull,stride);
-        else ecm_launch_tile_kernel<false>(EcmCudaLaunch(gr, FUSE_TILE_THREADS, smem, stream), d, nullptr, n, c.k, c.t,
+        if(c.warp_tail && tile>=5)
+            ecm_launch_tile_kernel<false,true>(EcmCudaLaunch(gr, FUSE_TILE_THREADS, smem, stream), d,nullptr,n,c.k,tile,c.tblF,0ull,stride);
+        else ecm_launch_tile_kernel<false>(EcmCudaLaunch(gr, FUSE_TILE_THREADS, smem, stream), d, nullptr, n, c.k, tile,
                                                             c.tblF, 0ull, stride);
         CK(cudaGetLastError());
         fuse_mark("fwd tile pass", ft0);
@@ -1112,6 +1127,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     stage2_trace::Range shape_trace(shape_label);
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
+    const bool weighted = sh.pack_weights.fine != nullptr;
     const unsigned int threads = 256;
     const unsigned int blocks = (unsigned int)((N + threads - 1) / threads);
     unsigned int *carry_partial=arena ? arena->carry_workspace(N,nbatch) : nullptr;
@@ -1151,11 +1167,11 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                 required<=arena->workspace.capacity-(address-start)/8;
         };
         if(contains(arena->workspace.dA,dA) && contains(arena->workspace.dB,dB))
-            graph=arena->short_graph.lookup(arena->device,fc,dA,dB,sh.omega,sh.omega_inv,sh.n_scale,nbatch);
+            graph=arena->short_graph.lookup(arena->device,fc,dA,dB,sh.omega,sh.omega_inv,sh.n_scale,nbatch,weighted);
     }
     CK(cudaEventRecord(ev_f0));
     if(graph)CK(cudaGraphLaunch(graph->forward,0));
-    else {ntt_forward_fused(dA, fc, sh.omega, nbatch);ntt_forward_fused(dB, fc, sh.omega, nbatch);}
+    else {ntt_forward_fused(dA, fc, sh.omega, nbatch, 0, weighted);ntt_forward_fused(dB, fc, sh.omega, nbatch, 0, weighted);}
     if (dump && nbatch == 1 && hfa && hfb) {
         hfa->assign(N, 0);
         hfb->assign(N, 0);
@@ -1170,8 +1186,13 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
 
     if(graph) {
         CK(cudaGraphLaunch(graph->inverse,0));arena->short_graph.launches+=2;
-        arena->short_graph.saved_launches+=(unsigned long long)fc.passes_fwd*3-2;
-    } else ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch);
+        const int omitted=weighted && (fc.nms ? fc.ms[0]==1 : fc.t==1) ? 2 : 0;
+        arena->short_graph.saved_launches+=std::max(0,fc.passes_fwd*3-2-omitted);
+    } else {
+        // The full inverse's last DIT butterfly unweights the odd spectrum and
+        // combines both halves. Its existing 1/N scale supplies the factor 1/2.
+        ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch);
+    }
     CK(cudaEventRecord(ev_i1));
 
     if (dump && nbatch == 1 && hPre) {
@@ -1577,6 +1598,15 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     }
     const double tcopy0 = now_s();
     if (input) {
+        if (input->accepts_weighted && fuse_env_ull("NTT_S4_WEIGHTED",0) &&
+            fuse_env_ull("NTT_S4_PACK_ZERO",0) && fc.tables_cached && sh.L_terms <= N/2) {
+            if (fc.nms) {
+                const auto shift=static_cast<unsigned>(fc.k-fc.ms[0]);
+                sh.pack_weights={fc.passF[0],fc.ms[0]>1 ? fc.radF[0] : nullptr,shift};
+            } else {
+                sh.pack_weights={fc.tblF+N/2-1,nullptr,0};
+            }
+        }
         const int rc = input->run ? input->run(input->ctx, sh, nbatch, dA, dB) : 2;
         if (rc) {
 
@@ -1584,6 +1614,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
             return rc;
         }
         CK(cudaGetLastError());
+        if (arena && sh.pack_weights.fine) arena->weighted_slices+=nbatch;
     } else {
         CK(ntt_host_copy(dA, alias_a.empty() ? dAin : alias_a.data(), (size_t)N * nbatch * sizeof(unsigned long long),
                       alias_a.empty() ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice));

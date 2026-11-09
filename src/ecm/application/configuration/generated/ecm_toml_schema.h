@@ -113,6 +113,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_short_ntt_batch_tune","bool","[false|true|0|1]"},
     {"stage2","stage2_low_cpu_wait","bool","[false|true|0|1]"},
     {"stage2","stage2_pack_zero","bool","[false|true|0|1]"},
+    {"stage2","stage2_weighted_ntt","bool","[false|true|0|1]"},
     {"stage2","stage1_tune_profile","string","<path>"},
     {"stage2","stage2_auto_min_b2","u64","<x:Z,0..2^63-8193>"},
     {"stage2","stage2_auto_max_b2","u64","<x:Z,0..2^63-8193>"},

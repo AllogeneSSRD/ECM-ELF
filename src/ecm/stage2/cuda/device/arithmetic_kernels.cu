@@ -105,9 +105,9 @@ template void ecm_launch_s4_reduce_kernel<4,true>(EcmCudaLaunch, const unsigned 
 
 namespace stage2_pack {
 
-template void ecm_launch_pack_zero_kernel<false,false>(EcmCudaLaunch, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst);
-template void ecm_launch_pack_zero_kernel<true,true>(EcmCudaLaunch, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst);
-template void ecm_launch_pack_zero_kernel<true,false>(EcmCudaLaunch, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst);
+template void ecm_launch_pack_zero_kernel<false,false>(EcmCudaLaunch, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst, Stage2NttPackWeights);
+template void ecm_launch_pack_zero_kernel<true,true>(EcmCudaLaunch, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst, Stage2NttPackWeights);
+template void ecm_launch_pack_zero_kernel<true,false>(EcmCudaLaunch, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst, Stage2NttPackWeights);
 }
 
 

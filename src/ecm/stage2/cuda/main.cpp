@@ -145,6 +145,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
         else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--weighted-ntt") {const auto n=num();if(n>1)throw std::runtime_error("weighted-ntt must be 0 or 1");o.weighted_ntt=n!=0;o.portable_cli.insert(a);}
         else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
         else if (a == "--low-cpu-wait") {const auto n=num();if(n>1)throw std::runtime_error("low-cpu-wait must be 0 or 1");o.low_cpu_wait=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
@@ -307,6 +308,7 @@ void help() {
         "           --tune-runtime-samples N (1..1000, default 10): per-condition/path observation cap.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
+        "           --weighted-ntt 0|1: fuse the first NTT stage into CUDA packing (stage2_weighted_ntt in TOML).\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
         "           --baby-backend auto|scalar|coop32 --giant-backend auto|scalar|coop16|coop32\n"
         "           --seed-backend auto|scalar|coop32 (paired seeds and GPU [D]Q, >8192 bits)\n"
@@ -474,6 +476,8 @@ int driver(Options o) {
         absolute_from(base,s.has_submission?s.submission:ecm_config::worker_file(s.submission,o.worker))).string();
     if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
+    if(!o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;
+    configure_weighted_ntt(o);
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
     else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
     else if(o.cost_profile.empty()) {

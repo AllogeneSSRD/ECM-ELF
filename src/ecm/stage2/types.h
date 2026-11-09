@@ -100,6 +100,7 @@ struct Options {
     bool short_calibration=true;
     bool short_batch_tune=false;
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
+    bool weighted_ntt=ecm_config::defaults::stage2_stage2_weighted_ntt;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
     uint64_t tune_min_repeats=ecm_config::defaults::stage2_stage2_tune_min_repeats;

@@ -56,6 +56,7 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     request.ntt_counts=o.ntt_counts;
     request.owner_mb=o.owner_mb;
     request.pack_zero=o.pack_zero;
+    request.weighted_ntt=o.weighted_ntt;
     request.prediction_policy=o.prediction_policy;
     request.publication_task=o.publication_task;
     request.ratio_adjust=o.ratio_adjust;
@@ -116,6 +117,7 @@ int curve_worker(Options o) {
     configure_groot_experiment(o);
     configure_host_wait(o);
     configure_pack_zero(o);
+    configure_weighted_ntt(o);
     // Children ignore the first console interrupt; the parent owns stop policy.
     SetConsoleCtrlHandler(nullptr,TRUE);
     std::setvbuf(stdout,nullptr,_IONBF,0);std::setvbuf(stderr,nullptr,_IONBF,0);

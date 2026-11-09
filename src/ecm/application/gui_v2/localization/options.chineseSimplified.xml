@@ -113,6 +113,7 @@
       <Item id="option_stage2_stage2_short_ntt_batch_tune" name="实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。" />
       <Item id="option_stage2_stage2_low_cpu_wait" name="可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。&#10;默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。&#10;显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。&#10;未配置时保留专家环境覆盖；读回前休眠可单独实验。" />
       <Item id="option_stage2_stage2_pack_zero" name="每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。" />
+      <Item id="option_stage2_stage2_weighted_ntt" name="可选 CUDA 多项式卷积后端。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。命令行 --weighted-ntt 0|1 优先。" />
       <Item id="option_stage2_stage1_tune_profile" name="已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。" />
       <Item id="option_stage2_stage2_auto_min_b2" name="Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。" />
       <Item id="option_stage2_stage2_auto_max_b2" name="Auto B2 搜索上界；0 为 2.6e12。未测值允许估算，显式任务 B2 优先。" />

@@ -372,6 +372,8 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
     // S4 cost populations cannot cross arithmetic policies. Missing means the
     // scalar legacy baseline; NTT tables erase this separate policy below.
     // Actual reduction mode and variant are row/Shape identities.
+    if(old.count("env_s4_weighted")!=current.count("env_s4_weighted") ||
+       (old.count("env_s4_weighted") && !same("env_s4_weighted")))return false;
     if(!ignore.gpu && (!same("uuid_hex") || !same("sm_major") || !same("sm_minor")))return false;
     if(!ignore.driver && !same("cuda_driver"))return false;
     if(!ignore.cuda && !same("cuda_runtime"))return false;
@@ -394,7 +396,7 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
 inline bool ntt_matches(Fields old,Fields current,const Ignore &ignore) {
     // S4 scheduling changes do not change the standalone field benchmark.
     for(const char *key:{"env_s4_short_batch_tune","env_s4_short_batch_hash","env_giant_seed_coop","env_s4_coop_reduce","env_s4_coop_tpb","env_s4_coop_kernel",
-        "env_s4_oracle_pin_kb","env_s4_oracle_pin_pool","env_carry_residual_mode"}) {old.erase(key);current.erase(key);}
+        "env_s4_oracle_pin_kb","env_s4_oracle_pin_pool","env_carry_residual_mode","env_s4_weighted"}) {old.erase(key);current.erase(key);}
     return matches(old,current,ignore);
 }
 // Restricted TOML arrays contain scalar table cells, never trial samples.

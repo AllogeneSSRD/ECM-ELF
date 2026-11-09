@@ -1863,6 +1863,20 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_weighted_ntt",
+      "field": "weighted_ntt",
+      "type": "bool",
+      "default": false,
+      "domain": "[false|true|0|1]",
+      "fx": "Stage2_root_weighted_NTT",
+      "parser": "strict",
+      "description": [
+        "Opt-in CUDA polynomial convolution. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. CLI --weighted-ntt 0|1 overrides this key.",
+        "可选 CUDA 多项式卷积后端。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。命令行 --weighted-ntt 0|1 优先。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage1_tune_profile",
       "field": "stage1_profile",
       "type": "string",

@@ -19,7 +19,7 @@ void ecm_launch_carry_cone_kernel(EcmCudaLaunch cfg, const unsigned long long *c
 void ecm_launch_build_tile_table_kernel(EcmCudaLaunch cfg, unsigned long long *tbl, int k, int t, unsigned long long root);
 void ecm_launch_build_pass_table_kernel(EcmCudaLaunch cfg, unsigned long long *tbl, unsigned long long sz, int shift, unsigned long long root);
 void ecm_launch_build_radix_table_kernel(EcmCudaLaunch cfg, unsigned long long *tbl, int m, unsigned long long root, int rev);
-template<int M>
+template<int M, bool SQUARE_BASE=false>
 void ecm_launch_outer_fwd_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
 template<int M>
 void ecm_launch_outer_inv_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int s0, const unsigned long long *tq, const unsigned long long *dw, unsigned long long grp_per_blk, unsigned long long stride);
@@ -28,7 +28,7 @@ void ecm_launch_tile_kernel(EcmCudaLaunch cfg, unsigned long long *a, const unsi
 void ecm_launch_gl_mul_test_kernel(EcmCudaLaunch cfg, const unsigned long long *x, const unsigned long long *y, unsigned long long *out, int n);
 void ecm_launch_gl_twiddle_test_kernel(EcmCudaLaunch cfg, unsigned long long *out, unsigned long long n, unsigned long long omega);
 void ecm_launch_dft_direct_kernel(EcmCudaLaunch cfg, const unsigned long long *x, unsigned long long *out, unsigned long long n, unsigned long long omega);
-template<int M,bool INVERSE>
+template<int M,bool INVERSE,bool SQUARE_BASE=false>
 void ecm_launch_outer_coop_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
 void ecm_launch_carry_partial_kernel(EcmCudaLaunch cfg, const unsigned long long *c, unsigned long long n, int bpw, unsigned int *partial, unsigned long long stride);
 template<int ROUNDS>

@@ -35,6 +35,11 @@ template void ecm_launch_outer_fwd_kernel<4>(EcmCudaLaunch, unsigned long long *
 template void ecm_launch_outer_fwd_kernel<3>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
 template void ecm_launch_outer_fwd_kernel<2>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
 template void ecm_launch_outer_fwd_kernel<1>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
+template void ecm_launch_outer_fwd_kernel<5,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
+template void ecm_launch_outer_fwd_kernel<4,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
+template void ecm_launch_outer_fwd_kernel<3,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
+template void ecm_launch_outer_fwd_kernel<2,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
+template void ecm_launch_outer_fwd_kernel<1,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride);
 
 template void ecm_launch_outer_inv_kernel<6>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int s0, const unsigned long long *tq, const unsigned long long *dw, unsigned long long grp_per_blk, unsigned long long stride);
 template void ecm_launch_outer_inv_kernel<5>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int s0, const unsigned long long *tq, const unsigned long long *dw, unsigned long long grp_per_blk, unsigned long long stride);
@@ -56,6 +61,9 @@ template void ecm_launch_outer_coop_kernel<8,false>(EcmCudaLaunch, unsigned long
 template void ecm_launch_outer_coop_kernel<7,false>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
 template void ecm_launch_outer_coop_kernel<6,false>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
 template void ecm_launch_outer_coop_kernel<5,false>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
+template void ecm_launch_outer_coop_kernel<7,false,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
+template void ecm_launch_outer_coop_kernel<6,false,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
+template void ecm_launch_outer_coop_kernel<5,false,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
 
 template void ecm_launch_carry_cone_check_kernel<10>(EcmCudaLaunch, const unsigned long long *c, unsigned long long *cout, unsigned long long n, int bpw, unsigned long long stride, unsigned int *partial);
 template void ecm_launch_carry_cone_check_kernel<9>(EcmCudaLaunch, const unsigned long long *c, unsigned long long *cout, unsigned long long n, int bpw, unsigned long long stride, unsigned int *partial);

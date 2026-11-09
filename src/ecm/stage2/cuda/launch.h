@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../../kernels/cuda/stage2_ntt_weighted.cuh"
 #include "../../cuda/runtime/launch.h"
 #include <cstddef>
 #define ECM_STAGE2_CAP_ROW(NW,FN,...) NW,
@@ -40,7 +41,7 @@ void ecm_launch_fold_reverse_kernel(EcmCudaLaunch cfg, const unsigned long long 
 void ecm_launch_fold_subtract_kernel(EcmCudaLaunch cfg, const unsigned long long *a, const unsigned long long *b, const unsigned long long *n, int W, size_t count, unsigned long long *out, unsigned long long *length);
 namespace stage2_pack {
 template<bool GATHER,bool REVERSE>
-void ecm_launch_pack_zero_kernel(EcmCudaLaunch cfg, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst);
+void ecm_launch_pack_zero_kernel(EcmCudaLaunch cfg, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst, Stage2NttPackWeights weights={});
 }
 void ecm_launch_s4_pack_batch_kernel(EcmCudaLaunch cfg, const unsigned long long *src, int S, int bpw, unsigned long long slot_words, unsigned long long N, unsigned long long ds, unsigned long long ma, int W, unsigned long long *dst);
 void ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch cfg, const unsigned long long *src, const unsigned long long *offsets, size_t m, size_t nc, int W, int bits, int bpw, unsigned long long sw, unsigned long long N, unsigned long long *dst);

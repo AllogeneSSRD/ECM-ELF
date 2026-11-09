@@ -1,4 +1,6 @@
 #include "host_policy.h"
+#include "api.h"
+#include "../backend.h"
 #ifndef ECM_STAGE2_OPENCL
 #include <cuda_runtime_api.h>
 #endif
@@ -140,6 +142,17 @@ void configure_pack_zero(Options &o,const PackZeroDefaults *s) {
     }
     if(_putenv_s("NTT_S4_PACK_ZERO",o.pack_zero?"1":"0"))
         throw std::runtime_error("cannot configure Stage2 pack/zero fusion");
+}
+void configure_weighted_ntt(const Options &o) {
+    if(o.weighted_ntt) {
+        if(stage2_backend::opencl || ecm_cuda_stage2_default_log_level()==stage2_log::debug)
+            throw std::runtime_error("weighted NTT requires the production CUDA Stage2 engine");
+        if(!o.pack_zero)throw std::runtime_error("weighted NTT requires --pack-zero 1");
+        if(!o.cost_profile.empty())throw std::runtime_error("legacy cost profiles require linear NTT");
+        if(o.tune=="ntt")throw std::runtime_error("standalone --tune ntt calibrates linear NTT");
+    }
+    if(_putenv_s("NTT_S4_WEIGHTED",o.weighted_ntt?"1":""))
+        throw std::runtime_error("cannot configure weighted Stage2 NTT");
 }
 void configure_cuda_wait(int device) {
 #ifndef ECM_STAGE2_OPENCL

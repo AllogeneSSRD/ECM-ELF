@@ -16,6 +16,7 @@
 #include <vector>
 #include <algorithm>
 #include "host_trace.h"
+#include "../../../../kernels/cuda/stage2_ntt_weighted.cuh"
 inline void ntt_cuda_check_failed(cudaError_t error) {
 #if defined(ECM_HAS_CUDA_STAGE1) && ECM_HAS_CUDA_STAGE1
     throw std::runtime_error(cudaGetErrorString(error));
@@ -109,7 +110,8 @@ unsigned long long fuse_grid(unsigned long long groups, unsigned long long grp_p
 bool fuse_trace_on();
 void fuse_mark(const char *tag, double &t0);
 void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
-                              unsigned long long omega, unsigned long long nbatch = 1, cudaStream_t stream = 0);
+                              unsigned long long omega, unsigned long long nbatch = 1, cudaStream_t stream = 0,
+                              bool packed_first_stage = false);
 void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
                               const FuseCtx &c, unsigned long long omega_inv,
                               unsigned long long n_scale, unsigned long long nbatch = 1, cudaStream_t stream = 0);
@@ -196,23 +198,23 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
                       std::vector<unsigned long long> *out_slots_u64,
                       std::vector<std::vector<unsigned long long>> *out_exact,
                       NttMulStats *st, NttArena *arena = nullptr);
-template <bool INVERSE>
+template <bool INVERSE, bool SQUARE_BASE=false>
 void launch_outer_coop(int m,unsigned long long *a,unsigned long long n,int stage,
                               const unsigned long long *coarse,const unsigned long long *radix,
                               unsigned long long nbatch,unsigned long long stride,cudaStream_t stream=0)
 {
     const auto S=INVERSE ? (1ull<<stage) : (n>>(stage+m));
     const int v=m==8 ? 16 : 32;
-    if(m<5 || m>8 || S<(unsigned long long)v) {
+    if(m<5 || m>(SQUARE_BASE ? 7 : 8) || S<(unsigned long long)v) {
         std::fprintf(stderr,NTT_PROBE_NAME ": invalid cooperative outer M=%d S=%llu\n",m,S);
         std::exit(3);
     }
     dim3 grid((unsigned int)(n/((1ull<<m)*v)),(unsigned int)nbatch);
     switch(m) {
-    case 5:ecm_launch_outer_coop_kernel<5,INVERSE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
-    case 6:ecm_launch_outer_coop_kernel<6,INVERSE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
-    case 7:ecm_launch_outer_coop_kernel<7,INVERSE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
-    case 8:ecm_launch_outer_coop_kernel<8,INVERSE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
+    case 5:ecm_launch_outer_coop_kernel<5,INVERSE,SQUARE_BASE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
+    case 6:ecm_launch_outer_coop_kernel<6,INVERSE,SQUARE_BASE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
+    case 7:ecm_launch_outer_coop_kernel<7,INVERSE,SQUARE_BASE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
+    case 8:if constexpr(!SQUARE_BASE)ecm_launch_outer_coop_kernel<8,INVERSE>(EcmCudaLaunch{grid,256,0,stream}, a,n,stage,coarse,radix,stride);break;
     }
 }
 struct FuseCtx {
@@ -306,14 +308,16 @@ struct NttGraphCache {
     bool accept(cudaError_t error);
     bool capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc,
         unsigned long long *a,unsigned long long *b,unsigned long long omega,
-        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch);
+        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage);
     Entry *lookup(int device,const FuseCtx &fc,unsigned long long *a,unsigned long long *b,
-        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch);
+        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,
+        bool packed_first_stage=false);
     void print()const;
 };
 
 struct NttArena : NttWorkspacePolicy {
     NttGraphCache short_graph;
+    unsigned long long weighted_slices=0;
     int device = -1;
     size_t cap_bytes = 0;                 /* 0 = unlimited */
     size_t bytes = 0; // exact arena-owned CUDA payload; accounting v2
@@ -493,6 +497,7 @@ struct NttShape {
     double mem_mb = 0, bound_bits = 0, bound_ratio = 0, old_bound_bits = 0, p_bits = 0;
     bool bound_ok = false, old_bound_ok = false;
     int passes_fwd = 0, passes_total = 0, carry_rounds = 0;
+    Stage2NttPackWeights pack_weights{};  // Per-call borrowed view, empty in the shape cache.
 };
 
 struct NttShapeCacheEntry {
@@ -555,6 +560,7 @@ struct NttInputHook {
     void *ctx = nullptr;
     int (*run)(void *ctx, const NttShape &shape, unsigned long long nbatch,
                unsigned long long *dA, unsigned long long *dB) = nullptr;
+    bool accepts_weighted = false;
 };
 
 NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,

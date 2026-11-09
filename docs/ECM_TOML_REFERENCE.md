@@ -1625,6 +1625,18 @@ Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / wor
 
 0 表示 ECM/NTT 调优及启动短校准直接开始正式测量，不执行丢弃的预热轮次；1 表示每个形状先运行一轮经过核验的预热，占用相同预算但不计入中位数/MAD。CLI --tune-warmup 0|1 覆盖此键；必要算术检查始终执行。
 
+### stage2_weighted_ntt
+
+```toml
+stage2_weighted_ntt = false
+```
+
+Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Opt-in CUDA polynomial convolution. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. CLI --weighted-ntt 0|1 overrides this key.
+
+可选 CUDA 多项式卷积后端。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。命令行 --weighted-ntt 0|1 优先。
+
 ## [gui]
 
 ### dock_layout

@@ -165,6 +165,10 @@ CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局�
 
 不同形状有收益也有回退，结果与受控复现入口见[G树性能](../performance/STAGE2_GTREE_LAYOUT.md)。
 
+## CUDA 加权 NTT
+
+`--weighted-ntt 1` 启用根加权多项式卷积，也可在 `[stage2]` 或 worker 的 Stage2 表中设置 `stage2_weighted_ntt = true`。默认 `false` 使用全长线性卷积。加权要求 `stage2_pack_zero = true`，可用于 Edwards 和 Montgomery；直接设备打包或缓存根表不可用的调用走全长路径。曲线结束的 `stage2_weighted_ntt` 日志列出实际执行的加权卷积数。完整曲线配对结果见 [根加权半长卷积](../performance/NTT_OUTER.md#根加权半长卷积)。
+
 ## CUDA点块与链长选项
 
 可用 `stage2_giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。未实际借块时继续使用原执行与缓存身份，不增加策略重放或额外同步；日志及结果分别保留请求和实际值。默认仍为false，真实借块的原分块重放预算尚待完整扩展。`stage2_b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。

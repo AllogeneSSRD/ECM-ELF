@@ -53,7 +53,7 @@ void ecm_launch_build_radix_table_kernel(EcmCudaLaunch cfg, unsigned long long *
     build_radix_table_kernel<<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(tbl,m,root,rev);
 }
 
-template <int M>
+template <int M, bool SQUARE_BASE=false>
 __global__ void outer_fwd_kernel(unsigned long long *a, unsigned long long n, int L,
                                  const unsigned long long *tbl, const unsigned long long *D,
                                  unsigned long long grp_per_blk, unsigned long long stride)
@@ -76,6 +76,7 @@ __global__ void outer_fwd_kernel(unsigned long long *a, unsigned long long n, in
 #pragma unroll
         for (int i = 0; i < R; ++i) x[i] = p0[(unsigned long long)i * S];
         unsigned long long tb = tbl[v];             /* omega^(v*2^L), squared per stage */
+        if constexpr(SQUARE_BASE) tb=gl_mul(tb,tb);
 #pragma unroll
         for (int i = 0; i < M; ++i) {
             const int d = 1 << (M - 1 - i);
@@ -97,9 +98,9 @@ __global__ void outer_fwd_kernel(unsigned long long *a, unsigned long long n, in
     }
 }
 
-template<int M>
+template<int M,bool SQUARE_BASE>
 void ecm_launch_outer_fwd_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int L, const unsigned long long *tbl, const unsigned long long *D, unsigned long long grp_per_blk, unsigned long long stride) {
-    outer_fwd_kernel<M><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(a,n,L,tbl,D,grp_per_blk,stride);
+    outer_fwd_kernel<M,SQUARE_BASE><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(a,n,L,tbl,D,grp_per_blk,stride);
 }
 template <int M>
 __global__ void outer_inv_kernel(unsigned long long *a, unsigned long long n, int s0,

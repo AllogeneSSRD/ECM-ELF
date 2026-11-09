@@ -31,10 +31,10 @@ bool NttGraphCache::accept(cudaError_t error) {
 
 bool NttGraphCache::capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc,
         unsigned long long *a,unsigned long long *b,unsigned long long omega,
-        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch) {
+        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage) {
         if(!accept(cudaStreamBeginCapture(capture_stream,cudaStreamCaptureModeThreadLocal)))return false;
         if(inverse)ntt_inverse_fused(a,b,fc,omega_inv,scale,batch,capture_stream);
-        else {ntt_forward_fused(a,fc,omega,batch,capture_stream);ntt_forward_fused(b,fc,omega,batch,capture_stream);}
+        else {ntt_forward_fused(a,fc,omega,batch,capture_stream,packed_first_stage);ntt_forward_fused(b,fc,omega,batch,capture_stream,packed_first_stage);}
         cudaGraph_t graph=nullptr;const auto end=cudaStreamEndCapture(capture_stream,&graph);
         if(end!=cudaSuccess){if(graph)CK(cudaGraphDestroy(graph));return accept(end);}
         size_t count=0;CK(cudaGraphGetNodes(graph,nullptr,&count));
@@ -44,14 +44,14 @@ bool NttGraphCache::capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc
     }
 
 NttGraphCache::Entry *NttGraphCache::lookup(int device,const FuseCtx &fc,unsigned long long *a,unsigned long long *b,
-        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch) {
+        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage) {
         if(!enabled || failed || fc.k<0 || (unsigned long long)fc.k>max_k || !batch ||
             fc.n>max_words/batch || !fc.tables_cached || !fc.arena_borrowed || fuse_trace_on()) {++skipped;return nullptr;}
         ++candidates;Key key;int i=0;
         key.v[i++]=(unsigned long long)device;key.v[i++]=fc.n;key.v[i++]=fc.k;key.v[i++]=fc.t;
         key.v[i++]=fc.m_max;key.v[i++]=fc.warp_tail;key.v[i++]=fc.coop_outer;key.v[i++]=fc.compact_scratch;
         key.v[i++]=omega;key.v[i++]=omega_inv;key.v[i++]=scale;key.v[i++]=batch;
-        key.v[i++]=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
+        key.v[i++]=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;key.v[i++]=packed_first_stage;
         key.v[i++]=(uintptr_t)a;key.v[i++]=(uintptr_t)b;key.v[i++]=(uintptr_t)fc.tblF;key.v[i++]=(uintptr_t)fc.tblI;
         for(int p=0;p<8;++p) {
             key.v[i++]=fc.ms[p];key.v[i++]=(uintptr_t)fc.passF[p];key.v[i++]=(uintptr_t)fc.radF[p];
@@ -74,8 +74,8 @@ NttGraphCache::Entry *NttGraphCache::lookup(int device,const FuseCtx &fc,unsigne
         if(free<(64ull<<20)){++skipped;return nullptr;}
         const double begin=now_s();
         if(!capture_stream && !accept(cudaStreamCreateWithFlags(&capture_stream,cudaStreamNonBlocking)))return nullptr;
-        if(!capture(entry.forward,false,fc,a,b,omega,omega_inv,scale,batch) ||
-           !capture(entry.inverse,true,fc,a,b,omega,omega_inv,scale,batch)) {
+        if(!capture(entry.forward,false,fc,a,b,omega,omega_inv,scale,batch,packed_first_stage) ||
+           !capture(entry.inverse,true,fc,a,b,omega,omega_inv,scale,batch,packed_first_stage)) {
             destroy(entry);setup_seconds+=now_s()-begin;return nullptr;
         }
         setup_seconds+=now_s()-begin;++builds;return &entry;

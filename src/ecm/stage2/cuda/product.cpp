@@ -435,7 +435,9 @@ void poly_mul_batch_modN(
         if(resident) {
             if(host_pack) {std::fprintf(stderr,"%s: FATAL: resident multiply cannot use host packing\n",NTT_PROBE_NAME);std::exit(3);}
             S4GatherPack pack{resident,&C,(size_t)s0,ma,mb,(unsigned long long)P,qN,qsw,(int)L.S,qbpw,(int)W};
-            NttInputHook input{&pack,s4_gather_final_input};
+            const bool pack_weighted=stage2_pack::supported(qN,qsw,ma,(int)L.S,qbpw,(int)W) &&
+                                     stage2_pack::supported(qN,qsw,mb,(int)L.S,qbpw,(int)W);
+            NttInputHook input{&pack,s4_gather_final_input,pack_weighted};
             const double tp=C.t_packdev;
             r1=ntt_poly_mul_batch_dev(P,(int)L.S,L.device,m,nullptr,nullptr,&st,L.arena,&h2,
                 nullptr,qbpw,defer_this,&input);
@@ -510,7 +512,7 @@ void poly_mul_batch_modN(
             }
             C.packed_peak_bytes = std::max(C.packed_peak_bytes, 16ull * pack_words);
             S4InputPack pack{&C, (unsigned long long)P, qN, qsw, (int)L.S, qbpw, (int)W};
-            NttInputHook input{&pack, s4_pack_final_input};
+            NttInputHook input{&pack, s4_pack_final_input,stage2_pack::supported(qN,qsw,P,(int)L.S,qbpw,(int)W)};
             const double tp0 = C.t_packdev;
             if (!g_s4_pack_direct) {
                 /* Control: identical digits go through the retained temporary buffers + D2D. */
@@ -848,14 +850,15 @@ int s4_gather_final_input(
     const double start=now_s();
     if(stage2_pack::enabled() && stage2_pack::supported(p.N,p.sw,p.ma,p.bits,p.bpw,p.W) &&
        stage2_pack::supported(p.N,p.sw,p.mb,p.bits,p.bpw,p.W)) {
-        stage2_pack::launch<true>(p.batch->src,p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a);
+        stage2_pack::launch<true>(p.batch->src,p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a,sh.pack_weights);
         const auto *offsets=p.batch->meta+p.batch->nbatch+p.s0;
         if(p.batch->reverse_b)
-            stage2_pack::launch<true,true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
-        else stage2_pack::launch<true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+            stage2_pack::launch<true,true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b,sh.pack_weights);
+        else stage2_pack::launch<true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b,sh.pack_weights);
         stage2_pack::account(m,p.N,true);stage2_pack::account(m,p.N,true,p.batch->reverse_b);
         p.C->t_packdev+=now_s()-start;return 0;
     }
+    if(sh.pack_weights.fine)return 3;  // Weighted spectra require the fused packer.
     CK(cudaMemsetAsync(a,0,(size_t)m*sh.N*8));
     CK(cudaMemsetAsync(b,0,(size_t)m*sh.N*8));
     ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned int)((m*p.ma+255)/256),256}, p.batch->src,
@@ -889,11 +892,12 @@ int s4_pack_final_input(
     const double t0 = now_s();
     const size_t bytes = (size_t)nbatch * sh.N * sizeof(unsigned long long);
     if(stage2_pack::enabled() && stage2_pack::supported(p.N,p.slot_words,p.P,p.S,p.bpw,p.W)) {
-        stage2_pack::launch<false>(p.C->d_rawA,nullptr,nbatch,p.P,p.W,p.S,p.bpw,p.slot_words,p.N,dA);
-        stage2_pack::launch<false>(p.C->d_rawB,nullptr,nbatch,p.P,p.W,p.S,p.bpw,p.slot_words,p.N,dB);
+        stage2_pack::launch<false>(p.C->d_rawA,nullptr,nbatch,p.P,p.W,p.S,p.bpw,p.slot_words,p.N,dA,sh.pack_weights);
+        stage2_pack::launch<false>(p.C->d_rawB,nullptr,nbatch,p.P,p.W,p.S,p.bpw,p.slot_words,p.N,dB,sh.pack_weights);
         stage2_pack::account(nbatch,p.N,false);stage2_pack::account(nbatch,p.N,false);
         p.C->t_packdev+=now_s()-t0;return 0;
     }
+    if(sh.pack_weights.fine)return 3;
     /* Reused scratch contains spectra/previous outputs. Clear gaps, window tails and unused
        coefficients on EVERY call, then overwrite the occupied digits with the original packer. */
     CK(cudaMemsetAsync(dA, 0, bytes));

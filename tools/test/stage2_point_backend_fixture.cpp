@@ -24,6 +24,12 @@ static void s4_policy_tests(const std::filesystem::path &out) {
     auto coop_condition=old;coop_condition["env_s4_coop_reduce"]="32";
     require(p::matches(old,coop_condition,p::Ignore::parse("")),"S4 request still splits actual row identity");
     require(p::ntt_matches(old,coop_condition,p::Ignore::parse("")),"S4 invalidated standalone NTT");
+    auto weighted=old;weighted["env_s4_weighted"]="1";
+    const auto portable=p::Ignore::parse("backend,environment");
+    require(!p::matches(old,weighted,portable) && !p::matches(weighted,old,portable),
+            "Linear and weighted ECM timings must remain separate");
+    require(p::matches(weighted,weighted,portable) && p::ntt_matches(old,weighted,portable),
+            "Weighted ECM must reuse its own samples and standalone NTT costs");
     for(const char *key:{"env_s4_oracle_pin_kb","env_s4_oracle_pin_pool","env_carry_residual_mode"}) {
         auto check_condition=old;check_condition[key]="1";
         require(!p::matches(old,check_condition,p::Ignore::parse("")),"Strict ECM environment lost checker identity");

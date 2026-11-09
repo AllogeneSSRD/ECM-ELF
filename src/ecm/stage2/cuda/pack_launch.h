@@ -14,14 +14,15 @@ static bool supported(unsigned long long N,unsigned long long sw,unsigned long l
 template<bool GATHER,bool REVERSE=false>
 static void launch(const unsigned long long *src,const unsigned long long *offsets,
     unsigned long long m,unsigned long long nc,int W,int bits,int bpw,
-    unsigned long long sw,unsigned long long N,unsigned long long *dst)
+    unsigned long long sw,unsigned long long N,unsigned long long *dst,Stage2NttPackWeights weights={})
 {
     const unsigned reciprocal=sw==1 ? 0 : (unsigned)((1ull<<32)/sw);
     for(unsigned long long first=0;first<m;first+=65535) {
         const unsigned y=(unsigned)std::min(65535ull,m-first);
-        const dim3 grid((unsigned)((N+255)/256),y);
+        const auto work=weights.fine ? N/2 : N;
+        const dim3 grid((unsigned)((work+255)/256),y);
         ecm_launch_pack_zero_kernel<GATHER,REVERSE>(EcmCudaLaunch{grid,256}, src,offsets,(unsigned)nc,(unsigned)W,
-            (unsigned)((bits+bpw-1)/bpw),(unsigned)bpw,(unsigned)sw,reciprocal,(unsigned)N,first,dst);
+            (unsigned)((bits+bpw-1)/bpw),(unsigned)bpw,(unsigned)sw,reciprocal,(unsigned)N,first,dst,weights);
         CK(cudaGetLastError());
     }
 }

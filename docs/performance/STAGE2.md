@@ -467,6 +467,8 @@ B1=50000，固定D2310/P240，B2=260000／2600000，arena512/batch64/fold640 MiB
 
 ## 分项分析
 
+[加权 NTT](NTT_OUTER.md#生产验证与固定-dp-对照)记录融合 pack、逆向合并和 GPU1 固定 D/P 的整条曲线对照。
+
 CUDA归一化、少量GCD与尾部块乘积的CPU/GPU同输入对照、传输边界和收益上限见 [CPU尾部成本报告](STAGE2_CPU_TAIL.md)。生产默认已将组根求逆和最终GCD交给CPU；不能把OpenCL算子差异直接当作CUDA增量收益。
 
 ### 初始化与主计算

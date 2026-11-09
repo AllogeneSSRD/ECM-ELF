@@ -10,7 +10,7 @@
 #if NTT_OUTER_UNROLL_U != 0 && NTT_OUTER_UNROLL_U != 4
 #error "NTT_OUTER_UNROLL_U must be 0 (compiler default) or 4 (experimental ILP)"
 #endif
-template <int M, bool INVERSE>
+template <int M, bool INVERSE, bool SQUARE_BASE=false>
 __global__ __launch_bounds__(256, M==8 ? 2 : 3)
 void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
                        const unsigned long long *coarse, const unsigned long long *radix,
@@ -32,6 +32,7 @@ void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
     for(int r=row;r<R;r+=ROWS)x[r*V+v]=a[(unsigned long long)r*S];
     if(row==0) {
         unsigned long long tb=coarse[offset];
+        if constexpr(SQUARE_BASE) tb=gl_mul(tb,tb);
         if constexpr(INVERSE) {
             base_roots[(M-1)*V+v]=tb;
 #pragma unroll
@@ -90,7 +91,7 @@ void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
 
 
 
-template<int M,bool INVERSE>
+template<int M,bool INVERSE,bool SQUARE_BASE>
 void ecm_launch_outer_coop_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride) {
-    outer_coop_kernel<M,INVERSE><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(a,n,stage,coarse,radix,stride);
+    outer_coop_kernel<M,INVERSE,SQUARE_BASE><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(a,n,stage,coarse,radix,stride);
 }

@@ -42,7 +42,7 @@ NTT性能表的字段、计时边界、tile级数、外层radix与处理趟数�
 
 Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认。仅满足小字长 FHE 模数的库不能直接替换 Goldilocks64/多精度 carry 管线；适配参考见 [算法资料](../reference/ECM_ALGORITHMS.md)。
 
-Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equiv1\pmod{2^p-1}\) 在单个梅森余数内回卷，Stage2 只在各多项式系数的 S4 归约内使用这个等式。Stage2 独立探针用普通循环和根加权的负循环两次半长卷积恢复完整 digit 向量。推导、GPU1 对照与适用区间见 [Stage2 根加权 NTT](../performance/NTT_OUTER.md#根加权半长卷积)。
+Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equiv1\pmod{2^p-1}\) 在单个梅森余数内回卷，Stage2 只在各多项式系数的 S4 归约内使用这个等式。可选 `stage2_weighted_ntt` 在直接设备打包时写出首层 DIF 的普通与加权两半，两个前向 NTT 跳过该层。末层 DIT 同时去权和合并，现有逆变换的归一化提供重建所需的除以二。该后端借用当前 NTT 计划的根表，沿用工作区、carry 和 S4；ECM tune 将两种后端的整曲线样本分开。推导与 GPU1 对照见 [Stage2 根加权 NTT](../performance/NTT_OUTER.md#根加权半长卷积)。
 
 当前独立实验提供Tensor64及稀疏有符号根的Tensor40，两者在生产outer/根表上比较完整变换和卷积，另提供Graph提交诊断。它们未接入运行或tune选型；已测长度、batch、算术资格与负收益见[Tensor NTT性能](../performance/NTT_TENSOR.md)，精确分解见[数学资料](../reference/TENSOR_NTT_MATH.md#有符号稀疏根与-dft8-分解)。
 
@@ -75,6 +75,8 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 生产 Stage2 通过 `stage2_ntt_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 TOML。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
 
 开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数，每次卷积含两个正向与一个逆向，因此 forward=2·convolutions、inverse=convolutions、total=3·convolutions。Graph 重放和物理分块不改变数学变换数；它不是 CUDA kernel 启动数。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
+
+加权后端继续按等价的全长卷积请求计入长度表，另用 `stage2_weighted_ntt` 记录实际执行的加权卷积数。
 
 兼容行 `ntt_length_counts: log2_length:num_of_ntt` 按 k 升序列出 **L=2ᵏ 的独立数学变换数**；debug 另输出按长度的卷积数。消费旧直方图的分析工具仍可读取此行，新运行需要显式开启上述选项。
 

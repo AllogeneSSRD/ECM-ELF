@@ -5,13 +5,13 @@
 #include "pack_index.cuh"
 
 namespace stage2_pack {
-template<bool GATHER,bool REVERSE>
+template<bool GATHER,bool REVERSE,bool WEIGHTED>
 __global__ void pack_zero_kernel(const unsigned long long *src,const unsigned long long *offsets,
     unsigned nc,unsigned W,unsigned ndig,unsigned bpw,unsigned sw,unsigned reciprocal,
-    unsigned N,unsigned long long first_slice,unsigned long long *dst)
+    unsigned N,unsigned long long first_slice,unsigned long long *dst,Stage2NttPackWeights weights)
 {
     const unsigned j=blockIdx.x*blockDim.x+threadIdx.x;
-    if(j>=N)return;
+    if(j>=(WEIGHTED ? N/2 : N))return;
     const unsigned long long slice=first_slice+blockIdx.y;
     unsigned long long value=0;
     if((unsigned long long)j<(unsigned long long)nc*sw) {
@@ -26,7 +26,9 @@ __global__ void pack_zero_kernel(const unsigned long long *src,const unsigned lo
             value&=(1ull<<bpw)-1;
         }
     }
-    dst[slice*(unsigned long long)N+j]=value;
+    auto *output=dst+slice*(unsigned long long)N+j;
+    *output=value;
+    if constexpr(WEIGHTED) output[N/2]=stage2_ntt_weight_digit(value,j,weights);
 }
 }
 
@@ -89,8 +91,11 @@ __global__ void s4_pack_gather_reverse_kernel(const unsigned long long *src,
 
 namespace stage2_pack {
 template<bool GATHER,bool REVERSE>
-void ecm_launch_pack_zero_kernel(EcmCudaLaunch cfg, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst) {
-    pack_zero_kernel<GATHER,REVERSE><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(src,offsets,nc,W,ndig,bpw,sw,reciprocal,N,first_slice,dst);
+void ecm_launch_pack_zero_kernel(EcmCudaLaunch cfg, const unsigned long long *src, const unsigned long long *offsets, unsigned nc, unsigned W, unsigned ndig, unsigned bpw, unsigned sw, unsigned reciprocal, unsigned N, unsigned long long first_slice, unsigned long long *dst, Stage2NttPackWeights weights) {
+    if(weights.fine)
+        pack_zero_kernel<GATHER,REVERSE,true><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(src,offsets,nc,W,ndig,bpw,sw,reciprocal,N,first_slice,dst,weights);
+    else
+        pack_zero_kernel<GATHER,REVERSE,false><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(src,offsets,nc,W,ndig,bpw,sw,reciprocal,N,first_slice,dst,weights);
 }
 }
 

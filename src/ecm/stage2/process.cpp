@@ -53,6 +53,7 @@ int run_curve_process(const CurveProcessRequest &o) {
     else cmd+=L" --groot-layout auto"; // Preserve explicit auto over a forced TOML value.
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     arg(L"--pack-zero",o.pack_zero?1:0);
+    if(o.weighted_ntt)arg(L"--weighted-ntt",1);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     arg(L"--tune-runtime-samples",o.runtime_samples);
     arg(L"--tune-min-repeats",o.tune_min_repeats);

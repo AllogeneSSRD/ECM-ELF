@@ -634,6 +634,9 @@ int run_real(
                     1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
                     stage2_fixture_seconds,(int)(!stage2_extra_fixtures));
         L.print_ntt_lengths();
+        if(fuse_env_ull("NTT_S4_WEIGHTED",0))stage2_log::print(stage2_log::curve,
+            "stage2_weighted_ntt: weighted_slices=%llu polynomial_muls=%llu\n",
+            arena.weighted_slices,L.muls);
         if(g_relocation_enabled)stage2_log::print(stage2_log::curve,
             "stage2_relocation: active=%d first=%llu last=%llu probe_points=%llu missing=%llu replayed=%d "
             "probe=%.6f replay=%.6f main=%.6f final_first=%llu final_points=%llu reason=%s\n",

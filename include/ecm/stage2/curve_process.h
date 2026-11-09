@@ -34,6 +34,7 @@ struct CurveProcessRequest {
     bool ntt_counts=0;
     uint64_t owner_mb=0;
     bool pack_zero=0;
+    bool weighted_ntt=false;
     std::string prediction_policy{};
     std::string publication_task{};
     double ratio_adjust=0;
