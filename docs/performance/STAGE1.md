@@ -40,7 +40,7 @@ GPU 用实际批次时间除以曲线数，再乘 `1,000,000 / B1`。图中阴�
 
 CGBN 采集期间 GPU1 利用率至少 50% 的 2512 个遥测点中，SM 频率中位数为 1500 MHz（范围 210–1500 MHz），功耗为 1.68–25.34 W（中位数 23.22 W），温度为 47–56 °C。原始日志、save 与分曲线汇总在 `data/experiments/stage1_unified_4060_0600/cgbn/`，绘图 CSV 在 `data/figures/stage1_unified_4060_0600/`。
 
-复测可用 [CGBN 工作行生成器](../../tools/bench/prepare_stage1_gpu_matrix.py) 的 `--device 1` 生成两类曲线的完整队列，再用 [基准分析](../../tools/bench/analyze_stage1_gpu.py) 分别匹配 Prime95 数据。绘图脚本要求 CGBN 和 NTT 的 GPU 型号及曲线构造一致。见 [三路径绘图](../../tools/bench/plot_stage1_ntt_best.py)。
+复测可用 [CGBN 工作行生成器](../../tools/bench/prepare_stage1_gpu_matrix.py) 的 `--device 1` 生成两类曲线的完整队列，再用 [基准分析](../../tools/bench/analyze_stage1_gpu.py) 分别匹配 Prime95 数据。绘图脚本要求 CGBN 和 NTT 的 GPU 型号及曲线构造一致。另见 [三路径绘图](../../tools/bench/plot_stage1_ntt_best.py) 和 [各 NTT 长度的每步耗时](STAGE1_MERSENNE_NTT.md#各-ntt-长度的每步耗时)。
 
 ## RTX4070 Ti 全范围 Stage1 对比
 

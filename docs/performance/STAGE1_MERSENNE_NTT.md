@@ -44,6 +44,16 @@ Edwards 用 0.60.0 在同一 GPU 上复用这 26 组实测计划，各跑三次�
 
 原始调优表、三轮运行日志、save、遥测和汇总保存在 `data/experiments/stage1_ntt_best_matrix_0599/`（M7001 起的运行在 `continuation/`）。复测可运行 `python tools/bench/bench_stage1_ntt_best.py --exe <ecm_cuda.exe> --device 1 --output <新实验目录>`。Edwards 可传入 `--curve ed --reuse-tune <同一设备的 NTT 汇总>`，在原有阶梯参数下独立测量真实曲线。图表按曲线构造分别配对同设备的 CGBN。见 [矩阵采集脚本](../../tools/bench/bench_stage1_ntt_best.py)、[绘图脚本](../../tools/bench/plot_stage1_ntt_best.py) 和 [三后端比较图](STAGE1.md#stage1-ntt-与-cgbn-和-prime95-对比)。
 
+### 各 NTT 长度的每步耗时
+
+![GPU1 上 Stage1 NTT 各长度的单曲线摊销和整批每步耗时](attachments/stage1-ntt-iter-cost-by-length.png)
+
+`iter` 是一次二进制阶梯步，对应一个标量 bit，每条活跃曲线各执行一次。整批每步为 `1000 × device_ms / steps`，再除以实际批量得到单曲线摊销值，单位均为微秒。这里使用生产运行的实际步数，无需按 B1 外推。每个指数先取三次中位数，同一 NTT 长度再对各指数等权取中位数。阴影覆盖该长度的全部实测样本。12 个长度的生产样本来自同一张 RTX 4060 Laptop。
+
+两种曲线在各长度的中位数相差至多 **0.34%**。以 Edwards 为例，长度 512 时为 **4.09 µs/iter/曲线**，整批 32 条为 **130.76 µs/iter**。长度 16384 时为 **101.60 µs/iter/曲线**，整批 24 条为 **2.44 ms/iter**。长度 4096 起批量从 32 降至 24，左图的摊销耗时同时反映变换成本和批量变化。
+
+统计表在 `data/benchmarks/stage1_ntt_iter_cost_4060/by-length.csv`。复现使用 `--edwards` 和 `--montgomery` 读取 `data/experiments/stage1_unified_4060_0600/` 内的 `ed_ntt/summary.json` 与 `mont_ntt_0599.json`，用 `--figure` 和 `--csv` 指定输出。见 [按长度统计和绘图脚本](../../tools/bench/plot_stage1_ntt_iter_cost.py)。
+
 ## 实现与正确性
 
 线性后端对 p 位操作数选择最大整数 digit 宽度 b，令 `c=ceil(p/b)`，要求 `c·(2^b−1)^2 < 2^64−2^32+1`。变换长度 `L=nextpow2(2c+1)`，所以 Goldilocks 单模数足以精确恢复每个卷积系数，不会把线性卷积误做循环卷积。生产 NTT 模块处理 forward、点乘／逆缩放、inverse 和进位；其输入打包是完整整数，独立于 Stage2 的多项式槽宽和 D/P。
