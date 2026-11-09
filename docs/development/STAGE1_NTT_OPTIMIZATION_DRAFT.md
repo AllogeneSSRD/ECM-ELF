@@ -55,3 +55,11 @@ GPU1 上分别用线性和加权后端对比 0.59.3，沿用 B1=256 的六位宽
 Edwards 沿用 Atkin–Morain 构造、原 sigma 规则和 `48·lcm(1…B1)`。GPU 执行前将基点映射到 Montgomery x 坐标，共用 PARAM0 的 NTT 阶梯、线性和加权卷积及 tune。Stage1 save 已采用这个 x 坐标。Edwards NTT 的 checkpoint 身份带 `ntt-v1`，与 CGBN Edwards 各自恢复。完整梅森模数、1–32 条活跃曲线和现有 NTT 内存约束保持适用。
 
 GPU1 RTX 4060 Laptop 上，M4423 的 32 条曲线在 linear、weighted、auto 和 CGBN 下均与独立整数阶梯末点一致。M65 在 B1=8、sigma=9 发布因子 31，M35 在 B1=128、sigma=16 完成恒等点且无 Stage2 点。M9689 的 16 条 Edwards 在 bit 128/5930 停止，由 linear 切换至 weighted 后恢复，存档与不中断版本一致，队列转为 Stage2。Montgomery 原生产回归全部通过。原始记录位于 `data/experiments/stage1_unified_4060_0600/production_check/`。验收入口为 [NTT 生产回归](../../tools/test/test_stage1_ntt_production.py)，比较口径和图表维护在 [Stage1 性能](../performance/STAGE1.md#stage1-ntt-与-cgbn-和-prime95-对比)。
+
+## 0.60.1 加权 radix-5
+
+`5·2^k` 的一层 DIF 由打包融合内核执行，得到五组连续子变换。频谱排列在点乘阶段保持一致，逆向 DIT 后撤销跨段旋转因子并执行 radix-5 逆合并。radix-5 对称与反对称部分共用乘积，五点 DFT 使用六次域乘。正反跨段旋转表合计增加 `8·2^k` 个域元素。两种构造共用设备实现，检查点保持规范 X/Z。
+
+GPU1 对所有 13 个混合长度各测两组接近可用指数上界的合成状态。四条曲线的两组 X/Z 在 Graph、直接提交和 GMP 间一致。20480 点在 Compute Sanitizer memcheck 和 synccheck 下均为 0 错误，32768 点加权二次幂也通过 GMP 对拍。生产回归覆盖两类构造、非法长度、跨卷积续跑和混合 tune 的缓存回读。
+
+同输入的 78 批生产对照全部存档一致。三个较大降阶点节省 12.41%–27.33%，较短降阶点受到新增变换调度开销影响。当前由显式长度启用混合路径。证据和测量脚本位于 `data/experiments/stage1_ntt_radix5_0601/`。见 [指数阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。

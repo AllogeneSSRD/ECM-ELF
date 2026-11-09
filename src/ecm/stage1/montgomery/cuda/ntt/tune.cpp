@@ -1,5 +1,6 @@
 #include "tune.h"
 #include "ladder.h"
+#include "ecm/stage1/ntt_length.h"
 #include "../../../../cuda/ntt/runtime.h"
 #include "../../../../../io/files.h"
 #include "../../../../stage2/planning/tune_portable.h"
@@ -54,10 +55,8 @@ pt::Profile load(const std::filesystem::path& path) {
     return {};
 }
 
-unsigned log_length(unsigned length) {
-    unsigned log = 0;
-    for (; length > 1; length >>= 1) ++log;
-    return log;
+unsigned tile_log(unsigned length) {
+    return ecm_stage1::stage1_ntt_length_log(ecm_stage1::stage1_ntt_radix2_length(length));
 }
 
 struct Measurement {
@@ -111,7 +110,8 @@ Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
 Fields encode(const Measurement& m, unsigned iterations) {
     const auto& plan = m.plan;
     Fields row{
-        {"length", std::to_string(plan.length)}, {"log2_length", std::to_string(log_length(plan.length))},
+        {"length", std::to_string(plan.length)},
+        {"log2_length", std::to_string(ecm_stage1::stage1_ntt_length_log(plan.length))},
         {"iter_per_s", pt::numeric(m.throughput() * iterations)}, {"batch", std::to_string(m.batch)},
         {"ntt_type", pt::quoted(plan.weighted ? pt::weighted_ntt_type : pt::linear_ntt_type)},
         {"bpw", std::to_string(plan.bpw)}, {"tile", std::to_string(plan.tile)},
@@ -301,7 +301,7 @@ struct Cached {
 std::optional<Packing> eligible_packing(unsigned p, const Stage1NttOptions& options) {
     try {
         const auto packing = resolve_packing(p, options);
-        if (options.tile <= log_length(packing.length)) return packing;
+        if (options.tile <= tile_log(packing.length)) return packing;
     } catch (const std::invalid_argument&) {}
     return {};
 }
@@ -314,7 +314,7 @@ std::optional<Cached> decode(const Fields& row, const Packing& shape, const Devi
     const unsigned tile = unsigned(uint(row,"tile")), outer = unsigned(uint(row,"max_radix_bits"));
     const auto window = int(uint(row,"graph_bits")), warp = int(uint(row,"warp_tail"));
     const unsigned fixed_tile = base.tile ? base.tile : base.profile
-        ? std::min(log_length(shape.length), base.profile == 2 ? 10u : 12u) : 0;
+        ? std::min(tile_log(shape.length), base.profile == 2 ? 10u : 12u) : 0;
     const unsigned fixed_outer = base.outer_max ? base.outer_max : base.profile ? 4 : 0;
     const int fixed_window = base.window >= 0 ? base.window : base.profile ? 16 : -1;
     const int fixed_warp = base.warp_tail >= 0 ? base.warp_tail : base.profile ? 1 : -1;

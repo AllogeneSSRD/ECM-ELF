@@ -40,6 +40,8 @@ ntt_profile = 0
 
 `ntt_convolution` 默认为 `"auto"`。先从输入推导安全的 NTT 长度和 digit 位宽，再按设备、这两项形状、活跃曲线数和显式计划参数查共享表。没有可用记录时短测当前批量。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积。加权模式的默认长度为最短的安全二次幂，`ntt_bpw` 可限定最大 digit 位宽，`ntt_length` 可指定满足系数界的长度。
 
+加权卷积也接受显式 `ntt_length = 5·2^k` 的整数值，范围为 5–20480。例如 `ntt_length = 2560` 可用于 53249–64000 位的混合变换，显式 `ntt_tile` 以其二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass，`--tune ntt` 可用同一长度测量并保存选型。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
+
 `ntt_tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，Stage1 和 Stage2 共用单个 `[ntt]` 矩阵。使用自定义共享文件时，让 Stage1 的 `ntt_tune_file` 与 Stage2 的 `stage2_tune_profile` 指向同一路径。旧配置若显式填写了 Stage1 JSON 路径，将该值改为共享 TOML 路径后重新调优。`ntt_memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 进一步收紧这个上限。
 
 ```powershell

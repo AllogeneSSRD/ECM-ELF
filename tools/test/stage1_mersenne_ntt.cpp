@@ -95,7 +95,21 @@ void values(const char* name, const std::vector<double>& ms) {
     for (size_t i=0;i<ms.size();++i) std::printf("%s%.6f",i?",":"",ms[i]);
 }
 
-int check_carries(int device, unsigned p, bool weighted) {
+auto run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+                const std::vector<uint8_t>& bits, unsigned window, unsigned samples, bool weighted,
+                unsigned length, unsigned tile = 0) {
+    if (!length) return ecm_mersenne_ntt::ladder(device,p,curves,initial,bits,window,samples,weighted);
+    std::vector<uint32_t> packed((bits.size()+31)/32);
+    for (size_t i=0; i<bits.size(); ++i) {
+        const size_t bit=bits.size()-1-i;
+        packed[bit/32] |= uint32_t(bits[i]) << (bit%32);
+    }
+    ecm_stage1::Stage1NttOptions options;
+    options.length=length; options.tile=tile; options.window=window; options.weighted=weighted;
+    return ecm_mersenne_ntt::ladder(device,p,curves,initial,packed,unsigned(bits.size()),options,{},samples);
+}
+
+int check_carries(int device, unsigned p, bool weighted, unsigned length) {
     // Deliberately non-curve states: stress the arithmetic independently of
     // Suyama's distribution (M-1+1, overflowing top limb, equal differences).
     constexpr unsigned count=4;
@@ -116,8 +130,8 @@ int check_carries(int device, unsigned p, bool weighted) {
         }
     }
     const std::vector<uint8_t> bits={0,1,0,0,1,1,1,0,0};
-    const auto graph=ecm_mersenne_ntt::ladder(device,p,count,input,bits,4,2,weighted);
-    const auto direct=ecm_mersenne_ntt::ladder(device,p,count,input,bits,0,1,weighted);
+    const auto graph=run_ladder(device,p,count,input,bits,4,2,weighted,length);
+    const auto direct=run_ladder(device,p,count,input,bits,0,1,weighted,length);
     if (graph.points!=direct.points) throw std::runtime_error("Graph/direct carry check differed");
     for (unsigned curve=0;curve<count;++curve) {
         for (auto bit:bits) point_step(states[curve],bit,n.v);
@@ -127,7 +141,8 @@ int check_carries(int device, unsigned p, bool weighted) {
             if (mpz_cmp(got.v,states[curve][slot].v)) throw std::runtime_error("GMP carry check differed");
         }
     }
-    std::printf("stage1_ntt_carries: p=%u device=%d curves=%u bits=%zu bad=0\n",p,device,count,bits.size());
+    std::printf("stage1_ntt_carries: p=%u device=%d curves=%u bits=%zu bad=0 length=%u\n",
+                p,device,count,bits.size(),graph.length);
     return 0;
 }
 } // namespace
@@ -135,12 +150,18 @@ int check_carries(int device, unsigned p, bool weighted) {
 int main(int argc,char** argv) {
     const bool weighted = argc > 1 && std::strcmp(argv[1], "--weighted") == 0;
     if (weighted) { ++argv; --argc; }
+    unsigned length=0;
+    if (argc > 2 && !std::strcmp(argv[1],"--length")) {
+        try { length=unsigned(num(argv[2],2,65536)); }
+        catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
+        argv+=2; argc-=2;
+    }
     if (argc==4 && !std::strcmp(argv[1],"--check-carries")) {
-        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144)), weighted); }
+        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144)), weighted,length); }
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
     }
     if (argc<9 || argc>10) {
-        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] device p B1 sigma curves samples tile window [print-x]\n"
+        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] [--length N] device p B1 sigma curves samples tile window [print-x]\n"
                             "M=2^p-1, PARAM0, LCM, 1..%u curves, window=0 direct or 1..64 Graph\n",
                             ecm_stage1::stage1_ntt_max_curves);
         return 2;
@@ -180,7 +201,7 @@ int main(int argc,char** argv) {
         std::vector<uint32_t> compact(6*used);
         for (unsigned j=0;j<6;++j) std::copy_n(initial.data()+j*stride,used,compact.data()+j*used);
         const double host_setup=seconds(setup);
-        const auto run=ecm_mersenne_ntt::ladder(device,p,unsigned(active.size()),compact,bits,window,samples,weighted);
+        const auto run=run_ladder(device,p,unsigned(active.size()),compact,bits,window,samples,weighted,length,tile);
         double oracle_seconds=0;
         for (size_t lane=0;lane<active.size();++lane) {
             std::array<Z,6> s;

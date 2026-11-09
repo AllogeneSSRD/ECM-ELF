@@ -48,7 +48,7 @@
       <Item id="option_stage1_ntt_convolution" name="auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
       <Item id="option_stage1_ntt_memory_mib" name="Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。" />
-      <Item id="option_stage1_ntt_length" name="变换长度。0 根据模数和数字宽度推导最小安全长度。" />
+      <Item id="option_stage1_ntt_length" name="变换长度。0 推导最小安全二次幂。显式 5*2^k 使用加权卷积。" />
       <Item id="option_stage1_ntt_bpw" name="每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。" />
       <Item id="option_stage1_ntt_profile" name="按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设置优先。" />
       <Item id="option_stage1_ntt_tile" name="融合 tile 的 radix-2 层数。0 使用所选配置。" />

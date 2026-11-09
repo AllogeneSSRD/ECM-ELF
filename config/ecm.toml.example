@@ -210,8 +210,9 @@ ntt_convolution = "auto"
 # 中文：Goldilocks，共用 Stage1 任务及检查点格式。
 
 ntt_length = 0
-# EN: Transform length. Zero derives the minimum safe length from the modulus and digit width.
-# 中文：变换长度。0 根据模数和数字宽度推导最小安全长度。
+# EN: Transform length. Zero derives the minimum safe power of two. Explicit 5*2^k uses weighted
+# EN: convolution.
+# 中文：变换长度。0 推导最小安全二次幂。显式 5*2^k 使用加权卷积。
 
 ntt_memory_mib = 0
 # EN: Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An

@@ -25,7 +25,7 @@ struct WeightedTables {
 inline WeightedTables weighted_tables(unsigned p, unsigned length) {
     using U = WeightedWord;
     // 2 has order 192 in Goldilocks. The generator of that subgroup is
-    // 7^h, where h is divisible by every supported power-of-two length.
+    // 7^h, where h is divisible by every supported 2^k and 5*2^k length.
     constexpr U h = (GL_P - 1) / 192;
     const U generator = gl_pow_host(7, h);
     const U target = gl_pow_host(2, p);

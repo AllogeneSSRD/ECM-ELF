@@ -48,7 +48,7 @@
       <Item id="option_stage1_ntt_convolution" name="Auto selects the measured backend or calibrates on a cache miss. Explicit modes select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and checkpoint format." />
       <Item id="option_stage1_ntt_tune_file" name="Shared tune TOML. Stage1 NTT plans use the single [ntt] matrix alongside Stage2 tuning data. Relative to the configuration directory. Empty disables persistence." />
       <Item id="option_stage1_ntt_memory_mib" name="Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An explicit cap is also bounded by available VRAM." />
-      <Item id="option_stage1_ntt_length" name="Transform length. Zero derives the minimum safe length from the modulus and digit width." />
+      <Item id="option_stage1_ntt_length" name="Transform length. Zero derives the minimum safe power of two. Explicit 5*2^k uses weighted convolution." />
       <Item id="option_stage1_ntt_bpw" name="Bits per digit. Zero selects the widest exact linear packing or the shortest safe weighted transform. In weighted mode, an explicit value is an upper bound on the largest digit." />
       <Item id="option_stage1_ntt_profile" name="Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10 bits). Explicit tile and outer overrides take precedence." />
       <Item id="option_stage1_ntt_tile" name="Fused tile width in radix-2 layers. Zero uses the profile." />

@@ -48,7 +48,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","ntt_convolution","[auto|linear|weighted]","option_stage1_ntt_convolution","string",false,false,0,0},
     {"stage1","ntt_tune_file","<path>","option_stage1_ntt_tune_file","string",false,false,0,0},
     {"stage1","ntt_memory_mib","[0,1048576]","option_stage1_ntt_memory_mib","int",true,true,0,1048576},
-    {"stage1","ntt_length","0 or power of two [2,65536]","option_stage1_ntt_length","int",true,true,0,65536},
+    {"stage1","ntt_length","0, 2^k in [2,65536], or 5*2^k in [5,20480] (weighted)","option_stage1_ntt_length","int",true,true,0,65536},
     {"stage1","ntt_bpw","0 or [16,31]","option_stage1_ntt_bpw","int",true,true,0,31},
     {"stage1","ntt_profile","[0|1|2]","option_stage1_ntt_profile","int",true,true,0,2},
     {"stage1","ntt_tile","[0,12]","option_stage1_ntt_tile","int",true,true,0,12},

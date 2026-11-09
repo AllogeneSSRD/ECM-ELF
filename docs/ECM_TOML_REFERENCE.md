@@ -412,11 +412,11 @@ auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积
 ntt_length = 0
 ```
 
-Type / 类型: `int`; range / 范围: `0 or power of two [2,65536]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `int`; range / 范围: `0, 2^k in [2,65536], or 5*2^k in [5,20480] (weighted)`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Transform length. Zero derives the minimum safe length from the modulus and digit width.
+Transform length. Zero derives the minimum safe power of two. Explicit 5*2^k uses weighted convolution.
 
-变换长度。0 根据模数和数字宽度推导最小安全长度。
+变换长度。0 推导最小安全二次幂。显式 5*2^k 使用加权卷积。
 
 ### ntt_memory_mib
 

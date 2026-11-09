@@ -1,6 +1,8 @@
 #include "ladder.h"
 #include "profiles.h"
 #include "weighted.cuh"
+#include "ecm/stage1/ntt_length.h"
+#include "../../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
 #include "../../../../cuda/ntt/runtime.h"
 #include "../../../../cuda/ntt/device/tile_pass.cuh"
 #include <stdexcept>
@@ -58,22 +60,37 @@ __device__ uint32_t limb_mask(Shape s, unsigned i) {
     return i + 1 == s.words && rest ? (1u << rest) - 1 : 0xffffffffu;
 }
 
-template<bool Weighted>
+template<bool Weighted, bool Mixed = false>
 __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
-                     const WeightedDigit* weighted) {
+                     const WeightedDigit* weighted, const U* twiddles = nullptr,
+                     Radix5Constants radix5 = {}) {
     const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= s.length) return;
-    U v = 0;
-    if (i < s.digits) {
-        const auto digit = Weighted ? weighted[i] : WeightedDigit{1, i*s.bpw, s.bpw};
+    const unsigned width = Mixed ? s.length / 5 : s.length;
+    if (i >= width) return;
+    const auto read = [&](unsigned j) -> U {
+        if (j >= s.digits) return 0;
+        const auto digit = Weighted ? weighted[j] : WeightedDigit{1, j*s.bpw, s.bpw};
         const unsigned word = digit.bit / 32, offset = digit.bit % 32;
         const auto pos = limb(s, in.x[blockIdx.y/s.curves], blockIdx.y%s.curves, word);
-        v = state[pos];
+        U v = state[pos];
         if (word+1 < s.words) v |= U(state[pos+1]) << 32;
         v = (v >> offset) & ((1ull << digit.width)-1);
         if constexpr(Weighted) v = gl_mul(v, digit.weight);
+        return v;
+    };
+    auto* row = out + size_t(blockIdx.y) * s.length + i;
+    if constexpr(Mixed) {
+        U x[5];
+#pragma unroll
+        for (unsigned j = 0; j < 5; ++j) x[j] = read(i + j * width);
+        radix5_dft(x, radix5);
+        row[0] = x[0];
+#pragma unroll
+        for (unsigned j = 1; j < 5; ++j)
+            row[j * width] = gl_mul(x[j], twiddles[(j - 1) * width + i]);
+    } else {
+        *row = read(i);
     }
-    out[size_t(blockIdx.y)*s.length+i] = v;
 }
 
 struct ProductInputs {
@@ -200,7 +217,8 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options)
         s.length = options.length ? options.length : 2;
         if (!options.length)
             while (s.length < 65536 && !usable(s.length)) s.length *= 2;
-        if (s.length < 2 || (s.length & (s.length - 1)) || !usable(s.length))
+        if (s.length < 2 || (!ecm_stage1::stage1_ntt_power_of_two(s.length) &&
+                            !ecm_stage1::stage1_ntt_radix5(s.length)) || !usable(s.length))
             throw std::invalid_argument("unsafe weighted NTT length or digit width");
         s.digits = s.length;
         s.bpw = (p + s.length - 1) / s.length;
@@ -246,8 +264,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     const auto packing = resolve_packing(p, options);
     s.length=packing.length; s.bpw=packing.bpw; s.digits=packing.digits;
-    int log = 0;
-    for (unsigned n = s.length; n > 1; n >>= 1) ++log;
+    const bool mixed = ecm_stage1::stage1_ntt_radix5(s.length);
+    const unsigned planes = mixed ? 5 : 1;
+    const unsigned width = s.length / planes;
+    const int log = int(ecm_stage1::stage1_ntt_length_log(width));
     if (options.tile > unsigned(log) || options.tile > 12 ||
         options.outer_max > 4 || options.profile > 2)
         throw std::invalid_argument("NTT tile, outer width or profile is out of range for this length");
@@ -280,48 +300,77 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         options.warp_tail >= 0 ? options.warp_tail != 0 : profile.warp_tail};
     Stream stream; const auto q=stream.value;
     const U omega=gl_pow_host(7,(GL_P-1)/s.length), inv=gl_pow_host(omega,GL_P-2);
+    const U omega2 = gl_pow_host(omega, planes), inv2 = gl_pow_host(inv, planes);
     const U scale=gl_pow_host(s.length,GL_P-2);
     Tables tables;
     auto& ctx=tables.ctx;
     const auto* resolved = control ? &overrides : nullptr;
-    fuse_describe(ctx,s.length,log,omega,inv,true,resolved);
+    if (log) fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
+    else ctx.m_max = overrides.outer_max;
     result.owned_bytes = 11 * sizeof(U) * curves * s.length + slots * stride * sizeof(uint32_t) +
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
-        (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
+        (log ? (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U) : 0);
+    if (mixed) result.owned_bytes += size_t(8) * width * sizeof(U);
     if (options.weighted)
         result.owned_bytes += size_t(s.length) * (sizeof(U) + sizeof(WeightedDigit)) +
                               size_t(s.words) * sizeof(WeightedLimb);
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
-    fuse_init(ctx,s.length,log,omega,inv,true,resolved);
+    if (log) fuse_init(ctx,width,log,omega2,inv2,true,resolved);
     if (control && control->describe) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
             stages += std::to_string(width);
         };
         Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
-                  FUSE_TILE_THREADS, FUSE_OUTER_THREADS, unsigned(ctx.passes_fwd),
+                  ctx.t ? FUSE_TILE_THREADS : 0u, ctx.nms ? FUSE_OUTER_THREADS : 0u,
+                  unsigned(ctx.passes_fwd) + unsigned(mixed),
                   ctx.warp_tail && ctx.t >= 5, profile.source, options.weighted, {}, {}};
+        if (mixed) plan.forward = "r5";
         for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
-        join(plan.forward, ctx.t);
-        join(plan.inverse, ctx.t);
+        if (ctx.t) {
+            join(plan.forward, ctx.t);
+            join(plan.inverse, ctx.t);
+        }
         for (int i = ctx.nms; i > 0; --i) join(plan.inverse, ctx.ms[i-1]);
+        if (mixed) plan.inverse += plan.inverse.empty() ? "r5" : "+r5";
         control->describe(plan);
     }
-    if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
+    if (!ctx.t && !mixed) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
     const size_t tile_smem = sizeof(U) << ctx.t;
     const void* tile_kernel = warp_tile ? (const void*)inverse_product_tile<true>
                                        : (const void*)inverse_product_tile<false>;
     cudaFuncSetAttribute(tile_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
     CK(cudaFuncSetAttribute(tile_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
-    ntt_fuse_cache_tables(ctx,omega,inv);
+    if (log) ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
     Buffer<U> inverse(size_t(4)*curves*s.length);
+    Buffer<U> mixed_fwd(mixed ? size_t(4) * width : 0), mixed_inv(mixed ? size_t(4) * width : 0);
+    Radix5Constants radix5_fwd{}, radix5_inv{};
+    std::vector<U> fwd_twiddles, inv_twiddles;
+    if (mixed) {
+        const auto fill = [width, q](std::vector<U>& host, U* device, U root) {
+            host.resize(size_t(4) * width);
+            for (unsigned plane = 1; plane < 5; ++plane) {
+                const U step = gl_pow_host(root, plane);
+                U w = 1;
+                for (unsigned j = 0; j < width; ++j) {
+                    host[(plane - 1) * width + j] = w;
+                    w = gl_mul_host(w, step);
+                }
+            }
+            CK(cudaMemcpyAsync(device, host.data(), host.size() * sizeof(U), cudaMemcpyHostToDevice, q));
+        };
+        fill(fwd_twiddles, mixed_fwd.data, omega);
+        fill(inv_twiddles, mixed_inv.data, inv);
+        radix5_fwd = radix5_constants(gl_pow_host(omega, width));
+        radix5_inv = radix5_constants(gl_pow_host(inv, width));
+    }
     const auto weights = options.weighted ? weighted_tables(p, s.length) : WeightedTables{};
     const unsigned limb_smem = weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
@@ -336,21 +385,25 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                            cudaMemcpyHostToDevice, q));
     }
     const auto grid=[&](unsigned ops) { return dim3((s.length+threads-1)/threads, ops*curves); };
+    const auto mixed_grid=[&](unsigned ops) { return dim3((width+threads-1)/threads, ops*curves); };
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
         CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
     const auto pack_inputs = [&](U* dest, unsigned count, Indices in) {
-        if (options.weighted)
+        if (mixed)
+            pack<true,true><<<mixed_grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data,
+                                                               mixed_fwd.data,radix5_fwd);
+        else if (options.weighted)
             pack<true><<<grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data);
         else
             pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
     };
     pack_inputs(fixed.data, 2, {{A24,Base}});
-    ntt_forward_fused(fixed.data,ctx,omega,2*curves,q);
+    if (log) ntt_forward_fused(fixed.data,ctx,omega2,2*curves*planes,q);
     CK(cudaStreamSynchronize(q));
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out) {
         pack_inputs(freq.data, inputs, in);
-        ntt_forward_fused(freq.data,ctx,omega,inputs*curves,q);
+        if (log) ntt_forward_fused(freq.data,ctx,omega2,inputs*curves*planes,q);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
             return id < 5 ? freq.data + id * plane : fixed.data + (id - 5) * plane;
@@ -368,7 +421,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             inverse_product_tile<false><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                 inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
         CK(cudaGetLastError());
-        ntt_inverse_outer_fused(inverse.data,ctx,inv,outputs*curves,q);
+        if (log) ntt_inverse_outer_fused(inverse.data,ctx,inv2,outputs*curves*planes,q);
+        if (mixed)
+            radix5_inverse<<<mixed_grid(outputs),threads,0,q>>>(inverse.data,width,mixed_inv.data,radix5_inv);
         if (options.weighted) {
             const unsigned batch = outputs * curves;
             const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
@@ -417,7 +472,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Event begin,end,boundary;
     CK(cudaStreamSynchronize(q));
     observe_memory();
-    result.length=s.length; result.digit_bits=s.bpw; result.passes=ctx.passes_fwd; result.tile=ctx.t;
+    result.length=s.length; result.digit_bits=s.bpw; result.passes=ctx.passes_fwd+unsigned(mixed); result.tile=ctx.t;
     result.setup_seconds=now_s()-prep;
     result.points.resize(4*stride);
     auto reset = [&] {

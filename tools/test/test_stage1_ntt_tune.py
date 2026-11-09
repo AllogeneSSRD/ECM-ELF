@@ -96,6 +96,18 @@ matrix = [
         ("8", "0"), ("8", "1")]
     print("PASS both modes grouped at one length with direct submission and 100-iteration warmup", flush=True)
 
+    mixed = fixture + "ntt_length = 5\n"
+    log = run("mixed_tune", ["--tune", "ntt", "--bits", "127"], cfg=mixed)
+    assert re.search(r"Best 5 \d+ 1:0:\d+:\d+:0:r5:r5 \d+c \d+ iter/s", log)
+    columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
+    mixed_rows = [dict(zip(columns, row)) for row in values if row[0] == 5]
+    assert any(row[columns.index("ntt_type")] == "stage2_convolution" for row in values)
+    assert any(row["batch"] == 1 and row["log2_length"] == 2 and row["passes_forward"] == 1
+               and row["ntt_type"] == "stage1_weighted" for row in mixed_rows)
+    log = run("mixed_cached", [*flags[:1], "1", *flags[2:]], cfg=mixed, expression="2^127-1\n")
+    assert "source=tune" in log and "length=5" in log
+    print("PASS radix-5 tune persistence, legacy Stage2 rows and production cache hit", flush=True)
+
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
     log = run("low_budget", ["-gpucurves", "32", "-sigma", "26", "20"],
               cfg=limited, expression="2^262139-1\n", ok=False)

@@ -413,7 +413,7 @@ Stage2 卷积基准逐项对照 GMP 参考。内存不足可跳过，验证失�
 
 共享 `tune.toml` 只写一张 `[ntt]` 矩阵。前五列依次为 `length`、`log2_length`、`iter_per_s`、`batch`、`ntt_type`。每行通过 `condition` 关联设备和环境，保存实际执行参数、程序版本及 UTC 更新时间。行仍按 length、batch、tile 稳定升序排列。
 
-- `stage1_linear` 和 `stage1_weighted` 的吞吐单位是每秒独立曲线的 ladder 步数。表保存 digit 位宽、tile、外层 radix 上限、正逆 pass、Graph 窗口、warp 尾层、计时次数及显存。兼容输入按形状复用这些行。
+- `stage1_linear` 和 `stage1_weighted` 的吞吐单位是每秒独立曲线的 ladder 步数。表保存 digit 位宽、tile、外层 radix 上限、正逆 pass、Graph 窗口、warp 尾层、计时次数及显存。加权混合长度的 `log2_length` 向下取整，完整长度由 `length` 标识，正逆 pass 用 `r5` 标记 radix-5。兼容输入按形状复用这些行。
 - `stage2_convolution` 的吞吐单位是每秒独立卷积数。一次卷积包含两个正向 NTT、有限域点乘和逆缩放、一个逆向 NTT。GPU event 排除输入生成、准备和核验。批耗时由 `batch / iter_per_s` 推得。矩阵保留实测次数、样本标准差和实际变换参数。
 - Stage2 新测观察按次数合并批耗时及标准差。导入同形状摘要时保留更新时间较新的聚合结果，时间相同时优先样本数较多的记录。旧 `[ntt.N]` 表在读入时归并到单个 `[ntt]`，旧统计字段转换为当前列。逐次核验、准备和预热耗时仍在原始 JSONL。
 

@@ -9,6 +9,7 @@
 #include <charconv>
 #include <ctime>
 #include "ecm/platform/program_version.h"
+#include "ecm/stage1/ntt_length.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
 constexpr unsigned format=14;
@@ -182,9 +183,15 @@ inline void validate_stage1_ntt(const Fields &s) {
     validate_provenance(s);
     const auto n=uint(s,"length"), log=uint(s,"log2_length"), batch=uint(s,"batch");
     const auto tile=uint(s,"tile"), bpw=uint(s,"bpw"), radix=uint(s,"max_radix_bits");
-    if(!is_stage1_ntt(s) || log<1 || log>16 || n!=(Word(1)<<log) ||
-       !batch || batch>32 || !bpw || bpw>31 || !tile || tile>std::min(log,Word(12)) ||
-       !radix || radix>4 || !uint(s,"passes_forward") || uint(s,"passes_forward")>log ||
+    const bool mixed=n<=ecm_stage1::stage1_ntt_mixed_limit && ecm_stage1::stage1_ntt_radix5(unsigned(n));
+    if(!is_stage1_ntt(s) || log<1 || log>16 || n>65536 ||
+       log!=ecm_stage1::stage1_ntt_length_log(unsigned(n)) ||
+       (mixed ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
+        throw std::runtime_error("invalid Stage1 NTT length");
+    const Word radix2_log=mixed ? log-2 : log;
+    if(!batch || batch>32 || !bpw || bpw>31 || (tile==0)!=(radix2_log==0) ||
+       tile>std::min(radix2_log,Word(12)) || !radix || radix>4 ||
+       !uint(s,"passes_forward") || uint(s,"passes_forward")>radix2_log+mixed ||
        uint(s,"graph_bits")>64 || uint(s,"warp_tail")>1 || !uint(s,"repeats") ||
        !(real(s,"iter_per_s")>0) || !uint(s,"owned_bytes") ||
        uint(s,"owned_bytes")>uint(s,"peak_bytes") || uint(s,"peak_bytes")>uint(s,"budget_bytes") ||

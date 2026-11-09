@@ -1,6 +1,7 @@
 #include "io/config.h"
 #include "ecm/application/configuration/generated/ecm_toml_template.h"
 #include "ecm/stage1/selection.h"
+#include "ecm/stage1/ntt_length.h"
 #include <fstream>
 
 bool read_config(const std::string& path, ParsedConfig& parsed) {
@@ -39,7 +40,8 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                         valid = mode == "auto" || mode == "linear" || mode == "weighted";
                     } else if (key == "ntt_length")
                         valid = scratch.ntt_length == 0 || (scratch.ntt_length >= 2 &&
-                            !(scratch.ntt_length & (scratch.ntt_length - 1)));
+                            (ecm_stage1::stage1_ntt_power_of_two(unsigned(scratch.ntt_length)) ||
+                             ecm_stage1::stage1_ntt_radix5(unsigned(scratch.ntt_length))));
                     else if (key == "ntt_bpw")
                         valid = scratch.ntt_bpw == 0 || scratch.ntt_bpw >= 16;
                     else if (key == "gpu_param")
