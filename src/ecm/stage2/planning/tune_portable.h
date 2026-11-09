@@ -11,8 +11,8 @@
 #include "ecm/platform/program_version.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=13;
-inline bool supported_format(Word value){return value==8 || value==9 || value==10 || value==11 || value==12 || value==format;}
+constexpr unsigned format=14;
+inline bool supported_format(Word value){return value>=8 && value<=format;}
 inline constexpr const char *matrix_column_order[]={
 #define ECM_STAGE2_TUNE_COLUMN(name) #name,
 #define ECM_STAGE2_TUNE_NTT_COLUMN(name)
@@ -169,6 +169,27 @@ inline void merge_provenance(Fields &to,const Fields &from) {
 inline Word ntt_option(const Fields &f,const char *key) {
     const auto at=f.find(key);if(at==f.end())return 0;
     return at->second=="true"?1:at->second=="false"?0:uint(f,key);
+}
+inline constexpr const char *stage2_ntt_type="stage2_convolution";
+inline constexpr const char *linear_ntt_type="stage1_linear";
+inline constexpr const char *weighted_ntt_type="stage1_weighted";
+inline bool is_stage1_ntt(const Fields &s) {
+    if(!s.count("ntt_type"))return false;
+    const auto type=text(s,"ntt_type");
+    return type==linear_ntt_type || type==weighted_ntt_type;
+}
+inline void validate_stage1_ntt(const Fields &s) {
+    validate_provenance(s);
+    const auto n=uint(s,"length"), log=uint(s,"log2_length"), batch=uint(s,"batch");
+    const auto tile=uint(s,"tile"), bpw=uint(s,"bpw"), radix=uint(s,"max_radix_bits");
+    if(!is_stage1_ntt(s) || log<1 || log>16 || n!=(Word(1)<<log) ||
+       !batch || batch>32 || !bpw || bpw>31 || !tile || tile>std::min(log,Word(12)) ||
+       !radix || radix>4 || !uint(s,"passes_forward") || uint(s,"passes_forward")>log ||
+       uint(s,"graph_bits")>64 || uint(s,"warp_tail")>1 || !uint(s,"repeats") ||
+       !(real(s,"iter_per_s")>0) || !uint(s,"owned_bytes") ||
+       uint(s,"owned_bytes")>uint(s,"peak_bytes") || uint(s,"peak_bytes")>uint(s,"budget_bytes") ||
+       text(s,"forward").empty() || text(s,"inverse").empty())
+        throw std::runtime_error("invalid Stage1 NTT measurement");
 }
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
 inline bool runtime_observation(const Fields &sample) {
@@ -463,6 +484,7 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
             throw std::runtime_error("inconsistent NTT length logarithm");
         s["log2_length"]=std::to_string(log);s["source"]=s["status"]="\"measured\"";s["unit"]="\"field_convolution\"";
         s["reference_kind"]="\"gmp_3x3_distinct_constant_v1\"";s["verified_words_per_sample"]=std::to_string(n*b);s["bad"]="0";
+        if(!s.count("mean_seconds"))s["mean_seconds"]=numeric(b/real(s,"iter_per_s"));
         if(s.count("batch_iter_per_s") && std::abs(real(s,"batch_iter_per_s")-1/real(s,"mean_seconds"))>
             1e-9*std::max(real(s,"batch_iter_per_s"),1/real(s,"mean_seconds")))
             throw std::runtime_error("inconsistent NTT batch throughput");
@@ -470,7 +492,7 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
         if(s.count("iter_per_s") && std::abs(real(s,"iter_per_s")-b/real(s,"mean_seconds"))>
             1e-9*std::max(real(s,"iter_per_s"),b/real(s,"mean_seconds")))
             throw std::runtime_error("inconsistent NTT convolution throughput");
-        s["iter_per_s"]=s["conv_iter_per_s"];
+        if(!s.count("iter_per_s"))s["iter_per_s"]=s["conv_iter_per_s"];
         if(!s.count("passes_forward") && s.count("tile") && s.count("max_radix_bits") &&
             uint(s,"tile")<=log && uint(s,"max_radix_bits")) {
             const auto remaining=log-uint(s,"tile"),radix=uint(s,"max_radix_bits");
@@ -505,7 +527,7 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
 struct Profile {
     Fields metadata;
     std::map<Word,Fields> conditions;
-    std::vector<Fields> samples,ntt;
+    std::vector<Fields> samples,ntt,stage1_ntt;
     Word revision=0;
     Word condition(Fields fields) {
         fields.erase("program_version");fields.erase("updated_at");
@@ -532,28 +554,61 @@ struct Profile {
         if(runtime_observation(sample) && uint(sample,"repeats")>runtime_limit)return false;
         samples.push_back(std::move(sample));++revision;return true;
     }
-    bool update_ntt(Fields sample) {
+    bool update_ntt(Fields sample,bool fresh=true) {
         validate_ntt_summary(sample);
         strip_ntt_auxiliary_timing(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown NTT measurement condition");
         hydrate(sample,conditions.at(uint(sample,"condition")),true);
-        sample["measurement_ids"]=encoded_ids(measurement_ids(sample));sample["verified"]="1";
+        sample.erase("measurement_ids");
+        sample["verified"]="1";
+        sample["ntt_type"]=quoted(stage2_ntt_type);
         for(auto &old:ntt)if(uint(old,"condition")==uint(sample,"condition") &&
             uint(old,"length")==uint(sample,"length") && uint(old,"batch")==uint(sample,"batch")) {
             bool same=true;
             for(const char *k:{"tile","max_radix_bits","coop_outer","warp_tail","compact_scratch"})
                 if(ntt_option(old,k)!=ntt_option(sample,k))same=false;
             if(!same)continue;
-            if(!combine(old,sample))return false;old.erase("iter_per_s");old.erase("batch_iter_per_s");
-            hydrate(old,conditions.at(uint(old,"condition")),true);++revision;return true;
+            if(old==sample)return false;
+            const auto n=uint(old,"repeats"),m=uint(sample,"repeats");
+            if(fresh) {
+                if(n+m>1000000000)return false;
+                const auto a=real(old,"mean_seconds"),delta=real(sample,"mean_seconds")-a;
+                const auto x=real(old,"stddev_seconds"),y=real(sample,"stddev_seconds");
+                const auto m2=(n-1)*x*x+(m-1)*y*y+delta*delta*double(n)*m/(n+m);
+                old["mean_seconds"]=numeric(a+delta*double(m)/(n+m));
+                old["stddev_seconds"]=numeric(std::sqrt(m2/(n+m-1)));
+                old["repeats"]=std::to_string(n+m);
+                old.erase("iter_per_s");old.erase("batch_iter_per_s");
+                merge_provenance(old,sample);
+                hydrate(old,conditions.at(uint(old,"condition")),true);
+            } else {
+                // Imported summaries can overlap. Keep the newest aggregate.
+                if(updated_at(old)>updated_at(sample) ||
+                   (updated_at(old)==updated_at(sample) && n>=m))return false;
+                old=std::move(sample);
+            }
+            ++revision;return true;
         }
         ntt.push_back(std::move(sample));++revision;return true;
+    }
+    void update_stage1_ntt(Fields sample) {
+        validate_stage1_ntt(sample);
+        if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown Stage1 NTT condition");
+        const auto same=[&](const Fields &old) {
+            for(const char *key:{"condition","length","batch","ntt_type","bpw","tile","max_radix_bits",
+                                "passes_forward","forward","inverse","graph_bits","warp_tail"})
+                if(required(old,key)!=required(sample,key))return false;
+            return true;
+        };
+        const auto at=std::find_if(stage1_ntt.begin(),stage1_ntt.end(),same);
+        if(at==stage1_ntt.end())stage1_ntt.push_back(std::move(sample));
+        else if(updated_at(*at)<=updated_at(sample))*at=std::move(sample);
     }
     static Profile load(const std::filesystem::path &path) {
         std::error_code error;const auto bytes=std::filesystem::file_size(path,error);
         if(error || bytes>64*1048576)throw std::runtime_error("tune summary missing or exceeds 64MiB");
         std::ifstream in(path,std::ios::binary);Profile out;Fields *table=nullptr;std::string line;
-        Fields common;std::vector<std::string> columns;bool parameter_table=false,ntt_table=false,rows=false;
+        Fields common;std::vector<std::string> columns;bool parameter_table=false,ntt_table=false,legacy_ntt=false,rows=false;
         Word table_key=0,row_count=0;std::set<std::string> sections;bool first=true,columns_seen=false,rows_seen=false;
         auto finish=[&]() {
             if(parameter_table && (!columns_seen || !rows_seen || !row_count || rows))
@@ -583,9 +638,15 @@ struct Profile {
                 for(size_t i=0;i<columns.size();++i)if(values[i]!="\"\"" && !record.emplace(columns[i],values[i]).second)
                     throw std::runtime_error("tune column duplicates a common field");
                 if(ntt_table) {
-                    if(uint(record,"condition")!=table_key)
+                    if(legacy_ntt && uint(record,"condition")!=table_key)
                         throw std::runtime_error("NTT table condition/count mismatch");
-                    out.ntt.push_back(std::move(record));
+                    if(!legacy_ntt && is_stage1_ntt(record))out.stage1_ntt.push_back(std::move(record));
+                    else {
+                        if(!legacy_ntt && text(record,"ntt_type")!=stage2_ntt_type)
+                            throw std::runtime_error("unknown NTT type");
+                        if(!legacy_ntt)record["verified"]="1";
+                        out.ntt.push_back(std::move(record));
+                    }
                 } else {
                     if(uint(record,"target_bits")!=table_key)
                         throw std::runtime_error("width table target/count mismatch");
@@ -601,11 +662,15 @@ struct Profile {
                 else if(section.compare(0,10,"condition.")==0) {
                     if(out.conditions.size()>=256)throw std::runtime_error("too many tune conditions");
                     table=&out.conditions[cost::integer(section.substr(10))];
-                } else if(section.compare(0,6,"width.")==0 || section.compare(0,4,"ntt.")==0) {
-                    ntt_table=section.compare(0,4,"ntt.")==0;
-                    const size_t begin=ntt_table?4u:6u;table_key=cost::integer(section.substr(begin));
+                } else if(section=="ntt" || section.compare(0,6,"width.")==0 || section.compare(0,4,"ntt.")==0) {
+                    legacy_ntt=section.compare(0,4,"ntt.")==0;
+                    ntt_table=section=="ntt" || legacy_ntt;
+                    if(legacy_ntt && optional_uint(out.metadata,"format",format)>=format)
+                        throw std::runtime_error("NTT rows belong in one [ntt] table");
+                    table_key=section=="ntt"?0:cost::integer(section.substr(ntt_table?4u:6u));
                     if(!ntt_table && (table_key<2 || table_key>16384))throw std::runtime_error("invalid width knot");
-                    parameter_table=true;table=&common;common[ntt_table?"condition":"target_bits"]=std::to_string(table_key);
+                    parameter_table=true;table=&common;
+                    if(section!="ntt")common[ntt_table?"condition":"target_bits"]=std::to_string(table_key);
                 } else throw std::runtime_error("unsupported tune table; regenerate this development profile");
             } else {
                 const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid tune row");
@@ -658,7 +723,8 @@ struct Profile {
                 else if(!measured(old))old=std::move(s);
             }
         }
-        for(auto s:out.ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_ntt(std::move(s));}
+        for(auto s:out.ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_ntt(std::move(s),false);}
+        for(auto s:out.stage1_ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_stage1_ntt(std::move(s));}
         normalized.revision=out.revision;return normalized;
     }
     std::string serialize()const {
@@ -670,14 +736,13 @@ struct Profile {
         }
         auto emit=[&](const std::string &section,std::vector<Fields> rows,bool ntt) {
             std::set<std::string> names;
-            const std::set<std::string> omitted=ntt?std::set<std::string>{"condition","source","status","unit","reference_kind","verified_words_per_sample","bad","conv_iter_per_s"}:
-                std::set<std::string>{"target_bits","p","arithmetic_bits","execution_path"};
+            const std::set<std::string> omitted={"target_bits","p","arithmetic_bits","execution_path"};
             for(const auto &s:rows)for(const auto &f:s)if(!omitted.count(f.first))names.insert(f.first);
             names.insert("program_version");names.insert("updated_at");
             std::vector<std::string> columns;
             if(ntt) {
-                for(const char *k:ntt_matrix_column_order)names.insert(k);
-                for(const char *k:ntt_matrix_column_order)if(names.erase(k))columns.push_back(k);
+                columns.assign(std::begin(ntt_matrix_column_order),std::end(ntt_matrix_column_order));
+                names.clear();
             } else for(const char *k:matrix_column_order)if(names.erase(k))columns.push_back(k);
             columns.insert(columns.end(),names.begin(),names.end());
             std::stable_sort(rows.begin(),rows.end(),[&](const Fields &a,const Fields &b){
@@ -693,10 +758,12 @@ struct Profile {
         std::map<Word,std::vector<Fields>> groups;
         for(const auto &s:samples){auto row=compact_sample(s);groups[uint(s,"target_bits")].push_back(std::move(row));}
         for(auto &g:groups)emit("width."+std::to_string(g.first),std::move(g.second),false);
-        groups.clear();
-        static const std::set<std::string> ntt_fields={"log2_length","length","iter_per_s","batch_iter_per_s","batch","tile","max_radix_bits","passes_forward","coop_outer","warp_tail","compact_scratch","repeats","mean_seconds","stddev_seconds","verified","measurement_ids","program_version","updated_at"};
-        for(auto s:ntt){hydrate(s,conditions.at(uint(s,"condition")),true);validate_ntt_summary(s);Fields row;for(const auto &f:s)if(ntt_fields.count(f.first))row.insert(f);row["verified"]="1";groups[uint(s,"condition")].push_back(std::move(row));}
-        for(auto &g:groups)emit("ntt."+std::to_string(g.first),std::move(g.second),true);
+        auto ntt_rows=stage1_ntt;
+        for(auto s:ntt){
+            hydrate(s,conditions.at(uint(s,"condition")),true);validate_ntt_summary(s);
+            s["ntt_type"]=quoted(stage2_ntt_type);ntt_rows.push_back(std::move(s));
+        }
+        if(!ntt_rows.empty())emit("ntt",std::move(ntt_rows),true);
         return out.str();
     }
 };

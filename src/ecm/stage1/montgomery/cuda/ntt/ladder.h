@@ -16,9 +16,12 @@ struct Plan {
 
 struct BudgetError : std::runtime_error { using std::runtime_error::runtime_error; };
 size_t memory_budget(size_t free_bytes, unsigned limit_mib);
+struct Packing { unsigned length=0, bpw=0, digits=0; };
+Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&);
 
 struct Control {
     unsigned resume = 0;
+    unsigned warmup_iterations = 0;
     std::function<void(const Plan&)> describe;
     // Poll only when the stream is idle. Read back only when requested.
     struct Action { bool save = false, stop = false; };

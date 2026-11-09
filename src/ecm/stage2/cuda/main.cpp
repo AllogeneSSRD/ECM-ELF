@@ -476,7 +476,10 @@ int driver(Options o) {
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
     else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
-    else if(o.cost_profile.empty())o.tune_profile=absolute_from(base,"stage2_ecm_tune.toml").string();
+    else if(o.cost_profile.empty()) {
+        const auto shared=absolute_from(base,"tune.toml"), legacy=absolute_from(base,"stage2_ecm_tune.toml");
+        o.tune_profile=(fs::is_regular_file(shared) || !fs::is_regular_file(legacy)?shared:legacy).string();
+    }
 #ifdef ECM_STAGE2_OPENCL
     // Shared TOML may contain CUDA tuning defaults. Never consume or overwrite
     // those profiles under a different engine identity.
@@ -545,7 +548,9 @@ int driver(Options o) {
             if(!o.has_tune_repeats)o.tune_repeats=effort.repeats;
             if(!o.has_tune_slices)o.tune_slices.assign(effort.slices.begin(),effort.slices.end());
         }
-        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? (o.tune=="ecm"?"stage2_ecm_tune.toml":"stage2_tune.toml") : o.tune_file);
+        const fs::path destination = o.tune_file.empty()
+            ? (o.tune_profile.empty()?absolute_from(base,"tune.toml"):fs::u8path(o.tune_profile))
+            : absolute_from(cwd,o.tune_file);
         auto same_path = [&](const fs::path &other) {
             std::error_code error;
             if (fs::equivalent(destination, other, error) && !error) return true;
@@ -558,7 +563,7 @@ int driver(Options o) {
             same_path(results) || same_path(legacy_progress) || (!log.empty() && same_path(log)) ||
             (!o.debug_file.empty() && same_path(fs::path(o.debug_file))) || (!o.tune_save.empty() && same_path(absolute_from(cwd,o.tune_save))) ||
             (!o.tune_worktodo.empty() && same_path(absolute_from(cwd,o.tune_worktodo))) ||
-            (o.tune!="ecm" && !o.tune_profile.empty() && same_path(fs::path(o.tune_profile))) ||
+            (!toml && !o.tune_profile.empty() && same_path(fs::path(o.tune_profile))) ||
             (!o.stage1_profile.empty() && same_path(fs::path(o.stage1_profile))) ||
             (!o.stage1_csv.empty() && same_path(fs::path(o.stage1_csv))))
             throw std::runtime_error("tune-file must differ from executable, config, queue and result files");

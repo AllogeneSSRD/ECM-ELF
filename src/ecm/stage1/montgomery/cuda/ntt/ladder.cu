@@ -188,25 +188,9 @@ size_t memory_budget(size_t free_bytes, unsigned limit_mib) {
     return limit_mib ? std::min(available, size_t(limit_mib) * 1024 * 1024) : available;
 }
 
-static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
-                      const std::vector<uint32_t>& scalar_words, unsigned count,
-                      const ecm_stage1::Stage1NttOptions& options, const Control* control,
-                      unsigned samples) {
-    if (p < 32 || p > 262144 || !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
-        !samples || samples > 20 || count > UINT32_MAX - 64 ||
-        scalar_words.size() < (size_t(count) + 31) / 32 ||
-        (control && control->resume > count))
-        throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");
-    Shape s{p, (p+31)/32, curves, 0, 0, 0};
-    const size_t stride = size_t(s.words)*curves;
-    if (initial.size() != 6*stride) throw std::invalid_argument("invalid Stage1 initial points");
-    for (size_t n=0; n<6*curves; ++n) {
-        const unsigned top = p%32 ? (1u << (p%32))-1 : UINT32_MAX;
-        const auto* v = initial.data()+n*s.words;
-        if (v[s.words-1] > top || (v[s.words-1] == top && std::all_of(v,v+s.words-1,
-                [](auto x) { return x == UINT32_MAX; })))
-            throw std::invalid_argument("noncanonical Stage1 initial residue");
-    }
+Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options) {
+    if (p < 32 || p > 262144) throw std::invalid_argument("invalid Stage1 NTT exponent");
+    Packing s;
     if (options.weighted) {
         const auto usable = [p, &options](unsigned length) {
             const unsigned bpw = (p + length - 1) / length;
@@ -238,6 +222,30 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if ((s.length & (s.length - 1)) || s.length < 2 * s.digits + 1 || s.length > 65536)
             throw std::invalid_argument("NTT length must be a power of two covering 2*digits+1, at most 65536");
     }
+    return s;
+}
+
+static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+                      const std::vector<uint32_t>& scalar_words, unsigned count,
+                      const ecm_stage1::Stage1NttOptions& options, const Control* control,
+                      unsigned samples) {
+    if (p < 32 || p > 262144 || !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
+        !samples || samples > 20 || count > UINT32_MAX - 64 ||
+        scalar_words.size() < (size_t(count) + 31) / 32 ||
+        (control && control->resume > count))
+        throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");
+    Shape s{p, (p+31)/32, curves, 0, 0, 0};
+    const size_t stride = size_t(s.words)*curves;
+    if (initial.size() != 6*stride) throw std::invalid_argument("invalid Stage1 initial points");
+    for (size_t n=0; n<6*curves; ++n) {
+        const unsigned top = p%32 ? (1u << (p%32))-1 : UINT32_MAX;
+        const auto* v = initial.data()+n*s.words;
+        if (v[s.words-1] > top || (v[s.words-1] == top && std::all_of(v,v+s.words-1,
+                [](auto x) { return x == UINT32_MAX; })))
+            throw std::invalid_argument("noncanonical Stage1 initial residue");
+    }
+    const auto packing = resolve_packing(p, options);
+    s.length=packing.length; s.bpw=packing.bpw; s.digits=packing.digits;
     int log = 0;
     for (unsigned n = s.length; n > 1; n >>= 1) ++log;
     if (options.tile > unsigned(log) || options.tile > 12 ||
@@ -389,7 +397,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         route<<<dim3((s.words+threads-1)/threads,curves),threads,0,q>>>(state.data,s,cursor);
         CK(cudaGetLastError());
     };
-    Graph full, tail;
+    Graph full, tail, warm_tail;
     auto capture=[&](Graph& graph, unsigned count) {
         CK(cudaStreamBeginCapture(q,cudaStreamCaptureModeThreadLocal));
         for (unsigned i=0;i<count;++i) step(i);
@@ -400,17 +408,32 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     };
     const unsigned resume = control ? control->resume : 0;
     const unsigned remaining = count - resume;
+    const unsigned warmup = control ? control->warmup_iterations : 0;
+    if (warmup > remaining) throw std::invalid_argument("Stage1 NTT warmup exceeds scalar");
     if (window && remaining >= window) capture(full,window);
     if (window && remaining % window) capture(tail,remaining % window);
+    if (window && warmup % window && warmup % window != remaining % window)
+        capture(warm_tail,warmup % window);
     Event begin,end,boundary;
     CK(cudaStreamSynchronize(q));
     observe_memory();
     result.length=s.length; result.digit_bits=s.bpw; result.passes=ctx.passes_fwd; result.tile=ctx.t;
     result.setup_seconds=now_s()-prep;
     result.points.resize(4*stride);
-    for (unsigned sample=0; sample<samples; ++sample) {
+    auto reset = [&] {
         CK(cudaMemcpyAsync(state.data,initial.data(),4*stride*4,cudaMemcpyHostToDevice,q));
         CK(cudaMemcpyAsync(start.data,&resume,sizeof(unsigned),cudaMemcpyHostToDevice,q));
+    };
+    if (warmup) {
+        reset();
+        if (window) {
+            for (unsigned i=0;i<warmup/window;++i) CK(cudaGraphLaunch(full.exec,q));
+            if (warmup % window) CK(cudaGraphLaunch(warm_tail.exec ? warm_tail.exec : tail.exec,q));
+        } else for (unsigned i=0;i<warmup;++i) step(i);
+        CK(cudaStreamSynchronize(q));
+    }
+    for (unsigned sample=0; sample<samples; ++sample) {
+        reset();
         CK(cudaStreamSynchronize(q));
         const double wall=now_s();
         CK(cudaEventRecord(begin.value,q));

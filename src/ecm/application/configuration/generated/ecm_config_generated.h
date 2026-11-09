@@ -139,7 +139,7 @@ struct Stage1Values {
     int gpu_param=3;
     std::string gpu_algorithm="cgbn";
     std::string ntt_convolution="auto";
-    std::string ntt_tune_file="data/stage1_ntt.tune.json";
+    std::string ntt_tune_file="tune.toml";
     int ntt_memory_mib=0;
     int ntt_length=0;
     int ntt_bpw=0;

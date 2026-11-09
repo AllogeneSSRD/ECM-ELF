@@ -39,3 +39,9 @@ GPU1 上分别用线性和加权后端对比 0.59.3，沿用 B1=256 的六位宽
 - `ecm.exe --tune ntt` 由 CUDA worker 独立执行。两种后端使用同批合成整数状态，先粗搜并确认平台区，再细测区间和峰值肩部；同一批量下候选必须得到相同的两组 X/Z。调优按吞吐给出峰值与 95% 推荐，生产自动模式按任务实际活跃曲线数选卷积，不改变 sigma 的安排。
 - 生产批次容量提高到 32，检查点继续使用原有的 32 位活跃掩码和整数 X/Z。GPU1 在 M4423、B1=32 对 16／32 条两种卷积各自用独立 Python 对拍。M9689、B1=4096 的两组真实队列在 bit 128/5924 中断，换用 weighted、tile 9 和 32 位 Graph 窗口恢复，save 与不中断的 linear 一致，并完成 Stage2 交接。
 - GPU1 的实测和可复用 tune 记录在 `data/experiments/stage1_ntt_batch_tune_0596/`。验收入口为 [生产对拍](../../tools/test/test_stage1_ntt_production.py) 和 [自动选型测试](../../tools/test/test_stage1_ntt_tune.py)。使用方式及结果见 [Stage1 NTT 调优与显存](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)。
+
+## 0.59.8 共享 NTT 调优矩阵
+
+- Stage1 NTT 与 Stage2 共用 `tune.toml`、发布锁及单个 `[ntt]`。形状复用基于安全长度、digit 位宽、活跃批量和计划约束。Stage1 调优输入的指数不进入摘要表。Stage2 既有分表在读取后归并，旧摘要导入按更新时间选择聚合值。
+- 每个 Stage1 候选先执行 100 步，重置原始状态后计时。控制台及日志使用同样的单行摘要，峰值档和 95% 推荐档由本轮数据计算。
+- GPU1 复验 Graph 与直接提交预热、跨指数查表、16／32 曲线正确性和续跑。用 `ecm.exe → ecm_cuda_stage2.exe → ecm.exe` 交替写同一个默认文件，保留既有 Stage2 位宽矩阵和两类 NTT 行。CPU 门禁覆盖旧分表归并、行排序、列定义和损坏摘要拒绝。原始结果位于 `data/experiments/shared_ntt_tune_0598/`。

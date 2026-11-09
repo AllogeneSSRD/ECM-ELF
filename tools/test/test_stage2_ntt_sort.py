@@ -44,7 +44,10 @@ def main():
     actual=summaries(document,'ntt')
     assert len(actual)==len(expected)
     for row,old in zip(actual,expected):
-        assert all(row.get(k)==v for k,v in old.items()),'existing statistics/shape/provenance changed'
+        for k,v in old.items():
+            if k in ('verified','measurement_ids'):continue
+            if isinstance(v,float):assert math.isclose(row[k],v,rel_tol=1e-12),k
+            else:assert row.get(k)==v,k
         assert row['log2_length']==row['length'].bit_length()-1
         assert math.isclose(row['iter_per_s'],row['batch']/row['mean_seconds'],rel_tol=1e-12)
         assert math.isclose(row['batch_iter_per_s'],1/row['mean_seconds'],rel_tol=1e-12)
@@ -52,19 +55,19 @@ def main():
             remaining=row['log2_length']-row['tile'];radix=row['max_radix_bits']
             assert row['passes_forward']==(remaining+radix-1)//radix+int(row['tile']>0)
     assert tuple(json.loads(subprocess.check_output([str(a.fixture_exe.resolve()),'--ntt-columns'],text=True)))==NTT_COLUMN_ORDER
-    for table in document['ntt'].values():
-        assert table['matrix'][0][:4]==['log2_length','length','iter_per_s','mean_seconds']
+    assert set(document['ntt'])=={'matrix'}
+    assert document['ntt']['matrix'][0][:5]==['length','log2_length','iter_per_s','batch','ntt_type']
+    assert not {'measurement_ids','verified','mean_seconds','batch_iter_per_s'} & set(document['ntt']['matrix'][0])
     (a.output / 'native.toml').write_text(native, encoding='utf-8')
     assert subprocess.check_output([str(a.fixture_exe.resolve()),'--roundtrip',str((a.output/'native.toml').resolve())],text=True)==native
     assert format_rows(native)==(native,0)
-    # Derived display fields must not hide stale or corrupt metadata on reload.
-    assert len(document['ntt'])==1,'this gate expects one frozen NTT condition'
-    table=next(iter(document['ntt'].values()));columns,*values=table['matrix']
-    for field in ('log2_length','iter_per_s','batch_iter_per_s','passes_forward'):
+    # Reject inconsistent shape and non-positive throughput.
+    columns,*values=document['ntt']['matrix']
+    for field in ('log2_length','iter_per_s','passes_forward'):
         damaged=[list(row) for row in values];column=columns.index(field)
         assert isinstance(damaged[0][column],(int,float))
-        damaged[0][column]+=1
-        text=native.split('matrix = [',1)[0]+'matrix = [\n'+''.join(
+        damaged[0][column]=0 if field=='iter_per_s' else damaged[0][column]+1
+        text=native.rsplit('matrix = [',1)[0]+'matrix = [\n'+''.join(
             '['+', '.join(map(literal,row))+'],\n' for row in [columns,*damaged])+']\n'
         bad=a.output/(field+'_bad.toml');bad.write_text(text,encoding='utf-8')
         assert subprocess.run([str(a.fixture_exe.resolve()),'--roundtrip',str(bad.resolve())],capture_output=True).returncode!=0,field

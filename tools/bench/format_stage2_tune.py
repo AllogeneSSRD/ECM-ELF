@@ -8,14 +8,14 @@ from stage2_tune_matrix import matrix_row_key
 
 def format_rows(source: str) -> tuple[str, int]:
     document = tomllib.loads(source)
-    if document.get('profile',{}).get('format') not in (8,9,10,11,12,13):
-        raise ValueError('The formatter requires format 8, 9, 10, 11, 12 or 13; regenerate older profiles')
+    if document.get('profile',{}).get('format') not in range(8, 15):
+        raise ValueError('The formatter requires profile format 8–14')
     changed = 0
-    section = re.compile(r"(?m)^\[ntt\.(\d+)\][^\r\n]*\r?\n(?:(?!^\[).)*", re.S | re.M)
+    section = re.compile(r"(?m)^\[ntt(?:\.(\d+))?\][^\r\n]*\r?\n(?:(?!^\[).)*", re.S | re.M)
 
     def rewrite(match):
         nonlocal changed
-        table = document["ntt"][match[1]]
+        table = document["ntt"][match[1]] if match[1] else document["ntt"]
         block = match[0]
         rows = re.search(r"(?m)^matrix\s*=\s*\[\s*\r?\n(.*?)^\][ \t]*", block, re.S)
         if rows is None:

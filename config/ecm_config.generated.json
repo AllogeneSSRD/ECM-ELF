@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "e87101d2216005fa9cb351a82b008a0b2dee634fbc7bd2ff300577d46a418e2b",
-    "src/ecm/platform/generated/configuration_defaults.h": "609e5c86fb7a99d6bdf9fa23f656d12c0ae80b2b098084d5da497b92ac74edbd",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "167851aeb14bd6710d6b0a3235c619ab6e35fb54b502195803cfa06bb5f17936",
+    "src/ecm/platform/generated/configuration_defaults.h": "acd495b88aa252366010889ff2a3b3e56219c62769916dbe04f5949c5cf57138",
     "src/ecm/application/configuration/generated/ecm_toml_schema.h": "027e2515b2bdcc1393589aa1fe2dde53a971f2d5ca1f34750358fea594c2cdce",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "6e8bd5bc6ee129ca2ec7936ff99f3d05b47a74478a4232e760a5f0af3cb412a1",
-    "config/ecm.toml.default": "eb27c7789a2f0592d04ab8a48ef21975544e3dcce7a6c2d3f27a7afdf668def2",
-    "config/ecm.toml.example": "e6c30d0576cb60d5f31d8c5405712e3e85244fc72b5acea452d8380dc34e3d35",
-    "docs/ECM_TOML_REFERENCE.md": "b3a4689ce89846466d27bd228310e80374f2b24830ed2b18e5615fc9d5efac4a",
-    "config/ecm_options.json": "9d8bf0b9d95e75794e38ac5321c3c98399ad00ab6fc8fa2aef29af7cc9d372e7",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "f6f7d1a232847e67dfd274d204a3793300937abcfc2084fc236e0b6dbd798fe0",
+    "config/ecm.toml.default": "33c358e3dfd85f5ba5a071f0511437e36214206da6ab67ce44ebfd2f77d9955f",
+    "config/ecm.toml.example": "b0193e35715b76d2398550160eea241c0ed1acb0911963c0f6b5cd26dcdaefa4",
+    "docs/ECM_TOML_REFERENCE.md": "bf77481379dbeedf9163bd2e4a6b9db0e90203da9e9d946b896cc2cf4aff5177",
+    "config/ecm_options.json": "6bf1815cee98349cb0e2d3b8467765154a1dc7bddc8e82f0df467ef8ae4cbe71",
     "tools/gen/generate_ecm_config.py": "d491289e49651c7b061be86c570bb08ea7034f6b06713f15e6a053d00589e1a2"
   }
 }

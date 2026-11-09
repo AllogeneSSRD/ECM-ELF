@@ -2,32 +2,30 @@
 #include "ladder.h"
 #include "../../../../cuda/ntt/runtime.h"
 #include "../../../../../io/files.h"
-#include "../../../../../io/json.h"
+#include "../../../../stage2/planning/tune_portable.h"
 #include "ecm/platform/logging.h"
-#include "ecm/platform/program_version.h"
 #include "ecm/platform/stop.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
-#include <iomanip>
-#include <locale>
 #include <map>
 #include <optional>
 #include <random>
-#include <sstream>
 
 namespace ecm_mersenne_ntt {
 namespace {
 using ecm_stage1::Stage1NttOptions;
-using ecm_results::json::Value;
+namespace pt = ecm_stage2::tune::portable;
+using ecm_stage2::tune::Fields;
 constexpr unsigned max_batch = ecm_stage1::stage1_ntt_max_curves;
+constexpr unsigned warmup_iterations = 100;
 constexpr double plateau = 1.05, near_peak = 0.95;
 constexpr const char* modes[] = {"linear", "weighted"};
 
 struct Device {
     int index;
-    std::string uuid, name;
+    std::string uuid;
     size_t budget;
 };
 
@@ -44,65 +42,29 @@ Device device_info(int index, unsigned memory_mib) {
         uuid += hex[byte >> 4];
         uuid += hex[byte & 15];
     }
-    return {index, uuid, prop.name, memory_budget(free, memory_mib)};
+    return {index, uuid, memory_budget(free, memory_mib)};
 }
 
-std::string cache_key(const Device& device, unsigned p, const Stage1NttOptions& o) {
-    std::ostringstream key;
-    key << device.uuid << ':' << p << ':' << o.length << ':' << o.bpw << ':' << o.tile << ':'
-        << o.outer_max << ':' << o.profile << ':' << o.window << ':' << o.warp_tail << ':' << o.memory_mib;
-    return key.str();
+pt::Profile load(const std::filesystem::path& path) {
+    if (path.empty()) return {};
+    if (std::filesystem::exists(path)) return pt::Profile::load(path);
+    const auto legacy = path.parent_path() / "stage2_ecm_tune.toml";
+    if (path.filename() == "tune.toml" && std::filesystem::is_regular_file(legacy))
+        return pt::Profile::load(legacy);
+    return {};
 }
 
-Value object() { Value v; v.type = 'o'; return v; }
-Value number(uint64_t n) { return Value::number(std::to_string(n)); }
-Value decimal(double n) {
-    std::ostringstream stream;
-    stream.imbue(std::locale::classic());
-    stream << std::setprecision(12) << n;
-    return Value::number(stream.str());
-}
-
-Value load(const std::string& path) {
-    if (path.empty() || !std::filesystem::exists(path))
-        return object();
-    auto db = ecm_results::json::parse(ecm_io::read_file(path));
-    if (db.type != 'o' || db.get("schema").text() != "1" || db.get("profiles").type != 'o')
-        throw std::runtime_error("invalid Stage1 NTT tune file schema: " + path);
-    return db;
-}
-
-void persist(const std::string& path, const std::string& key, const Value& entry,
-             unsigned short_batch = 0) {
-    if (path.empty()) return;
-    const auto parent = std::filesystem::path(path).parent_path();
-    if (!parent.empty()) std::filesystem::create_directories(parent);
-    ecm_io::FileLock lock(path);
-    auto db = load(path);
-    auto profiles = db.get("profiles");
-    if (profiles.type != 'o') profiles = object();
-    auto profile = entry;
-    const auto& existing = profiles.get(key);
-    auto short_rows = existing.get("short");
-    if (short_batch) {
-        profile = existing;
-        if (profile.type != 'o') profile = object();
-        if (short_rows.type != 'o') short_rows = object();
-        short_rows.set(std::to_string(short_batch), entry);
-    }
-    if (short_rows.type == 'o')
-        profile.set("short", std::move(short_rows));
-    db.set("schema", number(1));
-    profiles.set(key, std::move(profile));
-    db.set("profiles", std::move(profiles));
-    ecm_io::write_atomic(path, db.dump() + "\n");
+unsigned log_length(unsigned length) {
+    unsigned log = 0;
+    for (; length > 1; length >>= 1) ++log;
+    return log;
 }
 
 struct Measurement {
     unsigned batch = 0;
     Plan plan{};
     std::vector<double> ms;
-    size_t owned = 0, observed = 0;
+    size_t owned = 0, observed = 0, budget = 0;
     double time() const {
         auto ordered = ms;
         std::sort(ordered.begin(), ordered.end());
@@ -111,6 +73,28 @@ struct Measurement {
     }
     double throughput() const { return 1000.0 * batch / time(); }
 };
+
+unsigned max_exponent(const Plan& plan) {
+    constexpr unsigned supported_max = 262144;
+    if (plan.weighted) return std::min(supported_max, plan.length * plan.bpw);
+    unsigned lo = 0, hi = (plan.length - 1) / 2;
+    while (lo < hi) {
+        const unsigned mid = lo + (hi - lo + 1) / 2;
+        if (exact_ok_terms(mid, plan.bpw)) lo = mid;
+        else hi = mid - 1;
+    }
+    return std::min(supported_max, lo * plan.bpw);
+}
+
+void print_measurement(const char* prefix, const Measurement& m, unsigned iterations) {
+    const auto& p = m.plan;
+    auto forward = p.forward, inverse = p.inverse;
+    std::replace(forward.begin(), forward.end(), '+', ',');
+    std::replace(inverse.begin(), inverse.end(), '+', ',');
+    ecm_ts_fprintf(stdout, "%s%u %u %u:%u:%u:%u:%u:%s:%s %uc %.0f iter/s\n", prefix,
+        p.length, max_exponent(p), unsigned(p.weighted), p.tile, p.outer_max, p.window,
+        unsigned(p.warp_tail), forward.c_str(), inverse.c_str(), m.batch, m.throughput()*iterations);
+}
 
 Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
     o.automatic = false;
@@ -124,25 +108,36 @@ Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
     return o;
 }
 
-Value encode(const Measurement& m) {
-    auto out = object(), plan = object();
-    out.set("batch", number(m.batch));
-    out.set("ms", decimal(m.time()));
-    out.set("curves_per_second", decimal(m.throughput()));
-    out.set("repeats", number(m.ms.size()));
-    out.set("owned_bytes", number(m.owned));
-    out.set("observed_bytes", number(m.observed));
-    out.set("peak_bytes", number(std::max(m.owned, m.observed)));
-    plan.set("length", number(m.plan.length));
-    plan.set("bpw", number(m.plan.bpw));
-    plan.set("tile", number(m.plan.tile));
-    plan.set("outer_max", number(m.plan.outer_max));
-    plan.set("graph_bits", number(m.plan.window));
-    plan.set("warp_tail", number(m.plan.warp_tail));
-    plan.set("forward", Value::string(m.plan.forward));
-    plan.set("inverse", Value::string(m.plan.inverse));
-    out.set("plan", std::move(plan));
-    return out;
+Fields encode(const Measurement& m, unsigned iterations) {
+    const auto& plan = m.plan;
+    Fields row{
+        {"length", std::to_string(plan.length)}, {"log2_length", std::to_string(log_length(plan.length))},
+        {"iter_per_s", pt::numeric(m.throughput() * iterations)}, {"batch", std::to_string(m.batch)},
+        {"ntt_type", pt::quoted(plan.weighted ? pt::weighted_ntt_type : pt::linear_ntt_type)},
+        {"bpw", std::to_string(plan.bpw)}, {"tile", std::to_string(plan.tile)},
+        {"max_radix_bits", std::to_string(plan.outer_max)}, {"passes_forward", std::to_string(plan.passes)},
+        {"forward", pt::quoted(plan.forward)}, {"inverse", pt::quoted(plan.inverse)},
+        {"graph_bits", std::to_string(plan.window)}, {"warp_tail", std::to_string(plan.warp_tail)},
+        {"repeats", std::to_string(m.ms.size())}, {"owned_bytes", std::to_string(m.owned)},
+        {"peak_bytes", std::to_string(std::max(m.owned, m.observed))},
+        {"budget_bytes", std::to_string(m.budget)}
+    };
+    pt::stamp_provenance(row);
+    return row;
+}
+
+void persist(const std::string& path, const Device& device, std::vector<Fields> rows) {
+    if (path.empty() || rows.empty()) return;
+    const auto parent = std::filesystem::path(path).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent);
+    ecm_io::FileLock lock(path);
+    auto db = load(path);
+    const auto condition = std::to_string(db.condition({{"uuid_hex", pt::quoted(device.uuid)}}));
+    for (auto& row : rows) {
+        row["condition"] = condition;
+        db.update_stage1_ntt(std::move(row));
+    }
+    ecm_io::write_atomic(path, db.serialize());
 }
 
 struct Cancelled : std::runtime_error { Cancelled() : std::runtime_error("Stage1 NTT tune stopped") {} };
@@ -153,7 +148,6 @@ class Calibration {
     std::vector<uint32_t> scalar_, initial_;
     std::map<unsigned, std::vector<uint32_t>> reference_;
 public:
-    unsigned runs = 0;
     Calibration(const Device& device, unsigned p, unsigned bits)
         : device_(device), p_(p), bits_(bits), scalar_((bits + 31) / 32),
           initial_(size_t(6) * max_batch * ((p + 31) / 32)) {
@@ -178,9 +172,9 @@ public:
         Measurement m;
         m.batch = batch;
         Control control;
+        control.warmup_iterations = warmup_iterations;
         control.describe = [&](const Plan& plan) { m.plan = plan; };
         control.poll = [](unsigned) { return Control::Action{false, ecm_stage1_stop_requested()}; };
-        ++runs;
         auto run = ladder(device_.index, p_, batch, active, scalar_, bits_, options, control, samples);
         if (run.stopped) throw Cancelled();
         const auto found = reference_.find(batch);
@@ -189,6 +183,7 @@ public:
         m.ms = std::move(run.device_ms);
         m.owned = run.owned_bytes;
         m.observed = run.observed_bytes;
+        m.budget = run.budget_bytes;
         return m;
     }
 };
@@ -234,6 +229,7 @@ class BatchSearch {
             row->ms.push_back(extra.ms.front());
             row->owned = std::max(row->owned, extra.owned);
             row->observed = std::max(row->observed, extra.observed);
+            row->budget = std::max(row->budget, extra.budget);
         }
     }
 
@@ -248,7 +244,7 @@ class BatchSearch {
 public:
     BatchSearch(Calibration& cal, const Stage1NttOptions& options) : cal_(cal), options_(options) {}
 
-    Value search(bool exhaustive) {
+    std::vector<Measurement> search(bool exhaustive) {
         auto* prior = sample(1);
         if (!prior) return {};
         if (exhaustive) {
@@ -291,70 +287,49 @@ public:
                 else lo = m;
             }
         }
-        const auto& best = peak();
-        const Measurement* recommended = &best;
-        auto result = object(), samples = object();
-        for (const auto& [batch, row] : rows_) {
-            if (!row) continue;
-            if (row->throughput() >= near_peak * best.throughput() && batch < recommended->batch)
-                recommended = &*row;
-            samples.set(std::to_string(batch), encode(*row));
-        }
-        result.set("peak_batch", number(best.batch));
-        result.set("recommended_batch", number(recommended->batch));
-        result.set("single_curve", encode(*rows_.at(1)));
-        result.set("peak", encode(best));
-        result.set("recommended", encode(*recommended));
-        result.set("samples", std::move(samples));
+        std::vector<Measurement> result;
+        for (auto& item : rows_) if (item.second) result.push_back(std::move(*item.second));
         return result;
     }
 };
 
-Value context(const Device& device, unsigned p, unsigned bits) {
-    auto row = object();
-    row.set("gpu", Value::string(device.name));
-    row.set("uuid", Value::string(device.uuid));
-    row.set("p", number(p));
-    row.set("bits", number(bits));
-    row.set("version", Value::string(ecm_program::version));
-    row.set("budget_bytes", number(device.budget));
-    return row;
-}
-
 struct Cached {
     Stage1NttOptions options;
-    double ms;
+    double rate;
 };
 
-std::optional<Cached> decode(const Value& sample, bool weighted, size_t budget,
-                             const Stage1NttOptions& base) {
-    if (sample.type != 'o') return {};
+std::optional<Packing> eligible_packing(unsigned p, const Stage1NttOptions& options) {
     try {
-        if (std::stoull(sample.get("peak_bytes").text()) > budget) return {};
-        const auto& plan = sample.get("plan");
-        auto bounded = [&](const char* key, unsigned lo, unsigned hi) {
-            const auto text = plan.get(key).text();
-            size_t end = 0;
-            const auto value = std::stoul(text, &end);
-            if (end != text.size() || value < lo || value > hi)
-                throw std::invalid_argument(key);
-            return unsigned(value);
-        };
-        auto o = base;
-        o.automatic = false;
-        o.weighted = weighted;
-        o.length = bounded("length", 2, 65536);
-        o.bpw = bounded("bpw", 1, 31);
-        o.tile = bounded("tile", 1, 12);
-        o.outer_max = bounded("outer_max", 1, 4);
-        o.window = int(bounded("graph_bits", 0, 64));
-        o.warp_tail = int(bounded("warp_tail", 0, 1));
-        const double ms = std::stod(sample.get("ms").text());
-        if (!std::isfinite(ms) || ms <= 0) return {};
-        return Cached{std::move(o), ms};
-    } catch (const std::exception&) {
-        return {};
-    }
+        const auto packing = resolve_packing(p, options);
+        if (options.tile <= log_length(packing.length)) return packing;
+    } catch (const std::invalid_argument&) {}
+    return {};
+}
+
+std::optional<Cached> decode(const Fields& row, const Packing& shape, const Device& device,
+                             unsigned batch, const Stage1NttOptions& base) {
+    using ecm_stage2::tune::uint;
+    if (uint(row,"batch") != batch || uint(row,"length") != shape.length || uint(row,"bpw") != shape.bpw ||
+        uint(row,"peak_bytes") > device.budget) return {};
+    const unsigned tile = unsigned(uint(row,"tile")), outer = unsigned(uint(row,"max_radix_bits"));
+    const auto window = int(uint(row,"graph_bits")), warp = int(uint(row,"warp_tail"));
+    const unsigned fixed_tile = base.tile ? base.tile : base.profile
+        ? std::min(log_length(shape.length), base.profile == 2 ? 10u : 12u) : 0;
+    const unsigned fixed_outer = base.outer_max ? base.outer_max : base.profile ? 4 : 0;
+    const int fixed_window = base.window >= 0 ? base.window : base.profile ? 16 : -1;
+    const int fixed_warp = base.warp_tail >= 0 ? base.warp_tail : base.profile ? 1 : -1;
+    if ((fixed_tile && tile != fixed_tile) || (fixed_outer && outer != fixed_outer) ||
+        (fixed_window >= 0 && window != fixed_window) ||
+        (fixed_warp >= 0 && warp != int(fixed_warp && tile >= 5))) return {};
+    auto o = base;
+    o.automatic = false;
+    o.length = shape.length;
+    o.bpw = shape.bpw;
+    o.tile = tile;
+    o.outer_max = outer;
+    o.window = window;
+    o.warp_tail = warp;
+    return Cached{std::move(o), ecm_stage2::tune::real(row,"iter_per_s")};
 }
 
 } // namespace
@@ -362,36 +337,40 @@ std::optional<Cached> decode(const Value& sample, bool weighted, size_t budget,
 int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool exhaustive) {
     try {
         const auto device = device_info(index, options.memory_mib);
-        // One representative exponent per default transform width. An exact
-        // width can always be added with --bits.
         std::vector<unsigned> widths{61,127,251,521,1279,2539,4003,8191,16001,32749,65521,131071,262139};
         if (p) widths = {p};
-        constexpr unsigned bits = 192;
+        constexpr unsigned iterations = 192;
+        const auto start = now_s();
+        ecm_ts_fprintf(stdout, "length max_exp ntt_type batch iter/s (warmup=%u)\n", warmup_iterations);
         for (const unsigned width : widths) {
             if (width < 32 || width > 262144)
                 throw std::invalid_argument("--tune ntt --bits requires 32..262144");
-            const auto start = now_s();
-            Calibration cal(device, width, bits);
-            auto row = context(device, width, bits);
-            row.set("search", Value::string(exhaustive ? "exhaustive" : "adaptive"));
-            std::array<double, 2> score{};
+            Calibration cal(device, width, iterations);
+            std::vector<Fields> rows;
             for (unsigned mode = 0; mode < 2; ++mode) {
                 auto candidate = options;
                 candidate.automatic = false;
                 candidate.weighted = mode != 0;
-                auto result = BatchSearch(cal, candidate).search(exhaustive);
-                if (result.type == 'o')
-                    score[mode] = std::stod(result.get("peak").get("curves_per_second").text());
-                row.set(modes[mode], std::move(result));
+                const auto result = BatchSearch(cal, candidate).search(exhaustive);
+                if (result.empty()) continue;
+                const auto peak = std::max_element(result.begin(), result.end(), [](const auto& a, const auto& b) {
+                    return a.throughput() < b.throughput();
+                });
+                const auto recommended = std::find_if(result.begin(), result.end(), [&](const auto& m) {
+                    return m.throughput() >= near_peak * peak->throughput();
+                });
+                for (const auto& measurement : result) {
+                    print_measurement("", measurement, iterations);
+                    rows.push_back(encode(measurement, iterations));
+                }
+                print_measurement("Best ", *peak, iterations);
+                if (recommended != peak) print_measurement("95%  ", *recommended, iterations);
             }
-            if (score[0] == 0 && score[1] == 0)
-                throw std::runtime_error("no safe NTT backend for the requested shape or VRAM budget");
-            row.set("peak_backend", Value::string(modes[score[1] > score[0]]));
-            row.set("runs", number(cal.runs));
-            row.set("elapsed_seconds", decimal(now_s() - start));
-            persist(options.tune_file, cache_key(device, width, options), row);
-            ecm_ts_fprintf(stdout, "stage1_ntt_tune: %s\n", row.dump().c_str());
+            if (rows.empty()) throw std::runtime_error("no safe NTT backend for the requested shape or VRAM budget");
+            persist(options.tune_file, device, std::move(rows));
         }
+        if (!options.tune_file.empty())
+            ecm_ts_fprintf(stdout, "Saved %s (%.2f s)\n", options.tune_file.c_str(), now_s()-start);
         return 0;
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "ERROR: %s\n", e.what());
@@ -403,45 +382,46 @@ Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
                                    const Stage1NttOptions& options) {
     if (!options.automatic) return options;
     const auto device = device_info(index, options.memory_mib);
-    const auto key = cache_key(device, p, options), b = std::to_string(batch);
+    std::array<Stage1NttOptions, 2> candidates{options, options};
+    candidates[0].weighted = false;
+    candidates[1].weighted = true;
+    const std::array<std::optional<Packing>, 2> shapes{
+        eligible_packing(p, candidates[0]), eligible_packing(p, candidates[1])};
     std::array<std::optional<Cached>, 2> choices;
-    auto read = [&](const Value& row) {
-        for (unsigned i = 0; i < 2; ++i) choices[i] = decode(row.get(modes[i]), i != 0, device.budget, options);
-    };
-    const char* source = "tune";
     try {
         const auto db = load(options.tune_file);
-        const auto& group = db.get("profiles").get(key);
-        for (unsigned i = 0; i < 2; ++i)
-            choices[i] = decode(group.get(modes[i]).get("samples").get(b), i != 0, device.budget, options);
-        // A mode absent from the full search may simply have skipped this batch.
-        // A short row has already tried both modes at the exact batch.
-        if (!choices[0] || !choices[1]) read(group.get("short").get(b));
+        for (const auto& row : db.stage1_ntt) {
+            const auto& condition = db.conditions.at(ecm_stage2::tune::uint(row,"condition"));
+            if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid) continue;
+            const unsigned mode = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
+            if (!shapes[mode]) continue;
+            auto sample = decode(row, *shapes[mode], device, batch, candidates[mode]);
+            if (sample && (!choices[mode] || sample->rate > choices[mode]->rate)) choices[mode] = std::move(sample);
+        }
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "Stage1 NTT tune read: %s\n", e.what());
     }
+    const char* source = "tune";
     if (!choices[0] && !choices[1]) {
         source = "short_tune";
         const auto start = now_s();
-        constexpr unsigned bits = 96;
-        Calibration cal(device, p, bits);
-        auto exact = context(device, p, bits);
-        for (unsigned i = 0; i < 2; ++i) {
-            auto candidate = options;
-            candidate.automatic = false;
-            candidate.weighted = i != 0;
-            auto row = measure_batch(cal, batch, candidate);
-            exact.set(modes[i], row ? encode(*row) : Value{});
+        constexpr unsigned iterations = 128;
+        Calibration cal(device, p, iterations);
+        std::vector<Fields> rows;
+        for (unsigned mode = 0; mode < 2; ++mode) {
+            if (!shapes[mode]) continue;
+            auto row = measure_batch(cal, batch, candidates[mode]);
+            if (!row) continue;
+            rows.push_back(encode(*row, iterations));
+            choices[mode] = Cached{fixed_plan(candidates[mode], row->plan), row->throughput() * iterations};
         }
-        read(exact);
-        if (choices[0] || choices[1]) {
-            try { persist(options.tune_file, key, exact, batch); }
-            catch (const std::exception& e) { ecm_ts_fprintf(stderr, "Stage1 NTT tune write: %s\n", e.what()); }
-        }
-        ecm_ts_fprintf(stdout, "stage1_ntt_short_tune: p=%u batch=%u seconds=%.3f\n", p, batch, now_s() - start);
+        try { persist(options.tune_file, device, std::move(rows)); }
+        catch (const std::exception& e) { ecm_ts_fprintf(stderr, "Stage1 NTT tune write: %s\n", e.what()); }
+        ecm_ts_fprintf(stdout, "stage1_ntt_short_tune: batch=%u warmup_iters=%u seconds=%.3f\n",
+                       batch, warmup_iterations, now_s() - start);
     }
     if (!choices[0] && !choices[1]) throw BudgetError("no safe Stage1 NTT auto plan under the current VRAM budget");
-    const auto winner = choices[1] && (!choices[0] || choices[1]->ms < choices[0]->ms) ? 1 : 0;
+    const unsigned winner = choices[1] && (!choices[0] || choices[1]->rate > choices[0]->rate);
     ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s\n",
                    source, p, batch, modes[winner]);
     return choices[winner]->options;

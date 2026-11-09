@@ -31,6 +31,7 @@
 #include "ecm/io/stage2_checkpoint.h"
 #include "../../../io/json.h"
 #include "ecm/io/results.h"
+#include "../../../io/files.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -130,12 +131,9 @@ void portable_publish(const fs::path &path,pt::Profile &profile) {
     if(!MoveFileExW(partial.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
         throw std::runtime_error("cannot publish portable tune summary; partial retained");
 }
-Handle portable_lock(const fs::path &path) {
+ecm_io::FileLock portable_lock(const fs::path &path) {
     if(!path.parent_path().empty())fs::create_directories(path.parent_path());
-    Handle guard;const fs::path lock(path.string()+".tune.lock");
-    guard.value=CreateFileW(lock.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
-    if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("another process owns the tune update lock");
-    return guard;
+    return ecm_io::FileLock(path.u8string(),ecm_io::FileLockDomain::Publication,0);
 }
 bool portable_query(ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots) {
     // Pure packing geometry has no device/free-memory dependencies.
@@ -1169,14 +1167,18 @@ void merge_portable_tune(const Options &o,const fs::path &destination) {
     if(o.tune_merge.size()>64 || !o.tune_save.empty() || !o.tune_worktodo.empty() || o.tune_carrier || !o.tune_ds.empty() ||
        !o.tune_b2s.empty() || !o.tune_exponents.empty())throw std::runtime_error("merge accepts at most 64 profiles and no curve grid");
     auto guard=portable_lock(destination);auto combined=portable_read(destination);
+    auto merge_ntt=[&](const pt::Profile &source) {
+        for(auto s:source.ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_ntt(std::move(s),false);}
+        for(auto s:source.stage1_ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_stage1_ntt(std::move(s));}
+    };
     for(const auto &path:o.tune_merge) {
         const auto source=pt::Profile::load(absolute_from(fs::current_path(),path));
         for(auto s:source.samples){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update(std::move(s),o.runtime_samples);}
-        for(auto s:source.ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_ntt(std::move(s));}
+        merge_ntt(source);
     }
     for(const auto &path:o.tune_ntt_profiles) {
         const auto source=pt::Profile::load(absolute_from(fs::current_path(),path));
-        for(auto s:source.ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_ntt(std::move(s));}
+        merge_ntt(source);
     }
     portable_publish(destination,combined);
     std::cout<<"ecm_tune_merge_complete: summaries="<<combined.samples.size()<<" ntt="<<combined.ntt.size()
@@ -1562,7 +1564,7 @@ void portable_ntt(Options o,pt::Profile &profile,ecm_stage2::Word condition,pt::
             f["mean_seconds"]=pt::numeric(pt::average(times));f["stddev_seconds"]=pt::numeric(pt::deviation(times));
             f["conv_iter_per_s"]=pt::numeric(et::uint(f,"batch")/pt::average(times));f["batch_iter_per_s"]=pt::numeric(1/pt::average(times));
             pt::stamp_provenance(f);
-            f["measurement_ids"]=pt::encoded_ids({stage2_queue::token()});f.erase("median_seconds");
+            f.erase("median_seconds");
             for(auto i=f.begin();i!=f.end();)if(!i->second.empty() && i->second.front()=='[')i=f.erase(i);else ++i;
             f.erase("type");f.erase("device_index");
             f["condition"]=std::to_string(sink.condition);f["source"]="\"measured\"";sink.profile.update_ntt(std::move(f));
@@ -1807,7 +1809,8 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
     const auto binary=portable_identity(evidence);
     for(const auto &path:o.tune_ntt_profiles) {
         const auto old=pt::Profile::load(absolute_from(fs::current_path(),path));
-        for(auto s:old.ntt){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_ntt(std::move(s));}
+        for(auto s:old.ntt){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_ntt(std::move(s),false);}
+        for(auto s:old.stage1_ntt){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_stage1_ntt(std::move(s));}
     }
     pt::Budget budget(double(o.tune_budget));
     std::vector<PortableTuneTarget> targets;

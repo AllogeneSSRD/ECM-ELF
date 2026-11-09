@@ -941,6 +941,15 @@ int main(int argc, char** argv) {
     }
     ecm_stage1_install_stop_handler();
 
+    EcmLogMirror direct_log;
+    if (!queue &&
+        (input.tune_ntt || settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) &&
+        !settings.config.log_file.empty() &&
+        !direct_log.open(resolve_rel_local(exe, settings.config.log_file))) {
+        ecm_ts_fprintf(stderr, "FATAL: cannot open Stage1 log file %s\n",
+                       settings.config.log_file.c_str());
+        return 1;
+    }
     if (input.tune_ntt) {
 #if ECM_HAS_CUDA_STAGE1
         return ecm_mersenne_ntt::tune_command(settings.options.execution.device_index,
@@ -955,14 +964,6 @@ int main(int argc, char** argv) {
         return ecm_stage1_app::run_worktodo(input, settings, parsed, paths, ini);
     }
 
-    EcmLogMirror direct_log;
-    if (settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt &&
-        !settings.config.log_file.empty() &&
-        !direct_log.open(resolve_rel_local(exe, settings.config.log_file))) {
-        ecm_ts_fprintf(stderr, "FATAL: cannot open Stage1 log file %s\n",
-                       settings.config.log_file.c_str());
-        return 1;
-    }
     ecm_ts_fprintf(stdout, "%s %s (Stage1)\n", ecm_program::name, ecm_program::version);
 
     // Diagnosis follows durable task publication; GP availability is not admission.

@@ -1,4 +1,4 @@
-"""Layout-aware format-13 matrices. Full receipts stay in the original JSONL."""
+"""Layout-aware portable tune matrices. Full receipts stay in the original JSONL."""
 import json
 import math
 import re
@@ -217,7 +217,7 @@ def hydrate_point_backends(row,condition):
 
 def write_profile(conditions, samples):
     lines = ['# Stage2 mean timings; identical parameters share one repeated measurement row.',
-             '[profile]', 'format = 13', 'unit = "full_stage2"']
+             '[profile]', 'format = 14', 'unit = "full_stage2"']
     canonical=[];remap={};prepared=[]
     for i,c in enumerate(conditions):
         condition={k:v for k,v in c.items() if k not in ('program_version','updated_at','env_giant_seed_coop','env_s4_coop_reduce','env_s4_coop_tpb','env_s4_coop_kernel')}

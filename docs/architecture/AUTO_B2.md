@@ -4,7 +4,7 @@
 
 Auto B2 选择连续生成、处理新曲线的单位时间收益，计入 Stage1 成本，即使当前读取已完成的 save。固定 B2 时，性能文件选择 D 和合法梅森承载；最终 B2=0 且启用 Auto B2 时联合选择 B2、D、承载。
 
-默认性能文件为 TOML 所在目录的 `stage2_ecm_tune.toml`，可由 `stage2_tune_profile` 或 `--tune-profile FILE.toml`覆盖。`--auto-b2` 对应 `stage2_auto_b2=1`。显式同时提供非零 `--b2` 与 `--auto-b2` 报冲突；任务或 TOML 已有非零 B2 时保持固定值。
+默认性能文件为 `ecm.toml` 所在目录的共享 `tune.toml`。若该目录只有旧 `stage2_ecm_tune.toml`，Stage2 可先读取它，Stage1 首次写入 `tune.toml` 时会带入其中的数据。可由 `stage2_tune_profile` 或 `--tune-profile FILE.toml` 覆盖。`--auto-b2` 对应 `stage2_auto_b2=1`。显式同时提供非零 `--b2` 与 `--auto-b2` 报冲突。任务或 TOML 已有非零 B2 时使用固定值。
 
 每个`[workers.N.stage2]`可分别设置`stage2_tune_profile`，覆盖全局`[stage2]`路径；CLI仍优先。相对路径以ecm.toml目录为基准，读取、采样写回和更新锁均使用同一个解析后路径。显式路径不自动增加worker后缀，双GPU示例见[Stage2使用](../usage/STAGE2.md#cuda-入口)。
 
@@ -96,7 +96,7 @@ Auto以R=`stage2_tune_min_repeats`为重复门槛。先完成baby／giant的已�
 
 `stage2_reduce_backend=auto|scalar|coop32`默认auto。auto在固定点后端及几何下，先重复标量参考，再逐项重复两遍乘减和合并乘减；采用完整引擎加启动算术检查成本最低的合格结果。先完成已开始的重复，再探索链长或D；剩余曲线门槛只限制新比较。强制结果若没有标量配对，不构成auto资格。
 
-格式13将实际`reduce_coop`、`reduce_threads`、`reduce_kernel`放入matrix、Shape、预测区域和缓存身份，即使忽略environment也不混合。标量及实际回退为`0/0/0`，协作为`32/T/1`（两遍）或`32/T/2`（合并）。默认T=128；诊断CLI允许64／96／128。NTT表忽略S4请求设置，继续共享。读取器兼容8…13；旧非零S4请求缺实际执行证据时保留为255（未知），不参与选型。
+实际 `reduce_coop`、`reduce_threads`、`reduce_kernel` 写入 matrix、Shape、预测区域和缓存身份，即使忽略 environment 也分开匹配。标量及实际回退为 `0/0/0`，协作为 `32/T/1`（两遍）或 `32/T/2`（合并）。默认 T=128，诊断 CLI 允许 64／96／128。NTT 表忽略 S4 请求设置。读取器兼容格式 8–14，旧记录的非零 S4 请求缺实际执行证据时标记为 255（未知），不参与选型。
 
 S4配对复用限定实际硬件条件、算术位宽、NTT区间、实际B2、布局、链长、驻留和点后端；不要求B1相同。相邻D在同一区间可复用已合格胜者，未覆盖的NTT拐点重新建立标量参考。正式tune也遵循相同规则。只读时不补采样、不修改文件。
 
@@ -407,25 +407,15 @@ paired策略及保留的采样摘要估算器可用跨D非负拟合分别估计�
 
 `--tune ntt --length-log2 a:b --tune-slices s,... --tune-repeats n --tune-file FILE.toml`测长度和批量，也可用等级预设。共享软预算和增量摘要规则。每秒域卷积数=batch/mean，每秒批调用数=1/mean，不是ECM曲线吞吐，不含大整数carry、归约或完整Stage2。
 
-GMP参考验证每个输出项；摘要保留平均耗时、样本标准差、次数及已验证标记；逐次检查量留在原始JSONL。内存不足可跳过，验证失败报错并保留证据。TOML用格式8参数表，显式JSONL调试输出保留逐次接口。
+Stage2 卷积基准逐项对照 GMP 参考。内存不足可跳过，验证失败报错并保留证据。共享 TOML 摘要采用格式 14，显式 JSONL 输出保留逐次核验数据。
 
 ### NTT 性能摘要表
 
-`[ntt.<condition>]`关联对应设备/环境条件，内容只有一个列对齐matrix。前四列固定为 `log2_length`、`length`、`iter_per_s`、`mean_seconds`，后续保存离散度、次数、批量、执行参数和来源。完全相同参数重复测量合并次数和均值/标准差，不同参数保留多行；行排序仍为length、batch、tile的稳定升序。
+共享 `tune.toml` 只写一张 `[ntt]` 矩阵。前五列依次为 `length`、`log2_length`、`iter_per_s`、`batch`、`ntt_type`。每行通过 `condition` 关联设备和环境，保存实际执行参数、程序版本及 UTC 更新时间。行仍按 length、batch、tile 稳定升序排列。
 
-一次基准批调用包含两个正向NTT、有限域点乘与缩放、一个逆向NTT，运算域为Goldilocks素数域。GPU事件只包围这段计算，输入生成、准备、核验在计时外；不包含生产多项式的packing、carry、模N归约、传输和整条ECM曲线。
-
-**性能矩阵字段：**
-
-- `log2_length=k`、`length=L`：L=2ᵏ，每个NTT的有限域元素数。
-- `iter_per_s=b/mean_seconds`：每秒独立卷积数，一个卷积包含两个正向和一个逆向NTT；`batch_iter_per_s=1/mean_seconds`是每秒批调用数，不能把前者解释成单次正向NTT吞吐率。
-- `batch=b`：一次批调用中的独立卷积数。
-- `repeats`、`mean_seconds`、`stddev_seconds`：正式观察次数、批调用平均GPU耗时、样本标准差。显式预热不计入次数。
-- `tile`、`max_radix_bits`、`coop_outer`、`warp_tail`、`compact_scratch`：实际执行形状。
-- `passes_forward`：一次正向NTT的完整数组处理趟数，优先保留实际报告。旧format 8有合法tile和max_radix_bits时按最少外层趟数推导，缺少必要参数则留空，不猜默认radix；详见下文公式。
-- `verified=1`、`measurement_ids`：通过算术验证的标记及独立批次身份。
-
-log₂L和吞吐率作为展示列持久保存并核对一致性，合并观察后由新的批平均耗时重新计算，不能直接平均吞吐率。读取旧format 8时补齐可确定的展示信息，不改变已有均值、方差、次数、来源或行排序。L·b检查字数仍由程序推导。NTT使用GMP的规定输入参考：两个各含3个非零系数的多项式，各切片常数项不同，核对全部输出及零尾部；不声明随机输入覆盖。逐次bad计数、最小/最大值、预热、准备/核验耗时和具体outer_radix_bits序列留在底层JSONL。
+- `stage1_linear` 和 `stage1_weighted` 的吞吐单位是每秒独立曲线的 ladder 步数。表保存 digit 位宽、tile、外层 radix 上限、正逆 pass、Graph 窗口、warp 尾层、计时次数及显存。兼容输入按形状复用这些行。
+- `stage2_convolution` 的吞吐单位是每秒独立卷积数。一次卷积包含两个正向 NTT、有限域点乘和逆缩放、一个逆向 NTT。GPU event 排除输入生成、准备和核验。批耗时由 `batch / iter_per_s` 推得。矩阵保留实测次数、样本标准差和实际变换参数。
+- Stage2 新测观察按次数合并批耗时及标准差。导入同形状摘要时保留更新时间较新的聚合结果，时间相同时优先样本数较多的记录。旧 `[ntt.N]` 表在读入时归并到单个 `[ntt]`，旧统计字段转换为当前列。逐次核验、准备和预热耗时仍在原始 JSONL。
 
 独立基准仍记录容量证据：external数组为16Lb+40b+8 bytes，另有arena实际载荷及准入规划载荷。这些不是生产Stage2进程峰值，不持久写入性能矩阵；生产始终核对当前原生计划及设备可用显存。
 
@@ -497,7 +487,7 @@ NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升�
 
 ## 汇集预计算结果
 
-当前格式按位宽组织 `[width.<bits>]`，NTT按条件组织 `[ntt.<condition>]`；每个表只有一个matrix，首行列名与数值保持列宽对齐。同参数的次数、均值和样本标准差合并保存；不同参数不受逐表记录数淘汰限制。可选单元缺失用空字符串，不因字段集合差异拆表。模型节点之间的值仍为估算，不冒充实测。
+当前格式按位宽组织 `[width.<bits>]`，所有 NTT 条件共用 `[ntt]`。每个表只有一个 matrix，首行列名与数值保持列宽对齐。同参数的次数、均值和样本标准差合并保存；不同参数不受逐表记录数淘汰限制。可选单元缺失用空字符串，不因字段集合差异拆表。模型节点之间的值仍为估算，不冒充实测。
 
 来源、条件、均值/标准差、验证标记及必要独立误差保留，读回恢复确定性派生量并执行结构与统计校验。重复列、列数不符、嵌套数组、错误位宽/条件、坏核验及重复候选均拒绝。
 

@@ -232,9 +232,11 @@ ntt_tile = 0
 # EN: Fused tile width in radix-2 layers. Zero uses the profile.
 # 中文：融合 tile 的 radix-2 层数。0 使用所选配置。
 
-ntt_tune_file = "data/stage1_ntt.tune.json"
-# EN: Stage1 NTT tuning database, relative to the configuration directory. Empty disables persistence.
-# 中文：Stage1 NTT 调优表，路径相对配置目录。留空关闭持久化。
+ntt_tune_file = "tune.toml"
+# EN: Shared tune TOML. Stage1 NTT plans use the single [ntt] matrix alongside Stage2 tuning data.
+# EN: Relative to the configuration directory. Empty disables persistence.
+# 中文：共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关
+# 中文：闭持久化。
 
 ntt_warp_tail = "auto"
 # EN: Enable warp shuffles for the local tail of the tile transform. Auto uses the selected profile.
@@ -920,14 +922,13 @@ stage2_tune_min_repeats = 2
 # 中文：观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。
 
 stage2_tune_profile = ""
-# EN: ECM tune matrix TOML. Set a different path in each [workers.N.stage2] to keep GPU timing files
-# EN: independent; relative paths resolve beside ecm.toml. CLI --tune-profile takes priority.
-# EN: Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne data remain independent. B1
-# EN: never gates reuse. Missing data permits the basic model. Empty selects stage2_ecm_tune.toml beside
-# EN: ecm.toml unless a legacy cost profile is supplied.
-# 中文：ECM调优矩阵TOML。可在各[workers.N.stage2]填写不同路径，让多GPU分别读取并更新自己的性能文件；相对路径
-# 中文：以ecm.toml所在目录为基准，CLI --tune-profile优先。按arithmetic_bits分别查询通用、梅森算术；B1不作为
-# 中文：复用门槛，缺数据可使用基础模型。留空且未指定旧成本配置时使用ecm.toml旁的stage2_ecm_tune.toml。
+# EN: Shared tune TOML. CLI --tune-profile takes priority. Relative paths resolve beside ecm.toml. If
+# EN: empty and no legacy cost profile is supplied, use tune.toml beside ecm.toml, with
+# EN: stage2_ecm_tune.toml as a fallback when it already exists. Arithmetic-family lookup uses
+# EN: arithmetic_bits independently for generic and Mersenne arithmetic.
+# 中文：共享调优 TOML。CLI --tune-profile 优先，相对路径以 ecm.toml 所在目录为准。留空且未指定旧成本配置时优
+# 中文：先使用 tune.toml，若只有已有的 stage2_ecm_tune.toml 则沿用。通用与梅森算术分别按 arithmetic_bits 查
+# 中文：询。
 
 stage2_tune_runtime = true
 # EN: Accumulate checked no-factor production timings by device, environment and execution shape.

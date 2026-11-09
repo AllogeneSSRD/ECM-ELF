@@ -6,15 +6,15 @@ CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Mon
 
 ## 批量调优与显存
 
-`--tune ntt` 分别搜索线性与加权后端。固定 192 个标量位，每个候选以三次 CUDA event 计时的中位数计算吞吐。先测 1、2、4、8、16、32；当吞吐增益低于 5% 时交替复测当前和前一批量，确认后停止倍增。补测停止点相邻的两个区间，并用上限档探查后续是否回升。再检查峰值附近和 95% 阈值附近。推荐档是达到该后端**实测**峰值吞吐 95% 的最小实测档。默认计划与较小 tile 都纳入候选，显式指定 tile 或 profile 时只比较指定配置。
+`--tune ntt` 分别搜索线性与加权后端。每个候选在原缓冲上预热 100 个 ladder 步，再重置起点，对 192 步正式样本取 CUDA event 计时中位数。先测 1、2、4、8、16、32。吞吐增益低于 5% 时交替复测当前和前一批量，确认后停止倍增。补测停止点相邻的两个区间，并用上限档探查后续是否回升，再检查峰值和 95% 阈值附近。推荐档是达到该后端**实测**峰值吞吐 95% 的最小实测档。自动计划比较默认 tile 和较小 tile，显式指定 tile 或 profile 时比较指定配置。
 
-生产 `auto` 查实际活跃批量，缺档则用相同算术短测 96 个标量位。调优按 `batch / device_seconds` 选批量；生产在同一批量下比较两种卷积的设备耗时。调优墙钟时间还包括候选的初始化、Graph 构建、回读和末点对照。
+生产 `auto` 查兼容 NTT 形状和活跃批量，缺档则预热后短测 128 步。共享 `[ntt]` 行用 `batch × ladder_steps / device_seconds` 保存吞吐。调优墙钟时间还包括初始化、Graph 构建、预热、回读和末点对照。表结构及 Stage2 吞吐口径见 [NTT 性能摘要表](../architecture/AUTO_B2.md#ntt-性能摘要表)。
 
 以活跃批量 B、指数 p、NTT 长度 L 计，主数组需要 `88·B·L + 92·B·ceil(p/32)` 字节，此外还有标量、NTT 常量表和加权表。申请前核算显式分配，Graph 上传后及同步执行后用 `cudaMemGetInfo` 采样空闲显存差；两者较大值写为 `peak_bytes`。观测值以 CUDA 上下文就绪后的空闲显存为基准，受同设备其他进程和驱动分配粒度影响。
 
 ### GPU1 验证
 
-0.59.6 本机构建使用 CUDA 13.3 / sm89。GPU1 为 8 GiB RTX 4060 Laptop，驱动 610.88。完整自适应扫描覆盖 61–262139 位的 13 个代表指数。三组对照用相同的点、候选参数和计时口径，分别执行一次自适应搜索和 1–32 穷举。调优中 GPU 利用率至少 50% 的遥测样本为 1500 MHz、3.40–41.62 W、45–60 °C。表中数字依次为自适应／穷举，批量栏为峰值 → 95% 推荐。
+历史 0.59.6 本机构建使用 CUDA 13.3 / sm89，计时采用当时的调优流程。GPU1 为 8 GiB RTX 4060 Laptop，驱动 610.88。完整自适应扫描覆盖 61–262139 位的 13 个代表指数。三组对照用相同的点、候选参数和计时口径，分别执行一次自适应搜索和 1–32 穷举。调优中 GPU 利用率至少 50% 的遥测样本为 1500 MHz、3.40–41.62 W、45–60 °C。表中数字依次为自适应／穷举，批量栏为峰值 → 95% 推荐。
 
 | 指数 | 搜索耗时（秒） | linear 批量 | weighted 批量 |
 |---:|---:|:---|:---|
@@ -28,7 +28,7 @@ CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Mon
 
 M4423、B1=32 的 16／32 条 PARAM0 保存点在两个后端均通过独立 Python 验算。M32749、B1=64 的同批量两组 X/Z 也与 GMP 一致。M9689、B1=4096 的两个批次在 bit 128/5924 中断，从 linear 换到 weighted 后续算。最后的 save 与不中断运行一致，Stage2 队列正常生成。M262139 的 16／32 条调优测得 linear 显存增量为 58／114 MiB，weighted 为 36／70 MiB。对应显式分配为 55.66／111.16 MiB 和 34.22／67.72 MiB。将预算设为 96 MiB 后，32 条 linear 被准入检查排除，32 条 weighted 仍成功测量。
 
-原始结果和设备遥测位于 `data/experiments/stage1_ntt_batch_tune_0596/`，其中 `measured/matrix/tune.json` 可复用。复测入口见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)、[设备对测](../../tools/bench/compare_stage1_ntt.py) 和 [生产验收](../../tools/test/test_stage1_ntt_production.py)。
+原始结果和设备遥测位于 `data/experiments/stage1_ntt_batch_tune_0596/`，其中 `measured/matrix/tune.json` 为历史测量。复测入口见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)、[设备对测](../../tools/bench/compare_stage1_ntt.py) 和 [生产验收](../../tools/test/test_stage1_ntt_production.py)。
 
 ## 实现与正确性
 

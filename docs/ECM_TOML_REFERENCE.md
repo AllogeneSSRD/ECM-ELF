@@ -469,14 +469,14 @@ Fused tile width in radix-2 layers. Zero uses the profile.
 ### ntt_tune_file
 
 ```toml
-ntt_tune_file = "data/stage1_ntt.tune.json"
+ntt_tune_file = "tune.toml"
 ```
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Stage1 NTT tuning database, relative to the configuration directory. Empty disables persistence.
+Shared tune TOML. Stage1 NTT plans use the single [ntt] matrix alongside Stage2 tuning data. Relative to the configuration directory. Empty disables persistence.
 
-Stage1 NTT 调优表，路径相对配置目录。留空关闭持久化。
+共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。
 
 ### ntt_warp_tail
 
@@ -1585,9 +1585,9 @@ stage2_tune_profile = ""
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-ECM tune matrix TOML. Set a different path in each [workers.N.stage2] to keep GPU timing files independent; relative paths resolve beside ecm.toml. CLI --tune-profile takes priority. Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne data remain independent. B1 never gates reuse. Missing data permits the basic model. Empty selects stage2_ecm_tune.toml beside ecm.toml unless a legacy cost profile is supplied.
+Shared tune TOML. CLI --tune-profile takes priority. Relative paths resolve beside ecm.toml. If empty and no legacy cost profile is supplied, use tune.toml beside ecm.toml, with stage2_ecm_tune.toml as a fallback when it already exists. Arithmetic-family lookup uses arithmetic_bits independently for generic and Mersenne arithmetic.
 
-ECM调优矩阵TOML。可在各[workers.N.stage2]填写不同路径，让多GPU分别读取并更新自己的性能文件；相对路径以ecm.toml所在目录为基准，CLI --tune-profile优先。按arithmetic_bits分别查询通用、梅森算术；B1不作为复用门槛，缺数据可使用基础模型。留空且未指定旧成本配置时使用ecm.toml旁的stage2_ecm_tune.toml。
+共享调优 TOML。CLI --tune-profile 优先，相对路径以 ecm.toml 所在目录为准。留空且未指定旧成本配置时优先使用 tune.toml，若只有已有的 stage2_ecm_tune.toml 则沿用。通用与梅森算术分别按 arithmetic_bits 查询。
 
 ### stage2_tune_runtime
 
