@@ -353,7 +353,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             {{DA,DA,AA},{CB,CB,BB},{Sum,Diff,E},0b110},{});
         mul(5,4,{Sum,Diff,AA,BB,E},{0,1,2,4},{0,1,3,5},{XA,DiffSq,XD,AE});
         combine<false,false><<<curves,threads,0,q>>>(state.data,nullptr,s,{{BB},{AE},{Sum},0},{});
-        mul(3,2,{DiffSq,E,Sum},{0,1},{6,2},{ZA,ZD});
+        // E is still in frequency plane 4 from the second batch. Both
+        // reducers only overwrite planes 0–3, and this pack uses planes 0–1.
+        constexpr unsigned cached_e = 4;
+        mul(2,2,{DiffSq,Sum},{0,cached_e},{6,1},{ZA,ZD});
         route<<<dim3((s.words+threads-1)/threads,curves),threads,0,q>>>(state.data,s,cursor);
         CK(cudaGetLastError());
     };
