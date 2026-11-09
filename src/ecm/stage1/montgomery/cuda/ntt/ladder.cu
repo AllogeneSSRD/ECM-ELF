@@ -3,9 +3,8 @@
 #include "weighted.cuh"
 #include "ecm/stage1/ntt_length.h"
 #include "../../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
-#include "../../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
 #include "../../../../cuda/ntt/runtime.h"
-#include "../../../../cuda/ntt/device/tile_pass.cuh"
+#include "../../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
 #include <stdexcept>
 #include <type_traits>
 
@@ -69,18 +68,9 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
     const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
     const unsigned width = Mixed ? s.length / 5 : s.length;
     if (i >= width) return;
-    const auto read = [&](unsigned j) -> U {
-        if (j >= s.digits) return 0;
-        const auto digit = Weighted ? weighted[j] : WeightedDigit{1, j*s.bpw, s.bpw};
-        if constexpr (Modulus) return gl_mul((1ull << digit.width) - 1, digit.weight);
-        const unsigned word = digit.bit / 32, offset = digit.bit % 32;
-        const auto pos = limb(s, in.x[blockIdx.y/s.curves], blockIdx.y%s.curves, word);
-        U v = state[pos];
-        if (word+1 < s.words) v |= U(state[pos+1]) << 32;
-        v = (v >> offset) & ((1ull << digit.width)-1);
-        if constexpr(Weighted) v = gl_mul(v, digit.weight);
-        return v;
-    };
+    const uint32_t* source = nullptr;
+    if constexpr (!Modulus) source = state + limb(s, in.x[blockIdx.y/s.curves], blockIdx.y%s.curves, 0);
+    const auto read = [&](unsigned j) { return stage1_ntt_pack_digit<Weighted,Modulus>(source,s,weighted,j); };
     auto* row = out + size_t(blockIdx.y) * s.length + i;
     if constexpr(Mixed) {
         U x[5];
@@ -154,11 +144,19 @@ __device__ uint32_t extract(const U* digits, Shape s, unsigned bit) {
 // One block per output residue. A thread first summarizes a contiguous limb
 // interval; warp ballots compute its prefix. Feed the high carry back into the
 // low limb (2^p=1). An all-propagate sum is exactly M, represented as zero.
-template<bool Fold, bool Select, bool Weighted = false>
+template<bool Fold, bool Select, bool Weighted = false, bool Routed = false, bool Cached = false>
 __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, Cursor cursor) {
     __shared__ unsigned warp_tags[threads/32];
+    extern __shared__ uint32_t saved_raw[];
     const unsigned op = blockIdx.x/s.curves, curve = blockIdx.x%s.curves;
-    const unsigned out = ops.out.x[op];
+    unsigned out = ops.out.x[op];
+    if constexpr (Routed) {
+        if (out == XA || out == XD || out == ZA || out == ZD) {
+            const unsigned bit = scalar_bit(cursor);
+            const bool doubled = out == XD || out == ZD;
+            out = 2 * (doubled ? bit : 1 - bit) + unsigned(out == ZA || out == ZD);
+        }
+    }
     unsigned a = ops.left.x[op], b = ops.right.x[op];
     if constexpr(Select) {
         const unsigned swap = 2u * scalar_bit(cursor);
@@ -179,10 +177,17 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
             return U(state[limb(s,a,curve,i)]) + (((ops.subtract >> op) & 1) ? (rhs ^ mask) : rhs);
         }
     };
-    unsigned tag = 1;
+    unsigned tag = 1, limb_generate = 0, limb_propagate = 0;
     for (unsigned i=begin; i<end; ++i) {
         const uint32_t mask = limb_mask(s,i);
         const U v = raw(i,mask);
+        if constexpr (Cached) {
+            // The supported exponent limit gives at most 32 limbs per thread.
+            const unsigned j = i-begin;
+            saved_raw[j*threads + threadIdx.x] = uint32_t(v);
+            limb_generate |= unsigned(v > mask) << j;
+            limb_propagate |= unsigned(v == mask) << j;
+        }
         tag = Join{}(tag, v > mask ? 2u : v == mask ? 1u : 0u);
     }
     const unsigned warp=threadIdx.x/32, lane=threadIdx.x%32;
@@ -201,9 +206,16 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
     unsigned carry = prefix == 2 || (prefix == 1 && whole == 2);
     for (unsigned i=begin; i<end; ++i) {
         const uint32_t mask = limb_mask(s,i);
-        const U v = raw(i,mask) + carry;
-        state[limb(s,out,curve,i)] = whole == 1 ? 0 : uint32_t(v) & mask;
-        carry = v > mask;
+        if constexpr (Cached) {
+            const unsigned j = i-begin;
+            const uint32_t v = saved_raw[j*threads + threadIdx.x] + carry;
+            state[limb(s,out,curve,i)] = whole == 1 ? 0 : v & mask;
+            carry = ((limb_generate | (limb_propagate & (0u - carry))) >> j) & 1;
+        } else {
+            const U v = raw(i,mask) + carry;
+            state[limb(s,out,curve,i)] = whole == 1 ? 0 : uint32_t(v) & mask;
+            carry = v > mask;
+        }
     }
 }
 
@@ -303,16 +315,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     size_t free_before = 0, total = 0;
     CK(cudaMemGetInfo(&free_before, &total));
     Run result;
-    const unsigned requested = control ? control->experimental_dataflow : 0;
-    const U terms = options.weighted ? 2ull * s.length : s.digits;
-    // A loose E digit can be twice the canonical maximum. The weighted
-    // cyclic reducer handles the full coefficient range without a 2p cutoff.
-    const bool loose = (requested & LooseDifference) && options.weighted && exact_ok_terms(2 * terms, s.bpw);
-    const U digit_max = (1ull << s.bpw) - 1;
-    // Require terms * digit_max^2 + digit_max < Q, without overflow.
-    const bool fma = (requested & FusedMultiplyAdd) &&
-        (loose ? 2 : 1) * terms <= (GL_P - 1 - digit_max) / digit_max / digit_max;
-    result.dataflow = (loose ? unsigned(LooseDifference) : 0) | (fma ? unsigned(FusedMultiplyAdd) : 0);
+    unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward;
+    // Wider weighted reductions showed a batch-dependent cache tradeoff.
+    if (p <= 65536) defaults |= CachedCarry;
+    const unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     result.budget_bytes = memory_budget(free_before, options.memory_mib);
     auto observe_memory = [&] {
         size_t free_now = 0;
@@ -346,13 +352,36 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
         (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
     if (mixed) result.owned_bytes += size_t(8) * width * sizeof(U);
-    if (loose) result.owned_bytes += size_t(s.length) * sizeof(U);
     if (options.weighted)
         result.owned_bytes += size_t(s.length) * (sizeof(U) + sizeof(WeightedDigit)) +
                               size_t(s.words) * sizeof(WeightedLimb);
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
+    const U terms = options.weighted ? 2ull * s.length : s.digits;
+    const size_t modulus_bytes = size_t(s.length) * sizeof(U);
+    // A loose E digit can be twice the canonical maximum. The weighted
+    // cyclic reducer handles the full coefficient range without a 2p cutoff.
+    const bool loose = (requested & LooseDifference) && options.weighted &&
+        exact_ok_terms(2 * terms, s.bpw) && modulus_bytes <= result.budget_bytes - result.owned_bytes;
+    if (loose) {
+        result.owned_bytes += modulus_bytes;
+        result.dataflow |= LooseDifference;
+    }
+    const U digit_max = (1ull << s.bpw) - 1;
+    // Require terms * digit_max^2 + digit_max < Q, without overflow.
+    const bool fma = (requested & FusedMultiplyAdd) &&
+        (loose ? 2 : 1) * terms <= (GL_P - 1 - digit_max) / digit_max / digit_max;
+    if (fma) result.dataflow |= FusedMultiplyAdd;
     fuse_init(ctx,width,log,omega2,inv2,true,resolved);
+    if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
+    const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
+    const size_t tile_smem = sizeof(U) << ctx.t;
+    const bool routed = requested & DirectRoute;
+    const bool packed = (requested & PackedForward) && !mixed && ctx.nms == 0;
+    const bool cached = (requested & CachedCarry) && options.weighted;
+    if (routed) result.dataflow |= DirectRoute;
+    if (packed) result.dataflow |= PackedForward;
+    if (cached) result.dataflow |= CachedCarry;
     if (control && control->describe) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
@@ -361,7 +390,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
                   FUSE_TILE_THREADS, ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
-                  ctx.warp_tail && ctx.t >= 5, profile.source, options.weighted, {}, {}};
+                  warp_tile, profile.source, options.weighted, {}, {}, result.dataflow};
         if (mixed) plan.forward = "r5";
         for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
         join(plan.forward, ctx.t);
@@ -370,9 +399,18 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (mixed) plan.inverse += plan.inverse.empty() ? "r5" : "+r5";
         control->describe(plan);
     }
-    if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
-    const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
-    const size_t tile_smem = sizeof(U) << ctx.t;
+    const size_t carry_smem = size_t((s.words + threads - 1) / threads) * threads * sizeof(uint32_t);
+    const auto select_packed_kernel = [warp_tile](auto weight) {
+        constexpr bool weighted = decltype(weight)::value;
+        return warp_tile ? stage1_ntt_packed_forward<weighted,true,Shape,Indices,WeightedDigit>
+                         : stage1_ntt_packed_forward<weighted,false,Shape,Indices,WeightedDigit>;
+    };
+    const auto packed_kernel = options.weighted ? select_packed_kernel(std::true_type{})
+                                                : select_packed_kernel(std::false_type{});
+    if (packed) {
+        cudaFuncSetAttribute(packed_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+        CK(cudaFuncSetAttribute(packed_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
+    }
     const auto configure_tile = [warp_tile, tile_smem](auto add, auto difference) {
         constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
         const void* kernel = warp_tile ? (const void*)inverse_product_tile<true,add_bb,loose_e>
@@ -431,7 +469,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
         CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
-    const auto pack_inputs = [&](U* dest, unsigned count, Indices in) {
+    const auto forward_inputs = [&](U* dest, unsigned count, Indices in) {
+        if (packed) {
+            packed_kernel<<<dim3(1,count*curves),FUSE_TILE_THREADS,tile_smem,q>>>(
+                state.data,dest,s,in,digit_table.data,ctx.t,ctx.tblF);
+            CK(cudaGetLastError());
+            return;
+        }
         if (mixed)
             pack<true,true><<<mixed_grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data,
                                                                mixed_fwd.data,radix5_fwd);
@@ -439,9 +483,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             pack<true><<<grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data);
         else
             pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
+        ntt_forward_fused(dest,ctx,omega2,count*curves*planes,q);
     };
-    pack_inputs(fixed.data, 2, {{A24,Base}});
-    ntt_forward_fused(fixed.data,ctx,omega2,2*curves*planes,q);
+    forward_inputs(fixed.data, 2, {{A24,Base}});
     if (loose) {
         Shape one = s;
         one.curves = 1;
@@ -455,9 +499,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     CK(cudaStreamSynchronize(q));
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out,
-                 bool build_e = false, bool add_bb = false) {
-        pack_inputs(freq.data, inputs, in);
-        ntt_forward_fused(freq.data,ctx,omega2,inputs*curves*planes,q);
+                 bool build_e = false, bool add_bb = false, Cursor cursor = {}) {
+        forward_inputs(freq.data, inputs, in);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
             return id < 5 ? freq.data + id * plane : fixed.data + (id - 5) * plane;
@@ -491,16 +534,30 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         ntt_inverse_outer_fused(inverse.data,ctx,inv2,outputs*curves*planes,q);
         if (mixed)
             radix5_inverse<<<mixed_grid(outputs),threads,0,q>>>(inverse.data,width,mixed_inv.data,radix5_inv);
+        const unsigned batch = outputs * curves;
+        const bool route_output = routed && cursor.bits;
+        const Sums reduction{{},{},out,0};
+        const auto reduce = [&](auto weight, auto direct, auto cache) {
+            constexpr bool weighted = decltype(weight)::value;
+            constexpr bool route = decltype(direct)::value, cached = decltype(cache)::value;
+            combine<true,false,weighted,route,cached><<<batch,threads,cached ? carry_smem : 0,q>>>(
+                state.data,freq.data,s,reduction,cursor);
+        };
+        constexpr std::true_type yes{};
+        constexpr std::false_type no{};
         if (options.weighted) {
-            const unsigned batch = outputs * curves;
             const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
             weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
                 freq.data, inverse.data, inverse_weights.data, digit_table.data,
                 limb_table.data, p, s.words, s.length);
-            combine<true,false,true><<<batch,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
+            if (route_output && cached) reduce(yes,yes,yes);
+            else if (route_output) reduce(yes,yes,no);
+            else if (cached) reduce(yes,no,yes);
+            else reduce(yes,no,no);
         } else {
             ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
-            combine<true,false><<<outputs*curves,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
+            if (route_output) reduce(no,yes,no);
+            else reduce(no,no,no);
         }
     };
     auto step=[&](unsigned i) {
@@ -510,15 +567,18 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         mul(4,4,{A,B,C,D},{0,1,3,2},{0,1,0,1},{AA,BB,DA,CB});
         combine<false,false><<<(loose ? 2 : 3)*curves,threads,0,q>>>(state.data,nullptr,s,
             {{DA,DA,AA},{CB,CB,BB},{Sum,Diff,E},0b110},{});
-        mul(loose ? 4 : 5,4,{Sum,Diff,AA,BB,E},{0,1,2,4},{0,1,3,5},{XA,DiffSq,XD,fma ? Sum : AE},loose,fma);
+        // The old X/Z values were consumed by the first combine. Both
+        // multiplication batches can now write the final X/Z slots.
+        mul(loose ? 4 : 5,4,{Sum,Diff,AA,BB,E},{0,1,2,4},{0,1,3,5},{XA,DiffSq,XD,fma ? Sum : AE},loose,fma,cursor);
         if (!fma)
             combine<false,false><<<curves,threads,0,q>>>(state.data,nullptr,s,{{BB},{AE},{Sum},0},{});
         // E is still in frequency plane 4 from the second batch (packed
         // normally or produced by the last product tile). Both
         // reducers only overwrite planes 0–3, and this pack uses planes 0–1.
         constexpr unsigned cached_e = 4;
-        mul(2,2,{DiffSq,Sum},{0,cached_e},{6,1},{ZA,ZD});
-        route<<<dim3((s.words+threads-1)/threads,curves),threads,0,q>>>(state.data,s,cursor);
+        mul(2,2,{DiffSq,Sum},{0,cached_e},{6,1},{ZA,ZD},false,false,cursor);
+        if (!routed)
+            route<<<dim3((s.words+threads-1)/threads,curves),threads,0,q>>>(state.data,s,cursor);
         CK(cudaGetLastError());
     };
     Graph full, tail, warm_tail;

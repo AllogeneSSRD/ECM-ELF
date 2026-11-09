@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm/stage1/task.h"
 #include <functional>
+#include <optional>
 #include <stdexcept>
 
 namespace ecm_mersenne_ntt {
@@ -12,6 +13,7 @@ struct Plan {
     const char* source;
     bool weighted;
     std::string forward, inverse;
+    unsigned dataflow = 0;
 };
 
 struct BudgetError : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -19,7 +21,9 @@ size_t memory_budget(size_t free_bytes, unsigned limit_mib);
 struct Packing { unsigned length=0, bpw=0, digits=0; };
 Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool prefer_radix5 = true);
 
-enum Dataflow : unsigned { FusedMultiplyAdd = 1, LooseDifference = 2 };
+enum Dataflow : unsigned {
+    FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16
+};
 
 struct Control {
     unsigned resume = 0;
@@ -29,7 +33,7 @@ struct Control {
     struct Action { bool save = false, stop = false; };
     std::function<Action(unsigned)> poll;
     std::function<void(unsigned, const std::vector<uint32_t>&)> checkpoint;
-    unsigned experimental_dataflow = 0;
+    std::optional<unsigned> experimental_dataflow;
 };
 
 // Initial slots (slot-major, then curve, then little-endian uint32 limbs):

@@ -78,6 +78,7 @@ def main():
     log = run(work, call, text=data)
     mirror = (work / "screen.log").read_text(encoding="utf-8")
     assert "length=512" in log and "forward_layers=1+8" in log and "inverse_layers=8+1" in log
+    assert "convolution=linear curve=mont0 dataflow=5" in log  # Multiply-add and direct route.
     assert "stage1_ntt_plan:" in mirror and "stage1_ntt_timing:" in mirror
     n = (1 << 4003) - 1
     assert saved_points(work / "out.save", 4003, 128) == {
@@ -100,6 +101,7 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=256 bpw=16" in log and "convolution=weighted" in log and "graph_bits=0" in log
+    assert "convolution=weighted curve=mont0 dataflow=31" in log  # One tile, with cached carry.
     assert saved_points(work / "out.save", 4003, 32) == expected
     print("PASS weighted direct launch against independent Python", flush=True)
 
@@ -146,6 +148,7 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=2560" in log and "forward_layers=r5+9 inverse_layers=9+r5" in log
+    assert "convolution=weighted curve=mont0 dataflow=23" in log  # Radix-5 has its own pack.
     assert saved_points(work / "out.save", 4003, 32) == expected
 
     p, b1, sigma, curves = 4423, 32, 26, 32

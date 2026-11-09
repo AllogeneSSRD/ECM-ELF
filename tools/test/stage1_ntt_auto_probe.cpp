@@ -5,6 +5,7 @@
 #include "../../src/io/files.h"
 #include "ecm/platform/program_version.h"
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <random>
 #include <string_view>
@@ -18,7 +19,7 @@ int main(int argc, char** argv) {
     const int plan_argc = argc - (experiment ? 2 : 0);
     if (plan_argc != 6 && plan_argc != 13) {
         std::fprintf(stderr, "stage1_ntt_auto_probe device p batch steps tune.toml "
-                             "[weighted length bpw tile outer window warp] [--dataflow 0..3]\n");
+                             "[weighted length bpw tile outer window warp] [--dataflow auto|0..31]\n");
         return 2;
     }
     try {
@@ -52,9 +53,14 @@ int main(int argc, char** argv) {
         ecm_mersenne_ntt::Control control;
         if (experiment) {
             const std::string_view mode = argv[argc-1];
-            if (mode.size()!=1 || mode[0]<'0' || mode[0]>'3')
-                throw std::invalid_argument("invalid experimental dataflow");
-            control.experimental_dataflow = unsigned(mode[0]-'0');
+            if (mode != "auto") {
+                unsigned requested = 0;
+                const auto end = mode.data() + mode.size();
+                const auto parsed = std::from_chars(mode.data(), end, requested);
+                if (parsed.ec != std::errc{} || parsed.ptr != end || requested > 31)
+                    throw std::invalid_argument("invalid experimental dataflow");
+                control.experimental_dataflow = requested;
+            }
             control.warmup_iterations = std::min(100u, steps);
         }
         control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
@@ -67,14 +73,14 @@ int main(int argc, char** argv) {
         };
         const auto run = ecm_mersenne_ntt::ladder(device, p, batch, initial, scalar, steps, selected, control);
         if (experiment) {
-            const auto requested = control.experimental_dataflow;
-            if (requested) {
+            const bool compare = control.experimental_dataflow != 0u;
+            if (compare) {
                 ecm_mersenne_ntt::Control baseline;
                 const auto reference = ecm_mersenne_ntt::ladder(device, p, batch, initial, scalar, steps, selected, baseline);
                 if (reference.points != run.points) throw std::runtime_error("experimental ladder endpoint differs");
             }
-            std::printf("stage1_ntt_dataflow: requested=%u actual=%u verified_words=%zu warmup=%u\n",
-                        requested,run.dataflow,requested ? run.points.size() : 0,control.warmup_iterations);
+            std::printf("stage1_ntt_dataflow: requested=%s actual=%u verified_words=%zu warmup=%u\n",
+                        argv[argc-1],run.dataflow,compare ? run.points.size() : 0,control.warmup_iterations);
         }
         const std::string bytes(reinterpret_cast<const char*>(run.points.data()),
                                 run.points.size() * sizeof(uint32_t));
