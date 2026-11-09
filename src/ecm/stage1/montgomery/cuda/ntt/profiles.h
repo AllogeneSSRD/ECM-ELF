@@ -39,7 +39,7 @@ inline Profile laptop_4060_profile(int log_length, unsigned curves) {
     auto profile = default_profile(log_length, 0);
     // The probe screened all batch sizes at B1=13 and confirmed the selected
     // tile at B1=41. Use these tile-only choices for the unmeasured batches.
-    if (curves != 1 && curves != 4 && curves != 8 && log_length >= 11 && log_length <= 14) {
+    if (curves > 1 && curves < 8 && curves != 4 && log_length >= 11 && log_length <= 14) {
         constexpr int tiles[][8] = {
             { 8,  8, 11, 11, 11, 11, 11, 11},
             { 8, 10,  8, 10, 12, 10, 10, 10},

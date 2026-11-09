@@ -141,14 +141,16 @@ int main(int argc,char** argv) {
     }
     if (argc<9 || argc>10) {
         std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] device p B1 sigma curves samples tile window [print-x]\n"
-                            "M=2^p-1, PARAM0, LCM, 1..8 curves, window=0 direct or 1..64 Graph\n");
+                            "M=2^p-1, PARAM0, LCM, 1..%u curves, window=0 direct or 1..64 Graph\n",
+                            ecm_stage1::stage1_ntt_max_curves);
         return 2;
     }
     try {
         const int device=int(num(argv[1],0,63));
         const unsigned p=unsigned(num(argv[2],32,262144)), b1=unsigned(num(argv[3],2,1000000));
         const uint64_t sigma=num(argv[4],6,UINT64_MAX);
-        const unsigned curves=unsigned(num(argv[5],1,8)), samples=unsigned(num(argv[6],1,20));
+        const unsigned curves=unsigned(num(argv[5],1,ecm_stage1::stage1_ntt_max_curves));
+        const unsigned samples=unsigned(num(argv[6],1,20));
         const unsigned tile=unsigned(num(argv[7],1,12)), window=unsigned(num(argv[8],0,64));
         if (sigma>UINT64_MAX-(curves-1) || (argc==10 && std::strcmp(argv[9],"print-x")))
             throw std::invalid_argument("invalid sigma range or output option");

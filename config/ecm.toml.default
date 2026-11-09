@@ -132,8 +132,8 @@ finished = "worktodo.finished.txt"
 
 gpu_algorithm = "cgbn"
 # EN: Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full
-# EN: Mersenne modulus, and 1–8 curves.
-# 中文：GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8
+# EN: Mersenne modulus, and 1–32 curves.
+# 中文：GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–32
 # 中文：条曲线。
 
 gpu_param = 3
@@ -202,14 +202,21 @@ ntt_bpw = 0
 # EN: transform. In weighted mode, an explicit value is an upper bound on the largest digit.
 # 中文：每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。
 
-ntt_convolution = "linear"
-# EN: Select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the
-# EN: same Stage1 task and checkpoint format.
-# 中文：选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。
+ntt_convolution = "auto"
+# EN: Auto selects the measured backend or calibrates on a cache miss. Explicit modes select exact linear
+# EN: convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and
+# EN: checkpoint format.
+# 中文：auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用
+# 中文：Goldilocks，共用 Stage1 任务及检查点格式。
 
 ntt_length = 0
 # EN: Transform length. Zero derives the minimum safe length from the modulus and digit width.
 # 中文：变换长度。0 根据模数和数字宽度推导最小安全长度。
+
+ntt_memory_mib = 0
+# EN: Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An
+# EN: explicit cap is also bounded by available VRAM.
+# 中文：Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。
 
 ntt_outer_max = 0
 # EN: Maximum fused radix-2 layers per outer pass. Zero uses the profile.
@@ -224,6 +231,10 @@ ntt_profile = 0
 ntt_tile = 0
 # EN: Fused tile width in radix-2 layers. Zero uses the profile.
 # 中文：融合 tile 的 radix-2 层数。0 使用所选配置。
+
+ntt_tune_file = "data/stage1_ntt.tune.json"
+# EN: Stage1 NTT tuning database, relative to the configuration directory. Empty disables persistence.
+# 中文：Stage1 NTT 调优表，路径相对配置目录。留空关闭持久化。
 
 ntt_warp_tail = "auto"
 # EN: Enable warp shuffles for the local tail of the tile transform. Auto uses the selected profile.

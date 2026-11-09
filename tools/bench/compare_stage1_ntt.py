@@ -17,6 +17,8 @@ def measure(exe, directory, args, p, curves, convolution, length):
     lines = ["[stage1]", 'curve = "mont"', "gpu_param = 0", 'lcm = "1"',
              f"device = {args.device}", 'exp_cache = "off"', 'log_file = ""',
              "ckpt_seconds = 0", "gpu_algorithm = 2"]
+    if args.tune_file:
+        lines += [f'ntt_tune_file = "{args.tune_file.as_posix()}"']
     if convolution:
         lines += [f'ntt_convolution = "{convolution}"']
     if length:
@@ -48,10 +50,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
-    parser.add_argument("--baseline-convolution", choices=("linear", "weighted"))
-    parser.add_argument("--candidate-convolution", choices=("linear", "weighted"))
+    parser.add_argument("--baseline-convolution", choices=("auto", "linear", "weighted"))
+    parser.add_argument("--candidate-convolution", choices=("auto", "linear", "weighted"))
     parser.add_argument("--baseline-length", type=int, default=0)
     parser.add_argument("--candidate-length", type=int, default=0)
+    parser.add_argument("--tune-file", type=Path, help="shared Stage1 NTT tune data for auto comparisons")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", type=int, default=1)
     parser.add_argument("--b1", type=int, default=256)
@@ -61,6 +64,8 @@ def main():
     parser.add_argument("--curves", type=int, nargs="+", default=(1, 4, 8))
     args = parser.parse_args()
     args.output = args.output.resolve()
+    if args.tune_file:
+        args.tune_file = args.tune_file.resolve()
     args.output.mkdir(parents=True)
     workers = [args.baseline.resolve(strict=True), args.candidate.resolve(strict=True)]
     convolution = [args.baseline_convolution, args.candidate_convolution]

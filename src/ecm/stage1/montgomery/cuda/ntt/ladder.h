@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm/stage1/task.h"
 #include <functional>
+#include <stdexcept>
 
 namespace ecm_mersenne_ntt {
 
@@ -12,6 +13,9 @@ struct Plan {
     bool weighted;
     std::string forward, inverse;
 };
+
+struct BudgetError : std::runtime_error { using std::runtime_error::runtime_error; };
+size_t memory_budget(size_t free_bytes, unsigned limit_mib);
 
 struct Control {
     unsigned resume = 0;
@@ -31,13 +35,14 @@ struct Run {
     double setup_seconds = 0, readback_seconds = 0;
     unsigned length = 0, digit_bits = 0, passes = 0, tile = 0, completed_bits = 0;
     bool stopped = false;
+    size_t owned_bytes = 0, observed_bytes = 0, budget_bytes = 0;
 };
 
 // Scalar words are little-endian. Process the low bit_count bits from high
 // to low, omitting the implicit leading 1.
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
            const std::vector<uint32_t>& scalar, unsigned bit_count,
-           const ecm_stage1::Stage1NttOptions&, const Control&);
+           const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);
 
 // Standalone probe retains its byte-per-bit input and environment overrides.
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,

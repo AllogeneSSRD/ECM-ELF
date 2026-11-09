@@ -711,8 +711,8 @@
       "fx": "algorithm(S1 CUDA)",
       "parser": "legacy",
       "description": [
-        "Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full Mersenne modulus, and 1–8 curves.",
-        "GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8 条曲线。"
+        "Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full Mersenne modulus, and 1–32 curves.",
+        "GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–32 条曲线。"
       ]
     },
     {
@@ -720,13 +720,43 @@
       "key": "ntt_convolution",
       "field": "ntt_convolution",
       "type": "string",
-      "default": "linear",
-      "domain": "[linear|weighted]",
+      "default": "auto",
+      "domain": "[auto|linear|weighted]",
       "fx": "algorithm(S1 CUDA)",
       "parser": "legacy",
       "description": [
-        "Select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and checkpoint format.",
-        "选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。"
+        "Auto selects the measured backend or calibrates on a cache miss. Explicit modes select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and checkpoint format.",
+        "auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_tune_file",
+      "field": "ntt_tune_file",
+      "type": "string",
+      "default": "data/stage1_ntt.tune.json",
+      "domain": "<path>",
+      "fx": "NTT tune(S1 CUDA)",
+      "parser": "legacy",
+      "description": [
+        "Stage1 NTT tuning database, relative to the configuration directory. Empty disables persistence.",
+        "Stage1 NTT 调优表，路径相对配置目录。留空关闭持久化。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "ntt_memory_mib",
+      "field": "ntt_memory_mib",
+      "type": "int",
+      "default": 0,
+      "domain": "[0,1048576]",
+      "fx": "NTT tune(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 1048576,
+      "description": [
+        "Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An explicit cap is also bounded by available VRAM.",
+        "Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。"
       ]
     },
     {

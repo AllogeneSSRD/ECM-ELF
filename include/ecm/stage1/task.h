@@ -11,11 +11,16 @@ namespace ecm_save { struct Range; struct Naming; }
 namespace ecm_stage1 {
 
 // Resolved per-task values, separated by the responsibilities that consume them.
+inline constexpr unsigned stage1_ntt_max_curves = 32;
+
 struct Stage1NttOptions {
     unsigned length = 0, bpw = 0, tile = 0, outer_max = 0;
     unsigned profile = 0;
     int window = -1, warp_tail = -1;
     bool weighted = false;
+    bool automatic = true;
+    unsigned memory_mib = 0;
+    std::string tune_file;
 };
 
 struct Stage1ExecutionPreferences {

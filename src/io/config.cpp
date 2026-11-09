@@ -36,7 +36,7 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                         valid = v == "auto" || v == "true" || v == "false" || v == "0" || v == "1";
                     else if (key == "ntt_convolution") {
                         const auto mode = ecm_stage1::lower_ascii(v);
-                        valid = mode == "linear" || mode == "weighted";
+                        valid = mode == "auto" || mode == "linear" || mode == "weighted";
                     } else if (key == "ntt_length")
                         valid = scratch.ntt_length == 0 || (scratch.ntt_length >= 2 &&
                             !(scratch.ntt_length & (scratch.ntt_length - 1)));

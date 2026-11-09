@@ -20,7 +20,7 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 
 ## CUDA 全宽 NTT
 
-`[stage1] gpu_algorithm = 2` 或 `"ntt"` 启用 NTT；`1` 或 `"cgbn"` 选择默认后端，字符串不区分大小写。CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持完整 `2^p−1`（`32 ≤ p ≤ 262144`）、Montgomery PARAM0、每批 1–8 条曲线，以及 `lcm = 1` 或 `12`。剥除已知因子的余因子不能使用本路径。队列任务使用 `m0_` save 前缀或显式配置 `gpu_param = 0`，按任务行控制曲线数。
+`[stage1] gpu_algorithm = 2` 或 `"ntt"` 启用 NTT；`1` 或 `"cgbn"` 选择默认后端，字符串不区分大小写。CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持完整 `2^p−1`（`32 ≤ p ≤ 262144`）、Montgomery PARAM0、每批 1–32 条曲线，以及 `lcm = 1` 或 `12`。剥除已知因子的余因子不能使用本路径。队列任务使用 `m0_` save 前缀或显式配置 `gpu_param = 0`，按任务行控制曲线数。
 
 ```toml
 [stage1]
@@ -38,9 +38,18 @@ ntt_profile = 0
 
 `ntt_profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt_length`、`ntt_bpw`、`ntt_tile` 和 `ntt_outer_max` 的 0 值使用自动值。`ntt_window = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt_warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
-`ntt_convolution = "linear"` 是默认的定宽线性卷积。`ntt_convolution = "weighted"` 启用精确 IBDWT 加权循环卷积。加权模式使用最短的安全二次幂长度，`ntt_bpw` 指定最大 digit 位宽的上限，`ntt_length` 可指定满足系数界的长度。加权模式自动档使用通用 tile 计划。两种模式的检查点均保存整数 X/Z，因此可切换卷积后端续跑。
+`ntt_convolution` 默认为 `"auto"`，按设备、精确指数、当前活跃曲线数和 NTT 配置查询 tune 数据，在显存预算内选择设备耗时较短的计划。没有可用记录时，先用 96 个标量位短测当前批量，再缓存结果。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积。加权模式的默认长度为最短的安全二次幂，`ntt_bpw` 可限定最大 digit 位宽，`ntt_length` 可指定满足系数界的长度。
 
-运行时的 `stage1_ntt_plan` 输出卷积后端、长度、最大 digit 位宽、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点使用同一批次文件命名，保存当前标量位置和两组 X/Z，可换 NTT 参数续跑；CGBN 与 NTT 的检查点各自只能由对应后端续跑。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
+`ntt_tune_file` 默认是相对于 TOML 的 `data/stage1_ntt.tune.json`。`ntt_memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%；正数以 MiB 进一步收紧这个上限。
+
+```powershell
+.\ecm.exe --config .\ecm.toml --tune ntt
+.\ecm.exe --config .\ecm.toml --tune ntt --bits 8191
+```
+
+不带 `--bits` 时覆盖 13 个代表指数，单独指定指数可预热对应条件。调优文件按后端保存峰值批量、达到实测峰值吞吐 95% 的最小实测批量、单曲线以及各档的 NTT 计划和显存数据。可用推荐批量安排新任务；现有 `-gpucurves` 和队列行的曲线数按原值执行。`--tune-exhaustive` 逐一测量 1–32 档，供对照。调优使用合成点和短标量，不写任务结果。
+
+运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 输出卷积后端、长度、最大 digit 位宽、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 
 ## 共用 TOML 与 worker
 

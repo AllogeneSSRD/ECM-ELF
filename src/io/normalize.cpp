@@ -224,7 +224,10 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
                          unsigned(cfg.ntt_outer_max), unsigned(cfg.ntt_profile), cfg.ntt_window,
                          cfg.ntt_warp_tail == "auto" ? -1 :
                          int(cfg.ntt_warp_tail == "true" || cfg.ntt_warp_tail == "1"),
-                         ecm_stage1::lower_ascii(cfg.ntt_convolution) == "weighted"};
+                         ecm_stage1::lower_ascii(cfg.ntt_convolution) == "weighted",
+                         ecm_stage1::lower_ascii(cfg.ntt_convolution) == "auto",
+                         unsigned(cfg.ntt_memory_mib),
+                         resolve_rel_local(base, cfg.ntt_tune_file)};
     opt.execution.gpu_mul_path = cfg.kernel_mul;
     opt.execution.gpu_sqr_path = cfg.kernel_sqr;
     opt.execution.gpu_add_path = cfg.kernel_add;
@@ -246,7 +249,13 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
 }
 
 bool validate_cli_mode(const ParsedCli& input, std::string& error) {
-    const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels;
+    const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels && !input.tune_ntt;
+    if ((input.tune_exhaustive && !input.tune_ntt) ||
+        (input.tune_ntt && (!input.pos.empty() || input.show_gpu_info || input.show_kernels ||
+                           input.has("-gpucurves") || input.has("-save") || input.has("-savea")))) {
+        error = "--tune ntt is a separate mode; use --bits to select a width";
+        return false;
+    }
     const std::vector<std::string> forbidden = {
         "--curve", "--gpu-param", "--lcm",        "-gpucurves",      "-save",
         "-savea",  "--go",        "--go-backend", "--go-gp-timeout", "--bits"};
@@ -364,7 +373,7 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         }
         // A query shares projection and overrides, but does not invent a task or
         // impose computation-only capability/combination checks.
-        if (!input.show_gpu_info && !input.show_kernels && execution_preferences_error(s, error))
+        if (!input.show_gpu_info && !input.show_kernels && !input.tune_ntt && execution_preferences_error(s, error))
             throw std::runtime_error(error);
         out.options = normalize_options(cfg, paths.exe, paths.config_directory, paths.cwd,
                                         input.worker_index);
@@ -376,7 +385,7 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
             out.options.persistence.tmp_dir = paths.cwd;
         if (direct && out.options.persistence.tmp_dir.empty())
             out.options.persistence.tmp_dir = paths.cwd;
-        if (!input.show_gpu_info && s.target == ecm_stage1::ExecutionTarget::Cpu &&
+        if (!input.show_gpu_info && !input.tune_ntt && s.target == ecm_stage1::ExecutionTarget::Cpu &&
             stage1_task_error(out.options, 0, error))
             throw std::runtime_error(error);
         out.runtime = input.runtime;
@@ -505,8 +514,8 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
 bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error,
                        mpz_srcptr modulus) {
     if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
-        if (curves > 8) {
-            error = "Stage1 NTT supports at most 8 curves per batch";
+        if (curves > ecm_stage1::stage1_ntt_max_curves) {
+            error = "Stage1 NTT supports at most 32 curves per batch";
             return true;
         }
         if (modulus) {

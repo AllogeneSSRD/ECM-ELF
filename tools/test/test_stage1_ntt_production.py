@@ -44,6 +44,8 @@ def main():
         work = out / name
         work.mkdir()
         config = work / "ecm.toml"
+        if "ntt_convolution" not in extra:
+            extra += 'ntt_convolution = "linear"\n'
         config.write_text(f'[shared]\nworktodo = "{(work / "worktodo.txt").as_posix()}"\n'
                           f'[stage1]\ntarget = "gpu"\ncurve = "mont"\ngpu_param = 0\n'
                           f'gpu_algorithm = {algorithm}\ndevice = {args.device}\n'
@@ -110,7 +112,7 @@ def main():
 
     for name, extra, data, curves, reason in (
         ("cofactor", "", "2^65-3\n", 1, "full 2^p-1"),
-        ("too_many_curves", "", "2^127-1\n", 9, "at most 8 curves"),
+        ("too_many_curves", "", "2^127-1\n", 33, "at most 32 curves"),
         ("undersized_transform", "ntt_length = 8\n", "2^4003-1\n", 1, "covering 2*digits+1"),
         ("unsafe_digits", "ntt_bpw = 31\n", "2^4003-1\n", 1, "coefficient bound"),
         ("unsafe_weighted", 'ntt_convolution = "weighted"\nntt_length = 2\n',
@@ -124,59 +126,77 @@ def main():
         assert not (work / "out.save").exists()
     print("PASS unsupported route and unsafe-plan rejection", flush=True)
 
-    work, cmd = fixture("resume", extra="auto_stage2 = 1\nntt_tile = 8\n")
-    p, b1, curves, sigma = 9689, 16000, 2, 26
-    save = work / f"m0_m{p}_{b1}.save"
-    row = f'ECMSTAGE1=1,2,{p},-1,"{save.as_posix()}",{10*b1},0,{curves}\n'
-    todo = work / "worktodo.txt"
-    todo.write_text(row, encoding="ascii")
-    config = work / "ecm.toml"
-    config.write_text(config.read_text() + f"sigma = {sigma}\n", encoding="utf-8")
-    checkpoint = work / f".m0_s1_m{p}_{b1}.ckpt"
+    p, b1, sigma = 4423, 32, 26
+    n = (1 << p) - 1
+    expected = {seed: stage1(seed, b1, n)["x"] for seed in range(sigma, sigma + 32)}
+    for curves in (16, 32):
+        for mode in ("linear", "weighted"):
+            work, cmd = fixture(f"batch_{curves}_{mode}", extra=f'ntt_convolution = "{mode}"\n')
+            call, data = direct(work, cmd, p, b1, sigma, curves)
+            log = run(work, call, text=data)
+            assert f"curves={curves}" in log and f"convolution={mode}" in log
+            owned, observed, budget = map(int, re.search(
+                r"stage1_ntt_memory: owned_bytes=(\d+) observed_bytes=(\d+) budget_bytes=(\d+)", log).groups())
+            assert 0 < owned <= budget and 0 <= observed <= budget
+            assert saved_points(work / "out.save", p, b1) == {
+                seed: expected[seed] for seed in range(sigma, sigma + curves)}
+            print(f"PASS {mode} {curves} curves against Python, owned={owned}, observed={observed}", flush=True)
 
-    class Security(ctypes.Structure):
-        _fields_ = [("length", wintypes.DWORD), ("descriptor", wintypes.LPVOID),
-                    ("inherit", wintypes.BOOL)]
+    for curves in (16, 32):
+        work, cmd = fixture(f"resume_{curves}", extra="auto_stage2 = 1\nntt_tile = 8\n")
+        p, b1, sigma = 9689, 4096, 26
+        save = work / f"m0_m{p}_{b1}.save"
+        row = f'ECMSTAGE1=1,2,{p},-1,"{save.as_posix()}",{10*b1},0,{curves}\n'
+        todo = work / "worktodo.txt"
+        todo.write_text(row, encoding="ascii")
+        config = work / "ecm.toml"
+        config.write_text(config.read_text() + f"sigma = {sigma}\n", encoding="utf-8")
+        checkpoint = work / f".m0_s1_m{p}_{b1}.ckpt"
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateEventW.argtypes = [ctypes.POINTER(Security), wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
-    kernel.CreateEventW.restype = wintypes.HANDLE
-    kernel.SetEvent.argtypes = [wintypes.HANDLE]
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    sa = Security(ctypes.sizeof(Security), None, True)
-    event = kernel.CreateEventW(ctypes.byref(sa), True, False, None)
-    assert event
-    with (work / "stop.log").open("wb") as log:
-        process = subprocess.Popen(cmd + ["--stage1-stop-handle", str(event)], cwd=work,
-                                   stdout=log, stderr=log, close_fds=False,
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
-        try:
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline and process.poll() is None and not checkpoint.exists():
-                time.sleep(0.01)
-            assert process.poll() is None and checkpoint.is_file()
-            assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-            kernel.CloseHandle(event)
-    assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
-    identity, lanes = batch(checkpoint)
-    assert identity.endswith("|ntt-v1") and [lane[0] for lane in lanes] == [26, 27]
-    magic, count, cursor, mask = struct.unpack_from("<8sIII", lanes[0][1])
-    assert magic == b"ECMNTTS1" and 0 < cursor < count and mask == 3
-    assert not lanes[1][1]
-    config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
-                      + 'ntt_window = 32\nntt_convolution = "weighted"\n', encoding="utf-8")
-    log = run(work, cmd, "resume")
-    assert f"resume={cursor}" in log and "graph_bits=32" in log and "convolution=weighted" in log
-    assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
-    ref, ref_cmd = fixture("uninterrupted")
-    call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
-    run(ref, call, text=data)
-    assert saved_points(save, p, b1) == saved_points(ref / "out.save", p, b1)
-    print(f"PASS real stop and resume at bit {cursor}/{count}, linear to weighted, Stage2 handoff", flush=True)
+        class Security(ctypes.Structure):
+            _fields_ = [("length", wintypes.DWORD), ("descriptor", wintypes.LPVOID),
+                        ("inherit", wintypes.BOOL)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateEventW.argtypes = [ctypes.POINTER(Security), wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel.CreateEventW.restype = wintypes.HANDLE
+        kernel.SetEvent.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        sa = Security(ctypes.sizeof(Security), None, True)
+        event = kernel.CreateEventW(ctypes.byref(sa), True, False, None)
+        assert event
+        with (work / "stop.log").open("wb") as log:
+            process = subprocess.Popen(cmd + ["--stage1-stop-handle", str(event)], cwd=work,
+                                       stdout=log, stderr=log, close_fds=False,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+            try:
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline and process.poll() is None and not checkpoint.exists():
+                    time.sleep(0.01)
+                assert process.poll() is None and checkpoint.is_file()
+                assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                kernel.CloseHandle(event)
+        assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
+        identity, lanes = batch(checkpoint)
+        assert identity.endswith("|ntt-v1") and [lane[0] for lane in lanes] == list(range(sigma, sigma + curves))
+        magic, count, cursor, mask = struct.unpack_from("<8sIII", lanes[0][1])
+        assert magic == b"ECMNTTS1" and 0 < cursor < count and mask == (1 << curves) - 1
+        assert not lanes[1][1]
+        config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
+                          .replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"')
+                          + "ntt_window = 32\n", encoding="utf-8")
+        log = run(work, cmd, "resume")
+        assert f"resume={cursor}" in log and "graph_bits=32" in log and "convolution=weighted" in log
+        assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
+        ref, ref_cmd = fixture(f"uninterrupted_{curves}")
+        call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
+        run(ref, call, text=data)
+        assert saved_points(save, p, b1) == saved_points(ref / "out.save", p, b1)
+        print(f"PASS real stop and resume with {curves} curves at bit {cursor}/{count}, linear to weighted, Stage2 handoff", flush=True)
 
 
 if __name__ == "__main__":

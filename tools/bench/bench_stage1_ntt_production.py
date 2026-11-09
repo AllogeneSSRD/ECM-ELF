@@ -50,7 +50,7 @@ def run(args, directory, p, curves, preset=None):
         command += ["--target", "cpu", "--impl", "scalar"]
     else:
         tile, outer, window, warp = preset
-        lines += ["gpu_algorithm = 2", "ntt_profile = 1", f"ntt_tile = {tile}",
+        lines += ["gpu_algorithm = 2", 'ntt_convolution = "linear"', "ntt_profile = 1", f"ntt_tile = {tile}",
                   f"ntt_outer_max = {outer}", f"ntt_window = {window}",
                   f"ntt_warp_tail = {str(warp).lower()}"]
         if args.length:
@@ -195,8 +195,8 @@ def main():
     parser.add_argument("--exponents", type=int, nargs="+", default=EXPONENTS)
     parser.add_argument("--curves", type=int, nargs="+", default=(1, 4, 8))
     args = parser.parse_args()
-    if args.rounds < 1 or not all(1 <= n <= 8 for n in args.curves):
-        parser.error("use at least one round and 1–8 curves")
+    if args.rounds < 1 or not all(1 <= n <= 32 for n in args.curves):
+        parser.error("use at least one round and 1–32 curves")
     args.exe, args.output = args.exe.resolve(strict=True), args.output.resolve()
     if args.probe:
         args.probe = args.probe.resolve(strict=True)

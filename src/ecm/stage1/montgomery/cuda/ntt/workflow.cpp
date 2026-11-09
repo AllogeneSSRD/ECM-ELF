@@ -1,5 +1,6 @@
 #include "workflow.h"
 #include "ladder.h"
+#include "tune.h"
 #include "../host_math.h"
 #include "../../../sigma.h"
 #include "../../../../../io/stage1_binary.h"
@@ -33,7 +34,7 @@ bool read_snapshot(std::string_view bytes, unsigned count, unsigned p, unsigned 
     Snapshot decoded;
     decoded.cursor = reader.u32();
     decoded.lanes = reader.u32();
-    if (decoded.cursor > count || !decoded.lanes || decoded.lanes >= (1u << curves))
+    if (decoded.cursor > count || !decoded.lanes || (curves < 32 && (decoded.lanes >> curves)))
         return false;
     const unsigned words = (p + 31) / 32;
     unsigned active = 0;
@@ -75,10 +76,10 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
         const auto N = request.modulus;
         const size_t p = mpz_sizeinbase(N, 2);
         const unsigned curves = request.curves;
-        if (!curves || curves > 8 || opt.execution.selection.gpu_param != 0 ||
+        if (!curves || curves > stage1_ntt_max_curves || opt.execution.selection.gpu_param != 0 ||
             p < 32 || p > 262144 || mpz_sgn(N) <= 0 || mpz_scan0(N, 0) != p)
             throw std::invalid_argument(
-                "NTT requires Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-8 curves");
+                "NTT requires Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-32 curves");
         ecm_edwards::Integer scalar;
         const unsigned torsion =
             opt.execution.selection.scalar_construction == ScalarConstruction::PrimePowerLcmTimes12
@@ -188,8 +189,16 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
             };
 
             phase = FailureSource::Device;
+            const auto selected = ecm_mersenne_ntt::select_tuned_plan(opt.execution.device_index,
+                unsigned(p), unsigned(active.size()), opt.execution.ntt);
+            if (ecm_stage1_stop_requested()) {
+                result.stop();
+                return result;
+            }
             const auto run = ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p),
-                unsigned(active.size()), initial, packed, count, opt.execution.ntt, control);
+                unsigned(active.size()), initial, packed, count, selected, control);
+            ecm_ts_fprintf(stdout, "stage1_ntt_memory: owned_bytes=%zu observed_bytes=%zu budget_bytes=%zu\n",
+                run.owned_bytes, run.observed_bytes, run.budget_bytes);
             ecm_ts_fprintf(stdout, "stage1_ntt_timing: bits=%u device_ms=%.3f wall_ms=%.3f "
                 "setup_ms=%.3f readback_ms=%.3f stopped=%u\n",
                 run.completed_bits - control.resume, run.device_ms.front(), run.wall_ms.front(),
@@ -229,8 +238,12 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
         result.fail(FailureSource::Persistence);
         ecm_ts_fprintf(stderr, "ERROR: GPU Stage1 NTT checkpoint: %s\n", error.what());
     } catch (const std::exception& error) {
-        result.fail(phase);
-        ecm_ts_fprintf(stderr, "ERROR: GPU Stage1 NTT: %s\n", error.what());
+        if (ecm_stage1_stop_requested()) {
+            result.stop();
+        } else {
+            result.fail(phase);
+            ecm_ts_fprintf(stderr, "ERROR: GPU Stage1 NTT: %s\n", error.what());
+        }
     }
     return result;
 }

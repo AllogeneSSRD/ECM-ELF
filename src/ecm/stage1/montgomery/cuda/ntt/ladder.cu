@@ -183,11 +183,16 @@ __global__ void route(uint32_t* state, Shape s, Cursor cursor) {
 __global__ void advance(unsigned* start, unsigned window) { *start += window; }
 } // namespace
 
+size_t memory_budget(size_t free_bytes, unsigned limit_mib) {
+    const size_t available = free_bytes - free_bytes / 5;
+    return limit_mib ? std::min(available, size_t(limit_mib) * 1024 * 1024) : available;
+}
+
 static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                       const std::vector<uint32_t>& scalar_words, unsigned count,
                       const ecm_stage1::Stage1NttOptions& options, const Control* control,
                       unsigned samples) {
-    if (p < 32 || p > 262144 || !curves || curves > 8 || options.window < -1 || options.window > 64 ||
+    if (p < 32 || p > 262144 || !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
         !samples || samples > 20 || count > UINT32_MAX - 64 ||
         scalar_words.size() < (size_t(count) + 31) / 32 ||
         (control && control->resume > count))
@@ -240,6 +245,19 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         throw std::invalid_argument("NTT tile, outer width or profile is out of range for this length");
     const auto prep = now_s();
     CK(cudaSetDevice(device));
+    CK(cudaFree(nullptr)); // Establish the CUDA context before measuring the worker's delta.
+    size_t free_before = 0, total = 0;
+    CK(cudaMemGetInfo(&free_before, &total));
+    Run result;
+    result.budget_bytes = memory_budget(free_before, options.memory_mib);
+    auto observe_memory = [&] {
+        size_t free_now = 0;
+        CK(cudaMemGetInfo(&free_now, &total));
+        if (free_now < free_before)
+            result.observed_bytes = std::max(result.observed_bytes, free_before - free_now);
+        if (std::max(result.owned_bytes, result.observed_bytes) > result.budget_bytes)
+            throw BudgetError("Stage1 NTT exceeds the total VRAM budget");
+    };
     auto profile = default_profile(log, options.profile);
     if (control && !options.profile && !options.weighted) {
         cudaDeviceProp prop{};
@@ -257,7 +275,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const U scale=gl_pow_host(s.length,GL_P-2);
     Tables tables;
     auto& ctx=tables.ctx;
-    fuse_init(ctx,s.length,log,omega,inv,true,control ? &overrides : nullptr);
+    const auto* resolved = control ? &overrides : nullptr;
+    fuse_describe(ctx,s.length,log,omega,inv,true,resolved);
+    result.owned_bytes = 11 * sizeof(U) * curves * s.length + slots * stride * sizeof(uint32_t) +
+        (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
+        (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
+    if (options.weighted)
+        result.owned_bytes += size_t(s.length) * (sizeof(U) + sizeof(WeightedDigit)) +
+                              size_t(s.words) * sizeof(WeightedLimb);
+    if (result.owned_bytes > result.budget_bytes)
+        throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
+    fuse_init(ctx,s.length,log,omega,inv,true,resolved);
     if (control && control->describe) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
@@ -376,7 +404,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (window && remaining % window) capture(tail,remaining % window);
     Event begin,end,boundary;
     CK(cudaStreamSynchronize(q));
-    Run result;
+    observe_memory();
     result.length=s.length; result.digit_bits=s.bpw; result.passes=ctx.passes_fwd; result.tile=ctx.t;
     result.setup_seconds=now_s()-prep;
     result.points.resize(4*stride);
@@ -427,12 +455,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (sample && got!=result.points) throw std::runtime_error("nondeterministic NTT Stage1 endpoint");
         result.points=std::move(got);
     }
+    observe_memory();
     return result;
 }
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
            const std::vector<uint32_t>& scalar, unsigned count,
-           const ecm_stage1::Stage1NttOptions& options, const Control& control) {
-    return run_ladder(device, p, curves, initial, scalar, count, options, &control, 1);
+           const ecm_stage1::Stage1NttOptions& options, const Control& control, unsigned samples) {
+    return run_ladder(device, p, curves, initial, scalar, count, options, &control, samples);
 }
 
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,

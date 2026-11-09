@@ -33,6 +33,7 @@ struct ParsedCli {
     std::string gpu_sub_path;
     std::string gpu_special_mult_path;
     bool show_kernels = false;
+    bool tune_ntt = false, tune_exhaustive = false;
     bool show_gpu_info = false; // --gpu-info: report tiers/occupancy and exit
     uint32_t gpu_info_bits = 0; // --bits N: only the tier that N would pick (0 = all)
     std::string ini_path, gpu_backend;

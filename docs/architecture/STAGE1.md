@@ -89,7 +89,7 @@ checkpoint实现与恢复合同维持原样。Android原有native存档可以覆
 
 [Montgomery workflow](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/stage1/montgomery/cuda/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 
-[Montgomery NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 复用 PARAM0 构造与共同标量生成，将剩余活跃曲线转换成 slot-major 布局。适配器负责 checkpoint、末点求逆和因子分类；[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、正逆变换和 Graph。配置档位于 [profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h)，变换运行时与 CUDA Stage2 共用。检查点保存标量 cursor、活跃曲线掩码和规范 X/Z 状态，恢复与 tile、pass 或 Graph 配置解耦。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
+[Montgomery NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 复用 PARAM0 构造与共同标量生成，将剩余活跃曲线转换成 slot-major 布局。适配器负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) 用同一个 ladder 搜索并缓存计划，不改动队列和曲线状态。检查点沿用标量 cursor、32 位活跃曲线掩码和规范 X/Z 状态，恢复与卷积后端、tile、pass 或 Graph 配置解耦。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
 
 [Edwards workflow](../../src/ecm/stage1/edwards/cuda/workflow.cpp)管理Batch、恢复、构造、进度和末点分类；同目录checkpoint.cpp拥有专用codec。两种曲线save_checkpoint均以bool表示持久提交成功；decode解释载荷并返回RestoreResult，候选接纳和布局检查仍留在实际拥有这些约束的位置。中途checkpoint参与安全点，最终发布失败仍可恢复已完成计算。
 

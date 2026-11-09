@@ -44,8 +44,10 @@
       <Item id="option_stage1_ckpt_seconds" name="Stage1 checkpoint interval in seconds. 0 disables periodic checkpoints; negative values act as 0. Normal stop or Ctrl+C can still request a checkpoint. Actual writes wait for the backend's safe checkpoint boundary." />
       <Item id="option_stage1_device" name="Zero-based GPU device ID for Stage1. Stage2 inherits it unless stage2_device is explicitly set. IDs refer to the device list exposed by the executable's actual GPU backend." />
       <Item id="option_stage1_gpu_param" name="GPU Stage1 curve parametrization. CUDA Stage2 consumes param0 saves; select 0 for that handoff. OpenCL uses param3. The default is 3." />
-      <Item id="option_stage1_gpu_algorithm" name="Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full Mersenne modulus, and 1–8 curves." />
-      <Item id="option_stage1_ntt_convolution" name="Select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and checkpoint format." />
+      <Item id="option_stage1_gpu_algorithm" name="Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full Mersenne modulus, and 1–32 curves." />
+      <Item id="option_stage1_ntt_convolution" name="Auto selects the measured backend or calibrates on a cache miss. Explicit modes select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and checkpoint format." />
+      <Item id="option_stage1_ntt_tune_file" name="Stage1 NTT tuning database, relative to the configuration directory. Empty disables persistence." />
+      <Item id="option_stage1_ntt_memory_mib" name="Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An explicit cap is also bounded by available VRAM." />
       <Item id="option_stage1_ntt_length" name="Transform length. Zero derives the minimum safe length from the modulus and digit width." />
       <Item id="option_stage1_ntt_bpw" name="Bits per digit. Zero selects the widest exact linear packing or the shortest safe weighted transform. In weighted mode, an explicit value is an upper bound on the largest digit." />
       <Item id="option_stage1_ntt_profile" name="Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10 bits). Explicit tile and outer overrides take precedence." />

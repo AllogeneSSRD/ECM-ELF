@@ -117,6 +117,8 @@ void print_usage(const char* prog) {
               << "  --showkernel         List available " << ecm_backend_name()
               << " kernel paths and exit\n"
               << "  --gpu-algorithm <1|2|cgbn|ntt>  Select the Stage1 GPU algorithm.\n"
+              << "  --tune ntt          Tune CUDA Stage1 NTT. Use --bits N for one exponent width.\n"
+              << "  --tune-exhaustive   With --tune ntt: measure every eligible batch.\n"
               << "  --gpu-info           Report the device this build would use and, "
                  "per kernel\n"
               << "                       tier, the curves a full GPU needs; no curve "
@@ -201,6 +203,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                    "--go",
                                                    "--showkernel",
                                                    "--gpu-info",
+                                                   "--tune-exhaustive",
                                                    "--sliced",
                                                    "--sliced-t16",
                                                    "--local",
@@ -245,6 +248,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                  "--add",
                                                  "--sub",
                                                  "--special-mult",
+                                                 "--tune",
                                                  "--bits",
                                                  "--config",
                                                  "--worker",
@@ -416,6 +420,13 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 input.gpu_sub_path = value;
             else if (key == "--special-mult")
                 input.gpu_special_mult_path = value;
+            else if (key == "--tune") {
+                expected = "ntt";
+                if (ecm_stage1::lower_ascii(value) != "ntt")
+                    reject();
+                input.tune_ntt = true;
+            } else if (key == "--tune-exhaustive")
+                input.tune_exhaustive = true;
             else if (key == "--bits")
                 input.gpu_info_bits = uint32_t(integer(0, 100000000));
             else if (key == "--config")

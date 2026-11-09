@@ -60,6 +60,9 @@ using ecm_stage1_app::stage1_task_error;
 #ifndef ECM_HAS_CUDA_STAGE1
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
+#if ECM_HAS_CUDA_STAGE1
+#include "ecm/stage1/montgomery/cuda/ntt/tune.h"
+#endif
 // Application assembly still selects the CPU default NAF window.
 #include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
 
@@ -885,7 +888,7 @@ int main(int argc, char** argv) {
                                             : resolve_rel_local(exe, input.ini_path);
     const ecm_stage1_app::InputPaths paths{exe, std::filesystem::path(ini).parent_path().string(),
                                            std::filesystem::current_path().string()};
-    const bool queue = input.pos.empty() && !input.show_gpu_info;
+    const bool queue = input.pos.empty() && !input.show_gpu_info && !input.tune_ntt;
     ParsedConfig parsed;
     parsed.path = ini;
     bool config_used = std::filesystem::exists(ini);
@@ -909,10 +912,10 @@ int main(int argc, char** argv) {
         std::cerr << error << "\n";
         return 1;
     }
-    if (settings.options.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
+    if (input.tune_ntt || settings.options.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
         try {
             auto backend = input.gpu_backend.empty() ? settings.config.gpu_backend : input.gpu_backend;
-            if (settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
+            if (input.tune_ntt || settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
                 if (backend == "opencl") throw std::invalid_argument("Stage1 NTT requires CUDA");
                 backend = "cuda";
             }
@@ -938,6 +941,15 @@ int main(int argc, char** argv) {
     }
     ecm_stage1_install_stop_handler();
 
+    if (input.tune_ntt) {
+#if ECM_HAS_CUDA_STAGE1
+        return ecm_mersenne_ntt::tune_command(settings.options.execution.device_index,
+            settings.options.execution.ntt, input.gpu_info_bits, input.tune_exhaustive);
+#else
+        std::cerr << "Stage1 NTT tune requires the CUDA worker\n";
+        return 1;
+#endif
+    }
     if (queue) {
         // No positional B1/B2 → queue-manager mode (reads ecm.toml + worktodo).
         return ecm_stage1_app::run_worktodo(input, settings, parsed, paths, ini);
