@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
     const int plan_argc = argc - (experiment ? 2 : 0);
     if (plan_argc != 6 && plan_argc != 13) {
         std::fprintf(stderr, "stage1_ntt_auto_probe device p batch steps tune.toml "
-                             "[weighted length bpw tile outer window warp] [--dataflow auto|0..31]\n");
+                             "[weighted length bpw tile outer window warp] [--dataflow auto|0..127]\n");
         return 2;
     }
     try {
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
                 unsigned requested = 0;
                 const auto end = mode.data() + mode.size();
                 const auto parsed = std::from_chars(mode.data(), end, requested);
-                if (parsed.ec != std::errc{} || parsed.ptr != end || requested > 31)
+                if (parsed.ec != std::errc{} || parsed.ptr != end || requested > 127)
                     throw std::invalid_argument("invalid experimental dataflow");
                 control.experimental_dataflow = requested;
             }
@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
             const bool compare = control.experimental_dataflow != 0u;
             if (compare) {
                 ecm_mersenne_ntt::Control baseline;
+                baseline.experimental_dataflow = 0;
                 const auto reference = ecm_mersenne_ntt::ladder(device, p, batch, initial, scalar, steps, selected, baseline);
                 if (reference.points != run.points) throw std::runtime_error("experimental ladder endpoint differs");
             }

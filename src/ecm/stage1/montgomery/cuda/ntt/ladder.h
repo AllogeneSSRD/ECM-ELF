@@ -22,7 +22,8 @@ struct Packing { unsigned length=0, bpw=0, digits=0; };
 Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool prefer_radix5 = true);
 
 enum Dataflow : unsigned {
-    FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16
+    FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16,
+    SegmentedCarry = 32, DeferredPack = 64
 };
 
 struct Control {

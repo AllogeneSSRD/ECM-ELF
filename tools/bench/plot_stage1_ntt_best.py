@@ -33,12 +33,12 @@ def make_points(ntt, historical):
     return {key: sorted(rows, key=lambda r: r[1]) for key, rows in points.items()}
 
 
-def plot(points, output, logarithmic, curve, device):
+def plot(points, output, logarithmic, curve, device, ntt_version, cgbn_version):
     label = "Edwards" if curve == "ed" else "Montgomery"
     scheme = "Edwards" if curve == "ed" else "PARAM0"
     styles = {
-        "ntt": (f"NTT {scheme} · {device} · full Mersenne", "#176fa5", "o"),
-        "cgbn": (f"CGBN {scheme}{' NAF' if curve == 'ed' else ''} · {device} · cofactor", "#cb6719", "s"),
+        "ntt": (f"NTT {scheme} {ntt_version} · {device} · full Mersenne", "#176fa5", "o"),
+        "cgbn": (f"CGBN {scheme}{' NAF' if curve == 'ed' else ''} {cgbn_version} · {device} · cofactor", "#cb6719", "s"),
         "prime95": (f"Prime95 {label} · 1 core at 4 GHz · full-M FFT", "#72459a", "^"),
     }
     with plt.style.context("seaborn-v0_8-whitegrid"):
@@ -85,7 +85,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     prefix = "stage1-edwards-ntt-cgbn-prime95" if curve == "ed" else "stage1-ntt-best-cgbn-prime95"
     for suffix in ("log", "linear"):
-        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device)
+        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device,
+             ntt["version"].removeprefix("ECM-ELF "), comparison.get("program_version", ""))
     with (args.output / "comparison.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(("series", "mersenne_exponent", "arithmetic_bits", "median_s_per_curve_at_1e6",

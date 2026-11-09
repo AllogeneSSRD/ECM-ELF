@@ -5,28 +5,16 @@
 #include "../../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
 #include "../../../../cuda/ntt/runtime.h"
 #include "../../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
+#include "../../../../../../kernels/cuda/stage1_ntt_layout.cuh"
+#include "../../../../../../kernels/cuda/stage1_ntt_segments.cuh"
 #include <stdexcept>
 #include <type_traits>
 
 namespace ecm_mersenne_ntt {
 namespace {
+using namespace stage1_layout;
 using U = unsigned long long;
 constexpr unsigned threads = 256;
-constexpr unsigned slots = 23;
-enum Slot : unsigned {
-    X0, Z0, X1, Z1, A24, Base, A, B, C, D, AA, BB, DA, CB,
-    Sum, Diff, E, XA, DiffSq, XD, AE, ZA, ZD
-};
-struct Indices { unsigned x[5]; };
-struct Sums { Indices left, right, out; unsigned subtract; };
-struct Shape { unsigned p, words, curves, length, bpw, digits; };
-struct Cursor { const uint32_t* bits; const unsigned* start; unsigned offset, count; };
-
-__device__ unsigned scalar_bit(Cursor cursor) {
-    const unsigned i = cursor.count - 1 - (*cursor.start + cursor.offset);
-    return (cursor.bits[i / 32] >> (i % 32)) & 1u;
-}
-
 template<class T> struct Buffer {
     T* data = nullptr;
     explicit Buffer(size_t count) { if (count) CK(cudaMalloc(&data, count * sizeof(T))); }
@@ -53,24 +41,27 @@ struct Tables {
     ~Tables() { fuse_release(ctx); }
 };
 
-__device__ size_t limb(Shape s, unsigned slot, unsigned curve, unsigned word) {
-    return (size_t(slot) * s.curves + curve) * s.words + word;
-}
-__device__ uint32_t limb_mask(Shape s, unsigned i) {
-    const unsigned rest = s.p % 32;
-    return i + 1 == s.words && rest ? (1u << rest) - 1 : 0xffffffffu;
-}
-
-template<bool Weighted, bool Mixed = false, bool Modulus = false>
+template<bool Weighted, bool Mixed = false, bool Modulus = false, bool Deferred = false>
 __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
                      const WeightedDigit* weighted, const U* twiddles = nullptr,
-                     Radix5Constants radix5 = {}) {
+                     Radix5Constants radix5 = {}, const unsigned* headers = nullptr,
+                     unsigned deferred_mask = 0) {
     const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
     const unsigned width = Mixed ? s.length / 5 : s.length;
+    const unsigned op = blockIdx.y / s.curves;
+    const size_t residue = size_t(in.x[op]) * s.curves + blockIdx.y % s.curves;
+    const uint32_t* source = Modulus ? nullptr : state + residue * s.words;
+    __shared__ unsigned limits[Deferred ? stage1_max_segments : 1];
+    const bool pending = Deferred && ((deferred_mask >> op) & 1);
+    if (pending) {
+        const unsigned segments = stage1_segment_count(s.words);
+        stage1_segment_corrections(limits, headers + residue * segments, segments);
+    }
     if (i >= width) return;
-    const uint32_t* source = nullptr;
-    if constexpr (!Modulus) source = state + limb(s, in.x[blockIdx.y/s.curves], blockIdx.y%s.curves, 0);
-    const auto read = [&](unsigned j) { return stage1_ntt_pack_digit<Weighted,Modulus>(source,s,weighted,j); };
+    const auto read_word = [&](unsigned word) {
+        return pending ? stage1_segment_word(source, limits, word, limb_mask(s,word)) : source[word];
+    };
+    const auto read = [&](unsigned j) { return stage1_ntt_pack_digit_from<Weighted,Modulus>(read_word,s,weighted,j); };
     auto* row = out + size_t(blockIdx.y) * s.length + i;
     if constexpr(Mixed) {
         U x[5];
@@ -149,14 +140,7 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
     __shared__ unsigned warp_tags[threads/32];
     extern __shared__ uint32_t saved_raw[];
     const unsigned op = blockIdx.x/s.curves, curve = blockIdx.x%s.curves;
-    unsigned out = ops.out.x[op];
-    if constexpr (Routed) {
-        if (out == XA || out == XD || out == ZA || out == ZD) {
-            const unsigned bit = scalar_bit(cursor);
-            const bool doubled = out == XD || out == ZD;
-            out = 2 * (doubled ? bit : 1 - bit) + unsigned(out == ZA || out == ZD);
-        }
-    }
+    const unsigned out = output_slot<Routed>(ops.out.x[op],cursor);
     unsigned a = ops.left.x[op], b = ops.right.x[op];
     if constexpr(Select) {
         const unsigned swap = 2u * scalar_bit(cursor);
@@ -173,8 +157,7 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
             const auto* digits = products + size_t(blockIdx.x)*s.length;
             return U(extract(digits,s,i*32) & mask) + (extract(digits,s,s.p+i*32) & mask);
         } else {
-            const auto rhs = state[limb(s,b,curve,i)];
-            return U(state[limb(s,a,curve,i)]) + (((ops.subtract >> op) & 1) ? (rhs ^ mask) : rhs);
+            return add_limb(state,s,a,b,curve,i,mask,(ops.subtract >> op) & 1);
         }
     };
     unsigned tag = 1, limb_generate = 0, limb_propagate = 0;
@@ -318,6 +301,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
+    // Enable segmentation where enough limbs amortize its extra launch.
+    if (p > 14 * stage1_carry_segment * 32) {
+        defaults |= SegmentedCarry;
+        if (mixed || curves == 1) defaults |= DeferredPack;
+    }
     const unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     result.budget_bytes = memory_budget(free_before, options.memory_mib);
     auto observe_memory = [&] {
@@ -357,6 +345,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                               size_t(s.words) * sizeof(WeightedLimb);
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
+    const unsigned segment_count = stage1_segment_count(s.words);
+    const size_t header_words = size_t(slots) * curves * segment_count;
+    const bool segmented = (requested & SegmentedCarry) && options.weighted &&
+        header_words * sizeof(unsigned) <= result.budget_bytes - result.owned_bytes;
+    if (segmented) {
+        result.owned_bytes += header_words * sizeof(unsigned);
+        result.dataflow |= SegmentedCarry;
+    }
     const U terms = options.weighted ? 2ull * s.length : s.digits;
     const size_t modulus_bytes = size_t(s.length) * sizeof(U);
     // A loose E digit can be twice the canonical maximum. The weighted
@@ -378,10 +374,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const size_t tile_smem = sizeof(U) << ctx.t;
     const bool routed = requested & DirectRoute;
     const bool packed = (requested & PackedForward) && !mixed && ctx.nms == 0;
-    const bool cached = (requested & CachedCarry) && options.weighted;
+    const bool cached = (requested & CachedCarry) && options.weighted && !segmented;
+    const bool deferred = segmented && !packed && (requested & DeferredPack);
     if (routed) result.dataflow |= DirectRoute;
     if (packed) result.dataflow |= PackedForward;
     if (cached) result.dataflow |= CachedCarry;
+    if (deferred) result.dataflow |= DeferredPack;
     if (control && control->describe) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
@@ -425,6 +423,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
+    Buffer<unsigned> carry_headers(segmented ? header_words : 0);
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
@@ -466,17 +465,24 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     const auto grid=[&](unsigned ops) { return dim3((s.length+threads-1)/threads, ops*curves); };
     const auto mixed_grid=[&](unsigned ops) { return dim3((width+threads-1)/threads, ops*curves); };
+    const auto segment_grid=[&](unsigned ops) { return dim3(segment_count, ops*curves); };
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
         CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
-    const auto forward_inputs = [&](U* dest, unsigned count, Indices in) {
+    const auto forward_inputs = [&](U* dest, unsigned count, Indices in, unsigned pending = 0) {
         if (packed) {
             packed_kernel<<<dim3(1,count*curves),FUSE_TILE_THREADS,tile_smem,q>>>(
                 state.data,dest,s,in,digit_table.data,ctx.t,ctx.tblF);
             CK(cudaGetLastError());
             return;
         }
-        if (mixed)
+        if (pending && mixed)
+            pack<true,true,false,true><<<mixed_grid(count),threads,0,q>>>(
+                state.data,dest,s,in,digit_table.data,mixed_fwd.data,radix5_fwd,carry_headers.data,pending);
+        else if (pending)
+            pack<true,false,false,true><<<grid(count),threads,0,q>>>(
+                state.data,dest,s,in,digit_table.data,nullptr,{},carry_headers.data,pending);
+        else if (mixed)
             pack<true,true><<<mixed_grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data,
                                                                mixed_fwd.data,radix5_fwd);
         else if (options.weighted)
@@ -498,9 +504,29 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         ntt_forward_fused(modulus.data,ctx,omega2,planes,q);
     }
     CK(cudaStreamSynchronize(q));
+    const auto finish_carries = [&](unsigned count, Indices out, Cursor cursor,
+                                    bool route, unsigned pending) {
+        if (route)
+            finish_segment_carries<true><<<segment_grid(count),stage1_carry_segment,0,q>>>(
+                state.data,carry_headers.data,s,out,cursor,pending);
+        else
+            finish_segment_carries<false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
+                state.data,carry_headers.data,s,out,cursor,pending);
+    };
+    const auto add_inputs = [&](auto select, unsigned count, Sums ops, Cursor cursor) {
+        constexpr bool select_coords = decltype(select)::value;
+        if (!segmented) {
+            combine<false,select_coords><<<count*curves,threads,0,q>>>(state.data,nullptr,s,ops,cursor);
+            return;
+        }
+        segment_limb_sums<false,select_coords,false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
+            state.data,nullptr,carry_headers.data,s,ops,cursor);
+        if (!deferred) finish_carries(count,ops.out,{},false,0);
+    };
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out,
-                 bool build_e = false, bool add_bb = false, Cursor cursor = {}) {
-        forward_inputs(freq.data, inputs, in);
+                 bool build_e = false, bool add_bb = false, Cursor cursor = {},
+                 unsigned pending_inputs = 0, unsigned pending_outputs = 0) {
+        forward_inputs(freq.data, inputs, in, pending_inputs);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
             return id < 5 ? freq.data + id * plane : fixed.data + (id - 5) * plane;
@@ -550,7 +576,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
                 freq.data, inverse.data, inverse_weights.data, digit_table.data,
                 limb_table.data, p, s.words, s.length);
-            if (route_output && cached) reduce(yes,yes,yes);
+            if (segmented) {
+                if (route_output)
+                    segment_limb_sums<true,false,true><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
+                        state.data,freq.data,carry_headers.data,s,reduction,cursor);
+                else
+                    segment_limb_sums<true,false,false><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
+                        state.data,freq.data,carry_headers.data,s,reduction,cursor);
+                finish_carries(outputs,out,cursor,route_output,pending_outputs);
+            } else if (route_output && cached) reduce(yes,yes,yes);
             else if (route_output) reduce(yes,yes,no);
             else if (cached) reduce(yes,no,yes);
             else reduce(yes,no,no);
@@ -562,21 +596,25 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     };
     auto step=[&](unsigned i) {
         const Cursor cursor{scalar.data,start.data,i,count};
-        combine<false,true><<<4*curves,threads,0,q>>>(state.data,nullptr,s,
+        add_inputs(std::true_type{},4,
             {{X0,X0,X1,X1},{Z0,Z0,Z1,Z1},{A,B,C,D},0b1010},cursor);
-        mul(4,4,{A,B,C,D},{0,1,3,2},{0,1,0,1},{AA,BB,DA,CB});
-        combine<false,false><<<(loose ? 2 : 3)*curves,threads,0,q>>>(state.data,nullptr,s,
+        mul(4,4,{A,B,C,D},{0,1,3,2},{0,1,0,1},{AA,BB,DA,CB},false,false,{},deferred ? 0b1111 : 0);
+        add_inputs(std::false_type{},loose ? 2 : 3,
             {{DA,DA,AA},{CB,CB,BB},{Sum,Diff,E},0b110},{});
         // The old X/Z values were consumed by the first combine. Both
         // multiplication batches can now write the final X/Z slots.
-        mul(loose ? 4 : 5,4,{Sum,Diff,AA,BB,E},{0,1,2,4},{0,1,3,5},{XA,DiffSq,XD,fma ? Sum : AE},loose,fma,cursor);
+        // The second pack resolves the fresh sums. DiffSq and the fused Sum
+        // can then stay tentative until pack three. X/Z are always finalized.
+        mul(loose ? 4 : 5,4,{Sum,Diff,AA,BB,E},{0,1,2,4},{0,1,3,5},{XA,DiffSq,XD,fma ? Sum : AE},
+            loose,fma,cursor,deferred ? (loose ? 0b11 : 0b10011) : 0,
+            deferred ? (fma ? 0b1010 : 0b10) : 0);
         if (!fma)
-            combine<false,false><<<curves,threads,0,q>>>(state.data,nullptr,s,{{BB},{AE},{Sum},0},{});
+            add_inputs(std::false_type{},1,{{BB},{AE},{Sum},0},{});
         // E is still in frequency plane 4 from the second batch (packed
         // normally or produced by the last product tile). Both
         // reducers only overwrite planes 0–3, and this pack uses planes 0–1.
         constexpr unsigned cached_e = 4;
-        mul(2,2,{DiffSq,Sum},{0,cached_e},{6,1},{ZA,ZD},false,false,cursor);
+        mul(2,2,{DiffSq,Sum},{0,cached_e},{6,1},{ZA,ZD},false,false,cursor,deferred ? 0b11 : 0);
         if (!routed)
             route<<<dim3((s.words+threads-1)/threads,curves),threads,0,q>>>(state.data,s,cursor);
         CK(cudaGetLastError());

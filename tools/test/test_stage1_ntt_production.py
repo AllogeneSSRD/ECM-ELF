@@ -105,6 +105,23 @@ def main():
     assert saved_points(work / "out.save", 4003, 32) == expected
     print("PASS weighted direct launch against independent Python", flush=True)
 
+    p, b1, sigma = 131071, 20, 26
+    wide_n = (1 << p) - 1
+    for model, curves, dataflow in (("mont", 2, 39), ("ed", 1, 103)):
+        work, cmd = fixture(f"wide_segments_{model}", extra='ntt_convolution = "weighted"\n'
+                            'ntt_length = 8192\nntt_tile = 12\n', model=model)
+        call, data = direct(work, cmd, p, b1, sigma, curves)
+        log = run(work, call, text=data)
+        curve = "edwards" if model == "ed" else "mont0"
+        assert f"curve={curve} dataflow={dataflow}" in log
+        if model == "ed":
+            _, x, z = edwards_stage1(wide_n, sigma, b1)
+            wide_expected = {sigma: x * pow(z, -1, wide_n) % wide_n}
+        else:
+            wide_expected = {seed: stage1(seed, b1, wide_n)["x"] for seed in range(sigma, sigma + curves)}
+        assert saved_points(work / "out.save", p, b1, edwards=model == "ed") == wide_expected
+    print("PASS wide segmented carry and deferred pack against independent Python", flush=True)
+
     for mode, length in (("linear", 8), ("weighted", 4)):
         work, cmd = fixture(f"factors_{mode}", extra=f'ntt_convolution = "{mode}"\n')
         call, data = direct(work, cmd, 65, 40, 30, 2)

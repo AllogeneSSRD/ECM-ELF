@@ -32,8 +32,11 @@ def run(exe, work, config, flags, expression=None):
     return result.stdout
 
 
-def tune(exe, work, config, p):
-    run(exe, work, config, ["--tune", "ntt", "--bits", str(p)])
+def tune(exe, work, config, p, exhaustive_batches):
+    flags = ["--tune", "ntt", "--bits", str(p)]
+    if exhaustive_batches:
+        flags.append("--tune-exhaustive")
+    run(exe, work, config, flags)
     table = tomllib.loads((work / "tune.toml").read_text(encoding="utf-8"))
     columns, *values = table["ntt"]["matrix"]
     rows = [dict(zip(columns, row)) for row in values]
@@ -67,6 +70,8 @@ def measure(exe, work, config, p, b1, sigma, winner):
     fields = re.search(r"stage1_ntt_timing: bits=(\d+) device_ms=([.\d]+) wall_ms=([.\d]+)"
                        r" setup_ms=([.\d]+) readback_ms=([.\d]+) stopped=0", log)
     sample = dict(zip(("steps", "device_ms", "wall_ms", "setup_ms", "readback_ms"), map(float, fields.groups())))
+    if "dataflow" in plan:
+        sample["dataflow"] = int(plan["dataflow"])
     save = records(work / "point.save")
     for identity in map(int, re.findall(r"Edwards identity: sigma=(\d+)", log)):
         if identity in save:
@@ -84,6 +89,7 @@ def main():
     parser.add_argument("--device", default=1, type=int)
     parser.add_argument("--curve", choices=("mont", "ed"), default="mont")
     parser.add_argument("--reuse-tune", type=Path, help="Use measured plans from a summary for the same GPU")
+    parser.add_argument("--exhaustive-batches", action="store_true", help="Tune all batch sizes from 1 to 32")
     parser.add_argument("--rounds", default=3, type=int)
     parser.add_argument("--sigma", default=20260922, type=int)
     parser.add_argument("--exponents", nargs="+", type=int, default=sorted(set(EXPONENTS + HISTORICAL_EXPONENTS)))
@@ -100,7 +106,7 @@ def main():
         previous = json.loads(args.reuse_tune.read_text(encoding="utf-8"))
         if previous["gpu_model"] != gpu_model or previous["device"] != args.device:
             parser.error("reuse summary must match the selected GPU")
-        plans = {group["p"]: group["tune"] for group in previous["groups"]}
+        plans = {group["p"]: group for group in previous["groups"]}
     config = f'[stage1]\ndevice = {args.device}\ngpu_algorithm = "ntt"\ncurve = "{args.curve}"\ngpu_param = 0\n' \
              'lcm = "1"\nexp_cache = "off"\nlog_file = ""\nckpt_seconds = 0\n'
     report = dict(version=version, device=args.device, gpu_model=gpu_model, curve=args.curve,
@@ -114,7 +120,12 @@ def main():
             for p in args.exponents:
                 group = out / f"p{p}"
                 group.mkdir()
-                winner = plans.get(p) or tune(exe, group / "tune", config, p)
+                if p in plans:
+                    winner = plans[p]["tune"]
+                    batch_search = plans[p].get("batch_search", "unspecified")
+                else:
+                    winner = tune(exe, group / "tune", config, p, args.exhaustive_batches)
+                    batch_search = "exhaustive" if args.exhaustive_batches else "doubling"
                 b1 = 1024 if p > 20000 or p < 128 else 10000
                 batch = winner["batch"]
                 for attempt in range(8):
@@ -136,6 +147,7 @@ def main():
                     samples.append(sample)
                 seconds = [s["device_ms"] / (1000 * batch) for s in samples]
                 report["groups"].append(dict(p=p, b1=b1, batch=batch, sigma=sigma, tune=winner, samples=samples,
+                    batch_search=batch_search,
                     measured_seconds_per_curve=statistics.median(seconds),
                     projected_seconds_per_curve_1e6=[s * report["reference_b1"] / b1 for s in seconds]))
                 (out / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

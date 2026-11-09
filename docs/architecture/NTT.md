@@ -1,10 +1,46 @@
-# Stage2 精确 NTT 与系数归约
+# 精确 NTT 与归约
+
+CUDA Stage1 和 Stage2 共用 Goldilocks 域算术、根表与正逆变换调度。Stage1 在完整梅森模数上计算单个点坐标的乘积，Stage2 使用 Kronecker 槽计算多项式乘积并逐系数归约。
+
+## Stage1 分段进位与 pack 融合
+
+Edwards 和 Montgomery PARAM0 共用 x-only 阶梯。每个标量 bit 分三批计算乘积，批次之间要做模加减、规范化以及下一批的 digit 打包。宽位宽时，一个 CTA 处理整条 residue 会让每个线程串行处理多个 limb。分段路径将连续 256 个 32-bit limb 分给一个 CTA，每个线程处理一个 limb，末段按实际位宽屏蔽填充位。点公式、NTT 长度和逆变换保持同一合同。阶梯与检查点边界见 [Stage1 架构](STAGE1.md#唯一执行分派与-gpu-主机流程)。
+
+### 局部结果与跨段回卷
+
+模减使用 \(a+(M-b)\equiv a-b\pmod M\)，逐 limb 对右操作数取补后复用加法。对于 weighted 乘积，逆变换后的系数先去权并汇入各 limb 的未进位和 \(s_i\)。中间的完整 limb 用 \(v_i=(s_i\bmod 2^{32})+\lfloor s_{i-1}/2^{32}\rfloor\) 转移多位高部，最高 limb 按实际位宽截断并回卷到最低 limb。此后剩下的是同一种一位进位问题。
+
+设第 \(i\) 个 limb 宽 \(w_i\)，掩码 \(m_i=2^{w_i}-1\)，接收本轮进位前的局部值为 \(v_i\)。该 limb 的传递函数 \(f_i(c)=[v_i+c>m_i]\) 只有三种状态。
+
+- \(v_i<m_i\) 时终止进位，输出 0。
+- \(v_i=m_i\) 时传播输入进位。
+- \(v_i>m_i\) 时产生进位，输出 1。
+
+段内用 warp ballot 和共享摘要找到每个 limb 之前的最后一个非传播项。CTA 写出以输入进位 0 为假设的局部结果，同时记录全段的传递函数以及从段首到第一个非传播 limb 的长度，包含该 limb。实际段输入进位为 1 时，修正只需给这个前缀的每个局部 limb 加一，再按各自掩码截断。前缀之后的输出与段输入无关。
+
+消费者用一个 warp 组合至多 32 个段摘要。全体段的传递函数为常数时，该常数就是从高端回卷到首段的进位。全传播时，输入 0 会保留 \(M=2^p-1\) 的编码，选择输入 1 可使所有有效 limb 回到 0。每曲线每槽需要 \(4\lceil p/8192\rceil\) bytes 摘要，设备工作区按 23 个槽和活跃曲线数计入显存预算。
+
+### 写回与下一批打包
+
+```mermaid
+flowchart LR
+    A["模加减的局部值"] --> C["并行求段内结果和摘要"]
+    B["逆 NTT、去权与 limb 汇集"] --> C
+    C --> D["扫描摘要并写回规范 limb"]
+    C --> E["pack 扫描摘要并按需修正 limb"]
+    D --> F["X/Z 回读、检查点或后续算术"]
+    E --> G["加权 digit 和下一批前向 NTT"]
+```
+
+融合适用于一批模加减产生且只被下一批打包读取的槽，以及第二批中只供第三批使用的平方项 \(\mathrm{DiffSq}\) 和融合乘加项 \(BB+A_{24}E\)。这类槽保留段内结果，pack 对源 limb 按需修正，再提取 digit 并施加权重。digit 跨越 limb 或段边界时，两个来源分别查各自的修正范围。还要参与普通模算术的输出和每步的两组 X/Z 都走独立写回，因此回读和检查点只看到规范整数。
+
+生产在 weighted 且 \(p>114688\) 时启用分段进位，预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。分项剖析及启用依据见 [GPU1 宽位宽归约热点](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点)。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
 
 ## 数学合同
 
 域素数 q=2⁶⁴−2³²+1，支持长度 L=2ᵏ、k≤32 的单位根。项目以精确整数 NTT 实现系数多项式乘法，不依赖浮点误差控制。Goldilocks 模数 q 与待分解整数 N、算术承载 M 相互独立。
 
-将 S-bit 系数放入足够宽的 Kronecker 槽。最大 operand 含 A 个系数时，slot_bits=2S+max(1,⌈log₂A⌉)；实际 shape query 决定 digit 宽 b、slot_words、补零与 L。不能用手工近似替代执行端的 `choose_cfg`。
+Stage2 将 S-bit 系数放入足够宽的 Kronecker 槽。最大 operand 含 A 个系数时，slot_bits=2S+max(1,⌈log₂A⌉)；实际 shape query 决定 digit 宽 b、slot_words、补零与 L。执行端由 `choose_cfg` 核定各项。
 
 每个整数卷积系数须满足 Lterms·(2ᵇ−1)²<q，随后按 b-bit digit 精确进位。槽位上界和 carry 检查防止循环卷积别名、丢失高位及系数串槽。强制 digit 宽同样必须通过精确性检查。
 
@@ -38,7 +74,7 @@ tile 在 shared 中融合若干层，outer 按 radix/pass 分解大变换，缓�
 
 `NTT_FUSE_JOINT=1` 默认关闭，在相同受支持条件下包含中段M6，并选k23 tile11/M6、k25 tile12/M7；其他长度不变。当前1428算子样本与80条固定D曲线仅显示约0.19%的额外矩阵收益，未启用默认。[准备与同步报告](../performance/STAGE2_PREPARATION.md)说明默认关闭的 `NTT_HOST_TRACE=1` 诊断范围，以及后续pack/补零融合的证据。
 
-NTT性能表的字段、计时边界、tile级数、外层radix与处理趟数，以及摘要如何影响D/P选型，统一见[NTT性能摘要表](AUTO_B2.md#ntt-性能摘要表)。当前NTT tune校准成本，不自动搜索或部署内核配置。
+Stage2 NTT 性能表的字段、计时边界、tile 级数、外层 radix 与处理趟数，以及摘要如何影响 D/P 选型，统一见 [NTT 性能摘要表](AUTO_B2.md#ntt-性能摘要表)。Stage2 的这项调优用于校准成本。Stage1 的批量和形状调优见 [批量调优与显存](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)。
 
 Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认。仅满足小字长 FHE 模数的库不能直接替换 Goldilocks64/多精度 carry 管线；适配参考见 [算法资料](../reference/ECM_ALGORITHMS.md)。
 

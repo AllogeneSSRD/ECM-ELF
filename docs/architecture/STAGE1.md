@@ -91,6 +91,8 @@ checkpoint实现与恢复合同维持原样。Android原有native存档可以覆
 
 [NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 接收 PARAM0 和 Atkin–Morain Edwards。Edwards 保留 `48·lcm(1…B1)`，用 `u=(1+y)/(1−y)` 和 `a24=1/(1−d)` 进入同一条 x-only 阶梯。映射分母的非单位通过 GCD 分类，最后按 Montgomery X/Z 求仿射坐标，与现有 Edwards save 的坐标一致。适配器将剩余活跃曲线转为 slot-major 布局，负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) 用同一个 ladder 搜索并缓存计划。检查点保存标量 cursor、32 位活跃曲线掩码和规范 X/Z，恢复与卷积后端、tile、pass 或 Graph 配置解耦。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
 
+宽位宽的分段归约可把进位摘要交给下一批打包，设备数据流见 [NTT 架构](NTT.md#stage1-分段进位与-pack-融合)。
+
 [Edwards workflow](../../src/ecm/stage1/edwards/cuda/workflow.cpp)管理Batch、恢复、构造、进度和末点分类；同目录checkpoint.cpp拥有专用codec。两种曲线save_checkpoint均以bool表示持久提交成功；decode解释载荷并返回RestoreResult，候选接纳和布局检查仍留在实际拥有这些约束的位置。中途checkpoint参与安全点，最终发布失败仍可恢复已完成计算。
 
 CUDA关闭时选择[OpenCL Montgomery workflow](../../src/ecm/stage1/montgomery/opencl/workflow.cpp)。其设备hook和算术保持，最终结果同样交给task。CPU/OpenCL旧状态映射集中在兼容转换；明确失败优先于同时收到的停止信号。任务层按计算/发布阶段归类逃逸异常。

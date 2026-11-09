@@ -3,9 +3,9 @@
 #include "../../src/ecm/cuda/arithmetic/goldilocks/goldilocks.cuh"
 #include "../../src/ecm/cuda/ntt/device/tile_pass.cuh"
 
-template<bool Weighted, bool Modulus = false, class Shape, class Digit>
-__device__ __forceinline__ unsigned long long stage1_ntt_pack_digit(
-    const uint32_t* row, Shape s, const Digit* weighted, unsigned j)
+template<bool Weighted, bool Modulus = false, class Shape, class Digit, class Read>
+__device__ __forceinline__ unsigned long long stage1_ntt_pack_digit_from(
+    Read read, Shape s, const Digit* weighted, unsigned j)
 {
     using U = unsigned long long;
     if (j >= s.digits) return 0;
@@ -15,12 +15,20 @@ __device__ __forceinline__ unsigned long long stage1_ntt_pack_digit(
         return gl_mul(mask, digit.weight);
     } else {
         const unsigned word = digit.bit / 32, offset = digit.bit % 32;
-        U v = row[word];
-        if (word + 1 < s.words) v |= U(row[word + 1]) << 32;
+        U v = read(word);
+        if (word + 1 < s.words) v |= U(read(word + 1)) << 32;
         v = (v >> offset) & mask;
         if constexpr (Weighted) v = gl_mul(v, digit.weight);
         return v;
     }
+}
+
+template<bool Weighted, bool Modulus = false, class Shape, class Digit>
+__device__ __forceinline__ unsigned long long stage1_ntt_pack_digit(
+    const uint32_t* row, Shape s, const Digit* weighted, unsigned j)
+{
+    return stage1_ntt_pack_digit_from<Weighted,Modulus>(
+        [=](unsigned word) { return row[word]; }, s, weighted, j);
 }
 
 // A forward plan without outer passes has exactly one tile per spectrum.
