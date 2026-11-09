@@ -287,6 +287,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
     Buffer<U> inverse(size_t(4)*curves*s.length);
     const auto weights = options.weighted ? weighted_tables(p, s.length) : WeightedTables{};
+    const unsigned limb_smem = weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
     Buffer<U> inverse_weights(weights.inverse.size());
     Buffer<WeightedLimb> limb_table(weights.limbs.size());
@@ -334,11 +335,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         ntt_inverse_outer_fused(inverse.data,ctx,inv,outputs*curves,q);
         if (options.weighted) {
             const unsigned batch = outputs * curves;
-            unweight_products<<<grid(outputs),threads,0,q>>>(freq.data, inverse.data,
-                                                           inverse_weights.data, s.length);
-            weighted_limb_sums<<<dim3((s.words+threads-1)/threads,batch),threads,0,q>>>(
-                inverse.data, freq.data, digit_table.data, limb_table.data, p, s.words, s.length);
-            combine<true,false,true><<<batch,threads,0,q>>>(state.data,inverse.data,s,{{},{},out,0},{});
+            const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
+            weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
+                freq.data, inverse.data, inverse_weights.data, digit_table.data,
+                limb_table.data, p, s.words, s.length);
+            combine<true,false,true><<<batch,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
         } else {
             ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
             combine<true,false><<<outputs*curves,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});

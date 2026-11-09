@@ -75,32 +75,55 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length) {
     return out;
 }
 
-__global__ void unweight_products(WeightedWord* out, const WeightedWord* in,
-                                 const WeightedWord* weights, unsigned length) {
-    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < length) {
-        const size_t index = size_t(blockIdx.y) * length + i;
-        out[index] = gl_mul(in[index], weights[i]);
+constexpr unsigned weighted_limb_threads = 128;
+
+inline unsigned weighted_limb_smem(const std::vector<WeightedLimb>& limbs) {
+    unsigned capacity = 0;
+    for (unsigned begin = 0; begin < limbs.size(); begin += weighted_limb_threads) {
+        const auto& first = limbs[begin];
+        const auto& last = limbs[std::min<size_t>(limbs.size(), begin + weighted_limb_threads) - 1];
+        unsigned count = 0;
+        for (unsigned wrap = 0; wrap < 3; ++wrap)
+            count += last.end[wrap] - first.first[wrap];
+        capacity = std::max(capacity, count);
     }
+    return capacity * sizeof(WeightedWord);
 }
 
-__global__ void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
-    const WeightedDigit* digits, const WeightedLimb* spans, unsigned p,
-    unsigned words, unsigned length) {
-    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= words) return;
+__global__ __launch_bounds__(weighted_limb_threads)
+void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
+    const WeightedWord* inverse_weights, const WeightedDigit* digits, const WeightedLimb* spans,
+    unsigned p, unsigned words, unsigned length) {
+    const unsigned begin = blockIdx.x * weighted_limb_threads;
+    const unsigned end = min(words, begin + weighted_limb_threads);
+    const auto first = spans[begin];
+    const auto last = spans[end - 1];
+    const auto* input = coefficients + size_t(blockIdx.y) * length;
+    extern __shared__ WeightedWord local[];
+    unsigned offset = 0;
+    for (unsigned wrap = 0; wrap < 3; ++wrap) {
+        const unsigned lo = first.first[wrap], hi = last.end[wrap];
+        for (unsigned j = lo + threadIdx.x; j < hi; j += weighted_limb_threads)
+            local[offset + j - lo] = gl_mul(input[j], inverse_weights[j]);
+        offset += hi - lo;
+    }
+    __syncthreads();
+
+    const unsigned i = begin + threadIdx.x;
+    if (i >= end) return;
     const unsigned bit = i * 32, width = min(32u, p - bit);
     const auto mask = (WeightedWord(1) << width) - 1;
-    const auto* input = coefficients + size_t(blockIdx.y) * length;
     const auto span = spans[i];
     WeightedWord sum = 0;
+    offset = 0;
     for (unsigned wrap = 0; wrap < 3; ++wrap) {
         const unsigned lo = bit + wrap * p;
         for (unsigned j = span.first[wrap]; j < span.end[wrap]; ++j) {
-            const auto start = digits[j].bit;
-            const auto c = input[j];
+            const unsigned start = digits[j].bit;
+            const auto c = local[offset + j - first.first[wrap]];
             sum += (start <= lo ? c >> (lo - start) : c << (start - lo)) & mask;
         }
+        offset += last.end[wrap] - first.first[wrap];
     }
     out[size_t(blockIdx.y) * words + i] = sum;
 }
