@@ -22,7 +22,7 @@ Edwards 继续使用独立的主循环计时。新增 Montgomery 日志只有**�
 
 ### 输入与工况
 
-GPU START 工作行中的已知因子逐项通过整除验证；计算出的实际 N 位宽与原生 GPU 输出相符，并与 CPU 原工作行的目标一致。CPU screen 日志不打印已知因子列表，因此 CPU 输入身份的证据范围是原工作行，不能单凭 screen 日志证明执行时剥离了这些因子。
+GPU START 工作行中的已知因子逐项通过整除验证，计算出的实际 N 位宽与原生 GPU 输出相符，并与 CPU 原工作行的分解目标一致。本节历史图的横轴使用目标余因子位宽。Prime95 的 ECM 参考源码用 `setN` 剥除已知因子以确定因子检查目标，GWNUM 的主循环仍按原始 `k,b,n,c` 建立 FFT。因此实际算术位宽对比图将 Prime95 放在完整梅森指数处。CPU screen 日志未记录已知因子列表及精确二进制版本。参见本地 Prime95 31.06b01 `ecm.cpp:1199,1220,6885,7208` 和 [按算术位宽对比](STAGE2.md#stage1-ntt-与-cgbn-和-prime95-对比)。
 
 两次 GPU 测量均使用 device 0、RTX4070 Ti、60 SM、TPB128、120 个 block，即发射 2 block/SM；实际驻留仍受资源约束。Edwards 为 NAF w6、HWCD 倍点，Montgomery 为 Suyama PARAM0。TPI4/8/16/32 对应 B1=1e6/2e5/5e4/1e4，批量为 3840/1920/960/480。不同构造使用各自的进位余量，容器不强制相同：M1009 的 Edwards/Montgomery 为 **384/512 bits**，M12511 为 **12288/13312 bits**；不能把这些点的差异全部归因于点运算公式。
 

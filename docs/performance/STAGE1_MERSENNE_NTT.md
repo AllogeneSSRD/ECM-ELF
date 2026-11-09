@@ -30,6 +30,18 @@ M4423、B1=32 的 16／32 条 PARAM0 保存点在两个后端均通过独立 Pyt
 
 原始结果和设备遥测位于 `data/experiments/stage1_ntt_batch_tune_0596/`，其中 `measured/matrix/tune.json` 为历史测量。复测入口见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)、[设备对测](../../tools/bench/compare_stage1_ntt.py) 和 [生产验收](../../tools/test/test_stage1_ntt_production.py)。
 
+## 最佳配置全位宽矩阵
+
+2026-11-09 使用 ECM-ELF 0.59.9（CUDA 13.3、sm89）和 GPU1 RTX 4060 Laptop 8 GiB（驱动 610.88）测量 PARAM0。输入为 26 个完整梅森数，覆盖 61–262139 位。其中 13 个沿用历史基准的指数，另外 13 个覆盖 Stage1 NTT 的调优形状。每个指数单独从空 tune 搜索 linear 和 weighted，候选预热 100 步，按 `iter_per_s` 选搜索中实测吞吐最高的行，再锁定配置另跑三次完整 Stage1。加权卷积固定长度后由指数确定 digit 位宽，并在每次运行中核对实际位宽。
+
+实测 B1 为 1024（指数小于 128 或大于 20000）或 10000（其余）。sigma 从 20260922 起按批量连续分配，三次运行使用相同输入。`stage1_ntt_timing.device_ms` 取 ladder 的 CUDA event 区间，曲线构造、准备、回读、因子检查和发布另行执行。用 `device_ms / (1000 × 曲线数) × (1,000,000 / B1)` 折算至共同 B1。图中点为三次中位数，阴影覆盖最小至最大样本。折算沿用历史 Stage1 的线性口径。
+
+22 个指数选中 weighted，4 个选中 linear。65521、131071 和 262139 位使用 24 条并行，其余使用 32 条。选中的变换长度为 2–16384。折算后的中位数范围为 3.34–146.52 秒/曲线。262139 位用加权长度 16384，B1=1024 时实测 0.15004 秒/曲线。各组最快与最慢样本的差值最多为该组中位数的 0.17%。调优与正式测量期间，GPU 利用率至少 50% 的遥测样本显示 SM 频率为 1500 MHz，整卡功耗为 2.88–41.67 W（中位数 20.77 W），温度为 41–57 °C。
+
+78 个批次的实际计划与 tune 一致，逐组比较的三份存档中 sigma、B1、末点或因子及校验值均相同。对全部存档重算校验值，逐一确认日志中的因子整除对应梅森数且与存档一致。抽查首条曲线，M127 和 M7001 的末点与 ECM-ELF CPU scalar 一致，M262139 的末点与 GMP-ECM 7.0.5 一致。
+
+原始调优表、三轮运行日志、save、遥测和汇总保存在 `data/experiments/stage1_ntt_best_matrix_0599/`（M7001 起的运行在 `continuation/`），绘图汇总保存在 `data/figures/stage1_ntt_best_matrix_0599/`。复测可运行 `python tools/bench/bench_stage1_ntt_best.py --exe <ecm_cuda.exe> --device 1 --output <新实验目录>`。绘图脚本接收该实验的 `summary.json`，以及 `data/benchmarks/stage1_gpu_0_52_2_20261024/mont0_4070ti_02/summary.json`。见 [矩阵采集脚本](../../tools/bench/bench_stage1_ntt_best.py)、[绘图脚本](../../tools/bench/plot_stage1_ntt_best.py) 和 [三后端比较图](STAGE2.md#stage1-ntt-与-cgbn-和-prime95-对比)。
+
 ## 实现与正确性
 
 线性后端对 p 位操作数选择最大整数 digit 宽度 b，令 `c=ceil(p/b)`，要求 `c·(2^b−1)^2 < 2^64−2^32+1`。变换长度 `L=nextpow2(2c+1)`，所以 Goldilocks 单模数足以精确恢复每个卷积系数，不会把线性卷积误做循环卷积。生产 NTT 模块处理 forward、点乘／逆缩放、inverse 和进位；其输入打包是完整整数，独立于 Stage2 的多项式槽宽和 D/P。

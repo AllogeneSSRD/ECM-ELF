@@ -593,6 +593,20 @@ GPU 主指标为 `stage2_full_wall.total=init+main`，包含引擎内必需自�
 
 复现入口见 [版本化测量与绘图](../../tools/bench/README_STAGE2_VERSION.md)。历史 Edwards 全范围证据在 `data/experiments/edwards_stage2_reference_20261017/matrix_01/`，Montgomery 两组在 `data/experiments/stage2_n_scaling_20261009_current/`、`data/experiments/stage2_n_scaling_20261009_2400/`；对应分组 CSV 为 `data/benchmarks/stage2_n_scaling_20261009_{current,2400}_summary.csv`，55 W 全范围为 `data/benchmarks/stage2_n_scaling_20261008_reaudit_summary.csv`。单点选型、生产 B1 探针、relocation 和完整 G 边界实验的原始记录保留在 data，开发草稿保留；它们不参与本页全范围统计。
 
+## Stage1 NTT 与 CGBN 和 Prime95 对比
+
+本节比较进入 Stage2 之前的 Montgomery Stage1 成本。三条曲线使用各自实际算术模数位宽，纵轴为折算到 B1=1,000,000 的秒/曲线。左图放大历史数据覆盖范围，右图显示 NTT 完整测量范围。
+
+![Stage1 NTT、CGBN 和 Prime95 的秒每曲线对比，对数坐标](attachments/stage1-ntt-best-cgbn-prime95-log.png)
+
+![相同数据的线性坐标图](attachments/stage1-ntt-best-cgbn-prime95-linear.png)
+
+- **NTT PARAM0** 使用 ECM-ELF 0.59.9、GPU1 RTX 4060 Laptop，在 26 个完整梅森模数上测量。覆盖历史 13 个指数和默认调优的 13 个代表指数，跨度为 61–262139 位。每个指数独立短测 linear／weighted 及批量，冻结实测吞吐最高的配置，再跑三次真实 Stage1。
+- **CGBN PARAM0** 使用历史 ECM-ELF 0.52.2、RTX 4070 Ti、13 个 318–16272 位余因子，各一批。使用原全局 GPU event，包含设备准备。
+- **Prime95 Montgomery** 使用历史 4.0 GHz 单核、每指数三次 B1=1,000,000 的原生 Stage1 计时。Prime95 31.06b01 参考源码的 `setN` 将已知因子从因子检查目标剥除，主循环的 `gwsetup` 仍用原始 `k,b,n,c`。图中 Prime95 以完整梅森指数定位。历史日志未记录精确程序版本。源码位置见 [历史 Stage1 工况](STAGE1.md#输入与工况)。
+
+NTT 采用设备 ladder event 除以实际批量，再乘以 `1,000,000 / B1`。图中阴影为 NTT 和 Prime95 三次样本的最小／最大值。以历史范围内最大的 M16319 为例，NTT 为 8.67 秒/曲线，Prime95 为 12.95 秒/曲线，CGBN 在 16272 位余因子上为 3.53 秒/曲线。设备、模数和计时边界不同，图用于观察成本随位宽变化的趋势。计时、选择与复现见 [NTT 最佳配置全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 和 [历史 Stage1 基准](STAGE1.md#rtx4070-ti-全范围-stage1-对比)。
+
 ## 待验证范围
 
 本页 GPU 主指标为单条 Edwards 曲线的完整引擎计时，预算固定、两档 B2、GPU1。0.39.3连续队列用于学习观察；0.54.7已完成小档B2的13格冻结后独立n=3复测，大档仍未完成当前版本的独立矩阵。其他设备、生产B1或宽位B2≥10^12也未覆盖。旧 Montgomery 三档全范围与 Prime95 单次参考不能替代这些复测。优先用固定 D 对照复核宽位高 B2 的默认 D/P、NTT 长度边界和候选准入模型，区分选型与分块算法的影响。运行时自动选型在其他设备、生产 B1/B2 和长期波动中的收益仍需扩展；G=1、小预算回退和可选 relocation 另行验证。CPU 保持历史参考，不据 GPU 改进推定 CPU 后端收益。
