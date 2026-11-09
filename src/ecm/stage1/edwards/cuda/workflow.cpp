@@ -112,8 +112,7 @@ static void prepared(void* context) {
         p.display(p.loop_start);
 }
 
-static bool progress(uint32_t done, void* context) {
-    auto& p = *static_cast<Progress*>(context);
+static bool progress(Progress& p, uint32_t done, const ecm_cuda_stage1::EdwardsSnapshot& snapshot) {
     p.b.done = done;
     const auto sample_time = Progress::Clock::now();
     p.delta = done - p.sampled;
@@ -129,6 +128,8 @@ static bool progress(uint32_t done, void* context) {
         (stop || (p.opt.persistence.ckpt_ms &&
                   now - p.last >= std::chrono::milliseconds(p.opt.persistence.ckpt_ms)))) {
         bool saved = true;
+        if (!p.path.empty())
+            snapshot();
         try {
             if (!p.path.empty())
                 saved = save_checkpoint(p.checkpoint, p.path, p.b, p.n, p.scalar, p.b1);
@@ -148,8 +149,8 @@ static bool progress(uint32_t done, void* context) {
             p.durable = done;
         p.last = now;
     }
-    // The rate samples include each slice and its state readback, excluding
-    // checkpoint/console callback time. Elapsed is the complete loop wall time.
+    // Checkpoint/console callback time is excluded from rate samples.
+    // Elapsed is the complete loop wall time.
     p.sample_start = Progress::Clock::now();
     if (stop && done < p.total) {
         p.finish();
@@ -372,7 +373,10 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         const auto run =
             execute_edwards_batch(n, scalar.v, batch.state.data(), curves, batch.done,
                                   {opt.execution.device_index, batch.window, batch.doubling, 0},
-                                  progress, &p, &metrics, prepared);
+                                  [&p](uint32_t done, const EdwardsSnapshot& snapshot) {
+                                      return progress(p, done, snapshot);
+                                  },
+                                  &p, &metrics, prepared);
         const int rc = run.code;
         const double arithmetic_seconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - arithmetic_start)
@@ -388,6 +392,8 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 metrics.columns, metrics.additions, metrics.container_bits, metrics.tpi,
                 static_cast<unsigned long long>(metrics.dictionary_bytes),
                 metrics.dictionary_gpu_ms, metrics.loop_gpu_ms, metrics.launches);
+        if (batch.window)
+            ecm_ts_fprintf(stdout, "GPU Edwards NAF snapshots: count=%u\n", metrics.snapshots);
         if (rc < 0) {
             result.fail(run.failure == ecm_cuda_stage1::Failure::Device
                             ? ecm_stage1::FailureSource::Device

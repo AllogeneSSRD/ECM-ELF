@@ -52,8 +52,10 @@ const Kernels &kernels_##W() { \
             slice<P><<<(n+128/T-1)/(128/T),128>>>(static_cast<cgbn_error_report_t*>(r),static_cast<Mem*>(d),s,b,a,z,n);}, \
         [](void *r,void *d,void *q,uint32_t e,uint32_t n){ \
             edwards_naf_prepare<P><<<(n+128/T-1)/(128/T),128>>>(static_cast<cgbn_error_report_t*>(r),static_cast<Mem*>(d),static_cast<Mem*>(q),e,n);}, \
-        [](void *r,void *d,void *q,void *o,const uint32_t *nz,const uint32_t *c,uint32_t b,uint32_t a,uint32_t z,uint32_t e,uint32_t w,uint32_t n,int dbl){ \
-            edwards_naf_slice<P><<<(n+128/T-1)/(128/T),128>>>(static_cast<cgbn_error_report_t*>(r),static_cast<Mem*>(d),static_cast<Mem*>(q),static_cast<Mem*>(o),nz,c,b,a,z,e,w,n,dbl);} }; \
+        [](void *r,void *d,void *q,const uint32_t *nz,const uint32_t *c,uint32_t b,uint32_t a,uint32_t z,uint32_t e,uint32_t w,uint32_t n,int dbl){ \
+            edwards_naf_slice<P><<<(n+128/T-1)/(128/T),128>>>(static_cast<cgbn_error_report_t*>(r),static_cast<Mem*>(d),static_cast<Mem*>(q),nz,c,b,a,z,e,w,n,dbl);}, \
+        [](void *r,void *d,void *o,uint32_t n){ \
+            edwards_naf_snapshot<P><<<(n+128/T-1)/(128/T),128>>>(static_cast<cgbn_error_report_t*>(r),static_cast<Mem*>(d),static_cast<Mem*>(o),n);} }; \
     return k; \
 }
 #include "../../../../cuda/dispatch/tiers.def"

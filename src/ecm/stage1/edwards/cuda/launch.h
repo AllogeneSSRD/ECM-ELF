@@ -8,8 +8,9 @@ struct Kernels {
     uint32_t bits,tpi,tpb;
     void (*binary)(void*,void*,const uint32_t*,uint32_t,uint32_t,uint32_t,uint32_t);
     void (*prepare)(void*,void*,void*,uint32_t,uint32_t);
-    void (*naf)(void*,void*,void*,void*,const uint32_t*,const uint32_t*,
+    void (*naf)(void*,void*,void*,const uint32_t*,const uint32_t*,
                 uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,int);
+    void (*snapshot)(void*,void*,void*,uint32_t);
 };
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) const Kernels &kernels_##W();
 #include "../../../cuda/dispatch/tiers.def"

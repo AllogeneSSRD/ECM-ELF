@@ -15,6 +15,13 @@ const Tier *select_tier(size_t bits) {
     for(const auto &tier:tiers)if(tier.bits && bits<tier.bits)return &tier;
     return nullptr;
 }
+ecm_cuda_stage1::EdwardsSliceProgress legacy_progress(EcmEdwardsProgress callback, void *context) {
+    if (!callback) return {};
+    return [callback, context](uint32_t done, const ecm_cuda_stage1::EdwardsSnapshot &snapshot) {
+        snapshot();
+        return callback(done, context);
+    };
+}
 }
 bool ecm_cuda_edwards_tier(size_t bits,uint32_t &container,uint32_t &tpi) {
     const auto *tier=select_tier(bits);container=tier?tier->bits:0;tpi=tier?tier->tpi:0;
@@ -22,7 +29,8 @@ bool ecm_cuda_edwards_tier(size_t bits,uint32_t &container,uint32_t &tpi) {
 }
 ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_edwards_batch(mpz_srcptr n,mpz_srcptr scalar,
     mpz_t *states,uint32_t count,uint32_t &done,const EdwardsOptions &options,
-    EcmEdwardsProgress progress,void *context,EcmEdwardsNafMetrics *metrics,EcmEdwardsPrepared prepared) {
+    const EdwardsSliceProgress &progress,void *context,EcmEdwardsNafMetrics *metrics,EcmEdwardsPrepared prepared) {
+    uint32_t snapshot_cursor=done;
     RunResult result;result.cursor=done;result.snapshot_cursor=done;
     try {
         if(metrics)*metrics={};
@@ -53,13 +61,13 @@ ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_edwards_batch(mpz_srcptr n,m
         if(metrics){metrics->container_bits=tier->bits;metrics->tpi=tier->tpi;metrics->dictionary_bytes=dictionary_bytes;}
         ecm_edwards_cuda_detail::prepare_device(options.device);
         result.failure=Failure::Execution;
-        result.code=tier->execute({n,scalar,states,count,done,options.chunk,progress,context,
+        result.code=tier->execute({n,scalar,states,count,done,snapshot_cursor,options.chunk,progress,context,
             plan.get(),options.doubling,metrics,prepared});
-        result.cursor=done;result.snapshot_cursor=done;
         if(result.code==0){result.termination=Termination::Completed;result.failure=Failure::None;}
         else if(result.code==2){result.termination=Termination::Stopped;result.failure=Failure::None;}
-    }catch(const RunError &e){result.failure=e.failure;result.error=e.what();result.cursor=done;result.snapshot_cursor=done;}
-    catch(const std::exception &e){result.error=e.what();result.cursor=done;result.snapshot_cursor=done;}
+    }catch(const RunError &e){result.failure=e.failure;result.error=e.what();}
+    catch(const std::exception &e){result.error=e.what();}
+    result.cursor=done;result.snapshot_cursor=snapshot_cursor;
     return result;
 }
 
@@ -68,7 +76,7 @@ int ecm_cuda_edwards_stage1(const mpz_t n,const mpz_t scalar,mpz_t *states,
     uint32_t count,uint32_t &done,uint32_t chunk,int device,EcmEdwardsProgress progress,
     void *context,std::string &error,EcmEdwardsPrepared prepared,ecm_cuda_stage1::Failure *failure) {
     const auto result=ecm_cuda_stage1::execute_edwards_batch(n,scalar,states,count,done,
-        {device,0,4,chunk},progress,context,nullptr,prepared);
+        {device,0,4,chunk},legacy_progress(progress,context),context,nullptr,prepared);
     error=result.error;if(failure)*failure=result.failure;return result.code;
 }
 int ecm_cuda_edwards_stage1_naf(const mpz_t n,const mpz_t scalar,mpz_t *states,
@@ -81,6 +89,6 @@ int ecm_cuda_edwards_stage1_naf(const mpz_t n,const mpz_t scalar,mpz_t *states,
         return -1;
     }
     const auto result=ecm_cuda_stage1::execute_edwards_batch(n,scalar,states,count,done,
-        {device,window,doubling,chunk},progress,context,metrics,prepared);
+        {device,window,doubling,chunk},legacy_progress(progress,context),context,metrics,prepared);
     error=result.error;if(failure)*failure=result.failure;return result.code;
 }

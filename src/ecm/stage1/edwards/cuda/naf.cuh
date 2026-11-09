@@ -19,12 +19,19 @@ template<class P> __global__ void edwards_naf_prepare(cgbn_error_report_t *repor
     cgbn_edwards_point<Env> odd,two;
     cgbn_load(env,odd.x,slot+2);cgbn_load(env,odd.y,slot+3);
     cgbn_load(env,odd.z,slot+4);cgbn_load(env,odd.t,slot+5);
-    cgbn_edwards_field<Env> f{env,n,np0};f.dbl(two,odd);
+    cgbn_edwards_field<Env> f{env,n,np0};
+    typename Env::cgbn_t two_dt;
+    if(entries>1) {
+        f.dbl(two,odd);
+        f.mul(two_dt,two.t,d);
+    }
     auto *dest=dictionary+size_t(i)*entries*4;
     for(uint32_t j=0;j<entries;++j) {
         cgbn_store(env,dest+4*j,odd.x);cgbn_store(env,dest+4*j+1,odd.y);
-        cgbn_store(env,dest+4*j+2,odd.z);cgbn_store(env,dest+4*j+3,odd.t);
-        if(j+1<entries)f.add_point(odd,odd,two,d);
+        cgbn_store(env,dest+4*j+2,odd.z);
+        f.mul(value,odd.t,d);
+        cgbn_store(env,dest+4*j+3,value);
+        if(j+1<entries)f.add_point_cached(odd,odd,two.x,two.y,two.z,two_dt);
     }
 }
 
@@ -45,7 +52,7 @@ template<class Env> __device__ __forceinline__ void edwards_naf_double(
 
 template<class P> __global__ void edwards_naf_slice(cgbn_error_report_t *report,
         cgbn_mem_t<P::BITS> *data,cgbn_mem_t<P::BITS> *dictionary,
-        cgbn_mem_t<P::BITS> *ordinary,const uint32_t *nonzero,const uint32_t *codes,
+        const uint32_t *nonzero,const uint32_t *codes,
         uint32_t total_bits,uint32_t start,uint32_t stop,uint32_t entries,
         uint32_t window,uint32_t count,int algorithm) {
     using Context=cgbn_context_t<P::TPI,P>;
@@ -54,12 +61,12 @@ template<class P> __global__ void edwards_naf_slice(cgbn_error_report_t *report,
     if(i>=count)return;
     Context ctx(cgbn_report_monitor,report,i);Env env(ctx);
     auto *slot=data+size_t(10)*i;
-    typename Env::cgbn_t n,d,tmp,zero;
-    cgbn_load(env,n,slot);cgbn_load(env,d,slot+1);
+    typename Env::cgbn_t n,zero;
+    cgbn_load(env,n,slot);
     // np0 depends only on the low limb of N, not on d's representation.
     const uint32_t np0=cgbn_binary_inverse_ui32(env,0u-cgbn_get_ui32(env,n));
     cgbn_set_ui32(env,zero,0);
-    cgbn_edwards_point<Env> r,q;
+    cgbn_edwards_point<Env> r;
     cgbn_load(env,r.x,slot+6);cgbn_load(env,r.y,slot+7);
     cgbn_load(env,r.z,slot+8);cgbn_load(env,r.t,slot+9);
     cgbn_edwards_field<Env> f{env,n,np0};
@@ -71,16 +78,31 @@ template<class P> __global__ void edwards_naf_slice(cgbn_error_report_t *report,
             const uint64_t packed=uint64_t(codes[word])|(uint64_t(codes[word+1])<<32);
             const uint32_t code=uint32_t(packed>>shift)&((1u<<(window-1))-1);
             auto *source=dictionary+(size_t(i)*entries+(code&(entries-1)))*4;
-            cgbn_load(env,q.x,source);cgbn_load(env,q.y,source+1);
-            cgbn_load(env,q.z,source+2);cgbn_load(env,q.t,source+3);
-            if(code&entries){f.sub(q.x,zero,q.x);f.sub(q.t,zero,q.t);}
-            f.add_point(r,r,q,d);
+            typename Env::cgbn_t qx,qy,qz,dqt;
+            cgbn_load(env,qx,source);cgbn_load(env,qy,source+1);
+            cgbn_load(env,qz,source+2);cgbn_load(env,dqt,source+3);
+            if(code&entries){f.sub(qx,zero,qx);f.sub(dqt,zero,dqt);}
+            f.add_point_cached(r,r,qx,qy,qz,dqt);
         }
     }
     cgbn_store(env,slot+6,r.x);cgbn_store(env,slot+7,r.y);
     cgbn_store(env,slot+8,r.z);cgbn_store(env,slot+9,r.t);
-    cgbn_mont2bn(env,tmp,r.x,n,np0);cgbn_store(env,ordinary+size_t(i)*4,tmp);
-    cgbn_mont2bn(env,tmp,r.y,n,np0);cgbn_store(env,ordinary+size_t(i)*4+1,tmp);
-    cgbn_mont2bn(env,tmp,r.z,n,np0);cgbn_store(env,ordinary+size_t(i)*4+2,tmp);
-    cgbn_mont2bn(env,tmp,r.t,n,np0);cgbn_store(env,ordinary+size_t(i)*4+3,tmp);
+}
+
+template<class P> __global__ void edwards_naf_snapshot(cgbn_error_report_t *report,
+        cgbn_mem_t<P::BITS> *data,cgbn_mem_t<P::BITS> *ordinary,uint32_t count) {
+    using Context=cgbn_context_t<P::TPI,P>;
+    using Env=cgbn_env_t<Context,P::BITS>;
+    const uint32_t i=(blockIdx.x*blockDim.x+threadIdx.x)/P::TPI;
+    if(i>=count)return;
+    Context ctx(cgbn_report_monitor,report,i);Env env(ctx);
+    auto *slot=data+size_t(10)*i;
+    typename Env::cgbn_t n,value;
+    cgbn_load(env,n,slot);
+    const uint32_t np0=cgbn_binary_inverse_ui32(env,0u-cgbn_get_ui32(env,n));
+    for(unsigned j=0;j<4;++j) {
+        cgbn_load(env,value,slot+6+j);
+        cgbn_mont2bn(env,value,value,n,np0);
+        cgbn_store(env,ordinary+size_t(i)*4+j,value);
+    }
 }

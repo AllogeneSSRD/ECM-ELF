@@ -60,14 +60,31 @@ struct cgbn_edwards_field {
                                                const cgbn_edwards_point<Env> &p,
                                                const cgbn_edwards_point<Env> &q,
                                                const bn &d) const {
-        bn A, B, C, D, E, F, G, H, tmp, tmp2;
-        mul(A, p.x, q.x);
-        mul(B, p.y, q.y);
+        bn C;
         mul(C, p.t, q.t);
         mul(C, C, d);
-        mul(D, p.z, q.z);
+        add_point_with_cross(out, p, q.x, q.y, q.z, C);
+    }
+
+    // A fixed addend can supply d*T once, including for signed NAF entries.
+    __device__ __forceinline__ void add_point_cached(cgbn_edwards_point<Env> &out,
+            const cgbn_edwards_point<Env> &p, const bn &qx, const bn &qy, const bn &qz,
+            const bn &dqt) const {
+        bn C;
+        mul(C, p.t, dqt);
+        add_point_with_cross(out, p, qx, qy, qz, C);
+    }
+
+private:
+    __device__ __forceinline__ void add_point_with_cross(cgbn_edwards_point<Env> &out,
+            const cgbn_edwards_point<Env> &p, const bn &qx, const bn &qy, const bn &qz,
+            const bn &C) const {
+        bn A, B, D, E, F, G, H, tmp, tmp2;
+        mul(A, p.x, qx);
+        mul(B, p.y, qy);
+        mul(D, p.z, qz);
         add(tmp, p.x, p.y);
-        add(tmp2, q.x, q.y);
+        add(tmp2, qx, qy);
         mul(E, tmp, tmp2);
         sub(E, E, A);
         sub(E, E, B);

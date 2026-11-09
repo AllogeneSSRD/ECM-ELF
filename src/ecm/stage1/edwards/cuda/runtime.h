@@ -1,7 +1,12 @@
 #pragma once
 #include "naf.h"
+#include <functional>
 
 namespace ecm_cuda_stage1 {
+using EdwardsSnapshot = std::function<void()>;
+// The callback can pull canonical host coordinates for this slice while it runs.
+using EdwardsSliceProgress = std::function<bool(uint32_t, const EdwardsSnapshot &)>;
+
 struct EdwardsOptions {
     int device=0;
     unsigned window=0; // 0=binary, otherwise width-w NAF.
@@ -11,5 +16,5 @@ struct EdwardsOptions {
 // One production boundary for validation, resolved geometry and error mapping.
 // Borrowed state remains owned by the caller, including on failure.
 RunResult execute_edwards_batch(mpz_srcptr,mpz_srcptr,mpz_t *,uint32_t,uint32_t &,
-    const EdwardsOptions &,EcmEdwardsProgress,void *,EcmEdwardsNafMetrics *,EcmEdwardsPrepared);
+    const EdwardsOptions &,const EdwardsSliceProgress &,void *,EcmEdwardsNafMetrics *,EcmEdwardsPrepared);
 }

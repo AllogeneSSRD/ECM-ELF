@@ -62,3 +62,10 @@ TODO：冻结基线与源依赖；完成测量、窗口/倍点选择、正确性
 `tools/bench/plot_edwards_gpu_stage1.py` 读取 `final_02/summary.json`，生成三曲线族初始成本、同一exe的binary/NAF、窗口/字典分配及HWCD/2XY四组PNG/SVG，图与解释维护在 [Stage1性能](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)。没有新增GPU测量，144个正式样本全部保留，48个预热仍排除；误差线为实测范围而非置信区间，嵌套计时独立展示。来源、变换、构建及图表摘要保存在 `data/benchmarks/edwards_naf_20261016/plots_01.json`，输出位于 `data/figures/edwards_naf_20261016/`。原始证据保持不变，开发草稿继续保留。
 
 数值/绘图核对见同目录的 `plot_validation_01.json`：234个绘制的计时观测点均未被裁出坐标范围（含同批次不同计时边界），归一化结果匹配原审计，36个窗口正式样本的字典分配匹配原日志；7项损坏输入均被拒绝。8个PNG/SVG可解析并在重复生成时逐字节相同，图表链接存在，四组图已查看排版。
+
+## 0.59.7 NAF 按需快照与字典预乘
+
+- 将 NAF 切片与普通坐标导出拆开。生产进度回调在需要持久化时请求一次快照，设备执行游标和已导入的主机游标分别跟踪。完成与主动停止提供当前普通状态，完成档补发布沿用主机校验。兼容算术探针的旧回调仍在看到当片坐标后执行。
+- 奇倍点字典保持四个域元素，末项为 `dT`。加点与构表固定加数都复用预乘值。实际累加点和存档仍使用完整普通 `(X,Y,Z,T)`，恢复时重建字典。
+- GPU1 用独立 Python Montgomery ladder 验证窗口 2／12 与两种倍点组合。实际队列通过关闭周期写入时的停止恢复、0.59.6 与 0.59.7 双向恢复、周期写入故障后从上一个快照恢复，以及设备不可用时的完成档补发布。生产快照门禁由 [test_edwards_live_progress.py](../../tools/test/test_edwards_live_progress.py) 的 `--check-snapshots` 启用。
+- 原始记录在 `data/experiments/edwards_stage1_snapshot_dt_0597/`，性能结果见 [Stage1 性能](../performance/STAGE1.md#gpu-edwards-naf-按需导出与字典预乘)。

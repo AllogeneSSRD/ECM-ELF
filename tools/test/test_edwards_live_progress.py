@@ -15,7 +15,7 @@ PROGRESS = re.compile(
 )
 
 
-def validate(text, mode):
+def validate(text, mode, check_snapshots=False):
     rows = [m.groups() for m in PROGRESS.finditer(text)]
     assert rows, "no live GPU progress; Edwards still uses the old stage1: bar"
     assert "stage1: [" not in text, "old progress renderer still active"
@@ -28,10 +28,18 @@ def validate(text, mode):
     assert all(row[3] == ("columns" if mode == "naf" else "bits") for row in rows)
     assert all(float(row[4]) > 0 for row in rows), rows
     assert rows[-1][0] == "100.0" and float(rows[-1][6]) == 0, rows[-1]
+    if check_snapshots and mode == "naf":
+        assert_single_snapshot(text)
     return dict(samples=len(rows), first=rows[0], last=rows[-1])
 
 
-def resume_check(exe, out, device, exponent, mode, env, reference):
+def assert_single_snapshot(text):
+    launches = int(re.search(r"GPU Edwards NAF: .* launches=(\d+)", text)[1])
+    snapshots = int(re.search(r"GPU Edwards NAF snapshots: count=(\d+)", text)[1])
+    assert launches > snapshots == 1, (launches, snapshots)
+
+
+def resume_check(exe, out, device, exponent, mode, env, reference, check_snapshots):
     import ctypes
     from ctypes import wintypes
     from stage1_checkpoint_decode import batch
@@ -79,6 +87,8 @@ def resume_check(exe, out, device, exponent, mode, env, reference):
                 child.wait()
             kernel.CloseHandle(event)
     assert queue.read_text() == task and not (work / "finished.txt").exists()
+    if check_snapshots and mode == "naf":
+        assert_single_snapshot(log.read_text(encoding="utf-8", errors="replace"))
     ckpt = next(path for path in work.glob(".e_s1_*.ckpt") if ".bak" not in path.name)
     raw = ckpt.read_bytes()
     (work / "frozen_stopped.ckpt").write_bytes(raw)
@@ -90,7 +100,7 @@ def resume_check(exe, out, device, exponent, mode, env, reference):
                          encoding="utf-8", errors="replace", timeout=120)
     (work / "resumed.log").write_text(run.stdout, encoding="utf-8")
     assert run.returncode == 0, run.stdout[-4000:]
-    stats = validate(run.stdout, mode)
+    stats = validate(run.stdout, mode, check_snapshots)
     assert "GPU Edwards resume:" in run.stdout
     assert int(stats["first"][1]) == before + int(stats["first"][2]), "restored work counted as new work"
     assert float(stats["first"][5]) < 5, "preparation contaminated the live loop clock"
@@ -108,6 +118,7 @@ def main():
     p.add_argument("--exponent", type=int, default=1279)
     p.add_argument("--reference", type=Path, help="baseline output folder containing mode/point.save")
     p.add_argument("--resume", action="store_true", help="also stop/resume both modes with a real Windows stop event")
+    p.add_argument("--check-snapshots", action="store_true", help="require one NAF export for each completion or stop with periodic checkpoints disabled")
     args = p.parse_args()
     exe, out = args.exe.resolve(), args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -139,14 +150,15 @@ def main():
             case["save_sha256"] = hashlib.sha256(point).hexdigest()
             if args.reference:
                 assert point == (args.reference / mode / "point.save").read_bytes(), "save point changed"
-            case.update(validate(run.stdout, mode))
+            case.update(validate(run.stdout, mode, args.check_snapshots))
             case["passed"] = True
         except AssertionError as error:
             case.update(passed=False, error=str(error))
             failures.append(f"{mode}: {error}")
         report["cases"].append(case)
     if args.resume and not failures:
-        report["resume"] = [resume_check(exe, out, args.device, args.exponent, mode, env, args.reference or out)
+        report["resume"] = [resume_check(exe, out, args.device, args.exponent, mode, env,
+                                         args.reference or out, args.check_snapshots)
                             for mode in ("naf", "binary")]
     report["passed"] = not failures
     (out / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

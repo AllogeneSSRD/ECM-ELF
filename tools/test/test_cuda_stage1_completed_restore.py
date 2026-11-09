@@ -17,24 +17,28 @@ def main():
     out.mkdir(parents=True,exist_ok=False)
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),cases=[],complete=False)
     for algorithm in ['binary','naf']:
-        folder=out/algorithm;folder.mkdir();blocked=folder/'blocked';blocked.write_text('publication failure fixture\n')
+        folder=out/algorithm;folder.mkdir()
+        submission=folder/'results.json.txt'
+        blocked=folder/'results.json.txt.new';blocked.mkdir()
         queue=folder/'worktodo.txt';task='ECM2=1,2,127,-1,1000,10000,4,20260922\n';queue.write_text(task)
         ini=folder/'ecm.toml'
-        config='[shared]\nuser=""\ncomputer=""\nworktodo='+json.dumps(str(queue))+\
-            '\n[stage1]\ncurve="ed"\ntarget="gpu"\nauto_stage2=0\nckpt_seconds=0\ntmp_dir='+\
-            json.dumps(str(folder))+'\nstage1_submission_file='+json.dumps(str(blocked/'results.json.txt'))+'\nlog_file=""\n'
+        config=('[shared]\nuser=""\ncomputer=""\nworktodo='+json.dumps(str(queue))+
+                '\n[stage1]\ncurve="ed"\ntarget="gpu"\nauto_stage2=0\nckpt_seconds=0\ntmp_dir='+
+                json.dumps(str(folder))+'\nfinished='+json.dumps(str(folder/'finished.txt'))+
+                '\nstage1_submission_file='+json.dumps(str(submission))+'\nlog_file=""\n')
         ini.write_text(config,encoding='utf-8')
         env=dict(os.environ,ECM_EDWARDS_STAGE1_ALGO=algorithm)
         env.pop('ECM_EDWARDS_DBL_ALGO',None)
-        command=[str(exe),'--config',str(ini)]
+        command=[str(exe),'--config',str(ini),'--gpu-backend','cuda']
         failed=subprocess.run(command+['-d',str(args.device)],cwd=folder,env=env,capture_output=True,timeout=120)
         (folder/'failed.log').write_bytes(failed.stdout+failed.stderr)
         assert failed.returncode!=0 and queue.read_text()==task
+        assert b'cannot create temporary file:' in failed.stdout+failed.stderr
         path=folder/'.e_s1_m127_1000.ckpt';saved=checkpoint(path)
         assert saved['done']==saved['total'] and saved['count']==4
         snapshot=path.read_bytes();(folder/'completed_checkpoint.bin').write_bytes(snapshot)
         save=next(folder.glob('e_*.save'));before=records(save);assert len(before)==4
-        blocked.rename(folder/'blocked_evidence')
+        blocked.rmdir()
         # Invalid device index would fail cudaSetDevice if the completed path used it.
         env['CUDA_VISIBLE_DEVICES']=''
         resumed=subprocess.run(command+['-d','999'],cwd=folder,env=env,capture_output=True,timeout=120)
@@ -42,6 +46,7 @@ def main():
         text=(resumed.stdout+resumed.stderr).decode('utf-8','replace')
         assert resumed.returncode==0 and not queue.read_text().strip(),text[-3000:]
         assert 'host validation only; no device preparation' in text
+        if algorithm=='naf':assert 'GPU Edwards NAF snapshots: count=0' in text
         assert not path.exists() and records(save)==before
         assert len((folder/'stage1_results.jsonl').read_text().splitlines())==4
         report['cases'].append(dict(algorithm=algorithm,curves=4,completed_snapshot_sha256=hashlib.sha256(snapshot).hexdigest()))

@@ -116,7 +116,8 @@ void edwards_runtime_contract() {
         "Edwards device error lost");
     reject_device=false;EcmEdwardsNafMetrics metrics;
     const auto stopped=execute_edwards_batch(n.v,s.v,state.data(),1,done,{1,6,5,17},nullptr,nullptr,&metrics,nullptr);
-    require(stopped.termination==Termination::Stopped && stopped.cursor==1 && device_calls==2 && dispatch_calls==1 &&
+    require(stopped.termination==Termination::Stopped && stopped.cursor==1 && stopped.snapshot_cursor==1 &&
+        device_calls==2 && dispatch_calls==1 &&
         metrics.container_bits==384 && metrics.tpi==4,"resolved Edwards request/stop mismatch");
     std::puts("edwards_runtime_contract=PASS complete_binary_naf_no_gpu_or_tier=1 invalid_state=1 compatibility=1 device_failure=1 resolved_dispatch=1");
 }
@@ -128,7 +129,10 @@ void ecm_edwards_cuda_detail::prepare_device(int) {
 }
 int ecm_edwards_cuda_detail::run_384(const Request &request) {
     ++dispatch_calls;require(request.chunk==17 && request.plan && request.plan->window==6 && request.doubling==5,
-        "resolved request differs from requested NAF options");request.done=1;return 2;
+        "resolved request differs from requested NAF options");
+    request.done=1;
+    request.snapshot_cursor=request.done;
+    return 2;
 }
 int main() {
     using namespace ecm_cuda_mont_host;

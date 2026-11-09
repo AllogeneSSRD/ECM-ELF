@@ -6,6 +6,7 @@ struct EcmEdwardsNafMetrics {
     uint64_t dictionary_bytes=0;
     float dictionary_gpu_ms=0,loop_gpu_ms=0;
     double dictionary_wall_ms=0;
+    uint32_t snapshots=0;
 };
 // done counts MSB-first NAF columns (possibly one more than binary scalar
 // length). Rebuilding the dictionary never changes the supplied accumulator.

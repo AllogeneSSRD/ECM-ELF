@@ -37,6 +37,7 @@ int ecm_cuda_diagnostics::host_wait_run(const HostWaitHooks &hooks,mpz_srcptr n,
         ~Restore(){active_hooks=previous;}
     } restore{active_hooks};
     active_hooks=&hooks;
+    uint32_t snapshot_cursor=done;
     return ecm_edwards_cuda_detail::ECM_DIAG_JOIN(run_,ECM_HOST_WAIT_TIER)(
-        {n,scalar,states,count,done,chunk,nullptr,nullptr,&plan,doubling,metrics,nullptr});
+        {n,scalar,states,count,done,snapshot_cursor,chunk,nullptr,nullptr,&plan,doubling,metrics,nullptr});
 }

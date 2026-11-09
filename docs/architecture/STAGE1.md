@@ -143,7 +143,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 ### GPU Edwards
 
-[CUDA NAF 批量入口](../../src/ecm/stage1/edwards/cuda/runtime.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [标量与 NAF 合同](../../include/ecm/stage1/scalar.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../src/ecm/stage1/edwards/cuda/naf.cuh)。
+[CUDA NAF 批量入口](../../src/ecm/stage1/edwards/cuda/runtime.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12。每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，字典存 `(X,Y,Z,dT)`。加点直接计算 `T_acc·(dT)`，负数字对 X 和 dT 取负。主机以两份紧凑位图保存非零列和有符号索引，生产调用按实测执行时间调整每片 NAF 列数。累加点留在设备算术域，检查点、停止和完成边界按需导出四个规范普通坐标。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [标量与 NAF 合同](../../include/ecm/stage1/scalar.h)，设备字典、切片和导出见 [naf.cuh](../../src/ecm/stage1/edwards/cuda/naf.cuh)。
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
 
@@ -161,17 +161,17 @@ Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery
 
 `GPU Edwards initialization` 为本次 Edwards 批次从指数准备开始、到设备可进入切片循环为止的墙钟时间，减去单独报告的字典构建墙钟；包括曲线构造/恢复、标量编码、设备分配和上传。`GPU Edwards dictionary` 为设备字典准备的墙钟，同时报告对应的 CUDA event 毫秒；binary 不构建字典，该项为零。两行均在进度条前输出。已完成的 checkpoint 不重建 NAF 设备字典，字典计时也为零。
 
-`arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。这些计时存在嵌套，不能与进程 wall 重复相加。
+`arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、快照及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。`loop_gpu_ms` 排除独立的快照内核。`GPU Edwards NAF snapshots` 记录本次调用实际导出次数。已完成档补发布走主机验证，导出次数为零。这些计时存在嵌套，不能与进程 wall 重复相加。
 
-GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。三种 Montgomery 运行路径及 Edwards 均复用已有 SpeedWindow，各自保持原计时区间、进度单位和切片策略。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/stage1/progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/stage1/edwards/cuda/workflow.cpp)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl)。
+GPU Edwards 的 live 计时从设备准备回调开始，已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，取最近最多 50 个样本的速度算术平均。每曲线耗时等于总工作量除以平均速度和曲线数，剩余时间等于未完成工作量除以平均速度。速度样本包含进入进度回调之前的设备工作，排除回调中的周期检查点导出、写入及进度输出。`elapsed` 覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/stage1/progress.h)。Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/stage1/edwards/cuda/workflow.cpp)，设备准备边界位于 [binary/NAF 主机循环](../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl)。
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
-**切片与主机等待。** Edwards binary/NAF 入口明确设置阻塞设备调度，保留其他设备标志。NAF 先记录结束事件，通过设备同步等待，再检查事件、CGBN 报告并回读规范坐标；结束事件位置不包含主机唤醒后的工作。binary 原有设备同步也采用阻塞调度。当前每个 Stage1 调用只使用默认流，因此设备同步不会串行化另一个独立计算流；将来并行提交多流时须重新选择等待范围。
+**切片与主机等待。** Edwards binary/NAF 入口设置阻塞设备调度。NAF 记录结束事件，设备同步后检查事件和 CGBN 报告，再推进执行游标。主机快照游标仅在坐标转换、回读和导入成功后更新。binary 每片回读普通状态，设备同步也采用阻塞调度。当前每个 Stage1 调用只使用默认流。
 
 生产调用的切片参数为 0，由共用 `EcmEdwardsSlice` 从 32 列/位起步，按上一片时间调整到约 100 ms；范围为 16…4096，单次增长/缩小不超过 4 倍，末尾剩余量单独截断。NAF 使用 CUDA event 时间，binary 使用提交至设备同步返回的墙钟时间。正数 API 参数仍指定固定切片，便于独立对照。目标时间不是硬性截止时间，设备负载变化、边界限制、回读和检查点写入仍会影响实际响应。
 
-每片仍先完成原有点运算、错误检查及坐标回读，再调用进度/停止回调；切片大小不保存进检查点，恢复后重新采样。标量、窗口、列位置和普通域累加点的存档合同保持一致。Windows 11 / WDDM、驱动 610.88 的 GPU1 实测中，仅阻塞事件标志未降低占用；原等待诊断与当前吞吐、恢复验证见 [主机等待草稿](../development/GPU_STAGE1_HOST_WAIT_DRAFT.md)。
+切片大小不保存进检查点，恢复后重新采样。检查点保存标量身份、窗口、列位置和普通域累加点。字典随设备状态重建。Windows 11 / WDDM、驱动 610.88 的 GPU1 实测中，仅阻塞事件标志未降低占用。等待诊断见 [主机等待草稿](../development/GPU_STAGE1_HOST_WAIT_DRAFT.md)。
 
 ### Montgomery resident 与 PRAC
 

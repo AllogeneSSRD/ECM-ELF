@@ -33,7 +33,8 @@ template<class Mem> void put(Mem &r,const mpz_t x) {
     std::memset(&r,0,sizeof(r));size_t used=0;mpz_export(r._limbs,&used,-1,4,0,0,x);
 }
 template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t count,
-                         uint32_t &done,uint32_t chunk,EcmEdwardsProgress cb,void *context,
+                         uint32_t &done,uint32_t &snapshot_cursor,uint32_t chunk,
+                         const ecm_cuda_stage1::EdwardsSliceProgress &cb,void *context,
                          EcmEdwardsPrepared prepared,const ecm_edwards_cuda_detail::Kernels &k) {
     using Mem=HostMem<P::BITS>;
     const uint32_t bits=static_cast<uint32_t>(mpz_sizeinbase(s,2));
@@ -49,6 +50,7 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
     check(cudaMemcpy(scalar.p,words.data(),words.size()*4,cudaMemcpyHostToDevice));
     if(prepared)prepared(context);
     EcmEdwardsSlice slices(chunk);
+    const ecm_cuda_stage1::EdwardsSnapshot snapshot=[] {};
     while(done<bits) {
         const uint32_t stop=done+slices.columns(bits-done);
         const uint32_t ipb=P::TPB/P::TPI;
@@ -62,7 +64,8 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
         for(uint32_t i=0;i<count;++i)for(unsigned j=5;j<9;++j)
             mpz_import(states[size_t(i)*9+j],P::BITS/32,-1,4,0,0,host[size_t(i)*10+j+1]._limbs);
         done=stop;
-        if(cb && !cb(done,context))return 2;
+        snapshot_cursor=done;
+        if(cb && !cb(done,snapshot))return 2;
     }
     return 0;
 }
@@ -75,10 +78,11 @@ struct EdwardsEvent {
     void wait(){check(cudaDeviceSynchronize());check(cudaEventSynchronize(value));}
 };
 template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *states,
-        uint32_t count,uint32_t &done,uint32_t chunk,EcmEdwardsProgress cb,
+        uint32_t count,uint32_t &done,uint32_t &snapshot_cursor,uint32_t chunk,
+        const ecm_cuda_stage1::EdwardsSliceProgress &cb,
         void *context,int doubling,EcmEdwardsNafMetrics *metrics,EcmEdwardsPrepared prepared,const ecm_edwards_cuda_detail::Kernels &k) {
     using Mem=HostMem<P::BITS>;
-    const uint32_t entries=1u<<(plan.window-2),ipb=P::TPB/P::TPI;
+    const uint32_t entries=1u<<(plan.window-2);
     if(metrics){*metrics={};metrics->columns=plan.bits;metrics->additions=plan.additions;
         metrics->container_bits=P::BITS;metrics->tpi=P::TPI;
         metrics->dictionary_bytes=uint64_t(count)*entries*4*sizeof(Mem);}
@@ -104,20 +108,33 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
         std::chrono::steady_clock::now()-dictionary_start).count();
     if(prepared)prepared(context);
     EcmEdwardsSlice slices(chunk);
+    const ecm_cuda_stage1::EdwardsSnapshot snapshot=[&] {
+        if(snapshot_cursor==done)return;
+        k.snapshot(report.p,data.p,result.p,count);
+        check(cudaGetLastError());
+        check(cudaMemcpy(ordinary.data(),result.p,ordinary.size()*sizeof(Mem),cudaMemcpyDeviceToHost));
+        if(cgbn_error_report_check(report.p))throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"CGBN Edwards snapshot error");
+        for(uint32_t i=0;i<count;++i)for(unsigned j=0;j<4;++j)
+            mpz_import(states[size_t(i)*9+j+5],P::BITS/32,-1,4,0,0,ordinary[size_t(i)*4+j]._limbs);
+        snapshot_cursor=done;
+        if(metrics)++metrics->snapshots;
+    };
     while(done<plan.bits) {
         const uint32_t end=done+slices.columns(plan.bits-done);
         check(cudaEventRecord(start.value));
-        k.naf(report.p,data.p,dictionary.p,result.p,
+        k.naf(report.p,data.p,dictionary.p,
             nonzero.p,codes.p,plan.bits,done,end,entries,plan.window,count,doubling);
         check(cudaGetLastError());check(cudaEventRecord(stop.value));stop.wait();
         if(cgbn_error_report_check(report.p))throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"CGBN Edwards NAF arithmetic error");
         if(metrics || !chunk){float ms=0;check(cudaEventElapsedTime(&ms,start.value,stop.value));
             slices.observe(end-done,ms);
             if(metrics){metrics->loop_gpu_ms+=ms;++metrics->launches;}}
-        check(cudaMemcpy(ordinary.data(),result.p,ordinary.size()*sizeof(Mem),cudaMemcpyDeviceToHost));
-        for(uint32_t i=0;i<count;++i)for(unsigned j=0;j<4;++j)
-            mpz_import(states[size_t(i)*9+j+5],P::BITS/32,-1,4,0,0,ordinary[size_t(i)*4+j]._limbs);
-        done=end;if(cb && !cb(done,context))return 2;
+        done=end;
+        if(done==plan.bits)snapshot();
+        if(cb && !cb(done,snapshot)) {
+            snapshot();
+            return 2;
+        }
     }
     return 0;
 }
@@ -127,8 +144,8 @@ namespace ecm_edwards_cuda_detail {
 int run_##W(const Request &r) { \
     static_assert(HostParams<W,T>::TPB==ET,"Edwards host block geometry"); \
     const auto &k=kernels_##W(); \
-    if(r.plan)return run_naf<HostParams<W,T>>(r.n,*r.plan,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.doubling,r.metrics,r.prepared,k); \
-    return run<HostParams<W,T>>(r.n,r.scalar,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.prepared,k); \
+    if(r.plan)return run_naf<HostParams<W,T>>(r.n,*r.plan,r.states,r.count,r.done,r.snapshot_cursor,r.chunk,r.progress,r.context,r.doubling,r.metrics,r.prepared,k); \
+    return run<HostParams<W,T>>(r.n,r.scalar,r.states,r.count,r.done,r.snapshot_cursor,r.chunk,r.progress,r.context,r.prepared,k); \
 }
 #include "../../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
