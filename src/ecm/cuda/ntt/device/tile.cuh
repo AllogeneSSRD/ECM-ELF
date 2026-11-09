@@ -1,7 +1,7 @@
 #pragma once
 #include "../launch.h"
 #include "../../arithmetic/goldilocks/goldilocks.cuh"
-#include "../../arithmetic/goldilocks/goldilocks_tile.cuh"
+#include "tile_pass.cuh"
 __global__ void build_tile_table_kernel(unsigned long long *tbl, int k, int t,
                                         unsigned long long root)
 {
@@ -179,68 +179,7 @@ void tile_kernel(unsigned long long *a, const unsigned long long *b,
         }
         __syncthreads();
     }
-    if (WARP_TAIL && t>=5) {
-        const int wt=t>=6 ? 6 : 5;
-        if (!INVERSE) {
-            int st=t-1;
-            for(;st>=wt+1;st-=2) {
-                tile_radix4_block(sm,TILE,st,tbl);
-                __syncthreads();
-            }
-            if(st==wt) tile_radix2_stage<false>(sm,TILE,wt,tbl);
-            /* No shared store or barrier after the warp tail: each lane owns its output. */
-            if(wt==6) {
-                for(unsigned long long i=(threadIdx.x>>5)*64+(threadIdx.x&31);i<TILE;i+=2*blockDim.x) {
-                    auto lo=sm[i], hi=sm[i+32];
-                    tile_warp6_pair<false>(lo,hi,tbl);
-                    const unsigned long long dst=(i&~63ull)+2*(threadIdx.x&31);
-                    a[base+dst]=lo; a[base+dst+1]=hi;
-                }
-            } else for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
-                a[base+i]=tile_warp5<false>(sm[i],tbl);
-        } else {
-            if(wt==6) {
-                for(unsigned long long i=(threadIdx.x>>5)*64+(threadIdx.x&31);i<TILE;i+=2*blockDim.x) {
-                    const unsigned long long src=(i&~63ull)+2*(threadIdx.x&31);
-                    auto lo=sm[src], hi=sm[src+1];
-                    tile_warp6_pair<true>(lo,hi,tbl);
-                    /* All input words of this warp have reached registers before any
-                       lane overwrites their permuted shared locations. */
-                    __syncwarp();
-                    sm[i]=lo; sm[i+32]=hi;
-                }
-            } else for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
-                sm[i]=tile_warp5<true>(sm[i],tbl);
-            __syncthreads();
-            int st=wt;
-            for(;st+1<t;st+=2) {
-                tile_radix4_block_inv(sm,TILE,st,tbl);
-                __syncthreads();
-            }
-            if(st<t) tile_radix2_stage<true>(sm,TILE,st,tbl);
-            for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
-                a[base+i]=sm[i];
-        }
-        return;
-    }
-    int q = 0;
-    if (!INVERSE) {
-        /* DIF runs half = t-1 down to 0: pair (t-1,t-2), (t-3,t-4), ... */
-        for (; q + 1 < t; q += 2) {
-            tile_radix4_block(sm, TILE, t - 1 - q, tbl);
-            __syncthreads();
-        }
-        if (q < t) tile_radix2_stage<false>(sm, TILE, 0, tbl);
-    } else {
-        /* DIT runs half = 0 up to t-1: pair (0,1), (2,3), ... */
-        for (; q + 1 < t; q += 2) {
-            tile_radix4_block_inv(sm, TILE, q, tbl);
-            __syncthreads();
-        }
-        if (q < t) tile_radix2_stage<true>(sm, TILE, q, tbl);
-    }
-    for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
-        a[base + i] = sm[i];
+    ntt_tile_pass<INVERSE,WARP_TAIL>(a+base, sm, TILE, t, tbl);
 }
 
 template<bool INVERSE,bool WARP_TAIL>

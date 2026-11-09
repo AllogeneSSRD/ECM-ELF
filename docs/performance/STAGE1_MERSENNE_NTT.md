@@ -10,9 +10,9 @@ CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Mon
 
 进位后的乘积按实际第 p 位拆成低半和高半。用 `2^p≡1 (mod M)` 折叠成一份残数，末 limb 即使不足 32 位也以实际位宽传播。每个 limb 将输入进位映射为 kill、propagate 或 generate；warp 票选加块内前缀求出回卷进位，全 propagate 的和 M 归一为 0。减法复用同一运算：`a−b ≡ a+(M−b)`。整个模乘没有 CGBN REDC，也没有中间值经 PCIe 传给 GMP。
 
-标量按二进制 ladder 扫描，起始寄存 `[1]P` 和 `[2]P`。每位计算一组 xDBL 和 xADD，共四次平方和六次乘法，按依赖拆成三层：第一层同时算平方及交叉项并共享输入频谱，第二层算两平方、倍点的 X 及 `a24·E`，第三层完成两点的 Z。每位实际变换为 12 次 forward、10 次 inverse，分别组织为三层批处理；`a24` 和差点仿射 x 的频谱只生成一次。Graph 可移植配置默认使用 16 位窗口，余数用独立短图；标量索引在设备上更新，无逐位回读。直接提交用相同算法。
+标量按二进制 ladder 扫描，起始寄存 `[1]P` 和 `[2]P`。每位计算一组 xDBL 和 xADD，共四次平方和六次乘法，按依赖拆成三层：第一层同时算平方及交叉项并共享输入频谱，第二层算两平方、倍点的 X 及 `a24·E`，第三层完成两点的 Z。每位实际变换为 12 次 forward、10 次 inverse，分别组织为三层批处理；`a24` 和差点仿射 x 的频谱只生成一次。逆向首个 tile 直接读取各乘积的输入频谱，平方复用同一次读取。Graph 可移植配置默认使用 16 位窗口，余数用独立短图；标量索引在设备上更新，无逐位回读。直接提交用相同算法。
 
-实现见 [ladder](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L159)，其中 [回卷与规范化](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L96) 与 [独立 GMP 整曲线对照](../../tools/test/stage1_mersenne_ntt.cpp#L27) 分别负责设备归约和验算。显式驻留数组规模为 `15·8·B·L + 23·4·B·ceil(p/32)` 字节，另有标量、缓存表、Graph、CUDA 上下文等；这不是进程峰值。
+实现见 [ladder](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L159)，其中 [回卷与规范化](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L96) 与 [独立 GMP 整曲线对照](../../tools/test/stage1_mersenne_ntt.cpp#L27) 分别负责设备归约和验算。显式驻留数组规模为 `11·8·B·L + 23·4·B·ceil(p/32)` 字节，另有标量、缓存表、Graph、CUDA 上下文等；这不是进程峰值。
 
 - 32／33／64／65／8192／8193／262144 位人工状态：覆盖对齐与非对齐边界、全宽进位、减法为零，直接与 Graph 的两组 X/Z 完全一致，并与 GMP 一致。
 - 8193 位人工状态的直接与 Graph 路径通过 Compute Sanitizer memcheck 和 synccheck，均为 0 errors，日志见 `sanitizer_local/`。
@@ -124,7 +124,7 @@ NTT event 包含驻留点乘、打包、变换、进位、折叠及 Graph 窗口
 
 ## 参考与下一步
 
-- Prime95 31.06b01 的 `ecm.cpp`（约 1982–2156 行）利用延迟 FFT、变换保留和融合乘加减少点公式的重复 FFT；可借鉴调度与数据流，不能直接套用它的浮点时序。当前 NTT 实现仍会把每个产品归一化后再进入下一层；进一步可把频谱索引合进 inverse 的首 pass，省掉 gather 的全局写回。
+- Prime95 31.06b01 的 `ecm.cpp`（约 1982–2156 行）利用延迟 FFT、变换保留和融合乘加减少点公式的重复 FFT；可借鉴调度与数据流，不能直接套用它的浮点时序。当前 NTT 实现把每个产品归一化后再进入下一层，后续可测量归约与下一次打包或变换的融合收益。
 - GPUOWL 本地 `.refactor/gpuowl/src/fftbpw.h` 和 `src/cl/carryutil.cl` 用有效位宽、舍入误差门槛和进位来约束 iBDWT。加权循环变换有机会去掉线性卷积的补零和折叠，但任意 p 的大小字权重、乘法和复合点式都须单独验证；不能用一次 LL 平方的成绩推算整条 ECM 曲线。当前路径采用整数精确性上界，未测 FP32／FP64 FFT。
 - 完整梅森模数才可直接按第 p 位回卷。对已剔除因子的余因子，可研究把模余因子构造的值提升到完整梅森承载环，再按实际余因子验证/GCD；通用整数则需要非二次复杂度归约。两者均未接入。PRAC 或 Edwards 的整曲线成本还需分别评估。
 

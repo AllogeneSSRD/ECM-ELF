@@ -675,6 +675,14 @@ void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
         CK(cudaGetLastError());
         fuse_mark("inv tile pass (+pw+scale)", ft0);
     }
+    ntt_inverse_outer_fused(d, c, omega_inv, nbatch, stream);
+}
+
+void ntt_inverse_outer_fused(unsigned long long* d, const FuseCtx& c,
+    unsigned long long omega_inv, unsigned long long nbatch, cudaStream_t stream) {
+    const auto n = c.n;
+    const auto stride = n;
+    double ft0 = now_s();
     int L = c.outer_stages;                 /* stages already done walking DOWN from k-1 */
     for (int p = c.nms - 1; p >= 0; --p) {
         const int M = c.ms[p];

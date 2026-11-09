@@ -1,6 +1,7 @@
 #include "ladder.h"
 #include "profiles.h"
 #include "../../../../cuda/ntt/runtime.h"
+#include "../../../../cuda/ntt/device/tile_pass.cuh"
 #include <stdexcept>
 
 namespace ecm_mersenne_ntt {
@@ -70,19 +71,30 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in) {
     out[size_t(blockIdx.y)*s.length+i] = v;
 }
 
-// Forward each unique operand once. The existing inverse kernel fuses the
-// pointwise product and scaling; gather keeps the shared spectra immutable.
-__global__ void gather(const U* input, const U* fixed, U* x, U* y,
-                       Shape s, Indices left, Indices right) {
-    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= s.length) return;
-    const unsigned op = blockIdx.y/s.curves, curve = blockIdx.y%s.curves;
-    const unsigned a = left.x[op], b = right.x[op];
-    const auto at = [=](unsigned id) {
-        return (id < 5 ? input : fixed)[(size_t(id < 5 ? id : id-5)*s.curves+curve)*s.length+i];
-    };
-    x[size_t(blockIdx.y)*s.length+i] = at(a);
-    y[size_t(blockIdx.y)*s.length+i] = at(b);
+struct ProductInputs {
+    const U* left[4];
+    const U* right[4];
+};
+
+template<bool WarpTail>
+__global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
+void inverse_product_tile(U* out, ProductInputs products, unsigned length, int tile,
+                          const U* twiddles, U scale) {
+    const unsigned op = blockIdx.z;
+    const size_t curve = size_t(blockIdx.y) * length;
+    const unsigned width = 1u << tile;
+    const size_t start = curve + blockIdx.x * width;
+    const U* left = products.left[op] + start;
+    const U* right = products.right[op] + start;
+    const bool square = left == right;
+    extern __shared__ U sm[];
+    for (unsigned i = threadIdx.x; i < width; i += blockDim.x) {
+        const U a = left[i];
+        sm[i] = gl_mul(gl_mul(a, square ? a : right[i]), scale);
+    }
+    __syncthreads();
+    ntt_tile_pass<true, WarpTail>(out + size_t(op) * gridDim.y * length + start,
+                                sm, width, tile, twiddles);
 }
 
 // A limb's incoming carry is mapped to: 0=kill, 1=propagate, 2=generate.
@@ -236,13 +248,20 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         for (int i = ctx.nms; i > 0; --i) join(plan.inverse, ctx.ms[i-1]);
         control->describe(plan);
     }
+    if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
+    const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
+    const size_t tile_smem = sizeof(U) << ctx.t;
+    const void* tile_kernel = warp_tile ? (const void*)inverse_product_tile<true>
+                                       : (const void*)inverse_product_tile<false>;
+    cudaFuncSetAttribute(tile_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+    CK(cudaFuncSetAttribute(tile_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
     ntt_fuse_cache_tables(ctx,omega,inv);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
-    Buffer<U> left(size_t(4)*curves*s.length), right(size_t(4)*curves*s.length);
+    Buffer<U> inverse(size_t(4)*curves*s.length);
     const auto grid=[&](unsigned ops) { return dim3((s.length+threads-1)/threads, ops*curves); };
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
@@ -253,9 +272,25 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out) {
         pack<<<grid(inputs),threads,0,q>>>(state.data,freq.data,s,in);
         ntt_forward_fused(freq.data,ctx,omega,inputs*curves,q);
-        gather<<<grid(outputs),threads,0,q>>>(freq.data,fixed.data,left.data,right.data,s,a,b);
-        ntt_inverse_fused(left.data,right.data,ctx,inv,scale,outputs*curves,q);
-        ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),left.data,freq.data,s.length,s.bpw,s.length);
+        const size_t plane = size_t(curves) * s.length;
+        const auto spectrum = [&](unsigned id) {
+            return id < 5 ? freq.data + id * plane : fixed.data + (id - 5) * plane;
+        };
+        ProductInputs products{};
+        for (unsigned op = 0; op < outputs; ++op) {
+            products.left[op] = spectrum(a.x[op]);
+            products.right[op] = spectrum(b.x[op]);
+        }
+        const dim3 tiles(s.length >> ctx.t, curves, outputs);
+        if (warp_tile)
+            inverse_product_tile<true><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
+                inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
+        else
+            inverse_product_tile<false><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
+                inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
+        CK(cudaGetLastError());
+        ntt_inverse_outer_fused(inverse.data,ctx,inv,outputs*curves,q);
+        ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
         combine<true,false><<<outputs*curves,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
     };
     auto step=[&](unsigned i) {

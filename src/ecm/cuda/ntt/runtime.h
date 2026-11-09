@@ -113,6 +113,8 @@ void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
 void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
                               const FuseCtx &c, unsigned long long omega_inv,
                               unsigned long long n_scale, unsigned long long nbatch = 1, cudaStream_t stream = 0);
+void ntt_inverse_outer_fused(unsigned long long* d, const FuseCtx& c,
+    unsigned long long omega_inv, unsigned long long nbatch, cudaStream_t stream);
 void ntt_arena_pin_smem(NttArena *ar, int t, bool warp);
 void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned long long omega,
                            unsigned long long omega_inv, FuseCtx &out);
