@@ -97,8 +97,9 @@ void values(const char* name, const std::vector<double>& ms) {
 
 auto run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                 const std::vector<uint8_t>& bits, unsigned window, unsigned samples, bool weighted,
-                unsigned length, unsigned tile = 0) {
-    if (!length) return ecm_mersenne_ntt::ladder(device,p,curves,initial,bits,window,samples,weighted);
+                unsigned length, unsigned tile = 0, unsigned dataflow = 0, unsigned resume = 0) {
+    if (!length && !dataflow && !resume)
+        return ecm_mersenne_ntt::ladder(device,p,curves,initial,bits,window,samples,weighted);
     std::vector<uint32_t> packed((bits.size()+31)/32);
     for (size_t i=0; i<bits.size(); ++i) {
         const size_t bit=bits.size()-1-i;
@@ -106,10 +107,13 @@ auto run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint3
     }
     ecm_stage1::Stage1NttOptions options;
     options.length=length; options.tile=tile; options.window=window; options.weighted=weighted;
-    return ecm_mersenne_ntt::ladder(device,p,curves,initial,packed,unsigned(bits.size()),options,{},samples);
+    ecm_mersenne_ntt::Control control;
+    control.experimental_dataflow=dataflow;
+    control.resume=resume;
+    return ecm_mersenne_ntt::ladder(device,p,curves,initial,packed,unsigned(bits.size()),options,control,samples);
 }
 
-int check_carries(int device, unsigned p, bool weighted, unsigned length) {
+int check_carries(int device, unsigned p, bool weighted, unsigned length, unsigned dataflow) {
     // Deliberately non-curve states: stress the arithmetic independently of
     // Suyama's distribution (M-1+1, overflowing top limb, equal differences).
     constexpr unsigned count=4;
@@ -130,9 +134,22 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length) {
         }
     }
     const std::vector<uint8_t> bits={0,1,0,0,1,1,1,0,0};
-    const auto graph=run_ladder(device,p,count,input,bits,4,2,weighted,length);
-    const auto direct=run_ladder(device,p,count,input,bits,0,1,weighted,length);
+    const auto graph=run_ladder(device,p,count,input,bits,4,2,weighted,length,0,dataflow);
+    const auto direct=run_ladder(device,p,count,input,bits,0,1,weighted,length,0,dataflow);
     if (graph.points!=direct.points) throw std::runtime_error("Graph/direct carry check differed");
+    if (dataflow) {
+        constexpr unsigned split=4;
+        const std::vector<uint8_t> prefix(bits.begin(),bits.begin()+split);
+        for (bool experimental_first : {false,true}) {
+            const auto partial=run_ladder(device,p,count,input,prefix,4,1,weighted,length,0,
+                                          experimental_first ? dataflow : 0);
+            auto restarted=input;
+            std::copy(partial.points.begin(),partial.points.end(),restarted.begin());
+            const auto resumed=run_ladder(device,p,count,restarted,bits,4,1,weighted,length,0,
+                                          experimental_first ? 0 : dataflow,split);
+            if (resumed.points!=graph.points) throw std::runtime_error("cross-dataflow resume differed");
+        }
+    }
     for (unsigned curve=0;curve<count;++curve) {
         for (auto bit:bits) point_step(states[curve],bit,n.v);
         Z got;
@@ -143,6 +160,7 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length) {
     }
     std::printf("stage1_ntt_carries: p=%u device=%d curves=%u bits=%zu bad=0 length=%u\n",
                 p,device,count,bits.size(),graph.length);
+    if (dataflow) std::printf("stage1_ntt_dataflow: requested=%u actual=%u\n",dataflow,graph.dataflow);
     return 0;
 }
 } // namespace
@@ -156,12 +174,18 @@ int main(int argc,char** argv) {
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
         argv+=2; argc-=2;
     }
+    unsigned dataflow=0;
+    if (argc > 2 && !std::strcmp(argv[1],"--dataflow")) {
+        try { dataflow=unsigned(num(argv[2],0,3)); }
+        catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
+        argv+=2; argc-=2;
+    }
     if (argc==4 && !std::strcmp(argv[1],"--check-carries")) {
-        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144)), weighted,length); }
+        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144)), weighted,length,dataflow); }
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
     }
     if (argc<9 || argc>10) {
-        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] [--length N] device p B1 sigma curves samples tile window [print-x]\n"
+        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] [--length N] [--dataflow 0..3] device p B1 sigma curves samples tile window [print-x]\n"
                             "M=2^p-1, PARAM0, LCM, 1..%u curves, window=0 direct or 1..64 Graph\n",
                             ecm_stage1::stage1_ntt_max_curves);
         return 2;
@@ -201,7 +225,7 @@ int main(int argc,char** argv) {
         std::vector<uint32_t> compact(6*used);
         for (unsigned j=0;j<6;++j) std::copy_n(initial.data()+j*stride,used,compact.data()+j*used);
         const double host_setup=seconds(setup);
-        const auto run=run_ladder(device,p,unsigned(active.size()),compact,bits,window,samples,weighted,length,tile);
+        const auto run=run_ladder(device,p,unsigned(active.size()),compact,bits,window,samples,weighted,length,tile,dataflow);
         double oracle_seconds=0;
         for (size_t lane=0;lane<active.size();++lane) {
             std::array<Z,6> s;

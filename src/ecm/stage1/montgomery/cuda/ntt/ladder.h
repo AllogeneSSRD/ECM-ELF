@@ -19,6 +19,8 @@ size_t memory_budget(size_t free_bytes, unsigned limit_mib);
 struct Packing { unsigned length=0, bpw=0, digits=0; };
 Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool prefer_radix5 = true);
 
+enum Dataflow : unsigned { FusedMultiplyAdd = 1, LooseDifference = 2 };
+
 struct Control {
     unsigned resume = 0;
     unsigned warmup_iterations = 0;
@@ -27,6 +29,7 @@ struct Control {
     struct Action { bool save = false, stop = false; };
     std::function<Action(unsigned)> poll;
     std::function<void(unsigned, const std::vector<uint32_t>&)> checkpoint;
+    unsigned experimental_dataflow = 0;
 };
 
 // Initial slots (slot-major, then curve, then little-endian uint32 limbs):
@@ -37,6 +40,7 @@ struct Run {
     std::vector<double> device_ms, wall_ms;
     double setup_seconds = 0, readback_seconds = 0;
     unsigned length = 0, digit_bits = 0, passes = 0, tile = 0, completed_bits = 0;
+    unsigned dataflow = 0;
     bool stopped = false;
     size_t owned_bytes = 0, observed_bytes = 0, budget_bytes = 0;
 };
