@@ -31,7 +31,7 @@ TOML 相对输出路径基于 TOML 目录，显式 CLI 路径基于当前目录�
 
 AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../include/ecm/platform/program_version.h) 统一维护。Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果的 source-build 直接记录当前可执行文件 SHA256，构建清单另存编译条件。
 
-版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
+版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。[独立 Stage1 NTT 实验入口](../performance/STAGE1_MERSENNE_NTT.md)随 `0.59.0` 引入，后续对该路径的优化只递增 z。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
 ## 提交字段与参考 FFT
 

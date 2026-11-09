@@ -84,9 +84,12 @@ ND     = NWORDS / 2
 BIG_H  = SMALL_HEIGHT * MIDDLE
 ```
 
-一个复数元素承载两个连续的大整数 word；因此长度为 `ND` 的复数 NTT 对应
+一个复数或扩域元素承载两个连续的大整数 word；因此长度为 `ND` 的成对数据对应
 `NWORDS` 个整数 word。`NW` 和 `NH` 通常为 4 或 8，分别控制 width/height
-方向的 radix 和每个线程暂存的元素数。`MIDDLE` 为 2、4、8 或 16。
+方向的 radix 和每个线程暂存的元素数。本地 `cb560c9` 副本的 `FFTShape` 允许
+`MIDDLE=1…16`，目录会按类型继续筛选；某些奇因子可在整数或混合路线中用
+Good–Thomas PFA 处理，并非只接受 2 的幂。见 `FFTConfig.h::pfaMiddle` 与
+`src/cl/fftmiddlein.cl` 的 PFA 分支。
 
 这不是单一的一维 Stockham 循环，而是带转置的分解变换：
 
@@ -94,7 +97,7 @@ BIG_H  = SMALL_HEIGHT * MIDDLE
 2. `fftMidIn`：middle 方向 butterfly、乘 twiddle、转置；
 3. `tailSquare` 或 `tailMul`：height 方向变换及中间乘法；
 4. `fftMidOut`：逆向 middle 变换并转置回去；
-5. `fftW` 与 carry，或融合后的 `carryFused`。
+5. `fftW` 与 carry，或融合后的 `carryFused`；`Gpu::square()` 允许把结果保留在 `LEAD_WIDTH`，省掉下一轮单独的 `fftP`。普通 `Gpu::mul()` 使用分离的 `fftW` 与 carry，并能复用已做到 `LEAD_MIDDLE` 的 B 操作数。
 
 平方和乘法的主机调用链分别在 `Gpu::square()` 与乘法流程中记录。`INPLACE`
 决定是否使用原地的 swizzled 布局；关闭原地模式时会使用额外 scratch buffer。
@@ -151,9 +154,12 @@ word 的 bit 数，不是每个复数元素的 bit 数。主机端用：
 bitsPerWord = EXP / NWORDS
 ```
 
-表中 6 个值对应不同的 middle/height 变体；形状不在表中时，
-`FFTConfig::maxBpw()` 会尝试映射到已知形状并扣减余量，仍找不到时使用默认值
-并记录错误。bpw 表是按长期 ROE/溢出经验标定的安全裕量，不是数学上的硬上界。
+表项保存最大允许平均 bpw，而非本次真实字宽。表中 6 个值以 `000`、`101`、
+`202`、`010`、`111`、`212` 为基准，部分较大 width 形状使用变体替代；
+`FFTConfig::maxBpw()` 按 W/M/H 变体选值或插值，并根据 carry 模式限幅。
+缺表时 `FFTShape` 负责从邻近形状估计。容量约为 `NWORDS·maxBpw`，还需检查
+`minBpw`；`FFTConfig::bestFits()` 优先选 `tune.txt` 中成本最低的合格配置。
+表是按数值和进位安全余量标定的配置容量；含浮点路径才涉及浮点舍入误差。
 
 它影响三件事：是否超过形状可支持的最大指数、是否启用 long-carry，以及
 kernel 中 `MAXBPW` 和 carry 快捷路径的选择。`CARRY32` 对 word 位宽有严格
