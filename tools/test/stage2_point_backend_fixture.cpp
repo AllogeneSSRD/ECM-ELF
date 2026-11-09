@@ -30,6 +30,9 @@ static void s4_policy_tests(const std::filesystem::path &out) {
             "Linear and weighted ECM timings must remain separate");
     require(p::matches(weighted,weighted,portable) && p::ntt_matches(old,weighted,portable),
             "Weighted ECM must reuse its own samples and standalone NTT costs");
+    auto half_inverse=weighted;half_inverse["env_s4_half_inverse"]="1";
+    require(!p::matches(weighted,half_inverse,portable) && p::ntt_matches(weighted,half_inverse,portable),
+            "Half-plan inverse must isolate ECM samples while retaining standalone NTT costs");
     for(const char *key:{"env_s4_oracle_pin_kb","env_s4_oracle_pin_pool","env_carry_residual_mode"}) {
         auto check_condition=old;check_condition[key]="1";
         require(!p::matches(old,check_condition,p::Ignore::parse("")),"Strict ECM environment lost checker identity");

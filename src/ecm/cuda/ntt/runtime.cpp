@@ -438,6 +438,31 @@ int fuse_outer_max(int t,int k,bool &coop)
     return std::max(coop ? 5 : 1,std::min(maximum,requested));
 }
 
+static bool half_inverse_requested(int k)
+{
+    return k>=24 && fuse_env_ull("NTT_S4_WEIGHTED",0)==1 && fuse_env_ull("NTT_S4_HALF_INVERSE",0)==1;
+}
+
+static void describe_half_inverse(FuseCtx &full)
+{
+    const int k=full.k-1;
+    const int t=fuse_selected_tile(k,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12)));
+    if(t!=full.t || t<5 || k<=t)return;
+    FuseCtx half;
+    half.m_max=fuse_outer_max(t,k,half.coop_outer);
+    fuse_plan_stages(half,k-t);
+    // The last DIT pass combines the halves in registers/shared memory by
+    // extending the most significant pass of the half-length plan by one bit.
+    // Scalar inverse kernels already support radix widths through six.
+    if(half.nms>full.nms || half.ms[0]>=(half.coop_outer ? 8 : 6))return;
+    ++half.ms[0];
+    if(half.nms==full.nms && half.coop_outer==full.coop_outer &&
+       std::equal(half.ms,half.ms+half.nms,full.ms))return;
+    full.inverse_nms=half.nms;
+    full.inverse_coop=half.coop_outer;
+    std::copy_n(half.ms,half.nms,full.inverse_ms);
+}
+
 void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
                       unsigned long long omega_inv, bool compact, const FuseOverrides* overrides)
 {
@@ -455,6 +480,9 @@ void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long long o
         throw std::invalid_argument("NTT tile and outer width require more than eight outer passes");
     c.compact_scratch=compact;
     fuse_plan_stages(c, k - t);
+    c.inverse_nms=-1;
+    c.half_inverse_requested=!overrides && half_inverse_requested(k);
+    if(c.half_inverse_requested)describe_half_inverse(c);
 
     c.scrWords = compact ? 0 : (size_t)(n >> 1) + 64;
     c.scr2Words = compact ? 0 : (c.coop_outer ? (size_t)(1ull<<c.m_max) : 64);
@@ -465,11 +493,12 @@ void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long long o
             c.scrWords=std::max(c.scrWords,(size_t)(n>>(L+M)));
             c.scr2Words=std::max(c.scr2Words,(size_t)(1ull<<M)); L+=M;
         }
-        L=c.outer_stages;
-        for (int p=c.nms-1;p>=0;--p) {
-            const int M=c.ms[p]; L-=M;
-            c.scrWords=std::max(c.scrWords,(size_t)(1ull<<(c.k-L-M)));
-        }
+    }
+    int L=c.outer_stages;
+    for (int p=c.inverse_passes()-1;p>=0;--p) {
+        const int M=c.inverse_radix(p); L-=M;
+        c.scrWords=std::max(c.scrWords,(size_t)(1ull<<(c.k-L-M)));
+        c.scr2Words=std::max(c.scr2Words,(size_t)(1ull<<M));
     }
     c.passes_fwd = c.nms + (t > 0 ? 1 : 0);
 }
@@ -479,7 +508,7 @@ unsigned long long fuse_planned_table_words(const FuseCtx &c)
     unsigned long long w=0; int L=0;
     for(int p=0;p<c.nms;++p) { const int M=c.ms[p]; w+=(c.n>>(L+M))+(1ull<<M); L+=M; }
     L=c.outer_stages;
-    for(int p=c.nms-1;p>=0;--p) { const int M=c.ms[p]; L-=M; w+=(1ull<<(c.k-L-M))+(1ull<<M); }
+    for(int p=c.inverse_passes()-1;p>=0;--p) { const int M=c.inverse_radix(p); L-=M; w+=(1ull<<(c.k-L-M))+(1ull<<M); }
     return w;
 }
 
@@ -492,6 +521,13 @@ void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega
                       unsigned long long omega_inv, bool compact, const FuseOverrides* overrides)
 {
     fuse_describe(c,n,k,omega,omega_inv,compact,overrides);
+    if(c.inverse_nms>=0) {
+        std::string fwd,inv;
+        for(int p=0;p<c.nms;++p)fwd+=(p ? "," : "")+std::to_string(c.ms[p]);
+        for(int p=0;p<c.inverse_nms;++p)inv+=(p ? "," : "")+std::to_string(c.inverse_ms[p]);
+        stage2_log::print(stage2_log::phases,"stage2_half_inverse_plan: k=%d tile=%d forward=%s inverse=%s coop=%d\n",
+            k,c.t,fwd.c_str(),inv.c_str(),(int)c.inverse_coop);
+    }
     const int t=c.t;
     fuse_base_allocate(&c.tblF,(size_t)(1ull << t));
     fuse_base_allocate(&c.tblI,(size_t)(1ull << t));
@@ -562,8 +598,8 @@ void ntt_fuse_cache_tables(FuseCtx &c, unsigned long long omega,
     }
     {   /* inverse: same bookkeeping as ntt_inverse_fused (L walks back DOWN from k-t) */
         int L = c.outer_stages;
-        for (int p = c.nms - 1; p >= 0; --p) {
-            const int M = c.ms[p];
+        for (int p = c.inverse_passes() - 1; p >= 0; --p) {
+            const int M = c.inverse_radix(p);
             L -= M;
             const int s0 = c.k - L - M;
             const unsigned long long S = 1ull << s0;
@@ -699,8 +735,8 @@ void ntt_inverse_outer_fused(unsigned long long* d, const FuseCtx& c,
     const auto stride = n;
     double ft0 = now_s();
     int L = c.outer_stages;                 /* stages already done walking DOWN from k-1 */
-    for (int p = c.nms - 1; p >= 0; --p) {
-        const int M = c.ms[p];
+    for (int p = c.inverse_passes() - 1; p >= 0; --p) {
+        const int M = c.inverse_radix(p);
         L -= M;                             /* prefix sum of the passes before p */
         const int s0 = c.k - L - M;         /* lowest stage of this pass (ascending now) */
         const unsigned long long S = 1ull << s0;
@@ -718,7 +754,7 @@ void ntt_inverse_outer_fused(unsigned long long* d, const FuseCtx& c,
         }
         const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
         dim3 gr(g, (unsigned int)nbatch);
-        if(c.coop_outer && M>=5)
+        if(c.inverse_cooperative() && M>=5)
             launch_outer_coop<true>(M,d,n,s0,scr,scr2,nbatch,stride,stream);
         else {
         switch (M) {
@@ -930,10 +966,11 @@ void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned long lon
     const int requested_t=fuse_selected_tile(k,std::max(0,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12))));
     bool requested_coop=false;
     const int requested_m=fuse_outer_max(requested_t,k,requested_coop);
+    const bool requested_half_inverse=half_inverse_requested(k);
     for (NttArena::FuseEntry &e : ar->fuses) {
         if (e.n == n && e.k == k && e.omega == omega && e.fc.t==requested_t &&
             e.fc.m_max==requested_m && e.fc.coop_outer==requested_coop &&
-            e.fc.compact_scratch==fuse_compact_scratch()) {
+            e.fc.compact_scratch==fuse_compact_scratch() && e.fc.half_inverse_requested==requested_half_inverse) {
             out = e.fc;                                  /* pointers are owned by the arena */
             out.warp_tail=fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0; /* plan tables are identical */
             out.arena_borrowed = true;
@@ -1098,7 +1135,7 @@ void ntt_shape_print(const NttShape &sh, const FuseCtx &fc, bool verbose,
     stage2_log::print(stage2_log::debug, "  fusion: PASSES=%d total (each pass = one full read AND one full write of the "
                 "N-word array) = %d forward + %d forward + %d inverse (+%d carry) ; "
                 "transform_stages=%d ; plan: tile t=%d stages, then outer",
-                sh.passes_total, sh.passes_fwd, sh.passes_fwd, sh.passes_fwd, 1, sh.k, fc.t);
+                sh.passes_total, sh.passes_fwd, sh.passes_fwd, fc.passes_inv(), 1, sh.k, fc.t);
     for (int p = 0; p < fc.nms; ++p) stage2_log::print(stage2_log::debug, " radix-%d", 1 << fc.ms[p]);
     stage2_log::print(stage2_log::debug, " ; warp_tail=%d ; slot assembly reads %.2f of a pass\n",
                 (int)(fc.warp_tail && fc.t>=5), (double)(sh.out_slots * sh.slot_words) / (double)sh.N);
@@ -1187,7 +1224,7 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     if(graph) {
         CK(cudaGraphLaunch(graph->inverse,0));arena->short_graph.launches+=2;
         const int omitted=weighted && (fc.nms ? fc.ms[0]==1 : fc.t==1) ? 2 : 0;
-        arena->short_graph.saved_launches+=std::max(0,fc.passes_fwd*3-2-omitted);
+        arena->short_graph.saved_launches+=std::max(0,fc.passes_fwd*2+fc.passes_inv()-2-omitted);
     } else {
         // The full inverse's last DIT butterfly unweights the odd spectrum and
         // combines both halves. Its existing 1/N scale supplies the factor 1/2.

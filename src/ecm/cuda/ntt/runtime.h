@@ -223,6 +223,13 @@ struct FuseCtx {
     int ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     int nms = 0;
     int outer_stages = 0;                                /* stages covered by outer passes */
+    bool half_inverse_requested = false;
+    bool inverse_coop = false;
+    int inverse_nms = -1, inverse_ms[FUSE_MAX_PASSES]{};
+    int inverse_passes() const { return inverse_nms < 0 ? nms : inverse_nms; }
+    int inverse_radix(int p) const { return inverse_nms < 0 ? ms[p] : inverse_ms[p]; }
+    bool inverse_cooperative() const { return inverse_nms < 0 ? coop_outer : inverse_coop; }
+    int passes_inv() const { return inverse_passes() + (t > 0); }
     unsigned long long *tblF = nullptr, *tblI = nullptr; /* 2^t words each */
     unsigned long long *scr = nullptr;                   /* per-pass coarse tables */
     unsigned long long *scr2 = nullptr;                  /* per-pass radix tables */

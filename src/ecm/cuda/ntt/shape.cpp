@@ -416,7 +416,7 @@ int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttArena *a
        radix-2^M register passes.  PASS COUNT = number of FULL ARRAY PASSES. */
     ntt_arena_fuse(arena, sh.N, sh.k, sh.omega, sh.omega_inv, fc);
     sh.passes_fwd = fc.passes_fwd;
-    sh.passes_total = 2 * fc.passes_fwd + fc.passes_fwd + 1;      /* +1 = the carry cone */
+    sh.passes_total = 2 * fc.passes_fwd + fc.passes_inv() + 1;      /* +1 = the carry cone */
     sh.carry_rounds = 2 + (sh.k + 2 * sh.bpw + sh.bpw - 1) / sh.bpw;
     /* NTT_CARRY_ROUNDS raises the height-reduction rounds for diagnostic comparisons.
        Long binary carry chains are resolved exactly, independently of this override. */

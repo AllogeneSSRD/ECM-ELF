@@ -44,6 +44,8 @@ Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认�
 
 Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equiv1\pmod{2^p-1}\) 在单个梅森余数内回卷，Stage2 只在各多项式系数的 S4 归约内使用这个等式。可选 `stage2_weighted_ntt` 在直接设备打包时写出首层 DIF 的普通与加权两半，两个前向 NTT 跳过该层。末层 DIT 同时去权和合并，现有逆变换的归一化提供重建所需的除以二。该后端借用当前 NTT 计划的根表，沿用工作区、carry 和 S4；ECM tune 将两种后端的整曲线样本分开。推导与 GPU1 对照见 [Stage2 根加权 NTT](../performance/NTT_OUTER.md#根加权半长卷积)。
 
+加权模式下，实验环境变量 `NTT_S4_HALF_INVERSE=1` 对 \(k\ge24\) 尝试半长计划的逆向分解。候选须保持 tile 大小、支持扩一位后的 radix，且 outer 趟数不得增加。最高一趟 DIT 扩一位并融合两半合并，前向计划与 pack 根表沿用原方案。逆向表和暂存容量按实际计划计算，ECM tune 单独记录该实验条件。 [逆向实测](../performance/NTT_OUTER.md#nsight-分项与半长逆向计划)
+
 当前独立实验提供Tensor64及稀疏有符号根的Tensor40，两者在生产outer/根表上比较完整变换和卷积，另提供Graph提交诊断。它们未接入运行或tune选型；已测长度、batch、算术资格与负收益见[Tensor NTT性能](../performance/NTT_TENSOR.md)，精确分解见[数学资料](../reference/TENSOR_NTT_MATH.md#有符号稀疏根与-dft8-分解)。
 
 实验另有96-bit重构及64-register约束入口N96r64，完整GMP和同卡CUDA/Tensor双流对照已通过。两任务使用私有A/B与只读根表，Systems确认内核重叠，Compute按整个应用范围采集；当前仍慢于同工作量的纯CUDA控制。该探针不代表生产已支持多曲线并发，详见[单卡并发](../performance/NTT_TENSOR.md#单卡cuda--tensor并发与96-bit候选)。
