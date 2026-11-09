@@ -42,6 +42,8 @@ NTT性能表的字段、计时边界、tile级数、外层radix与处理趟数�
 
 Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认。仅满足小字长 FHE 模数的库不能直接替换 Goldilocks64/多精度 carry 管线；适配参考见 [算法资料](../reference/ECM_ALGORITHMS.md)。
 
+Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equiv1\pmod{2^p-1}\) 在单个梅森余数内回卷，Stage2 只在各多项式系数的 S4 归约内使用这个等式。Stage2 独立探针用普通循环和根加权的负循环两次半长卷积恢复完整 digit 向量。推导、GPU1 对照与适用区间见 [Stage2 根加权 NTT](../performance/NTT_OUTER.md#根加权半长卷积)。
+
 当前独立实验提供Tensor64及稀疏有符号根的Tensor40，两者在生产outer/根表上比较完整变换和卷积，另提供Graph提交诊断。它们未接入运行或tune选型；已测长度、batch、算术资格与负收益见[Tensor NTT性能](../performance/NTT_TENSOR.md)，精确分解见[数学资料](../reference/TENSOR_NTT_MATH.md#有符号稀疏根与-dft8-分解)。
 
 实验另有96-bit重构及64-register约束入口N96r64，完整GMP和同卡CUDA/Tensor双流对照已通过。两任务使用私有A/B与只读根表，Systems确认内核重叠，Compute按整个应用范围采集；当前仍慢于同工作量的纯CUDA控制。该探针不代表生产已支持多曲线并发，详见[单卡并发](../performance/NTT_TENSOR.md#单卡cuda--tensor并发与96-bit候选)。
