@@ -82,7 +82,7 @@ function Invoke-EcmNttProbeBuild {
         $compile+=('"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O3 --default-stream '+$DefaultStream+
             ' --split-compile='+$SplitCompile+' -arch='+$Arch+' -DNTT_GL_FIXED_MODE=3 -DNTT_GL_ADD_SUB_MASK=1 -DNTT_OUTER_UNROLL_U=0'+
             ' '+(($unitDefines|ForEach-Object {'-D'+$_}) -join ' ')+
-            ' -I "'+$Repo+'/include" -I "'+$Gmp+'/include" -Xcompiler /utf-8 -Xcompiler /wd4819 -c "'+$src+'" -o "'+$obj+'"')
+            ' -I "'+$Repo+'/include" -I "'+$Repo+'/src" -I "'+$Gmp+'/include" -Xcompiler /utf-8 -Xcompiler /wd4819 -c "'+$src+'" -o "'+$obj+'"')
         $compile+='if errorlevel 1 exit /b 1';$objects+=('"'+$obj+'"')
     }
     $exe=Join-Path $Build ($Name+'.exe')
