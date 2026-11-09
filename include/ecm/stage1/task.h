@@ -15,6 +15,7 @@ struct Stage1NttOptions {
     unsigned length = 0, bpw = 0, tile = 0, outer_max = 0;
     unsigned profile = 0;
     int window = -1, warp_tail = -1;
+    bool weighted = false;
 };
 
 struct Stage1ExecutionPreferences {

@@ -9,6 +9,7 @@ struct Plan {
     unsigned tile_threads, outer_threads, passes;
     bool warp_tail;
     const char* source;
+    bool weighted;
     std::string forward, inverse;
 };
 
@@ -40,5 +41,5 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
 
 // Standalone probe retains its byte-per-bit input and environment overrides.
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
-           const std::vector<uint8_t>& bits, unsigned window, unsigned samples);
+           const std::vector<uint8_t>& bits, unsigned window, unsigned samples, bool weighted = false);
 } // namespace ecm_mersenne_ntt

@@ -34,8 +34,11 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                         valid = ecm_stage1::parse_gpu_algorithm(v, s.gpu_algorithm);
                     else if (key == "ntt_warp_tail")
                         valid = v == "auto" || v == "true" || v == "false" || v == "0" || v == "1";
-                    else if (key == "ntt_length")
-                        valid = scratch.ntt_length == 0 || (scratch.ntt_length >= 8 &&
+                    else if (key == "ntt_convolution") {
+                        const auto mode = ecm_stage1::lower_ascii(v);
+                        valid = mode == "linear" || mode == "weighted";
+                    } else if (key == "ntt_length")
+                        valid = scratch.ntt_length == 0 || (scratch.ntt_length >= 2 &&
                             !(scratch.ntt_length & (scratch.ntt_length - 1)));
                     else if (key == "ntt_bpw")
                         valid = scratch.ntt_bpw == 0 || scratch.ntt_bpw >= 16;

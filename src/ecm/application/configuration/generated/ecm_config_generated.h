@@ -136,6 +136,7 @@ struct Stage1Values {
     int device=0;
     int gpu_param=3;
     std::string gpu_algorithm="cgbn";
+    std::string ntt_convolution="linear";
     int ntt_length=0;
     int ntt_bpw=0;
     int ntt_profile=0;
@@ -201,6 +202,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"device",[](Stage1Values&c,const std::string&v){assign_value(c.device,v);},[](Stage1Values&c,const Stage1Values&v){c.device=v.device;}},
     {"gpu_param",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_param,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_param=v.gpu_param;}},
     {"gpu_algorithm",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_algorithm,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_algorithm=v.gpu_algorithm;}},
+    {"ntt_convolution",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_convolution,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_convolution=v.ntt_convolution;}},
     {"ntt_length",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_length,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_length=v.ntt_length;}},
     {"ntt_bpw",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_bpw,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_bpw=v.ntt_bpw;}},
     {"ntt_profile",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_profile,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_profile=v.ntt_profile;}},

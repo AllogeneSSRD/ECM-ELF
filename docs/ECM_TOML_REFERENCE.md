@@ -390,9 +390,21 @@ ntt_bpw = 0
 
 Type / 类型: `int`; range / 范围: `0 or [16,31]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Bits per digit. Zero selects the widest exact packing; explicit values must satisfy the Goldilocks coefficient bound.
+Bits per digit. Zero selects the widest exact linear packing or the shortest safe weighted transform. In weighted mode, an explicit value is an upper bound on the largest digit.
 
-每个数字的位数。0 选取能精确计算的最宽表示；指定值须满足 Goldilocks 系数界。
+每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。
+
+### ntt_convolution
+
+```toml
+ntt_convolution = "linear"
+```
+
+Type / 类型: `string`; range / 范围: `[linear|weighted]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Select exact linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1 task and checkpoint format.
+
+选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。
 
 ### ntt_length
 
@@ -400,7 +412,7 @@ Bits per digit. Zero selects the widest exact packing; explicit values must sati
 ntt_length = 0
 ```
 
-Type / 类型: `int`; range / 范围: `0 or power of two [8,65536]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+Type / 类型: `int`; range / 范围: `0 or power of two [2,65536]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
 Transform length. Zero derives the minimum safe length from the modulus and digit width.
 

@@ -45,8 +45,9 @@
       <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
       <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
       <Item id="option_stage1_gpu_algorithm" name="GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–8 条曲线。" />
+      <Item id="option_stage1_ntt_convolution" name="选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。" />
       <Item id="option_stage1_ntt_length" name="变换长度。0 根据模数和数字宽度推导最小安全长度。" />
-      <Item id="option_stage1_ntt_bpw" name="每个数字的位数。0 选取能精确计算的最宽表示；指定值须满足 Goldilocks 系数界。" />
+      <Item id="option_stage1_ntt_bpw" name="每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。" />
       <Item id="option_stage1_ntt_profile" name="按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设置优先。" />
       <Item id="option_stage1_ntt_tile" name="融合 tile 的 radix-2 层数。0 使用所选配置。" />
       <Item id="option_stage1_ntt_outer_max" name="每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。" />

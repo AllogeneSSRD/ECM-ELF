@@ -223,7 +223,8 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     opt.execution.ntt = {unsigned(cfg.ntt_length), unsigned(cfg.ntt_bpw), unsigned(cfg.ntt_tile),
                          unsigned(cfg.ntt_outer_max), unsigned(cfg.ntt_profile), cfg.ntt_window,
                          cfg.ntt_warp_tail == "auto" ? -1 :
-                         int(cfg.ntt_warp_tail == "true" || cfg.ntt_warp_tail == "1")};
+                         int(cfg.ntt_warp_tail == "true" || cfg.ntt_warp_tail == "1"),
+                         ecm_stage1::lower_ascii(cfg.ntt_convolution) == "weighted"};
     opt.execution.gpu_mul_path = cfg.kernel_mul;
     opt.execution.gpu_sqr_path = cfg.kernel_sqr;
     opt.execution.gpu_add_path = cfg.kernel_add;

@@ -88,16 +88,24 @@ def main():
     assert saved_points(cgbn / "out.save", 4003, 32) == expected
     print("PASS numeric CLI override, direct launch, custom packing, CGBN comparison", flush=True)
 
-    work, cmd = fixture("factors")
-    call, data = direct(work, cmd, 65, 40, 30, 2)
+    work, cmd = fixture("weighted_direct", extra='ntt_convolution = "WeIgHtEd"\nntt_window = 0\n')
+    call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
-    assert "p=65 curves=1 length=8" in log
-    assert re.findall(r"factor\[\d+\]=(\d+) curve=\d+ sigma=(\d+)", log) == [
-        ("253921", "30"), ("31", "31")]
-    assert saved_points(work / "out.save", 65, 40) == {30: 253921, 31: 31}
-    submission = [json.loads(row) for row in (work / "results.json.txt").read_text().splitlines()]
-    assert len(submission) == 2 and all(row["status"] == "F" and row["curves"] == 1 and
-                                        "checksum" in row for row in submission)
+    assert "length=256 bpw=16" in log and "convolution=weighted" in log and "graph_bits=0" in log
+    assert saved_points(work / "out.save", 4003, 32) == expected
+    print("PASS weighted direct launch against independent Python", flush=True)
+
+    for mode, length in (("linear", 8), ("weighted", 4)):
+        work, cmd = fixture(f"factors_{mode}", extra=f'ntt_convolution = "{mode}"\n')
+        call, data = direct(work, cmd, 65, 40, 30, 2)
+        log = run(work, call, text=data)
+        assert f"p=65 curves=1 length={length}" in log and f"convolution={mode}" in log
+        assert re.findall(r"factor\[\d+\]=(\d+) curve=\d+ sigma=(\d+)", log) == [
+            ("253921", "30"), ("31", "31")]
+        assert saved_points(work / "out.save", 65, 40) == {30: 253921, 31: 31}
+        submission = [json.loads(row) for row in (work / "results.json.txt").read_text().splitlines()]
+        assert len(submission) == 2 and all(row["status"] == "F" and row["curves"] == 1 and
+                                            "checksum" in row for row in submission)
     print("PASS endpoint and construction factors, submission records", flush=True)
 
     for name, extra, data, curves, reason in (
@@ -105,6 +113,8 @@ def main():
         ("too_many_curves", "", "2^127-1\n", 9, "at most 8 curves"),
         ("undersized_transform", "ntt_length = 8\n", "2^4003-1\n", 1, "covering 2*digits+1"),
         ("unsafe_digits", "ntt_bpw = 31\n", "2^4003-1\n", 1, "coefficient bound"),
+        ("unsafe_weighted", 'ntt_convolution = "weighted"\nntt_length = 2\n',
+         "2^4003-1\n", 1, "unsafe weighted NTT length"),
         ("too_many_passes", "ntt_length = 65536\nntt_tile = 1\nntt_outer_max = 1\n",
          "2^4003-1\n", 1, "more than eight outer passes"),
     ):
@@ -157,16 +167,16 @@ def main():
     magic, count, cursor, mask = struct.unpack_from("<8sIII", lanes[0][1])
     assert magic == b"ECMNTTS1" and 0 < cursor < count and mask == 3
     assert not lanes[1][1]
-    config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 10")
-                      + "ntt_window = 32\n", encoding="utf-8")
+    config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
+                      + 'ntt_window = 32\nntt_convolution = "weighted"\n', encoding="utf-8")
     log = run(work, cmd, "resume")
-    assert f"resume={cursor}" in log and "graph_bits=32" in log
+    assert f"resume={cursor}" in log and "graph_bits=32" in log and "convolution=weighted" in log
     assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
     ref, ref_cmd = fixture("uninterrupted")
     call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
     run(ref, call, text=data)
     assert saved_points(save, p, b1) == saved_points(ref / "out.save", p, b1)
-    print(f"PASS real stop and resume at bit {cursor}/{count}, changed plan, Stage2 handoff", flush=True)
+    print(f"PASS real stop and resume at bit {cursor}/{count}, linear to weighted, Stage2 handoff", flush=True)
 
 
 if __name__ == "__main__":

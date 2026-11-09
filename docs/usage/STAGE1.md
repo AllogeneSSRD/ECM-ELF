@@ -38,7 +38,9 @@ ntt_profile = 0
 
 `ntt_profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt_length`、`ntt_bpw`、`ntt_tile` 和 `ntt_outer_max` 的 0 值使用自动值。`ntt_window = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt_warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
-运行时的 `stage1_ntt_plan` 输出长度、每 digit 的位数、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点使用同一批次文件命名，保存当前标量位置和两组 X/Z，可换 NTT 参数续跑；CGBN 与 NTT 的检查点各自只能由对应后端续跑。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
+`ntt_convolution = "linear"` 是默认的定宽线性卷积。`ntt_convolution = "weighted"` 启用精确 IBDWT 加权循环卷积。加权模式使用最短的安全二次幂长度，`ntt_bpw` 指定最大 digit 位宽的上限，`ntt_length` 可指定满足系数界的长度。加权模式自动档使用通用 tile 计划。两种模式的检查点均保存整数 X/Z，因此可切换卷积后端续跑。
+
+运行时的 `stage1_ntt_plan` 输出卷积后端、长度、最大 digit 位宽、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点使用同一批次文件命名，保存当前标量位置和两组 X/Z，可换 NTT 参数续跑；CGBN 与 NTT 的检查点各自只能由对应后端续跑。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 
 ## 共用 TOML 与 worker
 

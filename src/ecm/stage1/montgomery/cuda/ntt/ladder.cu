@@ -1,5 +1,6 @@
 #include "ladder.h"
 #include "profiles.h"
+#include "weighted.cuh"
 #include "../../../../cuda/ntt/runtime.h"
 #include "../../../../cuda/ntt/device/tile_pass.cuh"
 #include <stdexcept>
@@ -25,8 +26,8 @@ __device__ unsigned scalar_bit(Cursor cursor) {
 
 template<class T> struct Buffer {
     T* data = nullptr;
-    explicit Buffer(size_t count) { CK(cudaMalloc(&data, count * sizeof(T))); }
-    ~Buffer() { cudaFree(data); }
+    explicit Buffer(size_t count) { if (count) CK(cudaMalloc(&data, count * sizeof(T))); }
+    ~Buffer() { if (data) cudaFree(data); }
     Buffer(const Buffer&) = delete;
 };
 struct Stream {
@@ -57,16 +58,20 @@ __device__ uint32_t limb_mask(Shape s, unsigned i) {
     return i + 1 == s.words && rest ? (1u << rest) - 1 : 0xffffffffu;
 }
 
-__global__ void pack(const uint32_t* state, U* out, Shape s, Indices in) {
+template<bool Weighted>
+__global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
+                     const WeightedDigit* weighted) {
     const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= s.length) return;
     U v = 0;
     if (i < s.digits) {
-        const unsigned bit = i*s.bpw, word = bit/32, offset = bit%32;
+        const auto digit = Weighted ? weighted[i] : WeightedDigit{1, i*s.bpw, s.bpw};
+        const unsigned word = digit.bit / 32, offset = digit.bit % 32;
         const auto pos = limb(s, in.x[blockIdx.y/s.curves], blockIdx.y%s.curves, word);
         v = state[pos];
         if (word+1 < s.words) v |= U(state[pos+1]) << 32;
-        v = (v >> offset) & ((1ull << s.bpw)-1);
+        v = (v >> offset) & ((1ull << digit.width)-1);
+        if constexpr(Weighted) v = gl_mul(v, digit.weight);
     }
     out[size_t(blockIdx.y)*s.length+i] = v;
 }
@@ -113,7 +118,7 @@ __device__ uint32_t extract(const U* digits, Shape s, unsigned bit) {
 // One block per output residue. A thread first summarizes a contiguous limb
 // interval; warp ballots compute its prefix. Feed the high carry back into the
 // low limb (2^p=1). An all-propagate sum is exactly M, represented as zero.
-template<bool Fold, bool Select>
+template<bool Fold, bool Select, bool Weighted = false>
 __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, Cursor cursor) {
     __shared__ unsigned warp_tags[threads/32];
     const unsigned op = blockIdx.x/s.curves, curve = blockIdx.x%s.curves;
@@ -126,7 +131,11 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
     const unsigned stride = (s.words+threads-1)/threads;
     const unsigned begin = min(threadIdx.x * stride, s.words), end = min(begin+stride, s.words);
     const auto raw = [=](unsigned i, uint32_t mask) -> U {
-        if constexpr(Fold) {
+        if constexpr(Weighted) {
+            const auto* sums = products + size_t(blockIdx.x) * s.words;
+            const unsigned tail_bits = s.p - 32 * (s.words - 1);
+            return weighted_limb(sums, s.words, tail_bits, i, mask);
+        } else if constexpr(Fold) {
             const auto* digits = products + size_t(blockIdx.x)*s.length;
             return U(extract(digits,s,i*32) & mask) + (extract(digits,s,s.p+i*32) & mask);
         } else {
@@ -193,22 +202,37 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 [](auto x) { return x == UINT32_MAX; })))
             throw std::invalid_argument("noncanonical Stage1 initial residue");
     }
-    const unsigned first_bpw = options.bpw ? options.bpw : 31;
-    const unsigned last_bpw = options.bpw ? options.bpw : 16;
-    for (unsigned b = first_bpw; b >= last_bpw && b >= 16 && b <= 31; --b) {
-        const unsigned digits = (p + b - 1) / b;
-        if (exact_ok_terms(digits, b)) {
-            s.bpw = b;
-            s.digits = digits;
-            break;
+    if (options.weighted) {
+        const auto usable = [p, &options](unsigned length) {
+            const unsigned bpw = (p + length - 1) / length;
+            return length <= p && length <= 65536 && bpw <= 31 &&
+                (!options.bpw || bpw <= options.bpw) && exact_ok_terms(2ull * length, bpw);
+        };
+        s.length = options.length ? options.length : 2;
+        if (!options.length)
+            while (s.length < 65536 && !usable(s.length)) s.length *= 2;
+        if (s.length < 2 || (s.length & (s.length - 1)) || !usable(s.length))
+            throw std::invalid_argument("unsafe weighted NTT length or digit width");
+        s.digits = s.length;
+        s.bpw = (p + s.length - 1) / s.length;
+    } else {
+        const unsigned first_bpw = options.bpw ? options.bpw : 31;
+        const unsigned last_bpw = options.bpw ? options.bpw : 16;
+        for (unsigned b = first_bpw; b >= last_bpw && b >= 16 && b <= 31; --b) {
+            const unsigned digits = (p + b - 1) / b;
+            if (exact_ok_terms(digits, b)) {
+                s.bpw = b;
+                s.digits = digits;
+                break;
+            }
         }
+        if (!s.bpw) throw std::invalid_argument("digit width exceeds the exact Goldilocks coefficient bound");
+        s.length = options.length ? options.length : 1;
+        if (!options.length)
+            while (s.length < 2 * s.digits + 1) s.length *= 2;
+        if ((s.length & (s.length - 1)) || s.length < 2 * s.digits + 1 || s.length > 65536)
+            throw std::invalid_argument("NTT length must be a power of two covering 2*digits+1, at most 65536");
     }
-    if (!s.bpw) throw std::invalid_argument("digit width exceeds the exact Goldilocks coefficient bound");
-    s.length = options.length ? options.length : 1;
-    if (!options.length)
-        while (s.length < 2 * s.digits + 1) s.length *= 2;
-    if ((s.length & (s.length - 1)) || s.length < 2 * s.digits + 1 || s.length > 65536)
-        throw std::invalid_argument("NTT length must be a power of two covering 2*digits+1, at most 65536");
     int log = 0;
     for (unsigned n = s.length; n > 1; n >>= 1) ++log;
     if (options.tile > unsigned(log) || options.tile > 12 ||
@@ -217,7 +241,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto prep = now_s();
     CK(cudaSetDevice(device));
     auto profile = default_profile(log, options.profile);
-    if (control && !options.profile) {
+    if (control && !options.profile && !options.weighted) {
         cudaDeviceProp prop{};
         CK(cudaGetDeviceProperties(&prop, device));
         if (prop.major == 8 && prop.minor == 9 && prop.multiProcessorCount == 24 &&
@@ -241,7 +265,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         };
         Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
                   FUSE_TILE_THREADS, FUSE_OUTER_THREADS, unsigned(ctx.passes_fwd),
-                  ctx.warp_tail && ctx.t >= 5, profile.source, {}, {}};
+                  ctx.warp_tail && ctx.t >= 5, profile.source, options.weighted, {}, {}};
         for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
         join(plan.forward, ctx.t);
         join(plan.inverse, ctx.t);
@@ -262,15 +286,33 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
     Buffer<U> inverse(size_t(4)*curves*s.length);
+    const auto weights = options.weighted ? weighted_tables(p, s.length) : WeightedTables{};
+    Buffer<WeightedDigit> digit_table(weights.digits.size());
+    Buffer<U> inverse_weights(weights.inverse.size());
+    Buffer<WeightedLimb> limb_table(weights.limbs.size());
+    if (options.weighted) {
+        CK(cudaMemcpyAsync(digit_table.data, weights.digits.data(), weights.digits.size()*sizeof(WeightedDigit),
+                           cudaMemcpyHostToDevice, q));
+        CK(cudaMemcpyAsync(inverse_weights.data, weights.inverse.data(), weights.inverse.size()*sizeof(U),
+                           cudaMemcpyHostToDevice, q));
+        CK(cudaMemcpyAsync(limb_table.data, weights.limbs.data(), weights.limbs.size()*sizeof(WeightedLimb),
+                           cudaMemcpyHostToDevice, q));
+    }
     const auto grid=[&](unsigned ops) { return dim3((s.length+threads-1)/threads, ops*curves); };
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
         CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
-    pack<<<grid(2),threads,0,q>>>(state.data,fixed.data,s,{{A24,Base}});
+    const auto pack_inputs = [&](U* dest, unsigned count, Indices in) {
+        if (options.weighted)
+            pack<true><<<grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data);
+        else
+            pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
+    };
+    pack_inputs(fixed.data, 2, {{A24,Base}});
     ntt_forward_fused(fixed.data,ctx,omega,2*curves,q);
     CK(cudaStreamSynchronize(q));
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out) {
-        pack<<<grid(inputs),threads,0,q>>>(state.data,freq.data,s,in);
+        pack_inputs(freq.data, inputs, in);
         ntt_forward_fused(freq.data,ctx,omega,inputs*curves,q);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
@@ -290,8 +332,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
         CK(cudaGetLastError());
         ntt_inverse_outer_fused(inverse.data,ctx,inv,outputs*curves,q);
-        ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
-        combine<true,false><<<outputs*curves,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
+        if (options.weighted) {
+            const unsigned batch = outputs * curves;
+            unweight_products<<<grid(outputs),threads,0,q>>>(freq.data, inverse.data,
+                                                           inverse_weights.data, s.length);
+            weighted_limb_sums<<<dim3((s.words+threads-1)/threads,batch),threads,0,q>>>(
+                inverse.data, freq.data, digit_table.data, limb_table.data, p, s.words, s.length);
+            combine<true,false,true><<<batch,threads,0,q>>>(state.data,inverse.data,s,{{},{},out,0},{});
+        } else {
+            ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
+            combine<true,false><<<outputs*curves,threads,0,q>>>(state.data,freq.data,s,{{},{},out,0},{});
+        }
     };
     auto step=[&](unsigned i) {
         const Cursor cursor{scalar.data,start.data,i,count};
@@ -381,7 +432,7 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
 }
 
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
-           const std::vector<uint8_t>& bits, unsigned window, unsigned samples) {
+           const std::vector<uint8_t>& bits, unsigned window, unsigned samples, bool weighted) {
     if (bits.empty() || bits.size() > UINT32_MAX - 64)
         throw std::invalid_argument("invalid probe scalar size");
     std::vector<uint32_t> packed((bits.size()+31)/32);
@@ -392,6 +443,7 @@ Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>&
     }
     ecm_stage1::Stage1NttOptions options;
     options.window = window;
+    options.weighted = weighted;
     return run_ladder(device, p, curves, initial, packed, unsigned(bits.size()), options, nullptr, samples);
 }
 } // namespace ecm_mersenne_ntt

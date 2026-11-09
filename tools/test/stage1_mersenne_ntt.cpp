@@ -95,7 +95,7 @@ void values(const char* name, const std::vector<double>& ms) {
     for (size_t i=0;i<ms.size();++i) std::printf("%s%.6f",i?",":"",ms[i]);
 }
 
-int check_carries(int device, unsigned p) {
+int check_carries(int device, unsigned p, bool weighted) {
     // Deliberately non-curve states: stress the arithmetic independently of
     // Suyama's distribution (M-1+1, overflowing top limb, equal differences).
     constexpr unsigned count=4;
@@ -116,8 +116,8 @@ int check_carries(int device, unsigned p) {
         }
     }
     const std::vector<uint8_t> bits={0,1,0,0,1,1,1,0,0};
-    const auto graph=ecm_mersenne_ntt::ladder(device,p,count,input,bits,4,2);
-    const auto direct=ecm_mersenne_ntt::ladder(device,p,count,input,bits,0,1);
+    const auto graph=ecm_mersenne_ntt::ladder(device,p,count,input,bits,4,2,weighted);
+    const auto direct=ecm_mersenne_ntt::ladder(device,p,count,input,bits,0,1,weighted);
     if (graph.points!=direct.points) throw std::runtime_error("Graph/direct carry check differed");
     for (unsigned curve=0;curve<count;++curve) {
         for (auto bit:bits) point_step(states[curve],bit,n.v);
@@ -133,12 +133,14 @@ int check_carries(int device, unsigned p) {
 } // namespace
 
 int main(int argc,char** argv) {
+    const bool weighted = argc > 1 && std::strcmp(argv[1], "--weighted") == 0;
+    if (weighted) { ++argv; --argc; }
     if (argc==4 && !std::strcmp(argv[1],"--check-carries")) {
-        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144))); }
+        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144)), weighted); }
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
     }
     if (argc<9 || argc>10) {
-        std::fprintf(stderr,"stage1_mersenne_ntt device p B1 sigma curves samples tile window [print-x]\n"
+        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] device p B1 sigma curves samples tile window [print-x]\n"
                             "M=2^p-1, PARAM0, LCM, 1..8 curves, window=0 direct or 1..64 Graph\n");
         return 2;
     }
@@ -176,7 +178,7 @@ int main(int argc,char** argv) {
         std::vector<uint32_t> compact(6*used);
         for (unsigned j=0;j<6;++j) std::copy_n(initial.data()+j*stride,used,compact.data()+j*used);
         const double host_setup=seconds(setup);
-        const auto run=ecm_mersenne_ntt::ladder(device,p,unsigned(active.size()),compact,bits,window,samples);
+        const auto run=ecm_mersenne_ntt::ladder(device,p,unsigned(active.size()),compact,bits,window,samples,weighted);
         double oracle_seconds=0;
         for (size_t lane=0;lane<active.size();++lane) {
             std::array<Z,6> s;

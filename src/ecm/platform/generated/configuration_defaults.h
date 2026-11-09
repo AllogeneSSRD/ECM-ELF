@@ -45,6 +45,7 @@ inline constexpr double stage1_ckpt_seconds=600;
 inline constexpr int stage1_device=0;
 inline constexpr int stage1_gpu_param=3;
 inline constexpr char stage1_gpu_algorithm[]="cgbn";
+inline constexpr char stage1_ntt_convolution[]="linear";
 inline constexpr int stage1_ntt_length=0;
 inline constexpr int stage1_ntt_bpw=0;
 inline constexpr int stage1_ntt_profile=0;
