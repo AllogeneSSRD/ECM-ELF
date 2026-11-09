@@ -131,10 +131,10 @@ finished = "worktodo.finished.txt"
 # 中文：指定 Stage1 已完成任务的记录文件。用于保留原任务行和处理结果，不是曲线计算的中间存档。
 
 gpu_algorithm = "cgbn"
-# EN: Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. NTT requires CUDA Montgomery param0, a full
-# EN: Mersenne modulus, and 1–32 curves.
-# 中文：GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。NTT 要求 CUDA Montgomery param0、完整梅森模数和 1–32
-# 中文：条曲线。
+# EN: Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery
+# EN: PARAM0 on full Mersenne moduli, with 1–32 curves. Edwards NTT requires naf_w=0.
+# 中文：GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整
+# 中文：梅森模数和 1–32 条曲线。Edwards NTT 要求 naf_w=0。
 
 gpu_param = 3
 # EN: GPU Stage1 curve parametrization. CUDA Stage2 consumes param0 saves; select 0 for that handoff.

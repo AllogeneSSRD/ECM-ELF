@@ -282,10 +282,10 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                             std::to_string(opt.execution.naf_w ? opt.execution.naf_w
                                                                : deps.default_naf_window()) +
                             "|" + std::to_string(int(opt.execution.selection.cpu_implementation));
-            else if (!base.edwards) {
-                identity += execution.execution.selection.gpu_algorithm == GpuAlgorithm::Ntt
-                    ? "|ntt-v1" : "|" + execution.cgbn_algorithm;
-            }
+            else if (execution.execution.selection.gpu_algorithm == GpuAlgorithm::Ntt)
+                identity += "|ntt-v1";
+            else if (!base.edwards)
+                identity += "|" + execution.cgbn_algorithm;
             session.begin(identity, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&
                               opt.execution.selection.target == ExecutionTarget::Gpu);

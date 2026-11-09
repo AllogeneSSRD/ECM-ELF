@@ -20,7 +20,7 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 
 ## CUDA 全宽 NTT
 
-`[stage1] gpu_algorithm = 2` 或 `"ntt"` 启用 NTT；`1` 或 `"cgbn"` 选择默认后端，字符串不区分大小写。CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持完整 `2^p−1`（`32 ≤ p ≤ 262144`）、Montgomery PARAM0、每批 1–32 条曲线，以及 `lcm = 1` 或 `12`。剥除已知因子的余因子不能使用本路径。队列任务使用 `m0_` save 前缀或显式配置 `gpu_param = 0`，按任务行控制曲线数。
+`[stage1] gpu_algorithm = 2` 或 `"ntt"` 启用 NTT；`1` 或 `"cgbn"` 选择默认后端，字符串不区分大小写。CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`），每批 1–32 条。Edwards 使用 `curve = "ed"`、默认的 `naf_w = 0` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 使用 `lcm = 1` 或 `12`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
 
 ```toml
 [stage1]
@@ -51,7 +51,7 @@ ntt_profile = 0
 
 调优控制台与 `log_file` 开头单独列出 `ntt_type` 的字段名，实测行使用 `length max_exp ntt_type batch iter/s` 格式。`max_exp` 是该打包参数的安全指数上限。`ntt_type` 依次编码卷积（0=linear，1=weighted）、tile 位数、外层 radix 上限、Graph 位数、warp 尾层开关、正向各趟的层数和逆向各趟的层数。每个实测形状以 `Best` 标记峰值吞吐，推荐档与峰值档不同时另显示 `95%` 行。
 
-运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 输出卷积后端、长度、最大 digit 位宽、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
+运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 输出曲线构造、卷积后端、长度、最大 digit 位宽、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。正常结束按曲线构造生成标准 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 
 ## 共用 TOML 与 worker
 

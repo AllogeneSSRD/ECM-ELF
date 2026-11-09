@@ -49,3 +49,9 @@ GPU1 上分别用线性和加权后端对比 0.59.3，沿用 B1=256 的六位宽
 ## 0.59.9 按 NTT 长度调度
 
 先推导各输入和卷积类型的合法长度，再按长度依次执行。保留同一输入的算术参考结果，供两种卷积跨长度对拍。控制台和镜像日志开头共用一行类型字段说明。验证入口为 [Stage1 NTT 调优门禁](../../tools/test/test_stage1_ntt_tune.py)，本机证据位于 `data/experiments/stage1_ntt_length_order_0599/`。
+
+## 0.60.0 Edwards Stage1 NTT
+
+Edwards 沿用 Atkin–Morain 构造、原 sigma 规则和 `48·lcm(1…B1)`。GPU 执行前将基点映射到 Montgomery x 坐标，共用 PARAM0 的 NTT 阶梯、线性和加权卷积及 tune。Stage1 save 已采用这个 x 坐标。Edwards NTT 的 checkpoint 身份带 `ntt-v1`，与 CGBN Edwards 各自恢复。完整梅森模数、1–32 条活跃曲线和现有 NTT 内存约束保持适用。
+
+GPU1 RTX 4060 Laptop 上，M4423 的 32 条曲线在 linear、weighted、auto 和 CGBN 下均与独立整数阶梯末点一致。M65 在 B1=8、sigma=9 发布因子 31，M35 在 B1=128、sigma=16 完成恒等点且无 Stage2 点。M9689 的 16 条 Edwards 在 bit 128/5930 停止，由 linear 切换至 weighted 后恢复，存档与不中断版本一致，队列转为 Stage2。Montgomery 原生产回归全部通过。原始记录位于 `data/experiments/stage1_unified_4060_0600/production_check/`。验收入口为 [NTT 生产回归](../../tools/test/test_stage1_ntt_production.py)，比较口径和图表维护在 [Stage1 性能](../performance/STAGE1.md#stage1-ntt-与-cgbn-和-prime95-对比)。

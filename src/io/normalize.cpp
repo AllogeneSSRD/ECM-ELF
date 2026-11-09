@@ -480,11 +480,10 @@ bool stage1_save_construction(const std::string& name, Stage1Options& opt, std::
 bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string& error) {
     if (selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
         if (!ECM_HAS_CUDA_STAGE1 || selection.target != ecm_stage1::ExecutionTarget::Gpu ||
-            selection.curve != ecm_stage1::CurveModel::Montgomery || selection.gpu_param != 0) {
-            error = "Stage1 NTT requires CUDA GPU Montgomery param0";
+            (selection.curve == ecm_stage1::CurveModel::Montgomery && selection.gpu_param != 0)) {
+            error = "Stage1 NTT requires CUDA GPU Edwards or Montgomery param0";
             return true;
         }
-        return execution_preferences_error(selection, error);
     }
     if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_STAGE1 != 0)) {
         error = "GPU Edwards requires the CUDA backend";
@@ -497,6 +496,8 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
     }
     if (execution_preferences_error(selection, error))
         return true;
+    if (selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt)
+        return false;
     if (selection.target != ecm_stage1::ExecutionTarget::Gpu ||
         selection.curve == ecm_stage1::CurveModel::Edwards)
         return false;
@@ -514,6 +515,10 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
 bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error,
                        mpz_srcptr modulus) {
     if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
+        if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards && opt.execution.naf_w) {
+            error = "Edwards Stage1 NTT uses an x-only ladder; naf_w must be 0";
+            return true;
+        }
         if (curves > ecm_stage1::stage1_ntt_max_curves) {
             error = "Stage1 NTT supports at most 32 curves per batch";
             return true;

@@ -14,7 +14,7 @@ Stage1Entry select_stage1_entry(const Selection& selection) {
                                                       : ecm_cpu_stage1::run_mont_stage1;
 #if ECM_HAS_CUDA_STAGE1
     if (selection.gpu_algorithm == GpuAlgorithm::Ntt)
-        return ecm_cuda_stage1::run_mont_ntt_stage1;
+        return ecm_cuda_stage1::run_ntt_stage1;
     return selection.curve == CurveModel::Edwards ? ecm_cuda_stage1::run_edwards_stage1
                                                   : ecm_cuda_stage1::run_mont_stage1;
 #else

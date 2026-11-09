@@ -12,20 +12,26 @@ import sys
 import time
 
 from stage1_checkpoint_decode import batch
+from test_edwards_gpu_pipeline import checksum as edwards_checksum, stage1 as edwards_stage1
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stat"))
 from suyama_mont_ref import stage1
 
 
-def saved_points(path, p, b1):
+def saved_points(path, p, b1, edwards=False):
     n = (1 << p) - 1
     points = {}
     for row in path.read_text(encoding="utf-8").splitlines():
         fields = dict(v.strip().split("=", 1) for v in row.split(";") if "=" in v)
         sigma, x = int(fields["SIGMA"]), int(fields["X"], 0)
-        assert fields["METHOD"] == "ECM" and int(fields.get("PARAM", 0)) == 0
         assert int(fields["B1"]) == b1 and 0 <= x < n
-        assert int(fields["CHECKSUM"]) == (b1 * sigma * n * x) % 4294967291
+        if edwards:
+            assert fields["METHOD"] == "ECM-EDWARDS-AM" and "PARAM" not in fields
+            assert fields["SCALAR"] == "48LCM" and fields["VERSION"] == "1"
+            assert int(fields["CHECKSUM"]) == edwards_checksum(n, x, sigma, b1, fields["STATUS"])
+        else:
+            assert fields["METHOD"] == "ECM" and int(fields.get("PARAM", 0)) == 0
+            assert int(fields["CHECKSUM"]) == (b1 * sigma * n * x) % 4294967291
         assert sigma not in points
         points[sigma] = x
     return points
@@ -40,14 +46,14 @@ def main():
     exe, out = args.exe.resolve(strict=True), args.output.resolve()
     out.mkdir(parents=True)
 
-    def fixture(name, algorithm="2", extra=""):
+    def fixture(name, algorithm="2", extra="", model="mont"):
         work = out / name
         work.mkdir()
         config = work / "ecm.toml"
         if "ntt_convolution" not in extra:
             extra += 'ntt_convolution = "linear"\n'
         config.write_text(f'[shared]\nworktodo = "{(work / "worktodo.txt").as_posix()}"\n'
-                          f'[stage1]\ntarget = "gpu"\ncurve = "mont"\ngpu_param = 0\n'
+                          f'[stage1]\ntarget = "gpu"\ncurve = "{model}"\ngpu_param = 0\n'
                           f'gpu_algorithm = {algorithm}\ndevice = {args.device}\n'
                           f'log_file = "{(work / "screen.log").as_posix()}"\n'
                           f'tmp_dir = "{work.as_posix()}"\n'
@@ -126,6 +132,37 @@ def main():
         assert not (work / "out.save").exists()
     print("PASS unsupported route and unsafe-plan rejection", flush=True)
 
+    p, b1, sigma, curves = 4423, 32, 26, 32
+    n = (1 << p) - 1
+    expected = {}
+    for seed in range(sigma, sigma + curves):
+        _, x, z = edwards_stage1(n, seed, b1)
+        expected[seed] = x * pow(z, -1, n) % n
+    for mode in ("linear", "weighted", "auto", "cgbn"):
+        work, cmd = fixture(f"edwards_{mode}", "1" if mode == "cgbn" else "2",
+                            extra=f'ntt_convolution = "{mode}"\n' if mode != "cgbn" else "", model="ed")
+        call, data = direct(work, cmd, p, b1, sigma, curves)
+        log = run(work, call, text=data)
+        if mode == "auto":
+            assert "stage1_ntt_selection:" in log and "curve=edwards" in log
+        elif mode != "cgbn":
+            assert f"convolution={mode} curve=edwards" in log
+        assert saved_points(work / "out.save", p, b1, edwards=True) == expected
+    print("PASS Edwards linear, weighted, auto and CGBN agree with independent 48LCM reference", flush=True)
+
+    work, cmd = fixture("edwards_factor", model="ed")
+    call, data = direct(work, cmd, 65, 8, 9, 1)
+    log = run(work, call, text=data)
+    assert "factor[0]=31" in log and saved_points(work / "out.save", 65, 8, edwards=True) == {9: 31}
+    submission = [json.loads(row) for row in (work / "results.json.txt").read_text().splitlines()]
+    assert any(row["status"] == "F" and row["curves"] == 1 and "Edwards" in row for row in submission)
+
+    work, cmd = fixture("edwards_identity", model="ed")
+    call, data = direct(work, cmd, 35, 128, 16, 1)
+    assert "Edwards identity: sigma=16" in run(work, call, text=data)
+    assert not (work / "out.save").exists() or not (work / "out.save").stat().st_size
+    print("PASS Edwards factor publication and identity without a Stage2 point", flush=True)
+
     p, b1, sigma = 4423, 32, 26
     n = (1 << p) - 1
     expected = {seed: stage1(seed, b1, n)["x"] for seed in range(sigma, sigma + 32)}
@@ -142,16 +179,17 @@ def main():
                 seed: expected[seed] for seed in range(sigma, sigma + curves)}
             print(f"PASS {mode} {curves} curves against Python, owned={owned}, observed={observed}", flush=True)
 
-    for curves in (16, 32):
-        work, cmd = fixture(f"resume_{curves}", extra="auto_stage2 = 1\nntt_tile = 8\n")
+    for model, curves in (("mont", 16), ("mont", 32), ("ed", 16)):
+        work, cmd = fixture(f"resume_{model}_{curves}", extra="auto_stage2 = 1\nntt_tile = 8\n", model=model)
         p, b1, sigma = 9689, 4096, 26
-        save = work / f"m0_m{p}_{b1}.save"
+        prefix = "e" if model == "ed" else "m0"
+        save = work / f"{prefix}_m{p}_{b1}.save"
         row = f'ECMSTAGE1=1,2,{p},-1,"{save.as_posix()}",{10*b1},0,{curves}\n'
         todo = work / "worktodo.txt"
         todo.write_text(row, encoding="ascii")
         config = work / "ecm.toml"
         config.write_text(config.read_text() + f"sigma = {sigma}\n", encoding="utf-8")
-        checkpoint = work / f".m0_s1_m{p}_{b1}.ckpt"
+        checkpoint = work / f".{prefix}_s1_m{p}_{b1}.ckpt"
 
         class Security(ctypes.Structure):
             _fields_ = [("length", wintypes.DWORD), ("descriptor", wintypes.LPVOID),
@@ -192,10 +230,10 @@ def main():
         log = run(work, cmd, "resume")
         assert f"resume={cursor}" in log and "graph_bits=32" in log and "convolution=weighted" in log
         assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
-        ref, ref_cmd = fixture(f"uninterrupted_{curves}")
+        ref, ref_cmd = fixture(f"uninterrupted_{model}_{curves}", model=model)
         call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
         run(ref, call, text=data)
-        assert saved_points(save, p, b1) == saved_points(ref / "out.save", p, b1)
+        assert saved_points(save, p, b1, model == "ed") == saved_points(ref / "out.save", p, b1, model == "ed")
         print(f"PASS real stop and resume with {curves} curves at bit {cursor}/{count}, linear to weighted, Stage2 handoff", flush=True)
 
 

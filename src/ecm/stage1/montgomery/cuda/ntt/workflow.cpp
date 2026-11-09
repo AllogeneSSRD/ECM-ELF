@@ -3,6 +3,7 @@
 #include "tune.h"
 #include "../host_math.h"
 #include "../../../sigma.h"
+#include "../../../../curve/edwards.h"
 #include "../../../../../io/stage1_binary.h"
 #include "../../../../../io/stage1_checkpoint.h"
 #include "ecm/integer.h"
@@ -66,22 +67,65 @@ std::string encode_snapshot(unsigned count, unsigned cursor, unsigned lanes,
     for (auto word : points) u32(payload, word);
     return payload;
 }
+
+// Edwards saves already use the Montgomery x coordinate (1+y)/(1-y).
+// Construct the Edwards curve and point before mapping into the shared ladder.
+CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uint32_t* initial,
+                               unsigned words) {
+    using ecm_edwards::Integer;
+    using ecm_edwards::Setup;
+    Integer d, px, py, a24, x, inv, den;
+    const auto setup = ecm_edwards::construct(d.v, px.v, py.v, a24.v, factor, sigma, n);
+    if (setup == Setup::Factor) return CurveKind::Factor;
+    if (setup == Setup::Degenerate) return CurveKind::Degenerate;
+
+    mpz_ui_sub(den.v, 1, py.v);
+    const auto chart = ecm_edwards::inverse(inv.v, den.v, n, factor);
+    if (chart == Setup::Factor) return CurveKind::Factor;
+    if (chart == Setup::Degenerate) return CurveKind::CompletedWithoutPoint;
+    mpz_add_ui(x.v, py.v, 1);
+    mpz_mul(x.v, x.v, inv.v);
+    mpz_mod(x.v, x.v, n);
+    // The point with x=0 has order two and the Edwards scalar is even.
+    if (mpz_sgn(x.v) == 0) return CurveKind::CompletedWithoutPoint;
+
+    Integer one, aa, bb, e, x2, z2;
+    mpz_set_ui(one.v, 1);
+    mpz_add_ui(aa.v, x.v, 1);
+    mpz_mul(aa.v, aa.v, aa.v);
+    mpz_mod(aa.v, aa.v, n);
+    mpz_sub_ui(bb.v, x.v, 1);
+    mpz_mul(bb.v, bb.v, bb.v);
+    mpz_mod(bb.v, bb.v, n);
+    mpz_sub(e.v, aa.v, bb.v);
+    mpz_mul(x2.v, aa.v, bb.v);
+    mpz_mod(x2.v, x2.v, n);
+    mpz_mul(z2.v, a24.v, e.v);
+    mpz_add(z2.v, z2.v, bb.v);
+    mpz_mul(z2.v, z2.v, e.v);
+    mpz_mod(z2.v, z2.v, n);
+    const mpz_srcptr slots[] = {x.v, one.v, x2.v, z2.v, a24.v, x.v};
+    for (unsigned slot = 0; slot < 6; ++slot)
+        mpz_export(initial + slot * words, nullptr, -1, sizeof(uint32_t), 0, 0, slots[slot]);
+    return CurveKind::Stage2Point;
+}
 } // namespace
 
-ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOptions& opt,
-                                      ecm_stage1_checkpoint::Context& checkpoint) {
+ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions& opt,
+                                 ecm_stage1_checkpoint::Context& checkpoint) {
     ComputationResult result;
     auto phase = FailureSource::Preparation;
     try {
         const auto N = request.modulus;
         const size_t p = mpz_sizeinbase(N, 2);
         const unsigned curves = request.curves;
-        if (!curves || curves > stage1_ntt_max_curves || opt.execution.selection.gpu_param != 0 ||
+        const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
+        if (!curves || curves > stage1_ntt_max_curves || (!edwards && opt.execution.selection.gpu_param != 0) ||
             p < 32 || p > 262144 || mpz_sgn(N) <= 0 || mpz_scan0(N, 0) != p)
             throw std::invalid_argument(
-                "NTT requires Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-32 curves");
+                "NTT requires Edwards or Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-32 curves");
         ecm_edwards::Integer scalar;
-        const unsigned torsion =
+        const unsigned torsion = edwards ? 48u :
             opt.execution.selection.scalar_construction == ScalarConstruction::PrimePowerLcmTimes12
                 ? 12u : 1u;
         if (!compute_batch_s(scalar.v, request.b1, torsion, opt.persistence.exponent_cache_dir))
@@ -94,59 +138,96 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
         mpz_export(packed.data(), nullptr, -1, sizeof(uint32_t), 0, 0, scalar.v);
 
         Snapshot snapshot;
+        bool has_checkpoint = false;
         phase = FailureSource::Persistence;
         checkpoint.validate_pending([&](const auto& records, auto& sigmas) {
             if (records.size() != curves || sigmas.size() != curves ||
-                !montgomery_sigma_batch_fits(sigmas.front(), curves, 0))
+                (!edwards && !montgomery_sigma_batch_fits(sigmas.front(), curves, 0)))
                 return false;
             for (unsigned i = 0; i < curves; ++i)
-                if (sigmas[i] != sigmas.front() + i || (i && !records[i].empty()))
+                if ((edwards ? sigmas[i] == 0 : sigmas[i] != sigmas.front() + i) ||
+                    (i && !records[i].empty()))
                     return false;
-            return read_snapshot(records.front(), count, unsigned(p), curves, snapshot);
+            has_checkpoint = read_snapshot(records.front(), count, unsigned(p), curves, snapshot);
+            return has_checkpoint;
         });
         uint64_t saved_sigma = 0;
         checkpoint.saved_sigma(0, saved_sigma);
-        const uint64_t first = select_batch_sigma(saved_sigma, opt.identity.sigma_fixed,
-                                                    opt.identity.fixed_sigma64, curves, 0);
+        std::vector<uint64_t> sigmas(curves);
+        if (edwards) {
+            for (unsigned i = 0; i < curves; ++i) {
+                uint64_t saved = 0;
+                checkpoint.saved_sigma(i, saved);
+                sigmas[i] = select_curve_sigma(saved, opt.identity.sigma_fixed, opt.identity.fixed_sigma64, i);
+            }
+        } else {
+            const uint64_t first = select_batch_sigma(saved_sigma, opt.identity.sigma_fixed,
+                                                        opt.identity.fixed_sigma64, curves, 0);
+            for (unsigned i = 0; i < curves; ++i) sigmas[i] = first + i;
+        }
         phase = FailureSource::Preparation;
         result.curves.resize(curves);
         ecm_edwards::Array factors(curves);
-        std::vector<int> hits(curves, ECM_NO_FACTOR_FOUND);
-        uint32_t degenerate = curves;
-        ecm_cuda_mont_host::ConstructionResults construction{
-            factors.data(), hits.data(), nullptr, nullptr, &degenerate};
         const unsigned words = unsigned((p + 31) / 32);
-        size_t bytes = 0;
-        const std::unique_ptr<uint32_t, decltype(&std::free)> initial_curves(
-            ecm_cuda_mont_host::set_p_2p_suyama(N, curves, first, words * 32, &bytes, &construction),
-            std::free);
+        std::vector<uint32_t> lanes_initial(size_t(curves) * 6 * words);
+        std::vector<CurveKind> kinds(curves, CurveKind::Stage2Point);
+        if (edwards) {
+            for (unsigned i = 0; i < curves; ++i)
+                kinds[i] = prepare_edwards_lane(N, sigmas[i], factors.data()[i],
+                                                lanes_initial.data() + size_t(i) * 6 * words, words);
+        } else {
+            std::vector<int> hits(curves, ECM_NO_FACTOR_FOUND);
+            uint32_t degenerate = curves;
+            ecm_cuda_mont_host::ConstructionResults construction{
+                factors.data(), hits.data(), nullptr, nullptr, &degenerate};
+            size_t bytes = 0;
+            const std::unique_ptr<uint32_t, decltype(&std::free)> initial_curves(
+                ecm_cuda_mont_host::set_p_2p_suyama(N, curves, sigmas.front(), words * 32,
+                                                    &bytes, &construction), std::free);
+            if (degenerate < curves)
+                throw std::runtime_error("degenerate param0 construction");
+            for (unsigned i = 0; i < curves; ++i) {
+                if (hits[i] == ECM_FACTOR_FOUND_STEP1) kinds[i] = CurveKind::Factor;
+                constexpr unsigned slot_map[] = {3, 4, 5, 6, 1, 2};
+                for (unsigned slot = 0; slot < 6; ++slot)
+                    std::copy_n(initial_curves.get() + (7 * i + slot_map[slot]) * words,
+                                words, lanes_initial.data() + (6 * i + slot) * words);
+            }
+        }
         std::vector<unsigned> active;
         unsigned lanes = 0;
         int legacy = ECM_NO_FACTOR_FOUND;
+        auto edwards_identity = [&](unsigned lane) {
+            ecm_ts_fprintf(stdout, "Edwards identity: sigma=%llu, no Stage2 point\n",
+                           static_cast<unsigned long long>(sigmas[lane]));
+            result.set_curve(lane, CurveKind::CompletedWithoutPoint, nullptr, sigmas[lane]);
+        };
         for (unsigned i = 0; i < curves; ++i) {
-            if (hits[i] == ECM_FACTOR_FOUND_STEP1) {
-                result.set_curve(i, CurveKind::Factor, factors.data()[i], first + i);
+            if (kinds[i] == CurveKind::Degenerate)
+                throw std::runtime_error("degenerate Atkin-Morain construction on sigma " +
+                                         std::to_string(sigmas[i]));
+            if (kinds[i] == CurveKind::Factor) {
+                result.set_curve(i, CurveKind::Factor, factors.data()[i], sigmas[i]);
                 legacy = ECM_FACTOR_FOUND_STEP1;
+            } else if (kinds[i] == CurveKind::CompletedWithoutPoint) {
+                edwards_identity(i);
             } else {
                 active.push_back(i);
                 lanes |= 1u << i;
             }
         }
-        if (saved_sigma && snapshot.lanes != lanes)
+        if (has_checkpoint && snapshot.lanes != lanes)
             throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
                                                "NTT checkpoint active curve mask differs");
-        if (degenerate < curves)
-            throw std::runtime_error("degenerate param0 construction");
 
         if (!active.empty()) {
             const size_t stride = words * active.size();
             std::vector<uint32_t> initial(6 * stride);
-            constexpr unsigned slot_map[] = {3, 4, 5, 6, 1, 2};
             for (unsigned slot = 0; slot < 6; ++slot)
                 for (size_t i = 0; i < active.size(); ++i)
-                    std::copy_n(initial_curves.get() + (7 * active[i] + slot_map[slot]) * words,
+                    std::copy_n(lanes_initial.data() + (6 * active[i] + slot) * words,
                                 words, initial.data() + slot * stride + i * words);
-            if (saved_sigma) std::copy(snapshot.points.begin(), snapshot.points.end(), initial.begin());
+            if (has_checkpoint) std::copy(snapshot.points.begin(), snapshot.points.end(), initial.begin());
 
             ecm_mersenne_ntt::Control control;
             control.resume = snapshot.cursor;
@@ -155,16 +236,15 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
                     "outer_max_layers=%u outer_threads=%u warp_tail=%u graph_bits=%u "
-                    "profile=%u source=%s resume=%u bits=%u convolution=%s\n",
+                    "profile=%u source=%s resume=%u bits=%u convolution=%s curve=%s\n",
                     opt.execution.device_index, p, active.size(), plan.length, plan.bpw, plan.digits,
                     plan.passes, plan.passes, plan.forward.c_str(), plan.inverse.c_str(),
                     plan.tile, 1u << plan.tile, plan.tile_threads, 8u << plan.tile,
                     plan.outer_max, plan.outer_threads, unsigned(plan.warp_tail),
                     plan.window, opt.execution.ntt.profile, plan.source, control.resume, count,
-                    plan.weighted ? "weighted" : "linear");
+                    plan.weighted ? "weighted" : "linear", edwards ? "edwards" : "mont0");
             };
             auto last_save = Clock::now(), last_progress = last_save;
-            bool has_checkpoint = saved_sigma != 0;
             control.poll = [&](unsigned cursor) {
                 const auto now = Clock::now();
                 if (now - last_progress >= std::chrono::seconds(2)) {
@@ -180,7 +260,7 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
             control.checkpoint = [&](unsigned cursor, const auto& points) {
                 const auto payload = encode_snapshot(count, cursor, lanes, points);
                 const bool ok = has_checkpoint ? checkpoint.write_blob(ecm_stage1_curve_record(0), payload)
-                                               : checkpoint.import_payload(payload, first);
+                                               : checkpoint.import_payload(payload, sigmas);
                 if (!ok)
                     throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::IoFailure,
                                                        "cannot persist NTT Stage1 checkpoint");
@@ -217,15 +297,19 @@ ComputationResult run_mont_ntt_stage1(const Stage1Request& request, ExecutionOpt
                 if (!mpz_invert(inv.v, z.v, N)) {
                     mpz_gcd(inv.v, z.v, N);
                     if (mpz_cmp(inv.v, N) == 0) {
-                        result.set_curve(lane, CurveKind::Degenerate, nullptr, first + lane);
-                        throw std::runtime_error("degenerate NTT endpoint on sigma " + std::to_string(first + lane));
+                        if (edwards) {
+                            edwards_identity(lane);
+                            continue;
+                        }
+                        result.set_curve(lane, CurveKind::Degenerate, nullptr, sigmas[lane]);
+                        throw std::runtime_error("degenerate NTT endpoint on sigma " + std::to_string(sigmas[lane]));
                     }
-                    result.set_curve(lane, CurveKind::Factor, inv.v, first + lane);
+                    result.set_curve(lane, CurveKind::Factor, inv.v, sigmas[lane]);
                     legacy = ECM_FACTOR_FOUND_STEP1;
                 } else {
                     mpz_mul(x.v, x.v, inv.v);
                     mpz_mod(x.v, x.v, N);
-                    result.set_curve(lane, CurveKind::Stage2Point, x.v, first + lane);
+                    result.set_curve(lane, CurveKind::Stage2Point, x.v, sigmas[lane]);
                 }
             }
             if (opt.persistence.ckpt_ms && !checkpoint.path().empty() && control.resume != count)
