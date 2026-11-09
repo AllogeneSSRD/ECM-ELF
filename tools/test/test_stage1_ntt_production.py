@@ -123,11 +123,11 @@ def main():
         ("unsafe_digits", "ntt_bpw = 31\n", "2^4003-1\n", 1, "coefficient bound"),
         ("unsafe_weighted", 'ntt_convolution = "weighted"\nntt_length = 2\n',
          "2^4003-1\n", 1, "unsafe weighted NTT length"),
-        ("unsafe_radix5", 'ntt_convolution = "weighted"\nntt_length = 5\n',
-         "2^4003-1\n", 1, "unsafe weighted NTT length"),
+        ("unsafe_radix5", 'ntt_convolution = "weighted"\nntt_length = 2560\n',
+         "2^64001-1\n", 1, "unsafe weighted NTT length"),
         ("radix5_over_limit", 'ntt_convolution = "weighted"\nntt_length = 40960\n',
          "2^4003-1\n", 1, "outside the supported domain"),
-        ("linear_radix5", 'ntt_length = 320\n', "2^4003-1\n", 1, "power of two"),
+        ("linear_radix5", 'ntt_length = 2560\n', "2^4003-1\n", 1, "power of two"),
         ("too_many_passes", "ntt_length = 65536\nntt_tile = 1\nntt_outer_max = 1\n",
          "2^4003-1\n", 1, "more than eight outer passes"),
     ):
@@ -137,10 +137,15 @@ def main():
         assert not (work / "out.save").exists()
     print("PASS unsupported route and unsafe-plan rejection", flush=True)
 
-    work, cmd = fixture("mont_radix5", extra='ntt_convolution = "weighted"\nntt_length = 160\n')
+    for length in (5, 10, 20, 40, 80, 160, 320, 640, 1280):
+        work, cmd = fixture(f"retired_radix5_{length}", extra=f'ntt_convolution = "weighted"\nntt_length = {length}\n')
+        call, data = direct(work, cmd, 4003, 20, 26, 1)
+        assert "outside the supported domain" in run(work, call, text=data, ok=False)
+
+    work, cmd = fixture("mont_radix5", extra='ntt_convolution = "weighted"\nntt_length = 2560\n')
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
-    assert "length=160" in log and "forward_layers=r5+5 inverse_layers=5+r5" in log
+    assert "length=2560" in log and "forward_layers=r5+9 inverse_layers=9+r5" in log
     assert saved_points(work / "out.save", 4003, 32) == expected
 
     p, b1, sigma, curves = 4423, 32, 26, 32
@@ -151,7 +156,7 @@ def main():
         expected[seed] = x * pow(z, -1, n) % n
     for mode in ("linear", "weighted", "radix5", "auto", "cgbn"):
         if mode == "radix5":
-            extra = 'ntt_convolution = "weighted"\nntt_length = 320\n'
+            extra = 'ntt_convolution = "weighted"\nntt_length = 2560\n'
         else:
             extra = f'ntt_convolution = "{mode}"\n' if mode != "cgbn" else ""
         work, cmd = fixture(f"edwards_{mode}", "1" if mode == "cgbn" else "2",
@@ -161,7 +166,7 @@ def main():
         if mode == "auto":
             assert "stage1_ntt_selection:" in log and "curve=edwards" in log
         elif mode == "radix5":
-            assert "length=320" in log and "forward_layers=r5+6 inverse_layers=6+r5" in log
+            assert "length=2560" in log and "forward_layers=r5+9 inverse_layers=9+r5" in log
         elif mode != "cgbn":
             assert f"convolution={mode} curve=edwards" in log
         assert saved_points(work / "out.save", p, b1, edwards=True) == expected
@@ -241,13 +246,13 @@ def main():
         magic, count, cursor, mask = struct.unpack_from("<8sIII", lanes[0][1])
         assert magic == b"ECMNTTS1" and 0 < cursor < count and mask == (1 << curves) - 1
         assert not lanes[1][1]
-        config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 7" if model == "ed" else "ntt_tile = 9")
+        config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
                           .replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"')
-                          + "ntt_window = 32\n" + ("ntt_length = 640\n" if model == "ed" else ""), encoding="utf-8")
+                          + "ntt_window = 32\n" + ("ntt_length = 2560\n" if model == "ed" else ""), encoding="utf-8")
         log = run(work, cmd, "resume")
         assert f"resume={cursor}" in log and "graph_bits=32" in log and "convolution=weighted" in log
         if model == "ed":
-            assert "length=640" in log and "forward_layers=r5+7" in log
+            assert "length=2560" in log and "forward_layers=r5+9" in log
         assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
         ref, ref_cmd = fixture(f"uninterrupted_{model}_{curves}", model=model)
         call, data = direct(ref, ref_cmd, p, b1, sigma, curves)

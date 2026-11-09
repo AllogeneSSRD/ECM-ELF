@@ -41,7 +41,7 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                     } else if (key == "ntt_length")
                         valid = scratch.ntt_length == 0 || (scratch.ntt_length >= 2 &&
                             (ecm_stage1::stage1_ntt_power_of_two(unsigned(scratch.ntt_length)) ||
-                             ecm_stage1::stage1_ntt_radix5(unsigned(scratch.ntt_length))));
+                             ecm_stage1::stage1_ntt_supported_radix5(unsigned(scratch.ntt_length))));
                     else if (key == "ntt_bpw")
                         valid = scratch.ntt_bpw == 0 || scratch.ntt_bpw >= 16;
                     else if (key == "gpu_param")

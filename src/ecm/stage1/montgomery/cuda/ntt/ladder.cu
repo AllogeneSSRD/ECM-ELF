@@ -205,7 +205,7 @@ size_t memory_budget(size_t free_bytes, unsigned limit_mib) {
     return limit_mib ? std::min(available, size_t(limit_mib) * 1024 * 1024) : available;
 }
 
-Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options) {
+Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options, bool prefer_radix5) {
     if (p < 32 || p > 262144) throw std::invalid_argument("invalid Stage1 NTT exponent");
     Packing s;
     if (options.weighted) {
@@ -215,10 +215,17 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options)
                 (!options.bpw || bpw <= options.bpw) && exact_ok_terms(2ull * length, bpw);
         };
         s.length = options.length ? options.length : 2;
-        if (!options.length)
+        if (!options.length) {
             while (s.length < 65536 && !usable(s.length)) s.length *= 2;
+            // Only the 5/8-length shape between this and the previous power
+            // of two can be the shortest safe mixed transform.
+            const unsigned shorter = (s.length / 8) * 5;
+            if (prefer_radix5 && ecm_stage1::stage1_ntt_supported_radix5(shorter) && usable(shorter) &&
+                options.tile <= ecm_stage1::stage1_ntt_length_log(shorter / 5))
+                s.length = shorter;
+        }
         if (s.length < 2 || (!ecm_stage1::stage1_ntt_power_of_two(s.length) &&
-                            !ecm_stage1::stage1_ntt_radix5(s.length)) || !usable(s.length))
+                            !ecm_stage1::stage1_ntt_supported_radix5(s.length)) || !usable(s.length))
             throw std::invalid_argument("unsafe weighted NTT length or digit width");
         s.digits = s.length;
         s.bpw = (p + s.length - 1) / s.length;
@@ -305,45 +312,42 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Tables tables;
     auto& ctx=tables.ctx;
     const auto* resolved = control ? &overrides : nullptr;
-    if (log) fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
-    else ctx.m_max = overrides.outer_max;
+    fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
     result.owned_bytes = 11 * sizeof(U) * curves * s.length + slots * stride * sizeof(uint32_t) +
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
-        (log ? (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U) : 0);
+        (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
     if (mixed) result.owned_bytes += size_t(8) * width * sizeof(U);
     if (options.weighted)
         result.owned_bytes += size_t(s.length) * (sizeof(U) + sizeof(WeightedDigit)) +
                               size_t(s.words) * sizeof(WeightedLimb);
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
-    if (log) fuse_init(ctx,width,log,omega2,inv2,true,resolved);
+    fuse_init(ctx,width,log,omega2,inv2,true,resolved);
     if (control && control->describe) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
             stages += std::to_string(width);
         };
         Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
-                  ctx.t ? FUSE_TILE_THREADS : 0u, ctx.nms ? FUSE_OUTER_THREADS : 0u,
+                  FUSE_TILE_THREADS, ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   ctx.warp_tail && ctx.t >= 5, profile.source, options.weighted, {}, {}};
         if (mixed) plan.forward = "r5";
         for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
-        if (ctx.t) {
-            join(plan.forward, ctx.t);
-            join(plan.inverse, ctx.t);
-        }
+        join(plan.forward, ctx.t);
+        join(plan.inverse, ctx.t);
         for (int i = ctx.nms; i > 0; --i) join(plan.inverse, ctx.ms[i-1]);
         if (mixed) plan.inverse += plan.inverse.empty() ? "r5" : "+r5";
         control->describe(plan);
     }
-    if (!ctx.t && !mixed) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
+    if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
     const size_t tile_smem = sizeof(U) << ctx.t;
     const void* tile_kernel = warp_tile ? (const void*)inverse_product_tile<true>
                                        : (const void*)inverse_product_tile<false>;
     cudaFuncSetAttribute(tile_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
     CK(cudaFuncSetAttribute(tile_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
-    if (log) ntt_fuse_cache_tables(ctx,omega2,inv2);
+    ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
     Buffer<unsigned> start(1);
@@ -399,11 +403,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
     };
     pack_inputs(fixed.data, 2, {{A24,Base}});
-    if (log) ntt_forward_fused(fixed.data,ctx,omega2,2*curves*planes,q);
+    ntt_forward_fused(fixed.data,ctx,omega2,2*curves*planes,q);
     CK(cudaStreamSynchronize(q));
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out) {
         pack_inputs(freq.data, inputs, in);
-        if (log) ntt_forward_fused(freq.data,ctx,omega2,inputs*curves*planes,q);
+        ntt_forward_fused(freq.data,ctx,omega2,inputs*curves*planes,q);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
             return id < 5 ? freq.data + id * plane : fixed.data + (id - 5) * plane;
@@ -421,7 +425,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             inverse_product_tile<false><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                 inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
         CK(cudaGetLastError());
-        if (log) ntt_inverse_outer_fused(inverse.data,ctx,inv2,outputs*curves*planes,q);
+        ntt_inverse_outer_fused(inverse.data,ctx,inv2,outputs*curves*planes,q);
         if (mixed)
             radix5_inverse<<<mixed_grid(outputs),threads,0,q>>>(inverse.data,width,mixed_inv.data,radix5_inv);
         if (options.weighted) {

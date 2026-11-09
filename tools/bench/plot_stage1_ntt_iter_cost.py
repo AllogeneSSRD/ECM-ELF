@@ -92,11 +92,11 @@ def weighted_steps(lengths):
 
 def plot_steps(report, output):
     binary = {1 << k for k in range(1, 17)}
-    mixed = {5 << k for k in range(13)}
+    mixed = {5 << k for k in range(9, 13)}
     with plt.style.context("seaborn-v0_8-whitegrid"):
         fig, ax = plt.subplots(figsize=(9.5, 5), layout="constrained")
         for lengths, label, color in ((binary, "Weighted · powers of two", "#cb6719"),
-                                      (binary | mixed, "Weighted · with radix-5 lengths", "#176fa5")):
+                                      (binary | mixed, "Weighted · default radix-5 range", "#176fa5")):
             steps = list(weighted_steps(lengths))
             edges = [p for p, _, _ in steps] + [steps[-1][1] + 1]
             ax.stairs([length for _, _, length in steps], edges, baseline=None,

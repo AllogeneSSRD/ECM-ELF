@@ -96,17 +96,30 @@ matrix = [
         ("8", "0"), ("8", "1")]
     print("PASS both modes grouped at one length with direct submission and 100-iteration warmup", flush=True)
 
-    mixed = fixture + "ntt_length = 5\n"
-    log = run("mixed_tune", ["--tune", "ntt", "--bits", "127"], cfg=mixed)
-    assert re.search(r"Best 5 \d+ 1:0:\d+:\d+:0:r5:r5 \d+c \d+ iter/s", log)
+    p = 58631
+    wide = f"2^{p}-1\n"
+    one_curve = [*flags[:1], "1", *flags[2:]]
+    assert "length=4096" in run("seed_binary", one_curve, cfg=fixture + "ntt_length = 4096\n", expression=wide)
+    assert "source=short_tune" in run("add_mixed_to_binary", one_curve, expression=wide)
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
-    mixed_rows = [dict(zip(columns, row)) for row in values if row[0] == 5]
-    assert any(row[columns.index("ntt_type")] == "stage2_convolution" for row in values)
-    assert any(row["batch"] == 1 and row["log2_length"] == 2 and row["passes_forward"] == 1
-               and row["ntt_type"] == "stage1_weighted" for row in mixed_rows)
-    log = run("mixed_cached", [*flags[:1], "1", *flags[2:]], cfg=mixed, expression="2^127-1\n")
-    assert "source=tune" in log and "length=5" in log
-    print("PASS radix-5 tune persistence, legacy Stage2 rows and production cache hit", flush=True)
+    rows = [dict(zip(columns, row)) for row in values]
+    assert any(row["ntt_type"] == "stage2_convolution" for row in rows)
+    mixed, = [row for row in rows if row["length"] == 2560 and row["batch"] == 1]
+    assert mixed["ntt_type"] == "stage1_weighted" and mixed["log2_length"] == 11
+    assert mixed["forward"].startswith("r5+") and mixed["inverse"].endswith("+r5")
+    cached = database.read_bytes()
+    assert "source=tune" in run("mixed_cached", one_curve, expression=wide)
+    assert database.read_bytes() == cached
+    weighted = fixture + 'ntt_convolution = "weighted"\n'
+    assert "length=2560" in run("mixed_default", one_curve, cfg=weighted, expression=wide)
+    assert "length=4096" in run("binary_for_tile", one_curve, cfg=weighted + "ntt_tile = 10\n", expression=wide)
+    assert saved_points(out / "mixed_default/out.save", p, b1) == saved_points(out / "seed_binary/out.save", p, b1)
+    print("PASS default radix-5, explicit tile fallback, short tune with an existing binary row and cache reuse", flush=True)
+
+    log = run("full_mixed", ["--tune", "ntt", "--bits", str(p)])
+    lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best (\d+) \d+ [01]:", log, re.M)]
+    assert len(lengths) == 3 and lengths[:2] == [2560, 4096] and lengths == sorted(lengths), lengths
+    print("PASS full tune compares all three eligible plans in length order", flush=True)
 
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
     log = run("low_budget", ["-gpucurves", "32", "-sigma", "26", "20"],

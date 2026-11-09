@@ -239,8 +239,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                     "profile=%u source=%s resume=%u bits=%u convolution=%s curve=%s\n",
                     opt.execution.device_index, p, active.size(), plan.length, plan.bpw, plan.digits,
                     plan.passes, plan.passes, plan.forward.c_str(), plan.inverse.c_str(),
-                    plan.tile, plan.tile ? 1u << plan.tile : 0, plan.tile_threads,
-                    plan.tile ? 8u << plan.tile : 0,
+                    plan.tile, 1u << plan.tile, plan.tile_threads, 8u << plan.tile,
                     plan.outer_max, plan.outer_threads, unsigned(plan.warp_tail),
                     plan.window, opt.execution.ntt.profile, plan.source, control.resume, count,
                     plan.weighted ? "weighted" : "linear", edwards ? "edwards" : "mont0");

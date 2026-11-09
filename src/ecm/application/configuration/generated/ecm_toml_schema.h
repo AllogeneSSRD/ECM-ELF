@@ -48,7 +48,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","ntt_convolution","string","[auto|linear|weighted]"},
     {"stage1","ntt_tune_file","string","<path>"},
     {"stage1","ntt_memory_mib","int","[0,1048576]"},
-    {"stage1","ntt_length","int","0, 2^k in [2,65536], or 5*2^k in [5,20480] (weighted)"},
+    {"stage1","ntt_length","int","0, 2^k in [2,65536], or 5*2^k in [2560,20480] (weighted)"},
     {"stage1","ntt_bpw","int","0 or [16,31]"},
     {"stage1","ntt_profile","int","[0|1|2]"},
     {"stage1","ntt_tile","int","[0,12]"},

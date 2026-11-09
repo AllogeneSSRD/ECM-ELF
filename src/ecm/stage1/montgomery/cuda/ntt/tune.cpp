@@ -298,12 +298,38 @@ struct Cached {
     double rate;
 };
 
-std::optional<Packing> eligible_packing(unsigned p, const Stage1NttOptions& options) {
+struct Candidate {
+    Stage1NttOptions options;
+    Packing shape;
+};
+
+enum : unsigned { Linear, Weighted, Mixed, CandidateCount };
+using Candidates = std::array<std::optional<Candidate>, CandidateCount>;
+
+std::optional<Candidate> candidate(unsigned p, Stage1NttOptions options, bool prefer_radix5) {
     try {
-        const auto packing = resolve_packing(p, options);
-        if (options.tile <= tile_log(packing.length)) return packing;
+        const auto shape = resolve_packing(p, options, prefer_radix5);
+        if (options.tile <= tile_log(shape.length)) {
+            options.length = shape.length;
+            options.automatic = false;
+            return Candidate{std::move(options), shape};
+        }
     } catch (const std::invalid_argument&) {}
     return {};
+}
+
+Candidates candidates_for(unsigned p, Stage1NttOptions options) {
+    Candidates out;
+    options.weighted = false;
+    out[Linear] = candidate(p, options, false);
+    options.weighted = true;
+    out[Weighted] = candidate(p, options, false);
+    if (!options.length) {
+        auto mixed = candidate(p, options, true);
+        if (mixed && ecm_stage1::stage1_ntt_supported_radix5(mixed->shape.length))
+            out[Mixed] = std::move(mixed);
+    }
+    return out;
 }
 
 std::optional<Cached> decode(const Fields& row, const Packing& shape, const Device& device,
@@ -337,31 +363,29 @@ std::optional<Cached> decode(const Fields& row, const Packing& shape, const Devi
 int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool exhaustive) {
     try {
         const auto device = device_info(index, options.memory_mib);
-        std::vector<unsigned> widths{61,127,251,521,1279,2539,4003,8191,16001,32749,65521,131071,262139};
+        std::vector<unsigned> widths{61,127,251,521,1279,2539,4003,8191,16001,32749,
+                                     58631,65521,115201,131071,225287,262139};
         if (p) widths = {p};
         constexpr unsigned iterations = 192;
         const auto start = now_s();
-        std::array<Stage1NttOptions, 2> candidates{options, options};
-        for (unsigned mode = 0; mode < candidates.size(); ++mode) {
-            candidates[mode].automatic = false;
-            candidates[mode].weighted = mode != 0;
-        }
         // Resolve every packing first: the same input width can produce
         // different lengths, and a length can be shared by different inputs.
         struct Input {
+            Candidates candidates;
             unsigned pending = 0;
             bool measured = false;
             std::optional<Calibration> calibration;
         };
-        std::map<unsigned, std::array<std::vector<unsigned>, 2>> schedule;
+        std::map<unsigned, std::array<std::vector<unsigned>, CandidateCount>> schedule;
         std::map<unsigned, Input> inputs;
         for (const unsigned width : widths) {
             if (width < 32 || width > 262144)
                 throw std::invalid_argument("--tune ntt --bits requires 32..262144");
             auto& input = inputs[width];
-            for (unsigned mode = 0; mode < candidates.size(); ++mode) {
-                if (const auto packing = eligible_packing(width, candidates[mode])) {
-                    schedule[packing->length][mode].push_back(width);
+            input.candidates = candidates_for(width, options);
+            for (unsigned mode = 0; mode < CandidateCount; ++mode) {
+                if (const auto& plan = input.candidates[mode]) {
+                    schedule[plan->shape.length][mode].push_back(width);
                     ++input.pending;
                 }
             }
@@ -372,12 +396,13 @@ int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool ex
         ecm_ts_fprintf(stdout, "length max_exp ntt_type batch iter/s (warmup=%u)\n", warmup_iterations);
         for (const auto& group : schedule) {
             std::vector<Fields> rows;
-            for (unsigned mode = 0; mode < candidates.size(); ++mode) {
+            for (unsigned mode = 0; mode < CandidateCount; ++mode) {
                 for (const unsigned width : group.second[mode]) {
                     auto& input = inputs.at(width);
                     if (!input.calibration) input.calibration.emplace(device, width, iterations);
-                    const auto result = BatchSearch(*input.calibration, candidates[mode]).search(exhaustive);
-                    // Keep the reference endpoints until both modes have run for this input.
+                    const auto result = BatchSearch(*input.calibration, input.candidates[mode]->options)
+                                            .search(exhaustive);
+                    // Keep the reference endpoints until all shapes have run for this input.
                     if (--input.pending == 0) input.calibration.reset();
                     if (result.empty()) continue;
                     input.measured = true;
@@ -413,49 +438,58 @@ Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
                                    const Stage1NttOptions& options) {
     if (!options.automatic) return options;
     const auto device = device_info(index, options.memory_mib);
-    std::array<Stage1NttOptions, 2> candidates{options, options};
-    candidates[0].weighted = false;
-    candidates[1].weighted = true;
-    const std::array<std::optional<Packing>, 2> shapes{
-        eligible_packing(p, candidates[0]), eligible_packing(p, candidates[1])};
-    std::array<std::optional<Cached>, 2> choices;
+    const auto candidates = candidates_for(p, options);
+    std::array<std::optional<Cached>, CandidateCount> choices;
     try {
         const auto db = load(options.tune_file);
         for (const auto& row : db.stage1_ntt) {
             const auto& condition = db.conditions.at(ecm_stage2::tune::uint(row,"condition"));
             if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid) continue;
-            const unsigned mode = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
-            if (!shapes[mode]) continue;
-            auto sample = decode(row, *shapes[mode], device, batch, candidates[mode]);
-            if (sample && (!choices[mode] || sample->rate > choices[mode]->rate)) choices[mode] = std::move(sample);
+            const bool weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
+            for (unsigned mode = 0; mode < CandidateCount; ++mode) {
+                const auto& plan = candidates[mode];
+                if (!plan || plan->options.weighted != weighted) continue;
+                auto sample = decode(row, plan->shape, device, batch, plan->options);
+                if (sample && (!choices[mode] || sample->rate > choices[mode]->rate))
+                    choices[mode] = std::move(sample);
+            }
         }
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "Stage1 NTT tune read: %s\n", e.what());
     }
     const char* source = "tune";
-    if (!choices[0] && !choices[1]) {
+    bool measure = std::none_of(choices.begin(), choices.end(), [](const auto& choice) { return choice.has_value(); });
+    if (candidates[Mixed]) {
+        // Existing tune files can have valid binary rows but no mixed measurement.
+        for (unsigned mode = 0; mode < CandidateCount; ++mode)
+            measure |= candidates[mode].has_value() && !choices[mode];
+    }
+    if (measure) {
         source = "short_tune";
         const auto start = now_s();
         constexpr unsigned iterations = 128;
         Calibration cal(device, p, iterations);
         std::vector<Fields> rows;
-        for (unsigned mode = 0; mode < 2; ++mode) {
-            if (!shapes[mode]) continue;
-            auto row = measure_batch(cal, batch, candidates[mode]);
+        for (unsigned mode = 0; mode < CandidateCount; ++mode) {
+            if (!candidates[mode] || choices[mode]) continue;
+            const auto& plan = candidates[mode]->options;
+            auto row = measure_batch(cal, batch, plan);
             if (!row) continue;
             rows.push_back(encode(*row, iterations));
-            choices[mode] = Cached{fixed_plan(candidates[mode], row->plan), row->throughput() * iterations};
+            choices[mode] = Cached{fixed_plan(plan, row->plan), row->throughput() * iterations};
         }
         try { persist(options.tune_file, device, std::move(rows)); }
         catch (const std::exception& e) { ecm_ts_fprintf(stderr, "Stage1 NTT tune write: %s\n", e.what()); }
         ecm_ts_fprintf(stdout, "stage1_ntt_short_tune: batch=%u warmup_iters=%u seconds=%.3f\n",
                        batch, warmup_iterations, now_s() - start);
     }
-    if (!choices[0] && !choices[1]) throw BudgetError("no safe Stage1 NTT auto plan under the current VRAM budget");
-    const unsigned winner = choices[1] && (!choices[0] || choices[1]->rate > choices[0]->rate);
-    ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s\n",
-                   source, p, batch, modes[winner]);
-    return choices[winner]->options;
+    const Cached* winner = nullptr;
+    for (const auto& choice : choices)
+        if (choice && (!winner || choice->rate > winner->rate)) winner = &*choice;
+    if (!winner) throw BudgetError("no safe Stage1 NTT auto plan under the current VRAM budget");
+    ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s length=%u\n",
+                   source, p, batch, modes[winner->options.weighted], winner->options.length);
+    return winner->options;
 }
 
 } // namespace ecm_mersenne_ntt

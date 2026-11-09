@@ -38,9 +38,9 @@ ntt_profile = 0
 
 `ntt_profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt_length`、`ntt_bpw`、`ntt_tile` 和 `ntt_outer_max` 的 0 值使用自动值。`ntt_window = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt_warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
-`ntt_convolution` 默认为 `"auto"`。先从输入推导安全的 NTT 长度和 digit 位宽，再按设备、这两项形状、活跃曲线数和显式计划参数查共享表。没有可用记录时短测当前批量。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积。加权模式的默认长度为最短的安全二次幂，`ntt_bpw` 可限定最大 digit 位宽，`ntt_length` 可指定满足系数界的长度。
+`ntt_convolution` 默认为 `"auto"`。程序按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt_length=0` 时使用满足约束的较短长度。`ntt_bpw` 可限定最大 digit 位宽。
 
-加权卷积也接受显式 `ntt_length = 5·2^k` 的整数值，范围为 5–20480。例如 `ntt_length = 2560` 可用于 53249–64000 位的混合变换，显式 `ntt_tile` 以其二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass，`--tune ntt` 可用同一长度测量并保存选型。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
+加权卷积支持的混合长度为 2560、5120、10240 和 20480。前三档可在相应位宽缩短变换，20480 保留为显式 `ntt_length`。显式 `ntt_tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
 
 `ntt_tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，Stage1 和 Stage2 共用单个 `[ntt]` 矩阵。使用自定义共享文件时，让 Stage1 的 `ntt_tune_file` 与 Stage2 的 `stage2_tune_profile` 指向同一路径。旧配置若显式填写了 Stage1 JSON 路径，将该值改为共享 TOML 路径后重新调优。`ntt_memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 进一步收紧这个上限。
 
@@ -49,7 +49,7 @@ ntt_profile = 0
 .\ecm.exe --config .\ecm.toml --tune ntt --bits 8191
 ```
 
-不带 `--bits` 时用 13 个代表指数生成测试形状。调优按实际 NTT 长度升序执行，每个长度内先测适用的 linear，再测 weighted，各自完成批量搜索后才进入下一长度。每个候选先执行 100 步预热，再重置输入计时。共享表保存单曲线及各批量的计划、吞吐和显存，指数只用于生成测试数据。命令输出峰值批量和达到本轮峰值吞吐 95% 的最小实测批量。任务曲线数仍由 `-gpucurves` 或队列行指定。`--tune-exhaustive` 逐一测量 1–32 档。调优使用合成点和短标量，结果只写调优表。
+不带 `--bits` 时用 16 个代表指数生成测试形状，覆盖三个默认混合档。调优按实际 NTT 长度升序执行，每个长度内先测适用的 linear，再测 weighted，各自完成批量搜索后才进入下一长度。每个候选先执行 100 步预热，再重置输入计时。共享表保存单曲线及各批量的计划、吞吐和显存，指数只用于生成测试数据。命令输出峰值批量和达到本轮峰值吞吐 95% 的最小实测批量。任务曲线数仍由 `-gpucurves` 或队列行指定。`--tune-exhaustive` 逐一测量 1–32 档。调优使用合成点和短标量，结果只写调优表。
 
 调优控制台与 `log_file` 开头单独列出 `ntt_type` 的字段名，实测行使用 `length max_exp ntt_type batch iter/s` 格式。`max_exp` 是该打包参数的安全指数上限。`ntt_type` 依次编码卷积（0=linear，1=weighted）、tile 位数、外层 radix 上限、Graph 位数、warp 尾层开关、正向各趟的层数和逆向各趟的层数。每个实测形状以 `Best` 标记峰值吞吐，推荐档与峰值档不同时另显示 `95%` 行。
 
