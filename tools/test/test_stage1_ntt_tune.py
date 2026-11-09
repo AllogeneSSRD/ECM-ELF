@@ -63,9 +63,15 @@ matrix = [
     mirror = out / "screen.log"
     config = fixture.replace('log_file = ""', f'log_file = "{mirror.as_posix()}"')
     log = run("full", ["--tune", "ntt", "--bits", str(p)], cfg=config)
-    assert "length max_exp ntt_type batch iter/s (warmup=100)" in log
+    legend = ("ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
+              "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)")
+    header = "length max_exp ntt_type batch iter/s (warmup=100)"
+    assert log.index(legend) < log.index(header)
+    lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?(?:Best |95% +)?(\d+) \d+ [01]:", log, re.M)]
+    assert len(set(lengths)) == 2 and lengths == sorted(lengths), lengths
     best_lines = re.findall(r"Best \d+ \d+ [01]:[\d:,]+ \d+c \d+ iter/s", log)
-    assert len(best_lines) == 2 and all(line in mirror.read_text(encoding="utf-8") for line in best_lines)
+    mirrored = mirror.read_text(encoding="utf-8")
+    assert legend in mirrored and len(best_lines) == 2 and all(line in mirrored for line in best_lines)
     profile = tomllib.loads(database.read_text(encoding="utf-8"))
     assert profile["profile"]["format"] == 14 and set(profile["ntt"]) == {"matrix"}
     columns, *values = profile["ntt"]["matrix"]
@@ -84,9 +90,11 @@ matrix = [
     assert "source=tune" in run("full_cached", [*flags[:1], "1", *flags[2:]], expression=expression)
     print("PASS full tune CLI, per-backend 95% recommendations and production selection", flush=True)
 
-    direct = run("direct", ["--tune", "ntt", "--bits", "61"], cfg=fixture + "ntt_window = 0\n")
-    assert re.search(r"Best \d+ \d+ 0:\d+:\d+:0:[\d:,]+ \d+c \d+ iter/s", direct)
-    print("PASS 100-iteration warmup with direct submission", flush=True)
+    direct = run("direct", ["--tune", "ntt", "--bits", "61"],
+                 cfg=fixture + "ntt_window = 0\nntt_length = 8\n")
+    assert re.findall(r"Best (\d+) \d+ ([01]):\d+:\d+:0:[\d:,]+ \d+c \d+ iter/s", direct) == [
+        ("8", "0"), ("8", "1")]
+    print("PASS both modes grouped at one length with direct submission and 100-iteration warmup", flush=True)
 
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
     log = run("low_budget", ["-gpucurves", "32", "-sigma", "26", "20"],

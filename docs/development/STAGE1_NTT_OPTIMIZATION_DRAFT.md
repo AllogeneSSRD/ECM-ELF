@@ -45,3 +45,7 @@ GPU1 上分别用线性和加权后端对比 0.59.3，沿用 B1=256 的六位宽
 - Stage1 NTT 与 Stage2 共用 `tune.toml`、发布锁及单个 `[ntt]`。形状复用基于安全长度、digit 位宽、活跃批量和计划约束。Stage1 调优输入的指数不进入摘要表。Stage2 既有分表在读取后归并，旧摘要导入按更新时间选择聚合值。
 - 每个 Stage1 候选先执行 100 步，重置原始状态后计时。控制台及日志使用同样的单行摘要，峰值档和 95% 推荐档由本轮数据计算。
 - GPU1 复验 Graph 与直接提交预热、跨指数查表、16／32 曲线正确性和续跑。用 `ecm.exe → ecm_cuda_stage2.exe → ecm.exe` 交替写同一个默认文件，保留既有 Stage2 位宽矩阵和两类 NTT 行。CPU 门禁覆盖旧分表归并、行排序、列定义和损坏摘要拒绝。原始结果位于 `data/experiments/shared_ntt_tune_0598/`。
+
+## 0.59.9 按 NTT 长度调度
+
+先推导各输入和卷积类型的合法长度，再按长度依次执行。保留同一输入的算术参考结果，供两种卷积跨长度对拍。控制台和镜像日志开头共用一行类型字段说明。验证入口为 [Stage1 NTT 调优门禁](../../tools/test/test_stage1_ntt_tune.py)，本机证据位于 `data/experiments/stage1_ntt_length_order_0599/`。

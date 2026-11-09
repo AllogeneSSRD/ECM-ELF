@@ -47,9 +47,9 @@ ntt_profile = 0
 .\ecm.exe --config .\ecm.toml --tune ntt --bits 8191
 ```
 
-不带 `--bits` 时用 13 个代表指数生成测试形状。每个候选先执行 100 步预热，再重置输入计时。共享表保存单曲线及各批量的计划、吞吐和显存，指数只用于生成测试数据。命令输出峰值批量和达到本轮峰值吞吐 95% 的最小实测批量。任务曲线数仍由 `-gpucurves` 或队列行指定。`--tune-exhaustive` 逐一测量 1–32 档。调优使用合成点和短标量，结果只写调优表。
+不带 `--bits` 时用 13 个代表指数生成测试形状。调优按实际 NTT 长度升序执行，每个长度内先测适用的 linear，再测 weighted，各自完成批量搜索后才进入下一长度。每个候选先执行 100 步预热，再重置输入计时。共享表保存单曲线及各批量的计划、吞吐和显存，指数只用于生成测试数据。命令输出峰值批量和达到本轮峰值吞吐 95% 的最小实测批量。任务曲线数仍由 `-gpucurves` 或队列行指定。`--tune-exhaustive` 逐一测量 1–32 档。调优使用合成点和短标量，结果只写调优表。
 
-调优控制台与 `log_file` 共用 `length max_exp ntt_type batch iter/s` 单行格式。`max_exp` 是该打包参数的安全指数上限。`ntt_type` 依次编码卷积（0=linear，1=weighted）、tile、外层 radix 上限、Graph 位数、warp 尾层、正向层序和逆向层序。组末的 `Best` 标记峰值吞吐。推荐档与峰值档不同时显示 `95%` 行。
+调优控制台与 `log_file` 开头单独列出 `ntt_type` 的字段名，实测行使用 `length max_exp ntt_type batch iter/s` 格式。`max_exp` 是该打包参数的安全指数上限。`ntt_type` 依次编码卷积（0=linear，1=weighted）、tile 位数、外层 radix 上限、Graph 位数、warp 尾层开关、正向各趟的层数和逆向各趟的层数。每个实测形状以 `Best` 标记峰值吞吐，推荐档与峰值档不同时另显示 `95%` 行。
 
 运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 输出卷积后端、长度、最大 digit 位宽、正逆向 pass 与各 pass 层数、tile 元素数与线程数、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。正常结束生成标准 PARAM0 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 

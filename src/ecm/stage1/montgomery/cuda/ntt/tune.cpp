@@ -341,34 +341,65 @@ int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool ex
         if (p) widths = {p};
         constexpr unsigned iterations = 192;
         const auto start = now_s();
-        ecm_ts_fprintf(stdout, "length max_exp ntt_type batch iter/s (warmup=%u)\n", warmup_iterations);
+        std::array<Stage1NttOptions, 2> candidates{options, options};
+        for (unsigned mode = 0; mode < candidates.size(); ++mode) {
+            candidates[mode].automatic = false;
+            candidates[mode].weighted = mode != 0;
+        }
+        // Resolve every packing first: the same input width can produce
+        // different lengths, and a length can be shared by different inputs.
+        struct Input {
+            unsigned pending = 0;
+            bool measured = false;
+            std::optional<Calibration> calibration;
+        };
+        std::map<unsigned, std::array<std::vector<unsigned>, 2>> schedule;
+        std::map<unsigned, Input> inputs;
         for (const unsigned width : widths) {
             if (width < 32 || width > 262144)
                 throw std::invalid_argument("--tune ntt --bits requires 32..262144");
-            Calibration cal(device, width, iterations);
-            std::vector<Fields> rows;
-            for (unsigned mode = 0; mode < 2; ++mode) {
-                auto candidate = options;
-                candidate.automatic = false;
-                candidate.weighted = mode != 0;
-                const auto result = BatchSearch(cal, candidate).search(exhaustive);
-                if (result.empty()) continue;
-                const auto peak = std::max_element(result.begin(), result.end(), [](const auto& a, const auto& b) {
-                    return a.throughput() < b.throughput();
-                });
-                const auto recommended = std::find_if(result.begin(), result.end(), [&](const auto& m) {
-                    return m.throughput() >= near_peak * peak->throughput();
-                });
-                for (const auto& measurement : result) {
-                    print_measurement("", measurement, iterations);
-                    rows.push_back(encode(measurement, iterations));
+            auto& input = inputs[width];
+            for (unsigned mode = 0; mode < candidates.size(); ++mode) {
+                if (const auto packing = eligible_packing(width, candidates[mode])) {
+                    schedule[packing->length][mode].push_back(width);
+                    ++input.pending;
                 }
-                print_measurement("Best ", *peak, iterations);
-                if (recommended != peak) print_measurement("95%  ", *recommended, iterations);
             }
-            if (rows.empty()) throw std::runtime_error("no safe NTT backend for the requested shape or VRAM budget");
+        }
+
+        ecm_ts_fprintf(stdout, "ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
+                               "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)\n");
+        ecm_ts_fprintf(stdout, "length max_exp ntt_type batch iter/s (warmup=%u)\n", warmup_iterations);
+        for (const auto& group : schedule) {
+            std::vector<Fields> rows;
+            for (unsigned mode = 0; mode < candidates.size(); ++mode) {
+                for (const unsigned width : group.second[mode]) {
+                    auto& input = inputs.at(width);
+                    if (!input.calibration) input.calibration.emplace(device, width, iterations);
+                    const auto result = BatchSearch(*input.calibration, candidates[mode]).search(exhaustive);
+                    // Keep the reference endpoints until both modes have run for this input.
+                    if (--input.pending == 0) input.calibration.reset();
+                    if (result.empty()) continue;
+                    input.measured = true;
+                    const auto peak = std::max_element(result.begin(), result.end(), [](const auto& a, const auto& b) {
+                        return a.throughput() < b.throughput();
+                    });
+                    const auto recommended = std::find_if(result.begin(), result.end(), [&](const auto& m) {
+                        return m.throughput() >= near_peak * peak->throughput();
+                    });
+                    for (const auto& measurement : result) {
+                        print_measurement("", measurement, iterations);
+                        rows.push_back(encode(measurement, iterations));
+                    }
+                    print_measurement("Best ", *peak, iterations);
+                    if (recommended != peak) print_measurement("95%  ", *recommended, iterations);
+                }
+            }
+            if (rows.empty()) continue;
             persist(options.tune_file, device, std::move(rows));
         }
+        if (std::any_of(inputs.begin(), inputs.end(), [](const auto& item) { return !item.second.measured; }))
+            throw std::runtime_error("no safe NTT backend for at least one requested shape or VRAM budget");
         if (!options.tune_file.empty())
             ecm_ts_fprintf(stdout, "Saved %s (%.2f s)\n", options.tune_file.c_str(), now_s()-start);
         return 0;
