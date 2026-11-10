@@ -12,7 +12,7 @@ CUDA Montgomery 默认 ladder、TPB128、按容器选择 TPI，分档寄存器�
 
 ## Stage1 NTT 与 CGBN 和 Prime95 对比
 
-Montgomery PARAM0 和 Edwards 分开绘图。横轴是各后端实际使用的算术位宽，纵轴是折算到 B1=1,000,000 的批量摊销秒/曲线。每张图左侧放大 16500 位以内的范围，右侧显示 NTT 的完整范围。
+Montgomery PARAM0 和 Edwards 分开绘图。蓝色实线是本次 NTT 0.61.3，蓝色虚线是上一版 NTT 实测，版本分别为 Montgomery 0.59.9 和 Edwards 0.60.0。横轴是各后端实际使用的算术位宽，纵轴是折算到 B1=1,000,000 的批量摊销秒/曲线。每张图左侧放大 16500 位以内的范围，右侧显示 NTT 的完整范围。
 
 ### Montgomery PARAM0
 
@@ -20,7 +20,7 @@ Montgomery PARAM0 和 Edwards 分开绘图。横轴是各后端实际使用的�
 
 ![相同数据的线性坐标图](attachments/stage1-ntt-best-cgbn-prime95-linear.png)
 
-M16319 折算后，NTT 为 **7.77 秒/曲线**，CGBN PARAM0 在对应的 16272 位余因子上为 **7.52 秒/曲线**，Prime95 单核为 **12.95 秒/曲线**。完整 M262139 用 16384 点加权 NTT、tile 12 和 27 条曲线，在 B1=1024 实测 **0.11902 秒/曲线**，折算为 **116.23 秒/曲线**。
+M16319 的 NTT 折算耗时从 **8.67 降到 7.77 秒/曲线**，CGBN PARAM0 在对应的 16272 位余因子上为 **7.52 秒/曲线**，Prime95 单核为 **12.95 秒/曲线**。完整 M262139 用 16384 点加权 NTT、tile 12 和 27 条曲线，在 B1=1024 实测 **0.11902 秒/曲线**，折算耗时从 **146.52 降到 116.23 秒/曲线**。
 
 ### Edwards
 
@@ -28,19 +28,20 @@ M16319 折算后，NTT 为 **7.77 秒/曲线**，CGBN PARAM0 在对应的 16272 
 
 ![Edwards Stage1 的相同数据，线性坐标](attachments/stage1-edwards-ntt-cgbn-prime95-linear.png)
 
-M16319 折算后，NTT 为 **7.77 秒/曲线**，CGBN NAF 在对应的 16272 位余因子上为 **6.30 秒/曲线**，Prime95 单核为 **11.65 秒/曲线**。完整 M262139 复用 16384 点加权 NTT、tile 12 和 27 条曲线，在 B1=1024 实测 **0.11952 秒/曲线**，折算为 **116.72 秒/曲线**。
+M16319 的 NTT 折算耗时从 **8.68 降到 7.77 秒/曲线**，CGBN NAF 在对应的 16272 位余因子上为 **6.30 秒/曲线**，Prime95 单核为 **11.65 秒/曲线**。完整 M262139 复用 16384 点加权 NTT、tile 12 和 27 条曲线，在 B1=1024 实测 **0.11952 秒/曲线**，折算耗时从 **147.24 降到 116.72 秒/曲线**。
 
 ### 样本与计时
 
 - **NTT** 使用 ECM-ELF 0.61.3 和 GPU1 RTX 4060 Laptop，覆盖 61–262139 位的 26 个完整梅森模数。每个指数穷举 1–32 条曲线，在调优候选中选实测吞吐最高的计划。两种曲线复用计划，各跑三次真实 Stage1，取 ladder 的 CUDA event，排除准备、回读和发布。
+- **上一版 NTT** 在同一 GPU 上使用相同的 26 个指数、B1 和阶梯计时边界。Montgomery 使用 0.59.9 的调优计划，Edwards 0.60.0 复用这些计划，每指数各测三次。虚线取中位数。新旧对照比较两轮各自的计划与曲线数，涵盖版本和选型差异。
 - **CGBN** 于 2026-11-09 使用 GPU1 RTX 4060 Laptop 和 ECM-ELF 0.60.0（CUDA 13.3、sm89、驱动 610.88），分别在相同的 13 个 318–16272 位余因子上测一批。每 SM 发射两个 block，B1 按 TPI 取 1,000,000／200,000／50,000／10,000，对应 1536／768／384／192 条曲线。Edwards 使用 NAF w6／HWCD，计时取 `loop_gpu_ms`。Montgomery PARAM0 取包含设备准备的全局 `gputime`。
 - **Prime95** 使用历史 4.0 GHz 单核、每指数三次 B1=1,000,000 的原生 Stage1 计时。Prime95 31.06b01 参考源码的 `setN` 将已知因子从因子检查目标剥除，主循环的 `gwsetup` 仍用原始 `k,b,n,c`，图中按完整梅森指数定位。历史日志未记录精确程序版本。源码位置见 [历史 Stage1 工况](#输入与工况)。
 
-GPU 用实际批次时间除以曲线数，再乘 `1,000,000 / B1`。图中阴影为 NTT 和 Prime95 三次样本的最小／最大值。两类曲线的 CGBN 批量摊销耗时在全部 13 个共有指数上低于 NTT。模数、批量与计时边界随路径变化。计时和复现见 [NTT 最佳配置全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 与 [历史 Prime95 单核基准](#prime95-单核基准与-b1-外推)。
+GPU 用实际批次时间除以曲线数，再乘 `1,000,000 / B1`。图中阴影为本次 NTT 和 Prime95 三次样本的最小／最大值。两类曲线各有 24 个指数的 NTT 中位耗时下降，M127 和 M251 的耗时增幅均小于 0.9%。CGBN 在全部 13 个共有指数上的批量摊销耗时低于 NTT。模数、批量与计时边界随路径变化。计时和复现见 [NTT 最佳配置全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 与 [历史 Prime95 单核基准](#prime95-单核基准与-b1-外推)。
 
-CGBN 采集期间 GPU1 利用率至少 50% 的 2512 个遥测点中，SM 频率中位数为 1500 MHz（范围 210–1500 MHz），功耗为 1.68–25.34 W（中位数 23.22 W），温度为 47–56 °C。原始日志、save 与分曲线汇总在 `data/experiments/stage1_unified_4060_0600/cgbn/`，当前绘图 CSV 在 `data/figures/stage1_ntt_segments/`。
+CGBN 采集期间 GPU1 利用率至少 50% 的 2512 个遥测点中，SM 频率中位数为 1500 MHz（范围 210–1500 MHz），功耗为 1.68–25.34 W（中位数 23.22 W），温度为 47–56 °C。原始日志、save 与分曲线汇总在 `data/experiments/stage1_unified_4060_0600/cgbn/`，绘图 CSV 在 `data/figures/stage1_ntt_history_0613/`。
 
-复测可用 [CGBN 工作行生成器](../../tools/bench/prepare_stage1_gpu_matrix.py) 的 `--device 1` 生成两类曲线的完整队列，再用 [基准分析](../../tools/bench/analyze_stage1_gpu.py) 分别匹配 Prime95 数据。绘图脚本要求 CGBN 和 NTT 的 GPU 型号及曲线构造一致。另见 [三路径绘图](../../tools/bench/plot_stage1_ntt_best.py)、[各 NTT 长度的每步耗时](STAGE1_MERSENNE_NTT.md#各-ntt-长度的每步耗时) 和 [指数位宽与长度阶梯](STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
+复测可用 [CGBN 工作行生成器](../../tools/bench/prepare_stage1_gpu_matrix.py) 的 `--device 1` 生成两类曲线的完整队列，再用 [基准分析](../../tools/bench/analyze_stage1_gpu.py) 分别匹配 Prime95 数据。绘图时，`--ntt` 读取 `data/experiments/stage1_ntt_segments/{mont,ed}/summary.json`，`--previous-ntt` 分别读取 `data/experiments/stage1_unified_4060_0600/` 下的 `mont_ntt_0599.json` 和 `ed_ntt/summary.json`。绘图脚本校验 GPU 型号、曲线构造和 B1 折算口径，两轮 NTT 还须覆盖相同的指数。见 [绘图脚本](../../tools/bench/plot_stage1_ntt_best.py)、[各 NTT 长度的每步耗时](STAGE1_MERSENNE_NTT.md#各-ntt-长度的每步耗时) 和 [指数位宽与长度阶梯](STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
 
 ## RTX4070 Ti 全范围 Stage1 对比
 
