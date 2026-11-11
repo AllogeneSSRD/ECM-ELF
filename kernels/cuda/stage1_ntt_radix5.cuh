@@ -40,18 +40,40 @@ __device__ __forceinline__ void radix5_dft(Radix5Word (&x)[5], Radix5Constants c
     x[4] = gl_sub(u, y);
 }
 
+// Rotate the five planes without changing the index modulo width. The
+// resulting coefficient sets are disjoint between threads, including stores.
+__device__ __forceinline__ unsigned radix5_plane(unsigned plane, unsigned rotation) {
+    const unsigned sum = plane + rotation;
+    return sum < 5 ? sum : sum - 5;
+}
+
+template<bool GoodThomas, bool Coalesced = false>
 __global__ void radix5_inverse(Radix5Word* data, unsigned width, const Radix5Word* twiddles,
-                               Radix5Constants c) {
+                               Radix5Constants c, unsigned rotation_step) {
     const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= width) return;
     auto* row = data + size_t(blockIdx.y) * 5 * width + j;
     Radix5Word x[5] = {row[0]};
 #pragma unroll
     for (unsigned i = 1; i < 5; ++i)
-        x[i] = gl_mul(row[i * width], twiddles[(i - 1) * width + j]);
+        x[i] = GoodThomas ? row[i * width] : gl_mul(row[i * width], twiddles[(i - 1) * width + j]);
     radix5_dft(x, c);
+    const unsigned rotation = GoodThomas ? (j * rotation_step) % 5 : 0;
+    if constexpr (Coalesced) {
+        // Each thread owns one column. The shared permutation keeps the
+        // global stores contiguous and never exchanges values between threads.
+        extern __shared__ Radix5Word local[];
+        auto* column = local + threadIdx.x;
 #pragma unroll
-    for (unsigned i = 0; i < 5; ++i) row[i * width] = x[i];
+        for (unsigned i = 0; i < 5; ++i)
+            column[radix5_plane(i, rotation) * blockDim.x] = x[i];
+#pragma unroll
+        for (unsigned i = 0; i < 5; ++i) row[i * width] = column[i * blockDim.x];
+    } else {
+#pragma unroll
+        for (unsigned i = 0; i < 5; ++i)
+            row[(GoodThomas ? radix5_plane(i, rotation) : i) * width] = x[i];
+    }
 }
 
 } // namespace ecm_mersenne_ntt

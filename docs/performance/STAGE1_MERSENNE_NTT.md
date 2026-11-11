@@ -115,7 +115,7 @@ Prime95 31.06b01 的 `ecm.cpp` 约 2020–2160 行在原生 Edwards 公式中使
 - **1 · 融合乘加。** 在点乘之后、缩放和逆变换之前加上第二批已有的 \(\widehat{BB}\)，直接输出 \(BB+A_{24}E\)。启用条件为 \(TB^2+B<Q\)，若同时使用松弛 `E`，则乘积项改用 \(2T\)。
 - **2 · 复用松弛差的频谱。** weighted 路径在逆变换的乘积入口生成 \(\widehat{AA}+\widehat M-\widehat{BB}\)，同时保留到第三批。\(M=2^p-1\) 的 digit 全为各自的最大值，因此 \(AA+(M-BB)\) 可逐 digit 表示，每个 digit 非负且至多 \(2B\)。守卫要求 \(2TB^2<Q\)。每步少一次前向变换。整批共用 \(\widehat M\)，增加 \(8L\) bytes，与批量无关。计划预算容不下这张表时使用规范差。
 - **4 · 坐标直写。** 第二、三批乘法的进位归约直接写入规范 X/Z 槽。第一批之前已读取旧坐标。每步省掉一次坐标复制 kernel，回读和 checkpoint 继续使用相同的整数槽。
-- **8 · 打包融合前向变换。** 当二次幂 NTT 无外层 pass 时，CTA 直接把 digit 打包到共享内存并完成 tile。每步省三次独立 pack 启动和中间 digit 的全局访存。混合 radix-5 已在 pack 中执行五点 DIF，继续由现有路径调度后续 pass。
+- **8 · 打包融合前向变换。** 当二次幂 NTT 无外层 pass 时，CTA 直接把 digit 打包到共享内存并完成 tile。每步省三次独立 pack 启动和中间 digit 的全局访存。混合 radix-5 的 pack 同时完成五点 DFT 和 [CRT 置换](../architecture/NTT.md#stage1-混合-radix-5-的-crt-置换)。
 - **16 · 进位缓存。** weighted 且 \(p\le65536\) 时，乘积归约用共享内存保存每个 limb 的低 32 位，并在寄存器中保存进位状态，前缀扫描后直接使用。每 CTA 用 \(1024\lceil\lceil p/32\rceil/256\rceil\) bytes 动态共享内存，生产上限为 8 KiB。更宽时收益随批量和形状波动，共享内存用量也会限制同时驻留的线程块数。[CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-cuda-kernels.html#kernel-launch-and-occupancy)
 - **32 · 分段进位。** weighted 且 \(p>114688\) 时启用，模加减和乘积归约按 256 个 limb 分段。
 - **64 · pack 解析进位。** 分段路径在 radix-5 或单曲线、且未使用单 tile pack 融合时启用。部分进位修正由 pack 直接完成。原理及检查点边界见 [NTT 架构](../architecture/NTT.md#stage1-分段进位与-pack-融合)。
@@ -148,6 +148,35 @@ Nsight Systems 2026.1.3 逐节点追踪只累计计时区间的 kernel。模加�
 | 262139 | 24 | 10.26 → 4.96 | 10.13 → 10.12 | 16.68 → 8.45 | 5.73 → 5.70 |
 
 216 个计时样本的端点逐词与控制一致。另有 45 组独立 GMP 用例，覆盖单段、跨段边界、混合长度、262144 位上限、Graph／直接提交和双向续跑。原始样本与脚本位于 `data/experiments/stage1_ntt_segments/`，分项表与消融在 `data/benchmarks/stage1_ntt_segments/`。前一轮短变换、坐标直写和进位缓存的结果见 [0.61.2 开发记录](../development/STAGE1_NTT_OPTIMIZATION_DRAFT.md#0612-归约写回与打包热点)。
+
+### 混合 radix-5 吞吐与寄存器
+
+0.61.5 的 weighted 混合长度默认采用共享内存版 Good–Thomas。CUDA 13.3，GPU1 RTX 4060 Laptop 8 GiB，SM 固定 1500 MHz，活跃样本整卡功耗中位数约 31.6 W。固定下列长度与 tile，Graph 每组 16 个阶梯步，预热 100 步，交替测量 3 次并取中位数。计时为 256 或 512 步的 CUDA event 时间除以曲线数和步数，单位 µs／曲线／阶梯步。
+
+| 指数 \(p\) | NTT 长度 | tile bits | 单曲线 旋转因子 → CRT | 12 曲线 旋转因子 → CRT | 30 曲线 旋转因子 → CRT |
+|---:|---:|---:|---:|---:|---:|
+| 58631 | 2560 | 9 | 95.66 → 92.52 | 19.61 → 19.25 | 16.45 → 16.22 |
+| 115201 | 5120 | 10 | 102.82 → 99.52 | 31.36 → 30.74 | 28.28 → 27.71 |
+| 225287 | 10240 | 11 | 133.72 → 130.96 | 56.21 → 54.98 | 52.96 → 51.78 |
+| 256001 | 20480 | 12 | 194.71 → 190.37 | 97.91 → 95.57 | 96.99 → 95.39 |
+
+8 个多曲线条件的每曲线耗时减少 1.44%–2.39%，对应吞吐提高 1.46%–2.45%。直接在全局地址上置换会使这 8 格慢 3.4%–6.7%。每个条件的阶梯终点摘要一致。GMP 独立检查覆盖卷积系数、模平方及 carry 边界，并验证 Graph、直接启动和跨数据流续跑。原始日志和样本在 `data/experiments/fft_ntt_20261111/pfa_shared/` 与同级 `gmp_*`。
+
+用 NVCC 文件级 `-maxrregcount=32/48` 对同一 ladder 编译单元复测了两个指数的 1／12／30 曲线，每格 3 次。上限 32 使 radix-5 逆核由 40 降至 32 个寄存器，并引入每线程各 8 B 的 spill store 和 load。声明 `__launch_bounds__` 的归约核维持 40 个寄存器。上限 48 的整步中位数改善均不足 0.7%，继续使用编译器默认上限。原始记录见 `data/experiments/fft_ntt_20261111/registers/` 和同级 `resources_*.txt`。[CUDA 编译器寄存器选项](https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/#maxrregcount-amount-maxrregcount)
+
+### 逆变换参数栈与批量吞吐
+
+逐点乘加与逆变换 tile 共享的输入指针表改用只读 grid 参数。CUDA 13.3 `sm_89` 的 `ptxas` 报告显示，每线程栈由 96 B 降至 0 B。测试设备、Graph、预热和计时口径同上，每格交替测 3 次。该组未独立采样功耗。混合长度两侧均使用 Good–Thomas，共 9 格，阶梯终点一致。
+
+| 指数 \(p\) | NTT 长度 | tile bits | 单曲线 旧 → 新 | 12 曲线 旧 → 新 | 30 曲线 旧 → 新 |
+|---:|---:|---:|---:|---:|---:|
+| 58631 | 2560 | 9 | 92.76 → 87.96 | 19.27 → 16.29 | 16.22 → 13.61 |
+| 225287 | 10240 | 11 | 130.96 → 126.30 | 54.98 → 52.79 | 51.78 → 50.01 |
+| 262139 | 16384 | 11 | 205.91 → 198.62 | 87.37 → 84.32 | 83.66 → 80.88 |
+
+30 曲线在三档的吞吐分别提高 19.1%、3.5%、3.4%。计算能力 7.0 及以上的目标启用该参数优化。使用 CUDA 11.8 验证了 `compute_50` PTX、`sm_60` 和 `sm_75` 内核编译，GPU 正确性与吞吐测试在 `sm_89` 上执行。原始样本和编译记录在 `data/experiments/fft_ntt_20261111/grid_const/`、`grid_const_build.log` 和 `cuda118_final.log`。
+
+最终版通过 Montgomery 与 Edwards 的生产入口、tune、16／32 曲线和续跑测试。独立 GMP 对拍覆盖四档混合长度和 16384 点二次幂，2560 点的 Compute Sanitizer `memcheck` 与 `synccheck` 均为零错误。验证日志在 `data/experiments/fft_ntt_20261111/` 下的 `production_final.log`、`tune_final.log`、`gmp_final_*` 和 `*_final.log`。
 
 ## 长度、pass 和 GPUOWL 形状
 
@@ -238,6 +267,18 @@ GPUOWL/PRPLL 本地副本 `cb560c9` 使用的是另一套大整数表示。`W:M:
 
 两者都融合多层 butterfly、缓存 twiddle、尽量减少显存往返，也可以减少提交开销。本实验的 Graph 减少提交，跨点运算依赖层仍回到规范整数；GPUOWL 的 `LEAD_WIDTH`/`LEAD_MIDDLE` 是实际数据状态，能跳过已经计算的变换阶段。不要把两边同名 `tail`、`bpw` 或长度数字当成同一单位。细节与本地源文件索引见 [GPUOWL NTT](../reference/GPUOWL_NTT.md)。
 
+### 同卡完整模平方与 PRPLL
+
+采用相同的完整梅森模数，测一次 `x ← x² mod (2ᵖ−1)` 的墙钟时间，包含打包、变换、逐点平方、逆变换及 carry 归约。GPU1 RTX 4060 Laptop 固定 1500 MHz，活跃样本整卡功耗中位数约 18.6 W。两程序交替，每格 3 次取中位数。ECM-ELF 用包含 0.61.5 加权算术的独立探针和 Graph16，预热 100 次、计时 2000 次。PRPLL `v8.0-683-g481d11ae` 用 CUDA FP32 `53:256:1:256:202`，原生 PRP 计时含 380 次模平方与块间的一次校验乘法。表中 PRPLL 的形状使用 131072 个整数 word。[PRPLL `timePRP` 源码](https://github.com/gwoltman/gpuowl/blob/481d11ae/src/Gpu.cpp)
+
+| 指数 \(p\) | PRPLL FP32 单路，µs／次 | ECM-ELF 长度 | ECM-ELF 单路，µs／次 | ECM-ELF 24 路，µs／次／路 |
+|---:|---:|---:|---:|---:|
+| 225287 | 88.1 | 10240 | 35.21 | 5.19 |
+| 225287 | 88.1 | 16384 | 56.97 | 7.90 |
+| 262139 | 86.8 | 16384 | 56.37 | 7.99 |
+
+PRPLL 在两个指数上的样本范围分别为 86.1–89.0 和 86.3–92.9 µs。这个对照覆盖两套实现可共同执行的 FP32 小指数区间。该 PRPLL 版本的 GF61 最短形状至少需要 \(p=393216\)，ECM-ELF 生产 Stage1 NTT 支持到 262144。表中 24 路列用于读出 ECM-ELF 的批吞吐，点公式的阶梯步另行计时。原始样本、PRPLL 日志及 NVML 数据在 `data/experiments/fft_ntt_20261111/square_grid/`。[PRPLL 形状容量规则](https://github.com/gwoltman/gpuowl/blob/481d11ae/src/FFTConfig.h)
+
 ## 生产路径选型实测
 
 0.59.1 的 `ecm_cuda` 本地构建使用 CUDA 13.3 / sm_89。测试设备为 GPU1 RTX 4060 Laptop（24 SM、8 GiB，驱动 610.88），未调整频率或功耗上限。200 ms 采样中，利用率至少 20% 的 1795 个样本均为 1500 MHz，设备功耗为 1.78–43.28 W，温度为 62–75 °C。驱动未报告功耗上限。
@@ -303,7 +344,7 @@ NTT event 包含驻留点乘、打包、变换、进位、折叠及 Graph 窗口
 
 在 GPU1 上对每个 `L` 独立扫描 **1…8** 条曲线。先用 B1=13 从 tile 6／8／10／12（超过 k 时截断、去重）筛每个批量，再用 B1=41、57 个 ladder 步、窗口 16 做复测。复测每格 2 个进程、每进程 3 个 event 样本，两轮反向遍历曲线数；中位数取法和设备边界同上。176 个筛选进程与 96 个复测进程都与 GMP 核对。设备仍为 4060 Laptop GPU1、版本 0.58.11；200 ms 遥测中利用率≥20% 的 207 个样本均为 1500 MHz，整卡功耗 1.76–11.59 W、60–67 °C。原始数据见 `batches_final/summary.json` 与 `batch_gpu1_telemetry.csv`。
 
-设 `T(B)` 为整批耗时：追求尽快返回，最小化 `T(B)`；追求每秒完成的曲线数，最大化 `B/T(B)`。这六档在已支持的 1…8 条内均是 **1 条最低批次延迟、8 条最高吞吐**。8 是实现的当前上限；该扫描不说明 9 条以上会退化。
+设 `T(B)` 为整批耗时。追求尽快返回时最小化 `T(B)`，追求每秒完成的曲线数时最大化 `B/T(B)`。这轮历史扫描的六档均是 **1 条最低批次延迟、8 条最高吞吐**。当前 1…32 曲线的选型和显存限制见本页开头。
 
 | L | 模数位宽 | b | 1／4／8 条批次 ms | 8 条吞吐 / 单条 | 达 8 条吞吐 90% 的最小批量 | 延迟不超单条 1.25 倍的最大批量 |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -339,3 +380,9 @@ python tools/bench/bench_stage1_mersenne_ntt.py --probe build_dev/stage1_mersenn
 ```
 
 参数依次为设备、指数、B1、首 sigma、曲线数、样本数、tile、Graph 窗口；窗口 0 为直接提交，`print-x` 可省略。采集器 `--mode bench --cgbn <worker.exe>` 可复测矩阵。证据目录 `data/experiments/stage1_mersenne_ntt_20261109/`，主矩阵为 `matrix_final/summary.json`，长标量对照为 `long_compare/summary.json`；正确性见 `qualify_final/`，设备遥测见 `gpu1_telemetry_final.csv`。[开发草稿](../development/STAGE1_MERSENNE_NTT_DRAFT.md)保留本轮实现与验证记录。
+
+完整模平方可用 `tools/build/test/build_stage1_ntt_auto_probe.ps1` 构建诊断程序。固定 weighted、10240 点、tile 11、外层宽度 4 和 Graph16 的单路命令如下。输出 `wall_ms` 除以迭代数给出模平方时间，批量测量再除以并行数。可用同一输入运行 `stage1_mersenne_ntt --weighted --length 10240 --dataflow 487 --check-squares 1 225287` 做 GMP 对拍。
+
+```powershell
+build_dev/stage1_ntt_auto_probe/stage1_ntt_auto_probe.exe 1 225287 1 2000 data/experiments/unused.toml 1 10240 0 11 4 16 1 --square
+```

@@ -36,6 +36,16 @@ flowchart LR
 
 生产在 weighted 且 \(p>114688\) 时启用分段进位，预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。分项剖析及启用依据见 [GPU1 宽位宽归约热点](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点)。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
 
+## Stage1 混合 radix-5 的 CRT 置换
+
+加权 Stage1 在 \(L=5W\)、\(W=2^k\) 的变换上使用 Good–Thomas 分解。选 \(r\in\{1,2,3,4\}\) 使 \(1+rW\equiv0\pmod 5\)，用 \(n=(1+rW)i+Wj\bmod L\) 表示系数序号。两个因子互素，五点 DFT 和 \(W\) 点 NTT 因此可以独立执行。频点按相同置换排列，逐点乘加保持原有卷积含义。
+
+输入置换合入加权 pack，逆置换合入五点逆变换的写回。每个线程拥有同一列 \(i=n\bmod W\) 的五个值，只在本线程的共享内存槽中轮换，保持各平面的全局读写连续。不同线程的逆变换写回互不相交，因此可以原位执行。256 线程块使用 10 KiB 动态共享内存。每个方向省去 \(4W\) 次 Goldilocks 域乘，长度 10240 时两张旋转因子表合计少用 128 KiB 设备内存。实现与调度见 [radix-5 内核](../../kernels/cuda/stage1_ntt_radix5.cuh) 和 [Stage1 NTT ladder](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
+
+## Stage1 逐点乘加与逆变换 tile
+
+逐点乘加与首段逆变换融合在 `inverse_product_tile`。同一个 grid 的不同块按输出编号选择输入指针。CUDA 计算能力 7.0 起，`__grid_constant__` 允许动态索引直接读取只读 grid 参数，省去每线程的输入指针表副本。较早的 CUDA 目标使用按值传参。[CUDA 参数说明](https://docs.nvidia.com/cuda/archive/13.2.2/cuda-programming-guide/05-appendices/cpp-language-extensions.html)
+
 ## 数学合同
 
 域素数 q=2⁶⁴−2³²+1，支持长度 L=2ᵏ、k≤32 的单位根。项目以精确整数 NTT 实现系数多项式乘法，不依赖浮点误差控制。Goldilocks 模数 q 与待分解整数 N、算术承载 M 相互独立。

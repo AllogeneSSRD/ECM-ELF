@@ -23,7 +23,7 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool pr
 
 enum Dataflow : unsigned {
     FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16,
-    SegmentedCarry = 32, DeferredPack = 64
+    SegmentedCarry = 32, DeferredPack = 64, GoodThomasRadix5 = 128, CoalescedRadix5 = 256
 };
 
 struct Control {
@@ -35,6 +35,7 @@ struct Control {
     std::function<Action(unsigned)> poll;
     std::function<void(unsigned, const std::vector<uint32_t>&)> checkpoint;
     std::optional<unsigned> experimental_dataflow;
+    bool modular_square_probe = false;
 };
 
 // Initial slots (slot-major, then curve, then little-endian uint32 limbs):
