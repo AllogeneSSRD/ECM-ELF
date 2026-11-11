@@ -10,6 +10,7 @@
 #include "ui/stage2_progress.h"
 #include "ui/log_visibility.h"
 #include "ui/range_slider.h"
+#include "ui/result_copies.h"
 #include "../gui/worker_controller.h"
 #include "../gui/toml_file.h"
 #include "../gui/results.h"
@@ -101,6 +102,12 @@ public:
     std::set<std::string> visible_result_ids;
     std::string result_view_signature;
     bool result_view_dirty=true;
+    int result_sort_column=-1;
+    bool result_sort_descending=false;
+    ui::ResultCopies result_copies;
+    std::vector<std::string> result_copy_keys;
+    size_t result_uncopied_count=0;
+    ImVec2 result_copy_controls[2]{};
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[8]{},right_items[8]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
     ImVec2 language_control{};

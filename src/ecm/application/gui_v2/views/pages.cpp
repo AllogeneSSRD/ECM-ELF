@@ -12,6 +12,7 @@
 #include <sstream>
 #include <cmath>
 #include <tuple>
+#include <string_view>
 
 namespace ecmgui_v2 {
 namespace {
@@ -48,8 +49,50 @@ bool chips(const char* id,int& value,const std::vector<const char*>& labels,ImVe
     }ImGui::PopID();return changed;
 }
 
+// Compare decimal runs without converting them to machine integers. Targets and
+// factor lists can contain values much larger than uint64_t.
+int result_natural_order(std::string_view a,std::string_view b) {
+    for(size_t i=0,j=0;;){
+        if(i==a.size()||j==b.size())return (i<a.size())-(j<b.size());
+        const auto digit=[](char c){return c>='0'&&c<='9';};
+        if(digit(a[i])&&digit(b[j])){
+            auto x=i,y=j;
+            while(i<a.size()&&digit(a[i]))++i;
+            while(j<b.size()&&digit(b[j]))++j;
+            while(x<i&&a[x]=='0')++x;
+            while(y<j&&b[y]=='0')++y;
+            if(i-x!=j-y)return i-x<j-y?-1:1;
+            if(const int order=a.substr(x,i-x).compare(b.substr(y,j-y)))return order;
+        }else {
+            if(a[i]!=b[j])return static_cast<unsigned char>(a[i])<static_cast<unsigned char>(b[j])?-1:1;
+            ++i;++j;
+        }
+    }
+}
+void sort_results(std::vector<size_t>& indices,const std::vector<ecmgui::ResultRecord>& rows,int column,bool descending) {
+    std::sort(indices.begin(),indices.end(),[&](size_t i,size_t j){
+        const auto& a=rows[i];const auto& b=rows[j];
+        const std::string* lhs[]{nullptr,&a.status,&a.target,&a.b1,&a.b2,&a.curves,&a.model,&a.timestamp,&a.factors};
+        const std::string* rhs[]{nullptr,&b.status,&b.target,&b.b1,&b.b2,&b.curves,&b.model,&b.timestamp,&b.factors};
+        int order=0;
+        if(column>0&&column<9){
+            if(lhs[column]->empty()!=rhs[column]->empty())return !lhs[column]->empty();
+            order=(column>=2&&column<=5)||column==8
+                ?result_natural_order(*lhs[column],*rhs[column]):lhs[column]->compare(*rhs[column]);
+        }else if(column==9)order=(a.stage>b.stage)-(a.stage<b.stage);
+        else if(column==10){
+            const auto x=std::tie(a.source,a.line),y=std::tie(b.source,b.line);
+            order=(x>y)-(x<y);
+        }
+        if(order)return descending?order>0:order<0;
+        // Also the default when ImGui has no active sort column.
+        if(a.timestamp!=b.timestamp)return a.timestamp>b.timestamp;
+        return i<j;
+    });
+}
 }
 void App::draw_results(bool zh) {
+    const bool history_changed=result_copies.load(state.path);
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
     ImGui::TextUnformatted(ecmgui_v2::ui::text("published_results",zh));
     const char* statuses[]{"All","F","NF"}; int status_index=result_filter.status=="F"?1:result_filter.status=="NF"?2:0;
@@ -62,32 +105,86 @@ void App::draw_results(bool zh) {
         ImGui::EndCombo();
     }
     const auto signature=result_filter.status+'\n'+std::to_string(result_filter.stage)+'\n'+std::to_string(result_filter.source)+'\n'+result_filter.search;
-    if(result_view_dirty||signature!=result_view_signature){
+    const bool rebuild=result_view_dirty||history_changed||signature!=result_view_signature;
+    if(rebuild){
         result_indices=results.filtered(result_filter);visible_result_ids.clear();
-        for(auto i:result_indices)visible_result_ids.insert(results.rows()[i].id);
+        result_copy_keys.assign(results.rows().size(),{});result_uncopied_count=0;
+        for(auto i:result_indices){
+            const auto& row=results.rows()[i];visible_result_ids.insert(row.id);
+            result_copy_keys[i]=ui::result_copy_key(results.files()[row.source].path,row.raw);
+            result_uncopied_count+=!result_copies.contains(result_copy_keys[i]);
+        }
         for(auto it=selected_results.begin();it!=selected_results.end();)if(!visible_result_ids.count(*it))it=selected_results.erase(it);else ++it;
         result_view_dirty=false;result_view_signature=signature;
     }
     const auto& indices=result_indices;const auto& visible=visible_result_ids;
     if(ImGui::Button(ecmgui_v2::ui::text("select_visible",zh))) selected_results=visible;
     ImGui::SameLine(); if(ImGui::Button(ecmgui_v2::ui::text("clear_selection",zh)))selected_results.clear();
-    ImGui::SameLine(); if(ImGui::Button(ecmgui_v2::ui::text("copy_original_json_checksum",zh))) {
-        std::vector<size_t> copy; for(auto i:indices)if(selected_results.count(results.rows()[i].id))copy.push_back(i);
-        ImGui::SetClipboardText(results.copy_text(copy).c_str());
+    const auto center=[](){const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();return ImVec2{(a.x+b.x)*.5f,(a.y+b.y)*.5f};};
+    ImGui::SameLine();ImGui::BeginDisabled(selected_results.empty());
+    const bool copy_selected=ImGui::Button(ui::text("copy_original_json_checksum",zh));
+    result_copy_controls[0]=center();ImGui::EndDisabled();
+    const auto uncopied=[&](size_t i){return !result_copies.contains(result_copy_keys[i]);};
+    const auto new_count=result_uncopied_count;
+    const auto* new_label=ui::text("results.copy_new",zh);
+    if(ImGui::GetItemRectMax().x+ImGui::CalcTextSize(new_label).x+ImGui::GetStyle().FramePadding.x*2+
+       ImGui::GetStyle().ItemSpacing.x<ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x)ImGui::SameLine();
+    ImGui::BeginDisabled(!new_count);const bool copy_new=ImGui::Button(new_label);
+    result_copy_controls[1]=center();ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)){
+        ImGui::BeginTooltip();ImGui::TextUnformatted(ui::text("results.copy_new_hint",zh));
+        if(!result_copies.last_copy().empty())ImGui::Text(ui::text("results.last_copy",zh),result_copies.last_copy().c_str());
+        ImGui::EndTooltip();
     }
-    ImGui::Text(ecmgui_v2::ui::text("results.selection_summary",zh),indices.size(),results.rows().size(),selected_results.size());
+    ImGui::Text(ui::text("results.selection_summary",zh),indices.size(),results.rows().size(),selected_results.size());
+    ImGui::SameLine();ImGui::TextDisabled(ui::text("results.uncopied_count",zh),new_count);
+    if(!result_copies.error.empty())ImGui::TextWrapped("%s: %s",ui::text("results.copy_history_error",zh),result_copies.error.c_str());
     for(const auto& f:results.files()) if(!f.error.empty()||f.invalid_lines||f.pending_lines)
         ImGui::TextWrapped(ecmgui_v2::ui::text("results.source_summary",zh),f.path.c_str(),f.error.c_str(),f.invalid_lines,f.pending_lines);
-    if(ImGui::BeginTable("results",11,ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable,ImVec2(0,ImGui::GetContentRegionAvail().y))) {
+    if(ImGui::BeginTable("results",11,ImGuiTableFlags_ScrollX|ImGuiTableFlags_ScrollY|ImGuiTableFlags_RowBg|ImGuiTableFlags_Resizable|ImGuiTableFlags_Sortable|ImGuiTableFlags_SortTristate,
+                         ImVec2(0,ImGui::GetContentRegionAvail().y))) {
         result_scroll=ImGui::GetScrollY();result_wheel=ImVec2(ImGui::GetWindowPos().x+80,ImGui::GetWindowPos().y+ImGui::GetWindowSize().y*.6f);
-        for(const char* title:{ecmgui_v2::ui::text("select",zh),ecmgui_v2::ui::text("status",zh),ecmgui_v2::ui::text("target",zh),"B1","B2",ecmgui_v2::ui::text("curves",zh),ecmgui_v2::ui::text("model",zh),ecmgui_v2::ui::text("time",zh),ecmgui_v2::ui::text("factors",zh),ecmgui_v2::ui::text("stage",zh),ecmgui_v2::ui::text("source",zh)}) ImGui::TableSetupColumn(title,ImGuiTableColumnFlags_WidthFixed,110);
-        ImGui::TableSetupScrollFreeze(2,1);ImGui::TableHeadersRow(); ImGuiListClipper clip;clip.Begin(static_cast<int>(indices.size()));
+        ImGui::TableSetupColumn(ui::text("select",zh),ImGuiTableColumnFlags_WidthFixed|ImGuiTableColumnFlags_NoSort,110);
+        for(const char* title:{ui::text("status",zh),ui::text("target",zh),"B1","B2",ui::text("curves",zh),ui::text("model",zh),ui::text("time",zh),ui::text("factors",zh),ui::text("stage",zh),ui::text("source",zh)})
+            ImGui::TableSetupColumn(title,ImGuiTableColumnFlags_WidthFixed|ImGuiTableColumnFlags_PreferSortAscending,110);
+        ImGui::TableSetupScrollFreeze(2,1);ImGui::TableHeadersRow();
+        auto* specs=ImGui::TableGetSortSpecs();
+        if(rebuild||specs->SpecsDirty){
+            result_sort_column=specs->SpecsCount?specs->Specs[0].ColumnIndex:-1;
+            result_sort_descending=specs->SpecsCount&&specs->Specs[0].SortDirection==ImGuiSortDirection_Descending;
+            sort_results(result_indices,results.rows(),result_sort_column,result_sort_descending);
+            specs->SpecsDirty=false;
+        }
+        const auto palette=ui::palette(state.ui_theme=="light");
+        const auto factored_bg=ImGui::GetColorU32(palette.success_bg);
+        const auto unread_bg=ImGui::GetColorU32(ImVec4{
+            (palette.bg.x+palette.info_bg.x)*.5f,(palette.bg.y+palette.info_bg.y)*.5f,
+            (palette.bg.z+palette.info_bg.z)*.5f,1});
+        ImGuiListClipper clip;clip.Begin(static_cast<int>(indices.size()));
         while(clip.Step())for(int j=clip.DisplayStart;j<clip.DisplayEnd;++j) {
-            const auto& row=results.rows()[indices[static_cast<size_t>(j)]]; ImGui::PushID(row.id.c_str());ImGui::TableNextRow();ImGui::TableNextColumn();
+            const auto i=indices[static_cast<size_t>(j)];const auto& row=results.rows()[i];ImGui::PushID(row.id.c_str());ImGui::TableNextRow();
+            if(row.status=="F")ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,factored_bg);
+            else if(uncopied(i))ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,unread_bg);
+            ImGui::TableNextColumn();
             bool chosen=selected_results.count(row.id)!=0;if(ecmgui_v2::ui::checkbox("##select",&chosen)){if(chosen)selected_results.insert(row.id);else selected_results.erase(row.id);}
             for(const auto* value:{&row.status,&row.target,&row.b1,&row.b2,&row.curves,&row.model,&row.timestamp,&row.factors}){ImGui::TableNextColumn();ImGui::TextUnformatted(value->c_str());}
             ImGui::TableNextColumn();ImGui::Text("%d",row.stage);ImGui::TableNextColumn();ImGui::Text("%zu:%zu",row.source+1,row.line);ImGui::PopID();
         } ImGui::EndTable();
+    }else if(rebuild)sort_results(result_indices,results.rows(),result_sort_column,result_sort_descending);
+    if(copy_selected||copy_new){
+        std::vector<size_t> copy;std::vector<std::string> keys;
+        for(auto i:indices)if(copy_new?uncopied(i):selected_results.count(results.rows()[i].id)!=0){
+            copy.push_back(i);keys.push_back(result_copy_keys[i]);
+        }
+        if(!copy.empty()){
+            const auto payload=results.copy_text(copy);ImGui::SetClipboardText(payload.c_str());
+            const auto* clipboard=ImGui::GetClipboardText();
+            if(clipboard&&payload==clipboard){
+                if(!result_copies.remember(keys))toast(ui::text("results.copy_history_error",zh),true);
+                result_uncopied_count=static_cast<size_t>(std::count_if(indices.begin(),indices.end(),uncopied));
+                trace("result copy: "+result_copies.last_copy()+" rows="+std::to_string(copy.size()));
+            }else toast(ui::text("results.copy_failed",zh),true);
+        }
     }
 }
 std::string App::generator_signature() const {

@@ -118,6 +118,12 @@
       <Item id="select_visible" name="选择可见行" />
       <Item id="clear_selection" name="清除选择" />
       <Item id="copy_original_json_checksum" name="复制原始 JSON" />
+      <Item id="results.copy_new" name="复制新增结果" />
+      <Item id="results.copy_new_hint" name="按显示顺序复制当前筛选中尚未复制的结果。" />
+      <Item id="results.last_copy" name="上次复制：%s" />
+      <Item id="results.uncopied_count" name="未复制：%zu" />
+      <Item id="results.copy_history_error" name="结果复制记录不可用" />
+      <Item id="results.copy_failed" name="未能复制结果" />
       <Item id="results.selection_summary" name="%zu / %zu | 已选择 %zu" />
       <Item id="results.source_summary" name="%s: %s | 无效 %zu | 待完成 %zu" />
       <Item id="select" name="选择" />

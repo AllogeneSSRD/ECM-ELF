@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include "imgui_internal.h"
 #include "../../../src/ecm/application/gui_v2/ui/scroll.h"
 #include "../../../src/ecm/application/gui_v2/ui/probability_presets.h"
 #include "../../../src/ecm/application/gui_v2/ui/navigation.h"
@@ -96,6 +97,84 @@ static void workflow_errors(const fs::path& root){
     assert(read(path).find("stage2_giant_backend=\"future\"")!=std::string::npos);
     write(path,"[gui]\nNumWorkers=\"invalid\"\n");
     assert(!app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&!app.workflow_load_error.empty());
+}
+static void result_table_contract(const fs::path& root){
+    const auto row=[](int exponent,int b1,int day,bool factored=false){
+        return std::string("{\"status\":\"")+(factored?"F":"NF")+"\",\"exponent\":"+std::to_string(exponent)+
+            ",\"worktype\":\"ECM\",\"b1\":"+std::to_string(b1)+",\"b2\":"+std::to_string(b1)+
+            ",\"curves\":1,\"timestamp\":\"2026-11-0"+std::to_string(day)+" 00:00:00\","
+            "\"program\":{\"name\":\"ECM-ELF\",\"version\":\"fixture\"},\"checksum\":{\"version\":1,\"checksum\":\"1234ABCD\"}"+
+            (factored?",\"stage\":1,\"factors\":[\"233\"]":"")+"}\n";
+    };
+    const auto a=root/"sort-first.txt",b=root/"sort-second.txt";
+    const auto first=row(100,100,2)+row(10,10,3,true)+row(2,2,1);
+    const auto second=row(20,20,4);
+    write(a,first);write(b,second);
+    ecmgui_v2::UiState state;state.path=root/"result.ui.toml";ecmgui_v2::App app(state,stdout);
+    app.results.set_paths({a.u8string(),b.u8string()});assert(app.results.refresh());
+    auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();
+    io.IniFilename=nullptr;io.DisplaySize={1600,900};io.DeltaTime=1.f/60;
+    io.Fonts->AddFontDefault();unsigned char* pixels;int width,height;io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+    static std::string clipboard;
+    static bool allow_clipboard=false;
+    auto& platform=ImGui::GetPlatformIO();
+    platform.Platform_SetClipboardTextFn=[](ImGuiContext*,const char* value){if(allow_clipboard)clipboard=value;};
+    platform.Platform_GetClipboardTextFn=[](ImGuiContext*){return clipboard.c_str();};
+    ecmgui_v2::ui::Fonts fonts;ecmgui_v2::ui::Settings style;
+    ImGuiID table_id=0;
+    const auto frame=[&]{
+        ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({1500,800});
+        ImGui::Begin("result-sort-contract",nullptr,ImGuiWindowFlags_NoSavedSettings);
+        table_id=ImGui::GetID("results");app.draw_page(style,fonts,1);
+        ImGui::End();ImGui::Render();
+    };
+    const auto click_at=[&](ImVec2 pos){
+        io.AddMousePosEvent(pos.x,pos.y);frame();
+        io.AddMouseButtonEvent(0,true);frame();io.AddMouseButtonEvent(0,false);frame();frame();
+    };
+    const auto click=[&](int column){
+        const auto* table=ImGui::TableFindByID(table_id);assert(table);
+        click_at({(table->Columns[column].MinX+table->Columns[column].MaxX)*.5f,table->OuterRect.Min.y+9});
+    };
+    const auto has_color=[](ImU32 color){
+        const auto* draw=ImGui::GetDrawData();
+        for(int i=0;i<draw->CmdListsCount;++i)
+            for(const auto& vertex:draw->CmdLists[i]->VtxBuffer)if(vertex.col==color)return true;
+        return false;
+    };
+    ecmgui_v2::ui::apply_theme(style);frame();frame();
+    assert((app.result_indices==std::vector<size_t>{3,1,0,2}));
+    const auto selected_id=app.results.rows()[1].id;app.selected_results.insert(selected_id);
+    click(0);assert(app.result_sort_column==-1);
+    click(3);assert((app.result_indices==std::vector<size_t>{2,1,3,0}));
+    click(3);assert((app.result_indices==std::vector<size_t>{0,3,1,2}));
+    write(b,second+row(50,50,5));assert(app.results.refresh());app.result_view_dirty=true;frame();
+    assert((app.result_indices==std::vector<size_t>{0,4,3,1,2}));
+    click(3);assert(app.result_sort_column==-1);
+    assert((app.result_indices==std::vector<size_t>{4,3,1,0,2}));
+    assert(app.selected_results.size()==1&&app.selected_results.count(selected_id));
+    for(bool light:{false,true}){
+        state.ui_theme=light?"light":"dark";style.light=light;ecmgui_v2::ui::apply_theme(style);frame();
+        const auto tint=ImGui::GetColorU32(ecmgui_v2::ui::palette(light).success_bg);
+        const auto p=ecmgui_v2::ui::palette(light);
+        const auto unread=ImGui::GetColorU32(ImVec4{(p.bg.x+p.info_bg.x)*.5f,(p.bg.y+p.info_bg.y)*.5f,(p.bg.z+p.info_bg.z)*.5f,1});
+        assert(has_color(tint)&&has_color(unread)&&tint!=unread);
+    }
+    assert(app.result_uncopied_count==5);
+    click_at(app.result_copy_controls[0]);assert(app.result_uncopied_count==5&&app.result_copies.last_copy().empty());
+    allow_clipboard=true;
+    click_at(app.result_copy_controls[0]);assert(clipboard==row(10,10,3,true)&&app.result_uncopied_count==4);
+    assert(!app.result_copies.last_copy().empty());
+    click_at(app.result_copy_controls[1]);
+    assert(clipboard==row(50,50,5)+second+row(100,100,2)+row(2,2,1)&&app.result_uncopied_count==0);
+    const auto palette=ecmgui_v2::ui::palette(true);
+    assert(has_color(ImGui::GetColorU32(palette.success_bg)));
+    ecmgui_v2::ui::ResultCopies restored;assert(restored.load(state.path)&&restored.error.empty());
+    assert(restored.last_copy()==app.result_copies.last_copy());
+    for(const auto& key:app.result_copy_keys)assert(restored.contains(key));
+    assert(read(a)==first&&read(b)==second+row(50,50,5));
+    ImGui::DestroyContext(context);
+    std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true}\n";
 }
 int main(int argc,char** argv){
     {ecmgui::WorkerView worker;worker.stage2=true;auto& status=worker.stage2_status;
@@ -356,6 +435,7 @@ int main(int argc,char** argv){
      copy();assert(copied=="Group order #E(F_p): 996\n    = 2^2 × 3 × 83\nPoint order ord(P): 249\n    = 3 × 83");
      const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
      ImGui::DestroyContext(context);}
+    result_table_contract(root);
     if(argc==3){no_protocol_probe(root,fs::absolute(argv[2]));stage2_raw_times(root,fs::absolute(argv[2]));}
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";
 }

@@ -118,6 +118,12 @@
       <Item id="select_visible" name="Select visible" />
       <Item id="clear_selection" name="Clear selection" />
       <Item id="copy_original_json_checksum" name="Copy original JSON" />
+      <Item id="results.copy_new" name="Copy new results" />
+      <Item id="results.copy_new_hint" name="Copy uncopied rows in the current filter, in display order." />
+      <Item id="results.last_copy" name="Last copy: %s" />
+      <Item id="results.uncopied_count" name="Uncopied: %zu" />
+      <Item id="results.copy_history_error" name="Result copy history unavailable" />
+      <Item id="results.copy_failed" name="Could not copy results" />
       <Item id="results.selection_summary" name="%zu / %zu | selected %zu" />
       <Item id="results.source_summary" name="%s: %s | invalid %zu | pending %zu" />
       <Item id="select" name="Select" />
