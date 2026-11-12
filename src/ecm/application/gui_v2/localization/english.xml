@@ -15,6 +15,8 @@
       <Item id="window.maximize_restore" name="Maximize / restore" />
       <Item id="window.close" name="Close" />
       <Item id="navigation.title" name="Navigation###v2.navigation" />
+      <Item id="navigation.collapse" name="Collapse sidebar" />
+      <Item id="navigation.expand" name="Expand sidebar" />
       <Item id="move_to_right_tabs" name="Move to right tabs" />
       <Item id="navigation.right_tabs" name="Right tabs &gt;###right-drop" />
       <Item id="navigation.move_right_hint" name="Long-press a page, then drag here to open it in the right tabs." />
@@ -343,6 +345,9 @@
       <Item id="worker_charts_list" name="List: one chart per row" />
       <Item id="logs.phase_only" name="Phase: %s" />
       <Item id="stage2.curve_progress" name="Current curve %.1f%% (estimated)" />
+      <Item id="stage2.curve_identity" name="Curve #%llu / %llu" />
+      <Item id="stage2.paired" name="Stage2 · Two curves in parallel" />
+      <Item id="stage2.stop_active" name="Stop after the active Stage2 curves finish" />
       <Item id="stage2.timing_source" name="Stage2 segment durations" />
       <Item id="stage2.source.auto" name="Previous &gt; tune" />
       <Item id="stage2.source.previous" name="Previous run only" />

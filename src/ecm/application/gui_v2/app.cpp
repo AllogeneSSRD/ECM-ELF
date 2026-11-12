@@ -9,6 +9,7 @@
 #include "../gui/task_display.h"
 #include "imgui_internal.h" // DockBuilder is kept in the v2 layout module.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <thread>
 #include <cstring>
@@ -167,10 +168,16 @@ void App::tick() {
     for(const auto& worker:controller.workers())if(worker.stage2){
         const auto device=gpu_details.get(worker.device).uuid;
         stage2_history_.observe(worker,device);
-        const auto& stage=worker.stage2_status;auto& view=stage2_views_[worker.index];
-        const auto curve=std::to_string(stage.current)+"|"+std::to_string(stage.record)+"|"+std::to_string(stage.sigma);
-        if(view.clock_curve!=curve||view.phase!=stage.phase){view.clock_curve=curve;view.phase=stage.phase;view.phase_at=view.batch_at=now;view.batch=stage.batch;}
-        if(view.batch!=stage.batch){view.batch=stage.batch;view.batch_at=now;}
+        const auto& status=worker.stage2_status;
+        auto& views=stage2_views_[worker.index];
+        for(auto it=views.begin();it!=views.end();)
+            if(it->first&&it->first!=status.current&&!status.curves.count(it->first))it=views.erase(it);else ++it;
+        for(const auto* stage:status.visible_curves()){
+            auto& view=views[status.queue_events?stage->current:0];
+            const auto curve=stage->save+"|"+std::to_string(stage->current)+"|"+std::to_string(stage->record)+"|"+std::to_string(stage->sigma);
+            if(view.clock_curve!=curve||view.phase!=stage->phase){view.clock_curve=curve;view.phase=stage->phase;view.phase_at=view.batch_at=now;view.batch=stage->batch;}
+            if(view.batch!=stage->batch){view.batch=stage->batch;view.batch_at=now;}
+        }
         if(poll_tune){
             const auto base=std::filesystem::u8path(config_path).parent_path();
             auto file=state.ui_stage2_tune_file;
@@ -214,6 +221,34 @@ void App::shutdown_workers() noexcept {
         controller.force_close(); leases_.clear();
     } catch (...) { controller.force_close(); }
 }
+float App::navigation_width(float scale)const {
+    if(state.ui_nav_collapsed)return (16+36*std::max(15,state.ui_font_size)/15.f)*scale;
+    if(state.ui_nav_expanded_width>0)return state.ui_nav_expanded_width*scale;
+    const float width=ImGui::GetMainViewport()->WorkSize.x;
+    return std::clamp(170*scale,width*.16f,width*.35f);
+}
+void App::apply_navigation_width(float scale){
+    if(!state.ui_nav_collapsed&&!nav_restore_width_)return;
+    const auto* window=ImGui::FindWindowByName("###v2.navigation");
+    auto* nav=window?window->DockNode:nullptr;
+    if(!nav||!nav->ParentNode)return;
+    auto* parent=nav->ParentNode;
+    // Only resize the dedicated left leaf. A shared dock can contain other pages.
+    if(parent->SplitAxis!=ImGuiAxis_X||parent->ChildNodes[0]!=nav||nav->Windows.Size>1)return;
+    constexpr auto rail_flags=ImGuiDockNodeFlags_NoResizeX|ImGuiDockNodeFlags_NoTabBar;
+    const auto flags=state.ui_nav_collapsed?nav->LocalFlags|rail_flags:nav->LocalFlags&~rail_flags;
+    const auto& style=ImGui::GetStyle();
+    const float limit=parent->Size.x-style.DockingSeparatorSize-style.WindowMinSize.x;
+    if(limit<style.WindowMinSize.x)return;
+    const float width=std::clamp(std::round(navigation_width(scale)),style.WindowMinSize.x,limit);
+    if(nav->LocalFlags!=flags||std::abs(nav->Size.x-width)>.5f||std::abs(nav->SizeRef.x-width)>.5f){
+        nav->SetLocalFlags(flags);
+        nav->Size.x=nav->SizeRef.x=width;
+        nav->WantLockSizeOnce=true;
+        ImGui::MarkIniSettingsDirty();
+    }
+    nav_restore_width_=false;
+}
 void App::build_layout(unsigned dock, float scale) {
     sync_dock_tabs();tab_nodes_={};
     ++layout_build_count;
@@ -222,9 +257,16 @@ void App::build_layout(unsigned dock, float scale) {
     ImGui::DockBuilderSetNodeSize(dock, viewport->WorkSize);
     ImGuiID center = dock, nav = 0, inspector = 0, logs = 0;
     const bool wide = viewport->WorkSize.x >= 1100 * scale;
-    ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, std::clamp(170*scale/viewport->WorkSize.x,.16f,.35f), &nav, &center);
+    const float initial_nav=state.ui_nav_collapsed?navigation_width(scale):
+        std::clamp(170*scale,viewport->WorkSize.x*.16f,viewport->WorkSize.x*.35f);
+    ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, initial_nav/viewport->WorkSize.x, &nav, &center);
     if ((wide && state.ui_inspector)||state.ui_right_pages) ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, wide?.34f:.43f, &inspector, &center);
     if (logs_visible) ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, .28f, &logs, &center);
+    if(state.ui_nav_hide_tab_bar)ImGui::DockBuilderGetNode(nav)->SetLocalFlags(ImGuiDockNodeFlags_HiddenTabBar);
+    if(state.ui_workspace_hide_tab_bar){
+        auto* workspace=ImGui::DockBuilderGetNode(center);
+        workspace->SetLocalFlags(workspace->LocalFlags|ImGuiDockNodeFlags_HiddenTabBar);
+    }
     ImGui::DockBuilderDockWindow("Navigation###v2.navigation", nav);
     ImGui::DockBuilderDockWindow("Workspace###v2.workspace", center);
     if (inspector) ImGui::DockBuilderDockWindow("Inspector###v2.inspector", inspector);
@@ -457,7 +499,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::End();
     ImGui::PopStyleColor();ImGui::PopStyleVar(2);
-    sync_dock_tabs();update_logs_visibility();
+    sync_dock_tabs();update_logs_visibility();apply_navigation_width(active.scale);
     const auto dock = ImGui::DockSpaceOverViewport(ImGui::GetID("v2.dock"), ImGui::GetMainViewport());
     const bool wide = ImGui::GetMainViewport()->WorkSize.x >= 1100 * active.scale;
     const auto node = ImGui::DockBuilderGetNode(dock);
@@ -465,12 +507,40 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         build_layout(dock, active.scale); reset_layout = false;
     }
     layout_ready_ = true; layout_wide_ = wide;
-    begin_window(ecmgui_v2::ui::text("navigation.title",zh),nullptr,active); fonts.push(ui::FontRole::Body);
-    const bool compact = ImGui::GetContentRegionAvail().x < 110 * active.scale;
+    const bool collapsed=state.ui_nav_collapsed;
+    if(const auto* nav=ImGui::FindWindowByName("###v2.navigation");nav&&!nav->DockId&&(collapsed||nav_restore_width_)){
+        ImGui::SetNextWindowSize({navigation_width(active.scale),nav->SizeFull.y});
+        nav_restore_width_=false;
+    }
+    begin_window(collapsed?"###v2.navigation":ui::text("navigation.title",zh),nullptr,active);fonts.push(ui::FontRole::Body);
+    const bool compact=collapsed||ImGui::GetContentRegionAvail().x<110*active.scale;
     const auto item_center=[](){return ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};};
     for(auto& pos:nav_items)pos={};for(auto& pos:right_items)pos={};
     nav_drag_page=-1;nav_return={};
     const auto nav_palette=ui::palette(active.light);const float nav_scale=ImGui::GetFontSize()/15.f;
+    const float toggle_width=ImGui::GetFrameHeight(),remaining=ImGui::GetContentRegionAvail().x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX()+std::max(0.f,(remaining-toggle_width)*(collapsed?.5f:1.f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,0.f);
+    const bool toggle=ImGui::InvisibleButton("##navigation-toggle",{toggle_width,toggle_width},ImGuiButtonFlags_EnableNav);
+    ImGui::PopStyleVar();
+    if(toggle){
+        if(!collapsed)state.ui_nav_expanded_width=std::clamp(int(std::round(ImGui::GetWindowWidth()/active.scale)),1,16384);
+        state.ui_nav_collapsed=!collapsed;nav_restore_width_=collapsed;
+    }
+    nav_toggle=item_center();
+    const float direction=collapsed?1.f:-1.f;
+    const ImVec2 chevron[]{
+        {nav_toggle.x-direction*2.5f*nav_scale,nav_toggle.y-4*nav_scale},
+        {nav_toggle.x+direction*2.5f*nav_scale,nav_toggle.y},
+        {nav_toggle.x-direction*2.5f*nav_scale,nav_toggle.y+4*nav_scale},
+    };
+    const bool hovered=ImGui::IsItemHovered();
+    const auto color=ImGui::IsItemActive()?nav_palette.focus:hovered?nav_palette.fg:nav_palette.muted;
+    auto* nav_draw=ImGui::GetWindowDrawList();
+    nav_draw->AddPolyline(chevron,3,ImGui::GetColorU32(color),ImDrawFlags_None,1.5f*nav_scale);
+    const float separator_y=ImGui::GetItemRectMax().y+2*nav_scale;
+    nav_draw->AddLine({nav_toggle.x-8*nav_scale,separator_y},{nav_toggle.x+8*nav_scale,separator_y},ImGui::GetColorU32(nav_palette.strong));
+    if(hovered)ImGui::SetTooltip("%s",ui::text(collapsed?"navigation.expand":"navigation.collapse",zh));
     nav_rounding=8*nav_scale;nav_item_height=std::max(40*nav_scale,ImGui::GetTextLineHeight()+16*nav_scale);nav_item_gap=8*nav_scale;
     size_t nav_count=1;for(int i=0;i<8;++i)if(i!=5&&!ui::pinned(state.ui_right_pages,i))++nav_count;
     const float nav_top=ImGui::GetCursorPosY(),nav_bottom=ImGui::GetWindowSize().y-ImGui::GetStyle().WindowPadding.y;
@@ -486,7 +556,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     for(char id:order){const int i=id-'0';
         if(i==5||ui::pinned(state.ui_right_pages,i))continue;
         ImGui::PushID(i);
-        if(ui::navigation_button("##page",ui::page_name(i,zh),ui::page_icon(i),state.ui_page==i,nav_palette,nav_scale,nav_item_height))state.ui_page=i;
+        if(ui::navigation_button("##page",ui::page_name(i,zh),ui::page_icon(i),state.ui_page==i,nav_palette,nav_scale,nav_item_height,collapsed))state.ui_page=i;
         ++navigation_icon_count;nav_items[i]=item_center();
         const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();
         if(ImGui::IsItemActive()&&ImGui::GetIO().MouseDownDuration[0]>=.32f&&ImGui::BeginDragDropSource()){
@@ -501,14 +571,16 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
         ImGui::PopID();
     }
     ImGui::PopStyleVar(5);
-    ImGui::Separator();ImGui::Button(compact?">###right-drop":ecmgui_v2::ui::text("navigation.right_tabs",zh),{-1,0});
+    ImGui::Separator();
+    if(collapsed)ui::navigation_button("###right-drop","",ui::Icon::Layout,false,nav_palette,nav_scale,ImGui::GetFrameHeight(),true);
+    else ImGui::Button(compact?">###right-drop":ui::text("navigation.right_tabs",zh),{-1,0});
     nav_drop=item_center();
     if(ImGui::BeginDragDropTarget()){if(const auto* payload=ImGui::AcceptDragDropPayload("V2_PAGE"))if(payload->DataSize==sizeof(int))move_page(*static_cast<const int*>(payload->Data),true);ImGui::EndDragDropTarget();}
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ecmgui_v2::ui::text("navigation.move_right_hint",zh));
     if(!compact&&!short_nav)ui::secondary_text(ecmgui_v2::ui::text("navigation.reorder_hint",zh));
     const float settings_y=ImGui::GetWindowSize().y-ImGui::GetStyle().WindowPadding.y-nav_item_height;
     ImGui::SetCursorPosY(std::max(nav_top,settings_y));
-    if(ui::navigation_button("##open-settings",ui::page_name(5,zh),ui::Icon::Settings,settings_open,nav_palette,nav_scale,nav_item_height))open_settings();
+    if(ui::navigation_button("##open-settings",ui::page_name(5,zh),ui::Icon::Settings,settings_open,nav_palette,nav_scale,nav_item_height,collapsed))open_settings();
     settings_entry=nav_items[5]=item_center();++navigation_icon_count;
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text("settings_shortcut",zh));
     nav_padding=ImGui::GetStyle().WindowPadding.x;nav_scroll={ImGui::GetScrollX(),ImGui::GetScrollY()};nav_size=ImGui::GetWindowSize();
@@ -581,9 +653,13 @@ std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
     std::string summary=std::string(ui::text("worker.task_label",zh))+task;
     if(worker.stage2){
         const auto ratio=worker_b2_ratios_.find(worker.index);
-        summary+="\n"+ui::worker_construction(worker,ratio==worker_b2_ratios_.end()?0:ratio->second,zh);
-        char phase[512];std::snprintf(phase,sizeof(phase),ui::text("logs.phase_only",zh),ui::stage2_phase_name(worker.stage2_status,zh).c_str());
-        summary+="\n"+std::string(phase);
+        const auto& status=worker.stage2_status;
+        for(const auto* curve:status.visible_curves()){
+            const auto construction=ui::stage2_construction(*curve,ratio==worker_b2_ratios_.end()?0:ratio->second,zh);
+            summary+="\n";
+            if(status.workers==2)summary+=ui::stage2_curve_label(*curve,zh)+" | ";
+            summary+=construction;
+        }
     }
     return summary;
 }
@@ -646,12 +722,17 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     const bool compress_columns=visible_width<preferred_width;
     worker_table_scroll_max_x=0;worker_field_overflow=0;worker_table_columns=0;
     worker_summary_rects.clear();worker_summary_texts.clear();
+    const float curve_bar_pitch=std::max(8*scale,ImGui::GetTextLineHeight());
+    const auto show_curve_bars=[](const ecmgui::WorkerView& worker){
+        return worker.stage2&&worker.stage2_status.workers==2&&worker.running()&&!worker.stage2_status.curves.empty();
+    };
     const float padding=ImGui::GetStyle().CellPadding.y*2;float content_height=ImGui::GetTextLineHeight()+padding+4*scale;
     for(const auto& worker:controller.workers()){
         const auto summary=worker_summary(worker,zh);
         // Selectable's baseline follows the button's FramePadding.y in each row.
         content_height+=control_height+padding+ImGui::GetStyle().FramePadding.y;
         content_height+=ImGui::CalcTextSize(summary.c_str(),nullptr,false,std::max(1.f,visible_width-24*scale)).y+padding;
+        if(show_curve_bars(worker))content_height+=curve_bar_pitch*worker.stage2_status.visible_curves().size();
     }
     // Reserve child viewport padding so every row remains visible.
     content_height+=ImGui::GetStyle().ScrollbarSize;
@@ -663,7 +744,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         worker_table_scroll_max_x=ImGui::GetScrollMaxX();
         worker_table_scroll_max_y=ImGui::GetScrollMaxY();worker_table_height=ImGui::GetWindowSize().y;worker_table_content_height=ImGui::GetCurrentWindow()->ContentSize.y;
         const auto table_origin=ImGui::GetWindowPos();worker_table_data_height=ImGui::GetCurrentWindow()->InnerRect.GetHeight();
-        struct SummaryRow {ImVec2 min,max,pos;float wrap;std::string text;};
+        struct SummaryRow {ImVec2 min,max,pos;float wrap,text_height;std::string text;std::vector<std::pair<unsigned long long,float>> curves;};
         std::vector<SummaryRow> summaries;auto* table_draw=ImGui::GetWindowDrawList();
         const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin(),table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         float body_top=table_clip_min.y;
@@ -727,9 +808,13 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
             const auto row=ImGui::GetCursorScreenPos();worker_row_height=row.y-main_row_top;
             const ImVec2 pos{std::max(left.x+12*scale,row.x),row.y};const float right=left.x+visible_width-12*scale;
-            const float wrap=std::max(1.f,right-pos.x),height=ImGui::CalcTextSize(summary.c_str(),nullptr,false,wrap).y;
+            const float wrap=std::max(1.f,right-pos.x),text_height=ImGui::CalcTextSize(summary.c_str(),nullptr,false,wrap).y;
+            std::vector<std::pair<unsigned long long,float>> curves;
+            if(show_curve_bars(worker))
+                for(const auto* curve:worker.stage2_status.visible_curves())curves.emplace_back(curve->current,stage2_visual(worker,*curve).high_water);
+            const float height=text_height+curve_bar_pitch*curves.size();
             ImGui::Dummy({1,height});
-            summaries.push_back({{table_clip_min.x,row.y-ImGui::GetStyle().CellPadding.y},{table_clip_max.x,row.y+height+ImGui::GetStyle().CellPadding.y},pos,wrap,summary});
+            summaries.push_back({{table_clip_min.x,row.y-ImGui::GetStyle().CellPadding.y},{table_clip_max.x,row.y+height+ImGui::GetStyle().CellPadding.y},pos,wrap,text_height,summary,std::move(curves)});
             if(ImGui::IsWindowHovered()&&ImGui::IsMouseHoveringRect(pos,{right,pos.y+height})&&!worker.task.empty())ImGui::SetTooltip("%s",worker.task.c_str());
             ImGui::PopID();
         }
@@ -743,6 +828,18 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         for(const auto& row:summaries){
             table_draw->AddRectFilled(row.min,row.max,ImGui::GetColorU32(p.surface));
             table_draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),row.pos,ImGui::GetColorU32(p.muted),row.text.c_str(),nullptr,row.wrap);
+            float top=row.pos.y+row.text_height,label_width=0;
+            for(const auto& curve:row.curves)label_width=std::max(label_width,ImGui::CalcTextSize(("#"+std::to_string(curve.first)).c_str()).x);
+            for(const auto& [number,fraction]:row.curves){
+                const auto label="#"+std::to_string(number);
+                table_draw->AddText({row.pos.x,top},ImGui::GetColorU32(p.muted),label.c_str());
+                const float bar_top=top+(curve_bar_pitch-5*scale)*.5f;
+                const ImVec2 hi{row.pos.x+row.wrap,bar_top+5*scale};
+                const ImVec2 lo{std::min(hi.x,row.pos.x+label_width+8*scale),bar_top};
+                table_draw->AddRectFilled(lo,hi,ImGui::GetColorU32(ImGuiCol_FrameBg),2*scale);
+                if(fraction>0)table_draw->AddRectFilled(lo,{lo.x+(hi.x-lo.x)*fraction,hi.y},ImGui::GetColorU32(p.stage2),2*scale);
+                top+=curve_bar_pitch;
+            }
             worker_summary_rects.push_back({row.min,row.max});
         }
         table_draw->PopClipRect();
@@ -861,10 +958,14 @@ void App::draw_inspector(const ui::Fonts& fonts) {
         if (worker->stage2 && worker->stage2_status.valid) {
             const auto& s=worker->stage2_status;
             ImGui::Text(ecmgui_v2::ui::text("worker.task_curves",zh),s.done,s.total);
-            ImGui::Text(ecmgui_v2::ui::text("worker.phase_batch",zh),s.phase.c_str(),s.batch,s.batches);
-            if(s.curve_model=="ed")ImGui::Text("Edwards sigma=%llu",s.sigma);
-            else ImGui::Text("%s param=%d sigma=%llu",s.curve_model.c_str(),s.param,s.sigma);
-            ImGui::Text("B1=%llu B2=%llu",s.b1,s.b2);
+            const auto p=ui::palette(state.ui_theme=="light");
+            for(const auto* curve:s.visible_curves()){
+                if(s.workers==2)ImGui::TextUnformatted(ui::stage2_curve_label(*curve,zh).c_str());
+                ImGui::TextWrapped("%s",ui::stage2_construction(*curve,0,zh).c_str());
+                const auto phase=ui::stage2_phase_name(*curve,zh);
+                ImGui::Text(ecmgui_v2::ui::text("worker.phase_batch",zh),phase.c_str(),curve->batch,curve->batches);
+                draw_stage2_progress(*worker,*curve,p,zh,s.workers==2);
+            }
         }
         if (ImGui::Button(ecmgui_v2::ui::text("open_worker_folder",zh))) ecmgui::open_in_explorer(worker->working_dir);
         ImGui::TextWrapped("%s", worker->effective_config.c_str());
@@ -905,10 +1006,11 @@ void App::draw_log_windows(const ui::Settings& active,const ui::Fonts& fonts){
         end_window();
     }
 }
-void App::draw_stage2_progress(const ecmgui::WorkerView& worker,const ui::Palette& p,bool zh){
-    const auto& s=worker.stage2_status;auto& view=stage2_views_[worker.index];const auto now=GetTickCount64();
+App::PhaseView& App::stage2_visual(const ecmgui::WorkerView& worker,const ecmgui::Stage2Curve& s){
+    auto& view=stage2_views_[worker.index][worker.stage2_status.queue_events?s.current:0];
+    const auto now=GetTickCount64();
     const auto engine=stage2_engine_ids_.find(worker.index);
-    const auto scope=ui::stage2_scope(worker,gpu_details.get(worker.device).uuid,engine==stage2_engine_ids_.end()?"unknown":engine->second);
+    const auto scope=ui::stage2_scope(worker,s,gpu_details.get(worker.device).uuid,engine==stage2_engine_ids_.end()?"unknown":engine->second);
     const auto tune=stage2_tunes_.find(worker.index);
     const auto identity=scope+"|"+std::to_string(s.current)+"|"+std::to_string(s.record)+"|"+std::to_string(s.sigma)+"|"+state.ui_stage2_timing_source+"|"+state.ui_stage2_tune_file+"|"+std::to_string(tune==stage2_tunes_.end()?0:tune->second.revision);
     if(view.identity!=identity){
@@ -929,9 +1031,17 @@ void App::draw_stage2_progress(const ecmgui::WorkerView& worker,const ui::Palett
         }else if(worker.running()&&view.timing.seconds[phase]>0)local=std::min(.95,double(now-view.phase_at)/1000/view.timing.seconds[phase]);
         fraction+=weights[phase]*local;
     }
-    view.high_water=std::max(view.high_water,ui::stage2_bounded_fraction(s,fraction));
+    const bool completed=s.phase=="complete"&&s.current>0&&worker.stage2_status.done>=s.current;
+    view.high_water=std::max(view.high_water,ui::stage2_bounded_fraction(s,fraction,completed));
+    return view;
+}
+void App::draw_stage2_progress(const ecmgui::WorkerView& worker,const ecmgui::Stage2Curve& s,const ui::Palette& p,bool zh,bool compact){
+    const auto& view=stage2_visual(worker,s);
+    const auto weights=view.timing.fractions();
+    const auto tune=stage2_tunes_.find(worker.index);
     char overlay[128];std::snprintf(overlay,sizeof(overlay),ui::text("stage2.curve_progress",zh),100.*view.high_water);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,p.stage2);ImGui::ProgressBar(view.high_water,{-1,ImGui::GetFrameHeight()},overlay);ImGui::PopStyleColor();
+    const auto height=compact?ImGui::GetTextLineHeight()+2:ImGui::GetFrameHeight();
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,p.stage2);ImGui::ProgressBar(view.high_water,{-1,height},overlay);ImGui::PopStyleColor();
     const auto lo=ImGui::GetItemRectMin(),hi=ImGui::GetItemRectMax();auto* draw=ImGui::GetWindowDrawList();double boundary=0;
     for(size_t i=0;i<weights.size()-1;++i){boundary+=weights[i];if(boundary>0&&boundary<1){const float x=lo.x+float(boundary)*(hi.x-lo.x);draw->AddLine({x,lo.y+2},{x,hi.y-2},ImGui::GetColorU32(p.border));}}
     if(ImGui::IsItemHovered()){
@@ -945,7 +1055,7 @@ void App::draw_stage2_progress(const ecmgui::WorkerView& worker,const ui::Palett
         if(tune!=stage2_tunes_.end()&&!tune->second.value.notice.empty())ImGui::TextUnformatted(tune->second.value.notice.c_str());
         if(!stage2_history_.notice.empty())ImGui::TextUnformatted(stage2_history_.notice.c_str());ImGui::EndTooltip();
     }
-    log_stage2_fraction=view.high_water;log_stage2_width=hi.x-lo.x;log_stage2_phase=phase;
+    log_stage2_fraction=view.high_water;log_stage2_width=hi.x-lo.x;log_stage2_phase=ui::stage2_phase_index(s.phase);log_stage2_sources.clear();
     for(int source:view.timing.sources)log_stage2_sources+=char('0'+source);
 }
 void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_worker) {
@@ -959,20 +1069,28 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
         const auto task=ecmgui::task_caption(active_worker->task,ecmgui_v2::ui::text("worker.known_factors",zh),"assignment ID",ecmgui_v2::ui::text("worker.no_task",zh));
         ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ecmgui_v2::ui::text("logs.worker_summary",zh),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",active_worker->task.c_str(),ui::worker_phase(*active_worker,zh).c_str());
-        const auto shape=ui::worker_shape(*active_worker);
-        if(!shape.empty()){
-            // Keep the shape on one line; hover to read it in a narrow pane.
-            ImGui::TextColored(p.stage2,"%s",shape.c_str());
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",shape.c_str());
-        }else if(active_worker->stage2)ImGui::Dummy({0,ImGui::GetTextLineHeight()});
         if(active_worker->stage2){
-            const auto& s=active_worker->stage2_status;const auto name=ui::stage2_phase_name(s,zh);
-            char phase_line[512];std::snprintf(phase_line,sizeof(phase_line),ui::text("logs.phase_only",zh),name.c_str());
-            std::string label=phase_line;const auto batch=ui::stage2_batch(s,zh);
-            if(batch.visible)label+=" | "+batch.label+" | "+batch.remaining;
-            ImGui::TextColored(p.stage2,"%s",label.c_str());if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",label.c_str(),s.phase.c_str());
-            draw_stage2_progress(*active_worker,p,zh);
-            if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ui::text("stop_after_the_current_stage2_curve",zh));
+            const auto& status=active_worker->stage2_status;
+            const bool paired=status.workers==2;
+            if(paired)ImGui::TextDisabled("%s",ui::text("stage2.paired",zh));
+            for(const auto* curve:status.visible_curves()){
+                const auto shape=ui::stage2_shape(*curve);
+                if(!paired){
+                    if(!shape.empty()){
+                        ImGui::TextColored(p.stage2,"%s",shape.c_str());
+                        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",shape.c_str());
+                    }else ImGui::Dummy({0,ImGui::GetTextLineHeight()});
+                }
+                const auto name=ui::stage2_phase_name(*curve,zh);
+                char phase_line[512];std::snprintf(phase_line,sizeof(phase_line),ui::text("logs.phase_only",zh),name.c_str());
+                std::string label=paired?ui::stage2_curve_label(*curve,zh)+" | "+phase_line:phase_line;
+                const auto batch=ui::stage2_batch(*curve,zh);
+                if(batch.visible)label+=" | "+batch.label+" | "+batch.remaining;
+                ImGui::TextColored(p.stage2,"%s",label.c_str());
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",label.c_str(),shape.c_str());
+                draw_stage2_progress(*active_worker,*curve,p,zh,paired);
+            }
+            if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ui::text(paired?"stage2.stop_active":"stop_after_the_current_stage2_curve",zh));
         }
     }
     auto found=log_views_.find(log_id);if(found==log_views_.end())found=log_views_.emplace(log_id,LogView{state.ui_raw_log,state.ui_follow_log,true}).first;

@@ -40,9 +40,8 @@ def main():
         assert float(later['stage2_fraction'])<1
         summaries=[line for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('worker_summary: index=1 ')]
         actual=json.loads(summaries[-1].split(' text=',1)[1]);lines=actual.splitlines()
-        assert len(lines)==3 and lines[0].startswith('任务：') and 'M137' in lines[0],lines
+        assert len(lines)==2 and lines[0].startswith('任务：') and 'M137' in lines[0],lines
         assert 'Edwards' in lines[1] and 'param=' not in lines[1] and 'B1=260000000' in lines[1] and 'B2=5000*B1=1300000000000' in lines[1] and 'sigma=18' in lines[1],lines
-        assert lines[2].startswith('阶段：') and 'B1=' not in lines[2] and '曲线' not in lines[2],lines
         capture(hwnd,out/'stage2-measured-segments.png')
         user.SetWindowPos(hwnd,None,40,40,1850,1000,0x14)
         wide=wait(lambda s:float(s['stage2_width'])>float(first['stage2_width'])+120)
@@ -55,6 +54,6 @@ def main():
     finally:close(proc,hwnd)
     assert proc.returncode==0 and cfg.read_bytes()==original
     saved=tomllib.loads(state.read_text(encoding='utf-8'));assert saved['ui']['stage2_timing_source']=='auto'
-    result=dict(passed=True,native_log_windows=3,previous_run_sources=True,realtime_advance=True,elastic_width=[float(first['stage2_width']),float(wide['stage2_width'])],per_worker_raw=True,three_summary_lines=True,ratio_expanded=True,business_unchanged=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())
+    result=dict(passed=True,native_log_windows=3,previous_run_sources=True,realtime_advance=True,elastic_width=[float(first['stage2_width']),float(wide['stage2_width'])],per_worker_raw=True,two_summary_lines=True,ratio_expanded=True,business_unchanged=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())
     (out/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 if __name__=='__main__':main()

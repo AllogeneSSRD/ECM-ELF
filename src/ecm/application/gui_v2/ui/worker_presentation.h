@@ -8,7 +8,7 @@
 namespace ecmgui_v2::ui {
 struct WorkerProgress {float fraction=0;std::string label="--",speed="--",eta="--",eta_detail="--";};
 struct Stage2Batch {bool visible=false;float fraction=0;std::string label,remaining;};
-inline Stage2Batch stage2_batch(const ecmgui::Stage2Status& s,bool zh) {
+inline Stage2Batch stage2_batch(const ecmgui::Stage2Curve& s,bool zh) {
     Stage2Batch out;if(!s.valid||!s.batches)return out;out.visible=true;
     out.fraction=static_cast<float>(std::clamp(double(s.batch)/double(s.batches),0.,1.));
     const bool giant=s.phase.find("Giant")!=s.phase.npos||s.phase.find("giant")!=s.phase.npos;
@@ -39,9 +39,10 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
         out.label=text;
         if(std::isfinite(p.s_per_curve)&&p.s_per_curve>0){
             std::snprintf(text,sizeof(text),"%.2f",p.s_per_curve);out.speed=text;
-            if(std::isfinite(p.eta_s)&&p.eta_s>=0){
-                out.eta=eta_text(p.eta_s);out.eta_detail=eta_text(p.eta_s,true);
-            }
+        }
+        if((worker.stage2&&worker.stage2_status.queue_events?!worker.stop_requested:p.s_per_curve>0)&&
+            std::isfinite(p.eta_s)&&p.eta_s>=0){
+            out.eta=eta_text(p.eta_s);out.eta_detail=eta_text(p.eta_s,true);
         }
     } else if(std::isfinite(worker.resume_pct)&&worker.resume_pct>=0) {
         const double pct=std::clamp(worker.resume_pct,0.,100.);out.fraction=static_cast<float>(pct/100.);
@@ -49,13 +50,15 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
     } else if(worker.running()||worker.state()==ecmgui::WorkerRunState::Restarting)out.label=ecmgui_v2::ui::text("waiting_for_progress",zh);
     return out;
 }
-inline std::string worker_shape(const ecmgui::WorkerView& worker) {
-    if(!worker.stage2||!worker.stage2_status.valid)return {};
-    const auto& s=worker.stage2_status;
+inline std::string stage2_shape(const ecmgui::Stage2Curve& s) {
+    if(!s.valid)return {};
     const auto value=[](unsigned long long n){return n?std::to_string(n):std::string("--");};
     return "B1="+value(s.b1)+"  B2="+value(s.b2)+"  S="+value(s.bits)+" bits  D="+value(s.d)+"  P="+value(s.p);
 }
-inline std::string stage2_phase_name(const ecmgui::Stage2Status& s,bool zh){
+inline std::string worker_shape(const ecmgui::WorkerView& worker) {
+    return worker.stage2?stage2_shape(worker.stage2_status):std::string{};
+}
+inline std::string stage2_phase_name(const ecmgui::Stage2Curve& s,bool zh){
     const int phase=stage2_phase_index(s.phase);
     if(phase>=0){const auto key=std::string("stage2.phase.")+stage2_phase_keys[phase];return text(key.c_str(),zh);}
     if(s.phase=="curve_done")return text("stage2.phase.curve_done",zh);
@@ -63,8 +66,7 @@ inline std::string stage2_phase_name(const ecmgui::Stage2Status& s,bool zh){
     if(s.phase=="complete")return text("stage2.phase.ended",zh);
     return s.phase.empty()?std::string(text("waiting_for_progress",zh)):s.phase;
 }
-inline std::string worker_construction(const ecmgui::WorkerView& worker,unsigned long long ratio,bool zh){
-    const auto& s=worker.stage2_status;
+inline std::string stage2_construction(const ecmgui::Stage2Curve& s,unsigned long long ratio,bool zh){
     const bool mont=s.curve_model=="mont"||s.curve_model=="montgomery";
     const bool ed=s.curve_model=="ed"||s.curve_model=="edwards";
     std::string line=!s.valid?text("worker.curve_unknown",zh):mont?text("worker.curve_montgomery",zh):ed?text("worker.curve_edwards",zh):s.curve_model;
@@ -73,6 +75,13 @@ inline std::string worker_construction(const ecmgui::WorkerView& worker,unsigned
     line+="  B1="+value(s.b1)+"  B2=";
     if(ratio&&s.b1&&s.b2&&s.b1<=std::numeric_limits<unsigned long long>::max()/ratio&&s.b1*ratio==s.b2)line+=std::to_string(ratio)+"*B1=";
     line+=value(s.b2)+"  sigma="+value(s.sigma);return line;
+}
+inline std::string worker_construction(const ecmgui::WorkerView& worker,unsigned long long ratio,bool zh){
+    return stage2_construction(worker.stage2_status,ratio,zh);
+}
+inline std::string stage2_curve_label(const ecmgui::Stage2Curve& s,bool zh) {
+    char label[100];std::snprintf(label,sizeof(label),text("stage2.curve_identity",zh),s.current,s.total);
+    return label;
 }
 inline std::string worker_phase(const ecmgui::WorkerView& worker,bool zh) {
     if(!worker.stage2||!worker.stage2_status.valid)return {};

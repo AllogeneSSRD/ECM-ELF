@@ -21,6 +21,7 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 namespace ecmgui {
 
@@ -62,26 +63,38 @@ struct HitInfo {
 };
 
 struct Stage2Event {
-    enum class Kind {None,Plan,CurveStart,Modulus,Shape,Phase,Batch,FullWall,Result,CurveDone,TaskDone,Complete};
+    enum class Kind {None,Plan,Queue,CurvePrepare,CurveStart,GpuFree,CurveFailed,Modulus,Shape,Phase,Batch,FullWall,Result,CurveDone,TaskDone,Complete};
     Kind kind=Kind::None;
     unsigned long long total=0,done=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0,carrier_exponent=0;
     bool carrier_known=false;
-    double seconds=0,elapsed=0,left=0;
+    unsigned long long curve=0,completed=0;
+    unsigned workers=1;
+    double seconds=0,elapsed=0,left=0,eta=-1;
     std::string save,phase,curve_model;
     int param=-1;
     std::vector<std::string> factors;
 };
-struct Stage2Status {
+struct Stage2Curve {
     bool valid=false;
-    unsigned long long total=0,done=0,current=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0,carrier_exponent=0;
-    bool carrier_known=false;
-    unsigned long long measured_curves=0;
-    double engine_seconds=0,seconds_sum=0,last_curve_seconds=0,elapsed=0,batch_left=0;
+    unsigned long long total=0,current=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0,carrier_exponent=0;
+    bool carrier_known=false,admitted=false,gpu_free=false;
+    unsigned workers=1;
+    double engine_seconds=0,elapsed=0,batch_left=0;
     std::string save,phase,curve_model="mont";
     int param=0; // Legacy Stage2 lines describe Suyama PARAM0.
     void apply(const Stage2Event &event);
-    ProgressInfo progress(bool average=true)const;
     HitInfo factor_hit(const std::string &factor)const;
+};
+struct Stage2Status : Stage2Curve {
+    unsigned long long done=0,measured_curves=0;
+    unsigned long long planned_b2=0,planned_d=0;
+    double seconds_sum=0,last_curve_seconds=0,queue_eta=-1;
+    bool queue_events=false;
+    std::map<unsigned long long,Stage2Curve> curves;
+    void apply(const Stage2Event &event);
+    ProgressInfo progress(bool average=true)const;
+    const Stage2Curve& curve_for(unsigned long long position)const;
+    std::vector<const Stage2Curve*> visible_curves()const;
 };
 
 // One `p95_add:` notice, i.e. the outcome of handing a finished task to Prime95 through

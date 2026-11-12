@@ -110,6 +110,7 @@ public:
     ImVec2 result_copy_controls[2]{};
     ImVec2 result_chips[3]{},result_wheel{},start_control{},stop_control{};
     ImVec2 nav_items[8]{},right_items[8]{},nav_drop{},nav_return{},language_items[2]{},save_ui_control{},calculate_control{};
+    ImVec2 nav_toggle{};
     ImVec2 language_control{};
     ImVec2 view_control{},view_logs_control{},view_keep_logs_control{},view_save_control{};
     bool view_menu_open=false,view_save_separator=false;
@@ -221,6 +222,9 @@ private:
     FILE* log_;
     std::map<int,std::unique_ptr<ecm_queue::OwnerLease>> leases_;
     bool layout_ready_ = false, layout_wide_ = false;
+    bool nav_restore_width_ = false;
+    float navigation_width(float scale) const;
+    void apply_navigation_width(float scale);
     bool focus_right_ = true;
     bool focus_settings_=false,place_settings_=true;
     ImVec2 settings_restore_pos_{},settings_restore_size_{};
@@ -233,7 +237,7 @@ private:
     std::map<int,std::string> stage2_engine_ids_;
     unsigned long long stage2_tune_poll_=0;
     struct PhaseView {std::string identity,phase,clock_curve;unsigned long long phase_at=0,batch_at=0,batch=0;ui::Stage2Timing timing;float high_water=0;};
-    std::map<int,PhaseView> stage2_views_;
+    std::map<int,std::map<unsigned long long,PhaseView>> stage2_views_;
     ui::LogVisibility log_visibility_;
     std::array<unsigned,3> tab_nodes_{};
     std::array<bool,3> tab_known_{};
@@ -262,7 +266,9 @@ private:
     void draw_settings_window(const ui::Settings& active,const ui::Fonts& fonts);
     void draw_log_windows(const ui::Settings& active,const ui::Fonts& fonts);
     void draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* worker);
-    void draw_stage2_progress(const ecmgui::WorkerView& worker,const ui::Palette& palette,bool zh);
+    PhaseView& stage2_visual(const ecmgui::WorkerView& worker,const ecmgui::Stage2Curve& curve);
+    void draw_stage2_progress(const ecmgui::WorkerView& worker,const ecmgui::Stage2Curve& curve,
+                              const ui::Palette& palette,bool zh,bool compact=false);
     void draw_inspector(const ui::Fonts& fonts);
     void build_layout(unsigned dock, float scale);
 };

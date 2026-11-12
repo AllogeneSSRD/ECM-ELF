@@ -79,6 +79,46 @@ static void stage2_raw_times(const fs::path& root,const fs::path& fixture){
      assert(legacy.workers()[0].hist_s_per_curve==(std::vector<float>{10,20,15}));}
     std::cout<<"{\"stage2_raw_history\":true,\"raw_display_and_eta\":true,\"legacy_average_preserved\":true}\n";
 }
+static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"stage2-paired";fs::create_directories(dir);
+    const auto cfg=dir/"ecm.toml";
+    write(dir/"worktodo.txt","[Worker #1]\nECMSTAGE2=1,2,137,-1,\"fixture.save\",0,0,5\n");
+    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[gui]\nNumWorkers=1\nstage2_exe=\""+fixture.generic_u8string()+
+        "\"\n[workers.1]\nautostart=0\nextra_args=\"--scenario v2-stage2-paired\"\n");
+    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
+    const auto worker=[&]() -> const ecmgui::WorkerView& {return app.controller.workers()[0];};
+    const auto wait=[&](const auto& predicate){
+        const auto deadline=GetTickCount64()+5000;
+        do{app.tick();if(predicate())return;Sleep(10);}while(GetTickCount64()<deadline);
+        assert(false);
+    };
+    wait([&]{return worker().stage2_status.curves.size()==3;});
+    const auto& status=worker().stage2_status;
+    const auto shown=status.visible_curves();
+    assert(shown.size()==2&&shown[0]->current==2&&shown[1]->current==3);
+    assert(status.done==1&&shown[0]->batch==2&&shown[0]->bits==318&&shown[1]->batch==0);
+    assert(shown[0]->phase=="Giant points"&&shown[1]->phase=="Generate and normalize baby points");
+    assert(ecmgui_v2::ui::worker_progress(worker(),false).eta=="--");
+    auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={1500,850};io.DeltaTime=1.f/60;
+    ecmgui_v2::ui::Settings style;ecmgui_v2::ui::Fonts fonts;
+    auto* font=io.Fonts->AddFontDefault();fonts.body=fonts.mono=font;io.Fonts->Build();
+    for(int i=0;i<2;++i){
+        ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({1500,850});
+        ImGui::Begin("paired-workspace");app.draw_page(style,fonts,0);ImGui::End();ImGui::Render();
+    }
+    const auto& summary=app.worker_summary_texts.at(1);
+    assert(summary.find("Curve #2 / 5")!=summary.npos&&summary.find("Curve #3 / 5")!=summary.npos);
+    assert(summary.find("Curve #4 / 5")==summary.npos);
+    assert(summary.find("Phase:")==summary.npos&&std::count(summary.begin(),summary.end(),'\n')==2);
+    ImGui::DestroyContext(context);
+    wait([&]{return status.done==4&&status.workers==1;});
+    assert(status.visible_curves().size()==1&&status.visible_curves().front()->current==5&&status.progress().eta_s<0);
+    wait([&]{return !app.controller.busy();});
+    assert(worker().hist_s_per_curve==(std::vector<float>{9,20,6,4}));
+    assert(status.done==5&&status.progress().eta_s==0&&status.curves.empty());
+    std::cout<<"{\"stage2_parallel_views\":true,\"pipeline_hidden\":true,\"serial_fallback\":true,\"all_curve_samples\":true}\n";
+}
 static void workflow_errors(const fs::path& root){
     const auto path=root/"workflow-error.toml";
     write(path,"[gui]\nNumWorkers=\"invalid\"\n");
@@ -436,6 +476,6 @@ int main(int argc,char** argv){
      const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
      ImGui::DestroyContext(context);}
     result_table_contract(root);
-    if(argc==3){no_protocol_probe(root,fs::absolute(argv[2]));stage2_raw_times(root,fs::absolute(argv[2]));}
+    if(argc==3){no_protocol_probe(root,fs::absolute(argv[2]));stage2_raw_times(root,fs::absolute(argv[2]));stage2_paired_views(root,fs::absolute(argv[2]));}
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";
 }

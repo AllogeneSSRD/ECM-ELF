@@ -69,6 +69,7 @@ struct CurveProcessRequest {
     bool tune_runtime=0;
     bool fixed_queue_route=false;
     bool queue_pipeline=false;
+    uint64_t queue_curve=0; // One-based position in the task, independent of child/process slot.
     std::string queue_phase_gate;
     int worker=0;
     // Called synchronously at the original selection-output position, before

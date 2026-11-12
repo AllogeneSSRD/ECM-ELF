@@ -8,7 +8,7 @@
     "config/ecm.toml.default": "349065f9d53d3781fb5f41f6de96ebc257e1e34bcb5ca82f2e578e02e2b1bb8b",
     "config/ecm.toml.example": "69dc372910cbc89f257a46872d092f45c7c0af9a7ab39c12ea1a4f961f886b34",
     "docs/ECM_TOML_REFERENCE.md": "b994c0ba6aa2dc09e7713b5d8fb68243f0ae1578e254f6de96ad5c5df48ff42a",
-    "config/ecm_options.json": "f8596d3af54edbb610e5af1ed4feb08146a0fde0888d2a311fde742ceadd66df",
+    "config/ecm_options.json": "7178454c8b2592860a2098e832cf456e23114a03370f9fede6ca7a48fc5967da",
     "tools/gen/generate_ecm_config.py": "d491289e49651c7b061be86c570bb08ea7034f6b06713f15e6a053d00589e1a2"
   }
 }

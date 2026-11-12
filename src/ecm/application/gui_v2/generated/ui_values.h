@@ -34,8 +34,10 @@ struct UiValues {
     bool ui_external_windows = false;
     bool ui_worker_chart_auto_y = false;
     bool ui_logs_keep_visible = false;
-    bool ui_nav_hide_tab_bar = false;
-    bool ui_workspace_hide_tab_bar = false;
+    bool ui_nav_collapsed = false;
+    int ui_nav_expanded_width = 0;
+    bool ui_nav_hide_tab_bar = true;
+    bool ui_workspace_hide_tab_bar = true;
     bool ui_right_hide_tab_bar = false;
     int window_x = (-2147483647 - 1);
     int window_y = (-2147483647 - 1);
@@ -70,6 +72,8 @@ inline constexpr int ui_right_pages_min = 0;
 inline constexpr int ui_right_pages_max = 254;
 inline constexpr int ui_right_page_min = 0;
 inline constexpr int ui_right_page_max = 7;
+inline constexpr int ui_nav_expanded_width_min = 0;
+inline constexpr int ui_nav_expanded_width_max = 16384;
 inline constexpr int window_x_min = (-2147483647 - 1);
 inline constexpr int window_x_max = 2147483647;
 inline constexpr int window_y_min = (-2147483647 - 1);
@@ -112,6 +116,8 @@ template<class V,class F> void visit_ui_fields(V& value,F&& field) {
     field("ui","external_windows",value.ui_external_windows);
     field("ui","worker_chart_auto_y",value.ui_worker_chart_auto_y);
     field("ui","logs_keep_visible",value.ui_logs_keep_visible);
+    field("ui","nav_collapsed",value.ui_nav_collapsed);
+    field("ui","nav_expanded_width",value.ui_nav_expanded_width);
     field("ui","nav_hide_tab_bar",value.ui_nav_hide_tab_bar);
     field("ui","workspace_hide_tab_bar",value.ui_workspace_hide_tab_bar);
     field("ui","right_hide_tab_bar",value.ui_right_hide_tab_bar);
@@ -149,6 +155,7 @@ inline void validate_ui(const UiValues& v) {
     if (v.ui_dock.size() > 524288) throw std::runtime_error("Invalid UI state: ui.dock");
     if (v.ui_right_pages < 0 || v.ui_right_pages > 254) throw std::runtime_error("Invalid UI state: ui.right_pages");
     if (v.ui_right_page < 0 || v.ui_right_page > 7) throw std::runtime_error("Invalid UI state: ui.right_page");
+    if (v.ui_nav_expanded_width < 0 || v.ui_nav_expanded_width > 16384) throw std::runtime_error("Invalid UI state: ui.nav_expanded_width");
     if (v.window_x < (-2147483647 - 1) || v.window_x > 2147483647) throw std::runtime_error("Invalid UI state: window.x");
     if (v.window_y < (-2147483647 - 1) || v.window_y > 2147483647) throw std::runtime_error("Invalid UI state: window.y");
     if (v.window_width < 480 || v.window_width > 16384) throw std::runtime_error("Invalid UI state: window.width");

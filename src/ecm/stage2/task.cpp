@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -476,6 +477,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
         !o.tune_child && !o.relocation && !std::getenv("ECM_STAGE2_PHASE_GATE") &&
         state.reserved.empty() && end>state.done+1;
     const unsigned capacity=pipeline?workers+1:workers;
+    const bool tagged=pipeline || workers==2;
     size_t next=static_cast<size_t>(state.done);
     unsigned running=0;
     Active *prepared=nullptr;
@@ -483,15 +485,26 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
     bool failed=false;
     QueueWindow result;
     const auto begin=QueueClock::now();
-    const auto report_start=[&](Active &slot) {
+    auto observed_from=begin;
+    unsigned samples=0;
+    double curve_wall_sum=0;
+    const bool events=stage2_log::enabled(stage2_log::curve)||o.gui_events;
+    const auto completed_count=[&] {
+        return state.done+std::count_if(state.reserved.begin(),state.reserved.end(),[](const auto &entry){return entry.completed;});
+    };
+    const auto report_mode=[&] {
+        if(events)queue.report("stage2_queue: workers="+std::to_string(workers)+
+            " completed="+std::to_string(completed_count()),false);
+    };
+    const auto report_start=[&](Active &slot,const char *event) {
         const auto &r=queue.plan[slot.position];
-        if(stage2_log::enabled(stage2_log::curve))
-            queue.report("curve_start: "+std::to_string(slot.position+1)+"/"+std::to_string(queue.plan.size())+
+        if(events)
+            queue.report(std::string(event)+": "+std::to_string(slot.position+1)+"/"+std::to_string(queue.plan.size())+
                 " record="+std::to_string(r.index)+" sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+
                 " checksum="+(r.checksum?"verified":"absent")+" curve_model="+(r.edwards?"ed":"mont param=0"),false);
     };
     const auto admit_worker=[&](Active &slot) {
-        if(pipeline)report_start(slot);
+        report_start(slot,"curve_start");
         slot.started=QueueClock::now();slot.admitted=true;
         ++running;
         if(pipeline) {
@@ -509,8 +522,11 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
         if(running)return false;
         workers=1;
         queue.report("stage2_parallel_memory: serial fallback after live memory check",true);
+        observed_from=QueueClock::now();samples=0;curve_wall_sum=0;
+        report_mode();
         return true;
     };
+    report_mode();
     while(true) {
         poll_inherited_stop();
         for(auto &slot:active) {
@@ -519,11 +535,11 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             if(pipeline && slot.admitted && !slot.released && slot.process->gpu_released()) {
                 --running;slot.released=true;
                 if(o.tune_runtime)latest_observation=slot.process->gpu_feedback().value_or("null");
-                if(stage2_log::enabled(stage2_log::curve)) {
+                if(events) {
                     std::ostringstream message;
                     message<<"stage2_queue_gpu_free: record="<<queue.plan[slot.position].index<<" wall="
                            <<std::chrono::duration<double>(QueueClock::now()-slot.started).count()
-                           <<" feedback="<<int(latest_observation!="null");
+                           <<" feedback="<<int(latest_observation!="null")<<" curve="<<slot.position+1;
                     queue.report(message.str(),false);
                 }
             }
@@ -531,6 +547,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             if(slot.admitted && !slot.released)--running;
             if(prepared==&slot)prepared=nullptr;
             if(*code || !slot.admitted) {
+                if(events)queue.report("stage2_curve_failed: curve="+std::to_string(slot.position+1),true);
                 failed=true;slot.process.reset();continue;
             }
             const auto position=slot.position;
@@ -549,11 +566,36 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             state.advance_completed();
             if(persist)state.save(queue.progress);
             ++queue.completed;
-            if(stage2_log::enabled(stage2_log::curve)) {
+            if(events) {
+                const auto now=QueueClock::now();
+                const double wall=std::chrono::duration<double>(now-slot.started).count();
+                const auto done=completed_count(),remaining=queue.plan.size()-std::min<uint64_t>(done,queue.plan.size());
+                curve_wall_sum+=wall;++samples;
+                const double latency=curve_wall_sum/samples;
+                double eta=-1;
+                if(!remaining)eta=0;
+                else if(!stop_requests&&!failed) {
+                    // A partially drained queue is limited by its slowest active curve.
+                    unsigned admitted=0;
+                    double tail=0;
+                    for(const auto &other:active)if(other.process&&other.admitted){
+                        ++admitted;
+                        tail=std::max(tail,std::max(.1,latency-std::chrono::duration<double>(now-other.started).count()));
+                    }
+                    if(admitted>=remaining)eta=tail;
+                    else if(remaining<=workers)eta=latency;
+                    else if(workers==1)eta=remaining*latency;
+                    else if(samples>=2){
+                        const double cadence=std::chrono::duration<double>(now-observed_from).count()/samples;
+                        eta=latency+(remaining-workers)*cadence;
+                    }
+                }
                 const auto &r=queue.plan[position];
                 std::ostringstream message;
                 message<<"curve_done: "<<position+1<<'/'<<queue.plan.size()<<" record="<<r.index<<" sigma="<<r.sigma
-                       <<" wall="<<std::chrono::duration<double>(QueueClock::now()-slot.started).count()<<" s";
+                       <<" completed="<<done;
+                if(eta>=0 && std::isfinite(eta))message<<" eta="<<std::fixed<<std::setprecision(1)<<eta<<std::defaultfloat<<std::setprecision(6);
+                message<<" wall="<<wall<<" s";
                 queue.report(message.str(),false);
             }
             if(route)result.finishes.push_back(std::chrono::duration<double>(QueueClock::now()-begin).count());
@@ -576,7 +618,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             if(slot==active.begin()+capacity)break;
             const auto &r=queue.plan[next];
             slot->position=next;slot->admitted=slot->released=false;
-            if(!pipeline)report_start(*slot);
+            if(pipeline)report_start(*slot,"curve_prepare");
             if(!o.tune_child)ecm_results::check_stage2_outputs(queue.results,o.submission,persist && state.done>0);
             if(position==state.reserved.size())
                 state.reserved.push_back({next,false,persist?stage2_queue::token():std::string{},queue.results.string()});
@@ -586,6 +628,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             o.receipt=entry.receipt;o.runtime_remaining=queue.plan.size()-next;
             auto request=curve_request(o,queue.save,r,b2,d,o.device,queue.results,queue.log,o.batch,queue.defaults);
             request.queue_pipeline=pipeline;
+            if(tagged)request.queue_curve=slot->position+1;
             if((workers==2 || pipeline) && request.debug_log)
                 request.debug_file+=".slot"+std::to_string(slot-active.begin()+1);
             ++next;
@@ -964,7 +1007,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                 " is below already completed="+std::to_string(state.done)+
                 "; no further curves will run; sealing all completed curves (factor hits reported separately).",true);
         }
-        if(stage2_log::enabled(stage2_log::curve)||o.dry) {
+        if(stage2_log::enabled(stage2_log::curve)||o.gui_events||o.dry) {
             if(o.gui_events && !task_line.empty())std::cout<<"START: "<<task_line<<std::endl;
             std::ostringstream message;
             message << "stage2_plan: save=" << save.string() << " requested=" << (count?std::to_string(count):"all")

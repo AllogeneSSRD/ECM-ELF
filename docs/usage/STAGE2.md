@@ -95,6 +95,10 @@ CUDA的`stage2_seed_backend`默认auto，也可强制scalar／coop32；CLI为`--
 
 各 worker 保持独立 CUDA 上下文。父进程可在 GPU 计算期间预读下一条，或让上一条继续发布。按算术位宽，单槽和仅报告因子的双槽默认预读至 4096 bit，保留因子归因的双槽至 2048 bit。调试日志按进程槽附加 `.slot1` 至 `.slot3`，内部 JSONL 按实际完成写入。中途命中因子的窗口仍发布结果，该窗口不计入调优。
 
+曲线级日志用 `stage2_queue: workers=1|2` 显示当前窗口的调度模式。双槽和启用预读的串行窗口中，子进程的阶段、批次、结果和警告带有 `[curve N]` 前缀。N 是任务内从 1 开始的曲线序号，`record` 是 save 文件中的记录号。`curve_prepare` 表示开始预读，`curve_start` 表示获准计算。`curve_done` 中的 `completed` 是任务中已有完成记录的总数，包含续跑恢复的结果。曲线可乱序完成，完成数独立于曲线序号。
+
+`curve_done` 的 `eta` 以秒为单位，是按当前调度窗口估算的任务剩余墙钟。串行使用本窗口已完成曲线的平均墙钟。双槽队列有后续曲线时用完成速率估计，收尾时用活跃曲线中最晚的预计完成时间。双槽积压窗口需至少两个完成样本才报告 ETA，切换窗口时重新估计。停机请求后不再估算后续任务，最后一条完成时 ETA 为零。原始单曲线耗时和队列 ETA 使用不同计时边界。
+
 高级对照可设置 `ECM_STAGE2_QUEUE_PIPELINE=0` 关闭预读、`1` 仅预读固定路线、`2` 同时预读运行时调优。`ECM_STAGE2_EARLY_GPU_HANDOFF=0` 禁用块积后的提前交接，`NTT_STAGE2_RESIDENT_PRODUCTS=0` 强制上传叶值后计算块积。`ECM_STAGE2_QUEUE_D_SEARCH=1` 启用自动 D 的双槽试跑，最多额外试三种配置。`NTT_STAGE2_SWAP_WORKSPACE=1` 启用双槽单套工作区租约，`2` 在 fold 后换出 H 再交接。D/P 试跑与单套工作区用于显式实验。算法、显存准入和计时边界见 [阶段调度](../architecture/STAGE2.md#双目标阶段调度)。
 
 ## 队列语法

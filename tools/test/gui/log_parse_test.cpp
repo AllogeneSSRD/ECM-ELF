@@ -154,7 +154,41 @@ int main() {
               "unknown lines stay raw");
     }
 
-    std::printf("[6a] Edwards Stage1 and Stage2 curve identity\n");
+    std::printf("[6a] Interleaved Stage2 queue progress\n");
+    {
+        Stage2Status status;
+        const auto apply=[&](const char* line){auto event=parse_line(line).stage2;status.apply(event);return event;};
+        apply("stage2_plan: save=sample.save requested=7 available=7 completed=1 B2=1000 D=210");
+        apply("stage2_queue: workers=2 completed=2"); // One extra durable receipt past a hole.
+        apply("curve_start: 2/7 record=10 sigma=17 B1=20 curve_model=ed");
+        apply("curve_start: 4/7 record=13 sigma=19 B1=20 curve_model=mont param=0");
+        apply("[curve 2] stage2_phase: Giant points previous=0 elapsed=2");
+        apply("[curve 4] stage2_phase: Publish result previous=3 elapsed=5");
+        apply("[curve 2] batched_progress: batch=2/8 t=4 left=9");
+        apply("[curve 4] stage2_full_wall: init=1 main=4 total=5");
+        const auto hit=apply("[curve 4] stage2_result: record=13 seconds=5 sigma=19 B1=20 curve_model=mont param=0 save=\"sample.save\" \"factors\":[\"123\"]");
+        check(hit.curve==4&&hit.factors.size()==1&&status.curve_for(4).factor_hit(hit.factors.front()).sigma==19,
+              "tagged factor keeps its curve identity");
+        apply("stage2_queue_gpu_free: record=13 wall=5 curve=4");
+        apply("curve_prepare: 5/7 record=14 sigma=20 B1=20");
+        apply("[curve 5] stage2_phase: Plan Stage2 bounds and memory previous=0 elapsed=1");
+        check(status.visible_curves().size()==2&&status.curve_for(2).batch==2&&status.current==2,
+              "preparation does not take a displayed slot");
+        apply("curve_start: 5/7 record=14 sigma=20 B1=20");
+        check(status.visible_curves()[1]->current==5&&status.curve_for(5).phase=="Plan Stage2 bounds and memory",
+              "handoff replaces a publishing curve and preserves preparation state");
+        apply("curve_done: 4/7 record=13 completed=3 eta=11.5 wall=6 s");
+        check(status.done==3&&status.progress(false).s_per_curve==5&&status.progress(false).eta_s==11.5,
+              "out-of-order completion uses aggregate count and queue ETA");
+        apply("curve_done: 2/7 record=10 completed=4 eta=8 wall=10 s");
+        check(status.done==4&&status.progress(false).s_per_curve==10&&status.current==5,
+              "closing earlier curve does not regress progress or erase its peer");
+        apply("stage2_queue: workers=1 completed=4");
+        check(status.workers==1&&status.progress(false).eta_s<0,"mode changes invalidate the previous estimate");
+        apply("stage2_stopped: curves_this_run=2");
+        check(status.done==4&&status.curves.empty()&&status.progress().eta_s<0,"stop preserves completed count");
+    }
+    std::printf("[6b] Edwards Stage1 and Stage2 curve identity\n");
     {
         const auto hit=parse_line(TS "factor[0]=1009 curve=0 sigma=17 curve_model=ed execution_target=gpu save=ed_m137_1e3.save").hit;
         check(hit.factor=="1009" && hit.curve_model=="ed" && hit.param==-1,

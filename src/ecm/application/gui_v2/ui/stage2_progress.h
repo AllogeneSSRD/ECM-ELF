@@ -20,10 +20,12 @@ inline int stage2_phase_index(const std::string& phase){
     for(int i=0;i<int(stage2_phase_count);++i)if(phase.compare(0,std::strlen(prefixes[i]),prefixes[i])==0)return i;
     if(phase=="read"||phase=="starting")return 0;if(phase=="calibration")return 1;return -1;
 }
-inline bool stage2_finished(const ecmgui::Stage2Status& s){return s.phase=="curve_done"||s.phase=="task_done"||(s.phase=="complete"&&s.current>0&&s.done>=s.current);}
-inline float stage2_bounded_fraction(const ecmgui::Stage2Status& s,double estimated){
-    if(stage2_finished(s))return 1;
+inline float stage2_bounded_fraction(const ecmgui::Stage2Curve& s,double estimated,bool completed=false){
+    if(completed||s.phase=="curve_done"||s.phase=="task_done")return 1;
     return std::isfinite(estimated)?float(std::clamp(estimated,0.,.99)):0;
+}
+inline float stage2_bounded_fraction(const ecmgui::Stage2Status& s,double estimated){
+    return stage2_bounded_fraction(s,estimated,s.phase=="complete"&&s.current>0&&s.done>=s.current);
 }
 using PhaseSeconds=std::array<double,stage2_phase_count>;
 inline PhaseSeconds no_phase_seconds(){PhaseSeconds a;a.fill(-1);return a;}
@@ -43,12 +45,13 @@ inline Stage2Timing stage2_timing(const PhaseSeconds& previous,const PhaseSecond
         if(mode!=2&&std::isfinite(previous[i])&&previous[i]>=0){out.seconds[i]=previous[i];out.sources[i]=1;}
     }return out;
 }
-inline std::string stage2_scope(const ecmgui::WorkerView& w,const std::string& device,std::string engine_stamp={}){
-    const auto& s=w.stage2_status;std::error_code error;
+inline std::string stage2_scope(const ecmgui::WorkerView& w,const ecmgui::Stage2Curve& s,const std::string& device,std::string engine_stamp={}){
+    std::error_code error;
     if(engine_stamp.empty()){const auto stamp=std::filesystem::last_write_time(std::filesystem::u8path(w.exe),error);engine_stamp=error?"unknown":std::to_string(stamp.time_since_epoch().count());}
     // Sigma differs per curve; duration scope follows the engine, device and shape.
-    return w.exe+"|"+engine_stamp+"|"+device+"|"+std::to_string(w.device)+"|"+s.curve_model+"|"+std::to_string(s.param)+"|"+std::to_string(s.bits)+"|"+std::to_string(s.d)+"|"+std::to_string(s.b1)+"|"+std::to_string(s.b2);
+    return w.exe+"|"+engine_stamp+"|"+device+"|"+std::to_string(w.device)+"|"+s.curve_model+"|"+std::to_string(s.param)+"|"+std::to_string(s.bits)+"|"+std::to_string(s.d)+"|"+std::to_string(s.b1)+"|"+std::to_string(s.b2)+(s.workers==2?"|paired":"");
 }
+inline std::string stage2_scope(const ecmgui::WorkerView& w,const std::string& device){return stage2_scope(w,w.stage2_status,device);}
 
 // Read-only view of this repository's scalar/matrix tune summary subset.
 // It does not grant a profile computational calibration eligibility.
@@ -101,7 +104,7 @@ public:
             if(format<3||format>8||text(metadata,"unit")!="full_stage2")throw std::runtime_error("unsupported tune summary");
         }catch(const std::exception& error){records_.clear();conditions_.clear();notice=error.what();}
     }
-    PhaseSeconds lookup(const ecmgui::Stage2Status& s,const std::string& device)const{
+    PhaseSeconds lookup(const ecmgui::Stage2Curve& s,const std::string& device)const{
         auto result=no_phase_seconds();if(!s.bits||!s.d||!s.b2)return result;double best=std::numeric_limits<double>::infinity();
         for(const auto& r:records_){
             if(text(r,"phase_accounting")!="exclusive_engine_v1"||real(r,"d")!=double(s.d)||real(r,"b2")!=double(s.b2))continue;
@@ -142,7 +145,7 @@ public:
 
 class Stage2TimingHistory {
     using Value=ecm_results::json::Value;
-    struct Cursor {std::vector<std::string> tail;size_t count=0;ecmgui::Stage2Status status;PhaseSeconds measured=no_phase_seconds();bool incomplete=false;};
+    struct Cursor {std::vector<std::string> tail;ecmgui::Stage2Status status;std::map<unsigned long long,PhaseSeconds> measured;bool lost_sync=false;};
     std::map<int,Cursor> cursors_;
     std::map<std::string,PhaseSeconds> previous_;
     std::filesystem::path file_;
@@ -164,20 +167,33 @@ public:
         if(!c.tail.empty()){
             bool found=false;
             for(size_t end=worker.raw.size();end>=c.tail.size();--end){if(std::equal(c.tail.begin(),c.tail.end(),worker.raw.begin()+end-c.tail.size())){start=end;found=true;break;}if(end==c.tail.size())break;}
-            if(!found){c=Cursor{};c.incomplete=true;}
+            if(!found){c=Cursor{};c.lost_sync=true;}
         }
         for(size_t i=start;i<worker.raw.size();++i){const auto line=ecmgui::parse_line(worker.raw[i]);const auto& event=line.stage2;using Kind=ecmgui::Stage2Event::Kind;
             if(event.kind==Kind::None)continue;
-            if(event.kind==Kind::CurveStart){c.measured=no_phase_seconds();c.incomplete=false;}
-            if(event.kind==Kind::Phase){const int old=stage2_phase_index(c.status.phase);const auto a=line.plain.find(" previous=");
-                if(old>=0&&a!=line.plain.npos){char* end=nullptr;const char* begin=line.plain.c_str()+a+10;const double duration=std::strtod(begin,&end);
-                    if(end!=begin&&std::isfinite(duration)&&duration>=0){if(c.measured[old]<0)c.measured[old]=0;c.measured[old]+=duration;}}}
-            c.status.apply(event);
-            if(event.kind==Kind::CurveDone&&!c.incomplete&&c.status.bits&&c.status.d&&c.status.b2&&std::any_of(c.measured.begin(),c.measured.end(),[](double n){return n>0;})){
-                ecmgui::WorkerView scope;scope.exe=worker.exe;scope.device=worker.device;scope.stage2_status=c.status;previous_[stage2_scope(scope,device)]=c.measured;save();
+            if(c.lost_sync){
+                if(event.kind!=Kind::Plan)continue;
+                c.lost_sync=false;
             }
+            const auto position=c.status.queue_events?(event.curve?event.curve:
+                (event.kind==Kind::CurveStart||event.kind==Kind::CurvePrepare||event.kind==Kind::CurveDone?event.done:c.status.current)):0;
+            if(event.kind==Kind::Plan||event.kind==Kind::TaskDone||event.kind==Kind::Complete)c.measured.clear();
+            if(event.kind==Kind::CurveStart||event.kind==Kind::CurvePrepare)c.measured.try_emplace(position,no_phase_seconds());
+            if(event.kind==Kind::CurveFailed)c.measured.erase(position);
+            const auto measured=c.measured.find(position);
+            const auto& curve=c.status.curve_for(position);
+            if(event.kind==Kind::Phase&&measured!=c.measured.end()){const int old=stage2_phase_index(curve.phase);const auto a=line.plain.find(" previous=");
+                if(old>=0&&a!=line.plain.npos){char* end=nullptr;const char* begin=line.plain.c_str()+a+10;const double duration=std::strtod(begin,&end);
+                    if(end!=begin&&std::isfinite(duration)&&duration>=0){auto& value=measured->second[old];if(value<0)value=0;value+=duration;}}}
+            if(event.kind==Kind::CurveDone&&measured!=c.measured.end()){
+                if(curve.bits&&curve.d&&curve.b2&&std::any_of(measured->second.begin(),measured->second.end(),[](double n){return n>0;})){
+                    previous_[stage2_scope(worker,curve,device)]=measured->second;save();
+                }
+                c.measured.erase(measured);
+            }
+            c.status.apply(event);
         }
-        c.tail.assign(worker.raw.end()-std::min(size_t(8),worker.raw.size()),worker.raw.end());c.count=worker.raw.size();
+        c.tail.assign(worker.raw.end()-std::min(size_t(8),worker.raw.size()),worker.raw.end());
     }
     void save(){
         if(!writable_||file_.empty())return;

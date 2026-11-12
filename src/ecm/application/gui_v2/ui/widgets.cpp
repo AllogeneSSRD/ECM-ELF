@@ -7,17 +7,19 @@
 #include <string>
 
 namespace ecmgui_v2::ui {
-bool navigation_button(const char* id,const char* label,Icon shape,bool selected,const Palette& p,float scale,float height){
+bool navigation_button(const char* id,const char* label,Icon shape,bool selected,const Palette& p,float scale,float height,bool icon_only){
     ImGui::PushStyleColor(ImGuiCol_Button,selected?p.active:ImVec4{0,0,0,0});
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,p.hover);ImGui::PushStyleColor(ImGuiCol_ButtonActive,p.active);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,0);ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,8*scale);
     const float width=std::max(1.f,ImGui::GetContentRegionAvail().x);
     const bool clicked=ImGui::Button(id,{width,height});const auto pos=ImGui::GetItemRectMin();
     const auto color=ImGui::GetColorU32(selected?p.fg:p.muted);auto* draw=ImGui::GetWindowDrawList();
-    const auto shown=fitted_label(label,width-48*scale);
+    const auto shown=icon_only?std::string{}:fitted_label(label,width-48*scale);
     draw->PushClipRect(pos,{pos.x+width,pos.y+height},true);
-    line_icon(draw,shape,{pos.x+12*scale,pos.y+(height-18*scale)*.5f},18*scale,color);
-    draw->AddText({pos.x+40*scale,pos.y+(height-ImGui::GetFontSize())*.5f},color,shown.c_str());draw->PopClipRect();
+    const float icon_x=icon_only?(width-18*scale)*.5f:12*scale;
+    line_icon(draw,shape,{pos.x+icon_x,pos.y+(height-18*scale)*.5f},18*scale,color);
+    if(!shown.empty())draw->AddText({pos.x+40*scale,pos.y+(height-ImGui::GetFontSize())*.5f},color,shown.c_str());
+    draw->PopClipRect();
     if(shown!=label&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",label);
     ImGui::PopStyleVar(2);ImGui::PopStyleColor(3);return clicked;
 }

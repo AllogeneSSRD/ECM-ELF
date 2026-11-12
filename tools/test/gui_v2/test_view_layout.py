@@ -22,7 +22,7 @@ def main():
         v={}
         latest={}
         for line in log.read_text(encoding='utf-8').splitlines():
-            if line.startswith(('usability_sample:','navigation_sample:','presentation_sample:','view_sample:')):latest[line.split(':',1)[0]]=line
+            if line.startswith(('usability_sample:','navigation_sample:','presentation_sample:','view_sample:','workspace_policy:')):latest[line.split(':',1)[0]]=line
         for line in latest.values():v.update(dict(re.findall(r'(\w+)=([^\s]+)',line)))
         return v
     def wait(predicate):
@@ -40,8 +40,16 @@ def main():
         s=sample();click(s.get('view','149,13'));time.sleep(.2)
         s=sample();click(s.get('logs_control','150,104'))
         wait(lambda s:('logdock0' in s)==visible);time.sleep(.5)
+    def toggle_navigation(collapsed, expanded_width):
+        s=sample();click(s['nav_toggle'])
+        width=52 if collapsed else expanded_width
+        result=wait(lambda s:s.get('nav_collapsed')==str(int(collapsed)) and abs(float(s['nav_size'].split(',')[0])-width)<=1)
+        assert result['layout_builds']==s['layout_builds'] and result['dock3']==s['dock3'] and result['dock4']==s['dock4'],result
+        return result
     try:
         s=wait(lambda s:s.get('page')=='1' and s.get('right_count')=='2')
+        if not a.expect_bug:
+            s=wait(lambda s:s.get('hidden0')=='1' and s.get('hidden1')=='1' and s.get('hidden2')=='0')
         initial=float(s['nav_size'].split(',')[0]);custom=initial
         for offset in [1,-2,3]:
             x=custom+offset;pointer(x,320,0);time.sleep(.12);pointer(x,320,1);time.sleep(.2)
@@ -49,6 +57,13 @@ def main():
             pointer(x+72,320,2);time.sleep(.5);custom=float(sample()['nav_size'].split(',')[0])
             if abs(custom-initial)>20:break
         assert abs(custom-initial)>20,sample()
+        if not a.expect_bug:
+            compact=toggle_navigation(True,custom)
+            assert compact['scrollbars']=='0,0'
+            capture(hwnd,out/'navigation-collapsed.png')
+            click(compact['nav0']);wait(lambda s:s.get('page')=='0')
+            click(sample()['nav1']);wait(lambda s:s.get('page')=='1')
+            toggle_navigation(False,custom)
         before=sample();capture(hwnd,out/'before.png');widths=[]
         if a.start_hidden:toggle_logs(True);widths.append(float(sample()['nav_size'].split(',')[0]))
         for _ in range(2):
@@ -69,15 +84,19 @@ def main():
             wait(lambda s:s.get('save_count')=='1');saved=tomllib.loads(state.read_text(encoding='utf-8'));assert saved['ui']['dock'] and saved['window']['width']==1500 and saved['ui']['logs']==(not a.save_hidden),saved
             assert cfg.read_bytes()==original
             result.update(explicit_save=True,no_reset_entry=True,separator=True)
+            toggle_navigation(True,custom)
     finally:close(proc,hwnd)
     if not a.expect_bug:
+        saved=tomllib.loads(state.read_text(encoding='utf-8'))
+        assert saved['ui']['nav_collapsed'] and abs(saved['ui']['nav_expanded_width']-custom)<=1,saved
         proc,hwnd,log=launch('restart')
         try:
-            s=wait(lambda s:s.get('right_count')=='2' and ('logdock2' in s)==(not a.save_hidden))
-            assert abs(float(s['nav_size'].split(',')[0])-custom)<=1,s
+            s=wait(lambda s:s.get('right_count')=='2' and ('logdock2' in s)==(not a.save_hidden) and
+                s.get('nav_collapsed')=='1' and abs(float(s['nav_size'].split(',')[0])-52)<=1)
+            s=toggle_navigation(False,custom)
             if a.save_hidden:
                 toggle_logs(True);s=sample();assert abs(float(s['nav_size'].split(',')[0])-custom)<=1 and all(int(s.get('logdock'+str(i),'0'))>0 for i in range(3)),s
-            capture(hwnd,out/'restarted.png');result['restart_preserved']=True
+            capture(hwnd,out/'restarted.png');result.update(restart_preserved=True,collapsed_navigation=True,expanded_width_restored=True,default_tab_bars_hidden=True)
         finally:close(proc,hwnd)
     assert cfg.read_bytes()==original;result['workflow_unchanged']=True
     (out/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))

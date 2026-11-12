@@ -198,19 +198,33 @@ Fit curve-time Y bounds to finite samples in the current retained window; off ke
 Keep enabled logs visible across pages; otherwise follow visible Workers management, with a temporary manual override on other views.
 已开启日志跨页保持可见；关闭时跟随可见的Workers管理页，其他视图可临时手动打开。
 
-## ui.nav_hide_tab_bar
+## ui.nav_collapsed
 
 默认值：`false`；类型：`bool`。
 
-Remember the native Navigation dock Hide tab bar choice across restarts and layout rebuilding.
-持久记忆导航停靠窗Hide tab bar选择，布局重建后保留。
+Show only icons in the navigation sidebar.
+将左侧导航缩为图标栏。
+
+## ui.nav_expanded_width
+
+默认值：`0`；类型：`int`。
+
+Previous expanded navigation width in logical pixels. Zero uses the default width.
+上次展开的导航宽度，以逻辑像素计。0 使用默认宽度。
+
+## ui.nav_hide_tab_bar
+
+默认值：`true`；类型：`bool`。
+
+The Navigation tab bar starts hidden by default. The saved choice survives restarts and layout rebuilding.
+导航顶部标签栏默认收起，保存的选择在重启及布局重建后保留。
 
 ## ui.workspace_hide_tab_bar
 
-默认值：`false`；类型：`bool`。
+默认值：`true`；类型：`bool`。
 
-Remember the native Workspace dock Hide tab bar choice across restarts and layout rebuilding.
-持久记忆工作区停靠窗Hide tab bar选择，布局重建后保留。
+The Workspace tab bar starts hidden by default. The saved choice survives restarts and layout rebuilding.
+工作区顶部标签栏默认收起，保存的选择在重启及布局重建后保留。
 
 ## ui.right_hide_tab_bar
 

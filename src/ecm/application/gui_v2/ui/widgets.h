@@ -6,7 +6,7 @@
 namespace ecmgui_v2::ui {
 enum class ButtonKind { Primary, Secondary, Ghost, Danger, Selected };
 enum class Status { Success, Warning, Danger, Info };
-bool navigation_button(const char* id,const char* label,Icon icon,bool selected,const Palette& p,float scale,float height);
+bool navigation_button(const char* id,const char* label,Icon icon,bool selected,const Palette& p,float scale,float height,bool icon_only=false);
 bool icon_button(const char* id,Icon icon,const Palette& p,float scale);
 bool theme_card(const char* id,const char* label,bool light,bool selected,const Palette& p,float scale,float width);
 bool button(const char* id, const char* label, ButtonKind kind, const Palette& p, float scale, bool disabled = false,float* rendered_size=nullptr,bool compact=false,float width=0,float height=0,Icon icon=Icon::None);

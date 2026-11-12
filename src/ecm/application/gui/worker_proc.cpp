@@ -301,6 +301,7 @@ void WorkerProc::drain(DrainedOutput &out) {
         std::lock_guard<std::mutex> lk(mu_);
         local.swap(lines_);
     }
+    bool stage2_received=false;
     for (const std::string &l : local) {
         // Both views are ANSI-free: the raw view keeps UNCLASSIFIED lines, not escape
         // codes (the driver writes colour into pipes; rendering escape sequences in a
@@ -309,12 +310,14 @@ void WorkerProc::drain(DrainedOutput &out) {
         const ParsedLine pl = parse_line(l);
         if(!pl.application_version.empty())out.application_version=pl.application_version;
         if(pl.stage2.kind!=Stage2Event::Kind::None && spawn_.stage2) {
-            stage2_status_.apply(pl.stage2);out.stage2=stage2_status_;
+            stage2_status_.apply(pl.stage2);
+            stage2_received=true;
             if(pl.stage2.kind==Stage2Event::Kind::Plan)out.stage2_task_started=true;
             out.last_progress=stage2_status_.progress();++out.progress_lines;
-            if(pl.stage2.kind==Stage2Event::Kind::CurveDone)out.speed_sample=true;
+            if(pl.stage2.kind==Stage2Event::Kind::CurveDone&&stage2_status_.last_curve_seconds>0)
+                out.stage2_speed_samples.emplace_back(stage2_status_.last_curve_seconds,out.last_progress.s_per_curve);
             for(const auto &factor:pl.stage2.factors) {
-                out.hits.push_back(stage2_status_.factor_hit(factor));
+                out.hits.push_back(stage2_status_.curve_for(pl.stage2.curve).factor_hit(factor));
             }
         }
         out.raw.push_back(pl.plain);
@@ -338,6 +341,7 @@ void WorkerProc::drain(DrainedOutput &out) {
                 break;                           // only in the raw view
         }
     }
+    if(stage2_received)out.stage2=stage2_status_;
 }
 
 void WorkerProc::poll(unsigned long long now_ms) {

@@ -15,7 +15,7 @@ def main():
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     queue=out/'worktodo.txt';queue.write_text('[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n')
     cfg=out/'ecm.toml';cfg.write_text('[shared]\nworktodo='+json.dumps(str(queue))+'\n[gui]\nNumWorkers=1\nexe='+json.dumps(str(worker))+'\nexit_confirm="stop"\ngraceful_stop_ms=1500\n[workers.1]\nautostart=1\nextra_args="--scenario v2-presentation"\n')
-    original=cfg.read_bytes();state=out/'ui.toml';state.write_text('[ui]\npage=0\nlogs=true\nright_pages=16\nright_page=4\ninspector=false\nscale=1\nfont_size=15\nlanguage="en"\ntoasts=false\n')
+    original=cfg.read_bytes();state=out/'ui.toml';state.write_text('[ui]\npage=0\nlogs=true\nright_pages=16\nright_page=4\ninspector=false\nscale=1\nfont_size=15\nlanguage="en"\ntoasts=false\nnav_hide_tab_bar=false\nworkspace_hide_tab_bar=false\n')
     def launch(name):
         log=out/(name+'.log');si=subprocess.STARTUPINFO();si.dwFlags=subprocess.STARTF_USESHOWWINDOW;si.wShowWindow=0
         proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app','--no-nvml','--no-pet'],cwd=out,startupinfo=si)
@@ -59,6 +59,7 @@ def main():
     def all_hidden(row):return all(row.get('preference'+str(i))=='1' and row.get('hidden'+str(i))=='1' for i in range(3))
     try:
         r=wait(lambda r:r.get('logs_visible')=='1' and int(r.get('workspace_speed','0'))>=6 and r.get('ymin0')=='0' and int(r.get('node2','0'))>0)
+        assert r['preference0']==r['hidden0']==r['preference1']==r['hidden1']=='0',r
         before_width=float(r['nav_size'].split(',')[0]);builds=r['layout_builds'];base_max=float(r['ymax0'])
         click('auto_control');r=wait(lambda r:r['auto_y']=='1' and float(r['ymin0'])>0)
         assert 0<float(r['ymin0'])<1.75 and 2.25<float(r['ymax0'])<base_max,r
@@ -78,8 +79,11 @@ def main():
         capture(hwnd,out/'hidden-tab-bars.png')
         page(1,False);assert all_hidden(sample());page(0,True);assert all_hidden(sample())
         # A responsive dock rebuild must carry the role preferences to new nodes.
-        user.SetWindowPos(hwnd,None,30,30,900,1100,0x14);wait(all_hidden)
-        user.SetWindowPos(hwnd,None,30,30,1500,1200,0x14);wait(all_hidden)
+        previous_builds=int(sample()['layout_builds'])
+        user.SetWindowPos(hwnd,None,30,30,900,1100,0x14)
+        narrow=wait(lambda r:all_hidden(r) and int(r['layout_builds'])>previous_builds and float(r['nav_size'].split(',')[0])<200)
+        user.SetWindowPos(hwnd,None,30,30,1500,1200,0x14)
+        wait(lambda r:all_hidden(r) and int(r['layout_builds'])>int(narrow['layout_builds']) and float(r['nav_size'].split(',')[0])>200)
         # Multi-tab native docks show their tabs, then restore the single-tab choice.
         move_right(3);wait(lambda r:r['mask']=='24' and r['right_count']=='2' and r['hidden2']=='0' and r['preference2']=='1')
         click('close3');wait(lambda r:r['mask']=='16' and r['right_count']=='1' and all_hidden(r))
@@ -101,8 +105,8 @@ def main():
         capture(hwnd,out/'restart-failure.png');raise
     finally:close(proc,hwnd)
     assert cfg.read_bytes()==original and renderer_clean(log.read_text(encoding='utf-8'),'dx11')
-    # Legacy sidecars already stored the native layout flags. Adopt those flags
-    # when the new role keys are absent, rather than overwrite them with false.
+    # Defaults cover absent Navigation and Workspace keys. The right dock
+    # keeps its previous native layout state when its preference key is absent.
     keys={'nav_hide_tab_bar','workspace_hide_tab_bar','right_hide_tab_bar'}
     state.write_text('\n'.join(line for line in state.read_text(encoding='utf-8').splitlines() if line.partition('=')[0].strip() not in keys)+'\n',encoding='utf-8')
     proc,hwnd,log=launch('legacy')

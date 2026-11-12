@@ -83,7 +83,7 @@ public:
         // --worker support (D1/D2) and never entered queue mode. See kOldDriverHint.
         bool old_driver = false;
         Stage2Status stage2;
-        bool speed_sample=false;
+        std::vector<std::pair<double,double>> stage2_speed_samples; // raw, cumulative
         bool stage2_task_started=false;
     };
     void drain(DrainedOutput &out);

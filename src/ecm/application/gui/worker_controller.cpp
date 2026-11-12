@@ -335,7 +335,10 @@ void WorkerController::tick() {
             // Sample for the chart. The driver emits progress lines at a decaying rate, so
             // every line is worth keeping when it carries new information. The series holds
             // SECONDS PER CURVE (see WorkerView::hist_s_per_curve).
-            if (w.progress.s_per_curve > 0.0 && (!w.stage2 || d.speed_sample)) {
+            if(w.stage2){
+                for(const auto& sample:d.stage2_speed_samples)
+                    w.hist_s_per_curve.push_back(static_cast<float>(stage2_average_?sample.second:sample.first));
+            }else if(w.progress.s_per_curve>0.0){
                 w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
             }
             const std::size_t cap = 600;

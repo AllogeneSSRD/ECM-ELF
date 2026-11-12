@@ -56,6 +56,7 @@ struct CurveProcess::Impl {
     Handle out_read,err_read,job,process,gpu_start,gpu_done,gpu_input;
     Clock::time_point begin,next;
     std::string phase="Starting curve",stdout_pending,stderr_pending,queue_sample;
+    std::string curve_label;
     std::optional<std::string> gpu_feedback;
     bool heartbeat=false,stop_reported=false;
     stage2_console::Summary console_summary;
@@ -71,6 +72,7 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     : request(std::move(value)),
       console_summary(request.batch,request.console_budget.arena,request.console_budget.owner_mb) {
     const auto &o=request;
+    if(o.queue_curve)curve_label="[curve "+std::to_string(o.queue_curve)+"] ";
     const auto &save=o.save,&results=o.results,&log=o.log;
     const auto &r=o.record;
     const auto b2=o.b2,d=o.d,batch=o.batch;const int device=o.device;
@@ -199,7 +201,7 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
 
 void CurveProcess::Impl::console_line(const std::string &text,bool error) {
     if(heartbeat){std::cout<<'\n';heartbeat=false;}
-    (error?std::cerr:std::cout)<<text<<std::endl;
+    (error?std::cerr:std::cout)<<curve_label<<text<<std::endl;
 }
 
 void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &output) {
@@ -215,24 +217,34 @@ void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &
     if(!error && o.runtime_prepare_cache && text.rfind("{\"type\":\"tune_selection\"",0)==0) {
         if(o.observe_selection)o.observe_selection(text);
     }
+    const bool milestone=text.rfind("stage2_phase: ",0)==0;
+    const bool result=text.rfind("stage2_result: ",0)==0;
+    const bool detail=text.rfind("batched_progress:",0)==0||text.rfind("stage2_full_wall:",0)==0||
+        text.rfind("stage2_modulus:",0)==0||text.rfind("real_shape:",0)==0;
+    const bool tagged=milestone||result||detail||error||text.find("WARNING")!=text.npos;
     // Release the log between pumps so task milestones and both children can append.
     if(!o.log.empty()){
         if(!output.is_open())output.open(o.log,std::ios::binary|std::ios::app);
+        // Structured benchmark records keep their existing framing.
+        if(tagged)output<<curve_label;
         output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");
     }
     if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
     const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
     if(stage2_log::enabled(stage2_log::phases))
         for(const auto &entry:summary.lines)console_line(entry);
-    const bool milestone=text.compare(0,14,"stage2_phase: ")==0;
     const bool tune_update=text.compare(0,21,"stage2_tune_runtime: ")==0;
-    const bool result=text.compare(0,15,"stage2_result: ")==0;
     if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
-    if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
+    const bool gui_detail=o.gui_events&&(milestone||detail);
+    if((!summary.replace||(gui_detail&&!stage2_log::enabled(stage2_log::phases))) &&
+       (gui_detail || error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
        ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&(result || text.rfind("stage2_relocation:",0)==0)) ||
        stage2_log::enabled(stage2_log::batches) ||
        (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
-       text.find("WARNING")!=text.npos))console_line(text,error);
+       text.find("WARNING")!=text.npos)){
+        if(tagged)console_line(text,error);
+        else (error?std::cerr:std::cout)<<text<<std::endl;
+    }
 }
 
 void CurveProcess::Impl::drain(HANDLE pipe,std::string &pending,bool error,std::ofstream &output) {
@@ -268,9 +280,14 @@ std::optional<int> CurveProcess::Impl::poll() {
     if(wait==WAIT_TIMEOUT) {
         const auto now=Clock::now();
         if(now>=next && !o.tune_child && stage2_log::enabled(stage2_log::curve)) {
-            std::cout<<'\r'<<"Curve "<<o.record.index<<": "<<phase<<" | elapsed="
-                     <<static_cast<unsigned long long>(std::chrono::duration<double>(now-begin).count())<<" s     "<<std::flush;
-            heartbeat=true;next=now+std::chrono::seconds(30);
+            if(o.queue_curve)console_line(phase+" | elapsed="+
+                std::to_string(std::chrono::duration_cast<std::chrono::seconds>(now-begin).count())+" s");
+            else {
+                std::cout<<'\r'<<"Curve "<<o.record.index<<": "<<phase<<" | elapsed="
+                         <<std::chrono::duration_cast<std::chrono::seconds>(now-begin).count()<<" s     "<<std::flush;
+                heartbeat=true;
+            }
+            next=now+std::chrono::seconds(30);
     }
         return std::nullopt;
         }

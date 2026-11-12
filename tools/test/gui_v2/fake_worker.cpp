@@ -96,6 +96,34 @@ int main(int argc, char** argv) {
             if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
             out("stage2_stopped: fixture\n");return 0;
         }
+        if(arg_value("--scenario")=="v2-stage2-paired"){
+            out("stage2_plan: save=fixture.save requested=5 available=5 completed=1 B2=1000 D=210\n");
+            out("stage2_queue: workers=2 completed=1\n");
+            out("curve_prepare: 2/5 record=9 sigma=17 B1=20 curve_model=ed\n");
+            out("[curve 2] real_shape: B1=20 B2=1000 S_bits=318 D=210 P=24\n");
+            out("curve_start: 2/5 record=9 sigma=17 B1=20 curve_model=ed\n");
+            out("curve_start: 3/5 record=12 sigma=18 B1=20 curve_model=ed\n");
+            out("[curve 2] stage2_phase: Giant points previous=2 elapsed=3\n");
+            out("[curve 3] stage2_phase: Generate and normalize baby points previous=1 elapsed=2\n");
+            out("[curve 2] batched_progress: batch=2/8 t=4 left=12\n");
+            out("curve_prepare: 4/5 record=18 sigma=19 B1=20 curve_model=ed\n");
+            out("[curve 4] stage2_phase: Plan Stage2 bounds and memory previous=1 elapsed=1\n");
+            Sleep(1500);
+            out("stage2_queue_gpu_free: record=12 wall=5 curve=3\n");
+            out("curve_start: 4/5 record=18 sigma=19 B1=20 curve_model=ed\n");
+            out("[curve 3] stage2_full_wall: init=1 main=8 total=9\n");
+            out("curve_done: 3/5 record=12 completed=2 eta=17 wall=10 s\n");
+            out("[curve 2] stage2_full_wall: init=1 main=19 total=20\n");
+            out("curve_done: 2/5 record=9 completed=3 eta=7 wall=21 s\n");
+            out("curve_done: 4/5 record=18 completed=4 eta=6 wall=6 s\n");
+            out("stage2_queue: workers=1 completed=4\n");
+            out("curve_start: 5/5 record=20 sigma=21 B1=20 curve_model=ed\n");
+            Sleep(600);
+            out("curve_done: 5/5 record=20 completed=5 eta=0 wall=4 s\n");
+            out("task_done: requested=5 available=5 completed=5\n");
+            out("stage2_complete: curves_this_run=4 invalid_tasks=0\n");
+            return 0;
+        }
         if(arg_value("--scenario")=="v2-presentation-stage2"){
             out("ECM-ELF 0.49.1 (Stage2 fixture)\n");
             out("START: ECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");

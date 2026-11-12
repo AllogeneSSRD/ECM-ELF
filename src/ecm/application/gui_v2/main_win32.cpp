@@ -405,6 +405,8 @@ int run(const Options& options, int show, FILE* log) {
             const auto search=point(app.settings_search_control);std::fprintf(log," matches=%d search=%ld,%ld settings=%d settings_category=%d\n",app.settings_matches,search.x,search.y,app.settings_open,app.settings_category);std::fflush(log);
             std::fprintf(log,"navigation_sample: order=%s dragged=%d rounding=%.1f height=%.1f gap=%.1f tools=%d right_count=%zu",state.ui_nav_order.c_str(),app.nav_drag_page,app.nav_rounding,app.nav_item_height,app.nav_item_gap,app.right_container_present,app.right_docks.size());
             std::fprintf(log," padding=%.1f nav_scroll=%.1f,%.1f scrollbars=%.0f,%.0f nav_size=%.0f,%.0f",app.nav_padding,app.nav_scroll.x,app.nav_scroll.y,app.nav_scrollbars.x,app.nav_scrollbars.y,app.nav_size.x,app.nav_size.y);
+            const auto nav_toggle=point(app.nav_toggle);
+            std::fprintf(log," nav_collapsed=%d nav_toggle=%ld,%ld",state.ui_nav_collapsed,nav_toggle.x,nav_toggle.y);
             for(const auto& tab:app.right_close_controls){const auto pos=point(tab.second);std::fprintf(log," close%d=%ld,%ld",tab.first,pos.x,pos.y);}
             for(const auto& tab:app.right_docks)std::fprintf(log," dock%d=%u",tab.first,tab.second);std::fprintf(log,"\n");
             const auto language_combo=point(app.language_control);

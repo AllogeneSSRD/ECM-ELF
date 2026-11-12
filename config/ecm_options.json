@@ -3087,13 +3087,37 @@
       },
       {
         "table": "ui",
-        "key": "nav_hide_tab_bar",
-        "field": "ui_nav_hide_tab_bar",
+        "key": "nav_collapsed",
+        "field": "ui_nav_collapsed",
         "type": "bool",
         "default": false,
         "description": [
-          "Remember the native Navigation dock Hide tab bar choice across restarts and layout rebuilding.",
-          "持久记忆导航停靠窗Hide tab bar选择，布局重建后保留。"
+          "Show only icons in the navigation sidebar.",
+          "将左侧导航缩为图标栏。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "nav_expanded_width",
+        "field": "ui_nav_expanded_width",
+        "type": "int",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 16384,
+        "description": [
+          "Previous expanded navigation width in logical pixels. Zero uses the default width.",
+          "上次展开的导航宽度，以逻辑像素计。0 使用默认宽度。"
+        ]
+      },
+      {
+        "table": "ui",
+        "key": "nav_hide_tab_bar",
+        "field": "ui_nav_hide_tab_bar",
+        "type": "bool",
+        "default": true,
+        "description": [
+          "The Navigation tab bar starts hidden by default. The saved choice survives restarts and layout rebuilding.",
+          "导航顶部标签栏默认收起，保存的选择在重启及布局重建后保留。"
         ]
       },
       {
@@ -3101,10 +3125,10 @@
         "key": "workspace_hide_tab_bar",
         "field": "ui_workspace_hide_tab_bar",
         "type": "bool",
-        "default": false,
+        "default": true,
         "description": [
-          "Remember the native Workspace dock Hide tab bar choice across restarts and layout rebuilding.",
-          "持久记忆工作区停靠窗Hide tab bar选择，布局重建后保留。"
+          "The Workspace tab bar starts hidden by default. The saved choice survives restarts and layout rebuilding.",
+          "工作区顶部标签栏默认收起，保存的选择在重启及布局重建后保留。"
         ]
       },
       {

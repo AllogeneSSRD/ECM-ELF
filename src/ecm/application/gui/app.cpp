@@ -293,7 +293,7 @@ void App::rebuild_workers() {
         else if(n.kind==WorkerNotice::Kind::StageChanged)worker_ui_[n.worker]=WorkerUi{};
         else status_=n.text;
     });
-    controller_.configure({ini_path_,worker_exe_,stage2_exe_,priority_,exit_confirm_,num_workers_,graceful_stop_ms_});
+    controller_.configure({ini_path_,worker_exe_,stage2_exe_,priority_,exit_confirm_,true,num_workers_,graceful_stop_ms_});
     worker_ui_.clear();refresh_result_sources();gen_has_preview_=false;
     gen_worker_index_=std::clamp(gen_worker_index_,1,num_workers_);
     gen_target_device_=workers_[static_cast<size_t>(gen_worker_index_-1)].stage1_device;
@@ -2004,8 +2004,11 @@ void App::draw_workers_table() {
                 std::string phase;
                 if(w.stage2 && w.stage2_status.valid) {
                     const auto &status=w.stage2_status;
-                    phase=loc_.t("stage2","phase")+": "+loc_.t("stage2",stage2_phase_key(status.phase));
-                    if(status.total)phase+=" | "+loc_.t("stage2","curve")+" "+std::to_string(status.current)+" / "+std::to_string(status.total);
+                    for(const auto* curve:status.visible_curves()){
+                        if(!phase.empty())phase+="\n";
+                        phase+=loc_.t("stage2","phase")+": "+loc_.t("stage2",stage2_phase_key(curve->phase));
+                        if(curve->total)phase+=" | "+loc_.t("stage2","curve")+" "+std::to_string(curve->current)+" / "+std::to_string(curve->total);
+                    }
                 }
                 const auto summary_size=ImGui::CalcTextSize(summary.c_str(),nullptr,false,width);
                 const auto phase_size=phase.empty()?ImVec2():ImGui::CalcTextSize(phase.c_str(),nullptr,false,width);
@@ -2052,19 +2055,21 @@ void App::draw_workers_table() {
 
 void App::draw_stage2_status(const WorkerView &w,bool compact) {
     const auto &s=w.stage2_status;if(!s.valid)return;
-    ImGui::TextColored(ImVec4(.75f,.69f,.97f,1.f),"%s: %s",loc_.t("stage2","phase").c_str(),loc_.t("stage2",stage2_phase_key(s.phase)).c_str());
-    if(s.total){ImGui::SameLine();ImGui::TextDisabled("| %s %llu / %llu",loc_.t("stage2","curve").c_str(),s.current,s.total);}
-    if(compact)return;
-    if(s.b1 && s.b2)ImGui::TextDisabled("B1=%llu   B2=%llu",s.b1,s.b2);
-    if(s.bits && s.d && s.p)ImGui::TextDisabled("S=%llu bits   D=%llu   P=%llu",s.bits,s.d,s.p);
-    if(s.carrier_known)ImGui::TextDisabled("mersenne_carrier = %llu",s.carrier_exponent);
-    if(s.batches) {
-        char overlay[96];std::snprintf(overlay,sizeof(overlay),"%s %llu / %llu",loc_.t("stage2","batch").c_str(),s.batch,s.batches);
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.56f,.44f,.89f,1.f));
-        bounded_progress(double(s.batch)/s.batches,overlay);ImGui::PopStyleColor();
-        ImGui::TextDisabled("%s: %.1f s",loc_.t("stage2","phase_remaining").c_str(),s.batch_left);
+    for(const auto* curve:s.visible_curves()){
+        ImGui::TextColored(ImVec4(.75f,.69f,.97f,1.f),"%s: %s",loc_.t("stage2","phase").c_str(),loc_.t("stage2",stage2_phase_key(curve->phase)).c_str());
+        if(curve->total){ImGui::SameLine();ImGui::TextDisabled("| %s %llu / %llu",loc_.t("stage2","curve").c_str(),curve->current,curve->total);}
+        if(compact)continue;
+        if(curve->b1&&curve->b2)ImGui::TextDisabled("B1=%llu   B2=%llu",curve->b1,curve->b2);
+        if(curve->bits&&curve->d&&curve->p)ImGui::TextDisabled("S=%llu bits   D=%llu   P=%llu",curve->bits,curve->d,curve->p);
+        if(curve->carrier_known)ImGui::TextDisabled("mersenne_carrier = %llu",curve->carrier_exponent);
+        if(curve->batches){
+            char overlay[96];std::snprintf(overlay,sizeof(overlay),"%s %llu / %llu",loc_.t("stage2","batch").c_str(),curve->batch,curve->batches);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.56f,.44f,.89f,1.f));
+            bounded_progress(double(curve->batch)/curve->batches,overlay);ImGui::PopStyleColor();
+            ImGui::TextDisabled("%s: %.1f s",loc_.t("stage2","phase_remaining").c_str(),curve->batch_left);
+        }
     }
-    if(w.stop_requested)ImGui::TextColored(ImVec4(1.f,.77f,.35f,1.f),"%s",loc_.t("stage2","finish_curve_stop").c_str());
+    if(!compact&&w.stop_requested)ImGui::TextColored(ImVec4(1.f,.77f,.35f,1.f),"%s",loc_.t("stage2","finish_curve_stop").c_str());
 }
 
 void App::draw_gpu_panel() {

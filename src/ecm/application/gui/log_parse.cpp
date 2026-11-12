@@ -151,10 +151,18 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
         e.kind=Kind::Plan;integer("available",e.total);integer("completed",e.done);integer("B2",e.b2);integer("D",e.d);
         const auto a=line.find("save="),b=line.find(" requested=");
         if(a!=line.npos && b!=line.npos && b>a+5)e.save=line.substr(a+5,b-a-5);
-    } else if(starts_with(line,"curve_start:")) {
-        if(std::sscanf(line.c_str(),"curve_start: %llu/%llu record=%llu sigma=%llu B1=%llu",
+    } else if(starts_with(line,"stage2_queue:")) {
+        unsigned long long workers=0;integer("workers",workers);
+        if(workers!=1&&workers!=2)return false;
+        e.kind=Kind::Queue;e.workers=static_cast<unsigned>(workers);integer("completed",e.completed);
+    } else if(starts_with(line,"curve_start:") || starts_with(line,"curve_prepare:")) {
+        const bool prepare=starts_with(line,"curve_prepare:");
+        if(std::sscanf(line.c_str()+(prepare?14:12)," %llu/%llu record=%llu sigma=%llu B1=%llu",
             &e.done,&e.total,&e.record,&e.sigma,&e.b1)<2)return false;
-        e.kind=Kind::CurveStart;
+        e.kind=prepare?Kind::CurvePrepare:Kind::CurveStart;
+    } else if(starts_with(line,"stage2_queue_gpu_free:") || starts_with(line,"stage2_curve_failed:")) {
+        integer("curve",e.curve);if(!e.curve)return false;
+        e.kind=starts_with(line,"stage2_queue_gpu_free:")?Kind::GpuFree:Kind::CurveFailed;
     } else if(starts_with(line,"stage2_modulus:")) {
         e.kind=Kind::Modulus;
         integer("carrier_bits",e.bits);
@@ -195,16 +203,17 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
     } else if(starts_with(line,"curve_done:")) {
         if(std::sscanf(line.c_str(),"curve_done: %llu/%llu record=%llu",&e.done,&e.total,&e.record)<2)return false;
         e.kind=Kind::CurveDone;read_after(line,"wall=",e.seconds);
+        integer("completed",e.completed);read_after(line,"eta=",e.eta);
     } else if(starts_with(line,"task_done:")) {
         e.kind=Kind::TaskDone;integer("completed",e.done);
     } else if(starts_with(line,"stage2_complete:") || starts_with(line,"stage2_stopped:"))e.kind=Kind::Complete;
-    if(e.kind==Kind::CurveStart || e.kind==Kind::Result) {
+    if(e.kind==Kind::CurveStart || e.kind==Kind::CurvePrepare || e.kind==Kind::Result) {
         std::size_t start=0;
         if(kv_pos(line,"curve_model",start)) {
             const auto end=line.find_first_of(" \t\r\n",start);
             e.curve_model=line.substr(start,end==line.npos?line.npos:end-start);
         }
-        if(e.kind==Kind::CurveStart && e.curve_model.empty())e.curve_model="mont";
+        if(e.kind!=Kind::Result && e.curve_model.empty())e.curve_model="mont";
         if(e.curve_model=="mont") {
             e.param=0;long long value=0;
             if(read_kv_int(line,"param",value) && value>=0 && value<=3)e.param=static_cast<int>(value);
@@ -215,16 +224,14 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
 
 } // namespace
 
-void Stage2Status::apply(const Stage2Event &e) {
+void Stage2Curve::apply(const Stage2Event &e) {
     using Kind=Stage2Event::Kind;valid=true;
-    if(e.kind==Kind::Plan) {
-        *this=Stage2Status{};valid=true;total=e.total;done=std::min(e.done,total);current=done;
-        b2=e.b2;d=e.d;save=e.save;phase="starting";
-    } else if(e.kind==Kind::CurveStart) {
-        total=e.total;current=std::min(e.done,total);done=current?current-1:0;
+    if(e.kind==Kind::CurveStart || e.kind==Kind::CurvePrepare) {
+        total=e.total;current=std::min(e.done,total);
         record=e.record;sigma=e.sigma;b1=e.b1;engine_seconds=0;batch=batches=0;batch_left=0;elapsed=0;phase="read";
         carrier_exponent=0;carrier_known=false;
         curve_model=e.curve_model.empty()?"mont":e.curve_model;param=curve_model=="mont"?e.param:-1;
+        admitted=e.kind==Kind::CurveStart;
     } else if(e.kind==Kind::Modulus) {
         if(e.bits)bits=e.bits;
         if(e.carrier_known){carrier_exponent=e.carrier_exponent;carrier_known=true;}
@@ -238,23 +245,78 @@ void Stage2Status::apply(const Stage2Event &e) {
         if(e.record)record=e.record;if(e.sigma)sigma=e.sigma;if(e.b1)b1=e.b1;if(!e.save.empty())save=e.save;
         if(!e.curve_model.empty()){curve_model=e.curve_model;param=curve_model=="mont"?e.param:-1;}
     } else if(e.kind==Kind::FullWall)engine_seconds=e.seconds;
-    else if(e.kind==Kind::CurveDone) {
-        total=e.total;done=std::min(e.done,total);current=done;record=e.record;
+    else if(e.kind==Kind::GpuFree)gpu_free=true;
+}
+const Stage2Curve& Stage2Status::curve_for(unsigned long long position)const {
+    const auto it=curves.find(position);
+    return it==curves.end()?static_cast<const Stage2Curve&>(*this):it->second;
+}
+std::vector<const Stage2Curve*> Stage2Status::visible_curves()const {
+    std::vector<const Stage2Curve*> out;
+    for(bool released:{false,true})
+        for(const auto &entry:curves)
+            if(entry.second.admitted && entry.second.gpu_free==released && out.size()<workers)
+                out.push_back(&entry.second);
+    if(out.empty())out.push_back(this);
+    return out;
+}
+void Stage2Status::apply(const Stage2Event &e) {
+    using Kind=Stage2Event::Kind;valid=true;
+    if(e.kind==Kind::Plan) {
+        *this=Stage2Status{};valid=true;total=e.total;done=std::min(e.done,total);current=done;
+        planned_b2=b2=e.b2;planned_d=d=e.d;save=e.save;phase="starting";
+        return;
+    }
+    if(e.kind==Kind::Queue){
+        queue_events=true;workers=e.workers;done=std::min(e.completed,total);queue_eta=-1;
+        return;
+    }
+    if(e.kind==Kind::TaskDone||e.kind==Kind::Complete){
+        if(e.kind==Kind::TaskDone)done=queue_events?std::min(e.done,total):total;
+        phase=e.kind==Kind::TaskDone?"task_done":"complete";curves.clear();queue_eta=done==total?0:-1;
+        return;
+    }
+    if(e.kind==Kind::CurveStart||e.kind==Kind::CurvePrepare){
+        if(queue_events){
+            auto [it,inserted]=curves.try_emplace(e.done);
+            auto& curve=it->second;
+            if(inserted){curve.b2=planned_b2;curve.d=planned_d;curve.save=save;curve.apply(e);}
+            if(e.kind==Kind::CurveStart){curve.admitted=true;curve.workers=workers;}
+        }else{
+            Stage2Curve::apply(e);done=current?current-1:0;
+        }
+    }else if(e.kind==Kind::CurveDone){
+        const auto it=curves.find(e.done);
+        Stage2Curve finished=it==curves.end()?static_cast<const Stage2Curve&>(*this):it->second;
+        if(it!=curves.end())curves.erase(it);
+        finished.current=e.done;finished.record=e.record;finished.batch=finished.batches=0;
+        finished.batch_left=0;finished.phase="curve_done";finished.workers=workers;
+        static_cast<Stage2Curve&>(*this)=std::move(finished);
+        total=e.total;done=std::min(queue_events?e.completed:e.done,total);queue_eta=e.eta;
         const auto seconds=engine_seconds>0?engine_seconds:e.seconds;
         last_curve_seconds=seconds>0&&std::isfinite(seconds)?seconds:0;
         if(last_curve_seconds>0){seconds_sum+=seconds;++measured_curves;}
-        batch=batches=0;batch_left=0;phase="curve_done";
-    } else if(e.kind==Kind::TaskDone){done=total;phase="task_done";}
-    else if(e.kind==Kind::Complete)phase="complete";
+    }else if(e.kind==Kind::CurveFailed){
+        curves.erase(e.curve);phase="failed";queue_eta=-1;
+    }else if(!queue_events)Stage2Curve::apply(e);
+    else {
+        const auto it=e.curve?curves.find(e.curve):curves.find(current);
+        if(it!=curves.end())it->second.apply(e);
+        else if(!e.curve)Stage2Curve::apply(e);
+    }
+    if(queue_events){
+        const auto* visible=visible_curves().front();
+        if(visible!=this){const auto mode=workers;static_cast<Stage2Curve&>(*this)=*visible;workers=mode;}
+    }
 }
 ProgressInfo Stage2Status::progress(bool average)const {
     ProgressInfo out;out.valid=valid && total>0;out.gpu=true;
     out.curves_done=done;out.curves_total=total;out.pct=total?100.*done/total:0;out.elapsed_s=elapsed;
     out.bits=bits;
     out.s_per_curve=average?(measured_curves?seconds_sum/measured_curves:0):last_curve_seconds;
-    out.eta_s=(total>done?total-done:0)*out.s_per_curve;return out;
+    out.eta_s=queue_events?queue_eta:(total>done?total-done:0)*out.s_per_curve;return out;
 }
-HitInfo Stage2Status::factor_hit(const std::string &factor)const {
+HitInfo Stage2Curve::factor_hit(const std::string &factor)const {
     HitInfo hit;hit.factor=factor;hit.curve=static_cast<int>(record);
     hit.sigma=sigma;hit.has_sigma=sigma!=0;hit.param=param;
     hit.save=save;hit.curve_model=curve_model;hit.execution_target="gpu";
@@ -338,11 +400,15 @@ ParsedLine parse_line(const std::string &line) {
             return out;
         }
     }
-    if(parse_stage2(p,out.stage2)) {
+    const auto tagged=starts_with(p,"[curve ")?p.find("] ",7):p.npos;
+    const auto payload=tagged==p.npos?std::string{}:p.substr(tagged+2);
+    if(parse_stage2(tagged==p.npos?p:payload,out.stage2)) {
+        if(tagged!=p.npos){const char* n=p.c_str()+7;read_u64(n,out.stage2.curve);}
         out.queue_done=starts_with(p,"stage2_complete:");
         const auto kind=out.stage2.kind;
-        const bool detail=kind==Stage2Event::Kind::Modulus || kind==Stage2Event::Kind::Shape || kind==Stage2Event::Kind::Batch || kind==Stage2Event::Kind::FullWall;
-        out.kind=out.queue_done?LogKind::QueueDone:detail?LogKind::Raw:LogKind::Event;
+        const bool detail=kind==Stage2Event::Kind::Modulus || kind==Stage2Event::Kind::Shape || kind==Stage2Event::Kind::Batch ||
+            kind==Stage2Event::Kind::FullWall || kind==Stage2Event::Kind::CurvePrepare || kind==Stage2Event::Kind::GpuFree;
+        out.kind=out.queue_done?LogKind::QueueDone:kind==Stage2Event::Kind::CurveFailed?LogKind::Error:detail?LogKind::Raw:LogKind::Event;
         return out;
     }
 

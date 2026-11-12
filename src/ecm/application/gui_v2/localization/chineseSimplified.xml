@@ -15,6 +15,8 @@
       <Item id="window.maximize_restore" name="最大化/还原" />
       <Item id="window.close" name="关闭" />
       <Item id="navigation.title" name="导航###v2.navigation" />
+      <Item id="navigation.collapse" name="折叠侧边栏" />
+      <Item id="navigation.expand" name="展开侧边栏" />
       <Item id="move_to_right_tabs" name="移到右侧标签页" />
       <Item id="navigation.right_tabs" name="右侧标签页 &gt;###right-drop" />
       <Item id="navigation.move_right_hint" name="长按页面后拖到此处，在右侧标签页中显示。" />
@@ -343,6 +345,9 @@
       <Item id="worker_charts_list" name="切换列表：一行一个图表" />
       <Item id="logs.phase_only" name="阶段：%s" />
       <Item id="stage2.curve_progress" name="当前曲线 %.1f%%（估计）" />
+      <Item id="stage2.curve_identity" name="曲线 #%llu / %llu" />
+      <Item id="stage2.paired" name="Stage2 · 双曲线并行" />
+      <Item id="stage2.stop_active" name="正在运行的 Stage2 曲线完成后停止" />
       <Item id="stage2.timing_source" name="Stage2区段时长来源" />
       <Item id="stage2.source.auto" name="上次运行 &gt; tune" />
       <Item id="stage2.source.previous" name="仅上次运行" />
