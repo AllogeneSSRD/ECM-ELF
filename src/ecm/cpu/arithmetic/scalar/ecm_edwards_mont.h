@@ -60,6 +60,8 @@ typedef struct { mp_limb_t l[ED_MONT_MAX_LIMBS]; } mont_t;
 typedef struct {
     mp_limb_t N[ED_MONT_MAX_LIMBS];   // 模数 limbs (nlimbs 有效, 其余 0)
     size_t nlimbs;                     // N 的实际 limb 数
+    bool mersenne;
+    unsigned mersenne_tail;
     mp_limb_t nprime0;                 // -N^{-1} mod 2^64
 #if ECM_MONT_USE_GMP_REDC
     mp_limb_t *ip;                     // N^{-1} mod B^nlimbs (供 mpn_redc_n)
@@ -77,13 +79,16 @@ static inline int mont_init(mont_ctx_t *ctx, const mpz_t N) {
     size_t nlimbs = (bits + GMP_NUMB_BITS - 1) / GMP_NUMB_BITS;
     if (nlimbs > ED_MONT_MAX_LIMBS) return -1;
     ctx->nlimbs = nlimbs;
+    ctx->mersenne = bits >= 2 && mpz_sgn(N) > 0 && mpz_scan0(N, 0) == bits;
+    ctx->mersenne_tail = static_cast<unsigned>(bits % GMP_NUMB_BITS);
 
     memset(ctx->N, 0, sizeof(ctx->N));
     size_t count = 0;
     mpz_export(ctx->N, &count, -1, sizeof(mp_limb_t), 0, 0, N);
 
     // nprime0 = -N0^{-1} mod 2^64
-    {
+    ctx->nprime0 = 0;
+    if (!ctx->mersenne) {
         mpz_t n0, mod;
         mpz_init(n0);
         mpz_import(n0, 1, -1, sizeof(mp_limb_t), 0, 0, &ctx->N[0]);  // n0 = N 的低 limb (64-bit)
@@ -96,12 +101,14 @@ static inline int mont_init(mont_ctx_t *ctx, const mpz_t N) {
         mpz_clear(mod);
     }
 
-    // R = 2^(nlimbs*64), one = R mod N, Rinv = R^{-1} mod N
+    // Mersenne folding works directly on ordinary residues (R=1).
+    // Other moduli use R = 2^(nlimbs*GMP_NUMB_BITS).
     mpz_init(ctx->Nz);
     mpz_set(ctx->Nz, N);
     mpz_init(ctx->R);
     mpz_set_ui(ctx->R, 1);
-    mpz_mul_2exp(ctx->R, ctx->R, (unsigned long)(nlimbs * GMP_NUMB_BITS));
+    if (!ctx->mersenne)
+        mpz_mul_2exp(ctx->R, ctx->R, (unsigned long)(nlimbs * GMP_NUMB_BITS));
     {
         mpz_t t;
         mpz_init(t);
@@ -116,7 +123,7 @@ static inline int mont_init(mont_ctx_t *ctx, const mpz_t N) {
 #if ECM_MONT_USE_GMP_REDC
     // n >= 79 时用 GMP 的次二次归约 mpn_redc_n, 需要 ip = N^{-1} mod B^n。
     ctx->ip = nullptr;
-    ctx->use_redc_n = (nlimbs >= ECM_MONT_REDC_N_THRESHOLD);
+    ctx->use_redc_n = !ctx->mersenne && nlimbs >= ECM_MONT_REDC_N_THRESHOLD;
     if (ctx->use_redc_n) {
         const mp_size_t n = (mp_size_t)nlimbs;
         const mp_size_t itch = ECM_MPN_binvert_itch(n);
@@ -150,8 +157,12 @@ static inline void mont_clear(mont_ctx_t *ctx) {
 static inline void mont_to(mont_t *r, const mpz_t a, const mont_ctx_t *ctx) {
     mpz_t t;
     mpz_init(t);
-    mpz_mul(t, a, ctx->R);
-    mpz_mod(t, t, ctx->Nz);
+    if (ctx->mersenne) {
+        mpz_mod(t, a, ctx->Nz);
+    } else {
+        mpz_mul(t, a, ctx->R);
+        mpz_mod(t, t, ctx->Nz);
+    }
     memset(r->l, 0, sizeof(r->l));
     size_t count = 0;
     mpz_export(r->l, &count, -1, sizeof(mp_limb_t), 0, 0, t);
@@ -160,6 +171,10 @@ static inline void mont_to(mont_t *r, const mpz_t a, const mont_ctx_t *ctx) {
 
 // 转换: r = a*R^{-1} mod N (出 Montgomery 域)
 static inline void mont_from(mpz_t r, const mont_t *a, const mont_ctx_t *ctx) {
+    if (ctx->mersenne) {
+        mpz_import(r, ctx->nlimbs, -1, sizeof(mp_limb_t), 0, 0, a->l);
+        return;
+    }
     mpz_t t;
     mpz_init(t);
     mpz_import(t, ctx->nlimbs, -1, sizeof(mp_limb_t), 0, 0, a->l);
@@ -169,8 +184,43 @@ static inline void mont_from(mpz_t r, const mont_t *a, const mont_ctx_t *ctx) {
     mpz_clear(t);
 }
 
-// REDC: t (2n limbs) -> r (n limbs), r = t * R^{-1} mod N.  Clobbers t.
+// Fold the carry at bit p and map the all-ones residue to zero.
+static inline void mont_finish_mersenne(mp_limb_t *r, mp_limb_t carry,
+                                       const mont_ctx_t *ctx) {
+    const mp_size_t n = (mp_size_t)ctx->nlimbs;
+    const mp_limb_t top_mask = ctx->N[n - 1];
+    if (ctx->mersenne_tail) {
+        carry = r[n - 1] >> ctx->mersenne_tail;
+        r[n - 1] &= top_mask;
+    }
+    // Only the rare carry into the second limb needs a propagation loop.
+    r[0] += carry;
+    if (r[0] < carry) mpn_add_1(r + 1, r + 1, n - 1, 1);
+    if (r[0] == ctx->N[0] && mpn_cmp(r, ctx->N, n) == 0) mpn_zero(r, n);
+}
+
+// t = lo + 2^p * hi. For canonical inputs, lo+hi <= 2N-1.
+static inline void mont_fold_mersenne(mp_limb_t *r, mp_limb_t *t, const mont_ctx_t *ctx) {
+    const mp_size_t n = (mp_size_t)ctx->nlimbs;
+    const unsigned tail = ctx->mersenne_tail;
+    mp_limb_t carry;
+    if (!tail) {
+        carry = mpn_add_n(r, t, t + n, n);
+    } else {
+        mp_limb_t hi[ED_MONT_MAX_LIMBS + 1];
+        mpn_rshift(hi, t + n - 1, n + 1, tail);
+        t[n - 1] &= ctx->N[n - 1];
+        carry = mpn_add_n(r, t, hi, n);
+    }
+    mont_finish_mersenne(r, carry, ctx);
+}
+
+// Product reduction: t (2n limbs) -> r (n limbs). Clobbers t.
 static inline void mont_redc(mp_limb_t *r, mp_limb_t *t, const mont_ctx_t *ctx) {
+    if (ctx->mersenne) {
+        mont_fold_mersenne(r, t, ctx);
+        return;
+    }
     const size_t n = ctx->nlimbs;
 #if ECM_MONT_USE_GMP_REDC
     if (ctx->use_redc_n) {
@@ -221,6 +271,10 @@ static inline void mont_add(mont_t *r, const mont_t *a, const mont_t *b,
                             const mont_ctx_t *ctx) {
     const size_t n = ctx->nlimbs;
     mp_limb_t c = mpn_add_n(r->l, a->l, b->l, n);
+    if (ctx->mersenne) {
+        mont_finish_mersenne(r->l, c, ctx);
+        return;
+    }
     if (c || mpn_cmp(r->l, ctx->N, n) >= 0) {
         mpn_sub_n(r->l, r->l, ctx->N, n);
     }
@@ -229,8 +283,14 @@ static inline void mont_add(mont_t *r, const mont_t *a, const mont_t *b,
 static inline void mont_sub(mont_t *r, const mont_t *a, const mont_t *b,
                             const mont_ctx_t *ctx) {
     const size_t n = ctx->nlimbs;
-    mp_limb_t b_ = mpn_sub_n(r->l, a->l, b->l, n);
-    if (b_) {
+    const mp_limb_t borrow = mpn_sub_n(r->l, a->l, b->l, n);
+    if (ctx->mersenne) {
+        // When borrowed, adding 2^p-1 is decrement and truncation.
+        const mp_limb_t low = r->l[0];
+        r->l[0] = low - borrow;
+        if (low < borrow) mpn_sub_1(r->l + 1, r->l + 1, n - 1, 1);
+        r->l[n - 1] &= ctx->N[n - 1];
+    } else if (borrow) {
         mpn_add_n(r->l, r->l, ctx->N, n);
     }
 }

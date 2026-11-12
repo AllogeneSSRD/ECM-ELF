@@ -25,9 +25,9 @@ enum Dataflow : unsigned {
     FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16,
     SegmentedCarry = 32, DeferredPack = 64, PfaRadix5 = 128, CoalescedRadix5 = 256,
     InverseWarpInput = 512, ForwardTileInput = 1024, ForwardTileCompact = 2048,
-    FusedWeightedCarry = 4096
+    FusedWeightedCarry = 4096, ShortInverseTile = 8192
 };
-inline constexpr unsigned experimental_dataflow_limit = (FusedWeightedCarry << 1) - 1;
+inline constexpr unsigned experimental_dataflow_limit = (ShortInverseTile << 1) - 1;
 
 struct Control {
     unsigned resume = 0;

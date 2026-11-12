@@ -125,23 +125,23 @@ __device__ __forceinline__ unsigned long long tile_warp5(unsigned long long v,
     return v;
 }
 
-template <bool INVERSE>
+template <bool INVERSE, int Bits = 6>
 __device__ __forceinline__ void tile_warp6_pair(unsigned long long &lo, unsigned long long &hi,
-                                              const unsigned long long *tbl)
+                                              const unsigned long long *tbl, unsigned mask = 0xffffffffu)
 {
     const unsigned int lane=threadIdx.x&31;
     #pragma unroll
-    for(int q=0;q<6;++q) {
-        const int st=INVERSE ? q : 5-q;
+    for(int q=0;q<Bits;++q) {
+        const int st=INVERSE ? q : Bits-1-q;
         const unsigned int half=1u<<st, j=lane&(half-1);
         const auto w=__ldg(tbl+(half-1)+j);
         const auto u=lo, v=INVERSE ? tile_warp_twiddle(hi,w,st) : hi;
         lo=gl_add_dev(u,v);
         hi=INVERSE ? gl_sub_dev(u,v) : tile_warp_twiddle(gl_sub_dev(u,v),w,st);
-        if(INVERSE ? st<5 : st>0) {
-            const unsigned int mask=1u<<(INVERSE ? st : st-1);
-            const bool lower=(lane&mask)==0;
-            const auto peer=__shfl_xor_sync(0xffffffffu,lower ? hi : lo,mask);
+        if(INVERSE ? st<Bits-1 : st>0) {
+            const unsigned int distance=1u<<(INVERSE ? st : st-1);
+            const bool lower=(lane&distance)==0;
+            const auto peer=__shfl_xor_sync(mask,lower ? hi : lo,distance);
             lo=lower ? lo : peer; hi=lower ? peer : hi;
         }
     }

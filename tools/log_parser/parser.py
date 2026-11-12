@@ -35,8 +35,10 @@ ECM_RE = re.compile(
 # exponent, so we must track the worker's *current* FFT across all three kinds.
 FFT_LINE_RE = re.compile(
     r"(?P<kind>Using|Switching to|Switching back to) "
-    r"(?P<type>[\w+-]+) FFT length (?P<len>\d+)"
+    r"(?:(?P<reduction>Barrett reduction) )?"
+    r"(?P<type>[\w+-]+) FFT length (?P<len>\d+)(?P<unit>[KMG]?)\b"
 )
+FFT_UNIT = {"": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
 
 B2_RE = re.compile(
     r"Actual B2 will be (?P<b2>\d+).*?Curve is worth (?P<worth>\d+(?:\.\d+)?)"
@@ -124,7 +126,10 @@ def parse_log(text):
         # "Switching to" inside an open run, record the run's S2 FFT.
         fft = FFT_LINE_RE.search(msg)
         if fft:
-            ftype, flen = fft.group("type"), int(fft.group("len"))
+            ftype = fft.group("type")
+            if fft.group("reduction"):
+                ftype = f'{fft.group("reduction")} {ftype}'
+            flen = int(fft.group("len")) * FFT_UNIT[fft.group("unit")]
             current_fft[wnum] = (ftype, flen)
             run = open_run.get(wnum)
             if (

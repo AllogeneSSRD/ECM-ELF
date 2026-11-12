@@ -254,9 +254,9 @@ gpu_algorithm = "cgbn"
 
 Type / 类型: `int|string`; range / 范围: `[1|2|cgbn|ntt]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–32 curves. Edwards NTT requires naf_w=0.
+Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. Edwards NTT requires naf_w=0.
 
-GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–32 条曲线。Edwards NTT 要求 naf_w=0。
+GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards NTT 要求 naf_w=0。
 
 ### gpu_param
 

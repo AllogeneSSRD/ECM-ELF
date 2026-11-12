@@ -132,9 +132,9 @@ finished = "worktodo.finished.txt"
 
 gpu_algorithm = "cgbn"
 # EN: Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery
-# EN: PARAM0 on full Mersenne moduli, with 1–32 curves. Edwards NTT requires naf_w=0.
+# EN: PARAM0 on full Mersenne moduli, with 1–128 curves. Edwards NTT requires naf_w=0.
 # 中文：GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整
-# 中文：梅森模数和 1–32 条曲线。Edwards NTT 要求 naf_w=0。
+# 中文：梅森模数和 1–128 条曲线。Edwards NTT 要求 naf_w=0。
 
 gpu_param = 3
 # EN: GPU Stage1 curve parametrization. CUDA Stage2 consumes param0 saves; select 0 for that handoff.

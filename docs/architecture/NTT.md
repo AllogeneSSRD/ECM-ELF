@@ -62,6 +62,8 @@ flowchart LR
 
 启用 warp 尾段且 tile 至少有六层时，Stage1 逆变换以 64 个系数为一组。每个 lane 从对齐地址读取相邻的两个频谱系数，在寄存器中完成逐点乘加与六层 DIT。lane `j` 的两个结果对应组内 `j` 和 `j+32`。六层 tile 直接写回，动态共享内存为 0。更大 tile 只把六层结果写入共享内存，经过一次块同步，再执行余下的 DIT。逆向块线程数为 \(\min(512,2^{t-1})\)，其中 \(t\) 是 tile 层数。计划日志分别列出前向和逆向块宽与动态共享内存。见 [频谱成对读取](../../kernels/cuda/stage1_ntt_dataflow.cuh)、[剩余 DIT 层](../../src/ecm/cuda/ntt/device/tile_pass.cuh) 和 [吞吐对照](../performance/STAGE1_MERSENNE_NTT.md#逆向-warp-输入融合与块宽)。
 
+完整的 2–32 点二次幂逆变换可在一个 warp 的子组内结束。每线程对相邻两个频点乘加，交换寄存器中的蝶形输入，再写出该子组的两半结果。一个块负责一条曲线在一个输出上的逆变换。活跃批量达到 64 时，同一块处理两条曲线，有两个输出的阶段仍可发射至少 64 块。每组使用 `L/2` 个线程，动态共享内存为 0。尾块的 ballot 掩码只包含有效子组。单曲线 16 点以及线性 32 点采用共享内存 tile。见 [短逆变换内核](../../kernels/cuda/stage1_ntt_dataflow.cuh#L174) 与 [设备调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L432)。
+
 ## 数学合同
 
 域素数 q=2⁶⁴−2³²+1，支持长度 L=2ᵏ、k≤32 的单位根。项目以精确整数 NTT 实现系数多项式乘法，不依赖浮点误差控制。Goldilocks 模数 q 与待分解整数 N、算术承载 M 相互独立。

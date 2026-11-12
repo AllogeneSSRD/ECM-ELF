@@ -432,8 +432,9 @@ static void ifma_cios(uint64_t *out, const uint64_t *a, const uint64_t *b,
  * Three passes, all O(n) vector ops except the product:
  *   1. product    : n rows; row i accumulates columns [i, i+n] with the same
  *                   register-carried sliding window as ifma_cios, 2n madds.
- *                   Columns are 64-bit lazy: column c receives at most n
- *                   products of 52 bits, so it cannot overflow.
+ *                   A column receives up to 2n-1 low/high 52-bit parts.
+ *                   Wide products drain carry periodically before the
+ *                   64-bit accumulator can wrap.
  *   2. normalize  : carry chain over the 2n product columns.
  *   3. fold       : columns n..2n-1 (and the carry) move down by n columns and
  *                   sh bits, then the bits >= k of limb n-1 and any carry out
@@ -470,6 +471,17 @@ static inline __m512i ifma_carry_pass(uint64_t *t, size_t from, size_t to,
         _mm512_store_si512((__m512i *)(t + 8 * k), _mm512_and_si512(v, mask));
     }
     return carry;
+}
+
+static constexpr size_t max_lazy_rows = 2048;
+static constexpr size_t carry_row_interval = 1024;
+
+static inline void ifma_carry_wide_rows(uint64_t* t, size_t n, size_t rows, __m512i zero, __m512i mask)
+{
+    // Each row adds at most two 52-bit parts to any column. The partial
+    // product is nonnegative and below 2^(104*n), so the top carry is zero.
+    if (n > max_lazy_rows && rows % carry_row_interval == 0)
+        ifma_carry_pass(t, 0, 2 * n, zero, mask);
 }
 
 /* shared tail of both fold kernels (defined after ifma_mersenne_mul) */
@@ -530,6 +542,7 @@ static void ifma_mersenne_mul(uint64_t *out, const uint64_t *a, const uint64_t *
             _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (i + n))), h0));
         _mm512_store_si512((__m512i *)(t + 8 * (i + 1 + n)),
             _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (i + 1 + n))), h1));
+        ifma_carry_wide_rows(t, n, i + 2, zero, mask);
     }
     if (i < n) {                                    /* odd n: one row left */
         const __m512i ai = _mm512_load_si512((const __m512i *)(a + 8 * i));
@@ -722,7 +735,10 @@ static void ifma_mersenne_sqr(uint64_t *out, const uint64_t *a, const ifma_ctx_t
             _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (i + n))), h0));
         _mm512_store_si512((__m512i *)(t + 8 * (i + 1 + n)),
             _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (i + 1 + n))), h1));
+        ifma_carry_wide_rows(t, n, i + 2, zero, mask);
     }
+
+    if (n > max_lazy_rows) ifma_carry_pass(t, 0, 2 * n, zero, mask);
 
     /* ---- double the off-diagonal part, add the diagonal, normalize -------
        One pass instead of three.  The doubling must not touch the diagonal, so the
@@ -733,8 +749,8 @@ static void ifma_mersenne_sqr(uint64_t *out, const uint64_t *a, const ifma_ctx_t
        exactly the `top` digit the tail wants -- so ifma_mersenne_fold_top() is
        called directly and the tail's own normalize pass is skipped.
 
-       Bounds: t[k] holds at most ~n/2 accumulated lo parts (< 2^57 at n52=58), so
-       2*t[k] + carry + a_q^2 part stays below 2^58 and the 64-bit add cannot wrap.
+       The doubled triangle and diagonal contain at most 2n-1 low/high
+       parts per column. Wider triangles are normalized before doubling.
        Unrolled by two columns to keep the lo/hi selection out of the loop body;
        2n is even, so there is no tail. */
     __m512i cy = zero;

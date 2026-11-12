@@ -13,6 +13,19 @@ add_executable(stage1_selection_test stage1_selection_test.cpp
 target_include_directories(stage1_selection_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 ecm_tool_output_root(stage1_selection_test)
 
+set(_ifma_arithmetic ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp)
+add_executable(cpu_stage1_field_check cpu_stage1_field_check.cpp ${_ifma_arithmetic})
+target_include_directories(cpu_stage1_field_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+ecm_target_link_gmp(cpu_stage1_field_check)
+ecm_tool_output_root(cpu_stage1_field_check)
+if(MSVC)
+    target_compile_options(cpu_stage1_field_check PRIVATE /utf-8)
+    set_source_files_properties(${_ifma_arithmetic} PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
+else()
+    set_source_files_properties(${_ifma_arithmetic} PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
+endif()
+unset(_ifma_arithmetic)
+
 add_executable(stage1_checkpoint_rotation_test
     stage1_checkpoint_rotation_test.cpp
     ${CMAKE_SOURCE_DIR}/src/ecm/stage1/montgomery/opencl/checkpoint.cpp

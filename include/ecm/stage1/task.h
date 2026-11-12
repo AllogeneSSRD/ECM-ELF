@@ -1,4 +1,5 @@
 #pragma once
+#include "ecm/stage1/ntt_length.h"
 #include "ecm/stage1/selection.h"
 #include <gmp.h>
 #include <cstdint>
@@ -11,8 +12,6 @@ namespace ecm_save { struct Range; struct Naming; }
 namespace ecm_stage1 {
 
 // Resolved per-task values, separated by the responsibilities that consume them.
-inline constexpr unsigned stage1_ntt_max_curves = 32;
-
 struct Stage1NttOptions {
     unsigned length = 0, bpw = 0, tile = 0, outer_max = 0;
     unsigned profile = 0;

@@ -195,8 +195,8 @@ def main():
     parser.add_argument("--exponents", type=int, nargs="+", default=EXPONENTS)
     parser.add_argument("--curves", type=int, nargs="+", default=(1, 4, 8))
     args = parser.parse_args()
-    if args.rounds < 1 or not all(1 <= n <= 32 for n in args.curves):
-        parser.error("use at least one round and 1–32 curves")
+    if args.rounds < 1 or not all(1 <= n <= 128 for n in args.curves):
+        parser.error("use at least one round and 1–128 curves")
     args.exe, args.output = args.exe.resolve(strict=True), args.output.resolve()
     if args.probe:
         args.probe = args.probe.resolve(strict=True)

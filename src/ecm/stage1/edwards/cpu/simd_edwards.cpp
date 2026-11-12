@@ -123,8 +123,8 @@ static uint64_t *arena_slot(ed_soa_ctx_t *c, int idx)
     return c->arena + (size_t)idx * 8 * c->n;
 }
 
-/* r = 2p : 4 sqr + 4 mul (a = 1 case). */
-static void ed_soa_dbl(ed_soa_ctx_t *c, soa_pt r, const soa_pt p)
+/* r = 2p (a = 1). T is only computed for an extended result. */
+static void ed_soa_dbl(ed_soa_ctx_t *c, soa_pt r, const soa_pt p, bool extended = true)
 {
     const ifma_ctx_t *mc = &c->mc;
     uint64_t *A = arena_slot(c, 0), *B = arena_slot(c, 1), *C = arena_slot(c, 2);
@@ -137,14 +137,13 @@ static void ed_soa_dbl(ed_soa_ctx_t *c, soa_pt r, const soa_pt p)
     soa_add(C, C, C, mc);                     /* C = 2Z^2 */
     soa_add(t, p.x, p.y, mc);
     ifma_mont_sqr(E, t, mc);
-    soa_sub(E, E, A, o, mc);
-    soa_sub(E, E, B, o, mc);                  /* E = (X+Y)^2 - A - B */
     soa_add(G, A, B, mc);                     /* G = A + B */
+    soa_sub(E, E, G, o, mc);                  /* E = (X+Y)^2 - G */
     soa_sub(F, G, C, o, mc);                  /* F = G - C */
     soa_sub(H, A, B, o, mc);                  /* H = A - B */
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
-    ifma_mont_mul(r.t, E, H, mc);
+    if (extended) ifma_mont_mul(r.t, E, H, mc);
     ifma_mont_mul(r.z, F, G, mc);
 }
 
@@ -177,7 +176,8 @@ static void ed_soa_add(ed_soa_ctx_t *c, soa_pt r, const soa_pt p, const soa_pt q
 
 /* r = p + q where q = (x, y, dxy = d*x*y) is affine: 7 mul. */
 static void ed_soa_add_affine(ed_soa_ctx_t *c, soa_pt r, const soa_pt p,
-                              const uint64_t *qx, const uint64_t *qy, const uint64_t *qdxy)
+                              const uint64_t *qx, const uint64_t *qy, const uint64_t *qdxy,
+                              bool extended = true)
 {
     const ifma_ctx_t *mc = &c->mc;
     uint64_t *A = arena_slot(c, 0), *B = arena_slot(c, 1), *C = arena_slot(c, 2);
@@ -197,7 +197,7 @@ static void ed_soa_add_affine(ed_soa_ctx_t *c, soa_pt r, const soa_pt p,
     soa_sub(H, B, A, o, mc);
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
-    ifma_mont_mul(r.t, E, H, mc);
+    if (extended) ifma_mont_mul(r.t, E, H, mc);
     ifma_mont_mul(r.z, F, G, mc);
 }
 
@@ -1062,6 +1062,8 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
     const size_t start = (c->resume_digit < total) ? c->resume_digit : 0;
 
     const int dbg = getenv("ED_SOA_DEBUG") != NULL;
+    const char* dump_env = dbg ? getenv("ED_SOA_DUMP_STEP") : nullptr;
+    const long dump_step = dump_env ? atol(dump_env) : 0;
     if (dbg) {
         size_t nz = 0;
         for (size_t i = 0; i < total; i++) if (digits[i] != 0) nz++;
@@ -1081,8 +1083,12 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
                 return 1;
             }
         }
-        ed_soa_dbl(c, R, R);
         const int dgt = digits[total - 1 - i];
+        const bool dump = dump_step > 0 && i % size_t(dump_step) == 0;
+        const bool trace_point = dump || (dbg && total <= 8);
+        // Checkpoint and final projection only use X/Y/Z. A full trace still
+        // gets a valid extended point after every printed digit.
+        ed_soa_dbl(c, R, R, dgt != 0 || trace_point);
         if (dgt != 0) {
             const size_t idx = (size_t)(dgt > 0 ? dgt : -dgt) - 1;
             const size_t j = idx / 2;
@@ -1092,13 +1098,13 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
                         i, dgt, j, (unsigned long long)(base[0] & IFMA_M52));
             if (dgt > 0) {
                 ed_soa_add_affine(c, R, R, base + 0 * lane_words, base + 1 * lane_words,
-                                  base + 2 * lane_words);
+                                  base + 2 * lane_words, trace_point);
             } else {
                 /* (-x, y, -dxy) */
                 soa_neg(nx, base + 0 * lane_words, mc);
                 soa_copy(ny, base + 1 * lane_words, mc);
                 soa_neg(nd, base + 2 * lane_words, mc);
-                ed_soa_add_affine(c, R, R, nx, ny, nd);
+                ed_soa_add_affine(c, R, R, nx, ny, nd, trace_point);
             }
         }
         if (dbg && (i < 5 || (i % 500) == 0))
@@ -1107,9 +1113,7 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
         /* ED_SOA_DUMP_STEP=N: full point of lane 0 every N digits (debugging a
            divergence against an external reference ladder). */
         {
-            static const char *dump_env = getenv("ED_SOA_DUMP_STEP");
-            const long dump_step = dump_env ? atol(dump_env) : 0;
-            if (dbg && dump_step > 0 && (i % (size_t)dump_step) == 0) {
+            if (dump) {
                 mpz_t vx, vy, vz, vt;
                 mpz_inits(vx, vy, vz, vt, NULL);
                 ifma_to_mpz_lane(vx, R.x, 0, mc);

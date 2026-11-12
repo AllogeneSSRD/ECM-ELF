@@ -520,7 +520,8 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
             return true;
         }
         if (curves > ecm_stage1::stage1_ntt_max_curves) {
-            error = "Stage1 NTT supports at most 32 curves per batch";
+            error = "Stage1 NTT supports at most " +
+                std::to_string(ecm_stage1::stage1_ntt_max_curves) + " curves per batch";
             return true;
         }
         if (modulus) {

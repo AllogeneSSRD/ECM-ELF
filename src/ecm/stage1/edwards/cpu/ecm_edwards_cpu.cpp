@@ -245,7 +245,8 @@ static void naf_digits(const mpz_t k, int w, std::vector<int> &digits) {
 struct ed_point_mont { mont_t x, y, z, t; };
 struct ed_affine_mont { mont_t x, y, dxy; };
 
-static void ed_dbl_mont(ed_point_mont &r, const ed_point_mont &p, const mont_ctx_t *ctx) {
+static void ed_dbl_mont(ed_point_mont &r, const ed_point_mont &p, const mont_ctx_t *ctx,
+                        bool extended = true) {
     mont_t A, B, C, E, F, G, H, t;
     mont_sqr(&A, &p.x, ctx);
     mont_sqr(&B, &p.y, ctx);
@@ -253,14 +254,13 @@ static void ed_dbl_mont(ed_point_mont &r, const ed_point_mont &p, const mont_ctx
     mont_add(&C, &C, &C, ctx);              // C = 2Z^2
     mont_add(&t, &p.x, &p.y, ctx);
     mont_sqr(&E, &t, ctx);
-    mont_sub(&E, &E, &A, ctx);
-    mont_sub(&E, &E, &B, ctx);              // E = (X+Y)^2 - A - B
     mont_add(&G, &A, &B, ctx);              // G = A + B  (=D+B, a=1)
+    mont_sub(&E, &E, &G, ctx);              // E = (X+Y)^2 - G
     mont_sub(&F, &G, &C, ctx);              // F = G - C
     mont_sub(&H, &A, &B, ctx);              // H = A - B  (=D-B)
     mont_mul(&r.x, &E, &F, ctx);
     mont_mul(&r.y, &G, &H, ctx);
-    mont_mul(&r.t, &E, &H, ctx);
+    if (extended) mont_mul(&r.t, &E, &H, ctx);
     mont_mul(&r.z, &F, &G, ctx);
 }
 
@@ -287,7 +287,7 @@ static void ed_add_mont(ed_point_mont &r, const ed_point_mont &p, const ed_point
 }
 
 static void ed_add_affine_mont(ed_point_mont &r, const ed_point_mont &p, const ed_affine_mont &q,
-                               const mont_ctx_t *ctx) {
+                               const mont_ctx_t *ctx, bool extended) {
     mont_t A, B, C, E, F, G, H, t;
     mont_mul(&A, &p.x, &q.x, ctx);
     mont_mul(&B, &p.y, &q.y, ctx);
@@ -302,7 +302,7 @@ static void ed_add_affine_mont(ed_point_mont &r, const ed_point_mont &p, const e
     mont_sub(&H, &B, &A, ctx);
     mont_mul(&r.x, &E, &F, ctx);
     mont_mul(&r.y, &G, &H, ctx);
-    mont_mul(&r.t, &E, &H, ctx);
+    if (extended) mont_mul(&r.t, &E, &H, ctx);
     mont_mul(&r.z, &F, &G, ctx);
 }
 
@@ -453,18 +453,21 @@ static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const m
         size_t chunk_end = total;
         if (chunk_bits != 0 && done + chunk_bits < total) chunk_end = done + chunk_bits;
         for (; done < chunk_end; done++) {
-            ed_dbl_mont(Rm, Rm, &mc);
             const int dgt = digits[total - 1 - done];
+            // The next doubling and checkpoint only read X/Y/Z. The caller
+            // also gets T when the scalar multiplication finishes.
+            const bool last = done + 1 == total;
+            ed_dbl_mont(Rm, Rm, &mc, dgt != 0 || last);
             if (dgt != 0) {
                 const int a = dgt > 0 ? dgt : -dgt;
                 const size_t idx = (size_t)(a - 1) / 2;
                 if (dgt > 0) {
-                    ed_add_affine_mont(Rm, Rm, aff[idx], &mc);
+                    ed_add_affine_mont(Rm, Rm, aff[idx], &mc, last);
                 } else {
                     mont_neg(&neg.x, &aff[idx].x, &mc);
                     mont_set(&neg.y, &aff[idx].y, &mc);
                     mont_neg(&neg.dxy, &aff[idx].dxy, &mc);
-                    ed_add_affine_mont(Rm, Rm, neg, &mc);
+                    ed_add_affine_mont(Rm, Rm, neg, &mc, last);
                 }
             }
         }

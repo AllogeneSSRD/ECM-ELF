@@ -193,7 +193,7 @@ inline void validate_stage1_ntt(const Fields &s) {
        (mixed ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
         throw std::runtime_error("invalid Stage1 NTT length");
     const Word radix2_log=mixed ? log-2 : log;
-    if(!batch || batch>32 || !bpw || bpw>31 || (tile==0)!=(radix2_log==0) ||
+    if(!batch || batch>ecm_stage1::stage1_ntt_max_curves || !bpw || bpw>31 || (tile==0)!=(radix2_log==0) ||
        tile>std::min(radix2_log,Word(12)) || !radix || radix>4 ||
        !uint(s,"passes_forward") || uint(s,"passes_forward")>radix2_log+mixed ||
        uint(s,"graph_bits")>64 || uint(s,"warp_tail")>1 || !uint(s,"repeats") ||

@@ -7,6 +7,7 @@
 #include "../../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
 #include "../../../../../../kernels/cuda/stage1_ntt_layout.cuh"
 #include "../../../../../../kernels/cuda/stage1_ntt_segments.cuh"
+#include <array>
 #include <stdexcept>
 #include <type_traits>
 
@@ -337,7 +338,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemGetInfo(&free_before, &total));
     Run result;
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
-                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput;
+                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput | ShortInverseTile;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
     // The mixed pack can consume the segment carries directly. The 5120
@@ -428,12 +429,20 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
     const bool inverse_warp_input = warp_tile && ctx.t >= 6 && (requested & InverseWarpInput);
+    // The shared tile still wins for isolated 16-point and linear 32-point work.
+    const bool short_shape = curves > 1 || s.length <= 8 ||
+                             (s.length == 32 && options.weighted) ||
+                             (control && control->experimental_dataflow.has_value());
+    const bool short_inverse = ctx.warp_tail && (requested & ShortInverseTile) &&
+                               !mixed && ctx.nms == 0 && ctx.t <= 5 && short_shape;
+    const unsigned inverse_rows = curves >= 64 ? 2 : 1;
     // Each lane loads two coefficients. Small tiles need only those warps.
-    const unsigned inverse_threads = inverse_warp_input
+    const unsigned inverse_threads = short_inverse ? inverse_rows * (s.length / 2) : inverse_warp_input
         ? std::min(unsigned(FUSE_TILE_THREADS), 1u << (ctx.t - 1)) : FUSE_TILE_THREADS;
     if (inverse_warp_input) result.dataflow |= InverseWarpInput;
+    if (short_inverse) result.dataflow |= ShortInverseTile;
     const size_t tile_smem = sizeof(U) << ctx.t;
-    const size_t inverse_smem = inverse_warp_input && ctx.t == 6 ? 0 : tile_smem;
+    const size_t inverse_smem = short_inverse || (inverse_warp_input && ctx.t == 6) ? 0 : tile_smem;
     const bool packed = (requested & PackedForward) && !mixed && ctx.nms == 0;
     const bool default_forward = control && !control->experimental_dataflow.has_value();
     const bool packed_batch = packed && curves >= 24;
@@ -467,7 +476,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                   forward_threads, unsigned(forward_smem), inverse_threads, unsigned(inverse_smem),
                   ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
-                  warp_tile, profile.source, options.weighted, {}, {}, result.dataflow};
+                  warp_tile || short_inverse, profile.source, options.weighted, {}, {}, result.dataflow};
         if (mixed) plan.forward = "r5";
         for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
         join(plan.forward, ctx.t);
@@ -503,10 +512,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
         CK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(inverse_smem)));
     };
-    configure_tile(std::false_type{},std::false_type{});
-    if (loose && fma) configure_tile(std::true_type{},std::true_type{});
-    else if (loose) configure_tile(std::false_type{},std::true_type{});
-    else if (fma) configure_tile(std::true_type{},std::false_type{});
+    if (!short_inverse) {
+        configure_tile(std::false_type{},std::false_type{});
+        if (loose && fma) configure_tile(std::true_type{},std::true_type{});
+        else if (loose) configure_tile(std::false_type{},std::true_type{});
+        else if (fma) configure_tile(std::true_type{},std::false_type{});
+    }
     ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
@@ -660,7 +671,18 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         const dim3 tiles(s.length >> ctx.t, curves, outputs);
         const auto invert = [&](auto add, auto difference) {
             constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
-            if (inverse_warp_input)
+            if (short_inverse) {
+                const dim3 groups((curves + inverse_rows - 1) / inverse_rows, outputs);
+                const std::array kernels{
+                    stage1_ntt_short_inverse<1,add_bb,loose_e,ProductInputs>,
+                    stage1_ntt_short_inverse<2,add_bb,loose_e,ProductInputs>,
+                    stage1_ntt_short_inverse<3,add_bb,loose_e,ProductInputs>,
+                    stage1_ntt_short_inverse<4,add_bb,loose_e,ProductInputs>,
+                    stage1_ntt_short_inverse<5,add_bb,loose_e,ProductInputs>,
+                };
+                auto kernel = kernels[ctx.t - 1];
+                kernel<<<groups,inverse_threads,0,q>>>(inverse.data,products,curves,ctx.tblI,product_scale);
+            } else if (inverse_warp_input)
                 inverse_product_tile<true,add_bb,loose_e,true><<<tiles,inverse_threads,inverse_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
             else if (warp_tile)

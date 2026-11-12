@@ -30,9 +30,7 @@ def measure(values):
                 mean=statistics.mean(values), min=min(values), max=max(values))
 
 
-def input_scope(path):
-    """Worktodo identifies the intended integers, not proof of logged factors."""
-    scope = {}
+def ecm_work_rows(path):
     for line in path.read_text(encoding="utf-8-sig").splitlines():
         if not line.startswith(("ECM=", "ECM2=")):
             continue
@@ -40,6 +38,13 @@ def input_scope(path):
         k, base, exponent, c = map(int, fields[:4])
         if (k, base, c) != (1, 2, -1):
             raise ValueError("Only Mersenne work lines are supported")
+        yield exponent, fields
+
+
+def input_scope(path):
+    """Worktodo identifies the intended integers, not proof of logged factors."""
+    scope = {}
+    for exponent, fields in ecm_work_rows(path):
         factors = [int(f) for f in fields[-1].split(",")]
         if not factors or any(f <= 1 for f in factors):
             raise ValueError("Invalid known factors")
@@ -54,6 +59,44 @@ def input_scope(path):
     if not scope:
         raise ValueError("No ECM inputs in worktodo")
     return scope
+
+
+def stage1_plot_points(worktodo, log, curve_type, target_b1):
+    """Scale a Stage1-only supplement to the main chart's reference bound."""
+    expected = {}
+    for p, fields in ecm_work_rows(worktodo):
+        b1, b2, curves = map(int, fields[4:7])
+        if p in expected or b1 <= 0 or b2 != b1 or curves <= 0:
+            raise ValueError(f"Expected one Stage1-only work row for M{p}")
+        expected[p] = (b1, curves)
+    if not expected:
+        raise ValueError("No ECM inputs in supplemental worktodo")
+    source = log.read_text(encoding="utf-8-sig")
+    samples, workers, seen = defaultdict(list), set(), set()
+    for run in parse_log(source):
+        seconds = run["s1_time"]
+        if seconds is None:
+            continue
+        p = run["exponent"]
+        if p not in expected or run["curve_type"] != curve_type or run["b1"] != expected[p][0]:
+            raise ValueError(f"Stage1 timer for M{p} does not match the supplemental worktodo or curve type")
+        key = (p, run["s"])
+        if key in seen or not math.isfinite(seconds) or seconds <= 0:
+            raise ValueError(f"Duplicate or invalid supplemental Stage1 timer for M{p}")
+        seen.add(key)
+        workers.add(run["worker"])
+        samples[p].append(seconds * target_b1 / run["b1"])
+    if len(workers) != 1:
+        raise ValueError("Expected a single Prime95 worker in the supplemental log")
+    if len(re.findall(r"Stage 1 complete\..*?Total time:", source)) != len(seen):
+        raise ValueError("Not all supplemental Stage1 timers were attributed to curves")
+    points = []
+    for p, (_, curves) in sorted(expected.items()):
+        values = samples[p]
+        if len(values) != curves:
+            raise ValueError(f"Expected {curves} completed Stage1 timers for M{p}, got {len(values)}")
+        points.append((p, p, statistics.median(values), min(values), max(values)))
+    return points
 
 
 def analyze(sources, scope, cpu_ghz, program_version, target_bounds, curve_type="Edwards"):

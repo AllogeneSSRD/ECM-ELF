@@ -3,8 +3,8 @@
 Uses the separately reported loop_gpu_ms CUDA event sum, excluding the NAF
 dictionary, setup, coordinate readback, result checks and publication. CPU
 comparison is a throughput proxy against the native Prime95 Stage1 timer.
-Montgomery logs provide a global event interval including setup, which is
-reported separately and must not be relabelled as a main-loop measurement.
+Standard Montgomery logs provide a global interval including setup.
+An instrumented run can supply a separate main-loop event sum.
 """
 from __future__ import annotations
 
@@ -144,7 +144,7 @@ def parse_batches(text, references, sm_count):
                 queue_interrupted="STOP: queue interrupted" in text)
 
 
-def parse_mont_batches(text, references, sm_count):
+def parse_mont_batches(text, references, sm_count, *, loop_timing=False):
     """Select PARAM0 tasks, binding each one to its own preceding session header."""
     lines = text.splitlines()
     starts = [i for i, line in enumerate(lines) if "START: ECMSTAGE1=" in line]
@@ -198,9 +198,20 @@ def parse_mont_batches(text, references, sm_count):
             raise ValueError("Montgomery target width, carry margin or TPI/B1 mismatch")
         if int(native_sms) != sm_count or blocks != 2 * sm_count or curves != blocks * (tpb // tpi):
             raise ValueError("Expected two launched blocks per SM")
-        seconds = float(times[0][1]) / 1000
-        if not math.isfinite(seconds) or seconds <= 0:
+        global_seconds = float(times[0][1]) / 1000
+        if not math.isfinite(global_seconds) or global_seconds <= 0:
             raise ValueError("Invalid global timer")
+        seconds = global_seconds
+        loop_metrics = {}
+        if loop_timing:
+            loops = re.findall(r"GPU Montgomery ladder: loop_gpu_ms=([\d.]+) scalar_bits=(\d+) launches=(\d+)", segment)
+            if len(loops) != 1:
+                raise ValueError(f"Expected a dedicated Montgomery loop timer for M{exponent}")
+            seconds = float(loops[0][0]) / 1000
+            scalar_bits, launches = map(int, loops[0][1:])
+            if not 0 < seconds <= global_seconds or not 0 < launches <= scalar_bits:
+                raise ValueError(f"Inconsistent Montgomery timing for M{exponent}")
+            loop_metrics = dict(gpu_loop_batch_seconds=seconds, scalar_bits=scalar_bits, launches=launches)
         s = cpu["measured"]
         if s["n"] != 3 or s["median"] <= 0:
             raise ValueError("Expected three completed CPU reference observations")
@@ -209,7 +220,7 @@ def parse_mont_batches(text, references, sm_count):
                          native_gpu_model=native_model, program_version=versions[-1],
                          samples=1, b1=b1, curves=curves, tpi=tpi, tpb=tpb,
                          container_bits=container, blocks=blocks,
-                         gpu_global_batch_seconds=seconds,
+                         gpu_global_batch_seconds=global_seconds, **loop_metrics,
                          measured_gpu_seconds_per_curve=seconds / curves,
                          projection_to_b1_1e6=1_000_000 / b1,
                          projected_gpu_seconds_per_curve_1e6=projected,

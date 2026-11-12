@@ -17,7 +17,7 @@ def main():
     args = parser.parse_args()
     exe, out = args.exe.resolve(strict=True), args.output.resolve()
     out.mkdir(parents=True)
-    p, b1, curves = 4423, 32, 16
+    p, b1, curves = 4423, 32, 128
     database = out / "tune.toml"
     database.write_text('''[profile]
 format = 13
@@ -82,7 +82,7 @@ matrix = [
     assert stage2["iter_per_s"] == 100
     for index, mode in enumerate(("linear", "weighted")):
         group = [r for r in rows if r["ntt_type"] == f"stage1_{mode}"]
-        assert {1, 32} <= {r["batch"] for r in group}
+        assert {1, 128} <= {r["batch"] for r in group}
         assert all(r["length"] == 1 << r["log2_length"] and
                    0 < r["owned_bytes"] <= r["peak_bytes"] <= r["budget_bytes"] and
                    r["program_version"] and r["updated_at"].endswith("Z") for r in group)
@@ -122,7 +122,7 @@ matrix = [
     print("PASS full tune compares all three eligible plans in length order", flush=True)
 
     limited = fixture + 'ntt_convolution = "linear"\nntt_memory_mib = 1\n'
-    log = run("low_budget", ["-gpucurves", "32", "-sigma", "26", "20"],
+    log = run("low_budget", ["-gpucurves", "128", "-sigma", "26", "20"],
               cfg=limited, expression="2^262139-1\n", ok=False)
     assert "VRAM budget" in log
     print("PASS bounded VRAM refusal", flush=True)

@@ -167,3 +167,33 @@ __device__ __forceinline__ ulonglong2 stage1_ntt_product_pair(const Inputs& inpu
     return scale == 1 ? make_ulonglong2(lo, hi)
                       : make_ulonglong2(gl_mul(lo, scale), gl_mul(hi, scale));
 }
+
+// Full inverse tiles of at most 32 points. A subgroup reads adjacent pairs
+// and writes the two output halves without visiting shared memory.
+template<int Bits, bool MultiplyAdd, bool Loose, class Inputs>
+__global__ void stage1_ntt_short_inverse(unsigned long long* out,
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    const __grid_constant__ Inputs products,
+#else
+    const Inputs products,
+#endif
+    unsigned curves, const unsigned long long* twiddles, unsigned long long scale)
+{
+    constexpr unsigned length = 1u << Bits;
+    constexpr unsigned half = length / 2;
+    const unsigned op = blockIdx.y;
+    const unsigned curve = (blockIdx.x * blockDim.x + threadIdx.x) / half;
+    const unsigned mask = __ballot_sync(__activemask(), curve < curves);
+    if (curve >= curves) return;
+    const unsigned lane = threadIdx.x & (half - 1);
+    const size_t base = size_t(curve) * length;
+    const unsigned pair = 2 * lane;
+    const auto index = base + pair;
+    auto v = stage1_ntt_product_pair<MultiplyAdd, Loose>(
+        products, products.left[op] + index, products.right[op] + index, index,
+        pair, op + 1 == gridDim.y, scale);
+    tile_warp6_pair<true, Bits>(v.x, v.y, twiddles, mask);
+    auto* row = out + (size_t(op) * curves + curve) * length;
+    row[lane] = v.x;
+    row[lane + half] = v.y;
+}

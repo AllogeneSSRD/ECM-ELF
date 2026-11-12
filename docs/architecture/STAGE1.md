@@ -10,6 +10,10 @@ Suyama PARAM0 使用 sigma 构造 Montgomery 曲线和初始 X:Z 点。设 u=σ�
 
 CPU Edwards 路径使用自身曲线构造及扩展坐标公式；CPU Montgomery、CUDA 和 OpenCL 的点表示/算术域不同。只有投影或归一化后的数学点可跨实现对比，不能比较未经解码的字数组。
 
+CPU Edwards 的标量和 IFMA NAF 主循环按需生成扩展坐标 T。只有紧随倍点的加点读取 T，倍点与检查点读取 X/Y/Z。标量完整点输出和 SIMD 完整点诊断在需要时计算 T。两条路径都复用倍点中的 \(G=X^2+Y^2\)，计算 \(E=(X+Y)^2-G\) 时只做一次模减。见 [标量倍点](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp#L248) 与 [IFMA 倍点](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L127)。
+
+GMP 标量用 64 位 limbs，完整 `2^p−1` 在固定宽度范围内用普通余数。模乘、平方与加法都在第 p 位折叠，回卷先在最低 limb 加入进位，溢出时才继续传播。模减借位时，把差减一并保留低 p 位即得规范余数。其他模数用 Montgomery REDC。IFMA 完整梅森乘法和平方超过 2048 个 52 位 limbs 时，每累加 1024 行传播一次进位，宽位平方还在对称项翻倍前传播进位。见 [CPU 标量算术](../../src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h#L188)、[IFMA 进位](../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp#L479) 与 [CPU Stage1 算术对照](../performance/STAGE1.md#cpu-stage1-算术对照)。
+
 ## 方法选择与输入校验
 
 Stage1 单次运行和队列模式共用五个独立选择项：`curve`（Montgomery / Edwards）、`target`（CPU / GPU）、`impl`（自动 / IFMA SIMD / GMP 标量）、`reduction`（自动 / Montgomery / Mersenne fold）及 `lcm`（素数幂最小公倍积 / 其 12 倍）。默认是 Montgomery 曲线、GPU 执行；Edwards GPU 需要编入该模块的 CUDA 可执行文件，OpenCL 会拒绝该组合。`Auto` 在内部 CPU 实现及 SIMD 归约枚举中均为 0；调用现有 IFMA 接口时显式转换，避免枚举序号与实现常量耦合。TOML 和 CLI 均拒绝无效选择值，参数默认值及范围由 [配置定义](../../config/ecm_options.json) 维护。

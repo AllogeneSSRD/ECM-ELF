@@ -28,6 +28,7 @@ struct Device {
     int index;
     std::string uuid;
     size_t budget;
+    unsigned sm_count;
 };
 
 Device device_info(int index, unsigned memory_mib) {
@@ -43,7 +44,7 @@ Device device_info(int index, unsigned memory_mib) {
         uuid += hex[byte >> 4];
         uuid += hex[byte & 15];
     }
-    return {index, uuid, memory_budget(free, memory_mib)};
+    return {index, uuid, memory_budget(free, memory_mib), unsigned(prop.multiProcessorCount)};
 }
 
 pt::Profile load(const std::filesystem::path& path) {
@@ -146,7 +147,8 @@ class Calibration {
     const Device& device_;
     unsigned p_, bits_;
     std::vector<uint32_t> scalar_, initial_;
-    std::map<unsigned, std::vector<uint32_t>> reference_;
+    unsigned reference_batch_ = 0;
+    std::vector<uint32_t> reference_;
 public:
     Calibration(const Device& device, unsigned p, unsigned bits)
         : device_(device), p_(p), bits_(bits), scalar_((bits + 31) / 32),
@@ -177,9 +179,21 @@ public:
         control.poll = [](unsigned) { return Control::Action{false, ecm_stage1_stop_requested()}; };
         auto run = ladder(device_.index, p_, batch, active, scalar_, bits_, options, control, samples);
         if (run.stopped) throw Cancelled();
-        const auto found = reference_.find(batch);
-        if (found == reference_.end()) reference_.emplace(batch, std::move(run.points));
-        else if (found->second != run.points) throw std::runtime_error("NTT tune endpoint mismatch");
+        // A larger batch appends lanes to each slot. Retain one reference and
+        // check common lanes even when the plan or batch size changes.
+        const size_t reference_stride = size_t(words) * reference_batch_;
+        const size_t common = size_t(words) * std::min(batch, reference_batch_);
+        if (common) {
+            for (unsigned slot = 0; slot < 4; ++slot) {
+                const auto* first = run.points.data() + slot * stride;
+                if (!std::equal(first, first + common, reference_.data() + slot * reference_stride))
+                    throw std::runtime_error("NTT tune endpoint mismatch");
+            }
+        }
+        if (batch > reference_batch_) {
+            reference_batch_ = batch;
+            reference_ = std::move(run.points);
+        }
         m.ms = std::move(run.device_ms);
         m.owned = run.owned_bytes;
         m.observed = run.observed_bytes;
@@ -250,7 +264,7 @@ class BatchSearch {
 public:
     BatchSearch(Calibration& cal, const Stage1NttOptions& options) : cal_(cal), options_(options) {}
 
-    std::vector<Measurement> search(bool exhaustive) {
+    std::vector<Measurement> search(bool exhaustive, unsigned sms) {
         auto* prior = sample(1);
         if (!prior) return {};
         if (exhaustive) {
@@ -278,6 +292,10 @@ public:
                 if (auto* limit = sample(max_batch); limit && limit->throughput() > plateau * local_peak)
                     mid(stop, max_batch);
             }
+            // The ladder launches groups of two and four transforms per curve.
+            // Sample full waves that a power-of-two batch sweep can miss.
+            for (unsigned batch : {(sms + 3) / 4, (sms + 1) / 2, sms, (3 * sms + 1) / 2, 2 * sms})
+                if (batch && batch <= max_batch) sample(batch);
             for (unsigned i = 0; i < 2; ++i) {
                 const auto best = peak().batch;
                 if (best > 1) sample(best - 1);
@@ -407,7 +425,7 @@ int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool ex
                     auto& input = inputs.at(width);
                     if (!input.calibration) input.calibration.emplace(device, width, iterations);
                     const auto result = BatchSearch(*input.calibration, input.candidates[mode]->options)
-                                            .search(exhaustive);
+                                            .search(exhaustive, device.sm_count);
                     // Keep the reference endpoints until all shapes have run for this input.
                     if (--input.pending == 0) input.calibration.reset();
                     if (result.empty()) continue;

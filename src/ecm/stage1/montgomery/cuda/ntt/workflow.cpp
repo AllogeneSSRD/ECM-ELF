@@ -9,6 +9,7 @@
 #include "ecm/integer.h"
 #include "ecm/platform/logging.h"
 #include <algorithm>
+#include <bitset>
 #include <chrono>
 #include <cstdlib>
 
@@ -16,31 +17,40 @@ namespace ecm_cuda_stage1 {
 namespace {
 using namespace ecm_stage1;
 using Clock = std::chrono::steady_clock;
+using ActiveLanes = std::bitset<stage1_ntt_max_curves>;
 
 struct Snapshot {
     unsigned cursor = 0;
-    unsigned lanes = 0;
+    ActiveLanes lanes;
     std::vector<uint32_t> points;
 };
 
-constexpr std::string_view snapshot_magic = "ECMNTTS1";
+constexpr std::string_view single_mask_snapshot = "ECMNTTS1";
+constexpr std::string_view multi_mask_snapshot = "ECMNTTS2";
 
 bool read_snapshot(std::string_view bytes, unsigned count, unsigned p, unsigned curves,
                    Snapshot& out) {
     using ecm_stage1_binary::Reader;
     Reader reader(bytes);
-    if (reader.left() < snapshot_magic.size() + 3 * 4 || reader.take(8) != snapshot_magic ||
-        reader.u32() != count)
+    const auto magic = curves <= 32 ? single_mask_snapshot : multi_mask_snapshot;
+    const unsigned mask_words = (curves + 31) / 32;
+    if (reader.left() < magic.size() + (2 + mask_words) * 4 ||
+        reader.take(magic.size()) != magic || reader.u32() != count)
         return false;
     Snapshot decoded;
     decoded.cursor = reader.u32();
-    decoded.lanes = reader.u32();
-    if (decoded.cursor > count || !decoded.lanes || (curves < 32 && (decoded.lanes >> curves)))
+    for (unsigned word = 0; word < mask_words; ++word) {
+        const auto mask = reader.u32();
+        const unsigned base = 32 * word;
+        const unsigned width = std::min(32u, curves - base);
+        if (width < 32 && (mask >> width)) return false;
+        for (unsigned bit = 0; bit < width; ++bit)
+            decoded.lanes[base + bit] = (mask >> bit) & 1u;
+    }
+    if (decoded.cursor > count || decoded.lanes.none())
         return false;
     const unsigned words = (p + 31) / 32;
-    unsigned active = 0;
-    for (unsigned i = 0; i < curves; ++i) active += (decoded.lanes >> i) & 1;
-    const size_t size = size_t(4) * words * active;
+    const size_t size = size_t(4) * words * decoded.lanes.count();
     if (reader.left() != size * sizeof(uint32_t))
         return false;
     decoded.points.resize(size);
@@ -56,14 +66,19 @@ bool read_snapshot(std::string_view bytes, unsigned count, unsigned p, unsigned 
     return true;
 }
 
-std::string encode_snapshot(unsigned count, unsigned cursor, unsigned lanes,
+std::string encode_snapshot(unsigned count, unsigned cursor, unsigned curves, const ActiveLanes& lanes,
                             const std::vector<uint32_t>& points) {
     using ecm_stage1_binary::u32;
-    std::string payload(snapshot_magic);
-    payload.reserve(payload.size() + (3 + points.size()) * 4);
+    std::string payload(curves <= 32 ? single_mask_snapshot : multi_mask_snapshot);
+    payload.reserve(payload.size() + (2 + (curves + 31) / 32 + points.size()) * 4);
     u32(payload, count);
     u32(payload, cursor);
-    u32(payload, lanes);
+    for (unsigned base = 0; base < curves; base += 32) {
+        uint32_t mask = 0;
+        for (unsigned bit = 0; bit < std::min(32u, curves - base); ++bit)
+            if (lanes[base + bit]) mask |= uint32_t(1) << bit;
+        u32(payload, mask);
+    }
     for (auto word : points) u32(payload, word);
     return payload;
 }
@@ -123,7 +138,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         if (!curves || curves > stage1_ntt_max_curves || (!edwards && opt.execution.selection.gpu_param != 0) ||
             p < 32 || p > 262144 || mpz_sgn(N) <= 0 || mpz_scan0(N, 0) != p)
             throw std::invalid_argument(
-                "NTT requires Edwards or Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-32 curves");
+                "NTT requires Edwards or Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-" +
+                std::to_string(stage1_ntt_max_curves) + " curves");
         ecm_edwards::Integer scalar;
         const unsigned torsion = edwards ? 48u :
             opt.execution.selection.scalar_construction == ScalarConstruction::PrimePowerLcmTimes12
@@ -195,7 +211,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             }
         }
         std::vector<unsigned> active;
-        unsigned lanes = 0;
+        ActiveLanes lanes;
         int legacy = ECM_NO_FACTOR_FOUND;
         auto edwards_identity = [&](unsigned lane) {
             ecm_ts_fprintf(stdout, "Edwards identity: sigma=%llu, no Stage2 point\n",
@@ -213,7 +229,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 edwards_identity(i);
             } else {
                 active.push_back(i);
-                lanes |= 1u << i;
+                lanes.set(i);
             }
         }
         if (has_checkpoint && snapshot.lanes != lanes)
@@ -260,7 +276,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 return ecm_mersenne_ntt::Control::Action{!checkpoint.path().empty() && (stop || due), stop};
             };
             control.checkpoint = [&](unsigned cursor, const auto& points) {
-                const auto payload = encode_snapshot(count, cursor, lanes, points);
+                const auto payload = encode_snapshot(count, cursor, curves, lanes, points);
                 const bool ok = has_checkpoint ? checkpoint.write_blob(ecm_stage1_curve_record(0), payload)
                                                : checkpoint.import_payload(payload, sigmas);
                 if (!ok)

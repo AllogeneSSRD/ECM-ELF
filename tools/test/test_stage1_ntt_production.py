@@ -152,7 +152,7 @@ def main():
 
     for name, extra, data, curves, reason in (
         ("cofactor", "", "2^65-3\n", 1, "full 2^p-1"),
-        ("too_many_curves", "", "2^127-1\n", 33, "at most 32 curves"),
+        ("too_many_curves", "", "2^127-1\n", 129, "at most 128 curves"),
         ("undersized_transform", "ntt_length = 8\n", "2^4003-1\n", 1, "covering 2*digits+1"),
         ("unsafe_digits", "ntt_bpw = 31\n", "2^4003-1\n", 1, "coefficient bound"),
         ("unsafe_weighted", 'ntt_convolution = "weighted"\nntt_length = 2\n',
@@ -193,7 +193,27 @@ def main():
             seed: stage1(seed, 20, modulus)["x"] for seed in range(26, 26 + curves)}
     print("PASS mixed fused and early segmented carry against independent Python", flush=True)
 
-    p, b1, sigma, curves = 4423, 32, 26, 32
+    for mode, p, length, threads in (
+        ("linear", 61, 8, 8),
+        ("weighted", 61, 2, 2),
+        ("weighted", 521, 32, 32),
+    ):
+        curves, b1, sigma = 65, 20, 26
+        work, cmd = fixture(f"short_inverse_{mode}_{p}",
+                            extra=f'ntt_convolution = "{mode}"\nntt_length = {length}\n', model="ed")
+        call, data = direct(work, cmd, p, b1, sigma, curves)
+        log = run(work, call, text=data)
+        assert f"inverse_tile_threads={threads} inverse_tile_smem_bytes=0" in log
+        assert int(re.search(r"\bdataflow=(\d+)", log)[1]) & 8192
+        n = (1 << p) - 1
+        expected = {}
+        for seed in range(sigma, sigma + curves):
+            _, x, z = edwards_stage1(n, seed, b1)
+            expected[seed] = x * pow(z, -1, n) % n
+        assert saved_points(work / "out.save", p, b1, edwards=True) == expected
+    print("PASS short inverse tiles with a partial batch at the end of the grid", flush=True)
+
+    p, b1, sigma, curves = 4423, 32, 26, 128
     n = (1 << p) - 1
     expected = {}
     for seed in range(sigma, sigma + curves):
@@ -232,8 +252,8 @@ def main():
 
     p, b1, sigma = 4423, 32, 26
     n = (1 << p) - 1
-    expected = {seed: stage1(seed, b1, n)["x"] for seed in range(sigma, sigma + 32)}
-    for curves in (16, 32):
+    expected = {seed: stage1(seed, b1, n)["x"] for seed in range(sigma, sigma + 128)}
+    for curves in (16, 32, 128):
         for mode in ("linear", "weighted"):
             work, cmd = fixture(f"batch_{curves}_{mode}", extra=f'ntt_convolution = "{mode}"\n')
             call, data = direct(work, cmd, p, b1, sigma, curves)
@@ -246,7 +266,7 @@ def main():
                 seed: expected[seed] for seed in range(sigma, sigma + curves)}
             print(f"PASS {mode} {curves} curves against Python, owned={owned}, observed={observed}", flush=True)
 
-    for model, curves in (("mont", 16), ("mont", 32), ("ed", 16)):
+    for model, curves in (("mont", 16), ("mont", 32), ("ed", 16), ("mont", 65), ("ed", 128)):
         work, cmd = fixture(f"resume_{model}_{curves}", extra="auto_stage2 = 1\nntt_tile = 8\n", model=model)
         p, b1, sigma = 9689, 4096, 26
         prefix = "e" if model == "ed" else "m0"
@@ -288,8 +308,10 @@ def main():
         assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
         identity, lanes = batch(checkpoint)
         assert identity.endswith("|ntt-v1") and [lane[0] for lane in lanes] == list(range(sigma, sigma + curves))
-        magic, count, cursor, mask = struct.unpack_from("<8sIII", lanes[0][1])
-        assert magic == b"ECMNTTS1" and 0 < cursor < count and mask == (1 << curves) - 1
+        magic, count, cursor = struct.unpack_from("<8sII", lanes[0][1])
+        mask = int.from_bytes(lanes[0][1][16:16 + 4 * ((curves + 31) // 32)], "little")
+        assert magic == (b"ECMNTTS1" if curves <= 32 else b"ECMNTTS2")
+        assert 0 < cursor < count and mask == (1 << curves) - 1
         assert not lanes[1][1]
         config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
                           .replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"')

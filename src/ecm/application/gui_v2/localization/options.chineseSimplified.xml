@@ -44,7 +44,7 @@
       <Item id="option_stage1_ckpt_seconds" name="设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。" />
       <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
       <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
-      <Item id="option_stage1_gpu_algorithm" name="GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–32 条曲线。Edwards NTT 要求 naf_w=0。" />
+      <Item id="option_stage1_gpu_algorithm" name="GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards NTT 要求 naf_w=0。" />
       <Item id="option_stage1_ntt_convolution" name="auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
       <Item id="option_stage1_ntt_memory_mib" name="Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。" />
@@ -107,7 +107,8 @@
       <Item id="option_stage2_stage2_prediction_policy" name="model：优先使用精确配对实测；其他输入分别按通用、梅森算术位宽区间预测，满足双侧误差保护及当前显存准入才替换。缺调优资料时使用明确标为估算的4060 Laptop/1800MHz基础模型；未覆盖的NTT/驻留区间保留默认。paired恢复原精确位宽/B2实测收益门禁。B1不作为复用门槛。" />
       <Item id="option_stage2_stage2_tune_arithmetic" name="显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo/save配对仍遵循stage2_auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。" />
       <Item id="option_stage2_stage2_tune_profile" name="共享调优 TOML。CLI --tune-profile 优先，相对路径以 ecm.toml 所在目录为准。留空且未指定旧成本配置时优先使用 tune.toml，若只有已有的 stage2_ecm_tune.toml 则沿用。通用与梅森算术分别按 arithmetic_bits 查询。" />
-      <Item id="option_stage2_stage2_tune_runtime" name="按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。 OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。" />
+      <Item id="option_stage2_stage2_tune_runtime" name="按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false 关闭单曲线试跑、采集和写回，双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。" />
+      <Item id="option_stage2_stage2_parallel" name="CUDA Stage2 曲线队列：0 串行，1 允许同时运行两条，2 自动（默认）。自动模式在单曲线路线确定后比较通过检查的串行和双曲线队列吞吐。队列测量保存到共享 tune 文件。1 和 2 均需有足够显存运行两个 worker。命令行：--parallel 0|1|2。" />
       <Item id="option_stage2_stage2_tune_min_repeats" name="运行时D、布局与链长候选比较和采用所需的最少已校验观察数，同时作为ECM校准最小重复次数；--tune-repeats可要求更多。默认2；设为1用于快速筛查，但无法测得离散程度。不得超过stage2_tune_runtime_samples；已有观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。" />
       <Item id="option_stage2_stage2_tune_runtime_samples" name="完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。达到stage2_tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。" />
       <Item id="option_stage2_stage2_short_ntt_batch_tune" name="实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。" />
