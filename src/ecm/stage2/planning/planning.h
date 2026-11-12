@@ -18,6 +18,7 @@ void ensure_portable_calibration(Options &o,const Record &r,const TaskDefaults &
 void merge_portable_tune(const Options &o,const fs::path &destination);
 std::vector<Record> portable_queue_range(const fs::path &worktodo,int worker,const fs::path &save_dir);
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r);
+std::shared_ptr<const PreparedRuntimeProfile> prepare_runtime_profile(const Options &o);
 void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation);
 struct ParallelRoute {
     Options options;
@@ -31,6 +32,8 @@ struct ParallelEvidence {
     double serial_wall=0,serial_middle=0,paired_wall=0,paired_middle=0;
 };
 std::optional<ParallelRoute> prepare_parallel_route(Options options,const Record &record,bool writes_log);
+std::vector<ParallelRoute> prepare_parallel_alternatives(const ParallelRoute &primary,const Record &record,
+                                                        bool writes_log,bool explore_layout);
 uint64_t parallel_free_memory(int device);
 ParallelEvidence read_parallel_evidence(const ParallelRoute &route,unsigned mask,uint64_t preferred_curves);
 void record_parallel_window(const ParallelRoute &route,unsigned mask,unsigned workers,
@@ -40,6 +43,7 @@ void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &de
     const fs::path &default_worktodo,const fs::path &save_dir);
 std::string runtime_route_event(const Options &o);
 std::string runtime_tune_json(const RuntimeTuneObservation &observation);
+std::string runtime_tune_observation_json(const RuntimeTuneObservation &observation);
 std::string select_auto_tuned(Options &o,const Record &r);
 std::string select_runtime_tuned(Options &o,const Record &r);
 std::string select_tuned(Options &o,const Record &r);

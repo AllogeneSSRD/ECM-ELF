@@ -9,6 +9,7 @@
 #include "process.h"
 #include <gmp.h>
 #include <filesystem>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -33,6 +34,7 @@ struct Record {
     uint64_t sigma = 0, b1 = 0, offset = 0, hash = 0, index = 0;
     bool checksum = false, edwards = false;
 };
+struct PreparedRuntimeProfile;
 struct Options {
     std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_ini,submission_aid;
     uint64_t submission_exponent=0;
@@ -104,6 +106,9 @@ struct Options {
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     unsigned parallel=ecm_config::defaults::stage2_stage2_parallel;
     bool fixed_queue_route=false;
+    uint64_t queue_gpu_start=0,queue_gpu_done=0,queue_gpu_input=0;
+    std::shared_ptr<const PreparedRuntimeProfile> queue_tune_snapshot;
+    std::string queue_tune_observation;
     std::string queue_phase_gate;
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
     uint64_t tune_min_repeats=ecm_config::defaults::stage2_stage2_tune_min_repeats;

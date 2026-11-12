@@ -412,7 +412,7 @@ int ecm_cuda_stage2_plan(const char*n, uint64_t sigma,uint64_t b1,uint64_t b2,ui
 int ecm_cuda_stage2_tune_ntt(int,int,int,int,uint64_t,void(*)(const char*,void*),void*,bool){return 2;}
 int ecm_cuda_stage2_tune_ntt_batches(int,int,int,int,uint64_t,const uint64_t*,size_t,void(*)(const char*,void*),void*,bool){return 2;}
 
-int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int index,void(*report)(const char*,void*),void*ctx,unsigned carrier,EcmStage2Metrics*metrics,const char*a24){
+int ecm_cuda_stage2_run(const char*n,const char*x,uint64_t sigma,uint64_t b1,uint64_t b2,uint64_t d,int index,void(*report)(const char*,void*),void*ctx,unsigned carrier,EcmStage2Metrics*metrics,const char*a24,const EcmStage2GpuHandoff*){
     try{
         if(!n||!x||!report||b1<2||b2<=b1||b2>uint64_t(INT64_MAX)-8192)throw std::runtime_error("invalid Stage2 bounds");
         stage2_log::phase("Plan Stage2 bounds and OpenCL payload");

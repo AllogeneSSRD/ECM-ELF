@@ -34,6 +34,7 @@
 #include "ecm/io/results.h"
 #include "../../../io/files.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
@@ -46,6 +47,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 #include <iomanip>
 #include <sstream>
@@ -78,6 +81,41 @@ pt::Profile portable_read(const fs::path &path) {
         std::cout<<"tune_profile_reset: incompatible development format; calibration will regenerate "<<path.string()<<std::endl;
         return {};
     }
+}
+using TuneFileStamp=std::array<DWORD,7>;
+struct PreparedRuntimeProfile {
+    TuneFileStamp stamp;
+    pt::Profile profile;
+};
+static std::optional<TuneFileStamp> tune_file_stamp(const fs::path &path) {
+    if(path.empty())return std::nullopt;
+    Handle file;
+    file.value=CreateFileW(path.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+        nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    BY_HANDLE_FILE_INFORMATION info{};
+    if(file.value==INVALID_HANDLE_VALUE || !GetFileInformationByHandle(file.value,&info))return std::nullopt;
+    return TuneFileStamp{info.dwVolumeSerialNumber,info.nFileIndexHigh,info.nFileIndexLow,
+        info.ftLastWriteTime.dwHighDateTime,info.ftLastWriteTime.dwLowDateTime,info.nFileSizeHigh,info.nFileSizeLow};
+}
+std::shared_ptr<const PreparedRuntimeProfile> prepare_runtime_profile(const Options &o) {
+    const auto path=fs::u8path(o.tune_profile);
+    const auto stamp=tune_file_stamp(path);
+    if(!stamp)return {};
+    auto profile=portable_read(path);
+    if(stamp!=tune_file_stamp(path))return {};
+    return std::make_shared<PreparedRuntimeProfile>(PreparedRuntimeProfile{*stamp,std::move(profile)});
+}
+static pt::Profile read_runtime_profile(const Options &o) {
+    const auto path=fs::u8path(o.tune_profile);
+    const bool cached=o.queue_tune_snapshot && tune_file_stamp(path)==o.queue_tune_snapshot->stamp;
+    auto profile=cached?o.queue_tune_snapshot->profile:portable_read(path);
+    if(o.queue_tune_observation.empty() || o.queue_tune_observation=="null")return profile;
+    const auto feedback=ecm_results::json::parse(o.queue_tune_observation);
+    auto sample=et::fields(feedback.get("sample").dump());
+    sample["condition"]=std::to_string(profile.condition(et::fields(feedback.get("condition").dump())));
+    const bool added=profile.update(std::move(sample),o.runtime_samples);
+    stage2_log::print(stage2_log::debug,"stage2_queue_tune_profile: snapshot=%d applied=%d\n",int(cached),int(added));
+    return profile;
 }
 et::Fields portable_condition(const Options &o) {
     EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device,&info))throw std::runtime_error("cannot query tuning device");
@@ -398,7 +436,7 @@ bool portable_runtime_candidate_admit(const Options &o,const Record &r,pt::Shape
 uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan);
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     RuntimeTuneObservation result;
-    const auto profile=portable_read(o.tune_profile);result.condition=portable_condition(o);
+    const auto profile=read_runtime_profile(o);result.condition=portable_condition(o);
     pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
     pt::WidthPredictor predictor(engine);
     // Selection normally fixes D. A protected legacy fallback may leave it 0.
@@ -453,7 +491,11 @@ std::string portable_fields_json(const et::Fields &fields) {
 }
 std::string runtime_tune_json(const RuntimeTuneObservation &observation) {
     if(observation.sample.empty())return {};
-    return ",\"tune_observation\":{\"condition\":"+portable_fields_json(observation.condition)+
+    return ",\"tune_observation\":"+runtime_tune_observation_json(observation);
+}
+std::string runtime_tune_observation_json(const RuntimeTuneObservation &observation) {
+    if(observation.sample.empty())return "null";
+    return "{\"condition\":"+portable_fields_json(observation.condition)+
         ",\"sample\":"+portable_fields_json(observation.sample)+"}";
 }
 void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation) {
@@ -909,7 +951,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
     return out.str()+'}';
 }
 std::string portable_width_select(Options &o,const Record &r) {
-    const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
+    const auto profile=read_runtime_profile(o);const auto condition=portable_condition(o);
     pt::Estimator engine(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
     pt::WidthPredictor runtime_predictor(engine,nullptr,true);
     const auto runtime=portable_runtime_select(o,r,engine,runtime_predictor);if(!runtime.empty())return runtime;
@@ -991,11 +1033,12 @@ std::string portable_width_select(Options &o,const Record &r) {
 std::string portable_select(Options &o,const Record &r,bool automatic) {
     if(!automatic && o.prediction_policy=="model")return portable_width_select(o,r);
     if(o.tune_profile.empty() && o.prediction_policy!="model")return {};
-    if(!fs::is_regular_file(o.tune_profile) && o.prediction_policy!="model") {
+    if(!fs::is_regular_file(o.tune_profile) && o.prediction_policy!="model" &&
+       (o.queue_tune_observation.empty() || o.queue_tune_observation=="null")) {
         if(automatic)throw std::runtime_error("Auto B2 needs a tune summary; enable short calibration or supply a profile");
         return "{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"missing_profile\"}";
     }
-    const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
+    const auto profile=read_runtime_profile(o);const auto condition=portable_condition(o);
     pt::Estimator estimator(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
     pt::WidthPredictor width_predictor(estimator);
     double t1=o.stage1_seconds;std::string t1_source="provided_per_curve";
@@ -1158,30 +1201,13 @@ std::string select_tuned(Options &o,const Record &r){
 std::string select_auto_tuned(Options &o,const Record &r){return portable_select(o,r,true);}
 std::string select_runtime_tuned(Options &o,const Record &r) {
     if(o.prediction_policy!="model")return {};
-    const auto profile=portable_read(o.tune_profile);
+    const auto profile=read_runtime_profile(o);
     pt::Estimator engine(profile,portable_condition(o),pt::Ignore::parse(o.tune_ignore),portable_query,o.runtime_prepare_cache,o.tune_min_repeats);
     pt::WidthPredictor predictor(engine,nullptr,true);return portable_runtime_select(o,r,engine,predictor);
 }
 
-std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bool writes_log) {
-#ifdef ECM_STAGE2_OPENCL
-    (void)o;(void)r;(void)writes_log;return std::nullopt;
-#else
-    if(!o.b2 || o.relocation)return std::nullopt;
-    const bool fixed_d=o.has_d && o.d;
-    if(o.parallel==1)o.tune_runtime=false;
-    configure_weighted_ntt(o);
-    configure_short_ntt_batches(o);
-    const auto selection=select_tuned(o,r);
-    const bool measured=selection.find("\"source\":")!=selection.npos &&
-        plan_scalar(selection,"source")=="\"measured\"";
-    if(o.tune_runtime) {
-        const auto mature=std::min(o.runtime_samples,std::max<uint64_t>(3,o.tune_min_repeats));
-        if(!measured || o.runtime_probe ||
-           selection.find("\"runtime_samples\":")==selection.npos ||
-           u64(plan_scalar(selection,"runtime_samples"),"runtime samples")<mature)return std::nullopt;
-    }
-    if(o.parallel==2 && !o.tune_runtime && !fixed_d && !measured)return std::nullopt;
+#ifndef ECM_STAGE2_OPENCL
+static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record &r,bool writes_log) {
     if(!o.d)return std::nullopt;
     auto shape=portable_shape(o,r,o.b2,o.d,o.carrier_exponent);
     if(!portable_runtime_bounds(o,shape))return std::nullopt;
@@ -1198,6 +1224,11 @@ std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bo
     key<<"stage2-parallel-v1 "<<r.edwards<<' '<<r.n<<' '<<o.factor_only<<' '<<o.factorize_hits<<' '
        <<o.debug_log<<' '<<o.ntt_counts<<' '<<o.log_level<<' '<<o.gui_events<<' '
        <<o.save.empty()<<' '<<writes_log<<'\n';
+    if(queue_pipeline_level(shape.arithmetic_bits,1,o.factor_only)) {
+        key<<(queue_pipeline_level(shape.arithmetic_bits,2,o.factor_only)?"host_pipeline\n":"host_pipeline_serial\n");
+        if(o.factor_only && shape.chain_block==64 && !shape.tail_balance && early_gpu_handoff_requested())
+            key<<"early_gpu_handoff\n";
+    }
     for(const auto field:shape.key())key<<field<<' ';
     o.b2=shape.b2;o.d=shape.d;o.has_d=true;o.auto_b2=false;o.auto_carrier=false;
     o.carrier_exponent=shape.carrier;o.has_carrier=true;o.inferred_carrier=0;
@@ -1210,7 +1241,70 @@ std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bo
     o.fixed_queue_route=true;o.b2_round_chain=false;o.tune_runtime=false;
     o.runtime_prepare_cache=false;o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();
     return ParallelRoute{std::move(o),shape,std::move(condition),ecm_stage2::sha256_text(key.str()),device,required+headroom};
+}
 #endif
+
+std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bool writes_log) {
+#ifdef ECM_STAGE2_OPENCL
+    (void)o;(void)r;(void)writes_log;return std::nullopt;
+#else
+    if(!o.b2 || o.relocation)return std::nullopt;
+    const bool fixed_d=o.has_d && o.d;
+    if(o.parallel==1)o.tune_runtime=false;
+    configure_weighted_ntt(o);
+    configure_short_ntt_batches(o);
+    const auto selection=select_tuned(o,r);
+    const bool measured=selection.find("\"source\":")!=selection.npos && plan_scalar(selection,"source")=="\"measured\"";
+    if(o.tune_runtime) {
+        const auto mature=std::min(o.runtime_samples,std::max<uint64_t>(3,o.tune_min_repeats));
+        if(!measured || o.runtime_probe ||
+           selection.find("\"runtime_samples\":")==selection.npos ||
+           u64(plan_scalar(selection,"runtime_samples"),"runtime samples")<mature)return std::nullopt;
+    }
+    if(o.parallel==2 && !o.tune_runtime && !fixed_d && !measured)return std::nullopt;
+    return admit_parallel_route(std::move(o),r,writes_log);
+#endif
+}
+
+std::vector<ParallelRoute> prepare_parallel_alternatives(const ParallelRoute &primary,const Record &r,
+                                                        bool writes_log,bool explore_layout) {
+    std::vector<ParallelRoute> routes;
+#ifdef ECM_STAGE2_OPENCL
+    (void)primary;(void)r;(void)writes_log;(void)explore_layout;
+#else
+    constexpr uint64_t margin=256ull<<20;
+    const auto free=parallel_free_memory(primary.options.device);
+    // Keep a further margin per slot for the frontier's late live admission.
+    if(free<=3*margin)return routes;
+    const auto limit=(free-margin)/2-margin;
+    const auto p=ecm_stage2::d_catalog::degree(primary.shape.d);
+    const auto original_layout=primary.shape.groot_balanced;
+    std::set<std::pair<uint64_t,bool>> tried{{primary.shape.d,original_layout}};
+    auto candidate=[&](uint64_t d,bool layout) {
+        if(routes.size()>=3 || !tried.emplace(d,layout).second)return;
+        auto o=primary.options;o.d=d;o.groot_layout=int(layout);
+        auto route=admit_parallel_route(std::move(o),r,writes_log);
+        if(route && route->shape.b2==primary.shape.b2 && route->shape.fold==primary.shape.fold &&
+           route->shape.frontier==primary.shape.frontier && route->reservation<=limit)
+            routes.push_back(std::move(*route));
+    };
+    if(explore_layout)candidate(primary.shape.d,!original_layout);
+    // Test progressively smaller polynomial ranges to span a memory/NTT step.
+    for(const uint64_t ratio:{87,72,58,43}) {
+        if(routes.size()>=3)break;
+        const auto ceiling=p*ratio/100;
+        ecm_stage2::d_catalog::Entry best{};
+        for(const auto &entry:ecm_stage2::d_catalog::entries()) {
+            if(entry.d>=primary.shape.d || entry.d<primary.shape.d/3 || entry.p>ceiling)continue;
+            if(std::tie(entry.p,entry.d)>std::tie(best.p,best.d))best=entry;
+        }
+        if(!best.d)continue;
+        const auto before=routes.size();
+        candidate(best.d,original_layout);
+        if(explore_layout && routes.size()==before)candidate(best.d,!original_layout);
+    }
+#endif
+    return routes;
 }
 
 uint64_t parallel_free_memory(int device) {
@@ -2363,7 +2457,11 @@ ecm_stage2::tune::Fields tune_environment() {
         auto field=key.substr(4);for(char &c:field)c=(char)std::tolower((unsigned char)c);
         env[field]=value.empty()?"\"\"":value;
     }
-    FreeEnvironmentStringsA(block);return env;
+    FreeEnvironmentStringsA(block);
+#ifndef ECM_STAGE2_OPENCL
+    env.try_emplace("stage2_resident_products","1");
+#endif
+    return env;
 }
 std::string plan_scalar(const std::string &json,const char *key) {
     const auto marker=std::string("\"")+key+"\":";auto a=json.find(marker);

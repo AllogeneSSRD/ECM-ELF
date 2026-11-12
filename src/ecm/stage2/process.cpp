@@ -4,6 +4,8 @@
 #include "../platform/compute_log.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -27,6 +29,16 @@ BOOL WINAPI console_control(DWORD event) {
     InterlockedIncrement(&stop_requests);
     return TRUE;
 }
+unsigned queue_pipeline_level(unsigned arithmetic_bits,unsigned workers,bool factor_only) {
+    const char *value=std::getenv("ECM_STAGE2_QUEUE_PIPELINE");
+    if(value)return (value[0]=='1' || value[0]=='2') && !value[1]?unsigned(value[0]-'0'):0;
+    const unsigned limit=workers==2 && !factor_only?2048:4096;
+    return arithmetic_bits && arithmetic_bits<=limit?2:0;
+}
+bool early_gpu_handoff_requested() {
+    const char *value=std::getenv("ECM_STAGE2_EARLY_GPU_HANDOFF");
+    return !value || (value[0]=='1' && !value[1]);
+}
 std::wstring quote(const std::wstring &s) {
     std::wstring out = L"\"";
     size_t slashes = 0;
@@ -41,9 +53,10 @@ std::wstring quote(const std::wstring &s) {
 struct CurveProcess::Impl {
     using Clock = std::chrono::steady_clock;
     CurveProcessRequest request;
-    Handle out_read,err_read,job,process;
+    Handle out_read,err_read,job,process,gpu_start,gpu_done,gpu_input;
     Clock::time_point begin,next;
     std::string phase="Starting curve",stdout_pending,stderr_pending,queue_sample;
+    std::optional<std::string> gpu_feedback;
     bool heartbeat=false,stop_reported=false;
     stage2_console::Summary console_summary;
 
@@ -64,6 +77,19 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     const fs::path exe = executable();
     std::wstring cmd = quote(exe.wstring()) + L" --curve-worker --save " + quote(save.wstring());
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
+    SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
+    if(o.queue_pipeline) {
+        gpu_start.value=CreateEventW(&security,TRUE,FALSE,nullptr);
+        gpu_done.value=CreateEventW(&security,TRUE,FALSE,nullptr);
+        if(!gpu_start.value || !gpu_done.value)throw std::runtime_error("cannot create Stage2 pipeline events");
+        arg(L"--queue-gpu-start",reinterpret_cast<uintptr_t>(gpu_start.value));
+        arg(L"--queue-gpu-done",reinterpret_cast<uintptr_t>(gpu_done.value));
+        if(o.tune_runtime) {
+            gpu_input.value=CreateFileMappingW(INVALID_HANDLE_VALUE,&security,PAGE_READWRITE,0,queue_feedback_bytes,nullptr);
+            if(!gpu_input.value)throw std::runtime_error("cannot allocate Stage2 pipeline feedback");
+            arg(L"--queue-gpu-input",reinterpret_cast<uintptr_t>(gpu_input.value));
+        }
+    }
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
@@ -140,7 +166,6 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
         if(!output)throw std::runtime_error("cannot open Stage2 log: "+log.string());
     }
     if(o.debug_log)fs::create_directories(fs::path(o.debug_file).parent_path());
-    SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
     Handle out_write,err_write;
     if(!CreatePipe(&out_read.value,&out_write.value,&security,0) ||
        !CreatePipe(&err_read.value,&err_write.value,&security,0) ||
@@ -161,6 +186,10 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     if(!AssignProcessToJobObject(job.value,pi.hProcess)) {
         TerminateProcess(pi.hProcess,2);throw std::runtime_error("cannot bind curve process lifetime");
     }
+    if(o.queue_pipeline && (!SetHandleInformation(gpu_start.value,HANDLE_FLAG_INHERIT,0) ||
+                            !SetHandleInformation(gpu_done.value,HANDLE_FLAG_INHERIT,0) ||
+                            (o.tune_runtime && !SetHandleInformation(gpu_input.value,HANDLE_FLAG_INHERIT,0))))
+        throw std::runtime_error("cannot isolate Stage2 pipeline events");
     if(ResumeThread(pi.hThread)==static_cast<DWORD>(-1))throw std::runtime_error("cannot resume curve process");
     CloseHandle(out_write.value);out_write.value=INVALID_HANDLE_VALUE;
     CloseHandle(err_write.value);err_write.value=INVALID_HANDLE_VALUE;
@@ -175,6 +204,11 @@ void CurveProcess::Impl::console_line(const std::string &text,bool error) {
 
 void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &output) {
     const auto &o=request;
+    constexpr char feedback_prefix[]="stage2_queue_observation: ";
+    if(!error && o.queue_pipeline && o.tune_runtime && text.rfind(feedback_prefix,0)==0) {
+        gpu_feedback=text.substr(sizeof(feedback_prefix)-1);
+        return;
+    }
     constexpr char sample_prefix[]="stage2_parallel_curve: ";
     if(!error && o.fixed_queue_route && text.rfind(sample_prefix,0)==0)
         queue_sample=text.substr(sizeof(sample_prefix)-1);
@@ -255,6 +289,22 @@ std::optional<int> CurveProcess::Impl::poll() {
 CurveProcess::CurveProcess(CurveProcessRequest request):state_(std::make_unique<Impl>(std::move(request))) {}
 CurveProcess::~CurveProcess() = default;
 HANDLE CurveProcess::handle() const {return state_->process.value;}
+HANDLE CurveProcess::gpu_done_handle() const {return state_->gpu_done.value;}
+void CurveProcess::allow_gpu(const std::string &feedback) {
+    if(!feedback.empty()) {
+        if(feedback.size()>=queue_feedback_bytes)throw std::runtime_error("Stage2 pipeline feedback exceeds its transport");
+        void *view=MapViewOfFile(state_->gpu_input.value,FILE_MAP_WRITE,0,0,queue_feedback_bytes);
+        if(!view)throw std::runtime_error("cannot send Stage2 pipeline feedback");
+        std::memcpy(view,feedback.c_str(),feedback.size()+1);
+        UnmapViewOfFile(view);
+    }
+    if(!SetEvent(state_->gpu_start.value))throw std::runtime_error("cannot admit Stage2 pipeline worker");
+}
+bool CurveProcess::gpu_released() const {
+    return (!state_->request.tune_runtime || state_->gpu_feedback.has_value()) &&
+        WaitForSingleObject(state_->gpu_done.value,0)==WAIT_OBJECT_0;
+}
+const std::optional<std::string> &CurveProcess::gpu_feedback() const {return state_->gpu_feedback;}
 std::optional<int> CurveProcess::poll() {return state_->poll();}
 const std::string &CurveProcess::queue_sample() const {return state_->queue_sample;}
 

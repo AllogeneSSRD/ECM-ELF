@@ -45,6 +45,7 @@ struct S4Ctx {
     void raw_reserve(size_t a,size_t b);
     size_t raw_release();
     size_t output_release();
+    size_t release_buffers();
     double t_h2d_raw = 0.0, t_packdev = 0.0;
     unsigned long long raw_words = 0, pack_launches = 0;
     /* All S4 device-packed calls, including F-tree/inverse before the main-loop timers. */

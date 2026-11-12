@@ -43,12 +43,13 @@ struct FoldDeviceState {
     ~FoldDeviceState();
     void release();
     bool init(PolyLayer &L,const std::vector<unsigned long long> &F,
-              const std::vector<unsigned long long> &inverse,FoldDeviceStats &st,FoldFlatStats &fs);
+              const std::vector<unsigned long long> &inverse,FoldDeviceStats &st,FoldFlatStats &fs,bool descent_only=false);
     void upload(size_t offset,const std::vector<unsigned long long> &v);
     void digest_root(size_t offset,size_t words);
     void read_digest();
     void accept_device_root(const unsigned long long *src,size_t count,bool seed_root);
     void seed(const std::vector<unsigned long long> &H);
+    void restore(const std::vector<unsigned long long> &H);
     std::vector<unsigned long long> read(size_t offset,size_t count);
     void mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count);
     void reverse_copy(size_t src,size_t top,size_t count);
@@ -70,6 +71,7 @@ struct ScaledStats {
 struct ScaledFrontierDevice {
     FoldDeviceState *fold=nullptr;
     unsigned long long *metadata=nullptr;
+    unsigned long long *leaves=nullptr,*product_output=nullptr;
     bool requested=false,enabled=false;
     const char *fallback="none";
     size_t metadata_words=0;
@@ -77,7 +79,7 @@ struct ScaledFrontierDevice {
     unsigned long long f_h2d_bytes=0,metadata_h2d_bytes=0,leaf_d2h_bytes=0,check_d2h_bytes=0;
     unsigned long long avoided_parent_h2d_bytes=0,avoided_state_d2h_bytes=0;
     unsigned long long logical_frontier_peak_bytes=0,host_staging_peak_bytes=0,pinned_borrow_peak_bytes=0;
-    double setup_seconds=0,upload_seconds=0;
+    double setup_seconds=0,upload_seconds=0,leaf_read_seconds=0;
     ~ScaledFrontierDevice();
     void release();
     bool init(FoldDeviceState &owner);

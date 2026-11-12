@@ -57,20 +57,30 @@ def preflight(args, env, folder):
 
 
 def curve_outputs(folder, expected, row, count, workers, log):
-    launches = re.findall(r"^curve_(start|done): (\d+)/", log, re.M)
-    active = set()
-    for event, index in launches:
+    events = re.findall(r"^curve_(start|done): \d+/\d+ record=(\d+)|^stage2_queue_gpu_free: record=(\d+)", log, re.M)
+    active, publishing = set(), set()
+    for event, index, released in events:
+        if released:
+            if released not in active:
+                raise ValueError("GPU release has no active curve")
+            active.remove(released)
+            publishing.add(released)
+            continue
         if event == "start":
-            if index in active:
+            if index in active or index in publishing:
                 raise ValueError("duplicate launch")
             active.add(index)
             if len(active) > workers:
                 raise ValueError("more curves in flight than requested")
         else:
-            if index not in active:
+            if index in publishing:
+                publishing.remove(index)
+            elif index in active:
+                active.remove(index)
+            else:
                 raise ValueError("completion has no launch")
-            active.remove(index)
-    if active or len(launches) != 2*count or [x[0] for x in launches[:workers]] != ["start"]*workers:
+    launches = [event for event, _, released in events if not released]
+    if active or publishing or len(launches) != 2*count or launches[:workers] != ["start"]*workers:
         raise ValueError("incomplete launch sequence")
     rows = [json.loads(line) for line in (folder/"result.jsonl").read_text(encoding="utf-8").splitlines()]
     if len(rows) != count or any((r["status"], int(r["N"]), r["b1"], r["b2"], r["d"], r["poly-size"]) !=
@@ -86,14 +96,17 @@ def curve_outputs(folder, expected, row, count, workers, log):
     histogram = Counter(re.findall(r"^ntt_length_counts: (.+)$", log, re.M))
     if len(histogram) != 1 or histogram.total() != count:
         raise ValueError("NTT work changed across replays")
-    names = ("debug.log.slot1", "debug.log.slot2") if workers == 2 else ("debug.log",)
-    slots = [(folder/name).read_text(encoding="utf-8") for name in names]
-    hashes = Counter(re.findall(r"descent_values: .*?hash=(\d+)", "\n".join(slots)))
+    paths = sorted(folder.glob("debug.log.slot*")) or [folder/"debug.log"]
+    slots = [path.read_text(encoding="utf-8") for path in paths]
+    hashes = Counter(re.findall(r"^descent_values: .*?hash=(\d+)", "\n".join(slots), re.M))
     if len(hashes) != 1 or hashes.total() != count:
         raise ValueError("descent leaf fingerprint changed")
     if workers == 2:
-        left, right = [[tuple(map(int, x)) for x in PHASE.findall(slot)] for slot in slots]
-        if not left or not right or any(max(a[0], b[0]) < min(a[1], b[1]) for a in left for b in right):
+        intervals = [PHASE.findall(slot) for slot in slots]
+        timeline = sorted(tuple(map(int, interval)) for trace in intervals for interval in trace)
+        if sum(bool(trace) for trace in intervals) < workers or any(
+            end > start for (_, end), (start, _) in zip(timeline, timeline[1:])
+        ):
             raise ValueError("gated phases overlapped")
     return {"leaf_hash": next(iter(hashes)), "ntt_counts": next(iter(histogram))}
 

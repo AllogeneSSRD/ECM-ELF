@@ -42,11 +42,15 @@ struct EcmStage2Metrics {
     ecm_stage2::timing::PhaseTimes phases;
     bool clean=false,fold_resident=false,frontier_resident=false,groot_balanced=false;
 };
+struct EcmStage2GpuHandoff {
+    void (*ready)(void *)=nullptr;
+    void *context=nullptr;
+};
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
                        void (*report)(const char *, void *), void *context,
                        unsigned carrier_exponent=0,EcmStage2Metrics *metrics=nullptr,
-                       const char *a24_hex=nullptr);
+                       const char *a24_hex=nullptr,const EcmStage2GpuHandoff *handoff=nullptr);
 
 // Planning initializes the CUDA context and queries live memory, but performs
 // no curve arithmetic. All time/memory estimates are explicitly labelled.

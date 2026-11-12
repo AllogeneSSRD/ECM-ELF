@@ -17,7 +17,9 @@ BatchedRun run_batched(
     const std::vector<size_t> &Fdeg,
     size_t Fpad,
     const SmallPrimeBabyCache *baby_cache,
-    const ecm_stage2::GiantRange *requested_range)
+    const ecm_stage2::GiantRange *requested_range,
+    const EcmStage2GpuHandoff *handoff,
+    stage2_schedule::WorkspaceLease *workspace)
 {
     const size_t W = L.W;
     const unsigned long long D = SP.D, B1 = SP.B1, B2 = SP.B2;
@@ -687,6 +689,29 @@ BatchedRun run_batched(
         "giant_chunk_done: chunks=%llu chain_chunks=%llu ladder_chunks=%llu points=%llu\n",
         actual_point_chunks,R.giant_chain_chunks,actual_point_chunks-R.giant_chain_chunks,imax);
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
+    if(workspace && workspace->swapping() && device_fold.active && device_fold.hcount) {
+        const auto begin=now_s();
+        const auto owner_bytes=device_fold.memory.words[0]*8+device_fold.memory.words[1]*8;
+        device_fold.finish(Hflat);
+        const auto saved=Hflat.size()*8;
+        s4_dbad_resolve(*L.s4->red,true);
+        s4_oracle_drain(*L.s4->red);
+        const auto released=owner_bytes+L.s4->release_buffers()+L.arena->bytes+ws.bytes;
+        L.arena->release();ws.release();
+        const auto parked=now_s();
+        workspace->transfer();
+        const auto resumed=now_s();
+        ws.init(C);
+        size_t uploaded=0;
+        if(device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat,true)) {
+            device_fold.restore(Hflat);uploaded=saved+finvflat.size()*8+sizeof(R.fold_device.root_digest)+W*8;
+            std::vector<unsigned long long>().swap(Hflat);
+        }
+        stage2_log::print(stage2_log::debug,
+            "stage2_workspace_swap: h_d2h_bytes=%llu restore_h2d_bytes=%llu released_bytes=%llu save_seconds=%.6f wait_seconds=%.6f restore_seconds=%.6f resident=%d\n",
+            (unsigned long long)saved,(unsigned long long)uploaded,(unsigned long long)released,
+            parked-begin,resumed-parked,now_s()-resumed,int(device_fold.active));
+    }
     schedule.begin(stage2_schedule::Work::descent);
     stage2_log::phase("Normalize fold and descend F tree");
     stage2_memory::snapshot("after_giant_loop");
@@ -795,6 +820,7 @@ BatchedRun run_batched(
     s2g_state("the batched descent");            /* a driver kill here leaves this behind */
     if(!frontier.enabled)ws.need_vals((size_t)P);
     R.tail.metrics.frontier_resident=frontier.enabled;
+    const bool keep_product_leaves=frontier.enabled && fuse_env_ull("NTT_STAGE2_RESIDENT_PRODUCTS",1)!=0;
     std::vector<std::vector<unsigned long long>> values;
 
     {
@@ -802,7 +828,7 @@ BatchedRun run_batched(
             ScaledStats st;
             if(frontier.enabled) {
                 frontier.run(L,Ft,Fdeg,Fpad,H,values,st,BC_DESCENT,g_scaled_check || frontier_check);
-                frontier.release();device_fold.release();
+                if(!keep_product_leaves){frontier.release();device_fold.release();}
             } else descent_scaled(L,Ft,Fdeg,Fpad,H,&finv,values,st,BC_DESCENT,g_scaled_check,root_device.enabled?&prepared_root:nullptr);
             frontier.print();
             L.cat=-1;
@@ -923,7 +949,7 @@ BatchedRun run_batched(
         stage2_log::print(stage2_log::phases, "batched_phase: descent_done t=%.1f s divmods=%llu\n", R.t_descent,
                     R.descent_divmods);
 
-    schedule.begin(stage2_schedule::Work::gcd);
+    if(!keep_product_leaves)schedule.begin(stage2_schedule::Work::gcd);
     stage2_log::phase("Accumulate leaf products and GCD");
     stage2_memory::snapshot("after_descent");
     /* ---- 4. accumulate prod_j H(x_j) mod N ON THE DEVICE, one gcd per block ------------ */
@@ -931,16 +957,22 @@ BatchedRun run_batched(
     R.phase_boundaries.accum_begin=ta0;
     const size_t BLOCK = 64;                            /* small, so a hit localises to <=64 */
     std::vector<std::vector<unsigned long long>> bprod;
-    ws.need_vals((size_t)P);
-    {
-        {                  /* the S5 path already left its leaves in ws.dvals */
-            std::vector<unsigned long long> flat((size_t)P * W, 0ull);
-            for (size_t i = 0; i < P; ++i)
-                std::copy(values[i].begin(), values[i].end(), flat.begin() + (long)(i * W));
-            CK(stage2_wait::copy(ws.dvals, flat.data(), flat.size() * 8, cudaMemcpyHostToDevice));
-        }
+    if(keep_product_leaves) {
+        dev_block_products(ws,(int)P,(int)BLOCK,bprod,frontier.leaves,frontier.product_output);
+        frontier.release();device_fold.release();
+        schedule.begin(stage2_schedule::Work::gcd);
+    } else {
+        ws.need_vals((size_t)P);
+        std::vector<unsigned long long> flat((size_t)P * W, 0ull);
+        for(size_t i=0;i<P;++i)
+            std::copy(values[i].begin(),values[i].end(),flat.begin()+i*W);
+        CK(stage2_wait::copy(ws.dvals,flat.data(),flat.size()*8,cudaMemcpyHostToDevice));
         dev_block_products(ws, (int)P, (int)BLOCK, bprod);
     }
+    stage2_log::print(stage2_log::debug,
+        "stage2_block_products: resident=%d leaf_d2h_bytes=%llu leaf_d2h_seconds=%.6f leaf_h2d_bytes=%llu seconds=%.6f\n",
+        int(keep_product_leaves),frontier.leaf_d2h_bytes,frontier.leaf_read_seconds,
+        keep_product_leaves?0ull:(unsigned long long)P*W*8,now_s()-ta0);
     stage2_memory::snapshot("after_block_products");
     stage2_log::print(stage2_log::debug,
         "s3_product_workspace: compact=%d values_cap=%llu products_cap=%llu values_bytes=%llu "
@@ -960,6 +992,7 @@ BatchedRun run_batched(
        the cap. Every hit leaf's GCD and proper factors are retained even when
        candidate naming stops. Relocated probes do not name candidates. */
     bool name_hits = true;
+    const double arena_mb=L.arena?L.arena->mb():0;
     unsigned long long name_budget_blocks = 0;
     {
         const char *eh = std::getenv("NTT_NAME_HITS");
@@ -978,6 +1011,22 @@ BatchedRun run_batched(
         stage2_log::print(stage2_log::debug, "naming_policy: name_hits=%d budget_blocks=%llu (2*imax=%llu primality tests "
                     "per leaf, %llu per block of %llu)\n", name_hits ? 1 : 0, name_budget_blocks,
                     2ull * imax, tests_per_block, (unsigned long long)BLOCK);
+    }
+    if(handoff && !name_hits) {
+        const double handoff_start=now_s();
+        auto &reduce=*L.s4->red;
+        s4_dbad_resolve(reduce,true);
+        s4_oracle_drain(reduce);
+        for(auto *shape:reduce.shapes)shape->dt_flush();
+        const auto checks_done=now_s();
+        const auto bytes=L.s4->release_buffers()+(L.arena?L.arena->bytes:0)+ws.bytes;
+        if(L.arena)L.arena->release();
+        ws.release();
+        stage2_memory::snapshot("queue_before_cpu_gcd");
+        stage2_log::print(stage2_log::debug,
+            "stage2_queue_early: boundary=block_products released_bytes=%llu check_seconds=%.6f free_seconds=%.6f\n",
+            (unsigned long long)bytes,checks_done-handoff_start,now_s()-checks_done);
+        handoff->ready(handoff->context);
     }
     mpz_t bv, bg;
     mpz_inits(bv, bg, nullptr);
@@ -1125,7 +1174,7 @@ BatchedRun run_batched(
         R.arena_buf_builds = L.arena->buf_builds;
         R.arena_buf_reuse = L.arena->buf_hits;
         R.arena_overflow = L.arena->overflow;
-        R.arena_mb = L.arena->mb();
+        R.arena_mb = arena_mb;
     }
     R.t_post_end = now_s();
     R.phase_boundaries.accum_end=R.t_post_end;

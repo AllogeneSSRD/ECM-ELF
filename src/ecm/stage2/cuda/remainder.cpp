@@ -317,7 +317,8 @@ bool FoldDeviceState::init(
     const std::vector<unsigned long long> &F,
     const std::vector<unsigned long long> &inverse,
     FoldDeviceStats &st,
-    FoldFlatStats &fs)
+    FoldFlatStats &fs,
+    bool descent_only)
 {
     layer=&L;stats=&st;flat=&fs;st.requested=fold_device_flag("NTT_FOLD_DEVICE");
     if(!st.requested)return false;
@@ -364,11 +365,12 @@ bool FoldDeviceState::init(
     CK(cudaMalloc(&digest,16));CK(cudaMemsetAsync(digest,0,16));
     f=layout.f;inv=layout.inv;h=layout.h;g=layout.g;reverse=layout.reverse;
     t=layout.t;q=layout.q;qb=layout.qb;
-    upload(f,F);upload(inv,inverse);
+    if(!descent_only)upload(f,F);
+    upload(inv,inverse);
     std::vector<unsigned long long> hn(W);mpz_to_words(hn,W,L.N);
     CK(stage2_wait::copy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
     st.saved_bytes=ecm_stage2::owner_bytes(P,W,0)-bytes;
-    st.peak_bytes=bytes;st.enabled=active=true;st.t_setup=now_s()-begin;
+    st.peak_bytes=bytes;st.enabled=active=true;st.t_setup+=now_s()-begin;
     return true;
 }
 
@@ -424,6 +426,13 @@ void FoldDeviceState::seed(const std::vector<unsigned long long> &H)
 {
     if(H.size()>(P+1)*W || H.size()%W){std::fprintf(stderr,"FATAL: device fold seed shape\n");std::exit(3);}
     upload(h,H);hcount=H.size()/W;digest_root(h,H.size());
+}
+
+void FoldDeviceState::restore(const std::vector<unsigned long long> &H) {
+    if(H.size()>(P+1)*W || H.size()%W)throw std::runtime_error("invalid Stage2 saved fold shape");
+    upload(h,H);hcount=H.size()/W;
+    CK(stage2_wait::copy(digest,stats->root_digest,sizeof(stats->root_digest),cudaMemcpyHostToDevice));
+    stats->h2d_bytes+=sizeof(stats->root_digest);
 }
 
 std::vector<unsigned long long> FoldDeviceState::read(size_t offset,size_t count)
@@ -1019,13 +1028,18 @@ void ScaledFrontierDevice::run(
         if(poison && base==1)corrupt(next);
         std::swap(cur,next);offsets.swap(target);++st.levels;validate(nbase);
     }
-    std::vector<unsigned long long> leaves(pw);CK(stage2_wait::copy(leaves.data(),cur,pw*8,cudaMemcpyDeviceToHost));leaf_d2h_bytes=pw*8;
+    std::vector<unsigned long long> flat_leaves(pw);
+    const double read_start=now_s();
+    CK(stage2_wait::copy(flat_leaves.data(),cur,pw*8,cudaMemcpyDeviceToHost));
+    leaf_read_seconds=now_s()-read_start;leaf_d2h_bytes=pw*8;
     values.assign(p,std::vector<unsigned long long>(w));size_t leaf=0;
     for(size_t i=0;i<pad;++i)if(deg[pad+i]) {
         if(deg[pad+i]!=1 || leaf>=p){std::fprintf(stderr,"FATAL: scaled frontier nonlinear leaf\n");std::exit(3);}
-        std::copy_n(leaves.data()+offsets[i],w,values[leaf++].data());
+        std::copy_n(flat_leaves.data()+offsets[i],w,values[leaf++].data());
     }
     if(leaf!=p){std::fprintf(stderr,"FATAL: scaled frontier leaf count\n");std::exit(3);}
+    // Degree conservation and ordered offsets above make the final owner slice dense.
+    leaves=cur;product_output=next;
     st.leaves+=leaf;
     st.frontier_peak_bytes=logical_frontier_peak_bytes;
     st.pack_peak_bytes=host_staging_peak_bytes;

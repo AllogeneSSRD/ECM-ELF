@@ -17,7 +17,9 @@ struct Stage2Tail {
 };
 
 void dev_block_products(S3Workspace &W, int nvals, int per_block,
-                               std::vector<std::vector<unsigned long long>> &out);
+                       std::vector<std::vector<unsigned long long>> &out,
+                       const unsigned long long *resident_leaves=nullptr,
+                       unsigned long long *resident_output=nullptr);
 
 void s3_record(Stage2Tail &out, const mpz_t f, unsigned long long prime, const mpz_t N,
                       bool count_hit = true);

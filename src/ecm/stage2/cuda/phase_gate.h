@@ -49,6 +49,68 @@ inline const Options& options() {
     return value;
 }
 
+// Experimental one-workspace lease. Acquire it before any phase mutex.
+class WorkspaceLease {
+#ifdef _WIN32
+    HANDLE mutex_=nullptr;
+    unsigned mode_=0;
+    bool held_=false;
+    static void mark(const char *event) {
+        const auto time=std::chrono::steady_clock::now().time_since_epoch();
+        stage2_log::print(stage2_log::debug,"stage2_workspace_lease: event=%s ns=%lld\n",event,
+            (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
+    }
+    void acquire() {
+        const auto status=WaitForSingleObject(mutex_,INFINITE);
+        if(status==WAIT_ABANDONED)ReleaseMutex(mutex_);
+        if(status!=WAIT_OBJECT_0)throw std::runtime_error("cannot acquire Stage2 workspace lease");
+        held_=true;
+        mark("acquire");
+    }
+#endif
+public:
+    WorkspaceLease() {
+#ifdef _WIN32
+        const char *value=std::getenv("NTT_STAGE2_SWAP_WORKSPACE");
+        if(!value || (value[0]!='1' && value[0]!='2') || value[1] || options().mutex_name.empty())return;
+        mode_=unsigned(value[0]-'0');
+        mutex_=CreateMutexA(nullptr,FALSE,(options().mutex_name+".workspace").c_str());
+        if(!mutex_)throw std::runtime_error("cannot create Stage2 workspace lease");
+        try {acquire();}
+        catch(...) {if(held_)ReleaseMutex(mutex_);CloseHandle(mutex_);throw;}
+#endif
+    }
+    WorkspaceLease(const WorkspaceLease&)=delete;
+    WorkspaceLease& operator=(const WorkspaceLease&)=delete;
+    ~WorkspaceLease() {
+#ifdef _WIN32
+        if(mutex_) {
+            if(held_) {
+                try {mark("release");}catch(const std::exception &) {}
+                ReleaseMutex(mutex_);
+            }
+            CloseHandle(mutex_);
+        }
+#endif
+    }
+    bool swapping() const {
+#ifdef _WIN32
+        return mode_==2;
+#else
+        return false;
+#endif
+    }
+    void transfer() {
+#ifdef _WIN32
+        mark("release");
+        if(!ReleaseMutex(mutex_))throw std::runtime_error("cannot transfer Stage2 workspace lease");
+        held_=false;
+        SwitchToThread();
+        acquire();
+#endif
+    }
+};
+
 // One timeline per engine section, reused across giant chunks and G-tree
 // batches. The experiment shares only the gate, never CUDA buffers or state.
 class Phases {

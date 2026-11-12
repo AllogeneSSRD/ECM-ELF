@@ -7,6 +7,7 @@
 #include "remainder.h"
 
 #include "factors.h"
+namespace stage2_schedule {class WorkspaceLease;}
 
 struct BatchedRun {
     bool groot_balanced=false;
@@ -80,11 +81,13 @@ BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Params &SP,
                               const std::vector<std::vector<unsigned long long>> &Ft,
                               const std::vector<size_t> &Fdeg, size_t Fpad,
                               const SmallPrimeBabyCache *baby_cache=nullptr,
-                              const ecm_stage2::GiantRange *requested_range=nullptr);
+                              const ecm_stage2::GiantRange *requested_range=nullptr,
+                              const EcmStage2GpuHandoff *handoff=nullptr,
+                              stage2_schedule::WorkspaceLease *workspace=nullptr);
 
 int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
                     bool choose_d,
                     const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr,
                     unsigned carrier_exponent = 0,
-                    const char *saved_a24_hex = nullptr);
+                    const char *saved_a24_hex = nullptr,const EcmStage2GpuHandoff *handoff=nullptr);

@@ -1,5 +1,6 @@
 #include "ecm/stage2/curve_process.h"
 #include "ecm/stage2/process.h"
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -10,9 +11,28 @@ int main(int argc,char **argv) {
     try {
         if(argc>1 && std::string(argv[1])=="--curve-worker") {
             int code=0;
+            s2prod::Handle start,done,feedback;
+            std::string finalize;
             for(int i=2;i<argc;++i) {
-                std::cout<<"wire:"<<argv[i]<<'\n';
-                if(std::string(argv[i])=="--queue-receipt" && i+1<argc)code=std::stoi(argv[i+1]);
+                const std::string arg=argv[i];
+                std::cout<<"wire:"<<arg<<'\n';
+                if(i+1==argc)continue;
+                if(arg=="--queue-receipt")code=std::stoi(argv[i+1]);
+                if(arg=="--queue-gpu-start")start.value=reinterpret_cast<HANDLE>(uintptr_t(std::stoull(argv[i+1])));
+                if(arg=="--queue-gpu-done")done.value=reinterpret_cast<HANDLE>(uintptr_t(std::stoull(argv[i+1])));
+                if(arg=="--queue-gpu-input")feedback.value=reinterpret_cast<HANDLE>(uintptr_t(std::stoull(argv[i+1])));
+                if(arg=="--tune-condition-tag")finalize=argv[i+1];
+            }
+            if(start.value!=INVALID_HANDLE_VALUE) {
+                require(WaitForSingleObject(start.value,5000)==WAIT_OBJECT_0,"worker did not receive GPU admission");
+                const auto *view=static_cast<const char*>(MapViewOfFile(feedback.value,FILE_MAP_READ,0,0,s2prod::queue_feedback_bytes));
+                require(view && std::string(view)=="fixture feedback","worker received incorrect tune feedback");
+                UnmapViewOfFile(view);
+                std::cout<<"stage2_queue_observation: {\"verified\":1}"<<std::endl;
+                require(SetEvent(done.value)!=0,"cannot signal fixture GPU completion");
+                s2prod::Handle finish;
+                finish.value=OpenEventA(SYNCHRONIZE,FALSE,finalize.c_str());
+                require(finish.value && WaitForSingleObject(finish.value,5000)==WAIT_OBJECT_0,"fixture publication was not resumed");
             }
             std::cout<<"{\"type\":\"tune_selection\",\"runtime_prepare_hints\":\"fixture\"}\n";
             std::cerr<<"fixture stderr tail";std::cout<<"fixture stdout tail";
@@ -20,6 +40,14 @@ int main(int argc,char **argv) {
         }
         require(argc==2,"expected isolated output directory");
         const auto out=fs::absolute(argv[1]);require(!fs::exists(out),"output must be fresh");fs::create_directories(out);
+        using s2prod::queue_pipeline_level;
+        require(_putenv_s("ECM_STAGE2_QUEUE_PIPELINE","")==0,"cannot clear fixture pipeline override");
+        require(queue_pipeline_level(4096,1,false)==2 && queue_pipeline_level(4097,1,false)==0,"serial prefetch boundary changed");
+        require(queue_pipeline_level(2048,2,false)==2 && queue_pipeline_level(2049,2,false)==0,"paired witness prefetch boundary changed");
+        require(queue_pipeline_level(4096,2,true)==2 && queue_pipeline_level(4097,2,true)==0,"paired factor-only prefetch boundary changed");
+        require(_putenv_s("ECM_STAGE2_QUEUE_PIPELINE","2")==0 && queue_pipeline_level(4096,2,false)==2,"explicit prefetch override ignored");
+        require(_putenv_s("ECM_STAGE2_QUEUE_PIPELINE","0")==0 && queue_pipeline_level(318,1,false)==0,"explicit prefetch disable ignored");
+        require(_putenv_s("ECM_STAGE2_QUEUE_PIPELINE","")==0,"cannot restore fixture pipeline policy");
         s2prod::CurveProcessRequest r;
         r.save=out/"point with spaces.save";r.results=out/"internal.jsonl";
         r.record={47,98432,7};r.console_budget={128,32};r.b2=40000;r.d=210;r.batch=16;r.device=9999;r.worker=2;
@@ -53,7 +81,21 @@ int main(int argc,char **argv) {
         r.log=out/"callback-failure.log";bool threw=false;
         try{s2prod::run_curve_process(r);}catch(const std::runtime_error &e){threw=std::string(e.what())=="feedback fixture failure";}
         require(threw,"callback exception swallowed");
-        std::cout<<"{\"passed\":true,\"processes\":5,\"wire_checks\":33,\"cuda_devices\":0,\"engine_links\":0}\n";
+        r.queue_pipeline=true;r.runtime_prepare_cache=false;r.log=out/"pipeline.log";
+        r.condition_tag="Local\\ECM-ELF.Stage2.ProcessFixture."+std::to_string(GetCurrentProcessId());
+        s2prod::Handle publish;
+        publish.value=CreateEventA(nullptr,TRUE,FALSE,r.condition_tag.c_str());
+        require(publish.value!=nullptr,"cannot create fixture publication event");
+        s2prod::CurveProcess pipeline(r);
+        require(WaitForSingleObject(pipeline.gpu_done_handle(),50)==WAIT_TIMEOUT,"worker ran before GPU admission");
+        pipeline.allow_gpu("fixture feedback");
+        require(WaitForSingleObject(pipeline.gpu_done_handle(),5000)==WAIT_OBJECT_0,"GPU completion signal missing");
+        require(!pipeline.poll() && pipeline.gpu_released(),"GPU completion required worker exit");
+        require(pipeline.gpu_feedback().value_or("")=="{\"verified\":1}","verified observation was not read");
+        require(SetEvent(publish.value)!=0,"cannot resume fixture publication");
+        require(WaitForSingleObject(pipeline.handle(),5000)==WAIT_OBJECT_0,"fixture worker did not finish");
+        require(pipeline.poll().value_or(-1)==0,"pipeline fixture failed");
+        std::cout<<"{\"passed\":true,\"processes\":6,\"wire_checks\":47,\"cuda_devices\":0,\"engine_links\":0}\n";
         return 0;
     }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -56,6 +56,14 @@ size_t S4Ctx::output_release()
     return bytes;
 }
 
+size_t S4Ctx::release_buffers() {
+    const auto bytes=raw_release()+output_release()+8*d_pack_cap*(unsigned(d_packA!=nullptr)+unsigned(d_packB!=nullptr));
+    if(d_packA)CK(cudaFree(d_packA));
+    if(d_packB)CK(cudaFree(d_packB));
+    d_packA=d_packB=nullptr;d_pack_cap=0;
+    return bytes;
+}
+
 S4Ctx::~S4Ctx()
 {
     if (d_out) cudaFree(d_out);
@@ -103,20 +111,14 @@ void FoldDeviceState::release()
     active=false;
 }
 
-S3Workspace::~S3Workspace()
-{
-    if (dn) cudaFree(dn);
-    if (dqx) cudaFree(dqx);
-    if (dqz) cudaFree(dqz);
-    if (da24) cudaFree(da24);
-    if (dmone) cudaFree(dmone);
-    if (djs) cudaFree(djs);
-    if (dx) cudaFree(dx);
-    if (dz) cudaFree(dz);
-    if (giant_base) cudaFree(giant_base);
-    if (dvals) cudaFree(dvals);
-    if (dprod) cudaFree(dprod);
-    if (dsegfix) cudaFree(dsegfix);
+S3Workspace::~S3Workspace() { release(); }
+void S3Workspace::release() noexcept {
+    for(auto ptr:{&dn,&dqx,&dqz,&da24,&dmone,&djs,&dx,&dz,&giant_base,&dvals,&dprod,&dsegfix}) {
+        if(*ptr)cudaFree(*ptr);
+        *ptr=nullptr;
+    }
+    segfix_cap=js_cap=pt_cap=val_cap=prod_cap=bytes=0;
+    giant_base_d=0;giant_base_unit=false;
 }
 
 void S3Workspace::init(const LadderCtx &c)
@@ -224,4 +226,4 @@ ScaledFrontierDevice::~ScaledFrontierDevice()
 {release();}
 
 void ScaledFrontierDevice::release()
-{if(metadata){CK(cudaFree(metadata));metadata=nullptr;}}
+{if(metadata){CK(cudaFree(metadata));metadata=nullptr;}leaves=product_output=nullptr;}

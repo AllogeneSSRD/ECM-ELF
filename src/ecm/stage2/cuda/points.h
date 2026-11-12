@@ -58,6 +58,7 @@ struct S3Workspace {
     size_t bytes = 0;
 
     ~S3Workspace();
+    void release() noexcept;
     void init(const LadderCtx &c);
     void need_segfix(size_t seg);
     bool need_giant_base(unsigned long long d,mpz_srcptr modulus);

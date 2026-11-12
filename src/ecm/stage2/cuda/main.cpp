@@ -138,6 +138,9 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--parallel") {const auto n=num();if(n>2)throw std::runtime_error("parallel must be 0, 1 or 2");o.parallel=unsigned(n);o.portable_cli.insert(a);}
         else if (a == "--fixed-queue-route") o.fixed_queue_route=true;
+        else if (a == "--queue-gpu-start") o.queue_gpu_start=num();
+        else if (a == "--queue-gpu-done") o.queue_gpu_done=num();
+        else if (a == "--queue-gpu-input") o.queue_gpu_input=num();
         else if (a == "--queue-phase-gate") o.queue_phase_gate=value();
         else if (a == "--tune-min-repeats") {o.tune_min_repeats=num();if(!o.tune_min_repeats || o.tune_min_repeats>1000)throw std::runtime_error("tune-min-repeats must be 1..1000");o.portable_cli.insert(a);}
         else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<1 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 1..1000");o.portable_cli.insert(a);}
@@ -371,7 +374,7 @@ int driver(Options o) {
         configure_phase_experiment(o);
         return curve_worker(o);
     }
-    if(o.fixed_queue_route || !o.queue_phase_gate.empty())
+    if(o.fixed_queue_route || !o.queue_phase_gate.empty() || o.queue_gpu_start || o.queue_gpu_done || o.queue_gpu_input)
         throw std::runtime_error("Stage2 queue route arguments are internal to curve workers");
     if(o.stop_handle) {
         inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));

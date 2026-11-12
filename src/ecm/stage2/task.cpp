@@ -23,10 +23,12 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <string_view>
 namespace s2prod {
 fs::path fatal_log;
 // Shared by parent tasks and calibration; only process wire fields cross here.
@@ -119,6 +121,24 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     return run_curve_process(curve_request(o,save,r,b2,d,device,results,log,batch,ini_settings));
 }
 int curve_worker(Options o) {
+    using Clock=std::chrono::steady_clock;
+    const auto worker_start=Clock::now();
+    Handle gpu_start,gpu_done,gpu_input;
+    if(o.queue_gpu_start || o.queue_gpu_done || o.queue_gpu_input) {
+        if(stage2_backend::opencl || !o.queue_gpu_start || !o.queue_gpu_done || o.tune_child)
+            throw std::runtime_error("incomplete CUDA Stage2 pipeline worker");
+        gpu_start.value=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.queue_gpu_start));
+        gpu_done.value=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.queue_gpu_done));
+        if(!SetHandleInformation(gpu_start.value,HANDLE_FLAG_INHERIT,0) ||
+           !SetHandleInformation(gpu_done.value,HANDLE_FLAG_INHERIT,0))
+            throw std::runtime_error("invalid CUDA Stage2 pipeline worker events");
+        if(o.tune_runtime!=bool(o.queue_gpu_input))throw std::runtime_error("missing Stage2 pipeline tune feedback");
+        if(o.queue_gpu_input) {
+            gpu_input.value=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.queue_gpu_input));
+            if(!SetHandleInformation(gpu_input.value,HANDLE_FLAG_INHERIT,0))
+                throw std::runtime_error("invalid Stage2 pipeline tune feedback handle");
+        }
+    }
     // Internal children bypass the public TOML setup. Bind the forwarded S4
     // request before point setup publishes the per-curve environment.
     configure_s4_backend(o,false,{});
@@ -143,18 +163,47 @@ int curve_worker(Options o) {
     if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
         throw std::runtime_error("incomplete internal curve-worker arguments");
     if(!o.tune_child && !o.submission.empty())ecm_results::check_stage2_outputs(o.results,o.submission);
-    std::ifstream in(o.save, std::ios::binary);
-    if (!in) throw std::runtime_error("cannot reread save");
-    in.seekg(static_cast<std::streamoff>(o.offset));
-    std::string line;
-    if (!std::getline(in, line) || fingerprint(line) != o.hash)
-        throw std::runtime_error("save changed after planning");
+    const auto read_saved_line=[&] {
+        std::ifstream input(o.save,std::ios::binary);
+        if(!input)throw std::runtime_error("cannot reread save");
+        input.seekg(static_cast<std::streamoff>(o.offset));
+        std::string line;
+        if(!std::getline(input,line) || fingerprint(line)!=o.hash)
+            throw std::runtime_error("save changed after planning");
+        return line;
+    };
+    const auto line=read_saved_line();
     const Record r = parse_record(line);
     if(r.edwards && !o.b2 && o.auto_b2)
         throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
     if(o.carrier_exponent) {
         ecm_stage2::ModulusContext modulus;std::string error;
         if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
+    }
+    Big n, x, gcd;
+    mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
+    mpz_gcd(gcd.z, x.z, n.z);
+    if(o.queue_gpu_start) {
+        if(o.tune_runtime)try {o.queue_tune_snapshot=prepare_runtime_profile(o);}
+        catch(const std::exception &) {} // The normal selector will read a fresh profile on admission.
+        stage2_log::print(stage2_log::debug,"stage2_queue_prepare: record=%llu seconds=%.6f\n",
+            static_cast<unsigned long long>(o.index),std::chrono::duration<double>(Clock::now()-worker_start).count());
+        if(WaitForSingleObject(gpu_start.value,INFINITE)!=WAIT_OBJECT_0)
+            throw std::runtime_error("cannot wait for CUDA Stage2 queue admission");
+        if(read_saved_line()!=line)throw std::runtime_error("save changed during Stage2 prefetch");
+        if(o.queue_gpu_input) {
+            const auto *view=static_cast<const char *>(MapViewOfFile(gpu_input.value,FILE_MAP_READ,0,0,queue_feedback_bytes));
+            if(!view)throw std::runtime_error("cannot receive Stage2 pipeline tune feedback");
+            const auto *end=static_cast<const char *>(std::memchr(view,0,queue_feedback_bytes));
+            std::string payload;
+            if(end)payload.assign(view,end);
+            UnmapViewOfFile(view);
+            if(payload.empty())throw std::runtime_error("empty Stage2 pipeline tune feedback");
+            const auto feedback=ecm_results::json::parse(payload);
+            o.runtime_prepare_hints=feedback.get("prepare_hints").text();
+            o.runtime_route_hints=feedback.get("route_hints").text();
+            o.queue_tune_observation=feedback.get("observation").dump();
+        }
     }
     std::string result;
     EcmStage2Metrics tune_metrics;
@@ -179,9 +228,6 @@ int curve_worker(Options o) {
     const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
-    Big n, x, gcd;
-    mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
-    mpz_gcd(gcd.z, x.z, n.z);
     RuntimeTuneObservation observation;
     const auto observation_start=std::chrono::steady_clock::now();
     if(!o.relocation && !o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
@@ -207,12 +253,18 @@ int curve_worker(Options o) {
         ecm_stage2::GrootLayoutScope layout_scope(o.groot_layout);
         configure_cuda_wait(o.device);
         if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
+        const EcmStage2GpuHandoff handoff{[](void *handle){
+            if(!SetEvent(static_cast<HANDLE>(handle)))throw std::runtime_error("cannot hand off Stage2 GPU before GCD");
+        },gpu_done.value};
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
             &tune_metrics,
-            r.a24.empty()?nullptr:r.a24.c_str());
+            r.a24.empty()?nullptr:r.a24.c_str(),
+            o.queue_gpu_done && !o.tune_runtime && o.factor_only && early_gpu_handoff_requested()?&handoff:nullptr);
     }
     if (code || result.empty()) return code ? code : 1;
+    if(o.queue_gpu_done && !o.tune_runtime && !SetEvent(gpu_done.value))
+        throw std::runtime_error("cannot release CUDA Stage2 queue admission");
     if(o.tune_child) {
         const auto &m=tune_metrics;
         if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad || !m.phases.complete)
@@ -234,12 +286,18 @@ int curve_worker(Options o) {
             throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
         append(o.results,tune_metrics_json(m));return 0;
     }
+    const auto verify_start=Clock::now();
     if(!observation.sample.empty()) {
         if(status!="stage2_completed" || result.find("\"hits\":0,")!=0 || !ecm_stage2::result_factors(result).empty())
             observation.sample.clear();
         else try {complete_runtime_tune(observation,tune_metrics);}
         catch(const std::exception &e){observation.sample.clear();std::cerr<<"WARNING: runtime tune sample skipped: "<<e.what()<<std::endl;}
     }
+    if(o.queue_gpu_done && o.tune_runtime) {
+        std::cout<<"stage2_queue_observation: "<<runtime_tune_observation_json(observation)<<std::endl;
+        if(!SetEvent(gpu_done.value))throw std::runtime_error("cannot release CUDA Stage2 tune admission");
+    }
+    const auto publish_start=Clock::now();
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     double factor_seconds = 0;
     const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::path(o.ini);
@@ -301,11 +359,20 @@ int curve_worker(Options o) {
     details.members.erase(std::remove_if(details.members.begin(),details.members.end(),[](const auto &p){return p.first=="factors";}),details.members.end());
     const auto extra=",\"queue_receipt\":"+json_string(o.receipt)+",\"stage2-engine\":"+details.dump()+runtime_tune_json(observation);
     static const auto source_build=ecm_stage2::sha256_file(executable());
-    auto internal=ecm_results::internal_json(submission,n.z,0,source_build,extra);internal.pop_back();append(o.results,internal);
+    auto internal=ecm_results::internal_json(submission,n.z,0,source_build,extra);internal.pop_back();
+    const auto receipt_start=Clock::now();
+    append(o.results,internal);
+    const auto receipt_done=Clock::now();
     // Optional cache work follows the durable result. It cannot invalidate the
     // successful curve or cause the parent to replay a committed receipt.
     if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
     catch(const std::exception &e){std::cerr<<"WARNING: runtime tune write skipped; observation retained in results: "<<e.what()<<std::endl;}
+    if(o.queue_gpu_done)stage2_log::print(stage2_log::debug,
+        "stage2_queue_publish: record=%llu tune_verify=%.6f prepare=%.6f receipt=%.6f tune_write=%.6f\n",
+        static_cast<unsigned long long>(o.index),std::chrono::duration<double>(publish_start-verify_start).count(),
+        std::chrono::duration<double>(receipt_start-publish_start).count(),
+        std::chrono::duration<double>(receipt_done-receipt_start).count(),
+        std::chrono::duration<double>(Clock::now()-receipt_done).count());
     if(o.fixed_queue_route) {
         const auto &m=tune_metrics;
         std::cout<<"stage2_parallel_curve: {\"checked_nf\":"
@@ -363,9 +430,15 @@ bool checked_queue_curve(const std::string &payload,const ParallelRoute &route) 
     return true;
 }
 
-bool pair_memory_fits(const ParallelRoute &route,unsigned workers) {
+bool queue_workspace_lease_requested() {
+    const auto *mode=std::getenv("NTT_STAGE2_SWAP_WORKSPACE");
+    return mode && (mode[0]=='1' || mode[0]=='2') && !mode[1];
+}
+
+bool pair_memory_fits(const ParallelRoute &route,unsigned workers,bool beside_active=false) {
     const auto free=parallel_free_memory(route.options.device);
     const uint64_t margin=uint64_t(256)<<20;
+    if(queue_workspace_lease_requested())return free>margin && (beside_active || free-margin>=route.reservation);
     return free>margin && (free-margin)/workers>=route.reservation;
 }
 
@@ -390,23 +463,74 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
         size_t position=0;
         std::unique_ptr<CurveProcess> process;
         QueueClock::time_point started;
+        bool admitted=false,released=false;
     };
-    std::array<Active,2> active;
+    std::array<Active,3> active;
     auto &state=queue.state;
     const bool persist=!queue.progress.empty();
+    unsigned arithmetic_bits=route?route->shape.arithmetic_bits:std::max(o.carrier_exponent,o.inferred_carrier);
+    if(!route)for(size_t i=static_cast<size_t>(state.done);i<end && arithmetic_bits<=4096;++i)
+        arithmetic_bits=std::max(arithmetic_bits,unsigned(queue.plan[i].n.size()*4));
+    const auto pipeline_level=queue_pipeline_level(arithmetic_bits,workers,o.factor_only);
+    const bool pipeline=pipeline_level && (!o.tune_runtime || pipeline_level>=2) && !stage2_backend::opencl &&
+        !o.tune_child && !o.relocation && !std::getenv("ECM_STAGE2_PHASE_GATE") &&
+        state.reserved.empty() && end>state.done+1;
+    const unsigned capacity=pipeline?workers+1:workers;
     size_t next=static_cast<size_t>(state.done);
     unsigned running=0;
+    Active *prepared=nullptr;
+    std::string latest_observation="null";
     bool failed=false;
     QueueWindow result;
     const auto begin=QueueClock::now();
+    const auto report_start=[&](Active &slot) {
+        const auto &r=queue.plan[slot.position];
+        if(stage2_log::enabled(stage2_log::curve))
+            queue.report("curve_start: "+std::to_string(slot.position+1)+"/"+std::to_string(queue.plan.size())+
+                " record="+std::to_string(r.index)+" sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+
+                " checksum="+(r.checksum?"verified":"absent")+" curve_model="+(r.edwards?"ed":"mont param=0"),false);
+    };
+    const auto admit_worker=[&](Active &slot) {
+        if(pipeline)report_start(slot);
+        slot.started=QueueClock::now();slot.admitted=true;
+        ++running;
+        if(pipeline) {
+            const auto feedback=o.tune_runtime?"{\"prepare_hints\":"+json_string(o.runtime_prepare_hints)+
+                ",\"route_hints\":"+json_string(o.runtime_route_hints)+",\"observation\":"+latest_observation+'}':std::string{};
+            slot.process->allow_gpu(feedback);
+        }
+    };
+    const auto can_admit=[&] {
+        if(running>=workers)return false;
+        if(workers<2 || pair_memory_fits(*route,running?1:2,running!=0))return true;
+        if(pipeline && std::any_of(active.begin(),active.end(),[](const auto &slot){return slot.process && slot.released;}))
+            return false; // A finishing worker can still own a CUDA context.
+        result.checked=false;
+        if(running)return false;
+        workers=1;
+        queue.report("stage2_parallel_memory: serial fallback after live memory check",true);
+        return true;
+    };
     while(true) {
         poll_inherited_stop();
         for(auto &slot:active) {
             if(!slot.process)continue;
             const auto code=slot.process->poll();
+            if(pipeline && slot.admitted && !slot.released && slot.process->gpu_released()) {
+                --running;slot.released=true;
+                if(o.tune_runtime)latest_observation=slot.process->gpu_feedback().value_or("null");
+                if(stage2_log::enabled(stage2_log::curve)) {
+                    std::ostringstream message;
+                    message<<"stage2_queue_gpu_free: record="<<queue.plan[slot.position].index<<" wall="
+                           <<std::chrono::duration<double>(QueueClock::now()-slot.started).count()
+                           <<" feedback="<<int(latest_observation!="null");
+                    queue.report(message.str(),false);
+                }
+            }
             if(!code)continue;
-            --running;
-            if(*code) {
+            if(slot.admitted && !slot.released)--running;
+            if(prepared==&slot)prepared=nullptr;
+            if(*code || !slot.admitted) {
                 failed=true;slot.process.reset();continue;
             }
             const auto position=slot.position;
@@ -434,23 +558,25 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             }
             if(route)result.finishes.push_back(std::chrono::duration<double>(QueueClock::now()-begin).count());
         }
-        while(!failed && !stop_requests && next<end && running<workers) {
+        if(prepared && (failed || stop_requests)) {
+            // This reservation was never admitted and cannot have a receipt.
+            prepared->process.reset();prepared=nullptr;
+            state.reserved.pop_back();
+            if(persist)state.save(queue.progress);
+        }
+        if(prepared && can_admit()) {admit_worker(*prepared);prepared=nullptr;}
+        while(!failed && !stop_requests && next<end && !prepared) {
             const auto position=next-state.done;
             if(position<state.reserved.size() && state.reserved[position].completed) {
                 ++next;result.checked=false;continue;
             }
-            if(workers==2 && !pair_memory_fits(*route,running?1:2)) {
-                result.checked=false;
-                if(running)break;
-                workers=1;
-                queue.report("stage2_parallel_memory: serial fallback after live memory check",true);
-            }
-            const auto slot=std::find_if(active.begin(),active.end(),[](const auto &a){return !a.process;});
+            if(pipeline && state.reserved.size()>=workers+1)break;
+            if(!pipeline && !can_admit())break;
+            const auto slot=std::find_if(active.begin(),active.begin()+capacity,[](const auto &a){return !a.process;});
+            if(slot==active.begin()+capacity)break;
             const auto &r=queue.plan[next];
-            if(stage2_log::enabled(stage2_log::curve))
-                queue.report("curve_start: "+std::to_string(next+1)+"/"+std::to_string(queue.plan.size())+
-                    " record="+std::to_string(r.index)+" sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+
-                    " checksum="+(r.checksum?"verified":"absent")+" curve_model="+(r.edwards?"ed":"mont param=0"),false);
+            slot->position=next;slot->admitted=slot->released=false;
+            if(!pipeline)report_start(*slot);
             if(!o.tune_child)ecm_results::check_stage2_outputs(queue.results,o.submission,persist && state.done>0);
             if(position==state.reserved.size())
                 state.reserved.push_back({next,false,persist?stage2_queue::token():std::string{},queue.results.string()});
@@ -459,17 +585,24 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             if(persist)state.save(queue.progress);
             o.receipt=entry.receipt;o.runtime_remaining=queue.plan.size()-next;
             auto request=curve_request(o,queue.save,r,b2,d,o.device,queue.results,queue.log,o.batch,queue.defaults);
-            if(workers==2 && request.debug_log)
+            request.queue_pipeline=pipeline;
+            if((workers==2 || pipeline) && request.debug_log)
                 request.debug_file+=".slot"+std::to_string(slot-active.begin()+1);
-            slot->position=next++;
-            slot->started=QueueClock::now();
+            ++next;
+            if(!pipeline)admit_worker(*slot);
             slot->process=std::make_unique<CurveProcess>(std::move(request));
-            ++running;
+            if(pipeline) {
+                if(can_admit())admit_worker(*slot);
+                else prepared=&*slot;
+            }
         }
-        if(!running)break;
-        HANDLE handles[2];
+        HANDLE handles[6];
         DWORD count=0;
-        for(const auto &slot:active)if(slot.process)handles[count++]=slot.process->handle();
+        for(const auto &slot:active)if(slot.process) {
+            handles[count++]=slot.process->handle();
+            if(pipeline && slot.admitted && !slot.released)handles[count++]=slot.process->gpu_done_handle();
+        }
+        if(!count)break;
         if(WaitForMultipleObjects(count,handles,FALSE,workers==1?50:10)==WAIT_FAILED)
             throw std::runtime_error("Stage2 queue worker wait failed");
     }
@@ -505,6 +638,12 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
     std::optional<ParallelRoute> route;
     ParallelEvidence evidence{parallel_window_curves};
     bool evidence_read=false;
+    const auto *geometry_setting=std::getenv("ECM_STAGE2_QUEUE_D_SEARCH");
+    const bool geometry_search=o.parallel==2 && !d && !queue_workspace_lease_requested() &&
+        geometry_setting && std::string_view(geometry_setting)=="1";
+    struct GeometryArm {const ParallelRoute *route;ParallelEvidence evidence;bool attempted=false;};
+    std::vector<ParallelRoute> neighbours;
+    std::vector<GeometryArm> geometry_arms;
     const bool explicit_serial_sample=o.parallel==0 && !o.tune_runtime &&
         o.portable_cli.count("--parallel") && o.portable_cli.count("--tune-profile");
     const bool can_learn_parallel=o.tune_runtime || o.portable_cli.count("--parallel");
@@ -539,12 +678,47 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
         unsigned workers=o.parallel==1?2:1;
         size_t count=remaining;
         const char *reason=o.parallel==1?"forced":o.parallel==0?"serial":"insufficient_samples";
+        const ParallelRoute *selected=&*route;
+        GeometryArm *geometry_arm=nullptr;
+        bool geometry_probe=false;
         if(o.parallel==2 && !evidence_read) {
             evidence_read=true;
             try {evidence=read_parallel_evidence(*route,parallel_phase_mask,parallel_window_curves);}
             catch(const std::exception &e){queue.report("stage2_parallel: tune evidence unavailable: "+std::string(e.what()),true);}
         }
-        if(o.parallel==2) {
+        if(geometry_search && evidence.serial_middle) {
+            if(geometry_arms.empty()) {
+                geometry_arms.push_back({&*route,evidence});
+                try {
+                    neighbours=prepare_parallel_alternatives(*route,r,!queue.log.empty(),o.groot_layout<0);
+                    for(const auto &other:neighbours)geometry_arms.push_back({&other,
+                        read_parallel_evidence(other,parallel_phase_mask,parallel_window_curves)});
+                }catch(const std::exception &e){queue.report("stage2_parallel_geometry: "+std::string(e.what()),true);}
+            }
+            const double serial_wall=evidence.serial_wall/evidence.curves;
+            const double serial_middle=evidence.serial_middle/(evidence.curves-3);
+            double fastest=serial_wall;
+            for(auto &arm:geometry_arms) {
+                if(!pair_memory_fits(*arm.route,2))continue;
+                if(!arm.evidence.paired_middle) {
+                    if(!arm.attempted && can_learn_parallel && remaining>=parallel_window_curves) {
+                        geometry_arm=&arm;geometry_probe=true;
+                        break;
+                    }
+                    continue;
+                }
+                const auto wall=arm.evidence.paired_wall/arm.evidence.curves;
+                const auto middle=arm.evidence.paired_middle/(arm.evidence.curves-3);
+                if(wall<=fastest && serial_middle>=middle*parallel_min_gain) {
+                    geometry_arm=&arm;fastest=wall;
+                }
+            }
+            if(geometry_arm) {
+                selected=geometry_arm->route;workers=2;
+                if(geometry_probe)count=parallel_window_curves;
+                reason=geometry_probe?"measure_parallel_geometry":"measured_geometry_gain";
+            } else reason="geometry_serial";
+        } else if(o.parallel==2) {
             if(evidence.serial_middle && evidence.paired_middle) {
                 const auto gain=evidence.serial_middle/evidence.paired_middle;
                 workers=(gain>=parallel_min_gain && evidence.serial_wall>=evidence.paired_wall)?2:1;
@@ -555,30 +729,36 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
                 reason=workers==2?"measure_parallel":"measure_serial";
             }
         }
-        if(workers==2 && (!pair_memory_fits(*route,2) || !lease.acquire(route->device_uuid))) {
+        if(workers==2 && (!pair_memory_fits(*selected,2) || !lease.acquire(selected->device_uuid))) {
             workers=1;count=remaining;reason="memory_or_device_busy";
+            selected=&*route;geometry_arm=nullptr;geometry_probe=false;
         }
+        if(geometry_probe)geometry_arm->attempted=true;
         std::ostringstream decision;
         decision<<"stage2_parallel: mode="<<o.parallel<<" workers="<<workers<<" reason="<<reason
-                <<" curves="<<count<<" D="<<route->shape.d<<" P="<<ecm_stage2::d_catalog::degree(route->shape.d)
-                <<" carrier="<<route->shape.carrier<<" phase_mask="<<(workers==2?parallel_phase_mask:0);
-        if(o.parallel==2 && evidence.serial_middle && evidence.paired_middle)
+                <<" curves="<<count<<" D="<<selected->shape.d<<" P="<<ecm_stage2::d_catalog::degree(selected->shape.d)
+                <<" carrier="<<selected->shape.carrier<<" phase_mask="<<(workers==2?parallel_phase_mask:0)
+                <<" layout="<<unsigned(selected->shape.groot_balanced);
+        if(!geometry_search && o.parallel==2 && evidence.serial_middle && evidence.paired_middle)
             decision<<" middle_gain="<<evidence.serial_middle/evidence.paired_middle-1
                     <<" wall_gain="<<evidence.serial_wall/evidence.paired_wall-1;
         queue.report(decision.str(),false);
-        auto &fixed=route->options;
+        auto fixed=selected->options;
         fixed.queue_phase_gate=workers==2?std::to_string(parallel_phase_mask)+':'+stage2_queue::token():std::string{};
-        const auto timing=run_curve_window(queue,fixed,static_cast<size_t>(state.done)+count,workers,fixed.b2,fixed.d,&*route);
+        const auto timing=run_curve_window(queue,fixed,static_cast<size_t>(state.done)+count,workers,fixed.b2,fixed.d,selected);
         const auto [wall,middle]=queue_window_timing(queue,workers,count,timing);
         if(middle>0 && (o.parallel!=2 || can_learn_parallel)) {
-            if(o.parallel==2 && count==evidence.curves) {
+            if(geometry_probe) {
+                auto &entry=geometry_arm->evidence;
+                entry.curves=count;entry.paired_wall=wall;entry.paired_middle=middle;
+            } else if(o.parallel==2 && count==evidence.curves && !geometry_arm) {
                 if(workers==2){evidence.paired_wall=wall;evidence.paired_middle=middle;}
                 else {evidence.serial_wall=wall;evidence.serial_middle=middle;}
             }
-            try {record_parallel_window(*route,workers==2?parallel_phase_mask:0,workers,count,wall,middle);}
+            try {record_parallel_window(*selected,workers==2?parallel_phase_mask:0,workers,count,wall,middle);}
             catch(const std::exception &e){queue.report("stage2_parallel: tune write skipped: "+std::string(e.what()),true);}
         }
-        if(!timing.checked && state.done<size && !stop_requests) {
+        if(!timing.checked && !geometry_probe && state.done<size && !stop_requests) {
             run_curve_window(queue,o,size,1,b2,d);
             break;
         }

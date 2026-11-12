@@ -24,8 +24,10 @@ int run_real(
     const char *saved_qx_hex,
     Stage2Tail *saved_result,
     unsigned carrier_exponent,
-    const char *saved_a24_hex)
+    const char *saved_a24_hex,
+    const EcmStage2GpuHandoff *handoff)
 {
+    stage2_schedule::WorkspaceLease workspace;
     PolyLayer L;
     L.ntt_lengths.enabled=g_ntt_counts_enabled;
     L.device = g_device;
@@ -559,7 +561,8 @@ int run_real(
             ecm_stage2::GiantPolicyScope early(point_requested && baby_nonunit?0:-1,
                 point_requested && baby_nonunit?64:0);
             BR=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,
-                           relocation.active?&relocation:nullptr);
+                           relocation.active?&relocation:nullptr,
+                           (g_relocation_enabled || point_requested)?nullptr:handoff,&workspace);
         }
         const bool point_policy=BR.giant_tail_balance || ecm_stage2::giant_chain_points()!=64;
         const bool attempted=(relocation.active || point_policy) && !baby_nonunit;
@@ -575,7 +578,7 @@ int run_real(
                 stage2_log::print(stage2_log::phases,"%s: reason=hit_or_nonunit first=1 last=%llu\n",
                     g_relocation_enabled?"stage2_relocation_replay":"stage2_point_replay",relocation.last);
                 ecm_stage2::GiantPolicyScope legacy_points(0,64);
-                BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr);
+                BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,nullptr,nullptr,&workspace);
                 s4_oracle_drain(red);replay_seconds=now_s()-end;
                 original.t_giant+=BR.t_giant;original.t_gtrees+=BR.t_gtrees;original.t_fold+=BR.t_fold;
                 original.t_descent+=BR.t_descent;original.t_inv+=BR.t_inv;original.t_accum+=BR.t_accum;
@@ -973,7 +976,8 @@ int ecm_cuda_stage2_run(
     void *context,
     unsigned carrier_exponent,
     EcmStage2Metrics *metrics,
-    const char *a24_hex)
+    const char *a24_hex,
+    const EcmStage2GpuHandoff *handoff)
 {
     if(!n_hex || !x_hex || !report || device<0 || b1<2 || b2<=b1 ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
@@ -993,7 +997,7 @@ int ecm_cuda_stage2_run(
     } readback_hook;
     Stage2Tail tail;
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
-                              x_hex, &tail,carrier_exponent,a24_hex);
+                              x_hex, &tail,carrier_exponent,a24_hex,handoff);
     stage2_wait::report();
     if (code || tail.bad_factors) return code ? code : 1;
     if(metrics)*metrics=tail.metrics;
