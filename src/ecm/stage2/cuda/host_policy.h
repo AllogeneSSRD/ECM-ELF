@@ -7,6 +7,7 @@ void configure_weighted_ntt(const Options &o);
 void configure_cuda_wait(int device);
 struct HostWaitDefaults {bool present,value;};
 void configure_host_wait(Options &o,const HostWaitDefaults *defaults=nullptr);
+void configure_phase_experiment(Options &o);
 void configure_groot_experiment(Options &o);
 void configure_giant_policy(Options &o);
 struct PointBackendDefaults {bool baby_present,giant_present;std::string baby,giant;bool seed_present=false;std::string seed="scalar";};

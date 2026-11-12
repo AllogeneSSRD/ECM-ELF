@@ -361,6 +361,7 @@ int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) {
         bind_engine_options(o);
+        configure_phase_experiment(o);
         return curve_worker(o);
     }
     if(o.stop_handle) {
@@ -433,6 +434,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--short-calibration-seconds"))o.short_budget=s.short_budget;
     if(!o.portable_cli.count("--short-calibration"))o.short_calibration=s.short_calibration;
     if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
+    configure_phase_experiment(o);
     if(!o.portable_cli.count("--ntt-counts"))o.ntt_counts=s.ntt_counts;
 #ifndef ECM_STAGE2_OPENCL
     if(!o.portable_cli.count("--relocation"))o.relocation=s.relocation;

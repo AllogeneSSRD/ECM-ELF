@@ -167,6 +167,14 @@ S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收�
 
 `request_program`预测满次数驻留fold的乘法顺序、形状、来源和树租约。初始化/NTT/S4/owner/giant按同一时间线计算条件峰和free需求，host fold/frontier可使用受限arena的保守上界。驱动以tune实测或估算选择D及合法承载；单G、baby预算回退、诊断及全部分配失败不在统一保证中。引擎保留实时检查，详见[内存](MEMORY.md)与[Auto B2/tune](AUTO_B2.md)。
 
+## 双目标阶段调度试验
+
+队列默认一次执行一条曲线。Windows CUDA 可在两个独立 worker 中用相同的 `ECM_STAGE2_PHASE_GATE=<mask>:<group>` 试验阶段互斥。同一设备上的一对 worker 共用一个组名。掩码位值为 baby 点及归一化 1、F 树 2、求逆 4、giant 点及归一化 8、每棵 G 树及 fold 16、下降 32、GCD 64。每个 worker 可以按其执行形状设置掩码。启用后暂停运行时学习与短校准，可继续读取既有整曲线 tune。日志、结果和检查点仍由各 worker 独立管理，显存准入由外层试验控制。
+
+受控阶段开始前阻塞等待命名互斥锁，完成后记录默认 CUDA stream 的事件，等本进程已提交的设备工作完成才释放锁。锁覆盖实际 giant 点块及其非单位回退，G 树及 fold 则逐批准入。未纳入掩码的阶段可继续推进。退出时若 CUDA 围栏失败，当前 worker 返回失败。等待方检测到锁所有者异常退出时也报告失败。
+
+`ECM_STAGE2_PHASE_TRACE=1` 把阶段起止与准入等待写入调试日志。启用 `NTT_HOST_TRACE=1` 时同一阶段也生成 NVTX 区间。分类应依据执行形状的单曲线时间线及双曲线实测争用，结合显存和单曲线延迟决定是否准入。相关入口和数据见 [阶段围栏](../../src/ecm/stage2/cuda/phase_gate.h) 与 [双目标阶段互斥实测](../performance/STAGE2.md#双目标阶段互斥)。
+
 ## 代码依据
 
 - [生产引擎](../../src/ecm/stage2/cuda/engine.cpp)：`run_real`、relocation 和 [完整计时输出](../../src/ecm/stage2/cuda/engine.cpp#L607)；[批次流程](../../src/ecm/stage2/cuda/batch.cpp)：`run_batched`；[规划](../../src/ecm/stage2/cuda/plan.cpp)：`prepare_stage2_plan`、`ecm_cuda_stage2_plan`。

@@ -3,6 +3,7 @@
 #include "../backend.h"
 #ifndef ECM_STAGE2_OPENCL
 #include <cuda_runtime_api.h>
+#include "phase_gate.h"
 #endif
 #include "../planning/cost_profile.h"
 #include "../point_backend.h"
@@ -11,6 +12,21 @@
 #include <cstring>
 #include <iostream>
 namespace s2prod {
+void configure_phase_experiment(Options &o) {
+#ifndef ECM_STAGE2_OPENCL
+    if (!stage2_schedule::options().mask) return;
+    if (!o.tune.empty() || o.tune_child)
+        throw std::runtime_error("Stage2 phase gating is incompatible with tune runs");
+    // Pair scheduling changes wall time and live memory. Keep its observations
+    // out of the single-worker profile, while allowing reads of existing rows.
+    o.tune_runtime = false;
+    o.short_calibration = false;
+    o.short_batch_tune = false;
+#else
+    (void)o;
+#endif
+}
+
 void apply_point_backends(const Options &o) {
 #ifndef ECM_STAGE2_OPENCL
     if(_putenv_s("NTT_BABY_COOP",std::to_string(o.selected_baby_coop).c_str()) ||

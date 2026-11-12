@@ -11,6 +11,7 @@
 #include "../planning/giant_chunk.h"
 #include "scale_plain.cuh"
 #include "s4_pack_state.h"
+#include "phase_gate.h"
 
 int run_real(
     const char *n_str,
@@ -29,6 +30,8 @@ int run_real(
     L.ntt_lengths.enabled=g_ntt_counts_enabled;
     L.device = g_device;
     stage2_memory::Session memory_session; // Destroyed after all curve-local device owners.
+    stage2_schedule::Phases schedule;
+    schedule.begin(stage2_schedule::Work::setup);
     stage2_log::phase("Plan Stage2 bounds and memory");
     std::string modulus_error;
     if(!L.configure(n_str,n_is_hex?16:10,carrier_exponent,modulus_error)) {
@@ -349,6 +352,7 @@ int run_real(
     std::vector<std::string> baby_deg;
     unsigned long long baby_noninv=0;
     bool baby_nonunit_seen=false;
+    schedule.begin(stage2_schedule::Work::baby);
     phase_boundaries.baby_begin=now_s();
     stage2_log::phase("Generate and normalize baby points");
     stage2_memory::snapshot("before_baby");
@@ -477,6 +481,7 @@ int run_real(
         stage2_log::print(stage2_log::phases, "real_baby: points=%llu ladder=%.3f s affine=%.3f s degenerate=%llu\n",
                     (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
+        schedule.begin(stage2_schedule::Work::f_tree);
         phase_boundaries.ftree_begin=now_s();
         stage2_log::phase("Build baby-point F tree");
         stage2_memory::snapshot("before_ftree");
@@ -510,6 +515,7 @@ int run_real(
                     L.ntt_seconds);
         t_f = now_s() - t0;
     }
+    schedule.finish();
     stage2_log::print(stage2_log::debug, "exactness: binding_shape P=%llu S=%llu slot_bits=%llu slot_words=%llu "
                 "L=P*slot_words=%llu bpw=%d ; L*(2^bpw-1)^2 = 2^%.3f < p = 2^%.3f -> %s\n",
                 L.bind_P, (unsigned long long)L.S, L.bind_slot_bits, L.bind_slot_words,
@@ -578,6 +584,7 @@ int run_real(
         } else if(replayed)replay_seconds=now_s()-t0;
         if(point_policy)stage2_log::print(stage2_log::phases,
             "stage2_point_policy: requested=1 replayed=%d legacy_chain=64 legacy_tail_balance=0\n",(int)replayed);
+        schedule.begin(stage2_schedule::Work::finalize);
         stage2_log::phase("Validate arithmetic and finalize factors");
         s4_oracle_drain(red);    /* validation must finish BEFORE elapsed and success */
         /* merge the factors that degenerate BABY points revealed (objective 3): each already

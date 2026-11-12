@@ -7,6 +7,7 @@
 #include "checks.h"
 #include "diagnostics.h"
 #include "../planning/giant_chunk.h"
+#include "phase_gate.h"
 
 BatchedRun run_batched(
     PolyLayer &L,
@@ -135,6 +136,8 @@ BatchedRun run_batched(
     /* 1/F: the Newton inverse of the REVERSED, MONIC F, to the length a full-size mod-F
        reduction needs (deg T = 2P => k = P+1).  Computed ONCE and reused by every fold --
        the reference's cost model has no such term, so it is charged to its own category. */
+    stage2_schedule::Phases schedule;
+    schedule.begin(stage2_schedule::Work::inverse);
     stage2_log::phase("Prepare polynomial inverse");
     stage2_memory::snapshot("before_inverse");
     CPoly finv;
@@ -173,6 +176,7 @@ BatchedRun run_batched(
             (unsigned long long)freed,(unsigned long long)output,now_s()-begin);
     }
     if(fold_flat_enabled && !finvflat.empty())device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat);
+    schedule.finish();
     stage2_memory::snapshot("after_fold_admission");
     CPoly H;
     FTreeStats gs;
@@ -223,6 +227,7 @@ BatchedRun run_batched(
         if(range.active)stage2_log::print(stage2_log::debug,
             "relocation_chunk: offset=%llu first=%llu points=%llu capacity=%llu\n",
             c0,(unsigned long long)clo,take,pts_per_chunk);
+        schedule.begin(stage2_schedule::Work::giant);
         const double tgp = now_s();
         s2g_state("giant ladder chunk: about to launch");   /* the last state on a driver kill */
         /* THE CHAIN BY DEFAULT (see s2g_chain_kernel): one differential addition per giant point
@@ -364,12 +369,14 @@ BatchedRun run_batched(
             if(R.device_leaf.bad_groups)R.tail.nonunit=true;
             R.t_gleaves+=now_s()-t;R.t_ginv+=R.device_leaf.t_invert-ti;
         }
+        schedule.finish();
         stage2_log::print(stage2_log::debug, "giant_chain_policy: npts=%llu route=%s base_block=%llu block=%llu short_block=%llu short_max=%llu configured_min=%llu effective_min=%llu words=%llu\n",
             npts,actual_chain?"chain":"ladder",chain_block,actual_chain?effective_chain_block:0ull,
             short_chain_block,short_chain_max,configured_chain_min,chain_min,(unsigned long long)W);
         GfinvBatch segment_inverse(gseg,W,L.target(),g_gfinv_batch);
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
+        schedule.begin(stage2_schedule::Work::g_tree_fold);
         const size_t lo = (size_t)(b * (unsigned long long)P);
         size_t hi = lo + P;
         if (hi > (size_t)imax) hi = (size_t)imax;
@@ -671,6 +678,7 @@ BatchedRun run_batched(
                         L.arena ? L.arena->overflow : 0ull);
         }
         }
+        schedule.finish();
         c0=c1;
     }
     R.t_post_loop=now_s();
@@ -679,6 +687,7 @@ BatchedRun run_batched(
         "giant_chunk_done: chunks=%llu chain_chunks=%llu ladder_chunks=%llu points=%llu\n",
         actual_point_chunks,R.giant_chain_chunks,actual_point_chunks-R.giant_chain_chunks,imax);
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
+    schedule.begin(stage2_schedule::Work::descent);
     stage2_log::phase("Normalize fold and descend F tree");
     stage2_memory::snapshot("after_giant_loop");
     ScaledRootDeviceStats root_device;
@@ -914,6 +923,7 @@ BatchedRun run_batched(
         stage2_log::print(stage2_log::phases, "batched_phase: descent_done t=%.1f s divmods=%llu\n", R.t_descent,
                     R.descent_divmods);
 
+    schedule.begin(stage2_schedule::Work::gcd);
     stage2_log::phase("Accumulate leaf products and GCD");
     stage2_memory::snapshot("after_descent");
     /* ---- 4. accumulate prod_j H(x_j) mod N ON THE DEVICE, one gcd per block ------------ */
