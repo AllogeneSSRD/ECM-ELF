@@ -129,6 +129,42 @@ TPI32及分档对照使用`--coop-tpi 32 --coop-middle`，每格测旧版默认�
 
 原生功能回归见`test_stage2_point_backends_gpu.py --scope giant-auto|giant-small|giant-formal`：固定／凑整B2上的三后端学习、只读复用、未配对保护、显式小P及邻D／增量ECM tune。完整后端队列需留足剩余曲线；最少观察数2时使用10条计划，覆盖四组主要比较及后续复用。该回归使用独立宽位NF输入，全部为功能证据，不加入上述性能矩阵。
 
+### 小档 B2 串行与双槽对照
+
+`bench_stage2_parallel_matrix.py` 读取小档 13 点冻结摘要的 `best` 行和原始 save。每个点默认强制双槽，运行两批、每批两条。保留相同的 N、B1/B2、承载与点核配置。显存不足时试同 D 的另一布局或较小 D，逐项保存准入日志。每条曲线通过引擎自检、下降摘要、NTT 计数和阶段互斥检查后，窗口才进入图表。
+
+```powershell
+python tools/bench/bench_stage2_parallel_matrix.py --exe build_stage2_local/ecm_cuda_stage2.exe --device 1 `
+  --reference data/benchmarks/stage2_giant_auto_20261101/matrix01/summary.json `
+  --inputs data/experiments/stage2_giant_auto_20261101/matrix01/inputs `
+  --out data/experiments/stage2_parallel_0620/small_b2_pairs --curves 2 --repeats 2
+```
+
+`--curves 9 --repeats 1` 可复查长窗口。短批使用完整队列墙钟除以曲线数，长窗口同时提供完整与去头尾的中段秒数。自动准入使用长窗口的数据。
+
+串行补测使用合并后的双槽 `summary.json`。可先运行下方分析器，省略 `--serial-summary` 和 `--publish`，将 `--output`、`--figures` 分别指向 `data/benchmarks/stage2_parallel_0620/small_b2_pairs` 和 `data/figures/stage2_parallel_0620/small_b2_pairs`。
+
+候选包含旧矩阵的普通与承载优选、当前规划器为两种算术返回的 D/P 和布局，以及实际双槽配置。先对每种唯一配置测一条，距首轮最快值 3% 内有多个候选时各补一条，按引擎耗时选定串行路线。选定后独立跑两批、每批两条。短批使用空 tune 与 `--parallel 2 --tune-runtime 0`，程序在一槽运行并输出原生队列墙钟。采集器核对实际并行槽数及算术结果。
+
+```powershell
+python tools/bench/bench_stage2_serial_matrix.py --exe build_stage2_local/ecm_cuda_stage2.exe --device 1 `
+  --reference data/benchmarks/stage2_giant_auto_20261101/matrix01/summary.json `
+  --pair-summary data/benchmarks/stage2_parallel_0620/small_b2_pairs/summary.json `
+  --inputs data/experiments/stage2_giant_auto_20261101/matrix01/inputs `
+  --out data/experiments/stage2_parallel_0620/small_b2_serial
+```
+
+```powershell
+python tools/bench/analyze_stage2_backend_matrix.py `
+  --reference-summary data/benchmarks/stage2_giant_auto_20261101/matrix01/summary.json `
+  --parallel-summary data/benchmarks/stage2_parallel_0620/small_b2_pairs/summary.json `
+  --serial-summary data/experiments/stage2_parallel_0620/small_b2_serial/summary.json `
+  --output data/benchmarks/stage2_parallel_0620/small_b2_comparison `
+  --figures data/figures/stage2_parallel_0620/small_b2_comparison --publish docs/performance/attachments
+```
+
+分段采集可多次传入相应的摘要参数。对照图要求两种模式覆盖同一 13 个位宽，GPU、版本和样本规模一致。线性和对数绝对耗时图使用相同数据，百分比图和 `serial_vs_parallel.csv` 以单槽每曲线耗时为分母。
+
 ### 启动短校准与生产凑整隔离
 
 `tools/test/test_stage2_calibration_rounding_gpu.py --stage2 <EXE> --save <B1=20的NF成本探测点> --output <新目录> --allow-gpu-pid <已授权界面PID>`用空性能文件验证五种配置。`--expect-bug`记录修复前短校准被凑整的失败及两个通过对照；默认要求短校准保持D210／B2=42020／202点，正常规划仍保留生产凑整，显式ECM tune仍拒绝凑整但接受CLI关闭。`--run-curve`将short_on继续执行为一条真实Stage2，核对NF、实际B2及GMP零错误。该工具不消费生产队列，不修改源保存点；原始输入与程序、逐调用进程门禁及遥测均独立冻结。此为功能回归，不计入性能矩阵。
