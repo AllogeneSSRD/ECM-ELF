@@ -34,13 +34,19 @@ flowchart LR
 
 融合适用于一批模加减产生且只被下一批打包读取的槽，以及第二批中只供第三批使用的平方项 \(\mathrm{DiffSq}\) 和融合乘加项 \(BB+A_{24}E\)。这类槽保留段内结果，pack 对源 limb 按需修正，再提取 digit 并施加权重。digit 跨越 limb 或段边界时，两个来源分别查各自的修正范围。还要参与普通模算术的输出和每步的两组 X/Z 都走独立写回，因此回读和检查点只看到规范整数。
 
-生产在 weighted 且 \(p>114688\) 时启用分段进位，预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。分项剖析及启用依据见 [GPU1 宽位宽归约热点](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点)。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
+生产在 weighted 且 \(p>114688\) 时启用分段进位。单曲线使用 2560 或 5120 点混合 NTT 时，从 \(p=53249\) 起可提前启用。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。分项剖析及启用依据见 [GPU1 宽位宽归约热点](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [前向 tile 与进位](../performance/STAGE1_MERSENNE_NTT.md#前向-tile-与进位)。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
 
 ## Stage1 radix-5 PFA
 
 加权 Stage1 在 \(L=5W\)、\(W=2^k\) 的变换上使用 PFA 分解。选 \(r\in\{1,2,3,4\}\) 使 \(1+rW\equiv0\pmod 5\)，用 \(n=(1+rW)i+Wj\bmod L\) 表示系数序号。两个因子互素，五点 DFT 和 \(W\) 点 NTT 因此可以独立执行。频点按相同置换排列，逐点乘加保持原有卷积含义。
 
 输入置换合入加权 pack，逆置换合入五点逆变换的写回。每个线程拥有同一列 \(i=n\bmod W\) 的五个值，只在本线程的共享内存槽中轮换，保持各平面的全局读写连续。不同线程的逆变换写回互不相交，因此可以原位执行。256 线程块使用 10 KiB 动态共享内存。每个方向省去 \(4W\) 次 Goldilocks 域乘，长度 10240 时两张旋转因子表合计少用 128 KiB 设备内存。实现与调度见 [radix-5 内核](../../kernels/cuda/stage1_ntt_radix5.cuh) 和 [Stage1 NTT ladder](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
+
+## Stage1 前向 tile
+
+对于独立 pack 后至少九层的 tile，每个线程读取第一组 radix-4 的四个操作数，在寄存器中完成首两层 DIF，再将结果写入共享内存。块同步后继续剩余 DIF 和 warp 尾层。这样省去原始数据的共享写入、首组读取和一次块同步。混合 radix-5 的各二次幂平面使用同一索引合同。
+
+直接 pack 到单 tile 且有至少 24 条活跃曲线时，按层数选择。1 层直接完成两点蝶形，启用 warp 尾层的 5／6 层在一个 warp 内直接变换并写出，7 层先做一层 DIF 再进入 warp。2–4 和 8–10 层保留共享 pack，并使用 \(\max(32,\min(256,2^{t-1}))\) 个线程。读入融合的块宽使用上限 512。`stage1_ntt_plan` 分别记录前向和逆向的线程数及动态共享内存。见 [前向内核](../../kernels/cuda/stage1_ntt_dataflow.cuh)、[剩余 DIF 层](../../src/ecm/cuda/ntt/device/tile_pass.cuh) 和 [实测](../performance/STAGE1_MERSENNE_NTT.md#前向-tile-与进位)。
 
 ## Stage1 逐点乘加与逆变换 tile
 

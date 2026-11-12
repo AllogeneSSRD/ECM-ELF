@@ -661,8 +661,8 @@ static void launch_forward_outer(bool coop, int M, unsigned long long *d,
     }
 }
 
-void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
-                              unsigned long long omega, unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage)
+void ntt_forward_outer_fused(unsigned long long* d, const FuseCtx& c, unsigned long long omega,
+    unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage)
 {
     unsigned long long n = c.n;
     const unsigned long long stride = n;
@@ -693,6 +693,14 @@ void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
         fuse_mark("fwd outer pass", ft0);
         L += M;
     }
+}
+
+void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
+                              unsigned long long omega, unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage)
+{
+    ntt_forward_outer_fused(d, c, omega, nbatch, stream, packed_first_stage);
+    const auto n = c.n, stride = n;
+    double ft0 = now_s();
     const int tile = c.t - (packed_first_stage && c.nms==0 ? 1 : 0);
     if (tile > 0) {
         const unsigned int blocks = (unsigned int)(n >> tile);

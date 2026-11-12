@@ -1,5 +1,20 @@
 #pragma once
 #include "goldilocks.cuh"
+
+struct TileRadix4 {
+    unsigned long long x0, x1, x2, x3;
+};
+
+__device__ __forceinline__ TileRadix4 tile_radix4_dif(unsigned long long a,
+    unsigned long long b, unsigned long long c, unsigned long long d,
+    unsigned long long w0, unsigned long long w1, unsigned long long w2)
+{
+    const auto ac = gl_add_dev(a, c), bd = gl_add_dev(b, d);
+    const auto u = gl_mul(gl_sub_dev(a, c), w0), v = gl_mul(gl_sub_dev(b, d), w1);
+    return {gl_add_dev(ac, bd), gl_mul(gl_sub_dev(ac, bd), w2),
+            gl_add_dev(u, v), gl_mul(gl_sub_dev(u, v), w2)};
+}
+
 __device__ __forceinline__ void tile_radix4_block(unsigned long long *sm, unsigned long long TILE,
                                                  int st, const unsigned long long *tbl)
 {
@@ -11,23 +26,12 @@ __device__ __forceinline__ void tile_radix4_block(unsigned long long *sm, unsign
     for (unsigned long long m = threadIdx.x; m < units; m += blockDim.x) {
         const unsigned long long base = (m >> (st - 1)) << (st + 1);
         const unsigned long long u = m & (h2 - 1);
-        const unsigned long long a = sm[base + u];
-        const unsigned long long b = sm[base + u + half];
-        const unsigned long long c = sm[base + h2 + u];
-        const unsigned long long d = sm[base + h2 + u + half];
-        /* stage st (half): (base+u, base+u+half) with j = u; (base+h2+u, base+h2+u+half)
-           with j = (base+h2+u) mod half = h2+u  -- DIF multiplies AFTER the subtraction */
-        const unsigned long long a1 = gl_add_dev(a, b);
-        const unsigned long long b1 = gl_mul(gl_sub_dev(a, b), twA[u]);
-        const unsigned long long c1 = gl_add_dev(c, d);
-        const unsigned long long d1 = gl_mul(gl_sub_dev(c, d), twA[h2 + u]);
-        /* stage st-1 (h2): (base+u, base+h2+u) with j = u  and  (base+2*h2+u, base+3*h2+u)
-           with j = u  -- BOTH pairs of the smaller stage share the same twiddle */
-        const unsigned long long tw = twB[u];
-        sm[base + u] = gl_add_dev(a1, c1);
-        sm[base + h2 + u] = gl_mul(gl_sub_dev(a1, c1), tw);
-        sm[base + 2 * h2 + u] = gl_add_dev(b1, d1);
-        sm[base + 3 * h2 + u] = gl_mul(gl_sub_dev(b1, d1), tw);
+        const auto x = tile_radix4_dif(sm[base + u], sm[base + h2 + u], sm[base + half + u],
+            sm[base + half + h2 + u], twA[u], twA[h2 + u], twB[u]);
+        sm[base + u] = x.x0;
+        sm[base + h2 + u] = x.x1;
+        sm[base + half + u] = x.x2;
+        sm[base + half + h2 + u] = x.x3;
     }
 }
 

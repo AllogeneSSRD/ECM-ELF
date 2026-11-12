@@ -340,8 +340,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                         PfaRadix5 | CoalescedRadix5 | InverseWarpInput;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
-    // Enable segmentation where enough limbs amortize its extra launch.
-    if (p > 14 * stage1_carry_segment * 32) {
+    // A single mixed transform can amortize the extra segment launch sooner
+    // when its existing pack can consume the carries directly.
+    const bool early_segments = curves == 1 && p >= 53249 && (s.length == 2560 || s.length == 5120);
+    if (p > 14 * stage1_carry_segment * 32 || early_segments) {
         defaults |= SegmentedCarry;
         if (mixed || curves == 1) defaults |= DeferredPack;
     }
@@ -429,8 +431,22 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (inverse_warp_input) result.dataflow |= InverseWarpInput;
     const size_t tile_smem = sizeof(U) << ctx.t;
     const size_t inverse_smem = inverse_warp_input && ctx.t == 6 ? 0 : tile_smem;
-    const bool routed = requested & DirectRoute;
     const bool packed = (requested & PackedForward) && !mixed && ctx.nms == 0;
+    const bool default_forward = control && !control->experimental_dataflow.has_value();
+    const bool packed_batch = packed && curves >= 24;
+    const bool forward_input = (requested & ForwardTileInput) || (default_forward &&
+        ((!packed && ctx.t >= 9) || (packed_batch && (ctx.t == 1 || (warp_tile && ctx.t <= 7)))));
+    const bool compact_pack = packed_batch && ((ctx.t >= 2 && ctx.t <= 4) || (ctx.t >= 8 && ctx.t <= 10));
+    const bool compact_forward = ((forward_input || packed) && (requested & ForwardTileCompact)) ||
+        (default_forward && compact_pack);
+    const unsigned forward_limit = compact_forward ? 256 : FUSE_TILE_THREADS;
+    const unsigned forward_threads = (forward_input || compact_forward)
+        ? std::max(32u, std::min(forward_limit, 1u << (ctx.t - 1))) : FUSE_TILE_THREADS;
+    const size_t forward_smem = forward_input && (ctx.t <= 2 || (warp_tile && ctx.t <= 6)) ? 0 : tile_smem;
+    if (forward_input) result.dataflow |= ForwardTileInput;
+    if (compact_forward && (!forward_input || ctx.t >= 10))
+        result.dataflow |= ForwardTileCompact;
+    const bool routed = requested & DirectRoute;
     const bool cached = (requested & CachedCarry) && options.weighted && !segmented;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
     if (routed) result.dataflow |= DirectRoute;
@@ -443,7 +459,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             stages += std::to_string(width);
         };
         Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
-                  FUSE_TILE_THREADS, inverse_threads, unsigned(inverse_smem),
+                  forward_threads, unsigned(forward_smem), inverse_threads, unsigned(inverse_smem),
                   ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   warp_tile, profile.source, options.weighted, {}, {}, result.dataflow};
@@ -456,16 +472,23 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         control->describe(plan);
     }
     const size_t carry_smem = size_t((s.words + threads - 1) / threads) * threads * sizeof(uint32_t);
-    const auto select_packed_kernel = [warp_tile](auto weight) {
+    const auto select_packed_kernel = [warp_tile, forward_input](auto weight) {
         constexpr bool weighted = decltype(weight)::value;
+        if (forward_input) return warp_tile ? stage1_ntt_packed_forward_registers<weighted,true,Shape,Indices,WeightedDigit>
+                                            : stage1_ntt_packed_forward_registers<weighted,false,Shape,Indices,WeightedDigit>;
         return warp_tile ? stage1_ntt_packed_forward<weighted,true,Shape,Indices,WeightedDigit>
                          : stage1_ntt_packed_forward<weighted,false,Shape,Indices,WeightedDigit>;
     };
     const auto packed_kernel = options.weighted ? select_packed_kernel(std::true_type{})
                                                 : select_packed_kernel(std::false_type{});
+    const auto forward_kernel = warp_tile ? stage1_ntt_forward_tile<true> : stage1_ntt_forward_tile<false>;
     if (packed) {
         cudaFuncSetAttribute(packed_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-        CK(cudaFuncSetAttribute(packed_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
+        CK(cudaFuncSetAttribute(packed_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(forward_smem)));
+    }
+    if (forward_input) {
+        cudaFuncSetAttribute(forward_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+        CK(cudaFuncSetAttribute(forward_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(forward_smem)));
     }
     const auto configure_tile = [&](auto add, auto difference) {
         constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
@@ -532,9 +555,18 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemcpyAsync(state.data,initial.data(),initial.size()*4,cudaMemcpyHostToDevice,q));
     if (!scalar_words.empty())
         CK(cudaMemcpyAsync(scalar.data,scalar_words.data(),scalar_words.size()*4,cudaMemcpyHostToDevice,q));
+    const auto forward_spectra = [&](U* dest, unsigned batch) {
+        if (!forward_input) {
+            ntt_forward_fused(dest,ctx,omega2,batch,q);
+            return;
+        }
+        ntt_forward_outer_fused(dest,ctx,omega2,batch,q);
+        forward_kernel<<<dim3(width >> ctx.t, batch),forward_threads,forward_smem,q>>>(dest,width,ctx.t,ctx.tblF);
+        CK(cudaGetLastError());
+    };
     const auto forward_inputs = [&](U* dest, unsigned count, Indices in, unsigned pending = 0) {
         if (packed) {
-            packed_kernel<<<dim3(1,count*curves),FUSE_TILE_THREADS,tile_smem,q>>>(
+            packed_kernel<<<dim3(1,count*curves),forward_threads,forward_smem,q>>>(
                 state.data,dest,s,in,digit_table.data,ctx.t,ctx.tblF);
             CK(cudaGetLastError());
             return;
@@ -564,7 +596,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             pack<true><<<grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data);
         else
             pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
-        ntt_forward_fused(dest,ctx,omega2,count*curves*planes,q);
+        forward_spectra(dest,count*curves*planes);
     };
     forward_inputs(fixed.data, 2, {{A24,Base}});
     if (loose) {
@@ -579,7 +611,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         else
             pack<true,false,true><<<(width+threads-1)/threads,threads,0,q>>>(nullptr,modulus.data,one,{},digit_table.data);
         CK(cudaGetLastError());
-        ntt_forward_fused(modulus.data,ctx,omega2,planes,q);
+        forward_spectra(modulus.data,planes);
     }
     CK(cudaStreamSynchronize(q));
     const auto finish_carries = [&](unsigned count, Indices out, Cursor cursor,

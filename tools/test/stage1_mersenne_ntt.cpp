@@ -184,7 +184,7 @@ int main(int argc,char** argv) {
     }
     unsigned dataflow=0;
     if (argc > 2 && !std::strcmp(argv[1],"--dataflow")) {
-        try { dataflow=unsigned(num(argv[2],0,1023)); }
+        try { dataflow=unsigned(num(argv[2],0,ecm_mersenne_ntt::experimental_dataflow_limit)); }
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
         argv+=2; argc-=2;
     }
@@ -194,7 +194,7 @@ int main(int argc,char** argv) {
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
     }
     if (argc<9 || argc>10) {
-        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] [--length N] [--dataflow 0..1023] device p B1 sigma curves samples tile window [print-x]\n"
+        std::fprintf(stderr,"stage1_mersenne_ntt [--weighted] [--length N] [--dataflow MASK] device p B1 sigma curves samples tile window [print-x]\n"
                             "or use the same options with --check-carries|--check-squares device p\n"
                             "M=2^p-1, PARAM0, LCM, 1..%u curves, window=0 direct or 1..64 Graph\n",
                             ecm_stage1::stage1_ntt_max_curves);

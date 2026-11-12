@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
     const int plan_argc = flags - int(square);
     if (plan_argc != 6 && plan_argc != 13) {
         std::fprintf(stderr, "stage1_ntt_auto_probe device p batch steps tune.toml "
-                             "[weighted length bpw tile outer window warp] [--square] [--dataflow auto|0..1023]\n");
+                             "[weighted length bpw tile outer window warp] [--square] [--dataflow auto|MASK]\n");
         return 2;
     }
     try {
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
                 unsigned requested = 0;
                 const auto end = mode.data() + mode.size();
                 const auto parsed = std::from_chars(mode.data(), end, requested);
-                if (parsed.ec != std::errc{} || parsed.ptr != end || requested > 1023)
+                if (parsed.ec != std::errc{} || parsed.ptr != end || requested > ecm_mersenne_ntt::experimental_dataflow_limit)
                     throw std::invalid_argument("invalid experimental dataflow");
                 control.experimental_dataflow = requested;
             }
@@ -69,10 +69,11 @@ int main(int argc, char** argv) {
         control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
             std::printf("stage1_ntt_plan: device=%d p=%u curves=%u length=%u bpw=%u "
                         "tile_layers=%u outer_max_layers=%u graph_bits=%u warp_tail=%u "
+                        "tile_threads=%u tile_smem_bytes=%u "
                         "inverse_tile_threads=%u inverse_tile_smem_bytes=%u "
                         "forward_passes=%u forward_layers=%s inverse_layers=%s convolution=%s\n",
                         device, p, batch, plan.length, plan.bpw, plan.tile, plan.outer_max,
-                        plan.window, unsigned(plan.warp_tail), plan.inverse_tile_threads,
+                        plan.window, unsigned(plan.warp_tail), plan.tile_threads, plan.tile_smem_bytes, plan.inverse_tile_threads,
                         plan.inverse_tile_smem_bytes, plan.passes, plan.forward.c_str(),
                         plan.inverse.c_str(), plan.weighted ? "weighted" : "linear");
         };

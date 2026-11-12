@@ -106,9 +106,23 @@ def main():
     assert saved_points(work / "out.save", 4003, 32) == expected
     print("PASS weighted direct launch against independent Python", flush=True)
 
+    for p, length, mode, curves, threads, shared in (
+        (127, 8, "weighted", 24, 32, 64),
+        (521, 64, "linear", 16, 512, 512),
+        (521, 64, "linear", 24, 32, 0),
+    ):
+        work, cmd = fixture(f"forward_tile_{p}_{curves}", extra=f'ntt_convolution = "{mode}"\nntt_length = {length}\n')
+        call, data = direct(work, cmd, p, 20, 26, curves)
+        log = run(work, call, text=data)
+        assert re.search(rf"\btile_threads={threads} tile_smem_bytes={shared}\b", log)
+        modulus = (1 << p) - 1
+        assert saved_points(work / "out.save", p, 20) == {
+            seed: stage1(seed, 20, modulus)["x"] for seed in range(26, 26 + curves)}
+    print("PASS packed forward fusion and block sizing against independent Python", flush=True)
+
     p, b1, sigma = 131071, 20, 26
     wide_n = (1 << p) - 1
-    for model, curves, dataflow in (("mont", 2, 551), ("ed", 1, 615)):
+    for model, curves, dataflow in (("mont", 2, 1575), ("ed", 1, 1639)):
         work, cmd = fixture(f"wide_segments_{model}", extra='ntt_convolution = "weighted"\n'
                             'ntt_length = 8192\nntt_tile = 12\n', model=model)
         call, data = direct(work, cmd, p, b1, sigma, curves)
@@ -166,8 +180,15 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=2560" in log and "forward_layers=r5+9 inverse_layers=9+r5" in log
-    assert "convolution=weighted curve=mont0 dataflow=919" in log  # PFA and fused inverse warp input.
+    assert "convolution=weighted curve=mont0 dataflow=1943" in log  # PFA with fused forward and inverse tiles.
     assert saved_points(work / "out.save", 4003, 32) == expected
+
+    work, cmd = fixture("single_mixed_segments", extra='ntt_convolution = "weighted"\nntt_length = 2560\n')
+    call, data = direct(work, cmd, 58631, 20, 26, 1)
+    log = run(work, call, text=data)
+    assert "convolution=weighted curve=mont0 dataflow=2023" in log
+    assert saved_points(work / "out.save", 58631, 20) == {26: stage1(26, 20, (1 << 58631) - 1)["x"]}
+    print("PASS single mixed transform with early segmented carry and deferred pack", flush=True)
 
     p, b1, sigma, curves = 4423, 32, 26, 32
     n = (1 << p) - 1
