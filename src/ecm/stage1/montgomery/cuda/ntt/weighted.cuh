@@ -77,6 +77,11 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord 
 
 constexpr unsigned weighted_limb_threads = 128;
 
+__device__ __forceinline__ WeightedWord weighted_limb_fragment(WeightedWord coefficient,
+    unsigned start, unsigned bit, WeightedWord mask) {
+    return (start <= bit ? coefficient >> (bit - start) : coefficient << (start - bit)) & mask;
+}
+
 inline unsigned weighted_limb_smem(const std::vector<WeightedLimb>& limbs) {
     unsigned capacity = 0;
     for (unsigned begin = 0; begin < limbs.size(); begin += weighted_limb_threads) {
@@ -121,7 +126,7 @@ void weighted_limb_sums(WeightedWord* out, const WeightedWord* coefficients,
         for (unsigned j = span.first[wrap]; j < span.end[wrap]; ++j) {
             const unsigned start = digits[j].bit;
             const auto c = local[offset + j - first.first[wrap]];
-            sum += (start <= lo ? c >> (lo - start) : c << (start - lo)) & mask;
+            sum += weighted_limb_fragment(c,start,lo,mask);
         }
         offset += last.end[wrap] - first.first[wrap];
     }

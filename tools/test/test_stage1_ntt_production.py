@@ -183,12 +183,15 @@ def main():
     assert "convolution=weighted curve=mont0 dataflow=1943" in log  # PFA with fused forward and inverse tiles.
     assert saved_points(work / "out.save", 4003, 32) == expected
 
-    work, cmd = fixture("single_mixed_segments", extra='ntt_convolution = "weighted"\nntt_length = 2560\n')
-    call, data = direct(work, cmd, 58631, 20, 26, 1)
-    log = run(work, call, text=data)
-    assert "convolution=weighted curve=mont0 dataflow=2023" in log
-    assert saved_points(work / "out.save", 58631, 20) == {26: stage1(26, 20, (1 << 58631) - 1)["x"]}
-    print("PASS single mixed transform with early segmented carry and deferred pack", flush=True)
+    for p, length, curves, flow in ((58631, 2560, 1, 6119), (106501, 5120, 1, 6119), (106501, 5120, 4, 2023)):
+        work, cmd = fixture(f"mixed_segments_{p}_{curves}", extra=f'ntt_convolution = "weighted"\nntt_length = {length}\n')
+        call, data = direct(work, cmd, p, 20, 26, curves)
+        log = run(work, call, text=data)
+        assert f"convolution=weighted curve=mont0 dataflow={flow}" in log
+        modulus = (1 << p) - 1
+        assert saved_points(work / "out.save", p, 20) == {
+            seed: stage1(seed, 20, modulus)["x"] for seed in range(26, 26 + curves)}
+    print("PASS mixed fused and early segmented carry against independent Python", flush=True)
 
     p, b1, sigma, curves = 4423, 32, 26, 32
     n = (1 << p) - 1

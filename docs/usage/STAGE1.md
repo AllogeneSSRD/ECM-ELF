@@ -53,6 +53,8 @@ ntt_profile = 0
 
 调优控制台与 `log_file` 开头单独列出 `ntt_type` 的字段名，实测行使用 `length max_exp ntt_type batch iter/s` 格式。`max_exp` 是该打包参数的安全指数上限。`ntt_type` 依次编码卷积（0=linear，1=weighted）、tile 位数、外层 radix 上限、Graph 位数、warp 尾层开关、正向各趟的层数和逆向各趟的层数。每个实测形状以 `Best` 标记峰值吞吐，推荐档与峰值档不同时另显示 `95%` 行。
 
+16384 点加权 NTT 的单曲线自动调优会实测 tile 12 和 `tile=10, outer_max=2`。显式 tile、outer 或配置档继续约束可用计划，已有匹配的 tune 行可直接复用。需要在已有条件上重新选型时可执行 `--tune ntt --bits <p>`。见 [单曲线调优对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)。
+
 运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 输出曲线构造、卷积后端、长度、最大 digit 位宽、正逆向各 pass 的层数、正逆向 tile 的线程数与动态共享内存、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。正常结束按曲线构造生成标准 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 
 ## 共用 TOML 与 worker

@@ -12,7 +12,7 @@ CUDA Montgomery 默认 ladder、TPB128、按容器选择 TPI，分档寄存器�
 
 ## Stage1 NTT 与 CGBN 和 Prime95 对比
 
-Montgomery PARAM0 和 Edwards 分开绘图。NTT 0.62.2 使用深蓝实线，0.61.3 和更早一版使用逐级变浅的蓝色虚线。最早一版是 Montgomery 0.59.9 和 Edwards 0.60.0。横轴是各后端实际使用的算术位宽，纵轴是折算到 B1=1,000,000 的批量摊销秒／曲线。每张图左侧放大 16500 位以内的范围，右侧显示 NTT 的完整范围。
+Montgomery PARAM0 和 Edwards 分开绘图。最近一轮完整矩阵 NTT 0.62.2 使用深蓝实线，0.61.3 和更早一版使用逐级变浅的蓝色虚线。最早一版是 Montgomery 0.59.9 和 Edwards 0.60.0。横轴是各后端实际使用的算术位宽，纵轴是折算到 B1=1,000,000 的批量摊销秒／曲线。每张图左侧放大 16500 位以内的范围，右侧显示 NTT 的完整范围。
 
 ### Montgomery PARAM0
 
@@ -39,7 +39,7 @@ M16319 的 NTT 折算耗时由 0.61.3 的 **7.77 降至 6.63 秒／曲线**。CG
 
 GPU 用实际批次时间除以曲线数，再乘 `1,000,000 / B1`。图中阴影为最新 NTT 和 Prime95 三次样本的最小／最大值。相对 0.61.3，两类曲线各 26 个指数的中位耗时均下降，降幅中位数分别为 Montgomery **32.5%** 和 Edwards **32.8%**。按图中各自的模数、批量和计时口径，Montgomery NTT 在 M12511 和 M16319 的折算耗时低于对应 CGBN，Edwards 的 13 个共有指数仍以 CGBN 耗时较低。见 [NTT 最佳配置全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 与 [历史 Prime95 单核基准](#prime95-单核基准与-b1-外推)。
 
-固定形状对照单独测量前向读入融合、块宽和单曲线进位的收益。另在两个相同指数上与 PRPLL 比较完整模平方。见 [前向 tile 与进位](STAGE1_MERSENNE_NTT.md#前向-tile-与进位) 和 [同卡模平方对照](STAGE1_MERSENNE_NTT.md#同卡完整模平方与-prpll)。
+固定形状对照单独测量前向读入融合、块宽和进位的收益。0.62.3 另有 2560／5120 点归约与 16384 点单曲线调优的专项复测。见 [前向 tile 与进位](STAGE1_MERSENNE_NTT.md#前向-tile-与进位)、[0.62.3 专项复测](STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优) 和 [同卡模平方对照](STAGE1_MERSENNE_NTT.md#同卡完整模平方与-prpll)。
 
 CGBN 采集期间 GPU1 利用率至少 50% 的 2512 个遥测点中，SM 频率中位数为 1500 MHz（范围 210–1500 MHz），功耗为 1.68–25.34 W（中位数 23.22 W），温度为 47–56 °C。原始日志、save 与分曲线汇总在 `data/experiments/stage1_unified_4060_0600/cgbn/`，按版本标注的绘图 CSV 在 `data/figures/stage1_ntt_history_0622/`。
 

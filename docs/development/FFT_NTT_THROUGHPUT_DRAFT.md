@@ -12,11 +12,12 @@
 8. **按执行阶段错开双目标。** 0.61.8 测得 baby 与 giant 的 kernel 时间覆盖率都在 94% 以上，F 树和求逆有较多可重叠空档。两 worker 进入所选阶段时共享互斥锁，等各自 CUDA 事件完成后释放。宽档仅互斥 baby 和 giant 时吞吐比串行高 11.33%。M8011 将 G 树/fold 与下降也纳入后高 13.50%。同组复测显示主要额外收益来自互斥 G 树/fold。生产默认串行。[阶段时间线与配对对照](../performance/STAGE2.md#双目标阶段互斥)
 9. **接入持续双槽及自动准入。** 0.62.0 在每条完成后补位，队列计时从独立的串行与双槽窗口取得并保存到共享 tune。GPU1 三个位宽的 9 条中段吞吐提高 68.79%、31.07%、11.88%，7995-bit 的 17 条复测提高 12.32%。默认 auto 先完成单曲线选型，再比较同路线窗口，复用已有决策。[双槽队列对照](../performance/STAGE2.md#双槽持续队列)
 10. **融合前向 tile 的读入并按批量缩小块宽。** 0.62.2 用 GPU1 交替比较首层融合、独立缩小线程块及 radix-4 旋转因子化。旋转因子化以 \(2^{48}\) 代替一次通用域乘，第三个因子按指数越界取负，实测无稳定收益。选中的读入路径融合两层 DIF 或直接执行短 warp 变换。单 tile 的小批量沿用原块宽，24 条起按层数选择。2560／5120 点混合变换提前分段进位只在单曲线受益。保留合成样本、真实 Stage1 存档与 CUDA Graph 节点时间线。[前向 tile 与进位](../performance/STAGE1_MERSENNE_NTT.md#前向-tile-与进位)
+11. **融合加权归约并独立搜索宽档单曲线。** 0.62.3 用 GPU1 对照直接去权、分段共享内存缓存及缩短回卷扫描。直接融合在 2560／5120 点单曲线上有收益，5120 点多曲线由提前分段获益。16384 点筛选了每个输入 40 种实际布局，tile 10 加两趟 2 层 outer 在两个 weighted 单曲线输入上胜出，30 曲线另测吞吐后沿用原搜索。生产 Montgomery 和 Edwards 存档逐组一致。[专项对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)
 
 ## 下一轮顺序
 
-1. **Stage1 继续收缩归约与 outer 的成本。** 先尝试融合去权、limb 汇集与段内进位，按单曲线和批量复测。宽档分别搜索小 tile 和 outer 融合层数，比较 16384 点的单曲线延迟与批吞吐。评估第三方后端时优先参考 GPUowl 的 3161、3261、323161。原生形状从 393,216 位起。评估数千至数十万位时，需实现更短的形状后再比较进位、完整模平方和批吞吐。[GPUowl 类型与范围](../reference/GPUOWL_NTT.md)
+1. **Stage1 扩展归约与 outer 的验收。** 在其他 CUDA 设备复测归约启用分界和单曲线 outer 候选，确定同一启用范围能否覆盖不同的占用率及带宽。评估第三方后端时优先参考 GPUowl 的 3161、3261、323161。原生形状从 393,216 位起。评估数千至数十万位时，需实现更短的形状后再比较进位、完整模平方和批吞吐。[GPUowl 类型与范围](../reference/GPUOWL_NTT.md)
 2. **Stage2 按实测收益筛选双目标。** 扩充不同位宽、D/P、实际点块与显存余量的配对，按阶段互相争用和实测收益确定准入与掩码。每个 worker 单独保留日志、检查点、结果与预算，同时限制单任务尾延迟。已有时间线可识别空档，设备性能计数器可用后再测活跃 SM、warp 和内存带宽，确定同一 CUDA context 方案的空间。进入该方案前先清点 `cudaDeviceSynchronize()` 等全设备同步和跨任务共享资源。[GPUowl 的 Windows 显存分页探测](https://github.com/gwoltman/gpuowl/commit/c48a4304)
 3. **Stage2：减少固定多项式的重复变换。** 同一模数和卷积形状内，测量缓存 F 与逆多项式频谱的命中率、显存开销和每条曲线节省的前向变换数。按完整 shape 隔离缓存，在预算不足时回退。用固定 D/P、下降叶值、GCD 和完整曲线耗时确认收益，并检验是否挤占双目标的显存余量。
 
-原始证据位于 `data/experiments/fft_ntt_20261111/`、`data/experiments/fft_ntt_20261112/`、`data/experiments/fft_ntt_20261112_tile/`、`data/experiments/stage1_forward_tile_0622/`、`data/experiments/stage2_phase_gate_20261112/` 和 `data/experiments/stage2_parallel_0620/`。
+原始证据位于 `data/experiments/fft_ntt_20261111/`、`data/experiments/fft_ntt_20261112/`、`data/experiments/fft_ntt_20261112_tile/`、`data/experiments/stage1_forward_tile_0622/`、`data/experiments/stage1_gather_outer_0623/`、`data/experiments/stage2_phase_gate_20261112/` 和 `data/experiments/stage2_parallel_0620/`。

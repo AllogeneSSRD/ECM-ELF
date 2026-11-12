@@ -34,7 +34,13 @@ flowchart LR
 
 融合适用于一批模加减产生且只被下一批打包读取的槽，以及第二批中只供第三批使用的平方项 \(\mathrm{DiffSq}\) 和融合乘加项 \(BB+A_{24}E\)。这类槽保留段内结果，pack 对源 limb 按需修正，再提取 digit 并施加权重。digit 跨越 limb 或段边界时，两个来源分别查各自的修正范围。还要参与普通模算术的输出和每步的两组 X/Z 都走独立写回，因此回读和检查点只看到规范整数。
 
-生产在 weighted 且 \(p>114688\) 时启用分段进位。单曲线使用 2560 或 5120 点混合 NTT 时，从 \(p=53249\) 起可提前启用。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。分项剖析及启用依据见 [GPU1 宽位宽归约热点](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [前向 tile 与进位](../performance/STAGE1_MERSENNE_NTT.md#前向-tile-与进位)。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
+加权变换在 \(p>114688\) 时启用分段进位。5120 点在 \(p\ge106497\) 时各批量均可提前启用，2560／5120 点单曲线从 \(p=53249\) 起可提前启用。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。见 [宽位宽归约剖析](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [归约对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)。
+
+### 单曲线融合归约
+
+2560 点单曲线在 \(p\ge53249\)、5120 点单曲线在 \(p\ge106497\) 时，去权、limb 汇集和段内扫描共用一个 CTA。每个 lane 从逆变换系数求本 limb 的和，warp 内用 shuffle 取得前一 limb 的高部。warp 首 lane 直接从输入系数重算前一 limb，包含段之间的邻接值。最低 limb 单独读取最高两 limb，计算模 \(2^p-1\) 的回卷。普通 limb 只扫描本区间，低两 limb 还检查回卷区间，短模数另处理第二次回卷。
+
+融合后直接生成段内结果与摘要。需规范化的输出由独立写回消费摘要，只供下一次 pack 的槽由 pack 解析。每步三批乘法各少一次独立汇集 kernel 和一次 limb 和的全局中转。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
 
 ## Stage1 radix-5 PFA
 

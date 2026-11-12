@@ -195,6 +195,12 @@ std::optional<Measurement> measure_batch(Calibration& cal, unsigned batch,
         if (!options.tile && !options.profile && best.plan.tile >= 5) {
             auto alternate = options;
             alternate.tile = best.plan.tile - 2;
+            // A single 16384-point weighted ladder benefits from splitting
+            // the four outer layers into two smaller kernels. Keep the
+            // batch search and explicit radix choices on their own paths.
+            if (batch == 1 && best.plan.weighted && best.plan.length == 16384 &&
+                best.plan.tile == 12 && !options.outer_max)
+                alternate.outer_max = 2;
             try {
                 auto challenger = cal.measure(batch, alternate, 3);
                 if (challenger.time() < best.time()) best = std::move(challenger);
