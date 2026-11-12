@@ -47,7 +47,7 @@ __device__ __forceinline__ unsigned radix5_plane(unsigned plane, unsigned rotati
     return sum < 5 ? sum : sum - 5;
 }
 
-template<bool GoodThomas, bool Coalesced = false>
+template<bool Pfa, bool Coalesced = false>
 __global__ void radix5_inverse(Radix5Word* data, unsigned width, const Radix5Word* twiddles,
                                Radix5Constants c, unsigned rotation_step) {
     const unsigned j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -56,9 +56,9 @@ __global__ void radix5_inverse(Radix5Word* data, unsigned width, const Radix5Wor
     Radix5Word x[5] = {row[0]};
 #pragma unroll
     for (unsigned i = 1; i < 5; ++i)
-        x[i] = GoodThomas ? row[i * width] : gl_mul(row[i * width], twiddles[(i - 1) * width + j]);
+        x[i] = Pfa ? row[i * width] : gl_mul(row[i * width], twiddles[(i - 1) * width + j]);
     radix5_dft(x, c);
-    const unsigned rotation = GoodThomas ? (j * rotation_step) % 5 : 0;
+    const unsigned rotation = Pfa ? (j * rotation_step) % 5 : 0;
     if constexpr (Coalesced) {
         // Each thread owns one column. The shared permutation keeps the
         // global stores contiguous and never exchanges values between threads.
@@ -72,7 +72,7 @@ __global__ void radix5_inverse(Radix5Word* data, unsigned width, const Radix5Wor
     } else {
 #pragma unroll
         for (unsigned i = 0; i < 5; ++i)
-            row[(GoodThomas ? radix5_plane(i, rotation) : i) * width] = x[i];
+            row[(Pfa ? radix5_plane(i, rotation) : i) * width] = x[i];
     }
 }
 

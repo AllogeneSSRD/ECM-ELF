@@ -165,7 +165,7 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=2560" in log and "forward_layers=r5+9 inverse_layers=9+r5" in log
-    assert "convolution=weighted curve=mont0 dataflow=407" in log  # Good–Thomas with shared permutation.
+    assert "convolution=weighted curve=mont0 dataflow=407" in log  # PFA with shared permutation.
     assert saved_points(work / "out.save", 4003, 32) == expected
 
     p, b1, sigma, curves = 4423, 32, 26, 32

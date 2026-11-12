@@ -42,7 +42,7 @@ struct Tables {
 };
 
 template<bool Weighted, bool Mixed = false, bool Modulus = false, bool Deferred = false,
-         bool GoodThomas = false, bool Coalesced = false>
+         bool Pfa = false, bool Coalesced = false>
 __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
                      const WeightedDigit* weighted, const U* twiddles = nullptr,
                      Radix5Constants radix5 = {}, const unsigned* headers = nullptr,
@@ -66,7 +66,7 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
     auto* row = out + size_t(blockIdx.y) * s.length + i;
     if constexpr(Mixed) {
         U x[5];
-        const unsigned rotation = GoodThomas ? (i * rotation_step) % 5 : 0;
+        const unsigned rotation = Pfa ? (i * rotation_step) % 5 : 0;
         if constexpr (Coalesced) {
             extern __shared__ U local[];
             auto* column = local + threadIdx.x;
@@ -79,13 +79,13 @@ __global__ void pack(const uint32_t* state, U* out, Shape s, Indices in,
         } else {
 #pragma unroll
             for (unsigned j = 0; j < 5; ++j)
-                x[j] = read(i + (GoodThomas ? radix5_plane(j, rotation) : j) * width);
+                x[j] = read(i + (Pfa ? radix5_plane(j, rotation) : j) * width);
         }
         radix5_dft(x, radix5);
         row[0] = x[0];
 #pragma unroll
         for (unsigned j = 1; j < 5; ++j)
-            row[j * width] = GoodThomas ? x[j] : gl_mul(x[j], twiddles[(j - 1) * width + i]);
+            row[j * width] = Pfa ? x[j] : gl_mul(x[j], twiddles[(j - 1) * width + i]);
     } else {
         *row = read(i);
     }
@@ -133,7 +133,7 @@ void inverse_product_tile(U* out,
         U product = gl_mul(a, square ? a : right[i]);
         if constexpr (MultiplyAdd)
             if (last) product = gl_add_dev(product, Loose ? bb : products.bb[start+i]);
-        sm[i] = gl_mul(product, scale);
+        sm[i] = scale == 1 ? product : gl_mul(product, scale);
     }
     __syncthreads();
     ntt_tile_pass<true, WarpTail>(out + size_t(op) * gridDim.y * length + start,
@@ -320,7 +320,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemGetInfo(&free_before, &total));
     Run result;
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
-                        GoodThomasRadix5 | CoalescedRadix5;
+                        PfaRadix5 | CoalescedRadix5;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
     // Enable segmentation where enough limbs amortize its extra launch.
@@ -329,15 +329,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (mixed || curves == 1) defaults |= DeferredPack;
     }
     const unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
-    const bool good_thomas = mixed && (requested & GoodThomasRadix5);
-    const bool coalesced = good_thomas && (requested & CoalescedRadix5);
+    const bool pfa = mixed && (requested & PfaRadix5);
+    const bool coalesced = pfa && (requested & CoalescedRadix5);
     const bool square_probe = control && control->modular_square_probe;
     // n = (1 + rotation_step * width) * i + width * j (mod length).
     // The first multiplier is divisible by 5 and congruent to 1 modulo width.
     // omega^5 still gives a primitive width root, with permuted frequencies.
     constexpr unsigned crt_rotation[] = {0, 4, 2, 3, 1};
-    const unsigned rotation_step = good_thomas ? crt_rotation[width % 5] : 0;
-    if (good_thomas) result.dataflow |= GoodThomasRadix5;
+    const unsigned rotation_step = pfa ? crt_rotation[width % 5] : 0;
+    if (pfa) result.dataflow |= PfaRadix5;
     if (coalesced) result.dataflow |= CoalescedRadix5;
     result.budget_bytes = memory_budget(free_before, options.memory_mib);
     auto observe_memory = [&] {
@@ -363,7 +363,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Stream stream; const auto q=stream.value;
     const U omega=gl_pow_host(7,(GL_P-1)/s.length), inv=gl_pow_host(omega,GL_P-2);
     const U omega2 = gl_pow_host(omega, planes), inv2 = gl_pow_host(inv, planes);
-    const U scale=gl_pow_host(s.length,GL_P-2);
+    const U inverse_scale = gl_pow_host(s.length, GL_P - 2);
+    // Weighted carry already multiplies each coefficient by its inverse weight.
+    const U product_scale = options.weighted ? 1 : inverse_scale;
     Tables tables;
     auto& ctx=tables.ctx;
     const auto* resolved = control ? &overrides : nullptr;
@@ -371,7 +373,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     result.owned_bytes = 11 * sizeof(U) * curves * s.length + slots * stride * sizeof(uint32_t) +
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
         (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
-    if (mixed && !good_thomas) result.owned_bytes += size_t(8) * width * sizeof(U);
+    if (mixed && !pfa) result.owned_bytes += size_t(8) * width * sizeof(U);
     if (options.weighted)
         result.owned_bytes += size_t(s.length) * (sizeof(U) + sizeof(WeightedDigit)) +
                               size_t(s.words) * sizeof(WeightedLimb);
@@ -461,7 +463,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
     Buffer<U> modulus(loose ? s.length : 0);
     Buffer<U> inverse(size_t(4)*curves*s.length);
-    const size_t mixed_table_words = mixed && !good_thomas ? size_t(4) * width : 0;
+    const size_t mixed_table_words = mixed && !pfa ? size_t(4) * width : 0;
     Buffer<U> mixed_fwd(mixed_table_words), mixed_inv(mixed_table_words);
     Radix5Constants radix5_fwd{}, radix5_inv{};
     std::vector<U> fwd_twiddles, inv_twiddles;
@@ -478,14 +480,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             }
             CK(cudaMemcpyAsync(device, host.data(), host.size() * sizeof(U), cudaMemcpyHostToDevice, q));
         };
-        if (!good_thomas) {
+        if (!pfa) {
             fill(fwd_twiddles, mixed_fwd.data, omega);
             fill(inv_twiddles, mixed_inv.data, inv);
         }
         radix5_fwd = radix5_constants(gl_pow_host(omega, width));
         radix5_inv = radix5_constants(gl_pow_host(inv, width));
     }
-    const auto weights = options.weighted ? weighted_tables(p, s.length) : WeightedTables{};
+    const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale) : WeightedTables{};
     const unsigned limb_smem = weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
     Buffer<U> inverse_weights(weights.inverse.size());
@@ -512,7 +514,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             CK(cudaGetLastError());
             return;
         }
-        if (good_thomas) {
+        if (pfa) {
             const auto launch_pfa = [&](auto use_shared) {
                 constexpr bool shared = decltype(use_shared)::value;
                 if (pending)
@@ -543,7 +545,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (loose) {
         Shape one = s;
         one.curves = 1;
-        if (good_thomas)
+        if (pfa)
             pack<true,true,true,false,true><<<(width+threads-1)/threads,threads,0,q>>>(
                 nullptr,modulus.data,one,{},digit_table.data,nullptr,radix5_fwd,nullptr,0,rotation_step);
         else if (mixed)
@@ -598,10 +600,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
             if (warp_tile)
                 inverse_product_tile<true,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
-                    inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
+                    inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
             else
                 inverse_product_tile<false,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
-                    inverse.data,products,s.length,ctx.t,ctx.tblI,scale);
+                    inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
         };
         if (add_bb && build_e) invert(std::true_type{},std::true_type{});
         else if (build_e) invert(std::false_type{},std::true_type{});
@@ -612,7 +614,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (coalesced)
             radix5_inverse<true,true><<<mixed_grid(outputs),threads,radix5_smem,q>>>(
                 inverse.data,width,nullptr,radix5_inv,rotation_step);
-        else if (good_thomas)
+        else if (pfa)
             radix5_inverse<true><<<mixed_grid(outputs),threads,0,q>>>(inverse.data,width,nullptr,radix5_inv,rotation_step);
         else if (mixed)
             radix5_inverse<false><<<mixed_grid(outputs),threads,0,q>>>(inverse.data,width,mixed_inv.data,radix5_inv,0);

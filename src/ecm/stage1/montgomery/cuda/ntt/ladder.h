@@ -23,7 +23,7 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool pr
 
 enum Dataflow : unsigned {
     FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16,
-    SegmentedCarry = 32, DeferredPack = 64, GoodThomasRadix5 = 128, CoalescedRadix5 = 256
+    SegmentedCarry = 32, DeferredPack = 64, PfaRadix5 = 128, CoalescedRadix5 = 256
 };
 
 struct Control {

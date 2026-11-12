@@ -2,14 +2,16 @@
 
 ## 已执行
 
-1. **减少 Stage1 NTT 的重复算术。** 混合 radix-5 用 Good–Thomas 去除交叉旋转因子。直接置换使多曲线变慢，改为本线程共享内存置换后，四档长度的多曲线吞吐均提高。已通过独立 GMP、生产入口和 tune 测试，作为 0.61.5 混合长度的默认数据流。[GPUowl 的 radix-5 PFA](https://github.com/gwoltman/gpuowl/commit/a5d68380)、[Stage1 性能](../performance/STAGE1_MERSENNE_NTT.md#混合-radix-5-吞吐与寄存器)
+1. **减少 Stage1 NTT 的重复算术。** 混合 radix-5 用 PFA 去除交叉旋转因子。直接置换使多曲线变慢，改为本线程共享内存置换后，四档长度的多曲线吞吐均提高。已通过独立 GMP、生产入口和 tune 测试，作为 0.61.5 混合长度的默认数据流。[GPUowl 的 radix-5 PFA](https://github.com/gwoltman/gpuowl/commit/a5d68380)、[Stage1 性能](../performance/STAGE1_MERSENNE_NTT.md#混合-radix-5-吞吐与寄存器)
 2. **统一比较单位，再调寄存器。** 两边在同一设备、同一指数上计时完整模平方，曲线吞吐仍用各自真实阶梯步。GPUowl 的原生寄存器调优按形状和 kernel 编译，M262139 的一次短扫报告默认 107.0 µs、选中组合 97.4 µs。ECM-ELF 的整个编译单元限制为 32 或 48 个寄存器均未产生稳定收益，32 还导致 spill。进一步把逆变换的输入指针表改为只读 grid 参数，在 2560 点、30 曲线提高约 19% 吞吐。 [同卡模平方对照](../performance/STAGE1_MERSENNE_NTT.md#同卡完整模平方与-prpll)
 3. **验证 Stage2 双目标。** 用两个独立 worker 隔离上下文、输入和输出，小档串行、同时、固定错峰各测 3 次，大档串行与同时各测 2 次。并行改善两目标吞吐，个别组件因争用变慢。先扩充有显存和因子校验的输入矩阵，再决定是否引入生产调度。 [Stage2 双目标数据](../performance/STAGE2.md#双目标吞吐试验)
+4. **按热点减少 Stage1 tile 的域乘。** 8 组 Graph node 轨迹给出 pack、tile、outer 和 carry 的耗时。30 曲线的 tile 占 46%–54%。0.61.6 把长度归一化并入逆权重，六档加权形状的多曲线吞吐提高 0.88%–1.91%。[剖析与固定形状对照](../performance/STAGE1_MERSENNE_NTT.md#tile-剖析与逆变换缩放)
+5. **复测 GPUowl 最短原生形状。** 固定 `256:1:256`，在 39 万和 52 万位时，纯 FP32 在这四种候选中最快。GIMPS 波前的优先参考顺序仍按 3161、3261、323161 记录，另在 ECM 位宽设计更短形状做独立比较。[GPUowl 最短形状实测](../reference/GPUOWL_NTT.md#最短原生形状复测)
 
 ## 下一轮顺序
 
-1. **Stage1：按 kernel 和形状调。** 先剖析 pack、外层变换和 carry 的等待与吞吐，再决定哪些热点值得增加内核级编译变体。以相同长度、tile 和 1／12／30 曲线做配对，检查寄存器、栈、spill、共享访存和 Graph，保留二次幂和混合长度的无回归对照。对于更大的 FFT／NTT 形状，先扩展诊断范围，获得同指数的 GF61 对照，再评估引入另一算术后端的收益。
+1. **Stage1 按 kernel 和形状调优。** 在 30 曲线的 tile 热点中，优先测共享内存事务和 warp tail。单曲线另测 2560 点的 carry、16384 点的外层变换。评估第三方后端时优先参考 GPUowl 的 3161、3261、323161。原生形状从 393,216 位起。评估数千至数十万位时，需实现更短的形状后再比较进位、完整模平方和批吞吐。[GPUowl 类型与范围](../reference/GPUOWL_NTT.md)
 2. **Stage2：从固定错峰推进到分阶段准入。** 加测相同／不同位宽配对、靠近显存边界的大 D/P 和已知 Stage2 因子。每个 worker 单独保留日志、检查点、结果与预算，准入时同时考虑整卡峰值和驱动显存压力。先比较同时启动与 giant 区间错峰，再验证一进程双 stream。进入同一 CUDA context 前，需要清点 `cudaDeviceSynchronize()` 等全设备同步和跨任务共享的资源。用每对墙钟、单位时间完成任务数及单任务尾延迟共同验收。[GPUowl 的 Windows 显存分页探测](https://github.com/gwoltman/gpuowl/commit/c48a4304)
 3. **Stage2：减少固定多项式的重复变换。** 同一模数和卷积形状内，测量缓存 F 与逆多项式频谱的命中率、显存开销和每条曲线节省的前向变换数。按完整 shape 隔离缓存，在预算不足时回退。用固定 D/P、下降叶值、GCD 和完整曲线耗时确认收益，并检验是否挤占双目标的显存余量。
 
-原始证据位于 `data/experiments/fft_ntt_20261111/`。
+原始证据位于 `data/experiments/fft_ntt_20261111/` 和 `data/experiments/fft_ntt_20261112/`。

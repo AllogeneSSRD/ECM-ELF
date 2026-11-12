@@ -22,7 +22,7 @@ struct WeightedTables {
     std::vector<WeightedLimb> limbs;
 };
 
-inline WeightedTables weighted_tables(unsigned p, unsigned length) {
+inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord inverse_scale) {
     using U = WeightedWord;
     // 2 has order 192 in Goldilocks. The generator of that subgroup is
     // 7^h, where h is divisible by every supported 2^k and 5*2^k length.
@@ -46,7 +46,7 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length) {
     const U inverse_step = gl_mul_host(gl_pow_host(2, GL_P - 1 - small), rho);
     const U forward_steps[] = {forward_step, gl_mul_host(forward_step, 2)};
     const U inverse_steps[] = {inverse_step, gl_mul_host(inverse_step, (GL_P + 1) / 2)};
-    U w = 1, iw = 1;
+    U w = 1, iw = inverse_scale;
     for (unsigned i = 0; i < length; ++i) {
         const unsigned bit = at(i), width = at(i + 1) - bit;
         out.digits.push_back({w, bit, width});
