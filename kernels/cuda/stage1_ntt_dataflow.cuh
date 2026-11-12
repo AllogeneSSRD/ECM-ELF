@@ -54,3 +54,36 @@ __device__ __forceinline__ unsigned long long stage1_ntt_loose_difference(
 {
     return gl_add_dev(aa, gl_sub_dev(modulus, bb));
 }
+
+// The inverse warp consumes adjacent even/odd coefficients per lane. All
+// spectrum rows and pair offsets are 16-byte aligned for this path.
+template<bool MultiplyAdd, bool Loose, class Inputs>
+__device__ __forceinline__ ulonglong2 stage1_ntt_product_pair(const Inputs& inputs,
+    const unsigned long long* left, const unsigned long long* right,
+    size_t offset, unsigned modulus_index, bool last, unsigned long long scale)
+{
+    using U = unsigned long long;
+    const auto load = [](const U* ptr) { return *reinterpret_cast<const ulonglong2*>(ptr); };
+    ulonglong2 a, bb{};
+    if constexpr (Loose) {
+        if (last) {
+            bb = load(inputs.bb + offset);
+            const auto aa = load(inputs.aa + offset);
+            const auto modulus = load(inputs.modulus + modulus_index);
+            a = make_ulonglong2(stage1_ntt_loose_difference(aa.x, bb.x, modulus.x),
+                                stage1_ntt_loose_difference(aa.y, bb.y, modulus.y));
+            *reinterpret_cast<ulonglong2*>(inputs.cached_e + offset) = a;
+        } else a = load(left);
+    } else a = load(left);
+    const auto b = left == right ? a : load(right);
+    U lo = gl_mul(a.x, b.x), hi = gl_mul(a.y, b.y);
+    if constexpr (MultiplyAdd) {
+        if (last) {
+            if constexpr (!Loose) bb = load(inputs.bb + offset);
+            lo = gl_add_dev(lo, bb.x);
+            hi = gl_add_dev(hi, bb.y);
+        }
+    }
+    return scale == 1 ? make_ulonglong2(lo, hi)
+                      : make_ulonglong2(gl_mul(lo, scale), gl_mul(hi, scale));
+}

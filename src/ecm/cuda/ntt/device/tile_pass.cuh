@@ -1,6 +1,19 @@
 #pragma once
 #include "../../arithmetic/goldilocks/goldilocks_tile.cuh"
 
+__device__ __forceinline__ void ntt_tile_finish_inverse(unsigned long long* out,
+    unsigned long long* sm, unsigned long long tile_size, int first_stage, int tile_bits,
+    const unsigned long long* twiddles) {
+    int stage = first_stage;
+    for (; stage + 1 < tile_bits; stage += 2) {
+        tile_radix4_block_inv(sm, tile_size, stage, twiddles);
+        __syncthreads();
+    }
+    if (stage < tile_bits) tile_radix2_stage<true>(sm, tile_size, stage, twiddles);
+    for (unsigned long long i = threadIdx.x; i < tile_size; i += blockDim.x)
+        out[i] = sm[i];
+}
+
 // Operates on a ready shared-memory tile and writes the same transform layout
 // for in-place NTTs and Stage1 products loaded from immutable spectra.
 template<bool INVERSE, bool WARP_TAIL>
@@ -39,14 +52,7 @@ __device__ __forceinline__ void ntt_tile_pass(unsigned long long* out, unsigned 
             } else for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
                 sm[i]=tile_warp5<true>(sm[i],tbl);
             __syncthreads();
-            int st=wt;
-            for(;st+1<t;st+=2) {
-                tile_radix4_block_inv(sm,TILE,st,tbl);
-                __syncthreads();
-            }
-            if(st<t) tile_radix2_stage<true>(sm,TILE,st,tbl);
-            for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
-                out[i]=sm[i];
+            ntt_tile_finish_inverse(out, sm, TILE, wt, t, tbl);
         }
         return;
     }

@@ -100,7 +100,7 @@ struct ProductInputs {
     U* cached_e;
 };
 
-template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false>
+template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false, bool WarpInput = false>
 __global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
 void inverse_product_tile(U* out,
                           // Keep dynamically indexed pointers in grid parameter memory.
@@ -118,26 +118,43 @@ void inverse_product_tile(U* out,
     const size_t start = curve + tile_start;
     const U* left = products.left[op] + start;
     const U* right = products.right[op] + start;
-    const bool square = left == right;
     const bool last = op + 1 == gridDim.z;
     extern __shared__ U sm[];
-    for (unsigned i = threadIdx.x; i < width; i += blockDim.x) {
-        U a, bb = 0;
-        if constexpr (Loose) {
-            if (last) {
-                bb = products.bb[start+i];
-                a = stage1_ntt_loose_difference(products.aa[start+i], bb, products.modulus[tile_start+i]);
-                products.cached_e[start+i] = a;
+    auto* output = out + size_t(op) * gridDim.y * length + start;
+    if constexpr (WarpInput) {
+        const unsigned lane = threadIdx.x & 31;
+        auto* destination = tile == 6 ? output : sm;
+        for (unsigned i = (threadIdx.x >> 5) * 64 + lane; i < width; i += 2 * blockDim.x) {
+            const unsigned pair = i + lane;
+            auto values = stage1_ntt_product_pair<MultiplyAdd, Loose>(products, left + pair, right + pair,
+                start + pair, tile_start + pair, last, scale);
+            tile_warp6_pair<true>(values.x, values.y, twiddles);
+            destination[i] = values.x;
+            destination[i + 32] = values.y;
+        }
+        if (tile > 6) {
+            __syncthreads();
+            ntt_tile_finish_inverse(output, sm, width, 6, tile, twiddles);
+        }
+    } else {
+        const bool square = left == right;
+        for (unsigned i = threadIdx.x; i < width; i += blockDim.x) {
+            U a, bb = 0;
+            if constexpr (Loose) {
+                if (last) {
+                    bb = products.bb[start+i];
+                    a = stage1_ntt_loose_difference(products.aa[start+i], bb, products.modulus[tile_start+i]);
+                    products.cached_e[start+i] = a;
+                } else a = left[i];
             } else a = left[i];
-        } else a = left[i];
-        U product = gl_mul(a, square ? a : right[i]);
-        if constexpr (MultiplyAdd)
-            if (last) product = gl_add_dev(product, Loose ? bb : products.bb[start+i]);
-        sm[i] = scale == 1 ? product : gl_mul(product, scale);
+            U product = gl_mul(a, square ? a : right[i]);
+            if constexpr (MultiplyAdd)
+                if (last) product = gl_add_dev(product, Loose ? bb : products.bb[start+i]);
+            sm[i] = scale == 1 ? product : gl_mul(product, scale);
+        }
+        __syncthreads();
+        ntt_tile_pass<true, WarpTail>(output, sm, width, tile, twiddles);
     }
-    __syncthreads();
-    ntt_tile_pass<true, WarpTail>(out + size_t(op) * gridDim.y * length + start,
-                                sm, width, tile, twiddles);
 }
 
 // A limb's incoming carry is mapped to: 0=kill, 1=propagate, 2=generate.
@@ -320,7 +337,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     CK(cudaMemGetInfo(&free_before, &total));
     Run result;
     unsigned defaults = FusedMultiplyAdd | LooseDifference | DirectRoute | PackedForward |
-                        PfaRadix5 | CoalescedRadix5;
+                        PfaRadix5 | CoalescedRadix5 | InverseWarpInput;
     // Wider weighted reductions showed a batch-dependent cache tradeoff.
     if (p <= 65536) defaults |= CachedCarry;
     // Enable segmentation where enough limbs amortize its extra launch.
@@ -405,7 +422,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     fuse_init(ctx,width,log,omega2,inv2,true,resolved);
     if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
+    const bool inverse_warp_input = warp_tile && ctx.t >= 6 && (requested & InverseWarpInput);
+    // Each lane loads two coefficients. Small tiles need only those warps.
+    const unsigned inverse_threads = inverse_warp_input
+        ? std::min(unsigned(FUSE_TILE_THREADS), 1u << (ctx.t - 1)) : FUSE_TILE_THREADS;
+    if (inverse_warp_input) result.dataflow |= InverseWarpInput;
     const size_t tile_smem = sizeof(U) << ctx.t;
+    const size_t inverse_smem = inverse_warp_input && ctx.t == 6 ? 0 : tile_smem;
     const bool routed = requested & DirectRoute;
     const bool packed = (requested & PackedForward) && !mixed && ctx.nms == 0;
     const bool cached = (requested & CachedCarry) && options.weighted && !segmented;
@@ -420,7 +443,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             stages += std::to_string(width);
         };
         Plan plan{s.length, s.bpw, s.digits, unsigned(ctx.t), unsigned(ctx.m_max), window,
-                  FUSE_TILE_THREADS, ctx.nms ? FUSE_OUTER_THREADS : 0u,
+                  FUSE_TILE_THREADS, inverse_threads, unsigned(inverse_smem),
+                  ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   warp_tile, profile.source, options.weighted, {}, {}, result.dataflow};
         if (mixed) plan.forward = "r5";
@@ -443,12 +467,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         cudaFuncSetAttribute(packed_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
         CK(cudaFuncSetAttribute(packed_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
     }
-    const auto configure_tile = [warp_tile, tile_smem](auto add, auto difference) {
+    const auto configure_tile = [&](auto add, auto difference) {
         constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
-        const void* kernel = warp_tile ? (const void*)inverse_product_tile<true,add_bb,loose_e>
+        const void* kernel = inverse_warp_input ? (const void*)inverse_product_tile<true,add_bb,loose_e,true>
+                           : warp_tile ? (const void*)inverse_product_tile<true,add_bb,loose_e>
                                        : (const void*)inverse_product_tile<false,add_bb,loose_e>;
         cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-        CK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(tile_smem)));
+        CK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(inverse_smem)));
     };
     configure_tile(std::false_type{},std::false_type{});
     if (loose && fma) configure_tile(std::true_type{},std::true_type{});
@@ -598,7 +623,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         const dim3 tiles(s.length >> ctx.t, curves, outputs);
         const auto invert = [&](auto add, auto difference) {
             constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
-            if (warp_tile)
+            if (inverse_warp_input)
+                inverse_product_tile<true,add_bb,loose_e,true><<<tiles,inverse_threads,inverse_smem,q>>>(
+                    inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
+            else if (warp_tile)
                 inverse_product_tile<true,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
             else

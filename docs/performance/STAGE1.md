@@ -39,7 +39,7 @@ M16319 的 NTT 折算耗时从 **8.68 降到 7.77 秒/曲线**，CGBN NAF 在对
 
 GPU 用实际批次时间除以曲线数，再乘 `1,000,000 / B1`。图中阴影为本次 NTT 和 Prime95 三次样本的最小／最大值。两类曲线各有 24 个指数的 NTT 中位耗时下降，M127 和 M251 的耗时增幅均小于 0.9%。CGBN 在全部 13 个共有指数上的批量摊销耗时低于 NTT。模数、批量与计时边界随路径变化。计时和复现见 [NTT 最佳配置全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 与 [历史 Prime95 单核基准](#prime95-单核基准与-b1-外推)。
 
-0.61.5 的混合 radix-5 和逆变换参数优化采用固定形状的阶梯对照。另在两个相同指数上与 PRPLL 比较完整模平方。详见 [0.61.5 阶梯吞吐](STAGE1_MERSENNE_NTT.md#混合-radix-5-吞吐与寄存器) 和 [同卡模平方对照](STAGE1_MERSENNE_NTT.md#同卡完整模平方与-prpll)。
+Stage1 NTT 的固定形状对照覆盖混合 radix-5、逆向参数和 warp 输入融合。0.61.7 在三组真实生产曲线中提高设备吞吐 1.40%–9.68%。另在两个相同指数上与 PRPLL 比较完整模平方。[生产曲线对照](STAGE1_MERSENNE_NTT.md#逆向-warp-输入融合与块宽)、[同卡模平方对照](STAGE1_MERSENNE_NTT.md#同卡完整模平方与-prpll)
 
 CGBN 采集期间 GPU1 利用率至少 50% 的 2512 个遥测点中，SM 频率中位数为 1500 MHz（范围 210–1500 MHz），功耗为 1.68–25.34 W（中位数 23.22 W），温度为 47–56 °C。原始日志、save 与分曲线汇总在 `data/experiments/stage1_unified_4060_0600/cgbn/`，绘图 CSV 在 `data/figures/stage1_ntt_history_0613/`。
 

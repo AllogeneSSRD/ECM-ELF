@@ -48,6 +48,8 @@ flowchart LR
 
 加权路径把长度归一化 \(L^{-1}\) 乘入逆权重表。逆变换对统一缩放是线性的，因而可以先做未缩放的逆变换，再由 `weighted_limb_sums` 对每个系数一次性应用 \(L^{-1}\) 和逆权重。PFA 与二次幂形状均使用完整卷积长度 \(L\)。线性卷积继续在逆变换 tile 入口缩放。见 [权重表与 limb 汇集](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh) 和 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
 
+启用 warp 尾段且 tile 至少有六层时，Stage1 逆变换以 64 个系数为一组。每个 lane 从对齐地址读取相邻的两个频谱系数，在寄存器中完成逐点乘加与六层 DIT。lane `j` 的两个结果对应组内 `j` 和 `j+32`。六层 tile 直接写回，动态共享内存为 0。更大 tile 只把六层结果写入共享内存，经过一次块同步，再执行余下的 DIT。逆向块线程数为 \(\min(512,2^{t-1})\)，其中 \(t\) 是 tile 层数。计划日志分别列出前向和逆向块宽与动态共享内存。见 [频谱成对读取](../../kernels/cuda/stage1_ntt_dataflow.cuh)、[剩余 DIT 层](../../src/ecm/cuda/ntt/device/tile_pass.cuh) 和 [吞吐对照](../performance/STAGE1_MERSENNE_NTT.md#逆向-warp-输入融合与块宽)。
+
 ## 数学合同
 
 域素数 q=2⁶⁴−2³²+1，支持长度 L=2ᵏ、k≤32 的单位根。项目以精确整数 NTT 实现系数多项式乘法，不依赖浮点误差控制。Goldilocks 模数 q 与待分解整数 N、算术承载 M 相互独立。

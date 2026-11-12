@@ -235,11 +235,13 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 ecm_ts_fprintf(stdout, "stage1_ntt_plan: device=%d p=%zu curves=%zu length=%u bpw=%u digits=%u "
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
+                    "inverse_tile_threads=%u inverse_tile_smem_bytes=%u "
                     "outer_max_layers=%u outer_threads=%u warp_tail=%u graph_bits=%u "
                     "profile=%u source=%s resume=%u bits=%u convolution=%s curve=%s dataflow=%u\n",
                     opt.execution.device_index, p, active.size(), plan.length, plan.bpw, plan.digits,
                     plan.passes, plan.passes, plan.forward.c_str(), plan.inverse.c_str(),
                     plan.tile, 1u << plan.tile, plan.tile_threads, 8u << plan.tile,
+                    plan.inverse_tile_threads, plan.inverse_tile_smem_bytes,
                     plan.outer_max, plan.outer_threads, unsigned(plan.warp_tail),
                     plan.window, opt.execution.ntt.profile, plan.source, control.resume, count,
                     plan.weighted ? "weighted" : "linear", edwards ? "edwards" : "mont0", plan.dataflow);

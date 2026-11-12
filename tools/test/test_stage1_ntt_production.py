@@ -78,7 +78,8 @@ def main():
     log = run(work, call, text=data)
     mirror = (work / "screen.log").read_text(encoding="utf-8")
     assert "length=512" in log and "forward_layers=1+8" in log and "inverse_layers=8+1" in log
-    assert "convolution=linear curve=mont0 dataflow=5" in log  # Multiply-add and direct route.
+    assert "convolution=linear curve=mont0 dataflow=517" in log
+    assert "inverse_tile_threads=128 inverse_tile_smem_bytes=2048" in log
     assert "stage1_ntt_plan:" in mirror and "stage1_ntt_timing:" in mirror
     n = (1 << 4003) - 1
     assert saved_points(work / "out.save", 4003, 128) == {
@@ -101,13 +102,13 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=256 bpw=16" in log and "convolution=weighted" in log and "graph_bits=0" in log
-    assert "convolution=weighted curve=mont0 dataflow=31" in log  # One tile, with cached carry.
+    assert "convolution=weighted curve=mont0 dataflow=543" in log  # One tile, with cached carry.
     assert saved_points(work / "out.save", 4003, 32) == expected
     print("PASS weighted direct launch against independent Python", flush=True)
 
     p, b1, sigma = 131071, 20, 26
     wide_n = (1 << p) - 1
-    for model, curves, dataflow in (("mont", 2, 39), ("ed", 1, 103)):
+    for model, curves, dataflow in (("mont", 2, 551), ("ed", 1, 615)):
         work, cmd = fixture(f"wide_segments_{model}", extra='ntt_convolution = "weighted"\n'
                             'ntt_length = 8192\nntt_tile = 12\n', model=model)
         call, data = direct(work, cmd, p, b1, sigma, curves)
@@ -165,7 +166,7 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=2560" in log and "forward_layers=r5+9 inverse_layers=9+r5" in log
-    assert "convolution=weighted curve=mont0 dataflow=407" in log  # PFA with shared permutation.
+    assert "convolution=weighted curve=mont0 dataflow=919" in log  # PFA and fused inverse warp input.
     assert saved_points(work / "out.save", 4003, 32) == expected
 
     p, b1, sigma, curves = 4423, 32, 26, 32
