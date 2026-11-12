@@ -10,6 +10,12 @@ namespace stage2_queue {
 namespace fs = std::filesystem;
 struct Task;
 
+struct Reservation {
+    uint64_t position = 0;
+    bool completed = false;
+    std::string receipt, results;
+};
+
 struct State {
     std::string identity, run, pending, pending_results;
     uint64_t done = 0, total = 0;
@@ -17,9 +23,11 @@ struct State {
     std::string publication_task;
     uint64_t b2 = 0;
     bool auto_b2 = false;
+    std::vector<Reservation> reserved;
     bool load(const fs::path& path);
     void save(const fs::path& path) const;
     void reconfigure(const Task& task);
+    void advance_completed();
 };
 
 struct Task {

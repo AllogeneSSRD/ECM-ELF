@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "11c1c81d9fd485ef71bed7b72a2d2df2d0350bd29f833a1d6c4e8fcd3c596596",
-    "src/ecm/platform/generated/configuration_defaults.h": "f3c91c9fa6ccf681ea90aee242327bbb4777a0a2d2ebf8aadf9264fa8c86a42f",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "07a4784b0c63886d3f93e1fae894d154fddbc8c81c17582bf7d13ac21bc9bb48",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "598d55f81a891b407e614a9b731023e28fd930bada5269b8b7ce54d418570a70",
-    "config/ecm.toml.default": "db766735cb0104e41b72959ebc6197611ada6a3a675cec3c235dc530dfee696d",
-    "config/ecm.toml.example": "98586334c8e8311c4f067e0649a65f807223f3616e3242b94a21985180aaa787",
-    "docs/ECM_TOML_REFERENCE.md": "3fe2346fca2eeeb66fc36535c58902efe19d069cbde66d75f3685054076ecc8c",
-    "config/ecm_options.json": "95a966ccae41d3a5aa6a76cb2cc57e252336ffb92270a546e49708b5fc0eafed",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "c13429002f408557cd6a721b8d26bcfb99355b9263c57c5e16d669e99e6fc1c8",
+    "src/ecm/platform/generated/configuration_defaults.h": "500b7dc967463844c9fe6ee4fefd933827d4b893e9dcf405d0c913818877441b",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "f7a82820df7f98c2bb47b0c2a44c60a39e840ffbbaa889668cea86c7ca145fe9",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "96e2f361a9fa763d5945c62ba87495bf9acd7df89719c64b248ffeda41c9cfb5",
+    "config/ecm.toml.default": "e8d9ca3ff8878a2e00f9db0bec07c0369b35e941a47d5143264d997841c5a0ed",
+    "config/ecm.toml.example": "c6e79c321c569d0c0d535d82b51d98b03f7d6ee87c6176acd4b71cb618a1441b",
+    "docs/ECM_TOML_REFERENCE.md": "3722a518ad50b94052f0d3468f5a9f5187d405752e1e56fff5029d0c59ea2264",
+    "config/ecm_options.json": "87d8840dbc0534165100b3ff669215cb17f39f1ebcbbc3c57f3a5d6eed7cca47",
     "tools/gen/generate_ecm_config.py": "d491289e49651c7b061be86c570bb08ea7034f6b06713f15e6a053d00589e1a2"
   }
 }

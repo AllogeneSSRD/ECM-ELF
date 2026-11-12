@@ -1,5 +1,6 @@
 #pragma once
 #include "../types.h"
+#include <optional>
 namespace ecm_stage2 { namespace tune { namespace portable { struct RuntimeRouteHints; } } }
 namespace s2prod {
 bool open_runtime_routes(const std::string &text,ecm_stage2::tune::portable::RuntimeRouteHints &out);
@@ -18,6 +19,22 @@ void merge_portable_tune(const Options &o,const fs::path &destination);
 std::vector<Record> portable_queue_range(const fs::path &worktodo,int worker,const fs::path &save_dir);
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r);
 void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation);
+struct ParallelRoute {
+    Options options;
+    ecm_stage2::tune::portable::Shape shape;
+    ecm_stage2::tune::Fields condition;
+    std::string scope,device_uuid;
+    uint64_t reservation=0;
+};
+struct ParallelEvidence {
+    uint64_t curves=0;
+    double serial_wall=0,serial_middle=0,paired_wall=0,paired_middle=0;
+};
+std::optional<ParallelRoute> prepare_parallel_route(Options options,const Record &record,bool writes_log);
+uint64_t parallel_free_memory(int device);
+ParallelEvidence read_parallel_evidence(const ParallelRoute &route,unsigned mask,uint64_t preferred_curves);
+void record_parallel_window(const ParallelRoute &route,unsigned mask,unsigned workers,
+                            uint64_t curves,double wall,double middle);
 void run_portable_ntt(const Options &o,const fs::path &destination);
 void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &destination,
     const fs::path &default_worktodo,const fs::path &save_dir);

@@ -44,7 +44,7 @@ bool import_legacy(const fs::path& path, const Task& task,
         old.publication_task = old.identity;
         old.b2 = *found;
         old.auto_b2 = !*found;
-    } else if (old.version == 3) {
+    } else if (old.version >= 3) {
         if (old.identity != task.id())
             return false;
     } else {
@@ -62,7 +62,7 @@ bool import_legacy(const fs::path& path, const Task& task,
         old.auto_b2 = identity.auto_b2 && !identity.b2;
     }
     old.identity = task.id();
-    old.version = 3;
+    old.version = (std::max)(3u, old.version);
     out = std::move(old);
     return true;
 }
@@ -74,7 +74,7 @@ bool State::load(const fs::path& path) {
     unsigned schema = 0;
     if (!(in >> schema >> done >> total >> std::quoted(run) >> std::quoted(pending) >>
           std::quoted(identity)) ||
-        (schema != 1 && schema != 2 && schema != 3) || done > total ||
+        (schema < 1 || schema > 4) || done > total ||
         (done == total && !pending.empty()) || run.empty())
         throw std::runtime_error("invalid Stage2 progress file; inspect: " + path.string());
     version = schema;
@@ -82,18 +82,35 @@ bool State::load(const fs::path& path) {
     publication_task.clear();
     b2 = 0;
     auto_b2 = false;
+    reserved.clear();
     if (schema >= 2 && !(in >> std::quoted(pending_results)))
         throw std::runtime_error("missing Stage2 receipt path");
     if (schema >= 2 &&
         (identity.size() != 64 || identity.find_first_not_of("0123456789abcdef") != identity.npos))
         throw std::runtime_error("invalid Stage2 task ID");
-    if (schema == 3) {
+    if (schema >= 3) {
         unsigned mode = 0;
         if (!(in >> std::quoted(publication_task) >> b2 >> mode) || mode > 1 || (mode && b2) ||
             publication_task.size() != 64 ||
             publication_task.find_first_not_of("0123456789abcdef") != publication_task.npos)
             throw std::runtime_error("invalid Stage2 execution policy or publication task");
         auto_b2 = mode != 0;
+    }
+    if (schema == 4) {
+        uint64_t count = 0;
+        if (!pending.empty() || !pending_results.empty() || !(in >> count) || !count || count > total - done)
+            throw std::runtime_error("invalid Stage2 reserved curves");
+        std::set<std::string> receipts;
+        for (uint64_t i = 0; i < count; ++i) {
+            Reservation entry;
+            unsigned completed = 0;
+            if (!(in >> entry.position >> completed >> std::quoted(entry.receipt) >> std::quoted(entry.results)) ||
+                entry.position != done + i || completed > 1 || (i == 0 && completed) ||
+                entry.receipt.empty() || entry.results.empty() || !receipts.insert(entry.receipt).second)
+                throw std::runtime_error("invalid Stage2 reserved curve");
+            entry.completed = completed != 0;
+            reserved.push_back(std::move(entry));
+        }
     }
     in >> std::ws;
     if (!in.eof())
@@ -106,9 +123,19 @@ void State::save(const fs::path& path) const {
         fs::create_directories(path.parent_path());
     const fs::path temp(path.string() + ".tmp." + std::to_string(GetCurrentProcessId()));
     std::ostringstream out;
-    out << "3 " << done << ' ' << total << ' ' << std::quoted(run) << ' ' << std::quoted(pending)
-        << ' ' << std::quoted(identity) << ' ' << std::quoted(pending_results) << ' '
-        << std::quoted(publication_task) << ' ' << b2 << ' ' << unsigned(auto_b2) << '\n';
+    const bool multiple = reserved.size() > 1;
+    const auto &receipt = reserved.size() == 1 ? reserved.front().receipt : pending;
+    const auto &results = reserved.size() == 1 ? reserved.front().results : pending_results;
+    out << (multiple ? "4 " : "3 ") << done << ' ' << total << ' ' << std::quoted(run) << ' ' << std::quoted(receipt)
+        << ' ' << std::quoted(identity) << ' ' << std::quoted(results) << ' '
+        << std::quoted(publication_task) << ' ' << b2 << ' ' << unsigned(auto_b2);
+    if (multiple) {
+        out << ' ' << reserved.size();
+        for (const auto& entry : reserved)
+            out << '\n' << entry.position << ' ' << unsigned(entry.completed) << ' '
+                << std::quoted(entry.receipt) << ' ' << std::quoted(entry.results);
+    }
+    out << '\n';
     const auto bytes = out.str();
     HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -145,7 +172,7 @@ void State::reconfigure(const Task& task) {
     if (!identity.empty() && identity != key)
         throw std::runtime_error("Stage2 checkpoint input identity mismatch");
     const bool mode = task.auto_b2 && !task.b2;
-    if (!pending.empty() && (total != task.total || b2 != task.b2 || auto_b2 != mode))
+    if ((!pending.empty() || !reserved.empty()) && (total != task.total || b2 != task.b2 || auto_b2 != mode))
         throw std::runtime_error("Stage2 has an unconfirmed curve; recover its original B2 and "
                                  "curve count before changing the task");
     if (identity.empty()) {
@@ -164,7 +191,7 @@ fs::path load_task(const fs::path& directory, size_t bits, const Task& task, Sta
     const auto canonical = task.path(directory, bits);
     State current;
     if (current.load(canonical)) {
-        if (current.version != 3 || current.identity != task.id())
+        if (current.version < 3 || current.identity != task.id())
             throw std::runtime_error("Stage2 checkpoint input identity mismatch");
         const auto old = directory / (".ecm_ckpt_stage2_" + std::to_string(bits) + '_' +
                                       current.publication_task + ".dat");
@@ -238,6 +265,13 @@ std::string token() {
     for (int i = 0; i < 4; ++i)
         out << std::setw(8) << source();
     return out.str();
+}
+
+void State::advance_completed() {
+    const auto first_unfinished = std::find_if(reserved.begin(),reserved.end(),
+        [](const Reservation& entry) {return !entry.completed;});
+    done += first_unfinished - reserved.begin();
+    reserved.erase(reserved.begin(),first_unfinished);
 }
 
 bool result_written(const fs::path& path, const std::string& receipt) {

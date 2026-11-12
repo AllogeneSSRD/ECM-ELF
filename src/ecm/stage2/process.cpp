@@ -38,9 +38,28 @@ std::wstring quote(const std::wstring &s) {
     out.append(2 * slashes, L'\\');
     return out + L'"';
 }
-int run_curve_process(const CurveProcessRequest &o) {
+struct CurveProcess::Impl {
+    using Clock = std::chrono::steady_clock;
+    CurveProcessRequest request;
+    Handle out_read,err_read,job,process;
+    Clock::time_point begin,next;
+    std::string phase="Starting curve",stdout_pending,stderr_pending,queue_sample;
+    bool heartbeat=false,stop_reported=false;
+    stage2_console::Summary console_summary;
+
+    explicit Impl(CurveProcessRequest value);
+    void console_line(const std::string &text,bool error=false);
+    void line(const std::string &text,bool error,std::ofstream &output);
+    void drain(HANDLE pipe,std::string &pending,bool error,std::ofstream &output);
+    std::optional<int> poll();
+};
+
+CurveProcess::Impl::Impl(CurveProcessRequest value)
+    : request(std::move(value)),
+      console_summary(request.batch,request.console_budget.arena,request.console_budget.owner_mb) {
+    const auto &o=request;
     const auto &save=o.save,&results=o.results,&log=o.log;
-    const auto &r=o.record;const auto &ini_settings=o.console_budget;
+    const auto &r=o.record;
     const auto b2=o.b2,d=o.d,batch=o.batch;const int device=o.device;
     const fs::path exe = executable();
     std::wstring cmd = quote(exe.wstring()) + L" --curve-worker --save " + quote(save.wstring());
@@ -55,6 +74,8 @@ int run_curve_process(const CurveProcessRequest &o) {
     arg(L"--pack-zero",o.pack_zero?1:0);
     if(o.weighted_ntt)arg(L"--weighted-ntt",1);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
+    if(o.fixed_queue_route)cmd+=L" --fixed-queue-route";
+    if(!o.queue_phase_gate.empty())cmd+=L" --queue-phase-gate "+quote(fs::path(o.queue_phase_gate).wstring());
     arg(L"--tune-runtime-samples",o.runtime_samples);
     arg(L"--tune-min-repeats",o.tune_min_repeats);
     arg(L"--runtime-remaining-curves",o.runtime_remaining);
@@ -113,21 +134,20 @@ int run_curve_process(const CurveProcessRequest &o) {
     // Preserve readable batch statistics in the file even with a concise console.
     const int engine_level=o.engine_log_level;
     arg(L"--log-level",static_cast<uint64_t>(engine_level));
-    std::ofstream output;
     if(!log.empty()) {
         fs::create_directories(log.parent_path());
-        output.open(log,std::ios::binary|std::ios::app);
+        std::ofstream output(log,std::ios::binary|std::ios::app);
         if(!output)throw std::runtime_error("cannot open Stage2 log: "+log.string());
     }
     if(o.debug_log)fs::create_directories(fs::path(o.debug_file).parent_path());
     SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
-    Handle out_read,out_write,err_read,err_write;
+    Handle out_write,err_write;
     if(!CreatePipe(&out_read.value,&out_write.value,&security,0) ||
        !CreatePipe(&err_read.value,&err_write.value,&security,0) ||
        !SetHandleInformation(out_read.value,HANDLE_FLAG_INHERIT,0) ||
        !SetHandleInformation(err_read.value,HANDLE_FLAG_INHERIT,0))
         throw std::runtime_error("cannot create curve output pipes");
-    Handle job;job.value=CreateJobObjectW(nullptr,nullptr);
+    job.value=CreateJobObjectW(nullptr,nullptr);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if(!job.value || !SetInformationJobObject(job.value,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))
@@ -137,86 +157,113 @@ int run_curve_process(const CurveProcessRequest &o) {
     PROCESS_INFORMATION pi{};
     if(!CreateProcessW(exe.c_str(),cmd.data(),nullptr,nullptr,TRUE,CREATE_SUSPENDED|CREATE_NEW_PROCESS_GROUP,nullptr,nullptr,&si,&pi))
         throw std::runtime_error("cannot launch curve process: "+std::to_string(GetLastError()));
-    Handle process,thread;process.value=pi.hProcess;thread.value=pi.hThread;
+    Handle thread;process.value=pi.hProcess;thread.value=pi.hThread;
     if(!AssignProcessToJobObject(job.value,pi.hProcess)) {
         TerminateProcess(pi.hProcess,2);throw std::runtime_error("cannot bind curve process lifetime");
     }
     if(ResumeThread(pi.hThread)==static_cast<DWORD>(-1))throw std::runtime_error("cannot resume curve process");
     CloseHandle(out_write.value);out_write.value=INVALID_HANDLE_VALUE;
     CloseHandle(err_write.value);err_write.value=INVALID_HANDLE_VALUE;
-    const auto begin=std::chrono::steady_clock::now();
-    auto next=begin+std::chrono::seconds(30);
-    std::string phase="Starting curve",stdout_pending,stderr_pending;
-    bool heartbeat=false,stop_reported=false;
-    stage2_console::Summary console_summary(batch,ini_settings.arena,ini_settings.owner_mb);
-    auto console_line=[&](const std::string &text,bool error=false) {
-        if(heartbeat){std::cout<<'\n';heartbeat=false;}
-        (error?std::cerr:std::cout)<<text<<std::endl;
-    };
-    auto line=[&](const std::string &text,bool error) {
-        if(!error && o.runtime_prepare_cache && text.rfind("{\"type\":\"tune_selection\"",0)==0) {
-            if(o.observe_selection)o.observe_selection(text);
-        }
-        if(output.is_open()){output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");}
-        if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
-        const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
-        if(stage2_log::enabled(stage2_log::phases))
-            for(const auto &entry:summary.lines)console_line(entry);
-        const bool milestone=text.compare(0,14,"stage2_phase: ")==0;
-        const bool tune_update=text.compare(0,21,"stage2_tune_runtime: ")==0;
-        const bool result=text.compare(0,15,"stage2_result: ")==0;
-        if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
-        if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
-           ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&(result || text.rfind("stage2_relocation:",0)==0)) ||
-           stage2_log::enabled(stage2_log::batches) ||
-           (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
-           text.find("WARNING")!=text.npos))console_line(text,error);
-    };
-    auto drain=[&](HANDLE pipe,std::string &pending,bool error) {
-        DWORD available=0;
-        while(PeekNamedPipe(pipe,nullptr,0,nullptr,&available,nullptr) && available) {
-            char buffer[4096];DWORD got=0;
-            if(!ReadFile(pipe,buffer,std::min<DWORD>(available,sizeof(buffer)),&got,nullptr) || !got)break;
-            pending.append(buffer,got);
-            size_t pos;
-            while((pos=pending.find('\n'))!=std::string::npos) {
-                std::string text=pending.substr(0,pos);pending.erase(0,pos+1);
-                if(!text.empty()&&text.back()=='\r')text.pop_back();
-                line(text,error);
-            }
-        }
-    };
-    DWORD wait=WAIT_TIMEOUT;
-    for(;;) {
-        poll_inherited_stop();
-        if(stop_requests>=2) {
-            TerminateJobObject(job.value,130);
-            WaitForSingleObject(pi.hProcess,5000);
-            throw std::runtime_error("immediate stop requested; incomplete curve will restart next time");
-        }
-        if(stop_requests && !stop_reported) {
-            line("Stop requested: finishing current curve; press Ctrl+C again to terminate immediately.",true);
-            stop_reported=true;
-        }
-        drain(out_read.value,stdout_pending,false);drain(err_read.value,stderr_pending,true);
-        wait=WaitForSingleObject(pi.hProcess,50);
-        if(wait==WAIT_OBJECT_0)break;
-        if(wait!=WAIT_TIMEOUT)throw std::runtime_error("curve process wait failed");
-        const auto now=std::chrono::steady_clock::now();
-        if(now>=next && !o.tune_child && stage2_log::enabled(stage2_log::curve)) {
-            std::cout<<'\r'<<"Curve "<<r.index<<": "<<phase<<" | elapsed="
-                     <<static_cast<unsigned long long>(std::chrono::duration<double>(now-begin).count())<<" s     "<<std::flush;
-            heartbeat=true;next=now+std::chrono::seconds(30);
+    begin=Clock::now();
+    next=begin+std::chrono::seconds(30);
+}
+
+void CurveProcess::Impl::console_line(const std::string &text,bool error) {
+    if(heartbeat){std::cout<<'\n';heartbeat=false;}
+    (error?std::cerr:std::cout)<<text<<std::endl;
+}
+
+void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &output) {
+    const auto &o=request;
+    constexpr char sample_prefix[]="stage2_parallel_curve: ";
+    if(!error && o.fixed_queue_route && text.rfind(sample_prefix,0)==0)
+        queue_sample=text.substr(sizeof(sample_prefix)-1);
+    if(!error && o.runtime_prepare_cache && text.rfind("{\"type\":\"tune_selection\"",0)==0) {
+        if(o.observe_selection)o.observe_selection(text);
+    }
+    // Release the log between pumps so task milestones and both children can append.
+    if(!o.log.empty()){
+        if(!output.is_open())output.open(o.log,std::ios::binary|std::ios::app);
+        output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");
+    }
+    if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
+    const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
+    if(stage2_log::enabled(stage2_log::phases))
+        for(const auto &entry:summary.lines)console_line(entry);
+    const bool milestone=text.compare(0,14,"stage2_phase: ")==0;
+    const bool tune_update=text.compare(0,21,"stage2_tune_runtime: ")==0;
+    const bool result=text.compare(0,15,"stage2_result: ")==0;
+    if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
+    if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
+       ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&(result || text.rfind("stage2_relocation:",0)==0)) ||
+       stage2_log::enabled(stage2_log::batches) ||
+       (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
+       text.find("WARNING")!=text.npos))console_line(text,error);
+}
+
+void CurveProcess::Impl::drain(HANDLE pipe,std::string &pending,bool error,std::ofstream &output) {
+    DWORD available=0;
+    while(PeekNamedPipe(pipe,nullptr,0,nullptr,&available,nullptr) && available) {
+        char buffer[4096];DWORD got=0;
+        if(!ReadFile(pipe,buffer,std::min<DWORD>(available,sizeof(buffer)),&got,nullptr) || !got)break;
+        pending.append(buffer,got);
+        size_t pos;
+        while((pos=pending.find('\n'))!=std::string::npos) {
+            std::string text=pending.substr(0,pos);pending.erase(0,pos+1);
+            if(!text.empty()&&text.back()=='\r')text.pop_back();
+            line(text,error,output);
         }
     }
-    drain(out_read.value,stdout_pending,false);drain(err_read.value,stderr_pending,true);
-    if(!stdout_pending.empty())line(stdout_pending,false);
-    if(!stderr_pending.empty())line(stderr_pending,true);
+}
+
+std::optional<int> CurveProcess::Impl::poll() {
+    const auto &o=request;
+    std::ofstream output;
+    poll_inherited_stop();
+    if(stop_requests>=2) {
+        TerminateJobObject(job.value,130);
+        WaitForSingleObject(process.value,5000);
+        throw std::runtime_error("immediate stop requested; incomplete curve will restart next time");
+    }
+    if(stop_requests && !stop_reported) {
+        line("Stop requested: finishing active curves. Press Ctrl+C again to terminate immediately.",true,output);
+        stop_reported=true;
+    }
+    drain(out_read.value,stdout_pending,false,output);drain(err_read.value,stderr_pending,true,output);
+    const DWORD wait=WaitForSingleObject(process.value,0);
+    if(wait==WAIT_TIMEOUT) {
+        const auto now=Clock::now();
+        if(now>=next && !o.tune_child && stage2_log::enabled(stage2_log::curve)) {
+            std::cout<<'\r'<<"Curve "<<o.record.index<<": "<<phase<<" | elapsed="
+                     <<static_cast<unsigned long long>(std::chrono::duration<double>(now-begin).count())<<" s     "<<std::flush;
+            heartbeat=true;next=now+std::chrono::seconds(30);
+    }
+        return std::nullopt;
+        }
+    if(wait!=WAIT_OBJECT_0)throw std::runtime_error("curve process wait failed");
+    drain(out_read.value,stdout_pending,false,output);drain(err_read.value,stderr_pending,true,output);
+    if(!stdout_pending.empty())line(stdout_pending,false,output);
+    if(!stderr_pending.empty())line(stderr_pending,true,output);
     if(!o.tune_child && stage2_log::enabled(stage2_log::phases))
         for(const auto &entry:console_summary.finish().lines)console_line(entry);
     if(heartbeat)std::cout<<std::endl;
     DWORD code=1;
-    if(!GetExitCodeProcess(pi.hProcess,&code))throw std::runtime_error("cannot read curve exit status");
+    if(!GetExitCodeProcess(process.value,&code))throw std::runtime_error("cannot read curve exit status");
     return code==0?0:(code==3?3:1);
+}
+
+CurveProcess::CurveProcess(CurveProcessRequest request):state_(std::make_unique<Impl>(std::move(request))) {}
+CurveProcess::~CurveProcess() = default;
+HANDLE CurveProcess::handle() const {return state_->process.value;}
+std::optional<int> CurveProcess::poll() {return state_->poll();}
+const std::string &CurveProcess::queue_sample() const {return state_->queue_sample;}
+
+int run_curve_process(const CurveProcessRequest &request) {
+    CurveProcess process(request);
+    while(true) {
+        if(const auto result=process.poll())return *result;
+        if(WaitForSingleObject(process.handle(),50)==WAIT_FAILED)
+            throw std::runtime_error("curve process wait failed");
+    }
 }
 }

@@ -101,6 +101,28 @@ int main(int argc,char **argv) {
         catch(const std::runtime_error &){refused=true;}check(refused);
         auto unrelated=requested;unrelated.save_sha256=std::string(64,'c');stage2_queue::State empty;
         check(stage2_queue::load_task(v2_count_dir,11694,unrelated,empty).empty() && empty.identity.empty());
+        stage2_queue::State parallel;
+        parallel.reconfigure(policy);
+        parallel.reserved={{0,false,"first",receipt.string()},{1,true,"second",receipt.string()},
+                           {2,false,"third",receipt.string()}};
+        const auto parallel_dir=dir/"parallel";
+        const auto parallel_path=policy.path(parallel_dir,11694);
+        parallel.save(parallel_path);
+        stage2_queue::State recovered;
+        check(stage2_queue::load_task(parallel_dir,11694,policy,recovered)==parallel_path);
+        check(recovered.version==4 && recovered.done==0 && recovered.reserved.size()==3 &&
+              recovered.reserved[1].completed && recovered.reserved[1].receipt=="second");
+        refused=false;
+        try {recovered.reconfigure(changed_policy);}
+        catch(const std::runtime_error &) {refused=true;}
+        check(refused);
+        recovered.reserved.front().completed=true;
+        recovered.advance_completed();
+        check(recovered.done==2 && recovered.reserved.size()==1 && recovered.reserved.front().position==2);
+        recovered.save(parallel_path);
+        stage2_queue::State compressed;
+        check(compressed.load(parallel_path) && compressed.version==3 && compressed.done==2 &&
+              compressed.pending=="third" && compressed.pending_results==receipt.string());
         stage2_log::level=stage2_log::phases;
         stage2_log::phase("Read and validate Stage1 point");
         {stage2_log::PlanningScope quiet;stage2_log::phase("Plan Stage2 bounds and memory");

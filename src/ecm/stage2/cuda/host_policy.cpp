@@ -21,7 +21,8 @@ void configure_phase_experiment(Options &o) {
     // out of the single-worker profile, while allowing reads of existing rows.
     o.tune_runtime = false;
     o.short_calibration = false;
-    o.short_batch_tune = false;
+    if(!o.fixed_queue_route)o.short_batch_tune = false;
+    o.parallel = 0;
 #else
     (void)o;
 #endif

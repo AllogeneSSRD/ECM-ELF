@@ -1,9 +1,9 @@
 """Read portable tune matrices for assertions and analysis."""
 def summaries(document, kind='sample'):
-    if document.get('profile',{}).get('format') not in range(8,15):
-        raise ValueError('This reader requires portable profile format 8–14')
+    if document.get('profile',{}).get('format') not in range(8,16):
+        raise ValueError('This reader requires portable profile format 8–15')
     result=[]
-    tables=document.get('width' if kind=='sample' else 'ntt',{})
+    tables=document.get({'sample':'width','ntt':'ntt','parallel':'stage2_parallel'}[kind],{})
     for key, table in ([(None,tables)] if 'matrix' in tables else tables.items()):
         columns,*rows=table['matrix']
         assert len(columns)==len(set(columns))
@@ -14,7 +14,7 @@ def summaries(document, kind='sample'):
                 row['target_bits']=int(key)
                 row['arithmetic_bits']=row.get('carrier_exponent') or int(key)
                 row['execution_path']='resident' if row['fold_resident'] and row['frontier_resident'] else 'host_frontier' if row['fold_resident'] else 'host_fold_frontier'
-            else:
+            elif kind=='ntt':
                 if key is not None:row['condition']=int(key)
                 if row.get('ntt_type','stage2_convolution')=='stage2_convolution' and 'mean_seconds' not in row:
                     row['mean_seconds']=row['batch']/row['iter_per_s']

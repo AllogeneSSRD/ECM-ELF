@@ -108,6 +108,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_tune_arithmetic","string","[both|generic|mersenne]"},
     {"stage2","stage2_tune_profile","string","<path>"},
     {"stage2","stage2_tune_runtime","bool","[false|true|0|1]"},
+    {"stage2","stage2_parallel","u64","[0|1|2]"},
     {"stage2","stage2_tune_min_repeats","u64","[1..1000]"},
     {"stage2","stage2_tune_runtime_samples","u64","[1..1000]"},
     {"stage2","stage2_short_ntt_batch_tune","bool","[false|true|0|1]"},

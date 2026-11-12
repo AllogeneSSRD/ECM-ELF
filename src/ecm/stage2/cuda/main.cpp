@@ -134,8 +134,11 @@ Options arguments(int argc, char **argv) {
         else if (a == "--factor-only") o.factor_only = true;
         else if (a == "--auto-b2") o.auto_b2=true;
         else if (a == "--cost-profile") o.cost_profile=value();
-        else if (a == "--tune-profile") o.tune_profile=value();
+        else if (a == "--tune-profile") {o.tune_profile=value();o.portable_cli.insert(a);}
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--parallel") {const auto n=num();if(n>2)throw std::runtime_error("parallel must be 0, 1 or 2");o.parallel=unsigned(n);o.portable_cli.insert(a);}
+        else if (a == "--fixed-queue-route") o.fixed_queue_route=true;
+        else if (a == "--queue-phase-gate") o.queue_phase_gate=value();
         else if (a == "--tune-min-repeats") {o.tune_min_repeats=num();if(!o.tune_min_repeats || o.tune_min_repeats>1000)throw std::runtime_error("tune-min-repeats must be 1..1000");o.portable_cli.insert(a);}
         else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<1 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 1..1000");o.portable_cli.insert(a);}
         else if (a == "--runtime-remaining-curves") {o.runtime_remaining=num();}
@@ -321,6 +324,7 @@ void help() {
         "         Production console default: phases; readable file: batches. --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
+        "         --parallel 0|1|2 (serial, two in-flight CUDA curves, or measured auto; default 2)\n"
         "Auto B2: --auto-b2 --tune-profile FILE.toml --stage1-seconds-per-curve S\n"
         "         Or: --stage1-tune-profile FILE.toml --stage1-batch N [--lcm 1|12]\n"
         "         Offline validation: --check-stage1-tune-profile FILE.toml\n"
@@ -361,9 +365,14 @@ int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) {
         bind_engine_options(o);
+        if(!o.queue_phase_gate.empty() && (!o.fixed_queue_route ||
+           _putenv_s("ECM_STAGE2_PHASE_GATE",o.queue_phase_gate.c_str())))
+            throw std::runtime_error("cannot configure Stage2 queue phase gate");
         configure_phase_experiment(o);
         return curve_worker(o);
     }
+    if(o.fixed_queue_route || !o.queue_phase_gate.empty())
+        throw std::runtime_error("Stage2 queue route arguments are internal to curve workers");
     if(o.stop_handle) {
         inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));
         if(WaitForSingleObject(inherited_stop_event,0)==WAIT_FAILED)throw std::runtime_error("invalid inherited Stage2 stop event");
@@ -423,6 +432,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;
     if(!o.portable_cli.count("--tune-runtime"))o.tune_runtime=s.tune_runtime;
+    if(!o.portable_cli.count("--parallel"))o.parallel=unsigned(s.parallel);
     if(!o.portable_cli.count("--tune-runtime-samples"))o.runtime_samples=s.runtime_samples;
     if(!o.portable_cli.count("--tune-min-repeats"))o.tune_min_repeats=s.tune_min_repeats;
     if(o.tune_min_repeats>o.runtime_samples)throw std::runtime_error("tune-min-repeats exceeds tune-runtime-samples");
@@ -512,6 +522,7 @@ int driver(Options o) {
     point_env("ECM_OPENCL_RUNTIME_BUDGET",std::to_string(o.runtime_samples));
     o.cost_profile.clear();o.relocation=false;
     o.tune_profile.clear();o.tune_runtime=false;o.short_batch_tune=false;o.auto_carrier=false;o.auto_b2=false;
+    o.parallel=0;
 #endif
     if(!o.stage1_csv.empty())o.stage1_csv=absolute_from(cwd,o.stage1_csv).string();
     else if(!s.stage1_csv.empty())o.stage1_csv=absolute_from(base,s.stage1_csv).string();

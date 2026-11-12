@@ -1325,6 +1325,18 @@ Fuse input digit packing and zero padding in one GPU kernel per operand. Covers 
 
 每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。
 
+### stage2_parallel
+
+```toml
+stage2_parallel = 2
+```
+
+Type / 类型: `u64`; range / 范围: `[0|1|2]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+CUDA Stage2 curve queue: 0 serial, 1 allow two in-flight curves, 2 auto (default). Auto compares checked serial and paired queue throughput after the single-curve route is selected. Queue measurements are kept in the shared tune profile. Both modes 1 and 2 require enough device memory for two workers. CLI: --parallel 0|1|2.
+
+CUDA Stage2 曲线队列：0 串行，1 允许同时运行两条，2 自动（默认）。自动模式在单曲线路线确定后比较通过检查的串行和双曲线队列吞吐。队列测量保存到共享 tune 文件。1 和 2 均需有足够显存运行两个 worker。命令行：--parallel 0|1|2。
+
 ### stage2_prediction_policy
 
 ```toml
@@ -1597,9 +1609,9 @@ stage2_tune_runtime = true
 
 Type / 类型: `bool`; range / 范围: `[false|true|0|1]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.
+Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. Parallel queue decisions use stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.
 
-按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。 OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。
+按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false 关闭单曲线试跑、采集和写回，双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。
 
 ### stage2_tune_runtime_samples
 

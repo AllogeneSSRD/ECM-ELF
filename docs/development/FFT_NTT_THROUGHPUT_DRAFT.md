@@ -10,6 +10,7 @@
 6. **把逆向 warp 的输入留在寄存器。** 0.61.7 成对读取频谱，直接做逐点运算和首六层 DIT。缩小逆向线程块后，64、256、2560 点的 30 曲线吞吐提高 11.53%、9.74%、4.90%。Nsight Systems 已定位这部分耗时变化。Nsight Compute 因设备计数器权限未采到 bank 指标。[正式性能记录](../performance/STAGE1_MERSENNE_NTT.md#逆向-warp-输入融合与块宽)
 7. **验证 Stage2 显存准入和阶段错峰。** M5167／M8387 同时启动提高 6.01% 吞吐，同位宽 M8011 两曲线下降 9.71%。按 giant 主循环入口错峰在这两组分别提高 3.33%、下降 2.21%。预算拒绝按预期串行，已知因子与下降结果一致。[Stage2 准入记录](../performance/STAGE2.md#双目标准入与阶段错峰)
 8. **按执行阶段错开双目标。** 0.61.8 测得 baby 与 giant 的 kernel 时间覆盖率都在 94% 以上，F 树和求逆有较多可重叠空档。两 worker 进入所选阶段时共享互斥锁，等各自 CUDA 事件完成后释放。宽档仅互斥 baby 和 giant 时吞吐比串行高 11.33%。M8011 将 G 树/fold 与下降也纳入后高 13.50%。同组复测显示主要额外收益来自互斥 G 树/fold。生产默认串行。[阶段时间线与配对对照](../performance/STAGE2.md#双目标阶段互斥)
+9. **接入持续双槽及自动准入。** 0.62.0 在每条完成后补位，队列计时从独立的串行与双槽窗口取得并保存到共享 tune。GPU1 三个位宽的 9 条中段吞吐提高 68.79%、31.07%、11.88%，7995-bit 的 17 条复测提高 12.32%。默认 auto 先完成单曲线选型，再比较同路线窗口，复用已有决策。[双槽队列对照](../performance/STAGE2.md#双槽持续队列)
 
 ## 下一轮顺序
 
@@ -17,4 +18,4 @@
 2. **Stage2 按实测收益筛选双目标。** 扩充不同位宽、D/P、实际点块与显存余量的配对，按阶段互相争用和实测收益确定准入与掩码。每个 worker 单独保留日志、检查点、结果与预算，同时限制单任务尾延迟。已有时间线可识别空档，设备性能计数器可用后再测活跃 SM、warp 和内存带宽，确定同一 CUDA context 方案的空间。进入该方案前先清点 `cudaDeviceSynchronize()` 等全设备同步和跨任务共享资源。[GPUowl 的 Windows 显存分页探测](https://github.com/gwoltman/gpuowl/commit/c48a4304)
 3. **Stage2：减少固定多项式的重复变换。** 同一模数和卷积形状内，测量缓存 F 与逆多项式频谱的命中率、显存开销和每条曲线节省的前向变换数。按完整 shape 隔离缓存，在预算不足时回退。用固定 D/P、下降叶值、GCD 和完整曲线耗时确认收益，并检验是否挤占双目标的显存余量。
 
-原始证据位于 `data/experiments/fft_ntt_20261111/`、`data/experiments/fft_ntt_20261112/`、`data/experiments/fft_ntt_20261112_tile/` 和 `data/experiments/stage2_phase_gate_20261112/`。
+原始证据位于 `data/experiments/fft_ntt_20261111/`、`data/experiments/fft_ntt_20261112/`、`data/experiments/fft_ntt_20261112_tile/`、`data/experiments/stage2_phase_gate_20261112/` 和 `data/experiments/stage2_parallel_0620/`。

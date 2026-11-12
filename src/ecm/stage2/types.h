@@ -102,6 +102,9 @@ struct Options {
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
     bool weighted_ntt=ecm_config::defaults::stage2_stage2_weighted_ntt;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
+    unsigned parallel=ecm_config::defaults::stage2_stage2_parallel;
+    bool fixed_queue_route=false;
+    std::string queue_phase_gate;
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
     uint64_t tune_min_repeats=ecm_config::defaults::stage2_stage2_tune_min_repeats;
     bool runtime_probe=false;

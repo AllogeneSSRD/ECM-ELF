@@ -7,6 +7,7 @@
 #include <cuda_runtime_api.h>
 #endif
 #include "../cuda/api.h"
+#include "../cuda/host_policy.h"
 #include "../modulus.h"
 #include "../../../io/worktodo.h"
 #include "ecm/platform/program_version.h"
@@ -1162,6 +1163,102 @@ std::string select_runtime_tuned(Options &o,const Record &r) {
     pt::WidthPredictor predictor(engine,nullptr,true);return portable_runtime_select(o,r,engine,predictor);
 }
 
+std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bool writes_log) {
+#ifdef ECM_STAGE2_OPENCL
+    (void)o;(void)r;(void)writes_log;return std::nullopt;
+#else
+    if(!o.b2 || o.relocation)return std::nullopt;
+    const bool fixed_d=o.has_d && o.d;
+    if(o.parallel==1)o.tune_runtime=false;
+    configure_weighted_ntt(o);
+    configure_short_ntt_batches(o);
+    const auto selection=select_tuned(o,r);
+    const bool measured=selection.find("\"source\":")!=selection.npos &&
+        plan_scalar(selection,"source")=="\"measured\"";
+    if(o.tune_runtime) {
+        const auto mature=std::min(o.runtime_samples,std::max<uint64_t>(3,o.tune_min_repeats));
+        if(!measured || o.runtime_probe ||
+           selection.find("\"runtime_samples\":")==selection.npos ||
+           u64(plan_scalar(selection,"runtime_samples"),"runtime samples")<mature)return std::nullopt;
+    }
+    if(o.parallel==2 && !o.tune_runtime && !fixed_d && !measured)return std::nullopt;
+    if(!o.d)return std::nullopt;
+    auto shape=portable_shape(o,r,o.b2,o.d,o.carrier_exponent);
+    if(!portable_runtime_bounds(o,shape))return std::nullopt;
+    std::string plan;
+    if(!portable_admit(o,r,shape,plan))return std::nullopt;
+    const auto memory=curve_memory_record(plan);
+    const auto required=u64(plan_scalar(memory,"required_free_bytes"),"curve memory requirement");
+    const auto peak=u64(plan_scalar(memory,"peak_bytes"),"curve memory peak");
+    const auto headroom=std::max(uint64_t(256)<<20,peak/8);
+    if(!required || required>UINT64_MAX-headroom)return std::nullopt;
+    auto condition=portable_condition(o);
+    const auto device=pt::text(condition,"uuid_hex");
+    std::ostringstream key;
+    key<<"stage2-parallel-v1 "<<r.edwards<<' '<<r.n<<' '<<o.factor_only<<' '<<o.factorize_hits<<' '
+       <<o.debug_log<<' '<<o.ntt_counts<<' '<<o.log_level<<' '<<o.gui_events<<' '
+       <<o.save.empty()<<' '<<writes_log<<'\n';
+    for(const auto field:shape.key())key<<field<<' ';
+    o.b2=shape.b2;o.d=shape.d;o.has_d=true;o.auto_b2=false;o.auto_carrier=false;
+    o.carrier_exponent=shape.carrier;o.has_carrier=true;o.inferred_carrier=0;
+    o.groot_layout=int(shape.groot_balanced);o.giant_chain=std::to_string(shape.chain_block);
+    o.baby_backend=ecm_stage2::point_backend_name(shape.baby_coop);
+    o.giant_backend=ecm_stage2::point_backend_name(shape.giant_coop);
+    o.seed_backend=ecm_stage2::point_backend_name(shape.seed_coop);
+    o.reduce_backend=ecm_stage2::point_backend_name(shape.reduce_coop);
+    if(shape.reduce_coop){o.reduce_threads=shape.reduce_threads;o.reduce_kernel=shape.reduce_kernel;}
+    o.fixed_queue_route=true;o.b2_round_chain=false;o.tune_runtime=false;
+    o.runtime_prepare_cache=false;o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();
+    return ParallelRoute{std::move(o),shape,std::move(condition),ecm_stage2::sha256_text(key.str()),device,required+headroom};
+#endif
+}
+
+uint64_t parallel_free_memory(int device) {
+    return portable_memory_snapshot(device).free;
+}
+
+ParallelEvidence read_parallel_evidence(const ParallelRoute &route,unsigned mask,uint64_t preferred_curves) {
+    if(route.options.tune_profile.empty())return {preferred_curves};
+    const auto profile=portable_read(route.options.tune_profile);
+    std::map<uint64_t,ParallelEvidence> windows;
+    for(const auto &row:profile.parallel) {
+        if(pt::text(row,"scope")!=route.scope || profile.conditions.at(et::uint(row,"condition"))!=route.condition)
+            continue;
+        const auto size=et::uint(row,"curves");
+        if(size<preferred_curves)continue;
+        auto &w=windows[size];w.curves=size;
+        if(et::uint(row,"workers")==1) {
+            w.serial_wall=et::real(row,"mean_wall_seconds");
+            w.serial_middle=et::real(row,"mean_middle_seconds");
+        } else if(et::uint(row,"phase_mask")==mask) {
+            w.paired_wall=et::real(row,"mean_wall_seconds");
+            w.paired_middle=et::real(row,"mean_middle_seconds");
+        }
+    }
+    for(auto i=windows.rbegin();i!=windows.rend();++i)
+        if(i->second.serial_middle && i->second.paired_middle)return i->second;
+    const auto preferred=windows.find(preferred_curves);
+    return preferred!=windows.end()?preferred->second:ParallelEvidence{preferred_curves};
+}
+
+void record_parallel_window(const ParallelRoute &route,unsigned mask,unsigned workers,
+                            uint64_t curves,double wall,double middle) {
+    if(route.options.tune_profile.empty())return;
+    const fs::path destination=fs::u8path(route.options.tune_profile);
+    auto lock=portable_lock(destination);
+    auto profile=portable_read(destination);
+    const auto &s=route.shape;
+    et::Fields row={{"condition",std::to_string(profile.condition(route.condition))},{"scope",pt::quoted(route.scope)},
+        {"target_bits",std::to_string(s.target_bits)},{"b1",std::to_string(s.b1)},{"b2",std::to_string(s.b2)},
+        {"d",std::to_string(s.d)},{"carrier_exponent",std::to_string(s.carrier)},
+        {"phase_mask",std::to_string(mask)},{"workers",std::to_string(workers)},{"curves",std::to_string(curves)},
+        {"repeats","1"},{"mean_wall_seconds",pt::numeric(wall)},{"mean_middle_seconds",pt::numeric(middle)},
+        {"middle_stddev_seconds","0"}};
+    pt::stamp_provenance(row);
+    profile.update_parallel(std::move(row),true);
+    portable_publish(destination,profile);
+}
+
 struct PortableInput {fs::path save;Record record;std::string kind;};
 void merge_portable_tune(const Options &o,const fs::path &destination) {
     if(o.tune_merge.size()>64 || !o.tune_save.empty() || !o.tune_worktodo.empty() || o.tune_carrier || !o.tune_ds.empty() ||
@@ -1174,6 +1271,7 @@ void merge_portable_tune(const Options &o,const fs::path &destination) {
     for(const auto &path:o.tune_merge) {
         const auto source=pt::Profile::load(absolute_from(fs::current_path(),path));
         for(auto s:source.samples){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update(std::move(s),o.runtime_samples);}
+        for(auto s:source.parallel){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_parallel(std::move(s),false);}
         merge_ntt(source);
     }
     for(const auto &path:o.tune_ntt_profiles) {

@@ -20,14 +20,17 @@
 #include "ecm/io/results.h"
 #include "../../io/json.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 namespace s2prod {
 fs::path fatal_log;
 // Shared by parent tasks and calibration; only process wire fields cross here.
-int child_run(Options &o,const fs::path &save,const Record &r,
+static CurveProcessRequest curve_request(Options &o,const fs::path &save,const Record &r,
               uint64_t b2,uint64_t d,int device,const fs::path &results,const fs::path &log,
               uint64_t batch,const TaskDefaults &ini_settings) {
     CurveProcessRequest request;
@@ -94,6 +97,8 @@ int child_run(Options &o,const fs::path &save,const Record &r,
     request.tune_ignore=o.tune_ignore;
     request.tune_profile=o.tune_profile;
     request.tune_runtime=o.tune_runtime;
+    request.fixed_queue_route=o.fixed_queue_route;
+    request.queue_phase_gate=o.queue_phase_gate;
     request.worker=o.worker;
     request.engine_log_level=ecm_cuda_stage2_default_log_level()==stage2_log::debug?stage2_log::debug:stage2_log::batches;
     request.observe_selection=[&o](const std::string &text) {
@@ -106,7 +111,12 @@ int child_run(Options &o,const fs::path &save,const Record &r,
                 if(open_runtime_routes(route_text,routes))o.runtime_route_hints=route_text;else o.runtime_route_hints.clear();
             }catch(const std::runtime_error &){o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();}
     };
-    return run_curve_process(request);
+    return request;
+}
+int child_run(Options &o,const fs::path &save,const Record &r,
+              uint64_t b2,uint64_t d,int device,const fs::path &results,const fs::path &log,
+              uint64_t batch,const TaskDefaults &ini_settings) {
+    return run_curve_process(curve_request(o,save,r,b2,d,device,results,log,batch,ini_settings));
 }
 int curve_worker(Options o) {
     // Internal children bypass the public TOML setup. Bind the forwarded S4
@@ -158,10 +168,12 @@ int curve_worker(Options o) {
     const auto start = std::chrono::steady_clock::now();
     std::string auto_json;
     configure_short_ntt_batches(o);
-    if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
+    if(!o.fixed_queue_route && !o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
     o.has_d=requested_d!=0;
-    auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
-    round_giant_bounds(o,r);
+    if(o.fixed_queue_route && (!o.has_d || !o.b2 || o.tune_runtime || o.tune_child))
+        throw std::runtime_error("incomplete fixed Stage2 queue route");
+    auto tuned_json=(o.tune_child || o.fixed_queue_route)?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
+    if(!o.fixed_queue_route)round_giant_bounds(o,r);
     apply_point_backends(o);
     ecm_stage2::GiantPolicyScope point_execution(o.giant_tail_balance?1:0,o.selected_chain);
     const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
@@ -294,6 +306,18 @@ int curve_worker(Options o) {
     // successful curve or cause the parent to replay a committed receipt.
     if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
     catch(const std::exception &e){std::cerr<<"WARNING: runtime tune write skipped; observation retained in results: "<<e.what()<<std::endl;}
+    if(o.fixed_queue_route) {
+        const auto &m=tune_metrics;
+        std::cout<<"stage2_parallel_curve: {\"checked_nf\":"
+                 <<(m.clean && m.selftest_cases && m.checked && !m.bad && m.phases.complete &&
+                    !m.point_policy_replayed && submission.factors.empty()?1:0)
+                 <<",\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"b2\":"<<o.b2<<",\"carrier\":"<<o.carrier_exponent
+                 <<",\"layout\":"<<int(m.groot_balanced)<<",\"fold\":"<<int(m.fold_resident)
+                 <<",\"frontier\":"<<int(m.frontier_resident)<<",\"points\":"<<m.giant_points
+                 <<",\"baby\":"<<m.baby_coop<<",\"giant\":"<<m.giant_coop<<",\"seed\":"<<m.seed_coop
+                 <<",\"reduce\":"<<m.reduce_coop<<",\"reduce_threads\":"<<m.reduce_threads
+                 <<",\"reduce_kernel\":"<<m.reduce_kernel<<"}"<<std::endl;
+    }
     std::cout << "stage2_result: record=" << o.index << " seconds=" << seconds
               << " factorization_seconds=" << factor_seconds
               << " sigma=" << r.sigma << " B1=" << r.b1
@@ -302,9 +326,270 @@ int curve_worker(Options o) {
               << " " << result << std::endl;
     return 0;
 }
+
+namespace {
+using QueueClock=std::chrono::steady_clock;
+using QueueReport=std::function<void(const std::string &,bool)>;
+constexpr uint64_t parallel_window_curves=9; // Retains six completion intervals after trimming.
+constexpr unsigned parallel_phase_mask=57; // Baby, giant, G tree/fold and descent.
+constexpr double parallel_min_gain=1.03;
+
+struct CurveQueue {
+    const std::vector<Record> &plan;
+    const fs::path &save,&results,&log,&progress;
+    const TaskDefaults &defaults;
+    stage2_queue::State &state;
+    uint64_t &completed;
+    const QueueReport &report;
+};
+
+struct QueueWindow {
+    std::vector<double> finishes;
+    bool checked=true;
+};
+
+bool checked_queue_curve(const std::string &payload,const ParallelRoute &route) {
+    if(payload.empty())return false;
+    const auto row=ecm_results::json::parse(payload);
+    const auto &s=route.shape;
+    const std::pair<const char*,uint64_t> expected[]={
+        {"checked_nf",1},{"d",s.d},{"p",ecm_stage2::d_catalog::degree(s.d)},
+        {"b2",s.b2},{"carrier",s.carrier},{"layout",s.groot_balanced},{"fold",s.fold},
+        {"frontier",s.frontier},{"points",s.b2/s.d+2},{"baby",s.baby_coop},{"giant",s.giant_coop},
+        {"seed",s.seed_coop},{"reduce",s.reduce_coop},{"reduce_threads",s.reduce_threads},{"reduce_kernel",s.reduce_kernel}
+    };
+    for(const auto &item:expected)
+        if(row.get(item.first).text()!=std::to_string(item.second))return false;
+    return true;
+}
+
+bool pair_memory_fits(const ParallelRoute &route,unsigned workers) {
+    const auto free=parallel_free_memory(route.options.device);
+    const uint64_t margin=uint64_t(256)<<20;
+    return free>margin && (free-margin)/workers>=route.reservation;
+}
+
+struct PairLease {
+    Handle mutex;
+    bool held=false;
+    bool acquire(const std::string &device) {
+        if(held)return true;
+        if(mutex.value==INVALID_HANDLE_VALUE)
+            mutex.value=CreateMutexA(nullptr,FALSE,("Local\\ECM-ELF.Stage2.Queue."+device).c_str());
+        if(!mutex.value)return false;
+        const auto status=WaitForSingleObject(mutex.value,0);
+        held=status==WAIT_OBJECT_0 || status==WAIT_ABANDONED;
+        return held;
+    }
+    ~PairLease(){if(held)ReleaseMutex(mutex.value);}
+};
+
+QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsigned workers,
+                            uint64_t b2,uint64_t d,const ParallelRoute *route=nullptr) {
+    struct Active {
+        size_t position=0;
+        std::unique_ptr<CurveProcess> process;
+        QueueClock::time_point started;
+    };
+    std::array<Active,2> active;
+    auto &state=queue.state;
+    const bool persist=!queue.progress.empty();
+    size_t next=static_cast<size_t>(state.done);
+    unsigned running=0;
+    bool failed=false;
+    QueueWindow result;
+    const auto begin=QueueClock::now();
+    while(true) {
+        poll_inherited_stop();
+        for(auto &slot:active) {
+            if(!slot.process)continue;
+            const auto code=slot.process->poll();
+            if(!code)continue;
+            --running;
+            if(*code) {
+                failed=true;slot.process.reset();continue;
+            }
+            const auto position=slot.position;
+            auto &entry=state.reserved.at(position-state.done);
+            if(persist) {
+                ecm_io::FileLock lock(entry.results);
+                if(!stage2_queue::result_written(fs::u8path(entry.results),entry.receipt))
+                    throw std::runtime_error("successful worker has no durable result receipt; queue retained");
+            }
+            if(route && result.checked) {
+                try {result.checked=checked_queue_curve(slot.process->queue_sample(),*route);}
+                catch(const std::runtime_error &){result.checked=false;}
+            }
+            slot.process.reset();
+            entry.completed=true;
+            state.advance_completed();
+            if(persist)state.save(queue.progress);
+            ++queue.completed;
+            if(stage2_log::enabled(stage2_log::curve)) {
+                const auto &r=queue.plan[position];
+                std::ostringstream message;
+                message<<"curve_done: "<<position+1<<'/'<<queue.plan.size()<<" record="<<r.index<<" sigma="<<r.sigma
+                       <<" wall="<<std::chrono::duration<double>(QueueClock::now()-slot.started).count()<<" s";
+                queue.report(message.str(),false);
+            }
+            if(route)result.finishes.push_back(std::chrono::duration<double>(QueueClock::now()-begin).count());
+        }
+        while(!failed && !stop_requests && next<end && running<workers) {
+            const auto position=next-state.done;
+            if(position<state.reserved.size() && state.reserved[position].completed) {
+                ++next;result.checked=false;continue;
+            }
+            if(workers==2 && !pair_memory_fits(*route,running?1:2)) {
+                result.checked=false;
+                if(running)break;
+                workers=1;
+                queue.report("stage2_parallel_memory: serial fallback after live memory check",true);
+            }
+            const auto slot=std::find_if(active.begin(),active.end(),[](const auto &a){return !a.process;});
+            const auto &r=queue.plan[next];
+            if(stage2_log::enabled(stage2_log::curve))
+                queue.report("curve_start: "+std::to_string(next+1)+"/"+std::to_string(queue.plan.size())+
+                    " record="+std::to_string(r.index)+" sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+
+                    " checksum="+(r.checksum?"verified":"absent")+" curve_model="+(r.edwards?"ed":"mont param=0"),false);
+            if(!o.tune_child)ecm_results::check_stage2_outputs(queue.results,o.submission,persist && state.done>0);
+            if(position==state.reserved.size())
+                state.reserved.push_back({next,false,persist?stage2_queue::token():std::string{},queue.results.string()});
+            auto &entry=state.reserved.at(position);
+            entry.results=queue.results.string();
+            if(persist)state.save(queue.progress);
+            o.receipt=entry.receipt;o.runtime_remaining=queue.plan.size()-next;
+            auto request=curve_request(o,queue.save,r,b2,d,o.device,queue.results,queue.log,o.batch,queue.defaults);
+            if(workers==2 && request.debug_log)
+                request.debug_file+=".slot"+std::to_string(slot-active.begin()+1);
+            slot->position=next++;
+            slot->started=QueueClock::now();
+            slot->process=std::make_unique<CurveProcess>(std::move(request));
+            ++running;
+        }
+        if(!running)break;
+        HANDLE handles[2];
+        DWORD count=0;
+        for(const auto &slot:active)if(slot.process)handles[count++]=slot.process->handle();
+        if(WaitForMultipleObjects(count,handles,FALSE,workers==1?50:10)==WAIT_FAILED)
+            throw std::runtime_error("Stage2 queue worker wait failed");
+    }
+    if(failed)throw std::runtime_error("curve failed; queue and completed progress retained; inspect "+queue.log.string());
+    return result;
+}
+
+std::pair<double,double> queue_window_timing(const CurveQueue &queue,unsigned workers,
+                                            uint64_t count,const QueueWindow &timing) {
+    if(timing.finishes.size()!=count || count<2)return {};
+    const double wall=timing.finishes.back();
+    const uint64_t middle_count=count>=5?count-3:0;
+    const double middle=middle_count?timing.finishes[count-2]-timing.finishes[1]:0;
+    std::ostringstream message;
+    message<<std::setprecision(9)<<"stage2_parallel_window: workers="<<workers<<" curves="<<count
+           <<" wall_seconds="<<wall<<" middle_curves="<<middle_count<<" middle_seconds="<<middle
+           <<" middle_curves_per_second="<<(middle>0?middle_count/middle:0)
+           <<" checked="<<int(timing.checked);
+    queue.report(message.str(),false);
+    if(timing.checked && count>=parallel_window_curves && middle>0)
+        return {wall,middle};
+    return {};
+}
+
+bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) {
+    auto &state=queue.state;
+    const auto size=queue.plan.size();
+    if(!state.reserved.empty()) {
+        // First resolve the durable in-flight range, regardless of this run's
+        // scheduling preference. Already acknowledged entries are skipped.
+        run_curve_window(queue,o,static_cast<size_t>(state.done)+state.reserved.size(),1,b2,d);
+    }
+    std::optional<ParallelRoute> route;
+    ParallelEvidence evidence{parallel_window_curves};
+    bool evidence_read=false;
+    const bool explicit_serial_sample=o.parallel==0 && !o.tune_runtime &&
+        o.portable_cli.count("--parallel") && o.portable_cli.count("--tune-profile");
+    const bool can_learn_parallel=o.tune_runtime || o.portable_cli.count("--parallel");
+    PairLease lease;
+    while(state.done<size && !stop_requests) {
+        const auto remaining=size-static_cast<size_t>(state.done);
+        const auto &r=queue.plan[state.done];
+        const bool homogeneous=std::all_of(queue.plan.begin()+static_cast<size_t>(state.done),queue.plan.end(),
+            [&r](const auto &next){return next.n==r.n && next.b1==r.b1 && next.edwards==r.edwards;});
+        const bool requested=o.parallel ? remaining>=2 : explicit_serial_sample && remaining>=parallel_window_curves;
+        const bool possible=requested && !stage2_backend::opencl && b2 && !o.relocation &&
+            homogeneous && !std::getenv("ECM_STAGE2_PHASE_GATE");
+        if(!possible) {
+            if(o.parallel==1 && remaining>=2)
+                queue.report("stage2_parallel: mode=1 workers=1 reason=ineligible_task",false);
+            run_curve_window(queue,o,size,1,b2,d);
+            break;
+        }
+        if(!route) {
+            Options local=o;local.b2=b2;local.d=d;local.has_d=d!=0;local.runtime_remaining=remaining;
+            try {route=prepare_parallel_route(std::move(local),r,!queue.log.empty());}
+            catch(const std::exception &e){queue.report("stage2_parallel: route unavailable: "+std::string(e.what()),true);}
+            if(!route) {
+                if(o.parallel==1)
+                    queue.report("stage2_parallel: mode=1 workers=1 reason=unavailable_route",false);
+                const auto next=o.parallel==2 && o.tune_runtime && remaining>=parallel_window_curves?
+                    std::min(size,static_cast<size_t>(state.done)+2):size;
+                run_curve_window(queue,o,next,1,b2,d);
+                continue;
+            }
+        }
+        unsigned workers=o.parallel==1?2:1;
+        size_t count=remaining;
+        const char *reason=o.parallel==1?"forced":o.parallel==0?"serial":"insufficient_samples";
+        if(o.parallel==2 && !evidence_read) {
+            evidence_read=true;
+            try {evidence=read_parallel_evidence(*route,parallel_phase_mask,parallel_window_curves);}
+            catch(const std::exception &e){queue.report("stage2_parallel: tune evidence unavailable: "+std::string(e.what()),true);}
+        }
+        if(o.parallel==2) {
+            if(evidence.serial_middle && evidence.paired_middle) {
+                const auto gain=evidence.serial_middle/evidence.paired_middle;
+                workers=(gain>=parallel_min_gain && evidence.serial_wall>=evidence.paired_wall)?2:1;
+                reason=workers==2?"measured_gain":"measured_serial";
+            } else if(can_learn_parallel && remaining>=evidence.curves) {
+                count=static_cast<size_t>(evidence.curves);
+                workers=evidence.serial_middle?2:1;
+                reason=workers==2?"measure_parallel":"measure_serial";
+            }
+        }
+        if(workers==2 && (!pair_memory_fits(*route,2) || !lease.acquire(route->device_uuid))) {
+            workers=1;count=remaining;reason="memory_or_device_busy";
+        }
+        std::ostringstream decision;
+        decision<<"stage2_parallel: mode="<<o.parallel<<" workers="<<workers<<" reason="<<reason
+                <<" curves="<<count<<" D="<<route->shape.d<<" P="<<ecm_stage2::d_catalog::degree(route->shape.d)
+                <<" carrier="<<route->shape.carrier<<" phase_mask="<<(workers==2?parallel_phase_mask:0);
+        if(o.parallel==2 && evidence.serial_middle && evidence.paired_middle)
+            decision<<" middle_gain="<<evidence.serial_middle/evidence.paired_middle-1
+                    <<" wall_gain="<<evidence.serial_wall/evidence.paired_wall-1;
+        queue.report(decision.str(),false);
+        auto &fixed=route->options;
+        fixed.queue_phase_gate=workers==2?std::to_string(parallel_phase_mask)+':'+stage2_queue::token():std::string{};
+        const auto timing=run_curve_window(queue,fixed,static_cast<size_t>(state.done)+count,workers,fixed.b2,fixed.d,&*route);
+        const auto [wall,middle]=queue_window_timing(queue,workers,count,timing);
+        if(middle>0 && (o.parallel!=2 || can_learn_parallel)) {
+            if(o.parallel==2 && count==evidence.curves) {
+                if(workers==2){evidence.paired_wall=wall;evidence.paired_middle=middle;}
+                else {evidence.serial_wall=wall;evidence.serial_middle=middle;}
+            }
+            try {record_parallel_window(*route,workers==2?parallel_phase_mask:0,workers,count,wall,middle);}
+            catch(const std::exception &e){queue.report("stage2_parallel: tune write skipped: "+std::string(e.what()),true);}
+        }
+        if(!timing.checked && state.done<size && !stop_requests) {
+            run_curve_window(queue,o,size,1,b2,d);
+            break;
+        }
+    }
+    return state.done>=size;
+}
+} // namespace
+
 int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const TaskDefaults &defaults) {
     const auto &[cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir]=paths;
-    const int device=o.device;const uint64_t d=o.d,batch=o.batch;
+    const int device=o.device;const uint64_t d=o.d;
     const bool queue = o.save.empty();
     ecm_queue::OwnerLease owner;
     if (queue) owner.acquire(worktodo.u8string(), o.worker);
@@ -328,7 +613,9 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
         return upper(a.lexically_normal().string())==upper(b.lexically_normal().string());
     };
     // A common TOML may share device/save defaults, never writable queue state.
-    const std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
+    std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
+    if(o.parallel && o.debug_log)for(const char *suffix:{".slot1",".slot2"})
+        writable.emplace_back(o.debug_file+suffix);
     for(size_t i=0;i<writable.size();++i) {
         if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
         if(!o.stage1_profile.empty() && same_path(writable[i],fs::path(o.stage1_profile)))throw std::runtime_error("output path conflicts with Stage1 tune profile");
@@ -346,7 +633,8 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
     report(std::string(ecm_program::name)+" "+ecm_program::version+" (Stage2)");
     if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
     struct ControlGuard { ~ControlGuard(){SetConsoleCtrlHandler(console_control,FALSE);} } control_guard;
-    const auto calibration_range=queue && !o.dry && o.short_calibration?portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};
+    const auto calibration_range=queue && o.parallel!=1 && !o.dry && o.short_calibration?
+        portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};
     uint64_t completed=0,failed_tasks=0;
     for (;;) {
         poll_inherited_stop();
@@ -417,7 +705,8 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(plan.size())+
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
-        if(!o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())ensure_portable_calibration(o,plan.front(),defaults,calibration_range);
+        if(o.parallel!=1 && !o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())
+            ensure_portable_calibration(o,plan.front(),defaults,calibration_range);
         stage2_queue::State state;
         const bool persist=queue&&!o.dry&&!o.plan_only;
         fs::path progress;
@@ -457,6 +746,12 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                 ++state.done;state.pending.clear();state.pending_results.clear();state.save(progress);
                 report("Recovered completed curve from durable result receipt.");
             }
+            for(auto &entry:state.reserved)
+                if(!entry.completed && stage2_queue::result_written(fs::u8path(entry.results),entry.receipt)) {
+                    entry.completed=true;
+                    report("Recovered completed curve from durable result receipt.");
+                }
+            state.advance_completed();
             if(state.done>plan.size() && records(save,skip,state.done).size()!=state.done)
                 throw std::runtime_error("Stage2 completed progress exceeds the available save records");
             if(!state.pending.empty() && (state.total!=task.total || state.b2!=task.b2 || state.auto_b2!=task.auto_b2)) {
@@ -500,8 +795,16 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             report(message.str());
         }
         o.publication_task=persist?state.publication_task:std::to_string(ecm_io::fingerprint(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
+        if(!state.pending.empty()) {
+            state.reserved.push_back({state.done,false,std::move(state.pending),std::move(state.pending_results)});
+            state.pending.clear();state.pending_results.clear();
+        }
         bool task_completed=true;
-        for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
+        if(!o.dry && !o.plan_only) {
+            const QueueReport queue_report=report;
+            const CurveQueue curve_queue{plan,save,results,log,progress,defaults,state,completed,queue_report};
+            task_completed=run_curve_queue(curve_queue,o,b2,d);
+        } else for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
             poll_inherited_stop();
             if(stop_requests){task_completed=false;break;}
             const auto &r=plan[i];
@@ -528,26 +831,6 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                     [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);
                 if(code||result.empty())throw std::runtime_error("Stage2 planning failed");
                 std::cout<<result<<std::endl;continue;
-            }
-            if(!o.tune_child)ecm_results::check_stage2_outputs(results,o.submission,persist && state.done>0);
-            if(persist) {
-                // Publish intent first, then launch. Only a complete result with
-                // this random receipt can resolve an ambiguous interrupted exit.
-                state.pending=stage2_queue::token();state.pending_results=results.string();state.save(progress);o.receipt=state.pending;
-            }
-            const auto begin=std::chrono::steady_clock::now();
-            if(child_run(o,save,r,b2,d,device,results,log,batch,defaults))
-                throw std::runtime_error("curve failed; queue and completed progress retained; inspect "+log.string());
-            if(persist) {
-                if(!stage2_queue::result_written(results,state.pending))throw std::runtime_error("successful worker has no durable result receipt; queue retained");
-                ++state.done;state.pending.clear();state.pending_results.clear();state.save(progress);
-            }
-            ++completed;
-            if(stage2_log::enabled(stage2_log::curve)) {
-                std::ostringstream message;
-                message << "curve_done: " << i+1 << '/' << plan.size() << " record=" << r.index << " sigma=" << r.sigma
-                        << " wall=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count() << " s";
-                report(message.str());
             }
         }
         if(task_completed && !o.dry && !o.plan_only && !o.tune_child) {

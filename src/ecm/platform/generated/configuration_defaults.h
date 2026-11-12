@@ -108,6 +108,7 @@ inline constexpr char stage2_stage2_prediction_policy[]="model";
 inline constexpr char stage2_stage2_tune_arithmetic[]="both";
 inline constexpr char stage2_stage2_tune_profile[]="";
 inline constexpr bool stage2_stage2_tune_runtime=true;
+inline constexpr uint64_t stage2_stage2_parallel=2;
 inline constexpr uint64_t stage2_stage2_tune_min_repeats=2;
 inline constexpr uint64_t stage2_stage2_tune_runtime_samples=10;
 inline constexpr bool stage2_stage2_short_ntt_batch_tune=false;

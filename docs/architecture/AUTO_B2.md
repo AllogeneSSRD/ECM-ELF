@@ -407,7 +407,7 @@ paired策略及保留的采样摘要估算器可用跨D非负拟合分别估计�
 
 `--tune ntt --length-log2 a:b --tune-slices s,... --tune-repeats n --tune-file FILE.toml`测长度和批量，也可用等级预设。共享软预算和增量摘要规则。每秒域卷积数=batch/mean，每秒批调用数=1/mean，不是ECM曲线吞吐，不含大整数carry、归约或完整Stage2。
 
-Stage2 卷积基准逐项对照 GMP 参考。内存不足可跳过，验证失败报错并保留证据。共享 TOML 摘要采用格式 14，显式 JSONL 输出保留逐次核验数据。
+Stage2 卷积基准逐项对照 GMP 参考。内存不足可跳过，验证失败报错并保留证据。共享 TOML 摘要包含双槽矩阵时采用格式 15，其余写为格式 14。显式 JSONL 输出保留逐次核验数据。
 
 ### NTT 性能摘要表
 

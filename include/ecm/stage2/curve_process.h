@@ -67,6 +67,8 @@ struct CurveProcessRequest {
     std::string tune_ignore{};
     std::string tune_profile{};
     bool tune_runtime=0;
+    bool fixed_queue_route=false;
+    std::string queue_phase_gate;
     int worker=0;
     // Called synchronously at the original selection-output position, before
     // logging that line; domain validation/cache policy belongs to the caller.
