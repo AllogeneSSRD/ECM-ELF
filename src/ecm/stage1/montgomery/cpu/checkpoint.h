@@ -42,13 +42,13 @@ enum {
 typedef struct {
     int      status;      /* MONT_CKPT_INFLIGHT | MONT_CKPT_DONE */
     int      hit;         /* DONE only: gcd(Z,N) yielded a non-trivial factor */
-    size_t   bitnum;      /* INFLIGHT: exponent bits consumed (multiple of the chunk) */
-    size_t   sbits;       /* total exponent bits (identity + progress check) */
+    size_t   bitnum;      /* INFLIGHT: exponent bits or PRAC descriptors consumed */
+    size_t   sbits;       /* total work units for the chosen chain */
     uint64_t sigma;       /* identifies the curve; adopted on resume */
     uint32_t curve;       /* 0-based curve index within the task */
     double   B1;
     int      torsion;     /* 1 = lcm (gmp-ecm param 0), 12 = Prime95 choose12 */
-    char     field[32];   /* field layer token: "mpn" | "ifma" (informational) */
+    char     field[32];   /* "mpn", "ifma", or "prac-<plan identity>" */
 
     /* INFLIGHT state, plain domain mod N (converted from lane-SoA by the caller) */
     mpz_t X0, Z0, X1, Z1;

@@ -56,4 +56,4 @@ CLI/配置错误停止启动。TOML 诊断由 [config_format.h](../../src/io/con
 
 ## 运行时限制
 
-JSON 中的静态范围与类型由生成绑定检查。设备存在性、路径冲突、save/任务匹配、D/NTT 形状及 Auto B2 标定资格依赖实际运行环境，由消费端验证。队列的 worktodo、自动 Stage2 目标、结果/提交路径及 Stage2 接收端 finished 基于 TOML 目录；Stage1 tmp、finished、日志、备份/P95 与任务 save 基于程序目录。direct 的 CLI save/tmp 基于 CWD，省略或空 tmp 使用 CWD；direct 显式 TOML tmp 基于程序目录。显式相对 exp_cache 基于 CWD，空/省略值默认程序目录，off/none/0/- 保持禁用。配置路径基于程序目录。队列缺少配置时创建模板；direct 缺少默认配置使用默认值，显式缺失报错；gpu-info 缺少配置不创建文件，即使显式指定也保留查询默认。具体键、默认值和 worker 覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。
+JSON 中的静态范围与类型由生成绑定检查。设备存在性、路径冲突、save/任务匹配、D/NTT 形状及 Auto B2 标定资格依赖实际运行环境，由消费端验证。队列的 worktodo、自动 Stage2 目标、结果/提交路径及 Stage2 接收端 finished 基于 TOML 目录；Stage1 tmp、finished、日志、备份/P95 与任务 save 基于程序目录。direct 的 CLI save/tmp 基于 CWD，省略或空 tmp 使用 CWD；direct 显式 TOML tmp 基于程序目录。显式相对 `exp_cache` 基于 CWD。留空或省略时使用仓库根目录的 `cache/`，独立部署使用可执行文件同级的 `cache/`。`off`、`none`、`0`、`-` 禁用缓存。配置路径基于程序目录。队列缺少配置时创建模板；direct 缺少默认配置使用默认值，显式缺失报错；gpu-info 缺少配置不创建文件，即使显式指定也保留查询默认。具体键、默认值和 worker 覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。

@@ -37,11 +37,15 @@ int main() {
 
     CpuImplementation cpu = CpuImplementation::Auto;
     SimdReduction reduction = SimdReduction::Auto;
+    CpuMontgomeryChain chain = CpuMontgomeryChain::Ladder;
     ScalarConstruction scalar = ScalarConstruction::PrimePowerLcm;
     require(parse_cpu_implementation("scalar", cpu) && cpu == CpuImplementation::GmpScalar,
             "CPU implementation must parse");
     require(parse_simd_reduction("mersenne-fold", reduction) && reduction == SimdReduction::MersenneFold,
             "SIMD reduction must parse");
+    require(parse_cpu_montgomery_chain("PRAC", chain) && chain == CpuMontgomeryChain::Prac &&
+            parse_cpu_montgomery_chain("ladder", chain) && chain == CpuMontgomeryChain::Ladder &&
+            !parse_cpu_montgomery_chain("unknown", chain), "CPU Montgomery chain selection must parse");
     require(parse_scalar_construction("1", scalar) &&
             scalar == ScalarConstruction::PrimePowerLcm, "scalar construction must parse");
     require(parse_scalar_construction("12", scalar) &&

@@ -594,6 +594,15 @@ function(ecm_tool_output_root target)
 endfunction()
 
 if(ECM_BUILD_TOOLS)
+    add_executable(prepare_prac_cache
+        tools/gen/prepare_prac_cache.cpp
+        src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp
+        src/ecm/stage1/scalar.cpp
+        src/io/exponent_cache.cpp
+        src/io/files.cpp)
+    target_include_directories(prepare_prac_cache PRIVATE include src)
+    ecm_target_link_gmp(prepare_prac_cache)
+    ecm_tool_output_root(prepare_prac_cache)
     add_subdirectory(tools/bench)
     add_subdirectory(tools/test)
     add_subdirectory(tools/disasm)

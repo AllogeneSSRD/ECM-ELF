@@ -29,6 +29,8 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                         valid = ecm_stage1::parse_cpu_implementation(v, s.cpu_implementation);
                     else if (key == "reduction")
                         valid = ecm_stage1::parse_simd_reduction(v, s.simd_reduction);
+                    else if (key == "cpu_mont_chain")
+                        valid = ecm_stage1::parse_cpu_montgomery_chain(v, s.cpu_montgomery_chain);
                     else if (key == "lcm")
                         valid = ecm_stage1::parse_scalar_construction(v, s.scalar_construction);
                     else if (key == "gpu_algorithm")
@@ -79,6 +81,8 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                                     scope.selection.cpu_implementation = s.cpu_implementation;
                                 else if (key == "reduction")
                                     scope.selection.simd_reduction = s.simd_reduction;
+                                else if (key == "cpu_mont_chain")
+                                    scope.selection.cpu_montgomery_chain = s.cpu_montgomery_chain;
                                 else if (key == "lcm")
                                     scope.selection.scalar_construction = s.scalar_construction;
                                 else if (key == "affinity")
@@ -109,6 +113,7 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
     ecm_stage1::parse_execution_target(cfg.execution_target, cfg.selection.target);
     ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, cfg.selection.cpu_implementation);
     ecm_stage1::parse_simd_reduction(cfg.simd_reduction, cfg.selection.simd_reduction);
+    ecm_stage1::parse_cpu_montgomery_chain(cfg.cpu_mont_chain, cfg.selection.cpu_montgomery_chain);
     ecm_stage1::parse_scalar_construction(cfg.scalar_construction,
                                           cfg.selection.scalar_construction);
     cfg.affinity_cpus = ecm_config::affinity_indices(cfg.affinity);
@@ -129,6 +134,8 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
                 cfg.selection.cpu_implementation = selected.selection.cpu_implementation;
             else if (key == "reduction")
                 cfg.selection.simd_reduction = selected.selection.simd_reduction;
+            else if (key == "cpu_mont_chain")
+                cfg.selection.cpu_montgomery_chain = selected.selection.cpu_montgomery_chain;
             else if (key == "lcm")
                 cfg.selection.scalar_construction = selected.selection.scalar_construction;
             else if (key == "affinity")

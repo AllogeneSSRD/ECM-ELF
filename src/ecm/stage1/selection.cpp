@@ -65,6 +65,14 @@ bool parse_simd_reduction(std::string_view value, SimdReduction &out) {
     return true;
 }
 
+bool parse_cpu_montgomery_chain(std::string_view value, CpuMontgomeryChain& out) {
+    const auto mode = lower_ascii(value);
+    if (mode == "ladder") out = CpuMontgomeryChain::Ladder;
+    else if (mode == "prac") out = CpuMontgomeryChain::Prac;
+    else return false;
+    return true;
+}
+
 bool parse_gpu_algorithm(std::string_view value, GpuAlgorithm& out) {
     const auto v = lower_ascii(value);
     if (v == "1" || v == "+1" || v == "cgbn") out = GpuAlgorithm::Cgbn;

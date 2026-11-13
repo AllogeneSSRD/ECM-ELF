@@ -1,5 +1,6 @@
 // Prime95 ecm.cpp:2645/2857 simplified PRAC search, priced for normalized CGBN.
 #include "ecm_prac_plan.h"
+#include "io/files.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -10,6 +11,11 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 uint64_t ecm_prac_hash(const void *data, size_t bytes, uint64_t hash) {
     const auto *p = static_cast<const unsigned char *>(data);
@@ -29,6 +35,29 @@ struct Header {
     uint64_t magic, b1, scalar, count, work, checksum;
     uint32_t version, search, torsion, endian;
 };
+bool write_plan(const std::filesystem::path& file, const Header& header,
+                const std::vector<EcmPracPrime>& primes) {
+    std::error_code error;
+    std::filesystem::create_directories(file.parent_path(), error);
+    if (error)
+        return false;
+#ifdef _WIN32
+    const auto process = _getpid();
+#else
+    const auto process = getpid();
+#endif
+    static std::atomic<uint64_t> sequence{0};
+    auto temporary = file;
+    temporary += ".tmp." + std::to_string(process) + "." + std::to_string(sequence.fetch_add(1));
+    std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    out.write(reinterpret_cast<const char*>(primes.data()), primes.size() * sizeof(EcmPracPrime));
+    out.close();
+    if (out && ecm_replace_file(temporary, file))
+        return true;
+    std::filesystem::remove(temporary, error);
+    return false;
+}
 constexpr uint64_t magic = 0x31504e414c504345ull;
 constexpr double ratios[] = {0.6180339887498948, 0.7236067977499790,
     0.5801787282954641, 0.6328398060887063, 0.6124299495094950,
@@ -105,13 +134,13 @@ std::vector<EcmPracPrime> sieve(uint32_t limit, uint32_t torsion) {
 }
 
 EcmPracPlan ecm_prac_build(uint32_t B1, uint32_t torsion, mpz_srcptr s,
-                          const std::string &cache_dir) {
+                          const std::string &cache_dir, unsigned max_threads) {
     if (B1 < 2 || (torsion != 1 && torsion != 12)) throw std::runtime_error("invalid PRAC B1/torsion");
     auto start = std::chrono::steady_clock::now();
     EcmPracPlan plan;
     Header want{magic, B1, ecm_prac_hash_mpz(s), 0, 0, 0, 1, 7, torsion, 0x12345678};
     std::filesystem::path file;
-    if (!cache_dir.empty()) file = std::filesystem::path(cache_dir) /
+    if (!cache_dir.empty()) file = std::filesystem::u8path(cache_dir) /
         ("prac_v1_b" + std::to_string(B1) + "_t" + std::to_string(torsion) + "_s7.bin");
     bool hit = false;
     if (!file.empty()) {
@@ -141,54 +170,56 @@ EcmPracPlan ecm_prac_build(uint32_t B1, uint32_t torsion, mpz_srcptr s,
     }
     if (!hit) {
         plan.primes = sieve(B1, torsion);
-        std::atomic<size_t> next{0};
-        unsigned threads = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
-        if (const char *env = std::getenv("ECM_PRAC_THREADS")) {
-            int value = std::atoi(env);
-            if (value < 1 || value > 32) throw std::runtime_error("ECM_PRAC_THREADS must be 1..32");
-            threads = unsigned(value);
-        }
-        // Join all started workers even if thread creation or a worker fails.
-        std::vector<std::thread> workers;
-        workers.reserve(threads);
-        std::exception_ptr failure;
-        std::mutex failure_mutex;
-        auto run = [&] {
-            try {
-                for (;;) {
-                    size_t first = next.fetch_add(1024);
-                    if (first >= plan.primes.size()) break;
-                    size_t end = std::min(first + 1024, plan.primes.size());
-                    for (size_t i = first; i < end; ++i) choose(plan.primes[i]);
-                }
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(failure_mutex);
-                if (!failure) failure = std::current_exception();
-                next.store(plan.primes.size());
+        if (max_threads == 1) {
+            for (auto &prime : plan.primes) choose(prime);
+        } else {
+            unsigned threads = std::max(1u, std::min(8u, std::thread::hardware_concurrency()));
+            if (max_threads != 0) {
+                threads = std::min(threads, max_threads);
+            } else if (const char *env = std::getenv("ECM_PRAC_THREADS")) {
+                int value = std::atoi(env);
+                if (value < 1 || value > 32) throw std::runtime_error("ECM_PRAC_THREADS must be 1..32");
+                threads = unsigned(value);
             }
-        };
-        try {
-            for (unsigned t = 0; t < threads; ++t) workers.emplace_back(run);
-        } catch (...) {
-            next.store(plan.primes.size());
+            // Join all started workers even if thread creation or a worker fails.
+            std::atomic<size_t> next{0};
+            std::vector<std::thread> workers;
+            workers.reserve(threads);
+            std::exception_ptr failure;
+            std::mutex failure_mutex;
+            auto run = [&] {
+                try {
+                    for (;;) {
+                        size_t first = next.fetch_add(1024);
+                        if (first >= plan.primes.size()) break;
+                        size_t end = std::min(first + 1024, plan.primes.size());
+                        for (size_t i = first; i < end; ++i) choose(plan.primes[i]);
+                    }
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(failure_mutex);
+                    if (!failure) failure = std::current_exception();
+                    next.store(plan.primes.size());
+                }
+            };
+            try {
+                for (unsigned t = 0; t < threads; ++t) workers.emplace_back(run);
+            } catch (...) {
+                next.store(plan.primes.size());
+                for (auto &worker : workers) worker.join();
+                throw;
+            }
             for (auto &worker : workers) worker.join();
-            throw;
+            if (failure) std::rethrow_exception(failure);
         }
-        for (auto &worker : workers) worker.join();
-        if (failure) std::rethrow_exception(failure);
         want.count = plan.primes.size();
         for (const auto &p : plan.primes) want.work += uint64_t(p.work) * p.repetitions;
         want.checksum = ecm_prac_hash(plan.primes.data(), plan.primes.size() * sizeof(EcmPracPrime));
-        if (!file.empty()) {
-            std::error_code ec; std::filesystem::create_directories(file.parent_path(), ec);
-            // Cache is optional. A truncated/concurrent file is rejected on the next load.
-            std::ofstream out(file, std::ios::binary | std::ios::trunc);
-            out.write(reinterpret_cast<const char *>(&want), sizeof(want));
-            out.write(reinterpret_cast<const char *>(plan.primes.data()), plan.primes.size() * sizeof(EcmPracPrime));
-        }
+        if (!file.empty())
+            plan.cache_written = write_plan(file, want, plan.primes);
     }
     plan.work = want.work;
     plan.identity = ecm_prac_hash(&want, sizeof(want));
+    plan.cache_hit = hit;
     double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     plan.status = std::string(hit ? "cache hit" : "built") + ", " + std::to_string(plan.primes.size()) +
         " primes, " + std::to_string(plan.primes.size() * sizeof(EcmPracPrime)) + " bytes, " +

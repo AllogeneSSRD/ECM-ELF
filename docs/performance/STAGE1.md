@@ -344,6 +344,53 @@ TPB128，批量 `C=2×SM数×(TPB/TPI)`：4070 Ti（60 SM）为 3840/1920/960/48
 
 ## CPU Stage1 算术对照
 
+### CPU IFMA 和差复用与 PRAC
+
+ECM-ELF 0.62.15，Windows，Ryzen AI 9 HX 370，MSVC 14.51.36231 和 GMP 6.3.0 Zen3。生产对照固定逻辑 CPU 1，一次八条曲线（sigma=26…33），定期检查点关闭。未独立采样频率和功耗。每格取三次交错运行的中位数，单位为从进程启动至退出的秒／八曲线批。
+
+下表三种运行使用相同的输入与缓存。分开计算和差的 ladder 来自同一版的对照构建。两个 ladder 和 PRAC 都得到相同的归一化末点，54 批的 432 条记录逐条相符。此矩阵无因子和二进制重放。
+
+| 输入 | B1=B2 | 分开计算和差的 ladder | 复用和差的 ladder | PRAC（缓存命中） |
+| --- | ---: | ---: | ---: | ---: |
+| M521 | 100,000 | 0.341 | 0.306 | 0.305 |
+| M1279 | 100,000 | 0.811 | 0.773 | 0.741 |
+| M2203 | 50,000 | 0.932 | 0.881 | 0.857 |
+| M4253 | 20,000 | 1.087 | 1.046 | 0.992 |
+| M11213 | 7,500 | 1.891 | 1.832 | 1.711 |
+| M16057 | 4,000 | 1.880 | 1.846 | 1.694 |
+
+复用和差的 ladder 整批耗时降低 1.8%–10.3%。PRAC 在 M521 基本持平，其余五档在此基础上降低 2.7%–8.2%。另一组关闭缓存、`B1=B2=100000` 的对照中，M521 的 PRAC 计算段为 0.22 秒，梯形法为 0.25 秒，计入建计划后整进程为 0.356 对 0.335 秒。M4001 命中因子触发复核，PRAC 加重放约 8.97 秒，对照 ladder 约 4.63 秒。冷启动对照使用分开计算和差的 ladder。默认采用复用和差的 ladder，PRAC 由 `cpu_mont_chain = "prac"` 显式启用。
+
+Edwards 的成对模加减在独立八曲线对照的六档（521–16001 位）降低中位耗时 0.4%–2.7%。这组数据固定逻辑 CPU 6，NAF w8，B1 随位宽为 120000、65000、20000、10000、3000、1100。每条件六个计时样本，含 NAF 编码、点乘和结果导出，曲线与字典预先准备。六档的 54 个对照进程均得到相同的八路投影坐标和 GCD。生产进程对照中，六档变化为约慢 0.9% 至快 3.9%。
+
+生产回归另核对 56 条 Montgomery 记录，覆盖素数幂边界、`lcm=1|12`、梅森折叠、强制 REDC 和命中重放。PRAC 自身中断续跑与旧版 ladder 向新版恢复各通过八条曲线。两线程命中样本的 16 条存档也一致。
+
+原始墙钟与存档见 `data/experiments/cpu_stage1_prac_06215/` 的 `fused-hot/`、`matrix/`、`correctness-final/` 和 `config-final-2/`。Edwards 独立点乘证据见 `data/experiments/cpu_stage1_edwards_addsub/timing.json`。点乘链和恢复格式见 [Stage1 架构](../architecture/STAGE1.md#cpu-执行与共享主机准备)。
+
+### avx-ecm 单核对照
+
+对照 [独立版 avx-ecm `118e015`](../reference/AVX_ECM.md) 与 ECM-ELF 0.62.14。Windows 主机为 Ryzen AI 9 HX 370，两者固定逻辑 CPU 1，本轮未独立采样实际频率或功耗。输入为完整梅森数，十档覆盖 127–4093 位。`B1=B2=100000`，各档每路径运行三次，主矩阵交错运行，32 位掩码修正随后单独补测。52 位与 ECM-ELF IFMA 每批 8 条（sigma=26…33），32 位每批 16 条（sigma=26…41）。Montgomery 对照均使用 Suyama PARAM0 和未乘额外挠子因子的素数幂标量。ECM-ELF Edwards 使用 NAF w8，提供不同曲线构造下的吞吐参考。
+
+avx-ecm 用 GCC 15.2 `-O3 -march=znver5` 构建，链接与 ECM-ELF 相同的 GMP 6.3.0 Zen3 DLL。Windows 构建修改了字符串声明及 64 位 GMP 接口，独立克隆保留原样。两份实验构建另行标记。一份只将 52 位 IFMA 的载体识别上限从 2047 位放宽到 4096 位，另一份只修正 32 位梅森加减的两处掩码。ECM-ELF 使用 MSVC 14.51.36231，关闭指数缓存和周期检查点。
+
+左图使用 avx-ecm 原生日志的 Stage1 时间，从曲线构造完成后开始，至最终 GCD 和 save 写入前结束。右图统一使用进程启动至退出的墙钟。avx-ecm 在启动时筛至 \(10^8\)，与本次 B1 无关，计入右图。两图均按实际曲线数摊销，点为三次中位数，误差线为最小到最大实测值。只绘制通过存档和因子校验的 avx-ecm 档位。
+
+![avx-ecm 与 ECM-ELF 单核 Stage1 4K 吞吐](attachments/stage1-avx-ecm-4k.png)
+
+原版梅森路径中，52 位 IFMA 的 Stage1 循环吞吐是 52 位 FMA 的 1.36–1.75 倍。跨过 2048 位后，原版 IFMA 通用 REDC 未通过校验。M4001 上，通过校验的原版 52 位 FMA REDC 为 2.335 秒／曲线，扩展识别版 52 位 IFMA 折叠为 0.582。后者与 ECM-ELF Montgomery 的 0.580 基本持平。ECM-ELF Edwards 为 0.428，较该扩展版少约 26.5% 墙钟。FMA REDC 与 IFMA 折叠的差值同时含指令路径和归约方式的变化。
+
+扩展识别版与 ECM-ELF Montgomery 在 2053–4093 位的五个墙钟中位数相差不超过 4.1%。修正掩码后，32 位梅森内核仅在 M127 的采样点领先 52 位 IFMA，Stage1 循环为 0.0053 对 0.0075 秒／曲线。在 M521–M2017 的四个采样点，32 位用时为 52 位 IFMA 的约 2.0–2.8 倍。16 lane 的优势在这些档位抵不过 32 位算术的开销。
+
+用 ECM-ELF PARAM0 对拍 1,320 条存档，覆盖 32 位构建的全部 16 条 lane，比较可逆分母的仿射 X、不可逆分母的 GCD 和报告因子。原版 32 位梅森路径有 120 条奇数索引 lane 与参考结果不符，修正掩码后 240 条全部通过。原版 52 位 IFMA REDC 在本次五个 2K 以上输入的 120 条记录均不符。另以独立 Python 整数梯在 `B1=1000` 完成 120 项检查，复现 M991、M4001 在 sigma 26 的已知因子 8218291649、24007。
+
+原始日志、Stage1 存档与验证结果位于 `data/experiments/avx_ecm_4k/`。本地构建脚本、补丁和编译日志位于 `data/experiments/avx_ecm_build_probe/`。单次测试示例为 `avx-ecm-ifma52.exe "2^991-1" 8 100000 1 100000 26`，应在独立目录运行，因为上游以追加方式写 `save_b1.txt`。从仓库根目录用 [绘图脚本](../../tools/bench/plot_avx_ecm_stage1.py) 复现对照图。
+
+```powershell
+$bench = 'data/experiments/avx_ecm_4k'
+python tools/bench/plot_avx_ecm_stage1.py "$bench/matrix/bench.json" `
+  "$bench/matrix/verification.json" --supplement "$bench/maskfix/bench.json"
+```
+
 ### 单核 Edwards 16K 矩阵
 
 ECM-ELF 0.62.13 与 Prime95 31.7b1 在同一台 Windows 主机上交错运行。Ryzen AI 9 HX 370 固定逻辑 CPU 1，沿用 4.0 GHz 设置，未独立采样频率和功耗。14 档输入均为完整梅森数，指数从 127 到 16319 位。B1=B2=100,000，各档每种路径三次，关闭指数缓存和周期检查点。Prime95 与 GMP 单条均为 sigma=26，IFMA 每批跑 sigma=26…33。ECM-ELF 使用 MSVC 14.51.36231 与 GMP Zen3，固定宽度 GMP 及 IFMA 均用 NAF w8。

@@ -15,6 +15,7 @@
 
 ## 第三方实现
 
+- [avx-ecm AVX-512](AVX_ECM.md)：Suyama PARAM0、PRAC、52/32 位向量算术和梅森归约分派。
 - [BOINC 图形与屏保机制](BOINC_GRAPHICS.html)：独立图形进程、状态通信、按需采样及 SETI/Rosetta/Einstein 的画面语义；固定第三方参考，不表示本项目已实现。
 - [ELYTerminal 桌宠行为](ELY_PET_BEHAVIOR.md)：固定版本的情绪、微动作时间表、点击及睡眠条件，区分上游矢量动作与图集适配。
 - [GPUOWL NTT](GPUOWL_NTT.md)：保留 `DEV_GPUOWL_NTT_NOTES.md` §§1–10 的域运算、IBDWT、twiddle、CRT、carry 与源码索引。

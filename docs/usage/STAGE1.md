@@ -8,6 +8,37 @@
 
 CPU Stage1 的实际模数超过 10240 位时，`impl=auto` 使用 IFMA，单曲线也适用。无可用 IFMA 时任务报错。Edwards 可用 `--impl scalar` 或在 `[stage1]` 设置 `impl = "scalar"`，显式运行宽位 GMP `mpz` 二进制点乘。Montgomery CPU 标量的上限为 10240 位。
 
+CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_mont_chain = "prac"`，同时使用 `target = "cpu"`、`curve = "mont"` 和 `impl = "simd"`。PRAC 计划可按 B1 和 `lcm` 约定复用，存放在 `exp_cache` 目录。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。继续检查点中的任务时需使用原来的点乘方式。
+
+### 预生成 PRAC 缓存
+
+PRAC（*Practical Algorithm*）用差分加法链安排 Montgomery 点乘。当前计划的缓存键包括 B1、`lcm=1|12`、计划格式和搜索版本。程序还核对精确 Stage1 标量的指纹。更换模数、位宽、sigma、B2 或 CPU/GPU 批量时，同一计划可继续复用。[Bernstein 与 Montgomery，§4.2.2](https://pure.tue.nl/ws/files/92552300/bernmont.pdf#page=10)
+
+启用 `ECM_BUILD_TOOLS` 后可构建 `prepare_prac_cache`。以下示例从仓库根目录运行，`1` 为 `lcm` 倍数，`6` 为规划线程上限。工具仅构造计划和指数，并用运行时读取器复验新文件。
+
+```powershell
+$build = 'build_dev/opencl_cpu_stage1_prac_06215'
+cmake --build $build --config Release --target prepare_prac_cache
+& "$build/prepare_prac_cache.exe" cache 1 6 50000 100000 1000000 11000000 44000000 260000000
+```
+
+`exp_cache` 留空时，Stage1 从工作目录及可执行文件目录向上查找 ECM-ELF 仓库，并使用仓库根目录的 `cache/`。独立部署使用可执行文件同级的 `cache/`。可用 `--exp-cache <目录>` 或 `[stage1] exp_cache` 指定其他位置。显式相对路径以工作目录为基准。CUDA PRAC 可通过 `ECM_PRAC_PLAN_CACHE` 单独覆盖计划目录。
+
+以 `prac_v1_b260000000_t1_s7.bin` 为例：
+
+| 字段 | 含义 |
+| --- | --- |
+| `prac` | PRAC 差分加法链计划 |
+| `v1` | 二进制缓存格式版本 1 |
+| `b260000000` | Stage1 上界 B1 = 260,000,000 |
+| `t1` | LCM 标量倍数为 1，`t12` 对应 12 倍 |
+| `s7` | 链种子搜索策略版本 7 |
+| `.bin` | 二进制文件扩展名 |
+
+计划每个素数占 16 字节，另加 64 字节头。B1=260,000,000 的计划约 217 MiB，指数文件另计。
+
+### 队列与交接
+
 `--go` 是命中后的可选群阶诊断：默认优先本地 PARI DLL，备选外部 GP，不自动使用 GMP 算法。`--go-backend auto|pari|gp|gmp` 可选择后端，`native` 保留为 `pari` 的兼容别名，`--go-gp-timeout 1..600` 设置 GP 截止秒数（默认 30）；诊断未完成不影响因子存档、结果和主计算退出码。输出区分旧群阶界限与新增点阶界限，资源和素性证明范围见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。GPU Edwards 的既有 `--go` 限制保留。
 
 生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。`ECM=`/`ECM2=` 队列行没有 save 名称；CPU/GPU 的自动 save 共用 `save_name_pattern`，默认 `{curve}_{target}_{b1}.save`，写入 `tmp_dir`。curve 为 e、m0、m2、m3；target 保留梅森任务的原始指数，例如 m5351，即使已经剥离因子。普通整数使用 bit 加实际位宽。B1 使用紧凑写法，例如 `m0_m5351_260e6.save`、`e_m5351_260e6.save`。旧自定义模式自动补充曲线前缀；CLI 显式 `-save` 路径保持原样。保存失败时任务留在 worktodo，不会进入 finished。

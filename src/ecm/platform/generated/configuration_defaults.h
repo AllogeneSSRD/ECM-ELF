@@ -32,6 +32,7 @@ inline constexpr char stage1_stage1_backend[]="auto";
 inline constexpr char stage1_target[]="gpu";
 inline constexpr char stage1_impl[]="auto";
 inline constexpr char stage1_reduction[]="auto";
+inline constexpr char stage1_cpu_mont_chain[]="ladder";
 inline constexpr uint32_t stage1_stage1_threads=0;
 inline constexpr char stage1_affinity[]="";
 inline constexpr char stage1_save_name_pattern[]="{curve}_{target}_{b1}.save";

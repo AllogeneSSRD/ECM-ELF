@@ -51,17 +51,14 @@ void print_usage(const char* prog) {
                  "1=serial). One task\n"
               << "                       is an 8-curve SIMD batch (simd backend) or "
                  "one curve\n"
-              << "  --exp-cache <dir>    cache s = torsion*lcm(1..B1) on disk "
-                 "(default: the exe\n"
-              << "                       directory; \"off\" disables).  B1 = 260e6 "
-                 "costs ~10 s to\n"
-              << "                       build and ~0.3 s to load from a validated "
-                 "cache.\n"
+              << "  --exp-cache <dir>    Stage1 scalar and PRAC cache. Defaults to cache/ at\n"
+              << "                       the checkout root or next to the executable. off disables.\n"
               << "  --lcm <1|12>         Stage1 scalar multiplier for lcm(1..B1). 1 is "
                  "the\n"
               << "                       default; 12 is Prime95-style (use when "
                  "Prime95 runs\n"
               << "                       stage 2 on our point, see doc section 16.7)\n"
+              << "  --cpu-mont-chain <ladder|prac>  CPU Montgomery IFMA point multiplication.\n"
               << "  --naf-w <w>          Edwards NAF window (0 = CPU 12 / GPU 6); "
                  "dictionary = 2^(w-2)\n"
               << "  --affinity <list>    Pin worker t to logical CPU list[t %% len], "
@@ -224,6 +221,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                  "--stage1-threads",
                                                  "--impl",
                                                  "--reduction",
+                                                 "--cpu-mont-chain",
                                                  "--naf-w",
                                                  "--lcm",
                                                  "--curve",
@@ -333,6 +331,10 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
             } else if (key == "--reduction") {
                 expected = "auto|montgomery|mersenne-fold";
                 if (!ecm_stage1::parse_simd_reduction(value, selection.simd_reduction))
+                    reject();
+            } else if (key == "--cpu-mont-chain") {
+                expected = "ladder|prac";
+                if (!ecm_stage1::parse_cpu_montgomery_chain(value, selection.cpu_montgomery_chain))
                     reject();
             } else if (key == "--curve") {
                 expected = "mont|ed";

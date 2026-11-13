@@ -277,12 +277,15 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                             std::to_string(uint64_t(B1)) + "|" +
                             std::to_string(int(opt.execution.selection.scalar_construction)) + "|" +
                             ecm_stage1::execution_target_name(opt.execution.selection.target);
-            if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu)
+            if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu) {
                 identity += "|" +
                             std::to_string(opt.execution.naf_w ? opt.execution.naf_w
                                                                : deps.default_naf_window()) +
                             "|" + std::to_string(int(opt.execution.selection.cpu_implementation));
-            else if (execution.execution.selection.gpu_algorithm == GpuAlgorithm::Ntt)
+                if (!base.edwards && opt.execution.selection.cpu_montgomery_chain ==
+                                         CpuMontgomeryChain::Prac)
+                    identity += "|prac-v1";
+            } else if (execution.execution.selection.gpu_algorithm == GpuAlgorithm::Ntt)
                 identity += "|ntt-v1";
             else if (!base.edwards)
                 identity += "|" + execution.cgbn_algorithm;

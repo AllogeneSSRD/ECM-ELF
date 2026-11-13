@@ -174,6 +174,18 @@ Stage1 checkpoint interval in seconds. 0 disables periodic checkpoints; negative
 
 设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。
 
+### cpu_mont_chain
+
+```toml
+cpu_mont_chain = "ladder"
+```
+
+Type / 类型: `string`; range / 范围: `[ladder|prac]`; worker override / worker 覆盖: `[workers.N.stage1]`.
+
+Montgomery CPU point multiplication. prac requires target=cpu, curve=mont, impl=simd and B1 in 2..4294967295. It shares the scalar convention and final save format with ladder, with its own in-flight checkpoint state.
+
+Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。
+
 ### curve
 
 ```toml
@@ -230,9 +242,9 @@ exp_cache = ""
 
 Type / 类型: `string`; range / 范围: `[off|none|0|-|<dir>]`; worker override / worker 覆盖: `[workers.N.stage1]`.
 
-Directory for the precomputed Stage1 scalar cache, reused for matching B1 and exponent mode. Empty uses the executable directory; off, none, 0, or - disables caching. Explicit relative paths use the current working directory. Small B1 values may be computed without writing a cache.
+Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout root, or cache/ next to the executable for standalone installs. off, none, 0, or - disables caching. Explicit relative paths use the current working directory. Small B1 values may skip writing the scalar cache.
 
-指定 Stage1 指数缓存目录，复用相同 B1 和指数模式的预计算结果。留空使用可执行文件目录；off、none、0 或 - 关闭缓存。显式相对目录以进程当前工作目录为基准；很小的 B1 可能直接计算而不写缓存。
+指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。
 
 ### finished
 

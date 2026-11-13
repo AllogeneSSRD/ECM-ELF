@@ -67,6 +67,7 @@ typedef int (*mont_soa_progress_fn)(void *ctx, size_t bitnum);
 
 #define MONT_SOA_DONE   0
 #define MONT_SOA_PAUSED 1
+#define MONT_SOA_REPLAY 2
 #define MONT_SOA_ERROR  (-1)
 
 size_t mont_soa_state_words(const mont_soa_ctx_t *c);
@@ -76,6 +77,18 @@ int mont_soa_stage1_bits_ex(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits
                             size_t start_bit, uint64_t *state, size_t *out_bitnum,
                             mpz_t *out_x, mpz_t *out_gcd,
                             mont_soa_progress_fn cb, void *cb_ctx, size_t chunk_bits);
+
+struct EcmPracPrime;
+
+/* PRAC advances one prime descriptor at a time. A paused state holds the
+   running projective point at start/out_offset in the first two field elements
+   of the same buffer used for the ladder. The last two elements are zero.
+   MONT_SOA_REPLAY requests the binary path for an exceptional curve setup. */
+int mont_soa_stage1_prac_ex(mont_soa_ctx_t *c, const EcmPracPrime *primes, size_t count,
+                           const uint64_t sigmas[IFMA_LANES],
+                           size_t start, uint64_t *state, size_t *out_offset,
+                           mpz_t *out_x, mpz_t *out_gcd,
+                           mont_soa_progress_fn cb, void *cb_ctx, size_t chunk_primes);
 
 /* Field ops per point operation (reporting / cost accounting). */
 void mont_soa_op_counts(uint64_t *muls_per_bit_x1000);

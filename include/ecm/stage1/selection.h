@@ -11,6 +11,7 @@ enum class CurveModel { Montgomery, Edwards };
 enum class ExecutionTarget { Cpu, Gpu };
 enum class CpuImplementation { Auto = 0, IfmaSimd = 1, GmpScalar = 2 };
 enum class SimdReduction { Auto = 0, Montgomery = 1, MersenneFold = 2 };
+enum class CpuMontgomeryChain { Ladder, Prac };
 enum class GpuAlgorithm { Cgbn = 1, Ntt = 2 };
 enum class ScalarConstruction { PrimePowerLcm, PrimePowerLcmTimes12 };
 
@@ -19,6 +20,7 @@ struct Selection {
     ExecutionTarget target = ExecutionTarget::Gpu;
     CpuImplementation cpu_implementation = CpuImplementation::Auto;
     SimdReduction simd_reduction = SimdReduction::Auto;
+    CpuMontgomeryChain cpu_montgomery_chain = CpuMontgomeryChain::Ladder;
     ScalarConstruction scalar_construction = ScalarConstruction::PrimePowerLcm;
     GpuAlgorithm gpu_algorithm = GpuAlgorithm::Cgbn;
     int gpu_param = -1; // assigned from the generated config before GPU validation
@@ -30,6 +32,7 @@ bool parse_curve_model(std::string_view,CurveModel &);
 bool parse_execution_target(std::string_view,ExecutionTarget &);
 bool parse_cpu_implementation(std::string_view,CpuImplementation &);
 bool parse_simd_reduction(std::string_view,SimdReduction &);
+bool parse_cpu_montgomery_chain(std::string_view, CpuMontgomeryChain&);
 bool parse_gpu_algorithm(std::string_view,GpuAlgorithm &);
 bool parse_scalar_construction(std::string_view,ScalarConstruction &);
 std::optional<CpuImplementation> resolve_cpu_implementation(

@@ -185,7 +185,8 @@ foreach ($name in @('src/ecm/cuda/dispatch/tiers.def','src/ecm/stage1/edwards/cu
     Check ($stage1.Contains($name)) "Stage1 release records $name"
 }
 $enabled = Get-Stage1ReleaseSources $repo -EnablePrac $true
-Check ($enabled.Contains('src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp') -and -not $stage1.Contains('src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp')) 'PRAC source membership follows explicit feature flag'
+Check ($enabled.Contains('src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp') -and $stage1.Contains('src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp') -and
+    $enabled.Contains('src/ecm/stage1/montgomery/cuda/prac/runtime.cu') -and -not $stage1.Contains('src/ecm/stage1/montgomery/cuda/prac/runtime.cu')) 'host PRAC plan is shared while device PRAC follows explicit feature flag'
 Reject { Assert-Stage1ReleaseSources ([pscustomobject]@{}) $stage1 } 'Stage1 source changed' 'missing release source entries rejected'
 $moduleSource = Join-Path $fixture 'src/host_module.cpp'
 $moduleHeader = Join-Path $fixture 'src/module_private.inc'

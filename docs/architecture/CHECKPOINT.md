@@ -201,10 +201,10 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 | 次序 | 字段 | 含义 |
 | --- | --- | --- |
 | 首行 | `MPA-MONT-CKPT 1` | 标记和版本 |
-| 公共 | N、B1、TORSION、SBITS | 实际模数、界限、1/12 标量倍数、总指数位数 |
-| 公共 | CURVE、SIGMA、FIELD | 零基曲线索引、u64 种子、`mpn`/`ifma` 字段层标签 |
-| 公共 | STATUS、BITNUM | `INFLIGHT`/`DONE`；ladder 已处理进度 |
-| INFLIGHT | X0、Z0、X1、Z1 | 相邻 ladder 点的普通域坐标；BITNUM=0 可作种子记录 |
+| 公共 | N、B1、TORSION、SBITS | 实际模数、界限、1/12 标量倍数、总指数位数或 PRAC 描述符数量 |
+| 公共 | CURVE、SIGMA、FIELD | 零基曲线索引、u64 种子、`mpn`/`ifma` 字段层标签或 `prac-<计划身份>` |
+| 公共 | STATUS、BITNUM | `INFLIGHT`/`DONE`；已处理的指数位数或 PRAC 描述符数 |
+| INFLIGHT | X0、Z0、X1、Z1 | ladder 相邻双点的普通域坐标。PRAC 用 X0/Z0 保存当前点，X1/Z1 为零。BITNUM=0 可作种子记录 |
 | DONE | HIT；FACTOR 或 XOUT | 命中标志及真因子，或归一化末点 |
 | 倒数第二行 | CHECKSUM | 16 位十六进制；覆盖此前每个字节，包括换行 |
 | 最后一行 | END | 完整性结束标记 |

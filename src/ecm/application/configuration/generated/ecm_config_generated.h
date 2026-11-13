@@ -131,6 +131,7 @@ struct Stage1Values {
     std::string execution_target="gpu";
     std::string cpu_implementation="auto";
     std::string simd_reduction="auto";
+    std::string cpu_mont_chain="ladder";
     uint32_t stage1_threads=0;
     std::string affinity="";
     std::string save_name_pattern="{curve}_{target}_{b1}.save";
@@ -199,6 +200,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"target",[](Stage1Values&c,const std::string&v){assign_value(c.execution_target,v);},[](Stage1Values&c,const Stage1Values&v){c.execution_target=v.execution_target;}},
     {"impl",[](Stage1Values&c,const std::string&v){assign_value(c.cpu_implementation,v);},[](Stage1Values&c,const Stage1Values&v){c.cpu_implementation=v.cpu_implementation;}},
     {"reduction",[](Stage1Values&c,const std::string&v){assign_value(c.simd_reduction,v);},[](Stage1Values&c,const Stage1Values&v){c.simd_reduction=v.simd_reduction;}},
+    {"cpu_mont_chain",[](Stage1Values&c,const std::string&v){assign_value(c.cpu_mont_chain,v);},[](Stage1Values&c,const Stage1Values&v){c.cpu_mont_chain=v.cpu_mont_chain;}},
     {"stage1_threads",[](Stage1Values&c,const std::string&v){assign_value(c.stage1_threads,v);},[](Stage1Values&c,const Stage1Values&v){c.stage1_threads=v.stage1_threads;}},
     {"affinity",[](Stage1Values&c,const std::string&v){assign_value(c.affinity,v);},[](Stage1Values&c,const Stage1Values&v){c.affinity=v.affinity;}},
     {"save_name_pattern",[](Stage1Values&c,const std::string&v){assign_value(c.save_name_pattern,v);},[](Stage1Values&c,const Stage1Values&v){c.save_name_pattern=v.save_name_pattern;}},

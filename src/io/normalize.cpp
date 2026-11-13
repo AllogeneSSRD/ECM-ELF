@@ -25,16 +25,33 @@
 #endif
 namespace ecm_stage1_app {
 
-// Resolve optional cache policy once. Empty input means the existing
-// executable-directory default; an explicit disable token remains empty and is
-// never replaced again during execution.
+static std::filesystem::path stage1_checkout_root(std::filesystem::path path) {
+    for (; !path.empty(); path = path.parent_path()) {
+        std::error_code error;
+        if (std::filesystem::exists(path / ".git", error) &&
+            std::filesystem::is_regular_file(path / "config/ecm_options.json", error))
+            return path;
+        if (path == path.root_path())
+            break;
+    }
+    return {};
+}
+
+// Resolve once, before execution. A disabled cache keeps the empty path.
 static std::string normalized_cache_dir(const std::string& value, const std::string& exe,
                                         const std::string& cwd) {
     if (value == "off" || value == "none" || value == "0" || value == "-")
         return {};
-    const auto path = value.empty() ? (exe.empty() ? std::string(".") : exe) : value;
+    const auto working = std::filesystem::u8path(cwd);
+    if (value.empty()) {
+        const auto executable = exe.empty() ? working : std::filesystem::u8path(exe);
+        auto root = stage1_checkout_root(working);
+        if (root.empty())
+            root = stage1_checkout_root(executable);
+        return ((root.empty() ? executable : root) / "cache").lexically_normal().u8string();
+    }
     // absolute also resolves Windows drive-relative spellings such as D:cache.
-    return std::filesystem::absolute(std::filesystem::u8path(cwd) / std::filesystem::u8path(path))
+    return std::filesystem::absolute(working / std::filesystem::u8path(value))
         .lexically_normal()
         .u8string();
 }
@@ -281,6 +298,13 @@ bool validate_cli_mode(const ParsedCli& input, std::string& error) {
 // Cross-field execution preferences have one rule shared by startup and task
 // admission.
 static bool execution_preferences_error(const ecm_stage1::Selection& s, std::string& error) {
+    if (s.cpu_montgomery_chain == ecm_stage1::CpuMontgomeryChain::Prac &&
+        (s.target != ecm_stage1::ExecutionTarget::Cpu ||
+         s.curve != ecm_stage1::CurveModel::Montgomery ||
+         s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd)) {
+        error = "Stage1 CPU Montgomery PRAC requires target=cpu, curve=mont, impl=simd";
+        return true;
+    }
     if (s.target == ecm_stage1::ExecutionTarget::Gpu &&
         (s.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
          s.simd_reduction != ecm_stage1::SimdReduction::Auto)) {
@@ -350,6 +374,8 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
             s.cpu_implementation = input.selection.cpu_implementation;
         if (input.has("--reduction"))
             s.simd_reduction = input.selection.simd_reduction;
+        if (input.has("--cpu-mont-chain"))
+            s.cpu_montgomery_chain = input.selection.cpu_montgomery_chain;
         if (input.has("--lcm"))
             s.scalar_construction = input.selection.scalar_construction;
         if (input.has("--gpu-param"))

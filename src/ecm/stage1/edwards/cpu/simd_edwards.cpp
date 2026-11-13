@@ -25,6 +25,7 @@
 #include "ecm_edwards_cpu.h"
 
 using ecm_ifma::add;
+using ecm_ifma::addsub;
 using ecm_ifma::sub;
 using ecm_ifma::neg;
 using ecm_ifma::limb_mask;
@@ -64,10 +65,9 @@ static void ed_soa_dbl(ed_soa_ctx_t *c, soa_pt r, const soa_pt p, bool extended 
     add(C, C, C, o, mc);                     /* C = 2Z^2 */
     add(t, p.x, p.y, o, mc);
     ifma_mont_sqr(E, t, mc);
-    add(G, A, B, o, mc);                     /* G = A + B */
+    addsub(G, H, A, B, o, mc);                /* G = A + B, H = A - B */
     sub(E, E, G, mc);                  /* E = (X+Y)^2 - G */
     sub(F, G, C, mc);                  /* F = G - C */
-    sub(H, A, B, mc);                  /* H = A - B */
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
     if (extended) ifma_mont_mul(r.t, E, H, mc);
@@ -92,8 +92,7 @@ static void ed_soa_add(ed_soa_ctx_t *c, soa_pt r, const soa_pt p, const soa_pt q
     ifma_mont_mul(E, t, E, mc);
     sub(E, E, A, mc);
     sub(E, E, B, mc);
-    sub(F, D, C, mc);
-    add(G, D, C, o, mc);
+    addsub(G, F, D, C, o, mc);
     sub(H, B, A, mc);
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
@@ -119,8 +118,7 @@ static void ed_soa_add_affine(ed_soa_ctx_t *c, soa_pt r, const soa_pt p,
     ifma_mont_mul(E, t, E, mc);
     sub(E, E, A, mc);
     sub(E, E, B, mc);
-    sub(F, p.z, C, mc);
-    add(G, p.z, C, o, mc);
+    addsub(G, F, p.z, C, o, mc);
     sub(H, B, A, mc);
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
@@ -184,6 +182,8 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
     const uint64_t *N = NULL;
     (void)N;
     std::vector<uint64_t> A(8 * n), B(8 * n), R(8 * n), T(8 * n);
+    std::vector<uint64_t> sum(lw), diff(lw), expected_sum(lw), expected_diff(lw);
+    std::vector<uint64_t> alias_a(lw), alias_b(lw);
     mpz_t av, bv, want, got, tmp;
     mpz_inits(av, bv, want, got, tmp, NULL);
     gmp_randstate_t rs;
@@ -195,6 +195,13 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
         for (unsigned k = 0; k < IFMA_LANES; k++) {
             mpz_urandomm(av, rs, mc->N);
             mpz_urandomm(bv, rs, mc->N);
+            if (t == 0 && k < 4) {
+                mpz_sub_ui(av, mc->N, 1);
+                mpz_sub_ui(bv, mc->N, 1);
+                if (k == 1) mpz_set_ui(bv, 1); // sum = N
+                if (k == 2) mpz_set_ui(av, 0); // negative difference
+                if (k == 3) mpz_set_ui(bv, 0); // identity
+            }
             ifma_from_mpz_lane(A.data(), k, av, mc);
             ifma_from_mpz_lane(B.data(), k, bv, mc);
         }
@@ -243,7 +250,18 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
                 }
             }
         }
-        (void)lw;
+        // Compare every canonical limb as well as the independent GMP checks above.
+        add(expected_sum.data(), A.data(), B.data(), T.data(), mc);
+        sub(expected_diff.data(), A.data(), B.data(), mc);
+        addsub(sum.data(), diff.data(), A.data(), B.data(), T.data(), mc);
+        alias_a = A;
+        alias_b = B;
+        addsub(alias_b.data(), alias_a.data(), alias_a.data(), alias_b.data(), T.data(), mc);
+        if (sum != expected_sum || diff != expected_diff || alias_b != expected_sum ||
+            alias_a != expected_diff) {
+            if (fails < 12) printf("  [selftest] paired add/sub trial=%d\n", t);
+            ++fails;
+        }
         /* aliased variants: the ladder does r = r - A and r = r + A in place,
            which the distinct-buffer cases above do not exercise. */
         for (int op = 0; op < 3; op++) {

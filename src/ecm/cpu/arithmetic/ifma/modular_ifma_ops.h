@@ -73,6 +73,46 @@ inline void sub(uint64_t *r, const uint64_t *a, const uint64_t *b, const ifma_ct
     }
 }
 
+/* Compute both a + b and a - b with one load of each input limb.
+   The outputs must be distinct. Either may exactly alias an input.
+   tmp is disjoint scratch with IFMA_LANES*n words, as for add. */
+inline void addsub(uint64_t *sum, uint64_t *diff, const uint64_t *a, const uint64_t *b,
+                   uint64_t *tmp, const ifma_ctx_t *mc)
+{
+    const size_t n = mc->n;
+    const uint64_t *nb = mc->nb;
+    const __m512i mask = _mm512_set1_epi64((long long)limb_mask);
+    const __m512i zero = _mm512_setzero_si512();
+    __m512i carry = zero, sum_borrow = zero, diff_borrow = zero;
+
+    for (size_t i = 0; i < 8 * n; i += 8) {
+        const __m512i ai = ld(a + i), bi = ld(b + i);
+        const __m512i s = _mm512_add_epi64(_mm512_add_epi64(ai, bi), carry);
+        const __m512i d = _mm512_sub_epi64(_mm512_sub_epi64(ai, bi), diff_borrow);
+        carry = _mm512_srli_epi64(s, 52);
+        diff_borrow = _mm512_srli_epi64(d, 63);
+
+        const __m512i low_sum = _mm512_and_si512(s, mask);
+        const __m512i reduced = _mm512_sub_epi64(_mm512_sub_epi64(low_sum, ld(nb + i)), sum_borrow);
+        sum_borrow = _mm512_srli_epi64(reduced, 63);
+        st(sum + i, low_sum);
+        st(diff + i, _mm512_and_si512(d, mask));
+        st(tmp + i, _mm512_and_si512(reduced, mask));
+    }
+
+    const __mmask8 sum_reduce = (__mmask8)(_mm512_cmpneq_epi64_mask(carry, zero) |
+                                            _mm512_cmpeq_epi64_mask(sum_borrow, zero));
+    const __mmask8 diff_negative = _mm512_cmpneq_epi64_mask(diff_borrow, zero);
+    carry = zero;
+    for (size_t i = 0; i < 8 * n; i += 8) {
+        st(sum + i, _mm512_mask_blend_epi64(sum_reduce, ld(sum + i), ld(tmp + i)));
+        const __m512i addend = _mm512_maskz_loadu_epi64(diff_negative, nb + i);
+        const __m512i d = _mm512_add_epi64(_mm512_add_epi64(ld(diff + i), addend), carry);
+        carry = _mm512_srli_epi64(d, 52);
+        st(diff + i, _mm512_and_si512(d, mask));
+    }
+}
+
 /* r = -a mod N  (0 stays 0, otherwise N - a). */
 inline void neg(uint64_t *r, const uint64_t *a, const ifma_ctx_t *mc)
 {

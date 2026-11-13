@@ -20,7 +20,8 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     cases = []
-    for mode in ('cli_off', 'config_off', 'explicit_directory', 'optional_write_failure'):
+    for mode in ('cli_off', 'config_off', 'checkout_default', 'explicit_directory',
+                 'optional_write_failure'):
         work = out / mode
         work.mkdir()
         exe = work / 'ecm_cuda.exe'
@@ -33,8 +34,16 @@ def main():
         command = [str(exe), '--config', str(ini), '--curve', 'mont', '--target', 'cpu',
                    '--impl', 'scalar', '--stage1-threads', '1',
                    '-sigma', '26', '-gpucurves', '1', '--tmp-dir', str(work)]
+        cwd = work
         if mode == 'cli_off':
             command += ['--exp-cache', 'off']
+        elif mode == 'checkout_default':
+            (work / '.git').mkdir()
+            (work / 'config').mkdir()
+            (work / 'config/ecm_options.json').write_text('{}', encoding='utf-8')
+            cwd = work / 'nested'
+            cwd.mkdir()
+            cache = work / 'cache'
         elif mode in ('explicit_directory', 'optional_write_failure'):
             cache = work / 'cache'
             if mode == 'optional_write_failure':
@@ -42,11 +51,11 @@ def main():
             command += ['--exp-cache', str(cache)]
         command += ['1000000', '1000000']
         start = time.perf_counter()
-        proc = subprocess.run(command, cwd=work, input=b'1111\n', capture_output=True, timeout=60)
+        proc = subprocess.run(command, cwd=cwd, input=b'1111\n', capture_output=True, timeout=60)
         (work / 'run.log').write_bytes(proc.stdout + proc.stderr)
         assert proc.returncode == 0, (mode, 'inspect run.log')
         rows = list(work.rglob('ecm_B1_1000000_t*_v1.bin'))
-        if mode == 'explicit_directory':
+        if mode in ('checkout_default', 'explicit_directory'):
             assert rows and all(p.parent == cache for p in rows), rows
         else:
             assert not rows, (mode, rows)

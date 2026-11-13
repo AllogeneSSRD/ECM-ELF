@@ -32,6 +32,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","target","string","[cpu|gpu]"},
     {"stage1","impl","string","[auto|simd|scalar]"},
     {"stage1","reduction","string","[auto|montgomery|mersenne-fold]"},
+    {"stage1","cpu_mont_chain","string","[ladder|prac]"},
     {"stage1","stage1_threads","u32","<x:Z,0..2^32-1>"},
     {"stage1","affinity","string","[none|auto|<n>,...|<a>-<b>]"},
     {"stage1","save_name_pattern","string","<pattern>"},

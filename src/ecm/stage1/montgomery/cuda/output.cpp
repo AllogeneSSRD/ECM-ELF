@@ -33,7 +33,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include <unistd.h>
 #endif
 #if ECM_CUDA_ENABLE_PRAC
-#include "prac/ecm_prac_plan.h"
+#include "../prac/ecm_prac_plan.h"
 #include <sstream>
 #include <stdexcept>
 #endif

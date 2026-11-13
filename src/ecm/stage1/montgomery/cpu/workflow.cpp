@@ -10,6 +10,7 @@
 #include "checkpoint.h"
 #include "ecm_mont_cpu.h"
 #include "simd_mont_curve.h"
+#include "../prac/ecm_prac_plan.h"
 #include "ecm/io/save.h"
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -102,14 +104,13 @@ static size_t mont_ckpt_chunk_bits(size_t nbits) {
     return p;
 }
 
-/* Progress + pause decision for one SIMD batch.  Called from inside the ladder
-   every `chunk` bits, with the batch holding the whole worker thread. */
+/* Progress and pause decision for one task, in ladder bits or PRAC descriptors. */
 struct MontProgCtx {
-    std::atomic<uint64_t>* lane_bits; /* [curves]: exponent bits done per curve */
+    std::atomic<uint64_t>* lane_bits;
     const uint32_t* lane_curve;       /* [lanes] : curve index of each lane */
     uint32_t lanes;
     uint32_t total_curves;
-    size_t nbits;
+    size_t work_total;
     std::atomic<long long>* last_ckpt_ms; /* shared by all workers: one timer */
     long long interval_ms;                /* < 0 = no periodic autosave */
 };
@@ -119,13 +120,11 @@ static int mont_progress_cb(void* p, size_t bitnum) {
     for (uint32_t k = 0; k < pc->lanes; k++)
         pc->lane_bits[pc->lane_curve[k]].store((uint64_t)bitnum, std::memory_order_relaxed);
 
-    /* Work unit = one curve; the fractional part of a lane is bitnum/nbits.  A
-       running sum over the per-curve counters is what keeps the number monotone
-       when several workers report at different offsets, and it needs no lock. */
+    /* Work unit = one curve; each lane contributes its completed fraction. */
     uint64_t sum = 0;
     for (uint32_t i = 0; i < pc->total_curves; i++)
         sum += pc->lane_bits[i].load(std::memory_order_relaxed);
-    const double done_f = pc->nbits ? (double)sum / (double)pc->nbits : 0.0;
+    const double done_f = pc->work_total ? (double)sum / (double)pc->work_total : 0.0;
     {
         std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
         stage1_progress_set(done_f, pc->total_curves);
@@ -175,6 +174,13 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         return result;
     }
     const bool use_simd = *implementation == ecm_stage1::CpuImplementation::IfmaSimd;
+    const bool use_prac = opt.execution.selection.cpu_montgomery_chain ==
+                          ecm_stage1::CpuMontgomeryChain::Prac;
+    if (use_prac && (!use_simd || !(B1 >= 2 && B1 <= UINT32_MAX))) {
+        ecm_ts_fprintf(stderr,
+                       "ERROR: CPU Montgomery PRAC requires IFMA and B1 in 2..4294967295.\n");
+        return result;
+    }
 
     ecm_edwards::Integer scalar;
     auto* s = scalar.v;
@@ -201,21 +207,36 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
     ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d) [%s]\n", s_bits, B1,
                    torsion, s_status.c_str());
 
+    EcmPracPlan prac;
+    if (use_prac) {
+        prac = ecm_prac_build(static_cast<uint32_t>(B1), torsion, s,
+                              opt.persistence.exponent_cache_dir, opt.execution.stage1_threads);
+        ecm_ts_fprintf(stdout, "stage1 chain    : PRAC [%s]\n", prac.status.c_str());
+    } else if (use_simd) {
+        ecm_ts_fprintf(stdout, "stage1 chain    : binary ladder\n");
+    }
+    const std::string field = use_prac ? "prac-" + std::to_string(prac.identity)
+                                     : use_simd ? "ifma" : "mpn";
+    const auto compatible_chain = [&](std::string_view saved_field) {
+        return use_prac ? saved_field == field : saved_field.substr(0, 5) != "prac-";
+    };
+
     ecm_edwards::Array factors_owner(curves);
     auto* factors = factors_owner.data();
     std::vector<int> statuses(curves, ECM_NO_FACTOR_FOUND);
     auto* array_found = statuses.data();
 
-    /* The exponent bit array depends only on (B1, torsion) -- not on N, not on sigma
-       -- so it is built once here and read by every task below.  It is built before
-       the sigmas because the checkpoint pre-pass needs s_bits to validate a resume. */
+    /* Build the ladder's shared bit array now, or lazily if PRAC needs a replay. */
     size_t nbits = 0;
-    std::unique_ptr<uint8_t, decltype(&std::free)> bits_owner(mont_expand_bits(s, &nbits),
-                                                              std::free);
+    std::unique_ptr<uint8_t, decltype(&std::free)> bits_owner(
+        use_prac ? nullptr : mont_expand_bits(s, &nbits), std::free);
     auto* bits = bits_owner.get();
-    if (!bits)
+    if (!use_prac && !bits)
         return result;
-    const size_t ckpt_chunk = mont_ckpt_chunk_bits(nbits);
+    std::once_flag replay_once;
+    const size_t work_total = use_prac ? prac.primes.size() : nbits;
+    const size_t ckpt_chunk = use_prac ? std::max<size_t>(1, work_total / 256)
+                                     : mont_ckpt_chunk_bits(nbits);
 
     /* ---- mid-stage-1 checkpoints (docs/architecture/STAGE1.md) ----------
        One independently resumable record per curve in a shared batch file. The
@@ -237,7 +258,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
     auto* hit = hits.data();
 
     /* curve state recovered from checkpoints */
-    std::vector<size_t> bit_off(curves, 0); /* exponent bits already consumed */
+    std::vector<size_t> bit_off(curves, 0); /* exponent bits or PRAC entries already consumed */
     std::vector<char> ckpt_done(curves, 0); /* result restored: curve is finished */
     uint32_t n_done_ck = 0, n_inflight_ck = 0, n_seeded = 0;
 
@@ -267,7 +288,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
             mont_ckpt_init(&ck);
             std::string why;
             if (mont_ckpt_read(checkpoint, mont_ckpt_path(checkpoint, ckpt_stem, i), N, B1, torsion,
-                               nbits, &ck, &why) &&
+                               work_total, &ck, &why) &&
                 ck.curve == i && (!opt.identity.sigma_fixed || ck.sigma == fixed_sigma)) {
                 sigmas[i] = ck.sigma;
                 adopted = true;
@@ -282,7 +303,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                     } else {
                         mpz_set(xs[i], ck.xout);
                     }
-                } else if (ck.bitnum > 0) {
+                } else if (ck.bitnum > 0 && ck.bitnum < work_total && compatible_chain(ck.field)) {
                     bit_off[i] = ck.bitnum;
                     n_inflight_ck++;
                 } else {
@@ -305,7 +326,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                 mont_ckpt_init(&ck);
                 ck.status = MONT_CKPT_INFLIGHT;
                 ck.bitnum = 0;
-                mont_ckpt_ident(&ck, i, sigmas[i], B1, torsion, nbits, use_simd ? "ifma" : "mpn");
+                mont_ckpt_ident(&ck, i, sigmas[i], B1, torsion, work_total, field.c_str());
                 if (mont_ckpt_write(checkpoint, mont_ckpt_path(checkpoint, ckpt_stem, i), N, &ck) !=
                     0)
                     checkpoint_failed.store(1);
@@ -373,7 +394,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         else
             snprintf(iv, sizeof(iv), "off (Ctrl+C still saves)");
         ecm_ts_fprintf(stdout,
-                       "checkpoint      : %s_c*.ckpt  [%u done, %u mid-ladder, %zu to run]"
+                       "checkpoint      : %s_c*.ckpt  [%u done, %u in flight, %zu to run]"
                        "  autosave %s\n",
                        ckpt_stem.c_str(), n_done_ck, n_inflight_ck, pending.size(), iv);
     }
@@ -398,7 +419,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
        offset (done ones at nbits), so the bar is right from the first sample */
     std::vector<std::atomic<uint64_t>> lane_bits(curves);
     for (uint32_t i = 0; i < curves; i++)
-        lane_bits[i].store(ckpt_done[i] ? (uint64_t)nbits : (uint64_t)bit_off[i],
+        lane_bits[i].store(ckpt_done[i] ? (uint64_t)work_total : (uint64_t)bit_off[i],
                            std::memory_order_relaxed);
 
     auto worker = [&]() {
@@ -451,12 +472,14 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                         std::string why;
                         const int ok = mont_ckpt_read(checkpoint,
                                                       mont_ckpt_path(checkpoint, ckpt_stem, cur[k]),
-                                                      N, B1, torsion, nbits, &ck, &why);
-                        if (ok && ck.bitnum == start) {
+                                                      N, B1, torsion, work_total, &ck, &why);
+                        if (ok && ck.bitnum == start && compatible_chain(ck.field)) {
                             ifma_from_mpz_lane(state.data() + 0 * lw, k, ck.X0, &ctx.mc);
                             ifma_from_mpz_lane(state.data() + 1 * lw, k, ck.Z0, &ctx.mc);
-                            ifma_from_mpz_lane(state.data() + 2 * lw, k, ck.X1, &ctx.mc);
-                            ifma_from_mpz_lane(state.data() + 3 * lw, k, ck.Z1, &ctx.mc);
+                            if (!use_prac) {
+                                ifma_from_mpz_lane(state.data() + 2 * lw, k, ck.X1, &ctx.mc);
+                                ifma_from_mpz_lane(state.data() + 3 * lw, k, ck.Z1, &ctx.mc);
+                            }
                         } else {
                             start = 0;
                         }
@@ -471,7 +494,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                 pc.lane_curve = cur;
                 pc.lanes = tk.count;
                 pc.total_curves = curves;
-                pc.nbits = nbits;
+                pc.work_total = work_total;
                 pc.last_ckpt_ms = &last_ckpt_ms;
                 pc.interval_ms = use_ckpt ? ckpt_interval_ms : -1;
 
@@ -484,9 +507,13 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                 int rc = MONT_SOA_DONE;
                 for (;;) {
                     size_t bitnum = start;
-                    rc = mont_soa_stage1_bits_ex(&ctx, bits, nbits, sg, start, state.data(),
-                                                 &bitnum, bx.data(), bg.data(), mont_progress_cb,
-                                                 &pc, ckpt_chunk);
+                    rc = use_prac
+                             ? mont_soa_stage1_prac_ex(&ctx, prac.primes.data(), work_total, sg,
+                                                       start, state.data(), &bitnum, bx.data(),
+                                                       bg.data(), mont_progress_cb, &pc, ckpt_chunk)
+                             : mont_soa_stage1_bits_ex(&ctx, bits, nbits, sg, start, state.data(),
+                                                       &bitnum, bx.data(), bg.data(), mont_progress_cb,
+                                                       &pc, ckpt_chunk);
                     if (rc != MONT_SOA_PAUSED)
                         break;
                     if (use_ckpt) {
@@ -496,11 +523,13 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                             mont_ckpt_init(&ck);
                             ck.status = MONT_CKPT_INFLIGHT;
                             ck.bitnum = bitnum;
-                            mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, "ifma");
+                            mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, work_total, field.c_str());
                             ifma_to_mpz_lane(ck.X0, state.data() + 0 * lw, k, &ctx.mc);
                             ifma_to_mpz_lane(ck.Z0, state.data() + 1 * lw, k, &ctx.mc);
-                            ifma_to_mpz_lane(ck.X1, state.data() + 2 * lw, k, &ctx.mc);
-                            ifma_to_mpz_lane(ck.Z1, state.data() + 3 * lw, k, &ctx.mc);
+                            if (!use_prac) {
+                                ifma_to_mpz_lane(ck.X1, state.data() + 2 * lw, k, &ctx.mc);
+                                ifma_to_mpz_lane(ck.Z1, state.data() + 3 * lw, k, &ctx.mc);
+                            }
                             if (mont_ckpt_write(checkpoint,
                                                 mont_ckpt_path(checkpoint, ckpt_stem, c), N,
                                                 &ck) != 0)
@@ -511,6 +540,41 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                     if (ecm_stage1_stop_requested())
                         break;      /* SIGINT: leave after saving */
                     start = bitnum; /* autosave: continue from here */
+                }
+                if (use_prac && (rc == MONT_SOA_REPLAY || rc == MONT_SOA_DONE)) {
+                    const bool replay_all = rc == MONT_SOA_REPLAY;
+                    bool replay_lane[IFMA_LANES]{};
+                    bool needs_replay = false;
+                    for (uint32_t k = 0; k < tk.count; ++k) {
+                        replay_lane[k] = replay_all || mpz_cmp_ui(bg[k], 1) != 0;
+                        needs_replay |= replay_lane[k];
+                    }
+                    if (needs_replay) {
+                        std::call_once(replay_once, [&] {
+                            bits_owner.reset(mont_expand_bits(s, &nbits));
+                        });
+                        if (!bits_owner) {
+                            init_failed.store(1);
+                            break;
+                        }
+                        ecm_ts_fprintf(stdout, "  PRAC: replaying exceptional lanes with the binary ladder\n");
+                        ecm_edwards::Array replay_x(IFMA_LANES), replay_gcd(IFMA_LANES);
+                        // The PRAC checkpoint remains a valid restart point if a replay is interrupted.
+                        const auto stop_replay = [](void*, size_t) -> int {
+                            return ecm_stage1_stop_requested() ? 1 : 0;
+                        };
+                        rc = mont_soa_stage1_bits_ex(&ctx, bits_owner.get(), nbits, sg, 0, state.data(),
+                                                     nullptr, replay_x.data(), replay_gcd.data(),
+                                                     stop_replay, nullptr, mont_ckpt_chunk_bits(nbits));
+                        if (rc == MONT_SOA_DONE) {
+                            for (uint32_t k = 0; k < tk.count; ++k) {
+                                if (replay_lane[k]) {
+                                    mpz_swap(bx[k], replay_x[k]);
+                                    mpz_swap(bg[k], replay_gcd[k]);
+                                }
+                            }
+                        }
+                    }
                 }
                 if (rc == MONT_SOA_ERROR) {
                     init_failed.store(1);
@@ -524,7 +588,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                 uint32_t local = 0;
                 for (uint32_t k = 0; k < tk.count; k++) {
                     const uint32_t c = cur[k];
-                    lane_bits[c].store((uint64_t)nbits, std::memory_order_relaxed);
+                    lane_bits[c].store((uint64_t)work_total, std::memory_order_relaxed);
                     if (mpz_cmp_ui(bg[k], 1) > 0 && mpz_cmp(bg[k], N) < 0) {
                         mpz_set(factors[c], bg[k]);
                         array_found[c] = ECM_FACTOR_FOUND_STEP1;
@@ -544,8 +608,8 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                         mont_ckpt_init(&ck);
                         ck.status = MONT_CKPT_DONE;
                         ck.hit = hit[c];
-                        ck.bitnum = nbits;
-                        mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, "ifma");
+                        ck.bitnum = work_total;
+                        mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, work_total, field.c_str());
                         if (ck.hit)
                             mpz_set(ck.factor, factors[c]);
                         else
@@ -600,7 +664,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                 pc.lane_curve = lane;
                 pc.lanes = 1;
                 pc.total_curves = curves;
-                pc.nbits = nbits;
+                pc.work_total = nbits;
                 pc.last_ckpt_ms = &last_ckpt_ms;
                 pc.interval_ms = use_ckpt ? ckpt_interval_ms : -1;
 
@@ -750,7 +814,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
 
     if (n_done_ck || n_inflight_ck) {
         ecm_ts_fprintf(stdout,
-                       "  resumed from checkpoint: %u curve(s) already done, %u mid-ladder\n",
+                       "  resumed from checkpoint: %u curve(s) already done, %u in flight\n",
                        n_done_ck, n_inflight_ck);
     }
     ecm_ts_fprintf(stdout, "  curves=%u  hits=%u  wall=%.2fs  (%.3f s/curve)\n", curves, found,

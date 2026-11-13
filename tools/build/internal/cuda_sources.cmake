@@ -36,6 +36,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp
     src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
     src/ecm/stage1/montgomery/cpu/checkpoint.cpp
+    src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp
     src/ecm/stage1/scalar.cpp
     src/io/exponent_cache.cpp)
 set(ECM_STAGE1_EDWARDS_SOURCES
@@ -78,8 +79,7 @@ set(ECM_STAGE1_PRAC_TEMPLATES_SOURCES
     src/ecm/stage1/montgomery/cuda/prac/constants.cuh)
 set(ECM_STAGE1_PRAC_SOURCES
     src/ecm/stage1/montgomery/cuda/prac/runtime.cu
-    src/ecm/stage1/montgomery/cuda/prac/dispatch.cu
-    src/ecm/stage1/montgomery/cuda/prac/ecm_prac_plan.cpp)
+    src/ecm/stage1/montgomery/cuda/prac/dispatch.cu)
 set(ECM_STAGE2_HOST_SOURCES
     src/io/files.cpp
     src/io/save.cpp

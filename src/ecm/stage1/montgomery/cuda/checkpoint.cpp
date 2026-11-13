@@ -11,7 +11,7 @@
 #include <iostream>
 #include <iterator>
 #if ECM_CUDA_ENABLE_PRAC
-#include "prac/ecm_prac_plan.h"
+#include "../prac/ecm_prac_plan.h"
 #include <sstream>
 #endif
 namespace ecm_cuda_mont_host {

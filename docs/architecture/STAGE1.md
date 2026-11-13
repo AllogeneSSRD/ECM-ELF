@@ -16,7 +16,7 @@ Edwards 与 Montgomery 的 CPU 点层共同调用 `src/ecm/cpu/arithmetic/`。�
 
 GMP 标量使用 64 位 limbs。完整 `2^p−1` 在固定宽度范围内使用普通余数，模乘、平方和加法在第 p 位折叠。回卷先在最低 limb 加入进位，溢出时才继续传播。模减借位时，把差减一并保留低 p 位即得规范余数。其他模数使用 Montgomery REDC。见 [GMP 标量模算术](../../src/ecm/cpu/arithmetic/scalar/modular_mpn.h)。
 
-IFMA 使用 52 位 limbs，每个向量 lane 处理一条曲线。两种曲线共用两趟模加减，模加用点层提供的暂存空间保存候选结果，模减按 lane 修正借位。模加、模减和取负位于 [IFMA 模加减私有头](../../src/ecm/cpu/arithmetic/ifma/modular_ifma_ops.h)。
+IFMA 使用 52 位 limbs，每个向量 lane 处理一条曲线。两种曲线共用 [IFMA 模加减](../../src/ecm/cpu/arithmetic/ifma/modular_ifma_ops.h)。点公式同时需要和与差时，`addsub` 在第一趟共用输入加载并计算进位与借位，在第二趟按 lane 选取规范和并修正负差。
 
 完整梅森数的 IFMA 归约先将乘积列规范化，再按指数 \(p\) 切成低、高两段。对齐高段、相加和进位在同一趟完成，只在有回卷进位的 lane 加一，全一结果映射为零。普通模数使用 CIOS。完整梅森学校乘法和平方超过 2048 个 limbs 时，每累加 1024 行传播一次进位，宽位平方还在对称项翻倍前传播进位。见 [IFMA 模乘与平方](../../src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp) 与 [CPU Stage1 算术对照](../performance/STAGE1.md#八路-ifma-的模乘平方与归约)。
 
@@ -24,9 +24,11 @@ IFMA 使用 52 位 limbs，每个向量 lane 处理一条曲线。两种曲线�
 
 CPU Edwards 的标量和 IFMA NAF 主循环按需生成扩展坐标 T。只有紧随倍点的加点读取 T，倍点与检查点读取 X/Y/Z。标量完整点输出和 SIMD 完整点诊断在需要时计算 T。两条路径都复用倍点中的 \(G=X^2+Y^2\)，计算 \(E=(X+Y)^2-G\) 时只做一次模减。见 [标量倍点](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp) 与 [IFMA 倍点](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp)。
 
+Montgomery IFMA 二进制 ladder 的每一位同时执行倍点与差分加点。两者共用被倍点的 \(X+Z\) 与 \(X-Z\)，三个同时需要和与差的位置用 `addsub`，省去一对重复模加减。每位仍执行 6 次模乘和 4 次模平方。检查点继续保存两条相邻的 X:Z，恢复后重新算当前位的和差。见 [IFMA Montgomery 点运算](../../src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp)。
+
 ## 方法选择与输入校验
 
-Stage1 单次运行和队列模式共用五个独立选择项：`curve`（Montgomery / Edwards）、`target`（CPU / GPU）、`impl`（自动 / IFMA SIMD / GMP 标量）、`reduction`（自动 / Montgomery / Mersenne fold）及 `lcm`（素数幂最小公倍积 / 其 12 倍）。默认是 Montgomery 曲线、GPU 执行；Edwards GPU 需要编入该模块的 CUDA 可执行文件，OpenCL 会拒绝该组合。`Auto` 在内部 CPU 实现及 SIMD 归约枚举中均为 0；调用现有 IFMA 接口时显式转换，避免枚举序号与实现常量耦合。TOML 和 CLI 均拒绝无效选择值，参数默认值及范围由 [配置定义](../../config/ecm_options.json) 维护。
+Stage1 单次运行和队列模式共用曲线 `curve`、执行目标 `target`、CPU 算术 `impl`、IFMA 归约 `reduction`、Montgomery 标量倍数 `lcm` 和 CPU Montgomery 点乘 `cpu_mont_chain`。默认是 Montgomery 曲线、GPU 执行。Edwards GPU 需要编入该模块的 CUDA 可执行文件。TOML 和 CLI 均拒绝无效选择值，参数默认值及范围由 [配置定义](../../config/ecm_options.json) 维护。
 
 CPU `auto` 以实际参与运算的模数位宽为准。超过 10240 位时要求 IFMA，包括未填满八个 lane 的批次。Edwards 的宽位 GMP 二进制点乘需显式指定 `scalar`。Montgomery 的 GMP 标量后端仅支持 10240 位以内的模数。
 
@@ -66,7 +68,7 @@ task接收后端的拥有结果，调用纯编码器生成save，在发布后核
 
 ## 选择词汇与配置依赖
 
-[selection.h](../../include/ecm/stage1/selection.h)公开曲线/目标/CPU 实现/归约/标量构造类型，以及这些词汇的解析、合法组合和名称声明；11 个实际函数集中在 [selection.cpp](../../src/ecm/stage1/selection.cpp)。旧应用私有选择头已删除，不保留转发。字段、枚举值、ASCII 解析、sigma 参数冲突规则与名称保持。
+[selection.h](../../include/ecm/stage1/selection.h)公开曲线、目标、CPU 实现、归约、标量构造和 CPU Montgomery 点乘链类型。解析、合法组合和名称声明对应的实现集中在 [selection.cpp](../../src/ecm/stage1/selection.cpp)。
 
 task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/configuration_defaults.h)获取同一 JSON 定义，不包含应用的 TOML 解析/完整绑定。任务准备也只依赖公共选择合同。应用完整生成绑定引用这份默认值，未复制默认值来源或新增配置服务。真实无 SDK 任务编译记录覆盖共享 selection 实现，且不包含 ecm_toml.h/ecm_config_generated.h。
 
@@ -81,6 +83,8 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 ## CPU 执行与共享主机准备
 
 CPU 的 [Edwards workflow](../../src/ecm/stage1/edwards/cpu/workflow.cpp) 和 [Montgomery workflow](../../src/ecm/stage1/montgomery/cpu/workflow.cpp) 接收统一 Stage1Request、执行副本及借用的 Context，直接返回 ComputationResult。新计算不先编码 save 文本再解析；Edwards 只在恢复边界解码并校验兼容的 DONE_V1，空点记录转为 CompletedWithoutPoint。Montgomery 在释放局部数组前移动末点。共享 ISA 探测、CPU 绑定和进度显示位于 [cpu_runtime](../../src/ecm/stage1/cpu_runtime.cpp)；线程寿命、GMP 临时量及进度条由作用域管理，工作线程异常传回 workflow。普通基线 CXX 不继承 AVX512 编译设置。最终 save 和结果由 task 发布。
+
+Montgomery IFMA 默认对完整标量执行二进制 ladder，可显式选 PRAC。PRAC 计划由 [共享 Montgomery 计划器](../../src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp) 生成，每个条目记录素数、链种子及素数幂重复数，所有批次共享。CPU 执行器按条目连续推进八条 lane，检查点保存已消费的条目数、计划身份和当前投影 X:Z。二进制梯保留自己的双点检查点。PRAC 的末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。最终 save 使用同一 PARAM0 标量约定和格式。
 
 [task.cpp](../../src/ecm/stage1/task.cpp)拥有共同的 `compute_batch_s` 标量/cache/log 编排，以及 `save_naming` 身份投影；纯 LCM/NAF 数学留在 scalar，缓存读写留在 exponent_cache，时钟/TTY 留在 progress。归一化将指数缓存目录固定到任务的 persistence 选项；空目录明确禁用缓存，不在执行时重新套默认值。CLI 或配置的 off/none/0/- 保留禁用语义，PRAC 默认计划目录使用同一显式目录。固定 sigma 的 Prime95 有符号范围提醒是 Montgomery CPU 的局部兼容警告，不是共同拒绝条件。
 
@@ -155,7 +159,7 @@ CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/cuda/` 内的�
 
 local/dev/release 只有构建生成这一种实例排布，由 `tools/build/internal/cuda_modules.cmake` 从 `tiers.def` 派生32个Edwards容器模块和31×3个Montgomery参数化/容器模块。PRAC 可选目标使用同一个生成器，按标准几何和 sparse family/geometry 生成入口与工厂表。源码只保留实际设备模板，内核及辅助函数在同一编译单元可见，普通 Montgomery 分派直接按 param/容器查找工厂。全档枚举读取纯元数据，任务选定宽度后才调用工厂并查询 occupancy。Edwards binary/NAF 共用容器模块，sigma 仍为运行时参数。旧 NVCC 的普通 Montgomery 编译单元保持56/128/255预算，PRAC 不增加此前不存在的旧工具链预算。生成清单、内容身份及按需 JIT 限制见[构建与发布](../usage/BUILD.md#默认策略)。
 
-依赖方向为：任务/旧执行适配 → CUDA 私有 API → CUDA 主机实现 → 私有发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码、主机计划与运行时统一位于 `src/ecm/stage1/montgomery/cuda/prac/`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `src/ecm/stage1/edwards/cuda/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
+依赖方向为：任务/旧执行适配 → CUDA 私有 API → CUDA 主机实现 → 私有发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 主机计划和描述符位于 `src/ecm/stage1/montgomery/prac/`。CUDA PRAC 设备和运行时在 `src/ecm/stage1/montgomery/cuda/prac/`，仅在启用 CUDA PRAC 时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `src/ecm/stage1/edwards/cuda/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
 
 Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由相邻点及固定差点组成。GPU 以切片推进，避免一个超长 kernel 占用整段 B1。每曲线的末点先解码、检查，求 Z 与 N 的 GCD；可逆时归一化 X=X/Z mod N，再输出 save。
 
