@@ -20,7 +20,9 @@ int main(int argc,char **argv) {
         changed=a;changed.total=300;check(changed.id()==a.id());
         changed=a;++changed.skip;check(changed.id()!=a.id());
         changed=a;changed.save_sha256=std::string(64,'c');check(changed.id()!=a.id());
-        const auto path=a.path(dir,11694);check(path.filename().string().find(".ecm_ckpt_stage2_11694_")==0);
+        a.b1=1000;
+        const auto path=a.legacy_path(dir,11694);
+        check(a.path(dir,11694).filename()==".ecm_ckpt_stage2_11694_1000.dat");
         std::ostringstream legacy_identity;
         legacy_identity<<std::quoted("row A")<<' '<<std::quoted("old queue path")<<' '<<std::string(64,'d')<<' '
             <<std::quoted("old save path")<<' '<<a.save_sha256<<' '<<std::quoted((dir/"old_results.jsonl").string())
@@ -65,6 +67,7 @@ int main(int argc,char **argv) {
         requested.total=1200;terminal.reconfigure(requested);check(terminal.total==1200 && terminal.done==150);
         requested.b2=0;requested.auto_b2=true;terminal.reconfigure(requested);check(terminal.auto_b2 && !terminal.b2);
         terminal.pending="not-yet-confirmed";
+        terminal.version=3;
         auto changed_policy=requested;changed_policy.total=100;
         refused=false;try{terminal.reconfigure(changed_policy);}catch(const std::runtime_error &){refused=true;}
         check(refused && terminal.total==1200 && terminal.pending=="not-yet-confirmed");
@@ -84,6 +87,7 @@ int main(int argc,char **argv) {
         stage2_queue::State converted;
         check(stage2_queue::load_task(v2_dir,11694,requested,converted,[&]{++bound_reads;return std::vector<uint64_t>{10000};})==old_path);
         check(bound_reads==1 && converted.done==150 && converted.total==960 && converted.b2==10000 && converted.publication_task==policy.legacy_id());
+        converted.version=5;
         converted.reconfigure(requested);converted.save(requested.path(v2_dir,11694));
         check(converted.total==300 && converted.b2==20000 && converted.publication_task==policy.legacy_id());
         stage2_queue::State fast;
@@ -102,11 +106,12 @@ int main(int argc,char **argv) {
         auto unrelated=requested;unrelated.save_sha256=std::string(64,'c');stage2_queue::State empty;
         check(stage2_queue::load_task(v2_count_dir,11694,unrelated,empty).empty() && empty.identity.empty());
         stage2_queue::State parallel;
+        parallel.version=4;
         parallel.reconfigure(policy);
         parallel.reserved={{0,false,"first",receipt.string()},{1,true,"second",receipt.string()},
                            {2,false,"third",receipt.string()}};
         const auto parallel_dir=dir/"parallel";
-        const auto parallel_path=policy.path(parallel_dir,11694);
+        const auto parallel_path=policy.legacy_path(parallel_dir,11694);
         parallel.save(parallel_path);
         stage2_queue::State recovered;
         check(stage2_queue::load_task(parallel_dir,11694,policy,recovered)==parallel_path);
@@ -116,6 +121,19 @@ int main(int argc,char **argv) {
         try {recovered.reconfigure(changed_policy);}
         catch(const std::runtime_error &) {refused=true;}
         check(refused);
+        auto collision=policy;collision.aid="same-bit-count-and-B1";
+        const auto collision_dir=dir/"collision";
+        stage2_queue::State owner;
+        owner.reconfigure(policy);
+        owner.save(policy.path(collision_dir,11694));
+        std::filesystem::path destination;
+        stage2_queue::State second;
+        check(stage2_queue::load_task(collision_dir,11694,collision,second,{},&destination).empty() &&
+              destination.filename()==".ecm_ckpt_stage2_11694_1000-1.dat");
+        second.reconfigure(collision);second.save(destination);
+        std::filesystem::remove(policy.path(collision_dir,11694));
+        check(stage2_queue::load_task(collision_dir,11694,collision,second,{},&destination)==
+              collision.path(collision_dir,11694,1));
         recovered.reserved.front().completed=true;
         recovered.advance_completed();
         check(recovered.done==2 && recovered.reserved.size()==1 && recovered.reserved.front().position==2);
@@ -123,6 +141,31 @@ int main(int argc,char **argv) {
         stage2_queue::State compressed;
         check(compressed.load(parallel_path) && compressed.version==3 && compressed.done==2 &&
               compressed.pending=="third" && compressed.pending_results==receipt.string());
+        stage2_queue::State checkpoint;
+        auto three=policy;three.total=3;
+        checkpoint.reconfigure(three);
+        checkpoint.submission_path=(dir/"submission.json.txt").u8string();
+        checkpoint.reserved={{0},{1},{2}};
+        const auto nf=[](char key, int b2) {
+            return "{\"key\":\""+std::string(64,key)+"\",\"report\":{\"status\":\"NF\",\"curves\":1,\"b2\":"+
+                std::to_string(b2)+"}}";
+        };
+        checkpoint.complete(checkpoint.reserved[1],nf('b',20));
+        const auto new_path=dir/"new.dat";
+        checkpoint.save(new_path);
+        stage2_queue::State restart;
+        check(restart.load(new_path) && restart.version==5 && restart.done==0 &&
+              restart.reserved[1].completed && restart.latest_nf_position==2 && restart.nf_keys.size()==1);
+        restart.complete(restart.reserved.front(),nf('a',10));
+        check(restart.done==2 && restart.nf_keys.size()==2 &&
+              restart.latest_nf.find("\"b2\":20")!=std::string::npos);
+        restart.complete(restart.reserved.front(),nf('b',20));
+        check(restart.done==3 && restart.nf_keys.size()==2 && restart.reserved.empty());
+        restart.save(new_path);
+        {std::fstream change(new_path,std::ios::in|std::ios::out|std::ios::binary);
+         change.seekp(2);change.put('0');}
+        refused=false;try{restart.load(new_path);}catch(const std::runtime_error &){refused=true;}
+        check(refused);
         stage2_log::level=stage2_log::phases;
         stage2_log::phase("Read and validate Stage1 point");
         {stage2_log::PlanningScope quiet;stage2_log::phase("Plan Stage2 bounds and memory");

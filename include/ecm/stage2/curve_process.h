@@ -77,6 +77,7 @@ struct CurveProcessRequest {
     // Called synchronously at the original selection-output position, before
     // logging that line; domain validation/cache policy belongs to the caller.
     std::function<void(const std::string &)> observe_selection;
+    std::function<void(const std::string &)> commit_outcome;
 };
 // Returns 0 (success), 3 (verified factor excluded from timing), or 1 (failure).
 // Resource/I/O/stop failures throw; Job/pipe/process handles close on unwinding.

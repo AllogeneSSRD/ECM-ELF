@@ -136,7 +136,8 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     cmd+=L" --seed-backend "+quote(std::wstring(o.seed_backend.begin(),o.seed_backend.end()));
     cmd+=L" --reduce-backend "+quote(std::wstring(o.reduce_backend.begin(),o.reduce_backend.end()));
     cmd+=L" --reduce-threads "+std::to_wstring(o.reduce_threads)+L" --reduce-kernel "+std::to_wstring(o.reduce_kernel);
-    cmd += L" --results " + quote(results.wstring());
+    if(!results.empty())cmd += L" --results " + quote(results.wstring());
+    if(o.commit_outcome)cmd += L" --checkpoint-outcome";
     if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
     if(!o.submission_ini.empty())cmd+=L" --config "+quote(fs::path(o.submission_ini).wstring());
     if(o.submission_exponent)arg(L"--exponent",o.submission_exponent);
@@ -208,6 +209,11 @@ void CurveProcess::Impl::console_line(const std::string &text,bool error) {
 
 void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &output) {
     const auto &o=request;
+    constexpr char outcome_prefix[]="stage2_checkpoint_outcome: ";
+    if(!error && o.commit_outcome && text.rfind(outcome_prefix,0)==0) {
+        o.commit_outcome(text.substr(sizeof(outcome_prefix)-1));
+        return;
+    }
     constexpr char feedback_prefix[]="stage2_queue_observation: ";
     if(!error && o.queue_pipeline && o.tune_runtime && text.rfind(feedback_prefix,0)==0) {
         gpu_feedback=text.substr(sizeof(feedback_prefix)-1);

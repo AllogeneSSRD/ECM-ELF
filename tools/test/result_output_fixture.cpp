@@ -88,8 +88,12 @@ int main(int argc,char **argv) {
                 r::publish_submission(path,next,n.v);
                 r::seal_submissions(path,stage,next.publication_task,true);
                 const auto after=read_bytes(path);check(after.compare(0,before.size(),before)==0);
-                if(i==0)fs::create_hard_link(path,alias);
-                check(read_bytes(alias)==after);
+                fs::create_hard_link(path,alias);
+                bool alias_refused=false;
+                try {r::refresh_submission_if_owned(path);}
+                catch(const std::runtime_error&) {alias_refused=true;}
+                check(alias_refused && read_bytes(alias)==after);
+                fs::remove(alias);
                 r::publish_submission(path,next,n.v);
                 r::seal_submissions(path,stage,next.publication_task,true);
                 r::refresh_submission_if_owned(path);check(read_bytes(path)==after);
@@ -120,6 +124,36 @@ int main(int argc,char **argv) {
         }
         bool refused=false;try{r::refresh_internal(conflict);}catch(const std::runtime_error &){refused=true;}
         check(refused);{std::ifstream file(conflict);std::string line;std::getline(file,line);check(line=="unchanged");}
+        // Interrupt after staging the final NF bytes but before replacement.
+        const auto checkpoint_output=out/"checkpoint.json.txt";
+        const auto latest_nf=r::submission_json(value,n.v);
+        std::string committed;
+        refused=false;
+        try {
+            r::publish_stage2_checkpoint(checkpoint_output,{},latest_nf,3,&committed,[&] {
+                check(!fs::exists(checkpoint_output) && !committed.empty());
+                throw std::runtime_error("simulated checkpoint interruption");
+            });
+        } catch(const std::runtime_error&) {refused=true;}
+        check(refused && !fs::exists(checkpoint_output));
+        for(int repeat=0;repeat<2;++repeat)
+            r::publish_stage2_checkpoint(checkpoint_output,{},latest_nf,3,&committed,
+                []{throw std::runtime_error("staged report must not be regenerated");});
+        check(read_bytes(checkpoint_output)==committed+'\n');
+        auto hit=r::submission_json(factor,composite.v);
+        hit.pop_back();
+        for(int repeat=0;repeat<2;++repeat)r::publish_stage2_checkpoint(checkpoint_output,{hit,hit});
+        check(read_bytes(checkpoint_output)==committed+'\n'+hit+'\n');
+        check(!fs::exists(data_ledger(checkpoint_output)));
+        // An existing legacy ledger accepts the new writer's suffix and can
+        // recover it after it has observed it during legacy export.
+        const auto shared=out/"legacy-checkpoint.json.txt";
+        r::publish_submission(shared,value,n.v);
+        r::seal_submissions(shared,2,value.publication_task,true);
+        r::publish_stage2_checkpoint(shared,{hit});
+        const auto coexistence=read_bytes(shared);
+        r::refresh_submission_if_owned(shared);
+        check(read_bytes(shared)==coexistence && coexistence.find(hit)!=std::string::npos);
         // Receipt detection is independent of member order and rejects torn JSON.
         const auto receipt=out/"receipt.jsonl";
         fixture_text(receipt,"{\"status\":\"NF\",\"queue_receipt\":\"ready\"}\n{\"queue_receipt\":\"torn\"}");

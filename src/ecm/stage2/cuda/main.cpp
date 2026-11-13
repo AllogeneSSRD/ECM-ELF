@@ -92,6 +92,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--log-level") o.log_level = stage2_log::parse(value());
         else if (a == "--debug-log-file") { o.debug_file=value(); o.debug_log=true; }
         else if (a == "--queue-receipt") o.receipt=value();
+        else if (a == "--checkpoint-outcome") o.checkpoint_outcome=true;
         else if (a == "--publication-task") o.publication_task=value();
         else if (a == "--stage2-stop-handle") o.stop_handle=num();
         else if (a == "--gui-events") o.gui_events=true;
@@ -392,7 +393,7 @@ int driver(Options o) {
         configure_phase_experiment(o);
         return curve_worker(o);
     }
-    if(o.fixed_queue_route || o.queue_requested_b2 || !o.queue_phase_gate.empty() || o.queue_workspace_lease ||
+    if(o.checkpoint_outcome || o.fixed_queue_route || o.queue_requested_b2 || !o.queue_phase_gate.empty() || o.queue_workspace_lease ||
        o.queue_gpu_start || o.queue_gpu_done || o.queue_gpu_input)
         throw std::runtime_error("Stage2 queue route arguments are internal to curve workers");
     if(o.stop_handle) {
@@ -558,6 +559,7 @@ int driver(Options o) {
     const std::string suffix = o.worker == 1 ? "" : "_" + std::to_string(o.worker);
     const fs::path results = !o.results.empty() ? absolute_from(cwd, o.results) :
         absolute_from(base, s.results.empty() ? ecm_config::worker_file(ecm_config::defaults::stage2_stage2_results_file,o.worker) : s.results);
+    const bool explicit_results = !o.results.empty() || !s.results.empty();
     fs::path log;
     if (!o.log.empty()) log = absolute_from(cwd, o.log);
     else if (!s.has_log) log = absolute_from(base, ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,o.worker));
@@ -663,7 +665,7 @@ int driver(Options o) {
         std::cout << "tune_complete: profile=" << destination.string() << std::endl;
         return 0;
     }
-    return run_tasks(std::move(o),{cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir},
+    return run_tasks(std::move(o),{cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir,explicit_results},
                      {cfg.b2_ratio,cfg.worktodo_priority,cfg.worktodo_skip,cfg.finished},
                      {s.b2,s.arena,s.owner_mb});
 }

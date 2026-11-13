@@ -65,6 +65,7 @@ struct Options {
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
+    bool checkpoint_outcome = false;
     bool gui_events=false;
     uint64_t stop_handle=0;
     uint64_t offset = 0, hash = 0, index = 0;

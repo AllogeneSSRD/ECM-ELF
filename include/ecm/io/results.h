@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -40,9 +41,20 @@ std::string internal_json(Submission, mpz_srcptr, uint64_t, const std::string&,
 void check_stage1_outputs(const std::filesystem::path&, const std::filesystem::path&);
 void check_stage2_outputs(const std::filesystem::path&, const std::filesystem::path&,
                           bool resumed = false);
+void publish_stage2_checkpoint(const std::filesystem::path&, const std::vector<std::string>& factors,
+                              const std::string& latest_nf = {}, uint64_t count = 0,
+                              std::string* final_nf = nullptr,
+                              const std::function<void()>& save_checkpoint = {});
 std::vector<uint64_t> legacy_stage2_bounds(const std::filesystem::path&);
-bool has_stage2_attempt(const std::filesystem::path&, const std::string&, uint64_t, mpz_srcptr,
-                        uint64_t, uint64_t, bool);
+struct LegacyStage2Curve {
+    uint64_t order, sigma, b1, b2;
+    bool edwards, owned, sealed;
+    std::string report;
+};
+std::vector<LegacyStage2Curve> read_legacy_stage2_curves(const std::filesystem::path&,
+                                                       const std::string& task, mpz_srcptr);
+void retire_legacy_stage2_curves(const std::filesystem::path&, const std::string& task,
+                                 const std::function<bool(const std::string&)>& migrated_nf_key);
 void publish_stage1_batch(const std::filesystem::path&, const std::filesystem::path&,
                           std::vector<Stage1BatchRecord>, mpz_srcptr, const std::string&);
 bool has_result_ledger(const std::filesystem::path&);

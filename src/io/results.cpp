@@ -544,17 +544,21 @@ std::string stage1_factor_identity(const json::Value&);
 uint64_t result_sigma(const json::Value&);
 bool stage1_modulus_matches(const json::Value&, mpz_srcptr);
 
-bool owned_stage1_submission(const std::string& text) {
+bool owned_submission(const std::string& text, bool stage1_only = false) {
     std::istringstream in(text);
     std::string line;
     bool found = false;
     while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
         if (line.empty())
             continue;
         const auto row = json::parse(line);
         if (row.type != 'o' || row.get("program").get("name").text() != ecm_program::name ||
+            row.get("worktype").text() != "ECM" ||
             (row.get("status").text() != "NF" && row.get("status").text() != "F") ||
-            (row.get("stage").text() != "1" && row.get("b1").text() != row.get("b2").text()) ||
+            (stage1_only && row.get("stage").text() != "1" &&
+             row.get("b1").text() != row.get("b2").text()) ||
             row.get("checksum").dump() !=
                 json::parse(with_result_checksum(line)).get("checksum").dump())
             return false;
@@ -602,13 +606,18 @@ void append_submissions(const fs::path& path, const fs::path& ledger) {
         if (record.key != "publication-order" || record.group != "ORDER" || value.type != 's')
             throw std::runtime_error("invalid submission publication history");
         ordered = value.text();
-        // Stage1 commits its two final files without a private ledger. Adopt
-        // only a verified Stage1 suffix appended after this Stage2 history.
-        if (actual.size() > ordered.size() && actual.compare(0, ordered.size(), ordered) == 0 &&
-            owned_stage1_submission(actual.substr(ordered.size())))
+        // Checkpoint-based publishers can add a verified ECM suffix after this history.
+        if (actual.size() > ordered.size()) {
+            size_t suffix = ordered.size();
+            if (suffix && ordered.back() != '\n' && actual[suffix] == '\n')
+                ++suffix;
+            if (actual.compare(0, ordered.size(), ordered) ||
+                !owned_submission(actual.substr(suffix)))
+                throw std::runtime_error("submission output differs from publication history");
             ordered = actual;
-        if (actual.size() > ordered.size() || ordered.compare(0, actual.size(), actual) != 0)
+        } else if (ordered.compare(0, actual.size(), actual) != 0) {
             throw std::runtime_error("submission output differs from publication history");
+        }
     }
     std::set<std::string> published;
     std::istringstream existing(ordered);
@@ -781,7 +790,7 @@ fs::path prepare_submission_ledger(const fs::path& path) {
     const auto ledger = migrate_result_ledger(path);
     if (!fs::exists(ledger / "format")) {
         // Never replace an unrelated Prime95/manual result file.
-        if (fs::exists(path) && !owned_stage1_submission(read_submission_bytes(path)))
+        if (fs::exists(path) && !owned_submission(read_submission_bytes(path)))
             throw std::runtime_error(
                 "submission file has no owned ledger; select a fresh output path");
         fs::create_directories(ledger);
@@ -802,7 +811,7 @@ void check_stage2_outputs(const fs::path& internal, const fs::path& submission, 
     auto locks = lock_result_pair(internal, submission);
     if (resumed || internal_has_stage2(internal) ||
         (fs::exists(submission) && fs::file_size(submission) &&
-         !owned_stage1_submission(read_submission_bytes(submission))))
+         !owned_submission(read_submission_bytes(submission), true)))
         throw std::runtime_error(
             "Stage2 result ledger is missing; restore its data directory before continuing");
 }
@@ -824,27 +833,92 @@ std::vector<uint64_t> legacy_stage2_bounds(const fs::path& submission) {
     return {bounds.begin(), bounds.end()};
 }
 
-bool has_stage2_attempt(const fs::path& submission, const std::string& task, uint64_t order,
-                        mpz_srcptr n, uint64_t sigma, uint64_t b1, bool edwards) {
+std::vector<LegacyStage2Curve> read_legacy_stage2_curves(const fs::path& submission,
+                                                       const std::string& task, mpz_srcptr n) {
+    std::vector<LegacyStage2Curve> curves;
     if (!has_result_ledger(submission))
-        return false;
+        return curves;
     auto lock = lock_result(submission);
     const auto ledger = migrate_result_ledger(submission);
     require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
-    const auto prefix = "T:" + task + ":O:" + std::to_string(order) + ':';
-    for (const auto& file : fs::recursive_directory_iterator(ledger))
-        if (file.path().extension() == ".curve") {
-            const auto entry = read_submission_entry(file.path());
-            if (entry.group.compare(0, prefix.size(), prefix) == 0)
-                return true;
-            if (entry.group != "F")
-                continue;
-            const auto row = json::parse(entry.json);
-            if (row.has("Edwards") == edwards && result_sigma(row) == sigma &&
-                row.get("b1").text() == std::to_string(b1) && stage1_modulus_matches(row, n))
-                return true;
+    const auto prefix = "T:" + task + ':';
+    std::set<std::string> sealed;
+    std::vector<fs::path> entries;
+    for (const auto& file : fs::recursive_directory_iterator(ledger)) {
+        if (file.path().extension() == ".curve")
+            entries.push_back(file.path());
+        else if (file.path().extension() == ".batch") {
+            std::istringstream ids(read_submission_entry(file.path()).group);
+            std::string id;
+            while (std::getline(ids, id, ','))
+                if (!sealed.insert(id).second)
+                    throw std::runtime_error("legacy Stage2 NF receipt occurs in two batches");
         }
-    return false;
+    }
+    const auto modulus = ecm_edwards::hex(n) + '|';
+    for (const auto& file : entries) {
+        const auto entry = read_submission_entry(file);
+        if (entry.key.compare(0,modulus.size(),modulus))
+            continue;
+        std::istringstream key(entry.key.substr(modulus.size()));
+        std::string sigma,b1,b2,stage,model;
+        if (!std::getline(key,sigma,'|') || !std::getline(key,b1,'|') ||
+            !std::getline(key,b2,'|') || !std::getline(key,stage,'|') ||
+            !std::getline(key,model,'|') || (model!="ed" && model!="mont0"))
+            continue;
+        const auto row = json::parse(entry.json);
+        if (entry.group != "F" && row.get("b1").text() == row.get("b2").text())
+            continue;
+        if (!owned_submission(entry.json))
+            throw std::runtime_error("invalid legacy Stage2 submission receipt");
+        const bool owned = entry.group.compare(0,prefix.size(),prefix) == 0;
+        curves.push_back({owned?submission_order(entry):0,std::stoull(sigma),std::stoull(b1),
+                          std::stoull(b2),model=="ed",owned,
+                          sealed.count(file.stem().string())!=0,entry.json});
+    }
+    return curves;
+}
+
+void retire_legacy_stage2_curves(const fs::path& submission, const std::string& task,
+                                 const std::function<bool(const std::string&)>& migrated_nf_key) {
+    if (!has_result_ledger(submission))
+        return;
+    auto lock = lock_result(submission);
+    const auto ledger = migrate_result_ledger(submission);
+    require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
+    const auto prefix = "T:" + task + ':';
+    std::vector<fs::path> migrated;
+    for (const auto& file : fs::recursive_directory_iterator(ledger)) {
+        if (file.path().extension() != ".curve")
+            continue;
+        const auto entry = read_submission_entry(file.path());
+        if (entry.group.compare(0,prefix.size(),prefix))
+            continue;
+        // Parse the four numeric identity fields. The stage is the fourth
+        // field after N, so a numeric zero elsewhere cannot be mistaken for it.
+        size_t separator = 0;
+        for (unsigned field=0;field<4 && separator!=entry.key.npos;++field) {
+            separator=entry.key.find('|',separator);
+            if(separator!=entry.key.npos)++separator;
+        }
+        if (separator==entry.key.npos || entry.key.compare(separator,2,"0|"))
+            continue;
+        const auto key = entry.key.substr(0,separator) + entry.key.substr(separator+2);
+        if (migrated_nf_key(key))
+            migrated.push_back(file.path());
+    }
+    for (const auto& file : migrated) {
+        auto archived = file;
+        archived += ".migrated";
+        if (fs::exists(archived))
+            throw std::runtime_error("migrated Stage2 result archive already exists");
+#ifdef _WIN32
+        if (!MoveFileExW(file.c_str(), archived.c_str(), MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error("cannot archive migrated Stage2 result receipt");
+#else
+        fs::rename(file,archived);
+#endif
+    }
 }
 
 void publish_submission(const fs::path& path, const Submission& r, const mpz_t n, bool render_now) {
@@ -1145,6 +1219,21 @@ std::string stage1_factor_identity(const json::Value& row) {
            row.get("b1").text() + "|" + model + "|" + row.get("factors").dump();
 }
 
+std::string stage2_factor_identity(const json::Value& row) {
+    if (row.get("status").text() != "F")
+        return {};
+    const auto stage1 = stage1_factor_identity(row);
+    if (!stage1.empty())
+        return "1|" + stage1;
+    ecm_edwards::Integer n;
+    result_modulus(row, n.v);
+    const auto model = row.has("Edwards") ? "ed" :
+        "mont" + row.get("param").text(row.has("GMP-ECM-param3") ? "3" : "0");
+    return "2|" + ecm_edwards::hex(n.v) + "|" + std::to_string(result_sigma(row)) + "|" +
+        row.get("b1").text() + "|" + row.get("b2").text() + "|" + model + "|" +
+        row.get("factors").dump();
+}
+
 bool stage1_work_matches(const json::Value& row, const Submission& r, mpz_srcptr n) {
     return row.get("b1").text() == std::to_string(r.b1) && row.has("Edwards") == r.edwards &&
            (r.edwards || row.get("param").text(row.has("GMP-ECM-param3") ? "3" : "0") ==
@@ -1199,6 +1288,73 @@ void replay_stage1_plan(const json::Value& plan, const fs::path& internal,
         actual += tail.substr(available);
 }
 } // namespace
+
+void publish_stage2_checkpoint(const fs::path& path, const std::vector<std::string>& factor_reports,
+                               const std::string& latest_nf, uint64_t count,
+                               std::string* final_nf,
+                               const std::function<void()>& save_checkpoint) {
+    auto lock = lock_result(path);
+    if (has_result_ledger(path)) {
+        const auto ledger = migrate_result_ledger(path);
+        require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
+        append_submissions(path, ledger);
+    }
+    auto actual = read_submission_bytes(path);
+    if (!actual.empty() && !owned_submission(actual))
+        throw std::runtime_error("Stage2 submission file is not an owned ECM result");
+    std::set<std::string> reports, factors;
+    std::istringstream exported(actual);
+    std::string line;
+    while (std::getline(exported, line)) {
+        if (line.empty() || line == "\r")
+            continue;
+        const auto row = json::parse(line);
+        reports.insert(row.dump());
+        const auto key = stage2_factor_identity(row);
+        if (!key.empty())
+            factors.insert(key);
+    }
+    std::string tail;
+    for (const auto& factor : factor_reports) {
+        const auto key = stage2_factor_identity(json::parse(factor));
+        if (key.empty() || !owned_submission(factor))
+            throw std::runtime_error("invalid Stage2 checkpoint factor report");
+        if (factors.insert(key).second)
+            tail += factor + '\n';
+    }
+    if (count) {
+        if (!final_nf || !save_checkpoint)
+            throw std::runtime_error("Stage2 NF publication needs a checkpoint");
+        if (final_nf->empty()) {
+            auto row = json::parse(latest_nf);
+            if (row.get("status").text() != "NF" || !owned_submission(latest_nf))
+                throw std::runtime_error("invalid Stage2 checkpoint NF report");
+            row.set("curves", json::Value::number(std::to_string(count)));
+            auto candidate = with_result_checksum(row.dump());
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (reports.count(candidate)) {
+                if (std::chrono::steady_clock::now() > deadline)
+                    throw std::runtime_error("system clock did not advance for Stage2 NF report");
+                row.set("timestamp", json::Value::string(utc_timestamp()));
+                candidate = with_result_checksum(row.dump());
+                if (reports.count(candidate))
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            *final_nf = std::move(candidate);
+            save_checkpoint();
+        }
+        if (!owned_submission(*final_nf) ||
+            json::parse(*final_nf).get("curves").text() != std::to_string(count))
+            throw std::runtime_error("invalid staged Stage2 NF report");
+        if (!reports.count(json::parse(*final_nf).dump()))
+            tail += *final_nf + '\n';
+    }
+    if (!tail.empty()) {
+        if (!actual.empty() && actual.back() != '\n')
+            actual += '\n';
+        ecm_io::write_atomic(path, actual + tail, ".new");
+    }
+}
 
 void check_stage1_outputs(const fs::path& internal, const fs::path& submission) {
     if (internal.empty() || submission.empty())

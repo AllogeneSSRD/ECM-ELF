@@ -4,6 +4,7 @@ The seed helper writes real storage formats; only remaining curves run on GPU.
 No production save, queue, executable or result file is modified.
 """
 import argparse,ctypes,hashlib,json,re,subprocess,time
+import shutil
 from ctypes import wintypes
 from pathlib import Path
 from test_result_output_consistency import crc_valid
@@ -46,21 +47,28 @@ def main():
         assert all(row['b2']==20000 for row in rows[-new_curves:]) if new_curves else all(row['b2']==10000 for row in rows)
         # V2 publication ownership must survive the new checkpoint identity.
         assert 'ECMSTAGE2=' in (work/'finished.txt').read_text()
-    for schema in ('v3','v2'):
+    for schema in ('v3','v2','v1'):
         work,_=seed(schema+'_shrink',schema);task(work,100)
         text=execute(work);assert 'already completed=150' in text and 'curve_start:' not in text and 'remaining=0' in text
         finish(work,150,0,10000);checks.append(schema+'_150_of_960_to_100')
     work,_=seed('pending_ack','pending',149);task(work,100)
-    text=execute(work);assert 'Recovered completed curve' in text and 'already completed=150' in text
+    text=execute(work);assert 'legacy_archived=1' in text and 'already completed=150' in text
     finish(work,150,0,10000);checks.append('pending_receipt_before_shrink')
     work,_=seed('unconfirmed','unconfirmed');task(work,100)
-    text=execute(work);assert 'Abandoned uncommitted' in text
+    text=execute(work);assert 'legacy_archived=1' in text and 'curve_start:' not in text
     finish(work,150,0,10000);checks.append('uncommitted_attempt_abandoned_before_shrink')
-    work,_=seed('torn_internal','torn_internal');line=task(work,100)
-    before={str(path):path.read_bytes() for path in (work/'progress').glob('*.dat')}
-    text=execute(work,good=False);assert 'unconfirmed curve' in text and (work/'worktodo.txt').read_text()==line
-    assert all(Path(path).read_bytes()==value for path,value in before.items())
-    assert not (work/'results.json.txt').exists();checks.append('unconfirmed_policy_change_preserves_evidence')
+    work,_=seed('torn_internal','torn_internal');task(work,100)
+    text=execute(work);assert 'already completed=151' in text and 'curve_start:' not in text
+    report,=map(json.loads,(work/'results.json.txt').read_text().splitlines())
+    assert report['curves']==151 and crc_valid(report)
+    checks.append('ledger_recovers_torn_jsonl')
+    work,_=seed('missing_evidence','v3');line=task(work,100)
+    shutil.move(work/'data',work/'evidence')
+    before={path:path.read_bytes() for path in (work/'progress').glob('*.dat')}
+    text=execute(work,good=False)
+    assert 'cannot verify legacy Stage2 outcome' in text and (work/'worktodo.txt').read_text()==line
+    assert {path:path.read_bytes() for path in (work/'progress').glob('*.dat')}==before
+    checks.append('missing_evidence_retains_original')
     if not a.skip_long_continue:
         work,_=seed('v3_continue');task(work,300)
         started=time.monotonic();text=execute(work);finish(work,300,150,20000)
@@ -68,7 +76,7 @@ def main():
         checks.append('v3_150_of_960_to_300_with_new_B2')
         print('PASS continued 150 GPU curves; seconds='+str(round(time.monotonic()-started,3)),flush=True)
     # Stop after one curve, then change the policy again. This verifies the V2
-    # import is persisted as V3 and keeps its original receipt owner.
+    # import is persisted as schema 5 before resuming arithmetic.
     work,metadata=seed('v2_resume_stop','v2');task(work,300)
     class Security(ctypes.Structure):
         _fields_=[('length',wintypes.DWORD),('descriptor',wintypes.LPVOID),('inherit',wintypes.BOOL)]
@@ -92,11 +100,65 @@ def main():
             if process.poll() is None:process.kill();process.wait()
             kernel.CloseHandle(event)
     checkpoints=list((work/'progress').glob('*.dat'));assert len(checkpoints)==1
-    state=checkpoints[0].read_text();assert state.startswith('3 151 300 ') and metadata['publication_task'] in state
+    state=checkpoints[0].read_text();assert state.startswith('5 151 300 ') and metadata['publication_task'] in state
+    assert checkpoints[0].name=='.ecm_ckpt_stage2_521_1000.dat'
+    old=Path(metadata['checkpoint'])
+    assert not old.exists() and Path(str(old)+'.migrated').exists()
+    shutil.move(work/'data',work/'retired-ledger')
+    (work/'stage2_results.jsonl').unlink()
     task(work,100,30000);text=execute(work,'shrink_again')
     assert 'already completed=151' in text and 'curve_start:' not in text
-    finish(work,151,1,20000);checks.append('v2_import_new_B2_stop_and_shrink_to_completed_151')
-    report={'complete':True,'checks':checks,'gpu_curves':1 if a.skip_long_continue else 151,'seeded_prior_NF_per_case':150,
+    report,=map(json.loads,(work/'results.json.txt').read_text().splitlines())
+    assert report['curves']==151 and report['b2']==20000 and crc_valid(report)
+    assert not checkpoints[0].exists()
+    checks.append('v2_import_stop_then_remove_legacy_evidence')
+    work,_=seed('v4_gap','v4',done=2);task(work,4)
+    text=execute(work)
+    assert re.findall(r'^curve_start: .* record=(\d+) ',text,re.M)==['3']
+    report,=map(json.loads,(work/'results.json.txt').read_text().splitlines())
+    assert report['curves']==4 and crc_valid(report)
+    checks.append('v4_out_of_order_gap')
+    work,meta=seed('v5_old_name','v5',done=0);task(work,1)
+    text=execute(work)
+    assert '.ecm_ckpt_stage2_521_1000.dat' in text
+    assert not Path(meta['checkpoint']).exists() and Path(meta['checkpoint']+'.migrated').exists()
+    checks.append('v5_old_sha_filename')
+    work,meta=seed('sealed_history','sealed',done=4);task(work,4,10000)
+    published=(work/'results.json.txt').read_bytes()
+    execute(work)
+    assert (work/'results.json.txt').read_bytes()==published
+    assert not Path(meta['checkpoint']).exists()
+    checks.append('sealed_nf_not_republished')
+    work,meta=seed('migration_retry','v3',done=4);task(work,4,10000)
+    archive=Path(meta['checkpoint']+'.migrated')
+    archive.mkdir()
+    text=execute(work,'archive_blocked',good=False)
+    assert 'cannot archive imported Stage2 checkpoint' in text
+    assert Path(meta['checkpoint']).exists()
+    assert (work/'progress/.ecm_ckpt_stage2_521_1000.dat').read_text().startswith('5 4 ')
+    archive.rmdir()
+    shutil.move(work/'data',work/'retired-ledger')
+    (work/'stage2_results.jsonl').unlink()
+    execute(work)
+    row,=map(json.loads,(work/'results.json.txt').read_text().splitlines())
+    assert row['curves']==4 and crc_valid(row)
+    assert archive.is_file() and not Path(meta['checkpoint']).exists()
+    checks.append('resume_interrupted_migration_from_new_checkpoint')
+    work,meta=seed('pending_without_ledger','pending',done=0);task(work,1,10000)
+    row_path=work/'stage2_results.jsonl'
+    row=json.loads(row_path.read_text())
+    point=(work/'e_m521_1000.save').read_bytes().split(b'\n',1)[0]
+    record_hash=14695981039346656037
+    for byte in point:
+        record_hash=((record_hash^byte)*1099511628211) % (1 << 64)
+    row['stage2-engine'].update(record=1,record_hash=str(record_hash))
+    row_path.write_text(json.dumps(row)+'\n',encoding='utf-8')
+    shutil.move(work/'data',work/'retired-ledger')
+    text=execute(work,good=False)
+    assert 'cannot verify legacy Stage2 outcome' in text and Path(meta['checkpoint']).exists()
+    assert 'curve_start:' not in text
+    checks.append('confirmed_pending_with_missing_ledger_preserved')
+    report={'complete':True,'checks':checks,'gpu_curves':3 if a.skip_long_continue else 153,'default_seeded_prior_nf':150,
         'exe_sha256':hashlib.sha256(exe.read_bytes()).hexdigest(),'fixture_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest()}
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report),flush=True)
 

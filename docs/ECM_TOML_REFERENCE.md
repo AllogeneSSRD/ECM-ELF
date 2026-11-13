@@ -1381,9 +1381,9 @@ stage2_progress_dir = ""
 
 Type / 类型: `string`; range / 范围: `<dir>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Directory for per-task .ecm_ckpt_stage2_<bits>_<task-id>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, full save contents and skip. On restart the current effective B2/Auto B2 and requested curve count override the checkpoint policy; completed curves retain their actual bounds. A target below the completed count warns and seals all completed work. Files contain counts, policy and receipt metadata only, and are removed after publication and queue advancement.
+Directory for per-task .ecm_ckpt_stage2_<bits>_<B1>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, full save contents and skip. On restart the current effective B2/Auto B2 and requested curve count override the checkpoint policy; completed curves retain their actual bounds. A target below the completed count warns and seals all completed work. New checkpoints contain completed curve state and pending submission data. They are removed after publication and queue advancement.
 
-每任务 .ecm_ckpt_stage2_<bits>_<task-id>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。文件仅保存计数、执行策略和回执元数据，结果发布并推进队列后清除。
+每任务 .ecm_ckpt_stage2_<bits>_<B1>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。
 
 ### stage2_progress_file
 
@@ -1393,9 +1393,9 @@ stage2_progress_file = ""
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix .progress file. A matching task's completed count and pending receipt are imported into its own .ecm_ckpt_stage2_<bits>_<task-id>.dat file. An unrelated legacy task is retained and does not stop this task. New progress files use stage2_progress_dir; no arithmetic state is checkpointed.
+Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix .progress file. A matching task's completed count and pending receipt are imported into its own .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this task. New progress files use stage2_progress_dir; no arithmetic state is checkpointed.
 
-旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_<bits>_<task-id>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。
+旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。
 
 ### stage2_ratio_adjust
 
@@ -1445,9 +1445,9 @@ stage2_results_file = ""
 
 Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-JSONL results for successful Stage2 curves, including factors and resume receipts. Empty uses the default filename. Do not independently delete or replace it while resuming an unfinished queue; it is needed to reconcile completed curves.
+Optional per-curve Stage2 JSONL for new GPU queue tasks. Empty disables it for queue runs. Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint migration completes.
 
-指定 Stage2 成功曲线结果的 JSONL 文件，包含因子信息和续跑回执。留空使用默认文件名；不要在未完成队列续跑期间单独删除或替换它，否则会失去回执对账依据。
+新 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。
 
 ### stage2_save_dir
 
