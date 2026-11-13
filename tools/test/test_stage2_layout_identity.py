@@ -41,7 +41,7 @@ class LayoutIdentity(unittest.TestCase):
     def test_writer_requires_layout_aware_reader(self):
         document = tomllib.loads(write_profile([dict(uuid_hex='fixture')],
             [self.row('old', 70), self.row('new', 50, groot_balanced=1)]))
-        self.assertEqual(document['profile']['format'], 13)
+        self.assertEqual(document['profile']['format'], 16)
         columns, *rows = document['width']['5700']['matrix']
         self.assertEqual({row[columns.index('groot_balanced')] for row in rows}, {0, 1})
 

@@ -12,9 +12,9 @@
 #include "ecm/stage1/ntt_length.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=15;
+constexpr unsigned format=16;
 inline constexpr const char *parallel_columns[]={
-    "condition","scope","target_bits","b1","b2","d","carrier_exponent","phase_mask","workers","curves",
+    "condition","scope","target_bits","b1","b2","d","required_free_bytes","carrier_exponent","phase_mask","workers","curves",
     "repeats","mean_wall_seconds","mean_middle_seconds","middle_stddev_seconds","program_version","updated_at"
 };
 inline bool supported_format(Word value){return value>=8 && value<=format;}
@@ -214,25 +214,6 @@ inline double deviation(const std::vector<double> &values) {
     for(double x:values){const double delta=x-mean;mean+=delta/double(++n);m2+=delta*(x-mean);}
     return n>1?std::sqrt(std::max(0.,m2/double(n-1))):0;
 }
-// Length-prefixed scalar strings keep the matrix flat and identities unambiguous.
-inline std::set<std::string> measurement_ids(const Fields &s) {
-    std::set<std::string> ids;
-    if(s.count("measurement_ids")) {
-        const auto value=text(s,"measurement_ids");size_t pos=0;
-        while(pos<value.size()) {
-            const auto sep=value.find(':',pos);if(sep==value.npos)throw std::runtime_error("invalid measurement identity set");
-            const auto length=cost::integer(value.substr(pos,sep-pos));pos=sep+1;
-            if(!length || length>value.size()-pos || !ids.insert(value.substr(pos,size_t(length))).second)
-                throw std::runtime_error("invalid/duplicate measurement identity");
-            pos+=size_t(length);
-        }
-    } else if(s.count("runtime_sample_id"))ids.insert(text(s,"runtime_sample_id"));
-    else if(measured(s))ids.insert("summary:"+required(s,"mean_seconds")+":"+required(s,"stddev_seconds")+":"+required(s,"repeats"));
-    return ids;
-}
-inline std::string encoded_ids(const std::set<std::string> &ids) {
-    std::string value;for(const auto &id:ids)value+=std::to_string(id.size())+":"+id;return ecm_stage2::tune::portable::quoted(value);
-}
 inline void validate_ntt_summary(const Fields &s) {
     validate_provenance(s);
     const auto n=uint(s,"length"),b=uint(s,"batch");
@@ -332,17 +313,12 @@ inline void validate(const Fields &s) {
         throw std::runtime_error("portable measurement lacks completed arithmetic evidence");
     if(runtime_observation(s) && !measured(s))
         throw std::runtime_error("invalid runtime aggregate count");
-    if(runtime_observation(s) && s.count("runtime_sample_id") &&
-       (text(s,"runtime_sample_id").empty() || text(s,"runtime_sample_id").size()>256))
-        throw std::runtime_error("invalid runtime observation identity");
+    if(s.count("required_free_bytes") && !uint(s,"required_free_bytes"))
+        throw std::runtime_error("invalid Stage2 memory requirement");
     if(optional_uint(s,"runtime_probe")>1)throw std::runtime_error("invalid runtime probe marker");
     const auto spread=real(s,"stddev_seconds");
     if(uint(s,"repeats")==1 && spread!=0)throw std::runtime_error("single observation has nonzero standard deviation");
     uint(s,"condition");text(s,"execution_path");
-    if(measured(s) && s.count("verified") &&
-       (!s.count("measurement_ids") || measurement_ids(s).empty() ||
-        (runtime_observation(s) && measurement_ids(s).size()!=uint(s,"repeats"))))
-        throw std::runtime_error("invalid aggregate measurement identities");
     for(const auto &field:s)if(!field.second.empty() && field.second.front()=='[')
         throw std::runtime_error("portable summaries must not contain sampling arrays");
     if(optional_uint(s,"validation_count"))real(s,"validation_max_relative_error");
@@ -448,14 +424,14 @@ inline Fields compact_sample(Fields s) {
     if(!s.count("giant_chain_block"))s["giant_chain_block"]="64";
     validate(s);
     if(measured(s)) {
-        s["verified"]="1";s["measurement_ids"]=encoded_ids(measurement_ids(s));
+        s["verified"]="1";
         if(!optional_uint(s,"runtime_probe",1))s["preferred_order"]=std::to_string(optional_uint(s,"runtime_completed_ns"));
     }
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
         "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder","groot_balanced","giant_tail_balance","giant_chain_block","baby_coop","giant_coop","seed_coop","reduce_coop","reduce_threads","reduce_kernel",
         "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
-        "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
+        "required_free_bytes","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
         "phase_inverse_setup_seconds","phase_giant_loop_seconds","phase_descent_seconds","phase_accum_seconds","phase_finalize_seconds",
         "giant_seconds","gtrees_seconds","fold_seconds","point_check_seconds","model_relative_error_allowance"};
@@ -464,17 +440,6 @@ inline Fields compact_sample(Fields s) {
 }
 // Merge sufficient statistics, preserving slow observations and sample variance.
 inline bool combine(Fields &old,const Fields &sample,Word limit=1000000000) {
-    const auto before=measurement_ids(old),added=measurement_ids(sample);
-    if(std::includes(before.begin(),before.end(),added.begin(),added.end()))return false;
-    if(std::includes(added.begin(),added.end(),before.begin(),before.end())) {
-        if(uint(sample,"repeats")<uint(old,"repeats"))throw std::runtime_error("measurement snapshot count regressed");
-        if(uint(sample,"repeats")>limit)return false;
-        const auto order=std::max(optional_uint(old,"preferred_order"),optional_uint(sample,"preferred_order"));
-        const auto previous=old;old=sample;merge_provenance(old,previous);
-        if(order)old["preferred_order"]=std::to_string(order);return true;
-    }
-    for(const auto &id:added)if(before.count(id))
-        throw std::runtime_error("partially overlapping tune snapshots; recover deduplicated original JSONL instead");
     const auto n=uint(old,"repeats"),m=uint(sample,"repeats");
     if(n>=limit || m>limit-n)return false;
     const double a=real(old,"mean_seconds"),b=real(sample,"mean_seconds"),delta=b-a;
@@ -486,13 +451,29 @@ inline bool combine(Fields &old,const Fields &sample,Word limit=1000000000) {
         f.second=numeric(real(old,f.first.c_str())+(real(sample,f.first.c_str())-real(old,f.first.c_str()))*double(m)/double(n+m));
     old["mean_seconds"]=numeric(a+delta*double(m)/double(n+m));
     old["stddev_seconds"]=numeric(std::sqrt(std::max(0.,m2/double(n+m-1))));old["repeats"]=std::to_string(n+m);
-    auto ids=before;ids.insert(added.begin(),added.end());old["measurement_ids"]=encoded_ids(ids);
+    if(sample.count("required_free_bytes"))
+        old["required_free_bytes"]=std::to_string(std::max(optional_uint(old,"required_free_bytes"),uint(sample,"required_free_bytes")));
     const auto order=std::max(optional_uint(old,"preferred_order"),optional_uint(sample,"preferred_order"));
     if(order)old["preferred_order"]=std::to_string(order);
     const auto checks=optional_uint(old,"validation_count")+optional_uint(sample,"validation_count");
     if(checks){old["validation_count"]=std::to_string(checks);old["validation_max_relative_error"]=numeric(std::max(optional_real(old,"validation_max_relative_error"),optional_real(sample,"validation_max_relative_error")));}
     merge_provenance(old,sample);
     return true;
+}
+// Independent runs are combined at their source. Imported summaries can overlap.
+inline bool prefer_snapshot(Fields &old,const Fields &sample) {
+    const auto n=uint(old,"repeats"),m=uint(sample,"repeats");
+    const auto memory=std::max(optional_uint(old,"required_free_bytes"),optional_uint(sample,"required_free_bytes"));
+    const auto order=std::max(optional_uint(old,"preferred_order"),optional_uint(sample,"preferred_order"));
+    bool changed=m>n || (m==n && updated_at(sample)>updated_at(old));
+    if(changed)old=sample;
+    if(memory>optional_uint(old,"required_free_bytes")){
+        old["required_free_bytes"]=std::to_string(memory);changed=true;
+    }
+    if(order>optional_uint(old,"preferred_order")){
+        old["preferred_order"]=std::to_string(order);changed=true;
+    }
+    return changed;
 }
 inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
     if(!s.count("program_version") && condition.count("program_version"))s["program_version"]=condition.at("program_version");
@@ -553,7 +534,7 @@ struct Profile {
         if(conditions.size()>=256)throw std::runtime_error("too many portable tune conditions");
         const Word id=conditions.empty()?0:conditions.rbegin()->first+1;conditions.emplace(id,fields);return id;
     }
-    bool update(Fields sample,Word runtime_limit=10) {
+    bool update(Fields sample,Word runtime_limit=10,bool fresh=true) {
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown measurement condition");
         hydrate(sample,conditions.at(uint(sample,"condition")));
         sample=compact_sample(std::move(sample));
@@ -565,11 +546,11 @@ struct Profile {
             if(measured(old) && !measured(sample))return false;
             if(measured(old) && measured(sample)) {
                 const Word limit=runtime_observation(sample)?std::max(runtime_limit,uint(old,"repeats")):1000000000;
-                if(!combine(old,sample,limit))return false;
+                if(fresh?!combine(old,sample,limit):!prefer_snapshot(old,sample))return false;
             } else {if(old==sample)return false;old=std::move(sample);}
             ++revision;return true;
         }
-        if(runtime_observation(sample) && uint(sample,"repeats")>runtime_limit)return false;
+        if(fresh && runtime_observation(sample) && uint(sample,"repeats")>runtime_limit)return false;
         samples.push_back(std::move(sample));++revision;return true;
     }
     bool update_ntt(Fields sample,bool fresh=true) {
@@ -577,7 +558,6 @@ struct Profile {
         strip_ntt_auxiliary_timing(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown NTT measurement condition");
         hydrate(sample,conditions.at(uint(sample,"condition")),true);
-        sample.erase("measurement_ids");
         sample["verified"]="1";
         sample["ntt_type"]=quoted(stage2_ntt_type);
         for(auto &old:ntt)if(uint(old,"condition")==uint(sample,"condition") &&
@@ -628,11 +608,13 @@ struct Profile {
         const auto n=uint(sample,"repeats"),mask=uint(sample,"phase_mask");
         const auto wall=real(sample,"mean_wall_seconds"),middle=real(sample,"mean_middle_seconds");
         const auto sd=real(sample,"middle_stddev_seconds");
-        const bool valid_mask=workers==1?mask==0:mask>0 && mask<=127;
+        if(sample.count("required_free_bytes") && !uint(sample,"required_free_bytes"))
+            throw std::runtime_error("invalid Stage2 queue memory requirement");
+        const bool valid_mask=workers==1?mask==0:mask<=127;
         if(key.size()!=64 || key.find_first_not_of("0123456789abcdef")!=key.npos ||
            !conditions.count(uint(sample,"condition")) || width<2 || width>16384 ||
            uint(sample,"b1")<2 || uint(sample,"b2")<=uint(sample,"b1") || uint(sample,"d")<6 ||
-           uint(sample,"carrier_exponent")>16384 || uint(sample,"curves")<5 ||
+           uint(sample,"carrier_exponent")>16384 || uint(sample,"curves")<2 ||
            workers<1 || workers>2 || !valid_mask ||
            !n || n>1000000000 || !(middle>0 && wall>=middle && sd>=0))
             throw std::runtime_error("invalid Stage2 parallel measurement");
@@ -646,11 +628,13 @@ struct Profile {
         if(at==parallel.end()){parallel.push_back(std::move(sample));return;}
         auto &old=*at;
         if(!fresh) {
-            if(updated_at(old)<=updated_at(sample))old=std::move(sample);
+            prefer_snapshot(old,sample);
             return;
         }
         const auto m=uint(old,"repeats");
         if(m+n>1000000000)return;
+        if(sample.count("required_free_bytes"))
+            old["required_free_bytes"]=std::to_string(std::max(optional_uint(old,"required_free_bytes"),uint(sample,"required_free_bytes")));
         const auto previous=real(old,"mean_middle_seconds"),delta=middle-previous;
         const auto old_sd=real(old,"middle_stddev_seconds");
         const auto m2=(m-1)*old_sd*old_sd+(n-1)*sd*sd+delta*delta*double(m)*n/(m+n);
@@ -754,7 +738,7 @@ struct Profile {
         std::set<std::string> scopes;
         for(auto &s:out.samples) {
             if(!out.conditions.count(uint(s,"condition")))throw std::runtime_error("unknown tune condition");
-            hydrate(s,out.conditions.at(uint(s,"condition")));validate(s);
+            hydrate(s,out.conditions.at(uint(s,"condition")));s=compact_sample(std::move(s));
             out.revision=std::max(out.revision,optional_uint(s,"preferred_order"));if(!out.conditions.count(uint(s,"condition")) || !scopes.insert(scope(s)).second)
                 throw std::runtime_error("duplicate/unknown tune measurement scope");
         }
@@ -778,7 +762,7 @@ struct Profile {
             if(at==merged.end()){merged[key]=normalized.samples.size();normalized.samples.push_back(std::move(s));}
             else {
                 auto &old=normalized.samples[at->second];
-                if(measured(old) && measured(s))combine(old,s);
+                if(measured(old) && measured(s))prefer_snapshot(old,s);
                 else if(!measured(old))old=std::move(s);
             }
         }
@@ -788,7 +772,7 @@ struct Profile {
         normalized.revision=out.revision;return normalized;
     }
     std::string serialize()const {
-        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(parallel.empty()?14:format)<<"\nunit = \"full_stage2\"\n";
+        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(samples.empty()&&parallel.empty()?14:format)<<"\nunit = \"full_stage2\"\n";
         if(metadata.count("error_limit"))out<<"error_limit = "<<compact_literal(metadata.at("error_limit"))<<'\n';
         for(const auto &c:conditions) {
             out<<"\n[condition."<<c.first<<"]\n";

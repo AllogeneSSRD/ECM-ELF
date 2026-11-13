@@ -1,4 +1,5 @@
 #include "../giant_policy.h"
+#include "../schedule_policy.h"
 #include "initial_memory.h"
 // Stage2 selection, calibration and profile publication; one complete planning TU.
 #define NOMINMAX
@@ -113,7 +114,12 @@ static pt::Profile read_runtime_profile(const Options &o) {
     const auto feedback=ecm_results::json::parse(o.queue_tune_observation);
     auto sample=et::fields(feedback.get("sample").dump());
     sample["condition"]=std::to_string(profile.condition(et::fields(feedback.get("condition").dump())));
-    const bool added=profile.update(std::move(sample),o.runtime_samples);
+    const auto key=pt::scope(sample);
+    const auto stamp=pt::updated_at(sample);
+    const bool present=std::any_of(profile.samples.begin(),profile.samples.end(),[&](const auto &saved){
+        return pt::measured(saved)&&pt::scope(saved)==key&&pt::updated_at(saved)>=stamp;
+    });
+    const bool added=!stamp.empty()&&!present&&profile.update(std::move(sample),o.runtime_samples);
     stage2_log::print(stage2_log::debug,"stage2_queue_tune_profile: snapshot=%d applied=%d\n",int(cached),int(added));
     return profile;
 }
@@ -447,6 +453,17 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     const bool admitted=portable_runtime_admit(o,r,shape,plan,&cache_hit);result.plan_cache_hits=cache_hit?1:0;
     if(!admitted || engine.runtime_statistics(shape,true).count>=o.runtime_samples)return result;
     pt::WidthEstimate prediction;if(!predictor.predict(shape,prediction))return result;
+    // A cached route hint can omit the native plan. Reuse the requirement only
+    // from the exact shape, or obtain it once from native admission.
+    uint64_t required_free=0;
+    if(plan.empty()){
+        if(const auto* saved=engine.observed(shape))required_free=pt::optional_uint(*saved,"required_free_bytes");
+        if(!required_free){
+            auto planned=shape;
+            if(!portable_admit(o,r,planned,plan)||planned.key()!=shape.key())return result;
+        }
+    }
+    if(!plan.empty())required_free=u64(plan_scalar(curve_memory_record(plan),"required_free_bytes"),"curve memory requirement");
     result.shape=shape;
     auto &s=result.sample;
     s["target_bits"]=std::to_string(shape.target_bits);s["arithmetic_bits"]=std::to_string(shape.arithmetic_bits);
@@ -463,7 +480,7 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     s["predicted_seconds"]=pt::numeric(prediction.seconds);s["prediction_model"]=pt::quoted(prediction.model);
     s["prediction_basis"]="\"before_measurement\"";
     s["program_version"]=pt::quoted(ecm_program::version);
-    s["runtime_sample_id"]=pt::quoted(o.receipt.empty()?stage2_queue::token():o.receipt);
+    if(required_free)s["required_free_bytes"]=std::to_string(required_free);
     s["runtime_probe"]=o.runtime_probe?"1":"0";
     return result;
 }
@@ -1218,6 +1235,10 @@ static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record 
     const auto peak=u64(plan_scalar(memory,"peak_bytes"),"curve memory peak");
     const auto headroom=std::max(uint64_t(256)<<20,peak/8);
     if(!required || required>UINT64_MAX-headroom)return std::nullopt;
+    const auto baby=u64(plan_scalar(memory,"baby_headroom_bytes"),"pre-F-tree memory requirement");
+    const auto initial=u64(plan_scalar(memory,"initial_peak_bytes"),"initial memory peak");
+    const auto preparation=std::max(baby,initial);
+    if(preparation>UINT64_MAX-parallel_memory_margin)return std::nullopt;
     auto condition=portable_condition(o);
     const auto device=pt::text(condition,"uuid_hex");
     std::ostringstream key;
@@ -1229,6 +1250,7 @@ static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record 
         if(o.factor_only && shape.chain_block==64 && !shape.tail_balance && early_gpu_handoff_requested())
             key<<"early_gpu_handoff\n";
     }
+    if(stage2_schedule::whole_giant_loop_requested())key<<"whole_giant_loop\n";
     for(const auto field:shape.key())key<<field<<' ';
     o.b2=shape.b2;o.d=shape.d;o.has_d=true;o.auto_b2=false;o.auto_carrier=false;
     o.carrier_exponent=shape.carrier;o.has_carrier=true;o.inferred_carrier=0;
@@ -1240,86 +1262,162 @@ static std::optional<ParallelRoute> admit_parallel_route(Options o,const Record 
     if(shape.reduce_coop){o.reduce_threads=shape.reduce_threads;o.reduce_kernel=shape.reduce_kernel;}
     o.fixed_queue_route=true;o.b2_round_chain=false;o.tune_runtime=false;
     o.runtime_prepare_cache=false;o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();
-    return ParallelRoute{std::move(o),shape,std::move(condition),ecm_stage2::sha256_text(key.str()),device,required+headroom};
+    o.queue_workspace_lease=o.parallel_workspace==2?2:0;
+    return ParallelRoute{std::move(o),shape,std::move(condition),key.str(),device,
+        required+headroom,preparation+parallel_memory_margin};
 }
 #endif
 
-std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bool writes_log) {
+std::optional<ParallelRoute> prepare_parallel_route(Options o,const Record &r,bool writes_log,const char *&rejection) {
+    rejection="single_curve_plan_rejected";
 #ifdef ECM_STAGE2_OPENCL
     (void)o;(void)r;(void)writes_log;return std::nullopt;
 #else
     if(!o.b2 || o.relocation)return std::nullopt;
+    const auto requested_b2=o.b2;
     const bool fixed_d=o.has_d && o.d;
-    if(o.parallel==1)o.tune_runtime=false;
+    if(o.parallel==ParallelMode::paired)o.tune_runtime=false;
     configure_weighted_ntt(o);
     configure_short_ntt_batches(o);
     const auto selection=select_tuned(o,r);
     const bool measured=selection.find("\"source\":")!=selection.npos && plan_scalar(selection,"source")=="\"measured\"";
     if(o.tune_runtime) {
         const auto mature=std::min(o.runtime_samples,std::max<uint64_t>(3,o.tune_min_repeats));
-        if(!measured || o.runtime_probe ||
-           selection.find("\"runtime_samples\":")==selection.npos ||
-           u64(plan_scalar(selection,"runtime_samples"),"runtime samples")<mature)return std::nullopt;
+        if(!measured || o.runtime_probe){rejection="runtime_route_unsettled";return std::nullopt;}
+        if(selection.find("\"runtime_samples\":")==selection.npos ||
+           u64(plan_scalar(selection,"runtime_samples"),"runtime samples")<mature){
+            rejection="single_curve_samples_insufficient";return std::nullopt;
+        }
     }
-    if(o.parallel==2 && !o.tune_runtime && !fixed_d && !measured)return std::nullopt;
-    return admit_parallel_route(std::move(o),r,writes_log);
+    if(o.parallel==ParallelMode::automatic && !o.tune_runtime && !fixed_d && !measured){
+        rejection="single_curve_route_unmeasured";return std::nullopt;
+    }
+    auto route=admit_parallel_route(std::move(o),r,writes_log);
+    if(route && route->shape.b2>=requested_b2)return route;
+    return std::nullopt;
 #endif
 }
 
 std::vector<ParallelRoute> prepare_parallel_alternatives(const ParallelRoute &primary,const Record &r,
-                                                        bool writes_log,bool explore_layout) {
+                                                        bool writes_log,bool explore_layout,uint64_t free,
+                                                        uint64_t requested_b2,bool round_bounds) {
     std::vector<ParallelRoute> routes;
 #ifdef ECM_STAGE2_OPENCL
-    (void)primary;(void)r;(void)writes_log;(void)explore_layout;
+    (void)primary;(void)r;(void)writes_log;(void)explore_layout;(void)free;(void)requested_b2;(void)round_bounds;
 #else
-    constexpr uint64_t margin=256ull<<20;
-    const auto free=parallel_free_memory(primary.options.device);
-    // Keep a further margin per slot for the frontier's late live admission.
-    if(free<=3*margin)return routes;
-    const auto limit=(free-margin)/2-margin;
+    if(free<=parallel_memory_margin)return routes;
+    const auto limit=(free-parallel_memory_margin)/2;
     const auto p=ecm_stage2::d_catalog::degree(primary.shape.d);
     const auto original_layout=primary.shape.groot_balanced;
+    const auto &options=primary.options;
+    const auto profile=portable_read(options.tune_profile);
+    pt::Estimator model(profile,primary.condition,pt::Ignore{},portable_query,true,options.tune_min_repeats);
+    pt::WidthPredictor predictor(model);
+    struct Candidate {ParallelRoute route;double rank;};
+    std::vector<Candidate> ranked;
     std::set<std::pair<uint64_t,bool>> tried{{primary.shape.d,original_layout}};
     auto candidate=[&](uint64_t d,bool layout) {
-        if(routes.size()>=3 || !tried.emplace(d,layout).second)return;
-        auto o=primary.options;o.d=d;o.groot_layout=int(layout);
+        if(!tried.emplace(d,layout).second)return;
+        auto o=options;o.d=d;o.groot_layout=int(layout);o.b2=requested_b2;o.b2_round_chain=round_bounds;
         auto route=admit_parallel_route(std::move(o),r,writes_log);
-        if(route && route->shape.b2==primary.shape.b2 && route->shape.fold==primary.shape.fold &&
-           route->shape.frontier==primary.shape.frontier && route->reservation<=limit)
-            routes.push_back(std::move(*route));
+        if(!route || route->shape.b2<requested_b2 || route->reservation>limit)return;
+        const auto measured=model.runtime_statistics(route->shape);
+        pt::WidthEstimate estimate;
+        const double rank=measured.count>=options.tune_min_repeats?measured.comparison_seconds():
+            predictor.predict(route->shape,estimate)?estimate.rank:std::numeric_limits<double>::infinity();
+        ranked.push_back({std::move(*route),rank});
     };
     if(explore_layout)candidate(primary.shape.d,!original_layout);
-    // Test progressively smaller polynomial ranges to span a memory/NTT step.
-    for(const uint64_t ratio:{87,72,58,43}) {
-        if(routes.size()>=3)break;
+    // Reuse timed geometries from this device first. The recorded memory
+    // requirement only filters; current native admission still decides.
+    std::map<std::pair<uint64_t,bool>,double> measured;
+    for(const auto &row:profile.samples){
+        if(!pt::measured(row)||profile.conditions.at(et::uint(row,"condition"))!=primary.condition)continue;
+        const auto shape=model.shape(row);
+        if(shape.arithmetic_bits!=primary.shape.arithmetic_bits || shape.carrier!=primary.shape.carrier ||
+           shape.b2<requested_b2 || !shape.same_point_backend(primary.shape) ||
+           !shape.same_reduce_backend(primary.shape) || shape.chain_block!=primary.shape.chain_block ||
+           (!explore_layout&&shape.groot_balanced!=original_layout) ||
+           pt::optional_uint(row,"required_free_bytes")>limit)continue;
+        const auto key=std::make_pair(shape.d,shape.groot_balanced);
+        const double seconds=et::real(row,"mean_seconds")+pt::optional_real(row,"point_check_seconds");
+        const auto [it,inserted]=measured.emplace(key,seconds);
+        if(!inserted)it->second=std::min(it->second,seconds);
+    }
+    std::vector<std::pair<double,std::pair<uint64_t,bool>>> timed;
+    for(const auto &entry:measured)timed.emplace_back(entry.second,entry.first);
+    std::sort(timed.begin(),timed.end());
+    for(size_t i=0;i<std::min<size_t>(12,timed.size());++i)candidate(timed[i].second.first,timed[i].second.second);
+    // Also span smaller memory/NTT steps where no timings exist.
+    for(const uint64_t ratio:{87,72,58,43,30,20}) {
         const auto ceiling=p*ratio/100;
         ecm_stage2::d_catalog::Entry best{};
         for(const auto &entry:ecm_stage2::d_catalog::entries()) {
-            if(entry.d>=primary.shape.d || entry.d<primary.shape.d/3 || entry.p>ceiling)continue;
+            if(entry.d>=primary.shape.d || entry.p>ceiling)continue;
             if(std::tie(entry.p,entry.d)>std::tie(best.p,best.d))best=entry;
         }
         if(!best.d)continue;
-        const auto before=routes.size();
         candidate(best.d,original_layout);
-        if(explore_layout && routes.size()==before)candidate(best.d,!original_layout);
+        if(explore_layout)candidate(best.d,!original_layout);
     }
+    std::stable_sort(ranked.begin(),ranked.end(),[](const auto &a,const auto &b){return a.rank<b.rank;});
+    for(size_t i=0;i<std::min<size_t>(3,ranked.size());++i)routes.push_back(std::move(ranked[i].route));
 #endif
     return routes;
 }
 
-uint64_t parallel_free_memory(int device) {
-    return portable_memory_snapshot(device).free;
+std::optional<uint64_t> parallel_free_memory(int device) {
+    const auto memory=portable_memory_snapshot(device);
+    if(!memory.valid())return std::nullopt;
+#ifndef ECM_STAGE2_OPENCL
+    // Queue workers have independent CUDA contexts. Also check device-wide
+    // free memory when the NVIDIA driver exposes it.
+    struct NvmlMemory {unsigned long long total,free,used;};
+    struct Nvml {
+        HMODULE module=LoadLibraryExW(L"nvml.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
+        int (*shutdown)()=nullptr;
+        int (*by_pci)(const char*,void**)=nullptr;
+        int (*memory_info)(void*,NvmlMemory*)=nullptr;
+        Nvml(){
+            if(!module)return;
+            const auto init=reinterpret_cast<int(*)()>(GetProcAddress(module,"nvmlInit_v2"));
+            const auto close=reinterpret_cast<int(*)()>(GetProcAddress(module,"nvmlShutdown"));
+            if(!init || !close || init()!=0)return;
+            shutdown=close;
+            by_pci=reinterpret_cast<decltype(by_pci)>(GetProcAddress(module,"nvmlDeviceGetHandleByPciBusId_v2"));
+            memory_info=reinterpret_cast<decltype(memory_info)>(GetProcAddress(module,"nvmlDeviceGetMemoryInfo"));
+        }
+        ~Nvml(){if(shutdown)shutdown();if(module)FreeLibrary(module);}
+    };
+    static const Nvml nvml;
+    char pci_bus[32]{};
+    void *adapter=nullptr;
+    NvmlMemory reported{};
+    if(nvml.by_pci && nvml.memory_info &&
+       cudaDeviceGetPCIBusId(pci_bus,sizeof(pci_bus),device)==cudaSuccess &&
+       nvml.by_pci(pci_bus,&adapter)==0 && nvml.memory_info(adapter,&reported)==0 && reported.total)
+        return std::min(memory.free,uint64_t(reported.free));
+#endif
+    return memory.free;
+}
+
+static std::string parallel_scope(const ParallelRoute &route) {
+    if(!route.options.queue_workspace_lease)return ecm_stage2::sha256_text(route.scope_key);
+    const auto shape=route.scope_key.rfind('\n')+1;
+    return ecm_stage2::sha256_text(route.scope_key.substr(0,shape)+"workspace_lease 3\n"+
+        route.scope_key.substr(shape));
 }
 
 ParallelEvidence read_parallel_evidence(const ParallelRoute &route,unsigned mask,uint64_t preferred_curves) {
     if(route.options.tune_profile.empty())return {preferred_curves};
     const auto profile=portable_read(route.options.tune_profile);
+    const auto scope=parallel_scope(route);
     std::map<uint64_t,ParallelEvidence> windows;
     for(const auto &row:profile.parallel) {
-        if(pt::text(row,"scope")!=route.scope || profile.conditions.at(et::uint(row,"condition"))!=route.condition)
+        if(pt::text(row,"scope")!=scope || profile.conditions.at(et::uint(row,"condition"))!=route.condition)
             continue;
         const auto size=et::uint(row,"curves");
-        if(size<preferred_curves)continue;
+        if(size!=preferred_curves)continue;
         auto &w=windows[size];w.curves=size;
         if(et::uint(row,"workers")==1) {
             w.serial_wall=et::real(row,"mean_wall_seconds");
@@ -1336,16 +1434,17 @@ ParallelEvidence read_parallel_evidence(const ParallelRoute &route,unsigned mask
 }
 
 void record_parallel_window(const ParallelRoute &route,unsigned mask,unsigned workers,
-                            uint64_t curves,double wall,double middle) {
+                            uint64_t curves,double wall,double middle,uint64_t required_free) {
     if(route.options.tune_profile.empty())return;
     const fs::path destination=fs::u8path(route.options.tune_profile);
     auto lock=portable_lock(destination);
     auto profile=portable_read(destination);
     const auto &s=route.shape;
-    et::Fields row={{"condition",std::to_string(profile.condition(route.condition))},{"scope",pt::quoted(route.scope)},
+    et::Fields row={{"condition",std::to_string(profile.condition(route.condition))},{"scope",pt::quoted(parallel_scope(route))},
         {"target_bits",std::to_string(s.target_bits)},{"b1",std::to_string(s.b1)},{"b2",std::to_string(s.b2)},
         {"d",std::to_string(s.d)},{"carrier_exponent",std::to_string(s.carrier)},
         {"phase_mask",std::to_string(mask)},{"workers",std::to_string(workers)},{"curves",std::to_string(curves)},
+        {"required_free_bytes",std::to_string(required_free)},
         {"repeats","1"},{"mean_wall_seconds",pt::numeric(wall)},{"mean_middle_seconds",pt::numeric(middle)},
         {"middle_stddev_seconds","0"}};
     pt::stamp_provenance(row);
@@ -1364,7 +1463,7 @@ void merge_portable_tune(const Options &o,const fs::path &destination) {
     };
     for(const auto &path:o.tune_merge) {
         const auto source=pt::Profile::load(absolute_from(fs::current_path(),path));
-        for(auto s:source.samples){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update(std::move(s),o.runtime_samples);}
+        for(auto s:source.samples){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update(std::move(s),o.runtime_samples,false);}
         for(auto s:source.parallel){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_parallel(std::move(s),false);}
         merge_ntt(source);
     }
@@ -1718,7 +1817,8 @@ bool portable_measure(Options &requested,const TaskDefaults &settings,const Port
     sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);sample["repeats"]=std::to_string(trials.size());
     sample["warmup_runs"]=o.tune_warmup?"1":"0";
     pt::stamp_provenance(sample);
-    sample["measurement_ids"]=pt::encoded_ids({stage2_queue::token()});
+    const auto required_free=u64(plan_scalar(curve_memory_record(plan),"required_free_bytes"),"curve memory requirement");
+    if(required_free)sample["required_free_bytes"]=std::to_string(required_free);
     sample["source"]="\"measured\"";sample["execution_path"]=json_string(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier");
     sample["giant_chunk_points"]=std::to_string(shape.giant_chunk);sample["giant_chain_min"]=std::to_string(shape.chain_min);
     sample["giant_force_ladder"]=shape.force_ladder?"1":"0";

@@ -68,9 +68,11 @@ struct CurveProcessRequest {
     std::string tune_profile{};
     bool tune_runtime=0;
     bool fixed_queue_route=false;
+    uint64_t queue_requested_b2=0;
     bool queue_pipeline=false;
     uint64_t queue_curve=0; // One-based position in the task, independent of child/process slot.
     std::string queue_phase_gate;
+    unsigned queue_workspace_lease=0;
     int worker=0;
     // Called synchronously at the original selection-output position, before
     // logging that line; domain validation/cache policy belongs to the caller.

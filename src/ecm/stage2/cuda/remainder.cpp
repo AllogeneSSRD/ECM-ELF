@@ -428,13 +428,6 @@ void FoldDeviceState::seed(const std::vector<unsigned long long> &H)
     upload(h,H);hcount=H.size()/W;digest_root(h,H.size());
 }
 
-void FoldDeviceState::restore(const std::vector<unsigned long long> &H) {
-    if(H.size()>(P+1)*W || H.size()%W)throw std::runtime_error("invalid Stage2 saved fold shape");
-    upload(h,H);hcount=H.size()/W;
-    CK(stage2_wait::copy(digest,stats->root_digest,sizeof(stats->root_digest),cudaMemcpyHostToDevice));
-    stats->h2d_bytes+=sizeof(stats->root_digest);
-}
-
 std::vector<unsigned long long> FoldDeviceState::read(size_t offset,size_t count)
 {
     std::vector<unsigned long long> v(count*W);const double begin=now_s();

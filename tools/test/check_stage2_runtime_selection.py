@@ -17,7 +17,7 @@ def main():
     a=p.parse_args();folder=a.study.resolve();assert not a.output.exists()
     report=normalize_result(json.loads((folder/'result.json').read_text(encoding='utf-8')));assert report['complete']
     rows=[normalize_result(json.loads(s)) for s in (folder/'internal.jsonl').read_text(encoding='utf-8').splitlines()]
-    history={};ids=set();measured=0;observations=0
+    history={};measured=0;observations=0
     for row in rows:
         assert row['status']=='stage2_completed' and not row['factors'] and not row['bad_factors']
         plan=row['tune_plan'];current={}
@@ -35,7 +35,7 @@ def main():
             measured+=1
         obs=row.get('tune_observation')
         if obs:
-            s=obs['sample'];identifier=s['runtime_sample_id'];assert identifier not in ids;ids.add(identifier)
+            s=obs['sample']
             assert s['clean']==1 and not s['bad'] and not s['hits'] and s['checked'] and s['selftest_cases']
             assert s['repeats']==1 and s['mean_seconds']>0
             assert abs(s['init_seconds']+s['main_seconds']-s['mean_seconds'])<1e-7

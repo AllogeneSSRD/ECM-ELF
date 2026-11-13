@@ -1,7 +1,7 @@
 """Read portable tune matrices for assertions and analysis."""
 def summaries(document, kind='sample'):
-    if document.get('profile',{}).get('format') not in range(8,16):
-        raise ValueError('This reader requires portable profile format 8–15')
+    if document.get('profile',{}).get('format') not in range(8,17):
+        raise ValueError('This reader requires portable profile format 8–16')
     result=[]
     tables=document.get({'sample':'width','ntt':'ntt','parallel':'stage2_parallel'}[kind],{})
     for key, table in ([(None,tables)] if 'matrix' in tables else tables.items()):

@@ -1328,14 +1328,38 @@ Fuse input digit packing and zero padding in one GPU kernel per operand. Covers 
 ### stage2_parallel
 
 ```toml
-stage2_parallel = 2
+stage2_parallel = 1
 ```
 
-Type / 类型: `u64`; range / 范围: `[0|1|2]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+Type / 类型: `u64`; range / 范围: `[0|auto|1|2]`; worker override / worker 覆盖: `[workers.N.stage2]`.
 
-CUDA Stage2 curve queue: 0 serial, 1 allow two in-flight curves, 2 auto (default). Auto compares checked serial and paired queue throughput after the single-curve route is selected. Queue measurements are kept in the shared tune profile. Both modes 1 and 2 require enough device memory for two workers. CLI: --parallel 0|1|2.
+CUDA Stage2 curve queue. 0 or auto selects serial or dual-slot by measurement, 1 runs serial (default), 2 requests dual-slot subject to device admission. CLI: --parallel auto|0|1|2.
 
-CUDA Stage2 曲线队列：0 串行，1 允许同时运行两条，2 自动（默认）。自动模式在单曲线路线确定后比较通过检查的串行和双曲线队列吞吐。队列测量保存到共享 tune 文件。1 和 2 均需有足够显存运行两个 worker。命令行：--parallel 0|1|2。
+CUDA Stage2 曲线队列。0 或 auto 按实测自动选择串行或双槽，1 单曲线串行（默认），2 请求双槽并检查显存准入。命令行 --parallel auto|0|1|2。
+
+### stage2_parallel_tune_curves
+
+```toml
+stage2_parallel_tune_curves = 5
+```
+
+Type / 类型: `u64`; range / 范围: `[2..16]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+Number of curves in each CUDA Stage2 queue tuning window. Windows of 2 to 4 curves compare full-window throughput. Longer windows also check steady-state completion throughput.
+
+CUDA Stage2 每个队列调优窗口的曲线数。2 至 4 条按整窗吞吐比较，5 条及以上还检查中段完成吞吐。
+
+### stage2_parallel_workspace
+
+```toml
+stage2_parallel_workspace = 0
+```
+
+Type / 类型: `u64`; range / 范围: `[0|auto|1|2]`; worker override / worker 覆盖: `[workers.N.stage2]`.
+
+CUDA Stage2 workspace policy. 0 or auto compares two independent workspaces and one workspace leased before F-tree construction. Selects 2 directly when mode 1 exceeds the available memory and mode 2 fits. 1 uses two independent workspaces. 2 overlaps preparation and baby points with one leased heavy workspace.
+
+CUDA Stage2 工作区策略。0 或 auto 比较双工作区和 F 树前租约。双工作区显存不足且租约可准入时直接选 2。1 使用双工作区，2 让下一槽先准备并计算 Baby 点，到 F 树前才申请独占大工作区。
 
 ### stage2_prediction_policy
 

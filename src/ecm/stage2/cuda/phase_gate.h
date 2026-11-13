@@ -1,6 +1,7 @@
 #pragma once
 
 #include "host_wait.h"
+#include "../schedule_policy.h"
 #include "../../cuda/ntt/host_trace.h"
 #include <charconv>
 #include <optional>
@@ -12,9 +13,10 @@
 
 namespace stage2_schedule {
 
-enum class Work { setup, baby, f_tree, inverse, giant, g_tree_fold, descent, gcd, finalize };
+enum class Work { setup, baby, f_tree, inverse, giant, g_tree_fold, descent, gcd, finalize, giant_loop };
 
 inline unsigned gate_bit(Work work) {
+    if(work==Work::giant_loop)return gate_bit(Work::giant)|gate_bit(Work::g_tree_fold);
     return work == Work::setup || work == Work::finalize ? 0 : 1u << (unsigned(work) - 1);
 }
 
@@ -35,7 +37,7 @@ struct Options {
             throw std::runtime_error("ECM_STAGE2_PHASE_GATE requires mask:group");
         const auto parsed = std::from_chars(spec.data(), spec.data() + colon, mask);
         const auto group = spec.substr(colon + 1);
-        if (parsed.ec != std::errc{} || parsed.ptr != spec.data() + colon || !mask || mask > 127 ||
+        if (parsed.ec != std::errc{} || parsed.ptr != spec.data() + colon || mask > 127 ||
             group.empty() || group.size() > 48 ||
             group.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_") != group.npos)
             throw std::runtime_error("invalid Stage2 phase gate mask or group");
@@ -49,11 +51,15 @@ inline const Options& options() {
     return value;
 }
 
+inline bool gate_whole_giant_loop() {
+    constexpr unsigned loop_mask=8|16;
+    return (options().mask & loop_mask)==loop_mask && whole_giant_loop_requested();
+}
+
 // Experimental one-workspace lease. Acquire it before any phase mutex.
 class WorkspaceLease {
 #ifdef _WIN32
     HANDLE mutex_=nullptr;
-    unsigned mode_=0;
     bool held_=false;
     static void mark(const char *event) {
         const auto time=std::chrono::steady_clock::now().time_since_epoch();
@@ -71,17 +77,25 @@ class WorkspaceLease {
 public:
     WorkspaceLease() {
 #ifdef _WIN32
-        const char *value=std::getenv("NTT_STAGE2_SWAP_WORKSPACE");
-        if(!value || (value[0]!='1' && value[0]!='2') || value[1] || options().mutex_name.empty())return;
-        mode_=unsigned(value[0]-'0');
+        if(!stage2_wait::option("ECM_STAGE2_FTREE_LEASE",false) || options().mutex_name.empty())return;
         mutex_=CreateMutexA(nullptr,FALSE,(options().mutex_name+".workspace").c_str());
         if(!mutex_)throw std::runtime_error("cannot create Stage2 workspace lease");
-        try {acquire();}
-        catch(...) {if(held_)ReleaseMutex(mutex_);CloseHandle(mutex_);throw;}
 #endif
     }
     WorkspaceLease(const WorkspaceLease&)=delete;
     WorkspaceLease& operator=(const WorkspaceLease&)=delete;
+    bool deferred() const {
+#ifdef _WIN32
+        return mutex_ && !held_;
+#else
+        return false;
+#endif
+    }
+    void acquire_heavy() {
+#ifdef _WIN32
+        if(deferred())acquire();
+#endif
+    }
     ~WorkspaceLease() {
 #ifdef _WIN32
         if(mutex_) {
@@ -93,22 +107,7 @@ public:
         }
 #endif
     }
-    bool swapping() const {
-#ifdef _WIN32
-        return mode_==2;
-#else
-        return false;
-#endif
-    }
-    void transfer() {
-#ifdef _WIN32
-        mark("release");
-        if(!ReleaseMutex(mutex_))throw std::runtime_error("cannot transfer Stage2 workspace lease");
-        held_=false;
-        SwitchToThread();
-        acquire();
-#endif
-    }
+
 };
 
 // One timeline per engine section, reused across giant chunks and G-tree
@@ -151,14 +150,14 @@ public:
     Phases(const Phases&) = delete;
     Phases& operator=(const Phases&) = delete;
 
-    void begin(Work work) {
+    void begin(Work work,bool use_gate=true) {
         finish();
-        const bool gate = (options_.mask & gate_bit(work)) != 0;
+        const bool gate = use_gate && (options_.mask & gate_bit(work)) != 0;
         if (!options_.trace && !gate) return;
         static constexpr const char* names[] = {
             "stage2.phase.setup", "stage2.phase.baby", "stage2.phase.f_tree",
             "stage2.phase.inverse", "stage2.phase.giant", "stage2.phase.g_tree_fold",
-            "stage2.phase.descent", "stage2.phase.gcd", "stage2.phase.finalize"
+            "stage2.phase.descent", "stage2.phase.gcd", "stage2.phase.finalize", "stage2.phase.giant_loop"
         };
         queued_ = Clock::now();
 #ifdef _WIN32

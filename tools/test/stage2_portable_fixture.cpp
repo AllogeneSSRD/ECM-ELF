@@ -100,9 +100,10 @@ int main(int argc,char **argv) {
             p::Estimator damaged(profile,profile.conditions.begin()->second,p::Ignore{},query);
             double value=0,error=0;if(damaged.fitted(target,w,value,error))throw std::runtime_error("bad holdout model qualified");
             std::cout<<"true";
-        } else if(argc==4 && std::string(argv[1])=="--update") {
+        } else if(argc==4 && (std::string(argv[1])=="--update" || std::string(argv[1])=="--merge")) {
             auto old=p::Profile::load(argv[2]);const auto added=p::Profile::load(argv[3]);
-            for(auto s:added.samples){s["condition"]=std::to_string(old.condition(added.conditions.at(ecm_stage2::tune::uint(s,"condition"))));old.update(std::move(s));}
+            const bool fresh=std::string(argv[1])=="--update";
+            for(auto s:added.samples){s["condition"]=std::to_string(old.condition(added.conditions.at(ecm_stage2::tune::uint(s,"condition"))));old.update(std::move(s),10,fresh);}
             std::cout<<old.serialize();
         } else if(argc==5 && std::string(argv[1])=="--matches") {
             const auto a=p::Profile::load(argv[2]),b=p::Profile::load(argv[3]);

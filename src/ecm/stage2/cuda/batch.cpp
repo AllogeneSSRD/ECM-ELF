@@ -18,8 +18,7 @@ BatchedRun run_batched(
     size_t Fpad,
     const SmallPrimeBabyCache *baby_cache,
     const ecm_stage2::GiantRange *requested_range,
-    const EcmStage2GpuHandoff *handoff,
-    stage2_schedule::WorkspaceLease *workspace)
+    const EcmStage2GpuHandoff *handoff)
 {
     const size_t W = L.W;
     const unsigned long long D = SP.D, B1 = SP.B1, B2 = SP.B2;
@@ -221,6 +220,9 @@ BatchedRun run_batched(
     R.giant_tail_balance=balance_active && !range.active;
     stage2_log::print(stage2_log::debug,"giant_point_policy: tail_balance=%d chain_block=%llu requested_tail_balance=%d borrow_points=%llu\n",
         (int)R.giant_tail_balance,ecm_stage2::giant_chain_points(),(int)ecm_stage2::giant_tail_balance_requested(),borrow);
+    const bool gate_loop=stage2_schedule::gate_whole_giant_loop();
+    stage2_schedule::Phases giant_loop;
+    if(gate_loop)giant_loop.begin(stage2_schedule::Work::giant_loop);
     for (unsigned long long c0 = 0; c0 < imax;) {
         ++actual_point_chunks;
         const auto take=ecm_stage2::giant_chunk_take(imax-c0,pts_per_chunk,P,rebalance_min,balance_active);
@@ -229,7 +231,7 @@ BatchedRun run_batched(
         if(range.active)stage2_log::print(stage2_log::debug,
             "relocation_chunk: offset=%llu first=%llu points=%llu capacity=%llu\n",
             c0,(unsigned long long)clo,take,pts_per_chunk);
-        schedule.begin(stage2_schedule::Work::giant);
+        schedule.begin(stage2_schedule::Work::giant,!gate_loop);
         const double tgp = now_s();
         s2g_state("giant ladder chunk: about to launch");   /* the last state on a driver kill */
         /* THE CHAIN BY DEFAULT (see s2g_chain_kernel): one differential addition per giant point
@@ -378,7 +380,7 @@ BatchedRun run_batched(
         GfinvBatch segment_inverse(gseg,W,L.target(),g_gfinv_batch);
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
-        schedule.begin(stage2_schedule::Work::g_tree_fold);
+        schedule.begin(stage2_schedule::Work::g_tree_fold,!gate_loop);
         const size_t lo = (size_t)(b * (unsigned long long)P);
         size_t hi = lo + P;
         if (hi > (size_t)imax) hi = (size_t)imax;
@@ -683,35 +685,13 @@ BatchedRun run_batched(
         schedule.finish();
         c0=c1;
     }
+    giant_loop.finish();
     R.t_post_loop=now_s();
     R.phase_boundaries.loop_end=R.t_post_loop;
     stage2_log::print(stage2_log::debug,
         "giant_chunk_done: chunks=%llu chain_chunks=%llu ladder_chunks=%llu points=%llu\n",
         actual_point_chunks,R.giant_chain_chunks,actual_point_chunks-R.giant_chain_chunks,imax);
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
-    if(workspace && workspace->swapping() && device_fold.active && device_fold.hcount) {
-        const auto begin=now_s();
-        const auto owner_bytes=device_fold.memory.words[0]*8+device_fold.memory.words[1]*8;
-        device_fold.finish(Hflat);
-        const auto saved=Hflat.size()*8;
-        s4_dbad_resolve(*L.s4->red,true);
-        s4_oracle_drain(*L.s4->red);
-        const auto released=owner_bytes+L.s4->release_buffers()+L.arena->bytes+ws.bytes;
-        L.arena->release();ws.release();
-        const auto parked=now_s();
-        workspace->transfer();
-        const auto resumed=now_s();
-        ws.init(C);
-        size_t uploaded=0;
-        if(device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat,true)) {
-            device_fold.restore(Hflat);uploaded=saved+finvflat.size()*8+sizeof(R.fold_device.root_digest)+W*8;
-            std::vector<unsigned long long>().swap(Hflat);
-        }
-        stage2_log::print(stage2_log::debug,
-            "stage2_workspace_swap: h_d2h_bytes=%llu restore_h2d_bytes=%llu released_bytes=%llu save_seconds=%.6f wait_seconds=%.6f restore_seconds=%.6f resident=%d\n",
-            (unsigned long long)saved,(unsigned long long)uploaded,(unsigned long long)released,
-            parked-begin,resumed-parked,now_s()-resumed,int(device_fold.active));
-    }
     schedule.begin(stage2_schedule::Work::descent);
     stage2_log::phase("Normalize fold and descend F tree");
     stage2_memory::snapshot("after_giant_loop");

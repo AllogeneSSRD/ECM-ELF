@@ -21,6 +21,7 @@
 #include "reduce_backend.h"
 namespace s2prod {
 namespace fs=std::filesystem;
+enum class ParallelMode : unsigned { automatic=0, serial=1, paired=2 };
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
 struct Big {
     mpz_t z;
@@ -104,12 +105,16 @@ struct Options {
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
     bool weighted_ntt=ecm_config::defaults::stage2_stage2_weighted_ntt;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
-    unsigned parallel=ecm_config::defaults::stage2_stage2_parallel;
+    ParallelMode parallel=ParallelMode(ecm_config::defaults::stage2_stage2_parallel);
+    unsigned parallel_workspace=ecm_config::defaults::stage2_stage2_parallel_workspace;
+    uint64_t parallel_tune_curves=ecm_config::defaults::stage2_stage2_parallel_tune_curves;
     bool fixed_queue_route=false;
+    uint64_t queue_requested_b2=0;
     uint64_t queue_gpu_start=0,queue_gpu_done=0,queue_gpu_input=0;
     std::shared_ptr<const PreparedRuntimeProfile> queue_tune_snapshot;
     std::string queue_tune_observation;
     std::string queue_phase_gate;
+    unsigned queue_workspace_lease=0;
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
     uint64_t tune_min_repeats=ecm_config::defaults::stage2_stage2_tune_min_repeats;
     bool runtime_probe=false;

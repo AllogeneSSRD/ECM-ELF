@@ -144,7 +144,7 @@ python tools/bench/bench_stage2_parallel_matrix.py --exe build_stage2_local/ecm_
 
 串行补测使用合并后的双槽 `summary.json`。可先运行下方分析器，省略 `--serial-summary` 和 `--publish`，将 `--output`、`--figures` 分别指向 `data/benchmarks/stage2_parallel_0620/small_b2_pairs` 和 `data/figures/stage2_parallel_0620/small_b2_pairs`。
 
-候选包含旧矩阵的普通与承载优选、当前规划器为两种算术返回的 D/P 和布局，以及实际双槽配置。先对每种唯一配置测一条，距首轮最快值 3% 内有多个候选时各补一条，按引擎耗时选定串行路线。选定后独立跑两批、每批两条。短批使用空 tune 与 `--parallel 2 --tune-runtime 0`，程序在一槽运行并输出原生队列墙钟。采集器核对实际并行槽数及算术结果。
+候选包含旧矩阵的普通与承载优选、当前规划器为两种算术返回的 D/P 和布局，以及实际双槽配置。先对每种唯一配置测一条，距首轮最快值 3% 内有多个候选时各补一条，按引擎耗时选定串行路线。选定后独立跑两批、每批两条。短批使用 `--parallel 1 --tune-runtime 0`，程序在一槽运行并输出原生队列墙钟。采集器核对实际并行槽数及算术结果。
 
 ```powershell
 python tools/bench/bench_stage2_serial_matrix.py --exe build_stage2_local/ecm_cuda_stage2.exe --device 1 `

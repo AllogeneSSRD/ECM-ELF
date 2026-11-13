@@ -49,7 +49,6 @@ struct FoldDeviceState {
     void read_digest();
     void accept_device_root(const unsigned long long *src,size_t count,bool seed_root);
     void seed(const std::vector<unsigned long long> &H);
-    void restore(const std::vector<unsigned long long> &H);
     std::vector<unsigned long long> read(size_t offset,size_t count);
     void mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count);
     void reverse_copy(size_t src,size_t top,size_t count);

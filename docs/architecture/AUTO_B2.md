@@ -190,7 +190,8 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 - `d` 为D，P=φ(D)/2自动恢复；fold/frontier列自动恢复驻留路径名称。giant分块、chain门槛和ladder开关影响执行形状，保留在matrix中。
 - `source`、`benchmark_kind` 区分模型、正式调优和运行采集。完全相同参数的独立测量合并为一行：`repeats` 是次数，`mean_seconds` 是算术平均耗时，`stddev_seconds` 是样本标准差。正式ECM及NTT也按真实次数合并，较慢观察同样计入。
 - `verified=1` 仅在运行检查通过后写入。逐次selftest/checked/bad/hits计数、预热次数、init/main重复计时、预测值/比值及模型过程保留在内部JSONL，不重复保存到性能矩阵。用于组件缩放的互斥阶段及giant/tree/fold嵌套组件保存均值，不相加冒充总耗时。
-- `measurement_ids` 是有界运行观察或正式批次的去重身份集合，以长度前缀编码为一个字符串单元；`preferred_order` 保存已成功采用路线的顺序。它们属于matrix记录，不作为表外公共字段。
+- ECM 矩阵在 `d` 后依次写入 `mean_seconds`、`stddev_seconds`、`repeats` 和 `required_free_bytes`。显存字段以字节记录单曲线原生工作区模型要求，同形状保留已知最大值。旧行在无可用显存数据时保持空值。`preferred_order` 保存已成功采用路线的顺序。
+- 合并同形状的已有汇总时，优先保留样本数较多的记录，样本数相同时采用时间较新的记录，避免重复累加可能重叠的汇总。离线导入原始 JSONL 时按队列回执去重，运行时预读仅纳入晚于同形状磁盘汇总的最新观测。
 
 完整ECM的均值使用 `stage2_full_wall.total=init+main`，包括初始化、必需自检、GCD及算术收尾，不含Stage1、选型、进程启动、因子分解和TOML写回。每次执行前的模型预测及误差仍记录在JSONL；缓存仅保留用于成本/误差保护的摘要。
 
@@ -246,7 +247,7 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 承载首个试跑不等于必须采用。日志 `runtime_candidates` 输出样本次数、平均时间及标准差；稳定采用原因是`runtime_measured_fastest`。`runtime_search`另列中心D/P、已测区间数、更大D/P的模型代表，以及模型、预算和显存拒绝次数。`last_memory_rejection`记录最后一次显存拒绝的D、生命周期所需free和现场free；不能用终止原因`neighborhood_complete`单独推断全部更大D都已实测。正式调优和运行观察分开累计，不混为一个低波动总体。
 
-运行上限按观察次数而非行数统计；不同参数行不按排名或数量自动淘汰。正式调优批次按真实次数累积。测量身份保证重复导入不增计数：相同/子集快照忽略，完整超集替换；部分重叠且无法恢复交集耗时的统计快照拒绝合并，须从原始JSONL去重恢复，不能猜测交集或重复计算。
+运行上限按观察次数统计，不同参数行保留。正式调优批次按真实次数累积。需要汇总多个文件中的独立观察时，先一起导入原始 JSONL，再合并生成的摘要。
 
 ### 准备结果的复用
 
@@ -271,9 +272,9 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 只采集P≥512且具有完整多批请求拓扑的曲线；G=1及D210启动探针不作为完整区间锚点。结果必须无因子、clean=1、自检和抽查量为正、bad=0、互斥阶段计时完整，且实际D/P/giant数量及fold/frontier状态与原生准入计划相符。规划、失败、中断、save中提前发现因子、调优子进程、因子命中和改变规划路径的回退不加入NF样本。
 
-计时保持`stage2_full_wall.total=init+main`，不包含Stage1、进程启动、选型和发布；每个观察保存采集前预测及完整数学检查。曲线结果先持久保存，再取得tune独占锁、重新读取文件、去重、检查上限并原子写回。锁占用或写回错误只提示，不改变已完成曲线或队列计数。
+计时保持`stage2_full_wall.total=init+main`，不包含Stage1、进程启动、选型和发布；每个观察保存采集前预测及完整数学检查。曲线结果先持久保存，再取得 tune 独占锁、重新读取文件、检查上限并原子写回。锁占用或写回错误只提示，不改变已完成曲线或队列计数。
 
-生产JSONL的`tune_observation`可由[导入工具](../../tools/bench/import_stage2_benchmark_tune.py)的`--runtime-results FILE --runtime-samples 10`恢复，再经原生`--tune-merge`汇集。重复导入同一观察不增加计数；导入保留上限内的独立较慢样本，不只保留最快一条。原始曲线、日志和失败证据放在忽略目录；TOML仅保存合并统计、必要组件均值及去重身份。
+生产 JSONL 的 `tune_observation` 可由[导入工具](../../tools/bench/import_stage2_benchmark_tune.py)的 `--runtime-results FILE --runtime-samples 10` 恢复，再经原生 `--tune-merge` 汇集。重复导入同一观察不增加计数，导入保留上限内的独立较慢样本。原始曲线、日志和失败证据放在忽略目录，TOML 保存合并统计、显存要求及必要组件均值。
 
 实现入口为[planning.cpp](../../src/ecm/stage2/planning/planning.cpp)的`portable_runtime_select/prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune`，统计在[portable_model.h](../../src/ecm/stage2/planning/portable_model.h)的`runtime_statistics`，切换规则在[runtime_tune.h](../../src/ecm/stage2/planning/runtime_tune.h)的`runtime_choice`。CPU门禁、GPU生产流程及离线恢复脚本为`tools/test/test_stage2_runtime_tune.py`、`test_stage2_runtime_selection_gpu.py`、`test_stage2_runtime_task.py`和`test_stage2_runtime_import.py`；各脚本要求新的`--output data/experiments/<目录>`。
 
@@ -283,7 +284,7 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 完整GPU流程基线为0.37.2：在GPU1 RTX4060 Laptop上验证15次队列NF，使用M1009的383位余因子save，B1=50000、B2=10⁸、D=30030、batch=64 MiB、arena=6300 MiB、owner=640 MiB。12次独立执行观察合并为普通10次和承载2次共两行；另核对显式D/算术锁、关闭写入仍读取统计、Montgomery Auto B2计划和因子命中不入样本。采用相同验证保存点重复运行，属于功能门禁，不是新的独立ECM覆盖或性能基准；计时边界为引擎init+main。
 
-CPU检查覆盖独立两遍方差参考、加权合并、较慢观察、10次上限、跨版本复用与设备隔离、完整/子集快照去重、部分重叠拒绝、不同B1记录、NTT参数行与布尔列、对齐矩阵稳定读写、20条不同参数、10级网格、非负拟合、105组邻域及坏文件拒绝。共享列序检查核对原生/Python表头一致、旧条件迁移、最近来源按时间选择、未知时间留空及重复导入不刷新时间。正式GPU门禁通过22项：驻留/host fold调优、512/4423位输入、跨B1复用、短校准、Auto B2、NTT、合并、输入保护、旧格式重建、D邻域、实际执行及承载规划。4条NTT摘要通过排序、数值保持和格式化幂等检查。
+CPU检查覆盖独立两遍方差参考、加权合并、较慢观察、10次上限、跨版本复用与设备隔离、快照选用、显存要求保留、不同B1记录、NTT参数行与布尔列、对齐矩阵稳定读写、20条不同参数、10级网格、非负拟合、105组邻域及坏文件拒绝。共享列序检查核对原生/Python表头一致、旧条件迁移、最近来源按时间选择、未知时间留空及重复导入不刷新时间。正式GPU门禁通过22项：驻留/host fold调优、512/4423位输入、跨B1复用、短校准、Auto B2、NTT、合并、输入保护、旧格式重建、D邻域、实际执行及承载规划。4条NTT摘要通过排序、数值保持和格式化幂等检查。
 
 真实0.37.1 format 8文件在0.37.2只读规划时不重写或重新校准；续算一次NF后，原普通10次统计累计为11次，均值/方差按独立参考核对，未运行的承载行仍保留0.37.1和未知时间。恢复工具把两版24次JSONL观察合并为同一条件、普通20次和承载4次两行；重复导入/合并不增加计数，较慢观察保留，坏检查回执拒绝。
 
@@ -407,7 +408,7 @@ paired策略及保留的采样摘要估算器可用跨D非负拟合分别估计�
 
 `--tune ntt --length-log2 a:b --tune-slices s,... --tune-repeats n --tune-file FILE.toml`测长度和批量，也可用等级预设。共享软预算和增量摘要规则。每秒域卷积数=batch/mean，每秒批调用数=1/mean，不是ECM曲线吞吐，不含大整数carry、归约或完整Stage2。
 
-Stage2 卷积基准逐项对照 GMP 参考。内存不足可跳过，验证失败报错并保留证据。共享 TOML 摘要包含双槽矩阵时采用格式 15，其余写为格式 14。显式 JSONL 输出保留逐次核验数据。
+Stage2 卷积基准逐项对照 GMP 参考。内存不足可跳过，验证失败报错并保留证据。包含 ECM 或队列矩阵的共享 TOML 摘要采用格式 16，仅包含 NTT 的摘要采用格式 14。Stage2 仍可读取格式 8 至 15 的摘要。显式 JSONL 输出保留逐次核验数据。
 
 ### NTT 性能摘要表
 
@@ -491,13 +492,13 @@ NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升�
 
 来源、条件、均值/标准差、验证标记及必要独立误差保留，读回恢复确定性派生量并执行结构与统计校验。重复列、列数不符、嵌套数组、错误位宽/条件、坏核验及重复候选均拒绝。
 
-当前读取format 8…13，写出具有布局、点块平衡、链长、点后端及S4实际身份的format 13；旧程序应拒绝新格式，不能将新策略成绩当作旧默认。旧format 8的条件级 `program_version` 在读取时迁入行内；仅版本不同的相同条件合并，独立测量按真实次数合并均值和方差，重复快照仍去重。缺少布局的旧行按实际旧策略还原，不重新测量；缺实际非零后端证据时保留未知身份。只读使用不改写原文件，后续正常写回或显式合并才输出format 13。format 8以前的中位数等不兼容结构仍需重新生成，不能把中位数当作均值迁移：显式合并报错，短校准成功发布后才原子替换；失败或关闭校准不覆盖旧文件。固定B2允许使用无缓存模型，Auto B2仍要求可用成本条件。旧`.cprof`及独立Stage1 TOML不受此Stage2格式规则影响。
+读取格式 8 至 16，正常写回或显式合并时按内容选择格式 16（ECM 或队列）或 14（仅 NTT）。只读使用保留原文件。旧格式 8 的条件级 `program_version` 在读取时迁入行内，只有版本差异的条件按同一条件处理。缺少布局的旧行按当时的策略还原，缺实际非零后端证据时保留未知身份。格式 8 以前的中位数表需重新生成，显式合并会报错，短校准成功发布后才原子替换。固定 B2 允许使用无缓存模型，Auto B2 要求可用成本条件。旧 `.cprof` 及独立 Stage1 TOML 有各自的格式。
 
 同条件同完整参数的独立测量按次数合并均值和标准差，相同/子集快照不重复计数，不同参数保留多行。运行和正式调优分别累计；估算不覆盖实测。写入使用独占锁，临时文件重新校验后原子替换。
 
 合并：`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-ntt-profile NTT.toml --tune-file combined.toml`。不运行曲线或查询GPU。只有NTT的文件尚无完整引擎锚点，需要短校准或ECM tune。
 
-显式tune的原始日志、计划、回执、二进制SHA256与可用构建清单位于工作目录的`data/experiments/`；正常运行使用现有结果JSONL保存采集回执，matrix行保留来源版本和UTC更新时间；二进制SHA只留在诊断证据。TOML保留统计、必要组件均值及去重身份，不展开运行/导入历史。队列进度身份不包含性能文件、D或承载选型，增量tune不重置已完成编号；Stage1成本输入身份另行保护。
+显式 tune 的原始日志、计划、回执、二进制 SHA256 与可用构建清单位于工作目录的 `data/experiments/`。正常运行使用现有结果 JSONL 保存采集回执，矩阵行保留来源版本和 UTC 更新时间。队列进度身份独立于性能文件、D 或承载选型，增量 tune 保留已完成编号。Stage1 成本输入身份另行保护。
 
 ## 验证范围与限制
 

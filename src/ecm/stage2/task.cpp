@@ -12,6 +12,7 @@
 #include "modulus.h"
 #include "giant_tree.h"
 #include "giant_policy.h"
+#include "schedule_policy.h"
 #include "factorize.h"
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/io/save.h"
@@ -101,7 +102,9 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.tune_profile=o.tune_profile;
     request.tune_runtime=o.tune_runtime;
     request.fixed_queue_route=o.fixed_queue_route;
+    request.queue_requested_b2=o.queue_requested_b2;
     request.queue_phase_gate=o.queue_phase_gate;
+    request.queue_workspace_lease=o.queue_workspace_lease;
     request.worker=o.worker;
     request.engine_log_level=ecm_cuda_stage2_default_log_level()==stage2_log::debug?stage2_log::debug:stage2_log::batches;
     request.observe_selection=[&o](const std::string &text) {
@@ -208,7 +211,7 @@ int curve_worker(Options o) {
     }
     std::string result;
     EcmStage2Metrics tune_metrics;
-    const uint64_t requested_d=o.d,requested_b2=o.b2;
+    const uint64_t requested_d=o.d,requested_b2=o.queue_requested_b2?o.queue_requested_b2:o.b2;
     const unsigned requested_carrier=o.carrier_exponent;
 #ifdef ECM_STAGE2_OPENCL
     stage2_log::phase("Plan Stage2 bounds and OpenCL payload");
@@ -398,8 +401,6 @@ int curve_worker(Options o) {
 namespace {
 using QueueClock=std::chrono::steady_clock;
 using QueueReport=std::function<void(const std::string &,bool)>;
-constexpr uint64_t parallel_window_curves=9; // Retains six completion intervals after trimming.
-constexpr unsigned parallel_phase_mask=57; // Baby, giant, G tree/fold and descent.
 constexpr double parallel_min_gain=1.03;
 
 struct CurveQueue {
@@ -431,29 +432,39 @@ bool checked_queue_curve(const std::string &payload,const ParallelRoute &route) 
     return true;
 }
 
-bool queue_workspace_lease_requested() {
-    const auto *mode=std::getenv("NTT_STAGE2_SWAP_WORKSPACE");
-    return mode && (mode[0]=='1' || mode[0]=='2') && !mode[1];
+struct QueueMemory {
+    std::optional<uint64_t> free;
+    uint64_t required;
+    const char *rejection()const {
+        if(!free)return "device_memory_query_failed";
+        return *free<required || *free<=parallel_memory_margin?"insufficient_device_memory":nullptr;
+    }
+    std::string fields()const {
+        return " required_free_bytes="+std::to_string(required)+" free_bytes="+(free?std::to_string(*free):"unknown");
+    }
+};
+uint64_t queue_memory_required(const ParallelRoute &route,unsigned workers,bool beside_active=false) {
+    const auto lease=route.options.queue_workspace_lease;
+    const auto slots=lease?(beside_active?0u:1u):workers;
+    const auto base=parallel_required_free_bytes(route.reservation,slots);
+    if(lease!=2 || (workers<2 && !beside_active))return base;
+    return route.pre_ftree_reservation>UINT64_MAX-base?UINT64_MAX:base+route.pre_ftree_reservation;
 }
-
-bool pair_memory_fits(const ParallelRoute &route,unsigned workers,bool beside_active=false) {
-    const auto free=parallel_free_memory(route.options.device);
-    const uint64_t margin=uint64_t(256)<<20;
-    if(queue_workspace_lease_requested())return free>margin && (beside_active || free-margin>=route.reservation);
-    return free>margin && (free-margin)/workers>=route.reservation;
+QueueMemory pair_memory(const ParallelRoute &route,unsigned workers,bool beside_active=false) {
+    return {parallel_free_memory(route.options.device),queue_memory_required(route,workers,beside_active)};
 }
 
 struct PairLease {
     Handle mutex;
     bool held=false;
-    bool acquire(const std::string &device) {
-        if(held)return true;
+    const char *rejection(const std::string &device) {
+        if(held)return nullptr;
         if(mutex.value==INVALID_HANDLE_VALUE)
             mutex.value=CreateMutexA(nullptr,FALSE,("Local\\ECM-ELF.Stage2.Queue."+device).c_str());
-        if(!mutex.value)return false;
+        if(!mutex.value)return "device_queue_lock_failed";
         const auto status=WaitForSingleObject(mutex.value,0);
         held=status==WAIT_OBJECT_0 || status==WAIT_ABANDONED;
-        return held;
+        return held?nullptr:status==WAIT_TIMEOUT?"device_queue_busy":"device_queue_lock_failed";
     }
     ~PairLease(){if(held)ReleaseMutex(mutex.value);}
 };
@@ -515,13 +526,15 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
     };
     const auto can_admit=[&] {
         if(running>=workers)return false;
-        if(workers<2 || pair_memory_fits(*route,running?1:2,running!=0))return true;
+        if(workers<2)return true;
+        const auto memory=pair_memory(*route,running?1:2,running!=0);
+        if(!memory.rejection())return true;
         if(pipeline && std::any_of(active.begin(),active.end(),[](const auto &slot){return slot.process && slot.released;}))
             return false; // A finishing worker can still own a CUDA context.
         result.checked=false;
         if(running)return false;
         workers=1;
-        queue.report("stage2_parallel_memory: serial fallback after live memory check",true);
+        queue.report(std::string("stage2_parallel_memory: workers=1 reason=")+memory.rejection()+memory.fields(),true);
         observed_from=QueueClock::now();samples=0;curve_wall_sum=0;
         report_mode();
         return true;
@@ -654,7 +667,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
 }
 
 std::pair<double,double> queue_window_timing(const CurveQueue &queue,unsigned workers,
-                                            uint64_t count,const QueueWindow &timing) {
+                                            uint64_t count,uint64_t sample_curves,const QueueWindow &timing) {
     if(timing.finishes.size()!=count || count<2)return {};
     const double wall=timing.finishes.back();
     const uint64_t middle_count=count>=5?count-3:0;
@@ -665,12 +678,19 @@ std::pair<double,double> queue_window_timing(const CurveQueue &queue,unsigned wo
            <<" middle_curves_per_second="<<(middle>0?middle_count/middle:0)
            <<" checked="<<int(timing.checked);
     queue.report(message.str(),false);
-    if(timing.checked && count>=parallel_window_curves && middle>0)
-        return {wall,middle};
+    if(timing.checked && count==sample_curves)
+        return {wall,middle_count?middle:wall};
     return {};
 }
 
 bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) {
+    const bool serial=o.parallel==ParallelMode::serial;
+    const bool automatic=o.parallel==ParallelMode::automatic;
+    const bool paired=o.parallel==ParallelMode::paired;
+    const auto mode=static_cast<unsigned>(o.parallel);
+    const auto parallel_phase_mask=!serial?stage2_schedule::queue_phase_mask():0;
+    const auto parallel_window_curves=o.parallel_tune_curves;
+    const auto middle_intervals=parallel_window_curves>=5?parallel_window_curves-3:parallel_window_curves;
     auto &state=queue.state;
     const auto size=queue.plan.size();
     if(!state.reserved.empty()) {
@@ -682,67 +702,111 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
     ParallelEvidence evidence{parallel_window_curves};
     bool evidence_read=false;
     const auto *geometry_setting=std::getenv("ECM_STAGE2_QUEUE_D_SEARCH");
-    const bool geometry_search=o.parallel==2 && !d && !queue_workspace_lease_requested() &&
+    const bool automatic_workspace=o.parallel_workspace==0;
+    const bool standard_workspace=o.parallel_workspace!=2;
+    const bool explicit_geometry_search=automatic && !d && standard_workspace &&
         geometry_setting && std::string_view(geometry_setting)=="1";
     struct GeometryArm {const ParallelRoute *route;ParallelEvidence evidence;bool attempted=false;};
     std::vector<ParallelRoute> neighbours;
+    std::optional<ParallelRoute> split_workspace;
     std::vector<GeometryArm> geometry_arms;
-    const bool explicit_serial_sample=o.parallel==0 && !o.tune_runtime &&
+    const bool explicit_serial_sample=serial && !o.tune_runtime &&
         o.portable_cli.count("--parallel") && o.portable_cli.count("--tune-profile");
-    const bool can_learn_parallel=o.tune_runtime || o.portable_cli.count("--parallel");
+    const bool can_learn_parallel=automatic;
+    bool direct_workspace_measured=false;
     PairLease lease;
     while(state.done<size && !stop_requests) {
         const auto remaining=size-static_cast<size_t>(state.done);
         const auto &r=queue.plan[state.done];
         const bool homogeneous=std::all_of(queue.plan.begin()+static_cast<size_t>(state.done),queue.plan.end(),
             [&r](const auto &next){return next.n==r.n && next.b1==r.b1 && next.edwards==r.edwards;});
-        const bool requested=o.parallel ? remaining>=2 : explicit_serial_sample && remaining>=parallel_window_curves;
-        const bool possible=requested && !stage2_backend::opencl && b2 && !o.relocation &&
-            homogeneous && !std::getenv("ECM_STAGE2_PHASE_GATE");
-        if(!possible) {
-            if(o.parallel==1 && remaining>=2)
-                queue.report("stage2_parallel: mode=1 workers=1 reason=ineligible_task",false);
+        const bool requested=remaining>=2 && (!serial || explicit_serial_sample);
+        const char *ineligible=!requested?"insufficient_remaining_curves":stage2_backend::opencl?"backend_not_cuda":
+            !b2?"unresolved_b2":o.relocation?"relocation_active":!homogeneous?"mixed_curve_shapes":
+            std::getenv("ECM_STAGE2_PHASE_GATE")?"external_phase_gate":nullptr;
+        if(ineligible) {
+            if(!serial)
+                queue.report("stage2_parallel: mode="+std::to_string(mode)+" workers=1 reason="+ineligible,false);
             run_curve_window(queue,o,size,1,b2,d);
             break;
         }
         if(!route) {
             Options local=o;local.b2=b2;local.d=d;local.has_d=d!=0;local.runtime_remaining=remaining;
-            try {route=prepare_parallel_route(std::move(local),r,!queue.log.empty());}
+            const char *rejection="single_curve_plan_rejected";
+            try {route=prepare_parallel_route(std::move(local),r,!queue.log.empty(),rejection);}
             catch(const std::exception &e){queue.report("stage2_parallel: route unavailable: "+std::string(e.what()),true);}
             if(!route) {
-                if(o.parallel==1)
-                    queue.report("stage2_parallel: mode=1 workers=1 reason=unavailable_route",false);
-                const auto next=o.parallel==2 && o.tune_runtime && remaining>=parallel_window_curves?
+                if(!serial)
+                    queue.report("stage2_parallel: mode="+std::to_string(mode)+" workers=1 reason="+rejection,false);
+                const auto next=automatic && o.tune_runtime && remaining>=parallel_window_curves?
                     std::min(size,static_cast<size_t>(state.done)+2):size;
                 run_curve_window(queue,o,next,1,b2,d);
                 continue;
             }
         }
-        unsigned workers=o.parallel==1?2:1;
+        unsigned workers=paired?2:1;
         size_t count=remaining;
-        const char *reason=o.parallel==1?"forced":o.parallel==0?"serial":"insufficient_samples";
+        const char *reason=paired?"forced":serial?"serial":"insufficient_samples";
         const ParallelRoute *selected=&*route;
+        const auto primary_memory=!serial?pair_memory(*route,2):QueueMemory{};
+        const bool memory_limited=!serial && primary_memory.free && primary_memory.rejection();
+        const bool geometry_search=automatic && (automatic_workspace || explicit_geometry_search || !geometry_arms.empty() ||
+            (memory_limited && !d && standard_workspace));
+        ParallelEvidence split_evidence{parallel_window_curves};
+        if(!serial && automatic_workspace && !split_workspace) {
+            split_workspace=*route;
+            split_workspace->options.queue_workspace_lease=2;
+        }
         GeometryArm *geometry_arm=nullptr;
         bool geometry_probe=false;
-        if(o.parallel==2 && !evidence_read) {
+        if(automatic && !evidence_read) {
             evidence_read=true;
             try {evidence=read_parallel_evidence(*route,parallel_phase_mask,parallel_window_curves);}
             catch(const std::exception &e){queue.report("stage2_parallel: tune evidence unavailable: "+std::string(e.what()),true);}
         }
-        if(geometry_search && evidence.serial_middle) {
+        if(split_workspace && (geometry_arms.empty() || memory_limited)) {
+            try {
+                split_evidence=read_parallel_evidence(*split_workspace,parallel_phase_mask,parallel_window_curves);
+                // Explicit lease runs used this scope for their identical serial baseline.
+                if(!evidence.serial_middle && split_evidence.serial_middle)
+                    evidence={split_evidence.curves,split_evidence.serial_wall,split_evidence.serial_middle};
+            }catch(const std::exception &e){queue.report("stage2_parallel: workspace evidence unavailable: "+std::string(e.what()),true);}
+        }
+        const bool direct_workspace=memory_limited && split_workspace && !pair_memory(*split_workspace,2).rejection();
+        if(direct_workspace) {
+            if(!direct_workspace_measured)
+                queue.report("stage2_parallel_admission: candidate=workspace_mode_1 reason=insufficient_device_memory"+
+                    primary_memory.fields(),false);
+            selected=&*split_workspace;
+            workers=2;
+            reason="workspace_memory_fallback";
+            if(can_learn_parallel && !direct_workspace_measured && !split_evidence.paired_middle &&
+               remaining>=parallel_window_curves)
+                count=parallel_window_curves;
+            direct_workspace_measured=true;
+        } else if(geometry_search && evidence.serial_middle) {
             if(geometry_arms.empty()) {
                 geometry_arms.push_back({&*route,evidence});
                 try {
-                    neighbours=prepare_parallel_alternatives(*route,r,!queue.log.empty(),o.groot_layout<0);
+                    if(memory_limited)queue.report(std::string("stage2_parallel_admission: candidate=primary reason=")+
+                        primary_memory.rejection()+primary_memory.fields(),false);
+                    if(split_workspace)
+                        geometry_arms.push_back({&*split_workspace,split_evidence});
+                    if(primary_memory.free && !d && (memory_limited || explicit_geometry_search))
+                        neighbours=prepare_parallel_alternatives(*route,r,!queue.log.empty(),
+                        o.groot_layout<0,*primary_memory.free,b2,o.b2_round_chain);
                     for(const auto &other:neighbours)geometry_arms.push_back({&other,
                         read_parallel_evidence(other,parallel_phase_mask,parallel_window_curves)});
                 }catch(const std::exception &e){queue.report("stage2_parallel_geometry: "+std::string(e.what()),true);}
             }
             const double serial_wall=evidence.serial_wall/evidence.curves;
-            const double serial_middle=evidence.serial_middle/(evidence.curves-3);
+            const double serial_middle=evidence.serial_middle/middle_intervals;
             double fastest=serial_wall;
+            bool fits=false,has_timing=false;
             for(auto &arm:geometry_arms) {
-                if(!pair_memory_fits(*arm.route,2))continue;
+                const QueueMemory memory{primary_memory.free,queue_memory_required(*arm.route,2)};
+                if(memory.rejection())continue;
+                fits=true;
                 if(!arm.evidence.paired_middle) {
                     if(!arm.attempted && can_learn_parallel && remaining>=parallel_window_curves) {
                         geometry_arm=&arm;geometry_probe=true;
@@ -750,8 +814,9 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
                     }
                     continue;
                 }
+                has_timing=true;
                 const auto wall=arm.evidence.paired_wall/arm.evidence.curves;
-                const auto middle=arm.evidence.paired_middle/(arm.evidence.curves-3);
+                const auto middle=arm.evidence.paired_middle/middle_intervals;
                 if(wall<=fastest && serial_middle>=middle*parallel_min_gain) {
                     geometry_arm=&arm;fastest=wall;
                 }
@@ -759,9 +824,12 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
             if(geometry_arm) {
                 selected=geometry_arm->route;workers=2;
                 if(geometry_probe)count=parallel_window_curves;
-                reason=geometry_probe?"measure_parallel_geometry":"measured_geometry_gain";
-            } else reason="geometry_serial";
-        } else if(o.parallel==2) {
+                if(selected->options.queue_workspace_lease==2)
+                    reason=geometry_probe?"measure_parallel_workspace":"measured_workspace_gain";
+                else reason=geometry_probe?"measure_parallel_geometry":"measured_geometry_gain";
+            } else if(!fits)reason=primary_memory.rejection();
+            else reason=has_timing?"parallel_geometry_no_gain":"parallel_geometry_samples_insufficient";
+        } else if(automatic) {
             if(evidence.serial_middle && evidence.paired_middle) {
                 const auto gain=evidence.serial_middle/evidence.paired_middle;
                 workers=(gain>=parallel_min_gain && evidence.serial_wall>=evidence.paired_wall)?2:1;
@@ -772,33 +840,48 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
                 reason=workers==2?"measure_parallel":"measure_serial";
             }
         }
-        if(workers==2 && (!pair_memory_fits(*selected,2) || !lease.acquire(selected->device_uuid))) {
-            workers=1;count=remaining;reason="memory_or_device_busy";
-            selected=&*route;geometry_arm=nullptr;geometry_probe=false;
+        std::string admission;
+        if(workers==2){
+            const auto memory=pair_memory(*selected,2);
+            admission=memory.fields();
+            const char* reject=memory.rejection();
+            if(!reject)reject=lease.rejection(selected->device_uuid);
+            if(reject){
+                workers=1;count=remaining;reason=reject;
+                selected=&*route;geometry_arm=nullptr;geometry_probe=false;
+            }
+        }else if(geometry_search&&evidence.serial_middle){
+            admission=primary_memory.fields();
         }
         if(geometry_probe)geometry_arm->attempted=true;
         std::ostringstream decision;
-        decision<<"stage2_parallel: mode="<<o.parallel<<" workers="<<workers<<" reason="<<reason
+        decision<<"stage2_parallel: mode="<<mode<<" workers="<<workers<<" reason="<<reason
                 <<" curves="<<count<<" D="<<selected->shape.d<<" P="<<ecm_stage2::d_catalog::degree(selected->shape.d)
                 <<" carrier="<<selected->shape.carrier<<" phase_mask="<<(workers==2?parallel_phase_mask:0)
-                <<" layout="<<unsigned(selected->shape.groot_balanced);
-        if(!geometry_search && o.parallel==2 && evidence.serial_middle && evidence.paired_middle)
+                <<" layout="<<unsigned(selected->shape.groot_balanced)<<" B2="<<selected->shape.b2<<" requested_B2="<<b2
+                <<admission;
+        if(workers==2)decision<<" giant_gate="<<(stage2_schedule::whole_giant_loop_requested()?"loop":"batch")
+                             <<" workspace_mode="<<(selected->options.queue_workspace_lease?2:1);
+        if(!geometry_search && automatic && evidence.serial_middle && evidence.paired_middle)
             decision<<" middle_gain="<<evidence.serial_middle/evidence.paired_middle-1
                     <<" wall_gain="<<evidence.serial_wall/evidence.paired_wall-1;
         queue.report(decision.str(),false);
         auto fixed=selected->options;
+        fixed.queue_requested_b2=b2;
         fixed.queue_phase_gate=workers==2?std::to_string(parallel_phase_mask)+':'+stage2_queue::token():std::string{};
+        if(workers==1)fixed.queue_workspace_lease=0;
         const auto timing=run_curve_window(queue,fixed,static_cast<size_t>(state.done)+count,workers,fixed.b2,fixed.d,selected);
-        const auto [wall,middle]=queue_window_timing(queue,workers,count,timing);
-        if(middle>0 && (o.parallel!=2 || can_learn_parallel)) {
+        const auto [wall,middle]=queue_window_timing(queue,workers,count,parallel_window_curves,timing);
+        if(middle>0) {
             if(geometry_probe) {
                 auto &entry=geometry_arm->evidence;
                 entry.curves=count;entry.paired_wall=wall;entry.paired_middle=middle;
-            } else if(o.parallel==2 && count==evidence.curves && !geometry_arm) {
+            } else if(automatic && !geometry_arm && !direct_workspace) {
                 if(workers==2){evidence.paired_wall=wall;evidence.paired_middle=middle;}
                 else {evidence.serial_wall=wall;evidence.serial_middle=middle;}
             }
-            try {record_parallel_window(*selected,workers==2?parallel_phase_mask:0,workers,count,wall,middle);}
+            try {record_parallel_window(*selected,workers==2?parallel_phase_mask:0,workers,count,wall,middle,
+                queue_memory_required(*selected,workers));}
             catch(const std::exception &e){queue.report("stage2_parallel: tune write skipped: "+std::string(e.what()),true);}
         }
         if(!timing.checked && !geometry_probe && state.done<size && !stop_requests) {
@@ -837,7 +920,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
     };
     // A common TOML may share device/save defaults, never writable queue state.
     std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
-    if(o.parallel && o.debug_log)for(const char *suffix:{".slot1",".slot2"})
+    if(o.parallel!=ParallelMode::serial && o.debug_log)for(const char *suffix:{".slot1",".slot2"})
         writable.emplace_back(o.debug_file+suffix);
     for(size_t i=0;i<writable.size();++i) {
         if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
@@ -856,7 +939,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
     report(std::string(ecm_program::name)+" "+ecm_program::version+" (Stage2)");
     if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
     struct ControlGuard { ~ControlGuard(){SetConsoleCtrlHandler(console_control,FALSE);} } control_guard;
-    const auto calibration_range=queue && o.parallel!=1 && !o.dry && o.short_calibration?
+    const auto calibration_range=queue && o.parallel!=ParallelMode::paired && !o.dry && o.short_calibration?
         portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};
     uint64_t completed=0,failed_tasks=0;
     for (;;) {
@@ -928,7 +1011,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(plan.size())+
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
-        if(o.parallel!=1 && !o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())
+        if(o.parallel!=ParallelMode::paired && !o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())
             ensure_portable_calibration(o,plan.front(),defaults,calibration_range);
         stage2_queue::State state;
         const bool persist=queue&&!o.dry&&!o.plan_only;

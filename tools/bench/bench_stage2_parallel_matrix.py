@@ -22,7 +22,7 @@ class WindowNotQualified(ValueError):
     """The queue timing was rejected by the worker's live checks."""
 
 
-def command(exe, row, folder, device, budgets, parallel=1):
+def command(exe, row, folder, device, budgets, parallel=2):
     arena, batch, owner = budgets
     backend = lambda width: f"coop{width}" if width else "scalar"
     return [str(exe), "--config", str(folder/"ecm.toml"), "--save", str(folder/"points.save"),
@@ -121,7 +121,7 @@ def queue_sample(folder, expected, row, count, workers=2):
         return dict(result, curves=1, engine_seconds=float(engine[0]))
     decisions = re.findall(r"^stage2_parallel: (.+)$", log, re.M)
     windows = re.findall(r"^stage2_parallel_window: (.+)$", log, re.M)
-    reason = "workers=2 reason=forced" if workers == 2 else "workers=1 reason=insufficient_samples"
+    reason = "workers=2 reason=forced" if workers == 2 else "workers=1 reason=serial"
     if len(decisions) != 1 or reason not in decisions[0] or len(windows) != 1:
         raise WindowNotQualified(f"no complete {workers}-slot window")
     timing = dict(re.findall(r"(\w+)=([0-9.e+-]+)", windows[0]))
@@ -162,10 +162,8 @@ def admitted_geometries(exe, row, device, folder, point, env, curves):
 def run_sample(exe, row, folder, point, expected, device, budgets, env, count, workers=2):
     folder.mkdir()
     (folder/"points.save").write_bytes((point+b"\n")*count)
-    (folder/"ecm.toml").write_text("[stage2]\nstage2_short_calibration=false\n",encoding="utf-8")
-    # With a fresh tune and fewer than nine curves, auto stays on one slot
-    # and emits the same native queue timing as forced two-slot mode.
-    parallel = 1 if workers == 2 else 2 if count > 1 else 0
+    (folder/"ecm.toml").write_text("[stage2]\nstage2_short_calibration=false\nstage2_parallel_workspace=1\n",encoding="utf-8")
+    parallel = 2 if workers == 2 else 1
     args = command(exe,row,folder,device,budgets,parallel)
     (folder/"command.json").write_text(json.dumps(args,indent=2),encoding="utf-8")
     sampler = TelemetryRecorder(device,folder/"gpu.jsonl",.1)

@@ -15,7 +15,7 @@ static Fields sample(unsigned id,unsigned d,double seconds) {
         {"max_seconds",p::numeric(seconds)},{"stddev_seconds","0"},
         {"giant_chunk_points","253440"},{"giant_chain_min","32768"},{"giant_force_ladder","0"},
         {"program_version",p::quoted(ecm_program::version)},{"updated_at",p::quoted(p::utc_updated_at(1700000000000000000ull+id))},
-        {"runtime_sample_id",p::quoted("sample-"+std::to_string(id))}};
+        {"required_free_bytes",std::to_string(1000000000ull+id)}};
 }
 int main(int argc,char **argv) {
     try {
@@ -25,7 +25,7 @@ int main(int argc,char **argv) {
         require(profile.update(sample(1,690690,52.8733957)),"first sample missing");
         require(profile.update(sample(2,690690,53.1)),"slower independent observation was discarded");
         require(profile.samples.size()==1,"identical parameters did not merge");
-        require(!profile.update(sample(2,690690,53.1)),"replayed sample counted twice");
+        require(!profile.update(sample(2,690690,53.1),10,false),"imported shorter snapshot counted twice");
         for(unsigned i=3;i<=10;++i)require(profile.update(sample(i,690690,52.9+i*.01)),"cap reached too early");
         require(!profile.update(sample(11,690690,1)),"cap did not retain first ten independent samples");
         require(profile.update(sample(21,1381380,45.1830623)),"candidate first observation missing");
@@ -99,16 +99,18 @@ int main(int argc,char **argv) {
         p::Estimator foreign_model(profile,foreign_condition,p::Ignore::parse(""),query);
         require(foreign_model.runtime_statistics(fast).count==0,"different device treated as exact");
         p::Profile bounded;bounded.condition(profile.conditions.at(0));
-        auto legacy=sample(1,690690,52.8);legacy.erase("runtime_sample_id");
-        require(bounded.update(legacy,2) && !bounded.update(legacy,2) && bounded.update(sample(30,690690,53),2) &&
+        auto legacy=sample(1,690690,52.8);legacy.erase("required_free_bytes");legacy["measurement_ids"]="\"8:legacy-1\"";
+        require(bounded.update(legacy,2) && !bounded.update(legacy,2,false) && bounded.update(sample(30,690690,53),2) &&
             !bounded.update(sample(31,690690,50),2),"legacy extension or configured cap failed");
         auto formal=sample(90,690690,50);formal["benchmark_kind"]="\"formal_fixture\"";
-        require(bounded.update(formal),"formal sample mixed with runtime");formal["mean_seconds"]="60";formal["runtime_sample_id"]="\"formal-second\"";
+        require(bounded.update(formal),"formal sample mixed with runtime");formal["mean_seconds"]="60";
         require(bounded.update(formal),"independent formal summary was discarded");
         const auto path=std::filesystem::path(argv[1])/"roundtrip.toml";
         {std::ofstream out(path);out<<profile.serialize();}
         const auto loaded=p::Profile::load(path);require(loaded.samples.size()==2,"bounded samples lost on TOML roundtrip");
         require(loaded.serialize()==profile.serialize(),"runtime serialization is not stable");
+        require(p::optional_uint(loaded.samples[0],"required_free_bytes")==1000000010ull &&
+            bounded.serialize().find("measurement_ids")==std::string::npos,"memory maximum or legacy column removal failed");
         require(ecm_stage2::tune::uint(profile.samples[0],"repeats")==10 && ecm_stage2::tune::uint(profile.samples[1],"repeats")==2,"merged repeat count wrong");
         require(profile.serialize().find(".table.")==std::string::npos && profile.serialize().find("selftest_cases")==std::string::npos,"redundant serialized fields remain");
         long double sum=52.8733957L+53.1L;std::vector<long double> values{52.8733957L,53.1L};
@@ -119,13 +121,14 @@ int main(int argc,char **argv) {
             "aggregate mean/variance differs from independent two-pass reference");
         p::Profile partial;partial.condition(profile.conditions.at(0));
         partial.update(sample(1,690690,52.8733957));partial.update(sample(2,690690,53.1));
-        require(partial.update(profile.samples[0]) && !partial.update(profile.samples[0]),"snapshot superset/subset deduplication failed");
+        require(partial.update(profile.samples[0],10,false) && !partial.update(profile.samples[0],10,false),
+            "larger snapshot should replace once");
         p::Profile left,right;left.condition(profile.conditions.at(0));right.condition(profile.conditions.at(0));
         left.update(sample(1,690690,10));left.update(sample(2,690690,11));
         right.update(sample(2,690690,11));right.update(sample(3,690690,12));
-        const auto frozen=left.serialize();bool overlap=false;
-        try{left.update(right.samples.front());}catch(const std::runtime_error&){overlap=true;}
-        require(overlap && frozen==left.serialize(),"partial overlap was silently double-counted or mutated the profile");
+        require(left.update(right.samples.front(),10,false) &&
+            p::optional_uint(left.samples.front(),"repeats")==2 && left.samples.front()==right.samples.front(),
+            "overlapping snapshots must select the newer summary without combining");
         auto next_b1=sample(40,1381380,46);next_b1["b1"]="22000000";
         require(profile.update(next_b1),"different B1 parameter row was discarded");
         require(profile.samples.size()==3,"different complete parameters merged into one row");
@@ -137,17 +140,17 @@ int main(int argc,char **argv) {
         require(p::matches(current,different,p::Ignore::parse("")),"provenance version became a measurement condition");
         require(profile.condition(different)==0,"version-only difference created a new condition");
         p::Profile field;field.condition(current);
-        auto ntt=[](const char *id,double time,unsigned tile) {
+        auto ntt=[](double time,unsigned tile) {
             Fields f={{"coop_outer","false"},{"warp_tail","true"},{"compact_scratch","true"},{"condition","0"},{"length","8"},{"log2_length","3"},{"batch","1"},{"tile",std::to_string(tile)},
                 {"bad","0"},{"source","\"measured\""},{"status","\"measured\""},{"unit","\"field_convolution\""},
                 {"reference_kind","\"gmp_3x3_distinct_constant_v1\""},{"verified_words_per_sample","8"},{"repeats","1"},
                 {"mean_seconds",p::numeric(time)},{"stddev_seconds","0"},{"conv_iter_per_s",p::numeric(1/time)},
-                {"batch_iter_per_s",p::numeric(1/time)},{"measurement_ids",p::encoded_ids({id})}};p::stamp_provenance(f,1700000000000000000ull+tile);return f;
+                {"batch_iter_per_s",p::numeric(1/time)}};p::stamp_provenance(f,1700000000000000000ull+tile);return f;
         };
-        require(field.update_ntt(ntt("ntt-a",1,3)) && field.update_ntt(ntt("ntt-b",3,3)),"NTT repeat accumulation failed");
+        require(field.update_ntt(ntt(1,3)) && field.update_ntt(ntt(3,3)),"NTT repeat accumulation failed");
         require(field.ntt.size()==1 && ecm_stage2::tune::uint(field.ntt.front(),"repeats")==2 &&
             std::abs(ecm_stage2::tune::real(field.ntt.front(),"mean_seconds")-2)<1e-12,"NTT mean is not weighted by repeats");
-        require(field.update_ntt(ntt("ntt-c",2,4)) && field.ntt.size()==2,"different NTT parameters were discarded");
+        require(field.update_ntt(ntt(2,4)) && field.ntt.size()==2,"different NTT parameters were discarded");
         {std::ofstream out(path);out<<field.serialize();}
         require(p::Profile::load(path).serialize()==field.serialize(),"NTT matrix roundtrip changed statistics");
         auto foreign=field.serialize();const auto at=foreign.find(ecm_program::version);foreign.replace(at,std::string(ecm_program::version).size(),"0.0.1");
@@ -164,7 +167,6 @@ int main(int argc,char **argv) {
         auto legacy_narrow=sample(201,1141140,70);legacy_narrow["arithmetic_bits"]="5987";
         legacy_narrow["carrier_exponent"]="5987";legacy_narrow["modulus_kind"]="\"mersenne\"";
         auto blocked=legacy_narrow;blocked["groot_balanced"]="1";blocked["mean_seconds"]="55";
-        blocked["runtime_sample_id"]="\"blocked-201\"";
         auto legacy_wide=legacy_narrow;legacy_wide["arithmetic_bits"]="9000";
         require(!p::sample_groot_layout(legacy_narrow) && p::sample_groot_layout(legacy_wide),"historical layout was reinterpreted");
         p::Profile layouts;layouts.condition(current);layouts.update(legacy_narrow);layouts.update(blocked);
@@ -247,8 +249,7 @@ int main(int argc,char **argv) {
             "exact runtime prediction ignored minimum one");
         require(std::string(one_estimate.uncertainty)=="single_runtime_observation","one sample claimed measured dispersion");
         p::Profile formal_profile;formal_profile.condition(current);auto formal_one=sample(223,1141140,12);
-        formal_one["benchmark_kind"]="\"save\"";formal_one.erase("runtime_sample_id");
-        formal_one["measurement_ids"]=p::encoded_ids({"formal-one"});formal_profile.update(formal_one);
+        formal_one["benchmark_kind"]="\"save\"";formal_profile.update(formal_one);
         p::Estimator formal_min1(formal_profile,current,p::Ignore::parse(""),query,true,1);
         p::Estimator formal_min2(formal_profile,current,p::Ignore::parse(""),query,true,2);
         const auto formal_shape=formal_min1.shape(formal_profile.samples[0]);
@@ -295,7 +296,7 @@ int main(int argc,char **argv) {
         std::cout<<"{\"layout_identity\":true,\"ntt_cliff_selection\":true,\"carrier_allocation\":true,\"complete\":true,\"retains_slower_samples\":true,\"cap\":10,\"independent_samples\":12,"
             "\"observed_D_win\":true,\"fastest_mean\":true,\"carrier_first\":true,\"deduplication\":true,"
             "\"cross_version_reuse\":true,\"matrix_roundtrip\":true,\"mean_variance_reference\":true,"
-            "\"snapshot_deduplication\":true,\"partial_overlap_rejected\":true,\"ntt_parameter_rows\":true,"
+            "\"snapshot_replacement\":true,\"memory_requirement_roundtrip\":true,\"ntt_parameter_rows\":true,"
             "\"model_memoization\":true,\"ntt_cost_evaluations\":"<<model.ntt_cost_evaluations<<",\"ntt_cost_cache_hits\":"<<model.ntt_cost_hits<<",\"CUDA_calls\":0}\n";
     } catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

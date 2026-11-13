@@ -103,7 +103,9 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     if(o.weighted_ntt)arg(L"--weighted-ntt",1);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     if(o.fixed_queue_route)cmd+=L" --fixed-queue-route";
+    if(o.queue_requested_b2)arg(L"--queue-requested-b2",o.queue_requested_b2);
     if(!o.queue_phase_gate.empty())cmd+=L" --queue-phase-gate "+quote(fs::path(o.queue_phase_gate).wstring());
+    if(o.queue_workspace_lease)arg(L"--queue-workspace-lease",o.queue_workspace_lease);
     arg(L"--tune-runtime-samples",o.runtime_samples);
     arg(L"--tune-min-repeats",o.tune_min_repeats);
     arg(L"--runtime-remaining-curves",o.runtime_remaining);

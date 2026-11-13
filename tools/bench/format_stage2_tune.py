@@ -8,8 +8,8 @@ from stage2_tune_matrix import matrix_row_key
 
 def format_rows(source: str) -> tuple[str, int]:
     document = tomllib.loads(source)
-    if document.get('profile',{}).get('format') not in range(8, 16):
-        raise ValueError('The formatter requires profile format 8–15')
+    if document.get('profile',{}).get('format') not in range(8, 17):
+        raise ValueError('The formatter requires profile format 8–16')
     changed = 0
     section = re.compile(r"(?m)^\[ntt(?:\.(\d+))?\][^\r\n]*\r?\n(?:(?!^\[).)*", re.S | re.M)
 

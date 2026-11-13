@@ -87,19 +87,25 @@ CUDA的`stage2_seed_backend`默认auto，也可强制scalar／coop32；CLI为`--
 
 ## CUDA 双曲线调度
 
-在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_parallel`，命令行 `--parallel 0|1|2` 可覆盖。该选项适用于同一 Stage2 任务中目标 N、B1 和曲线族一致的记录，并要求有效 B2 已确定。
+在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_parallel`，命令行 `--parallel auto|0|1|2` 可覆盖。该选项适用于同一 Stage2 任务中目标 N、B1 和曲线族一致的记录，并要求有效 B2 已确定。
 
-- `0` 串行。固定参数对照可以显式传 `--parallel 0 --tune-runtime 0 --tune-profile FILE`，将合格的串行窗口作为比较基准保存。
-- `1` 用已选路线直接尝试双槽。可同时固定 D、承载及其他算术选项进行跑分。完成一条即补下一条，显存或计划不满足准入时串行处理。
-- `2` 自动，默认。单曲线选型稳定后读取共享 tune。同形状无数据时，先用队列中的真实曲线测串行，再测双槽。每次试跑至少 9 条，取第 2 条完成到倒数第 2 条完成之间的速率。中段提升至少 3% 且整段墙钟没有增加才采用双槽。关掉单曲线运行时调优后，默认 auto 只读已有双槽成绩，显式 `--parallel 2` 可用固定 D 试跑新窗口。
+- `0` 或 `"auto"` 按实测自动选择。无匹配成绩时，先用真实曲线测串行，再测允许且可准入的双槽候选。窗口由 `stage2_parallel_tune_curves` 指定，默认 5，范围 2–16。5 条及以上取第 2 条完成到倒数第 2 条完成之间的吞吐，要求提高至少 3% 且整窗墙钟没有增加。2 至 4 条用整窗吞吐，要求提高至少 3%。合格候选按整窗每条耗时择优。不同条数的 tune 记录独立匹配。工作区为 auto 且双工作区预算不足时，直接采用可准入的 F 树前租约。
+- `1` 单曲线串行，默认。固定参数对照可以显式传 `--parallel 1 --tune-runtime 0 --tune-profile FILE`，将合格的串行窗口作为比较基准保存。
+- `2` 用已选路线直接尝试双槽。完成一条即补下一条，显存或计划不满足准入时串行处理。
 
 各 worker 保持独立 CUDA 上下文。父进程可在 GPU 计算期间预读下一条，或让上一条继续发布。按算术位宽，单槽和仅报告因子的双槽默认预读至 4096 bit，保留因子归因的双槽至 2048 bit。调试日志按进程槽附加 `.slot1` 至 `.slot3`，内部 JSONL 按实际完成写入。中途命中因子的窗口仍发布结果，该窗口不计入调优。
 
 曲线级日志用 `stage2_queue: workers=1|2` 显示当前窗口的调度模式。双槽和启用预读的串行窗口中，子进程的阶段、批次、结果和警告带有 `[curve N]` 前缀。N 是任务内从 1 开始的曲线序号，`record` 是 save 文件中的记录号。`curve_prepare` 表示开始预读，`curve_start` 表示获准计算。`curve_done` 中的 `completed` 是任务中已有完成记录的总数，包含续跑恢复的结果。曲线可乱序完成，完成数独立于曲线序号。
 
+双槽准入日志中的 `required_free_bytes` 和 `free_bytes` 分别是所需和查询到的空闲显存，单位为字节。`insufficient_device_memory` 表示显存不足，`device_memory_query_failed` 表示查询失败，`device_queue_busy` 表示另一队列已占用设备调度锁，`device_queue_lock_failed` 表示锁操作失败。候选试跑同时记录 `D`、实际 `B2` 和 `requested_B2`。
+
 `curve_done` 的 `eta` 以秒为单位，是按当前调度窗口估算的任务剩余墙钟。串行使用本窗口已完成曲线的平均墙钟。双槽队列有后续曲线时用完成速率估计，收尾时用活跃曲线中最晚的预计完成时间。双槽积压窗口需至少两个完成样本才报告 ETA，切换窗口时重新估计。停机请求后不再估算后续任务，最后一条完成时 ETA 为零。原始单曲线耗时和队列 ETA 使用不同计时边界。
 
-高级对照可设置 `ECM_STAGE2_QUEUE_PIPELINE=0` 关闭预读、`1` 仅预读固定路线、`2` 同时预读运行时调优。`ECM_STAGE2_EARLY_GPU_HANDOFF=0` 禁用块积后的提前交接，`NTT_STAGE2_RESIDENT_PRODUCTS=0` 强制上传叶值后计算块积。`ECM_STAGE2_QUEUE_D_SEARCH=1` 启用自动 D 的双槽试跑，最多额外试三种配置。`NTT_STAGE2_SWAP_WORKSPACE=1` 启用双槽单套工作区租约，`2` 在 fold 后换出 H 再交接。D/P 试跑与单套工作区用于显式实验。算法、显存准入和计时边界见 [阶段调度](../architecture/STAGE2.md#双目标阶段调度)。
+高级对照可设置 `ECM_STAGE2_QUEUE_PIPELINE=0` 关闭预读、`1` 仅预读固定路线、`2` 同时预读运行时调优。`ECM_STAGE2_EARLY_GPU_HANDOFF=0` 禁用块积后的提前交接，`NTT_STAGE2_RESIDENT_PRODUCTS=0` 强制上传叶值后计算块积。`ECM_STAGE2_QUEUE_D_SEARCH=1` 在首选路线显存充足时也搜索备选。`ECM_STAGE2_GIANT_GATE=loop` 实验性地把整个 giant、G 树和 fold 循环合成一次持锁，默认仍逐批交接。
+
+在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_parallel_workspace`。默认 `0`，也可写为 `"auto"`。模式 `1` 让两槽各持一套工作区，模式 `2` 让下一槽先做准备和 Baby 点，到 F 树前再申请独占大工作区。`stage2_parallel = 0` 会按实测比较可准入的模式。`stage2_parallel = 2` 直接使用指定模式，工作区为 auto 时优先双工作区，预算不足时使用可准入的模式 2。工作区模式和阶段掩码分别参与 tune 匹配。算法与计时边界见 [阶段调度](../architecture/STAGE2.md#双目标阶段调度)。
+
+`ECM_STAGE2_QUEUE_PHASE_MASK` 可给队列双槽指定阶段互斥掩码，默认 `57`。用 `0` 允许所有阶段交错，`56` 放开 Baby，`32` 只锁下降，`25` 放开下降，`49` 只移除 giant 点生成的锁。各掩码保留各自的双槽成绩。实时显存检查、设备队列互斥和显式启用的工作区租约仍生效。
 
 ## 队列语法
 
@@ -205,7 +211,7 @@ CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局�
 
 `--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
 
-分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再让`stage2_tune_profile`指向结果。同条件同完整参数按真实次数合并均值与样本标准差，不同参数保留多行；估算不能覆盖实测。可用`--tune-ntt-profile NTT.toml`导入组件。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
+用 `--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml` 汇集合格摘要，再让 `stage2_tune_profile` 指向结果。同形状的实测摘要优先保留样本数较多的一行，次数相同时采用较新的记录。不同形状各自保留。可用 `--tune-ntt-profile NTT.toml` 导入组件。该命令不运行 GPU 测试，输出应使用独立文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
 
 生产用`--tune-profile FILE.toml`或`stage2_tune_profile`加载资料，不要求B1匹配。默认`stage2_prediction_policy=model`：普通按实际N位宽，梅森按p的算术位宽查询各自区间；精确实测优先，其他输入使用基础模型加区间校正。更改D和切换承载分别通过双侧误差保护，NTT/驻留边界及当前显存重新规划。设为`paired`或CLI `--prediction-policy paired`恢复精确位宽/B2/形状的配对实测门禁。
 

@@ -24,7 +24,7 @@ def model_candidate(exe, row, folder, point, device, env):
     (folder/"points.save").write_bytes(point+b"\n")
     (folder/"ecm.toml").write_text("[stage2]\nstage2_short_calibration=false\n", encoding="utf-8")
     request = dict(row, D=0, layout="auto")
-    args = command(exe, request, folder, device, row["budgets"], parallel=0) + ["--plan-only", "--curves", "1"]
+    args = command(exe, request, folder, device, row["budgets"], parallel=1) + ["--plan-only", "--curves", "1"]
     write(folder/"command.json", args)
     report = subprocess.run(args, env=env, cwd=folder, capture_output=True, text=True, encoding="utf-8", timeout=45)
     (folder/"plan.log").write_text(report.stdout+report.stderr, encoding="utf-8")

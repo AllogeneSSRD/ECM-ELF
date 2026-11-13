@@ -108,7 +108,9 @@
       <Item id="option_stage2_stage2_tune_arithmetic" name="显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo/save配对仍遵循stage2_auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。" />
       <Item id="option_stage2_stage2_tune_profile" name="共享调优 TOML。CLI --tune-profile 优先，相对路径以 ecm.toml 所在目录为准。留空且未指定旧成本配置时优先使用 tune.toml，若只有已有的 stage2_ecm_tune.toml 则沿用。通用与梅森算术分别按 arithmetic_bits 查询。" />
       <Item id="option_stage2_stage2_tune_runtime" name="按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false 关闭单曲线试跑、采集和写回，双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。" />
-      <Item id="option_stage2_stage2_parallel" name="CUDA Stage2 曲线队列：0 串行，1 允许同时运行两条，2 自动（默认）。自动模式在单曲线路线确定后比较通过检查的串行和双曲线队列吞吐。队列测量保存到共享 tune 文件。1 和 2 均需有足够显存运行两个 worker。命令行：--parallel 0|1|2。" />
+      <Item id="option_stage2_stage2_parallel" name="CUDA Stage2 曲线队列。0 或 auto 按实测自动选择串行或双槽，1 单曲线串行（默认），2 请求双槽并检查显存准入。命令行 --parallel auto|0|1|2。" />
+      <Item id="option_stage2_stage2_parallel_workspace" name="CUDA Stage2 工作区策略。0 或 auto 比较双工作区和 F 树前租约。双工作区显存不足且租约可准入时直接选 2。1 使用双工作区，2 让下一槽先准备并计算 Baby 点，到 F 树前才申请独占大工作区。" />
+      <Item id="option_stage2_stage2_parallel_tune_curves" name="CUDA Stage2 每个队列调优窗口的曲线数。2 至 4 条按整窗吞吐比较，5 条及以上还检查中段完成吞吐。" />
       <Item id="option_stage2_stage2_tune_min_repeats" name="运行时D、布局与链长候选比较和采用所需的最少已校验观察数，同时作为ECM校准最小重复次数；--tune-repeats可要求更多。默认2；设为1用于快速筛查，但无法测得离散程度。不得超过stage2_tune_runtime_samples；已有观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。" />
       <Item id="option_stage2_stage2_tune_runtime_samples" name="完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。达到stage2_tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。" />
       <Item id="option_stage2_stage2_short_ntt_batch_tune" name="实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。" />

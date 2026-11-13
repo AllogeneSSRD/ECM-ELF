@@ -22,7 +22,7 @@ void configure_phase_experiment(Options &o) {
     o.tune_runtime = false;
     o.short_calibration = false;
     if(!o.fixed_queue_route)o.short_batch_tune = false;
-    o.parallel = 0;
+    o.parallel = ParallelMode::serial;
 #else
     (void)o;
 #endif

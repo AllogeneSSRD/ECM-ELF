@@ -64,6 +64,10 @@ inline constexpr int64_t stage2_stage2_factor_timeout_minimum=1;
 inline constexpr int64_t stage2_stage2_factor_timeout_maximum=600;
 inline constexpr int64_t stage2_stage2_parallel_minimum=0;
 inline constexpr int64_t stage2_stage2_parallel_maximum=2;
+inline constexpr int64_t stage2_stage2_parallel_workspace_minimum=0;
+inline constexpr int64_t stage2_stage2_parallel_workspace_maximum=2;
+inline constexpr int64_t stage2_stage2_parallel_tune_curves_minimum=2;
+inline constexpr int64_t stage2_stage2_parallel_tune_curves_maximum=16;
 inline constexpr int64_t stage2_stage2_tune_min_repeats_minimum=1;
 inline constexpr int64_t stage2_stage2_tune_min_repeats_maximum=1000;
 inline constexpr int64_t stage2_stage2_tune_runtime_samples_minimum=1;
@@ -278,7 +282,9 @@ struct Stage2Values {
     std::string tune_arithmetic="both";
     std::string tune_profile="";
     bool tune_runtime=true;
-    uint64_t parallel=2;
+    uint64_t parallel=1;
+    uint64_t parallel_workspace=0;
+    uint64_t parallel_tune_curves=5;
     uint64_t tune_min_repeats=2;
     uint64_t runtime_samples=10;
     bool short_batch_tune=false;
@@ -363,7 +369,9 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_tune_arithmetic",[](Stage2Values&c,const std::string&v){c.tune_arithmetic=v;},[](Stage2Values&c,const Stage2Values&v){c.tune_arithmetic=v.tune_arithmetic;}},
     {"stage2_tune_profile",[](Stage2Values&c,const std::string&v){c.tune_profile=v;},[](Stage2Values&c,const Stage2Values&v){c.tune_profile=v.tune_profile;}},
     {"stage2_tune_runtime",[](Stage2Values&c,const std::string&v){c.tune_runtime=boolean(v,"stage2_tune_runtime");},[](Stage2Values&c,const Stage2Values&v){c.tune_runtime=v.tune_runtime;}},
-    {"stage2_parallel",[](Stage2Values&c,const std::string&v){c.parallel=static_cast<uint64_t>(bounded_integer(v,"stage2_parallel",0,2));},[](Stage2Values&c,const Stage2Values&v){c.parallel=v.parallel;}},
+    {"stage2_parallel",[](Stage2Values&c,const std::string&v){c.parallel=v=="auto"?0:static_cast<uint64_t>(bounded_integer(v,"stage2_parallel",0,2));},[](Stage2Values&c,const Stage2Values&v){c.parallel=v.parallel;}},
+    {"stage2_parallel_workspace",[](Stage2Values&c,const std::string&v){c.parallel_workspace=v=="auto"?0:static_cast<uint64_t>(bounded_integer(v,"stage2_parallel_workspace",0,2));},[](Stage2Values&c,const Stage2Values&v){c.parallel_workspace=v.parallel_workspace;}},
+    {"stage2_parallel_tune_curves",[](Stage2Values&c,const std::string&v){c.parallel_tune_curves=static_cast<uint64_t>(bounded_integer(v,"stage2_parallel_tune_curves",2,16));},[](Stage2Values&c,const Stage2Values&v){c.parallel_tune_curves=v.parallel_tune_curves;}},
     {"stage2_tune_min_repeats",[](Stage2Values&c,const std::string&v){c.tune_min_repeats=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_min_repeats",1,1000));},[](Stage2Values&c,const Stage2Values&v){c.tune_min_repeats=v.tune_min_repeats;}},
     {"stage2_tune_runtime_samples",[](Stage2Values&c,const std::string&v){c.runtime_samples=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_runtime_samples",1,1000));},[](Stage2Values&c,const Stage2Values&v){c.runtime_samples=v.runtime_samples;}},
     {"stage2_short_ntt_batch_tune",[](Stage2Values&c,const std::string&v){c.short_batch_tune=boolean(v,"stage2_short_ntt_batch_tune");},[](Stage2Values&c,const Stage2Values&v){c.short_batch_tune=v.short_batch_tune;}},

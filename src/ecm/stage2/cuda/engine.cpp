@@ -483,6 +483,12 @@ int run_real(
         stage2_log::print(stage2_log::phases, "real_baby: points=%llu ladder=%.3f s affine=%.3f s degenerate=%llu\n",
                     (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
+        // Never wait for the workspace while holding a phase gate: its owner
+        // can still need that gate for giant points or descent.
+        if(workspace.deferred()){
+            schedule.finish();
+            workspace.acquire_heavy();
+        }
         schedule.begin(stage2_schedule::Work::f_tree);
         phase_boundaries.ftree_begin=now_s();
         stage2_log::phase("Build baby-point F tree");
@@ -562,7 +568,7 @@ int run_real(
                 point_requested && baby_nonunit?64:0);
             BR=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,
                            relocation.active?&relocation:nullptr,
-                           (g_relocation_enabled || point_requested)?nullptr:handoff,&workspace);
+                           (g_relocation_enabled || point_requested)?nullptr:handoff);
         }
         const bool point_policy=BR.giant_tail_balance || ecm_stage2::giant_chain_points()!=64;
         const bool attempted=(relocation.active || point_policy) && !baby_nonunit;
@@ -578,7 +584,7 @@ int run_real(
                 stage2_log::print(stage2_log::phases,"%s: reason=hit_or_nonunit first=1 last=%llu\n",
                     g_relocation_enabled?"stage2_relocation_replay":"stage2_point_replay",relocation.last);
                 ecm_stage2::GiantPolicyScope legacy_points(0,64);
-                BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,nullptr,nullptr,&workspace);
+                BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,nullptr,nullptr);
                 s4_oracle_drain(red);replay_seconds=now_s()-end;
                 original.t_giant+=BR.t_giant;original.t_gtrees+=BR.t_gtrees;original.t_fold+=BR.t_fold;
                 original.t_descent+=BR.t_descent;original.t_inv+=BR.t_inv;original.t_accum+=BR.t_accum;

@@ -389,6 +389,7 @@ bool App::edit_business(const std::string& table,const std::string& key,const st
         const auto* option=ecm_config::toml_option(table,key);const std::string type=option->type;
         auto base=table;if(ecm_config::toml_worker(table)>0){const auto dot=table.find('.',8);base=dot==std::string::npos?"workers.1":table.substr(dot+1);}
         for(const auto& field:business_options)if(base==field.table&&key==field.key&&(field.has_min||field.has_max)){
+            if(type=="int|string" && value=="auto")continue;
             size_t used=0;const double n=std::stod(value,&used);
             if(used!=value.size()||!std::isfinite(n)||(field.has_min&&n<field.minimum)||(field.has_max&&n>field.maximum))throw std::runtime_error("Value outside schema range: "+std::string(field.domain));
         }

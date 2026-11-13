@@ -111,6 +111,10 @@ S3 workspace=8[5W+(2W+1)c+W(v+r)+W(f+1)·[f>0]+2Wh] bytes。
 
 ### Giant 与工作区共同时间线
 
+在 RTX 4070 Ti 的 D=2282280 实测中，大分配从 **F 树** 开始。CUDA 分配账本在 F 树前的区间峰值为 0.27 GiB，F 树结束时的活跃分配为 3.55 GiB。求逆结束为 3.60 GiB，fold 驻留准入后为 4.06 GiB，giant/G 树/fold 循环内达到 4.52 GiB 峰值，下降阶段仍保留约 4.25 GiB。锁只约束提交和交接，跨阶段保留的工作区仍计入占用。
+
+单工作区租约把大分配限制为一套。Fold 后换出 H 可以让另一槽推进，恢复时重建缓冲并上传 H 和逆多项式。两种方式在该路线的标准双槽预算不足时都通过了实际分配检查。阶段对齐的整卡曲线和测量条件见 [显存与阶段时间线](../web/stage2-phase-memory-20261112.html)及 [Stage2 性能实测](../performance/STAGE2.md#大-d-的显存时序与错峰)。
+
 `curve_workspace_memory` version=3在同一执行器中联动初始化、NTT、S4、fold/frontier和giant，并提供`fold_enabled`、`frontier_enabled`及回退上界标志。基础Montgomery自检在S4初始化之前申请并释放；S4模数申请后生成baby点，其临时缓冲在F树前全部释放。S3五个常量与小素数留下的seed容量在F树之后、inverse之前申请；inverse后trim和fold准入结束，再生成首个point chunk。chain的seed、base、坐标、segment按生产顺序申请，legacy seed在group缓冲申请前释放。ladder坐标借用S3 seed数组，不再次计账。
 
 一个point chunk可以覆盖多棵G树及相应fold。其坐标、segment与group必须保留到最后一棵树消费完成，然后释放；S3的seed/base/segfix容量则跨chunk保留。满chunk与短尾分别选chain/ladder，短尾可以增大seed容量。驻留下降完成后先释放frontier/fold，再申请P个叶值及积缓冲，最后销毁S3、S4和NTT。

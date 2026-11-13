@@ -11,7 +11,7 @@ SHAPE = ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent', 'mod
 PHASES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
           'giant_loop', 'descent', 'accum', 'finalize')
 KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_kind', 'verified', 'repeats', 'mean_seconds',
-    'stddev_seconds', 'measurement_ids', 'preferred_order', 'validation_count',
+    'stddev_seconds', 'required_free_bytes', 'preferred_order', 'validation_count',
     'validation_max_relative_error', 'giant_seconds', 'gtrees_seconds', 'fold_seconds',
     'model_relative_error_allowance', 'point_check_seconds'} | {f'phase_{p}_seconds' for p in PHASES}
 
@@ -84,26 +84,6 @@ def literal(value):
     return repr(value)
 
 
-def encode_ids(ids):
-    return ''.join(f'{len(s.encode("utf-8"))}:{s}' for s in sorted(ids))
-
-
-def decode_ids(value):
-    result = set()
-    value = value.encode('utf-8')
-    while value:
-        length, _, tail = value.partition(b':')
-        n = int(length)
-        if not n or n > len(tail):
-            raise ValueError('Invalid measurement identity')
-        token = tail[:n].decode('utf-8')
-        if token in result:
-            raise ValueError('Duplicate measurement identity')
-        result.add(token)
-        value = tail[n:]
-    return result
-
-
 def sample_groot_layout(row):
     if 'groot_balanced' in row:
         value = int(row['groot_balanced'])
@@ -128,7 +108,7 @@ def sample_groot_layout(row):
     return int((bits + 63) // 64 > 128 and (int(row['b2']) // d + 2) // (phi // 2) >= 4)
 
 
-def aggregate(samples):
+def aggregate(samples, *, fresh=True):
     groups = {}
     for original in samples:
         row = {k:v for k,v in original.items() if k in KEEP}
@@ -159,8 +139,8 @@ def aggregate(samples):
         validate_provenance(row)
         if row['source'] == 'measured':
             row['verified'] = 1
-            row.setdefault('measurement_ids', encode_ids({original.get('runtime_sample_id') or
-                f'summary:{row["mean_seconds"]}:{row["stddev_seconds"]}:{row["repeats"]}'}))
+        if 'required_free_bytes' in row and (type(row['required_free_bytes']) is not int or row['required_free_bytes']<=0):
+            raise ValueError('Invalid Stage2 memory requirement')
         if not original.get('runtime_probe', 1):
             row['preferred_order'] = original.get('runtime_completed_ns', 0)
         key = tuple(row.get(k) for k in SHAPE) + (row.get('benchmark_kind') == 'runtime_save',)
@@ -173,15 +153,16 @@ def aggregate(samples):
             continue
         if row['source']!='measured':
             continue
-        a, b = decode_ids(old['measurement_ids']), decode_ids(row['measurement_ids'])
-        if b <= a:
+        if not fresh:
+            memory = max(old.get('required_free_bytes',0),row.get('required_free_bytes',0))
+            order = max(old.get('preferred_order',0),row.get('preferred_order',0))
+            if (row['repeats'],row.get('updated_at',''))>(old['repeats'],old.get('updated_at','')):
+                groups[key] = old = row
+            if memory:
+                old['required_free_bytes'] = memory
+            if order:
+                old['preferred_order'] = order
             continue
-        if a <= b:
-            merge_provenance(row,old)
-            groups[key] = row
-            continue
-        if a & b:
-            raise ValueError('Partially overlapping snapshots: recover original JSONL')
         n, m = old['repeats'], row['repeats']
         delta = row['mean_seconds']-old['mean_seconds']
         m2 = (n-1)*old['stddev_seconds']**2+(m-1)*row['stddev_seconds']**2+delta**2*n*m/(n+m)
@@ -189,8 +170,9 @@ def aggregate(samples):
         for k in old.keys() & row.keys():
             if k.endswith('_seconds') and k != 'stddev_seconds':
                 old[k] += (row[k]-old[k])*m/(n+m)
-        old.update(repeats=n+m, stddev_seconds=math.sqrt(max(0, m2/(n+m-1))),
-                   measurement_ids=encode_ids(a | b))
+        old.update(repeats=n+m, stddev_seconds=math.sqrt(max(0, m2/(n+m-1))))
+        if 'required_free_bytes' in row:
+            old['required_free_bytes']=max(old.get('required_free_bytes',0),row['required_free_bytes'])
         order = max(old.get('preferred_order',0),row.get('preferred_order',0))
         if order:
             old['preferred_order'] = order
@@ -217,7 +199,7 @@ def hydrate_point_backends(row,condition):
 
 def write_profile(conditions, samples):
     lines = ['# Stage2 mean timings; identical parameters share one repeated measurement row.',
-             '[profile]', 'format = 14', 'unit = "full_stage2"']
+             '[profile]', 'format = 16', 'unit = "full_stage2"']
     canonical=[];remap={};prepared=[]
     for i,c in enumerate(conditions):
         condition={k:v for k,v in c.items() if k not in ('program_version','updated_at','env_giant_seed_coop','env_s4_coop_reduce','env_s4_coop_tpb','env_s4_coop_kernel')}
@@ -233,7 +215,7 @@ def write_profile(conditions, samples):
         lines += [f'\n[condition.{i}]']
         lines += [f'{k} = {literal(v)}' for k,v in sorted(condition.items())]
     widths = {}
-    for s in aggregate(prepared):
+    for s in aggregate(prepared,fresh=False):
         widths.setdefault(s['target_bits'], []).append(s)
     omit = {'target_bits','arithmetic_bits','p','execution_path'}
     for width, rows in sorted(widths.items()):

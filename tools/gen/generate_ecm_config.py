@@ -131,6 +131,8 @@ def assignment(o, key=None):
         code = f"assign_value({dst},v);if({dst}<{lo}||{dst}>{hi})throw std::runtime_error({literal(key+' must be within ['+lo+','+hi+']')});"
     elif kind == "optional_integer":
         code = f"{dst}=v.empty()?0:static_cast<{TYPES[o['type']]}>(bounded_integer(v,{literal(key)},{lo},{hi}));"
+    elif kind == "auto_integer":
+        code = f'{dst}=v=="auto"?0:static_cast<{TYPES[o["type"]]}>(bounded_integer(v,{literal(key)},{lo},{hi}));'
     elif kind == "log_level":
         code = f"{dst}=log_level(v);"
     elif kind == "gui_font":
@@ -339,7 +341,10 @@ def toml_schema_header(schema):
     for option in schema["options"]:
         if not option.get("_mirror"):
             kind = option["type"]
-            if option.get("parser_override") in ("log_level", "gui_font"):
+            parser = option.get("parser_override", option["parser"])
+            if parser == "auto_integer":
+                kind = "int|string"
+            elif parser in ("log_level", "gui_font"):
                 kind += "|string"
             out.append("    {" + ",".join(literal(x) for x in (config_table(option),option["key"],kind,option.get("domain", "valid scalar"))) + "},")
     out.extend(["};", "} // namespace ecm_config", ""])

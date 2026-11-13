@@ -63,7 +63,8 @@ def products():
     for option in full_schema['options']:
         if option['owner']=='gui': continue
         table='workers.1' if option['owner']=='worker' else 'shared' if option.get('shared_with') else option['owner']
-        strings=[table,option['key'],option.get('domain',''),'option_'+table+'_'+option['key'],option['type']]
+        kind = 'int|string' if option['parser']=='auto_integer' else option['type']
+        strings=[table,option['key'],option.get('domain',''),'option_'+table+'_'+option['key'],kind]
         meta.append('    {'+','.join(json.dumps(v,ensure_ascii=True) for v in strings)+','+
                     ','.join(['true' if 'minimum' in option else 'false','true' if 'maximum' in option else 'false',str(option.get('minimum',0)),str(option.get('maximum',0))])+'},')
     meta+=['};','}']
