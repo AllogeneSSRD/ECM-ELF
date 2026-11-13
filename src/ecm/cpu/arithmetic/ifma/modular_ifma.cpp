@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * simd_mont_ifma.cpp — see simd_mont_ifma.h for the data layout contract.
+ * modular_ifma.cpp — see modular_ifma.h for the data layout contract.
  *
  * Algorithm: word-level CIOS (Coarsely Integrated Operand Scanning) in radix
  * 2^52, with the 8 lanes being 8 independent curves, so the interleaved
@@ -25,22 +25,25 @@
  * madds per batch mont_mul = n*(4n+3).
  * ------------------------------------------------------------------------- */
 
-#include "simd_mont_ifma.h"
+#include "modular_ifma.h"
 
 /* MSVC's /arch:AVX512 is a single "AVX512" level and does not define
    __AVX512IFMA__ even though it does accept the vpmadd52 intrinsics, so only
    the GCC/Clang path can assert on the IFMA macro. */
 #if !defined(__AVX512F__)
-#error "simd_mont_ifma.cpp must be compiled with AVX512 (/arch:AVX512 or -mavx512f)"
+#error "modular_ifma.cpp must be compiled with AVX512 (/arch:AVX512 or -mavx512f)"
 #endif
 #if !defined(__AVX512IFMA__) && !defined(_MSC_VER)
-#error "simd_mont_ifma.cpp must be compiled with AVX512-IFMA (-mavx512ifma)"
+#error "modular_ifma.cpp must be compiled with AVX512-IFMA (-mavx512ifma)"
 #endif
 
 #include <immintrin.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "modular_ifma_karatsuba.h"
 
 #define IFMA_MASK52 0x000FFFFFFFFFFFFFULL
 
@@ -150,7 +153,14 @@ int ifma_ctx_init_ex(ifma_ctx_t *c, const mpz_t N, int field_mode)
 
     c->nb = (uint64_t *)ifma_alloc(8 * n * sizeof(uint64_t));
     c->one = (uint64_t *)ifma_alloc(8 * n * sizeof(uint64_t));
-    c->scratch = (uint64_t *)ifma_alloc(8 * (2 * n + 2) * sizeof(uint64_t));
+    size_t scratch_columns = 2 * n + 2;
+    if (c->mode == IFMA_FIELD_MERS) {
+        c->mul_depth = ecm_ifma_karatsuba::mul_depth(n);
+        c->sqr_depth = ecm_ifma_karatsuba::sqr_depth(n);
+        const unsigned depth = c->mul_depth > c->sqr_depth ? c->mul_depth : c->sqr_depth;
+        scratch_columns += ecm_ifma_karatsuba::workspace_columns(n, depth);
+    }
+    c->scratch = (uint64_t *)ifma_alloc(8 * scratch_columns * sizeof(uint64_t));
     if (!c->nb || !c->one || !c->scratch) {
         ifma_ctx_clear(c);
         return -3;
@@ -299,7 +309,8 @@ void ifma_to_mpz_lane(mpz_t out, const uint64_t *e, unsigned lane, const ifma_ct
 
 uint64_t ifma_madd_count(const ifma_ctx_t *c)
 {
-    if (c->mode == IFMA_FIELD_MERS) return 2 * (uint64_t)c->n * (uint64_t)c->n;
+    if (c->mode == IFMA_FIELD_MERS)
+        return ecm_ifma_karatsuba::madd_count<false>(c->n, c->mul_depth);
     return (uint64_t)c->n * (4 * (uint64_t)c->n + 3);
 }
 
@@ -308,10 +319,8 @@ uint64_t ifma_madd_count(const ifma_ctx_t *c)
    mul there.  Reporting only. */
 uint64_t ifma_sqr_madd_count(const ifma_ctx_t *c)
 {
-    if (c->mode == IFMA_FIELD_MERS) {
-        const uint64_t n = (uint64_t)c->n;
-        return n * (n - 1) + 2 * n;
-    }
+    if (c->mode == IFMA_FIELD_MERS)
+        return ecm_ifma_karatsuba::madd_count<true>(c->n, c->sqr_depth);
     return ifma_madd_count(c);
 }
 
@@ -418,48 +427,11 @@ static void ifma_cios(uint64_t *out, const uint64_t *a, const uint64_t *b,
 /* ---------------------------------------------------------------------------
  * Mersenne kernel: N = 2^k - 1, so 2^k = 1 (mod N).
  *
- * Radix 2^52, n = ceil(k/52) limbs, sh = 52n - k in [0,52).  Then
- *
- *     B^n = 2^(52n) = 2^(k+sh) = 2^sh   (mod N)
- *     2^(52c) = 2^(52(c-n) + sh)        for every c >= n
- *
- * so a digit sitting at column c >= n folds back to columns c-n and c-n+1
- * with a left shift of sh bits: a shift and an add instead of the whole
- * m_i*N reduction row of CIOS.  A mul therefore costs 2n^2 madds instead of
- * n(4n+3) (1.9-2x fewer), and no Montgomery constant is needed at all — the
- * field representation is the plain one.
- *
- * Three passes, all O(n) vector ops except the product:
- *   1. product    : n rows; row i accumulates columns [i, i+n] with the same
- *                   register-carried sliding window as ifma_cios, 2n madds.
- *                   A column receives up to 2n-1 low/high 52-bit parts.
- *                   Wide products drain carry periodically before the
- *                   64-bit accumulator can wrap.
- *   2. normalize  : carry chain over the 2n product columns.
- *   3. fold       : columns n..2n-1 (and the carry) move down by n columns and
- *                   sh bits, then the bits >= k of limb n-1 and any carry out
- *                   of column n-1 keep folding until nothing is left above
- *                   position k; finally N is subtracted if the value reached
- *                   the non-canonical 2^k - 1.
- *
- * The folding shift is exact only for digits < 2^52 (a 2-limb split of
- * d << sh needs d*2^sh < 2^104), which is why the high columns are
- * normalized before they are folded and why column n is normalized again
- * after the last fold lands on it.
+ * Schoolbook multiplication accumulates 2n-1 low/high 52-bit parts at most
+ * per column. Wide products periodically drain carry before a lane can wrap.
+ * A full carry pass normalizes the product. Then split the product at bit k
+ * and add the two halves with carry in a single sweep.
  * ------------------------------------------------------------------------- */
-
-/* t[tcol .. tcol+1] += (d * 2^sh) split into two 52-bit limbs.  d < 2^52. */
-static inline void ifma_fold_digit(uint64_t *t, size_t tcol, __m512i d,
-                                   unsigned sh, __m512i mask)
-{
-    const __m512i lo = _mm512_and_si512(_mm512_slli_epi64(d, sh), mask);
-    const __m512i hi = (sh == 0) ? _mm512_setzero_si512()
-                                 : _mm512_srli_epi64(d, 52 - sh);
-    _mm512_store_si512((__m512i *)(t + 8 * tcol),
-                       _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * tcol)), lo));
-    _mm512_store_si512((__m512i *)(t + 8 * (tcol + 1)),
-                       _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (tcol + 1))), hi));
-}
 
 /* 52-bit normalization of columns [from,to): returns the carry out of to-1. */
 static inline __m512i ifma_carry_pass(uint64_t *t, size_t from, size_t to,
@@ -487,13 +459,9 @@ static inline void ifma_carry_wide_rows(uint64_t* t, size_t n, size_t rows, __m5
 /* shared tail of both fold kernels (defined after ifma_mersenne_mul) */
 static void ifma_mersenne_finish(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
                                  __m512i init_carry);
-/* Steps 3-5 of that tail (fold the high columns down, drain everything at/above
-   position k, canonicalize), entered with the carry out of column 2n-1 in hand.
-   Split out because the square kernel normalizes its columns *and* knows that
-   carry already: it does the doubling, the diagonal and the normalization in one
-   pass, so it must not pay the tail's normalize pass a second time. */
-static void ifma_mersenne_fold_top(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
-                                   __m512i top);
+/* Fold the normalized product at bit p and write the canonical residue. */
+static void ifma_mersenne_fold_top(uint64_t *out, const uint64_t *t, const ifma_ctx_t *c,
+                                  __m512i top);
 
 static void ifma_mersenne_mul(uint64_t *out, const uint64_t *a, const uint64_t *b,
                               const ifma_ctx_t *c)
@@ -566,9 +534,8 @@ static void ifma_mersenne_mul(uint64_t *out, const uint64_t *a, const uint64_t *
 }
 
 /* ---------------------------------------------------------------------------
- * Shared tail of the fold kernels: normalize the 2n product columns (starting
- * from an incoming carry at column 2n), fold the high half down, drain
- * everything at/above position k and reduce below N.
+ * Normalize the 2n product columns before folding. The fused square pass
+ * already produces normalized columns and enters the fold directly.
  * ------------------------------------------------------------------------- */
 static void ifma_mersenne_finish(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
                                  __m512i init_carry)
@@ -580,103 +547,67 @@ static void ifma_mersenne_finish(uint64_t *out, uint64_t *t, const ifma_ctx_t *c
     ifma_mersenne_fold_top(out, t, c, top);
 }
 
-static void ifma_mersenne_fold_top(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
-                                   __m512i top)
+// t contains the canonical radix-2^52 digits of a product strictly below 2^(2p).
+static void ifma_mersenne_fold_top(uint64_t *out, const uint64_t *t, const ifma_ctx_t *c,
+                                     __m512i top)
 {
+    assert(!_mm512_test_epi64_mask(top, top));
+    (void)top;
     const size_t n = c->n;
-    const unsigned sh = c->shift;
-    const __m512i mask = _mm512_set1_epi64((long long)IFMA_MASK52);
-    const __m512i zero = _mm512_setzero_si512();
-
-    /* ---- 3. fold the high columns down, highest first ------------------- */
-    /* The carry out of column 2n-1 is a digit at column 2n -> columns n, n+1. */
-    ifma_fold_digit(t, n, top, sh, mask);
-    /* Columns 2n-1 .. n+1 are 52-bit digits now; each lands at c-n, c-n+1.
-       Column n is folded last because column 2n-1 also lands on it. */
-    for (size_t cc = 2 * n - 1; cc > n; cc--) {
-        const __m512i d = _mm512_load_si512((const __m512i *)(t + 8 * cc));
-        _mm512_store_si512((__m512i *)(t + 8 * cc), zero);
-        ifma_fold_digit(t, cc - n, d, sh, mask);
-    }
-    /* Column n holds p_n plus the fold of column 2n-1: normalize it first so
-       the folding shift stays exact, and push any overflow to column n+1. */
-    {
-        const __m512i d = _mm512_load_si512((const __m512i *)(t + 8 * n));
-        _mm512_store_si512((__m512i *)(t + 8 * n), zero);
-        ifma_fold_digit(t, 0, _mm512_and_si512(d, mask), sh, mask);
-        const __m512i extra = _mm512_srli_epi64(d, 52);
-        if (_mm512_test_epi64_mask(extra, extra) != 0) ifma_fold_digit(t, 1, extra, sh, mask);
+    const unsigned shift = c->shift;
+    const unsigned tail = 52 - shift;
+    const auto mask = _mm512_set1_epi64(IFMA_MASK52);
+    const auto top_mask = _mm512_set1_epi64(IFMA_MASK52 >> shift);
+    auto carry = _mm512_setzero_si512();
+    __mmask8 is_modulus = 0xff;
+    auto high_lower = _mm512_load_si512(t + 8 * (n - 1));
+    for (size_t i = 0; i + 1 < n; ++i) {
+        const auto high_upper = _mm512_load_si512(t + 8 * (n + i));
+        const auto high = _mm512_and_si512(mask, _mm512_or_si512(
+            _mm512_srli_epi64(high_lower, tail), _mm512_slli_epi64(high_upper, shift)));
+        const auto low = _mm512_load_si512(t + 8 * i);
+        const auto sum = _mm512_add_epi64(_mm512_add_epi64(low, high), carry);
+        carry = _mm512_srli_epi64(sum, 52);
+        const auto digit = _mm512_and_si512(sum, mask);
+        is_modulus &= _mm512_cmpeq_epi64_mask(digit, mask);
+        _mm512_store_si512(out + 8 * i, digit);
+        high_lower = high_upper;
     }
 
-    /* ---- 4. drain whatever is left at or above position k ----------------
-       The top sh bits of limb n-1 fold back by 2^k = 1, a carry out of limb n-1
-       by 2^(52n) = 2^sh.  The masking has to be re-checked AFTER the carry
-       chain: the carry can push limb n-1 back up to exactly 2^(52-sh), i.e. one
-       bit above k, and the previous version broke out of the loop right there
-       and returned a *non-canonical* representative (>= 2^k).  mpz_mod() in
-       ifma_to_mpz_lane() hides that from any test that reads values back as
-       mpz, but the next field op then sees an operand >= N and produces
-       garbage — that was the "sparse operand" corruption seen in the point
-       selftest (k = 677 / 991 at sh = 51 / 49). */
-    if (sh != 0) {
-        const __m512i lowmask = _mm512_set1_epi64((long long)((1ULL << (52 - sh)) - 1));
-        for (int it = 0; it < 6; it++) {
-            /* 1. fold the bits >= k of limb n-1 down to limb 0 */
-            const __m512i d = _mm512_load_si512((const __m512i *)(t + 8 * (n - 1)));
-            _mm512_store_si512((__m512i *)(t + 8 * (n - 1)), _mm512_and_si512(d, lowmask));
-            _mm512_store_si512((__m512i *)(t + 8 * 0), _mm512_add_epi64(
-                _mm512_load_si512((const __m512i *)(t + 8 * 0)),
-                _mm512_srli_epi64(d, 52 - sh)));
-            /* 2. carry chain over the low n limbs */
-            const __m512i carry = ifma_carry_pass(t, 0, n, zero, mask);
-            /* 3. anything still at/above k?  (re-check the top limb: the carry
-                  chain may have pushed it back over 2^k) */
-            const __m512i d2 = _mm512_load_si512((const __m512i *)(t + 8 * (n - 1)));
-            const __m512i above = _mm512_srli_epi64(d2, 52 - sh);
-            if (_mm512_test_epi64_mask(above, above) == 0 &&
-                _mm512_test_epi64_mask(carry, carry) == 0) break;
-            /* 4. fold the carry (position 52n = 2^sh) and go round again */
-            if (_mm512_test_epi64_mask(carry, carry) != 0) ifma_fold_digit(t, 0, carry, sh, mask);
-        }
-    } else {
-        for (int it = 0; it < 6; it++) {
-            const __m512i carry = ifma_carry_pass(t, 0, n, zero, mask);
-            if (_mm512_test_epi64_mask(carry, carry) == 0) break;
-            ifma_fold_digit(t, 0, carry, sh, mask);
-        }
-    }
+    const auto high_upper = _mm512_load_si512(t + 8 * (2 * n - 1));
+    const auto high = _mm512_and_si512(top_mask, _mm512_or_si512(
+        _mm512_srli_epi64(high_lower, tail), _mm512_slli_epi64(high_upper, shift)));
+    const auto low = _mm512_and_si512(top_mask, _mm512_load_si512(t + 8 * (n - 1)));
+    const auto sum = _mm512_add_epi64(_mm512_add_epi64(low, high), carry);
+    auto wrap = _mm512_srli_epi64(sum, tail);
+    const auto digit = _mm512_and_si512(sum, top_mask);
+    is_modulus &= _mm512_cmpeq_epi64_mask(digit, top_mask);
+    _mm512_store_si512(out + 8 * (n - 1), digit);
 
-    /* ---- 5. canonical: below 2^k the only representative >= N is 2^k-1 = N ----
-       That value's 52-bit limbs are exactly the all-ones pattern that the broadcast
-       modulus holds (limb j = 2^52-1 for j < n-1, top limb = 2^(52-sh)-1), so
-       canonicalization is a limb-wise equality test against N: lanes where EVERY
-       limb matches hold the value N and must become 0.  The old form subtracted N
-       over the whole array and selected afterwards -- two passes plus a serial
-       borrow chain, 133 ns/batch at n52=58 (34% of the whole tail).  The fixup pass
-       below only runs for lanes that really hit the pattern, which in practice is
-       never. */
-    {
-        __mmask8 is_N = 0xFF;                        /* per lane: all limbs == N */
-        for (size_t k = 0; k < n; k++) {
-            const __m512i v = _mm512_load_si512((const __m512i *)(t + 8 * k));
-            is_N = (__mmask8)(is_N & _mm512_cmpeq_epi64_mask(
-                        v, _mm512_load_si512((const __m512i *)(c->nb + 8 * k))));
-            _mm512_store_si512((__m512i *)(out + 8 * k), v);
-        }
-        if (is_N != 0) {                             /* rare: value === N */
-            const __mmask8 keep = (__mmask8)(~is_N);
-            for (size_t k = 0; k < n; k++)
-                _mm512_store_si512((__m512i *)(out + 8 * k),
-                    _mm512_maskz_mov_epi64(keep,
-                        _mm512_load_si512((const __m512i *)(t + 8 * k))));
-        }
+    // Wrap the carry at p. The low part is <= N-2 in these lanes.
+    for (size_t i = 0; _mm512_test_epi64_mask(wrap, wrap); ++i) {
+        const auto v = _mm512_add_epi64(_mm512_load_si512(out + 8 * i), wrap);
+        _mm512_store_si512(out + 8 * i, _mm512_and_si512(v, mask));
+        wrap = _mm512_srli_epi64(v, 52);
     }
+    if (is_modulus)
+        for (size_t i = 0; i < n; ++i)
+            _mm512_store_si512(out + 8 * i,
+                _mm512_maskz_mov_epi64(~is_modulus, _mm512_load_si512(out + 8 * i)));
 }
 
 void ifma_mont_mul(uint64_t *out, const uint64_t *a, const uint64_t *b, const ifma_ctx_t *c)
 {
-    if (c->mode == IFMA_FIELD_MERS) { ifma_mersenne_mul(out, a, b, c); return; }
-    ifma_cios(out, a, b, c);
+    if (c->mode != IFMA_FIELD_MERS) {
+        ifma_cios(out, a, b, c);
+    } else if (!c->mul_depth) {
+        ifma_mersenne_mul(out, a, b, c);
+    } else {
+        uint64_t *workspace = c->scratch + 8 * (2 * c->n + 2);
+        const __m512i top = ecm_ifma_karatsuba::normalized_product<false>(
+            c->scratch, a, b, c->n, workspace, c->mul_depth);
+        ifma_mersenne_fold_top(out, c->scratch, c, top);
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -777,6 +708,14 @@ static void ifma_mersenne_sqr(uint64_t *out, const uint64_t *a, const ifma_ctx_t
 
 void ifma_mont_sqr(uint64_t *out, const uint64_t *a, const ifma_ctx_t *c)
 {
-    if (c->mode == IFMA_FIELD_MERS) { ifma_mersenne_sqr(out, a, c); return; }
-    ifma_cios(out, a, a, c);
+    if (c->mode != IFMA_FIELD_MERS) {
+        ifma_cios(out, a, a, c);
+    } else if (!c->sqr_depth) {
+        ifma_mersenne_sqr(out, a, c);
+    } else {
+        uint64_t *workspace = c->scratch + 8 * (2 * c->n + 2);
+        const __m512i top = ecm_ifma_karatsuba::normalized_product<true>(
+            c->scratch, a, a, c->n, workspace, c->sqr_depth);
+        ifma_mersenne_fold_top(out, c->scratch, c, top);
+    }
 }

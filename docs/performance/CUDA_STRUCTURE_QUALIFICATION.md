@@ -45,7 +45,7 @@ Stage2为176个函数，161个指令正文相同，15个算术函数不同，与
 
 显式PRAC选档384/2560/4608/9216/16384单独构建，不进入默认生产性能结论。16组CPU/GMP、暂停恢复和双代损坏拒绝通过；46组策略完整点比较与4组非法策略拒绝通过，覆盖替代TPI32、168/255寄存器、128 single-compact和三种常量策略。依据为`optional_runtime/result.json`、`optional_policies_03/result.json`。
 
-最高Montgomery GPU目标为16378位，Edwards为17407位。CPU标量MPN参考的固定容量为160 limbs、10240位，源码依据为[mont上下文](../../src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h)。旧／新版在16378位均同样拒绝，相关CPU源码与0.44.0相同；超过该参考边界时，使用独立任意精度整数ladder并与冻结旧版GPU完整点交叉核对，包含LCM和12LCM两种已有模式。证据见`cpu_oracle_diagnosis/result.json`。未扩展或修改生产CPU边界。
+最高Montgomery GPU目标为16378位，Edwards为17407位。CPU标量MPN参考的固定容量为160 limbs、10240位，源码依据为[标量模算术](../../src/ecm/cpu/arithmetic/scalar/modular_mpn.h)。旧／新版在16378位均同样拒绝，相关CPU源码与0.44.0相同；超过该参考边界时，使用独立任意精度整数ladder并与冻结旧版GPU完整点交叉核对，包含LCM和12LCM两种已有模式。证据见`cpu_oracle_diagnosis/result.json`。未扩展或修改生产CPU边界。
 
 显式Graph探针完成368次GMP卷积、14779392个数字检查，缓存捕获、重放、失效及释放通过；故障模式bad1并按预期退出3。另有5组真实曲线双版本对照和一组双版本错误拒绝，覆盖owner回退、单槽校验队列、较大树、合法承载及8193位输入。依据为`graph/result.json`、`graph_curves/result.json`。日志可能重复打印同一arena累计计数，不将记录之和当作独立调用总数。
 

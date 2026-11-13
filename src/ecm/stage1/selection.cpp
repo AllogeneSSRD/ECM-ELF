@@ -1,4 +1,5 @@
 #include "ecm/stage1/selection.h"
+#include "../cpu/arithmetic/scalar/modular_mpn_limits.h"
 
 namespace ecm_stage1 {
 
@@ -33,6 +34,24 @@ bool parse_cpu_implementation(std::string_view value, CpuImplementation &out) {
     else if (v == "scalar") out = CpuImplementation::GmpScalar;
     else return false;
     return true;
+}
+
+std::optional<CpuImplementation> resolve_cpu_implementation(
+    const Selection& selection, std::size_t modulus_bits, std::uint32_t curves, bool has_ifma) {
+    const bool wide = modulus_bits > ecm_cpu::gmp_fixed_width_bits;
+    if (selection.cpu_implementation == CpuImplementation::GmpScalar) {
+        if (wide && selection.curve == CurveModel::Montgomery)
+            return std::nullopt;
+        return CpuImplementation::GmpScalar;
+    }
+    if (wide || selection.cpu_implementation == CpuImplementation::IfmaSimd) {
+        if (!has_ifma)
+            return std::nullopt;
+        return CpuImplementation::IfmaSimd;
+    }
+    const auto min_curves = selection.curve == CurveModel::Edwards ? 8u : 2u;
+    return has_ifma && curves >= min_curves ? CpuImplementation::IfmaSimd
+                                          : CpuImplementation::GmpScalar;
 }
 
 bool parse_simd_reduction(std::string_view value, SimdReduction &out) {

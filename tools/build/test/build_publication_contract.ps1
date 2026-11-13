@@ -9,7 +9,7 @@ if(Test-Path -LiteralPath $output){throw 'Use a fresh build directory'}
 New-Item -ItemType Directory -Path $output|Out-Null
 [IO.File]::WriteAllText((Join-Path $output '.gitignore'),"*`n")
 $sources=@('tools/test/publication_contract.cpp','tools/test/adapters/publication_files.cpp',
- 'src/io/results.cpp','src/io/save.cpp','src/ecm/application/configuration/ecm_expr.cpp',
+ 'src/io/results.cpp','src/io/save.cpp','src/io/expression.cpp',
  'src/io/stage1_checkpoint.cpp','src/ecm/platform/stop.cpp',
  'src/ecm/stage1/montgomery/opencl/checkpoint.cpp','src/ecm/platform/logging.cpp',
  'src/ecm/application/configuration/runtime.cpp')

@@ -27,7 +27,7 @@ if ($GmpRoot) {
 }
 if ($WithoutLocalPari -and (Test-Path -LiteralPath (Join-Path $BuildDir 'libpari.dll'))) { throw 'WithoutLocalPari requires a fresh build directory without a retained PARI runtime' }
 $catalog = @('src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/application/configuration',
-    'src/ecm/platform/generated','src/ecm/group_order','src/ecm/curve','src/ecm/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1')
+    'src/ecm/platform/generated','src/io','src/ecm/group_order','src/ecm/curve','src/ecm/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1')
 if (-not $GmpRoot) { $catalog += 'third_party/gmp-zen3/dist' }
 $catalog += @('tools/build/test/build_gui_v2.ps1','tools/build/internal/check_gui_v2_config.cmake',
     'tools/gen/generate_ecm_config.py','tools/gen/generate_gui_v2_state.py',
@@ -66,7 +66,7 @@ if (-not $VcVars) {
 }
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $BuildDir '.gitignore'), "*`n")
-$defs = @('-DCMAKE_BUILD_TYPE=Release')
+$defs = @('-DCMAKE_BUILD_TYPE=Release','-DCMAKE_TRY_COMPILE_CONFIGURATION=Release')
 if ($GmpRoot) { $defs += "-DECM_GROUP_ORDER_GMP_ROOT=`"$GmpRoot`"" }
 if ($BasePetOnly) { $defs += '-DECM_GUI_V2_BASE_PET_ONLY=ON' } else { $defs += '-DECM_GUI_V2_BASE_PET_ONLY=OFF' }
 if ($WithoutLocalPari) { $defs += '-DECM_GUI_V2_LOCAL_PARI=OFF' } else { $defs += '-DECM_GUI_V2_LOCAL_PARI=ON' }

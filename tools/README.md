@@ -17,7 +17,7 @@
 | diag | 可选现场诊断；不作为普通计算启动步骤 |
 | gwnum_probe | 外部 gwnum/polymult 探针，不是生产 Stage2 引擎 |
 | refactor | 工程辅助脚本 |
-| p95feeder | 本地 save 的独立 Prime95 交接程序 |
+| p95feeder | 旧 Prime95 feeder 及 MIDSTAGE 格式工具的备份，不参与主构建 |
 
 ## 当前 Stage2 工作入口
 

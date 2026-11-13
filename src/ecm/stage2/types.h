@@ -37,7 +37,9 @@ struct Record {
 };
 struct PreparedRuntimeProfile;
 struct Options {
-    std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_ini,submission_aid;
+    std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_aid;
+    std::string result_user, result_computer;
+    bool frozen_publication = false;
     uint64_t submission_exponent=0;
     std::vector<std::string> submission_known;
     bool debug_log = false;

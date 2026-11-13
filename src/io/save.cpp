@@ -9,7 +9,7 @@
 #include <set>
 #include <stdexcept>
 #include "io/files.h"
-#include "ecm/application/configuration/ecm_expr.h"
+#include "io/expression.h"
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>

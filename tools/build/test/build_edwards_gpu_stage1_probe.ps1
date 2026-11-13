@@ -22,7 +22,7 @@ Initialize-EcmBuildDirectory $objDir
 $inventory=Get-EcmCudaInventory $repo
 $workerSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/stage1/scalar.cpp')
 $probeSources=@('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp',
-    'src/io/save.cpp','src/io/files.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/ecm_expr.cpp',
+    'src/io/save.cpp','src/io/files.cpp','src/ecm/platform/logging.cpp','src/io/expression.cpp',
     'src/ecm/application/configuration/runtime.cpp')
 $sources=$workerSources+
     $probeSources

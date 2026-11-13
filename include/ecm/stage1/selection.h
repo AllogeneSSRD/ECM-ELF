@@ -1,4 +1,7 @@
 #pragma once
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -29,6 +32,8 @@ bool parse_cpu_implementation(std::string_view,CpuImplementation &);
 bool parse_simd_reduction(std::string_view,SimdReduction &);
 bool parse_gpu_algorithm(std::string_view,GpuAlgorithm &);
 bool parse_scalar_construction(std::string_view,ScalarConstruction &);
+std::optional<CpuImplementation> resolve_cpu_implementation(
+    const Selection&, std::size_t modulus_bits, std::uint32_t curves, bool has_ifma);
 bool valid_route(const Selection &,bool gpu_edwards=false);
 bool valid_gpu_param(int);
 bool resolve_gpu_param(int configured,bool explicit_param,int sigma_claim,int &resolved);

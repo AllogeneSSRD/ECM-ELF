@@ -2,6 +2,7 @@
 #include <gmp.h>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Independent CPU/GMP arithmetic. No worker, GPU, PARI, or application dependency.
@@ -43,6 +44,19 @@ struct PrimePower {
     uint32_t exponent = 0;
     Primality primality = Primality::Probable;
 };
+
+// Callers supply the prime-power decomposition of the indicated order.
+struct GroupBounds {
+    Integer prime{0}, stage1{0}, stage2_b1{1};
+    uint32_t exponent = 0;
+};
+struct PointBounds {
+    Integer stage1{2};
+    std::vector<std::pair<Integer, Integer>> frontier;
+};
+GroupBounds group_bounds(const std::vector<PrimePower> &factors);
+PointBounds point_bounds(const std::vector<PrimePower> &factors, uint32_t scalar_multiplier);
+
 struct Factorization {
     Status status = Status::InvalidInput;
     std::string reason;

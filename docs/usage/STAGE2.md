@@ -85,6 +85,8 @@ CUDA的`stage2_seed_backend`默认auto，也可强制scalar／coop32；CLI为`--
 
 `--results` 的内部 JSONL 以 `curve=ed|mont` 标明模型，Edwards 的 `param` 为 null，Suyama 的 `param` 为 0。另写 `--submission` 指定的 `results.json.txt`；TOML 的 `user`、`computer` 用于提交身份，标准梅森队列自动传递原始指数、已知因子和可选 AID。直接处理梅森余因子时应提供 `--exponent P --known-factor F`，输出前验证与实际 N 的关系。批次去重和恢复见 [结果输出](ECM_RESULTS.md)。GUI 的因子结果文件使用其独立结果格式，见 [GUI 日志与结果](GUI.md#日志结果与监控)。控制台结果事件也携带模型及完整 sigma；显式 `--gui-events` 会在 quiet 级别保留该结果事件，普通 quiet 控制台规则保持不变。
 
+Stage2 父进程启动时读取 TOML，任务开始时从该快照和当前任务行确定有效设置。并行曲线与结果发布沿用同一配置，包括提交身份和解析后的路径。运行中修改 TOML 不会影响当前进程的任务；需要应用新设置时请重新启动。重启时仍校验 checkpoint 的提交路径，已经记录的发布内容保持原身份。
+
 ## CUDA 双曲线调度
 
 在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_parallel`，命令行 `--parallel auto|0|1|2` 可覆盖。该选项适用于同一 Stage2 任务中目标 N、B1 和曲线族一致的记录，并要求有效 B2 已确定。

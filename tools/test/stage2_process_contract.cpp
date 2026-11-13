@@ -13,6 +13,7 @@ int main(int argc,char **argv) {
             int code=0;
             s2prod::Handle start,done,feedback;
             std::string finalize;
+            bool publication_seen=false;
             for(int i=2;i<argc;++i) {
                 const std::string arg=argv[i];
                 std::cout<<"wire:"<<arg<<'\n';
@@ -22,7 +23,15 @@ int main(int argc,char **argv) {
                 if(arg=="--queue-gpu-done")done.value=reinterpret_cast<HANDLE>(uintptr_t(std::stoull(argv[i+1])));
                 if(arg=="--queue-gpu-input")feedback.value=reinterpret_cast<HANDLE>(uintptr_t(std::stoull(argv[i+1])));
                 if(arg=="--tune-condition-tag")finalize=argv[i+1];
+                require(arg!="--config","child received live config path");
+                if(arg=="--curve-publication") {
+                    const auto publication=s2prod::parse_curve_publication(argv[i+1]);
+                    require(publication.path=="public output.txt" && publication.user==u8"用户 \"A\"\\" &&
+                            publication.computer.empty(),"publication snapshot did not round-trip");
+                    publication_seen=true;
+                }
             }
+            require(publication_seen,"child did not receive a publication snapshot");
             if(start.value!=INVALID_HANDLE_VALUE) {
                 require(WaitForSingleObject(start.value,5000)==WAIT_OBJECT_0,"worker did not receive GPU admission");
                 const auto *view=static_cast<const char*>(MapViewOfFile(feedback.value,FILE_MAP_READ,0,0,s2prod::queue_feedback_bytes));
@@ -58,7 +67,8 @@ int main(int argc,char **argv) {
         r.stage1_csv="cost.csv";r.condition_tag="a quoted \"tag\" with trailing \\";
         r.stage1_mhz=1000;r.factor_bits=32;r.inferred_carrier=127;r.auto_carrier=true;r.prediction_policy="paired";
         r.arena=128;r.owner_mb=32;r.log_level=1;r.engine_log_level=3;r.ntt_counts=true;r.relocation=true;
-        r.submission="public.txt";r.submission_ini="config.toml";r.submission_exponent=127;r.submission_known={"101","103"};r.submission_aid="AID";
+        r.publication={"public output.txt",u8"用户 \"A\"\\",""};
+        r.submission_exponent=127;r.submission_known={"101","103"};r.submission_aid="AID";
         r.factorize_hits=true;r.gp="gp.exe";r.factor_timeout=5;r.factor_only=true;r.publication_task="task";
         int observed=0;
         r.observe_selection=[&](const std::string &line){require(line.find("fixture")!=line.npos,"selection feedback missing");++observed;};

@@ -10,7 +10,6 @@
 #include "io/files.h"
 #endif
 #include "../modulus.h"
-#include "../../application/configuration/ecm_expr.h"
 #include "../../../io/config.h"
 #include "../../../io/worktodo.h"
 #include "ecm/platform/program_version.h"
@@ -84,7 +83,19 @@ Options arguments(int argc, char **argv) {
         else if (a == "--save") o.save = value();
         else if (a == "--worktodo") o.worktodo = value();
         else if (a == "--results") o.results = value();
-        else if (a == "--submission") o.submission=value();
+        else if (a == "--submission") {
+            if(o.frozen_publication)throw std::runtime_error("submission path already set by Stage2 curve snapshot");
+            o.submission=value();
+        }
+        else if (a == "--curve-publication") {
+            if(o.frozen_publication || !o.submission.empty())
+                throw std::runtime_error("duplicate Stage2 curve publication settings");
+            auto publication=parse_curve_publication(value());
+            o.submission=std::move(publication.path);
+            o.result_user=std::move(publication.user);
+            o.result_computer=std::move(publication.computer);
+            o.frozen_publication=true;
+        }
         else if (a == "--exponent") o.submission_exponent=num();
         else if (a == "--known-factor") o.submission_known.push_back(value());
         else if (a == "--aid") o.submission_aid=value();
@@ -272,10 +283,23 @@ Options arguments(int argc, char **argv) {
 }
 using Settings=ecm_config::Stage2Values;
 
-Settings stage2_ini(const fs::path &path,int worker) {
+static std::vector<ecm_config::TomlLine> stage2_config(const fs::path &path,bool explicit_config) {
     std::vector<ecm_config::TomlLine> lines;
-    ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Stage2);
-    return ecm_config::read_stage2(ecm_config::cli_entries(lines,worker,true));
+    if(!ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Stage2) &&
+       (explicit_config || fs::exists(path)))
+        throw std::runtime_error("cannot read explicit TOML: "+path.u8string());
+    return lines;
+}
+
+static void freeze_publication(Options &o,const Settings &settings,const fs::path &config) {
+    if(settings.has_submission && settings.submission.empty())throw std::runtime_error("empty submission path");
+    const auto path=o.submission.empty()
+        ? config.parent_path()/fs::u8path(settings.has_submission?settings.submission:
+              ecm_config::worker_file(settings.submission,o.worker))
+        : fs::absolute(fs::path(o.submission));
+    o.submission=path.lexically_normal().u8string();
+    o.result_user=settings.result_user;
+    o.result_computer=settings.result_computer;
 }
 
 // Optional diagnostic for the calling process's CUDA context. Use the same
@@ -381,6 +405,15 @@ static void bind_engine_options(Options &o) {
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) {
+        if(o.frozen_publication && !o.ini.empty())
+            throw std::runtime_error("Stage2 curve worker cannot combine a publication snapshot with --config");
+        if(!o.frozen_publication) {
+            // Direct diagnostic probes can invoke the internal worker without
+            // its parent. Freeze their config before any curve work, too.
+            const auto ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::absolute(fs::path(o.ini));
+            const auto lines=stage2_config(ini,!o.ini.empty());
+            freeze_publication(o,ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true)),ini);
+        }
         bind_engine_options(o);
         if(o.queue_requested_b2 && (!o.fixed_queue_route || o.queue_requested_b2>o.b2))
             throw std::runtime_error("invalid requested B2 for fixed Stage2 queue route");
@@ -393,7 +426,7 @@ int driver(Options o) {
         configure_phase_experiment(o);
         return curve_worker(o);
     }
-    if(o.checkpoint_outcome || o.fixed_queue_route || o.queue_requested_b2 || !o.queue_phase_gate.empty() || o.queue_workspace_lease ||
+    if(o.frozen_publication || o.checkpoint_outcome || o.fixed_queue_route || o.queue_requested_b2 || !o.queue_phase_gate.empty() || o.queue_workspace_lease ||
        o.queue_gpu_start || o.queue_gpu_done || o.queue_gpu_input)
         throw std::runtime_error("Stage2 queue route arguments are internal to curve workers");
     if(o.stop_handle) {
@@ -412,7 +445,8 @@ int driver(Options o) {
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
     const fs::path cwd = fs::current_path();
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
-    Settings s = stage2_ini(ini, o.worker);
+    const auto lines=stage2_config(ini,!o.ini.empty());
+    const auto s=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     std::vector<const char*> inherited;
     if(o.save.empty())inherited.push_back("finished"); // Queue collision protection.
     if(o.device<0 && s.device<0)inherited.push_back("device");
@@ -420,8 +454,7 @@ int driver(Options o) {
     if(o.log_level<0 && s.log_level<0)inherited.push_back("verbose");
     if(!o.has_stage1_exponent)inherited.push_back("lcm");
     EcmQueueConfig cfg;
-    if (!ecm_queue_config_load(ini.string(), o.worker, cfg, inherited) && (!o.ini.empty() || fs::exists(ini)))
-        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
+    ecm_queue_config_project(lines,ini.u8string(),o.worker,cfg,inherited);
     const int selected_device=o.device<0?(s.device<0?cfg.device:s.device):o.device;
     if (auto routed=ecm_gpu::route(executable().parent_path(),true,!stage2_backend::opencl,
                                   o.gpu_backend.empty()?s.gpu_backend:o.gpu_backend,selected_device))
@@ -507,10 +540,7 @@ int driver(Options o) {
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
     const fs::path base = ini.parent_path();
-    o.submission_ini=ini.string();
-    if(s.has_submission && s.submission.empty())throw std::runtime_error("empty submission path");
-    o.submission=(!o.submission.empty()?absolute_from(cwd,o.submission):
-        absolute_from(base,s.has_submission?s.submission:ecm_config::worker_file(s.submission,o.worker))).string();
+    freeze_publication(o,s,ini);
     if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     if(!o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;

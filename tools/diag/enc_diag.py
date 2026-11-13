@@ -1,7 +1,12 @@
 import subprocess, sys, re
 
-FILES = ["src/cpu/ecm_edwards_cpu.cpp", "src/cpu/simd_edwards.cpp", "src/cpu/ecm_edwards_mont.h",
-         "src/cpu/simd_mont_ifma.cpp", "src/cpu/ecm_edwards_cpu.h"]
+FILES = [
+    "src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp",
+    "src/ecm/stage1/edwards/cpu/simd_edwards.cpp",
+    "src/ecm/cpu/arithmetic/scalar/modular_mpn.h",
+    "src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp",
+    "src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.h",
+]
 
 def git_show(path):
     try:

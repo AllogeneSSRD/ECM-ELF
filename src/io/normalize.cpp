@@ -1,5 +1,5 @@
 #include "io/normalize.h"
-#include "ecm/application/configuration/ecm_expr.h"
+#include "io/expression.h"
 #include "ecm/stage1/gpu_backend.h"
 #include "ecm/stage1/sigma.h"
 #include "ecm/io/save.h"
@@ -392,8 +392,6 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         out.runtime.device_index = out.options.execution.device_index;
         out.runtime.tpi = cfg.tpi;
         out.runtime.wg_size = cfg.wg_size;
-        if (!input.gp_bin_path.empty())
-            out.runtime.gp_bin = input.gp_bin_path;
         return true;
     } catch (const std::exception& e) {
         error = "INPUT[normalize] " + parsed.path +

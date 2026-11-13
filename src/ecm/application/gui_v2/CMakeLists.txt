@@ -138,7 +138,7 @@ if(NOT TARGET ecm_group_order)
     add_subdirectory("${ECM_GUI_V2_ROOT}/src/ecm/group_order" "${CMAKE_BINARY_DIR}/group_order_core")
 endif()
 add_executable(ecm_group_order_ui group_order_runner.cpp group_order_job.cpp
-    "${ECM_GUI_V2_ROOT}/src/ecm/diagnostics/order_analysis.cpp")
+    "${ECM_GUI_V2_ROOT}/src/ecm/group_order/backends.cpp")
 target_compile_features(ecm_group_order_ui PRIVATE cxx_std_17)
 target_compile_definitions(ecm_group_order_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 target_compile_options(ecm_group_order_ui PRIVATE /utf-8 /EHsc)

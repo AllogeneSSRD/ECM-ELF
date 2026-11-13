@@ -1,73 +1,36 @@
-#include "../../../../io/files.h"
-#include "ecm/stage1/progress.h"
 #include "ecm/stage1/cpu_runtime.h"
-#include <future>
-#include <memory>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <algorithm>
-#include <numeric>
-#include <cmath>
-#include <cstdlib>
-#include <cctype>
-#include <ctime>
-#include <fstream>
-#include <cstdio>
-#include <cstring>
-#include <csignal>
-#include <chrono>
-#include <thread>
-#include <atomic>
-#include <mutex>
-#include <condition_variable>
-#include <utility>
-#include <sys/stat.h>
-
-#ifdef _WIN32
-#include <io.h>
-#include <direct.h> /* _mkdir for the local save directory */
-#include <windows.h>
-#include <process.h>
-#define access _access
-#define getpid _getpid
-#else
-#include <unistd.h>
-#endif
-
-#ifdef _MSC_VER
-#include <intrin.h> /* __rdtsc() for the Prime95-style sigma entropy mix */
-#endif
-
-#include <gmp.h>
-
 #include "ecm/stage1/execution.h"
-#include "ecm/curve/edwards.h"
+#include "ecm/stage1/progress.h"
 #include "ecm/stage1/sigma.h"
-#include "ecm/io/save.h"
-#include "ecm/stage1/montgomery/opencl/checkpoint.h"
-#include "../../../../io/stage1_checkpoint.h"
-#include "ecm/stage1/montgomery/cpu/checkpoint.h"
-#include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
-#include "ecm/stage1/montgomery/cpu/ecm_mont_cpu.h"
-#include "ecm/stage1/montgomery/cpu/simd_mont_curve.h"
-#include "ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
-#include "../../../../io/prime95_save.h"
-#include "ecm/io/save.h"
+#include "ecm/stage1/libecm_compat.h"
+#include "ecm/curve/edwards.h"
+#include "ecm/cpu/arithmetic/scalar/modular_mpn_limits.h"
 #include "ecm/platform/logging.h"
-#include <iomanip>
-#include <regex>
-#include "ecm/stage1/edwards/cpu/simd_edwards.h" /* SoA 批量 Edwards 层 (AVX512-IFMA TU, 见 §13.8) */
-#include <intrin.h>
-#include <windows.h>
+#include "../../../../io/stage1_checkpoint.h"
+#include "checkpoint.h"
+#include "ecm_mont_cpu.h"
+#include "simd_mont_curve.h"
+#include "ecm/io/save.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <future>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace ecm_cpu_stage1 {
 using ecm_stage1::ComputationResult;
-using ecm_stage1::compute_batch_s;
 using ecm_stage1::CurveKind;
 using ecm_stage1::CurveOutcome;
-using ecm_io::ensure_dir;
 using ecm_stage1::ExecutionOptions;
 using ecm_save::format_name;
 using ecm_stage1::select_curve_sigma;
@@ -81,21 +44,7 @@ bool fixed_sigma_batch_exceeds_prime95_range(uint64_t sigma, uint32_t curves) {
 
 } // namespace
 using ecm_stage1::stage1_now_ms;
-using ecm_stage1::Stage1Options;
-using ecm_stage1::stdout_is_tty_local;
 using ecm_stage1::validate_stage1_factor;
-
-// Run one stage-1 batch. N and the caller's n_expr are borrowed (not cleared);
-// factors / array_found are allocated here and returned via `out` (caller frees).
-/* ---------------------------------------------------------------------------
- * Shared automatic Stage1 save names (ecm.toml: save_name_pattern).
- *
- *   {curve}: e / m0 / m2 / m3; {target}: m<original exponent> / bit<actual bits>;
- *   {n}  : original assignment exponent when available, else actual N bits;
- *   {b1} : compact bound -- 100000 -> "1e5", 110000000 -> "110e6", 12345 -> "12345".
- *
- * ecm_extract_b1_from_save_name() documents the same pattern on the reading side.
- * ------------------------------------------------------------------------- */
 
 /* Standalone codec fallback stem; the driver routes records into its batch. */
 static std::string mont_save_stem(const std::string& pattern, const mpz_t N, double B1) {
@@ -108,9 +57,6 @@ static std::string mont_save_stem(const std::string& pattern, const mpz_t N, dou
 
 // ---------------------------------------------------------------------------
 // Suyama-sigma Montgomery stage 1 (Prime95 sigma_type = 1 / gmp-ecm -param 0).
-//
-// Same result contract as run_edwards_stage1: fills out->factors / out->array_found
-// and returns an ECM_* code, so the CLI caller needs no changes.
 //
 //   * s = torsion * lcm(1..B1)   (torsion 1 matches gmp-ecm, 12 matches Prime95;
 //     see docs/architecture/STAGE1.md 4.1)
@@ -214,6 +160,22 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         return result;
     }
 
+    const auto modulus_bits = mpz_sizeinbase(N, 2);
+    const auto implementation = ecm_stage1::resolve_cpu_implementation(
+        opt.execution.selection, modulus_bits, curves, driver_simd_isa_ok());
+    if (!implementation) {
+        if (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::GmpScalar)
+            ecm_ts_fprintf(stderr, "ERROR: Montgomery CPU Stage1 scalar GMP supports up to "
+                                   "%zu bits. Use --impl auto or simd on an IFMA-capable CPU.\n",
+                           ecm_cpu::gmp_fixed_width_bits);
+        else
+            ecm_ts_fprintf(stderr, "ERROR: Montgomery CPU Stage1 at %zu bits requires "
+                                   "AVX512-F/DQ/IFMA for the selected implementation.\n",
+                           modulus_bits);
+        return result;
+    }
+    const bool use_simd = *implementation == ecm_stage1::CpuImplementation::IfmaSimd;
+
     ecm_edwards::Integer scalar;
     auto* s = scalar.v;
     const int torsion = opt.execution.selection.scalar_construction ==
@@ -234,20 +196,6 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         return result;
     }
 
-    const bool isa = driver_simd_isa_ok();
-    if (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd &&
-        !isa) {
-        ecm_ts_fprintf(stderr, "ERROR: --impl simd requested but this CPU lacks "
-                               "AVX512-F/DQ/IFMA. Use auto or scalar.\n");
-
-        return result;
-    }
-    const bool use_simd =
-        (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd)
-            ? true
-        : (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::GmpScalar)
-            ? false
-            : (isa && curves >= 2);
     ecm_ts_fprintf(stdout, "curve model     : montgomery (Suyama sigma, %s, torsion=%d)\n",
                    use_simd ? "AVX512-IFMA 8-lane batch" : "scalar mpn", torsion);
     ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d) [%s]\n", s_bits, B1,

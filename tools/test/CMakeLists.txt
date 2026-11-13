@@ -13,7 +13,7 @@ add_executable(stage1_selection_test stage1_selection_test.cpp
 target_include_directories(stage1_selection_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 ecm_tool_output_root(stage1_selection_test)
 
-set(_ifma_arithmetic ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp)
+set(_ifma_arithmetic ${CMAKE_SOURCE_DIR}/src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp)
 add_executable(cpu_stage1_field_check cpu_stage1_field_check.cpp ${_ifma_arithmetic})
 target_include_directories(cpu_stage1_field_check PRIVATE ${CMAKE_SOURCE_DIR}/src)
 ecm_target_link_gmp(cpu_stage1_field_check)

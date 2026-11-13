@@ -1,6 +1,6 @@
 // Complete Stage2 save/queue input validation and durable diagnostic append.
 #include "input.h"
-#include "../application/configuration/ecm_expr.h"
+#include "io/expression.h"
 #include "../../io/config_format.h"
 #include "../../io/files.h"
 #include "modulus.h"

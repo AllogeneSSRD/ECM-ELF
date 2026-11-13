@@ -48,7 +48,6 @@ ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、Ope
 | `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、TOML、队列及文本 save；GPU 算子可单独选择 |
 | `ecm_cuda_stage2.exe` | 独立 CUDA 多项式 Stage2，处理合格的归一化 PARAM0 Stage1 save | 直接读档或共用 `worktodo` 的 `ECMSTAGE2=` 任务；输出因子、结果和逐曲线回执 |
 | `ecm_gui.exe` | Windows Stage1 worker、配置、队列生成、日志、GPU 状态和结果界面 | 管理 worker 进程；计算仍由所选 `ecm_cuda.exe` 完成 |
-| `ecm_p95feeder` | CPU 本地 save 的 Prime95 交接工具 | 交付可供 Prime95 消费的任务；驱动也支持完成任务交接 |
 
 ### 各 Stage1 后端
 
@@ -223,7 +222,7 @@ Stage1 使用 `worktodo.txt`，完成的任务移入 `worktodo.finished.txt`；�
 ECM2=1,2,3001,-1,100000,0,64
 ```
 
-队列行中的已知因子、AID、σ、曲线数和 save 名称有各自语义；不要通过改名把不匹配的文件交给另一个任务。生产交接配置使用 `p95_worktodo_path`：驱动把完成任务的 save 同步到配置位置，并向 Prime95 的 `worktodo.add` 追加任务；失败交付进入 pending 文件供后续重试。GUI 只显示状态，不直接改 Prime95 活动队列。CPU 本地存档也可由 `ecm_p95feeder` 处理。详见 [Stage1 使用](docs/usage/STAGE1.md)、[GUI](docs/usage/GUI.md)。
+队列行中的已知因子、AID、σ、曲线数和 save 名称有各自语义；不要通过改名把不匹配的文件交给另一个任务。生产交接配置使用 `p95_worktodo_path`：驱动把完成任务的 save 同步到配置位置，并向 Prime95 的 `worktodo.add` 追加任务；失败交付进入 pending 文件供后续重试。GUI 只显示状态，不直接改 Prime95 活动队列。详见 [Stage1 使用](docs/usage/STAGE1.md)、[GUI](docs/usage/GUI.md)。
 
 ### Save 与 checkpoint 不能互用
 

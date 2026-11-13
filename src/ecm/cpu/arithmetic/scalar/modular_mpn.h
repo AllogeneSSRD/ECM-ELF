@@ -1,11 +1,13 @@
 #pragma once
-// ecm_edwards_mont.h — fixed-size Montgomery field arithmetic (mpn-based).
+// Fixed-size modular arithmetic on GMP limbs. Full Mersenne moduli use
+// ordinary residues and folding. Other odd moduli use Montgomery residues.
 //
 // 目标: <10000-bit 合数 N。用 GMP mpn 的 64-bit limb (mp_bits_per_limb=64),
 // 160 limbs = 10240 bits, 足够覆盖 <10000 bit。
 // 所有中间量栈上分配, 无逐次 mpz 堆分配; REDC 用 mpn_addmul_1 自实现。
 
 #include <gmp.h>
+#include "modular_mpn_limits.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +54,7 @@ extern mp_size_t ECM_MPN_binvert_itch(mp_size_t);
 #endif
 
 #ifndef ED_MONT_MAX_LIMBS
-#define ED_MONT_MAX_LIMBS 160   // 160*64 = 10240 bits (覆盖 <10000 bit 目标)
+#define ED_MONT_MAX_LIMBS (ecm_cpu::gmp_fixed_width_bits / GMP_NUMB_BITS)
 #endif
 
 typedef struct { mp_limb_t l[ED_MONT_MAX_LIMBS]; } mont_t;

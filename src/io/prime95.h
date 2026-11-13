@@ -1,8 +1,7 @@
 #pragma once
 // p95_worktodo.h — Prime95 worktodo.txt / worktodo.add / prime.txt helpers.
 //
-// Used by the standalone handoff feeder (ecm_p95feeder), which moves locally
-// produced stage-1 saves (e{n:07d}_c{k}.tmp) into a running Prime95 instance.
+// Used by the Stage1 handoff to a running Prime95 instance.
 //
 // File formats (verified against real Prime95 30.x worktodo.txt files):
 //

@@ -54,6 +54,36 @@ int main() {
             !parse_scalar_construction("choose12", scalar),
             "unknown and removed option values must be rejected");
 
+    for (const auto curve : {CurveModel::Edwards, CurveModel::Montgomery}) {
+        selection.curve = curve;
+        selection.cpu_implementation = CpuImplementation::Auto;
+        const auto min_curves = curve == CurveModel::Edwards ? 8u : 2u;
+        require(resolve_cpu_implementation(selection, 10240, min_curves - 1, true) ==
+                    CpuImplementation::GmpScalar &&
+                resolve_cpu_implementation(selection, 10240, min_curves, true) ==
+                    CpuImplementation::IfmaSimd &&
+                resolve_cpu_implementation(selection, 10240, min_curves, false) ==
+                    CpuImplementation::GmpScalar,
+                "narrow automatic CPU selection must preserve scalar and IFMA thresholds");
+        require(resolve_cpu_implementation(selection, 10241, 1, true) ==
+                    CpuImplementation::IfmaSimd &&
+                !resolve_cpu_implementation(selection, 10241, 1, false) &&
+                !resolve_cpu_implementation(selection, 10241, 8, false),
+                "wide automatic CPU selection must require IFMA even for a single curve");
+        selection.cpu_implementation = CpuImplementation::IfmaSimd;
+        require(resolve_cpu_implementation(selection, 10240, 1, true) ==
+                    CpuImplementation::IfmaSimd &&
+                !resolve_cpu_implementation(selection, 10240, 1, false),
+                "explicit SIMD must require IFMA for every batch size");
+        selection.cpu_implementation = CpuImplementation::GmpScalar;
+        const auto wide_scalar = resolve_cpu_implementation(selection, 10241, 1, false);
+        require(resolve_cpu_implementation(selection, 10240, 8, true) ==
+                    CpuImplementation::GmpScalar &&
+                (curve == CurveModel::Edwards ? wide_scalar == CpuImplementation::GmpScalar
+                                               : !wide_scalar),
+                "only Edwards provides a wide GMP scalar implementation");
+    }
+
     int param = -1;
     require(resolve_gpu_param(3, false, 0, param) && param == 0,
             "sigma prefix must select PARAM0");

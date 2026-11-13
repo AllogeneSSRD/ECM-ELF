@@ -1,66 +1,33 @@
-#include "../../../../io/files.h"
-#include "ecm/stage1/progress.h"
 #include "ecm/stage1/cpu_runtime.h"
-#include <future>
-#include <memory>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <algorithm>
-#include <numeric>
-#include <cmath>
-#include <cstdlib>
-#include <cctype>
-#include <ctime>
-#include <fstream>
-#include <cstdio>
-#include <cstring>
-#include <csignal>
-#include <chrono>
-#include <thread>
-#include <atomic>
-#include <mutex>
-#include <condition_variable>
-#include <utility>
-#include <sys/stat.h>
-
-#ifdef _WIN32
-#include <io.h>
-#include <direct.h> /* _mkdir for the local save directory */
-#include <windows.h>
-#include <process.h>
-#define access _access
-#define getpid _getpid
-#else
-#include <unistd.h>
-#endif
-
-#ifdef _MSC_VER
-#include <intrin.h> /* __rdtsc() for the Prime95-style sigma entropy mix */
-#endif
-
-#include <gmp.h>
-
 #include "ecm/stage1/execution.h"
-#include "ecm/curve/edwards.h"
+#include "ecm/stage1/progress.h"
 #include "ecm/stage1/sigma.h"
-#include "ecm/io/save.h"
-#include "ecm/stage1/montgomery/opencl/checkpoint.h"
+#include "ecm/stage1/libecm_compat.h"
+#include "ecm/curve/edwards.h"
+#include "ecm/cpu/arithmetic/scalar/modular_mpn_limits.h"
+#include "ecm/platform/logging.h"
 #include "../../../../io/stage1_checkpoint.h"
-#include "ecm/stage1/montgomery/cpu/checkpoint.h"
-#include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
-#include "ecm/stage1/montgomery/cpu/ecm_mont_cpu.h"
-#include "ecm/stage1/montgomery/cpu/simd_mont_curve.h"
-#include "ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "ecm_edwards_cpu.h"
+#include "simd_edwards.h"
+#include "../../../../io/files.h"
 #include "../../../../io/prime95_save.h"
 #include "ecm/io/save.h"
-#include "ecm/platform/logging.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <future>
 #include <iomanip>
-#include <regex>
-#include "ecm/stage1/edwards/cpu/simd_edwards.h" /* SoA 批量 Edwards 层 (AVX512-IFMA TU, 见 §13.8) */
-#include <intrin.h>
-#include <windows.h>
+#include <iostream>
+#include <mutex>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace ecm_cpu_stage1 {
 using ecm_stage1::ComputationResult;
@@ -69,11 +36,8 @@ using ecm_stage1::CurveKind;
 using ecm_stage1::CurveOutcome;
 using ecm_io::ensure_dir;
 using ecm_stage1::ExecutionOptions;
-using ecm_save::format_name;
 using ecm_stage1::select_curve_sigma;
 using ecm_stage1::stage1_now_ms;
-using ecm_stage1::Stage1Options;
-using ecm_stage1::stdout_is_tty_local;
 using ecm_stage1::validate_stage1_factor;
 
 // Classify the computed value directly. Text exists only at checkpoint/final-save encoding.
@@ -324,7 +288,8 @@ struct EdwardsWorkerCtx {
     std::atomic<uint32_t>* next;
     std::atomic<int>* aborted;
     /* SIMD 批量 (8 曲线/批) 相关 */
-    int simd_ok = 0;
+    bool use_simd = false;
+    bool wide_ifma = false;
     std::atomic<uint32_t>* done_ctr = nullptr;
 };
 
@@ -355,6 +320,7 @@ struct EdSimdProg {
     const ifma_ctx_t* mc;
     long long last_ms;
     long long interval_ms;
+    std::array<bool, IFMA_LANES> setup_factors{};
     bool write_failed = false;
 };
 
@@ -375,6 +341,8 @@ static int edwards_simd_progress(void* p, size_t bits_done, size_t bits_total, c
             mpz_inits(d, Px, Py, rx, ry, rz, NULL);
             size_t written = 0;
             for (uint32_t k = 0; k < pr->batch_count; k++) {
+                if (pr->setup_factors[k])
+                    continue;
                 const uint32_t i = pr->batch_first + k;
                 const std::string path = ecm_stage1_curve_record(i);
                 ecm_save_common cm;
@@ -451,7 +419,8 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
                                        const ExecutionOptions& opt, mpz_srcptr N, mpz_srcptr s,
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t* sigmas, mpz_t* factors, int* array_found,
-                                       std::atomic<uint32_t>* done_ctr, CurveOutcome* outcomes) {
+                                       std::atomic<uint32_t>* done_ctr, CurveOutcome* outcomes,
+                                       bool wide_ifma) {
     if (!opt.persistence.tmp_dir.empty()) {
         bool completed = true;
         std::vector<int> statuses(count);
@@ -472,13 +441,36 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     // Exceptional setup lanes need scalar factor/error classification before
     // building an affine SIMD dictionary (which requires invertible inputs).
     bool exceptional = false;
+    std::array<bool, IFMA_LANES> setup_factors{};
+    uint32_t first_ready = count;
     for (uint32_t k = 0; k < count; ++k) {
         ecm_edwards::Integer d, x, y, a24, f;
-        if (ecm_edwards::construct(d.v, x.v, y.v, a24.v, f.v, sigmas[first + k], N) !=
-            ecm_edwards::Setup::Ready)
+        const uint32_t i = first + k;
+        const auto setup = ecm_edwards::construct(d.v, x.v, y.v, a24.v, f.v, sigmas[i], N);
+        if (setup == ecm_edwards::Setup::Ready) {
+            if (first_ready == count)
+                first_ready = k;
+        } else if (wide_ifma && setup == ecm_edwards::Setup::Factor) {
+            if (!classify_edwards_outcome(outcomes[i], N, sigmas[i], x.v, y.v, f.v, true))
+                return ECM_ERROR;
+            mpz_set(factors[i], f.v);
+            array_found[i] = ECM_FACTOR_FOUND_STEP1;
+            setup_factors[k] = true;
+            if (!opt.persistence.tmp_dir.empty() &&
+                !edwards_completed_write(checkpoint, i, sigmas[i], N, uint64_t(B1), outcomes[i]))
+                return ECM_ERROR;
+        } else {
             exceptional = true;
+        }
     }
     auto run_exceptional = [&]() {
+        if (wide_ifma) {
+            std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
+            ecm_ts_fprintf(stderr, "ERROR: Edwards IFMA setup or dictionary failed for a "
+                                   "%zu-bit modulus. Use --impl scalar to explicitly run "
+                                   "Edwards GMP.\n", mpz_sizeinbase(N, 2));
+            return ECM_ERROR;
+        }
         for (uint32_t k = 0; k < count; ++k) {
             const uint32_t i = first + k;
             const auto path =
@@ -497,6 +489,11 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     };
     if (exceptional)
         return run_exceptional();
+    if (first_ready == count) {
+        if (done_ctr)
+            done_ctr->fetch_add(count, std::memory_order_relaxed);
+        return 0;
+    }
     ed_soa_ctx_t ctx;
     /* 字典窗口跟随配置 (naf_w / ini), 不再硬编码 w=8:
        这样 SIMD 与标量用同一套 digit/字典, 存档逐字节可比, 也便于混合与续跑。
@@ -546,10 +543,12 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
         }
     }
 
-    /* 不足 8 条时把最后一个 sigma 补满 (被补的 lane 结果丢弃) */
-    uint64_t sg[8];
-    for (uint32_t k = 0; k < 8; k++)
-        sg[k] = sigmas[first + (k < count ? k : count - 1)];
+    // Resolved factors borrow an invertible start point; pad with the last lane.
+    uint64_t sg[IFMA_LANES];
+    for (uint32_t k = 0; k < IFMA_LANES; k++) {
+        const uint32_t lane = k < count ? k : count - 1;
+        sg[k] = sigmas[first + (setup_factors[lane] ? first_ready : lane)];
+    }
 
     const int setup_rc = ed_soa_set_curves(&ctx, sg, 8);
     if (setup_rc != 0) {
@@ -572,6 +571,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     pr.last_ms = stage1_now_ms();
     pr.interval_ms = (long long)opt.persistence.ckpt_ms;
     pr.mc = &ctx.mc;
+    pr.setup_factors = setup_factors;
     /* ---- resume: 一批 8 条 lane 必须共用恢复点, 所以仅当**所有** lane 都有有效检查点
        且 bitnum 完全相同时才续跑 (这正是"整批一起被中止、一起落盘"的常态); 否则从头跑。 ---- */
     {
@@ -581,6 +581,8 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
         uint32_t common_bitnum = 0;
         int all_ok = (count > 0);
         for (uint32_t k = 0; k < count && all_ok; k++) {
+            if (setup_factors[k])
+                continue;
             const uint32_t i = first + k;
             const std::string path = ecm_stage1_curve_record(i);
             ecm_save_common rcm;
@@ -595,7 +597,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
                 all_ok = 0;
                 break;
             }
-            if (k == 0)
+            if (k == first_ready)
                 common_bitnum = rbn;
             else if (rbn != common_bitnum) {
                 all_ok = 0;
@@ -603,6 +605,13 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
             }
         }
         if (all_ok && common_bitnum > 0) {
+            for (uint32_t k = 0; k < count; k++) {
+                if (!setup_factors[k])
+                    continue;
+                mpz_set(rxs[k], rxs[first_ready]);
+                mpz_set(rys[k], rys[first_ready]);
+                mpz_set(rzs[k], rzs[first_ready]);
+            }
             const int rr = ed_soa_set_resume(&ctx, common_bitnum, (int)count, rxs.data(),
                                              rys.data(), rzs.data());
             std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
@@ -630,6 +639,8 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
 
     int rc = 0;
     for (uint32_t k = 0; k < count; k++) {
+        if (setup_factors[k])
+            continue;
         const uint32_t i = first + k;
         if (mpz_cmp_ui(fac[k], 1) > 0) {
             mpz_set(factors[i], fac[k]);
@@ -662,9 +673,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
 
 static void edwards_worker(EdwardsWorkerCtx* ctx) {
     auto& checkpoint = *ctx->checkpoint;
-    const int use_simd = (ctx->opt->execution.selection.cpu_implementation !=
-                          ecm_stage1::CpuImplementation::GmpScalar) &&
-                         ctx->simd_ok;
+    const bool use_simd = ctx->use_simd;
     for (;;) {
         if (ecm_stage1_stop_requested()) {
             ctx->aborted->fetch_or(1, std::memory_order_relaxed);
@@ -684,11 +693,12 @@ static void edwards_worker(EdwardsWorkerCtx* ctx) {
                 break;
             n = 1;
         }
-        if (use_simd && n >= 2) {
-            /* 批内至少 2 条才值得批量 (1 条走标量, 见 §13.6 的 hybrid 规则) */
+        if (use_simd && (n >= 2 || ctx->wide_ifma || ctx->curves == 1)) {
+            // A narrow singleton tail can use scalar. Wide batches and a
+            // single explicitly selected SIMD curve stay on IFMA.
             const int rc = edwards_run_batch_simd_impl(
                 checkpoint, *ctx->opt, ctx->N, ctx->s, ctx->B1, ctx->B2, i, n, ctx->sigmas,
-                ctx->factors, ctx->array_found, ctx->done_ctr, ctx->outcomes);
+                ctx->factors, ctx->array_found, ctx->done_ctr, ctx->outcomes, ctx->wide_ifma);
             if (rc == 2) {
                 ctx->aborted->fetch_or(1, std::memory_order_relaxed);
                 break;
@@ -700,8 +710,6 @@ static void edwards_worker(EdwardsWorkerCtx* ctx) {
                 break;
             }
             continue;
-        }
-        if (use_simd && n == 1) { /* fallthrough to scalar for the tail curve */
         }
         {
             const uint64_t sigma = ctx->sigmas[i];
@@ -754,8 +762,7 @@ static uint32_t edwards_default_threads(uint32_t curves) {
 
 // Run one Edwards (Atkin-Morain) stage-1 batch on the CPU. One curve per sigma.
 //
-// curves == 1 or opt.execution.stage1_threads == 1 -> 顺序执行 (与历史行为一致);
-// 否则按曲线并行 (每线程独立曲线, 动态取号), 吞吐随核数线性提升.
+// Scalar curves and IFMA batches are independent worker tasks.
 ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                                      ExecutionOptions& opt,
                                      ecm_stage1_checkpoint::Context& checkpoint) {
@@ -768,6 +775,17 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         std::cerr << "curves must be > 0" << std::endl;
         return result;
     }
+    const auto modulus_bits = mpz_sizeinbase(N, 2);
+    const bool wide = modulus_bits > ecm_cpu::gmp_fixed_width_bits;
+    const auto implementation = ecm_stage1::resolve_cpu_implementation(
+        opt.execution.selection, modulus_bits, curves, driver_simd_isa_ok());
+    if (!implementation) {
+        ecm_ts_fprintf(stderr, "ERROR: Edwards CPU Stage1 at %zu bits requires AVX512-F/DQ/IFMA "
+                               "for the selected implementation. Use --impl scalar to "
+                               "explicitly run Edwards GMP.\n", modulus_bits);
+        return result;
+    }
+    const bool use_simd = *implementation == ecm_stage1::CpuImplementation::IfmaSimd;
 
     // NAF 窗口 (字典大小 2^(w-2)); 0 = 保持 ecm_edwards_cpu 的默认值.
     if (opt.execution.naf_w >= 2) {
@@ -872,7 +890,7 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     stage1_progress_set(0, curves);
     bool aborted = false;
     bool failed = false;
-    if (nthreads <= 1 && curves == 1) {
+    if (curves == 1 && !use_simd) {
         for (uint32_t i = 0; i < curves; i++) {
             const int rc = edwards_run_one_curve(checkpoint, N, s, opt, B1, B2, i, sigmas[i],
                                                  curves, factors[i], ckpt_paths[i], outcomes[i]);
@@ -904,36 +922,23 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         wctx.s = s;
         wctx.opt = &opt;
         wctx.checkpoint = &checkpoint;
-        /* ---- backend 选择 + 起始信息 (见 §13.6 第 7 条: simd 不允许静默降级) ---- */
+        wctx.use_simd = use_simd;
+        wctx.wide_ifma = use_simd && wide;
+        /* ---- backend startup information ---- */
         g_stage1_done.store(0, std::memory_order_relaxed);
         std::atomic<uint32_t>& done_ctr = g_stage1_done;
         {
-            const int isa = driver_simd_isa_ok();
-            if (opt.execution.selection.cpu_implementation ==
-                    ecm_stage1::CpuImplementation::IfmaSimd &&
-                !isa) {
-                ecm_ts_fprintf(stderr, "ERROR: --impl simd requested but this CPU lacks "
-                                       "AVX512-F/DQ/IFMA. Refusing to fall back silently; use "
-                                       "--impl auto or scalar.\n");
-                return result;
-            }
-            wctx.simd_ok = (opt.execution.selection.cpu_implementation ==
-                            ecm_stage1::CpuImplementation::IfmaSimd)
-                               ? 1
-                           : (opt.execution.selection.cpu_implementation ==
-                              ecm_stage1::CpuImplementation::Auto)
-                               ? (isa && curves >= 8)
-                               : 0;
             wctx.done_ctr = &done_ctr;
             char sbuf[160];
             snprintf(sbuf, sizeof(sbuf),
                      "simd (AVX512-IFMA: 8 curves per batch, 1 thread/batch, dict w=%d)",
                      edwards_get_naf_w() >= 3 ? edwards_get_naf_w() : 8);
             ecm_ts_fprintf(stdout, "CPU implementation : %s\n",
-                           wctx.simd_ok ? sbuf : "gmp (scalar mpn, 1 curve/thread)");
-            ecm_ts_fprintf(stdout, "N / s           : %zu bit N, %zu bit s\n", mpz_sizeinbase(N, 2),
+                           use_simd ? sbuf : wide ? "gmp (scalar mpz, 1 curve/thread)"
+                                                 : "gmp (scalar mpn, 1 curve/thread)");
+            ecm_ts_fprintf(stdout, "N / s           : %zu bit N, %zu bit s\n", modulus_bits,
                            mpz_sizeinbase(s, 2));
-            if (wctx.simd_ok) {
+            if (use_simd) {
                 /* 批量模式下真正的并行度是"批数"而不是线程数: 8 条曲线 = 1 批 = 1 个线程在干活,
                    其余线程空闲。这里如实显示, 免得用户以为 8 线程都忙。 */
                 const uint32_t batches = (curves + 7u) / 8u;

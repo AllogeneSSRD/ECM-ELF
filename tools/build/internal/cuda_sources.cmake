@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.20)
 set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/group_order/group_order.cpp
-    src/ecm/diagnostics/order_analysis.cpp
+    src/ecm/group_order/backends.cpp
     src/ecm/stage1/selection.cpp
     src/io/results.cpp
     src/ecm/stage1/task.cpp
@@ -13,7 +13,6 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/stage1/execution.cpp
     src/ecm/stage1/edwards/cpu/workflow.cpp src/ecm/stage1/montgomery/cpu/workflow.cpp src/ecm/stage1/cpu_runtime.cpp
     src/io/normalize.cpp
-    src/ecm/application/cli/group_order.cpp
     src/io/cli.cpp
     src/io/files.cpp
     src/sync/backup.cpp
@@ -26,14 +25,14 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/io/config.cpp
     src/io/worktodo.cpp
     src/sync/stage2.cpp
-    src/ecm/application/configuration/ecm_expr.cpp
+    src/io/expression.cpp
     src/io/prime95.cpp
     src/ecm/platform/logging.cpp
     src/ecm/stage1/progress.cpp
     src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp
     src/io/prime95_save.cpp
     src/ecm/stage1/edwards/cpu/simd_edwards.cpp
-    src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp
     src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp
     src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
     src/ecm/stage1/montgomery/cpu/checkpoint.cpp
@@ -87,7 +86,7 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/platform/logging.cpp
     src/ecm/application/configuration/runtime.cpp
     src/ecm/group_order/group_order.cpp
-    src/ecm/diagnostics/order_analysis.cpp
+    src/ecm/group_order/backends.cpp
     src/ecm/platform/fingerprint.cpp
     src/io/stage2_checkpoint.cpp
     src/io/results.cpp
@@ -98,8 +97,7 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/stage2/input.cpp
     src/ecm/stage2/process.cpp
     src/ecm/stage2/cuda/host_policy.cpp
-    src/ecm/application/configuration/stage2_identity.cpp
-    src/ecm/application/configuration/ecm_expr.cpp
+    src/io/expression.cpp
     src/io/worktodo.cpp
     src/io/config.cpp)
 set(ECM_STAGE2_ARITHMETIC_SOURCES

@@ -12,9 +12,7 @@
  *   stage 1: [s]P by the x-only Montgomery ladder (one xDBLADD per bit);
  *            factor found <=> gcd(Z, N) > 1
  *
- * Field arithmetic: MPN, via the generic Montgomery layer in
- * src/cpu/ecm_edwards_mont.h (GMP REDC).  The header was written for the Edwards
- * path but is curve-agnostic.
+ * Residue arithmetic uses the shared modular_mpn.h backend.
  * ------------------------------------------------------------------------- */
 #ifndef ECM_MONT_CPU_H
 #define ECM_MONT_CPU_H

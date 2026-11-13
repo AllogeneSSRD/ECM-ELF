@@ -1,4 +1,4 @@
-#include "ecm/diagnostics/order_analysis.h"
+#include "ecm/group_order/backends.h"
 #include "ecm/diagnostics/pari_protocol.h"
 #include <cstdlib>
 #include <fstream>

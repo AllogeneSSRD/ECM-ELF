@@ -26,10 +26,10 @@ def main():
     points = args.save.read_bytes().splitlines()[:point_count]
     assert len(points) == point_count
     (work / "point.save").write_bytes(b"\n".join(points) + b"\n")
-    (work / "ecm.toml").write_text(
-        '[shared]\nb2_ratio=0\n[stage2]\nstage2_save_dir="."\nstage2_finished="finished.txt"\n'
-        'stage2_progress_dir="progress"\n', encoding="utf-8"
-    )
+    config = work / "ecm.toml"
+    config_text = ('[shared]\nb2_ratio=0\nuser="original"\n[stage2]\nstage2_save_dir="."\n'
+                   'stage2_finished="finished.txt"\nstage2_progress_dir="progress"\n')
+    config.write_text(config_text, encoding="utf-8")
     queue = work / "worktodo.txt"
     target = "1,2,521,-1"
     if args.saved_factor:
@@ -77,6 +77,7 @@ def main():
         assert len(rows) == point_count and all(map(crc_valid, rows))
         diagnostics.unlink()
     blocked.rmdir()
+    config.write_text(config_text.replace('user="original"', 'user="after-restart"'), encoding="utf-8")
     # Simulate another failure after successful publication but before finished
     # bookkeeping. Replay must leave the already published line byte-identical.
     finished = work / "finished.txt"
@@ -86,6 +87,7 @@ def main():
     published = submission.read_bytes()
     row, = map(json.loads, published.splitlines())
     assert row["status"] == ("F" if args.saved_factor else "NF")
+    assert row["user"] == "original", row
     assert row["curves"] == point_count and crc_valid(row)
     finished.rmdir()
     log = run("resume", True)

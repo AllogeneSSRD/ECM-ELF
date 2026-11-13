@@ -1,6 +1,6 @@
 #include "ecm/stage1/progress.h"
 #include "cpu_runtime.h"
-#include "ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "ecm/cpu/arithmetic/ifma/modular_ifma.h"
 #include "ecm/platform/logging.h"
 #include "../../../include/indicators/indicators.hpp"
 #include <chrono>

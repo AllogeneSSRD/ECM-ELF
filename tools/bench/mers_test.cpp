@@ -1,13 +1,11 @@
 /* mers_test.cpp — standalone correctness + timing for the Mersenne fold kernel.
  *
- *   cl /nologo /O2 /arch:AVX512 /I third_party\gmp-zen3\dist\include \
- *      mers_test.cpp src\cpu\simd_mont_ifma.cpp /Fe:mers_test.exe \
- *      /link /LIBPATH:third_party\gmp-zen3\dist\lib gmp.lib
+ *   tools\build_tool.bat tools\bench\mers_test.cpp src\ecm\cpu\arithmetic\ifma\modular_ifma.cpp
  *
  * Checks ifma_mont_mul/sqr against mpz in BOTH field modes, with random,
  * adversarial and structured (zero-limb, 2^52j, top-boundary) inputs.
  */
-#include "../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/cpu/arithmetic/ifma/modular_ifma.h"
 
 #include <gmp.h>
 #include <stdio.h>

@@ -143,10 +143,13 @@ gpu_param = 3
 # 中文：使用参数 3。默认值为 3。
 
 impl = "auto"
-# EN: CPU Stage1 arithmetic implementation. auto selects by CPU capability and batch size; simd requires
-# EN: AVX512-IFMA; scalar uses GMP. Non-auto values are rejected for GPU runs.
-# 中文：CPU Stage1 算术实现：auto 根据 CPU 能力和批量选择；simd 要求 AVX512-IFMA；scalar 使用 GMP。GPU 运行
-# 中文：时拒绝非 auto 值。
+# EN: CPU Stage1 arithmetic implementation. auto selects by CPU capability and batch size up to 10240
+# EN: modulus bits; above that it requires AVX512-IFMA. simd requires AVX512-IFMA. scalar uses GMP; above
+# EN: 10240 bits it is available for Edwards only and uses mpz binary point multiplication. Non-auto
+# EN: values are rejected for GPU runs.
+# 中文：CPU Stage1 算术实现：实际模数不超过 10240 位时，auto 根据 CPU 能力和批量选择；超过该位宽时，auto 要
+# 中文：求 AVX512-IFMA。simd 要求 AVX512-IFMA。scalar 使用 GMP；超过 10240 位时，仅 Edwards 可显式使用 mpz
+# 中文：二进制点乘。GPU 运行时拒绝非 auto 值。
 
 kernel_add = ""
 # EN: OpenCL modular-addition kernel ID or alias. Empty or auto lets the backend choose; automatic

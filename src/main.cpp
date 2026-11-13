@@ -1,5 +1,5 @@
 #include "ecm/platform/gpu_worker.h"
-#include "ecm/application/cli/group_order.h"
+#include "ecm/group_order/backends.h"
 #include "ecm/io/save.h"
 #include "ecm/platform/log_file.h"
 #include "io/cli.h"
@@ -8,10 +8,7 @@
 #include "sync/backup.h"
 #include "sync/p95.h"
 using ecm_stage1_app::get_exe_dir_local;
-using ecm_stage1_app::get_gp_executable;
 using ecm_stage1_app::normalize_path_local;
-using ecm_stage1_app::print_group_order_factor;
-using ecm_stage1_app::resolve_gp_path;
 using ecm_stage1_app::resolve_rel_local;
 using ecm_stage1_app::stage1_result_settings;
 using ecm_stage1_app::stage1_save_construction;
@@ -41,7 +38,6 @@ using ecm_stage1_app::stage1_task_error;
 
 #include <gmp.h>
 
-#include "ecm/application/configuration/ecm_expr.h" /* shared exact integer expression parser */
 #include "ecm/application/configuration/runtime.h"
 #include "ecm/stage1/selection.h"
 #include "ecm/stage1/progress.h"
@@ -190,6 +186,57 @@ static int print_gpu_info(const char* ini_used, int worker, int device_index, in
 }
 
 #include "ecm/platform/cuda_loading.h"
+
+static void print_parts(const std::vector<ecm_group_order::PrimePower>&parts,double bound=-1) {
+    std::cout<<"[ ";bool first=true;
+    for(const auto &part:parts){
+        if(bound>=0 && mpz_cmp_d(part.prime.v,bound)>0)continue;
+        if(!first)std::cout<<", ";first=false;
+        std::cout<<'<'<<part.prime.str()<<", "<<part.exponent<<'>';
+    }
+    std::cout<<" ]";
+}
+static void print_group_order_factor(const ecm_stage1::TaskResult &result,uint32_t i,int param,
+                              ecm_diagnostics::Session &session,double B1,uint32_t multiplier,ecm_group_order::Family family) {
+    try {
+        ecm_group_order::CurveRequest request;
+        mpz_set(request.prime.v,result.factor(i));request.family=family;
+        request.parameter=family==ecm_group_order::Family::Montgomery?param:-1;
+        request.sigma=result.has_sigmas()?result.sigma(i):uint64_t(result.first_sigma())+i;
+        auto diagnosis=session.group(request);const auto &value=diagnosis.value;
+        std::cout<<"  go_status["<<i<<"]: backend="<<diagnosis.backend<<" status="<<ecm_group_order::name(value.status)
+            <<" all_proven="<<(value.all_proven?1:0)<<" reason="<<ecm_diagnostics::quote(value.reason)
+            <<" pari_failure="<<ecm_diagnostics::quote(diagnosis.pari_failure)<<" gp_failure="<<ecm_diagnostics::quote(diagnosis.gp_failure)<<'\n';
+        if(value.group_order_computed){
+            std::cout<<"  go["<<i<<"]="<<value.group_order.str()<<'\n';
+            std::cout<<"  go_factor["<<i<<"]=";print_parts(value.multiple_factorization.factors,B1);std::cout<<'\n';
+            if(value.multiple_factorization.status==ecm_group_order::Status::Complete)
+            {
+                const auto bounds=ecm_group_order::group_bounds(value.multiple_factorization.factors);
+                std::cout<<"  go_min_bounds["<<i<<"]: param="<<request.parameter
+                    <<" largest_prime="<<bounds.prime.str()<<" min_b1_stage1="<<bounds.stage1.str()
+                    <<" min_b1_stage2="<<bounds.stage2_b1.str()<<" min_b2_stage2="<<bounds.prime.str()
+                    <<" largest_exponent="<<bounds.exponent<<'\n';
+            }
+        }
+        if(value.status==ecm_group_order::Status::Complete && value.point_minimality_checked){
+            std::cout<<"  go_point_order["<<i<<"]="<<value.point_order.str()<<'\n';
+            std::cout<<"  go_point_factor["<<i<<"]=";print_parts(value.point_factorization);std::cout<<'\n';
+            const auto bounds=ecm_group_order::point_bounds(value.point_factorization,multiplier);
+            std::cout<<"  go_point_bounds["<<i<<"]: scalar="<<multiplier<<"LCM min_b1_stage1="
+                     <<bounds.stage1.str()<<" frontier=[ ";
+            bool first=true;
+            for(const auto &[b1,b2]:bounds.frontier) {
+                if(!first)std::cout<<", ";
+                first=false;
+                std::cout<<'<'<<b1.str()<<", "<<b2.str()<<'>';
+            }
+            std::cout<<" ]\n";
+        }
+    }catch(const std::exception &error){
+        std::cerr<<"  go_status["<<i<<"]: status=unresolved reason="<<ecm_diagnostics::quote(error.what())<<'\n';
+    }
+}
 
 namespace ecm_stage1_app {
 using namespace ecm_stage1;
@@ -666,10 +713,9 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
         ecm_ts_fprintf(stdout,
-                       "note: p95_dir=%s is informational here -- ecm.exe only writes local saves\n"
-                       "      to %s; the stage-2 handoff program ecm_p95feeder reads its own\n"
-                       "      feeder.ini (same key name)\n",
-                       cfg.p95_dir.c_str(), opt.persistence.tmp_dir.c_str());
+                       "note: p95_dir=%s is informational; configure p95_worktodo_path and "
+                       "p95_sync_dir for Prime95 handoff\n",
+                       cfg.p95_dir.c_str());
     }
 
     ecm_ts_fprintf(stdout, "%s %s (Stage1)\n", ecm_program::name, ecm_program::version);
@@ -970,7 +1016,7 @@ int main(int argc, char** argv) {
 
     // Diagnosis follows durable task publication; GP availability is not admission.
     auto go_settings = input.go_settings;
-    go_settings.gp = resolve_gp_path(get_gp_executable(input.gp_bin_path));
+    go_settings.gp = ecm_diagnostics::resolve_gp_path(go_settings.gp);
     ecm_diagnostics::Session go_session(go_settings);
     const auto& execution = settings.options.execution;
     std::cout << "ecm driver starting\n  curve_model: "

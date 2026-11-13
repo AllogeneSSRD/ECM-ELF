@@ -56,12 +56,13 @@ def main():
     # Keep the standalone target rebuildable alongside the binary, without private
     # ignored workflow/evidence files or the large compute SDK dependencies.
     roots=['src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/application/configuration',
-           'src/ecm/platform/generated','src/ecm/storage','include/ecm','third_party/imgui',
+           'src/ecm/platform/generated','src/io','include/ecm','third_party/imgui',
            'third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gui_v2_pet',
            'assets/gui_v2','tools/test/gui','tools/test/gui_v2','tools/gen','tools/build','config',
            'LICENSE','docs/ECM_TOML_REFERENCE.md','docs/GUI_V2_STATE_REFERENCE.md','docs/usage/GUI_V2.md']
     tracked=subprocess.check_output(['git','ls-files','-z','--',*roots],cwd=ROOT).decode().split('\0')
-    selected={name for name in tracked if name}
+    deleted=subprocess.check_output(['git','ls-files','--deleted','-z','--',*roots],cwd=ROOT).decode().split('\0')
+    selected=set(tracked)-set(deleted)
     # This is a local working-tree snapshot, not an export of HEAD. Include the
     # exact frozen build inputs even when optional art is deliberately ignored.
     selected.update(identity['source_catalog_sha256'])

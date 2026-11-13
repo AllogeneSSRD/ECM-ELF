@@ -16,7 +16,7 @@ $script=Join-Path $Build 'build.cmd'
 $sources=@("tools/test/$fixture.cpp",'src/ecm/stage1/edwards/cuda/checkpoint.cpp',
     'src/ecm/stage1/edwards/cuda/host_math.cpp',
     'src/io/stage1_checkpoint.cpp','src/io/files.cpp','src/io/save.cpp',
-    'src/ecm/application/configuration/ecm_expr.cpp','src/ecm/platform/stop.cpp',
+    'src/io/expression.cpp','src/ecm/platform/stop.cpp',
     'src/ecm/stage1/scalar.cpp','src/ecm/platform/logging.cpp',
     'src/ecm/application/configuration/runtime.cpp')
 if(-not $Ownership){

@@ -48,7 +48,6 @@ For performance comparisons and applicable ranges, see [Stage1 performance](docs
 | `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, TOML, queue and text saves; selectable OpenCL operators |
 | `ecm_cuda_stage2.exe` | Separate CUDA polynomial Stage2 for eligible normalized PARAM0 Stage1 saves | Direct save input or `ECMSTAGE2=` tasks in the shared `worktodo`; factors, results and per-curve receipts |
 | `ecm_gui.exe` | Windows Stage1 workers, configuration, queue generation, logs, GPU status and results | Manages worker processes; the chosen `ecm_cuda.exe` still performs the computation |
-| `ecm_p95feeder` | Prime95 handoff for local CPU saves | Delivers tasks Prime95 can consume; the driver also supports completed-task handoff |
 
 ### Stage1 backends
 
@@ -223,7 +222,7 @@ For example, put a Stage1 task into the chosen worker section:
 ECM2=1,2,3001,-1,100000,0,64
 ```
 
-Known factors, AID, sigma, curve count and save names have distinct queue semantics. Renaming a save cannot make it belong to another task. For production handoff, configure `p95_worktodo_path`: the driver synchronizes completed saves and appends assignments to Prime95's `worktodo.add`; failed deliveries enter a pending file for retry. The GUI displays status and is not a second consumer of Prime95's active queue. `ecm_p95feeder` can separately handle local CPU saves. See [Stage1 usage](docs/usage/STAGE1.md) and [GUI usage](docs/usage/GUI.md).
+Known factors, AID, sigma, curve count and save names have distinct queue semantics. Renaming a save cannot make it belong to another task. For production handoff, configure `p95_worktodo_path`: the driver synchronizes completed saves and appends assignments to Prime95's `worktodo.add`; failed deliveries enter a pending file for retry. The GUI displays status and is not a second consumer of Prime95's active queue. See [Stage1 usage](docs/usage/STAGE1.md) and [GUI usage](docs/usage/GUI.md).
 
 ### Saves and checkpoints are different
 

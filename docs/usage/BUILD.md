@@ -227,3 +227,5 @@ Stage1、Stage2 与 GUI v2 默认采用 PARI DLL → 外部 GP 的诊断顺序�
 本地输出附带助手、GMP、PARI DLL、`pari-data/seadata`、许可证和 `diagnostics-source.zip`，并生成逐文件及源码摘要的 `diagnostics_build_manifest.json`。Stage1/Stage2 发布打包核对该冻结身份，再将完整依赖纳入 ZIP，支持受限的相对目录路径；不打包用户配置、队列或日志。PARI 原始源码、配置头文件及 SEA 数据声明随包保留；没有 gp.exe。只复制计算 EXE 不构成完整的 DLL 诊断部署。
 
 `-WithoutLocalPari`（共享助手/GUI 测试构建）或 `ECM_DIAGNOSTICS_LOCAL_PARI=OFF` 用于明确的无 DLL 测试，要求新目录；它不启用自动 GMP。Windows 发布候选要求完整 PARI 依赖。运行时 DLL 缺失时 Auto 可尝试用户配置的 GP。当前 Win64 ABI、预算与证明语义见[共享诊断层](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。
+
+从 `diagnostics-source.zip` 独立重建时按包内 `SOURCE-BUILD.txt` 设置 `ECM_DIAGNOSTICS_LOCAL_PARI=OFF` 和 `ECM_DIAGNOSTICS_PACKAGE_RUNTIME=OFF`。该模式使用包内 GMP 构建并复制其运行库，无需再次生成分发包。GUI v2 和诊断源码包都按现行 `src/io/` 依赖冻结输入。

@@ -42,8 +42,8 @@ struct Options {
 };
 Options options(int argc,char **argv) {
     Options o;
-    // Read local identity first so explicit CLI values, including empty values,
-    // always override the selected global/worker TOML projection.
+    // Snapshot local identity before starting any curve. Explicit CLI values,
+    // including empty names, override the selected global/worker projection.
     for(int i=1;i<argc;++i) {
         const std::string key=argv[i];
         if((key=="--config" || key=="--worker") && i+1<argc) {

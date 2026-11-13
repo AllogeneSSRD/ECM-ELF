@@ -5,6 +5,10 @@
 #include <string>
 #include <vector>
 namespace s2prod {
+struct CurvePublication {
+    std::string path, user, computer;
+};
+
 // One synchronous curve-process launch. Owns no CLI parser or compute state.
 struct CurveProcessRequest {
     std::filesystem::path save,results,log;
@@ -58,10 +62,9 @@ struct CurveProcessRequest {
     uint64_t stage1_mhz=0;
     std::string stage1_profile{};
     double stage1_seconds=0;
-    std::string submission{};
+    CurvePublication publication;
     std::string submission_aid{};
     uint64_t submission_exponent=0;
-    std::string submission_ini{};
     std::vector<std::string> submission_known{};
     bool tune_child=0;
     std::string tune_ignore{};

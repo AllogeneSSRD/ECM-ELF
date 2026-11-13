@@ -1,8 +1,8 @@
 #pragma once
-// Edwards (Atkin-Morain, a=1, Z/2xZ/8) stage-1 CPU backend, mpz-based.
+// Edwards (Atkin-Morain, a=1, Z/2xZ/8) scalar Stage1 backend.
 //
-// Correctness-first reference implementation; the scalar multiplier is plain
-// double-and-add (NAF is a later performance step). The stage-1 result is the
+// Window NAF uses shared GMP limb arithmetic. Larger moduli fall back to
+// mpz double-and-add. The stage-1 result is the
 // Montgomery point (Qx:Qz) = (z+y : z-y) of [s]P, plus a gcd factor check.
 
 #include <stdint.h>

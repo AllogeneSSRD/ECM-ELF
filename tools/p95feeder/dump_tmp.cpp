@@ -1,10 +1,9 @@
 /* dump_tmp.cpp -- print the (Qx, Qz) that a stage-1 run wrote into a .tmp file.
- * Uses the driver's own reader (ecm_edwards_save), so the parse is exactly the
- * one the pipeline uses for stage-2 handoff.  Everything goes through printf with
+ * Uses the archived MIDSTAGE reader. Everything goes through printf with
  * mpz_get_str: mixing gmp_printf and printf interleaves out of order on Windows.
  *   usage: dump_tmp <file.tmp> [more.tmp ...]
  */
-#include "io/prime95_save.h"
+#include "midstage.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -455,8 +455,8 @@
       ],
       "empty": "default",
       "description": [
-        "CPU Stage1 arithmetic implementation. auto selects by CPU capability and batch size; simd requires AVX512-IFMA; scalar uses GMP. Non-auto values are rejected for GPU runs.",
-        "CPU Stage1 算术实现：auto 根据 CPU 能力和批量选择；simd 要求 AVX512-IFMA；scalar 使用 GMP。GPU 运行时拒绝非 auto 值。"
+        "CPU Stage1 arithmetic implementation. auto selects by CPU capability and batch size up to 10240 modulus bits; above that it requires AVX512-IFMA. simd requires AVX512-IFMA. scalar uses GMP; above 10240 bits it is available for Edwards only and uses mpz binary point multiplication. Non-auto values are rejected for GPU runs.",
+        "CPU Stage1 算术实现：实际模数不超过 10240 位时，auto 根据 CPU 能力和批量选择；超过该位宽时，auto 要求 AVX512-IFMA。simd 要求 AVX512-IFMA。scalar 使用 GMP；超过 10240 位时，仅 Edwards 可显式使用 mpz 二进制点乘。GPU 运行时拒绝非 auto 值。"
       ]
     },
     {

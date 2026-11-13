@@ -3,7 +3,7 @@
  * multiplication vs the production scalar GMP stack.
  *
  * Baseline = the real production primitives, i.e. this file includes
- * ecm_edwards_mont.h and calls mont_mul()/mont_sqr(), which are exactly
+ * modular_mpn.h and calls mont_mul()/mont_sqr(), which are exactly
  *   mpn_mul_n()/mpn_sqr() + the landed REDC dispatch (mpn_redc_1 / mpn_redc_n).
  * Not mpz_mod, not a toy reimplementation.
  *
@@ -15,8 +15,8 @@
  * Build: cmake --build build_vs18 --config Release --target simd_mont_gate
  * ------------------------------------------------------------------------- */
 
-#include "../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
-#include "../../src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h"
+#include "../../src/ecm/cpu/arithmetic/ifma/modular_ifma.h"
+#include "../../src/ecm/cpu/arithmetic/scalar/modular_mpn.h"
 
 #include <gmp.h>
 #include <emmintrin.h>

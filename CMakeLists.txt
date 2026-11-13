@@ -137,7 +137,7 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
 endforeach()
 foreach(_source include/ecm/io/results.h src/io/json.h
-                src/ecm/group_order/group_order.h src/ecm/diagnostics/order_analysis.h
+                src/ecm/group_order/group_order.h src/ecm/group_order/backends.h
                 include/ecm/stage1/selection.h include/ecm/stage1/scalar.h include/ecm/stage1/task.h
                 src/ecm/stage1/execution.h src/ecm/platform/generated/configuration_defaults.h
                 src/ecm/stage1/montgomery/opencl/workflow.cpp
@@ -179,11 +179,11 @@ ecm_stage1_identity_sidecar(ecm)
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
 # (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
 if(MSVC)
-    set_source_files_properties(src/ecm/stage1/edwards/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(src/ecm/stage1/edwards/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp
         src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(src/ecm/stage1/edwards/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    set_source_files_properties(src/ecm/stage1/edwards/cpu/simd_edwards.cpp src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp
         src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
@@ -572,7 +572,7 @@ if(ECM_ENABLE_CUDA)
 endif()
 
 # ===========================================================================
-# Optional helper targets: bench / test / disasm / p95feeder.
+# Optional helper targets: bench / test / disasm.
 #
 # These used to be defined in this file.  They now live in their own
 # tools/<group>/CMakeLists.txt so that this file stays about the two shipped
@@ -582,11 +582,11 @@ endif()
 #                           smaller build tree).  `ecm`/`ecm_cuda` are unaffected: none of
 #                           the helpers is a dependency of either.
 # ===========================================================================
-option(ECM_BUILD_TOOLS "Build the bench/test/disasm/p95feeder helper executables under tools/" ON)
+option(ECM_BUILD_TOOLS "Build the bench/test/disasm helper executables under tools/" ON)
 
 # Helper executables keep landing in the build ROOT (not in tools/<group>/), because the
 # docs and the tools/*.ps1 scripts reference them by path:
-#   build_vs18\Release\simd_mont_gate.exe, build_vs18\Release\ecm_p95feeder.exe,
+#   build_vs18\Release\simd_mont_gate.exe,
 #   build_cuda_cmake\cpu_mont_bench.exe ...
 # (VS appends the configuration directory to this, i.e. exactly today's layout.)
 function(ecm_tool_output_root target)
@@ -597,7 +597,6 @@ if(ECM_BUILD_TOOLS)
     add_subdirectory(tools/bench)
     add_subdirectory(tools/test)
     add_subdirectory(tools/disasm)
-    add_subdirectory(tools/p95feeder)
     add_custom_target(ecm_opencl_tool_resources
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/kernels/opencl/bench"
@@ -607,7 +606,7 @@ if(ECM_BUILD_TOOLS)
                   opencl_asm_selftest opencl_mont_isa_export opencl_addsub_isa_export)
         add_dependencies(${_tool} ecm_opencl_tool_resources)
     endforeach()
-    message(STATUS "tools: bench/test/disasm/p95feeder helper targets enabled (ECM_BUILD_TOOLS=ON)")
+    message(STATUS "tools: bench/test/disasm helper targets enabled (ECM_BUILD_TOOLS=ON)")
 else()
     message(STATUS "tools: helper targets disabled (ECM_BUILD_TOOLS=OFF)")
 endif()

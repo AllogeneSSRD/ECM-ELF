@@ -71,7 +71,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()): raise ValueError('use a fresh evidence directory')
     sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    frozen_source = ROOT/'tools/test/ecm_edwards_save_test.cpp'
+    frozen_source = ROOT/'tools/p95feeder/ecm_edwards_save_test.cpp'
     fixture_source = frozen_source.read_text(encoding='utf-8-sig')
     historical = {name: int(re.search(r'mpz_set_str\('+name+r', "(\d+)"', fixture_source)[1]) for name in ('Qx', 'Qz')}
     report = dict(identity=dict(stage1=sha(s1), stage2=sha(s2), test=sha(__file__),

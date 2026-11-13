@@ -1,6 +1,6 @@
 # 群阶、点阶与整数分解诊断
 
-共享诊断层位于 `src/ecm/diagnostics/`，供 Stage1、Stage2 与 GUI v2 使用。默认优先本地 PARI DLL，备选外部 GP；纯 CPU/GMP 算法保留为显式选项。`src/ecm/group_order/` 是独立 GMP 数学核心，负责曲线构造、验证和可选的有界分析。数据集脚本仍保持独立 GP 调用。共享接入的开发与验收记录见[临时草稿](../development/SHARED_PARI_DIAGNOSTICS_DRAFT.md)。
+Stage1、Stage2 与 GUI v2 助手共享 `src/ecm/group_order/`。`group_order.cpp/.h` 是独立 GMP 数学模块，负责曲线构造、群阶与点阶分析、分解验证及界限推导；`backends.cpp/.h` 负责后端调度，默认优先本地 PARI DLL，再尝试外部 GP，纯 GMP 为显式选项。隔离宿主在 `src/ecm/diagnostics/`；数据集脚本仍独立调用 GP。共享接入的开发与验收记录见[临时草稿](../development/SHARED_PARI_DIAGNOSTICS_DRAFT.md)。
 
 数据集正确性和性能结果另有[HTML 阅读版](../web/cpu-group-order-validation-20261023.html)，数字以草稿中的验收记录和冻结证据为依据。
 
@@ -39,7 +39,7 @@
 
 `ecm_diagnostics::Session` 的默认 `Auto` 顺序为 **PARI DLL → 外部 GP**。显式 `pari`（兼容别名 `native`）只运行 DLL，`gp` 只运行外部程序，`gmp` 才运行原有有界 GMP 算法。默认路线不自动选择 GMP；缺失依赖、超时、异常退出、协议错误或超过 2 MiB 输出上限均保留原因。PARI 已得到的群阶、因子和余因子在 GP 不可用时继续保留；不能将未完成结果声明为完整分析。曲线构造错误、合数模数等数学输入错误返回无效，不改变后续合法请求的后端策略。会话记住不可用的 GP，避免后续命中重复等待。
 
-PARI 适配器位于 `service/diagnostics/pari_native.h/.cpp`，仅在同目录的 `ecm_diagnostics_host.exe` 加载 `libpari.dll` 与 `pari-data/seadata`。主 GUI、Stage1 和 Stage2 均不加载 PARI DLL；它们通过有界临时请求与输出文件调用独立进程。一个请求对应一个 PARI 进程，不复用全局栈，不要求 GP 解释器或脚本。Windows Job 负责取消、超时及异常回收，并对每个 PARI 进程设置 512 MiB 内存上限；PARI 栈初值 128 MiB。该 ABI 当前仅验证 Win64 PARI 2.17.3、64 位字长、单线程版本；其他平台默认可尝试 GP，不冒充 DLL 已获资格。
+PARI 适配器位于 `src/ecm/diagnostics/pari_native.h/.cpp`，仅在同目录的 `ecm_diagnostics_host.exe` 加载 `libpari.dll` 与 `pari-data/seadata`。主 GUI、Stage1 和 Stage2 均不加载 PARI DLL；它们通过有界临时请求与输出文件调用独立进程。一个请求对应一个 PARI 进程，不复用全局栈，不要求 GP 解释器或脚本。Windows Job 负责取消、超时及异常回收，并对每个 PARI 进程设置 512 MiB 内存上限；PARI 栈初值 128 MiB。该 ABI 当前仅验证 Win64 PARI 2.17.3、64 位字长、单线程版本；其他平台默认可尝试 GP，不冒充 DLL 已获资格。
 
 曲线及原始点由既有 GMP 构造映射到短 Weierstrass，然后调用 PARI 的 `ellinit`、`ellcard`、`factorint`、`isprime` 和 `ellorder`。因子分解后逐项实际证素；接收方重新检查 Hasse 界、分解乘积、点阶整除、消去与最小性。当前 DLL 群阶分析的素域模数范围为 ≤192 bit，整数分解输入范围为 ≤4096 bit。整数分解先做 50 ms / 8192 次 rho 的便宜预分解；这及 GMP 曲线构造、验证是基础运算，不等于自动切换到 GMP 群阶后端。
 

@@ -13,7 +13,6 @@ if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $sources=@('src/ecm/stage2/cuda/main.cpp',
-    'src/ecm/application/configuration/stage2_identity.cpp',
     'src/ecm/stage2/task.cpp','src/ecm/stage2/input.cpp',
     'src/ecm/stage2/process.cpp')
 foreach($source in $sources){if($source -notin $inventory.groups.STAGE2_HOST){throw "Missing production source: $source"}}
@@ -46,4 +45,4 @@ foreach($source in $sources){
 [ordered]@{complete=$true;compile_only=$true;compiler=$m.host_compiler;crt='MT';cuda_compiler_invocations=0;
     cuda_sdk_include_paths=0;cuda_sdk_headers=0;source_hashes=$hashes;header_hashes=$headers;objects=$objectHashes}|
     ConvertTo-Json -Depth 4|Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8
-Write-Host 'Compiled five actual Stage2 host implementations without CUDA SDK headers.'
+Write-Host 'Compiled four actual Stage2 host implementations without CUDA SDK headers.'

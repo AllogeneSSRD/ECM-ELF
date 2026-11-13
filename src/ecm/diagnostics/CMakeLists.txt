@@ -7,6 +7,7 @@ get_filename_component(ECM_DIAGNOSTICS_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../../.
 set(ECM_DIAGNOSTICS_GMP_ROOT "${ECM_DIAGNOSTICS_REPO}/third_party/gmp-zen3/dist" CACHE PATH "Diagnostic host GMP prefix")
 set(ECM_DIAGNOSTICS_PARI_ROOT "${ECM_DIAGNOSTICS_REPO}/third_party/pari-2.17.3" CACHE PATH "Prepared PARI runtime and sources")
 option(ECM_DIAGNOSTICS_LOCAL_PARI "Bundle the PARI DLL and SEA tables" ON)
+option(ECM_DIAGNOSTICS_PACKAGE_RUNTIME "Produce a distributable runtime and source archive" ON)
 if(NOT WIN32)
     message(STATUS "PARI DLL host is qualified on Win64 only; GP and explicit GMP remain available")
     return()
@@ -30,12 +31,22 @@ add_custom_target(ecm_diagnostics_inputs
         --freeze-inputs "${CMAKE_BINARY_DIR}/diagnostics-inputs.json" --gmp "${ECM_DIAGNOSTICS_GMP_ROOT}" --pari "${ECM_DIAGNOSTICS_PARI_ROOT}" ${_pari_args}
     VERBATIM)
 add_dependencies(ecm_diagnostics_host ecm_diagnostics_inputs)
-add_custom_target(ecm_diagnostics_runtime ALL
-    COMMAND "${Python3_EXECUTABLE}" "${ECM_DIAGNOSTICS_REPO}/tools/packaging/diagnostics_runtime.py"
-        --binary "$<TARGET_FILE:ecm_diagnostics_host>" --gmp "${ECM_DIAGNOSTICS_GMP_ROOT}" --pari "${ECM_DIAGNOSTICS_PARI_ROOT}" ${_pari_args}
-    DEPENDS ecm_diagnostics_host
-    VERBATIM)
-add_executable(ecm_diagnostics_probe EXCLUDE_FROM_ALL "${ECM_DIAGNOSTICS_REPO}/tools/test/diagnostics_probe.cpp" order_analysis.cpp ../group_order/group_order.cpp)
+if(ECM_DIAGNOSTICS_PACKAGE_RUNTIME)
+    add_custom_target(ecm_diagnostics_runtime ALL
+        COMMAND "${Python3_EXECUTABLE}" "${ECM_DIAGNOSTICS_REPO}/tools/packaging/diagnostics_runtime.py"
+            --binary "$<TARGET_FILE:ecm_diagnostics_host>" --gmp "${ECM_DIAGNOSTICS_GMP_ROOT}" --pari "${ECM_DIAGNOSTICS_PARI_ROOT}" ${_pari_args}
+        DEPENDS ecm_diagnostics_host
+        VERBATIM)
+else()
+    if(ECM_DIAGNOSTICS_LOCAL_PARI)
+        message(FATAL_ERROR "Disable ECM_DIAGNOSTICS_LOCAL_PARI for a source-only diagnostic rebuild")
+    endif()
+    add_custom_target(ecm_diagnostics_runtime ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ECM_DIAGNOSTICS_GMP_ROOT}/bin/gmp-10.dll" "${CMAKE_BINARY_DIR}/gmp-10.dll"
+        DEPENDS ecm_diagnostics_host
+        VERBATIM)
+endif()
+add_executable(ecm_diagnostics_probe EXCLUDE_FROM_ALL "${ECM_DIAGNOSTICS_REPO}/tools/test/diagnostics_probe.cpp" ../group_order/backends.cpp ../group_order/group_order.cpp)
 target_compile_features(ecm_diagnostics_probe PRIVATE cxx_std_17)
 target_compile_definitions(ecm_diagnostics_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(ecm_diagnostics_probe PRIVATE /utf-8 /EHsc)

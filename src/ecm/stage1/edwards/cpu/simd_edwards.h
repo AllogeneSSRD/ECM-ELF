@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
  * simd_edwards.h — batched Edwards stage-1 point layer, 8 curves in one zmm.
  *
- * Sits on top of simd_mont_ifma (lane = curve, SoA over 52-bit limbs) and
+ * Sits on top of modular_ifma (lane = curve, SoA over 52-bit limbs) and
  * mirrors src/cpu/ecm_edwards_cpu.cpp's scalar formulas exactly:
  *   dbl          = 4 sqr + 4 mul
  *   add          = 9 mul (incl. d)
@@ -29,7 +29,7 @@
 #include <stdint.h>
 #include <gmp.h>
 
-#include "../../../cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../../cpu/arithmetic/ifma/modular_ifma.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,7 +57,7 @@ typedef struct {
 
 /* w in [3,12].  Returns 0 on success.
    field_mode: IFMA_FIELD_AUTO | IFMA_FIELD_MONT | IFMA_FIELD_MERS (see
-   simd_mont_ifma.h).  AUTO uses the Mersenne fold kernel when N = 2^k - 1,
+   modular_ifma.h).  AUTO uses the Mersenne fold kernel when N = 2^k - 1,
    which halves the madds per field mul; everything above the field layer
    (point ops, dictionary, checkpoint, gcd) is domain agnostic. */
 int  ed_soa_init(ed_soa_ctx_t *c, const mpz_t N, int w);
@@ -106,7 +106,7 @@ int ed_soa_point_selftest(ed_soa_ctx_t *c, int trials);
 
 /* Debug hooks: run one point op on the whole batch with caller-provided buffers
    (8n words each); afterwards c->arena holds the op's internal slots
-   (0..6 = A,B,C,E,F,G,H, 7 = X+Y scratch, 8/9 = add/sub scratch) so a failing
+   (0..6 = A,B,C,E,F,G,H, 7 = X+Y scratch, 8/9 = modular add scratch) so a failing
    step can be compared against mpz. */
 void ed_soa_debug_dbl(ed_soa_ctx_t *c, uint64_t *ox, uint64_t *oy, uint64_t *oz, uint64_t *ot,
                       const uint64_t *ix, const uint64_t *iy, const uint64_t *iz,

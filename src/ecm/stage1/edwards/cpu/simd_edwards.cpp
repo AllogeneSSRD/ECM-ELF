@@ -1,15 +1,16 @@
 /* ---------------------------------------------------------------------------
  * simd_edwards.cpp 鈥?see simd_edwards.h for the contract.
  *
- * Field ops are vectorised on top of ifma_mont_mul (batched, lane = curve).
+ * Point formulas use the shared IFMA modular arithmetic (one curve per lane).
  * Everything here is "the same formula, 8 lanes wide": the scalar reference is
- * src/cpu/ecm_edwards_cpu.cpp ed_dbl_mont/ed_add_mont/ed_add_affine_mont, and
+ * ecm_edwards_cpu.cpp ed_dbl_mont/ed_add_mont/ed_add_affine_mont, and
  * a modular op in this file must return the same canonical residue < N as
  * mont_add/mont_sub/mont_neg do there (both are exact modular arithmetic, so
  * the ladder's final Qx/Qz are bit-identical to the scalar path's).
  * ------------------------------------------------------------------------- */
 
 #include "simd_edwards.h"
+#include "ecm/cpu/arithmetic/ifma/modular_ifma_ops.h"
 
 #if !defined(__AVX512F__)
 #error "simd_edwards.cpp must be compiled with AVX512 (/arch:AVX512)"
@@ -23,16 +24,10 @@
 /* The production curve construction and the scalar reference path. */
 #include "ecm_edwards_cpu.h"
 
-#define IFMA_M52 0x000FFFFFFFFFFFFFULL
-
-static const __m512i kMask = _mm512_set1_epi64((long long)IFMA_M52);
-
-static inline __m512i ld(const uint64_t *p) { return _mm512_load_si512((const __m512i *)p); }
-static inline void    st(uint64_t *p, __m512i v) { _mm512_store_si512((__m512i *)p, v); }
-
-/* ---------------------------------------------------------------------------
- * SoA modular field ops (all inputs/outputs < N, canonical)
- * ------------------------------------------------------------------------- */
+using ecm_ifma::add;
+using ecm_ifma::sub;
+using ecm_ifma::neg;
+using ecm_ifma::limb_mask;
 
 static void soa_zero(uint64_t *r, const ifma_ctx_t *mc)
 {
@@ -42,74 +37,6 @@ static void soa_zero(uint64_t *r, const ifma_ctx_t *mc)
 static void soa_copy(uint64_t *r, const uint64_t *a, const ifma_ctx_t *mc)
 {
     memcpy(r, a, 8 * mc->n * sizeof(uint64_t));
-}
-
-/* r -= N where the (n+1)-limb value (r, top) is >= N; two passes so that no
-   separate copy of the originals is needed. */
-static void soa_cond_sub(uint64_t *r, __m512i top, const ifma_ctx_t *mc)
-{
-    const size_t n = mc->n;
-    const uint64_t *nb = mc->nb;
-    __m512i borrow = _mm512_setzero_si512();
-
-    for (size_t i = 0; i < n; i++) {
-        const __m512i rk = ld(r + 8 * i), nk = ld(nb + 8 * i);
-        const __m512i d = _mm512_sub_epi64(_mm512_sub_epi64(rk, nk), borrow);
-        borrow = _mm512_maskz_set1_epi64(_mm512_movepi64_mask(d), 1);
-    }
-    const __mmask8 need = _mm512_cmpge_epu64_mask(top, borrow);
-
-    borrow = _mm512_setzero_si512();
-    for (size_t i = 0; i < n; i++) {
-        const __m512i rk = ld(r + 8 * i), nk = ld(nb + 8 * i);
-        __m512i d = _mm512_sub_epi64(_mm512_sub_epi64(rk, nk), borrow);
-        borrow = _mm512_maskz_set1_epi64(_mm512_movepi64_mask(d), 1);
-        st(r + 8 * i, _mm512_mask_blend_epi64(need, rk, _mm512_and_si512(d, kMask)));
-    }
-}
-
-/* r = a + b mod N.  Limbs are 52 bits, so a limb-wise sum with a running carry
-   register cannot overflow 64 bits. */
-static void soa_add(uint64_t *r, const uint64_t *a, const uint64_t *b, const ifma_ctx_t *mc)
-{
-    const size_t n = mc->n;
-    __m512i cy = _mm512_setzero_si512();
-    for (size_t i = 0; i < n; i++) {
-        const __m512i s = _mm512_add_epi64(_mm512_add_epi64(ld(a + 8 * i), ld(b + 8 * i)), cy);
-        cy = _mm512_srli_epi64(s, 52);
-        st(r + 8 * i, _mm512_and_si512(s, kMask));
-    }
-    soa_cond_sub(r, cy, mc);
-}
-
-/* r = -a mod N  (0 stays 0, otherwise N - a). */
-static void soa_neg(uint64_t *r, const uint64_t *a, const ifma_ctx_t *mc)
-{
-    const size_t n = mc->n;
-    const uint64_t *nb = mc->nb;
-    __m512i borrow = _mm512_setzero_si512();
-    /* "a != 0" is the OR over limbs of "limb != 0".  ANDing them would mean
-       "every limb is non-zero", which silently zeroes N - a for any sparse a
-       (e.g. a = R mod N, or a squared value with a zero limb). */
-    __mmask8 nz = 0;
-    for (size_t i = 0; i < n; i++) {
-        const __m512i ai = ld(a + 8 * i), nk = ld(nb + 8 * i);
-        nz = (__mmask8)(nz | ~_mm512_cmpeq_epi64_mask(ai, _mm512_setzero_si512()));
-        __m512i d = _mm512_sub_epi64(_mm512_sub_epi64(nk, ai), borrow);
-        borrow = _mm512_maskz_set1_epi64(_mm512_movepi64_mask(d), 1);
-        st(r + 8 * i, _mm512_and_si512(d, kMask));
-    }
-    /* a == 0 gave N, which must be 0 */
-    for (size_t i = 0; i < n; i++)
-        st(r + 8 * i, _mm512_maskz_mov_epi64(nz, ld(r + 8 * i)));
-}
-
-/* r = a - b mod N = a + (N - b); `t` is 8n scratch. */
-static void soa_sub(uint64_t *r, const uint64_t *a, const uint64_t *b,
-                    uint64_t *t, const ifma_ctx_t *mc)
-{
-    soa_neg(t, b, mc);
-    soa_add(r, a, t, mc);
 }
 
 /* ---------------------------------------------------------------------------
@@ -134,13 +61,13 @@ static void ed_soa_dbl(ed_soa_ctx_t *c, soa_pt r, const soa_pt p, bool extended 
     ifma_mont_sqr(A, p.x, mc);
     ifma_mont_sqr(B, p.y, mc);
     ifma_mont_sqr(C, p.z, mc);
-    soa_add(C, C, C, mc);                     /* C = 2Z^2 */
-    soa_add(t, p.x, p.y, mc);
+    add(C, C, C, o, mc);                     /* C = 2Z^2 */
+    add(t, p.x, p.y, o, mc);
     ifma_mont_sqr(E, t, mc);
-    soa_add(G, A, B, mc);                     /* G = A + B */
-    soa_sub(E, E, G, o, mc);                  /* E = (X+Y)^2 - G */
-    soa_sub(F, G, C, o, mc);                  /* F = G - C */
-    soa_sub(H, A, B, o, mc);                  /* H = A - B */
+    add(G, A, B, o, mc);                     /* G = A + B */
+    sub(E, E, G, mc);                  /* E = (X+Y)^2 - G */
+    sub(F, G, C, mc);                  /* F = G - C */
+    sub(H, A, B, mc);                  /* H = A - B */
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
     if (extended) ifma_mont_mul(r.t, E, H, mc);
@@ -160,14 +87,14 @@ static void ed_soa_add(ed_soa_ctx_t *c, soa_pt r, const soa_pt p, const soa_pt q
     ifma_mont_mul(C, p.t, q.t, mc);
     ifma_mont_mul(C, C, c->d, mc);            /* C = d*T1*T2 */
     ifma_mont_mul(D, p.z, q.z, mc);
-    soa_add(t, p.x, p.y, mc);
-    soa_add(E, q.x, q.y, mc);
+    add(t, p.x, p.y, o, mc);
+    add(E, q.x, q.y, o, mc);
     ifma_mont_mul(E, t, E, mc);
-    soa_sub(E, E, A, o, mc);
-    soa_sub(E, E, B, o, mc);
-    soa_sub(F, D, C, o, mc);
-    soa_add(G, D, C, mc);
-    soa_sub(H, B, A, o, mc);
+    sub(E, E, A, mc);
+    sub(E, E, B, mc);
+    sub(F, D, C, mc);
+    add(G, D, C, o, mc);
+    sub(H, B, A, mc);
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
     ifma_mont_mul(r.t, E, H, mc);
@@ -187,14 +114,14 @@ static void ed_soa_add_affine(ed_soa_ctx_t *c, soa_pt r, const soa_pt p,
     ifma_mont_mul(A, p.x, qx, mc);
     ifma_mont_mul(B, p.y, qy, mc);
     ifma_mont_mul(C, p.t, qdxy, mc);
-    soa_add(t, p.x, p.y, mc);
-    soa_add(E, qx, qy, mc);
+    add(t, p.x, p.y, o, mc);
+    add(E, qx, qy, o, mc);
     ifma_mont_mul(E, t, E, mc);
-    soa_sub(E, E, A, o, mc);
-    soa_sub(E, E, B, o, mc);
-    soa_sub(F, p.z, C, o, mc);
-    soa_add(G, p.z, C, mc);
-    soa_sub(H, B, A, o, mc);
+    sub(E, E, A, mc);
+    sub(E, E, B, mc);
+    sub(F, p.z, C, mc);
+    add(G, p.z, C, o, mc);
+    sub(H, B, A, mc);
     ifma_mont_mul(r.x, E, F, mc);
     ifma_mont_mul(r.y, G, H, mc);
     if (extended) ifma_mont_mul(r.t, E, H, mc);
@@ -286,7 +213,7 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
                 else ifma_mont_sqr(K.data(), A.data(), mc);
                 for (unsigned k = 0; k < IFMA_LANES; k++) {
                     for (size_t i = 0; i < n; i++) {
-                        if (K[8 * i + k] > (uint64_t)IFMA_M52) {
+                        if (K[8 * i + k] > (uint64_t)limb_mask) {
                             if (fails < 16)
                                 printf("  [selftest] %s lane=%u limb %llu = %016llx is dirty (> 2^52)\n",
                                        op ? "sqr" : "mul", k, (unsigned long long)i,
@@ -298,9 +225,9 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
             }
         }
         for (int op = 0; op < 3; op++) {
-            if (op == 0) soa_add(R.data(), A.data(), B.data(), mc);
-            else if (op == 1) soa_sub(R.data(), A.data(), B.data(), T.data(), mc);
-            else soa_neg(R.data(), A.data(), mc);
+            if (op == 0) add(R.data(), A.data(), B.data(), T.data(), mc);
+            else if (op == 1) sub(R.data(), A.data(), B.data(), mc);
+            else neg(R.data(), A.data(), mc);
             for (unsigned k = 0; k < IFMA_LANES; k++) {
                 ifma_to_mpz_lane(got, R.data(), k, mc);
                 ifma_to_mpz_lane(av, A.data(), k, mc);
@@ -325,9 +252,9 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
             mpz_inits(av0, bv0, want0, NULL);
             ifma_to_mpz_lane(av0, Aa.data(), 0, mc);
             ifma_to_mpz_lane(bv0, Ba.data(), 0, mc);
-            if (op == 0) { soa_add(Aa.data(), Aa.data(), Ba.data(), mc);       mpz_add(want0, av0, bv0); }
-            else if (op == 1) { soa_sub(Aa.data(), Aa.data(), Ba.data(), T.data(), mc); mpz_sub(want0, av0, bv0); }
-            else { soa_neg(Aa.data(), Aa.data(), mc);                          mpz_neg(want0, av0); }
+            if (op == 0) { add(Aa.data(), Aa.data(), Ba.data(), T.data(), mc);       mpz_add(want0, av0, bv0); }
+            else if (op == 1) { sub(Aa.data(), Aa.data(), Ba.data(), mc); mpz_sub(want0, av0, bv0); }
+            else { neg(Aa.data(), Aa.data(), mc);                          mpz_neg(want0, av0); }
             mpz_mod(want0, want0, mc->N);
             ifma_to_mpz_lane(got, Aa.data(), 0, mc);
             if (mpz_cmp(want0, got) != 0) {
@@ -342,7 +269,7 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
             mpz_t av0, want0;
             mpz_inits(av0, want0, NULL);
             ifma_to_mpz_lane(av0, Aa.data(), 0, mc);
-            soa_add(Aa.data(), Aa.data(), Aa.data(), mc);
+            add(Aa.data(), Aa.data(), Aa.data(), T.data(), mc);
             mpz_add(want0, av0, av0); mpz_mod(want0, want0, mc->N);
             ifma_to_mpz_lane(got, Aa.data(), 0, mc);
             if (mpz_cmp(want0, got) != 0) {
@@ -354,7 +281,7 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
         /* adversarial patterns + chained sub: the ladder subtracts twice in a
            row through the same scratch, which random cases did not cover. */
         for (int pat = 0; pat < 4; pat++) {
-            std::vector<uint64_t> Aa(8 * n), Ba(8 * n), Tt(8 * n);
+            std::vector<uint64_t> Aa(8 * n), Ba(8 * n);
             mpz_t av0, bv0, want0;
             mpz_inits(av0, bv0, want0, NULL);
             if (pat == 0) { mpz_set_ui(av0, 0); mpz_set_ui(bv0, 0); }
@@ -363,29 +290,8 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
             else { mpz_sub_ui(av0, mc->N, 1); mpz_set_ui(bv0, 1); }
             ifma_from_mpz_lane(Aa.data(), 0, av0, mc);
             ifma_from_mpz_lane(Ba.data(), 0, bv0, mc);
-            if (getenv("ED_SOA_DEBUG")) {
-                /* decompose soa_sub into neg + add and check each half against
-                   the Montgomery-domain expectation */
-                mpz_t Rm, ea, eb, exp, gotm;
-                mpz_inits(Rm, ea, eb, exp, gotm, NULL);
-                mpz_set_ui(Rm, 1);
-                mpz_mul_2exp(Rm, Rm, 52 * (unsigned long)n);
-                mpz_mod(ea, av0, mc->N); mpz_mul(ea, ea, Rm); mpz_mod(ea, ea, mc->N);
-                mpz_mod(eb, bv0, mc->N); mpz_mul(eb, eb, Rm); mpz_mod(eb, eb, mc->N);
-                soa_neg(Tt.data(), Ba.data(), mc);
-                ifma_to_mpz_lane(gotm, Tt.data(), 0, mc);
-                mpz_sub(exp, mc->N, eb); mpz_mod(exp, exp, mc->N);
-                gmp_printf("  [dbg] pat=%d neg: exp=%Zx got=%Zx %s\n", pat, exp, gotm,
-                           mpz_cmp(exp, gotm) ? "DIFF" : "ok");
-                soa_add(Aa.data(), Aa.data(), Tt.data(), mc);
-                ifma_to_mpz_lane(gotm, Aa.data(), 0, mc);
-                mpz_add(exp, ea, mc->N); mpz_sub(exp, exp, eb); mpz_mod(exp, exp, mc->N);
-                gmp_printf("  [dbg] pat=%d add: exp=%Zx got=%Zx %s\n", pat, exp, gotm,
-                           mpz_cmp(exp, gotm) ? "DIFF" : "ok");
-                mpz_clears(Rm, ea, eb, exp, gotm, NULL);
-            }
-            soa_sub(Aa.data(), Aa.data(), Ba.data(), Tt.data(), mc);
-            soa_sub(Aa.data(), Aa.data(), Ba.data(), Tt.data(), mc);   /* chained */
+            sub(Aa.data(), Aa.data(), Ba.data(), mc);
+            sub(Aa.data(), Aa.data(), Ba.data(), mc);   /* chained */
             mpz_sub(want0, av0, bv0); mpz_sub(want0, want0, bv0); mpz_mod(want0, want0, mc->N);
             ifma_to_mpz_lane(got, Aa.data(), 0, mc);
             if (mpz_cmp(want0, got) != 0) {
@@ -393,9 +299,9 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
                 fails++;
             }
             /* and add then sub back, which must return the original */
-            soa_sub(Aa.data(), Aa.data(), Ba.data(), Tt.data(), mc);
+            sub(Aa.data(), Aa.data(), Ba.data(), mc);
             mpz_sub(want0, av0, bv0); mpz_sub(want0, want0, bv0); mpz_mod(want0, want0, mc->N);
-            soa_add(Aa.data(), Aa.data(), Ba.data(), mc);
+            add(Aa.data(), Aa.data(), Ba.data(), T.data(), mc);
             ifma_to_mpz_lane(got, Aa.data(), 0, mc);
             if (mpz_cmp(want0, got) != 0) {
                 if (fails < 18) gmp_printf("  [selftest] ADD-BACK pat=%d want=%Zx got=%Zx\n", pat, want0, got);
@@ -425,20 +331,18 @@ void ed_soa_debug_dbl(ed_soa_ctx_t *c, uint64_t *ox, uint64_t *oy, uint64_t *oz,
 
 void ed_soa_debug_add_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a, const uint64_t *b)
 {
-    soa_pt dummy;
-    (void)dummy;
-    soa_add(r, a, b, &c->mc);
+    add(r, a, b, c->mc.scratch, &c->mc);
 }
 
 void ed_soa_debug_sub_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a, const uint64_t *b,
-                            uint64_t *scratch)
+                            uint64_t *)
 {
-    soa_sub(r, a, b, scratch, &c->mc);
+    sub(r, a, b, &c->mc);
 }
 
 void ed_soa_debug_neg_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a)
 {
-    soa_neg(r, a, &c->mc);
+    neg(r, a, &c->mc);
 }
 
 void ed_soa_debug_add(ed_soa_ctx_t *c, uint64_t *rx, uint64_t *ry, uint64_t *rz, uint64_t *rt,
@@ -662,13 +566,13 @@ int ed_soa_point_selftest(ed_soa_ctx_t *c, int trials)
             if (mpz_cmp(v, wB) != 0) { if (fails < 8) gmp_printf("  [step] B want=%Zx got=%Zx\n", wB, v); fails++; }
 
             ifma_mont_sqr(mC, Ppt.z, mc);
-            soa_add(mC, mC, mC, mc);
+            add(mC, mC, mC, mo, mc);
             mpz_mul(wC, P.Z, P.Z); mpz_mod(wC, wC, (mpz_ptr)NX);
             mpz_add(wC, wC, wC); mpz_mod(wC, wC, (mpz_ptr)NX);
             ifma_to_mpz_lane(v, mC, 0, mc);
             if (mpz_cmp(v, wC) != 0) { if (fails < 8) gmp_printf("  [step] C want=%Zx got=%Zx\n", wC, v); fails++; }
 
-            soa_add(mt, Ppt.x, Ppt.y, mc);
+            add(mt, Ppt.x, Ppt.y, mo, mc);
             {
                 mpz_t w1;
                 mpz_init(w1);
@@ -691,8 +595,8 @@ int ed_soa_point_selftest(ed_soa_ctx_t *c, int trials)
             mpz_mul(wE, wE, wE); mpz_mod(wE, wE, (mpz_ptr)NX);
             mpz_sub(wE, wE, wA); mpz_mod(wE, wE, (mpz_ptr)NX);
             mpz_sub(wE, wE, wB); mpz_mod(wE, wE, (mpz_ptr)NX);
-            soa_sub(mE, mE, mA, mo, mc);
-            soa_sub(mE, mE, mB, mo, mc);
+            sub(mE, mE, mA, mc);
+            sub(mE, mE, mB, mc);
             ifma_to_mpz_lane(v, mE, 0, mc);
             if (mpz_cmp(v, wE) != 0) {
                 if (fails < 12) {
@@ -715,17 +619,17 @@ int ed_soa_point_selftest(ed_soa_ctx_t *c, int trials)
                 fails++;
             }
 
-            soa_add(mG, mA, mB, mc);
+            add(mG, mA, mB, mo, mc);
             mpz_add(wG, wA, wB); mpz_mod(wG, wG, (mpz_ptr)NX);
             ifma_to_mpz_lane(v, mG, 0, mc);
             if (mpz_cmp(v, wG) != 0) { if (fails < 8) gmp_printf("  [step] G want=%Zx got=%Zx\n", wG, v); fails++; }
 
-            soa_sub(mF, mG, mC, mo, mc);
+            sub(mF, mG, mC, mc);
             mpz_sub(wF, wG, wC); mpz_mod(wF, wF, (mpz_ptr)NX);
             ifma_to_mpz_lane(v, mF, 0, mc);
             if (mpz_cmp(v, wF) != 0) { if (fails < 8) gmp_printf("  [step] F want=%Zx got=%Zx\n", wF, v); fails++; }
 
-            soa_sub(mH, mA, mB, mo, mc);
+            sub(mH, mA, mB, mc);
             mpz_sub(wH, wA, wB); mpz_mod(wH, wH, (mpz_ptr)NX);
             ifma_to_mpz_lane(v, mH, 0, mc);
             if (mpz_cmp(v, wH) != 0) { if (fails < 8) gmp_printf("  [step] H want=%Zx got=%Zx\n", wH, v); fails++; }
@@ -1011,9 +915,9 @@ int ed_soa_set_curves(ed_soa_ctx_t *c, const uint64_t *sigma, int lanes)
         for (size_t j = 0; j < 3; j++) {
             const uint64_t *base = c->dict + j * 3 * lane_words;
             fprintf(stderr, "[dict] j=%zu x=%llx y=%llx dxy=%llx (lane0 limb0)\n", j,
-                    (unsigned long long)(base[0] & IFMA_M52),
-                    (unsigned long long)(base[lane_words] & IFMA_M52),
-                    (unsigned long long)(base[2 * lane_words] & IFMA_M52));
+                    (unsigned long long)(base[0] & limb_mask),
+                    (unsigned long long)(base[lane_words] & limb_mask),
+                    (unsigned long long)(base[2 * lane_words] & limb_mask));
         }
     }
     c->set = 1;
@@ -1069,7 +973,7 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
         for (size_t i = 0; i < total; i++) if (digits[i] != 0) nz++;
         fprintf(stderr, "[soa] w=%d m=%zu total=%zu nonzero=%zu | R.z limb0 lane0=%llx R.y limb0 lane0=%llx\n",
                 c->w, c->m, total, nz,
-                (unsigned long long)(R.z[0] & IFMA_M52), (unsigned long long)(R.y[0] & IFMA_M52));
+                (unsigned long long)(R.z[0] & limb_mask), (unsigned long long)(R.y[0] & limb_mask));
     }
 
     for (size_t i = start; i < total; i++) {
@@ -1095,21 +999,21 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
             const uint64_t *base = c->dict + j * 3 * lane_words;
             if (dbg && i < 5)
                 fprintf(stderr, "[soa] step %zu dgt=%d j=%zu dict.x=%llx dict.z... (affine)\n",
-                        i, dgt, j, (unsigned long long)(base[0] & IFMA_M52));
+                        i, dgt, j, (unsigned long long)(base[0] & limb_mask));
             if (dgt > 0) {
                 ed_soa_add_affine(c, R, R, base + 0 * lane_words, base + 1 * lane_words,
                                   base + 2 * lane_words, trace_point);
             } else {
                 /* (-x, y, -dxy) */
-                soa_neg(nx, base + 0 * lane_words, mc);
+                neg(nx, base + 0 * lane_words, mc);
                 soa_copy(ny, base + 1 * lane_words, mc);
-                soa_neg(nd, base + 2 * lane_words, mc);
+                neg(nd, base + 2 * lane_words, mc);
                 ed_soa_add_affine(c, R, R, nx, ny, nd, trace_point);
             }
         }
         if (dbg && (i < 5 || (i % 500) == 0))
             fprintf(stderr, "[soa] after step %zu: R.z limb0 lane0=%llx R.y limb0 lane0=%llx\n",
-                    i, (unsigned long long)(R.z[0] & IFMA_M52), (unsigned long long)(R.y[0] & IFMA_M52));
+                    i, (unsigned long long)(R.z[0] & limb_mask), (unsigned long long)(R.y[0] & limb_mask));
         /* ED_SOA_DUMP_STEP=N: full point of lane 0 every N digits (debugging a
            divergence against an external reference ladder). */
         {

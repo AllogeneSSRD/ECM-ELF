@@ -6,7 +6,6 @@
 #include "planning/planning.h"
 #include "planning/runtime_cache.h"
 #include "cuda/host_policy.h"
-#include "../application/configuration/stage2_identity.h"
 #include "process.h"
 #include "../platform/compute_log.h"
 #include "modulus.h"
@@ -93,10 +92,9 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.stage1_mhz=o.stage1_mhz;
     request.stage1_profile=o.stage1_profile;
     request.stage1_seconds=o.stage1_seconds;
-    request.submission=o.submission;
+    request.publication={o.submission,o.result_user,o.result_computer};
     request.submission_aid=o.submission_aid;
     request.submission_exponent=o.submission_exponent;
-    request.submission_ini=o.submission_ini;
     request.submission_known=o.submission_known;
     request.tune_child=o.tune_child;
     request.tune_ignore=o.tune_ignore;
@@ -169,7 +167,7 @@ int curve_worker(Options o) {
         !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
         throw std::runtime_error("incomplete internal curve-worker arguments");
     if(!o.checkpoint_outcome && !o.tune_child && !o.submission.empty())
-        ecm_results::check_stage2_outputs(o.results,o.submission);
+        ecm_results::check_stage2_outputs(o.results,fs::u8path(o.submission));
     const auto read_saved_line=[&] {
         std::ifstream input(o.save,std::ios::binary);
         if(!input)throw std::runtime_error("cannot reread save");
@@ -307,8 +305,6 @@ int curve_worker(Options o) {
     const auto publish_start=Clock::now();
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     double factor_seconds = 0;
-    const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::path(o.ini);
-    const auto identity=read_result_identity(identity_ini,o.worker,!o.ini.empty());
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
     submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
     submission.publication_order=o.index;
@@ -316,10 +312,10 @@ int curve_worker(Options o) {
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
     submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
-    submission.user=identity.result_user;submission.computer=identity.result_computer;
+    submission.user=o.result_user;submission.computer=o.result_computer;
     submission.factors=ecm_stage2::result_factors(result);
     submission.stage=submission.factors.empty()?0:(status=="factor_in_saved_X"?1:2);
-    const auto external_path=o.submission.empty()?identity_ini.parent_path()/identity.submission:fs::path(o.submission);
+    const auto external_path=fs::u8path(o.submission);
     if(submission.stage==1){submission.d=0;submission.poly_size=0;}
     if(o.checkpoint_outcome) {
         const auto key=ecm_stage2::sha256_text(number(n.z)+"|"+std::to_string(r.sigma)+"|"+
@@ -783,7 +779,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             slot->position=next;slot->admitted=slot->released=slot->committed=false;
             if(pipeline)report_start(*slot,"curve_prepare");
             if(!checkpoint_outcomes && !o.tune_child)
-                ecm_results::check_stage2_outputs(queue.results,o.submission,persist && state.done>0);
+                ecm_results::check_stage2_outputs(queue.results,fs::u8path(o.submission),persist && state.done>0);
             if(position==state.reserved.size())
                 state.reserved.push_back({next});
             o.runtime_remaining=queue.plan.size()-next;
@@ -1051,20 +1047,21 @@ bool run_curve_queue(const CurveQueue &queue,Options &o,uint64_t b2,uint64_t d) 
 }
 } // namespace
 
-int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const TaskDefaults &defaults) {
+int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &cfg,const TaskDefaults &defaults) {
+    const auto &startup=worker_options;
     const auto &[cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir,explicit_results]=paths;
-    const int device=o.device;const uint64_t d=o.d;
-    const bool queue = o.save.empty();
+    const int device=startup.device;const uint64_t d=startup.d;
+    const bool queue = startup.save.empty();
     ecm_queue::OwnerLease owner;
-    if (queue) owner.acquire(worktodo.u8string(), o.worker);
-    if (queue && o.selection) throw std::runtime_error("queue curve selection comes from ECMSTAGE2; use --save for overrides");
+    if (queue) owner.acquire(worktodo.u8string(), startup.worker);
+    if (queue && startup.selection) throw std::runtime_error("queue curve selection comes from ECMSTAGE2; use --save for overrides");
     Handle lock;
     if (queue) {
         if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
-        if (!o.dry && !o.plan_only) {
+        if (!startup.dry && !startup.plan_only) {
             // Each worker section has one Stage2 consumer. The shared queue edit
             // lock serializes row rewrites across different workers.
-            fs::path lockpath(worktodo.string() + ".worker" + std::to_string(o.worker) + ".stage2.lock");
+            fs::path lockpath(worktodo.string() + ".worker" + std::to_string(startup.worker) + ".stage2.lock");
             lock.value = CreateFileW(lockpath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
                                      FILE_ATTRIBUTE_NORMAL, nullptr);
             if (lock.value == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot lock worktodo worker (another process may own it)");
@@ -1077,13 +1074,13 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
         return upper(a.lexically_normal().string())==upper(b.lexically_normal().string());
     };
     // A common TOML may share device/save defaults, never writable queue state.
-    std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
-    if(o.parallel!=ParallelMode::serial && o.debug_log)for(const char *suffix:{".slot1",".slot2"})
-        writable.emplace_back(o.debug_file+suffix);
+    std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::u8path(startup.debug_file),fs::u8path(startup.submission)};
+    if(startup.parallel!=ParallelMode::serial && startup.debug_log)for(const char *suffix:{".slot1",".slot2"})
+        writable.emplace_back(fs::u8path(startup.debug_file+suffix));
     for(size_t i=0;i<writable.size();++i) {
-        if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
-        if(!o.stage1_profile.empty() && same_path(writable[i],fs::path(o.stage1_profile)))throw std::runtime_error("output path conflicts with Stage1 tune profile");
-        if(!o.stage1_csv.empty() && same_path(writable[i],fs::path(o.stage1_csv)))throw std::runtime_error("output path conflicts with Stage1 cost CSV");
+        if(!startup.tune_profile.empty() && same_path(writable[i],fs::path(startup.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
+        if(!startup.stage1_profile.empty() && same_path(writable[i],fs::path(startup.stage1_profile)))throw std::runtime_error("output path conflicts with Stage1 tune profile");
+        if(!startup.stage1_csv.empty() && same_path(writable[i],fs::path(startup.stage1_csv)))throw std::runtime_error("output path conflicts with Stage1 cost CSV");
         if(same_path(writable[i],ini)||same_path(writable[i],executable()))throw std::runtime_error("output path conflicts with configuration or executable");
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
@@ -1092,18 +1089,21 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
         throw std::runtime_error("Stage1 and Stage2 finished records must use distinct paths");
     auto report=[&](const std::string &message,bool error=false) {
         (error?std::cerr:std::cout)<<message<<std::endl;
-        if(!o.dry&&!o.plan_only&&!log.empty())append(log,message);
+        if(!startup.dry&&!startup.plan_only&&!log.empty())append(log,message);
     };
     report(std::string(ecm_program::name)+" "+ecm_program::version+" (Stage2)");
     if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
     struct ControlGuard { ~ControlGuard(){SetConsoleCtrlHandler(console_control,FALSE);} } control_guard;
-    const auto calibration_range=queue && o.parallel!=ParallelMode::paired && !o.dry && o.short_calibration?
-        portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};
+    const auto calibration_range=queue && startup.parallel!=ParallelMode::paired && !startup.dry && startup.short_calibration?
+        portable_queue_range(worktodo,startup.worker,tmp):std::vector<Record>{};
     uint64_t completed=0,failed_tasks=0;
     for (;;) {
         poll_inherited_stop();
         fatal_log.clear();
         if(stop_requests)break;
+        // Freeze this task's inherited options before applying its worktodo row.
+        // Only runtime tuning feedback is carried from the preceding task.
+        Options o=startup;
         fs::path save;
         std::string task_line,expected_n;
         std::vector<Record> plan;
@@ -1189,7 +1189,7 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             name_lock.value=CreateFileW(name_lockpath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
                 FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
             if(name_lock.value==INVALID_HANDLE_VALUE)throw std::runtime_error("another process is allocating this Stage2 checkpoint name");
-            const auto legacy_bounds=[&] {return ecm_results::legacy_stage2_bounds(o.submission);};
+            const auto legacy_bounds=[&] {return ecm_results::legacy_stage2_bounds(fs::u8path(o.submission));};
             auto source=stage2_queue::load_task(progress_dir,bits,task,state,legacy_bounds,&progress);
             for(const auto &path:writable)if(same_path(progress,path))throw std::runtime_error("task checkpoint conflicts with output state");
             if(same_path(progress,save)||same_path(progress,ini)||same_path(progress,executable())||
@@ -1242,9 +1242,9 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                 state.save(progress);
                 // Materialize old sealed batches before reporting that their
                 // source can be removed. Pending NF now belongs to the ckpt.
-                ecm_results::refresh_submission_if_owned(o.submission);
+                ecm_results::refresh_submission_if_owned(fs::u8path(o.submission));
                 if(!state.nf_keys.empty())
-                    ecm_results::retire_legacy_stage2_curves(o.submission,state.publication_task,
+                    ecm_results::retire_legacy_stage2_curves(fs::u8path(o.submission),state.publication_task,
                         [&](const std::string& key){return state.nf_keys.count(ecm_stage2::sha256_text(key))!=0;});
                 auto archive=source;archive+=".migrated";
                 if(!MoveFileExW(source.c_str(),archive.c_str(),MOVEFILE_WRITE_THROUGH))
@@ -1321,8 +1321,8 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
                     ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),{},
                         state.latest_nf,state.nf_keys.size(),&state.final_nf,[&]{state.save(progress);});
             } else {
-                ecm_results::check_stage2_outputs(results,o.submission,persist && state.done>0);
-                ecm_results::seal_submissions(o.submission,2,o.publication_task,true);
+                ecm_results::check_stage2_outputs(results,fs::u8path(o.submission),persist && state.done>0);
+                ecm_results::seal_submissions(fs::u8path(o.submission),2,o.publication_task,true);
             }
         }
         if(!queue||o.dry||o.plan_only)break;
@@ -1344,10 +1344,12 @@ int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const Task
             throw std::runtime_error("task advanced but cannot remove completed progress file");
         report("task_done: requested="+(count?std::to_string(count):"all")+" available="+std::to_string(plan.size())+
                " completed="+std::to_string(state.done));
+        worker_options.runtime_prepare_hints=std::move(o.runtime_prepare_hints);
+        worker_options.runtime_route_hints=std::move(o.runtime_route_hints);
         if(o.once||stop_requests)break;
     }
-    if(stage2_log::enabled(stage2_log::curve)||o.dry)
-        report(std::string(o.plan_only?"plan_complete":o.dry?"dry_run_complete":stop_requests?"stage2_stopped":"stage2_complete")+
+    if(stage2_log::enabled(stage2_log::curve)||startup.dry)
+        report(std::string(startup.plan_only?"plan_complete":startup.dry?"dry_run_complete":stop_requests?"stage2_stopped":"stage2_complete")+
                ": curves_this_run="+std::to_string(completed)+" invalid_tasks="+std::to_string(failed_tasks));
     return failed_tasks?1:0;
 }

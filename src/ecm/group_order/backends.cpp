@@ -1,7 +1,8 @@
-#include "order_analysis.h"
-#include "pari_protocol.h"
+#include "backends.h"
+#include "../diagnostics/pari_protocol.h"
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -230,6 +231,49 @@ Factorization parse_factor(const std::string&text,const Integer&n){
     out.cofactor=Integer(1);out.status=Status::Complete;out.all_proven=true;return out;
 }
 } // namespace
+static void trim(std::string &s){
+    while(!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+    while(!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
+}
+static std::string normalize_gp_path(std::string s) {
+    trim(s);
+    // Remove any outer single/double quotes repeatedly.
+    while (s.size() >= 2 &&
+           ((s.front() == '"' && s.back() == '"') ||
+            (s.front() == '\'' && s.back() == '\''))) {
+        s = s.substr(1, s.size() - 2);
+        trim(s);
+    }
+    while (!s.empty() && (s.front() == '"' || s.front() == '\'')) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && (s.back() == '"' || s.back() == '\'')) {
+        s.pop_back();
+    }
+    s.erase(std::remove(s.begin(), s.end(), '"'), s.end());
+    s.erase(std::remove(s.begin(), s.end(), '\''), s.end());
+    return s;
+}
+
+std::string resolve_gp_path(const std::string &exe_path) {
+    const std::string cleaned = normalize_gp_path(exe_path.empty() ? "gp" : exe_path);
+    if (cleaned.empty()) return cleaned;
+#ifdef _WIN32
+    // If the path contains a directory separator, use it as-is.
+    if (cleaned.find('\\') != std::string::npos ||
+        cleaned.find('/') != std::string::npos) {
+        return cleaned;
+    }
+    // Bare name → resolve via SearchPath.
+    char found[MAX_PATH];
+    DWORD len = SearchPathA(nullptr, cleaned.c_str(), ".exe", MAX_PATH, found, nullptr);
+    if (len > 0 && len < MAX_PATH) {
+        return std::string(found);
+    }
+#endif
+    return cleaned;
+}
+
 Backend parse_backend(const std::string&s){if(s=="auto")return Backend::Auto;if(s=="gp")return Backend::Gp;if(s=="native"||s=="pari")return Backend::Native;if(s=="gmp")return Backend::Gmp;throw std::invalid_argument("--go-backend must be auto, pari/native, gp or gmp");}
 const char *name(Backend b){return b==Backend::Auto?"auto":b==Backend::Gp?"gp":b==Backend::Gmp?"gmp":"pari";}
 std::string quote(const std::string&s){

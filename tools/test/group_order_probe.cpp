@@ -56,6 +56,15 @@ void analysis_json(const Analysis&a){
     std::cout<<",\"statistics\":";stats_json(a.statistics);std::cout<<'}';
 }
 void self_tests(){
+    const std::vector<PrimePower> factors={{Integer(2),3},{Integer(3),2},{Integer(7),1}};
+    const auto legacy=group_bounds(factors);
+    require(legacy.prime.str()=="3" && legacy.exponent==2 && legacy.stage1.str()=="9" &&
+            legacy.stage2_b1.str()=="8","legacy largest prime power bounds");
+    const auto point=point_bounds(factors,48);
+    require(point.stage1.str()=="7" && point.frontier.size()==2 &&
+            point.frontier[0].first.str()=="7" && point.frontier[0].second.str()=="0" &&
+            point.frontier[1].first.str()=="3" && point.frontier[1].second.str()=="7",
+            "point bounds after torsion multiplier");
     require(Integer(UINT64_MAX).str()=="18446744073709551615","uint64 construction truncated");
     Integer copy(7);Integer moved(std::move(copy));copy=Integer(11);require(moved.str()=="7"&&copy.str()=="11","integer ownership");
     for(const char*n:{"0","1","4","561","3215031751","3825123056546413051","18446744073709551615"})

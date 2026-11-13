@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * simd_mont_ifma.h — batched Montgomery multiplication, 8 curves in one zmm.
+ * Batched modular arithmetic with one curve per lane.
  *
  * Layout (SoA, "lane = curve"):
  *   an element is uint64_t e[8*n]; column i is the 64-byte vector e + 8*i;
@@ -24,8 +24,8 @@
  *   out may alias a or b (in-place squaring is fine).  out must not alias
  *   the context scratch.
  * ------------------------------------------------------------------------- */
-#ifndef SIMD_MONT_IFMA_H
-#define SIMD_MONT_IFMA_H
+#ifndef ECM_CPU_MODULAR_IFMA_H
+#define ECM_CPU_MODULAR_IFMA_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -58,7 +58,9 @@ typedef struct {
     uint64_t  np0;      /* -N^-1 mod 2^52 (Montgomery mode only) */
     uint64_t *nb;       /* 8*n: broadcast modulus, nb[8*j+k] = N[j] */
     uint64_t *one;      /* 8*n: R mod N (mont) or 1 (mersenne), every lane */
-    uint64_t *scratch;  /* 8*(2*n+2): CIOS / fold accumulator, 64-byte aligned */
+    uint64_t *scratch;  /* CIOS / fold accumulator and optional Karatsuba workspace */
+    unsigned  mul_depth;/* Mersenne Karatsuba levels, 0 selects schoolbook */
+    unsigned  sqr_depth;
     mpz_t     N;        /* modulus, kept for the (rare) mpz conversions */
     int       mode;     /* effective: IFMA_FIELD_MONT | IFMA_FIELD_MERS */
     int       requested;/* what the caller asked for (an IFMA_FIELD_* value) */
@@ -97,4 +99,4 @@ uint64_t ifma_sqr_madd_count(const ifma_ctx_t *c); /* madds per batch square */
 }
 #endif
 
-#endif /* SIMD_MONT_IFMA_H */
+#endif /* ECM_CPU_MODULAR_IFMA_H */

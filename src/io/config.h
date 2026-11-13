@@ -42,4 +42,7 @@ bool ecm_queue_config_load(const std::string& path, EcmQueueConfig& cfg);
 bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& cfg,
                           const std::vector<const char*>& inherited_fields =
                               {"device","tmp_dir","verbose","lcm","finished"});
+void ecm_queue_config_project(const std::vector<ecm_config::TomlLine>& lines, const std::string& path,
+                             int worker, EcmQueueConfig& cfg,
+                             const std::vector<const char*>& inherited_fields);
 bool ecm_queue_config_write_default(const std::string& path);

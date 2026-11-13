@@ -1,5 +1,5 @@
-#include "ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
-#include "ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h"
+#include "ecm/cpu/arithmetic/ifma/modular_ifma.h"
+#include "ecm/cpu/arithmetic/scalar/modular_mpn.h"
 #include <immintrin.h>
 #include <cstdio>
 #include <initializer_list>
@@ -93,12 +93,17 @@ static void simd() {
     for (unsigned k=0;k<8;++k) mpz_inits(a[k],b[k],nullptr);
     gmp_randstate_t rng;
     gmp_randinit_default(rng);
-    for (unsigned p : {106496u,106497u,212993u,262139u}) {
+    for (unsigned p : {991u,4212u,4213u,4253u,8164u,8165u,8191u,16432u,16433u,
+                       106496u,106497u,212993u,262139u}) {
         mpz_set_ui(m,0);
         mpz_setbit(m,p);
         mpz_sub_ui(m,m,1);
         ifma_ctx_t ctx;
         if (ifma_ctx_init_ex(&ctx,m,IFMA_FIELD_MERS)) throw std::runtime_error("IFMA fold init");
+        const unsigned mul_depth = p >= 4213 && p <= 16432 ? 2 : 0;
+        const unsigned sqr_depth = p >= 8165 && p <= 16432 ? 2 : 0;
+        if (ctx.mul_depth != mul_depth || ctx.sqr_depth != sqr_depth)
+            throw std::runtime_error("IFMA Karatsuba dispatch boundary");
         const auto bytes=ctx.n*IFMA_LANES*sizeof(uint64_t);
         auto* x=(uint64_t*)_mm_malloc(bytes,64);
         auto* y=(uint64_t*)_mm_malloc(bytes,64);
@@ -113,11 +118,14 @@ static void simd() {
             }
             if (k==1) { mpz_sub_ui(a[k],m,1); mpz_set(b[k],a[k]); }
             if (k==2) { mpz_set_ui(a[k],0); mpz_set_ui(b[k],1); }
+            if (k==3 && p%2==0) { mpz_set_ui(a[k],3); mpz_divexact_ui(b[k],m,3); }
             ifma_from_mpz_lane(x,k,a[k],&ctx); ifma_from_mpz_lane(y,k,b[k],&ctx);
         }
         for (bool square : {false,true}) {
-            if (square) ifma_mont_sqr(z,x,&ctx);
-            else ifma_mont_mul(z,x,y,&ctx);
+            const auto words = bytes / sizeof(uint64_t);
+            for (size_t i=0;i<words;++i) z[i]=x[i];
+            if (square) ifma_mont_sqr(z,z,&ctx);
+            else ifma_mont_mul(z,z,y,&ctx);
             for (unsigned k=0;k<8;++k) {
                 ifma_to_mpz_lane(actual,z,k,&ctx);
                 mpz_mul(expected,a[k],square?a[k]:b[k]); mpz_mod(expected,expected,m);

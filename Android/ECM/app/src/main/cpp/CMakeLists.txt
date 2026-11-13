@@ -43,7 +43,7 @@ if(ECM_ANDROID_GMP_ROOT AND EXISTS "${_ECM_GMP_HEADER}" AND EXISTS "${_ECM_GMP_L
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ECM_HAVE_GMP=1)
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${ECM_ANDROID_GMP_ROOT}/include")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-            "${MPA_ROOT}/src/ecm/application/configuration/ecm_expr.cpp"
+            "${MPA_ROOT}/src/io/expression.cpp"
             "${MPA_ROOT}/src/ecm/stage1/montgomery/opencl/engine.cpp"
             "${MPA_ROOT}/src/ecm/stage1/sigma.cpp"
             "${MPA_ROOT}/src/ecm/stage1/libecm_compat.cpp"

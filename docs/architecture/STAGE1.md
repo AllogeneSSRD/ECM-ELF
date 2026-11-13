@@ -10,13 +10,25 @@ Suyama PARAM0 使用 sigma 构造 Montgomery 曲线和初始 X:Z 点。设 u=σ�
 
 CPU Edwards 路径使用自身曲线构造及扩展坐标公式；CPU Montgomery、CUDA 和 OpenCL 的点表示/算术域不同。只有投影或归一化后的数学点可跨实现对比，不能比较未经解码的字数组。
 
-CPU Edwards 的标量和 IFMA NAF 主循环按需生成扩展坐标 T。只有紧随倍点的加点读取 T，倍点与检查点读取 X/Y/Z。标量完整点输出和 SIMD 完整点诊断在需要时计算 T。两条路径都复用倍点中的 \(G=X^2+Y^2\)，计算 \(E=(X+Y)^2-G\) 时只做一次模减。见 [标量倍点](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp#L248) 与 [IFMA 倍点](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L127)。
+## CPU 模算术与点运算
 
-GMP 标量用 64 位 limbs，完整 `2^p−1` 在固定宽度范围内用普通余数。模乘、平方与加法都在第 p 位折叠，回卷先在最低 limb 加入进位，溢出时才继续传播。模减借位时，把差减一并保留低 p 位即得规范余数。其他模数用 Montgomery REDC。IFMA 完整梅森乘法和平方超过 2048 个 52 位 limbs 时，每累加 1024 行传播一次进位，宽位平方还在对称项翻倍前传播进位。见 [CPU 标量算术](../../src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h#L188)、[IFMA 进位](../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.cpp#L479) 与 [CPU Stage1 算术对照](../performance/STAGE1.md#cpu-stage1-算术对照)。
+Edwards 与 Montgomery 的 CPU 点层共同调用 `src/ecm/cpu/arithmetic/`。算术层管理余数表示、模运算和 GMP 转换。Edwards 点层负责扩展坐标、NAF 和仿射字典，Montgomery 点层负责 X:Z 坐标、差分加法和 ladder。各曲线目录的 `workflow.cpp` 负责调用点层执行批次，见 [CPU 执行与共享主机准备](#cpu-执行与共享主机准备)。
+
+GMP 标量使用 64 位 limbs。完整 `2^p−1` 在固定宽度范围内使用普通余数，模乘、平方和加法在第 p 位折叠。回卷先在最低 limb 加入进位，溢出时才继续传播。模减借位时，把差减一并保留低 p 位即得规范余数。其他模数使用 Montgomery REDC。见 [GMP 标量模算术](../../src/ecm/cpu/arithmetic/scalar/modular_mpn.h)。
+
+IFMA 使用 52 位 limbs，每个向量 lane 处理一条曲线。两种曲线共用两趟模加减，模加用点层提供的暂存空间保存候选结果，模减按 lane 修正借位。模加、模减和取负位于 [IFMA 模加减私有头](../../src/ecm/cpu/arithmetic/ifma/modular_ifma_ops.h)。
+
+完整梅森数的 IFMA 归约先将乘积列规范化，再按指数 \(p\) 切成低、高两段。对齐高段、相加和进位在同一趟完成，只在有回卷进位的 lane 加一，全一结果映射为零。普通模数使用 CIOS。完整梅森学校乘法和平方超过 2048 个 limbs 时，每累加 1024 行传播一次进位，宽位平方还在对称项翻倍前传播进位。见 [IFMA 模乘与平方](../../src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp) 与 [CPU Stage1 算术对照](../performance/STAGE1.md#八路-ifma-的模乘平方与归约)。
+
+完整梅森模数在 82–316 个 limbs 的模乘和 158–316 个 limbs 的平方使用两层 Karatsuba，其他宽度使用学校乘法或对称平方。Karatsuba 的三个子乘积保持带符号的冗余列。合成后以算术右移传播带符号进位，再走同一梅森折叠。每个算术 context 按选中的最大深度一次分配工作区，递归调用复用工作区。见 [IFMA Karatsuba](../../src/ecm/cpu/arithmetic/ifma/modular_ifma_karatsuba.h)。
+
+CPU Edwards 的标量和 IFMA NAF 主循环按需生成扩展坐标 T。只有紧随倍点的加点读取 T，倍点与检查点读取 X/Y/Z。标量完整点输出和 SIMD 完整点诊断在需要时计算 T。两条路径都复用倍点中的 \(G=X^2+Y^2\)，计算 \(E=(X+Y)^2-G\) 时只做一次模减。见 [标量倍点](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp) 与 [IFMA 倍点](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp)。
 
 ## 方法选择与输入校验
 
 Stage1 单次运行和队列模式共用五个独立选择项：`curve`（Montgomery / Edwards）、`target`（CPU / GPU）、`impl`（自动 / IFMA SIMD / GMP 标量）、`reduction`（自动 / Montgomery / Mersenne fold）及 `lcm`（素数幂最小公倍积 / 其 12 倍）。默认是 Montgomery 曲线、GPU 执行；Edwards GPU 需要编入该模块的 CUDA 可执行文件，OpenCL 会拒绝该组合。`Auto` 在内部 CPU 实现及 SIMD 归约枚举中均为 0；调用现有 IFMA 接口时显式转换，避免枚举序号与实现常量耦合。TOML 和 CLI 均拒绝无效选择值，参数默认值及范围由 [配置定义](../../config/ecm_options.json) 维护。
+
+CPU `auto` 以实际参与运算的模数位宽为准。超过 10240 位时要求 IFMA，包括未填满八个 lane 的批次。Edwards 的宽位 GMP 二进制点乘需显式指定 `scalar`。Montgomery 的 GMP 标量后端仅支持 10240 位以内的模数。
 
 TOML 使用 `curve`、`target`、`impl`、`reduction`、`lcm`；CLI 使用同名的双横线选项。`curve=mont|ed` 与 `target=cpu|gpu` 是不同轴；`impl=auto|simd|scalar` 只用于 CPU，`reduction=auto|montgomery|mersenne-fold` 控制 CPU SIMD 约减，`lcm=1|12` 控制 Montgomery 标量的倍数。Edwards 路径按曲线约定固定使用 48·lcm(1…B1)，因此拒绝 `lcm=12`；GPU 执行不接受非 auto 的 CPU 专用选项，显式归约必须同时选择 `impl=simd`，避免 auto 落到标量后忽略该设置。
 
@@ -239,6 +251,6 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 
 ## 应用群阶诊断
 
-单次 Stage1 的可选群阶诊断在任务最终 save 和结果发布后，按命中曲线的 family、param 及逐曲线 sigma 重建曲线；诊断失败不会撤销已发布因子。[CLI 适配](../../src/ecm/application/cli/group_order.cpp)负责 GP 路径设置及文本报告，[共同 Session](../../src/ecm/diagnostics/order_analysis.cpp)负责隔离 PARI host、外部 GP 及显式 GMP 后端的调用、超时、预算和结果校验。Auto 先尝试 PARI，再回退 GP，不自动改用 GMP；群阶输入须为通过素性检查的 p>3，并满足位数和构造限制。
+单次 Stage1 的可选群阶诊断在任务最终 save 和结果发布后，按命中曲线的 family、param 及逐曲线 sigma 重建曲线；诊断失败不会撤销已发布因子。[Stage1 入口](../../src/main.cpp)负责文本报告，[共同 Session](../../src/ecm/group_order/backends.cpp)负责隔离 PARI host、外部 GP 及显式 GMP 后端的调用、超时、预算和结果校验。Auto 先尝试 PARI，再回退 GP，不自动改用 GMP；群阶输入须为通过素性检查的 p>3，并满足位数和构造限制。
 
 完整诊断分别保存群阶与实际起始点阶；仅在点阶最小性已校验时输出点阶、分解及考虑固定标量倍数的 `go_point_bounds`，历史群阶 `go_min_bounds` 字段单独保留。[独立 GMP 数学](../../src/ecm/group_order/group_order.cpp)提供构造、分解、群阶计数和已知倍数下的点阶验证，不依赖 GPU 或应用配置。后端、证明范围与验证说明见 [群阶与点阶模块](GROUP_ORDER.md)。

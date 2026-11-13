@@ -34,7 +34,7 @@ if($IncludeMontgomeryHost){
 }
 if($IncludeOpenCLHost){$sources+='src/ecm/stage1/montgomery/opencl/workflow.cpp'}
 if($IncludeQueueHost){
-    $sources+=@('src/io/normalize.cpp','src/ecm/application/cli/group_order.cpp',
+    $sources+=@('src/io/normalize.cpp',
         'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/io/files.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}

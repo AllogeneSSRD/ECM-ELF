@@ -418,4 +418,64 @@ Analysis analyze(const CurveRequest&r,const Limits&limits,const Integer*known,co
         ctx.statistics.total_ms=elapsed(ctx.start);out.statistics=ctx.statistics;
     }catch(const std::invalid_argument&e){out.reason=e.what();}return out;
 }
+GroupBounds group_bounds(const std::vector<PrimePower> &factors) {
+    GroupBounds bounds;
+    const PrimePower *largest = nullptr;
+    Integer power;
+    for (const auto &factor : factors) {
+        mpz_pow_ui(power.v, factor.prime.v, factor.exponent);
+        if (mpz_cmp(power.v, bounds.stage1.v) > 0) {
+            bounds.stage1 = power;
+            largest = &factor;
+        }
+    }
+    if (largest) {
+        bounds.prime = largest->prime;
+        bounds.exponent = largest->exponent;
+    }
+    for (const auto &factor : factors) {
+        mpz_pow_ui(power.v, factor.prime.v, factor.exponent - (&factor == largest ? 1 : 0));
+        if (mpz_cmp(power.v, bounds.stage2_b1.v) > 0) bounds.stage2_b1 = power;
+    }
+    return bounds;
+}
+
+PointBounds point_bounds(const std::vector<PrimePower> &factors, uint32_t scalar_multiplier) {
+    PointBounds bounds;
+    auto adjusted = factors;
+    for (auto &factor : adjusted) {
+        if (mpz_cmp_ui(factor.prime.v, scalar_multiplier) > 0) continue;
+        const auto prime = mpz_get_ui(factor.prime.v);
+        uint32_t remaining = scalar_multiplier;
+        while (factor.exponent && remaining > 1 && remaining % prime == 0) {
+            --factor.exponent;
+            remaining /= uint32_t(prime);
+        }
+    }
+
+    const auto required_b1 = [&](const PrimePower *left) {
+        Integer b1(2), power;
+        for (const auto &factor : adjusted) {
+            mpz_pow_ui(power.v, factor.prime.v, factor.exponent - (&factor == left ? 1 : 0));
+            if (mpz_cmp(power.v, b1.v) > 0) b1 = power;
+        }
+        return b1;
+    };
+    bounds.stage1 = required_b1(nullptr);
+    std::vector<std::pair<Integer, Integer>> candidates;
+    candidates.emplace_back(bounds.stage1, Integer(0));
+    for (const auto &left : adjusted) {
+        if (!left.exponent) continue;
+        auto b1 = required_b1(&left);
+        if (mpz_cmp(left.prime.v, b1.v) > 0) candidates.emplace_back(std::move(b1), left.prime);
+    }
+    for (const auto &candidate : candidates) {
+        const bool dominated = std::any_of(candidates.begin(), candidates.end(), [&](const auto &other) {
+            return &candidate != &other && mpz_cmp(other.first.v, candidate.first.v) <= 0 &&
+                   mpz_cmp(other.second.v, candidate.second.v) <= 0;
+        });
+        if (!dominated) bounds.frontier.push_back(candidate);
+    }
+    return bounds;
+}
 } // namespace ecm_group_order

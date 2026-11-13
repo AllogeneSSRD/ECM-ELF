@@ -38,9 +38,9 @@ void print_usage(const char* prog) {
                  "mont)\n"
               << "  --target <t>         cpu|gpu (default gpu; GPU Edwards requires "
                  "CUDA)\n"
-              << "  --impl <m>           auto|simd|scalar (CPU only). The SIMD path\n"
-              << "                       requires AVX512-IFMA; auto selects by batch "
-                 "size.\n"
+              << "  --impl <m>           auto|simd|scalar (CPU only). SIMD requires AVX512-IFMA.\n"
+              << "                       Above 10240 modulus bits, auto requires SIMD. Edwards\n"
+              << "                       can use wide GMP arithmetic via explicit scalar.\n"
               << "  --reduction <m>      auto|montgomery|mersenne-fold (CPU SIMD). "
                  "auto\n"
               << "                       uses the Mersenne fold when N = 2^k-1 (half "
@@ -409,7 +409,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
             } else if (key == "--go-gp-timeout")
                 input.go_settings.gp_timeout_ms = unsigned(integer(1, 600)) * 1000;
             else if (key == "--gp")
-                input.gp_bin_path = value;
+                input.go_settings.gp = value;
             else if (key == "--mul")
                 input.gpu_mul_path = value;
             else if (key == "--sqr")

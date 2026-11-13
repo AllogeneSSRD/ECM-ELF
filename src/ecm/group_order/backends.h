@@ -1,11 +1,13 @@
 #pragma once
-#include "../group_order/group_order.h"
+#include "group_order.h"
 #include <string>
 
 namespace ecm_diagnostics {
 // Auto: PARI DLL first, then external GP. GMP is explicit-only.
 // Native is retained as the CLI spelling for the isolated PARI DLL engine.
 enum class Backend { Auto, Gp, Native, Gmp };
+// Resolve the Stage1 CLI spelling before constructing its diagnostic session.
+std::string resolve_gp_path(const std::string &path);
 Backend parse_backend(const std::string &text);
 const char *name(Backend backend);
 struct Settings {

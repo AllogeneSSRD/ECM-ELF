@@ -1,7 +1,7 @@
 #pragma once
 #include "ecm/application/configuration/runtime.h"
 #include "ecm/stage1/selection.h"
-#include "ecm/diagnostics/order_analysis.h"
+#include "ecm/group_order/backends.h"
 #include <map>
 #include <vector>
 
@@ -26,7 +26,6 @@ struct ParsedCli {
     ecm_diagnostics::Settings go_settings;
     std::string savefilename;
     bool saveappend = false;
-    std::string gp_bin_path;
     std::string gpu_mul_path;
     std::string gpu_sqr_path;
     std::string gpu_add_path;
@@ -39,7 +38,7 @@ struct ParsedCli {
     std::string ini_path, gpu_backend;
     int worker_index = 1;        // --worker N: ini + worktodo section (see the flag's parse site)
     std::string tmp_dir;         // 本地 stage-1 落盘目录
-    std::string p95_dir_ignored; // 兼容旧脚本: 现在由 ecm_p95feeder 处理
+    std::string p95_dir_ignored; // Accepted for compatibility; ignored in favor of p95_worktodo_path.
     uintptr_t stop_handle = 0;
     // Positional text is retained for diagnostics; bounds are converted once.
     std::vector<std::string> pos;

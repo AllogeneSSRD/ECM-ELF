@@ -43,7 +43,7 @@
 
 #include <gmp.h>
 
-#include "io/prime95_save.h"
+#include "midstage.h"
 #include "io/worktodo.h"
 #include "io/prime95.h"
 

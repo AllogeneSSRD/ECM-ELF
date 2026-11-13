@@ -207,23 +207,12 @@ Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制�
 
 来源：[队列完成与交接](../../src/main.cpp)、[P95 持久交接](../../src/sync/p95.cpp)、[普通备份](../../src/sync/backup.cpp)、[交付器](../../src/sync/p95.h)。
 
-## 8. 保留的二进制 MIDSTAGE 接口
+## 8. 旧二进制 MIDSTAGE 工具备份
 
-`ecm_edwards_write_midstage/read_midstage` 和 `ecm_p95feeder` 保留 Prime95 风格 version 6 的独立二进制接口。**当前 CPU/CUDA Edwards Stage1 正常输出使用第5节文本，不自动生成这类 `.tmp`**。其主公共头与 [CPU Edwards checkpoint](CHECKPOINT.md#44-cpu-edwards-二进制记录和完成记录) 的0..99字节结构共用，但 stage 标签为 `C{curve}S2`、state=2、sigma_type=0、montg_stage1=1。
-
-| 偏移/位置 | 编码 | 内容 |
-| --- | --- | --- |
-| 0..99 | 公共头与 Stage1 目标字段 | 52-byte 文件头及 curve/average_B2/state/sigma/B1/B2/sigma_type/montg_stage1 |
-| 100 | giant | Qx，u32 limb 数+低 limb 在前的 u32 数组 |
-| Qx 后 | i32 | Qz flag，当前 writer 写1 |
-| flag 后 | giant | Qz，当前 writer 总会写入 |
-| Qz 后 | i32 | gg flag，当前 writer 写0，不写 gg giant |
-
-总长度为 **108 + G(Qx)+G(Qz)** bytes，其中 G(U)=4+4·limbs(U)，零也占至少一个 limb。校验位于偏移48，按 CPU 二进制 codec 的加法规则；公共头、average_B2、sigma不计入。它没有完整实际 N 的独立大整数域，k/b/n/c/外部任务必须正确描述目标。
-
-该 writer 直接截断写目标，并非文本 save 的 `.new`+轮换发布器。`read_midstage` 仅实现其 MIDSTAGE 子集；公共头版本数通过不等于任意 Prime95 版本/状态都已支持。不能把这层保留接口当作所有外部二进制 save 的通用恢复器。
-
-来源：[MIDSTAGE 写入/读取](../../src/io/prime95_save.cpp)、[feeder 消费入口](../../src/ecm/application/p95_feeder/ecm_p95feeder.cpp#L429)。
+现行 CPU/CUDA Edwards Stage1 输出第 5 节的文本 save。Prime95 version 6 的
+MIDSTAGE 读写与独立 feeder 仅保存在 [工具备份](../../tools/p95feeder/README.md)，
+不属于正常构建和发布。CPU Edwards 中途恢复仍使用
+[Stage1 checkpoint](CHECKPOINT.md#44-cpu-edwards-二进制记录和完成记录)。
 
 ## 9. 验证入口与 TODO
 

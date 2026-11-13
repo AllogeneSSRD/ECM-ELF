@@ -151,23 +151,28 @@ bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& 
     try {
         std::vector<ecm_config::TomlLine> lines;
         if(!ecm_config::read_toml(path,lines,ecm_config::TomlReadMode::Stage2))return false;
-        // Stage2 still consumes these legacy defaults. Do not validate unrelated
-        // Stage1 arithmetic just to inherit device, paths and scalar convention.
-        std::vector<const char*> fields={"b2_ratio","priority","skip","worktodo"};
-        fields.insert(fields.end(),inherited_fields.begin(),inherited_fields.end());
-        const auto entries=ecm_config::selected_entries(lines,worker,fields,path);
-        cfg=EcmQueueConfig{};
-        static_cast<ecm_config::Stage1Values&>(cfg)=ecm_config::read_stage1(entries);
-        if(cfg.device<0)throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"device",
-            std::to_string(cfg.device),"invalid inherited Stage1 device","integer >= 0"));
-        if(!ecm_stage1::parse_scalar_construction(cfg.scalar_construction,cfg.selection.scalar_construction))
-            throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"lcm",
-                cfg.scalar_construction,"invalid inherited Stage1 scalar convention","1|12"));
+        ecm_queue_config_project(lines,path,worker,cfg,inherited_fields);
         return true;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return false;
     }
+}
+
+void ecm_queue_config_project(const std::vector<ecm_config::TomlLine>& lines, const std::string& path,
+                             int worker, EcmQueueConfig& cfg,
+                             const std::vector<const char*>& inherited_fields) {
+    // Stage2 inherits only the legacy settings it actually uses.
+    std::vector<const char*> fields={"b2_ratio","priority","skip","worktodo"};
+    fields.insert(fields.end(),inherited_fields.begin(),inherited_fields.end());
+    const auto entries=ecm_config::selected_entries(lines,worker,fields,path);
+    cfg=EcmQueueConfig{};
+    static_cast<ecm_config::Stage1Values&>(cfg)=ecm_config::read_stage1(entries);
+    if(cfg.device<0)throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"device",
+        std::to_string(cfg.device),"invalid inherited Stage1 device","integer >= 0"));
+    if(!ecm_stage1::parse_scalar_construction(cfg.scalar_construction,cfg.selection.scalar_construction))
+        throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"lcm",
+            cfg.scalar_construction,"invalid inherited Stage1 scalar convention","1|12"));
 }
 
 bool ecm_queue_config_write_default(const std::string& path) {

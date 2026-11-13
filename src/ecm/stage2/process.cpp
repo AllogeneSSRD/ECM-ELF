@@ -39,6 +39,46 @@ bool early_gpu_handoff_requested() {
     const char *value=std::getenv("ECM_STAGE2_EARLY_GPU_HANDOFF");
     return !value || (value[0]=='1' && !value[1]);
 }
+namespace {
+// The Windows worker uses narrow argv. Encode the bytes so quotes, empty names
+// and UTF-8 from TOML survive the round trip without a code-page conversion.
+std::wstring publication_argument(const CurvePublication &publication) {
+    constexpr wchar_t hex[]=L"0123456789abcdef";
+    std::wstring out;
+    for (const auto *field : {&publication.path,&publication.user,&publication.computer}) {
+        if (field!=&publication.path) out+=L':';
+        for (unsigned char c : *field) {
+            out+=hex[c>>4];
+            out+=hex[c&15];
+        }
+    }
+    return out;
+}
+} // namespace
+
+CurvePublication parse_curve_publication(std::string_view wire) {
+    CurvePublication publication;
+    auto nibble=[](char c) {
+        if (c>='0' && c<='9') return c-'0';
+        if (c>='a' && c<='f') return c-'a'+10;
+        throw std::runtime_error("invalid Stage2 curve publication snapshot");
+    };
+    for (auto *field : {&publication.path,&publication.user,&publication.computer}) {
+        const auto split=wire.find(':');
+        if ((field==&publication.computer)!=(split==wire.npos))
+            throw std::runtime_error("invalid Stage2 curve publication snapshot");
+        const auto part=wire.substr(0,split);
+        if (part.size()%2) throw std::runtime_error("invalid Stage2 curve publication snapshot");
+        field->reserve(part.size()/2);
+        for (size_t i=0;i<part.size();i+=2)
+            field->push_back(static_cast<char>(16*nibble(part[i])+nibble(part[i+1])));
+        if (split!=wire.npos) wire.remove_prefix(split+1);
+    }
+    if (publication.path.empty() || publication.path.find('\0')!=std::string::npos)
+        throw std::runtime_error("invalid Stage2 curve publication path");
+    return publication;
+}
+
 std::wstring quote(const std::wstring &s) {
     std::wstring out = L"\"";
     size_t slashes = 0;
@@ -138,8 +178,7 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     cmd+=L" --reduce-threads "+std::to_wstring(o.reduce_threads)+L" --reduce-kernel "+std::to_wstring(o.reduce_kernel);
     if(!results.empty())cmd += L" --results " + quote(results.wstring());
     if(o.commit_outcome)cmd += L" --checkpoint-outcome";
-    if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
-    if(!o.submission_ini.empty())cmd+=L" --config "+quote(fs::path(o.submission_ini).wstring());
+    if(!o.publication.path.empty())cmd+=L" --curve-publication "+publication_argument(o.publication);
     if(o.submission_exponent)arg(L"--exponent",o.submission_exponent);
     for(const auto &factor:o.submission_known)cmd+=L" --known-factor "+quote(fs::path(factor).wstring());
     if(!o.submission_aid.empty())cmd+=L" --aid "+quote(fs::path(o.submission_aid).wstring());

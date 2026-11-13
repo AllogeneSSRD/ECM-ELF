@@ -6,6 +6,7 @@
 #include "ecm/stage2/curve_process.h"
 #include <memory>
 #include <optional>
+#include <string_view>
 namespace s2prod {
 struct Handle {
     HANDLE value = INVALID_HANDLE_VALUE;
@@ -22,6 +23,7 @@ void poll_inherited_stop();
 BOOL WINAPI console_control(DWORD event);
 unsigned queue_pipeline_level(unsigned arithmetic_bits,unsigned workers,bool factor_only);
 bool early_gpu_handoff_requested();
+CurvePublication parse_curve_publication(std::string_view wire);
 constexpr DWORD queue_feedback_bytes=32768;
 
 class CurveProcess {

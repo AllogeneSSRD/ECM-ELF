@@ -211,7 +211,7 @@ G树布局由`giant_tree.h::select_groot_layout`统一选择。完整Shape及ECM
 
 `stage2/cuda/main.cpp` 负责 CLI、配置合并、模式与退出。`stage2/task.cpp` 只有一条父任务循环：校验/恢复 → pending 落盘 → 子进程 → receipt 确认 → done → seal → 源行复核 → finished → 队列移除 → 进度清理。同文件的 curve_worker 保留重读 save/hash、规划、GCD/引擎和持久发布的完整顺序。
 
-`src/ecm/stage2/process.cpp` 管理 Job、管道、进程、停止和 console 投影；Worker/Task 不重复管理这些资源。`src/ecm/stage2/input.cpp` 集中实际输入校验；普通配置 CPP 在发布处读取结果身份。父流程只接受具体路径/队列策略/默认值，无完整 Settings 依赖。私有 Options 仍是 executable 内部调用数据，不是公开计算 API；一个进程只有一个活跃曲线/引擎状态。
+`src/ecm/stage2/process.cpp` 管理 Job、管道、进程、停止和 console 投影；Worker/Task 不重复管理这些资源。`src/ecm/stage2/input.cpp` 集中实际输入校验。父进程从一次 TOML 解析取得启动设置，任务开始时复制有效选项并应用当前行；进程请求传递已解析的发布路径和身份，发布不再读取 TOML。父流程只接受具体路径、队列策略和默认值，不依赖 TOML 的 Settings。私有 Options 属于可执行程序；曲线子进程拥有自己的活跃曲线和引擎状态。
 
 ## 曲线进程协议
 

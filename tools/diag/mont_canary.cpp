@@ -1,6 +1,6 @@
 /* mont_canary.cpp -- is the *scalar* Edwards Montgomery layer correct?
  *
- * Uses exactly the header the scalar stage-1 uses (ecm_edwards_mont.h) and checks,
+ * Uses exactly the header the scalar stage-1 uses (modular_mpn.h) and checks,
  * for many random and adversarial inputs:
  *   * mul/sqr against mpz          (value)
  *   * every limb < N / result canonical (representation)
@@ -10,7 +10,7 @@
  *
  *   usage: mont_canary <bits> [trials]
  */
-#include "../../src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h"
+#include "../../src/ecm/cpu/arithmetic/scalar/modular_mpn.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

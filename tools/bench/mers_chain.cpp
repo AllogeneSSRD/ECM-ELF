@@ -5,9 +5,9 @@
  * mul/sqr (like a ladder does) and reports the first step where the kernel's
  * value stops being a*b mod N.
  *
- * build: cl /O2 /arch:AVX512 /I src\cpu mers_chain.cpp src\cpu\simd_mont_ifma.cpp
+ * build: tools\build_tool.bat tools\bench\mers_chain.cpp src\ecm\cpu\arithmetic\ifma\modular_ifma.cpp
  */
-#include "../../src/ecm/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/cpu/arithmetic/ifma/modular_ifma.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

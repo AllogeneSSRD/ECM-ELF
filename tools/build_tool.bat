@@ -12,9 +12,8 @@ rem
 rem   Examples:
 rem     tools\build_tool.bat tools\diag\limb_canary.cpp
 rem     tools\build_tool.bat tools\diag\mont_canary.cpp
-rem     tools\build_tool.bat tools\diag\canary_sqr.cpp src\cpu\simd_mont_ifma.cpp
-rem     tools\build_tool.bat tools\diag\dump_tmp.cpp src\cpu\ecm_edwards_save.cpp
-rem     tools\build_tool.bat tools\bench\mers_test.cpp src\cpu\simd_mont_ifma.cpp
+rem     tools\build_tool.bat tools\diag\canary_sqr.cpp src\ecm\cpu\arithmetic\ifma\modular_ifma.cpp
+rem     tools\build_tool.bat tools\bench\mers_test.cpp src\ecm\cpu\arithmetic\ifma\modular_ifma.cpp
 rem ---------------------------------------------------------------------------
 setlocal
 if "%~1"=="" ( echo usage: build_tool.bat ^<tool.cpp^> [extra .cpp ...] & exit /b 2 )

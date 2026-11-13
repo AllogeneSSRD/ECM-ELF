@@ -43,9 +43,6 @@ struct EcmRuntimeConfig {
     bool verify_gpu_results = false;    // was ECM_VERIFY_GPU_RESULTS   / CLI: --verify-gpu
     bool verify_gpu_strict = false;     // was ECM_VERIFY_GPU_STRICT    / CLI: --verify-gpu-strict
 
-    // --- external tools ---
-    std::string gp_bin;                 // was ECM_GP_BIN / PARI_GP_BIN  / CLI: --gp ("" = default "gp")
-
     // --- bench / diagnostic tools ---
     bool addsub_asm_disable = false;    // was ECM_ADDSUB_ASM_DISABLE    / CLI: --no-asm
     bool addsub_asm_b64 = false;        // was ECM_ADDSUB_ASM_B64        / CLI: --asm-b64

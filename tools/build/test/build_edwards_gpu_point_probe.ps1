@@ -28,7 +28,7 @@ foreach($command in @($gpuCommand,$cpuCommand,$linkCommand)){
 }
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $sources=@('src/ecm/stage1/edwards/cuda/point.cuh','tools/test/edwards_gpu_point_probe.cu',
-           'src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp','src/ecm/cpu/arithmetic/scalar/ecm_edwards_mont.h',
+           'src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp','src/ecm/cpu/arithmetic/scalar/modular_mpn.h',
            'tools/build/test/build_edwards_gpu_point_probe.ps1')
 $hashes=[ordered]@{}
 foreach($source in $sources){$hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash}
