@@ -108,6 +108,8 @@ Stage1 不创建逐曲线 `.curve`、`.batch` 或独立 `publication.order`。�
 
 新 GPU 队列把进度与待发布结果存入任务 ckpt。默认只输出最终提交文件；若需要逐曲线诊断，通过 `stage2_results_file` 或 `--results FILE` 启用 JSONL。串行和并行共用 [恢复顺序](../architecture/CHECKPOINT.md#73-恢复与发布)。保存点和剩余队列行仍是续算输入。
 
+Stage2 队列续跑使用当前配置的提交路径，`--submission` 可覆盖它。checkpoint 内的因子和已准备好的 NF 行可以补发到新目标，去重范围是该目标文件。同一行因此可以同时出现在旧文件和新文件中。
+
 F 即时单独发布，固定 `curves=1`。无因子曲线在整条任务完成后汇总成一行，参数与时间来自按计划顺序最后一条计入的 NF；各条曲线可以使用不同的 B2、D、P。重复的同一数学曲线在当前 checkpoint 内按实际 B2 去重。独立任务的 NF 提交行只含总数，无法用于跨任务的逐曲线去重。结果写入保留已有文件的字节和行顺序，已提交的 F 按数学身份去重，已准备好的 NF 按确切行重放。任务仍在队列时可通过原 ckpt 补发。任务结束并清理 ckpt 后，最终提交文件就是该任务的归档。
 
 GPU 直接 `--save` 与 CPU Edwards Stage2 继续使用私有 `data/<提交文件名>.ecm-ledger/`。已有 schema 1–4 队列首次恢复时使用原 JSONL 和账本完成一次性迁移。旧版的 `ecm_cpu_stage2.exe --export-results --submission results.json.txt` 可恢复旧账本对应的结果。新队列可以追加到已有 ECM-ELF 提交历史，同路径的旧账本仍供旧任务使用。

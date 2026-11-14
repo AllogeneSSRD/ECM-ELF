@@ -1257,12 +1257,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
             }
             const auto previous_total=state.total,previous_b2=state.b2;
             const auto previous_auto=state.auto_b2;
-            const auto submission_path=ecm_io::file_identity(fs::u8path(o.submission));
-            if(!state.submission_path.empty() &&
-               (ecm_io::file_identity_less(state.submission_path,submission_path) ||
-                ecm_io::file_identity_less(submission_path,state.submission_path)))
-                throw std::runtime_error("Stage2 checkpoint is bound to a different submission file");
-            state.submission_path=submission_path;
+            state.submission_path=ecm_io::file_identity(fs::u8path(o.submission));
             if(state.version<5)
                 migrate_queue_outcomes(state,save,skip,results,fs::u8path(o.submission),target.z);
             while(!state.reserved.empty() && !state.reserved.back().completed)

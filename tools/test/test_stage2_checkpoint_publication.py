@@ -1,4 +1,4 @@
-"""Exercise a GPU queue interrupted at final publication, then resume from its ckpt."""
+"""Exercise Stage2 checkpoint publication, including resuming with a new output path."""
 import argparse
 import json
 from pathlib import Path
@@ -28,7 +28,8 @@ def main():
     (work / "point.save").write_bytes(b"\n".join(points) + b"\n")
     config = work / "ecm.toml"
     config_text = ('[shared]\nb2_ratio=0\nuser="original"\n[stage2]\nstage2_save_dir="."\n'
-                   'stage2_finished="finished.txt"\nstage2_progress_dir="progress"\n')
+                   'stage2_finished="finished.txt"\nstage2_progress_dir="progress"\n'
+                   'stage2_submission_file="results.json.txt"\n')
     config.write_text(config_text, encoding="utf-8")
     queue = work / "worktodo.txt"
     target = "1,2,521,-1"
@@ -41,7 +42,7 @@ def main():
     submission = work / "results.json.txt"
     cmd = [str(args.exe.resolve()), "--config", str(work / "ecm.toml"),
            "--worktodo", str(queue), "--once", "--device", str(args.device),
-           "--submission", str(submission), "--short-calibration", "0",
+           "--short-calibration", "0",
            "--tune-runtime", "0", "--auto-carrier", "0", "--log-level", "1",
            "--parallel", str(args.parallel)]
     if args.d:
@@ -77,7 +78,8 @@ def main():
         assert len(rows) == point_count and all(map(crc_valid, rows))
         diagnostics.unlink()
     blocked.rmdir()
-    config.write_text(config_text.replace('user="original"', 'user="after-restart"'), encoding="utf-8")
+    restarted_config = config_text.replace('user="original"', 'user="after-restart"')
+    config.write_text(restarted_config, encoding="utf-8")
     # Simulate another failure after successful publication but before finished
     # bookkeeping. Replay must leave the already published line byte-identical.
     finished = work / "finished.txt"
@@ -89,10 +91,28 @@ def main():
     assert row["status"] == ("F" if args.saved_factor else "NF")
     assert row["user"] == "original", row
     assert row["curves"] == point_count and crc_valid(row)
+
+    new_submission = work / "new-results.json.txt"
+    config.write_text('config_version=3\n[shared]\nuser="after-restart"\nfinished_file="finished.txt"\n'
+                      '[stage2]\nb2_ratio=0\nsave_dir="."\ncheckpoint_dir="progress"\n'
+                      'submission_file="new-results.json.txt"\n', encoding="utf-8")
+    log = run("new-submission-finished-blocked", False)
+    assert "curve_start:" not in log and checkpoint.exists()
+    assert new_submission.read_bytes() == published
+    assert submission.read_bytes() == published
+
+    cli_submission = work / "cli-results.json.txt"
+    cli_override = ("--submission", str(cli_submission))
+    log = run("cli-submission-finished-blocked", False, cli_override)
+    assert "curve_start:" not in log and checkpoint.exists()
+    assert cli_submission.read_bytes() == published
+
     finished.rmdir()
-    log = run("resume", True)
+    log = run("resume", True, cli_override)
     assert "curve_start:" not in log and not checkpoint.exists()
-    assert submission.read_bytes() == published and not queue.read_text().strip()
+    assert new_submission.read_bytes() == published and submission.read_bytes() == published
+    assert cli_submission.read_bytes() == published
+    assert not queue.read_text().strip()
     assert not (work / "data").exists() and not (work / "stage2_results.jsonl").exists()
     print(f"Stage2 checkpoint publication passed (parallel={args.parallel}, device={args.device})")
 
