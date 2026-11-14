@@ -67,6 +67,9 @@ int main(int argc,char **argv)try {
     check(ecm_sync::park_p95(p95,handoff,range,error),"persist P95 responsibility");
     check(!ecm_sync::flush_p95(p95,error) && !fs::exists(root/"p95/worktodo.add"),"file failure exposed P95 task");
     fs::remove(target);
+    P95TransferConfig replay_only;replay_only.pending_path=p95.pending_path;
+    check(ecm_sync::flush_p95(replay_only,error),error.c_str());
+    check(fs::exists(root/"p95/worktodo.add"),"disabled routing discarded an existing P95 intent");
     auto changed_configuration=p95;changed_configuration.worktodo_path=(root/"other-p95/worktodo.txt").string();
     check(ecm_sync::flush_p95(changed_configuration,error),error.c_str());
     check(!fs::exists(root/"other-p95/worktodo.add"),"restart rerouted a pending handoff using changed config");

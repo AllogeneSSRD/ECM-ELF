@@ -2,6 +2,7 @@
 #include "ecm/stage1/selection.h"
 #include <atomic>
 #include <cstdint>
+#include <gmp.h>
 #include <mutex>
 #include <vector>
 
@@ -9,11 +10,14 @@ namespace indicators {
 class ProgressBar;
 }
 
+namespace ecm_stage1 { struct Stage1Request; }
+
 namespace ecm_cpu_stage1 {
 extern std::mutex g_stage1_out_mutex;
 extern std::atomic<uint32_t> g_stage1_done;
 int to_ifma_field_mode(ecm_stage1::SimdReduction);
 int driver_simd_isa_ok();
+bool freeze_cpu_implementation_policy(const ecm_stage1::Stage1Request&, ecm_stage1::Selection&);
 void apply_thread_affinity(const std::vector<unsigned>&, uint32_t thread);
 void stage1_progress_set(double done, uint32_t total);
 

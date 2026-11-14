@@ -21,6 +21,7 @@ from bench_stage2_n_scaling import fields
 from gpu_telemetry import TelemetryRecorder
 from result_format import normalize_result
 from stage2_d_catalog import phi
+from stage2_log import read_stage2_log
 
 
 def sha(path):
@@ -133,7 +134,7 @@ def main():
                         raise ValueError('Input/status differs')
                     if raw['source-build'].lower()!=variants[name]['sha256'] or (raw['d'],raw['poly-size'])!=(expected_d,phi(expected_d)//2):
                         raise ValueError('Build/geometry differs')
-                    text=(directory/'engine.log').read_text(encoding='utf-8')+'\n'+(directory/'debug.log').read_text(encoding='utf-8')
+                    text=read_stage2_log(directory/'engine.log')+'\n'+(directory/'debug.log').read_text(encoding='utf-8')
                     clock=fields(text,'stage2_full_wall');check=fields(text,'s4_multiply_stats');validate_clock(clock,a.diagnostic)
                     if any(int(check[k]) for k in ('gmp_check_bad','gmp_selftest_bad')) or min(int(check[k]) for k in ('gmp_checked','gmp_selftest_cases'))<=0:
                         raise ValueError('Arithmetic checks failed/missing')

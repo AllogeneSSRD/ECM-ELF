@@ -457,7 +457,7 @@ GPU memset共4391次，写入84,325,430,832 bytes（78.53GiB），累计0.298869
 
 ### pack/zero 融合路径
 
-独立生产程序默认启用pack/zero融合，配置键为`stage2_pack_zero=true`；设为false或使用`--pack-zero 0`恢复原packer。优先级为CLI、显式TOML、`NTT_S4_PACK_ZERO`环境变量、内置默认值；TOML支持共享设置和Worker覆盖，环境/CLI接受严格0/1。父进程把解析值传给曲线及tune子进程，tune条件记录`env_s4_pack_zero`。完整规则见[TOML参考](../ECM_TOML_REFERENCE.md#stage2_pack_zero)。旧严格.cprof要求关闭融合；未显式覆盖且指定该配置时，驱动保持false，不放宽成本合同。
+独立生产程序默认启用pack/zero融合，配置键为`stage2_pack_zero=true`；设为false或使用`--pack-zero 0`恢复原packer。优先级为CLI、显式TOML、`NTT_S4_PACK_ZERO`环境变量、内置默认值；TOML支持共享设置和Worker覆盖，环境/CLI接受严格0/1。父进程把解析值传给曲线及tune子进程，tune条件记录`env_s4_pack_zero`。完整规则见[TOML参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_pack_zero)。旧严格.cprof要求关闭融合；未显式覆盖且指定该配置时，驱动保持false，不放宽成本合同。
 
 融合不改变D、NTT长度、分块、carry、设备归约或GMP抽查。显式B2的普通save输入和resident gather共用相同digit表示，reverse-B有独立编译实例。不符合整数索引范围和slot容量的输入回退原packer。底层探针/库入口由显式环境开关控制，生产默认值由驱动读取统一配置后设置。
 

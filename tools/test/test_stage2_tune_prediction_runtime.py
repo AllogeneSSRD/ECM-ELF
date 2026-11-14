@@ -6,6 +6,9 @@ from pathlib import Path
 import re
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -87,7 +90,7 @@ def main():
         assert result['status']=='stage2_completed' and result['requested_D']==0
         assert result['B2']==b2 and result['tune_plan']['model']=='giant_route_cost_v2'
         assert result['hits']==result['bad_factors']==0
-        text = log.read_text(encoding='utf-8')
+        text = read_stage2_log(log)
         assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
         assert re.search(r'real_batched_folddevice: requested=1 enabled=1 fallback=none\b',text)
         assert re.search(r'scaled_frontier_device: requested=1 enabled=1\b',text)

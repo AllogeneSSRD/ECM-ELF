@@ -108,14 +108,17 @@ static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
         ImGui::Begin("paired-workspace");app.draw_page(style,fonts,0);ImGui::End();ImGui::Render();
     }
     const auto& summary=app.worker_summary_texts.at(1);
-    assert(summary.find("Curve #2 / 5")!=summary.npos&&summary.find("Curve #3 / 5")!=summary.npos);
-    assert(summary.find("Curve #4 / 5")==summary.npos);
+    assert(summary.find("Curve #")==summary.npos);
+    assert(summary.find("Edwards  B1=20  B2=1000  sigma=17  D=210  P=24")!=summary.npos);
+    assert(summary.find("Edwards  B1=20  B2=1100  sigma=18  D=330  P=40")!=summary.npos);
+    assert(summary.find("sigma=19")==summary.npos);
+    assert(ecmgui_v2::ui::stage2_curve_label(*shown[0],false)=="Curve #2 / 5");
     assert(summary.find("Phase:")==summary.npos&&std::count(summary.begin(),summary.end(),'\n')==2);
     ImGui::DestroyContext(context);
     wait([&]{return status.done==4&&status.workers==1;});
     assert(status.visible_curves().size()==1&&status.visible_curves().front()->current==5&&status.progress().eta_s<0);
     wait([&]{return !app.controller.busy();});
-    assert(worker().hist_s_per_curve==(std::vector<float>{9,20,6,4}));
+    assert(worker().hist_s_per_curve==(std::vector<float>{10.5f,7.5f,4}));
     assert(status.done==5&&status.progress().eta_s==0&&status.curves.empty());
     std::cout<<"{\"stage2_parallel_views\":true,\"pipeline_hidden\":true,\"serial_fallback\":true,\"all_curve_samples\":true}\n";
 }
@@ -429,6 +432,28 @@ int main(int argc,char** argv){
     assert(app.edit_business("shared","b2_ratio","20"));assert(!app.start(1));assert(app.save_business());
     assert(read(cfg).find("# preserve comment")!=std::string::npos&&read(cfg).find("font_size=\"auto\"")!=std::string::npos);
     assert(app.edit_business("shared","b2_ratio","30"));write(cfg,read(cfg)+"# changed externally\n");assert(!app.save_business());assert(app.load_config(cfg.u8string()));
+    {
+        const auto v2_path = root / "workflow-v2.toml";
+        write(v2_path, "config_version = 2\n[shared]\nqueue_order = \"file_order\"\n"
+                       "[stage1]\ngpu_device = 0\n"
+                       "[stage2]\ngpu_device = 1\n"
+                       "[worker.2]\nautostart = false\nstage2.gpu_device = 2\n");
+        ecmgui_v2::UiState preferences;
+        ecmgui_v2::App v2(preferences, stdout);
+        assert(v2.load_config(v2_path.u8string()));
+        assert(v2.edit_business("shared", "queue_order", "stage1_first"));
+        assert(v2.edit_business("worker.2", "stage2.gpu_device", "3"));
+        assert(v2.edit_business("worker.2", "autostart", "true"));
+        assert(!v2.edit_business("shared", "queue_order", "unknown"));
+        assert(v2.save_business());
+        const auto saved = read(v2_path);
+        assert(saved.find("queue_order = \"stage1_first\"") != saved.npos &&
+               saved.find("stage2.gpu_device = 3") != saved.npos &&
+               saved.find("autostart = true") != saved.npos);
+        const auto first = ecmgui::preview_stage1(ecm_config::preview_entries(v2.config.lines(), 2));
+        const auto second = ecmgui::preview_stage2(ecm_config::preview_entries(v2.config.lines(), 2));
+        assert(first.device == 0 && second.device == 3);
+    }
     using namespace ecmgui::probability_ui;Request request;const auto forward=calculate(request);assert(forward.error.empty());
     auto inverse=request;inverse.solve=Solve::Curves;inverse.target=.75;const auto solved=calculate(inverse);assert(solved.error.empty());assert(cumulative(solved.probability.selected,solved.parameters.curves)>=.75);
     const auto csv=curve_csv(forward);request.parameters.b1=10;assert(curve_csv(forward)==csv);

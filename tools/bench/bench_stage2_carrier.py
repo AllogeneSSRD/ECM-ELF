@@ -15,6 +15,7 @@ import time
 
 from bench_stage2_production import fields, freeze, read, sha
 from stage2_memory_ledger import parse as parse_memory_ledger
+from stage2_log import read_stage2_log
 
 
 def main():
@@ -255,7 +256,7 @@ def main():
                 if proc.returncode:
                     raise ValueError(name + ' failed; raw logs retained')
             verify()
-            text = log.read_text(encoding='utf-8') + '\n' + debug.read_text(encoding='utf-8')
+            text = read_stage2_log(log) + '\n' + debug.read_text(encoding='utf-8')
             rows = [json.loads(s) for s in result.read_text(encoding='utf-8').splitlines() if s.strip()]
             if len(rows) != 1:
                 raise ValueError('expected exactly one result')

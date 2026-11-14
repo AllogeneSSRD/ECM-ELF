@@ -23,7 +23,7 @@
 
 local BAT/PowerShell 输出为 `build_stage1_local/ecm_cuda.exe`、固定的 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；测试／实验默认输出到 `build_dev/`。显式本机/开发目录是最终叶目录。Stage1 的有效旧 profile 可让默认入口改选同层 `build_stage1_local_<key>`；Stage2 不添加后缀，默认入口将有效旧 profile 整目录归档到 `build_dev/stage2_local_profiles/` 后继续使用固定目录。显式 `-BuildDir`/`-Build` 仍拒绝不兼容配置，损坏标记及跨用途/阶段目录不能通过归档跳过验证。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 
-完整参数以各 PS1 的 param 与帮助为准。发布只附 `ECM_TOML_REFERENCE.md` 这一份项目说明；源码/构建/拆分/打包清单保留在构建目录，ZIP 旁保留 SHA256。
+完整参数以各 PS1 的 param 与帮助为准。发布包附英文 `ECM_TOML_REFERENCE.en.md` 和简体中文 `ECM_TOML_REFERENCE.zh-CN.md`。源码、构建、拆分和打包清单保留在构建目录，ZIP 旁保留 SHA256。
 
 完整输出默认实时保存到 `release/release-v<主程序版本>-<profile>.log`，例如 `release-v0.52.3-cu11.8.log`；双包入口为 `release-v0.52.3-all.log`，可通过 `-OutDir` 调整位置。同版本/profile 重跑覆盖上次日志。`VerifyJobs` 控制预检、复查和最终身份核对各自内部并行，阶段间保持顺序；不跨阶段复用文件摘要。日志、并行语义与验证记录以[构建与发布](../../docs/usage/BUILD.md#完整发布与按需加载)为准。
 
@@ -34,6 +34,8 @@ local BAT/PowerShell 输出为 `build_stage1_local/ecm_cuda.exe`、固定的 `bu
 - `internal/`：原 GUI 与 GUI v2 的正式 PowerShell 包装、CUDA 权威源清单与依赖身份、并行 nvcc、配置一致性、工具链选择、Stage1 拆分及两阶段打包。
 
 CUDA 源组在 `internal/cuda_sources.cmake` 维护，构建目录中的 JSON 由它生成；不要在脚本中另抄源文件列表。递归包含、编译命令和对象身份由 `internal/cuda_build_state.ps1` 校验；复用规则和测试入口见 [CUDA 源清单与依赖身份](../../docs/usage/BUILD.md#cuda-源清单与依赖身份)。
+
+`build_gwnum_local.ps1` 单独生成 Windows x64 的 `gwnum.dll`，可用 `-GwNumRoot` 指定上游 31.6 的 `gwnum` 目录。构建完成后手动复制到 worker 目录。见 [CPU Stage1 本地 GWNUM](../../docs/usage/BUILD.md#cpu-stage1-本地-gwnum-316)。
 
 Stage1 的位宽与实例分组由 `src/ecm/cuda/dispatch/tiers.def` 统一维护；主机驱动和设备实例职责见 [CUDA 模块边界](../../docs/architecture/STAGE1.md#cuda-模块边界)。`test/build_cuda_p1.ps1` 提供清单配置、Stage1 和 Stage2 的分步构建入口。
 

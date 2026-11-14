@@ -87,7 +87,7 @@ if (-not (Test-Path -LiteralPath $queue)) {
     $queueHeader += [Environment]::NewLine
     [IO.File]::WriteAllText($queue, $queueHeader, (New-Object Text.UTF8Encoding $false))
 }
-Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_TOML_REFERENCE.md') -Destination $OutDir -Force
+$references = @(Copy-EcmReleaseConfigReferences $repo $OutDir)
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $OutDir -Force
 Copy-Item -LiteralPath $gmpDependency.Copyright -Destination (Join-Path $OutDir 'GMP-COPYRIGHT.txt') -Force
 if ($Stage1Exe) {
@@ -96,7 +96,7 @@ if ($Stage1Exe) {
     Copy-Item -LiteralPath $Stage1Exe -Destination (Join-Path $OutDir 'ecm_cuda.exe') -Force
 }
 $hashes = [ordered]@{}
-$files = @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt','ECM_TOML_REFERENCE.md')
+$files = @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt') + $references
 . (Join-Path $PSScriptRoot 'diagnostics_payload.ps1')
 $files = @($files + @(Copy-EcmDiagnosticsPayload $repo $Build $OutDir) | Select-Object -Unique)
 foreach ($name in $files) {

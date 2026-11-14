@@ -121,9 +121,150 @@ static void role_isolation(const std::filesystem::path& path) {
     bad=false;try{ecm_config::selected_entries(parsed.lines,2,{"stage2_finished"},path.string());}catch(...){bad=true;}
     expect(bad,"consumed Stage2 receiver path type was not checked");
 }
+
+static void versioned_paths(const std::filesystem::path& path) {
+    using Mode = ecm_config::TomlReadMode;
+    const std::string old =
+        "[shared]\nworktodo='queue.txt'\npriority=2\nskip=1\n"
+        "[stage1]\ndevice=1\nauto_stage2=1\nntt_length=1024\n"
+        "[stage2]\nstage2_device=2\nstage2_parallel='auto'\nstage2_finished=''\n"
+        "[gui]\nNumWorkers=2\n[workers.2]\nautostart=1\n"
+        "[workers.2.stage1]\ndevice=3\n[workers.2.stage2]\nstage2_device=4\n";
+    const std::string current =
+        "config_version=2 # Business config version\n"
+        "[shared]\nworktodo_file='queue.txt'\nqueue_order='stage2_first'\nqueue_skip='stage1'\n"
+        "[stage1]\ngpu_device=1\nhandoff.enabled=true\nntt.length=1024\n"
+        "[stage2]\ngpu_device=2\ncuda.curve_concurrency='auto'\nfinished_file=''\n"
+        "[gui]\nworker_count=2\n[worker.2]\nautostart=true\n"
+        "stage1.gpu_device=3\nstage2.gpu_device=4\n";
+
+    const auto validate_projection = [&](const std::string& body, int version) {
+        write(path,body);
+        std::vector<ecm_config::TomlLine> lines;
+        int parsed_version = 0;
+        expect(ecm_config::read_toml(path.string(),lines,Mode::Strict,nullptr,&parsed_version) &&
+                   parsed_version==version,"wrong TOML version");
+        for (const int worker : {1,2}) {
+            const auto entries = ecm_config::cli_entries(lines,worker);
+            const auto stage1 = ecm_config::read_stage1(entries);
+            const auto stage2 = ecm_config::read_stage2(entries);
+            expect(stage1.device==(worker==1?1:3) && stage2.device==(worker==1?2:4),
+                   "same-name fields crossed stage/worker scopes");
+            expect(stage1.auto_stage2==1 && stage1.ntt_length==1024 && stage2.parallel==0 &&
+                       stage1.worktodo_priority==2 && stage2.worktodo_skip==1,
+                   "v1 and v2 effective values differ");
+            expect(std::find(entries.begin(),entries.end(),std::make_pair(
+                std::string("stage2_finished"),std::string{}))!=entries.end(),
+                "explicit empty value became absent");
+        }
+        expect(ecm_config::read_gui(ecm_config::section_entries(lines,"gui")).NumWorkers==2,
+               "GUI worker count lost");
+        expect(ecm_config::read_worker(ecm_config::section_entries(lines,"workers.2")).autostart==1,
+               "worker launch flag lost");
+        ParsedConfig parsed;
+        expect(read_config(path.string(),parsed),"Stage1 did not read versioned config");
+        EcmQueueConfig stage1;
+        project_stage1_config(parsed,2,stage1);
+        expect(stage1.auto_stage2==1 && stage1.device==3,"Stage1 typed projection changed");
+    };
+    validate_projection(old,1);
+    validate_projection("config_version=1\n"+old,1);
+    validate_projection(current,2);
+
+    auto subsection = current;
+    const std::string prior = "handoff.enabled=true\nntt.length=1024\n";
+    subsection.replace(subsection.find(prior),prior.size(),
+                       "ntt.length=1024\n[stage1.handoff]\nenabled=true\n");
+    validate_projection(subsection,2);
+
+    for (const auto* invalid : {
+            "config_version='2'\n", "config_version=2.0\n", "config_version=4\n",
+            "config_version=2\nconfig_version=1\n", "[stage1]\nconfig_version=2\n",
+            "config_version=2\n[stage1]\nhandoff.enabled=true\n[stage1.handoff]\nworkers='2'\n",
+            "config_version=2\n[stage1.handoff]\nworkers='2'\n[stage1]\nhandoff.enabled=true\n",
+            "config_version=2\n[stage1]\nhandoff=true\nhandoff.enabled=true\n",
+            "config_version=2\n[stage1]\n'handoff.enabled'=true\n",
+            "config_version=2\n[stage1]\nhandoff.enabled=1\n",
+            "config_version=2\n[stage1]\nauto_stage2=1\n",
+            "config_version=2\n[worker.0]\nautostart=true\n",
+            "config_version=2\n[worker.1000001]\nautostart=true\n"})
+        rejected(path,invalid);
+
+    write(path,"config_version=2\n[stage1]\ngpu_device=7\n[stage2]\n"
+               "finished_file='receiver'\nfuture.values=['a','b']\n"
+               "stage2_finished='legacy_name_in_foreign_table'\n");
+    std::vector<ecm_config::TomlLine> lines;
+    expect(ecm_config::read_toml(path.string(),lines,Mode::Stage1),
+           "Stage1 rejected future foreign Stage2 option");
+    const auto fields = ecm_config::selected_entries(lines,1,{"stage2_finished"},path.string());
+    expect(ecm_config::read_stage2(fields).finished=="receiver",
+           "foreign alias shadowed the recognized Stage2 handoff path");
+    expect(lines.back().raw=="stage2_finished='legacy_name_in_foreign_table'" &&
+               !lines.back().recognized && lines.back().deferred,"foreign value source lost");
+}
+
+static void cpu_slice_config(const std::filesystem::path& path) {
+    write(path, "config_version=3\n[stage1]\n"
+                "cpu_implementation='simd[:6144], scalar[:4096], gwnum[4096:], auto[]'\n"
+                "[worker.2]\nstage1.cpu_implementation=''\n");
+    ParsedConfig parsed;
+    expect(read_config(path.string(), parsed), "Stage1 did not read v3 CPU policy");
+    EcmQueueConfig stage1;
+    project_stage1_config(parsed, 1, stage1);
+    expect(stage1.selection.cpu_implementation_rules.size() == 4 &&
+               stage1.selection.cpu_implementation_rules.front().end_bit == 6144,
+           "Stage1 lost global CPU policy rules");
+    project_stage1_config(parsed, 2, stage1);
+    expect(stage1.selection.cpu_implementation_rules.empty() &&
+               stage1.selection.cpu_implementation == ecm_stage1::CpuImplementation::Auto,
+           "Stage1 did not clear inherited CPU policy with explicit empty override");
+    write(path, "config_version=3\n[stage1]\ncpu_implementation='simd[3:2]'\n");
+    expect(!read_config(path.string(), parsed), "Stage1 accepted invalid CPU slice");
+    write(path, "config_version=2\n[stage1]\ncpu_implementation='simd[:6144], auto[]'\n");
+    expect(!read_config(path.string(), parsed), "Stage1 accepted a v3 CPU policy in a v2 file");
+}
+
+static void v3_shared_config(const std::filesystem::path& path) {
+    write(path, "config_version=3\n[shared]\nlog_file='combined.log'\nfinished_file='done.txt'\n"
+                "log_file_max_KB=1000\ntune_file='shared.toml'\n"
+                "[stage1]\nparam='m0'\n"
+                "[stage2]\nb2_ratio=20\n[worker.2]\nshared.tune_file='worker.toml'\n"
+                "stage2.b2_ratio=30\n[worker.3]\nshared.tune_file=''\n");
+    ParsedConfig parsed;
+    expect(read_config(path.string(), parsed), "v3 Stage1 config unavailable");
+    EcmQueueConfig cfg;
+    project_stage1_config(parsed, 1, cfg);
+    expect(cfg.param == "m0" && cfg.shared_log_file == "combined.log" &&
+           cfg.shared_finished_file == "done.txt" && cfg.log_file_max_kb == 1000 &&
+           cfg.ntt_tune_file == "shared.toml" && cfg.handoff_mode == "ecm-elf", "v3 global fields lost");
+    project_stage1_config(parsed, 2, cfg);
+    expect(cfg.ntt_tune_file == "worker.toml", "worker tune did not override global Stage1 path");
+    std::vector<ecm_config::TomlLine> lines;
+    expect(ecm_config::read_toml(path.string(), lines, ecm_config::TomlReadMode::Stage2), "v3 Stage2 config unavailable");
+    expect(ecm_config::read_stage2(ecm_config::cli_entries(lines, 2)).shared_tune_file == cfg.ntt_tune_file,
+           "Stage1 and Stage2 resolved different worker tune files");
+    project_stage1_config(parsed, 3, cfg);
+    expect(cfg.ntt_tune_file.empty() &&
+           ecm_config::read_stage2(ecm_config::cli_entries(lines, 3)).shared_tune_file.empty(),
+           "empty worker tune path was lost");
+    expect(ecm_queue_config_load(path.string(), 2, cfg) && cfg.b2_ratio == 30, "worker B2 ratio was lost");
+    rejected(path, "config_version=3\n[worker.2]\nshared.log_file='invalid.log'\n");
+    for (const auto* wrong : {"[stage1]\ntune_file='wrong.toml'\n", "[stage2]\ntune_file='wrong.toml'\n",
+                              "[worker.2]\nstage1.tune_file='wrong.toml'\n",
+                              "[worker.2.stage2]\ntune_file='wrong.toml'\n"}) {
+        const auto source = std::string("config_version=3\n") + wrong;
+        rejected(path, source, ecm_config::TomlReadMode::Stage1);
+        rejected(path, source, ecm_config::TomlReadMode::Stage2);
+        rejected(path, source, ecm_config::TomlReadMode::Gui);
+    }
+}
+
 int main(int argc,char **argv) {
     try {
         expect(argc==3,"usage: fixture DEFAULT_TOML TEMP_TOML");
+        versioned_paths(argv[2]);
+        cpu_slice_config(argv[2]);
+        v3_shared_config(argv[2]);
         const auto *tail_meta=ecm_config::toml_option("stage2","stage2_giant_tail_balance");
         expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true|0|1]",
             "boolean error hint omits accepted aliases");

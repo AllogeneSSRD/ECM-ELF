@@ -70,6 +70,7 @@ struct Stage2Event {
     unsigned long long curve=0,completed=0;
     unsigned workers=1;
     double seconds=0,elapsed=0,left=0,eta=-1;
+    double queue_s_per_curve=0;
     std::string save,phase,curve_model;
     int param=-1;
     std::vector<std::string> factors;
@@ -89,6 +90,7 @@ struct Stage2Status : Stage2Curve {
     unsigned long long done=0,measured_curves=0;
     unsigned long long planned_b2=0,planned_d=0;
     double seconds_sum=0,last_curve_seconds=0,queue_eta=-1;
+    double last_queue_s_per_curve=0;
     bool queue_events=false;
     std::map<unsigned long long,Stage2Curve> curves;
     void apply(const Stage2Event &event);

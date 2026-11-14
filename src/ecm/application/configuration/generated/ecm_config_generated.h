@@ -6,6 +6,8 @@
 namespace ecm_config {
 inline constexpr int layout_version=8;
 namespace limits {
+inline constexpr int64_t stage1_log_file_max_KB_minimum=1000;
+inline constexpr int64_t stage1_log_file_max_KB_maximum=1000000;
 inline constexpr int64_t stage1_b2_ratio_minimum=0;
 inline constexpr int64_t stage1_b2_ratio_maximum=1000000;
 inline constexpr int64_t stage1_auto_stage2_minimum=0;
@@ -94,6 +96,8 @@ inline constexpr int64_t stage2_stage1_cost_mhz_minimum=0;
 inline constexpr int64_t stage2_stage1_cost_mhz_maximum=10000;
 inline constexpr int64_t stage2_stage2_target_factor_bits_minimum=0;
 inline constexpr int64_t stage2_stage2_target_factor_bits_maximum=16384;
+inline constexpr int64_t stage2_log_file_max_KB_minimum=1000;
+inline constexpr int64_t stage2_log_file_max_KB_maximum=1000000;
 inline constexpr int64_t stage2_b2_ratio_minimum=0;
 inline constexpr int64_t stage2_b2_ratio_maximum=1000000;
 inline constexpr int64_t stage2_priority_minimum=0;
@@ -102,6 +106,13 @@ inline constexpr int64_t stage2_skip_minimum=0;
 inline constexpr int64_t stage2_skip_maximum=2;
 } // namespace limits
 struct Stage1Values {
+    std::string shared_log_file="ecm.log";
+    std::string shared_finished_file="worktodo.finished.txt";
+    uint64_t log_file_max_kb=10000;
+    std::string shared_tune_file="tune.toml";
+    std::string param="auto";
+    std::string handoff_mode="ecm-elf";
+    std::string handoff_unsupported="ecm-elf";
     std::string worktodo="worktodo.txt";
     uint64_t b2_ratio=0;
     int auto_stage2=0;
@@ -171,6 +182,13 @@ struct Stage1Values {
     bool has_results=false;
 };
 inline const Binding<Stage1Values> stage1_bindings[]={
+    {"shared_log_file",[](Stage1Values&c,const std::string&v){c.shared_log_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_log_file=v.shared_log_file;}},
+    {"shared_finished_file",[](Stage1Values&c,const std::string&v){c.shared_finished_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_finished_file=v.shared_finished_file;}},
+    {"log_file_max_KB",[](Stage1Values&c,const std::string&v){c.log_file_max_kb=static_cast<uint64_t>(bounded_integer(v,"log_file_max_KB",1000,1000000));},[](Stage1Values&c,const Stage1Values&v){c.log_file_max_kb=v.log_file_max_kb;}},
+    {"shared_tune_file",[](Stage1Values&c,const std::string&v){c.shared_tune_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_tune_file=v.shared_tune_file;}},
+    {"param",[](Stage1Values&c,const std::string&v){if(v!="auto"&&v!="e"&&v!="m0"&&v!="m2"&&v!="m3")throw std::runtime_error("param must be [auto|e|m0|m2|m3]");c.param=v;},[](Stage1Values&c,const Stage1Values&v){c.param=v.param;}},
+    {"handoff_mode",[](Stage1Values&c,const std::string&v){if(v!="off"&&v!="ecm-elf"&&v!="prime95")throw std::runtime_error("handoff_mode must be [off|ecm-elf|prime95]");c.handoff_mode=v;},[](Stage1Values&c,const Stage1Values&v){c.handoff_mode=v.handoff_mode;}},
+    {"handoff_unsupported",[](Stage1Values&c,const std::string&v){if(v!="ecm-elf"&&v!="keep-save")throw std::runtime_error("handoff_unsupported must be [ecm-elf|keep-save]");c.handoff_unsupported=v;},[](Stage1Values&c,const Stage1Values&v){c.handoff_unsupported=v.handoff_unsupported;}},
     {"worktodo",[](Stage1Values&c,const std::string&v){assign_value(c.worktodo,v);},[](Stage1Values&c,const Stage1Values&v){c.worktodo=v.worktodo;}},
     {"b2_ratio",[](Stage1Values&c,const std::string&v){c.b2_ratio=v.empty()?0:static_cast<uint64_t>(bounded_integer(v,"b2_ratio",0,1000000));},[](Stage1Values&c,const Stage1Values&v){c.b2_ratio=v.b2_ratio;}},
     {"auto_stage2",[](Stage1Values&c,const std::string&v){c.auto_stage2=v.empty()?0:static_cast<int>(bounded_integer(v,"auto_stage2",0,1));},[](Stage1Values&c,const Stage1Values&v){c.auto_stage2=v.auto_stage2;}},
@@ -309,6 +327,10 @@ struct Stage2Values {
     uint64_t stage1_mhz=0;
     uint64_t factor_bits=0;
     std::string condition_tag="";
+    std::string shared_log_file="ecm.log";
+    std::string shared_finished_file="worktodo.finished.txt";
+    uint64_t log_file_max_kb=10000;
+    std::string shared_tune_file="tune.toml";
     std::string worktodo="worktodo.txt";
     uint64_t b2_ratio=0;
     int worktodo_priority=0;
@@ -396,6 +418,10 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage1_cost_mhz",[](Stage2Values&c,const std::string&v){c.stage1_mhz=static_cast<uint64_t>(bounded_integer(v,"stage1_cost_mhz",0,10000));},[](Stage2Values&c,const Stage2Values&v){c.stage1_mhz=v.stage1_mhz;}},
     {"stage2_target_factor_bits",[](Stage2Values&c,const std::string&v){c.factor_bits=static_cast<uint64_t>(bounded_integer(v,"stage2_target_factor_bits",0,16384));},[](Stage2Values&c,const Stage2Values&v){c.factor_bits=v.factor_bits;}},
     {"stage2_tune_condition_tag",[](Stage2Values&c,const std::string&v){c.condition_tag=v;},[](Stage2Values&c,const Stage2Values&v){c.condition_tag=v.condition_tag;}},
+    {"shared_log_file",[](Stage2Values&c,const std::string&v){c.shared_log_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_log_file=v.shared_log_file;}},
+    {"shared_finished_file",[](Stage2Values&c,const std::string&v){c.shared_finished_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_finished_file=v.shared_finished_file;}},
+    {"log_file_max_KB",[](Stage2Values&c,const std::string&v){c.log_file_max_kb=static_cast<uint64_t>(bounded_integer(v,"log_file_max_KB",1000,1000000));},[](Stage2Values&c,const Stage2Values&v){c.log_file_max_kb=v.log_file_max_kb;}},
+    {"shared_tune_file",[](Stage2Values&c,const std::string&v){c.shared_tune_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_tune_file=v.shared_tune_file;}},
     {"worktodo",[](Stage2Values&c,const std::string&v){assign_value(c.worktodo,v);},[](Stage2Values&c,const Stage2Values&v){c.worktodo=v.worktodo;}},
     {"b2_ratio",[](Stage2Values&c,const std::string&v){c.b2_ratio=v.empty()?0:static_cast<uint64_t>(bounded_integer(v,"b2_ratio",0,1000000));},[](Stage2Values&c,const Stage2Values&v){c.b2_ratio=v.b2_ratio;}},
     {"priority",[](Stage2Values&c,const std::string&v){c.worktodo_priority=v.empty()?0:static_cast<int>(bounded_integer(v,"priority",0,2));},[](Stage2Values&c,const Stage2Values&v){c.worktodo_priority=v.worktodo_priority;}},

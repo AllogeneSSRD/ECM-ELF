@@ -4,7 +4,7 @@
 
 默认采用按提交顺序回收的 S4 计时 FIFO：最旧项未完成就停止查询后续项，满环只等最旧一槽，收尾完整排空。默认仍使用 CUDA 自动调度与原生事件等待。下述性能数据来自0.52.4测试二进制，身份和计时边界见下一节。
 
-可选配置 `stage2_low_cpu_wait=true` 使用 **CUDA 设备阻塞调度4 + 事件退避等待**；同步读回保留原生路径。CLI 为 `--low-cpu-wait 0|1`，默认 false。配置/Worker/CLI 优先级、专家开关、资源与错误合同以 [Stage2架构](../architecture/STAGE2.md#主机等待与提交回收) 和 [配置参考](../ECM_TOML_REFERENCE.md#stage2_low_cpu_wait) 为准。
+可选配置 `stage2_low_cpu_wait=true` 使用 **CUDA 设备阻塞调度4 + 事件退避等待**；同步读回保留原生路径。CLI 为 `--low-cpu-wait 0|1`，默认 false。配置/Worker/CLI 优先级、专家开关、资源与错误合同以 [Stage2架构](../architecture/STAGE2.md#主机等待与提交回收) 和 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_low_cpu_wait) 为准。
 
 `NTT_HOST_READBACK_WAIT=1` 是另一个实验控制：在既有阻塞读回前记录并等待完成事件，然后执行原拷贝。实测它能减少 CPU 消耗，但唤醒代价较大，用户配置开关不启用这一项。
 

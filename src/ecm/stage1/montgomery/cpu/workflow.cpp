@@ -9,6 +9,7 @@
 #include "../../../../io/stage1_checkpoint.h"
 #include "checkpoint.h"
 #include "ecm_mont_cpu.h"
+#include "gwnum_curve.h"
 #include "simd_mont_curve.h"
 #include "../prac/ecm_prac_plan.h"
 #include "ecm/io/save.h"
@@ -174,6 +175,14 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         return result;
     }
     const bool use_simd = *implementation == ecm_stage1::CpuImplementation::IfmaSimd;
+    const bool use_gwnum = *implementation == ecm_stage1::CpuImplementation::Gwnum;
+    if (use_gwnum) {
+        if (const char* error = mont_stage1_gwnum_load_error()) {
+            ecm_ts_fprintf(stderr, "ERROR: %s\n", error);
+            return result;
+        }
+    }
+    const auto run_ladder = use_gwnum ? mont_stage1_curve_gwnum_bits_ex : mont_stage1_curve_bits_ex;
     const bool use_prac = opt.execution.selection.cpu_montgomery_chain ==
                           ecm_stage1::CpuMontgomeryChain::Prac;
     if (use_prac && (!use_simd || !(B1 >= 2 && B1 <= UINT32_MAX))) {
@@ -203,7 +212,9 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
     }
 
     ecm_ts_fprintf(stdout, "curve model     : montgomery (Suyama sigma, %s, torsion=%d)\n",
-                   use_simd ? "AVX512-IFMA 8-lane batch" : "scalar mpn", torsion);
+                   use_simd ? "AVX512-IFMA 8-lane batch"
+                            : use_gwnum ? "GWNUM 31.6" : "scalar mpn",
+                   torsion);
     ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d) [%s]\n", s_bits, B1,
                    torsion, s_status.c_str());
 
@@ -212,11 +223,11 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         prac = ecm_prac_build(static_cast<uint32_t>(B1), torsion, s,
                               opt.persistence.exponent_cache_dir, opt.execution.stage1_threads);
         ecm_ts_fprintf(stdout, "stage1 chain    : PRAC [%s]\n", prac.status.c_str());
-    } else if (use_simd) {
+    } else if (use_simd || use_gwnum) {
         ecm_ts_fprintf(stdout, "stage1 chain    : binary ladder\n");
     }
     const std::string field = use_prac ? "prac-" + std::to_string(prac.identity)
-                                     : use_simd ? "ifma" : "mpn";
+                                     : use_simd ? "ifma" : use_gwnum ? "gwnum" : "mpn";
     const auto compatible_chain = [&](std::string_view saved_field) {
         return use_prac ? saved_field == field : saved_field.substr(0, 5) != "prac-";
     };
@@ -671,8 +682,8 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                 /* autosave pause vs SIGINT: see the SIMD branch above */
                 int rc = MONT_LADDER_MISS;
                 for (;;) {
-                    rc = mont_stage1_curve_bits_ex(g, Qx, Qz, N, sigmas[c], bits, nbits, start, &st,
-                                                   mont_progress_cb_scalar, &pc, ckpt_chunk);
+                    rc = run_ladder(g, Qx, Qz, N, sigmas[c], bits, nbits, start, &st,
+                                    mont_progress_cb_scalar, &pc, ckpt_chunk);
                     if (rc != MONT_LADDER_PAUSED)
                         break;
                     if (use_ckpt) {
@@ -680,7 +691,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                         mont_ckpt_init(&ck);
                         ck.status = MONT_CKPT_INFLIGHT;
                         ck.bitnum = st.bitnum;
-                        mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, "mpn");
+                        mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, field.c_str());
                         mpz_set(ck.X0, st.X0);
                         mpz_set(ck.Z0, st.Z0);
                         mpz_set(ck.X1, st.X1);
@@ -732,7 +743,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                     ck.status = MONT_CKPT_DONE;
                     ck.hit = hit[c];
                     ck.bitnum = nbits;
-                    mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, "mpn");
+                    mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, field.c_str());
                     if (ck.hit)
                         mpz_set(ck.factor, factors[c]);
                     else

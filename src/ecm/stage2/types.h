@@ -51,6 +51,7 @@ struct Options {
     std::string gpu_backend;
     int device = -1, worker = 1;
     int log_level = -1;
+    uint64_t log_max_kb = 0;
     bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
     bool relocation=ecm_config::defaults::stage2_stage2_relocation;
     bool giant_tail_balance=ecm_config::defaults::stage2_stage2_giant_tail_balance;

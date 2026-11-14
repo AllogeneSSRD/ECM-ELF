@@ -2,6 +2,7 @@
 import argparse,hashlib,json,re,shutil,subprocess,zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
+CONFIG_REFERENCES=('ECM_TOML_REFERENCE.en.md','ECM_TOML_REFERENCE.zh-CN.md')
 def main():
     p=argparse.ArgumentParser();p.add_argument('--exe',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();exe=a.exe.resolve();out=a.out.resolve()
     assert not out.exists(),'Use a fresh package output directory'
@@ -53,16 +54,19 @@ def main():
         shutil.copy2(ROOT/'src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md',licenses/'PARI-NOTICE.md')
     (package/'docs').mkdir();shutil.copy2(ROOT/'docs/usage/GUI_V2.md',package/'docs/GUI_V2.md');shutil.copy2(ROOT/'docs/GUI_V2_STATE_REFERENCE.md',package/'docs/GUI_V2_STATE_REFERENCE.md')
     shutil.copy2(ROOT/'config/ecm.toml.example',package/'ecm.toml.example')
+    for filename in CONFIG_REFERENCES:
+        shutil.copy2(ROOT/'docs'/filename,package/filename)
     # Keep the standalone target rebuildable alongside the binary, without private
     # ignored workflow/evidence files or the large compute SDK dependencies.
     roots=['src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/application/configuration',
            'src/ecm/platform/generated','src/io','include/ecm','third_party/imgui',
            'third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gui_v2_pet',
            'assets/gui_v2','tools/test/gui','tools/test/gui_v2','tools/gen','tools/build','config',
-           'LICENSE','docs/ECM_TOML_REFERENCE.md','docs/GUI_V2_STATE_REFERENCE.md','docs/usage/GUI_V2.md']
+           'LICENSE','docs/GUI_V2_STATE_REFERENCE.md','docs/usage/GUI_V2.md']
     tracked=subprocess.check_output(['git','ls-files','-z','--',*roots],cwd=ROOT).decode().split('\0')
     deleted=subprocess.check_output(['git','ls-files','--deleted','-z','--',*roots],cwd=ROOT).decode().split('\0')
     selected=set(tracked)-set(deleted)
+    selected.update(f'docs/{filename}' for filename in CONFIG_REFERENCES)
     # This is a local working-tree snapshot, not an export of HEAD. Include the
     # exact frozen build inputs even when optional art is deliberately ignored.
     selected.update(identity['source_catalog_sha256'])

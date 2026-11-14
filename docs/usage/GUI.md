@@ -10,7 +10,7 @@
 
 Worker 管理顶部设置 worker 数量、两个阶段的程序路径和共用 TOML。`[gui]` 中的 `exe` 指向 Stage1，`stage2_exe` 指向 Stage2，`NumWorkers` 控制 GUI worker 数量，`priority` 仅控制进程优先级。`[workers.N]` 保存第 N 个 worker 的 GUI 设置。Stage1/Stage2 键分别放在 `[stage1]`、`[stage2]`，共用键放在 `[shared]`；按 worker 覆盖时写入 `[workers.N.stage1]`、`[workers.N.stage2]` 或 `[workers.N.shared]`。配置文件中的 worker 表与 `worktodo.txt` 的 `[Worker #N]` 队列分区使用同一编号，但语法独立。
 
-GUI 选择配置前检查文件并保存当前窗口设置，选择后不自动运行。语言、字体和布局保持当前会话设置；计算配置、worker 数量及程序路径从所选 TOML 读取。两阶段共用的 `worktodo` 相对 TOML 目录解析；Stage2 输出也基于 TOML 目录，Stage1 的日志和存档等相对路径基于 Stage1 程序目录。生效配置从工作程序同一投影读取。完整分区与每键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。
+GUI 选择配置前检查文件并保存当前窗口设置，选择后不自动运行。语言、字体和布局保持当前会话设置；计算配置、worker 数量及程序路径从所选 TOML 读取。两阶段共用的 `worktodo` 相对 TOML 目录解析；Stage2 输出也基于 TOML 目录，Stage1 的日志和存档等相对路径基于 Stage1 程序目录。生效配置从工作程序同一投影读取。完整分区与每键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
 例如两个 worker 分别选择 Stage1 设备时，可在 `[stage1]` 写 `device = 0`，在 `[workers.2.stage1]` 写 `device = 1`；`worktodo.txt` 中任务仍使用 `[Worker #1]`、`[Worker #2]`。没有 worker 标题的队列行只归 worker 1。GUI 保存 TOML 时保留注释和顺序，并原子替换文件。
 

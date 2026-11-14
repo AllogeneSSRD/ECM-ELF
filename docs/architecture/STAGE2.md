@@ -151,7 +151,7 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 
 S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收已完成事件；最旧事件尚未完成时停止查询其后的事件。满环时只等待、累计并释放最旧一槽，保留其他在途工作。收尾仍完整排空，每对事件只累计一次。`NTT_S4_TIMING_FIFO=0` 供同二进制对照恢复满环全排空；生产默认 1。`ring_waits` 记录满环次数，回收粒度改变后不能仅用次数比较等待成本。
 
-`stage2_low_cpu_wait` 默认 false，命令行 `--low-cpu-wait 0|1` 可覆盖；配置支持 `[stage2]` 及 `[workers.N.stage2]`。显式开启选择 CUDA 设备阻塞调度（`NTT_CUDA_WAIT_MODE=4`）及事件退避等待（`NTT_HOST_EVENT_WAIT=1`），同步读回保留原生路径（`NTT_HOST_READBACK_WAIT=0`）。显式关闭选择自动调度0及原事件等待。父进程通过环境传给曲线及 ECM tune 子进程；未显式设置时保留专家环境覆盖。事件与读回前等待的环境开关均接受严格0/1，默认0。配置语法和优先级见 [TOML参考](../ECM_TOML_REFERENCE.md#stage2_low_cpu_wait)。
+`stage2_low_cpu_wait` 默认 false，命令行 `--low-cpu-wait 0|1` 可覆盖；配置支持 `[stage2]` 及 `[workers.N.stage2]`。显式开启选择 CUDA 设备阻塞调度（`NTT_CUDA_WAIT_MODE=4`）及事件退避等待（`NTT_HOST_EVENT_WAIT=1`），同步读回保留原生路径（`NTT_HOST_READBACK_WAIT=0`）。显式关闭选择自动调度0及原事件等待。父进程通过环境传给曲线及 ECM tune 子进程；未显式设置时保留专家环境覆盖。事件与读回前等待的环境开关均接受严格0/1，默认0。配置语法和优先级见 [TOML参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_low_cpu_wait)。
 
 事件退避策略先查询完成事件，已完成直接走原同步边界；只有 NotReady 进入休眠重试，其他 CUDA 错误立即返回。请求休眠按 32、64、128、256 µs 退避并封顶。Windows 使用每线程私有高精度 waitable timer，不更改全局定时器分辨率；创建或使用失败则退回原生 CUDA 等待。请求时长不是唤醒延迟保证，系统抖动可能增加完整耗时，因此该模式保留为可选项。
 

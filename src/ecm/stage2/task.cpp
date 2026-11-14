@@ -16,6 +16,8 @@
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/io/save.h"
 #include "ecm/platform/fingerprint.h"
+#include "ecm/platform/log_file.h"
+#include "ecm/platform/logging.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/io/results.h"
 #include "../../io/json.h"
@@ -32,13 +34,37 @@
 #include <sstream>
 #include <string_view>
 namespace s2prod {
+namespace {
 fs::path fatal_log;
+int fatal_log_worker=1;
+uint64_t fatal_log_max_kb=0;
+
+void append_log(const fs::path &path,const std::string &message,int worker,uint64_t max_kb) {
+    if(max_kb)ecm_append_worker_log(path,worker,max_kb,message.empty()?"\n":message);
+    else append(path,ecm_format_worker_log_lines(message,worker));
+}
+
+void append_finished(const fs::path &path,const std::string &marker,
+                     const std::string &task,const std::string &run={}) {
+    // Stage1 uses this same domain for its finished file replacement. Keep
+    // the Stage2 marker check and append within one lock for both stages.
+    if(path.has_parent_path())fs::create_directories(path.parent_path());
+    ecm_io::FileLock lock(path.u8string(),ecm_io::FileLockDomain::QueueEdit);
+    if(run.empty() || !stage2_queue::finished_written(path,run,task))
+        append(path,marker+'\n'+task);
+}
+}
+
+void append_fatal_log(const std::string& message) {
+    if(!fatal_log.empty())append_log(fatal_log,message,fatal_log_worker,fatal_log_max_kb);
+}
 // Shared by parent tasks and calibration; only process wire fields cross here.
 static CurveProcessRequest curve_request(Options &o,const fs::path &save,const Record &r,
               uint64_t b2,uint64_t d,int device,const fs::path &results,const fs::path &log,
               uint64_t batch,const TaskDefaults &ini_settings) {
     CurveProcessRequest request;
     request.save=save;request.results=results;request.log=log;
+    request.log_max_kb=o.log_max_kb;
     request.record={r.offset,r.hash,r.index};request.console_budget={ini_settings.arena,ini_settings.owner_mb};
     request.b2=b2;request.d=d;request.device=device;request.batch=batch;
     request.arena=o.arena;
@@ -731,6 +757,8 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
                 const auto done=completed_count(),remaining=queue.plan.size()-std::min<uint64_t>(done,queue.plan.size());
                 curve_wall_sum+=wall;++samples;
                 const double latency=curve_wall_sum/samples;
+                const double cadence=workers==2 && samples>=2
+                    ? std::chrono::duration<double>(now-observed_from).count()/samples : 0;
                 double eta=-1;
                 if(!remaining)eta=0;
                 else if(!stop_requests&&!failed) {
@@ -744,8 +772,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
                     if(admitted>=remaining)eta=tail;
                     else if(remaining<=workers)eta=latency;
                     else if(workers==1)eta=remaining*latency;
-                    else if(samples>=2){
-                        const double cadence=std::chrono::duration<double>(now-observed_from).count()/samples;
+                    else if(cadence>0){
                         eta=latency+(remaining-workers)*cadence;
                     }
                 }
@@ -755,6 +782,8 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
                        <<" completed="<<done;
                 if(eta>=0 && std::isfinite(eta))message<<" eta="<<std::fixed<<std::setprecision(1)<<eta<<std::defaultfloat<<std::setprecision(6);
                 message<<" wall="<<wall<<" s";
+                if(cadence>0 && std::isfinite(cadence))
+                    message<<" queue_s_per_curve="<<cadence;
                 queue.report(message.str(),false);
             }
             if(route)result.finishes.push_back(std::chrono::duration<double>(QueueClock::now()-begin).count());
@@ -1085,11 +1114,12 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
 
-    if(queue && same_path(finished,absolute_from(executable().parent_path(),cfg.finished)))
+    if(queue && !cfg.shared_finished && same_path(finished,absolute_from(executable().parent_path(),cfg.finished)))
         throw std::runtime_error("Stage1 and Stage2 finished records must use distinct paths");
     auto report=[&](const std::string &message,bool error=false) {
         (error?std::cerr:std::cout)<<message<<std::endl;
-        if(!startup.dry&&!startup.plan_only&&!log.empty())append(log,message);
+        if(!startup.dry&&!startup.plan_only&&!log.empty())
+            append_log(log,message,startup.worker,startup.log_max_kb);
     };
     report(std::string(ecm_program::name)+" "+ecm_program::version+" (Stage2)");
     if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
@@ -1132,7 +1162,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
                     fields.task.n>=2 && fields.task.n<=ecm_stage2::max_input_bits?unsigned(fields.task.n):0;
             } else save=absolute_from(cwd,o.save);
             for(const auto &path:writable)if(same_path(save,path))throw std::runtime_error("save path conflicts with writable queue/log/result state");
-            if(!o.dry&&!o.plan_only)fatal_log=log;
+            if(!o.dry&&!o.plan_only){fatal_log=log;fatal_log_worker=o.worker;fatal_log_max_kb=o.log_max_kb;}
             if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
             plan=records(save,skip,count);
@@ -1158,7 +1188,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
             if(!queue || o.dry || o.plan_only)throw;
             // Record the reason durably before commenting out the original row.
             report("ERROR: task input: "+std::string(e.what())+" | task="+task_line,true);
-            append(finished,"# ERROR reason="+std::string(e.what())+"\n# "+task_line);
+            append_finished(finished,"# ERROR reason="+std::string(e.what()),"# "+task_line);
             if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::MarkError))
                 throw std::runtime_error("cannot mark invalid task; queue changed or rewrite failed");
             ++failed_tasks;
@@ -1335,8 +1365,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
         if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
         if(read != WorktodoReadResult::Task||current!=task_line)
             throw std::runtime_error("task completed but worktodo changed; queue and progress retained");
-        if(!stage2_queue::finished_written(finished,state.run,task_line))
-            append(finished,"# stage2_task_id="+state.run+"\n"+task_line);
+        append_finished(finished,"# stage2_task_id="+state.run,task_line,state.run);
         if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::Remove))
             throw std::runtime_error("task completed but queue could not be advanced; progress retained");
         // A restart after queue advancement can ignore a complete stale state.

@@ -16,6 +16,7 @@ import re
 import statistics
 import subprocess
 import sys
+from stage2_log import read_stage2_log
 
 if hasattr(sys,'set_int_max_str_digits'):sys.set_int_max_str_digits(0)
 
@@ -138,7 +139,7 @@ def main():
             (out/(name+'_driver.log')).write_bytes(proc.stdout+proc.stderr)
             if proc.returncode:raise ValueError(name+' failed; inspect raw logs')
         verify()
-        r=read_lines(result);text=log.read_text(encoding='utf-8')
+        r=read_lines(result);text=read_stage2_log(log)
         for token in ('mont_selftest: cases=2048 mismatches=0','s4_div_check: cases=800 bad=0',
                       'gmp_selftest_bad=0','gmp_check_bad=0','pending=0'):
             if token not in text:raise ValueError('required check missing: '+token)

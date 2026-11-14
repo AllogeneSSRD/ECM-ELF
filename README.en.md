@@ -4,7 +4,7 @@
 
 ECM-ELF is an Elliptic Curve Method (ECM) toolkit: CUDA/CGBN and OpenCL GPU Stage1, GMP and optional AVX-512 IFMA CPU Stage1, a separate CUDA polynomial Stage2, libecm CPU Edwards Stage2, plus a Windows GUI, task queues and factor-data tools. The former name, OpenCL-ECM, described only one of these backends; executable names such as `ecm.exe` and `ecm_cuda.exe` remain in use.
 
-This page retains the purpose of each entry point, runnable commands, configuration workflows, save-file boundaries, build routes and tool index. The generated [TOML reference](docs/ECM_TOML_REFERENCE.md) is authoritative for configuration defaults, ranges and bilingual descriptions. Check the actual binary and its help output to determine which kernel tiers or experimental algorithms a build includes.
+This page retains the purpose of each entry point, runnable commands, configuration workflows, save-file boundaries, build routes and tool index. See the generated TOML reference for configuration defaults, ranges and descriptions ([English](docs/ECM_TOML_REFERENCE.en.md) · [中文](docs/ECM_TOML_REFERENCE.zh-CN.md)). Check the actual binary and its help output to determine which kernel tiers or experimental algorithms a build includes.
 
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
@@ -150,7 +150,7 @@ ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
 
 ECM tune reads the selected worker's Stage2 queue by default. If the queue is absent, it measures a generic bit-width grid; `--tune-save FILE --tune-b2 B2` selects one save explicitly. Tuning has a time budget, and the resulting profile can be loaded with `--tune-profile FILE` or the `stage2_tune_profile` TOML key. Explicit B2 does not require tuning; Auto B2 also requires qualified Stage1 cost and a Stage2 profile. See [separate CUDA Stage2](#stage2), [Stage2 usage](docs/usage/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for queue, direct-save and Auto B2 limits.
 
-Common options are below. Run the relevant binary's `--help` and consult the [TOML reference](docs/ECM_TOML_REFERENCE.md) for all options and exact defaults.
+Common options are below. Run the relevant binary's `--help` and consult the [TOML reference](docs/ECM_TOML_REFERENCE.en.md) for all options and exact defaults.
 
 | Option | Purpose |
 | --- | --- |
@@ -194,7 +194,7 @@ tmp_dir = "saves"
 finished = "worktodo.finished.txt"
 ```
 
-Set `curve=ed` for the Edwards path; `naf_w` applies only there. To compare reductions on the same mathematical target, set `reduction` to `mersenne-fold` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and scalar construction, and Prime95 must be able to access the save. Applicable keys and ranges are in the [TOML reference](docs/ECM_TOML_REFERENCE.md).
+Set `curve=ed` for the Edwards path; `naf_w` applies only there. To compare reductions on the same mathematical target, set `reduction` to `mersenne-fold` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and scalar construction, and Prime95 must be able to access the save. Applicable keys and ranges are in the [TOML reference](docs/ECM_TOML_REFERENCE.en.md).
 
 Common CPU recipes:
 

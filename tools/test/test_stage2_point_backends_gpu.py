@@ -22,6 +22,7 @@ from gpu_telemetry import TelemetryRecorder
 from result_format import normalize_result
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from stage2_tune_tables import summaries
+from stage2_log import read_stage2_log
 
 
 def main():
@@ -73,7 +74,7 @@ def main():
                 normal=normalize_result(raw);engine=raw['stage2-engine']
                 assert raw['status']=='NF' and raw['source-build'].lower()==identity and not normal['factors'] and not normal['bad_factors']
                 assert engine['baby_coop']==mode and (giant is None or engine['giant_coop']==giant),engine
-            trace=(directory/'engine.log').read_text(encoding='utf-8')+(directory/'debug.log').read_text(encoding='utf-8')
+            trace=read_stage2_log(directory/'engine.log')+(directory/'debug.log').read_text(encoding='utf-8')
             check=fields(trace,'s4_multiply_stats');assert not int(check['gmp_check_bad']) and not int(check['gmp_selftest_bad'])
             digest=fields(trace,'real_batched_rootfold');counts=re.findall(r'^ntt_length_counts: log2_length:num_of_ntt (.*)$',trace,re.M)
             assert len(counts)==len(records) and len(set(counts))==1

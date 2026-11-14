@@ -21,6 +21,7 @@ struct ParsedCli {
     uint64_t fixed_sigma64 = 0;
     int gpu_device_index = 0;
     int gpu_param_cli = 0;      /* --gpu-param 0|2|3 */
+    std::string param;          /* --param e|m0|m2|m3 */
     int sigma_param_claim = -1; /* "-sigma i:s" -> i (gmp-ecm: selects -param i) */
     bool print_group_order = false;
     ecm_diagnostics::Settings go_settings;

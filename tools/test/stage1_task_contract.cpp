@@ -43,6 +43,15 @@ static void stop_now() {
 static const std::string &identity() {static const std::string value="task-contract";return value;}
 static int window() {return 8;}
 
+static bool freeze_cpu_policy(const Stage1Request& request, Selection& selection) {
+    require(request.options.execution.selection.cpu_implementation_rules.size()==1,
+            "resolver lost configured rules");
+    if (mode=="cpu_policy_unavailable") return false;
+    selection.cpu_implementation=CpuImplementation::GmpScalar;
+    selection.cpu_implementation_rules.clear();
+    return true;
+}
+
 // Computation is replaced at the private legacy seam. Real task sequencing,
 // checkpoint locking, publication, result ownership and status mapping run.
 static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::string &save,bool,
@@ -57,13 +66,22 @@ static int legacy_execute(mpz_srcptr n,double,double,uint32_t count,const std::s
     require(out->sigmas!=nullptr,"sigma allocation");
     for(uint32_t i=0;i<count;++i)out->sigmas[i]=checkpoint.sigma(i,26+i);
     require(checkpoint.write_blob(ecm_stage1_curve_record(0),"task-contract-state"),"checkpoint write");
+    if (mode=="cpu_policy_snapshot") {
+        require(options.execution.selection.cpu_implementation==CpuImplementation::GmpScalar &&
+                    options.execution.selection.cpu_implementation_rules.empty(), "CPU policy was not frozen");
+        std::ifstream file(checkpoint.path(),std::ios::binary);
+        const std::string bytes{std::istreambuf_iterator<char>(file),{}};
+        ecm_stage1_binary::Reader in(bytes);in.take(8);in.u32();in.u32();const auto identity=in.take(in.u64());
+        require(identity.size()>=8 && identity.substr(identity.size()-8)=="|cpu|8|2",
+                "CPU checkpoint identity did not include resolved backend");
+    }
     if(mode=="selection_snapshot") {
 #ifdef _WIN32
         require(_putenv_s("ECM_GPU_STAGE1_ALGO","bad")==0,"environment mutation");
 #else
         require(setenv("ECM_GPU_STAGE1_ALGO","bad",1)==0,"environment mutation");
 #endif
-        require(options.gpu_algorithm=="resident","execution selection did not retain snapshot");
+        require(options.cgbn_algorithm=="resident","execution selection did not retain snapshot");
         std::ifstream file(checkpoint.path(),std::ios::binary);
         const std::string bytes{std::istreambuf_iterator<char>(file),{}};
         ecm_stage1_binary::Reader in(bytes);in.take(8);in.u32();in.u32();const auto identity=in.take(in.u64());
@@ -159,11 +177,17 @@ int main(int argc,char **argv) {
             test_history_swap(source,ecm_edwards::save_line(n,x.v,888,20,false));
         }
 #endif
-        const TaskDependencies deps{execute,identity,window};
+        const bool policy = mode=="cpu_policy_snapshot" || mode=="cpu_policy_unavailable";
+        if (policy) require(parse_cpu_implementation_policy("scalar[]", options.execution.selection), "invalid CPU policy fixture");
+        const TaskDependencies deps{execute,identity,window,false,policy ? freeze_cpu_policy : nullptr};
         auto result=run_stage1_task({n,20,20,2,save,false,expression,options},deps);
         mpz_clear(n); // Result factors/sigmas must not borrow the request's modulus.
         require(options.execution.stage1_threads==ecm_stage1::Stage1Options{}.execution.stage1_threads,"request changed");
-        if(mode=="alias_save_internal" || mode=="alias_save_submission") {
+        if(mode=="cpu_policy_unavailable") {
+            require(result.failure_source()==FailureSource::Preparation && calls==0,"unavailable CPU reached execution");
+            require(!fs::exists(save) && !fs::exists(checkpoint) && !fs::exists(options.persistence.results_file),
+                    "unavailable CPU modified files");
+        } else if(mode=="alias_save_internal" || mode=="alias_save_submission") {
             require(result.status()==TaskStatus::Failed && calls==0,"aliased save reached computation");
             require(!fs::exists(save) && !fs::exists(options.persistence.submission_file),"alias rejection modified output");
 #ifdef ECM_TEST_HISTORY_SNAPSHOT
@@ -173,7 +197,7 @@ int main(int argc,char **argv) {
             require(!fs::exists(save) || ecm_io::read_file(save).find("METHOD=ECM-EDWARDS-AM")==std::string::npos,
                     "copied source bytes differ from validated history");
 #endif
-        } else if(mode=="concurrent_append" || mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot") {
+        } else if(mode=="concurrent_append" || mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_partial_point" || mode=="selection_snapshot" || mode=="cpu_policy_snapshot") {
             require(calls==1 && result.status()==TaskStatus::Completed,"completed status");
             require(result.failure_source()==FailureSource::None && result.task_return()==ECM_NO_FACTOR_FOUND,"completed code");
             require(result.curves()==2 && result.has_sigmas() && result.sigma(1)==27,"curve identity");

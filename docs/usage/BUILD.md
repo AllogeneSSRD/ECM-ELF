@@ -37,6 +37,8 @@ Montgomery 普通核保留原有分档寄存器策略，旧 NVCC 的独立编译
 
 `build_edwards_gpu_stage1_probe.ps1` 默认8路并行；`-WorkerBuild <stage1构建目录>` 在源文件、命令、架构及对象摘要全部匹配时，复用该worker的Edwards对象，只编译探针和CPU参考，再链接独立验证程序。构建日志 `par_nvcc/timings.json` 区分队列实际墙钟和各TU同时运行的时间之和，后者不作为串行构建实测或加速比。
 
+Stage1 并行构建在最终 CMake 构建的控制台输出及失败摘要中隐藏 CUDA SDK 头文件的 MSVC C4819 编码警告，以及 `/showIncludes` 的头文件列表。包含列表支持中英文前缀，也识别中文 UTF-8 被按 CP936 解码后出现的 `娉ㄦ剰: 鍖呭惈鏂囦欢:`。过滤在输出显示时进行，CMake 仍可生成头文件依赖记录。项目源码的同号警告和其他诊断照常显示。完整的最终构建输出保存在 `<BuildDir>/par_nvcc/cmake-build.log`，各 CUDA 编译单元的原始输出仍保存在同目录的 `.log` 和 `.err.log` 中。
+
 独立探针默认编全档，可用 `-Tiers 384` 构建单档；验证时执行 `edwards_gpu_stage1_probe.exe 1 <新输出目录> 384` 检查回退、上限和三种执行模式。多档受限构建使用末尾参数 `--compiled-tiers`，全档完整用例则省略最后参数。探针编译和链接均显式使用 `/MD` 与 worker 一致。短标量 CPU 参考使用 w2，边界输入仅按奇数模数和有效曲线构造筛选，避免把大素数搜索或大 CPU 字典作为算术验收的前置工作；末点、GCD、点不变量和恢复比较均保留。
 
 Stage2：独立生产 CUDA 引擎，固定 Goldilocks PTX 后端、canonical 减法、`AddSubMask=1`、`OuterUnrollU=0`。这里“PTX 后端”是内联模算术，不表示一定携带驱动 JIT 的 compute PTX。开发引擎由独立 wrapper 选择。
@@ -135,6 +137,28 @@ Stage2聚合模式不提供按容量隔离JIT的保证：算术或NTT镜像可�
 
 发布对象的独立数学探针由 `tools/build/test/build_release_probes.ps1 -Profile cu11.8/cu13.3 -Stage stage1/stage2` 构建。`build_release_ptx_fixture.ps1` 只在独立目录制作并核对 PTX 测试副本，不覆盖发布 EXE。混合队列范围与完整包验证分别使用 `tools/test/test_release_switching.py`、`test_release_bundle.py`；输入和新证据目录须显式指定。
 
+## CPU Stage1 本地 GWNUM 31.6
+
+Windows x64 的 `ecm.exe` 与 `ecm_cuda.exe` 默认包含 GWNUM 加载接口。安装 Visual Studio C++ x64 工具和 CMake 3.20 或以上版本。下载并解压完整的 Prime95 31.6 build 1 源码归档以保留 GWNUM 的相邻依赖。 [Prime95 31.6 build 1 源码归档](https://www.mersenne.org/download/software/v31/31.06/p95v3106b01.source.zip)
+
+在 Visual Studio x64 Native Tools 命令提示符中打开 PowerShell，然后从仓库根目录运行构建脚本。
+
+```powershell
+.\tools\build\build_gwnum_local.ps1 -GwNumRoot 'D:\src\p95v3106b01.source\gwnum'
+```
+
+省略 `-GwNumRoot` 时使用 `.refactor/p95v3106b01.source/gwnum`。脚本优先复用已有的 `gwnum64.lib`，缺失时在上游目录执行 `nmake /f compil64 gwnum64.lib`。若上游构建还需重编汇编对象，按其 makefile 将 `uasm64` 和 `strip` 加入 PATH。
+
+将 `build_dev/gwnum_local/gwnum.dll` 复制到 `ecm.exe` 或 `ecm_cuda.exe` 所在目录，再执行 `'2^991-1' | .\ecm.exe --target cpu --curve mont --impl gwnum -sigma 26 -gpucurves 1 1000 1000`。TOML v2 可在 `[stage1]` 设置 `target = "cpu"`、`curve = "mont"` 和 `cpu_implementation = "gwnum"`。v1 使用 `impl = "gwnum"`。GWNUM 支持 Montgomery PARAM0 的二进制 ladder。显式选择时，DLL 缺失或 ABI 不匹配会报错。自动选型仍使用 GMP 或 IFMA。
+
+该 DLL 只导出 ECM-ELF 的 `ecm_gwnum_get_api`，通过版本化接口执行 Stage1 ladder。它静态链接 GWNUM 的算术、FFT 计划和内核，链接器会拉入这些例程的传递依赖。当前 Windows x64 构建约 23 MiB，链接映射中包含上游 `gwnum64.lib` 的 68 个对象成员中的 66 个。它不链接 Stage2 所用的 `polymult64.lib`。
+
+0.63.0 的 Windows x64 验证覆盖缺库诊断、队列保留、36 条曲线对拍及检查点恢复。构建脚本分别验证了复用静态库和用归档内汇编对象重建静态库。记录在 `data/experiments/cpu_stage1_gwnum_0630/gwnum-rename-final/` 和 `build_dev/gwnum_rename_checks/from-source.log`。
+
+常规发布包提供加载接口，本地 DLL 由使用者从官方 GWNUM 31.6 归档构建。上游条款及公开分发组合所需的许可依据见 [GWNUM 31.6 许可与分发边界](../reference/GWNUM_LICENSE.md)。
+
+独立 CPU Stage2 的 GWNUM／polymult 构建入口见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)。
+
 ## GMP 与打包
 
 本机/开发默认使用本地 Zen3 GMP；发布默认使用 vcpkg 通用 x64 GMP，缺失时明确报错，不自动回退到 Zen3。自定义 `-Gmp <prefix>` 必须提供匹配的头文件、导入库、DLL 和许可证。Zen3 库使用 BMI2/ADX 等指令，其 CPU 兼容范围由实际构建决定。
@@ -150,6 +174,8 @@ Stage2聚合模式不提供按容量隔离JIT的保证：算术或NTT镜像可�
 ## 复用构建
 
 Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。
+
+并行预检同时检查 NMake 的依赖时间戳。CUDA 对象即使通过内容校验，只要其依赖、目标的 `flags.make` 或 `compiler_depend.ts` 更新，普通构建仍将该对象交给并行队列编译。每个单元成功后立即保存 `.ecm-state.json`。中断后，以相同配置重跑时，已写完记录且再次通过预检的对象可以复用，缺少记录或校验不通过的对象重新编译。
 
 复用旧的MSVC/CMake构建目录时，需核对关键主机对象的`.obj.d`确实包含头文件依赖。旧编译器探测缓存中的本地化`SHOWINCLUDES`前缀可能与当前输出不匹配，造成依赖文件为空，头文件变化后仍报告构建成功。遇到此情况，先保留证据，备份并移开该目录的C/C++编译器探测缓存和主机对象，再用正式入口重新探测、编译并验证实际程序行为；不编辑依赖指纹或CUDA对象来绕过校验。Stage2使用编译器依赖清单校验内容：新MSVC采用`/sourceDependencies`，14.16采用`/showIncludes`并保留实际SDK/STL/宏包含。
 

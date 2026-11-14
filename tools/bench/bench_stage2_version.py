@@ -22,6 +22,7 @@ from bench_stage2_n_scaling import Monitor, fields, number
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools/ecm_report'))
 from result_format import normalize_result
+from stage2_log import read_stage2_log
 
 
 def load(path):
@@ -226,7 +227,7 @@ def run(args):
                     factors = list(map(int, result.get('factors', [])))
                     if any(not 1<f<n or n%f for f in factors):
                         raise ValueError('Invalid factor')
-                    text = prefix.with_suffix('.engine.log').read_text(encoding='utf-8')
+                    text = read_stage2_log(prefix.with_suffix('.engine.log'))
                     if prefix.with_suffix('.debug.log').exists():
                         text += '\n'+prefix.with_suffix('.debug.log').read_text(encoding='utf-8')
                     phase = fields(text, 'stage2_full_wall')

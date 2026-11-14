@@ -19,6 +19,7 @@ from bench_stage2_point_routes import sha
 from bench_stage2_runtime_matrix import StopEvent,completed_records
 from bench_stage2_n_scaling import fields
 from gpu_telemetry import TelemetryRecorder
+from stage2_log import read_stage2_log
 
 
 def prepare(a,out):
@@ -90,7 +91,7 @@ def learned(raw,wide):
 
 def capture(plan,out,folder,case,cell):
     rows=records(plan,folder,case,cell);raw=completed_records(folder/'result.jsonl')
-    trace=(folder/'engine.log').read_text(encoding='utf-8')+'\n'+(folder/'debug.log').read_text(encoding='utf-8')
+    trace=read_stage2_log(folder/'engine.log')+'\n'+(folder/'debug.log').read_text(encoding='utf-8')
     digests=[fields(s,'real_batched_rootfold') for s in trace.splitlines() if s.startswith('real_batched_rootfold:')]
     counts=[s for s in trace.splitlines() if s.startswith('ntt_length_counts:')]
     walls=[fields(s,'curve_done') for s in (folder/'console.log').read_text(encoding='utf-8').splitlines() if s.startswith('curve_done:')]

@@ -59,6 +59,7 @@
 
 .NOTES
     Logs (one .log per translation unit) are written to <BuildDir>\par_nvcc\.
+    cmake-build.log records the final build output before console filtering.
     See docs/performance/STAGE1.md item 8.
 #>
 param(
@@ -123,6 +124,27 @@ $Jobs = [Math]::Max(1, [Math]::Min($Jobs, @($entries).Count))
 $logDir = Join-Path $BuildDir "par_nvcc"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
+function Test-EcmHiddenBuildOutput([string]$Line) {
+    # Match Chinese and English /showIncludes prefixes and Chinese UTF-8 read as CP936.
+    # Use Unicode escapes so Windows PowerShell 5.1 can read this ASCII script.
+    if ($Line -match '^\s*(?:\u6CE8\u610F\s*[:\uFF1A]\s*\u5305\u542B\u6587\u4EF6|Note\s*:\s*including file)\s*[:\uFF1A]') { return $true }
+    if ($Line -match '^\s*\u5A09\u3126\u5270:\s*\u9356\u546D\u60C8\u93C2\u56E6\u6B22:') { return $true }
+    # Use the warning code and SDK directory, which work across MSVC locales.
+    $warning = [regex]::Match($Line, '^\s*(?<header>[A-Za-z]:[\\/].+?)\(\d+(?:,\d+)?\)\s*:\s*warning\s+C4819\s*:')
+    if (-not $warning.Success) { return $false }
+    try { $header = [IO.Path]::GetFullPath($warning.Groups['header'].Value) }
+    catch { return $false }
+    # GetFullPath normalizes bin/../include; Test-Path also accepts 8.3 paths.
+    $directory = [IO.Path]::GetDirectoryName($header)
+    while ($directory) {
+        $parent = [IO.Path]::GetDirectoryName($directory)
+        if ($parent -and [IO.Path]::GetFileName($directory) -eq 'include' -and
+            (Test-Path -LiteralPath (Join-Path $parent 'bin/nvcc.exe') -PathType Leaf)) { return $true }
+        $directory = $parent
+    }
+    return $false
+}
+
 # --- decide what to compile -------------------------------------------------
 Write-Host ("== CUDA reuse preflight: {0} units; checking commands, dependency contents and objects ==" -f @($entries).Count)
 $preflightWatch=[Diagnostics.Stopwatch]::StartNew()
@@ -137,11 +159,9 @@ foreach ($e in $entries) {
     }
     $state = $preflight[$entryIndex].State
     $reason = if ($SkipUpToDate -and -not $Rebuild) { $preflight[$entryIndex].Reason } else { 'forced rebuild' }
-    $skip = $reason -eq ''
-    if ($HostOnly) {
-        if (-not $skip) { throw "HostOnly CUDA object is not reusable: $($e.file): $reason" }
-        # NMake also uses timestamps. Reject a pending native rebuild rather
-        # than letting its final host/link step silently invoke nvcc.
+    if (-not $reason) {
+        # NMake uses timestamps as well as the content checks above. Queue a
+        # pending native rebuild here so NMake will not redo it serially.
         $objectTime = (Get-Item -LiteralPath $obj).LastWriteTimeUtc
         $nativeInputs = @($state.source_hashes.Keys | ForEach-Object { Resolve-EcmSourcePath $repo $_ })
         $owner = [regex]::Match((Get-EcmSourceKey $BuildDir $obj), '^(CMakeFiles/[^/]+\.dir)/')
@@ -151,10 +171,13 @@ foreach ($e in $entries) {
         }
         foreach ($inputPath in $nativeInputs) {
             if ((Test-Path -LiteralPath $inputPath) -and (Get-Item -LiteralPath $inputPath).LastWriteTimeUtc -gt $objectTime) {
-                throw "HostOnly native CUDA dependency is newer than its object: $inputPath"
+                $reason = "native dependency is newer than its object: $inputPath"
+                break
             }
         }
     }
+    $skip = $reason -eq ''
+    if ($HostOnly -and -not $skip) { throw "HostOnly CUDA object is not reusable: $($e.file): $reason" }
     if (-not $skip) { Write-Host ("  rebuild {0}: {1}" -f $name, $reason) }
     $tuList += [pscustomobject]@{
         Name = $name; Entry = $e; Obj = $obj; Skip = $skip
@@ -216,7 +239,8 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
             $objMissing = ($j.Obj -and -not $objFresh)
             if ($code -ne 0 -or $objMissing) {
                 $failed += $j
-                $tail = (Get-Content $j.Out -Tail 12 -ErrorAction SilentlyContinue) -join "`n"
+                $tail = (Get-Content $j.Out -ErrorAction SilentlyContinue |
+                    Where-Object { -not (Test-EcmHiddenBuildOutput $_) } | Select-Object -Last 12) -join "`n"
                 Write-Host ("  FAIL {0} ({1:N1}s, exit {2})`n{3}" -f $j.Name, $j.Seconds, $code, $tail)
             } else {
                 $after = Get-EcmCompileState $repo $j.Entry $vcSetup
@@ -262,6 +286,8 @@ if ($NoBuild) { exit 0 }
 # --- hand the rest (host objects + link) to nmake ---------------------------
 Write-Host "cmake --build $BuildDir --target $Target (host code + link) ..."
 $build = "$vcSetup && cmake --build `"$BuildDir`" --config $Config --target $Target"
-& cmd.exe /c $build
+& cmd.exe /d /c "($build) 2>&1" |
+    Tee-Object -FilePath (Join-Path $logDir 'cmake-build.log') |
+    Where-Object { -not (Test-EcmHiddenBuildOutput $_) }
 if ($LASTEXITCODE -ne 0) { throw "cmake --build failed ($LASTEXITCODE)" }
 Write-Host "done"

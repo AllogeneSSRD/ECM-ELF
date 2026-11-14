@@ -950,8 +950,27 @@ bool ecm_worktodo_append_unique(const std::string& path, const std::string& fini
         return !in.bad();
     };
     std::vector<std::string> lines, done;
-    if (!read_lines(path, lines) || !read_lines(finished, done)) {
-        err = "cannot read Stage2 queue or finished record";
+    if (!read_lines(path, lines)) {
+        err = "cannot read Stage2 queue";
+        return false;
+    }
+    try {
+        if (!finished.empty()) {
+            const auto finished_path = std::filesystem::u8path(finished);
+            if (ecm_io::same_file_resource(std::filesystem::u8path(path), finished_path)) {
+                err = "Stage2 queue and finished record must use distinct paths";
+                return false;
+            }
+            if (finished_path.has_parent_path())
+                std::filesystem::create_directories(finished_path.parent_path());
+            const ecm_io::FileLock finished_lock(finished, ecm_io::FileLockDomain::QueueEdit);
+            if (!read_lines(finished, done)) {
+                err = "cannot read Stage2 finished record";
+                return false;
+            }
+        }
+    } catch (const std::exception& failure) {
+        err = failure.what();
         return false;
     }
     auto same = [&](const std::string& raw) {

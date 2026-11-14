@@ -5,10 +5,12 @@ $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Build=[IO.Path]::GetFullPath($Build);$Output=[IO.Path]::GetFullPath($Output)
 if(Test-Path -LiteralPath $Output){throw 'Use a fresh output directory'}
 . (Join-Path $repo 'tools/build/internal/diagnostics_payload.ps1')
+. (Join-Path $repo 'tools/build/internal/release_payload.ps1')
 $package=Join-Path $Output 'diagnostic-candidate'
 $files=@(Copy-EcmDiagnosticsPayload $repo $Build $package)
 Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.toml.example') -Destination $package
 $files+='ecm.toml.example'
+$files+=@(Copy-EcmReleaseConfigReferences $repo $package)
 [IO.File]::WriteAllText((Join-Path $package 'ecm.toml'),'private-existing-config-sentinel')
 [IO.File]::WriteAllText((Join-Path $package 'worktodo.txt'),'private-existing-queue-sentinel')
 & (Join-Path $repo 'tools/build/internal/package_archive.ps1') -PackageDir $package -BuildDir $Output -Stage stage2 -Files $files
@@ -17,6 +19,7 @@ $zip=[IO.Compression.ZipFile]::OpenRead($package+'.zip')
 try{
     $names=@($zip.Entries|ForEach-Object{$_.FullName.Replace('\','/')})
     foreach($file in $files+@('ecm.toml','worktodo.txt')){if($file -notin $names){throw "ZIP missing $file"}}
+    foreach($file in @('ECM_TOML_REFERENCE.en.md','ECM_TOML_REFERENCE.zh-CN.md')){if($file -notin $names){throw "ZIP missing $file"}}
     foreach($file in @('ecm.toml','worktodo.txt')){
         $reader=New-Object IO.StreamReader($zip.GetEntry($file).Open())
         try{if($reader.ReadToEnd().Contains('private-existing')){throw 'User workflow entered ZIP'}}finally{$reader.Dispose()}

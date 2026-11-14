@@ -9,6 +9,7 @@ import re
 import statistics as stats
 import subprocess
 import time
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,7 +26,7 @@ def fields(text, prefix):
 
 
 def parse(log, result, *, leaf_fixture=False):
-    text = log.read_text(encoding='utf-8', errors='replace')
+    text = read_stage2_log(log, errors='replace')
     full = fields(text, 'stage2_full_wall')
     work = fields(text, 'ntt_work')
     s4 = fields(text, 's4_multiply_stats')

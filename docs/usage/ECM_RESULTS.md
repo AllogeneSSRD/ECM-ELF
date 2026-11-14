@@ -12,7 +12,7 @@ contains_stage1_curves 接收结果路径、N、B1、曲线族/param 和 sigma �
 
 ## 文件与身份
 
-Stage1 通过 TOML 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，TOML 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 的 `--results` 目前只从 CLI 设置。提交路径的默认值及范围见生成的 [TOML 参考](../ECM_TOML_REFERENCE.md)。
+Stage1 通过 TOML 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，TOML 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 的 `--results` 目前只从 CLI 设置。提交路径的默认值及范围见生成的 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
 各程序默认读取 exe 同目录的 `ecm.toml`，`--config FILE` 显式覆盖。身份键为 `user`、`computer`；空值省略对应 JSON 字段。全局值可由 `[workers.N.shared]` 覆盖，启动时通过 `--worker N` 选择。Edwards CPU Stage2 的 `--user`、`--computer` 最后覆盖 TOML，显式空字符串也生效。Stage2 曲线发布使用[任务配置快照](STAGE2.md)，已记录的 checkpoint 发布内容沿用原身份。
 

@@ -20,6 +20,8 @@ from gpu_telemetry import TelemetryRecorder
 from bench_stage2_n_scaling import fields
 from result_format import normalize_result
 from stage2_tune_tables import summaries
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 
 def main():
@@ -81,7 +83,7 @@ def main():
         raise ValueError('Chain identities pooled or observations absent')
     if len(receipts)!=6 or any(r['status']!='NF' or r['source-build']!=identity or normalize_result(r)['bad_factors'] for r in receipts):
         raise ValueError('Incomplete clean NF receipts')
-    text=(original/'learn.engine.log').read_text(encoding='utf-8')
+    text=read_stage2_log(original/'learn.engine.log')
     clocks=[fields(s,'stage2_full_wall') for s in text.splitlines() if s.startswith('stage2_full_wall:')]
     checks=[fields(s,'s4_multiply_stats') for s in text.splitlines() if s.startswith('s4_multiply_stats:')]
     if len(clocks)!=6 or len(checks)!=6:raise ValueError('Missing per-curve arithmetic evidence')

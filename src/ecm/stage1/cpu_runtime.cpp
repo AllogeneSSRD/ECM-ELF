@@ -1,5 +1,7 @@
 #include "ecm/stage1/progress.h"
 #include "cpu_runtime.h"
+#include "ecm/stage1/task.h"
+#include "montgomery/cpu/gwnum_curve.h"
 #include "ecm/cpu/arithmetic/ifma/modular_ifma.h"
 #include "ecm/platform/logging.h"
 #include "../../../include/indicators/indicators.hpp"
@@ -14,6 +16,28 @@ using ecm_stage1::stage1_now_ms;
 using ecm_stage1::stdout_is_tty_local;
 std::mutex g_stage1_out_mutex;
 std::atomic<uint32_t> g_stage1_done{0};
+
+bool freeze_cpu_implementation_policy(const ecm_stage1::Stage1Request& request,
+                                      ecm_stage1::Selection& selection) {
+    const auto modulus = request.modulus;
+    const auto modulus_bits = mpz_sizeinbase(modulus, 2);
+    const bool odd = mpz_cmp_ui(modulus, 1) > 0 && mpz_odd_p(modulus);
+    const bool can_fold = odd && modulus_bits >= 64 && mpz_scan0(modulus, 0) == modulus_bits;
+    const ecm_stage1::CpuImplementationCapabilities capability{
+        driver_simd_isa_ok() != 0, odd, can_fold,
+        request.b1 >= 2 && request.b1 <= UINT32_MAX, mont_stage1_gwnum_load_error};
+    std::string decisions;
+    const auto implementation = ecm_stage1::resolve_cpu_implementation_policy(
+        selection, modulus_bits, request.curves, capability, decisions);
+    ecm_ts_fprintf(implementation ? stdout : stderr,
+                   "%sCPU Stage1 selection: curve=%s bits=%zu %s\n",
+                   implementation ? "" : "ERROR: no usable ",
+                   ecm_stage1::curve_model_name(selection.curve), modulus_bits, decisions.c_str());
+    if (!implementation) return false;
+    selection.cpu_implementation = *implementation;
+    selection.cpu_implementation_rules.clear();
+    return true;
+}
 
 int to_ifma_field_mode(ecm_stage1::SimdReduction reduction) {
     switch (reduction) {

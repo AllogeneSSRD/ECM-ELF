@@ -15,6 +15,7 @@ from opencl_release_payload import verify as verify_opencl
 
 ROOT=Path(__file__).resolve().parents[2]
 TARGETS={'cu11.8':('50','60'),'cu13.3':('75','80')}
+CONFIG_REFERENCES=('ECM_TOML_REFERENCE.en.md','ECM_TOML_REFERENCE.zh-CN.md')
 
 
 def read(path):return json.loads(Path(path).read_text(encoding='utf-8-sig'))
@@ -235,7 +236,10 @@ def main(plan):
     source_archive=staging/'release-source.zip'
     with zipfile.ZipFile(source_archive,'w',zipfile.ZIP_DEFLATED) as archive:
         for path in source_paths():archive.write(path,path.relative_to(ROOT).as_posix())
-        for rel in ['.gitignore','CMakeLists.txt','LICENSE','docs/ECM_TOML_REFERENCE.md','tools/diag/ensure_bom.ps1','assets/gui_v2/pet_ely.png','assets/gui_v2/pet_ely.json','assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt']:
+        for rel in ['.gitignore','CMakeLists.txt','LICENSE','tools/diag/ensure_bom.ps1','assets/gui_v2/pet_ely.png','assets/gui_v2/pet_ely.json','assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt']:
+            archive.write(ROOT/rel,rel)
+        for filename in CONFIG_REFERENCES:
+            rel=f'docs/{filename}'
             archive.write(ROOT/rel,rel)
         for path,rel in gmp_sources:archive.write(path,rel)
     for profile in plan['profiles']:
@@ -292,7 +296,8 @@ def main(plan):
         copy(gmp/'bin/gmp-10.dll',folder/'gmp-10.dll')
         for filename in ['ecm.toml','ecm.toml.example']:copy(ROOT/'config/ecm.toml.example',folder/filename)
         (folder/'worktodo.txt').write_text('# Add ECM or ECMSTAGE2 tasks here.\n',encoding='utf-8')
-        copy(ROOT/'docs/ECM_TOML_REFERENCE.md',folder/'ECM_TOML_REFERENCE.md')
+        for filename in CONFIG_REFERENCES:
+            copy(ROOT/'docs'/filename,folder/filename)
         copy(ROOT/'LICENSE',folder/'LICENSE')
         for path,filename in gmp_licenses:copy(path,folder/'licenses'/filename)
         for source,filename in [('third_party/imgui/LICENSE.txt','ImGui-MIT.txt'),('third_party/gui_v2_pet/LICENSE','Ely-Pet-MIT.txt'),

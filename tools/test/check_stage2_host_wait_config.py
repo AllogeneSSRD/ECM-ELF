@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 
 def main():
@@ -49,7 +52,7 @@ def main():
             if run.returncode:
                 raise AssertionError(name+': worker failed')
             text = debug.read_text(encoding='utf-8')
-            all_text=text+log.read_text(encoding='utf-8')
+            all_text=text+read_stage2_log(log)
             stats = dict(re.findall(r'(\w+)=([^\s|]+)', re.findall(r'^stage2_host_wait_stats: (.*)$', text, re.M)[-1]))
             if (int(stats['adaptive']),int(stats['readback'])) != expected[:2] or stats['timing_fifo']!='1':
                 raise AssertionError(name+': resolved policy did not reach child')

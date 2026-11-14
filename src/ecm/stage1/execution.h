@@ -111,6 +111,7 @@ struct TaskDependencies {
     const std::string& (*build_identity)();
     int (*default_naf_window)();
     bool defer_gpu_checkpoint_validation = false;
+    bool (*resolve_cpu_policy)(const Stage1Request&, Selection&) = nullptr;
 };
 
 // Shared scalar/cache/log preparation; implementations live with task.

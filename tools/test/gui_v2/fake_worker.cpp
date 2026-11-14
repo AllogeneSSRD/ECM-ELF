@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
             out("[curve 2] real_shape: B1=20 B2=1000 S_bits=318 D=210 P=24\n");
             out("curve_start: 2/5 record=9 sigma=17 B1=20 curve_model=ed\n");
             out("curve_start: 3/5 record=12 sigma=18 B1=20 curve_model=ed\n");
+            out("[curve 3] real_shape: B1=20 B2=1100 S_bits=318 D=330 P=40\n");
             out("[curve 2] stage2_phase: Giant points previous=2 elapsed=3\n");
             out("[curve 3] stage2_phase: Generate and normalize baby points previous=1 elapsed=2\n");
             out("[curve 2] batched_progress: batch=2/8 t=4 left=12\n");
@@ -114,8 +115,8 @@ int main(int argc, char** argv) {
             out("[curve 3] stage2_full_wall: init=1 main=8 total=9\n");
             out("curve_done: 3/5 record=12 completed=2 eta=17 wall=10 s\n");
             out("[curve 2] stage2_full_wall: init=1 main=19 total=20\n");
-            out("curve_done: 2/5 record=9 completed=3 eta=7 wall=21 s\n");
-            out("curve_done: 4/5 record=18 completed=4 eta=6 wall=6 s\n");
+            out("curve_done: 2/5 record=9 completed=3 eta=7 wall=21 s queue_s_per_curve=10.5\n");
+            out("curve_done: 4/5 record=18 completed=4 eta=6 wall=6 s queue_s_per_curve=7.5\n");
             out("stage2_queue: workers=1 completed=4\n");
             out("curve_start: 5/5 record=20 sigma=21 B1=20 curve_model=ed\n");
             Sleep(600);

@@ -31,6 +31,16 @@ std::string option_table(std::string table) {
 const BusinessOption* selected_option(const char* table,const char* key) {
     const auto base=option_table(table);for(const auto& option:business_options)if(base==option.table&&std::string(key)==option.key)return &option;return nullptr;
 }
+ecm_config::TomlAddress editor_address(const ecmgui::TomlFile& config,
+                                      const std::string& table, const std::string& key) {
+    if (config.config_version() >= 2)
+        return ecm_config::toml_versioned_address(table, key, config.config_version());
+    return {table, key, ecm_config::toml_worker(table), ecm_config::toml_option(table, key)};
+}
+std::string_view editor_conversion(const ecmgui::TomlFile& config,
+                                   const ecm_config::TomlOptionMeta* option) {
+    return config.config_version() >= 2 && option ? option->v2_conversion : "";
+}
 bool matches(const std::string& value,const std::string& query) {
     auto lower=[](std::string s){for(auto& c:s)if(static_cast<unsigned char>(c)<128)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;};
     return query.empty()||lower(value).find(lower(query))!=std::string::npos;
@@ -385,24 +395,33 @@ bool App::edit_business(const std::string& table,const std::string& key,const st
     if(!ready||controller.busy()){status="Stop workers before editing workflow.";return false;}
     if(table=="gui"||table.rfind("gui.",0)==0){status="Legacy GUI preferences are preserved; use v2 appearance controls.";return false;}
     try {
-        auto candidate=config;candidate.set(table,key,value);
-        const auto* option=ecm_config::toml_option(table,key);const std::string type=option->type;
-        auto base=table;if(ecm_config::toml_worker(table)>0){const auto dot=table.find('.',8);base=dot==std::string::npos?"workers.1":table.substr(dot+1);}
-        for(const auto& field:business_options)if(base==field.table&&key==field.key&&(field.has_min||field.has_max)){
-            if(type=="int|string" && value=="auto")continue;
-            size_t used=0;const double n=std::stod(value,&used);
-            if(used!=value.size()||!std::isfinite(n)||(field.has_min&&n<field.minimum)||(field.has_max&&n>field.maximum))throw std::runtime_error("Value outside schema range: "+std::string(field.domain));
+        const auto address = editor_address(config, table, key);
+        if (!address.option)
+            throw std::runtime_error("Unknown TOML option: " + table + "." + key);
+        const auto binding = config.binding_value(address.section, address.key, value);
+        const auto* field = selected_option(address.section.c_str(), address.key.c_str());
+        const std::string_view type = address.option->type;
+        if (field && (field->has_min || field->has_max) &&
+            !(type == "int|string" && binding == "auto")) {
+            size_t used = 0;
+            const double n = std::stod(binding, &used);
+            if (used != binding.size() || !std::isfinite(n) || (field->has_min && n < field->minimum) ||
+                (field->has_max && n > field->maximum))
+                throw std::runtime_error("Value outside schema range: " + std::string(field->domain));
         }
-        if(type=="bool")ecm_config::boolean(value,key.c_str());
-        if(type=="int"){int n=0;ecm_config::assign_value(n,value);}
-        if(type=="u32"){uint32_t n=0;ecm_config::assign_value(n,value);}
-        if(type=="u64")ecm_config::unsigned_integer(value,key.c_str());
-        if(type=="float"||type=="double"){double n=0;ecm_config::assign_value(n,value);}
-        for(const auto& line:candidate.lines())if(line.kind==ecm_config::TomlLine::Kind::KeyValue&&line.section==table&&line.key==key){char kind=0;ecm_config::toml_value(line.raw.substr(line.raw.find('=')+1),kind);}
-        // Validate this edit only. Another executable's future/invalid fields
-        // must not block saving an unrelated setting.
-        ecm_config::read_stage1(ecm_config::Entries{{key,value}});
-        ecm_config::read_stage2(ecm_config::Entries{{key,value}});
+        if (type == "bool") ecm_config::boolean(binding, key.c_str());
+        if (type == "int") { int n = 0; ecm_config::assign_value(n, binding); }
+        if (type == "u32") { uint32_t n = 0; ecm_config::assign_value(n, binding); }
+        if (type == "u64") ecm_config::unsigned_integer(binding, key.c_str());
+        if (type == "float" || type == "double") { double n = 0; ecm_config::assign_value(n, binding); }
+        // The edited field alone is validated here. Workers own their other settings.
+        const auto owner = std::string_view(address.option->table);
+        const ecm_config::Entries entry{{address.key, binding}};
+        if (owner == "shared" || owner == "stage1") ecm_config::read_stage1(entry);
+        if (owner == "shared" || owner == "stage2") ecm_config::read_stage2(entry);
+        if (owner == "workers.1") ecm_config::read_worker(entry);
+        auto candidate = config;
+        candidate.set(address.section, address.key, binding);
         config=std::move(candidate);gen_valid=false;status="Unsaved workflow edit";return true;
     }catch(const std::exception& error){status=error.what();return false;}
 }
@@ -534,22 +553,53 @@ void App::draw_settings(bool zh) {
         settings_search_control=ImVec2{(ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f};
         chips("settings-group",settings_group,{ecmgui_v2::ui::text("all",zh),ecmgui_v2::ui::text("shared",zh),"Stage1","Stage2",ecmgui_v2::ui::text("worker",zh)});
         const char* groups[]{"","shared","stage1","stage2","workers.1"};
-        const auto visible=[&](const char* table,const char* key,const BusinessOption* option){const auto base=option_table(table);return (!settings_group||base==groups[settings_group])&&matches(std::string(table)+"."+key+" "+(option?(ui::text(option->description_key,zh)):""),settings_search);};
-        auto select_field=[&](const char* table,const char* key){std::snprintf(edit_table,sizeof(edit_table),"%s",table);std::snprintf(edit_key,sizeof(edit_key),"%s",key);std::snprintf(edit_value,sizeof(edit_value),"%s",config.get(table,key).c_str());};
+        const auto visible=[&](const std::string& table,const std::string& path,const BusinessOption* option){
+            const auto base=option_table(table);
+            return (!settings_group||base==groups[settings_group])&&matches(path+" "+(option?ui::text(option->description_key,zh):""),settings_search);
+        };
+        auto select_field=[&](const std::string& table,const std::string& key,const std::string& value){
+            std::snprintf(edit_table,sizeof(edit_table),"%s",table.c_str());
+            std::snprintf(edit_key,sizeof(edit_key),"%s",key.c_str());
+            std::snprintf(edit_value,sizeof(edit_value),"%s",value.c_str());
+        };
         int shown=0;
         if(ImGui::BeginChild("fields",ImVec2(0,180),true))for(const auto& line:config.lines())if(line.kind==ecm_config::TomlLine::Kind::KeyValue&&line.section!="gui"){
-            const auto* option=selected_option(line.section.c_str(),line.key.c_str());if(!visible(line.section.c_str(),line.key.c_str(),option))continue;++shown;
-            const auto name=line.section+"."+line.key+" = "+line.value;if(ImGui::Selectable(name.c_str(),line.section==edit_table&&line.key==edit_key))select_field(line.section.c_str(),line.key.c_str());
+            const auto* option=line.recognized?selected_option(line.section.c_str(),line.key.c_str()):nullptr;
+            auto [table,key]=option ? config.display_path(line.section,line.key) : std::make_pair(line.source_section,line.source_key);
+            if(!visible(line.section,table+"."+key,option))continue;++shown;
+            const auto value=option?config.display_value(line.section,line.key):line.value;
+            const auto name=table+"."+key+" = "+value;
+            if(ImGui::Selectable(name.c_str(),table==edit_table&&key==edit_key))select_field(table,key,value);
             if(option&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(option->description_key,zh));}
         settings_matches=shown;if(!shown)ImGui::TextUnformatted(ecmgui_v2::ui::text("no_matching_existing_settings",zh));
         ImGui::EndChild();ImGui::InputText(ecmgui_v2::ui::text("section",zh),edit_table,sizeof(edit_table));ImGui::InputText(ecmgui_v2::ui::text("key",zh),edit_key,sizeof(edit_key));
         if(ImGui::BeginCombo(ecmgui_v2::ui::text("available_settings",zh),edit_key)){
-            for(const auto& option:business_options){if(!visible(option.table,option.key,&option))continue;const auto name=std::string(option.table)+"."+option.key;if(ImGui::Selectable(name.c_str()))select_field(option.table,option.key);if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(option.description_key,zh));}ImGui::EndCombo();
+            for(const auto& option:business_options){
+                const auto [table,key]=config.display_path(option.table,option.key);
+                if (table.empty() || key.empty()) continue;
+                const auto name=table+"."+key;
+                if(!visible(option.table,name,&option))continue;
+                if(ImGui::Selectable(name.c_str()))select_field(table,key,config.display_value(option.table,option.key));
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text(option.description_key,zh));
+            }
+            ImGui::EndCombo();
         }
-        const auto* option=selected_option(edit_table,edit_key);
-        if(option){ImGui::TextWrapped("%s\n%s: %s | %s",ui::text(option->description_key,zh),ecmgui_v2::ui::text("type",zh),option->type,option->domain);}
-        const bool toggle=option&&(std::string(option->type)=="bool"||std::string(option->domain)=="[0|1]");
-        if(toggle){settings_bool=std::string(edit_value)=="true"||std::string(edit_value)=="1";if(ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("enabled",zh),&settings_bool))std::snprintf(edit_value,sizeof(edit_value),"%s",std::string(option->type)=="bool"?(settings_bool?"true":"false"):(settings_bool?"1":"0"));}
+        ecm_config::TomlAddress address;
+        try { address=editor_address(config,edit_table,edit_key); }
+        catch(const std::exception&) {} // Input may be incomplete while typing.
+        const auto* option=selected_option(address.section.c_str(),address.key.c_str());
+        const auto conversion=editor_conversion(config,address.option);
+        const bool converted_enum=conversion.substr(0,5)=="enum:";
+        const bool converted_bool=!conversion.empty()&&!converted_enum;
+        if(option){
+            const std::string domain=converted_enum?"["+std::string(conversion.substr(5))+"]":
+                converted_bool?"[false|true]":option->domain;
+            ImGui::TextWrapped("%s\n%s: %s | %s",ui::text(option->description_key,zh),ecmgui_v2::ui::text("type",zh),
+                converted_enum?"string":converted_bool?"bool":option->type,domain.c_str());
+        }
+        const bool boolean=option&&(converted_bool||std::string_view(option->type)=="bool");
+        const bool toggle=option&&(boolean||(!converted_enum&&std::string_view(option->domain)=="[0|1]"));
+        if(toggle){settings_bool=std::string(edit_value)=="true"||std::string(edit_value)=="1";if(ecmgui_v2::ui::checkbox(ecmgui_v2::ui::text("enabled",zh),&settings_bool))std::snprintf(edit_value,sizeof(edit_value),"%s",boolean?(settings_bool?"true":"false"):(settings_bool?"1":"0"));}
         else ImGui::InputText(ecmgui_v2::ui::text("value",zh),edit_value,sizeof(edit_value));
         if(ImGui::Button(ecmgui_v2::ui::text("stage_edit",zh))&&!edit_business(edit_table,edit_key,edit_value))toast(status,true);ImGui::SameLine();if(ui::button("save-workflow",ecmgui_v2::ui::text("save_workflow",zh),ui::ButtonKind::Primary,ui::palette(ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).x>.5f),ImGui::GetStyle().FontScaleDpi)&&!save_business())toast(status,true);
         ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("reload_discard_edits",zh)))load_config(config_path);

@@ -15,6 +15,7 @@ struct CurveProcessRequest {
     struct Record {uint64_t offset=0,hash=0,index=0;} record;
     struct ConsoleBudget {uint64_t arena=0,owner_mb=0;} console_budget;
     uint64_t b2=0,d=0,batch=0;
+    uint64_t log_max_kb=0;
     int device=0,engine_log_level=0;
     uint64_t arena=0;
     bool auto_b2=0;

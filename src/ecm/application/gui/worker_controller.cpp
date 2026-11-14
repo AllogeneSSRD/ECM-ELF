@@ -219,15 +219,24 @@ WorkerView WorkerController::make_worker(int index) const {
     w.stage1_target=stage1.execution_target;w.gpu_param=stage1.gpu_param;
     w.gpucurves=worker.gpucurves;
     w.worktodo=path_resolve(path_dir(ini_path_),stage1.worktodo);
-    const auto log=index>1 && !stage1.log_file_explicit && stage1.log_file==ecm_config::defaults::stage1_log_file?
-        ecm_config::worker_file(stage1.log_file,index):stage1.log_file;
-    w.log_file=path_resolve(w.working_dir,log);
+    const bool shared_log=ini_.config_version()>=3;
+    if(shared_log) {
+        w.curve_model=stage1.param=="e"?"ed":"mont";
+        w.gpu_param=stage1.param.size()==2?stage1.param[1]-'0':stage1.execution_target=="cpu"?0:3;
+        if(!stage1.shared_log_file.empty())
+            w.log_file=path_resolve(path_dir(ini_path_),stage1.shared_log_file);
+    } else {
+        const auto log=index>1 && !stage1.log_file_explicit && stage1.log_file==ecm_config::defaults::stage1_log_file?
+            ecm_config::worker_file(stage1.log_file,index):stage1.log_file;
+        w.log_file=path_resolve(w.working_dir,log);
+    }
     if(w.stage2) {
         const auto stage2=ecmgui::preview_stage2(entries);
         w.execution_target="gpu";
         if(stage2.device>=0)w.device=stage2.device;
-        w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
-            path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
+        if(!shared_log)
+            w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
+                path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
     }
     w.task=queue_task(w.worktodo,index,stage1.worktodo_priority,stage1.worktodo_skip);
     w.extra_args=worker.extra_args;w.autostart=worker.autostart!=0;
@@ -336,8 +345,10 @@ void WorkerController::tick() {
             // every line is worth keeping when it carries new information. The series holds
             // SECONDS PER CURVE (see WorkerView::hist_s_per_curve).
             if(w.stage2){
-                for(const auto& sample:d.stage2_speed_samples)
-                    w.hist_s_per_curve.push_back(static_cast<float>(stage2_average_?sample.second:sample.first));
+                for(const auto& sample:d.stage2_speed_samples) {
+                    const auto speed=stage2_average_?sample.second:sample.first;
+                    if(speed>0.0)w.hist_s_per_curve.push_back(static_cast<float>(speed));
+                }
             }else if(w.progress.s_per_curve>0.0){
                 w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
             }

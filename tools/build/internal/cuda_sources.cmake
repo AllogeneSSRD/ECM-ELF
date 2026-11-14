@@ -34,6 +34,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/stage1/edwards/cpu/simd_edwards.cpp
     src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp
     src/ecm/stage1/montgomery/cpu/ecm_mont_cpu.cpp
+    src/ecm/stage1/montgomery/cpu/gwnum_curve.cpp
     src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp
     src/ecm/stage1/montgomery/cpu/checkpoint.cpp
     src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp

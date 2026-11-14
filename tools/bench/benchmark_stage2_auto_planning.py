@@ -16,6 +16,7 @@ import statistics
 import subprocess
 import time
 import tomllib
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -128,7 +129,7 @@ def main():
                 stable = {k:v for k,v in choice.items() if k != 'free_bytes'}
                 if case not in choices:choices[case] = stable
                 assert choices[case] == stable, ('Auto decision/model changed',stem)
-                text = log.read_text(encoding='utf-8-sig')
+                text = read_stage2_log(log)
                 wall = next(line for line in text.splitlines() if line.startswith('stage2_full_wall:'))
                 assert 'clean=1' in wall
                 engine = float(re.search(r'\btotal=([0-9.]+)',wall)[1])

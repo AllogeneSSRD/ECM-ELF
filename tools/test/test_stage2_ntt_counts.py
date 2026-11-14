@@ -10,6 +10,8 @@ import sys
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'ecm_report'))
 from result_format import normalize_result
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -50,12 +52,14 @@ def invoke(exe,save,out,name,text='',extra=(),b2=40000,d=210,curves=1,device=1,o
     if not good:
         assert proc.returncode and not result.exists();return dict(name=name,returncode=proc.returncode)
     assert not proc.returncode,name+' failed; inspect ignored evidence'
-    normal=log.read_text(encoding='utf-8');detail=debug.read_text(encoding='utf-8')
+    normal=read_stage2_log(log)
+    diagnostics=[debug,*sorted(debug.parent.glob(debug.name+'.slot*'))]
+    detail='\n'.join(path.read_text(encoding='utf-8') for path in diagnostics if path.is_file())
     receipts=[normalize_result(json.loads(s)) for s in result.read_text().splitlines()]
     assert len(receipts)==curves and all(r['status']=='stage2_completed' and not r['bad_factors'] for r in receipts)
     checks=[dict(re.findall(r'(\w+)=(\S+)',s)) for s in re.findall(r'^s4_multiply_stats: (.+)$',normal+'\n'+detail,re.M)]
     assert checks and all(int(c['gmp_checked'])>0 and int(c['gmp_selftest_cases'])>0 and c['gmp_check_bad']=='0' and c['gmp_selftest_bad']=='0' for c in checks)
-    ledger=[dict(re.findall(r'(\w+)=(\S+)',s)) for s in re.findall(r'^stage2_full_wall: (.+)$',normal,re.M)]
+    ledger=[dict(re.findall(r'(\w+)=(\S+)',s)) for s in re.findall(r'^(?:\[curve \d+\] )?stage2_full_wall: (.+)$',normal,re.M)]
     assert len(ledger)==curves and all(c['clean']=='1' for c in ledger)
     leaf=re.findall(r'^(?:target_)?descent_values:.*?hash=(\d+)',detail,re.M)
     assert leaf

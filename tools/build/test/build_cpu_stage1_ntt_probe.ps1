@@ -18,10 +18,16 @@ $Build = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath
 Initialize-EcmBuildDirectory $Build
 $exe = Join-Path $Build 'cpu_stage1_weighted_ntt.exe'
 $obj = Join-Path $Build 'cpu_stage1_weighted_ntt.obj'
+$ifmaObj = Join-Path $Build 'modular_ifma.obj'
 $batch = Join-Path $Build 'build.cmd'
+$compile = 'cl /nologo /c /O2 /MT /std:c++17 /EHsc /utf-8 /arch:AVX512 /I src /I "{0}/include"' -f $dependency.Root
 $commands = @('@echo off',
     ('call "{0}" >nul 2>&1' -f $VcVars), 'if errorlevel 1 exit /b 1',
-    ('cl /nologo /O2 /MT /std:c++17 /EHsc /utf-8 /arch:AVX512 /I "{0}/include" /I "{1}" tools/bench/cpu_stage1_weighted_ntt.cpp /Fo"{2}" /Fe"{3}" /link /LIBPATH:"{0}/lib" gmp.lib "{1}/gwnum64.lib" advapi32.lib' -f $dependency.Root,$GwNum,$obj,$exe),
+    ('{0} /I "{1}" tools/bench/cpu_stage1_weighted_ntt.cpp /Fo"{2}"' -f $compile,$GwNum,$obj),
+    'if errorlevel 1 exit /b 1',
+    ('{0} src/ecm/cpu/arithmetic/ifma/modular_ifma.cpp /Fo"{1}"' -f $compile,$ifmaObj),
+    'if errorlevel 1 exit /b 1',
+    ('link /nologo "{0}" "{1}" /OUT:"{2}" /LIBPATH:"{3}/lib" gmp.lib "{4}/gwnum64.lib" advapi32.lib' -f $obj,$ifmaObj,$exe,$dependency.Root,$GwNum),
     'exit /b %errorlevel%')
 [IO.File]::WriteAllText($batch, ($commands -join "`r`n") + "`r`n", [Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c $batch > (Join-Path $Build 'build.log') 2>&1

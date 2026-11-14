@@ -74,7 +74,8 @@ inline std::string stage2_construction(const ecmgui::Stage2Curve& s,unsigned lon
     const auto value=[](unsigned long long n){return n?std::to_string(n):std::string("--");};
     line+="  B1="+value(s.b1)+"  B2=";
     if(ratio&&s.b1&&s.b2&&s.b1<=std::numeric_limits<unsigned long long>::max()/ratio&&s.b1*ratio==s.b2)line+=std::to_string(ratio)+"*B1=";
-    line+=value(s.b2)+"  sigma="+value(s.sigma);return line;
+    line+=value(s.b2)+"  sigma="+value(s.sigma)+"  D="+value(s.d)+"  P="+value(s.p);
+    return line;
 }
 inline std::string worker_construction(const ecmgui::WorkerView& worker,unsigned long long ratio,bool zh){
     return stage2_construction(worker.stage2_status,ratio,zh);

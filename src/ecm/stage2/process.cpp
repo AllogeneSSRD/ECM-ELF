@@ -2,6 +2,8 @@
 #include "process.h"
 #include "console.h"
 #include "../platform/compute_log.h"
+#include "ecm/platform/log_file.h"
+#include "ecm/platform/logging.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -204,7 +206,7 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     // Preserve readable batch statistics in the file even with a concise console.
     const int engine_level=o.engine_log_level;
     arg(L"--log-level",static_cast<uint64_t>(engine_level));
-    if(!log.empty()) {
+    if(!log.empty() && (!o.log_max_kb || o.tune_child)) {
         fs::create_directories(log.parent_path());
         std::ofstream output(log,std::ios::binary|std::ios::app);
         if(!output)throw std::runtime_error("cannot open Stage2 log: "+log.string());
@@ -271,10 +273,15 @@ void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &
     const bool tagged=milestone||result||detail||error||text.find("WARNING")!=text.npos;
     // Release the log between pumps so task milestones and both children can append.
     if(!o.log.empty()){
-        if(!output.is_open())output.open(o.log,std::ios::binary|std::ios::app);
-        // Structured benchmark records keep their existing framing.
-        if(tagged)output<<curve_label;
-        output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");
+        const std::string record=(tagged?curve_label+text:text)+'\n';
+        if(o.log_max_kb && !o.tune_child) {
+            ecm_append_worker_log(o.log,o.worker,o.log_max_kb,record);
+        } else {
+            if(!output.is_open())output.open(o.log,std::ios::binary|std::ios::app);
+            // Tune trial logs are also inputs to the measurement parser.
+            output<<(o.tune_child?record:ecm_format_worker_log_lines(record,o.worker));
+            output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");
+        }
     }
     if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
     const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);

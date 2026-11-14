@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -46,7 +49,7 @@ def main():
         assert source not in profile.read_text(encoding='utf-8').lower()
     for result in sorted(evidence.glob('case_*_*.jsonl')):
         r = json.loads(result.read_text(encoding='utf-8'))
-        log = result.with_suffix('.log').read_text(encoding='utf-8')
+        log = read_stage2_log(result.with_suffix('.log'))
         wall = next(x for x in log.splitlines() if x.startswith('stage2_full_wall:'))
         measured = float(wall.split(' total=')[1].split()[0])
         assert abs(r['total_seconds']-measured) < 0.000001

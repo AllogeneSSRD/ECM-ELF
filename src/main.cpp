@@ -45,6 +45,9 @@ using ecm_stage1_app::stage1_task_error;
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/gpu_backend.h" /* GPU backend seam (OpenCL or CUDA glue) */
 #include "ecm/stage1/execution.h"
+#include "ecm/stage1/cpu_runtime.h"
+#include "ecm/stage1/sigma.h"
+#include "ecm/stage2/geometry.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
 #include "io/worktodo.h"
@@ -99,7 +102,8 @@ static const std::string& stage1_build_identity() {
 // Selection is application composition; task invokes the selected entry directly.
 static ecm_stage1::TaskDependencies stage1_tasks(const Stage1Options& options) {
     return {ecm_stage1::select_stage1_entry(options.execution.selection), stage1_build_identity,
-            edwards_get_naf_w, ecm_stage1::defer_gpu_checkpoint_validation};
+            edwards_get_naf_w, ecm_stage1::defer_gpu_checkpoint_validation,
+            ecm_cpu_stage1::freeze_cpu_implementation_policy};
 }
 
 // Rebuild the original N expression for the save-file N= field.
@@ -256,6 +260,43 @@ struct QueueItem : WorktodoStage1Task {
 // MarkError advances only the original ticket; Error preserves it and stops.
 enum class QueueReadStatus { Ready, Empty, Error, MarkError };
 
+static int handoff_param(const Selection& selection) {
+    if (selection.curve == CurveModel::Edwards)
+        return -1;
+    return selection.target == ExecutionTarget::Cpu ? 0 : selection.gpu_param;
+}
+
+static const char* prime95_unsupported(const NormalizedStage1Task& task) {
+    const int param = handoff_param(task.options.execution.selection);
+    if (param != 0 && param != 3)
+        return "Prime95 supports Montgomery PARAM0/3 saves";
+    const auto& identity = task.options.identity;
+    if (identity.sigma_fixed &&
+        !sigma_batch_fits(identity.fixed_sigma64, task.curves, 1, INT64_MAX))
+        return "Prime95 requires sigma in 1..2^63-1";
+    return nullptr;
+}
+
+static const char* local_stage2_unsupported(const QueueItem& item) {
+    const auto& task = item.input;
+    const int param = handoff_param(task.options.execution.selection);
+    if (param != -1 && param != 0)
+        return "ECM-ELF Stage2 supports Edwards and Montgomery PARAM0 saves";
+    if (task.b1 < 2 || mpz_cmp_ui(task.modulus, 3) <= 0 || !mpz_odd_p(task.modulus) ||
+        mpz_sizeinbase(task.modulus, 2) > ecm_stage2::max_input_bits)
+        return "modulus or B1 is outside the ECM-ELF Stage2 input range";
+    const auto& identity = task.options.identity;
+    if (param == 0 && identity.sigma_fixed && identity.fixed_sigma64 < 6)
+        return "ECM-ELF Stage2 requires Montgomery PARAM0 sigma >= 6";
+    EcmStage2Task line;
+    std::string error;
+    if (!ecm_parse_stage2_line(item.stage2_line, line, error))
+        throw std::runtime_error("invalid normalized ECMSTAGE2 assignment: " + error);
+    if (line.n > ecm_stage2::max_input_bits)
+        return "assignment exponent is outside the ECM-ELF Stage2 input range";
+    return nullptr;
+}
+
 static bool finish_record(const QueuePaths& paths) {
     const auto receipt = paths.worktodo + ".stage1_completed_worker" + std::to_string(paths.worker);
     if (!std::filesystem::exists(receipt))
@@ -287,10 +328,10 @@ static void report_p95_pending(const P95TransferConfig& cfg, int worker, const s
         count = std::to_string(ecm_sync::pending_p95_count(cfg));
     } catch (const std::exception&) {
     }
+    const auto path = cfg.worktodo_path.empty() ? cfg.pending_path + ".handoff"
+                                               : p95_transfer_add_path(cfg.worktodo_path);
     ecm_ts_fprintf(stderr, "p95_add: pending worker=%d lines=%s file=\"%s\" error=\"%s\"\n", worker,
-                   count.c_str(),
-                   p95_transfer_quote(p95_transfer_add_path(cfg.worktodo_path)).c_str(),
-                   p95_transfer_quote(error).c_str());
+                   count.c_str(), p95_transfer_quote(path).c_str(), p95_transfer_quote(error).c_str());
 }
 
 static bool run_one(const QueuePaths& paths, const QueueItem& item, int* processed) {
@@ -502,9 +543,14 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     const int worker = input.worker_index;
     const auto& exe_dir = input_paths.exe;
     auto& cfg = settings.config;
+    const bool shared_output = cfg.config_version >= 3;
+    const auto& ini_dir = input_paths.config_directory;
+    const std::string worktodo_path = resolve_rel_local(ini_dir, cfg.worktodo);
+    const std::string finished_path = shared_output ? resolve_rel_local(ini_dir, cfg.shared_finished_file)
+                                                   : resolve_rel_local(exe_dir, cfg.finished);
     // Several workers appending to one screen.log interleave their lines, so workers
     // 2..N get their own default log unless the ini set log_file explicitly.
-    if (worker > 1 && !cfg.log_file_explicit &&
+    if (!shared_output && worker > 1 && !cfg.log_file_explicit &&
         cfg.log_file == ecm_config::defaults::stage1_log_file) {
         cfg.log_file = ecm_config::worker_file(ecm_config::defaults::stage1_log_file, worker);
         ecm_ts_fprintf(stdout,
@@ -522,18 +568,36 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     ecm_log_set_progress_log_seconds(cfg.progress_log_seconds);
     ecm_stage1_gpu_progress::set_average_seconds(cfg.progress_average_seconds);
 
-    // Open the mirror log (screen.log by default).
+    const auto& log_name = shared_output ? cfg.shared_log_file : cfg.log_file;
+    const auto logpath = resolve_rel_local(shared_output ? ini_dir : exe_dir, log_name);
+    if (shared_output) {
+        try {
+            const auto same = ecm_io::same_file_resource;
+            const auto& output = settings.options.persistence;
+            const std::string private_paths[]{ini, worktodo_path,
+                worktodo_path + ".stage2_pending_worker" + std::to_string(worker)};
+            for (const auto& path : private_paths)
+                if (same(logpath, path) || same(finished_path, path))
+                    throw std::runtime_error("shared log or finished file conflicts with a configuration or queue path");
+            if (finished_path.empty() || same(logpath, finished_path) ||
+                same(logpath, output.results_file) || same(logpath, output.submission_file) ||
+                same(finished_path, output.results_file) || same(finished_path, output.submission_file) ||
+                same(logpath, settings.options.execution.ntt.tune_file) ||
+                same(finished_path, settings.options.execution.ntt.tune_file))
+                throw std::runtime_error("shared log, finished file and result paths must be distinct");
+        } catch (const std::exception& e) {
+            ecm_ts_fprintf(stderr, "FATAL: %s\n", e.what());
+            return 1;
+        }
+    }
     EcmLogMirror log;
-    if (!cfg.log_file.empty()) {
-        const std::string logpath = resolve_rel_local(exe_dir, cfg.log_file);
-        if (!log.open(logpath)) {
+    if (!log_name.empty()) {
+        if (!log.open(logpath, worker, shared_output ? cfg.log_file_max_kb : 0)) {
             ecm_ts_fprintf(stderr, "FATAL: cannot open log file %s\n", logpath.c_str());
             return 1;
         }
     }
 
-    const std::string ini_dir = std::filesystem::path(ini).parent_path().string();
-    const std::string worktodo_path = resolve_rel_local(ini_dir, cfg.worktodo);
     ecm_queue::OwnerLease owner;
     try {
         owner.acquire(worktodo_path, worker);
@@ -541,80 +605,97 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         ecm_ts_fprintf(stderr, "FATAL: %s\n", e.what());
         return 1;
     }
-    const std::string finished_path = resolve_rel_local(exe_dir, cfg.finished);
     const std::string sync1 = resolve_rel_local(exe_dir, cfg.save_sync_dir_1);
     const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
 
     const std::string stage2_pending =
         worktodo_path + ".stage2_pending_worker" + std::to_string(worker);
     const auto same_path = ecm_io::same_file_resource;
+    const bool legacy_handoff = cfg.handoff_mode.empty();
+    const auto& persistence = settings.options.persistence;
+    const std::string reserved_handoff_paths[]{
+        ini, logpath, finished_path, stage2_pending,
+        worktodo_path + ".stage1_completed_worker" + std::to_string(worker),
+        persistence.results_file, persistence.submission_file};
+    const auto conflicts_with_output = [&](const std::string& path) {
+        return std::any_of(std::begin(reserved_handoff_paths), std::end(reserved_handoff_paths),
+                           [&](const auto& reserved) { return same_path(path, reserved); });
+    };
+    const bool can_fallback = cfg.handoff_mode == "prime95" &&
+                              cfg.handoff_unsupported == "ecm-elf";
     const auto auto_worktodo = resolve_rel_local(
         ini_dir, cfg.auto_stage2_worktodo.empty() ? cfg.worktodo : cfg.auto_stage2_worktodo);
-    const bool auto_stage2_routed =
-        cfg.auto_stage2 && (!ecm_workers::trim(cfg.auto_stage2_workers).empty() ||
-                            !same_path(auto_worktodo, worktodo_path));
+    const auto auto_workers = ecm_workers::trim(cfg.auto_stage2_workers);
     Stage2TransferConfig stage2cfg;
-    if (auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer)) {
-        const int receiver = cfg.auto_stage2                  ? worker
-                             : cfg.edwards_stage2_worker == 0 ? worker
-                                                              : cfg.edwards_stage2_worker;
-        if (receiver < 1 || receiver > 1000000) {
-            ecm_ts_fprintf(stderr, "FATAL: Stage2 receiver worker must be 1..1000000\n");
-            return 1;
-        }
+    const auto local_route_is_external = [&] {
+        return !auto_workers.empty() || !same_path(auto_worktodo, worktodo_path);
+    };
+    const auto stage2_receiver_config = [&](bool all_curves) -> const Stage2TransferConfig* {
+        if (!stage2cfg.worktodo.empty())
+            return &stage2cfg;
+        const int receiver = all_curves || cfg.edwards_stage2_worker == 0
+                                 ? worker : cfg.edwards_stage2_worker;
+        if (receiver < 1 || receiver > 1000000)
+            throw std::runtime_error("Stage2 receiver worker must be 1..1000000");
         const auto& lines = parsed_config.lines;
-        const auto receiver_cfg =
-            ecm_config::read_stage2(ecm_config::selected_entries(lines, receiver, {"worktodo", "stage2_finished"}, ini));
-        stage2cfg.worktodo =
-            cfg.auto_stage2 ? auto_worktodo : resolve_rel_local(ini_dir, receiver_cfg.worktodo);
-        stage2cfg.finished = resolve_rel_local(ini_dir, receiver_cfg.finished);
+        const auto selected_stage2 = [&](int who) {
+            return ecm_config::read_stage2(ecm_config::selected_entries(
+                lines, who, {"worktodo", "stage2_finished"}, ini));
+        };
+        stage2cfg.worktodo = all_curves
+                                 ? auto_worktodo
+                                 : resolve_rel_local(ini_dir, selected_stage2(receiver).worktodo);
+        stage2cfg.finished =
+            shared_output ? finished_path : resolve_rel_local(ini_dir, selected_stage2(receiver).finished);
         stage2cfg.pending = stage2_pending;
         stage2cfg.worker = receiver;
-        if (cfg.auto_stage2) {
-            const auto spec = ecm_workers::trim(cfg.auto_stage2_workers);
-            stage2cfg.auto_workers = ecm_stage1::lower_ascii(spec) == "auto";
+        if (all_curves) {
+            stage2cfg.auto_workers = ecm_stage1::lower_ascii(auto_workers) == "auto";
             int ignored = 0;
-            if (!stage2cfg.auto_workers && !spec.empty() &&
-                (!ecm_workers::parse_list(spec, 1000000, stage2cfg.workers, ignored) || ignored ||
-                 stage2cfg.workers.empty())) {
-                ecm_ts_fprintf(stderr, "FATAL: auto_stage2_workers must be a worker list/range in "
-                                       "1..1000000 or auto\n");
-                return 1;
-            }
+            if (!stage2cfg.auto_workers && !auto_workers.empty() &&
+                (!ecm_workers::parse_list(auto_workers, 1000000, stage2cfg.workers, ignored) ||
+                 ignored || stage2cfg.workers.empty()))
+                throw std::runtime_error("handoff.workers must be a worker list/range in "
+                                         "1..1000000 or auto");
             stage2cfg.configured_workers =
                 ecm_config::read_gui(ecm_config::section_entries(lines, "gui")).NumWorkers;
-            const auto global = ecm_config::read_stage2(ecm_config::selected_entries(lines, 0, {"worktodo", "stage2_finished"}, ini));
-            stage2cfg.finished = resolve_rel_local(ini_dir, global.finished);
-            for (const auto& entry : lines)
-                if (entry.worker_scope > 0 &&
-                    !stage2cfg.finished_by_worker.count(entry.worker_scope)) {
-                    const auto selected = ecm_config::read_stage2(
-                        ecm_config::selected_entries(lines, entry.worker_scope, {"worktodo", "stage2_finished"}, ini));
-                    stage2cfg.finished_by_worker[entry.worker_scope] =
-                        resolve_rel_local(ini_dir, selected.finished);
-                }
+            if (!shared_output) {
+                stage2cfg.finished = resolve_rel_local(ini_dir, selected_stage2(0).finished);
+                for (const auto& entry : lines)
+                    if (entry.worker_scope > 0 &&
+                        !stage2cfg.finished_by_worker.count(entry.worker_scope))
+                        stage2cfg.finished_by_worker[entry.worker_scope] = resolve_rel_local(
+                            ini_dir, selected_stage2(entry.worker_scope).finished);
+            }
         }
         const auto valid_finished = [&](const std::string& finished) {
             return !finished.empty() && !same_path(stage2cfg.worktodo, finished) &&
-                   !same_path(finished, worktodo_path) && !same_path(finished, finished_path) &&
+                   !same_path(finished, worktodo_path) &&
+                   (shared_output || !same_path(finished, finished_path)) &&
                    !same_path(finished, stage2_pending);
         };
         bool valid = !stage2cfg.worktodo.empty() && !same_path(stage2cfg.worktodo, finished_path) &&
                      !same_path(stage2cfg.worktodo, stage2_pending) &&
+                     (!shared_output || !conflicts_with_output(stage2cfg.worktodo)) &&
                      valid_finished(stage2cfg.finished);
         for (const auto& item : stage2cfg.finished_by_worker)
             valid = valid && valid_finished(item.second);
-        if (!valid) {
-            ecm_ts_fprintf(
-                stderr,
-                "FATAL: Stage2 transfer queue/finished paths conflict with Stage1 output\n");
-            return 1;
-        }
+        if (!valid)
+            throw std::runtime_error("Stage2 transfer queue/finished paths conflict with Stage1 output");
         ecm_ts_fprintf(
             stdout, "stage2_transfer: ready source_worker=%d receiver=%s file=\"%s\"\n", worker,
-            cfg.auto_stage2 && !cfg.auto_stage2_workers.empty() ? cfg.auto_stage2_workers.c_str()
-                                                                : std::to_string(receiver).c_str(),
+            all_curves && !auto_workers.empty() ? auto_workers.c_str()
+                                                : std::to_string(receiver).c_str(),
             stage2cfg.worktodo.c_str());
+        return &stage2cfg;
+    };
+    const bool legacy_auto_routed = legacy_handoff && cfg.auto_stage2 && local_route_is_external();
+    try {
+        if (legacy_auto_routed || (legacy_handoff && !cfg.auto_stage2 && cfg.edwards_stage2_transfer))
+            stage2_receiver_config(cfg.auto_stage2);
+    } catch (const std::exception& e) {
+        ecm_ts_fprintf(stderr, "FATAL: %s\n", e.what());
+        return 1;
     }
     {
         size_t remaining = 0;
@@ -628,26 +709,18 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     // the TOML curve, and unsupported constructions must not touch transfer paths.
     P95TransferConfig p95cfg;
     bool p95_initialized = false, p95_ignore_reported = false;
-    auto p95_for_task = [&](const Stage1Options& actual) -> const P95TransferConfig* {
-        const bool ignore =
-            actual.execution.selection.curve == ecm_stage1::CurveModel::Edwards ||
-            (actual.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
-             actual.execution.selection.gpu_param == 2);
-        if (ignore) {
-            if (!cfg.p95_worktodo_path.empty() && !p95_ignore_reported) {
-                ecm_ts_fprintf(stdout, "Prime95 transfer path ignored for this curve construction; "
-                                       "Stage1 saves remain local\n");
-                p95_ignore_reported = true;
-            }
-            return nullptr;
-        }
+    auto prime95_receiver_config = [&]() -> const P95TransferConfig* {
         if (p95_initialized)
             return &p95cfg;
+        if (!legacy_handoff && cfg.p95_worktodo_path.empty())
+            throw std::runtime_error(ecm_config::config_diagnostic(
+                ini, 0, worker, "prime95.worktodo_file", "\"\"", "missing Prime95 queue",
+                "configure prime95.worktodo_file for Prime95 handoff"));
         if (!cfg.p95_worktodo_path.empty() && cfg.p95_sync_dir.empty())
             throw std::runtime_error(ecm_config::config_diagnostic(
-                ini, 0, worker, "p95_sync_dir", "\"\"", "missing Prime95 save destination",
+                ini, 0, worker, "prime95.save_dir (v1: p95_sync_dir)", "\"\"", "missing Prime95 save destination",
                 "save destination directory for supported Prime95 handoff; configure "
-                "p95_sync_dir (backup paths are independent)"));
+                "prime95.save_dir (v1: p95_sync_dir)"));
         p95_initialized = true;
         p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
         p95cfg.sync_dir = resolve_rel_local(exe_dir, cfg.p95_sync_dir);
@@ -659,6 +732,11 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         if (!p95cfg.worktodo_path.empty()) {
             const std::string add_path = p95_transfer_add_path(p95cfg.worktodo_path);
             const std::string p95_dir = p95_dir_of(p95cfg.worktodo_path);
+            if (!legacy_handoff &&
+                (conflicts_with_output(add_path) || conflicts_with_output(p95cfg.worktodo_path) ||
+                 same_path(add_path, p95cfg.worktodo_path) ||
+                 same_path(add_path, worktodo_path) || same_path(p95cfg.worktodo_path, worktodo_path)))
+                throw std::runtime_error("Prime95 worktodo/add paths conflict with Stage1 input/output");
             /* Prime95's own logs tell us which assignment keys PrimeNet has rejected: a line
                delivered with such a key is DELETED by Prime95 (commonc.c:6567), so those keys
                must not be attached any more and the work has to be re-delivered without them. */
@@ -702,10 +780,31 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             }
         }
         std::string retry_error;
-        if (!ecm_sync::flush_p95(p95cfg, retry_error))
+        if (!p95cfg.worktodo_path.empty() && !ecm_sync::flush_p95(p95cfg, retry_error))
             report_p95_pending(p95cfg, 0, retry_error);
         return &p95cfg;
     };
+    const auto legacy_prime95_for = [&](const Stage1Options& actual) -> const P95TransferConfig* {
+        const int param = handoff_param(actual.execution.selection);
+        if (param == 0 || param == 3)
+            return prime95_receiver_config();
+        if (!cfg.p95_worktodo_path.empty() && !p95_ignore_reported) {
+            ecm_ts_fprintf(stdout, "Prime95 transfer path ignored for this curve construction; "
+                                   "Stage1 saves remain local\n");
+            p95_ignore_reported = true;
+        }
+        return nullptr;
+    };
+
+    // Modern P95 intents freeze their destination, so old work can be recovered
+    // before selecting any route under the current v3 settings.
+    if (!legacy_handoff) {
+        P95TransferConfig recovery;
+        recovery.pending_path = p95_transfer_pending_path(exe_dir);
+        std::string error;
+        if (!ecm_sync::flush_p95(recovery, error))
+            report_p95_pending(recovery, worker, error);
+    }
 
     auto opt = settings.options;
     opt.persistence.retain_completed_checkpoint = true;
@@ -713,19 +812,19 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
         ecm_ts_fprintf(stdout,
-                       "note: p95_dir=%s is informational; configure p95_worktodo_path and "
-                       "p95_sync_dir for Prime95 handoff\n",
+                       "note: legacy Prime95 directory %s is informational; configure "
+                       "prime95.worktodo_file and prime95.save_dir for Prime95 handoff\n",
                        cfg.p95_dir.c_str());
     }
 
     ecm_ts_fprintf(stdout, "%s %s (Stage1)\n", ecm_program::name, ecm_program::version);
     ecm_ts_fprintf(stdout, "===== ECM queue manager =====\n");
     ecm_ts_fprintf(stdout, "config : %s\n", ini.c_str());
-    ecm_ts_fprintf(stdout, "worker : %d (TOML [workers.%d.*]; worktodo [Worker #%d])\n", worker,
-                   worker, worker);
+    ecm_ts_fprintf(stdout, "worker : %d (TOML v%d; worktodo [Worker #%d])\n",
+                   worker, parsed_config.config_version, worker);
     ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
-    ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
+    ecm_ts_fprintf(stdout, "log_file : %s\n", logpath.c_str());
     ecm_ts_fprintf(stdout, "saves : %s\n", opt.persistence.tmp_dir.c_str());
     ecm_ts_fprintf(stdout, "curve model : %s\n",
                    ecm_stage1::curve_model_name(opt.execution.selection.curve));
@@ -809,8 +908,11 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             return QueueReadStatus::Error;
         }
         if (read == WorktodoReadResult::Empty) {
-            if (!saw_task)
-                p95_for_task(opt); // Preserve idle-start recovery for an eligible TOML.
+            if (!saw_task && legacy_handoff)
+                legacy_prime95_for(opt);
+            if (!saw_task && !legacy_handoff && cfg.handoff_mode == "prime95" &&
+                !cfg.p95_worktodo_path.empty() && !cfg.p95_sync_dir.empty())
+                prime95_receiver_config(); // Legacy pending and rejected-AID recovery.
             return QueueReadStatus::Empty;
         }
         saw_task = true;
@@ -829,8 +931,52 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
             input_error(error);
             return QueueReadStatus::MarkError;
         }
-        // Resolve optional delivery only after the actual typed construction.
-        item.p95 = p95_for_task(item.input.options);
+        if (shared_output && (same_path(logpath, item.input.save_file) ||
+                              same_path(finished_path, item.input.save_file))) {
+            input_error("Stage1 save conflicts with the shared log or finished file");
+            return QueueReadStatus::Error;
+        }
+        // Resolve delivery only after the actual typed construction.
+        if (legacy_handoff) {
+            item.p95 = legacy_prime95_for(item.input.options);
+            if (legacy_auto_routed ||
+                (!cfg.auto_stage2 && cfg.edwards_stage2_transfer &&
+                 item.input.options.execution.selection.curve == CurveModel::Edwards))
+                item.stage2 = &stage2cfg;
+            else if (cfg.auto_stage2)
+                item.auto_stage2_line = item.stage2_line;
+        } else {
+            bool use_local = cfg.handoff_mode == "ecm-elf";
+            if (cfg.handoff_mode == "prime95") {
+                if (const char* reason = prime95_unsupported(item.input)) {
+                    use_local = can_fallback;
+                    ecm_ts_fprintf(stdout, "Stage2 handoff: %s; %s\n", reason,
+                                   use_local ? "checking ECM-ELF Stage2" : "retaining Stage1 save");
+                } else {
+                    item.p95 = prime95_receiver_config();
+                }
+            }
+            if (use_local) {
+                if (const char* reason = local_stage2_unsupported(item))
+                    ecm_ts_fprintf(stdout, "Stage2 handoff: %s; retaining Stage1 save\n", reason);
+                else if (local_route_is_external())
+                    item.stage2 = stage2_receiver_config(true);
+                else
+                    item.auto_stage2_line = item.stage2_line;
+            }
+            if (item.stage2 && same_path(item.stage2->worktodo, item.input.save_file))
+                throw std::runtime_error("Stage2 receiver queue conflicts with the Stage1 save");
+            if (item.p95) {
+                const auto target = p95_join_path(item.p95->sync_dir,
+                    std::filesystem::path(item.input.save_file).filename().string());
+                const auto add = p95_transfer_add_path(item.p95->worktodo_path);
+                if (conflicts_with_output(target) || same_path(target, worktodo_path) ||
+                    same_path(target, item.p95->worktodo_path) ||
+                    same_path(target, add) || same_path(item.input.save_file, add) ||
+                    same_path(item.input.save_file, item.p95->worktodo_path))
+                    throw std::runtime_error("Prime95 save destination conflicts with a queue or Stage1 output");
+            }
+        }
         item.marker = current_epoch_seconds();
         if (item.save_assignment) {
             const auto& legacy = item.input.options.persistence.legacy_save_source;
@@ -855,13 +1001,6 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 throw std::runtime_error(error);
             item.published_line = repaired;
         }
-        item.stage2 = auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer &&
-                                             item.input.options.execution.selection.curve ==
-                                                 ecm_stage1::CurveModel::Edwards)
-                          ? &stage2cfg
-                          : nullptr;
-        if (cfg.auto_stage2 && !auto_stage2_routed)
-            item.auto_stage2_line = item.stage2_line;
         return QueueReadStatus::Ready;
     };
     int processed = 0;
@@ -990,15 +1129,27 @@ int main(int argc, char** argv) {
     ecm_stage1_install_stop_handler();
 
     EcmLogMirror direct_log;
-    if (!queue &&
-        (input.tune_ntt || settings.options.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) &&
-        !settings.config.log_file.empty() &&
-        !direct_log.open(resolve_rel_local(exe, settings.config.log_file))) {
-        ecm_ts_fprintf(stderr, "FATAL: cannot open Stage1 log file %s\n",
-                       settings.config.log_file.c_str());
-        return 1;
-    }
+    const bool shared_output = settings.config.config_version >= 3;
+    const auto& log_name = shared_output ? settings.config.shared_log_file : settings.config.log_file;
+    const auto log_path = resolve_rel_local(shared_output ? paths.config_directory : exe, log_name);
+    const auto open_direct_log = [&](const std::vector<std::string>& protected_paths) {
+        if (log_path.empty()) return true;
+        try {
+            if (shared_output && (ecm_io::same_file_resource(log_path, ini) ||
+                std::any_of(protected_paths.begin(), protected_paths.end(), [&](const auto& path) {
+                    return ecm_io::same_file_resource(log_path, path);
+                }))) throw std::runtime_error("shared log conflicts with a Stage1 input or output path");
+            if (direct_log.open(log_path, input.worker_index, shared_output ? settings.config.log_file_max_kb : 0))
+                return true;
+        } catch (const std::exception& error) {
+            ecm_ts_fprintf(stderr, "FATAL: %s\n", error.what());
+            return false;
+        }
+        ecm_ts_fprintf(stderr, "FATAL: cannot open Stage1 log file %s\n", log_path.c_str());
+        return false;
+    };
     if (input.tune_ntt) {
+        if (!open_direct_log({settings.options.execution.ntt.tune_file})) return 1;
 #if ECM_HAS_CUDA_STAGE1
         return ecm_mersenne_ntt::tune_command(settings.options.execution.device_index,
             settings.options.execution.ntt, input.gpu_info_bits, input.tune_exhaustive);
@@ -1050,10 +1201,14 @@ int main(int argc, char** argv) {
         return 1;
     }
     const auto& opt = task.options;
+    if ((shared_output || opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) &&
+        !open_direct_log({task.save_file, opt.persistence.results_file, opt.persistence.submission_file,
+                          opt.execution.ntt.tune_file}))
+        return 1;
     const auto B1 = task.b1;
     if (!input.p95_dir_ignored.empty())
         std::cout
-            << "Prime95 transfer path ignored: --p95-dir is obsolete; use TOML p95_worktodo_path."
+            << "Prime95 transfer path ignored: --p95-dir is obsolete; use TOML prime95.worktodo_file."
             << std::endl;
     auto result = run_stage1_task(task.request(), stage1_tasks(opt));
     const int rc1 = result.task_return();

@@ -234,6 +234,16 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
     ecm_stage1_checkpoint::Context session;
     auto phase = FailureSource::Preparation;
     try {
+        ExecutionOptions execution(opt);
+        auto& selection = execution.execution.selection;
+        if (selection.target == ExecutionTarget::Cpu && !selection.cpu_implementation_rules.empty()) {
+            if (!deps.resolve_cpu_policy)
+                throw std::runtime_error("Stage1 CPU policy resolver is unavailable");
+            if (!deps.resolve_cpu_policy(request, selection)) {
+                out->failure_source = phase;
+                return result;
+            }
+        }
         const auto base = stage1_submission(opt, N, uint64_t(B1));
         (void)ecm_results::submission_json(base, N);
         const auto same = ecm_io::same_file_resource;
@@ -270,7 +280,6 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             std::filesystem::create_directories(opt.persistence.tmp_dir);
         session.set_backup_limit(opt.persistence.ckpt_backups);
         session.set_path(path);
-        ExecutionOptions execution(opt);
         {
             auto identity = ecm_edwards::hex(N) + "|" +
                             (base.edwards ? "ed" : "mont" + std::to_string(base.param)) + "|" +
@@ -281,7 +290,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                 identity += "|" +
                             std::to_string(opt.execution.naf_w ? opt.execution.naf_w
                                                                : deps.default_naf_window()) +
-                            "|" + std::to_string(int(opt.execution.selection.cpu_implementation));
+                            "|" + std::to_string(int(selection.cpu_implementation));
                 if (!base.edwards && opt.execution.selection.cpu_montgomery_chain ==
                                          CpuMontgomeryChain::Prac)
                     identity += "|prac-v1";

@@ -314,8 +314,9 @@ void WorkerProc::drain(DrainedOutput &out) {
             stage2_received=true;
             if(pl.stage2.kind==Stage2Event::Kind::Plan)out.stage2_task_started=true;
             out.last_progress=stage2_status_.progress();++out.progress_lines;
-            if(pl.stage2.kind==Stage2Event::Kind::CurveDone&&stage2_status_.last_curve_seconds>0)
-                out.stage2_speed_samples.emplace_back(stage2_status_.last_curve_seconds,out.last_progress.s_per_curve);
+            if(pl.stage2.kind==Stage2Event::Kind::CurveDone)
+                out.stage2_speed_samples.emplace_back(stage2_status_.last_queue_s_per_curve,
+                    stage2_status_.last_curve_seconds>0?out.last_progress.s_per_curve:0);
             for(const auto &factor:pl.stage2.factors) {
                 out.hits.push_back(stage2_status_.curve_for(pl.stage2.curve).factor_hit(factor));
             }

@@ -57,6 +57,10 @@ int main() {
         split_timestamp("[2026-09-28 18:42:41] worker : 1", ts, plain);
         check(ts == "2026-09-28 18:42:41", "timestamp extracted", ts);
         check(plain == "worker : 1", "payload extracted", plain);
+        split_timestamp("[Worker #3] " TS "worker : 3", ts, plain);
+        check(ts == "2026-09-28 18:42:41" && plain == "worker : 3", "worker log prefix parsed");
+        split_timestamp("[Worker #x] " TS "payload", ts, plain);
+        check(ts.empty() && plain == "[Worker #x] " TS "payload", "invalid worker prefix left alone");
         split_timestamp("no timestamp here", ts, plain);
         check(ts.empty() && plain == "no timestamp here", "line without prefix");
         split_timestamp("[not a date] x", ts, plain);

@@ -6,6 +6,9 @@ from pathlib import Path
 import re
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -95,7 +98,7 @@ def main():
     assert result['requested_carrier_exponent'] == 0
     assert result['carrier_exponent'] == result['tune_plan']['carrier_exponent'] == best['carrier_exponent']
     assert result['hits'] == result['bad_factors'] == 0
-    text = log.read_text(encoding='utf-8')
+    text = read_stage2_log(log)
     assert re.search(r'real_shape: D='+str(best['d'])+r'\b',text)
     assert re.search(r'stage2_modulus: target_bits='+str(best['target_bits'])+
                      r' carrier_bits='+str(best['arithmetic_bits'])+

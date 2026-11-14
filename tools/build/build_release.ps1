@@ -23,7 +23,7 @@ if(-not $LogWorker){
 . (Join-Path $PSScriptRoot 'internal/gmp_dependency.ps1')
 . (Join-Path $PSScriptRoot 'internal/stage1_release_sources.ps1')
 . (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
-foreach($generator in @('generate_ecm_config.py','generate_gui_v2_state.py')){
+foreach($generator in @('generate_ecm_config.py','generate_gui_v2_state.py','generate_gui_v2_localization.py')){
     $generatorArgs=@()
     if($SkipBuild){$generatorArgs=@('--check')}
     $action=if($SkipBuild){'check'}else{'synchronize'}

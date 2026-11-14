@@ -4,7 +4,7 @@
 
 ECM-ELF 是椭圆曲线因子分解（ECM）工具集：CUDA/CGBN 与 OpenCL GPU Stage1、GMP 与可选 AVX-512 IFMA CPU Stage1、独立 CUDA 多项式 Stage2、libecm CPU Edwards Stage2，以及 Windows GUI、任务队列和因子数据工具。原仓库名 OpenCL-ECM 只覆盖了其中一个后端；程序名仍为 `ecm.exe`、`ecm_cuda.exe` 等。
 
-本页保留各入口的实际用途、可运行命令、配置方法、存档关系、构建方式和工具索引。配置键的默认值、范围及双语说明以生成的 [TOML 参考](docs/ECM_TOML_REFERENCE.md) 为准；特定构建是否包含某个内核档位或实验算法，要检查该程序的构建身份与帮助输出。
+本页保留各入口的实际用途、可运行命令、配置方法、存档关系、构建方式和工具索引。配置键的默认值、范围和说明见生成的 TOML 参考（[中文](docs/ECM_TOML_REFERENCE.zh-CN.md) · [English](docs/ECM_TOML_REFERENCE.en.md)）；特定构建是否包含某个内核档位或实验算法，要检查该程序的构建身份与帮助输出。
 
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
@@ -150,7 +150,7 @@ ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
 
 ECM tune 默认使用所选 worker 的 Stage2 队列；队列不存在时改测通用位宽网格，也可用 `--tune-save FILE --tune-b2 B2` 指定单个 save。调优有时间预算，生成的档案可由 `--tune-profile FILE` 或 TOML 的 `stage2_tune_profile` 加载。显式 B2 无需先调优；自动选择 B2 还需要合格的 Stage1 成本和 Stage2 profile。Stage2 队列、直接读档和 Auto B2 的限制见[独立 CUDA Stage2](#stage2)、[Stage2 使用](docs/usage/STAGE2.md)及 [Auto B2](docs/architecture/AUTO_B2.md)。
 
-常用命令行参数如下；完整参数和准确默认值请运行相应程序的 `--help` 并查 [TOML 参考](docs/ECM_TOML_REFERENCE.md)。
+常用命令行参数如下；完整参数和准确默认值请运行相应程序的 `--help` 并查 [TOML 参考](docs/ECM_TOML_REFERENCE.zh-CN.md)。
 
 | 选项 | 用途 |
 | --- | --- |
@@ -194,7 +194,7 @@ tmp_dir = "saves"
 finished = "worktodo.finished.txt"
 ```
 
-将 `curve` 改为 `ed` 就会选择 Edwards 路径；`naf_w` 只影响该路径。需要在同一数学目标上比较归约方式时，可将 `reduction` 分别设为 `mersenne-fold` 和 `montgomery`，前者只适用于完整的 `2^k−1`。要给 Prime95 的 Suyama Stage2 交接，应明确使用与接收端相符的参数化、标量构造和可访问的 save 路径。配置范围与各键是否适用于 GPU/CPU 见 [TOML 参考](docs/ECM_TOML_REFERENCE.md)。
+将 `curve` 改为 `ed` 就会选择 Edwards 路径；`naf_w` 只影响该路径。需要在同一数学目标上比较归约方式时，可将 `reduction` 分别设为 `mersenne-fold` 和 `montgomery`，前者只适用于完整的 `2^k−1`。要给 Prime95 的 Suyama Stage2 交接，应明确使用与接收端相符的参数化、标量构造和可访问的 save 路径。配置范围与各键是否适用于 GPU/CPU 见 [TOML 参考](docs/ECM_TOML_REFERENCE.zh-CN.md)。
 
 常用 CPU 配方：
 

@@ -3,6 +3,13 @@
 namespace ecmgui_v2 {
 struct BusinessOption { const char *table,*key,*domain,*description_key,*type; bool has_min,has_max; double minimum,maximum; };
 inline constexpr BusinessOption business_options[]={
+    {"shared","shared_log_file","<path>","option_shared_shared_log_file","string",false,false,0,0},
+    {"shared","shared_finished_file","<path>","option_shared_shared_finished_file","string",false,false,0,0},
+    {"shared","log_file_max_KB","[1000..1000000]","option_shared_log_file_max_KB","u64",true,true,1000,1000000},
+    {"shared","shared_tune_file","<path>","option_shared_shared_tune_file","string",false,false,0,0},
+    {"stage1","param","[auto|e|m0|m2|m3]","option_stage1_param","string",false,false,0,0},
+    {"stage1","handoff_mode","[off|ecm-elf|prime95]","option_stage1_handoff_mode","string",false,false,0,0},
+    {"stage1","handoff_unsupported","[ecm-elf|keep-save]","option_stage1_handoff_unsupported","string",false,false,0,0},
     {"shared","worktodo","<path>","option_shared_worktodo","string",false,false,0,0},
     {"shared","b2_ratio","[0|1..1000000]","option_shared_b2_ratio","u64",true,true,0,1000000},
     {"stage1","auto_stage2","[0|1]","option_stage1_auto_stage2","int",true,true,0,1},
@@ -30,8 +37,9 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","curve","[mont|ed]","option_stage1_curve","string",false,false,0,0},
     {"stage1","stage1_backend","[auto|cuda|opencl]","option_stage1_stage1_backend","string",false,false,0,0},
     {"stage1","target","[cpu|gpu]","option_stage1_target","string",false,false,0,0},
-    {"stage1","impl","[auto|simd|scalar]","option_stage1_impl","string",false,false,0,0},
+    {"stage1","impl","[auto|simd|scalar|gwnum|slice list|empty]","option_stage1_impl","string",false,false,0,0},
     {"stage1","reduction","[auto|montgomery|mersenne-fold]","option_stage1_reduction","string",false,false,0,0},
+    {"stage1","cpu_mont_chain","[ladder|prac]","option_stage1_cpu_mont_chain","string",false,false,0,0},
     {"stage1","stage1_threads","<x:Z,0..2^32-1>","option_stage1_stage1_threads","u32",false,false,0,0},
     {"stage1","affinity","[none|auto|<n>,...|<a>-<b>]","option_stage1_affinity","string",false,false,0,0},
     {"stage1","save_name_pattern","<pattern>","option_stage1_save_name_pattern","string",false,false,0,0},

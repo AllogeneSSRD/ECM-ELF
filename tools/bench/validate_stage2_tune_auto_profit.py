@@ -7,6 +7,7 @@ is recorded separately and does not silently change the engine-cost contract.
 """
 import argparse,hashlib,importlib.util,json,math,os,re,shutil,statistics,subprocess,time,tomllib
 from pathlib import Path
+from stage2_log import read_stage2_log
 
 ROOT=Path(__file__).resolve().parents[2]
 TIME_ERROR_LIMIT=.08
@@ -157,7 +158,7 @@ def main():
                 else:
                     assert row['tune_plan']['D']==candidate['d']
                     assert row['tune_plan']['model']==candidate['prediction']['model']
-                text=log.read_text(encoding='utf-8')
+                text=read_stage2_log(log)
                 assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
                 assert re.search(r'real_batched_folddevice: requested=1 enabled=1 fallback=none\b',text)
                 assert re.search(r'scaled_frontier_device: requested=1 enabled=1\b',text)

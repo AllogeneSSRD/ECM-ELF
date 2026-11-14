@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
   "layout_version": 8,
+  "config_version": 3,
   "owners": {
     "stage1": "Stage1Values",
     "stage2": "Stage2Values",
@@ -10,7 +11,158 @@
   "options": [
     {
       "owner": "stage1",
+      "key": "shared_log_file",
+      "v3_only": true,
+      "v3_key": "log_file",
+      "shared_with": [
+        "stage2"
+      ],
+      "v3_global_only": true,
+      "template_level": "core",
+      "field": "shared_log_file",
+      "type": "string",
+      "default": "ecm.log",
+      "domain": "<path>",
+      "fx": "shared_log_file",
+      "parser": "strict",
+      "description": [
+        "Shared run log. Relative paths use the configuration directory. An empty string disables file logging.",
+        "共用运行日志。相对路径基于配置目录。空字符串关闭文件日志。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "shared_finished_file",
+      "v3_only": true,
+      "v3_key": "finished_file",
+      "shared_with": [
+        "stage2"
+      ],
+      "v3_global_only": true,
+      "template_level": "core",
+      "field": "shared_finished_file",
+      "type": "string",
+      "default": "worktodo.finished.txt",
+      "domain": "<path>",
+      "fx": "shared_finished_file",
+      "parser": "strict",
+      "description": [
+        "Shared completed-work file for both stages. Relative paths use the configuration directory.",
+        "两阶段共用的完成记录。相对路径基于配置目录。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "log_file_max_KB",
+      "v3_only": true,
+      "shared_with": [
+        "stage2"
+      ],
+      "v3_global_only": true,
+      "template_level": "core",
+      "field": "log_file_max_kb",
+      "type": "u64",
+      "default": 10000,
+      "domain": "[1000..1000000]",
+      "fx": "log_file_max_KB",
+      "parser": "strict",
+      "description": [
+        "Rotate the shared run log after its size exceeds this limit. 1 KB is 1000 bytes.",
+        "共享运行日志超过此上限后归档。1 KB 等于 1000 字节。"
+      ],
+      "minimum": 1000,
+      "maximum": 1000000
+    },
+    {
+      "owner": "stage1",
+      "key": "shared_tune_file",
+      "v3_only": true,
+      "v3_key": "tune_file",
+      "shared_with": [
+        "stage2"
+      ],
+      "template_level": "core",
+      "field": "shared_tune_file",
+      "type": "string",
+      "default": "tune.toml",
+      "domain": "<path>",
+      "fx": "shared_tune_file",
+      "parser": "strict",
+      "description": [
+        "CUDA Stage1 and Stage2 use this file together. Defaults to tune.toml beside ecm.toml. A worker can override the path for both stages. An explicit empty value disables automatic persistence for both stages.",
+        "CUDA Stage1 和 Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可以为两个阶段一并覆盖路径。显式留空时关闭两阶段的自动持久化。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "param",
+      "v3_only": true,
+      "template_level": "core",
+      "field": "param",
+      "type": "string",
+      "default": "auto",
+      "domain": "[auto|e|m0|m2|m3]",
+      "fx": "param",
+      "parser": "enum",
+      "description": [
+        "Stage1 curve construction. auto uses m0 on CPU and m3 on GPU. A task save prefix selects its own construction.",
+        "Stage1 曲线构造。auto 在 CPU 上选 m0，在 GPU 上选 m3。任务存档前缀可指定自身构造。"
+      ],
+      "values": [
+        "auto",
+        "e",
+        "m0",
+        "m2",
+        "m3"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "handoff_mode",
+      "v3_only": true,
+      "v3_key": "handoff.mode",
+      "template_level": "core",
+      "field": "handoff_mode",
+      "type": "string",
+      "default": "ecm-elf",
+      "domain": "[off|ecm-elf|prime95]",
+      "fx": "handoff_mode",
+      "parser": "enum",
+      "description": [
+        "Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Use off to keep the save without queuing Stage2, or prime95 to select Prime95.",
+        "Stage1 无因子完成且有可用保存点时，默认交给 ECM-ELF Stage2。设为 off 时只保留存档，设为 prime95 时选择 Prime95。"
+      ],
+      "values": [
+        "off",
+        "ecm-elf",
+        "prime95"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "handoff_unsupported",
+      "v3_only": true,
+      "v3_key": "handoff.unsupported",
+      "field": "handoff_unsupported",
+      "type": "string",
+      "default": "ecm-elf",
+      "domain": "[ecm-elf|keep-save]",
+      "fx": "handoff_unsupported",
+      "parser": "enum",
+      "description": [
+        "Fallback for saves unsupported by the Prime95 protocol.",
+        "Prime95 协议不支持该存档时使用的后备方式。"
+      ],
+      "values": [
+        "ecm-elf",
+        "keep-save"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "worktodo",
+      "v2_key": "worktodo_file",
+      "template_level": "core",
       "field": "worktodo",
       "type": "string",
       "shared_with": [
@@ -29,6 +181,8 @@
     {
       "owner": "stage1",
       "key": "b2_ratio",
+      "v3_table": "stage2",
+      "template_level": "core",
       "field": "b2_ratio",
       "type": "u64",
       "default": 0,
@@ -42,13 +196,17 @@
       ],
       "empty": "0",
       "description": [
-        "At Stage2 execution with this TOML, nonzero ratio replaces B2 with saved B1 multiplied by this integer, including direct save runs. Zero or omitting the key preserves normal B2 selection. Product overflow is rejected.",
-        "使用此 TOML 执行 Stage2 时，非零整数将 B2 设为存档 B1 与此值的乘积，直接读档也适用。0 或不填写此键沿用原有 B2 选择；乘积溢出会报错。"
+        "In GPU Stage2, a nonzero ratio sets B2 to the saved B1 times this value for queue and direct save runs. Zero leaves B2 selection to the other settings. Overflow is rejected.",
+        "GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的乘积。设为 0 时由其他设置选择 B2。乘积超出范围会报错。"
       ]
     },
     {
       "owner": "stage1",
       "key": "auto_stage2",
+      "v3_key": "",
+      "v2_key": "handoff.enabled",
+      "v2_conversion": "bool01",
+      "template_level": "core",
       "field": "auto_stage2",
       "type": "int",
       "default": 0,
@@ -59,13 +217,14 @@
       "parser": "optional_integer",
       "empty": "0",
       "description": [
-        "Enable Stage1-to-Stage2 handoff after successful Stage1 without a factor. With no receiver list and the same worktodo, replace the source row in place with ECMSTAGE2; otherwise deliver to auto_stage2_worktodo/auto_stage2_workers. Stage1 finished output is retained. A factor hit generates no Stage2 task. Zero disables new handoffs. Worker sections can override this setting.",
-        "启用 Stage1 无因子成功完成后的 Stage2 交接。未指定接收 worker 且目标为同一 worktodo 时，原位置改写为 ECMSTAGE2；否则按 auto_stage2_worktodo/auto_stage2_workers 投递。保留 Stage1 finished 记录；找到因子不生成 Stage2 任务。0 关闭新交接，worker 分区可覆盖。"
+        "On successful Stage1 completion without a factor, write the finished record and create an ECMSTAGE2 task. With the same queue and no receiver list, replace the source row in place. Otherwise use handoff.worktodo_file and handoff.workers.",
+        "Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff.worktodo_file 和 handoff.workers 投递。"
       ]
     },
     {
       "owner": "stage1",
       "key": "auto_stage2_workers",
+      "v2_key": "handoff.workers",
       "field": "auto_stage2_workers",
       "type": "string",
       "default": "",
@@ -80,6 +239,7 @@
     {
       "owner": "stage1",
       "key": "auto_stage2_worktodo",
+      "v2_key": "handoff.worktodo_file",
       "field": "auto_stage2_worktodo",
       "type": "string",
       "default": "",
@@ -95,6 +255,9 @@
     {
       "owner": "stage1",
       "key": "priority",
+      "v2_key": "queue_order",
+      "v2_conversion": "enum:file_order|stage1_first|stage2_first",
+      "template_level": "core",
       "field": "worktodo_priority",
       "type": "int",
       "default": 0,
@@ -108,13 +271,16 @@
       ],
       "empty": "0",
       "description": [
-        "Queue selection order: 0 follows file order; 1 drains ECMSTAGE1 first; 2 drains ECMSTAGE2 first. When no preferred task remains, the other stage runs. Worker sections can override this setting.",
-        "队列选择顺序：0 按文件顺序；1 优先完成 ECMSTAGE1；2 优先完成 ECMSTAGE2。优先阶段暂无任务时执行另一阶段；worker 分区可覆盖。"
+        "file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has no remaining tasks, then selects the other stage.",
+        "file_order 按文件顺序选任务。stage1_first 和 stage2_first 优先执行对应阶段，直到该阶段没有剩余任务。"
       ]
     },
     {
       "owner": "stage1",
       "key": "skip",
+      "v2_key": "queue_skip",
+      "v2_conversion": "enum:none|stage1|stage2",
+      "template_level": "core",
       "field": "worktodo_skip",
       "type": "int",
       "default": 0,
@@ -128,13 +294,15 @@
       ],
       "empty": "0",
       "description": [
-        "0 processes both stages; 1 leaves ECMSTAGE1 rows untouched; 2 leaves ECMSTAGE2 rows untouched. Worker sections can override this setting.",
-        "0 处理两个阶段；1 完全跳过 ECMSTAGE1 行；2 完全跳过 ECMSTAGE2 行。worker 分区可覆盖。"
+        "none allows both stages. stage1 or stage2 leaves that stage's tasks in the queue.",
+        "none 允许两阶段执行。stage1 和 stage2 将对应阶段的任务留在队列中。"
       ]
     },
     {
       "owner": "stage1",
       "key": "finished",
+      "v3_key": "",
+      "v2_key": "finished_file",
       "field": "finished",
       "type": "string",
       "default": "worktodo.finished.txt",
@@ -149,6 +317,7 @@
     {
       "owner": "stage1",
       "key": "log_file",
+      "v3_key": "",
       "field": "log_file",
       "type": "string",
       "default": "screen.log",
@@ -166,6 +335,8 @@
     {
       "owner": "stage1",
       "key": "tmp_dir",
+      "v2_key": "save_dir",
+      "template_level": "core",
       "field": "tmp_dir",
       "type": "string",
       "default": ".",
@@ -180,6 +351,7 @@
     {
       "owner": "stage1",
       "key": "save_sync_dir_1",
+      "v2_key": "backup.directory_1",
       "field": "save_sync_dir_1",
       "type": "string",
       "default": "",
@@ -195,6 +367,7 @@
     {
       "owner": "stage1",
       "key": "save_sync_dir_2",
+      "v2_key": "backup.directory_2",
       "field": "save_sync_dir_2",
       "type": "string",
       "default": "",
@@ -210,6 +383,7 @@
     {
       "owner": "stage1",
       "key": "sync_mode",
+      "v2_key": "backup.mode",
       "field": "sync_mode",
       "type": "string",
       "default": "incremental",
@@ -224,6 +398,7 @@
     {
       "owner": "stage1",
       "key": "p95_sync_dir",
+      "v2_key": "prime95.save_dir",
       "field": "p95_sync_dir",
       "type": "string",
       "default": "",
@@ -239,6 +414,7 @@
     {
       "owner": "stage1",
       "key": "p95_worktodo_path",
+      "v2_key": "prime95.worktodo_file",
       "field": "p95_worktodo_path",
       "type": "string",
       "default": "",
@@ -254,6 +430,9 @@
     {
       "owner": "stage1",
       "key": "edwards_stage2_transfer",
+      "v3_key": "",
+      "v2_key": "handoff.edwards_only_enabled",
+      "template_level": "legacy",
       "field": "edwards_stage2_transfer",
       "type": "bool",
       "default": false,
@@ -268,6 +447,9 @@
     {
       "owner": "stage1",
       "key": "edwards_stage2_worker",
+      "v3_key": "",
+      "v2_key": "handoff.edwards_only_worker",
+      "template_level": "legacy",
       "field": "edwards_stage2_worker",
       "type": "int",
       "default": 0,
@@ -282,6 +464,7 @@
     {
       "owner": "stage1",
       "key": "p95_add_workers",
+      "v2_key": "prime95.workers",
       "field": "p95_add_workers",
       "type": "string",
       "default": "",
@@ -297,6 +480,7 @@
     {
       "owner": "stage1",
       "key": "p95_keep_aid",
+      "v2_key": "prime95.keep_aid",
       "field": "p95_keep_aid",
       "type": "bool",
       "default": true,
@@ -311,6 +495,7 @@
     {
       "owner": "stage1",
       "key": "p95_recover_lost",
+      "v2_key": "prime95.recover_lost",
       "field": "p95_recover_lost",
       "type": "bool",
       "default": true,
@@ -377,6 +562,7 @@
     {
       "owner": "stage1",
       "key": "verbose",
+      "template_level": "core",
       "field": "verbose",
       "type": "bool",
       "default": true,
@@ -395,6 +581,8 @@
     {
       "owner": "stage1",
       "key": "curve",
+      "v3_key": "",
+      "template_level": "core",
       "field": "curve_model",
       "type": "string",
       "default": "mont",
@@ -410,6 +598,8 @@
     {
       "owner": "stage1",
       "key": "stage1_backend",
+      "v2_key": "gpu_backend",
+      "template_level": "core",
       "field": "gpu_backend",
       "type": "string",
       "parser": "strict",
@@ -430,6 +620,7 @@
     {
       "owner": "stage1",
       "key": "target",
+      "template_level": "core",
       "field": "execution_target",
       "type": "string",
       "default": "gpu",
@@ -444,10 +635,12 @@
     {
       "owner": "stage1",
       "key": "impl",
+      "v2_key": "cpu_implementation",
+      "template_level": "core",
       "field": "cpu_implementation",
       "type": "string",
       "default": "auto",
-      "domain": "[auto|simd|scalar]",
+      "domain": "[auto|simd|scalar|gwnum|slice list|empty]",
       "fx": "CPU_implementation",
       "parser": "legacy",
       "rules": [
@@ -455,13 +648,14 @@
       ],
       "empty": "default",
       "description": [
-        "CPU Stage1 arithmetic implementation. auto selects by CPU capability and batch size up to 10240 modulus bits; above that it requires AVX512-IFMA. simd requires AVX512-IFMA. scalar uses GMP; above 10240 bits it is available for Edwards only and uses mpz binary point multiplication. Non-auto values are rejected for GPU runs.",
-        "CPU Stage1 算术实现：实际模数不超过 10240 位时，auto 根据 CPU 能力和批量选择；超过该位宽时，auto 要求 AVX512-IFMA。simd 要求 AVX512-IFMA。scalar 使用 GMP；超过 10240 位时，仅 Edwards 可显式使用 mpz 二进制点乘。GPU 运行时拒绝非 auto 值。"
+        "CPU Stage1 arithmetic. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU runs accept only automatic mode.",
+        "CPU Stage1 算术实现。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU 任务仅接受自动模式。"
       ]
     },
     {
       "owner": "stage1",
       "key": "reduction",
+      "v2_key": "cpu_simd_reduction",
       "field": "simd_reduction",
       "type": "string",
       "default": "auto",
@@ -480,6 +674,7 @@
     {
       "owner": "stage1",
       "key": "cpu_mont_chain",
+      "v2_key": "cpu_montgomery_chain",
       "field": "cpu_mont_chain",
       "type": "string",
       "default": "ladder",
@@ -495,6 +690,7 @@
     {
       "owner": "stage1",
       "key": "stage1_threads",
+      "v2_key": "cpu_threads",
       "field": "stage1_threads",
       "type": "u32",
       "default": 0,
@@ -510,6 +706,7 @@
     {
       "owner": "stage1",
       "key": "affinity",
+      "v2_key": "cpu_affinity",
       "field": "affinity",
       "type": "string",
       "default": "",
@@ -547,6 +744,7 @@
     {
       "owner": "stage1",
       "key": "exp_cache",
+      "v2_key": "exponent_cache_dir",
       "field": "exp_cache",
       "type": "string",
       "default": "",
@@ -567,6 +765,7 @@
     {
       "owner": "stage1",
       "key": "naf_w",
+      "v2_key": "edwards_naf_window_bits",
       "field": "naf_w",
       "type": "int",
       "default": 0,
@@ -587,6 +786,7 @@
     {
       "owner": "stage1",
       "key": "lcm",
+      "v2_key": "montgomery_lcm_multiplier",
       "field": "scalar_construction",
       "type": "string",
       "default": "1",
@@ -629,6 +829,9 @@
     {
       "owner": "stage1",
       "key": "p95_dir",
+      "v3_key": "",
+      "v2_key": "prime95.legacy_directory",
+      "template_level": "legacy",
       "field": "p95_dir",
       "type": "string",
       "default": "",
@@ -644,6 +847,7 @@
     {
       "owner": "stage1",
       "key": "ckpt_backups",
+      "v2_key": "checkpoint_backups",
       "field": "ckpt_backups",
       "type": "int",
       "default": 3,
@@ -661,6 +865,7 @@
     {
       "owner": "stage1",
       "key": "ckpt_seconds",
+      "v2_key": "checkpoint_interval_seconds",
       "field": "ckpt_seconds",
       "type": "double",
       "default": 600,
@@ -681,6 +886,8 @@
     {
       "owner": "stage1",
       "key": "device",
+      "v2_key": "gpu_device",
+      "template_level": "core",
       "field": "device",
       "type": "int",
       "default": 0,
@@ -695,6 +902,8 @@
     {
       "owner": "stage1",
       "key": "gpu_param",
+      "v3_key": "",
+      "v2_key": "gpu_montgomery_param",
       "field": "gpu_param",
       "type": "int",
       "default": 3,
@@ -733,6 +942,7 @@
     {
       "owner": "stage1",
       "key": "ntt_convolution",
+      "v2_key": "ntt.convolution",
       "field": "ntt_convolution",
       "type": "string",
       "default": "auto",
@@ -747,6 +957,8 @@
     {
       "owner": "stage1",
       "key": "ntt_tune_file",
+      "v3_key": "",
+      "v2_key": "ntt.tune_file",
       "field": "ntt_tune_file",
       "type": "string",
       "default": "tune.toml",
@@ -761,6 +973,7 @@
     {
       "owner": "stage1",
       "key": "ntt_memory_mib",
+      "v2_key": "ntt.memory_mib",
       "field": "ntt_memory_mib",
       "type": "int",
       "default": 0,
@@ -777,6 +990,7 @@
     {
       "owner": "stage1",
       "key": "ntt_length",
+      "v2_key": "ntt.length",
       "field": "ntt_length",
       "type": "int",
       "default": 0,
@@ -793,6 +1007,7 @@
     {
       "owner": "stage1",
       "key": "ntt_bpw",
+      "v2_key": "ntt.bits_per_word",
       "field": "ntt_bpw",
       "type": "int",
       "default": 0,
@@ -809,6 +1024,7 @@
     {
       "owner": "stage1",
       "key": "ntt_profile",
+      "v2_key": "ntt.profile",
       "field": "ntt_profile",
       "type": "int",
       "default": 0,
@@ -825,6 +1041,7 @@
     {
       "owner": "stage1",
       "key": "ntt_tile",
+      "v2_key": "ntt.tile",
       "field": "ntt_tile",
       "type": "int",
       "default": 0,
@@ -841,6 +1058,7 @@
     {
       "owner": "stage1",
       "key": "ntt_outer_max",
+      "v2_key": "ntt.outer_radix_limit",
       "field": "ntt_outer_max",
       "type": "int",
       "default": 0,
@@ -857,6 +1075,7 @@
     {
       "owner": "stage1",
       "key": "ntt_window",
+      "v2_key": "ntt.window_bits",
       "field": "ntt_window",
       "type": "int",
       "default": -1,
@@ -873,6 +1092,7 @@
     {
       "owner": "stage1",
       "key": "ntt_warp_tail",
+      "v2_key": "ntt.warp_tail",
       "field": "ntt_warp_tail",
       "type": "bool|string",
       "default": "auto",
@@ -887,6 +1107,7 @@
     {
       "owner": "stage1",
       "key": "tpi",
+      "v2_key": "opencl.threads_per_integer",
       "field": "tpi",
       "type": "u32",
       "default": 8,
@@ -905,6 +1126,7 @@
     {
       "owner": "stage1",
       "key": "wg_size",
+      "v2_key": "opencl.workgroup_size",
       "field": "wg_size",
       "type": "int",
       "default": 0,
@@ -924,6 +1146,7 @@
     {
       "owner": "stage1",
       "key": "kernel_mul",
+      "v2_key": "opencl.kernel_mul",
       "field": "kernel_mul",
       "type": "string",
       "default": "",
@@ -942,6 +1165,7 @@
     {
       "owner": "stage1",
       "key": "kernel_sqr",
+      "v2_key": "opencl.kernel_sqr",
       "field": "kernel_sqr",
       "type": "string",
       "default": "",
@@ -960,6 +1184,7 @@
     {
       "owner": "stage1",
       "key": "kernel_add",
+      "v2_key": "opencl.kernel_add",
       "field": "kernel_add",
       "type": "string",
       "default": "",
@@ -978,6 +1203,7 @@
     {
       "owner": "stage1",
       "key": "kernel_sub",
+      "v2_key": "opencl.kernel_sub",
       "field": "kernel_sub",
       "type": "string",
       "default": "",
@@ -996,6 +1222,7 @@
     {
       "owner": "stage1",
       "key": "kernel_special_mult",
+      "v2_key": "opencl.kernel_special_mult",
       "field": "kernel_special_mult",
       "type": "string",
       "default": "",
@@ -1014,6 +1241,7 @@
     {
       "owner": "stage2",
       "key": "user",
+      "template_level": "core",
       "field": "result_user",
       "type": "string",
       "default": "",
@@ -1032,6 +1260,7 @@
     {
       "owner": "stage2",
       "key": "computer",
+      "template_level": "core",
       "field": "result_computer",
       "type": "string",
       "default": "",
@@ -1050,6 +1279,8 @@
     {
       "owner": "stage2",
       "key": "stage2_submission_file",
+      "v2_key": "submission_file",
+      "template_level": "core",
       "field": "submission",
       "type": "string",
       "default": "results.json.txt",
@@ -1068,6 +1299,8 @@
     {
       "owner": "stage2",
       "key": "stage2_finished",
+      "v3_key": "",
+      "v2_key": "finished_file",
       "field": "finished",
       "type": "string",
       "default": "worktodo.stage2.finished.txt",
@@ -1086,6 +1319,8 @@
     {
       "owner": "stage2",
       "key": "stage2_log_file",
+      "v3_key": "",
+      "v2_key": "log_file",
       "field": "log",
       "type": "string",
       "default": "",
@@ -1104,6 +1339,8 @@
     {
       "owner": "stage2",
       "key": "stage2_results_file",
+      "v2_key": "results_file",
+      "template_level": "core",
       "field": "results",
       "type": "string",
       "default": "",
@@ -1121,6 +1358,7 @@
     {
       "owner": "stage2",
       "key": "stage2_debug_log_file",
+      "v2_key": "diagnostics.debug_log_file",
       "field": "debug_file",
       "type": "string",
       "default": "",
@@ -1138,6 +1376,8 @@
     {
       "owner": "stage2",
       "key": "stage2_progress_file",
+      "v2_key": "checkpoint_legacy_file",
+      "template_level": "legacy",
       "field": "progress",
       "type": "string",
       "default": "",
@@ -1157,6 +1397,7 @@
     {
       "owner": "stage2",
       "key": "stage2_progress_dir",
+      "v2_key": "checkpoint_dir",
       "field": "progress_dir",
       "type": "string",
       "default": "",
@@ -1172,6 +1413,7 @@
     {
       "owner": "stage2",
       "key": "stage2_save_dir",
+      "v2_key": "save_dir",
       "field": "save_dir",
       "type": "string",
       "default": "",
@@ -1187,6 +1429,7 @@
     {
       "owner": "stage2",
       "key": "stage2_debug_log",
+      "v2_key": "diagnostics.debug_log",
       "field": "debug_log",
       "type": "bool",
       "default": false,
@@ -1201,6 +1444,8 @@
     {
       "owner": "stage2",
       "key": "stage2_device",
+      "v2_key": "gpu_device",
+      "template_level": "core",
       "field": "device",
       "type": "int",
       "default": -1,
@@ -1220,6 +1465,7 @@
     {
       "owner": "stage2",
       "key": "stage2_log_level",
+      "v2_key": "log_level",
       "field": "log_level",
       "type": "int",
       "default": -1,
@@ -1242,6 +1488,7 @@
     {
       "owner": "stage2",
       "key": "stage2_ntt_counts",
+      "v2_key": "diagnostics.ntt_length_counts",
       "field": "ntt_counts",
       "type": "bool",
       "default": false,
@@ -1259,6 +1506,8 @@
     {
       "owner": "stage2",
       "key": "stage2_backend",
+      "v2_key": "gpu_backend",
+      "template_level": "core",
       "field": "gpu_backend",
       "type": "string",
       "parser": "strict",
@@ -1279,6 +1528,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_plan",
+      "v2_key": "opencl.point_plan",
       "field": "opencl_point_plan",
       "type": "string",
       "parser": "strict",
@@ -1300,6 +1550,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_chunk",
+      "v2_key": "opencl.point_chunk",
       "field": "opencl_point_chunk",
       "type": "u64",
       "parser": "strict",
@@ -1316,6 +1567,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_group",
+      "v2_key": "opencl.point_group",
       "field": "opencl_point_group",
       "type": "u64",
       "parser": "strict",
@@ -1332,6 +1584,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_window",
+      "v2_key": "opencl.point_window",
       "field": "opencl_point_window",
       "type": "u64",
       "parser": "strict",
@@ -1348,6 +1601,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_short_point_batch",
+      "v2_key": "opencl.short_point_batch",
       "field": "opencl_short_point_batch",
       "type": "bool",
       "parser": "strict",
@@ -1362,6 +1616,8 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_tune_profile",
+      "v3_key": "opencl.tune_file",
+      "v2_key": "opencl.tune_profile",
       "field": "opencl_tune_profile",
       "type": "string",
       "parser": "strict",
@@ -1379,6 +1635,8 @@
       "type": "string",
       "parser": "strict",
       "key": "stage2_baby_backend",
+      "v3_key": "cuda.baby_backend",
+      "v2_key": "baby_backend",
       "field": "baby_backend",
       "present": "has_baby_backend",
       "default": "auto",
@@ -1400,6 +1658,8 @@
       "type": "string",
       "parser": "strict",
       "key": "stage2_giant_backend",
+      "v3_key": "cuda.giant_backend",
+      "v2_key": "giant_backend",
       "field": "giant_backend",
       "present": "has_giant_backend",
       "default": "auto",
@@ -1422,6 +1682,8 @@
       "type": "string",
       "parser": "strict",
       "key": "stage2_seed_backend",
+      "v3_key": "cuda.seed_backend",
+      "v2_key": "seed_backend",
       "field": "seed_backend",
       "present": "has_seed_backend",
       "default": "auto",
@@ -1443,6 +1705,8 @@
       "type": "string",
       "parser": "strict",
       "key": "stage2_reduce_backend",
+      "v3_key": "cuda.reduce_backend",
+      "v2_key": "reduce_backend",
       "field": "reduce_backend",
       "present": "has_reduce_backend",
       "default": "auto",
@@ -1462,6 +1726,7 @@
     {
       "owner": "stage2",
       "key": "stage2_groot_balanced",
+      "v2_key": "groot_balanced",
       "field": "groot_balanced",
       "type": "bool|string",
       "default": "auto",
@@ -1477,6 +1742,7 @@
     {
       "owner": "stage2",
       "key": "stage2_giant_tail_balance",
+      "v2_key": "giant_tail_balance",
       "field": "giant_tail_balance",
       "type": "bool",
       "default": false,
@@ -1494,6 +1760,7 @@
     {
       "owner": "stage2",
       "key": "stage2_b2_round_chain",
+      "v2_key": "b2_round_chain",
       "field": "b2_round_chain",
       "type": "bool",
       "default": false,
@@ -1511,6 +1778,7 @@
     {
       "owner": "stage2",
       "key": "stage2_giant_chain",
+      "v2_key": "giant_chain",
       "field": "giant_chain",
       "type": "string",
       "default": "64",
@@ -1525,6 +1793,7 @@
     {
       "owner": "stage2",
       "key": "stage2_relocation",
+      "v2_key": "relocation",
       "field": "relocation",
       "type": "bool",
       "default": false,
@@ -1542,6 +1811,8 @@
     {
       "owner": "stage2",
       "key": "stage2_b2",
+      "v2_key": "b2",
+      "template_level": "core",
       "field": "b2",
       "type": "u64",
       "default": 0,
@@ -1557,6 +1828,7 @@
     {
       "owner": "stage2",
       "key": "stage2_d",
+      "v2_key": "d",
       "field": "d",
       "type": "u64",
       "default": 0,
@@ -1575,6 +1847,7 @@
     {
       "owner": "stage2",
       "key": "stage2_batch_mb",
+      "v2_key": "memory.s4_batch_mib",
       "field": "batch",
       "type": "u64",
       "default": 64,
@@ -1592,6 +1865,7 @@
     {
       "owner": "stage2",
       "key": "stage2_arena_mb",
+      "v2_key": "memory.arena_mib",
       "field": "arena",
       "type": "u64",
       "default": 0,
@@ -1610,6 +1884,7 @@
     {
       "owner": "stage2",
       "key": "stage2_fold_mb",
+      "v2_key": "memory.fold_resident_mib",
       "field": "owner_mb",
       "type": "u64",
       "default": 640,
@@ -1632,6 +1907,7 @@
     {
       "owner": "stage2",
       "key": "stage2_factorize_hits",
+      "v2_key": "diagnostics.decompose_factors",
       "field": "factorize_hits",
       "type": "bool",
       "default": false,
@@ -1649,6 +1925,7 @@
     {
       "owner": "stage2",
       "key": "stage2_factor_only",
+      "v2_key": "diagnostics.skip_prime_attribution",
       "field": "factor_only",
       "type": "bool",
       "default": false,
@@ -1666,6 +1943,8 @@
     {
       "owner": "stage2",
       "key": "stage2_auto_b2",
+      "v2_key": "auto_b2",
+      "template_level": "core",
       "field": "auto_b2",
       "type": "bool",
       "default": false,
@@ -1683,6 +1962,7 @@
     {
       "owner": "stage2",
       "key": "stage2_gp",
+      "v2_key": "diagnostics.gp",
       "field": "gp",
       "type": "string",
       "default": "",
@@ -1700,6 +1980,7 @@
     {
       "owner": "stage2",
       "key": "stage2_factor_timeout",
+      "v2_key": "diagnostics.factor_timeout_seconds",
       "field": "factor_timeout",
       "type": "u64",
       "default": 30,
@@ -1717,6 +1998,8 @@
     {
       "owner": "stage2",
       "key": "stage2_cost_profile",
+      "v2_key": "tune.legacy_cost_profile",
+      "template_level": "legacy",
       "field": "cost_profile",
       "type": "string",
       "default": "",
@@ -1732,6 +2015,7 @@
     {
       "owner": "stage2",
       "key": "stage2_auto_carrier",
+      "v2_key": "cuda.auto_carrier",
       "field": "auto_carrier",
       "type": "bool",
       "default": true,
@@ -1746,6 +2030,7 @@
     {
       "owner": "stage2",
       "key": "stage2_prediction_policy",
+      "v2_key": "prediction_policy",
       "field": "prediction_policy",
       "type": "string",
       "default": "model",
@@ -1760,6 +2045,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_arithmetic",
+      "v2_key": "tune.arithmetic",
       "field": "tune_arithmetic",
       "type": "string",
       "default": "both",
@@ -1774,6 +2060,8 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_profile",
+      "v3_key": "",
+      "v2_key": "tune.profile",
       "field": "tune_profile",
       "type": "string",
       "default": "",
@@ -1789,6 +2077,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_runtime",
+      "v2_key": "tune.runtime_enabled",
       "field": "tune_runtime",
       "type": "bool",
       "default": true,
@@ -1803,6 +2092,8 @@
     {
       "owner": "stage2",
       "key": "stage2_parallel",
+      "v2_key": "cuda.curve_concurrency",
+      "v2_conversion": "enum:auto|serial|dual",
       "field": "parallel",
       "type": "u64",
       "default": 1,
@@ -1812,13 +2103,15 @@
       "fx": "stage2_curve_queue_concurrency",
       "parser": "auto_integer",
       "description": [
-        "CUDA Stage2 curve queue. 0 or auto selects serial or dual-slot by measurement, 1 runs serial (default), 2 requests dual-slot subject to device admission. CLI: --parallel auto|0|1|2.",
-        "CUDA Stage2 曲线队列。0 或 auto 按实测自动选择串行或双槽，1 单曲线串行（默认），2 请求双槽并检查显存准入。命令行 --parallel auto|0|1|2。"
+        "CUDA Stage2 curve scheduling. auto measures serial and eligible dual-slot modes. serial is the default. dual requests two slots subject to device admission. CLI: --parallel auto|0|1|2.",
+        "CUDA Stage2 曲线调度。auto 实测串行和可准入的双槽模式。默认 serial 串行执行，dual 请求双槽并检查显存准入。命令行仍使用 --parallel auto|0|1|2。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_parallel_workspace",
+      "v2_key": "cuda.workspace_policy",
+      "v2_conversion": "enum:auto|independent|leased",
       "field": "parallel_workspace",
       "type": "u64",
       "default": 0,
@@ -1828,13 +2121,14 @@
       "fx": "stage2_parallel_workspace_policy",
       "parser": "auto_integer",
       "description": [
-        "CUDA Stage2 workspace policy. 0 or auto compares two independent workspaces and one workspace leased before F-tree construction. Selects 2 directly when mode 1 exceeds the available memory and mode 2 fits. 1 uses two independent workspaces. 2 overlaps preparation and baby points with one leased heavy workspace.",
-        "CUDA Stage2 工作区策略。0 或 auto 比较双工作区和 F 树前租约。双工作区显存不足且租约可准入时直接选 2。1 使用双工作区，2 让下一槽先准备并计算 Baby 点，到 F 树前才申请独占大工作区。"
+        "independent gives each CUDA Stage2 slot a workspace. leased lets the second slot prepare and compute baby points before leasing the heavy workspace at the F-tree boundary. auto compares both and uses leased directly if only it fits.",
+        "independent 为两个 CUDA Stage2 槽分别分配工作区。leased 允许下一槽先准备和计算 Baby 点，到 F 树前再租用大工作区。auto 比较两种模式，只有租约可准入时直接使用 leased。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_parallel_tune_curves",
+      "v2_key": "cuda.parallel_tune_curves",
       "field": "parallel_tune_curves",
       "type": "u64",
       "default": 5,
@@ -1851,6 +2145,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_min_repeats",
+      "v2_key": "tune.min_repeats",
       "field": "tune_min_repeats",
       "type": "u64",
       "default": 2,
@@ -1867,6 +2162,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_runtime_samples",
+      "v2_key": "tune.runtime_sample_limit",
       "field": "runtime_samples",
       "type": "u64",
       "default": 10,
@@ -1883,6 +2179,7 @@
     {
       "owner": "stage2",
       "key": "stage2_short_ntt_batch_tune",
+      "v2_key": "short_ntt_batch_tune",
       "field": "short_batch_tune",
       "type": "bool",
       "default": false,
@@ -1897,6 +2194,7 @@
     {
       "owner": "stage2",
       "key": "stage2_low_cpu_wait",
+      "v2_key": "cuda.low_cpu_wait",
       "field": "low_cpu_wait",
       "type": "bool",
       "default": false,
@@ -1912,6 +2210,7 @@
     {
       "owner": "stage2",
       "key": "stage2_pack_zero",
+      "v2_key": "cuda.pack_zero",
       "field": "pack_zero",
       "type": "bool",
       "default": true,
@@ -1927,6 +2226,7 @@
     {
       "owner": "stage2",
       "key": "stage2_weighted_ntt",
+      "v2_key": "cuda.weighted_ntt",
       "field": "weighted_ntt",
       "type": "bool",
       "default": false,
@@ -1941,6 +2241,8 @@
     {
       "owner": "stage2",
       "key": "stage1_tune_profile",
+      "v3_key": "tune.stage1_cost_file",
+      "v2_key": "tune.stage1_profile",
       "field": "stage1_profile",
       "type": "string",
       "default": "",
@@ -1956,6 +2258,7 @@
     {
       "owner": "stage2",
       "key": "stage2_auto_min_b2",
+      "v2_key": "auto_min_b2",
       "field": "auto_min",
       "type": "u64",
       "default": 0,
@@ -1974,6 +2277,7 @@
     {
       "owner": "stage2",
       "key": "stage2_auto_max_b2",
+      "v2_key": "auto_max_b2",
       "field": "auto_max",
       "type": "u64",
       "default": 0,
@@ -1992,6 +2296,7 @@
     {
       "owner": "stage2",
       "key": "stage1_batch",
+      "v2_key": "tune.stage1_batch",
       "field": "stage1_batch",
       "type": "u64",
       "default": 1,
@@ -2008,6 +2313,7 @@
     {
       "owner": "stage2",
       "key": "stage1_seconds_per_curve",
+      "v2_key": "tune.stage1_seconds_per_curve",
       "field": "stage1_seconds",
       "type": "double",
       "default": 0,
@@ -2027,6 +2333,7 @@
     {
       "owner": "stage2",
       "key": "stage2_ratio_adjust",
+      "v2_key": "ratio_adjust",
       "field": "ratio_adjust",
       "type": "double",
       "default": 1,
@@ -2059,6 +2366,8 @@
     {
       "owner": "gui",
       "key": "NumWorkers",
+      "v2_key": "worker_count",
+      "template_level": "core",
       "field": "NumWorkers",
       "type": "int",
       "default": 1,
@@ -2068,13 +2377,14 @@
       "minimum": 1,
       "maximum": 64,
       "description": [
-        "Number of workers managed by the GUI, each using its [workers.N] settings. Does not change task curve counts in worktodo. Concurrent workers should have separate queues and output paths.",
-        "设置 GUI 管理的 worker 数量。每个 worker 使用对应的 [workers.N] 设置；此键不会修改 worktodo 中每项任务的曲线数。并行运行时应给各 worker 配置独立队列和输出路径。"
+        "Number of workers managed by the GUI. Each uses its own [worker.N] settings. Task curve counts come from worktodo.",
+        "GUI 管理的 worker 数量。各 worker 使用自己的 [worker.N] 设置，任务曲线数由 worktodo 决定。"
       ]
     },
     {
       "owner": "gui",
       "key": "exe",
+      "v2_key": "stage1_exe",
       "field": "exe",
       "type": "string",
       "default": "",
@@ -2133,6 +2443,7 @@
     {
       "owner": "gui",
       "key": "font",
+      "template_level": "legacy",
       "field": "font",
       "type": "string",
       "default": "",
@@ -2148,6 +2459,7 @@
     {
       "owner": "gui",
       "key": "font_size",
+      "template_level": "legacy",
       "field": "font_size",
       "type": "float",
       "default": 0,
@@ -2171,6 +2483,7 @@
     {
       "owner": "gui",
       "key": "font_snap",
+      "template_level": "legacy",
       "field": "font_snap",
       "type": "bool",
       "default": true,
@@ -2224,6 +2537,7 @@
     {
       "owner": "gui",
       "key": "priority",
+      "v2_key": "process_priority",
       "field": "priority",
       "type": "string",
       "default": "below_normal",
@@ -2238,6 +2552,7 @@
     {
       "owner": "gui",
       "key": "window",
+      "template_level": "legacy",
       "field": "window",
       "type": "rect",
       "default": [
@@ -2260,6 +2575,7 @@
     {
       "owner": "gui",
       "key": "dock_layout",
+      "template_level": "legacy",
       "field": "dock_layout",
       "type": "string",
       "default": "",
@@ -2275,6 +2591,7 @@
     {
       "owner": "gui",
       "key": "dock_layout_ver",
+      "template_level": "legacy",
       "field": "dock_layout_ver",
       "type": "int",
       "default": 0,
@@ -2295,6 +2612,7 @@
     {
       "owner": "gui",
       "key": "start_tab",
+      "template_level": "legacy",
       "field": "start_tab",
       "type": "string",
       "default": "workers",
@@ -2363,6 +2681,8 @@
     {
       "owner": "worker",
       "key": "autostart",
+      "v2_conversion": "nonzero_bool",
+      "template_level": "core",
       "field": "autostart",
       "type": "int",
       "default": 0,
@@ -2373,8 +2693,8 @@
         "x!=0:on"
       ],
       "description": [
-        "Automatically launch this worker when the GUI starts: 0 disables; nonzero enables. Does not affect starting a worker directly from the command line.",
-        "控制 GUI 启动后是否自动启动此 worker。0 不启动，非零值启动；此设置不影响从命令行直接启动 worker 的行为。"
+        "Start this worker when the GUI opens. The setting applies to GUI startup.",
+        "设为 true 时，GUI 打开工作流后自动启动此 worker。"
       ]
     },
     {
@@ -2394,6 +2714,7 @@
     {
       "owner": "worker",
       "key": "gpucurves",
+      "template_level": "legacy",
       "field": "gpucurves",
       "type": "int",
       "default": 0,
@@ -2412,6 +2733,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_ignore",
+      "v2_key": "tune.ignore",
       "field": "tune_ignore",
       "type": "string",
       "default": "gpu,driver,cuda,backend,environment",
@@ -2427,6 +2749,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_budget_seconds",
+      "v2_key": "tune.budget_seconds",
       "field": "tune_budget",
       "type": "u64",
       "default": 1800,
@@ -2443,6 +2766,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_warmup",
+      "v2_key": "tune.warmup",
       "field": "tune_warmup",
       "type": "bool",
       "default": false,
@@ -2457,6 +2781,7 @@
     {
       "owner": "stage2",
       "key": "stage2_short_calibration",
+      "v2_key": "short_calibration",
       "field": "short_calibration",
       "type": "bool",
       "default": true,
@@ -2471,6 +2796,7 @@
     {
       "owner": "stage2",
       "key": "stage2_short_calibration_seconds",
+      "v2_key": "short_calibration_seconds",
       "field": "short_budget",
       "type": "u64",
       "default": 10,
@@ -2487,6 +2813,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_error_limit",
+      "v2_key": "tune.error_limit",
       "field": "tune_error",
       "type": "double",
       "default": 0.08,
@@ -2502,6 +2829,7 @@
     {
       "owner": "stage2",
       "key": "stage1_cost_csv",
+      "v2_key": "tune.stage1_cost_csv",
       "field": "stage1_csv",
       "type": "string",
       "default": "",
@@ -2517,6 +2845,7 @@
     {
       "owner": "stage2",
       "key": "stage1_cost_mhz",
+      "v2_key": "tune.stage1_cost_mhz",
       "field": "stage1_mhz",
       "type": "u64",
       "default": 0,
@@ -2533,6 +2862,7 @@
     {
       "owner": "stage2",
       "key": "stage2_target_factor_bits",
+      "v2_key": "target_factor_bits",
       "field": "factor_bits",
       "type": "u64",
       "default": 0,
@@ -2549,6 +2879,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_condition_tag",
+      "v2_key": "tune.condition_tag",
       "field": "condition_tag",
       "type": "string",
       "default": "",
@@ -2564,6 +2895,8 @@
     {
       "owner": "stage1",
       "key": "stage1_submission_file",
+      "v2_key": "submission_file",
+      "template_level": "core",
       "field": "submission",
       "type": "string",
       "default": "results.json.txt",
@@ -2582,6 +2915,8 @@
     {
       "owner": "stage1",
       "key": "stage1_results_file",
+      "v2_key": "results_file",
+      "template_level": "core",
       "field": "results",
       "type": "string",
       "default": "stage1_results.jsonl",
@@ -2600,6 +2935,7 @@
     {
       "owner": "gui",
       "key": "group_order_gp",
+      "template_level": "legacy",
       "field": "group_order_gp",
       "type": "string",
       "default": "",

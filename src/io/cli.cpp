@@ -34,11 +34,13 @@ void print_usage(const char* prog) {
               << "  B1              Stage-1 bound (required for meaningful runs)\n"
               << "  B2              Stage-2 bound (optional; 0 disables stage 2)\n\n"
               << "Options:\n"
+              << "  --param <id>         e|m0|m2|m3 (curve construction)\n"
               << "  --curve <m>          mont|ed (Montgomery or Edwards; default "
                  "mont)\n"
               << "  --target <t>         cpu|gpu (default gpu; GPU Edwards requires "
                  "CUDA)\n"
-              << "  --impl <m>           auto|simd|scalar (CPU only). SIMD requires AVX512-IFMA.\n"
+              << "  --impl <m>           auto|simd|scalar|gwnum (CPU only). SIMD requires AVX512-IFMA.\n"
+              << "                       GWNUM requires gwnum.dll beside the worker and Montgomery PARAM0.\n"
               << "                       Above 10240 modulus bits, auto requires SIMD. Edwards\n"
               << "                       can use wide GMP arithmetic via explicit scalar.\n"
               << "  --reduction <m>      auto|montgomery|mersenne-fold (CPU SIMD). "
@@ -148,7 +150,7 @@ void print_usage(const char* prog) {
                  "only)\n"
               << "  --compile-verbose          Verbose compile timing (OpenCL only)\n"
               << " Logging / debug / verify:\n"
-              << "  --no-log-timestamp         Disable log timestamps (default on)\n"
+              << "  --no-log-timestamp         Disable console timestamps (default on)\n"
               << "  --gpu-dump [--gpu-dump-file <f>]      Dump GPU state to CSV\n"
               << "  --profile-ops [--profile-ops-file <f>]  Operator-count profiling\n"
               << "  --sync-each-batch          Synchronize after each batch\n"
@@ -159,7 +161,7 @@ void print_usage(const char* prog) {
                  "dir>/ecm.toml)\n"
               << "  --worker <n>               Which worker this process is (1-based, "
                  "default 1).\n"
-              << "                             Selects [workers.N.*] TOML overrides "
+              << "                             Selects [worker.N] TOML overrides "
                  "and the\n"
               << "                             [Worker #N] worktodo queue section.\n\n"
               << "Examples:\n"
@@ -224,7 +226,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                  "--cpu-mont-chain",
                                                  "--naf-w",
                                                  "--lcm",
-                                                 "--curve",
+                                                 "--curve", "--param",
                                                  "--target",
                                                  "-gpucurves",
                                                  "--ckpt",
@@ -325,7 +327,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
             } else if (key == "--stage1-threads")
                 input.stage1_threads = uint32_t(integer(0, UINT32_MAX));
             else if (key == "--impl") {
-                expected = "auto|simd|scalar";
+                expected = "auto|simd|scalar|gwnum";
                 if (!ecm_stage1::parse_cpu_implementation(value, selection.cpu_implementation))
                     reject();
             } else if (key == "--reduction") {
@@ -335,6 +337,11 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
             } else if (key == "--cpu-mont-chain") {
                 expected = "ladder|prac";
                 if (!ecm_stage1::parse_cpu_montgomery_chain(value, selection.cpu_montgomery_chain))
+                    reject();
+            } else if (key == "--param") {
+                expected = "e|m0|m2|m3";
+                input.param = ecm_stage1::lower_ascii(value);
+                if (input.param != "e" && input.param != "m0" && input.param != "m2" && input.param != "m3")
                     reject();
             } else if (key == "--curve") {
                 expected = "mont|ed";

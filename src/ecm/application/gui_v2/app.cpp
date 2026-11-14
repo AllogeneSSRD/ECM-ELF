@@ -181,10 +181,14 @@ void App::tick() {
         if(poll_tune){
             const auto base=std::filesystem::u8path(config_path).parent_path();
             auto file=state.ui_stage2_tune_file;
-            if(file.empty())file=config.get("workers."+std::to_string(worker.index)+".stage2","stage2_tune_profile",config.get("stage2","stage2_tune_profile"));
+            const bool shared_tune = config.config_version() >= 3;
+            if(file.empty() && shared_tune) {
+                file=config.get("workers."+std::to_string(worker.index)+".shared","shared_tune_file",
+                    config.get("shared","shared_tune_file",ecm_config::defaults::stage2_shared_tune_file));
+            } else if(file.empty()) file=config.get("workers."+std::to_string(worker.index)+".stage2","stage2_tune_profile",config.get("stage2","stage2_tune_profile"));
             std::filesystem::path path;
             if(!file.empty()){path=std::filesystem::u8path(file);if(path.is_relative())path=base/path;}
-            else for(const auto& dir:{base,std::filesystem::u8path(worker.exe).parent_path()})for(const char* name:{"tune.toml","stage2_ecm_tune.toml"}){
+            else if(!shared_tune)for(const auto& dir:{base,std::filesystem::u8path(worker.exe).parent_path()})for(const char* name:{"tune.toml","stage2_ecm_tune.toml"}){
                 std::error_code error;const auto candidate=dir/name;if(path.empty()&&std::filesystem::is_regular_file(candidate,error))path=candidate;
             }
             std::error_code error;const auto stamp=std::filesystem::last_write_time(std::filesystem::u8path(worker.exe),error);
@@ -656,9 +660,7 @@ std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
         const auto& status=worker.stage2_status;
         for(const auto* curve:status.visible_curves()){
             const auto construction=ui::stage2_construction(*curve,ratio==worker_b2_ratios_.end()?0:ratio->second,zh);
-            summary+="\n";
-            if(status.workers==2)summary+=ui::stage2_curve_label(*curve,zh)+" | ";
-            summary+=construction;
+            summary+="\n"+construction;
         }
     }
     return summary;

@@ -48,7 +48,8 @@ class ReleaseLayout(unittest.TestCase):
         self.layout=layout
         self.put(self.repo/'include/ecm/platform/program_version.h','inline constexpr char version[] = "0.52.1";')
         self.put(self.repo/'src/ecm/cuda/dispatch/tiers.def','ECM_CUDA_TIER(512,4,128,1,0)\n')
-        for name in ['.gitignore','CMakeLists.txt','LICENSE','docs/ECM_TOML_REFERENCE.md','tools/diag/ensure_bom.ps1',
+        for name in ['.gitignore','CMakeLists.txt','LICENSE','docs/ECM_TOML_REFERENCE.en.md',
+                     'docs/ECM_TOML_REFERENCE.zh-CN.md','tools/diag/ensure_bom.ps1',
                      'config/ecm.toml.example','assets/gui_v2/pet_ely.png','assets/gui_v2/pet_ely.json',
                      'assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt',
                      'third_party/imgui/LICENSE.txt','third_party/gui_v2_pet/LICENSE',
@@ -117,6 +118,11 @@ class ReleaseLayout(unittest.TestCase):
             with zipfile.ZipFile(archive) as payload:payload.extractall(extracted)
             self.assertEqual([p.name for p in extracted.iterdir()],[folder.name])
             self.assertTrue((extracted/folder.name/'ecm_gui_v2.exe').is_file())
+            with zipfile.ZipFile(extracted/folder.name/'source/release-source.zip') as sources:
+                for name in ['ECM_TOML_REFERENCE.en.md','ECM_TOML_REFERENCE.zh-CN.md']:
+                    expected=(self.repo/'docs'/name).read_bytes()
+                    self.assertEqual((extracted/folder.name/name).read_bytes(),expected)
+                    self.assertEqual(sources.read(f'docs/{name}'),expected)
             for name in self.opencl_files:self.assertEqual(packaging.sha(extracted/folder.name/name),self.opencl_files[name])
             before=packaging.sha(archive)
             with self.assertRaisesRegex(ValueError,'already exists'):self.assemble([profile])

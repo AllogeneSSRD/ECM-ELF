@@ -8,9 +8,14 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <random>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
+#include "cpu_stage1_ntt_ifma_control.h"
 
 #ifdef _MSC_VER
 #define WIN32_LEAN_AND_MEAN
@@ -21,6 +26,20 @@
 
 namespace {
 using Word = uint64_t;
+using Clock = std::chrono::steady_clock;
+using Digits = std::vector<Word>;
+using Chains = std::vector<Digits>;
+enum class Operation { Multiply, Square, Fixed };
+enum Phase { Pack, Forward, Pointwise, Inverse, Unpack, Carry, PhaseCount };
+using PhaseTimes = std::array<Clock::duration, PhaseCount>;
+
+struct Shape { unsigned p, row; Word rho_base; };
+constexpr Shape shapes[] = {
+    {4001, 64, 5915116383046ULL}, {6011, 64, 5915116383046ULL},
+    {8191, 128, 523974791127ULL}, {12511, 128, 523974791127ULL},
+    {16001, 256, 479836011024ULL}, {32749, 512, 770574134522ULL},
+    {65521, 1024, 188872533427ULL},
+};
 using Vec = __m512i;
 constexpr Word q = 1125899893734401ULL;
 constexpr Word mask52 = (Word{1} << 52) - 1;
@@ -82,19 +101,6 @@ Vec multiply_fixed(Vec a, Vec w, Vec precon) {
     const Vec lo = _mm512_madd52lo_epu64(_mm512_setzero_si512(), a, w);
     return reduce(_mm512_and_si512(_mm512_madd52lo_epu64(lo, hi, splat(0 - q)), splat(mask52)));
 }
-Vec multiply_fixed(Vec a, Multiplier m) {
-    return multiply_fixed(a, splat(m.value), splat(m.quotient));
-}
-Vec multiply(Vec a, Vec b) {
-    const Vec zero = _mm512_setzero_si512();
-    const Vec lo = _mm512_and_si512(_mm512_madd52lo_epu64(zero, a, b), splat(mask52));
-    const Vec hi = _mm512_madd52hi_epu64(zero, a, b);
-    const Vec m = _mm512_madd52lo_epu64(zero, lo, splat(montgomery_inverse()));
-    const Vec correction = _mm512_madd52lo_epu64(lo, m, splat(q));
-    return reduce(_mm512_madd52hi_epu64(_mm512_add_epi64(hi, _mm512_srli_epi64(correction, 52)),
-                                      m, splat(q)));
-}
-
 struct Stage {
     unsigned half = 0;
     std::vector<Word> weights, quotients;
@@ -153,13 +159,33 @@ struct Stage {
     }
 };
 
+#include "cpu_stage1_ntt_kernels.h"
+
+template<unsigned Lanes, bool Lazy, bool Fused>
 class WeightedPlan {
+    using O = cpu_ntt::Ops<Lanes>;
+    using V = typename O::V;
     unsigned p_, row_, n_;
     std::vector<Stage> forward_, inverse_;
     std::array<Multiplier, 4> root5_{}, inverse5_{};
     std::vector<unsigned> position_, offset_;
     std::vector<Word> digit_mask_, weights_, weight_precon_, unweights_, unweight_precon_;
     std::vector<Word> x_, y_, digit_;
+
+    template<bool Timed, class Fn>
+    static void phase(PhaseTimes* times, Phase index, Fn fn) {
+        if constexpr (Timed) {
+            const auto start = Clock::now();
+            fn();
+            (*times)[index] += Clock::now() - start;
+        } else {
+            fn();
+        }
+    }
+
+    static V mul_constant(V value, Multiplier m) {
+        return O::fixed(value, O::splat(m.value), O::splat(m.quotient));
+    }
 
     static std::array<Multiplier, 4> radix5_constants(Word root) {
         const Word r2 = mul_mod(root, root), r3 = mul_mod(r2, root), r4 = mul_mod(r3, root);
@@ -171,27 +197,27 @@ class WeightedPlan {
     }
 
     void radix5(Word* x, const std::array<Multiplier, 4>& c) const {
-        for (unsigned v = 0; v < row_; v += 8) {
+        for (unsigned v = 0; v < row_; v += Lanes) {
             Word* a = x + v;
             Word* b = a + row_;
             Word* d = b + row_;
             Word* e = d + row_;
             Word* f = e + row_;
-            const Vec x0 = load(a), x1 = load(b), x2 = load(d), x3 = load(e), x4 = load(f);
-            const Vec ab = add(x1, x4), cd = add(x2, x3), ac = sub(x1, x4), bd = sub(x2, x3);
-            const Vec z1 = add(x0, add(multiply_fixed(ab, c[0]), multiply_fixed(cd, c[1])));
-            const Vec z2 = add(x0, add(multiply_fixed(ab, c[1]), multiply_fixed(cd, c[0])));
-            const Vec s1 = add(multiply_fixed(ac, c[2]), multiply_fixed(bd, c[3]));
-            const Vec s2 = sub(multiply_fixed(ac, c[3]), multiply_fixed(bd, c[2]));
-            store(a, add(x0, add(ab, cd)));
-            store(b, add(z1, s1));
-            store(d, add(z2, s2));
-            store(e, sub(z2, s2));
-            store(f, sub(z1, s1));
+            const V x0 = O::load(a), x1 = O::load(b), x2 = O::load(d), x3 = O::load(e), x4 = O::load(f);
+            const V ab = O::add(x1, x4), cd = O::add(x2, x3), ac = O::sub(x1, x4), bd = O::sub(x2, x3);
+            const V z1 = O::add(x0, O::add(mul_constant(ab, c[0]), mul_constant(cd, c[1])));
+            const V z2 = O::add(x0, O::add(mul_constant(ab, c[1]), mul_constant(cd, c[0])));
+            const V s1 = O::add(mul_constant(ac, c[2]), mul_constant(bd, c[3]));
+            const V s2 = O::sub(mul_constant(ac, c[3]), mul_constant(bd, c[2]));
+            O::store(a, O::add(x0, O::add(ab, cd)));
+            O::store(b, O::add(z1, s1));
+            O::store(d, O::add(z2, s2));
+            O::store(e, O::sub(z2, s2));
+            O::store(f, O::sub(z1, s1));
         }
     }
 
-    void encode(const std::vector<Word>& a, Word* x) const {
+    void pack(const Digits& a, Word* x) const {
         for (unsigned i = 0; i < n_; ++i) {
             const unsigned j = position_[i];
             const unsigned limb = offset_[j] / 64, shift = offset_[j] % 64;
@@ -199,23 +225,42 @@ class WeightedPlan {
             if (shift) d |= a[limb + 1] << (64 - shift);
             x[i] = d & digit_mask_[j];
         }
-        for (unsigned i = 0; i < n_; i += 8)
-            store(x + i, multiply_fixed(load(x + i), load(weights_.data() + i), load(weight_precon_.data() + i)));
-        for (unsigned u = 0; u < 5; ++u)
-            for (const auto& stage : forward_) stage.apply<false>(x + u * row_, row_);
+        for (unsigned i = 0; i < n_; i += Lanes)
+            O::store(x + i, O::fixed(O::load(x + i), O::load(weights_.data() + i), O::load(weight_precon_.data() + i)));
+    }
+
+    void forward(Word* x) const {
+        for (unsigned u = 0; u < 5; ++u) {
+            auto* row = x + u * row_;
+            if constexpr (Lanes == 8 && !Lazy && !Fused)
+                for (const auto& stage : forward_) stage.apply<false>(row, row_);
+            else
+                cpu_ntt::transform_row<Lanes, false, Lazy, Fused>(row, row_, forward_);
+        }
         radix5(x, root5_);
     }
 
-    void decode(std::vector<Word>& out) {
+    void inverse() {
         radix5(x_.data(), inverse5_);
-        for (unsigned u = 0; u < 5; ++u)
-            for (const auto& stage : inverse_) stage.apply<true>(x_.data() + u * row_, row_);
-        for (unsigned i = 0; i < n_; i += 8) {
-            std::array<Word, 8> words;
-            store(words.data(), multiply_fixed(load(x_.data() + i), load(unweights_.data() + i),
-                                               load(unweight_precon_.data() + i)));
+        for (unsigned u = 0; u < 5; ++u) {
+            auto* row = x_.data() + u * row_;
+            if constexpr (Lanes == 8 && !Lazy && !Fused)
+                for (const auto& stage : inverse_) stage.apply<true>(row, row_);
+            else
+                cpu_ntt::transform_row<Lanes, true, Lazy, Fused>(row, row_, inverse_);
+        }
+    }
+
+    void unpack() {
+        for (unsigned i = 0; i < n_; i += Lanes) {
+            std::array<Word, Lanes> words;
+            O::store(words.data(), O::fixed(O::load(x_.data() + i), O::load(unweights_.data() + i),
+                                           O::load(unweight_precon_.data() + i)));
             for (unsigned j = 0; j < words.size(); ++j) digit_[position_[i + j]] = words[j];
         }
+    }
+
+    void carry(Digits& out) {
         Word carry = 0;
         do {
             for (unsigned i = 0; i < n_; ++i) {
@@ -234,29 +279,28 @@ class WeightedPlan {
     }
 
 public:
-    explicit WeightedPlan(unsigned p, unsigned row)
-        : p_(p), row_(row), n_(5 * row), position_(n_), offset_(n_ + 1), digit_mask_(n_),
+    explicit WeightedPlan(Shape shape, bool verify_bound = false)
+        : p_(shape.p), row_(shape.row), n_(5 * row_), position_(n_), offset_(n_ + 1), digit_mask_(n_),
           weights_(n_), weight_precon_(n_), unweights_(n_), unweight_precon_(n_),
           x_(n_), y_(n_), digit_(n_) {
-        if (!((p == 6011 && row == 64) || (p == 12511 && row == 128)))
-            throw std::invalid_argument("unverified p/length");
         for (unsigned j = 0; j <= n_; ++j) offset_[j] = (p_ * j + n_ - 1) / n_;
         for (unsigned j = 0; j < n_; ++j)
             digit_mask_[j] = (Word{1} << (offset_[j + 1] - offset_[j])) - 1;
         // Sum the actual unequal digit bounds. The coarse uniform-digit
         // bound rejects 640 for M12511 even though every coefficient fits.
-        for (unsigned k = 0; k < n_; ++k) {
+        for (unsigned k = 0; verify_bound && k < n_; ++k) {
             Word bound = 0;
             for (unsigned i = 0; i < n_; ++i) {
                 const unsigned wrap = i > k ? n_ : 0;
                 const unsigned j = k + wrap - i;
                 const unsigned shift = offset_[i] + offset_[j] - offset_[k] - (wrap ? p_ : 0);
                 if (shift > 1) throw std::runtime_error("invalid weighted exponent");
-                bound += (digit_mask_[i] * digit_mask_[j]) << shift;
+                const Word term = (digit_mask_[i] * digit_mask_[j]) << shift;
+                if (term >= q - bound) throw std::runtime_error("coefficient bound exceeds the field");
+                bound += term;
             }
-            if (bound >= q) throw std::runtime_error("coefficient bound exceeds the field");
         }
-        const Word rho = power(row == 64 ? 5915116383046ULL : 523974791127ULL, p_);
+        const Word rho = power(shape.rho_base, p_);
         if (power(rho, n_) != power(2, p_)) throw std::runtime_error("invalid weight root");
         const Word root = power(6, (q - 1) / n_);
         if (power(root, n_) != 1 || power(root, n_ / 2) == 1 || power(root, n_ / 5) == 1)
@@ -288,16 +332,32 @@ public:
         }
     }
 
-    void product(const std::vector<Word>& a, const std::vector<Word>& b, std::vector<Word>& out) {
-        encode(a, x_.data());
-        const Word* rhs = x_.data();
-        if (&a != &b) {
-            encode(b, y_.data());
-            rhs = y_.data();
-        }
-        for (unsigned i = 0; i < n_; i += 8)
-            store(x_.data() + i, multiply(load(x_.data() + i), load(rhs + i)));
-        decode(out);
+    Digits fixed_spectrum(const Digits& b) const {
+        Digits spectrum(n_);
+        pack(b, spectrum.data());
+        forward(spectrum.data());
+        return spectrum;
+    }
+
+    template<bool Timed = false>
+    void product(const Digits& a, const Digits& b, Digits& out, Operation op, PhaseTimes* times = nullptr) {
+        phase<Timed>(times, Pack, [&] {
+            pack(a, x_.data());
+            if (op == Operation::Multiply) pack(b, y_.data());
+        });
+        phase<Timed>(times, Forward, [&] {
+            forward(x_.data());
+            if (op == Operation::Multiply) forward(y_.data());
+        });
+        const Word* rhs = op == Operation::Square ? x_.data() :
+                          op == Operation::Fixed ? b.data() : y_.data();
+        phase<Timed>(times, Pointwise, [&] {
+            for (unsigned i = 0; i < n_; i += Lanes)
+                O::store(x_.data() + i, O::mul(O::load(x_.data() + i), O::load(rhs + i)));
+        });
+        phase<Timed>(times, Inverse, [&] { inverse(); });
+        phase<Timed>(times, Unpack, [&] { unpack(); });
+        phase<Timed>(times, Carry, [&] { carry(out); });
     }
 };
 
@@ -315,9 +375,10 @@ public:
         }
     }
     ~GwControl() { gwdone(&gw_); }
-    void reset(const std::vector<Word>& a, const std::vector<Word>& b) {
+    void reset(const Digits& a, const Digits& b, Operation op) {
         binary64togw(&gw_, a.data(), a.size(), a_);
         binary64togw(&gw_, b.data(), b.size(), b_);
+        if (op == Operation::Fixed) gwfft(&gw_, b_, b_);
     }
     void step(bool square) {
         if (square) gwsquare2(&gw_, a_, a_, 0);
@@ -329,76 +390,189 @@ public:
         return std::equal(expected.begin(), expected.end(), result.begin());
     }
     unsigned length() const { return static_cast<unsigned>(gwfftlen(&gw_)); }
+    uint64_t fft_count() { return gw_get_fft_count(&gw_); }
+    void clear_fft_count() { gw_clear_fft_count(&gw_); }
 };
 
-template<class Step> double chain(Step step, int repeats) {
-    const auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < repeats; ++i) step();
-    return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / repeats;
+struct Integer {
+    mpz_t v;
+    Integer() { mpz_init(v); }
+    ~Integer() { mpz_clear(v); }
+    Integer(const Integer&) = delete;
+    Integer& operator=(const Integer&) = delete;
+};
+
+const char* name(Operation op) {
+    return op == Operation::Square ? "square" : op == Operation::Fixed ? "fixed" : "multiply";
 }
 
-void probe(unsigned p, unsigned row) {
-    WeightedPlan plan(p, row);
-    const size_t words = (p + 63) / 64 + 1; // Zero sentinel for the last digit load.
-    std::vector<Word> a(words), b(words), out(words);
-    mpz_t mod, x, y, expected, actual;
-    mpz_inits(mod, x, y, expected, actual, nullptr);
-    mpz_setbit(mod, p);
-    mpz_sub_ui(mod, mod, 1);
-    std::mt19937_64 random(1);
-    for (int i = 0; i < 128; ++i) {
-        for (auto* operand : {&a, &b}) {
-            for (size_t j = 0; j + 1 < words; ++j) (*operand)[j] = random();
-            (*operand)[words - 2] &= (Word{1} << (p % 64)) - 1;
-        }
-        if (i < 3) {
-            mpz_sub_ui(x, mod, static_cast<unsigned>(i + 1));
-            mpz_export(a.data(), nullptr, -1, sizeof(Word), 0, 0, x);
-            if (i == 0) b = a;
-            if (i == 1) std::fill(b.begin(), b.end(), 0);
-            if (i == 2) { std::fill(b.begin(), b.end(), 0); b[0] = 1; }
-        }
-        mpz_import(x, words, -1, sizeof(Word), 0, 0, a.data());
-        mpz_import(y, words, -1, sizeof(Word), 0, 0, b.data());
-        for (bool square : {false, true}) {
-            plan.product(a, square ? a : b, out);
-            mpz_mul(expected, x, square ? x : y);
-            mpz_mod(expected, expected, mod);
-            mpz_import(actual, words, -1, sizeof(Word), 0, 0, out.data());
-            if (mpz_cmp(expected, actual)) throw std::runtime_error("GMP mismatch");
-        }
+Digits random_digits(unsigned p, std::mt19937_64& rng) {
+    Digits out((p + 63) / 64 + 1); // Zero sentinel for a digit crossing the last limb.
+    for (size_t i = 0; i + 1 < out.size(); ++i) out[i] = rng();
+    if (p % 64) out[out.size() - 2] &= (Word{1} << (p % 64)) - 1;
+    return out;
+}
+
+Digits gmp_chain(const Digits& a, const Digits& b, mpz_srcptr modulus, Operation op, unsigned count) {
+    Integer x, y;
+    mpz_import(x.v, a.size(), -1, sizeof(Word), 0, 0, a.data());
+    mpz_import(y.v, b.size(), -1, sizeof(Word), 0, 0, b.data());
+    for (unsigned i = 0; i < count; ++i) {
+        mpz_mul(x.v, x.v, op == Operation::Square ? x.v : y.v);
+        mpz_mod(x.v, x.v, modulus);
     }
-    GwControl control(p);
-    const auto seed = a;
-    for (bool square : {false, true}) {
-        const auto ntt_step = [&] { plan.product(a, square ? a : b, out); out.swap(a); };
-        const auto gw_step = [&] { control.step(square); };
-        for (int sample = 0; sample < 3; ++sample) {
-            constexpr int repeats = 30000;
-            a = seed;
-            control.reset(seed, b);
-            chain(ntt_step, 100);
-            chain(gw_step, 100);
-            a = seed;
-            control.reset(seed, b);
-            double ntt, gw;
-            if (sample == 1) {
-                gw = chain(gw_step, repeats);
-                ntt = chain(ntt_step, repeats);
-            } else {
-                ntt = chain(ntt_step, repeats);
-                gw = chain(gw_step, repeats);
+    Digits result(a.size());
+    mpz_export(result.data(), nullptr, -1, sizeof(Word), 0, 0, x.v);
+    return result;
+}
+
+template<class Step, class Reset>
+double chain(Step step, Reset reset, unsigned repeats, unsigned batch) {
+    reset();
+    for (unsigned i = 0; i < 100; ++i) step();
+    reset();
+    const auto start = Clock::now();
+    for (unsigned i = 0; i < repeats; ++i) step();
+    return std::chrono::duration<double, std::micro>(Clock::now() - start).count() / (repeats * batch);
+}
+
+void emit(Shape shape, Operation op, unsigned batch, unsigned sample, const char* backend,
+          unsigned length, unsigned depth, double us) {
+    std::printf("time,%u,%s,%u,%u,%s,%u,%u,%.6f\n", shape.p, name(op), batch, sample, backend, length, depth, us);
+}
+
+template<unsigned Lanes, bool Lazy, bool Fused>
+void measure_ntt(Shape shape, const Chains& seed, const Chains& rhs, const Chains& expected,
+                 Operation op, unsigned repeats, unsigned sample, mpz_srcptr modulus, bool profile_only) {
+    const unsigned batch = static_cast<unsigned>(seed.size());
+    WeightedPlan<Lanes, Lazy, Fused> plan(shape);
+    Digits out(seed[0].size());
+    if (sample == 1 && batch == 1) {
+        std::mt19937_64 rng(2);
+        for (unsigned i = 0; i < 32; ++i) {
+            auto a = random_digits(shape.p, rng), b = random_digits(shape.p, rng);
+            if (i < 3) {
+                Integer near_limit;
+                mpz_sub_ui(near_limit.v, modulus, i + 1);
+                mpz_export(a.data(), nullptr, -1, sizeof(Word), 0, 0, near_limit.v);
+                if (i == 0) b = a;
+                else { std::fill(b.begin(), b.end(), 0); b[0] = i - 1; }
             }
-            if (!control.equal(a)) throw std::runtime_error("GWNUM chain endpoint mismatch");
-            std::printf("M%u %s sample=%d NTT L=%u %.3f us GWNUM L=%u %.3f us\n",
-                        p, square ? "square" : "multiply", sample + 1, 5 * row, ntt, control.length(), gw);
+            if (op == Operation::Fixed) plan.product(a, plan.fixed_spectrum(b), out, op);
+            else plan.product(a, b, out, op);
+            if (out != gmp_chain(a, b, modulus, op, 1))
+                throw std::runtime_error("NTT GMP product mismatch at M" + std::to_string(shape.p));
         }
     }
-    mpz_clears(mod, x, y, expected, actual, nullptr);
+    Chains current = seed;
+    auto reset = [&] { current = seed; };
+    // Independent coefficient-SIMD chains share this plan and are interleaved on one core.
+    Chains spectra;
+    if (op == Operation::Fixed)
+        for (const auto& b : rhs) spectra.push_back(plan.fixed_spectrum(b));
+    const auto& operand = op == Operation::Fixed ? spectra : rhs;
+    auto step = [&] {
+        for (unsigned k = 0; k < batch; ++k) {
+            plan.product(current[k], operand[k], out, op);
+            current[k].swap(out);
+        }
+    };
+    char label[32];
+    std::snprintf(label, sizeof(label), "%s-%s%s", Lanes == 4 ? "ymm" : "zmm",
+                  Lazy ? "lazy" : "canonical", Fused ? "-fused8" : "");
+    if (!profile_only) {
+        const double us = chain(step, reset, repeats, batch);
+        if (current != expected) throw std::runtime_error("NTT dependent chain GMP mismatch");
+        emit(shape, op, batch, sample, label, 5 * shape.row, 0, us);
+    }
+    if (batch == 1) {
+        PhaseTimes times{};
+        reset();
+        for (unsigned i = 0; i < 100; ++i) step();
+        reset();
+        for (unsigned i = 0; i < repeats; ++i) {
+            plan.template product<true>(current[0], operand[0], out, op, &times);
+            current[0].swap(out);
+        }
+        if (current != expected) throw std::runtime_error("profiled NTT dependent chain GMP mismatch");
+        std::printf("phase,%u,%s,%u,%u,%s", shape.p, name(op), batch, sample, label);
+        for (const auto elapsed : times)
+            std::printf(",%.6f", std::chrono::duration<double, std::micro>(elapsed).count() / repeats);
+        std::printf("\n");
+        std::fflush(stdout);
+    }
+}
+
+void probe(Shape shape, bool profile_only) {
+    // All vector variants use identical digits, roots and coefficient bounds.
+    const WeightedPlan<8, false, false> verified(shape, true);
+    Integer modulus;
+    mpz_setbit(modulus.v, shape.p);
+    mpz_sub_ui(modulus.v, modulus.v, 1);
+    std::mt19937_64 rng(1);
+    Chains seeds, rhs;
+    for (unsigned lane = 0; lane < 8; ++lane) {
+        seeds.push_back(random_digits(shape.p, rng));
+        rhs.push_back(random_digits(shape.p, rng));
+    }
+    for (unsigned batch : {1u, 2u, 4u, 8u}) {
+        if (profile_only && batch != 1) break;
+        const Chains a(seeds.begin(), seeds.begin() + batch), b(rhs.begin(), rhs.begin() + batch);
+        const unsigned repeats = shape.p <= 16001 ? 2000 : 700;
+        for (Operation op : {Operation::Multiply, Operation::Square, Operation::Fixed}) {
+            Chains expected;
+            for (unsigned i = 0; i < batch; ++i)
+                expected.push_back(gmp_chain(a[i], b[i], modulus.v, op, repeats));
+            using Runner = decltype(&measure_ntt<4, false, false>);
+            constexpr Runner runners[] = {
+                &measure_ntt<8, false, false>, &measure_ntt<8, true, false>,
+                &measure_ntt<8, false, true>, &measure_ntt<8, true, true>,
+                &measure_ntt<4, false, false>, &measure_ntt<4, true, false>,
+                &measure_ntt<4, false, true>, &measure_ntt<4, true, true>,
+            };
+            for (unsigned sample = 1; sample <= 3; ++sample) {
+                if (profile_only) {
+                    runners[0](shape, a, b, expected, op, repeats, sample, modulus.v, true);
+                    continue;
+                }
+                const bool square = op == Operation::Square;
+                auto controls = [&] {
+                    ecm_cpu_ntt_bench::IfmaControl ifma(shape.p);
+                    const double t_ifma = chain([&] { ifma.step(square); }, [&] { ifma.reset(a, b); }, repeats, batch);
+                    if (!ifma.equal(expected)) throw std::runtime_error("IFMA dependent chain GMP mismatch");
+                    emit(shape, op, batch, sample, "ifma", ifma.limbs(), ifma.karatsuba_depth(square), t_ifma);
+                    std::vector<std::unique_ptr<GwControl>> gw;
+                    for (unsigned i = 0; i < batch; ++i) gw.push_back(std::make_unique<GwControl>(shape.p));
+                    const double t_gw = chain([&] { for (auto& control : gw) control->step(square); },
+                        [&] {
+                            for (unsigned i = 0; i < batch; ++i) {
+                                gw[i]->reset(a[i], b[i], op);
+                                gw[i]->clear_fft_count();
+                            }
+                        }, repeats, batch);
+                    uint64_t transforms = 0;
+                    for (auto& control : gw) transforms += control->fft_count();
+                    for (unsigned i = 0; i < batch; ++i)
+                        if (!gw[i]->equal(expected[i])) throw std::runtime_error("GWNUM dependent chain GMP mismatch");
+                    emit(shape, op, batch, sample, "gwnum", gw[0]->length(), 0, t_gw);
+                    std::printf("gwfft,%u,%s,%u,%u,%.6f\n", shape.p, name(op), batch, sample,
+                                double(transforms) / (repeats * batch));
+                };
+                if (sample == 2) controls();
+                for (unsigned index = 0; index < std::size(runners); ++index) {
+                    const auto selected = sample == 2 ? std::size(runners) - 1 - index :
+                                          sample == 3 ? (index + 4) % std::size(runners) : index;
+                    runners[selected](shape, a, b, expected, op, repeats, sample, modulus.v, false);
+                }
+                if (sample != 2) controls();
+                std::fflush(stdout);
+            }
+        }
+    }
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
 #ifdef _MSC_VER
         int regs[4];
@@ -406,14 +580,16 @@ int main() {
         if (!(regs[2] & (1 << 27)) || (_xgetbv(0) & 0xe6) != 0xe6)
             throw std::runtime_error("AVX-512 OS state is unavailable");
         __cpuidex(regs, 7, 0);
-        constexpr int required = (1 << 16) | (1 << 17) | (1 << 21);
-        if ((regs[1] & required) != required)
-            throw std::runtime_error("AVX-512F/DQ/IFMA is required");
+        constexpr unsigned required = (1u << 16) | (1u << 17) | (1u << 21) | (1u << 31);
+        if ((static_cast<unsigned>(regs[1]) & required) != required)
+            throw std::runtime_error("AVX-512F/DQ/IFMA/VL is required");
         if (!SetThreadAffinityMask(GetCurrentThread(), DWORD_PTR(1) << 1))
             throw std::runtime_error("cannot pin to logical CPU 1");
 #endif
-        probe(6011, 64);
-        probe(12511, 128);
+        const bool profile_only = argc > 1 && std::string_view(argv[1]) == "--profile-only";
+        if (argc > 2 || (argc == 2 && !profile_only))
+            throw std::invalid_argument("usage: cpu_stage1_weighted_ntt [--profile-only]");
+        for (const auto shape : shapes) probe(shape, profile_only);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
         return 1;

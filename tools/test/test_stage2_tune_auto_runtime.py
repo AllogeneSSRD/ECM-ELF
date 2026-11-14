@@ -11,6 +11,9 @@ from pathlib import Path
 import re
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -121,7 +124,7 @@ def main():
         assert 'tune_plan' not in row
         auto=row['auto_plan']
         assert auto['B2']==row['B2'] and auto['carrier_exponent']==row['carrier_exponent']
-        text=log.read_text(encoding='utf-8')
+        text=read_stage2_log(log)
         assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
         assert row['hits']==row['bad_factors']==0
         assert re.search(r'real_batched_folddevice: requested=1 enabled=1 fallback=none\b',text)

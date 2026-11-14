@@ -2,15 +2,15 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <string>
+#include <string_view>
 
-// Install timestamp prefixing for std::cout/std::cerr.
+// Install stream mirroring and optional console timestamps for std::cout/std::cerr.
 void ecm_install_timestamped_iostreams();
 bool ecm_log_timestamp_enabled();
 
-// Mirror every timestamped line (both the C++ streams and ecm_ts_* output) to
-// an extra FILE* (e.g. screen.log). Pass nullptr to disable. Used by the queue
-// manager so a single run writes to both the console and the log file.
-void ecm_log_set_mirror(FILE *mirror);
+// Prefix each physical file-log line, preserving the input newline structure.
+std::string ecm_format_worker_log_lines(std::string_view message, int worker);
 
 // Progress-bar colour. `name` is one of none|red|green|yellow|blue|magenta|cyan|
 // white|grey (unknown → none). The returned code is an ANSI escape sequence.

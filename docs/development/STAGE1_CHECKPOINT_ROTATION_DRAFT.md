@@ -1,6 +1,6 @@
 # Stage1 中断存档与备份轮换开发草稿
 
-此页记录本轮开发和验证；当前使用规则见 [Stage1 使用](../usage/STAGE1.md)，配置键以 `config/ecm_options.json` 生成的 `docs/ECM_INI_REFERENCE.md` 为准。
+此页记录本轮开发和验证；当前使用规则见 [Stage1 使用](../usage/STAGE1.md)，配置键见由 `config/ecm_options.json` 生成的 [TOML 配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
 ## 目标与实现
 

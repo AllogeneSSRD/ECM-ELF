@@ -447,6 +447,7 @@ int driver(Options o) {
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
     const auto lines=stage2_config(ini,!o.ini.empty());
     const auto s=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
+    const bool shared_output=ecm_config::toml_document_version(lines)>=3;
     std::vector<const char*> inherited;
     if(o.save.empty())inherited.push_back("finished"); // Queue collision protection.
     if(o.device<0 && s.device<0)inherited.push_back("device");
@@ -546,6 +547,10 @@ int driver(Options o) {
     if(!o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;
     configure_weighted_ntt(o);
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
+    else if(shared_output) {
+        if(!s.shared_tune_file.empty())o.tune_profile=absolute_from(base,s.shared_tune_file).string();
+        else if(!stage2_backend::opencl)o.tune_runtime=false;
+    }
     else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
     else if(o.cost_profile.empty()) {
         const auto shared=absolute_from(base,"tune.toml"), legacy=absolute_from(base,"stage2_ecm_tune.toml");
@@ -569,6 +574,8 @@ int driver(Options o) {
         native_profile=absolute_from(base,s.opencl_tune_profile);
         if(native_profile.extension()!=".toml" ||
            ecm_io::same_file_resource(native_profile,ini) ||
+           (shared_output && !s.shared_tune_file.empty() &&
+            ecm_io::same_file_resource(native_profile,absolute_from(base,s.shared_tune_file))) ||
            (!o.tune_profile.empty() && ecm_io::same_file_resource(native_profile,fs::u8path(o.tune_profile))))
             throw std::runtime_error("OpenCL tune requires its own .toml profile");
     }
@@ -584,14 +591,18 @@ int driver(Options o) {
     if(!o.stage1_profile.empty())o.stage1_profile=absolute_from(cwd,o.stage1_profile).string();
     else if(!s.stage1_profile.empty())o.stage1_profile=absolute_from(base,s.stage1_profile).string();
     const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.worktodo) : absolute_from(cwd, o.worktodo);
-    const fs::path finished = absolute_from(base, s.finished);
+    const auto& finished_name=shared_output?s.shared_finished_file:s.finished;
+    if(finished_name.empty())throw std::runtime_error("finished_file must name a file");
+    const fs::path finished = absolute_from(base, finished_name);
     const fs::path tmp = absolute_from(base, s.save_dir.empty()?cfg.tmp_dir:s.save_dir);
     const std::string suffix = o.worker == 1 ? "" : "_" + std::to_string(o.worker);
     const fs::path results = !o.results.empty() ? absolute_from(cwd, o.results) :
         absolute_from(base, s.results.empty() ? ecm_config::worker_file(ecm_config::defaults::stage2_stage2_results_file,o.worker) : s.results);
     const bool explicit_results = !o.results.empty() || !s.results.empty();
     fs::path log;
+    o.log_max_kb=shared_output?s.log_file_max_kb:0;
     if (!o.log.empty()) log = absolute_from(cwd, o.log);
+    else if (shared_output) { if (!s.shared_log_file.empty()) log = absolute_from(base, s.shared_log_file); }
     else if (!s.has_log) log = absolute_from(base, ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,o.worker));
     else if (!s.log.empty()) log = absolute_from(base, s.log);
     if(o.debug_log) {
@@ -696,7 +707,7 @@ int driver(Options o) {
         return 0;
     }
     return run_tasks(std::move(o),{cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir,explicit_results},
-                     {cfg.b2_ratio,cfg.worktodo_priority,cfg.worktodo_skip,cfg.finished},
+                     {cfg.b2_ratio,cfg.worktodo_priority,cfg.worktodo_skip,cfg.finished,shared_output},
                      {s.b2,s.arena,s.owner_mb});
 }
 
@@ -719,7 +730,7 @@ int main(int argc, char **argv) {
     catch (const std::exception &e) {
         const std::string message=std::string(stage2_backend::executable)+": "+e.what();
         std::cerr<<message<<std::endl;
-        try {if(!s2prod::fatal_log.empty())s2prod::append(s2prod::fatal_log,message);}catch(...){}
+        try {s2prod::append_fatal_log(message);}catch(...){}
         return 2;
     }
 }

@@ -16,6 +16,8 @@ from result_format import normalize_result
 import re
 import subprocess
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 
 def sha(path):
@@ -94,7 +96,7 @@ def main():
     assert 'stage2_stopped: curves_this_run=1' in text
     paths=re.search(r'^stage2_plan: .* log=(.+?) results=(.+?) checkpoint=',text,re.M)
     assert paths,'missing engine/result paths'
-    engine=Path(paths[1]).read_text(encoding='utf-8',errors='replace')
+    engine=read_stage2_log(Path(paths[1]), errors='replace')
     engine=engine[engine.rfind('stage2_phase: Read and validate Stage1 point'):]
     choices=[normalize_result(json.loads(s)) for s in engine.splitlines() if s.startswith('{"type":"tune_selection"')]
     assert len(choices)==1 and choices[0]['selected'] and choices[0]['carrier_exponent']==args.carrier,choices

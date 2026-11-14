@@ -27,6 +27,7 @@
 - [ECM 结果 JSON 与校验](ECM_RESULT_JSON.md)：Prime95 SEC5、PRPLL-NTT 与 PrMers CRC32 的源码事实及离线解析边界。
 - [Prime95 Auto B2 / PRPLL tune](PRIME95_AUTO_B2_TUNE.md)：收益公式、成本与内存选择、FFT tune 的实际搜索。
 - [gwnum / polymult](GWNUM_POLYMULT.md)：FFT 表示、接口与第三方源码事实。
+- [GWNUM 31.6 许可与分发](GWNUM_LICENSE.md)：上游许可、第三方声明及 GPLv3 链接边界。
 - [开源 GPU NTT](GPU_NTT_LIBRARIES.md)：GPU-NTT、ICICLE、sppark、TensorFHE 等库的算法与适配条件。
 
 ## 整数算术与映射

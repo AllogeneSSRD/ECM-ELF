@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 if hasattr(sys, 'set_int_max_str_digits'):
@@ -137,7 +139,7 @@ def main():
             log, result = out / (engine + '.log'), out / (engine + '.jsonl')
             row, _ = call(engine + '_default_logs', [exes[engine], *common, '--factor-only',
                                                     '--log', log, '--results', result])
-            text = log.read_text(encoding='utf-8')
+            text = read_stage2_log(log)
             records = [json.loads(s) for s in result.read_text().splitlines()]
             if len(records) != 1 or records[0]['bad_factors'] or records[0]['factors']:
                 raise ValueError('default result mismatch')
@@ -160,7 +162,7 @@ def main():
         log, result = out / 'override.log', out / 'override.jsonl'
         row, text = call('cli_overrides_worker', [prod, '--ini', qini, '--once', '--factor-only', '--d', '210',
                          '--log-level', 'debug', '--log', log, '--results', result])
-        actual = log.read_text(encoding='utf-8')
+        actual = read_stage2_log(log)
         if 'stage2_complete:' not in text or 'mont_selftest: cases=2048 mismatches=0' not in actual:
             raise ValueError('CLI debug did not reach driver/worker')
         if 'hash=' + case['expected_leaf_hash']['65'] not in actual:

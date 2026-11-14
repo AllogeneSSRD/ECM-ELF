@@ -19,6 +19,7 @@ from bench_stage2_n_scaling import fields
 from bench_edwards_gpu_stage1 import validate
 from analyze_stage2_point_matrix import partition
 from gpu_telemetry import TelemetryRecorder
+from stage2_log import read_stage2_log
 
 
 def sha(path):
@@ -120,7 +121,7 @@ def collect(plan,out,cell,kernel,label,checks=False):
         text=(folder/'debug.log').read_text(encoding='utf-8')
         layout=fields(text,'groot_layout');cell.update(D=raw[0]['d'],P=raw[0]['poly-size'],layout=int(layout['balanced']))
     row=records(plan,folder,case,cell)[0]
-    debug=(folder/'engine.log').read_text(encoding='utf-8')+'\n'+(folder/'debug.log').read_text(encoding='utf-8')
+    debug=read_stage2_log(folder/'engine.log')+'\n'+(folder/'debug.log').read_text(encoding='utf-8')
     console=(folder/'console.log').read_text(encoding='utf-8')
     diagnostic_labels=('real_batched_rootfold','real_batched_folddevice','ntt_workspace_stats','s4_coop_reduce_mode',
                        'scaled_frontier_device','real_giant_seed_pair','device_gleaf','rawupload','real_batched_prepare')

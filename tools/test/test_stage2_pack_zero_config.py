@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
+from stage2_log import read_stage2_log
 
 
 def sha(path):
@@ -72,7 +75,7 @@ def main():
         else:
             if run.returncode:
                 raise ValueError(name+': curve failed')
-            text = log.read_text(encoding='utf-8')
+            text = read_stage2_log(log)
             stats = re.findall(r'^s4_pack_zero_stats: (.*)$', text, re.M)
             if len(stats)!=1:
                 raise ValueError(name+': missing child statistics')

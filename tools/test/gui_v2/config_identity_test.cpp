@@ -11,6 +11,10 @@
 static void require(bool valid,const char* message) {
     if(!valid)throw std::runtime_error(message);
 }
+static std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    return {std::istreambuf_iterator<char>(input), {}};
+}
 int main(int argc,char** argv) {
     try {
         if(argc==3 && std::string(argv[1])=="--read") {
@@ -36,16 +40,63 @@ int main(int argc,char** argv) {
         config.set("stage2","stage2_giant_backend","auto");
         config.set("stage2","stage2_groot_balanced","auto");
         config.set("stage2","stage2_b2_round_chain","1");
-        config.set("workers.1.stage2","stage2_tune_profile","profiles/gpu0.toml");
-        config.set("workers.2.stage2","stage2_tune_profile","profiles/gpu1.toml");
+        config.set("workers.1.shared","shared_tune_file","profiles/gpu0.toml");
+        config.set("workers.2.shared","shared_tune_file","profiles/gpu1.toml");
         config.set("workers.2.stage2","stage2_giant_backend","coop16");
         std::string error;if(!config.save(error))throw std::runtime_error(error);
+        const auto generated = read_text(path);
+        require(generated.find("config_version = 3") == 0 &&
+                generated.find("[worker.2]") != generated.npos &&
+                generated.find("shared.tune_file = \"profiles/gpu1.toml\"") != generated.npos,
+                "new GUI configuration does not use the v3 layout");
         ecmgui::TomlFile loaded;if(!loaded.load(path.u8string(),error))throw std::runtime_error(error);
+        require(loaded.config_version() == 3, "GUI failed to recognize v3");
         const auto first=ecm_config::read_stage2(ecm_config::preview_entries(loaded.lines(),1));
         const auto second=ecm_config::read_stage2(ecm_config::preview_entries(loaded.lines(),2));
         require(first.baby_backend=="auto" && first.giant_backend=="auto" && second.giant_backend=="coop16" && first.groot_balanced=="auto" && first.b2_round_chain,
                 "Stage2 options changed during GUI edit/save/reload");
-        require(first.tune_profile=="profiles/gpu0.toml" && second.tune_profile=="profiles/gpu1.toml","worker profile overrides lost");
+        require(first.shared_tune_file=="profiles/gpu0.toml" && second.shared_tune_file=="profiles/gpu1.toml","shared worker profile overrides lost");
+
+        const auto mixed = out / "v2-editor.toml";
+        const std::string original =
+            "# Retain configuration format and comments\nconfig_version = 2\n"
+            "[shared]\nqueue_order = \"file_order\"\n"
+            "[stage1]\ngpu_device = 0\n"
+            "[stage1.handoff]\n  enabled  = true  # keep this comment\n"
+            "[stage2]\ngpu_device = 1\n"
+            "[worker.2]\nautostart = true\nstage2.gpu_device = 3\n"
+            "[worker.2.stage1]\ngpu_device = 4\n";
+        {std::ofstream f(mixed);f<<original;}
+        if(!loaded.load(mixed.u8string(),error))throw std::runtime_error(error);
+        require(read_text(mixed) == original, "loading v2 rewrote the file");
+        require(loaded.display_value("shared","priority") == "file_order" &&
+                loaded.binding_value("shared","priority","stage1_first") == "1",
+                "GUI enum edit did not round-trip through stable bindings");
+        require(loaded.display_value("workers.2","autostart") == "true",
+                "GUI did not display the v2 worker boolean");
+        loaded.set("stage1","auto_stage2",loaded.binding_value("stage1","auto_stage2","false"));
+        loaded.set("stage1","auto_stage2_worktodo","other#queue.txt");
+        loaded.set("workers.2.stage1","device","5");
+        if(!loaded.save(error))throw std::runtime_error(error);
+        const auto edited = read_text(mixed);
+        require(edited.find("  enabled  = false  # keep this comment") != edited.npos &&
+                edited.find("worktodo_file = \"other#queue.txt\"") != edited.npos &&
+                edited.find("handoff.worktodo_file") == edited.npos,
+                "GUI did not preserve the existing subsection and inline comment");
+        if(!loaded.load(mixed.u8string(),error))throw std::runtime_error(error);
+        const auto worker1 = ecm_config::preview_entries(loaded.lines(),1);
+        const auto worker2 = ecm_config::preview_entries(loaded.lines(),2);
+        require(ecm_config::read_stage1(worker1).device == 0 &&
+                ecm_config::read_stage1(worker2).device == 5 &&
+                ecm_config::read_stage2(worker2).device == 3,
+                "GUI merged identically named Stage1 and Stage2 keys");
+        const auto root_worker = out / "v2-root-worker.toml";
+        {std::ofstream f(root_worker);f<<"config_version=2\n[worker]\n2.autostart=false\n";}
+        if(!loaded.load(root_worker.u8string(),error))throw std::runtime_error(error);
+        loaded.set("workers.2.stage1", "device", "7");
+        if(!loaded.save(error))throw std::runtime_error(error);
+        require(read_text(root_worker).find("2.stage1.gpu_device = 7") != std::string::npos,
+                "GUI redefined a worker created by a dotted key");
         const auto future=out/"future-compute.toml";
         {std::ofstream f(future);f<<"[gui]\nNumWorkers=2\n[stage1]\nfuture_stage1=true\ncurve=\"future\"\n"
             "[stage2]\nfuture_stage2=7\nstage2_giant_backend=\"future\"\n[workers.2.stage2]\nfuture_worker_value=42\n";}

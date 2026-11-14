@@ -36,12 +36,21 @@ public:
 
     // Reads `path`. Returns false with an error for missing or invalid TOML.
     bool load(const std::string &path, std::string &err);
-    // Marks the object as "empty file at `path`" (used before the first save).
+    // Starts a new versioned file at `path` (used before the first save).
     void reset(const std::string &path);
 
     const std::string &path() const { return path_; }
     bool loaded() const { return loaded_; }
     bool dirty() const { return dirty_; }
+    int config_version() const { return config_version_; }
+
+    // Lookup and set use stable binding names. These helpers expose the
+    // spelling and values written by the current file version.
+    std::pair<std::string, std::string> display_path(const std::string &section,
+                                                     const std::string &key) const;
+    std::string display_value(const std::string &section, const std::string &key) const;
+    std::string binding_value(const std::string &section, const std::string &key,
+                              const std::string &value) const;
 
     // Exact table/key lookup; returns `def` when absent.
     std::string get(const std::string &section, const std::string &key,
@@ -70,6 +79,7 @@ public:
 private:
     std::string path_;
     std::vector<Line> lines_;
+    int config_version_ = 1;
     bool loaded_ = false;
     bool dirty_ = false;
 };

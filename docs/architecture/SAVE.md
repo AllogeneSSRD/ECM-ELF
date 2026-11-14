@@ -1,6 +1,6 @@
 # Save：Stage1 完成点、文本格式与交接
 
-本文是当前 save 的格式与发布说明。最终save由Stage1 task统一组织，后端返回拥有的点、因子或无点结果；编码器生成文本，发布器显式返回连续Range，task再发布最终结果。曲线内状态及 Stage2 队列进度另见 [CHECKPOINT](CHECKPOINT.md)。操作入口见 [Stage1](../usage/STAGE1.md)、[CUDA Stage2](../usage/STAGE2.md)、[CPU Edwards Stage2](../usage/EDWARDS_CPU_STAGE2.md)；配置默认值和范围见 [TOML 参考](../ECM_TOML_REFERENCE.md)。
+本文是当前 save 的格式与发布说明。最终save由Stage1 task统一组织，后端返回拥有的点、因子或无点结果；编码器生成文本，发布器显式返回连续Range，task再发布最终结果。曲线内状态及 Stage2 队列进度另见 [CHECKPOINT](CHECKPOINT.md)。操作入口见 [Stage1](../usage/STAGE1.md)、[CUDA Stage2](../usage/STAGE2.md)、[CPU Edwards Stage2](../usage/EDWARDS_CPU_STAGE2.md)；配置默认值和范围见 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
 ## 1. Save 保存的是什么
 

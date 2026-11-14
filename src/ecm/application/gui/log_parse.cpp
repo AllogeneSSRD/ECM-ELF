@@ -6,6 +6,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 namespace ecmgui {
 namespace {
@@ -204,6 +205,7 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
         if(std::sscanf(line.c_str(),"curve_done: %llu/%llu record=%llu",&e.done,&e.total,&e.record)<2)return false;
         e.kind=Kind::CurveDone;read_after(line,"wall=",e.seconds);
         integer("completed",e.completed);read_after(line,"eta=",e.eta);
+        read_after(line,"queue_s_per_curve=",e.queue_s_per_curve);
     } else if(starts_with(line,"task_done:")) {
         e.kind=Kind::TaskDone;integer("completed",e.done);
     } else if(starts_with(line,"stage2_complete:") || starts_with(line,"stage2_stopped:"))e.kind=Kind::Complete;
@@ -268,6 +270,7 @@ void Stage2Status::apply(const Stage2Event &e) {
         return;
     }
     if(e.kind==Kind::Queue){
+        if(e.workers!=workers || e.workers==2)last_queue_s_per_curve=0;
         queue_events=true;workers=e.workers;done=std::min(e.completed,total);queue_eta=-1;
         return;
     }
@@ -296,6 +299,9 @@ void Stage2Status::apply(const Stage2Event &e) {
         const auto seconds=engine_seconds>0?engine_seconds:e.seconds;
         last_curve_seconds=seconds>0&&std::isfinite(seconds)?seconds:0;
         if(last_curve_seconds>0){seconds_sum+=seconds;++measured_curves;}
+        last_queue_s_per_curve=workers==2
+            ? (e.queue_s_per_curve>0&&std::isfinite(e.queue_s_per_curve)?e.queue_s_per_curve:0)
+            : last_curve_seconds;
     }else if(e.kind==Kind::CurveFailed){
         curves.erase(e.curve);phase="failed";queue_eta=-1;
     }else if(!queue_events)Stage2Curve::apply(e);
@@ -313,7 +319,7 @@ ProgressInfo Stage2Status::progress(bool average)const {
     ProgressInfo out;out.valid=valid && total>0;out.gpu=true;
     out.curves_done=done;out.curves_total=total;out.pct=total?100.*done/total:0;out.elapsed_s=elapsed;
     out.bits=bits;
-    out.s_per_curve=average?(measured_curves?seconds_sum/measured_curves:0):last_curve_seconds;
+    out.s_per_curve=average?(measured_curves?seconds_sum/measured_curves:0):last_queue_s_per_curve;
     out.eta_s=queue_events?queue_eta:(total>done?total-done:0)*out.s_per_curve;return out;
 }
 HitInfo Stage2Curve::factor_hit(const std::string &factor)const {
@@ -363,22 +369,30 @@ std::string strip_ansi(const std::string &s) {
 void split_timestamp(const std::string &s, std::string &timestamp, std::string &plain) {
     timestamp.clear();
     plain = s;
-    // "[YYYY-MM-DD HH:MM:SS] "
-    if (s.size() < 21 || s[0] != '[') return;
-    for (int i = 1; i <= 4; ++i) {
-        if (!is_digit(s[static_cast<std::size_t>(i)])) return;
+    std::size_t offset = 0;
+    if (starts_with(s, "[Worker #")) {
+        const auto end = s.find("] ", 9);
+        if (end == std::string::npos || end == 9 ||
+            !std::all_of(s.begin() + 9, s.begin() + end, is_digit)) return;
+        offset = end + 2;
     }
-    if (s[5] != '-' || s[8] != '-' || s[11] != ' ' || s[14] != ':' || s[17] != ':' ||
-        s[20] != ']') {
+    const auto rest = std::string_view(s).substr(offset);
+    // "[YYYY-MM-DD HH:MM:SS] "
+    if (rest.size() < 21 || rest[0] != '[') return;
+    for (int i = 1; i <= 4; ++i) {
+        if (!is_digit(rest[static_cast<std::size_t>(i)])) return;
+    }
+    if (rest[5] != '-' || rest[8] != '-' || rest[11] != ' ' || rest[14] != ':' || rest[17] != ':' ||
+        rest[20] != ']') {
         return;
     }
     for (int i : {6, 7, 9, 10, 12, 13, 15, 16, 18, 19}) {
-        if (!is_digit(s[static_cast<std::size_t>(i)])) return;
+        if (!is_digit(rest[static_cast<std::size_t>(i)])) return;
     }
-    timestamp = s.substr(1, 19);
+    timestamp = rest.substr(1, 19);
     std::size_t p = 21;
-    if (p < s.size() && s[p] == ' ') ++p;
-    plain = s.substr(p);
+    if (p < rest.size() && rest[p] == ' ') ++p;
+    plain = rest.substr(p);
 }
 
 ParsedLine parse_line(const std::string &line) {

@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 from gpu_telemetry import TelemetryRecorder
+from stage2_log import read_stage2_log
 
 
 MIB = 1 << 20
@@ -112,7 +113,7 @@ def curve_outputs(folder, expected, row, count, workers, log):
 
 
 def queue_sample(folder, expected, row, count, workers=2):
-    log = (folder/"engine.log").read_text(encoding="utf-8")
+    log = read_stage2_log(folder/"engine.log")
     if count == 1:
         result = curve_outputs(folder, expected, row, count, workers, log)
         engine = re.findall(r"^stage2_full_wall: .*?\btotal=(\d+\.\d+)", log, re.M)

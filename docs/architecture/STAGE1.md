@@ -26,13 +26,17 @@ CPU Edwards 的标量和 IFMA NAF 主循环按需生成扩展坐标 T。只有�
 
 Montgomery IFMA 二进制 ladder 的每一位同时执行倍点与差分加点。两者共用被倍点的 \(X+Z\) 与 \(X-Z\)，三个同时需要和与差的位置用 `addsub`，省去一对重复模加减。每位仍执行 6 次模乘和 4 次模平方。检查点继续保存两条相邻的 X:Z，恢复后重新算当前位的和差。见 [IFMA Montgomery 点运算](../../src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp)。
 
+可选 GWNUM 31.6 后端沿用 Montgomery PARAM0 的 Suyama 构造和二进制 ladder。完整梅森数使用 GWNUM 的专用模数计划，其他奇数使用通用模数计划。差分加点和倍点共用被倍点的 \(X\pm Z\) 的正向变换，两项曲线常数的频谱保留在本次 ladder 中。检查点与最终点转回普通 GMP 余数。GWNUM 错误标志、转换失败或最大舍入误差超过 0.40 都会中止该批计算。每个 ECM worker 一次算一条曲线，GWNUM 每条曲线用单线程。见 [GWNUM 点运算](../../src/ecm/stage1/montgomery/cpu/gwnum_curve.cpp)。
+
+worker 在首次显式使用 GWNUM 时，仅从可执行文件同目录加载 DLL，校验 ABI 和 GWNUM 版本。宿主负责 Suyama 构造、GCD、进度和文件写入。DLL 执行整段 ladder，双方按块传递标量位和普通余数。内存所有权留在分配它的一侧。见 [DLL 接口](../../include/ecm/stage1/gwnum_abi.h)。
+
 ## 方法选择与输入校验
 
-Stage1 单次运行和队列模式共用曲线 `curve`、执行目标 `target`、CPU 算术 `impl`、IFMA 归约 `reduction`、Montgomery 标量倍数 `lcm` 和 CPU Montgomery 点乘 `cpu_mont_chain`。默认是 Montgomery 曲线、GPU 执行。Edwards GPU 需要编入该模块的 CUDA 可执行文件。TOML 和 CLI 均拒绝无效选择值，参数默认值及范围由 [配置定义](../../config/ecm_options.json) 维护。
+Stage1 单次运行和队列模式共用曲线、执行目标和算术设置。默认在 GPU 上计算 Montgomery 曲线。GPU Edwards 需要编入该模块的 CUDA 可执行文件。TOML 和 CLI 共用[配置定义](../../config/ecm_options.json)中的默认值及范围。
 
-CPU `auto` 以实际参与运算的模数位宽为准。超过 10240 位时要求 IFMA，包括未填满八个 lane 的批次。Edwards 的宽位 GMP 二进制点乘需显式指定 `scalar`。Montgomery 的 GMP 标量后端仅支持 10240 位以内的模数。
+CPU `auto` 以实际参与运算的模数位宽为准。超过 10240 位时要求 IFMA，包括未填满八个 lane 的批次。Edwards 的宽位 GMP 二进制点乘需显式指定 `scalar`。Montgomery 的 GMP 标量后端仅支持 10240 位以内的模数。通过 `cpu_implementation = "gwnum"` 或 `--impl gwnum` 可显式加载 GWNUM。见[本地 GWNUM 31.6](../usage/BUILD.md#cpu-stage1-本地-gwnum-316)。
 
-TOML 使用 `curve`、`target`、`impl`、`reduction`、`lcm`；CLI 使用同名的双横线选项。`curve=mont|ed` 与 `target=cpu|gpu` 是不同轴；`impl=auto|simd|scalar` 只用于 CPU，`reduction=auto|montgomery|mersenne-fold` 控制 CPU SIMD 约减，`lcm=1|12` 控制 Montgomery 标量的倍数。Edwards 路径按曲线约定固定使用 48·lcm(1…B1)，因此拒绝 `lcm=12`；GPU 执行不接受非 auto 的 CPU 专用选项，显式归约必须同时选择 `impl=simd`，避免 auto 落到标量后忽略该设置。
+`curve` 选择 `mont` 或 `ed`，`target` 选择 `cpu` 或 `gpu`。v2 配置的 `cpu_implementation` 对应 `--impl`，取值 `auto`、`simd`、`scalar`、`gwnum`。`cpu_simd_reduction` 对应 `--reduction`，设为 `montgomery` 或 `mersenne-fold` 时须同时选择 `simd`。`montgomery_lcm_multiplier` 对应 `--lcm`，取 `"1"` 或 `"12"`。Edwards 固定使用 48·lcm(1…B1)。GPU 执行要求 CPU 专用选项为默认值。CPU Montgomery 点乘方式由 `cpu_montgomery_chain` 或 `--cpu-mont-chain` 选择。
 
 GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行范围取决于链接的后端和构建配置。CPU Montgomery 只实现 PARAM0，因此 CPU 单次运行只接受 `-sigma 0:s` 这种带参数化前缀的种子；Edwards 不接受参数化前缀，`--gpu-param` 仅适用于 GPU。启动曲线计算前，驱动查询当前 GPU 后端是否支持该参数化；OpenCL 仅实现 PARAM3，CUDA 的 PARAM2 与 PARAM3 还受是否编入相应内核及折叠构建配置约束。CUDA PARAM0 在曲线构造、检查点及 save 中保留完整 64 位 sigma，批次不得在 2⁶⁴ 处回绕。PARAM2/3 的固定 sigma 及曲线批次须满足 sigma+曲线数≤2³²；不再截取低 32 位继续计算。参数化与 sigma 的冲突、后端不支持项在初始化 GPU 前报错。选中的队列任务 sigma 不符合要求时输出来源、值和范围，标为错误行并继续；队列 I/O 或标错失败时停止。
 

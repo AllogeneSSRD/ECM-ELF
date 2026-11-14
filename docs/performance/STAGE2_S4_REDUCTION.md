@@ -1,6 +1,6 @@
 # 普通高位宽 S4 归约性能
 
-当前CUDA提供`stage2_reduce_backend=auto|scalar|coop32`，默认auto。coop32对8193…16384实际算术bits的普通系数归约使用一个warp处理一个系数，余数放在共享内存；小位宽和精确梅森归约保留原内核。CLI为`--reduce-backend`，worker覆盖和环境回退见[配置参考](../ECM_TOML_REFERENCE.md#stage2_reduce_backend)。auto先完成点后端对照，再固定几何比较标量、warp两遍乘减和warp合并乘减，按完整引擎加启动算术检查成本选优；无合格配对时保留标量。
+当前CUDA提供`stage2_reduce_backend=auto|scalar|coop32`，默认auto。coop32对8193…16384实际算术bits的普通系数归约使用一个warp处理一个系数，余数放在共享内存；小位宽和精确梅森归约保留原内核。CLI为`--reduce-backend`，worker覆盖和环境回退见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_reduce_backend)。auto先完成点后端对照，再固定几何比较标量、warp两遍乘减和warp合并乘减，按完整引擎加启动算术检查成本选优；无合格配对时保留标量。
 
 RTX4060 Laptop固定D的小档B2四个普通输入，0.57.13标量／warp两遍参考的完整引擎合计113.389→94.091s（减少17.02%），完整曲线墙钟119.029→98.686s（减少17.09%）。最高位S4设备事件累计15.681→7.939s，约减半；不是整条Stage2快一倍。固定后端成绩不等于auto或新D的收益承诺，后者须独立资格与持出。
 

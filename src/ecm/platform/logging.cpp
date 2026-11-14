@@ -1,6 +1,7 @@
 #include "ecm/platform/logging.h"
 #include "ecm/platform/log_file.h"
 #include "ecm/platform/log_read.h"
+#include "io/files.h"
 #include <fstream>
 
 bool ecm_visit_log_lines(const std::string &path,const std::function<void(const std::string &)> &visitor) {
@@ -15,21 +16,19 @@ bool ecm_visit_log_lines(const std::string &path,const std::function<void(const 
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <streambuf>
 #include <string>
-
-EcmLogMirror::~EcmLogMirror(){if(file_){ecm_log_set_mirror(nullptr);std::fclose(file_);}}
-bool EcmLogMirror::open(const std::string &path) {
-    if(file_)return false;
-    file_=std::fopen(path.c_str(),"a");
-    if(!file_)return false;
-    ecm_log_set_mirror(file_);return true;
-}
+#include <system_error>
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -38,6 +37,10 @@ std::mutex g_log_mutex;
 
 // Optional extra output sink (screen.log in queue mode). Guarded by g_log_mutex.
 FILE *g_log_mirror = nullptr;
+std::filesystem::path g_shared_log;
+uint64_t g_log_max_kb = 0;
+int g_log_worker = 1;
+std::string g_stdio_pending;
 
 // Progress cadence for the FILE (mirror) only -- ini key `progress_log_seconds`.
 //   > 0 : at most one progress line per N seconds lands in the log file
@@ -102,9 +105,47 @@ std::string timestamp_prefix() {
     return oss.str();
 }
 
+std::string worker_log_prefix(int worker) {
+    return "[Worker #" + std::to_string(worker) + "] " + timestamp_prefix();
+}
+
+bool mirror_enabled() { return g_log_mirror || !g_shared_log.empty(); }
+
+void write_mirror(std::string_view text) {
+    if (!g_shared_log.empty()) {
+        try {
+            ecm_append_worker_log(g_shared_log, g_log_worker, g_log_max_kb, text);
+        } catch (const std::exception &error) {
+            std::fprintf(stderr, "WARNING: %s\n", error.what());
+        }
+        return;
+    }
+    const auto formatted = ecm_format_worker_log_lines(text, g_log_worker);
+    std::fwrite(formatted.data(), 1, formatted.size(), g_log_mirror);
+    std::fflush(g_log_mirror);
+}
+
+void append_mirror(std::string &pending, std::string_view text) {
+    pending.append(text);
+    const auto end = pending.rfind('\n');
+    if (end != std::string::npos) {
+        write_mirror(std::string_view(pending).substr(0, end + 1));
+        pending.erase(0, end + 1);
+    }
+}
+
+void finish_mirror(std::string &pending) {
+    if (!pending.empty()) {
+        pending += '\n';
+        write_mirror(pending);
+        pending.clear();
+    }
+}
+
 class timestamped_streambuf : public std::streambuf {
 public:
     explicit timestamped_streambuf(std::streambuf *target) : target_(target) {}
+    void finish_file_line() { finish_mirror(pending_); }
 
 protected:
     int overflow(int ch) override {
@@ -112,22 +153,17 @@ protected:
             return target_->sputc(ch);
         }
         std::lock_guard<std::mutex> lk(g_log_mutex);
-        if (at_line_start_) {
+        if (at_line_start_ && ecm_log_timestamp_enabled()) {
             std::string p = timestamp_prefix();
             target_->sputn(p.data(), static_cast<std::streamsize>(p.size()));
-            if (g_log_mirror) {
-                std::fwrite(p.data(), 1, p.size(), g_log_mirror);
-            }
-            at_line_start_ = false;
         }
         target_->sputc(static_cast<char>(ch));
-        if (g_log_mirror) {
-            std::fputc(static_cast<char>(ch), g_log_mirror);
-        }
-        if (ch == '\n') {
-            at_line_start_ = true;
-            if (g_log_mirror) {
-                std::fflush(g_log_mirror);
+        at_line_start_ = ch == '\n';
+        if (mirror_enabled()) {
+            pending_ += static_cast<char>(ch);
+            if (at_line_start_) {
+                write_mirror(pending_);
+                pending_.clear();
             }
         }
         return ch;
@@ -140,17 +176,197 @@ protected:
 private:
     std::streambuf *target_;
     bool at_line_start_ = true;
+    std::string pending_;
 };
 
 timestamped_streambuf *g_cout_buf = nullptr;
 timestamped_streambuf *g_cerr_buf = nullptr;
 bool g_installed = false;
 
+namespace fs = std::filesystem;
+using NativeLogName = fs::path::string_type;
+
+bool same_log_name(std::basic_string_view<fs::path::value_type> first,
+                   std::basic_string_view<fs::path::value_type> second) {
+#ifdef _WIN32
+    if (first.empty() || second.empty()) return first.empty() && second.empty();
+    return CompareStringOrdinal(first.data(), static_cast<int>(first.size()), second.data(),
+                                static_cast<int>(second.size()), TRUE) == CSTR_EQUAL;
+#else
+    return first == second;
+#endif
+}
+
+uint64_t next_archive_index(const fs::path &path) {
+    const auto parent = path.has_parent_path() ? path.parent_path() : fs::path(".");
+    const auto prefix = path.stem().native() + fs::path(".").native();
+    const auto suffix = path.extension().native();
+    constexpr auto limit = (std::numeric_limits<uint64_t>::max)();
+    uint64_t maximum = 0;
+    for (const auto &entry : fs::directory_iterator(parent)) {
+        const NativeLogName leaf = entry.path().filename().native();
+        const std::basic_string_view<fs::path::value_type> name(leaf);
+        if (name.size() <= prefix.size() + suffix.size() ||
+            !same_log_name(name.substr(0, prefix.size()), prefix) ||
+            !same_log_name(name.substr(name.size() - suffix.size()), suffix)) continue;
+        const auto digits = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+        uint64_t index = 0;
+        bool numeric = true;
+        for (const auto digit : digits) {
+            if (digit < '0' || digit > '9') { numeric = false; break; }
+            const auto value = static_cast<uint64_t>(digit - '0');
+            if (index > (limit - value) / 10) {
+                index = limit;
+            } else {
+                index = index * 10 + value;
+            }
+        }
+        if (numeric && index > maximum) maximum = index;
+    }
+    if (maximum == limit) throw std::runtime_error("log archive index exhausted");
+    return maximum + 1;
+}
+
+// False means another writer already owns this archive name.
+bool move_log_to_archive(const fs::path &path, const fs::path &archive) {
+#ifdef _WIN32
+    if (MoveFileExW(path.c_str(), archive.c_str(), MOVEFILE_WRITE_THROUGH)) return true;
+    const auto error = GetLastError();
+    if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) return false;
+    throw std::system_error(static_cast<int>(error), std::system_category(), "cannot rename log");
+#else
+    const int reservation = ::open(archive.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (reservation < 0) {
+        if (errno == EEXIST) return false;
+        throw std::system_error(errno, std::generic_category(), "cannot reserve log archive");
+    }
+    ::close(reservation);
+    std::error_code error;
+    fs::rename(path, archive, error);
+    if (!error) return true;
+    std::error_code ignored;
+    fs::remove(archive, ignored);
+    throw std::system_error(error, "cannot rename log");
+#endif
+}
+
+void rotate_log(const fs::path &path) {
+    try {
+        for (unsigned attempt = 0; attempt < 8; ++attempt) {
+            const auto archive = path.parent_path() /
+                fs::path(path.stem().native() + fs::path("." + std::to_string(next_archive_index(path))).native() +
+                         path.extension().native());
+            if (move_log_to_archive(path, archive)) return;
+        }
+        throw std::runtime_error("log archive names keep changing");
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "WARNING: cannot rotate log %s: %s\n", path.u8string().c_str(), error.what());
+    }
+}
+
+std::ofstream open_log_for_append(const fs::path &path) {
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out) throw std::runtime_error("cannot open log: " + path.u8string());
+    return out;
+}
+
 } // namespace
 
-void ecm_log_set_mirror(FILE *mirror) {
+std::string ecm_format_worker_log_lines(std::string_view message, int worker) {
+    if (message.empty()) return {};
+    const auto prefix = worker_log_prefix(worker);
+    std::string formatted;
+    while (!message.empty()) {
+        const auto newline = message.find('\n');
+        formatted += prefix;
+        if (newline == std::string_view::npos) {
+            formatted.append(message);
+            break;
+        }
+        formatted.append(message.substr(0, newline + 1));
+        message.remove_prefix(newline + 1);
+    }
+    return formatted;
+}
+
+void ecm_append_worker_log(const std::filesystem::path &path, int worker,
+                           uint64_t max_kb, std::string_view message) {
+    if (message.empty()) return;
+    if (max_kb > (std::numeric_limits<uint64_t>::max)() / 1000)
+        throw std::invalid_argument("log size limit overflows bytes");
+    if (path.has_parent_path()) fs::create_directories(path.parent_path());
+    ecm_io::FileLock lock(path.u8string());
+    auto size = fs::exists(path) ? fs::file_size(path) : 0;
+    bool separator = false;
+    if (size) {
+        std::ifstream tail(path, std::ios::binary);
+        tail.seekg(-1, std::ios::end);
+        const auto last = tail.get();
+        if (last == std::char_traits<char>::eof())
+            throw std::runtime_error("cannot inspect log tail: " + path.u8string());
+        separator = last != '\n';
+    }
+    const auto prefix = worker_log_prefix(worker);
+    const auto limit = max_kb * 1000;
+    std::ofstream out;
+    while (!message.empty()) {
+        if (!out.is_open()) out = open_log_for_append(path);
+        const auto newline = message.find('\n');
+        const auto line = message.substr(0, newline);
+        if (separator) { out.put('\n'); ++size; separator = false; }
+        out << prefix << line << '\n';
+        if (!out) throw std::runtime_error("cannot append log: " + path.u8string());
+        size += prefix.size() + line.size() + 1;
+        if (limit && size > limit) {
+            out.close();
+            if (!out) throw std::runtime_error("cannot close log: " + path.u8string());
+            rotate_log(path);
+            size = fs::exists(path) ? fs::file_size(path) : 0;
+        }
+        if (newline == std::string_view::npos) break;
+        message.remove_prefix(newline + 1);
+    }
+    if (out.is_open()) {
+        out.close();
+        if (!out) throw std::runtime_error("cannot close log: " + path.u8string());
+    }
+}
+
+EcmLogMirror::~EcmLogMirror() {
     std::lock_guard<std::mutex> lk(g_log_mutex);
-    g_log_mirror = mirror;
+    if (!file_ && shared_path_.empty()) return;
+    finish_mirror(g_stdio_pending);
+    if (g_cout_buf) g_cout_buf->finish_file_line();
+    if (g_cerr_buf) g_cerr_buf->finish_file_line();
+    if (file_) std::fclose(file_);
+    g_log_mirror = nullptr;
+    g_shared_log.clear();
+}
+
+bool EcmLogMirror::open(const std::string &path, int worker, uint64_t max_kb) {
+    std::lock_guard<std::mutex> lk(g_log_mutex);
+    if (mirror_enabled()) return false;
+    if (max_kb) {
+        try {
+            const auto candidate = fs::u8path(path);
+            if (candidate.has_parent_path()) fs::create_directories(candidate.parent_path());
+            ecm_io::FileLock lock(path);
+            auto log = open_log_for_append(candidate);
+            log.close();
+            if (!log) return false;
+            shared_path_ = candidate;
+            g_shared_log = candidate;
+            g_log_max_kb = max_kb;
+        } catch (const std::exception &) {
+            return false;
+        }
+    } else {
+        file_ = std::fopen(path.c_str(), "a");
+        if (!file_) return false;
+        g_log_mirror = file_;
+    }
+    g_log_worker = worker;
+    return true;
 }
 
 void ecm_log_set_progress_color(const char *name) {
@@ -224,9 +440,6 @@ double ecm_log_progress_log_seconds() {
 }
 
 void ecm_install_timestamped_iostreams() {
-    if (!ecm_log_timestamp_enabled()) {
-        return;
-    }
     std::lock_guard<std::mutex> lk(g_log_mutex);
     if (g_installed) {
         return;
@@ -255,19 +468,23 @@ int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap) {
 
     emit(stream);
 
-    if (g_log_mirror != nullptr && g_log_mirror != stream) {
-        /* The file is rate-limited for progress lines (ini progress_log_seconds): a task
-           running for hours would otherwise fill screen.log with a line every 200 ms.
-           The line has to be formatted HERE to be classified, so this renders into a
-           buffer first and falls back to a second vfprintf for anything longer. */
+    if (mirror_enabled() && g_log_mirror != stream) {
+        // Render separately so multiline file output gets a prefix on every line.
         char buf[4096];
         va_list apc;
         va_copy(apc, ap);
         const int n = std::vsnprintf(buf, sizeof(buf), fmt, apc);
         va_end(apc);
-        const bool fits = (n >= 0) && (static_cast<size_t>(n) < sizeof(buf));
-        if (!fits || !line_is_progress(buf) || file_wants_progress(buf)) {
-            emit(g_log_mirror);
+        if (n >= 0 && (!line_is_progress(buf) || file_wants_progress(buf))) {
+            if (static_cast<size_t>(n) < sizeof(buf)) {
+                append_mirror(g_stdio_pending, std::string_view(buf, n));
+            } else {
+                std::string message(static_cast<size_t>(n) + 1, '\0');
+                va_copy(apc, ap);
+                const int size = std::vsnprintf(message.data(), message.size(), fmt, apc);
+                va_end(apc);
+                if (size == n) append_mirror(g_stdio_pending, std::string_view(message).substr(0, n));
+            }
         }
     }
     return 0;

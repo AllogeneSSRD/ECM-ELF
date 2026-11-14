@@ -40,7 +40,7 @@ foreach ($arch in $Archs.Split(',')) {
     Copy-Item -LiteralPath $exe -Destination (Join-Path $package 'ecm_cuda.exe') -Force
     Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.toml.example') -Destination $package -Force
-    Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_TOML_REFERENCE.md') -Destination $package -Force
+    $references = @(Copy-EcmReleaseConfigReferences $repo $package)
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $package -Force
     Copy-Item -LiteralPath $gmpDependency.Copyright -Destination (Join-Path $package 'GMP-COPYRIGHT.txt') -Force
     $ini = Join-Path $package 'ecm.toml'
@@ -49,7 +49,7 @@ foreach ($arch in $Archs.Split(',')) {
     if (-not (Test-Path -LiteralPath $queue)) {
         [IO.File]::WriteAllText($queue, '# Add Stage1 ECM worktodo assignments here.' + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
     }
-    $files = @('ecm_cuda.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt','ECM_TOML_REFERENCE.md')
+    $files = @('ecm_cuda.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt') + $references
     $files = @($files + @(Copy-EcmDiagnosticsPayload $repo $BuildDir $package) | Select-Object -Unique)
     $hashes = [ordered]@{}
     foreach ($file in $files) { $hashes[$file] = (Get-FileHash -LiteralPath (Join-Path $package $file)).Hash }

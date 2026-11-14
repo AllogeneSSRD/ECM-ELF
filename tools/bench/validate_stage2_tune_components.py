@@ -12,6 +12,7 @@ import tomllib
 
 from analyze_stage2_tune_components import LIMIT, MODEL, predict
 from analyze_stage2_tune_workload import ntt_profile_set
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -140,7 +141,7 @@ def main():
                 run(name,extra+['--curves','1','--results',str(results),'--log',str(log)])
                 row = json.loads(results.read_text())
                 assert row['status']=='stage2_completed' and row['hits']==row['bad_factors']==0
-                text = log.read_text(encoding='utf-8')
+                text = read_stage2_log(log)
                 assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
                 assert re.search(r'real_batched_folddevice:.*requested=1 enabled=1\b',text)
                 assert re.search(r'scaled_frontier_device:.*requested=1 enabled=1\b',text)

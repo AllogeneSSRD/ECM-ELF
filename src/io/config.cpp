@@ -8,7 +8,8 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
     try {
         parsed = ParsedConfig{};
         parsed.path = path;
-        if (!ecm_config::read_toml(path, parsed.lines, ecm_config::TomlReadMode::Stage1))
+        if (!ecm_config::read_toml(path, parsed.lines, ecm_config::TomlReadMode::Stage1,
+                                  nullptr, &parsed.config_version))
             return false;
         for (const auto& line : parsed.lines)
             if (line.kind == ecm_config::TomlLine::Kind::KeyValue && !line.deferred) {
@@ -26,7 +27,9 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                     else if (key == "target")
                         valid = ecm_stage1::parse_execution_target(v, s.target);
                     else if (key == "impl")
-                        valid = ecm_stage1::parse_cpu_implementation(v, s.cpu_implementation);
+                        valid = parsed.config_version >= 3
+                                    ? ecm_stage1::parse_cpu_implementation_policy(v, s)
+                                    : ecm_stage1::parse_cpu_implementation(v, s.cpu_implementation);
                     else if (key == "reduction")
                         valid = ecm_stage1::parse_simd_reduction(v, s.simd_reduction);
                     else if (key == "cpu_mont_chain")
@@ -77,8 +80,10 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                                     scope.selection.curve = s.curve;
                                 else if (key == "target")
                                     scope.selection.target = s.target;
-                                else if (key == "impl")
+                                else if (key == "impl") {
                                     scope.selection.cpu_implementation = s.cpu_implementation;
+                                    scope.selection.cpu_implementation_rules = std::move(s.cpu_implementation_rules);
+                                }
                                 else if (key == "reduction")
                                     scope.selection.simd_reduction = s.simd_reduction;
                                 else if (key == "cpu_mont_chain")
@@ -94,8 +99,8 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                             }
                 } catch (const std::exception& e) {
                     throw std::runtime_error(ecm_config::config_diagnostic(
-                        path, line.line_number, line.worker_scope, line.key,
-                        ecm_config::trim(line.raw.substr(line.raw.find('=') + 1)), e.what(),
+                        path, line.line_number, line.worker_scope, line.source_key,
+                        ecm_config::toml_source_rhs(line), e.what(),
                         meta ? std::string(meta->type) + " " + meta->domain : "documented scalar"));
                 }
             }
@@ -108,6 +113,7 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
 
 void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfig& cfg) {
     cfg = EcmQueueConfig{};
+    cfg.config_version = parsed.config_version;
     // Defaults are supplied at projection time, never inferred from absent keys.
     ecm_stage1::parse_curve_model(cfg.curve_model, cfg.selection.curve);
     ecm_stage1::parse_execution_target(cfg.execution_target, cfg.selection.target);
@@ -130,8 +136,10 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
                 cfg.selection.curve = selected.selection.curve;
             else if (key == "target")
                 cfg.selection.target = selected.selection.target;
-            else if (key == "impl")
+            else if (key == "impl") {
                 cfg.selection.cpu_implementation = selected.selection.cpu_implementation;
+                cfg.selection.cpu_implementation_rules = selected.selection.cpu_implementation_rules;
+            }
             else if (key == "reduction")
                 cfg.selection.simd_reduction = selected.selection.simd_reduction;
             else if (key == "cpu_mont_chain")
@@ -146,6 +154,8 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
     }
     ecm_stage1::parse_gpu_algorithm(cfg.gpu_algorithm, cfg.selection.gpu_algorithm);
     cfg.selection.gpu_param = cfg.gpu_param;
+    if (cfg.config_version < 3) cfg.handoff_mode.clear();
+    else cfg.ntt_tune_file = cfg.shared_tune_file;
 }
 
 // Stage2 compatibility projection; Stage1 uses parsed sources + io/normalize.
@@ -175,11 +185,28 @@ void ecm_queue_config_project(const std::vector<ecm_config::TomlLine>& lines, co
     const auto entries=ecm_config::selected_entries(lines,worker,fields,path);
     cfg=EcmQueueConfig{};
     static_cast<ecm_config::Stage1Values&>(cfg)=ecm_config::read_stage1(entries);
-    if(cfg.device<0)throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"device",
-        std::to_string(cfg.device),"invalid inherited Stage1 device","integer >= 0"));
+    cfg.config_version = ecm_config::toml_document_version(lines);
+    const auto inherited_error = [&](const char* key, const std::string& value,
+                                     const char* reason, const char* expected) {
+        const auto source = std::find_if(lines.rbegin(), lines.rend(), [&](const auto& line) {
+            return line.kind == ecm_config::TomlLine::Kind::KeyValue && line.recognized &&
+                   line.key == key && line.section == "workers." + std::to_string(worker) + ".stage1";
+        });
+        auto effective = source;
+        if (effective == lines.rend())
+            effective = std::find_if(lines.rbegin(), lines.rend(), [&](const auto& line) {
+                return line.kind == ecm_config::TomlLine::Kind::KeyValue && line.recognized &&
+                       line.key == key && line.section == "stage1";
+            });
+        return std::runtime_error(effective == lines.rend() ?
+            ecm_config::config_diagnostic(path,0,worker,key,value,reason,expected) :
+            ecm_config::config_diagnostic(path,effective->line_number,effective->worker_scope,
+                effective->source_key,ecm_config::toml_source_rhs(*effective),reason,expected));
+    };
+    if(cfg.device<0)
+        throw inherited_error("device",std::to_string(cfg.device),"invalid inherited Stage1 device","integer >= 0");
     if(!ecm_stage1::parse_scalar_construction(cfg.scalar_construction,cfg.selection.scalar_construction))
-        throw std::runtime_error(ecm_config::config_diagnostic(path,0,worker,"lcm",
-            cfg.scalar_construction,"invalid inherited Stage1 scalar convention","1|12"));
+        throw inherited_error("lcm",cfg.scalar_construction,"invalid inherited Stage1 scalar convention","1|12");
 }
 
 bool ecm_queue_config_write_default(const std::string& path) {

@@ -274,7 +274,7 @@ bool validate_cli_mode(const ParsedCli& input, std::string& error) {
         return false;
     }
     const std::vector<std::string> forbidden = {
-        "--curve", "--gpu-param", "--lcm",        "-gpucurves",      "-save",
+        "--curve", "--param", "--gpu-param", "--lcm",        "-gpucurves",      "-save",
         "-savea",  "--go",        "--go-backend", "--go-gp-timeout", "--bits"};
     for (const auto& key : forbidden)
         if (queue && input.explicit_options.count(key)) {
@@ -298,21 +298,29 @@ bool validate_cli_mode(const ParsedCli& input, std::string& error) {
 // Cross-field execution preferences have one rule shared by startup and task
 // admission.
 static bool execution_preferences_error(const ecm_stage1::Selection& s, std::string& error) {
+    const bool policy = !s.cpu_implementation_rules.empty();
+    if (s.cpu_implementation == ecm_stage1::CpuImplementation::Gwnum) {
+        if (s.target != ecm_stage1::ExecutionTarget::Cpu ||
+            s.curve != ecm_stage1::CurveModel::Montgomery) {
+            error = "Stage1 GWNUM requires target=cpu and curve=mont (PARAM0)";
+            return true;
+        }
+    }
     if (s.cpu_montgomery_chain == ecm_stage1::CpuMontgomeryChain::Prac &&
         (s.target != ecm_stage1::ExecutionTarget::Cpu ||
          s.curve != ecm_stage1::CurveModel::Montgomery ||
-         s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd)) {
+         (!policy && s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd))) {
         error = "Stage1 CPU Montgomery PRAC requires target=cpu, curve=mont, impl=simd";
         return true;
     }
     if (s.target == ecm_stage1::ExecutionTarget::Gpu &&
-        (s.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
+        (policy || s.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
          s.simd_reduction != ecm_stage1::SimdReduction::Auto)) {
         error = "keys=target,impl,reduction; --impl and --reduction require "
                 "--target cpu";
         return true;
     }
-    if (s.target == ecm_stage1::ExecutionTarget::Cpu &&
+    if (s.target == ecm_stage1::ExecutionTarget::Cpu && !policy &&
         s.simd_reduction != ecm_stage1::SimdReduction::Auto &&
         s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd) {
         error = "keys=impl,reduction; explicit --reduction requires --impl simd";
@@ -366,12 +374,23 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         auto& s = cfg.selection;
         if (input.has("--gpu-algorithm"))
             s.gpu_algorithm = input.selection.gpu_algorithm;
-        if (input.has("--curve"))
-            s.curve = input.selection.curve;
         if (input.has("--target"))
             s.target = input.selection.target;
-        if (input.has("--impl"))
+        if (input.has("--param") && (input.has("--curve") || input.has("--gpu-param")))
+            throw std::runtime_error("--param conflicts with --curve or --gpu-param");
+        const auto param = input.has("--param") ? input.param : cfg.param;
+        if (cfg.config_version >= 3 || input.has("--param")) {
+            s.strict_param = param != "auto";
+            s.curve = param == "e" ? ecm_stage1::CurveModel::Edwards : ecm_stage1::CurveModel::Montgomery;
+            s.gpu_param = param.size() == 2 ? static_cast<unsigned>(param[1] - '0') :
+                          s.target == ecm_stage1::ExecutionTarget::Cpu ? 0u : 3u;
+        }
+        if (input.has("--curve"))
+            s.curve = input.selection.curve;
+        if (input.has("--impl")) {
             s.cpu_implementation = input.selection.cpu_implementation;
+            s.cpu_implementation_rules.clear();
+        }
         if (input.has("--reduction"))
             s.simd_reduction = input.selection.simd_reduction;
         if (input.has("--cpu-mont-chain"))
@@ -382,6 +401,8 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
             s.gpu_param = input.gpu_param_cli;
         if (direct) {
             const bool prefixed = input.sigma_param_claim >= 0;
+            if (prefixed && param != "auto" && (param == "e" || input.sigma_param_claim != int(s.gpu_param)))
+                throw std::runtime_error("conflict between -sigma parametrization and param");
             if (s.curve == ecm_stage1::CurveModel::Edwards &&
                 s.target == ecm_stage1::ExecutionTarget::Gpu &&
                 (input.has("--gpu-param") || prefixed || input.print_group_order))
@@ -502,6 +523,11 @@ bool stage1_save_construction(const std::string& name, Stage1Options& opt, std::
 }
 
 bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string& error) {
+    if (selection.strict_param && selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        selection.curve == ecm_stage1::CurveModel::Montgomery && selection.gpu_param != 0) {
+        error = "CPU Montgomery requires param m0";
+        return true;
+    }
     if (selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
         if (!ECM_HAS_CUDA_STAGE1 || selection.target != ecm_stage1::ExecutionTarget::Gpu ||
             (selection.curve == ecm_stage1::CurveModel::Montgomery && selection.gpu_param != 0)) {

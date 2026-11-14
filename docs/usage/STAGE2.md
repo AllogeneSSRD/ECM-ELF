@@ -4,13 +4,13 @@
 
 ## 原生 OpenCL 入口
 
-`ecm_opencl_stage2.exe` 共用本页的文本save、ECMSTAGE2任务、TOML、Worker、数量夹限、队列进度、结果发布与停止策略。同目录安装两套 worker 时，由 stage2_backend 选择实际后端，auto 优先可见的 CUDA 设备。先运行 `ecm_opencl_stage2.exe --list-devices`，再选择OpenCL编号；它可能因ICD平台重复枚举，不能直接当作CUDA编号。
+`ecm_opencl_stage2.exe` 共用本页的文本 save、`ECMSTAGE2` 队列任务、结果发布和停止策略。同目录安装两套 worker 时，在 `[stage2]` 设置 `gpu_backend`，默认 `"auto"` 优先使用可见的 CUDA 设备。先运行 `ecm_opencl_stage2.exe --list-devices`，再按输出填写 `gpu_device`。OpenCL 和 CUDA 分别编号，OpenCL 还可能在多个 ICD 平台上列出同一设备。
 
 直接续算可用 `ecm_opencl_stage2.exe --config ecm.toml --save FILE --device N --b2 B2 --d D`；队列入口为 `ecm_opencl_stage2.exe --config ecm.toml --worker N --once`。D=0使用独立基本模型和owned-payload预算。支持显式 `--carrier-exponent P`，先验证N整除2^P−1；不自动比较承载路线。
 
-须提供非零B2：来自CLI、worktodo、`stage2_b2`或共同 `b2_ratio`。OpenCL 支持本后端的运行时点计划调优，需要明确 B2；CUDA 的离线 NTT/ECM tune、Auto B2、自动承载比较及 relocation 仍限定 CUDA。两个后端分别维护实测文件，显式请求不支持的选项会报错。OpenCL自身采用阻塞传输/事件等待，CUDA `low_cpu_wait` flags不控制其设备调度。
+须提供非零B2：来自CLI、worktodo、`b2`或共同 `b2_ratio`。OpenCL 支持本后端的运行时点计划调优，需要明确 B2；CUDA 的离线 NTT/ECM tune、Auto B2、自动承载比较及 relocation 仍限定 CUDA。两个后端分别维护实测文件，显式请求不支持的选项会报错。OpenCL自身采用阻塞传输/事件等待，CUDA `low_cpu_wait` flags不控制其设备调度。
 
-`stage2_arena_mb` 是整个OpenCL owned-buffer硬预算，包含F树、结果、NTT临时区和表；它与CUDA arena口径不同。0表示自动payload预算；`opencl_payload`日志记录本模块实际账本峰值，不是进程显存峰或设备空闲显存。预算不足会失败并保留队列，不自动放宽。
+`memory.arena_mib` 是整个OpenCL owned-buffer硬预算，包含F树、结果、NTT临时区和表；它与CUDA arena口径不同。0表示自动payload预算；`opencl_payload`日志记录本模块实际账本峰值，不是进程显存峰或设备空闲显存。预算不足会失败并保留队列，不自动放宽。
 
 NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512 bits使用CPU点生成，继续使用OpenCL多项式流水线。归一化和最终GCD由CPU/GMP完成。功能边界见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)，构建与性能见 [OpenCL Stage2性能](../performance/OPENCL_STAGE2.md)。
 
@@ -18,7 +18,7 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 以下为当前OpenCL worker的专家环境开关，供同二进制对照；不写入TOML，不影响CUDA。正式运行可全部不设。环境须传给启动器及其曲线子进程；不要把调试覆盖留在后续性能样本中。
 
-生产 TOML 可在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_opencl_point_plan="auto"`、`stage2_opencl_tune_profile="stage2_opencl_tune.toml"`。打开 `stage2_tune_runtime` 后通过真实任务学习；`stage2_tune_min_repeats=1` 可快速试用，默认 2。使用独立路径可分离各 worker。非零的 `stage2_opencl_point_chunk`、`stage2_opencl_point_group`、`stage2_opencl_point_window`会锁定对应参数；设备短批次另由 `stage2_opencl_short_point_batch` 控制。完整键名、取值及默认值见[配置参考](../ECM_TOML_REFERENCE.md#stage2_opencl_point_plan)，CUDA 与 OpenCL 的区别见[运行时点计划](../architecture/OPENCL.md#opencl-运行时点计划)。
+生产 TOML 可在 `[stage2]` 设置 `opencl.point_plan="auto"`、`opencl.tune_file="stage2_opencl_tune.toml"`。打开 `tune.runtime_enabled` 后通过真实任务学习；`tune.min_repeats=1` 可快速试用，默认 2。使用独立路径可分离各 worker。非零的 `opencl.point_chunk`、`opencl.point_group`、`opencl.point_window`会锁定对应参数；设备短批次另由 `opencl.short_point_batch` 控制。完整键名、取值及默认值见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_opencl_point_plan)，CUDA 与 OpenCL 的区别见[运行时点计划](../architecture/OPENCL.md#opencl-运行时点计划)。
 
 在已验证的 HX 370／RTX 4060 Laptop 生产形状上，`auto` 从 GMP 点递推开始，启用调优后与设备 giant 递推对照。日志中的 `stage2_opencl.point_backend` 给出实际执行位置，`opencl_cpu_chain` 给出 CPU 递推的点数与恢复窗口数。其他形状可显式选择 `"cpu"` 做整曲线对照；多项式运算仍使用 OpenCL。[生产实测与边界](../performance/OPENCL_STAGE2.md#生产-b2-的同几何采样)
 
@@ -43,7 +43,7 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 窗口是主机坐标暂存范围，chunk是单次设备命令上限，两者需配合。小P时仅增大chunk仍受原G批点数限制。自动窗口优先取G批与点上限的最小公倍数，预算不足则取预算内的整G批；至多65536点。额外坐标准入按 `6×算术limbs×8×点数≤batch MiB` 估算，不包含GMP分配器开销。`opencl_point_window`打印请求、有效点数、估算cap、G批及来源；`opencl_point_plan`打印资格、设备CU、初始／最大chunk、有效反馈数、实际升档和预算裁剪。对照时用`ECM_OPENCL_POINT_AUTO=0`关闭自动计划；显式窗口0只锁定窗口，仍允许符合资格的baby批量升档。实测与范围见[自动点执行计划](../performance/OPENCL_STAGE2.md#自动点执行计划)。
 
-`stage2_log_level="phases"`开启点内核、CPU检查/归一化、树阶段与程序缓存的汇总；默认批进度级别不新增这些明细。日志字段与嵌套计时见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)。
+`log_level="phases"`开启点内核、CPU检查/归一化、树阶段与程序缓存的汇总；默认批进度级别不新增这些明细。日志字段与嵌套计时见 [OpenCL架构](../architecture/OPENCL.md#生产-stage2-入口)。
 
 设备点路径默认开启宽位升档；符合短标量计划时自动启用巨步递推，其余形状可显式开启递推对照。宽位计划最多256点，完整32点组的单位点／bit成本超过16点seed的1.10倍时退回seed；其后每bit命令成本增加超过35%时拒绝升档并停止增长。它没有1秒硬时限。巨步递推的提交点数与段长另受设备规模、预算和手动chunk限制；不能由POINT_AUTO的1秒门限推断其最长命令。两者保持原G批、NTT工作和独立检查，CPU／AMD宽位资格回退不变。
 
@@ -53,27 +53,29 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 直接读档和队列运行启动时均输出 `ECM-ELF x.y.z (Stage2)` 版本横幅，包括 `--dry-run` 和 `--plan-only`；GUI 从这个横幅读取实际 worker 版本。只输出机器数据的内部辅助入口保持其原有格式。
 
-CUDA点算术使用`[stage2]`或`[workers.N.stage2]`中的`stage2_baby_backend="auto"`、`stage2_giant_backend="auto"`默认配置。Baby可强制scalar／coop32，giant可强制scalar／coop16／coop32；CLI为`--baby-backend`／`--giant-backend`。协作仅支持实际算术8193…16384 bits，承载时按承载位宽判断；giant还需真实chain。auto先保留标量，在当前D／布局／链长上先比较baby、再逐项比较giant，受`stage2_tune_min_repeats`控制；达到重复数后选最快合格均值，再继续D与链长搜索。短队列或关闭运行时探索时不会为收集数据额外重复任务。配置范围见[TOML参考](../ECM_TOML_REFERENCE.md#stage2_giant_backend)，学习、回退和性能文件复用见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
+CUDA点算术使用`[stage2]` 中的 `baby_backend="auto"`、`giant_backend="auto"`默认配置。Baby可强制scalar／coop32，giant可强制scalar／coop16／coop32；CLI为`--baby-backend`／`--giant-backend`。协作仅支持实际算术8193…16384 bits，承载时按承载位宽判断；giant还需真实chain。auto先保留标量，在当前D／布局／链长上先比较baby、再逐项比较giant，受`tune.min_repeats`控制；达到重复数后选最快合格均值，再继续D与链长搜索。短队列或关闭运行时探索时不会为收集数据额外重复任务。配置范围见[TOML参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_giant_backend)，学习、回退和性能文件复用见[协作点后端选型](../architecture/AUTO_B2.md#协作点后端选型)。
 
-同一工作目录的多GPU可在每个worker的Stage2分区指定性能文件；使用现有`stage2_tune_profile`键：
+多卡共用工作目录时，可为每个 worker 指定自己的设备和性能文件。
 
 ```toml
-[workers.1.stage2]
-stage2_device = 0
-stage2_tune_profile = "stage2_gpu0.toml"
+config_version = 3
 
-[workers.2.stage2]
-stage2_device = 1
-stage2_tune_profile = "stage2_gpu1.toml"
+[worker.1]
+stage2.gpu_device = 0
+shared.tune_file = "tune_gpu0.toml"
+
+[worker.2]
+stage2.gpu_device = 1
+shared.tune_file = "tune_gpu1.toml"
 ```
 
-路径相对`ecm.toml`所在目录解析，不随启动cwd变化；绝对路径也可用。各worker只读取、锁定和更新其最终选定的文件。未提供worker覆盖时继承全局`[stage2]`值，CLI `--tune-profile`优先于TOML。示例GPU编号按实际设备调整；显式路径不自动添加worker后缀。
+相对路径基于 `ecm.toml` 所在目录。每个 worker 的 CUDA Stage1 和 Stage2 共用选定文件。省略 worker 覆盖时继承 `[shared] tune_file`，默认 `tune.toml`。CLI `--tune-profile` 可为单次 Stage2 命令显式指定输入。示例 GPU 编号按实际设备调整。
 
-`stage2_b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
+`b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
 
-CUDA的`stage2_seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-backend`。它控制8193…16384实际算术bits的paired seed及GPU构建[D]Q，其他情况仍为标量。运行时先完成同形状、R=`stage2_tune_min_repeats`次的标量／协作对照，再选最快合格均值；正式tune可复用配对区域。只读模式继续采用已有合格胜者，单独强制协作的未配对记录不足以启用auto。实际`seed_coop`按行记账，NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.md#stage2_seed_backend)与[自动选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)。
+CUDA的`seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-backend`。它控制8193…16384实际算术bits的paired seed及GPU构建[D]Q，其他情况仍为标量。运行时先完成同形状、R=`tune.min_repeats`次的标量／协作对照，再选最快合格均值；正式tune可复用配对区域。只读模式继续采用已有合格胜者，单独强制协作的未配对记录不足以启用auto。实际`seed_coop`按行记账，NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_seed_backend)与[自动选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)。
 
-普通高位宽S4可显式设置`stage2_reduce_backend="coop32"`，CLI为`--reduce-backend coop32`；默认`scalar`。仅CUDA实际算术8193…16384 bits的普通归约启用协作，小位宽和梅森归约继续原内核。它与seed／baby／giant的auto独立；ECM性能文件分开记录两种归约策略，独立NTT表可共用。当前设备资格、固定D收益和限制见[S4性能](../performance/STAGE2_S4_REDUCTION.md)与[配置参考](../ECM_TOML_REFERENCE.md#stage2_reduce_backend)。
+普通高位宽S4可显式设置`reduce_backend="coop32"`，CLI为`--reduce-backend coop32`；默认`scalar`。仅CUDA实际算术8193…16384 bits的普通归约启用协作，小位宽和梅森归约继续原内核。它与seed／baby／giant的auto独立；ECM性能文件分开记录两种归约策略，独立NTT表可共用。当前设备资格、固定D收益和限制见[S4性能](../performance/STAGE2_S4_REDUCTION.md)与[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_reduce_backend)。
 
 ## 直接读档
 
@@ -89,11 +91,11 @@ Stage2 父进程启动时读取 TOML，任务开始时从该快照和当前任�
 
 ## CUDA 双曲线调度
 
-在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_parallel`，命令行 `--parallel auto|0|1|2` 可覆盖。该选项适用于同一 Stage2 任务中目标 N、B1 和曲线族一致的记录，并要求有效 B2 已确定。
+在 `[stage2]` 设置 `cuda.curve_concurrency`。单个 worker 可在 `[worker.N]` 用 `stage2.cuda.curve_concurrency` 覆盖，命令行仍接受 `--parallel auto|0|1|2`。双槽要求同一任务中的 N、B1 和曲线族一致，并已确定有效 B2。
 
-- `0` 或 `"auto"` 按实测自动选择。无匹配成绩时，先用真实曲线测串行，再测允许且可准入的双槽候选。窗口由 `stage2_parallel_tune_curves` 指定，默认 5，范围 2–16。5 条及以上取第 2 条完成到倒数第 2 条完成之间的吞吐，要求提高至少 3% 且整窗墙钟没有增加。2 至 4 条用整窗吞吐，要求提高至少 3%。合格候选按整窗每条耗时择优。不同条数的 tune 记录独立匹配。工作区为 auto 且双工作区预算不足时，直接采用可准入的 F 树前租约。
-- `1` 单曲线串行，默认。固定参数对照可以显式传 `--parallel 1 --tune-runtime 0 --tune-profile FILE`，将合格的串行窗口作为比较基准保存。
-- `2` 用已选路线直接尝试双槽。完成一条即补下一条，显存或计划不满足准入时串行处理。
+- `"auto"` 按实测自动选择。无匹配成绩时，先用真实曲线测串行，再测可准入的双槽候选。窗口由 `cuda.parallel_tune_curves` 指定，默认 5，范围 2–16。5 条及以上取第 2 条完成到倒数第 2 条完成之间的吞吐，要求提高至少 3% 且整窗墙钟没有增加。2 至 4 条用整窗吞吐，要求提高至少 3%。合格候选按整窗每条耗时择优。不同条数的 tune 记录独立匹配。工作区为 auto 且双工作区预算不足时，直接采用可准入的 F 树前租约。
+- `"serial"` 单曲线串行，默认。固定参数对照可以显式传 `--parallel 1 --tune-runtime 0 --tune-profile FILE`，将合格的串行窗口作为比较基准保存。
+- `"dual"` 用已选路线尝试双槽。完成一条即补下一条，显存或计划不满足准入时串行处理。
 
 各 worker 保持独立 CUDA 上下文。父进程可在 GPU 计算期间预读下一条，或让上一条继续发布。按算术位宽，单槽和仅报告因子的双槽默认预读至 4096 bit，保留因子归因的双槽至 2048 bit。调试日志按进程槽附加 `.slot1` 至 `.slot3`，内部 JSONL 按实际完成写入。中途命中因子的窗口仍发布结果，该窗口不计入调优。
 
@@ -101,11 +103,11 @@ Stage2 父进程启动时读取 TOML，任务开始时从该快照和当前任�
 
 双槽准入日志中的 `required_free_bytes` 和 `free_bytes` 分别是所需和查询到的空闲显存，单位为字节。`insufficient_device_memory` 表示显存不足，`device_memory_query_failed` 表示查询失败，`device_queue_busy` 表示另一队列已占用设备调度锁，`device_queue_lock_failed` 表示锁操作失败。候选试跑同时记录 `D`、实际 `B2` 和 `requested_B2`。
 
-`curve_done` 的 `eta` 以秒为单位，是按当前调度窗口估算的任务剩余墙钟。串行使用本窗口已完成曲线的平均墙钟。双槽队列有后续曲线时用完成速率估计，收尾时用活跃曲线中最晚的预计完成时间。双槽积压窗口需至少两个完成样本才报告 ETA，切换窗口时重新估计。停机请求后不再估算后续任务，最后一条完成时 ETA 为零。原始单曲线耗时和队列 ETA 使用不同计时边界。
+`curve_done` 的 `eta` 以秒为单位，是按当前调度窗口估算的任务剩余墙钟。串行使用本窗口已完成曲线的平均墙钟。双槽队列有后续曲线时用完成速率估计，收尾时用活跃曲线中最晚的预计完成时间。双槽积压窗口需至少两个完成样本才报告 ETA，切换窗口时重新估计。停机请求后不再估算后续任务，最后一条完成时 ETA 为零。`wall` 保留单条曲线的墙钟耗时。双槽从窗口内第二条曲线完成起输出 `queue_s_per_curve`，用窗口墙钟除以本窗口实际完成的曲线数。GUI v2 用它显示双槽的队列吞吐。
 
 高级对照可设置 `ECM_STAGE2_QUEUE_PIPELINE=0` 关闭预读、`1` 仅预读固定路线、`2` 同时预读运行时调优。`ECM_STAGE2_EARLY_GPU_HANDOFF=0` 禁用块积后的提前交接，`NTT_STAGE2_RESIDENT_PRODUCTS=0` 强制上传叶值后计算块积。`ECM_STAGE2_QUEUE_D_SEARCH=1` 在首选路线显存充足时也搜索备选。`ECM_STAGE2_GIANT_GATE=loop` 实验性地把整个 giant、G 树和 fold 循环合成一次持锁，默认仍逐批交接。
 
-在 `[stage2]` 或 `[workers.N.stage2]` 设置 `stage2_parallel_workspace`。默认 `0`，也可写为 `"auto"`。模式 `1` 让两槽各持一套工作区，模式 `2` 让下一槽先做准备和 Baby 点，到 F 树前再申请独占大工作区。`stage2_parallel = 0` 会按实测比较可准入的模式。`stage2_parallel = 2` 直接使用指定模式，工作区为 auto 时优先双工作区，预算不足时使用可准入的模式 2。工作区模式和阶段掩码分别参与 tune 匹配。算法与计时边界见 [阶段调度](../architecture/STAGE2.md#双目标阶段调度)。
+在 `[stage2]` 设置 `cuda.workspace_policy`。默认 `"auto"`。`"independent"` 让两槽各持一套工作区，`"leased"` 让下一槽先做准备和 Baby 点，到 F 树前再申请独占大工作区。并发为 `"auto"` 时按实测比较可准入的模式。并发为 `"dual"` 时使用指定模式，工作区也为 `"auto"` 时优先双工作区，预算不足时使用可准入的租约模式。工作区模式和阶段掩码分别参与 tune 匹配。见 [阶段调度](../architecture/STAGE2.md#双目标阶段调度)。
 
 `ECM_STAGE2_QUEUE_PHASE_MASK` 可给队列双槽指定阶段互斥掩码，默认 `57`。用 `0` 允许所有阶段交错，`56` 放开 Baby，`32` 只锁下降，`25` 放开下降，`49` 只移除 giant 点生成的锁。各掩码保留各自的双槽成绩。实时显存检查、设备队列互斥和显式启用的工作区租约仍生效。
 
@@ -119,11 +121,11 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 例如 `ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10,"xxx"` 中，960 是跳过的 save 记录数，10 是请求数量；`xxx` 所在位置必须填可解析的已知因子或空字符串，不能当作任意备注。
 
-整数支持精确十进制及科学记数法，不能经浮点舍入改变 B2。`b2_ratio` 为非零整数时，执行 Stage2 前用 save 中的 B1 × ratio 覆盖 B2，并检查乘法溢出与 B2 > B1；否则 B2 优先级为 CLI 非零值 → 任务非零值 → `stage2_b2`，最终为 0 且启用 Auto B2 时才自动选择。
+整数支持精确十进制和科学记数法。队列和直接读档均以存档 B1 × 非零 `b2_ratio` 覆盖 B2，并检查溢出和 B2 > B1。其余情况下依次采用非零的 CLI 值、任务值、`b2`。CUDA 在有效 B2 为 0、`b2_ratio` 为 0 且启用 Auto B2 时才自动选择。
 
 ## 数量不足与错误
 
-删除性能文件会触发默认启动短校准。成本探测固定使用小B2，不继承`stage2_b2_round_chain`；正常任务之后仍可按该开关凑整。遇到`invalid completed calibration shape`时查看完整错误中的预期／实际点数及证据路径，这类错误不能据此判定Stage1 save损坏。实现与严格校验条件见[启动短校准](../architecture/AUTO_B2.md#启动短校准)。
+删除性能文件会触发默认启动短校准。成本探测固定使用小B2，不继承`b2_round_chain`；正常任务之后仍可按该开关凑整。遇到`invalid completed calibration shape`时查看完整错误中的预期／实际点数及证据路径，这类错误不能据此判定Stage1 save损坏。实现与严格校验条件见[启动短校准](../architecture/AUTO_B2.md#启动短校准)。
 
 请求 10 条、跳过后仅有 3 条时，提示 requested/available，执行这 3 条。全部成功后按 completed=3 完成原任务，继续下一项；可用记录为 0 时提示并按零曲线完成，不等待 save 追加。
 
@@ -142,30 +144,30 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 ## TOML 与路径
 
-默认读取 exe 同目录的 `ecm.toml`；隐式文件缺失采用内置默认值，显式 `--config FILE` 缺失或格式错误时报错。配置分区、优先级和逐键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。
+默认读取 exe 同目录的 `ecm.toml`；隐式文件缺失采用内置默认值，显式 `--config FILE` 缺失或格式错误时报错。配置分区、优先级和逐键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
-Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。队列只领取 `ECMSTAGE2=` 行；`priority`、`skip` 和 `b2_ratio` 在 `[shared]` 设置，按 worker 覆盖时写入 `[workers.N.shared]`。非零 `b2_ratio` 以 save 中 B1 × ratio 覆盖有效 B2，直接读档也适用。
+Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、检查点和调试日志在 `[stage2]` 单独设置。队列只领取 `ECMSTAGE2=` 行。`[stage2] b2_ratio` 在直接读档和队列模式下按存档 B1 × ratio 覆盖有效 B2，worker 使用 `stage2.b2_ratio`。
 
-共用 `worktodo` 及 Stage2 相对路径基于 TOML 目录，其他 Stage1 相对路径基于其程序目录；CLI 相对路径基于当前工作目录。进度目录空值使用队列目录；显式旧进度路径仍可作为导入来源。save 目录空值继承 Stage1 的 `tmp_dir`，`stage2_device = -1` 继承 Stage1 的 `device`。推荐将两个程序与共用 TOML 放在同一目录。
+共用 `worktodo` 及 Stage2 相对路径基于 TOML 目录，其他 Stage1 相对路径基于其程序目录；CLI 相对路径基于当前工作目录。进度目录空值使用队列目录；显式旧进度路径仍可作为导入来源。save 目录空值继承 Stage1 的 `tmp_dir`，`gpu_device = -1` 继承 Stage1 的 `device`。推荐将两个程序与共用 TOML 放在同一目录。
 
-`[stage1] auto_stage2 = 1` 可将无因子的 Stage1 任务转为 Stage2；默认原位改写，也可选择接收 worker 列表或其他队列文件，见 [Stage1 自动交接](STAGE1.md#自动交接到-stage2)。交接由 GUI 在阶段切换时启动对应程序。Edwards Stage2 需要有效 B2，可来自任务、`stage2_b2` 或 `b2_ratio`。GUI 按 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不读取配置中的阶段字段。
+在 `[stage1]` 中设置 `handoff.mode = "ecm-elf"`，可将无因子的 Stage1 任务转为 Stage2。默认原位改写，也可指定接收 worker 列表或其他队列文件。Edwards Stage2 需要有效 B2，可来自任务、`b2` 或队列比例 `b2_ratio`。GUI 根据 `ECMSTAGE1=` 和 `ECMSTAGE2=` 前缀启动对应程序。见 [Stage1 自动交接](STAGE1.md#自动交接到-stage2)。
 
 运行时拒绝 Stage1/Stage2 队列冲突及 save、程序、配置、队列、进度、结果和日志之间的危险重叠。
 
 ## 日志与内存摘要
 
-可选 `stage2_relocation=1`（或 CLI `--relocation 1`，默认0）在相同 B2 下试算较短 giant 后缀。命中或目标 N 非单位时自动重放完整原区间，完成验证后才发布结果。选 D/内存规划仍按原区间，完整 ECM tune 不支持此模式；详见 [算法、指标及边界](../architecture/STAGE2.md#可选-relocation) 与 [性能实测](../performance/EDWARDS_STAGE2.md)。
+可选 `relocation=1`（或 CLI `--relocation 1`，默认0）在相同 B2 下试算较短 giant 后缀。命中或目标 N 非单位时自动重放完整原区间，完成验证后才发布结果。选 D/内存规划仍按原区间，完整 ECM tune 不支持此模式；详见 [算法、指标及边界](../architecture/STAGE2.md#可选-relocation) 与 [性能实测](../performance/EDWARDS_STAGE2.md)。
 
-`verbose` 控制可读的阶段/批次输出；`stage2_debug_log` 控制独立调试文件。警告和错误始终可见。长阶段每 30 秒的父进程状态提示不等于 kernel 完成百分比。
+`verbose` 控制可读的阶段/批次输出；`diagnostics.debug_log` 控制独立调试文件。警告和错误始终可见。长阶段每 30 秒的父进程状态提示不等于 kernel 完成百分比。
 
 - `curve_start`：任务曲线编号、save 记录编号、sigma、B1 和文件校验状态。
 - `stage2_phase`：`previous` 为上阶段墙钟间隔，`elapsed` 为曲线累计时间。候选计划查询不输出正常阶段日志，也不更新曲线阶段时钟；实际运行的规划阶段每条曲线只打印一次。独立调试日志与规划 JSON 保留诊断信息。
 - `real_shape`：B1/B2、算术位宽、D/P、baby/giant 数及 G 批次数。
 - `mem`：设备 free/total、reserve 和 arena cap；预计最大变换及树顶形状。
 - 曲线结束的 `arena=a/b fold=a/b`：a 为实际完整 NTT 池峰值或启用 fold owner 占用；fold 回退时 a=0。b 保留读取的 TOML 值，可能与 CLI/环境覆盖后的有效预算不同。
-- `stage2_ntt_counts=1`（默认 0，CLI `--ntt-counts` 可覆盖）：曲线结束输出按长度排列的卷积、正向、逆向和总次数表，并保留 `ntt_length_counts` 兼容行。一次卷积为两个正向加一个逆向，不是 kernel 启动数；关闭时不采集此表。`ntt_work` 的元素数、逻辑蝶形数、计数边界及开销见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
+- `diagnostics.ntt_length_counts=1`（默认 0，CLI `--ntt-counts` 可覆盖）：曲线结束输出按长度排列的卷积、正向、逆向和总次数表，并保留 `ntt_length_counts` 兼容行。一次卷积为两个正向加一个逆向，不是 kernel 启动数；关闭时不采集此表。`ntt_work` 的元素数、逻辑蝶形数、计数边界及开销见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
 - `stage2_full_wall.total`：完整引擎 init+main，排除 Stage1 与自动 D 扫描。外层 result/curve_done 还含进程和发布结果等开销。
-- `stage2_tune_runtime`：只有成功补充缺失算术位宽/执行区间摘要时输出，包含位宽、算术家族、D/B2与实测/预测比值。默认采集已执行的干净完整曲线，可用`stage2_tune_runtime=false`关闭；完整规则见[运行补充](../architecture/AUTO_B2.md#正常运行补充缺失位宽)。
+- `tune.runtime_enabled`：只有成功补充缺失算术位宽/执行区间摘要时输出，包含位宽、算术家族、D/B2与实测/预测比值。默认采集已执行的干净完整曲线，可用`tune.runtime_enabled=false`关闭；完整规则见[运行补充](../architecture/AUTO_B2.md#正常运行补充缺失位宽)。
 
 `arena_mb` 是 NTT 池 payload，不是全部显存。独立 giant、S4、owner、下降元数据、按次回退和驱动资源另计。组件峰值不能直接相加；详细含义见 [内存](../architecture/MEMORY.md)。普通日志和结果默认不轮转。
 
@@ -173,7 +175,7 @@ Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_fin
 
 ## 固定参数G树实验
 
-生产配置 `stage2_groot_balanced = "auto"` 默认为自动选择；`true`强制分块均衡布局，`false`强制左侧连续布局。CLI `--groot-layout auto|true|false`覆盖当前worker配置，保留0/1别名；auto也会传给曲线子进程，以免重新读取TOML强制值。tune矩阵的 `groot_balanced` 仍记录实际布局0/1，不记录第三种auto布局。OpenCL接受auto，强制布局限于CUDA。
+生产配置 `groot_balanced = "auto"` 默认为自动选择；`true`强制分块均衡布局，`false`强制左侧连续布局。CLI `--groot-layout auto|true|false`覆盖当前worker配置，保留0/1别名；auto也会传给曲线子进程，以免重新读取TOML强制值。tune矩阵的 `groot_balanced` 仍记录实际布局0/1，不记录第三种auto布局。OpenCL接受auto，强制布局限于CUDA。
 
 CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局；不设置时沿用默认规则。只允许固定D和B2，关闭Auto B2、自动承载、运行时采样、短校准和短NTT调优；不与正式tune或旧cost profile混用。实验不读取或更新已有ECM tune行，不能用它收集当前格式的生产性能文件。OpenCL不接受此变量。
 
@@ -181,39 +183,39 @@ CUDA内部实验变量`NTT_GROOT_BALANCED=0|1`选择左侧连续／分块布局�
 
 ## CUDA 加权 NTT
 
-`--weighted-ntt 1` 启用根加权多项式卷积，也可在 `[stage2]` 或 worker 的 Stage2 表中设置 `stage2_weighted_ntt = true`。默认 `false` 使用全长线性卷积。加权要求 `stage2_pack_zero = true`，可用于 Edwards 和 Montgomery；直接设备打包或缓存根表不可用的调用走全长路径。曲线结束的 `stage2_weighted_ntt` 日志列出实际执行的加权卷积数。完整曲线配对结果见 [根加权半长卷积](../performance/NTT_OUTER.md#根加权半长卷积)。
+`--weighted-ntt 1` 启用根加权多项式卷积，也可在 `[stage2]` 或 worker 的 Stage2 表中设置 `cuda.weighted_ntt = true`。默认 `false` 使用全长线性卷积。加权要求 `cuda.pack_zero = true`，可用于 Edwards 和 Montgomery；直接设备打包或缓存根表不可用的调用走全长路径。曲线结束的 `cuda.weighted_ntt` 日志列出实际执行的加权卷积数。完整曲线配对结果见 [根加权半长卷积](../performance/NTT_OUTER.md#根加权半长卷积)。
 
 ## CUDA点块与链长选项
 
-可用 `stage2_giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。未实际借块时继续使用原执行与缓存身份，不增加策略重放或额外同步；日志及结果分别保留请求和实际值。默认仍为false，真实借块的原分块重放预算尚待完整扩展。`stage2_b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。
+可用 `giant_tail_balance` 对完整giant区间末两块借整P点，避免可消除的ladder短尾；它保持B2与点总数。未实际借块时继续使用原执行与缓存身份，不增加策略重放或额外同步；日志及结果分别保留请求和实际值。默认仍为false，真实借块的原分块重放预算尚待完整扩展。`b2_round_chain` 则增加实际B2到最小整P且使尾块可走chain，日志和结果保留请求／实际边界；它会增加覆盖量和可能的G树工作。
 
-`stage2_giant_chain` 可固定32或64，或以auto在正常任务中对当前最优项补有限32/64对照。默认保留原点块和64链；这些CUDA选项尚未获得全设备／全位宽默认启用资格。配置取值见[生成参考](../ECM_TOML_REFERENCE.md)，完整约束及回退见[点策略](../architecture/STAGE2.md#完整区间点块策略)，实测见[固定D报告](../performance/STAGE2_PREPARATION.md#完整尾块平衡b2凑整与3264生产选项)。
+`giant_chain` 可固定32或64，或以auto在正常任务中对当前最优项补有限32/64对照。默认保留原点块和64链；这些CUDA选项尚未获得全设备／全位宽默认启用资格。配置取值见[生成参考](../ECM_TOML_REFERENCE.zh-CN.md)，完整约束及回退见[点策略](../architecture/STAGE2.md#完整区间点块策略)，实测见[固定D报告](../performance/STAGE2_PREPARATION.md#完整尾块平衡b2凑整与3264生产选项)。
 
 ## 规划与依据
 
-`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖TOML，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。
+`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`cuda.auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖TOML，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。
 
-`--tune ecm --tune-level 1`优先读取TOML指定的当前worker队列与有效save，采用任务/TOML的生产B2；`--tune-worktodo FILE`可指定队列。`stage2_auto_carrier=1`时先补普通默认基线与经整除验证的承载默认对照，再从模型D/P搜索相邻项；只有平均耗时降低超过2%且越过双方2×样本标准差噪声界限才继续移动。不会推进生产队列。
+`--tune ecm --tune-level 1`优先读取TOML指定的当前worker队列与有效save，采用任务/TOML的生产B2；`--tune-worktodo FILE`可指定队列。`cuda.auto_carrier=1`时先补普通默认基线与经整除验证的承载默认对照，再从模型D/P搜索相邻项；只有平均耗时降低超过2%且越过双方2×样本标准差噪声界限才继续移动。不会推进生产队列。
 
 `--tune-exponents bits,...`明确使用通用位宽网格；默认队列缺失或无Stage2任务时也使用网格。`--tune-save FILE`使用一个保存点，自动承载指数可来自当前worker中重建N相同的任务；也可用`--tune-carrier-exponent p`明确指定。完整梅森N的普通路径已使用梅森归约，自动模式不重复测量相同承载。
 
-默认1800秒软预算，`--tune-budget-seconds`可覆盖。ECM、NTT及启动短校准默认不运行丢弃的预热轮次；`stage2_tune_warmup=1`或CLI `--tune-warmup 1`启用每个新测形状的一次预热。正式`repeats`记录实际次数，保存平均耗时和样本标准差；必要算术检查保持不变。缺NTT资料时补轻量组件校准，真实承载任务的普通/承载参考优先占用预算。
+默认1800秒软预算，`--tune-budget-seconds`可覆盖。ECM、NTT及启动短校准默认不运行丢弃的预热轮次；`tune.warmup=1`或CLI `--tune-warmup 1`启用每个新测形状的一次预热。正式`repeats`记录实际次数，保存平均耗时和样本标准差；必要算术检查保持不变。缺NTT资料时补轻量组件校准，真实承载任务的普通/承载参考优先占用预算。
 
 `--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；显式D表限定搜索范围。格式8每个位宽一个`matrix`，首行为列名，后续行与表头对齐；同参数重复执行合并repeats、均值和样本标准差，不同参数保留多行。行内保存来源程序版本与UTC更新时间，版本不影响匹配或累计，普通/承载通过`carrier_exponent`和`modulus_kind`独立记录，算术位宽自动恢复，详见[算术路径字段](../architecture/AUTO_B2.md#toml-中的算术路径)。不产生`[sample.*]`或未访问的模型网格。兼容其他程序版本的format 8，并将旧条件级版本迁入行内；format 8以前的不兼容结构须重新生成，失败不覆盖原文件；队列进度和Stage1 save不受影响。控制台保留`ecm_tune_progress`等进度，内部诊断保存在证据日志。
 
 `--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
 
-用 `--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml` 汇集合格摘要，再让 `stage2_tune_profile` 指向结果。同形状的实测摘要优先保留样本数较多的一行，次数相同时采用较新的记录。不同形状各自保留。可用 `--tune-ntt-profile NTT.toml` 导入组件。该命令不运行 GPU 测试，输出应使用独立文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
+用 `--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml` 汇集合格摘要，再让 `tune_file` 指向结果。同形状的实测摘要优先保留样本数较多的一行，次数相同时采用较新的记录。不同形状各自保留。可用 `--tune-ntt-profile NTT.toml` 导入组件。该命令不运行 GPU 测试，输出应使用独立文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
 
-生产用`--tune-profile FILE.toml`或`stage2_tune_profile`加载资料，不要求B1匹配。默认`stage2_prediction_policy=model`：普通按实际N位宽，梅森按p的算术位宽查询各自区间；精确实测优先，其他输入使用基础模型加区间校正。更改D和切换承载分别通过双侧误差保护，NTT/驻留边界及当前显存重新规划。设为`paired`或CLI `--prediction-policy paired`恢复精确位宽/B2/形状的配对实测门禁。
+生产用`--tune-profile FILE.toml`或`tune_file`加载资料，不要求B1匹配。默认`prediction_policy=model`：普通按实际N位宽，梅森按p的算术位宽查询各自区间；精确实测优先，其他输入使用基础模型加区间校正。更改D和切换承载分别通过双侧误差保护，NTT/驻留边界及当前显存重新规划。设为`paired`或CLI `--prediction-policy paired`恢复精确位宽/B2/形状的配对实测门禁。
 
 没有用户调优文件时也有内置4060 Laptop/1800MHz参考模型，输出标为builtin_model；范围外可以外推，但不承诺独立精度或未测性能。启动短校准默认保留，可用`--short-calibration 0`查询纯基础预测。邻近算术位宽可复用家族覆盖，不因梅森指数改变而必然再校准。条件忽略默认gpu、driver、cuda、backend、environment；算术、整除和显存检查始终保留。详见[模型与边界](../architecture/AUTO_B2.md#算术位宽区间预测)。
 
 通用位宽网格可用`--tune ecm --tune-exponents 512,2048,4096,8192,12288,15360 --tune-arithmetic both --tune-b2 26000000000,260000000000 --tune-budget-seconds 1800`。它分别收集通用与梅森算术资料；真实队列默认仍用真实save配对。网格的梅森实际余因子位数可能低于算术位数，两者不会混为同一索引。
 
-任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应TOML为`stage1_seconds_per_curve`、`stage1_cost_csv`、`stage1_tune_profile`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。Stage1 标量构造默认跟随 TOML 的 `lcm`，可用 `--lcm 1|12` 覆盖。现有成本证据文件中的 `lcm`、`choose12` 标签由程序在读取时映射。
+任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应 TOML 为 `tune.stage1_seconds_per_curve`、`tune.stage1_cost_csv`、`tune.stage1_cost_file`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。Stage1 标量构造默认跟随 TOML 的 `montgomery_lcm_multiplier`，可用 `--lcm 1|12` 覆盖。现有成本证据文件中的 `lcm`、`choose12` 标签由程序在读取时映射。
 
-`--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`stage2_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
+`--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`tune.legacy_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
 - [ecm_cuda_stage2_main.cpp](../../src/ecm/stage2/cuda/main.cpp#L175)：`records`；[队列字段](../../src/ecm/stage2/cuda/main.cpp#L395)：`queue_fields`。
 - [Stage2 进度接口](../../include/ecm/io/stage2_checkpoint.h)与[存储实现](../../src/io/stage2_checkpoint.cpp)：原子进度、结果持久化和旧回执兼容。

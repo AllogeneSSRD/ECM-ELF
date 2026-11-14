@@ -103,7 +103,8 @@ release/
       gmp-10.dll                    vcpkg 通用 x64，三个计算组件共用
       ecm.toml / ecm.toml.example
       worktodo.txt
-      ECM_TOML_REFERENCE.md
+      ECM_TOML_REFERENCE.en.md
+      ECM_TOML_REFERENCE.zh-CN.md
       assets/                   仅包含基础ELY
       localization/v2/
       licenses/                    组件与实际依赖对应的许可和声明

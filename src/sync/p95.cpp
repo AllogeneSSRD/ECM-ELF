@@ -789,12 +789,13 @@ bool park_p95(const P95TransferConfig& cfg, const std::string& line, const ecm_s
 }
 
 bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
-    if (cfg.worktodo_path.empty())
+    if (cfg.pending_path.empty())
         return true;
     try {
         // Import old ready-line pending files without dropping them. Native ECM
         // lines cannot prove a saved range and require operator correction.
-        if (std::filesystem::exists(std::filesystem::u8path(cfg.pending_path))) {
+        if (!cfg.worktodo_path.empty() &&
+            std::filesystem::exists(std::filesystem::u8path(cfg.pending_path))) {
             const auto legacy = ecm_io::read_file(std::filesystem::u8path(cfg.pending_path));
             std::istringstream in(legacy);
             std::string line;
@@ -863,7 +864,8 @@ bool flush_p95(const P95TransferConfig& cfg, std::string& error) {
 
             // Legacy pending/recovery must also name already usable saves. Never
             // release a new add file while an older line references missing data.
-            if (std::filesystem::exists(std::filesystem::u8path(cfg.pending_path))) {
+            if (!cfg.worktodo_path.empty() &&
+                std::filesystem::exists(std::filesystem::u8path(cfg.pending_path))) {
                 std::istringstream in(ecm_io::read_file(std::filesystem::u8path(cfg.pending_path)));
                 std::string line;
                 while (std::getline(in, line))
