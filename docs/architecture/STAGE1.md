@@ -24,6 +24,12 @@ IFMA 使用 52 位 limbs，每个向量 lane 处理一条曲线。两种曲线�
 
 CPU Edwards 的标量和 IFMA NAF 主循环按需生成扩展坐标 T。只有紧随倍点的加点读取 T，倍点与检查点读取 X/Y/Z。标量完整点输出和 SIMD 完整点诊断在需要时计算 T。两条路径都复用倍点中的 \(G=X^2+Y^2\)，计算 \(E=(X+Y)^2-G\) 时只做一次模减。见 [标量倍点](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp) 与 [IFMA 倍点](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp)。
 
+CPU Edwards 的所有 IFMA 批次和 GMP 曲线共享同一个只读 NAF 序列。同一 worker 按实际 B1 和窗口保留最近一份，保留上限 256 MiB。稠密 `int16_t` 序列预计超过 64 MiB 时优先用打包位图，两种表示生成相同的数字和列序。每条曲线仍生成自己的奇数倍点字典。进程内的序列缓存随进程退出释放。
+
+CPU 在构造标量和分配计算缓冲前分别核对可用内存。预算保留可用内存的 20%，且至少留 64 MiB。计算估算计入一个共享编码、批次状态和每个活跃线程的字典及归一化工作区。内存紧张时可采用打包编码、降低并发线程数或缩小 NAF 窗口。已有部分检查点固定其实际窗口，预算不足则保留检查点并报错。见 [CPU Edwards workflow](../../src/ecm/stage1/edwards/cpu/workflow.cpp)。
+
+`[stage1] naf_memory_mb` 为 CPU 或 CUDA CGBN 的计算缓冲区设置预算上限，单位为十进制 MB。`0` 使用运行时的空闲预算，正值最小为 `1`。实际预算取配置上限与扣除预留后的空闲预算中的较小值，`edwards_naf_window_bits` 给出内存选型的起点。CPU 命中缓存时，已有序列仍计入配置上限，只将新增分配与空闲内存比较。标量构造和 CUDA CGBN 的主机准备单独检查可用内存。
+
 Montgomery IFMA 二进制 ladder 的每一位同时执行倍点与差分加点。两者共用被倍点的 \(X+Z\) 与 \(X-Z\)，三个同时需要和与差的位置用 `addsub`，省去一对重复模加减。每位仍执行 6 次模乘和 4 次模平方。检查点继续保存两条相邻的 X:Z，恢复后重新算当前位的和差。见 [IFMA Montgomery 点运算](../../src/ecm/stage1/montgomery/cpu/simd_mont_curve.cpp)。
 
 可选 GWNUM 31.6 后端沿用 Montgomery PARAM0 的 Suyama 构造和二进制 ladder。完整梅森数使用 GWNUM 的专用模数计划，其他奇数使用通用模数计划。差分加点和倍点共用被倍点的 \(X\pm Z\) 的正向变换，两项曲线常数的频谱保留在本次 ladder 中。检查点与最终点转回普通 GMP 余数。GWNUM 错误标志、转换失败或最大舍入误差超过 0.40 都会中止该批计算。每个 ECM worker 一次算一条曲线，GWNUM 每条曲线用单线程。见 [GWNUM 点运算](../../src/ecm/stage1/montgomery/cpu/gwnum_curve.cpp)。
@@ -173,13 +179,13 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
 
-二进制与NAF的实例共享[位宽清单](../../src/ecm/cuda/dispatch/tiers.def)，核函数和七组实例化文件位于 `src/ecm/stage1/edwards/cuda/instances/`，按TPI及位宽范围拆分并行编译；`src/ecm/stage1/edwards/cuda/`保留输入校验、分派和主机驱动，相关 API 为曲线目录内的私有头。模板算术与切片逻辑见[共用实例实现](../../src/ecm/stage1/edwards/cuda/instances/instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
+二进制与 NAF 实例共享[位宽清单](../../src/ecm/cuda/dispatch/tiers.def)，核函数按 TPI 和容器位宽编译。CUDA CGBN 在分配前使用 `cudaMemGetInfo` 查询所选设备，并扣除 20% 可用显存或 16 MiB，取较大者作为预留。设 C 为曲线数，W 为容器字节数，L 为标量位数，NAF 的设备缓冲估算为 `C×W×(14+4×2^(w−2)) + 8×(floor((L+32)/32)+1) + 32` 字节，另有主机工作区预估。新任务显存不足时逐步缩小窗口并发出警告，自动模式必要时可切换到 binary。部分检查点固定其实际窗口。最小可用路径仍超过预算时保留任务和检查点，并报告所需容量。见 [设备估算与窗口选择](../../src/ecm/stage1/edwards/cuda/memory.h)。
 
 主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/ecm/stage1/edwards/cuda/runtime.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
 [曲线构造](../../src/ecm/curve/edwards.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
-[worker 接入](../../src/ecm/stage1/edwards/cuda/workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，未完成状态恢复按 N 重新选择容器。已计算完成的普通坐标状态经完整主机校验后直接补发布，不进行设备准备、档位查找、上传或字典分配。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
+[worker 接入](../../src/ecm/stage1/edwards/cuda/workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。已完成的普通坐标状态通过主机校验后直接补发布。未完成状态使用保存的进度和算法，按 N 选择容器。完整字段、兼容读取和恢复资格见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3v4)。
 
 CPU/GPU Edwards 共用完成点文本，可由 CUDA Stage2 和 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md) 消费；sigma 不能按 Suyama PARAM0 解释。字段、状态、校验及外部程序能力统一见 [Save](SAVE.md#5-edwards-save-version1)。
 

@@ -11,31 +11,41 @@
 #include "edwards_internal.h"
 #include "edwards_slice.h"
 #include "launch.h"
+#include "memory.h"
 namespace {
 template<uint32_t W> struct HostMem {uint32_t _limbs[W/32];};
 template<uint32_t W,uint32_t T> struct HostParams {static const uint32_t BITS=W,TPI=T,TPB=128;};
 void check(cudaError_t rc) {if(rc!=cudaSuccess)throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,cudaGetErrorString(rc));}
+void check_allocation(cudaError_t rc) {
+    if (rc == cudaErrorMemoryAllocation) {
+        // Clear the allocation error before another attempt on this thread.
+        cudaGetLastError();
+        throw ecm_edwards_cuda_detail::DeviceAllocationError(cudaGetErrorString(rc));
+    }
+    check(rc);
+}
 template<class T> struct Device {
     T *p=nullptr;
-    explicit Device(size_t n) {check(cudaMalloc(&p,ecm_cuda_stage1::checked_size({n,sizeof(T)})));}
+    explicit Device(size_t n) {check_allocation(cudaMalloc(&p,ecm_cuda_stage1::checked_size({n,sizeof(T)})));}
     Device(const Device &)=delete;
     Device &operator=(const Device &)=delete;
     ~Device(){if(p)cudaFree(p);}
 };
 struct Report {
     cgbn_error_report_t *p=nullptr;
-    Report(){check(cgbn_error_report_alloc(&p));}
+    Report(){check_allocation(cgbn_error_report_alloc(&p));}
     Report(const Report &)=delete;
     Report &operator=(const Report &)=delete;
     ~Report(){if(p)cgbn_error_report_free(p);}
 };
+static_assert(sizeof(cgbn_error_report_t) == ecm_cuda_stage1::edwards_device_report_bytes);
 template<class Mem> void put(Mem &r,const mpz_t x) {
     std::memset(&r,0,sizeof(r));size_t used=0;mpz_export(r._limbs,&used,-1,4,0,0,x);
 }
 template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t count,
                          uint32_t &done,uint32_t &snapshot_cursor,uint32_t chunk,
                          const ecm_cuda_stage1::EdwardsSliceProgress &cb,void *context,
-                         EcmEdwardsPrepared prepared,const ecm_edwards_cuda_detail::Kernels &k) {
+                         const std::function<void()> &prepared,const ecm_edwards_cuda_detail::Kernels &k) {
     using Mem=HostMem<P::BITS>;
     const uint32_t bits=static_cast<uint32_t>(mpz_sizeinbase(s,2));
     std::vector<Mem> host(ecm_cuda_stage1::checked_size({size_t(count),10}));
@@ -48,7 +58,7 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
     Device<Mem> data(host.size());Device<uint32_t> scalar(words.size());Report report;
     check(cudaMemcpy(data.p,host.data(),host.size()*sizeof(Mem),cudaMemcpyHostToDevice));
     check(cudaMemcpy(scalar.p,words.data(),words.size()*4,cudaMemcpyHostToDevice));
-    if(prepared)prepared(context);
+    if(prepared)prepared();
     EcmEdwardsSlice slices(chunk);
     const ecm_cuda_stage1::EdwardsSnapshot snapshot=[] {};
     while(done<bits) {
@@ -80,13 +90,13 @@ struct EdwardsEvent {
 template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *states,
         uint32_t count,uint32_t &done,uint32_t &snapshot_cursor,uint32_t chunk,
         const ecm_cuda_stage1::EdwardsSliceProgress &cb,
-        void *context,int doubling,EcmEdwardsNafMetrics *metrics,EcmEdwardsPrepared prepared,const ecm_edwards_cuda_detail::Kernels &k) {
+        void *context,int doubling,EcmEdwardsNafMetrics *metrics,const std::function<void()> &prepared,const ecm_edwards_cuda_detail::Kernels &k) {
     using Mem=HostMem<P::BITS>;
     const uint32_t entries=1u<<(plan.window-2);
     if(metrics){*metrics={};metrics->columns=plan.bits;metrics->additions=plan.additions;
         metrics->container_bits=P::BITS;metrics->tpi=P::TPI;
         metrics->dictionary_bytes=uint64_t(count)*entries*4*sizeof(Mem);}
-    if(done==plan.bits){if(prepared)prepared(context);return 0;}
+    if(done==plan.bits){if(prepared)prepared();return 0;}
     std::vector<Mem> host(ecm_cuda_stage1::checked_size({size_t(count),10})),ordinary(ecm_cuda_stage1::checked_size({size_t(count),4}));
     for(uint32_t i=0;i<count;++i) {
         put(host[size_t(i)*10],n);
@@ -106,7 +116,7 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
     if(metrics)check(cudaEventElapsedTime(&metrics->dictionary_gpu_ms,start.value,stop.value));
     if(metrics)metrics->dictionary_wall_ms=std::chrono::duration<double,std::milli>(
         std::chrono::steady_clock::now()-dictionary_start).count();
-    if(prepared)prepared(context);
+    if(prepared)prepared();
     EcmEdwardsSlice slices(chunk);
     const ecm_cuda_stage1::EdwardsSnapshot snapshot=[&] {
         if(snapshot_cursor==done)return;

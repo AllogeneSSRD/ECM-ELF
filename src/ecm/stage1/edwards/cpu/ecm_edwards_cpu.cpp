@@ -10,9 +10,15 @@
 //
 // 编译: 见 build_edwards_test.bat (MSVC + vcpkg GMP)。
 
+#include <chrono>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <vector>
 #include <string>
 #include <gmp.h>
@@ -184,15 +190,59 @@ static void ed_dbl(ed_point &r, const ed_point &p, const mpz_t N) {
     mpz_clears(A, B, C, D, E, F, G, H, t, NULL);
 }
 
-// w-NAF: 有符号数字, 每个非零位后至少 w-1 个零位. 返回 LSB-first.
-// 移植 Prime95 ecm.cpp:4824-4856 的 O(bits) 单遍算法 (tstbit + carry, 不做逐位右移).
-static void naf_digits(const mpz_t k, int w, std::vector<int> &digits) {
-    digits.clear();
-    const size_t nbits = mpz_sizeinbase(k, 2);
-    if (nbits == 0) return;
-    const int max_val = (1 << (w - 1)) - 1;      // 2^(w-1)-1 (w=4 → 7)
+namespace {
+constexpr size_t naf_cache_limit = 256ull * 1024 * 1024;
+std::mutex naf_cache_mutex;
+uint64_t naf_cache_b1 = 0;
+std::shared_ptr<const EdwardsNafPlan> naf_cache;
+}
 
-    std::vector<int> out(nbits + 1, 0);
+size_t edwards_naf_bytes(size_t scalar_bits, bool packed) {
+    if (packed)
+        return 2 * sizeof(uint32_t) * (scalar_bits / 32 + 2);
+    if (scalar_bits >= (std::numeric_limits<size_t>::max)() / sizeof(int16_t))
+        throw std::length_error("CPU Edwards NAF allocation is too large");
+    return sizeof(int16_t) * (scalar_bits + 1);
+}
+
+size_t EdwardsNafPlan::bytes() const {
+    return dense_.capacity() * sizeof(int16_t) + wide_.capacity() * sizeof(int) +
+           (nonzero_.capacity() + codes_.capacity()) * sizeof(uint32_t);
+}
+
+// CPU checkpoint cursors rely on this LSB-first, Prime95-derived digit order.
+EdwardsNafPlan::EdwardsNafPlan(mpz_srcptr k, int w, bool packed) : window_(w) {
+    if (w < 2 || w > std::numeric_limits<int>::digits - 1)
+        throw std::invalid_argument("invalid CPU Edwards NAF window");
+    const size_t nbits = mpz_sizeinbase(k, 2);
+    const int max_val = (1 << (w - 1)) - 1;      // 2^(w-1)-1 (w=4 → 7)
+    const bool wide = w > std::numeric_limits<int16_t>::digits + 1;
+    if (packed) {
+        const auto words = edwards_naf_bytes(nbits, true) / (2 * sizeof(uint32_t));
+        nonzero_.resize(words);
+        codes_.resize(words);
+    } else if (wide) {
+        wide_.resize(nbits + 1);
+    } else {
+        dense_.resize(edwards_naf_bytes(nbits) / sizeof(int16_t));
+    }
+    const auto store = [&](size_t bit, int value) {
+        if (packed) {
+            const auto word = bit / 32;
+            const auto shift = bit % 32;
+            const auto magnitude = static_cast<uint32_t>(value < 0 ? -value : value);
+            const auto code = magnitude / 2 | (uint32_t{value < 0} << (w - 2));
+            const auto bits = uint64_t{code} << shift;
+            nonzero_[word] |= uint32_t{1} << shift;
+            codes_[word] |= static_cast<uint32_t>(bits);
+            codes_[word + 1] |= static_cast<uint32_t>(bits >> 32);
+        } else if (wide) {
+            wide_[bit] = value;
+        } else {
+            dense_[bit] = static_cast<int16_t>(value);
+        }
+        size_ = bit + 1;
+    };
     int value = 0;        // 正在构造的 NAF 值 (奇数)
     int addin = 1;        // 当前位权
     int carry = 0;        // 负 NAF 码的借位
@@ -222,21 +272,46 @@ static void naf_digits(const mpz_t k, int w, std::vector<int> &digits) {
         if (!complete) continue;
 
         if (value <= max_val) {
-            out[start] = value;                  // 正 NAF 码
+            store(start, value);                // 正 NAF 码
         } else {
-            out[start] = value - addin;          // 负 NAF 码
+            store(start, value - addin);        // 负 NAF 码
             carry = 1;
         }
         value = 0;
         addin = 1;
     }
-    if (carry) {
-        out[nbits] = 1;                          // 末尾借位补 +1
+    if (carry) store(nbits, 1);
+    if (!size_) size_ = 1;
+}
+
+std::shared_ptr<const EdwardsNafPlan> edwards_cached_naf(uint64_t b1, int window) {
+    std::lock_guard<std::mutex> lock(naf_cache_mutex);
+    if (b1 && naf_cache && naf_cache_b1 == b1 && naf_cache->window() == window)
+        return naf_cache;
+    return {};
+}
+
+void edwards_drop_cached_naf() {
+    std::lock_guard<std::mutex> lock(naf_cache_mutex);
+    naf_cache.reset();
+    naf_cache_b1 = 0;
+}
+
+std::shared_ptr<const EdwardsNafPlan> edwards_prepare_naf(mpz_srcptr scalar, uint64_t b1,
+                                                         int window, bool packed) {
+    if (!b1) return std::make_shared<const EdwardsNafPlan>(scalar, window, packed);
+    std::lock_guard<std::mutex> lock(naf_cache_mutex);
+    if (naf_cache && naf_cache_b1 == b1 && naf_cache->window() == window &&
+        (!packed || naf_cache->packed()))
+        return naf_cache;
+    naf_cache.reset();
+    naf_cache_b1 = 0;
+    auto plan = std::make_shared<const EdwardsNafPlan>(scalar, window, packed);
+    if (plan->bytes() <= naf_cache_limit) {
+        naf_cache_b1 = b1;
+        naf_cache = plan;
     }
-    size_t sz = out.size();
-    while (sz > 1 && out[sz - 1] == 0) sz--;
-    out.resize(sz);
-    digits = std::move(out);
+    return plan;
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +441,11 @@ static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const m
                            const mpz_t N, uint32_t chunk_bits,
                            const edwards_checkpoint_t *resume,
                            edwards_progress_fn progress, void *pctx,
-                           edwards_checkpoint_t *cur,mpz_ptr factor=nullptr) {
+                           edwards_checkpoint_t *cur, mpz_ptr factor = nullptr,
+                           const EdwardsNafPlan *naf = nullptr, int window = 0) {
+    const int w = window ? window : g_edwards_naf_w;
+    if (w < 2 || w > std::numeric_limits<int>::digits - 1 || (naf && naf->window() != w))
+        return -1;
     mont_ctx_t mc;
     if (mont_init(&mc, N) != 0) {
         // N 超固定尺寸上限 (不该发生, <10000 bit); 回退 mpz double-and-add, 无 checkpoint.
@@ -384,7 +463,6 @@ static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const m
         return true;
     }
 
-    const int w = g_edwards_naf_w;
     const size_t m = (size_t)1 << (w - 2);
 
     ed_point_mont Pm;
@@ -414,8 +492,12 @@ static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const m
         mont_clear(&mc);return hit?2:-1;
     }
 
-    std::vector<int> digits;
-    naf_digits(k, w, digits);
+    std::optional<EdwardsNafPlan> owned_naf;
+    if (!naf) {
+        owned_naf.emplace(k, w);
+        naf = &*owned_naf;
+    }
+    const auto& digits = *naf;
     const size_t total = digits.size();
 
     // 累加点初始化: 恒等点 或 resume 点
@@ -449,6 +531,10 @@ static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const m
     // 主循环 (分块; done 从 MSB 已处理位数)
     ed_affine_mont neg;
     bool aborted = false;
+    const char* timing = std::getenv("ECM_EDWARDS_NAF_TIMING");
+    const bool measure_loop = timing && std::strcmp(timing, "1") == 0;
+    using Clock = std::chrono::steady_clock;
+    const auto loop_start = measure_loop ? Clock::now() : Clock::time_point{};
     while (done < total) {
         size_t chunk_end = total;
         if (chunk_bits != 0 && done + chunk_bits < total) chunk_end = done + chunk_bits;
@@ -478,6 +564,10 @@ static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const m
             cur->bitnum = (uint32_t)done;
             if (!progress(pctx, cur)) { aborted = true; break; }
         }
+    }
+    if (measure_loop && !aborted) {
+        const double seconds = std::chrono::duration<double>(Clock::now() - loop_start).count();
+        std::fprintf(stderr, "[naf-window] cpu_loop_seconds=%.9f\n", seconds);
     }
 
     if (!aborted) {
@@ -600,7 +690,8 @@ int edwards_stage1_curve_progress(mpz_t factor, mpz_t Qx, mpz_t Qz,
                                   const mpz_t N, uint64_t sigma, const mpz_t s,
                                   uint32_t chunk_bits,
                                   const edwards_checkpoint_t *resume,
-                                  edwards_progress_fn progress, void *ctx) {
+                                  edwards_progress_fn progress, void *ctx,
+                                  const EdwardsNafPlan *naf, int window) {
     mpz_t d, g;
     mpz_inits(d, g, NULL);
     ed_point P, R;
@@ -617,7 +708,8 @@ int edwards_stage1_curve_progress(mpz_t factor, mpz_t Qx, mpz_t Qz,
 
     edwards_checkpoint_t cur;
     edwards_checkpoint_init(&cur);
-    const int completed = ed_mul_chunked(R, s, P, d, N, chunk_bits, resume, progress, ctx, &cur,factor);
+    const int completed = ed_mul_chunked(R, s, P, d, N, chunk_bits, resume, progress, ctx,
+                                         &cur, factor, naf, window);
     edwards_checkpoint_clear(&cur);
 
     if (completed!=1) {

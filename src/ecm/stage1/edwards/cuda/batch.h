@@ -6,6 +6,7 @@ using namespace ecm_edwards;
 struct Batch {
     uint32_t count,done=0;
     unsigned window=6;
+    unsigned original_window=0; // Explicit request before a memory downgrade.
     int doubling=4;
     Array state,factors;
     std::vector<uint64_t> sigmas;

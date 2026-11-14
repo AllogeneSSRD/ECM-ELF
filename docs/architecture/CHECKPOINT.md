@@ -115,7 +115,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 | CPU Edwards scalar / SIMD | 每曲线一条二进制状态；完成后改为结果记录 | magic `0x1725bcd9`、version 6；或 `ECM_EDWARDS_DONE_V1` | 普通投影坐标；CPU 乘法进度号 |
 | CUDA Montgomery ladder | 记录 0 包含整批头和数组 | magic `0x45555047`、version 5 | 切片边界的普通整数；二进制位进度 |
 | OpenCL Montgomery PARAM3 | 记录 0 包含整批头和数组 | magic `0x45555047`、version 4 | 设备 Montgomery 域；二进制位进度 |
-| CUDA Edwards binary / NAF | 记录 0 包含全部曲线 | `ECMEDB3`、version 3 | 普通整数；binary 位或 NAF 列 |
+| CUDA Edwards binary / NAF | 记录 0 包含全部曲线 | `ECMEDB3`／`ECMEDB4`，版本 3／4 | 普通整数，进度为 binary 位或 NAF 列 |
 | CUDA resident / PRAC（可选构建） | 记录 0 包含整批驻留状态 | magic `0x31524d444d434545`、version 1 | Montgomery 域；位进度或素数计划位置 |
 
 正常 Stage1 驱动通过 `ecm-batch-record:<i>` 虚拟地址访问记录。这个文本不是磁盘文件路径；载荷写入会更新对应记录并重新发布**整份外层文件**。单独调用底层 codec 时存在独立文件接口，不等于驱动会自动扫描这些独立文件。
@@ -156,19 +156,19 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 来源：[CUDA 头和读写](../../src/ecm/stage1/montgomery/cuda/checkpoint.cpp)、[CUDA 恢复布局](../../src/ecm/stage1/montgomery/cuda/runtime.cu)、[普通域写回](../../src/ecm/stage1/montgomery/cuda/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/stage1/montgomery/opencl/checkpoint.cpp)、[OpenCL 状态](../../src/ecm/stage1/montgomery/opencl/engine.cpp#L937)。
 
-### 4.2 GPU Edwards V3
+### 4.2 GPU Edwards V3/V4
 
 这是外层记录 0 的内部偏移，均采用显式小端编码。
 
 | 偏移 | 字节数 | 字段 | 含义 |
 | --- | --- | --- | --- |
-| 0 | 8 | magic | `ECMEDB3` 加 NUL |
-| 8 | 4 | version | 3 |
+| 0 | 8 | magic | `ECMEDB3` 或 `ECMEDB4` 加 NUL |
+| 8 | 4 | version | 3 或 4，与 magic 对应 |
 | 12 | 4 | window | 0=binary；2..12=NAF |
 | 16 | 4 | doubling | binary 为 0；NAF 为 4=HWCD、5=2XY |
 | 20 | 4 | count | C |
 | 24 | 4 | done | binary 已处理位数，或 NAF 已处理列数 |
-| 28 | 4 | flags | 必须为 0 |
+| 28 | 4 | original_window | V3 为 0，V4 为内存降级前显式请求的窗口 |
 | 32 | 8 | B1 | 完整界限 |
 | 40 | 8 | scalar_bits | 48·LCM 指数位数 |
 | 48 | 8 | scalar_fingerprint | 指数规范二进制编码的 FNV-1a 64 |
@@ -188,11 +188,11 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 这里两处 FNV 的初值均为 **14695981039346656037**，乘数为 1099511628211。指数指纹覆盖“u32 指数字节数+规范指数字节”；不只是指数数值文本，也不只是位数。完整指数从 B1 重建或由已验证缓存取得，不写入载荷。
 
-恢复验证完整 N、B1、曲线数、指数位数及指纹、进度上界和固定 sigma；用 sigma 重构曲线和基点，核对 d 及全部基点状态、构造因子，并验证累加点范围、非全零、XY=ZT 及 Edwards 方程。默认使用所存算法；显式 binary/NAF、窗口或倍点选择不符时报错。坐标为普通整数，因此 V3 不保存 BITS/TPI，恢复重新选择可用容器。
+恢复验证完整 N、B1、曲线数、指数位数及指纹、进度上界和固定 sigma。程序用 sigma 重构曲线和基点，核对 d 及全部基点状态、构造因子，并验证累加点范围、非全零、XY=ZT 及 Edwards 方程。V4 仅用于显式窗口因内存不足而缩小的批次，满足 `2 ≤ window < original_window ≤ 12`。恢复 V4 可配置原请求或实际窗口，计算使用保存的实际窗口。V3 和 V4 的坐标均为普通整数，恢复时按 N 选择容器。
 
 大小精确为 **68 + bytes(N) + 52C + Σbytes(fᵢ) + Σbytes(vᵢⱼ)**，j=0..8。外层仍须再加自身开销。NAF 字典、完整指数、GPU 内存布局均不在该公式内。
 
-来源：[V3 编码和恢复](../../src/ecm/stage1/edwards/cuda/checkpoint.cpp)、[GPU 驱动和安全边界](../../src/ecm/stage1/edwards/cuda/workflow.cpp)。
+来源：[载荷编码和恢复](../../src/ecm/stage1/edwards/cuda/checkpoint.cpp)、[GPU 驱动和安全边界](../../src/ecm/stage1/edwards/cuda/workflow.cpp)。
 
 ### 4.3 CPU Montgomery 文本记录 V1
 
@@ -242,6 +242,8 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 giant 为 u32 limb 数 m，随后 m 个低 limb 在前的 u32；当前写入零也使用至少一个零 limb。大小为 **140 + 4Σmⱼ** bytes。字典只存基点，不存整个预计算字典；累加点为普通投影 X:Y:Z，恢复时重建所需扩展坐标和字典。
 
 内层 checksum 为模 2³² 的加法和：u32 加自身，u64 加高低两个 u32；每个 giant 加两次 limb 数和各 limb。公共头、average_B2、sigma 不计入该内层和，**外层 CRC32C 则覆盖它们**。完整实际 N 由外层 identity 绑定，不能只用子格式 k/b/n/c 标签检查余因子任务。标量和 SIMD 都使用此 codec；SIMD 恢复要求组合到同一批的 lane 进度兼容，否则该 SIMD 批可能重算。
+
+CPU Edwards 的外层任务身份仍使用原请求窗口，部分记录的 `dict_size` 对应实际运行窗口。恢复时按部分记录固定实际窗口，以保持列号语义。若内存无法容纳该窗口，可降低 CPU 并发数，预算仍不足则保留存档并退出。
 
 CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存 sigma、返回码 0/1、十六进制 factor，以及带双引号/转义的完整文本 save 行；无可用点时该行可以为空。记录没有独立尾校验，依靠外层 CRC。保存已完成结果是为了发布失败或批次停止后不重复计算已完成曲线。
 
@@ -376,7 +378,7 @@ schema 2 的旧 B2 以旧文件的 total、当前或 Auto B2、提交回执候�
 | GPU 只有 sigma、无算术载荷 | H |
 | CUDA PARAM0/2 ladder | H+80+7CK/8 |
 | CUDA PARAM3 / OpenCL PARAM3 | H+80+5CK/8 |
-| GPU Edwards V3 | H+68+bytes(N)+52C+Σbytes(fᵢ)+Σbytes(vᵢⱼ) |
+| GPU Edwards V3/V4 | H+68+bytes(N)+52C+Σbytes(fᵢ)+Σbytes(vᵢⱼ) |
 | CPU 各曲线记录 | H+Σ实际编码长度；文本十六进制不能按 limb 二进制大小计算 |
 | 可选 resident/PRAC | H+112+7CK/8 |
 

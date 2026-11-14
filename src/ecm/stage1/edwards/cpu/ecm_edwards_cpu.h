@@ -7,6 +7,51 @@
 
 #include <stdint.h>
 #include <gmp.h>
+#include <cstddef>
+#include <memory>
+#include <vector>
+
+class EdwardsNafPlan {
+public:
+    EdwardsNafPlan(mpz_srcptr scalar, int window, bool packed = false);
+
+    size_t size() const { return size_; }
+    int window() const { return window_; }
+    bool packed() const { return !nonzero_.empty(); }
+    size_t bytes() const;
+
+    // CPU checkpoints count columns from the MSB. The plan stores the exact
+    // existing CPU digits in LSB-first order in either representation.
+    int operator[](size_t bit) const {
+        if (!dense_.empty()) return dense_[bit];
+        if (!wide_.empty()) return wide_[bit];
+        const auto word = bit / 32;
+        const auto shift = bit % 32;
+        if ((nonzero_[word] & (uint32_t{1} << shift)) == 0) return 0;
+        const auto bits = uint64_t{codes_[word]} | (uint64_t{codes_[word + 1]} << 32);
+        const auto sign = uint32_t{1} << (window_ - 2);
+        const auto code = static_cast<uint32_t>(bits >> shift);
+        const int value = static_cast<int>(2 * (code & (sign - 1)) + 1);
+        return (code & sign) ? -value : value;
+    }
+
+private:
+    size_t size_ = 0;
+    int window_;
+    std::vector<int16_t> dense_;
+    std::vector<int> wide_;
+    std::vector<uint32_t> nonzero_, codes_;
+};
+
+// byte estimate for the production CPU windows (3..12), before allocating.
+size_t edwards_naf_bytes(size_t scalar_bits, bool packed = false);
+
+// Nonzero B1 identifies the canonical CPU scalar 48*lcm(1..B1). Use B1=0 for
+// a caller-supplied scalar with no cache identity.
+std::shared_ptr<const EdwardsNafPlan> edwards_cached_naf(uint64_t b1, int window);
+std::shared_ptr<const EdwardsNafPlan> edwards_prepare_naf(mpz_srcptr scalar, uint64_t b1,
+                                                         int window, bool packed = false);
+void edwards_drop_cached_naf();
 
 // Run one Atkin-Morain Edwards stage-1 curve.
 //
@@ -67,4 +112,5 @@ int edwards_stage1_curve_progress(
     const mpz_t N, uint64_t sigma, const mpz_t s,
     uint32_t chunk_bits,
     const edwards_checkpoint_t *resume,
-    edwards_progress_fn progress, void *ctx);
+    edwards_progress_fn progress, void *ctx,
+    const EdwardsNafPlan *naf = nullptr, int window = 0);

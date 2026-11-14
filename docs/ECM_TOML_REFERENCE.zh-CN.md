@@ -283,7 +283,7 @@ edwards_naf_window_bits = 0
 
 v1 旧键 `stage1.naf_w`
 
-设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此设置。
+Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。增大窗口减少加点，但字典按 2^(w-2) 增长。新任务受内存预算限制时可降低窗口，部分检查点保持已存窗口。
 
 <a id="exp_cache"></a>
 
@@ -402,6 +402,16 @@ montgomery_lcm_multiplier = "1"
 v1 旧键 `stage1.lcm`
 
 Montgomery Stage1 标量是 lcm(1..B1) 乘 1 或 12。Edwards 固定使用 48·lcm，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。
+
+### naf_memory_mb
+
+```toml
+naf_memory_mb = 0
+```
+
+类型 `int` · 范围 `[0|1..1048576]` · Worker 覆盖 `[worker.N] stage1.naf_memory_mb` · 级别 `高级`。
+
+Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。运行时取该上限与扣除预留后的空闲预算中的较小值。约束 CPU NAF 工作集或 CUDA CGBN 设备缓冲。标量构造和 CUDA 主机准备分别检查空闲内存。正值最小为 1 MB。
 
 <a id="ntt_bpw"></a>
 

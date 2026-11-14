@@ -1,7 +1,9 @@
 #include "ecm/stage1/scalar.h"
+#include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
 #include "../../src/ecm/stage1/edwards/cuda/edwards_slice.h"
 #include <cstdio>
 #include <cstdlib>
+#include <future>
 #include <stdexcept>
 
 static unsigned cases=0,negative=0,cross_limb=0;
@@ -45,9 +47,64 @@ static void check(const mpz_t scalar) {
     }
     mpz_clears(rebuilt,term,nullptr);
 }
+static void cpu_cache() {
+    constexpr uint64_t b1 = 1000;
+    constexpr int w = 8;
+    mpz_t scalar, next_scalar, n, x, z, factor, reference_x, reference_z, reference_factor;
+    mpz_inits(scalar, next_scalar, n, x, z, factor, reference_x, reference_z, reference_factor, nullptr);
+    if (!ecm_build_lcm_exponent(scalar, b1, 48) ||
+        !ecm_build_lcm_exponent(next_scalar, 2 * b1, 48))
+        throw std::runtime_error("fixture scalar construction failed");
+    if (edwards_cached_naf(b1, w)) throw std::runtime_error("unexpected warm NAF cache");
+    auto a = std::async(std::launch::async, [&] { return edwards_prepare_naf(scalar, b1, w); });
+    auto b = std::async(std::launch::async, [&] { return edwards_prepare_naf(scalar, b1, w); });
+    const auto plan = a.get();
+    if (!plan || plan != b.get() || plan != edwards_cached_naf(b1, w))
+        throw std::runtime_error("identical CPU NAF requests did not share their plan");
+    if (plan->packed() || plan->bytes() > edwards_naf_bytes(mpz_sizeinbase(scalar, 2)))
+        throw std::runtime_error("CPU NAF allocation exceeds the preflight estimate");
+    const auto packed = edwards_prepare_naf(scalar, 0, w, true);
+    if (!packed->packed() || packed->size() != plan->size() ||
+        packed->bytes() > edwards_naf_bytes(mpz_sizeinbase(scalar, 2), true))
+        throw std::runtime_error("CPU NAF packed allocation or shape differs from its estimate");
+    for (size_t bit = 0; bit < packed->size(); ++bit)
+        if ((*packed)[bit] != (*plan)[bit]) throw std::runtime_error("CPU NAF packed digit differs");
+    const auto changed_window = edwards_prepare_naf(scalar, b1, w + 1);
+    if (changed_window == plan || edwards_cached_naf(b1, w) ||
+        edwards_cached_naf(b1, w + 1) != changed_window)
+        throw std::runtime_error("CPU NAF window key or single-entry eviction failed");
+    const auto changed_bound = edwards_prepare_naf(next_scalar, 2 * b1, w + 1);
+    if (changed_bound == changed_window || edwards_cached_naf(b1, w + 1))
+        throw std::runtime_error("CPU NAF bound key failed");
+    if (edwards_prepare_naf(scalar, 0, w) == plan || edwards_cached_naf(0, w))
+        throw std::runtime_error("arbitrary scalar unexpectedly used the B1 cache");
+
+    mpz_setbit(n, 127);
+    mpz_sub_ui(n, n, 1);
+    const auto run = [&](int window, const EdwardsNafPlan* digits, mpz_t f, mpz_t qx, mpz_t qz) {
+        return edwards_stage1_curve_progress(f, qx, qz, n, 17, scalar, 0,
+                                             nullptr, nullptr, nullptr, digits, window);
+    };
+    const int rc = run(w, nullptr, reference_factor, reference_x, reference_z);
+    if (rc != 0 || run(w, plan.get(), factor, x, z) != rc ||
+        mpz_cmp(factor, reference_factor) || mpz_cmp(x, reference_x) || mpz_cmp(z, reference_z))
+        throw std::runtime_error("CPU NAF shared and local plans disagree");
+    if (run(w, packed.get(), factor, x, z) != rc ||
+        mpz_cmp(factor, reference_factor) || mpz_cmp(x, reference_x) || mpz_cmp(z, reference_z))
+        throw std::runtime_error("CPU NAF packed and dense endpoints differ");
+    if (run(w + 1, changed_window.get(), factor, x, z) != rc)
+        throw std::runtime_error("CPU NAF alternate window result differs");
+    mpz_mul(x, x, reference_z);
+    mpz_mul(z, z, reference_x);
+    mpz_sub(x, x, z);
+    if (!mpz_divisible_p(x, n)) throw std::runtime_error("CPU NAF alternate window endpoint differs");
+    mpz_clears(scalar, next_scalar, n, x, z, factor, reference_x, reference_z, reference_factor, nullptr);
+    std::printf("PASS CPU NAF shared identity, key changes, eviction and packed/dense endpoints\n");
+}
 int main() {
     try {
         slices();
+        cpu_cache();
         mpz_t scalar;mpz_init(scalar);
         for(unsigned k=1;k<4096;++k){mpz_set_ui(scalar,k);check(scalar);}
         for(unsigned bits: {31,32,33,63,64,65,127,128,129,1023,1024,1025,17408}) {

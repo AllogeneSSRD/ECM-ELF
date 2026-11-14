@@ -25,7 +25,7 @@ mont = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mont)
 
 
-def curve(n, sigma):
+def edwards_coordinates(n, sigma):
     def add(p, q):
         if p is None: return q
         if q is None: return p
@@ -49,6 +49,11 @@ def curve(n, sigma):
     x = h*(4*beta-3)*pow(6*beta-5, -1, n) % n
     y = h*(t*t+50*t-2*s**3+27*s*s-104)*pow((t+3*s-2)*(t+s+16), -1, n) % n
     assert (x*x+y*y-1-d*x*x*y*y) % n == 0
+    return d, x, y
+
+
+def curve(n, sigma):
+    d, _, y = edwards_coordinates(n, sigma)
     return pow(1-d, -1, n), (1+y)*pow(1-y, -1, n) % n
 
 
@@ -86,7 +91,8 @@ def checkpoint(path):
     raw=path.read_bytes()
     if raw.startswith((b'ECM_STAGE1_BATCH_V1\n',b'ECMS1B2\0')):
         _,rows=checkpoint_batch(path);raw=rows[0][1]
-    binary=raw.startswith(b'ECMEDB3\0')
+    binary=raw.startswith((b'ECMEDB3\0', b'ECMEDB4\0'))
+    requested_window = 0
     if binary:body,tail=raw[:-8],int.from_bytes(raw[-8:],'little')
     else:body,tail=raw.rsplit(b'CHECKSUM ',1)
     h = 14695981039346656037
@@ -95,7 +101,11 @@ def checkpoint(path):
     if binary:
         version,window,doubling,count,done,flags=struct.unpack_from('<IIIIII',body,8)
         b1,scalar_bits,fingerprint=struct.unpack_from('<QQQ',body,32)
-        assert version==3 and flags==0
+        if raw.startswith(b'ECMEDB4\0'):
+            assert version==4 and 2<=window<flags<=12
+            requested_window = flags
+        else:
+            assert version==3 and flags==0
         at=56
         def value():
             nonlocal at
@@ -148,7 +158,7 @@ def checkpoint(path):
             assert any((x, y, z, t)) and (x*y-z*t) % n == 0
             assert (x*x+y*y-z*z-d*t*t) % n == 0
         rows.append(dict(sigma=sigma, hit=hit, factor=factor, state=state))
-    return dict(tag=tag, window=window, doubling=doubling, n=n, scalar=scalar,
+    return dict(tag=tag, window=window, requested_window=requested_window, doubling=doubling, n=n, scalar=scalar,
                 b1=b1, count=count, done=done, total=total, rows=rows)
 
 

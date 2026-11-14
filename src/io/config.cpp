@@ -55,6 +55,9 @@ bool read_config(const std::string& path, ParsedConfig& parsed) {
                         valid = scratch.device >= 0;
                     else if (key == "naf_w")
                         valid = scratch.naf_w == 0 || (scratch.naf_w >= 2 && scratch.naf_w <= 12);
+                    else if (key == "naf_memory_mb")
+                        valid = scratch.naf_memory_mb >= ecm_config::limits::stage1_naf_memory_mb_minimum &&
+                                scratch.naf_memory_mb <= ecm_config::limits::stage1_naf_memory_mb_maximum;
                     else if (key == "tpi")
                         valid = scratch.tpi >= 1 && scratch.tpi <= 32 &&
                                 !(scratch.tpi & (scratch.tpi - 1));

@@ -779,8 +779,25 @@
         "dict=2^(x-2)"
       ],
       "description": [
-        "Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.",
-        "设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此设置。"
+        "Requested Edwards NAF window. 0 starts at CPU 12 or CUDA CGBN 6. Larger windows reduce additions and grow the dictionary as 2^(w-2). Memory admission may lower the window on a fresh task. Partial checkpoints retain their saved window.",
+        "Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。增大窗口减少加点，但字典按 2^(w-2) 增长。新任务受内存预算限制时可降低窗口，部分检查点保持已存窗口。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "naf_memory_mb",
+      "v2_key": "naf_memory_mb",
+      "field": "naf_memory_mb",
+      "type": "int",
+      "default": 0,
+      "domain": "[0|1..1048576]",
+      "fx": "Edwards_NAF",
+      "parser": "legacy",
+      "minimum": 0,
+      "maximum": 1048576,
+      "description": [
+        "Edwards Stage1 working-memory cap in MB (1 MB = 1,000,000 bytes). 0 uses the available-memory budget. The runtime takes the smaller of this cap and the free-memory budget after reserve. Applies to the CPU NAF working set or CUDA CGBN device buffers. Scalar construction and CUDA host preparation have separate free-memory checks. A positive value starts at 1 MB.",
+        "Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。运行时取该上限与扣除预留后的空闲预算中的较小值。约束 CPU NAF 工作集或 CUDA CGBN 设备缓冲。标量构造和 CUDA 主机准备分别检查空闲内存。正值最小为 1 MB。"
       ]
     },
     {

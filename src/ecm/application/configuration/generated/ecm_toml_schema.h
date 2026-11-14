@@ -46,6 +46,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","save_name_pattern","string","<pattern>","stage1","save_name_pattern","","stage1","save_name_pattern",false,false},
     {"stage1","exp_cache","string","[off|none|0|-|<dir>]","stage1","exponent_cache_dir","","stage1","exponent_cache_dir",false,false},
     {"stage1","naf_w","int","[0|2..12]; CPU: [0|3..12]","stage1","edwards_naf_window_bits","","stage1","edwards_naf_window_bits",false,false},
+    {"stage1","naf_memory_mb","int","[0|1..1048576]","stage1","naf_memory_mb","","stage1","naf_memory_mb",false,false},
     {"stage1","lcm","string","[1|12]","stage1","montgomery_lcm_multiplier","","stage1","montgomery_lcm_multiplier",false,false},
     {"stage1","sigma","u64","<x:Z,0..2^64-1>","stage1","sigma","","stage1","sigma",false,false},
     {"stage1","p95_dir","string","<dir>","stage1","prime95.legacy_directory","","stage1","",false,false},

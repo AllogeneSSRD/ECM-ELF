@@ -1,4 +1,5 @@
 #include "execution.h"
+#include "edwards/memory.h"
 #include "../../io/stage1_checkpoint.h"
 #include "ecm/stage1/selection.h"
 #include "ecm/io/save.h"
@@ -245,6 +246,14 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             }
         }
         const auto base = stage1_submission(opt, N, uint64_t(B1));
+        if (base.edwards && (selection.target == ExecutionTarget::Cpu || selection.gpu_algorithm != GpuAlgorithm::Ntt)) {
+            using namespace ecm_edwards_memory;
+            const auto available = host_free_bytes();
+            const auto required = batch_host_bytes(curves, mpz_sizeinbase(N, 2));
+            if (available && required > usable_bytes(*available, 64 * mib))
+                throw std::runtime_error("Edwards Stage1: insufficient host memory for the requested curve batch (estimate " +
+                                         std::to_string(required) + " bytes); use a smaller batch");
+        }
         (void)ecm_results::submission_json(base, N);
         const auto same = ecm_io::same_file_resource;
         if (same(opt.persistence.results_file, opt.persistence.submission_file) ||

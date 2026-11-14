@@ -19,6 +19,8 @@
 #include <immintrin.h>
 #include <string.h>
 #include <stdlib.h>
+#include <chrono>
+#include <cstdio>
 #include <vector>
 
 /* The production curve construction and the scalar reference path. */
@@ -124,52 +126,6 @@ static void ed_soa_add_affine(ed_soa_ctx_t *c, soa_pt r, const soa_pt p,
     ifma_mont_mul(r.y, G, H, mc);
     if (extended) ifma_mont_mul(r.t, E, H, mc);
     ifma_mont_mul(r.z, F, G, mc);
-}
-
-/* ---------------------------------------------------------------------------
- * w-NAF digits 鈥?copied from ecm_edwards_cpu.cpp naf_digits (which is static
- * there).  Both produce a valid signed representation of the same exponent, so
- * the ladder's result is identical regardless; kept in sync deliberately.
- * ------------------------------------------------------------------------- */
-static void soa_naf_digits(const mpz_t k, int w, std::vector<int> &digits)
-{
-    digits.clear();
-    const size_t nbits = mpz_sizeinbase(k, 2);
-    if (nbits == 0) return;
-    const int max_val = (1 << (w - 1)) - 1;
-
-    std::vector<int> out(nbits + 1, 0);
-    int value = 0, addin = 1, carry = 0;
-    size_t start = 0;
-
-    for (size_t bitnum = 0; bitnum < nbits; bitnum++) {
-        int this_bit = carry + (mpz_tstbit(k, bitnum) ? 1 : 0);
-        carry = this_bit >> 1;
-        this_bit &= 1;
-        if (this_bit) {
-            if (value == 0) start = bitnum;
-            value += addin;
-        }
-        if (value == 0) continue;
-        addin <<= 1;
-
-        bool complete;
-        if (bitnum == nbits - 1) complete = true;
-        else if (addin < max_val) complete = false;
-        else if (value <= max_val && addin - value <= max_val) complete = false;
-        else complete = true;
-        if (!complete) continue;
-
-        if (value <= max_val) out[start] = value;
-        else { out[start] = value - addin; carry = 1; }
-        value = 0;
-        addin = 1;
-    }
-    if (carry) out[nbits] = 1;
-    size_t sz = out.size();
-    while (sz > 1 && out[sz - 1] == 0) sz--;
-    out.resize(sz);
-    digits = std::move(out);
 }
 
 /* ---------------------------------------------------------------------------
@@ -943,13 +899,19 @@ int ed_soa_set_curves(ed_soa_ctx_t *c, const uint64_t *sigma, int lanes)
 }
 
 int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
-                  mpz_t *Qx, mpz_t *Qz, mpz_t *factor)
+                  mpz_t *Qx, mpz_t *Qz, mpz_t *factor) {
+    if (!c->set || lanes > IFMA_LANES) return -1;
+    const EdwardsNafPlan digits(s, c->w);
+    return ed_soa_stage1_with_naf(c, digits, lanes, Qx, Qz, factor);
+}
+
+int ed_soa_stage1_with_naf(ed_soa_ctx_t *c, const EdwardsNafPlan& digits, int lanes,
+                          mpz_t *Qx, mpz_t *Qz, mpz_t *factor)
 {
     const ifma_ctx_t *mc = &c->mc;
     const size_t n = c->n;
     const size_t lane_words = 8 * n;
-    if (!c->set) return -1;
-    if (lanes > IFMA_LANES) return -1;
+    if (!c->set || lanes > IFMA_LANES || digits.window() != c->w) return -1;
 
     /* R = (0, 1, 1, 0) in Montgomery form */
     uint64_t *rx = (uint64_t *)_mm_malloc(lane_words * sizeof(uint64_t), 64);
@@ -978,8 +940,6 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
         soa_zero(R.t, mc);
     }
 
-    std::vector<int> digits;
-    soa_naf_digits(s, c->w, digits);
     const size_t total = digits.size();
     const size_t start = (c->resume_digit < total) ? c->resume_digit : 0;
 
@@ -994,6 +954,10 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
                 (unsigned long long)(R.z[0] & limb_mask), (unsigned long long)(R.y[0] & limb_mask));
     }
 
+    const char* timing = getenv("ECM_EDWARDS_NAF_TIMING");
+    const bool measure_loop = timing && strcmp(timing, "1") == 0;
+    using Clock = std::chrono::steady_clock;
+    const auto loop_start = measure_loop ? Clock::now() : Clock::time_point{};
     for (size_t i = start; i < total; i++) {
         /* 批内进度: 每 ED_SOA_PROGRESS_BITS 个 digit 回调一次, 带上当前点 (供上层写
            checkpoint), 也让 SIGINT 在批内就有响应 (返回非 0 = 中止, 此时不写输出)。 */
@@ -1058,6 +1022,11 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
                         i, vx, i, vy, i, vz, i, vt);
             mpz_clears(vx, vy, vz, vt, NULL);
         }
+    }
+
+    if (measure_loop) {
+        const double seconds = std::chrono::duration<double>(Clock::now() - loop_start).count();
+        std::fprintf(stderr, "[naf-window] cpu_loop_seconds=%.9f\n", seconds);
     }
 
     /* Qx = z + y, Qz = z - y (ordinary), factor = gcd(Qz, N) */

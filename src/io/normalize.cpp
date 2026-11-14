@@ -235,6 +235,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     opt.execution.affinity_cpus = cfg.affinity_cpus;
     opt.execution.stage1_threads = cfg.stage1_threads;
     opt.execution.naf_w = cfg.naf_w;
+    opt.execution.naf_memory_mb = unsigned(cfg.naf_memory_mb);
     opt.execution.verbose = cfg.verbose;
     opt.execution.device_index = cfg.device;
     opt.execution.ntt = {unsigned(cfg.ntt_length), unsigned(cfg.ntt_bpw), unsigned(cfg.ntt_tile),

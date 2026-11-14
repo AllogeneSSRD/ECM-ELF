@@ -283,7 +283,7 @@ Type `int` · Range `[0|2..12]; CPU: [0|3..12]` · Worker override `[worker.N] s
 
 Legacy v1 key `stage1.naf_w`
 
-Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.
+Requested Edwards NAF window. 0 starts at CPU 12 or CUDA CGBN 6. Larger windows reduce additions and grow the dictionary as 2^(w-2). Memory admission may lower the window on a fresh task. Partial checkpoints retain their saved window.
 
 <a id="exp_cache"></a>
 
@@ -402,6 +402,16 @@ Type `string` · Range `[1|12]` · Worker override `[worker.N] stage1.montgomery
 Legacy v1 key `stage1.lcm`
 
 Montgomery Stage1 scalar is lcm(1..B1) multiplied by 1 or 12. Edwards uses its fixed 48*lcm scalar and rejects 12. This choice changes the output point and must match the Stage2 save convention.
+
+### naf_memory_mb
+
+```toml
+naf_memory_mb = 0
+```
+
+Type `int` · Range `[0|1..1048576]` · Worker override `[worker.N] stage1.naf_memory_mb` · Level `advanced`.
+
+Edwards Stage1 working-memory cap in MB (1 MB = 1,000,000 bytes). 0 uses the available-memory budget. The runtime takes the smaller of this cap and the free-memory budget after reserve. Applies to the CPU NAF working set or CUDA CGBN device buffers. Scalar construction and CUDA host preparation have separate free-memory checks. A positive value starts at 1 MB.
 
 <a id="ntt_bpw"></a>
 

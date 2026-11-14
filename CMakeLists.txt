@@ -141,6 +141,8 @@ foreach(_source include/ecm/io/results.h src/io/json.h
                 include/ecm/stage1/selection.h include/ecm/stage1/scalar.h include/ecm/stage1/task.h
                 include/ecm/stage1/gwnum_abi.h src/ecm/stage1/montgomery/cpu/gwnum_curve.h
                 src/ecm/stage1/execution.h src/ecm/platform/generated/configuration_defaults.h
+                src/ecm/stage1/edwards/memory.h src/ecm/stage1/edwards/cuda/memory.h
+                src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.h src/ecm/stage1/edwards/cpu/simd_edwards.h
                 src/ecm/stage1/montgomery/opencl/workflow.cpp
                 src/ecm/stage1/montgomery/cuda/workflow.cpp
                 src/ecm/stage1/edwards/cuda/workflow.cpp

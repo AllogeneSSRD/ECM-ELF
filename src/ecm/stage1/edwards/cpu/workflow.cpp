@@ -9,6 +9,7 @@
 #include "../../../../io/stage1_checkpoint.h"
 #include "ecm_edwards_cpu.h"
 #include "simd_edwards.h"
+#include "../memory.h"
 #include "../../../../io/files.h"
 #include "../../../../io/prime95_save.h"
 #include "ecm/io/save.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -39,6 +41,8 @@ using ecm_stage1::ExecutionOptions;
 using ecm_stage1::select_curve_sigma;
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::validate_stage1_factor;
+
+static constexpr int edwards_worker_memory_error = -3;
 
 // Classify the computed value directly. Text exists only at checkpoint/final-save encoding.
 static bool classify_edwards_outcome(CurveOutcome& out, mpz_srcptr n, uint64_t sigma, mpz_srcptr qx,
@@ -83,6 +87,7 @@ struct EdwardsCheckpointCtx {
     long long last_ms;
     mpz_srcptr N;
     mpz_srcptr s;
+    int window;
     bool write_failed = false;
 };
 
@@ -110,7 +115,7 @@ static int edwards_checkpoint_progress(void* ctx, const edwards_checkpoint_t* cu
     cm.B2 = c->B2;
     cm.sigma = c->sigma;
     const uint32_t expbuf = (uint32_t)mpz_sizeinbase(c->s, 2);
-    const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
+    const uint32_t dict_size = (uint32_t)1u << (c->window - 2);
     const bool written =
         ecm_edwards_write_stage1(checkpoint, c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
                                  Px, Py, cur->Rx, cur->Ry, cur->Rz);
@@ -197,7 +202,8 @@ static bool edwards_completed_write(ecm_stage1_checkpoint::Context& checkpoint, 
 static int edwards_run_one_curve(ecm_stage1_checkpoint::Context& checkpoint, mpz_srcptr N,
                                  mpz_srcptr s, const ExecutionOptions& opt, double B1, double B2,
                                  uint32_t idx, uint64_t sigma, uint32_t curves, mpz_t factor_out,
-                                 const std::string& ckpt_path, CurveOutcome& outcome) {
+                                 const std::string& ckpt_path, CurveOutcome& outcome,
+                                 const EdwardsNafPlan* naf, int window) {
     mpz_t Qx, Qz;
     mpz_inits(Qx, Qz, NULL);
 
@@ -219,6 +225,7 @@ static int edwards_run_one_curve(ecm_stage1_checkpoint::Context& checkpoint, mpz
         ck.last_ms = stage1_now_ms();
         ck.N = N;
         ck.s = s;
+        ck.window = window;
 
         // 检测并恢复 STAGE1 checkpoint
         edwards_checkpoint_t resume;
@@ -231,7 +238,9 @@ static int edwards_run_one_curve(ecm_stage1_checkpoint::Context& checkpoint, mpz
             mpz_inits(rdx, rdy, rex, rey, rez, NULL);
             if (ecm_edwards_read_stage1(checkpoint, ckpt_path, rcm, &rsp, &rebs, &rbn, &rds, rdx,
                                         rdy, rex, rey, rez)) {
-                if (rcm.sigma == sigma && rcm.B1 == (uint64_t)B1 && rbn > 0) {
+                if (naf && rcm.sigma == sigma && rcm.B1 == (uint64_t)B1 && rbn > 0 &&
+                    rds == (1u << (window - 2)) && rebs == mpz_sizeinbase(s, 2) &&
+                    rbn < naf->size()) {
                     resume.bitnum = rbn;
                     mpz_set(resume.Rx, rex);
                     mpz_set(resume.Ry, rey);
@@ -248,7 +257,7 @@ static int edwards_run_one_curve(ecm_stage1_checkpoint::Context& checkpoint, mpz
             static_cast<uint32_t>(std::clamp<size_t>(mpz_sizeinbase(s, 2) / 512, 64, 4096));
         rc = edwards_stage1_curve_progress(factor_out, Qx, Qz, N, sigma, s, chunk_bits,
                                            resume.bitnum > 0 ? &resume : nullptr,
-                                           edwards_checkpoint_progress_bar, &ck);
+                                           edwards_checkpoint_progress_bar, &ck, naf, window);
         edwards_checkpoint_clear(&resume);
 
         if (rc == 2) {
@@ -277,6 +286,8 @@ struct EdwardsWorkerCtx {
     ecm_stage1_checkpoint::Context* checkpoint;
     mpz_srcptr N;
     mpz_srcptr s;
+    const EdwardsNafPlan* naf;
+    int window;
     const ExecutionOptions* opt;
     double B1, B2;
     uint32_t curves;
@@ -318,6 +329,7 @@ struct EdSimdProg {
     double B1, B2;
     const uint64_t* sigmas;
     const ifma_ctx_t* mc;
+    int window;
     long long last_ms;
     long long interval_ms;
     std::array<bool, IFMA_LANES> setup_factors{};
@@ -359,7 +371,7 @@ static int edwards_simd_progress(void* p, size_t bits_done, size_t bits_total, c
                 ifma_to_mpz_lane(ry, Ry, k, mc);
                 ifma_to_mpz_lane(rz, Rz, k, mc);
                 const uint32_t expbuf = (uint32_t)pr->s_bits;
-                const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
+                const uint32_t dict_size = (uint32_t)1u << (pr->window - 2);
                 if (ecm_edwards_write_stage1(checkpoint, path, cm, 2, expbuf, (uint32_t)bits_done,
                                              dict_size, Px, Py, rx, ry, rz)) {
                     written++;
@@ -420,7 +432,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t* sigmas, mpz_t* factors, int* array_found,
                                        std::atomic<uint32_t>* done_ctr, CurveOutcome* outcomes,
-                                       bool wide_ifma) {
+                                       bool wide_ifma, const EdwardsNafPlan& naf, int window) {
     if (!opt.persistence.tmp_dir.empty()) {
         bool completed = true;
         std::vector<int> statuses(count);
@@ -476,7 +488,8 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
             const auto path =
                 opt.persistence.tmp_dir.empty() ? std::string() : ecm_stage1_curve_record(i);
             const int rc = edwards_run_one_curve(checkpoint, N, s, opt, B1, B2, i, sigmas[i],
-                                                 opt.stage1_curves, factors[i], path, outcomes[i]);
+                                                 opt.stage1_curves, factors[i], path, outcomes[i],
+                                                 &naf, window);
             if (rc == 2 || rc < 0)
                 return rc;
             array_found[i] = rc == 1 ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
@@ -495,16 +508,12 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
         return 0;
     }
     ed_soa_ctx_t ctx;
-    /* 字典窗口跟随配置 (naf_w / ini), 不再硬编码 w=8:
-       这样 SIMD 与标量用同一套 digit/字典, 存档逐字节可比, 也便于混合与续跑。
-       代价是字典内存 = 3*2^(w-2)*8n 字节 (w=12/n=155 约 29 MB/批), 见启动信息。 */
-    int w = edwards_get_naf_w();
-    if (w < 3 || w > 12)
-        w = 8;
     {
         const int rc =
-            ed_soa_init_ex(&ctx, N, w, to_ifma_field_mode(opt.execution.selection.simd_reduction));
+            ed_soa_init_ex(&ctx, N, window, to_ifma_field_mode(opt.execution.selection.simd_reduction));
         if (rc != 0) {
+            if (rc == -3)
+                return edwards_worker_memory_error;
             /* 保持与原来完全相同的控制流 (先尝试建 ctx, 失败就返回 -1), 只把
                "SIMD stage-1 internal error" 这句含糊的日志换成能看出原因的话:
                reduction=mersenne-fold 要求 N = 2^k-1 (k>=64), 这是最常见的误用。 */
@@ -529,7 +538,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
                 ecm_ts_fprintf(stderr,
                                "ERROR: edwards SIMD context init failed (rc=%d) for a %zu-bit N "
                                "with dict w=%d.\n",
-                               rc, mpz_sizeinbase(N, 2), w);
+                               rc, mpz_sizeinbase(N, 2), window);
             return -1;
         }
     }
@@ -553,6 +562,8 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     const int setup_rc = ed_soa_set_curves(&ctx, sg, 8);
     if (setup_rc != 0) {
         ed_soa_clear(&ctx);
+        if (setup_rc == -3)
+            return edwards_worker_memory_error;
         return setup_rc == -4 ? run_exceptional() : -1;
     }
 
@@ -571,6 +582,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     pr.last_ms = stage1_now_ms();
     pr.interval_ms = (long long)opt.persistence.ckpt_ms;
     pr.mc = &ctx.mc;
+    pr.window = window;
     pr.setup_factors = setup_factors;
     /* ---- resume: 一批 8 条 lane 必须共用恢复点, 所以仅当**所有** lane 都有有效检查点
        且 bitnum 完全相同时才续跑 (这正是"整批一起被中止、一起落盘"的常态); 否则从头跑。 ---- */
@@ -593,7 +605,8 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
             const bool ok = ecm_edwards_read_stage1(checkpoint, path, rcm, &rsp, &rebs, &rbn, &rds,
                                                     rdx, rdy, rxs[k], rys[k], rzs[k]);
             mpz_clears(rdx, rdy, NULL);
-            if (!ok || rbn == 0 || rcm.sigma != sigmas[i] || rcm.B1 != (uint64_t)B1) {
+            if (!ok || rbn == 0 || rcm.sigma != sigmas[i] || rcm.B1 != (uint64_t)B1 ||
+                rds != (1u << (window - 2)) || rebs != mpz_sizeinbase(s, 2) || rbn >= naf.size()) {
                 all_ok = 0;
                 break;
             }
@@ -629,12 +642,13 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     mpz_t Qx[8], Qz[8], fac[8];
     for (int k = 0; k < 8; k++)
         mpz_inits(Qx[k], Qz[k], fac[k], NULL);
-    const int aborted = ed_soa_stage1(&ctx, s, 8, Qx, Qz, fac);
+    const int aborted = ed_soa_stage1_with_naf(&ctx, naf, 8, Qx, Qz, fac);
     if (aborted) { /* 中途停: 不写任何存档 */
         for (int k = 0; k < 8; k++)
             mpz_clears(Qx[k], Qz[k], fac[k], NULL);
         ed_soa_clear(&ctx);
-        return pr.write_failed ? ECM_ERROR : 2;
+        return aborted == -3 ? edwards_worker_memory_error :
+               pr.write_failed || aborted < 0 ? ECM_ERROR : 2;
     }
 
     int rc = 0;
@@ -698,9 +712,14 @@ static void edwards_worker(EdwardsWorkerCtx* ctx) {
             // single explicitly selected SIMD curve stay on IFMA.
             const int rc = edwards_run_batch_simd_impl(
                 checkpoint, *ctx->opt, ctx->N, ctx->s, ctx->B1, ctx->B2, i, n, ctx->sigmas,
-                ctx->factors, ctx->array_found, ctx->done_ctr, ctx->outcomes, ctx->wide_ifma);
+                ctx->factors, ctx->array_found, ctx->done_ctr, ctx->outcomes, ctx->wide_ifma,
+                *ctx->naf, ctx->window);
             if (rc == 2) {
                 ctx->aborted->fetch_or(1, std::memory_order_relaxed);
+                break;
+            }
+            if (rc == edwards_worker_memory_error) {
+                ctx->aborted->fetch_or(4, std::memory_order_relaxed);
                 break;
             }
             if (rc < 0) {
@@ -715,7 +734,8 @@ static void edwards_worker(EdwardsWorkerCtx* ctx) {
             const uint64_t sigma = ctx->sigmas[i];
             const int rc = edwards_run_one_curve(checkpoint, ctx->N, ctx->s, *ctx->opt, ctx->B1,
                                                  ctx->B2, i, sigma, ctx->curves, ctx->factors[i],
-                                                 ctx->ckpt_paths[i], ctx->outcomes[i]);
+                                                 ctx->ckpt_paths[i], ctx->outcomes[i], ctx->naf,
+                                                 ctx->window);
             if (rc == 1) {
                 ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
                 if (!validate_stage1_factor(ctx->N, ctx->factors[i])) {
@@ -760,6 +780,89 @@ static uint32_t edwards_default_threads(uint32_t curves) {
     return t;
 }
 
+static std::optional<uint64_t> edwards_cpu_budget() {
+    using namespace ecm_edwards_memory;
+    if (const auto available = host_free_bytes())
+        return cap_budget(usable_bytes(*available, 64 * mib), "ECM_EDWARDS_CPU_MEMORY_LIMIT_MIB");
+    return std::nullopt;
+}
+
+static uint64_t edwards_cpu_worker_bytes(size_t bits, bool simd, bool wide, int window) {
+    using ecm_edwards_memory::mib;
+    const uint64_t entries = uint64_t{1} << (window - 2);
+    // Include thread/allocator slack, field buffers, table slots and simultaneous
+    // GMP inversion buffers. A narrow SIMD batch can fall back to GMP.
+    const uint64_t limb_bytes = (uint64_t(bits) + 63) / 64 * 8;
+    const uint64_t gmp = wide ? 128 * limb_bytes
+        : entries * (7 * (ecm_cpu::gmp_fixed_width_bits / 8) + 3 * (sizeof(mpz_t) + 2 * limb_bytes));
+    const uint64_t lane_bytes = ((uint64_t(bits) + 51) / 52) * 8 * sizeof(uint64_t);
+    const uint64_t ifma = (3 * entries + 128) * lane_bytes +
+        (2 * IFMA_LANES + 2) * entries * (sizeof(mpz_t) + 2 * limb_bytes);
+    return 2 * mib + (simd ? (std::max)(gmp, ifma) : gmp);
+}
+
+struct EdwardsCpuPlan {
+    int window;
+    uint32_t workers;
+    bool packed;
+    uint64_t bytes;
+};
+
+static std::optional<EdwardsCpuPlan> choose_edwards_cpu_plan(
+    uint64_t budget, uint64_t shared_bytes, size_t modulus_bits, size_t scalar_bits,
+    bool simd, bool wide, uint32_t workers, int window, int minimum_window,
+    const EdwardsNafPlan* cached, unsigned limit_mb) {
+    if (shared_bytes > budget)
+        return std::nullopt;
+    const bool needs_naf = simd || !wide;
+    const bool prefer_packed = needs_naf && edwards_naf_bytes(scalar_bits) > 64 * ecm_edwards_memory::mib;
+    for (int w = window; w >= minimum_window; --w) {
+        const auto per_worker = edwards_cpu_worker_bytes(modulus_bits, simd, wide, w);
+        const bool hit = cached && w == window;
+        // Free memory already excludes a live cached plan. The configured cap
+        // still includes that plan when it is used by this batch.
+        const auto window_budget = ecm_edwards_memory::configured_budget(
+            budget + (hit ? cached->bytes() : 0), limit_mb);
+        EdwardsCpuPlan best{w, 0, false, 0};
+        for (bool packed : {prefer_packed, !prefer_packed}) {
+            const auto bytes = shared_bytes + (hit ? cached->bytes() : needs_naf ? edwards_naf_bytes(scalar_bits, packed) : 0);
+            if (bytes > window_budget)
+                continue;
+            const auto active = uint32_t((std::min)(uint64_t(workers), (window_budget - bytes) / per_worker));
+            if (active > best.workers)
+                best = {w, active, packed, bytes + active * per_worker};
+        }
+        if (best.workers)
+            return best;
+    }
+    return std::nullopt;
+}
+
+static std::optional<int> saved_edwards_cpu_window(ecm_stage1_checkpoint::Context& checkpoint,
+                                                    uint32_t curves, uint64_t b1, size_t scalar_bits) {
+    int window = 0;
+    for (uint32_t i = 0; i < curves; ++i) {
+        uint64_t sigma = 0;
+        if (!checkpoint.saved_sigma(i, sigma))
+            continue;
+        ecm_save_common common{};
+        uint64_t first_prime = 0;
+        uint32_t bits = 0, cursor = 0, entries = 0;
+        ecm_edwards::Integer dx, dy, x, y, z;
+        if (!ecm_edwards_read_stage1(checkpoint, ecm_stage1_curve_record(i), common, &first_prime,
+                                    &bits, &cursor, &entries, dx.v, dy.v, x.v, y.v, z.v) ||
+            !cursor || common.sigma != sigma || common.B1 != b1 || bits != scalar_bits)
+            continue;
+        int candidate = 3;
+        while (candidate <= 12 && entries != (1u << (candidate - 2)))
+            ++candidate;
+        if (candidate > 12 || (window && window != candidate))
+            return std::nullopt;
+        window = candidate;
+    }
+    return window;
+}
+
 // Run one Edwards (Atkin-Morain) stage-1 batch on the CPU. One curve per sigma.
 //
 // Scalar curves and IFMA batches are independent worker tasks.
@@ -787,11 +890,32 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     }
     const bool use_simd = *implementation == ecm_stage1::CpuImplementation::IfmaSimd;
 
-    // NAF 窗口 (字典大小 2^(w-2)); 0 = 保持 ecm_edwards_cpu 的默认值.
-    if (opt.execution.naf_w >= 2) {
-        edwards_set_naf_w(opt.execution.naf_w);
-    } else if (opt.execution.naf_w != 0) {
-        std::cerr << "naf_w must be 0 (default) or >= 2" << std::endl;
+    const int requested_window = opt.execution.naf_w ? opt.execution.naf_w : 12;
+    if (requested_window < 3 || requested_window > 12) {
+        ecm_ts_fprintf(stderr, "ERROR: CPU Edwards NAF window must be 0 or 3..12\n");
+        return result;
+    }
+    if (!std::isfinite(B1) || B1 < 0 || std::floor(B1 + 0.0001) > 5000000000.0) {
+        ecm_ts_fprintf(stderr, "ERROR: invalid CPU Edwards B1\n");
+        return result;
+    }
+    const uint64_t scalar_key = B1 < 2 ? 1 : uint64_t(std::floor(B1 + 0.0001));
+    const bool needs_naf = use_simd || !wide;
+    auto naf = needs_naf ? edwards_cached_naf(scalar_key, requested_window) : nullptr;
+    const auto limit_mb = opt.execution.naf_memory_mb;
+    auto budget = edwards_cpu_budget();
+    // The LCM product tree, GMP multiplication scratch and exponent cache I/O
+    // precede the exact bit count. Use a conservative allowance at this boundary.
+    const uint64_t scalar_build_bytes = ecm_edwards_memory::scalar_preparation_bytes(scalar_key);
+    if (!budget || scalar_build_bytes > *budget) {
+        naf.reset();
+        edwards_drop_cached_naf();
+        budget = edwards_cpu_budget();
+    }
+    if (!budget || scalar_build_bytes > *budget) {
+        ecm_ts_fprintf(stderr, "ERROR: CPU Edwards memory: scalar preparation needs an estimated %llu bytes; "
+                               "usable host budget=%llu bytes\n",
+                       (unsigned long long)scalar_build_bytes, (unsigned long long)budget.value_or(0));
         return result;
     }
 
@@ -805,6 +929,91 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         return result;
     }
     mpz_mul_ui(s, s, 48);
+
+    const uint32_t worker_count = use_simd ? (curves - 1) / IFMA_LANES + 1 : curves;
+    const uint32_t requested_workers = (std::min)(worker_count, opt.execution.stage1_threads
+        ? opt.execution.stage1_threads : edwards_default_threads(curves));
+    const size_t scalar_bits = mpz_sizeinbase(s, 2);
+    if (needs_naf && scalar_bits >= std::numeric_limits<uint32_t>::max()) {
+        ecm_ts_fprintf(stderr, "ERROR: CPU Edwards NAF scalar exceeds the supported checkpoint cursor range\n");
+        return result;
+    }
+    const auto shared_bytes = ecm_edwards_memory::batch_host_bytes(curves, modulus_bits);
+    int initial_window = requested_window;
+    int minimum_window = needs_naf ? 3 : initial_window;
+    if (needs_naf && !checkpoint.path().empty()) {
+        const auto saved_window = saved_edwards_cpu_window(checkpoint, curves, uint64_t(B1), scalar_bits);
+        if (!saved_window || *saved_window > requested_window) {
+            ecm_ts_fprintf(stderr, "ERROR: CPU Edwards partial checkpoint has an incompatible NAF window\n");
+            return result;
+        }
+        if (*saved_window) {
+            initial_window = minimum_window = *saved_window;
+            if (initial_window != requested_window) {
+                naf = edwards_cached_naf(scalar_key, initial_window);
+            }
+        }
+    }
+    auto select_plan = [&] {
+        budget = edwards_cpu_budget();
+        return choose_edwards_cpu_plan(budget.value_or(0), shared_bytes, modulus_bits, scalar_bits,
+                                       use_simd, wide, requested_workers, initial_window, minimum_window,
+                                       naf.get(), limit_mb);
+    };
+    auto plan = select_plan();
+    if (!plan) {
+        naf.reset();
+        edwards_drop_cached_naf();
+        plan = select_plan();
+    }
+    if (!plan) {
+        ecm_ts_fprintf(stderr, "ERROR: CPU Edwards memory: smallest execution plan exceeds usable host budget "
+                               "(%llu bytes)\n", (unsigned long long)ecm_edwards_memory::configured_budget(
+                                   budget.value_or(0), limit_mb));
+        return result;
+    }
+    if (needs_naf && (!naf || naf->window() != plan->window)) {
+        naf = edwards_cached_naf(scalar_key, plan->window);
+        if (naf && naf->bytes() > edwards_naf_bytes(scalar_bits, plan->packed))
+            naf.reset();
+    }
+    const bool cache_hit = bool(naf);
+    if (needs_naf && !cache_hit) {
+        edwards_drop_cached_naf();
+        try {
+            naf = edwards_prepare_naf(s, scalar_key, plan->window, plan->packed);
+        } catch (const std::bad_alloc&) {
+            // Available memory may change after preflight. Try the compact
+            // representation once before giving up without launching workers.
+            edwards_drop_cached_naf();
+            if (!plan->packed) {
+                plan->packed = true;
+                try {
+                    naf = edwards_prepare_naf(s, scalar_key, plan->window, true);
+                } catch (const std::bad_alloc&) {
+                    naf.reset();
+                }
+            }
+        }
+        if (!naf) {
+            ecm_ts_fprintf(stderr, "ERROR: CPU Edwards memory: cannot allocate shared NAF sequence\n");
+            return result;
+        }
+    }
+    const int window = plan->window;
+    const uint32_t nthreads = plan->workers;
+    const bool forced_packed = naf && naf->packed() && edwards_naf_bytes(scalar_bits) <= 64 * ecm_edwards_memory::mib;
+    const bool downgraded = window != requested_window || nthreads != requested_workers || forced_packed;
+    if (opt.execution.verbose || downgraded) {
+        ecm_ts_fprintf(downgraded ? stderr : stdout,
+            "%sCPU Edwards memory: estimate=%llu bytes budget=%llu bytes workers=%u->%u window=%d->%d\n",
+            downgraded ? "WARNING: " : "", (unsigned long long)plan->bytes,
+            (unsigned long long)ecm_edwards_memory::configured_budget(*budget, limit_mb),
+            requested_workers, nthreads, requested_window, window);
+    }
+    if (naf && (opt.execution.verbose || downgraded))
+        ecm_ts_fprintf(stdout, "CPU Edwards NAF: bytes=%zu cache=%s representation=%s\n", naf->bytes(),
+                       cache_hit ? "hit" : "miss", naf->packed() ? "packed" : "dense");
 
     ecm_edwards::Array factors_owner(curves);
     auto* factors = factors_owner.data();
@@ -867,14 +1076,6 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         }
     }
 
-    uint32_t nthreads = opt.execution.stage1_threads;
-    if (nthreads == 0)
-        nthreads = edwards_default_threads(curves);
-    if (nthreads > curves)
-        nthreads = curves;
-    if (nthreads < 1)
-        nthreads = 1;
-
     std::cout << "Using B1=" << B1 << ", B2=" << B2 << " (" << curves << " Edwards curves, CPU";
     if (nthreads > 1)
         std::cout << ", " << nthreads << " threads";
@@ -893,7 +1094,8 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     if (curves == 1 && !use_simd) {
         for (uint32_t i = 0; i < curves; i++) {
             const int rc = edwards_run_one_curve(checkpoint, N, s, opt, B1, B2, i, sigmas[i],
-                                                 curves, factors[i], ckpt_paths[i], outcomes[i]);
+                                                 curves, factors[i], ckpt_paths[i], outcomes[i],
+                                                 naf.get(), window);
             if (rc == 1) {
                 array_found[i] = ECM_FACTOR_FOUND_STEP1;
                 if (!validate_stage1_factor(N, factors[i])) {
@@ -920,6 +1122,8 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         EdwardsWorkerCtx wctx;
         wctx.N = N;
         wctx.s = s;
+        wctx.naf = naf.get();
+        wctx.window = window;
         wctx.opt = &opt;
         wctx.checkpoint = &checkpoint;
         wctx.use_simd = use_simd;
@@ -932,7 +1136,7 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             char sbuf[160];
             snprintf(sbuf, sizeof(sbuf),
                      "simd (AVX512-IFMA: 8 curves per batch, 1 thread/batch, dict w=%d)",
-                     edwards_get_naf_w() >= 3 ? edwards_get_naf_w() : 8);
+                     window);
             ecm_ts_fprintf(stdout, "CPU implementation : %s\n",
                            use_simd ? sbuf : wide ? "gmp (scalar mpz, 1 curve/thread)"
                                                  : "gmp (scalar mpn, 1 curve/thread)");
@@ -985,11 +1189,20 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         for (uint32_t t = 0; t < nthreads; t++)
             pool.push_back(std::async(std::launch::async, [&wctx, t]() {
                 apply_thread_affinity(wctx.opt->execution.affinity_cpus, t);
-                edwards_worker(&wctx);
+                try {
+                    edwards_worker(&wctx);
+                } catch (const std::bad_alloc&) {
+                    wctx.aborted->fetch_or(4, std::memory_order_relaxed);
+                }
             }));
         for (auto& th : pool)
             th.get();
         const int stopped = aborted_flag.load(std::memory_order_relaxed);
+        if (stopped & 4) {
+            progress.finish();
+            ecm_ts_fprintf(stderr, "ERROR: CPU Edwards memory: worker allocation failed after preflight\n");
+            return result;
+        }
         failed = (stopped & 2) != 0;
         aborted = stopped != 0;
     }

@@ -123,6 +123,10 @@ void ed_soa_debug_neg_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a);
 
 #ifdef __cplusplus
 }
+
+class EdwardsNafPlan;
+int ed_soa_stage1_with_naf(ed_soa_ctx_t *c, const EdwardsNafPlan& naf, int lanes,
+                          mpz_t *Qx, mpz_t *Qz, mpz_t *factor);
 #endif
 
 #endif /* SIMD_EDWARDS_H */

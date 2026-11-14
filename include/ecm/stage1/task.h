@@ -29,6 +29,7 @@ struct Stage1ExecutionPreferences {
     uint32_t stage1_threads;
     std::vector<unsigned> affinity_cpus;
     int naf_w;
+    unsigned naf_memory_mb = 0;
     int verbose=0;
     int device_index;
     std::string gpu_mul_path,gpu_sqr_path,gpu_add_path,gpu_sub_path,gpu_special_mult_path;

@@ -24,10 +24,12 @@ using ecm_stage1::validate_stage1_factor;
 #include "api.h"
 #include "naf.h"
 #include "runtime.h"
+#include "memory.h"
 #include "ecm/stage1/scalar.h"
 #include "ecm/io/save.h"
 #include "../../../../io/stage1_binary.h"
 #include <iterator>
+#include <cmath>
 #include <stdexcept>
 
 #include "checkpoint.h"
@@ -181,12 +183,27 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     }
     auto phase = ecm_stage1::FailureSource::Preparation;
     try {
-        result.curves.resize(curves);
         (void)n_expr;
         // Prepare: scalar and explicit algorithm requirements define recovery admission.
         const auto initialization_start = Progress::Clock::now();
         if (opt.execution.naf_w != 0 && (opt.execution.naf_w < 2 || opt.execution.naf_w > 12))
             throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
+        using namespace ecm_edwards_memory;
+        const auto bound = std::floor(b1 + 0.0001);
+        if (!std::isfinite(bound) || bound < 0 || bound > 5000000000.0)
+            throw std::runtime_error("cannot build Edwards exponent");
+        const auto n_bits = mpz_sizeinbase(n, 2);
+        const auto state_value_bytes = sizeof(mpz_t) + uint64_t((n_bits + GMP_NUMB_BITS - 1) / GMP_NUMB_BITS) * sizeof(mp_limb_t);
+        // The live batch, recovery candidate, decoder batch and curve validation
+        // reference can coexist. Include buffer space for decoded residues and results.
+        const auto state_bytes = uint64_t(curves) * (40 * state_value_bytes + sizeof(ecm_stage1::CurveOutcome) + 128);
+        const auto available_host = edwards_host_budget();
+        const auto host_preparation = state_bytes + scalar_preparation_bytes(uint64_t(bound));
+        if (host_preparation > available_host)
+            throw std::runtime_error("insufficient host memory for GPU Edwards batch setup (estimated " +
+                                     std::to_string(host_preparation) + " bytes, usable " +
+                                     std::to_string(available_host) + " bytes); use a smaller curve batch");
+        result.curves.resize(curves);
         Integer scalar;
         if (!compute_batch_s(scalar.v, b1, 48, opt.persistence.exponent_cache_dir))
             throw std::runtime_error("cannot build Edwards exponent");
@@ -250,6 +267,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 sigmas = candidate.sigmas;
                 batch.done = candidate.done;
                 batch.window = candidate.window;
+                batch.original_window = candidate.original_window;
                 batch.doubling = candidate.doubling;
                 batch.sigmas = candidate.sigmas;
                 batch.hit = candidate.hit;
@@ -302,6 +320,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                         continue;
                     batch.done = saved.done;
                     batch.window = saved.window;
+                    batch.original_window = saved.original_window;
                     batch.doubling = saved.doubling;
                     batch.sigmas = saved.sigmas;
                     batch.hit = saved.hit;
@@ -351,11 +370,27 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 throw std::runtime_error(error);
             }
         }
-        ecm_ts_fprintf(stdout,
-                       "GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu "
-                       "window=%u doubling=%d\n",
-                       opt.execution.device_index, curves, mpz_sizeinbase(n, 2),
-                       mpz_sizeinbase(scalar.v, 2), batch.window, batch.doubling);
+        const EdwardsOptions execution{
+            opt.execution.device_index, batch.window, batch.doubling, 0, !restored,
+            !restored && !opt.execution.naf_w && mode_fixed < 0 && !dbl_env,
+            [&](unsigned requested, unsigned selected, size_t required, size_t budget) {
+                if (requested != selected) {
+                    batch.original_window = opt.execution.naf_w ? requested : 0;
+                    batch.window = selected;
+                    if (!selected)
+                        batch.doubling = 0;
+                    ecm_ts_fprintf(stderr, "WARNING: GPU Edwards memory: window=%u -> %u%s\n",
+                                   requested, selected, selected ? "" : " (binary)");
+                }
+                if (required)
+                    ecm_ts_fprintf(stdout, "GPU Edwards device memory: estimated_bytes=%zu budget_bytes=%zu\n",
+                                   required, budget);
+                ecm_ts_fprintf(stdout,
+                               "GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu "
+                               "window=%u doubling=%d\n",
+                               opt.execution.device_index, curves, n_bits,
+                               mpz_sizeinbase(scalar.v, 2), batch.window, batch.doubling);
+            }, opt.execution.naf_memory_mb};
         EcmEdwardsNafMetrics metrics;
         Progress p{checkpoint, batch,
                    n,
@@ -371,8 +406,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         const auto arithmetic_start = std::chrono::steady_clock::now();
         // Execute with checkpoint safe points; final files belong to task.
         const auto run =
-            execute_edwards_batch(n, scalar.v, batch.state.data(), curves, batch.done,
-                                  {opt.execution.device_index, batch.window, batch.doubling, 0},
+            execute_edwards_batch(n, scalar.v, batch.state.data(), curves, batch.done, execution,
                                   [&p](uint32_t done, const EdwardsSnapshot& snapshot) {
                                       return progress(p, done, snapshot);
                                   },

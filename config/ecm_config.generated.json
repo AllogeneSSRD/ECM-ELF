@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "4b95c03e42343c6aa577607a1b2e4a5051b4909c68a6bcdbcd143121c59a28f8",
-    "src/ecm/platform/generated/configuration_defaults.h": "ff225c01b7917e7edeaa1221216b1532164bd5a91ffeba1784cbfa21f53b9d72",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "69f56e9d41f6be437fd771ebf9e4865f6881b2977ba6269df7c3f85577120a01",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "42bc1a999b0d85935cf830067b600a5a6b67e3fd005e92e68500937fc12ea932",
+    "src/ecm/platform/generated/configuration_defaults.h": "1e91f9209da81c3fd8df34f5caa094a461cc01794bb140611a9d4f93534e43bd",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "a6376ef37bdf0b5bdb79946386808a35cc82246bb2cf2615986e798a3bba8563",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "0f91a03e5f50f803723684336747cf88e688161473a3c1d0ee480cdbc7a6be1a",
     "config/ecm.toml.default": "8ed3d7f4efcd113571ba2a8fe4f60d0216f3262620dcb0d44199a8da707f5371",
-    "config/ecm.toml.example": "8993468cbe88d3e5224664581e411bbf0cdd12a39fcf30b426f3628407fe6624",
-    "docs/ECM_TOML_REFERENCE.en.md": "e7e5c9f7e361a729b5801cdb77338c2f76165e4af63b9551822a2b64168d1248",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "ae43833e58549f52b8a22c416871400cbeb184995147d649400e3de32c7a6391",
-    "config/ecm_options.json": "edb8e1401490d41e469cdb81c213b5990a8141e0a84ee707338f1bba2eec52f7",
+    "config/ecm.toml.example": "2dc9366ec1e60ffd4380d00547fbbc565c6cacc6dfe61eaad51752969a0fc7d6",
+    "docs/ECM_TOML_REFERENCE.en.md": "e56a8db31fa29626b71815060e3e5ae3eb975c328e0288fe51295a25d6ba828f",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "0dcbb5491234ffd094d7b5839dddfb67b4f2dce602c2ca01e3d98eb5577dc0c5",
+    "config/ecm_options.json": "f9e11fd8b4d595eb9a51ee6d7a50c93e47b53909100088bbfabfcf1ddffc5b71",
     "tools/gen/generate_ecm_config.py": "541225f000885dd360c4c91a355645f2b74ac3cb82ec45ddca645032ee9637ed"
   }
 }

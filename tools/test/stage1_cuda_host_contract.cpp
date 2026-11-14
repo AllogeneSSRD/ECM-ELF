@@ -3,6 +3,7 @@
 #include "../../src/ecm/stage1/sigma.h"
 #include "../../src/ecm/stage1/edwards/cuda/runtime.h"
 #include "../../src/ecm/stage1/edwards/cuda/edwards_internal.h"
+#include "../../src/ecm/stage1/edwards/cuda/memory.h"
 #include "../../src/ecm/curve/edwards.h"
 #include <cstdio>
 #include <cstdlib>
@@ -90,6 +91,34 @@ void sigma_contract() {
     std::puts("sigma_contract=PASS u32_endpoints=1 param2_minimum=1 u64_overflow=1 restored_no_draw=1 legacy_abi=1");
 }
 unsigned device_calls=0,dispatch_calls=0;bool reject_device=false;
+size_t device_free=std::numeric_limits<size_t>::max();
+unsigned expected_window=6;
+unsigned rejected_allocations=0;
+
+void edwards_memory_contract() {
+    using namespace ecm_cuda_stage1;
+    constexpr uint32_t width=8192, curves=384, scalar_bits=375102581;
+    constexpr size_t mib=1024*1024;
+    const size_t w6=edwards_device_bytes(width,curves,scalar_bits,6);
+    const size_t w8=edwards_device_bytes(width,curves,scalar_bits,8);
+    const size_t minimum=edwards_device_bytes(width,curves,scalar_bits,2);
+    const size_t binary=edwards_device_bytes(width,curves,scalar_bits,0);
+    require(w8-w6==72*mib,"Edwards memory estimate did not account for dictionary growth");
+    require(edwards_device_window(width,curves,scalar_bits,8,true,w8)==8,
+        "Edwards device window rejected an exact fit");
+    require(edwards_device_window(width,curves,scalar_bits,8,true,w6)==6,
+        "Edwards memory planner skipped the largest fitting NAF window");
+    require(!edwards_device_window(width,curves,scalar_bits,8,false,w6),
+        "Edwards memory planner changed a retained cursor's window");
+    require(!edwards_device_window(width,curves,scalar_bits,8,true,minimum-1),
+        "Edwards memory planner accepted insufficient capacity");
+    require(edwards_device_window(width,curves,scalar_bits,0,false,binary)==0 &&
+            !edwards_device_window(width,curves,scalar_bits,0,false,binary-1),
+        "Edwards binary memory preflight exact-fit contract failed");
+    require(edwards_device_budget(0)==0 && edwards_device_budget(1024*mib)<1024*mib,
+        "Edwards memory reserve underflowed or was not applied");
+    std::puts("edwards_memory_contract=PASS exact_fit=1 lower_window=1 pinned_cursor=1 no_fit=1 binary=1 reserve=1");
+}
 void edwards_runtime_contract() {
     using namespace ecm_cuda_stage1;using namespace ecm_edwards;
     Integer n,s;mpz_ui_pow_ui(n.v,2,521);mpz_sub_ui(n.v,n.v,1);mpz_set_ui(s.v,12345);
@@ -119,17 +148,63 @@ void edwards_runtime_contract() {
     require(stopped.termination==Termination::Stopped && stopped.cursor==1 && stopped.snapshot_cursor==1 &&
         device_calls==2 && dispatch_calls==1 &&
         metrics.container_bits==384 && metrics.tpi==4,"resolved Edwards request/stop mismatch");
-    std::puts("edwards_runtime_contract=PASS complete_binary_naf_no_gpu_or_tier=1 invalid_state=1 compatibility=1 device_failure=1 resolved_dispatch=1");
+    done=0;
+    EdwardsOptions options{1,6,5,17};
+    options.allow_memory_downgrade=true;
+    unsigned notices=0;
+    options.memory_selection=[&](unsigned requested,unsigned selected,size_t bytes,size_t budget) {
+        require(requested==6 && selected==5 && bytes<=budget,
+            "Edwards allocation retry reported the wrong memory plan");
+        ++notices;
+    };
+    const auto original_dispatches=dispatch_calls;
+    rejected_allocations=1;
+    expected_window=5;
+    const auto retried=execute_edwards_batch(n.v,s.v,state.data(),1,done,options,nullptr,nullptr,&metrics,nullptr);
+    require(retried.termination==Termination::Stopped && done==1 && dispatch_calls==original_dispatches+2 && notices==1,
+        "fresh Edwards dispatch did not retry a pre-launch allocation failure at lower w");
+    rejected_allocations=1;
+    const auto pinned_dispatches=dispatch_calls;
+    const auto pinned=execute_edwards_batch(n.v,s.v,state.data(),1,done,options,nullptr,nullptr,&metrics,nullptr);
+    require(pinned.termination!=Termination::Completed && done==1 && dispatch_calls==pinned_dispatches+1 && notices==1,
+        "Edwards changed a retained NAF cursor after an allocation failure");
+    device_free=0;
+    const auto no_fit_dispatches=dispatch_calls;
+    done=0;
+    const auto no_fit=execute_edwards_batch(n.v,s.v,state.data(),1,done,options,nullptr,nullptr,&metrics,nullptr);
+    require(no_fit.termination!=Termination::Completed && !done && dispatch_calls==no_fit_dispatches && notices==1,
+        "insufficient Edwards device memory was not rejected before dispatch");
+    rejected_allocations=0;
+    expected_window=0;
+    const auto binary_bytes=edwards_device_bytes(384,1,14,0);
+    device_free=16*ecm_edwards_memory::mib+binary_bytes;
+    options.allow_binary_fallback=true;
+    options.memory_selection=[&](unsigned requested,unsigned selected,size_t bytes,size_t budget) {
+        require(requested==6 && !selected && bytes==binary_bytes && bytes==budget,
+            "Edwards low-memory binary fallback reported the wrong memory plan");
+        ++notices;
+    };
+    const auto binary=execute_edwards_batch(n.v,s.v,state.data(),1,done,options,nullptr,nullptr,&metrics,nullptr);
+    require(binary.termination==Termination::Stopped && done==1 && dispatch_calls==no_fit_dispatches+1 && notices==2,
+        "Edwards automatic memory downgrade did not fall back to binary");
+    std::puts("edwards_runtime_contract=PASS complete_binary_naf_no_gpu_or_tier=1 invalid_state=1 compatibility=1 device_failure=1 resolved_dispatch=1 retry=1 pinned_cursor=1 no_fit=1 binary_fallback=1");
 }
 }
 // Substitute only the hardware boundary. Validation and resolution above are
 // the real ordinary-CXX implementation; no CUDA SDK is linked by this test.
-void ecm_edwards_cuda_detail::prepare_device(int) {
+size_t ecm_edwards_cuda_detail::prepare_device(int) {
     ++device_calls;if(reject_device)throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"injected device failure");
+    return device_free;
 }
 int ecm_edwards_cuda_detail::run_384(const Request &request) {
-    ++dispatch_calls;require(request.chunk==17 && request.plan && request.plan->window==6 && request.doubling==5,
+    ++dispatch_calls;
+    if(rejected_allocations) {
+        --rejected_allocations;
+        throw DeviceAllocationError("injected allocation failure");
+    }
+    require(request.chunk==17 && (request.plan ? request.plan->window : 0)==expected_window && request.doubling==5,
         "resolved request differs from requested NAF options");
+    if(request.prepared)request.prepared();
     request.done=1;
     request.snapshot_cursor=request.done;
     return 2;
@@ -138,6 +213,7 @@ int main() {
     using namespace ecm_cuda_mont_host;
     using namespace ecm_cuda_stage1;
     try {
+        edwards_memory_contract();
         edwards_runtime_contract();
         sigma_contract();
         {

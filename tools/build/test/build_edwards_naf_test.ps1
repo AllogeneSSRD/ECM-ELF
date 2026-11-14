@@ -10,14 +10,15 @@ $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($
 . (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $Build
 $exe=Join-Path $Build 'edwards_naf_test.exe'
-$command='"'+$vc.Compiler+'" /nologo /O2 /std:c++17 /EHsc /utf-8 /I include /I src /I third_party/gmp-zen3/dist/include tools/test/edwards_naf_test.cpp src/ecm/stage1/scalar.cpp /Fo"'+$Build+'/" /Fe"'+$exe+'" /link /LIBPATH:third_party/gmp-zen3/dist/lib gmp.lib'
+$sources=@('tools/test/edwards_naf_test.cpp','src/ecm/stage1/scalar.cpp','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp')
+$command='"'+$vc.Compiler+'" /nologo /O2 /std:c++17 /EHsc /utf-8 /I include /I src /I third_party/gmp-zen3/dist/include '+($sources -join ' ')+' /Fo"'+$Build+'/" /Fe"'+$exe+'" /link /LIBPATH:third_party/gmp-zen3/dist/lib gmp.lib'
 $file=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($file,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c $file 2>&1 | Out-File (Join-Path $Build 'build.log') -Encoding utf8
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 30;throw 'compile failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $hashes=[ordered]@{}
-foreach($source in @('tools/test/edwards_naf_test.cpp','include/ecm/stage1/scalar.h','src/ecm/stage1/scalar.cpp','src/ecm/stage1/edwards/cuda/edwards_slice.h','tools/build/test/build_edwards_naf_test.ps1')){
+foreach($source in ($sources + @('include/ecm/stage1/scalar.h','src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.h','src/ecm/stage1/edwards/cuda/edwards_slice.h','tools/build/test/build_edwards_naf_test.ps1'))){
     $hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
 }
 [ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;sources=$hashes}|ConvertTo-Json -Depth 5|Set-Content (Join-Path $Build 'manifest.json') -Encoding utf8

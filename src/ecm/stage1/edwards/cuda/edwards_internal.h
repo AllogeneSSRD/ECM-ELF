@@ -2,6 +2,9 @@
 #include "runtime.h"
 #include "ecm/stage1/scalar.h"
 namespace ecm_edwards_cuda_detail {
+struct DeviceAllocationError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 struct Request {
     mpz_srcptr n,scalar;
     mpz_t *states;
@@ -14,10 +17,10 @@ struct Request {
     const EcmEdwardsNaf *plan;
     int doubling;
     EcmEdwardsNafMetrics *metrics;
-    EcmEdwardsPrepared prepared;
+    const std::function<void()> &prepared;
 };
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) int run_##W(const Request &request);
 #include "../../../cuda/dispatch/tiers.def"
 #undef ECM_CUDA_TIER
-void prepare_device(int device);
+size_t prepare_device(int device);
 }

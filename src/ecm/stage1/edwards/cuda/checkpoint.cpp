@@ -3,6 +3,7 @@
 #include "host_math.h"
 #include "ecm/io/save.h"
 #include "ecm/stage1/scalar.h"
+#include "memory.h"
 #include "../../../../io/stage1_binary.h"
 #include "ecm/platform/logging.h"
 #include "../../../../io/files.h"
@@ -29,8 +30,10 @@ static uint64_t scalar_fingerprint(mpz_srcptr scalar) {
 }
 std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
     using namespace ecm_stage1_binary;
-    std::string out("ECMEDB3",8);u32(out,3);u32(out,b.window);u32(out,uint32_t(b.doubling));
-    u32(out,b.count);u32(out,b.done);u32(out,0);u64(out,b1);
+    const bool downgraded = b.original_window != 0;
+    std::string out(downgraded ? "ECMEDB4" : "ECMEDB3",8);
+    u32(out,downgraded ? 4 : 3);u32(out,b.window);u32(out,uint32_t(b.doubling));
+    u32(out,b.count);u32(out,b.done);u32(out,b.original_window);u64(out,b1);
     u64(out,mpz_sizeinbase(scalar,2));u64(out,scalar_fingerprint(scalar));binary_value(out,n);
     for(uint32_t i=0;i<b.count;++i) {
         u64(out,b.sigmas[i]);u32(out,uint32_t(b.hit[i]));binary_value(out,b.factors[i]);
@@ -46,17 +49,22 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
     using namespace ecm_stage1_checkpoint;
         Batch temp(b.count);unsigned window=0;int doubling=0;bool valid=true;
-        if(text.size()>=8 && !std::memcmp(text.data(),"ECMEDB3",8)) {
+        const bool v3 = text.size() >= 8 && !std::memcmp(text.data(),"ECMEDB3",8);
+        const bool v4 = text.size() >= 8 && !std::memcmp(text.data(),"ECMEDB4",8);
+        if(v3 || v4) {
             using namespace ecm_stage1_binary;
             try {
                 if(text.size()<68)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 const auto body=std::string_view(text).substr(0,text.size()-8);
                 Reader footer(std::string_view(text).substr(text.size()-8));
                 if(footer.u64()!=ecm_io::fingerprint(std::string(body)))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
-                Reader data(body);data.take(8);if(data.u32()!=3)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+                Reader data(body);data.take(8);if(data.u32()!=(v4 ? 4u : 3u))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 window=data.u32();doubling=int(data.u32());
                 if(data.u32()!=b.count)return {RestoreState::Incompatible,"GPU Edwards checkpoint curve count differs"};temp.done=data.u32();
-                if(data.u32()!=0)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint flags"};
+                temp.original_window=data.u32();
+                if(v4 ? window < 2 || temp.original_window <= window || temp.original_window > 12
+                      : temp.original_window != 0)
+                    return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint window selection"};
                 if(data.u64()!=b1 || data.u64()!=mpz_sizeinbase(scalar,2) || data.u64()!=scalar_fingerprint(scalar))
                     return {RestoreState::Incompatible,"GPU Edwards checkpoint scalar or B1 differs"};
                 Integer saved_n;const auto maximum=(mpz_sizeinbase(n,2)+7)/8;
@@ -92,7 +100,12 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         }
         if((window && (window<2 || window>12 || (doubling!=4 && doubling!=5))) ||
            (!window && doubling!=0))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
-        const auto total=window?EcmEdwardsNaf(scalar,window).bits:mpz_sizeinbase(scalar,2);
+        const auto scalar_bits = mpz_sizeinbase(scalar,2);
+        if (window && (scalar_bits >= UINT32_MAX ||
+            ecm_cuda_stage1::edwards_runtime_host_bytes(0, 0, uint32_t(scalar_bits), true) >
+                ecm_cuda_stage1::edwards_host_budget()))
+            throw std::runtime_error("insufficient host memory or unsupported scalar length for GPU Edwards checkpoint NAF validation");
+        const auto total=window?EcmEdwardsNaf(scalar,window).bits:scalar_bits;
         if(temp.done>total)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         for(uint32_t i=0;i<b.count;++i)
             if((temp.hit[i]!=0 && temp.hit[i]!=1))valid=false;
@@ -108,10 +121,11 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         if(!valid)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         if(fixed)for(uint32_t i=0;i<b.count;++i)
             if(temp.sigmas[i]!=b.sigmas[i])return {RestoreState::Incompatible,"GPU Edwards checkpoint sigma differs from requested sigma"};
-        if((window_fixed && b.window!=window) || (doubling_fixed && b.doubling!=doubling) ||
+        if((window_fixed && b.window!=window && b.window!=temp.original_window) ||
+           (doubling_fixed && b.doubling!=doubling) ||
            (mode_fixed>=0 && bool(mode_fixed)!=bool(window)))
             return {RestoreState::Incompatible,"GPU Edwards checkpoint algorithm differs from explicit NAF/doubling selection"};
-        b.window=window;b.doubling=doubling;
+        b.window=window;b.original_window=temp.original_window;b.doubling=doubling;
         b.done=temp.done;b.sigmas=temp.sigmas;b.hit=temp.hit;
         for(uint32_t i=0;i<b.count;++i)mpz_set(b.factors[i],temp.factors[i]);
         for(size_t i=0;i<size_t(b.count)*9;++i)mpz_set(b.state[i],temp.state[i]);
