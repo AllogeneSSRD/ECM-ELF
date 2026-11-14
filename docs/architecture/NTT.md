@@ -42,6 +42,10 @@ flowchart LR
 
 融合后直接生成段内结果与摘要。需规范化的输出由独立写回消费摘要，只供下一次 pack 的槽由 pack 解析。每步三批乘法各少一次独立汇集 kernel 和一次 limb 和的全局中转。实现见 [段进位内核](../../kernels/cuda/stage1_ntt_segments.cuh) 与 [批次调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
 
+### 原生 Edwards 的共享去权缓存
+
+每个 256-limb CTA 先合作去权并缓存当前段及前一 limb 所需的连续系数。正常位置的 limb 汇集和 warp 首 lane 的进位使用同一缓存。低两 limb 的循环项及最低 limb 需要的高端系数从逆变换缓冲直接读取。这样每段内的相邻 limb 不必反复对同一系数乘逆权，而且不生成全局 limb 和中间表。跨段进位及规范化写回沿用现有规则。缓存大于 16 KiB 时使用原归约路径。启用条件和收益见 [两卡加权归约对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-共享去权缓存)。
+
 ## Stage1 radix-5 PFA
 
 加权 Stage1 在 \(L=5W\)、\(W=2^k\) 的变换上使用 PFA 分解。选 \(r\in\{1,2,3,4\}\) 使 \(1+rW\equiv0\pmod 5\)，用 \(n=(1+rW)i+Wj\bmod L\) 表示系数序号。两个因子互素，五点 DFT 和 \(W\) 点 NTT 因此可以独立执行。频点按相同置换排列，逐点乘加保持原有卷积含义。

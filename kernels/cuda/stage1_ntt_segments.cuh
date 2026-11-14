@@ -123,8 +123,9 @@ struct WeightedLimbSource {
     const WeightedLimb* spans;
 };
 
+template<class Coefficient>
 __device__ __forceinline__ WeightedWord gather_carry_limb(const WeightedLimbSource& source,
-                                                        unsigned p, unsigned word) {
+                                                        unsigned p, unsigned word, Coefficient coefficient) {
     const unsigned bit = 32 * word;
     const auto mask = (WeightedWord(1) << min(32u, p - bit)) - 1;
     const auto span = source.spans[word];
@@ -135,21 +136,48 @@ __device__ __forceinline__ WeightedWord gather_carry_limb(const WeightedLimbSour
     for (unsigned wrap = 0; wrap < wraps; ++wrap) {
         const unsigned lo = bit + wrap * p;
         for (unsigned j = span.first[wrap]; j < span.end[wrap]; ++j) {
-            const auto c = gl_mul(source.coefficients[j], source.inverse_weights[j]);
-            sum += weighted_limb_fragment(c, source.digits[j].bit, lo, mask);
+            sum += weighted_limb_fragment(coefficient(j), source.digits[j].bit, lo, mask);
         }
     }
     return sum;
 }
 
-template<bool Routed>
+inline unsigned weighted_segment_cache_bytes(const std::vector<WeightedLimb>& spans) {
+    unsigned capacity = 0;
+    for (size_t start = 0; start < spans.size(); start += stage1_carry_segment) {
+        const auto& first = spans[start ? start - 1 : 0]; // Include the incoming carry's limb.
+        const auto& last = spans[std::min(spans.size(), start + stage1_carry_segment) - 1];
+        capacity = std::max(capacity, last.end[0] - first.first[0]);
+    }
+    return capacity * sizeof(WeightedWord);
+}
+
+template<bool Routed, bool Cached = false>
 __global__ __launch_bounds__(stage1_carry_segment, 2)
 void weighted_segment_limb_sums(uint32_t* state, WeightedLimbSource source, unsigned* headers,
                                 Shape s, Indices out, Cursor cursor) {
     source.coefficients += size_t(blockIdx.y) * s.length;
-    const unsigned i = blockIdx.x * stage1_carry_segment + threadIdx.x;
+    const unsigned start = blockIdx.x * stage1_carry_segment;
+    const unsigned i = start + threadIdx.x;
     const unsigned lane = threadIdx.x % 32;
-    const auto sum = i < s.words ? gather_carry_limb(source,s.p,i) : 0;
+    const auto load = [&](unsigned digit) { return gl_mul(source.coefficients[digit], source.inverse_weights[digit]); };
+    extern __shared__ WeightedWord coefficients[];
+    unsigned first = 0;
+    if constexpr (Cached) {
+        first = source.spans[start ? start - 1 : 0].first[0];
+        const unsigned end = source.spans[min(start + stage1_carry_segment, s.words) - 1].end[0];
+        for (unsigned j = first + threadIdx.x; j < end; j += blockDim.x)
+            coefficients[j - first] = load(j);
+        __syncthreads();
+    }
+    const auto gather = [&](unsigned word) {
+        if constexpr (Cached) {
+            if (word >= 2)
+                return gather_carry_limb(source, s.p, word, [&](unsigned digit) { return coefficients[digit - first]; });
+        }
+        return gather_carry_limb(source, s.p, word, load);
+    };
+    const auto sum = i < s.words ? gather(i) : 0;
     auto previous = __shfl_up_sync(0xffffffffu, uint32_t(sum >> 32), 1);
     const uint32_t mask = i < s.words ? limb_mask(s,i) : 0;
     WeightedWord value = 0;
@@ -159,12 +187,12 @@ void weighted_segment_limb_sums(uint32_t* state, WeightedLimbSource source, unsi
             // This is the only limb that needs the opposite end of the residue.
             const unsigned tail_bits = s.p - 32 * last;
             const auto tail_mask = (WeightedWord(1) << tail_bits) - 1;
-            const auto last_sum = last ? gather_carry_limb(source,s.p,last) : sum;
+            const auto last_sum = last ? gather_carry_limb(source,s.p,last,load) : sum;
             const auto tail = (last_sum & tail_mask) + (last ?
-                gather_carry_limb(source,s.p,last - 1) >> 32 : last_sum >> tail_bits);
+                gather_carry_limb(source,s.p,last - 1,load) >> 32 : last_sum >> tail_bits);
             value = (last ? (sum & mask) + (last_sum >> tail_bits) : tail & tail_mask) + (tail >> tail_bits);
         } else {
-            if (lane == 0) previous = uint32_t(gather_carry_limb(source,s.p,i - 1) >> 32);
+            if (lane == 0) previous = uint32_t(gather(i - 1) >> 32);
             value = (sum & mask) + previous;
             if (i == last) value &= mask;
         }

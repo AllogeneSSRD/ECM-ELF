@@ -363,12 +363,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     // shape amortizes segmentation even with multiple live curves.
     const bool early_segments = (curves == 1 && p >= 53249 && (s.length == 2560 || s.length == 5120)) ||
                                 (s.length == 5120 && p >= 106497);
-    if (p > 14 * stage1_carry_segment * 32 || early_segments) {
+    const bool wide_segments = p > 14 * stage1_carry_segment * 32;
+    if (wide_segments || early_segments) {
         defaults |= SegmentedCarry;
         if (mixed || curves == 1) defaults |= DeferredPack;
     }
     if (curves == 1 && ((s.length == 2560 && p >= 53249) || (s.length == 5120 && p >= 106497)))
         defaults |= FusedWeightedCarry;
+    // On 5120-point plans the single-curve reducer already fuses this work.
+    const bool cache_edwards_carry = s.length == 5120 ? p >= 106497 && curves >= 8 : wide_segments;
+    if (naf && cache_edwards_carry)
+        defaults |= CachedFusedWeightedCarry;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | DeferredPack);
     const bool pfa = mixed && (requested & PfaRadix5);
@@ -490,8 +495,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (packed) result.dataflow |= PackedForward;
     if (cached) result.dataflow |= CachedCarry;
     if (deferred) result.dataflow |= DeferredPack;
-    const bool fused_weighted = segmented && (requested & FusedWeightedCarry);
+    const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale) : WeightedTables{};
+    const unsigned carry_cache_smem = segmented && (requested & CachedFusedWeightedCarry)
+        ? weighted_segment_cache_bytes(weights.limbs) : 0;
+    // Keep the shared coefficient tile small enough to allow several CTAs per SM.
+    const bool cached_fused = carry_cache_smem && carry_cache_smem <= 16 * 1024;
+    const bool fused_weighted = segmented && (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
+    if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
     if (control && control->describe) {
         const auto join = [](std::string& stages, int width) {
             if (!stages.empty()) stages += '+';
@@ -576,7 +587,6 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         radix5_fwd = radix5_constants(gl_pow_host(omega, width));
         radix5_inv = radix5_constants(gl_pow_host(inv, width));
     }
-    const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale) : WeightedTables{};
     const unsigned limb_smem = fused_weighted ? 0 : weighted_limb_smem(weights.limbs);
     Buffer<WeightedDigit> digit_table(weights.digits.size());
     Buffer<U> inverse_weights(weights.inverse.size());
@@ -746,12 +756,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (options.weighted) {
             if (fused_weighted) {
                 const WeightedLimbSource source{inverse.data,inverse_weights.data,digit_table.data,limb_table.data};
-                if (route_output)
-                    weighted_segment_limb_sums<true><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
+                const auto launch = [&](auto route) {
+                    constexpr bool routed = decltype(route)::value;
+                    auto kernel = cached_fused ? weighted_segment_limb_sums<routed,true>
+                                               : weighted_segment_limb_sums<routed,false>;
+                    kernel<<<segment_grid(outputs),stage1_carry_segment,cached_fused ? carry_cache_smem : 0,q>>>(
                         state.data,source,carry_headers.data,s,out,cursor);
-                else
-                    weighted_segment_limb_sums<false><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
-                        state.data,source,carry_headers.data,s,out,cursor);
+                };
+                if (route_output) launch(yes);
+                else launch(no);
             } else {
                 const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
                 weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
