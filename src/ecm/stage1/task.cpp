@@ -303,9 +303,12 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                 if (!base.edwards && opt.execution.selection.cpu_montgomery_chain ==
                                          CpuMontgomeryChain::Prac)
                     identity += "|prac-v1";
-            } else if (execution.execution.selection.gpu_algorithm == GpuAlgorithm::Ntt)
-                identity += "|ntt-v1";
-            else if (!base.edwards)
+            } else if (selection.gpu_algorithm == GpuAlgorithm::Ntt) {
+                if (base.edwards && opt.execution.naf_w)
+                    identity += "|ntt-edwards-naf-v1|" + std::to_string(opt.execution.naf_w);
+                else
+                    identity += "|ntt-v1";
+            } else if (!base.edwards)
                 identity += "|" + execution.cgbn_algorithm;
             session.begin(identity, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&

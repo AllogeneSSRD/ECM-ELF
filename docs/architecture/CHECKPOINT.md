@@ -265,6 +265,10 @@ CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存
 
 next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内层 checksum 仅为 data 的标准 FNV-1a 64，初值14695981039346656037；N/S 的 hash 按低 limb 到高 limb 的 GMP 本机 limb 字节计算，因此不构成跨 ABI 的规范数值摘要。模数、指数和计划身份通过头字段比对，外层 CRC 保护整个载荷。恢复要求版本、算法、域、N/S/计划 hash、B1、总长、BITS/TPI、曲线数及 torsion 等匹配。PRAC window 局部采样不产生完整 Stage1 save 或 checkpoint。
 
+### 4.6 CUDA NTT Edwards NAF
+
+外层任务身份包含 `ntt-edwards-naf-v1` 和窗口。记录 0 的载荷以 `ECMNTTE1` 起始，随后是总列数、窗口、已处理列数、活跃曲线位图及规范整数 X/Y/Z。计数和 32 位 limb 均为小端。位图每 32 条曲线用一个字，坐标依次按坐标面、活跃曲线及 limb 排列。续跑从同一 sigma 重建仿射字典与 NAF 编码，允许变更 NTT 卷积和调度参数。x-only 仍使用独立的 bit 游标和 X/Z 点对。
+
 来源：[ResidentCheckpoint 与恢复](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu#L18)、[window 范围](../../src/ecm/stage1/montgomery/cuda/prac/prac_window.inl#L70)。
 
 ## 5. 写入、恢复和清理顺序

@@ -48,6 +48,11 @@ struct Run {
     std::vector<uint32_t> points;
     std::vector<double> device_ms, wall_ms;
     double setup_seconds = 0, readback_seconds = 0;
+    double dictionary_gpu_ms = 0;
+    double dictionary_inverse_ms = 0;
+    // Empty for the host dictionary. Otherwise 0=ready, 1=factor, 2=replay.
+    std::vector<uint8_t> dictionary_status;
+    std::vector<uint32_t> dictionary_factors;
     unsigned length = 0, digit_bits = 0, passes = 0, tile = 0, completed_bits = 0;
     unsigned dataflow = 0;
     bool stopped = false;
@@ -59,6 +64,19 @@ struct Run {
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
            const std::vector<uint32_t>& scalar, unsigned bit_count,
            const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);
+
+// Edwards prototype. State is X/Y/Z in slot-major order. Digits are
+// MSB-first. The table holds affine x, y, d*x*y, x+y per entry for host
+// preparation or just the affine seed x, y, d for device preparation.
+struct EdwardsNaf {
+    unsigned window;
+    const std::vector<int16_t>& digits;
+    const std::vector<uint32_t>& dictionary;
+    size_t dictionary_budget = 0;
+    bool build_dictionary = false;
+};
+Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+                const EdwardsNaf&, const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);
 
 // Standalone probe retains its byte-per-bit input and environment overrides.
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,

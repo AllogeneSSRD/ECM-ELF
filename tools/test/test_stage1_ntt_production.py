@@ -4,6 +4,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -42,9 +43,14 @@ def main():
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", type=int, default=1)
+    parser.add_argument("--edwards-naf-only", action="store_true")
+    parser.add_argument("--edwards-dictionary", choices=("host", "gpu"))
     args = parser.parse_args()
     exe, out = args.exe.resolve(strict=True), args.output.resolve()
     out.mkdir(parents=True)
+    env = dict(os.environ)
+    if args.edwards_dictionary:
+        env["ECM_EDWARDS_NTT_DICTIONARY"] = args.edwards_dictionary
 
     def fixture(name, algorithm="2", extra="", model="mont"):
         work = out / name
@@ -63,7 +69,7 @@ def main():
 
     def run(work, cmd, label="run", text=None, ok=True):
         process = subprocess.run(cmd, input=text, text=True, encoding="utf-8", errors="replace",
-                                 cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
                                  timeout=120)
         (work / (label + ".log")).write_text(process.stdout, encoding="utf-8")
         assert (process.returncode == 0) == ok, (work, label, process.stdout[-2000:])
@@ -72,6 +78,110 @@ def main():
     def direct(work, cmd, p, b1, sigma, curves, *flags):
         return cmd + ["--ckpt", "0", "-save", str(work / "out.save"), "-sigma", str(sigma),
                       "-gpucurves", str(curves), *flags, str(b1), str(b1)], f"2^{p}-1\n"
+
+    if args.edwards_naf_only:
+        for p, b1, sigma, curves, mode, length, window, naf in (
+            (127, 20, 26, 2, "linear", 0, 0, 2),
+            (127, 128, 26, 3, "linear", 0, 0, 6),
+            (4253, 64, 4294967311, 4, "weighted", 0, 4, 6),
+            (53281, 32, 26, 2, "weighted", 2560, 8, 8),
+            (262139, 20, 26, 1, "weighted", 0, 4, 6),
+            (65, 8, 9, 1, "linear", 0, 0, 6),
+            (35, 128, 16, 1, "weighted", 0, 4, 6),
+        ):
+            expected = None
+            for kind in (0, naf):
+                extra = f'ntt_convolution = "{mode}"\nntt_length = {length}\nntt_window = {window}\nnaf_w = {kind}\n'
+                work, cmd = fixture(f"ed_{p}_{b1}_{kind}", extra=extra, model="ed")
+                call, data = direct(work, cmd, p, b1, sigma, curves)
+                log = run(work, call, text=data)
+                if kind and p > 65:
+                    assert "stage1_ntt_edwards_naf: window=" in log
+                points = saved_points(work / "out.save", p, b1, True)
+                if kind:
+                    assert points == expected, (p, points, expected)
+                else:
+                    expected = points
+                if p == 65:
+                    assert points == {9: 31} and "factor[0]=31" in log
+                elif p == 35:
+                    assert not points and "Edwards identity: sigma=16" in log
+            if p > 65:
+                n = (1 << p) - 1
+                oracle = {}
+                for seed in range(sigma, sigma + curves):
+                    _, x, z = edwards_stage1(n, seed, b1)
+                    oracle[seed] = x * pow(z, -1, n) % n
+                assert expected == oracle
+            print(f"PASS Edwards NTT w{naf} {mode} p={p}, {curves} curves", flush=True)
+        work, cmd = fixture("edwards_dictionary_factor", extra="naf_w = 6\n", model="ed")
+        call, data = direct(work, cmd, 55, 64, 5, 1)
+        log = run(work, call, text=data)
+        assert saved_points(work / "out.save", 55, 64, True) == {5: 881}
+        assert "factor[0]=881" in log
+        if args.edwards_dictionary == "gpu":
+            assert "backend=gpu" in log
+        work, cmd = fixture("edwards_dictionary_budget", extra="naf_w = 12\nnaf_memory_mb = 1\n", model="ed")
+        call, data = direct(work, cmd, 4253, 40, 26, 2)
+        assert "dictionary exceeds" in run(work, call, text=data, ok=False)
+        budget_save = work / "out.save"
+        assert not budget_save.exists() or budget_save.stat().st_size == 0
+        p, b1, sigma, curves = 4253, 4096, 26, 4
+        extra = "naf_w = 6\nsigma = 26\nntt_window = 4\nauto_stage2 = 1\n"
+        work, cmd = fixture("edwards_naf_resume", extra=extra, model="ed")
+        config = work / "ecm.toml"
+        save = work / f"e_m{p}_{b1}.save"
+        todo = work / "worktodo.txt"
+        row = f'ECMSTAGE1=1,2,{p},-1,"{save.as_posix()}",{10*b1},0,{curves}\n'
+        todo.write_text(row, encoding="ascii")
+        checkpoint = work / f".e_s1_m{p}_{b1}.ckpt"
+
+        class Security(ctypes.Structure):
+            _fields_ = [("length", wintypes.DWORD), ("descriptor", wintypes.LPVOID),
+                        ("inherit", wintypes.BOOL)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateEventW.argtypes = [ctypes.POINTER(Security), wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel.CreateEventW.restype = wintypes.HANDLE
+        kernel.SetEvent.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        event = kernel.CreateEventW(ctypes.byref(Security(ctypes.sizeof(Security), None, True)), True, False, None)
+        assert event
+        with (work / "stop.log").open("wb") as log:
+            process = subprocess.Popen(cmd + ["--stage1-stop-handle", str(event)], cwd=work,
+                                       stdout=log, stderr=log, close_fds=False, env=env,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+            try:
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline and process.poll() is None and not checkpoint.exists():
+                    time.sleep(0.01)
+                assert process.poll() is None and checkpoint.is_file()
+                assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                kernel.CloseHandle(event)
+        assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
+        identity, lanes = batch(checkpoint)
+        assert identity.endswith("|ntt-edwards-naf-v1|6")
+        magic, count, window, cursor, active = struct.unpack_from("<8sIIII", lanes[0][1])
+        assert magic == b"ECMNTTE1" and window == 6 and 0 < cursor < count and active == (1 << curves) - 1
+        original = config.read_text()
+        for incompatible in (0, 8):
+            config.write_text(original.replace("naf_w = 6", f"naf_w = {incompatible}"))
+            before = checkpoint.read_bytes()
+            assert "checkpoint belongs to different" in run(work, cmd, f"wrong_{incompatible}", ok=False)
+            assert checkpoint.read_bytes() == before and todo.read_text() == row
+        config.write_text(original.replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"'))
+        assert f"resume={cursor}" in run(work, cmd, "resume")
+        assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
+        ref, ref_cmd = fixture("edwards_naf_resume_reference", model="ed")
+        call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
+        run(ref, call, text=data)
+        assert saved_points(save, p, b1, True) == saved_points(ref / "out.save", p, b1, True)
+        print(f"PASS Edwards NAF column {cursor}/{count}, wrong-mode rejection, linear to weighted resume and Stage2 handoff")
+        return
 
     work, cmd = fixture("graph", '"NtT"', "ntt_tile = 8\nntt_outer_max = 2\n")
     call, data = direct(work, cmd, 4003, 128, 4294967311, 4, "--lcm", "12")

@@ -575,8 +575,9 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
 bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error,
                        mpz_srcptr modulus) {
     if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
-        if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards && opt.execution.naf_w) {
-            error = "Edwards Stage1 NTT uses an x-only ladder; naf_w must be 0";
+        if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards && opt.execution.naf_w &&
+            (opt.execution.naf_w < 2 || opt.execution.naf_w > 12)) {
+            error = "Edwards Stage1 NTT requires a NAF window from 2 to 12 or 0 for x-only";
             return true;
         }
         if (curves > ecm_stage1::stage1_ntt_max_curves) {

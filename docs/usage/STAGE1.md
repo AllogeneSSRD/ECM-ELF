@@ -66,7 +66,9 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 
 ## CUDA 全宽 NTT
 
-在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 启用 NTT。默认后端为 `"cgbn"`，也可填 `1`。字符串不区分大小写，CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`），每批 1–128 条。Edwards 使用 `param = "e"`、默认的 `edwards_naf_window_bits = 0` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
+在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 启用 NTT。默认后端为 `"cgbn"`，也可填 `1`。字符串不区分大小写，CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`），每批 1–128 条。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
+
+Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。完整模数达到 32768 位时，原生路径在 GPU 构造奇数倍点字典并归一化。显存不足时，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
 
 ```toml
 config_version = 3

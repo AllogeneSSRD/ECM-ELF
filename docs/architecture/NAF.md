@@ -1,6 +1,6 @@
 # Edwards Stage1 的窗口 NAF
 
-NAF 是 **Non-Adjacent Form**（非相邻形式）。窗口 NAF 把标量的二进制表示重编码为带符号的奇数数字，使大部分列只做倍点。CPU GMP、CPU IFMA 和 CUDA CGBN 均可在 Edwards 点坐标上运行该算法。Edwards CUDA NTT 当前使用映射后的 Montgomery x-only 阶梯，它以相差固定基点的一对点推进。通用 NAF 字典不能提供差分加法需要的动态差点。原生 Edwards NAF 的 NTT 方案已有整数参考探针，尚无生产设备实现。见 [NTT 的原生 Edwards NAF 参考数据流](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
+NAF 是 **Non-Adjacent Form**（非相邻形式）。窗口 NAF 把标量的二进制表示重编码为带符号的奇数数字，使大部分列只做倍点。CPU GMP、CPU IFMA 和 CUDA CGBN 均可在 Edwards 点坐标上运行该算法。Edwards CUDA NTT 默认映射到 Montgomery x-only 阶梯，也可显式指定窗口运行实验性的 2XY NAF。见 [NTT 的原生 Edwards NAF 数据流](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
 
 ## 从标量到点乘
 
@@ -61,6 +61,8 @@ $$
 实际 GPU 预算还要计入点状态和快照缓冲。CGBN NAF 的基础设备缓冲为 $CW(14+4m)+8(\lfloor(L+32)/32\rfloor+1)+32$ B，最后的 32 B 为 CGBN 报告；CUDA 上下文、并行切片元数据和分配器消耗由空闲显存与预留覆盖。CPU 预检另为进程内其他批次状态、线程、模逆和域算术工作区留出预算。见 [设备预估](../../src/ecm/stage1/edwards/cuda/memory.h#L10) 与 [CPU 工作区预估](../../src/ecm/stage1/edwards/cpu/workflow.cpp#L790)。
 
 `edwards_naf_window_bits = 0` 在有 NAF 的 CPU 路径从 w12 开始，在 CUDA CGBN 从 w6 开始。生产显式窗口为 CPU 3–12、CUDA CGBN 2–12。GMP 定长上限为 10240 位，显式标量宽位路径使用 GMP `mpz` 二进制点乘。`naf_memory_mb` 最小正值为 1 MB，0 表示使用空闲预算。CPU 对主内存保留 `max(20%, 64 MiB)`，CUDA 对设备空闲显存保留 `max(20%, 16 MiB)`，再与配置上限取较小值。CPU 尝试在同一窗口下使用可承受的表示和 worker 数，至少一个 worker 都放不下才缩窗。CUDA 固定曲线数，从请求的窗口向下选能装下的最大窗口，自动算法在必要时可切换到 binary。CPU 标量构造和 CUDA 主机准备另查可用内存。配置与作用域见 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md#naf_memory_mb)。
+
+CUDA NTT 原生 2XY NAF 使用显式窗口 2–12。`naf_memory_mb` 同时约束字典频谱和构建工作区，完整 NTT 分配另走可用显存准入。空间不足时显式窗口报错。字典存储与乘积树的字节数见 [原生 Edwards NAF](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
 
 ## 检查点与 Stage2 交接
 

@@ -2,6 +2,7 @@
 #include "profiles.h"
 #include "weighted.cuh"
 #include "ecm/stage1/ntt_length.h"
+#include "ecm/integer.h"
 #include "../../../../../../kernels/cuda/stage1_ntt_radix5.cuh"
 #include "../../../../cuda/ntt/runtime.h"
 #include "../../../../../../kernels/cuda/stage1_ntt_dataflow.cuh"
@@ -306,21 +307,38 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options,
 static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                       const std::vector<uint32_t>& scalar_words, unsigned count,
                       const ecm_stage1::Stage1NttOptions& options, const Control* control,
-                      unsigned samples) {
+                      unsigned samples, const EdwardsNaf* naf = nullptr) {
     if (p < 32 || p > 262144 || !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
         !samples || samples > 20 || count > UINT32_MAX - 64 ||
-        scalar_words.size() < (size_t(count) + 31) / 32 ||
+        (!naf && scalar_words.size() < (size_t(count) + 31) / 32) ||
         (control && control->resume > count))
         throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");
     Shape s{p, (p+31)/32, curves, 0, 0, 0};
     const size_t stride = size_t(s.words)*curves;
-    if (initial.size() != 6*stride) throw std::invalid_argument("invalid Stage1 initial points");
-    for (size_t n=0; n<6*curves; ++n) {
+    const unsigned initial_slots = naf ? 3 : 6, checkpoint_slots = naf ? 3 : 4;
+    if (initial.size() != initial_slots*stride) throw std::invalid_argument("invalid Stage1 initial points");
+    auto check_residues = [&](const std::vector<uint32_t>& values) {
         const unsigned top = p%32 ? (1u << (p%32))-1 : UINT32_MAX;
-        const auto* v = initial.data()+n*s.words;
-        if (v[s.words-1] > top || (v[s.words-1] == top && std::all_of(v,v+s.words-1,
-                [](auto x) { return x == UINT32_MAX; })))
-            throw std::invalid_argument("noncanonical Stage1 initial residue");
+        for (size_t offset = 0; offset < values.size(); offset += s.words) {
+            const auto* v = values.data() + offset;
+            if (v[s.words-1] > top || (v[s.words-1] == top && std::all_of(v,v+s.words-1,
+                    [](auto x) { return x == UINT32_MAX; })))
+                throw std::invalid_argument("noncanonical Stage1 NTT residue");
+        }
+    };
+    check_residues(initial);
+    unsigned entries = 0;
+    if (naf) {
+        if (naf->window < 2 || naf->window > 12 || naf->digits.size() != count ||
+            control->warmup_iterations || control->modular_square_probe)
+            throw std::invalid_argument("invalid Edwards NTT NAF request");
+        entries = 1u << (naf->window - 2);
+        if (naf->dictionary.size() != (naf->build_dictionary ? 3 : 4 * entries) * stride)
+            throw std::invalid_argument("invalid Edwards NTT NAF dictionary size");
+        for (int digit : naf->digits)
+            if (digit && (digit % 2 == 0 || unsigned(std::abs(digit)) >= 2 * entries))
+                throw std::invalid_argument("invalid Edwards NTT NAF digit");
+        check_residues(naf->dictionary);
     }
     const auto packing = resolve_packing(p, options);
     s.length=packing.length; s.bpw=packing.bpw; s.digits=packing.digits;
@@ -351,7 +369,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     if (curves == 1 && ((s.length == 2560 && p >= 53249) || (s.length == 5120 && p >= 106497)))
         defaults |= FusedWeightedCarry;
-    const unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
+    unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
+    if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | DeferredPack);
     const bool pfa = mixed && (requested & PfaRadix5);
     const bool coalesced = pfa && (requested & CoalescedRadix5);
     const bool square_probe = control && control->modular_square_probe;
@@ -393,7 +412,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     auto& ctx=tables.ctx;
     const auto* resolved = control ? &overrides : nullptr;
     fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
-    result.owned_bytes = 11 * sizeof(U) * curves * s.length + slots * stride * sizeof(uint32_t) +
+    const size_t dictionary_bytes = 4ull * sizeof(U) * curves * s.length * entries;
+    const bool gpu_dictionary = naf && naf->build_dictionary;
+    const size_t dictionary_workspace = gpu_dictionary ? 4ull * entries * stride * sizeof(uint32_t) : 0;
+    if (naf && naf->dictionary_budget && dictionary_bytes + dictionary_workspace > naf->dictionary_budget)
+        throw BudgetError("Edwards NTT dictionary exceeds its VRAM budget");
+    result.owned_bytes = (naf ? 9 : 11) * sizeof(U) * curves * s.length + dictionary_bytes + dictionary_workspace +
+        slots * stride * sizeof(uint32_t) +
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
         (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
     if (mixed && !pfa) result.owned_bytes += size_t(8) * width * sizeof(U);
@@ -524,7 +549,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Buffer<unsigned> carry_headers(segmented ? header_words : 0);
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
-    Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(2)*curves*s.length);
+    Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(naf ? 4 * entries : 2)*curves*s.length);
     Buffer<U> modulus(loose ? s.length : 0);
     Buffer<U> inverse(size_t(4)*curves*s.length);
     const size_t mixed_table_words = mixed && !pfa ? size_t(4) * width : 0;
@@ -614,7 +639,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             pack<false><<<grid(count),threads,0,q>>>(state.data,dest,s,in,nullptr);
         forward_spectra(dest,count*curves*planes);
     };
-    forward_inputs(fixed.data, 2, {{A24,Base}});
+    if (!naf) {
+        forward_inputs(fixed.data, 2, {{A24,Base}});
+    }
     if (loose) {
         Shape one = s;
         one.curves = 1;
@@ -651,11 +678,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     };
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out,
                  bool build_e = false, bool add_bb = false, Cursor cursor = {},
-                 unsigned pending_inputs = 0, unsigned pending_outputs = 0) {
+                 unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0) {
         forward_inputs(freq.data, inputs, in, pending_inputs);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
-            return id < 5 ? freq.data + id * plane : fixed.data + (id - 5) * plane;
+            return id < 5 ? freq.data + id * plane : fixed.data + (fixed_offset + id - 5) * plane;
         };
         ProductInputs products{};
         for (unsigned op = 0; op < outputs; ++op) {
@@ -778,11 +805,165 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             route<<<dim3((s.words+threads-1)/threads,curves),threads,0,q>>>(state.data,s,cursor);
         CK(cudaGetLastError());
     };
+    constexpr auto x = X0, y = Z0, z = X1, t = Z1;
+    const auto edwards_double = [&](bool extended) {
+        // Reduce all four products before combining their coefficients.
+        // The sums below form 2XY, X^2+Y^2, X^2-Y^2 and twice Z^2.
+        mul(3,4,{x,y,z},{0,1,2,0},{0,1,2,1},{AA,BB,C,E});
+        add_inputs(std::false_type{},4,{{C,E,AA,AA},{C,E,BB,BB},{D,Sum,A,B},0b1000},{});
+        add_inputs(std::false_type{},1,{{A},{D},{Diff},1},{});
+        mul(4,extended ? 4 : 3,{Sum,Diff,A,B},{0,2,1,0},{1,3,2,3},{x,y,z,t});
+    };
+    const auto edwards_step = [&](int digit) {
+        edwards_double(digit != 0);
+        if (!digit) return;
+
+        const bool negative = digit < 0;
+        add_inputs(std::false_type{},1,{{y},{x},{Sum},unsigned(negative)},{});
+        mul(4,4,{x,y,t,Sum},{0,1,2,3},{5,6,7,8},{AA,BB,C,D},
+            false,false,{},0,0,4 * (unsigned(std::abs(digit)) / 2));
+        if (negative) {
+            add_inputs(std::false_type{},4,{{BB,z,z,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b0101},{});
+            add_inputs(std::false_type{},1,{{Sum},{D},{E},1},{});
+        } else {
+            add_inputs(std::false_type{},4,{{D,z,z,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b1011},{});
+            add_inputs(std::false_type{},1,{{Sum},{BB},{E},1},{});
+        }
+        mul(4,3,{E,Diff,A,B},{0,2,1},{1,3,2},{x,y,z});
+        CK(cudaGetLastError());
+    };
+    if (naf) {
+        Event dictionary_begin, dictionary_end;
+        CK(cudaEventRecord(dictionary_begin.value, q));
+        if (gpu_dictionary) {
+            // Extra storage is transient: projective X/Y and the complete Z
+            // product tree. Each level overwrites its children with inverses.
+            Buffer<uint32_t> work(4ull * entries * stride);
+            const size_t plane = size_t(curves) * s.length;
+            const unsigned curve_d = 4 * entries - 1;
+            const auto xy = [&](unsigned entry, unsigned coord) { return work.data + (2ull * entry + coord) * stride; };
+            const auto tree = [&](unsigned node) { return work.data + (2ull * entries + node) * stride; };
+            const auto slot = [&](unsigned i) { return state.data + i * stride; };
+            const size_t bytes = stride * sizeof(uint32_t);
+            const auto copy = [&](uint32_t* dst, const uint32_t* src) {
+                CK(cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, q));
+            };
+            std::vector<uint32_t> one(stride);
+            for (unsigned lane=0; lane<curves; ++lane) one[lane*s.words] = 1;
+            CK(cudaMemcpyAsync(slot(x), naf->dictionary.data(), 2 * bytes, cudaMemcpyHostToDevice, q));
+            CK(cudaMemcpyAsync(slot(z), one.data(), bytes, cudaMemcpyHostToDevice, q));
+            CK(cudaMemcpyAsync(slot(A24), naf->dictionary.data()+2*stride, bytes, cudaMemcpyHostToDevice, q));
+            forward_inputs(fixed.data + curve_d * plane, 1, {{A24}});
+            copy(xy(0,0),slot(x)); copy(xy(0,1),slot(y)); copy(tree(entries),slot(z));
+            if (entries > 1) {
+                edwards_double(true);
+                mul(1,1,{t},{0},{5},{D},false,false,{},0,0,curve_d);
+                add_inputs(std::false_type{},1,{{x},{y},{Sum},0},{});
+                // Fixed 2P spectra: X, Y, dT, X+Y, Z. They are used only
+                // until the projective sequence has been generated.
+                forward_inputs(fixed.data, 5, {{x,y,D,Sum,z}});
+                copy(slot(x),xy(0,0)); copy(slot(y),xy(0,1)); copy(slot(z),tree(entries));
+                mul(2,1,{x,y},{0},{1},{t});
+                for (unsigned entry=1; entry<entries; ++entry) {
+                    add_inputs(std::false_type{},1,{{x},{y},{Sum},0},{});
+                    mul(4,4,{x,y,t,Sum},{0,1,2,3},{5,6,7,8},{AA,BB,C,D});
+                    mul(1,1,{z},{0},{9},{DA});
+                    add_inputs(std::false_type{},4,{{D,DA,DA,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b1011},{});
+                    add_inputs(std::false_type{},1,{{Sum},{BB},{E},1},{});
+                    mul(4,4,{E,Diff,A,B},{0,2,1,0},{1,3,2,3},{x,y,z,t});
+                    copy(xy(entry,0),slot(x)); copy(xy(entry,1),slot(y)); copy(tree(entries+entry),slot(z));
+                }
+            }
+            // Two sibling pairs per call. Ascend with Z_left * Z_right.
+            for (unsigned end=entries; end>1; end/=2) {
+                for (unsigned node=end/2; node<end; node+=2) {
+                    const bool pair = node+1<end;
+                    copy(slot(A),tree(2*node)); copy(slot(B),tree(2*node+1));
+                    if (pair) { copy(slot(C),tree(2*node+2)); copy(slot(D),tree(2*node+3)); }
+                    mul(pair ? 4 : 2,pair ? 2 : 1,{A,B,C,D},{0,2},{1,3},{AA,BB});
+                    copy(tree(node),slot(AA));
+                    if (pair) copy(tree(node+1),slot(BB));
+                }
+            }
+            std::vector<uint32_t> roots(stride), factors(stride);
+            result.dictionary_status.resize(curves);
+            CK(cudaMemcpyAsync(roots.data(), tree(1), bytes, cudaMemcpyDeviceToHost,q));
+            CK(cudaStreamSynchronize(q));
+            const auto inverse_start = now_s();
+            ecm_edwards::Integer modulus, value, inverse_root, gcd;
+            mpz_setbit(modulus.v,p);
+            mpz_sub_ui(modulus.v,modulus.v,1);
+            for (unsigned lane=0; lane<curves; ++lane) {
+                auto* root = roots.data()+lane*s.words;
+                mpz_import(value.v,s.words,-1,sizeof(uint32_t),0,0,root);
+                std::fill_n(root,s.words,0u);
+                if (mpz_invert(inverse_root.v,value.v,modulus.v)) {
+                    mpz_export(root,nullptr,-1,sizeof(uint32_t),0,0,inverse_root.v);
+                    continue;
+                }
+                mpz_gcd(gcd.v,value.v,modulus.v);
+                if (mpz_cmp(gcd.v,modulus.v)==0) {
+                    // Read individual denominators only for an exceptional lane.
+                    std::vector<uint32_t> leaves(size_t(entries)*s.words);
+                    CK(cudaMemcpy2DAsync(leaves.data(),s.words*sizeof(uint32_t),
+                        tree(entries)+lane*s.words,bytes,s.words*sizeof(uint32_t),entries,cudaMemcpyDeviceToHost,q));
+                    CK(cudaStreamSynchronize(q));
+                    for (unsigned entry=0; entry<entries; ++entry) {
+                        mpz_import(value.v,s.words,-1,sizeof(uint32_t),0,0,leaves.data()+entry*s.words);
+                        mpz_gcd(gcd.v,value.v,modulus.v);
+                        if (mpz_cmp_ui(gcd.v,1)>0 && mpz_cmp(gcd.v,modulus.v)<0) break;
+                    }
+                }
+                if (mpz_cmp_ui(gcd.v,1)>0 && mpz_cmp(gcd.v,modulus.v)<0) {
+                    result.dictionary_status[lane]=1;
+                    mpz_export(factors.data()+lane*s.words,nullptr,-1,sizeof(uint32_t),0,0,gcd.v);
+                } else {
+                    result.dictionary_status[lane]=2;
+                }
+            }
+            result.dictionary_inverse_ms = 1000 * (now_s()-inverse_start);
+            if (std::any_of(result.dictionary_status.begin(),result.dictionary_status.end(),[](auto flag){return flag==1;}))
+                result.dictionary_factors = std::move(factors);
+            CK(cudaMemcpyAsync(tree(1),roots.data(),bytes,cudaMemcpyHostToDevice,q));
+            // Descend with inverse_parent * sibling. Both products consume
+            // the old children before either child is overwritten.
+            for (unsigned node=1; node<entries; ++node) {
+                copy(slot(A),tree(node)); copy(slot(B),tree(2*node)); copy(slot(C),tree(2*node+1));
+                mul(3,2,{A,B,C},{0,0},{2,1},{AA,BB});
+                copy(tree(2*node),slot(AA)); copy(tree(2*node+1),slot(BB));
+            }
+            for (unsigned entry=0; entry<entries; ++entry) {
+                copy(slot(x),xy(entry,0)); copy(slot(y),xy(entry,1)); copy(slot(z),tree(entries+entry));
+                mul(3,2,{x,y,z},{0,1},{2,2},{x,y});
+                mul(2,1,{x,y},{0},{1},{t});
+                mul(1,1,{t},{0},{5},{D},false,false,{},0,0,curve_d);
+                add_inputs(std::false_type{},1,{{x},{y},{Sum},0},{});
+                forward_inputs(fixed.data + size_t(4) * entry * plane, 4, {{x,y,D,Sum}});
+            }
+            CK(cudaStreamSynchronize(q));
+            observe_memory();
+        } else {
+            for (unsigned entry=0; entry<entries; ++entry) {
+                CK(cudaMemcpyAsync(state.data + A24 * stride, naf->dictionary.data() + 4 * entry * stride,
+                                   4 * stride * sizeof(uint32_t), cudaMemcpyHostToDevice, q));
+                forward_inputs(fixed.data + size_t(4) * entry * curves * s.length, 4, {{A24,Base,A,B}});
+            }
+        }
+        CK(cudaEventRecord(dictionary_end.value, q));
+        CK(cudaEventSynchronize(dictionary_end.value));
+        float elapsed_ms = 0;
+        CK(cudaEventElapsedTime(&elapsed_ms, dictionary_begin.value, dictionary_end.value));
+        result.dictionary_gpu_ms = elapsed_ms;
+    }
     Graph full, tail, warm_tail;
+    std::array<Graph, 7> zero_graphs;
     auto capture=[&](Graph& graph, unsigned count) {
         CK(cudaStreamBeginCapture(q,cudaStreamCaptureModeThreadLocal));
-        for (unsigned i=0;i<count;++i) step(i);
-        advance<<<1,1,0,q>>>(start.data,count);
+        for (unsigned i=0;i<count;++i) {
+            if (naf) edwards_step(0);
+            else step(i);
+        }
+        if (!naf) advance<<<1,1,0,q>>>(start.data,count);
         CK(cudaStreamEndCapture(q,&graph.graph));
         CK(cudaGraphInstantiateWithFlags(&graph.exec,graph.graph,0));
         CK(cudaGraphUpload(graph.exec,q));
@@ -791,8 +972,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const unsigned remaining = count - resume;
     const unsigned warmup = control ? control->warmup_iterations : 0;
     if (warmup > remaining) throw std::invalid_argument("Stage1 NTT warmup exceeds scalar");
-    if (window && remaining >= window) capture(full,window);
-    if (window && remaining % window) capture(tail,remaining % window);
+    if (naf) {
+        for (unsigned i=0; (1u << i) <= std::min(window, remaining); ++i)
+            capture(zero_graphs[i], 1u << i);
+    } else if (window && remaining >= window) capture(full,window);
+    if (!naf && window && remaining % window) capture(tail,remaining % window);
     if (window && warmup % window && warmup % window != remaining % window)
         capture(warm_tail,warmup % window);
     Event begin,end,boundary;
@@ -800,9 +984,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     observe_memory();
     result.length=s.length; result.digit_bits=s.bpw; result.passes=ctx.passes_fwd+unsigned(mixed); result.tile=ctx.t;
     result.setup_seconds=now_s()-prep;
-    result.points.resize(4*stride);
+    result.points.resize(checkpoint_slots*stride);
     auto reset = [&] {
-        CK(cudaMemcpyAsync(state.data,initial.data(),4*stride*4,cudaMemcpyHostToDevice,q));
+        CK(cudaMemcpyAsync(state.data,initial.data(),checkpoint_slots*stride*4,cudaMemcpyHostToDevice,q));
         CK(cudaMemcpyAsync(start.data,&resume,sizeof(unsigned),cudaMemcpyHostToDevice,q));
     };
     if (warmup) {
@@ -820,6 +1004,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         CK(cudaEventRecord(begin.value,q));
         unsigned cursor = resume;
         unsigned next_poll = resume;
+        unsigned zero_end = resume;
         while (cursor < count) {
             if (control && control->poll && cursor >= next_poll) {
                 CK(cudaEventRecord(boundary.value,q));
@@ -835,7 +1020,23 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 }
                 next_poll = cursor + (window ? std::max(window, 128u) : 128u);
             }
-            if (!window) {
+            if (naf) {
+                const int digit = naf->digits[cursor];
+                if (!digit && window) {
+                    if (zero_end <= cursor) {
+                        zero_end = cursor + 1;
+                        while (zero_end < count && zero_end - cursor < window && !naf->digits[zero_end])
+                            ++zero_end;
+                    }
+                    unsigned i = 0;
+                    while ((2u << i) <= zero_end - cursor) ++i;
+                    CK(cudaGraphLaunch(zero_graphs[i].exec,q));
+                    cursor += 1u << i;
+                } else {
+                    edwards_step(digit);
+                    ++cursor;
+                }
+            } else if (!window) {
                 step(cursor - resume);
                 ++cursor;
             } else if (count - cursor >= window) {
@@ -853,7 +1054,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         float ms=0; CK(cudaEventElapsedTime(&ms,begin.value,end.value));
         result.device_ms.push_back(ms);
         const double read=now_s();
-        std::vector<uint32_t> got(4*stride);
+        std::vector<uint32_t> got(checkpoint_slots*stride);
         CK(cudaMemcpy(got.data(),state.data,got.size()*4,cudaMemcpyDeviceToHost));
         result.readback_seconds+=now_s()-read;
         if (sample && got!=result.points) throw std::runtime_error("nondeterministic NTT Stage1 endpoint");
@@ -861,6 +1062,13 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     observe_memory();
     return result;
+}
+Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
+                const EdwardsNaf& naf, const ecm_stage1::Stage1NttOptions& options,
+                const Control& control, unsigned samples) {
+    if (naf.digits.size() > UINT32_MAX - 64)
+        throw std::invalid_argument("Edwards NTT NAF exceeds the cursor range");
+    return run_ladder(device, p, curves, initial, {}, unsigned(naf.digits.size()), options, &control, samples, &naf);
 }
 Run ladder(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
            const std::vector<uint32_t>& scalar, unsigned count,

@@ -333,7 +333,7 @@ edwards_naf_window_bits = 0
 
 v1 旧键 `stage1.naf_w`
 
-Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。增大窗口减少加点，但字典按 2^(w-2) 增长。新任务受内存预算限制时可降低窗口，部分检查点保持已存窗口。
+Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 显式选择实验性 2XY NAF。NTT 原型要求指定窗口符合预算，CPU 与 CGBN 新任务可自动降窗。
 
 <a id="exp_cache"></a>
 
@@ -357,7 +357,7 @@ gpu_algorithm = "cgbn"
 
 类型 `int|string` · 范围 `[1|2|cgbn|ntt]` · Worker 覆盖 `[worker.N] stage1.gpu_algorithm` · 级别 `高级`。
 
-GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards NTT 要求 naf_w=0。
+GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。
 
 <a id="stage1_backend"></a>
 
@@ -461,7 +461,7 @@ naf_memory_mb = 0
 
 类型 `int` · 范围 `[0|1..1048576]` · Worker 覆盖 `[worker.N] stage1.naf_memory_mb` · 级别 `高级`。
 
-Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。运行时取该上限与扣除预留后的空闲预算中的较小值。约束 CPU NAF 工作集或 CUDA CGBN 设备缓冲。标量构造和 CUDA 主机准备分别检查空闲内存。正值最小为 1 MB。
+Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。约束 CPU NAF 工作集、CUDA CGBN 设备缓冲，或 CUDA NTT 字典（使用设备乘积树时也计入）。标量构造和 CUDA 主机准备另查空闲内存。正值最小为 1 MB。
 
 <a id="ntt_bpw"></a>
 
