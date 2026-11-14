@@ -238,6 +238,10 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     if (cfg.config_keys.count("edwards_doubling"))
         opt.execution.edwards_doubling = cfg.edwards_doubling;
     opt.execution.naf_memory_mb = unsigned(cfg.naf_memory_mb);
+    if (cfg.config_keys.count("cuda_montgomery_chain"))
+        opt.execution.cuda_montgomery_chain = cfg.cuda_montgomery_chain;
+    if (cfg.config_keys.count("cuda_prac_search"))
+        opt.execution.cuda_prac_search = unsigned(cfg.cuda_prac_search);
     if (cfg.config_keys.count("cuda_slice_depth"))
         opt.execution.cuda_slice_depth = unsigned(cfg.cuda_slice_depth);
     opt.execution.cuda_low_cpu = cfg.cuda_low_cpu;

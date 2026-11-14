@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 import re
 import statistics
@@ -42,9 +43,27 @@ def version_order(report):
     return tuple(map(int, match.groups()))
 
 
-def cgbn_points(report):
-    return [(row["exponent"], row["bits"], row["projected_gpu_seconds_per_curve_1e6"], None, None)
-            for row in report["rows"]]
+def cgbn_points(report, retest=()):
+    measured = {row["exponent"]: row for row in retest}
+    baseline = {row["exponent"]: row for row in report["rows"]}
+    if (retest and report.get("algorithm") != "prac") or len(measured) != len(retest) or measured.keys() - baseline.keys():
+        raise ValueError("paired retests require distinct points from a PARAM0 PRAC baseline")
+    main, ladder = [], []
+    for p, row in baseline.items():
+        bits = row["bits"]
+        if p not in measured:
+            main.append((p, bits, row["projected_gpu_seconds_per_curve_1e6"], None, None))
+            continue
+        repeat = measured[p]
+        if any(repeat[key] != row[key] for key in ("bits", "b1", "curves")) or len(repeat["pairs"]) != 3:
+            raise ValueError(f"M{p}: expected three pairs matching the baseline input and batch")
+        scale = report["target_b1"] / (row["b1"] * row["curves"])
+        for algorithm, points in (("prac", main), ("ladder", ladder)):
+            samples = [pair[algorithm] for pair in repeat["pairs"]]
+            if any(not math.isfinite(value) or value <= 0 for value in samples):
+                raise ValueError(f"M{p}: invalid {algorithm} retest timing")
+            points.append((p, bits, statistics.median(samples) * scale, min(samples) * scale, max(samples) * scale))
+    return main, ladder
 
 
 def reference_points(report):
@@ -52,7 +71,8 @@ def reference_points(report):
                              row["cpu_min_seconds_1e6"], row["cpu_max_seconds_1e6"]) for row in report["rows"]}
 
 
-def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=None, prime95_extra=()):
+def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=None, prime95_extra=(),
+                cgbn_baselines=(), cgbn_retests=None):
     target_b1 = historical["target_b1"]
     current_version = version_order(ntt)
     seen_versions = {current_version}
@@ -85,14 +105,41 @@ def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=N
     if not cgbn_exponents or len(set(cgbn_exponents)) != len(cgbn_exponents) or historical.get("missing_cpu_reference_exponents"):
         raise ValueError("CGBN and Prime95 reference conditions are incomplete or repeated")
     cgbn, prime95 = ("cgbn", historical.get("program_version", "")), ("prime95", "")
-    points[cgbn], points[prime95] = cgbn_points(historical), []
+    points[cgbn], points[prime95] = cgbn_points(historical)[0], []
     if overlay_cgbn is not None:
         if (overlay_cgbn["model"] != historical["model"] or overlay_cgbn["gpu_model"] == historical["gpu_model"]
                 or overlay_cgbn["target_b1"] != target_b1 or overlay_cgbn.get("gpu_timing") != historical.get("gpu_timing")
                 or len(overlay_cgbn["rows"]) != len(cgbn_exponents)
                 or reference_points(overlay_cgbn) != reference_points(historical)):
             raise ValueError("CGBN overlay must use another GPU with matching inputs, timers and CPU references")
-        points["cgbn_overlay", overlay_cgbn.get("program_version", "")] = cgbn_points(overlay_cgbn)
+        points["cgbn_overlay", overlay_cgbn.get("program_version", "")] = cgbn_points(overlay_cgbn)[0]
+    seen_baselines = set()
+    retests = dict(cgbn_retests or {})
+    for report in cgbn_baselines:
+        role, baseline = ("cgbn", historical) if report["gpu_model"] == historical["gpu_model"] else (
+            "cgbn_overlay", overlay_cgbn)
+        version = report["program_version"]
+        input_keys = ("exponent", "bits", "b1", "curves", "container_bits", "tpi", "tpb", "blocks")
+        rows = report["rows"]
+        expected_algorithm = "naf" if report["model"] == "ed" else "prac"
+        if (baseline is None or role in seen_baselines or not report.get("complete")
+                or any(report[key] != baseline[key] for key in ("gpu_model", "model", "target_b1", "gpu_timing"))
+                or version == baseline["program_version"] or report["algorithm"] != expected_algorithm
+                or {tuple(row[key] for key in input_keys) for row in rows}
+                    != {tuple(row[key] for key in input_keys) for row in baseline["rows"]}
+                or len(rows) != len(baseline["rows"])
+                or any(row["window" if expected_algorithm == "naf" else "prac_search"]
+                       != (12 if expected_algorithm == "naf" else 50) for row in rows)):
+            raise ValueError("new CGBN baseline requires a complete matrix matching historical inputs and timing")
+        seen_baselines.add(role)
+        previous = baseline["program_version"]
+        points[role + "_previous", previous] = points.pop((role, previous))
+        main, ladder = cgbn_points(report, retests.pop(str(report.get("device")), ()))
+        points[role, version] = main
+        if ladder:
+            points[role + "_paired_ladder", version] = ladder
+    if retests:
+        raise ValueError("paired retest has no matching --cgbn-baseline device")
     for row in historical["rows"]:
         p = row["exponent"]
         # Prime95 sets up GWNUM with k,b,n,c, even when the factor target is a cofactor.
@@ -107,6 +154,9 @@ def plot(points, output, logarithmic, curve, device, overlay_device=None):
     model = "Edwards" if curve == "ed" else "Montgomery PARAM0"
     primary_history = [version for backend, version in points if backend == "ntt_previous"]
     overlay_history = [version for backend, version in points if backend == "ntt_overlay_previous"]
+    updated_cgbn = {backend.removesuffix("_previous") for backend, _ in points
+                    if backend.startswith("cgbn") and backend.endswith("_previous")}
+    has_retests = any(backend.endswith("_paired_ladder") for backend, _ in points)
     colors = {
         "ntt": ("#b73339", "o"),
         "ntt_overlay": ("#14804a", "D"),
@@ -118,7 +168,13 @@ def plot(points, output, logarithmic, curve, device, overlay_device=None):
     for key in points:
         backend, version = key
         previous = backend.endswith("_previous")
-        if previous:
+        if backend.endswith("_paired_ladder"):
+            color, _ = colors[backend.removesuffix("_paired_ladder")]
+            marker = "x"
+        elif backend.startswith("cgbn") and previous:
+            color, marker = colors[backend.removesuffix("_previous")]
+            color = tuple(value + (1 - value) * .35 for value in to_rgb(color))
+        elif previous:
             overlay = backend == "ntt_overlay_previous"
             history = overlay_history if overlay else primary_history
             rgb = to_rgb("#237c55" if overlay else "#784788")
@@ -127,13 +183,24 @@ def plot(points, output, logarithmic, curve, device, overlay_device=None):
             marker = "D" if overlay else "o"
         else:
             color, marker = colors[backend]
-        label = ("GWNUM · 1 core at 4 GHz" if backend == "prime95"
-                 else f"{'NTT' if backend.startswith('ntt') else 'CGBN'} {version}")
+        if backend == "prime95":
+            label = "GWNUM · 1 core at 4 GHz"
+        elif backend.startswith("ntt"):
+            label = f"NTT {version}"
+        elif backend.endswith("_paired_ladder"):
+            label = f"Ladder retest · {version}"
+        else:
+            name = ("NAF w6" if previous else "NAF w12") if curve == "ed" else (
+                "ladder" if previous else "PRAC 50")
+            label = (f"CGBN {name} · {version}" if backend.removesuffix("_previous") in updated_cgbn
+                     else f"CGBN {version}")
         styles[key] = (label, color, marker, previous)
     with plt.style.context("seaborn-v0_8-whitegrid"):
-        fig, axes = plt.subplots(1, 2, figsize=(12, 6.15 + .18 * len(primary_history)), layout="constrained")
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6.15 + .18 * (len(primary_history) + bool(updated_cgbn) + has_retests)),
+                                 layout="constrained")
+        cgbn_scope = "1 batch, 3 on retests" if has_retests else "1 batch"
         fig.suptitle(f"Stage1 {model} · Cost per curve\n"
-                     "NTT · full Mersenne, 3 runs   |   CGBN · cofactor, 2 blocks/SM, 1 batch   |   "
+                     f"NTT · full Mersenne, 3 runs   |   CGBN · cofactor, 2 blocks/SM, {cgbn_scope}   |   "
                      "Prime95 · native Stage1, 3 runs",
                      fontsize=13, fontweight="medium", linespacing=1.45)
         lines = {}
@@ -145,12 +212,18 @@ def plot(points, output, logarithmic, curve, device, overlay_device=None):
                     continue
                 _, x, y, lo, hi = zip(*visible)
                 label, color, marker, previous = styles[key]
+                paired_ladder = key[0].endswith("_paired_ladder")
                 line, = ax.plot(x, y, label=label, color=color, marker=marker, markersize=4, linewidth=1.7,
-                                linestyle="--" if previous else "-", markerfacecolor="none" if previous else color,
-                                zorder=2 if previous else 3)
+                                linestyle="none" if paired_ladder else "--" if previous else "-",
+                                markerfacecolor="none" if previous else color, zorder=4 if paired_ladder else 2 if previous else 3)
                 if i:
                     lines[key] = line
-                if not previous and all(value is not None for value in lo + hi):
+                if key[0].startswith("cgbn") and not previous:
+                    ranges = [(a, b, b - c, d - b) for a, b, c, d in zip(x, y, lo, hi) if c is not None]
+                    if ranges:
+                        xs, ys, below, above = zip(*ranges)
+                        ax.errorbar(xs, ys, yerr=(below, above), fmt="none", ecolor=color, capsize=2, linewidth=.8)
+                elif not previous and all(value is not None for value in lo + hi):
                     ax.fill_between(x, lo, hi, color=color, alpha=.14, linewidth=0)
             ax.set_xlabel("Actual arithmetic modulus width (bits)")
             if logarithmic:
@@ -162,8 +235,8 @@ def plot(points, output, logarithmic, curve, device, overlay_device=None):
                 ax.ticklabel_format(style="plain", axis="x")
         axes[0].set_ylabel("Seconds per curve at B1 = 1,000,000 (scaled)")
         groups = (
-            (overlay_device, ("ntt_overlay", "ntt_overlay_previous", "cgbn_overlay")),
-            (device, ("ntt", "ntt_previous", "cgbn")),
+            (overlay_device, ("ntt_overlay", "ntt_overlay_previous", "cgbn_overlay", "cgbn_overlay_paired_ladder", "cgbn_overlay_previous")),
+            (device, ("ntt", "ntt_previous", "cgbn", "cgbn_paired_ladder", "cgbn_previous")),
             ("Prime95", ("prime95",)),
         )
         columns = [(name, [line for role in roles for key, line in lines.items() if key[0] == role])
@@ -190,6 +263,10 @@ def main():
     parser.add_argument("--overlay-ntt", action="append", default=[], type=Path,
                         help="Add another GPU's NTT data; repeat for versions or disjoint exponents")
     parser.add_argument("--overlay-cgbn", type=Path, help="Add the other GPU's CGBN results with the same timing scope")
+    parser.add_argument("--cgbn-baseline", action="append", default=[], type=Path,
+                        help="Add updated NAF/PRAC CGBN timings for an existing GPU")
+    parser.add_argument("--cgbn-retest", action="append", default=[], nargs=2, metavar=("DEVICE", "COMPARISON_JSON"),
+                        help="Replace matching PRAC points with three-run medians and add their paired ladder points")
     parser.add_argument("--prime95-stage1", type=Path, nargs=2, metavar=("WORKTODO", "SCREEN_LOG"),
                         help="Extend the 4 GHz single-core Prime95 baseline with Stage1-only results")
     parser.add_argument("--comparison", "--historical", required=True, type=Path)
@@ -212,7 +289,11 @@ def main():
         if args.prime95_stage1:
             curve_type = "Edwards" if curve == "ed" else "Montgomery"
             prime95_extra = stage1_plot_points(*args.prime95_stage1, curve_type, comparison["target_b1"])
-        points = make_points(ntt, comparison, previous, overlay, cgbn_overlay, prime95_extra)
+        baselines = [json.loads(path.read_text(encoding="utf-8-sig")) for path in args.cgbn_baseline]
+        retests = {device: json.loads(Path(path).read_text(encoding="utf-8-sig")) for device, path in args.cgbn_retest}
+        if len(retests) != len(args.cgbn_retest):
+            raise ValueError("provide at most one --cgbn-retest per device")
+        points = make_points(ntt, comparison, previous, overlay, cgbn_overlay, prime95_extra, baselines, retests)
     except (ValueError, OSError) as error:
         parser.error(str(error))
     args.output.mkdir(parents=True, exist_ok=True)

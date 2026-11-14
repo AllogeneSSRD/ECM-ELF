@@ -116,7 +116,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 | CUDA Montgomery ladder | 记录 0 包含整批头和数组 | magic `0x45555047`、version 5 | 切片边界的普通整数；二进制位进度 |
 | OpenCL Montgomery PARAM3 | 记录 0 包含整批头和数组 | magic `0x45555047`、version 4 | 设备 Montgomery 域；二进制位进度 |
 | CUDA Edwards binary / NAF | 记录 0 包含全部曲线 | `ECMEDB3`／`ECMEDB4`，版本 3／4 | 普通整数，进度为 binary 位或 NAF 列 |
-| CUDA resident / PRAC（可选构建） | 记录 0 包含整批驻留状态 | magic `0x31524d444d434545`、version 1 | Montgomery 域；位进度或素数计划位置 |
+| CUDA resident / PRAC | 记录 0 包含整批驻留状态 | magic `0x31524d444d434545`、version 1 | Montgomery 域；位进度或素数计划位置 |
 
 正常 Stage1 驱动通过 `ecm-batch-record:<i>` 虚拟地址访问记录。这个文本不是磁盘文件路径；载荷写入会更新对应记录并重新发布**整份外层文件**。单独调用底层 codec 时存在独立文件接口，不等于驱动会自动扫描这些独立文件。
 
@@ -249,7 +249,7 @@ CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存
 
 来源：[CPU Edwards codec](../../src/io/prime95_save.cpp)、[CPU 批次执行与完成记录](../../src/ecm/stage1/edwards/cpu/workflow.cpp)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
 
-### 4.5 可选 CUDA resident / PRAC
+### 4.5 CUDA resident / PRAC
 
 仅在编入实验模块并显式选择时存在，不是默认 ladder 载荷。112-byte 本机结构体头之后是 7CK/8-byte 状态数组。
 

@@ -163,7 +163,7 @@ CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/cuda/` 内的�
 
 设备算术与薄发射器位于各曲线目录，独立实例放在对应 `instances/`。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。设备实例闭包不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `src/ecm/cuda/arithmetic/cgbn/types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
 
-local/dev/release 只有构建生成这一种实例排布，由 `tools/build/internal/cuda_modules.cmake` 从 `tiers.def` 派生32个Edwards容器模块和31×3个Montgomery参数化/容器模块。PRAC 可选目标使用同一个生成器，按标准几何和 sparse family/geometry 生成入口与工厂表。源码只保留实际设备模板，内核及辅助函数在同一编译单元可见，普通 Montgomery 分派直接按 param/容器查找工厂。全档枚举读取纯元数据，任务选定宽度后才调用工厂并查询 occupancy。Edwards binary/NAF 共用容器模块，sigma 仍为运行时参数。旧 NVCC 的普通 Montgomery 编译单元保持56/128/255预算，PRAC 不增加此前不存在的旧工具链预算。生成清单、内容身份及按需 JIT 限制见[构建与发布](../usage/BUILD.md#默认策略)。
+local/dev/release 共用构建生成的实例排布，由 `tools/build/internal/cuda_modules.cmake` 从 `tiers.def` 派生 32 个 Edwards 容器模块和 31×3 个 Montgomery 参数化／容器模块。默认编译的 PRAC 目标使用同一生成器，为标准几何及少数候选变体生成独立入口与工厂表。源码只保留实际设备模板，内核及辅助函数在同一编译单元可见，普通 Montgomery 分派直接按 param/容器查找工厂。全档枚举读取纯元数据，任务选定宽度后才调用工厂并查询 occupancy。Edwards binary/NAF 共用容器模块，sigma 仍为运行时参数。旧 NVCC 的普通 Montgomery 编译单元保持 56/128/255 预算。生成清单、PRAC 寄存器预算及按需 JIT 限制见 [构建与发布](../usage/BUILD.md#默认策略)。
 
 依赖方向为：任务/旧执行适配 → CUDA 私有 API → CUDA 主机实现 → 私有发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 主机计划和描述符位于 `src/ecm/stage1/montgomery/prac/`。CUDA PRAC 设备和运行时在 `src/ecm/stage1/montgomery/cuda/prac/`，仅在启用 CUDA PRAC 时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `src/ecm/stage1/edwards/cuda/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
 

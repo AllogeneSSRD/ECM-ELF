@@ -509,6 +509,37 @@
     },
     {
       "owner": "stage1",
+      "key": "cuda_montgomery_chain",
+      "field": "cuda_montgomery_chain",
+      "type": "string",
+      "default": "ladder",
+      "domain": "[ladder|prac]",
+      "values": ["ladder", "prac"],
+      "fx": "point_chain(S1 CUDA CGBN PARAM0)",
+      "parser": "enum",
+      "description": [
+        "Point multiplication chain for CUDA CGBN Montgomery PARAM0. Other curve families and backends ignore this setting. If omitted, the legacy ECM_GPU_STAGE1_ALGO environment override is accepted.",
+        "为 CUDA CGBN Montgomery PARAM0 选择点乘链。其他曲线族与后端忽略此项。省略时允许使用旧环境变量 ECM_GPU_STAGE1_ALGO 覆盖。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "cuda_prac_search",
+      "field": "cuda_prac_search",
+      "type": "int",
+      "default": 7,
+      "domain": "[1..50]",
+      "minimum": 1,
+      "maximum": 50,
+      "fx": "chain_search(S1 CUDA CGBN PARAM0)",
+      "parser": "strict",
+      "description": [
+        "Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC checkpoint. If omitted, ECM_PRAC_SEARCH can override the default.",
+        "CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许 ECM_PRAC_SEARCH 覆盖默认值。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "cuda_slice_depth",
       "template_level": "core",
       "field": "cuda_slice_depth",

@@ -148,6 +148,18 @@ save_dir = "."  # string: <path>
 # 控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补
 # 投，0 关闭自动补投；只对程序能够确认的已交接任务生效。
 
+# cuda_montgomery_chain = "ladder"  # string: [ladder|prac]
+# Point multiplication chain for CUDA CGBN Montgomery PARAM0. Other curve families and backends
+# ignore this setting. If omitted, the legacy ECM_GPU_STAGE1_ALGO environment override is accepted.
+# 为 CUDA CGBN Montgomery PARAM0 选择点乘链。其他曲线族与后端忽略此项。省略时允许使用旧环境变量
+# ECM_GPU_STAGE1_ALGO 覆盖。
+
+# cuda_prac_search = 7  # int: [1..50]
+# Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC
+# checkpoint. If omitted, ECM_PRAC_SEARCH can override the default.
+# CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许
+# ECM_PRAC_SEARCH 覆盖默认值。
+
 # cuda_slice_depth = 3  # int: [2|3|8]
 # CUDA CGBN Stage1 slice submission. 2 and 3 keep a rolling queue of up to that many slices; 8 waits
 # at the end of each group of up to eight. When omitted, the legacy ECM_CUDA_STAGE1_SLICE_DEPTH

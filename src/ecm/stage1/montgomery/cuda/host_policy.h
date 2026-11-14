@@ -13,12 +13,14 @@ struct MontRequestedSpec {
     std::string default_plan_cache;
     unsigned cuda_slice_depth = 0;
     bool cuda_low_cpu = false;
+    unsigned prac_search = 0;
     const char *get(const char *key) const {
         const auto found=values.find(key);return found==values.end()?nullptr:found->second.c_str();
     }
 };
 MontRequestedSpec capture_mont_request(const char *algorithm=nullptr, const std::string& default_cache_dir={},
-                                      unsigned cuda_slice_depth=0, bool cuda_low_cpu=false);
+                                      unsigned cuda_slice_depth=0, bool cuda_low_cpu=false,
+                                      unsigned prac_search=0);
 const char *stage1_algorithm(const MontRequestedSpec &);
 struct PracPolicy {
     int mode;

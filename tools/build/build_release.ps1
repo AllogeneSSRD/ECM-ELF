@@ -114,7 +114,10 @@ foreach($name in $names) {
             if($fields.('gmp/'+$file) -ne $dependency.Hashes[$file]) {throw "Release GMP input mismatch: $name/$stage/$file"}
         }
         if($stage -eq 'stage1') {
-            if($manifest.architectures -ne $target.Sass -or $manifest.tiers -or $manifest.enable_prac){throw 'Complete release requires full production tiers, PRAC disabled'}
+            if($manifest.architectures -ne $target.Sass -or $manifest.tiers -or
+                -not $manifest.enable_prac -or $fields.'option/enable_prac' -ne '1'){
+                throw 'Complete release requires full production tiers and PARAM0 PRAC'
+            }
             Assert-Stage1BuildIdentity $repo $record.build $manifest -VerifyJobs $VerifyJobs
         } else {
             if($manifest.architecture -ne ('sm_'+$target.Sass) -or $manifest.engine -ne 'production' -or

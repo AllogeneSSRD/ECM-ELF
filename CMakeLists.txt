@@ -298,7 +298,7 @@ if(ECM_ENABLE_CUDA)
     if(NOT EXISTS "${CGBN_INCLUDE_DIR}/cgbn/cgbn.h")
         message(FATAL_ERROR "CGBN header not found at ${CGBN_INCLUDE_DIR}/cgbn/cgbn.h")
     endif()
-    option(ECM_CUDA_ENABLE_PRAC "Build experimental resident/PRAC Stage1 kernels (slow template compilation)" OFF)
+    option(ECM_CUDA_ENABLE_PRAC "Build Montgomery PARAM0 PRAC and resident Stage1 kernels" ON)
 
     include("${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_timing.cmake")
     if(DEFINED ECM_CUDA_ISOLATE_TIERS AND NOT ECM_CUDA_ISOLATE_TIERS)
@@ -320,7 +320,7 @@ if(ECM_ENABLE_CUDA)
     # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
     # that transitive include; keep the compatibility fix in our tracked build.
     target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--pre-include=stdint.h>)
-    message(STATUS "ecm_cuda: experimental resident/PRAC kernels ${ECM_CUDA_ENABLE_PRAC}")
+    message(STATUS "ecm_cuda: Montgomery PARAM0 PRAC and resident kernels ${ECM_CUDA_ENABLE_PRAC}")
 
     set_target_properties(ecm_cuda PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
                                               CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)

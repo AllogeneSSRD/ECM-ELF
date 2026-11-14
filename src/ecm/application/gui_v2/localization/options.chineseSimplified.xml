@@ -30,6 +30,8 @@
       <Item id="option_stage1_p95_add_workers" name="选择接收交接任务的 Prime95 worker，可指定单个编号、编号列表或区间；程序在候选 worker 中选择队列较短者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认 worker 处理。" />
       <Item id="option_stage1_p95_keep_aid" name="控制交接任务是否保留 PrimeNet assignment ID。1 保留未被判定失效的 AID，0 一律去掉；已在 Prime95 日志中确认失效的 AID 会去掉，以免任务再次被丢弃。" />
       <Item id="option_stage1_p95_recover_lost" name="控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，0 关闭自动补投；只对程序能够确认的已交接任务生效。" />
+      <Item id="option_stage1_cuda_montgomery_chain" name="为 CUDA CGBN Montgomery PARAM0 选择点乘链。其他曲线族与后端忽略此项。省略时允许使用旧环境变量 ECM_GPU_STAGE1_ALGO 覆盖。" />
+      <Item id="option_stage1_cuda_prac_search" name="CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许 ECM_PRAC_SEARCH 覆盖默认值。" />
       <Item id="option_stage1_cuda_slice_depth" name="CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片，8 按最多八片一组等待组尾。仅在 TOML 未设此项时，旧环境变量 ECM_CUDA_STAGE1_SLICE_DEPTH 可覆盖默认值。" />
       <Item id="option_stage1_cuda_low_cpu" name="设为 1 或 true 后，CUDA CGBN Stage1 主机线程在等待 GPU 完成时休眠，对所有切片深度优先生效。此模式用于降低 CPU 占用，唤醒可能稍慢。" />
       <Item id="option_stage1_progress_color" name="选择 Stage1 控制台进度文字颜色。none 关闭着色；此设置不改变普通文件日志内容或计算方式。" />

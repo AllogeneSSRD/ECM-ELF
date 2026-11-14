@@ -281,6 +281,26 @@ Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage1.cu
 
 Set to 1 or true to put the CUDA CGBN Stage1 host thread to sleep while waiting for GPU completions, regardless of slice depth. This mode is intended to reduce host CPU use and may increase wake-up latency.
 
+### cuda_montgomery_chain
+
+```toml
+cuda_montgomery_chain = "ladder"
+```
+
+Type `string` · Range `[ladder|prac]` · Worker override `[worker.N] stage1.cuda_montgomery_chain` · Level `advanced`.
+
+Point multiplication chain for CUDA CGBN Montgomery PARAM0. Other curve families and backends ignore this setting. If omitted, the legacy ECM_GPU_STAGE1_ALGO environment override is accepted.
+
+### cuda_prac_search
+
+```toml
+cuda_prac_search = 7
+```
+
+Type `int` · Range `[1..50]` · Worker override `[worker.N] stage1.cuda_prac_search` · Level `advanced`.
+
+Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC checkpoint. If omitted, ECM_PRAC_SEARCH can override the default.
+
 ### cuda_slice_depth
 
 ```toml

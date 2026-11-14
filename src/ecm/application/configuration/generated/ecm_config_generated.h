@@ -16,6 +16,8 @@ inline constexpr int64_t stage1_priority_minimum=0;
 inline constexpr int64_t stage1_priority_maximum=2;
 inline constexpr int64_t stage1_skip_minimum=0;
 inline constexpr int64_t stage1_skip_maximum=2;
+inline constexpr int64_t stage1_cuda_prac_search_minimum=1;
+inline constexpr int64_t stage1_cuda_prac_search_maximum=50;
 inline constexpr int64_t stage1_progress_average_seconds_minimum=0;
 inline constexpr int64_t stage1_progress_average_seconds_maximum=60;
 inline constexpr int64_t stage1_edwards_doubling_minimum=0;
@@ -137,6 +139,8 @@ struct Stage1Values {
     std::string p95_add_workers="";
     bool p95_keep_aid=true;
     bool p95_recover_lost=true;
+    std::string cuda_montgomery_chain="ladder";
+    int cuda_prac_search=7;
     int cuda_slice_depth=3;
     bool cuda_low_cpu=false;
     std::string progress_color="cyan";
@@ -217,6 +221,8 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"p95_add_workers",[](Stage1Values&c,const std::string&v){assign_value(c.p95_add_workers,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_add_workers=v.p95_add_workers;}},
     {"p95_keep_aid",[](Stage1Values&c,const std::string&v){assign_value(c.p95_keep_aid,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_keep_aid=v.p95_keep_aid;}},
     {"p95_recover_lost",[](Stage1Values&c,const std::string&v){assign_value(c.p95_recover_lost,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_recover_lost=v.p95_recover_lost;}},
+    {"cuda_montgomery_chain",[](Stage1Values&c,const std::string&v){if(v!="ladder"&&v!="prac")throw std::runtime_error("cuda_montgomery_chain must be [ladder|prac]");c.cuda_montgomery_chain=v;},[](Stage1Values&c,const Stage1Values&v){c.cuda_montgomery_chain=v.cuda_montgomery_chain;}},
+    {"cuda_prac_search",[](Stage1Values&c,const std::string&v){c.cuda_prac_search=static_cast<int>(bounded_integer(v,"cuda_prac_search",1,50));},[](Stage1Values&c,const Stage1Values&v){c.cuda_prac_search=v.cuda_prac_search;}},
     {"cuda_slice_depth",[](Stage1Values&c,const std::string&v){assign_value(c.cuda_slice_depth,v);if(c.cuda_slice_depth!=2&&c.cuda_slice_depth!=3&&c.cuda_slice_depth!=8)throw std::runtime_error("cuda_slice_depth must be [2|3|8]");},[](Stage1Values&c,const Stage1Values&v){c.cuda_slice_depth=v.cuda_slice_depth;}},
     {"cuda_low_cpu",[](Stage1Values&c,const std::string&v){assign_value(c.cuda_low_cpu,v);},[](Stage1Values&c,const Stage1Values&v){c.cuda_low_cpu=v.cuda_low_cpu;}},
     {"progress_color",[](Stage1Values&c,const std::string&v){assign_value(c.progress_color,v);},[](Stage1Values&c,const Stage1Values&v){c.progress_color=v.progress_color;}},

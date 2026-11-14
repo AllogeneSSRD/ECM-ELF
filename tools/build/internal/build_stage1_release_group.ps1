@@ -5,7 +5,7 @@ Internal Stage1 release worker for one CUDA toolkit group.
 .DESCRIPTION
 Called by build_stage1_release.ps1. Compiles, splits and packages only the
 architectures supported by the selected toolkit. Manifests stay in BuildDir.
-Experimental resident/PRAC is opt-in; PtxArch empty means SASS only.
+Montgomery PARAM0 PRAC is included by default; PtxArch empty means SASS only.
 #>
 param(
     [string]$BuildDir = "",
@@ -14,7 +14,7 @@ param(
     [ValidatePattern('^[0-9]+(,[0-9]+)*$')][string]$Archs = "75,86,89,120",
     [ValidatePattern('^$|^[0-9]+$')][string]$PtxArch = "",
     [string]$Tiers = "",
-    [switch]$EnablePrac,
+    [switch]$EnablePrac = $true,
     [ValidateRange(1,64)][int]$VerifyJobs=4,
     [ValidateRange(1,64)][int]$Jobs = 8,
     [switch]$SkipBuild,
@@ -102,7 +102,7 @@ if (-not $SkipBuild) {
 
     $ptxLabel = if ($PtxArch) { "PTX for sm_$PtxArch only" } else { 'SASS only' }
     Write-Host "== RELEASE rule: archs [$Archs], $ptxLabel, uncompressed (prunable) =="
-    Write-Host "   Experimental resident/PRAC: $([bool]$EnablePrac)"
+    Write-Host "   Montgomery PARAM0 PRAC and resident: $([bool]$EnablePrac)"
     $phaseWatch=[Diagnostics.Stopwatch]::StartNew()
     & cmd.exe /c "$($vc.Setup) && cmake $cfg" | Select-String -Pattern 'device code|PTX embedded|Error' |
         ForEach-Object { "   $($_.Line.Trim())" }

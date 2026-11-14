@@ -20,7 +20,7 @@
 .PARAMETER Jobs       Concurrent nvcc processes (default 8).
 .PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120". Empty (default) = every tier.
 .PARAMETER FullRebuild  Delete the CUDA objects first (forces a clean kernel compile).
-.PARAMETER EnablePrac  Include experimental resident/PRAC kernels (default OFF).
+.PARAMETER EnablePrac  Include resident/PRAC kernels (default ON). Use -EnablePrac:$false to omit them.
 .PARAMETER KernelLayout  Compatibility spelling; only generated isolated modules are supported.
 .PARAMETER HostOnly    Verify all CUDA objects and refuse any CUDA compilation.
 .PARAMETER RelinkOnly  Removed unsafe bypass; use verified reuse or HostOnly instead.
@@ -39,7 +39,7 @@ param(
     [int]$Jobs = 8,
     [string]$Tiers = "",
     [ValidateSet('isolated')][string]$KernelLayout = 'isolated',
-    [switch]$EnablePrac,       # experimental resident/PRAC kernels; excluded by default
+    [switch]$EnablePrac = $true,
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
     [switch]$HostOnly,
@@ -107,7 +107,7 @@ Assert-EcmBuildProfile $BuildDir $buildProfile
 $cfg = "-S `"$repo`" -B `"$BuildDir`" $configureOptions"
 
 Write-Host "== LOCAL build rule: sm_$Arch, compression ON, no PTX, tiers='$(if ($Tiers) { $Tiers } else { 'all' })' =="
-Write-Host "   Experimental resident/PRAC: $([bool]$EnablePrac)"
+Write-Host "   Montgomery PARAM0 PRAC and resident: $([bool]$EnablePrac)"
 Write-Host "   CUDA module layout: $KernelLayout"
 Write-Host "   CUDA: $($cuda.Root); MSVC: $($vc.Version)"
 Write-Host "   role=$BuildRole profile=$($buildProfile.Key) leaf=$BuildDir"

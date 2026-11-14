@@ -601,6 +601,7 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
   
   /* gputime and batch_time are measured in ms */
   float batch_time = 0;
+  double slice_seconds = 0;
   
   double last_progress_line_ms=-1.0e9;
   /* Track time for checkpoint saving */
@@ -681,6 +682,7 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
       s_partial=window.end;
       launches=window.launches;
     }
+    slice_seconds += batch_time / 1000.0;
     const uint64_t this_batch = s_partial-first;
     batches_complete += launches;
     if (dump_slice) {
@@ -775,6 +777,7 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
     // A partial point is never a completed Stage1 result.
     youpi = ECM_ERROR;
   } else {
+    outputf(OUTPUT_ALWAYS, "GPU: Stage1 ladder completed; kernel=%.6f s\n", slice_seconds);
     outputf (OUTPUT_VERBOSE, "Copying results back to CPU ...\n");
     CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
     outcome.snapshot_cursor=s_partial;

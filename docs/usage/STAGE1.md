@@ -14,6 +14,26 @@ Windows x64 worker 可通过 `--impl gwnum` 或 `[stage1]` 的 `cpu_implementati
 
 CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_montgomery_chain = "prac"`、`target = "cpu"`、`param = "m0"` 和 `cpu_implementation = "simd"`。PRAC 计划按 B1 和标量倍数复用，存放在 `exponent_cache_dir`。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。续跑检查点时沿用原点乘方式。
 
+### CUDA CGBN Montgomery PARAM0
+
+CUDA Stage1 本机和发布构建都包含 PARAM0 PRAC。默认点乘链为 ladder，可在 TOML 中为 PARAM0 启用 PRAC，例如：
+
+```toml
+[stage1]
+target = "gpu"
+gpu_backend = "cuda"
+gpu_algorithm = "cgbn"
+param = "m0"
+cuda_montgomery_chain = "prac"
+cuda_prac_search = 50
+```
+
+`cuda_prac_search` 可设为 1～50，默认 7。PRAC 计划支持整数 B1 2～4,294,967,295；设备控制表占用随 B1 增长。冷启动会生成计划，相同 B1、LCM 模式及搜索宽度可以复用缓存。两个键均可在 `[worker.N]` 下加 `stage1.` 前缀覆盖。使用 `m0_` 存档前缀的队列任务同样适用。混合队列中的 Edwards、PARAM2/3 及 NTT 任务各自使用其原点乘路径。TOML 未显式设置时仍可使用对应的 `ECM_GPU_STAGE1_ALGO` 和 `ECM_PRAC_SEARCH`。
+
+Stage1 save、结果和 Stage2 交接沿用 PARAM0 格式。正在运行的批次应以原点乘链完成；PRAC 恢复还需匹配原搜索宽度及计划。程序拒绝用不匹配的设置恢复检查点。完成当前批次后，可自由为下一批切换点乘链。见 [Stage1 实测](../performance/STAGE1.md#0637-优化前基线)。
+
+验证入口为 `tools/test/test_cuda_prac_queue.py`，指定 `--exe`、`--device` 和一个新的 `--output` 目录；可通过 `--stage2` 同时验证 Stage2 消费。0.63.8 的 PRAC 接入在两张 sm89 卡验证了 TOML 优先级、混合曲线队列、断点恢复、命中因子及 Stage2 交接。CUDA 11.8 的 384 位发布样本通过 compute_50 PTX 在 4070 Ti 上的 Stage1 验证。原始验收日志保留于 `data/experiments/stage1_prac_production_0640/`。
+
 ### 预计算 PRAC 种子
 
 用 `ECM_BUILD_TOOLS` 构建 `prepare_prac_cache`。它按 $B_1$、LCM 模式和搜索宽度生成计划，写入每个素数的赢家种子和两组 D/A/W。缺省宽度为 7，可显式选择 1～50。以下的 `1` 表示 LCM 模式，`6` 是规划线程上限。
@@ -26,7 +46,7 @@ cmake --build $build --config Release --target prepare_prac_cache
 $env:ECM_PRAC_SEARCH = '50'
 ```
 
-已启用 PRAC 的 CPU IFMA 和 CUDA 路径读取 `ECM_PRAC_SEARCH`。默认 7 档。恢复检查点时继续用原宽度。在同一缓存目录中，各宽度的文件可共存。v1 的 7 档文件可在加载时迁移，原文件可供旧版本使用。
+CPU IFMA 可用 `ECM_PRAC_SEARCH`，CUDA 可用上文的 TOML 选项。恢复检查点时继续用原宽度。在同一缓存目录中，各宽度的文件可共存。v1 的 7 档文件可在加载时迁移，原文件可供旧版本使用。
 
 `exponent_cache_dir` 留空时，Stage1 从工作目录及可执行文件目录向上查找 ECM-ELF 仓库，使用仓库根的 `cache/`。独立部署使用可执行文件同级的 `cache/`。可用 `--exp-cache <目录>` 指定，CUDA PRAC 还可用 `ECM_PRAC_PLAN_CACHE` 指定计划目录。文件大小、读取方式和迁移身份见 [PRAC 计划存储](../architecture/PRAC.md#计划存储与复用)。
 

@@ -15,7 +15,7 @@
 
 ## 参数定位
 
-- Stage1 本机/开发：`-Arch`、`-BuildDir`、`-Jobs`、`-Tiers`、`-KernelLayout isolated/grouped`、`-EnablePrac`、`-HostOnly`、`-FullRebuild`、`-Extra`。默认isolated，验证并复用 CUDA 对象，`-Incremental` 保留兼容；默认不编译 PRAC，改变构建参数后仅重编失效单元。已有分组缓存首次切换时，省略BuildDir可自动选独立profile目录；显式目录仍须匹配配置。
+- Stage1 本机／开发构建支持 `-Arch`、`-BuildDir`、`-Jobs`、`-Tiers`、`-KernelLayout isolated`、`-EnablePrac`、`-HostOnly`、`-FullRebuild` 和 `-Extra`。本机、开发与发布都包含 resident／PRAC。本机／开发可用 `-EnablePrac:$false` 省去这些内核。构建验证和复用同一配置下的 CUDA 对象。变更构建配置时可省略 `-BuildDir`，由脚本自动选择对应目录。显式指定的目录须匹配构建配置。
 - Stage2 本机/开发：`-Arch`、`-Build`、`-SplitCompile`、`-KernelLayout grouped/isolated`、`-GlBackend`、`-AddSubMask`、`-OuterUnrollU`、`-HostOnly`、`-Rebuild`。默认grouped，隔离备选仅支持生产引擎。默认逐单元复用；HostOnly 在编译前验证 CUDA 对象/参数和源身份，与 Rebuild 互斥。
 - 发布：`-Profile all/cu11.8/cu13.3`、`-BuildRoot`、`-OutDir`、`-Jobs`、`-VerifyJobs`（默认4）、`-Stage2KernelLayout grouped/isolated`；固定 PTX50/SASS60 与 PTX75/SASS80。完整入口还支持 `-Component all/stage1/stage2`；Stage2阶段包装使用 `-KernelLayout` 选择布局。
 - 发布工具链：`-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp`；发布要求同一 vcpkg 通用 GMP，缺失或身份变化即失败。local/dev 保留 `-CudaRoot` 和各自依赖参数。

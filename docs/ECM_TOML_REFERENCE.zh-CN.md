@@ -281,6 +281,26 @@ cuda_low_cpu = false
 
 设为 1 或 true 后，CUDA CGBN Stage1 主机线程在等待 GPU 完成时休眠，对所有切片深度优先生效。此模式用于降低 CPU 占用，唤醒可能稍慢。
 
+### cuda_montgomery_chain
+
+```toml
+cuda_montgomery_chain = "ladder"
+```
+
+类型 `string` · 范围 `[ladder|prac]` · Worker 覆盖 `[worker.N] stage1.cuda_montgomery_chain` · 级别 `高级`。
+
+为 CUDA CGBN Montgomery PARAM0 选择点乘链。其他曲线族与后端忽略此项。省略时允许使用旧环境变量 ECM_GPU_STAGE1_ALGO 覆盖。
+
+### cuda_prac_search
+
+```toml
+cuda_prac_search = 7
+```
+
+类型 `int` · 范围 `[1..50]` · Worker 覆盖 `[worker.N] stage1.cuda_prac_search` · 级别 `高级`。
+
+CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许 ECM_PRAC_SEARCH 覆盖默认值。
+
 ### cuda_slice_depth
 
 ```toml

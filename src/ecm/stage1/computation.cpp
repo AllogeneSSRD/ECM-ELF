@@ -7,10 +7,16 @@
 
 namespace ecm_stage1 {
 ExecutionOptions::ExecutionOptions(const Stage1Options& options) : Stage1Options(options) {
-    if (const auto* algorithm = std::getenv("ECM_GPU_STAGE1_ALGO"))
-        cgbn_algorithm = algorithm;
-    if (cgbn_algorithm.empty())
-        cgbn_algorithm = "ladder";
+    const auto& selection = execution.selection;
+    cgbn_algorithm = "ladder";
+    if (selection.target == ExecutionTarget::Gpu && selection.curve == CurveModel::Montgomery &&
+        selection.gpu_algorithm == GpuAlgorithm::Cgbn) {
+        if (!execution.cuda_montgomery_chain.empty()) {
+            if (selection.gpu_param == 0)
+                cgbn_algorithm = execution.cuda_montgomery_chain;
+        } else if (const auto* algorithm = std::getenv("ECM_GPU_STAGE1_ALGO"); algorithm && *algorithm)
+            cgbn_algorithm = algorithm;
+    }
 }
 
 LegacyExecutionResult::LegacyExecutionResult(LegacyExecutionResult&& other) noexcept {

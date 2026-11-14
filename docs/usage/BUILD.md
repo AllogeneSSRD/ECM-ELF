@@ -23,13 +23,15 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui_v2_local`。常规目标包含群阶分析助手及匹配的GMP DLL，无需CUDA；本机候选继续使用本地Zen3/BMI2依赖，未声明通用x64发布资格。`tools/build/package_gui_v2.ps1`是独立GUI候选打包入口，会附带对应GMP源码/许可；与下文计算worker的release策略分开，详见[GUI v2](GUI_V2.md#构建与启动)。
 
-Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
+Stage1 本机、开发与发布构建使用完整位宽和曲线族、通用 Montgomery、TPB128 及分档寄存器策略，并默认编译 PARAM0 PRAC 和 resident ladder。直接调用 CMake 时 `ECM_CUDA_ENABLE_PRAC` 也默认为 ON。本机及开发可通过 `-EnablePrac:$false` 省去两者，`-Tiers` 可限制容器档位。运行时默认使用 ladder，可在 TOML 中为 PARAM0 启用 PRAC。见 [Stage1 设置](STAGE1.md#cuda-cgbn-montgomery-param0)。
+
+PRAC 的标准实例按受支持的 PARAM0 容器位宽与 TPI 生成，每档编译域导入、域导出、resident ladder 和 PRAC 等模式。搜索级别只改变主机生成的链计划，切片深度只改变这些内核的提交方式。把原先关闭 PRAC 的构建切到开启时，当前独立 profile 和 CMake 目标级宏会使普通 CUDA 对象也失去复用资格。实验变体的裁剪方案见 [PRAC 构建拆分计划](../development/GPU_STAGE1_PRAC_BUILD_DRAFT.md)。
 
 Stage1 local/dev/release 统一使用构建生成的实例入口。`-KernelLayout isolated` 仅保留为兼容写法，`grouped` 已删除；CMake 的 `ECM_CUDA_ISOLATE_TIERS=OFF` 会明确报错。正式 Stage1 入口显式传入 `ECM_CUDA_ISOLATE_TIERS=ON` 并纳入 profile 身份，避免与未记录布局的旧 grouped 配置发生身份重合。local 保持单架构、压缩、无 PTX。已有缓存必须通过完整 profile、编译命令、依赖和对象内容核对；省略 `-BuildDir` 时，为不相容 profile 选择独立目录，旧目录保留。
 
 位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。`-Tiers` 在构建身份和 CMake 选档前通过同一归一化器处理：去除空白、去重、按清单排序；空字符串为全档，未知位宽、空列表项和分号分隔会报错。`"1024, 384,384"` 与 `"384,1024"` 产生相同选档身份。Edwards binary/NAF 共用32个容器入口，Montgomery PARAM0/2/3 各31个，共125个基础模块。容器边界仍按 Edwards 一位余量、Montgomery 六位余量判断，见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。
 
-实例入口、PRAC 工厂表和 `cuda_modules/stage1/modules.json` 由 `tools/build/internal/cuda_modules.cmake` 在构建目录生成，内容不变时不更新时间戳。PRAC 显式启用时，另生成31个标准几何及5个稀疏候选模块，仍链接到 `ecm_cuda_prac` 对象目标；默认完整发布不启用 PRAC。标准/alternate、single、constants 分别包含自己的设备模板，候选头变化不会进入标准核的依赖闭包。独立 Edwards 与主机等待探针共用这个生成器。
+实例入口、PRAC 工厂表和 `cuda_modules/stage1/modules.json` 由 `tools/build/internal/cuda_modules.cmake` 在构建目录生成，内容不变时不更新时间戳。PRAC 全档生成 31 个标准几何及 5 个稀疏候选模块，链接到 `ecm_cuda_prac` 对象目标。标准/alternate、single、constants 分别包含自己的设备模板，候选头变化不会进入标准核的依赖闭包。独立 Edwards 与主机等待探针共用这个生成器。
 
 Montgomery 普通核保留原有分档寄存器策略，旧 NVCC 的独立编译单元继续使用56/128/255预算；PRAC 保留原有每核属性及旧工具链行为，不额外增加 TU 上限。已无作用的 grouped 专用 `ECM_MAXRREG_SMALL` / `ECM_MAXRREG_SUYAMA` 非零设置会报错；统一上限和算术环境策略保持原规则。
 

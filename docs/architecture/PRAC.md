@@ -27,7 +27,7 @@ Stage1 将 $S=\tau\operatorname{lcm}(1,\ldots,B_1)$ 分解为逐素数的乘法�
 
 | | Prime95 v31.06 build 1 | ECM-ELF |
 | --- | --- | --- |
-| 搜索宽度 $w$ | `prime.txt` 中的 `PracSearch`，范围 1～50，默认 7。越界值夹到端点 | 默认 $w=7$，可用 `ECM_PRAC_SEARCH` 或离线工具选择 1～50。`ECM_PRAC_THREADS` 只调建表并行度 |
+| 搜索宽度 $w$ | `prime.txt` 中的 `PracSearch`，范围 1～50，默认 7。越界值夹到端点 | 默认 $w=7$，CUDA 可配置 `cuda_prac_search`。CPU IFMA 可用 `ECM_PRAC_SEARCH`，离线工具可用 `--search`。范围 1～50。`ECM_PRAC_THREADS` 只调建表并行度 |
 | 候选 | 对固定顺序的 10 个比例 $\rho_i$，令 $c_i=\lceil p\rho_i\rceil$，依次试 $c_i-\lfloor w/2\rfloor$ 起的 $w$ 个整数。第一中心用 $1/\varphi$，$\varphi=(1+\sqrt5)/2$ | 相同的 10 个比例，相同宽度和遍历顺序，跳过非法和已见种子 |
 | 评估 | 每次奇素数点乘发起 $10w$ 次估价调用，含重复种子和非法种子的快速返回。xDBL=10、xADD=12，以 FFT 变换次数估价 | 每个奇素数生成计划时最多评 $10w$ 个不同种子，同一任务的各批次共用计划。xDBL=5、xADD=6，以平方与乘法等价的模乘数估价 |
 | 平局 | 只有成本严格下降才替换赢家 | 同样保留先遇到的最低成本种子 |
