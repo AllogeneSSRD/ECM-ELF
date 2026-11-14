@@ -75,10 +75,11 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
         if (verify_size_of_n(N,bits,CARRY_BITS) != ECM_NO_FACTOR_FOUND) return ECM_ERROR;
         EcmPracPlan plan;
         if (prac) {
-            outputf(OUTPUT_ALWAYS, "GPU: preparing Prime95 PRAC plan (B1=%llu, t=%u, search=7)\n",
-                    (unsigned long long)B1, torsion);
+            const auto search = ecm_prac_search_width(requested.get("ECM_PRAC_SEARCH"));
+            outputf(OUTPUT_ALWAYS, "GPU: preparing Prime95 PRAC plan (B1=%llu, t=%u, search=%u)\n",
+                    (unsigned long long)B1, torsion, search);
             const auto cache=prac_plan_cache(requested);
-            plan = ecm_prac_build(uint32_t(B1), torsion, s, cache);
+            plan = ecm_prac_build(uint32_t(B1), torsion, s, cache, 0, search);
             outputf(OUTPUT_ALWAYS, "GPU: PRAC plan %s; work=%llu\n", plan.status.c_str(),
                     (unsigned long long)plan.work);
         }

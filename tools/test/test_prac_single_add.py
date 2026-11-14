@@ -5,12 +5,11 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
-import struct
 import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'stat'))
 from ecm_prac_plan import P95_RATIOS, prac_counts, primes
-from test_cuda_prac_windows import add, double, multiply
+from test_cuda_prac_windows import add, cached_window, double, multiply, prac_cache_path
 from test_prac_disjoint_add import add_disjoint
 
 
@@ -65,12 +64,8 @@ def chain(p,r,seed,a24,n,single,compact=False,disjoint=False,sentinel=False):
 
 
 def cached_pairs(path,count=32):
-    with path.open('rb') as f:
-        h=struct.unpack('<6Q4I',f.read(64));pairs=[]
-        for first in (0,(h[3]-count)//2,h[3]-count):
-            f.seek(64+16*first)
-            pairs += [(p,d) for p,d,_,_ in (struct.unpack('<4I',f.read(16)) for _ in range(count)) if p!=2]
-        return pairs
+    return [(p, d) for position in ('prefix', 'middle', 'tail')
+            for p, d, _, _ in cached_window(path, position, count)[4] if p != 2]
 
 
 def chain_shared_dbl(p,r,seed,a24,n):
@@ -118,7 +113,7 @@ def main():
         for ratio in P95_RATIOS[:7]:
             r=int(p*ratio+0.5)
             if p//2<r<p:pairs.add((p,r))
-    for b1 in (10000000,260000000):pairs.update(cached_pairs(args.cache/f'prac_v1_b{b1}_t1_s7.bin'))
+    for b1 in (10000000,260000000):pairs.update(cached_pairs(prac_cache_path(args.cache,b1,1)))
     n=2**127-1;coverage=Counter();steps=0
     for sigma in (26,4611686018427511360):
         u=(sigma*sigma-5)%n;v=4*sigma%n

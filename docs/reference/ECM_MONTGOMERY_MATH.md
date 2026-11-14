@@ -78,7 +78,30 @@ return R0
 
 生成器优化最小/近最小链长度，并在相关长度内偏好多倍点；这不自动等于 GPU 上全局最短时间。需要进一步计入活跃点和 field operation 的实际成本。
 
-本地链码文件为 9,800 字节、1,225 个 uint64 记录，按从第一个素数 11 起的顺序解码，最后一个是 9973。首尾及每条使用的差值关系按原文的本地链码副本核对。文件没有包含 B1、版本、字节序或校验和的 header；新的生产缓存应补上这些元数据。
+#### 大 B₁ 的离线生成时间
+
+本地 GMP-ECM 参考版本为 `c84da4480154cf0bd300aae83201aaf55a2cc38f`。上游 README 的时间覆盖生成整个 `Lchain_codes.dat`，包括为所有目标素数寻找并编码链。代表机器为 Intel Core i9-13900K，约 5 GHz。README 未给出重复次数、编译器、功耗或分阶段计时。本表引用上游记录。
+
+| $B_1$ | 线程 | 生成时间 |
+| ---: | ---: | ---: |
+| 1,000,000 | 7 | 18.6 秒 |
+| 11,000,000 | 7 | 7 分 32 秒 |
+| 43,000,000 | 7 | 46 分 55 秒 |
+| 110,000,000 | 7 | 3 小时 18 分 11 秒 |
+| 260,000,000 | 8 | 9 小时 40 分 24 秒 |
+| 850,000,000 | 7 | 45 小时 25 分 32 秒 |
+
+从 $B_1=10^6$ 到 $2.6\times10^8$，素数个数约增至 181 倍，上游生成时间约增至 1,872 倍，两个样本分别用 7 和 8 线程。仅按素数个数线性外推会明显低估生成时间。这两个样本无法单独量化深度、分段读写和线程调度各自的成本。 [上游 README](../../.refactor/ecm/LucasChainGenerator/README#L30)
+
+- **搜索按链长展开。** 外层逐个增加允许的链长 $L$。该轮新目标最大值为 $\min(B_1,F_{L+2})$，上一轮仍未找到链的素数进入后续轮。递归枚举可用的差分加法和倍点，靠 Fibonacci 最大延伸、整除条件与当前最小目标剪枝。$B_1$ 越大，目标素数越多，达到高位目标所需的链也越深。即使共享前缀并剪枝，留到后面的分支仍会随着搜索深度增加。 [外层链长循环](../../.refactor/ecm/LucasChainGenerator/src/LucasChainGen.c#L4203) · [递归与剪枝](../../.refactor/ecm/LucasChainGenerator/src/LucasChainGen.c#L2858)
+- **同一长度还比较候选链。** 找到可以到达某个素数的链后，该轮仍统计其他候选，优先保留倍点多的链，再偏好更短的编码。链长超过 26 时才启用该处的多线程分配，将预设子树交给 worker，随后按目标素数合并。目标表和待写链码有固定容量，长链轮可能按子区间重复运行枚举并读写中间表。上游未给出各项耗时占比。 [线程分配](../../.refactor/ecm/LucasChainGenerator/src/LucasChainGen.c#L4548) · [结果合并](../../.refactor/ecm/LucasChainGenerator/src/LucasChainGen.c#L3872) · [分段](../../.refactor/ecm/LucasChainGenerator/src/LucasChainGen.c#L4263)
+- **生成后顺序消费链码。** Stage1 可逐素数读取 64 位链码，利用目标素数补全省略的最大延伸步，再执行相应的点运算。表中的分钟和小时是一次性生成时间。 [链码编码](../../.refactor/ecm/LucasChainGenerator/src/LucasChainGen.c#L2885) · [Stage1 链码读取](../../.refactor/ecm/ecm.c#L1187)
+
+#### 可复用的链码文件
+
+- 参考工作树中的 `Lchain_codes.dat` 是由 Git 忽略的本机生成物。旁边的 `LCG.log` 标注 $B_1=10{,}000$。文件为 9,800 B、1,225 个小端 uint64，从素数 11 到 9,973。新格式生成器本轮生成的 300 万档文件，其前 9,800 B 与这份本机文件逐字节相同。 [本地链码](../../.refactor/ecm/Lchain_codes.dat) · [生成日志](../../.refactor/ecm/LCG.log)
+- Git 历史提交 `f4af741fb129af96f6decb771a4cabc747fd6705` 确实跟踪过 `Lchain_codes.dat`，共 2,361,056 B、295,132 个小端 uint64，逐条解码验证后确认覆盖到素数 4,182,163。提交 `12b86e7` 删除该旧文件，`6b3058a` 引入新编码。旧、新文件均从素数 11 开始。旧版首段占 4 bit，当前首段占 3 bit，处理历史文件时须使用对应提交的解码逻辑。可用 `git -C .refactor/ecm show f4af741:Lchain_codes.dat` 读取原始字节。 [当前分发说明](../../.refactor/ecm/INSTALL-ecm#L109)
+- 这两种上游格式都是无头的每素数链码。归档时记录编码版本、最大覆盖素数和摘要。ECM-ELF v2 缓存的记录是本项目 PRAC 赢家种子，两个格式的执行表示不同。
 
 
 参考：[EFD Montgomery XZ](https://hyperelliptic.org/EFD/g1p/auto-montgom-xz.html)、GMP-ECM `parametrizations.c`、Prime95 `ecm.cpp` 的 Lucas 链入口。

@@ -11,7 +11,7 @@ MontRequestedSpec capture_mont_request(const char *algorithm, const std::string&
     MontRequestedSpec request;
     request.default_plan_cache=default_cache_dir;
     for(const auto *key:{"ECM_GPU_STAGE1_ALGO","ECM_PRAC_WINDOW","ECM_PRAC_VARIANT",
-        "ECM_PRAC_REG_TARGET","ECM_STAGE1_TPI","ECM_PRAC_CONSTANTS","ECM_PRAC_PLAN_CACHE",
+        "ECM_PRAC_REG_TARGET","ECM_STAGE1_TPI","ECM_PRAC_CONSTANTS","ECM_PRAC_PLAN_CACHE","ECM_PRAC_SEARCH",
         "ECM_PRAC_TARGET_MS","ECM_GPU_STAGE1_SAMPLE_SECONDS","ECM_GPU_DUMP",
         "ECM_PRAC_WINDOW_COUNT","ECM_PRAC_WINDOW_CHUNK","ECM_PRAC_WINDOW_WARMUP","ECM_PRAC_WINDOW_DUMP"})
         if(const auto *value=algorithm && std::strcmp(key,"ECM_GPU_STAGE1_ALGO")==0?algorithm:std::getenv(key))

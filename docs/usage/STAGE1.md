@@ -14,32 +14,21 @@ Windows x64 worker 可通过 `--impl gwnum` 或 `[stage1]` 的 `cpu_implementati
 
 CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_montgomery_chain = "prac"`、`target = "cpu"`、`param = "m0"` 和 `cpu_implementation = "simd"`。PRAC 计划按 B1 和标量倍数复用，存放在 `exponent_cache_dir`。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。续跑检查点时沿用原点乘方式。
 
-### 预生成 PRAC 缓存
+### 预计算 PRAC 种子
 
-PRAC（*Practical Algorithm*）用差分加法链安排 Montgomery 点乘。当前计划的缓存键包括 B1、`lcm=1|12`、计划格式和搜索版本。程序还核对精确 Stage1 标量的指纹。更换模数、位宽、sigma、B2 或 CPU/GPU 批量时，同一计划可继续复用。[Bernstein 与 Montgomery，§4.2.2](https://pure.tue.nl/ws/files/92552300/bernmont.pdf#page=10)
-
-启用 `ECM_BUILD_TOOLS` 后可构建 `prepare_prac_cache`。以下示例从仓库根目录运行，`1` 为 `lcm` 倍数，`6` 为规划线程上限。工具仅构造计划和指数，并用运行时读取器复验新文件。
+用 `ECM_BUILD_TOOLS` 构建 `prepare_prac_cache`。它按 $B_1$、LCM 模式和搜索宽度生成计划，写入每个素数的赢家种子和两组 D/A/W。缺省宽度为 7，可显式选择 1～50。以下的 `1` 表示 LCM 模式，`6` 是规划线程上限。
 
 ```powershell
 $build = 'build_dev/opencl_cpu_stage1_prac_06215'
 cmake --build $build --config Release --target prepare_prac_cache
-& "$build/prepare_prac_cache.exe" cache 1 6 50000 100000 1000000 11000000 44000000 260000000
+& "$build/prepare_prac_cache.exe" --search 50 cache 1 6 50000 100000 1000000 11000000 44000000 260000000
+& "$build/prepare_prac_cache.exe" --summary cache/prac_v2_b260000000_t1_s50.bin
+$env:ECM_PRAC_SEARCH = '50'
 ```
 
-`exponent_cache_dir` 留空时，Stage1 从工作目录及可执行文件目录向上查找 ECM-ELF 仓库，并使用仓库根目录的 `cache/`。独立部署使用可执行文件同级的 `cache/`。可在 `[stage1]` 中填写该键，或用 `--exp-cache <目录>` 指定其他位置。显式相对路径以工作目录为基准。CUDA PRAC 可通过 `ECM_PRAC_PLAN_CACHE` 单独覆盖计划目录。
+已启用 PRAC 的 CPU IFMA 和 CUDA 路径读取 `ECM_PRAC_SEARCH`。默认 7 档。恢复检查点时继续用原宽度。在同一缓存目录中，各宽度的文件可共存。v1 的 7 档文件可在加载时迁移，原文件可供旧版本使用。
 
-以 `prac_v1_b260000000_t1_s7.bin` 为例：
-
-| 字段 | 含义 |
-| --- | --- |
-| `prac` | PRAC 差分加法链计划 |
-| `v1` | 二进制缓存格式版本 1 |
-| `b260000000` | Stage1 上界 B1 = 260,000,000 |
-| `t1` | LCM 标量倍数为 1，`t12` 对应 12 倍 |
-| `s7` | 链种子搜索策略版本 7 |
-| `.bin` | 二进制文件扩展名 |
-
-计划每个素数占 16 字节，另加 64 字节头。B1=260,000,000 的计划约 217 MiB，指数文件另计。
+`exponent_cache_dir` 留空时，Stage1 从工作目录及可执行文件目录向上查找 ECM-ELF 仓库，使用仓库根的 `cache/`。独立部署使用可执行文件同级的 `cache/`。可用 `--exp-cache <目录>` 指定，CUDA PRAC 还可用 `ECM_PRAC_PLAN_CACHE` 指定计划目录。文件大小、读取方式和迁移身份见 [PRAC 计划存储](../architecture/PRAC.md#计划存储与复用)。
 
 ### 队列与交接
 

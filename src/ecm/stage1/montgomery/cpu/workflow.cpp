@@ -220,8 +220,9 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
 
     EcmPracPlan prac;
     if (use_prac) {
+        const auto search = ecm_prac_search_width(std::getenv("ECM_PRAC_SEARCH"));
         prac = ecm_prac_build(static_cast<uint32_t>(B1), torsion, s,
-                              opt.persistence.exponent_cache_dir, opt.execution.stage1_threads);
+                              opt.persistence.exponent_cache_dir, opt.execution.stage1_threads, search);
         ecm_ts_fprintf(stdout, "stage1 chain    : PRAC [%s]\n", prac.status.c_str());
     } else if (use_simd || use_gwnum) {
         ecm_ts_fprintf(stdout, "stage1 chain    : binary ladder\n");

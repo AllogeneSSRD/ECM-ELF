@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'stat'))
 from bench_stage1_prac_windows import sample
-from ecm_prac_plan import prac_counts
+from ecm_prac_plan import prac_counts, prime_multiplicity, prime_window
 from test_cuda_prac import run, rows
 
 
@@ -48,19 +48,59 @@ def prime(p):
     return p >= 2 and (p == 2 or p % 2 != 0 and all(p % d for d in range(3, math.isqrt(p)+1, 2)))
 
 
-def product(cache, result):
-    torsion = 12 if result['exponent'] == 'choose12' else 1
-    file = cache / f"prac_v1_b{result['B1']}_t{torsion}_s7.bin"
+def prac_cache_path(cache, b1, torsion, width=7):
+    suffix = f"_b{b1}_t{torsion}_s{width}.bin"
+    v2 = cache / ("prac_v2" + suffix)
+    return v2 if v2.exists() or width != 7 else cache / ("prac_v1" + suffix)
+
+
+@lru_cache(maxsize=64)
+def prime_slice(b1, torsion, first, count):
+    result = []
+    for low in range(2, b1 + 1, 1 << 20):
+        segment = prime_window(low, min(low + (1 << 20) - 1, b1))
+        if b1 == 2 and torsion == 12:
+            segment.append(3)
+        if first < len(segment):
+            result.extend(segment[first:first + count - len(result)])
+            if len(result) == count:
+                return result
+        first = max(0, first - len(segment))
+    raise ValueError("PRAC prime window extends past the sieve")
+
+
+def cached_window(file, position, requested_count):
     with file.open('rb') as source:
         magic, b1, scalar_id, records, full_work, checksum, version, search, t, endian = struct.unpack('<6Q4I',source.read(64))
-        assert magic == 0x31504e414c504345 and b1 == result['B1'] and t == torsion
-        assert (version, search, endian) == (1, 7, 0x12345678)
-        assert file.stat().st_size == 64+16*records and full_work == result['full_work']
-        count = min(result['requested_count'],records)
-        first = 0 if result['position']=='prefix' else (records-count)//2 if result['position']=='middle' else records-count
-        assert (result['first'],result['count']) == (first,count)
-        source.seek(64+16*first)
-        entries = [struct.unpack('<4I',source.read(16)) for _ in range(count)]
+        assert magic == 0x31504e414c504345 and endian == 0x12345678
+        assert version in (1, 2) and 1 <= search <= 50
+        count = min(requested_count, records)
+        first = 0 if position == 'prefix' else (records-count)//2 if position == 'middle' else records-count
+        if version == 1:
+            assert file.stat().st_size == 64 + 16*records
+            source.seek(64 + 16*first)
+            entries = [struct.unpack('<4I', source.read(16)) for _ in range(count)]
+        else:
+            assert file.stat().st_size == 120 + 4*records
+            source.seek(120 + 4*first)
+            seeds = struct.unpack(f'<{count}I', source.read(4*count))
+            entries = []
+            for p, seed in zip(prime_slice(b1, t, first, count), seeds, strict=True):
+                repeats = max(1, prime_multiplicity(p, b1))
+                if t == 12:
+                    repeats += 2 if p == 2 else int(p == 3 and b1 >= 3)
+                dbl, dadd = (1, 0) if p == 2 else prac_counts(p, seed)
+                entries.append((p, seed, repeats, 5*dbl+6*dadd))
+    return b1, t, full_work, first, entries
+
+
+def product(cache, result):
+    torsion = 12 if result['exponent'] == 'choose12' else 1
+    width = int(os.environ.get("ECM_PRAC_SEARCH", "7"))
+    file = prac_cache_path(cache, result["B1"], torsion, width)
+    b1, t, full_work, first, entries = cached_window(file, result["position"], result["requested_count"])
+    assert (b1, t, full_work) == (result["B1"], torsion, result["full_work"])
+    assert (result["first"], result["count"]) == (first, len(entries))
     scalar = 1; work = 0
     for p, d, repeats, cost in entries:
         assert prime(p) and (p <= b1 or b1==2 and torsion==12 and p==3)

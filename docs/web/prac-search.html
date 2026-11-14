@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PRAC 逐步查看</title>
+<style>
+:root{color-scheme:light;--ink:#17282d;--muted:#49616a;--line:#cfdcd9;--accent:#006050;--pale:#e6f3ee}
+*{box-sizing:border-box}body{margin:0;background:#f3f6f5;color:var(--ink);font:16px/1.55 system-ui,"Microsoft Yahei",sans-serif}
+main{max-width:1180px;margin:auto;padding:32px 20px 60px}h1{font-size:clamp(28px,5vw,46px);line-height:1.1;margin:10px 0}h2{line-height:1.25;margin:0 0 10px}p{margin:8px 0 14px}a{color:var(--accent)}
+section,details{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0}
+summary{cursor:pointer;font-weight:700}.controls,.stats{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+label{display:inline-flex;gap:7px;align-items:center;flex-wrap:wrap}button,input,select{font:inherit}button,select,input[type=number]{border:1px solid #a6bcb5;border-radius:6px;padding:4px 9px;background:#fff;color:inherit}button{cursor:pointer}button:hover{background:var(--pale)}input[type=number]{max-width:140px}input[type=range]{accent-color:var(--accent);max-width:100%}
+.stats{margin:12px 0}.stats span{background:var(--pale);padding:5px 10px;border-radius:6px}code,.num{font-variant-numeric:tabular-nums;font-family:Consolas,monospace}
+.scroll{overflow:auto;max-height:430px;border:1px solid var(--line);border-radius:8px}table{border-collapse:collapse;width:100%;text-align:left;font-size:14px}th,td{padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#f0f5f2;position:sticky;top:0;white-space:nowrap;z-index:1}tr.active{background:var(--pale)}.muted{color:var(--muted)}.error{color:#a32921}output{min-width:2ch;font-weight:700}
+</style>
+</head>
+<body>
+<main>
+<nav><a href="../architecture/PRAC.md">PRAC 架构说明</a></nav>
+<h1>PRAC 逐步查看</h1>
+<p>选一个 Stage1 的奇素数乘数 <var>p</var>，观察 1–50 档怎样搜索种子 <var>r</var>，再沿整数系数和 Montgomery 点角色走完 <code>[p]P</code>。</p>
+
+<section aria-labelledby="input-title">
+<h2 id="input-title">乘数与搜索宽度</h2>
+<div class="controls">
+<label>示例 <select id="preset"><option value="101">101 · 降低成本与同成本换种子</option><option value="5">5 · 最小的两次差分加法示例</option><option value="11">11 · 同成本换种子</option><option value="9973">9973 · 50 档同一赢家</option><option value="4294967291">4294967291 · 第 29 档降低成本</option><option value="">自定义</option></select></label>
+<form id="prime-form"><label>奇素数 p <input id="prime" type="number" min="3" max="4294967295" step="2" value="101" required></label> <button>计算</button></form>
+<label>宽度 <input id="width" type="range" min="1" max="50" value="7"> <output id="width-output" for="width">7</output></label>
+</div>
+<p id="error" class="error" role="alert" hidden></p>
+<div id="stats" class="stats" aria-live="polite"></div>
+</section>
+
+<section>
+<h2>从 P 到 [p]P</h2>
+<p><code>(d,e)</code> 是剩余系数。<code>(a,b,c)</code> 表示角色 <code>A=[a]P、B=[b]P、C=[c]P</code>。本页用正倍数记点的 <code>X:Z</code>，因此 <code>C</code> 可以是 <code>A−B</code> 或 <code>B−A</code> 的同一横坐标。</p>
+<label>查看种子 <select id="seed"></select></label>
+<p id="trace-summary" class="num"></p>
+<div class="scroll"><table><thead><tr><th>步</th><th>规则</th><th>(d,e) 前 → 后</th><th>(a,b,c) 前 → 后</th><th>点运算与输入</th><th>累计 W</th></tr></thead><tbody id="trace"></tbody></table></div>
+</section>
+
+<details open>
+<summary>宽度 1–50 的结果</summary>
+<p>表中的尝试数包含重复和越界。每档按中心顺序遍历，从窗口左端开始。遇到严格更低的成本才替换赢家。</p>
+<div class="scroll"><table><thead><tr><th>档位</th><th>尝试数</th><th>有效不同种子</th><th>胜出 r</th><th>倍点 D</th><th>差分加法 A</th><th>5D+6A</th><th>相对上一档</th></tr></thead><tbody id="levels"></tbody></table></div>
+</details>
+
+<details>
+<summary>当前档位的十个中心与全部候选</summary>
+<p>按实际枚举顺序列出。Prime95 会重复估价，本页按 ECM-ELF 跳过重复和越界的种子。点选任意有效种子可展开它自己的链，包括落选候选。</p>
+<div class="scroll"><table><thead><tr><th>中心序号</th><th>比例 ρ</th><th>⌈pρ⌉</th><th>窗口</th></tr></thead><tbody id="centers"></tbody></table></div>
+<p><label><input type="checkbox" id="unique">只看实际估价的不同种子</label></p>
+<div class="scroll"><table><thead><tr><th>次序</th><th>中心</th><th>种子 r</th><th>初始 (d,e)</th><th>D</th><th>A</th><th>W</th><th>处理结果</th></tr></thead><tbody id="attempts"></tbody></table></div>
+</details>
+
+<details id="b1-100" open>
+<summary>完整 Stage1 对照 · B₁ = 100</summary>
+<p>取 Montgomery PARAM0，LCM 模式（τ=1）。下方 ladder 与 PRAC 都计算同一个 [S]P。每个点用相对于初始 P 的整数倍数表示，PRAC 操作列则用相对于本段输入 Q 的倍数表示。</p>
+<p id="stage-scalar" class="num"></p>
+<label>PRAC 搜索宽度 <select id="stage-width"></select></label>
+<div id="stage-stats" class="stats"></div>
+<h3>Montgomery ladder · 整数 S 的逐位执行</h3>
+<p>初始化 R₀=P、R₁=2P。每轮 xADD 的输入总是当前两个相邻倍数，已知差点固定为 P。下表倍点和差分加法都读取本轮旧状态。</p>
+<p id="ladder-cost"></p>
+<div class="scroll"><table><thead><tr><th>步</th><th>bit</th><th>旧 (R₀,R₁)</th><th>xDBL 输入</th><th>xADD 输出（已知差点 P）</th><th>新 (R₀,R₁)</th></tr></thead><tbody id="stage-ladder"></tbody></table></div>
+<h3>PRAC · 逐素数幂执行</h3>
+<p>点选素数可展开该段。输入 Q 每乘一次 p 就更新一次。同一 p 重复时，沿用同一规则链。</p>
+<div class="scroll"><table><thead><tr><th>p</th><th>执行 [p] 次数</th><th>种子 r</th><th>每次 D / A / W</th><th>Q 的输入倍数</th><th>该段输出倍数</th></tr></thead><tbody id="stage-primes"></tbody></table></div>
+<p id="stage-chain-summary"></p>
+<div class="scroll"><table><thead><tr><th>步</th><th>点运算（含已知差点或和点）</th><th>累计 W</th></tr></thead><tbody id="stage-chain"></tbody></table></div>
+</details>
+
+<section>
+<h2>素数、标量乘法与搜索种子</h2>
+<p><strong>筛法给出素数 <var>p</var>。</strong> 例如 <code>B₁=10</code> 时，素数是 <code>2, 3, 5, 7</code>。LCM 模式的标量是 <code>S=2³·3²·5·7=2520</code>。连续执行 <code>[2]、[2]、[2]、[3]、[3]、[5]、[7]</code>，得到 <code>P → [2]P → [4]P → [8]P → [24]P → [72]P → [360]P → [2520]P</code>。对应关系是 <code>[a]([b]P)=[ab]P</code>。每个 <code>p</code> 重复到其最高幂 <code>pᵏ ≤ B₁</code>，同一条链可以重复用。choose12 模式还乘 <code>12=2²·3</code>。</p>
+<p><strong>PRAC 搜索的是种子 <var>r</var>。</strong> 它满足 <code>p/2 &lt; r &lt; p</code>，可以是合数。比如乘数 <code>p=5</code>、种子 <code>r=3</code>，先倍点得 <code>2P</code>，再用输入 <code>P、2P</code> 和已知差点 <code>P</code> 得到 <code>3P</code>，最后用 <code>2P、3P</code> 和差点 <code>P</code> 得到 <code>5P</code>。差分加法要求已知差点的横坐标。若目标是求两个点的差，可以把第二个点取负，使用已知和点的横坐标作为差分输入。合法奇素数种子的 <code>gcd(2r−p,p−r)=1</code>，所以系数归约到 <code>(1,1)</code>。<code>p=2</code> 只倍点一次。本页和 ECM-ELF 的这个计划器使用逐素数规则，合数乘数需要额外处理。</p>
+<p><strong>提高 B₁ 与加宽搜索是两个变量。</strong> 提高 <code>B₁</code> 会纳入新的素数及更高素数幂。如果曲线点在未知因子 <code>q</code> 上的阶整除 <code>S</code>，该点乘到无穷远，才有机会从投影分母的 GCD 提取 <code>q</code>。比如点阶是 <code>25</code>，<code>B₁=10</code> 时仅含一次 <code>5</code>，到 <code>B₁=25</code> 才覆盖 <code>5²</code>。只增加素数个数未必补足所缺的幂，还会增加运行工作。固定 <code>B₁</code> 加宽搜索只增加候选种子，目标乘数和覆盖范围照旧，收益来自选中的点运算链成本下降。</p>
+</section>
+</main>
+<script>
+"use strict";
+const ratios = [
+  0.6180339887498948, 0.7236067977499790, 0.5801787282954641,
+  0.6328398060887063, 0.6124299495094950, 0.6201819808074158,
+  0.6172146165344039, 0.6183471196562281, 0.6179144065288179,
+  0.6180796684698958
+];
+
+function isOddPrime(n) {
+  if (!Number.isSafeInteger(n) || n < 3 || n > 4294967295 || n % 2 === 0) return false;
+  for (let i = 3; i * i <= n; i += 2) if (n % i === 0) return false;
+  return true;
+}
+
+function chain(p, r) {
+  let d = 2 * r - p, e = p - r, a = 1, b = 2, c = 1, D = 1, A = 0;
+  const state = () => ({de: [d, e], abc: [a, b, c]});
+  const steps = [{rule: "初始化", from: null, to: state(), operations: ["xDBL(1) → 2", "C 取 P"], work: 5}];
+  const record = (rule, from, operations) => {
+    if (d * a + e * b !== p || c !== Math.abs(a - b)) throw new Error("PRAC 不变量失败");
+    steps.push({rule, from, to: state(), operations, work: 5 * D + 6 * A});
+  };
+  const dbl = (x, ops) => {
+    D++;
+    ops.push("xDBL(" + x + ") → " + (2 * x));
+    return 2 * x;
+  };
+  const add = (x, y, z, ops) => {
+    const sum = x + y, difference = Math.abs(x - y);
+    if (z !== difference && z !== sum) throw new Error("缺少合法差点");
+    const result = z === difference ? sum : difference;
+    A++;
+    const known = z === difference ? "已知差点 " : "已知和点 ";
+    ops.push("xADD(" + x + ", " + y + "; " + known + z + ") → " + result);
+    return result;
+  };
+  while (d !== e) {
+    let from = state(), rule;
+    const ops = [];
+    if (d < e) {
+      [d, e] = [e, d];
+      [a, b] = [b, a];
+      record("交换 d/e、A/B", from, []);
+      from = state();
+    }
+    if (100 * d <= 296 * e) {
+      rule = "100d ≤ 296e，d ← d−e";
+      [b, c] = [add(a, b, c, ops), b];
+      d -= e;
+    } else if (d % 2 === e % 2) {
+      rule = "同奇偶，d ← (d−e)/2";
+      b = add(a, b, c, ops);
+      a = dbl(a, ops);
+      d = (d - e) / 2;
+    } else if (d % 2 === 0) {
+      rule = "d 为偶数，d ← d/2";
+      c = add(a, c, b, ops);
+      a = dbl(a, ops);
+      d /= 2;
+    } else {
+      rule = "e 为偶数，e ← e/2";
+      c = add(b, c, a, ops);
+      b = dbl(b, ops);
+      e /= 2;
+    }
+    record(rule, from, ops);
+  }
+  const operations = [];
+  if (d !== 1 || add(b, a, c, operations) !== p) throw new Error("PRAC 末点错误");
+  const work = 5 * D + 6 * A;
+  steps.push({rule: "收尾 → [" + p + "]P", from: state(), to: null, operations, work});
+  return {r, D, A, work, steps};
+}
+
+function search(p, width, cache) {
+  const seen = new Set(), attempts = [], centers = [];
+  let best;
+  ratios.forEach((ratio, i) => {
+    const center = Math.ceil(p * ratio), low = center - Math.floor(width / 2);
+    centers.push({ratio, center, low, high: low + width - 1});
+    for (let r = low; r < low + width; r++) {
+      const attempt = {i: i + 1, r, status: "越界"};
+      if (r > p / 2 && r < p) {
+        if (!cache.has(r)) cache.set(r, chain(p, r));
+        attempt.plan = cache.get(r);
+        attempt.status = "重复跳过";
+        if (!seen.has(r)) {
+          seen.add(r);
+          attempt.status = "未胜出";
+          if (!best || attempt.plan.work < best.work) {
+            best = attempt.plan;
+            attempt.status = "更新最低成本";
+          } else if (attempt.plan.work === best.work) {
+            attempt.status = "同成本，保留先遇到的种子";
+          }
+        }
+      }
+      attempts.push(attempt);
+    }
+  });
+  return {width, best, centers, attempts, total: seen.size};
+}
+
+const $ = id => document.getElementById(id);
+const asNumber = n => n.toLocaleString("zh-CN");
+const button = (action, value, label = value) =>
+  '<button type="button" data-' + action + '="' + value + '">' + label + '</button>';
+const row = (cells, active = false) =>
+  '<tr' + (active ? ' class="active"' : '') + '>' + cells.map(x => '<td>' + x + '</td>').join("") + '</tr>';
+const tuple = (from, to, field) => [from, to].filter(Boolean).map(s => '(' + s[field].join(", ") + ')').join(" → ");
+let p, levels, cache, selectedSeed;
+
+function renderTrace() {
+  const selected = cache.get(selectedSeed);
+  $("trace-summary").textContent = "r = " + selectedSeed + " · D = " + selected.D
+    + " · A = " + selected.A + " · W = " + selected.work
+    + " · " + (selectedSeed === levels[Number($("width").value) - 1].best.r ? "本档赢家" : "本档候选");
+  $("trace").innerHTML = selected.steps.map((step, i) =>
+    row([i, step.rule, tuple(step.from, step.to, "de"), tuple(step.from, step.to, "abc"),
+      step.operations.join("<br>"), step.work])).join("");
+}
+
+function renderAttempts(level) {
+  $("attempts").innerHTML = level.attempts.map(({i, r, status, plan}, index) => {
+    if ($("unique").checked && (!plan || status === "重复跳过")) return "";
+    const winner = level.best.r === r && status === "更新最低成本";
+    return row([index + 1, i, plan ? button("seed", r) : r,
+      plan ? "(" + (2 * r - p) + ", " + (p - r) + ")" : "—",
+      plan?.D ?? "—", plan?.A ?? "—", plan?.work ?? "—", winner ? "最终胜出" : status], winner);
+  }).join("");
+}
+
+function renderWidth() {
+  const width = Number($("width").value), level = levels[width - 1], best = level.best;
+  $("width-output").value = width;
+  $("stats").innerHTML = ["乘数 p = " + asNumber(p), "赢家 r = " + asNumber(best.r),
+    "倍点 " + best.D + " · 差分加法 " + best.A,
+    "W = " + best.work, "有效不同种子 " + level.total + " / " + level.attempts.length
+  ].map(x => "<span>" + x + "</span>").join("");
+  $("levels").innerHTML = levels.map((item, i) => {
+    const current = item.best, prev = levels[i - 1]?.best;
+    const change = !prev ? "起点" : current.work < prev.work ? "W −" + (prev.work - current.work)
+      : current.r !== prev.r ? "同成本换种子" : "同一种子";
+    return row([button("width", item.width), item.attempts.length, item.total,
+      current.r, current.D, current.A, current.work, change], item.width === width);
+  }).join("");
+  $("centers").innerHTML = level.centers.map(({ratio, center, low, high}, i) =>
+    row([i + 1, ratio, center, low + " … " + high])).join("");
+  const seeds = new Set(level.attempts.filter(x => x.plan).map(x => x.r));
+  $("seed").replaceChildren(...Array.from(seeds, r => new Option(r === best.r ? r + "（赢家）" : r, r)));
+  $("seed").value = selectedSeed = best.r;
+  renderTrace();
+  renderAttempts(level);
+}
+
+function load(n) {
+  const error = $("error");
+  error.hidden = isOddPrime(n);
+  if (!error.hidden) {
+    error.textContent = "请输入 3～4,294,967,295 之间的奇素数。下方仍显示上一次有效结果。";
+    return;
+  }
+  p = n;
+  cache = new Map();
+  levels = Array.from({length: 50}, (_, i) => search(p, i + 1, cache));
+  renderWidth();
+}
+
+$("prime-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const n = $("prime").valueAsNumber;
+  if (String(n) !== $("preset").value) $("preset").value = "";
+  load(n);
+});
+$("preset").addEventListener("change", event => {
+  if (!event.target.value) { $("prime").focus(); return; }
+  $("prime").value = event.target.value;
+  load(Number(event.target.value));
+});
+$("width").addEventListener("input", renderWidth);
+$("seed").addEventListener("change", () => { selectedSeed = Number($("seed").value); renderTrace(); });
+$("unique").addEventListener("change", () => renderAttempts(levels[Number($("width").value) - 1]));
+$("levels").addEventListener("click", event => {
+  if (!event.target.dataset.width) return;
+  const top = $("levels").closest(".scroll").scrollTop;
+  $("width").value = event.target.dataset.width;
+  renderWidth();
+  $("levels").closest(".scroll").scrollTop = top;
+});
+$("attempts").addEventListener("click", event => {
+  if (!event.target.dataset.seed) return;
+  selectedSeed = Number(event.target.dataset.seed);
+  $("seed").value = selectedSeed;
+  renderTrace();
+  $("seed").focus();
+});
+load(101);
+
+const stagePrimes = [2, ...Array.from({length: 99}, (_, i) => i + 2).filter(isOddPrime)];
+const stageTerms = stagePrimes.map(p => {
+  let power = p, repetitions = 1;
+  while (power * p <= 100) {
+    power *= p;
+    repetitions++;
+  }
+  return {p, power, repetitions, cache: new Map()};
+});
+const scalar = stageTerms.reduce((s, {power}) => s * BigInt(power), 1n);
+
+function renderLadder(s) {
+  const bits = s.toString(2);
+  let k = 1n;
+  const rows = [row([0, "首位 1", "(1, —)", "1 → 2", "—", "(1, 2)"])];
+  for (const [i, bit] of Array.from(bits.slice(1)).entries()) {
+    const old = k, other = k + 1n, sum = old + other;
+    const doubled = bit === "1" ? other : old;
+    k = 2n * k + BigInt(bit);
+    rows.push(row([i + 1, bit, "(" + old + ", " + other + ")",
+      doubled + " → " + (2n * doubled), old + " + " + other + " → " + sum,
+      "(" + k + ", " + (k + 1n) + ")"]));
+  }
+  if (k !== s) throw new Error("Ladder 末点错误");
+  $("stage-ladder").innerHTML = rows.join("");
+}
+
+let stageSelected = 7;
+let stagePlans;
+
+function renderStageChain() {
+  const {p, repetitions, best} = stagePlans.find(x => x.p === stageSelected);
+  $("stage-chain-summary").textContent = "查看 [" + p + "]Q · 执行 " + repetitions + " 次"
+    + (best.r === null ? " · 直接倍点" : " · 种子 r = " + best.r);
+  $("stage-chain").innerHTML = best.steps.map(({operations, work}, i) =>
+    row([i, operations.length ? operations.join("<br>") : "交换点角色，无点运算", work])).join("");
+}
+
+function renderStage() {
+  const width = Number($("stage-width").value);
+  let prefix = 1n, D = 0, A = 0;
+  stagePlans = stageTerms.map(term => {
+    const {p, repetitions, power, cache} = term;
+    const best = p === 2 ? {r: null, D: 1, A: 0, work: 5, steps: [{operations: ["xDBL(1) → 2"], work: 5}]}
+      : search(p, width, cache).best;
+    const input = prefix;
+    prefix *= BigInt(power);
+    D += repetitions * best.D;
+    A += repetitions * best.A;
+    return {p, repetitions, best, input, output: prefix};
+  });
+  if (prefix !== scalar) throw new Error("PRAC 标量不匹配");
+  $("stage-stats").innerHTML = "<span>PRAC · D = " + D + " · A = " + A + " · W = " + (5 * D + 6 * A)
+    + "</span><span>" + (width === 1 ? "比最低成本多 3" : "达到 1–50 档最低成本") + "</span>";
+  $("stage-primes").innerHTML = stagePlans.map(({p, repetitions, best, input, output}) =>
+    row([button("prime", p), repetitions, best.r ?? "—", [best.D,best.A,best.work].join(" / "), input, output],
+      p === stageSelected)).join("");
+  renderStageChain();
+}
+
+$("stage-scalar").textContent = "S = " + scalar + " · " + scalar.toString(2).length + " 位";
+$("stage-width").replaceChildren(...Array.from({length: 50}, (_, i) =>
+  new Option(i === 1 ? "2（最早达到最低成本）" : i === 6 ? "7（本仓库默认）" : i + 1, i + 1)));
+$("stage-width").value = 7;
+$("stage-width").addEventListener("change", renderStage);
+$("stage-primes").addEventListener("click", event => {
+  if (!event.target.dataset.prime) return;
+  stageSelected = Number(event.target.dataset.prime);
+  for (const tr of $("stage-primes").rows) tr.classList.toggle("active", tr.contains(event.target));
+  renderStageChain();
+});
+renderLadder(scalar);
+$("ladder-cost").textContent = "136 次倍点、135 次差分加法。采用固定差点公式的成本模型为 135×10 + 5 = 1355，含初始化。";
+renderStage();
+</script>
+</body>
+</html>
