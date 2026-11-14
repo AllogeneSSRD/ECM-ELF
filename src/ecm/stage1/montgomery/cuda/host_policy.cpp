@@ -7,9 +7,12 @@
 #include <stdexcept>
 namespace ecm_cuda_mont_host {
 
-MontRequestedSpec capture_mont_request(const char *algorithm, const std::string& default_cache_dir) {
+MontRequestedSpec capture_mont_request(const char *algorithm, const std::string& default_cache_dir,
+                                      unsigned cuda_slice_depth, bool cuda_low_cpu) {
     MontRequestedSpec request;
     request.default_plan_cache=default_cache_dir;
+    request.cuda_slice_depth=cuda_slice_depth;
+    request.cuda_low_cpu=cuda_low_cpu;
     for(const auto *key:{"ECM_GPU_STAGE1_ALGO","ECM_PRAC_WINDOW","ECM_PRAC_VARIANT",
         "ECM_PRAC_REG_TARGET","ECM_STAGE1_TPI","ECM_PRAC_CONSTANTS","ECM_PRAC_PLAN_CACHE","ECM_PRAC_SEARCH",
         "ECM_PRAC_TARGET_MS","ECM_GPU_STAGE1_SAMPLE_SECONDS","ECM_GPU_DUMP",

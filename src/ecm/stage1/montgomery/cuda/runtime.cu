@@ -33,6 +33,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "output.h"
 #include "host_policy.h"
 #include "../../sigma.h"
+#include "../../cuda_slices.h"
 using namespace ecm_cuda_mont_host;
 
 #include <cassert>
@@ -193,7 +194,7 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
   outcome.failure=Failure::Execution;
   CUDA_CHECK(cudaEventCreate (&global_start));
   CUDA_CHECK(cudaEventCreate (&batch_start));
-  CUDA_CHECK(cudaEventCreate (&stop));
+  CUDA_CHECK(cudaEventCreateWithFlags(&stop,slice_wait_flags(requested.cuda_low_cpu)));
   CUDA_CHECK(cudaEventRecord (global_start));
 
   // Copy s_bits
@@ -637,43 +638,56 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
   // ──────────────────────────────────────────────────────────────────────
 
   ecm_stage1_gpu_progress::SpeedWindow speed;
+  const bool dump_slice = dump_file && dump_host;
+  auto rolling=RollingSlices<uint64_t>::create(s_partial,
+      rolling_slice_depth(!dump_slice,requested.cuda_slice_depth),requested.cuda_low_cpu,report);
+  const auto checkpoint_due=[&] {
+    return checkpoint_interval_ms && std::chrono::steady_clock::now() - last_checkpoint_time >=
+        std::chrono::milliseconds(checkpoint_interval_ms);
+  };
 
   while (s_partial < s_num_bits) {
-    /* decrease batch_size for final batch if needed */
-    uint64_t this_batch = std::min(s_num_bits - s_partial, batch_size);
-
-    CUDA_CHECK(cudaEventRecord (batch_start));
-
-    if (dump_file != NULL && dump_host != NULL) {
+    if (!rolling)
+      CUDA_CHECK(cudaEventRecord(batch_start));
+    if (dump_slice) {
       CUDA_CHECK(cudaMemcpy(dump_host, gpu_data, data_size, cudaMemcpyDeviceToHost));
-      dump_curve_state_csv(dump_file, "begin", batches_complete, s_partial, this_batch,
+      dump_curve_state_csv(dump_file, "begin", batches_complete, s_partial,
+                           std::min(s_num_bits - s_partial, batch_size),
                            sigma32, BITS, TPI, dump_host, curves, BITS / 32);
     }
 
-    /* Call CUDA Kernel. */
     assert (kernel != NULL);
-    cgbn_stage1_launch(resolved.entry,resolved.blocks,resolved.tpb,report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma_arg, np0);
-    CUDA_CHECK(cudaGetLastError());
-
-    s_partial += this_batch;
-    batches_complete++;
-
-    /* error report uses managed memory, sync the device and check for cgbn errors */
-    CUDA_CHECK(cudaDeviceSynchronize());
-    if (report->_error)
-      outputf (OUTPUT_ERROR, "\n\nerror: %d\n", report->_error);
-    CGBN_CHECK(report);
-
-    if (dump_file != NULL && dump_host != NULL) {
+    const auto launch=[&](cgbn_error_report_t *errors,uint64_t first,uint64_t count) {
+      cgbn_stage1_launch(resolved.entry,resolved.blocks,resolved.tpb,errors,s_num_bits,
+                         first,count,gpu_s_bits,gpu_data,curves,sigma_arg,np0);
+      CUDA_CHECK(cudaGetLastError());
+    };
+    const uint64_t first=s_partial;
+    unsigned launches=1;
+    if (rolling) {
+      const auto completed=rolling->next(s_num_bits,batch_size,checkpoint_due(),launch);
+      CGBN_CHECK(completed.report);
+      batch_time=completed.milliseconds;
+      CUDA_CHECK(cudaEventElapsedTime(gputime,global_start,completed.kernel_end));
+      s_partial=completed.end;
+    } else {
+      const auto window=submit_slice_window(s_partial,s_num_bits,batch_size,!dump_slice,
+          [&](uint64_t begin,uint64_t count) { launch(report,begin,count); });
+      CUDA_CHECK(cudaEventRecord(stop));
+      CUDA_CHECK(cudaEventSynchronize(stop));
+      CGBN_CHECK(report);
+      CUDA_CHECK(cudaEventElapsedTime(&batch_time,batch_start,stop));
+      CUDA_CHECK(cudaEventElapsedTime(gputime,global_start,stop));
+      s_partial=window.end;
+      launches=window.launches;
+    }
+    const uint64_t this_batch = s_partial-first;
+    batches_complete += launches;
+    if (dump_slice) {
       CUDA_CHECK(cudaMemcpy(dump_host, gpu_data, data_size, cudaMemcpyDeviceToHost));
       dump_curve_state_csv(dump_file, "end", batches_complete, s_partial, this_batch,
                            sigma32, BITS, TPI, dump_host, curves, BITS / 32);
     }
-
-    CUDA_CHECK(cudaEventRecord (stop));
-    CUDA_CHECK(cudaEventSynchronize (stop));
-    CUDA_CHECK(cudaEventElapsedTime (&batch_time, batch_start, stop));
-    CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
 
     // Only synchronized successful work enters the live speed window.
     outcome.cursor=s_partial;
@@ -703,16 +717,19 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
     }
 
     /* Adjust batch_size to aim for 100ms */
-    if (batch_time < 80) {
-      batch_size = 11*batch_size/10;
-    } else if (batch_time > 120) {
-      batch_size = max((uint64_t)100, 9*batch_size / 10);  // MPA-OpenCl: uint64_t literal for Win64 overload resolution
+    if (!rolling || this_batch == batch_size) {
+      const double slice_ms = batch_time / launches;
+      if (slice_ms < 80) {
+        batch_size = 11*batch_size/10;
+      } else if (slice_ms > 120) {
+        batch_size = max((uint64_t)100, 9*batch_size / 10);
+      }
     }
     
     // ========== CHECKPOINT SAVING ==========
-    const bool stop_now = ecm_stage1_stop_requested();
-    if (stop_now || s_partial>=s_num_bits || (checkpoint_interval_ms > 0 &&
-      std::chrono::steady_clock::now()-last_checkpoint_time >= std::chrono::milliseconds(checkpoint_interval_ms))) {
+    const bool safe_snapshot=!rolling || rolling->empty();
+    const bool stop_now = safe_snapshot && ecm_stage1_stop_requested();
+    if (safe_snapshot && (stop_now || s_partial>=s_num_bits || checkpoint_due())) {
       // Copy data back from GPU temporarily for checkpoint
       CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
       
@@ -761,7 +778,6 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
     outputf (OUTPUT_VERBOSE, "Copying results back to CPU ...\n");
     CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
     outcome.snapshot_cursor=s_partial;
-    CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
     youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
                             words_per_curve, p1_word, p2_word, gpu_param,true,&outcome.degenerate_curve);
   }

@@ -32,6 +32,8 @@ struct Stage1ExecutionPreferences {
     int naf_w;
     std::optional<int> edwards_doubling;
     unsigned naf_memory_mb = 0;
+    unsigned cuda_slice_depth = 0; // Zero allows the legacy environment fallback.
+    bool cuda_low_cpu = false;
     int verbose=0;
     int device_index;
     std::string gpu_mul_path,gpu_sqr_path,gpu_add_path,gpu_sub_path,gpu_special_mult_path;

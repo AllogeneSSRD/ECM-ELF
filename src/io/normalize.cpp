@@ -238,6 +238,9 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     if (cfg.config_keys.count("edwards_doubling"))
         opt.execution.edwards_doubling = cfg.edwards_doubling;
     opt.execution.naf_memory_mb = unsigned(cfg.naf_memory_mb);
+    if (cfg.config_keys.count("cuda_slice_depth"))
+        opt.execution.cuda_slice_depth = unsigned(cfg.cuda_slice_depth);
+    opt.execution.cuda_low_cpu = cfg.cuda_low_cpu;
     opt.execution.verbose = cfg.verbose;
     opt.execution.device_index = cfg.device;
     opt.execution.ntt = {unsigned(cfg.ntt_length), unsigned(cfg.ntt_bpw), unsigned(cfg.ntt_tile),

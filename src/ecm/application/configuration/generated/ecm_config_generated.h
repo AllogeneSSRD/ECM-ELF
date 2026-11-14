@@ -137,6 +137,8 @@ struct Stage1Values {
     std::string p95_add_workers="";
     bool p95_keep_aid=true;
     bool p95_recover_lost=true;
+    int cuda_slice_depth=3;
+    bool cuda_low_cpu=false;
     std::string progress_color="cyan";
     double progress_log_seconds=60;
     double progress_average_seconds=0;
@@ -215,6 +217,8 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"p95_add_workers",[](Stage1Values&c,const std::string&v){assign_value(c.p95_add_workers,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_add_workers=v.p95_add_workers;}},
     {"p95_keep_aid",[](Stage1Values&c,const std::string&v){assign_value(c.p95_keep_aid,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_keep_aid=v.p95_keep_aid;}},
     {"p95_recover_lost",[](Stage1Values&c,const std::string&v){assign_value(c.p95_recover_lost,v);},[](Stage1Values&c,const Stage1Values&v){c.p95_recover_lost=v.p95_recover_lost;}},
+    {"cuda_slice_depth",[](Stage1Values&c,const std::string&v){assign_value(c.cuda_slice_depth,v);if(c.cuda_slice_depth!=2&&c.cuda_slice_depth!=3&&c.cuda_slice_depth!=8)throw std::runtime_error("cuda_slice_depth must be [2|3|8]");},[](Stage1Values&c,const Stage1Values&v){c.cuda_slice_depth=v.cuda_slice_depth;}},
+    {"cuda_low_cpu",[](Stage1Values&c,const std::string&v){assign_value(c.cuda_low_cpu,v);},[](Stage1Values&c,const Stage1Values&v){c.cuda_low_cpu=v.cuda_low_cpu;}},
     {"progress_color",[](Stage1Values&c,const std::string&v){assign_value(c.progress_color,v);},[](Stage1Values&c,const Stage1Values&v){c.progress_color=v.progress_color;}},
     {"progress_log_seconds",[](Stage1Values&c,const std::string&v){assign_value(c.progress_log_seconds,v);},[](Stage1Values&c,const Stage1Values&v){c.progress_log_seconds=v.progress_log_seconds;}},
     {"progress_average_seconds",[](Stage1Values&c,const std::string&v){assign_value(c.progress_average_seconds,v);if(c.progress_average_seconds<0||c.progress_average_seconds>60)throw std::runtime_error("progress_average_seconds must be within [0,60]");},[](Stage1Values&c,const Stage1Values&v){c.progress_average_seconds=v.progress_average_seconds;}},

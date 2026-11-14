@@ -6,7 +6,6 @@ const ecm_cuda_diagnostics::HostWaitHooks *active_hooks=nullptr;
 cudaError_t hook_create(cudaEvent_t *event){return active_hooks->event_create(event);}
 cudaError_t hook_record(cudaEvent_t event,cudaStream_t stream=0){return active_hooks->event_record(event,stream);}
 cudaError_t hook_event_sync(cudaEvent_t event){return active_hooks->event_sync(event);}
-cudaError_t hook_device_sync(){return active_hooks->device_sync();}
 cudaError_t hook_memcpy(void *dst,const void *src,size_t bytes,cudaMemcpyKind kind){return active_hooks->memcpy(dst,src,bytes,kind);}
 cudaError_t hook_last_error(){return active_hooks->last_error();}
 cudaError_t hook_elapsed(float *ms,cudaEvent_t start,cudaEvent_t stop){return active_hooks->elapsed(ms,start,stop);}
@@ -14,7 +13,6 @@ cudaError_t hook_elapsed(float *ms,cudaEvent_t start,cudaEvent_t stop){return ac
 #define cudaEventCreate hook_create
 #define cudaEventRecord hook_record
 #define cudaEventSynchronize hook_event_sync
-#define cudaDeviceSynchronize hook_device_sync
 #define cudaMemcpy hook_memcpy
 #define cudaGetLastError hook_last_error
 #define cudaEventElapsedTime hook_elapsed
@@ -22,7 +20,6 @@ cudaError_t hook_elapsed(float *ms,cudaEvent_t start,cudaEvent_t stop){return ac
 #undef cudaEventCreate
 #undef cudaEventRecord
 #undef cudaEventSynchronize
-#undef cudaDeviceSynchronize
 #undef cudaMemcpy
 #undef cudaGetLastError
 #undef cudaEventElapsedTime
@@ -39,5 +36,5 @@ int ecm_cuda_diagnostics::host_wait_run(const HostWaitHooks &hooks,mpz_srcptr n,
     active_hooks=&hooks;
     uint32_t snapshot_cursor=done;
     return ecm_edwards_cuda_detail::ECM_DIAG_JOIN(run_,ECM_HOST_WAIT_TIER)(
-        {n,scalar,states,count,done,snapshot_cursor,chunk,nullptr,nullptr,&plan,doubling,metrics,nullptr});
+        {n,scalar,states,count,done,snapshot_cursor,chunk,nullptr,nullptr,&plan,doubling,metrics,nullptr,false});
 }

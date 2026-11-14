@@ -34,12 +34,11 @@ static cudaError_t diagnostic_event_record(cudaEvent_t event,cudaStream_t stream
     return timed(1,[&]{return cudaEventRecord(event,stream);});
 }
 static cudaError_t diagnostic_event_sync(cudaEvent_t event) {
+    if(diagnostic_pre_sync==2) {
+        const auto rc=timed(0,[]{return cudaDeviceSynchronize();});
+        if(rc!=cudaSuccess)return rc;
+    }
     return timed(2,[&]{return cudaEventSynchronize(event);});
-}
-// The reference control suppresses only the production host device wait.
-// Its event wait still completes all GPU work before report/readback.
-static cudaError_t diagnostic_device_sync() {
-    return diagnostic_pre_sync==2?timed(0,[]{return cudaDeviceSynchronize();}):cudaSuccess;
 }
 static cudaError_t diagnostic_memcpy(void *dest,const void *src,size_t size,cudaMemcpyKind kind) {return timed(3,[&]{return cudaMemcpy(dest,src,size,kind);});}
 static cudaError_t diagnostic_last_error() {return timed(4,[]{return cudaGetLastError();});}
@@ -96,7 +95,7 @@ int main(int argc,char **argv) {
         }
         EcmEdwardsNaf plan(scalar.v,6);EcmEdwardsNafMetrics metrics;uint32_t done=0;
         const ecm_cuda_diagnostics::HostWaitHooks hooks{diagnostic_event_create,diagnostic_event_record,
-            diagnostic_event_sync,diagnostic_device_sync,diagnostic_memcpy,diagnostic_last_error,diagnostic_elapsed};
+            diagnostic_event_sync,diagnostic_memcpy,diagnostic_last_error,diagnostic_elapsed};
         const auto start=std::chrono::steady_clock::now();const auto cpu=process_cpu();
         const int rc=ecm_cuda_diagnostics::host_wait_run(hooks,n.v,scalar.v,states.data(),count,done,chunk,plan,4,&metrics);
         const auto cpu_seconds=process_cpu()-cpu;

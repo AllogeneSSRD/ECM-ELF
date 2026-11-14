@@ -755,6 +755,55 @@ M9689 墙钟范围：原 28.9426…30.5284 秒，新 29.1763…30.0343 秒。
 
 复现使用 `tools/bench/diagnose_stage1_host_wait.py --primary-only --adaptive-candidate` 进行三路控制，完整程序使用 `tools/bench/bench_stage1_host_wait.py --baseline ... --candidate ... --exponent ... --b1 ... --curves ... --output ...`；两个工具都要求新输出目录，GPU 固定为1。构建、完整命令、恢复门禁和当前限制见[主机等待草稿](../development/GPU_STAGE1_HOST_WAIT_DRAFT.md#0384-等待及切片优化)。临时草稿保留，由用户决定后续处理。
 
+## CUDA CGBN 切片深度与低 CPU 模式
+
+主测使用 M4423、B1=100,000、B2=0、128 条曲线，sigma 从 26 连续取值。两张卡是 RTX 4070 Ti 和 RTX 4060 Laptop，Windows WDDM 驱动 610.88，CUDA 13.3.73，sm_89、4608 位容器、TPI16、TPB128。Edwards 使用 NAF w6 和 HWCD。Montgomery 使用 PARAM0、LCM=12，分别跑 ladder 和 PRAC 7 档，PRAC 寄存器上限 168、目标片长 100 ms。当前默认三片滚动，低 CPU 模式默认关闭。两项的配置方式见 [TOML 配置参考](../ECM_TOML_REFERENCE.zh-CN.md#cuda_slice_depth)。
+
+### 2、3、8 片的提交开销
+
+![两张 GPU 上 2、3、8 片的进程墙钟、P95/P99 片间隔、CPU 核当量和停止延迟](attachments/stage1-cuda-slice-depths.png)
+
+- 八片组尾等待在六组中的片间隔 P99 为 1.041～3.618 ms。两片滚动降至 0.430～0.836 ms，三片为 0.402～0.494 ms。
+- 两片和三片的整批墙钟中位数在 Montgomery 各组相差不到 0.06 s。Edwards 在两张卡上用三片比两片少约 0.33～0.37 s，每格两次。
+- 停止延迟中位数在六组中均以两片最短，范围为 0.263～0.429 s，三片为 0.356～0.497 s，八片为 0.710～1.121 s。标准等待下，三种深度的整进程 CPU 占用中位数均接近一个逻辑核。
+
+墙钟和 CPU 每格两次，使用无 profiler 的完整进程，CPU 核当量为 Windows 进程 user 与 kernel CPU 时间之和除以启动至退出的墙钟。片间隔每格一次 Nsight Systems GPU 跟踪，按相邻算术切片内核的结束和开始时间计算，P95/P99 采用最近秩。停止每格三次，在进度约 35% 后按不同偏移触发 Windows 停止事件，计到进程退出。八片使用冻结构建 SHA-256 `e2974128cd1369d6734245448135b6f8261ef278e98ae59f5a09240317bba722`，两片和三片共用候选构建 `d2214296248847ea75b83f449dcfd825166ae80198df0a1101dbbfeebdf31460`，算术内核对象哈希一致。跟踪中的负载功耗中位数约为 4070 Ti 58～61 W、4060 Laptop 15～16 W。
+
+### 阻塞等待的 CPU 占用与吞吐
+
+![三片滚动下低 CPU 模式关闭、开启及最终版复测的 CPU 核当量，附短批次结果](attachments/stage1-cuda-low-cpu.png)
+
+每张卡每种算法在三片下各跑一次开关对照，关闭周期检查点。平均 CPU 占用从 **0.969～0.987 核降至 0.022～0.058 核**，六组存档摘要一致。标记为 `0.63.5` 的实验构建每格仅开启低 CPU 模式的复测为 **0.024～0.058 核**。B1=5,000、8 条曲线的短任务开启后整进程仍为 0.23～0.32 核，启动、准备和发布在短批次中的占比更高。
+
+开关对照和 RTX 4070 Ti 短批次使用同一预发布构建 SHA-256 `692419fc1172ca369f7fbcd046c3802c94e5d69f5dbb3ffdc017a5f0a31d7528`。开关对照的负载功耗中位数为 4070 Ti 59.5～61.9 W、4060 Laptop 15.0～16.1 W。标记为 `0.63.5` 的复测构建为 `4aa8ce74f4c9f2a68a0b896839d68c7b623c0466075bb2ee76181403b651fe62`，分别为 59.3～61.2 W、15.0～16.0 W。
+
+#### 同构建交错复测
+
+![同一构建在两张 GPU 上的低 CPU 模式开关整批耗时与配对吞吐变化](attachments/stage1-cuda-low-cpu-throughput.png)
+
+开关两组使用同一冻结构建，实验二进制自报 `0.64.0`，SHA-256 为 `56aaeb8ecf14b1d7586489723e7715e5a052439bc003c9a38dbcbf62259a1bb6`。同卡串行、两卡可并行，采用默认三片，关闭周期检查点。每张卡、每种算法交错开关三对。墙钟从进程启动计到退出。绝对吞吐为 128 除以每种设置的墙钟中位数。相对吞吐先对每对计算 `关时长 / 开时长 − 1`，再取三对中位数。
+
+| GPU | 算法 | 整批秒（关 → 开） | 曲线/秒（关 → 开） | 配对吞吐变化中位数 |
+| --- | --- | ---: | ---: | ---: |
+| RTX 4070 Ti | Edwards NAF | 10.079 → 10.287 | 12.70 → 12.44 | −2.07% |
+| RTX 4070 Ti | Montgomery ladder | 12.564 → 12.558 | 10.19 → 10.19 | +0.07% |
+| RTX 4070 Ti | Montgomery PRAC 7 | 12.397 → 12.441 | 10.33 → 10.29 | −0.88% |
+| RTX 4060 Laptop | Edwards NAF | 16.752 → 16.802 | 7.64 → 7.62 | −0.29% |
+| RTX 4060 Laptop | Montgomery ladder | 20.926 → 20.873 | 6.12 → 6.13 | +0.25% |
+| RTX 4060 Laptop | Montgomery PRAC 7 | 20.716 → 20.745 | 6.18 → 6.17 | −0.28% |
+
+RTX 4070 Ti 的 Edwards NAF 三对均变慢，每批多 0.190～0.229 s，吞吐下降 1.85%～2.22%。算术入口的配对耗时增量中位数为 0.173 s，日志中的切片内核累计时间只差 0.2～1.5 ms。主机等待和补片时机可能影响入口墙钟，仍在队列里的切片可以覆盖部分唤醒时间。要量出片间空泡，需要对开关两种模式单独跟踪 GPU 时间戳。
+
+其余五组的吞吐变化中位数均在 1% 以内。4070 Ti 的 PRAC 单对仍在 −1.12% 至 +3.96% 间波动。4060 Laptop 的 Edwards NAF 本次三对墙钟差为 −0.038～+0.097 s，早先单次的 +0.515 s 未复现。36 个纳入对照的样本存档末点逐组一致。CPU 占用由关闭时的 0.959～1.002 核降至 0.020～0.062 核。负载采样功耗中位数为 4070 Ti 57.4～62.1 W、4060 Laptop 15.1～16.4 W，实测 SM 时钟分别为 2610 MHz 和 1500 MHz。
+
+第一轮同一时段有三个关闭模式样本出现主机侧长停顿。4070 Ti PRAC 整批 221.854 s，其中累计内核 11.707 s。4060 Laptop 的 ladder 和 PRAC 分别为 45.528 s 和 177.344 s。停顿期间两张卡的日志均有多秒空档，原因未确认。图表使用这三组的完整补测对。若保留原对，4070 Ti PRAC 的吞吐变化中位数为 +3.96%，4060 Laptop 的 ladder 和 PRAC 四舍五入后的中位数与补测口径相同。原始报告和日志均保留。
+
+原始样本在 `data/experiments/prac-execution-4070ti-20261114/`。绘图读取 `rolling-summary.json`、`configured-{standard,blocking,final}-wall-gpu{0,1}/results.json`、短测的 `configured-{default,legacy}-wall-gpu0/results.json`，以及复测的 `configured-throughput-{paired,supplement}-gpu{0,1}/results.json`。停止恢复、跟踪样本筛选及完整记录见 [开发草稿](../development/GPU_STAGE1_SLICE_PIPELINE_DRAFT.md#两片与三片滚动提交)。图表用下列命令生成，正文引用 PNG 副本。 [绘图脚本](../../tools/bench/plot_stage1_cuda_slices.py)
+
+```powershell
+python tools/bench/plot_stage1_cuda_slices.py --input-dir data/experiments/prac-execution-4070ti-20261114 --output-dir data/figures/stage1_cuda_slices_20261114
+```
+
 ## GPU Edwards 细分实例三曲线族对照
 
 当前Edwards使用[32档最小可用容器](../architecture/STAGE1.md#gpu-edwards)，核函数和七组实例化文件位于 `kernels/cuda/`，保留17408档上限。以下为同一新exe的Edwards NAF、Montgomery PARAM0与PARAM3完整批次成本，不比较曲线族的因子发现概率。

@@ -9,7 +9,6 @@ struct HostWaitHooks {
     cudaError_t (*event_create)(cudaEvent_t *);
     cudaError_t (*event_record)(cudaEvent_t,cudaStream_t);
     cudaError_t (*event_sync)(cudaEvent_t);
-    cudaError_t (*device_sync)();
     cudaError_t (*memcpy)(void *,const void *,size_t,cudaMemcpyKind);
     cudaError_t (*last_error)();
     cudaError_t (*elapsed)(float *,cudaEvent_t,cudaEvent_t);

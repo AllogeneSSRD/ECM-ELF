@@ -31,6 +31,8 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","p95_add_workers","string","[<n>|<n>,...|<a>-<b>|auto]","stage1","prime95.workers","","stage1","prime95.workers",false,false},
     {"stage1","p95_keep_aid","bool","[false|true|0|1]","stage1","prime95.keep_aid","","stage1","prime95.keep_aid",false,false},
     {"stage1","p95_recover_lost","bool","[false|true|0|1]","stage1","prime95.recover_lost","","stage1","prime95.recover_lost",false,false},
+    {"stage1","cuda_slice_depth","int","[2|3|8]","stage1","cuda_slice_depth","","stage1","cuda_slice_depth",false,false},
+    {"stage1","cuda_low_cpu","bool","[false|true|0|1]","stage1","cuda_low_cpu","","stage1","cuda_low_cpu",false,false},
     {"stage1","progress_color","string","[none|red|green|yellow|blue|magenta|cyan|white|grey]","stage1","progress_color","","stage1","progress_color",false,false},
     {"stage1","progress_log_seconds","double","<x:R,finite>","stage1","progress_log_seconds","","stage1","progress_log_seconds",false,false},
     {"stage1","progress_average_seconds","double","[0..60]","stage1","progress_average_seconds","","stage1","progress_average_seconds",false,false},

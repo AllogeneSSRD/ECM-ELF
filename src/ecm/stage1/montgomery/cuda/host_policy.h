@@ -11,11 +11,14 @@ namespace ecm_cuda_mont_host {
 struct MontRequestedSpec {
     std::map<std::string,std::string> values;
     std::string default_plan_cache;
+    unsigned cuda_slice_depth = 0;
+    bool cuda_low_cpu = false;
     const char *get(const char *key) const {
         const auto found=values.find(key);return found==values.end()?nullptr:found->second.c_str();
     }
 };
-MontRequestedSpec capture_mont_request(const char *algorithm=nullptr, const std::string& default_cache_dir={});
+MontRequestedSpec capture_mont_request(const char *algorithm=nullptr, const std::string& default_cache_dir={},
+                                      unsigned cuda_slice_depth=0, bool cuda_low_cpu=false);
 const char *stage1_algorithm(const MontRequestedSpec &);
 struct PracPolicy {
     int mode;

@@ -14,7 +14,7 @@ Initialize-EcmBuildDirectory $Build
 $catalog=Get-EcmStage1Modules $repo $Build ([string]$Tier) $cuda
 $instance=@($catalog.modules|Where-Object{$_.curve -eq 'edwards' -and $_.bits -eq $Tier})
 if($instance.Count -ne 1){throw 'Host-wait probe requires one selected Edwards instance'}
-$sources=@('tools/test/stage1_host_wait_probe.cu','tools/test/adapters/edwards_host_wait.cu',
+$sources=@('tools/test/stage1_host_wait_probe.cu','tools/test/adapters/edwards_host_wait.cu','src/ecm/platform/stop.cpp',
     $instance[0].source,'src/ecm/stage1/scalar.cpp')
 $dirs=@('include','src','third_party/cgbn/include','third_party/gmp-zen3/dist/include')
 $deps=@(Get-EcmSourceClosure $repo $sources $dirs)+@('tools/build/test/build_stage1_host_wait_probe.ps1',

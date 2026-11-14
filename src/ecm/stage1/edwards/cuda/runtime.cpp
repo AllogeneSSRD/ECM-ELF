@@ -125,7 +125,8 @@ ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_edwards_batch(mpz_srcptr n,m
             };
             try {
                 result.code = tier->execute({n,scalar,states,count,done,snapshot_cursor,options.chunk,progress,context,
-                    plan.get(),options.doubling,metrics,ready});
+                    plan.get(),options.doubling,metrics,ready,options.pipeline,
+                    options.cuda_slice_depth,options.cuda_low_cpu,options.checkpoint_due});
                 break;
             } catch (const ecm_edwards_cuda_detail::DeviceAllocationError&) {
                 if (started || done || !can_lower || !window || (window == 2 && !can_use_binary))

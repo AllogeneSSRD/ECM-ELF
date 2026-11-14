@@ -156,8 +156,13 @@ def assignment(o, key=None):
         else:
             code = f"{dst}=v;"
     elif kind == "enum":
-        valid="&&".join("v!="+literal(x) for x in o["values"])
-        code=f"if({valid})throw std::runtime_error({literal(key+' must be '+o['domain'])});{dst}=v;"
+        message = literal(key + " must be " + o["domain"])
+        if o["type"] == "int":
+            invalid = "&&".join(f"{dst}!={x}" for x in o["values"])
+            code = f"assign_value({dst},v);if({invalid})throw std::runtime_error({message});"
+        else:
+            invalid = "&&".join("v!=" + literal(x) for x in o["values"])
+            code = f"if({invalid})throw std::runtime_error({message});{dst}=v;"
     elif kind == "strict":
         if o["type"] == "string":
             code = f"{dst}=v;"

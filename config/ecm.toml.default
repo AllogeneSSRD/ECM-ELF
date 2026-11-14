@@ -69,6 +69,20 @@ save_dir = "."  # string: <path>
 # 指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此
 # 键不是 Stage2 全部临时显存或内存的预算。
 
+# cuda_slice_depth = 3  # int: [2|3|8]
+# CUDA CGBN Stage1 slice submission. 2 and 3 keep a rolling queue of up to that many slices; 8 waits
+# at the end of each group of up to eight. When omitted, the legacy ECM_CUDA_STAGE1_SLICE_DEPTH
+# environment variable can override the default.
+# CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片，8 按最多八片一组等待组尾。仅在
+# TOML 未设此项时，旧环境变量 ECM_CUDA_STAGE1_SLICE_DEPTH 可覆盖默认值。
+
+# cuda_low_cpu = false  # bool: [false|true|0|1]
+# Set to 1 or true to put the CUDA CGBN Stage1 host thread to sleep while waiting for GPU
+# completions, regardless of slice depth. This mode is intended to reduce host CPU use and may
+# increase wake-up latency.
+# 设为 1 或 true 后，CUDA CGBN Stage1 主机线程在等待 GPU 完成时休眠，对所有切片深度优先生效。此模式
+# 用于降低 CPU 占用，唤醒可能稍慢。
+
 verbose = true  # bool: [false|true|0|1]
 # Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries;
 # stage2_debug_log independently controls debug logging. Stage1 uses the selected backend's normal

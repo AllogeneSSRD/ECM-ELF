@@ -191,13 +191,13 @@ Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery
 
 GPU Edwards 的 live 计时从设备准备回调开始，已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，取最近最多 50 个样本的速度算术平均。每曲线耗时等于总工作量除以平均速度和曲线数，剩余时间等于未完成工作量除以平均速度。速度样本包含进入进度回调之前的设备工作，排除回调中的周期检查点导出、写入及进度输出。`elapsed` 覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/stage1/progress.h)。Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/stage1/edwards/cuda/workflow.cpp)，设备准备边界位于 [binary/NAF 主机循环](../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl)。
 
-GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
+GPU Edwards 在已完成的提交窗口边界更新进度，GUI 管道可读取百分比。窗口确定后，NAF 与二进制都只在保存检查点、停止或完成时读取点状态。窗口调度与 Montgomery 共用 [CUDA CGBN 切片提交](#cuda-cgbn-切片提交)。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)。
 
-**切片与主机等待。** Edwards binary/NAF 入口设置阻塞设备调度。NAF 记录结束事件，设备同步后检查事件和 CGBN 报告，再推进执行游标。主机快照游标仅在坐标转换、回读和导入成功后更新。binary 每片回读普通状态，设备同步也采用阻塞调度。当前每个 Stage1 调用只使用默认流。
+Edwards binary/NAF 的设备入口设置阻塞设备调度。两种模式都在默认流上记录窗口结束事件，等待结束后检查 CGBN 报告。主机快照游标只在坐标转换、回读和导入成功后推进。
 
-生产调用的切片参数为 0，由共用 `EcmEdwardsSlice` 从 32 列/位起步，按上一片时间调整到约 100 ms；范围为 16…4096，单次增长/缩小不超过 4 倍，末尾剩余量单独截断。NAF 使用 CUDA event 时间，binary 使用提交至设备同步返回的墙钟时间。正数 API 参数仍指定固定切片，便于独立对照。目标时间不是硬性截止时间，设备负载变化、边界限制、回读和检查点写入仍会影响实际响应。
+生产调用的切片参数为 0，由共用 `EcmEdwardsSlice` 从 32 列或位起步，按窗口的 CUDA event 平均片时长调整到约 100 ms。范围为 16…4096，单次增减最多 4 倍，末尾按剩余量截断。正数 API 参数指定固定切片。设备负载、切片上下限、主机同步和检查点写入会影响实际响应时间。
 
-切片大小不保存进检查点，恢复后重新采样。检查点保存标量身份、窗口、列位置和普通域累加点。字典随设备状态重建。Windows 11 / WDDM、驱动 610.88 的 GPU1 实测中，仅阻塞事件标志未降低占用。等待诊断见 [主机等待草稿](../development/GPU_STAGE1_HOST_WAIT_DRAFT.md)。
+切片大小不保存进检查点，恢复后重新采样。检查点保存标量身份、窗口、列位置和普通域累加点。字典随设备状态重建。
 
 ### Montgomery resident 与 PRAC
 
@@ -206,6 +206,16 @@ resident 路径将点状态保持在 Montgomery 域，减少切片间往返转�
 选链规则、Prime95 的 `PracSearch` 与本仓库固定宽度的差异，以及耗时和计划体积见 [PRAC](PRAC.md)。
 
 PRAC 的 `single-compact` 专用体将 xADD 统一到一个调用点，倍点使用紧凑临时状态；终结规则和非终结规则共同维护同一组点角色。此路径仅在已编译的位宽/TPI/寄存器组合可选，缺失实例须报错。它不是发布默认算法。
+
+### CUDA CGBN 切片提交
+
+CUDA CGBN 的 Montgomery ladder、resident、PRAC，以及 Edwards NAF 和 binary，在同一 CUDA stream 上按游标顺序提交。通过 `[stage1].cuda_slice_depth` 选择两片或三片滚动提交，或八片组尾等待。滚动提交回收最旧切片的事件和错误快照后补片，并按已完成片的设备计时调整后续长度。组尾等待按窗口平均时间调整片长。各片原地更新同一份设备点缓冲。worker 的显式值覆盖全局设置，TOML 两处均未设置时可沿用 `ECM_CUDA_STAGE1_SLICE_DEPTH`。
+
+`[stage1].cuda_low_cpu = 1` 让主机通过阻塞式 CUDA 完成事件等待，在 GPU 执行期间休眠。它适用于各切片深度，也用于 Edwards NAF 字典的完成事件。两项的默认值见 [TOML 配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
+
+主机确认事件并检查 CGBN 错误后才推进已完成游标。周期检查点到期或收到停止请求后暂停补片，回收在途切片并从已确认的游标读回坐标。滚动槽使用固定页主机内存，后续切片在设备运行时仍可读取最旧切片的错误快照。Montgomery 调试 dump 和 PRAC 限时采样保留单片边界，Edwards 独立算术调用保留逐片回调粒度。
+
+提交实现见 [cuda_slices.h](../../src/ecm/stage1/cuda_slices.h)，调用点见 [Montgomery ladder](../../src/ecm/stage1/montgomery/cuda/runtime.cu)、[Montgomery PRAC 和 resident](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu) 和 [Edwards CUDA](../../src/ecm/stage1/edwards/cuda/edwards_runtime.inl)。两张卡的 M4423 对照见 [Stage1 性能依据](../performance/STAGE1.md#cuda-cgbn-切片深度与低-cpu-模式)，停止恢复证据见 [切片提交窗口开发草稿](../development/GPU_STAGE1_SLICE_PIPELINE_DRAFT.md)。
 
 ## 位宽与资源
 

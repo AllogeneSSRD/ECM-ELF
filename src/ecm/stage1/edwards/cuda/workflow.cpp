@@ -122,12 +122,12 @@ static bool progress(Progress& p, uint32_t done, const ecm_cuda_stage1::EdwardsS
     p.speed.add(p.delta,
                 std::chrono::duration<double, std::milli>(sample_time - p.sample_start).count());
     p.sampled = done;
-    const bool stop = ecm_stage1_stop_requested();
+    const bool stop = snapshot && ecm_stage1_stop_requested();
     const auto now = sample_time;
     if (!p.printed || stop || done == p.total ||
         sample_time - p.last_print >= std::chrono::milliseconds(200))
         p.display(sample_time);
-    if (done < p.total &&
+    if (snapshot && done < p.total &&
         (stop || (p.opt.persistence.ckpt_ms &&
                   now - p.last >= std::chrono::milliseconds(p.opt.persistence.ckpt_ms)))) {
         bool saved = true;
@@ -375,7 +375,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 throw std::runtime_error(error);
             }
         }
-        const EdwardsOptions execution{
+        EdwardsOptions execution{
             opt.execution.device_index, batch.window, batch.doubling, 0, !restored,
             !restored && !opt.execution.naf_w && mode_fixed < 0 && !dbl_env,
             [&](unsigned requested, unsigned selected, size_t required, size_t budget) {
@@ -395,7 +395,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                                "window=%u doubling=%d\n",
                                opt.execution.device_index, curves, n_bits,
                                mpz_sizeinbase(scalar.v, 2), batch.window, batch.doubling);
-            }, opt.execution.naf_memory_mb};
+            }, opt.execution.naf_memory_mb, true, opt.execution.cuda_slice_depth, opt.execution.cuda_low_cpu};
         EcmEdwardsNafMetrics metrics;
         Progress p{checkpoint, batch,
                    n,
@@ -407,6 +407,10 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                    &metrics,
                    initialization_start};
         p.durable = restored ? batch.done : 0;
+        execution.checkpoint_due = [&p] {
+            return !p.path.empty() && p.opt.persistence.ckpt_ms &&
+                Progress::Clock::now() - p.last >= std::chrono::milliseconds(p.opt.persistence.ckpt_ms);
+        };
         phase = ecm_stage1::FailureSource::Execution;
         const auto arithmetic_start = std::chrono::steady_clock::now();
         // Execute with checkpoint safe points; final files belong to task.

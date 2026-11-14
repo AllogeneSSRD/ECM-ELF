@@ -30,6 +30,8 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","p95_add_workers","[<n>|<n>,...|<a>-<b>|auto]","option_stage1_p95_add_workers","string",false,false,0,0},
     {"stage1","p95_keep_aid","[false|true|0|1]","option_stage1_p95_keep_aid","bool",false,false,0,0},
     {"stage1","p95_recover_lost","[false|true|0|1]","option_stage1_p95_recover_lost","bool",false,false,0,0},
+    {"stage1","cuda_slice_depth","[2|3|8]","option_stage1_cuda_slice_depth","int",false,false,0,0},
+    {"stage1","cuda_low_cpu","[false|true|0|1]","option_stage1_cuda_low_cpu","bool",false,false,0,0},
     {"stage1","progress_color","[none|red|green|yellow|blue|magenta|cyan|white|grey]","option_stage1_progress_color","string",false,false,0,0},
     {"stage1","progress_log_seconds","<x:R,finite>","option_stage1_progress_log_seconds","double",false,false,0,0},
     {"stage1","progress_average_seconds","[0..60]","option_stage1_progress_average_seconds","double",true,true,0,60},

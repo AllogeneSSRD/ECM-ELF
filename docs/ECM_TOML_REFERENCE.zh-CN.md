@@ -271,6 +271,26 @@ v1 旧键 `stage1.stage1_threads`
 
 设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。
 
+### cuda_low_cpu
+
+```toml
+cuda_low_cpu = false
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] stage1.cuda_low_cpu` · 级别 `常用`。
+
+设为 1 或 true 后，CUDA CGBN Stage1 主机线程在等待 GPU 完成时休眠，对所有切片深度优先生效。此模式用于降低 CPU 占用，唤醒可能稍慢。
+
+### cuda_slice_depth
+
+```toml
+cuda_slice_depth = 3
+```
+
+类型 `int` · 范围 `[2|3|8]` · Worker 覆盖 `[worker.N] stage1.cuda_slice_depth` · 级别 `常用`。
+
+CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片，8 按最多八片一组等待组尾。仅在 TOML 未设此项时，旧环境变量 ECM_CUDA_STAGE1_SLICE_DEPTH 可覆盖默认值。
+
 ### edwards_doubling
 
 ```toml

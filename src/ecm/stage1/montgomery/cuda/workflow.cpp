@@ -43,7 +43,9 @@ ecm_stage1::ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& r
         result.curves.resize(curves);
 
         // Prepare: freeze the algorithm request before checkpoint inspection.
-        const auto requested = ecm_cuda_mont_host::capture_mont_request(opt.cgbn_algorithm.c_str(), opt.persistence.exponent_cache_dir);
+        const auto requested = ecm_cuda_mont_host::capture_mont_request(
+            opt.cgbn_algorithm.c_str(), opt.persistence.exponent_cache_dir,
+            opt.execution.cuda_slice_depth, opt.execution.cuda_low_cpu);
 
         ecm_edwards::Integer owned_scalar;
         auto* batch_s = owned_scalar.v;

@@ -9,6 +9,7 @@
 #include "../../../../cuda/runtime/cuda_ecm_shim.h"
 #include <algorithm>
 #include "ecm/stage1/progress.h"
+#include "../../../cuda_slices.h"
 #include <cstring>
 using namespace ecm_cuda_mont_host;
 #define CUDA_CHECK(action) ecm_cuda_stage1::check_cuda(action,#action)
@@ -155,7 +156,8 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
         CUDA_CHECK(cudaMemcpy(gpu.control, prac ? static_cast<const void *>(plan.primes.data()) : exponent.get(),
                               control_bytes, cudaMemcpyHostToDevice));
         CUDA_CHECK(cgbn_error_report_alloc(&gpu.report));
-        CUDA_CHECK(cudaEventCreate(&gpu.begin)); CUDA_CHECK(cudaEventCreate(&gpu.end));
+        CUDA_CHECK(cudaEventCreate(&gpu.begin));
+        CUDA_CHECK(cudaEventCreateWithFlags(&gpu.end,slice_wait_flags(requested.cuda_low_cpu)));
         const uint32_t np0 = find_np0(N), blocks=uint32_t(resolved.blocks);
         auto launch = [&](cgbn_stage1_kernel_fn fn, uint64_t first, uint64_t length) {
             cgbn_stage1_launch(fn,blocks,TPB_DEFAULT,gpu.report, s_bits, first, length, gpu.control, gpu.data, curves, 0, np0);
@@ -194,15 +196,42 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
         ecm_stage1_gpu_progress::SpeedWindow speed;
         double kernel_seconds = 0, last_print = -1;
         const double sample_limit=prac_sample_limit(requested);
+        auto rolling=RollingSlices<uint64_t>::create(h.next,
+            rolling_slice_depth(sample_limit <= 0,requested.cuda_slice_depth),requested.cuda_low_cpu,gpu.report);
+        const auto checkpoint_due=[&] {
+            return checkpoint_ms && std::chrono::steady_clock::now() - last_ckpt >=
+                std::chrono::milliseconds(checkpoint_ms);
+        };
         while (h.next < total) {
-            uint64_t length = std::min(chunk, total - h.next), work = 0;
-            if (prac) for (uint64_t i = h.next; i < h.next + length; ++i) work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
-            else work = length;
-            CUDA_CHECK(cudaEventRecord(gpu.begin)); launch(resolved.entry, h.next, length);
-            CUDA_CHECK(cudaEventRecord(gpu.end)); CUDA_CHECK(cudaEventSynchronize(gpu.end));
-            CGBN_CHECK(gpu.report);
-            float ms = 0; CUDA_CHECK(cudaEventElapsedTime(&ms, gpu.begin, gpu.end));
-            kernel_seconds += ms / 1000.0; h.next += length; completed_work += work;
+            uint64_t end;
+            unsigned launches=1;
+            float ms=0;
+            if(rolling) {
+                const auto completed=rolling->next(total,chunk,checkpoint_due(),
+                    [&](cgbn_error_report_t *errors,uint64_t first,uint64_t length) {
+                        cgbn_stage1_launch(resolved.entry,blocks,TPB_DEFAULT,errors,s_bits,first,length,
+                                          gpu.control,gpu.data,curves,0,np0);
+                        CUDA_CHECK(cudaGetLastError());
+                    });
+                CGBN_CHECK(completed.report);
+                end=completed.end; ms=completed.milliseconds;
+            } else {
+                CUDA_CHECK(cudaEventRecord(gpu.begin));
+                const auto slices = submit_slice_window(h.next,total,chunk,sample_limit <= 0,
+                    [&](uint64_t first,uint64_t length) { launch(resolved.entry,first,length); });
+                CUDA_CHECK(cudaEventRecord(gpu.end)); CUDA_CHECK(cudaEventSynchronize(gpu.end));
+                CGBN_CHECK(gpu.report);
+                CUDA_CHECK(cudaEventElapsedTime(&ms,gpu.begin,gpu.end));
+                end=slices.end; launches=slices.launches;
+            }
+            const uint64_t length = end - h.next;
+            uint64_t work = length;
+            if (prac) {
+                work = 0;
+                for (uint64_t i = h.next; i < end; ++i)
+                    work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
+            }
+            kernel_seconds += ms / 1000.0; h.next = end; completed_work += work;
             double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_wall).count();
             outcome.cursor=h.next;
             speed.add(work,ms);
@@ -218,9 +247,9 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
                         (unsigned long long)length, double(ms));
                 last_print = elapsed;
             }
-            auto now = std::chrono::steady_clock::now();
-            const bool stopping=ecm_stage1_stop_requested();
-            if (sampled || stopping || h.next>=total || (checkpoint_ms && std::chrono::duration<double, std::milli>(now - last_ckpt).count() >= checkpoint_ms)) {
+            const bool safe_snapshot=!rolling || rolling->empty();
+            const bool stopping=safe_snapshot && ecm_stage1_stop_requested();
+            if (safe_snapshot && (sampled || stopping || h.next>=total || checkpoint_due())) {
                 CUDA_CHECK(cudaMemcpy(data.data(), gpu.data, bytes, cudaMemcpyDeviceToHost));
                 outcome.snapshot_cursor=h.next;
                 if(!path.empty()) {
@@ -238,8 +267,11 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
                 outputf(OUTPUT_ALWAYS, "GPU: sample limit reached; incomplete Stage1 saved only as checkpoint\n");
                 return ECM_ERROR; // Driver must not publish an incomplete final Stage1 save.
             }
-            if (ms < target_ms * 0.8) chunk = std::max<uint64_t>(chunk + 1, chunk * 11 / 10);
-            else if (ms > target_ms * 1.2) chunk = std::max<uint64_t>(1, chunk * 9 / 10);
+            if (!rolling || length == chunk) {
+                const double slice_ms = ms / launches;
+                if (slice_ms < target_ms * 0.8) chunk = std::max<uint64_t>(chunk + 1, chunk * 11 / 10);
+                else if (slice_ms > target_ms * 1.2) chunk = std::max<uint64_t>(1, chunk * 9 / 10);
+            }
         }
         uint32_t dummy;
         launch(cgbn_stage1_domain_dispatch(bits, &dummy, ECM_DOMAIN_EXPORT, requested_tpi), 0, 0);

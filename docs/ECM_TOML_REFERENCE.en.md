@@ -271,6 +271,26 @@ Legacy v1 key `stage1.stage1_threads`
 
 CPU Stage1 thread count; 0 selects automatically. Applies only to CPU arithmetic and does not set CUDA threads per block or threads per integer.
 
+### cuda_low_cpu
+
+```toml
+cuda_low_cpu = false
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage1.cuda_low_cpu` · Level `core`.
+
+Set to 1 or true to put the CUDA CGBN Stage1 host thread to sleep while waiting for GPU completions, regardless of slice depth. This mode is intended to reduce host CPU use and may increase wake-up latency.
+
+### cuda_slice_depth
+
+```toml
+cuda_slice_depth = 3
+```
+
+Type `int` · Range `[2|3|8]` · Worker override `[worker.N] stage1.cuda_slice_depth` · Level `core`.
+
+CUDA CGBN Stage1 slice submission. 2 and 3 keep a rolling queue of up to that many slices; 8 waits at the end of each group of up to eight. When omitted, the legacy ECM_CUDA_STAGE1_SLICE_DEPTH environment variable can override the default.
+
 ### edwards_doubling
 
 ```toml

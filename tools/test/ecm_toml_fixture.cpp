@@ -26,6 +26,25 @@ static void rejected(const std::filesystem::path &path,const std::string &body,
     catch(const std::exception &) {return;}
     throw std::runtime_error("invalid TOML was accepted: "+body);
 }
+static void cuda_slice_config(const std::filesystem::path& path) {
+    write(path, "config_version=3\n[stage1]\ncuda_slice_depth=2\ncuda_low_cpu=1\n"
+                "[worker.2]\nstage1.cuda_slice_depth=8\nstage1.cuda_low_cpu=0\n"
+                "[worker.3]\nstage1.cuda_slice_depth=+3\n");
+    ParsedConfig parsed;
+    expect(read_config(path.string(), parsed), "valid CUDA Stage1 config rejected");
+    EcmQueueConfig cfg;
+    project_stage1_config(parsed, 1, cfg);
+    expect(cfg.cuda_slice_depth == 2 && cfg.cuda_low_cpu && cfg.config_keys.count("cuda_slice_depth"),
+        "CUDA Stage1 global config not inherited");
+    project_stage1_config(parsed, 2, cfg);
+    expect(cfg.cuda_slice_depth == 8 && !cfg.cuda_low_cpu, "CUDA Stage1 worker override not applied");
+    project_stage1_config(parsed, 3, cfg);
+    expect(cfg.cuda_slice_depth == 3 && cfg.cuda_low_cpu, "CUDA Stage1 worker did not inherit wait mode");
+    for (const auto* value : {"0", "1", "4", "9", "'3'", "3.0"})
+        rejected(path, std::string("config_version=3\n[stage1]\ncuda_slice_depth=") + value + "\n");
+    rejected(path, "config_version=3\n[worker.2]\nstage1.cuda_low_cpu=2\n");
+}
+
 static void edwards_doubling_config(const std::filesystem::path& path) {
     write(path, "config_version=3\n[stage1]\nedwards_doubling=0\n"
                 "[worker.2]\nstage1.edwards_doubling=1\n");
@@ -280,6 +299,7 @@ int main(int argc,char **argv) {
         versioned_paths(argv[2]);
         cpu_slice_config(argv[2]);
         v3_shared_config(argv[2]);
+        cuda_slice_config(argv[2]);
         edwards_doubling_config(argv[2]);
         const auto *tail_meta=ecm_config::toml_option("stage2","stage2_giant_tail_balance");
         expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true|0|1]",
@@ -292,6 +312,8 @@ int main(int argc,char **argv) {
         expect(defaults1.gpu_param==3,
                "Stage1 generated default differs from TOML");
         expect(defaults1.progress_average_seconds==0,"speed averaging must default to off");
+        expect(defaults1.cuda_slice_depth==3 && !defaults1.cuda_low_cpu,
+               "CUDA Stage1 defaults must be three slices and standard waiting");
         expect(defaults1.edwards_doubling==1, "Edwards doubling must default to 2XY");
         expect(defaults2.device==-1,
                "Stage2 inheritance sentinel differs from TOML");

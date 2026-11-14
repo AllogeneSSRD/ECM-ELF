@@ -18,6 +18,10 @@ struct Request {
     int doubling;
     EcmEdwardsNafMetrics *metrics;
     const std::function<void()> &prepared;
+    bool pipeline;
+    unsigned cuda_slice_depth=0;
+    bool cuda_low_cpu=false;
+    std::function<bool()> checkpoint_due;
 };
 #define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) int run_##W(const Request &request);
 #include "../../../cuda/dispatch/tiers.def"
