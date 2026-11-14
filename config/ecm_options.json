@@ -785,6 +785,22 @@
     },
     {
       "owner": "stage1",
+      "key": "edwards_doubling",
+      "field": "edwards_doubling",
+      "type": "int",
+      "default": 1,
+      "minimum": 0,
+      "maximum": 1,
+      "domain": "[0|1]",
+      "fx": "cuda_edwards_naf_doubling",
+      "parser": "strict",
+      "description": [
+        "Doubling formula for new CUDA CGBN Edwards NAF batches. 0 selects HWCD, 1 selects 2XY (default). Applies to the main loop. Restoring a checkpoint uses the saved formula. If this key is omitted, the legacy ECM_EDWARDS_DBL_ALGO environment variable can override the default. CPU, CUDA NTT, and binary Edwards do not use this setting.",
+        "新 CUDA CGBN Edwards NAF 批次的主循环倍点公式。0 选择 HWCD，1 选择 2XY（默认）。检查点恢复沿用存档中的公式。仅在省略此键时，旧环境变量 ECM_EDWARDS_DBL_ALGO 可覆盖默认值。CPU、CUDA NTT 和 Edwards binary 路径不使用此设置。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "naf_memory_mb",
       "v2_key": "naf_memory_mb",
       "field": "naf_memory_mb",

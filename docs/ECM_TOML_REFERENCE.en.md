@@ -271,6 +271,16 @@ Legacy v1 key `stage1.stage1_threads`
 
 CPU Stage1 thread count; 0 selects automatically. Applies only to CPU arithmetic and does not set CUDA threads per block or threads per integer.
 
+### edwards_doubling
+
+```toml
+edwards_doubling = 1
+```
+
+Type `int` · Range `[0|1]` · Worker override `[worker.N] stage1.edwards_doubling` · Level `advanced`.
+
+Doubling formula for new CUDA CGBN Edwards NAF batches. 0 selects HWCD, 1 selects 2XY (default). Applies to the main loop. Restoring a checkpoint uses the saved formula. If this key is omitted, the legacy ECM_EDWARDS_DBL_ALGO environment variable can override the default. CPU, CUDA NTT, and binary Edwards do not use this setting.
+
 <a id="naf_w"></a>
 
 ### edwards_naf_window_bits

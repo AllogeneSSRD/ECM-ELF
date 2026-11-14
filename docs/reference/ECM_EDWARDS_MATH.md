@@ -69,7 +69,7 @@ Prime95 `choose_atkin_morain`（`ecm.cpp:4256`），参考论文 §7（ePrint 20
 - 逐 bit：1 次倍点 +（非零位）1 次加法。
 - 命中判定：在非奇异模素数 p 曲线上，`[s]P = 恒等点 (0,1)` ⇔ `ord(P)` 整除 s；s 含额外挠子群乘子时，不可把此条件直接写成 lcm 的 powersmooth 条件。
 
-> 窗口 w 只影响性能不影响结果，交叉验证用任意 w 均可；Prime95 默认 DictionaryMemory=256MB → w≈14（4675 字典项，见 screen.log）。
+固定标量、曲线和基点后，各窗口都求同一个群元素。合数模数上的字典归一化还可能提前暴露因子。Prime95 v31.06 build 1 的 `DictionaryMemory` 默认 256 MiB，实际字典项数由指数块成本、GWNUM 缓冲区大小和内存上限共同决定。一次实测曾用 4675 项。该项数没有对应的固定整数窗口。见 [NAF 架构中的 Prime95 对照](../architecture/NAF.md#prime95-对照)。
 
 
 ## 4. 曲线构造 + 标量乘的 stage-1 结果（交叉验证口径）

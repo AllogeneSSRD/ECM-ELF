@@ -166,7 +166,8 @@ def main():
                     folder = out/name; folder.mkdir()
                     save = folder/'completed.save'
                     edwards = model in ('ed', 'ed-5', 'ed-binary')
-                    selected_doubling = 5 if model == 'ed-5' else (a.doubling if model == 'ed' else None)
+                    selected_doubling = (5 if model == 'ed-5' else
+                                         (a.doubling or 4) if model == 'ed' else None)
                     command = [exe, '--curve', 'ed' if edwards else 'mont', '--target', 'gpu',
                         '-d', a.device, '-sigma', a.sigma, '-gpucurves', a.curves, '--ckpt', 0,
                         '--exp-cache', out/'exp_cache', '--tmp-dir', folder/'scratch', '-save', save, '-v']

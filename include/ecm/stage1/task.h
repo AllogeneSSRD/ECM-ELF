@@ -4,6 +4,7 @@
 #include <gmp.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@ struct Stage1ExecutionPreferences {
     uint32_t stage1_threads;
     std::vector<unsigned> affinity_cpus;
     int naf_w;
+    std::optional<int> edwards_doubling;
     unsigned naf_memory_mb = 0;
     int verbose=0;
     int device_index;

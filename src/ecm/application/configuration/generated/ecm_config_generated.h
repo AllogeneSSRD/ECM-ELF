@@ -18,6 +18,8 @@ inline constexpr int64_t stage1_skip_minimum=0;
 inline constexpr int64_t stage1_skip_maximum=2;
 inline constexpr int64_t stage1_progress_average_seconds_minimum=0;
 inline constexpr int64_t stage1_progress_average_seconds_maximum=60;
+inline constexpr int64_t stage1_edwards_doubling_minimum=0;
+inline constexpr int64_t stage1_edwards_doubling_maximum=1;
 inline constexpr int64_t stage1_naf_memory_mb_minimum=0;
 inline constexpr int64_t stage1_naf_memory_mb_maximum=1048576;
 inline constexpr int64_t stage1_ckpt_backups_minimum=0;
@@ -150,6 +152,7 @@ struct Stage1Values {
     std::string save_name_pattern="{curve}_{target}_{b1}.save";
     std::string exp_cache="";
     int naf_w=0;
+    int edwards_doubling=1;
     int naf_memory_mb=0;
     std::string scalar_construction="1";
     uint64_t sigma=0;
@@ -227,6 +230,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"save_name_pattern",[](Stage1Values&c,const std::string&v){assign_value(c.save_name_pattern,v);},[](Stage1Values&c,const Stage1Values&v){c.save_name_pattern=v.save_name_pattern;}},
     {"exp_cache",[](Stage1Values&c,const std::string&v){assign_value(c.exp_cache,v);},[](Stage1Values&c,const Stage1Values&v){c.exp_cache=v.exp_cache;}},
     {"naf_w",[](Stage1Values&c,const std::string&v){assign_value(c.naf_w,v);},[](Stage1Values&c,const Stage1Values&v){c.naf_w=v.naf_w;}},
+    {"edwards_doubling",[](Stage1Values&c,const std::string&v){c.edwards_doubling=static_cast<int>(bounded_integer(v,"edwards_doubling",0,1));},[](Stage1Values&c,const Stage1Values&v){c.edwards_doubling=v.edwards_doubling;}},
     {"naf_memory_mb",[](Stage1Values&c,const std::string&v){assign_value(c.naf_memory_mb,v);},[](Stage1Values&c,const Stage1Values&v){c.naf_memory_mb=v.naf_memory_mb;}},
     {"lcm",[](Stage1Values&c,const std::string&v){assign_value(c.scalar_construction,v);},[](Stage1Values&c,const Stage1Values&v){c.scalar_construction=v.scalar_construction;}},
     {"sigma",[](Stage1Values&c,const std::string&v){assign_value(c.sigma,v);},[](Stage1Values&c,const Stage1Values&v){c.sigma=v.sigma;}},

@@ -271,6 +271,16 @@ v1 旧键 `stage1.stage1_threads`
 
 设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。
 
+### edwards_doubling
+
+```toml
+edwards_doubling = 1
+```
+
+类型 `int` · 范围 `[0|1]` · Worker 覆盖 `[worker.N] stage1.edwards_doubling` · 级别 `高级`。
+
+新 CUDA CGBN Edwards NAF 批次的主循环倍点公式。0 选择 HWCD，1 选择 2XY（默认）。检查点恢复沿用存档中的公式。仅在省略此键时，旧环境变量 ECM_EDWARDS_DBL_ALGO 可覆盖默认值。CPU、CUDA NTT 和 Edwards binary 路径不使用此设置。
+
 <a id="naf_w"></a>
 
 ### edwards_naf_window_bits

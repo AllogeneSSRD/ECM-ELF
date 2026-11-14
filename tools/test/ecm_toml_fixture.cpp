@@ -26,6 +26,21 @@ static void rejected(const std::filesystem::path &path,const std::string &body,
     catch(const std::exception &) {return;}
     throw std::runtime_error("invalid TOML was accepted: "+body);
 }
+static void edwards_doubling_config(const std::filesystem::path& path) {
+    write(path, "config_version=3\n[stage1]\nedwards_doubling=0\n"
+                "[worker.2]\nstage1.edwards_doubling=1\n");
+    ParsedConfig parsed;
+    expect(read_config(path.string(), parsed), "valid Edwards doubling config rejected");
+    EcmQueueConfig cfg;
+    project_stage1_config(parsed, 1, cfg);
+    expect(cfg.edwards_doubling == 0 && cfg.config_keys.count("edwards_doubling"),
+           "Edwards HWCD config not inherited");
+    project_stage1_config(parsed, 2, cfg);
+    expect(cfg.edwards_doubling == 1, "Edwards worker override not applied");
+    for (const auto* value : {"-1", "2", "'1'", "1.0", "true"})
+        rejected(path, std::string("config_version=3\n[stage1]\nedwards_doubling=") + value + "\n");
+}
+
 static void boolean_diagnostic(const std::filesystem::path &path, bool worker) {
     write(path, std::string(worker ? "[workers.2.stage2]" : "[stage2]") +
                 "\nstage2_giant_tail_balance = 1.0\n");
@@ -265,6 +280,7 @@ int main(int argc,char **argv) {
         versioned_paths(argv[2]);
         cpu_slice_config(argv[2]);
         v3_shared_config(argv[2]);
+        edwards_doubling_config(argv[2]);
         const auto *tail_meta=ecm_config::toml_option("stage2","stage2_giant_tail_balance");
         expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true|0|1]",
             "boolean error hint omits accepted aliases");
@@ -276,6 +292,7 @@ int main(int argc,char **argv) {
         expect(defaults1.gpu_param==3,
                "Stage1 generated default differs from TOML");
         expect(defaults1.progress_average_seconds==0,"speed averaging must default to off");
+        expect(defaults1.edwards_doubling==1, "Edwards doubling must default to 2XY");
         expect(defaults2.device==-1,
                "Stage2 inheritance sentinel differs from TOML");
         expect(!defaults1.log_file_explicit&&!defaults1.has_submission&&!defaults1.has_results&&

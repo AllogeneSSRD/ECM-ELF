@@ -235,6 +235,8 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     opt.execution.affinity_cpus = cfg.affinity_cpus;
     opt.execution.stage1_threads = cfg.stage1_threads;
     opt.execution.naf_w = cfg.naf_w;
+    if (cfg.config_keys.count("edwards_doubling"))
+        opt.execution.edwards_doubling = cfg.edwards_doubling;
     opt.execution.naf_memory_mb = unsigned(cfg.naf_memory_mb);
     opt.execution.verbose = cfg.verbose;
     opt.execution.device_index = cfg.device;

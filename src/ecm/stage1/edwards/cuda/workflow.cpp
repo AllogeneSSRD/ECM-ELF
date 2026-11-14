@@ -6,6 +6,7 @@
 #include "ecm/io/save.h"
 #include "../../../../io/stage1_checkpoint.h"
 #include "ecm/platform/logging.h"
+#include "ecm/platform/generated/configuration_defaults.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -211,6 +212,9 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             throw std::runtime_error("cannot create Edwards save directory");
         Batch batch(curves);
         batch.window = opt.execution.naf_w ? unsigned(opt.execution.naf_w) : 6;
+        const auto doubling = opt.execution.edwards_doubling.value_or(
+            ecm_config::defaults::stage1_edwards_doubling);
+        batch.doubling = doubling == 1 ? 5 : 4;
         int mode_fixed = -1;
         if (const char* mode = std::getenv("ECM_EDWARDS_STAGE1_ALGO")) {
             const std::string value = mode;
@@ -224,7 +228,8 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 batch.doubling = 0;
             }
         }
-        const char* dbl_env = std::getenv("ECM_EDWARDS_DBL_ALGO");
+        const char* dbl_env = opt.execution.edwards_doubling
+            ? nullptr : std::getenv("ECM_EDWARDS_DBL_ALGO");
         if (dbl_env) {
             if (!batch.window)
                 throw std::runtime_error(

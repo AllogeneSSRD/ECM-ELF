@@ -559,7 +559,7 @@ NTT 的 YMM 与 ZMM 分别在 lane 内处理四个或八个相邻系数。多链
 
 ## Edwards NAF 窗口短测
 
-`[stage1] edwards_naf_window_bits`（命令行 `--naf-w`）为 0 时，CPU 默认 w12，CUDA CGBN 默认 w6。Edwards GPU NTT 使用 x-only ladder，显式窗口不适用。
+窗口语义、CPU 与 CUDA 的字典布局及当前支持范围见 [Edwards NAF](../architecture/NAF.md)。本节记录各窗口的实测性能。
 
 ![Edwards Stage1 各 NAF 窗口的主循环和整批归一化吞吐](attachments/stage1-edwards-naf-throughput.png)
 
@@ -611,12 +611,6 @@ python tools/bench/plot_stage1_naf_windows.py `
   --output-dir data/figures/stage1_naf_windows_0630
 ```
 
-### 字典大小与 B1
-
-`w` 决定每条曲线的 `2^(w−2)` 个奇数倍点。CUDA 字典字节数为 `曲线数 × (CGBN 容器位宽 / 8) × 4 × 2^(w−2)`。IFMA 每个八路字典为 `3 × 8 × 8 × ceil(模数位宽/52) × 2^(w−2)` 字节。GMP 标量在 10240 位以内同时保留四坐标投影表和三坐标仿射表，本构建两表的固定槽位共 `8960 × 2^(w−2)` 字节。各式只计字典，构建临时区、NAF 标量编码和工作区另计。见 [CUDA 分配](../../src/ecm/stage1/edwards/cuda/runtime.cpp) 与 [IFMA 字典](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L740)。
-
-固定 w、容器和批量时，字典容量与 B1 无关。标量位数 `L` 随 B1 增长，循环约执行 `L` 次倍点和 `L/(w+1)` 次加点。增大一个窗口位要多建 `2^(w−2)` 个字典项，预计省去 `L/((w+1)(w+2))` 次加点。因此更长的任务可以摊薄建表开销，实际交叉点仍取决于设备、批量和字典访存。共享的标量编码只依赖 B1、标量构造和 w。点字典还依赖模数、曲线构造及 sigma，同 B1 的不同曲线须各自构建。
-
 ### 常用 B1 的编码开销
 
 在 Ryzen AI 9 HX 370 的逻辑 CPU 1 上直接计时 ECM-ELF 0.63.1 工作区的原编码函数（MSVC 14.51，`/O2`），每格三次取中位数。编码计时包含输出分配，标量构造或加载、GPU 上传和点乘另计。CGBN 的两张位图合计为 `8 × (floor((L+32)/32)+1)` 字节，在主机和设备各有一份。主机编码时还暂存约 `L/8` 字节的标量导出。CPU 原路径每个活跃 IFMA 批次或 GMP 曲线各持一份约 `4L` 字节的 `int` 数组。下表是编码缓冲区大小，进程内存与显存峰值另计。
@@ -637,9 +631,7 @@ python tools/bench/plot_stage1_naf_windows.py `
 
 ### 长任务的窗口选择
 
-设 `L_w` 为实际 NAF 列数，`A_w` 为非零列数。`L_w` 约为标量位数 `L`，且 `A_w ≈ L/(w+1)`。CGBN 的 HWCD 主循环每列做 4 次模平方和 3 次模乘。非零列额外做 1 次模乘补齐 T，再做 9 次模乘加点，合计约 `4L_w` 次平方和 `3L_w+10A_w` 次模乘，切片导出边界另有少量 T 恢复。CPU 使用仿射字典，主循环每个非零列额外约 8 次模乘。CGBN w≥3 建表含一次完整倍点和 `m−1` 次加点，`m=2^(w−2)`。计入 `dT` 预乘后约为 4 次模平方和 `10m−4` 次模乘，坐标进域另计。见 [CGBN NAF](../../src/ecm/stage1/edwards/cuda/naf.cuh) 和 [CPU 点乘](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp)。
-
-从 w6 改成 w8／w10／w12，预计少做 22.2%／36.4%／46.2% 的加点。若模乘和平方等价计数，CGBN 总模运算约少 3.8%／6.2%／7.8%，CPU 从 w6 到 w12 约少 6.5%。B1=260e6 的实际编码中，w6 与 w12 相差 24,731,799 个非零数字，对应 CGBN 每条曲线约省 2.47 亿次模乘，倍点列数仅相差一列。实际耗时还受字典访存、模乘与平方成本差异影响。
+点运算公式及常用 B1 的实际列数与非零数见 [Edwards NAF 算术成本](../architecture/NAF.md#点字典与执行成本)。
 
 比较 w10 与 w12 时，用相同位宽和批量的整批主循环时间。设 w12 的循环比 w10 快 `r=1−Tloop12/Tloop10`，多出的字典准备时间为 `ΔD`，则 w10 的主循环超过 `ΔD/r` 后，w12 才预计占优。用本页短测估计，1279／4253／8191 位 CGBN 在两卡的门槛约为 1–2／4–8／14–24 秒每批；CPU IFMA 八路约为 6／19／50 秒每批，GMP 单曲线约为 0.4／1.8／4.5 秒。这些是同形状外推，完整大 B1 未复测。
 
@@ -650,6 +642,56 @@ python tools/bench/plot_stage1_naf_windows.py `
 以 8191 位、B1=260e6 为例，加上编码和点状态后，4060 Laptop 的 384 曲线在 w10／w12 需要约 502／1710 MB，4070 Ti 的 960 曲线约需 1114／4134 MB。若请求 w12、配置 `naf_memory_mb = 512` 且设备空闲预算充足，前者会选 w10，后者会选 w8。
 
 另用 ECM-ELF 0.63.1 的 sm89 三容器构建在 GPU1 RTX 4060 Laptop 上测实际单曲线。M8191、B1=100000、sigma=20260922、HWCD、8192/TPI16，关闭周期检查点，w8／w10／w12 各交错运行三次，九个存档末点一致。利用率至少 50% 的 124 个遥测点均为 1500 MHz、8.26–9.16 W。CUDA event 字典加主循环的中位数依次为 **43.463／42.490／42.046 秒**。w12 的 4 MiB 字典比 w10 的 1 MiB 多花约 276 ms，主循环省约 720 ms，合计省 444 ms（1.0%）。同形状估算 w10 到 w12 的门槛为约 16 秒主循环，其他位宽或设备需重新测量。证据见 `data/experiments/edwards_naf_config_single_8191/summary.json`。
+
+## CUDA Edwards 倍点 HWCD 与 2XY
+
+![两张 GPU 上 2XY 相对 HWCD 的 GPU 主循环和整批墙钟省时率](attachments/stage1-edwards-hwcd-2xy.png)
+
+2XY 的主循环收益从 347 位的 **5.4%** 降到 8191 位的约 **0.2%**。M12511 上两卡的主循环都约慢 **0.05%**，整批墙钟有快有慢。曲线在 4253 位和 16319 位仍有局部上升，因此单凭位宽无法确定收益。8K 起端到端收益大多落在配对波动内。
+
+M16319 在 4070 Ti 的三对复测中，主循环中位时间从 **36.416 s** 降至 **35.970 s**，配对省时中位数 **1.28%**，范围 **1.22%–1.39%**。4060 Laptop 在同位宽省 **0.16%**。两卡整批墙钟的配对省时中位数分别为 **2.27%** 和 **0.05%**。图中 4070 Ti 该格采用三对复测，初次三对另保留。初次有一批 HWCD 在运行中出现功耗和片长突变，主循环 48.670 s，同轮 2XY 为 35.887 s，表面省时 26.27%。后两对只有 1.35% 和 1.52%。突变来源未确定。
+
+两条路径在同一个 CGBN NAF 核内计算相同的点。2XY 直接求 $E=2XY$，HWCD 用 $(X+Y)^2-X^2-Y^2$ 求 $E$。默认的 CGBN 模平方调用相同的 Montgomery 乘法核心，2XY 在每列省去两次模减。按 32 位 limb 数 $n$ 估算，模加减的工作量随 $n$ 线性增长，CGBN 朴素 Montgomery 模乘约随 $n^2$ 增长。这个量级关系解释了加减节省为何可能被宽位模乘摊薄。实际运行还受容器、TPI、指令安排和寄存器占用影响。见 [NAF 架构](../architecture/NAF.md#点字典与执行成本) 和 [CGBN 模平方与模乘入口](../../third_party/cgbn/include/cgbn/impl_cuda.cu#L1027)。
+
+如果构建启用专用平方，粗略的单次倍点省时为 $T_S-T_M+2T_{\mathrm{sub}}$。平方比乘法快得足以抵消两次模减时，HWCD 也可能更快。该式按算子时间相加，只用于判断量级。
+
+独立算子探针使用相同的 CGBN 域函数、容器和发射几何，在七个位宽上分别测模加、模减、模乘和模平方。每核每条链 10,000 次相依运算，先预跑一轮，再按正反顺序各类交错测五次，取 CUDA event 除以批量操作数的中位数。两卡的模减／模乘成本均从 347 位的 **38% 左右**，降到 8191 位的 **1.3% 左右**、16319 位的 **0.28% 左右**。这与宽位下加减节省被模乘摊薄一致，也说明 4070 Ti 在 M16319 的 1.28% 收益无法由孤立模减成本直接预测。探针记录与源码位于 `data/experiments/stage1_edwards_doubling/field-gpu*-verified.csv` 和 `field_probe.cu`。探针本身未另采功耗。
+
+### 测试条件
+
+使用 ECM-ELF 0.63.0 的全容器本地构建。CUDA 13.3.73、sm89、MSVC 14.51.36231，Windows WDDM 驱动 610.88。该构建与当前工作区的 NAF 倍点、域算术和 CGBN 模算术源码一致。整进程计时适用于该构建的主机切片策略。两张卡独立采集，部分批次同时运行。
+
+| 完整模数 | $B_1$ | 容器／TPI | 4070 Ti 曲线／批 | 4060 Laptop 曲线／批 |
+|---|---:|---:|---:|---:|
+| M347 | 1,000,000 | 384／4 | 3840 | 1536 |
+| M607 | 500,000 | 768／8 | 1920 | 768 |
+| M1279 | 250,000 | 1280／8 | 1920 | 768 |
+| M2203 | 120,000 | 2560／16 | 960 | 384 |
+| M4253 | 80,000 | 4608／16 | 960 | 384 |
+| M8191 | 50,000 | 8192／16 | 960 | 384 |
+| M10267 | 50,000 | 11264／32 | 480 | 192 |
+| M12511 | 50,000 | 13312／32 | 480 | 192 |
+| M16319 | 50,000 | 16384／32 | 480 | 192 |
+
+固定 NAF w6、TPB128，每 SM 发射两个 block，sigma 从 20260922 连续取值，关闭周期检查点、指数缓存以及 Stage2 交接。每卡每个输入各跑三对，按 HWCD／2XY 与相反顺序交替，保留首轮。左图取主循环 CUDA event 累计时间，排除字典、最终回读及发布。右图从启动独立进程计至退出，包含初始化、字典、运算和存档。每点先逐对算 $100(1-T_{2XY}/T_{HWCD})$，再取中位数，正值表示 2XY 省时，误差线是三对的全范围。
+
+2026-11-14 采集。主矩阵在 GPU 利用率至少 50% 的遥测点中，4070 Ti 为 2610 MHz、22.26–188.85 W（中位数 178.39 W），4060 Laptop 为 1500 MHz、9.01–26.17 W（中位数 25.50 W）。M16319 复测的 4070 Ti 为 2610 MHz、23.02–181.01 W（中位数 177.15 W）。
+
+两卡共完成 108 批及 6 批复测。103,680 条存档记录通过模数、B₁、sigma、校验值及因子整除核对。按模数和 sigma 对拍的 12,000 个不同结果完全一致，其中 1,064 个为因子记录。另用独立 Montgomery x-only 整数梯验证 16 个归一化末点和 2 个 M16319 因子的分母 GCD。原始日志、存档、遥测、报告和独立验算位于 `data/experiments/stage1_edwards_doubling/`，逐位宽配对统计见 `data/benchmarks/stage1_edwards_doubling/paired.csv`。
+
+采集器和绘图脚本从仓库根目录运行。每张卡的采集需要一个全新的目录。
+
+```powershell
+$worker = 'build_stage1_local_c869d1f184d3b595/ecm_cuda.exe'
+$out = 'data/experiments/stage1_edwards_doubling_retest'
+python tools/bench/bench_stage1_edwards_doubling.py --exe $worker --device 0 --output "$out/run_4070ti"
+python tools/bench/bench_stage1_edwards_doubling.py --exe $worker --device 1 --output "$out/run_4060"
+python tools/bench/bench_stage1_edwards_doubling.py --exe $worker --device 0 --bits 16319 --output "$out/recheck_4070ti_m16319"
+python tools/bench/plot_stage1_edwards_doubling.py --input "$out/run_4070ti/report.json" "$out/run_4060/report.json" `
+  --replace "$out/recheck_4070ti_m16319/report.json" `
+  --output-dir data/figures/stage1_edwards_doubling_retest `
+  --summary data/benchmarks/stage1_edwards_doubling_retest/paired.csv
+```
 
 ## GPU Edwards NAF 按需导出与字典预乘
 
@@ -834,11 +876,7 @@ exe SHA256=`d853b4ce80c78853a4fdafa5f3ad3abc51cbe267cd5231c64d2a523e299f9a89`，
 
 这批event区间以w10较小，不能据此宣称所有B1/批量的最佳窗口或全局改默认。M8191的w6/w10完整进程中位数为4.7432/4.5841秒，字典从8MiB增长到128MiB；w12为512MiB且完整进程升至5.1838秒。默认仍为6，允许显式2..12；生产B1和更多批次的标定仍待验证。
 
-倍点配对使用w8、批量128。HWCD（GPU内部编号4）与采用Prime95算法5代数形式的2XY路径（编号5）交错运行：M347/M2203/M8191 的event区间中位数为0.4031→0.3758、1.3490→1.3362、3.2551→3.2511秒，分别降低约6.8%/0.95%/0.12%。完整进程样本范围重叠，未据此切换全局默认。Prime95 `undoc.txt` 的算法6说明过期，同版源码已废弃6；CGBN没有模拟算法5的FFT复合指令，依据见[数学参考](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。
-
-![HWCD 与 2XY 倍点形式的进程和 CUDA event 区间耗时比](../../data/figures/edwards_naf_20261016/doubling.png)
-
-各样本除以同位宽、同一计时边界的 HWCD 中位数。右面板放大 event 比值变化：大位宽的局部差异很小，M8191 两路径的 event 范围也重叠；左面板完整进程范围三个位宽均重叠。百分比不是不确定性估计，不能由此宣称稳定的端到端收益。[矢量图](../../data/figures/edwards_naf_20261016/doubling.svg)。
+早期低 $B_1$ 的倍点配对数据保留在原始证据目录。两张卡上更长的完整批次见 [HWCD 与 2XY 配对基准](#cuda-edwards-倍点-hwcd-与-2xy)。
 
 ### 证据与复现
 

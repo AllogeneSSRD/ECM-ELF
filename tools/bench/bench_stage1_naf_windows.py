@@ -75,6 +75,8 @@ def run(exe, folder, backend, bits, w, repeat, logical_cpu):
                     '-d', str(device)]
     env = {k: v for k, v in os.environ.items() if not k.startswith(('ECM_', 'NTT_', 'ED_SOA_'))}
     env['ECM_EDWARDS_NAF_TIMING'] = '1'
+    if device is not None:
+        env['ECM_EDWARDS_DBL_ALGO'] = '4'
     lines = []
     with (folder / 'run.log').open('wb') as raw, (folder / 'line_times.tsv').open('w') as timings:
         t0 = time.perf_counter()

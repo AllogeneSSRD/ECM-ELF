@@ -29,6 +29,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [CUDA 可视化架构图谱](../web/index.html)：代码分层、编译清单、位宽与运行时流程的离线交互网页；维护入口见 [网页说明](../web/README.md)。
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
 - [Montgomery Stage1 的 PRAC](architecture/PRAC.md) 说明 Lucas 链、Prime95 搜索强度、计划体积和执行成本。
+- [Edwards Stage1 的窗口 NAF](architecture/NAF.md) 说明标量编码、点字典、Prime95 的窗口策略和生产批量选型。
 - [Stage1 主机重构开发草稿](web/stage1-intake-architecture-20261025.html)：首轮0.53.0提交、第二轮0.53.1输入与执行入口、拥有结果及统一发布；保留讨论和验收证据，待用户决定草稿处理。
 - [Stage1 第四轮重构开发草稿](web/stage1-fourth-refactor-review-20261025.html#implementation-result)：0.53.3 共同写锁、竞态复现、输入单次转换与归一化；保留实施合同和验收证据，完成后待用户处理草稿。
 - [领域目录重构开发草稿](web/ecm-domain-layout-review-20261026.html#implementation-result)：0.53.4 的完整目录集中、保存／发布合同与必要合并；保留 [逐文件清单](development/ECM_DOMAIN_REFACTOR_MANIFEST.json)、复现和验收证据。当前目录以[架构与术语](architecture/OVERVIEW.md)为准，草稿保留待用户处理；延期候选见 [评估页](web/stage1-fifth-refactor-review-20261026.html)。
