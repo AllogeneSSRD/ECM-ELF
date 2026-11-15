@@ -274,7 +274,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
                          ecm_stage1::lower_ascii(cfg.ntt_convolution) == "weighted",
                          ecm_stage1::lower_ascii(cfg.ntt_convolution) == "auto",
                          unsigned(cfg.ntt_memory_mib),
-                         resolve_rel_local(base, cfg.ntt_tune_file)};
+                         resolve_rel_local(base, cfg.ntt_tune_file), cfg.ntt_tight_weighted_bound};
     opt.execution.gpu_mul_path = cfg.kernel_mul;
     opt.execution.gpu_sqr_path = cfg.kernel_sqr;
     opt.execution.gpu_add_path = cfg.kernel_add;

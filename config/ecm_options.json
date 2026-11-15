@@ -1071,6 +1071,21 @@
     },
     {
       "owner": "stage1",
+      "key": "ntt_tight_weighted_bound",
+      "v2_key": "ntt.tight_weighted_bound",
+      "field": "ntt_tight_weighted_bound",
+      "type": "bool",
+      "default": true,
+      "domain": "[false|true|0|1]",
+      "fx": "algorithm(S1 CUDA)",
+      "parser": "legacy",
+      "description": [
+        "Use the tighter unsigned coefficient bound for native Edwards NAF in CUDA Stage1. With automatic convolution and length, prefer a safe short weighted plan that needs this bound. False restores the conservative bound and measured backend selection.",
+        "CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的安全短加权计划。false 恢复保守界和实测后端选型。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "ntt_tune_file",
       "v3_key": "",
       "v2_key": "ntt.tune_file",

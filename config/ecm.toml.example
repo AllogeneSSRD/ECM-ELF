@@ -364,6 +364,13 @@ target = "gpu"  # string: [cpu|gpu]
 # auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用
 # Goldilocks，共用 Stage1 任务及检查点格式。
 
+# ntt.tight_weighted_bound = true  # bool: [false|true|0|1]
+# Use the tighter unsigned coefficient bound for native Edwards NAF in CUDA Stage1. With automatic
+# convolution and length, prefer a safe short weighted plan that needs this bound. False restores
+# the conservative bound and measured backend selection.
+# CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的
+# 安全短加权计划。false 恢复保守界和实测后端选型。
+
 # ntt.memory_mib = 0  # int: [0,1048576]
 # Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An
 # explicit cap is also bounded by available VRAM.

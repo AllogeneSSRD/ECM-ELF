@@ -260,30 +260,37 @@ size_t memory_budget(size_t free_bytes, unsigned limit_mib) {
     return limit_mib ? std::min(available, size_t(limit_mib) * 1024 * 1024) : available;
 }
 
-Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options, bool prefer_radix5) {
+Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options, bool prefer_radix5,
+                        WeightedBound weighted_bound) {
     if (p < 32 || p > 262144) throw std::invalid_argument("invalid Stage1 NTT exponent");
     Packing s;
     if (options.weighted) {
-        const auto usable = [p, &options](unsigned length) {
+        const bool allow_unsigned_bound = weighted_bound == WeightedBound::UnsignedProducts &&
+                                          options.tight_weighted_bound;
+        const auto usable = [p, &options, allow_unsigned_bound](unsigned length) {
             const unsigned bpw = (p + length - 1) / length;
             return length <= p && length <= 65536 && bpw <= 31 &&
-                (!options.bpw || bpw <= options.bpw) && exact_ok_terms(2ull * length, bpw);
+                (!options.bpw || bpw <= options.bpw) &&
+                options.tile <= ecm_stage1::stage1_ntt_length_log(ecm_stage1::stage1_ntt_radix2_length(length)) &&
+                (exact_ok_terms(2ull * length, bpw) ||
+                 (allow_unsigned_bound && weighted_unsigned_bound(p, length).has_value()));
         };
-        s.length = options.length ? options.length : 2;
-        if (!options.length) {
-            while (s.length < 65536 && !usable(s.length)) s.length *= 2;
-            // Only the 5/8-length shape between this and the previous power
-            // of two can be the shortest safe mixed transform.
-            const unsigned shorter = (s.length / 8) * 5;
-            if (prefer_radix5 && ecm_stage1::stage1_ntt_supported_radix5(shorter) && usable(shorter) &&
-                options.tile <= ecm_stage1::stage1_ntt_length_log(shorter / 5))
-                s.length = shorter;
+        s.length = options.length;
+        for (unsigned binary = 2; !s.length && binary <= 65536; binary *= 2) {
+            // The supported mixed length between binary/2 and binary, if any,
+            // must pass its own bound before trying the next power of two.
+            const unsigned mixed = (binary / 8) * 5;
+            if (prefer_radix5 && ecm_stage1::stage1_ntt_supported_radix5(mixed) && usable(mixed))
+                s.length = mixed;
+            else if (usable(binary))
+                s.length = binary;
         }
         if (s.length < 2 || (!ecm_stage1::stage1_ntt_power_of_two(s.length) &&
                             !ecm_stage1::stage1_ntt_supported_radix5(s.length)) || !usable(s.length))
             throw std::invalid_argument("unsafe weighted NTT length or digit width");
         s.digits = s.length;
         s.bpw = (p + s.length - 1) / s.length;
+        s.needs_unsigned_bound = !exact_ok_terms(2ull * s.length, s.bpw);
     } else {
         const unsigned first_bpw = options.bpw ? options.bpw : 31;
         const unsigned last_bpw = options.bpw ? options.bpw : 16;
@@ -341,7 +348,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 throw std::invalid_argument("invalid Edwards NTT NAF digit");
         check_residues(naf->dictionary);
     }
-    const auto packing = resolve_packing(p, options);
+    const bool square_probe = control && control->modular_square_probe;
+    const auto bound = (naf || square_probe) ? WeightedBound::UnsignedProducts : WeightedBound::Conservative;
+    const auto packing = resolve_packing(p, options, true, bound);
     s.length=packing.length; s.bpw=packing.bpw; s.digits=packing.digits;
     const bool mixed = ecm_stage1::stage1_ntt_radix5(s.length);
     const unsigned planes = mixed ? 5 : 1;
@@ -379,7 +388,6 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | DeferredPack);
     const bool pfa = mixed && (requested & PfaRadix5);
     const bool coalesced = pfa && (requested & CoalescedRadix5);
-    const bool square_probe = control && control->modular_square_probe;
     // n = (1 + rotation_step * width) * i + width * j (mod length).
     // The first multiplier is divisible by 5 and congruent to 1 modulo width.
     // omega^5 still gives a primitive width root, with permuted frequencies.
@@ -514,6 +522,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                   ctx.nms ? FUSE_OUTER_THREADS : 0u,
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   warp_tile || short_inverse, profile.source, options.weighted, {}, {}, result.dataflow};
+        plan.field_modulus = GL_P;
+        if (options.weighted && bound == WeightedBound::UnsignedProducts && options.tight_weighted_bound)
+            plan.coefficient_bound = weighted_unsigned_bound(p, s.length).value();
+        else
+            plan.coefficient_bound = (loose ? 2 : 1) * terms * digit_max * digit_max + (fma ? digit_max : 0);
         if (mixed) plan.forward = "r5";
         for (int i = 0; i < ctx.nms; ++i) join(plan.forward, ctx.ms[i]);
         join(plan.forward, ctx.t);

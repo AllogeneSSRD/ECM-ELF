@@ -3,6 +3,8 @@
 #include "../../../../cuda/arithmetic/goldilocks/goldilocks.cuh"
 #include <algorithm>
 #include <cstdint>
+#include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -21,6 +23,34 @@ struct WeightedTables {
     std::vector<WeightedWord> inverse;
     std::vector<WeightedLimb> limbs;
 };
+
+// For canonical p-bit inputs, digit widths are floor(p/L) or one bit larger.
+// The exact weighted coefficient envelope is largest at output zero. There
+// each short/long digit pair has factor 1 or 2 after removal of the weight.
+inline std::optional<WeightedWord> weighted_unsigned_bound(unsigned p, unsigned length) {
+    const unsigned period_count = std::gcd(p, length);
+    const unsigned period = length / period_count;
+    const unsigned wide = (p % length) / period_count;
+    const unsigned has_wide = wide != 0;
+    const auto step = WeightedWord{1} << (p / length);
+    const auto narrow_max = step - 1;
+    const unsigned wide_pairs = has_wide +
+        (2 * wide > period + 1 ? 2 * (2 * wide - period - 1) : 0);
+
+    // Expand (narrow_max + step * is_wide) for both digits. Each product
+    // fits in one word (bpw <= 31); check multiplicities before multiplying.
+    auto remaining = GL_P - 1;
+    const auto fits = [&](WeightedWord count, WeightedWord value) {
+        if (count && value > remaining / count) return false;
+        remaining -= count * value;
+        return true;
+    };
+    if (!fits(WeightedWord(period_count) * (2 * period - 1), narrow_max * narrow_max) ||
+        !fits(WeightedWord(period_count) * (2 * wide - has_wide), 2 * narrow_max * step) ||
+        !fits(WeightedWord(period_count) * wide_pairs, step * step))
+        return std::nullopt;
+    return GL_P - 1 - remaining;
+}
 
 inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord inverse_scale) {
     using U = WeightedWord;

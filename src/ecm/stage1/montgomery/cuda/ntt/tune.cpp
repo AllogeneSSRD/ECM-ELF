@@ -465,8 +465,25 @@ int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool ex
 }
 
 Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
-                                   const Stage1NttOptions& options) {
+                                   const Stage1NttOptions& options, bool native_edwards) {
     if (!options.automatic) return options;
+    if (native_edwards && options.tight_weighted_bound && !options.length) {
+        auto weighted = options;
+        weighted.automatic = false;
+        weighted.weighted = true;
+        try {
+            const auto shape = resolve_packing(p, weighted, true, WeightedBound::UnsignedProducts);
+            if (shape.needs_unsigned_bound) {
+                // X-only calibration cannot measure this native-only shape.
+                weighted.length = shape.length;
+                ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=edwards_unsigned_bound "
+                               "p=%u batch=%u convolution=weighted length=%u\n", p, batch, shape.length);
+                return weighted;
+            }
+        } catch (const std::invalid_argument&) {
+            // The requested constraints may still admit a linear plan.
+        }
+    }
     const auto device = device_info(index, options.memory_mib);
     const auto candidates = candidates_for(p, options);
     std::array<std::optional<Cached>, CandidateCount> choices;

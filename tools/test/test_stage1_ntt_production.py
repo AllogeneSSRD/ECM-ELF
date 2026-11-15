@@ -96,19 +96,22 @@ def main():
             (127, 128, 26, 3, "linear", 0, 0, 6),
             (4253, 64, 4294967311, 4, "weighted", 0, 4, 6),
             (53281, 32, 26, 2, "weighted", 2560, 8, 8),
+            (65521, 20, 26, 2, "weighted", 2560, 8, 6),
             (262139, 20, 26, 1, "weighted", 0, 4, 6),
             (65, 8, 9, 1, "linear", 0, 0, 6),
             (35, 128, 16, 1, "weighted", 0, 4, 6),
         ):
             expected = None
             for kind in (0, naf):
-                extra = f'ntt_convolution = "{mode}"\nntt_length = {length}\nntt_window = {window}\nnaf_w = {kind}\n'
+                required_length = 4096 if p == 65521 and not kind else length
+                extra = f'ntt_convolution = "{mode}"\nntt_length = {required_length}\nntt_window = {window}\nnaf_w = {kind}\n'
                 work, cmd = fixture(f"ed_{p}_{b1}_{kind}", extra=extra, model="ed")
                 call, data = direct(work, cmd, p, b1, sigma, curves)
                 log = run(work, call, text=data)
                 if kind and p > 65:
                     assert "stage1_ntt_edwards_naf: window=" in log
                     assert any(record["ntt_bits"] == str(p) and record["ntt_type"] == mode
+                               and (not required_length or record["ntt_length"] == str(required_length))
                                and record["naf"] == str(kind) for record in ntt_executions(log)), log
                 points = saved_points(work / "out.save", p, b1, True)
                 if kind:
@@ -132,6 +135,56 @@ def main():
                     oracle[seed] = x * pow(z, -1, n) % n
                 assert expected == oracle
             print(f"PASS Edwards NTT w{naf} {mode} p={p}, {curves} curves", flush=True)
+        work, cmd = fixture("edwards_xonly_reject_short", model="ed",
+                            extra='naf_w = 0\nntt_convolution = "weighted"\nntt_length = 2560\n')
+        call, data = direct(work, cmd, 65521, 20, 26, 1)
+        assert "unsafe weighted NTT length" in run(work, call, text=data, ok=False)
+        assert not (work / "out.save").exists()
+        for p, bpw, length in ((65521, 26, 2560), (65521, 25, 4096), (66067, 0, 4096)):
+            extra = f'naf_w = 6\nntt_convolution = "weighted"\nntt_bpw = {bpw}\n'
+            work, cmd = fixture(f"edwards_weighted_auto_{p}_{bpw}", extra=extra, model="ed")
+            call, data = direct(work, cmd, p, 20, 26, 1)
+            [plan] = ntt_executions(run(work, call, text=data))
+            assert plan["ntt_length"] == str(length) and plan["ntt_bpw"] == str((p + length - 1) // length)
+            [sigma] = saved_points(work / "out.save", p, 20, True)
+            assert sigma == 26
+        work, cmd = fixture("edwards_force_unsafe_weighted", model="ed",
+                            extra='naf_w = 6\nntt_convolution = "weighted"\nntt_length = 2560\n')
+        call, data = direct(work, cmd, 66067, 20, 26, 1)
+        assert "unsafe weighted NTT length" in run(work, call, text=data, ok=False)
+        assert not (work / "out.save").exists()
+        print("PASS Edwards weighted auto length, bpw cap, and forced unsafe length rejection", flush=True)
+
+        default_points = None
+        for mode, flags, length, upper in (
+            ("default", "", 2560, 13695445919225353215),
+            ("disabled", 'ntt.convolution = "weighted"\nntt.tight_weighted_bound = false\n',
+             4096, 2 * 4096 * (2**16 - 1)**2),
+        ):
+            work = out / f"edwards_tight_bound_{mode}"
+            work.mkdir()
+            cfg = work / "ecm.toml"
+            cfg.write_text('config_version = 3\n[shared]\nlog_file = "screen.log"\n'
+                           '[stage1]\nparam = "e"\ntarget = "gpu"\ngpu_algorithm = "ntt"\n'
+                           f'gpu_device = {args.device}\nedwards_naf_window_bits = 6\nhandoff.mode = "off"\n' +
+                           flags, encoding="utf-8")
+            call, data = direct(work, [str(exe), "--config", str(cfg)], 65521, 20, 26, 1)
+            log = run(work, call, text=data)
+            [plan] = ntt_executions(log)
+            assert plan == ntt_executions((work / "screen.log").read_text(encoding="utf-8"))[0]
+            assert plan["ntt_type"] == "weighted" and int(plan["ntt_length"]) == length
+            assert plan["ntt_bpw_avg"] == f"{65521 / length:.6f}"
+            assert plan["ntt_bpw"] == plan["ntt_bpw_max"] == str((65521 + length - 1) // length)
+            assert int(plan["ntt_u"]) == upper and int(plan["ntt_q"]) == 2**64 - 2**32 + 1
+            assert ("source=edwards_unsigned_bound" in log) == (mode == "default")
+            assert not (work / "tune.toml").exists()
+            points = saved_points(work / "out.save", 65521, 20, True)
+            if default_points is None:
+                default_points = points
+            else:
+                assert points == default_points
+        print("PASS default native auto bound, opt-out, save equality, and mirrored bpw/U/q logging", flush=True)
+
         work, cmd = fixture("edwards_dictionary_factor", extra="naf_w = 6\n", model="ed")
         call, data = direct(work, cmd, 55, 64, 5, 1)
         log = run(work, call, text=data)
@@ -144,7 +197,7 @@ def main():
         assert "dictionary exceeds" in run(work, call, text=data, ok=False)
         budget_save = work / "out.save"
         assert not budget_save.exists() or budget_save.stat().st_size == 0
-        p, b1, sigma, curves = 4253, 4096, 26, 4
+        p, b1, sigma, curves = 65521, 4096, 26, 4
         extra = "naf_w = 6\nsigma = 26\nntt_window = 4\nauto_stage2 = 1\n"
         work, cmd = fixture("edwards_naf_resume", extra=extra, model="ed")
         config = work / "ecm.toml"
@@ -191,17 +244,20 @@ def main():
             before = checkpoint.read_bytes()
             assert "checkpoint belongs to different" in run(work, cmd, f"wrong_{incompatible}", ok=False)
             assert checkpoint.read_bytes() == before and todo.read_text() == row
-        config.write_text(original.replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"'))
+        config.write_text(original.replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"') +
+                          "ntt_length = 2560\n")
         resumed = run(work, cmd, "resume")
         assert f"resume={cursor}" in resumed
         assert any(record["ntt_resume"] == str(cursor) and record["ntt_type"] == "weighted"
+                   and record["ntt_length"] == "2560"
                    for record in ntt_executions(resumed)), resumed
         assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
         ref, ref_cmd = fixture("edwards_naf_resume_reference", model="ed")
         call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
         run(ref, call, text=data)
         assert saved_points(save, p, b1, True) == saved_points(ref / "out.save", p, b1, True)
-        print(f"PASS Edwards NAF column {cursor}/{count}, wrong-mode rejection, linear to weighted resume and Stage2 handoff")
+        print(f"PASS Edwards NAF column {cursor}/{count}, wrong-mode rejection, linear to 2560-point "
+              "weighted resume and Stage2 handoff")
         return
 
     work, cmd = fixture("graph", '"NtT"', "ntt_tile = 8\nntt_outer_max = 2\n")

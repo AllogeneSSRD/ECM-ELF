@@ -21,7 +21,7 @@ CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `-
 Stage1 在控制台和启用的文件日志中用 `Stage1 execution:` 行记录当前计算采用的曲线、参数化和后端。后端完成选型后再输出，包含恢复检查点、资源限制和调优结果生效后的实际值。
 
 - CGBN 输出内核容器位宽 `kernel_weight`、每个大整数的线程数 `tpi` 和适用的启动形状。Edwards 输出实际 NAF 窗口，Montgomery 输出所用点乘链，PRAC 路径同时输出实际搜索宽度 `prac`。
-- NTT 输出本批模数位宽 `ntt_bits`、卷积类型、变换长度 `ntt_length` 和 digit 位宽 `ntt_bpw`。`ntt_shape` 沿用调优输出的冒号分隔顺序，包括卷积类型、tile、radix、Graph、warp 尾层和正逆向各趟的层数。Edwards 的 `naf=0` 表示 x-only。
+- NTT 输出本批模数位宽 `ntt_bits`、卷积类型 `ntt_type`、变换长度 `ntt_length`、平均 digit 位宽 `ntt_bpw_avg`、最大 digit 位宽 `ntt_bpw_max`、系数上界 `ntt_u` 和 Goldilocks 域模数 `ntt_q`。旧字段 `ntt_bpw` 等于 `ntt_bpw_max`。`ntt_shape` 沿用调优输出的冒号分隔顺序，包括卷积类型、tile、radix、Graph、warp 尾层和正逆向各趟的层数。Edwards 的 `naf=0` 表示 x-only。
 - CPU 输出实际选中的实现和线程数，以及适用的 NAF 窗口或 PRAC 搜索宽度。OpenCL 输出实际内核形状和工作组；由驱动自行决定的工作组显示为 `auto`。
 
 GUI v2 从 Worker 输出读取这些数据，详情里的预计交接另按 Worker 的有效配置显示。见 [GUI v2 Worker 详情](GUI_V2.md)。
@@ -99,9 +99,11 @@ ntt.profile = 0
 
 `ntt.profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt.length`、`ntt.bits_per_word`、`ntt.tile` 和 `ntt.outer_radix_limit` 的 0 值使用自动值。`ntt.window_bits = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt.warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
-`ntt.convolution` 默认为 `"auto"`。程序按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt.length=0` 时使用满足约束的较短长度。`ntt.bits_per_word` 可限定最大 digit 位宽。
+`ntt.convolution` 默认为 `"auto"`。程序先检查下文所述的 Edwards 短计划，其余情况按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt.length=0` 时使用满足约束的较短长度。`ntt.bits_per_word` 可限定最大 digit 位宽。
 
 加权卷积支持的混合长度为 2560、5120、10240 和 20480。前三档可在相应位宽缩短变换，20480 保留为显式 `ntt.length`。显式 `ntt.tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
+
+`[stage1]` 下的 `ntt.tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，如果卷积和长度均为自动，程序优先采用只有通过收紧界才可使用的短加权计划，日志来源为 `edwards_unsigned_bound`，跳过这次 x-only 调优表查询。其他自动计划继续用共享表。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt.bits_per_word` 限为 25 或把 `ntt.tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
 
 `[shared] tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，CUDA 两阶段共用此文件。可在 `[worker.N]` 用 `shared.tune_file` 为该 worker 的两个阶段一并覆盖。如果还在使用旧 Stage1 JSON 路径，改为共享 TOML 路径后重新调优。`ntt.memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 收紧上限。
 
@@ -116,7 +118,21 @@ ntt.profile = 0
 
 16384 点加权 NTT 的单曲线自动调优会实测 tile 12 和 `tile=10, outer_max=2`。显式 tile、outer 或配置档继续约束可用计划，已有匹配的 tune 行可直接复用。需要在已有条件上重新选型时可执行 `--tune ntt --bits <p>`。见 [单曲线调优对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)。
 
-运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 输出曲线构造、卷积后端、长度、最大 digit 位宽、正逆向各 pass 的层数、正逆向 tile 的线程数与动态共享内存、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。正常结束按曲线构造生成标准 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置、活跃曲线位图和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。32 条以内继续使用原 NTT 快照格式，33–128 条使用多字位图。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
+运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 单独记录同一计划的 `bpw_avg`、`bpw_max`、`U`、`q`，以及正逆向各 pass 的层数、tile 的线程数与动态共享内存、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。
+
+正常结束按曲线构造生成标准 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置、活跃曲线位图和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。32 条以内继续使用原 NTT 快照格式，33–128 条使用多字位图。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
+
+### 启动详情示例
+
+0.63.13 在 RTX 4060 Laptop 上使用 M65521、Edwards 2XY NAF w6、单曲线和默认 NTT 选型，日志节选如下。
+
+```text
+stage1_ntt_selection: source=edwards_unsigned_bound p=65521 batch=1 convolution=weighted length=2560
+Stage1 execution: … ntt_bits=65521 ntt_type=weighted ntt_length=2560 … ntt_bpw_avg=25.594141 ntt_bpw_max=26 ntt_u=13695445919225353215 ntt_q=18446744069414584321
+stage1_ntt_plan: … bpw_avg=25.594141 bpw_max=26 U=13695445919225353215 q=18446744069414584321
+```
+
+平均 bpw 是实际模数位宽除以参与打包的 digit 数，加权计划的 digit 数等于变换长度。最大位宽是单个 digit 的位宽上限，本例为 26 位。`U` 和 `q` 以十进制整数输出，必须满足 $U<q$ 才能从一个域余数恢复整数系数。 [系数界推导](../architecture/NTT.md#stage1-加权卷积的无符号系数界)
 
 ## 共用 TOML 与 worker
 

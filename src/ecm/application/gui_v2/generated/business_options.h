@@ -61,6 +61,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","gpu_param","[0|2|3]","option_stage1_gpu_param","int",false,false,0,0},
     {"stage1","gpu_algorithm","[1|2|cgbn|ntt]","option_stage1_gpu_algorithm","int|string",false,false,0,0},
     {"stage1","ntt_convolution","[auto|linear|weighted]","option_stage1_ntt_convolution","string",false,false,0,0},
+    {"stage1","ntt_tight_weighted_bound","[false|true|0|1]","option_stage1_ntt_tight_weighted_bound","bool",false,false,0,0},
     {"stage1","ntt_tune_file","<path>","option_stage1_ntt_tune_file","string",false,false,0,0},
     {"stage1","ntt_memory_mib","[0,1048576]","option_stage1_ntt_memory_mib","int",true,true,0,1048576},
     {"stage1","ntt_length","0, 2^k in [2,65536], or 5*2^k in [2560,20480] (weighted)","option_stage1_ntt_length","int",true,true,0,65536},

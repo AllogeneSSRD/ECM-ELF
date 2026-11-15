@@ -61,6 +61,7 @@ inline constexpr int stage1_device=0;
 inline constexpr int stage1_gpu_param=3;
 inline constexpr char stage1_gpu_algorithm[]="cgbn";
 inline constexpr char stage1_ntt_convolution[]="auto";
+inline constexpr bool stage1_ntt_tight_weighted_bound=true;
 inline constexpr char stage1_ntt_tune_file[]="tune.toml";
 inline constexpr int stage1_ntt_memory_mib=0;
 inline constexpr int stage1_ntt_length=0;

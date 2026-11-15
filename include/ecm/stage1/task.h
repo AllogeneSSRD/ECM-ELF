@@ -21,6 +21,7 @@ struct Stage1NttOptions {
     bool automatic = true;
     unsigned memory_mib = 0;
     std::string tune_file;
+    bool tight_weighted_bound = true;
 };
 
 struct Stage1ExecutionPreferences {

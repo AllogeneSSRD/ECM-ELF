@@ -14,12 +14,18 @@ struct Plan {
     bool weighted;
     std::string forward, inverse;
     unsigned dataflow = 0;
+    unsigned long long coefficient_bound = 0, field_modulus = 0;
 };
 
 struct BudgetError : std::runtime_error { using std::runtime_error::runtime_error; };
 size_t memory_budget(size_t free_bytes, unsigned limit_mib);
-struct Packing { unsigned length=0, bpw=0, digits=0; };
-Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool prefer_radix5 = true);
+enum class WeightedBound { Conservative, UnsignedProducts };
+struct Packing {
+    unsigned length = 0, bpw = 0, digits = 0;
+    bool needs_unsigned_bound = false;
+};
+Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions&, bool prefer_radix5 = true,
+                        WeightedBound = WeightedBound::Conservative);
 
 enum Dataflow : unsigned {
     FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16,

@@ -89,3 +89,11 @@ Nsight Systems 2026.1.3 每格另采一条，使用 CUDA Graph 节点与事件�
 初版候选让 warp 开头的 9／10／12 层路径分别以 radix-2 或 radix-4 直接写全局。B1=512 和 4096 各做六格、每侧三次交替，配对保存点逐条一致。16384 点两档 B1 的单曲线主循环减少 2.00%／1.64%，30 曲线减少 0.97%／0.96%。5120 点 30 曲线减少 0.87%／0.81%，单曲线差值在 ±1% 内。512 点的 30 曲线在两档分别快 1.11% 和慢 1.31%，A/A 的两组中位数也相差 2.78%。去掉 9 层直写后，10 层单曲线在短档对测中曾慢 2.54%。最终用独立的末级 radix-4 直写 kernel，仅在 12 层和至少 24 条活跃曲线的 10 层 tile 时分派。 [0.63.12 最终对测](../performance/STAGE1_MERSENNE_NTT.md#逆向-tile-末级直写)
 
 原始记录位于 `data/experiments/stage1_ntt_first_round_06311/`，含 `baseline-repeats/`、`systems/`、`direct-ab/`、`direct-holdout/`、`systems-direct/` 及本地汇总脚本。阶段分项用 Nsight 的单轨迹，性能差值用独立无插桩采样。
+
+## 第二轮 短加权形状
+
+0.63.13 源码按大小 digit 和去权因子对系数做常数时间的整数准入。M65521／2560 的系数界约为 $0.742432q$，足以容纳单个无符号乘积。该形状的 $2U>q$，松弛差值不能套用同一证明。原生 Edwards 2XY 的 weighted 路径和独立平方探针使用收紧界。生产路径由 `ntt.tight_weighted_bound` 控制，默认开启。卷积和长度都为自动时，原生 Edwards 先检查只有收紧界才能准入的短计划，其他情况继续使用 x-only 的保守调优计划。异常重放需要时重新推导长度。 [闭式系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界)
+
+独立的整数枚举与闭式计算比较了 3277 个小形状、M65521／2560 的全部系数，另对 20,000 个机器字累加输入验证了溢出检查。GPU1 GMP 探针覆盖全宽 digit、窄顶 limb、直接和 Graph 提交、分段与非分段归约，以及 2560／5120／10240 的相邻接受与拒绝例子。例如 2560 点接受 $p=66048$，拒绝 $p=66049$，又接受 $p=66050$。因此程序以实际指数验证，不能在调优表中用一个连续的指数上限表示扩展范围。x-only 探针按原有界拒绝 M65521／2560。
+
+整数审计、GMP 边界和初轮数据保存在 `data/experiments/stage1_ntt_weighted_bound_06312/`。两卡扩测的脚本、执行日志、端点 GMP 对拍和自动分派记录位于 `data/experiments/stage1_ntt_weighted_matrix_06313/`。 [双卡加权自动选长矩阵](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵) · [GPUowl Z 和 ROE](../reference/GPUOWL_NTT.md#运行日志中的-z-和-roe)

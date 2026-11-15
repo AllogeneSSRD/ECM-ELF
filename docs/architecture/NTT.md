@@ -46,6 +46,22 @@ flowchart LR
 
 每个 256-limb CTA 先合作去权并缓存当前段及前一 limb 所需的连续系数。正常位置的 limb 汇集和 warp 首 lane 的进位使用同一缓存。低两 limb 的循环项及最低 limb 需要的高端系数从逆变换缓冲直接读取。这样每段内的相邻 limb 不必反复对同一系数乘逆权，而且不生成全局 limb 和中间表。跨段进位及规范化写回沿用现有规则。缓存大于 16 KiB 时使用原归约路径。启用条件和收益见 [两卡加权归约对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-共享去权缓存)。
 
+## Stage1 加权卷积的无符号系数界
+
+原生 Edwards 2XY 每次单独归约一个规范残数乘积，NAF 字典构建也使用这一合同。对于 $p$ 位操作数、长度 $L$，第 $i$ 个 digit 的位宽为 $\lceil p(i+1)/L\rceil-\lceil pi/L\rceil$。平均 bpw 是 $p/L$，计划日志和配置上限按最大位宽 $\lceil p/L\rceil$ 检查。共有 $p\bmod L$ 个长 digit，其余为短 digit。M65521／2560 平均为 25.5941 bpw，由 1039 个 25 位和 1521 个 26 位 digit 组成。
+
+设 $g=\gcd(p,L)$、$H=L/g$、$R=(p\bmod L)/g$、$d=2^{\lfloor p/L\rfloor}$、$A=d-1$，用 $z=[R>0]$。短 digit 上界为 $A$，长 digit 为 $A+d$。将二者沿循环槽配对，再乘去权因子 1 或 2。对槽编号按分数余量重排后，系数包络随余量非增，最大值在槽零：
+
+$$
+U=g\big[(2H-1)A^2+(2R-z)2Ad+(z+2\max(0,2R-H-1))d^2\big].
+$$
+
+按项从 $q-1$ 扣除，乘计数前先除法检查溢出。$U<q$ 即可用一个 Goldilocks 余数恢复整数系数。后续 32 位 limb 汇集按最多 64 位的去权系数计算覆盖范围，再做梅森折叠和进位。建表还检查 $L$ 可整除 $(q-1)/192$，以构造满足 $\rho^L=2^p$ 的加权根。
+
+原生 Edwards 选择 weighted 且长度为 0 时，按长度递增检查二次幂和支持的 radix-5。候选须满足 $L\le p$、最大 bpw 不超过 31 及用户上限、tile 能在二次幂子变换中执行，并通过系数界。跳过不合格短档后选择第一个通过的长度。强制指定不合格长度时报错。随 $p$ 变化的实际 digit 分布会使准入有间隙。
+
+`ntt.tight_weighted_bound` 默认开启。卷积和长度都为自动时，原生 Edwards 先检查只有收紧界才能准入的短计划。其余形状由常规选型处理，使用 x-only 标定的计划均按保守界准入。若 Edwards 的显式长度只满足无符号界，异常 x-only 重放重新推导长度。启动日志的 $U$ 取执行计划实际使用的整数包络。保守包络为松弛差值预留双倍乘积空间，融合乘加启用时另计加数。 [系数代码](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh) · [选长代码](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
+
 ## Stage1 radix-5 PFA
 
 加权 Stage1 在 \(L=5W\)、\(W=2^k\) 的变换上使用 PFA 分解。选 \(r\in\{1,2,3,4\}\) 使 \(1+rW\equiv0\pmod 5\)，用 \(n=(1+rW)i+Wj\bmod L\) 表示系数序号。两个因子互素，五点 DFT 和 \(W\) 点 NTT 因此可以独立执行。频点按相同置换排列，逐点乘加保持原有卷积含义。

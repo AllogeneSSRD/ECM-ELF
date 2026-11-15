@@ -62,6 +62,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","gpu_param","int","[0|2|3]","stage1","gpu_montgomery_param","","stage1","",false,false},
     {"stage1","gpu_algorithm","int|string","[1|2|cgbn|ntt]","stage1","gpu_algorithm","","stage1","gpu_algorithm",false,false},
     {"stage1","ntt_convolution","string","[auto|linear|weighted]","stage1","ntt.convolution","","stage1","ntt.convolution",false,false},
+    {"stage1","ntt_tight_weighted_bound","bool","[false|true|0|1]","stage1","ntt.tight_weighted_bound","","stage1","ntt.tight_weighted_bound",false,false},
     {"stage1","ntt_tune_file","string","<path>","stage1","ntt.tune_file","","stage1","",false,false},
     {"stage1","ntt_memory_mib","int","[0,1048576]","stage1","ntt.memory_mib","","stage1","ntt.memory_mib",false,false},
     {"stage1","ntt_length","int","0, 2^k in [2,65536], or 5*2^k in [2560,20480] (weighted)","stage1","ntt.length","","stage1","ntt.length",false,false},

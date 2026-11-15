@@ -213,6 +213,14 @@ bitsPerWord = EXP / NWORDS
 `minBpw()` 是实现额外施加的准入线。给定形状，\(p_{\min}=N\cdot\mathrm{minBpw}\)，\(p_{\max}\) 则取决于变体、精度与 carry 容量。通用 **3 bpw** 的选值依据在该版本源码中未说明。纯 FP32 曾由 3 放宽到 **1 bpw**。低于 1 bpw 会出现 0 位 word，超出现有动态取位函数的约定。[FP32 下限变更](https://github.com/gwoltman/gpuowl/commit/bd5e35dd)、[取位约定](https://github.com/gwoltman/gpuowl/blob/481d11ae/src/cl/carryutil.cl#L30-L63)
 
 
+### 运行日志中的 Z 和 ROE
+
+在源码快照 90a3d8d 中，PRP 日志从抽样平方取数。每次采样先将该次变换所有 word 的误差指标归成一个最大值。$x_i$ 为第 $i$ 次平方的最大值，则 ROEmax 是 $\max_i x_i$，ROEavg 是 $\operatorname{mean}_i x_i$。因此示例的 0.047 是窗口中观测到的峰值，0.033 是逐次峰值的平均值。[平方／乘法统计](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/Gpu.cpp#L2270-L2289) · [日志与告警](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/Gpu.cpp#L2800-L2820)
+
+把 $x_i$ 的均值和标准差记为 $\bar x,s$，源码以 $\beta=s\sqrt6/\pi$、$\mu=\bar x-\gamma\beta$ 拟合 Gumbel 分布，再打印 $Z=(0.5-\mu)/\beta$。Z=262 是到 0.5 的无量纲拟合距离，括号里的 avg 262.1 按窗口样本数加权。采样数大于 2 且 ROEmax 高于 0.005 时，通用告警阈值为 Z<6，FFT64 采用 Z<20。这条 PRP 告警只提示增加精度或长度。方案准入在运行前按形状、类型、变体和 carry 容量表筛选。P−1 Stage2 另为选型留出 0.5 bpw，平方或乘法的抽样峰值超过 0.4 时回到上一个已验证检查点重试同一 FFT。[拟合与加权](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/Gpu.h#L65-L96) · [FFT 选型](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/FFTConfig.cpp#L394-L494) · [Stage2 峰值与恢复](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/Stage2.cpp#L153-L165) · [重试路径](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/Stage2.cpp#L997-L1080)
+
+同名指标随 FFT 类型变化。纯浮点统计去权值到最近整数的距离，FP32＋NTT 混合路线统计归一化 CRT 商到整数的距离。纯 NTT 分支可报告平衡余数到半个模数的接近程度。单凭这行日志无法区分三者，需要结合前面的 FFT 类型。对浮点或混合方案，可借鉴按形状分流的监测与独立校验。采样残差可能在错误地落到另一个整数时仍很小，精确 Goldilocks 依赖 $U<q$ 的运行前证明。可在诊断里给出 $U/q$ 或整数裕量 $q-1-U$。[各后端指标](https://github.com/gwoltman/gpuowl/blob/90a3d8d/src/cl/carryinc.cl#L11-L340) · [本仓库无符号系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界)
+
 ## 8. 进位与 CRT 重构
 
 每个 word 的有效位数为：

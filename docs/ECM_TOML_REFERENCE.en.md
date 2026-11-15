@@ -559,6 +559,20 @@ Legacy v1 key `stage1.ntt_profile`
 
 Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10 bits). Explicit tile and outer overrides take precedence.
 
+<a id="ntt_tight_weighted_bound"></a>
+
+### ntt.tight_weighted_bound
+
+```toml
+ntt.tight_weighted_bound = true
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage1.ntt.tight_weighted_bound` · Level `advanced`.
+
+Legacy v1 key `stage1.ntt_tight_weighted_bound`
+
+Use the tighter unsigned coefficient bound for native Edwards NAF in CUDA Stage1. With automatic convolution and length, prefer a safe short weighted plan that needs this bound. False restores the conservative bound and measured backend selection.
+
 <a id="ntt_tile"></a>
 
 ### ntt.tile

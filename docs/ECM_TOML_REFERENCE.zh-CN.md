@@ -559,6 +559,20 @@ v1 旧键 `stage1.ntt_profile`
 
 按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层设置优先。
 
+<a id="ntt_tight_weighted_bound"></a>
+
+### ntt.tight_weighted_bound
+
+```toml
+ntt.tight_weighted_bound = true
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] stage1.ntt.tight_weighted_bound` · 级别 `高级`。
+
+v1 旧键 `stage1.ntt_tight_weighted_bound`
+
+CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的安全短加权计划。false 恢复保守界和实测后端选型。
+
 <a id="ntt_tile"></a>
 
 ### ntt.tile

@@ -10,6 +10,6 @@ std::string tune_shape_descriptor(const Plan& plan);
 
 int tune_command(int device, const ecm_stage1::Stage1NttOptions&, unsigned p, bool exhaustive);
 ecm_stage1::Stage1NttOptions select_tuned_plan(int device, unsigned p, unsigned curves,
-                                             const ecm_stage1::Stage1NttOptions&);
+                                             const ecm_stage1::Stage1NttOptions&, bool native_edwards = false);
 
 } // namespace ecm_mersenne_ntt
