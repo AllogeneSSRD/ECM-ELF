@@ -198,6 +198,23 @@ Prime95 31.06b01 的 `ecm.cpp` 约 2020–2160 行在原生 Edwards 公式中使
 
 筛选、边界补测和最终选型共 432 批，配对的保存点和校验值逐条一致。独立 GMP 探针覆盖 32／63 位回卷、8191／8192／8193 位的段边界及 262144 位对齐上限，并验证 65536 点 1-bit digit 在共享缓存超限时能够回退。GPU1 通过原生 NAF 因子、异常重放、线性到加权续跑和 Stage2 交接验证。原始日志和遥测在 `data/experiments/edwards_weighted_carry_0639/{matrix-cache,matrix-wide-boundaries,matrix-final}/`。见 [共享去权缓存原理](../architecture/NTT.md#原生-edwards-的共享去权缓存)。
 
+### 逆向 tile 末级直写
+
+0.63.12 的 Stage1 warp 输入路径让 12 层 tile 和至少 24 条活跃曲线的 10 层 tile 直接写出末组 radix-4 DIT。GPU1 RTX 4060 Laptop，完整梅森模数，原生 Edwards 2XY NAF、w8、weighted、Graph 上限 16、起始 sigma 26。与 0.63.11 交替跑，每侧每格三批。主循环 CUDA event 包含 747 列（B1=512），排除字典、Graph 创建、回读和发布。利用率至少 50% 的 38 个采样点均为 1500 MHz，板功耗为 8.48–41.03 W。
+
+| 指数 | NTT／tile 层 | 曲线 | 末级直写 | 0.63.11 → 0.63.12，ms／批 | 耗时变化 |
+| ---: | ---: | ---: | :---: | ---: | ---: |
+| 8191 | 512／9 | 1 | 关 | 43.868 → 44.316 | +1.02% |
+| 8191 | 512／9 | 30 | 关 | 64.053 → 63.273 | −1.22% |
+| 106531 | 5120／10 | 1 | 关 | 79.372 → 78.913 | −0.58% |
+| 106531 | 5120／10 | 30 | 开 | 439.617 → 435.254 | −0.99% |
+| 262139 | 16384／12 | 1 | 开 | 133.822 → 132.441 | −1.03% |
+| 262139 | 16384／12 | 30 | 开 | 1325.858 → 1312.603 | −1.00% |
+
+0.63.11 的 16384 点／30 曲线，前逆 tile 合计占 kernel 时间 49.3%，outer 占 12.5%；5120 点单曲线则以 carry 为主，约占 42.9%。两档 30 曲线的独立 Nsight 对照中，5120 点的逆向 tile 从 107.26 降至 103.09 ms（−3.89%），16384 点从 362.84 降至 349.32 ms（−3.73%）。开发期配对、B1=4096 复验及分项计时见 [第一轮剖析](../development/GPU_NTT_NEXT_OPTIMIZATION_DRAFT.md#第一轮-gpu1-剖析与候选筛选)。最终逐次计时与轨迹位于 `data/experiments/stage1_ntt_first_round_06311/{split-ab,systems-split}/`，分项汇总见同目录的 `round1-summary.json`。
+
+六组 Edwards 对测的保存点和校验值逐条一致。独立 Edwards 验证覆盖已知因子、断点从 linear 切到 weighted 续跑及 Stage2 交接。Montgomery PARAM0 在 M106531、M262139 的线性／加权对照中另核对 36 条保存点。两档 Edwards 加权直写通过 Compute Sanitizer 的 `memcheck` 和 `synccheck`。证据位于同目录的 `qualification-split/` 和 `split-06312-variants/`。
+
 ### GPU1 宽位宽归约热点
 
 RTX 4060 Laptop（GPU1），CUDA 13.3.73、sm89。0.61.3 开发期间的探针以 0.61.2 生产规则为基线，交替对照分段进位及 pack 融合。24 组位宽／tile／批量各测三次，输入为确定性合成 X/Z、参数和标量，固定加权长度与 16 步 Graph。预热 100 步后重置状态，以 CUDA event 计 256 或 384 步，排除初始化和校验回读。GPU 利用率 ≥50% 的遥测为 1500 MHz、2.00–36.71 W、45–58 °C。

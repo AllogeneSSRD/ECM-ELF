@@ -35,18 +35,21 @@ __device__ __forceinline__ void tile_radix4_block(unsigned long long *sm, unsign
     }
 }
 
+template <bool WriteOut = false>
 __device__ __forceinline__ void tile_radix4_block_inv(unsigned long long *sm,
                                                       unsigned long long TILE, int st,
-                                                      const unsigned long long *tbl)
+                                                      const unsigned long long *tbl,
+                                                      unsigned long long *out = nullptr)
 {
-    const unsigned long long h2 = 1ull << st;        /* the smaller half (stage st) */
+    if constexpr (!WriteOut) out = sm;
+    const unsigned long long h2 = WriteOut ? TILE >> 2 : 1ull << st;
     const unsigned long long half = h2 << 1;         /* the larger half (stage st+1) */
     const unsigned long long *twA = tbl + (h2 - 1);          /* stage st */
     const unsigned long long *twB = tbl + (half - 1);        /* stage st+1 */
     const unsigned long long units = TILE >> 2;
     for (unsigned long long m = threadIdx.x; m < units; m += blockDim.x) {
-        const unsigned long long base = (m >> st) << (st + 2);
-        const unsigned long long u = m & (h2 - 1);
+        const unsigned long long base = WriteOut ? 0 : (m >> st) << (st + 2);
+        const unsigned long long u = WriteOut ? m : m & (h2 - 1);
         const unsigned long long a = sm[base + u];
         const unsigned long long b = sm[base + 2 * h2 + u];
         const unsigned long long c = sm[base + h2 + u];
@@ -62,10 +65,10 @@ __device__ __forceinline__ void tile_radix4_block_inv(unsigned long long *sm,
         /* stage st+1: (base+u, base+2h2+u) with j = u, (base+h2+u, base+3h2+u) with j = h2+u */
         const unsigned long long bv = gl_mul(b1, twB[u]);
         const unsigned long long dv2 = gl_mul(d1, twB[h2 + u]);
-        sm[base + u] = gl_add_dev(a1, bv);
-        sm[base + 2 * h2 + u] = gl_sub_dev(a1, bv);
-        sm[base + h2 + u] = gl_add_dev(c1, dv2);
-        sm[base + 3 * h2 + u] = gl_sub_dev(c1, dv2);
+        out[base + u] = gl_add_dev(a1, bv);
+        out[base + 2 * h2 + u] = gl_sub_dev(a1, bv);
+        out[base + h2 + u] = gl_add_dev(c1, dv2);
+        out[base + 3 * h2 + u] = gl_sub_dev(c1, dv2);
     }
 }
 

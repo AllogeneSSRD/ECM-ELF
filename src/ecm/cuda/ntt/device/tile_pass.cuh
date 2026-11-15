@@ -39,11 +39,18 @@ __device__ __forceinline__ void ntt_tile_finish_forward(unsigned long long* out,
 
 __device__ __forceinline__ void ntt_tile_finish_inverse(unsigned long long* out,
     unsigned long long* sm, unsigned long long tile_size, int first_stage, int tile_bits,
-    const unsigned long long* twiddles) {
+    const unsigned long long* twiddles, bool store_last_radix4 = false) {
     int stage = first_stage;
-    for (; stage + 1 < tile_bits; stage += 2) {
+    const int shared_limit = tile_bits - int(store_last_radix4);
+    for (; stage + 1 < shared_limit; stage += 2) {
         tile_radix4_block_inv(sm, tile_size, stage, twiddles);
         __syncthreads();
+    }
+    if (store_last_radix4) {
+        // The final radix-4 reads disjoint shared inputs and writes
+        // disjoint output quarters. No copy or barrier follows.
+        tile_radix4_block_inv<true>(sm, tile_size, stage, twiddles, out);
+        return;
     }
     if (stage < tile_bits) tile_radix2_stage<true>(sm, tile_size, stage, twiddles);
     for (unsigned long long i = threadIdx.x; i < tile_size; i += blockDim.x)

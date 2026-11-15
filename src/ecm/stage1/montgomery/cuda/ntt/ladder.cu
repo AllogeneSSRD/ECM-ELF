@@ -102,7 +102,8 @@ struct ProductInputs {
     U* cached_e;
 };
 
-template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false, bool WarpInput = false>
+template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false,
+         bool WarpInput = false, bool StoreLastRadix4 = false>
 __global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
 void inverse_product_tile(U* out,
                           // Keep dynamically indexed pointers in grid parameter memory.
@@ -136,7 +137,7 @@ void inverse_product_tile(U* out,
         }
         if (tile > 6) {
             __syncthreads();
-            ntt_tile_finish_inverse(output, sm, width, 6, tile, twiddles);
+            ntt_tile_finish_inverse(output, sm, width, 6, tile, twiddles, StoreLastRadix4);
         }
     } else {
         const bool square = left == right;
@@ -719,10 +720,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 };
                 auto kernel = kernels[ctx.t - 1];
                 kernel<<<groups,inverse_threads,0,q>>>(inverse.data,products,curves,ctx.tblI,product_scale);
-            } else if (inverse_warp_input)
-                inverse_product_tile<true,add_bb,loose_e,true><<<tiles,inverse_threads,inverse_smem,q>>>(
+            } else if (inverse_warp_input) {
+                // Keep the original tile kernel for the smaller batches.
+                const bool store_last = ctx.t == 12 || (ctx.t == 10 && curves >= 24);
+                const auto kernel = store_last ? inverse_product_tile<true,add_bb,loose_e,true,true>
+                                               : inverse_product_tile<true,add_bb,loose_e,true>;
+                kernel<<<tiles,inverse_threads,inverse_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
-            else if (warp_tile)
+            } else if (warp_tile)
                 inverse_product_tile<true,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
             else
