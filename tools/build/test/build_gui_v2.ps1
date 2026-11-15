@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 # Synchronize before collecting input hashes: generated headers/XML are frozen inputs too.
-foreach ($generator in @('generate_ecm_config.py','generate_gui_v2_state.py')) {
+foreach ($generator in @('generate_ecm_config.py','generate_gui_v2_state.py','generate_gui_v2_localization.py')) {
     Write-Host "== GUI v2 configuration: synchronize $generator =="
     & python (Join-Path $repo "tools/gen/$generator")
     if ($LASTEXITCODE -ne 0) { throw "GUI v2 configuration synchronization failed: $generator" }
@@ -30,31 +30,10 @@ $catalog = @('src/ecm/application/gui_v2','src/ecm/application/gui','src/ecm/app
     'src/ecm/platform/generated','src/io','src/ecm/group_order','src/ecm/curve','src/ecm/diagnostics','include/ecm','third_party/imgui','third_party/imgui_vulkan','third_party/gui_v2_vulkan','assets/gui_v2','tools/packaging/diagnostics_runtime.py','tools/packaging/gmp_payload.py','tools/build/test/build_diagnostics.ps1')
 if (-not $GmpRoot) { $catalog += 'third_party/gmp-zen3/dist' }
 $catalog += @('tools/build/test/build_gui_v2.ps1','tools/build/internal/check_gui_v2_config.cmake',
-    'tools/gen/generate_ecm_config.py','tools/gen/generate_gui_v2_state.py',
-    'config/ecm_options.json','config/ecm_config.generated.json',
+    'tools/build/internal/gui_v2_build_io.py','tools/gen/generate_ecm_config.py','tools/gen/generate_gui_v2_state.py',
+    'tools/gen/generate_gui_v2_localization.py',
+    'config/ecm_options.json','config/ecm_config.generated.json','config/gui_v2_localization_aliases.json',
     'config/gui_v2_localization.generated.json','config/gui_v2_state.generated.json')
-$inputs = @($catalog | ForEach-Object { Get-ChildItem -LiteralPath (Join-Path $repo $_) -File -Recurse })
-if($BasePetOnly) {
-    $assetRoot=(Join-Path $repo 'assets/gui_v2').TrimEnd('\')+'\'
-    $inputs=@($inputs|Where-Object { -not $_.FullName.StartsWith($assetRoot,[StringComparison]::OrdinalIgnoreCase) -or
-        ($_.DirectoryName -eq $assetRoot.TrimEnd('\') -and $_.Name -in @('pet_ely.png','pet_ely.json','CLASSIC-ELY-NOTICE.md','ELYTerminal-LICENSE.txt')) })
-}
-if (-not $WithoutLocalPari) {
-    $pari = Join-Path $repo 'third_party/pari-2.17.3'
-    if (-not (Test-Path -LiteralPath (Join-Path $pari 'provenance.json'))) { throw 'Prepare local PARI with tools/build/test/prepare_gui_v2_pari.py first' }
-    $provenance = Get-Content -LiteralPath (Join-Path $pari 'provenance.json') -Raw | ConvertFrom-Json
-    foreach ($entry in $provenance.sha256.PSObject.Properties) {
-        $file = Join-Path $pari $entry.Name
-        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { throw "Local PARI identity mismatch: $($entry.Name)" }
-        $inputs += Get-Item -LiteralPath $file
-    }
-    $inputs += Get-Item -LiteralPath (Join-Path $pari 'provenance.json')
-}
-$inputHashes = [ordered]@{}
-foreach ($file in $inputs | Sort-Object FullName -Unique) {
-    $key = $file.FullName.Substring($repo.Length+1).Replace('\','/')
-    $inputHashes[$key] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-}
 foreach ($legacy in @($repo, (Join-Path $repo 'build_gui'), (Join-Path $repo 'build_gui_local'))) {
     if ($BuildDir.TrimEnd('\') -eq $legacy.TrimEnd('\')) { throw 'GUI v2 requires an independent build directory' }
 }
@@ -73,24 +52,41 @@ if ($WithoutLocalPari) { $defs += '-DECM_GUI_V2_LOCAL_PARI=OFF' } else { $defs +
 if ($VulkanRoot) { $defs += "-DECM_GUI_V2_VULKAN=`"$VulkanRoot`"" }
 if ($BackendRoot) { $defs += "-DECM_GUI_V2_BACKEND=`"$BackendRoot`"" }
 $configure = "cmake -S `"$repo/src/ecm/application/gui_v2`" -B `"$BuildDir`" -G `"NMake Makefiles`" " + ($defs -join ' ')
-function Invoke-Compiler([string]$Command, [string]$Log) {
+$helper = Join-Path $repo 'tools/build/internal/gui_v2_build_io.py'
+function Invoke-Compiler([string]$ConfigureCommand, [string]$BuildCommand) {
     $saved = $ErrorActionPreference
+    $encoding = [Console]::OutputEncoding
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & cmd.exe /d /c "call `"$VcVars`" >nul 2>&1 && $Command" 2>&1 | Out-String
+        [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+        $configureToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ConfigureCommand))
+        $buildToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($BuildCommand))
+        & python $helper run --directory $BuildDir --vcvars $VcVars --configure $configureToken --build $buildToken
         $code = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $saved }
-    [IO.File]::WriteAllText((Join-Path $BuildDir $Log), $output)
-    if ($code) { Write-Host $output; throw "GUI v2 command failed ($code), log $Log" }
-    $output -split "`r?`n" | Where-Object { $_ -match 'gui_v2:|Built target|error|warning' } | Write-Host
-}
-Invoke-Compiler $configure 'configure.log'
-$targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_config_identity_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test ecm_gui_v2_native_timeout_fixture' } else { 'ecm_gui_v2' }
-Invoke-Compiler "cmake --build `"$BuildDir`" --target $targets" 'build.log'
-foreach ($key in $inputHashes.Keys) {
-    if ((Get-FileHash -LiteralPath (Join-Path $repo $key) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $inputHashes[$key]) {
-        throw "GUI v2 source catalog changed during build: $key"
+    } finally {
+        [Console]::OutputEncoding = $encoding
+        $ErrorActionPreference = $saved
     }
+    if ($code) { throw "GUI v2 command failed ($code). Build directory: $BuildDir" }
+}
+$snapshot = Join-Path $BuildDir ("gui-v2-inputs-{0}.json" -f [Guid]::NewGuid().ToString('N'))
+$snapshotArgs = @('--root', $repo, '--snapshot', $snapshot)
+if ($BasePetOnly) { $snapshotArgs += '--base-pet-only' }
+if ($WithoutLocalPari) { $snapshotArgs += '--without-local-pari' }
+$phase = [Diagnostics.Stopwatch]::StartNew()
+try {
+    Write-Host '== GUI v2 source preflight =='
+    & python $helper snapshot @snapshotArgs @catalog
+    if ($LASTEXITCODE) { throw 'GUI v2 source preflight failed' }
+    Write-Host ('GUI v2 source preflight completed in {0:N1}s' -f $phase.Elapsed.TotalSeconds)
+    $targets = if ($TestHelpers) { 'ecm_gui_v2 ecm_gui_v2_fake_worker ecm_gui_v2_owner_probe ecm_gui_v2_state_test ecm_gui_v2_config_identity_test ecm_gui_v2_app_test ecm_gui_v2_gpu_clock_test ecm_gui_v2_group_order_test ecm_gui_v2_native_timeout_fixture' } else { 'ecm_gui_v2' }
+    Invoke-Compiler $configure "cmake --build `"$BuildDir`" --target $targets"
+    Write-Host '== GUI v2 source postcheck =='
+    & python $helper snapshot --verify @snapshotArgs @catalog
+    if ($LASTEXITCODE) { throw 'GUI v2 source postcheck failed' }
+    $inputHashes = Get-Content -LiteralPath $snapshot -Raw -Encoding UTF8 | ConvertFrom-Json
+} finally {
+    [IO.File]::Delete($snapshot)
 }
 $binary = Join-Path $BuildDir 'ecm_gui_v2.exe'
 $versionHeader = [IO.File]::ReadAllText((Join-Path $repo 'include/ecm/platform/program_version.h'))

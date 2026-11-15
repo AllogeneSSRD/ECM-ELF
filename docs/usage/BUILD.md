@@ -175,7 +175,7 @@ Windows x64 的 `ecm.exe` 与 `ecm_cuda.exe` 默认包含 GWNUM 加载接口。�
 
 ## 复用构建
 
-Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。
+Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用，保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编，内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件由 CMake/NMake 管理。主程序、结果输出和 NTT 调优显式依赖公共版本头，local 构建核对产物的 `--version`。`-HostOnly` 要求已配置的同 profile 目录，在配置和主机编译前验证所有 CUDA 对象及原生依赖时间戳，任一失效即拒绝。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 会明确报错，主机修改使用正常增量或 `-HostOnly`。
 
 Stage1 在 CMake 配置前批量读取 Git HEAD 中的源码 BOM 基准，检查 `kernels/` 和 `src/` 中对应该版本的工作区文件。BOM 不一致时只修正文件开头，保留正文。独立诊断入口 `tools/diag/ensure_bom.ps1 -NoFix` 可只报告差异。
 

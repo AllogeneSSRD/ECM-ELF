@@ -43,7 +43,8 @@ def main():
     for name,content in products().items():
         path=ROOT/name
         if args.check:assert path.read_bytes()==content.encode(),f'Stale localization definitions: {name}'
-        else:path.write_text(content,encoding='utf-8',newline='\n')
+        elif not path.exists() or path.read_bytes()!=content.encode():
+            path.write_text(content,encoding='utf-8',newline='\n')
     print('GUI v2 localization keys current' if args.check else 'GUI v2 localization aliases generated')
 
 if __name__=='__main__':main()

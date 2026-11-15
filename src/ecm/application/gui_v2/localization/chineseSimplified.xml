@@ -375,16 +375,17 @@
       <Item id="worker.curve_edwards" name="Edwards" />
       <Item id="worker.stage1_execution" name="Stage1 执行" />
       <Item id="worker.stage1_kernel_bits" name="内核位宽" />
+      <Item id="worker.stage1_ntt_type" name="NTT 类型" />
+      <Item id="worker.stage1_naf_window" name="NAF 窗口" />
+      <Item id="worker.stage1_prac_level" name="PRAC 等级" />
       <Item id="worker.stage1_x_only" name="仅 x 坐标" />
       <Item id="worker.stage1_binary" name="二进制算法" />
-      <Item id="worker.stage1_handoff" name="计划交接" />
       <Item id="worker.stage1_handoff_off" name="关闭，保留 Stage1 存档" />
       <Item id="worker.stage1_handoff_incompatible" name="当前曲线构造与配置的路线不兼容，保留存档" />
       <Item id="worker.stage1_handoff_workers" name="Worker" />
       <Item id="worker.stage1_handoff_fallback" name="Prime95 不支持时备用" />
       <Item id="worker.stage1_handoff_keep_unsupported" name="不支持时保留存档" />
       <Item id="worker.stage1_handoff_edwards_only" name="仅 Edwards" />
-      <Item id="worker.stage1_handoff_condition" name="无因子且有兼容的保存点时交接" />
       <Item id="worker.stage1_handoff_local_queue" name="ECM-ELF Stage2 队列" />
       <Item id="worker.stage1_handoff_prime95_queue" name="Prime95 任务队列" />
       <Item id="worker.stage1_handoff_prime95_save" name="Prime95 存档目录" />

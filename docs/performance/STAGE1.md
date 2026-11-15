@@ -104,6 +104,20 @@ python tools/bench/bench_stage1_cgbn_baseline.py --exe $worker --version 0.63.7 
 
 复现 PARAM0 主图时，在原绘图参数上各加一次 `--cgbn-retest <设备号> <comparison.json>`，使用上述 GPU0、GPU1 各自的 `comparison.json`。
 
+## 按版本比较 GPU Stage1 吞吐
+
+四档固定使用 M2003、M4001、M8011、M16319。NTT 计算完整梅森模数，CGBN 计算同一输入剥除已知因子后的 1939、3600、7995、16272 位余因子。柱顶数值为折算到 B1=1,000,000 的曲线／秒，即 `曲线数 × 实测 B1 / (批次秒 × 1,000,000)`。每张卡、每种后端、每个版本各取已测可比配置中吞吐最高的一组，有重复样本时先取每组时间中位数。缺测组合留空。
+
+![Edwards Stage1 四个位宽的 GPU 版本吞吐柱状图](attachments/stage1-ed-version-throughput.png)
+
+![Montgomery PARAM0 Stage1 四个位宽的 GPU 版本吞吐柱状图](attachments/stage1-mont0-version-throughput.png)
+
+GPU 实心柱使用设备主循环计时，斜线柱保留历史 Montgomery 的设备全局计时，含准备开销。每个子图最右的黑柱为 4.0 GHz 单核 Prime95，采用各曲线族三次原生 Stage1 计时的中位数，按相同 B1 折算。Prime95 的 GWNUM 使用完整梅森指数设置算术位宽，原日志未记录精确版本。见 [Prime95 单核基准与 B1 外推](#prime95-单核基准与-b1-外推)。
+
+跨版本采用各轮实测配置，包括并行数、调优范围、NAF 窗口与曲线算法。0.62.4 的 RTX 4070 Ti NTT 样本允许搜索最多 128 条，0.62.3 的上限为 32 条。0.63.7 的 PARAM0 在 M2003 上选取同批复测的获胜路径，4070 Ti 为 ladder，4060 Laptop 为 PRAC 50。更早的折叠测试使用不同的原模数或批量条件，不能归到这四个固定输入的历史柱。见 [样本与计时](#样本与计时)、[PRAC 配对复测](#param0-prac-50-与-ladder-的配对复测)。
+
+图表从 Git 快照 `2d091243:docs/performance/STAGE1.md` 和 `fed434ef:docs/performance/CGBN_SQUARE.md` 恢复早期 CGBN 数据。0.57.16 采用历史构建的启动版本，三档均选原 CGBN。其余来源为主图的比较 CSV 及 0.60.2 PARAM0 自动选型复测。运行 [版本吞吐绘图脚本](../../tools/bench/plot_stage1_version_throughput.py) 可从原数据复算；逐柱的版本、算法、计时口径和来源写入 `data/benchmarks/stage1_version_throughput/selected.csv`。见 [早期 4070 Ti 工况](#输入与工况)、[CGBN 历史 A/B](CGBN_SQUARE.md#平方装配与redc融合的完整stage1资格)、[0.60.2 全位宽复测](STAGE1_MERSENNE_NTT.md#0602-全位宽复测与精确边界)。
+
 ## Edwards 与 Montgomery 的 Stage1 耗时差
 
 同一张卡上，对相同输入、B1 和批量计算 `100 × (Edwards 主循环耗时 / Montgomery PARAM0 主循环耗时 − 1)`。负值表示 Edwards 耗时较少。CGBN 横轴为剥除已知因子后的余因子位宽，NTT 横轴为完整梅森模数的位宽。

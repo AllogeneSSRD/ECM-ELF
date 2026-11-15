@@ -161,14 +161,23 @@ static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
 }
 static void stage1_details(const fs::path& root) {
     const auto execution=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
-        "ntt_length=32 ntt_bpw=24 naf=0 ntt_forward_pass_bits=2+3").stage1;
+        "ntt_bits=127 ntt_length=32 ntt_bpw=24 naf=0 ntt_shape=1:3:4:5:1:2,3:3,2 "
+        "ntt_forward_pass_bits=2+3").stage1;
     const auto compact=ecmgui_v2::ui::stage1_execution(execution,false);
-    assert(compact.find("CUDA/NTT")!=compact.npos && compact.find("x-only")!=compact.npos &&
+    assert(compact.find("CUDA/NTT 127 bits | L=32 | bpw=24 | NTT type=1:3:4:5:1:2,3:3,2")!=compact.npos &&
+           compact.find("x-only")!=compact.npos && compact.find('\n')==compact.npos &&
            compact.find("ntt_forward_pass_bits")==compact.npos);
     assert(ecmgui_v2::ui::stage1_execution(execution,false,true).find("ntt_forward_pass_bits=2+3")!=compact.npos);
-    const auto binary=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=cgbn naf=0 algorithm=binary").stage1;
+    const auto binary=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=cgbn "
+        "kernel_weight=1024 tpi=8 naf=0 algorithm=binary").stage1;
     const auto cgbn=ecmgui_v2::ui::stage1_execution(binary,false);
-    assert(cgbn.find("Binary")!=cgbn.npos && cgbn.find("x-only")==cgbn.npos);
+    assert(cgbn.find("CGBN＜1024, 8＞ | Binary")!=cgbn.npos && cgbn.find("x-only")==cgbn.npos);
+    const auto naf=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=cgbn "
+        "kernel_weight=2048 tpi=16 naf=5 algorithm=naf").stage1;
+    assert(ecmgui_v2::ui::stage1_execution(naf,false).find("CGBN＜2048, 16＞ | NAF window=5")!=std::string::npos);
+    const auto prac=ecmgui::parse_line("Stage1 execution: curve=mont param=m0 backend=cgbn "
+        "kernel_weight=1024 tpi=8 chain=prac prac=3").stage1;
+    assert(ecmgui_v2::ui::stage1_execution(prac,false).find("CGBN＜1024, 8＞ | PRAC level=3")!=std::string::npos);
     const auto mont=ecmgui::parse_line("Stage1 execution: curve=mont param=m0 backend=ntt naf=0 chain=ladder").stage1;
     const auto ladder=ecmgui_v2::ui::stage1_execution(mont,false,true);
     assert(ladder.find("chain=ladder")!=ladder.npos && ladder.find("x-only")==ladder.npos &&
@@ -185,8 +194,12 @@ static void stage1_details(const fs::path& root) {
     const auto& plan=workers.at(1).stage1_handoff;
     assert(plan.prime95 && plan.local_fallback && !plan.local && plan.local_workers=="auto");
     const auto details=ecmgui_v2::ui::stage1_handoff(plan,{},false,true);
-    assert(details.find("no factor and compatible saved points")!=details.npos &&
+    assert(details.find("compatible saved points")==details.npos &&
            details.find("local-queue.txt")!=details.npos && details.find("prime95.txt")!=details.npos);
+    ecmgui::Stage1HandoffPlan direct;
+    direct.local=true;
+    direct.local_workers="2";
+    assert(ecmgui_v2::ui::stage1_handoff(direct,prac,false)=="Stage2 → ECM-ELF (Worker2)");
     const auto fallback=ecmgui_v2::ui::stage1_handoff(plan,execution,false,true);
     assert(fallback.find("local-queue.txt")!=fallback.npos && fallback.find("prime95.txt")==fallback.npos);
     const auto param3=ecmgui::parse_line("Stage1 execution: curve=mont param=m3 backend=cgbn").stage1;

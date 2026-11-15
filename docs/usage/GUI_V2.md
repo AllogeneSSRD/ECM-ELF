@@ -4,9 +4,9 @@ GUI v2 是独立的 Windows / C++ / Dear ImGui 前端，版本直接使用`inclu
 
 ## 构建与启动
 
-GUI v2 独立 BAT、`internal/build_gui_v2.ps1` 包装和测试构建共用 `tools/build/test/build_gui_v2.ps1`。入口先依次运行 `generate_ecm_config.py`、`generate_gui_v2_state.py`，同步业务配置、GUI 侧车、业务选项头文件及选项 XML，再冻结源码/配置摘要并配置 CMake；任一步失败即停止。无内容变化的生成物保留时间戳。CMake 的过期检查及构建后源码身份复查继续生效；直接调用 CMake 时须自行先完成这两个生成步骤。
+GUI v2 独立 BAT、`internal/build_gui_v2.ps1` 包装和测试构建共用 `tools/build/test/build_gui_v2.ps1`。入口同步业务配置、GUI 侧车和语言资源，然后计算源码及配置摘要。配置和编译共用一次 MSVC 环境初始化。终端显示各阶段及实时构建输出，并过滤 MSVC 的包含文件跟踪。`configure.log` 和 `build.log` 保留完整 UTF-8 输出。无内容变化的生成物保留时间戳。直接调用 CMake 时需先运行 `generate_ecm_config.py`、`generate_gui_v2_state.py` 和 `generate_gui_v2_localization.py`。
 
-GUI 与模型源文件显式依赖业务/GUI 配置生成头文件及公共版本头，确保生成内容或版本变化时重编译，包括旧缓存未正确记录 MSVC 本地化头文件依赖的情况。构建入口在产出后执行不打开窗口的`--version`，核对公共版本并将横幅和版本写入构建清单；不一致时构建失败。没有变化的生成物不会因此触发重编译；这不替代其他普通头文件的编译器依赖跟踪。
+旧 NMake 构建目录首次切换到 UTF-8 输出时，入口让 CMake 重新探测 MSVC，并重建已有依赖列表为空的对象。业务与 GUI 配置生成头文件及公共版本头另有显式依赖。构建入口在产出后执行不打开窗口的 `--version`，核对公共版本并将横幅和版本写入构建清单。
 
 完整 CUDA 发布由 `tools/build/build_release.ps1/.bat` 构建，使用独立 `gui-v2-release` 目录、统一 vcpkg 通用 GMP，并只启用基础 Classic ELY 注册项和资源。两个 CUDA 包各自包含完整 GUI v2、群阶/诊断助手和相邻计算 worker。发布不会直接拾取已有 local GUI 候选；入口核对 GMP头/库/DLL、源码和程序身份。下面的独立 local/GUI-only 入口保留完整皮肤候选及其本地依赖条件，完整发布的目录、工具链和载荷以[构建与发布](BUILD.md)为准。
 
@@ -75,9 +75,11 @@ GUI允许打开含另一版本Stage1／Stage2新键、未知枚举或类型变�
 
 日志默认跟随可见的Workers管理页：中央Workers页或右侧当前显示Workers时显示，切换到其他视图自动隐藏。自动隐藏不改变保存的`ui.logs`启用偏好，也不停止日志收集或计算控制。在其他视图手动打开日志仅对当前视图停留生效，换页恢复自动规则；在Workers管理页手动关闭则保留关闭偏好。“视图”及“设置 → 布局与交互”提供“保持日志页面可见”，开启后已启用日志跨页可见，该选择保存为`ui.logs_keep_visible`。
 
-Stage1 的 Worker 摘要、检查器和单 Worker 日志依据计算程序上报的执行记录显示实际曲线、参数化和后端。CGBN 或 OpenCL 可显示内核位宽和 TPI，NTT 可显示线性或加权模式、当前位宽、长度和每字位数。检查器和日志还显示执行记录中的其他参数。新任务开始时清除上一任务的执行详情。
+Stage1 的 Worker 摘要、检查器和单 Worker 日志按执行记录显示实际曲线、参数化和后端。例如 `CGBN＜2048, 16＞` 表示内核位宽和 TPI。NTT 同时显示当前模数位宽、变换长度、每字位数，以及与 tune 同序的冒号分隔类型，依次为卷积模式（0 为线性，1 为加权）、tile 位数、最大 radix 位数、graph 位数、warp tail、正向与反向分步。执行记录提供 NAF 窗口或 PRAC 等级时，同一行显示该值。检查器和日志还显示其他执行参数。新任务开始时清除上一任务的执行详情。
 
-计划交接从当前 Worker 的有效 TOML 配置读取，显示关闭、ECM-ELF Stage2 或 Prime95。v3 工作流收到实际曲线参数化后，会据此更新可用路线。检查器和日志可查看已配置的目标队列、Prime95 存档目录和备用路线。交接取决于 Stage1 无因子完成且产生兼容的保存点，实际投递结果见 Worker 日志。
+执行详情要求 `[gui].stage1_exe` 指向能输出 `Stage1 execution:` 的计算程序。更新已有目录时，GUI 和 Stage1 计算程序需配套更新。收到当前任务的执行记录后，GUI 才显示实际参数。
+
+Stage2 投放行按当前 Worker 的有效 TOML 配置显示目标，例如 `Stage2 → ECM-ELF (Worker2)`。v3 工作流收到实际曲线参数化后，会据此更新可用路线。检查器和日志可查看已配置的目标队列、Prime95 存档目录和备用路线。Stage1 无因子完成且产生兼容的保存点后才会交接，实际投递结果见 Worker 日志。
 
 导航和工作区的顶部标签栏默认收起，点击停靠区左上角的小三角可展开。导航、工作区和右侧停靠区的“Hide tab bar”选择分别保存为 `ui.nav_hide_tab_bar`、`ui.workspace_hide_tab_bar`、`ui.right_hide_tab_bar`。重启和布局重建会沿用已保存的选择。右侧有多个标签时保留横排标签栏，恢复单标签后重新使用原隐藏选择。旧侧车缺少右侧标签栏选项时，沿用已载入布局的右侧状态。
 

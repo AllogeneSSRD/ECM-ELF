@@ -375,16 +375,17 @@
       <Item id="worker.curve_edwards" name="Edwards" />
       <Item id="worker.stage1_execution" name="Stage1 execution" />
       <Item id="worker.stage1_kernel_bits" name="Kernel bits" />
+      <Item id="worker.stage1_ntt_type" name="NTT type" />
+      <Item id="worker.stage1_naf_window" name="NAF window" />
+      <Item id="worker.stage1_prac_level" name="PRAC level" />
       <Item id="worker.stage1_x_only" name="x-only" />
       <Item id="worker.stage1_binary" name="Binary" />
-      <Item id="worker.stage1_handoff" name="Planned handoff" />
       <Item id="worker.stage1_handoff_off" name="Off, keep the Stage1 save" />
       <Item id="worker.stage1_handoff_incompatible" name="Keep the save, this construction is incompatible with the configured route" />
-      <Item id="worker.stage1_handoff_workers" name="Workers" />
+      <Item id="worker.stage1_handoff_workers" name="Worker" />
       <Item id="worker.stage1_handoff_fallback" name="fallback if Prime95 is unsupported" />
       <Item id="worker.stage1_handoff_keep_unsupported" name="keep save if unsupported" />
       <Item id="worker.stage1_handoff_edwards_only" name="Edwards only" />
-      <Item id="worker.stage1_handoff_condition" name="Requires no factor and compatible saved points" />
       <Item id="worker.stage1_handoff_local_queue" name="ECM-ELF Stage2 queue" />
       <Item id="worker.stage1_handoff_prime95_queue" name="Prime95 worktodo" />
       <Item id="worker.stage1_handoff_prime95_save" name="Prime95 save directory" />

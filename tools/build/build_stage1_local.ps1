@@ -136,6 +136,11 @@ Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $BuildDir 
 
 $exe = Join-Path $BuildDir "ecm_cuda.exe"
 if (Test-Path $exe) {
+    $header = [IO.File]::ReadAllText((Join-Path $repo 'include/ecm/platform/program_version.h'))
+    if ($header -notmatch 'version\[\]\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"') { throw 'Public program version not found' }
+    $expected = "ECM-ELF $($Matches[1])"
+    $banner = (& $exe --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $banner -ne $expected) { throw "Stage1 version mismatch: expected $expected; actual $banner" }
     $cuobjdump = Join-Path $cuda.Root "bin\cuobjdump.exe"
     $nCubins = ((& $cuobjdump --list-elf $exe 2>&1) | Select-String '\.cubin').Count
     $nPtx = ((& $cuobjdump --list-ptx $exe 2>&1) | Select-String '\.ptx').Count

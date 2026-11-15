@@ -63,49 +63,64 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
     line += " | ";
     line += backend == "cgbn" ? "CUDA/CGBN" : backend == "ntt" ? "CUDA/NTT" :
         backend == "cpu" ? "CPU" : backend == "opencl" ? "OpenCL" : backend;
-    const auto algorithm = execution.details.find("algorithm");
-    const auto append_field = [&](const std::string& key) {
+    const auto field = [&](const char* key) -> std::string {
         const auto found = execution.details.find(key);
-        if (found == execution.details.end())
-            return;
-        const auto& value = found->second;
-        if (key == "naf" && value == "0" && (execution.curve != "ed" ||
-            (backend == "cgbn" && algorithm != execution.details.end() && algorithm->second == "binary")))
-            return;
-        if (!details && key == "algorithm" && value == "naf")
-            return;
-        line += " | ";
-        if (key == "cpu_impl") {
-            line += value == "ifma" ? "IFMA SIMD" : value == "scalar" ? "GMP scalar" :
-                value == "gwnum" ? "GWNUM" : value;
-        } else if (key == "naf") {
-            line += value == "0" && backend == "ntt" ? text("worker.stage1_x_only", zh) : "NAF=" + value;
-        } else if (key == "algorithm" && value == "binary") {
-            line += text("worker.stage1_binary", zh);
-        } else {
-            const std::string label = key == "kernel_weight" ? text("worker.stage1_kernel_bits", zh) :
-                key == "tpi" ? "TPI" : key == "ntt_type" ? "NTT" :
-                key == "ntt_length" ? "L" : key == "ntt_bpw" ? "bpw" :
-                key == "ntt_bits" ? "NTT bits" : key == "prac" ? "PRAC" : key;
-            line += label + "=" + value;
-        }
+        return found == execution.details.end() ? std::string{} : found->second;
     };
-    static constexpr const char* core[] = {
-        "cpu_impl", "kernel_weight", "tpi", "ntt_type", "ntt_bits", "ntt_length", "ntt_bpw",
+    const auto append = [&](const std::string& value) { line += " | " + value; };
+    const auto append_field = [&](const char* key, const char* label) {
+        if (const auto value = field(key); !value.empty())
+            append(std::string(label) + "=" + value);
+    };
+    if (backend == "cgbn" || backend == "opencl") {
+        const auto weight = field("kernel_weight"), tpi = field("tpi");
+        if (!weight.empty() && !tpi.empty())
+            line += "＜" + weight + ", " + tpi + "＞";
+        else {
+            append_field("kernel_weight", text("worker.stage1_kernel_bits", zh));
+            append_field("tpi", "TPI");
+        }
+    } else if (backend == "ntt") {
+        if (const auto bits = field("ntt_bits"); !bits.empty())
+            line += " " + bits + " bits";
+        append_field("ntt_length", "L");
+        append_field("ntt_bpw", "bpw");
+        if (const auto shape = field("ntt_shape"); !shape.empty())
+            append(std::string(text("worker.stage1_ntt_type", zh)) + "=" + shape);
+        else
+            append_field("ntt_type", text("worker.stage1_ntt_type", zh));
+    } else if (backend == "cpu") {
+        if (const auto impl = field("cpu_impl"); !impl.empty())
+            append(impl == "ifma" ? "IFMA SIMD" : impl == "scalar" ? "GMP scalar" :
+                   impl == "gwnum" ? "GWNUM" : impl);
+    }
+    const auto naf = field("naf"), algorithm = field("algorithm"), chain = field("chain");
+    const auto prac = field("prac");
+    if (!naf.empty() && naf != "0")
+        append(std::string(text("worker.stage1_naf_window", zh)) + "=" + naf);
+    else if (algorithm == "binary")
+        append(text("worker.stage1_binary", zh));
+    else if (chain == "x-only" || (backend == "ntt" && execution.curve == "ed" && naf == "0"))
+        append(text("worker.stage1_x_only", zh));
+    if (!prac.empty())
+        append(std::string(text("worker.stage1_prac_level", zh)) + "=" + prac);
+    if (!chain.empty() && chain != "x-only" && chain != "naf" && (chain != "prac" || prac.empty()))
+        append("chain=" + chain);
+
+    static constexpr std::string_view shown[] = {
+        "cpu_impl", "kernel_weight", "tpi", "ntt_type", "ntt_bits", "ntt_length", "ntt_bpw", "ntt_shape",
         "naf", "algorithm", "chain", "prac"
     };
-    for (const auto* key : core)
-        append_field(key);
     if (details)
-        for (const auto& field : execution.details)
-            if (std::find(std::begin(core), std::end(core), field.first) == std::end(core))
-                append_field(field.first);
+        for (const auto& [key, value] : execution.details)
+            if (std::find(std::begin(shown), std::end(shown), key) == std::end(shown))
+                append(key + "=" + value);
     return line;
 }
 
 inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
                                   const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {
-    std::string line = std::string(text("worker.stage1_handoff", zh)) + "  ";
+    std::string line = "Stage2 → ";
     if (!plan.prime95 && !plan.local)
         return line + text("worker.stage1_handoff_off", zh);
     bool local = plan.local, prime95 = plan.prime95, local_fallback = plan.local_fallback;
@@ -122,7 +137,8 @@ inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
     }
     const auto append_workers = [&](const std::string& workers) {
         if (!workers.empty())
-            line += " (" + std::string(text("worker.stage1_handoff_workers", zh)) + " " + workers + ")";
+            line += " (" + std::string(text("worker.stage1_handoff_workers", zh)) +
+                (workers == "auto" ? " " : "") + workers + ")";
     };
     if (prime95) {
         line += "Prime95";
@@ -133,15 +149,13 @@ inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
     if (local || local_fallback) {
         if (prime95)
             line += local_fallback ? " → " : " / ";
-        line += "ECM-ELF Stage2";
+        line += "ECM-ELF";
         if (local_fallback || fallback_selected)
             line += " (" + std::string(text("worker.stage1_handoff_fallback", zh)) + ")";
         if (plan.edwards_only)
             line += " (" + std::string(text("worker.stage1_handoff_edwards_only", zh)) + ")";
         append_workers(plan.local_workers);
     }
-    line += " | ";
-    line += text("worker.stage1_handoff_condition", zh);
     if (details) {
         if (prime95) {
             line += "\n" + std::string(text("worker.stage1_handoff_prime95_queue", zh)) + "  " +
