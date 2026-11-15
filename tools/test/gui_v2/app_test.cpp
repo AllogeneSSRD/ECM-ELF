@@ -159,6 +159,44 @@ static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
     assert(status.done==5&&status.progress().eta_s==0&&status.curves.empty());
     std::cout<<"{\"stage2_parallel_views\":true,\"pipeline_hidden\":true,\"serial_fallback\":true,\"all_curve_samples\":true}\n";
 }
+static void stage1_details(const fs::path& root) {
+    const auto execution=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
+        "ntt_length=32 ntt_bpw=24 naf=0 ntt_forward_pass_bits=2+3").stage1;
+    const auto compact=ecmgui_v2::ui::stage1_execution(execution,false);
+    assert(compact.find("CUDA/NTT")!=compact.npos && compact.find("x-only")!=compact.npos &&
+           compact.find("ntt_forward_pass_bits")==compact.npos);
+    assert(ecmgui_v2::ui::stage1_execution(execution,false,true).find("ntt_forward_pass_bits=2+3")!=compact.npos);
+    const auto binary=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=cgbn naf=0 algorithm=binary").stage1;
+    const auto cgbn=ecmgui_v2::ui::stage1_execution(binary,false);
+    assert(cgbn.find("Binary")!=cgbn.npos && cgbn.find("x-only")==cgbn.npos);
+    const auto mont=ecmgui::parse_line("Stage1 execution: curve=mont param=m0 backend=ntt naf=0 chain=ladder").stage1;
+    const auto ladder=ecmgui_v2::ui::stage1_execution(mont,false,true);
+    assert(ladder.find("chain=ladder")!=ladder.npos && ladder.find("x-only")==ladder.npos &&
+           ladder.find("NAF=")==ladder.npos);
+    const auto path=root/"stage1-details.toml";
+    write(path,"config_version=3\n[shared]\nworker_count=2\n[stage1]\nhandoff.mode='off'\n"
+        "[worker.2]\nstage1.handoff.mode='prime95'\nstage1.handoff.unsupported='ecm-elf'\n"
+        "stage1.handoff.workers='auto'\nstage1.handoff.worktodo_file='local-queue.txt'\n"
+        "stage1.prime95.worktodo_file='prime95.txt'\n");
+    ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);
+    assert(app.load_config(path.u8string()));
+    const auto& workers=app.controller.workers();
+    assert(ecmgui_v2::ui::stage1_handoff(workers.at(0).stage1_handoff,{},false).find("Off")!=std::string::npos);
+    const auto& plan=workers.at(1).stage1_handoff;
+    assert(plan.prime95 && plan.local_fallback && !plan.local && plan.local_workers=="auto");
+    const auto details=ecmgui_v2::ui::stage1_handoff(plan,{},false,true);
+    assert(details.find("no factor and compatible saved points")!=details.npos &&
+           details.find("local-queue.txt")!=details.npos && details.find("prime95.txt")!=details.npos);
+    const auto fallback=ecmgui_v2::ui::stage1_handoff(plan,execution,false,true);
+    assert(fallback.find("local-queue.txt")!=fallback.npos && fallback.find("prime95.txt")==fallback.npos);
+    const auto param3=ecmgui::parse_line("Stage1 execution: curve=mont param=m3 backend=cgbn").stage1;
+    const auto prime95=ecmgui_v2::ui::stage1_handoff(plan,param3,false,true);
+    assert(prime95.find("prime95.txt")!=prime95.npos && prime95.find("local-queue.txt")==prime95.npos);
+    const auto param2=ecmgui::parse_line("Stage1 execution: curve=mont param=m2 backend=cgbn").stage1;
+    const auto keep=ecmgui_v2::ui::stage1_handoff(plan,param2,false,true);
+    assert(keep.find("incompatible")!=keep.npos && keep.find("prime95.txt")==keep.npos &&
+           keep.find("local-queue.txt")==keep.npos);
+}
 static void workflow_errors(const fs::path& root){
     const auto path=root/"workflow-error.toml";
     write(path,"[gui]\nNumWorkers=\"invalid\"\n");
@@ -177,6 +215,17 @@ static void workflow_errors(const fs::path& root){
     assert(read(path).find("stage2_giant_backend=\"future\"")!=std::string::npos);
     write(path,"[gui]\nNumWorkers=\"invalid\"\n");
     assert(!app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&!app.workflow_load_error.empty());
+    state.worker_count=4;
+    write(path,"config_version=3\n[shared]\nworker_count=2\n[gui]\nworker_count=3\n");
+    assert(app.load_config(path.u8string())&&app.controller.workers().size()==2&&app.workflow_worker_count==2);
+    write(path,"config_version=3\n[shared]\nworker_count=65\n");
+    assert(!app.load_config(path.u8string())&&app.controller.workers().size()==2&&app.workflow_worker_count==2);
+    write(path,"config_version=3\n[gui]\nworker_count=3\n");
+    assert(app.load_config(path.u8string())&&app.controller.workers().size()==3&&app.workflow_worker_count==3);
+    write(path,"config_version=2\n[gui]\nworker_count=3\n");
+    assert(app.load_config(path.u8string())&&app.controller.workers().size()==4&&app.workflow_worker_count==0);
+    write(path,"config_version=3\n");
+    assert(app.load_config(path.u8string())&&app.controller.workers().size()==4&&app.workflow_worker_count==0);
 }
 static void result_table_contract(const fs::path& root){
     const auto row=[](int exponent,int b1,int day,bool factored=false){
@@ -397,6 +446,7 @@ int main(int argc,char** argv){
      }ImGui::DestroyContext(context);}
     assert(argc==2||argc==3);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
     workflow_errors(root);
+    stage1_details(root);
     {using namespace ecmgui_v2::ui;
      auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
      auto timing=stage2_timing(previous,tuned,0);assert(timing.seconds[5]==20&&timing.sources[5]==1&&timing.seconds[2]==10&&timing.sources[2]==2);

@@ -85,12 +85,12 @@ def main():
             case=out/f'cli_invalid_{index}';case.mkdir();log,_=run(case.name,args,case,success=False)
             assert 'INPUT[cli]' in log and key in log and value in log and 'expected' in log
         passed('actionable_cli_diagnostics')
-        # Range checks precede worker/CLI overrides, including non-selected workers.
+        # Validate global values even when another worker overrides them.
         for bad in [-1, 17, 99]:
             case,q,ini=setup('invalid_backup_'+str(bad),'# empty\n',extra='ckpt_backups='+str(bad)+'\n')
             ini.write_text(ini.read_text()+'\n[workers.2.stage1]\nckpt_backups=3\n')
             log,_=run(case.name,['--config',ini],case,success=False)
-            assert 'key=ckpt_backups' in log and "value='"+str(bad)+"'" in log and '0..16' in log
+            assert 'key=ckpt_backups' in log and f'value={bad}\n' in log and '0..16' in log
             assert q.read_text()=='# empty\n'
         passed('checkpoint_backup_range_before_precedence')
         for name,args in [('invalid_duplicate',['--sigma','bad','--sigma','200','100']),
@@ -145,18 +145,58 @@ def main():
         case,q,ini=setup('masked_invalid_config','# empty\n')
         ini.write_text(ini.read_text().replace('device='+str(a.device),'device=-1')+'\n[workers.1.stage1]\ndevice=0\n')
         log,_=run(case.name,['--config',ini,'-d','0'],case,success=False)
-        assert str(ini) in log and 'key=device' in log and "value='-1'" in log and 'expected' in log
+        assert str(ini) in log and 'key=device' in log and 'value=-1\n' in log and 'expected' in log
         passed('invalid_explicit_config_not_masked')
         case,q,ini=setup('masked_invalid_affinity','# empty\n',extra='affinity="0,,1"\n')
         ini.write_text(ini.read_text()+'\n[workers.1.stage1]\naffinity="0"\n')
         log,_=run(case.name,['--config',ini,'--affinity','1'],case,success=False)
         assert 'key=affinity' in log and '0,,1' in log and 'expected' in log
         passed('invalid_affinity_not_masked')
-        case,q,ini=setup('invalid_execution_combination','ECM=1,2,127,-1,100,0,2,1000\n')
-        original=q.read_bytes();ini.write_text(ini.read_text().replace('target="cpu"','target="gpu"'))
-        log,_=run(case.name,['--config',ini],case,success=False)
+        case,q,ini=setup('invalid_execution_combination','ECM=1,2,127,-1,100,0,2,1000\n',target='gpu')
+        original=q.read_bytes()
+        log,_=run(case.name,['--config',ini,'--impl','scalar'],case,success=False)
         assert 'keys=target,impl,reduction' in log and q.read_bytes()==original and '# ERROR' not in q.read_text()
-        passed('invalid_config_combination_preserves_queue')
+        passed('explicit_backend_mismatch_preserves_queue')
+        case,q,ini=setup('cpu_preset_on_gpu','# empty\n',target='gpu')
+        ini.write_text('config_version=3\n[shared]\nworktodo_file='+quoted(q)+
+                       '\nlog_file=""\n[stage1]\ntarget="gpu"\nparam="m0"\n'
+                       'cpu_implementation="simd[:6144], scalar[], auto[]"\n'
+                       'cpu_simd_reduction="montgomery"\ncpu_montgomery_chain="prac"\n')
+        log,_=run(case.name,['--config',ini],case)
+        assert 'execution target : gpu' in log and q.read_text()=='# empty\n'
+        passed('cpu_toml_presets_dormant_on_gpu')
+        case,q,ini=setup('gpu_preset_on_cpu','ECM=1,2,127,-1,100,0,1,1000\n',
+                         extra='gpu_algorithm="ntt"\nnaf_w=2\n')
+        original=q.read_bytes()
+        log,_=run(case.name+'_explicit',['--config',ini,'--gpu-algorithm','ntt'],case,success=False)
+        assert '--gpu-algorithm requires --target gpu' in log and q.read_bytes()==original
+        log,_=run(case.name,['--config',ini],case)
+        assert '1 task(s) processed' in log and not q.read_text().strip()
+        passed('gpu_ntt_and_edwards_naf_inactive_on_cpu_montgomery')
+        case,q,ini=setup('different_worker_invalid_option','# empty\n')
+        ini.write_text(ini.read_text()+'\n[workers.2.stage1]\nimpl="unknown"\n')
+        run(case.name,['--config',ini],case)
+        log,_=run(case.name+'_worker2',['--config',ini,'--worker','2'],case,success=False)
+        assert 'worker=2' in log and q.read_text()=='# empty\n'
+        passed('invalid_value_is_scoped_to_its_worker')
+        case,q,ini=setup('typed_save_wrong_backend','ECMSTAGE1=1,2,127,-1,"m2_m127_100.save",0,0,1\n')
+        original=q.read_bytes()
+        log,_=run(case.name,['--config',ini],case,success=False)
+        assert 'requires target=gpu' in log and 'worktodo retained' in log and q.read_bytes()==original
+        passed('current_backend_mismatch_does_not_disable_typed_save')
+        case,q,ini=setup('cpu_prac_on_edwards','ECM=1,2,127,-1,100,0,1,1000\n',
+                         model='ed',extra='cpu_mont_chain="prac"\n')
+        log,_=run(case.name,['--config',ini],case)
+        assert '1 task(s) processed' in log and not q.read_text().strip()
+        passed('cpu_montgomery_chain_inactive_on_edwards')
+        case,q,ini=setup('no_matching_cpu_policy','ECM=1,2,127,-1,100,0,1,1000\n')
+        ini.write_text('config_version=3\n[shared]\nworktodo_file='+quoted(q)+
+                       '\nlog_file=""\n[stage1]\ntarget="cpu"\nparam="m0"\n'
+                       'cpu_implementation="scalar[200:]"\n')
+        original=q.read_bytes()
+        log,_=run(case.name,['--config',ini],case,success=False)
+        assert 'no usable CPU Stage1 selection' in log and 'worktodo unchanged' in log and q.read_bytes()==original
+        passed('runtime_cpu_policy_failure_retains_task')
         case,q,ini=setup('precedence','',extra='sigma=2000\n')
         save=case/'m0_m127_100.save'
         native='ECM=1,2,127,-1,100,10000,4,1000'

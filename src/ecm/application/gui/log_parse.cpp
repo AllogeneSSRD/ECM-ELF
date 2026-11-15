@@ -6,7 +6,9 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace ecmgui {
 namespace {
@@ -69,6 +71,35 @@ bool starts_with(const std::string &s, const char *prefix) {
 
 bool contains(const std::string &s, const char *needle) {
     return s.find(needle) != std::string::npos;
+}
+
+bool parse_stage1_execution(const std::string& line, Stage1Execution& out) {
+    constexpr std::string_view prefix = "Stage1 execution:";
+    if (line.compare(0, prefix.size(), prefix) != 0)
+        return false;
+    Stage1Execution parsed;
+    std::istringstream fields(line.substr(prefix.size()));
+    for (std::string token; fields >> token;) {
+        const auto equal = token.find('=');
+        if (equal == token.npos || equal == 0 || equal + 1 == token.size())
+            continue;
+        const auto key = token.substr(0, equal);
+        auto value = token.substr(equal + 1);
+        if (key == "curve")
+            parsed.curve = std::move(value);
+        else if (key == "param")
+            parsed.param = std::move(value);
+        else if (key == "backend")
+            parsed.backend = std::move(value);
+        else
+            parsed.details.emplace(key, std::move(value));
+    }
+    if (!parsed.valid() ||
+        !((parsed.curve == "ed" && parsed.param == "e") ||
+          (parsed.curve == "mont" && (parsed.param == "m0" || parsed.param == "m2" || parsed.param == "m3"))))
+        return false;
+    out = std::move(parsed);
+    return true;
 }
 
 // ---- `p95_add:` notice fields -------------------------------------------------------
@@ -400,6 +431,10 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if (parse_stage1_execution(p, out.stage1)) {
+        out.kind = LogKind::Event;
+        return out;
+    }
     if(starts_with(p,"ECM-ELF ")) {
         const std::size_t end=p.find(' ',8);
         const std::string version=p.substr(8,end==p.npos?p.npos:end-8);

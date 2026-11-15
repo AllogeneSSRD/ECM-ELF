@@ -10,9 +10,21 @@ CPU Stage1 的实际模数超过 10240 位时，`cpu_implementation = "auto"` �
 
 v3 也可用 `cpu_implementation = "simd[:6144], scalar[:4096], gwnum[4096:], auto[]"`。规则按顺序检查剥除已知因子后的实际模数位宽和后端能力。区间左闭右开，省略边界表示最小值或无上限。`[]` 等价于 `[:]`，空字符串等价于 `auto`。
 
+全局默认值与当前 worker 的覆盖合并后，按最终 `target` 应用运行选项。GPU 任务保留配置中的 CPU 实现、归约及点乘链预设，CPU 任务保留 GPU 算法预设，切换目标时可复用这些配置。TOML 仍校验当前 worker 的选项值。为 GPU 任务显式指定非默认 `--impl`、`--reduction` 或 `--cpu-mont-chain` 会报错。CPU 任务拒绝显式指定的 `--gpu-algorithm` 和非自动的 `--gpu-backend`。
+
 Windows x64 worker 可通过 `--impl gwnum` 或 `[stage1]` 的 `cpu_implementation = "gwnum"` 为 CPU Montgomery PARAM0 加载同目录的 `gwnum.dll`。该路径沿用现有批次存档和结果格式。见 [构建与运行](BUILD.md#cpu-stage1-本地-gwnum-316)。
 
 CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_montgomery_chain = "prac"`、`target = "cpu"`、`param = "m0"` 和 `cpu_implementation = "simd"`。PRAC 计划按 B1 和标量倍数复用，存放在 `exponent_cache_dir`。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。续跑检查点时沿用原点乘方式。
+
+## 进度前的执行详情
+
+Stage1 在控制台和启用的文件日志中用 `Stage1 execution:` 行记录当前计算采用的曲线、参数化和后端。后端完成选型后再输出，包含恢复检查点、资源限制和调优结果生效后的实际值。
+
+- CGBN 输出内核容器位宽 `kernel_weight`、每个大整数的线程数 `tpi` 和适用的启动形状。Edwards 输出实际 NAF 窗口，Montgomery 输出所用点乘链，PRAC 路径同时输出实际搜索宽度 `prac`。
+- NTT 输出本批模数位宽 `ntt_bits`、卷积类型、变换长度 `ntt_length` 和 digit 位宽 `ntt_bpw`。`ntt_shape` 沿用调优输出的冒号分隔顺序，包括卷积类型、tile、radix、Graph、warp 尾层和正逆向各趟的层数。Edwards 的 `naf=0` 表示 x-only。
+- CPU 输出实际选中的实现和线程数，以及适用的 NAF 窗口或 PRAC 搜索宽度。OpenCL 输出实际内核形状和工作组；由驱动自行决定的工作组显示为 `auto`。
+
+GUI v2 从 Worker 输出读取这些数据，详情里的预计交接另按 Worker 的有效配置显示。见 [GUI v2 Worker 详情](GUI_V2.md)。
 
 ### CUDA CGBN Montgomery PARAM0
 
@@ -56,7 +68,7 @@ CPU IFMA 可用 `ECM_PRAC_SEARCH`，CUDA 可用上文的 TOML 选项。恢复检
 
 生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。`ECM=`/`ECM2=` 队列行没有 save 名称；CPU/GPU 的自动 save 共用 `save_name_pattern`，默认 `{curve}_{target}_{b1}.save`，写入 `save_dir`。curve 为 e、m0、m2、m3；target 保留梅森任务的原始指数，例如 m5351，即使已经剥离因子。普通整数使用 bit 加实际位宽。B1 使用紧凑写法，例如 `m0_m5351_260e6.save`、`e_m5351_260e6.save`。旧自定义模式自动补充曲线前缀；CLI 显式 `-save` 路径保持原样。保存失败时任务留在 worktodo，不会进入 finished。
 
-Stage1 启动器也接受 `ECMSTAGE1=` 队列：从 save 文件名末尾的 `_B1.save` 提取 B1。文件名前缀 `e_`、`m0_`、`m2_`、`m3_` 分别指定 Edwards、Montgomery PARAM0/2/3，覆盖该任务的 TOML `param`；`ed_` 兼容识别为 Edwards，并规范为 `e_`。Edwards 自动采用固定的 48·lcm 标量，忽略该任务的 Montgomery `lcm` 设置。执行设备和 CPU/GPU 选择仍由 TOML 决定，CPU 遇到 `m2_`/`m3_` 会报错并保留队列。每条任务独立应用前缀，不影响下一条无类型前缀任务的 TOML 默认值。无类型前缀的旧名称沿用 TOML，并自动补充类型前缀；父目录和剩余文件名保留。
+Stage1 启动器也接受 `ECMSTAGE1=` 队列，从 save 文件名末尾的 `_B1.save` 提取 B1。文件名前缀 `e_`、`m0_`、`m2_`、`m3_` 分别指定 Edwards、Montgomery PARAM0/2/3，覆盖该任务的 TOML `param`。`ed_` 兼容识别为 Edwards，并规范为 `e_`。Edwards 自动采用固定的 48·lcm 标量，忽略该任务的 Montgomery `lcm` 设置。确定实际曲线后，才应用 Edwards NAF 窗口和 CPU Montgomery 点乘链等曲线专用设置。CPU 遇到 `m2_` 或 `m3_` 等当前配置无法执行的任务会报错并保留队列。只有任务行本身无效时才将其标为 `# ERROR`。每条任务独立应用前缀，无类型前缀的旧名称沿用 TOML，并自动补充类型前缀。父目录和剩余文件名保留。
 
 控制台 `START:` 保留原始 worktodo 行；`finished` 和受支持的 Prime95 交接行使用实际 save 名称，其他字段保持原样。补前缀时，若新目标不存在或为空，将旧 save 中同曲线族、同参数化的记录复制到新文件后追加，保持原 `skip_curves` 编号；旧文件保留。记录类型冲突时停止并保留队列。新目标已有内容时不重复复制旧历史。`save_name_pattern` 只生成没有显式 save 名称的任务路径。
 
@@ -120,7 +132,7 @@ v3 的 `finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，
 
 v3 的 `[stage1] handoff.mode` 默认为 `"ecm-elf"`。Stage1 无因子完成且有可用保存点时，将原任务写入完成记录并生成 `ECMSTAGE2=`。投递保留 B2、曲线范围、AID 和已知因子，save 使用实际输出文件的绝对路径。只运行 Stage1 时可设 `handoff.mode = "off"`。
 
-`handoff.workers` 留空时保留当前 worker：目标为同一队列文件时原位改写；显式指定其他文件时，写入该文件的同编号 worker，不选择其他编号。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。投递到目标 worker 已有的最后一段末尾，保持该 worker 的任务先后顺序；只有缺少分区时才创建标签，文件头未标号部分视为 worker 1。投递时移除同一连续分区中的重复 worker 标签，保留任务、注释和空行；跨其他 worker 或未知方括号标签的显式分隔保留。`"auto"` 使用目标队列已有的 worker 分区（包括空分区），没有分区时使用本 TOML 的 `[gui] worker_count`。
+`handoff.workers` 留空时保留当前 worker：目标为同一队列文件时原位改写；显式指定其他文件时，写入该文件的同编号 worker，不选择其他编号。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。投递到目标 worker 已有的最后一段末尾，保持该 worker 的任务先后顺序；只有缺少分区时才创建标签，文件头未标号部分视为 worker 1。投递时移除同一连续分区中的重复 worker 标签，保留任务、注释和空行；跨其他 worker 或未知方括号标签的显式分隔保留。同队列的 `"auto"` 优先使用 `[shared] worker_count` 确定编号范围，兼容已有的显式 `[gui] worker_count`。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。目标为外部队列时，优先采用目标队列已有分区，缺少分区时按配置数量生成候选。可用显式列表指定外部接收方。
 
 `handoff.worktodo_file` 留空时使用当前 worker 生效的 `[shared] worktodo_file`。可填写绝对路径或相对 TOML 所在目录的路径。接收端去重使用 `[shared] finished_file`。在 `[worker.N]` 下加 `stage1.` 前缀可覆盖交接设置。
 
@@ -227,7 +239,7 @@ Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并�
 
 队列模式拒绝 CLI 的 `--curve`、`--gpu-param`、`--lcm`、`-gpucurves`、`-save/-savea` 和单次群阶诊断选项；`--bits` 需用于 `--gpu-info`。任务结构由 worktodo/typed save 决定。显式设备、target、impl、reduction、线程、NAF、affinity、checkpoint、目录和内核偏好可覆盖 worker 配置。sigma 优先级为 worktodo > 显式 CLI > 配置 > 原有随机策略；队列 CLI 仅接受不带 param 前缀的 sigma。运行时调试/缓存标志继续作用于进程。`--p95-dir` 为旧兼容参数，不启用交接。
 
-CLI/配置非法输入停止启动，诊断给出来源、键、原值和允许类型/范围；覆盖不会掩盖一个非法显式值。选中的非法 worktodo 行标为 `# ERROR` 并继续；文件、锁和标错写入失败停止。未知计算配置键严格报错，GUI-only 扩展仍按共享读取合同处理。
+CLI 或当前 Stage1 worker 的非法配置会停止启动，诊断给出来源、键、原值和允许类型或范围。CLI 覆盖仍需通过配置值校验。TOML 语法和重复键按整份文件检查，其他阶段和其他 worker 的选项值由对应的运行入口检查。选中的非法 worktodo 行标为 `# ERROR` 并继续。后端能力、运行失败、文件或锁错误会停止本次执行，保留任务供排查或重试。
 
 计算期间冻结当前任务，其他行允许新增、删除、修改或重排。完成时重新读取文件，在当前 worker 中从上到下匹配第一条完全相同的任务；行号只用于诊断。找不到当前任务时保留结果和完成记录并停止推进，不删除其他行。任意编辑器不遵守文件编辑锁时，无法提供与合作写入方相同的并发保证。
 

@@ -63,6 +63,7 @@ using namespace ecm_cuda_mont_host;
 #include "../../../cuda/runtime/cuda_ecm_shim.h"
 #include "../../../../io/stage1_checkpoint.h"
 #include "ecm/stage1/progress.h"
+#include "ecm/stage1/execution_details.h"
 
 #include <time.h>
 #include <sys/types.h>
@@ -84,12 +85,7 @@ using namespace ecm_cuda_mont_host;
 #include "registry.cuh"
 #define CGBN_CHECK(report) ecm_cuda_stage1::check_cgbn(report,__FILE__,__LINE__)
 
-#ifndef ECM_CUDA_ENABLE_PRAC
-#define ECM_CUDA_ENABLE_PRAC 0
-#endif
-#if ECM_CUDA_ENABLE_PRAC
 #include "prac/runtime.h"
-#endif
 
 static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
@@ -112,7 +108,6 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
   const char *algorithm = stage1_algorithm(requested);
   if (!algorithm) return ECM_ERROR;
   if (strcmp(algorithm, "ladder") != 0) {
-#if ECM_CUDA_ENABLE_PRAC
     if (gpu_param != 0 || ECM_MERS_FOLD) {
       outputf(OUTPUT_ERROR, "GPU: resident/PRAC requires param0 and a Montgomery build\n");
       return ECM_ERROR;
@@ -120,11 +115,6 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
     return run_mont_resident(checkpoint, factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
                                strcmp(algorithm, "prac") == 0,outcome,construction,generate_sigma,requested);
-#else
-    outputf(OUTPUT_ERROR, "GPU: resident/PRAC kernels are not built; rebuild with "
-                         "-EnablePrac or -DECM_CUDA_ENABLE_PRAC=ON\n");
-    return ECM_ERROR;
-#endif
   }
   uint64_t sigma64 = (sigma_ptr != NULL) ? *sigma_ptr : 0;
 
@@ -640,8 +630,18 @@ static int run_mont_runtime(ecm_stage1_checkpoint::Context& checkpoint, mpz_t *f
 
   ecm_stage1_gpu_progress::SpeedWindow speed;
   const bool dump_slice = dump_file && dump_host;
+  const unsigned rolling_depth = rolling_slice_depth(!dump_slice,requested.cuda_slice_depth);
   auto rolling=RollingSlices<uint64_t>::create(s_partial,
-      rolling_slice_depth(!dump_slice,requested.cuda_slice_depth),requested.cuda_low_cpu,report);
+      rolling_depth,requested.cuda_low_cpu,report);
+  ecm_stage1::log_execution_details(ecm_stage1::CurveModel::Montgomery, unsigned(gpu_param), "cgbn",
+      "kernel_weight=" + std::to_string(resolved.bits) +
+      " tpi=" + std::to_string(resolved.tpi) +
+      " tpb=" + std::to_string(resolved.tpb) +
+      " blocks=" + std::to_string(resolved.blocks) +
+      " chain=ladder slice_depth=" + std::to_string(rolling_depth ? rolling_depth : dump_slice ? 1u : 8u) +
+      " low_cpu_wait=" + std::to_string(requested.cuda_low_cpu) +
+      " resume=" + std::to_string(ckpt_loaded) +
+      " cursor=" + std::to_string(s_partial));
   const auto checkpoint_due=[&] {
     return checkpoint_interval_ms && std::chrono::steady_clock::now() - last_checkpoint_time >=
         std::chrono::milliseconds(checkpoint_interval_ms);

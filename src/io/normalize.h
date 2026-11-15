@@ -54,8 +54,16 @@ struct WorktodoStage1Task {
 
 bool normalize_direct(const ParsedCli&, const ecm_stage1::Stage1Options&,
                       const std::string& expression, NormalizedStage1Task&, std::string& error);
-bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options& defaults,
-                        const std::string& exe, WorktodoStage1Task&, std::string& error);
+enum class WorktodoNormalization {
+    Ready,
+    InvalidTask,
+    Blocked,
+};
+
+WorktodoNormalization normalize_worktodo(const std::string& line,
+                                         const ecm_stage1::Stage1Options& defaults,
+                                         const std::string& exe, WorktodoStage1Task&,
+                                         std::string& error);
 // Parsing retains explicit presence. Defaults and precedence are applied here.
 bool validate_cli_mode(const ParsedCli&, std::string& error);
 void normalize_assignment(Ecm2Task&);

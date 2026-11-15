@@ -2,6 +2,7 @@
 #include "worker_proc.h"
 #include "toml_file.h"
 #include "../configuration/generated/ecm_config_generated.h"
+#include "io/worktodo_selection.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -9,10 +10,12 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 namespace ecmgui {
 bool is_stage2_exe(std::string name) {
     name=file_name(name);for(char &c:name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -36,32 +39,62 @@ std::string adjacent_stage2_exe() {
     return candidates.size()==1?candidates.front():"ecm_cuda_stage2.exe";
 }
 std::string queue_task(const std::string &path,int worker,int priority=0,int skip=0) {
-    std::ifstream in(std::filesystem::u8path(path));std::vector<std::pair<int,std::string>> tasks;
-    std::string line;int section=1;
-    while(std::getline(in,line)) {
-        const auto a=line.find_first_not_of(" \t\r");if(a==line.npos)continue;line.erase(0,a);
-        if(line.size()>=3 && static_cast<unsigned char>(line[0])==0xef &&
-           static_cast<unsigned char>(line[1])==0xbb &&
-           static_cast<unsigned char>(line[2])==0xbf)line.erase(0,3);
-        if(line.empty())continue;
-        auto lower=line;for(char &c:lower)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if(line.front()=='[') {
-            const auto hash=lower.find('#'),end=lower.find(']');section=-1;
-            if(lower.find("worker")!=lower.npos && hash!=lower.npos && end!=lower.npos) {
-                const auto digits=lower.substr(hash+1,end-hash-1);section=std::atoi(digits.c_str());
-            }
-        } else if(line.front()!='#' && line.front()!=';')
-            tasks.emplace_back(section,line);
-    }
-    std::string first,preferred;
-    for(const auto &task:tasks)if(task.first==worker) {
-        const int stage=task.second.compare(0,10,"ECMSTAGE2=")==0?2:1;
-        if(stage==skip)continue;
-        if(first.empty())first=task.second;
-        if(stage==priority && preferred.empty())preferred=task.second;
-    }
-    return preferred.empty()?first:preferred;
+    std::ifstream in(std::filesystem::u8path(path));
+    std::string task;
+    if (in)
+        ecm_queue::read_next_task(in, worker, {priority, skip}, WorktodoStage::Any, task);
+    return task;
 }
+
+namespace {
+bool reserved_worker_arg(std::string_view arg) {
+    const auto option = arg.substr(0, arg.find('='));
+    static constexpr std::string_view reserved[] = {
+        "--config", "--worker", "--worktodo", "--stage1-stop-handle", "--stage2-stop-handle",
+        "--stop-handle", "--gui-queue-protocol", "-h", "--help", "/?", "--version", "--gpu-info", "--showkernel",
+        "--tune", "--save", "-save", "-savea", "--curve-worker", "--ecm-tune-worker",
+        "--cost-device-info", "--check-stage1-tune-profile", "--plan-only", "--dry-run",
+        "--fixed-queue-route", "--publication-task"
+    };
+    return std::find(std::begin(reserved), std::end(reserved), option) != std::end(reserved) ||
+        option.substr(0, 8) == "--queue-" || option.substr(0, 9) == "--record-";
+}
+
+void append_worker_args(WorkerSpawn& spawn, std::string_view field, const std::string& text) {
+    if (!spawn.argument_error.empty())
+        return;
+    const std::string prefix = "[worker." + std::to_string(spawn.worker_index) + "]." + std::string(field);
+    std::string arg;
+    bool quoted = false, present = false;
+    const auto finish_arg = [&] {
+        if (!present)
+            return;
+        if (reserved_worker_arg(arg))
+            spawn.argument_error = prefix + ": " + arg.substr(0, arg.find('=')) + " is reserved for worker dispatch";
+        else
+            spawn.extra_args.push_back(std::move(arg));
+        arg.clear();
+        present = false;
+    };
+    for (char c : text) {
+        if (c == '"') {
+            quoted = !quoted;
+            present = true;
+        } else if (!quoted && (c == ' ' || c == '\t')) {
+            finish_arg();
+            if (!spawn.argument_error.empty())
+                return;
+        } else {
+            arg.push_back(c);
+            present = true;
+        }
+    }
+    if (quoted || text.find('\0') != text.npos)
+        spawn.argument_error = prefix + ": invalid argument quoting";
+    else
+        finish_arg();
+}
+} // namespace
 bool parse_resume_pct(const std::string &line, double &pct) {
     const char *kResume = "Resuming from checkpoint:";
     const char *kLoaded = "Checkpoint loaded:";
@@ -157,6 +190,7 @@ bool WorkerController::start(int index,bool detailed_trace,WorkerStart origin) {
         if(origin==WorkerStart::Automatic && w.breaker_tripped())return false;
         std::string err;refresh_worker_for_queue(w);
         if(w.proc && w.proc->start(err,origin)) {
+            w.stage1_execution = {};
             trace("worker "+std::to_string(w.index)+": started pid="+std::to_string(w.proc->pid())+
                   (detailed_trace?" cmd="+w.proc->command_line():""));return true;
         }
@@ -193,7 +227,7 @@ bool WorkerController::worker_stage2(int worker_index) const {
     const auto cfg=ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),worker_index,true));
     const auto path=path_resolve(path_dir(ini_path_),cfg.worktodo);
     const auto task=queue_task(path,worker_index,cfg.worktodo_priority,cfg.worktodo_skip);
-    return task.compare(0,10,"ECMSTAGE2=")==0;
+    return ecm_queue::task_stage(task) == WorktodoStage::Stage2;
 }
 std::string WorkerController::resolve_worker_exe(int worker_index) const {
     return (worker_index>0?worker_stage2(worker_index):stage2_mode())?resolve_stage2_exe():resolve_stage1_exe();
@@ -203,12 +237,7 @@ WorkerView WorkerController::make_worker(int index) const {
     auto gui_entries=ecm_config::section_entries(ini_.lines(),section);
     const auto worker=ecm_config::read_worker(gui_entries);
     WorkerView w;
-    w.index=index;w.stage2=worker_stage2(index);
-    w.exe=resolve_worker_exe(index);
-    // Stage1 resolves paths beside its executable; Stage2 resolves TOML paths
-    // beside the shared TOML. An adjacent pair therefore shares one work directory.
-    w.working_dir=w.stage2?path_dir(ini_path_):path_dir(w.exe);
-    if(w.working_dir.empty())w.working_dir=exe_dir();
+    w.index=index;
     w.name=worker.name;
     if(!ini_.has(section,"name")) {
         const auto token=w.name.find("{N}");
@@ -221,6 +250,11 @@ WorkerView WorkerController::make_worker(int index) const {
     w.stage1_target=stage1.execution_target;w.gpu_param=stage1.gpu_param;
     w.gpucurves=worker.gpucurves;
     w.worktodo=path_resolve(path_dir(ini_path_),stage1.worktodo);
+    w.task=queue_task(w.worktodo,index,stage1.worktodo_priority,stage1.worktodo_skip);
+    w.stage2=ecm_queue::task_stage(w.task) == WorktodoStage::Stage2;
+    w.exe=w.stage2?resolve_stage2_exe():resolve_stage1_exe();
+    w.working_dir=w.stage2?path_dir(ini_path_):path_dir(w.exe);
+    if(w.working_dir.empty())w.working_dir=exe_dir();
     const bool shared_log=ini_.config_version()>=3;
     if(shared_log) {
         w.curve_model=stage1.param=="e"?"ed":"mont";
@@ -239,22 +273,52 @@ WorkerView WorkerController::make_worker(int index) const {
         if(!shared_log)
             w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
                 path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
+    } else {
+        auto& handoff = w.stage1_handoff;
+        handoff.legacy = !shared_log;
+        if (shared_log) {
+            handoff.local = stage1.handoff_mode == "ecm-elf";
+            handoff.prime95 = stage1.handoff_mode == "prime95";
+            handoff.local_fallback = handoff.prime95 && stage1.handoff_unsupported == "ecm-elf";
+        } else {
+            handoff.local = stage1.auto_stage2 || stage1.edwards_stage2_transfer;
+            handoff.edwards_only = handoff.local && !stage1.auto_stage2;
+            handoff.prime95 = !stage1.p95_worktodo_path.empty();
+        }
+        if (handoff.local || handoff.local_fallback) {
+            const int receiver = handoff.edwards_only && stage1.edwards_stage2_worker > 0 ?
+                stage1.edwards_stage2_worker : index;
+            const auto base = path_dir(ini_path_);
+            if (handoff.edwards_only) {
+                const auto receiver_config = ecmgui::preview_stage2(ecm_config::preview_entries(ini_.lines(), receiver));
+                handoff.local_queue = path_resolve(base, receiver_config.worktodo);
+            } else {
+                handoff.local_queue = stage1.auto_stage2_worktodo.empty() ?
+                    w.worktodo : path_resolve(base, stage1.auto_stage2_worktodo);
+            }
+            handoff.local_workers = handoff.edwards_only ? "" : ecm_config::trim(stage1.auto_stage2_workers);
+            if (handoff.local_workers.empty())
+                handoff.local_workers = std::to_string(receiver);
+        }
+        if (handoff.prime95) {
+            if (!stage1.p95_worktodo_path.empty())
+                handoff.prime95_queue = path_resolve(w.working_dir, stage1.p95_worktodo_path);
+            if (!stage1.p95_sync_dir.empty())
+                handoff.prime95_save_dir = path_resolve(w.working_dir, stage1.p95_sync_dir);
+            handoff.prime95_workers = ecm_config::trim(stage1.p95_add_workers);
+        }
     }
-    w.task=queue_task(w.worktodo,index,stage1.worktodo_priority,stage1.worktodo_skip);
-    w.extra_args=worker.extra_args;w.autostart=worker.autostart!=0;
-    w.effective_config=effective_config_text(index);
+    w.autostart=worker.autostart!=0;
+    w.effective_config=effective_config_text(w);
     WorkerSpawn spawn;
     spawn.exe=w.exe;spawn.ini=ini_path_;spawn.working_dir=w.working_dir;
     spawn.worker_index=index;spawn.priority=priority_;spawn.stage2=w.stage2;
     if(w.stage2)spawn.extra_args={"--gui-events","--log-level","batches"};
-    std::string arg;bool quoted=false;
-    for(char c:w.extra_args) {
-        if(c=='"'){quoted=!quoted;continue;}
-        if(!quoted && (c==' ' || c=='\t')) {
-            if(!arg.empty()){spawn.extra_args.push_back(arg);arg.clear();}
-        } else arg.push_back(c);
-    }
-    if(!arg.empty())spawn.extra_args.push_back(arg);
+    append_worker_args(spawn, "extra_args", worker.extra_args);
+    if (w.stage2)
+        append_worker_args(spawn, "stage2_extra_args", worker.stage2_extra_args);
+    else
+        append_worker_args(spawn, "stage1_extra_args", worker.stage1_extra_args);
     w.proc.reset(new WorkerProc());w.proc->configure(spawn,WorkerLimits{});
     w.proc->set_autostart(w.autostart);
     return w;
@@ -326,6 +390,7 @@ void WorkerController::tick() {
             !w.proc->breaker_tripped() && !autostart_done_) {
             std::string err;
             if (w.proc->start(err)) {
+                w.stage1_execution = {};
                 trace("worker " + std::to_string(w.index) + ": autostart pid=" +
                       std::to_string(w.proc->pid()) + " cmd=" + w.proc->command_line());
             } else {
@@ -336,6 +401,7 @@ void WorkerController::tick() {
         if(w.proc->running() && w.version_pid!=w.proc->pid()) {
             w.version_pid=w.proc->pid();
             w.application_version.clear();
+            w.stage1_execution = {};
         }
         WorkerProc::DrainedOutput d;
         w.proc->drain(d);
@@ -378,6 +444,8 @@ void WorkerController::tick() {
             w.task = d.last_start_line;
             trace("worker " + std::to_string(w.index) + ": task " + w.task);
         }
+        if (!w.stage2 && (d.stage1.valid() || !d.last_start_line.empty()))
+            w.stage1_execution = std::move(d.stage1);
         if(d.stage2.valid) {
             w.stage2_status=d.stage2;
             if(d.last_start_line.empty() && (d.stage2_task_started || w.task.empty())) {
@@ -455,7 +523,7 @@ void WorkerController::tick() {
            !w.stop_requested && exit_phase_==ExitPhase::Idle) {
             const auto cfg=ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),w.index,true));
             const auto next=queue_task(w.worktodo,w.index,cfg.worktodo_priority,cfg.worktodo_skip);
-            if(!next.empty() && (next.compare(0,10,"ECMSTAGE2=")==0)!=w.stage2) {
+            if(!next.empty() && (ecm_queue::task_stage(next) == WorktodoStage::Stage2)!=w.stage2) {
                 refresh_worker_for_queue(w);
                 std::string err;
                 if(w.proc->start(err))trace("worker "+std::to_string(w.index)+": dispatched pid="+
@@ -466,11 +534,12 @@ void WorkerController::tick() {
     }
     autostart_done_ = true;
 }
-std::string WorkerController::effective_config_text(int worker_index) const {
+std::string WorkerController::effective_config_text(const WorkerView& worker) const {
+    const int worker_index=worker.index;
     const auto section="workers."+std::to_string(worker_index);
     std::ostringstream out;
-    out<<"next task = "<<(worker_stage2(worker_index)?"ECMSTAGE2":"ECMSTAGE1")<<"\n"
-       <<"exe = "<<resolve_worker_exe(worker_index)<<"\n";
+    out<<"next task = "<<(worker.stage2?"ECMSTAGE2":"ECMSTAGE1")<<"\n"
+       <<"exe = "<<worker.exe<<"\n";
     std::set<std::string> keys;
     for(const auto &binding:ecm_config::stage1_bindings)keys.insert(binding.key);
     for(const auto &binding:ecm_config::stage2_bindings)keys.insert(binding.key);

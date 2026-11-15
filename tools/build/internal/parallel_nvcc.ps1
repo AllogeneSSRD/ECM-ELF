@@ -16,7 +16,7 @@
       1. configure (only with -Reconfigure, or when compile_commands.json is missing)
       2. read the exact nvcc command lines out of compile_commands.json
       3. launch them concurrently (each in its own cmd + vcvars64 process)
-      4. run cmake --build once so that nmake only compiles host code and links
+      4. pass the verified CUDA dependency files to CMake, then build host code and link
 
     Because step 3 writes the very object files nmake is about to want, step 4 is
     normally just a link. Step 3 reuses matching objects by default. Use -Only
@@ -159,6 +159,9 @@ foreach ($e in $entries) {
     }
     $state = $preflight[$entryIndex].State
     $reason = if ($SkipUpToDate -and -not $Rebuild) { $preflight[$entryIndex].Reason } else { 'forced rebuild' }
+    if (-not $reason -and $e.file -match '\.cu$' -and -not [IO.File]::Exists("$obj.ecm.d")) {
+        $reason = 'CUDA compiler dependency file missing'
+    }
     if (-not $reason) {
         # NMake uses timestamps as well as the content checks above. Queue a
         # pending native rebuild here so NMake will not redo it serially.
@@ -282,6 +285,54 @@ $timingReport['reuse_postcheck_seconds']=$postcheckWatch.Elapsed.TotalSeconds
 $timingReport|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
 
 if ($NoBuild) { exit 0 }
+
+# CMake imports .obj.d into compiler_depend.make. A native depfile left by
+# an older build can make NMake rebuild a verified object, e.g. when it lists
+# a generated source in a retired build directory. Give CMake NVCC's
+# verified depfile for both reused and newly compiled objects.
+if (Select-String -LiteralPath (Join-Path $BuildDir 'CMakeCache.txt') -Pattern '^CMAKE_GENERATOR:INTERNAL=NMake Makefiles$' -Quiet) {
+    $updated = 0
+    foreach ($j in $tuList | Where-Object { $_.Entry.file -match '\.cu$' }) {
+        $verified = "$($j.Obj).ecm.d"
+        $native = "$($j.Obj).d"
+        if ([IO.File]::Exists($native) -and [string]::Equals(
+                [IO.File]::ReadAllText($native), [IO.File]::ReadAllText($verified), [StringComparison]::Ordinal)) { continue }
+        $temp = "$native.$([Guid]::NewGuid().ToString('N')).tmp"
+        try {
+            # Write a fresh file so CMake reimports it even when the verified
+            # depfile is older than its cached compiler dependencies.
+            $bytes = [IO.File]::ReadAllBytes($verified)
+            [IO.File]::WriteAllBytes($temp, $bytes)
+            if ([IO.File]::Exists($native)) {
+                try {
+                    [IO.File]::Replace($temp, $native, [NullString]::Value)
+                } catch [IO.IOException], [UnauthorizedAccessException] {
+                    $code = $_.Exception.GetBaseException().HResult -band 0xffff
+                    # Windows can deny replacing a file while still permitting writes.
+                    if ($code -notin @(5, 32, 33, 1175)) { throw "Cannot replace NMake dependency '$native': $_" }
+                    for ($attempt = 0; ; $attempt++) {
+                        try {
+                            $stream = [IO.File]::Open($native, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+                            try {
+                                $stream.Write($bytes, 0, $bytes.Length)
+                                $stream.SetLength($bytes.Length)
+                            } finally { $stream.Dispose() }
+                            break
+                        } catch [IO.IOException], [UnauthorizedAccessException] {
+                            $code = $_.Exception.GetBaseException().HResult -band 0xffff
+                            if ($attempt -ge 3 -or $code -notin @(5, 32, 33)) { throw "Cannot update NMake dependency '$native': $_" }
+                            Start-Sleep -Milliseconds (100 * ($attempt + 1))
+                        }
+                    }
+                }
+            } else { [IO.File]::Move($temp, $native) }
+        } finally {
+            [IO.File]::Delete($temp)
+        }
+        $updated++
+    }
+    Write-Host "== NMake CUDA dependency handoff: $updated depfile(s) updated =="
+}
 
 # --- hand the rest (host objects + link) to nmake ---------------------------
 Write-Host "cmake --build $BuildDir --target $Target (host code + link) ..."

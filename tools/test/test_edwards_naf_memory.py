@@ -113,6 +113,7 @@ def stop_and_resume(exe, folder, device):
     security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), None, True)
     event = kernel.CreateEventW(ctypes.byref(security), True, False, None)
     assert event
+    path = folder / f'.e_s1_m8191_{b1}.ckpt'
     with (folder / 'stopped.log').open('wb') as log:
         process = subprocess.Popen(command + ['--stage1-stop-handle', str(event)], cwd=folder,
                                    env=memory_env(device, 8 if device is None else 1), close_fds=False,
@@ -120,9 +121,8 @@ def stop_and_resume(exe, folder, device):
         try:
             deadline = time.monotonic() + 30
             while process.poll() is None and time.monotonic() < deadline:
-                path = next(folder.glob('.e_s1_*.ckpt'), None)
                 try:
-                    if path and checkpoint_window(path, device):
+                    if path.exists() and checkpoint_window(path, device):
                         break
                 except (PermissionError, FileNotFoundError):
                     pass
@@ -156,6 +156,12 @@ def stop_and_resume(exe, folder, device):
             assert result.returncode == 0 and not path.exists() and not queue.read_text().strip(), raw[-3000:]
             expected = b'resume STAGE1 checkpoint' if device is None else f'window={window}'.encode()
             assert expected in raw, raw[-3000:]
+            if device is not None:
+                text = raw.decode(errors='replace')
+                actual, = re.findall(r'Stage1 execution: ([^\r\n]+)', text)
+                fields = dict(field.split('=', 1) for field in actual.split())
+                assert fields['naf'] == str(window) and fields['resume'] == '1'
+                assert fields['cursor'] == str(done)
     checked = oracle.records(save)
     assert len(checked) == 1 and checked[0][2:4] == (20260922, b1)
 
@@ -194,6 +200,9 @@ def main():
         log, limited = run_queue(exe, out / 'gpu_limited', device=args.device, limit_mb=1)
         assert 'WARNING: GPU Edwards memory:' in log, log
         assert re.findall(r'GPU Edwards device memory:.*\bbudget_bytes=(\d+)', log) == ['1000000'] * 2, log
+        lowered = re.findall(r'WARNING: GPU Edwards memory: window=12 -> (\d+)', log)
+        actual = re.findall(r'Stage1 execution: [^\r\n]*\bnaf=(\d+)', log)
+        assert len(actual) == 2 and actual == lowered, log
         assert limited == baseline
         print('PASS limited CUDA keeps every requested curve and the same endpoints', flush=True)
 

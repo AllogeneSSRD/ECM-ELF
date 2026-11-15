@@ -128,7 +128,6 @@ function New-EcmStage2Profile([string]$Repo, [string]$Role, [string]$Engine, [st
 
 function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf = '', [string]$Root = '') {
     if ($Leaf -and $Root) { throw 'Specify a final build directory or a build root, not both' }
-    $automaticLocal = -not $Leaf -and -not $Root -and $buildProfile.Role -eq 'local'
     if (-not $Leaf) {
         if (-not $Root -and $buildProfile.Role -eq 'local') {
             $Leaf = "build_$($buildProfile.Stage)_local"
@@ -148,21 +147,6 @@ function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf =
         }
         if ($part -match '^build_(stage[12])_(?:local|dev|release)$' -and $Matches[1] -ne $buildProfile.Stage) {
             throw "Build directory belongs to another stage: $part; requested $($buildProfile.Stage)"
-        }
-    }
-    if ($automaticLocal -and $buildProfile.Stage -ne 'stage2' -and
-        (Test-Path -LiteralPath (Join-Path $leafPath 'profile.json'))) {
-        $existing = Get-Content -LiteralPath (Join-Path $leafPath 'profile.json') -Raw | ConvertFrom-Json
-        # Only a valid local marker for this source/stage may select a sibling.
-        # Damaged markers and explicit paths must still fail normal admission.
-        if ($existing.schema -eq 1 -and $existing.fields.role -eq 'local' -and
-            $existing.fields.stage -eq $buildProfile.Stage -and $existing.fields.source_root -ieq [IO.Path]::GetFullPath($Repo) -and
-            (Get-EcmProfileHash $existing.fields) -ceq $existing.profile_sha256 -and
-            $existing.profile_sha256 -cne $buildProfile.Hash) {
-            $changed = @(Get-EcmProfileDifferences $existing.fields $buildProfile.Fields) -join ', '
-            $leafPath += '_' + $buildProfile.Hash.Substring(0,16)
-            Write-Host "== Local $($buildProfile.Stage) profile changed: $changed =="
-            Write-Host "   Preserving the previous build; selected directory: $leafPath"
         }
     }
     if ($Root) {
@@ -236,14 +220,30 @@ function Assert-EcmLegacyProfile([string]$Leaf, $buildProfile) {
     }
 }
 
+function Test-EcmStage1PracProfileChange($Before, $After, [string[]]$Changed) {
+    if ($Changed.Count -ne 2 -or 'option/enable_prac' -notin $Changed -or 'option/configure' -notin $Changed) {
+        return $false
+    }
+    $oldPrac = $Before.'option/enable_prac'
+    $newPrac = $After.'option/enable_prac'
+    if ($oldPrac -notin @('0','1') -or $newPrac -notin @('0','1')) { return $false }
+    $oldFlag = if ($oldPrac -eq '1') { 'ON' } else { 'OFF' }
+    $newFlag = if ($newPrac -eq '1') { 'ON' } else { 'OFF' }
+    $configure = $Before.'option/configure'
+    $flag = " -DECM_CUDA_ENABLE_PRAC=$oldFlag "
+    return $configure.Contains($flag) -and
+        $configure.Replace($flag, " -DECM_CUDA_ENABLE_PRAC=$newFlag ") -ceq $After.'option/configure'
+}
+
 function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly,
-                               [switch]$ArchiveLocalStage2) {
-    if ($ArchiveLocalStage2) {
+                               [switch]$ArchiveLocalStage2, [switch]$ReconfigureLocalStage1) {
+    if ($ArchiveLocalStage2 -or $ReconfigureLocalStage1) {
         $sourceRoot = [IO.Path]::GetFullPath($buildProfile.Fields.source_root).TrimEnd('\','/')
-        $fixed = Join-Path $sourceRoot 'build_stage2_local'
-        if ($buildProfile.Role -ne 'local' -or $buildProfile.Stage -ne 'stage2' -or
+        $stage = if ($ReconfigureLocalStage1) { 'stage1' } else { 'stage2' }
+        $fixed = Join-Path $sourceRoot "build_${stage}_local"
+        if ($buildProfile.Role -ne 'local' -or $buildProfile.Stage -ne $stage -or
             [IO.Path]::GetFullPath($Leaf).TrimEnd('\','/') -ine $fixed) {
-            throw 'Automatic archiving is restricted to the fixed local Stage2 directory'
+            throw "Automatic archiving is restricted to the fixed local $stage directory"
         }
     }
     $path = Join-Path $Leaf 'profile.json'
@@ -251,20 +251,35 @@ function Assert-EcmBuildProfile([string]$Leaf, $buildProfile, [switch]$ReadOnly,
         $marker = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         if ($marker.schema -ne 1 -or $marker.profile_sha256 -cne $buildProfile.Hash -or
             (Get-EcmProfileHash $marker.fields) -cne $buildProfile.Hash) {
-            $changed = @(Get-EcmProfileDifferences $marker.fields $buildProfile.Fields) -join ', '
+            $differences = @(Get-EcmProfileDifferences $marker.fields $buildProfile.Fields)
+            $changed = $differences -join ', '
             if (-not $changed) { $changed = 'marker schema/content hash' }
             # An implicit local build keeps one stable output path. Preserve a
             # valid older cache before admitting a different profile; never
             # relabel old objects or bypass damaged/foreign marker checks.
-            if ($ArchiveLocalStage2 -and -not $ReadOnly -and $marker.schema -eq 1 -and
-                $marker.fields.role -eq 'local' -and $marker.fields.stage -eq 'stage2' -and
+            if (($ArchiveLocalStage2 -or $ReconfigureLocalStage1) -and -not $ReadOnly -and $marker.schema -eq 1 -and
+                $marker.fields.role -eq 'local' -and $marker.fields.stage -eq $stage -and
+                (-not $ReconfigureLocalStage1 -or $marker.fields.engine -eq $buildProfile.Engine) -and
                 $marker.fields.source_root -ieq $sourceRoot -and
                 (Get-EcmProfileHash $marker.fields) -ceq $marker.profile_sha256) {
-                $archiveRoot = Join-Path $sourceRoot 'build_dev/stage2_local_profiles'
+                if ($ReconfigureLocalStage1 -and (Test-EcmStage1PracProfileChange $marker.fields $buildProfile.Fields $differences)) {
+                    Initialize-EcmBuildDirectory $Leaf
+                    $next = [ordered]@{ schema = 1; profile_sha256 = $buildProfile.Hash; fields = $buildProfile.Fields }
+                    $temp = "$path.$([Guid]::NewGuid().ToString('N')).tmp"
+                    try {
+                        [IO.File]::WriteAllText($temp, ($next | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+                        [IO.File]::Replace($temp, $path, [NullString]::Value)
+                    } finally {
+                        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
+                    }
+                    Write-Host "== Local Stage1 PRAC changed in place: $($buildProfile.Fields.'option/enable_prac') =="
+                    return
+                }
+                $archiveRoot = Join-Path $sourceRoot "build_dev/${stage}_local_profiles"
                 $archiveName = $marker.profile_sha256.Substring(0,16) + '_' + [Guid]::NewGuid().ToString('N')
                 $archive = Join-Path $archiveRoot $archiveName
                 Move-EcmBuildDirectory $sourceRoot $Leaf $archive
-                Write-Host "== Local Stage2 profile changed: $changed =="
+                Write-Host "== Local $stage profile changed: $changed =="
                 Write-Host "   Previous build archived: $archive"
                 Write-Host "   Fixed output directory : $Leaf"
                 Assert-EcmBuildProfile $Leaf $buildProfile

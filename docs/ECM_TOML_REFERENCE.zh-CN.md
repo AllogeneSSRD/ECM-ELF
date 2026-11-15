@@ -115,6 +115,18 @@ user = ""
 
 Stage1与Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。
 
+<a id="workflow_worker_count"></a>
+
+### worker_count
+
+```toml
+worker_count = 1
+```
+
+类型 `int` · 范围 `<x:Z,1..64>` · Worker 覆盖 `不支持` · 级别 `高级`。
+
+供 GUI v2 与同队列 ECM-ELF 自动交接共用的 worker 数量，编号从 1 到该数量。自动交接排除跳过 Stage2 的 worker。省略时兼容显式设置的旧 GUI worker_count。
+
 <a id="worktodo"></a>
 
 ### worktodo_file
@@ -227,7 +239,7 @@ cpu_implementation = "auto"
 
 v1 旧键 `stage1.impl`
 
-CPU Stage1 算术实现。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU 任务仅接受自动模式。
+选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。
 
 <a id="cpu_mont_chain"></a>
 
@@ -357,7 +369,7 @@ gpu_algorithm = "cgbn"
 
 类型 `int|string` · 范围 `[1|2|cgbn|ntt]` · Worker 覆盖 `[worker.N] stage1.gpu_algorithm` · 级别 `高级`。
 
-GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。
+选中 GPU 时使用的 Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。
 
 <a id="stage1_backend"></a>
 
@@ -423,7 +435,7 @@ handoff.workers = ""
 
 v1 旧键 `stage1.auto_stage2_workers`
 
-auto_stage2=1 时的接收 worker，可填写 1..1000000 内单个编号、逗号列表或区间；选择任务数最少者，并列取较小编号。auto 使用目标队列已有 worker 分区，无分区时使用 GUI NumWorkers。显式指定但尚不存在的分区会创建。留空保留当前 worker，同文件原位改写，其他文件也使用当前编号；目标不可写时保留待投递记录。
+Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小编号。v3 同队列 auto 优先采用显式的 shared.worker_count（兼容 GUI 旧数量），候选须读取该队列并允许 Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。
 
 <a id="auto_stage2_worktodo"></a>
 
@@ -1146,7 +1158,7 @@ cuda.weighted_ntt = false
 
 v1 旧键 `stage2.stage2_weighted_ntt`
 
-可选 CUDA 多项式卷积后端。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。命令行 --weighted-ntt 0|1 优先。
+生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt 0|1 优先。
 
 <a id="stage2_parallel_workspace"></a>
 
@@ -2048,7 +2060,7 @@ worker_count = 1
 
 v1 旧键 `gui.NumWorkers`
 
-GUI 管理的 worker 数量。各 worker 使用自己的 [worker.N] 设置，任务曲线数由 worktodo 决定。
+GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 shared.worker_count 时优先使用该值。各 worker 使用自己的 [worker.N] 设置。
 
 ## [worker.1]
 
@@ -2074,7 +2086,7 @@ extra_args = ""
 
 v1 旧键 `workers.1.extra_args`
 
-向 GUI 启动的 worker 追加命令行参数。参数以空格分隔，含空格的路径使用双引号；命令行覆盖配置文件的选项应以实际 worker 支持的参数为准。
+向 GUI 启动的 worker 追加两阶段共用的命令行参数。阶段专用选项使用对应的键。工作流配置、worker 编号和队列路径由 GUI 管理。
 
 ### gpucurves
 
@@ -2099,6 +2111,26 @@ name = "Worker #{N}"
 v1 旧键 `workers.1.name`
 
 设置此 worker 在 GUI 中显示的名称。未配置时显示 Worker #N，其中 N 为 worker 编号；只改变显示名称，不改变设备或任务分配。
+
+### stage1_extra_args
+
+```toml
+stage1_extra_args = ""
+```
+
+类型 `string` · 范围 `<argv>` · Worker 覆盖 `不支持` · 级别 `高级`。
+
+Stage1 专用命令行参数，追加在共用 extra_args 之后。参数以空格分隔，含空格的路径使用双引号。
+
+### stage2_extra_args
+
+```toml
+stage2_extra_args = ""
+```
+
+类型 `string` · 范围 `<argv>` · Worker 覆盖 `不支持` · 级别 `高级`。
+
+Stage2 专用命令行参数，追加在共用 extra_args 之后。参数以空格分隔，含空格的路径使用双引号。
 
 ## 维护
 

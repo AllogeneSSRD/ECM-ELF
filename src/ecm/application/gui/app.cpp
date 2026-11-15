@@ -209,7 +209,9 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     priority_=gui.priority;
     win_x_=gui.window[0];win_y_=gui.window[1];win_w_=gui.window[2];win_h_=gui.window[3];
     layout_blob_loaded_=unescape_blob(gui.dock_layout);
-    num_workers_=gui.NumWorkers;
+    const int workflow_count=ini_.config_version()>=3?
+        ecm_config::configured_workflow_worker_count(ini_.lines(),ini_path_):0;
+    num_workers_=workflow_count>0?workflow_count:gui.NumWorkers;
     worker_exe_=gui.exe;
     stage2_exe_=gui.stage2_exe;
     probability_focus_requested_=gui.start_tab=="prob" || gui.start_tab=="probability";
@@ -306,14 +308,17 @@ bool App::select_workflow_ini(const std::string &path) {
     TomlFile selected;std::string error;if(!selected.load(path,error)){status_=error;return false;}
     try {
         const auto gui=ecm_config::read_gui(ecm_config::section_entries(selected.lines(),"gui"));
-        for(int i=1;i<=gui.NumWorkers;++i) {
+        const int workflow_count=selected.config_version()>=3?
+            ecm_config::configured_workflow_worker_count(selected.lines(),path):0;
+        const int worker_count=workflow_count>0?workflow_count:gui.NumWorkers;
+        for(int i=1;i<=worker_count;++i) {
             const auto entries=ecm_config::preview_entries(selected.lines(),i,true);
             ecmgui::preview_stage1(entries);ecmgui::preview_stage2(entries);
         }
         capture_layout();if(!ini_.save(error)){status_=error;return false;}
         if(selected.has("gui","exe"))worker_exe_=gui.exe;
         if(selected.has("gui","stage2_exe"))stage2_exe_=gui.stage2_exe;
-        num_workers_=gui.NumWorkers;priority_=gui.priority;
+        num_workers_=worker_count;priority_=gui.priority;
         exit_confirm_=gui.exit_confirm;graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
         ini_=std::move(selected);ini_path_=std::filesystem::absolute(std::filesystem::u8path(path)).u8string();
         p95_pending_next_scan_ms_ = 0;
@@ -352,7 +357,8 @@ void App::capture_layout(bool save_docking_layout) {
     }
     int rect[4] = {win_x_, win_y_, win_w_, win_h_};
     ini_.set("gui", "window", int_list(rect, 4));
-    ini_.set_int("gui", "NumWorkers", num_workers_);
+    if (!ini_.has("shared", "workflow_worker_count"))
+        ini_.set_int("gui", "NumWorkers", num_workers_);
     ini_.set("gui", "language", language_);
     ini_.set_int("gui", "refresh_hz", refresh_hz_);
     ini_.set_int("gui", "gpu_poll_ms", gpu_poll_ms_);
@@ -1762,7 +1768,11 @@ void App::draw_workers_table() {
     if(ImGui::InputInt("##worker_count",&worker_count,0,0) && worker_count!=num_workers_) {
         num_workers_=std::clamp(worker_count,static_cast<int>(ecm_config::limits::gui_NumWorkers_minimum),static_cast<int>(ecm_config::limits::gui_NumWorkers_maximum));
         rebuild_workers();selected_worker_=std::clamp(selected_worker_,0,num_workers_-1);
-        ini_.set_int("gui","NumWorkers",num_workers_);std::string error;if(!ini_.save(error))status_=error;
+        if (ini_.has("shared", "workflow_worker_count"))
+            ini_.set_int("shared","workflow_worker_count",num_workers_);
+        else
+            ini_.set_int("gui","NumWorkers",num_workers_);
+        std::string error;if(!ini_.save(error))status_=error;
     }
     ImGui::EndDisabled();
     for(bool stage2:{false,true}) {

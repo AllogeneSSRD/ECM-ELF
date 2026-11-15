@@ -14,6 +14,7 @@ function Get-Stage1ReleaseSources([string]$Repo, [bool]$EnablePrac = $false, [st
     $inventory = Get-EcmCudaInventory $Repo
     $sources = @($inventory.groups.STAGE1_COMMON) + @($inventory.groups.STAGE1_CUDA) + @($inventory.groups.STAGE1_TEMPLATES)
     if ($EnablePrac) { $sources += @($inventory.groups.STAGE1_PRAC) + @($inventory.groups.STAGE1_PRAC_TEMPLATES) }
+    else { $sources += @($inventory.groups.STAGE1_PRAC_DISABLED) }
     $buildInputs = @()
     if ($BuildDir) {
         foreach ($name in @('compile_commands.json','cuda_target_graph.json','cuda_modules/stage1/modules.json')) {

@@ -121,9 +121,18 @@ static std::string saved_stage2_line(const Task& task, const std::string& save) 
     return out.str();
 }
 
-bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options& defaults,
-                        const std::string& exe, WorktodoStage1Task& queue, std::string& error) {
+static void apply_curve_preferences(ecm_stage1::Stage1Options& options) {
+    auto& selection = options.execution.selection;
+    if (selection.curve == ecm_stage1::CurveModel::Edwards)
+        selection.cpu_montgomery_chain = ecm_stage1::CpuMontgomeryChain::Ladder;
+}
+
+WorktodoNormalization normalize_worktodo(const std::string& line,
+                                         const ecm_stage1::Stage1Options& defaults,
+                                         const std::string& exe, WorktodoStage1Task& queue,
+                                         std::string& error) {
     auto& out = queue.input;
+    auto failure = WorktodoNormalization::InvalidTask;
     try {
         out.options = defaults;
         out.append_save = true;
@@ -131,10 +140,10 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
         if (line.compare(0, 4, "ECM=") == 0 || line.compare(0, 5, "ECM2=") == 0) {
             Ecm2Task task;
             if (!ecm_parse_ecm2_line(line, task, error))
-                return false;
+                return failure;
             normalize_assignment(task);
             if (!ecm_compute_ecm2_n(task, out.modulus, error))
-                return false;
+                return failure;
             target_identity(task, out);
             out.b1 = task.B1;
             out.b2 = task.B2;
@@ -144,6 +153,11 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
             }
             (void)ecm_config::unsigned_integer(task.b2_text,
                                                "B2 (integer >=0 for saved Stage2 handoff)");
+            if (task.has_sigma && !ecm_stage1::sigma_batch_fits(task.sigma, out.curves)) {
+                error = "assignment sigma + curve index exceeds 2^64-1";
+                return failure;
+            }
+            failure = WorktodoNormalization::Blocked;
             out.save_file = resolve_rel_local(
                 out.options.persistence.tmp_dir,
                 ecm_save::format_name(out.options.persistence.save_name_pattern,
@@ -154,14 +168,15 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
         } else {
             EcmStage2Task task;
             if (!ecm_parse_stage1_line(line, task, error))
-                return false;
+                return failure;
             if (!ecm_extract_b1_from_save_name(task.save_name, &out.b1, error) ||
                 !ecm_compute_stage2_n(task, out.modulus, error))
-                return false;
+                return failure;
             target_identity(task, out);
+            failure = WorktodoNormalization::Blocked;
             queue.save_assignment = true;
             if (!stage1_save_construction(task.save_name, out.options, error))
-                return false;
+                return failure;
             out.save_file = resolve_rel_local(
                 exe, ecm_save::prefixed_name(task.save_name,
                                                       ecm_stage1::save_naming(out.options).curve));
@@ -169,17 +184,18 @@ bool normalize_worktodo(const std::string& line, const ecm_stage1::Stage1Options
             if (out.save_file != original)
                 out.options.persistence.legacy_save_source = original;
             if (!ecm_rewrite_stage2_save(line, out.save_file, queue.published_line, error))
-                return false;
+                return failure;
             queue.stage2_line = queue.published_line;
             queue.stage2_line.replace(0, 10, "ECMSTAGE2=");
         }
+        apply_curve_preferences(out.options);
         if (stage1_selection_error(out.options.execution.selection, error) ||
             stage1_task_error(out.options, out.curves, error, out.modulus))
-            return false;
-        return true;
+            return failure;
+        return WorktodoNormalization::Ready;
     } catch (const std::exception& e) {
         error = e.what();
-        return false;
+        return failure;
     }
 }
 
@@ -200,6 +216,10 @@ bool normalize_direct(const ParsedCli& input, const ecm_stage1::Stage1Options& d
         out.options = defaults;
         auto& opt = out.options;
         const auto& selection = opt.execution.selection;
+        if (selection.curve == ecm_stage1::CurveModel::Edwards && input.has("--cpu-mont-chain") &&
+            selection.cpu_montgomery_chain == ecm_stage1::CpuMontgomeryChain::Prac)
+            throw std::runtime_error("--cpu-mont-chain prac requires Montgomery");
+        apply_curve_preferences(opt);
         out.save_file = input.savefilename;
         out.append_save = input.saveappend;
         // Keep exact k*b^n+c metadata when the direct expression supplies it.
@@ -305,33 +325,21 @@ bool validate_cli_mode(const ParsedCli& input, std::string& error) {
     return true;
 }
 
-// Cross-field execution preferences have one rule shared by startup and task
-// admission.
 static bool execution_preferences_error(const ecm_stage1::Selection& s, std::string& error) {
+    if (s.target != ecm_stage1::ExecutionTarget::Cpu)
+        return false;
     const bool policy = !s.cpu_implementation_rules.empty();
-    if (s.cpu_implementation == ecm_stage1::CpuImplementation::Gwnum) {
-        if (s.target != ecm_stage1::ExecutionTarget::Cpu ||
-            s.curve != ecm_stage1::CurveModel::Montgomery) {
-            error = "Stage1 GWNUM requires target=cpu and curve=mont (PARAM0)";
-            return true;
-        }
+    if (s.cpu_implementation == ecm_stage1::CpuImplementation::Gwnum &&
+        s.curve != ecm_stage1::CurveModel::Montgomery) {
+        error = "Stage1 GWNUM requires CPU Montgomery PARAM0";
+        return true;
     }
     if (s.cpu_montgomery_chain == ecm_stage1::CpuMontgomeryChain::Prac &&
-        (s.target != ecm_stage1::ExecutionTarget::Cpu ||
-         s.curve != ecm_stage1::CurveModel::Montgomery ||
-         (!policy && s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd))) {
+        !policy && s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd) {
         error = "Stage1 CPU Montgomery PRAC requires target=cpu, curve=mont, impl=simd";
         return true;
     }
-    if (s.target == ecm_stage1::ExecutionTarget::Gpu &&
-        (policy || s.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
-         s.simd_reduction != ecm_stage1::SimdReduction::Auto)) {
-        error = "keys=target,impl,reduction; --impl and --reduction require "
-                "--target cpu";
-        return true;
-    }
-    if (s.target == ecm_stage1::ExecutionTarget::Cpu && !policy &&
-        s.simd_reduction != ecm_stage1::SimdReduction::Auto &&
+    if (!policy && s.simd_reduction != ecm_stage1::SimdReduction::Auto &&
         s.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd) {
         error = "keys=impl,reduction; explicit --reduction requires --impl simd";
         return true;
@@ -428,10 +436,25 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
                                                            input.sigma_param_claim, s.gpu_param))
                 throw std::runtime_error("conflict between -sigma parametrization and --gpu-param");
         }
-        // A query shares projection and overrides, but does not invent a task or
-        // impose computation-only capability/combination checks.
-        if (!input.show_gpu_info && !input.show_kernels && !input.tune_ntt && execution_preferences_error(s, error))
-            throw std::runtime_error(error);
+        if (!input.show_gpu_info && !input.show_kernels && !input.tune_ntt) {
+            if (s.target == ecm_stage1::ExecutionTarget::Cpu) {
+                if (input.has("--gpu-algorithm"))
+                    throw std::runtime_error("--gpu-algorithm requires --target gpu");
+                if (input.has("--gpu-backend") && input.gpu_backend != "auto")
+                    throw std::runtime_error("--gpu-backend requires --target gpu");
+                s.gpu_algorithm = ecm_stage1::GpuAlgorithm::Cgbn;
+            } else {
+                if ((input.has("--impl") && s.cpu_implementation != ecm_stage1::CpuImplementation::Auto) ||
+                    (input.has("--reduction") && s.simd_reduction != ecm_stage1::SimdReduction::Auto))
+                    throw std::runtime_error("keys=target,impl,reduction; --impl and --reduction require --target cpu");
+                if (input.has("--cpu-mont-chain") && s.cpu_montgomery_chain != ecm_stage1::CpuMontgomeryChain::Ladder)
+                    throw std::runtime_error("--cpu-mont-chain requires --target cpu");
+                s.cpu_implementation = ecm_stage1::CpuImplementation::Auto;
+                s.cpu_implementation_rules.clear();
+                s.simd_reduction = ecm_stage1::SimdReduction::Auto;
+                s.cpu_montgomery_chain = ecm_stage1::CpuMontgomeryChain::Ladder;
+            }
+        }
         out.options = normalize_options(cfg, paths.exe, paths.config_directory, paths.cwd,
                                         input.worker_index);
         if (input.has("--tmp-dir"))
@@ -442,9 +465,6 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
             out.options.persistence.tmp_dir = paths.cwd;
         if (direct && out.options.persistence.tmp_dir.empty())
             out.options.persistence.tmp_dir = paths.cwd;
-        if (!input.show_gpu_info && !input.tune_ntt && s.target == ecm_stage1::ExecutionTarget::Cpu &&
-            stage1_task_error(out.options, 0, error))
-            throw std::runtime_error(error);
         out.runtime = input.runtime;
         out.runtime.device_index = out.options.execution.device_index;
         out.runtime.tpi = cfg.tpi;
@@ -594,6 +614,7 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
         }
     }
     if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards &&
         opt.execution.naf_w != 0 && (opt.execution.naf_w < 3 || opt.execution.naf_w > 12)) {
         error = "key=naf_w value='" + std::to_string(opt.execution.naf_w) +
                 "'; CPU requires 0 (auto) or [3,12]";

@@ -85,27 +85,51 @@ sys.exit(17 if isolated else 13)  # Stop before any project compilation.
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_entry(self, *args):
-        result = subprocess.run([self.shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                                 str(self.repo/'tools/build/build_stage1_local.ps1'), *args],
+    def run_entry(self, *args, disable_prac=False):
+        entry = self.repo/'tools/build/build_stage1_local.ps1'
+        command = ['-File', str(entry), *args]
+        if disable_prac:
+            assert not args
+            self.env['ECM_LAYOUT_ENTRY'] = str(entry)
+            command = ['-Command', '& $env:ECM_LAYOUT_ENTRY -EnablePrac:$false']
+        result = subprocess.run([self.shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', *command],
                                 env=self.env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)  # Intentional fixture configure boundary.
         return result.stdout+result.stderr
 
-    def test_default_forces_generated_layout_and_preserves_grouped_cache(self):
+    def test_default_forces_generated_layout_and_archives_grouped_cache(self):
         self.run_entry()
         request = json.loads((self.repo/'configure.jsonl').read_text())
         self.assertTrue(request['isolated'], 'CMake must receive an explicit ON independent of its old cache')
-        self.assertNotEqual(Path(request['build']), self.leaf)
+        self.assertEqual(Path(request['build']), self.leaf)
         marker = json.loads((Path(request['build'])/'profile.json').read_text(encoding='utf-8-sig'))
         self.assertIn('-DECM_CUDA_ISOLATE_TIERS=ON', marker['fields']['option/configure'])
+        archive, = (p for p in (self.repo/'build_dev/stage1_local_profiles').iterdir() if p.is_dir())
         for name, content in self.before.items():
-            self.assertEqual((self.leaf/name).read_bytes(), content)
+            self.assertEqual((archive/name).read_bytes(), content)
 
     def test_explicit_grouped_cache_is_rejected_before_configure(self):
         output = self.run_entry('-BuildDir', str(self.leaf))
         self.assertFalse((self.repo/'configure.jsonl').exists())
         self.assertIn('option/configure', output)
+
+    def test_default_prac_switch_keeps_the_same_leaf(self):
+        self.run_entry(disable_prac=True)
+        marker = self.leaf/'profile.json'
+        off = json.loads(marker.read_text(encoding='utf-8-sig'))
+        self.assertEqual(off['fields']['option/enable_prac'], '0')
+        cached = self.leaf/'ordinary.obj'
+        cached.write_bytes(b'ordinary CUDA object')
+        self.run_entry()
+        on = json.loads(marker.read_text(encoding='utf-8-sig'))
+        self.assertEqual(on['fields']['option/enable_prac'], '1')
+        self.assertNotEqual(on['profile_sha256'], off['profile_sha256'])
+        self.run_entry(disable_prac=True)
+        self.assertEqual(json.loads(marker.read_text(encoding='utf-8-sig')), off)
+        self.assertEqual(cached.read_bytes(), b'ordinary CUDA object')
+        self.assertEqual(sum(p.is_dir() for p in (self.repo/'build_dev/stage1_local_profiles').iterdir()), 1)
+        builds = [json.loads(row)['build'] for row in (self.repo/'configure.jsonl').read_text().splitlines()]
+        self.assertEqual([Path(build) for build in builds], [self.leaf]*3)
 
 
 if __name__ == '__main__':

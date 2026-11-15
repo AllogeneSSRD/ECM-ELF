@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <array>
 namespace ecm_config { namespace defaults {
+inline constexpr int stage1_workflow_worker_count=1;
 inline constexpr char stage1_shared_log_file[]="ecm.log";
 inline constexpr char stage1_shared_finished_file[]="worktodo.finished.txt";
 inline constexpr uint64_t stage1_log_file_max_KB=10000;
@@ -159,6 +160,8 @@ inline constexpr int64_t gui_graceful_stop_ms=300000;
 inline constexpr char worker_name[]="Worker #{N}";
 inline constexpr int worker_autostart=0;
 inline constexpr char worker_extra_args[]="";
+inline constexpr char worker_stage1_extra_args[]="";
+inline constexpr char worker_stage2_extra_args[]="";
 inline constexpr int worker_gpucurves=0;
 inline constexpr char stage2_stage2_tune_ignore[]="gpu,driver,cuda,backend,environment";
 inline constexpr uint64_t stage2_stage2_tune_budget_seconds=1800;
@@ -173,6 +176,7 @@ inline constexpr char stage2_stage2_tune_condition_tag[]="";
 inline constexpr char stage1_stage1_submission_file[]="results.json.txt";
 inline constexpr char stage1_stage1_results_file[]="stage1_results.jsonl";
 inline constexpr char gui_group_order_gp[]="";
+inline constexpr int stage2_workflow_worker_count=1;
 inline constexpr char stage2_shared_log_file[]="ecm.log";
 inline constexpr char stage2_shared_finished_file[]="worktodo.finished.txt";
 inline constexpr uint64_t stage2_log_file_max_KB=10000;

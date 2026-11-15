@@ -12,6 +12,12 @@ class TomlFile;
 const char *state_name(WorkerRunState state);
 const char *state_key(WorkerRunState state);
 const WorkerRunState *all_worker_states(int *count);
+
+struct Stage1HandoffPlan {
+    bool local = false, prime95 = false, local_fallback = false, edwards_only = false, legacy = false;
+    std::string local_queue, local_workers, prime95_queue, prime95_workers, prime95_save_dir;
+};
+
 // Borrowed read-only view; Controller owns records, logs and process lifetime.
 struct WorkerView {
     int index = 1;                    // [Worker #N] number (also --worker N)
@@ -25,7 +31,6 @@ struct WorkerView {
     int gpucurves = 0;
     std::string worktodo;
     std::string log_file;
-    std::string extra_args;           // [Worker #N] extra_args= (space separated)
     std::string exe;
     std::string working_dir;
     bool autostart = false;
@@ -37,6 +42,8 @@ struct WorkerView {
     long long hits = 0;
     std::string task;                 // current worktodo line (from START:)
     bool stage2=false;
+    Stage1Execution stage1_execution;
+    Stage1HandoffPlan stage1_handoff;
     Stage2Status stage2_status;
     std::string application_version;  // observed banner of this worker process
     std::vector<std::string> events;  // event layer (timestamped, ANSI-free)
@@ -120,7 +127,7 @@ private:
     WorkerView make_worker(int index) const;
     void refresh_worker_for_queue(WorkerView &worker);void refresh_device_warnings();
     void tick_graceful_stops(unsigned long long now);
-    std::string effective_config_text(int worker_index) const;
+    std::string effective_config_text(const WorkerView& worker) const;
     void trace(const std::string &line) const {if(trace_)trace_(line);}
     void notify(const WorkerNotice &notice) const {if(notice_)notice_(notice);}
     const TomlFile &ini_;

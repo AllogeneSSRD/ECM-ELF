@@ -1,5 +1,6 @@
 #include "ecm/stage1/cpu_runtime.h"
 #include "ecm/stage1/execution.h"
+#include "ecm/stage1/execution_details.h"
 #include "ecm/stage1/progress.h"
 #include "ecm/stage1/sigma.h"
 #include "ecm/stage1/libecm_compat.h"
@@ -1083,6 +1084,17 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     if (use_ckpt)
         std::cout << " [saves -> " << opt.persistence.tmp_dir << "]";
     std::cout << std::endl;
+
+    std::string execution_details = std::string("cpu_impl=") + (use_simd ? "ifma" : "scalar") +
+        " chain=" + (naf ? "naf" : "binary") +
+        " modulus_bits=" + std::to_string(modulus_bits) +
+        " threads=" + std::to_string(nthreads) +
+        " curves=" + std::to_string(curves) +
+        " ckpt_ms=" + std::to_string(use_ckpt ? opt.persistence.ckpt_ms : 0);
+    if (naf)
+        execution_details += " naf=" + std::to_string(window) +
+            " naf_encoding=" + (naf->packed() ? "packed" : "dense");
+    ecm_stage1::log_execution_details(opt, "cpu", execution_details);
 
     Stage1Progress progress;
     opt.stage1_t0_ms = stage1_now_ms();

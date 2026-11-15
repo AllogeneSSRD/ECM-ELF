@@ -32,11 +32,6 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #else
 #include <unistd.h>
 #endif
-#if ECM_CUDA_ENABLE_PRAC
-#include "../prac/ecm_prac_plan.h"
-#include <sstream>
-#include <stdexcept>
-#endif
 namespace ecm_cuda_mont_host {
 bool stdout_is_tty() {
 #ifdef _WIN32

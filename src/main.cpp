@@ -11,9 +11,6 @@ using ecm_stage1_app::get_exe_dir_local;
 using ecm_stage1_app::normalize_path_local;
 using ecm_stage1_app::resolve_rel_local;
 using ecm_stage1_app::stage1_result_settings;
-using ecm_stage1_app::stage1_save_construction;
-using ecm_stage1_app::stage1_selection_error;
-using ecm_stage1_app::stage1_task_error;
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -410,15 +407,8 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     }
 
     if (result.status() == TaskStatus::Failed) {
-        ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
-        // Marking the line is what stops the queue from re-running it: if that write
-        // fails, abort instead of spinning on the same task forever.
-        if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError)) {
-            ecm_ts_fprintf(stderr, "ERROR: cannot mark the failed line in %s; aborting\n",
-                           worktodo_path.c_str());
-            return false;
-        }
-        return true;
+        ecm_ts_fprintf(stderr, "ERROR: Stage1 execution failed; worktodo retained: %s\n", line.c_str());
+        return false;
     }
 
     try {
@@ -657,8 +647,35 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                  ignored || stage2cfg.workers.empty()))
                 throw std::runtime_error("handoff.workers must be a worker list/range in "
                                          "1..1000000 or auto");
-            stage2cfg.configured_workers =
-                ecm_config::read_gui(ecm_config::section_entries(lines, "gui")).NumWorkers;
+            if (stage2cfg.auto_workers) {
+                const int configured = ecm_config::configured_workflow_worker_count(lines, ini);
+                if (configured > 0)
+                    stage2cfg.configured_workers = configured;
+                if (shared_output && same_path(stage2cfg.worktodo, worktodo_path)) {
+                    const auto eligible = [&, queue = stage2cfg.worktodo](int candidate) {
+                        try {
+                            const auto receiver = ecm_config::read_stage2(ecm_config::selected_entries(
+                                parsed_config.lines, candidate, {"worktodo", "skip"}, ini));
+                            return receiver.worktodo_skip != 2 &&
+                                   same_path(queue, resolve_rel_local(ini_dir, receiver.worktodo));
+                        } catch (const std::runtime_error& error) {
+                            ecm_ts_fprintf(stderr, "Stage2 auto handoff: skipping worker %d: %s\n",
+                                           candidate, error.what());
+                            return false;
+                        }
+                    };
+                    if (configured > 0) {
+                        for (int candidate = 1; candidate <= configured; ++candidate)
+                            if (eligible(candidate))
+                                stage2cfg.workers.push_back(candidate);
+                        if (stage2cfg.workers.empty())
+                            throw std::runtime_error("automatic Stage2 handoff found no eligible worker for the destination queue");
+                        stage2cfg.auto_workers = false;
+                    } else {
+                        stage2cfg.auto_worker_eligible = eligible;
+                    }
+                }
+            }
             if (!shared_output) {
                 stage2cfg.finished = resolve_rel_local(ini_dir, selected_stage2(0).finished);
                 for (const auto& entry : lines)
@@ -855,43 +872,6 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
     if (!finish_record(
             {worktodo_path, finished_path, exe_dir, sync1, sync2, worker, cfg.sync_mode == "full"}))
         return 1;
-    try {
-        std::vector<std::string> rows;
-        std::string error;
-        if (!ecm_worktodo_stage1_lines(worktodo_path, worker, rows, error))
-            throw std::runtime_error(error);
-        std::map<std::string, uint64_t> counts;
-        for (const auto& row : rows) {
-            EcmStage2Task task;
-            if (!ecm_parse_stage1_line(row, task, error) || task.skip_curves != 0)
-                continue;
-            auto actual = opt;
-            if (!stage1_save_construction(task.save_name, actual, error))
-                continue;
-            const auto typed = prefixed_name(task.save_name, save_naming(actual).curve);
-            auto file = resolve_rel_local(exe_dir, typed);
-            const auto legacy = resolve_rel_local(exe_dir, task.save_name);
-            if ((!std::filesystem::exists(file) || std::filesystem::file_size(file) == 0) &&
-                std::filesystem::exists(legacy))
-                file = legacy;
-            auto count = counts.find(file);
-            if (count == counts.end())
-                count = counts.emplace(file, ecm_save::record_count(file)).first;
-            if (!count->second)
-                continue;
-            std::string repaired;
-            if (!ecm_rewrite_stage2_range(row, count->second, task.curves_to_run, repaired,
-                                          error) ||
-                !ecm_worktodo_advance(worktodo_path, worker, row, WorktodoAction::Replace,
-                                      repaired))
-                throw std::runtime_error("cannot repair current worker Stage1 skip: " + error);
-            ecm_ts_fprintf(stdout, "worktodo: repaired skip=%llu save=\"%s\"\n",
-                           static_cast<unsigned long long>(count->second), file.c_str());
-        }
-    } catch (const std::exception& e) {
-        ecm_ts_fprintf(stderr, "FATAL: %s\n", e.what());
-        return 1;
-    }
 
     bool saw_task = false;
     const bool full_sync = (cfg.sync_mode == "full");
@@ -927,9 +907,13 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         };
 
         std::string error;
-        if (!normalize_worktodo(line, opt, exe_dir, item, error)) {
+        const auto normalized = normalize_worktodo(line, opt, exe_dir, item, error);
+        if (normalized != WorktodoNormalization::Ready) {
             input_error(error);
-            return QueueReadStatus::MarkError;
+            if (normalized == WorktodoNormalization::InvalidTask)
+                return QueueReadStatus::MarkError;
+            ecm_ts_fprintf(stderr, "FATAL: current Stage1 configuration cannot run the selected task; worktodo retained\n");
+            return QueueReadStatus::Error;
         }
         if (shared_output && (same_path(logpath, item.input.save_file) ||
                               same_path(finished_path, item.input.save_file))) {
@@ -1088,7 +1072,7 @@ int main(int argc, char** argv) {
         config_used = true;
     }
     if (config_used) {
-        if (!read_config(ini, parsed))
+        if (!read_config(ini, parsed, input.worker_index))
             return 1;
     } else if (!input.ini_path.empty() && !input.show_gpu_info) {
         std::cerr << "INPUT[config] cannot read explicit configuration " << ini << "\n";

@@ -122,6 +122,12 @@ struct P95Notice {
     std::string error;                    // failure reason (Pending)
 };
 
+struct Stage1Execution {
+    std::string curve, param, backend;
+    std::map<std::string, std::string> details;
+    bool valid() const { return !backend.empty(); }
+};
+
 struct ParsedLine {
     LogKind kind = LogKind::Raw;
     std::string text;        // the line as received, ANSI codes removed
@@ -129,6 +135,7 @@ struct ParsedLine {
     std::string timestamp;   // "2026-09-28 18:42:41", empty when absent
     std::string application_version; // actual child banner, e.g. ECM-ELF 0.39.0
     ProgressInfo progress;
+    Stage1Execution stage1;
     Stage2Event stage2;
     bool is_hit = false;
     std::string factor;      // decimal factor of a hit ("factor[i]=<dec>")

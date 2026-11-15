@@ -1138,6 +1138,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
         std::string task_line,expected_n;
         std::vector<Record> plan;
         uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:defaults.b2;
+        std::string_view b2_source=o.b2?"cli":defaults.b2?"config":o.auto_b2?"auto":"unset";
         if(queue) {
             std::string read_error;
             const auto read = ecm_worktodo_read_next_line(worktodo.string(), o.worker,
@@ -1152,7 +1153,10 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
                 try { fields=queue_fields(task_line); }
                 catch(const std::runtime_error &e){throw TaskInputError(e.what());}
                 skip=fields.skip;count=fields.count;
-                if(!o.b2&&fields.b2)b2=fields.b2;
+                if(!o.b2&&fields.b2) {
+                    b2=fields.b2;
+                    b2_source="worktodo";
+                }
                 Big n;std::string error;
                 if(!ecm_compute_stage2_n(fields.task,n.z,error))throw TaskInputError("worktodo N: "+error);
                 expected_n=number(n.z);save=absolute_from(tmp,fields.task.save_name);
@@ -1168,13 +1172,20 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
             plan=records(save,skip,count);
             if(cfg.b2_ratio && !plan.empty()) {
                 if(plan.front().b1 > (static_cast<uint64_t>(INT64_MAX)-8192)/cfg.b2_ratio)
-                    throw TaskInputError("b2_ratio multiplication exceeds Stage2 B2 range");
+                    throw std::runtime_error("b2_ratio multiplication exceeds Stage2 B2 range");
                 b2=plan.front().b1*cfg.b2_ratio;
+                b2_source="b2_ratio";
             }
             for(const auto &r:plan) {
                 if(r.edwards && o.auto_b2 && !b2)throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
-                if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192)
-                    throw TaskInputError("B2 must exceed every saved B1 and fit the engine's signed index range");
+                if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192) {
+                    auto message=std::string("B2 must exceed every saved B1 and fit the engine's signed index range")+
+                        " (source="+std::string(b2_source)+')';
+                    if(b2_source=="worktodo")throw TaskInputError(message);
+                    if(b2_source=="unset" && stage2_backend::opencl)
+                        message+="; OpenCL Stage2 requires a nonzero B2 from --b2, worktodo, [stage2].b2 or b2_ratio";
+                    throw std::runtime_error(message);
+                }
                 if(!expected_n.empty()&&r.n!=expected_n)throw TaskInputError("worktodo N differs from save N");
                 if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
                 if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
@@ -1301,7 +1312,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
             message << "stage2_plan: save=" << save.string() << " requested=" << (count?std::to_string(count):"all")
                     << " available=" << plan.size() << " completed=" << state.done << " remaining=" << (state.done<plan.size()?plan.size()-state.done:0)
                     << " B2=" << b2 << " D=" << d << " device=" << device << " worker=" << o.worker
-                    << " log=" << log.string() << " results=" << curve_results.string();
+                    << " B2_source=" << b2_source << " log=" << log.string() << " results=" << curve_results.string();
             if(persist)message<<" checkpoint="<<progress.string();
             report(message.str());
         }

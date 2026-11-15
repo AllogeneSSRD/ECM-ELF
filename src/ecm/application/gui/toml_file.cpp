@@ -83,6 +83,8 @@ bool TomlFile::load(const std::string &path, std::string &err) {
                     std::string(meta->type)+" "+meta->domain));
             }
         }
+        if (config_version_ >= 3)
+            ecm_config::configured_workflow_worker_count(lines_, path);
     } catch(const std::exception &e) {err=e.what();return false;}
     loaded_=true;return true;
 }

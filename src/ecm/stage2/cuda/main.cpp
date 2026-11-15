@@ -283,9 +283,9 @@ Options arguments(int argc, char **argv) {
 }
 using Settings=ecm_config::Stage2Values;
 
-static std::vector<ecm_config::TomlLine> stage2_config(const fs::path &path,bool explicit_config) {
+static std::vector<ecm_config::TomlLine> stage2_config(const fs::path &path,bool explicit_config,int worker) {
     std::vector<ecm_config::TomlLine> lines;
-    if(!ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Stage2) &&
+    if(!ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Stage2,nullptr,nullptr,worker) &&
        (explicit_config || fs::exists(path)))
         throw std::runtime_error("cannot read explicit TOML: "+path.u8string());
     return lines;
@@ -397,6 +397,8 @@ static void bind_engine_options(Options &o) {
     if(!o.tune.empty() || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.short_batch_tune || o.relocation ||
        (o.portable_cli.count("--auto-carrier")&&o.auto_carrier))
         throw std::runtime_error("OpenCL supports explicit B2, D or its basic planner; CUDA tune/Auto B2/relocation profiles are not applicable");
+    if(o.portable_cli.count("--parallel") && o.parallel==ParallelMode::paired)
+        throw std::runtime_error("OpenCL Stage2 does not support --parallel 2 (dual-slot CUDA mode)");
     if(o.child)o.tune_runtime=false; // CUDA profile machinery is disabled in the child.
     o.auto_carrier=false;
 #endif
@@ -411,7 +413,7 @@ int driver(Options o) {
             // Direct diagnostic probes can invoke the internal worker without
             // its parent. Freeze their config before any curve work, too.
             const auto ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::absolute(fs::path(o.ini));
-            const auto lines=stage2_config(ini,!o.ini.empty());
+            const auto lines=stage2_config(ini,!o.ini.empty(),o.worker);
             freeze_publication(o,ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true)),ini);
         }
         bind_engine_options(o);
@@ -445,7 +447,7 @@ int driver(Options o) {
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
     const fs::path cwd = fs::current_path();
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
-    const auto lines=stage2_config(ini,!o.ini.empty());
+    const auto lines=stage2_config(ini,!o.ini.empty(),o.worker);
     const auto s=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     const bool shared_output=ecm_config::toml_document_version(lines)>=3;
     std::vector<const char*> inherited;
@@ -544,7 +546,7 @@ int driver(Options o) {
     freeze_publication(o,s,ini);
     if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
-    if(!o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;
+    if(!stage2_backend::opencl && !o.portable_cli.count("--weighted-ntt"))o.weighted_ntt=s.weighted_ntt;
     configure_weighted_ntt(o);
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
     else if(shared_output) {

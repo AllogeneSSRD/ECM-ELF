@@ -34,11 +34,9 @@ std::string checkpoint_record(ecm_stage1_checkpoint::Context& checkpoint);
 bool save_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const char *,const checkpoint_header_t *,const uint32_t *,size_t);
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_srcptr,
     uint64_t scalar_bits,uint32_t curves,uint32_t param,checkpoint_header_t &,std::vector<uint32_t> &);
-#if ECM_CUDA_ENABLE_PRAC
 bool save_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const std::string &,ResidentCheckpoint,const std::vector<uint32_t> &);
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_srcptr,
     ResidentCheckpoint &,std::vector<uint32_t> &,bool prac);
-#endif
 }
 
 // Import validated V5 CUDA ladder snapshots, retaining the original file.

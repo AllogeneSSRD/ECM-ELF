@@ -3,8 +3,8 @@
     Local Stage1 build for ecm_cuda, using the general Montgomery baseline.
 
 .DESCRIPTION
-    Prefers build_stage1_local; a different valid local profile selects a
-    deterministic build_stage1_local_<key> sibling. Existing objects are never relabelled.
+    Uses build_stage1_local. PRAC can change in place; other valid local profiles
+    are archived before configuring the fixed directory.
     Explicit BuildDir remains a final leaf. Defaults are in docs/usage/BUILD.md:
 
         compression ON      -Xfatbin -compress-all
@@ -15,7 +15,7 @@
 
     The compile step uses tools\build\internal\parallel_nvcc.ps1 for independent CUDA TUs.
 
-.PARAMETER BuildDir   Explicit final directory; omitted prefers build_stage1_local or its matching profile sibling.
+.PARAMETER BuildDir   Explicit final directory; omitted uses build_stage1_local for local builds.
 .PARAMETER Arch       CUDA architecture (default 89).
 .PARAMETER Jobs       Concurrent nvcc processes (default 8).
 .PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120". Empty (default) = every tier.
@@ -97,13 +97,15 @@ $configureOptions = @(
 if ($Extra) { $configureOptions = "$configureOptions $Extra" }
 $buildProfile = New-EcmCudaProfile $repo $BuildRole stage1 production $Arch $cuda $vc $gmpDependency ([ordered]@{
     configure = $configureOptions; tiers = $Tiers; enable_prac = $(if ($EnablePrac) { '1' } else { '0' }); extra = $Extra })
+$fixedLocal = $BuildRole -eq 'local' -and -not $BuildDir
 $BuildDir = Resolve-EcmBuildDirectory $repo $buildProfile $BuildDir
-Assert-EcmCmakeToolchain $BuildDir $cuda $vc
 if ($HostOnly -and (-not (Test-Path -LiteralPath (Join-Path $BuildDir 'compile_commands.json')) -or
     -not (Test-Path -LiteralPath (Join-Path $BuildDir "CMakeFiles/$($buildProfile.Fields.cmake_version)/CMakeCUDACompiler.cmake")))) {
     throw 'HostOnly requires an existing configured build with the same CMake version; run normal reuse first'
 }
-Assert-EcmBuildProfile $BuildDir $buildProfile
+if (-not $fixedLocal -or $HostOnly) { Assert-EcmCmakeToolchain $BuildDir $cuda $vc }
+Assert-EcmBuildProfile $BuildDir $buildProfile -ReadOnly:$HostOnly -ReconfigureLocalStage1:$fixedLocal
+if ($fixedLocal -and -not $HostOnly) { Assert-EcmCmakeToolchain $BuildDir $cuda $vc }
 $cfg = "-S `"$repo`" -B `"$BuildDir`" $configureOptions"
 
 Write-Host "== LOCAL build rule: sm_$Arch, compression ON, no PTX, tiers='$(if ($Tiers) { $Tiers } else { 'all' })' =="

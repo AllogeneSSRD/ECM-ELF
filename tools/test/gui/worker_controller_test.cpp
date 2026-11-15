@@ -27,6 +27,14 @@ static int child(int argc,char **argv) {
     std::cout<<"ECM-ELF 0.0.0 ("<<(stage2?"Stage2":"Stage1")<<")\n";
     if(scenario=="crash")return 9;
     if(scenario=="old"){std::cout<<"No input number on stdin\n";return 1;}
+    if(scenario=="stage1-metadata") {
+        std::cout<<"START: ECMSTAGE1=first\n"
+            "Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted ntt_length=32 naf=0\n";
+        const auto deadline=mono_ms()+5000;
+        while(!fs::exists("next-task") && mono_ms()<deadline)Sleep(5);
+        std::cout<<"START: ECMSTAGE1=second\n===== queue done, 2 task(s) processed =====\n";
+        return 0;
+    }
     if(scenario=="queue-step") {
         const auto queue=fs::u8path(value(argc,argv,"--queue"));std::ifstream in(queue);std::string first,rest,line;
         std::getline(in,first);while(std::getline(in,line))rest+=line+'\n';in.close();
@@ -58,13 +66,16 @@ struct Fixture {
     WorkerSettings settings;
     std::vector<std::string> trace;
     std::vector<WorkerNotice> notices;
-    Fixture(const fs::path &root,const fs::path &self,const std::string &name,const std::string &scenario,bool stage2=false,int autostart=0):directory(root/name) {
+    Fixture(const fs::path &root,const fs::path &self,const std::string &name,const std::string &scenario,
+            bool stage2=false,int autostart=0,bool version3=false):directory(root/name) {
         fs::create_directories(directory/"bin");
         const auto exe=directory/"bin/fixture.exe";fs::copy_file(self,exe);
         queue=directory/"worktodo.txt";{std::ofstream out(queue);out<<(stage2?"ECMSTAGE2=fixture\n":"ECMSTAGE1=fixture\n");}
         config=directory/"ecm.toml";
         const auto args="--controller-fixture "+scenario+" --queue \""+queue.string()+"\"";
-        {std::ofstream out(config);out<<"[shared]\nworktodo="<<quoted(queue.string())<<"\n[workers.1]\nautostart="<<autostart<<"\nextra_args="<<quoted(args)<<"\n";}
+        {std::ofstream out(config);out<<(version3?"config_version=3\n[shared]\nworktodo_file=":"[shared]\nworktodo=")
+            <<quoted(queue.string())<<(version3?"\n[worker.1]":"\n[workers.1]")<<"\nautostart="
+            <<(version3?(autostart?"true":"false"):std::to_string(autostart))<<"\nextra_args="<<quoted(args)<<"\n";}
         std::string error;const bool loaded=ini.load(config.string(),error);check(loaded,error.c_str());
         settings={config.string(),exe.string(),exe.string(),"normal","ask",1,3000};
         controller.set_sinks([this](const std::string &line){trace.push_back(line);},[this](const WorkerNotice &notice){notices.push_back(notice);});
@@ -108,6 +119,51 @@ int main(int argc,char **argv) {
         check(argc==2,"expected fresh output directory");const auto root=fs::absolute(argv[1]),self=fs::absolute(argv[0]);
         check(!fs::exists(root),"output must be fresh");fs::create_directories(root);
         static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<WorkerController &>().workers()[0])>>);
+        {
+            Fixture f(root,self,"stage1-metadata","stage1-metadata");
+            check(f.controller.start(1),"Stage1 metadata fixture start failed");
+            f.wait([&]{return f.view().stage1_execution.valid();});
+            check(f.view().task=="ECMSTAGE1=first" && f.view().stage1_execution.backend=="ntt",
+                  "Stage1 execution details did not follow the current task");
+            {std::ofstream next(f.directory/"bin"/"next-task");next<<"next";}
+            f.wait([&]{return f.view().task=="ECMSTAGE1=second";});
+            check(!f.view().stage1_execution.valid(),"Stage1 details leaked into the following task");
+        }
+        {
+            Fixture f(root,self,"stage-args","ok",false,0,true);
+            f.ini.set("workers.1","stage1_extra_args","--stage-one 7");
+            f.ini.set("workers.1","stage2_extra_args","--stage-two 9");
+            f.controller.configure(f.settings);
+            const auto stage1=f.view().command_line();
+            check(stage1.find("--controller-fixture ok")!=stage1.npos &&
+                  stage1.find("--stage-one 7")!=stage1.npos && stage1.find("--stage-two")==stage1.npos,
+                  "Stage1 received the wrong additional arguments");
+            {std::ofstream out(f.queue);out<<"[Worker #1]\n[unrelated header]\nECMSTAGE2=fixture\n";}
+            check(f.controller.start(1),"shared queue selection failed to launch Stage2");
+            f.wait([&]{return f.view().state()==WorkerRunState::QueueEmpty;});
+            const auto stage2=f.view().command_line();
+            check(f.view().stage2 && stage2.find("--controller-fixture ok")!=stage2.npos &&
+                  stage2.find("--stage-two 9")!=stage2.npos && stage2.find("--stage-one")==stage2.npos,
+                  "Stage2 received the wrong additional arguments");
+        }
+        {
+            Fixture f(root,self,"reserved-args","ok",false,0,true);
+            f.ini.set("workers.1","stage1_extra_args","--worker 2 --config other.toml");
+            f.controller.configure(f.settings);
+            check(!f.controller.start(1) && f.view().state_text().find("stage1_extra_args: --worker")!=std::string::npos,
+                  "Stage1 accepted a worker override");
+            f.ini.set("workers.1","stage1_extra_args","");
+            f.ini.set("workers.1","extra_args","--config=other.toml");
+            f.controller.configure(f.settings);
+            check(!f.controller.start(1) && f.view().state_text().find("extra_args: --config")!=std::string::npos,
+                  "shared arguments accepted a config override");
+            f.ini.set("workers.1","extra_args","");
+            f.ini.set("workers.1","stage2_extra_args","\"--worktodo\" elsewhere.txt");
+            {std::ofstream out(f.queue);out<<"ECMSTAGE2=fixture\n";}
+            f.controller.configure(f.settings);
+            check(!f.controller.start(1) && f.view().state_text().find("stage2_extra_args: --worktodo")!=std::string::npos,
+                  "Stage2 accepted a queue override");
+        }
         {
             Fixture f(root,self,"autostart","ok",false,1);
             f.wait([&]{return f.view().state()==WorkerRunState::QueueEmpty;});

@@ -82,6 +82,7 @@ public:
         // The worker printed "No input number on stdin": its executable predates the
         // --worker support (D1/D2) and never entered queue mode. See kOldDriverHint.
         bool old_driver = false;
+        Stage1Execution stage1;
         Stage2Status stage2;
         std::vector<std::pair<double,double>> stage2_speed_samples; // v2 queue speed, legacy mean
         bool stage2_task_started=false;

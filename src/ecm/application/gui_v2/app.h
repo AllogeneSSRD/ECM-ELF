@@ -93,6 +93,7 @@ public:
     };
     std::map<int,GpuPresentation> gpu_presentations;
     std::string status, config_path, workflow_load_error;
+    int workflow_worker_count = 0;
     std::deque<std::string> messages;
     std::vector<ecmgui::WorkerNotice> notices;
     bool ready = false, no_nvml = false, reset_layout = false;

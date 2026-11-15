@@ -34,9 +34,9 @@ struct ParsedConfig {
 // reparsed.
 void project_stage1_config(const ParsedConfig&, int worker, EcmQueueConfig&);
 
-// Stage1 validates its own/shared fields. Foreign stage values remain in the
-// startup snapshot for narrow receiver-path projection when handoff is enabled.
-bool read_config(const std::string& path, ParsedConfig& parsed);
+// Stage1 validates its own/shared fields for the active worker. Foreign values
+// remain in the snapshot for explicit receiver projections.
+bool read_config(const std::string& path, ParsedConfig& parsed, int active_worker = 0);
 
 // Stage2 validates its own/shared fields, plus only the legacy Stage1 defaults
 // requested by the caller. Omit overridden defaults from inherited_fields.

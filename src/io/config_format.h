@@ -524,14 +524,14 @@ private:
 };
 
 enum class TomlReadMode { Strict, Computation, Stage1, Stage2, Gui };
-inline bool deferred_toml(TomlReadMode mode, const std::string& section, const std::string& key) {
+inline bool deferred_toml(TomlReadMode mode, const std::string& section) {
     auto table = section;
     if(toml_worker(section)>0) {
         const auto dot=section.find('.',8);
         table=dot==section.npos?"workers":section.substr(dot+1);
     }
     if(mode==TomlReadMode::Stage1)
-        return table!="shared" && table!="stage1" && !(table=="gui" && key=="NumWorkers");
+        return table!="shared" && table!="stage1";
     if(mode==TomlReadMode::Stage2)return table!="shared" && table!="stage2";
     if(mode==TomlReadMode::Gui)return table!="shared" && table!="gui" && table!="workers";
     return false;
@@ -541,7 +541,7 @@ inline bool deferred_toml(TomlReadMode mode, const std::string& section, const s
 inline bool read_toml(std::istream& in, const std::string& path, std::vector<TomlLine>& lines,
                       TomlReadMode mode = TomlReadMode::Strict,
                       std::vector<std::string>* ignored_gui = nullptr,
-                      int* config_version = nullptr) {
+                      int* config_version = nullptr, int active_worker = 0) {
     if (!in)
         return false;
     lines.clear();
@@ -669,8 +669,9 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                     lines.push_back(std::move(l));
                     continue;
                 }
-                if ((version >= 3 && l.key == "b2_ratio" && mode == TomlReadMode::Stage1) ||
-                    deferred_toml(mode, l.section, option ? l.key : std::string{})) {
+                if ((active_worker > 0 && l.worker_scope > 0 && l.worker_scope != active_worker) ||
+                    (version >= 3 && l.key == "b2_ratio" && mode == TomlReadMode::Stage1) ||
+                    deferred_toml(mode, l.section)) {
                     // Foreign enum/type extensions must not gate this program.
                     // Decode supported scalars for optional previews; opaque values
                     // remain verbatim. Missing values/unclosed strings still fail.
@@ -712,9 +713,9 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
 inline bool read_toml(const std::string& path, std::vector<TomlLine>& lines,
                       TomlReadMode mode = TomlReadMode::Strict,
                       std::vector<std::string>* ignored_gui = nullptr,
-                      int* config_version = nullptr) {
+                     int* config_version = nullptr, int active_worker = 0) {
     std::ifstream in(path, std::ios::binary);
-    return read_toml(in, path, lines, mode, ignored_gui, config_version);
+    return read_toml(in, path, lines, mode, ignored_gui, config_version, active_worker);
 }
 
 using Entries = std::vector<std::pair<std::string, std::string>>;
@@ -797,6 +798,38 @@ inline Entries section_entries(const std::vector<TomlLine>& lines, const std::st
         if (l.kind == TomlLine::Kind::KeyValue && l.recognized && l.section == section)
             replace_entry(values, l.key, l.value);
     return values;
+}
+
+// The v3 workflow count is authoritative. Old files can still supply the
+// explicit GUI count as a compatibility default for automatic handoff.
+inline int configured_workflow_worker_count(const std::vector<TomlLine>& lines,
+                                            const std::string& path) {
+    const TomlLine* legacy = nullptr;
+    const TomlLine* selected = nullptr;
+    for (const auto& line : lines) {
+        if (line.kind != TomlLine::Kind::KeyValue || !line.recognized)
+            continue;
+        if (line.section == "shared" && line.key == "workflow_worker_count")
+            selected = &line;
+        else if (line.section == "gui" && line.key == "NumWorkers")
+            legacy = &line;
+    }
+    if (!selected)
+        selected = legacy;
+    if (!selected)
+        return 0;
+    const auto& line = *selected;
+    const auto& meta = *toml_option(line.section, line.key);
+    try {
+        const auto value = toml_binding_value(line, meta);
+        const auto count = std::stoi(value);
+        if (count < 1 || count > 64)
+            throw std::runtime_error("worker count outside 1..64");
+        return count;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(config_diagnostic(path, line.line_number, line.worker_scope,
+            line.source_key, toml_source_rhs(line), e.what(), std::string(meta.type) + " " + meta.domain));
+    }
 }
 
 // Exact decimal/scientific uint64 input, shared by Stage2 TOML and CLI. Decimal

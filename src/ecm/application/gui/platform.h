@@ -103,6 +103,7 @@ struct WorkerSpawn {
     std::string working_dir;         // empty = the GUI's own directory
     std::vector<std::string> extra_args;
     bool stage2=false;
+    std::string argument_error;
 };
 
 enum class WorkerRunState { Stopped, Starting, Running, Restarting, Error, QueueEmpty };

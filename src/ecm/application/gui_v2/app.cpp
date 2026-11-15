@@ -89,9 +89,12 @@ bool App::load_config(const std::string& input) {
             throw std::runtime_error("Business TOML and UI sidecar must be distinct");
         std::string error; ecmgui::TomlFile candidate;
         if (!candidate.load(path, error)) throw std::runtime_error(error);
+        const int worker_count = candidate.config_version() >= 3 ?
+            ecm_config::configured_workflow_worker_count(candidate.lines(), path) : 0;
         group_order_job.cancel();
         group_order_loaded=false;
-        config = std::move(candidate); config_path = path; leases_.clear();log_views_.clear();log_last_worker_=-1;
+        config = std::move(candidate); config_path = path; workflow_worker_count = worker_count;
+        leases_.clear();log_views_.clear();log_last_worker_=-1;
         saved_clock_profiles.clear();saved_clock_automatic.clear();clock_drafts.clear();
         clock_profiles_valid=parse_clock_profiles(config.get("gui","gpu_clock_ranges"),saved_clock_profiles,&saved_clock_automatic);
         // Loading a different workflow does not replay startup commands. The
@@ -116,8 +119,9 @@ void App::configure_workers() {
     auto settings = ecm_config::read_gui(ecm_config::section_entries(config.lines(), "gui"));
     ecmgui::WorkerSettings workers;
     workers.stage2_average=false;
-    workers.ini_path = config_path; workers.num_workers = std::clamp(settings.NumWorkers, 1, 1024);
-    if(state.worker_count>0)workers.num_workers=state.worker_count;
+    workers.ini_path = config_path;
+    workers.num_workers = workflow_worker_count > 0 ? workflow_worker_count :
+        state.worker_count > 0 ? state.worker_count : settings.NumWorkers;
     const auto base = ecmgui::path_dir(config_path);
     auto first = state.worker_stage1_exe.empty() ? settings.exe : state.worker_stage1_exe;
     auto second = state.worker_stage2_exe.empty() ? settings.stage2_exe : state.worker_stage2_exe;
@@ -669,6 +673,11 @@ std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
             const auto construction=ui::stage2_construction(*curve,ratio==worker_b2_ratios_.end()?0:ratio->second,zh);
             summary+="\n"+construction;
         }
+    } else {
+        const auto execution = ui::stage1_execution(worker.stage1_execution, zh);
+        if (!execution.empty())
+            summary += "\n" + execution;
+        summary += "\n" + ui::stage1_handoff(worker.stage1_handoff, worker.stage1_execution, zh);
     }
     return summary;
 }
@@ -981,6 +990,11 @@ void App::draw_inspector(const ui::Fonts& fonts) {
                 ImGui::Text(ecmgui_v2::ui::text("worker.phase_batch",zh),phase.c_str(),curve->batch,curve->batches);
                 draw_stage2_progress(*worker,*curve,p,zh,s.workers==2);
             }
+        } else if (!worker->stage2) {
+            const auto execution = ui::stage1_execution(worker->stage1_execution, zh, true);
+            if (!execution.empty())
+                ImGui::TextWrapped("%s", execution.c_str());
+            ImGui::TextWrapped("%s", ui::stage1_handoff(worker->stage1_handoff, worker->stage1_execution, zh, true).c_str());
         }
         if (ImGui::Button(ecmgui_v2::ui::text("open_worker_folder",zh))) ecmgui::open_in_explorer(worker->working_dir);
         ImGui::TextWrapped("%s", worker->effective_config.c_str());
@@ -1106,6 +1120,11 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
                 draw_stage2_progress(*active_worker,*curve,p,zh,paired);
             }
             if(active_worker->stop_requested)ImGui::TextColored(p.warning,"%s",ui::text(paired?"stage2.stop_active":"stop_after_the_current_stage2_curve",zh));
+        } else {
+            const auto execution = ui::stage1_execution(active_worker->stage1_execution, zh, true);
+            if (!execution.empty())
+                ImGui::TextWrapped("%s", execution.c_str());
+            ImGui::TextWrapped("%s", ui::stage1_handoff(active_worker->stage1_handoff, active_worker->stage1_execution, zh, true).c_str());
         }
     }
     auto found=log_views_.find(log_id);if(found==log_views_.end())found=log_views_.emplace(log_id,LogView{state.ui_raw_log,state.ui_follow_log,true}).first;

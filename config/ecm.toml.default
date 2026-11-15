@@ -104,21 +104,23 @@ target = "gpu"  # string: [cpu|gpu]
 # 内切换 CUDA 与 OpenCL。
 
 # cpu_implementation = "auto"  # string: [auto|simd|scalar|gwnum|slice list|empty]
-# CPU Stage1 arithmetic. A single mode forces its usual behavior; auto or an empty value selects by
-# CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3,
-# a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on
-# the actual modulus after removing known factors. Overlapping slices are allowed. The first
-# available backend whose slice contains the width is selected. Slices include the start and exclude
-# the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:].
-# Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA.
-# scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery
-# PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU runs accept only automatic mode.
-# CPU Stage1 算术实现。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过
-# 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列
-# 表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起
-# 点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回
-# 退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求
-# Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU 任务仅接受自动模式。
+# Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or
+# an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires
+# AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries
+# each candidate in order on the actual modulus after removing known factors. Overlapping slices are
+# allowed. The first available backend whose slice contains the width is selected. Slices include
+# the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is
+# equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd
+# requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum
+# requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can
+# inherit this TOML policy and leave it inactive.
+# 选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实
+# 际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这
+# 样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。
+# 切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用
+# auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。
+# gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此
+# TOML 策略，运行时不启用。
 
 # gpu_device = 0  # int: <x:Z,0..device_count-1>
 # Zero-based GPU device ID for Stage1. Stage2 inherits it unless stage2_device is explicitly set.
@@ -188,9 +190,10 @@ target = "gpu"  # string: [cpu|gpu]
 
 [gui]
 # worker_count = 1  # int: <x:Z,1..64>
-# Number of workers managed by the GUI. Each uses its own [worker.N] settings. Task curve counts
-# come from worktodo.
-# GUI 管理的 worker 数量。各 worker 使用自己的 [worker.N] 设置，任务曲线数由 worktodo 决定。
+# Legacy count for workers managed by the GUI. For v3 workflows, shared.worker_count takes
+# precedence when present. Each worker uses its own [worker.N] settings.
+# GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 shared.worker_count 时优先使用该值。各 worker 使
+# 用自己的 [worker.N] 设置。
 
 [worker.1]
 # autostart = false  # bool: [false|true]

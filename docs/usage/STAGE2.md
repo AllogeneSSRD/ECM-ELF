@@ -8,7 +8,7 @@
 
 直接续算可用 `ecm_opencl_stage2.exe --config ecm.toml --save FILE --device N --b2 B2 --d D`；队列入口为 `ecm_opencl_stage2.exe --config ecm.toml --worker N --once`。D=0使用独立基本模型和owned-payload预算。支持显式 `--carrier-exponent P`，先验证N整除2^P−1；不自动比较承载路线。
 
-须提供非零B2：来自CLI、worktodo、`b2`或共同 `b2_ratio`。OpenCL 支持本后端的运行时点计划调优，需要明确 B2；CUDA 的离线 NTT/ECM tune、Auto B2、自动承载比较及 relocation 仍限定 CUDA。两个后端分别维护实测文件，显式请求不支持的选项会报错。OpenCL自身采用阻塞传输/事件等待，CUDA `low_cpu_wait` flags不控制其设备调度。
+须提供非零 B2，可来自 CLI、worktodo、`b2` 或 `b2_ratio`。OpenCL 支持本后端的运行时点计划调优。离线 NTT/ECM tune、Auto B2、自动承载比较及 relocation 仍限定 CUDA。两个后端分别维护实测文件。OpenCL 忽略 TOML 中的 CUDA 加权 NTT 预设。显式请求 CUDA 加权 NTT 或通过 `--parallel 2` 请求双槽会报错。OpenCL 采用阻塞传输和事件等待，`low_cpu_wait` 只控制 CUDA 的主机等待方式。
 
 `memory.arena_mib` 是整个OpenCL owned-buffer硬预算，包含F树、结果、NTT临时区和表；它与CUDA arena口径不同。0表示自动payload预算；`opencl_payload`日志记录本模块实际账本峰值，不是进程显存峰或设备空闲显存。预算不足会失败并保留队列，不自动放宽。
 
@@ -121,7 +121,7 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 例如 `ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10,"xxx"` 中，960 是跳过的 save 记录数，10 是请求数量；`xxx` 所在位置必须填可解析的已知因子或空字符串，不能当作任意备注。
 
-整数支持精确十进制和科学记数法。队列和直接读档均以存档 B1 × 非零 `b2_ratio` 覆盖 B2，并检查溢出和 B2 > B1。其余情况下依次采用非零的 CLI 值、任务值、`b2`。CUDA 在有效 B2 为 0、`b2_ratio` 为 0 且启用 Auto B2 时才自动选择。
+整数支持精确十进制和科学记数法。队列和直接读档均以存档 B1 × 非零 `b2_ratio` 覆盖 B2，并检查溢出和 B2 > B1。其余情况下依次采用非零的 CLI 值、任务值、`b2`。CUDA 在有效 B2 为 0、`b2_ratio` 为 0 且启用 Auto B2 时才自动选择。`stage2_plan` 的 `B2_source` 记录本次选择的来源。
 
 ## 数量不足与错误
 
@@ -129,7 +129,7 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 请求 10 条、跳过后仅有 3 条时，提示 requested/available，执行这 3 条。全部成功后按 completed=3 完成原任务，继续下一项；可用记录为 0 时提示并按零曲线完成，不等待 save 追加。
 
-存档缺失、损坏、checksum/N/X 不匹配或任务字段错误属于输入错误：记录原因，队列原行变为错误注释，finished 保留原任务和原因，继续下一项。文件权限、状态对账、CUDA/设备/显存或未知内部故障属于致命错误：停止，保留未完成任务。退出码为正常 0、存在队列输入错误 1、致命错误 2。
+存档缺失、损坏、checksum/N/X 不匹配或任务字段错误属于输入错误。队列原行标记为错误注释，finished 保留原任务和原因，随后继续下一项。当前配置或后端无法为任务提供有效 B2 时（例如 OpenCL 收到只有 Auto B2 可用的任务），停止并保留该任务。文件权限、状态对账、设备、显存和未知内部故障也会停止并保留未完成任务。退出码为正常 0、存在队列输入错误 1、致命错误 2。
 
 ## 自动续跑与退出
 

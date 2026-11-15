@@ -22,6 +22,8 @@
 
 #include <gmp.h>
 
+#include "io/worktodo_selection.h"
+
 struct EcmStage2Task {
     std::string raw_line;  // original queue identity/error text; delivery may rename save
     std::string aid;       // optional assignment id (empty if none)
@@ -90,14 +92,6 @@ bool ecm_compute_ecm2_n(const Ecm2Task& task, mpz_t N, std::string& err);
 // Read the first task for one worker. Empty is distinct from an unreadable or
 // missing file; on Error, `err` explains the I/O failure. `line` and `err` are
 // cleared before reading. Worker <= 0 ignores sections.
-enum class WorktodoReadResult { Task, Empty, Error };
-enum class WorktodoStage { Any = 0, Stage1 = 1, Stage2 = 2 };
-
-struct WorktodoSelection {
-    int priority = 0; // 0=file order, 1=Stage1 first, 2=Stage2 first
-    int skip = 0;     // 0=none, 1=Stage1, 2=Stage2
-};
-
 WorktodoStage ecm_worktodo_stage(const std::string& line);
 WorktodoReadResult ecm_worktodo_read_next_line(const std::string& path, int worker,
                                                WorktodoSelection selection, WorktodoStage consumer,

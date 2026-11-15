@@ -9,6 +9,7 @@
 #include "../../../../cuda/runtime/cuda_ecm_shim.h"
 #include <algorithm>
 #include "ecm/stage1/progress.h"
+#include "ecm/stage1/execution_details.h"
 #include "../../../cuda_slices.h"
 #include <cstring>
 using namespace ecm_cuda_mont_host;
@@ -75,8 +76,9 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
         if (!kernel) throw std::runtime_error("requested Stage1 TPI/register policy is unavailable for the selected tier");
         if (verify_size_of_n(N,bits,CARRY_BITS) != ECM_NO_FACTOR_FOUND) return ECM_ERROR;
         EcmPracPlan plan;
+        unsigned search = 0;
         if (prac) {
-            const auto search = requested.prac_search ? requested.prac_search
+            search = requested.prac_search ? requested.prac_search
                 : ecm_prac_search_width(requested.get("ECM_PRAC_SEARCH"));
             outputf(OUTPUT_ALWAYS, "GPU: preparing Prime95 PRAC plan (B1=%llu, t=%u, search=%u)\n",
                     (unsigned long long)B1, torsion, search);
@@ -184,21 +186,37 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
         }
         outputf(OUTPUT_ALWAYS, "GPU: sigma=%llu, CGBN<%u,%u>, curves=%u, blocks=%u, blocks/SM=%d, control=%zu bytes\n",
                 (unsigned long long)*sigma, tpi, bits, curves, blocks, occupied, control_bytes);
-        if (window.enabled()) return prac_window_run(window, plan, gpu, resolved.entry, s_bits,
-            bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime,
-            mode == ECM_DOMAIN_PRAC_CONSTANT_M4423 ? 5 : 6);
+        std::string details = "kernel_weight=" + std::to_string(resolved.bits) +
+            " tpi=" + std::to_string(resolved.tpi) +
+            " tpb=" + std::to_string(resolved.tpb) +
+            " blocks=" + std::to_string(resolved.blocks) +
+            " chain=" + (prac ? "prac" : "ladder") +
+            " resident=1 low_cpu_wait=" + std::to_string(requested.cuda_low_cpu) +
+            " resume=" + std::to_string(resumed) +
+            " cursor=" + std::to_string(h.next);
+        if (prac)
+            details += " prac=" + std::to_string(search);
+        if (window.enabled()) {
+            ecm_stage1::log_execution_details(ecm_stage1::CurveModel::Montgomery, 0, "cgbn", details + " mode=window");
+            return prac_window_run(window, plan, gpu, resolved.entry, s_bits,
+                bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime,
+                mode == ECM_DOMAIN_PRAC_CONSTANT_M4423 ? 5 : 6);
+        }
         const double target_ms=prac_target_ms(requested,prac);
         uint64_t completed_work = 0;
         if (prac) for (uint64_t i = 0; i < h.next; ++i) completed_work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
         else completed_work = h.next - 1;
+        const double sample_limit=prac_sample_limit(requested);
+        const unsigned rolling_depth=rolling_slice_depth(sample_limit <= 0,requested.cuda_slice_depth);
+        details += " slice_depth=" + std::to_string(rolling_depth ? rolling_depth : sample_limit <= 0 ? 8u : 1u);
+        ecm_stage1::log_execution_details(ecm_stage1::CurveModel::Montgomery, 0, "cgbn", details);
         auto start_wall = std::chrono::steady_clock::now(), last_ckpt = start_wall;
         outcome.total=total;outcome.cursor=h.next;outcome.snapshot_cursor=h.next;outcome.durable_cursor=resumed?h.next:0;
         uint64_t chunk = prac ? 16 : 200;
         ecm_stage1_gpu_progress::SpeedWindow speed;
         double kernel_seconds = 0, last_print = -1;
-        const double sample_limit=prac_sample_limit(requested);
         auto rolling=RollingSlices<uint64_t>::create(h.next,
-            rolling_slice_depth(sample_limit <= 0,requested.cuda_slice_depth),requested.cuda_low_cpu,gpu.report);
+            rolling_depth,requested.cuda_low_cpu,gpu.report);
         const auto checkpoint_due=[&] {
             return checkpoint_ms && std::chrono::steady_clock::now() - last_ckpt >=
                 std::chrono::milliseconds(checkpoint_ms);

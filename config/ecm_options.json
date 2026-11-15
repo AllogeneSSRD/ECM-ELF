@@ -11,6 +11,26 @@
   "options": [
     {
       "owner": "stage1",
+      "key": "workflow_worker_count",
+      "v3_key": "worker_count",
+      "v3_only": true,
+      "v3_global_only": true,
+      "shared_with": ["stage2"],
+      "field": "workflow_worker_count",
+      "type": "int",
+      "default": 1,
+      "minimum": 1,
+      "maximum": 64,
+      "domain": "<x:Z,1..64>",
+      "fx": "workflow_workers",
+      "parser": "strict",
+      "description": [
+        "Workflow worker count for GUI v2 and automatic ECM-ELF handoff within the same queue. Use worker numbers 1 through this count. Automatic handoff excludes workers that skip Stage2. When omitted, an explicit legacy GUI worker_count remains supported.",
+        "供 GUI v2 与同队列 ECM-ELF 自动交接共用的 worker 数量，编号从 1 到该数量。自动交接排除跳过 Stage2 的 worker。省略时兼容显式设置的旧 GUI worker_count。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "shared_log_file",
       "v3_only": true,
       "v3_key": "log_file",
@@ -232,8 +252,8 @@
       "fx": "workers(S2)",
       "parser": "strict",
       "description": [
-        "Receiving workers when auto_stage2=1: a single ID, comma list or ranges within 1..1000000. Select the shortest candidate queue; ties use the lowest ID. auto uses the destination's existing worker sections, falling back to GUI NumWorkers when none exist. Missing explicit sections are created. Empty keeps the current worker and rewrites in place when the destination is the same file; an external file receives that same worker number. Unreadable destinations remain pending for retry.",
-        "auto_stage2=1 时的接收 worker，可填写 1..1000000 内单个编号、逗号列表或区间；选择任务数最少者，并列取较小编号。auto 使用目标队列已有 worker 分区，无分区时使用 GUI NumWorkers。显式指定但尚不存在的分区会创建。留空保留当前 worker，同文件原位改写，其他文件也使用当前编号；目标不可写时保留待投递记录。"
+        "Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest eligible queue; ties use the lowest ID. For v3 auto within the same queue, an explicit shared.worker_count (or legacy GUI count) defines the candidate range. Candidates must read that queue and allow Stage2. Without a configured range, auto uses existing worker sections or starts from worker 1. An external queue uses its existing sections before falling back to the configured count. Empty keeps the current worker. Unwritable destinations remain pending for retry.",
+        "Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小编号。v3 同队列 auto 优先采用显式的 shared.worker_count（兼容 GUI 旧数量），候选须读取该队列并允许 Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。"
       ]
     },
     {
@@ -710,8 +730,8 @@
       ],
       "empty": "default",
       "description": [
-        "CPU Stage1 arithmetic. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU runs accept only automatic mode.",
-        "CPU Stage1 算术实现。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU 任务仅接受自动模式。"
+        "Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can inherit this TOML policy and leave it inactive.",
+        "选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。"
       ]
     },
     {
@@ -1030,8 +1050,8 @@
       "fx": "algorithm(S1 CUDA)",
       "parser": "legacy",
       "description": [
-        "Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. For Edwards NTT, see the NAF window setting.",
-        "GPU Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。"
+        "Stage1 algorithm when the target is GPU: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. For Edwards NTT, see the NAF window setting.",
+        "选中 GPU 时使用的 Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。"
       ]
     },
     {
@@ -2329,8 +2349,8 @@
       "fx": "Stage2_root_weighted_NTT",
       "parser": "strict",
       "description": [
-        "Opt-in CUDA polynomial convolution. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. CLI --weighted-ntt 0|1 overrides this key.",
-        "可选 CUDA 多项式卷积后端。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。命令行 --weighted-ntt 0|1 优先。"
+        "Opt-in polynomial convolution for the production CUDA backend. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. The TOML preset stays inactive on OpenCL. CLI --weighted-ntt 0|1 overrides this key.",
+        "生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt 0|1 优先。"
       ]
     },
     {
@@ -2486,8 +2506,8 @@
       "minimum": 1,
       "maximum": 64,
       "description": [
-        "Number of workers managed by the GUI. Each uses its own [worker.N] settings. Task curve counts come from worktodo.",
-        "GUI 管理的 worker 数量。各 worker 使用自己的 [worker.N] 设置，任务曲线数由 worktodo 决定。"
+        "Legacy count for workers managed by the GUI. For v3 workflows, shared.worker_count takes precedence when present. Each worker uses its own [worker.N] settings.",
+        "GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 shared.worker_count 时优先使用该值。各 worker 使用自己的 [worker.N] 设置。"
       ]
     },
     {
@@ -2816,8 +2836,38 @@
       "fx": "worker_args",
       "parser": "gui",
       "description": [
-        "Additional command-line arguments for this GUI-launched worker. Separate arguments with spaces; quote paths containing spaces. Overrides depend on options supported by the selected executable.",
-        "向 GUI 启动的 worker 追加命令行参数。参数以空格分隔，含空格的路径使用双引号；命令行覆盖配置文件的选项应以实际 worker 支持的参数为准。"
+        "Command-line arguments common to both stages of this GUI-launched worker. Use the stage-specific keys for options that only one stage understands. Workflow configuration, worker number and queue path are managed by the GUI.",
+        "向 GUI 启动的 worker 追加两阶段共用的命令行参数。阶段专用选项使用对应的键。工作流配置、worker 编号和队列路径由 GUI 管理。"
+      ]
+    },
+    {
+      "owner": "worker",
+      "key": "stage1_extra_args",
+      "v3_only": true,
+      "field": "stage1_extra_args",
+      "type": "string",
+      "default": "",
+      "domain": "<argv>",
+      "fx": "worker_stage1_args",
+      "parser": "gui",
+      "description": [
+        "Additional Stage1 command-line arguments appended after the common extra_args. Separate arguments with spaces and quote paths containing spaces.",
+        "Stage1 专用命令行参数，追加在共用 extra_args 之后。参数以空格分隔，含空格的路径使用双引号。"
+      ]
+    },
+    {
+      "owner": "worker",
+      "key": "stage2_extra_args",
+      "v3_only": true,
+      "field": "stage2_extra_args",
+      "type": "string",
+      "default": "",
+      "domain": "<argv>",
+      "fx": "worker_stage2_args",
+      "parser": "gui",
+      "description": [
+        "Additional Stage2 command-line arguments appended after the common extra_args. Separate arguments with spaces and quote paths containing spaces.",
+        "Stage2 专用命令行参数，追加在共用 extra_args 之后。参数以空格分隔，含空格的路径使用双引号。"
       ]
     },
     {

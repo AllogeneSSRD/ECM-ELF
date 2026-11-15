@@ -3,6 +3,7 @@
 namespace ecmgui_v2 {
 struct BusinessOption { const char *table,*key,*domain,*description_key,*type; bool has_min,has_max; double minimum,maximum; };
 inline constexpr BusinessOption business_options[]={
+    {"shared","workflow_worker_count","<x:Z,1..64>","option_shared_workflow_worker_count","int",true,true,1,64},
     {"shared","shared_log_file","<path>","option_shared_shared_log_file","string",false,false,0,0},
     {"shared","shared_finished_file","<path>","option_shared_shared_finished_file","string",false,false,0,0},
     {"shared","log_file_max_KB","[1000..1000000]","option_shared_log_file_max_KB","u64",true,true,1000,1000000},
@@ -140,6 +141,8 @@ inline constexpr BusinessOption business_options[]={
     {"workers.1","name","<text>","option_workers.1_name","string",false,false,0,0},
     {"workers.1","autostart","[0|1]","option_workers.1_autostart","int",false,false,0,0},
     {"workers.1","extra_args","<argv>","option_workers.1_extra_args","string",false,false,0,0},
+    {"workers.1","stage1_extra_args","<argv>","option_workers.1_stage1_extra_args","string",false,false,0,0},
+    {"workers.1","stage2_extra_args","<argv>","option_workers.1_stage2_extra_args","string",false,false,0,0},
     {"workers.1","gpucurves","<x:Z,x>=0>","option_workers.1_gpucurves","int",false,false,0,0},
     {"stage2","stage2_tune_ignore","[gpu|driver|cuda|backend|memory|environment],...","option_stage2_stage2_tune_ignore","string",false,false,0,0},
     {"stage2","stage2_tune_budget_seconds","<x:Z,1..86400>","option_stage2_stage2_tune_budget_seconds","u64",true,true,1,86400},

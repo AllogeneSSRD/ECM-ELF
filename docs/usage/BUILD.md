@@ -17,7 +17,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 cu13.3 聚合模式使用 `SplitCompile=8`，cu11.8及隔离备选使用1。构建入口不自动运行数学、GPU 或性能测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 固定为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。Stage1 配置不匹配时可选择带 profile key 的独立目录；Stage2 默认入口将有效旧构建归档到 `build_dev/stage2_local_profiles/` 后继续使用固定目录。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 默认输出固定为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_cuda_stage2.exe` 和 `build_gui_local/ecm_gui.exe`。配置切换和归档规则见[用途与 profile 目录](#用途与-profile-目录)。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -25,9 +25,9 @@ GUI v2 使用独立入口`tools/build/build_gui_v2.bat`，默认生成`build_gui
 
 Stage1 本机、开发与发布构建使用完整位宽和曲线族、通用 Montgomery、TPB128 及分档寄存器策略，并默认编译 PARAM0 PRAC 和 resident ladder。直接调用 CMake 时 `ECM_CUDA_ENABLE_PRAC` 也默认为 ON。本机及开发可通过 `-EnablePrac:$false` 省去两者，`-Tiers` 可限制容器档位。运行时默认使用 ladder，可在 TOML 中为 PARAM0 启用 PRAC。见 [Stage1 设置](STAGE1.md#cuda-cgbn-montgomery-param0)。
 
-PRAC 的标准实例按受支持的 PARAM0 容器位宽与 TPI 生成，每档编译域导入、域导出、resident ladder 和 PRAC 等模式。搜索级别只改变主机生成的链计划，切片深度只改变这些内核的提交方式。把原先关闭 PRAC 的构建切到开启时，当前独立 profile 和 CMake 目标级宏会使普通 CUDA 对象也失去复用资格。实验变体的裁剪方案见 [PRAC 构建拆分计划](../development/GPU_STAGE1_PRAC_BUILD_DRAFT.md)。
+PRAC 的标准实例按受支持的 PARAM0 容器位宽与 TPI 生成，每档编译域导入、域导出、resident ladder 和 PRAC 等模式。搜索级别只改变主机生成的链计划，切片深度只改变这些内核的提交方式。Stage1 默认 local 在固定目录内切换 PRAC。普通 PARAM0/2/3 和 Edwards 的编译命令与依赖保持一致，经正常预检可直接复用。开启时编译缺失或失效的 PRAC 模块并链接，关闭时链接提示实现。实验变体的裁剪方案见 [PRAC 构建拆分计划](../development/GPU_STAGE1_PRAC_BUILD_DRAFT.md)。
 
-Stage1 local/dev/release 统一使用构建生成的实例入口。`-KernelLayout isolated` 仅保留为兼容写法，`grouped` 已删除；CMake 的 `ECM_CUDA_ISOLATE_TIERS=OFF` 会明确报错。正式 Stage1 入口显式传入 `ECM_CUDA_ISOLATE_TIERS=ON` 并纳入 profile 身份，避免与未记录布局的旧 grouped 配置发生身份重合。local 保持单架构、压缩、无 PTX。已有缓存必须通过完整 profile、编译命令、依赖和对象内容核对；省略 `-BuildDir` 时，为不相容 profile 选择独立目录，旧目录保留。
+Stage1 local/dev/release 统一使用构建生成的实例入口。`-KernelLayout isolated` 为兼容写法。正式 Stage1 入口显式传入 `ECM_CUDA_ISOLATE_TIERS=ON` 并纳入 profile 身份。local 保持单架构、压缩、无 PTX。已有缓存必须通过 profile、编译命令、依赖和对象内容核对。
 
 位宽唯一清单为 `src/ecm/cuda/dispatch/tiers.def`。`-Tiers` 在构建身份和 CMake 选档前通过同一归一化器处理：去除空白、去重、按清单排序；空字符串为全档，未知位宽、空列表项和分号分隔会报错。`"1024, 384,384"` 与 `"384,1024"` 产生相同选档身份。Edwards binary/NAF 共用32个容器入口，Montgomery PARAM0/2/3 各31个，共125个基础模块。容器边界仍按 Edwards 一位余量、Montgomery 六位余量判断，见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。
 
@@ -177,7 +177,11 @@ Windows x64 的 `ecm.exe` 与 `ecm_cuda.exe` 默认包含 GWNUM 加载接口。�
 
 Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。
 
+Stage1 在 CMake 配置前批量读取 Git HEAD 中的源码 BOM 基准，检查 `kernels/` 和 `src/` 中对应该版本的工作区文件。BOM 不一致时只修正文件开头，保留正文。独立诊断入口 `tools/diag/ensure_bom.ps1 -NoFix` 可只报告差异。
+
 并行预检同时检查 NMake 的依赖时间戳。CUDA 对象即使通过内容校验，只要其依赖、目标的 `flags.make` 或 `compiler_depend.ts` 更新，普通构建仍将该对象交给并行队列编译。每个单元成功后立即保存 `.ecm-state.json`。中断后，以相同配置重跑时，已写完记录且再次通过预检的对象可以复用，缺少记录或校验不通过的对象重新编译。
+
+复查通过后，并行驱动将每个 CUDA 对象对应的 NVCC 依赖记录（`.obj.ecm.d`）同步到 CMake 使用的 `.obj.d`。CMake 据此刷新 NMake 的依赖规则，替换旧路径并保留真实依赖。内容相同的依赖文件保留时间戳。这一步也覆盖本次复用的对象。如果 Windows 拒绝替换文件，脚本会尝试原位写入，并在同步成功后启动 NMake。
 
 复用旧的MSVC/CMake构建目录时，需核对关键主机对象的`.obj.d`确实包含头文件依赖。旧编译器探测缓存中的本地化`SHOWINCLUDES`前缀可能与当前输出不匹配，造成依赖文件为空，头文件变化后仍报告构建成功。遇到此情况，先保留证据，备份并移开该目录的C/C++编译器探测缓存和主机对象，再用正式入口重新探测、编译并验证实际程序行为；不编辑依赖指纹或CUDA对象来绕过校验。Stage2使用编译器依赖清单校验内容：新MSVC采用`/sourceDependencies`，14.16采用`/showIncludes`并保留实际SDK/STL/宏包含。
 
@@ -197,13 +201,15 @@ dev、local、release 和测试构建入口在写入产物前，为输出目录�
 
 测试与实验构建默认放在 `build_dev/` 下，例如 `build_dev/build_cuda_cmake/`；正式 local/release 目录保留各自入口。`tools/build/test/move_root_test_builds.ps1` 默认只生成迁移计划，传 `-Apply` 后按绝对路径逐目录移动，保留已跟踪脚本与正式目录。`-PromoteStage2 <明确的旧后缀目录>` 可验证 profile 和 EXE 摘要后将指定本机产物提升至固定 Stage2 目录，原固定目录先归档；不按时间戳自动选程序。迁移清单保存在忽略的 `build_dev/migrations/`。缓存内的原绝对路径保留作证据，重新编译时须通过正常依赖／对象／链接校验；CMake 缓存可能需要重新配置。迁移、忽略及路径边界由 `tools/test/test_build_migration.ps1` 验证。
 
-`profile.json` 保存完整 SHA256 及字段。Stage1 local 优先使用 `build_stage1_local`；Stage2 local 始终使用 `build_stage2_local`，不添加 key 后缀。dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。每个叶目录只容纳一个相容 profile。Stage1 省略目录参数且遇到有效旧 profile 时，仍可选择同层 `build_stage1_local_<key>`。Stage2 默认入口遇到同源码根、local/stage2 且哈希有效的旧 profile 时，将整个旧目录移入 `build_dev/stage2_local_profiles/`，随后在固定目录创建新 profile；匹配时直接复用，损坏或外来标记仍拒绝。日志报告变化字段、归档位置与实际输出路径。首次使用新 profile 需要正常构建，`-HostOnly` 在归档之前先要求已有匹配 profile，不会为新配置搬移旧缓存。
+`profile.json` 保存完整 SHA256 及字段。默认 Stage1 和 Stage2 local 分别使用 `build_stage1_local` 和 `build_stage2_local`。dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译和链接策略、工具链和 GMP 内容身份。Stage1 还记录 CMake 身份、tiers、PRAC 和额外选项。源码变化由逐 TU 身份处理。
+
+Stage1 默认 local 仅切换 PRAC 时在原目录刷新 profile，普通 CUDA 对象仍需逐个通过预检。相同源码根、用途和阶段下，其他有效但不兼容的 profile 整目录归档到 `build_dev/stage1_local_profiles/` 或 `build_dev/stage2_local_profiles/`，随后在固定目录配置。旧 Stage1 grouped 目录也按此规则归档。原有后缀目录可保留作历史产物，其 CMake 缓存和对象记录含原路径。`-HostOnly` 要求已有匹配的 profile。
 
 显式 `-BuildDir` / `-Build` 仍是最终叶目录，不会自动改选；与该目录配置不匹配时拒绝，并报告目录和变化字段。标记损坏、跨用途/阶段或来源根不符时，不通过自动改选隐藏问题。显式目录不会改写另一份 profile 或清空目录；GUI、运行命令和后续测试应使用本次输出的实际 exe 路径。需要自定义并存位置时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
 
 本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。公开 release 统一只接收 `-BuildRoot` 根目录，叶目录由完整 profile 派生。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
 
-除上述 Stage2 默认入口的有效旧 profile 归档外，其他旧目录不自动移动或复制。显式指定旧目录时，仅对已有正式清单、工具链/GMP/架构/策略相符的目录原位核对并建立 marker；未知非空目录拒绝。`-SkipBuild` 要求已有正确 marker，仍需通过原有构建和打包身份检查。路径消费者需使用入口打印的精确叶目录或显式配置，不选择扫描结果中的“最新”程序。
+显式指定旧目录时，仅对已有正式清单且工具链、GMP、架构及策略相符的目录原位核对并建立 marker。未知非空目录拒绝。`-SkipBuild` 要求已有正确 marker，仍需通过构建和打包身份检查。路径消费者使用入口打印的叶目录或显式配置。
 
 CPU-only 身份检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_profile_paths.py`；双 profile/生成边界/计时合同使用 `test_release_build_contracts.py`。`test_cuda_p5_release.py`、`test_cuda_p5_images.py`保留为原六架构阶段的显式冻结验收工具，不用于认定当前双 CUDA 完整包。路径检查不等于运行资格。
 

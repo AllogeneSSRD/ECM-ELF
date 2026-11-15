@@ -27,9 +27,10 @@ python tools/refactor/migrate_ecm_config.py ecm.toml
 
 - `[shared]` 供两阶段共用，`[stage1]` 和 `[stage2]` 各自管理本阶段的设置。
 - `[gui]` 存放界面全局设置。`[worker.N]` 存放第 N 个 worker 的启动设置和覆盖值，N 为 1…1000000。
-- 专用选项在所属表中使用点号，例如 `[stage1]` 下的 `handoff.mode`。在 `[worker.2]` 下写 `stage1.handoff.mode` 可覆盖该项。`[shared]` 的日志、滚动上限和完成记录供所有 worker 共用。
+- v3 的 `[stage1]` 和 `[stage2]` 正式选项都支持同名 worker 覆盖。例如在 `[worker.2]` 下写 `stage1.handoff.mode` 或 `stage2.cuda.weighted_ntt`。覆盖值仍受运行模式、后端和任务约束。
+- `[shared]` 的队列、跳过规则和调优文件可按 worker 覆盖，同时作用于两个阶段。工作流 worker 数量、共享日志、滚动上限和完成记录是全局配置。`[gui]` 是前端全局设置，`[worker.N]` 的启动参数由前端消费。
 
-键名和分区名区分大小写。一个键仅能放在其定义的分区或相应 worker 覆盖分区；同表重复键、未知表，以及当前读取程序负责字段中的未知键或类型错误，会报告文件名和行号。内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。`worktodo.txt` 的 `[Worker #N]` 是独立的队列语法，不是 TOML 配置分区。
+键名和分区名区分大小写。键只能放在定义的分区及其允许的 worker 覆盖分区。同表重复键、未知表，以及当前程序负责字段中的未知键或类型错误，会报告文件名和行号。运行选项依次合并内置默认值、全局分区、当前 worker 覆盖和允许的命令行选项。曲线构造等任务字段采用任务及存档规则，Stage2 的 [B2 优先级](../usage/STAGE2.md) 单独定义。`worktodo.txt` 使用自己的 `[Worker #N]` 队列分区语法。
 
 [config_format.h](../../src/io/config_format.h) 提供共享 TOML 文法及标量解析，支持带引号的字符串、布尔值、整数、浮点数及窗口整数数组，允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/ecm/application/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
 
@@ -47,15 +48,15 @@ OpenCL Stage2 支持固定 B2、基本 D 规划和显式梅森承载；CUDA tune
 
 程序先按所属分区和 worker 识别设置，再查找字段。两阶段的 `gpu_device` 各有自己的字段。覆盖项沿用其所属分区的校验规则。
 
-- Stage1 校验 `shared`、`stage1` 及路由用的 `gui.worker_count`（v1 为 `gui.NumWorkers`）。
+- Stage1 校验本 worker 的 `shared` 和 `stage1`。自动交接需要确定候选范围时读取 `shared.worker_count`，省略时兼容已有的显式 `gui.worker_count`（v1 为 `gui.NumWorkers`）。
 - Stage2 校验 `shared` 和 `stage2`。设备、save 目录、日志级别和标量倍数仍可按既有规则从 Stage1 继承。程序先确定实际需要继承哪些字段，再按 worker 优先级读取并校验。队列模式还检查两阶段的完成记录路径是否冲突。
 - GUI 校验 `shared`、`gui` 和 worker 启动设置。能识别的计算项用于预览，其他项保留原文。计算程序启动时读取同一份 TOML，校验自己负责的参数。
 
-Stage1 向 Stage2 移交任务时，从启动快照读取接收队列和完成记录。v3 使用共享 `finished_file`，v1/v2 沿用接收方的阶段配置。
+Stage1 向 Stage2 移交任务时，从启动快照读取接收队列和完成记录。v3 使用共享 `finished_file`，同队列自动交接只选实际读取该队列并允许 Stage2 的 worker。v1/v2 沿用接收方的阶段配置。配置显式给出工作流 worker 数量时，GUI v2 使用相同的数量。
 
 GUI 保存时保留未编辑的行、注释、顺序和未知值。编辑已知键时校验本次修改。预览使用的默认值只用于显示。
 
-忽略范围限于已知阶段分区；未知分区、重复分区／键、缺少右值、未闭合字符串和非法行结构仍报错。外阶段的复杂值可以作为不透明原行保留，其业务有效性由拥有该分区的程序负责。本策略需要各组件先具备按职责读取能力，无法改变旧可执行文件的读取行为。
+全文件检查分区和结构。未知分区、重复分区或键、缺少右值、未闭合字符串和非法行结构仍报错。外阶段及其他 worker 的值可保留原文，业务校验由消费该值的程序负责。选中实际执行后端后再启用该后端的预设；读取任务及存档后校验曲线或参数专用的组合约束。
 
 代码入口：[config_format.h](../../src/io/config_format.h)的`TomlReadMode`／`deferred_toml`决定职责，`selected_entries`仅校验实际继承或移交字段；[config.cpp](../../src/io/config.cpp)分别实现Stage1解析和Stage2继承投影；GUI的[TomlFile](../../src/ecm/application/gui/toml_file.h)提供计算预览，[设置编辑](../../src/ecm/application/gui_v2/views/pages.cpp)只检查本次修改。CPU Edwards Stage2与CUDA／OpenCL Stage2均使用Stage2职责。
 
@@ -67,7 +68,7 @@ Stage1 的 [cli.cpp](../../src/io/cli.cpp) 一次转换每个显式选项并保�
 
 `checkpoint_backups` 接受 0…16。负数 `checkpoint_interval_seconds` 禁用定期存档。重复指定 sigma 时，后一个值及其可选参数化声明一并生效。独立指定的 `--gpu-param` 仍需与 sigma 一致。
 
-CLI/配置错误停止启动。TOML 诊断由 [config_format.h](../../src/io/config_format.h) 的 `config_diagnostic()` 统一排版：`INPUT[config]`、`file=路径:行号`、`worker=`、`key=`、`value=`、错误原因和 `expected 类型 范围` 各占一行。`value` 保留填写的原始右值；`worker=0` 表示全局分区，其他数字表示发生错误的 worker 覆盖分区。布尔范围同时列出true／false和0／1。选中 worktodo 行的错误由队列标记并跳过。队列模式的任务结构字段不能由 CLI 覆盖，sigma 采用单独优先级；完整规则见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
+CLI 或当前 worker 配置错误会停止运行。TOML 诊断由 [config_format.h](../../src/io/config_format.h) 的 `config_diagnostic()` 排版，报告路径、行号、worker、键、原始右值及允许值。任务记录本身有误时，队列将该行标为 `# ERROR`。当前配置或后端无法执行合法任务时，队列保留该行，待调整配置后可重试。队列中的任务结构字段由任务提供，sigma 采用单独优先级。见 [Stage1 输入与默认](../usage/STAGE1.md#输入归一化与运行中编辑)。
 
 ## 运行时限制
 

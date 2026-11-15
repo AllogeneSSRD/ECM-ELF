@@ -54,7 +54,7 @@ Options options(int argc,char **argv) {
     }
     const auto ini=o.ini.empty()?std::filesystem::path(argv[0]).parent_path()/"ecm.toml":std::filesystem::path(o.ini);
     std::vector<ecm_config::TomlLine> lines;
-    const bool read=ecm_config::read_toml(ini.string(),lines,ecm_config::TomlReadMode::Stage2);
+    const bool read=ecm_config::read_toml(ini.string(),lines,ecm_config::TomlReadMode::Stage2,nullptr,nullptr,o.worker);
     if(!read && (!o.ini.empty() || std::filesystem::exists(ini)))throw std::runtime_error("cannot read local TOML");
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     o.user=settings.result_user;o.computer=settings.result_computer;

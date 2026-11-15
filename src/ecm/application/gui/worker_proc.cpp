@@ -44,16 +44,23 @@ std::wstring widen(const std::string &s) {
 
 void append_quoted(std::wstring &cmd, const std::wstring &arg, bool first) {
     if (!first) cmd.push_back(L' ');
-    const bool need_quotes = arg.find_first_of(L" \t\"") != std::wstring::npos;
+    const bool need_quotes = arg.empty() || arg.find_first_of(L" \t\"") != std::wstring::npos;
     if (!need_quotes) {
         cmd += arg;
         return;
     }
     cmd.push_back(L'"');
+    std::size_t backslashes = 0;
     for (wchar_t c : arg) {
-        if (c == L'"') cmd.push_back(L'\\');
+        if (c == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        cmd.append(c == L'"' ? 2 * backslashes + 1 : backslashes, L'\\');
+        backslashes = 0;
         cmd.push_back(c);
     }
+    cmd.append(2 * backslashes, L'\\');
     cmd.push_back(L'"');
 }
 
@@ -146,6 +153,10 @@ bool WorkerProc::start(std::string &err, WorkerStart origin) {
 
 #ifdef _WIN32
 bool WorkerProc::spawn_locked(std::string &err) {
+    if (!spawn_.argument_error.empty()) {
+        err = spawn_.argument_error;
+        return false;
+    }
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -316,6 +327,12 @@ void WorkerProc::drain(DrainedOutput &out) {
         // timestamp column is drawn by the UI).
         const ParsedLine pl = parse_line(l);
         if(!pl.application_version.empty())out.application_version=pl.application_version;
+        if (!spawn_.stage2) {
+            if (!pl.start_line.empty())
+                out.stage1 = {};
+            if (pl.stage1.valid())
+                out.stage1 = pl.stage1;
+        }
         if(pl.stage2.kind!=Stage2Event::Kind::None && spawn_.stage2) {
             stage2_status_.apply(pl.stage2);
             stage2_received=true;

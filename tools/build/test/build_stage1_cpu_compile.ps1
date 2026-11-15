@@ -38,8 +38,8 @@ if($IncludeQueueHost){
         'src/io/cli.cpp','src/io/config.cpp','src/io/worktodo.cpp','src/io/files.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}
+if($EnablePracHost){$sources+='src/ecm/stage1/montgomery/cuda/prac/checkpoint.cpp'}
 $definitions=if($IncludeGpuHost){' /DECM_HAS_CUDA_STAGE1=1'}else{''}
-$definitions+=' /DECM_CUDA_ENABLE_PRAC='+$(if($EnablePracHost){'1'}else{'0'})
 $commands=@();$objects=[ordered]@{};$hashes=[ordered]@{}
 foreach($source in $sources){
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects[$source]=$object

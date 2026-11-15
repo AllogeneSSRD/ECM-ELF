@@ -251,6 +251,7 @@
       <Item id="browse_stage1" name="选择 Stage1" />
       <Item id="browse_stage2" name="选择 Stage2" />
       <Item id="settings.worker_count" name="worker 数量（0 跟随工作流）" />
+      <Item id="settings.workflow_worker_count" name="数量由工作流 TOML 决定，可在计算设置中编辑 shared.worker_count。" />
       <Item id="apply_worker_settings" name="应用 worker 设置" />
       <Item id="worker_settings_applied" name="已应用 worker 设置" />
       <Item id="edit_computation_settings" name="编辑计算设置" />
@@ -372,6 +373,22 @@
       <Item id="worker.curve_unknown" name="曲线 --" />
       <Item id="worker.curve_montgomery" name="Montgomery" />
       <Item id="worker.curve_edwards" name="Edwards" />
+      <Item id="worker.stage1_execution" name="Stage1 执行" />
+      <Item id="worker.stage1_kernel_bits" name="内核位宽" />
+      <Item id="worker.stage1_x_only" name="仅 x 坐标" />
+      <Item id="worker.stage1_binary" name="二进制算法" />
+      <Item id="worker.stage1_handoff" name="计划交接" />
+      <Item id="worker.stage1_handoff_off" name="关闭，保留 Stage1 存档" />
+      <Item id="worker.stage1_handoff_incompatible" name="当前曲线构造与配置的路线不兼容，保留存档" />
+      <Item id="worker.stage1_handoff_workers" name="Worker" />
+      <Item id="worker.stage1_handoff_fallback" name="Prime95 不支持时备用" />
+      <Item id="worker.stage1_handoff_keep_unsupported" name="不支持时保留存档" />
+      <Item id="worker.stage1_handoff_edwards_only" name="仅 Edwards" />
+      <Item id="worker.stage1_handoff_condition" name="无因子且有兼容的保存点时交接" />
+      <Item id="worker.stage1_handoff_local_queue" name="ECM-ELF Stage2 队列" />
+      <Item id="worker.stage1_handoff_prime95_queue" name="Prime95 任务队列" />
+      <Item id="worker.stage1_handoff_prime95_save" name="Prime95 存档目录" />
+      <Item id="worker.stage1_handoff_missing" name="未配置" />
       <Item id="stage2.phase.curve_done" name="曲线完成" />
       <Item id="stage2.phase.task_done" name="任务完成" />
       <Item id="stage2.phase.ended" name="已结束" />

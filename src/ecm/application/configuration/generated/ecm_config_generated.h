@@ -6,6 +6,8 @@
 namespace ecm_config {
 inline constexpr int layout_version=8;
 namespace limits {
+inline constexpr int64_t stage1_workflow_worker_count_minimum=1;
+inline constexpr int64_t stage1_workflow_worker_count_maximum=64;
 inline constexpr int64_t stage1_log_file_max_KB_minimum=1000;
 inline constexpr int64_t stage1_log_file_max_KB_maximum=1000000;
 inline constexpr int64_t stage1_b2_ratio_minimum=0;
@@ -102,6 +104,8 @@ inline constexpr int64_t stage2_stage1_cost_mhz_minimum=0;
 inline constexpr int64_t stage2_stage1_cost_mhz_maximum=10000;
 inline constexpr int64_t stage2_stage2_target_factor_bits_minimum=0;
 inline constexpr int64_t stage2_stage2_target_factor_bits_maximum=16384;
+inline constexpr int64_t stage2_workflow_worker_count_minimum=1;
+inline constexpr int64_t stage2_workflow_worker_count_maximum=64;
 inline constexpr int64_t stage2_log_file_max_KB_minimum=1000;
 inline constexpr int64_t stage2_log_file_max_KB_maximum=1000000;
 inline constexpr int64_t stage2_b2_ratio_minimum=0;
@@ -112,6 +116,7 @@ inline constexpr int64_t stage2_skip_minimum=0;
 inline constexpr int64_t stage2_skip_maximum=2;
 } // namespace limits
 struct Stage1Values {
+    int workflow_worker_count=1;
     std::string shared_log_file="ecm.log";
     std::string shared_finished_file="worktodo.finished.txt";
     uint64_t log_file_max_kb=10000;
@@ -194,6 +199,7 @@ struct Stage1Values {
     bool has_results=false;
 };
 inline const Binding<Stage1Values> stage1_bindings[]={
+    {"workflow_worker_count",[](Stage1Values&c,const std::string&v){c.workflow_worker_count=static_cast<int>(bounded_integer(v,"workflow_worker_count",1,64));},[](Stage1Values&c,const Stage1Values&v){c.workflow_worker_count=v.workflow_worker_count;}},
     {"shared_log_file",[](Stage1Values&c,const std::string&v){c.shared_log_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_log_file=v.shared_log_file;}},
     {"shared_finished_file",[](Stage1Values&c,const std::string&v){c.shared_finished_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_finished_file=v.shared_finished_file;}},
     {"log_file_max_KB",[](Stage1Values&c,const std::string&v){c.log_file_max_kb=static_cast<uint64_t>(bounded_integer(v,"log_file_max_KB",1000,1000000));},[](Stage1Values&c,const Stage1Values&v){c.log_file_max_kb=v.log_file_max_kb;}},
@@ -345,6 +351,7 @@ struct Stage2Values {
     uint64_t stage1_mhz=0;
     uint64_t factor_bits=0;
     std::string condition_tag="";
+    int workflow_worker_count=1;
     std::string shared_log_file="ecm.log";
     std::string shared_finished_file="worktodo.finished.txt";
     uint64_t log_file_max_kb=10000;
@@ -436,6 +443,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage1_cost_mhz",[](Stage2Values&c,const std::string&v){c.stage1_mhz=static_cast<uint64_t>(bounded_integer(v,"stage1_cost_mhz",0,10000));},[](Stage2Values&c,const Stage2Values&v){c.stage1_mhz=v.stage1_mhz;}},
     {"stage2_target_factor_bits",[](Stage2Values&c,const std::string&v){c.factor_bits=static_cast<uint64_t>(bounded_integer(v,"stage2_target_factor_bits",0,16384));},[](Stage2Values&c,const Stage2Values&v){c.factor_bits=v.factor_bits;}},
     {"stage2_tune_condition_tag",[](Stage2Values&c,const std::string&v){c.condition_tag=v;},[](Stage2Values&c,const Stage2Values&v){c.condition_tag=v.condition_tag;}},
+    {"workflow_worker_count",[](Stage2Values&c,const std::string&v){c.workflow_worker_count=static_cast<int>(bounded_integer(v,"workflow_worker_count",1,64));},[](Stage2Values&c,const Stage2Values&v){c.workflow_worker_count=v.workflow_worker_count;}},
     {"shared_log_file",[](Stage2Values&c,const std::string&v){c.shared_log_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_log_file=v.shared_log_file;}},
     {"shared_finished_file",[](Stage2Values&c,const std::string&v){c.shared_finished_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_finished_file=v.shared_finished_file;}},
     {"log_file_max_KB",[](Stage2Values&c,const std::string&v){c.log_file_max_kb=static_cast<uint64_t>(bounded_integer(v,"log_file_max_KB",1000,1000000));},[](Stage2Values&c,const Stage2Values&v){c.log_file_max_kb=v.log_file_max_kb;}},
@@ -495,12 +503,16 @@ struct WorkerValues {
     std::string name="Worker #{N}";
     int autostart=0;
     std::string extra_args="";
+    std::string stage1_extra_args="";
+    std::string stage2_extra_args="";
     int gpucurves=0;
 };
 inline const Binding<WorkerValues> worker_bindings[]={
     {"name",[](WorkerValues&c,const std::string&v){c.name=v;},[](WorkerValues&c,const WorkerValues&v){c.name=v.name;}},
     {"autostart",[](WorkerValues&c,const std::string&v){c.autostart=gui_integer(v,0,INT32_MIN,INT32_MAX);},[](WorkerValues&c,const WorkerValues&v){c.autostart=v.autostart;}},
     {"extra_args",[](WorkerValues&c,const std::string&v){c.extra_args=v;},[](WorkerValues&c,const WorkerValues&v){c.extra_args=v.extra_args;}},
+    {"stage1_extra_args",[](WorkerValues&c,const std::string&v){c.stage1_extra_args=v;},[](WorkerValues&c,const WorkerValues&v){c.stage1_extra_args=v.stage1_extra_args;}},
+    {"stage2_extra_args",[](WorkerValues&c,const std::string&v){c.stage2_extra_args=v;},[](WorkerValues&c,const WorkerValues&v){c.stage2_extra_args=v.stage2_extra_args;}},
     {"gpucurves",[](WorkerValues&c,const std::string&v){c.gpucurves=gui_integer(v,0,INT32_MIN,INT32_MAX);},[](WorkerValues&c,const WorkerValues&v){c.gpucurves=v.gpucurves;}},
 };
 inline WorkerValues read_worker(const Entries &entries){WorkerValues c;apply(c,entries,worker_bindings);return c;}

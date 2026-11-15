@@ -556,7 +556,16 @@ void App::draw_settings(bool zh) {
     auto browse_exe=[&](const char* id,char* value,size_t capacity){if(ImGui::Button(id)){std::string path=value;const char filter[]="Executable\0*.exe\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,ecmgui_v2::ui::text("choose_worker_executable",zh),std::string(filter,sizeof(filter))))std::snprintf(value,capacity,"%s",path.c_str());}};
     browse_exe(ecmgui_v2::ui::text("browse_stage1",zh),stage1_input,sizeof(stage1_input));ImGui::SameLine();browse_exe(ecmgui_v2::ui::text("browse_stage2",zh),stage2_input,sizeof(stage2_input));
     ImGui::EndDisabled();
-    ImGui::BeginDisabled(controller.busy());ImGui::TextWrapped("%s",ui::text("settings.worker_count",zh));ImGui::SetNextItemWidth(std::min(240*ImGui::GetStyle().FontScaleDpi,ImGui::GetContentRegionAvail().x));ImGui::InputInt("##worker-count",&state.worker_count);state.worker_count=std::clamp(state.worker_count,0,64);
+    ImGui::BeginDisabled(controller.busy());
+    ImGui::BeginDisabled(workflow_worker_count > 0);
+    ImGui::TextWrapped("%s",ui::text("settings.worker_count",zh));
+    ImGui::SetNextItemWidth(std::min(240*ImGui::GetStyle().FontScaleDpi,ImGui::GetContentRegionAvail().x));
+    int worker_count = workflow_worker_count > 0 ? workflow_worker_count : state.worker_count;
+    if (ImGui::InputInt("##worker-count", &worker_count))
+        state.worker_count = std::clamp(worker_count, 0, 64);
+    ImGui::EndDisabled();
+    if (workflow_worker_count > 0)
+        ImGui::TextWrapped("%s", ui::text("settings.workflow_worker_count", zh));
     ImGui::BeginDisabled(config.dirty());
     if(ImGui::Button(ecmgui_v2::ui::text("apply_worker_settings",zh))){state.worker_stage1_exe=stage1_input;state.worker_stage2_exe=stage2_input;if(ready)configure_workers();toast(ecmgui_v2::ui::text("worker_settings_applied",zh));}
     ImGui::EndDisabled();

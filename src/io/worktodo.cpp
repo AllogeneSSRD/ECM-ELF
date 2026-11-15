@@ -1,5 +1,4 @@
 #include "io/worktodo.h"
-#include "io/config_format.h"
 #include "io/files.h"
 
 #include <algorithm>
@@ -621,33 +620,9 @@ int ecm_worktodo_parse_worker_header(const std::string& line, bool* is_bracket_l
 
 namespace {
 
-// Classification of one raw line for the section-aware queue walk. Keeping the
-// original (untrimmed) text is what lets the rewrite preserve the file verbatim.
-enum class LineKind { Task, Comment, Header, ForeignBracket };
-
-LineKind classify_line(const std::string& raw, int* section_out, int* header_out) {
-    std::string t = raw;
-    strip_bom(t);
-    trim(t);
-    bool bracket = false;
-    const int w = ecm_worktodo_parse_worker_header(t, &bracket);
-    if (w > 0) {
-        if (header_out)
-            *header_out = w;
-        if (section_out)
-            *section_out = w;
-        return LineKind::Header;
-    }
-    if (bracket) {
-        return LineKind::ForeignBracket;
-    }
-    if (t.empty() || t[0] == '#') {
-        return LineKind::Comment;
-    }
-    return LineKind::Task;
-}
-
-bool worker_matches(int section, int worker) { return worker <= 0 || section == worker; }
+using ecm_queue::classify_line;
+using ecm_queue::LineKind;
+using ecm_queue::worker_matches;
 
 // Preserve the legacy bool-returning queue interface; the platform gate is
 // shared with GUI editing, including the complete read-modify-write lifetime.
@@ -677,14 +652,7 @@ bool ecm_worktodo_first_line(const std::string& path, int worker, std::string& l
 }
 
 WorktodoStage ecm_worktodo_stage(const std::string& line) {
-    std::string text = line;
-    strip_bom(text);
-    trim(text);
-    if (starts_with(text, "ECMSTAGE2="))
-        return WorktodoStage::Stage2;
-    // ECM/ECM2 remain native Prime95 Stage1 assignments. An unknown task is
-    // diagnosed by Stage1 rather than silently hidden from the queue.
-    return WorktodoStage::Stage1;
+    return ecm_queue::task_stage(ecm_queue::task_text(line));
 }
 
 WorktodoReadResult ecm_worktodo_read_next_line(const std::string& path, int worker,
@@ -698,41 +666,10 @@ WorktodoReadResult ecm_worktodo_read_next_line(const std::string& path, int work
         err = "cannot read worktodo: " + path;
         return WorktodoReadResult::Error;
     }
-    int section = 1;
-    std::string first, preferred, raw;
-    size_t number = 0, first_number = 0, preferred_number = 0;
-    while (std::getline(in, raw)) {
-        ++number;
-        if (classify_line(raw, &section, nullptr) != LineKind::Task ||
-            !worker_matches(section, worker))
-            continue;
-        std::string task = raw;
-        strip_bom(task);
-        trim(task);
-        const auto stage = ecm_worktodo_stage(task);
-        if (selection.skip == static_cast<int>(stage))
-            continue;
-        if (first.empty()) {
-            first = task;
-            first_number = number;
-        }
-        if (selection.priority == static_cast<int>(stage) && preferred.empty()) {
-            preferred = task;
-            preferred_number = number;
-        }
-    }
-    if (in.bad()) {
+    const auto result = ecm_queue::read_next_task(in, worker, selection, consumer, line, source_line);
+    if (result == WorktodoReadResult::Error)
         err = "worktodo read failed: " + path;
-        return WorktodoReadResult::Error;
-    }
-    const std::string& selected = preferred.empty() ? first : preferred;
-    if (selected.empty() ||
-        (consumer != WorktodoStage::Any && ecm_worktodo_stage(selected) != consumer))
-        return WorktodoReadResult::Empty;
-    line = selected;
-    if (source_line)
-        *source_line = preferred.empty() ? first_number : preferred_number;
-    return WorktodoReadResult::Task;
+    return result;
 }
 
 WorktodoReadResult ecm_worktodo_read_first_line(const std::string& path, int worker,

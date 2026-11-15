@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <map>
 #include <vector>
@@ -13,6 +14,7 @@ struct Stage2TransferConfig {
     std::vector<int> workers;
     bool auto_workers = false;
     int configured_workers = 1;
+    std::function<bool(int)> auto_worker_eligible;
     std::map<int, std::string> finished_by_worker;
 };
 

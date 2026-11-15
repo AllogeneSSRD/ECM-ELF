@@ -1,4 +1,5 @@
 #include "ecm/stage1/progress.h"
+#include "ecm/stage1/execution_details.h"
 #include "../../../../io/files.h"
 #include "ecm/io/results.h"
 #include "../../execution.h"
@@ -47,7 +48,7 @@ struct Progress {
     uint64_t b1, total, durable = 0;
     Clock::time_point last;
     const EcmEdwardsNafMetrics* metrics;
-    bool failed = false;
+    bool failed = false, resumed = false;
     Clock::time_point initialization_start, loop_start, sample_start, last_print;
     uint64_t sampled = 0, delta = 0;
     bool printed = false, line_open = false;
@@ -92,16 +93,30 @@ static void prepared(void* context) {
     const double dictionary = p.metrics->dictionary_wall_ms / 1000.0;
     const double preparation =
         std::chrono::duration<double>(Progress::Clock::now() - p.initialization_start).count();
-    if (p.metrics->container_bits)
+    std::string details = "naf=" + std::to_string(p.b.window) +
+                          " algorithm=" + (p.b.window ? "naf" : "binary") +
+                          " resume=" + std::to_string(p.resumed) +
+                          " cursor=" + std::to_string(p.b.done);
+    if (p.b.window)
+        details += " doubling=" + std::to_string(p.b.doubling);
+    if (p.metrics->container_bits) {
+        const auto instances_per_block = 128 / p.metrics->tpi;
+        const auto blocks = (uint64_t(p.b.count) + instances_per_block - 1) / instances_per_block;
+        details += " kernel_weight=" + std::to_string(p.metrics->container_bits) +
+                   " tpi=" + std::to_string(p.metrics->tpi) +
+                   " tpb=128 blocks=" + std::to_string(blocks) +
+                   " device=" + std::to_string(p.opt.execution.device_index);
         ecm_ts_fprintf(
             stdout, "GPU Edwards geometry: container_bits=%u tpi=%u tpb=128 blocks=%llu\n",
             p.metrics->container_bits, p.metrics->tpi,
-            static_cast<unsigned long long>((uint64_t(p.b.count) + 128 / p.metrics->tpi - 1) /
-                                            (128 / p.metrics->tpi)));
-    else
+            static_cast<unsigned long long>(blocks));
+    } else {
+        details += " completed_checkpoint=1";
         ecm_ts_fprintf(
             stdout,
             "GPU Edwards completed checkpoint: host validation only; no device preparation\n");
+    }
+    ecm_stage1::log_execution_details(p.opt, "cgbn", details);
     ecm_ts_fprintf(stdout, "GPU Edwards initialization: %.3f s\n",
                    (std::max)(0.0, preparation - dictionary));
     ecm_ts_fprintf(stdout, "GPU Edwards dictionary: %.3f s (gpu=%.3f ms)\n", dictionary,
@@ -406,6 +421,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                    mpz_sizeinbase(scalar.v, 2),
                    &metrics,
                    initialization_start};
+        p.resumed = restored;
         p.durable = restored ? batch.done : 0;
         execution.checkpoint_due = [&p] {
             return !p.path.empty() && p.opt.persistence.ckpt_ms &&

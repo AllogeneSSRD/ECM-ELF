@@ -42,6 +42,19 @@ bool near(double a, double b, double eps = 1e-6) {
 } // namespace
 
 int main() {
+    {
+        const auto ntt = parse_line(TS "Stage1 execution: curve=ed param=e backend=ntt ntt_bits=127 "
+            "ntt_type=weighted ntt_length=32 ntt_bpw=20 naf=0 ntt_forward_pass_bits=2+3");
+        check(ntt.kind == LogKind::Event && ntt.stage1.valid() && ntt.stage1.curve == "ed" &&
+              ntt.stage1.param == "e" && ntt.stage1.backend == "ntt", "Stage1 execution event");
+        check(ntt.stage1.details.count("ntt_forward_pass_bits") &&
+              ntt.stage1.details.at("ntt_forward_pass_bits") == "2+3", "Stage1 optional execution detail");
+        const auto cpu = parse_line("Stage1 execution: curve=mont param=m0 backend=cpu cpu_impl=ifma chain=prac");
+        check(cpu.stage1.valid() && cpu.stage1.details.count("cpu_impl") &&
+              cpu.stage1.details.at("cpu_impl") == "ifma", "Stage1 CPU implementation");
+        check(!parse_line("Stage1 execution: curve=ed param=m0 backend=cgbn").stage1.valid(),
+              "Malformed Stage1 construction is ignored");
+    }
     std::printf("[1] ANSI stripping\n");
     {
         const std::string s = strip_ansi("\033[36mGPU: [=>  ] 10.0%\033[0m\r");

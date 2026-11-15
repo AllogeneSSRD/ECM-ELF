@@ -83,14 +83,18 @@ $oldObjectHash = (Get-FileHash -LiteralPath $oldObject).Hash
 $splitOptions = [ordered]@{configure=($stage1Options.configure+' -DECM_CUDA_ISOLATE_TIERS=ON');tiers='384';enable_prac='0';extra=''}
 $splitStage1 = New-EcmCudaProfile $fixture local stage1 production 89 $cuda $vc $gmp $splitOptions
 $splitLeaf = Resolve-EcmBuildDirectory $fixture $splitStage1
-Check ($splitLeaf -eq ($oldStage1Leaf+'_'+$splitStage1.Key)) 'changed default Stage1 policy selects a deterministic separate directory'
-Assert-EcmBuildProfile $splitLeaf $splitStage1
-Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $splitLeaf) 'repeated default Stage1 build reuses its matching alternate profile'
-Assert-EcmBuildProfile $splitLeaf $splitStage1 -ReadOnly
+Check ($splitLeaf -eq $oldStage1Leaf) 'changed Stage1 policy keeps the fixed default path'
+Reject { Assert-EcmBuildProfile $splitLeaf $splitStage1 -ReadOnly -ReconfigureLocalStage1 } 'profile/role/engine differs' 'read-only Stage1 admission cannot archive'
 Check ((Get-FileHash -LiteralPath (Join-Path $oldStage1Leaf 'profile.json')).Hash -eq $oldMarkerHash -and
-    (Get-FileHash -LiteralPath $oldObject).Hash -eq $oldObjectHash) 'automatic selection preserves old marker and objects'
+    (Get-FileHash -LiteralPath $oldObject).Hash -eq $oldObjectHash) 'directory resolution preserves old marker and objects'
 Check ((Resolve-EcmBuildDirectory $fixture $splitStage1 $oldStage1Leaf) -eq $oldStage1Leaf) 'explicit Stage1 BuildDir never redirects'
 Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'option/configure' 'explicit profile mismatch reports the changed configuration field'
+Assert-EcmBuildProfile $splitLeaf $splitStage1 -ReconfigureLocalStage1
+Assert-EcmBuildProfile $splitLeaf $splitStage1 -ReadOnly
+$stage1Archive = @(Get-ChildItem -LiteralPath (Join-Path $fixture 'build_dev/stage1_local_profiles') -Directory)
+Check ($stage1Archive.Count -eq 1 -and -not (Test-Path -LiteralPath $oldObject)) 'old grouped cache is archived from the fixed Stage1 path'
+Check ((Get-FileHash -LiteralPath (Join-Path $stage1Archive[0].FullName 'profile.json')).Hash -eq $oldMarkerHash -and
+    (Get-FileHash -LiteralPath (Join-Path $stage1Archive[0].FullName 'cached.obj')).Hash -eq $oldObjectHash) 'Stage1 archive preserves marker and object bytes'
 $alternateStage2 = Profile -Split 4
 $alternateLeaf = Resolve-EcmBuildDirectory $fixture $alternateStage2
 Check ($alternateLeaf -eq $leaf) 'Stage2 always keeps its fixed default directory after a profile change'
@@ -122,16 +126,12 @@ $damaged = Get-Content -LiteralPath (Join-Path $oldStage1Leaf 'profile.json') -R
 $damaged.fields.role = 'dev'
 Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ($damaged|ConvertTo-Json -Depth 5)
 Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $oldStage1Leaf) 'corrupt default marker cannot be hidden by automatic redirection'
-Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'profile/role/engine differs' 'corrupt default profile still fails closed'
+Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 -ReconfigureLocalStage1 } 'profile/role/engine differs' 'corrupt default profile still fails closed'
 Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$stage1.Hash;fields=$stage1.Fields}|ConvertTo-Json -Depth 5)
 $foreign = New-EcmCudaProfile $fixture dev stage1 production 89 $cuda $vc $gmp $stage1Options
 Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$foreign.Hash;fields=$foreign.Fields}|ConvertTo-Json -Depth 5)
 Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $oldStage1Leaf) 'valid foreign-role marker cannot redirect a local default'
-Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 } 'role' 'foreign-role default is refused without replacing its marker'
-Write-Fixture (Join-Path $oldStage1Leaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$stage1.Hash;fields=$stage1.Fields}|ConvertTo-Json -Depth 5)
-Write-Fixture (Join-Path $splitLeaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$stage1.Hash;fields=$stage1.Fields}|ConvertTo-Json -Depth 5)
-Check ((Resolve-EcmBuildDirectory $fixture $splitStage1) -eq $splitLeaf) 'alternate directory is deterministic even when occupied'
-Reject { Assert-EcmBuildProfile $splitLeaf $splitStage1 } 'option/configure' 'incompatible alternate cache is refused rather than overwritten'
+Reject { Assert-EcmBuildProfile $oldStage1Leaf $splitStage1 -ReconfigureLocalStage1 } 'role' 'foreign-role default is refused without replacing its marker'
 Write-Fixture (Join-Path $splitLeaf 'profile.json') ([ordered]@{schema=1;profile_sha256=$splitStage1.Hash;fields=$splitStage1.Fields}|ConvertTo-Json -Depth 5)
 $legacy = Join-Path $fixture 'legacy_stage1'; New-Item -ItemType Directory -Path $legacy | Out-Null
 $legacyManifest = [ordered]@{identity_schema=1;architecture='89';tiers='384';enable_prac=$false

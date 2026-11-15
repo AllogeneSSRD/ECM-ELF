@@ -1,5 +1,6 @@
 #include "ecm/stage1/cpu_runtime.h"
 #include "ecm/stage1/execution.h"
+#include "ecm/stage1/execution_details.h"
 #include "ecm/stage1/progress.h"
 #include "ecm/stage1/sigma.h"
 #include "ecm/stage1/libecm_compat.h"
@@ -219,10 +220,11 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
                    torsion, s_status.c_str());
 
     EcmPracPlan prac;
+    unsigned prac_search = 0;
     if (use_prac) {
-        const auto search = ecm_prac_search_width(std::getenv("ECM_PRAC_SEARCH"));
+        prac_search = ecm_prac_search_width(std::getenv("ECM_PRAC_SEARCH"));
         prac = ecm_prac_build(static_cast<uint32_t>(B1), torsion, s,
-                              opt.persistence.exponent_cache_dir, opt.execution.stage1_threads, search);
+                              opt.persistence.exponent_cache_dir, opt.execution.stage1_threads, prac_search);
         ecm_ts_fprintf(stdout, "stage1 chain    : PRAC [%s]\n", prac.status.c_str());
     } else if (use_simd || use_gwnum) {
         ecm_ts_fprintf(stdout, "stage1 chain    : binary ladder\n");
@@ -397,6 +399,16 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
         nthreads = tasks;
     if (nthreads < 1)
         nthreads = 1;
+    std::string execution_details = std::string("cpu_impl=") + (use_simd ? "ifma" : use_gwnum ? "gwnum" : "scalar") +
+        " chain=" + (use_prac ? "prac" : "ladder") +
+        " modulus_bits=" + std::to_string(modulus_bits) +
+        " threads=" + std::to_string(nthreads) +
+        " curves=" + std::to_string(curves) +
+        " lcm_multiplier=" + std::to_string(torsion) +
+        " ckpt_ms=" + std::to_string(use_ckpt && ckpt_interval_ms > 0 ? ckpt_interval_ms : 0);
+    if (use_prac)
+        execution_details += " prac=" + std::to_string(prac_search);
+    ecm_stage1::log_execution_details(ecm_stage1::CurveModel::Montgomery, 0, "cpu", execution_details);
     ecm_ts_fprintf(stdout, "stage1 threads  : %u worker(s) x %u task(s) of %s\n", nthreads, tasks,
                    use_simd ? "8 curves" : "1 curve");
     if (use_ckpt) {

@@ -2,6 +2,7 @@
 #include "ladder.h"
 #include "tune.h"
 #include "../host_math.h"
+#include "../../../execution_details.h"
 #include "../../../sigma.h"
 #include "../../../../curve/edwards.h"
 #include "../../../edwards/ntt_dictionary.h"
@@ -15,12 +16,29 @@
 #include <bitset>
 #include <chrono>
 #include <cstdlib>
+#include <sstream>
 
 namespace ecm_cuda_stage1 {
 namespace {
 using namespace ecm_stage1;
 using Clock = std::chrono::steady_clock;
 using ActiveLanes = std::bitset<stage1_ntt_max_curves>;
+
+void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t batch,
+                       unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan) {
+    const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
+    const char* chain = !edwards ? "ladder" : naf_window ? "naf" : "x-only";
+    std::ostringstream details;
+    details << "device=" << opt.execution.device_index << " chain=" << chain
+            << " ntt_bits=" << modulus_bits << " ntt_type=" << (plan.weighted ? "weighted" : "linear")
+            << " ntt_length=" << plan.length << " ntt_bpw=" << plan.bpw
+            << " naf=" << naf_window << " ntt_batch=" << batch << " ntt_digits=" << plan.digits
+            << " ntt_resume=" << resume << " ntt_shape=" << ecm_mersenne_ntt::tune_shape_descriptor(plan)
+            << " ntt_tile_bits=" << plan.tile << " ntt_max_radix_bits=" << plan.outer_max
+            << " ntt_graph_bits=" << plan.window << " ntt_warp_tail=" << unsigned(plan.warp_tail)
+            << " ntt_forward_pass_bits=" << plan.forward << " ntt_inverse_pass_bits=" << plan.inverse;
+    log_execution_details(opt, "ntt", details.str());
+}
 
 struct Snapshot {
     unsigned cursor = 0;
@@ -333,6 +351,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             ecm_mersenne_ntt::Control control;
             control.resume = snapshot.cursor;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
+                log_ntt_execution(opt, p, active.size(), naf_window, control.resume, plan);
                 ecm_ts_fprintf(stdout, "stage1_ntt_plan: device=%d p=%zu curves=%zu length=%u bpw=%u digits=%u "
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
@@ -447,6 +466,9 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             const auto* begin = lanes_initial.data() + size_t(6) * lane * words;
             const std::vector<uint32_t> initial(begin, begin + 6 * words);
             ecm_mersenne_ntt::Control control;
+            control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
+                log_ntt_execution(opt, p, 1, 0, control.resume, plan);
+            };
             control.poll = [](unsigned) {
                 return ecm_mersenne_ntt::Control::Action{false, ecm_stage1_stop_requested()};
             };

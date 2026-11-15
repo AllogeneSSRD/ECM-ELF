@@ -4,6 +4,7 @@ import csv
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 
@@ -17,6 +18,11 @@ def main():
     cases=[]
     def run(name,settings='',tail='',worker=2,seed='',task=None,good=True):
         work=out/name;work.mkdir()
+        worker_exe=work/exe.name
+        shutil.copy2(exe,worker_exe)
+        runtime=exe.with_name('gmp-10.dll')
+        if runtime.is_file():
+            shutil.copy2(runtime,work/runtime.name)
         task=task or 'ECMSTAGE1=1,2,127,-1,"e_m127_100.save",2000,0,1'
         queue=work/'worktodo.txt'
         queue.write_text(f'# preserved\n[Worker #{worker}]\n{task}\n'+seed,encoding='utf-8')
@@ -24,7 +30,7 @@ def main():
         base='[shared]\nworktodo = "worktodo.txt"\n[stage1]\ncurve = "ed"\ntarget = "cpu"\nimpl = "scalar"\nsigma = 20260922\nlog_file = ""\nckpt_seconds = 0\n'
         base+='finished = '+json.dumps(str(work/'finished.txt'))+'\ntmp_dir = '+json.dumps(str(work/'saves'))+'\n'
         config.write_text(base+settings+'\n'+tail,encoding='utf-8')
-        result=subprocess.run([str(exe),'--config',str(config),'--worker',str(worker)],
+        result=subprocess.run([str(worker_exe),'--config',str(config),'--worker',str(worker)],
             cwd=work,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
         (work/'run.log').write_bytes(result.stdout)
         assert (result.returncode==0)==good,(name,result.returncode,result.stdout[-1500:])
@@ -32,7 +38,8 @@ def main():
         return work,queue,config,task,result.stdout.decode('utf-8',errors='replace')
     work,queue,_,task,_=run('in_place','auto_stage2 = 1',seed='[Worker #3]\n# receiver empty\n')
     text=queue.read_text();assert text.index('ECMSTAGE2=')<text.index('[Worker #3]')
-    assert task in (work/'finished.txt').read_text() and '# preserved' in text
+    completed=task.replace('"e_m127_100.save"',f'"{work / "e_m127_100.save"}"')
+    assert completed in (work/'finished.txt').read_text() and '# preserved' in text
     assert not list(work.glob('*.stage2_pending_worker*'))
 
     work,queue,_,task,log=run('worker_override','auto_stage2 = 0\nauto_stage2_workers = "1"',
@@ -76,7 +83,7 @@ def main():
     saved=next(work.glob('e_*.save'));before=saved.read_bytes()
     blocked.rmdir()
     config.write_text('[shared]\nworktodo="worktodo.txt"\n[stage1]\nlog_file=""\nauto_stage2=0\n',encoding='utf-8')
-    retry=subprocess.run([str(exe),'--config',str(config),'--worker','2'],cwd=work,env=env,capture_output=True,timeout=90)
+    retry=subprocess.run([str(work/exe.name),'--config',str(config),'--worker','2'],cwd=work,env=env,capture_output=True,timeout=90)
     assert retry.returncode==0 and not pending.read_text().strip() and '[Worker #3]' in blocked.read_text()
     assert saved.read_bytes()==before
 

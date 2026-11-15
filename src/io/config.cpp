@@ -4,12 +4,12 @@
 #include "ecm/stage1/ntt_length.h"
 #include <fstream>
 
-bool read_config(const std::string& path, ParsedConfig& parsed) {
+bool read_config(const std::string& path, ParsedConfig& parsed, int active_worker) {
     try {
         parsed = ParsedConfig{};
         parsed.path = path;
         if (!ecm_config::read_toml(path, parsed.lines, ecm_config::TomlReadMode::Stage1,
-                                  nullptr, &parsed.config_version))
+                                  nullptr, &parsed.config_version, active_worker))
             return false;
         for (const auto& line : parsed.lines)
             if (line.kind == ecm_config::TomlLine::Kind::KeyValue && !line.deferred) {
@@ -170,7 +170,7 @@ bool ecm_queue_config_load(const std::string& path, int worker, EcmQueueConfig& 
                            const std::vector<const char*>& inherited_fields) {
     try {
         std::vector<ecm_config::TomlLine> lines;
-        if(!ecm_config::read_toml(path,lines,ecm_config::TomlReadMode::Stage2))return false;
+        if(!ecm_config::read_toml(path,lines,ecm_config::TomlReadMode::Stage2,nullptr,nullptr,worker))return false;
         ecm_queue_config_project(lines,path,worker,cfg,inherited_fields);
         return true;
     } catch (const std::exception& e) {

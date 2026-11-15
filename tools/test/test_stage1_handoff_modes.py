@@ -14,7 +14,8 @@ def verify(build, root):
 
     def scenario(name, mode, curve="m0", fallback="ecm-elf", external=False,
                  prime95_paths=True, blocked=False, expected="off", error=None,
-                 local_queue="receiver.txt", log_file=""):
+                 local_queue="receiver.txt", log_file="", shared_extra="", stage1_extra="",
+                 overrides="", extra_queue="", local_receiver=None):
         case = root / name
         bin_dir, config_dir, p95 = case / "bin", case / "config", case / "prime95"
         for directory in (bin_dir, config_dir, p95):
@@ -34,6 +35,7 @@ def verify(build, root):
 worktodo_file = "worktodo.txt"
 finished_file = "finished.txt"
 log_file = "{log_file}"
+{shared_extra}
 [stage1]
 target = "cpu"
 cpu_implementation = "scalar"
@@ -48,8 +50,8 @@ handoff.unsupported = "{fallback}"
         if prime95_paths:
             settings += (f'prime95.worktodo_file = "{(p95 / "worktodo.txt").as_posix()}"\n'
                          f'prime95.save_dir = "{(p95 / "saves").as_posix()}"\n')
-        config.write_text(settings, encoding="ascii")
-        queue.write_text(TASKS[curve] + "\n", encoding="ascii")
+        config.write_text(settings + stage1_extra + overrides, encoding="ascii")
+        queue.write_text(TASKS[curve] + "\n" + extra_queue, encoding="ascii")
 
         def run(label, error=None):
             process = subprocess.run([str(exe), "--config", str(config), "--worker", "1"],
@@ -64,7 +66,7 @@ handoff.unsupported = "{fallback}"
 
         if error:
             run("rejected", error)
-            assert queue.read_text(encoding="ascii").strip() == TASKS[curve]
+            assert queue.read_text(encoding="ascii") == TASKS[curve] + "\n" + extra_queue
             assert not (bin_dir / f"{curve}_m127_100.save").exists()
             return
 
@@ -74,7 +76,9 @@ handoff.unsupported = "{fallback}"
         assert "ECMSTAGE1=" not in remaining, remaining
         assert "ECMSTAGE1=" in finished.read_text(encoding="utf-8")
         assert (bin_dir / f"{curve}_m127_100.save").is_file()
-        assert (("ECMSTAGE2=" in remaining) == (expected == "in-place")), remaining
+        assert (("ECMSTAGE2=" in remaining) == (expected == "in-place" or local_receiver is not None)), remaining
+        if local_receiver is not None:
+            assert f"[Worker #{local_receiver}]\nECMSTAGE2=" in remaining, remaining
         assert receiver.is_file() == (expected == "external")
         if expected == "external":
             assert "[Worker #2]\nECMSTAGE2=" in receiver.read_text(encoding="utf-8")
@@ -106,7 +110,17 @@ handoff.unsupported = "{fallback}"
              log_file="ecm.log", error="Stage2 transfer queue/finished paths conflict")
     scenario("local_queue_conflicts_with_config", "ecm-elf", external=True, local_queue="ecm.toml",
              error="Stage2 transfer queue/finished paths conflict")
-    print("Stage1 handoff modes: 11 queue scenarios passed")
+    scenario("local_auto_eligible_workflow_worker", "ecm-elf", local_receiver=3,
+             shared_extra="worker_count = 4", stage1_extra='handoff.workers = "auto"\n',
+             overrides='[gui]\nworker_count = 5\n[worker.1]\nshared.queue_skip = "stage2"\n'
+                       '[worker.2]\nshared.worktodo_file = "other.txt"\n'
+                       '[worker.4]\nshared.queue_skip = "invalid"\n',
+             extra_queue="[Worker #5]\n# outside the configured workflow\n")
+    scenario("local_auto_without_receiver", "ecm-elf",
+             shared_extra='worker_count = 1\nqueue_skip = "stage2"',
+             stage1_extra='handoff.workers = "auto"\n',
+             error="automatic Stage2 handoff found no eligible worker")
+    print("Stage1 handoff modes: 13 queue scenarios passed")
 
 
 if __name__ == "__main__":

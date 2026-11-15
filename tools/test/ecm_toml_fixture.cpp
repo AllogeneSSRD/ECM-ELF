@@ -149,7 +149,12 @@ static void role_isolation(const std::filesystem::path& path) {
         rejected(path,"[stage2]\nfuture_key=1\nfuture_key=2\n",mode);
     }
     write(path,"[gui]\nNumWorkers=\"future\"\n");
-    ParsedConfig invalid_routing;expect(!read_config(path.string(),invalid_routing),"Stage1 routing count must remain checked");
+    ParsedConfig invalid_routing;
+    expect(read_config(path.string(),invalid_routing),"unused GUI routing count blocked Stage1");
+    bad=false;
+    try { ecm_config::configured_workflow_worker_count(invalid_routing.lines,path.string()); }
+    catch (const std::runtime_error&) { bad=true; }
+    expect(bad,"consumed legacy routing count was not checked");
     write(path,"[stage2]\nstage2_finished=123\n");
     ParsedConfig parsed;expect(read_config(path.string(),parsed),"unused receiver path blocked Stage1");
     bad=false;try{ecm_config::selected_entries(parsed.lines,2,{"stage2_finished"},path.string());}catch(...){bad=true;}
@@ -283,6 +288,24 @@ static void v3_shared_config(const std::filesystem::path& path) {
            "empty worker tune path was lost");
     expect(ecm_queue_config_load(path.string(), 2, cfg) && cfg.b2_ratio == 30, "worker B2 ratio was lost");
     rejected(path, "config_version=3\n[worker.2]\nshared.log_file='invalid.log'\n");
+    rejected(path, "config_version=3\n[worker.2]\nshared.worker_count=2\n");
+    write(path, "config_version=3\n[shared]\nworker_count=3\n[gui]\nworker_count=5\n");
+    expect(ecm_config::read_toml(path.string(), lines, ecm_config::TomlReadMode::Stage1) &&
+           ecm_config::configured_workflow_worker_count(lines, path.string()) == 3,
+           "workflow count must take precedence over GUI legacy count");
+    write(path, "config_version=3\n[gui]\nworker_count=5\n");
+    expect(ecm_config::read_toml(path.string(), lines, ecm_config::TomlReadMode::Stage1) &&
+           ecm_config::configured_workflow_worker_count(lines, path.string()) == 5,
+           "legacy workflow count fallback lost");
+    for (const auto& option : ecm_config::toml_options) {
+        const std::string table = option.v3_table;
+        if (!*option.v3_key || (table != "stage1" && table != "stage2"))
+            continue;
+        const auto address = ecm_config::toml_versioned_address("worker.2",
+            table + "." + option.v3_key, 3);
+        expect(address.option == &option && address.worker_scope == 2,
+               "v3 stage option missing worker override");
+    }
     for (const auto* wrong : {"[stage1]\ntune_file='wrong.toml'\n", "[stage2]\ntune_file='wrong.toml'\n",
                               "[worker.2]\nstage1.tune_file='wrong.toml'\n",
                               "[worker.2.stage2]\ntune_file='wrong.toml'\n"}) {

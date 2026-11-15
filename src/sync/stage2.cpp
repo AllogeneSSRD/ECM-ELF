@@ -83,6 +83,14 @@ bool ecm_stage2_transfer_park(const Stage2TransferConfig& cfg, const std::string
                 if (workers.empty())
                     for (int i = 1; i <= cfg.configured_workers; ++i)
                         workers.push_back(i);
+                if (cfg.auto_worker_eligible)
+                    workers.erase(std::remove_if(workers.begin(), workers.end(), [&](int candidate) {
+                        return !cfg.auto_worker_eligible(candidate);
+                    }), workers.end());
+                if (workers.empty()) {
+                    error = "automatic Stage2 handoff found no eligible worker for the destination queue";
+                    return false;
+                }
             }
             std::sort(workers.begin(), workers.end());
             if (workers.empty() || workers.front() < 1 || workers.back() > 1000000) {

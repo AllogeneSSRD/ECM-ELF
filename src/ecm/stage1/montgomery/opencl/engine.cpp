@@ -5,6 +5,7 @@
 #include "../../sigma.h"
 #include "../../../opencl/runtime/cgbn_opencl.h"
 #include "ecm/stage1/montgomery/opencl/checkpoint.h"
+#include "ecm/stage1/execution_details.h"
 #include "../../../../io/stage1_checkpoint.h"
 #include "debug_utils.h"
 #include "../../../../../include/ecm/platform/logging.h"
@@ -1036,6 +1037,34 @@ extern "C" int cgbn_ecm_stage1(void* checkpoint_context, mpz_t *factors, int *ar
 
     const bool sync_each_batch = g_dump_ctx.enabled || ecm_runtime_config().sync_each_batch;
 
+    const bool use_sliced = ecm_runtime_config().gpu_sliced && g_ecm_kernel_sliced != nullptr;
+    const bool use_sliced_t16 = ecm_runtime_config().gpu_sliced_t16 && g_ecm_kernel_sliced_t16 != nullptr;
+    const bool use_local = g_ecm_kernel_local != nullptr;
+    const bool use_explicit_wg = !use_local && !g_kernel_use_coop_wg && g_kernel_local_wg > 0;
+    const bool is_sliced = use_sliced || use_sliced_t16;
+    const size_t sliced_wg = use_sliced_t16 ? 16 : 32;
+    const cl_kernel active_kernel = use_sliced_t16 ? g_ecm_kernel_sliced_t16
+                                  : use_sliced ? g_ecm_kernel_sliced
+                                  : use_local ? g_ecm_kernel_local : g_ecm_kernel;
+    const size_t global = use_local ? (size_t)curves * g_kernel_local_wg
+                        : is_sliced ? (size_t)curves * sliced_wg
+                        : use_explicit_wg ? (size_t)curves * g_kernel_local_wg
+                        : g_kernel_use_coop_wg ? (size_t)curves * g_kernel_coop_wg : curves;
+    const size_t local_wg = use_local || use_explicit_wg ? g_kernel_local_wg
+                          : is_sliced ? sliced_wg : g_kernel_coop_wg;
+    const size_t* local_ptr = (use_local || use_explicit_wg || is_sliced || g_kernel_use_coop_wg)
+                            ? &local_wg : nullptr;
+    ecm_stage1::log_execution_details(ecm_stage1::CurveModel::Montgomery, 3, "opencl",
+        "kernel_weight=" + std::to_string(container_limbs * 32u) +
+        " tpi=" + std::to_string(tpi) +
+        " kernel=" + (use_sliced_t16 ? "sliced16" : use_sliced ? "sliced32" : use_local ? "local" : "global") +
+        " workgroup=" + (local_ptr ? std::to_string(local_wg) : "auto") +
+        " chain=ladder modulus_bits=" + std::to_string(n_log2) +
+        " device=" + std::to_string(selected_device_index_from_env()) +
+        " curves=" + std::to_string(curves) +
+        " ckpt_ms=" + std::to_string(checkpoint_interval_ms) +
+        " resume=" + std::to_string(ckpt_loaded));
+
     using steady_clock = std::chrono::steady_clock;
     const auto checkpoint_epoch = steady_clock::now();
     auto last_checkpoint_wall = checkpoint_epoch;
@@ -1075,15 +1104,6 @@ extern "C" int cgbn_ecm_stage1(void* checkpoint_context, mpz_t *factors, int *ar
         cl_uint np0_arg = np0;
         cl_uint limbs_arg = limbs;
 
-        bool use_sliced     = ecm_runtime_config().gpu_sliced && (g_ecm_kernel_sliced != nullptr);
-        bool use_sliced_t16 = ecm_runtime_config().gpu_sliced_t16 && (g_ecm_kernel_sliced_t16 != nullptr);
-        bool use_local      = g_ecm_kernel_local != nullptr;
-        bool use_explicit_wg = !use_local && !g_kernel_use_coop_wg && (g_kernel_local_wg > 0u);
-        uint32_t sliced_wg  = use_sliced_t16 ? 16u : 32u;
-        cl_kernel active_kernel = use_sliced_t16 ? g_ecm_kernel_sliced_t16
-                                : use_sliced     ? g_ecm_kernel_sliced
-                                : use_local      ? g_ecm_kernel_local
-                                : g_ecm_kernel;
         err = clSetKernelArg(active_kernel, 0, sizeof(cl_mem), &gpu_s_bits);
         err |= clSetKernelArg(active_kernel, 1, sizeof(cl_ulong), &s_num_bits_arg);
         err |= clSetKernelArg(active_kernel, 2, sizeof(cl_ulong), &s_start_arg);
@@ -1098,19 +1118,6 @@ extern "C" int cgbn_ecm_stage1(void* checkpoint_context, mpz_t *factors, int *ar
             break;
         }
 
-        bool is_sliced = use_sliced || use_sliced_t16;
-        size_t global = use_local
-            ? (size_t)curves * (size_t)g_kernel_local_wg
-            : (is_sliced
-                ? (size_t)curves * (size_t)sliced_wg
-                : (use_explicit_wg
-                    ? (size_t)curves * (size_t)g_kernel_local_wg
-                    : (g_kernel_use_coop_wg ? (size_t)curves * (size_t)g_kernel_coop_wg : (size_t)curves)));
-        size_t local_wg = use_local       ? (size_t)g_kernel_local_wg
-                        : use_explicit_wg ? (size_t)g_kernel_local_wg
-                        : is_sliced       ? (size_t)sliced_wg
-                        : (size_t)g_kernel_coop_wg;
-        const size_t *local_ptr = (use_local || use_explicit_wg || is_sliced || g_kernel_use_coop_wg) ? &local_wg : nullptr;
         auto t0 = std::chrono::high_resolution_clock::now();
         err = clEnqueueNDRangeKernel(g_ctx.queue, active_kernel, 1, nullptr, &global, local_ptr, 0,
                                      nullptr, nullptr);

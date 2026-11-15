@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 namespace ecmgui_v2::ui {
 struct WorkerProgress {float fraction=0;std::string label="--",speed="--",eta="--",eta_detail="--";};
 struct Stage2Batch {bool visible=false;float fraction=0;std::string label,remaining;};
@@ -50,6 +51,110 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
     } else if(worker.running()||worker.state()==ecmgui::WorkerRunState::Restarting)out.label=ecmgui_v2::ui::text("waiting_for_progress",zh);
     return out;
 }
+
+inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {
+    if (!execution.valid())
+        return {};
+    std::string line = std::string(text("worker.stage1_execution", zh)) + "  ";
+    line += text(execution.curve == "ed" ? "worker.curve_edwards" : "worker.curve_montgomery", zh);
+    if (execution.curve == "mont")
+        line += " PARAM" + execution.param.substr(1);
+    const auto& backend = execution.backend;
+    line += " | ";
+    line += backend == "cgbn" ? "CUDA/CGBN" : backend == "ntt" ? "CUDA/NTT" :
+        backend == "cpu" ? "CPU" : backend == "opencl" ? "OpenCL" : backend;
+    const auto algorithm = execution.details.find("algorithm");
+    const auto append_field = [&](const std::string& key) {
+        const auto found = execution.details.find(key);
+        if (found == execution.details.end())
+            return;
+        const auto& value = found->second;
+        if (key == "naf" && value == "0" && (execution.curve != "ed" ||
+            (backend == "cgbn" && algorithm != execution.details.end() && algorithm->second == "binary")))
+            return;
+        if (!details && key == "algorithm" && value == "naf")
+            return;
+        line += " | ";
+        if (key == "cpu_impl") {
+            line += value == "ifma" ? "IFMA SIMD" : value == "scalar" ? "GMP scalar" :
+                value == "gwnum" ? "GWNUM" : value;
+        } else if (key == "naf") {
+            line += value == "0" && backend == "ntt" ? text("worker.stage1_x_only", zh) : "NAF=" + value;
+        } else if (key == "algorithm" && value == "binary") {
+            line += text("worker.stage1_binary", zh);
+        } else {
+            const std::string label = key == "kernel_weight" ? text("worker.stage1_kernel_bits", zh) :
+                key == "tpi" ? "TPI" : key == "ntt_type" ? "NTT" :
+                key == "ntt_length" ? "L" : key == "ntt_bpw" ? "bpw" :
+                key == "ntt_bits" ? "NTT bits" : key == "prac" ? "PRAC" : key;
+            line += label + "=" + value;
+        }
+    };
+    static constexpr const char* core[] = {
+        "cpu_impl", "kernel_weight", "tpi", "ntt_type", "ntt_bits", "ntt_length", "ntt_bpw",
+        "naf", "algorithm", "chain", "prac"
+    };
+    for (const auto* key : core)
+        append_field(key);
+    if (details)
+        for (const auto& field : execution.details)
+            if (std::find(std::begin(core), std::end(core), field.first) == std::end(core))
+                append_field(field.first);
+    return line;
+}
+
+inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
+                                  const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {
+    std::string line = std::string(text("worker.stage1_handoff", zh)) + "  ";
+    if (!plan.prime95 && !plan.local)
+        return line + text("worker.stage1_handoff_off", zh);
+    bool local = plan.local, prime95 = plan.prime95, local_fallback = plan.local_fallback;
+    bool fallback_selected = false;
+    if (!plan.legacy && execution.valid()) {
+        const bool local_compatible = execution.param == "e" || execution.param == "m0";
+        const bool prime95_compatible = execution.param == "m0" || execution.param == "m3";
+        fallback_selected = prime95 && !prime95_compatible && local_fallback && local_compatible;
+        local = (local && local_compatible) || fallback_selected;
+        prime95 = prime95 && prime95_compatible;
+        local_fallback = prime95 && local_fallback && local_compatible;
+        if (!local && !prime95)
+            return line + text("worker.stage1_handoff_incompatible", zh);
+    }
+    const auto append_workers = [&](const std::string& workers) {
+        if (!workers.empty())
+            line += " (" + std::string(text("worker.stage1_handoff_workers", zh)) + " " + workers + ")";
+    };
+    if (prime95) {
+        line += "Prime95";
+        append_workers(plan.prime95_workers);
+        if (!local && !local_fallback)
+            line += " (" + std::string(text("worker.stage1_handoff_keep_unsupported", zh)) + ")";
+    }
+    if (local || local_fallback) {
+        if (prime95)
+            line += local_fallback ? " → " : " / ";
+        line += "ECM-ELF Stage2";
+        if (local_fallback || fallback_selected)
+            line += " (" + std::string(text("worker.stage1_handoff_fallback", zh)) + ")";
+        if (plan.edwards_only)
+            line += " (" + std::string(text("worker.stage1_handoff_edwards_only", zh)) + ")";
+        append_workers(plan.local_workers);
+    }
+    line += " | ";
+    line += text("worker.stage1_handoff_condition", zh);
+    if (details) {
+        if (prime95) {
+            line += "\n" + std::string(text("worker.stage1_handoff_prime95_queue", zh)) + "  " +
+                (plan.prime95_queue.empty() ? text("worker.stage1_handoff_missing", zh) : plan.prime95_queue);
+            line += "\n" + std::string(text("worker.stage1_handoff_prime95_save", zh)) + "  " +
+                (plan.prime95_save_dir.empty() ? text("worker.stage1_handoff_missing", zh) : plan.prime95_save_dir);
+        }
+        if ((local || local_fallback) && !plan.local_queue.empty())
+            line += "\n" + std::string(text("worker.stage1_handoff_local_queue", zh)) + "  " + plan.local_queue;
+    }
+    return line;
+}
+
 inline std::string stage2_shape(const ecmgui::Stage2Curve& s) {
     if(!s.valid)return {};
     const auto value=[](unsigned long long n){return n?std::to_string(n):std::string("--");};

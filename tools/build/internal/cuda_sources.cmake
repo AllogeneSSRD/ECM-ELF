@@ -79,8 +79,11 @@ set(ECM_STAGE1_PRAC_TEMPLATES_SOURCES
     src/ecm/stage1/montgomery/cuda/prac/single_instances.cuh
     src/ecm/stage1/montgomery/cuda/prac/constants.cuh)
 set(ECM_STAGE1_PRAC_SOURCES
+    src/ecm/stage1/montgomery/cuda/prac/checkpoint.cpp
     src/ecm/stage1/montgomery/cuda/prac/runtime.cu
     src/ecm/stage1/montgomery/cuda/prac/dispatch.cu)
+set(ECM_STAGE1_PRAC_DISABLED_SOURCES
+    src/ecm/stage1/montgomery/cuda/prac/unavailable.cpp)
 set(ECM_STAGE2_HOST_SOURCES
     src/io/files.cpp
     src/io/save.cpp
@@ -139,7 +142,7 @@ set(ECM_EXPERIMENT_NTT_SOURCES tools/experiments/cuda/ntt_variants/main.cu)
 set(ECM_EXPERIMENT_CUFFT_SOURCES tools/experiments/cuda/ntt_variants/cufft_probe.cu)
 set(ECM_EXPERIMENT_GIANT_SOURCES tools/experiments/cuda/stage2_tree/giant_variant.cu)
 set(ECM_CUDA_SOURCE_GROUPS
-    STAGE1_COMMON STAGE1_CUDA STAGE1_EDWARDS STAGE1_MONT STAGE1_PRAC STAGE1_TEMPLATES STAGE1_PRAC_TEMPLATES
+    STAGE1_COMMON STAGE1_CUDA STAGE1_EDWARDS STAGE1_MONT STAGE1_PRAC STAGE1_PRAC_DISABLED STAGE1_TEMPLATES STAGE1_PRAC_TEMPLATES
     STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT CUDA_NTT
     EXPERIMENT_STAGE2_BSGS EXPERIMENT_STAGE2_TREE EXPERIMENT_NTT EXPERIMENT_CUFFT EXPERIMENT_GIANT)
 set(ECM_CUDA_BUILD_INPUTS

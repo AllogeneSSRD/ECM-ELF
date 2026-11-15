@@ -35,6 +35,12 @@ def write_config(folder, device, chain, search, stage2=False):
     (folder / "ecm.toml").write_text("\n".join(text) + "\n", encoding="ascii")
 
 
+def execution_records(text):
+    marker = "Stage1 execution: "
+    return [dict(field.split("=", 1) for field in line.split(marker, 1)[1].split())
+            for line in text.splitlines() if marker in line]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", required=True, type=Path)
@@ -58,7 +64,12 @@ def main():
 
     reference, _ = queue("reference", ["m0"])
     write_config(reference, args.device, None, None)
-    assert "Stage1 ladder completed" in run(exe, reference, "ladder", env)
+    ladder = run(exe, reference, "ladder", env)
+    assert "Stage1 ladder completed" in ladder
+    geometry, = execution_records(ladder)
+    assert geometry["param"] == "m0" and geometry["backend"] == "cgbn" and geometry["chain"] == "ladder"
+    assert int(geometry["kernel_weight"]) > 127 and int(geometry["tpi"]) > 0
+    assert geometry["slice_depth"] == "3" and "prac" not in geometry
     expected = rows(reference)
     assert len(expected) == 8
 
@@ -68,6 +79,8 @@ def main():
     sampled = run(exe, resumed, "stop", dict(contradict, ECM_GPU_STAGE1_SAMPLE_SECONDS="0.000001"),
                   success=False)
     assert "search=50" in sampled and "sample limit reached" in sampled
+    actual, = execution_records(sampled)
+    assert actual["chain"] == "prac" and actual["prac"] == "50" and actual["resume"] == "0"
     saved_checkpoint, = checkpoints(resumed)
     snapshot = saved_checkpoint.read_bytes()
     assert not rows(resumed) and (resumed / "worktodo.txt").read_text() == original_queue
@@ -84,6 +97,9 @@ def main():
     write_config(resumed, args.device, "prac", 50, stage2=True)
     completion = run(exe, resumed, "resume", contradict)
     assert "resident checkpoint resumed" in completion and "Stage1 PRAC completed" in completion
+    actual, = execution_records(completion)
+    assert actual["chain"] == "prac" and actual["prac"] == "50" and actual["resume"] == "1"
+    assert int(actual["cursor"]) > 0 and actual["slice_depth"] == "3"
     assert not checkpoints(resumed) and rows(resumed) == expected
     handoff = (resumed / "worktodo.txt").read_text().strip()
     assert handoff.count("ECMSTAGE2=") == 1 and "ECMSTAGE1=" not in handoff
@@ -95,6 +111,11 @@ def main():
     assert completion.count("Stage1 PRAC completed") == 1
     assert completion.count("Stage1 ladder completed") == 2
     assert "GPU Edwards Stage1:" in completion
+    actual = execution_records(completion)
+    assert [record["param"] for record in actual] == ["m0", "m2", "m3", "e"]
+    assert [record.get("chain") for record in actual] == ["prac", "ladder", "ladder", None]
+    assert all(record["backend"] == "cgbn" and int(record["kernel_weight"]) > 347 and int(record["tpi"]) for record in actual)
+    assert actual[-1]["naf"] == "6" and "prac" not in actual[-1]
     assert not (mixed / "worktodo.txt").read_text().strip()
 
     legacy, _ = queue("legacy", ["m0"])

@@ -96,6 +96,22 @@ file(WRITE "${OUTPUT}/normalized.txt" "${ECM_TIERS}")
                 assert '#define ECM_PRAC_BITS ' + str(module['bits']) in body
                 assert '#define ECM_PRAC_TPI ' + str(module['tpi']) in body
         checks.append(name)
+    switch_dir = out / 'prac_switch'
+    switch_dir.mkdir()
+    command = ['cmake', '-DREPO=' + ROOT.as_posix(), '-DOUTPUT=' + switch_dir.as_posix(),
+               '-DECM_TIERS=384']
+    dispatch = switch_dir / 'cuda_modules/stage1/stage1_prac_instances.inc'
+    for index, enabled in enumerate(('ON', 'OFF', 'ON')):
+        subprocess.run([*command, '-DECM_CUDA_ENABLE_PRAC=' + enabled, '-P', str(fixture)],
+                       capture_output=True, text=True, check=True)
+        modules = json.loads(dispatch.with_name('modules.json').read_text())['modules']
+        assert len(modules) == (5 if enabled == 'ON' else 4)
+        state = dispatch.read_bytes(), dispatch.stat().st_mtime_ns
+        if index == 0:
+            dispatch_baseline = state
+        else:
+            assert state == dispatch_baseline, 'PRAC switch rewrote the cached dispatch input'
+    checks.append('prac_dispatch_retained')
     for name, raw, invalid in [('unknown', '999', '999'),
                                ('empty_item', '384,,1024', ''),
                                ('negative', '-384', '-384'),

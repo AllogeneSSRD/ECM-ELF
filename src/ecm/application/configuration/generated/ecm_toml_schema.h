@@ -4,6 +4,7 @@ namespace ecm_config {
 inline constexpr int business_config_version=3;
 struct TomlOptionMeta { const char *table, *key, *type, *domain, *v2_table, *v2_key, *v2_conversion, *v3_table, *v3_key; bool v3_only, v3_global_only; };
 inline constexpr TomlOptionMeta toml_options[]={
+    {"shared","workflow_worker_count","int","<x:Z,1..64>","shared","workflow_worker_count","","shared","worker_count",true,true},
     {"shared","shared_log_file","string","<path>","shared","shared_log_file","","shared","log_file",true,true},
     {"shared","shared_finished_file","string","<path>","shared","shared_finished_file","","shared","finished_file",true,true},
     {"shared","log_file_max_KB","u64","[1000..1000000]","shared","log_file_max_KB","","shared","log_file_max_KB",true,true},
@@ -160,6 +161,8 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"workers.1","name","string","<text>","workers.1","name","","workers.1","name",false,false},
     {"workers.1","autostart","int","[0|1]","workers.1","autostart","nonzero_bool","workers.1","autostart",false,false},
     {"workers.1","extra_args","string","<argv>","workers.1","extra_args","","workers.1","extra_args",false,false},
+    {"workers.1","stage1_extra_args","string","<argv>","workers.1","stage1_extra_args","","workers.1","stage1_extra_args",true,false},
+    {"workers.1","stage2_extra_args","string","<argv>","workers.1","stage2_extra_args","","workers.1","stage2_extra_args",true,false},
     {"workers.1","gpucurves","int","<x:Z,x>=0>","workers.1","gpucurves","","workers.1","gpucurves",false,false},
     {"stage2","stage2_tune_ignore","string","[gpu|driver|cuda|backend|memory|environment],...","stage2","tune.ignore","","stage2","tune.ignore",false,false},
     {"stage2","stage2_tune_budget_seconds","u64","<x:Z,1..86400>","stage2","tune.budget_seconds","","stage2","tune.budget_seconds",false,false},

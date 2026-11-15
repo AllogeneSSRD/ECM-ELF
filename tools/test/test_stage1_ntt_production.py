@@ -19,6 +19,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stat"))
 from suyama_mont_ref import stage1
 
 
+def ntt_executions(log):
+    marker = "Stage1 execution: "
+    records = []
+    for line in log.splitlines():
+        if marker in line:
+            fields = dict(token.split("=", 1) for token in line.split(marker, 1)[1].split())
+            if fields["backend"] == "ntt":
+                records.append(fields)
+    return records
+
+
 def saved_points(path, p, b1, edwards=False):
     n = (1 << p) - 1
     points = {}
@@ -97,6 +108,8 @@ def main():
                 log = run(work, call, text=data)
                 if kind and p > 65:
                     assert "stage1_ntt_edwards_naf: window=" in log
+                    assert any(record["ntt_bits"] == str(p) and record["ntt_type"] == mode
+                               and record["naf"] == str(kind) for record in ntt_executions(log)), log
                 points = saved_points(work / "out.save", p, b1, True)
                 if kind:
                     assert points == expected, (p, points, expected)
@@ -106,6 +119,11 @@ def main():
                     assert points == {9: 31} and "factor[0]=31" in log
                 elif p == 35:
                     assert not points and "Edwards identity: sigma=16" in log
+                    if kind:
+                        main, replay = ntt_executions(log)
+                        assert main["chain"] == "naf" and main["naf"] == str(kind)
+                        assert replay["chain"] == "x-only" and replay["naf"] == "0", log
+                        assert log.index("x-only replay sigma=16") < log.rindex("Stage1 execution:")
             if p > 65:
                 n = (1 << p) - 1
                 oracle = {}
@@ -174,7 +192,10 @@ def main():
             assert "checkpoint belongs to different" in run(work, cmd, f"wrong_{incompatible}", ok=False)
             assert checkpoint.read_bytes() == before and todo.read_text() == row
         config.write_text(original.replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"'))
-        assert f"resume={cursor}" in run(work, cmd, "resume")
+        resumed = run(work, cmd, "resume")
+        assert f"resume={cursor}" in resumed
+        assert any(record["ntt_resume"] == str(cursor) and record["ntt_type"] == "weighted"
+                   for record in ntt_executions(resumed)), resumed
         assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
         ref, ref_cmd = fixture("edwards_naf_resume_reference", model="ed")
         call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
@@ -191,6 +212,12 @@ def main():
     assert "convolution=linear curve=mont0 dataflow=517" in log
     assert "inverse_tile_threads=128 inverse_tile_smem_bytes=2048" in log
     assert "stage1_ntt_plan:" in mirror and "stage1_ntt_timing:" in mirror
+    [execution] = ntt_executions(log)
+    assert execution == ntt_executions(mirror)[0] and log.index("Stage1 execution:") < log.index("stage1_ntt_plan:")
+    assert execution["ntt_bits"] == "4003" and execution["ntt_type"] == "linear"
+    assert execution["ntt_length"] == "512" and execution["naf"] == "0"
+    assert execution["ntt_forward_pass_bits"] == "1+8" and execution["ntt_inverse_pass_bits"] == "8+1"
+    assert execution["ntt_shape"] == "0:8:2:16:1:1,8:8,1" and execution["chain"] == "ladder"
     n = (1 << 4003) - 1
     assert saved_points(work / "out.save", 4003, 128) == {
         s: stage1(s, 128, n, torsion=12)["x"] for s in range(4294967311, 4294967315)}
@@ -212,6 +239,8 @@ def main():
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=256 bpw=16" in log and "convolution=weighted" in log and "graph_bits=0" in log
+    [execution] = ntt_executions(log)
+    assert execution["ntt_type"] == "weighted" and execution["ntt_length"] == "256" and execution["ntt_bpw"] == "16"
     assert "convolution=weighted curve=mont0 dataflow=543" in log  # One tile, with cached carry.
     assert saved_points(work / "out.save", 4003, 32) == expected
     print("PASS weighted direct launch against independent Python", flush=True)

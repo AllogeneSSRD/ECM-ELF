@@ -115,6 +115,18 @@ Type `string` · Range `<local-user-id>` · Worker override `[worker.N] shared.u
 
 Optional local result user identity for Stage1 and Stage2. Never put real account values in committed templates or fixtures.
 
+<a id="workflow_worker_count"></a>
+
+### worker_count
+
+```toml
+worker_count = 1
+```
+
+Type `int` · Range `<x:Z,1..64>` · Worker override `not supported` · Level `advanced`.
+
+Workflow worker count for GUI v2 and automatic ECM-ELF handoff within the same queue. Use worker numbers 1 through this count. Automatic handoff excludes workers that skip Stage2. When omitted, an explicit legacy GUI worker_count remains supported.
+
 <a id="worktodo"></a>
 
 ### worktodo_file
@@ -227,7 +239,7 @@ Type `string` · Range `[auto|simd|scalar|gwnum|slice list|empty]` · Worker ove
 
 Legacy v1 key `stage1.impl`
 
-CPU Stage1 arithmetic. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU runs accept only automatic mode.
+Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can inherit this TOML policy and leave it inactive.
 
 <a id="cpu_mont_chain"></a>
 
@@ -357,7 +369,7 @@ gpu_algorithm = "cgbn"
 
 Type `int|string` · Range `[1|2|cgbn|ntt]` · Worker override `[worker.N] stage1.gpu_algorithm` · Level `advanced`.
 
-Stage1 GPU algorithm: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. For Edwards NTT, see the NAF window setting.
+Stage1 algorithm when the target is GPU: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. For Edwards NTT, see the NAF window setting.
 
 <a id="stage1_backend"></a>
 
@@ -423,7 +435,7 @@ Type `string` · Range `[<n>|<n>,...|<a>-<b>|auto]` · Worker override `[worker.
 
 Legacy v1 key `stage1.auto_stage2_workers`
 
-Receiving workers when auto_stage2=1: a single ID, comma list or ranges within 1..1000000. Select the shortest candidate queue; ties use the lowest ID. auto uses the destination's existing worker sections, falling back to GUI NumWorkers when none exist. Missing explicit sections are created. Empty keeps the current worker and rewrites in place when the destination is the same file; an external file receives that same worker number. Unreadable destinations remain pending for retry.
+Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest eligible queue; ties use the lowest ID. For v3 auto within the same queue, an explicit shared.worker_count (or legacy GUI count) defines the candidate range. Candidates must read that queue and allow Stage2. Without a configured range, auto uses existing worker sections or starts from worker 1. An external queue uses its existing sections before falling back to the configured count. Empty keeps the current worker. Unwritable destinations remain pending for retry.
 
 <a id="auto_stage2_worktodo"></a>
 
@@ -1145,7 +1157,7 @@ Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage2.cu
 
 Legacy v1 key `stage2.stage2_weighted_ntt`
 
-Opt-in CUDA polynomial convolution. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. CLI --weighted-ntt 0|1 overrides this key.
+Opt-in polynomial convolution for the production CUDA backend. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. The TOML preset stays inactive on OpenCL. CLI --weighted-ntt 0|1 overrides this key.
 
 <a id="stage2_parallel_workspace"></a>
 
@@ -2047,7 +2059,7 @@ Type `int` · Range `<x:Z,1..64>` · Worker override `not supported` · Level `c
 
 Legacy v1 key `gui.NumWorkers`
 
-Number of workers managed by the GUI. Each uses its own [worker.N] settings. Task curve counts come from worktodo.
+Legacy count for workers managed by the GUI. For v3 workflows, shared.worker_count takes precedence when present. Each worker uses its own [worker.N] settings.
 
 ## [worker.1]
 
@@ -2073,7 +2085,7 @@ Type `string` · Range `<argv>` · Worker override `not supported` · Level `adv
 
 Legacy v1 key `workers.1.extra_args`
 
-Additional command-line arguments for this GUI-launched worker. Separate arguments with spaces; quote paths containing spaces. Overrides depend on options supported by the selected executable.
+Command-line arguments common to both stages of this GUI-launched worker. Use the stage-specific keys for options that only one stage understands. Workflow configuration, worker number and queue path are managed by the GUI.
 
 ### gpucurves
 
@@ -2098,6 +2110,26 @@ Type `string` · Range `<text>` · Worker override `not supported` · Level `adv
 Legacy v1 key `workers.1.name`
 
 Worker display name in the GUI. Unset shows Worker #N, where N is the worker index. Changes only the name, not device or task assignment.
+
+### stage1_extra_args
+
+```toml
+stage1_extra_args = ""
+```
+
+Type `string` · Range `<argv>` · Worker override `not supported` · Level `advanced`.
+
+Additional Stage1 command-line arguments appended after the common extra_args. Separate arguments with spaces and quote paths containing spaces.
+
+### stage2_extra_args
+
+```toml
+stage2_extra_args = ""
+```
+
+Type `string` · Range `<argv>` · Worker override `not supported` · Level `advanced`.
+
+Additional Stage2 command-line arguments appended after the common extra_args. Separate arguments with spaces and quote paths containing spaces.
 
 ## Maintenance
 

@@ -88,12 +88,9 @@ unsigned max_exponent(const Plan& plan) {
 
 void print_measurement(const char* prefix, const Measurement& m, unsigned iterations) {
     const auto& p = m.plan;
-    auto forward = p.forward, inverse = p.inverse;
-    std::replace(forward.begin(), forward.end(), '+', ',');
-    std::replace(inverse.begin(), inverse.end(), '+', ',');
-    ecm_ts_fprintf(stdout, "%s%u %u %u:%u:%u:%u:%u:%s:%s %uc %.0f iter/s\n", prefix,
-        p.length, max_exponent(p), unsigned(p.weighted), p.tile, p.outer_max, p.window,
-        unsigned(p.warp_tail), forward.c_str(), inverse.c_str(), m.batch, m.throughput()*iterations);
+    const auto shape = tune_shape_descriptor(p);
+    ecm_ts_fprintf(stdout, "%s%u %u %s %uc %.0f iter/s\n", prefix,
+        p.length, max_exponent(p), shape.c_str(), m.batch, m.throughput()*iterations);
 }
 
 Stage1NttOptions fixed_plan(Stage1NttOptions o, const Plan& plan) {
@@ -383,6 +380,15 @@ std::optional<Cached> decode(const Fields& row, const Packing& shape, const Devi
 }
 
 } // namespace
+
+std::string tune_shape_descriptor(const Plan& plan) {
+    auto forward = plan.forward, inverse = plan.inverse;
+    std::replace(forward.begin(), forward.end(), '+', ',');
+    std::replace(inverse.begin(), inverse.end(), '+', ',');
+    return std::to_string(unsigned(plan.weighted)) + ':' + std::to_string(plan.tile) + ':' +
+           std::to_string(plan.outer_max) + ':' + std::to_string(plan.window) + ':' +
+           std::to_string(unsigned(plan.warp_tail)) + ':' + forward + ':' + inverse;
+}
 
 int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool exhaustive) {
     try {
