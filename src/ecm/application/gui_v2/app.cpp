@@ -107,6 +107,7 @@ bool App::load_config(const std::string& input) {
         configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};result_view_dirty=true;
         ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
+        result_copies.load(std::filesystem::u8path(config_path),state.path,config.get("gui","results_last_copy_utc"));
         workflow_load_error.clear();status = "Workflow opened."; trace("config=" + path);
         return true;
     } catch (const std::exception& error) { workflow_load_error=status=error.what();trace(status);return false; }
@@ -136,28 +137,34 @@ void App::configure_workers() {
     std::snprintf(stage1_input, sizeof(stage1_input), "%s", workers.worker_exe.c_str());
     std::snprintf(stage2_input, sizeof(stage2_input), "%s", workers.stage2_exe.c_str());
 }
-bool App::start(int index) {
+bool App::start(int index,ecmgui::WorkerStart origin) {
     if (!ready || controller.exit_phase() != ecmgui::WorkerController::ExitPhase::Idle) return false;
     if (config.dirty()) { status="Save or reload workflow changes before starting workers."; return false; }
     try {
         for (const auto& worker : controller.workers()) if (worker.index == index) {
             if (worker.running()) return true;
+            if (origin==ecmgui::WorkerStart::Automatic && worker.breaker_tripped()) return false;
             // Worker binaries are assumed to implement ownership. Keep the real
             // GUI control lease and worker-lock collision check before dispatch.
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
-            if (!controller.start(index, true)) return false;
+            if (!controller.start(index,true,origin)) return false;
             leases_[index] = std::move(lease); toast((ecmgui_v2::ui::text("worker_started",state.ui_language=="zh"))+std::to_string(index)); return true;
         }
     } catch (const std::exception& error) { status = error.what(); trace(status); }
     return false;
+}
+void App::start_all() {
+    for(const auto& worker:controller.workers())
+        if(!start(worker.index))toast(status,true);
 }
 void App::tick() {
     tick_gpu_clocks();
     if(group_order_job.poll())notify_group_order();
     if (autostart_pending) {
         autostart_pending = false;
-        for (const auto& worker : controller.workers()) if (worker.autostart) start(worker.index);
+        for (const auto& worker : controller.workers())
+            if (worker.autostart) start(worker.index,ecmgui::WorkerStart::Automatic);
     }
     controller.tick();
     for (const auto& worker : controller.workers())
@@ -689,7 +696,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     const float toolbar_right=ImGui::GetCursorScreenPos().x+ImGui::GetContentRegionAvail().x,gap=ImGui::GetStyle().ItemSpacing.x;
     if(title_end.x+2*button_width+2*gap<=toolbar_right)ImGui::SameLine();
     if (ui::button("start-all", start_label, ui::ButtonKind::Primary, p, active.scale,false,&primary_font_height,true,button_width,button_height,ui::Icon::Play))
-        for (const auto& worker : controller.workers()) if(!start(worker.index))toast(status,true);
+        start_all();
     start_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
     start_button_size=ImGui::GetItemRectSize();
     if(ImGui::GetItemRectMax().x+gap+button_width<=toolbar_right)ImGui::SameLine();
@@ -794,7 +801,13 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             const auto state_kind=st==ecmgui::WorkerRunState::Error?ui::Status::Danger:worker.stop_requested||st==ecmgui::WorkerRunState::Restarting?ui::Status::Warning:worker.running()?ui::Status::Success:ui::Status::Info;
             const auto state_label=worker.stop_requested?std::string(ui::text("status.stopping",zh)):ui::message(ecmgui::state_name(st),zh);
             ui::status_badge(state_label.c_str(),state_kind,p,scale,std::max(1.f,ImGui::GetContentRegionAvail().x));
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",state_label.c_str(),worker.state_text().c_str());
+            if(ImGui::IsItemHovered()){
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(state_label.c_str());
+                ImGui::TextUnformatted(worker.state_text().c_str());
+                if(worker.breaker_tripped())ImGui::TextUnformatted(ui::text("worker.retry_paused",zh));
+                ImGui::EndTooltip();
+            }
             ImGui::TableSetColumnIndex(4);ImGui::AlignTextToFramePadding();
             const auto device=worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device):std::string("CPU");
             value_cell(device+" / S"+std::to_string(worker.stage2?2:1)+(worker.duplicate_device?"*":""),worker.stage2?p.stage2:p.stage1);

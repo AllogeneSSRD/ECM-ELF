@@ -1981,6 +1981,16 @@ Type `int` · Range `<x:Z,1..60>` · Worker override `not supported` · Level `a
 
 Idle GUI frame and worker-status refresh target in Hz. Input messages wake the GUI promptly; higher values smooth charts and status updates at additional UI cost. GPU metrics are sampled independently at gpu_poll_ms, and neither setting changes computation speed.
 
+### results_last_copy_utc
+
+```toml
+results_last_copy_utc = ""
+```
+
+Type `string` · Range `<YYYY-MM-DD HH:MM:SS UTC>` · Worker override `not supported` · Level `advanced`.
+
+Last successful JSON result copy in GUI v2, recorded in UTC. Empty means no copy time has been recorded.
+
 <a id="exe"></a>
 
 ### stage1_exe

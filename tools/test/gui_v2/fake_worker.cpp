@@ -29,6 +29,14 @@ int main(int argc, char** argv) {
             lease.acquire((std::filesystem::u8path(config).parent_path() / std::filesystem::u8path(value.worktodo)).u8string(), worker);
             std::printf("queue_owner: acquired worker=%d\n", worker); std::fflush(stdout);
         }
+        if (arg_value("--scenario") == "v2-recover-after-breaker") {
+            if (!std::filesystem::exists(std::filesystem::u8path(arg_value("--marker")))) {
+                out("ERROR: fixture fault still present\n");
+                return 3;
+            }
+            out("===== queue done, 1 task(s) processed =====\n");
+            return 0;
+        }
         if (arg_value("--scenario") == "v2-checkpoint-stop") {
             HANDLE stop = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage1-stop-handle").c_str(),nullptr,10)));
             DWORD flags = 0; if (!stop || !GetHandleInformation(stop,&flags)) return 4;

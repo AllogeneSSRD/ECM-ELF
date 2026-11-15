@@ -112,18 +112,25 @@ std::string WorkerProc::command_line() const {
     return cmd;
 }
 
-bool WorkerProc::start(std::string &err) {
+bool WorkerProc::start(std::string &err, WorkerStart origin) {
     err.clear();
     if (running_) return true;
-    if (breaker_tripped_) {
+    if (breaker_tripped_ && origin == WorkerStart::Automatic) {
         err = "breaker tripped";
         return false;
     }
 #ifdef _WIN32
     if (!spawn_locked(err)) {
+        want_running_ = false;
         state_ = WorkerRunState::Error;
         state_text_ = err;
         return false;
+    }
+    if (origin == WorkerStart::Manual) {
+        breaker_tripped_ = false;
+        crash_times_ms_.clear();
+        restart_at_ms_ = 0;
+        restarts_ = 0;
     }
     want_running_ = true;
     saw_queue_done_ = false;
@@ -388,6 +395,7 @@ void WorkerProc::poll(unsigned long long now_ms) {
             }
             if (static_cast<int>(crash_times_ms_.size()) >= limits_.breaker_crashes) {
                 breaker_tripped_ = true;
+                want_running_ = false;
                 state_ = WorkerRunState::Error;
                 char buf[160];
                 std::snprintf(buf, sizeof(buf),

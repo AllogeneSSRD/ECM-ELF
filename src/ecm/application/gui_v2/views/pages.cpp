@@ -102,7 +102,7 @@ void sort_results(std::vector<size_t>& indices,const std::vector<ecmgui::ResultR
 }
 }
 void App::draw_results(bool zh) {
-    const bool history_changed=result_copies.load(state.path);
+    const bool history_changed=config_path.empty()&&result_copies.load(state.path);
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
     ImGui::TextUnformatted(ecmgui_v2::ui::text("published_results",zh));
     const char* statuses[]{"All","F","NF"}; int status_index=result_filter.status=="F"?1:result_filter.status=="NF"?2:0;
@@ -191,6 +191,25 @@ void App::draw_results(bool zh) {
             const auto* clipboard=ImGui::GetClipboardText();
             if(clipboard&&payload==clipboard){
                 if(!result_copies.remember(keys))toast(ui::text("results.copy_history_error",zh),true);
+                else if(!config_path.empty()){
+                    std::string error;
+                    ecmgui::TomlFile disk;
+                    ecmgui::FileStamp current;
+                    const bool unchanged=ecmgui::stamp_file(config_path,current)&&current.exists==config_stamp.exists&&
+                        current.size==config_stamp.size&&current.mtime==config_stamp.mtime&&current.hash==config_stamp.hash;
+                    if(unchanged&&disk.load(config_path,error)){
+                        disk.set("gui","results_last_copy_utc",result_copies.last_copy());
+                        if(disk.save(error)){
+                            if(config.dirty())config.set("gui","results_last_copy_utc",result_copies.last_copy());
+                            else config=std::move(disk);
+                            ecmgui::stamp_file(config_path,config_stamp);
+                        }
+                    }
+                    if(!unchanged||!error.empty()){
+                        if(!error.empty())trace(error);
+                        toast(ui::text("results.copy_time_save_error",zh),true);
+                    }
+                }
                 result_uncopied_count=static_cast<size_t>(std::count_if(indices.begin(),indices.end(),uncopied));
                 trace("result copy: "+result_copies.last_copy()+" rows="+std::to_string(copy.size()));
             }else toast(ui::text("results.copy_failed",zh),true);

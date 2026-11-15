@@ -130,6 +130,7 @@ WorkerRunState WorkerView::state()const{return proc?proc->state():WorkerRunState
 const std::string &WorkerView::state_text()const{static const std::string empty;return proc?proc->state_text():empty;}
 std::string WorkerView::command_line()const{return proc?proc->command_line():"-";}
 int WorkerView::restarts()const{return proc?proc->restarts():0;}
+bool WorkerView::breaker_tripped()const{return proc&&proc->breaker_tripped();}
 void WorkerController::set_sinks(std::function<void(const std::string &)> trace,std::function<void(const WorkerNotice &)> notice) {
     trace_=std::move(trace);notice_=std::move(notice);
 }
@@ -151,10 +152,11 @@ void WorkerController::force_close(){
     stop_all_quietly();for(auto &w:workers_)w.stop_requested=false;
     exit_phase_=ExitPhase::Idle;quit_requested_=true;
 }
-bool WorkerController::start(int index,bool detailed_trace) {
+bool WorkerController::start(int index,bool detailed_trace,WorkerStart origin) {
     for(auto &w:workers_)if(w.index==index) {
+        if(origin==WorkerStart::Automatic && w.breaker_tripped())return false;
         std::string err;refresh_worker_for_queue(w);
-        if(w.proc && w.proc->start(err)) {
+        if(w.proc && w.proc->start(err,origin)) {
             trace("worker "+std::to_string(w.index)+": started pid="+std::to_string(w.proc->pid())+
                   (detailed_trace?" cmd="+w.proc->command_line():""));return true;
         }

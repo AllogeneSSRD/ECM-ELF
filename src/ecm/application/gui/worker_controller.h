@@ -71,6 +71,7 @@ struct WorkerView {
     WorkerView &operator=(WorkerView &&) noexcept;
     bool has_process() const;
     bool running() const;
+    bool breaker_tripped() const;
     WorkerRunState state() const;
     const std::string &state_text() const;
     std::string command_line() const;
@@ -103,7 +104,7 @@ public:
     // Reject active/restarting workers before changing any settings or ownership.
     void configure(const WorkerSettings &settings);
     bool busy() const;
-    bool start(int index,bool detailed_trace=false);
+    bool start(int index,bool detailed_trace=false,WorkerStart origin=WorkerStart::Manual);
     void start_all();void stop_all();void stop_all_quietly();void tick();
     void request_stop(int worker_index);
     bool request_close();void begin_graceful_exit();void cancel_close();void force_close();

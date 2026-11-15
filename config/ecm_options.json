@@ -2460,6 +2460,20 @@
     },
     {
       "owner": "gui",
+      "key": "results_last_copy_utc",
+      "field": "results_last_copy_utc",
+      "type": "string",
+      "default": "",
+      "domain": "<YYYY-MM-DD HH:MM:SS UTC>",
+      "fx": "GUI_v2_result_copy_time",
+      "parser": "gui",
+      "description": [
+        "Last successful JSON result copy in GUI v2, recorded in UTC. Empty means no copy time has been recorded.",
+        "GUI v2 上次成功复制 JSON 结果的 UTC 时间。留空表示尚未记录复制时间。"
+      ]
+    },
+    {
+      "owner": "gui",
       "key": "NumWorkers",
       "v2_key": "worker_count",
       "template_level": "core",

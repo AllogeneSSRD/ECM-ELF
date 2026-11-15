@@ -67,6 +67,7 @@
       <Item id="open_log_folder" name="Open log folder" />
       <Item id="no_output_yet" name="No output yet" />
       <Item id="worker_started" name="Worker started: " />
+      <Item id="worker.retry_paused" name="Automatic retries paused. After fixing the issue, click Start." />
       <Item id="keep_at_least_one_central_page" name="Keep at least one central page" />
       <Item id="worker.title" name="Workers" />
       <Item id="action.start_all" name="Start all" />
@@ -125,6 +126,7 @@
       <Item id="results.last_copy" name="Last copy: %s" />
       <Item id="results.uncopied_count" name="Uncopied: %zu" />
       <Item id="results.copy_history_error" name="Result copy history unavailable" />
+      <Item id="results.copy_time_save_error" name="Results copied, but the copy time could not be saved to the workflow" />
       <Item id="results.copy_failed" name="Could not copy results" />
       <Item id="results.selection_summary" name="%zu / %zu | selected %zu" />
       <Item id="results.source_summary" name="%s: %s | invalid %zu | pending %zu" />

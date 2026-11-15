@@ -35,6 +35,7 @@ Android/ECM/app/release/
 *.ini
 ecm.toml
 *.jsonl*
+*.result-copies.json*
 *.json.txt*
 *.json_*.txt*
 *.ckpt*

@@ -448,6 +448,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
 inline Stage2Values read_stage2(const Entries &entries){Stage2Values c;apply(c,entries,stage2_bindings);return c;}
 struct GuiValues {
     std::string gpu_clock_ranges="";
+    std::string results_last_copy_utc="";
     int NumWorkers=1;
     std::string exe="";
     std::string stage2_exe="";
@@ -469,6 +470,7 @@ struct GuiValues {
 };
 inline const Binding<GuiValues> gui_bindings[]={
     {"gpu_clock_ranges",[](GuiValues&c,const std::string&v){c.gpu_clock_ranges=v;},[](GuiValues&c,const GuiValues&v){c.gpu_clock_ranges=v.gpu_clock_ranges;}},
+    {"results_last_copy_utc",[](GuiValues&c,const std::string&v){c.results_last_copy_utc=v;},[](GuiValues&c,const GuiValues&v){c.results_last_copy_utc=v.results_last_copy_utc;}},
     {"NumWorkers",[](GuiValues&c,const std::string&v){c.NumWorkers=gui_integer(v,1,1,64);},[](GuiValues&c,const GuiValues&v){c.NumWorkers=v.NumWorkers;}},
     {"exe",[](GuiValues&c,const std::string&v){c.exe=v;},[](GuiValues&c,const GuiValues&v){c.exe=v.exe;}},
     {"stage2_exe",[](GuiValues&c,const std::string&v){c.stage2_exe=v;},[](GuiValues&c,const GuiValues&v){c.stage2_exe=v.stage2_exe;}},

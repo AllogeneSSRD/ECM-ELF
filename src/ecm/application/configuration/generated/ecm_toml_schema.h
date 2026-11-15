@@ -139,6 +139,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage1_seconds_per_curve","double","<x:R,finite,x>0>","stage2","tune.stage1_seconds_per_curve","","stage2","tune.stage1_seconds_per_curve",false,false},
     {"stage2","stage2_ratio_adjust","double","<x:R,finite,x>0>","stage2","ratio_adjust","","stage2","ratio_adjust",false,false},
     {"gui","gpu_clock_ranges","string","<GPU-UUID:minMHz-maxMHz[:auto];...>","gui","gpu_clock_ranges","","gui","gpu_clock_ranges",false,false},
+    {"gui","results_last_copy_utc","string","<YYYY-MM-DD HH:MM:SS UTC>","gui","results_last_copy_utc","","gui","results_last_copy_utc",false,false},
     {"gui","NumWorkers","int","<x:Z,1..64>","gui","worker_count","","gui","worker_count",false,false},
     {"gui","exe","string","<exe>","gui","stage1_exe","","gui","stage1_exe",false,false},
     {"gui","stage2_exe","string","<exe>","gui","stage2_exe","","gui","stage2_exe",false,false},

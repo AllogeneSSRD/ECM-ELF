@@ -67,6 +67,7 @@
       <Item id="open_log_folder" name="打开日志目录" />
       <Item id="no_output_yet" name="暂无输出" />
       <Item id="worker_started" name="已启动 worker " />
+      <Item id="worker.retry_paused" name="自动重试已暂停。排除故障后，点击开始。" />
       <Item id="keep_at_least_one_central_page" name="至少保留一个中央页面" />
       <Item id="worker.title" name="Workers 管理" />
       <Item id="action.start_all" name="全部开始" />
@@ -125,6 +126,7 @@
       <Item id="results.last_copy" name="上次复制：%s" />
       <Item id="results.uncopied_count" name="未复制：%zu" />
       <Item id="results.copy_history_error" name="结果复制记录不可用" />
+      <Item id="results.copy_time_save_error" name="结果已复制，但无法将复制时间保存到工作流配置" />
       <Item id="results.copy_failed" name="未能复制结果" />
       <Item id="results.selection_summary" name="%zu / %zu | 已选择 %zu" />
       <Item id="results.source_summary" name="%s: %s | 无效 %zu | 待完成 %zu" />

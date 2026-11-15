@@ -1982,6 +1982,16 @@ refresh_hz = 10
 
 GUI 空闲时绘制帧与 worker 状态处理的目标频率，单位为 Hz。输入消息会及时唤醒界面；提高此值可使图表和状态显示更平滑，但增加界面开销。GPU 指标按 gpu_poll_ms 独立采样，两项设置均不改变计算速度。
 
+### results_last_copy_utc
+
+```toml
+results_last_copy_utc = ""
+```
+
+类型 `string` · 范围 `<YYYY-MM-DD HH:MM:SS UTC>` · Worker 覆盖 `不支持` · 级别 `高级`。
+
+GUI v2 上次成功复制 JSON 结果的 UTC 时间。留空表示尚未记录复制时间。
+
 <a id="exe"></a>
 
 ### stage1_exe

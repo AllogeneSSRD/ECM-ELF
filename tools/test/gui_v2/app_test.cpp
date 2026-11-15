@@ -58,6 +58,43 @@ static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
     assert(!fs::exists(probe));assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE","")==0);
     std::cout<<"{\"no_protocol_probe\":true,\"manual_autostart_restart_stage_switch\":true,\"queue_locks_preserved\":true,\"spawn_errors_preserved\":true}\n";
 }
+static void worker_breaker_recovery(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"breaker-recovery";fs::create_directories(dir);
+    const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt",fixed=dir/"fault-fixed";
+    const std::string queued="[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n";
+    write(queue,queued);
+    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[gui]\nNumWorkers=1\nexe=\""+fixture.generic_u8string()+
+        "\"\n[workers.1]\nautostart=1\nextra_args='--scenario v2-recover-after-breaker --marker \""+
+        fixed.generic_u8string()+"\"'\n");
+    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
+    const auto worker=[&]() -> const ecmgui::WorkerView& {return app.controller.workers().at(0);};
+    const auto wait=[&](ecmgui::WorkerRunState expected){
+        const auto deadline=GetTickCount64()+20000;
+        do {app.tick();if(worker().state()==expected)return;Sleep(10);}while(GetTickCount64()<deadline);
+        assert(false);
+    };
+    wait(ecmgui::WorkerRunState::Error);
+    assert(worker().breaker_tripped()&&worker().restarts()==2&&!app.controller.busy());
+    write(fixed,"ready");
+    assert(!app.start(1,ecmgui::WorkerStart::Automatic));
+    {ecm_queue::OwnerLease owner(queue.u8string(),1);assert(!app.start(1));}
+    {ecm_queue::OwnerLease control(queue.u8string(),1,".gui-control.lock");app.start_all();}
+    assert(worker().breaker_tripped()&&worker().restarts()==2&&!app.controller.busy());
+    assert(app.start(1));
+    wait(ecmgui::WorkerRunState::QueueEmpty);
+    assert(!worker().breaker_tripped()&&worker().restarts()==0);
+
+    fs::remove(fixed);
+    app.start_all();
+    wait(ecmgui::WorkerRunState::Error);
+    assert(worker().breaker_tripped()&&worker().restarts()==2);
+    write(fixed,"ready");
+    app.start_all();
+    wait(ecmgui::WorkerRunState::QueueEmpty);
+    assert(!worker().breaker_tripped()&&worker().restarts()==0&&read(queue)==queued);
+    std::cout<<"{\"worker_breaker_manual_recovery\":true,\"start_all_recovery\":true,\"retry_budget_reset\":true,\"queue_locks_preserved\":true}\n";
+}
 static void stage2_raw_times(const fs::path& root,const fs::path& fixture){
     const auto dir=root/"stage2-raw";fs::create_directories(dir);
     const auto cfg=dir/"ecm.toml";
@@ -154,6 +191,9 @@ static void result_table_contract(const fs::path& root){
     const auto second=row(20,20,4);
     write(a,first);write(b,second);
     ecmgui_v2::UiState state;state.path=root/"result.ui.toml";ecmgui_v2::App app(state,stdout);
+    const auto workflow=root/"result-workflow.toml";
+    write(workflow,"config_version = 2\n[shared]\nworktodo_file = \"worktodo.txt\"\n[gui]\nworker_count = 1\n");
+    assert(app.load_config(workflow.u8string()));
     app.results.set_paths({a.u8string(),b.u8string()});assert(app.results.refresh());
     auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();
     io.IniFilename=nullptr;io.DisplaySize={1600,900};io.DeltaTime=1.f/60;
@@ -165,12 +205,13 @@ static void result_table_contract(const fs::path& root){
     platform.Platform_GetClipboardTextFn=[](ImGuiContext*){return clipboard.c_str();};
     ecmgui_v2::ui::Fonts fonts;ecmgui_v2::ui::Settings style;
     ImGuiID table_id=0;
-    const auto frame=[&]{
+    const auto draw_frame=[&](ecmgui_v2::App& view){
         ImGui::NewFrame();ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize({1500,800});
         ImGui::Begin("result-sort-contract",nullptr,ImGuiWindowFlags_NoSavedSettings);
-        table_id=ImGui::GetID("results");app.draw_page(style,fonts,1);
+        table_id=ImGui::GetID("results");view.draw_page(style,fonts,1);
         ImGui::End();ImGui::Render();
     };
+    const auto frame=[&]{draw_frame(app);};
     const auto click_at=[&](ImVec2 pos){
         io.AddMousePosEvent(pos.x,pos.y);frame();
         io.AddMouseButtonEvent(0,true);frame();io.AddMouseButtonEvent(0,false);frame();frame();
@@ -205,6 +246,8 @@ static void result_table_contract(const fs::path& root){
     }
     assert(app.result_uncopied_count==5);
     click_at(app.result_copy_controls[0]);assert(app.result_uncopied_count==5&&app.result_copies.last_copy().empty());
+    assert(read(workflow).find("results_last_copy_utc")==std::string::npos);
+    app.config.set("gui","NumWorkers","2");
     allow_clipboard=true;
     click_at(app.result_copy_controls[0]);assert(clipboard==row(10,10,3,true)&&app.result_uncopied_count==4);
     assert(!app.result_copies.last_copy().empty());
@@ -212,10 +255,20 @@ static void result_table_contract(const fs::path& root){
     assert(clipboard==row(50,50,5)+second+row(100,100,2)+row(2,2,1)&&app.result_uncopied_count==0);
     const auto palette=ecmgui_v2::ui::palette(true);
     assert(has_color(ImGui::GetColorU32(palette.success_bg)));
-    ecmgui_v2::ui::ResultCopies restored;assert(restored.load(state.path)&&restored.error.empty());
-    assert(restored.last_copy()==app.result_copies.last_copy());
-    for(const auto& key:app.result_copy_keys)assert(restored.contains(key));
+    assert(read(workflow).find("results_last_copy_utc = \""+app.result_copies.last_copy()+"\"")!=std::string::npos);
+    assert(app.config.dirty()&&app.config.get("gui","NumWorkers")=="2");
+    assert(read(workflow).find("worker_count = 1")!=std::string::npos);
+    ecmgui_v2::UiState restarted_state;restarted_state.path=root/"another-layout.toml";
+    ecmgui_v2::App restarted(restarted_state,stdout);
+    assert(restarted.load_config(workflow.u8string()));
+    assert(restarted.result_copies.last_copy()==app.result_copies.last_copy());
+    for(const auto& key:app.result_copy_keys)assert(restarted.result_copies.contains(key));
     assert(read(a)==first&&read(b)==second+row(50,50,5));
+    restarted.results.set_paths({a.u8string(),b.u8string()});
+    write(b,read(b)+row(60,60,6));
+    assert(restarted.results.refresh());
+    draw_frame(restarted);
+    assert(restarted.result_uncopied_count==1);
     ImGui::DestroyContext(context);
     std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true}\n";
 }
@@ -501,6 +554,10 @@ int main(int argc,char** argv){
      const auto original=copied;io.AddInputCharactersUTF8("overwrite");frame();copy();assert(copied==original);
      ImGui::DestroyContext(context);}
     result_table_contract(root);
-    if(argc==3){no_protocol_probe(root,fs::absolute(argv[2]));stage2_raw_times(root,fs::absolute(argv[2]));stage2_paired_views(root,fs::absolute(argv[2]));}
+    if(argc==3){
+        const auto fixture=fs::absolute(argv[2]);
+        no_protocol_probe(root,fixture);worker_breaker_recovery(root,fixture);
+        stage2_raw_times(root,fixture);stage2_paired_views(root,fixture);
+    }
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";
 }

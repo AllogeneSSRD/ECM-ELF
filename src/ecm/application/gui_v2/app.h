@@ -31,7 +31,8 @@ public:
     void initialize(const std::string& config, bool no_nvml);
     bool load_config(const std::string& config);
     void configure_workers();
-    bool start(int worker);
+    bool start(int worker,ecmgui::WorkerStart origin=ecmgui::WorkerStart::Manual);
+    void start_all();
     void tick();
     bool request_close();
     void begin_exit();

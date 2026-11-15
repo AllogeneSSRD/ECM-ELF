@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "eeb5914b16c346cec7901aa355f75d626eb1a018503c448950ca66cbc8c27471",
-    "src/ecm/platform/generated/configuration_defaults.h": "41a2cd9c04b3e86c1024955a382f1a0bcfb1ae16d02a81fb611a9f0d2a624b78",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "8d70e616e8d47411ceb03e75be41004abeb16ff8e7ae70d0e6632b7f5608e9db",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "ea0cc8445d515123f259483e25ca700808ee7e30d5ceaf2311ce793e1f5e12c1",
+    "src/ecm/platform/generated/configuration_defaults.h": "c535037c0689e4cadf537f57d7bf73e2db83b254340f39f62e8fb7155b2ea623",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "84358e22dd356b6d17ed2b01c182926e927cfce472fb59aa1446423978053ac4",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "cdbadee56959aec14c222ed1e6b957db502cf25b000c936f1541d4093d80e191",
     "config/ecm.toml.default": "75a6f3688079c55b8ba891fd7eac9c157db7c2da82f8817670d73aa808f4c825",
-    "config/ecm.toml.example": "9a78f651818688d5b85c17686185cbc4ee2d0de77670936f805e7defdc37f2ac",
-    "docs/ECM_TOML_REFERENCE.en.md": "18ba4e7ba845b670a02378231367159a6a2905a996dab1a0a73faeaac83ab353",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "2ad2e475b57fbe9a4349326827c64176bac56da9bc337f208aa3c84d4cec53ed",
-    "config/ecm_options.json": "6e06465d37eb2fd112fd58ca27854deae339c7d36bc28f9daa4cfd7969b6917e",
+    "config/ecm.toml.example": "09aab069ef528b0fc14809b65b3ddcc9bde72e1b92402ca5c27ae1a0e96f3411",
+    "docs/ECM_TOML_REFERENCE.en.md": "e686a0f168f26e8da8e71eeed17b1a59ce1bd7caf3dd6845ae344c845e33713b",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "f1065730ca5d3ae5396107f5ec3f7d22f68087d56923cb17fbe3bcc8aab6b3e0",
+    "config/ecm_options.json": "f078fe35799132558a3551a74b8883c933a28f98f0e61c4ff4fb574029fdad8c",
     "tools/gen/generate_ecm_config.py": "42b3dc3a69f49785ca42042efff7bd650c1e51bb7eac2671e77057ed3d9d76d0"
   }
 }

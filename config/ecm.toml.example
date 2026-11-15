@@ -1002,6 +1002,11 @@ target = "gpu"  # string: [cpu|gpu]
 # 件。保存不应用本次草稿；点击应用才启用本次范围和自动选项。恢复默认关闭本次会话自动应用，不删除保存
 # 草稿。空值不保存范围，不改变 worker 计算配置。
 
+# results_last_copy_utc = ""  # string: <YYYY-MM-DD HH:MM:SS UTC>
+# Last successful JSON result copy in GUI v2, recorded in UTC. Empty means no copy time has been
+# recorded.
+# GUI v2 上次成功复制 JSON 结果的 UTC 时间。留空表示尚未记录复制时间。
+
 # worker_count = 1  # int: <x:Z,1..64>
 # Number of workers managed by the GUI. Each uses its own [worker.N] settings. Task curve counts
 # come from worktodo.

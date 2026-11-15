@@ -106,6 +106,7 @@ struct WorkerSpawn {
 };
 
 enum class WorkerRunState { Stopped, Starting, Running, Restarting, Error, QueueEmpty };
+enum class WorkerStart { Automatic, Manual };
 
 struct WorkerStatus {
     WorkerRunState state = WorkerRunState::Stopped;

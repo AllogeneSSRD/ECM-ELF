@@ -45,8 +45,8 @@ public:
 
     void configure(const WorkerSpawn &spawn, const WorkerLimits &limits);
 
-    // Starts (or restarts) the process unless the breaker has tripped.
-    bool start(std::string &err);
+    // A successful manual start begins a new retry budget.
+    bool start(std::string &err, WorkerStart origin = WorkerStart::Automatic);
     // Terminates the whole job (children included). Safe to call when stopped.
     void stop();
     // Stage1 saves at its next safe boundary; Stage2 finishes the current curve.
