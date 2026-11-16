@@ -29,7 +29,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 <a id="comparison"></a>
 ## 与现有主流工具相比
 
-每组对比使用相同数据绘制对数图和线性图。纵轴均为每条曲线的耗时，**越低越快（lower is faster）。**
+每组对比使用相同数据绘制对数图和线性图。耗时图的纵轴为每条曲线的耗时，**越低越快（lower is faster）。**
 
 ### Edwards Stage1
 
@@ -38,6 +38,14 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 ![Edwards Stage1 每曲线耗时，对数图](docs/performance/attachments/stage1-edwards-ntt-cgbn-prime95-log.png)
 
 ![Edwards Stage1 每曲线耗时，线性图](docs/performance/attachments/stage1-edwards-ntt-cgbn-prime95-linear.png)
+
+#### RTX 4070 Ti 等效 CPU 核心数
+
+逐档采用 RTX 4070 Ti 上耗时最短的 CGBN 或 NTT 实测结果，与同一输入的 4.0 GHz Prime95 单核耗时比较。Edwards 数据覆盖至 262,139 位。计算口径见 [GPU 型号与 CPU 等效核心数](docs/performance/STAGE1.md#gpu-型号与-cpu-等效核心数)。
+
+![RTX 4070 Ti Stage1 等效 CPU 核心数，对数图](docs/performance/attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
+
+
 
 ### Stage2
 

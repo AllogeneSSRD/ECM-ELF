@@ -23,6 +23,14 @@ COLORS = {
     "4060 Laptop NTT": "#943e78",
     PRIME95: "#181818",
 }
+GMP_ECM = {
+    "GMP-ECM 4070 Ti": COLORS["4070 Ti CGBN"],
+    "GMP-ECM 4060 Laptop": COLORS["4060 Laptop CGBN"],
+}
+GMP_ECM_ROLES = {
+    "gmp_ecm_cgbn_overlay": "GMP-ECM 4070 Ti",
+    "gmp_ecm_cgbn": "GMP-ECM 4060 Laptop",
+}
 HISTORICAL_COMPARISON = "2d091243:docs/performance/STAGE1.md"
 HISTORICAL_SQUARE = "fed434ef:docs/performance/CGBN_SQUARE.md"
 MATRIX_VERSION = "0.63.17"
@@ -136,6 +144,16 @@ def comparison_samples(path, curve, current):
                              float(row["median_s_per_curve_at_1e6"]), "GWNUM, 1 thread",
                              "native Prime95 Stage1", path.as_posix())
                 continue
+            if role in GMP_ECM_ROLES:
+                # Both comparison files contain the same PARAM3 data. Load it once.
+                if curve != "mont0":
+                    continue
+                if not row["version"] or not row.get("timing") or not row.get("source"):
+                    raise ValueError(f"Invalid GMP-ECM CGBN metadata for M{p} in {path}")
+                yield Sample(curve, p, int(row["arithmetic_bits"]), "", GMP_ECM_ROLES[role],
+                             float(row["median_s_per_curve_at_1e6"]), f"GMP-ECM {row['version']} WSL CGBN PARAM3",
+                             WITH_SETUP, row["source"])
+                continue
             if backend not in ("cgbn", "ntt"):
                 continue
             version = row["version"]
@@ -177,7 +195,8 @@ def mont_auto_samples(path):
 def select(samples):
     best = {}
     for sample in samples:
-        expected_bits = WIDTHS[sample.exponent][1] if sample.series.endswith("CGBN") else sample.exponent
+        cofactor = sample.series.endswith("CGBN") or sample.series in GMP_ECM
+        expected_bits = WIDTHS[sample.exponent][1] if cofactor else sample.exponent
         seconds = sample.seconds_per_curve_at_1e6
         if sample.bits != expected_bits or not math.isfinite(seconds) or seconds <= 0:
             raise ValueError(f"Invalid benchmark point: {sample}")
@@ -209,17 +228,20 @@ def main():
         samples.extend(current)
         samples.extend(comparison_samples(args.comparison_root / curve / "comparison.csv", curve, current))
     selected = select(samples)
+    gmp_ecm = [row for row in selected if row.series in GMP_ECM]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for curve in curves:
         model = "Edwards" if curve == "ed" else "Montgomery PARAM0"
+        rows = [row for row in selected if row.curve == curve and row.series not in GMP_ECM] + gmp_ecm
+        note = "CGBN uses the cofactor. NTT and Prime95 use the full exponent for arithmetic."
         plot_version_panels(
-            [row for row in selected if row.curve == curve],
+            rows,
             args.output_dir / f"stage1-{curve}-version-throughput.png",
             title=f"{model} Stage1 throughput by version", ylabel="Curves/s at B1 = 1,000,000 (scaled)",
             colors=COLORS, hatch=WITH_SETUP, hatch_label="GPU interval includes prep",
             reference_label="Prime95 (1T)",
-            note="CGBN uses the cofactor. NTT and Prime95 use the full exponent for arithmetic.",
-            stagger_higher_labels=True,
+            note=note, stagger_higher_labels=True,
+            extra_reference=("GMP-ECM\nPARAM3", GMP_ECM) if gmp_ecm else None,
         )
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     rows = [dict(asdict(row), curves_per_second_at_1e6=row.throughput) for row in selected]

@@ -16,9 +16,16 @@ def version_key(version):
 
 
 def plot_version_panels(samples, path, *, title, ylabel, colors, hatch, hatch_label, reference_label, note,
-                        stagger_higher_labels=False):
-    max_versions = max(len({row.version for row in samples if row.exponent == p}) for p in WIDTHS)
-    dense = max_versions > 10
+                        stagger_higher_labels=False, extra_reference=None):
+    reference_columns = [(PRIME95, (PRIME95,))]
+    bar_colors = colors
+    if extra_reference:
+        label, reference_colors = extra_reference
+        reference_columns.append((label, tuple(reference_colors)))
+        bar_colors = colors | reference_colors
+    reference_series = {series for _, group in reference_columns for series in group}
+    max_columns = max(len({row.version for row in samples if row.exponent == p and row.version}) for p in WIDTHS)
+    dense = max_columns + len(reference_columns) > 10
     with plt.style.context("seaborn-v0_8-whitegrid"):
         fig, axes = plt.subplots(2, 2, figsize=(20, 9.4) if dense else (14, 8.4))
         fig.suptitle(title, fontsize=20, fontweight="semibold", y=.965)
@@ -27,16 +34,20 @@ def plot_version_panels(samples, path, *, title, ylabel, colors, hatch, hatch_la
             panel = [row for row in samples if row.exponent == p]
             if sum(row.series == PRIME95 and not row.version for row in panel) != 1:
                 raise ValueError(f"Expected one unversioned Prime95 reference for M{p}")
-            versions = sorted({row.version for row in panel}, key=version_key)
+            if any(row.series not in reference_series for row in panel if not row.version):
+                raise ValueError(f"Unknown reference series for M{p}")
+            versions = sorted({row.version for row in panel if row.version}, key=version_key)
+            columns = [(version, [row for row in panel if row.version == version]) for version in versions]
+            columns.extend((label, [row for row in panel if not row.version and row.series in series])
+                           for label, series in reference_columns)
             peak = max(row.throughput for row in panel)
             ax.set_title(f"~{size}K  ·  M{p}  |  {cofactor:,}-bit cofactor", fontsize=12, pad=9)
-            for x, version in enumerate(versions):
-                group = sorted((row for row in panel if row.version == version),
-                               key=lambda row: list(colors).index(row.series))
-                if not version:
+            for x, (_, rows) in enumerate(columns):
+                group = sorted(rows, key=lambda row: list(bar_colors).index(row.series))
+                if x == len(versions):
                     ax.axvline(x - .5, color="#b0b8c2", linewidth=.9, linestyle="--")
                 for i, row in enumerate(group):
-                    color = colors[row.series]
+                    color = bar_colors[row.series]
                     offset = .32 * (i - (len(group) - 1) / 2)
                     hatched = row.timing == hatch
                     bars = ax.bar(x + offset, row.throughput, width=.21, color="white" if hatched else color,
@@ -50,14 +61,18 @@ def plot_version_panels(samples, path, *, title, ylabel, colors, hatch, hatch_la
                         )
                     else:
                         near_neighbor = i and abs(row.throughput - group[i - 1].throughput) < .05 * peak
-                    stagger = (len(versions) > 20 and x % 2 == 1) or near_neighbor
+                    stagger = (len(columns) > 20 and x % 2 == 1) or near_neighbor
                     ax.bar_label(bars, labels=[f"{row.throughput:.{digits}f}"], padding=12 if stagger else 4,
-                                 fontsize=7 if len(versions) > 14 else 8, color="#242831", zorder=5)
-            ax.set_xticks(range(len(versions)), [v or PRIME95 for v in versions], fontsize=9)
-            if len(versions) > 10:
-                plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+                                 fontsize=7 if len(columns) > 14 else 8, color="#242831", zorder=5)
+            ax.set_xticks(range(len(columns)), [label for label, _ in columns], fontsize=9)
+            if len(columns) > 10:
+                tick_labels = ax.get_xticklabels()
+                if extra_reference:
+                    plt.setp(tick_labels[len(versions):], fontsize=8)
+                    tick_labels = tick_labels[:len(versions)]
+                plt.setp(tick_labels, rotation=45, ha="right", rotation_mode="anchor")
             ax.set_ylim(0, 1.16 * peak)
-            ax.set_xlim(-.57, len(versions) - .43)
+            ax.set_xlim(-.57, len(columns) - .43)
             ax.grid(axis="x", visible=False)
             ax.spines[["top", "right"]].set_visible(False)
         legend = [Patch(facecolor=color, label=reference_label if series == PRIME95 else series)

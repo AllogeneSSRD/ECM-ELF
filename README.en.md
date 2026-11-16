@@ -29,7 +29,7 @@ Use `ecm_gui_v2.exe` to manage Stage1 and Stage2 workers, queues, progress, and 
 <a id="comparison"></a>
 ## Compared with established ECM tools
 
-Each comparison shows the same data on logarithmic and linear scales. The vertical axis reports seconds per curve. **Lower is faster.**
+The timing comparisons show the same data on logarithmic and linear scales. They report seconds per curve. **Lower is faster.**
 
 ### Edwards Stage1
 
@@ -38,6 +38,12 @@ The chart compares ECM-ELF CUDA NTT (0.63.17) and CGBN on the RTX 4070 Ti and RT
 ![Edwards Stage1 seconds per curve, logarithmic chart](docs/performance/attachments/stage1-edwards-ntt-cgbn-prime95-log.png)
 
 ![Edwards Stage1 seconds per curve, linear chart](docs/performance/attachments/stage1-edwards-ntt-cgbn-prime95-linear.png)
+
+#### RTX 4070 Ti equivalent CPU cores
+
+For each input, the chart compares the fastest measured CGBN or NTT result on the RTX 4070 Ti with Prime95 running on one 4.0 GHz CPU core. The Edwards data cover inputs up to 262,139 bits. See [how equivalent CPU cores are calculated](docs/performance/STAGE1.md#gpu-型号与-cpu-等效核心数).
+
+![RTX 4070 Ti Stage1 equivalent CPU cores, logarithmic chart](docs/performance/attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
 
 ### Stage2
 

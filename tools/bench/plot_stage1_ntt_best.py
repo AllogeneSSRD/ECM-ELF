@@ -71,8 +71,38 @@ def reference_points(report):
                              row["cpu_min_seconds_1e6"], row["cpu_max_seconds_1e6"]) for row in report["rows"]}
 
 
+def gmp_ecm_points(report, historical, overlay):
+    roles = {historical["gpu_model"]: "gmp_ecm_cgbn"}
+    if overlay is not None:
+        roles[overlay["gpu_model"]] = "gmp_ecm_cgbn_overlay"
+    if not report["version"] or not report["timing"]:
+        raise ValueError("GMP-ECM CGBN requires version and timer metadata")
+    known_widths = {row["exponent"]: row["bits"] for row in historical["rows"]}
+    points, seen_devices = {}, set()
+    for device in report["devices"]:
+        gpu = device["gpu_model"]
+        if gpu not in roles or gpu in seen_devices:
+            raise ValueError(f"Unexpected or repeated GMP-ECM device: {gpu}")
+        seen_devices.add(gpu)
+        rows, seen = [], set()
+        for row in device["rows"]:
+            p, bits, b1, curves = (row[key] for key in ("exponent", "bits", "b1", "curves"))
+            samples = row["stage1_seconds"]
+            if (p in seen or bits != known_widths.get(p) or b1 <= 0 or curves <= 0 or not samples
+                    or any(not math.isfinite(value) or value <= 0 for value in samples)):
+                raise ValueError(f"Invalid GMP-ECM measurement: {gpu}, M{p}, {bits} bits")
+            seen.add(p)
+            scale = historical["target_b1"] / (b1 * curves)
+            rows.append((p, bits, statistics.median(samples) * scale, min(samples) * scale, max(samples) * scale))
+        if rows:
+            points[roles[gpu], report["version"]] = rows
+    if not points:
+        raise ValueError("GMP-ECM report has no measurements")
+    return points
+
+
 def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=None, prime95_extra=(),
-                cgbn_baselines=(), cgbn_retests=None):
+                cgbn_baselines=(), cgbn_retests=None, gmp_ecm=None):
     target_b1 = historical["target_b1"]
     current_version = version_order(ntt)
     current_exponents = set(ntt["exponents"])
@@ -148,17 +178,20 @@ def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=N
     if set(cgbn_exponents) & {row[0] for row in prime95_extra}:
         raise ValueError("Supplemental Prime95 points overlap the historical baseline")
     points[prime95].extend(prime95_extra)
+    if gmp_ecm is not None:
+        points.update(gmp_ecm_points(gmp_ecm, historical, overlay_cgbn))
     return {key: sorted(rows, key=lambda r: r[1]) for key, rows in points.items()}
 
 
-def ntt_sample_scope(current, previous, overlay):
+def ntt_sample_scope(current, previous, overlay, hidden_versions=()):
     newest_overlay = max((version_order(report) for report in overlay), default=None)
     current_reports = [current] + [report for report in overlay if version_order(report) == newest_overlay]
     earlier_reports = list(previous) + [report for report in overlay if version_order(report) != newest_overlay]
 
     def counts(reports):
         lengths = sorted({len(group["projected_seconds_per_curve_1e6"])
-                          for report in reports for group in report["groups"]})
+                          for report in reports if ntt_version(report) not in hidden_versions
+                          for group in report["groups"]})
         if len(lengths) < 2:
             return str(lengths[0]) if lengths else ""
         return f"{lengths[0]}–{lengths[-1]}"
@@ -167,18 +200,25 @@ def ntt_sample_scope(current, previous, overlay):
     return f"{latest} current / {earlier} prior runs" if earlier and earlier != latest else f"{latest} runs"
 
 
-def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope):
+def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope,
+         hidden_versions=(), hide_ladder_retests=False):
     model = "Edwards" if curve == "ed" else "Montgomery PARAM0"
-    primary_history = [version for backend, version in points if backend == "ntt_previous"]
-    overlay_history = [version for backend, version in points if backend == "ntt_overlay_previous"]
     updated_cgbn = {backend.removesuffix("_previous") for backend, _ in points
                     if backend.startswith("cgbn") and backend.endswith("_previous")}
     has_retests = any(backend.endswith("_paired_ladder") for backend, _ in points)
+    points = {(backend, version): rows for (backend, version), rows in points.items()
+              if version not in hidden_versions
+              and not (hide_ladder_retests and backend.endswith("_paired_ladder"))}
+    primary_history = [version for backend, version in points if backend == "ntt_previous"]
+    overlay_history = [version for backend, version in points if backend == "ntt_overlay_previous"]
+    has_gmp_ecm = any(backend.startswith("gmp_ecm_cgbn") for backend, _ in points)
     colors = {
         "ntt": ("#b73339", "o"),
         "ntt_overlay": ("#14804a", "D"),
         "cgbn": ("#d4771d", "s"),
         "cgbn_overlay": ("#2866a2", "P"),
+        "gmp_ecm_cgbn": ("#9f4910", "v"),
+        "gmp_ecm_cgbn_overlay": ("#204e73", "v"),
         "prime95": ("#000000", "^"),
     }
     styles = {}
@@ -206,6 +246,8 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope):
             label = f"NTT {version}"
         elif backend.endswith("_paired_ladder"):
             label = f"Ladder retest · {version}"
+        elif backend.startswith("gmp_ecm_cgbn"):
+            label = f"GMP-ECM {version} WSL · PARAM3"
         else:
             name = ("NAF w6" if previous else "NAF w12") if curve == "ed" else (
                 "ladder" if previous else "PRAC 50")
@@ -213,12 +255,14 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope):
                      else f"CGBN {version}")
         styles[key] = (label, color, marker, previous)
     with plt.style.context("seaborn-v0_8-whitegrid"):
-        fig, axes = plt.subplots(1, 2, figsize=(12, 6.15 + .18 * (len(primary_history) + bool(updated_cgbn) + has_retests)),
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6.15 + .18 * (len(primary_history) + bool(updated_cgbn)
+                                                               + (has_retests and not hide_ladder_retests)
+                                                               + 2 * has_gmp_ecm)),
                                  layout="constrained")
-        cgbn_scope = "1 batch, 3 on retests" if has_retests else "1 batch"
+        cgbn_scope = "1 batch, 3 at paired points" if has_retests else "1 batch"
         fig.suptitle(f"Stage1 {model} · Cost per curve\n"
                      f"NTT · full Mersenne, {ntt_scope}   |   CGBN · cofactor, 2 blocks/SM, {cgbn_scope}   |   "
-                     "Prime95 · native Stage1, 3 runs",
+                     "Prime95 · native Stage1, 3 runs" + ("\nGMP-ECM · cofactor, GPU CGBN in WSL" if has_gmp_ecm else ""),
                      fontsize=13, fontweight="medium", linespacing=1.45)
         lines = {}
         for i, ax in enumerate(axes):
@@ -230,13 +274,15 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope):
                 _, x, y, lo, hi = zip(*visible)
                 label, color, marker, previous = styles[key]
                 paired_ladder = key[0].endswith("_paired_ladder")
+                gmp_ecm = key[0].startswith("gmp_ecm_cgbn")
                 line, = ax.plot(x, y, label=label, color=color, marker=marker, markersize=4, linewidth=1.7,
-                                linestyle="none" if paired_ladder else "--" if previous else "-",
-                                markerfacecolor="none" if previous else color, zorder=4 if paired_ladder else 2 if previous else 3)
+                                linestyle="none" if paired_ladder else ":" if gmp_ecm else "--" if previous else "-",
+                                markerfacecolor="none" if previous or gmp_ecm else color,
+                                zorder=4 if paired_ladder else 2 if previous else 3)
                 if i:
                     lines[key] = line
-                if key[0].startswith("cgbn") and not previous:
-                    ranges = [(a, b, b - c, d - b) for a, b, c, d in zip(x, y, lo, hi) if c is not None]
+                if (key[0].startswith("cgbn") or gmp_ecm) and not previous:
+                    ranges = [(a, b, b - c, d - b) for a, b, c, d in zip(x, y, lo, hi) if c is not None and d > c]
                     if ranges:
                         xs, ys, below, above = zip(*ranges)
                         ax.errorbar(xs, ys, yerr=(below, above), fmt="none", ecolor=color, capsize=2, linewidth=.8)
@@ -252,8 +298,9 @@ def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope):
                 ax.ticklabel_format(style="plain", axis="x")
         axes[0].set_ylabel("Seconds per curve at B1 = 1,000,000 (scaled)")
         groups = (
-            (overlay_device, ("ntt_overlay", "ntt_overlay_previous", "cgbn_overlay", "cgbn_overlay_paired_ladder", "cgbn_overlay_previous")),
-            (device, ("ntt", "ntt_previous", "cgbn", "cgbn_paired_ladder", "cgbn_previous")),
+            (overlay_device, ("ntt_overlay", "ntt_overlay_previous", "cgbn_overlay", "cgbn_overlay_paired_ladder",
+                              "cgbn_overlay_previous", "gmp_ecm_cgbn_overlay")),
+            (device, ("ntt", "ntt_previous", "cgbn", "cgbn_paired_ladder", "cgbn_previous", "gmp_ecm_cgbn")),
             ("Prime95", ("prime95",)),
         )
         columns = [(name, [line for role in roles for key, line in lines.items() if key[0] == role])
@@ -286,6 +333,11 @@ def main():
                         help="Replace matching PRAC points with three-run medians and add their paired ladder points")
     parser.add_argument("--prime95-stage1", type=Path, nargs=2, metavar=("WORKTODO", "SCREEN_LOG"),
                         help="Extend the 4 GHz single-core Prime95 baseline with Stage1-only results")
+    parser.add_argument("--gmp-ecm-cgbn", type=Path, help="Add the local WSL GMP-ECM GPU PARAM3 build")
+    parser.add_argument("--hide-version", action="append", default=[], help="Hide this version in PNGs only")
+    parser.add_argument("--hide-ladder-retests", action="store_true", help="Hide the paired ladder markers in PNGs")
+    parser.add_argument("--device-mhz", type=int, help="Primary GPU legend frequency")
+    parser.add_argument("--overlay-mhz", type=int, help="Overlay GPU legend frequency")
     parser.add_argument("--comparison", "--historical", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -301,6 +353,10 @@ def main():
         parser.error("NTT and CGBN overlays must use the same GPU model")
     extra = overlay[0] if overlay else cgbn_overlay
     overlay_device = extra["gpu_model"].removeprefix("NVIDIA GeForce ").removesuffix(" GPU") if extra else None
+    if args.device_mhz:
+        device = f"{device} · {args.device_mhz} MHz"
+    if args.overlay_mhz and overlay_device:
+        overlay_device = f"{overlay_device} · {args.overlay_mhz} MHz"
     try:
         prime95_extra = ()
         if args.prime95_stage1:
@@ -310,20 +366,26 @@ def main():
         retests = {device: json.loads(Path(path).read_text(encoding="utf-8-sig")) for device, path in args.cgbn_retest}
         if len(retests) != len(args.cgbn_retest):
             raise ValueError("provide at most one --cgbn-retest per device")
-        points = make_points(ntt, comparison, previous, overlay, cgbn_overlay, prime95_extra, baselines, retests)
+        gmp_ecm = json.loads(args.gmp_ecm_cgbn.read_text(encoding="utf-8-sig")) if args.gmp_ecm_cgbn else None
+        points = make_points(ntt, comparison, previous, overlay, cgbn_overlay, prime95_extra, baselines, retests,
+                             gmp_ecm)
     except (ValueError, OSError) as error:
         parser.error(str(error))
     args.output.mkdir(parents=True, exist_ok=True)
     prefix = "stage1-edwards-ntt-cgbn-prime95" if curve == "ed" else "stage1-ntt-best-cgbn-prime95"
-    ntt_scope = ntt_sample_scope(ntt, previous, overlay)
+    ntt_scope = ntt_sample_scope(ntt, previous, overlay, args.hide_version)
     for suffix in ("log", "linear"):
-        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device, overlay_device, ntt_scope)
+        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device, overlay_device, ntt_scope,
+             args.hide_version, args.hide_ladder_retests)
     with (args.output / "comparison.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(("series", "mersenne_exponent", "arithmetic_bits", "median_s_per_curve_at_1e6",
-                         "min_s_per_curve_at_1e6", "max_s_per_curve_at_1e6", "version"))
+                         "min_s_per_curve_at_1e6", "max_s_per_curve_at_1e6", "version", "timing", "source"))
         for (backend, version), rows in points.items():
-            writer.writerows((backend, *row, version) for row in rows)
+            external = backend.startswith("gmp_ecm_cgbn")
+            timing = gmp_ecm["timing"] if external else ""
+            source = args.gmp_ecm_cgbn.as_posix() if external else ""
+            writer.writerows((backend, *row, version, timing, source) for row in rows)
 
 
 if __name__ == "__main__":
