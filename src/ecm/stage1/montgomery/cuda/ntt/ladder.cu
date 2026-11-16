@@ -105,7 +105,8 @@ struct ProductInputs {
 enum class InverseInput { Products, CombinedSpectrum, Edwards2XY };
 
 template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false,
-         bool WarpInput = false, bool StoreLastRadix4 = false, InverseInput Input = InverseInput::Products>
+         bool WarpInput = false, bool StoreLastRadix4 = false, InverseInput Input = InverseInput::Products,
+         bool Fixed12 = false>
 __global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
 void inverse_product_tile(U* out,
                           // Keep dynamically indexed pointers in grid parameter memory.
@@ -118,7 +119,7 @@ void inverse_product_tile(U* out,
                           const U* twiddles, U scale) {
     const unsigned op = blockIdx.z;
     const size_t curve = size_t(blockIdx.y) * length;
-    const unsigned width = 1u << tile;
+    const unsigned width = Fixed12 ? 4096 : 1u << tile;
     const unsigned tile_start = blockIdx.x * width;
     const size_t start = curve + tile_start;
     const U* left = products.left[op] + start;
@@ -128,7 +129,7 @@ void inverse_product_tile(U* out,
     auto* output = out + size_t(op) * gridDim.y * length + start;
     if constexpr (WarpInput) {
         const unsigned lane = threadIdx.x & 31;
-        auto* destination = tile == 6 ? output : sm;
+        auto* destination = !Fixed12 && tile == 6 ? output : sm;
         for (unsigned i = (threadIdx.x >> 5) * 64 + lane; i < width; i += 2 * blockDim.x) {
             const unsigned pair = i + lane;
             ulonglong2 values;
@@ -151,7 +152,15 @@ void inverse_product_tile(U* out,
             destination[i] = values.x;
             destination[i + 32] = values.y;
         }
-        if (tile > 6) {
+        if constexpr (Fixed12) {
+            static_assert(StoreLastRadix4);
+            __syncthreads();
+            tile_radix4_block_inv(sm, 4096, 6, twiddles);
+            __syncthreads();
+            tile_radix4_block_inv(sm, 4096, 8, twiddles);
+            __syncthreads();
+            tile_radix4_block_inv<true>(sm, 4096, 10, twiddles, output);
+        } else if (tile > 6) {
             __syncthreads();
             ntt_tile_finish_inverse(output, sm, width, 6, tile, twiddles, StoreLastRadix4);
         }
@@ -400,7 +409,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool cache_edwards_carry = s.length == 5120 ? p >= 106497 && curves >= 8 : wide_segments;
     if (naf && cache_edwards_carry)
         defaults |= CachedFusedWeightedCarry;
-    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput | TightCarrySpans;
+    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput | TightCarrySpans | FixedWideInverse;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     const bool pfa = mixed && (requested & PfaRadix5);
@@ -495,6 +504,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
     const bool inverse_warp_input = warp_tile && ctx.t >= 6 && (requested & InverseWarpInput);
     const bool store_last_inverse = ctx.t == 12 || (ctx.t == 10 && curves >= 24);
+    const bool fixed_wide_inverse = naf && options.weighted && inverse_warp_input &&
+        ctx.t == 12 && s.length >= 8192 && curves >= 24 && (requested & FixedWideInverse);
+    if (fixed_wide_inverse) result.dataflow |= FixedWideInverse;
     const auto unsigned_bound = options.weighted && bound == WeightedBound::UnsignedProducts &&
                                 options.tight_weighted_bound ? weighted_unsigned_bound(p, s.length) : std::nullopt;
     const bool frequency_double = naf && inverse_warp_input && (requested & Edwards2XYFrequency) &&
@@ -604,13 +616,18 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         cudaFuncSetAttribute(forward_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
         CK(cudaFuncSetAttribute(forward_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(forward_smem)));
     }
-    const auto configure_tile = [&](auto add, auto difference) {
-        constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
-        const void* kernel = inverse_warp_input ? (const void*)inverse_product_tile<true,add_bb,loose_e,true>
-                           : warp_tile ? (const void*)inverse_product_tile<true,add_bb,loose_e>
-                                       : (const void*)inverse_product_tile<false,add_bb,loose_e>;
+    const auto configure_inverse = [&](const void* kernel) {
         cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
         CK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(inverse_smem)));
+    };
+    const auto fixed_inverse_product =
+        inverse_product_tile<true,false,false,true,true,InverseInput::Products,true>;
+    const auto configure_tile = [&](auto add, auto difference) {
+        constexpr bool add_bb = decltype(add)::value, loose_e = decltype(difference)::value;
+        configure_inverse(fixed_wide_inverse ? (const void*)fixed_inverse_product
+            : inverse_warp_input ? (const void*)inverse_product_tile<true,add_bb,loose_e,true>
+            : warp_tile ? (const void*)inverse_product_tile<true,add_bb,loose_e>
+                        : (const void*)inverse_product_tile<false,add_bb,loose_e>);
     };
     if (!short_inverse) {
         configure_tile(std::false_type{},std::false_type{});
@@ -620,16 +637,16 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     const auto frequency_kernel = [&](auto input) {
         constexpr auto kind = decltype(input)::value;
+        if constexpr (kind == InverseInput::CombinedSpectrum) {
+            if (fixed_wide_inverse) return inverse_product_tile<true,false,false,true,true,kind,true>;
+        }
         return store_last_inverse ? inverse_product_tile<true,false,false,true,true,kind>
                                   : inverse_product_tile<true,false,false,true,false,kind>;
     };
     const auto frequency_inverse = direct_frequency
         ? frequency_kernel(std::integral_constant<InverseInput, InverseInput::Edwards2XY>{})
         : frequency_kernel(std::integral_constant<InverseInput, InverseInput::CombinedSpectrum>{});
-    if (frequency_double) {
-        cudaFuncSetAttribute(frequency_inverse, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-        CK(cudaFuncSetAttribute(frequency_inverse, cudaFuncAttributeMaxDynamicSharedMemorySize, int(inverse_smem)));
-    }
+    if (frequency_double) configure_inverse((const void*)frequency_inverse);
     ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
@@ -805,8 +822,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 auto kernel = kernels[ctx.t - 1];
                 kernel<<<groups,inverse_threads,0,q>>>(inverse.data,products,curves,ctx.tblI,product_scale);
             } else if (inverse_warp_input) {
-                // Keep the original tile kernel for the smaller batches.
-                const auto kernel = store_last_inverse ? inverse_product_tile<true,add_bb,loose_e,true,true>
+                const auto kernel = fixed_wide_inverse ? fixed_inverse_product
+                    : store_last_inverse ? inverse_product_tile<true,add_bb,loose_e,true,true>
                                                        : inverse_product_tile<true,add_bb,loose_e,true>;
                 kernel<<<tiles,inverse_threads,inverse_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);

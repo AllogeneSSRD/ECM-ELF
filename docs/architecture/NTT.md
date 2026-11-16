@@ -82,6 +82,8 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 
 128、256 和 512 点的单 tile 计划在逆变换读入时直接计算频域坐标。每个 CTA 按输出坐标读取原始 $X,Y,Z$ 频谱的相邻系数并计算所需的乘积，即刻进入 warp 逆变换。四个坐标合计每个频点使用 8 次域乘，省下每列一次频域组合 kernel 和四路中间频谱的全局写回。其余形状用独立组合 kernel，每个频点的 4 次域乘由四路输出共用。两条路径遵守同一个 $4U<q$ 上界。`stage1_ntt_plan.dataflow` 的 `0x10000` 位表示逆变换直接计算坐标。[组合内核](../../kernels/cuda/stage1_ntt_dataflow.cuh) · [逆变换与调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#逆变换读入时组合倍点频谱)
 
+原生 Edwards 的加权计划在变换长度至少 8192、采用 12 层 warp 输入 tile 且至少 24 条曲线时，使用固定的宽逆向 tile。每个 warp 先完成六层，随后三组 radix-4 从第 6、8、10 层进入，最后一组直接写出。蝶形共享索引与旋转因子偏移使用编译期常量，仍用 512 线程、32 KiB 共享内存和原有频谱布局。频域组合的输出与普通逐点乘积共用这一调度。`stage1_ntt_plan.dataflow` 的 `0x40000` 位表示启用。[双卡实测](../performance/STAGE1_MERSENNE_NTT.md#12-层固定逆向-tile)
+
 ## Stage1 radix-5 PFA
 
 加权 Stage1 在 \(L=5W\)、\(W=2^k\) 的变换上使用 PFA 分解。选 \(r\in\{1,2,3,4\}\) 使 \(1+rW\equiv0\pmod 5\)，用 \(n=(1+rW)i+Wj\bmod L\) 表示系数序号。两个因子互素，五点 DFT 和 \(W\) 点 NTT 因此可以独立执行。频点按相同置换排列，逐点乘加保持原有卷积含义。

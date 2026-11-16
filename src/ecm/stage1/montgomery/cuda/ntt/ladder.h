@@ -32,9 +32,10 @@ enum Dataflow : unsigned {
     SegmentedCarry = 32, DeferredPack = 64, PfaRadix5 = 128, CoalescedRadix5 = 256,
     InverseWarpInput = 512, ForwardTileInput = 1024, ForwardTileCompact = 2048,
     FusedWeightedCarry = 4096, ShortInverseTile = 8192, CachedFusedWeightedCarry = 16384,
-    Edwards2XYFrequency = 32768, Edwards2XYInverseInput = 65536, TightCarrySpans = 131072
+    Edwards2XYFrequency = 32768, Edwards2XYInverseInput = 65536, TightCarrySpans = 131072,
+    FixedWideInverse = 262144
 };
-inline constexpr unsigned experimental_dataflow_limit = (TightCarrySpans << 1) - 1;
+inline constexpr unsigned experimental_dataflow_limit = (FixedWideInverse << 1) - 1;
 
 struct Control {
     unsigned resume = 0;
