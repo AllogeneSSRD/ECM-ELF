@@ -84,6 +84,8 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 
 原生 Edwards 的加权计划在变换长度至少 8192、采用 12 层 warp 输入 tile 且至少 24 条曲线时，使用固定的宽逆向 tile。每个 warp 先完成六层，随后三组 radix-4 从第 6、8、10 层进入，最后一组直接写出。蝶形共享索引与旋转因子偏移使用编译期常量，仍用 512 线程、32 KiB 共享内存和原有频谱布局。频域组合的输出与普通逐点乘积共用这一调度。`stage1_ntt_plan.dataflow` 的 `0x40000` 位表示启用。[双卡实测](../performance/STAGE1_MERSENNE_NTT.md#12-层固定逆向-tile)
 
+原生 Edwards 的加权计划在变换长度至少 5120、采用独立的 10 层 warp 前向 tile 且至少 24 条曲线时，将 tile 大小和前向层数固定在编译期。第一组 radix-4 从全局输入直接读入，第二组从共享内存读入，末六层由 warp 完成。频谱排列与通用 tile 相同。日志 `stage1_ntt_plan.dataflow` 的 `0x80000` 位表示启用。[前向实测](../performance/STAGE1_MERSENNE_NTT.md#10-层固定前向-tile)
+
 ## Stage1 radix-5 PFA
 
 加权 Stage1 在 \(L=5W\)、\(W=2^k\) 的变换上使用 PFA 分解。选 \(r\in\{1,2,3,4\}\) 使 \(1+rW\equiv0\pmod 5\)，用 \(n=(1+rW)i+Wj\bmod L\) 表示系数序号。两个因子互素，五点 DFT 和 \(W\) 点 NTT 因此可以独立执行。频点按相同置换排列，逐点乘加保持原有卷积含义。

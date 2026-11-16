@@ -409,7 +409,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool cache_edwards_carry = s.length == 5120 ? p >= 106497 && curves >= 8 : wide_segments;
     if (naf && cache_edwards_carry)
         defaults |= CachedFusedWeightedCarry;
-    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput | TightCarrySpans | FixedWideInverse;
+    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput | TightCarrySpans |
+                         FixedWideInverse | FixedWideForward;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     const bool pfa = mixed && (requested & PfaRadix5);
@@ -539,6 +540,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool packed_batch = packed && curves >= 24;
     const bool forward_input = (requested & ForwardTileInput) || (default_forward &&
         ((!packed && ctx.t >= 9) || (packed_batch && (ctx.t == 1 || (warp_tile && ctx.t <= 7)))));
+    const bool fixed_wide_forward = naf && options.weighted && !packed && forward_input && warp_tile &&
+        ctx.t == 10 && s.length >= 5120 && curves >= 24 && (requested & FixedWideForward);
+    if (fixed_wide_forward) result.dataflow |= FixedWideForward;
     const bool compact_pack = packed_batch && ((ctx.t >= 2 && ctx.t <= 4) || (ctx.t >= 8 && ctx.t <= 10));
     const bool compact_forward = ((forward_input || packed) && (requested & ForwardTileCompact)) ||
         (default_forward && compact_pack);
@@ -607,7 +611,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     };
     const auto packed_kernel = options.weighted ? select_packed_kernel(std::true_type{})
                                                 : select_packed_kernel(std::false_type{});
-    const auto forward_kernel = warp_tile ? stage1_ntt_forward_tile<true> : stage1_ntt_forward_tile<false>;
+    const auto forward_kernel = fixed_wide_forward ? stage1_ntt_forward_tile<true,10>
+        : warp_tile ? stage1_ntt_forward_tile<true> : stage1_ntt_forward_tile<false>;
     if (packed) {
         cudaFuncSetAttribute(packed_kernel, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
         CK(cudaFuncSetAttribute(packed_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, int(forward_smem)));

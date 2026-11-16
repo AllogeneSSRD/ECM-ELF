@@ -62,11 +62,12 @@ void stage1_ntt_packed_forward(const uint32_t* state, unsigned long long* out,
     ntt_tile_pass<false, WarpTail>(out + size_t(blockIdx.y) * s.length, sm, s.length, tile, twiddles);
 }
 
-template<bool WarpTail, bool InPlace, class Read>
+template<bool WarpTail, bool InPlace, int FixedTile = 0, class Read>
 __device__ __forceinline__ void stage1_ntt_forward_from(Read read, unsigned long long* out,
-    unsigned long long* sm, int tile, const unsigned long long* twiddles)
+    unsigned long long* sm, int runtime_tile, const unsigned long long* twiddles)
 {
     using U = unsigned long long;
+    const int tile = FixedTile ? FixedTile : runtime_tile;
     const unsigned lane = threadIdx.x;
     const unsigned size = 1u << tile;
     if (tile == 1) {
@@ -118,14 +119,14 @@ __device__ __forceinline__ void stage1_ntt_forward_from(Read read, unsigned long
     ntt_tile_finish_forward<WarpTail>(out, sm, size, tile - 3, tile, twiddles);
 }
 
-template<bool WarpTail>
+template<bool WarpTail, int FixedTile = 0>
 __global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
 void stage1_ntt_forward_tile(unsigned long long* data, size_t stride, int tile,
     const unsigned long long* twiddles)
 {
     extern __shared__ unsigned long long sm[];
-    auto* values = data + size_t(blockIdx.y) * stride + (size_t(blockIdx.x) << tile);
-    stage1_ntt_forward_from<WarpTail,true>(
+    auto* values = data + size_t(blockIdx.y) * stride + (size_t(blockIdx.x) << (FixedTile ? FixedTile : tile));
+    stage1_ntt_forward_from<WarpTail,true,FixedTile>(
         [=](unsigned j) { return values[j]; }, values, sm, tile, twiddles);
 }
 

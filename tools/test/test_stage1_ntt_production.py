@@ -23,6 +23,7 @@ EDWARDS_2XY_FREQUENCY = 1 << 15
 EDWARDS_2XY_INVERSE_INPUT = 1 << 16
 TIGHT_CARRY_SPANS = 1 << 17
 FIXED_WIDE_INVERSE = 1 << 18
+FIXED_WIDE_FORWARD = 1 << 19
 
 
 def ntt_executions(log):
@@ -211,26 +212,29 @@ def main():
 
         p, b1, sigma = 19937, 20, 26
         batch_points = {}
-        for curves, graph_bits in ((23, 16), (24, 16), (24, 0)):
-            work, cmd = fixture(f"edwards_wide_inverse_{curves}_{graph_bits}", model="ed",
-                                extra='naf_w = 2\nntt_convolution = "weighted"\n'
-                                      f'ntt_length = 8192\nntt_tile = 12\nntt_window = {graph_bits}\n')
-            call, data = direct(work, cmd, p, b1, sigma, curves)
-            log = run(work, call, text=data)
-            [execution] = ntt_executions(log)
-            assert execution["ntt_length"] == "8192" and int(execution["ntt_graph_bits"]) == graph_bits, log
-            [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
-            assert bool(int(dataflow) & FIXED_WIDE_INVERSE) == (curves == 24), log
-            points = saved_points(work / "out.save", p, b1, True)
-            assert set(points) == set(range(sigma, sigma + curves))
-            batch_points[curves, graph_bits] = points
+        for length, tile, dataflow_bit in ((8192, 12, FIXED_WIDE_INVERSE), (5120, 10, FIXED_WIDE_FORWARD)):
+            for curves, graph_bits in ((23, 16), (24, 16), (24, 0)):
+                work, cmd = fixture(f"edwards_wide_tile_{tile}_{curves}_{graph_bits}", model="ed",
+                                    extra='naf_w = 2\nntt_convolution = "weighted"\n'
+                                          f'ntt_length = {length}\nntt_tile = {tile}\nntt_window = {graph_bits}\n')
+                call, data = direct(work, cmd, p, b1, sigma, curves)
+                log = run(work, call, text=data)
+                [execution] = ntt_executions(log)
+                assert (int(execution["ntt_length"]), int(execution["ntt_tile_bits"]),
+                        int(execution["ntt_graph_bits"])) == (length, tile, graph_bits), log
+                [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+                assert bool(int(dataflow) & dataflow_bit) == (curves == 24), log
+                points = saved_points(work / "out.save", p, b1, True)
+                assert set(points) == set(range(sigma, sigma + curves))
+                expected = batch_points.setdefault((curves, graph_bits), points)
+                assert points == expected
         assert batch_points[24, 16] == batch_points[24, 0]
         assert batch_points[23, 16] == {s: batch_points[24, 16][s] for s in range(sigma, sigma + 23)}
         n = (1 << p) - 1
         last_sigma = sigma + 23
         _, x, z = edwards_stage1(n, last_sigma, b1)
         assert batch_points[24, 16][last_sigma] == x * pow(z, -1, n) % n
-        print("PASS Edwards fixed 12-layer inverse, 23/24-curve dispatch and Graph/direct", flush=True)
+        print("PASS Edwards fixed wide forward/inverse, 23/24-curve dispatch and Graph/direct", flush=True)
 
         default_points = None
         for mode, flags, length, upper in (
