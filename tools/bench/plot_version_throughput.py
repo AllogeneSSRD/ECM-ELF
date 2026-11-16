@@ -15,7 +15,8 @@ def version_key(version):
     return (0, *map(int, version.split("."))) if version else (1,)
 
 
-def plot_version_panels(samples, path, *, title, ylabel, colors, hatch, hatch_label, reference_label, note):
+def plot_version_panels(samples, path, *, title, ylabel, colors, hatch, hatch_label, reference_label, note,
+                        stagger_higher_labels=False):
     max_versions = max(len({row.version for row in samples if row.exponent == p}) for p in WIDTHS)
     dense = max_versions > 10
     with plt.style.context("seaborn-v0_8-whitegrid"):
@@ -41,8 +42,15 @@ def plot_version_panels(samples, path, *, title, ylabel, colors, hatch, hatch_la
                     bars = ax.bar(x + offset, row.throughput, width=.21, color="white" if hatched else color,
                                   edgecolor=color, hatch="////" if hatched else None, zorder=3)
                     digits = 2 if row.throughput >= 10 else (4 if row.throughput < .1 else 3)
-                    near_previous = i and abs(row.throughput - group[i - 1].throughput) < .05 * peak
-                    stagger = (len(versions) > 20 and x % 2 == 1) or near_previous
+                    if stagger_higher_labels:
+                        near_neighbor = any(
+                            (row.throughput, i) > (group[j].throughput, j)
+                            and row.throughput - group[j].throughput < .05 * peak
+                            for j in (i - 1, i + 1) if 0 <= j < len(group)
+                        )
+                    else:
+                        near_neighbor = i and abs(row.throughput - group[i - 1].throughput) < .05 * peak
+                    stagger = (len(versions) > 20 and x % 2 == 1) or near_neighbor
                     ax.bar_label(bars, labels=[f"{row.throughput:.{digits}f}"], padding=12 if stagger else 4,
                                  fontsize=7 if len(versions) > 14 else 8, color="#242831", zorder=5)
             ax.set_xticks(range(len(versions)), [v or PRIME95 for v in versions], fontsize=9)

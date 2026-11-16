@@ -1,10 +1,16 @@
 #include "ecm/stage1/scalar.h"
 #include "ecm/stage1/edwards/cpu/ecm_edwards_cpu.h"
+#include "../../src/ecm/curve/edwards.h"
 #include "../../src/ecm/stage1/edwards/cuda/edwards_slice.h"
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <future>
+#include <random>
+#include <string>
 #include <stdexcept>
+#include <vector>
 
 static unsigned cases=0,negative=0,cross_limb=0;
 static void slices() {
@@ -101,10 +107,119 @@ static void cpu_cache() {
     mpz_clears(scalar, next_scalar, n, x, z, factor, reference_x, reference_z, reference_factor, nullptr);
     std::printf("PASS CPU NAF shared identity, key changes, eviction and packed/dense endpoints\n");
 }
+
+static void check_mersenne_fold() {
+    using ecm_edwards::Integer;
+    for (unsigned bits : {5, 31, 61, 64, 65, 127, 4001, 65521, 262139}) {
+        Integer modulus, input, actual, expected;
+        mpz_setbit(modulus.v, bits);
+        mpz_sub_ui(modulus.v, modulus.v, 1);
+        ecm_edwards::MersenneConstruction worker(modulus.v);
+        const auto check = [&] {
+            for (int sign : {1, -1}) {
+                mpz_mul_si(actual.v, input.v, sign);
+                mpz_mod(expected.v, actual.v, modulus.v);
+                worker.reduce(actual.v);
+                if (mpz_cmp(actual.v, expected.v))
+                    throw std::runtime_error("Mersenne construction reduction differs at width " +
+                                             std::to_string(bits));
+            }
+        };
+        check();
+        mpz_sub_ui(input.v, modulus.v, 1);
+        check();
+        mpz_set(input.v, modulus.v);
+        check();
+        mpz_add_ui(input.v, modulus.v, 1);
+        check();
+        mpz_mul(input.v, modulus.v, modulus.v);
+        check();
+        mpz_sub_ui(input.v, input.v, 1);
+        check();
+        mpz_set_ui(input.v, 0);
+        mpz_setbit(input.v, 3 * bits + 17);
+        mpz_sub_ui(input.v, input.v, 1);
+        check();
+    }
+}
+
+struct ConstructionOutput {
+    ecm_edwards::Integer d, x, y, a24, factor;
+};
+
+static std::array<unsigned, 3> compare_construction(mpz_srcptr n, const std::vector<uint64_t>& sigmas) {
+    using ecm_edwards::Setup;
+    ecm_edwards::MersenneConstruction worker(n);
+    ConstructionOutput generic, optimized;
+    std::array<unsigned, 3> counts{};
+    for (const uint64_t sigma : sigmas) {
+        const auto expected = ecm_edwards::construct(generic.d.v, generic.x.v, generic.y.v, generic.a24.v,
+                                                     generic.factor.v, sigma, n);
+        const auto actual = ecm_edwards::construct(optimized.d.v, optimized.x.v, optimized.y.v,
+                                                   optimized.a24.v, optimized.factor.v, sigma, n, &worker);
+        if (actual != expected || mpz_cmp(optimized.factor.v, generic.factor.v) ||
+            (actual == Setup::Ready &&
+             (mpz_cmp(optimized.d.v, generic.d.v) || mpz_cmp(optimized.x.v, generic.x.v) ||
+              mpz_cmp(optimized.y.v, generic.y.v) || mpz_cmp(optimized.a24.v, generic.a24.v)))) {
+            throw std::runtime_error("Mersenne curve or factor differs at width " +
+                                     std::to_string(mpz_sizeinbase(n, 2)) + ", sigma " + std::to_string(sigma));
+        }
+        if (actual == Setup::Factor &&
+            (mpz_cmp_ui(optimized.factor.v, 1) <= 0 || mpz_cmp(optimized.factor.v, n) >= 0 ||
+             !mpz_divisible_p(n, optimized.factor.v)))
+            throw std::runtime_error("Mersenne construction reported an invalid factor");
+        ++counts[static_cast<unsigned>(actual)];
+    }
+    return counts;
+}
+
+static void check_mersenne_construction() {
+    check_mersenne_fold();
+    std::vector<uint64_t> sigmas{UINT64_MAX, UINT64_MAX - 1, 0, UINT64_MAX - 1, uint64_t(1) << 63,
+                                (uint64_t(1) << 63) - 1, uint64_t(1) << 63, 20260922, 20260922, 1};
+    std::mt19937_64 rng(16319);
+    for (unsigned i = 0; i < 32; ++i)
+        sigmas.push_back(rng());
+    for (uint64_t sigma = 20260896; sigma <= 20261152; ++sigma)
+        sigmas.push_back(sigma);
+    for (uint64_t sigma = 1; sigma < 128; ++sigma)
+        sigmas.push_back(sigma);
+
+    std::array<unsigned, 3> counts{};
+    for (unsigned bits : {5, 6, 8, 11, 15, 21, 25, 61}) {
+        ecm_edwards::Integer modulus;
+        mpz_setbit(modulus.v, bits);
+        mpz_sub_ui(modulus.v, modulus.v, 1);
+        const auto result = compare_construction(modulus.v, sigmas);
+        for (size_t i = 0; i < counts.size(); ++i)
+            counts[i] += result[i];
+    }
+    if (!counts[0] || !counts[1] || !counts[2])
+        throw std::runtime_error("missing ready, factor or degenerate construction coverage");
+
+    ecm_edwards::Integer modulus;
+    mpz_setbit(modulus.v, 127);
+    mpz_sub_ui(modulus.v, modulus.v, 1);
+    auto reverse = sigmas;
+    std::reverse(reverse.begin(), reverse.end());
+    auto first = std::async(std::launch::async, [&] { return compare_construction(modulus.v, sigmas); });
+    auto second = std::async(std::launch::async, [&] { return compare_construction(modulus.v, reverse); });
+    if (first.get() != second.get())
+        throw std::runtime_error("independent construction workers changed lane classification");
+
+    mpz_set_ui(modulus.v, 0);
+    mpz_setbit(modulus.v, 65521);
+    mpz_sub_ui(modulus.v, modulus.v, 1);
+    compare_construction(modulus.v, {20260922, 20260923, 20260924, UINT64_MAX, UINT64_MAX - 1, 0, 20260922});
+    std::printf("PASS Mersenne Edwards construction and signed fold: ready=%u factors=%u degenerate=%u\n",
+                counts[0], counts[1], counts[2]);
+}
+
 int main() {
     try {
         slices();
         cpu_cache();
+        check_mersenne_construction();
         mpz_t scalar;mpz_init(scalar);
         for(unsigned k=1;k<4096;++k){mpz_set_ui(scalar,k);check(scalar);}
         for(unsigned bits: {31,32,33,63,64,65,127,128,129,1023,1024,1025,17408}) {

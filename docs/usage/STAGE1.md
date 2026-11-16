@@ -80,7 +80,9 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 
 在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 启用 NTT。默认后端为 `"cgbn"`，也可填 `1`。字符串不区分大小写，CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`），每批 1–128 条。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
 
-Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。完整模数达到 32768 位时，原生路径在 GPU 构造奇数倍点字典并归一化。显存不足时，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
+Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机，保留曲线和窗口。若驻留频谱也放不下，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
+
+两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `stage1_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)。
 
 ```toml
 config_version = 3
@@ -104,6 +106,8 @@ ntt.profile = 0
 加权卷积支持的混合长度为 2560、5120、10240 和 20480。前三档可在相应位宽缩短变换，20480 保留为显式 `ntt.length`。显式 `ntt.tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
 
 `[stage1]` 下的 `ntt.tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，如果卷积和长度均为自动，程序优先采用只有通过收紧界才可使用的短加权计划，日志来源为 `edwards_unsigned_bound`，跳过这次 x-only 调优表查询。其他自动计划继续用共享表。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt.bits_per_word` 限为 25 或把 `ntt.tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
+
+原生 Edwards 加权计划通过四倍系数界检查时，可在频域合并 2XY 倍点的第一层。启用后，`ntt_u` 显示四倍乘积系数上界。超过此界时，原长度仍可单独计算四个乘积。`ntt.tight_weighted_bound = false` 同时关闭频域融合。 [2XY 融合与准入](../architecture/NTT.md#edwards-2xy-第一层频域融合)
 
 `[shared] tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，CUDA 两阶段共用此文件。可在 `[worker.N]` 用 `shared.tune_file` 为该 worker 的两个阶段一并覆盖。如果还在使用旧 Stage1 JSON 路径，改为共享 TOML 路径后重新调优。`ntt.memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 收紧上限。
 

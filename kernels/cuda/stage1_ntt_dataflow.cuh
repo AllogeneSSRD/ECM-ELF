@@ -3,6 +3,21 @@
 #include "../../src/ecm/cuda/arithmetic/goldilocks/goldilocks.cuh"
 #include "../../src/ecm/cuda/ntt/device/tile_pass.cuh"
 
+template<unsigned Count>
+struct Stage1DictionaryCopies {
+    uint32_t* dst[Count];
+    const uint32_t* src[Count];
+};
+
+template<unsigned Count>
+__global__ void stage1_ntt_copy_dictionary_planes(Stage1DictionaryCopies<Count> planes, size_t words) {
+    const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= words) return;
+    #pragma unroll
+    for (unsigned plane = 0; plane < Count; ++plane)
+        planes.dst[plane][i] = planes.src[plane][i];
+}
+
 template<bool Weighted, bool Modulus = false, class Shape, class Digit, class Read>
 __device__ __forceinline__ unsigned long long stage1_ntt_pack_digit_from(
     Read read, Shape s, const Digit* weighted, unsigned j)
@@ -133,6 +148,32 @@ __device__ __forceinline__ unsigned long long stage1_ntt_loose_difference(
     unsigned long long aa, unsigned long long bb, unsigned long long modulus)
 {
     return gl_add_dev(aa, gl_sub_dev(modulus, bb));
+}
+
+__global__ void stage1_ntt_square_spectrum(unsigned long long* values, unsigned length)
+{
+    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < length) values[i] = gl_mul(values[i], values[i]);
+}
+
+__global__ void stage1_ntt_edwards_double_spectra(unsigned long long* spectra,
+    const unsigned long long* bias, unsigned length)
+{
+    const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= length) return;
+    const size_t plane = size_t(gridDim.y) * length;
+    auto* x = spectra + size_t(blockIdx.y) * length + i;
+    const auto a = x[0], b = x[plane], c = x[2 * plane];
+    const auto aa = gl_mul(a, a), bb = gl_mul(b, b), cc = gl_mul(c, c);
+    const auto xy = gl_mul(a, b), g = gl_add_dev(aa, bb);
+    const auto offset = bias[i];
+    // Bias each difference with a multiple of the Mersenne modulus squared.
+    // The host checks the resulting nonnegative coefficients fit one field word.
+    const auto negative_cc = gl_sub_dev(offset, cc);
+    x[0] = gl_add_dev(xy, xy);                                      // E
+    x[plane] = gl_add_dev(g, gl_add_dev(negative_cc, negative_cc));  // F
+    x[2 * plane] = g;                                               // G
+    x[3 * plane] = gl_add_dev(aa, gl_sub_dev(offset, bb));            // H
 }
 
 // The inverse warp consumes adjacent even/odd coefficients per lane. All

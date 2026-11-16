@@ -281,7 +281,7 @@ cpu_threads = 0
 
 v1 旧键 `stage1.stage1_threads`
 
-设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。
+设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设置。
 
 ### cuda_low_cpu
 

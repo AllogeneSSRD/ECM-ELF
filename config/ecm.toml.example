@@ -257,10 +257,10 @@ target = "gpu"  # string: [cpu|gpu]
 # ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。
 
 # cpu_threads = 0  # u32: <x:Z,0..2^32-1>
-# CPU Stage1 thread count; 0 selects automatically. Applies only to CPU arithmetic and does not set
-# CUDA threads per block or threads per integer.
-# 设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使
-# 用的线程数。
+# Host worker count for CPU Stage1 and for curve construction in CUDA Edwards NTT Stage1. 0 selects
+# automatically. CUDA launch geometry is controlled separately.
+# 设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设
+# 置。
 
 # cpu_affinity = ""  # string: [none|auto|<n>,...|<a>-<b>]
 # CPU affinity list/ranges, e.g. 0-7,10. Indices must be 0..1023, with at most 1024 entries. Empty,

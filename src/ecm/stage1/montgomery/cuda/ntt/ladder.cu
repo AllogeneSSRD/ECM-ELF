@@ -103,7 +103,7 @@ struct ProductInputs {
 };
 
 template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false,
-         bool WarpInput = false, bool StoreLastRadix4 = false>
+         bool WarpInput = false, bool StoreLastRadix4 = false, bool Precomputed = false>
 __global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
 void inverse_product_tile(U* out,
                           // Keep dynamically indexed pointers in grid parameter memory.
@@ -129,8 +129,9 @@ void inverse_product_tile(U* out,
         auto* destination = tile == 6 ? output : sm;
         for (unsigned i = (threadIdx.x >> 5) * 64 + lane; i < width; i += 2 * blockDim.x) {
             const unsigned pair = i + lane;
-            auto values = stage1_ntt_product_pair<MultiplyAdd, Loose>(products, left + pair, right + pair,
-                start + pair, tile_start + pair, last, scale);
+            auto values = Precomputed ? *reinterpret_cast<const ulonglong2*>(left + pair)
+                : stage1_ntt_product_pair<MultiplyAdd, Loose>(products, left + pair, right + pair,
+                    start + pair, tile_start + pair, last, scale);
             tile_warp6_pair<true>(values.x, values.y, twiddles);
             destination[i] = values.x;
             destination[i + 32] = values.y;
@@ -316,6 +317,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                       const std::vector<uint32_t>& scalar_words, unsigned count,
                       const ecm_stage1::Stage1NttOptions& options, const Control* control,
                       unsigned samples, const EdwardsNaf* naf = nullptr) {
+    const auto prep = now_s();
     if (p < 32 || p > 262144 || !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
         !samples || samples > 20 || count > UINT32_MAX - 64 ||
         (!naf && scalar_words.size() < (size_t(count) + 31) / 32) ||
@@ -359,7 +361,6 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (options.tile > unsigned(log) || options.tile > 12 ||
         options.outer_max > 4 || options.profile > 2)
         throw std::invalid_argument("NTT tile, outer width or profile is out of range for this length");
-    const auto prep = now_s();
     CK(cudaSetDevice(device));
     CK(cudaFree(nullptr)); // Establish the CUDA context before measuring the worker's delta.
     size_t free_before = 0, total = 0;
@@ -384,8 +385,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool cache_edwards_carry = s.length == 5120 ? p >= 106497 && curves >= 8 : wide_segments;
     if (naf && cache_edwards_carry)
         defaults |= CachedFusedWeightedCarry;
+    if (naf) defaults |= Edwards2XYFrequency;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
-    if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute | DeferredPack);
+    if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     const bool pfa = mixed && (requested & PfaRadix5);
     const bool coalesced = pfa && (requested & CoalescedRadix5);
     // n = (1 + rotation_step * width) * i + width * j (mod length).
@@ -427,11 +429,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const auto* resolved = control ? &overrides : nullptr;
     fuse_describe(ctx,width,log,omega2,inv2,true,resolved);
     const size_t dictionary_bytes = 4ull * sizeof(U) * curves * s.length * entries;
-    const bool gpu_dictionary = naf && naf->build_dictionary;
+    bool gpu_dictionary = naf && naf->build_dictionary;
     const size_t dictionary_workspace = gpu_dictionary ? 4ull * entries * stride * sizeof(uint32_t) : 0;
-    if (naf && naf->dictionary_budget && dictionary_bytes + dictionary_workspace > naf->dictionary_budget)
-        throw BudgetError("Edwards NTT dictionary exceeds its VRAM budget");
-    result.owned_bytes = (naf ? 9 : 11) * sizeof(U) * curves * s.length + dictionary_bytes + dictionary_workspace +
+    result.owned_bytes = (naf ? 9 : 11) * sizeof(U) * curves * s.length + dictionary_bytes +
         slots * stride * sizeof(uint32_t) +
         (std::max(size_t(1), scalar_words.size()) + 1) * sizeof(uint32_t) +
         (fuse_planned_base_words(ctx) + fuse_planned_table_words(ctx)) * sizeof(U);
@@ -439,6 +439,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (options.weighted)
         result.owned_bytes += size_t(s.length) * (sizeof(U) + sizeof(WeightedDigit)) +
                               size_t(s.words) * sizeof(WeightedLimb);
+    if (gpu_dictionary && naf->host_fallback &&
+        ((naf->dictionary_budget && dictionary_bytes + dictionary_workspace > naf->dictionary_budget) ||
+         result.owned_bytes + dictionary_workspace > result.budget_bytes)) {
+        gpu_dictionary = false;
+    }
+    result.dictionary_built_on_gpu = gpu_dictionary;
+    result.dictionary_spectra_bytes = dictionary_bytes;
+    result.dictionary_workspace_bytes = gpu_dictionary ? dictionary_workspace : 0;
+    if (naf && naf->dictionary_budget && dictionary_bytes + result.dictionary_workspace_bytes > naf->dictionary_budget)
+        throw BudgetError("Edwards NTT dictionary exceeds its VRAM budget");
+    result.owned_bytes += result.dictionary_workspace_bytes;
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
     const unsigned segment_count = stage1_segment_count(s.words);
@@ -468,6 +479,16 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
     const bool inverse_warp_input = warp_tile && ctx.t >= 6 && (requested & InverseWarpInput);
+    const bool store_last_inverse = ctx.t == 12 || (ctx.t == 10 && curves >= 24);
+    const auto unsigned_bound = options.weighted && bound == WeightedBound::UnsignedProducts &&
+                                options.tight_weighted_bound ? weighted_unsigned_bound(p, s.length) : std::nullopt;
+    const bool frequency_double = naf && inverse_warp_input && (requested & Edwards2XYFrequency) &&
+        unsigned_bound && *unsigned_bound <= (GL_P - 1) / 4 &&
+        modulus_bytes <= result.budget_bytes - result.owned_bytes;
+    if (frequency_double) {
+        result.owned_bytes += modulus_bytes;
+        result.dataflow |= Edwards2XYFrequency;
+    }
     // The shared tile still wins for isolated 16-point and linear 32-point work.
     const bool short_shape = curves > 1 || s.length <= 8 ||
                              (s.length == 32 && options.weighted) ||
@@ -523,8 +544,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   warp_tile || short_inverse, profile.source, options.weighted, {}, {}, result.dataflow};
         plan.field_modulus = GL_P;
-        if (options.weighted && bound == WeightedBound::UnsignedProducts && options.tight_weighted_bound)
-            plan.coefficient_bound = weighted_unsigned_bound(p, s.length).value();
+        if (unsigned_bound)
+            plan.coefficient_bound = (frequency_double ? 4 : 1) * *unsigned_bound;
         else
             plan.coefficient_bound = (loose ? 2 : 1) * terms * digit_max * digit_max + (fma ? digit_max : 0);
         if (mixed) plan.forward = "r5";
@@ -568,6 +589,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         else if (loose) configure_tile(std::false_type{},std::true_type{});
         else if (fma) configure_tile(std::true_type{},std::false_type{});
     }
+    const auto frequency_inverse = store_last_inverse ? inverse_product_tile<true,false,false,true,true,true>
+                                                     : inverse_product_tile<true,false,false,true,false,true>;
+    if (frequency_double) {
+        cudaFuncSetAttribute(frequency_inverse, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+        CK(cudaFuncSetAttribute(frequency_inverse, cudaFuncAttributeMaxDynamicSharedMemorySize, int(inverse_smem)));
+    }
     ntt_fuse_cache_tables(ctx,omega2,inv2);
     CK(cudaDeviceSynchronize()); // table creation uses the legacy stream
     Buffer<uint32_t> state(slots*stride);
@@ -575,7 +602,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     Buffer<unsigned> start(1);
     Buffer<uint32_t> scalar(std::max(size_t(1), scalar_words.size()));
     Buffer<U> freq(size_t(5)*curves*s.length), fixed(size_t(naf ? 4 * entries : 2)*curves*s.length);
-    Buffer<U> modulus(loose ? s.length : 0);
+    Buffer<U> modulus(loose || frequency_double ? s.length : 0);
     Buffer<U> inverse(size_t(4)*curves*s.length);
     const size_t mixed_table_words = mixed && !pfa ? size_t(4) * width : 0;
     Buffer<U> mixed_fwd(mixed_table_words), mixed_inv(mixed_table_words);
@@ -666,7 +693,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (!naf) {
         forward_inputs(fixed.data, 2, {{A24,Base}});
     }
-    if (loose) {
+    if (loose || frequency_double) {
         Shape one = s;
         one.curves = 1;
         if (pfa)
@@ -679,10 +706,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             pack<true,false,true><<<(width+threads-1)/threads,threads,0,q>>>(nullptr,modulus.data,one,{},digit_table.data);
         CK(cudaGetLastError());
         forward_spectra(modulus.data,planes);
+        if (frequency_double) {
+            stage1_ntt_square_spectrum<<<(s.length+threads-1)/threads,threads,0,q>>>(modulus.data,s.length);
+            CK(cudaGetLastError());
+        }
     }
     CK(cudaStreamSynchronize(q));
     const auto finish_carries = [&](unsigned count, Indices out, Cursor cursor,
                                     bool route, unsigned pending) {
+        if (pending == (1u << count) - 1) return;
         if (route)
             finish_segment_carries<true><<<segment_grid(count),stage1_carry_segment,0,q>>>(
                 state.data,carry_headers.data,s,out,cursor,pending);
@@ -690,7 +722,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             finish_segment_carries<false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
                 state.data,carry_headers.data,s,out,cursor,pending);
     };
-    const auto add_inputs = [&](auto select, unsigned count, Sums ops, Cursor cursor) {
+    const auto add_inputs = [&](auto select, unsigned count, Sums ops, Cursor cursor, unsigned pending = 0) {
         constexpr bool select_coords = decltype(select)::value;
         if (!segmented) {
             combine<false,select_coords><<<count*curves,threads,0,q>>>(state.data,nullptr,s,ops,cursor);
@@ -698,12 +730,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         }
         segment_limb_sums<false,select_coords,false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
             state.data,nullptr,carry_headers.data,s,ops,cursor);
-        if (!deferred) finish_carries(count,ops.out,{},false,0);
+        finish_carries(count,ops.out,{},false,pending);
     };
     auto mul=[&](unsigned inputs, unsigned outputs, Indices in, Indices a, Indices b, Indices out,
                  bool build_e = false, bool add_bb = false, Cursor cursor = {},
-                 unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0) {
+                 unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0,
+                 bool combine_double = false) {
         forward_inputs(freq.data, inputs, in, pending_inputs);
+        if (combine_double)
+            stage1_ntt_edwards_double_spectra<<<grid(1),threads,0,q>>>(freq.data,modulus.data,s.length);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
             return id < 5 ? freq.data + id * plane : fixed.data + (fixed_offset + id - 5) * plane;
@@ -735,9 +770,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 kernel<<<groups,inverse_threads,0,q>>>(inverse.data,products,curves,ctx.tblI,product_scale);
             } else if (inverse_warp_input) {
                 // Keep the original tile kernel for the smaller batches.
-                const bool store_last = ctx.t == 12 || (ctx.t == 10 && curves >= 24);
-                const auto kernel = store_last ? inverse_product_tile<true,add_bb,loose_e,true,true>
-                                               : inverse_product_tile<true,add_bb,loose_e,true>;
+                const auto kernel = store_last_inverse ? inverse_product_tile<true,add_bb,loose_e,true,true>
+                                                       : inverse_product_tile<true,add_bb,loose_e,true>;
                 kernel<<<tiles,inverse_threads,inverse_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
             } else if (warp_tile)
@@ -747,7 +781,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 inverse_product_tile<false,add_bb,loose_e><<<tiles,FUSE_TILE_THREADS,tile_smem,q>>>(
                     inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
         };
-        if (add_bb && build_e) invert(std::true_type{},std::true_type{});
+        if (combine_double)
+            frequency_inverse<<<tiles,inverse_threads,inverse_smem,q>>>(
+                inverse.data,products,s.length,ctx.t,ctx.tblI,product_scale);
+        else if (add_bb && build_e) invert(std::true_type{},std::true_type{});
         else if (build_e) invert(std::false_type{},std::true_type{});
         else if (add_bb) invert(std::true_type{},std::false_type{});
         else invert(std::false_type{},std::false_type{});
@@ -814,10 +851,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         }
         const Cursor cursor{scalar.data,start.data,i,count};
         add_inputs(std::true_type{},4,
-            {{X0,X0,X1,X1},{Z0,Z0,Z1,Z1},{A,B,C,D},0b1010},cursor);
+            {{X0,X0,X1,X1},{Z0,Z0,Z1,Z1},{A,B,C,D},0b1010},cursor,deferred ? 0b1111 : 0);
         mul(4,4,{A,B,C,D},{0,1,3,2},{0,1,0,1},{AA,BB,DA,CB},false,false,{},deferred ? 0b1111 : 0);
         add_inputs(std::false_type{},loose ? 2 : 3,
-            {{DA,DA,AA},{CB,CB,BB},{Sum,Diff,E},0b110},{});
+            {{DA,DA,AA},{CB,CB,BB},{Sum,Diff,E},0b110},{},deferred ? (loose ? 0b11 : 0b111) : 0);
         // The old X/Z values were consumed by the first combine. Both
         // multiplication batches can now write the final X/Z slots.
         // The second pack resolves the fresh sums. DiffSq and the fused Sum
@@ -826,7 +863,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             loose,fma,cursor,deferred ? (loose ? 0b11 : 0b10011) : 0,
             deferred ? (fma ? 0b1010 : 0b10) : 0);
         if (!fma)
-            add_inputs(std::false_type{},1,{{BB},{AE},{Sum},0},{});
+            add_inputs(std::false_type{},1,{{BB},{AE},{Sum},0},{},deferred ? 1 : 0);
         // E is still in frequency plane 4 from the second batch (packed
         // normally or produced by the last product tile). Both
         // reducers only overwrite planes 0–3, and this pack uses planes 0–1.
@@ -838,32 +875,49 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     };
     constexpr auto x = X0, y = Z0, z = X1, t = Z1;
     const auto edwards_double = [&](bool extended) {
-        // Reduce all four products before combining their coefficients.
-        // The sums below form 2XY, X^2+Y^2, X^2-Y^2 and twice Z^2.
-        mul(3,4,{x,y,z},{0,1,2,0},{0,1,2,1},{AA,BB,C,E});
-        add_inputs(std::false_type{},4,{{C,E,AA,AA},{C,E,BB,BB},{D,Sum,A,B},0b1000},{});
-        add_inputs(std::false_type{},1,{{A},{D},{Diff},1},{});
-        mul(4,extended ? 4 : 3,{Sum,Diff,A,B},{0,2,1,0},{1,3,2,3},{x,y,z,t});
+        if (frequency_double) {
+            mul(3,4,{x,y,z},{0,1,2,3},{0,1,2,3},{Sum,Diff,A,B},false,false,{},0,
+                deferred ? 0b1111 : 0,0,true);
+        } else {
+            // Reduce each product before forming the sums and differences.
+            mul(3,4,{x,y,z},{0,1,2,0},{0,1,2,1},{AA,BB,C,E});
+            // Only A and D are read by the subtraction. Pack can resolve the
+            // pending carries for Sum, Diff and B together.
+            add_inputs(std::false_type{},4,{{C,E,AA,AA},{C,E,BB,BB},{D,Sum,A,B},0b1000},{},deferred ? 0b1010 : 0);
+            add_inputs(std::false_type{},1,{{A},{D},{Diff},1},{},deferred ? 1 : 0);
+        }
+        mul(4,extended ? 4 : 3,{Sum,Diff,A,B},{0,2,1,0},{1,3,2,3},{x,y,z,t},
+            false,false,{},deferred ? (frequency_double ? 0b1111 : 0b1011) : 0);
     };
     const auto edwards_step = [&](int digit) {
         edwards_double(digit != 0);
         if (!digit) return;
 
         const bool negative = digit < 0;
-        add_inputs(std::false_type{},1,{{y},{x},{Sum},unsigned(negative)},{});
+        add_inputs(std::false_type{},1,{{y},{x},{Sum},unsigned(negative)},{},deferred ? 1 : 0);
         mul(4,4,{x,y,t,Sum},{0,1,2,3},{5,6,7,8},{AA,BB,C,D},
-            false,false,{},0,0,4 * (unsigned(std::abs(digit)) / 2));
+            false,false,{},deferred ? 0b1000 : 0,0,4 * (unsigned(std::abs(digit)) / 2));
+        // Sum is consumed by the next subtraction. All other coordinates
+        // are consumed directly by the second multiply's pack.
         if (negative) {
-            add_inputs(std::false_type{},4,{{BB,z,z,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b0101},{});
-            add_inputs(std::false_type{},1,{{Sum},{D},{E},1},{});
+            add_inputs(std::false_type{},4,{{BB,z,z,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b0101},{},deferred ? 0b1110 : 0);
+            add_inputs(std::false_type{},1,{{Sum},{D},{E},1},{},deferred ? 1 : 0);
         } else {
-            add_inputs(std::false_type{},4,{{D,z,z,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b1011},{});
-            add_inputs(std::false_type{},1,{{Sum},{BB},{E},1},{});
+            add_inputs(std::false_type{},4,{{D,z,z,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b1011},{},deferred ? 0b1110 : 0);
+            add_inputs(std::false_type{},1,{{Sum},{BB},{E},1},{},deferred ? 1 : 0);
         }
-        mul(4,3,{E,Diff,A,B},{0,2,1},{1,3,2},{x,y,z});
+        mul(4,3,{E,Diff,A,B},{0,2,1},{1,3,2},{x,y,z},false,false,{},deferred ? 0b1111 : 0);
         CK(cudaGetLastError());
     };
     if (naf) {
+        std::vector<uint32_t> fallback_table;
+        if (naf->build_dictionary && !gpu_dictionary) {
+            const auto start = now_s();
+            fallback_table = naf->host_fallback(result);
+            result.dictionary_host_ms = 1000 * (now_s() - start);
+            result.dictionary_fallback_host_bytes = fallback_table.size() * sizeof(uint32_t);
+        }
+        const auto device_dictionary_start = now_s();
         Event dictionary_begin, dictionary_end;
         CK(cudaEventRecord(dictionary_begin.value, q));
         if (gpu_dictionary) {
@@ -879,13 +933,21 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             const auto copy = [&](uint32_t* dst, const uint32_t* src) {
                 CK(cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, q));
             };
+            const auto copy_planes = [&](const auto& planes) {
+                stage1_ntt_copy_dictionary_planes<<<unsigned((stride + 127) / 128),128,0,q>>>(planes,stride);
+                CK(cudaGetLastError());
+            };
+            const auto save_point = [&](unsigned entry) {
+                copy_planes(Stage1DictionaryCopies<3>{{xy(entry,0),xy(entry,1),tree(entries+entry)},
+                                                      {slot(x),slot(y),slot(z)}});
+            };
             std::vector<uint32_t> one(stride);
             for (unsigned lane=0; lane<curves; ++lane) one[lane*s.words] = 1;
             CK(cudaMemcpyAsync(slot(x), naf->dictionary.data(), 2 * bytes, cudaMemcpyHostToDevice, q));
             CK(cudaMemcpyAsync(slot(z), one.data(), bytes, cudaMemcpyHostToDevice, q));
             CK(cudaMemcpyAsync(slot(A24), naf->dictionary.data()+2*stride, bytes, cudaMemcpyHostToDevice, q));
             forward_inputs(fixed.data + curve_d * plane, 1, {{A24}});
-            copy(xy(0,0),slot(x)); copy(xy(0,1),slot(y)); copy(tree(entries),slot(z));
+            save_point(0);
             if (entries > 1) {
                 edwards_double(true);
                 mul(1,1,{t},{0},{5},{D},false,false,{},0,0,curve_d);
@@ -893,7 +955,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 // Fixed 2P spectra: X, Y, dT, X+Y, Z. They are used only
                 // until the projective sequence has been generated.
                 forward_inputs(fixed.data, 5, {{x,y,D,Sum,z}});
-                copy(slot(x),xy(0,0)); copy(slot(y),xy(0,1)); copy(slot(z),tree(entries));
+                copy_planes(Stage1DictionaryCopies<3>{{slot(x),slot(y),slot(z)},{xy(0,0),xy(0,1),tree(entries)}});
                 mul(2,1,{x,y},{0},{1},{t});
                 for (unsigned entry=1; entry<entries; ++entry) {
                     add_inputs(std::false_type{},1,{{x},{y},{Sum},0},{});
@@ -902,18 +964,23 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                     add_inputs(std::false_type{},4,{{D,DA,DA,BB},{AA,C,C,AA},{Sum,Diff,A,B},0b1011},{});
                     add_inputs(std::false_type{},1,{{Sum},{BB},{E},1},{});
                     mul(4,4,{E,Diff,A,B},{0,2,1,0},{1,3,2,3},{x,y,z,t});
-                    copy(xy(entry,0),slot(x)); copy(xy(entry,1),slot(y)); copy(tree(entries+entry),slot(z));
+                    save_point(entry);
                 }
             }
             // Two sibling pairs per call. Ascend with Z_left * Z_right.
             for (unsigned end=entries; end>1; end/=2) {
                 for (unsigned node=end/2; node<end; node+=2) {
                     const bool pair = node+1<end;
-                    copy(slot(A),tree(2*node)); copy(slot(B),tree(2*node+1));
-                    if (pair) { copy(slot(C),tree(2*node+2)); copy(slot(D),tree(2*node+3)); }
+                    if (pair) {
+                        copy_planes(Stage1DictionaryCopies<4>{{slot(A),slot(B),slot(C),slot(D)},
+                            {tree(2*node),tree(2*node+1),tree(2*node+2),tree(2*node+3)}});
+                    } else {
+                        copy_planes(Stage1DictionaryCopies<2>{{slot(A),slot(B)},{tree(2*node),tree(2*node+1)}});
+                    }
                     mul(pair ? 4 : 2,pair ? 2 : 1,{A,B,C,D},{0,2},{1,3},{AA,BB});
-                    copy(tree(node),slot(AA));
-                    if (pair) copy(tree(node+1),slot(BB));
+                    if (pair)
+                        copy_planes(Stage1DictionaryCopies<2>{{tree(node),tree(node+1)},{slot(AA),slot(BB)}});
+                    else copy(tree(node),slot(AA));
                 }
             }
             std::vector<uint32_t> roots(stride), factors(stride);
@@ -959,12 +1026,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             // Descend with inverse_parent * sibling. Both products consume
             // the old children before either child is overwritten.
             for (unsigned node=1; node<entries; ++node) {
-                copy(slot(A),tree(node)); copy(slot(B),tree(2*node)); copy(slot(C),tree(2*node+1));
+                copy_planes(Stage1DictionaryCopies<3>{{slot(A),slot(B),slot(C)},
+                                                      {tree(node),tree(2*node),tree(2*node+1)}});
                 mul(3,2,{A,B,C},{0,0},{2,1},{AA,BB});
-                copy(tree(2*node),slot(AA)); copy(tree(2*node+1),slot(BB));
+                copy_planes(Stage1DictionaryCopies<2>{{tree(2*node),tree(2*node+1)},{slot(AA),slot(BB)}});
             }
             for (unsigned entry=0; entry<entries; ++entry) {
-                copy(slot(x),xy(entry,0)); copy(slot(y),xy(entry,1)); copy(slot(z),tree(entries+entry));
+                copy_planes(Stage1DictionaryCopies<3>{{slot(x),slot(y),slot(z)},
+                                                      {xy(entry,0),xy(entry,1),tree(entries+entry)}});
                 mul(3,2,{x,y,z},{0,1},{2,2},{x,y});
                 mul(2,1,{x,y},{0},{1},{t});
                 mul(1,1,{t},{0},{5},{D},false,false,{},0,0,curve_d);
@@ -974,8 +1043,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             CK(cudaStreamSynchronize(q));
             observe_memory();
         } else {
+            const auto& table = naf->build_dictionary ? fallback_table : naf->dictionary;
             for (unsigned entry=0; entry<entries; ++entry) {
-                CK(cudaMemcpyAsync(state.data + A24 * stride, naf->dictionary.data() + 4 * entry * stride,
+                CK(cudaMemcpyAsync(state.data + A24 * stride, table.data() + 4 * entry * stride,
                                    4 * stride * sizeof(uint32_t), cudaMemcpyHostToDevice, q));
                 forward_inputs(fixed.data + size_t(4) * entry * curves * s.length, 4, {{A24,Base,A,B}});
             }
@@ -985,6 +1055,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         float elapsed_ms = 0;
         CK(cudaEventElapsedTime(&elapsed_ms, dictionary_begin.value, dictionary_end.value));
         result.dictionary_gpu_ms = elapsed_ms;
+        result.dictionary_device_wall_ms = 1000 * (now_s() - device_dictionary_start);
     }
     Graph full, tail, warm_tail;
     std::array<Graph, 7> zero_graphs;

@@ -18,6 +18,9 @@ from test_edwards_gpu_pipeline import checksum as edwards_checksum, stage1 as ed
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stat"))
 from suyama_mont_ref import stage1
 
+DEFERRED_PACK = 1 << 6
+EDWARDS_2XY_FREQUENCY = 1 << 15
+
 
 def ntt_executions(log):
     marker = "Stage1 execution: "
@@ -78,9 +81,10 @@ def main():
                           'exp_cache = "off"\nckpt_seconds = 0.01\n' + extra, encoding="utf-8")
         return work, [str(exe), "--config", str(config)]
 
-    def run(work, cmd, label="run", text=None, ok=True):
+    def run(work, cmd, label="run", text=None, ok=True, env_override=None):
         process = subprocess.run(cmd, input=text, text=True, encoding="utf-8", errors="replace",
-                                 cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                                 cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 env=env if env_override is None else env_override,
                                  timeout=120)
         (work / (label + ".log")).write_text(process.stdout, encoding="utf-8")
         assert (process.returncode == 0) == ok, (work, label, process.stdout[-2000:])
@@ -140,12 +144,18 @@ def main():
         call, data = direct(work, cmd, 65521, 20, 26, 1)
         assert "unsafe weighted NTT length" in run(work, call, text=data, ok=False)
         assert not (work / "out.save").exists()
-        for p, bpw, length in ((65521, 26, 2560), (65521, 25, 4096), (66067, 0, 4096)):
+        # M63487 and M63493 straddle the 4U < q fusion gate at the same NTT length.
+        for p, bpw, length, fused in ((65521, 26, 2560, False), (65521, 25, 4096, True),
+                                     (66067, 0, 4096, True), (63487, 0, 2560, True),
+                                     (63493, 0, 2560, False)):
             extra = f'naf_w = 6\nntt_convolution = "weighted"\nntt_bpw = {bpw}\n'
             work, cmd = fixture(f"edwards_weighted_auto_{p}_{bpw}", extra=extra, model="ed")
             call, data = direct(work, cmd, p, 20, 26, 1)
-            [plan] = ntt_executions(run(work, call, text=data))
+            log = run(work, call, text=data)
+            [plan] = ntt_executions(log)
             assert plan["ntt_length"] == str(length) and plan["ntt_bpw"] == str((p + length - 1) // length)
+            [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+            assert bool(int(dataflow) & EDWARDS_2XY_FREQUENCY) == fused, log
             [sigma] = saved_points(work / "out.save", p, 20, True)
             assert sigma == 26
         work, cmd = fixture("edwards_force_unsafe_weighted", model="ed",
@@ -153,7 +163,8 @@ def main():
         call, data = direct(work, cmd, 66067, 20, 26, 1)
         assert "unsafe weighted NTT length" in run(work, call, text=data, ok=False)
         assert not (work / "out.save").exists()
-        print("PASS Edwards weighted auto length, bpw cap, and forced unsafe length rejection", flush=True)
+        print("PASS Edwards weighted auto length, bpw cap, 2XY fusion bound, and forced unsafe length rejection",
+              flush=True)
 
         default_points = None
         for mode, flags, length, upper in (
@@ -197,7 +208,39 @@ def main():
         assert "dictionary exceeds" in run(work, call, text=data, ok=False)
         budget_save = work / "out.save"
         assert not budget_save.exists() or budget_save.stat().st_size == 0
-        p, b1, sigma, curves = 65521, 4096, 26, 4
+
+        # At 2560 points, two M65521 w6 curves need 2,621,440 bytes for
+        # spectra and 1,048,576 more for the GPU builder. A 3 MB limit
+        # admits the spectra, but only with the host dictionary builder.
+        automatic = {key: val for key, val in env.items() if key != "ECM_EDWARDS_NTT_DICTIONARY"}
+        dictionary_config = 'naf_w = 6\nntt_convolution = "weighted"\nntt_length = 2560\n'
+        expected = None
+        for limit, builder, workspace in ((0, "gpu", 1048576), (3, "host", 0)):
+            work, cmd = fixture(f"edwards_auto_dictionary_{limit}mb", model="ed",
+                                extra=dictionary_config + f"naf_memory_mb = {limit}\n")
+            call, data = direct(work, cmd, 65521, 20, 26, 2)
+            log = run(work, call, text=data, env_override=automatic)
+            assert re.findall(r"stage1_ntt_edwards_dictionary: [^\r\n]*\bbackend=(\w+)", log) == [builder]
+            assert f"dictionary_spectra_bytes=2621440 dictionary_workspace_bytes={workspace}" in log
+            assert ("GPU dictionary workspace exceeds the VRAM budget, building on the host" in log) == bool(limit)
+            points = saved_points(work / "out.save", 65521, 20, True)
+            assert set(points) == {26, 27}
+            if expected is None:
+                expected = points
+            else:
+                assert points == expected
+        work, cmd = fixture("edwards_forced_gpu_dictionary_3mb", model="ed",
+                            extra=dictionary_config + "naf_memory_mb = 3\n")
+        call, data = direct(work, cmd, 65521, 20, 26, 2)
+        log = run(work, call, text=data, ok=False,
+                  env_override=dict(automatic, ECM_EDWARDS_NTT_DICTIONARY="gpu"))
+        assert "dictionary exceeds its VRAM budget" in log
+        budget_save = work / "out.save"
+        assert not budget_save.exists() or budget_save.stat().st_size == 0
+        print("PASS Edwards NTT dictionary fallback keeps the points inside a 3 MB budget", flush=True)
+
+        # The resumed plan uses both deferred pack and frequency fusion just below 4U=q.
+        p, b1, sigma, curves = 63487, 4096, 26, 1
         extra = "naf_w = 6\nsigma = 26\nntt_window = 4\nauto_stage2 = 1\n"
         work, cmd = fixture("edwards_naf_resume", extra=extra, model="ed")
         config = work / "ecm.toml"
@@ -251,13 +294,16 @@ def main():
         assert any(record["ntt_resume"] == str(cursor) and record["ntt_type"] == "weighted"
                    and record["ntt_length"] == "2560"
                    for record in ntt_executions(resumed)), resumed
+        [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", resumed)
+        expected_dataflow = DEFERRED_PACK | EDWARDS_2XY_FREQUENCY
+        assert int(dataflow) & expected_dataflow == expected_dataflow, resumed
         assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
         ref, ref_cmd = fixture("edwards_naf_resume_reference", model="ed")
         call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
         run(ref, call, text=data)
         assert saved_points(save, p, b1, True) == saved_points(ref / "out.save", p, b1, True)
         print(f"PASS Edwards NAF column {cursor}/{count}, wrong-mode rejection, linear to 2560-point "
-              "weighted resume and Stage2 handoff")
+              "weighted fused resume and Stage2 handoff")
         return
 
     work, cmd = fixture("graph", '"NtT"', "ntt_tile = 8\nntt_outer_max = 2\n")

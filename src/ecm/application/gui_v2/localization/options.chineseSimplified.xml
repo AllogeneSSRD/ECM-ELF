@@ -45,7 +45,7 @@
       <Item id="option_stage1_impl" name="选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。" />
       <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
       <Item id="option_stage1_cpu_mont_chain" name="Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。" />
-      <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。" />
+      <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设置。" />
       <Item id="option_stage1_affinity" name="CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。" />
       <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
       <Item id="option_stage1_exp_cache" name="指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。" />

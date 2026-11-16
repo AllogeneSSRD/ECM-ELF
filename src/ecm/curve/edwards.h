@@ -1,7 +1,9 @@
 #pragma once
 #include "ecm/integer.h"
+#include <array>
 #include <cstdint>
 #include <cstddef>
+#include <stdexcept>
 
 // Checked Atkin-Morain construction for x^2 + y^2 = 1 + d*x^2*y^2 (a = 1).
 // Reference: .refactor/p95v3106b01.source/ecm truncated P-1.cpp,
@@ -21,23 +23,59 @@ inline Setup inverse(mpz_t out, const mpz_t value, const mpz_t n, mpz_t factor) 
     return mpz_cmp(factor, n) < 0 ? Setup::Factor : Setup::Degenerate;
 }
 
+// One worker owns this state for a single immutable Mersenne modulus.
+struct MersenneConstruction {
+    explicit MersenneConstruction(mpz_srcptr modulus) : n(modulus), bits(mpz_sizeinbase(n, 2)) {
+        if (mpz_sgn(n) <= 0 || mpz_scan0(n, 0) != bits)
+            throw std::invalid_argument("Edwards Mersenne construction requires a full Mersenne modulus");
+    }
+
+    struct Jacobian {
+        Integer x, y, z;
+    };
+    const mpz_srcptr n;
+    const mp_bitcnt_t bits;
+    Integer high;
+    std::array<Jacobian, 64> before_bit;
+    uint64_t previous_sigma = 0;
+
+    void reduce(mpz_ptr value) {
+        if (bits < 8192) {
+            mpz_mod(value, value, n);
+            return;
+        }
+        const bool negative = mpz_sgn(value) < 0;
+        if (negative) mpz_neg(value, value);
+        while (mpz_sizeinbase(value, 2) > bits) {
+            mpz_tdiv_q_2exp(high.v, value, bits);
+            mpz_tdiv_r_2exp(value, value, bits);
+            mpz_add(value, value, high.v);
+        }
+        if (mpz_cmp(value, n) == 0) mpz_set_ui(value, 0);
+        if (negative && mpz_sgn(value)) mpz_sub(value, n, value);
+    }
+};
+
 inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uint64_t sigma,
-                       const mpz_t n) {
+                       const mpz_t n, MersenneConstruction* mersenne = nullptr) {
+    if (mersenne && mersenne->n != n)
+        throw std::invalid_argument("Edwards Mersenne construction modulus differs from its scratch state");
     mpz_set_ui(factor, 0);
     if (!sigma || mpz_cmp_ui(n, 3) <= 0 || !mpz_odd_p(n))
         return Setup::Degenerate;
     Integer X, Y, Z,                            // Auxiliary Jacobian point.
             A, B, C, S, M, U, V, H, J, K, T,    // Reused point-operation temporaries.
             inv, s, t, alpha, beta, h, num, den;
+    auto reduce = [&](mpz_t r) {
+        if (mersenne) mersenne->reduce(r);
+        else mpz_mod(r, r, n);
+    };
     auto mul = [&](mpz_t r, const mpz_t a, const mpz_t b) {
         mpz_mul(r, a, b);
-        mpz_mod(r, r, n);
+        reduce(r);
     };
     auto sqr = [&](mpz_t r, const mpz_t a) {
         mul(r, a, a);
-    };
-    auto reduce = [&](mpz_t r) {
-        mpz_mod(r, r, n);
     };
 
     // Auxiliary curve: t^2 = s^3 - 8*s - 32, with base point Q = (12, 40).
@@ -85,8 +123,25 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
         }
     };
 
+    int bit = 63;
+    if (mersenne && mersenne->previous_sigma) {
+        const uint64_t diff = sigma ^ mersenne->previous_sigma;
+        while (bit && !(diff >> bit)) --bit;
+        const auto& shared = mersenne->before_bit[bit];
+        mpz_set(X.v, shared.x.v);
+        mpz_set(Y.v, shared.y.v);
+        mpz_set(Z.v, shared.z.v);
+    }
+    // An early gcd inside the loop can leave later snapshots stale.
+    if (mersenne) mersenne->previous_sigma = 0;
     // Left-to-right binary multiplication: P <- 2*P, then P <- P+Q for bit 1.
-    for (int bit = 63; bit >= 0; --bit) {
+    for (; bit >= 0; --bit) {
+        if (mersenne) {
+            auto& state = mersenne->before_bit[bit];
+            mpz_set(state.x.v, X.v);
+            mpz_set(state.y.v, Y.v);
+            mpz_set(state.z.v, Z.v);
+        }
         double_point();
         if (!((sigma >> bit) & 1))
             continue;
@@ -151,6 +206,7 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
         mpz_set(X.v, U.v);
         mpz_set(Y.v, V.v);
     }
+    if (mersenne) mersenne->previous_sigma = sigma;
 
     // Normalize once: (s, t) = (X/Z^2, Y/Z^3).
     Setup rc = inverse(inv.v, Z.v, n, factor);

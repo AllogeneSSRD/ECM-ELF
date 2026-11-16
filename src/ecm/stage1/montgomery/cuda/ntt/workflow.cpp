@@ -16,14 +16,21 @@
 #include <bitset>
 #include <chrono>
 #include <cstdlib>
+#include <future>
 #include <iomanip>
+#include <numeric>
 #include <sstream>
+#include <thread>
 
 namespace ecm_cuda_stage1 {
 namespace {
 using namespace ecm_stage1;
 using Clock = std::chrono::steady_clock;
 using ActiveLanes = std::bitset<stage1_ntt_max_curves>;
+
+double milliseconds_since(Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
 
 void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t batch,
                        unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan) {
@@ -116,11 +123,12 @@ std::string encode_snapshot(unsigned count, unsigned cursor, unsigned curves, co
 // Edwards saves already use the Montgomery x coordinate (1+y)/(1-y).
 // Construct the Edwards curve and point before mapping into the shared ladder.
 CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uint32_t* initial,
-                               unsigned words, mpz_ptr d, mpz_ptr px, mpz_ptr py) {
+                               unsigned words, mpz_ptr d, mpz_ptr px, mpz_ptr py,
+                               ecm_edwards::MersenneConstruction* construction) {
     using ecm_edwards::Integer;
     using ecm_edwards::Setup;
     Integer a24, x, inv, den;
-    const auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n);
+    const auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction);
     if (setup == Setup::Factor) return CurveKind::Factor;
     if (setup == Setup::Degenerate) return CurveKind::Degenerate;
 
@@ -154,6 +162,81 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
         mpz_export(initial + slot * words, nullptr, -1, sizeof(uint32_t), 0, 0, slots[slot]);
     return CurveKind::Stage2Point;
 }
+
+void prepare_edwards_batch(mpz_srcptr n, const std::vector<uint64_t>& sigmas, unsigned words,
+        unsigned threads, bool use_prefix, std::vector<CurveKind>& kinds, ecm_edwards::Array& factors,
+        std::vector<uint32_t>& initial, uint32_t* seeds) {
+    const unsigned curves = unsigned(sigmas.size());
+    std::vector<unsigned> order(curves);
+    std::iota(order.begin(), order.end(), 0u);
+    if (use_prefix) {
+        // Only traversal order changes. Every result is stored in its original lane.
+        std::sort(order.begin(), order.end(), [&](unsigned a, unsigned b) { return sigmas[a] < sigmas[b]; });
+    }
+    const auto prepare = [&](unsigned worker) {
+        std::optional<ecm_edwards::MersenneConstruction> scratch;
+        if (use_prefix) scratch.emplace(n);
+        ecm_edwards::Integer d, px, py;
+        for (unsigned j = curves * worker / threads; j < curves * (worker + 1) / threads; ++j) {
+            const unsigned i = order[j];
+            kinds[i] = prepare_edwards_lane(n, sigmas[i], factors[i],
+                initial.data() + size_t(i) * 6 * words, words, d.v, px.v, py.v, scratch ? &*scratch : nullptr);
+            if (!seeds || kinds[i] != CurveKind::Stage2Point) continue;
+            const mpz_srcptr point[] = {px.v, py.v, d.v};
+            for (unsigned slot = 0; slot < 3; ++slot)
+                mpz_export(seeds + (size_t(slot) * curves + i) * words,
+                           nullptr, -1, sizeof(uint32_t), 0, 0, point[slot]);
+        }
+    };
+    std::vector<std::future<void>> jobs;
+    jobs.reserve(threads - 1);
+    for (unsigned i = 1; i < threads; ++i)
+        jobs.emplace_back(std::async(std::launch::async, prepare, i));
+    prepare(0);
+    for (auto& job : jobs) job.get();
+}
+
+bool prefer_device_dictionary(size_t p, unsigned curves, unsigned window) {
+    if (p >= 32768) return true;
+    if (window < 8) return false;
+    if (p >= 24576 || (p >= 2000 && curves >= 64)) return true;
+    if (p >= 6144) return curves >= 8;
+    return p >= 3500 && curves >= (window >= 10 ? 16u : 32u);
+}
+
+std::vector<uint32_t> build_host_naf_fallback(ecm_mersenne_ntt::Run& run, mpz_srcptr modulus,
+        const std::vector<uint32_t>& seeds, unsigned curves, unsigned words, unsigned window) {
+    const size_t entries = size_t(1) << (window - 2);
+    const size_t stride = size_t(curves) * words;
+    const size_t table_words = 4 * entries * stride;
+    const size_t scratch_bytes = (table_words + 8 * entries * words + stride) * sizeof(uint32_t);
+    const auto free = ecm_edwards_memory::host_free_bytes();
+    if (free && scratch_bytes > ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib))
+        throw ecm_mersenne_ntt::BudgetError("Edwards NTT host fallback exceeds available host memory");
+    ecm_ts_fprintf(stdout, "Stage1 NTT: GPU dictionary workspace exceeds the VRAM budget, building on the host\n");
+
+    std::vector<uint32_t> table(table_words);
+    run.dictionary_status.resize(curves);
+    ecm_edwards::Integer px, py, d, factor;
+    for (unsigned i = 0; i < curves; ++i) {
+        const auto* ptr = seeds.data() + size_t(i) * words;
+        mpz_import(px.v, words, -1, sizeof(uint32_t), 0, 0, ptr);
+        mpz_import(py.v, words, -1, sizeof(uint32_t), 0, 0, ptr + stride);
+        mpz_import(d.v, words, -1, sizeof(uint32_t), 0, 0, ptr + 2 * stride);
+        const auto status = ecm_edwards::ntt::affine_dictionary(table, curves, i, words, window,
+                                                               px.v, py.v, d.v, modulus, factor.v);
+        if (status == ecm_edwards::Setup::Ready) continue;
+        if (status == ecm_edwards::Setup::Factor) {
+            run.dictionary_status[i] = 1;
+            run.dictionary_factors.resize(stride);
+            mpz_export(run.dictionary_factors.data() + size_t(i) * words, nullptr,
+                       -1, sizeof(uint32_t), 0, 0, factor.v);
+        } else {
+            run.dictionary_status[i] = 2;
+        }
+    }
+    return table;
+}
 } // namespace
 
 ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions& opt,
@@ -185,9 +268,11 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         const unsigned binary_count = unsigned(scalar_bits - 1);
         const unsigned words = unsigned((p + 31) / 32);
         const size_t entries = naf_window ? size_t(1) << (naf_window - 2) : 0;
-        bool gpu_dictionary = naf_window && p >= 32768;
+        bool gpu_dictionary = naf_window && prefer_device_dictionary(p, curves, naf_window);
+        bool automatic_dictionary = true;
         if (naf_window) {
             if (const char* override = std::getenv("ECM_EDWARDS_NTT_DICTIONARY")) {
+                automatic_dictionary = false;
                 const std::string_view mode(override);
                 if (mode == "gpu") gpu_dictionary = true;
                 else if (mode == "host") gpu_dictionary = false;
@@ -197,21 +282,30 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         const size_t budget = size_t(opt.execution.naf_memory_mb) * ecm_edwards_memory::mb;
         const size_t dictionary_slots = !naf_window ? 0 : gpu_dictionary ? 3 : 4 * entries;
         const size_t host_dictionary_words = dictionary_slots * curves * words;
+        const size_t host_seed_words = naf_window && !gpu_dictionary ? 3ull * curves * words : 0;
+        const auto host_free = edwards ? ecm_edwards_memory::host_free_bytes() : std::nullopt;
+        const size_t host_limit = host_free
+            ? ecm_edwards_memory::usable_bytes(*host_free, 64 * ecm_edwards_memory::mib) : SIZE_MAX;
+        const size_t prep_words = naf_window ? (gpu_dictionary ? entries + 2 * curves : 8 * entries) * words : 0;
+        const size_t host_required = (host_dictionary_words + host_seed_words + 6ull * curves * words + prep_words)
+            * sizeof(uint32_t) + (naf_window ? (scalar_bits + 1) * sizeof(int16_t) +
+                edwards_naf_bytes(scalar_bits, true) : 0);
         std::vector<int16_t> digits;
+        double encoding_ms = 0, curve_setup_ms = 0, host_points_ms = 0;
+        unsigned host_dictionary_curves = 0;
+        const auto naf_started = Clock::now();
         if (naf_window) {
             const size_t table_bytes = host_dictionary_words * sizeof(uint32_t);
             if (!gpu_dictionary && budget && table_bytes > budget)
                 throw ecm_mersenne_ntt::BudgetError("Edwards NTT host dictionary exceeds naf_memory_mb");
-            const auto free = ecm_edwards_memory::host_free_bytes();
-            const size_t host_bytes = table_bytes + (scalar_bits + 1) * sizeof(int16_t) +
-                edwards_naf_bytes(scalar_bits, true) +
-                (gpu_dictionary ? entries + 2 * curves : 8 * entries) * words * sizeof(uint32_t);
-            if (free && host_bytes > ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib))
+            if (host_required > host_limit)
                 throw ecm_mersenne_ntt::BudgetError("Edwards NTT NAF preparation exceeds available host memory");
+            const auto encode_started = Clock::now();
             const auto plan = edwards_prepare_naf(scalar.v, uint64_t(request.b1), int(naf_window), true);
             digits.resize(plan->size());
             for (size_t i = 0; i < digits.size(); ++i)
                 digits[i] = int16_t((*plan)[digits.size() - 1 - i]);
+            encoding_ms = milliseconds_since(encode_started);
         }
         const unsigned count = naf_window ? unsigned(digits.size()) : binary_count;
         std::vector<uint32_t> packed((scalar_bits + 31) / 32);
@@ -254,25 +348,46 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         std::vector<unsigned> fallback;
         const auto dict_started = Clock::now();
         if (edwards) {
+            const unsigned available = std::max(1u, std::thread::hardware_concurrency());
+            const unsigned automatic = p >= 4096 && curves >= 8 ? 4 : 1;
+            const unsigned requested = opt.execution.stage1_threads ? opt.execution.stage1_threads : automatic;
+            // Reserve complete prefix snapshots plus ordinary GMP temporaries per worker.
+            const size_t scratch_bytes = size_t(3 * 64 + 48) * words * sizeof(uint32_t);
+            const size_t affordable = host_required < host_limit ? (host_limit - host_required) / scratch_bytes : 0;
+            const unsigned workers = unsigned(std::max<size_t>(1, std::min<size_t>(
+                std::min({curves, available, requested}), affordable)));
+            std::vector<uint32_t> host_seeds(host_seed_words);
+            auto* seeds = !naf_window ? nullptr : gpu_dictionary ? dictionary.data() : host_seeds.data();
+            const auto curve_started = Clock::now();
+            prepare_edwards_batch(N, sigmas, words, workers, affordable != 0,
+                                  kinds, factors, lanes_initial, seeds);
+            curve_setup_ms = milliseconds_since(curve_started);
+            ecm_ts_fprintf(stdout, "stage1_ntt_edwards_setup: threads=%u ms=%.3f prefix=%u fold=%u\n",
+                workers, curve_setup_ms, unsigned(affordable != 0), unsigned(affordable != 0 && p >= 8192));
+            if (ecm_stage1_stop_requested()) {
+                result.stop();
+                return result;
+            }
             ecm_edwards::Integer d, px, py;
             for (unsigned i = 0; i < curves; ++i) {
-                kinds[i] = prepare_edwards_lane(N, sigmas[i], factors.data()[i],
-                    lanes_initial.data() + size_t(i) * 6 * words, words, d.v, px.v, py.v);
                 if (!naf_window || kinds[i] != CurveKind::Stage2Point) continue;
-                if (gpu_dictionary && (!has_checkpoint || snapshot.lanes[i])) {
-                    const mpz_srcptr seed[] = {px.v, py.v, d.v};
-                    for (unsigned j=0; j<3; ++j)
-                        mpz_export(dictionary.data()+(size_t(j)*curves+i)*words,nullptr,-1,sizeof(uint32_t),0,0,seed[j]);
-                    continue;
-                }
+                if (gpu_dictionary && (!has_checkpoint || snapshot.lanes[i])) continue;
                 // Earlier snapshots could exclude lanes classified by the
                 // host dictionary before entering the device loop.
+                const auto points_started = Clock::now();
+                const auto* seed = seeds + size_t(i) * words;
+                const size_t stride = size_t(curves) * words;
+                mpz_import(px.v, words, -1, sizeof(uint32_t), 0, 0, seed);
+                mpz_import(py.v, words, -1, sizeof(uint32_t), 0, 0, seed + stride);
+                mpz_import(d.v, words, -1, sizeof(uint32_t), 0, 0, seed + 2 * stride);
                 std::vector<uint32_t> legacy_table;
                 if (gpu_dictionary) legacy_table.resize(4 * entries * words);
                 auto& table = gpu_dictionary ? legacy_table : dictionary;
                 const auto status = ecm_edwards::ntt::affine_dictionary(table, gpu_dictionary ? 1 : curves,
                     gpu_dictionary ? 0 : i, words,
                     naf_window, px.v, py.v, d.v, N, factors[i]);
+                host_points_ms += milliseconds_since(points_started);
+                ++host_dictionary_curves;
                 if (gpu_dictionary && status == ecm_edwards::Setup::Ready)
                     throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
                         "NTT checkpoint excludes a usable Edwards dictionary lane");
@@ -320,7 +435,11 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 lanes.set(i);
             }
         }
-        if (has_checkpoint && snapshot.lanes != lanes)
+        // The host builder can now prove a factor for a lane present in a
+        // GPU-built snapshot. Removing that lane is safe; adding one is not.
+        const bool compact_snapshot = has_checkpoint && naf_window && !gpu_dictionary &&
+            snapshot.lanes != lanes && (lanes & ~snapshot.lanes).none();
+        if (has_checkpoint && snapshot.lanes != lanes && !compact_snapshot)
             throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
                                                "NTT checkpoint active curve mask differs");
 
@@ -350,7 +469,21 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                         std::copy_n(lanes_initial.data() + (6 * active[i] + slot) * words,
                                     words, initial.data() + slot * stride + i * words);
             }
-            if (has_checkpoint) std::copy(snapshot.points.begin(), snapshot.points.end(), initial.begin());
+            if (compact_snapshot) {
+                const size_t saved_stride = snapshot.lanes.count() * words;
+                for (size_t lane = 0, saved_index = 0, active_index = 0; lane < curves; ++lane) {
+                    if (!snapshot.lanes[lane]) continue;
+                    if (lanes[lane]) {
+                        for (unsigned slot = 0; slot < 3; ++slot)
+                            std::copy_n(snapshot.points.data() + slot * saved_stride + saved_index * words,
+                                        words, initial.data() + slot * stride + active_index * words);
+                        ++active_index;
+                    }
+                    ++saved_index;
+                }
+            } else if (has_checkpoint) {
+                std::copy(snapshot.points.begin(), snapshot.points.end(), initial.begin());
+            }
 
             ecm_mersenne_ntt::Control control;
             control.resume = snapshot.cursor;
@@ -403,15 +536,37 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 result.stop();
                 return result;
             }
+            ecm_mersenne_ntt::EdwardsNaf naf{naf_window, digits, dictionary, budget, gpu_dictionary, {}};
+            if (gpu_dictionary && automatic_dictionary)
+                naf.host_fallback = [&](ecm_mersenne_ntt::Run& run) {
+                    return build_host_naf_fallback(run, N, dictionary, unsigned(active.size()), words, naf_window);
+                };
+            const double host_init_ms = milliseconds_since(naf_started);
             const auto run = naf_window ? ecm_mersenne_ntt::edwards_naf(opt.execution.device_index, unsigned(p),
-                unsigned(active.size()), initial, {naf_window, digits, dictionary, budget, gpu_dictionary}, selected, control)
+                unsigned(active.size()), initial, naf, selected, control)
                 : ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p),
                     unsigned(active.size()), initial, packed, count, selected, control);
             ecm_ts_fprintf(stdout, "stage1_ntt_memory: owned_bytes=%zu observed_bytes=%zu budget_bytes=%zu\n",
                 run.owned_bytes, run.observed_bytes, run.budget_bytes);
-            if (naf_window)
+            if (naf_window) {
+                const double init_ms = host_init_ms + 1000 * run.setup_seconds;
                 ecm_ts_fprintf(stdout, "stage1_ntt_edwards_dictionary: gpu_ms=%.3f backend=%s root_inverse_ms=%.3f\n",
-                    run.dictionary_gpu_ms, gpu_dictionary ? "gpu" : "host", run.dictionary_inverse_ms);
+                    run.dictionary_gpu_ms, run.dictionary_built_on_gpu ? "gpu" : "host", run.dictionary_inverse_ms);
+                ecm_ts_fprintf(stdout, "stage1_ntt_naf_init: ms=%.3f encoding_bytes=%zu host_dictionary_bytes=%zu "
+                    "dictionary_spectra_bytes=%zu dictionary_workspace_bytes=%zu\n",
+                    init_ms,
+                    edwards_naf_bytes(scalar_bits, true) + digits.size() * sizeof(int16_t),
+                    (host_dictionary_words + host_seed_words) * sizeof(uint32_t) + run.dictionary_fallback_host_bytes,
+                    run.dictionary_spectra_bytes, run.dictionary_workspace_bytes);
+                const double all_host_points_ms = host_points_ms + run.dictionary_host_ms;
+                ecm_ts_fprintf(stdout, "stage1_ntt_naf_init_parts: encoding_ms=%.3f curve_setup_ms=%.3f "
+                    "host_points_ms=%.3f device_dictionary_ms=%.3f other_ms=%.3f "
+                    "entries_per_curve=%zu host_dictionary_curves=%zu device_dictionary_curves=%zu\n",
+                    encoding_ms, curve_setup_ms, all_host_points_ms, run.dictionary_device_wall_ms,
+                    init_ms - encoding_ms - curve_setup_ms - all_host_points_ms - run.dictionary_device_wall_ms,
+                    entries, size_t(host_dictionary_curves) +
+                        (run.dictionary_fallback_host_bytes ? active.size() : 0), active.size());
+            }
             ecm_ts_fprintf(stdout, "stage1_ntt_timing: %s=%u device_ms=%.3f wall_ms=%.3f "
                 "setup_ms=%.3f readback_ms=%.3f stopped=%u\n",
                 naf_window ? "columns" : "bits", run.completed_bits - control.resume, run.device_ms.front(), run.wall_ms.front(),
@@ -425,7 +580,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             ecm_edwards::Integer x, z, inv, y;
             for (size_t i = 0; i < active.size(); ++i) {
                 const unsigned lane = active[i];
-                if (gpu_dictionary && run.dictionary_status[i]) {
+                if (!run.dictionary_status.empty() && run.dictionary_status[i]) {
                     if (run.dictionary_status[i]==1) {
                         mpz_import(inv.v, words, -1, sizeof(uint32_t), 0, 0,
                                    run.dictionary_factors.data()+i*words);

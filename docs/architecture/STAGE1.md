@@ -115,9 +115,34 @@ checkpoint实现与恢复合同维持原样。Android原有native存档可以覆
 
 [Montgomery workflow](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/stage1/montgomery/cuda/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 
-[NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 接收 PARAM0 和 Atkin–Morain Edwards。Edwards 保留 `48·lcm(1…B1)`，用 `u=(1+y)/(1−y)` 和 `a24=1/(1−d)` 进入同一条 x-only 阶梯。映射分母的非单位通过 GCD 分类，最后按 Montgomery X/Z 求仿射坐标，与现有 Edwards save 的坐标一致。适配器将剩余活跃曲线转为 slot-major 布局，负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) 用同一个 ladder 搜索并缓存计划。检查点保存标量 cursor、32 位活跃曲线掩码和规范 X/Z，恢复与卷积后端、tile、pass 或 Graph 配置解耦。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
+[NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 接收 PARAM0 和 Atkin–Morain Edwards。Edwards 使用 `48·lcm(1…B1)`，可运行原生 2XY NAF，也可用 `u=(1+y)/(1−y)` 和 `a24=1/(1−d)` 进入 x-only 阶梯。映射分母的非单位通过 GCD 分类，最终按 Montgomery X/Z 求仿射坐标，与 Edwards save 的约定一致。适配器将剩余活跃曲线转为 slot-major 布局，负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) 用 ladder 搜索并缓存计划。检查点保存位或 NAF 列游标、活跃曲线掩码和对应算法的规范坐标。卷积后端、tile、pass 和 Graph 配置可在恢复时重新选择。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
 
 宽位宽的分段归约可把进位摘要交给下一批打包，设备数据流见 [NTT 架构](NTT.md#stage1-分段进位与-pack-融合)。
+
+### CUDA Edwards NTT 主机曲线初始化
+
+1. 主机确定每条曲线的 sigma，恢复任务沿用检查点的 sigma。在辅助 Weierstrass 曲线 $t^2=s^3-8s-32$ 上，用 Jacobian 坐标计算 $[\sigma]Q$，其中 $Q=(12,40)$。倍点与混合加点各用约九次模乘或模平方。这一步的计算量随 sigma 的位数和置位数变化。
+2. 求投影分母的逆并恢复仿射 $(s,t)$。经 Atkin–Morain 的有理映射计算 Edwards 的 $d$ 和基点 $(x,y)$，检查 $d(1-d)$ 的单位性并验证基点方程。求逆失败时，用实际模数上的 GCD 区分真因子和退化构造。完整映射见 [Edwards 参数化](ECM_PARAMETERIZATIONS.md)。
+3. 按 $u=(1+y)/(1-y)$ 和 $A_{24}=1/(1-d)$ 准备 x-only 初始点。原生 NAF 同时保留 $(x,y,d)$ 供奇数倍点建表。x-only 重放使用预备好的相同曲线坐标。建表、Graph 准备及设备主循环分别计时。见 [NAF 字典](NAF.md#点字典与执行成本)。
+
+0.63.16 在 Ryzen AI 9 HX 370 的逻辑 CPU 2 上串行拆测原构造。每档为从 sigma 20260922 开始的连续批次，三次取总时间居中的那次，各列为该次的批量秒数。构建为 MSVC 14.51 `/O2`、GMP 6.3.0。测试固定逻辑核，频率及功耗未单独采样。
+
+| 输入 | 曲线数 | $[\sigma]Q$ | 仿射归一化 | 参数映射及逆元检查 | 基点方程检查 | Montgomery 初值及导出 | 合计 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| M4001 | 128 | 0.107 | 0.006 | 0.033 | 0.002 | 0.007 | 0.155 |
+| M16319 | 120 | 0.892 | 0.041 | 0.222 | 0.014 | 0.048 | 1.217 |
+| M65521 | 120 | 8.976 | 0.398 | 2.144 | 0.135 | 0.453 | 12.107 |
+| M262139 | 30 | 10.096 | 0.595 | 3.526 | 0.176 | 0.751 | 15.143 |
+
+辅助点乘占原构造的 67%–74%，参数映射和逆元检查占 18%–23%。测量从批次收到已定 sigma 开始，止于主机导出坐标。原始样本和独立探针在 `data/experiments/stage1_setup_06317/cpu_profile/`。
+
+CUDA Edwards NTT 的主机工作线程按 sigma 排序后分段处理，结果写回原曲线槽位。每个线程保留上一 sigma 在各位之前的精确 Jacobian 状态，从新旧 sigma 最高的不同位继续执行原二进制链。连续 sigma 可复用较长前缀，独立随机 sigma 的收益较小。8192 位及以上的完整梅森模数将普通除法归约改为高低位折叠。由 $2^p\equiv1\pmod{2^p-1}$ 可将 $a_L+2^pa_H$ 化为 $a_L+a_H$，最终恢复与 GMP 除法相同的规范余数。GCD、求逆、因子分类和发布顺序沿用原路径。
+
+0.63.17 在相同单核口径下重测两档连续 sigma。M65521 的 120 曲线总计 2.170 秒，其中辅助点乘 0.193 秒，参数映射 1.359 秒。M262139 的 30 曲线总计 4.043 秒，两项为 0.377 秒和 2.576 秒。参数映射现占 63%–64%，其中约 81%–82% 用于 GMP 求逆。求逆为参数映射的子项。原始数据见 `cpu_profile/optimized-phase.csv`。
+
+`[stage1] stage1_threads` 控制该主机阶段。0 为自动，至少 8 条曲线且模数不少于 4096 位时最多用 4 个工作线程。预算、可用逻辑 CPU 数和曲线数也限制实际线程数。每线程拥有自己的 GMP 工作区，主机字典构造及结果发布仍按原槽位顺序执行。`stage1_ntt_edwards_setup` 记录实际线程数、墙钟时间与归约方式。见 [曲线数学](../../src/ecm/curve/edwards.h) 和 [NTT 主机工作流](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp)。
+
+### 其他 GPU 工作流
 
 [Edwards workflow](../../src/ecm/stage1/edwards/cuda/workflow.cpp)管理Batch、恢复、构造、进度和末点分类；同目录checkpoint.cpp拥有专用codec。两种曲线save_checkpoint均以bool表示持久提交成功；decode解释载荷并返回RestoreResult，候选接纳和布局检查仍留在实际拥有这些约束的位置。中途checkpoint参与安全点，最终发布失败仍可恢复已完成计算。
 

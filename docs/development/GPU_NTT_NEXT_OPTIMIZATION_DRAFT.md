@@ -23,9 +23,11 @@
 
 ## 2. 让 2XY 和 carry 少搬中间数据
 
-- **先尝试频域线性组合。** 当前 2XY 第一层用 $X,Y,Z$ 的频谱得到 $X^2,Y^2,Z^2,XY$，分别逆变换并归约，再在整数域形成 $E=2XY$、$G=X^2+Y^2$、$H=X^2-Y^2$、$F=G-2Z^2$。候选在逐点乘法处合成四个结果，再各做一次逆变换。零列仍需 7 次前向、7 次逆向，收益来自省去一批独立模加减和中间读写。若去权后任一非负乘积系数上界为 $U$，则四路的绝对值至多 $2U$。统一使用中心代表元时，$4U<q$ 是充分条件。现有 carry 按非负系数处理，原型需要实现有符号归约或证明等价的偏置。首轮选择原长度下能满足上界的形状。 [原生 2XY 数据流](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流) · [系数界与已有整数原型](STAGE1_NTT_OPTIMIZATION_DRAFT.md#原生-edwards-2xy-naf-原型)
+- **继续减少频域组合的读写。** 0.63.15 的原生 Edwards 先逐点生成 $E,F,G,H$，再各做一次逆变换。零列仍需 7 次前向、7 次逆向。可以对照在逆向 warp 读入时直接计算四路的候选，考察重复域乘的代价。还可先逆变换 $J=2(C-Z^2)$，归约 $F$ 时读取并加上已逆变换的 $G$。后一个方案增加一次系数读取，逐点域乘从直接计算四路的 7 次降为 5 次。 [频域组合](../architecture/NTT.md#edwards-2xy-第一层频域融合) · [双卡对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)
 - **测试 carry 与下一次前向首层融合。** 宽位已有分段进位及 pack 摘要解析。先选只被下一层变换消费的槽，尝试避免规范值全局写回再读入。若共享内存驻留或同步抵消收益，则保留旧路径。完成点、检查点及仍被整数运算消费的坐标使用规范 limb。 [分段进位与 pack](../architecture/NTT.md#stage1-分段进位与-pack-融合) · [原生 Edwards 去权缓存](../architecture/NTT.md#原生-edwards-的共享去权缓存)
 - **保留有明确消费者的频谱。** 固定点字典和 x-only 的固定操作数已经复用频谱。可进一步尝试复用相同的规范输入，或在归约完成后顺带生成下一次前向的首段。去权、进位和模数折叠会改变 digit，未经归约的乘积频谱继续串乘需要另证系数界。分别计纯倍点列、非零列和按真实 NAF 序列运行的整批时间。 [Stage1 点公式的数据流](../performance/STAGE1_MERSENNE_NTT.md#stage1-点公式的数据流)
+
+这里的 $C$ 是全满 digit 向量的加权平方。若拆开 $J$ 与 $G$，二者逐槽均在 $[0,2U]$ 内，归约前相加仍满足 $4U<q$。该候选尚待实测，优先选 16384 点多曲线和 5120 点 128 曲线。
 
 ## 3. 先算能缩多少长度，再换算术后端
 
@@ -97,3 +99,11 @@ Nsight Systems 2026.1.3 每格另采一条，使用 CUDA Graph 节点与事件�
 独立的整数枚举与闭式计算比较了 3277 个小形状、M65521／2560 的全部系数，另对 20,000 个机器字累加输入验证了溢出检查。GPU1 GMP 探针覆盖全宽 digit、窄顶 limb、直接和 Graph 提交、分段与非分段归约，以及 2560／5120／10240 的相邻接受与拒绝例子。例如 2560 点接受 $p=66048$，拒绝 $p=66049$，又接受 $p=66050$。因此程序以实际指数验证，不能在调优表中用一个连续的指数上限表示扩展范围。x-only 探针按原有界拒绝 M65521／2560。
 
 整数审计、GMP 边界和初轮数据保存在 `data/experiments/stage1_ntt_weighted_bound_06312/`。两卡扩测的脚本、执行日志、端点 GMP 对拍和自动分派记录位于 `data/experiments/stage1_ntt_weighted_matrix_06313/`。 [双卡加权自动选长矩阵](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵) · [GPUowl Z 和 ROE](../reference/GPUOWL_NTT.md#运行日志中的-z-和-roe)
+
+## 第三轮 Edwards 进位与打包
+
+0.63.14 让原生 2XY NAF 使用已有的跨段进位与 pack 融合。按下一步消费者选择需要独立写回的中间值。在 M106531／5120 点上，747 列少 913 次写回。30 曲线的 pack 成本上升，但小于写回节省。两卡长短 B1 对照、波动复测、Sanitizer、检查点和 Stage2 交接均留在 `data/experiments/stage1_ntt_edwards_deferred_carry_06314/`。 [分段进位](../architecture/NTT.md#写回与下一批打包) · [双卡结果](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-延迟进位)
+
+## 第四轮 Edwards 2XY 第一层频域组合
+
+0.63.15 使用全满 digit 卷积的频谱做模零偏置。在第一批逆向前逐点写出 $E,F,G,H$，继续用非负归约。两卡在原长度下对照 0.63.14，覆盖 256–16384 点及 1、8、30、128 曲线。另验证 $4U/q$ 在 1 两侧和 M65521 的同长度回退。实测覆盖直接提交、Graph、断点续算和 Stage2 交接。证据保存在 `data/experiments/stage1_ntt_edwards_2xy_frequency_06315/`。 [正系数偏置](../architecture/NTT.md#edwards-2xy-第一层频域融合) · [双卡结果](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)

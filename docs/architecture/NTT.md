@@ -32,7 +32,9 @@ flowchart LR
     E --> G["加权 digit 和下一批前向 NTT"]
 ```
 
-融合适用于一批模加减产生且只被下一批打包读取的槽，以及第二批中只供第三批使用的平方项 \(\mathrm{DiffSq}\) 和融合乘加项 \(BB+A_{24}E\)。这类槽保留段内结果，pack 对源 limb 按需修正，再提取 digit 并施加权重。digit 跨越 limb 或段边界时，两个来源分别查各自的修正范围。还要参与普通模算术的输出和每步的两组 X/Z 都走独立写回，因此回读和检查点只看到规范整数。
+只供下一批打包的中间值可以保留段内结果。pack 对源 limb 按需修正，再提取 digit 并施加权重。digit 跨越 limb 或段边界时，两个来源分别查各自的修正范围。x-only 阶梯可延迟只供下一批打包使用的模加减、平方项 \(\mathrm{DiffSq}\) 和融合乘加项 \(BB+A_{24}E\)。还要参与普通模算术的输出和每步的两组 X/Z 都走独立写回。
+
+原生 Edwards 2XY 分别归约四个乘积时，倍点将 \(E=2XY\)、\(H=X^2-Y^2\) 和 \(F=X^2+Y^2-2Z^2\) 留给下一次 pack。计算 \(F\) 之前仍写回规范的 \(G=X^2+Y^2\) 和 \(2Z^2\)。第一层频域融合时，四路输出都可留给 pack。非零 NAF 列中的 \(Y\pm X\) 和最后一批只供打包使用的加减项也可延迟。全组输出都由 pack 消费时，省去整个写回 kernel。点坐标在每列结束时完成进位，GPU 字典、回读和检查点由此获得规范整数。 [实测](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-延迟进位)
 
 加权变换在 \(p>114688\) 时启用分段进位。5120 点在 \(p\ge106497\) 时各批量均可提前启用，2560／5120 点单曲线从 \(p=53249\) 起可提前启用。预算容不下摘要时使用单块归约。混合 radix-5 或单曲线可在 pack 中解析进位，二次幂多曲线独立写回。见 [宽位宽归约剖析](../performance/STAGE1_MERSENNE_NTT.md#gpu1-宽位宽归约热点) 和 [归约对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)。
 
@@ -48,7 +50,9 @@ flowchart LR
 
 ## Stage1 加权卷积的无符号系数界
 
-原生 Edwards 2XY 每次单独归约一个规范残数乘积，NAF 字典构建也使用这一合同。对于 $p$ 位操作数、长度 $L$，第 $i$ 个 digit 的位宽为 $\lceil p(i+1)/L\rceil-\lceil pi/L\rceil$。平均 bpw 是 $p/L$，计划日志和配置上限按最大位宽 $\lceil p/L\rceil$ 检查。共有 $p\bmod L$ 个长 digit，其余为短 digit。M65521／2560 平均为 25.5941 bpw，由 1039 个 25 位和 1521 个 26 位 digit 组成。
+原生 Edwards 2XY 按规范残数乘积的系数界选择长度，NAF 字典构建使用同一界。对于 $p$ 位操作数、长度 $L$，第 $i$ 个 digit 的位宽为 $\lceil p(i+1)/L\rceil-\lceil pi/L\rceil$。平均 bpw 是 $p/L$，计划日志和配置上限按最大位宽 $\lceil p/L\rceil$ 检查。共有 $p\bmod L$ 个长 digit，其余为短 digit。M65521／2560 平均为 25.5941 bpw，由 1039 个 25 位和 1521 个 26 位 digit 组成。
+
+字典归一化遇到非单位投影分母时可在点乘前检出真因子。见 [M16319 的配对验证](NAF.md#m16319-在字典归一化时检出因子) 和 [GPU 建表与显存预算](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 
 设 $g=\gcd(p,L)$、$H=L/g$、$R=(p\bmod L)/g$、$d=2^{\lfloor p/L\rfloor}$、$A=d-1$，用 $z=[R>0]$。短 digit 上界为 $A$，长 digit 为 $A+d$。将二者沿循环槽配对，再乘去权因子 1 或 2。对槽编号按分数余量重排后，系数包络随余量非增，最大值在槽零：
 
@@ -61,6 +65,18 @@ $$
 原生 Edwards 选择 weighted 且长度为 0 时，按长度递增检查二次幂和支持的 radix-5。候选须满足 $L\le p$、最大 bpw 不超过 31 及用户上限、tile 能在二次幂子变换中执行，并通过系数界。跳过不合格短档后选择第一个通过的长度。强制指定不合格长度时报错。随 $p$ 变化的实际 digit 分布会使准入有间隙。
 
 `ntt.tight_weighted_bound` 默认开启。卷积和长度都为自动时，原生 Edwards 先检查只有收紧界才能准入的短计划。其余形状由常规选型处理，使用 x-only 标定的计划均按保守界准入。若 Edwards 的显式长度只满足无符号界，异常 x-only 重放重新推导长度。启动日志的 $U$ 取执行计划实际使用的整数包络。保守包络为松弛差值预留双倍乘积空间，融合乘加启用时另计加数。 [系数代码](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh) · [选长代码](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
+
+### Edwards 2XY 第一层频域融合
+
+设 $D$ 为各 digit 取最大值的向量，它表示梅森模数 $M=2^p-1$。记 $C=D*D$ 为它的加权循环卷积。对每个去权后的系数，规范输入的 $X^2$、$Y^2$、$Z^2$ 和 $XY$ 均在 $[0,C]$ 内。频域逐点生成四路输出。
+
+$$
+E=2XY,\qquad F=X^2+Y^2+2(C-Z^2),\qquad G=X^2+Y^2,\qquad H=X^2+C-Y^2.
+$$
+
+$E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有系数非负。$C$ 在回卷后代表 $M^2$，因此在模 $M$ 下为零。程序只在 $U\le\lfloor(q-1)/4\rfloor$ 时组合四路频谱，可直接用现有无符号归约。启用后，日志用乘积上界的四倍作为 `U`。
+
+批次初始化打包并变换 $D$，逐点平方得到共享偏置频谱，占 $8L$ 字节。倍点仍对 $X,Y,Z$ 做三次前向，对 $E,F,G,H$ 做四次逆向。逐点组合复用四个域乘，随后逆向 tile 直接读取结果，省去第一层的两批整数加减。分段计划可将四路进位都交给下一次 pack。只有原生 Edwards 加权路径、允许紧界、适用 warp 逆向 tile 且显存有余量时启用。系数界不通过时原长度可继续单独计算四个乘积，再做加减。 [组合内核](../../kernels/cuda/stage1_ntt_dataflow.cuh) · [启用与调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)
 
 ## Stage1 radix-5 PFA
 

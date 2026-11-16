@@ -8,11 +8,11 @@ CUDA Montgomery 运行时默认 ladder、TPB128、按容器选择 TPI，使用�
 
 完整曲线 wall、GPU kernel 时间、批量摊销 s/curve 和短时投影分别报告。生产 B1=10e6…260e6 的短时采样按完整/窗口工作比投影，排除冷准备、最终归一化/save；checkpoint 不算已完成曲线。
 
-重复实验采用预热及相反或交错顺序，保留完整矩阵、失败样本和原始日志。CGBN 主矩阵通常每个条件测一批，PARAM0 三档复测各三批。NTT 主矩阵每个条件测三批。管理员 NCU 会重放，采集时间不计作吞吐。Nsight Systems 的自身事件间隙不等于整卡空闲比例。
+重复实验保留完整矩阵、失败样本和原始日志。CGBN 主矩阵通常每个条件测一批，PARAM0 三档复测各三批。当前 NTT 主矩阵每个条件测五个独立进程批次。管理员 NCU 会重放，采集时间不计作吞吐。Nsight Systems 的自身事件间隙不等于整卡空闲比例。
 
 ## Stage1 NTT 与 CGBN 和 Prime95 对比
 
-图例按 RTX 4070 Ti、RTX 4060 Laptop、Prime95 排列。4070 Ti 的 NTT 用绿色，CGBN 用蓝色。4060 Laptop 的当前 NTT 用红色，历史 NTT 用渐浅的紫色虚线，CGBN 用橙色。Prime95 为黑色。最新版本为实线，旧版本为虚线。横轴为各后端实际使用的算术位宽，纵轴为折算到 B1=1,000,000 的批量摊销秒／曲线。每张图左侧放大 16500 位以内的范围，右侧显示 NTT 的完整范围。
+图例按 RTX 4070 Ti、RTX 4060 Laptop、Prime95 排列。4070 Ti 的 NTT 用绿色，CGBN 用蓝色。4060 Laptop 的当前 NTT 用红色，历史 NTT 用渐浅的紫色虚线，CGBN 用橙色。Prime95 为黑色。两卡 NTT 实线均为 0.63.17，保留的早期版本用虚线。横轴为实际算术位宽，纵轴为折算到 B1=1,000,000 的秒／曲线。每张图左侧放大 16500 位以内的范围，右侧覆盖 NTT 全位宽。
 
 ### Edwards
 
@@ -20,9 +20,11 @@ CUDA Montgomery 运行时默认 ladder、TPB128、按容器选择 TPI，使用�
 
 ![Edwards Stage1 的相同数据，线性坐标](attachments/stage1-edwards-ntt-cgbn-prime95-linear.png)
 
-M16319 的 NTT 在 RTX 4070 Ti 上由 0.62.3 的 2.62 降至 0.62.4 的 **1.45 秒／曲线**。同指数的 16272 位余因子在 0.63.7 上用 CGBN NAF w12 为 **1.37 秒／曲线**，旧 w6 基线为 1.49 秒／曲线，Prime95 单核为 11.65 秒／曲线。RTX 4060 Laptop 的 w12 和 NTT 分别为 **5.77** 和 **6.63 秒／曲线**。主图的 M262139 在两张卡上均采用 30 条、16384 点加权 NTT，4060 Laptop 和 4070 Ti 分别为 **108.90** 和 **28.48 秒／曲线**。4070 Ti 在额外的 1–128 条穷举中选到 45 条，实测为 **28.06 秒／曲线**。见 [代表位宽穷举](#代表位宽穷举)。
+M16319 的完整模数使用 1024 点加权 NTT 和原生 2XY NAF w12。RTX 4070 Ti 以 120 条曲线测得 **1.20 秒／曲线**，RTX 4060 Laptop 以 128 条测得 **3.78 秒／曲线**。同指数的 16272 位余因子用 0.63.7 CGBN NAF w12 分别为 1.37 和 5.77 秒／曲线，Prime95 单核参考为 11.65 秒／曲线。
 
-原生 2XY NAF 的奇数倍点字典是固定准备开销，单独用短 B1 测量建表时间和冷进程吞吐。见 [两卡字典矩阵](STAGE1_MERSENNE_NTT.md#两卡字典矩阵)。
+M262139 在两卡均用 16384 点加权 NTT 和原生 2XY NAF w10。4070 Ti 的 40 曲线批量为 **20.43 秒／曲线**，4060 Laptop 的 30 曲线批量为 **77.94 秒／曲线**。
+
+0.63.17 在各档沿用之前选出的 Edwards 点乘路径和窗口。w8／w10／w12 的全位宽对照、初始化时间及内存分项见 [原生 Edwards NTT 的窗口矩阵](STAGE1_MERSENNE_NTT.md#原生-edwards-ntt-窗口矩阵)。
 
 ### Montgomery PARAM0
 
@@ -30,18 +32,31 @@ M16319 的 NTT 在 RTX 4070 Ti 上由 0.62.3 的 2.62 降至 0.62.4 的 **1.45 �
 
 ![相同数据的线性坐标图](attachments/stage1-ntt-best-cgbn-prime95-linear.png)
 
-M16319 的 NTT 在 RTX 4070 Ti 上由 0.62.3 的 2.61 降至 0.62.4 的 **1.45 秒／曲线**。同指数的 16272 位余因子在 0.63.7 上用 CGBN PRAC 50 为 **1.57 秒／曲线**，旧 ladder 基线为 1.71 秒／曲线，Prime95 单核为 12.95 秒／曲线。RTX 4060 Laptop 的 PRAC 50 和 NTT 分别为 **6.74** 和 **6.62 秒／曲线**。M262139 在 4060 Laptop 和 4070 Ti 上分别为 **108.45** 和 **28.35 秒／曲线**。
+M16319 的完整模数使用 1024 点加权 NTT 和 ladder。RTX 4070 Ti 以 120 条曲线测得 **1.44 秒／曲线**，RTX 4060 Laptop 以 128 条测得 **5.18 秒／曲线**。同指数的 16272 位余因子用 0.63.7 CGBN PRAC 50 分别为 1.57 和 6.74 秒／曲线，Prime95 单核参考为 12.95 秒／曲线。
+
+M262139 的 16384 点加权 ladder 在 4070 Ti 上用 45 条，在 4060 Laptop 上用 30 条，分别为 **27.86** 和 **106.88 秒／曲线**。
 
 ### 样本与计时
 
-- **RTX 4070 Ti NTT** 在 2610 MHz 上比较相同的 29 个完整梅森数（61–262139 位）。0.62.4 在 1–128 条范围自适应搜索，0.62.3 穷举 1–32 条。各版本用获选计划实测每种曲线三次，B1=1024 用于 M61、M127 和超过 20000 位的输入，其余用 B1=10000。两版都取阶梯 CUDA event 区间。见 [RTX 4070 Ti 全位宽矩阵](#rtx-4070-ti-全位宽矩阵)。
+- **NTT 0.63.17** 2026-11-16 两卡并行采集。每卡分别测试 Edwards 和 Montgomery PARAM0，输入为相同的 29 个完整梅森模数（61–262139 位），只运行 Stage1。固定 0.63.16 对应条件的实测计划。PARAM0 在 0.63.16 缺测的档位使用 0.63.15 的计划。按固定计划的短测时间选择约 5 秒主循环的阶梯 B1，首批偏离 4.25–5.75 秒时允许按档位校准一次。每档最终保留五批同 B1 的正式样本，共 116 个条件、580 批。构建使用 CUDA 13.3.73／sm89、MSVC 14.51.36231、驱动 610.88。见 [阶梯 B1 的主循环计时](STAGE1_MERSENNE_NTT.md#阶梯-b1-的主循环计时)。
+- **RTX 4070 Ti 历史 NTT** 在 2610 MHz 上使用相同的 29 个指数。0.62.4 在 1–128 条范围自适应搜索，0.62.3 穷举 1–32 条。各版本用获选计划实测每种曲线三次，使用相同 B1 和阶梯 CUDA event 区间。见 [RTX 4070 Ti 全位宽矩阵](#rtx-4070-ti-全位宽矩阵)。
 - **NTT 0.62.2** 使用 GPU1 RTX 4060 Laptop，覆盖 61–262139 位的 26 个完整梅森模数。每个指数重新测量 1–32 条曲线，在调优候选中选实测吞吐最高的计划。两种曲线复用计划，各跑三次真实 Stage1，取 ladder 的 CUDA event，排除准备、回读和发布。
 - **RTX 4060 Laptop 历史 NTT** 与本卡 0.62.2 共用 26 个指数、B1 和阶梯计时边界，每指数各测三次。Edwards 最早一版是 0.60.0，Montgomery 是 0.59.9。跨版本曲线体现各版本的实现、计划和并行数。
 - **CGBN 0.62.3** 使用两张 GPU，在相同的 13 个 318–16272 位余因子上按曲线族各测一批。Edwards 用 NAF w6，PARAM0 用二进制 ladder，两种曲线都采用主循环设备计时。见 [CGBN 两卡对照](#cgbn-两卡对照)。
 - **CGBN 0.63.7** 沿用相同余因子和批量，实线为 Edwards NAF w12 和 PARAM0 PRAC 50。两种算法均使用三片滚动提交。PARAM0 三档复测的 PRAC 中位数替换实线对应点，配对的 ladder 以叉号标出，误差线表示三批最小至最大值。两组复测都归入 0.63.7 算法基线。见 [优化前基线](#0637-优化前基线)和[配对复测](#param0-prac-50-与-ladder-的配对复测)。
 - **Prime95** 使用 4.0 GHz 单核原生 Stage1 计时。Edwards 覆盖 29 个指数，Montgomery 覆盖历史的 13 个指数，每指数三次。历史数据 B1=1,000,000，Edwards 补测按各指数的 B1 归一化。图中按完整梅森指数定位，GWNUM 仍用原始 `k,b,n,c` 设置。日志未记录精确程序版本。见 [CPU 基准和补测](#prime95-单核基准与-b1-外推)。
 
-GPU 用实际批次时间除以参加设备主循环的曲线数，再乘 `1,000,000 / B1`。NTT 排除曲线构造、初始化、末点回读、GCD 和发布。阴影覆盖两张 GPU 各自最新的 NTT 和 Prime95 三次样本的最小至最大值。RTX 4060 Laptop 的 0.62.2 相对 0.61.3，两类曲线各 26 个指数的中位耗时均下降，降幅中位数分别为 Montgomery **32.5%** 和 Edwards **32.8%**。4060 Laptop 上，PARAM0 的 NTT 在 M12511 和 M16319 的折算耗时较低，Edwards 的 13 个共有指数均以 CGBN 耗时较低。见 [RTX 4060 Laptop NTT 全位宽矩阵](STAGE1_MERSENNE_NTT.md#最佳配置全位宽矩阵) 与 [历史 Prime95 单核基准](#prime95-单核基准与-b1-外推)。
+GPU 用实际批次时间除以设备计划中的活跃曲线数，再乘 `1,000,000 / B1`。NTT 取主循环的 CUDA event 区间，排除曲线构造、指数和 NAF 准备、字典、Graph 构建、末点回读、GCD 和发布。两卡实线取各条件五批的中位数，Prime95 取三次的中位数。阴影为对应样本的最小至最大值。跨版本结果包含点乘实现、计划、并行数和实测 B1 的影响。固定同一形状的 2XY 融合收益见 [第一层频域融合对照](STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)。
+
+PARAM0 的 M61 是 B1 标定的例外。初始 sigma 20260945 的点阶整除两卡试跑的 $operatorname{lcm}(1,ldots,B_1)$，独立 PARI 运算得到无穷远点。0.63.17 在该结果下中止整批。各次失败均保留。正式样本统一以 sigma 20261946 起跑，B1=49152、每批 128 条，主循环中位数为 4070 Ti 的 2.29 秒与 4060 Laptop 的 4.66 秒。验证脚本和试跑日志在本轮实验目录。
+
+除上述 M61 外，115 个条件的主循环中位数为 4.43–5.43 秒。按共同指数逐档计算折算耗时的相对变化，4070 Ti 相对 0.62.4 的 29 档中位数为 −9.4%（Edwards）和 +0.6%（PARAM0）。4060 Laptop 相对 0.62.2 的 26 档中位数分别为 −57.6% 和 −41.3%，该卡矩阵的最大批量从 32 条扩展到 128 条。Edwards 在 4070 Ti 上有 10 档 x-only、7 档 w10、12 档 w12，在 4060 Laptop 上分别为 1、7、21 档。
+
+正式运行区间内，整卡利用率至少 50% 的遥测样本中，4070 Ti 为 2610 MHz、15.02–258.89 W（4230 点，功耗上限 285 W），4060 Laptop 为 1500 MHz、3.77–47.15 W（4379 点）。
+
+0.63.17 的四份 `summary.json`、逐批日志和存档在 `data/experiments/stage1_main_matrix_06317/gpu{0,1}/{ed,mont}/`。实验根目录的 `replot_main.ps1` 用四份汇总数据重生成主图，合并后的绘图 CSV 在 `data/figures/stage1_main_matrix_06317/{ed,mont0}/comparison.csv`。[对比图脚本](../../tools/bench/plot_stage1_ntt_best.py)
+
+按 sigma 核对五批中的 69,000 条曲线结果，校验存档及真因子的整除性。PARAM0 的 M61 两卡 128 条曲线的规范末点逐条一致。CPU 整数参考另对拍 5 个 M61 结果，含一个 Edwards 恒等点。Edwards 的 M251 在主循环前剔除了已得因子的曲线，按实发批量折算。正式样本中 x-only 重放次数为零。详情见实验目录的 `audit.json`。
 
 固定形状对照分别测量短逆变换、前向读入融合、块宽和进位的收益。0.62.3 另有 2560／5120 点归约与 16384 点单曲线调优的专项复测。见 [短逆变换](STAGE1_MERSENNE_NTT.md#短逆变换)、[前向 tile 与进位](STAGE1_MERSENNE_NTT.md#前向-tile-与进位)、[0.62.3 专项复测](STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优) 和 [同卡模平方对照](STAGE1_MERSENNE_NTT.md#同卡完整模平方与-prpll)。
 
@@ -86,7 +101,7 @@ python tools/bench/bench_stage1_cgbn_baseline.py --exe $worker --version 0.63.7 
 python tools/bench/bench_stage1_cgbn_baseline.py --exe $worker --version 0.63.7 --device 1 --output "$out/retest-gpu1"
 ```
 
-绘图时，`--ntt` 读取 `data/experiments/stage1_forward_tile_0622/{mont,ed}/summary.json`。两个 `--previous-ntt` 分别读取 `stage1_ntt_segments/` 与 `stage1_unified_4060_0600/` 的同曲线报告。`--overlay-ntt` 读取 `stage1_ntt_128_0624/{mont,ed}128/` 的同曲线报告，以及 `stage1_4070ti_0623/` 的同曲线主矩阵和混合长度补测。`--comparison` 与 `--overlay-cgbn` 分别读取 `data/benchmarks/stage1_cgbn_curve_cost_0623/` 下的 GPU1 和 GPU0 同曲线汇总。两次 `--cgbn-baseline` 分别读取本轮 `gpu{0,1}/{ed,mont0}.json` 的同曲线报告。Edwards 用 `--prime95-stage1` 读入补测工作行及日志。合并后的绘图 CSV 位于 `data/figures/stage1_slice_baseline_0637/{ed,mont0}/comparison.csv`。见 [对比图脚本](../../tools/bench/plot_stage1_ntt_best.py)。
+0.63.7 当时的对比图使用 `data/experiments/stage1_forward_tile_0622/`、`stage1_ntt_segments/`、`stage1_unified_4060_0600/`、`stage1_ntt_128_0624/` 和 `stage1_4070ti_0623/` 中的 NTT 历史数据，以及 `data/benchmarks/stage1_cgbn_curve_cost_0623/` 和本轮的 CUDA CGBN 报告。合并后的绘图 CSV 位于 `data/figures/stage1_slice_baseline_0637/{ed,mont0}/comparison.csv`。
 
 ### PARAM0 PRAC 50 与 ladder 的配对复测
 
@@ -114,9 +129,9 @@ python tools/bench/bench_stage1_cgbn_baseline.py --exe $worker --version 0.63.7 
 
 GPU 实心柱使用设备主循环计时，斜线柱保留历史 Montgomery 的设备全局计时，含准备开销。每个子图最右的黑柱为 4.0 GHz 单核 Prime95，采用各曲线族三次原生 Stage1 计时的中位数，按相同 B1 折算。Prime95 的 GWNUM 使用完整梅森指数设置算术位宽，原日志未记录精确版本。见 [Prime95 单核基准与 B1 外推](#prime95-单核基准与-b1-外推)。
 
-跨版本采用各轮实测配置，包括并行数、调优范围、NAF 窗口与曲线算法。0.62.4 的 RTX 4070 Ti NTT 样本允许搜索最多 128 条，0.62.3 的上限为 32 条。0.63.7 的 PARAM0 在 M2003 上选取同批复测的获胜路径，4070 Ti 为 ladder，4060 Laptop 为 PRAC 50。更早的折叠测试使用不同的原模数或批量条件，不能归到这四个固定输入的历史柱。见 [样本与计时](#样本与计时)、[PRAC 配对复测](#param0-prac-50-与-ladder-的配对复测)。
+跨版本使用各轮实测配置。0.63.17 的 16 根 NTT 柱来自本轮两卡矩阵，每档取五批正式样本的中位数，按实测 B1 和进入主循环的曲线数折算。0.62.4 的 RTX 4070 Ti NTT 允许搜索最多 128 条，0.62.3 的上限为 32 条。0.63.7 的 PARAM0 在 M2003 上选取同批复测的获胜路径，4070 Ti 为 ladder，4060 Laptop 为 PRAC 50。更早的折叠测试使用不同原模数或批量。见 [样本与计时](#样本与计时)和[PRAC 配对复测](#param0-prac-50-与-ladder-的配对复测)。
 
-图表从 Git 快照 `2d091243:docs/performance/STAGE1.md` 和 `fed434ef:docs/performance/CGBN_SQUARE.md` 恢复早期 CGBN 数据。0.57.16 采用历史构建的启动版本，三档均选原 CGBN。其余来源为主图的比较 CSV 及 0.60.2 PARAM0 自动选型复测。运行 [版本吞吐绘图脚本](../../tools/bench/plot_stage1_version_throughput.py) 可从原数据复算；逐柱的版本、算法、计时口径和来源写入 `data/benchmarks/stage1_version_throughput/selected.csv`。见 [早期 4070 Ti 工况](#输入与工况)、[CGBN 历史 A/B](CGBN_SQUARE.md#平方装配与redc融合的完整stage1资格)、[0.60.2 全位宽复测](STAGE1_MERSENNE_NTT.md#0602-全位宽复测与精确边界)。
+早期 CGBN 数据来自 Git 快照 `2d091243:docs/performance/STAGE1.md` 和 `fed434ef:docs/performance/CGBN_SQUARE.md`。0.57.16 取历史构建的启动版本，三档均选原 CGBN。其余来源为 0.63.17 的四份矩阵 `summary.json`、主图的 `comparison.csv` 及 0.60.2 PARAM0 自动选型复测。逐柱的版本、计时区间和来源记录在 `data/benchmarks/stage1_version_throughput/selected.csv`。0.63.17 样本还记录 NTT 长度、点乘路径、活跃批量和 B1。[版本吞吐绘图脚本](../../tools/bench/plot_stage1_version_throughput.py) · [早期 4070 Ti 工况](#输入与工况) · [CGBN 历史 A/B](CGBN_SQUARE.md#平方装配与redc融合的完整stage1资格) · [0.60.2 全位宽复测](STAGE1_MERSENNE_NTT.md#0602-全位宽复测与精确边界)
 
 ## Edwards 与 Montgomery 的 Stage1 耗时差
 

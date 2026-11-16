@@ -281,7 +281,7 @@ Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] stage1.cpu_
 
 Legacy v1 key `stage1.stage1_threads`
 
-CPU Stage1 thread count; 0 selects automatically. Applies only to CPU arithmetic and does not set CUDA threads per block or threads per integer.
+Host worker count for CPU Stage1 and for curve construction in CUDA Edwards NTT Stage1. 0 selects automatically. CUDA launch geometry is controlled separately.
 
 ### cuda_low_cpu
 

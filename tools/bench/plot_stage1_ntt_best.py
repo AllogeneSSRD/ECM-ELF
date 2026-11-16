@@ -75,6 +75,7 @@ def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=N
                 cgbn_baselines=(), cgbn_retests=None):
     target_b1 = historical["target_b1"]
     current_version = version_order(ntt)
+    current_exponents = set(ntt["exponents"])
     seen_versions = {current_version}
     points = {("ntt", ntt_version(ntt)): ntt_points(ntt, target_b1)}
     for report in sorted(previous_ntt, key=version_order, reverse=True):
@@ -83,8 +84,8 @@ def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=N
             raise ValueError("each previous NTT version must be distinct and older than --ntt")
         if any(report[key] != ntt[key] for key in ("curve", "gpu_model")):
             raise ValueError("NTT series must use the same GPU model and curve construction")
-        if sorted(report["exponents"]) != sorted(ntt["exponents"]):
-            raise ValueError("NTT series must cover the same exponents")
+        if not set(report["exponents"]).issubset(current_exponents):
+            raise ValueError("previous NTT reports must use exponents from the current matrix")
         seen_versions.add(version)
         points["ntt_previous", ntt_version(report)] = ntt_points(report, target_b1)
     if overlay_ntt:
@@ -150,7 +151,23 @@ def make_points(ntt, historical, previous_ntt=(), overlay_ntt=(), overlay_cgbn=N
     return {key: sorted(rows, key=lambda r: r[1]) for key, rows in points.items()}
 
 
-def plot(points, output, logarithmic, curve, device, overlay_device=None):
+def ntt_sample_scope(current, previous, overlay):
+    newest_overlay = max((version_order(report) for report in overlay), default=None)
+    current_reports = [current] + [report for report in overlay if version_order(report) == newest_overlay]
+    earlier_reports = list(previous) + [report for report in overlay if version_order(report) != newest_overlay]
+
+    def counts(reports):
+        lengths = sorted({len(group["projected_seconds_per_curve_1e6"])
+                          for report in reports for group in report["groups"]})
+        if len(lengths) < 2:
+            return str(lengths[0]) if lengths else ""
+        return f"{lengths[0]}–{lengths[-1]}"
+
+    latest, earlier = counts(current_reports), counts(earlier_reports)
+    return f"{latest} current / {earlier} prior runs" if earlier and earlier != latest else f"{latest} runs"
+
+
+def plot(points, output, logarithmic, curve, device, overlay_device, ntt_scope):
     model = "Edwards" if curve == "ed" else "Montgomery PARAM0"
     primary_history = [version for backend, version in points if backend == "ntt_previous"]
     overlay_history = [version for backend, version in points if backend == "ntt_overlay_previous"]
@@ -200,7 +217,7 @@ def plot(points, output, logarithmic, curve, device, overlay_device=None):
                                  layout="constrained")
         cgbn_scope = "1 batch, 3 on retests" if has_retests else "1 batch"
         fig.suptitle(f"Stage1 {model} · Cost per curve\n"
-                     f"NTT · full Mersenne, 3 runs   |   CGBN · cofactor, 2 blocks/SM, {cgbn_scope}   |   "
+                     f"NTT · full Mersenne, {ntt_scope}   |   CGBN · cofactor, 2 blocks/SM, {cgbn_scope}   |   "
                      "Prime95 · native Stage1, 3 runs",
                      fontsize=13, fontweight="medium", linespacing=1.45)
         lines = {}
@@ -298,8 +315,9 @@ def main():
         parser.error(str(error))
     args.output.mkdir(parents=True, exist_ok=True)
     prefix = "stage1-edwards-ntt-cgbn-prime95" if curve == "ed" else "stage1-ntt-best-cgbn-prime95"
+    ntt_scope = ntt_sample_scope(ntt, previous, overlay)
     for suffix in ("log", "linear"):
-        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device, overlay_device)
+        plot(points, args.output / f"{prefix}-{suffix}.png", suffix == "log", curve, device, overlay_device, ntt_scope)
     with (args.output / "comparison.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(("series", "mersenne_exponent", "arithmetic_bits", "median_s_per_curve_at_1e6",

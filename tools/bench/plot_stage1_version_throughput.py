@@ -10,6 +10,7 @@ from pathlib import Path
 from statistics import median
 import subprocess
 
+from plot_stage1_ntt_best import ntt_points, ntt_version
 from plot_version_throughput import PRIME95, WIDTHS, plot_version_panels, version_key
 
 
@@ -24,6 +25,7 @@ COLORS = {
 }
 HISTORICAL_COMPARISON = "2d091243:docs/performance/STAGE1.md"
 HISTORICAL_SQUARE = "fed434ef:docs/performance/CGBN_SQUARE.md"
+MATRIX_VERSION = "0.63.17"
 MAIN_LOOP = "main loop"
 WITH_SETUP = "device interval including preparation"
 
@@ -85,7 +87,43 @@ def historical_samples():
                          MAIN_LOOP if ed else WITH_SETUP, HISTORICAL_SQUARE)
 
 
-def comparison_samples(path, curve):
+def matrix_samples(root, curve):
+    model = "ed" if curve == "ed" else "mont"
+    for device, name in enumerate(("4070 Ti", "4060 Laptop")):
+        path = root / f"gpu{device}" / model / "summary.json"
+        report = json.loads(path.read_text(encoding="utf-8-sig"))
+        if (ntt_version(report) != MATRIX_VERSION or report["curve"] != model
+                or report["device"] != device or name not in report["gpu_model"]
+                or report["rounds"] != 5 or not WIDTHS.keys() <= set(report["exponents"])):
+            raise ValueError(f"Unexpected Stage1 matrix identity in {path}")
+        points = {p: seconds for p, _, seconds, _, _ in ntt_points(report, REFERENCE_B1)}
+        for group in report["groups"]:
+            p = group["p"]
+            if p not in WIDTHS:
+                continue
+            measurements = group["projected_seconds_per_curve_1e6"]
+            samples = group["samples"]
+            active_batch = group["active_batch"]
+            b1 = group["b1"]
+            shapes = {(sample["chain"], sample["naf_window"], sample["active_curves"]) for sample in samples}
+            if (len(samples) != 5 or len(measurements) != 5 or len(shapes) != 1 or active_batch <= 0 or b1 <= 0
+                    or any(not math.isfinite(seconds) or seconds <= 0 for seconds in measurements)
+                    or any(not math.isclose(seconds, projected(sample["device_ms"] / 1000, b1, active_batch),
+                                            rel_tol=1e-12) for seconds, sample in zip(measurements, samples))):
+                raise ValueError(f"Invalid NTT samples for M{p} in {path}")
+            chain, window, measured_batch = next(iter(shapes))
+            if measured_batch != active_batch:
+                raise ValueError(f"Mismatched active batch for M{p} in {path}")
+            if chain == "naf":
+                chain = f"2XY NAF w{window}"
+            tune = group["tune"]
+            convolution = tune["ntt_type"].removeprefix("stage1_")
+            variant = f"{convolution} N={tune['length']}, {chain}, {active_batch}c, B1={b1}"
+            yield Sample(curve, p, p, MATRIX_VERSION, f"{name} NTT", points[p], variant, MAIN_LOOP, path.as_posix())
+
+
+def comparison_samples(path, curve, current):
+    matrix = {(sample.exponent, sample.series): sample for sample in current}
     with path.open(encoding="utf-8", newline="") as stream:
         for row in csv.DictReader(stream):
             p = int(row["mersenne_exponent"])
@@ -102,6 +140,14 @@ def comparison_samples(path, curve):
                 continue
             version = row["version"]
             device = "4070 Ti" if "overlay" in role else "4060 Laptop"
+            if backend == "ntt" and version == MATRIX_VERSION:
+                actual = matrix[p, f"{device} NTT"]
+                if not math.isclose(float(row["median_s_per_curve_at_1e6"]), actual.seconds_per_curve_at_1e6,
+                                    rel_tol=1e-12):
+                    raise ValueError(f"M{p} {device}: {path} and {actual.source} disagree")
+                continue
+            if backend == "ntt" and version == "0.63.15":
+                continue
             if backend == "ntt":
                 variant = "tuned NTT plan"
             elif curve == "ed":
@@ -146,7 +192,9 @@ def select(samples):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--comparison-root", type=Path, default=Path("data/figures/stage1_slice_baseline_0637"))
+    matrix_dir = "stage1_main_matrix_" + MATRIX_VERSION.replace(".", "")
+    parser.add_argument("--comparison-root", type=Path, default=Path("data/figures") / matrix_dir)
+    parser.add_argument("--ntt-matrix-root", type=Path, default=Path("data/experiments") / matrix_dir)
     parser.add_argument("--mont-auto", type=Path,
                         default=Path("data/experiments/stage1_ntt_auto_matrix_0602/verified/summary.json"))
     parser.add_argument("--output-dir", type=Path, default=Path("data/figures/stage1_version_throughput"))
@@ -157,7 +205,9 @@ def main():
     samples = list(historical_samples())
     samples.extend(mont_auto_samples(args.mont_auto))
     for curve in curves:
-        samples.extend(comparison_samples(args.comparison_root / curve / "comparison.csv", curve))
+        current = list(matrix_samples(args.ntt_matrix_root, curve))
+        samples.extend(current)
+        samples.extend(comparison_samples(args.comparison_root / curve / "comparison.csv", curve, current))
     selected = select(samples)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for curve in curves:
@@ -169,6 +219,7 @@ def main():
             colors=COLORS, hatch=WITH_SETUP, hatch_label="GPU interval includes prep",
             reference_label="Prime95 (1T)",
             note="CGBN uses the cofactor. NTT and Prime95 use the full exponent for arithmetic.",
+            stagger_higher_labels=True,
         )
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     rows = [dict(asdict(row), curves_per_second_at_1e6=row.throughput) for row in selected]

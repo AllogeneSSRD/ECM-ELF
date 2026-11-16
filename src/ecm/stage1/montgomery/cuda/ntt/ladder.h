@@ -31,9 +31,10 @@ enum Dataflow : unsigned {
     FusedMultiplyAdd = 1, LooseDifference = 2, DirectRoute = 4, PackedForward = 8, CachedCarry = 16,
     SegmentedCarry = 32, DeferredPack = 64, PfaRadix5 = 128, CoalescedRadix5 = 256,
     InverseWarpInput = 512, ForwardTileInput = 1024, ForwardTileCompact = 2048,
-    FusedWeightedCarry = 4096, ShortInverseTile = 8192, CachedFusedWeightedCarry = 16384
+    FusedWeightedCarry = 4096, ShortInverseTile = 8192, CachedFusedWeightedCarry = 16384,
+    Edwards2XYFrequency = 32768
 };
-inline constexpr unsigned experimental_dataflow_limit = (CachedFusedWeightedCarry << 1) - 1;
+inline constexpr unsigned experimental_dataflow_limit = (Edwards2XYFrequency << 1) - 1;
 
 struct Control {
     unsigned resume = 0;
@@ -56,6 +57,10 @@ struct Run {
     double setup_seconds = 0, readback_seconds = 0;
     double dictionary_gpu_ms = 0;
     double dictionary_inverse_ms = 0;
+    double dictionary_host_ms = 0, dictionary_device_wall_ms = 0;
+    bool dictionary_built_on_gpu = false;
+    size_t dictionary_spectra_bytes = 0, dictionary_workspace_bytes = 0;
+    size_t dictionary_fallback_host_bytes = 0;
     // Empty for the host dictionary. Otherwise 0=ready, 1=factor, 2=replay.
     std::vector<uint8_t> dictionary_status;
     std::vector<uint32_t> dictionary_factors;
@@ -80,6 +85,9 @@ struct EdwardsNaf {
     const std::vector<uint32_t>& dictionary;
     size_t dictionary_budget = 0;
     bool build_dictionary = false;
+    // Convert the seed to a host table only if the automatic GPU builder's
+    // temporary storage exceeds a limit. Keep the same lanes for checkpoints.
+    std::function<std::vector<uint32_t>(Run&)> host_fallback;
 };
 Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                 const EdwardsNaf&, const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);

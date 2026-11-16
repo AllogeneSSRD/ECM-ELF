@@ -16,6 +16,19 @@ def metric(row, measure):
     return median(row["curves"] / s["process_s"] for s in samples)
 
 
+def matched_points(rows, curves, window, builder):
+    by_width = {}
+    for row in rows:
+        if row["curves"] != curves or row["window"] != window:
+            continue
+        if not all(sample["backend"] == builder for sample in row["samples"]):
+            continue
+        width = row["p"]
+        if width not in by_width or row.get("requested") == builder:
+            by_width[width] = row
+    return [by_width[width] for width in sorted(by_width)]
+
+
 def plot(devices, output, measure, log):
     batches = sorted({row["curves"] for _, rows in devices for row in rows})
     fig, axes = plt.subplots(len(batches), len(devices), figsize=(11, 8.1),
@@ -32,9 +45,7 @@ def plot(devices, output, measure, log):
                         label="x-only", color="#353535", marker=".", linewidth=1.4)
             for window, color, marker in zip((6, 8), colors, ("o", "s")):
                 for builder, linestyle in (("gpu", "-"), ("host", "--")):
-                    points = sorted((r for r in rows if r["curves"] == curves
-                                     and r["window"] == window and r["samples"][0]["backend"] == builder),
-                                    key=lambda r: r["p"])
+                    points = matched_points(rows, curves, window, builder)
                     ax.plot([r["p"] for r in points], [metric(r, measure) for r in points],
                             label=f"w{window} {builder.upper()}", color=color, linestyle=linestyle,
                             marker=marker, markerfacecolor=color if builder == "gpu" else "white",
