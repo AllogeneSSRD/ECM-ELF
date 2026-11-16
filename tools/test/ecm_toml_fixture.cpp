@@ -60,6 +60,20 @@ static void edwards_doubling_config(const std::filesystem::path& path) {
         rejected(path, std::string("config_version=3\n[stage1]\nedwards_doubling=") + value + "\n");
 }
 
+static void prac_search_config(const std::filesystem::path& path) {
+    write(path, "config_version=3\n[stage1]\ncpu_prac_search=50\n"
+                "[worker.2]\nstage1.cpu_prac_search=1\nstage1.cuda_prac_search=12\n");
+    ParsedConfig parsed;
+    expect(read_config(path.string(), parsed), "valid PRAC search config rejected");
+    EcmQueueConfig cfg;
+    project_stage1_config(parsed, 1, cfg);
+    expect(cfg.cpu_prac_search == 50 && cfg.cuda_prac_search == 7, "PRAC global value or default lost");
+    project_stage1_config(parsed, 2, cfg);
+    expect(cfg.cpu_prac_search == 1 && cfg.cuda_prac_search == 12, "PRAC worker override not applied");
+    for (const auto* value : {"0", "51", "7.0", "'7'", "true"})
+        rejected(path, std::string("config_version=3\n[stage1]\ncpu_prac_search=") + value + "\n");
+}
+
 static void boolean_diagnostic(const std::filesystem::path &path, bool worker) {
     write(path, std::string(worker ? "[workers.2.stage2]" : "[stage2]") +
                 "\nstage2_giant_tail_balance = 1.0\n");
@@ -323,6 +337,7 @@ int main(int argc,char **argv) {
         cpu_slice_config(argv[2]);
         v3_shared_config(argv[2]);
         cuda_slice_config(argv[2]);
+        prac_search_config(argv[2]);
         edwards_doubling_config(argv[2]);
         const auto *tail_meta=ecm_config::toml_option("stage2","stage2_giant_tail_balance");
         expect(tail_meta && std::string(tail_meta->type)=="bool" && std::string(tail_meta->domain)=="[false|true|0|1]",

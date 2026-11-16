@@ -74,7 +74,8 @@ def main():
         for enabled,directory in [(0,a.systems_off),(1,a.systems_on)]:
             report=json.loads((directory/'summary.json').read_text())
             meta=json.loads((directory/'command.json').read_text())
-            if not report['arithmetic_verified'] or meta['binary_sha256']!=summary['stage2_binary'] or int(meta['environment']['NTT_S4_PACK_ZERO'])!=enabled:
+            pack_zero=meta.get('pack_zero',meta['environment'].get('NTT_S4_PACK_ZERO'))
+            if not report['arithmetic_verified'] or meta['binary_sha256']!=summary['stage2_binary'] or pack_zero is None or int(pack_zero)!=enabled:
                 raise ValueError('Systems capture does not match full curve binary/path')
             invariant=[report['application'][key] for key in ['correctness','histogram','convolutions','chunks']]+[meta['inputs']]
             if inputs is None:inputs=invariant

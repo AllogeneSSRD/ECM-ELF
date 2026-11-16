@@ -12,9 +12,15 @@ import time
 from bench_cuda_prac import GEOMETRY
 
 INFO = re.compile(r'PRAC_WINDOW position=(\w+) first=(\d+) count=(\d+) p_first=(\d+) p_last=(\d+) work=(\d+) full_work=(\d+) warmup=(\d+)')
+PLAN = re.compile(r'preparing Prime95 PRAC plan \(B1=\d+, t=\d+, search=(\d+)\)')
 DONE = re.compile(r'PRAC_WINDOW_DONE rounds=(\d+) measured=(\d+) kernel_ms=([\d.]+) work=(\d+) projected=([\d.]+) s/curve wall=([\d.]+) seed_bytes=(\d+) restore_bytes=(\d+)')
 SLICING = re.compile(r'PRAC_WINDOW_SLICING chunk=(\d+) launches_per_round=(\d+)')
 COST = re.compile(r'PRAC_WINDOW_COST measured_wall_ms=([\d.]+) measured_launches=(\d+) boundary_logical_bytes_per_round=(\d+)')
+
+
+def checkpoint_digests(folder):
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+            for pattern in ("*.ckpt*", ".ecm_ckpt_*") for p in folder.glob(pattern) if p.is_file()}
 
 
 def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
@@ -32,7 +38,7 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
         ECM_GPU_STAGE1_SAMPLE_SECONDS=str(seconds), ECM_PRAC_PLAN_CACHE=str(cache))
     env.pop('ECM_GPU_DUMP', None)
     env.pop('ECM_PRAC_TARGET_MS', None)  # Fixed window chunks are independent of production feedback.
-    before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('.ecm_ckpt_*')}
+    before = checkpoint_digests(folder)
     command = [str(exe), '--curve','mont','--target','gpu', '-d', str(device), '--gpu-param', '0', '-sigma', f'0:{sigma}',
         '-gpucurves', str(curves), '--ckpt', '0', '--lcm',
         '12' if exponent == 'choose12' else '1',
@@ -43,8 +49,8 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=seconds + 180)
     text = proc.stdout.decode('utf-8', errors='replace')
     (folder / 'run.log').write_text(text, encoding='utf-8')
-    info, done, geometry = INFO.search(text), DONE.search(text), GEOMETRY.search(text)
-    if not info or not done or not geometry or proc.returncode != 1:
+    info, done, geometry, plan = INFO.search(text), DONE.search(text), GEOMETRY.search(text), PLAN.search(text)
+    if not info or not done or not geometry or not plan or proc.returncode != 1:
         raise RuntimeError(f'Incomplete window measurement: {folder}\n{text[-2000:]}')
     if f'PRAC variant={variant}' not in text:
         raise RuntimeError('Requested window variant was not selected')
@@ -52,8 +58,9 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
         raise RuntimeError('Requested window constants policy was not selected')
     if 'checkpoint resumed' in text or 'Stage1 PRAC completed' in text:
         raise RuntimeError('Window entered a production checkpoint/completion path')
-    after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('.ecm_ckpt_*')}
-    if before != after: raise RuntimeError('Window modified production checkpoints')
+    after = checkpoint_digests(folder)
+    if any(after.get(name) != digest for name, digest in before.items()):
+        raise RuntimeError('Window modified an existing Stage1 checkpoint')
     if any('SIGMA=' in p.read_text(encoding='utf-8') for p in folder.glob('*.save')):
         raise RuntimeError('Window published a final Stage1 save')
     rounds, measured, ms, work, projected, wall, seed, restore = done.groups()
@@ -72,7 +79,7 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
                         map(int, geometry.groups())))
     if (tpi and selected['tpi'] != tpi) or selected['curves'] != curves:
         raise RuntimeError('Wrong window geometry')
-    result = dict(bits=bits, B1=b1, curves=curves, device=device, requested_tpi=tpi,
+    result = dict(bits=bits, B1=b1, curves=curves, device=device, requested_tpi=tpi, prac_search=int(plan[1]),
         registers=registers, variant=variant, constants=constants, position=position, requested_count=count,
         first=int(info[2]), count=int(info[3]), p_first=int(info[4]), p_last=int(info[5]),
         requested_chunk=chunk, chunk=actual_chunk, launches_per_round=launches_per_round,

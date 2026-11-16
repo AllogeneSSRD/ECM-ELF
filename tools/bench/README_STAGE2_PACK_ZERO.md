@@ -16,7 +16,7 @@
 
 `benchmark_stage2_graph.py --variant pack-zero --exe <生产Stage2 exe> --cases <cases.json> --output <新目录> --device 1 --repeats 4`。
 
-复用固定D工具，Graph/MID_COOP/JOINT关闭，只改变NTT_S4_PACK_ZERO=0/1。每条曲线核对GMP、因子、rootfold、数学NTT长度分布及S4分块，且要求on侧实际覆盖digit；输入、曲线和预算字段见[完整Stage2工具](README_NTT_OUTER_PLANS.md#完整-stage2)。`--diagnostic`另核对完整叶子指纹，其运行不进入性能样本。
+复用固定D工具，Graph/MID_COOP/JOINT关闭，只改变 `--pack-zero 0|1`。每条曲线核对GMP、因子、rootfold、数学NTT长度分布及S4分块，且要求on侧实际覆盖digit；输入、曲线和预算字段见[完整Stage2工具](README_NTT_OUTER_PLANS.md#完整-stage2)。`--diagnostic`另核对完整叶子指纹，其运行不进入性能样本。
 
 pack-zero对照可使用其他生产设备；中段M6/joint独立对照仍限制为已测4060LP。case的`d=0`使用当前自动D选择；两侧的算术结果、NTT分布、分块、自检、GMP抽查和S4 launch数量仍须一致，不用改变D制造局部收益。
 

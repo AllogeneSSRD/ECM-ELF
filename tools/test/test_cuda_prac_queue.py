@@ -118,10 +118,11 @@ def main():
     assert actual[-1]["naf"] == "6" and "prac" not in actual[-1]
     assert not (mixed / "worktodo.txt").read_text().strip()
 
-    legacy, _ = queue("legacy", ["m0"])
-    write_config(legacy, args.device, None, None)
-    completion = run(exe, legacy, "legacy", dict(env, ECM_GPU_STAGE1_ALGO="prac", ECM_PRAC_SEARCH="3"))
-    assert "search=3" in completion and rows(legacy) == expected
+    default_search, _ = queue("default-search", ["m0"])
+    write_config(default_search, args.device, None, None)
+    completion = run(exe, default_search, "default-search",
+                     dict(env, ECM_GPU_STAGE1_ALGO="prac", ECM_PRAC_SEARCH="3"))
+    assert "search=7" in completion and rows(default_search) == expected
 
     invalid, original_queue = queue("invalid", ["m0"])
     for chain, search, key in (("unknown", 7, "cuda_montgomery_chain"), ("prac", 0, "cuda_prac_search"),
@@ -158,7 +159,7 @@ def main():
         assert (submission["status"], submission["curves"], submission["b1"], submission["b2"]) == (
             "NF", 8, 1000, 10000)
 
-    print("PASS CUDA PRAC TOML, legacy overrides, mixed-curve queue, checkpoint, factor and handoff")
+    print("PASS CUDA PRAC TOML/default search, mixed-curve queue, checkpoint, factor and handoff")
 
 
 if __name__ == "__main__":

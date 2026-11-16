@@ -8,10 +8,13 @@ from pathlib import Path
 import re
 import statistics as stats
 import subprocess
+import sys
 import time
 from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools/ecm_report'))
+from result_format import normalize_result
 
 
 def sha(path):
@@ -39,7 +42,7 @@ def parse(log, result, *, leaf_fixture=False):
     results = [json.loads(line) for line in result.read_text(encoding='utf-8').splitlines()]
     if len(results) != 1:
         raise ValueError('expected one result')
-    r = results[0]
+    r = normalize_result(results[0])
     assert r['status'] == 'stage2_completed' and not r['bad_factors'], r
     # clean denotes absence of extra fixtures, not arithmetic correctness.
     # NTT_TARGET_LEAF_HASH explicitly marks the dedicated diagnostic run dirty.

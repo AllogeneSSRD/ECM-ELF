@@ -7,6 +7,7 @@
 #include "ecm/curve/edwards.h"
 #include "ecm/cpu/arithmetic/scalar/modular_mpn_limits.h"
 #include "ecm/platform/logging.h"
+#include "ecm/platform/generated/configuration_defaults.h"
 #include "../../../../io/stage1_checkpoint.h"
 #include "checkpoint.h"
 #include "ecm_mont_cpu.h"
@@ -222,7 +223,8 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
     EcmPracPlan prac;
     unsigned prac_search = 0;
     if (use_prac) {
-        prac_search = ecm_prac_search_width(std::getenv("ECM_PRAC_SEARCH"));
+        prac_search = opt.execution.cpu_prac_search ? opt.execution.cpu_prac_search
+            : ecm_config::defaults::stage1_cpu_prac_search;
         prac = ecm_prac_build(static_cast<uint32_t>(B1), torsion, s,
                               opt.persistence.exponent_cache_dir, opt.execution.stage1_threads, prac_search);
         ecm_ts_fprintf(stdout, "stage1 chain    : PRAC [%s]\n", prac.status.c_str());

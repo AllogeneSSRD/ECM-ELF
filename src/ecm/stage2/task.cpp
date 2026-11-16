@@ -174,7 +174,7 @@ int curve_worker(Options o) {
     configure_s4_backend(o,false,{});
     configure_point_backends(o);
     configure_giant_policy(o);
-    configure_groot_experiment(o);
+    validate_groot_layout(o);
     configure_host_wait(o);
     configure_pack_zero(o);
     configure_weighted_ntt(o);

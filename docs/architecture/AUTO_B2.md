@@ -36,7 +36,7 @@ ECM矩阵的`groot_balanced`为`0|1`：0为叶子左侧连续布局，1为分块
 
 CUDA自动布局保留上述宽位资格。其他位宽须同时满足：至少4个完整G批次、P不是2的幂、按原生精确packing查询得到的G树根最大NTT长度下降、整段G树的Σ批次数×NTT长度×log₂长度下降至少10%，且输出系数工作量增幅不超过10%。最后两项包括完整批和尾批，只是工作量筛选；fold/F树及当前显存准入仍按实际形状检查。未跨NTT拐点时保持连续布局。数学及限定输入性能见[G树布局](../performance/STAGE2_GTREE_LAYOUT.md)。
 
-正式ECM tune在自动布局与旧默认不同的D上分别测量并记录两种布局，已足够的正式测量可复用；D搜索比较已完成配对中较快的成绩。运行时先保留各算术家族的默认及历史最快布局，再通过正常任务曲线补足新布局观察。显式D限制D，不阻止同D比较布局。`stage2_groot_balanced="auto"`为默认；true/false固定CUDA布局。CLI `--groot-layout auto|true|false`覆盖当前worker配置，保留0/1别名；auto不是第三种计算布局，最终仍记录0/1。专家环境变量`NTT_GROOT_BALANCED=0|1`与明确强制值冲突时报错，其固定D和隔离要求见[使用说明](../usage/STAGE2.md#固定参数g树实验)。OpenCL当前使用自己的连续G树实现，接受auto但拒绝强制CUDA布局。
+正式ECM tune在自动布局与旧默认不同的D上分别测量并记录两种布局，已足够的正式测量可复用；D搜索比较已完成配对中较快的成绩。运行时先保留各算术家族的默认及历史最快布局，再通过正常任务曲线补足新布局观察。显式D限制D，不阻止同D比较布局。`stage2_groot_balanced="auto"`为默认；true/false固定CUDA布局。CLI `--groot-layout auto|true|false`覆盖当前worker配置，保留0/1别名；auto不是第三种计算布局，最终仍记录0/1。固定 D 的对照用法见[使用说明](../usage/STAGE2.md#固定参数g树实验)。OpenCL当前使用自己的连续G树实现，接受auto但拒绝强制CUDA布局。
 
 ## 点块与有限链长身份
 

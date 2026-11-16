@@ -236,7 +236,7 @@ PRAC 的 `single-compact` 专用体将 xADD 统一到一个调用点，倍点使
 
 ### CUDA CGBN 切片提交
 
-CUDA CGBN 的 Montgomery ladder、resident、PRAC，以及 Edwards NAF 和 binary，在同一 CUDA stream 上按游标顺序提交。通过 `[stage1].cuda_slice_depth` 选择两片或三片滚动提交，或八片组尾等待。滚动提交回收最旧切片的事件和错误快照后补片，并按已完成片的设备计时调整后续长度。组尾等待按窗口平均时间调整片长。各片原地更新同一份设备点缓冲。worker 的显式值覆盖全局设置，TOML 两处均未设置时可沿用 `ECM_CUDA_STAGE1_SLICE_DEPTH`。
+CUDA CGBN 的 Montgomery ladder、resident、PRAC，以及 Edwards NAF 和 binary，在同一 CUDA stream 上按游标顺序提交。通过 `[stage1].cuda_slice_depth` 选择两片或三片滚动提交，或八片组尾等待。滚动提交回收最旧切片的事件和错误快照后补片，并按已完成片的设备计时调整后续长度。组尾等待按窗口平均时间调整片长。各片原地更新同一份设备点缓冲。worker 的显式值覆盖全局设置，两处均省略时使用默认深度 3。
 
 `[stage1].cuda_low_cpu = 1` 让主机通过阻塞式 CUDA 完成事件等待，在 GPU 执行期间休眠。它适用于各切片深度，也用于 Edwards NAF 字典的完成事件。两项的默认值见 [TOML 配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 

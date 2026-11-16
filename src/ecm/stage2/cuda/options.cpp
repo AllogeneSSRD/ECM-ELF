@@ -399,9 +399,6 @@ int ecm_cuda_stage2_check_configuration()
     if(const char *v=std::getenv("NTT_POINT_SQUARE"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
         std::fprintf(stderr,"NTT_POINT_SQUARE must be 0 or 1\n");return 2;
     }
-    if(const char *v=std::getenv("NTT_GROOT_BALANCED"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
-        std::fprintf(stderr,"NTT_GROOT_BALANCED must be 0 or 1\n");return 2;
-    }
     struct FixedOption { const char *key; const char *value; };
     if(std::getenv("NTT_FUSE_COOP_M")) {
         std::fprintf(stderr,"production Stage2 requires automatic NTT_FUSE_COOP_M; use -Engine development for radix comparisons\n");

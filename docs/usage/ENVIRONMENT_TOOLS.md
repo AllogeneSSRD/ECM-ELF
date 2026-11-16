@@ -11,6 +11,7 @@
 | `VCPKG_INSTALLATION_ROOT` | 发布脚本的第二个 vcpkg 根目录候选，路径规则与 `VCPKG_ROOT` 相同。 | 继续查找仓库相邻的 `vcpkg`、`D:/code/vcpkg` 和 `C:/code/vcpkg`。 |
 | `CUDA_PATH` | OpenCL 构建可在该 SDK 根目录寻找 `include/CL/cl.h` 和 OpenCL 导入库。显式 `-OpenClRoot` 优先。 | 桌面 OpenCL 入口查找 OpenSSL 前缀和已安装 NVIDIA Toolkit；独立探针入口查找 vcpkg 前缀和已安装 NVIDIA Toolkit。 |
 | `OPENCL_ROOT` | 独立 OpenCL Stage2 构建脚本在 `-OpenClRoot` 省略时优先检查此 SDK 根目录；本机 OpenCL Stage2 包装器也调用此脚本。 | 继续查找 `CUDA_PATH` 和其他 SDK 候选。 |
+| `ProgramData` | Windows 提供的共享应用数据路径。NVIDIA GPU 选择诊断脚本从中定位 NVIDIA 安装数据。 | 使用系统提供的值。 [NVIDIA GPU 选择诊断](../../tools/diag/repair_npcf_gpu_selection.ps1) |
 | `VSCMD_ARG_TGT_ARCH` | GWNUM 本机构建脚本要求其值为 `x64`，并检查 `cl.exe`、`nmake.exe`。由 Visual Studio x64 Native Tools Command Prompt 或 x64 Developer PowerShell 设置。 | 脚本报错。上游需要汇编时还应能从 `PATH` 找到 `UASM64`。 |
 
 [CUDA 工具链解析](../../tools/build/internal/cuda_toolchain.ps1) · [GMP 依赖解析](../../tools/build/internal/gmp_dependency.ps1) · [根 CMake](../../CMakeLists.txt) · [桌面 OpenCL 构建](../../tools/build/build_opencl_local.ps1) · [OpenCL Stage2 构建](../../tools/build/test/build_opencl_stage2_ntt.ps1) · [GWNUM 构建](../../tools/build/build_gwnum_local.ps1)
@@ -30,9 +31,9 @@ Remove-Item Env:\CUDA_PATH_V13_3
 | `ECM_DB` | `tools/ecm_report` 的导入、绘图及查询脚本共用的 SQLite 路径。 | 默认是这些脚本旁的 `ecm_progress.db`。按次设置可直接传 `--db`，该参数优先。 [ECM 报告工具](../../tools/ecm_report/) |
 | `PORT` | 直接启动 `tools/log_parser/app.py` 时传给 Flask 的监听端口。 | 默认 `9500`；使用十进制端口号。 [日志解析器](../../tools/log_parser/app.py) |
 | `PLAYWRIGHT_MODULE` | GUI v2 Chromium 资源测试与宠物图集渲染 `require()` 的模块名或绝对路径。 | 默认 `playwright`。 [GUI v2 测试](../../tools/test/gui_v2/) · [图集渲染](../../tools/gen/render_gui_v2_pet.cjs) |
+| `MPLCONFIGDIR` | OpenCL Stage2 绘图脚本传给 Matplotlib 的配置和缓存目录。 | 默认使用报告目录下的 `matplotlib`。 [CUDA 对照报告](../../tools/bench/report_opencl_cuda_stage2.py) · [OpenCL 演进报告](../../tools/bench/report_opencl_stage2_evolution.py) |
 | `CUDA_PATH_V13_3` | 发布运行测试 `test_release_runtime.py` 和架构切换测试 `test_release_switching.py` 使用此目录下 `bin/cuobjdump.exe`。 | 默认查找标准 CUDA 13.3 安装目录；前一个测试还支持 `--inspector`。 [运行测试](../../tools/test/test_release_runtime.py) · [切换测试](../../tools/test/test_release_switching.py) |
 | `ECM_PRAC_REG_TARGET` | CUDA PRAC 对拍脚本的 `--registers` 缺省值，也会传给被测程序。 | 默认 `0`；可用 `0`、`128`、`168`、`255`，仍需满足脚本对位宽、TPI 和公式变体的组合约束。 [PRAC 对拍](../../tools/test/test_cuda_prac.py) |
-| `ECM_PRAC_SEARCH` | CUDA PRAC 窗口对拍脚本以此查找实际搜索级别对应的缓存文件。 | 默认 `7`；用其他值时，被测程序的搜索级别也需一致。 [窗口对拍](../../tools/test/test_cuda_prac_windows.py) |
 | `ECM_OPENCL_POINTS` | OpenCL 验证脚本检测到非空覆盖值时，跳过针对 NVIDIA 自动选型的 tune 表断言。 | 默认未设置；验证自动选型时清除该变量。 [OpenCL worker 验证](../../tools/test/check_opencl_stage2_worker.py) |
 | `RYZEN_AI_INSTALLATION_PATH` | 随附 Ryzen AI 独立 quicktest 用此 SDK 根目录寻找 ONNX 模型和 Phoenix 装载文件。 | 必须由 SDK 环境提供。NPU 检测脚本只报告 `XLNX_VART_FIRMWARE`、`VAIP_DRIVERS_PATH`、`VART_FIRMWARE`、`XRT_PATH` 等 SDK 变量。 [Quicktest](../../tools/RyzenAI/quicktest/quicktest.py) · [NPU 环境检测](../../tools/RyzenAI/NPUtest.py) |
 

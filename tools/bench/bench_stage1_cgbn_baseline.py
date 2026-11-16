@@ -85,10 +85,14 @@ def run_case(exe, folder, device, model, case, prior, env, version):
         'exponent_cache_dir = "off"\ncuda_low_cpu = false\n'
         f'cuda_slice_depth = {DEPTH}\nsave_dir = {json.dumps(folder.as_posix())}\n' +
         (f'edwards_naf_window_bits = {WINDOW}\nedwards_doubling = 1\n' if model == "ed" else
-         'montgomery_lcm_multiplier = "1"\n'), encoding="utf-8")
+         'montgomery_lcm_multiplier = "1"\n') +
+        (f'cuda_montgomery_chain = "prac"\ncuda_prac_search = {SEARCH}\n'
+         if model == "mont0" and version != "0.63.7" else ""), encoding="utf-8")
     if model == "mont0":
-        env = env | {"ECM_GPU_STAGE1_ALGO": "prac", "ECM_PRAC_SEARCH": str(SEARCH),
-                     "ECM_PRAC_VARIANT": "baseline"}
+        env = env | {"ECM_PRAC_VARIANT": "baseline"}
+        if version == "0.63.7":
+            # Reproduce the frozen baseline, which predates the CUDA PRAC TOML keys.
+            env.update(ECM_GPU_STAGE1_ALGO="prac", ECM_PRAC_SEARCH=str(SEARCH))
     with (folder / "run.log").open("wb") as log:
         subprocess.run([str(exe), "--config", str(config)], env=env, cwd=folder, stdout=log,
                        stderr=subprocess.STDOUT, check=True, timeout=900)

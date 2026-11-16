@@ -34,8 +34,9 @@ struct Stage1ExecutionPreferences {
     std::optional<int> edwards_doubling;
     unsigned naf_memory_mb = 0;
     std::string cuda_montgomery_chain; // Empty allows the legacy environment fallback.
-    unsigned cuda_prac_search = 0; // Zero allows the legacy environment fallback.
-    unsigned cuda_slice_depth = 0; // Zero allows the legacy environment fallback.
+    unsigned cuda_prac_search = 0; // Zero uses the generated configuration default.
+    unsigned cpu_prac_search = 0; // Zero uses the generated configuration default.
+    unsigned cuda_slice_depth = 0; // Zero uses the generated configuration default.
     bool cuda_low_cpu = false;
     int verbose=0;
     int device_index;

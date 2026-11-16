@@ -1,4 +1,4 @@
-"""Exercise generated INI / worker / environment / CLI pack-zero precedence on real curves."""
+"""Exercise TOML and CLI pack-zero precedence on real curves."""
 import argparse
 import hashlib
 import json
@@ -37,18 +37,16 @@ def main():
     # B1=20, sigma=26, 318-bit cofactor saves are used in the documented fixture.
     tests = [
         ('default', '', {}, [], expected_default),
-        ('ini_off', 'stage2_pack_zero=false\n', {}, [], 0),
-        ('ini_on', 'stage2_pack_zero=true\n', {}, [], 1),
-        ('worker_off', 'stage2_pack_zero=true\n[Worker #2]\nstage2_pack_zero=false\n', {}, ['--worker','2'], 0),
-        ('worker_on', 'stage2_pack_zero=false\n[Worker #2]\nstage2_pack_zero=true\n', {}, ['--worker','2'], 1),
-        ('env_off', '', {'NTT_S4_PACK_ZERO':'0'}, [], 0),
-        ('env_on', '', {'NTT_S4_PACK_ZERO':'1'}, [], 1),
-        ('ini_above_env', 'stage2_pack_zero=true\n', {'NTT_S4_PACK_ZERO':'0'}, [], 1),
-        ('cli_off', 'stage2_pack_zero=true\n', {'NTT_S4_PACK_ZERO':'1'}, ['--pack-zero','0'], 0),
-        ('cli_on', 'stage2_pack_zero=false\n', {'NTT_S4_PACK_ZERO':'0'}, ['--pack-zero','1'], 1),
+        ('toml_off', 'cuda.pack_zero=false\n', {}, [], 0),
+        ('toml_on', 'cuda.pack_zero=true\n', {}, [], 1),
+        ('worker_off', 'cuda.pack_zero=true\n[worker.2]\nstage2.cuda.pack_zero=false\n', {}, ['--worker','2'], 0),
+        ('worker_on', 'cuda.pack_zero=false\n[worker.2]\nstage2.cuda.pack_zero=true\n', {}, ['--worker','2'], 1),
+        ('retired_env', '', {'NTT_S4_PACK_ZERO':str(1-expected_default)}, [], expected_default),
+        ('retired_invalid_env', '', {'NTT_S4_PACK_ZERO':'invalid'}, [], expected_default),
+        ('cli_off', 'cuda.pack_zero=true\n', {'NTT_S4_PACK_ZERO':'1'}, ['--pack-zero','0'], 0),
+        ('cli_on', 'cuda.pack_zero=false\n', {'NTT_S4_PACK_ZERO':'0'}, ['--pack-zero','1'], 1),
         ('legacy_implicit_off', '', {}, ['--cost-profile',str(out/'unused.cprof')], 0),
-        ('bad_ini', 'stage2_pack_zero=2\n', {}, [], None),
-        ('bad_env', '', {'NTT_S4_PACK_ZERO':'invalid'}, [], None),
+        ('bad_toml', 'cuda.pack_zero=2\n', {}, [], None),
         ('bad_cli', '', {}, ['--pack-zero','2'], None),
     ]
     report = dict(binary_sha256=sha(exe), save_sha256=sha(save), tool_sha256=sha(__file__),
@@ -57,12 +55,12 @@ def main():
     for name, text, changes, extra, expected in tests:
         if sha(exe)!=report['binary_sha256'] or sha(save)!=report['save_sha256']:
             raise ValueError('binary/input changed')
-        ini = out/(name+'.ini')
-        ini.write_text('stage2_short_calibration=false\nstage2_tune_runtime=false\n'+text)
+        config = out/(name+'.toml')
+        config.write_text('config_version=3\n[stage2]\nshort_calibration=false\ntune.runtime_enabled=false\n'+text)
         log, result = out/(name+'.engine.log'), out/(name+'.jsonl')
         env = {k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
         env.update(changes)
-        cmd = [str(exe), '--ini',str(ini),'--save',str(save),'--device',str(a.device),
+        cmd = [str(exe), '--config',str(config),'--save',str(save),'--device',str(a.device),
                '--curves','1','--b2','260000000','--d','30030','--short-calibration','0',
                '--factor-only','--log-level','phases','--log',str(log),'--results',str(result),*extra]
         run = subprocess.run(cmd, env=env, cwd=root, capture_output=True, text=True,
@@ -88,7 +86,8 @@ def main():
                     or not int(f['gmp_checked']) or not int(f['gmp_selftest_cases'])):
                 raise ValueError(name+': arithmetic checks failed')
             receipts=[json.loads(line) for line in result.read_text(encoding='utf-8').splitlines()]
-            if len(receipts)!=1 or receipts[0]['status']!='stage2_completed' or receipts[0]['bad_factors']:
+            if (len(receipts)!=1 or receipts[0]['status'] not in ('F','NF') or receipts[0]['curves']!=1
+                    or receipts[0]['stage2-engine']['bad_factors']):
                 raise ValueError(name+': missing or invalid completion receipt')
         report['runs'].append(dict(name=name, expected=expected, returncode=run.returncode,
                                    command=cmd, environment=changes))

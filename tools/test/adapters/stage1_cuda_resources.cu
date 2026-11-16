@@ -19,11 +19,16 @@ cudaError_t release_event(cudaEvent_t p){--event_live;delete reinterpret_cast<in
 #undef cudaFree
 #undef cgbn_error_report_free
 #undef cudaEventDestroy
+#include "ecm/stage1/cuda_slices.h"
 
 int main() {
     using namespace ecm_cuda_stage1;
     static_assert(!std::is_copy_constructible_v<MontResources>);
     try {
+        if(_putenv_s("ECM_CUDA_STAGE1_SLICE_DEPTH","8") ||
+           rolling_slice_depth(true,0)!=ecm_config::defaults::stage1_cuda_slice_depth ||
+           rolling_slice_depth(true,2)!=2 || rolling_slice_depth(true,8)!=0 || rolling_slice_depth(false,3)!=0)
+            throw std::runtime_error("CUDA Stage1 slice depth did not use the parsed/default configuration");
         for(int fail=0;fail<=6;++fail) {
             try {
                 MontResources owned;

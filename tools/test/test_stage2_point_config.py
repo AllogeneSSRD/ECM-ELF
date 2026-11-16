@@ -23,13 +23,14 @@ def main():
         ('cli_auto','true',['--groot-layout','auto'],0),('cli_true','false',['--groot-layout','true'],1),
         ('cli_false','true',['--groot-layout','false'],0),('cli_one','false',['--groot-layout','1'],1),
         ('cli_zero','true',['--groot-layout','0'],0),('toml_one','1',[],1),('toml_zero','0',[],0),
-        ('toml_two','2',[],None),('toml_float','1.0',[],None),
+        ('retired_environment','',[],0),('toml_two','2',[],None),('toml_float','1.0',[],None),
         ('bad_cli','"auto"',['--groot-layout','2'],None)]
     report=dict(complete=False,exe_sha256=identity,cases=[])
 
     def invoke(name,command):
         assert hashlib.sha256(exe.read_bytes()).hexdigest()==identity,'Binary changed'
-        r=subprocess.run(command,cwd=out,env=env,capture_output=True,timeout=45)
+        child_env=env|({'NTT_GROOT_BALANCED':'1'} if name=='retired_environment' else {})
+        r=subprocess.run(command,cwd=out,env=child_env,capture_output=True,timeout=45)
         text=(r.stdout+r.stderr).decode('utf-8',errors='replace')
         (out/(name+'.log')).write_text(text,encoding='utf-8')
         (out/(name+'.command.json')).write_text(json.dumps(command,indent=2),encoding='utf-8')

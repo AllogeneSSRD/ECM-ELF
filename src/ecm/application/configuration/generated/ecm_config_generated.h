@@ -22,6 +22,8 @@ inline constexpr int64_t stage1_cuda_prac_search_minimum=1;
 inline constexpr int64_t stage1_cuda_prac_search_maximum=50;
 inline constexpr int64_t stage1_progress_average_seconds_minimum=0;
 inline constexpr int64_t stage1_progress_average_seconds_maximum=60;
+inline constexpr int64_t stage1_cpu_prac_search_minimum=1;
+inline constexpr int64_t stage1_cpu_prac_search_maximum=50;
 inline constexpr int64_t stage1_edwards_doubling_minimum=0;
 inline constexpr int64_t stage1_edwards_doubling_maximum=1;
 inline constexpr int64_t stage1_naf_memory_mb_minimum=0;
@@ -158,6 +160,7 @@ struct Stage1Values {
     std::string cpu_implementation="auto";
     std::string simd_reduction="auto";
     std::string cpu_mont_chain="ladder";
+    int cpu_prac_search=7;
     uint32_t stage1_threads=0;
     std::string affinity="";
     std::string save_name_pattern="{curve}_{target}_{b1}.save";
@@ -242,6 +245,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"impl",[](Stage1Values&c,const std::string&v){assign_value(c.cpu_implementation,v);},[](Stage1Values&c,const Stage1Values&v){c.cpu_implementation=v.cpu_implementation;}},
     {"reduction",[](Stage1Values&c,const std::string&v){assign_value(c.simd_reduction,v);},[](Stage1Values&c,const Stage1Values&v){c.simd_reduction=v.simd_reduction;}},
     {"cpu_mont_chain",[](Stage1Values&c,const std::string&v){assign_value(c.cpu_mont_chain,v);},[](Stage1Values&c,const Stage1Values&v){c.cpu_mont_chain=v.cpu_mont_chain;}},
+    {"cpu_prac_search",[](Stage1Values&c,const std::string&v){c.cpu_prac_search=static_cast<int>(bounded_integer(v,"cpu_prac_search",1,50));},[](Stage1Values&c,const Stage1Values&v){c.cpu_prac_search=v.cpu_prac_search;}},
     {"stage1_threads",[](Stage1Values&c,const std::string&v){assign_value(c.stage1_threads,v);},[](Stage1Values&c,const Stage1Values&v){c.stage1_threads=v.stage1_threads;}},
     {"affinity",[](Stage1Values&c,const std::string&v){assign_value(c.affinity,v);},[](Stage1Values&c,const Stage1Values&v){c.affinity=v.affinity;}},
     {"save_name_pattern",[](Stage1Values&c,const std::string&v){assign_value(c.save_name_pattern,v);},[](Stage1Values&c,const Stage1Values&v){c.save_name_pattern=v.save_name_pattern;}},

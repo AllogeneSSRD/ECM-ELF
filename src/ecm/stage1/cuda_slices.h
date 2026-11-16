@@ -24,18 +24,8 @@ template<class Cursor> struct SliceWindow {
 inline unsigned rolling_slice_depth(bool enabled, unsigned configured) {
     if (!enabled)
         return 0;
-    if (configured)
-        return configured == 8 ? 0 : configured;
-    const char *value = std::getenv("ECM_CUDA_STAGE1_SLICE_DEPTH");
-    if (!value)
-        return ecm_config::defaults::stage1_cuda_slice_depth;
-    if (std::strcmp(value, "8") == 0)
-        return 0;
-    if (std::strcmp(value, "2") == 0)
-        return 2;
-    if (std::strcmp(value, "3") == 0)
-        return 3;
-    throw std::invalid_argument("ECM_CUDA_STAGE1_SLICE_DEPTH must be 2, 3 or 8");
+    const unsigned depth = configured ? configured : ecm_config::defaults::stage1_cuda_slice_depth;
+    return depth == 8 ? 0 : depth;
 }
 
 inline unsigned slice_wait_flags(bool low_cpu) {

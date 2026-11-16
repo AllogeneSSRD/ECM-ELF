@@ -598,7 +598,7 @@ static int ensure_ecm_kernel(const EcmStage1KernelBuildPlan &plan, int verbose,
         for (const char *rel_path : kernel_paths) {
             if (cgbn::opencl::load_ecm_stage1_kernel_file(rel_path).empty()) {
                 ecm_ts_fprintf(stderr,
-                               "OpenCL: failed to load %s (set ECM_KERNEL_ROOT or run from project root)\n",
+                               "OpenCL: failed to load %s (use --kernel-root or run from the project root)\n",
                                rel_path);
                 return -1;
             }

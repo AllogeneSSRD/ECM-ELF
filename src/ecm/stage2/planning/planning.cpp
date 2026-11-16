@@ -2547,7 +2547,8 @@ ecm_stage2::tune::Fields tune_environment() {
         std::string row=p;const auto eq=row.find('=');if(eq==row.npos || row.compare(0,4,"NTT_")!=0)continue;
         const auto key=row.substr(0,eq),value=row.substr(eq+1);
         // D is explicit during tune; logging and audits are not runtime knobs.
-        if(key=="NTT_D_MODEL" || key=="NTT_NO_PROGRESS" || key=="NTT_MEMORY_AUDIT" || key=="NTT_REQUEST_AUDIT")continue;
+        if(key=="NTT_D_MODEL" || key=="NTT_NO_PROGRESS" || key=="NTT_MEMORY_AUDIT" || key=="NTT_REQUEST_AUDIT" ||
+           key=="NTT_GROOT_BALANCED")continue; // Layout is carried by the selected shape.
         // Actual borrowing is a row/Shape identity, not an environment request.
         // The full native-plan memo still binds the complete environment.
         if(key=="NTT_GIANT_TAIL_BALANCE" || key=="NTT_BABY_COOP" || key=="NTT_GIANT_COOP")continue;

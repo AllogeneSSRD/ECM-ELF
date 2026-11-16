@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 
 from benchmark_stage2_short_ntt import parse, fields
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 NSYS = Path('C:/Program Files/NVIDIA Corporation/Nsight Systems 2026.1.3/target-windows-x64/nsys.exe')
@@ -124,12 +125,14 @@ def collect(out):
         if json.dumps(actual[key], sort_keys=True) != json.dumps(reference[key], sort_keys=True):
             if key != 'histogram' or {str(k): v for k, v in actual[key].items()} != reference[key]:
                 raise ValueError('Profile arithmetic/workload changed: ' + key)
-    graph = fields((out / 'engine.log').read_text(encoding='utf-8'), 'ntt_graph_stats')
+    log = read_stage2_log(out / 'engine.log')
+    graph = fields(log, 'ntt_graph_stats')
     if graph['requested'] != meta['environment']['NTT_SHORT_GRAPH'] or int(graph['failures']):
         raise ValueError('Graph request/capture differs')
-    if 'NTT_S4_PACK_ZERO' in meta['environment']:
-        pack = fields((out / 'engine.log').read_text(encoding='utf-8'), 's4_pack_zero_stats')
-        enabled = int(meta['environment']['NTT_S4_PACK_ZERO'])
+    pack_zero = meta.get('pack_zero', meta['environment'].get('NTT_S4_PACK_ZERO'))
+    if pack_zero is not None:
+        pack = fields(log, 's4_pack_zero_stats')
+        enabled = int(pack_zero)
         if int(pack['requested']) != enabled or bool(int(pack['words'])) != bool(enabled):
             raise ValueError('Pack/zero profile request differs')
     if meta['kind'] == 'systems':
@@ -211,10 +214,12 @@ def main():
         return cmd[cmd.index(name)+1]
     source_log, source_result = Path(arg('--log')), Path(arg('--results'))
     reference = parse(source_log, source_result)
-    inputs = {arg('--ini'): sha(arg('--ini')), arg('--save'): sha(arg('--save'))}
+    config = arg('--config' if '--config' in cmd else '--ini')
+    inputs = {config: sha(config), arg('--save'): sha(arg('--save'))}
     cmd[cmd.index('--log')+1] = str(out / 'engine.log')
     cmd[cmd.index('--results')+1] = str(out / 'results.jsonl')
-    env = dict(record['environment'], CUDA_LAUNCH_BLOCKING='0')
+    env = {key: value for key, value in record['environment'].items() if not key.startswith('CUDA_PATH')}
+    env['CUDA_LAUNCH_BLOCKING'] = '0'
     if a.host_trace:
         env['NTT_HOST_TRACE'] = '1'
     if any(not re.fullmatch(r'(NTT_[A-Z0-9_]+|CUDA_LAUNCH_BLOCKING)', k) or
@@ -254,6 +259,8 @@ def main():
                 all_cuda_apis=a.all_cuda_apis, host_trace=a.host_trace,
                 reference_file=str(ref), reference_sha256=sha(ref), inputs=inputs, binary_sha256=sha(cmd[0]),
                 command=command, kernel=kernel, collector_sha256=sha(__file__))
+    if '--pack-zero' in cmd:
+        meta['pack_zero'] = int(arg('--pack-zero'))
     verify(meta)
     (out / 'command.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     if a.run_admin:

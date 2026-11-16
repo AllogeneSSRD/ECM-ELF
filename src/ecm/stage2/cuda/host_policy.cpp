@@ -120,17 +120,11 @@ void configure_giant_policy(Options &o) {
     o.selected_chain=o.giant_chain=="32"?32:64;
 #endif
 }
-void configure_groot_experiment(Options &o) {
-    const char *value=std::getenv("NTT_GROOT_BALANCED");
+void validate_groot_layout(const Options &o) {
 #ifdef ECM_STAGE2_OPENCL
-    if(value || o.groot_layout>=0)throw std::runtime_error("G-root layout selection is CUDA-only");
+    if(o.groot_layout>=0)throw std::runtime_error("G-root layout selection is CUDA-only");
 #else
-    if(!value)return;
-    if(std::strcmp(value,"0") && std::strcmp(value,"1"))
-        throw std::runtime_error("NTT_GROOT_BALANCED must be 0 or 1");
-    if(o.groot_layout>=0 && o.groot_layout!=int(value[0]-'0'))
-        throw std::runtime_error("conflicting G-root layout overrides");
-    o.groot_layout=int(value[0]-'0');
+    (void)o;
 #endif
 }
 void configure_host_wait(Options &o,const HostWaitDefaults *defaults) {
@@ -151,11 +145,7 @@ void configure_pack_zero(Options &o,const PackZeroDefaults *s) {
     // Legacy cprof has an exact PACK_ZERO=0 contract, including absent env.
     if(!o.portable_cli.count("--pack-zero")) {
         if(s && s->has_pack_zero)o.pack_zero=s->pack_zero;
-        else if(const char *v=std::getenv("NTT_S4_PACK_ZERO")) {
-            if(std::strcmp(v,"0") && std::strcmp(v,"1"))
-                throw std::runtime_error("NTT_S4_PACK_ZERO must be 0 or 1");
-            o.pack_zero=std::strcmp(v,"1")==0;
-        } else if(!o.cost_profile.empty() || (s && !s->cost_profile.empty()))o.pack_zero=false;
+        else if(!o.cost_profile.empty() || (s && !s->cost_profile.empty()))o.pack_zero=false;
     }
     if(_putenv_s("NTT_S4_PACK_ZERO",o.pack_zero?"1":"0"))
         throw std::runtime_error("cannot configure Stage2 pack/zero fusion");

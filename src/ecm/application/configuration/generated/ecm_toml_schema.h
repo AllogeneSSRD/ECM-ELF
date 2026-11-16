@@ -46,6 +46,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","impl","string","[auto|simd|scalar|gwnum|slice list|empty]","stage1","cpu_implementation","","stage1","cpu_implementation",false,false},
     {"stage1","reduction","string","[auto|montgomery|mersenne-fold]","stage1","cpu_simd_reduction","","stage1","cpu_simd_reduction",false,false},
     {"stage1","cpu_mont_chain","string","[ladder|prac]","stage1","cpu_montgomery_chain","","stage1","cpu_montgomery_chain",false,false},
+    {"stage1","cpu_prac_search","int","[1..50]","stage1","cpu_prac_search","","stage1","cpu_prac_search",false,false},
     {"stage1","stage1_threads","u32","<x:Z,0..2^32-1>","stage1","cpu_threads","","stage1","cpu_threads",false,false},
     {"stage1","affinity","string","[none|auto|<n>,...|<a>-<b>]","stage1","cpu_affinity","","stage1","cpu_affinity",false,false},
     {"stage1","save_name_pattern","string","<pattern>","stage1","save_name_pattern","","stage1","save_name_pattern",false,false},

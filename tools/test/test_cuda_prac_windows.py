@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'stat'))
 from bench_stage1_prac_windows import sample
 from ecm_prac_plan import prac_counts, prime_multiplicity, prime_window
-from test_cuda_prac import run, rows
+from stage1_checkpoint_decode import batch, progressed
+from test_cuda_prac import checkpoints, run, rows
 
 
 def double(point, a24, n):
@@ -96,8 +97,7 @@ def cached_window(file, position, requested_count):
 
 def product(cache, result):
     torsion = 12 if result['exponent'] == 'choose12' else 1
-    width = int(os.environ.get("ECM_PRAC_SEARCH", "7"))
-    file = prac_cache_path(cache, result["B1"], torsion, width)
+    file = prac_cache_path(cache, result["B1"], torsion, result["prac_search"])
     b1, t, full_work, first, entries = cached_window(file, result["position"], result["requested_count"])
     assert (b1, t, full_work) == (result["B1"], torsion, result["full_work"])
     assert (result["first"], result["count"]) == (first, len(entries))
@@ -137,6 +137,26 @@ def verify(cache, folder, result):
     return len(actual)
 
 
+def assert_no_checkpoint_progress(folder):
+    # The task driver may create a batch manifest that only reserves sigmas.
+    for path in checkpoints(folder):
+        assert path.suffix == ".ckpt" and not progressed(batch(path)[1]), path
+
+
+def verify_checkpoint_rejected(exe, folder, cache, device, tpi, registers, variant, sigma):
+    checkpoint, = checkpoints(folder)
+    snapshot = checkpoint.read_bytes()
+    try:
+        sample(exe, folder, 4423, 1000, 8, device, tpi, registers, variant,
+               "tail", 4, 0.001, 1, cache, True, sigma=sigma, exponent="choose12")
+    except RuntimeError as error:
+        assert "window sample cannot resume a production checkpoint" in str(error), error
+    else:
+        raise AssertionError("window accepted an in-progress production checkpoint")
+    assert checkpoints(folder) == [checkpoint] and checkpoint.read_bytes() == snapshot
+    assert not (folder / "window_q.csv").exists()
+
+
 def rejected(exe, folder, cache, settings, message, device, bits=4423):
     folder.mkdir()
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO='prac',ECM_PRAC_REG_TARGET='255',
@@ -152,7 +172,8 @@ def rejected(exe, folder, cache, settings, message, device, bits=4423):
     text=proc.stdout.decode('utf-8',errors='replace');(folder/'run.log').write_text(text,encoding='utf-8')
     assert proc.returncode==1 and message in text and 'PRAC_WINDOW_DONE' not in text, (
         f'{folder}: exit={proc.returncode}, expected rejection={message!r}; see run.log')
-    assert not list(folder.glob('.ecm_ckpt_*')) and not (folder/'window_q.csv').exists()
+    assert_no_checkpoint_progress(folder)
+    assert not (folder/'window_q.csv').exists()
     assert not rows(folder)
 
 
@@ -218,29 +239,27 @@ def main():
                                 bitwise_slice_checks+=1
                             else:slicing_signatures[key]=signature
                             r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
-    # A real candidate checkpoint remains byte-identical during window runs and
-    # can subsequently resume via the baseline kernel at the same TPI.
+    # A window must refuse a production checkpoint without modifying it.
+    # The baseline kernel can subsequently resume it at the same TPI.
     settings=('(2^4423-1)',1000,8,4611686018427511360,'choose12')
     checkpoint_variant='single-compact' if a.single_compact else 'single-add' if a.single_add else 'compact'
     checkpoint_registers=128 if a.single_compact_reg128 else 168
     folder=root/'checkpoint_isolation'
     text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=16,registers=checkpoint_registers,variant=checkpoint_variant)
-    assert 'sample limit reached' in text and len(list(folder.glob('.ecm_ckpt_*')))==1
-    r=sample(exe,folder,4423,1000,8,a.device,16,checkpoint_registers,checkpoint_variant,'tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
-    r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
+    assert 'sample limit reached' in text and len(checkpoints(folder)) == 1
+    verify_checkpoint_rejected(exe, folder, cache, a.device, 16, checkpoint_registers, checkpoint_variant, settings[3])
     run(exe,root/'checkpoint_reference',*settings,'cpu',a.device)
     text=run(exe,folder,*settings,'prac',a.device,tpi=16,registers=255,variant='baseline')
     assert 'checkpoint resumed' in text and rows(folder)==rows(root/'checkpoint_reference')
-    assert not list(folder.glob('.ecm_ckpt_*'))
+    assert not checkpoints(folder)
     if a.single_compact_tpi32:
         folder=root/'checkpoint_isolation_tpi32'
         text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=32,registers=168,variant='single-compact')
-        assert 'sample limit reached' in text and len(list(folder.glob('.ecm_ckpt_*')))==1
-        r=sample(exe,folder,4423,1000,8,a.device,32,168,'single-compact','tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
-        r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
+        assert 'sample limit reached' in text and len(checkpoints(folder)) == 1
+        verify_checkpoint_rejected(exe, folder, cache, a.device, 32, 168, 'single-compact', settings[3])
         text=run(exe,folder,*settings,'prac',a.device,tpi=32,registers=255,variant='baseline')
         assert 'checkpoint resumed' in text and rows(folder)==rows(root/'checkpoint_reference')
-        assert not list(folder.glob('.ecm_ckpt_*'))
+        assert not checkpoints(folder)
     failures=[({'ECM_PRAC_WINDOW':'bad'},'must be prefix, middle or tail'),
               ({'ECM_PRAC_WINDOW_COUNT':'0'},'count must be 1..32'),
               ({'ECM_PRAC_WINDOW_COUNT':'-1'},'invalid ECM_PRAC_WINDOW_COUNT'),
@@ -285,9 +304,11 @@ def main():
             rejected(exe,root/f'reject_single-compact_reg128_n{bits}',cache,
                 {'ECM_PRAC_VARIANT':'single-compact','ECM_PRAC_REG_TARGET':'128'},'policy is unavailable',a.device,bits=bits)
             unsupported_tier_cases+=1
+    for result in results:
+        assert_no_checkpoint_progress(Path(result["log"]).parent)
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
         window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=16 if a.single_compact_tpi32 else 8,
-        rejection_cases=len(failures)+unsupported_tier_cases,production_windows=a.production,
+        rejection_cases=len(failures)+unsupported_tier_cases+1+int(a.single_compact_tpi32),production_windows=a.production,
         production_counts=a.production_counts if a.production else [],
         production_chunks=a.production_chunks if a.production else [],
         bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,single_add=a.single_add,

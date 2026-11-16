@@ -162,7 +162,7 @@ Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `l
 
 生产配置 `groot_balanced = "auto"` 默认为自动选择；`true`强制分块均衡布局，`false`强制左侧连续布局。CLI `--groot-layout auto|true|false`覆盖当前worker配置，保留0/1别名；auto也会传给曲线子进程，以免重新读取TOML强制值。tune矩阵的 `groot_balanced` 仍记录实际布局0/1，不记录第三种auto布局。OpenCL接受auto，强制布局限于CUDA。
 
-固定参数实验入口和 tune 隔离要求见 [G 树环境变量](ENVIRONMENT_CUDA_NTT.md#giant-多项式树fold-与下降阶段)。
+只比较 G 树布局时，可以用 `--groot-layout 0` 和 `--groot-layout 1` 做 A/B，固定 D 和 B2，并关闭 Auto B2、自动承载、运行时采样、短校准和短 NTT 调优。使用独立实验目录与调参文件隔离已有的性能记录。[复现实验](../performance/STAGE2_GTREE_LAYOUT.md)
 
 不同形状有收益也有回退，结果与受控复现入口见[G树性能](../performance/STAGE2_GTREE_LAYOUT.md)。
 

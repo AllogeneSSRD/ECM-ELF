@@ -255,6 +255,16 @@ Legacy v1 key `stage1.cpu_mont_chain`
 
 Montgomery CPU point multiplication. prac requires target=cpu, curve=mont, impl=simd and B1 in 2..4294967295. It shares the scalar convention and final save format with ladder, with its own in-flight checkpoint state.
 
+### cpu_prac_search
+
+```toml
+cpu_prac_search = 7
+```
+
+Type `int` · Range `[1..50]` · Worker override `[worker.N] stage1.cpu_prac_search` · Level `advanced`.
+
+Number of candidate seeds per prime for CPU IFMA PRAC. Keep the same width when resuming a PRAC checkpoint.
+
 <a id="reduction"></a>
 
 ### cpu_simd_reduction
@@ -311,7 +321,7 @@ cuda_prac_search = 7
 
 Type `int` · Range `[1..50]` · Worker override `[worker.N] stage1.cuda_prac_search` · Level `advanced`.
 
-Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC checkpoint. If omitted, ECM_PRAC_SEARCH can override the default.
+Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC checkpoint.
 
 ### cuda_slice_depth
 
@@ -321,7 +331,7 @@ cuda_slice_depth = 3
 
 Type `int` · Range `[2|3|8]` · Worker override `[worker.N] stage1.cuda_slice_depth` · Level `core`.
 
-CUDA CGBN Stage1 slice submission. 2 and 3 keep a rolling queue of up to that many slices; 8 waits at the end of each group of up to eight. When omitted, the legacy ECM_CUDA_STAGE1_SLICE_DEPTH environment variable can override the default.
+CUDA CGBN Stage1 slice submission. Values 2 and 3 keep a rolling queue of up to that many slices. Value 8 waits at the end of each group of up to eight.
 
 ### edwards_doubling
 
@@ -1111,7 +1121,7 @@ Legacy v1 key `stage2.stage2_pack_zero`
 
 Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
 
-Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous, resident gather and reverse inputs; unsupported shapes use the original packer. Does not change arithmetic checks, D, NTT length or device workspace capacity. CLI --pack-zero overrides this key; an explicit key overrides NTT_S4_PACK_ZERO. Without an override, the built-in default applies; legacy .cprof cost profiles retain false and require false explicitly if this key is set.
+Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous, resident gather and reverse inputs. Other shapes use the original packer. CLI --pack-zero overrides this key. Legacy .cprof cost profiles default to false and require false when set explicitly.
 
 <a id="stage2_parallel_tune_curves"></a>
 

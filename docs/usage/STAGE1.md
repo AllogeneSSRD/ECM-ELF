@@ -16,7 +16,7 @@ v3 也可用 `cpu_implementation = "simd[:6144], scalar[:4096], gwnum[4096:], au
 
 Windows x64 worker 可通过 `--impl gwnum` 或 `[stage1]` 的 `cpu_implementation = "gwnum"` 为 CPU Montgomery PARAM0 加载同目录的 `gwnum.dll`。该路径沿用现有批次存档和结果格式。见 [构建与运行](BUILD.md#cpu-stage1-本地-gwnum-316)。
 
-CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_montgomery_chain = "prac"`、`target = "cpu"`、`param = "m0"` 和 `cpu_implementation = "simd"`。PRAC 计划按 B1 和标量倍数复用，存放在 `exponent_cache_dir`。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。续跑检查点时沿用原点乘方式。
+CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_montgomery_chain = "prac"`、`target = "cpu"`、`param = "m0"` 和 `cpu_implementation = "simd"`。`cpu_prac_search` 可设为 1～50，默认 7。相同 B1、标量倍数和搜索宽度共用 `exponent_cache_dir` 中的计划。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。续跑检查点时沿用原点乘方式和搜索宽度。
 
 ## 进度前的执行详情
 
@@ -42,7 +42,7 @@ cuda_montgomery_chain = "prac"
 cuda_prac_search = 50
 ```
 
-`cuda_prac_search` 可设为 1～50，默认 7。PRAC 计划支持整数 B1 2～4,294,967,295；设备控制表占用随 B1 增长。冷启动会生成计划，相同 B1、LCM 模式及搜索宽度可以复用缓存。两个键均可在 `[worker.N]` 下加 `stage1.` 前缀覆盖。使用 `m0_` 存档前缀的队列任务同样适用。混合队列中的 Edwards、PARAM2/3 及 NTT 任务各自使用其原点乘路径。TOML 未显式设置时仍可使用对应的 `ECM_GPU_STAGE1_ALGO` 和 `ECM_PRAC_SEARCH`。
+`cuda_prac_search` 可设为 1～50，默认 7。PRAC 计划支持整数 B1 2～4,294,967,295；设备控制表占用随 B1 增长。冷启动会生成计划，相同 B1、LCM 模式及搜索宽度可以复用缓存。两个键均可在 `[worker.N]` 下加 `stage1.` 前缀覆盖。使用 `m0_` 存档前缀的队列任务同样适用。混合队列中的 Edwards、PARAM2/3 及 NTT 任务各自使用其原点乘路径。省略 `cuda_montgomery_chain` 时，点乘链仍可由 `ECM_GPU_STAGE1_ALGO` 选择。
 
 Stage1 save、结果和 Stage2 交接沿用 PARAM0 格式。正在运行的批次应以原点乘链完成；PRAC 恢复还需匹配原搜索宽度及计划。程序拒绝用不匹配的设置恢复检查点。完成当前批次后，可自由为下一批切换点乘链。见 [Stage1 实测](../performance/STAGE1.md#0637-优化前基线)。
 
@@ -57,10 +57,9 @@ $build = 'build_dev/opencl_cpu_stage1_prac_06215'
 cmake --build $build --config Release --target prepare_prac_cache
 & "$build/prepare_prac_cache.exe" --search 50 cache 1 6 50000 100000 1000000 11000000 44000000 260000000
 & "$build/prepare_prac_cache.exe" --summary cache/prac_v2_b260000000_t1_s50.bin
-$env:ECM_PRAC_SEARCH = '50'
 ```
 
-CPU IFMA 可用 `ECM_PRAC_SEARCH`，CUDA 可用上文的 TOML 选项。恢复检查点时继续用原宽度。在同一缓存目录中，各宽度的文件可共存。v1 的 7 档文件可在加载时迁移，原文件可供旧版本使用。
+使用预计算计划时，将 `cpu_prac_search` 或 `cuda_prac_search` 设为建表时的宽度。各宽度的文件可共存于同一缓存目录。v1 的 7 档文件可在加载时迁移，原文件可供旧版本使用。
 
 `exponent_cache_dir` 留空时，Stage1 从工作目录及可执行文件目录向上查找 ECM-ELF 仓库，使用仓库根的 `cache/`。独立部署使用可执行文件同级的 `cache/`。可用 `--exp-cache <目录>` 指定，CUDA PRAC 还可用 `ECM_PRAC_PLAN_CACHE` 指定计划目录。文件大小、读取方式和迁移身份见 [PRAC 计划存储](../architecture/PRAC.md#计划存储与复用)。
 

@@ -32,8 +32,8 @@
       <Item id="option_stage1_p95_keep_aid" name="控制交接任务是否保留 PrimeNet assignment ID。1 保留未被判定失效的 AID，0 一律去掉；已在 Prime95 日志中确认失效的 AID 会去掉，以免任务再次被丢弃。" />
       <Item id="option_stage1_p95_recover_lost" name="控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，0 关闭自动补投；只对程序能够确认的已交接任务生效。" />
       <Item id="option_stage1_cuda_montgomery_chain" name="为 CUDA CGBN Montgomery PARAM0 选择点乘链。其他曲线族与后端忽略此项。省略时允许使用旧环境变量 ECM_GPU_STAGE1_ALGO 覆盖。" />
-      <Item id="option_stage1_cuda_prac_search" name="CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许 ECM_PRAC_SEARCH 覆盖默认值。" />
-      <Item id="option_stage1_cuda_slice_depth" name="CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片，8 按最多八片一组等待组尾。仅在 TOML 未设此项时，旧环境变量 ECM_CUDA_STAGE1_SLICE_DEPTH 可覆盖默认值。" />
+      <Item id="option_stage1_cuda_prac_search" name="CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。" />
+      <Item id="option_stage1_cuda_slice_depth" name="CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片。8 按最多八片一组等待组尾。" />
       <Item id="option_stage1_cuda_low_cpu" name="设为 1 或 true 后，CUDA CGBN Stage1 主机线程在等待 GPU 完成时休眠，对所有切片深度优先生效。此模式用于降低 CPU 占用，唤醒可能稍慢。" />
       <Item id="option_stage1_progress_color" name="选择 Stage1 控制台进度文字颜色。none 关闭着色；此设置不改变普通文件日志内容或计算方式。" />
       <Item id="option_stage1_progress_log_seconds" name="控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。" />
@@ -45,6 +45,7 @@
       <Item id="option_stage1_impl" name="选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。" />
       <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
       <Item id="option_stage1_cpu_mont_chain" name="Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。" />
+      <Item id="option_stage1_cpu_prac_search" name="CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。" />
       <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设置。" />
       <Item id="option_stage1_affinity" name="CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。" />
       <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
@@ -131,7 +132,7 @@
       <Item id="option_stage2_stage2_tune_runtime_samples" name="完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。达到stage2_tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。" />
       <Item id="option_stage2_stage2_short_ntt_batch_tune" name="实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。" />
       <Item id="option_stage2_stage2_low_cpu_wait" name="可选低CPU策略：CUDA设备阻塞调度（4）配合事件退避轮询；同步读回保持原路径，可能增加耗时。&#10;默认false：自动调度（0）和原生事件等待。命令行--low-cpu-wait 0|1优先，FIFO回收独立生效。&#10;显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。&#10;未配置时保留专家环境覆盖；读回前休眠可单独实验。" />
-      <Item id="option_stage2_stage2_pack_zero" name="每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。" />
+      <Item id="option_stage2_stage2_pack_zero" name="每个操作数用一个 GPU 内核完成 digit 打包和补零，覆盖连续输入、设备驻留 gather 及反向输入。其余形状使用原打包路径。命令行 --pack-zero 优先于本键。旧 .cprof 成本配置默认使用 false，显式配置时也须设为 false。" />
       <Item id="option_stage2_stage2_weighted_ntt" name="生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt 0|1 优先。" />
       <Item id="option_stage2_stage1_tune_profile" name="已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。" />
       <Item id="option_stage2_stage2_auto_min_b2" name="Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。" />

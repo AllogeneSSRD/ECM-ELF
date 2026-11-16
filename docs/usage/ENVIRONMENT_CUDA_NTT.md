@@ -59,7 +59,7 @@
 | `NTT_S4_BATCH_MB` | 64 | 多项式乘法分块预算，由 Stage2 CLI 或 TOML 解析出的 batch MB 写入。 |
 | `NTT_S4_CHUNK_MAX` | 0 | 额外限制单块的乘法组数。0 使用预算选出的值。 |
 | `NTT_S4_WORKSPACE_BUDGET` | 0 | 按实际工作区字节数决定乘法分块。 |
-| `NTT_S4_PACK_ZERO` | 1 | 融合 pack 和补零。CLI `--pack-zero`、显式 TOML `cuda.pack_zero`、环境变量依次优先。旧成本表要求关闭。 |
+| `NTT_S4_PACK_ZERO` | 1 | 生产启动器用 `--pack-zero` 或 TOML `cuda.pack_zero` 的有效值配置内部引擎。旧成本表要求关闭。 |
 | `NTT_S4_WEIGHTED` | 0 | 启用加权 NTT，要求 CUDA 生产引擎和 pack/补零融合。使用 `--weighted-ntt 1` 或 TOML `cuda.weighted_ntt`。 |
 | `NTT_S4_HALF_INVERSE` | 0 | 在加权 NTT 且 `k ≥ 24` 时尝试半长逆变换计划。tile 或趟数等条件不满足则回退。 |
 | `NTT_S4_PACK_DIRECT`、`NTT_S4_FLAT_DIRECT` | 1 | 启用设备直接打包及 flat 输入直通。生产固定。 |
@@ -90,7 +90,6 @@
 | `NTT_GFINV_SEG_EXACT`、`NTT_GFINV_BATCH` | 1 | 使用精确分段积和统一批量求逆。生产固定。 |
 | `NTT_SMALL_PRIME_REUSE` | 1 | 在满足缓存身份时复用同一曲线的小素数处理结果。生产固定。 |
 | `NTT_S4_GROOT_ONLY` | 1 | G-tree 只保留根结果。生产固定。 |
-| `NTT_GROOT_BALANCED` | 自动 | 0 左侧连续布局，1 分块均衡布局。与 CLI 或 TOML 显式布局冲突时报错。仅 CUDA 支持。 |
 | `NTT_GROOT_DEVICE`、`NTT_GROOT_COMPACT_RAW`、`NTT_GROOT_LEAF_STAGING` | 1 | 使用设备 G-root、紧凑 raw 缓冲和分段 leaf 暂存。生产固定。 |
 | `NTT_GROOT_LEAF_CHUNK` | 0 | 限制一次暂存的 G-tree 叶数，0 使用工作区计算出的大小。 |
 | `NTT_DEVICE_GLEAF`、`NTT_GROOT_TO_FOLD` | 1 | 在满足显存与形状准入时保留 G-tree 叶节点，并把设备 G-root 直接交给 fold。生产固定。 |
@@ -102,7 +101,7 @@
 | `NTT_SCALED_FRONTIER_MAX_MB` | 继承 fold 预算 | 限制设备下降前沿工作区，实际预算取该值与 fold 上限的较小值。 |
 | `NTT_STAGE2_RESIDENT_PRODUCTS` | 1 | 前沿设备常驻时保留 product 叶，供后续 GCD 路径使用。 |
 
-只比较 G 树布局时，固定 D 和 B2，关闭 Auto B2、自动承载、运行时采样、短校准和短 NTT 调优，使用独立实验目录与调参文件，避免加载已有 ECM tune 或旧成本表。当前程序将环境覆盖解析为显式布局，可参与常规调参，以上是控制单变量对照的设置。[布局解析](../../src/ecm/stage2/cuda/host_policy.cpp) · [调参选择](../../src/ecm/stage2/planning/planning.cpp) · [G 树性能](../performance/STAGE2_GTREE_LAYOUT.md)
+G 树布局通过 `--groot-layout` 或 TOML `groot_balanced` 配置。固定参数 A/B 用法见 [Stage2 使用说明](STAGE2.md#固定参数g树实验)。
 
 ## 正确性检查、故障注入与日志
 

@@ -42,7 +42,7 @@ BatchedRun run_batched(
     stage2_log::print(stage2_log::debug,
         "groot_layout: balanced=%d words=%llu points=%llu P=%llu full_groups=%llu policy=%s\n",
         (int)balanced_groot,(unsigned long long)W,imax,(unsigned long long)P,imax/P,
-        std::getenv("NTT_GROOT_BALANCED")?"forced":ecm_stage2::groot_layout_override>=0?"selected":"ntt_cliff_v2");
+        ecm_stage2::groot_layout_override>=0?"selected":"ntt_cliff_v2");
     R.dbg_progress = true;                  /* one line per G-tree batch: gate-able, machine-readable */
     L.cost.S = (long)L.S;                              /* (already set by the caller) */
 

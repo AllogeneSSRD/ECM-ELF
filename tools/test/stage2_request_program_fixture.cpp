@@ -118,15 +118,8 @@ int main() {
             check(plan.signature.multiplier==all.multiplier && plan.signature.addend==all.addend);
         }
         context="fixed-layout override";
-        auto policy=[](const char *value) {
-#ifdef _WIN32
-            _putenv_s("NTT_GROOT_BALANCED",value);
-#else
-            if(*value)setenv("NTT_GROOT_BALANCED",value,1);else unsetenv("NTT_GROOT_BALANCED");
-#endif
-        };
-        for(const char *value:{"0","1"}) {
-            policy(value);const bool balanced=*value=='1';
+        for(bool balanced:{false,true}) {
+            GrootLayoutScope policy(balanced);
             check(giant_tree_balanced(2,200,48)==balanced);
             check(giant_tree_balanced(129,200,48)==balanced);
             RequestPlan plan;check(request_plan(48,200,129,query,describe,1024,3,false,0,true,plan) && plan.valid);
@@ -135,7 +128,7 @@ int main() {
             const auto expected=dense_program(48,200,balanced);check(actual.size()==expected.size());
             for(size_t i=0;i<actual.size();++i)check(equal(actual[i],expected[i]));
         }
-        policy("");check(!giant_tree_balanced(128,200,48) && giant_tree_balanced(129,200,48) && !giant_tree_balanced(129,100,48));
+        check(!giant_tree_balanced(128,200,48) && giant_tree_balanced(129,200,48) && !giant_tree_balanced(129,100,48));
         context="overflow";RequestPlan overflow;check(!request_plan(1,~Word(0),129,query,describe,1024,2,false,0,true,overflow));
         std::cout<<"{\"checks\":"<<checks<<",\"bad\":0}\n";return 0;
     } catch(const std::exception &e) {std::cerr<<e.what()<<" at check "<<checks<<'\n';return 1;}

@@ -255,6 +255,16 @@ v1 旧键 `stage1.cpu_mont_chain`
 
 Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。
 
+### cpu_prac_search
+
+```toml
+cpu_prac_search = 7
+```
+
+类型 `int` · 范围 `[1..50]` · Worker 覆盖 `[worker.N] stage1.cpu_prac_search` · 级别 `高级`。
+
+CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。
+
 <a id="reduction"></a>
 
 ### cpu_simd_reduction
@@ -311,7 +321,7 @@ cuda_prac_search = 7
 
 类型 `int` · 范围 `[1..50]` · Worker 覆盖 `[worker.N] stage1.cuda_prac_search` · 级别 `高级`。
 
-CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许 ECM_PRAC_SEARCH 覆盖默认值。
+CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。
 
 ### cuda_slice_depth
 
@@ -321,7 +331,7 @@ cuda_slice_depth = 3
 
 类型 `int` · 范围 `[2|3|8]` · Worker 覆盖 `[worker.N] stage1.cuda_slice_depth` · 级别 `常用`。
 
-CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片，8 按最多八片一组等待组尾。仅在 TOML 未设此项时，旧环境变量 ECM_CUDA_STAGE1_SLICE_DEPTH 可覆盖默认值。
+CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片。8 按最多八片一组等待组尾。
 
 ### edwards_doubling
 
@@ -1112,7 +1122,7 @@ v1 旧键 `stage2.stage2_pack_zero`
 
 显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
 
-每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。
+每个操作数用一个 GPU 内核完成 digit 打包和补零，覆盖连续输入、设备驻留 gather 及反向输入。其余形状使用原打包路径。命令行 --pack-zero 优先于本键。旧 .cprof 成本配置默认使用 false，显式配置时也须设为 false。
 
 <a id="stage2_parallel_tune_curves"></a>
 

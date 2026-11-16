@@ -16,6 +16,7 @@ import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bench'))
 from gpu_telemetry import TelemetryRecorder
+from stage2_log import read_stage2_log
 
 if hasattr(sys, 'set_int_max_str_digits'):
     sys.set_int_max_str_digits(20000)
@@ -70,7 +71,8 @@ def main():
     report=dict(complete=False, identities=identities, independent_ecm_coverage=False,
         D=a.d,B2=a.b2,carrier=a.carrier,device=a.device,runs=[])
     report['collector_sha256']=sha(out/'collector_snapshot.py')
-    report.update(N_hex=re.search(r'\bN=0x([\da-fA-F]+);',point)[1],
+    modulus=re.search(r'\bN=(0x[\da-fA-F]+|\d+);',point)[1]
+    report.update(N_hex=format(int(modulus,16 if modulus.startswith('0x') else 10),'x'),
         B1=int(re.search(r'\bB1=(\d+);',point)[1]),sigma=int(re.search(r'\bSIGMA=(\d+);',point)[1]))
     report['target_bits']=int(report['N_hex'],16).bit_length()
     modes=[('checked',1,0),('fault',1,1)] if a.fixtures else [(f'{i:02d}_layout{layout}',layout,0) for i,layout in enumerate(order)]
@@ -80,7 +82,7 @@ def main():
         (directory/'ecm.toml').write_text('[stage2]\nstage2_auto_carrier=false\nstage2_auto_b2=false\n'
             'stage2_tune_runtime=false\nstage2_short_calibration=false\n',encoding='utf-8')
         sentinel=directory/'unused_tune.toml'
-        env=base|({'NTT_GROOT_BALANCED':str(layout)} if layout>=0 else {})
+        env=base.copy()
         if a.fixtures:
             env.update(NTT_GROOT_DEVICE_TEST='1',NTT_GROOT_DEVICE_CHECK='1',NTT_GROOT_DEVICE_TEST_BAD=str(fault))
         command=[str(a.exe.resolve()),'--config',str(directory/'ecm.toml'),
@@ -91,6 +93,8 @@ def main():
             '--arena-mb','0','--owner-budget-mb','960','--batch-mb','64','--ntt-counts','1',
             '--results',str(directory/'internal.jsonl'),'--submission',str(directory/'results.txt'),
             '--log',str(directory/'engine.log'),'--debug-log-file',str(directory/'debug.log'),'--log-level','batches']
+        if layout>=0:
+            command+=['--groot-layout',str(layout)]
         (directory/'command.json').write_text(json.dumps(dict(command=command,environment={k:v for k,v in env.items() if k.startswith('NTT_')}),indent=2),encoding='utf-8')
         monitor=None
         if not a.fixtures and shutil.which('nvidia-smi'):
@@ -105,9 +109,9 @@ def main():
                 monitor.close()
         text=(directory/'console.log').read_text(encoding='utf-8',errors='replace')
         if (directory/'engine.log').exists():
-            text+='\n'+(directory/'engine.log').read_text(encoding='utf-8',errors='replace')
+            text+='\n'+read_stage2_log(directory/'engine.log',errors='replace')
         if (directory/'debug.log').exists():
-            text+='\n'+(directory/'debug.log').read_text(encoding='utf-8',errors='replace')
+            text+='\n'+read_stage2_log(directory/'debug.log',errors='replace')
         assert not sentinel.exists(),'fixed run unexpectedly wrote tune profile'
         row=dict(label=label,layout=layout,wall_seconds=elapsed,exit=result.returncode,fault=bool(fault))
         if monitor is not None:
@@ -135,26 +139,18 @@ def main():
         (out/'summary.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
         print(json.dumps(dict(label=label,wall=elapsed,exit=result.returncode,split=row.get('split'))),flush=True)
     if a.fixtures:
-        # Both explicit controls must agree; malformed values fail before work.
-        # Automatic D/calibration/runtime learning now accept layout identity.
-        report['guards']=[]
-        for name,changes,extra,value in [
-            ('bad_value',{},[],'2'),('conflicting',{},['--groot-layout','0'],'1')]:
-            guard=out/('guard_'+name);guard.mkdir()
-            for item in ('point.save','ecm.toml'):
-                shutil.copy2(directory/item,guard/item)
-            guard_command=[arg.replace(str(directory),str(guard)) for arg in command]+extra
-            for flag,new_value in changes.items():
-                guard_command[guard_command.index(flag)+1]=new_value
-            rejected=subprocess.run(guard_command,cwd=guard,env=base|{'NTT_GROOT_BALANCED':value},
-                capture_output=True,timeout=30)
-            text=(rejected.stdout+rejected.stderr).decode('utf-8',errors='replace')
-            (guard/'console.log').write_text(text,encoding='utf-8')
-            (guard/'command.json').write_text(json.dumps(guard_command,indent=2),encoding='utf-8')
-            assert rejected.returncode and not (guard/'internal.jsonl').exists(),name
-            assert ('NTT_GROOT_BALANCED must be 0 or 1' if name=='bad_value' else 'conflicting G-root layout overrides') in text,name
-            assert not (guard/'unused_tune.toml').exists(),name
-            report['guards'].append(name)
+        guard=out/'guard_bad_value';guard.mkdir()
+        for item in ('point.save','ecm.toml'):
+            shutil.copy2(directory/item,guard/item)
+        guard_command=[arg.replace(str(directory),str(guard)) for arg in command]
+        guard_command[guard_command.index('--groot-layout')+1]='2'
+        rejected=subprocess.run(guard_command,cwd=guard,env=base,capture_output=True,timeout=30)
+        text=(rejected.stdout+rejected.stderr).decode('utf-8',errors='replace')
+        (guard/'console.log').write_text(text,encoding='utf-8')
+        (guard/'command.json').write_text(json.dumps(guard_command,indent=2),encoding='utf-8')
+        assert rejected.returncode and 'groot-layout' in text and not (guard/'internal.jsonl').exists()
+        assert not (guard/'unused_tune.toml').exists()
+        report['guards']=['bad_value']
     if not a.fixtures:
         digests={(r['root']['digest_words'],r['root']['digest_sum'],r['root']['digest_xor']) for r in report['runs']}
         assert len(digests)==1,'G roots changed with layout'

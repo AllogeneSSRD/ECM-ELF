@@ -11,6 +11,7 @@ import time
 
 from benchmark_stage2_short_ntt import fields, parse, sha as file_sha
 from bench_stage2_production import freeze
+from stage2_log import read_stage2_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,22 +29,18 @@ def environment(enabled, max_k=19, max_words=1 << 22, min_calls=4, diagnostic=Fa
         env['NTT_FUSE_MID_COOP'] = str(enabled)
     elif variant == 'joint-outer':
         env.update(NTT_FUSE_MID_COOP='1', NTT_FUSE_JOINT=str(enabled))
-    elif variant == 'pack-zero':
-        env['NTT_S4_PACK_ZERO'] = str(enabled)
-    if variant != 'pack-zero':
-        env['NTT_S4_PACK_ZERO'] = '0'
     if diagnostic:
         env['NTT_TARGET_LEAF_HASH'] = '1'
     return env
 
 
-def command(exe, ini, case, device, log, result, debug=None):
-    cmd = [str(exe), '--ini', str(ini), '--save', case['save'], '--b2', str(case['b2']),
+def command(exe, config, case, device, log, result, debug=None):
+    cmd = [str(exe), '--config', str(config), '--save', case['save'], '--b2', str(case['b2']),
            '--d', str(case['d']), '--device', str(device), '--curves', '1',
            '--batch-mb', str(case['batch_mb']), '--arena-mb', str(case.get('arena_mb', 6300)),
            '--owner-budget-mb', str(case.get('fold_mb', 640)),
            '--carrier-exponent', str(case.get('carrier', 0)), '--short-calibration', '0',
-           '--short-ntt-batch-tune', '0', '--factor-only', '--log-level', 'phases',
+           '--short-ntt-batch-tune', '0', '--ntt-counts', '1', '--factor-only', '--log-level', 'phases',
            '--log', str(log), '--results', str(result)]
     if debug:
         cmd += ['--debug-log-file', str(debug)]
@@ -108,11 +105,11 @@ def main():
         case['source_save'] = str(source)
         case['save'] = str(dest)
         case['save_sha256'] = sha(dest)
-    ini = out / 'manual.ini'
-    ini.write_text('verbose=true\nstage2_debug_log=false\nstage2_short_calibration=false\nstage2_tune_runtime=false\n')
+    config = out / 'manual.toml'
+    config.write_text('config_version=3\n[stage2]\ndiagnostics.debug_log=false\nshort_calibration=false\ntune.runtime_enabled=false\n')
     baseline_env = environment(0, a.max_k, a.max_words, a.min_calls, a.diagnostic, a.variant)
     receipt = dict(identity=identity, cases=cases, device=a.device, diagnostic=a.diagnostic,
-                   repeats=a.repeats, variant=a.variant, ini_sha256=sha(ini), script_sha256=sha(Path(__file__)),
+                   repeats=a.repeats, variant=a.variant, ini_sha256=sha(config), script_sha256=sha(Path(__file__)),
                    graph_controls={k: v for k, v in baseline_env.items() if k.startswith('NTT_')},
                    argv_vars={k: str(v) if isinstance(v, Path) else v for k, v in vars(a).items()},
                    timing='engine init+main; no discarded warmups; profiling collected separately')
@@ -136,7 +133,8 @@ def main():
                     name = f"{case['name']}_{'on' if enabled else 'off'}_{turn}"
                     log, result = out / (name + '.engine.log'), out / (name + '.results.jsonl')
                     debug = out / (name + '.debug.log') if a.diagnostic else None
-                    cmd = command(exe, ini, case, a.device, log, result, debug)
+                    cmd = command(exe, config, case, a.device, log, result, debug)
+                    cmd += ['--pack-zero', str(enabled if a.variant == 'pack-zero' else 0)]
                     env = environment(enabled, a.max_k, a.max_words, a.min_calls, a.diagnostic, a.variant)
                     env.update({k:str(v) for k,v in case.get('environment',{}).items()})
                     started = time.time()
@@ -144,14 +142,15 @@ def main():
                         run = subprocess.run(cmd, env=env, cwd=ROOT, stdout=console, stderr=subprocess.STDOUT, timeout=a.timeout,
                                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                     ended = time.time()
-                    (out / (name + '.command.json')).write_text(json.dumps(dict(command=cmd, environment={k: v for k, v in env.items() if k.startswith(('NTT_', 'CUDA_'))},
+                    (out / (name + '.command.json')).write_text(json.dumps(dict(command=cmd, environment={k: v for k, v in env.items() if k.startswith('NTT_') or k == 'CUDA_LAUNCH_BLOCKING'},
                         start_unix=started, end_unix=ended, returncode=run.returncode), indent=2), encoding='utf-8')
                     if run.returncode:
                         raise RuntimeError(f'{name} failed ({run.returncode}); evidence retained')
                     row = parse(log, result, leaf_fixture=a.diagnostic)
                     if a.variant in ('mid-outer','joint-outer') and 'RTX 4060 Laptop' not in log.read_text(encoding='utf-8'):
                         raise ValueError('Middle-outer table is not supported on this device')
-                    graph = fields(log.read_text(encoding='utf-8'), 'ntt_graph_stats')
+                    text = read_stage2_log(log)
+                    graph = fields(text, 'ntt_graph_stats')
                     if int(graph['requested']) != int(env['NTT_SHORT_GRAPH']) or int(graph['failures']):
                         raise ValueError('Graph request or capture failed')
                     graph_active = bool(enabled and int(graph['builds']) and int(graph['hits']))
@@ -159,7 +158,7 @@ def main():
                     variant_active = graph_active if a.variant == 'graph' else bool(enabled and sum(
                         count for k, count in row['histogram'].items() if int(k) in selected_lengths))
                     if a.variant == 'pack-zero':
-                        pack = fields(log.read_text(encoding='utf-8'), 's4_pack_zero_stats')
+                        pack = fields(text, 's4_pack_zero_stats')
                         if int(pack['requested'])!=enabled or (not enabled and int(pack['words'])):
                             raise ValueError('Pack/zero request differs')
                         variant_active=bool(enabled and int(pack['words']) and int(pack['avoided_memsets']))
@@ -172,8 +171,7 @@ def main():
                     if current != invariant:
                         raise ValueError('Arithmetic or workload changed: ' + name)
                     if a.diagnostic:
-                        text = log.read_text(encoding='utf-8') + debug.read_text(encoding='utf-8')
-                        actual_leaf = fields(text, 'target_descent_values')
+                        actual_leaf = fields(text + read_stage2_log(debug), 'target_descent_values')
                         if leaf is None:
                             leaf = actual_leaf
                         if actual_leaf != leaf:

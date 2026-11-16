@@ -45,6 +45,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","impl","[auto|simd|scalar|gwnum|slice list|empty]","option_stage1_impl","string",false,false,0,0},
     {"stage1","reduction","[auto|montgomery|mersenne-fold]","option_stage1_reduction","string",false,false,0,0},
     {"stage1","cpu_mont_chain","[ladder|prac]","option_stage1_cpu_mont_chain","string",false,false,0,0},
+    {"stage1","cpu_prac_search","[1..50]","option_stage1_cpu_prac_search","int",true,true,1,50},
     {"stage1","stage1_threads","<x:Z,0..2^32-1>","option_stage1_stage1_threads","u32",false,false,0,0},
     {"stage1","affinity","[none|auto|<n>,...|<a>-<b>]","option_stage1_affinity","string",false,false,0,0},
     {"stage1","save_name_pattern","<pattern>","option_stage1_save_name_pattern","string",false,false,0,0},

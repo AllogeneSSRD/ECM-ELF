@@ -25,6 +25,48 @@ try {
 
 实验时固定输入、算术路径和参数，记录显式环境值、程序版本和启动日志中的实际选型。若对应变量会改变数学工作量、启用提前停止或注入故障，使用独立队列、输出和 tune 文件。部分 Stage2 覆盖会暂停学习或被调优入口拒绝，限制见 [Stage2 环境变量](ENVIRONMENT_STAGE2.md) 与 [CUDA NTT 环境变量](ENVIRONMENT_CUDA_NTT.md)。
 
+## 旧变量与配置迁移
+
+| 已移除的生产环境入口 | 使用方式 |
+|---|---|
+| `ECM_CUDA_STAGE1_SLICE_DEPTH` | `[stage1] cuda_slice_depth = 2`、`3` 或 `8`。默认 `3`。 |
+| `ECM_PRAC_SEARCH` | `[stage1] cpu_prac_search` 用于 CPU IFMA，`cuda_prac_search` 用于 CUDA CGBN。两者均为 `1…50`，默认 `7`。恢复检查点时沿用原搜索宽度。 |
+| `NTT_GROOT_BALANCED` | `[stage2] groot_balanced = false` 对应 `0`，`true` 对应 `1`。CUDA 也可使用 `--groot-layout 0\|1`，自动模式用 `"auto"`。 |
+| `NTT_S4_PACK_ZERO` | `[stage2] cuda.pack_zero = true\|false` 或 `--pack-zero 0\|1`。生产入口按配置写入引擎所需的有效值。 |
+
+以下配置与仍可用的环境入口有重叠。迁移脚本时按实际使用的路径选择正式选项。
+
+| 环境变量 | 正式选项与适用范围 |
+|---|---|
+| `ECM_GPU_STAGE1_ALGO` | `[stage1] cuda_montgomery_chain` 支持 `ladder`、`prac`。历史 `resident` 实验仍通过环境选择。 |
+| `ECM_EDWARDS_DBL_ALGO` | `[stage1] edwards_doubling` 为新批次选择公式。环境 `4` 对应 TOML `0`（HWCD），`5` 对应 `1`（2XY）。省略 TOML 时，显式环境值还可用于检查旧检查点的公式是否匹配。 |
+| `ECM_PRAC_PLAN_CACHE` | `[stage1] exponent_cache_dir` 是共用指数和计划缓存入口。环境变量可只改 CUDA PRAC 的目录。 |
+| `NTT_BABY_COOP`、`NTT_GIANT_COOP`、`NTT_GIANT_SEED_COOP`、`NTT_S4_COOP_REDUCE` | `[stage2] cuda.baby_backend`、`cuda.giant_backend`、`cuda.seed_backend`、`cuda.reduce_backend`。引擎也读取这些变量，启动器按曲线选型写入有效值。 |
+| `NTT_S4_COOP_TPB`、`NTT_S4_COOP_KERNEL` | CUDA Stage2 CLI `--reduce-threads`、`--reduce-kernel`。启动器和引擎共用这两个内部参数。 |
+| `NTT_CUDA_WAIT_MODE`、`NTT_HOST_EVENT_WAIT`、`NTT_HOST_READBACK_WAIT` | `[stage2] cuda.low_cpu_wait` 选择生产等待策略。自旋、yield 和逐次回读等待仍可单独实验。 |
+| `NTT_ARENA_CAP_KB`、`NTT_FOLD_DEVICE_MAX_MB` | `[stage2] memory.arena_mib`、`memory.fold_resident_mib`。环境仍可直接指定引擎预算，其中 arena 环境参数以 KiB 计。 |
+| `ECM_OPENCL_POINTS`、`ECM_OPENCL_POINT_CHUNK`、`ECM_OPENCL_POINT_GROUP`、`ECM_OPENCL_POINT_WINDOW`、`ECM_OPENCL_SHORT_POINT_BATCH` | `[stage2] opencl.point_plan`、`opencl.point_chunk`、`opencl.point_group`、`opencl.point_window`、`opencl.short_point_batch`。OpenCL 启动器与引擎通过环境传递部分设置。 |
+
+以下值由生产启动器写入。独立探针可继续按各自的接口使用环境变量。[Stage2 环境变量](ENVIRONMENT_STAGE2.md) · [CUDA NTT 环境变量](ENVIRONMENT_CUDA_NTT.md)
+
+| 引擎内部环境变量 | 生产配置 |
+|---|---|
+| `NTT_GIANT_CHAIN_BLOCK`、`NTT_GIANT_TAIL_BALANCE` | `[stage2] giant_chain`、`giant_tail_balance` |
+| `NTT_S4_WEIGHTED`、`NTT_S4_BATCH_MB` | `[stage2] cuda.weighted_ntt`、`memory.s4_batch_mib` |
+| `ECM_STAGE2_FTREE_LEASE` | `[stage2] cuda.workspace_policy` |
+
+OpenCL Stage1 早期环境入口也已迁至命令行。当前入口见 [Stage1 CLI](../../src/io/cli.cpp) 和 [运行配置结构](../../include/ecm/application/configuration/runtime.h)。
+
+| 旧变量 | 当前入口 |
+|---|---|
+| `CGBN_OPENCL_DEVICE_INDEX`、`ECM_OPENCL_TPI`、`ECM_STAGE1_FORCE_NORMALIZE`、`ECM_MP_ADD_MOD_FUSED_UNROLL` | 依次为 `-d`、`--tpi`、`--force-normalize`、`--addsub-fused-unroll`。 |
+| `ECM_KERNEL_ROOT`、`CGBN_KERNEL_ROOT` | `--kernel-root`。 |
+| `CGBN_OPENCL_CACHE_DIR`、`CGBN_OPENCL_CACHE_DISABLE`、`CGBN_OPENCL_CACHE_VERBOSE`、`CGBN_OPENCL_COMPILE_VERBOSE` | 依次为 `--kernel-cache-dir`、`--no-kernel-cache`、`--kernel-cache-verbose`、`--compile-verbose`。 |
+| `ECM_LOG_TIMESTAMP`、`ECM_GPU_DUMP`、`ECM_GPU_DUMP_FILE` | OpenCL CLI 依次用 `--no-log-timestamp`、`--gpu-dump`、`--gpu-dump-file`。`ECM_GPU_DUMP` 在 CUDA CGBN 保留。 |
+| `ECM_PROFILE_OPS`、`ECM_PROFILE_OPS_FILE`、`ECM_SYNC_EACH_BATCH`、`ECM_VERIFY_GPU_RESULTS`、`ECM_VERIFY_GPU_STRICT` | 依次为 `--profile-ops`、`--profile-ops-file`、`--sync-each-batch`、`--verify-gpu`、`--verify-gpu-strict`。 |
+
+独立基准的旧变量 `ECM_ADDSUB_ASM_DISABLE`、`ECM_ADDSUB_ASM_B64`、`ECM_BENCH_CSV`、`ECM_MONT_WG_IMPL`、`ECM_MONT_WG_IMPL4_UNROLL` 对应支持这些参数的基准程序的 `--no-asm`、`--asm-b64`、`--csv`、`--wg-impl`、`--wg-impl4-unroll`。
+
 ## Stage1
 
 ### CUDA CGBN
@@ -32,7 +74,6 @@ try {
 | 变量 | 默认与取值 | 生效条件和用途 |
 |---|---|---|
 | `ECM_GPU_STAGE1_ALGO` | `ladder`，接受 `ladder`、`resident`、`prac` | Montgomery CGBN 点乘链。省略 `stage1.cuda_montgomery_chain` 时读取。PRAC 用于 PARAM0，`resident` 是历史实验入口，取决于所用构建。 |
-| `ECM_CUDA_STAGE1_SLICE_DEPTH` | `3`，接受 `2`、`3`、`8` | 省略 `stage1.cuda_slice_depth` 时读取。`2` 或 `3` 滚动提交相应数量的切片，`8` 每组最多提交八片再等待。仅在允许预提交的 CGBN 路径生效。 |
 | `ECM_STAGE1_TPI` | `0` 由程序选择，另可设 `16` 或 `32` | 请求 Montgomery PARAM0 专用 CGBN 调度所用的每整数线程数。需要构建包含对应位宽/TPI 实例。 |
 | `ECM_GPU_DUMP` | 未设置或 `0` 关闭，非零整数打开 | Montgomery 通用 CGBN 路径将 kernel 切片边界状态写到当前目录 `dump.csv`。导出会改变提交方式和计时。 |
 | `ECM_EDWARDS_STAGE1_ALGO` | 省略按 NAF、资源和恢复状态决定。可设 `naf`、`binary` | 固定新批次的 Edwards 算法。`binary` 与显式 `--naf-w` 不可同时指定。 |
@@ -46,9 +87,8 @@ try {
 
 | 变量 | 默认与取值 | 生效条件和用途 |
 |---|---|---|
-| `ECM_PRAC_SEARCH` | `7`，`1…50` | 每个素数的候选种子数。CPU IFMA PRAC 直接读取。CUDA PRAC 在省略 `stage1.cuda_prac_search` 时读取。恢复检查点时保持原搜索宽度。 |
 | `ECM_PRAC_THREADS` | 自动，按硬件线程数取 `1…8`。可设 `1…32` | PRAC 计划生成线程数。调用方传入非零线程上限时，使用该上限和自动值中的较小者。命中缓存时无需重建。 |
-| `ECM_PRAC_PLAN_CACHE` | 继承 `[shared]` 的指数缓存设置 | 执行 CUDA PRAC 时覆盖计划缓存目录。 |
+| `ECM_PRAC_PLAN_CACHE` | 继承 `[stage1] exponent_cache_dir` | 执行 CUDA PRAC 时覆盖计划缓存目录。 |
 | `ECM_PRAC_TARGET_MS` | `100`，有限小数 `10…500` | CUDA PRAC 自适应切片时长目标，调节使用目标的 80%～120% 范围。 |
 | `ECM_PRAC_REG_TARGET` | `0` 默认调度。也接受 `128`、`168`、`255` | CUDA PRAC 选择已编译的寄存器策略。`255` 选择自然寄存器策略，`128` 只与 `single-compact` 组合。 |
 | `ECM_PRAC_VARIANT` | `baseline`，另有 `compact`、`outline-add`、`single-add`、`single-compact` | CUDA PRAC 诊断 kernel。非基线一般要求 `168` 或 `255`，`single-compact` 另支持 `128`。需要所选构建包含该实例。 |

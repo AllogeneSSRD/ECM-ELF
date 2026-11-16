@@ -10,6 +10,7 @@
 #include <algorithm>
 #include "ecm/stage1/progress.h"
 #include "ecm/stage1/execution_details.h"
+#include "ecm/platform/generated/configuration_defaults.h"
 #include "../../../cuda_slices.h"
 #include <cstring>
 using namespace ecm_cuda_mont_host;
@@ -79,7 +80,7 @@ int ecm_cuda_stage1::run_mont_resident(ecm_stage1_checkpoint::Context& checkpoin
         unsigned search = 0;
         if (prac) {
             search = requested.prac_search ? requested.prac_search
-                : ecm_prac_search_width(requested.get("ECM_PRAC_SEARCH"));
+                : ecm_config::defaults::stage1_cuda_prac_search;
             outputf(OUTPUT_ALWAYS, "GPU: preparing Prime95 PRAC plan (B1=%llu, t=%u, search=%u)\n",
                     (unsigned long long)B1, torsion, search);
             const auto cache=prac_plan_cache(requested);

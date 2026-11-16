@@ -30,7 +30,7 @@ std::string load_text_file(const char *path);
 // Load kernel source: tries rel_path from cwd, then ../.. prefixes (for build/Debug runs).
 std::string load_kernel_file(const char *rel_path);
 
-// Load ECM stage1 kernel relative to kernels/opencl/ (ECM_KERNEL_ROOT or ECM_KERNEL_ROOT_DEFAULT).
+// Load a Stage1 kernel relative to the configured or default OpenCL kernel root.
 std::string load_ecm_stage1_kernel_file(const char *rel_path);
 
 } // namespace opencl

@@ -1,7 +1,6 @@
 #pragma once
 #include "geometry.h"
 #include <vector>
-#include <cstdlib>
 
 namespace ecm_stage2 {
 inline thread_local int groot_layout_override=-1;
@@ -16,7 +15,6 @@ inline bool legacy_groot_layout(Word words,Word points,Word p) {
 // Override/legacy resolver. New automatic planning also evaluates NTT cliffs.
 inline bool giant_tree_balanced(Word words,Word points,Word p) {
     // Explicit controls, native memory planning and execution share one layout.
-    if(const char *forced=std::getenv("NTT_GROOT_BALANCED"))return forced[0]=='1';
     if(groot_layout_override>=0)return groot_layout_override!=0;
     return legacy_groot_layout(words,points,p);
 }
@@ -61,7 +59,7 @@ template<class Visit> bool giant_tree_multiply_groups(Word n,Visit visit) {
 // cliff and >=10% less complete G-tree N*log2(N) work, with <=10% extra output
 // coefficients. No arithmetic/memory admission is replaced by this cost gate.
 template<class Query> bool select_groot_layout(Word words,Word points,Word p,int bits,Query query) {
-    if(std::getenv("NTT_GROOT_BALANCED") || groot_layout_override>=0)
+    if(groot_layout_override>=0)
         return giant_tree_balanced(words,points,p);
     const bool legacy=legacy_groot_layout(words,points,p);
     if(legacy || !p || points/p<4)return legacy;

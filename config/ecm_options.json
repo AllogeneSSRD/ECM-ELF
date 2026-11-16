@@ -554,8 +554,8 @@
       "fx": "chain_search(S1 CUDA CGBN PARAM0)",
       "parser": "strict",
       "description": [
-        "Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC checkpoint. If omitted, ECM_PRAC_SEARCH can override the default.",
-        "CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。省略时允许 ECM_PRAC_SEARCH 覆盖默认值。"
+        "Number of candidate seeds per prime for CUDA PRAC. Keep the same width when resuming a PRAC checkpoint.",
+        "CUDA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。"
       ]
     },
     {
@@ -570,8 +570,8 @@
       "fx": "cuda_cgbn_slice_submission",
       "parser": "enum",
       "description": [
-        "CUDA CGBN Stage1 slice submission. 2 and 3 keep a rolling queue of up to that many slices; 8 waits at the end of each group of up to eight. When omitted, the legacy ECM_CUDA_STAGE1_SLICE_DEPTH environment variable can override the default.",
-        "CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片，8 按最多八片一组等待组尾。仅在 TOML 未设此项时，旧环境变量 ECM_CUDA_STAGE1_SLICE_DEPTH 可覆盖默认值。"
+        "CUDA CGBN Stage1 slice submission. Values 2 and 3 keep a rolling queue of up to that many slices. Value 8 waits at the end of each group of up to eight.",
+        "CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片。8 按最多八片一组等待组尾。"
       ]
     },
     {
@@ -767,6 +767,22 @@
       "description": [
         "Montgomery CPU point multiplication. prac requires target=cpu, curve=mont, impl=simd and B1 in 2..4294967295. It shares the scalar convention and final save format with ladder, with its own in-flight checkpoint state.",
         "Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "cpu_prac_search",
+      "field": "cpu_prac_search",
+      "type": "int",
+      "default": 7,
+      "domain": "[1..50]",
+      "minimum": 1,
+      "maximum": 50,
+      "fx": "chain_search(S1 CPU IFMA PARAM0)",
+      "parser": "strict",
+      "description": [
+        "Number of candidate seeds per prime for CPU IFMA PRAC. Keep the same width when resuming a PRAC checkpoint.",
+        "CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。"
       ]
     },
     {
@@ -2349,8 +2365,8 @@
       "parser": "strict",
       "present": "has_pack_zero",
       "description": [
-        "Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous, resident gather and reverse inputs; unsupported shapes use the original packer. Does not change arithmetic checks, D, NTT length or device workspace capacity. CLI --pack-zero overrides this key; an explicit key overrides NTT_S4_PACK_ZERO. Without an override, the built-in default applies; legacy .cprof cost profiles retain false and require false explicitly if this key is set.",
-        "每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。"
+        "Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous, resident gather and reverse inputs. Other shapes use the original packer. CLI --pack-zero overrides this key. Legacy .cprof cost profiles default to false and require false when set explicitly.",
+        "每个操作数用一个 GPU 内核完成 digit 打包和补零，覆盖连续输入、设备驻留 gather 及反向输入。其余形状使用原打包路径。命令行 --pack-zero 优先于本键。旧 .cprof 成本配置默认使用 false，显式配置时也须设为 false。"
       ]
     },
     {

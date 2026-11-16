@@ -24,13 +24,13 @@ struct EcmRuntimeConfig {
     int device_index = 0;               // was CGBN_OPENCL_DEVICE_INDEX   / CLI: -d
     uint32_t tpi = 8u;                  // was ECM_OPENCL_TPI             / CLI: --tpi (1..32)
     int stage1_force_normalize = 1;     // was ECM_STAGE1_FORCE_NORMALIZE / CLI: --force-normalize
-    int add_mod_fused_unroll = 2;       // was ECM_MP_ADD_MOD_FUSED_UNROLL/ CLI: --fused-unroll (1|2)
+    int add_mod_fused_unroll = 2;       // was ECM_MP_ADD_MOD_FUSED_UNROLL / CLI: --addsub-fused-unroll (1|2)
 
     // --- OpenCL backend (impl_opencl.cpp) ---
     std::string kernel_root;            // was ECM_KERNEL_ROOT / CGBN_KERNEL_ROOT / CLI: --kernel-root ("" = built-in default)
-    std::string cache_dir;              // was CGBN_OPENCL_CACHE_DIR        / CLI: --cache-dir ("" = default)
+    std::string cache_dir;              // was CGBN_OPENCL_CACHE_DIR        / CLI: --kernel-cache-dir ("" = default)
     bool cache_disable = false;         // was CGBN_OPENCL_CACHE_DISABLE    / CLI: --no-kernel-cache
-    bool cache_verbose = false;         // was CGBN_OPENCL_CACHE_VERBOSE    / CLI: --cache-verbose
+    bool cache_verbose = false;         // was CGBN_OPENCL_CACHE_VERBOSE    / CLI: --kernel-cache-verbose
     bool compile_verbose = false;       // was CGBN_OPENCL_COMPILE_VERBOSE  / CLI: --compile-verbose
 
     // --- logging / debug / verification (main solver) ---
