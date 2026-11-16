@@ -187,6 +187,12 @@ Windows CUDA 父任务用同一进程接口驱动一个或两个 GPU 槽，每�
 
 `ECM_STAGE2_PHASE_TRACE=1` 把阶段起止与准入等待写入调试日志。启用 `NTT_HOST_TRACE=1` 时同一阶段也生成 NVTX 区间。队列调度入口为 [run_curve_queue](../../src/ecm/stage2/task.cpp)，计算边界见 [阶段围栏](../../src/ecm/stage2/cuda/phase_gate.h)，吞吐和显存实测见 [队列预读与工作区交接](../performance/STAGE2.md#队列预读与工作区交接)。
 
+### 并行曲线的计时边界
+
+`stage2_result.seconds`、诊断 JSONL 的 `stage2-engine.seconds` 和 `curve_done.active` 使用同一曲线有效耗时。从曲线规划开始计到校验完成，扣除阶段互斥锁和工作区租约的获取等待，仍计入本曲线 GPU 工作的完成等待。单独记录的 `lock_wait_seconds` 是该区间内扣除的秒数。预读 worker 的 GPU 准入发生在曲线规划之前，阶段进度的 `previous` 和 `elapsed` 也排除这段准入等待。见 [curve_worker](../../src/ecm/stage2/task.cpp) 和 [阶段锁与工作区租约](../../src/ecm/stage2/cuda/phase_gate.h)。
+
+`curve_done.wall`、`queue_s_per_curve` 和 `stage2_full_wall` 保留各自的墙钟口径，用于队列 ETA、吞吐或引擎诊断。GUI 的 s/curve 采用 `curve_done.active`。
+
 ## 代码依据
 
 - [生产引擎](../../src/ecm/stage2/cuda/engine.cpp)：`run_real`、relocation 和 [完整计时输出](../../src/ecm/stage2/cuda/engine.cpp#L607)；[批次流程](../../src/ecm/stage2/cuda/batch.cpp)：`run_batched`；[规划](../../src/ecm/stage2/cuda/plan.cpp)：`prepare_stage2_plan`、`ecm_cuda_stage2_plan`。

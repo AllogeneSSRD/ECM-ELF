@@ -121,14 +121,14 @@ int main(int argc, char** argv) {
             out("stage2_queue_gpu_free: record=12 wall=5 curve=3\n");
             out("curve_start: 4/5 record=18 sigma=19 B1=20 curve_model=ed\n");
             out("[curve 3] stage2_full_wall: init=1 main=8 total=9\n");
-            out("curve_done: 3/5 record=12 completed=2 eta=17 wall=10 s\n");
+            out("curve_done: 3/5 record=12 completed=2 eta=17 wall=10 s active=8\n");
             out("[curve 2] stage2_full_wall: init=1 main=19 total=20\n");
-            out("curve_done: 2/5 record=9 completed=3 eta=7 wall=21 s queue_s_per_curve=10.5\n");
-            out("curve_done: 4/5 record=18 completed=4 eta=6 wall=6 s queue_s_per_curve=7.5\n");
+            out("curve_done: 2/5 record=9 completed=3 eta=7 wall=21 s active=12 queue_s_per_curve=10.5\n");
+            out("curve_done: 4/5 record=18 completed=4 eta=6 wall=6 s active=5 queue_s_per_curve=7.5\n");
             out("stage2_queue: workers=1 completed=4\n");
             out("curve_start: 5/5 record=20 sigma=21 B1=20 curve_model=ed\n");
             Sleep(600);
-            out("curve_done: 5/5 record=20 completed=5 eta=0 wall=4 s\n");
+            out("curve_done: 5/5 record=20 completed=5 eta=0 wall=4 s active=3\n");
             out("task_done: requested=5 available=5 completed=5\n");
             out("stage2_complete: curves_this_run=4 invalid_tasks=0\n");
             return 0;

@@ -12,6 +12,7 @@
 #include "giant_tree.h"
 #include "giant_policy.h"
 #include "schedule_policy.h"
+#include "active_clock.h"
 #include "factorize.h"
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/io/save.h"
@@ -219,7 +220,10 @@ int curve_worker(Options o) {
         catch(const std::exception &) {} // The normal selector will read a fresh profile on admission.
         stage2_log::print(stage2_log::debug,"stage2_queue_prepare: record=%llu seconds=%.6f\n",
             static_cast<unsigned long long>(o.index),std::chrono::duration<double>(Clock::now()-worker_start).count());
-        if(WaitForSingleObject(gpu_start.value,INFINITE)!=WAIT_OBJECT_0)
+        const auto admission_started=Clock::now();
+        const auto admission=WaitForSingleObject(gpu_start.value,INFINITE);
+        ecm_stage2::timing::record_lock_wait(admission_started);
+        if(admission!=WAIT_OBJECT_0)
             throw std::runtime_error("cannot wait for CUDA Stage2 queue admission");
         if(read_saved_line()!=line)throw std::runtime_error("save changed during Stage2 prefetch");
         if(o.queue_gpu_input) {
@@ -246,6 +250,7 @@ int curve_worker(Options o) {
     stage2_log::phase("Plan Stage2 bounds and memory");
 #endif
     const auto start = std::chrono::steady_clock::now();
+    const auto wait_at_start=ecm_stage2::timing::lock_wait;
     std::string auto_json;
     configure_short_ntt_batches(o);
     if(!o.fixed_queue_route && !o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
@@ -329,7 +334,9 @@ int curve_worker(Options o) {
         if(!SetEvent(gpu_done.value))throw std::runtime_error("cannot release CUDA Stage2 tune admission");
     }
     const auto publish_start=Clock::now();
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    const auto lock_wait=ecm_stage2::timing::lock_wait-wait_at_start;
+    const double lock_wait_seconds=std::chrono::duration<double>(lock_wait).count();
+    const double seconds=std::chrono::duration<double>(publish_start-start-lock_wait).count();
     double factor_seconds = 0;
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
     submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
@@ -372,6 +379,7 @@ int curve_worker(Options o) {
         ",\"save\":"+json_string(o.save)+",\"record\":"+std::to_string(o.index)+
         ",\"record_hash\":"+json_string(std::to_string(o.hash))+",\"worker\":"+std::to_string(o.worker)+
         ",\"device\":"+std::to_string(o.device)+",\"seconds\":"+std::to_string(seconds)+
+        ",\"lock_wait_seconds\":"+std::to_string(lock_wait_seconds)+
         ",\"carrier_exponent\":"+std::to_string(o.carrier_exponent)+
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
         ",\"requested_D\":"+std::to_string(requested_d)+",\"requested_B2\":"+std::to_string(requested_b2)+
@@ -429,6 +437,7 @@ int curve_worker(Options o) {
                  <<",\"reduce_kernel\":"<<m.reduce_kernel<<"}"<<std::endl;
     }
     std::cout << "stage2_result: record=" << o.index << " seconds=" << seconds
+              << " lock_wait_seconds=" << lock_wait_seconds
               << " factorization_seconds=" << factor_seconds
               << " sigma=" << r.sigma << " B1=" << r.b1
               << " curve_model=" << (r.edwards?"ed":"mont")
@@ -741,6 +750,7 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
                 try {result.checked=!*code && checked_queue_curve(slot.process->queue_sample(),*route);}
                 catch(const std::runtime_error &){result.checked=false;}
             }
+            const double active_seconds=slot.process->active_seconds();
             slot.process.reset();
             if(checkpoint_outcomes) {
                 if(!slot.committed)
@@ -781,7 +791,8 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
                 message<<"curve_done: "<<position+1<<'/'<<queue.plan.size()<<" record="<<r.index<<" sigma="<<r.sigma
                        <<" completed="<<done;
                 if(eta>=0 && std::isfinite(eta))message<<" eta="<<std::fixed<<std::setprecision(1)<<eta<<std::defaultfloat<<std::setprecision(6);
-                message<<" wall="<<wall<<" s";
+                message<<" wall="<<wall<<" s active="<<std::fixed<<std::setprecision(6)<<active_seconds
+                       <<std::defaultfloat;
                 if(cadence>0 && std::isfinite(cadence))
                     message<<" queue_s_per_curve="<<cadence;
                 queue.report(message.str(),false);

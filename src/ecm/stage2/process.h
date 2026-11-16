@@ -38,6 +38,7 @@ public:
     bool gpu_released() const;
     const std::optional<std::string> &gpu_feedback() const;
     std::optional<int> poll();
+    double active_seconds() const;
     const std::string &queue_sample() const;
 };
 }

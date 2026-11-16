@@ -6,6 +6,7 @@
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+#include "../stage2/active_clock.h"
 
 // One curve worker owns the engine. Verbosity never controls arithmetic checks,
 // result publication, or stderr; quiet only suppresses progress/statistics.
@@ -49,9 +50,9 @@ inline void phase(const char *name) {
     if(phase_silence)return;
     static std::string current;
     if(current==name)return;
-    static const auto start=std::chrono::steady_clock::now();
+    static const auto start=ecm_stage2::timing::active_now();
     static auto previous=start;
-    const auto now=std::chrono::steady_clock::now();
+    const auto now=ecm_stage2::timing::active_now();
     print(curve,"stage2_phase: %s previous=%.2f s elapsed=%.2f s\n",name,
           std::chrono::duration<double>(now-previous).count(),
           std::chrono::duration<double>(now-start).count());

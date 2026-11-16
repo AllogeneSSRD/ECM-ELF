@@ -6,6 +6,7 @@
 #include "ecm/platform/logging.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -100,6 +101,7 @@ struct CurveProcess::Impl {
     std::string phase="Starting curve",stdout_pending,stderr_pending,queue_sample;
     std::string curve_label;
     std::optional<std::string> gpu_feedback;
+    double active_seconds=0;
     bool heartbeat=false,stop_reported=false;
     stage2_console::Summary console_summary;
 
@@ -268,6 +270,16 @@ void CurveProcess::Impl::line(const std::string &text,bool error,std::ofstream &
     }
     const bool milestone=text.rfind("stage2_phase: ",0)==0;
     const bool result=text.rfind("stage2_result: ",0)==0;
+    if(!error && result) {
+        const auto offset=text.find(" seconds=");
+        if(offset!=text.npos) {
+            const char* begin=text.c_str()+offset+9;
+            char* end=nullptr;
+            const double seconds=std::strtod(begin,&end);
+            if(end!=begin && *end==' ' && seconds>0 && std::isfinite(seconds))
+                active_seconds=seconds;
+        }
+    }
     const bool detail=text.rfind("batched_progress:",0)==0||text.rfind("stage2_full_wall:",0)==0||
         text.rfind("stage2_modulus:",0)==0||text.rfind("real_shape:",0)==0;
     const bool tagged=milestone||result||detail||error||text.find("WARNING")!=text.npos;
@@ -377,6 +389,7 @@ bool CurveProcess::gpu_released() const {
 }
 const std::optional<std::string> &CurveProcess::gpu_feedback() const {return state_->gpu_feedback;}
 std::optional<int> CurveProcess::poll() {return state_->poll();}
+double CurveProcess::active_seconds() const {return state_->active_seconds;}
 const std::string &CurveProcess::queue_sample() const {return state_->queue_sample;}
 
 int run_curve_process(const CurveProcessRequest &request) {

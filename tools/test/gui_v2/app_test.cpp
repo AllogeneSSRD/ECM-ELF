@@ -155,7 +155,7 @@ static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
     wait([&]{return status.done==4&&status.workers==1;});
     assert(status.visible_curves().size()==1&&status.visible_curves().front()->current==5&&status.progress().eta_s<0);
     wait([&]{return !app.controller.busy();});
-    assert(worker().hist_s_per_curve==(std::vector<float>{10.5f,7.5f,4}));
+    assert(worker().hist_s_per_curve==(std::vector<float>{8,12,5,3}));
     assert(status.done==5&&status.progress().eta_s==0&&status.curves.empty());
     std::cout<<"{\"stage2_parallel_views\":true,\"pipeline_hidden\":true,\"serial_fallback\":true,\"all_curve_samples\":true}\n";
 }

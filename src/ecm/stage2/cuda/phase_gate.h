@@ -1,6 +1,7 @@
 #pragma once
 
 #include "host_wait.h"
+#include "../active_clock.h"
 #include "../schedule_policy.h"
 #include "../../cuda/ntt/host_trace.h"
 #include <charconv>
@@ -67,7 +68,9 @@ class WorkspaceLease {
             (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(time).count());
     }
     void acquire() {
+        const auto started=ecm_stage2::timing::Clock::now();
         const auto status=WaitForSingleObject(mutex_,INFINITE);
+        ecm_stage2::timing::record_lock_wait(started);
         if(status==WAIT_ABANDONED)ReleaseMutex(mutex_);
         if(status!=WAIT_OBJECT_0)throw std::runtime_error("cannot acquire Stage2 workspace lease");
         held_=true;
@@ -131,7 +134,9 @@ class Phases {
             if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
         }
         const stage2_trace::Range waiting("stage2.phase.wait");
+        const auto started=Clock::now();
         const auto status = WaitForSingleObject(mutex_, INFINITE);
+        ecm_stage2::timing::record_lock_wait(started);
         if (status == WAIT_ABANDONED) {
             ReleaseMutex(mutex_);
             throw std::runtime_error("Stage2 phase gate owner exited during GPU work");

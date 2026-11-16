@@ -194,16 +194,20 @@ int main() {
         apply("curve_start: 5/7 record=14 sigma=20 B1=20");
         check(status.visible_curves()[1]->current==5&&status.curve_for(5).phase=="Plan Stage2 bounds and memory",
               "handoff replaces a publishing curve and preserves preparation state");
-        apply("curve_done: 4/7 record=13 completed=3 eta=11.5 wall=6 s");
-        check(status.done==3&&status.progress(false).s_per_curve==5&&status.progress(false).eta_s==11.5,
-              "out-of-order completion uses aggregate count and queue ETA");
-        apply("curve_done: 2/7 record=10 completed=4 eta=8 wall=10 s");
-        check(status.done==4&&status.progress(false).s_per_curve==10&&status.current==5,
-              "closing earlier curve does not regress progress or erase its peer");
-        apply("stage2_queue: workers=1 completed=4");
+        apply("curve_done: 4/7 record=13 completed=3 eta=11.5 wall=60 s active=3 queue_s_per_curve=40");
+        check(status.done==3&&status.progress(false).s_per_curve==3&&status.progress(false).eta_s==11.5,
+              "out-of-order completion uses active curve time and queue ETA");
+        apply("curve_done: 2/7 record=10 completed=4 eta=8 wall=100 s active=7 queue_s_per_curve=55");
+        check(status.done==4&&status.progress(false).s_per_curve==7&&status.current==5&&
+              status.progress().s_per_curve==5,
+              "latest and average speed both exclude queue waits");
+        apply("curve_done: 5/7 record=14 completed=5 eta=4 wall=90 s queue_s_per_curve=60");
+        check(status.progress(false).s_per_curve==0&&status.progress().s_per_curve==5,
+              "legacy parallel queue timing is not used as an active sample");
+        apply("stage2_queue: workers=1 completed=5");
         check(status.workers==1&&status.progress(false).eta_s<0,"mode changes invalidate the previous estimate");
         apply("stage2_stopped: curves_this_run=2");
-        check(status.done==4&&status.curves.empty()&&status.progress().eta_s<0,"stop preserves completed count");
+        check(status.done==5&&status.curves.empty()&&status.progress().eta_s<0,"stop preserves completed count");
     }
     std::printf("[6b] Edwards Stage1 and Stage2 curve identity\n");
     {
