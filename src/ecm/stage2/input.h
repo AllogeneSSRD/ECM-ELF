@@ -11,5 +11,6 @@ Record parse_record(std::string line);
 std::vector<Record> records(const fs::path &path,uint64_t skip,uint64_t count);
 fs::path absolute_from(const fs::path &base,const std::string &p);
 QueueSelection queue_fields(std::string line);
+std::string queue_modulus(const EcmStage2Task &task,const Record *first_record);
 void append(const fs::path &path,const std::string &line);
 }

@@ -100,11 +100,7 @@ Stage2 父进程启动时读取 TOML，任务开始时从该快照和当前任�
 
 save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队列 checkpoint 的字段、身份摘要与持久化顺序见 [Checkpoint 架构](../architecture/CHECKPOINT.md#7-stage2-队列进度格式)。
 
-任务格式：`ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip_curves][,num_curves][,"known_factors"]`。
-
-数学目标为 k·bⁿ+c，再按已知因子确定实际 N。可选字段顺序固定：B2、跳过数量、执行数量、已知因子。AID 位于 k 之前，末尾 quoted 字段是因子列表。
-
-例如 `ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10,"xxx"` 中，960 是跳过的 save 记录数，10 是请求数量；`xxx` 所在位置必须填可解析的已知因子或空字符串，不能当作任意备注。
+队列接受 `ECMSTAGE2=` 和 `ECMSTAGE2N=`，语法和样例见 [README 的 Worktodo 格式](../../README.md#worktodo-格式)。有原始表达式时用前者校验存档的实际模数，并可利用原梅森指数选择承载。只有 save 时用后者，采用第一条所选记录的完整 N，并核对其余所选记录的 N 和 B1。尾部已知因子用于结果记录，无需再次从 N 中剥除，也不用于推断原梅森指数。
 
 整数支持精确十进制和科学记数法。队列和直接读档均以存档 B1 × 非零 `b2_ratio` 覆盖 B2，并检查溢出和 B2 > B1。其余情况下依次采用非零的 CLI 值、任务值、`b2`。CUDA 在有效 B2 为 0、`b2_ratio` 为 0 且启用 Auto B2 时才自动选择。`stage2_plan` 的 `B2_source` 记录本次选择的来源。
 
@@ -131,11 +127,11 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 默认读取 exe 同目录的 `ecm.toml`；隐式文件缺失采用内置默认值，显式 `--config FILE` 缺失或格式错误时报错。配置分区、优先级和逐键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
-Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、检查点和调试日志在 `[stage2]` 单独设置。队列只领取 `ECMSTAGE2=` 行。`[stage2] b2_ratio` 在直接读档和队列模式下按存档 B1 × ratio 覆盖有效 B2，worker 使用 `stage2.b2_ratio`。
+Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `log_file`。Stage2 的结果、提交、检查点和调试日志在 `[stage2]` 单独设置。队列领取 `ECMSTAGE2=` 和 `ECMSTAGE2N=`。`[stage2] b2_ratio` 在直接读档和队列模式下按存档 B1 × ratio 覆盖有效 B2，worker 使用 `stage2.b2_ratio`。
 
 共用 `worktodo` 及 Stage2 相对路径基于 TOML 目录，其他 Stage1 相对路径基于其程序目录；CLI 相对路径基于当前工作目录。进度目录空值使用队列目录；显式旧进度路径仍可作为导入来源。save 目录空值继承 Stage1 的 `tmp_dir`，`gpu_device = -1` 继承 Stage1 的 `device`。推荐将两个程序与共用 TOML 放在同一目录。
 
-在 `[stage1]` 中设置 `handoff.mode = "ecm-elf"`，可将无因子的 Stage1 任务转为 Stage2。默认原位改写，也可指定接收 worker 列表或其他队列文件。Edwards Stage2 需要有效 B2，可来自任务、`b2` 或队列比例 `b2_ratio`。GUI 根据 `ECMSTAGE1=` 和 `ECMSTAGE2=` 前缀启动对应程序。见 [Stage1 自动交接](STAGE1.md#自动交接到-stage2)。
+在 `[stage1]` 中设置 `handoff.mode = "ecm-elf"`，可将无因子的 Stage1 任务转为 Stage2。默认追加到原 worker 队列末尾，也可指定接收 worker 列表或其他队列文件。Edwards Stage2 需要有效 B2，可来自任务、`b2` 或队列比例 `b2_ratio`。见 [Stage1 自动交接](STAGE1.md#自动交接到-stage2)。
 
 运行时拒绝 Stage1/Stage2 队列冲突及 save、程序、配置、队列、进度、结果和日志之间的危险重叠。
 

@@ -378,6 +378,7 @@ void help() {
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.toml]\n"
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
+        "       ECMSTAGE2N=[AID,]save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
         "TOML: [shared] worktodo; [stage2] stage2_finished, stage2_progress_dir, stage2_log_file;\n"
         "stage2_progress_file imports legacy single-file progress only.\n"
         "     shared tmp_dir/device/verbose; stage2_save_dir/device overrides; stage2_b2, stage2_d,\n"

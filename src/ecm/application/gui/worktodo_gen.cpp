@@ -1,6 +1,7 @@
 #include "worktodo_gen.h"
 #include "../../../io/config_format.h"
 #include "../../../io/files.h"
+#include "../../../io/worktodo_selection.h"
 #include <memory>
 
 #include <algorithm>
@@ -609,7 +610,7 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
             // ecm.py's split: ECMSTAGE1=/ECMSTAGE2= are output formats (the generator only takes
             // assignments), everything else is an unknown line.
             if (s.compare(0, 10, "ECMSTAGE1=") == 0 ||
-                s.compare(0, 10, "ECMSTAGE2=") == 0) r.skipped_other++;
+                ecm_queue::task_stage(s) == WorktodoStage::Stage2) r.skipped_other++;
             else r.skipped_unknown++;
             continue;
         }

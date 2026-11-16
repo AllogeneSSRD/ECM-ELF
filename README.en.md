@@ -60,7 +60,7 @@ The chart compares ECM-ELF CUDA (0.62.0) in serial and two-slot modes on the RTX
 | --- | --- | --- |
 | `ecm_cuda.exe` | CUDA Stage1. CGBN supports Edwards and the built-in Montgomery parametrizations. NTT supports Edwards and PARAM0 on full Mersenne numbers | Number, expression, or Stage1 queue. Writes `.save` files and checkpoints |
 | `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, TOML, queue and text saves; selectable OpenCL operators |
-| `ecm_cuda_stage2.exe`, `ecm_opencl_stage2.exe` | Standalone GPU polynomial Stage2 | Normalized PARAM0 or Edwards AM saves, directly or through `ECMSTAGE2=` queue entries |
+| `ecm_cuda_stage2.exe`, `ecm_opencl_stage2.exe` | Standalone GPU polynomial Stage2 | Normalized PARAM0 or Edwards AM saves, directly or through `ECMSTAGE2=` and `ECMSTAGE2N=` |
 | `ecm_cpu_stage2.exe` | Standalone CPU Edwards Stage2 | Reads Edwards text saves directly. See [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) for backends and build options |
 | `ecm_gui_v2.exe` | Windows graphical frontend | Manages Stage1 and Stage2 workers, queues, logs, and results |
 
@@ -232,13 +232,40 @@ Explicit `simd` requires AVX-512 IFMA. If a TOML edit has no effect, check `[wor
 
 `--worker N` selects TOML overrides under `[worker.N]` and the `[Worker #N]` section of worktodo. Run one consumer per worker. The program records completed tasks in `[shared] finished_file`. GUI v2 can preview and append PrimeNet `ECM=` and `ECM2=` assignments.
 
-For example, put a Stage1 task into the chosen worker section:
+### Worktodo formats
+
+`ECM=`, `ECM2=` and `ECMSTAGE1=` run Stage1. `ECMSTAGE1` takes B1 from the `_B1.save` filename suffix. Queue tasks default to Edwards. Set `[stage1] curve = "mont"`, or choose `param = "m0"`, `"m2"` or `"m3"` for a specific Montgomery parametrization. An `e_`, `m0_`, `m2_` or `m3_` filename prefix in `ECMSTAGE1` takes precedence.
 
 ```text
-ECM2=1,2,3001,-1,100000,0,64
+ECM|ECM2=[<AID>,|N/A,|<nul>]<k>,<b>,<n>,<c>,<B1>,<B2>,<curves_to_run>[,"known-factors"]
+ECMSTAGE1=[<AID>,|N/A,|<nul>]<k>,<b>,<n>,<c>,filename,B2-or-zero,skip_curves,num_curves[,"known-factors"]
+ECMSTAGE2=[<AID>,|N/A,|<nul>]<k>,<b>,<n>,<c>,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
+ECMSTAGE2N=[<AID>,|N/A,|<nul>]filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
 ```
 
-`handoff.mode` defaults to `"ecm-elf"`. To hand off to Prime95, set it to `"prime95"` and configure `prime95.worktodo_file` and `prime95.save_dir` under `[stage1]`. The worker publishes the save to the destination and writes the task to `worktodo.add`. ECM-ELF handles incompatible saves by default. See [Stage1 handoff](docs/usage/STAGE1.md#prime95-持久交接).
+Choose either `ECM` or `ECM2`. AIDs have 32 hexadecimal digits. `<nul>` means to omit the AID field. You can also use `N/A,` or leave the first field empty. Put comma-separated known factors inside one pair of double quotes.
+
+```text
+ECM2=1,2,3001,-1,100000,1000000,64
+ECMSTAGE1=1,2,3001,-1,"e_m3001_1e5.save",1000000,0,64
+ECMSTAGE2=1,2,3001,-1,"e_m3001_1e5.save",1000000,0,64
+ECMSTAGE2N="e_bit4096_1e5.save",1000000,0,64
+```
+
+Both Stage2 formats read B1 from the save. `ECMSTAGE2` checks the saved modulus against `k*b^n+c` after removing known factors. `ECMSTAGE2N` takes the full modulus from the selected records and keeps known factors as result metadata. The selected records must share N and B1. Skip defaults to 0, and an omitted or zero count uses all remaining records. An omitted or zero B2 uses Stage2 configuration. Edwards needs an effective B2.
+
+### Automatic Stage1 handoff
+
+When Stage1 finishes without a factor and publishes supported saved points, it creates `ECMSTAGE2=` from `ECM=`, `ECM2=` or `ECMSTAGE1=`. The new line reuses the AID, `k,b,n,c`, B2 and known factors, and records the actual absolute save path and the batch's saved skip and count.
+
+```toml
+[stage1]
+# handoff.mode = "ecm-elf"  # "off" | "ecm-elf" | "prime95"
+# handoff.workers = "2-3"  # ID, list, range or "auto"
+# handoff.worktodo_file = "worktodo-stage2.txt"
+```
+
+The default `"ecm-elf"` appends to the source worker's queue. Use `handoff.workers` or `handoff.worktodo_file` to choose another worker or queue. `"off"` keeps the save. `"prime95"` requires `prime95.worktodo_file` and `prime95.save_dir` and delivers compatible tasks to `worktodo.add`. ECM-ELF handles Edwards and other saves that Prime95 cannot accept by default. [Stage1 handoff](docs/usage/STAGE1.md#自动交接到-stage2)
 
 ### Saves and checkpoints are different
 
@@ -256,7 +283,7 @@ Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PAR
 .\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
-GUI v2 starts the program indicated by `ECMSTAGE1=` or `ECMSTAGE2=`. Set `[shared] queue_order` to `"file_order"`, `"stage1_first"`, or `"stage2_first"` and `queue_skip` to `"none"`, `"stage1"`, or `"stage2"`. A nonzero `[stage2] b2_ratio` sets B2 to B1 × ratio. On queue resume, receipts identify completed curves. For a direct save run, use `--skip-curves` and `--curves` to select records. See [Stage2 usage](docs/usage/STAGE2.md) for the full task syntax and B2 precedence.
+GUI v2 uses the [task prefix](#worktodo-formats) to start the corresponding program. Set `[shared] queue_order` to `"file_order"`, `"stage1_first"`, or `"stage2_first"` and `queue_skip` to `"none"`, `"stage1"`, or `"stage2"`. A nonzero `[stage2] b2_ratio` sets B2 to B1 × ratio. On queue resume, receipts identify completed curves. For a direct save run, use `--skip-curves` and `--curves` to select records. See [Stage2 usage](docs/usage/STAGE2.md) for B2 precedence.
 
 Manual B2 supports eligible 2…16384-bit inputs. Auto B2 additionally needs a suitable cost profile and Stage1 cost, and always remains subject to current memory and arithmetic checks. Give production tasks an explicit B2 when no qualified model is available. `--dry-run` only validates input. `--plan-only` may run a short startup calibration; add `--short-calibration 0` for a pure query. See [Stage2 usage](docs/usage/STAGE2.md), [pipeline](docs/architecture/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for arguments, receipts, memory summaries and tuning data.
 

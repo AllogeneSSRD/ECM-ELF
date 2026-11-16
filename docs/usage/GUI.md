@@ -6,7 +6,7 @@
 
 ## Worker 与配置
 
-一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`；Stage2 使用 `ecm_cuda_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 按 `priority`、`skip` 选择下一行：`ECMSTAGE1=` 启动 Stage1，`ECMSTAGE2=` 启动 Stage2；同一 worker 同时只运行一个程序。
+一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`，Stage2 使用 `ecm_cuda_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 选择下一行，并按[任务前缀](../../README.md#worktodo-格式)启动对应程序。同一 worker 同时只运行一个程序。
 
 Worker 管理顶部设置 worker 数量、两个阶段的程序路径和共用 TOML。`[gui]` 中的 `exe` 指向 Stage1，`stage2_exe` 指向 Stage2，`NumWorkers` 控制 GUI worker 数量，`priority` 仅控制进程优先级。`[workers.N]` 保存第 N 个 worker 的 GUI 设置。Stage1/Stage2 键分别放在 `[stage1]`、`[stage2]`，共用键放在 `[shared]`；按 worker 覆盖时写入 `[workers.N.stage1]`、`[workers.N.stage2]` 或 `[workers.N.shared]`。配置文件中的 worker 表与 `worktodo.txt` 的 `[Worker #N]` 队列分区使用同一编号，但语法独立。
 

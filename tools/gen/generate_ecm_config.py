@@ -127,12 +127,16 @@ def assignment(o, key=None):
         code = f"{dst}=automatic_boolean_text(v,{literal(key)});"
     elif kind == "signed_integer":
         code = f"{dst}=signed_integer(v,{literal(key)},{lo},{hi});"
-    elif kind == "nonnegative":
-        code = f"{dst}=bounded_integer(v,{literal(key)},{lo},{hi});"
     elif kind == "positive":
         code = f"{dst}=positive(v,{literal(key)});"
     elif kind == "bounded_real":
-        code = f"assign_value({dst},v);if({dst}<{lo}||{dst}>{hi})throw std::runtime_error({literal(key+' must be within ['+lo+','+hi+']')});"
+        if "maximum" in o:
+            condition = f"{dst}<{lo}||{dst}>{hi}"
+            message = f"{key} must be within [{lo},{hi}]"
+        else:
+            condition = f"{dst}<{lo}"
+            message = f"{key} must be at least {lo}"
+        code = f"assign_value({dst},v);if({condition})throw std::runtime_error({literal(message)});"
     elif kind == "optional_integer":
         code = f"{dst}=v.empty()?0:static_cast<{TYPES[o['type']]}>(bounded_integer(v,{literal(key)},{lo},{hi}));"
     elif kind == "auto_integer":

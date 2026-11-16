@@ -145,7 +145,7 @@ Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个�
 
 v3 的 `finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，以 TOML 所在目录解析。Stage1 的 `save_dir` 仍相对程序目录解析。
 
-任务前缀 `ECMSTAGE1=`、`ECMSTAGE2=` 指定阶段。GUI 根据下一个可运行任务启动对应程序，CLI 只领取本阶段任务。`[shared]` 的 `queue_order` 可选 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`。优先阶段无任务时运行另一阶段。`queue_skip` 可选 `"none"`、`"stage1"` 或 `"stage2"`。不同 worker 可以共用队列文件，每个 worker 同时由一个程序处理。
+`ECM=`、`ECM2=` 和 `ECMSTAGE1=` 交给 Stage1，`ECMSTAGE2=` 和 `ECMSTAGE2N=` 交给 Stage2。队列的 Stage1 默认 Edwards，`curve` 或 `param` 可覆盖，`ECMSTAGE1` 的存档类型前缀优先。OpenCL Stage1 要求选 Montgomery。GUI 根据下一个可运行任务启动对应程序，CLI 只领取本阶段任务。`[shared]` 的 `queue_order` 可选 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`。优先阶段无任务时运行另一阶段。`queue_skip` 可选 `"none"`、`"stage1"` 或 `"stage2"`。不同 worker 可以共用队列文件，每个 worker 同时由一个程序处理。
 
 当前程序无符合阶段、优先级和跳过条件的任务时正常结束；队列不存在或读取失败时报错。Stage2 执行时，`[stage2] b2_ratio` 为 1…1000000 则以 save 中的 B1 × ratio 覆盖 B2，且仍须满足 B2 > B1；0 或省略此键保留原 B2 选择。
 
@@ -153,7 +153,7 @@ v3 的 `finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，
 
 v3 的 `[stage1] handoff.mode` 默认为 `"ecm-elf"`。Stage1 无因子完成且有可用保存点时，将原任务写入完成记录并生成 `ECMSTAGE2=`。投递保留 B2、曲线范围、AID 和已知因子，save 使用实际输出文件的绝对路径。只运行 Stage1 时可设 `handoff.mode = "off"`。
 
-`handoff.workers` 留空时保留当前 worker：目标为同一队列文件时原位改写；显式指定其他文件时，写入该文件的同编号 worker，不选择其他编号。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。投递到目标 worker 已有的最后一段末尾，保持该 worker 的任务先后顺序；只有缺少分区时才创建标签，文件头未标号部分视为 worker 1。投递时移除同一连续分区中的重复 worker 标签，保留任务、注释和空行；跨其他 worker 或未知方括号标签的显式分隔保留。同队列的 `"auto"` 优先使用 `[shared] worker_count` 确定编号范围，兼容已有的显式 `[gui] worker_count`。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。目标为外部队列时，优先采用目标队列已有分区，缺少分区时按配置数量生成候选。可用显式列表指定外部接收方。
+`handoff.workers` 留空时保留当前 worker。同一队列内移除已完成的 Stage1 行并追加到该 worker 最后一段末尾。指定外部队列时写入其中的同编号 worker。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。目标缺少分区时创建标签，文件头未标号部分视为 worker 1。同队列的 `"auto"` 优先使用 `[shared] worker_count`，兼容显式 `[gui] worker_count`。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。外部队列优先采用已有分区，缺少分区时按配置数量生成候选。
 
 `handoff.worktodo_file` 留空时使用当前 worker 生效的 `[shared] worktodo_file`。可填写绝对路径或相对 TOML 所在目录的路径。接收端去重使用 `[shared] finished_file`。在 `[worker.N]` 下加 `stage1.` 前缀可覆盖交接设置。
 

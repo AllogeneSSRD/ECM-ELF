@@ -25,7 +25,7 @@ bool decode(const std::string& raw, Pending& p) {
     in >> std::quoted(p.worktodo) >> std::quoted(p.finished) >> p.worker >> std::quoted(p.line);
     in >> std::ws;
     return !in.fail() && in.eof() && p.worker > 0 && !p.worktodo.empty() && !p.finished.empty() &&
-           p.line.compare(0, 10, "ECMSTAGE2=") == 0;
+           ecm_queue::task_stage(p.line) == WorktodoStage::Stage2;
 }
 
 std::string read_pending(const std::string& path) {
@@ -51,7 +51,7 @@ bool ecm_stage2_transfer_park(const Stage2TransferConfig& cfg, const std::string
                               std::string& error, int* receiver) {
     error.clear();
     if (cfg.worktodo.empty() || cfg.finished.empty() || cfg.pending.empty() || cfg.worker < 1 ||
-        cfg.worker > 1000000 || line.compare(0, 10, "ECMSTAGE2=") != 0 ||
+        cfg.worker > 1000000 || ecm_queue::task_stage(line) != WorktodoStage::Stage2 ||
         line.find_first_of("\r\n") != std::string::npos) {
         error = "invalid Stage2 transfer";
         return false;

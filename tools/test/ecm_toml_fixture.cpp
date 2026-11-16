@@ -447,6 +447,19 @@ int main(int argc,char **argv) {
             ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).tune_profile=="profiles/gpu1.toml" &&
             ecm_config::read_stage2(ecm_config::cli_entries(lines,3)).tune_profile=="profiles/shared.toml",
             "worker tune profiles leaked or lost global fallback");
+        write(temp,"config_version=3\n[stage2]\ntune.stage1_seconds_per_curve=48.78\n"
+                   "[worker.2]\nstage2.tune.stage1_seconds_per_curve=0.0\n");
+        expect(ecm_config::read_toml(temp.string(),lines),"Stage1 cost TOML unavailable");
+        expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).stage1_seconds==48.78,
+               "fractional Stage1 cost lost");
+        expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,2)).stage1_seconds==0,
+               "worker could not restore the Stage1 cost fallback");
+        write(temp,"[stage2]\nstage1_seconds_per_curve=2.5e-2\n");
+        expect(ecm_config::read_toml(temp.string(),lines),"legacy Stage1 cost TOML unavailable");
+        expect(ecm_config::read_stage2(ecm_config::cli_entries(lines,1)).stage1_seconds==0.025,
+               "legacy fractional Stage1 cost lost");
+        for(const auto *value:{"-0.01","nan","inf","1e309","'48.78'"})
+            rejected(temp,std::string("config_version=3\n[stage2]\ntune.stage1_seconds_per_curve=")+value+"\n");
         for(const auto *value:{"0","0.25","5","60"}) {
             write(temp,std::string("[stage1]\nprogress_average_seconds=")+value+
                        "\n[workers.2.stage1]\nprogress_average_seconds=2.5\n");

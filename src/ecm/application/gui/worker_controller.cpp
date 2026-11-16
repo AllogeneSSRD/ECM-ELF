@@ -250,7 +250,8 @@ WorkerView WorkerController::make_worker(int index) const {
     const auto entries=ecm_config::preview_entries(ini_.lines(),index,true);
     const auto stage1=ecmgui::preview_stage1(entries);
     w.device=stage1.device;w.stage1_device=stage1.device;
-    w.curve_model=stage1.curve_model;w.execution_target=stage1.execution_target;
+    w.curve_model=stage1.curve_model.empty()?"ed":stage1.curve_model;
+    w.execution_target=stage1.execution_target;
     w.stage1_target=stage1.execution_target;w.gpu_param=stage1.gpu_param;
     w.gpucurves=worker.gpucurves;
     w.worktodo=path_resolve(path_dir(ini_path_),stage1.worktodo);
@@ -261,7 +262,8 @@ WorkerView WorkerController::make_worker(int index) const {
     if(w.working_dir.empty())w.working_dir=exe_dir();
     const bool shared_log=ini_.config_version()>=3;
     if(shared_log) {
-        w.curve_model=stage1.param=="e"?"ed":"mont";
+        if(stage1.param!="auto")
+            w.curve_model=stage1.param=="e"?"ed":"mont";
         w.gpu_param=stage1.param.size()==2?stage1.param[1]-'0':stage1.execution_target=="cpu"?0:3;
         if(!stage1.shared_log_file.empty())
             w.log_file=path_resolve(path_dir(ini_path_),stage1.shared_log_file);

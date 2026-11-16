@@ -23,7 +23,7 @@ bool read_config(const std::string& path, ParsedConfig& parsed, int active_worke
                     bool valid = true;
                     const auto &key = line.key, &v = line.value;
                     if (key == "curve")
-                        valid = ecm_stage1::parse_curve_model(v, s.curve);
+                        valid = v.empty() || ecm_stage1::parse_curve_model(v, s.curve);
                     else if (key == "target")
                         valid = ecm_stage1::parse_execution_target(v, s.target);
                     else if (key == "impl")

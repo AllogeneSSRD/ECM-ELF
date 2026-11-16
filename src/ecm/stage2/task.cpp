@@ -1094,7 +1094,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
     const bool queue = startup.save.empty();
     ecm_queue::OwnerLease owner;
     if (queue) owner.acquire(worktodo.u8string(), startup.worker);
-    if (queue && startup.selection) throw std::runtime_error("queue curve selection comes from ECMSTAGE2; use --save for overrides");
+    if (queue && startup.selection) throw std::runtime_error("queue curve selection comes from the Stage2 save; use --save for overrides");
     Handle lock;
     if (queue) {
         if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
@@ -1147,6 +1147,7 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
         Options o=startup;
         fs::path save;
         std::string task_line,expected_n;
+        QueueSelection fields;
         std::vector<Record> plan;
         uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:defaults.b2;
         std::string_view b2_source=o.b2?"cli":defaults.b2?"config":o.auto_b2?"auto":"unset";
@@ -1160,17 +1161,14 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
         }
         try {
             if(queue) {
-                QueueSelection fields;
-                try { fields=queue_fields(task_line); }
-                catch(const std::runtime_error &e){throw TaskInputError(e.what());}
+                fields=queue_fields(task_line);
                 skip=fields.skip;count=fields.count;
                 if(!o.b2&&fields.b2) {
                     b2=fields.b2;
                     b2_source="worktodo";
                 }
-                Big n;std::string error;
-                if(!ecm_compute_stage2_n(fields.task,n.z,error))throw TaskInputError("worktodo N: "+error);
-                expected_n=number(n.z);save=absolute_from(tmp,fields.task.save_name);
+                if(!fields.task.modulus_from_save)expected_n=queue_modulus(fields.task,nullptr);
+                save=absolute_from(tmp,fields.task.save_name);
                 o.submission_exponent=fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1"?fields.task.n:0;
                 o.submission_known=fields.task.factors;o.submission_aid=fields.task.aid;
                 o.inferred_carrier=o.auto_carrier && fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1" &&
@@ -1181,6 +1179,8 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
             if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
             plan=records(save,skip,count);
+            if(queue && fields.task.modulus_from_save)
+                expected_n=queue_modulus(fields.task,plan.empty()?nullptr:&plan.front());
             if(cfg.b2_ratio && !plan.empty()) {
                 if(plan.front().b1 > (static_cast<uint64_t>(INT64_MAX)-8192)/cfg.b2_ratio)
                     throw std::runtime_error("b2_ratio multiplication exceeds Stage2 B2 range");
@@ -1197,7 +1197,9 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
                         message+="; OpenCL Stage2 requires a nonzero B2 from --b2, worktodo, [stage2].b2 or b2_ratio";
                     throw std::runtime_error(message);
                 }
-                if(!expected_n.empty()&&r.n!=expected_n)throw TaskInputError("worktodo N differs from save N");
+                if(!expected_n.empty()&&r.n!=expected_n)
+                    throw TaskInputError(fields.task.modulus_from_save ?
+                        "ECMSTAGE2N selected save records must have the same N" : "worktodo N differs from save N");
                 if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
                 if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
                 if(o.carrier_exponent) {
@@ -1226,7 +1228,6 @@ int run_tasks(Options worker_options,const TaskPaths &paths,const QueuePolicy &c
         fs::path progress;
         Handle progress_lock;
         if(persist) {
-            const auto fields=queue_fields(task_line);
             stage2_queue::Task task;
             task.aid=fields.task.aid;task.n=expected_n;
             task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=plan.size();

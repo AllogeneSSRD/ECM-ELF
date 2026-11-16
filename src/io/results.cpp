@@ -110,8 +110,15 @@ uint64_t target_exponent(const Submission& r, const mpz_t n) {
         return 0;
     }
     if (!r.exponent) {
-        if (!r.known.empty())
-            throw std::runtime_error("known factors require the original Mersenne exponent");
+        if (!r.known.empty()) {
+            // A save-only task has the exact cofactor N, but no original expression.
+            // Keep known factors as metadata and report the explicit N.
+            for (const auto& text : r.known)
+                if (text.empty() || text.find_first_not_of("0123456789") != text.npos ||
+                    mpz_set_str(f.v, text.c_str(), 10) || mpz_cmp_ui(f.v, 1) <= 0)
+                    throw std::runtime_error("invalid submission known factor");
+            return 0;
+        }
         mpz_add_ui(m.v, n, 1);
         return mpz_popcount(m.v) == 1 ? mpz_scan1(m.v, 0) : 0;
     }

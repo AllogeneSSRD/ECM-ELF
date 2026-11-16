@@ -8,10 +8,10 @@
       <Item id="option_shared_shared_finished_file" name="两阶段共用的完成记录。相对路径基于配置目录。" />
       <Item id="option_shared_log_file_max_KB" name="共享运行日志超过此上限后归档。1 KB 等于 1000 字节。" />
       <Item id="option_shared_shared_tune_file" name="CUDA Stage1 和 Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可以为两个阶段一并覆盖路径。显式留空时关闭两阶段的自动持久化。" />
-      <Item id="option_stage1_param" name="Stage1 曲线构造。auto 在 CPU 上选 m0，在 GPU 上选 m3。任务存档前缀可指定自身构造。" />
-      <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认交给 ECM-ELF Stage2。设为 off 时只保留存档，设为 prime95 时选择 Prime95。" />
+      <Item id="option_stage1_param" name="Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。" />
+      <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
       <Item id="option_stage1_handoff_unsupported" name="Prime95 协议不支持该存档时使用的后备方式。" />
-      <Item id="option_shared_worktodo" name="Stage1/Stage2 共用的任务队列。ECMSTAGE1 与 ECMSTAGE2 前缀选择执行程序；两阶段分别记录完成任务。同一 worker 同时只能有一个进程消费此队列。" />
+      <Item id="option_shared_worktodo" name="共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同时由一个进程消费队列。" />
       <Item id="option_shared_b2_ratio" name="GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的乘积。设为 0 时由其他设置选择 B2。乘积超出范围会报错。" />
       <Item id="option_stage1_auto_stage2" name="Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff.worktodo_file 和 handoff.workers 投递。" />
       <Item id="option_stage1_auto_stage2_workers" name="Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小编号。v3 同队列 auto 优先采用显式的 shared.worker_count（兼容 GUI 旧数量），候选须读取该队列并允许 Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。" />
@@ -39,7 +39,7 @@
       <Item id="option_stage1_progress_log_seconds" name="控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。" />
       <Item id="option_stage1_progress_average_seconds" name="Stage1 CPU/CUDA 实时 s/curve 与剩余时间估计的平均窗口，单位为秒。0 使用最近一次有效采样，不做平均；正值按采样时长累计已完成工作量，最多 60 秒。CUDA 采样排除准备和 checkpoint 写盘；不改变计算、切片、最终计时或日志刷新频率。" />
       <Item id="option_stage1_verbose" name="控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由 stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。" />
-      <Item id="option_stage1_curve" name="Stage1 曲线模型：mont 为 Montgomery，ed 为 Atkin-Morain Edwards。Edwards 支持 CPU 与 CUDA GPU，固定使用 48*lcm(1..B1)；OpenCL 不支持 Edwards。CUDA Edwards 输出 METHOD=ECM-EDWARDS-AM 存档供 CUDA Stage2 使用。" />
+      <Item id="option_stage1_curve" name="param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。OpenCL Stage1 要求 Montgomery。需要指定 Montgomery 参数化时请用 param=m0、m2 或 m3。" />
       <Item id="option_stage1_stage1_backend" name="Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。" />
       <Item id="option_stage1_target" name="选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件内切换 CUDA 与 OpenCL。" />
       <Item id="option_stage1_impl" name="选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。" />
@@ -138,7 +138,7 @@
       <Item id="option_stage2_stage2_auto_min_b2" name="Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。" />
       <Item id="option_stage2_stage2_auto_max_b2" name="Auto B2 搜索上界；0 为 2.6e12。未测值允许估算，显式任务 B2 优先。" />
       <Item id="option_stage2_stage1_batch" name="指定 Auto B2 成本估算对应的 Stage1 批次曲线数。它用于选择或核对 Stage1 的成本条件，不会让 Stage2 驱动启动该批 Stage1 计算，也不改变任务要处理的曲线数。" />
-      <Item id="option_stage2_stage1_seconds_per_curve" name="为 Auto B2 提供正的 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。优先于 Stage1 tune 实测。未指定时，完整 ECM tune 需匹配 stage1_tune_profile；旧组件 profile 使用其自身匹配的 Stage1 数据。此值不是本次运行时限，也不是调优输入的准备耗时。" />
+      <Item id="option_stage2_stage1_seconds_per_curve" name="为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 stage1_batch。正值（可填小数）优先于调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使用成本 CSV 或匹配的 stage1_tune_profile。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成本规划。" />
       <Item id="option_stage2_stage2_ratio_adjust" name="将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。" />
       <Item id="option_workers.1_name" name="设置此 worker 在 GUI 中显示的名称。未配置时显示 Worker #N，其中 N 为 worker 编号；只改变显示名称，不改变设备或任务分配。" />
       <Item id="option_workers.1_autostart" name="设为 true 时，GUI 打开工作流后自动启动此 worker。" />

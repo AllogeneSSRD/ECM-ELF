@@ -399,10 +399,15 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         const auto param = input.has("--param") ? input.param : cfg.param;
         if (cfg.config_version >= 3 || input.has("--param")) {
             s.strict_param = param != "auto";
-            s.curve = param == "e" ? ecm_stage1::CurveModel::Edwards : ecm_stage1::CurveModel::Montgomery;
+            if (s.strict_param || !cfg.config_keys.count("curve"))
+                s.curve = param == "e" ? ecm_stage1::CurveModel::Edwards : ecm_stage1::CurveModel::Montgomery;
             s.gpu_param = param.size() == 2 ? static_cast<unsigned>(param[1] - '0') :
                           s.target == ecm_stage1::ExecutionTarget::Cpu ? 0u : 3u;
         }
+        const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels && !input.tune_ntt;
+        const bool configured_curve = cfg.config_keys.count("curve") && !cfg.curve_model.empty();
+        if (queue && !s.strict_param && !configured_curve)
+            s.curve = ecm_stage1::CurveModel::Edwards;
         if (input.has("--curve"))
             s.curve = input.selection.curve;
         if (input.has("--impl")) {

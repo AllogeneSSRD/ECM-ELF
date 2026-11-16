@@ -32,11 +32,10 @@ config_version = 3
 # 覆盖路径。显式留空时关闭两阶段的自动持久化。
 
 worktodo_file = "worktodo.txt"  # string: <path>
-# Shared Stage1/Stage2 task queue for the current worker. ECMSTAGE1 and ECMSTAGE2 select the engine;
-# Stage1 and Stage2 keep separate finished records. One worker process consumes this queue at a
-# time.
-# Stage1/Stage2 共用的任务队列。ECMSTAGE1 与 ECMSTAGE2 前缀选择执行程序；两阶段分别记录完成任务。同
-# 一 worker 同时只能有一个进程消费此队列。
+# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One
+# process consumes a worker queue at a time.
+# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同
+# 时由一个进程消费队列。
 
 # queue_order = "file_order"  # string: [file_order|stage1_first|stage2_first]
 # file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has
@@ -60,15 +59,18 @@ worktodo_file = "worktodo.txt"  # string: <path>
 
 [stage1]
 # param = "auto"  # string: [auto|e|m0|m2|m3]
-# Stage1 curve construction. auto uses m0 on CPU and m3 on GPU. A task save prefix selects its own
-# construction.
-# Stage1 曲线构造。auto 在 CPU 上选 m0，在 GPU 上选 m3。任务存档前缀可指定自身构造。
+# Stage1 curve construction. With auto, queue tasks default to Edwards and direct input defaults to
+# m0 on CPU or m3 on GPU. The optional curve key applies with auto. A typed ECMSTAGE1 save name
+# takes precedence.
+# Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。
+# curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。
 
 # handoff.mode = "ecm-elf"  # string: [off|ecm-elf|prime95]
-# Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Use
-# off to keep the save without queuing Stage2, or prime95 to select Prime95.
-# Stage1 无因子完成且有可用保存点时，默认交给 ECM-ELF Stage2。设为 off 时只保留存档，设为 prime95 时
-# 选择 Prime95。
+# Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append
+# the new task at the end of the source worker's queue unless a receiver is configured. Use off to
+# keep the save or prime95 to select Prime95.
+# Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接
+# 收方。off 只保留存档，prime95 交给 Prime95。
 
 # handoff.unsupported = "ecm-elf"  # string: [ecm-elf|keep-save]
 # Fallback for saves unsupported by the Prime95 protocol.
@@ -206,6 +208,13 @@ verbose = true  # bool: [false|true|0|1]
 # verbosity behavior.
 # 控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由
 # stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
+
+curve = ""  # string: [mont|ed|empty]
+# Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted
+# or empty key uses the mode default. OpenCL Stage1 requires Montgomery. Use param=m0, m2 or m3 to
+# select a specific Montgomery parametrization.
+# param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认
+# 值。OpenCL Stage1 要求 Montgomery。需要指定 Montgomery 参数化时请用 param=m0、m2 或 m3。
 
 # gpu_backend = "auto"  # string: [auto|cuda|opencl]
 # Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the
@@ -930,14 +939,15 @@ target = "gpu"  # string: [cpu|gpu]
 # 指定 Auto B2 成本估算对应的 Stage1 批次曲线数。它用于选择或核对 Stage1 的成本条件，不会让 Stage2
 # 驱动启动该批 Stage1 计算，也不改变任务要处理的曲线数。
 
-# tune.stage1_seconds_per_curve = 0  # double: <x:R,finite,x>0>
-# Positive Stage1 seconds per curve for Auto B2, already amortized for the actual batch. Does not
-# divide by stage1_batch again. Overrides Stage1 tune measurements. When unset, full ECM tune
-# requires a matching stage1_tune_profile; the legacy component profile uses its own matched Stage1
-# data. Not a runtime limit or the tune input preparation time.
-# 为 Auto B2 提供正的 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。优先于
-# Stage1 tune 实测。未指定时，完整 ECM tune 需匹配 stage1_tune_profile；旧组件 profile 使用其自身匹
-# 配的 Stage1 数据。此值不是本次运行时限，也不是调优输入的准备耗时。
+# tune.stage1_seconds_per_curve = 0  # double: <x:R,finite,x>=0>
+# Stage1 seconds per curve for Auto B2, already amortized for the actual batch. A positive value,
+# including a decimal, overrides the Stage1 cost from tuning data. Set 0 or omit this option to use
+# the configured Stage1 cost sources. Full ECM tune can use a cost CSV or a matching
+# stage1_tune_profile. The legacy component profile uses its own matched Stage1 data. This value is
+# a planning input.
+# 为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 stage1_batch。正值（可填小数）优先于
+# 调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使用成本
+# CSV 或匹配的 stage1_tune_profile。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成本规划。
 
 # ratio_adjust = 1  # double: <x:R,finite,x>0>
 # Multiplier applied to Stage2 time in the Auto B2 model. 1 leaves it unchanged; greater than 1

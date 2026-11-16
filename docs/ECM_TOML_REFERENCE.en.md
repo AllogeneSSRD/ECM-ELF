@@ -139,7 +139,7 @@ Type `string` · Range `<path>` · Worker override `[worker.N] shared.worktodo_f
 
 Legacy v1 key `shared.worktodo`
 
-Shared Stage1/Stage2 task queue for the current worker. ECMSTAGE1 and ECMSTAGE2 select the engine; Stage1 and Stage2 keep separate finished records. One worker process consumes this queue at a time.
+Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One process consumes a worker queue at a time.
 
 ## [stage1]
 
@@ -333,6 +333,16 @@ Type `int` · Range `[2|3|8]` · Worker override `[worker.N] stage1.cuda_slice_d
 
 CUDA CGBN Stage1 slice submission. Values 2 and 3 keep a rolling queue of up to that many slices. Value 8 waits at the end of each group of up to eight.
 
+### curve
+
+```toml
+curve = ""
+```
+
+Type `string` · Range `[mont|ed|empty]` · Worker override `[worker.N] stage1.curve` · Level `advanced`.
+
+Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted or empty key uses the mode default. OpenCL Stage1 requires Montgomery. Use param=m0, m2 or m3 to select a specific Montgomery parametrization.
+
 ### edwards_doubling
 
 ```toml
@@ -419,7 +429,7 @@ handoff.mode = "ecm-elf"
 
 Type `string` · Range `[off|ecm-elf|prime95]` · Worker override `[worker.N] stage1.handoff.mode` · Level `core`.
 
-Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Use off to keep the save without queuing Stage2, or prime95 to select Prime95.
+Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append the new task at the end of the source worker's queue unless a receiver is configured. Use off to keep the save or prime95 to select Prime95.
 
 <a id="handoff_unsupported"></a>
 
@@ -731,7 +741,7 @@ param = "auto"
 
 Type `string` · Range `[auto|e|m0|m2|m3]` · Worker override `[worker.N] stage1.param` · Level `core`.
 
-Stage1 curve construction. auto uses m0 on CPU and m3 on GPU. A task save prefix selects its own construction.
+Stage1 curve construction. With auto, queue tasks default to Edwards and direct input defaults to m0 on CPU or m3 on GPU. The optional curve key applies with auto. A typed ECMSTAGE1 save name takes precedence.
 
 <a id="p95_keep_aid"></a>
 
@@ -1853,11 +1863,11 @@ Stage1 target frequency for inverse-frequency cost scaling. 0 uses the CSV refer
 tune.stage1_seconds_per_curve = 0
 ```
 
-Type `double` · Range `<x:R,finite,x>0>` · Worker override `[worker.N] stage2.tune.stage1_seconds_per_curve` · Level `advanced`.
+Type `double` · Range `<x:R,finite,x>=0>` · Worker override `[worker.N] stage2.tune.stage1_seconds_per_curve` · Level `advanced`.
 
 Legacy v1 key `stage2.stage1_seconds_per_curve`
 
-Positive Stage1 seconds per curve for Auto B2, already amortized for the actual batch. Does not divide by stage1_batch again. Overrides Stage1 tune measurements. When unset, full ECM tune requires a matching stage1_tune_profile; the legacy component profile uses its own matched Stage1 data. Not a runtime limit or the tune input preparation time.
+Stage1 seconds per curve for Auto B2, already amortized for the actual batch. A positive value, including a decimal, overrides the Stage1 cost from tuning data. Set 0 or omit this option to use the configured Stage1 cost sources. Full ECM tune can use a cost CSV or a matching stage1_tune_profile. The legacy component profile uses its own matched Stage1 data. This value is a planning input.
 
 <a id="stage2_tune_warmup"></a>
 

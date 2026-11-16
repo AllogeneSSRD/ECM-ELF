@@ -1890,10 +1890,11 @@ std::vector<Record> portable_queue_range(const fs::path &worktodo,int worker,con
         if(header){section=next;continue;}
         if(section!=worker || trim(line).empty() || trim(line)[0]=='#')continue;
         try {
-            const auto fields=queue_fields(line);Big expected;std::string error;
-            if(!ecm_compute_stage2_n(fields.task,expected.z,error))continue;
+            const auto fields=queue_fields(line);
             const auto records_in_task=records(absolute_from(save_dir,fields.task.save_name),fields.skip,1);
-            if(!records_in_task.empty() && records_in_task.front().n==number(expected.z))range.push_back(records_in_task.front());
+            if(!records_in_task.empty() &&
+               records_in_task.front().n==queue_modulus(fields.task,&records_in_task.front()))
+                range.push_back(records_in_task.front());
         } catch(const std::exception &) {
             // Invalid future tasks are handled by the normal queue consumer.
             // They provide no calibration coverage and are never rewritten here.
@@ -2014,18 +2015,18 @@ std::vector<PortableTuneTarget> portable_tune_tasks(const Options &o,const TaskD
         if(next){section=next;continue;}
         line=trim(line);
         if(header || section!=o.worker || line.empty() || line.front()=='#' || line.front()==';')continue;
-        if(line.compare(0,10,"ECMSTAGE2="))continue;
+        if(ecm_queue::task_stage(line)!=WorktodoStage::Stage2)continue;
         ++active;
         try {
-            const auto task=queue_fields(line);Big expected;std::string error;
-            if(!ecm_compute_stage2_n(task.task,expected.z,error))throw TaskInputError("worktodo N: "+error);
+            const auto task=queue_fields(line);
             const auto save=absolute_from(save_dir,task.task.save_name);
             auto records_in_task=records(save,task.skip,1);
             if(records_in_task.empty())throw TaskInputError("no available save record after skip");
             const auto &r=records_in_task.front();
-            if(r.n!=number(expected.z))throw TaskInputError("worktodo N differs from save N");
+            if(r.n!=queue_modulus(task.task,&r))throw TaskInputError("worktodo N differs from save N");
             if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
             PortableTuneTarget target;
+            Big expected;mpz_set_str(expected.z,r.n.c_str(),16);
             target.bits=unsigned(mpz_sizeinbase(expected.z,2));
             if(target.bits<2 || target.bits>ecm_stage2::max_input_bits)throw TaskInputError("target width is outside 2..16384 bits");
             target.input={save,r,"validated_worktodo_save"};
@@ -2064,7 +2065,8 @@ unsigned portable_tune_save_carrier(const Options &o,const Record &record,const 
         bool header=false;const auto next=ecm_worktodo_parse_worker_header(line,&header);
         if(next){section=next;continue;}
         line=trim(line);
-        if(header || section!=o.worker || line.compare(0,10,"ECMSTAGE2="))continue;
+        if(header || section!=o.worker || ecm_queue::task_stage(line)!=WorktodoStage::Stage2 ||
+           ecm_queue::stage2_from_save(line))continue;
         try {
             const auto task=queue_fields(line);
             if(task.task.k!="1" || task.task.b!="2" || task.task.c!="-1" ||

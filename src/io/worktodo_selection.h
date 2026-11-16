@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <istream>
 #include <string>
+#include <string_view>
 
 enum class WorktodoReadResult { Task, Empty, Error };
 enum class WorktodoStage { Any = 0, Stage1 = 1, Stage2 = 2 };
@@ -43,9 +44,17 @@ inline bool worker_matches(int section, int worker) {
     return worker <= 0 || section == worker;
 }
 
-inline WorktodoStage task_stage(const std::string& text) {
+inline constexpr std::string_view stage2_prefix = "ECMSTAGE2=";
+inline constexpr std::string_view stage2_n_prefix = "ECMSTAGE2N=";
+
+inline bool stage2_from_save(std::string_view text) {
+    return text.substr(0, stage2_n_prefix.size()) == stage2_n_prefix;
+}
+
+inline WorktodoStage task_stage(std::string_view text) {
     // Prime95 and unknown rows go to Stage1 for parsing and diagnostics.
-    return text.compare(0, 10, "ECMSTAGE2=") == 0 ? WorktodoStage::Stage2 : WorktodoStage::Stage1;
+    return text.substr(0, stage2_prefix.size()) == stage2_prefix || stage2_from_save(text)
+               ? WorktodoStage::Stage2 : WorktodoStage::Stage1;
 }
 
 inline WorktodoReadResult read_next_task(std::istream& input, int worker, WorktodoSelection selection,

@@ -62,7 +62,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 | --- | --- | --- |
 | `ecm_cuda.exe` | CUDA Stage1。CGBN 支持 Edwards 和构建中包含的 Montgomery 参数化，NTT 支持完整梅森数上的 Edwards 和 PARAM0 | 数字、表达式或 Stage1 队列，输出 `.save` 和检查点 |
 | `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、TOML、队列及文本 save；GPU 算子可单独选择 |
-| `ecm_cuda_stage2.exe`、`ecm_opencl_stage2.exe` | 独立 GPU 多项式 Stage2 | 读取归一化 PARAM0 或 Edwards AM 存档，也可消费 `ECMSTAGE2=` 队列任务 |
+| `ecm_cuda_stage2.exe`、`ecm_opencl_stage2.exe` | 独立 GPU 多项式 Stage2 | 直接读取归一化 PARAM0 或 Edwards AM 存档，也可消费 `ECMSTAGE2=` 和 `ECMSTAGE2N=` |
 | `ecm_cpu_stage2.exe` | 独立 CPU Edwards Stage2 | 直接读取 Edwards 文本 save。后端和构建选项见 [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) |
 | `ecm_gui_v2.exe` | Windows 图形界面 | 管理 Stage1 和 Stage2 worker、队列、日志与结果 |
 
@@ -234,13 +234,40 @@ Edwards 的窗口由 `edwards_naf_window_bits` 控制。显式指定 `cpu_simd_r
 
 `--worker N` 同时选择 TOML 的 `[worker.N]` 覆盖和 worktodo 的 `[Worker #N]` 队列分区。同一 worker 同时由一个进程消费。完成的任务写入 `[shared] finished_file`。GUI v2 可预览并追加 PrimeNet 的 `ECM=` 或 `ECM2=` 任务。
 
-例如在所选 worker 的 worktodo 段中放入一条 Stage1 任务：
+### Worktodo 格式
+
+`ECM=`、`ECM2=` 和 `ECMSTAGE1=` 都交给 Stage1。`ECMSTAGE1` 从文件名末尾的 `_B1.save` 取 B1。队列默认用 Edwards。可用 `[stage1] curve = "mont"`，或用 `param = "m0"`、`"m2"`、`"m3"` 指定 Montgomery 参数化。若 `ECMSTAGE1` 的文件名带 `e_`、`m0_`、`m2_`、`m3_` 前缀，则以该前缀为准。
 
 ```text
-ECM2=1,2,3001,-1,100000,0,64
+ECM|ECM2=[<AID>,|N/A,|<nul>]<k>,<b>,<n>,<c>,<B1>,<B2>,<curves_to_run>[,"known-factors"]
+ECMSTAGE1=[<AID>,|N/A,|<nul>]<k>,<b>,<n>,<c>,filename,B2-or-zero,skip_curves,num_curves[,"known-factors"]
+ECMSTAGE2=[<AID>,|N/A,|<nul>]<k>,<b>,<n>,<c>,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
+ECMSTAGE2N=[<AID>,|N/A,|<nul>]filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
 ```
 
-`handoff.mode` 默认为 `"ecm-elf"`。交给 Prime95 时，将它设为 `"prime95"`，并在 `[stage1]` 配置 `prime95.worktodo_file` 和 `prime95.save_dir`。成功交接的存档写入目标目录，任务投递至 `worktodo.add`。不适用 Prime95 协议的存档默认由 ECM-ELF 继续处理。见 [Stage1 交接](docs/usage/STAGE1.md#prime95-持久交接)。
+`ECM|ECM2` 表示任选一个前缀。AID 为 32 位十六进制字符。`<nul>` 表示省略 AID，也可用 `N/A,` 或留空首列。已知因子用一组双引号包住，多个因子用逗号分隔。
+
+```text
+ECM2=1,2,3001,-1,100000,1000000,64
+ECMSTAGE1=1,2,3001,-1,"e_m3001_1e5.save",1000000,0,64
+ECMSTAGE2=1,2,3001,-1,"e_m3001_1e5.save",1000000,0,64
+ECMSTAGE2N="e_bit4096_1e5.save",1000000,0,64
+```
+
+两种 Stage2 格式都从存档读取 B1。`ECMSTAGE2` 用 `k*b^n+c` 和已知因子计算预期模数，再与存档核对。`ECMSTAGE2N` 适合只有 save 的任务，直接采用所选记录的完整 N，已知因子仅作结果元数据。所选记录须有相同的 N 和 B1。`skip_curves` 默认 0，`num_curves` 省略或为 0 时处理余下全部记录。B2 省略或为 0 时沿用 Stage2 配置，Edwards 需要有效的 B2。
+
+### Stage1 自动交接
+
+Stage1 无因子完成且发布了受支持的保存点时，从 `ECM=`、`ECM2=` 或 `ECMSTAGE1=` 生成 `ECMSTAGE2=`。新任务复用 AID、`k,b,n,c`、B2 和已知因子，引用实际 save 的绝对路径，并按本批写入的记录填写 skip 和 count。
+
+```toml
+[stage1]
+# handoff.mode = "ecm-elf"  # "off" | "ecm-elf" | "prime95"
+# handoff.workers = "2-3"  # 单个编号、列表、范围或 "auto"
+# handoff.worktodo_file = "worktodo-stage2.txt"
+```
+
+默认 `"ecm-elf"` 在原 worker 的队列末尾追加。可用 `handoff.workers` 或 `handoff.worktodo_file` 改投其他 worker 或队列。`"off"` 只保留 save。`"prime95"` 需要配置 `prime95.worktodo_file` 和 `prime95.save_dir`，兼容任务投递到 `worktodo.add`。Edwards 等不受 Prime95 支持的存档默认交给 ECM-ELF 续算。 [Stage1 交接规则](docs/usage/STAGE1.md#自动交接到-stage2)
 
 ### Save 与 checkpoint 不能互用
 
@@ -258,7 +285,7 @@ save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格
 .\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
-GUI v2 根据 `ECMSTAGE1=` 或 `ECMSTAGE2=` 启动相应程序。`[shared] queue_order` 可设为 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`，`queue_skip` 可设为 `"none"`、`"stage1"` 或 `"stage2"`。`[stage2] b2_ratio` 为非零整数时使用 B1 × ratio。队列中断后按回执跳过已经完成的曲线，直接读档可用 `--skip-curves` 和 `--curves` 选择记录。完整任务格式和 B2 优先级见 [Stage2 使用](docs/usage/STAGE2.md)。
+GUI v2 根据[任务前缀](#worktodo-格式)启动相应程序。`[shared] queue_order` 可设为 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`，`queue_skip` 可设为 `"none"`、`"stage1"` 或 `"stage2"`。`[stage2] b2_ratio` 为非零整数时使用 B1 × ratio。队列中断后按回执跳过已经完成的曲线，直接读档可用 `--skip-curves` 和 `--curves` 选择记录。B2 优先级见 [Stage2 使用](docs/usage/STAGE2.md)。
 
 手动 B2 支持符合实现约束的 2…16384-bit 输入。Auto B2 还要求适用的成本 profile 和 Stage1 成本，且始终受当前显存及算术检查约束；对没有合格模型的生产任务应明确给出 B2。`--dry-run` 只校验输入；`--plan-only` 可进行启动短校准，若要纯查询需配合 `--short-calibration 0`。参数、回执、内存摘要、调优数据格式见 [Stage2 使用](docs/usage/STAGE2.md)、[管线](docs/architecture/STAGE2.md)、[Auto B2](docs/architecture/AUTO_B2.md)。
 

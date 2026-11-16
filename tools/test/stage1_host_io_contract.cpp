@@ -27,6 +27,20 @@ int main(int argc,char **argv)try {
     check(ecm_parse_ecm2_line("ECM=1,2,7,-1,100,0,3,0",ecm,error) && !ecm.has_sigma,"worktodo sigma zero semantics");
     check(ecm_parse_ecm2_line("ECM=1,2,7,-1,100",ecm,error) && !ecm.has_curves && ecm.curves_to_run==0,"parser applied omitted curve default");
     check(!ecm_parse_ecm2_line("ECM=1,2,7,-1,100,0,3,1,\"broken",ecm,error),"unterminated CSV accepted");
+    check(ecm_parse_ecm2_line("ECM2=N/A,1,2,7,-1,100,2000,3",ecm,error) && ecm.aid.empty(),"N/A is not an AID");
+    const std::string save_only="ECMSTAGE2N=01234567890123456789012345678901,\"point,2.save\",0,4,2,\"7,31\"";
+    check(ecm_worktodo_stage(save_only)==WorktodoStage::Stage2 &&
+          ecm_parse_stage2_line(save_only,task,error) && task.modulus_from_save &&
+          task.aid=="01234567890123456789012345678901" && task.save_name=="point,2.save" &&
+          task.skip_curves==4 && task.curves_to_run==2 && task.factors.size()==2,"save-only task fields");
+    check(ecm_parse_stage2_line("ECMSTAGE2N=N/A,points.save",task,error) && task.aid.empty() &&
+          task.curves_to_run==0,"save-only task defaults");
+    check(!ecm_parse_stage2_line("ECMSTAGE2N=points.save,\"not a factor\"",task,error),
+          "save-only task accepted invalid known factor");
+    check(ecm_parse_stage2_line("ECMSTAGE2=1,2,7,-1,points.save,\"7\"",task,error) &&
+          !task.modulus_from_save && task.curves_to_run==0 && task.factors.size()==1,"Stage2 optional bounds");
+    check(ecm_rewrite_stage2_range("ECMSTAGE2N=\"point,2.save\",1e6,\"7\"",3,4,line,error) &&
+          line=="ECMSTAGE2N=\"point,2.save\",1e6,3,4,\"7\"","save-only range rewrite");
     const std::string row="ECMSTAGE1=1,2,7,-1,\"m0_name,part_100.save\",1e4,0,3,\"7,31\"";
     check(ecm_rewrite_stage2_range(row,150,2,line,error),"range rewrite");
     check(ecm_parse_stage1_line(line,task,error) && task.skip_curves==150 && task.curves_to_run==2 && task.save_name=="m0_name,part_100.save" && task.factors.size()==2,"CSV range preservation");
@@ -45,6 +59,17 @@ int main(int argc,char **argv)try {
     check(get(queue)==advanced && get(root/"finished.txt")==finished,"completion replay consumed another duplicate");
     put(queue,advanced+"# edit after crash\n");
     check(!ecm_worktodo_commit_completion(receipt.string(),queue.string(),1,completed,error),"ambiguous recovery must stop");
+    const auto tail_receipt=root/"completion_tail";
+    put(queue,"[Worker #2]\n"+row+"\n"+save_only+"\n[Worker #3]\n# keep\n[Worker #2]\n# tail\n[Worker #4]\n");
+    CompletedWorktodo tail{row,row,"ECMSTAGE2=1,2,7,-1,other.save,2000,0,1",
+                           (root/"finished_tail.txt").string(),"",true};
+    check(ecm_worktodo_store_completion(tail_receipt.string(),tail,error),"store append completion");
+    check(ecm_worktodo_commit_completion(tail_receipt.string(),queue.string(),2,tail,error) &&
+          get(queue)=="[Worker #2]\n"+save_only+"\n[Worker #3]\n# keep\n[Worker #2]\n# tail\n"+tail.replacement+"\n[Worker #4]\n",
+          "completion did not append to last source worker section");
+    const auto tail_committed=get(queue);
+    check(ecm_worktodo_commit_completion(tail_receipt.string(),queue.string(),2,tail,error) &&
+          get(queue)==tail_committed,"append completion replay duplicated delivery");
     const auto save=root/"m0_m7_100.save";put(save,"# old history\n"+point(10)+point(11));
     ecm_save::Range range;
     range=ecm_save::publish_batch(save.string(),point(21)+point(20)+point(22),true);

@@ -2,15 +2,10 @@
 
 // Worktodo parsing + small file helpers used by the queue manager.
 //
-// Three line formats are supported (dispatched by prefix):
-//
-// 1) ECMSTAGE1= / ECMSTAGE2= (save-based tasks; the prefix selects the stage):
-//      ECMSTAGE2=[<aid>,]<k>,<b>,<n>,<c>,<save_name>,<B2>,<skip_curves>,<curves_to_run>[,"factors"]
-//    B1 is extracted from save_name (m{n}_{b1}.save). Stage1 preserves B2 and
-//    skip_curves for Stage2 handoff; Stage2 uses them when processing the save.
-//
-// 2) ECM= / ECM2= (Prime95 native ECM worktodo; both prefixes are equivalent —
-//    added for the Edwards CPU path):
+// ECMSTAGE1 takes k,b,n,c,save,B2,skip,count and extracts B1 from the filename.
+// ECMSTAGE2 takes k,b,n,c,save; ECMSTAGE2N takes save alone. Both take optional
+// B2, skip, count and quoted known factors. Stage2 reads B1 from the save.
+// ECM= / ECM2= (equivalent native Prime95 Stage1 assignments):
 //      ECM=[<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves_to_run>][,<specificsigma>][,"comma-separated-list-of-known-factors"]
 //    B2 defaults to 0, curves_to_run defaults to 100 (matching Prime95).
 
@@ -36,7 +31,8 @@ struct EcmStage2Task {
     std::string b2_text = "0";
     uint64_t skip_curves = 0;
     bool has_b2 = false, has_skip = false;
-    uint32_t curves_to_run = 0;       // GPU curves per batch
+    bool modulus_from_save = false;  // ECMSTAGE2N
+    uint32_t curves_to_run = 0;       // Stage2: 0 selects all remaining records
     std::vector<std::string> factors; // known factors (optional)
 };
 
@@ -61,7 +57,7 @@ struct Ecm2Task {
 
 // Both save-based stages use the same CSV fields; the prefix selects the engine.
 bool ecm_parse_stage1_line(const std::string& line, EcmStage2Task& task, std::string& err);
-// Parse one ECMSTAGE2 line into `task`. Returns false and fills `err` on failure.
+// Parse ECMSTAGE2 or ECMSTAGE2N. Returns false and fills `err` on failure.
 bool ecm_parse_stage2_line(const std::string& line, EcmStage2Task& task, std::string& err);
 // Replace only the save-name CSV token; AID, bounds, counts and factors keep
 // their original spelling. Used when Stage1 adds its curve/param prefix.
@@ -109,7 +105,7 @@ bool ecm_worktodo_first_line(const std::string& path, std::string& line);
 // error it is replaced in place by "# ERROR <line>" (kept as a comment so the
 // user can inspect it). `first_line` must match the current first task line.
 // Returns true if the file was rewritten.
-enum class WorktodoAction { Remove, MarkError, Replace };
+enum class WorktodoAction { Remove, MarkError, Replace, AppendToWorker };
 bool ecm_worktodo_advance(const std::string& path, const std::string& first_line,
                           WorktodoAction action);
 
@@ -159,6 +155,7 @@ bool ecm_append_text_line_unique(const std::string& path, const std::string& lin
 
 struct CompletedWorktodo {
     std::string ticket, record, replacement, finished, checkpoint;
+    bool append_replacement = false;
 };
 
 // Durable completion responsibility. Leave the receipt until checkpoint cleanup

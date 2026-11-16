@@ -86,6 +86,7 @@ inline constexpr int64_t stage2_stage2_tune_runtime_samples_minimum=1;
 inline constexpr int64_t stage2_stage2_tune_runtime_samples_maximum=1000;
 inline constexpr int64_t stage2_stage1_batch_minimum=1;
 inline constexpr int64_t stage2_stage1_batch_maximum=1048576;
+inline constexpr int64_t stage2_stage1_seconds_per_curve_minimum=0;
 inline constexpr int64_t gui_NumWorkers_minimum=1;
 inline constexpr int64_t gui_NumWorkers_maximum=64;
 inline constexpr int64_t gui_font_size_minimum=6;
@@ -154,7 +155,7 @@ struct Stage1Values {
     double progress_log_seconds=60;
     double progress_average_seconds=0;
     bool verbose=true;
-    std::string curve_model="mont";
+    std::string curve_model="";
     std::string gpu_backend="auto";
     std::string execution_target="gpu";
     std::string cpu_implementation="auto";
@@ -437,7 +438,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_auto_min_b2",[](Stage2Values&c,const std::string&v){c.auto_min=static_cast<uint64_t>(bounded_integer(v,"stage2_auto_min_b2",0,UINT64_MAX));},[](Stage2Values&c,const Stage2Values&v){c.auto_min=v.auto_min;}},
     {"stage2_auto_max_b2",[](Stage2Values&c,const std::string&v){c.auto_max=static_cast<uint64_t>(bounded_integer(v,"stage2_auto_max_b2",0,UINT64_MAX));},[](Stage2Values&c,const Stage2Values&v){c.auto_max=v.auto_max;}},
     {"stage1_batch",[](Stage2Values&c,const std::string&v){c.stage1_batch=static_cast<uint64_t>(bounded_integer(v,"stage1_batch",1,1048576));},[](Stage2Values&c,const Stage2Values&v){c.stage1_batch=v.stage1_batch;}},
-    {"stage1_seconds_per_curve",[](Stage2Values&c,const std::string&v){c.stage1_seconds=bounded_integer(v,"stage1_seconds_per_curve",0,UINT64_MAX);},[](Stage2Values&c,const Stage2Values&v){c.stage1_seconds=v.stage1_seconds;}},
+    {"stage1_seconds_per_curve",[](Stage2Values&c,const std::string&v){assign_value(c.stage1_seconds,v);if(c.stage1_seconds<0)throw std::runtime_error("stage1_seconds_per_curve must be at least 0");},[](Stage2Values&c,const Stage2Values&v){c.stage1_seconds=v.stage1_seconds;}},
     {"stage2_ratio_adjust",[](Stage2Values&c,const std::string&v){c.ratio_adjust=positive(v,"stage2_ratio_adjust");},[](Stage2Values&c,const Stage2Values&v){c.ratio_adjust=v.ratio_adjust;}},
     {"stage2_tune_ignore",[](Stage2Values&c,const std::string&v){c.tune_ignore=v;},[](Stage2Values&c,const Stage2Values&v){c.tune_ignore=v.tune_ignore;}},
     {"stage2_tune_budget_seconds",[](Stage2Values&c,const std::string&v){c.tune_budget=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_budget_seconds",1,86400));},[](Stage2Values&c,const Stage2Values&v){c.tune_budget=v.tune_budget;}},

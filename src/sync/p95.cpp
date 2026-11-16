@@ -329,7 +329,7 @@ std::string p95_line_aid(const std::string& line) {
             break;
         }
     }
-    if (integer_like)
+    if (integer_like && (first.size() != 32 || first[0] == '+' || first[0] == '-'))
         return std::string(); // that field is k, not an AID
     if (lower(first) == "n/a")
         return std::string(); // explicit "no AID"
@@ -703,6 +703,8 @@ void validate_ready(const std::string& line) {
     std::string error;
     if (!ecm_parse_stage2_line(line, task, error))
         throw std::runtime_error("pending P95 task is not a saved Stage2 task: " + error);
+    if (task.modulus_from_save || !task.curves_to_run)
+        throw std::runtime_error("Prime95 handoff requires ECMSTAGE2 with k,b,n,c and an explicit curve count");
     if (!std::filesystem::u8path(task.save_name).is_absolute())
         throw std::runtime_error("pending P95 save must use an absolute path: " + task.save_name);
     const auto count = ecm_save::record_count(task.save_name);

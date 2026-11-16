@@ -155,66 +155,29 @@ fs::path absolute_from(const fs::path &base, const std::string &p) {
     fs::path v(p);
     return fs::absolute(v.is_absolute() ? v : base / v).lexically_normal();
 }
-std::vector<std::string> csv(const std::string &s, std::vector<bool> *quotes = nullptr) {
-    std::vector<std::string> out;
-    std::string field;
-    bool quoted = false, had_quote = false;
-    for (size_t i = 0; i < s.size(); ++i) {
-        const char c = s[i];
-        if (c == '"') {
-            had_quote = true;
-            if (quoted && i + 1 < s.size() && s[i + 1] == '"') { field += c; ++i; }
-            else quoted = !quoted;
-        } else if (c == ',' && !quoted) {
-            out.push_back(trim(field)); field.clear();
-            if (quotes) quotes->push_back(had_quote);
-            had_quote = false;
-        }
-        else field += c;
-    }
-    if (quoted) throw std::runtime_error("unclosed worktodo quote");
-    out.push_back(trim(field));
-    if (quotes) quotes->push_back(had_quote);
-    return out;
-}
 QueueSelection queue_fields(std::string line) {
-    if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
-    line = trim(line);
-    const std::string prefix = "ECMSTAGE2=";
-    if (line.compare(0, prefix.size(), prefix))
-        throw std::runtime_error("worktodo must contain ECMSTAGE2 save tasks");
-    std::vector<bool> quotes;
-    const auto cols = csv(line.substr(prefix.size()), &quotes);
-    auto integer_text = [](const std::string &s) {
-        size_t i = (!s.empty() && (s[0] == '+' || s[0] == '-')) ? 1 : 0;
-        if (i == s.size()) return false;
-        for (; i < s.size(); ++i) if (s[i] < '0' || s[i] > '9') return false;
-        return true;
-    };
     QueueSelection q;
-    size_t idx = integer_text(cols.front()) ? 0 : 1;
-    if (idx) q.task.aid = cols.front();
-    if (cols.size() < idx + 5) throw std::runtime_error("ECMSTAGE2 needs k,b,n,c,filename");
-    q.task.raw_line = line;
-    q.task.k = cols[idx]; q.task.b = cols[idx + 1]; q.task.c = cols[idx + 3];
-    const uint64_t exponent = u64(cols[idx + 2], "worktodo exponent");
-    if (exponent > ecm_stage2::max_input_bits) throw std::runtime_error("worktodo exponent exceeds supported input range");
-    q.task.n = static_cast<unsigned long>(exponent);
-    q.task.save_name = cols[idx + 4];
-    if (q.task.save_name.empty()) throw std::runtime_error("worktodo save filename is empty");
-    idx += 5;
-    uint64_t *targets[] = {&q.b2, &q.skip, &q.count};
-    const char *labels[] = {"worktodo B2", "worktodo skip_curves", "worktodo num_curves"};
-    for (size_t i = 0; i < 3 && idx < cols.size() && !quotes[idx]; ++i, ++idx)
-        *targets[i] = cols[idx].empty() ? 0 : u64(cols[idx], labels[i]);
-    if (q.count > UINT32_MAX) throw std::runtime_error("worktodo num_curves exceeds uint32");
-    q.task.curves_to_run = static_cast<uint32_t>(q.count);
-    if (idx < cols.size()) {
-        if (!quotes[idx] || idx + 1 != cols.size())
-            throw std::runtime_error("extra worktodo fields; known factors must be the final quoted field");
-        for (const auto &factor : csv(cols[idx])) if (!factor.empty()) q.task.factors.push_back(factor);
-    }
+    std::string error;
+    if (!ecm_parse_stage2_line(line, q.task, error))
+        throw TaskInputError(error);
+    if (q.task.n > ecm_stage2::max_input_bits)
+        throw TaskInputError("worktodo exponent exceeds supported input range");
+    q.b2 = u64(q.task.b2_text, "worktodo B2");
+    q.skip = q.task.skip_curves;
+    q.count = q.task.curves_to_run;
     return q;
+}
+std::string queue_modulus(const EcmStage2Task &task,const Record *first_record) {
+    if (task.modulus_from_save) {
+        if (!first_record)
+            throw TaskInputError("ECMSTAGE2N has no available save record after skip");
+        return first_record->n;
+    }
+    Big expected;
+    std::string error;
+    if (!ecm_compute_stage2_n(task, expected.z, error))
+        throw TaskInputError("worktodo N: " + error);
+    return number(expected.z);
 }
 void append(const fs::path &path, const std::string &line) {
     if (!path.parent_path().empty()) fs::create_directories(path.parent_path());

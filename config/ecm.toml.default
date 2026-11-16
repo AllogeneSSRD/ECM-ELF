@@ -25,11 +25,10 @@ config_version = 3
 # 覆盖路径。显式留空时关闭两阶段的自动持久化。
 
 worktodo_file = "worktodo.txt"  # string: <path>
-# Shared Stage1/Stage2 task queue for the current worker. ECMSTAGE1 and ECMSTAGE2 select the engine;
-# Stage1 and Stage2 keep separate finished records. One worker process consumes this queue at a
-# time.
-# Stage1/Stage2 共用的任务队列。ECMSTAGE1 与 ECMSTAGE2 前缀选择执行程序；两阶段分别记录完成任务。同
-# 一 worker 同时只能有一个进程消费此队列。
+# Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One
+# process consumes a worker queue at a time.
+# 共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同
+# 时由一个进程消费队列。
 
 # queue_order = "file_order"  # string: [file_order|stage1_first|stage2_first]
 # file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has
@@ -53,15 +52,18 @@ worktodo_file = "worktodo.txt"  # string: <path>
 
 [stage1]
 # param = "auto"  # string: [auto|e|m0|m2|m3]
-# Stage1 curve construction. auto uses m0 on CPU and m3 on GPU. A task save prefix selects its own
-# construction.
-# Stage1 曲线构造。auto 在 CPU 上选 m0，在 GPU 上选 m3。任务存档前缀可指定自身构造。
+# Stage1 curve construction. With auto, queue tasks default to Edwards and direct input defaults to
+# m0 on CPU or m3 on GPU. The optional curve key applies with auto. A typed ECMSTAGE1 save name
+# takes precedence.
+# Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。
+# curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。
 
 # handoff.mode = "ecm-elf"  # string: [off|ecm-elf|prime95]
-# Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Use
-# off to keep the save without queuing Stage2, or prime95 to select Prime95.
-# Stage1 无因子完成且有可用保存点时，默认交给 ECM-ELF Stage2。设为 off 时只保留存档，设为 prime95 时
-# 选择 Prime95。
+# Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append
+# the new task at the end of the source worker's queue unless a receiver is configured. Use off to
+# keep the save or prime95 to select Prime95.
+# Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接
+# 收方。off 只保留存档，prime95 交给 Prime95。
 
 save_dir = "."  # string: <path>
 # Output directory for Stage1 curve saves. Stage2 also searches here when stage2_save_dir is unset.

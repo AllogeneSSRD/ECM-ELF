@@ -251,6 +251,7 @@ struct QueuePaths {
 struct QueueItem : WorktodoStage1Task {
     long long marker = 0;
     std::string auto_stage2_line;
+    bool append_stage2 = false;
     const P95TransferConfig* p95 = nullptr;
     const Stage2TransferConfig* stage2 = nullptr;
 };
@@ -470,7 +471,8 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     if (!ecm_worktodo_store_completion(receipt,
                                        {line, completed_line,
                                         (!found_factor ? auto_stage2_line : std::string{}),
-                                        finished_path, result.completed_checkpoint()},
+                                        finished_path, result.completed_checkpoint(),
+                                        item.append_stage2 && !found_factor && !auto_stage2_line.empty()},
                                        completion_error)) {
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo retained\n", completion_error.c_str());
         return false;
@@ -945,8 +947,10 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                     ecm_ts_fprintf(stdout, "Stage2 handoff: %s; retaining Stage1 save\n", reason);
                 else if (local_route_is_external())
                     item.stage2 = stage2_receiver_config(true);
-                else
+                else {
                     item.auto_stage2_line = item.stage2_line;
+                    item.append_stage2 = true;
+                }
             }
             if (item.stage2 && same_path(item.stage2->worktodo, item.input.save_file))
                 throw std::runtime_error("Stage2 receiver queue conflicts with the Stage1 save");

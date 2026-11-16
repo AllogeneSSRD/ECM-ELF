@@ -139,7 +139,7 @@ worktodo_file = "worktodo.txt"
 
 v1 旧键 `shared.worktodo`
 
-Stage1/Stage2 共用的任务队列。ECMSTAGE1 与 ECMSTAGE2 前缀选择执行程序；两阶段分别记录完成任务。同一 worker 同时只能有一个进程消费此队列。
+共用队列。ECM、ECM2 和 ECMSTAGE1 交给 Stage1，ECMSTAGE2 和 ECMSTAGE2N 交给 Stage2。同一 worker 同时由一个进程消费队列。
 
 ## [stage1]
 
@@ -333,6 +333,16 @@ cuda_slice_depth = 3
 
 CUDA CGBN Stage1 的切片提交方式。2 和 3 分别滚动提交至多两片和三片。8 按最多八片一组等待组尾。
 
+### curve
+
+```toml
+curve = ""
+```
+
+类型 `string` · 范围 `[mont|ed|empty]` · Worker 覆盖 `[worker.N] stage1.curve` · 级别 `高级`。
+
+param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。OpenCL Stage1 要求 Montgomery。需要指定 Montgomery 参数化时请用 param=m0、m2 或 m3。
+
 ### edwards_doubling
 
 ```toml
@@ -419,7 +429,7 @@ handoff.mode = "ecm-elf"
 
 类型 `string` · 范围 `[off|ecm-elf|prime95]` · Worker 覆盖 `[worker.N] stage1.handoff.mode` · 级别 `常用`。
 
-Stage1 无因子完成且有可用保存点时，默认交给 ECM-ELF Stage2。设为 off 时只保留存档，设为 prime95 时选择 Prime95。
+Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。
 
 <a id="handoff_unsupported"></a>
 
@@ -731,7 +741,7 @@ param = "auto"
 
 类型 `string` · 范围 `[auto|e|m0|m2|m3]` · Worker 覆盖 `[worker.N] stage1.param` · 级别 `常用`。
 
-Stage1 曲线构造。auto 在 CPU 上选 m0，在 GPU 上选 m3。任务存档前缀可指定自身构造。
+Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。
 
 <a id="p95_keep_aid"></a>
 
@@ -1854,11 +1864,11 @@ Stage1 成本反频率缩放的目标频率；0 使用 CSV 参考频率，不修
 tune.stage1_seconds_per_curve = 0
 ```
 
-类型 `double` · 范围 `<x:R,finite,x>0>` · Worker 覆盖 `[worker.N] stage2.tune.stage1_seconds_per_curve` · 级别 `高级`。
+类型 `double` · 范围 `<x:R,finite,x>=0>` · Worker 覆盖 `[worker.N] stage2.tune.stage1_seconds_per_curve` · 级别 `高级`。
 
 v1 旧键 `stage2.stage1_seconds_per_curve`
 
-为 Auto B2 提供正的 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。优先于 Stage1 tune 实测。未指定时，完整 ECM tune 需匹配 stage1_tune_profile；旧组件 profile 使用其自身匹配的 Stage1 数据。此值不是本次运行时限，也不是调优输入的准备耗时。
+为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 stage1_batch。正值（可填小数）优先于调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使用成本 CSV 或匹配的 stage1_tune_profile。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成本规划。
 
 <a id="stage2_tune_warmup"></a>
 
