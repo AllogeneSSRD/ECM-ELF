@@ -1985,6 +1985,16 @@ Type `string` · Range `<dir>` · Worker override `not supported` · Level `adva
 
 Directory containing GUI language XML files. Empty uses localization beside the GUI executable. Development builds also try the source-tree language resources.
 
+### pause_schedule
+
+```toml
+pause_schedule = []
+```
+
+Type `string_array` · Range `["application, Worker, weekday, time", ...]` · Worker override `not supported` · Level `advanced`.
+
+GUI v2 local-time pause rules. Each item has application, Worker, weekday and time groups. Example: ["foobar, [1,3-5], Mon-Fri, 08:30-17:30"]. Application names match a running program's path substring regardless of case. Use * for time-only rules, or an empty array to disable scheduling.
+
 ### process_priority
 
 ```toml

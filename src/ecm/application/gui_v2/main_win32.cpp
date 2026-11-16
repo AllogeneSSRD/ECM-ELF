@@ -130,7 +130,7 @@ LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l) {
     case WM_APP + 34:
         if (current_app && audit_app) {
             if (w == 1) current_app->start(static_cast<int>(l));
-            if (w == 2) current_app->controller.request_stop(static_cast<int>(l));
+            if (w == 2) current_app->stop_worker(static_cast<int>(l));
             if (w == 3) current_app->begin_exit();
             if (w == 4) current_app->request_close();
             if (w == 5) current_app->controller.cancel_close();

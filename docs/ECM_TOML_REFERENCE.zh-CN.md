@@ -1986,6 +1986,16 @@ localization_dir = ""
 
 指定 GUI 语言 XML 文件目录。留空使用 GUI 可执行文件旁的 localization 目录；从开发构建目录运行时还会尝试源码中的语言资源目录。
 
+### pause_schedule
+
+```toml
+pause_schedule = []
+```
+
+类型 `string_array` · 范围 `["application, Worker, weekday, time", ...]` · Worker 覆盖 `不支持` · 级别 `高级`。
+
+GUI v2 暂停规则。每项依次填写应用、Worker、星期、时间。例如 ["foobar, [1,3-5], Mon-Fri, 08:30-17:30"]。应用按运行程序路径的子串匹配，忽略大小写。仅按时间暂停时使用 *。空数组关闭计划。
+
 ### process_priority
 
 ```toml

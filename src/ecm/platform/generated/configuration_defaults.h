@@ -140,6 +140,7 @@ inline constexpr uint64_t stage2_stage1_batch=1;
 inline constexpr double stage2_stage1_seconds_per_curve=0;
 inline constexpr double stage2_stage2_ratio_adjust=1;
 inline constexpr char gui_gpu_clock_ranges[]="";
+inline constexpr char gui_pause_schedule[]="[]";
 inline constexpr char gui_results_last_copy_utc[]="";
 inline constexpr int gui_NumWorkers=1;
 inline constexpr char gui_exe[]="";

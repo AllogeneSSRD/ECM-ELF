@@ -3,6 +3,7 @@
 #include "ui/navigation.h"
 #include "ui/i18n.h"
 #include "ui/chart.h"
+#include "ui/checkbox.h"
 #include "ui/worker_presentation.h"
 #include "ui/log_presentation.h"
 #include "ui/group_order_presentation.h"
@@ -91,8 +92,18 @@ bool App::load_config(const std::string& input) {
         if (!candidate.load(path, error)) throw std::runtime_error(error);
         const int worker_count = candidate.config_version() >= 3 ?
             ecm_config::configured_workflow_worker_count(candidate.lines(), path) : 0;
+        const auto pause_rows=ecm_config::toml_string_array(candidate.get("gui","pause_schedule","[]"));
+        PauseSchedule schedule;
+        PauseScheduleError schedule_error;
+        schedule.parse(pause_rows,schedule_error);
         group_order_job.cancel();
         group_order_loaded=false;
+        if(config_path!=path) {
+            set_task_watch(false);
+            scheduled_paused_.clear();
+            scheduled_resume_.clear();
+            scheduled_autostart_.clear();
+        }
         config = std::move(candidate); config_path = path; workflow_worker_count = worker_count;
         leases_.clear();log_views_.clear();log_last_worker_=-1;
         saved_clock_profiles.clear();saved_clock_automatic.clear();clock_drafts.clear();
@@ -112,6 +123,10 @@ bool App::load_config(const std::string& input) {
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
         result_copies.load(std::filesystem::u8path(config_path),state.path,config.get("gui","results_last_copy_utc"));
         workflow_load_error.clear();status = "Workflow opened."; trace("config=" + path);
+        install_pause_schedule(std::move(schedule),schedule_error,pause_rows);
+        SYSTEMTIME local_time{};
+        GetLocalTime(&local_time);
+        update_pause_schedule(local_time);
         return true;
     } catch (const std::exception& error) { workflow_load_error=status=error.what();trace(status);return false; }
 }
@@ -135,6 +150,9 @@ void App::configure_workers() {
     workers.priority = settings.priority; workers.exit_confirm = settings.exit_confirm;
     workers.graceful_stop_ms = static_cast<unsigned long long>(settings.graceful_stop_ms);
     controller.configure(workers); controller.suppress_autostart();
+    task_watch_next_scan_=0;
+    pause_schedule_.reset_selection();
+    last_pause_minute_=-1;
     worker_b2_ratios_.clear();
     for(const auto& worker:controller.workers())for(const auto& entry:ecm_config::preview_entries(config.lines(),worker.index))if(entry.first=="b2_ratio")
         worker_b2_ratios_[worker.index]=ecmgui::preview_stage2(ecm_config::Entries{entry}).b2_ratio;
@@ -143,6 +161,11 @@ void App::configure_workers() {
 }
 bool App::start(int index,ecmgui::WorkerStart origin) {
     if (!ready || controller.exit_phase() != ecmgui::WorkerController::ExitPhase::Idle) return false;
+    if (pause_schedule_error_.group != PauseScheduleError::None || scheduled_paused_.count(index)) {
+        const bool zh=state.ui_language=="zh";
+        status=pause_schedule_error_.group!=PauseScheduleError::None?pause_schedule_error_text(pause_schedule_error_,zh):ui::text("worker.pause_blocked",zh);
+        return false;
+    }
     if (config.dirty()) { status="Save or reload workflow changes before starting workers."; return false; }
     try {
         for (const auto& worker : controller.workers()) if (worker.index == index) {
@@ -153,6 +176,7 @@ bool App::start(int index,ecmgui::WorkerStart origin) {
             auto lease = std::make_unique<ecm_queue::OwnerLease>(worker.worktodo, index, ".gui-control.lock");
             { ecm_queue::OwnerLease probe(worker.worktodo, index); }
             if (!controller.start(index,true,origin)) return false;
+            if(origin==ecmgui::WorkerStart::Manual) task_watch_paused_workers_.erase(index);
             leases_[index] = std::move(lease); toast((ecmgui_v2::ui::text("worker_started",state.ui_language=="zh"))+std::to_string(index)); return true;
         }
     } catch (const std::exception& error) { status = error.what(); trace(status); }
@@ -162,18 +186,144 @@ void App::start_all() {
     for(const auto& worker:controller.workers())
         if(!start(worker.index))toast(status,true);
 }
+void App::stop_all() {
+    set_task_watch(false);
+    autostart_pending=false;
+    scheduled_autostart_.clear();
+    scheduled_resume_.clear();
+    controller.stop_all();
+}
+void App::stop_worker(int index) {
+    if(task_watch_enabled_) task_watch_paused_workers_.insert(index);
+    scheduled_autostart_.erase(index);
+    scheduled_resume_.erase(index);
+    controller.request_stop(index);
+}
+void App::set_task_watch(bool enabled) {
+    task_watch_enabled_=enabled;
+    task_watch_next_poll_=task_watch_next_scan_=0;
+    task_watch_files_.clear();
+    task_watch_paused_workers_.clear();
+}
+void App::poll_task_watch(unsigned long long now) {
+    if(!task_watch_enabled_ || !ready || config.dirty() || pause_schedule_error_.group!=PauseScheduleError::None ||
+        controller.exit_phase()!=ecmgui::WorkerController::ExitPhase::Idle || now<task_watch_next_poll_) return;
+
+    constexpr unsigned long long poll_ms=1000, scan_ms=5*60*1000;
+    task_watch_next_poll_=now+poll_ms;
+    const bool scan_all=now>=task_watch_next_scan_;
+    if(scan_all) task_watch_next_scan_=now+scan_ms;
+
+    // Shared worktodo paths are sampled once. Only read queue contents when dispatching.
+    decltype(task_watch_files_) current;
+    std::set<std::string> seen,changed;
+    for(const auto& worker:controller.workers()){
+        if(!seen.insert(worker.worktodo).second) continue;
+        const auto path=std::filesystem::u8path(worker.worktodo);
+        std::error_code error;
+        const auto modified=std::filesystem::last_write_time(path,error);
+        if(error) continue;
+        const auto size=std::filesystem::file_size(path,error);
+        if(error) continue;
+        const auto stamp=std::make_pair(modified,size);
+        const auto old=task_watch_files_.find(worker.worktodo);
+        if(old==task_watch_files_.end() || old->second!=stamp) changed.insert(worker.worktodo);
+        current.emplace(worker.worktodo,stamp);
+    }
+    task_watch_files_.swap(current);
+
+    for(const auto& worker:controller.workers()){
+        if(!scan_all && !changed.count(worker.worktodo)) continue;
+        if(worker.running() || worker.stop_requested || worker.breaker_tripped() || task_watch_paused_workers_.count(worker.index) || scheduled_paused_.count(worker.index)) continue;
+        if(worker.state()==ecmgui::WorkerRunState::Starting || worker.state()==ecmgui::WorkerRunState::Restarting) continue;
+        if(controller.has_queued_task(worker)) start(worker.index,ecmgui::WorkerStart::Automatic);
+    }
+}
+void App::install_pause_schedule(PauseSchedule schedule,PauseScheduleError error,const std::vector<std::string>& rows) {
+    pause_schedule_=std::move(schedule);
+    pause_schedule_error_=error;
+    pause_schedule_draft_.clear();
+    for(const auto& row:rows){
+        if(!pause_schedule_draft_.empty()) pause_schedule_draft_+='\n';
+        pause_schedule_draft_+=ecm_config::trim(row).empty()?",,":row;
+    }
+    last_pause_minute_=-1;
+    if(error.group!=PauseScheduleError::None){
+        status=pause_schedule_error_text(error,state.ui_language=="zh");
+        trace(status);
+        toast(status,true);
+    }
+}
+void App::update_pause_schedule(const SYSTEMTIME& local_time) {
+    if(!ready || pause_schedule_error_.group!=PauseScheduleError::None ||
+        controller.exit_phase()!=ecmgui::WorkerController::ExitPhase::Idle) return;
+    const int weekday=(local_time.wDayOfWeek+6)%7, minute=local_time.wHour*60+local_time.wMinute;
+    const int minute_of_week=weekday*24*60+minute;
+    const bool minute_changed=last_pause_minute_!=minute_of_week;
+    const bool needs_applications=pause_schedule_.needs_applications(weekday,minute);
+    const auto now=GetTickCount64();
+    const bool poll=needs_applications&&(minute_changed||now>=next_pause_application_poll_);
+    if(!minute_changed&&!poll) return;
+    last_pause_minute_=minute_of_week;
+    if(poll){
+        next_pause_application_poll_=now+1000;
+        if(auto paths=running_application_paths()) pause_application_paths_=std::move(*paths);
+    }else if(!needs_applications) pause_application_paths_.clear();
+    std::vector<PauseWorker> workers;
+    for(const auto& worker:controller.workers())
+        workers.push_back({worker.index,!worker.stop_requested && (worker.running() || worker.state()==ecmgui::WorkerRunState::Restarting)});
+    auto paused=pause_schedule_.paused_workers(weekday,minute,workers,pause_application_paths_);
+    if(paused==scheduled_paused_) return;
+
+    bool started=false, ended=false;
+    for(const auto& worker:workers){
+        if(paused.count(worker.index) && !scheduled_paused_.count(worker.index)){
+            started=true;
+            if(worker.active){
+                scheduled_resume_.insert(worker.index);
+                controller.request_stop(worker.index);
+            }
+        }
+        if(!paused.count(worker.index) && scheduled_paused_.count(worker.index)) ended=true;
+    }
+    scheduled_paused_.swap(paused);
+    if(ended) task_watch_next_poll_=task_watch_next_scan_=0;
+    const bool zh=state.ui_language=="zh";
+    if(started) toast(ui::text("worker.pause_started",zh));
+    if(ended) toast(ui::text("worker.pause_ended",zh));
+}
+void App::resume_scheduled_workers() {
+    if((scheduled_resume_.empty() && scheduled_autostart_.empty()) || config.dirty() ||
+        pause_schedule_error_.group!=PauseScheduleError::None || controller.exit_phase()!=ecmgui::WorkerController::ExitPhase::Idle) return;
+    for(const auto& worker:controller.workers()){
+        if(worker.stop_requested || scheduled_paused_.count(worker.index)) continue;
+        const bool resume=scheduled_resume_.erase(worker.index)!=0;
+        const bool autostart=scheduled_autostart_.erase(worker.index)!=0;
+        if((resume || autostart) && controller.has_queued_task(worker)) start(worker.index,ecmgui::WorkerStart::Automatic);
+    }
+}
 void App::tick() {
+    SYSTEMTIME local_time{};
+    GetLocalTime(&local_time);
+    tick(local_time);
+}
+void App::tick(const SYSTEMTIME& local_time) {
     tick_gpu_clocks();
     if(group_order_job.poll())notify_group_order();
+    update_pause_schedule(local_time);
     if (autostart_pending) {
         autostart_pending = false;
-        for (const auto& worker : controller.workers())
-            if (worker.autostart) start(worker.index,ecmgui::WorkerStart::Automatic);
+        for (const auto& worker : controller.workers()) if(worker.autostart) {
+            if(scheduled_paused_.count(worker.index) || pause_schedule_error_.group!=PauseScheduleError::None) scheduled_autostart_.insert(worker.index);
+            else start(worker.index,ecmgui::WorkerStart::Automatic);
+        }
     }
     controller.tick();
     for (const auto& worker : controller.workers())
         if (!worker.running() && worker.state() != ecmgui::WorkerRunState::Restarting && worker.state() != ecmgui::WorkerRunState::Starting) leases_.erase(worker.index);
+    resume_scheduled_workers();
     const auto now = GetTickCount64();
+    poll_task_watch(now);
     auto timing_file=state.path;timing_file+=".stage2-timing.json";stage2_history_.load(timing_file);
     const bool poll_tune=now>=stage2_tune_poll_;if(poll_tune)stage2_tune_poll_=now+1000;
     for(const auto& worker:controller.workers())if(worker.stage2){
@@ -709,9 +859,22 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     start_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
     start_button_size=ImGui::GetItemRectSize();
     if(ImGui::GetItemRectMax().x+gap+button_width<=toolbar_right)ImGui::SameLine();
-    if (ui::button("stop-all", stop_label, ui::ButtonKind::Secondary, p, active.scale,false,&secondary_button_font_height,true,button_width,button_height,ui::Icon::Stop)) {controller.stop_all();toast(ecmgui_v2::ui::text("worker.safe_stop_requested",fonts.chinese));}
+    if (ui::button("stop-all", stop_label, ui::ButtonKind::Secondary, p, active.scale,false,&secondary_button_font_height,true,button_width,button_height,ui::Icon::Stop)) {stop_all();toast(ui::text("worker.safe_stop_requested",zh));}
     stop_control=ImVec2((ImGui::GetItemRectMin().x+ImGui::GetItemRectMax().x)*.5f,(ImGui::GetItemRectMin().y+ImGui::GetItemRectMax().y)*.5f);
     stop_button_size=ImGui::GetItemRectSize();
+    const char* watch_label=ui::text("worker.task_watch",zh);
+    const float watch_width=ui::checkbox_width(watch_label);
+    if(ImGui::GetItemRectMax().x+gap+watch_width<=toolbar_right) ImGui::SameLine();
+    bool watching=task_watch_enabled();
+    if(ui::checkbox(watch_label,&watching)) set_task_watch(watching);
+    if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",ui::text("worker.task_watch_hint",zh));
+    if(pause_schedule_error_.group!=PauseScheduleError::None)
+        ImGui::TextWrapped("%s",pause_schedule_error_text(pause_schedule_error_,zh).c_str());
+    else if(!scheduled_paused_.empty()){
+        std::string workers=ui::text("worker.pause_active",zh);
+        for(int index:scheduled_paused_) workers+=" #"+std::to_string(index);
+        ImGui::TextWrapped("%s",workers.c_str());
+    }
     worker_toolbar_height=ImGui::GetCursorScreenPos().y-toolbar_top;ImGui::PopStyleVar(2);
     for (const auto& worker : controller.workers()) if (worker.p95.valid) {
         const bool pending = worker.p95.level == ecmgui::P95Notice::Level::Pending;
@@ -800,7 +963,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             const float action_width=std::max(1.f,std::min(ImGui::GetContentRegionAvail().x,ImGui::CalcTextSize(action_label).x+35*scale));
             const auto action_shown=ui::fitted_label(action_label,action_width-8*scale);
             if(ui::button("worker-action",action_shown.c_str(),busy?ui::ButtonKind::Danger:ui::ButtonKind::Secondary,p,scale,worker.stop_requested,nullptr,true,action_width,0,busy||worker.stop_requested?ui::Icon::Stop:ui::Icon::Play)){
-                if(busy){controller.request_stop(worker.index);toast("Safe stop requested: "+worker.name);}else if(!start(worker.index))toast(status,true);
+                if(busy){stop_worker(worker.index);toast("Safe stop requested: "+worker.name);}else if(!start(worker.index))toast(status,true);
             }
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)&&action_shown!=action_label)ImGui::SetTooltip("%s",action_label);
             worker_action_controls[worker.index]=center();worker_button_height=ImGui::GetItemRectSize().y;

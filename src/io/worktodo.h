@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <gmp.h>
+#include "worker_list.h"
 
 #include "io/worktodo_selection.h"
 
@@ -175,8 +176,3 @@ bool ecm_worktodo_commit_completion(const std::string& receipt, const std::strin
 // only if absent. Redundant headers are compacted without changing task order.
 bool ecm_worktodo_append_unique(const std::string& path, const std::string& finished, int worker,
                                 const std::string& line, std::string& err);
-
-namespace ecm_workers {
-std::string trim(const std::string&);
-bool parse_list(const std::string& spec, int maximum, std::vector<int>& workers, int& ignored);
-}

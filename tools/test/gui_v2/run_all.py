@@ -65,8 +65,13 @@ def plan(exe, out):
     probe = build / 'ecm_gui_v2_owner_probe.exe'
     tests = []
 
-    def native(name, binary):
-        tests.append((name, [build / binary, out / name / 'fixture'], [build / binary]))
+    def native(name, binary, *, uses_worker=False):
+        command = [build / binary, out / name / 'fixture']
+        required = [build / binary]
+        if uses_worker:
+            command.append(worker)
+            required.append(worker)
+        tests.append((name, command, required))
 
     def python(name, script, *, uses_worker=False, uses_layers=False, extra=()):
         command = [sys.executable, '-u', HERE / script, '--exe', exe, '--out', out / name]
@@ -80,7 +85,7 @@ def plan(exe, out):
         tests.append((name, command + list(extra), required))
 
     native('state', 'ecm_gui_v2_state_test.exe')
-    native('app', 'ecm_gui_v2_app_test.exe')
+    native('app', 'ecm_gui_v2_app_test.exe', uses_worker=True)
     tests.append(('ownership', [sys.executable, '-u', HERE / 'test_ownership.py',
                                '--probe', probe, '--out', out / 'ownership'], [probe]))
     python('startup-dispatch', 'test_startup_dispatch.py', uses_worker=True)
@@ -143,8 +148,9 @@ def main():
     required = {exe} | {path for _, _, paths in selected for path in paths}
     for path in required | set(exe.parent.glob('*.dll')):
         shutil.copy2(path, binaries / path.name)
-    if (exe.parent / 'assets').is_dir():
-        shutil.copytree(exe.parent / 'assets', binaries / 'assets')
+    for directory in ('assets', 'localization'):
+        if (exe.parent / directory).is_dir():
+            shutil.copytree(exe.parent / directory, binaries / directory)
     selected = [test for test in plan(binaries / exe.name, out)
                 if fnmatch.fnmatchcase(test[0], args.only)]
     report = {'renderer': 'dx11', 'source_exe': str(exe), 'tested_exe': str(binaries / exe.name),

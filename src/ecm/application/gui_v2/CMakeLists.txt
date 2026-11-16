@@ -45,7 +45,7 @@ set(_old "${ECM_GUI_V2_ROOT}/src/ecm/application/gui")
 add_library(ecm_gui_v2_models STATIC "${_old}/worker_controller.cpp" "${_old}/worker_proc.cpp"
     "${_old}/toml_file.cpp" "${_old}/log_parse.cpp" "${_old}/platform_win32.cpp"
     "${_old}/results.cpp" "${_old}/worktodo_gen.cpp" "${_old}/probability_model.cpp" "${_old}/gpu_monitor.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/ui/localization_xml.cpp")
-target_sources(ecm_gui_v2_models PRIVATE "${ECM_GUI_V2_ROOT}/src/io/files.cpp")
+target_sources(ecm_gui_v2_models PRIVATE pause_schedule.cpp "${ECM_GUI_V2_ROOT}/src/io/files.cpp")
 # Keep generated configuration visible to incremental builds even in old caches
 # whose localized MSVC include scan did not record header dependencies.
 get_target_property(_gui_config_sources ecm_gui_v2 SOURCES)

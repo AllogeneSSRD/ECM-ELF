@@ -1021,6 +1021,14 @@ target = "gpu"  # string: [cpu|gpu]
 # 件。保存不应用本次草稿；点击应用才启用本次范围和自动选项。恢复默认关闭本次会话自动应用，不删除保存
 # 草稿。空值不保存范围，不改变 worker 计算配置。
 
+# pause_schedule = []  # string_array: ["application, Worker, weekday, time", ...]
+# GUI v2 local-time pause rules. Each item has application, Worker, weekday and time groups.
+# Example: ["foobar, [1,3-5], Mon-Fri, 08:30-17:30"]. Application names match a running program's
+# path substring regardless of case. Use * for time-only rules, or an empty array to disable
+# scheduling.
+# GUI v2 暂停规则。每项依次填写应用、Worker、星期、时间。例如 ["foobar, [1,3-5], Mon-Fri,
+# 08:30-17:30"]。应用按运行程序路径的子串匹配，忽略大小写。仅按时间暂停时使用 *。空数组关闭计划。
+
 # results_last_copy_utc = ""  # string: <YYYY-MM-DD HH:MM:SS UTC>
 # Last successful JSON result copy in GUI v2, recorded in UTC. Empty means no copy time has been
 # recorded.

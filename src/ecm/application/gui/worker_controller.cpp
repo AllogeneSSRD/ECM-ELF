@@ -229,6 +229,10 @@ bool WorkerController::worker_stage2(int worker_index) const {
     const auto task=queue_task(path,worker_index,cfg.worktodo_priority,cfg.worktodo_skip);
     return ecm_queue::task_stage(task) == WorktodoStage::Stage2;
 }
+bool WorkerController::has_queued_task(const WorkerView& worker) const {
+    const auto cfg=ecmgui::preview_stage1(ecm_config::preview_entries(ini_.lines(),worker.index,true));
+    return !queue_task(worker.worktodo,worker.index,cfg.worktodo_priority,cfg.worktodo_skip).empty();
+}
 std::string WorkerController::resolve_worker_exe(int worker_index) const {
     return (worker_index>0?worker_stage2(worker_index):stage2_mode())?resolve_stage2_exe():resolve_stage1_exe();
 }

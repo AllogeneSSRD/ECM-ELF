@@ -121,6 +121,7 @@ public:
     void suppress_autostart(){autostart_done_=true;}
     std::string resolve_stage1_exe() const;std::string resolve_stage2_exe() const;
     bool stage2_mode() const;bool worker_stage2(int worker_index) const;
+    bool has_queued_task(const WorkerView& worker) const;
     std::string resolve_worker_exe(int worker_index=0) const;
     std::string worker_dir(int worker_index=0) const;
 private:

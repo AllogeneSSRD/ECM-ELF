@@ -58,6 +58,196 @@ static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
     assert(!fs::exists(probe));assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE","")==0);
     std::cout<<"{\"no_protocol_probe\":true,\"manual_autostart_restart_stage_switch\":true,\"queue_locks_preserved\":true,\"spawn_errors_preserved\":true}\n";
 }
+static void task_watch_dispatch(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"task-watch";
+    fs::create_directories(dir);
+    const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt";
+    const std::string header="[Worker #1]\n";
+    const std::string task="ECMSTAGE1=1,2,127,-1,100,1\n";
+    write(queue,header);
+    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=1\nexe=\""+
+        fixture.generic_u8string()+"\"\n[workers.1]\nautostart=0\nextra_args='--scenario v2-checkpoint-stop'\n");
+    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::App app(state,stdout);
+    app.initialize(cfg.u8string(),true);
+    const auto worker=[&]() -> const ecmgui::WorkerView& {return app.controller.workers().front();};
+    const auto running=[&]{return worker().running();};
+    const auto stopped=[&]{return !app.controller.busy()&&!worker().stop_requested;};
+    const auto wait=[&](const auto& done){
+        const auto deadline=GetTickCount64()+10000;
+        while(!done()&&GetTickCount64()<deadline){app.tick();Sleep(10);}
+        assert(done());
+    };
+    const auto owner_acquisitions=[&]{
+        size_t count=0;
+        for(const auto& line:worker().raw)
+            if(line.find("queue_owner: acquired")!=line.npos)++count;
+        return count;
+    };
+    const auto base=GetTickCount64();
+    constexpr unsigned long long interval=5*60*1000;
+    assert(!app.task_watch_enabled());
+    app.set_task_watch(true);
+    app.poll_task_watch(base);
+    assert(!running());
+
+    // A changed queue triggers immediately, but its owner can block dispatch.
+    {
+        ecm_queue::OwnerLease owner(queue.u8string(),1);
+        write(queue,header+task);
+        app.poll_task_watch(base+1000);
+        assert(!running()&&app.status.find("queue")!=app.status.npos);
+    }
+    app.poll_task_watch(base+2000);
+    assert(!running());
+    write(queue,header+task+"\n");
+    app.poll_task_watch(base+3000);
+    assert(running());
+    wait([&]{return owner_acquisitions()==1;});
+
+    app.stop_worker(1);
+    wait(stopped);
+    app.poll_task_watch(base+interval);
+    assert(app.task_watch_enabled()&&!running());
+    assert(app.start(1));
+    wait([&]{return owner_acquisitions()==2;});
+    app.stop_all();
+    wait(stopped);
+    app.poll_task_watch(base+2*interval);
+    assert(!app.task_watch_enabled()&&!running());
+
+    // Without a second edit, the five-minute scan retries a previously busy queue.
+    app.set_task_watch(true);
+    app.status.clear();
+    {
+        ecm_queue::OwnerLease owner(queue.u8string(),1);
+        app.poll_task_watch(base+3*interval);
+        assert(!running()&&app.status.find("queue")!=app.status.npos);
+    }
+    app.poll_task_watch(base+4*interval);
+    assert(running());
+    wait([&]{return owner_acquisitions()==3;});
+    app.stop_all();
+    wait(stopped);
+    std::cout<<"{\"task_watch\":true,\"queue_change\":true,\"periodic_scan\":true,\"queue_owner_respected\":true,\"safe_stop_respected\":true}\n";
+}
+static void pause_schedule_rules(){
+    ecmgui_v2::PauseSchedule schedule;
+    ecmgui_v2::PauseScheduleError error;
+    assert(schedule.parse({"[1,3-4], 1-5, 08:30-12:00|13:00-17:30", "2, Mon, 08:30-09:30", "#5, 7, 22:00-02:00"},error));
+    std::vector<ecmgui_v2::PauseWorker> workers{{1,true},{2,true},{3,true},{4,true},{5,false},{6,true}};
+    assert(schedule.paused_workers(0,509,workers).empty());
+    assert((schedule.paused_workers(0,510,workers)==std::set<int>{1,2,3,4,6}));
+    workers[1].active=false;
+    workers[4].active=true;
+    assert((schedule.paused_workers(0,511,workers)==std::set<int>{1,2,3,4,6}));
+    assert((schedule.paused_workers(0,570,workers)==std::set<int>{1,3,4}));
+    assert(schedule.paused_workers(0,720,workers).empty());
+    assert((schedule.paused_workers(0,780,workers)==std::set<int>{1,3,4}));
+    assert((schedule.paused_workers(6,22*60,workers)==std::set<int>{5}));
+    assert((schedule.paused_workers(0,119,workers)==std::set<int>{5}));
+    assert(schedule.paused_workers(0,120,workers).empty());
+    assert(schedule.parse({",, 03:00-04:00"},error));
+    assert(schedule.paused_workers(6,180,workers).size()==workers.size());
+    assert(schedule.parse({"*,Tue|4,*"},error));
+    assert(schedule.paused_workers(3,0,workers).size()==workers.size());
+    assert(!schedule.parse({"#2","[],*,*"},error)&&error.item==2&&error.group==ecmgui_v2::PauseScheduleError::Worker);
+    assert(!schedule.parse({"1,8,*"},error)&&error.group==ecmgui_v2::PauseScheduleError::Weekday);
+    assert(!schedule.parse({"1,1,08:00-08:00"},error)&&error.group==ecmgui_v2::PauseScheduleError::Time);
+    assert(schedule.parse({"foo bar, [1, 3-4], 1, 08 : 30 - 09:00"},error));
+    assert(!schedule.needs_applications(0,509)&&schedule.needs_applications(0,510));
+    assert(schedule.paused_workers(0,510,workers,{LR"(C:\other.exe)"}).empty());
+    for (const std::wstring& path : {LR"(c:\foobar.exe)", LR"(C:\FOOBAR\name.exe)", LR"(C:\myFoo Barprog.exe)"})
+        assert((schedule.paused_workers(0,510,workers,{path})==std::set<int>{1,3,4}));
+    assert(schedule.paused_workers(0,540,workers,{LR"(C:\FOOBAR\name.exe)"}).empty());
+    assert(schedule.paused_workers(0,510,workers).empty());
+    for (const std::string row : {"*,1,*,*", "*, 1, *, *   "}) {
+        assert(schedule.parse({row},error)&&!schedule.needs_applications(0,510));
+        assert((schedule.paused_workers(0,510,workers)==std::set<int>{6}));
+    }
+}
+static void scheduled_worker_dispatch(const fs::path& root,const fs::path& fixture){
+    const auto dir=root/"pause-schedule";
+    fs::create_directories(dir);
+    const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt";
+    write(queue,"[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n[Worker #2]\nECMSTAGE1=1,2,137,-1,100,1\n");
+    const auto args="\nautostart=0\nextra_args='--scenario v2-checkpoint-stop'\n";
+    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=2\nexe=\""+
+        fixture.generic_u8string()+"\"\npause_schedule = [\n  '#1, 1, 08:30-09:00', # preserve rule note\n] # preserve schedule note\n[workers.1]"+args+"[workers.2]"+args);
+
+    // Computation readers accept the GUI array and ignore its scheduling semantics.
+    for(const auto mode:{ecm_config::TomlReadMode::Computation,ecm_config::TomlReadMode::Stage1,ecm_config::TomlReadMode::Stage2}){
+        std::vector<ecm_config::TomlLine> lines;
+        assert(ecm_config::read_toml(cfg.u8string(),lines,mode));
+    }
+    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::App app(state,stdout);
+    app.initialize(cfg.u8string(),true);
+    assert(app.ready);
+    SYSTEMTIME time{};time.wDayOfWeek=1;time.wHour=8;time.wMinute=29;
+    const auto worker=[&](int i) -> const ecmgui::WorkerView& {return app.controller.workers().at(i-1);};
+    const auto wait=[&](const auto& done){
+        const auto deadline=GetTickCount64()+10000;
+        while(!done()&&GetTickCount64()<deadline){app.tick(time);Sleep(10);}
+        assert(done());
+    };
+    const auto acquired=[&](int i,int count){
+        for(const auto& line:worker(i).raw)if(line.find("queue_owner: acquired")!=line.npos)--count;
+        return count==0;
+    };
+    app.tick(time);
+    assert(app.start(1));
+    wait([&]{return acquired(1,1);});
+    time.wMinute=30;
+    app.set_task_watch(true);
+    app.tick(time);
+    wait([&]{return !worker(1).running()&&!worker(1).stop_requested&&acquired(2,1);});
+    assert(!app.start(1)&&worker(2).running()&&app.task_watch_enabled());
+    app.stop_worker(2);
+    wait([&]{return !worker(2).running()&&!worker(2).stop_requested;});
+    time.wHour=9;time.wMinute=0;
+    app.tick(time);
+    wait([&]{return acquired(1,2);});
+    assert(!worker(2).running());
+    const auto before=read(cfg);
+    assert(!app.save_pause_schedule({"#2,8,*"})&&read(cfg)==before);
+    assert(app.save_pause_schedule({"#1, Mon, 09:00-09:30"}));
+    const auto saved=read(cfg);
+    assert(saved.find("# preserve rule note")!=saved.npos&&saved.find("# preserve schedule note")!=saved.npos);
+    app.tick(time);
+    wait([&]{return !worker(1).running()&&!worker(1).stop_requested;});
+    app.stop_all();
+    time.wMinute=30;
+    app.tick(time);
+    assert(!worker(1).running()&&!worker(2).running()&&!app.task_watch_enabled());
+    assert(app.load_config(cfg.u8string()));
+    assert((ecm_config::toml_string_array(app.config.get("gui","pause_schedule"))==std::vector<std::string>{"#1, Mon, 09:00-09:30"}));
+
+    // Only the directory name matches. Keep the clock in the same minute for both polls.
+    const std::string rule="ecm pause foobar, #1, *, *";
+    assert(app.save_pause_schedule({rule}));
+    app.tick(time);
+    assert(app.start(1));
+    wait([&]{return acquired(1,1);});
+    const auto program=dir/"ECM Pause FooBar"/"name.exe";
+    fs::create_directories(program.parent_path());
+    fs::copy_file(fixture,program);
+    auto command=L"\""+program.wstring()+L"\" --scenario hang --lines 0";
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);
+    PROCESS_INFORMATION process{};
+    assert(CreateProcessW(program.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,
+                          nullptr,nullptr,&startup,&process));
+    CloseHandle(process.hThread);
+    wait([&]{return !worker(1).running()&&!worker(1).stop_requested;});
+    assert(!app.start(1)&&!app.task_watch_enabled());
+    assert(TerminateProcess(process.hProcess,0));
+    assert(WaitForSingleObject(process.hProcess,5000)==WAIT_OBJECT_0);
+    CloseHandle(process.hProcess);
+    wait([&]{return acquired(1,2);});
+    app.stop_all();
+    wait([&]{return !app.controller.busy()&&!worker(1).stop_requested;});
+    std::cout<<"{\"pause_schedule\":true,\"task_watch_obeys_pause\":true,\"only_scheduled_worker_resumed\":true,\"toml_round_trip\":true,\"application_path_pause_and_resume_same_minute\":true}\n";
+}
 static void worker_breaker_recovery(const fs::path& root,const fs::path& fixture){
     const auto dir=root/"breaker-recovery";fs::create_directories(dir);
     const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt",fixed=dir/"fault-fixed";
@@ -77,6 +267,10 @@ static void worker_breaker_recovery(const fs::path& root,const fs::path& fixture
     wait(ecmgui::WorkerRunState::Error);
     assert(worker().breaker_tripped()&&worker().restarts()==2&&!app.controller.busy());
     write(fixed,"ready");
+    app.set_task_watch(true);
+    app.poll_task_watch(GetTickCount64());
+    assert(worker().breaker_tripped()&&!app.controller.busy());
+    app.set_task_watch(false);
     assert(!app.start(1,ecmgui::WorkerStart::Automatic));
     {ecm_queue::OwnerLease owner(queue.u8string(),1);assert(!app.start(1));}
     {ecm_queue::OwnerLease control(queue.u8string(),1,".gui-control.lock");app.start_all();}
@@ -335,6 +529,7 @@ static void result_table_contract(const fs::path& root){
     std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true}\n";
 }
 int main(int argc,char** argv){
+    pause_schedule_rules();
     {ecmgui::WorkerView worker;worker.stage2=true;auto& status=worker.stage2_status;
      const auto apply=[&](const char* line){status.apply(ecmgui::parse_line(line).stage2);};
      apply("stage2_plan: save=f.save requested=5 available=5 completed=2 B2=1000 D=210");
@@ -619,7 +814,7 @@ int main(int argc,char** argv){
     result_table_contract(root);
     if(argc==3){
         const auto fixture=fs::absolute(argv[2]);
-        no_protocol_probe(root,fixture);worker_breaker_recovery(root,fixture);
+        no_protocol_probe(root,fixture);task_watch_dispatch(root,fixture);scheduled_worker_dispatch(root,fixture);worker_breaker_recovery(root,fixture);
         stage2_raw_times(root,fixture);stage2_paired_views(root,fixture);
     }
     std::cout<<"{\"passed\":true,\"generator_target\":2,\"stale_preview_refused\":true,\"mtime_refused\":true,\"cpu_m3_refused\":true,\"legacy_ui_preserved\":true,\"external_config_refused\":true,\"probability_snapshot\":true,\"order_mouse_selection_clipboard_readonly\":true}\n";

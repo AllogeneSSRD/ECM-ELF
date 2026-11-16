@@ -73,6 +73,22 @@
       <Item id="action.start_all" name="Start all" />
       <Item id="action.stop_safely" name="Stop safely" />
       <Item id="worker.safe_stop_requested" name="Safe stop requested; waiting for checkpoint boundary" />
+      <Item id="worker.task_watch" name="Watch tasks" />
+      <Item id="worker.task_watch_hint" name="Try starting idle workers with queued tasks when enabled, every 5 minutes, or after a queue file changes." />
+      <Item id="worker.pause_active" name="Scheduled pause" />
+      <Item id="worker.pause_blocked" name="This Worker is paused by the schedule." />
+      <Item id="worker.pause_started" name="Scheduled pause started. Affected workers will stop safely." />
+      <Item id="worker.pause_ended" name="A scheduled pause ended." />
+      <Item id="settings.pause_schedule" name="Scheduled pause" />
+      <Item id="settings.pause_hint" name="One rule per line: application, Worker, weekday, time. Example: foobar, [1,3-5], 1-5, 08:30-17:30. Use * for any application state. Leave the editor blank to disable." />
+      <Item id="settings.pause_save" name="Save pause schedule" />
+      <Item id="settings.pause_saved" name="Pause schedule saved to workflow." />
+      <Item id="settings.pause_invalid_row" name="Invalid pause schedule, entry " />
+      <Item id="settings.pause_weekday" name="Weekday" />
+      <Item id="settings.pause_time" name="Time" />
+      <Item id="settings.pause_extra_groups" name="Expected up to four groups" />
+      <Item id="settings.pause_application" name="Application" />
+      <Item id="settings.pause_config_changed" name="Workflow file changed. Reload before saving." />
       <Item id="worker.curve_time" name="Curve time" />
       <Item id="chart.sample" name="Sample" />
       <Item id="worker.waiting_curve_time" name="Waiting for a measured curve time" />

@@ -57,6 +57,33 @@ void replace_source_value(TomlFile::Line &line, const std::string &encoded) {
     line.source_value = ecm_config::trim(line.raw.substr(eq + 1));
 }
 
+void replace_string_array(TomlFile::Line& line, const std::string& encoded) {
+    const auto eq = ecm_config::toml_assignment_offset(line.raw);
+    const auto start = line.raw.find_first_not_of(" \t", eq + 1);
+    if (line.raw.find('\n') == line.raw.npos || line.raw[start] != '[') {
+        replace_source_value(line, encoded);
+        return;
+    }
+
+    // Keep comments from array rows when the editor replaces the list as a whole.
+    std::string comments;
+    for (auto pos = start; pos < line.raw.size();) {
+        const auto next = line.raw.find('\n', pos);
+        const auto row = line.raw.substr(pos, next - pos);
+        const auto comment = ecm_config::toml_comment_offset(row);
+        const auto close = ecm_config::toml_unquoted_offset(row.substr(0, comment), ']');
+        if (close != row.npos) {
+            line.raw = line.raw.substr(0, start) + encoded + line.raw.substr(pos + close + 1) + comments;
+            line.source_value = encoded;
+            return;
+        }
+        if (comment != row.npos) comments += '\n' + row.substr(comment);
+        if (next == line.raw.npos) break;
+        pos = next + 1;
+    }
+    throw std::runtime_error("unterminated TOML array");
+}
+
 } // namespace
 
 bool TomlFile::load(const std::string &path, std::string &err) {
@@ -188,7 +215,8 @@ void TomlFile::set(const std::string &section, const std::string &key,
     for (auto &l : lines_) {
         if (l.kind == Line::Kind::KeyValue && l.recognized && l.section == section && l.key == key) {
             if (l.value == nl.value) return;
-            replace_source_value(l, encoded);
+            if(std::string_view(option->type)=="string_array") replace_string_array(l, encoded);
+            else replace_source_value(l, encoded);
             l.value = nl.value;
             dirty_ = true;
             return;

@@ -1,6 +1,6 @@
 #pragma once
 
-// Shared TOML reader. The supported value types are the scalar and integer-array
+// Shared TOML reader. The supported value types are the scalar and array
 // types used by the generated ECM schema. GUI edits retain untouched source lines.
 #include "../ecm/application/configuration/generated/ecm_toml_schema.h"
 #include "io/json.h"
@@ -17,6 +17,7 @@
 #include <map>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -260,8 +261,45 @@ inline std::string toml_value(const std::string& source, char& kind) {
             result += c;
     return result;
 }
+inline std::vector<std::string> toml_string_array(const std::string& source) {
+    std::istringstream lines(source);
+    std::string line, value;
+    while (std::getline(lines, line)) {
+        value += line.substr(0, toml_comment_offset(line));
+        value += ' ';
+    }
+    value = trim(std::move(value));
+    if (value.empty() || value.front() != '[' || toml_unquoted_offset(value, ']', 1) != value.size() - 1)
+        throw std::runtime_error("expected a TOML array of strings");
+    const auto end = value.size() - 1;
+    std::vector<std::string> items;
+    for (size_t pos = 1; pos < end;) {
+        const auto comma = toml_unquoted_offset(value, ',', pos);
+        const auto stop = std::min(comma, end);
+        const auto item = trim(value.substr(pos, stop - pos));
+        if (item.empty() && stop == end) break;
+        char kind = 0;
+        auto decoded = toml_value(item, kind);
+        if (kind != 's') throw std::runtime_error("TOML array requires string items");
+        items.push_back(std::move(decoded));
+        pos = stop + 1;
+    }
+    return items;
+}
+
+inline std::string encode_toml_string_array(const std::vector<std::string>& items) {
+    std::string value = "[";
+    for (const auto& item : items) {
+        if (value.size() > 1) value += ", ";
+        value += ecm_results::json::quote(item);
+    }
+    return value + "]";
+}
+
 // Only the consuming executable enforces a key's schema type.
 inline std::string checked_toml_value(const std::string& source, const TomlOptionMeta& option) {
+    if (std::string_view(option.type) == "string_array")
+        return encode_toml_string_array(toml_string_array(source));
     char kind = 0;
     auto value = toml_value(source, kind);
     const std::string type = option.type;
@@ -652,6 +690,18 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                     if (option && option->v3_only) option = nullptr;
                 }
                 l.recognized = option != nullptr;
+                const bool string_array = option && std::string_view(option->type) == "string_array";
+                if (string_array && !l.source_value.empty() && l.source_value.front() == '[') {
+                    auto part = l.source_value;
+                    while (toml_unquoted_offset(part.substr(0, toml_comment_offset(part)), ']') == part.npos) {
+                        if (!std::getline(in, part)) throw std::runtime_error("unterminated TOML array");
+                        ++number;
+                        if (!part.empty() && part.back() == '\r') part.pop_back();
+                        l.raw += '\n' + part;
+                        l.source_value += '\n' + part;
+                    }
+                    diagnostic_value = l.source_value;
+                }
                 // GUI settings are outside the computation projection, except
                 // NumWorkers: Stage1 routing uses it when the destination queue
                 // has no worker sections. Keep its schema/type validation.
@@ -661,7 +711,7 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                 if (mode == TomlReadMode::Computation && gui_table &&
                     !(l.section == "gui" && l.key == "NumWorkers")) {
                     char kind = 0;
-                    (void)toml_value(t.substr(eq + 1), kind);
+                    if (!string_array) (void)toml_value(t.substr(eq + 1), kind);
                     if (!option && ignored_gui)
                         ignored_gui->push_back(path + ":" + std::to_string(number) + ": " +
                                                l.source_section + "." + l.source_key);
@@ -697,7 +747,7 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
             }
         } catch (const std::exception& e) {
             throw std::runtime_error(config_diagnostic(
-                path, number, l.worker_scope, l.source_key, diagnostic_value, e.what(),
+                path, l.line_number, l.worker_scope, l.source_key, diagnostic_value, e.what(),
                 option ? (version >= 2 && *option->v2_conversion ?
                     "the documented form of " + std::string(version >= 3 ? option->v3_key : option->v2_key) :
                     std::string(option->type) + " " + option->domain) :

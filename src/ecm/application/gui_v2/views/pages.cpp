@@ -450,6 +450,38 @@ bool App::save_business() {
     std::string error;if(!config.save(error)){status=error;return false;}
     const auto path=config_path;return load_config(path);
 }
+std::string App::pause_schedule_error_text(PauseScheduleError error,bool zh) const {
+    const char* groups[]{"", "worker", "settings.pause_weekday", "settings.pause_time", "settings.pause_extra_groups", "settings.pause_application"};
+    return std::string(ui::text("settings.pause_invalid_row",zh))+std::to_string(error.item)+" · "+ui::text(groups[error.group],zh);
+}
+bool App::save_pause_schedule(const std::vector<std::string>& rows) {
+    if(!ready) return false;
+    const bool zh=state.ui_language=="zh";
+    PauseSchedule schedule;
+    PauseScheduleError parse_error;
+    if(!schedule.parse(rows,parse_error)){status=pause_schedule_error_text(parse_error,zh);return false;}
+    ecmgui::FileStamp current;
+    if(!ecmgui::stamp_file(config_path,current) || !same_stamp(current,config_stamp)){
+        status=ui::text("settings.pause_config_changed",zh);
+        return false;
+    }
+    const auto value=ecm_config::encode_toml_string_array(rows);
+    if(config.get("gui","pause_schedule","[]")==value){
+        status=ui::text("settings.pause_saved",zh);
+        return true;
+    }
+    std::string error;
+    ecmgui::TomlFile disk;
+    if(!disk.load(config_path,error)){status=error;return false;}
+    disk.set("gui","pause_schedule",value);
+    if(!disk.save(error)){status=error;return false;}
+    if(config.dirty()) config.set("gui","pause_schedule",value);
+    else config=std::move(disk);
+    ecmgui::stamp_file(config_path,config_stamp);
+    install_pause_schedule(std::move(schedule),{},rows);
+    status=ui::text("settings.pause_saved",zh);
+    return true;
+}
 void App::draw_settings(bool zh) {
     if(settings_category==0){
     ImGui::SeparatorText(ui::text("settings_theme",zh));
@@ -549,6 +581,27 @@ void App::draw_settings(bool zh) {
     ImGui::SeparatorText(ecmgui_v2::ui::text("workflow",zh));ImGui::TextUnformatted("TOML");ImGui::SetNextItemWidth(-1);ImGui::InputText("##workflow-path",config_input,sizeof(config_input));
     if(ImGui::Button(ecmgui_v2::ui::text("browse_workflow",zh))){std::string path=config_input;const char filter[]="TOML\0*.toml\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,ecmgui_v2::ui::text("open_workflow",zh),std::string(filter,sizeof(filter))))std::snprintf(config_input,sizeof(config_input),"%s",path.c_str());}
     ImGui::SameLine();if(ImGui::Button(ecmgui_v2::ui::text("open_reload",zh))&&!load_config(config_input))toast(status,true);
+    if(ready){
+        ImGui::SeparatorText(ui::text("settings.pause_schedule",zh));
+        std::vector<char> buffer(std::max<std::size_t>(8192,pause_schedule_draft_.size()+1024));
+        std::copy(pause_schedule_draft_.begin(),pause_schedule_draft_.end(),buffer.begin());
+        if(ImGui::InputTextMultiline("##pause-schedule",buffer.data(),buffer.size(),{-1,ImGui::GetTextLineHeightWithSpacing()*4}))
+            pause_schedule_draft_=buffer.data();
+        ImGui::TextWrapped("%s",ui::text("settings.pause_hint",zh));
+        if(pause_schedule_error_.group!=PauseScheduleError::None)
+            ImGui::TextWrapped("%s",pause_schedule_error_text(pause_schedule_error_,zh).c_str());
+        if(ImGui::Button(ui::text("settings.pause_save",zh))){
+            std::istringstream input(pause_schedule_draft_);
+            std::vector<std::string> rows;
+            std::string row;
+            while(std::getline(input,row)){
+                row=ecm_config::trim(std::move(row));
+                if(!row.empty()) rows.push_back(std::move(row));
+            }
+            const bool saved=save_pause_schedule(rows);
+            toast(status,!saved);
+        }
+    }
     if(ImGui::CollapsingHeader(ecmgui_v2::ui::text("worker_settings",zh),ImGuiTreeNodeFlags_DefaultOpen)){
     ImGui::BeginDisabled(controller.busy()||config.dirty());
     ImGui::TextWrapped("%s",ui::text("stage1_executable",zh));ImGui::SetNextItemWidth(-1);ImGui::InputText("##stage1-path",stage1_input,sizeof(stage1_input));

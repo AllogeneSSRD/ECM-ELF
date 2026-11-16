@@ -4,6 +4,7 @@
 #include "gpu_details.h"
 #include "gpu_clocks.h"
 #include "gpu_clock_automation.h"
+#include "pause_schedule.h"
 #include "ui/widgets.h"
 #include "ui/chart.h"
 #include "ui/compact_form.h"
@@ -33,7 +34,14 @@ public:
     void configure_workers();
     bool start(int worker,ecmgui::WorkerStart origin=ecmgui::WorkerStart::Manual);
     void start_all();
+    void stop_all();
+    void stop_worker(int worker);
+    void set_task_watch(bool enabled);
+    bool task_watch_enabled() const { return task_watch_enabled_; }
+    void poll_task_watch(unsigned long long now);
     void tick();
+    void tick(const SYSTEMTIME& local_time);
+    bool save_pause_schedule(const std::vector<std::string>& rows);
     bool request_close();
     void begin_exit();
     bool done() const { return controller.quit_requested(); }
@@ -223,6 +231,21 @@ public:
 private:
     FILE* log_;
     std::map<int,std::unique_ptr<ecm_queue::OwnerLease>> leases_;
+    bool task_watch_enabled_=false;
+    unsigned long long task_watch_next_poll_=0,task_watch_next_scan_=0;
+    std::map<std::string,std::pair<std::filesystem::file_time_type,std::uintmax_t>> task_watch_files_;
+    std::set<int> task_watch_paused_workers_;
+    PauseSchedule pause_schedule_;
+    PauseScheduleError pause_schedule_error_;
+    std::string pause_schedule_draft_;
+    int last_pause_minute_=-1;
+    unsigned long long next_pause_application_poll_=0;
+    std::vector<std::wstring> pause_application_paths_;
+    std::set<int> scheduled_paused_, scheduled_resume_, scheduled_autostart_;
+    std::string pause_schedule_error_text(PauseScheduleError error, bool zh) const;
+    void install_pause_schedule(PauseSchedule schedule, PauseScheduleError error, const std::vector<std::string>& rows);
+    void update_pause_schedule(const SYSTEMTIME& local_time);
+    void resume_scheduled_workers();
     bool layout_ready_ = false, layout_wide_ = false;
     bool nav_restore_width_ = false;
     float navigation_width(float scale) const;

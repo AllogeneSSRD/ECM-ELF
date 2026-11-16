@@ -2495,6 +2495,20 @@
     },
     {
       "owner": "gui",
+      "key": "pause_schedule",
+      "field": "pause_schedule",
+      "type": "string_array",
+      "default": "[]",
+      "domain": "[\"application, Worker, weekday, time\", ...]",
+      "fx": "GUI_v2_pause_schedule",
+      "parser": "gui",
+      "description": [
+        "GUI v2 local-time pause rules. Each item has application, Worker, weekday and time groups. Example: [\"foobar, [1,3-5], Mon-Fri, 08:30-17:30\"]. Application names match a running program's path substring regardless of case. Use * for time-only rules, or an empty array to disable scheduling.",
+        "GUI v2 暂停规则。每项依次填写应用、Worker、星期、时间。例如 [\"foobar, [1,3-5], Mon-Fri, 08:30-17:30\"]。应用按运行程序路径的子串匹配，忽略大小写。仅按时间暂停时使用 *。空数组关闭计划。"
+      ]
+    },
+    {
+      "owner": "gui",
       "key": "results_last_copy_utc",
       "field": "results_last_copy_utc",
       "type": "string",
