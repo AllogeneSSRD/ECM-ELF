@@ -247,62 +247,107 @@ inline Setup construct(mpz_t d, mpz_t px, mpz_t py, mpz_t a24, mpz_t factor, uin
     mpz_mul_ui(num.v, T.v, 2);
     mpz_sub_ui(num.v, num.v, 1);
     sqr(den.v, T.v);
-    rc = inverse(inv.v, den.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
-    mul(d, num.v, inv.v);
-
-    // For a = 1 and odd n, nonsingularity requires d*(1-d) to be a unit.
-    mpz_ui_sub(den.v, 1, d);
-    mul(T.v, d, den.v);
-    mpz_gcd(factor, T.v, n);
-    if (mpz_cmp_ui(factor, 1) != 0)
-        return mpz_cmp(factor, n) < 0 ? Setup::Factor : Setup::Degenerate;
-
-    // Birational Montgomery parameter A = 2*(1+d)/(1-d).
-    // Our xDBL uses a24 = (A+2)/4 = 1/(1-d).
-    // Prime95 stores the reciprocal Ad4 = 4/(A+2) = 1-d instead.
-    rc = inverse(a24, den.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
 
     // Edwards starting x = h*(4*beta-3)/(6*beta-5).
-    mpz_mul_ui(num.v, beta.v, 4);
-    mpz_sub_ui(num.v, num.v, 3);
-    mul(num.v, num.v, h.v);
-    mpz_mul_ui(den.v, beta.v, 6);
-    mpz_sub_ui(den.v, den.v, 5);
-    rc = inverse(inv.v, den.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
-    mul(px, num.v, inv.v);
+    const auto x_numerator = [&] {
+        mpz_mul_ui(num.v, beta.v, 4);
+        mpz_sub_ui(num.v, num.v, 3);
+        mul(num.v, num.v, h.v);
+    };
+    const auto x_denominator = [&](mpz_ptr r) {
+        mpz_mul_ui(r, beta.v, 6);
+        mpz_sub_ui(r, r, 5);
+    };
 
     // Edwards starting y = h*(t^2 + 50*t - 2*s^3 + 27*s^2 - 104)
     //                      / ((t + 3*s - 2)*(t + s + 16)).
-    // Assemble the numerator in num; T keeps s^2 until 27*s^2 is added.
-    sqr(num.v, t.v);                // t^2
-    mpz_mul_ui(T.v, t.v, 50);
-    mpz_add(num.v, num.v, T.v);     // t^2 + 50*t
-    sqr(T.v, s.v);
-    mul(U.v, T.v, s.v);
-    mpz_mul_ui(U.v, U.v, 2);
-    mpz_sub(num.v, num.v, U.v);     // t^2 + 50*t - 2*s^3
-    mpz_mul_ui(T.v, T.v, 27);
-    mpz_add(num.v, num.v, T.v);     // t^2 + 50*t - 2*s^3 + 27*s^2
-    mpz_sub_ui(num.v, num.v, 104);
-    mul(num.v, num.v, h.v);
+    const auto y_numerator = [&] {
+        sqr(num.v, t.v);
+        mpz_mul_ui(T.v, t.v, 50);
+        mpz_add(num.v, num.v, T.v);
+        sqr(T.v, s.v);
+        mul(U.v, T.v, s.v);
+        mpz_mul_ui(U.v, U.v, 2);
+        mpz_sub(num.v, num.v, U.v);
+        mpz_mul_ui(T.v, T.v, 27);
+        mpz_add(num.v, num.v, T.v);
+        mpz_sub_ui(num.v, num.v, 104);
+        mul(num.v, num.v, h.v);
+    };
+    const auto y_denominator = [&](mpz_ptr r) {
+        mpz_mul_ui(r, s.v, 3);
+        mpz_add(r, r, t.v);
+        mpz_sub_ui(r, r, 2);
+        mpz_add(T.v, t.v, s.v);
+        mpz_add_ui(T.v, T.v, 16);
+        mul(r, r, T.v);
+    };
 
-    // Denominator = (t + 3*s - 2)*(t + s + 16).
-    mpz_mul_ui(den.v, s.v, 3);
-    mpz_add(den.v, den.v, t.v);
-    mpz_sub_ui(den.v, den.v, 2);
-    mpz_add(T.v, t.v, s.v);
-    mpz_add_ui(T.v, T.v, 16);
-    mul(den.v, den.v, T.v);
-    rc = inverse(inv.v, den.v, n, factor);
-    if (rc != Setup::Ready)
-        return rc;
-    mul(py, num.v, inv.v);
+    bool mapped = false;
+    if (mersenne) {
+        // With d = num/den, a24 = den/(den-num). The product also includes num
+        // to check that d is a unit; den-num checks that 1-d is a unit.
+        Integer a24_den, x_den, y_den;
+        mpz_sub(a24_den.v, den.v, num.v);
+        x_denominator(x_den.v);
+        y_denominator(y_den.v);
+        const std::array<mpz_srcptr, 4> divisors{den.v, a24_den.v, x_den.v, y_den.v};
+        std::array<Integer, divisors.size()> products;
+        mpz_set(products.front().v, divisors.front());
+        for (size_t i = 1; i < divisors.size(); ++i)
+            mul(products[i].v, products[i - 1].v, divisors[i]);
+        mul(T.v, products.back().v, num.v);
+        if (mpz_invert(inv.v, T.v, n)) {
+            // Cancel num, then recover each reciprocal using the prefix products.
+            mul(inv.v, inv.v, num.v);
+            for (size_t i = divisors.size() - 1; i != 0; --i) {
+                mul(products[i].v, inv.v, products[i - 1].v);
+                mul(inv.v, inv.v, divisors[i]);
+            }
+            mul(d, num.v, inv.v);
+            mul(a24, den.v, products[1].v);
+            x_numerator();
+            mul(px, num.v, products[2].v);
+            y_numerator();
+            mul(py, num.v, products[3].v);
+            mapped = true;
+        }
+    }
+
+    if (!mapped) {
+        // Check nonunit products in the original order to preserve the result
+        // and the exact reported gcd, including when different divisors fail.
+        rc = inverse(inv.v, den.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+        mul(d, num.v, inv.v);
+
+        // For a = 1 and odd n, nonsingularity requires d*(1-d) to be a unit.
+        mpz_ui_sub(den.v, 1, d);
+        mul(T.v, d, den.v);
+        mpz_gcd(factor, T.v, n);
+        if (mpz_cmp_ui(factor, 1) != 0)
+            return mpz_cmp(factor, n) < 0 ? Setup::Factor : Setup::Degenerate;
+
+        // xDBL uses a24 = (A+2)/4 = 1/(1-d).
+        rc = inverse(a24, den.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+
+        x_numerator();
+        x_denominator(den.v);
+        rc = inverse(inv.v, den.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+        mul(px, num.v, inv.v);
+
+        y_numerator();
+        y_denominator(den.v);
+        rc = inverse(inv.v, den.v, n, factor);
+        if (rc != Setup::Ready)
+            return rc;
+        mul(py, num.v, inv.v);
+    }
 
     // Verify px^2 + py^2 - 1 - d*px^2*py^2 = 0 (mod n).
     sqr(U.v, px);

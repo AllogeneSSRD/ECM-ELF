@@ -20,6 +20,7 @@ from suyama_mont_ref import stage1
 
 DEFERRED_PACK = 1 << 6
 EDWARDS_2XY_FREQUENCY = 1 << 15
+EDWARDS_2XY_INVERSE_INPUT = 1 << 16
 
 
 def ntt_executions(log):
@@ -165,6 +166,29 @@ def main():
         assert not (work / "out.save").exists()
         print("PASS Edwards weighted auto length, bpw cap, 2XY fusion bound, and forced unsafe length rejection",
               flush=True)
+
+        points_by_mode = {}
+        p, b1, sigma, curves = 8191, 32, 26, 30
+        for length, graph_bits, expects_direct in ((1024, 16, False), (512, 16, True), (512, 0, True)):
+            work, cmd = fixture(f"edwards_inverse_input_{length}_{graph_bits}", model="ed",
+                                extra='naf_w = 8\nntt_convolution = "weighted"\n'
+                                      f'ntt_length = {length}\nntt_window = {graph_bits}\n')
+            call, data = direct(work, cmd, p, b1, sigma, curves)
+            log = run(work, call, text=data)
+            [execution] = ntt_executions(log)
+            assert int(execution["ntt_graph_bits"]) == graph_bits, log
+            [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+            assert int(dataflow) & EDWARDS_2XY_FREQUENCY, log
+            assert bool(int(dataflow) & EDWARDS_2XY_INVERSE_INPUT) == expects_direct, log
+            points = saved_points(work / "out.save", p, b1, True)
+            assert set(points) == set(range(sigma, sigma + curves))
+            points_by_mode[length, graph_bits] = points
+        graph_points = points_by_mode[512, 16]
+        assert graph_points == points_by_mode[512, 0] == points_by_mode[1024, 16]
+        n = (1 << p) - 1
+        _, x, z = edwards_stage1(n, sigma, b1)
+        assert graph_points[sigma] == x * pow(z, -1, n) % n
+        print("PASS Edwards 2XY inverse input dispatch, Graph/direct and integer endpoint", flush=True)
 
         default_points = None
         for mode, flags, length, upper in (

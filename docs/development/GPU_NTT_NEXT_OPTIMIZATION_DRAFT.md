@@ -23,7 +23,7 @@
 
 ## 2. 让 2XY 和 carry 少搬中间数据
 
-- **继续减少频域组合的读写。** 0.63.15 的原生 Edwards 先逐点生成 $E,F,G,H$，再各做一次逆变换。零列仍需 7 次前向、7 次逆向。可以对照在逆向 warp 读入时直接计算四路的候选，考察重复域乘的代价。还可先逆变换 $J=2(C-Z^2)$，归约 $F$ 时读取并加上已逆变换的 $G$。后一个方案增加一次系数读取，逐点域乘从直接计算四路的 7 次降为 5 次。 [频域组合](../architecture/NTT.md#edwards-2xy-第一层频域融合) · [双卡对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)
+- **继续减少宽档频域组合的读写。** 256／512 点已使用逆向 warp 读入时的直接计算。5120／16384 点的组合 kernel 仍可试共享平方结果。一个候选是先逆变换 $J=2(C-Z^2)$，归约 $F$ 时读取并加上已逆变换的 $G$。相对逐 CTA 重算四个坐标的 8 次域乘，直接逆变换 $E,J,G,H$ 共用 6 次；与独立组合的 4 次相比仍多 2 次，但可能省一次 kernel 提交。先对照新增系数读取与同步成本。 [频域组合](../architecture/NTT.md#edwards-2xy-第一层频域融合) · [双卡对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)
 - **测试 carry 与下一次前向首层融合。** 宽位已有分段进位及 pack 摘要解析。先选只被下一层变换消费的槽，尝试避免规范值全局写回再读入。若共享内存驻留或同步抵消收益，则保留旧路径。完成点、检查点及仍被整数运算消费的坐标使用规范 limb。 [分段进位与 pack](../architecture/NTT.md#stage1-分段进位与-pack-融合) · [原生 Edwards 去权缓存](../architecture/NTT.md#原生-edwards-的共享去权缓存)
 - **保留有明确消费者的频谱。** 固定点字典和 x-only 的固定操作数已经复用频谱。可进一步尝试复用相同的规范输入，或在归约完成后顺带生成下一次前向的首段。去权、进位和模数折叠会改变 digit，未经归约的乘积频谱继续串乘需要另证系数界。分别计纯倍点列、非零列和按真实 NAF 序列运行的整批时间。 [Stage1 点公式的数据流](../performance/STAGE1_MERSENNE_NTT.md#stage1-点公式的数据流)
 
@@ -107,3 +107,7 @@ Nsight Systems 2026.1.3 每格另采一条，使用 CUDA Graph 节点与事件�
 ## 第四轮 Edwards 2XY 第一层频域组合
 
 0.63.15 使用全满 digit 卷积的频谱做模零偏置。在第一批逆向前逐点写出 $E,F,G,H$，继续用非负归约。两卡在原长度下对照 0.63.14，覆盖 256–16384 点及 1、8、30、128 曲线。另验证 $4U/q$ 在 1 两侧和 M65521 的同长度回退。实测覆盖直接提交、Graph、断点续算和 Stage2 交接。证据保存在 `data/experiments/stage1_ntt_edwards_2xy_frequency_06315/`。 [正系数偏置](../architecture/NTT.md#edwards-2xy-第一层频域融合) · [双卡结果](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)
+
+## 第五轮 短逆变换读入与主机求逆
+
+以 0.63.17 的 Stage1 路径为基础，比较先写四路频谱和由逆向 CTA 自行计算四路。原型支持强制在宽档运行，用两卡样本区分一次提交的节省和重复域乘的代价。256／512 点的测试收益在两卡同向，默认覆盖同系数界的单 tile 计划。5120／16384 点的多曲线结果在 −0.94% 至 0.87% 之间。主机构造分开测量，合并同一曲线的四项分母可减少参数映射阶段的逆元计算。原始结果保存在 `data/experiments/stage1_next_optimization/`。[短逆向实测](../performance/STAGE1_MERSENNE_NTT.md#逆变换读入时组合倍点频谱) · [构造实测](../performance/STAGE1_MERSENNE_NTT.md#参数映射的批量求逆)

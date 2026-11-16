@@ -102,8 +102,10 @@ struct ProductInputs {
     U* cached_e;
 };
 
+enum class InverseInput { Products, CombinedSpectrum, Edwards2XY };
+
 template<bool WarpTail, bool MultiplyAdd = false, bool Loose = false,
-         bool WarpInput = false, bool StoreLastRadix4 = false, bool Precomputed = false>
+         bool WarpInput = false, bool StoreLastRadix4 = false, InverseInput Input = InverseInput::Products>
 __global__ __launch_bounds__(FUSE_TILE_THREADS, WarpTail ? 3 : 1)
 void inverse_product_tile(U* out,
                           // Keep dynamically indexed pointers in grid parameter memory.
@@ -129,9 +131,22 @@ void inverse_product_tile(U* out,
         auto* destination = tile == 6 ? output : sm;
         for (unsigned i = (threadIdx.x >> 5) * 64 + lane; i < width; i += 2 * blockDim.x) {
             const unsigned pair = i + lane;
-            auto values = Precomputed ? *reinterpret_cast<const ulonglong2*>(left + pair)
-                : stage1_ntt_product_pair<MultiplyAdd, Loose>(products, left + pair, right + pair,
+            ulonglong2 values;
+            if constexpr (Input == InverseInput::Edwards2XY) {
+                const auto offset = start + pair;
+                const auto bias_index = tile_start + pair;
+                switch (op) {
+                    case 0: values = stage1_ntt_edwards_double_pair<0>(products, offset, bias_index); break;
+                    case 1: values = stage1_ntt_edwards_double_pair<1>(products, offset, bias_index); break;
+                    case 2: values = stage1_ntt_edwards_double_pair<2>(products, offset, bias_index); break;
+                    default: values = stage1_ntt_edwards_double_pair<3>(products, offset, bias_index); break;
+                }
+            } else if constexpr (Input == InverseInput::CombinedSpectrum) {
+                values = *reinterpret_cast<const ulonglong2*>(left + pair);
+            } else {
+                values = stage1_ntt_product_pair<MultiplyAdd, Loose>(products, left + pair, right + pair,
                     start + pair, tile_start + pair, last, scale);
+            }
             tile_warp6_pair<true>(values.x, values.y, twiddles);
             destination[i] = values.x;
             destination[i + 32] = values.y;
@@ -385,7 +400,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool cache_edwards_carry = s.length == 5120 ? p >= 106497 && curves >= 8 : wide_segments;
     if (naf && cache_edwards_carry)
         defaults |= CachedFusedWeightedCarry;
-    if (naf) defaults |= Edwards2XYFrequency;
+    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     const bool pfa = mixed && (requested & PfaRadix5);
@@ -485,10 +500,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool frequency_double = naf && inverse_warp_input && (requested & Edwards2XYFrequency) &&
         unsigned_bound && *unsigned_bound <= (GL_P - 1) / 4 &&
         modulus_bytes <= result.budget_bytes - result.owned_bytes;
+    const bool direct_frequency = frequency_double && (requested & Edwards2XYInverseInput) &&
+        ((control && control->experimental_dataflow.has_value()) ||
+         (!mixed && ctx.nms == 0 && s.length >= 256 && s.length <= 512));
     if (frequency_double) {
         result.owned_bytes += modulus_bytes;
         result.dataflow |= Edwards2XYFrequency;
     }
+    if (direct_frequency) result.dataflow |= Edwards2XYInverseInput;
     // The shared tile still wins for isolated 16-point and linear 32-point work.
     const bool short_shape = curves > 1 || s.length <= 8 ||
                              (s.length == 32 && options.weighted) ||
@@ -589,8 +608,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         else if (loose) configure_tile(std::false_type{},std::true_type{});
         else if (fma) configure_tile(std::true_type{},std::false_type{});
     }
-    const auto frequency_inverse = store_last_inverse ? inverse_product_tile<true,false,false,true,true,true>
-                                                     : inverse_product_tile<true,false,false,true,false,true>;
+    const auto frequency_kernel = [&](auto input) {
+        constexpr auto kind = decltype(input)::value;
+        return store_last_inverse ? inverse_product_tile<true,false,false,true,true,kind>
+                                  : inverse_product_tile<true,false,false,true,false,kind>;
+    };
+    const auto frequency_inverse = direct_frequency
+        ? frequency_kernel(std::integral_constant<InverseInput, InverseInput::Edwards2XY>{})
+        : frequency_kernel(std::integral_constant<InverseInput, InverseInput::CombinedSpectrum>{});
     if (frequency_double) {
         cudaFuncSetAttribute(frequency_inverse, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
         CK(cudaFuncSetAttribute(frequency_inverse, cudaFuncAttributeMaxDynamicSharedMemorySize, int(inverse_smem)));
@@ -737,7 +762,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                  unsigned pending_inputs = 0, unsigned pending_outputs = 0, unsigned fixed_offset = 0,
                  bool combine_double = false) {
         forward_inputs(freq.data, inputs, in, pending_inputs);
-        if (combine_double)
+        if (combine_double && !direct_frequency)
             stage1_ntt_edwards_double_spectra<<<grid(1),threads,0,q>>>(freq.data,modulus.data,s.length);
         const size_t plane = size_t(curves) * s.length;
         const auto spectrum = [&](unsigned id) {
@@ -748,6 +773,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             products.left[op] = spectrum(a.x[op]);
             products.right[op] = spectrum(b.x[op]);
         }
+        if (combine_double && direct_frequency) products.modulus = modulus.data;
         if (add_bb || build_e) products.bb = spectrum(3);
         if (build_e) {
             products.aa = spectrum(2);

@@ -176,6 +176,37 @@ __global__ void stage1_ntt_edwards_double_spectra(unsigned long long* spectra,
     x[3 * plane] = gl_add_dev(aa, gl_sub_dev(offset, bb));            // H
 }
 
+template<unsigned Coordinate>
+__device__ __forceinline__ unsigned long long stage1_ntt_edwards_double_coordinate(
+    unsigned long long x, unsigned long long y, unsigned long long z, unsigned long long bias)
+{
+    if constexpr (Coordinate == 0) {
+        const auto xy = gl_mul(x, y);
+        return gl_add_dev(xy, xy);  // E
+    } else if constexpr (Coordinate == 1) {
+        const auto g = gl_add_dev(gl_mul(x, x), gl_mul(y, y));
+        const auto j = gl_sub_dev(bias, gl_mul(z, z));
+        return gl_add_dev(g, gl_add_dev(j, j));  // F
+    } else if constexpr (Coordinate == 2) {
+        return gl_add_dev(gl_mul(x, x), gl_mul(y, y));  // G
+    } else {
+        return gl_add_dev(gl_mul(x, x), gl_sub_dev(bias, gl_mul(y, y)));  // H
+    }
+}
+
+template<unsigned Coordinate, class Inputs>
+__device__ __forceinline__ ulonglong2 stage1_ntt_edwards_double_pair(const Inputs& spectra,
+    size_t offset, unsigned bias_index)
+{
+    const auto load = [](const unsigned long long* ptr) { return *reinterpret_cast<const ulonglong2*>(ptr); };
+    const auto x = load(spectra.left[0] + offset), y = load(spectra.left[1] + offset);
+    ulonglong2 z{}, bias{};
+    if constexpr (Coordinate == 1) z = load(spectra.left[2] + offset);
+    if constexpr (Coordinate == 1 || Coordinate == 3) bias = load(spectra.modulus + bias_index);
+    return make_ulonglong2(stage1_ntt_edwards_double_coordinate<Coordinate>(x.x, y.x, z.x, bias.x),
+                           stage1_ntt_edwards_double_coordinate<Coordinate>(x.y, y.y, z.y, bias.y));
+}
+
 // The inverse warp consumes adjacent even/odd coefficients per lane. All
 // spectrum rows and pair offsets are 16-byte aligned for this path.
 template<bool MultiplyAdd, bool Loose, class Inputs>
