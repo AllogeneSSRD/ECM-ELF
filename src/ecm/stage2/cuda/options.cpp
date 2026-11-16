@@ -387,6 +387,12 @@ int ecm_cuda_stage2_check_configuration()
     if(const char *v=std::getenv("NTT_BABY_COOP"))if(std::strcmp(v,"0") && std::strcmp(v,"32")) {
         std::fprintf(stderr,"NTT_BABY_COOP must be 0 or 32\n");return 2;
     }
+    if(const char *v=std::getenv("NTT_BABY_WHEEL"))if(std::strcmp(v,"0") && std::strcmp(v,"1")) {
+        std::fprintf(stderr,"NTT_BABY_WHEEL must be 0 or 1\n");return 2;
+    }
+    if(const char *v=std::getenv("NTT_STAGE2_SHORT_CONV"))if(std::strcmp(v,"0") && std::strcmp(v,"1") && std::strcmp(v,"2")) {
+        std::fprintf(stderr,"NTT_STAGE2_SHORT_CONV must be 0, 1 or 2\n");return 2;
+    }
     if(const char *v=std::getenv("NTT_GIANT_COOP"))if(std::strcmp(v,"0") && std::strcmp(v,"16") && std::strcmp(v,"32")) {
         std::fprintf(stderr,"NTT_GIANT_COOP must be 0, 16 or 32\n");return 2;
     }

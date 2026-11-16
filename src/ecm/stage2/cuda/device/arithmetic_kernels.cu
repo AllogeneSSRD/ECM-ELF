@@ -5,11 +5,20 @@
 #include "coefficient_ops.cuh"
 #include "pack.cuh"
 #include "baby_giant.cuh"
+#include "baby_wheel.cuh"
 #include "plain_scale.cuh"
 
 cudaError_t ecm_stage2_copy_constants(const void *source,size_t bytes,size_t offset,cudaMemcpyKind kind) {
     return cudaMemcpyToSymbol(g_s2g_device_constants,source,bytes,offset,kind);
 }
+
+template void ecm_launch_s2g_baby_wheel_scalar<256>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
+template void ecm_launch_s2g_baby_wheel_scalar<128>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
+template void ecm_launch_s2g_baby_wheel_scalar<64>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
+template void ecm_launch_s2g_baby_wheel_scalar<32>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
+template void ecm_launch_s2g_baby_wheel_scalar<16>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
+template void ecm_launch_s2g_baby_wheel_scalar<8>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
+template void ecm_launch_s2g_baby_wheel_scalar<4>(EcmCudaLaunch, int, const unsigned long long*, unsigned long long, const unsigned long long*, const ecm_stage2::baby_wheel::Segment*, unsigned, const unsigned*, const unsigned long long*, const unsigned long long*, unsigned long long*, unsigned long long*, unsigned long long*);
 
 template void ecm_launch_s2g_ladder_kernel<256,true>(EcmCudaLaunch, const unsigned long long *n, unsigned long long ninv, int nw, const unsigned long long *qx, const unsigned long long *qz, const unsigned long long *a24, const unsigned long long *mone, const unsigned long long *js, int npts, unsigned long long *out_x, unsigned long long *out_z, bool normal_output);
 template void ecm_launch_s2g_ladder_kernel<128,true>(EcmCudaLaunch, const unsigned long long *n, unsigned long long ninv, int nw, const unsigned long long *qx, const unsigned long long *qz, const unsigned long long *a24, const unsigned long long *mone, const unsigned long long *js, int npts, unsigned long long *out_x, unsigned long long *out_z, bool normal_output);

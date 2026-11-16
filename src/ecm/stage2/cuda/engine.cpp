@@ -371,7 +371,7 @@ int run_real(
         DeviceBabyStats bs;
         const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
         const bool baby_used=baby_requested && device_baby_generate(C,L.target(),baby_j,leaf,
-            reuse_small?&small_cache:nullptr,baby_deg,noninv,bs);
+            reuse_small?&small_cache:nullptr,baby_deg,noninv,bs,false,D,planning.baby_wheel_device);
         actual_baby_coop=baby_used?bs.cooperative_tpi:0;
         if(baby_used && bs.bad_groups)baby_nonunit_seen=true;
         if(!baby_used)ladder_points(C,baby_j,bx,bz);

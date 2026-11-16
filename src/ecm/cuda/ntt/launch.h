@@ -25,6 +25,12 @@ template<int M>
 void ecm_launch_outer_inv_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int s0, const unsigned long long *tq, const unsigned long long *dw, unsigned long long grp_per_blk, unsigned long long stride);
 template<bool INVERSE,bool WARP_TAIL=false>
 void ecm_launch_tile_kernel(EcmCudaLaunch cfg, unsigned long long *a, const unsigned long long *b, unsigned long long n, int k, int t, const unsigned long long *tbl, unsigned long long n_scale, unsigned long long stride, bool shift_scale=false);
+template<bool ShiftScale>
+void ecm_launch_ntt_inverse_tile_from_pairs(EcmCudaLaunch, unsigned long long*, const unsigned long long*,
+    unsigned long long, int, int, const unsigned long long*, unsigned long long);
+template<int T, bool ShiftScale, bool Packed>
+void ecm_launch_ntt_short_convolution(EcmCudaLaunch, unsigned long long*, unsigned long long*,
+    const unsigned long long*, const unsigned long long*, unsigned long long);
 void ecm_launch_gl_mul_test_kernel(EcmCudaLaunch cfg, const unsigned long long *x, const unsigned long long *y, unsigned long long *out, int n);
 void ecm_launch_gl_twiddle_test_kernel(EcmCudaLaunch cfg, unsigned long long *out, unsigned long long n, unsigned long long omega);
 void ecm_launch_dft_direct_kernel(EcmCudaLaunch cfg, const unsigned long long *x, unsigned long long *out, unsigned long long n, unsigned long long omega);

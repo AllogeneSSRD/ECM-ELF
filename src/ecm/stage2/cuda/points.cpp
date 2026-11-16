@@ -8,6 +8,8 @@
 #include "point_coop_plan.h"
 #include "point_coop_ladder_launch.h"
 #include "stage2_baby_launch.h"
+#include "stage2_baby_wheel_plan.h"
+#include "ecm/integer.h"
 
 // Classify the arithmetic ring, never the smaller GCD target of a carrier.
 static int point_mersenne_bits(const LadderCtx& C) {
@@ -653,6 +655,167 @@ done:
     return rc;
 }
 
+namespace {
+struct BabyDeviceLadder {
+    const LadderCtx& C;
+    BabyBuffer& n;
+    BabyBuffer& qx;
+    BabyBuffer& qz;
+    BabyBuffer& a24;
+    BabyBuffer& one;
+    bool coop;
+    int mersenne_bits;
+
+    void launch(const unsigned long long* indices,size_t count,
+                unsigned long long* x,unsigned long long* z) const {
+        const int w=(int)C.nw;
+        if(!coop) {
+            S2G_DISPATCH(w,s2g_launch_ladder,w,(int)count,n.words(),C.ninv,qx.words(),qz.words(),
+                         a24.words(),one.words(),indices,x,z,false);
+        } else {
+            for(size_t first=0;first<count;first+=(size_t)g_ladder_cap) {
+                const int points=(int)std::min(count-first,(size_t)g_ladder_cap);
+                const unsigned grid=(unsigned)(((size_t)points+1)/2);
+                ecm_launch_s2g_coop_ladder_kernel(EcmCudaLaunch{grid,64},n.words(),C.ninv,w,
+                    qx.words(),qz.words(),a24.words(),one.words(),indices+first,points,mersenne_bits,
+                    false,x+first*C.nw,z+first*C.nw);
+                CK(cudaGetLastError());
+            }
+        }
+    }
+};
+
+unsigned baby_wheel_step(unsigned long long d) {
+    constexpr unsigned max_step=30030;
+    if(const auto override_step=fuse_env_ull("NTT_BABY_WHEEL_STEP",0)) {
+        return override_step<=max_step && override_step%2==0 && d%override_step==0
+            ? (unsigned)override_step : 0;
+    }
+    for(unsigned step:{2310u,210u,30u,6u,2u})
+        if(d%step==0 && d/(2*step)>=(d<1000 ? 3u : 64u))return step;
+    return 0;
+}
+
+bool try_baby_wheel(const BabyDeviceLadder& ladder,const mpz_t N,
+    const std::vector<unsigned long long>& indices,unsigned long long d,
+    size_t baseline_bytes,size_t available_extra,unsigned long long* out_x,unsigned long long* out_z,
+    bool automatic) {
+    using namespace ecm_stage2::baby_wheel;
+    const size_t w=ladder.C.nw,points=indices.size();
+    size_t replay_segments=0,replay_points=0;
+    const auto decline=[&](const char* reason) {
+        stage2_log::print(stage2_log::debug,
+            "baby_wheel: requested=1 enabled=0 reason=%s replayed_segments=%llu replayed_points=%llu\n",
+            reason,(unsigned long long)replay_segments,(unsigned long long)replay_points);
+        return false;
+    };
+    const auto step=baby_wheel_step(d);
+    const auto walk=fuse_env_ull("NTT_BABY_WHEEL_WALK",32);
+    if(!step || walk<2 || walk>64 || points>~0u/walk ||
+       indices.front()==0 || indices.back()>d/2 || !std::is_sorted(indices.begin(),indices.end()) ||
+       std::adjacent_find(indices.begin(),indices.end())!=indices.end())return decline("shape");
+    const double start=now_s();
+    const auto plan=make_plan(indices,step,(unsigned)walk);
+    const size_t seed_count=plan.seeds.size(),segments=plan.segments.size();
+    if(automatic && seed_count>points/4)return decline("seed_ratio");
+    const size_t scratch=seed_count*(sizeof(Word)+2*w*sizeof(Word))+
+        segments*(sizeof(Segment)+w*sizeof(Word))+plan.slots.size()*sizeof(unsigned);
+    if(scratch>available_extra)return decline("budget");
+    if(fuse_env_ull("NTT_BABY_WHEEL_ALLOC_FAIL",0))return decline("allocation");
+    const auto common_nonunit=[&] {
+        replay_segments=segments;
+        replay_points=points;
+        return decline("common_nonunit");
+    };
+    ecm_edwards::Integer value,gcd,one;
+    const auto is_unit=[&] {
+        mpz_gcd(gcd.v,value.v,N);
+        return mpz_cmp_ui(gcd.v,1)==0;
+    };
+    const auto packed_unit=[&](const Word* words) {
+        words_to_mpz(value.v,words,w);
+        return is_unit();
+    };
+    // Every tested value is a Montgomery image, and the radix is a unit modulo N.
+    if(!packed_unit(ladder.C.hqx.data()) || !packed_unit(ladder.C.hqz.data()) ||
+       !packed_unit(ladder.C.ha24.data()))return common_nonunit();
+    words_to_mpz(one.v,ladder.C.hmone.data(),w);
+    mpz_sub(value.v,value.v,one.v);
+    if(!is_unit())return common_nonunit();
+
+    BabyBuffer scalar,slot,segment,sx,sz,guard;
+    if(!scalar.allocate(seed_count*sizeof(Word)) || !slot.allocate(plan.slots.size()*sizeof(unsigned)) ||
+       !segment.allocate(segments*sizeof(Segment)) || !sx.allocate(seed_count*w*sizeof(Word)) ||
+       !sz.allocate(seed_count*w*sizeof(Word)) || !guard.allocate(segments*w*sizeof(Word)))
+        return decline("allocation");
+    const auto upload=[](void* dst,const void* src,size_t bytes) {
+        CK(stage2_wait::copy(dst,src,bytes,cudaMemcpyHostToDevice));
+    };
+    const auto read=[](void* dst,const void* src,size_t bytes) {
+        CK(stage2_wait::copy(dst,src,bytes,cudaMemcpyDeviceToHost));
+    };
+    upload(scalar.ptr,plan.seeds.data(),seed_count*sizeof(Word));
+    ladder.launch(scalar.words(),seed_count,sx.words(),sz.words());
+    std::vector<Word> step_coordinates(2*w);
+    read(step_coordinates.data(),sx.ptr,w*sizeof(Word));
+    read(step_coordinates.data()+w,sz.ptr,w*sizeof(Word));
+    if(!packed_unit(step_coordinates.data()) || !packed_unit(step_coordinates.data()+w))
+        return common_nonunit();
+
+    upload(slot.ptr,plan.slots.data(),plan.slots.size()*sizeof(unsigned));
+    upload(segment.ptr,plan.segments.data(),segments*sizeof(Segment));
+    const auto* segment_device=static_cast<const Segment*>(segment.ptr);
+    const auto* slot_device=static_cast<const unsigned*>(slot.ptr);
+    const int width=(int)w;
+    const unsigned count=(unsigned)segments;
+    if(ladder.coop) {
+        ecm_launch_s2g_baby_wheel_coop(EcmCudaLaunch{(count+1)/2,64},width,ladder.n.words(),
+            ladder.C.ninv,ladder.one.words(),segment_device,count,slot_device,sx.words(),sz.words(),
+            ladder.mersenne_bits,out_x,out_z,guard.words());
+    } else {
+        S2G_DISPATCH(width,ecm_launch_s2g_baby_wheel_scalar,(EcmCudaLaunch{(count+63)/64,64}),
+            width,ladder.n.words(),ladder.C.ninv,ladder.one.words(),segment_device,
+            count,slot_device,sx.words(),sz.words(),out_x,out_z,guard.words());
+    }
+    CK(cudaGetLastError());
+    std::vector<Word> products(segments*w),replay;
+    std::vector<unsigned> replay_slots;
+    read(products.data(),guard.ptr,products.size()*sizeof(Word));
+    for(size_t i=0;i<segments;++i) {
+        if(packed_unit(products.data()+i*w))continue;
+        ++replay_segments;
+        const auto& seg=plan.segments[i];
+        for(unsigned j=0;j<seg.span;++j) {
+            const auto index=plan.slots[seg.walk_begin+j];
+            if(index==skip)continue;
+            replay.push_back(indices[index]);
+            replay_slots.push_back(index);
+        }
+    }
+    replay_points=replay.size();
+    // Reuse completed seed storage for replay. A bad segment must restore every
+    // original projective coordinate before normalization or cache bookkeeping.
+    const size_t chunk=std::min(seed_count,plan.slots.size());
+    for(size_t first=0;first<replay_points;first+=chunk) {
+        const auto size=std::min(chunk,replay_points-first),words=size*w;
+        upload(scalar.ptr,replay.data()+first,size*sizeof(Word));
+        upload(slot.ptr,replay_slots.data()+first,size*sizeof(unsigned));
+        ladder.launch(scalar.words(),size,sx.words(),sz.words());
+        ecm_launch_s2g_baby_wheel_scatter(EcmCudaLaunch{(unsigned)((words+127)/128),128},
+            width,slot_device,words,sx.words(),sz.words(),out_x,out_z);
+        CK(cudaGetLastError());
+    }
+    CK(cudaDeviceSynchronize());
+    stage2_log::print(stage2_log::debug,
+        "baby_wheel: requested=1 enabled=1 step=%u max_walk=%llu segments=%llu seeds=%llu walked=%llu "
+        "replayed_segments=%llu replayed_points=%llu scratch_bytes=%llu seconds=%.6f payload_bytes=%llu\n",
+        step,walk,(unsigned long long)segments,(unsigned long long)seed_count,(unsigned long long)plan.slots.size(),
+        (unsigned long long)replay_segments,(unsigned long long)replay_points,(unsigned long long)scratch,
+        now_s()-start,(unsigned long long)(baseline_bytes+scratch));
+    return true;
+}
+}
+
 bool device_baby_generate(
     const LadderCtx &C,
     const mpz_t N,
@@ -662,7 +825,9 @@ bool device_baby_generate(
     std::vector<std::string> &factors,
     unsigned long long &noninv,
     DeviceBabyStats &st,
-    bool force_check)
+    bool force_check,
+    unsigned long long d,
+    bool baby_wheel_device)
 {
     stage2_trace::Range trace("Baby.generate");
     const double begin=now_s();const size_t n=indices.size(),w=C.nw;
@@ -692,23 +857,21 @@ bool device_baby_generate(
     CK(stage2_wait::copy(da.ptr,C.ha24.data(),w*8,cudaMemcpyHostToDevice));
     CK(stage2_wait::copy(dm.ptr,C.hmone.data(),w*8,cudaMemcpyHostToDevice));
     CK(stage2_wait::copy(dj.ptr,indices.data(),n*8,cudaMemcpyHostToDevice));
-    if(baby_coop_tpi() && w>128 && w<=256) {
+    const bool coop=baby_coop_tpi() && w>128 && w<=256;
+    const auto reserve=64ull*1024*1024;
+    const auto available_extra=(size_t)std::min(limit-bytes,free_bytes-bytes-reserve);
+    const BabyDeviceLadder ladder{C,dn,dqx,dqz,da,dm,coop,coop?point_mersenne_bits(C):0};
+    const char* wheel_override=std::getenv("NTT_BABY_WHEEL");
+    const bool wheel_requested=wheel_override ? wheel_override[0]=='1'
+        : baby_wheel_device && w>=31 && n>=17280 && n<=103680;
+    const bool wheel_used=wheel_requested &&
+        try_baby_wheel(ladder,N,indices,d,bytes,available_extra,dx.words(),dz.words(),!wheel_override);
+    if(!wheel_used)ladder.launch(dj.words(),n,dx.words(),dz.words());
+    if(coop) {
         st.cooperative_tpi=32;
-        const int mersenne_bits=point_mersenne_bits(C);
-        for(size_t first=0;first<n;first+=(size_t)g_ladder_cap) {
-            const int count=(int)std::min(n-first,(size_t)g_ladder_cap);
-            const unsigned int threads=64,grid=(unsigned int)(((size_t)count*32+threads-1)/threads);
-            ecm_launch_s2g_coop_ladder_kernel(EcmCudaLaunch{grid,threads},dn.words(),C.ninv,(int)w,
-                dqx.words(),dqz.words(),da.words(),dm.words(),dj.words()+first,count,mersenne_bits,false,
-                dx.words()+first*w,dz.words()+first*w);
-            CK(cudaGetLastError());
-        }
-        stage2_log::print(stage2_log::debug,"baby_coop: tpi=32 nw=%llu capacity_bits=%d mersenne_bits=%d points=%llu chunks=%llu normal_output=0\n",
-            (unsigned long long)w,64*s2g_coop_capacity_words((int)w,32),mersenne_bits,
+        if(!wheel_used)stage2_log::print(stage2_log::debug,"baby_coop: tpi=32 nw=%llu capacity_bits=%d mersenne_bits=%d points=%llu chunks=%llu normal_output=0\n",
+            (unsigned long long)w,64*s2g_coop_capacity_words((int)w,32),ladder.mersenne_bits,
             (unsigned long long)n,(unsigned long long)((n+g_ladder_cap-1)/g_ladder_cap));
-    } else {
-        S2G_DISPATCH((int)w,s2g_launch_ladder,(int)w,(int)n,dn.words(),C.ninv,dqx.words(),dqz.words(),
-                     da.words(),dm.words(),dj.words(),dx.words(),dz.words(),false);
     }
     CK(cudaGetLastError());CK(cudaDeviceSynchronize());st.ladder_seconds=now_s()-begin;
     for(int l=1;l<=8;++l) {

@@ -2,6 +2,8 @@
 
 工具位于 `tools/build/`。从任意目录调用 PS1，或双击 BAT；BAT 转交参数，无参数运行结束后暂停。默认值由 PS1 维护；两个按 CUDA 版本命名的 release BAT 固定传入对应 profile 与 `-Jobs 16`。
 
+工具链查找、依赖路径和测试开关见 [构建与辅助工具环境变量](ENVIRONMENT_TOOLS.md)。
+
 Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通过 `CGBN_INCLUDE_DIR` 指向该目录，需要其他安装位置时可在配置时覆盖。
 
 ## 构建入口

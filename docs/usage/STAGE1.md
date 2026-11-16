@@ -6,6 +6,8 @@
 
 `ecm_cuda.exe` 默认使用 NVIDIA CUDA/CGBN 并行处理曲线，也可选择少曲线全宽 NTT。`ecm.exe` 提供 CPU 和 OpenCL 路径；CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md) 为准。
 
+历史覆盖、计时和建表诊断见 [Stage1 环境变量](ENVIRONMENT.md#stage1)。
+
 CPU Stage1 的实际模数超过 10240 位时，`cpu_implementation = "auto"` 使用 IFMA，单曲线也适用。无可用 IFMA 时任务报错。Edwards 可用 `--impl scalar` 或在 `[stage1]` 设置 `cpu_implementation = "scalar"`，显式运行宽位 GMP `mpz` 二进制点乘。Montgomery CPU 标量的上限为 10240 位。
 
 v3 也可用 `cpu_implementation = "simd[:6144], scalar[:4096], gwnum[4096:], auto[]"`。规则按顺序检查剥除已知因子后的实际模数位宽和后端能力。区间左闭右开，省略边界表示最小值或无上限。`[]` 等价于 `[:]`，空字符串等价于 `auto`。

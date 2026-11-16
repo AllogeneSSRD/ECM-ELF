@@ -717,7 +717,8 @@ void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
 
 void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
                               const FuseCtx &c, unsigned long long omega_inv,
-                              unsigned long long n_scale, unsigned long long nbatch, cudaStream_t stream)
+                              unsigned long long n_scale, unsigned long long nbatch, cudaStream_t stream,
+                              bool warp_input)
 {
     unsigned long long n = c.n;
     const unsigned long long stride = n;
@@ -727,7 +728,11 @@ void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
         const int smem = (int)(1ull << c.t) * (int)sizeof(unsigned long long);
         dim3 gr(blocks, (unsigned int)nbatch);
         const bool shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
-        if(c.warp_tail && c.t>=5)
+        if (warp_input) {
+            const auto launch = shift_scale && gl_scale_is_inverse_pow2(n_scale,c.k)
+                ? ecm_launch_ntt_inverse_tile_from_pairs<true> : ecm_launch_ntt_inverse_tile_from_pairs<false>;
+            launch(EcmCudaLaunch(gr,FUSE_TILE_THREADS,smem,stream),d,b,stride,c.k,c.t,c.tblI,n_scale);
+        } else if(c.warp_tail && c.t>=5)
             ecm_launch_tile_kernel<true,true>(EcmCudaLaunch(gr, FUSE_TILE_THREADS, smem, stream), d,b,n,c.k,c.t,c.tblI,n_scale,stride,shift_scale);
         else ecm_launch_tile_kernel<true>(EcmCudaLaunch(gr, FUSE_TILE_THREADS, smem, stream), d, b, n, c.k, c.t, c.tblI,
                                                            n_scale, stride,shift_scale);
@@ -735,6 +740,26 @@ void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
         fuse_mark("inv tile pass (+pw+scale)", ft0);
     }
     ntt_inverse_outer_fused(d, c, omega_inv, nbatch, stream);
+}
+
+template<int T>
+static void ntt_launch_short_convolution(unsigned long long *a, unsigned long long *b, const FuseCtx &c,
+    unsigned long long scale, unsigned long long batch, bool packed_first_stage, cudaStream_t stream)
+{
+    const bool shift=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0 && gl_scale_is_inverse_pow2(scale,T);
+    const auto launch = packed_first_stage
+        ? (shift ? ecm_launch_ntt_short_convolution<T,true,true> : ecm_launch_ntt_short_convolution<T,false,true>)
+        : (shift ? ecm_launch_ntt_short_convolution<T,true,false> : ecm_launch_ntt_short_convolution<T,false,false>);
+    constexpr size_t shared=2 * sizeof(unsigned long long) << T;
+    launch(EcmCudaLaunch((unsigned int)batch,FUSE_TILE_THREADS,shared,stream),a,b,c.tblF,c.tblI,scale);
+}
+
+void ntt_short_convolution_fused(unsigned long long *a, unsigned long long *b, const FuseCtx &c,
+    unsigned long long scale, unsigned long long batch, bool packed_first_stage, cudaStream_t stream)
+{
+    const auto launch = c.t==10 ? ntt_launch_short_convolution<10> : ntt_launch_short_convolution<11>;
+    launch(a,b,c,scale,batch,packed_first_stage,stream);
+    CK(cudaGetLastError());
 }
 
 void ntt_inverse_outer_fused(unsigned long long* d, const FuseCtx& c,
@@ -1204,6 +1229,26 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     CK(cudaEventCreate(&ev_f1));
     CK(cudaEventCreate(&ev_i1));
     NttGraphCache::Entry *graph=nullptr;
+    const auto requested_short = arena ? arena->short_graph.short_conv_mode : 0;
+    const uintptr_t addr_a=(uintptr_t)dA,addr_b=(uintptr_t)dB;
+    const auto distance=addr_a>addr_b ? addr_a-addr_b : addr_b-addr_a;
+    int short_mode=0;
+    if (requested_short && !dump && fc.warp_tail && (fc.k==10 || fc.k==11) &&
+        (fc.t==10 || fc.t==11) && dA && dB && !(addr_a%16) && !(addr_b%16) &&
+        distance>=N*nbatch*sizeof(unsigned long long)) {
+        if (requested_short==1) short_mode=1;
+        if (requested_short==2 && fc.nms==0 && fc.k==fc.t) short_mode=2;
+    }
+    if (short_mode) {
+        auto &stats=arena->short_graph;
+        if (short_mode==1) ++stats.warp_calls;
+        else ++stats.fused_calls;
+        if (weighted) ++stats.weighted_calls;
+        if (fc.k==10) ++stats.k10_calls;
+        else ++stats.k11_calls;
+        stats.min_batch=stats.min_batch ? std::min(stats.min_batch,nbatch) : nbatch;
+        stats.max_batch=std::max(stats.max_batch,nbatch);
+    }
     if(arena && arena->short_graph.enabled && !dump && arena->workspace_pool && arena->workspace.dA && arena->workspace.dB) {
         const size_t required=(size_t)N*(size_t)nbatch;
         const auto contains=[&](const unsigned long long *base,const unsigned long long *value) {
@@ -1212,31 +1257,38 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                 required<=arena->workspace.capacity-(address-start)/8;
         };
         if(contains(arena->workspace.dA,dA) && contains(arena->workspace.dB,dB))
-            graph=arena->short_graph.lookup(arena->device,fc,dA,dB,sh.omega,sh.omega_inv,sh.n_scale,nbatch,weighted);
+            graph=arena->short_graph.lookup(arena->device,fc,dA,dB,sh.omega,sh.omega_inv,sh.n_scale,nbatch,weighted,short_mode);
     }
     CK(cudaEventRecord(ev_f0));
-    if(graph)CK(cudaGraphLaunch(graph->forward,0));
-    else {ntt_forward_fused(dA, fc, sh.omega, nbatch, 0, weighted);ntt_forward_fused(dB, fc, sh.omega, nbatch, 0, weighted);}
-    if (dump && nbatch == 1 && hfa && hfb) {
-        hfa->assign(N, 0);
-        hfb->assign(N, 0);
-        CK(ntt_host_copy(hfa->data(), dA, N * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToHost));
-        CK(ntt_host_copy(hfb->data(), dB, N * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToHost));
-    }
-    /* the pointwise product AND the 1/N scale are elementwise, so they ride along inside the
-       inverse's tile pass (which touches the array once anyway) -- two whole passes saved */
-    CK(cudaEventRecord(ev_f1));
-
-    if(graph) {
-        CK(cudaGraphLaunch(graph->inverse,0));arena->short_graph.launches+=2;
-        const int omitted=weighted && (fc.nms ? fc.ms[0]==1 : fc.t==1) ? 2 : 0;
-        arena->short_graph.saved_launches+=std::max(0,fc.passes_fwd*2+fc.passes_inv()-2-omitted);
+    r.combined_transform=short_mode==2;
+    if (r.combined_transform) {
+        if (graph) {
+            CK(cudaGraphLaunch(graph->forward,0));
+            ++arena->short_graph.launches;
+        } else ntt_short_convolution_fused(dA,dB,fc,sh.n_scale,nbatch,weighted,0);
     } else {
-        // The full inverse's last DIT butterfly unweights the odd spectrum and
-        // combines both halves. Its existing 1/N scale supplies the factor 1/2.
-        ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch);
+        if(graph) CK(cudaGraphLaunch(graph->forward,0));
+        else {
+            ntt_forward_fused(dA, fc, sh.omega, nbatch, 0, weighted);
+            ntt_forward_fused(dB, fc, sh.omega, nbatch, 0, weighted);
+        }
+        if (dump && nbatch == 1 && hfa && hfb) {
+            hfa->assign(N, 0);
+            hfb->assign(N, 0);
+            CK(ntt_host_copy(hfa->data(), dA, N * sizeof(unsigned long long),cudaMemcpyDeviceToHost));
+            CK(ntt_host_copy(hfb->data(), dB, N * sizeof(unsigned long long),cudaMemcpyDeviceToHost));
+        }
+        // The inverse tile consumes the pointwise product and the 1/N scale.
+        CK(cudaEventRecord(ev_f1));
+
+        if(graph) {
+            CK(cudaGraphLaunch(graph->inverse,0));arena->short_graph.launches+=2;
+            const int omitted=weighted && (fc.nms ? fc.ms[0]==1 : fc.t==1) ? 2 : 0;
+            arena->short_graph.saved_launches+=std::max(0,fc.passes_fwd*2+fc.passes_inv()-2-omitted);
+        } else {
+            // The last DIT butterfly unweights the odd spectrum and combines both halves.
+            ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch, 0, short_mode==1);
+        }
     }
     CK(cudaEventRecord(ev_i1));
 
@@ -1386,10 +1438,14 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
        that) -- see the note at ev_f0 */
     {
         float ms = 0.0f;
-        CK(cudaEventElapsedTime(&ms, ev_f0, ev_f1));
-        r.t_fwd = (double)ms * 1e-3;
-        CK(cudaEventElapsedTime(&ms, ev_f1, ev_i1));
+        if (!r.combined_transform) {
+            CK(cudaEventElapsedTime(&ms, ev_f0, ev_f1));
+            r.t_fwd = (double)ms * 1e-3;
+        }
+        CK(cudaEventElapsedTime(&ms, r.combined_transform ? ev_f0 : ev_f1, ev_i1));
         r.t_inv = (double)ms * 1e-3;
+        // Keep fwd + inv totals compatible and report the combined interval separately.
+        if (r.combined_transform) arena->short_graph.fused_seconds+=r.t_inv;
         cudaEventDestroy(ev_f0);
         cudaEventDestroy(ev_f1);
         cudaEventDestroy(ev_i1);
@@ -1397,15 +1453,18 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     return r;
 }
 
-void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk)
+void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk, double *t_combined)
 {
     float ms = 0.0f;
-    if (r.dev_ev[0] && r.dev_ev[1] &&
+    if (!r.combined_transform && r.dev_ev[0] && r.dev_ev[1] &&
         cudaEventElapsedTime(&ms, r.dev_ev[0], r.dev_ev[1]) == cudaSuccess)
         *t_fwd += (double)ms * 1e-3;
-    if (r.dev_ev[1] && r.dev_ev[2] &&
-        cudaEventElapsedTime(&ms, r.dev_ev[1], r.dev_ev[2]) == cudaSuccess)
+    const auto inverse_begin=r.dev_ev[r.combined_transform ? 0 : 1];
+    if (inverse_begin && r.dev_ev[2] &&
+        cudaEventElapsedTime(&ms, inverse_begin, r.dev_ev[2]) == cudaSuccess) {
         *t_inv += (double)ms * 1e-3;
+        if (r.combined_transform && t_combined) *t_combined += (double)ms * 1e-3;
+    }
     if (r.dev_ev[3] && r.dev_ev[4] &&
         cudaEventElapsedTime(&ms, r.dev_ev[3], r.dev_ev[4]) == cudaSuccess)
         *t_chk += (double)ms * 1e-3;
@@ -1726,7 +1785,8 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
                           cudaMemcpyDeviceToHost));
         }
         for (unsigned long long ci = 0; ci < nchunk; ++ci)
-            ntt_pass_read_marks(sub[(size_t)ci], &r.t_fwd, &r.t_inv, &r.t_check_kernel);
+            ntt_pass_read_marks(sub[(size_t)ci], &r.t_fwd, &r.t_inv, &r.t_check_kernel,
+                                ab && arena ? &arena->short_graph.fused_seconds : nullptr);
         if (!defer) r.t_check_d2h += now_s() - tr0;
     }
     if (st) {

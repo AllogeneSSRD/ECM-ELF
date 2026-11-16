@@ -5,7 +5,7 @@
 struct Stage2PlanRuntime {
     size_t freeb=0,totalb=0,reserve=0,cap=0;
     unsigned long long D=0,P_baby=0;
-    bool s4_on=false;
+    bool s4_on=false, baby_wheel_device=false;
 
 };
 int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,

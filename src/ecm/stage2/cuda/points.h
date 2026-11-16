@@ -151,6 +151,7 @@ int suyama_curve(mpz_t a24, mpz_t px, mpz_t pz, unsigned long long sigma, const 
 bool device_baby_generate(const LadderCtx &C,const mpz_t N,
     const std::vector<unsigned long long> &indices,
     std::vector<std::vector<unsigned long long>> &leaf,SmallPrimeBabyCache *cache,
-    std::vector<std::string> &factors,unsigned long long &noninv,DeviceBabyStats &st,bool force_check=false);
+    std::vector<std::string> &factors,unsigned long long &noninv,DeviceBabyStats &st,
+    bool force_check=false,unsigned long long d=0,bool baby_wheel_device=false);
 
 extern GiantSeedStats g_giant_seed;

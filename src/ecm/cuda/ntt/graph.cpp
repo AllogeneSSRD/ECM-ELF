@@ -31,9 +31,11 @@ bool NttGraphCache::accept(cudaError_t error) {
 
 bool NttGraphCache::capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc,
         unsigned long long *a,unsigned long long *b,unsigned long long omega,
-        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage) {
+        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage,
+        int short_mode) {
         if(!accept(cudaStreamBeginCapture(capture_stream,cudaStreamCaptureModeThreadLocal)))return false;
-        if(inverse)ntt_inverse_fused(a,b,fc,omega_inv,scale,batch,capture_stream);
+        if(short_mode==2)ntt_short_convolution_fused(a,b,fc,scale,batch,packed_first_stage,capture_stream);
+        else if(inverse)ntt_inverse_fused(a,b,fc,omega_inv,scale,batch,capture_stream,short_mode==1);
         else {ntt_forward_fused(a,fc,omega,batch,capture_stream,packed_first_stage);ntt_forward_fused(b,fc,omega,batch,capture_stream,packed_first_stage);}
         cudaGraph_t graph=nullptr;const auto end=cudaStreamEndCapture(capture_stream,&graph);
         if(end!=cudaSuccess){if(graph)CK(cudaGraphDestroy(graph));return accept(end);}
@@ -44,7 +46,8 @@ bool NttGraphCache::capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc
     }
 
 NttGraphCache::Entry *NttGraphCache::lookup(int device,const FuseCtx &fc,unsigned long long *a,unsigned long long *b,
-        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage) {
+        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,
+        bool packed_first_stage,int short_mode) {
         if(!enabled || failed || fc.k<0 || (unsigned long long)fc.k>max_k || !batch ||
             fc.n>max_words/batch || !fc.tables_cached || !fc.arena_borrowed || fuse_trace_on()) {++skipped;return nullptr;}
         ++candidates;Key key;int i=0;
@@ -52,6 +55,7 @@ NttGraphCache::Entry *NttGraphCache::lookup(int device,const FuseCtx &fc,unsigne
         key.v[i++]=fc.m_max;key.v[i++]=fc.warp_tail;key.v[i++]=fc.coop_outer;key.v[i++]=fc.compact_scratch;
         key.v[i++]=omega;key.v[i++]=omega_inv;key.v[i++]=scale;key.v[i++]=batch;
         key.v[i++]=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;key.v[i++]=packed_first_stage;
+        key.v[i++]=short_mode;
         key.v[i++]=(uintptr_t)a;key.v[i++]=(uintptr_t)b;key.v[i++]=(uintptr_t)fc.tblF;key.v[i++]=(uintptr_t)fc.tblI;
         for(int p=0;p<8;++p) {
             key.v[i++]=fc.ms[p];key.v[i++]=(uintptr_t)fc.passF[p];key.v[i++]=(uintptr_t)fc.radF[p];
@@ -68,14 +72,14 @@ NttGraphCache::Entry *NttGraphCache::lookup(int device,const FuseCtx &fc,unsigne
             peak_entries=std::max(peak_entries,(unsigned long long)entries.size());
         }
         auto &entry=*found;entry.last=candidates;++entry.seen;
-        if(entry.forward && entry.inverse){++hits;return &entry;}
+        if(entry.forward && (short_mode==2 || entry.inverse)){++hits;return &entry;}
         if(entry.seen<min_calls){++cold;return nullptr;}
         size_t free=0,total=0;CK(cudaMemGetInfo(&free,&total));
         if(free<(64ull<<20)){++skipped;return nullptr;}
         const double begin=now_s();
         if(!capture_stream && !accept(cudaStreamCreateWithFlags(&capture_stream,cudaStreamNonBlocking)))return nullptr;
-        if(!capture(entry.forward,false,fc,a,b,omega,omega_inv,scale,batch,packed_first_stage) ||
-           !capture(entry.inverse,true,fc,a,b,omega,omega_inv,scale,batch,packed_first_stage)) {
+        if(!capture(entry.forward,false,fc,a,b,omega,omega_inv,scale,batch,packed_first_stage,short_mode) ||
+           (short_mode!=2 && !capture(entry.inverse,true,fc,a,b,omega,omega_inv,scale,batch,packed_first_stage,short_mode))) {
             destroy(entry);setup_seconds+=now_s()-begin;return nullptr;
         }
         setup_seconds+=now_s()-begin;++builds;return &entry;
@@ -86,4 +90,8 @@ void NttGraphCache::print()const {
             "ntt_graph_stats: requested=%d max_k=%llu max_words=%llu min_calls=%llu capacity=%llu candidates=%llu hits=%llu builds=%llu launches=%llu saved_launches=%llu skipped=%llu cold=%llu failures=%llu invalidations=%llu evictions=%llu entries=%llu peak_entries=%llu captured_nodes=%llu setup_seconds=%.6f\n",
             (int)enabled,max_k,max_words,min_calls,(unsigned long long)limit,candidates,hits,builds,launches,
             saved_launches,skipped,cold,failures,invalidations,evictions,(unsigned long long)entries.size(),peak_entries,nodes,setup_seconds);
+        stage2_log::print(stage2_log::phases,
+            "ntt_short_conv_stats: requested=%llu warp_calls=%llu fused_calls=%llu weighted_calls=%llu "
+            "k10_calls=%llu k11_calls=%llu min_batch=%llu max_batch=%llu fused_seconds=%.6f\n",
+            short_conv_mode,warp_calls,fused_calls,weighted_calls,k10_calls,k11_calls,min_batch,max_batch,fused_seconds);
     }

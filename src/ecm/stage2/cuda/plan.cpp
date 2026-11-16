@@ -407,6 +407,7 @@ stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue 
 
     runtime.freeb=freeb;runtime.totalb=totalb;runtime.reserve=reserve;runtime.cap=cap;
     runtime.D=D;runtime.P_baby=P_baby;runtime.s4_on=s4_on;
+    runtime.baby_wheel_device=prop.major==8 && prop.minor==9;
     return 0;
 }
 

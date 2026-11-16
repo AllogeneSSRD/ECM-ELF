@@ -2,6 +2,7 @@
 #include "transform.cuh"
 #include "carry.cuh"
 #include "tile.cuh"
+#include "short_convolution.cuh"
 #include "outer_coop.cuh"
 #include "carry_partial.cuh"
 #include "tune_checks.cuh"
@@ -52,6 +53,16 @@ template void ecm_launch_tile_kernel<true,false>(EcmCudaLaunch, unsigned long lo
 template void ecm_launch_tile_kernel<true,true>(EcmCudaLaunch, unsigned long long *a, const unsigned long long *b, unsigned long long n, int k, int t, const unsigned long long *tbl, unsigned long long n_scale, unsigned long long stride, bool shift_scale);
 template void ecm_launch_tile_kernel<false,false>(EcmCudaLaunch, unsigned long long *a, const unsigned long long *b, unsigned long long n, int k, int t, const unsigned long long *tbl, unsigned long long n_scale, unsigned long long stride, bool shift_scale);
 template void ecm_launch_tile_kernel<false,true>(EcmCudaLaunch, unsigned long long *a, const unsigned long long *b, unsigned long long n, int k, int t, const unsigned long long *tbl, unsigned long long n_scale, unsigned long long stride, bool shift_scale);
+template void ecm_launch_ntt_inverse_tile_from_pairs<false>(EcmCudaLaunch, unsigned long long*, const unsigned long long*, unsigned long long, int, int, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_inverse_tile_from_pairs<true>(EcmCudaLaunch, unsigned long long*, const unsigned long long*, unsigned long long, int, int, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<10,false,false>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<10,false,true>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<10,true,false>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<10,true,true>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<11,false,false>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<11,false,true>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<11,true,false>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
+template void ecm_launch_ntt_short_convolution<11,true,true>(EcmCudaLaunch, unsigned long long*, unsigned long long*, const unsigned long long*, const unsigned long long*, unsigned long long);
 
 template void ecm_launch_outer_coop_kernel<8,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);
 template void ecm_launch_outer_coop_kernel<7,true>(EcmCudaLaunch, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride);

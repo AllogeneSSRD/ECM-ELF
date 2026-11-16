@@ -116,7 +116,10 @@ void ntt_forward_outer_fused(unsigned long long* d, const FuseCtx& c, unsigned l
     unsigned long long nbatch, cudaStream_t stream, bool packed_first_stage = false);
 void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
                               const FuseCtx &c, unsigned long long omega_inv,
-                              unsigned long long n_scale, unsigned long long nbatch = 1, cudaStream_t stream = 0);
+                              unsigned long long n_scale, unsigned long long nbatch = 1,
+                              cudaStream_t stream = 0, bool warp_input = false);
+void ntt_short_convolution_fused(unsigned long long *a, unsigned long long *b, const FuseCtx &c,
+    unsigned long long scale, unsigned long long batch, bool packed_first_stage, cudaStream_t stream);
 void ntt_inverse_outer_fused(unsigned long long* d, const FuseCtx& c,
     unsigned long long omega_inv, unsigned long long nbatch, cudaStream_t stream);
 void ntt_arena_pin_smem(NttArena *ar, int t, bool warp);
@@ -174,7 +177,8 @@ NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
                                     bool need_hout = true, bool defer_res = false, NttArena *arena=nullptr);
-void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk);
+void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk,
+                         double *t_combined);
 bool ntt_hook_window(const NttReduceHook *hook, unsigned long long slots,
                              unsigned long long &count);
 int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned long long nbatch,
@@ -294,6 +298,7 @@ struct NttGraphCache {
     };
     struct Entry {
         Key key;unsigned long long seen=0,last=0;
+        // Fused short convolutions store their single complete executable in forward.
         cudaGraphExec_t forward=nullptr,inverse=nullptr;
     };
     bool enabled=fuse_env_ull("NTT_SHORT_GRAPH",0)!=0,failed=false;
@@ -306,6 +311,10 @@ struct NttGraphCache {
     unsigned long long candidates=0,hits=0,builds=0,launches=0,skipped=0,cold=0;
     unsigned long long failures=0,invalidations=0,evictions=0,peak_entries=0,nodes=0,saved_launches=0;
     double setup_seconds=0;
+    unsigned long long short_conv_mode=fuse_env_ull("NTT_STAGE2_SHORT_CONV",0);
+    unsigned long long warp_calls=0,fused_calls=0,weighted_calls=0,k10_calls=0,k11_calls=0;
+    unsigned long long min_batch=0,max_batch=0;
+    double fused_seconds=0;
     static void destroy(Entry &entry);
     void clear();
     void release();
@@ -317,10 +326,11 @@ struct NttGraphCache {
     bool accept(cudaError_t error);
     bool capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc,
         unsigned long long *a,unsigned long long *b,unsigned long long omega,
-        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage);
+        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,bool packed_first_stage,
+        int short_mode);
     Entry *lookup(int device,const FuseCtx &fc,unsigned long long *a,unsigned long long *b,
         unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch,
-        bool packed_first_stage=false);
+        bool packed_first_stage=false,int short_mode=0);
     void print()const;
 };
 
@@ -517,6 +527,7 @@ struct NttShapeCacheEntry {
 
 struct NttPassResult {
     double t_fwd = 0.0, t_inv = 0.0, t_slot = 0.0;
+    bool combined_transform = false;
     /* the carry-convergence assert below is a WHOLE EXTRA PASS over the digit array (a memset, a
        kernel over N*nbatch digits and a device-to-host copy) and it was untimed, which is why
        more than half of ntt_seconds had no owner (docs/architecture/STAGE2.md). */
