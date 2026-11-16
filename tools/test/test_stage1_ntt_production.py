@@ -21,6 +21,7 @@ from suyama_mont_ref import stage1
 DEFERRED_PACK = 1 << 6
 EDWARDS_2XY_FREQUENCY = 1 << 15
 EDWARDS_2XY_INVERSE_INPUT = 1 << 16
+TIGHT_CARRY_SPANS = 1 << 17
 
 
 def ntt_executions(log):
@@ -157,6 +158,7 @@ def main():
             assert plan["ntt_length"] == str(length) and plan["ntt_bpw"] == str((p + length - 1) // length)
             [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
             assert bool(int(dataflow) & EDWARDS_2XY_FREQUENCY) == fused, log
+            assert bool(int(dataflow) & TIGHT_CARRY_SPANS) == (int(plan["ntt_u"]).bit_length() < 64), log
             [sigma] = saved_points(work / "out.save", p, 20, True)
             assert sigma == 26
         work, cmd = fixture("edwards_force_unsafe_weighted", model="ed",
@@ -189,6 +191,22 @@ def main():
         _, x, z = edwards_stage1(n, sigma, b1)
         assert graph_points[sigma] == x * pow(z, -1, n) % n
         print("PASS Edwards 2XY inverse input dispatch, Graph/direct and integer endpoint", flush=True)
+
+        for p, expects_direct in ((3433, True), (3457, False)):
+            work, cmd = fixture(f"edwards_inverse_input_128_{p}", model="ed",
+                                extra='naf_w = 8\nntt_convolution = "weighted"\nntt_length = 128\n')
+            call, data = direct(work, cmd, p, 20, 26, 1)
+            log = run(work, call, text=data)
+            [execution] = ntt_executions(log)
+            assert execution["ntt_length"] == "128", log
+            [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+            frequency_flags = EDWARDS_2XY_FREQUENCY | EDWARDS_2XY_INVERSE_INPUT
+            assert int(dataflow) & frequency_flags == (frequency_flags if expects_direct else 0), log
+            points = saved_points(work / "out.save", p, 20, True)
+            n = (1 << p) - 1
+            _, x, z = edwards_stage1(n, 26, 20)
+            assert points == {26: x * pow(z, -1, n) % n}, (p, points.keys())
+        print("PASS Edwards 128-point inverse input and exact-bound fallback", flush=True)
 
         default_points = None
         for mode, flags, length, upper in (

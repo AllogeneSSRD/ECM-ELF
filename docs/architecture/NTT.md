@@ -48,6 +48,8 @@ flowchart LR
 
 每个 256-limb CTA 先合作去权并缓存当前段及前一 limb 所需的连续系数。正常位置的 limb 汇集和 warp 首 lane 的进位使用同一缓存。低两 limb 的循环项及最低 limb 需要的高端系数从逆变换缓冲直接读取。这样每段内的相邻 limb 不必反复对同一系数乘逆权，而且不生成全局 limb 和中间表。跨段进位及规范化写回沿用现有规则。缓存大于 16 KiB 时使用原归约路径。启用条件和收益见 [两卡加权归约对照](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-共享去权缓存)。
 
+原生 Edwards 的加权长度达到 2560 时，可按计划的整数系数上界缩短 limb 汇集的扫描范围。设 $K=\operatorname{bit\_length}(U)$，启用 2XY 频域组合时统一取 $K=\operatorname{bit\_length}(4U)$。起点为 $b$ 的系数只可能覆盖到 $b+K-1$，因此对于起点为 $lo$ 的 limb，每个回卷区间的起始索引从第一个 $b\ge\max(0,lo-63)$ 改为第一个 $b\ge\max(0,lo-K+1)$。主机生成的索引表同时供共享缓存和普通归约使用。计算不出足够紧的界时沿用 64 位覆盖范围。日志 `stage1_ntt_plan.dataflow` 的 `0x20000` 位表示使用了缩短范围。[索引表](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#宽档去权系数的扫描范围)
+
 ## Stage1 加权卷积的无符号系数界
 
 原生 Edwards 2XY 按规范残数乘积的系数界选择长度，NAF 字典构建使用同一界。对于 $p$ 位操作数、长度 $L$，第 $i$ 个 digit 的位宽为 $\lceil p(i+1)/L\rceil-\lceil pi/L\rceil$。平均 bpw 是 $p/L$，计划日志和配置上限按最大位宽 $\lceil p/L\rceil$ 检查。共有 $p\bmod L$ 个长 digit，其余为短 digit。M65521／2560 平均为 25.5941 bpw，由 1039 个 25 位和 1521 个 26 位 digit 组成。
@@ -60,7 +62,7 @@ $$
 U=g\big[(2H-1)A^2+(2R-z)2Ad+(z+2\max(0,2R-H-1))d^2\big].
 $$
 
-按项从 $q-1$ 扣除，乘计数前先除法检查溢出。$U<q$ 即可用一个 Goldilocks 余数恢复整数系数。后续 32 位 limb 汇集按最多 64 位的去权系数计算覆盖范围，再做梅森折叠和进位。建表还检查 $L$ 可整除 $(q-1)/192$，以构造满足 $\rho^L=2^p$ 的加权根。
+按项从 $q-1$ 扣除，乘计数前先除法检查溢出。$U<q$ 即可用一个 Goldilocks 余数恢复整数系数。后续 32 位 limb 汇集用去权系数的覆盖范围定位输入，再做梅森折叠和进位。建表还检查 $L$ 可整除 $(q-1)/192$，以构造满足 $\rho^L=2^p$ 的加权根。
 
 原生 Edwards 选择 weighted 且长度为 0 时，按长度递增检查二次幂和支持的 radix-5。候选须满足 $L\le p$、最大 bpw 不超过 31 及用户上限、tile 能在二次幂子变换中执行，并通过系数界。跳过不合格短档后选择第一个通过的长度。强制指定不合格长度时报错。随 $p$ 变化的实际 digit 分布会使准入有间隙。
 
@@ -78,7 +80,7 @@ $E$、$G$、$H$ 的去权系数至多为 $2U$，$F$ 至多为 $4U$，且所有�
 
 批次初始化打包并变换 $D$，逐点平方得到共享偏置频谱，占 $8L$ 字节。倍点对 $X,Y,Z$ 做三次前向，对 $E,F,G,H$ 做四次逆向。组合频谱省去第一层的两批整数加减，分段计划可将四路进位交给下一次 pack。该路径要求原生 Edwards 加权卷积、紧界、warp 逆向 tile 和足够的显存。系数界外仍用原长度分别归约四个乘积，再做整数加减。
 
-256 和 512 点的单 tile 计划在逆变换读入时直接计算频域坐标。每个 CTA 按输出坐标读取原始 $X,Y,Z$ 频谱的相邻系数并计算所需的乘积，即刻进入 warp 逆变换。四个坐标合计每个频点使用 8 次域乘，省下每列一次频域组合 kernel 和四路中间频谱的全局写回。其余形状用独立组合 kernel，每个频点的 4 次域乘由四路输出共用。两条路径遵守同一个 $4U<q$ 上界。`stage1_ntt_plan.dataflow` 的 `0x10000` 位表示逆变换直接计算坐标。[组合内核](../../kernels/cuda/stage1_ntt_dataflow.cuh) · [逆变换与调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#逆变换读入时组合倍点频谱)
+128、256 和 512 点的单 tile 计划在逆变换读入时直接计算频域坐标。每个 CTA 按输出坐标读取原始 $X,Y,Z$ 频谱的相邻系数并计算所需的乘积，即刻进入 warp 逆变换。四个坐标合计每个频点使用 8 次域乘，省下每列一次频域组合 kernel 和四路中间频谱的全局写回。其余形状用独立组合 kernel，每个频点的 4 次域乘由四路输出共用。两条路径遵守同一个 $4U<q$ 上界。`stage1_ntt_plan.dataflow` 的 `0x10000` 位表示逆变换直接计算坐标。[组合内核](../../kernels/cuda/stage1_ntt_dataflow.cuh) · [逆变换与调度](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#逆变换读入时组合倍点频谱)
 
 ## Stage1 radix-5 PFA
 

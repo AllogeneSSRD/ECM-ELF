@@ -52,7 +52,8 @@ inline std::optional<WeightedWord> weighted_unsigned_bound(unsigned p, unsigned 
     return GL_P - 1 - remaining;
 }
 
-inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord inverse_scale) {
+inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord inverse_scale,
+                                      unsigned coefficient_bits = 64) {
     using U = WeightedWord;
     // 2 has order 192 in Goldilocks. The generator of that subgroup is
     // 7^h, where h is divisible by every supported 2^k and 5*2^k length.
@@ -91,14 +92,15 @@ inline WeightedTables weighted_tables(unsigned p, unsigned length, WeightedWord 
             [](const WeightedDigit& digit, unsigned bound) { return digit.bit < bound; })
             - out.digits.begin());
     };
+    const unsigned reach = coefficient_bits - 1;
     out.limbs.resize((p + 31) / 32);
     for (unsigned i = 0; i < out.limbs.size(); ++i) {
         const unsigned bit = i * 32, width = std::min(32u, p - bit);
         for (unsigned wrap = 0; wrap < 3; ++wrap) {
             const unsigned lo = bit + wrap * p;
-            // A coefficient has at most 64 bits. Include each coefficient
-            // that overlaps this word, including wrap at p and at 2*p.
-            out.limbs[i].first[wrap] = lower(lo < 63 ? 0 : lo - 63);
+            // Include each coefficient whose proved bit range overlaps this
+            // word, including wrap at p and at 2*p.
+            out.limbs[i].first[wrap] = lower(lo < reach ? 0 : lo - reach);
             out.limbs[i].end[wrap] = lower(lo + width);
         }
     }

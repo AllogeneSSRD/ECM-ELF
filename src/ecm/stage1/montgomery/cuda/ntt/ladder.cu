@@ -400,7 +400,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool cache_edwards_carry = s.length == 5120 ? p >= 106497 && curves >= 8 : wide_segments;
     if (naf && cache_edwards_carry)
         defaults |= CachedFusedWeightedCarry;
-    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput;
+    if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput | TightCarrySpans;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     const bool pfa = mixed && (requested & PfaRadix5);
@@ -502,7 +502,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         modulus_bytes <= result.budget_bytes - result.owned_bytes;
     const bool direct_frequency = frequency_double && (requested & Edwards2XYInverseInput) &&
         ((control && control->experimental_dataflow.has_value()) ||
-         (!mixed && ctx.nms == 0 && s.length >= 256 && s.length <= 512));
+         (!mixed && ctx.nms == 0 && s.length >= 128 && s.length <= 512));
     if (frequency_double) {
         result.owned_bytes += modulus_bytes;
         result.dataflow |= Edwards2XYFrequency;
@@ -544,7 +544,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (packed) result.dataflow |= PackedForward;
     if (cached) result.dataflow |= CachedCarry;
     if (deferred) result.dataflow |= DeferredPack;
-    const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale) : WeightedTables{};
+    unsigned coefficient_bits = 64;
+    if (naf && s.length >= 2560 && unsigned_bound && (requested & TightCarrySpans)) {
+        // Canonical Edwards products fit U, including dictionary products.
+        // The biased 2XY combination is the only wider consumer of the table.
+        const U upper = (frequency_double ? 4 : 1) * *unsigned_bound;
+        coefficient_bits = 1;
+        for (U high = upper >> 1; high; high >>= 1) ++coefficient_bits;
+        if (coefficient_bits < 64) result.dataflow |= TightCarrySpans;
+    }
+    const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale, coefficient_bits)
+                                          : WeightedTables{};
     const unsigned carry_cache_smem = segmented && (requested & CachedFusedWeightedCarry)
         ? weighted_segment_cache_bytes(weights.limbs) : 0;
     // Keep the shared coefficient tile small enough to allow several CTAs per SM.
