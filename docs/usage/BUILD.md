@@ -185,7 +185,7 @@ Stage1 在 CMake 配置前批量读取 Git HEAD 中的源码 BOM 基准，检查
 
 复查通过后，并行驱动将每个 CUDA 对象对应的 NVCC 依赖记录（`.obj.ecm.d`）同步到 CMake 使用的 `.obj.d`。CMake 据此刷新 NMake 的依赖规则，替换旧路径并保留真实依赖。内容相同的依赖文件保留时间戳。这一步也覆盖本次复用的对象。如果 Windows 拒绝替换文件，脚本会尝试原位写入，并在同步成功后启动 NMake。
 
-复用旧的MSVC/CMake构建目录时，需核对关键主机对象的`.obj.d`确实包含头文件依赖。旧编译器探测缓存中的本地化`SHOWINCLUDES`前缀可能与当前输出不匹配，造成依赖文件为空，头文件变化后仍报告构建成功。遇到此情况，先保留证据，备份并移开该目录的C/C++编译器探测缓存和主机对象，再用正式入口重新探测、编译并验证实际程序行为；不编辑依赖指纹或CUDA对象来绕过校验。Stage2使用编译器依赖清单校验内容：新MSVC采用`/sourceDependencies`，14.16采用`/showIncludes`并保留实际SDK/STL/宏包含。
+Windows 上使用 MSVC 和 NMake 构建时，按主机编译实际使用的 `/utf-8` 选项重新探测 `/showIncludes` 前缀。既有构建目录首次启用这条规则时会重编 Stage1 主机对象，重新生成含头文件的 `.obj.d`。之后的增量构建沿用这些依赖。可在 MSVC x64 开发者终端运行 [依赖回归](../../tools/build/test/test_nmake_host_dependencies.py)，验证旧构建迁移和后续仅改头文件的情况。Stage2 的专用构建入口继续校验编译器依赖清单，新 MSVC 用 `/sourceDependencies`，14.16 用 `/showIncludes`。
 
 配置读写、sigma 生成、曲线 CPU 参数化、运行选择、逐曲线结果、checkpoint/save、data/result/tune.toml/屏幕的主机实现正文使用普通 CXX。`tools/test/test_host_incremental_boundaries.py` 通过正式 local 脚本验证这些正文修改只重编译主机单元，随后恢复源文件；不会改写对象或清单强行复用。接口、CUDA runtime 或其实际依赖的修改仍可能重编译 CU。验收证据与适用构建见 [统一 Stage1 实施记录](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md#p5-完成完整档位兼容编译边界与固定条件对照)。
 

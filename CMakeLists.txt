@@ -4,6 +4,7 @@ set(ECM_TIERS "" CACHE STRING "comma-separated Stage1 widths (empty = all)")
 ecm_stage1_normalize_tiers("${ECM_TIERS}" _ecm_normalized_tiers)
 set(ECM_TIERS "${_ecm_normalized_tiers}" CACHE STRING "comma-separated Stage1 widths (empty = all)" FORCE)
 project(main)
+include("${CMAKE_CURRENT_SOURCE_DIR}/tools/build/internal/nmake_host_dependencies.cmake")
 
 # Config source, generated bindings, templates and reference must agree.
 # This native hash guard avoids a Python dependency for ordinary builds.
@@ -183,6 +184,7 @@ add_executable(ecm
     src/ecm/opencl/diagnostics/selftest.cpp
 )
 ecm_stage1_identity_sidecar(ecm)
+ecm_track_nmake_host_dependencies(ecm)
 
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
 # (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
@@ -322,6 +324,7 @@ if(ECM_ENABLE_CUDA)
     else()
         target_sources(ecm_cuda PRIVATE ${ECM_STAGE1_PRAC_DISABLED_SOURCES})
     endif()
+    ecm_track_nmake_host_dependencies(ecm_cuda)
     target_compile_definitions(ecm_cuda PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
     # PRAC is selected at link time so ordinary CUDA compile rules stay stable.
     target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_STAGE1=1)

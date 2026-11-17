@@ -88,8 +88,8 @@ Run these commands from the executable directory, or replace the paths with the 
 .\ecm.exe --showkernel
 
 # One-off OpenCL / CUDA Stage1; N may be a decimal number or an expression
-echo '(2^347-1)' | .\ecm.exe --curve mont --target gpu --gpu-param 3 -gpucurves 1 -d 0 1e4 0
-echo '(2^421-1)' | .\ecm_cuda.exe --curve mont --target gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
+echo '(2^347-1)' | .\ecm.exe --param m3 --target gpu -gpucurves 1 -d 0 1e4 0
+echo '(2^421-1)' | .\ecm_cuda.exe --param m0 --target gpu -gpucurves 32 -d 0 1e5 0
 echo '(2^8191-1)' | .\ecm_cuda.exe --curve ed --target gpu --gpu-algorithm ntt -gpucurves 8 -d 0 1e4 0
 
 # CPU Suyama-Montgomery; auto selects SIMD on a supported CPU
@@ -171,9 +171,10 @@ Common options are below. Run the relevant binary's `--help` and consult the [TO
 
 | Option | Purpose |
 | --- | --- |
-| `-gpucurves N`, `--gpu-param P`, `-sigma S` | Curve batch, GPU parametrization and fixed seed; PARAM0 can use a full 64-bit sigma |
+| `--param e\|m0\|m2\|m3`, `-sigma S` | Curve construction and fixed seed; PARAM0 can use a full 64-bit sigma |
+| `-gpucurves N` | Direct-run task curve count; NTT can split the task into batches |
 | `--curve mont\|ed`, `--target cpu\|gpu` | Curve model and execution target |
-| `--gpu-algorithm cgbn\|ntt` | CUDA Stage1 arithmetic backend |
+| `--gpu-algorithm cgbn\|ntt\|thread` | GPU Stage1 algorithm; also accepts a bit-range policy |
 | `--impl auto\|simd\|scalar\|gwnum`, `--reduction auto\|montgomery\|mersenne-fold` | CPU arithmetic and SIMD reduction |
 | `--lcm 1\|12` | Montgomery Stage1 scalar construction |
 | `--stage1-threads N`, `--affinity LIST` | Stage1 host thread count and optional CPU affinity |

@@ -4,6 +4,8 @@
 
 正常计算/队列启动输出公共程序名和版本；`--version` 只输出版本后退出，不启动计算。`--gpu-info` 等机器查询保持原输出结构。
 
+`-h`、`-help`、`--help` 和 `/?` 显示同一份帮助，按曲线与任务、队列与交接、GPU、CPU/NAF、存档及诊断排列。曲线构造统一使用 `--param e|m0|m2|m3`。
+
 `ecm_cuda.exe` 按实际模数位宽和后端能力选择 CUDA NTT 或 CGBN。`ecm.exe` 提供 CPU 和 OpenCL 路径。CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md) 为准。
 
 历史覆盖、计时和建表诊断见 [Stage1 环境变量](ENVIRONMENT.md#stage1)。
@@ -120,7 +122,7 @@ Stage1 启动器也接受 `ECMSTAGE1=` 队列，从 save 文件名末尾的 `_B1
 
 Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)。CUDA PARAM0 和 Edwards 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
 
-GPU Edwards 使用不带参数化前缀的 sigma，CLI 不接受 `--gpu-param` 和 `--go`。已知素因子的 Edwards 群阶、点阶及分解可用 [独立 PARI 入口](DATASET.md#edwards群阶与点阶) 计算。CUDA CGBN 默认使用窗口 NAF，`--naf-w 0` 选择窗口 6，显式允许 2..12。CGBN 切片的设备时间目标为约 100 ms，OpenCL 为约 50 ms。CPU 负责构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。自动文件名使用共用模式中的 e 前缀，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 Stage2 读取。
+GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子的 Edwards 群阶、点阶及分解通过 [独立 PARI 入口](DATASET.md#edwards群阶与点阶) 计算。CUDA CGBN 默认使用窗口 NAF，`--naf-w 0` 选择窗口 6，显式允许 2..12。CGBN 切片的设备时间目标为约 100 ms，OpenCL 为约 50 ms。CPU 负责构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。自动文件名使用共用模式中的 e 前缀，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 Stage2 读取。
 
 ## CUDA 全宽 NTT
 
@@ -315,7 +317,7 @@ Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并�
 
 `src/io/cli.cpp`、`config.cpp`、`worktodo.cpp` 分别解释三个来源，`normalize.cpp` 应用默认、优先级和组合检查。CLI 每次出现只转换一次，TOML 一次启动快照保留已解析值，默认/覆盖仅生成一次有效启动设置，不回填 CLI。原始输入保留显式值及来源位置；配置生成默认仍只以 `config/ecm_options.json` 为准。`ECM/ECM2` 省略曲线数时在归一化时补为 Prime95 的 100 条，空/零 sigma 表示未指定。无 B1/B2 位置参数时只有 worktodo 能提供任务；单次模式继续从 stdin 读取 N 或整数表达式。
 
-队列模式拒绝 CLI 的 `--curve`、`--gpu-param`、`--lcm`、`-gpucurves`、`-save/-savea` 和单次群阶诊断选项；`--bits` 需用于 `--gpu-info`。任务结构由 worktodo/typed save 决定。显式设备、target、impl、reduction、线程、NAF、affinity、checkpoint、目录和内核偏好可覆盖 worker 配置。sigma 优先级为 worktodo > 显式 CLI > 配置 > 原有随机策略；队列 CLI 仅接受不带 param 前缀的 sigma。运行时调试/缓存标志继续作用于进程。`--p95-dir` 为旧兼容参数，不启用交接。
+队列模式拒绝 CLI 的 `--param`、`--curve`、`--lcm`、`-gpucurves`、`-save/-savea` 和单次群阶诊断选项；`--bits` 需用于 `--gpu-info` 或 `--tune ntt`。任务结构由 worktodo/typed save 决定。显式设备、target、impl、reduction、线程、NAF、affinity、checkpoint、目录和内核偏好可覆盖 worker 配置。sigma 优先级为 worktodo > 显式 CLI > 配置 > 原有随机策略；队列 CLI 仅接受不带 param 前缀的 sigma。运行时调试/缓存标志继续作用于进程。`--p95-dir` 为旧兼容参数，不启用交接。
 
 CLI 或当前 Stage1 worker 的非法配置会停止启动，诊断给出来源、键、原值和允许类型或范围。CLI 覆盖仍需通过配置值校验。TOML 语法和重复键按整份文件检查，其他阶段和其他 worker 的选项值由对应的运行入口检查。选中的非法 worktodo 行标为 `# ERROR` 并继续。后端能力、运行失败、文件或锁错误会停止本次执行，保留任务供排查或重试。
 

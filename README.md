@@ -90,8 +90,8 @@ CUDA 默认按 `gpu_algorithm = "ntt[16384:], cgbn[]"` 和实际模数选择后�
 .\ecm.exe --showkernel
 
 # 单次 OpenCL / CUDA Stage1；N 可以是十进制数或表达式
-echo '(2^347-1)' | .\ecm.exe --curve mont --target gpu --gpu-param 3 -gpucurves 1 -d 0 1e4 0
-echo '(2^421-1)' | .\ecm_cuda.exe --curve mont --target gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
+echo '(2^347-1)' | .\ecm.exe --param m3 --target gpu -gpucurves 1 -d 0 1e4 0
+echo '(2^421-1)' | .\ecm_cuda.exe --param m0 --target gpu -gpucurves 32 -d 0 1e5 0
 echo '(2^8191-1)' | .\ecm_cuda.exe --curve ed --target gpu --gpu-algorithm ntt -gpucurves 8 -d 0 1e4 0
 
 # CPU Suyama-Montgomery；auto 在支持的机器上选 SIMD
@@ -173,9 +173,10 @@ ECM tune 默认使用所选 worker 的 Stage2 队列。也可用 `--tune-save FI
 
 | 选项 | 用途 |
 | --- | --- |
-| `-gpucurves N`、`--gpu-param P`、`-sigma S` | 曲线批量、GPU 参数化和固定种子；PARAM0 可使用完整 64 位 σ |
+| `--param e\|m0\|m2\|m3`、`-sigma S` | 曲线构造和固定种子；PARAM0 可使用完整 64 位 σ |
+| `-gpucurves N` | 单次运行的任务曲线数；NTT 可自动拆批 |
 | `--curve mont\|ed`、`--target cpu\|gpu` | 分别选择曲线模型和执行位置 |
-| `--gpu-algorithm cgbn\|ntt` | CUDA Stage1 算术后端 |
+| `--gpu-algorithm cgbn\|ntt\|thread` | GPU Stage1 算法，也支持按位宽的切片规则 |
 | `--impl auto\|simd\|scalar\|gwnum`、`--reduction auto\|montgomery\|mersenne-fold` | CPU 算术实现和 SIMD 归约 |
 | `--lcm 1\|12` | Montgomery Stage1 标量的构造方式 |
 | `--stage1-threads N`、`--affinity LIST` | Stage1 主机线程数与可选 CPU 亲和性 |

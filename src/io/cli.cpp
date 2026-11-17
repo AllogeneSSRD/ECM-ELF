@@ -24,160 +24,162 @@ void print_usage(const char* prog) {
         name = "ecm";
     }
 
-    std::cout << ecm_backend_name() << " ECM stage-1 driver\n\n"
+    std::cout << ecm_program::name << ' ' << ecm_program::version
+              << " Stage1 (" << ecm_backend_name() << ")\n\n"
               << "Usage:\n"
-              << "  echo '<N>' | " << name << " [options] B1 [B2]\n\n"
-              << "Input:\n"
-              << "  N is read from stdin as a decimal integer or expression\n"
-              << "  (e.g. '(2^991-1)', '0xdeadbeef'). Whitespace is ignored.\n\n"
-              << "Positional:\n"
-              << "  B1              Stage-1 bound (required for meaningful runs)\n"
-              << "  B2              Stage-2 bound (optional; 0 disables stage 2)\n\n"
-              << "Options:\n"
-              << "  --param <id>         e|m0|m2|m3 (curve construction)\n"
-              << "  --curve <m>          mont|ed (Montgomery or Edwards; default "
-                 "mont)\n"
-              << "  --target <t>         cpu|gpu (default gpu). Desktop OpenCL Edwards supports\n"
-              << "                       moduli up to 1024 bits.\n"
-              << "  --impl <m>           auto|simd|scalar|gwnum (CPU only). SIMD requires AVX512-IFMA.\n"
-              << "                       GWNUM requires gwnum.dll beside the worker and Montgomery PARAM0.\n"
-              << "                       Above 10240 modulus bits, auto requires SIMD. Edwards\n"
-              << "                       can use wide GMP arithmetic via explicit scalar.\n"
-              << "  --reduction <m>      auto|montgomery|mersenne-fold (CPU SIMD). "
-                 "auto\n"
-              << "                       uses the Mersenne fold when N = 2^k-1 (half "
-                 "the madds\n"
-              << "                       per multiply); explicit values require --impl "
-                 "simd.\n"
-              << "  --stage1-threads <n> Host workers for CPU Stage1 and CUDA Edwards NTT curve\n"
-              << "                       construction (0=auto, 1=serial).\n"
-              << "  --exp-cache <dir>    Stage1 scalar and PRAC cache. Defaults to cache/ at\n"
-              << "                       the checkout root or next to the executable. off disables.\n"
-              << "  --lcm <1|12>         Stage1 scalar multiplier for lcm(1..B1). 1 is "
-                 "the\n"
-              << "                       default; 12 is Prime95-style (use when "
-                 "Prime95 runs\n"
-              << "                       stage 2 on our point, see doc section 16.7)\n"
-              << "  --cpu-mont-chain <ladder|prac>  CPU Montgomery IFMA point multiplication.\n"
-              << "  --naf-w <w>          Edwards NAF window (0 = CPU 12 / GPU 6); "
-                 "dictionary = 2^(w-2)\n"
-              << "  --affinity <list>    Pin worker t to logical CPU list[t %% len], "
-                 "e.g. 0,1,2,3\n"
-              << "                       or 0-7.  On hybrid CPUs (Zen5 + Zen5c, P+E "
-                 "cores, ...)\n"
-              << "                       this can hurt: measure first (doc section "
-                 "13.4)\n"
-              << "  --tmp-dir <dir>      Local directory for text saves and one batch "
-                 ".ckpt\n"
-              << "                       (default: current dir; ecm.exe never writes "
-                 "to p95)\n"
-              << "  -gpucurves <n>       Number of ECM curves (total for Edwards or CUDA NTT)\n"
-              << "  --ckpt <sec>         Mid-stage-1 checkpoint interval in seconds, "
-                 "for every\n"
-              << "                       implementation that has one (GPU, CPU "
-                 "Edwards, CPU Montgomery;\n"
-              << "                       default: 600, 0 = no autosave -- Ctrl+C still "
-                 "saves)\n"
-              << "  --gpu-backend MODE   auto|cuda|opencl (Windows GPU worker)\n"
-              << "  -d <index>           " << ecm_backend_name() << " device index (default: 0)\n"
-              << "  --gpu-param <0|2|3>  GPU curve parametrization (ini: gpu_param):\n"
-              << "                       0 = Suyama param0 (same curves as CPU "
-                 "Montgomery,\n"
-              << "                           Z/12 torsion, param0 save file) -- "
-                 "CUDA/CGBN only;\n"
-              << "                       2 = gmp-ecm batch 2 / PARAM=2 -- CUDA/CGBN "
-                 "only;\n"
-              << "                       3 = gmp-ecm batch/PARAM=3 (default, "
-                 "historical GPU path)\n"
-              << "  -sigma <value>       Fixed curve sigma (1..2^64-1; optional "
-                 "param:sigma prefix).\n"
-              << "                       GPU PARAM2/3 need sigma+curves <= 2^32.\n"
-              << "  -v                   Verbose output\n"
-              << "  -save <file>         Append factorization lines to file\n"
-              << "  -savea <file>        Same as -save (append mode)\n"
-              << "  --go                 Print optional group order diagnostics (GP "
-                 "preferred, CPU "
-                 "fallback)\n"
-              << "  --go-backend <mode>  auto (PARI DLL then GP), pari/native, gp or "
-                 "gmp; diagnosis "
-                 "never changes task status\n"
-              << "  --go-gp-timeout <s>  GP diagnostic deadline in seconds (1..600; "
-                 "default 30)\n"
-              << "  --gp <path>          Path to gp executable (default: gp on PATH)\n"
-              << "  --mul <path>         Montgomery mul kernel path (OpenCL only)\n"
-              << "  --sqr <path>         Montgomery sqr kernel path (OpenCL only)\n"
-              << "  --add <path>         Modular add kernel path (OpenCL only)\n"
-              << "  --sub <path>         Modular sub kernel path (OpenCL only)\n"
-              << "  --special-mult <path>  special_mult (R=2^32) kernel path (OpenCL "
-                 "only)\n"
-              << "  --showkernel         List available " << ecm_backend_name()
-              << " kernel paths and exit\n"
-              << "  --gpu-algorithm <1|2|3|cgbn|ntt|thread|slice list>\n"
-              << "                       Select the Stage1 GPU algorithm (e.g. \"ntt[16384:], cgbn[]\").\n"
-              << "  --tune ntt          Tune CUDA Stage1 NTT. Use --bits N for one exponent width.\n"
-              << "  --tune-exhaustive   With --tune ntt: measure every eligible batch.\n"
-              << "  --gpu-info           Report the device this build would use and, "
-                 "per kernel\n"
-              << "                       tier, the curves a full GPU needs; no curve "
-                 "is run and\n"
-              << "                       no file is written. Honours -d, --curve and\n"
-              << "                       --gpu-param (Montgomery only)\n"
-              << "  --bits <n>           With --gpu-info: only the tier the kernel "
-                 "would pick\n"
-              << "                       for an N of n bits (default: every tier of "
-                 "this build)\n"
-              << "  -h, --help           Show this help and exit\n"
-              << "\nRuntime tuning (kebab-case; replaces former environment "
-                 "variables):\n"
-              << " Device / operators:\n"
-              << "  --tpi <1..32>              Threads per instance (default 8)\n"
-              << "  --force-normalize <0|1>    Stage1 force-normalize path\n"
-              << "  --addsub-fused-unroll <1|2>  add/sub fused-unroll mode\n"
-              << "  --local                    Use LDS-based kernel (reduce scratch "
-                 "spill at large "
-                 "bits)\n"
-              << "  --wg <N>                   OpenCL work-group size (0=auto) or CUDA Edwards thread block\n"
-              << "                             size (32, 64, 128 or 256; 0=128)\n"
-              << " Kernel source / cache:\n"
-              << "  --kernel-root <dir>        Kernel source root\n"
-              << "  --kernel-cache-dir <dir>   OpenCL binary cache directory (OpenCL "
-                 "only)\n"
-              << "  --no-kernel-cache          Disable kernel binary cache (OpenCL "
-                 "only)\n"
-              << "  --kernel-cache-verbose     Verbose cache hit/miss logging (OpenCL "
-                 "only)\n"
-              << "  --compile-verbose          Verbose compile timing (OpenCL only)\n"
-              << " Logging / debug / verify:\n"
-              << "  --no-log-timestamp         Disable console timestamps (default on)\n"
-              << "  --gpu-dump [--gpu-dump-file <f>]      Dump GPU state to CSV\n"
-              << "  --profile-ops [--profile-ops-file <f>]  Operator-count profiling\n"
-              << "  --sync-each-batch          Synchronize after each batch\n"
-              << "  --verify-gpu [--verify-gpu-strict]   CPU cross-check GPU "
-                 "results\n\n"
-              << "Queue manager (run with no positional B1/B2):\n"
-              << "  --config <path>                Config file (default: <exe "
-                 "dir>/ecm.toml)\n"
-              << "  --worker <n>               Which worker this process is (1-based, "
-                 "default 1).\n"
-              << "                             Selects [worker.N] TOML overrides "
-                 "and the\n"
-              << "                             [Worker #N] worktodo queue section.\n\n"
-              << "Examples:\n"
-              << "  echo '(2^991-1)' | " << name
-              << " -v --go --curve mont --target gpu -gpucurves 384 1e6 0\n"
+              << "  " << name << " [--config FILE] [--worker N]          Run the Stage1 queue\n"
+              << "  echo '<N>' | " << name << " [options] B1 [B2]    Run Stage1 on stdin\n"
+              << "  " << name << " --tune ntt [--bits P] [options]    Tune CUDA Stage1 NTT\n"
+              << R"(
+Curve and task:
+  --param <e|m0|m2|m3>  Curve construction: Edwards or Montgomery PARAM0/2/3.
+                       Queue default: Edwards. Direct defaults: CPU m0, GPU m3.
+                       A typed ECMSTAGE1 save name selects that task's construction.
+  --curve <ed|mont>     Select only the curve model; use --param for parametrization.
+                       Choose either --param or --curve.
+  -sigma, --sigma <S>   Fix the starting sigma (1..2^64-1); curve i uses S+i.
+                       Optional 0:S / 2:S / 3:S prefixes select Montgomery parameters.
+                       Edwards uses bare S. PARAM2/3 require S+curves <= 2^32.
+  -gpucurves <N>       Direct-run curve count. Queue counts come from each work line.
+                       CUDA NTT: 1..128 is one batch; larger requests split automatically.
+                       NTT defaults to one curve when this option is omitted.
+  --target <cpu|gpu>   Execution target (default gpu).
+  B1 [B2]             B1 is a finite positive bound. B2 is optional, nonnegative.
+                       This worker computes Stage1 and saves points for Stage2.
+  N                    stdin accepts integers or expressions, e.g. (2^4423-1).
+
+Queue input and Stage2 handoff:
+  --config <FILE>     Load TOML (default: ecm.toml beside the executable).
+                       Explicit command-line options override configuration.
+  --worker <N>        Select [worker.N] settings and [Worker #N] in worktodo.
+                       N is 1-based; default 1.
+  Queue curve/param/count are configured in TOML or the work line. --param,
+  --curve, --lcm, -gpucurves and -save/-savea are direct-run options.
+  Stage1 worktodo formats:
+    ECM|ECM2=[AID,]k,b,n,c,B1,B2,curves[,"known-factors"]
+    ECMSTAGE1=[AID,]k,b,n,c,filename,B2-or-zero,skip_curves,num_curves[,"known-factors"]
+  ECM|ECM2 means either prefix. AID is optional: omit it, use N/A, or an empty field.
+  A nonempty AID has 32 hexadecimal characters. ECM/ECM2 may also specify a numeric
+  sigma after curves; omitted B2 and curves default to 0 and 100.
+  Quote comma-separated known factors. N is (k*b^n+c) divided by those factors.
+  ECMSTAGE1 gets B1 from the filename's final _B1.save field.
+  Its e_, m0_, m2_, m3_ prefix overrides the configured construction.
+
+  Completed tasks can produce these lines for a separate Stage2 worker:
+    ECMSTAGE2=[AID,]k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
+    ECMSTAGE2N=[AID,]filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
+  ECMSTAGE2 checks the expected modulus; ECMSTAGE2N reads the full N from the save.
+  Both read B1 from the save; omitted/zero count means all records after skip.
+  TOML [stage1] handoff.mode = "ecm-elf" (default), "off", or "prime95".
+  ECM-ELF handoff appends an eligible ECMSTAGE2 line to the original worker.
+  handoff.workers / handoff.worktodo_file select another destination.
+  Published counts use the actual saved range, including any extra NTT tail curves.
+
+GPU execution:
+  --gpu-backend <MODE> auto|cuda|opencl (backend routing on Windows).
+  -d <INDEX>          GPU device index (default 0).
+  --gpu-algorithm <A> 1|2|3|cgbn|ntt|thread or a quoted slice list.
+                       Default: "ntt[16384:], cgbn[]"; ranges use actual modulus bits.
+                       CUDA NTT: full 2^p-1, 32 <= p <= 262144; Edwards or m0.
+                       CUDA thread: Edwards through 1024 bits.
+                       OpenCL: Edwards through 1024 bits or Montgomery PARAM3.
+  --gpu-info          Report device and compiled tiers, then exit.
+                       Honors -d, --param and --curve.
+  --bits <P>          With --gpu-info, select one operand width (0 = all tiers).
+                       With --tune ntt, select one exponent width (0 = full grid).
+  --tune ntt          Search linear/weighted NTT plans and batches through 128 curves.
+                       Store measurements in the shared TOML tune_file.
+  --tune-exhaustive   With --tune ntt, measure every eligible batch size.
+  --showkernel        List available backend kernel paths, then exit.
+
+Edwards and CPU arithmetic:
+  --naf-w <W>         Edwards window: 0 or 2..12 (CPU: 0 or 3..12).
+                       0 starts at CPU w12 or CGBN/OpenCL/thread w6.
+                       CUDA NTT: 0 selects x-only; 2..12 selects native 2XY NAF.
+                       Fresh CPU/CGBN/OpenCL tasks may lower W to fit memory.
+  --lcm <1|12>        Montgomery scalar multiplier; default 1.
+                       Edwards uses its fixed 48*lcm(1..B1) scalar.
+  --impl <MODE>       CPU auto|simd|scalar|gwnum. SIMD requires AVX-512 IFMA.
+                       GWNUM requires gwnum.dll beside the worker and param m0.
+                       Above 10240 bits auto needs SIMD; Edwards supports explicit scalar.
+  --reduction <MODE>  CPU SIMD auto|montgomery|mersenne-fold.
+                       An explicit reduction requires --impl simd.
+  --cpu-mont-chain <C> CPU IFMA Montgomery ladder|prac.
+  --stage1-threads <N> Host threads for CPU Stage1 and CUDA Edwards NTT construction.
+                       0 selects automatically; 1 selects serial construction.
+  --affinity <LIST>   Logical CPUs, e.g. 0,2,4 or 0-7.
+
+Saves and checkpoints:
+  -save <FILE>        Publish completed Stage1 points/factors to this text save.
+  -savea <FILE>       Publish completed Stage1 points/factors in append mode.
+  --tmp-dir <DIR>     Stage1 output/checkpoint directory; direct-run default is cwd.
+  --ckpt <SECONDS>   Periodic checkpoint interval (default 600).
+                       <=0 disables periodic saves; normal stop still saves.
+                       Restart the original task to resume a compatible checkpoint.
+  --exp-cache <DIR>  Stage1 scalar and PRAC cache; "off" disables it.
+                       Default: cache/ at the checkout root or beside the executable.
+
+Additional TOML controls:
+  [shared] tune_file selects the common Stage1/Stage2 tuning database.
+  [stage1] ntt.pad_batch = 0 runs the requested count; 1 rounds the tail batch
+           up with new sigmas and includes those curves in saves and handoff.
+           ntt.convolution = "auto"|"linear"|"weighted" selects convolution.
+           ntt.length, ntt.bits_per_word, ntt.tile, ntt.outer_radix_limit,
+           ntt.window_bits, ntt.warp_tail and ntt.memory_mib control NTT plans.
+           cuda_montgomery_chain = "ladder"|"prac" selects CGBN PARAM0's chain.
+           cuda_prac_search, cpu_prac_search, naf_memory_mb and edwards_doubling
+           control PRAC search, NAF memory and Edwards doubling.
+  Full keys, ranges and defaults: docs/ECM_TOML_REFERENCE.en.md.
+
+OpenCL operators and diagnostics:
+  --tpi <1|2|4|8|16|32>     OpenCL threads per integer.
+  --wg <N>                  OpenCL work-group size (0=auto); CUDA thread block
+                            size 32|64|128|256 (0=128).
+  --mul/--sqr/--add/--sub/--special-mult <PATH>
+                            OpenCL Montgomery operator paths.
+  --force-normalize <0|1>    OpenCL Montgomery normalization mode.
+  --addsub-fused-unroll <1|2> OpenCL Montgomery add/sub unrolling.
+  --sliced / --sliced-t16    OpenCL Montgomery sliced kernels.
+  --local                   OpenCL Montgomery local-memory kernel.
+  --kernel-root <DIR>       OpenCL kernel source root.
+  --kernel-cache-dir <DIR>  OpenCL binary cache.
+  --no-kernel-cache / --kernel-cache-verbose / --compile-verbose
+                            OpenCL cache and compilation diagnostics.
+  --gpu-dump [--gpu-dump-file FILE]
+                            Dump supported GPU state to CSV.
+  --profile-ops [--profile-ops-file FILE]
+                            OpenCL Montgomery operator counts.
+  --sync-each-batch         OpenCL Montgomery batch synchronization.
+  --verify-gpu [--verify-gpu-strict]
+                            OpenCL Montgomery results checked on CPU.
+
+Logging and group-order diagnostics:
+  -v                        Verbose output.
+  --no-log-timestamp         Disable console timestamps.
+  --go                      Diagnose group orders after a factor is found.
+                            GPU Edwards uses the separate PARI diagnostic tool.
+  --go-backend <MODE>        auto|pari|native|gp|gmp.
+                            auto tries local PARI, then external GP.
+  --go-gp-timeout <SECONDS>  External GP deadline, 1..600 (default 30).
+  --gp <PATH>               GP executable path.
+  --version                 Print program name and version, then exit.
+  -h, -help, --help, /?      Show this help, then exit.
+
+Examples:
+)"
+              << "  " << name << " --config ecm.toml --worker 2\n"
               << "  echo '(2^421-1)' | " << name
-              << " --curve mont --target gpu -gpucurves 256 -d 1 1e5 0\n"
-              << "  echo '(2^4003-1)' | " << name
-              << " --curve mont --target gpu -gpucurves 384 --add asm_b32 1e6 0\n"
-              << "  " << name << " --showkernel\n"
-              << "  " << name << " --config ecm.toml --worker 2      (queue manager, worker #2)\n\n"
-              << "Add/sub path names (for --add / --sub): default, fused, "
-                 "fused_unroll,\n"
-              << "  asm/unroll_128b, asm/unroll_192b, asm/unroll_256b, "
-                 "asm/unroll_384b,\n"
-              << "  asm/unroll_512b, asm/unroll_4096b (legacy: asm_b16, asm_b32, "
-                 "fused_unroll_b16).\n"
-              << "Run with --showkernel for full Montgomery and add/sub path lists.\n";
+              << " --param m0 -sigma 26 --target gpu -gpucurves 32 -d 1 1e5 0\n"
+              << "  echo '(2^8191-1)' | " << name
+              << " --param e --target gpu --gpu-algorithm ntt --naf-w 8 -gpucurves 8 1e4 0\n"
+              << "  echo '(2^991-1)' | " << name
+              << " --param e --target cpu --impl simd -gpucurves 8 1e4 0\n"
+              << "  " << name << " --tune ntt --bits 16319 -d 1\n\n"
+              << "Worktodo examples:\n"
+              << "  ECM2=1,2,3001,-1,100000,1000000,64\n"
+              << "  ECMSTAGE1=1,2,3001,-1,\"e_m3001_1e5.save\",1000000,0,64\n"
+              << "  ECMSTAGE2=1,2,3001,-1,\"e_m3001_1e5.save\",1000000,0,64\n"
+              << "  ECMSTAGE2N=\"e_bit4096_1e5.save\",1000000,0,64\n";
 }
 
 bool wants_usage(int argc, char** argv) {
@@ -185,7 +187,7 @@ bool wants_usage(int argc, char** argv) {
     // positional B1 → single-run CLI mode). Only explicit help flags print usage.
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "-h" || a == "--help" || a == "/?") {
+        if (a == "-h" || a == "-help" || a == "--help" || a == "/?") {
             return true;
         }
     }
@@ -214,6 +216,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                    "--verify-gpu",
                                                    "--verify-gpu-strict",
                                                    "-h",
+                                                   "-help",
                                                    "--help",
                                                    "/?"};
     static const std::set<std::string> values = {"--affinity",
