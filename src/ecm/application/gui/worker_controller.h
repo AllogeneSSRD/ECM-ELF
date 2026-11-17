@@ -43,6 +43,7 @@ struct WorkerView {
     std::string task;                 // current worktodo line (from START:)
     bool stage2=false;
     Stage1Execution stage1_execution;
+    Stage1NttStatus stage1_ntt;
     Stage1HandoffPlan stage1_handoff;
     Stage2Status stage2_status;
     std::string application_version;  // observed banner of this worker process

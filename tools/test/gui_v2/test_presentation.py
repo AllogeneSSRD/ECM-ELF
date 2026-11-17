@@ -85,7 +85,7 @@ def main():
         click(s['log3']);s=wait(lambda v,t:v['log_worker']=='3' and 'shape=B1=260000000  B2=1300000000000  S=4283 bits  D=1381380  P=126720' in t and 'batch=Giant batch 2 / 8 | remaining=Phase remaining 12.0 s' in t)
         summaries=[line for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('worker_summary: index=3 ')]
         detail=json.loads(summaries[-1].split(' text=',1)[1]).splitlines()
-        assert len(detail)==3 and 'Edwards' in detail[1] and 'B2=1300000000000' in detail[1] and '*B1=' not in detail[1] and 'B1=' not in detail[2],detail
+        assert len(detail)==2 and 'M137  curves = 10' in detail[0] and 'Edwards' in detail[1] and 'B2=1300000000000' in detail[1] and '*B1=' not in detail[1],detail
         capture(hwnd,out/'stage2-shape.png')
         click(s['log1']);s=wait(lambda v,t:v['log_worker']=='1')
         click(s['log2']);s=wait(lambda v,t:v['log_worker']=='2');click(s['raw_button']);s=wait(lambda v,t:v['log_worker']=='2' and v['raw']=='1')

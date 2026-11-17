@@ -1,6 +1,7 @@
 #include "i18n.h"
 #pragma once
 #include "../../gui/worker_controller.h"
+#include "../../gui/task_display.h"
 #include "stage2_progress.h"
 #include <algorithm>
 #include <cmath>
@@ -9,6 +10,12 @@
 namespace ecmgui_v2::ui {
 struct WorkerProgress {float fraction=0;std::string label="--",speed="--",eta="--",eta_detail="--";};
 struct Stage2Batch {bool visible=false;float fraction=0;std::string label,remaining;};
+inline Stage2Batch stage1_ntt_batch(const ecmgui::Stage1NttStatus& s) {
+    Stage2Batch out;if(!s.valid||!s.curves)return out;
+    out.visible=true;out.fraction=static_cast<float>(s.batch_fraction());
+    char label[128];std::snprintf(label,sizeof(label),"curve %llu–%llu  %.1f%%",s.first+1,s.first+s.curves,100.*out.fraction);
+    out.label=label;return out;
+}
 inline Stage2Batch stage2_batch(const ecmgui::Stage2Curve& s,bool zh) {
     Stage2Batch out;if(!s.valid||!s.batches)return out;out.visible=true;
     out.fraction=static_cast<float>(std::clamp(double(s.batch)/double(s.batches),0.,1.));
@@ -31,11 +38,11 @@ inline std::string eta_text(double seconds,bool detail=false) {
     return result;
 }
 inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) {
-    WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress(false):worker.progress;
+    WorkerProgress out;const auto p=worker.stage2?worker.stage2_status.progress(false):worker.stage1_ntt.valid?worker.stage1_ntt.progress():worker.progress;
     char text[128];
     if(p.valid&&std::isfinite(p.pct)) {
         const double pct=std::clamp(p.pct,0.,100.);out.fraction=static_cast<float>(pct/100.);
-        if(p.curves_total)std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
+        if(p.curves_total&&(worker.stage2||!worker.stage1_ntt.valid))std::snprintf(text,sizeof(text),"%llu / %llu  (%.1f%%)",p.curves_done,p.curves_total,pct);
         else std::snprintf(text,sizeof(text),"%.1f%%",pct);
         out.label=text;
         if(std::isfinite(p.s_per_curve)&&p.s_per_curve>0){
@@ -50,6 +57,18 @@ inline WorkerProgress worker_progress(const ecmgui::WorkerView& worker,bool zh) 
         std::snprintf(text,sizeof(text),ecmgui_v2::ui::text("worker.resumed_percent",zh),pct);out.label=text;
     } else if(worker.running()||worker.state()==ecmgui::WorkerRunState::Restarting)out.label=ecmgui_v2::ui::text("waiting_for_progress",zh);
     return out;
+}
+
+inline std::string worker_task(const ecmgui::WorkerView& worker,bool zh) {
+    const auto task=ecmgui::task_display(worker.task);
+    if(!task.valid)return text("worker.no_task",zh);
+    std::string line=task.number;
+    if(task.from_save)line+=" (Stage1 save)";
+    if(task.has_factors)line+=" / "+std::string(text("worker.known_factors",zh));
+    const auto curves=worker.stage2&&worker.stage2_status.valid?worker.stage2_status.total:
+        worker.stage1_ntt.valid?worker.stage1_ntt.total:task.curves;
+    line+="  curves = "+(curves?std::to_string(curves):std::string("--"));
+    return line;
 }
 
 inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bool zh, bool details = false) {

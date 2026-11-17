@@ -530,13 +530,18 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                     double(p) / plan.digits, plan.bpw, plan.coefficient_bound, plan.field_modulus);
             };
             auto last_save = Clock::now(), last_progress = last_save;
+            auto progress_started = last_save;
+            bool first_poll = true;
             control.poll = [&](unsigned cursor) {
                 const auto now = Clock::now();
-                if (now - last_progress >= std::chrono::seconds(2)) {
-                    ecm_ts_fprintf(stdout, "stage1_ntt_progress: %s=%u/%u (%.1f%%)\n",
-                                   naf_window ? "columns" : "bits", cursor, count, 100.0 * cursor / count);
+                if (first_poll)progress_started=now;
+                if (first_poll || now - last_progress >= std::chrono::seconds(2)) {
+                    ecm_ts_fprintf(stdout, "stage1_ntt_progress: %s=%u/%u (%.1f%%) elapsed=%.3f\n",
+                                   naf_window ? "columns" : "bits", cursor, count, 100.0 * cursor / count,
+                                   std::chrono::duration<double>(now-progress_started).count());
                     last_progress = now;
                 }
+                first_poll=false;
                 const bool stop = ecm_stage1_stop_requested();
                 const auto elapsed = std::chrono::duration<double, std::milli>(now - last_save).count();
                 const bool due = opt.persistence.ckpt_ms && elapsed >= opt.persistence.ckpt_ms;

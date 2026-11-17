@@ -1,4 +1,5 @@
 #include "worker_proc.h"
+#include "task_display.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -142,6 +143,7 @@ bool WorkerProc::start(std::string &err, WorkerStart origin) {
     want_running_ = true;
     saw_queue_done_ = false;
     stage2_status_=Stage2Status{};
+    stage1_ntt_status_={};
     state_ = WorkerRunState::Running;
     state_text_.clear();
     return true;
@@ -320,6 +322,7 @@ void WorkerProc::drain(DrainedOutput &out) {
         local.swap(lines_);
     }
     bool stage2_received=false;
+    bool stage1_ntt_received=false;
     for (const std::string &l : local) {
         // Both views are ANSI-free: the raw view keeps UNCLASSIFIED lines, not escape
         // codes (the driver writes colour into pipes; rendering escape sequences in a
@@ -328,10 +331,18 @@ void WorkerProc::drain(DrainedOutput &out) {
         const ParsedLine pl = parse_line(l);
         if(!pl.application_version.empty())out.application_version=pl.application_version;
         if (!spawn_.stage2) {
-            if (!pl.start_line.empty())
+            if (!pl.start_line.empty()) {
                 out.stage1 = {};
+                stage1_ntt_status_.start(task_display(pl.start_line).curves);
+                stage1_ntt_received=true;out.stage1_task_started=true;out.last_progress={};
+            }
             if (pl.stage1.valid())
                 out.stage1 = pl.stage1;
+            if(pl.stage1_ntt.kind!=Stage1NttEvent::Kind::None) {
+                stage1_ntt_status_.apply(pl.stage1_ntt,double(mono_ms())/1000.);
+                stage1_ntt_received=true;out.last_progress=stage1_ntt_status_.progress();
+                if(pl.kind!=LogKind::Progress)++out.progress_lines;
+            }
         }
         if(pl.stage2.kind!=Stage2Event::Kind::None && spawn_.stage2) {
             stage2_status_.apply(pl.stage2);
@@ -350,7 +361,7 @@ void WorkerProc::drain(DrainedOutput &out) {
         switch (pl.kind) {
             case LogKind::Progress:
                 ++out.progress_lines;
-                out.last_progress = pl.progress;
+                if(pl.progress.valid)out.last_progress = pl.progress;
                 break;
             case LogKind::Event:
             case LogKind::Error:
@@ -367,6 +378,7 @@ void WorkerProc::drain(DrainedOutput &out) {
         }
     }
     if(stage2_received)out.stage2=stage2_status_;
+    if(stage1_ntt_received)out.stage1_ntt=stage1_ntt_status_;
 }
 
 void WorkerProc::poll(unsigned long long now_ms) {

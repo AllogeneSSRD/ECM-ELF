@@ -353,7 +353,46 @@ static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
     assert(status.done==5&&status.progress().eta_s==0&&status.curves.empty());
     std::cout<<"{\"stage2_parallel_views\":true,\"pipeline_hidden\":true,\"serial_fallback\":true,\"all_curve_samples\":true}\n";
 }
+static void stage1_ntt_progress(const fs::path& root,const fs::path& fixture) {
+    const auto dir=root/"stage1-ntt";fs::create_directories(dir);
+    write(dir/"worktodo.txt","[Worker #1]\nECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"\n");
+    const auto cfg=dir/"ecm.toml";
+    write(cfg,"[shared]\nworktodo='worktodo.txt'\n[gui]\nNumWorkers=1\nexe='"+fixture.generic_u8string()+
+        "'\n[workers.1]\nautostart=0\nextra_args='--scenario v2-ntt-progress'\n");
+    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
+    const auto deadline=GetTickCount64()+5000;
+    while(!app.controller.workers()[0].stage1_ntt.units&&GetTickCount64()<deadline){app.tick();Sleep(10);}
+    const auto& worker=app.controller.workers()[0];
+    const auto shown=ecmgui_v2::ui::worker_progress(worker,false);
+    assert(shown.label=="14.4%"&&shown.speed=="1.00"&&shown.eta=="856 s");
+    const auto batch=ecmgui_v2::ui::stage1_ntt_batch(worker.stage1_ntt);
+    assert(batch.visible&&batch.fraction==.5f&&batch.label=="curve 129–160  50.0%");
+    app.stop_worker(1);
+    const auto stop_deadline=GetTickCount64()+5000;
+    while(app.controller.busy()&&GetTickCount64()<stop_deadline){app.tick();Sleep(10);}
+    assert(!app.controller.busy());
+    std::cout<<"{\"stage1_ntt_total\":true,\"resumed_batch\":true,\"speed_eta\":true}\n";
+}
 static void stage1_details(const fs::path& root) {
+    {
+        ecmgui::WorkerView worker;worker.task="ECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"";
+        assert(ecmgui_v2::ui::worker_task(worker,true)=="M15919 / 已知因子  curves = 1000");
+        worker.task="ECMSTAGE1=1,2,5351,-1,\"e_m5351_260e6.save\",0,0,300";
+        assert(ecmgui_v2::ui::worker_task(worker,false)=="M5351  curves = 300");
+        worker.task="ECMSTAGE2=1,2,5351,-1,\"e_m5351_260e6.save\",0,0,300";
+        assert(!ecmgui::task_display(worker.task).has_factors);
+        worker.task="ECMSTAGE2N=N/A,\"ed.save\",0,0,300,\"1782929\"";
+        assert(ecmgui_v2::ui::worker_task(worker,false)=="N (Stage1 save) / Known factors  curves = 300");
+        worker.task="ECM=1,2,5351,-1,44000000";
+        assert(ecmgui::task_display(worker.task).curves==100);
+        worker.task="ECM=1,2,5351,-1,44000000,\"7\"";
+        assert(ecmgui::task_display(worker.task).has_factors&&ecmgui::task_display(worker.task).curves==100);
+        worker.task="ECM=1,2,5351,-1,44000000,0,\"7\"";
+        assert(ecmgui::task_display(worker.task).curves==100);
+        worker.task="ECMSTAGE2N=\"ed.save\",\"7\"";
+        assert(ecmgui::task_display(worker.task).has_factors&&ecmgui::task_display(worker.task).curves==0);
+    }
     const auto execution=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
         "ntt_bits=127 ntt_length=32 ntt_bpw=24 naf=0 ntt_shape=1:3:4:5:1:2,3:3,2 "
         "ntt_forward_pass_bits=2+3").stage1;
@@ -655,6 +694,7 @@ int main(int argc,char** argv){
     assert(argc==2||argc==3);const auto root=fs::absolute(argv[1]);assert(!fs::exists(root));fs::create_directories(root);
     workflow_errors(root);
     stage1_details(root);
+    if(argc>2)stage1_ntt_progress(root,fs::absolute(fs::u8path(argv[2])));
     {using namespace ecmgui_v2::ui;
      auto previous=no_phase_seconds(),tuned=no_phase_seconds();previous[5]=20;tuned[5]=80;tuned[2]=10;
      auto timing=stage2_timing(previous,tuned,0);assert(timing.seconds[5]==20&&timing.sources[5]==1&&timing.seconds[2]==10&&timing.sources[2]==2);

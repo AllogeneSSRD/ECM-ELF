@@ -102,6 +102,39 @@ bool parse_stage1_execution(const std::string& line, Stage1Execution& out) {
     return true;
 }
 
+bool parse_stage1_ntt(const std::string& line, Stage1NttEvent& out) {
+    using Kind = Stage1NttEvent::Kind;
+    if (starts_with(line,"stage1_ntt_batch:")) out.kind=Kind::Batch;
+    else if (starts_with(line,"stage1_ntt_batch_resume:")) out.kind=Kind::Resume;
+    else if (starts_with(line,"stage1_ntt_batch_complete:")) out.kind=Kind::BatchComplete;
+    else if (starts_with(line,"stage1_ntt_plan:")) out.kind=Kind::Plan;
+    else if (starts_with(line,"stage1_ntt_progress:")) out.kind=Kind::Progress;
+    else if (starts_with(line,"stage1_ntt_timing:")) out.kind=Kind::Timing;
+    else return false;
+    const auto number = [&](const char* key, unsigned long long& value) {
+        if (const auto* p=find_str(line.c_str(),key)) { p+=std::strlen(key);return read_u64(p,value); }
+        return false;
+    };
+    number(" offset=",out.offset);number(" total=",out.total);number(" curves=",out.curves);
+    number(" completed=",out.offset);number(" resume=",out.resume);
+    out.columns=line.find(" columns=")!=line.npos;
+    const char* key=out.columns?" columns=":" bits=";
+    if (const auto* p=find_str(line.c_str(),key)) {
+        p+=std::strlen(key);read_u64(p,out.cursor);
+        if (*p=='/') {++p;read_u64(p,out.units);}
+    }
+    if (out.kind==Kind::Plan) {out.units=out.cursor;out.cursor=out.resume;}
+    if (out.kind==Kind::Timing) {
+        double ms=0;if(read_after(line," wall_ms=",ms))out.seconds=ms/1000.;
+    } else read_after(line," elapsed=",out.seconds);
+    const bool valid=out.kind==Kind::Progress?out.units&&out.cursor<=out.units:
+        out.kind==Kind::Plan?out.curves&&out.units&&out.resume<=out.units:
+        out.kind==Kind::Batch?out.total&&out.curves:
+        out.kind==Kind::Timing?out.seconds>=0:out.total>0;
+    if(!valid){out={};return false;}
+    return true;
+}
+
 // ---- `p95_add:` notice fields -------------------------------------------------------
 // "… worker=3 added=1 file=\"D:\\p95 dir\\worktodo.add\" note=\"free text\"" -- every
 // value except a number is quoted, so a path with spaces or a free-text reason cannot be
@@ -256,6 +289,61 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
 }
 
 } // namespace
+
+void Stage1NttStatus::start(unsigned long long requested) {
+    *this=Stage1NttStatus{};total=requested;
+}
+double Stage1NttStatus::batch_fraction() const {
+    return units?std::clamp(double(cursor)/double(units),0.,1.):0.;
+}
+void Stage1NttStatus::apply(const Stage1NttEvent& e, double now_seconds) {
+    using Kind=Stage1NttEvent::Kind;
+    if(e.kind==Kind::None)return;
+    valid=true;
+    if(e.kind==Kind::Batch || e.kind==Kind::Resume) {
+        batched=true;completed=e.offset;first=e.offset;curves=e.curves;
+        total=std::max(e.total,first+curves);active=e.kind==Kind::Batch;
+        cursor=units=resume=sample_cursor=0;elapsed=0;sample_clock=-1;
+    } else if(e.kind==Kind::Plan) {
+        if(!batched){first=completed=0;curves=total?total:e.curves;total=curves;}
+        active=true;units=e.units;cursor=resume=sample_cursor=std::min(e.resume,units);
+        elapsed=0;sample_clock=-1;
+    } else if(e.kind==Kind::Progress) {
+        if(e.units)units=e.units;
+        cursor=std::min(e.cursor,units);
+        if(e.seconds>=0 && std::isfinite(e.seconds)) {
+            elapsed=e.seconds;sample_cursor=resume;
+        } else if(now_seconds>=0) {
+            // Older workers have no elapsed field. Measure from the first
+            // observed scalar cursor, excluding all work before that sample.
+            if(sample_clock<0){sample_clock=now_seconds;sample_cursor=cursor;}
+            elapsed=std::max(0.,now_seconds-sample_clock);
+        }
+    } else if(e.kind==Kind::Timing) {
+        cursor=resume+std::min(e.cursor,units-resume);
+        if(units && e.seconds>0 && std::isfinite(e.seconds)) {
+            measured_seconds+=e.seconds;
+            measured_curves+=double(curves)*double(cursor-resume)/double(units);
+        }
+        elapsed=0;sample_cursor=cursor;
+        if(!batched && units && cursor==units){completed=curves;active=false;}
+    } else if(e.kind==Kind::BatchComplete) {
+        completed=e.offset;total=std::max(total,std::max(e.total,completed));
+        cursor=units;active=false;
+    }
+}
+ProgressInfo Stage1NttStatus::progress() const {
+    ProgressInfo out;if(!valid || !total)return out;
+    out.valid=out.gpu=true;out.curves_done=completed;out.curves_total=total;
+    const double done=std::min(double(total),double(completed)+(active?curves*batch_fraction():0.));
+    out.pct=100.*done/double(total);
+    const double work=measured_curves+(units&&elapsed>0&&cursor>=sample_cursor?double(curves)*double(cursor-sample_cursor)/double(units):0.);
+    const double seconds=measured_seconds+elapsed;
+    out.elapsed_s=seconds;
+    if(work>0 && seconds>0){out.s_per_curve=seconds/work;out.eta_s=(double(total)-done)*out.s_per_curve;}
+    // Only completed curves belong in the integer counter; pct includes partial batches.
+    return out;
+}
 
 void Stage2Curve::apply(const Stage2Event &e) {
     using Kind=Stage2Event::Kind;valid=true;
@@ -429,6 +517,10 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if (parse_stage1_ntt(p, out.stage1_ntt)) {
+        out.kind=out.stage1_ntt.kind==Stage1NttEvent::Kind::Progress?LogKind::Progress:LogKind::Raw;
+        return out;
+    }
     if (parse_stage1_execution(p, out.stage1)) {
         out.kind = LogKind::Event;
         return out;

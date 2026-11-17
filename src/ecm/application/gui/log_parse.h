@@ -3,7 +3,7 @@
 // Parsing of the driver's stdout/stderr into the pieces the UI needs
 // (docs/usage/GUI.md sections 7.2 / 7.3).
 //
-// Everything here is a pure function over one line, so it is unit-testable without
+// Line parsers and deterministic progress reducers are unit-testable without
 // a GPU, a window or a worker process (see tools/test/gui/log_parse_test.cpp).
 //
 // Facts this encodes (all measured from the driver source):
@@ -44,6 +44,27 @@ struct ProgressInfo {
     unsigned long long curves_total = 0; // only in the stage1: form
     unsigned long long bits = 0;         // "+789 bits"
     unsigned long long columns = 0;      // "+256 columns" (GPU Edwards NAF)
+};
+
+// NTT Stage1 reports scalar columns/bits within a curve batch. Keep the two
+// coordinates separate: a scalar cursor is never a task-level curve counter.
+struct Stage1NttEvent {
+    enum class Kind {None, Batch, Resume, Plan, Progress, Timing, BatchComplete};
+    Kind kind = Kind::None;
+    unsigned long long offset=0, total=0, curves=0, cursor=0, units=0, resume=0;
+    double seconds=-1;
+    bool columns=false;
+};
+struct Stage1NttStatus {
+    bool valid=false, batched=false, active=false;
+    unsigned long long total=0, completed=0, first=0, curves=0, cursor=0, units=0, resume=0;
+    double measured_seconds=0, measured_curves=0;
+    double elapsed=0, sample_clock=-1;
+    unsigned long long sample_cursor=0;
+    void start(unsigned long long requested=0);
+    void apply(const Stage1NttEvent& event, double now_seconds=-1);
+    double batch_fraction() const;
+    ProgressInfo progress() const;
 };
 
 // One hit as reported by the driver's D3 hit line (docs/usage/GUI.md):
@@ -135,6 +156,7 @@ struct ParsedLine {
     std::string application_version; // actual child banner, e.g. ECM-ELF 0.39.0
     ProgressInfo progress;
     Stage1Execution stage1;
+    Stage1NttEvent stage1_ntt;
     Stage2Event stage2;
     bool is_hit = false;
     std::string factor;      // decimal factor of a hit ("factor[i]=<dec>")

@@ -814,7 +814,7 @@ void App::draw(ui::Settings& pending, const ui::Settings& active, const ui::Font
     }
 }
 std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
-    const auto task=ecmgui::task_caption(worker.task,ui::text("worker.known_factors",zh),"assignment ID",ui::text("worker.no_task",zh));
+    const auto task=ui::worker_task(worker,zh);
     std::string summary=std::string(ui::text("worker.task_label",zh))+task;
     if(worker.stage2){
         const auto ratio=worker_b2_ratios_.find(worker.index);
@@ -824,10 +824,10 @@ std::string App::worker_summary(const ecmgui::WorkerView& worker,bool zh)const {
             summary+="\n"+construction;
         }
     } else {
+        summary += "  |  " + ui::stage1_handoff(worker.stage1_handoff, worker.stage1_execution, zh);
         const auto execution = ui::stage1_execution(worker.stage1_execution, zh);
         if (!execution.empty())
             summary += "\n" + execution;
-        summary += "\n" + ui::stage1_handoff(worker.stage1_handoff, worker.stage1_execution, zh);
     }
     return summary;
 }
@@ -907,6 +907,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
     const auto show_curve_bars=[](const ecmgui::WorkerView& worker){
         return worker.stage2&&worker.stage2_status.workers==2&&worker.running()&&!worker.stage2_status.curves.empty();
     };
+    const auto ntt_bar=[](const ecmgui::WorkerView& worker){return !worker.stage2?ui::stage1_ntt_batch(worker.stage1_ntt):ui::Stage2Batch{};};
     const float padding=ImGui::GetStyle().CellPadding.y*2;float content_height=ImGui::GetTextLineHeight()+padding+4*scale;
     for(const auto& worker:controller.workers()){
         const auto summary=worker_summary(worker,zh);
@@ -914,6 +915,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         content_height+=control_height+padding+ImGui::GetStyle().FramePadding.y;
         content_height+=ImGui::CalcTextSize(summary.c_str(),nullptr,false,std::max(1.f,visible_width-24*scale)).y+padding;
         if(show_curve_bars(worker))content_height+=curve_bar_pitch*worker.stage2_status.visible_curves().size();
+        if(ntt_bar(worker).visible)content_height+=curve_bar_pitch;
     }
     // Reserve child viewport padding so every row remains visible.
     content_height+=ImGui::GetStyle().ScrollbarSize;
@@ -925,7 +927,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
         worker_table_scroll_max_x=ImGui::GetScrollMaxX();
         worker_table_scroll_max_y=ImGui::GetScrollMaxY();worker_table_height=ImGui::GetWindowSize().y;worker_table_content_height=ImGui::GetCurrentWindow()->ContentSize.y;
         const auto table_origin=ImGui::GetWindowPos();worker_table_data_height=ImGui::GetCurrentWindow()->InnerRect.GetHeight();
-        struct SummaryRow {ImVec2 min,max,pos;float wrap,text_height;std::string text;std::vector<std::pair<unsigned long long,float>> curves;};
+        struct SummaryRow {ImVec2 min,max,pos;float wrap,text_height;std::string text;std::vector<std::pair<std::string,float>> curves;bool stage2;};
         std::vector<SummaryRow> summaries;auto* table_draw=ImGui::GetWindowDrawList();
         const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin(),table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         float body_top=table_clip_min.y;
@@ -996,12 +998,13 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             const auto row=ImGui::GetCursorScreenPos();worker_row_height=row.y-main_row_top;
             const ImVec2 pos{std::max(left.x+12*scale,row.x),row.y};const float right=left.x+visible_width-12*scale;
             const float wrap=std::max(1.f,right-pos.x),text_height=ImGui::CalcTextSize(summary.c_str(),nullptr,false,wrap).y;
-            std::vector<std::pair<unsigned long long,float>> curves;
+            std::vector<std::pair<std::string,float>> curves;
             if(show_curve_bars(worker))
-                for(const auto* curve:worker.stage2_status.visible_curves())curves.emplace_back(curve->current,stage2_visual(worker,*curve).high_water);
+                for(const auto* curve:worker.stage2_status.visible_curves())curves.emplace_back("#"+std::to_string(curve->current),stage2_visual(worker,*curve).high_water);
+            if(const auto batch=ntt_bar(worker);batch.visible)curves.emplace_back(batch.label,batch.fraction);
             const float height=text_height+curve_bar_pitch*curves.size();
             ImGui::Dummy({1,height});
-            summaries.push_back({{table_clip_min.x,row.y-ImGui::GetStyle().CellPadding.y},{table_clip_max.x,row.y+height+ImGui::GetStyle().CellPadding.y},pos,wrap,text_height,summary,std::move(curves)});
+            summaries.push_back({{table_clip_min.x,row.y-ImGui::GetStyle().CellPadding.y},{table_clip_max.x,row.y+height+ImGui::GetStyle().CellPadding.y},pos,wrap,text_height,summary,std::move(curves),worker.stage2});
             if(ImGui::IsWindowHovered()&&ImGui::IsMouseHoveringRect(pos,{right,pos.y+height})&&!worker.task.empty())ImGui::SetTooltip("%s",worker.task.c_str());
             ImGui::PopID();
         }
@@ -1016,15 +1019,16 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             table_draw->AddRectFilled(row.min,row.max,ImGui::GetColorU32(p.surface));
             table_draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),row.pos,ImGui::GetColorU32(p.muted),row.text.c_str(),nullptr,row.wrap);
             float top=row.pos.y+row.text_height,label_width=0;
-            for(const auto& curve:row.curves)label_width=std::max(label_width,ImGui::CalcTextSize(("#"+std::to_string(curve.first)).c_str()).x);
-            for(const auto& [number,fraction]:row.curves){
-                const auto label="#"+std::to_string(number);
+            for(const auto& curve:row.curves)label_width=std::max(label_width,ImGui::CalcTextSize(curve.first.c_str()).x);
+            label_width=std::min(label_width,row.wrap*.65f);
+            for(const auto& [full_label,fraction]:row.curves){
+                const auto label=ui::fitted_label(full_label.c_str(),label_width);
                 table_draw->AddText({row.pos.x,top},ImGui::GetColorU32(p.muted),label.c_str());
                 const float bar_top=top+(curve_bar_pitch-5*scale)*.5f;
                 const ImVec2 hi{row.pos.x+row.wrap,bar_top+5*scale};
                 const ImVec2 lo{std::min(hi.x,row.pos.x+label_width+8*scale),bar_top};
                 table_draw->AddRectFilled(lo,hi,ImGui::GetColorU32(ImGuiCol_FrameBg),2*scale);
-                if(fraction>0)table_draw->AddRectFilled(lo,{lo.x+(hi.x-lo.x)*fraction,hi.y},ImGui::GetColorU32(p.stage2),2*scale);
+                if(fraction>0)table_draw->AddRectFilled(lo,{lo.x+(hi.x-lo.x)*fraction,hi.y},ImGui::GetColorU32(row.stage2?p.stage2:p.stage1),2*scale);
                 top+=curve_bar_pitch;
             }
             worker_summary_rects.push_back({row.min,row.max});
@@ -1258,7 +1262,7 @@ void App::draw_logs(const ui::Fonts& fonts,const ecmgui::WorkerView* active_work
     const int log_id=active_worker?active_worker->index:0;
     if(active_worker){
         const auto progress=ui::worker_progress(*active_worker,zh);
-        const auto task=ecmgui::task_caption(active_worker->task,ecmgui_v2::ui::text("worker.known_factors",zh),"assignment ID",ecmgui_v2::ui::text("worker.no_task",zh));
+        const auto task=ui::worker_task(*active_worker,zh);
         ImGui::PushTextWrapPos(0);ImGui::TextColored(active_worker->stage2?p.stage2:p.stage1,ecmgui_v2::ui::text("logs.worker_summary",zh),active_worker->stage2?"Stage 2":"Stage 1",task.c_str(),progress.label.c_str(),progress.speed.c_str(),progress.eta_detail.c_str());ImGui::PopTextWrapPos();
         if(ImGui::IsItemHovered())ImGui::SetTooltip("%s\n%s",active_worker->task.c_str(),ui::worker_phase(*active_worker,zh).c_str());
         if(active_worker->stage2){

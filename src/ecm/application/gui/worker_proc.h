@@ -83,6 +83,8 @@ public:
         // --worker support (D1/D2) and never entered queue mode. See kOldDriverHint.
         bool old_driver = false;
         Stage1Execution stage1;
+        Stage1NttStatus stage1_ntt;
+        bool stage1_task_started=false;
         Stage2Status stage2;
         std::vector<std::pair<double,double>> stage2_speed_samples; // v2 queue speed, legacy mean
         bool stage2_task_started=false;
@@ -126,6 +128,7 @@ private:
     bool want_running_ = false;
     bool saw_queue_done_ = false;
     Stage2Status stage2_status_;
+    Stage1NttStatus stage1_ntt_status_;
     unsigned long long restart_at_ms_ = 0;
     std::vector<unsigned long long> crash_times_ms_;
 };

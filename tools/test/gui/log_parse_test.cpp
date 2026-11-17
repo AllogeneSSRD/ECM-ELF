@@ -43,6 +43,41 @@ bool near(double a, double b, double eps = 1e-6) {
 
 int main() {
     {
+        Stage1NttStatus status;status.start(1000);
+        const auto apply=[&](const char* line,double now=-1.){status.apply(parse_line(line).stage1_ntt,now);};
+        apply(TS "stage1_ntt_batch_resume: completed=128 total=1000");
+        check(near(status.progress().pct,12.8),"NTT restored completed batches");
+        apply("stage1_ntt_batch: offset=128 total=1000 curves=32 capacity=32 resumed=1");
+        apply("stage1_ntt_plan: device=1 p=16319 curves=32 resume=250 bits=1000");
+        check(near(status.progress().pct,13.6)&&status.progress().s_per_curve==0,"NTT restored scalar cursor has no invented speed");
+        apply("[Worker #3] " TS "stage1_ntt_progress: columns=500/1000 (50.0%) elapsed=8.000");
+        auto p=status.progress();
+        check(p.curves_done==128&&p.curves_total==1000&&near(p.pct,14.4)&&near(status.batch_fraction(),.5),"NTT task progress and batch progress are separate");
+        check(near(p.s_per_curve,1)&&near(p.eta_s,856),"NTT speed excludes restored work");
+        apply("stage1_ntt_timing: columns=750 device_ms=23000 wall_ms=24000 setup_ms=10000 readback_ms=5 stopped=0");
+        check(near(status.progress().s_per_curve,1),"NTT timing uses delta columns and excludes setup");
+        apply("stage1_ntt_batch_complete: completed=160 total=1000");
+        check(near(status.progress().pct,16)&&status.progress().curves_done==160,"NTT batch completion counts once");
+        apply("stage1_ntt_batch: offset=160 total=1000 curves=16 capacity=16 resumed=0");
+        apply("stage1_ntt_plan: device=1 p=16319 curves=16 resume=0 bits=1000");
+        apply("stage1_ntt_progress: bits=250/1000 (25.0%) elapsed=4.000");
+        check(near(status.progress().s_per_curve,1)&&near(status.progress().pct,16.4),"NTT adaptive batch size preserves task speed");
+        check(parse_line("stage1_ntt_progress: bits=200/0 (100%)").stage1_ntt.kind==Stage1NttEvent::Kind::None,"Malformed NTT progress ignored");
+        status.start(300);
+        apply("stage1_ntt_batch: offset=256 total=300 curves=96 capacity=96 resumed=0");
+        apply("stage1_ntt_plan: device=1 p=16319 curves=96 resume=0 bits=1000");
+        apply("stage1_ntt_progress: bits=500/1000 (50.0%) elapsed=48.000");
+        check(status.total==352&&near(status.progress().pct,100.*304/352)&&near(status.progress().eta_s,48),"NTT real padded curves extend task denominator");
+        status.start(8);
+        apply("stage1_ntt_plan: device=1 p=16319 curves=8 resume=0 bits=1000");
+        apply("stage1_ntt_progress: bits=250/1000 (25.0%)",10);
+        apply("stage1_ntt_progress: bits=500/1000 (50.0%)",12);
+        check(near(status.progress().s_per_curve,1),"NTT old workers measure from first observed cursor");
+        apply("stage1_ntt_timing: bits=1000 device_ms=7900 wall_ms=8000 setup_ms=10000 readback_ms=1 stopped=0");
+        check(status.progress().curves_done==8&&near(status.progress().pct,100)&&status.progress().eta_s==0,"NTT single-batch completion");
+        status.start(12);check(!status.progress().valid&&status.measured_seconds==0,"NTT next task resets all samples");
+    }
+    {
         const auto ntt = parse_line(TS "Stage1 execution: curve=ed param=e backend=ntt ntt_bits=127 "
             "ntt_type=weighted ntt_length=32 ntt_bpw=20 naf=0 ntt_forward_pass_bits=2+3");
         check(ntt.kind == LogKind::Event && ntt.stage1.valid() && ntt.stage1.curve == "ed" &&

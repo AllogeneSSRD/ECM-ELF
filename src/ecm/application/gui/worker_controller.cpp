@@ -191,6 +191,7 @@ bool WorkerController::start(int index,bool detailed_trace,WorkerStart origin) {
         std::string err;refresh_worker_for_queue(w);
         if(w.proc && w.proc->start(err,origin)) {
             w.stage1_execution = {};
+            w.stage1_ntt={};w.progress={};w.resume_pct=-1;w.last_traced_pct=-1;
             trace("worker "+std::to_string(w.index)+": started pid="+std::to_string(w.proc->pid())+
                   (detailed_trace?" cmd="+w.proc->command_line():""));return true;
         }
@@ -408,11 +409,17 @@ void WorkerController::tick() {
             w.version_pid=w.proc->pid();
             w.application_version.clear();
             w.stage1_execution = {};
+            w.stage1_ntt={};w.progress={};w.resume_pct=-1;w.last_traced_pct=-1;
         }
         WorkerProc::DrainedOutput d;
         w.proc->drain(d);
         if(!d.application_version.empty())w.application_version=d.application_version;
         w.progress_lines += d.progress_lines;
+        if(d.stage1_task_started) {
+            w.progress={};w.resume_pct=-1;w.last_traced_pct=-1;
+            w.hist_s_per_curve.clear();w.stage1_ntt={};
+        }
+        if(d.stage1_ntt.valid)w.stage1_ntt=d.stage1_ntt;
         if (d.last_progress.valid) {
             w.progress = !stage2_average_&&w.stage2&&d.stage2.valid?d.stage2.progress(false):d.last_progress;
             // Sample for the chart. The driver emits progress lines at a decaying rate, so

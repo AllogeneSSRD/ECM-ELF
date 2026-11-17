@@ -66,6 +66,18 @@ int main(int argc, char** argv) {
             if(!std::filesystem::exists(marker))return 5;
             out("===== queue done, 1 task(s) processed =====\n");return 0;
         }
+        if(arg_value("--scenario")=="v2-ntt-progress"){
+            out("ECM-ELF 0.64.5 (Stage1 fixture)\n");
+            out("START: ECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"\n");
+            out("stage1_ntt_batch_resume: completed=128 total=1000\n");
+            out("stage1_ntt_batch: offset=128 total=1000 curves=32 capacity=32 resumed=1\n");
+            out("Stage1 execution: curve=ed param=e backend=ntt ntt_bits=15919 ntt_type=weighted ntt_length=1280 ntt_bpw=13 naf=12\n");
+            out("stage1_ntt_plan: device=1 p=15919 curves=32 resume=250 bits=1000\n");
+            out("stage1_ntt_progress: columns=500/1000 (50.0%%) elapsed=8.000\n");
+            HANDLE stop=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage1-stop-handle").c_str(),nullptr,10)));
+            if(!stop||WaitForSingleObject(stop,60000)!=WAIT_OBJECT_0)return 5;
+            out("Checkpoint saved: NTT presentation stop\n");return 1;
+        }
         if(arg_value("--scenario")=="v2-presentation"){
             out("ECM-ELF 0.49.1 (Stage1 fixture)\n");
             out("START: ECMSTAGE1=1,2,%d,-1,100,1,\"1234567\"\n",worker==1?127:5237);

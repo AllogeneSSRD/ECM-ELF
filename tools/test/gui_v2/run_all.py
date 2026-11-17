@@ -89,6 +89,7 @@ def plan(exe, out):
     tests.append(('ownership', [sys.executable, '-u', HERE / 'test_ownership.py',
                                '--probe', probe, '--out', out / 'ownership'], [probe]))
     python('startup-dispatch', 'test_startup_dispatch.py', uses_worker=True)
+    python('ntt-progress', 'test_ntt_progress.py', uses_worker=True)
     python('dx11-host', 'test_dx11_host.py')
     python('pages', 'test_pages.py', uses_layers=True)
     python('interaction', 'test_interaction.py', uses_worker=True, uses_layers=True)
