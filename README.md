@@ -70,6 +70,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 
 - **CUDA CGBN** 是默认 CUDA 算法，按构建中的位宽档执行 Edwards 或 Montgomery。`param = "m0"` 选择与 GMP-ECM `-param 0` 同族的 Suyama 曲线，`"m2"` 和 `"m3"` 选择相应的 batch 参数化。Montgomery 默认用 ladder，PARAM0 可选 PRAC。见 [Stage1 实现](docs/architecture/STAGE1.md)。
 - **CUDA NTT** 用于完整梅森数，支持 Edwards 和 Montgomery PARAM0。通过 `[stage1] gpu_algorithm = "ntt"` 或 `--gpu-algorithm ntt` 启用。见 [CUDA 全宽 NTT](docs/usage/STAGE1.md#cuda-全宽-ntt)。
+- **CUDA 一线程一曲线** 用于最高 1024 bit 的 Edwards，使用与 OpenCL 共用的 NAF 点算术。通过 `gpu_algorithm = "thread"` 或 `--gpu-algorithm thread` 启用。见 [使用方法](docs/usage/STAGE1.md#cuda-edwards-一线程一曲线)。
 - **OpenCL** 的桌面 worker 支持 Montgomery PARAM3 和最高 1024 bit 的 Edwards NAF。Edwards 每个工作项处理一条曲线，使用共享 NAF 编码并在设备建表。`ecm.exe --showkernel` 列出 Montgomery 可选算子。 [OpenCL Stage1 用法](docs/usage/STAGE1.md#opencl-edwards) · [OpenCL 架构](docs/architecture/OPENCL.md#stage1-曲线执行)
 - **CPU** 的 Edwards 与 Suyama-Montgomery 路径可用 GMP 标量或 AVX-512 IFMA，IFMA 每批处理 8 条曲线。Windows x64 上的 Montgomery PARAM0 还可显式使用本地构建的 `gwnum.dll`。见 [Stage1 实现](docs/architecture/STAGE1.md)与 [GWNUM 本地构建](docs/usage/BUILD.md#cpu-stage1-本地-gwnum-316)。
 

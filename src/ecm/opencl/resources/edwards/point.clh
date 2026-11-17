@@ -1,17 +1,18 @@
 // Extended Edwards a=1. A dictionary entry stores d*T in its fourth field.
 typedef struct { fe x, y, z, t; } ed_point;
 
-static inline ed_point ed_double(ed_point p, fe n, uint np0, int need_t) {
-    const fe a = fe_mul(p.x, p.x, n, np0);
-    const fe b = fe_mul(p.y, p.y, n, np0);
-    const fe z2 = fe_mul(p.z, p.z, n, np0);
-    #if TWO_XY
-    const fe xy = fe_mul(p.x, p.y, n, np0);
-    const fe e = fe_add(xy, xy, n);
-    #else
-    const fe xy = fe_add(p.x, p.y, n);
-    const fe e = fe_sub(fe_sub(fe_mul(xy, xy, n, np0), a, n), b, n);
-    #endif
+EDWARDS_INLINE ed_point ed_double(ed_point p, fe n, uint np0, int need_t, int two_xy) {
+    const fe a = fe_sqr(p.x, n, np0);
+    const fe b = fe_sqr(p.y, n, np0);
+    const fe z2 = fe_sqr(p.z, n, np0);
+    fe e;
+    if (two_xy) {
+        const fe xy = fe_mul(p.x, p.y, n, np0);
+        e = fe_add(xy, xy, n);
+    } else {
+        const fe xy = fe_add(p.x, p.y, n);
+        e = fe_sub(fe_sub(fe_sqr(xy, n, np0), a, n), b, n);
+    }
     const fe g = fe_add(a, b, n);
     const fe f = fe_sub(g, fe_add(z2, z2, n), n);
     const fe h = fe_sub(a, b, n);
@@ -23,7 +24,7 @@ static inline ed_point ed_double(ed_point p, fe n, uint np0, int need_t) {
     return p;
 }
 
-static inline ed_point ed_add(ed_point p, ed_point q, fe n, uint np0, int need_t) {
+EDWARDS_INLINE ed_point ed_add(ed_point p, ed_point q, fe n, uint np0, int need_t) {
     const fe a = fe_mul(p.x, q.x, n, np0);
     const fe b = fe_mul(p.y, q.y, n, np0);
     const fe c = fe_mul(p.t, q.t, n, np0);
@@ -41,13 +42,14 @@ static inline ed_point ed_add(ed_point p, ed_point q, fe n, uint np0, int need_t
     return p;
 }
 
-static inline ed_point point_load(__global const uint *p, size_t stride) {
-    return (ed_point){fe_load(p, stride), fe_load(p + LIMBS * stride, stride),
-                      fe_load(p + 2 * LIMBS * stride, stride),
-                      fe_load(p + 3 * LIMBS * stride, stride)};
+EDWARDS_INLINE ed_point point_load(__global const uint *p, size_t stride) {
+    const ed_point point = {fe_load(p, stride), fe_load(p + LIMBS * stride, stride),
+                            fe_load(p + 2 * LIMBS * stride, stride),
+                            fe_load(p + 3 * LIMBS * stride, stride)};
+    return point;
 }
 
-static inline void point_store(__global uint *p, size_t stride, ed_point q) {
+EDWARDS_INLINE void point_store(__global uint *p, size_t stride, ed_point q) {
     fe_store(p, stride, q.x);
     fe_store(p + LIMBS * stride, stride, q.y);
     fe_store(p + 2 * LIMBS * stride, stride, q.z);

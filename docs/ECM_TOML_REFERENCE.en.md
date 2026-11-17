@@ -291,7 +291,21 @@ Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] stage1.cpu_
 
 Legacy v1 key `stage1.stage1_threads`
 
-Host worker count for CPU Stage1 and for curve construction in CUDA Edwards NTT Stage1. 0 selects automatically. CUDA launch geometry is controlled separately.
+Host worker count for CPU Stage1 and Edwards curve construction in CUDA NTT and one-thread-per-curve CUDA/OpenCL. 0 selects automatically. GPU launch geometry is controlled separately.
+
+<a id="cuda_thread_block_size"></a>
+
+### cuda.thread_block_size
+
+```toml
+cuda.thread_block_size = 128
+```
+
+Type `int` · Range `[32|64|128|256]` · Worker override `[worker.N] stage1.cuda.thread_block_size` · Level `advanced`.
+
+Legacy v1 key `stage1.cuda_thread_block_size`
+
+CUDA block size for the Edwards thread algorithm only. Use 32, 64, 128 or 256. CLI --wg overrides it; --wg 0 selects 128.
 
 ### cuda_low_cpu
 
@@ -387,9 +401,9 @@ Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout r
 gpu_algorithm = "cgbn"
 ```
 
-Type `int|string` · Range `[1|2|cgbn|ntt]` · Worker override `[worker.N] stage1.gpu_algorithm` · Level `advanced`.
+Type `int|string` · Range `[1|2|3|cgbn|ntt|thread]` · Worker override `[worker.N] stage1.gpu_algorithm` · Level `advanced`.
 
-Stage1 algorithm when the target is GPU: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. For Edwards NTT, see the NAF window setting.
+CUDA Stage1 GPU algorithm, case-insensitive. 1/cgbn selects CGBN, 2/ntt selects NTT on full Mersenne moduli with 1–128 curves, and 3/thread selects one CUDA thread per Edwards curve for moduli up to 1024 bits.
 
 <a id="stage1_backend"></a>
 
@@ -661,7 +675,7 @@ Type `string` · Range `[auto|<id>|<alias>]` · Worker override `[worker.N] stag
 
 Legacy v1 key `stage1.kernel_mul`
 
-OpenCL modular-multiplication kernel ID or alias. Empty or auto lets the backend choose. Intended for comparing or debugging known kernels; automatic selection is normally suitable. CUDA ignores this key.
+OpenCL modular multiplication. PARAM3 accepts registered IDs and aliases. Edwards defaults to cios and accepts fips or NVIDIA-only fips_ptx through 512-bit moduli. CUDA ignores this key.
 
 <a id="kernel_special_mult"></a>
 
@@ -689,7 +703,7 @@ Type `string` · Range `[auto|<id>|<alias>]` · Worker override `[worker.N] stag
 
 Legacy v1 key `stage1.kernel_sqr`
 
-OpenCL modular-squaring kernel ID or alias. Empty or auto lets the backend choose; automatic selection is normally suitable. CUDA ignores this key.
+OpenCL modular squaring. PARAM3 accepts registered IDs and aliases. Edwards auto reuses the selected multiplier. Explicit cios selects CIOS, while fips and NVIDIA-only fips_ptx select symmetric FIPS through 512 bits. On one Edwards task, select the same FIPS implementation for both operators that use FIPS. CUDA ignores this key.
 
 <a id="kernel_sub"></a>
 

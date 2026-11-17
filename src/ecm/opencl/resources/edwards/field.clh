@@ -1,3 +1,10 @@
+#ifndef EDWARDS_INLINE
+#define EDWARDS_INLINE static inline
+#endif
+#ifndef EDWARDS_ASM
+#define EDWARDS_ASM __asm
+#endif
+
 // Private fixed-width Montgomery residues. LIMBS is selected at program build.
 typedef struct { uint limb[LIMBS]; } fe;
 
@@ -7,7 +14,7 @@ typedef struct { uint limb[LIMBS]; } fe;
 #define EDWARDS_LIMB_LOOP _Pragma("unroll 1")
 #endif
 
-static inline fe fe_load(__global const uint *p, size_t stride) {
+EDWARDS_INLINE fe fe_load(__global const uint *p, size_t stride) {
     fe r;
     EDWARDS_LIMB_LOOP
     for (uint j = 0; j < LIMBS; ++j)
@@ -15,13 +22,13 @@ static inline fe fe_load(__global const uint *p, size_t stride) {
     return r;
 }
 
-static inline void fe_store(__global uint *p, size_t stride, fe value) {
+EDWARDS_INLINE void fe_store(__global uint *p, size_t stride, fe value) {
     EDWARDS_LIMB_LOOP
     for (uint j = 0; j < LIMBS; ++j)
         p[j * stride] = value.limb[j];
 }
 
-static inline uint fe_sub_raw(fe a, fe b, fe *r) {
+EDWARDS_INLINE uint fe_sub_raw(fe a, fe b, fe *r) {
     ulong borrow = 0;
     EDWARDS_LIMB_LOOP
     for (uint j = 0; j < LIMBS; ++j) {
@@ -32,7 +39,7 @@ static inline uint fe_sub_raw(fe a, fe b, fe *r) {
     return (uint)borrow;
 }
 
-static inline uint fe_add_raw(fe a, fe b, fe *r) {
+EDWARDS_INLINE uint fe_add_raw(fe a, fe b, fe *r) {
     ulong carry = 0;
     EDWARDS_LIMB_LOOP
     for (uint j = 0; j < LIMBS; ++j) {
@@ -43,28 +50,29 @@ static inline uint fe_add_raw(fe a, fe b, fe *r) {
     return (uint)carry;
 }
 
-static inline fe fe_reduce(fe r, uint high, fe n) {
+EDWARDS_INLINE fe fe_reduce(fe r, uint high, fe n) {
     fe diff;
     const uint borrow = fe_sub_raw(r, n, &diff);
     return (high || !borrow) ? diff : r;
 }
 
-static inline fe fe_add(fe a, fe b, fe n) {
+EDWARDS_INLINE fe fe_add(fe a, fe b, fe n) {
     fe r;
     const uint high = fe_add_raw(a, b, &r);
     return fe_reduce(r, high, n);
 }
 
-static inline fe fe_sub(fe a, fe b, fe n) {
+EDWARDS_INLINE fe fe_sub(fe a, fe b, fe n) {
     fe r;
     if (fe_sub_raw(a, b, &r))
         fe_add_raw(r, n, &r);
     return r;
 }
 
+#if !EDWARDS_FIPS || EDWARDS_CIOS_SQUARE
 // CIOS. Each inner sum fits in 64 bits: (2^32-1)^2 + 2*(2^32-1).
 // The explicit high word permits a modulus occupying all LIMBS*32 bits.
-static inline fe fe_mul(fe a, fe b, fe n, uint np0) {
+EDWARDS_INLINE fe fe_cios(fe a, fe b, fe n, uint np0) {
     fe t = {0};
     uint high = 0;
     for (uint i = 0; i < LIMBS; ++i) {
@@ -89,6 +97,112 @@ static inline fe fe_mul(fe a, fe b, fe n, uint np0) {
         high = (uint)((top >> 32) + (merged >> 32));
     }
     return fe_reduce(t, high, n);
+}
+#endif
+
+#if EDWARDS_FIPS || EDWARDS_FIPS_SQUARE
+// Scan the columns of a*b + q*n, choosing q so its low LIMBS words vanish.
+#if EDWARDS_FIPS_PTX
+typedef struct { uint lo, mid, hi; } fips_column;
+
+EDWARDS_INLINE void fips_add(fips_column *sum, uint a, uint b, uint twice) {
+    if (twice) {
+        const uint lo = a * b, hi = mul_hi(a, b);
+        const uint twice_lo = lo << 1;
+        const uint twice_mid = (hi << 1) | (lo >> 31);
+        const uint twice_hi = hi >> 31;
+        EDWARDS_ASM volatile("{ .reg .u32 lo, mid;\n\t"
+                       "add.cc.u32 lo, %0, %3;\n\t"
+                       "addc.cc.u32 mid, %1, %4;\n\t"
+                       "addc.u32 %2, %2, %5;\n\t"
+                       "mov.u32 %0, lo;\n\t"
+                       "mov.u32 %1, mid; }"
+                       : "+r"(sum->lo), "+r"(sum->mid), "+r"(sum->hi)
+                       : "r"(twice_lo), "r"(twice_mid), "r"(twice_hi));
+    } else {
+        EDWARDS_ASM volatile("{ .reg .u32 lo;\n\t"
+                       "mad.lo.cc.u32 lo, %3, %4, %0;\n\t"
+                       "madc.hi.cc.u32 %1, %3, %4, %1;\n\t"
+                       "addc.u32 %2, %2, 0;\n\t"
+                       "mov.u32 %0, lo; }"
+                       : "+r"(sum->lo), "+r"(sum->mid), "+r"(sum->hi)
+                       : "r"(a), "r"(b));
+    }
+}
+
+EDWARDS_INLINE ulong fips_carry(fips_column sum) {
+    return ((ulong)sum.hi << 32) | sum.mid;
+}
+#else
+// A column has at most 2*LIMBS products. Sums of their 32-bit halves fit
+// in 64 bits and can accumulate independently until the column is complete.
+typedef struct { ulong lo, hi; } fips_column;
+
+EDWARDS_INLINE void fips_add(fips_column *sum, uint a, uint b, uint twice) {
+    sum->lo += (ulong)(a * b) << twice;
+    sum->hi += (ulong)mul_hi(a, b) << twice;
+}
+
+EDWARDS_INLINE ulong fips_carry(fips_column sum) {
+    return sum.hi + (sum.lo >> 32);
+}
+#endif
+
+EDWARDS_INLINE void fips_products(fips_column *sum, fe a, fe b, uint i,
+                                 uint first, uint last, uint square) {
+    EDWARDS_LIMB_LOOP
+    for (uint j = first; j <= last; ++j) {
+        const uint k = i - j;
+        if (!square || j <= k)
+            fips_add(sum, a.limb[j], b.limb[k], square && j < k);
+    }
+}
+
+EDWARDS_INLINE fe fe_fips(fe a, fe b, fe n, uint np0, uint square) {
+    fe q;
+    ulong carry = 0;
+    EDWARDS_LIMB_LOOP
+    for (uint i = 0; i < LIMBS; ++i) {
+        fips_column sum = {(uint)carry, (uint)(carry >> 32)};
+        fips_products(&sum, a, b, i, 0, i, square);
+        EDWARDS_LIMB_LOOP
+        for (uint j = 0; j < i; ++j)
+            fips_add(&sum, q.limb[j], n.limb[i - j], 0);
+        q.limb[i] = (uint)sum.lo * np0;
+        fips_add(&sum, q.limb[i], n.limb[0], 0);
+        carry = fips_carry(sum);
+    }
+    // In column LIMBS+i, q[i] is no longer needed as a quotient digit.
+    EDWARDS_LIMB_LOOP
+    for (uint i = 0; i < LIMBS; ++i) {
+        fips_column sum = {(uint)carry, (uint)(carry >> 32)};
+        fips_products(&sum, a, b, LIMBS + i, i + 1, LIMBS - 1, square);
+        EDWARDS_LIMB_LOOP
+        for (uint j = i + 1; j < LIMBS; ++j)
+            fips_add(&sum, q.limb[j], n.limb[LIMBS + i - j], 0);
+        q.limb[i] = (uint)sum.lo;
+        carry = fips_carry(sum);
+    }
+    return fe_reduce(q, (uint)carry, n);
+}
+#endif
+
+EDWARDS_INLINE fe fe_mul(fe a, fe b, fe n, uint np0) {
+#if EDWARDS_FIPS
+    return fe_fips(a, b, n, np0, 0);
+#else
+    return fe_cios(a, b, n, np0);
+#endif
+}
+
+EDWARDS_INLINE fe fe_sqr(fe a, fe n, uint np0) {
+#if EDWARDS_FIPS_SQUARE
+    return fe_fips(a, a, n, np0, 1);
+#elif EDWARDS_CIOS_SQUARE
+    return fe_cios(a, a, n, np0);
+#else
+    return fe_mul(a, a, n, np0);
+#endif
 }
 
 #undef EDWARDS_LIMB_LOOP

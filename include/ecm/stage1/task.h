@@ -37,6 +37,7 @@ struct Stage1ExecutionPreferences {
     unsigned cuda_prac_search = 0; // Zero uses the generated configuration default.
     unsigned cpu_prac_search = 0; // Zero uses the generated configuration default.
     unsigned cuda_slice_depth = 0; // Zero uses the generated configuration default.
+    unsigned cuda_thread_block_size = 128;
     bool cuda_low_cpu = false;
     int verbose=0;
     int device_index;

@@ -62,6 +62,7 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
     const auto& backend = execution.backend;
     line += " | ";
     line += backend == "cgbn" ? "CUDA/CGBN" : backend == "ntt" ? "CUDA/NTT" :
+        backend == "cuda-thread" ? "CUDA/thread" :
         backend == "cpu" ? "CPU" : backend == "opencl" ? "OpenCL" : backend;
     const auto field = [&](const char* key) -> std::string {
         const auto found = execution.details.find(key);
@@ -72,7 +73,7 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
         if (const auto value = field(key); !value.empty())
             append(std::string(label) + "=" + value);
     };
-    if (backend == "cgbn" || backend == "opencl") {
+    if (backend == "cgbn" || backend == "opencl" || backend == "cuda-thread") {
         const auto weight = field("kernel_weight"), tpi = field("tpi");
         if (!weight.empty() && !tpi.empty())
             line += "＜" + weight + ", " + tpi + "＞";
@@ -80,6 +81,8 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
             append_field("kernel_weight", text("worker.stage1_kernel_bits", zh));
             append_field("tpi", "TPI");
         }
+        if (backend == "cuda-thread")
+            append_field("tpb", "TPB");
     } else if (backend == "ntt") {
         if (const auto bits = field("ntt_bits"); !bits.empty())
             line += " " + bits + " bits";

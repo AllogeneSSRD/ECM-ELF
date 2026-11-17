@@ -13,3 +13,13 @@
 RTX 4060 Laptop、RTX 4070 Ti 与 AMD gfx1150 的设备验收覆盖全部七个容器。AMD PAL 3640.0 从 512 bit 起曾在 `clBuildProgram` 中异常退出，禁用宽位 limb 循环的强制展开后通过 512、768、1024 bit 对拍。两张 NVIDIA 卡的中断测试确认恢复后文本存档逐条一致。队列验收在 AMD 上生成 8 条 Edwards 保存点及对应 `ECMSTAGE2=` 交接行。另一份 OpenCL save 由 CUDA Stage2 以 B1=300、B2=2000 实际续算并发布 NF。日志按设备保存在 `data/experiments/opencl_edwards_stage1/`。
 
 首轮用 768 条做等批量对照，原始样本在 `data/experiments/opencl_edwards_stage1/bench_*/`。随后按两张卡各自的吞吐平台扩大批量，在 383／384／385 bit 两侧补测，并用更长的 B1 复核边界。[双卡小位宽对照](../performance/STAGE1.md#opencl-小位宽对照) 记录当前口径。后续剖析可在 384／385 bit 并列采集寄存器、private memory 和 local load/store。若溢出随位宽跃升，先试 CIOS 静态下标和缩短倍点临时变量的存活区间。若依赖链占主导，比较 `mul_hi` 的 32 位部分积与专用平方。同一套点公式和 NAF 协议继续用于对拍。
+
+### FIPS
+
+先在 4060 Laptop 上比较 32 位半积独立累加和 PTX 三字进位链，再比较整个 Edwards 点乘。便携通用 FIPS 在窄位有退化，单独使用便携对称平方有小幅收益。PTX FIPS 在 127–511 bit 的完整主循环均有收益。离线汇编在代表位宽没有发现 spill，512-bit 容器仍接近寄存器上限。正式选择复用 OpenCL 模乘和平方配置，默认 CIOS。实测、计时口径与验证见 [FIPS 对照](../performance/STAGE1.md#opencl-edwards-fips)。
+
+### CUDA 原生移植
+
+CUDA 直接编译 OpenCL 路径的字段和点公式。两端对拍时固定 sigma、批量、工作组、乘法与平方。首次 12,288 条 CUDA 批次出现末点不匹配，少量曲线的短测未触发。原生路径将 pageable H2D 经默认 stream 提交，首个 kernel 随即走独立的非阻塞 stream。改为同一 stream 后重跑整个大批量矩阵，每条曲线的归一化终点与 OpenCL 一致。 [CUDA 内存传输同步](https://docs.nvidia.com/cuda/cuda-runtime-api/api-sync-behavior.html) · [CUDA stream 同步规则](https://docs.nvidia.com/cuda/cuda-runtime-api/stream-sync-behavior.html)
+
+暖缓存对照显示，串行曲线构造在 6,144 条、1021 bit 时约 1.5 秒。共享主机流程改为先提交种子身份，再按连续下标并行构造、打包，发布顺序由原曲线下标决定。[性能结果](../performance/STAGE1.md#cuda-与-opencl-一线程一曲线) 区分设备主循环、主机构造和整批墙钟。

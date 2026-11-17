@@ -46,7 +46,7 @@
       <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
       <Item id="option_stage1_cpu_mont_chain" name="Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。" />
       <Item id="option_stage1_cpu_prac_search" name="CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。" />
-      <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设置。" />
+      <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动选择。GPU 发射几何另行设置。" />
       <Item id="option_stage1_affinity" name="CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。" />
       <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
       <Item id="option_stage1_exp_cache" name="指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。" />
@@ -60,7 +60,8 @@
       <Item id="option_stage1_ckpt_seconds" name="设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。" />
       <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
       <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
-      <Item id="option_stage1_gpu_algorithm" name="选中 GPU 时使用的 Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。" />
+      <Item id="option_stage1_gpu_algorithm" name="CUDA Stage1 GPU 算法，不区分大小写。1/cgbn 选择 CGBN，2/ntt 对完整梅森模数运行 1–128 条曲线，3/thread 由每个 CUDA 线程处理一条 Edwards 曲线，支持最高 1024 bit 的模数。" />
+      <Item id="option_stage1_cuda_thread_block_size" name="仅用于 CUDA Edwards thread 的线程块大小，可选 32、64、128 或 256。CLI --wg 可覆盖，--wg 0 选择 128。" />
       <Item id="option_stage1_ntt_convolution" name="auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。" />
       <Item id="option_stage1_ntt_tight_weighted_bound" name="CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的安全短加权计划。false 恢复保守界和实测后端选型。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
@@ -74,8 +75,8 @@
       <Item id="option_stage1_ntt_warp_tail" name="用 warp shuffle 处理 tile 变换的局部尾部。auto 使用所选配置。" />
       <Item id="option_stage1_tpi" name="设置 OpenCL 每个大整数使用的线程数，需满足有效 TPI 与整数 limb 数的布局约束。CUDA 后端自行按位宽选择 TPI，不使用此键；不要用它调整 CUDA 的线程块大小。" />
       <Item id="option_stage1_wg_size" name="设置 OpenCL 工作组大小，0 由后端自动选择。显式值必须满足当前设备和内核的限制；CUDA 后端不使用此设置。" />
-      <Item id="option_stage1_kernel_mul" name="指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。CUDA 后端忽略此键。" />
-      <Item id="option_stage1_kernel_sqr" name="指定 OpenCL 模平方内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
+      <Item id="option_stage1_kernel_mul" name="选择 OpenCL 模乘。PARAM3 接受注册的内核 ID 和别名。Edwards 默认 cios，最高 512 bit 可选 fips 或 NVIDIA 专用的 fips_ptx。CUDA 忽略此键。" />
+      <Item id="option_stage1_kernel_sqr" name="选择 OpenCL 模平方。PARAM3 接受注册的内核 ID 和别名。Edwards 的 auto 复用所选模乘，cios 强制使用 CIOS，fips 和 NVIDIA 专用的 fips_ptx 在 512 bit 以内使用对称 FIPS。一个 Edwards 任务使用同一种 FIPS 实现。CUDA 忽略此键。" />
       <Item id="option_stage1_kernel_add" name="指定 OpenCL 模加内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
       <Item id="option_stage1_kernel_sub" name="指定 OpenCL 模减内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />
       <Item id="option_stage1_kernel_special_mult" name="指定 OpenCL 特殊乘法内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。" />

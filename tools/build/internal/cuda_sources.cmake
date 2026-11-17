@@ -42,6 +42,10 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/io/exponent_cache.cpp)
 set(ECM_STAGE1_EDWARDS_SOURCES
     src/ecm/stage1/edwards/cuda/runtime.cpp
+    src/ecm/stage1/edwards/cuda/thread_workflow.cpp
+    kernels/cuda/stage1_edwards_thread_small.cu
+    kernels/cuda/stage1_edwards_thread_medium.cu
+    kernels/cuda/stage1_edwards_thread_wide.cu
     src/ecm/stage1/edwards/cuda/edwards_runtime.cu)
 set(ECM_STAGE1_MONT_SOURCES
     src/ecm/stage1/montgomery/cuda/runtime.cu

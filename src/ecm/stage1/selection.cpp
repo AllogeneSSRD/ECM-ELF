@@ -225,6 +225,7 @@ bool parse_gpu_algorithm(std::string_view value, GpuAlgorithm& out) {
     const auto v = lower_ascii(value);
     if (v == "1" || v == "+1" || v == "cgbn") out = GpuAlgorithm::Cgbn;
     else if (v == "2" || v == "+2" || v == "ntt") out = GpuAlgorithm::Ntt;
+    else if (v == "3" || v == "+3" || v == "thread") out = GpuAlgorithm::Thread;
     else return false;
     return true;
 }

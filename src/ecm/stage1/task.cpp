@@ -308,6 +308,8 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                     identity += "|ntt-edwards-naf-v1|" + std::to_string(opt.execution.naf_w);
                 else
                     identity += "|ntt-v1";
+            } else if (selection.gpu_algorithm == GpuAlgorithm::Thread) {
+                identity += "|cuda-edwards-thread-v1";
             }
 #if !ECM_HAS_CUDA_STAGE1
             else if (base.edwards)

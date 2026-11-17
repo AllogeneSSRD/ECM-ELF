@@ -198,6 +198,8 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 ### GPU Edwards
 
+最高 1024 bit 的一线程一曲线路径可用 CUDA 原生内核或 OpenCL 工作项运行。两端共用点算术、标量计划、内存布局和切片流程。CUDA 通过 `gpu_algorithm = "thread"` 显式选用。 [一线程一曲线架构](OPENCL.md#stage1-曲线执行)
+
 [CUDA NAF 批量入口](../../src/ecm/stage1/edwards/cuda/runtime.cpp)在 CGBN Montgomery 域推进 Edwards 点。主机负责标量编码和检查点，设备负责点字典、按列点乘及快照。完整数据流、点运算计数和显存公式见 [Edwards NAF](NAF.md)。
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。

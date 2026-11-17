@@ -268,6 +268,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     if (cfg.config_keys.count("cuda_slice_depth"))
         opt.execution.cuda_slice_depth = unsigned(cfg.cuda_slice_depth);
     opt.execution.cuda_low_cpu = cfg.cuda_low_cpu;
+    opt.execution.cuda_thread_block_size = unsigned(cfg.cuda_thread_block_size);
     opt.execution.verbose = cfg.verbose;
     opt.execution.device_index = cfg.device;
     opt.execution.ntt = {unsigned(cfg.ntt_length), unsigned(cfg.ntt_bpw), unsigned(cfg.ntt_tile),
@@ -395,6 +396,8 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         auto& s = cfg.selection;
         if (input.has("--gpu-algorithm"))
             s.gpu_algorithm = input.selection.gpu_algorithm;
+        if (s.gpu_algorithm == ecm_stage1::GpuAlgorithm::Thread && input.has("--wg"))
+            cfg.cuda_thread_block_size = cfg.wg_size ? cfg.wg_size : 128;
         if (input.has("--target"))
             s.target = input.selection.target;
         if (input.has("--param") && (input.has("--curve") || input.has("--gpu-param")))
@@ -561,6 +564,12 @@ bool stage1_save_construction(const std::string& name, Stage1Options& opt, std::
 }
 
 bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string& error) {
+    if (selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Thread &&
+        (!ECM_HAS_CUDA_STAGE1 || selection.target != ecm_stage1::ExecutionTarget::Gpu ||
+         selection.curve != ecm_stage1::CurveModel::Edwards)) {
+        error = "Stage1 thread requires the CUDA GPU Edwards worker";
+        return true;
+    }
     if (selection.strict_param && selection.target == ecm_stage1::ExecutionTarget::Cpu &&
         selection.curve == ecm_stage1::CurveModel::Montgomery && selection.gpu_param != 0) {
         error = "CPU Montgomery requires param m0";
@@ -598,6 +607,17 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
 
 bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error,
                        mpz_srcptr modulus) {
+    if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Thread) {
+        const auto block = opt.execution.cuda_thread_block_size;
+        if (block != 32 && block != 64 && block != 128 && block != 256) {
+            error = "CUDA Edwards thread block size must be 32, 64, 128 or 256";
+            return true;
+        }
+        if (modulus && mpz_sizeinbase(modulus, 2) > 1024) {
+            error = "CUDA Edwards thread Stage1 supports up to 1024-bit moduli";
+            return true;
+        }
+    }
 #if !ECM_HAS_CUDA_STAGE1
     if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
         opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards && modulus &&

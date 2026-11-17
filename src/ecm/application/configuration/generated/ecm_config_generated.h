@@ -177,6 +177,7 @@ struct Stage1Values {
     int device=0;
     int gpu_param=3;
     std::string gpu_algorithm="cgbn";
+    int cuda_thread_block_size=128;
     std::string ntt_convolution="auto";
     bool ntt_tight_weighted_bound=true;
     std::string ntt_tune_file="tune.toml";
@@ -262,6 +263,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"device",[](Stage1Values&c,const std::string&v){assign_value(c.device,v);},[](Stage1Values&c,const Stage1Values&v){c.device=v.device;}},
     {"gpu_param",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_param,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_param=v.gpu_param;}},
     {"gpu_algorithm",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_algorithm,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_algorithm=v.gpu_algorithm;}},
+    {"cuda_thread_block_size",[](Stage1Values&c,const std::string&v){c.cuda_thread_block_size=static_cast<int>(bounded_integer(v,"cuda_thread_block_size",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.cuda_thread_block_size=v.cuda_thread_block_size;}},
     {"ntt_convolution",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_convolution,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_convolution=v.ntt_convolution;}},
     {"ntt_tight_weighted_bound",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tight_weighted_bound,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tight_weighted_bound=v.ntt_tight_weighted_bound;}},
     {"ntt_tune_file",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tune_file,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tune_file=v.ntt_tune_file;}},

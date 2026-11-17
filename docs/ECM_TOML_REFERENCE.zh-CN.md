@@ -291,7 +291,21 @@ cpu_threads = 0
 
 v1 旧键 `stage1.stage1_threads`
 
-设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设置。
+设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动选择。GPU 发射几何另行设置。
+
+<a id="cuda_thread_block_size"></a>
+
+### cuda.thread_block_size
+
+```toml
+cuda.thread_block_size = 128
+```
+
+类型 `int` · 范围 `[32|64|128|256]` · Worker 覆盖 `[worker.N] stage1.cuda.thread_block_size` · 级别 `高级`。
+
+v1 旧键 `stage1.cuda_thread_block_size`
+
+仅用于 CUDA Edwards thread 的线程块大小，可选 32、64、128 或 256。CLI --wg 可覆盖，--wg 0 选择 128。
 
 ### cuda_low_cpu
 
@@ -387,9 +401,9 @@ v1 旧键 `stage1.exp_cache`
 gpu_algorithm = "cgbn"
 ```
 
-类型 `int|string` · 范围 `[1|2|cgbn|ntt]` · Worker 覆盖 `[worker.N] stage1.gpu_algorithm` · 级别 `高级`。
+类型 `int|string` · 范围 `[1|2|3|cgbn|ntt|thread]` · Worker 覆盖 `[worker.N] stage1.gpu_algorithm` · 级别 `高级`。
 
-选中 GPU 时使用的 Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。
+CUDA Stage1 GPU 算法，不区分大小写。1/cgbn 选择 CGBN，2/ntt 对完整梅森模数运行 1–128 条曲线，3/thread 由每个 CUDA 线程处理一条 Edwards 曲线，支持最高 1024 bit 的模数。
 
 <a id="stage1_backend"></a>
 
@@ -661,7 +675,7 @@ opencl.kernel_mul = ""
 
 v1 旧键 `stage1.kernel_mul`
 
-指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。CUDA 后端忽略此键。
+选择 OpenCL 模乘。PARAM3 接受注册的内核 ID 和别名。Edwards 默认 cios，最高 512 bit 可选 fips 或 NVIDIA 专用的 fips_ptx。CUDA 忽略此键。
 
 <a id="kernel_special_mult"></a>
 
@@ -689,7 +703,7 @@ opencl.kernel_sqr = ""
 
 v1 旧键 `stage1.kernel_sqr`
 
-指定 OpenCL 模平方内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
+选择 OpenCL 模平方。PARAM3 接受注册的内核 ID 和别名。Edwards 的 auto 复用所选模乘，cios 强制使用 CIOS，fips 和 NVIDIA 专用的 fips_ptx 在 512 bit 以内使用对称 FIPS。一个 Edwards 任务使用同一种 FIPS 实现。CUDA 忽略此键。
 
 <a id="kernel_sub"></a>
 

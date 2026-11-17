@@ -71,7 +71,29 @@ cmake --build $build --config Release --target prepare_prac_cache
 '(2^521-1)' | .\ecm.exe --target gpu --param e --gpu-backend opencl -d 1 --naf-w 6 -sigma 20260922 -gpucurves 256 -savea ed.save 1000 0
 ```
 
-`edwards_naf_window_bits` 接受 2～12，自动从 6 开始。`edwards_doubling = 1` 用 2XY，`0` 用 HWCD。指定 `naf_memory_mb` 可压低设备预算。`opencl.workgroup_size` 为 0 时交由运行时决定，每工作项始终处理一条曲线。`opencl.threads_per_integer` 和 Montgomery 算子选择只作用于 OpenCL PARAM3。最终 Edwards 文本 save 可交给现有 Stage2。断点续跑沿用检查点中的窗口和倍点公式。 [设备算术与内存](../architecture/OPENCL.md#stage1-曲线执行)
+`edwards_naf_window_bits` 接受 2～12，自动从 6 开始。`edwards_doubling = 1` 用 2XY，`0` 用 HWCD。指定 `naf_memory_mb` 可压低设备预算。`opencl.workgroup_size` 为 0 时交由运行时决定。Edwards 每工作项处理一条曲线，`opencl.threads_per_integer` 作用于 OpenCL PARAM3。最终 Edwards 文本 save 可交给现有 Stage2。断点续跑沿用检查点中的窗口和倍点公式。 [设备算术与内存](../architecture/OPENCL.md#stage1-曲线执行)
+
+OpenCL 和 CUDA 的一线程一曲线路径共用 `cpu_threads`。设为 0 时，从 1024 条曲线起用最多 4 个主机线程构造曲线和打包初始坐标，更小的批次用 1 个。设为 1 可固定单线程，日志中的 `construction_threads` 显示实际值。
+
+Edwards 默认使用 CIOS。模数不超过 512 bit 时，可在 `[stage1]` 为 `opencl.kernel_mul` 和 `opencl.kernel_sqr` 选便携 `"fips"` 或 NVIDIA 的 `"fips_ptx"`。例如，让 RTX 4060 同时使用 PTX 模乘和对称平方：
+
+```toml
+[stage1]
+opencl.kernel_mul = "fips_ptx"
+opencl.kernel_sqr = "fips_ptx"
+```
+
+平方设为 `"auto"` 时复用模乘，显式 `"cios"` 可固定 CIOS 平方。也可保留 CIOS 模乘，只把平方设为 `"fips"`。一个任务使用同一种 FIPS 实现。CLI 的 `--mul` 和 `--sqr` 可覆盖这两个键。恢复检查点时可以切换算术，日志用 `field_mul` 和 `field_sqr` 标出实际选择。 [4060 Laptop 实测](../performance/STAGE1.md#opencl-edwards-fips)
+
+### CUDA Edwards 一线程一曲线
+
+用 `ecm_cuda.exe` 在 GPU 上运行，支持最高 1024 bit 的奇数模数。以下示例只运行 Stage1：
+
+```powershell
+'(2^521-1)' | .\ecm_cuda.exe --target gpu --param e --gpu-algorithm thread -d 1 --wg 128 --naf-w 6 -sigma 20260922 -gpucurves 6144 -savea ed.save 1000 0
+```
+
+也可在 `[stage1]` 设置 `param = "e"`、`target = "gpu"`、`gpu_backend = "cuda"`、`gpu_algorithm = "thread"`（或 `3`）。`cuda.thread_block_size` 可取 32、64、128 或 256，默认 128，`--wg` 可覆盖。512 bit 以内使用 PTX FIPS 模乘与对称平方，更宽的容器使用 CIOS。日志的 `backend=cuda-thread` 后显示实际容器、TPB、模乘、平方、寄存器、每线程本地存储和 NAF 恢复位置。CUDA thread 检查点由同一路径恢复，完成后的 Edwards save 可交给现有 Stage2。 [设备与检查点布局](../architecture/OPENCL.md#cuda-原生一线程一曲线) · [4060 Laptop 对照](../performance/STAGE1.md#cuda-与-opencl-一线程一曲线)
 
 ### 队列与交接
 

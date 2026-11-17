@@ -1,9 +1,15 @@
+#ifndef EDWARDS_KERNEL
+#define EDWARDS_KERNEL __kernel
+#define EDWARDS_LANE get_global_id(0)
+#define EDWARDS_TWO_XY TWO_XY
+#endif
+
 // SoA: adjacent work-items read the same limb of adjacent curves.
 // Dictionary ranges are bounded independently of the chosen NAF window.
-__kernel void edwards_dictionary(__global const uint *constants,
+EDWARDS_KERNEL void edwards_dictionary(__global const uint *constants,
         __global const uint *base, __global uint *dictionary, __global uint *next,
         uint count, uint np0, uint start, uint stop, uint entries) {
-    const size_t lane = get_global_id(0);
+    const size_t lane = EDWARDS_LANE;
     if (lane >= count)
         return;
     const fe n = fe_load(constants, 1);
@@ -15,7 +21,7 @@ __kernel void edwards_dictionary(__global const uint *constants,
     ed_point odd = start ? point_load(next + lane, count) : p;
     ed_point two;
     if (entries > 1) {
-        two = ed_double(p, n, np0, 1);
+        two = ed_double(p, n, np0, 1, EDWARDS_TWO_XY);
         two.t = fe_mul(two.t, d, n, np0);
     }
     for (uint j = start; j < stop; ++j) {
@@ -29,11 +35,11 @@ __kernel void edwards_dictionary(__global const uint *constants,
         point_store(next + lane, count, odd);
 }
 
-__kernel void edwards_slice(__global const uint *constants,
+EDWARDS_KERNEL void edwards_slice(__global const uint *constants,
         __global uint *state, __global const uint *dictionary,
         __global const uint *nonzero, __global const uint *codes,
         uint count, uint np0, uint bits, uint start, uint stop, uint entries) {
-    const size_t lane = get_global_id(0);
+    const size_t lane = EDWARDS_LANE;
     if (lane >= count)
         return;
     const fe n = fe_load(constants, 1);
@@ -43,7 +49,7 @@ __kernel void edwards_slice(__global const uint *constants,
         const uint bit = bits - 1 - pos, word = bit >> 5, shift = bit & 31;
         const int add = (nonzero[word] >> shift) & 1;
         const int last = pos + 1 == stop;
-        p = ed_double(p, n, np0, add || last);
+        p = ed_double(p, n, np0, add || last, EDWARDS_TWO_XY);
         if (add) {
             const ulong packed = (ulong)codes[word] | ((ulong)codes[word + 1] << 32);
             const uint code = (uint)(packed >> shift) & (2 * entries - 1);

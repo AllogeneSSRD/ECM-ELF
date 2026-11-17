@@ -113,7 +113,7 @@ void print_usage(const char* prog) {
                  "only)\n"
               << "  --showkernel         List available " << ecm_backend_name()
               << " kernel paths and exit\n"
-              << "  --gpu-algorithm <1|2|cgbn|ntt>  Select the Stage1 GPU algorithm.\n"
+              << "  --gpu-algorithm <1|2|3|cgbn|ntt|thread>  Select the Stage1 GPU algorithm.\n"
               << "  --tune ntt          Tune CUDA Stage1 NTT. Use --bits N for one exponent width.\n"
               << "  --tune-exhaustive   With --tune ntt: measure every eligible batch.\n"
               << "  --gpu-info           Report the device this build would use and, "
@@ -136,8 +136,8 @@ void print_usage(const char* prog) {
               << "  --local                    Use LDS-based kernel (reduce scratch "
                  "spill at large "
                  "bits)\n"
-              << "  --wg <N>                   Explicit work-group size (0=auto; "
-                 "1,4,8,16,32...)\n"
+              << "  --wg <N>                   OpenCL work-group size (0=auto) or CUDA Edwards thread block\n"
+              << "                             size (32, 64, 128 or 256; 0=128)\n"
               << " Kernel source / cache:\n"
               << "  --kernel-root <dir>        Kernel source root\n"
               << "  --kernel-cache-dir <dir>   OpenCL binary cache directory (OpenCL "
@@ -346,7 +346,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 if (!ecm_stage1::parse_curve_model(value, selection.curve))
                     reject();
             } else if (key == "--gpu-algorithm") {
-                expected = "1|2|cgbn|ntt";
+                expected = "1|2|3|cgbn|ntt|thread";
                 if (!ecm_stage1::parse_gpu_algorithm(value, selection.gpu_algorithm))
                     reject();
             } else if (key == "--gpu-backend") {

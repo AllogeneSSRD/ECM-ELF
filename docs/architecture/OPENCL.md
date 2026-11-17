@@ -6,15 +6,27 @@ OpenCL 实现 Stage1 曲线批处理，以及独立 `ecm_opencl_stage2.exe` 的�
 
 Montgomery PARAM3 在小位宽走私有 limb 路径。一个工作项维护一条曲线的两组阶梯坐标，工作项间无需交换 limb。每一位调用 `double_add_v2`，其中四次平方、四次完整模乘和一次 32 位曲线常数乘法。PARAM3 固定基点差分和短系数，使该常数乘法可以按 limb 线性扫描。主机根据位宽和厂商选择模乘、平方、加减与短乘算子。手写展开、汇编、LDS 和多工作项方案各有自己的准入范围。小位宽性能主要取决于整条曲线的私有寄存器和 spill，而单独的算子微基准只覆盖依赖链的一部分。 [私有阶梯](../../src/ecm/opencl/resources/ecm_stage1.cl) · [算子注册表](../../src/ecm/opencl/arithmetic/path_registry.cpp)
 
-Edwards 使用独立代码路径。主机在 [workflow.cpp](../../src/ecm/stage1/edwards/opencl/workflow.cpp) 复用 Atkin–Morain 构造和共享 `48·lcm(1…B1)` 的 NAF 编码。设备代码分三层：
+Edwards 在 [共享主机流程](../../src/ecm/stage1/edwards/thread_workflow.h) 构造 Atkin–Morain 曲线，为整批生成同一份 `48·lcm(1…B1)` 的 NAF 编码。批次先按队列顺序确定 sigma，再分段并行构造曲线。每个主机线程拥有独立的 GMP 工作区，完整梅森数的构造还会在段内复用相邻 sigma 的公共前缀。结果按原曲线下标写入同一份交错缓冲。OpenCL 的 [设备层](../../src/ecm/stage1/edwards/opencl/device.h) 管理 JIT、命令队列和缓冲。设备代码分三层：
 
-- [field.clh](../../src/ecm/opencl/resources/edwards/field.clh) 定义规范 Montgomery 残基和 32 位 limb CIOS。位宽在 OpenCL 编译时确定。支持 128、192、256、384、512、768、1024 bit 容器，进位路径支持模数占满容器。AMD 在 512 bit 起禁用 limb 循环的全部展开，以避开在 gfx1150 PAL 驱动 3640.0 上复现的编译器异常退出。启动日志用 `limb_unroll` 标出编译策略。
+- [field.clh](../../src/ecm/opencl/resources/edwards/field.clh) 定义规范 Montgomery 残基。默认 32 位 limb CIOS，支持 128、192、256、384、512、768、1024 bit 容器。512 bit 以内可显式选便携 FIPS 或 NVIDIA PTX FIPS，模数可以占满容器。AMD 在 512 bit 起禁用 limb 循环的全部展开，以避开 gfx1150 PAL 3640.0 的编译器异常退出。启动日志标出 `field_mul`、`field_sqr` 和 `limb_unroll`。
 - [point.clh](../../src/ecm/opencl/resources/edwards/point.clh) 定义扩展 Edwards 的 2XY／HWCD 倍点和带缓存 `dT` 的加点。普通 NAF 列只更新 XYZ，有加点或切片收尾时才计算 T。
 - [stage1.cl](../../src/ecm/opencl/resources/edwards/stage1.cl) 通过每工作项一条曲线构建并消费奇数倍点字典。字典和状态按 limb 交错布局，使相邻工作项访问相邻元素。一批曲线共用两份 NAF 位平面。字典保留投影坐标，因此设备建表无需求逆。
 
 设 $L$ 为 32 位 limb 数、$C$ 为曲线数量，则字典占 $16LC\,2^{w-2}$ 字节。OpenCL 以设备全局内存的一半、单对象容量和 `naf_memory_mb` 做准入。新任务可降窗。切片按 kernel event 时间朝 50 ms 调整，只有检查点、停止和收尾才读回状态。CPU 核对点方程，再用 $\gcd(Z-Y,N)$ 提取因子，或归一化 $(Z+Y)/(Z-Y)$ 写统一 Edwards save。OpenCL Edwards 使用自己的 NAF 游标和 XYZT 检查点载荷。
 
-当前 CIOS 通用乘法也用于平方。常规倍点列需 7 次模乘，非零列多一次倍点 T 和 8 次加点乘法，切片收尾另计。以 NAF 非零密度约 $1/(w+1)$ 估算，主循环每列约 $7+9/(w+1)$ 次通用模乘。两张 NVIDIA 卡的 [配对跑分](../performance/STAGE1.md#opencl-小位宽对照) 分别报告设备主循环和完整批次墙钟。
+默认平方复用通用乘法。常规倍点列有 7 次模域乘积，其中 3 次是平方。非零列多一次倍点 T 和 8 次加点乘法，切片收尾另计。以 NAF 非零密度约 $1/(w+1)$ 估算，主循环每列约 $7+9/(w+1)$ 次模域乘积。两张 NVIDIA 卡的 [配对跑分](../performance/STAGE1.md#opencl-小位宽对照) 分别报告设备主循环和完整批次墙钟。
+
+### Edwards Montgomery 模乘与 FIPS
+
+FIPS 按列累加 $ab+qN$。设基数 $W=2^{32}$，当前列低字为 $c_i$，选择 $q_i=c_i(-N^{-1})\bmod W$ 消去低半部。输出高半部时，旧 $q_i$ 已离开活动列，可原位写入结果。规范输入 $a,b<N$ 给出 $0\le (ab+qN)/W^L<2N$，最后沿用含最高进位字的条件减法。
+
+便携版将各乘积的高、低字累加到独立 64 位和，整列完成时再合并进位。每列至多有 $2L$ 个等效乘积，两个和都在 64 位内。NVIDIA 版用三个 32 位字，通用乘积通过 `mad.lo.cc`、`madc.hi.cc` 和 `addc` 传播进位。两者的通用乘法都执行 $2L^2+L$ 次 limb 乘法。专用平方将对角线以外的对称积乘二，减少 $L(L-1)/2$ 次 limb 乘法。两条 FIPS 路径与 CIOS 使用相同的 Montgomery 基数、规范坐标和检查点布局。论文调度与实测见 [4060 Laptop 的 FIPS 对照](../performance/STAGE1.md#opencl-edwards-fips)。
+
+### CUDA 原生一线程一曲线
+
+CUDA 同样为每条曲线分配一个线程，保留按 limb 交错的曲线状态、只读 NAF 位平面和投影字典。CUDA 的 [内核包装](../../kernels/cuda/stage1_edwards_thread_variant.cuh) 将上述三层算术编译为原生 `__global__` kernel。七个容器分在三个翻译单元，编译时分别实例化 2XY 和 HWCD。128–512 bit 容器使用 PTX FIPS 及其对称平方，768／1024 bit 容器使用 CIOS。
+
+[CUDA 设备层](../../src/ecm/stage1/edwards/cuda/thread_workflow.cpp) 为整批复用一个非阻塞 stream 及一对计时 event。上传、计算和回读都在该 stream 排序，主机通过阻塞 event 等待设备完成。显存准入根据当前可用量预留余量，再结合 `naf_memory_mb` 校验整批缓冲。主机流程按设备时间调节片长，由两端共用。CUDA 检查点以 `CUDA_ED_THREAD_V1` 标识，保存游标、窗口、倍点公式和 Montgomery 域的 XYZT。恢复时在重新上传前验证曲线身份、游标、规范残基和点方程。两端最终仍写统一文本 save。 [用法](../usage/STAGE1.md#cuda-edwards-一线程一曲线) · [4060 Laptop 对照](../performance/STAGE1.md#cuda-与-opencl-一线程一曲线)
 
 ## 原生 Stage2 NTT 与算子层
 

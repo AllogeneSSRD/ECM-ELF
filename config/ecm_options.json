@@ -796,8 +796,8 @@
       "parser": "legacy",
       "zero": "auto",
       "description": [
-        "Host worker count for CPU Stage1 and for curve construction in CUDA Edwards NTT Stage1. 0 selects automatically. CUDA launch geometry is controlled separately.",
-        "设置 CPU Stage1 及 CUDA Edwards NTT Stage1 主机曲线构造的线程数，0 为自动选择。CUDA 发射几何另行设置。"
+        "Host worker count for CPU Stage1 and Edwards curve construction in CUDA NTT and one-thread-per-curve CUDA/OpenCL. 0 selects automatically. GPU launch geometry is controlled separately.",
+        "设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动选择。GPU 发射几何另行设置。"
       ]
     },
     {
@@ -1061,12 +1061,27 @@
       "field": "gpu_algorithm",
       "type": "int|string",
       "default": "cgbn",
-      "domain": "[1|2|cgbn|ntt]",
+      "domain": "[1|2|3|cgbn|ntt|thread]",
       "fx": "algorithm(S1 CUDA)",
       "parser": "legacy",
       "description": [
-        "Stage1 algorithm when the target is GPU: 1/CGBN or 2/NTT, case-insensitive. CUDA NTT supports Edwards and Montgomery PARAM0 on full Mersenne moduli, with 1–128 curves. For Edwards NTT, see the NAF window setting.",
-        "选中 GPU 时使用的 Stage1 算法：1/CGBN 或 2/NTT，不区分大小写。CUDA NTT 支持 Edwards 和 Montgomery PARAM0，要求完整梅森模数和 1–128 条曲线。Edwards 的点乘由 NAF 窗口设置选择。"
+        "CUDA Stage1 GPU algorithm, case-insensitive. 1/cgbn selects CGBN, 2/ntt selects NTT on full Mersenne moduli with 1–128 curves, and 3/thread selects one CUDA thread per Edwards curve for moduli up to 1024 bits.",
+        "CUDA Stage1 GPU 算法，不区分大小写。1/cgbn 选择 CGBN，2/ntt 对完整梅森模数运行 1–128 条曲线，3/thread 由每个 CUDA 线程处理一条 Edwards 曲线，支持最高 1024 bit 的模数。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "cuda_thread_block_size",
+      "v2_key": "cuda.thread_block_size",
+      "field": "cuda_thread_block_size",
+      "type": "int",
+      "default": 128,
+      "domain": "[32|64|128|256]",
+      "fx": "block size (Stage1 CUDA thread)",
+      "parser": "strict",
+      "description": [
+        "CUDA block size for the Edwards thread algorithm only. Use 32, 64, 128 or 256. CLI --wg overrides it; --wg 0 selects 128.",
+        "仅用于 CUDA Edwards thread 的线程块大小，可选 32、64、128 或 256。CLI --wg 可覆盖，--wg 0 选择 128。"
       ]
     },
     {
@@ -1303,8 +1318,8 @@
         "CUDA:ignored"
       ],
       "description": [
-        "OpenCL modular-multiplication kernel ID or alias. Empty or auto lets the backend choose. Intended for comparing or debugging known kernels; automatic selection is normally suitable. CUDA ignores this key.",
-        "指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。CUDA 后端忽略此键。"
+        "OpenCL modular multiplication. PARAM3 accepts registered IDs and aliases. Edwards defaults to cios and accepts fips or NVIDIA-only fips_ptx through 512-bit moduli. CUDA ignores this key.",
+        "选择 OpenCL 模乘。PARAM3 接受注册的内核 ID 和别名。Edwards 默认 cios，最高 512 bit 可选 fips 或 NVIDIA 专用的 fips_ptx。CUDA 忽略此键。"
       ]
     },
     {
@@ -1322,8 +1337,8 @@
         "CUDA:ignored"
       ],
       "description": [
-        "OpenCL modular-squaring kernel ID or alias. Empty or auto lets the backend choose; automatic selection is normally suitable. CUDA ignores this key.",
-        "指定 OpenCL 模平方内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。"
+        "OpenCL modular squaring. PARAM3 accepts registered IDs and aliases. Edwards auto reuses the selected multiplier. Explicit cios selects CIOS, while fips and NVIDIA-only fips_ptx select symmetric FIPS through 512 bits. On one Edwards task, select the same FIPS implementation for both operators that use FIPS. CUDA ignores this key.",
+        "选择 OpenCL 模平方。PARAM3 接受注册的内核 ID 和别名。Edwards 的 auto 复用所选模乘，cios 强制使用 CIOS，fips 和 NVIDIA 专用的 fips_ptx 在 512 bit 以内使用对称 FIPS。一个 Edwards 任务使用同一种 FIPS 实现。CUDA 忽略此键。"
       ]
     },
     {

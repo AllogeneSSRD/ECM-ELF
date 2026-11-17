@@ -13,7 +13,7 @@ enum class ExecutionTarget { Cpu, Gpu };
 enum class CpuImplementation { Auto = 0, IfmaSimd = 1, GmpScalar = 2, Gwnum = 3 };
 enum class SimdReduction { Auto = 0, Montgomery = 1, MersenneFold = 2 };
 enum class CpuMontgomeryChain { Ladder, Prac };
-enum class GpuAlgorithm { Cgbn = 1, Ntt = 2 };
+enum class GpuAlgorithm { Cgbn = 1, Ntt = 2, Thread = 3 };
 enum class ScalarConstruction { PrimePowerLcm, PrimePowerLcmTimes12 };
 
 struct CpuImplementationRule {

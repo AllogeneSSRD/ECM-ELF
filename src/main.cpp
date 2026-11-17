@@ -858,6 +858,9 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                            opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards
                                ? "Edwards Atkin-Morain" : "Montgomery param0",
                            opt.execution.device_index);
+        else if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Thread)
+            ecm_ts_fprintf(stdout, "gpu backend : CUDA/thread, Edwards Atkin-Morain, device %d\n",
+                           opt.execution.device_index);
         else if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards)
             ecm_ts_fprintf(stdout, "gpu backend : %s, Edwards Atkin-Morain, device %d\n",
                            ecm_backend_name(), opt.execution.device_index);
