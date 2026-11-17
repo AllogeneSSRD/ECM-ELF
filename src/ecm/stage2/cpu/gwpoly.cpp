@@ -356,7 +356,23 @@ std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,boo
     }
     return t;
 }
-uint64_t phi(uint64_t d){uint64_t p=d;for(uint64_t f=2;f<=d/f;++f)if(d%f==0){p=p/f*(f-1);while(d%f==0)d/=f;}if(d>1)p=p/d*(d-1);return p;}
+template<class Function>
+void for_each_wheel_prime(uint64_t wheel, Function visit) {
+    for (uint64_t prime = 2; prime <= wheel / prime; ++prime) {
+        if (wheel % prime != 0) continue;
+        visit(prime);
+        do {
+            wheel /= prime;
+        } while (wheel % prime == 0);
+    }
+    if (wheel > 1) visit(wheel);
+}
+
+uint64_t phi(uint64_t wheel) {
+    uint64_t result = wheel;
+    for_each_wheel_prime(wheel, [&](uint64_t prime) { result -= result / prime; });
+    return result;
+}
 uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
     // Smooth wheels including repeated odd factors; compare actual phi(D)/2.
     std::vector<uint64_t> choices;
@@ -469,15 +485,17 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         points.ladder(q,d,base,storage[12]);
         c.check("giant base ladder");
         const uint64_t first=std::max<uint64_t>(1,b1>d/2?(b1-d/2)/d:1),last=(b2+d/2)/d;
-        // Primes <= D/2 are not represented by a positive giant index. Cover
-        // them explicitly, without sieving the production B2 interval.
-        const uint64_t small_end=std::min<uint64_t>(b2,d/2);
-        if(b1<small_end){
-            std::vector<bool> composite(small_end+1);
-            for(uint64_t v=2;v<=small_end;++v)if(!composite[v]){
-                if(v>b1){points.ladder(q,v,next,storage[12]);c.divisor(next.z);c.check("small-prime ladder");}
-                if(v<=small_end/v)for(uint64_t k=v*v;k<=small_end;k+=v)composite[k]=true;
-            }
+        // Successful baby normalization proved every Z([j]Q) with gcd(j,D)=1
+        // invertible modulo the target N. Only prime divisors of D are missing
+        // from that proof in the small-prime interval.
+        const uint64_t small_end = std::min(b2, d / 2);
+        if (b1 < small_end) {
+            for_each_wheel_prime(d, [&](uint64_t prime) {
+                if (prime <= b1 || prime > small_end) return;
+                points.ladder(q, prime, next, storage[12]);
+                c.divisor(next.z);
+                c.check("small-prime ladder");
+            });
         }
         Array g_workspace_a(c.gw,2*p),g_workspace_b(c.gw,2*p);
         stats.init_seconds=seconds(begin);main_begin=Clock::now();main_started=true;

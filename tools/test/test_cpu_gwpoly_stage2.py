@@ -111,6 +111,16 @@ def main():
         _,rz=oracle.mont.ladder(prime,x,z,a24,hit_n);product=product*rz%hit_n
     expected=math.gcd(product,hit_n);assert 1<expected<hit_n
     r=run('stage2_factor',hit,hit_n)[0];assert r['stage']==2 and int(r['factors'][0])%expected==0
+    # Small primes represented in the baby wheel have already passed the
+    # denominator check. Prime divisors of D require a separate ladder.
+    for prime, sigma, order in [(131, 31, 3), (67, 19, 5), (97, 26, 7)]:
+        modulus = prime * n
+        path = save(f'small_q{order}', modulus, b1=2, sigma=sigma)
+        a24, x, z = oracle.stage1(modulus, sigma, 2)
+        assert math.gcd(oracle.mont.ladder(order, x, z, a24, modulus)[1], modulus) == prime
+        for wheel in (2 * order**2, 2 * (order + 1)):
+            row = run(f'small_q{order}_d{wheel}', path, modulus, b2=order, extra=['--d', wheel])[0]
+            assert row['stage'] == 2 and str(prime) in row['factors']
     stored=save('stored_factor',1009*n)
     assert run('cached_stage1_factor',stored,1009*n)[0]['stage']==1
     damaged=out/'damaged.save';damaged.write_text(cpu.read_text().replace('CHECKSUM=','CHECKSUM=9',1))

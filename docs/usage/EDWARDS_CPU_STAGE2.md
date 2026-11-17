@@ -79,7 +79,7 @@ CPU/GPU Stage1 的默认文件名均为 `ed_m{位数}_{B1}.save`（遵循配置�
 a_{24}=\frac1{1-d},\qquad A=4a_{24}-2\pmod N.
 \]
 
-GW 后端直接使用保存的 x 和 a24；libecm 设置 A、保存的 x 和 `B1done=B1`。两者跳过 Stage1，不再次乘 48。运行时核对 libecm 返回的 Stage1 点及完成界限未改变；libecm 使用 S=1。GW baby 集为 1≤j≤D/2 且 gcd(j,D)=1，giant 为 [mD]Q，求 G 在 baby 横坐标处的乘积。主路径均为快速多项式算法。GW 单独枚举 B1 与 min(B2,D/2) 之间的素数，覆盖 wheel 的小素数边界；不枚举生产 B2 全区间。两侧规划可能覆盖请求 B2 以外的尾部，JSON 仅报告保守的请求 B2。公式及环上适用条件见 [多项式 Stage2 数学](../reference/ECM_STAGE2_MATH.md)。
+GW 后端直接使用保存的 x 和 a24；libecm 设置 A、保存的 x 和 `B1done=B1`。两者跳过 Stage1，不再次乘 48。运行时核对 libecm 返回的 Stage1 点及完成界限未改变；libecm 使用 S=1。GW baby 集为 1≤j≤D/2 且 gcd(j,D)=1，giant 为 [mD]Q，求 G 在 baby 横坐标处的乘积。主路径均为快速多项式算法。GW 在 baby 批量归一化成功后复用已覆盖小素数的分母检查，对 (B1,min(B2,D/2)] 内整除 D 的不同素数分别补算梯形和 GCD。两侧规划可能覆盖请求 B2 以外的尾部，JSON 仅报告保守的请求 B2。公式及环上适用条件见 [多项式 Stage2 数学](../reference/ECM_STAGE2_MATH.md)。
 
 曲线构造、字典批量求逆或恢复归一化失败必须提取真因子或报错，不能使用零化字典继续算术。SIMD 字典不可逆时转入逐曲线的检查路径。所有输出因子都在实际 N 上验证 `1<f<N` 且 `f|N`；饱和 GCD=N 和算术错误不生成 NF。
 
