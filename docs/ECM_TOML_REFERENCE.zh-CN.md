@@ -341,7 +341,7 @@ curve = ""
 
 类型 `string` · 范围 `[mont|ed|empty]` · Worker 覆盖 `[worker.N] stage1.curve` · 级别 `高级`。
 
-param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。OpenCL Stage1 要求 Montgomery。需要指定 Montgomery 参数化时请用 param=m0、m2 或 m3。
+param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。桌面 OpenCL 支持 1024 bit 以内的 Edwards 和 Montgomery PARAM3。
 
 ### edwards_doubling
 
@@ -351,7 +351,7 @@ edwards_doubling = 1
 
 类型 `int` · 范围 `[0|1]` · Worker 覆盖 `[worker.N] stage1.edwards_doubling` · 级别 `高级`。
 
-新 CUDA CGBN Edwards NAF 批次的主循环倍点公式。0 选择 HWCD，1 选择 2XY（默认）。检查点恢复沿用存档中的公式。仅在省略此键时，旧环境变量 ECM_EDWARDS_DBL_ALGO 可覆盖默认值。CPU、CUDA NTT 和 Edwards binary 路径不使用此设置。
+新 CUDA CGBN 与 OpenCL Edwards NAF 批次的倍点公式。0 选择 HWCD，1 选择 2XY（默认）。续跑沿用检查点中的公式。省略此键时，CUDA CGBN 还支持 ECM_EDWARDS_DBL_ALGO。
 
 <a id="naf_w"></a>
 
@@ -365,7 +365,7 @@ edwards_naf_window_bits = 0
 
 v1 旧键 `stage1.naf_w`
 
-Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 显式选择实验性 2XY NAF。NTT 原型要求指定窗口符合预算，CPU 与 CGBN 新任务可自动降窗。
+Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 选择 2XY NAF。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。
 
 <a id="exp_cache"></a>
 
@@ -493,7 +493,7 @@ naf_memory_mb = 0
 
 类型 `int` · 范围 `[0|1..1048576]` · Worker 覆盖 `[worker.N] stage1.naf_memory_mb` · 级别 `高级`。
 
-Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。约束 CPU NAF 工作集、CUDA CGBN 设备缓冲，或 CUDA NTT 字典（使用设备乘积树时也计入）。标量构造和 CUDA 主机准备另查空闲内存。正值最小为 1 MB。
+Edwards Stage1 内存上限，1 MB = 1,000,000 字节。约束 CPU NAF 工作集、CUDA CGBN 或 OpenCL 设备缓冲、CUDA NTT 字典及设备乘积树。0 使用后端预算。OpenCL 以报告的全局内存一半为预算，并检查单个缓冲的最大容量。
 
 <a id="ntt_bpw"></a>
 
@@ -917,7 +917,7 @@ target = "gpu"
 
 类型 `string` · 范围 `[cpu|gpu]` · Worker 覆盖 `[worker.N] stage1.target` · 级别 `常用`。
 
-选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件内切换 CUDA 与 OpenCL。
+选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持 Edwards。
 
 ### verbose
 

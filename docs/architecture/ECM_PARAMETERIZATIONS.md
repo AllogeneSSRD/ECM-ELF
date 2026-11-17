@@ -74,7 +74,7 @@ GMP-ECM 的 `param` 枚举定义在 `ecm.h:179-189`。所有 Montgomery 形式�
 | CPU GMP 标量 | 扩展 Edwards 坐标、窗口 NAF；单曲线执行和恢复 | [CPU Stage 1](../../src/ecm/stage1/edwards/cpu/ecm_edwards_cpu.cpp#L597)调用 `construct` |
 | CPU AVX512-IFMA | 可用 ISA/构建条件下按最多 8 条曲线并行，尾部和异常曲线可走标量 | [SIMD 字典准备](../../src/ecm/stage1/edwards/cpu/simd_edwards.cpp#L889)逐 lane 使用相同构造 |
 | CUDA CGBN | 默认窗口 NAF（默认窗口 6），可显式改用二进制标量路径；两者共用曲线批次 | [CUDA 初始化](../../src/ecm/stage1/edwards/cuda/host_math.cpp#L3)调用 `construct` |
-| OpenCL | 当前不提供 Edwards Stage 1 | [Stage 1 能力说明](STAGE1.md#方法选择与输入校验) |
+| 桌面 OpenCL | 每工作项一条曲线，最高 1024 位，使用扩展 Edwards NAF | [OpenCL Stage1](OPENCL.md#stage1-曲线执行) |
 
 三条可运行路径均使用 `48·lcm(1,…,B1)` 作为 Edwards Stage 1 标量；NAF 窗口、点表示、CPU SIMD 归约或 CUDA 倍点策略只改变执行方法，不改变固定 `(N, curve=ed, σ)` 的 `d` 与 `P`。CPU 与 CUDA 将完成点的 Edwards 投影坐标转为 Montgomery x-only `x_M=(Z+Y)/(Z−Y) mod N`，写入 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 的[文本 save](SAVE.md#5-edwards-save-version1)；[CUDA Stage 2](STAGE2.md#输入与表示)与 [CPU Stage 2](../usage/EDWARDS_CPU_STAGE2.md)按 σ 重构曲线。只比较设备域字数组或未归一化投影坐标，不能证明两条路径的数学点相同。
 

@@ -70,7 +70,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 
 - **CUDA CGBN** 是默认 CUDA 算法，按构建中的位宽档执行 Edwards 或 Montgomery。`param = "m0"` 选择与 GMP-ECM `-param 0` 同族的 Suyama 曲线，`"m2"` 和 `"m3"` 选择相应的 batch 参数化。Montgomery 默认用 ladder，PARAM0 可选 PRAC。见 [Stage1 实现](docs/architecture/STAGE1.md)。
 - **CUDA NTT** 用于完整梅森数，支持 Edwards 和 Montgomery PARAM0。通过 `[stage1] gpu_algorithm = "ntt"` 或 `--gpu-algorithm ntt` 启用。见 [CUDA 全宽 NTT](docs/usage/STAGE1.md#cuda-全宽-ntt)。
-- **OpenCL**：Windows、Linux、macOS 和 Android 的 GPU 路径，支持从注册表选择 Montgomery 乘/平方、模加/减和 special multiplication 算子。`ecm.exe --showkernel` 列出当前构建可用的路径。OpenCL 与 CUDA 的设备编号、运行时和内部 checkpoint 不互换；同名驱动选项不表示两者有相同的内核。见 [OpenCL 架构](docs/architecture/OPENCL.md) 和 [内核说明](kernels/opencl/README.md)。
+- **OpenCL** 的桌面 worker 支持 Montgomery PARAM3 和最高 1024 bit 的 Edwards NAF。Edwards 每个工作项处理一条曲线，使用共享 NAF 编码并在设备建表。`ecm.exe --showkernel` 列出 Montgomery 可选算子。 [OpenCL Stage1 用法](docs/usage/STAGE1.md#opencl-edwards) · [OpenCL 架构](docs/architecture/OPENCL.md#stage1-曲线执行)
 - **CPU** 的 Edwards 与 Suyama-Montgomery 路径可用 GMP 标量或 AVX-512 IFMA，IFMA 每批处理 8 条曲线。Windows x64 上的 Montgomery PARAM0 还可显式使用本地构建的 `gwnum.dll`。见 [Stage1 实现](docs/architecture/STAGE1.md)与 [GWNUM 本地构建](docs/usage/BUILD.md#cpu-stage1-本地-gwnum-316)。
 
 `gpucurves` 表示一次任务的曲线数，并不保证所有曲线同时驻留 GPU。GPU 批量应结合 `--gpu-info`、位宽、TPI、TPB、SM 数及实际资源占用选择。CPU SIMD 的线程并行度上限为 `ceil(曲线数/8)` 个批；标量路径则按每曲线一个任务分配。固定 σ 时，第 `i` 条曲线使用 `sigma+i`；不同参数化的同一 σ 不是同一条曲线。
@@ -95,7 +95,7 @@ echo '(2^8191-1)' | .\ecm_cuda.exe --curve ed --target gpu --gpu-algorithm ntt -
 echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8 1e5 0
 ```
 
-单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`；无位置参数时进入 Stage1 队列模式。`--curve` 与 `--target` 分别选择曲线和执行位置；默认是 Montgomery + GPU，CUDA 支持 Edwards + GPU，OpenCL 不支持该组合。`-d` 是当前程序列出的设备编号；`--gpu-info` 可报告 CUDA 档位与建议批量，OpenCL 构建会说明该查询不适用。
+单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`。无位置参数时进入 Stage1 队列模式。`--curve` 与 `--target` 分别选择曲线和执行位置，单次运行默认 Montgomery + GPU。`-d` 是当前后端的设备编号，`--gpu-info` 报告 CUDA 档位与建议批量。
 
 ### 使用 worktodo 运行 Stage1
 

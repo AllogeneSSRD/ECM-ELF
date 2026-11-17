@@ -148,7 +148,7 @@ CUDA Edwards NTT 的主机工作线程按 sigma 排序后分段处理，结果�
 
 [Edwards workflow](../../src/ecm/stage1/edwards/cuda/workflow.cpp)管理Batch、恢复、构造、进度和末点分类；同目录checkpoint.cpp拥有专用codec。两种曲线save_checkpoint均以bool表示持久提交成功；decode解释载荷并返回RestoreResult，候选接纳和布局检查仍留在实际拥有这些约束的位置。中途checkpoint参与安全点，最终发布失败仍可恢复已完成计算。
 
-CUDA关闭时选择[OpenCL Montgomery workflow](../../src/ecm/stage1/montgomery/opencl/workflow.cpp)。其设备hook和算术保持，最终结果同样交给task。CPU/OpenCL旧状态映射集中在兼容转换；明确失败优先于同时收到的停止信号。任务层按计算/发布阶段归类逃逸异常。
+桌面 OpenCL 编译分别选择 [Edwards workflow](../../src/ecm/stage1/edwards/opencl/workflow.cpp) 和 [Montgomery PARAM3 workflow](../../src/ecm/stage1/montgomery/opencl/workflow.cpp)。Edwards 使用独立的 NAF 检查点并直接返回计算结果。两者交给同一任务层持久化和发布。CPU／OpenCL PARAM3 的旧状态映射集中在兼容转换。明确失败优先于同时收到的停止信号，任务层按计算或发布阶段归类逃逸异常。
 
 这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；Edwards 运行入口的校验/选择/错误适配也使用普通 CXX。设备协作继续由 runtime.cu 持有。
 

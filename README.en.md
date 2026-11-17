@@ -68,7 +68,7 @@ The chart compares ECM-ELF CUDA (0.62.0) in serial and two-slot modes on the RTX
 
 - **CUDA CGBN** is the default CUDA algorithm. It supports Edwards and Montgomery at the widths included in the build. `param = "m0"` selects the Suyama family used by GMP-ECM `-param 0`. `"m2"` and `"m3"` select their respective batch parametrizations. Montgomery uses the ladder by default and offers PRAC for PARAM0. See [Stage1 implementation](docs/architecture/STAGE1.md).
 - **CUDA NTT** supports Edwards and Montgomery PARAM0 on full Mersenne numbers. Select it with `[stage1] gpu_algorithm = "ntt"` or `--gpu-algorithm ntt`. See [full-width CUDA NTT](docs/usage/STAGE1.md#cuda-全宽-ntt).
-- **OpenCL** is the Windows, Linux, macOS and Android GPU path. Its registry selects Montgomery multiplication/squaring, modular addition/subtraction and special multiplication operators. `ecm.exe --showkernel` lists paths in the current build. CUDA and OpenCL device IDs, runtimes and internal checkpoints are not interchangeable. See the [OpenCL architecture](docs/architecture/OPENCL.md) and [kernel guide](kernels/opencl/README.md).
+- **OpenCL** on desktop supports Montgomery PARAM3 and Edwards NAF through 1024 bits. Edwards uses one work-item per curve, shares the NAF encoding and builds the dictionary on the device. `ecm.exe --showkernel` lists selectable Montgomery operators. [OpenCL Stage1 usage](docs/usage/STAGE1.md#opencl-edwards) · [OpenCL architecture](docs/architecture/OPENCL.md#stage1-曲线执行)
 - **CPU** supports Edwards and Suyama-Montgomery with scalar GMP or eight-curve AVX-512 IFMA batches. On Windows x64, Montgomery PARAM0 can also use a locally built `gwnum.dll` when explicitly selected. See [Stage1 implementation](docs/architecture/STAGE1.md) and the [GWNUM build guide](docs/usage/BUILD.md#cpu-stage1-本地-gwnum-316).
 
 `gpucurves` is a task batch size, not a promise that all curves reside on the GPU at once. Choose GPU batches using `--gpu-info`, operand size, TPI, TPB, SM count and actual resource occupancy. CPU SIMD parallelism is bounded by `ceil(curves/8)` batches; the scalar path assigns one curve per task. With a fixed sigma, curve `i` uses `sigma+i`. The same numeric sigma under different parametrizations does not define the same curve.
@@ -93,7 +93,7 @@ echo '(2^8191-1)' | .\ecm_cuda.exe --curve ed --target gpu --gpu-algorithm ntt -
 echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8 1e5 0
 ```
 
-A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `--curve` selects the curve and `--target` selects CPU or GPU; the default is Montgomery on GPU, and CUDA supports GPU Edwards while OpenCL does not. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
+A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `--curve` selects the curve and `--target` selects CPU or GPU. One-off runs default to GPU Montgomery. `-d` selects a device by its backend index. `--gpu-info` reports CUDA tiers and suggested batch sizes.
 
 ### Run Stage1 from worktodo
 

@@ -1,6 +1,8 @@
 # ECM Stage1 OpenCL kernels
 
-Production Stage1 sources live under `src/ecm/backend/opencl/resources/`; this directory retains standalone benchmark inputs. The table below describes logical paths inside the production resource root. Host assembles kernel source via
+Production Stage1 sources live under `src/ecm/opencl/resources/`. This directory retains standalone benchmark inputs. Edwards uses the separate [`edwards/`](../../src/ecm/opencl/resources/edwards/) package for field arithmetic, point formulas, and NAF kernels.
+
+The table below describes the Montgomery paths inside the production resource root. Host assembles kernel source via
 `opencl_ecm_stage1_assemble_kernel_source()`: injects `ECM_STAGE1_*_IMPL` macros, then
 concatenates only the files from `opencl_ecm_stage1_kernel_source_paths()`.
 

@@ -39,9 +39,9 @@
       <Item id="option_stage1_progress_log_seconds" name="控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。" />
       <Item id="option_stage1_progress_average_seconds" name="Stage1 CPU/CUDA 实时 s/curve 与剩余时间估计的平均窗口，单位为秒。0 使用最近一次有效采样，不做平均；正值按采样时长累计已完成工作量，最多 60 秒。CUDA 采样排除准备和 checkpoint 写盘；不改变计算、切片、最终计时或日志刷新频率。" />
       <Item id="option_stage1_verbose" name="控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由 stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。" />
-      <Item id="option_stage1_curve" name="param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。OpenCL Stage1 要求 Montgomery。需要指定 Montgomery 参数化时请用 param=m0、m2 或 m3。" />
+      <Item id="option_stage1_curve" name="param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。桌面 OpenCL 支持 1024 bit 以内的 Edwards 和 Montgomery PARAM3。" />
       <Item id="option_stage1_stage1_backend" name="Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。" />
-      <Item id="option_stage1_target" name="选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件内切换 CUDA 与 OpenCL。" />
+      <Item id="option_stage1_target" name="选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持 Edwards。" />
       <Item id="option_stage1_impl" name="选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。" />
       <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
       <Item id="option_stage1_cpu_mont_chain" name="Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。" />
@@ -50,9 +50,9 @@
       <Item id="option_stage1_affinity" name="CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。" />
       <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
       <Item id="option_stage1_exp_cache" name="指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。" />
-      <Item id="option_stage1_naf_w" name="Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 显式选择实验性 2XY NAF。NTT 原型要求指定窗口符合预算，CPU 与 CGBN 新任务可自动降窗。" />
-      <Item id="option_stage1_edwards_doubling" name="新 CUDA CGBN Edwards NAF 批次的主循环倍点公式。0 选择 HWCD，1 选择 2XY（默认）。检查点恢复沿用存档中的公式。仅在省略此键时，旧环境变量 ECM_EDWARDS_DBL_ALGO 可覆盖默认值。CPU、CUDA NTT 和 Edwards binary 路径不使用此设置。" />
-      <Item id="option_stage1_naf_memory_mb" name="Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。约束 CPU NAF 工作集、CUDA CGBN 设备缓冲，或 CUDA NTT 字典（使用设备乘积树时也计入）。标量构造和 CUDA 主机准备另查空闲内存。正值最小为 1 MB。" />
+      <Item id="option_stage1_naf_w" name="Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 选择 2XY NAF。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。" />
+      <Item id="option_stage1_edwards_doubling" name="新 CUDA CGBN 与 OpenCL Edwards NAF 批次的倍点公式。0 选择 HWCD，1 选择 2XY（默认）。续跑沿用检查点中的公式。省略此键时，CUDA CGBN 还支持 ECM_EDWARDS_DBL_ALGO。" />
+      <Item id="option_stage1_naf_memory_mb" name="Edwards Stage1 内存上限，1 MB = 1,000,000 字节。约束 CPU NAF 工作集、CUDA CGBN 或 OpenCL 设备缓冲、CUDA NTT 字典及设备乘积树。0 使用后端预算。OpenCL 以报告的全局内存一半为预算，并检查单个缓冲的最大容量。" />
       <Item id="option_stage1_lcm" name="Montgomery Stage1 标量是 lcm(1..B1) 乘 1 或 12。Edwards 固定使用 48·lcm，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。" />
       <Item id="option_stage1_sigma" name="曲线起始 sigma；0 表示随机生成，连续曲线使用 sigma+i 且不得在 64 位处回绕。CUDA PARAM0 接受完整 64 位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是 Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。" />
       <Item id="option_stage1_p95_dir" name="保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 p95_worktodo_path。" />

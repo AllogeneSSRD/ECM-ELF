@@ -23,6 +23,9 @@
 #ifndef ECM_HAS_CUDA_STAGE1
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
+#if !ECM_HAS_CUDA_STAGE1
+#include "ecm/stage1/edwards/opencl/workflow.h"
+#endif
 namespace ecm_stage1_app {
 
 static std::filesystem::path stage1_checkout_root(std::filesystem::path path) {
@@ -570,10 +573,6 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
             return true;
         }
     }
-    if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_STAGE1 != 0)) {
-        error = "GPU Edwards requires the CUDA backend";
-        return true;
-    }
     if (selection.curve == ecm_stage1::CurveModel::Edwards &&
         selection.scalar_construction != ecm_stage1::ScalarConstruction::PrimePowerLcm) {
         error = "Edwards uses its fixed 48*lcm(1..B1) scalar; --lcm 12 is unsupported";
@@ -599,6 +598,14 @@ bool stage1_selection_error(const ecm_stage1::Selection& selection, std::string&
 
 bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& error,
                        mpz_srcptr modulus) {
+#if !ECM_HAS_CUDA_STAGE1
+    if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
+        opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards && modulus &&
+        mpz_sizeinbase(modulus, 2) > ecm_opencl_stage1::edwards_max_bits) {
+        error = "OpenCL Edwards Stage1 supports up to 1024-bit moduli";
+        return true;
+    }
+#endif
     if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt) {
         if (opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards && opt.execution.naf_w &&
             (opt.execution.naf_w < 2 || opt.execution.naf_w > 12)) {

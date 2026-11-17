@@ -63,6 +63,16 @@ cmake --build $build --config Release --target prepare_prac_cache
 
 `exponent_cache_dir` 留空时，Stage1 从工作目录及可执行文件目录向上查找 ECM-ELF 仓库，使用仓库根的 `cache/`。独立部署使用可执行文件同级的 `cache/`。可用 `--exp-cache <目录>` 指定，CUDA PRAC 还可用 `ECM_PRAC_PLAN_CACHE` 指定计划目录。文件大小、读取方式和迁移身份见 [PRAC 计划存储](../architecture/PRAC.md#计划存储与复用)。
 
+### OpenCL Edwards
+
+桌面 `ecm.exe` 可用 OpenCL 在奇数模数上批量运行 Edwards，最高 1024 bit。通过 `param = "e"`、`target = "gpu"` 和 `gpu_backend = "opencl"` 选择后端。直接输入示例使用 OpenCL 编号 1：
+
+```powershell
+'(2^521-1)' | .\ecm.exe --target gpu --param e --gpu-backend opencl -d 1 --naf-w 6 -sigma 20260922 -gpucurves 256 -savea ed.save 1000 0
+```
+
+`edwards_naf_window_bits` 接受 2～12，自动从 6 开始。`edwards_doubling = 1` 用 2XY，`0` 用 HWCD。指定 `naf_memory_mb` 可压低设备预算。`opencl.workgroup_size` 为 0 时交由运行时决定，每工作项始终处理一条曲线。`opencl.threads_per_integer` 和 Montgomery 算子选择只作用于 OpenCL PARAM3。最终 Edwards 文本 save 可交给现有 Stage2。断点续跑沿用检查点中的窗口和倍点公式。 [设备算术与内存](../architecture/OPENCL.md#stage1-曲线执行)
+
 ### 队列与交接
 
 `--go` 是命中后的可选群阶诊断：默认优先本地 PARI DLL，备选外部 GP，不自动使用 GMP 算法。`--go-backend auto|pari|gp|gmp` 可选择后端，`native` 保留为 `pari` 的兼容别名，`--go-gp-timeout 1..600` 设置 GP 截止秒数（默认 30）；诊断未完成不影响因子存档、结果和主计算退出码。输出区分旧群阶界限与新增点阶界限，资源和素性证明范围见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。GPU Edwards 的既有 `--go` 限制保留。
@@ -73,9 +83,9 @@ Stage1 启动器也接受 `ECMSTAGE1=` 队列，从 save 文件名末尾的 `_B1
 
 控制台 `START:` 保留原始 worktodo 行；`finished` 和受支持的 Prime95 交接行使用实际 save 名称，其他字段保持原样。补前缀时，若新目标不存在或为空，将旧 save 中同曲线族、同参数化的记录复制到新文件后追加，保持原 `skip_curves` 编号；旧文件保留。记录类型冲突时停止并保留队列。新目标已有内容时不重复复制旧历史。`save_name_pattern` 只生成没有显式 save 名称的任务路径。
 
-Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)，不接受 `lcm=12`。`ecm_cuda.exe` 可用 `--curve ed --target gpu` 或同名 TOML 键运行 GPU Edwards；OpenCL 不支持该组合。CUDA PARAM0 和 Edwards 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
+Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)。CUDA PARAM0 和 Edwards 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
 
-GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` 和 `--go`。已知素因子的Edwards群阶、点阶及分解可用[独立PARI入口](DATASET.md#edwards群阶与点阶)计算。默认使用窗口 NAF，`--naf-w 0` 在 GPU 选择窗口 6，显式允许 2..12；切片会根据设备执行时间调整到约 100 ms，CPU 使用阻塞等待，并负责构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。批次内的 GPU 二进制状态会按保存的算法恢复；显式选择与检查点不符时会报错并保留进度。自动文件名使用共用模式中的 e 前缀，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 CUDA Stage2 或 [CPU Stage2](EDWARDS_CPU_STAGE2.md) 读取。
+GPU Edwards 使用不带参数化前缀的 sigma，CLI 不接受 `--gpu-param` 和 `--go`。已知素因子的 Edwards 群阶、点阶及分解可用 [独立 PARI 入口](DATASET.md#edwards群阶与点阶) 计算。CUDA CGBN 默认使用窗口 NAF，`--naf-w 0` 选择窗口 6，显式允许 2..12。CGBN 切片的设备时间目标为约 100 ms，OpenCL 为约 50 ms。CPU 负责构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。自动文件名使用共用模式中的 e 前缀，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 Stage2 读取。
 
 ## CUDA 全宽 NTT
 
@@ -145,7 +155,7 @@ Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个�
 
 v3 的 `finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，以 TOML 所在目录解析。Stage1 的 `save_dir` 仍相对程序目录解析。
 
-`ECM=`、`ECM2=` 和 `ECMSTAGE1=` 交给 Stage1，`ECMSTAGE2=` 和 `ECMSTAGE2N=` 交给 Stage2。队列的 Stage1 默认 Edwards，`curve` 或 `param` 可覆盖，`ECMSTAGE1` 的存档类型前缀优先。OpenCL Stage1 要求选 Montgomery。GUI 根据下一个可运行任务启动对应程序，CLI 只领取本阶段任务。`[shared]` 的 `queue_order` 可选 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`。优先阶段无任务时运行另一阶段。`queue_skip` 可选 `"none"`、`"stage1"` 或 `"stage2"`。不同 worker 可以共用队列文件，每个 worker 同时由一个程序处理。
+`ECM=`、`ECM2=` 和 `ECMSTAGE1=` 交给 Stage1，`ECMSTAGE2=` 和 `ECMSTAGE2N=` 交给 Stage2。队列的 Stage1 默认 Edwards，`curve` 或 `param` 可覆盖，`ECMSTAGE1` 的存档类型前缀优先。GUI 根据下一个可运行任务启动对应程序，CLI 只领取本阶段任务。`[shared]` 的 `queue_order` 可选 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`。优先阶段无任务时运行另一阶段。`queue_skip` 可选 `"none"`、`"stage1"` 或 `"stage2"`。不同 worker 可以共用队列文件，每个 worker 同时由一个程序处理。
 
 当前程序无符合阶段、优先级和跳过条件的任务时正常结束；队列不存在或读取失败时报错。Stage2 执行时，`[stage2] b2_ratio` 为 1…1000000 则以 save 中的 B1 × ratio 覆盖 B2，且仍须满足 B2 > B1；0 或省略此键保留原 B2 选择。
 

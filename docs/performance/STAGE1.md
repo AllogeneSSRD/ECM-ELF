@@ -196,6 +196,72 @@ GPU 实心柱使用设备主循环计时，斜线柱使用含设备准备的全�
 
 早期 CGBN 数据来自 Git 快照 `2d091243:docs/performance/STAGE1.md` 和 `fed434ef:docs/performance/CGBN_SQUARE.md`。0.57.16 取历史构建的启动版本，三档均选原 CGBN。其余来源为 0.63.17 的四份矩阵 `summary.json`、主图的 `comparison.csv` 及 0.60.2 PARAM0 自动选型复测。逐柱的版本、计时区间和来源记录在 `data/benchmarks/stage1_version_throughput/selected.csv`。0.63.17 样本还记录 NTT 长度、点乘路径、活跃批量和 B1。[版本吞吐绘图脚本](../../tools/bench/plot_stage1_version_throughput.py) · [早期 4070 Ti 工况](#输入与工况) · [CGBN 历史 A/B](CGBN_SQUARE.md#平方装配与redc融合的完整stage1资格) · [0.60.2 全位宽复测](STAGE1_MERSENNE_NTT.md#0602-全位宽复测与精确边界)
 
+## OpenCL 小位宽对照
+
+### 并行批量与吞吐平台
+
+2026-11-16 至 17 日对照桌面 OpenCL 0.63.26 开发构建和 CUDA CGBN 0.63.25 本地构建。两卡驱动为 NVIDIA 610.88。RTX 4070 Ti 有 60 个 SM，运行频率为 2610 MHz。RTX 4060 Laptop 有 24 个 SM，运行频率为 1500 MHz。每卡同一时刻执行一个样本，两卡采集时段有重叠。Edwards 两端均用 2XY NAF w6。PARAM3 两端均用 ladder，OpenCL 固定每曲线一个工作项。
+
+主矩阵固定实际奇数模数位宽 127、241、319、421、511、1021。同一位宽使用同一个接近 $2^p$、通过 12 个底数 Miller–Rabin 检验的奇数。每个条件从 sigma 20260922 连续展开，按各候选批量取同一序列前缀。127、241 bit 用 B1=5,000，其余用 B1=1,000。每后端先跑一批预热，再在七个批量上各测两次，取曲线数／耗时的中位数。批量从 768 倍增到 49,152。OpenCL 由驱动选工作组，CUDA 使用 TPB128 和原有 TPI 分派。
+
+Edwards 的内部口径在两端均用设备 event 累计主循环，排除初始化、奇数倍点字典、末点回读与发布。旧 PARAM3 的 OpenCL 循环口径还包含主机提交、等待和末点回读，CUDA 使用设备时间。按各自峰值归一化时，该口径可用于观察单个后端的批量变化。跨后端的 PARAM3 结论取统一的整批墙钟，即进程启动至存档和结果发布后退出。
+
+![两卡 OpenCL 和 CUDA CGBN 的批量吞吐扩展](attachments/stage1-opencl-batch-scaling.png)
+
+| 模数位宽 | 4070 Ti Edwards | 4060 Laptop Edwards | 4070 Ti PARAM3 | 4060 Laptop PARAM3 |
+|---:|---:|---:|---:|---:|
+| 127 | 24,576／12,288 | 12,288／3,072 | 24,576／24,576 | 24,576／6,144 |
+| 241 | 12,288／24,576 | 6,144／6,144 | 24,576／24,576 | 24,576／6,144 |
+| 319 | 49,152／24,576 | 6,144／24,576 | 24,576／49,152 | 24,576／12,288 |
+| 421 | 24,576／49,152 | 6,144／12,288 | 49,152／49,152 | 12,288／12,288 |
+| 511 | 12,288／49,152 | 6,144／12,288 | 24,576／49,152 | 6,144／24,576 |
+| 1021 | 12,288／24,576 | 6,144／6,144 | 12,288／24,576 | 6,144／12,288 |
+
+表中为循环口径达到各自实测峰值 95% 的最小已测批量，数字按 **OpenCL／CUDA CGBN** 排列。768 条只提供 24 个有效 OpenCL warp，平均每 SM 为 0.4 个和 1 个。TPI=4 的 CGBN 同批有 96 个有效 warp。实际驻留还受工作组划分和寄存器资源限制。扫描中 768 条只达到 OpenCL 峰值的约 6%–14%。4070 Ti 在多档仍需要扩到扫描上限，例如 CUDA Edwards 的 421、511 bit 从 24,576 到 49,152 条仍各提升约 11%。这些结果以 49,152 条内的实测峰值为基准。
+
+旧 [OpenCL 吞吐工作簿](../paper/OpenCL吞吐量.xlsx) 的 `ecm` 页以曲线数乘标量列数，再除以实测毫秒数。4060 Laptop 的旧 PARAM3 在 M241、M421 最快的记录都使用 12,288 条，M1009 使用 6,144 条。早期对照采用原版 GMP-ECM。本节使用 ECM-ELF 当前 CUDA CGBN 和统一输入重新测量。
+
+
+### 入选方案与交叉点复测
+
+在 Edwards 的 383／384／385 bit 边界补测 6,144–49,152 条四档批量。在 241 和 421 bit 另用 6,144、12,288 条检查 OpenCL 工作组 32、64、128。每个补测候选测一次。长任务对每个后端复测实测峰值和达到峰值 95% 的最小批量，手动组胜出时保留自动组对照。B1 按短测标定，使两端峰值候选中较短的循环约为一秒，同设备、曲线族和位宽两端共用 B1。每个入选方案交错测三次，取中位数。作图分别取设备时间或整批墙钟的最佳实测候选。
+
+![两卡 OpenCL 对 CGBN 的吞吐比与 384-bit 容器交叉点](attachments/stage1-opencl-crossover.png)
+
+表中均为 OpenCL 吞吐除以 CUDA CGBN 吞吐，大于 1 表示 OpenCL 较快。Edwards 每格按主循环／整批墙钟排列，PARAM3 仅列整批墙钟。
+
+| 模数位宽 | 4070 Ti Edwards | 4060 Laptop Edwards | 4070 Ti PARAM3 | 4060 Laptop PARAM3 |
+|---:|---:|---:|---:|---:|
+| 127 | 12.15／1.98 | 14.67／2.00 | 1.30 | 1.69 |
+| 241 | 2.79／1.37 | 3.53／2.03 | 1.15 | 1.10 |
+| 319 | 1.21／0.91 | 1.50／1.23 | 1.02 | 0.90 |
+| 383 | 1.24／1.04 | 1.53／1.27 | · | · |
+| 384 | 1.37／1.07 | 1.59／1.29 | · | · |
+| 385 | 0.73／1.04 | 0.89／0.86 | · | · |
+| 421 | 0.76／0.92 | 0.89／1.09 | 0.91 | 0.88 |
+| 511 | 0.79／1.00 | 0.92／1.05 | 0.92 | 0.91 |
+| 1021 | 0.57／0.95 | 0.68／0.98 | 0.79 | 0.59 |
+
+Edwards 的设备主循环在实测样点 **384→385 bit** 换向。4070 Ti 的 OpenCL／CGBN 吞吐比由 1.37× 降至 0.73×，4060 Laptop 由 1.59× 降至 0.89×。OpenCL 从 385 bit 才将容器由 384 升到 512 bit；CGBN 需要一位余量，在 384 bit 已换成 512-bit 容器。319 bit 若只测 768 条，两卡的 OpenCL 主循环吞吐都约为 CGBN 的 0.6 倍；按各自最优候选复测后，变为 1.21× 和 1.50×。4070 Ti 于 319–385 bit 的整批复测接近持平，三次样本范围在这些位宽均有重叠。
+
+旧 PARAM3 在两卡的 241 bit 档仍有约 10%–15% 的 OpenCL 整批优势。4070 Ti 在 319 bit 持平，421 bit 的三次墙钟结果均支持 CGBN 领先。4060 Laptop 的整批中位数在 241–319 bit 间换向，319、421 和 511 bit 的样本范围有重叠。1021 bit 的两卡整批对照均稳定由 CGBN 领先。旧 PARAM3 的低位宽优势仍可复现，区间会随批量、B1 和硬件变化。
+
+整批墙钟受曲线构造、结果处理和发布影响。以 4070 Ti 的 127-bit Edwards、B1=93,000、49,152 条为例，一个 OpenCL 样本的设备主循环约 1.00 秒，标准 save 写完后的结果发布约 14 秒。对比长任务仍需注明 B1 与输出口径。
+
+四轮采集共完成 1,238 批，读回 22,809,600 个保存点，同一条件按 sigma 核对重叠区间的规范末点。NVML 每 250 ms 采一次。复测期间，利用率至少 50% 的记录中，4070 Ti 有 1,004 点，全部 2610 MHz，板功耗 17.7–221.0 W、36–61 °C。4060 Laptop 有 1,898 点，全部 1500 MHz，板功耗 3.0–29.7 W、51–59 °C。
+
+逐批 TOML、日志、存档与遥测见 `data/experiments/opencl_stage1_scaling/`。绘图数据和各测试方案的吞吐中位数见 `data/benchmarks/opencl_stage1_scaling/`。使用 [采集脚本](../../tools/bench/bench_stage1_opencl_scaling.py) 从不同后端的 Stage1 可执行文件采样，使用 [分析脚本](../../tools/bench/analyze_stage1_opencl_scaling.py) 生成 CSV 和两幅图。两张卡的 OpenCL 和 CUDA 编号在本次环境中一致。
+
+```powershell
+$bench = 'tools/bench/bench_stage1_opencl_scaling.py'
+$root = 'data/experiments/opencl_stage1_scaling/retest'
+$opt = @('--device', '0', '--opencl', 'path/to/ecm.exe', '--cuda', 'path/to/ecm_cuda.exe')
+python $bench @opt --out "$root/sweep"
+python $bench @opt --out "$root/edge" --models e --widths 383 384 385 --batches 6144 12288 24576 49152 --repeats 1
+python $bench @opt --out "$root/wg" --widths 241 421 --batches 6144 12288 --workgroups 32 64 128 --repeats 1
+python $bench @opt --out "$root/confirm" --phase confirm --sweep "$root/sweep/summary.json" "$root/edge/summary.json" "$root/wg/summary.json" --widths 127 241 319 383 384 385 421 511 1021 --target 1 --repeats 3
+```
+
 ## Edwards 与 Montgomery 的 Stage1 耗时差
 
 同一张卡上，对相同输入、B1 和批量计算 `100 × (Edwards 主循环耗时 / Montgomery PARAM0 主循环耗时 − 1)`。负值表示 Edwards 耗时较少。CGBN 横轴为剥除已知因子后的余因子位宽，NTT 横轴为完整梅森模数的位宽。

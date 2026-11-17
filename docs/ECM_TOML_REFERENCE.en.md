@@ -341,7 +341,7 @@ curve = ""
 
 Type `string` · Range `[mont|ed|empty]` · Worker override `[worker.N] stage1.curve` · Level `advanced`.
 
-Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted or empty key uses the mode default. OpenCL Stage1 requires Montgomery. Use param=m0, m2 or m3 to select a specific Montgomery parametrization.
+Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted or empty key uses the mode default. Desktop OpenCL supports Edwards through 1024 bits and Montgomery PARAM3.
 
 ### edwards_doubling
 
@@ -351,7 +351,7 @@ edwards_doubling = 1
 
 Type `int` · Range `[0|1]` · Worker override `[worker.N] stage1.edwards_doubling` · Level `advanced`.
 
-Doubling formula for new CUDA CGBN Edwards NAF batches. 0 selects HWCD, 1 selects 2XY (default). Applies to the main loop. Restoring a checkpoint uses the saved formula. If this key is omitted, the legacy ECM_EDWARDS_DBL_ALGO environment variable can override the default. CPU, CUDA NTT, and binary Edwards do not use this setting.
+Doubling formula for new CUDA CGBN and OpenCL Edwards NAF batches. 0 selects HWCD, 1 selects 2XY (default). Resume uses the saved formula. CUDA CGBN also accepts ECM_EDWARDS_DBL_ALGO when this key is omitted.
 
 <a id="naf_w"></a>
 
@@ -365,7 +365,7 @@ Type `int` · Range `[0|2..12]; CPU: [0|3..12]` · Worker override `[worker.N] s
 
 Legacy v1 key `stage1.naf_w`
 
-Requested Edwards NAF window. 0 starts at CPU 12 or CUDA CGBN 6. With CUDA NTT, 0 selects x-only and 2–12 explicitly selects experimental 2XY NAF. The NTT prototype requires its requested window to fit; CPU and CGBN may lower the window on fresh tasks.
+Requested Edwards NAF window. 0 starts at 12 for CPU and 6 for CUDA CGBN or OpenCL. With CUDA NTT, 0 selects x-only and 2–12 selects 2XY NAF. CPU, CGBN and OpenCL can lower the window for a fresh task to fit the memory budget.
 
 <a id="exp_cache"></a>
 
@@ -493,7 +493,7 @@ naf_memory_mb = 0
 
 Type `int` · Range `[0|1..1048576]` · Worker override `[worker.N] stage1.naf_memory_mb` · Level `advanced`.
 
-Edwards Stage1 working-memory cap in MB (1 MB = 1,000,000 bytes). 0 uses the available-memory budget. Limits the CPU NAF working set, CUDA CGBN device buffers, or the CUDA NTT dictionary (including the device product tree when used). Scalar construction and CUDA host preparation also check free memory. A positive value starts at 1 MB.
+Edwards Stage1 memory cap in MB (1 MB = 1,000,000 bytes). Limits the CPU NAF working set, CUDA CGBN or OpenCL device buffers, or CUDA NTT dictionaries and their device product tree. 0 uses the backend budget. OpenCL uses half the reported global memory and also checks the maximum allocation size.
 
 <a id="ntt_bpw"></a>
 
@@ -917,7 +917,7 @@ target = "gpu"
 
 Type `string` · Range `[cpu|gpu]` · Worker override `[worker.N] stage1.target` · Level `core`.
 
-Run Stage1 on CPU or on the GPU backend linked into this executable. Edwards GPU requires ecm_cuda; the target does not select between CUDA and OpenCL.
+Run Stage1 on CPU or GPU. The gpu_backend setting selects CUDA or desktop OpenCL. Both support Edwards within their own width limits.
 
 ### verbose
 

@@ -1,0 +1,94 @@
+// Private fixed-width Montgomery residues. LIMBS is selected at program build.
+typedef struct { uint limb[LIMBS]; } fe;
+
+#if EDWARDS_UNROLL
+#define EDWARDS_LIMB_LOOP _Pragma("unroll")
+#else
+#define EDWARDS_LIMB_LOOP _Pragma("unroll 1")
+#endif
+
+static inline fe fe_load(__global const uint *p, size_t stride) {
+    fe r;
+    EDWARDS_LIMB_LOOP
+    for (uint j = 0; j < LIMBS; ++j)
+        r.limb[j] = p[j * stride];
+    return r;
+}
+
+static inline void fe_store(__global uint *p, size_t stride, fe value) {
+    EDWARDS_LIMB_LOOP
+    for (uint j = 0; j < LIMBS; ++j)
+        p[j * stride] = value.limb[j];
+}
+
+static inline uint fe_sub_raw(fe a, fe b, fe *r) {
+    ulong borrow = 0;
+    EDWARDS_LIMB_LOOP
+    for (uint j = 0; j < LIMBS; ++j) {
+        const ulong x = (ulong)a.limb[j] - b.limb[j] - borrow;
+        r->limb[j] = (uint)x;
+        borrow = x >> 63;
+    }
+    return (uint)borrow;
+}
+
+static inline uint fe_add_raw(fe a, fe b, fe *r) {
+    ulong carry = 0;
+    EDWARDS_LIMB_LOOP
+    for (uint j = 0; j < LIMBS; ++j) {
+        const ulong x = (ulong)a.limb[j] + b.limb[j] + carry;
+        r->limb[j] = (uint)x;
+        carry = x >> 32;
+    }
+    return (uint)carry;
+}
+
+static inline fe fe_reduce(fe r, uint high, fe n) {
+    fe diff;
+    const uint borrow = fe_sub_raw(r, n, &diff);
+    return (high || !borrow) ? diff : r;
+}
+
+static inline fe fe_add(fe a, fe b, fe n) {
+    fe r;
+    const uint high = fe_add_raw(a, b, &r);
+    return fe_reduce(r, high, n);
+}
+
+static inline fe fe_sub(fe a, fe b, fe n) {
+    fe r;
+    if (fe_sub_raw(a, b, &r))
+        fe_add_raw(r, n, &r);
+    return r;
+}
+
+// CIOS. Each inner sum fits in 64 bits: (2^32-1)^2 + 2*(2^32-1).
+// The explicit high word permits a modulus occupying all LIMBS*32 bits.
+static inline fe fe_mul(fe a, fe b, fe n, uint np0) {
+    fe t = {0};
+    uint high = 0;
+    for (uint i = 0; i < LIMBS; ++i) {
+        ulong carry = 0;
+        EDWARDS_LIMB_LOOP
+        for (uint j = 0; j < LIMBS; ++j) {
+            const ulong v = (ulong)a.limb[j] * b.limb[i] + t.limb[j] + carry;
+            t.limb[j] = (uint)v;
+            carry = v >> 32;
+        }
+        const ulong top = high + carry;
+        const uint m = t.limb[0] * np0;
+        carry = ((ulong)m * n.limb[0] + t.limb[0]) >> 32;
+        EDWARDS_LIMB_LOOP
+        for (uint j = 1; j < LIMBS; ++j) {
+            const ulong v = (ulong)m * n.limb[j] + t.limb[j] + carry;
+            t.limb[j - 1] = (uint)v;
+            carry = v >> 32;
+        }
+        const ulong merged = (uint)top + carry;
+        t.limb[LIMBS - 1] = (uint)merged;
+        high = (uint)((top >> 32) + (merged >> 32));
+    }
+    return fe_reduce(t, high, n);
+}
+
+#undef EDWARDS_LIMB_LOOP

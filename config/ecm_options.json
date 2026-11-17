@@ -672,8 +672,8 @@
       "parser": "legacy",
       "empty": "default",
       "description": [
-        "Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted or empty key uses the mode default. OpenCL Stage1 requires Montgomery. Use param=m0, m2 or m3 to select a specific Montgomery parametrization.",
-        "param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。OpenCL Stage1 要求 Montgomery。需要指定 Montgomery 参数化时请用 param=m0、m2 或 m3。"
+        "Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted or empty key uses the mode default. Desktop OpenCL supports Edwards through 1024 bits and Montgomery PARAM3.",
+        "param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认值。桌面 OpenCL 支持 1024 bit 以内的 Edwards 和 Montgomery PARAM3。"
       ]
     },
     {
@@ -709,8 +709,8 @@
       "fx": "execution_target(S1)",
       "parser": "legacy",
       "description": [
-        "Run Stage1 on CPU or on the GPU backend linked into this executable. Edwards GPU requires ecm_cuda; the target does not select between CUDA and OpenCL.",
-        "选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件内切换 CUDA 与 OpenCL。"
+        "Run Stage1 on CPU or GPU. The gpu_backend setting selects CUDA or desktop OpenCL. Both support Edwards within their own width limits.",
+        "选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持 Edwards。"
       ]
     },
     {
@@ -876,8 +876,8 @@
         "dict=2^(x-2)"
       ],
       "description": [
-        "Requested Edwards NAF window. 0 starts at CPU 12 or CUDA CGBN 6. With CUDA NTT, 0 selects x-only and 2–12 explicitly selects experimental 2XY NAF. The NTT prototype requires its requested window to fit; CPU and CGBN may lower the window on fresh tasks.",
-        "Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 显式选择实验性 2XY NAF。NTT 原型要求指定窗口符合预算，CPU 与 CGBN 新任务可自动降窗。"
+        "Requested Edwards NAF window. 0 starts at 12 for CPU and 6 for CUDA CGBN or OpenCL. With CUDA NTT, 0 selects x-only and 2–12 selects 2XY NAF. CPU, CGBN and OpenCL can lower the window for a fresh task to fit the memory budget.",
+        "Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 选择 2XY NAF。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。"
       ]
     },
     {
@@ -889,11 +889,11 @@
       "minimum": 0,
       "maximum": 1,
       "domain": "[0|1]",
-      "fx": "cuda_edwards_naf_doubling",
+      "fx": "gpu_edwards_naf_doubling",
       "parser": "strict",
       "description": [
-        "Doubling formula for new CUDA CGBN Edwards NAF batches. 0 selects HWCD, 1 selects 2XY (default). Applies to the main loop. Restoring a checkpoint uses the saved formula. If this key is omitted, the legacy ECM_EDWARDS_DBL_ALGO environment variable can override the default. CPU, CUDA NTT, and binary Edwards do not use this setting.",
-        "新 CUDA CGBN Edwards NAF 批次的主循环倍点公式。0 选择 HWCD，1 选择 2XY（默认）。检查点恢复沿用存档中的公式。仅在省略此键时，旧环境变量 ECM_EDWARDS_DBL_ALGO 可覆盖默认值。CPU、CUDA NTT 和 Edwards binary 路径不使用此设置。"
+        "Doubling formula for new CUDA CGBN and OpenCL Edwards NAF batches. 0 selects HWCD, 1 selects 2XY (default). Resume uses the saved formula. CUDA CGBN also accepts ECM_EDWARDS_DBL_ALGO when this key is omitted.",
+        "新 CUDA CGBN 与 OpenCL Edwards NAF 批次的倍点公式。0 选择 HWCD，1 选择 2XY（默认）。续跑沿用检查点中的公式。省略此键时，CUDA CGBN 还支持 ECM_EDWARDS_DBL_ALGO。"
       ]
     },
     {
@@ -909,8 +909,8 @@
       "minimum": 0,
       "maximum": 1048576,
       "description": [
-        "Edwards Stage1 working-memory cap in MB (1 MB = 1,000,000 bytes). 0 uses the available-memory budget. Limits the CPU NAF working set, CUDA CGBN device buffers, or the CUDA NTT dictionary (including the device product tree when used). Scalar construction and CUDA host preparation also check free memory. A positive value starts at 1 MB.",
-        "Edwards Stage1 计算内存上限，单位 MB（1 MB = 1,000,000 字节）。0 使用按空闲量计算的预算。约束 CPU NAF 工作集、CUDA CGBN 设备缓冲，或 CUDA NTT 字典（使用设备乘积树时也计入）。标量构造和 CUDA 主机准备另查空闲内存。正值最小为 1 MB。"
+        "Edwards Stage1 memory cap in MB (1 MB = 1,000,000 bytes). Limits the CPU NAF working set, CUDA CGBN or OpenCL device buffers, or CUDA NTT dictionaries and their device product tree. 0 uses the backend budget. OpenCL uses half the reported global memory and also checks the maximum allocation size.",
+        "Edwards Stage1 内存上限，1 MB = 1,000,000 字节。约束 CPU NAF 工作集、CUDA CGBN 或 OpenCL 设备缓冲、CUDA NTT 字典及设备乘积树。0 使用后端预算。OpenCL 以报告的全局内存一半为预算，并检查单个缓冲的最大容量。"
       ]
     },
     {

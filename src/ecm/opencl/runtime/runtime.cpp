@@ -141,7 +141,7 @@ static bool save_program_binary(context_t &ctx, cl_program program, const std::s
     return out.good();
 }
 
-static cl_int create_context_impl(context_t &out, int device_index) {
+static cl_int create_context_impl(context_t &out, int device_index, bool profiling) {
     cl_int err;
     cl_uint numPlatforms = 0;
     err = clGetPlatformIDs(0, NULL, &numPlatforms);
@@ -174,10 +174,11 @@ static cl_int create_context_impl(context_t &out, int device_index) {
 
     // create a command queue (non-deprecated compatible API)
 #if CL_TARGET_OPENCL_VERSION >= 200
-    cl_queue_properties props[] = { 0 };
+    const cl_queue_properties props[] = {
+        CL_QUEUE_PROPERTIES, static_cast<cl_queue_properties>(profiling ? CL_QUEUE_PROFILING_ENABLE : 0), 0};
     out.queue = clCreateCommandQueueWithProperties(out.ctx, out.device, props, &err);
 #else
-    out.queue = clCreateCommandQueue(out.ctx, out.device, 0, &err);
+    out.queue = clCreateCommandQueue(out.ctx, out.device, profiling ? CL_QUEUE_PROFILING_ENABLE : 0, &err);
 #endif
     if (err != CL_SUCCESS) {
         clReleaseContext(out.ctx);
@@ -188,12 +189,12 @@ static cl_int create_context_impl(context_t &out, int device_index) {
     return CL_SUCCESS;
 }
 
-cl_int create_context_with_device_index(context_t &out, int device_index) {
-    return create_context_impl(out, device_index);
+cl_int create_context_with_device_index(context_t &out, int device_index, bool profiling) {
+    return create_context_impl(out, device_index, profiling);
 }
 
 cl_int create_context(context_t &out) {
-    return create_context_impl(out, ecm_runtime_config().device_index);
+    return create_context_impl(out, ecm_runtime_config().device_index, false);
 }
 
 cl_int destroy_context(context_t &c) {

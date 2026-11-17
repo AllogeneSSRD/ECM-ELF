@@ -98,10 +98,10 @@ verbose = true  # bool: [false|true|0|1]
 # 要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
 target = "gpu"  # string: [cpu|gpu]
-# Run Stage1 on CPU or on the GPU backend linked into this executable. Edwards GPU requires
-# ecm_cuda; the target does not select between CUDA and OpenCL.
-# 选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件
-# 内切换 CUDA 与 OpenCL。
+# Run Stage1 on CPU or GPU. The gpu_backend setting selects CUDA or desktop OpenCL. Both support
+# Edwards within their own width limits.
+# 选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持
+# Edwards。
 
 # cpu_implementation = "auto"  # string: [auto|simd|scalar|gwnum|slice list|empty]
 # Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or

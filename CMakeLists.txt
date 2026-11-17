@@ -172,6 +172,7 @@ endfunction()
 
 add_executable(ecm
     ${ECM_STAGE1_COMMON_SOURCES}
+    src/ecm/stage1/edwards/opencl/workflow.cpp
     src/ecm/stage1/montgomery/opencl/workflow.cpp
     src/ecm/stage1/montgomery/opencl/engine.cpp
     src/ecm/opencl/factory.cpp

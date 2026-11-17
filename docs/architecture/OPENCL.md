@@ -2,6 +2,20 @@
 
 OpenCL 实现 Stage1 曲线批处理，以及独立 `ecm_opencl_stage2.exe` 的精确多项式 Stage2。Stage2 共用现有生产 save/队列/进度/结果流程，在编译和链接时选择原生 OpenCL 引擎；默认 CUDA 程序与算术路径保持独立。两者的设备编号、内存口径、支持范围与基准分别核对。
 
+## Stage1 曲线执行
+
+Montgomery PARAM3 在小位宽走私有 limb 路径。一个工作项维护一条曲线的两组阶梯坐标，工作项间无需交换 limb。每一位调用 `double_add_v2`，其中四次平方、四次完整模乘和一次 32 位曲线常数乘法。PARAM3 固定基点差分和短系数，使该常数乘法可以按 limb 线性扫描。主机根据位宽和厂商选择模乘、平方、加减与短乘算子。手写展开、汇编、LDS 和多工作项方案各有自己的准入范围。小位宽性能主要取决于整条曲线的私有寄存器和 spill，而单独的算子微基准只覆盖依赖链的一部分。 [私有阶梯](../../src/ecm/opencl/resources/ecm_stage1.cl) · [算子注册表](../../src/ecm/opencl/arithmetic/path_registry.cpp)
+
+Edwards 使用独立代码路径。主机在 [workflow.cpp](../../src/ecm/stage1/edwards/opencl/workflow.cpp) 复用 Atkin–Morain 构造和共享 `48·lcm(1…B1)` 的 NAF 编码。设备代码分三层：
+
+- [field.clh](../../src/ecm/opencl/resources/edwards/field.clh) 定义规范 Montgomery 残基和 32 位 limb CIOS。位宽在 OpenCL 编译时确定。支持 128、192、256、384、512、768、1024 bit 容器，进位路径支持模数占满容器。AMD 在 512 bit 起禁用 limb 循环的全部展开，以避开在 gfx1150 PAL 驱动 3640.0 上复现的编译器异常退出。启动日志用 `limb_unroll` 标出编译策略。
+- [point.clh](../../src/ecm/opencl/resources/edwards/point.clh) 定义扩展 Edwards 的 2XY／HWCD 倍点和带缓存 `dT` 的加点。普通 NAF 列只更新 XYZ，有加点或切片收尾时才计算 T。
+- [stage1.cl](../../src/ecm/opencl/resources/edwards/stage1.cl) 通过每工作项一条曲线构建并消费奇数倍点字典。字典和状态按 limb 交错布局，使相邻工作项访问相邻元素。一批曲线共用两份 NAF 位平面。字典保留投影坐标，因此设备建表无需求逆。
+
+设 $L$ 为 32 位 limb 数、$C$ 为曲线数量，则字典占 $16LC\,2^{w-2}$ 字节。OpenCL 以设备全局内存的一半、单对象容量和 `naf_memory_mb` 做准入。新任务可降窗。切片按 kernel event 时间朝 50 ms 调整，只有检查点、停止和收尾才读回状态。CPU 核对点方程，再用 $\gcd(Z-Y,N)$ 提取因子，或归一化 $(Z+Y)/(Z-Y)$ 写统一 Edwards save。OpenCL Edwards 使用自己的 NAF 游标和 XYZT 检查点载荷。
+
+当前 CIOS 通用乘法也用于平方。常规倍点列需 7 次模乘，非零列多一次倍点 T 和 8 次加点乘法，切片收尾另计。以 NAF 非零密度约 $1/(w+1)$ 估算，主循环每列约 $7+9/(w+1)$ 次通用模乘。两张 NVIDIA 卡的 [配对跑分](../performance/STAGE1.md#opencl-小位宽对照) 分别报告设备主循环和完整批次墙钟。
+
 ## 原生 Stage2 NTT 与算子层
 
 `src/ecm/opencl/ntt/` 提供原生 OpenCL 精确域卷积，`src/ecm/stage2/opencl/` 在其上实现整数打包、进位、普通／梅森 S4、驻留树、Newton 逆多项式、fold 和 scaled 下降，以及点算子。域层保留 Goldilocks 素数 q=2⁶⁴−2³²+1、7 生成的单位根、自然序输入的 DIF 正变换和消费位反序频谱的 DIT 逆变换。逆归一化及卷积逐点乘法融合在 inverse tile 的输入处；没有全长排列缓冲。设备算子库不依赖GMP；生产引擎主机侧使用GMP批量归一化、尾部块积/GCD和独立检查，探针另用GMP构造夹具。

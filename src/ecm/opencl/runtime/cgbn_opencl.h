@@ -17,7 +17,7 @@ struct context_t {
 // Create a simple OpenCL context for the given device (or the first available)
 // Returns 0 on success, non-zero on error (cl_int)
 cl_int create_context(context_t &out);
-cl_int create_context_with_device_index(context_t &out, int device_index);
+cl_int create_context_with_device_index(context_t &out, int device_index, bool profiling = false);
 cl_int destroy_context(context_t &ctx);
 
 // Build a program from source in-memory. The returned program must be released

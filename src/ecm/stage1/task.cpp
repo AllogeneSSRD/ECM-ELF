@@ -308,7 +308,12 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                     identity += "|ntt-edwards-naf-v1|" + std::to_string(opt.execution.naf_w);
                 else
                     identity += "|ntt-v1";
-            } else if (!base.edwards)
+            }
+#if !ECM_HAS_CUDA_STAGE1
+            else if (base.edwards)
+                identity += "|opencl-edwards-naf-v1";
+#endif
+            else if (!base.edwards)
                 identity += "|" + execution.cgbn_algorithm;
             session.begin(identity, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&
