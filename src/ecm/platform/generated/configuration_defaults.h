@@ -63,6 +63,7 @@ inline constexpr int stage1_gpu_param=3;
 inline constexpr char stage1_gpu_algorithm[]="ntt[16384:], cgbn[]";
 inline constexpr int stage1_cuda_thread_block_size=128;
 inline constexpr char stage1_ntt_convolution[]="auto";
+inline constexpr int stage1_ntt_allow_known_factors=1;
 inline constexpr int stage1_ntt_pad_batch=0;
 inline constexpr bool stage1_ntt_tight_weighted_bound=true;
 inline constexpr char stage1_ntt_tune_file[]="tune.toml";

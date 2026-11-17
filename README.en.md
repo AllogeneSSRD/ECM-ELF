@@ -58,7 +58,7 @@ The chart compares ECM-ELF CUDA (0.62.0) in serial and two-slot modes on the RTX
 
 | Program | Current purpose | Main input and output |
 | --- | --- | --- |
-| `ecm_cuda.exe` | CUDA Stage1. CGBN supports Edwards and the built-in Montgomery parametrizations. NTT supports Edwards and PARAM0 on full Mersenne numbers | Number, expression, or Stage1 queue. Writes `.save` files and checkpoints |
+| `ecm_cuda.exe` | CUDA Stage1. CGBN supports Edwards and the built-in Montgomery parametrizations. NTT supports Edwards and PARAM0 on full Mersenne numbers or assignments with known factors | Number, expression, or Stage1 queue. Writes `.save` files and checkpoints |
 | `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, TOML, queue and text saves; selectable OpenCL operators |
 | `ecm_cuda_stage2.exe`, `ecm_opencl_stage2.exe` | Standalone GPU polynomial Stage2 | Normalized PARAM0 or Edwards AM saves, directly or through `ECMSTAGE2=` and `ECMSTAGE2N=` |
 | `ecm_cpu_stage2.exe` | Standalone CPU Edwards Stage2 | Reads Edwards text saves directly. See [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) for backends and build options |
@@ -69,7 +69,7 @@ The chart compares ECM-ELF CUDA (0.62.0) in serial and two-slot modes on the RTX
 The CUDA worker selects an algorithm using the actual modulus and the default rule `gpu_algorithm = "ntt[16384:], cgbn[]"`. See [GPU algorithm selection](docs/usage/STAGE1.md#gpu-算法选择).
 
 - **CUDA CGBN** supports Edwards and Montgomery at the widths included in the build. `param = "m0"` selects the Suyama family used by GMP-ECM `-param 0`. `"m2"` and `"m3"` select their respective batch parametrizations. Montgomery uses the ladder by default and offers PRAC for PARAM0. See [Stage1 implementation](docs/architecture/STAGE1.md).
-- **CUDA NTT** supports Edwards and Montgomery PARAM0 on full Mersenne numbers. Use `--gpu-algorithm ntt` to select it explicitly. NTT queue assignments run in automatically sized batches and record observed throughput in `tune.toml`. See [full-width CUDA NTT](docs/usage/STAGE1.md#cuda-全宽-ntt).
+- **CUDA NTT** supports Edwards and Montgomery PARAM0. Assignments with known Mersenne factors can use full-Mersenne arithmetic by default, with checks and saves on the remaining cofactor. Use `--gpu-algorithm ntt` to select it explicitly. NTT queue assignments run in automatically sized batches and record observed throughput in `tune.toml`. See [full-width CUDA NTT](docs/usage/STAGE1.md#cuda-全宽-ntt).
 - **CUDA one thread per curve** supports Edwards up to 1024 bits and shares its NAF arithmetic with OpenCL. Select it with `gpu_algorithm = "thread"` or `--gpu-algorithm thread`. See [Stage1 usage](docs/usage/STAGE1.md#cuda-edwards-一线程一曲线).
 - **OpenCL** on desktop supports Montgomery PARAM3 and Edwards NAF through 1024 bits. Edwards uses one work-item per curve, shares the NAF encoding and builds the dictionary on the device. `ecm.exe --showkernel` lists selectable Montgomery operators. [OpenCL Stage1 usage](docs/usage/STAGE1.md#opencl-edwards) · [OpenCL architecture](docs/architecture/OPENCL.md#stage1-曲线执行)
 - **CPU** supports Edwards and Suyama-Montgomery with scalar GMP or eight-curve AVX-512 IFMA batches. On Windows x64, Montgomery PARAM0 can also use a locally built `gwnum.dll` when explicitly selected. See [Stage1 implementation](docs/architecture/STAGE1.md) and the [GWNUM build guide](docs/usage/BUILD.md#cpu-stage1-本地-gwnum-316).

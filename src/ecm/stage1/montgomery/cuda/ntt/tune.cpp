@@ -1,4 +1,5 @@
 #include "tune.h"
+#include "ecm/stage1/ntt_target.h"
 #include "ladder.h"
 #include "ecm/stage1/ntt_length.h"
 #include "../../../../cuda/ntt/runtime.h"
@@ -640,7 +641,9 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     if (!remaining) return 0;
     const auto& exec = request.options.execution;
     const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
-    const auto p = unsigned(mpz_sizeinbase(request.modulus, 2)), window = naf_window(request);
+    const auto p = ecm_stage1::ntt_arithmetic_bits(request.modulus, request.options);
+    const auto target_bits = mpz_sizeinbase(request.modulus, 2);
+    const auto window = naf_window(request);
     const auto shapes = production_shapes(p, exec.ntt, window != 0);
     const auto cap = std::min(remaining, production_capacity(request, device, p, shapes));
     std::map<unsigned, BatchRate> production, synthetic;
@@ -661,6 +664,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
             if (!compatible) continue;
             const bool runtime = pt::is_runtime_stage1_ntt(row);
             if (runtime && (uint(row,"valid_curves") != batch || uint(row,"arithmetic_bits") != p ||
+                            pt::optional_uint(row,"target_bits",p) != target_bits ||
                             uint(row,"b1") != uint64_t(std::floor(request.b1 + 0.0001)) ||
                             uint(row,"lcm_multiplier") != lcm_multiplier(request) ||
                             uint(row,"naf_window") != window ||
@@ -722,7 +726,8 @@ void record_production_sample(const ecm_stage1::Stage1Request& request, const Pl
                                       run.budget_bytes}, run.completed_bits);
         row["benchmark_kind"] = pt::quoted(pt::stage1_runtime_ntt_kind);
         row["curve"] = pt::quoted(curve_name(request));
-        row["arithmetic_bits"] = std::to_string(mpz_sizeinbase(request.modulus, 2));
+        row["arithmetic_bits"] = std::to_string(ecm_stage1::ntt_arithmetic_bits(request.modulus, request.options));
+        row["target_bits"] = std::to_string(mpz_sizeinbase(request.modulus, 2));
         row["b1"] = std::to_string(uint64_t(std::floor(request.b1 + 0.0001)));
         row["lcm_multiplier"] = std::to_string(lcm_multiplier(request));
         row["naf_window"] = std::to_string(naf_window(request));

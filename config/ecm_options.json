@@ -1101,6 +1101,23 @@
     },
     {
       "owner": "stage1",
+      "key": "ntt_allow_known_factors",
+      "v2_key": "ntt.allow_known_factors",
+      "field": "ntt_allow_known_factors",
+      "type": "int",
+      "default": 1,
+      "minimum": 0,
+      "maximum": 1,
+      "domain": "[0|1]",
+      "fx": "allow Stage1 NTT Mersenne carriers",
+      "parser": "strict",
+      "description": [
+        "1 allows Mersenne assignments with known factors to use NTT arithmetic modulo the full 2^p-1. Construction, factor checks and published saves use the remaining cofactor. 0 excludes this carrier path. Algorithm slice rules still match the cofactor bit width.",
+        "1 允许带已知因子的梅森任务使用完整 2^p-1 进行 NTT 运算。曲线构造、因子检查和发布存档使用剩余余因子。0 禁用此承载路径。算法切片仍按余因子的位宽匹配。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "ntt_pad_batch",
       "v2_key": "ntt.pad_batch",
       "field": "ntt_pad_batch",

@@ -1049,6 +1049,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             ecm_edwards::Integer modulus, value, inverse_root, gcd;
             mpz_setbit(modulus.v,p);
             mpz_sub_ui(modulus.v,modulus.v,1);
+            if (naf->check_modulus) {
+                if (mpz_cmp_ui(naf->check_modulus, 1) <= 0 ||
+                    !mpz_divisible_p(modulus.v, naf->check_modulus))
+                    throw std::invalid_argument("Edwards dictionary check modulus must divide M_p");
+                mpz_set(modulus.v, naf->check_modulus);
+            }
             for (unsigned lane=0; lane<curves; ++lane) {
                 auto* root = roots.data()+lane*s.words;
                 mpz_import(value.v,s.words,-1,sizeof(uint32_t),0,0,root);

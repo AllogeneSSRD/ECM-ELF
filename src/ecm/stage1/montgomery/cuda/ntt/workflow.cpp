@@ -10,6 +10,7 @@
 #include "../../../edwards/memory.h"
 #include "../../../../../io/stage1_binary.h"
 #include "../../../../../io/stage1_checkpoint.h"
+#include "ecm/stage1/ntt_target.h"
 #include "ecm/integer.h"
 #include "ecm/platform/logging.h"
 #include <algorithm>
@@ -34,7 +35,7 @@ double milliseconds_since(Clock::time_point start) {
 
 void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t batch,
                        unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan,
-                       size_t valid = 0) {
+                       size_t valid = 0, size_t target_bits = 0) {
     const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
     const char* chain = !edwards ? "ladder" : naf_window ? "naf" : "x-only";
     std::ostringstream details;
@@ -50,6 +51,8 @@ void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t 
             << " ntt_bpw_max=" << plan.bpw << " ntt_u=" << plan.coefficient_bound
             << " ntt_q=" << plan.field_modulus;
     if (valid && valid != batch) details << " ntt_valid_curves=" << valid;
+    if (target_bits && target_bits != modulus_bits)
+        details << " target_bits=" << target_bits << " carrier_exponent=" << modulus_bits;
     log_execution_details(opt, "ntt", details.str());
 }
 
@@ -248,17 +251,22 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
     try {
         const auto compute_started = Clock::now();
         const auto N = request.modulus;
-        const size_t p = mpz_sizeinbase(N, 2);
+        const size_t p = ntt_arithmetic_bits(N, request.options);
+        const auto target_bits = mpz_sizeinbase(N, 2);
+        const bool carrier = p && mpz_scan0(N, 0) != p;
         const unsigned curves = request.curves;
         const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
         const unsigned naf_window = edwards ? unsigned(opt.execution.naf_w) : 0;
         if (naf_window && (naf_window < 2 || naf_window > 12))
             throw std::invalid_argument("Edwards NTT NAF requires a window from 2 to 12");
         if (!curves || curves > stage1_ntt_max_curves || (!edwards && opt.execution.selection.gpu_param != 0) ||
-            p < 32 || p > 262144 || mpz_sgn(N) <= 0 || mpz_scan0(N, 0) != p)
+            !p)
             throw std::invalid_argument(
-                "NTT requires Edwards or Montgomery param0, a full 2^p-1 (32 <= p <= 262144), and 1-" +
+                "NTT requires Edwards or Montgomery param0, a legal Mersenne carrier, and 1-" +
                 std::to_string(stage1_ntt_max_curves) + " curves");
+        if (carrier)
+            ecm_ts_fprintf(stdout, "stage1_ntt_carrier: target_bits=%zu arithmetic_bits=%zu exponent=%zu\n",
+                           target_bits, p, p);
         ecm_edwards::Integer scalar;
         const unsigned torsion = edwards ? 48u :
             opt.execution.selection.scalar_construction == ScalarConstruction::PrimePowerLcmTimes12
@@ -362,11 +370,12 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             std::vector<uint32_t> host_seeds(host_seed_words);
             auto* seeds = !naf_window ? nullptr : gpu_dictionary ? dictionary.data() : host_seeds.data();
             const auto curve_started = Clock::now();
-            prepare_edwards_batch(N, sigmas, words, workers, affordable != 0,
+            const bool prefix = affordable != 0 && !carrier;
+            prepare_edwards_batch(N, sigmas, words, workers, prefix,
                                   kinds, factors, lanes_initial, seeds);
             curve_setup_ms = milliseconds_since(curve_started);
             ecm_ts_fprintf(stdout, "stage1_ntt_edwards_setup: threads=%u ms=%.3f prefix=%u fold=%u\n",
-                workers, curve_setup_ms, unsigned(affordable != 0), unsigned(affordable != 0 && p >= 8192));
+                workers, curve_setup_ms, unsigned(prefix), unsigned(prefix && p >= 8192));
             if (ecm_stage1_stop_requested()) {
                 result.stop();
                 return result;
@@ -503,7 +512,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             control.resume = snapshot.cursor;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
                 executed_plan = plan;
-                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, valid);
+                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, valid, target_bits);
                 ecm_ts_fprintf(stdout, "stage1_ntt_plan: device=%d p=%zu curves=%zu length=%u bpw=%u digits=%u "
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
@@ -554,6 +563,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 return result;
             }
             ecm_mersenne_ntt::EdwardsNaf naf{naf_window, digits, dictionary, budget, gpu_dictionary, {}};
+            if (carrier) naf.check_modulus = N;
             if (gpu_dictionary && automatic_dictionary)
                 naf.host_fallback = [&](ecm_mersenne_ntt::Run& run) {
                     return build_host_naf_fallback(run, N, dictionary, batch, words, naf_window);
@@ -657,7 +667,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             const std::vector<uint32_t> initial(begin, begin + 6 * words);
             ecm_mersenne_ntt::Control control;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
-                log_ntt_execution(opt, p, 1, 0, control.resume, plan);
+                log_ntt_execution(opt, p, 1, 0, control.resume, plan, 0, target_bits);
             };
             control.poll = [](unsigned) {
                 return ecm_mersenne_ntt::Control::Action{false, ecm_stage1_stop_requested()};

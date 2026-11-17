@@ -509,6 +509,20 @@ Type `int` · Range `[0|1..1048576]` · Worker override `[worker.N] stage1.naf_m
 
 Edwards Stage1 memory cap in MB (1 MB = 1,000,000 bytes). Limits the CPU NAF working set, CUDA CGBN or OpenCL device buffers, or CUDA NTT dictionaries and their device product tree. 0 uses the backend budget. OpenCL uses half the reported global memory and also checks the maximum allocation size.
 
+<a id="ntt_allow_known_factors"></a>
+
+### ntt.allow_known_factors
+
+```toml
+ntt.allow_known_factors = 1
+```
+
+Type `int` · Range `[0|1]` · Worker override `[worker.N] stage1.ntt.allow_known_factors` · Level `advanced`.
+
+Legacy v1 key `stage1.ntt_allow_known_factors`
+
+1 allows Mersenne assignments with known factors to use NTT arithmetic modulo the full 2^p-1. Construction, factor checks and published saves use the remaining cofactor. 0 excludes this carrier path. Algorithm slice rules still match the cofactor bit width.
+
 <a id="ntt_bpw"></a>
 
 ### ntt.bits_per_word

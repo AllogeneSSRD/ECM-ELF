@@ -2,7 +2,7 @@
 
 CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Montgomery PARAM0 和 Atkin–Morain Edwards。两种曲线共用设备上的 x-only 阶梯，一条曲线也会将同层的独立乘法一起提交。GPU1 RTX 4060 Laptop 上，8191／16001 位的 PARAM0 单曲线设备阶段短于本机 CGBN 对照。该对照的 CGBN 批量提高到 192 条后，CGBN 的吞吐更高。
 
-生产入口接受完整 `2^p−1`，单批运行 1–128 条曲线。CUDA 默认策略在实际模数位宽达到 16384 且符合 NTT 条件时选择 NTT，也可显式启用。队列会按可用显存和调优结果拆分任务。PARAM0 使用 `lcm(1…B1)` 或 `12·lcm(1…B1)`，Edwards 使用 `48·lcm(1…B1)`，可走默认 x-only 阶梯或显式窗口的原生 2XY NAF。独立算术探针可输出未归一化的 X/Z 与 GMP 对拍。生产入口复用曲线构造、save、结果账本和 Stage2 交接。配置见 [Stage1 用法](../usage/STAGE1.md#cuda-全宽-ntt)。
+生产入口接受完整 `2^p−1`，或有原始梅森元数据的已知因子任务，单批运行 1–128 条曲线。CUDA 默认策略在实际模数位宽达到 16384 且符合 NTT 条件时选择 NTT，也可显式启用。队列会按可用显存和调优结果拆分任务。PARAM0 使用 `lcm(1…B1)` 或 `12·lcm(1…B1)`，Edwards 使用 `48·lcm(1…B1)`，可走默认 x-only 阶梯或显式窗口的原生 2XY NAF。独立算术探针可输出未归一化的 X/Z 与 GMP 对拍。生产入口复用曲线构造、save、结果账本和 Stage2 交接。配置见 [Stage1 用法](../usage/STAGE1.md#cuda-全宽-ntt)。
 
 ## 批量调优与显存
 
@@ -10,11 +10,13 @@ CUDA Stage1 的 NTT 后端可对完整梅森模数 `M=2^p−1` 运行 Suyama Mon
 
 生产中的变换计划 `auto` 查兼容 NTT 形状和活跃批量，缺档时预热后短测 128 步。共享 `[ntt]` 调优行用 `batch × ladder_steps / device_seconds` 保存吞吐。调优墙钟时间还包括初始化、Graph 构建、预热、回读和末点对照。
 
-自动拆批用同一张表的 `benchmark_kind = "stage1_runtime"` 样本独立选批量。条件包括设备、实际位宽、曲线、标量倍数、B1、NAF 窗口及兼容计划。冷启动可用合成表的推荐批量，没有记录时从 64 条起步并按显存裁剪。余量允许时用不同批量执行真实、互不重叠的曲线。计划优先比较两次以上的实测档，选择达到这些档位峰值吞吐 95% 的最小档。样本记录真实有效曲线数、物理批量、设备主循环 `iter_per_s` 和 `curves_per_s`。后者从标量准备算到结果归一化，排除合成试跑和最终文件发布。恢复的部分批次不参与完整批量的排名。补齐新增的真实曲线与同批其他曲线一起计入合格样本。表结构见 [NTT 性能摘要表](../architecture/AUTO_B2.md#ntt-性能摘要表)。
+自动拆批用同一张表的 `benchmark_kind = "stage1_runtime"` 样本独立选批量。条件包括设备、目标及算术位宽、曲线、标量倍数、B1、NAF 窗口及兼容计划。冷启动可用合成表的推荐批量，没有记录时从 64 条起步并按显存裁剪。余量允许时用不同批量执行真实、互不重叠的曲线。计划优先比较两次以上的实测档，选择达到这些档位峰值吞吐 95% 的最小档。样本记录真实有效曲线数、物理批量、设备主循环 `iter_per_s` 和 `curves_per_s`。后者从标量准备算到结果归一化，排除合成试跑和最终文件发布。恢复的部分批次不参与完整批量的排名。补齐新增的真实曲线与同批其他曲线一起计入合格样本。表结构见 [NTT 性能摘要表](../architecture/AUTO_B2.md#ntt-性能摘要表)。
 
 以活跃批量 B、指数 p、NTT 长度 L 计，主数组需要 `88·B·L + 92·B·ceil(p/32)` 字节，此外还有标量、NTT 常量表和加权表。申请前核算显式分配，Graph 上传后及同步执行后用 `cudaMemGetInfo` 采样空闲显存差；两者较大值写为 `peak_bytes`。观测值以 CUDA 上下文就绪后的空闲显存为基准，受同设备其他进程和驱动分配粒度影响。
 
 ### GPU1 验证
+
+0.64.4 在 RTX 4060 Laptop（GPU1）验证已知因子承载。M15919 剥除 1782929 后为 15899 位，B1=64，每条件两条曲线。Edwards x-only、NAF w6 主机字典、NAF w8 GPU 字典，以及 PARAM0 的线性和加权后端，均与直接在余因子上执行的 CGBN 和独立整数参考一致。M65 剥除 31 后，PARAM0 的 sigma 30、31 均发布新因子 8191。另用 244 位梅森数承载 61 位目标，B1=1024，130 条曲线的中断续跑与连续执行保存点一致。配置开关、调优表双位宽、known-factors 元数据、checksum 和 Stage2 交接也通过回归。每条件一次，原始记录位于 `data/experiments/stage1_ntt_known_factors/final_0644/`，入口为 [已知因子验收](../../tools/test/test_stage1_ntt_known_factors.py)。
 
 2026-11-17 在 RTX 4060 Laptop（GPU1、8 GiB，驱动 610.88，测试前 SM 频率 1500 MHz）验证 0.64.1 开发构建的任务拆批。CUDA 13.3、sm_89、MSVC 14.51。输入为 M4423、Edwards 2XY NAF w6，B1=1024，交接 B2=4096，连续 sigma 从 20260922 开始。每轮用空的 tune 文件起跑整项 1000 条，逐批日志和汇总保存在 `data/experiments/stage1_ntt_task_batches/`。
 

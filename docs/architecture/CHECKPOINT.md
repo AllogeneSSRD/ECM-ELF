@@ -54,11 +54,14 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | CPU 附加 2 | 实现枚举 | 0=auto、1=IFMA SIMD、2=GMP scalar |
 | CUDA NTT 附加 | 公式和 NAF 窗口 | x-only 为 `ntt-v1`，原生 Edwards 为 `ntt-edwards-naf-v1` 加窗口 |
 | CUDA 拆批 NTT 追加 | 任务载荷版本和总曲线数 | 在 NTT 身份末尾追加 `ntt-task-v1` 和十进制总曲线数 |
+| CUDA NTT 梅森承载追加 | 算术模数 | 在公式身份之后追加 `ntt-carrier-v1` 和原始梅森指数 |
 | 其他 GPU Montgomery 附加 | CGBN 算法文本 | 由驱动写入有效的 CGBN 算法 |
 
 一般路径用外层头比较曲线数，并在记录头中保存各 sigma。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i，随机任务采用已存种子。拆批 NTT 的外层固定为一条记录，使用 identity 核对任务总曲线数，从任务载荷恢复起始 sigma。GPU Edwards 的窗口、binary/NAF 模式及倍点变体也可由对应载荷验证。见 [Stage1 身份构造](../../src/ecm/stage1/task.cpp#L245)。
 
 设备编号、GPU 型号、驱动版本、D、B2、输出路径不在该外层身份中。不能据此推断任意设备或后端之间均可恢复：内部布局、构建包含的内核和算法约束仍须满足。CPU auto 切换实际实现的情况还受各后端的分块恢复条件约束。
+
+NTT 梅森承载任务的首项 N 仍为余因子，算术快照按承载指数编码，完成记录按余因子验证。修改已知因子或承载指数后需重新核对任务身份。见 [梅森承载](NTT.md#stage1-已知因子与梅森承载)。
 
 ### Context 与停止信号
 

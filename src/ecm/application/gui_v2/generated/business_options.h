@@ -63,6 +63,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage1","gpu_algorithm","[1|2|3|cgbn|ntt|thread|slice list]","option_stage1_gpu_algorithm","int|string",false,false,0,0},
     {"stage1","cuda_thread_block_size","[32|64|128|256]","option_stage1_cuda_thread_block_size","int",false,false,0,0},
     {"stage1","ntt_convolution","[auto|linear|weighted]","option_stage1_ntt_convolution","string",false,false,0,0},
+    {"stage1","ntt_allow_known_factors","[0|1]","option_stage1_ntt_allow_known_factors","int",true,true,0,1},
     {"stage1","ntt_pad_batch","[0|1]","option_stage1_ntt_pad_batch","int",false,false,0,0},
     {"stage1","ntt_tight_weighted_bound","[false|true|0|1]","option_stage1_ntt_tight_weighted_bound","bool",false,false,0,0},
     {"stage1","ntt_tune_file","<path>","option_stage1_ntt_tune_file","string",false,false,0,0},

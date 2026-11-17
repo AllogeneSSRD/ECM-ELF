@@ -384,6 +384,13 @@ target = "gpu"  # string: [cpu|gpu]
 # auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用
 # Goldilocks，共用 Stage1 任务及检查点格式。
 
+# ntt.allow_known_factors = 1  # int: [0|1]
+# 1 allows Mersenne assignments with known factors to use NTT arithmetic modulo the full 2^p-1.
+# Construction, factor checks and published saves use the remaining cofactor. 0 excludes this
+# carrier path. Algorithm slice rules still match the cofactor bit width.
+# 1 允许带已知因子的梅森任务使用完整 2^p-1 进行 NTT 运算。曲线构造、因子检查和发布存档使用剩余余因
+# 子。0 禁用此承载路径。算法切片仍按余因子的位宽匹配。
+
 # ntt.pad_batch = 0  # int: [0|1]
 # 0 runs exactly the requested number of Stage1 NTT curves. 1 rounds the final batch up to the
 # selected size when resources permit. Each extra curve gets a new sigma and is included in the

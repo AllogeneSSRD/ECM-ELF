@@ -60,7 +60,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 
 | 程序 | 当前用途 | 主要输入与输出 |
 | --- | --- | --- |
-| `ecm_cuda.exe` | CUDA Stage1。CGBN 支持 Edwards 和构建中包含的 Montgomery 参数化，NTT 支持完整梅森数上的 Edwards 和 PARAM0 | 数字、表达式或 Stage1 队列，输出 `.save` 和检查点 |
+| `ecm_cuda.exe` | CUDA Stage1。CGBN 支持 Edwards 和构建中包含的 Montgomery 参数化，NTT 支持 Edwards 和 PARAM0 的完整梅森数或已知因子任务 | 数字、表达式或 Stage1 队列，输出 `.save` 和检查点 |
 | `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、TOML、队列及文本 save；GPU 算子可单独选择 |
 | `ecm_cuda_stage2.exe`、`ecm_opencl_stage2.exe` | 独立 GPU 多项式 Stage2 | 直接读取归一化 PARAM0 或 Edwards AM 存档，也可消费 `ECMSTAGE2=` 和 `ECMSTAGE2N=` |
 | `ecm_cpu_stage2.exe` | 独立 CPU Edwards Stage2 | 直接读取 Edwards 文本 save。后端和构建选项见 [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) |
@@ -71,7 +71,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 CUDA 默认按 `gpu_algorithm = "ntt[16384:], cgbn[]"` 和实际模数选择后端。见 [GPU 算法选择](docs/usage/STAGE1.md#gpu-算法选择)。
 
 - **CUDA CGBN** 按构建中的位宽档执行 Edwards 或 Montgomery。`param = "m0"` 选择与 GMP-ECM `-param 0` 同族的 Suyama 曲线，`"m2"` 和 `"m3"` 选择相应的 batch 参数化。Montgomery 默认用 ladder，PARAM0 可选 PRAC。见 [Stage1 实现](docs/architecture/STAGE1.md)。
-- **CUDA NTT** 用于完整梅森数，支持 Edwards 和 Montgomery PARAM0。可通过 `--gpu-algorithm ntt` 固定使用。队列自动拆批并把实测吞吐写入 `tune.toml`。见 [CUDA 全宽 NTT](docs/usage/STAGE1.md#cuda-全宽-ntt)。
+- **CUDA NTT** 支持 Edwards 和 Montgomery PARAM0。带已知因子的梅森任务默认允许用完整梅森数承载运算，检查和存档使用余因子。可通过 `--gpu-algorithm ntt` 固定使用。队列自动拆批并把实测吞吐写入 `tune.toml`。见 [CUDA 全宽 NTT](docs/usage/STAGE1.md#cuda-全宽-ntt)。
 - **CUDA 一线程一曲线** 用于最高 1024 bit 的 Edwards，使用与 OpenCL 共用的 NAF 点算术。通过 `gpu_algorithm = "thread"` 或 `--gpu-algorithm thread` 启用。见 [使用方法](docs/usage/STAGE1.md#cuda-edwards-一线程一曲线)。
 - **OpenCL** 的桌面 worker 支持 Montgomery PARAM3 和最高 1024 bit 的 Edwards NAF。Edwards 每个工作项处理一条曲线，使用共享 NAF 编码并在设备建表。`ecm.exe --showkernel` 列出 Montgomery 可选算子。 [OpenCL Stage1 用法](docs/usage/STAGE1.md#opencl-edwards) · [OpenCL 架构](docs/architecture/OPENCL.md#stage1-曲线执行)
 - **CPU** 的 Edwards 与 Suyama-Montgomery 路径可用 GMP 标量或 AVX-512 IFMA，IFMA 每批处理 8 条曲线。Windows x64 上的 Montgomery PARAM0 还可显式使用本地构建的 `gwnum.dll`。见 [Stage1 实现](docs/architecture/STAGE1.md)与 [GWNUM 本地构建](docs/usage/BUILD.md#cpu-stage1-本地-gwnum-316)。

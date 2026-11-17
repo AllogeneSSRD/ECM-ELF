@@ -64,6 +64,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage1","gpu_algorithm","int|string","[1|2|3|cgbn|ntt|thread|slice list]","stage1","gpu_algorithm","","stage1","gpu_algorithm",false,false},
     {"stage1","cuda_thread_block_size","int","[32|64|128|256]","stage1","cuda.thread_block_size","","stage1","cuda.thread_block_size",false,false},
     {"stage1","ntt_convolution","string","[auto|linear|weighted]","stage1","ntt.convolution","","stage1","ntt.convolution",false,false},
+    {"stage1","ntt_allow_known_factors","int","[0|1]","stage1","ntt.allow_known_factors","","stage1","ntt.allow_known_factors",false,false},
     {"stage1","ntt_pad_batch","int","[0|1]","stage1","ntt.pad_batch","","stage1","ntt.pad_batch",false,false},
     {"stage1","ntt_tight_weighted_bound","bool","[false|true|0|1]","stage1","ntt.tight_weighted_bound","","stage1","ntt.tight_weighted_bound",false,false},
     {"stage1","ntt_tune_file","string","<path>","stage1","ntt.tune_file","","stage1","",false,false},

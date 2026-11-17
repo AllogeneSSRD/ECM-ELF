@@ -208,8 +208,9 @@ inline void validate_stage1_ntt(const Fields &s) {
     if(is_runtime_stage1_ntt(s)) {
         const auto curve=text(s,"curve");
         const auto bits=uint(s,"arithmetic_bits"), window=uint(s,"naf_window"), valid=uint(s,"valid_curves");
+        const auto target=optional_uint(s,"target_bits",bits);
         const auto lcm=uint(s,"lcm_multiplier");
-        if((curve!="edwards" && curve!="mont0") || bits<32 || bits>262144 ||
+        if((curve!="edwards" && curve!="mont0") || bits<32 || bits>262144 || target<2 || target>bits ||
            (curve=="edwards" ? lcm!=48 : lcm!=1 && lcm!=12) ||
            uint(s,"b1")<2 || (window && (curve!="edwards" || window<2 || window>12)) ||
            !valid || valid>batch || !(real(s,"curves_per_s")>0) ||
@@ -615,6 +616,8 @@ struct Profile {
             if(is_runtime_stage1_ntt(old)!=runtime)return false;
             if(runtime)for(const char *key:{"curve","arithmetic_bits","b1","lcm_multiplier","naf_window","valid_curves","dataflow"})
                 if(required(old,key)!=required(sample,key))return false;
+            if(runtime && optional_uint(old,"target_bits",uint(old,"arithmetic_bits"))!=
+                          optional_uint(sample,"target_bits",uint(sample,"arithmetic_bits")))return false;
             return true;
         };
         const auto at=std::find_if(stage1_ntt.begin(),stage1_ntt.end(),same);

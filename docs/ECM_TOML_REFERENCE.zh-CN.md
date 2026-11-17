@@ -509,6 +509,20 @@ naf_memory_mb = 0
 
 Edwards Stage1 内存上限，1 MB = 1,000,000 字节。约束 CPU NAF 工作集、CUDA CGBN 或 OpenCL 设备缓冲、CUDA NTT 字典及设备乘积树。0 使用后端预算。OpenCL 以报告的全局内存一半为预算，并检查单个缓冲的最大容量。
 
+<a id="ntt_allow_known_factors"></a>
+
+### ntt.allow_known_factors
+
+```toml
+ntt.allow_known_factors = 1
+```
+
+类型 `int` · 范围 `[0|1]` · Worker 覆盖 `[worker.N] stage1.ntt.allow_known_factors` · 级别 `高级`。
+
+v1 旧键 `stage1.ntt_allow_known_factors`
+
+1 允许带已知因子的梅森任务使用完整 2^p-1 进行 NTT 运算。曲线构造、因子检查和发布存档使用剩余余因子。0 禁用此承载路径。算法切片仍按余因子的位宽匹配。
+
 <a id="ntt_bpw"></a>
 
 ### ntt.bits_per_word

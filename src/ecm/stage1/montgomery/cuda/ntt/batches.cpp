@@ -1,5 +1,6 @@
 #include "batches.h"
 #include "tune.h"
+#include "ecm/stage1/ntt_target.h"
 #include "../../../edwards/memory.h"
 #include "../../../sigma.h"
 #include "../../../../../io/stage1_binary.h"
@@ -50,6 +51,7 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
         const auto completed = reader.u32();
         const auto native_size = reader.u64();
         const auto modulus_bytes = (mpz_sizeinbase(request.modulus, 2) + 7) / 8;
+        const auto arithmetic_bytes = (ntt_arithmetic_bits(request.modulus, request.options) + 7) / 8;
         const uint64_t scheduled = uint64_t(completed) + saved.curves;
         if (scheduled > UINT32_MAX || scheduled >= uint64_t(request.curves) + stage1_ntt_max_curves ||
             (saved.curves && completed >= request.curves) ||
@@ -59,7 +61,7 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
             saved.preferred > stage1_ntt_max_curves || capacity > saved.preferred ||
             saved.curves > capacity || bool(saved.curves) != bool(capacity) ||
             (native_size && !saved.curves) ||
-            native_size > 6ull * saved.curves * (modulus_bytes + 3) + 256)
+            native_size > 6ull * saved.curves * (arithmetic_bytes + 3) + 256)
             return false;
         saved.native = reader.take(native_size);
         const auto results_start = reader.at;
@@ -115,7 +117,9 @@ ecm_stage1::ComputationResult run_ntt_batches(
     using namespace ecm_stage1;
     using namespace ecm_edwards_memory;
     const auto free = host_free_bytes();
-    const auto bits = mpz_sizeinbase(request.modulus, 2);
+    const auto bits = ntt_arithmetic_bits(request.modulus, request.options);
+    if (!bits)
+        throw std::invalid_argument("NTT Stage1 task has no eligible arithmetic modulus");
     const auto budget = free ? usable_bytes(*free, 64 * mib) : UINT64_MAX;
     if (batch_host_bytes(request.curves, bits) > budget)
         throw std::runtime_error("NTT Stage1 task exceeds available host memory; reduce total curves");

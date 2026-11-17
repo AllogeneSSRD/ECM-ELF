@@ -2,6 +2,16 @@
 
 CUDA Stage1 和 Stage2 共用 Goldilocks 域算术、根表与正逆变换调度。Stage1 在完整梅森模数上计算单个点坐标的乘积，Stage2 使用 Kronecker 槽计算多项式乘积并逐系数归约。
 
+## Stage1 已知因子与梅森承载
+
+梅森任务可保留原始 $M=2^p-1$ 作为 GPU 算术模数，同时令 $C=M/K$ 为实际目标，$K$ 为 worktodo 中已知因子的乘积。默认配置 `ntt.allow_known_factors = 1` 允许这条路径；0 关闭其选型。输入须保留 $k=1,b=2,c=-1,p$ 和已知因子元数据，并验证 $C\mid M$。GPU 算法切片按 $C$ 的位宽匹配，NTT 长度、系数界和显存准入按 $p$ 计算。见 [模数资格](../../include/ecm/stage1/ntt_target.h)。
+
+投影 $\mathbb Z/M\mathbb Z\to\mathbb Z/C\mathbb Z$ 保持加、减、乘和平方。因此，主机构造出的曲线常量、初始坐标和字典可以从 $C$ 提升为 $M$ 中的整数代表，GPU 按原 NTT 路径计算，回读后再投影到 $C$。这些输入在 $C$ 上对应原曲线和 sigma。
+
+所有求逆和因子分类使用 $C$。这包括主机构造、主机仿射字典、GPU 字典乘积树根的逆元、末点归一化和异常点的 x-only 重放。GPU 字典的乘积树升降仍在 $M$ 上运行，根逆元在 $C$ 上求得，下降后得到的坐标投影到 $C$ 仍满足批量归一化关系。已知因子不会作为目标模数中的新因子返回。单纯在发布时过滤因子无法代替这些求逆边界的处理。见 [Stage1 workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp)、[GPU 字典](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu)。
+
+保存点、checksum、因子验证和结果 JSON 继续使用实际目标 $C$，已知因子保留为任务元数据。Stage2 读取的也是 $C$ 上的归一化点。检查点身份额外绑定承载指数，快照以 $p$ 位规范整数编码。生产调优行分别记录 `target_bits` 和 `arithmetic_bits`，只合并两个位宽都相容的完整曲线样本。
+
 ## Stage1 分段进位与 pack 融合
 
 Edwards 和 Montgomery PARAM0 共用 x-only 阶梯。每个标量 bit 分三批计算乘积，批次之间要做模加减、规范化以及下一批的 digit 打包。宽位宽时，一个 CTA 处理整条 residue 会让每个线程串行处理多个 limb。分段路径将连续 256 个 32-bit limb 分给一个 CTA，每个线程处理一个 limb，末段按实际位宽屏蔽填充位。点公式、NTT 长度和逆变换保持同一合同。阶梯与检查点边界见 [Stage1 架构](STAGE1.md#唯一执行分派与-gpu-主机流程)。

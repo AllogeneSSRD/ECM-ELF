@@ -80,7 +80,8 @@ GPU execution:
   -d <INDEX>          GPU device index (default 0).
   --gpu-algorithm <A> 1|2|3|cgbn|ntt|thread or a quoted slice list.
                        Default: "ntt[16384:], cgbn[]"; ranges use actual modulus bits.
-                       CUDA NTT: full 2^p-1, 32 <= p <= 262144; Edwards or m0.
+                       CUDA NTT: full 2^p-1 or a known-factor Mersenne assignment;
+                       32 <= p <= 262144; Edwards or m0.
                        CUDA thread: Edwards through 1024 bits.
                        OpenCL: Edwards through 1024 bits or Montgomery PARAM3.
   --gpu-info          Report device and compiled tiers, then exit.
@@ -123,6 +124,8 @@ Additional TOML controls:
   [shared] tune_file selects the common Stage1/Stage2 tuning database.
   [stage1] ntt.pad_batch = 0 runs the requested count; 1 rounds the tail batch
            up with new sigmas and includes those curves in saves and handoff.
+           ntt.allow_known_factors = 1 permits full-Mersenne arithmetic for
+           cofactor assignments; checks and saves use the cofactor. 0 disables it.
            ntt.convolution = "auto"|"linear"|"weighted" selects convolution.
            ntt.length, ntt.bits_per_word, ntt.tile, ntt.outer_radix_limit,
            ntt.window_bits, ntt.warp_tail and ntt.memory_mib control NTT plans.

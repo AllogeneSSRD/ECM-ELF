@@ -113,7 +113,7 @@ checkpoint实现与恢复合同维持原样。Android原有native存档可以覆
 
 [execution.cpp](../../src/ecm/stage1/execution.cpp)按实际任务的 target、曲线与 GPU 算法选择入口。CGBN Montgomery 各 param 共享同一个 `run_mont_stage1`；全宽 NTT 使用独立适配器。CUDA 由构建显式定义 `ECM_HAS_CUDA_STAGE1`。各 workflow 线性编排准备、恢复候选验证、布局接纳或新曲线构造、设备执行、结果收集；不拥有最终save/results发布或队列。
 
-GPU 切片策略在工作行的曲线类型和实际算术模数确定后依次匹配。CUDA 构建可以检查 CGBN 档位、NTT 完整梅森形式和 thread 的 Edwards 位宽上限；OpenCL 构建按自身曲线和位宽能力执行。自动策略恢复时先检查路径中匹配身份的检查点，固定原算术后端。[归一化](../../src/io/normalize.cpp) · [检查点身份](../../src/ecm/stage1/task.cpp)
+GPU 切片策略在工作行的曲线类型和实际目标模数确定后依次匹配。CUDA 构建可以检查 CGBN 档位、NTT 梅森模数或已知因子承载资格，以及 thread 的 Edwards 位宽上限；OpenCL 构建按自身曲线和位宽能力执行。自动策略恢复时先检查路径中匹配身份的检查点，固定原算术后端。[归一化](../../src/io/normalize.cpp) · [梅森承载](NTT.md#stage1-已知因子与梅森承载) · [检查点身份](../../src/ecm/stage1/task.cpp)
 
 [Montgomery workflow](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/stage1/montgomery/cuda/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 

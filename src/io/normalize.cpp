@@ -2,6 +2,7 @@
 #include "io/expression.h"
 #include "ecm/stage1/gpu_backend.h"
 #include "ecm/stage1/sigma.h"
+#include "ecm/stage1/ntt_target.h"
 #include "ecm/io/save.h"
 #include "io/cli.h"
 #include "io/config.h"
@@ -287,6 +288,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
                          unsigned(cfg.ntt_memory_mib),
                          resolve_rel_local(base, cfg.ntt_tune_file), cfg.ntt_tight_weighted_bound};
     opt.execution.ntt.pad_batch = cfg.ntt_pad_batch != 0;
+    opt.execution.ntt.allow_known_factors = cfg.ntt_allow_known_factors != 0;
     opt.execution.gpu_mul_path = cfg.kernel_mul;
     opt.execution.gpu_sqr_path = cfg.kernel_sqr;
     opt.execution.gpu_add_path = cfg.kernel_add;
@@ -644,9 +646,9 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
             return true;
         }
         if (modulus) {
-            const auto bits = mpz_sizeinbase(modulus, 2);
-            if (bits < 32 || bits > 262144 || mpz_sgn(modulus) <= 0 || mpz_scan0(modulus, 0) != bits) {
-                error = "Stage1 NTT requires a full 2^p-1 with 32 <= p <= 262144";
+            if (!ecm_stage1::ntt_arithmetic_bits(modulus, opt)) {
+                error = "Stage1 NTT requires a full 2^p-1 or an enabled known-factor Mersenne carrier "
+                        "with 32 <= p <= 262144";
                 return true;
             }
         }

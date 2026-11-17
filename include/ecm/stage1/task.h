@@ -24,6 +24,7 @@ struct Stage1NttOptions {
     bool tight_weighted_bound = true;
     bool pad_batch = false;
     bool observe_batch = false; // Runtime tuning uses normally scheduled task batches.
+    bool allow_known_factors = true;
 };
 
 struct Stage1ExecutionPreferences {

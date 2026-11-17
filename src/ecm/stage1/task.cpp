@@ -2,6 +2,7 @@
 #include "edwards/memory.h"
 #include "../../io/stage1_checkpoint.h"
 #include "ecm/stage1/selection.h"
+#include "ecm/stage1/ntt_target.h"
 #include "ecm/io/save.h"
 #include "ecm/io/results.h"
 #include "../platform/generated/configuration_defaults.h"
@@ -262,6 +263,9 @@ static std::string checkpoint_identity(const Stage1Request& request,
             identity += "|ntt-edwards-naf-v1|" + std::to_string(options.execution.naf_w);
         else
             identity += "|ntt-v1";
+        const auto p = ntt_arithmetic_bits(request.modulus, request.options);
+        if (p && mpz_scan0(request.modulus, 0) != p)
+            identity += "|ntt-carrier-v1|" + std::to_string(p);
     } else if (selection.gpu_algorithm == GpuAlgorithm::Thread) {
         identity += "|cuda-edwards-thread-v1";
     }

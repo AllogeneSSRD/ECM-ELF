@@ -89,6 +89,8 @@ struct EdwardsNaf {
     // Convert the seed to a host table only if the automatic GPU builder's
     // temporary storage exceeds a limit. Keep the same lanes for checkpoints.
     std::function<std::vector<uint32_t>(Run&)> host_fallback;
+    // Optional divisor of M_p for dictionary inverses and factor classification.
+    mpz_srcptr check_modulus = nullptr;
 };
 Run edwards_naf(int device, unsigned p, unsigned curves, const std::vector<uint32_t>& initial,
                 const EdwardsNaf&, const ecm_stage1::Stage1NttOptions&, const Control&, unsigned samples = 1);

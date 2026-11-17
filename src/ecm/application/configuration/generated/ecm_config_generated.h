@@ -30,6 +30,8 @@ inline constexpr int64_t stage1_naf_memory_mb_minimum=0;
 inline constexpr int64_t stage1_naf_memory_mb_maximum=1048576;
 inline constexpr int64_t stage1_ckpt_backups_minimum=0;
 inline constexpr int64_t stage1_ckpt_backups_maximum=16;
+inline constexpr int64_t stage1_ntt_allow_known_factors_minimum=0;
+inline constexpr int64_t stage1_ntt_allow_known_factors_maximum=1;
 inline constexpr int64_t stage1_ntt_memory_mib_minimum=0;
 inline constexpr int64_t stage1_ntt_memory_mib_maximum=1048576;
 inline constexpr int64_t stage1_ntt_length_minimum=0;
@@ -179,6 +181,7 @@ struct Stage1Values {
     std::string gpu_algorithm="ntt[16384:], cgbn[]";
     int cuda_thread_block_size=128;
     std::string ntt_convolution="auto";
+    int ntt_allow_known_factors=1;
     int ntt_pad_batch=0;
     bool ntt_tight_weighted_bound=true;
     std::string ntt_tune_file="tune.toml";
@@ -266,6 +269,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"gpu_algorithm",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_algorithm,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_algorithm=v.gpu_algorithm;}},
     {"cuda_thread_block_size",[](Stage1Values&c,const std::string&v){c.cuda_thread_block_size=static_cast<int>(bounded_integer(v,"cuda_thread_block_size",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.cuda_thread_block_size=v.cuda_thread_block_size;}},
     {"ntt_convolution",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_convolution,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_convolution=v.ntt_convolution;}},
+    {"ntt_allow_known_factors",[](Stage1Values&c,const std::string&v){c.ntt_allow_known_factors=static_cast<int>(bounded_integer(v,"ntt_allow_known_factors",0,1));},[](Stage1Values&c,const Stage1Values&v){c.ntt_allow_known_factors=v.ntt_allow_known_factors;}},
     {"ntt_pad_batch",[](Stage1Values&c,const std::string&v){c.ntt_pad_batch=static_cast<int>(bounded_integer(v,"ntt_pad_batch",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.ntt_pad_batch=v.ntt_pad_batch;}},
     {"ntt_tight_weighted_bound",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tight_weighted_bound,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tight_weighted_bound=v.ntt_tight_weighted_bound;}},
     {"ntt_tune_file",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tune_file,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tune_file=v.ntt_tune_file;}},
