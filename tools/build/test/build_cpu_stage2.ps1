@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_dev/build_cpu_stage2',[int]$Jobs=8,[string]$VcVars='',[switch]$GwPoly)
+param([string]$Build='build_dev/build_cpu_stage2',[int]$Jobs=8,[string]$VcVars='',[switch]$GwPoly,[switch]$WithGwDll)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -9,8 +9,8 @@ if(-not $VcVars){
 }
 if(-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)){throw 'MSVC x64 environment not found'}
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force -Path $Build|Out-Null
-[IO.File]::WriteAllText((Join-Path $Build ".gitignore"),"*`n")
+. (Join-Path $PSScriptRoot '../internal/build_directory.ps1')
+Initialize-EcmBuildDirectory $Build
 $project=Join-Path $Build 'project';New-Item -ItemType Directory -Force $project | Out-Null
 $gmpRoot=(Join-Path $repo 'third_party/gmp-zen3/dist').Replace('\','/')
 $repoUnix=$repo.Replace('\','/')
@@ -22,6 +22,15 @@ set(GMP_INCLUDE_DIR "$gmpRoot/include")
 set(GMP_LIBRARY "$gmpRoot/lib/gmp.lib")
 include("$repoUnix/tools/build/internal/ecm_cpu_stage2.cmake")
 "@
+if($WithGwDll){
+    if($GwPoly){throw 'Choose either the local DLL or the static comparison build'}
+    $cmake+=@"
+
+set(ECM_GW_STAGE2 ON CACHE BOOL "" FORCE)
+add_subdirectory("$repoUnix/tools/build/gwnum" gwnum)
+set_target_properties(ecm_gwnum PROPERTIES LIBRARY_OUTPUT_DIRECTORY "$Build/native" RUNTIME_OUTPUT_DIRECTORY "$Build/native")
+"@.Replace('\','/')
+}
 [IO.File]::WriteAllText((Join-Path $project 'CMakeLists.txt'),$cmake,[Text.UTF8Encoding]::new($false))
 $gwOption=if($GwPoly){'ON'}else{'OFF'}
 $commands=@(('cmake -S "{0}" -B "{1}/native" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DECM_CPU_GW_POLY={2}' -f $project,$Build,$gwOption),
@@ -32,5 +41,5 @@ $batch=Join-Path $Build 'build.cmd'
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 50;throw 'CPU Stage2 build failed'}
 Copy-Item "$gmpRoot/bin/gmp-10.dll" "$Build/native" -Force
 Copy-Item "$repo/.refactor/gmp-ecm/COPYING*" "$Build/native" -Force
-& "$Build/native/ecm_cpu_stage2.exe" --help
+& "$Build/native/ecm_stage2.exe" --help
 if($LASTEXITCODE -ne 0){throw 'CPU Stage2 launch failed'}

@@ -1,5 +1,6 @@
 #include "worker_controller.h"
 #include "worker_proc.h"
+#include "ecm/platform/gpu_worker.h"
 #include "toml_file.h"
 #include "../configuration/generated/ecm_config_generated.h"
 #include "io/worktodo_selection.h"
@@ -25,18 +26,30 @@ std::string resolve_gui_exe(const std::string &value) {
     const auto local=path_resolve(exe_dir(),value);
     return file_exists(local) || value.find_first_of("\\/")!=value.npos?local:value;
 }
-std::string adjacent_stage2_exe() {
-    const auto direct=path_join(exe_dir(),"ecm_cuda_stage2.exe");if(file_exists(direct))return direct;
-    const auto opencl=path_join(exe_dir(),"ecm_opencl_stage2.exe");if(file_exists(opencl))return opencl;
-    std::vector<std::string> candidates;std::error_code error;
-    for(const auto &item:std::filesystem::directory_iterator(std::filesystem::u8path(exe_dir()),error)) {
-        if(error)break;
-        const auto name=item.path().filename().u8string();
-        if(name.compare(0,11,"cuda-stage2"))continue;
-        const auto exe=(item.path()/"ecm_cuda_stage2.exe").u8string();
-        if(file_exists(exe))candidates.push_back(exe);
+std::string adjacent_stage2_exe(const std::string &config_dir) {
+    const char *names[]={"ecm_stage2.exe","ecm_cuda_stage2.exe","ecm_cpu_stage2.exe","ecm_opencl_stage2.exe"};
+    std::vector<std::string> roots;
+    if(!config_dir.empty())roots.push_back(config_dir);
+    if(config_dir!=exe_dir())roots.push_back(exe_dir());
+    for(const auto &root:roots)for(const auto *name:names) {
+        const auto path=path_join(root,name);
+        if(file_exists(path))return path;
     }
-    return candidates.size()==1?candidates.front():"ecm_cuda_stage2.exe";
+    for(const auto &root:roots) {
+        std::vector<std::string> candidates;
+        std::error_code error;
+        for(const auto &item:std::filesystem::directory_iterator(std::filesystem::u8path(root),error)) {
+            const auto dir=item.path().filename().u8string();
+            if(dir.rfind("cuda-stage2",0) && dir.rfind("cpu-stage2",0) && dir.rfind("opencl-stage2",0))continue;
+            for(const auto *name:names) {
+                const auto path=(item.path()/name).u8string();
+                if(file_exists(path)){candidates.push_back(path);break;}
+            }
+        }
+        if(candidates.size()==1)return candidates.front();
+        if(candidates.size()>1)break;
+    }
+    return names[0];
 }
 std::string queue_task(const std::string &path,int worker,int priority=0,int skip=0) {
     std::ifstream in(std::filesystem::u8path(path));
@@ -221,7 +234,7 @@ bool WorkerController::stage2_mode() const {
 }
 std::string WorkerController::resolve_stage2_exe() const {
     if(resolved_stage2_exe_.empty())resolved_stage2_exe_=!stage2_exe_.empty()?resolve_gui_exe(stage2_exe_):
-        is_stage2_exe(worker_exe_)?resolve_gui_exe(worker_exe_):adjacent_stage2_exe();
+        is_stage2_exe(worker_exe_)?resolve_gui_exe(worker_exe_):adjacent_stage2_exe(path_dir(ini_path_));
     return resolved_stage2_exe_;
 }
 bool WorkerController::worker_stage2(int worker_index) const {
@@ -275,7 +288,7 @@ WorkerView WorkerController::make_worker(int index) const {
     }
     if(w.stage2) {
         const auto stage2=ecmgui::preview_stage2(entries);
-        w.execution_target="gpu";
+        w.execution_target=ecm_gpu::cpu_stage2_worker(std::filesystem::u8path(w.exe)) ? "cpu" : "gpu";
         if(stage2.device>=0)w.device=stage2.device;
         if(!shared_log)
             w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):

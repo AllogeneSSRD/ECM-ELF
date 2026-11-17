@@ -1,17 +1,17 @@
 # Edwards 统一存档与 CPU Stage2
 
-CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 多曲线文本 save。独立程序 `ecm_cpu_stage2.exe` 读取其中的完成点，以 GWNUM/polymult 或 libecm 继续 Stage2；也可继续使用本仓库的 CUDA Stage2。CPU Stage2 不读取旧 Edwards/Prime95 二进制 `.tmp`，不通过 feeder 交接。
+CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 多曲线文本 save。独立程序 `ecm_stage2.exe` 读取其中的完成点，以 GWNUM/polymult 或 libecm 继续 Stage2；也可继续使用本仓库的 CUDA Stage2。CPU Stage2 不读取旧 Edwards/Prime95 二进制 `.tmp`，不通过 feeder 交接。
 
 ## 构建与运行
 
-Windows x64 使用 MSVC、CMake、Ninja、GMP 和本地 GMP-ECM 源码构建 worker。使用 GWNUM 时，在 x64 Developer PowerShell 从仓库根目录构建 31.6 DLL，然后复制到 worker 旁。两个上游 x64 库来自 `.refactor/p95v3106b01.source/gwnum`，可用 `-GwNumRoot` 指定其他本地 31.6 路径。
+Windows x64 使用 MSVC、CMake、Ninja、GMP 和本地 GMP-ECM 源码。常规 PowerShell 可以一并构建 CPU worker 和 Stage2 DLL，输出目录包含同版本 `ecm_stage2.exe`、`gwnum.dll` 和 `gmp-10.dll`。
 
 ```powershell
-tools/build/test/build_cpu_stage2.ps1
-tools/build/build_gwnum_local.ps1 -Stage2
-Copy-Item build_dev/gwnum_local/gwnum.dll build_dev/build_cpu_stage2/native/
-build_dev/build_cpu_stage2/native/ecm_cpu_stage2.exe --version
+tools/build/build_stage2_cpu_local.ps1
+.\build_stage2_cpu_local\ecm_stage2.exe --version
 ```
+
+该入口使用 `.refactor/p95v3106b01.source/gwnum` 下的 `gwnum64.lib` 和 `polymult64.lib`。若本地尚未生成这两个上游库，先在 x64 Developer PowerShell 运行 `tools/build/build_gwnum_local.ps1 -Stage2`。
 
 `--version` 显示 worker 版本、加载的 DLL 构建指纹、Stage2 ABI、GWNUM 版本和 CPU 支持的指令集。每条执行 GW 算术的曲线在建计划后记录系数 FFT 描述与外层 polymult 指令集，内部 JSONL 对应 `fft-description` 和 `polymult-isa`。DLL 同时导出 Stage1 ABI v1。静态对照用 `tools/build/test/build_cpu_stage2.ps1 -GwPoly -Build build_dev/build_cpu_stage2_static` 单独构建。CPU worker 支持 TOML 结果配置及独立 CLI。
 
@@ -21,7 +21,7 @@ build_dev/build_cpu_stage2/native/ecm_cpu_stage2.exe --version
 
 ```powershell
 ecm_cuda.exe --curve ed --target gpu -d 1 -sigma 17 -gpucurves 4 -save ed.save 1000 1000
-ecm_cpu_stage2.exe --save ed.save --b2 100000000 --results results.jsonl --submission results.json.txt --exponent 127
+ecm_stage2.exe --save ed.save --b2 100000000 --results results.jsonl --submission results.json.txt --exponent 127
 ```
 
 Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保存的 N 确实等于 2^127−1。一般整数可省略 exponent；梅森余因子必须显式提供 `--exponent P` 和可重复的 `--known-factor DECIMAL`，程序验证 `(2^P−1)/∏known-factors = N`，不会按位宽猜指数。输入存档与结果文件不能指向同一个文件。
@@ -37,12 +37,35 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 `--gw-check` 在完整运行中额外使用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶结果比较，适合正确性验证，不计入默认性能测量。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
 
 ```powershell
-ecm_cpu_stage2.exe --save ed.save --backend gwpoly --threads 4 --memory-mib 4096 --b2 2600000000000 --exponent 347
+ecm_stage2.exe --save ed.save --backend gwpoly --threads 4 --memory-mib 4096 --b2 2600000000000 --exponent 347
 ```
 
 上例要求保存的 N=M347；余因子须另给实际已知因子。未提供 exponent 时调用 GW 一般模数设置接口；提供并通过目标关系检查时，在原 M=2^p−1（p 为原始梅森指数）上执行 GW 乘法，所有求逆、GCD、直接验证和因子仍针对实际 N。FFT 按最大多项式尺寸预留误差余量，运行检查 GWNUM 错误及最大舍入误差≤0.40；超限报错，不生成当前 NF。当前没有自动换大 FFT 重算或曲线内部检查点。
 
-`--skip N --curves K` 按有效 save 记录选择范围。每完成一条曲线原子追加一行内部 JSONL；Ctrl+C 或停止事件中断当前曲线时不报告 NF，之前已发布行保留。CPU Stage2 暂无曲线内部恢复或算术跳过：续跑时根据已完成记录数设置 skip，中断的当前曲线从 Stage1 末点重新开始。提交账本会对相同数学工作去重，但重复启动仍可能重算并追加内部行。Stage1 与 Stage2 仍需分别启动。
+直接运行 `--save` 时，`--skip N --curves K` 选择有效记录范围。Ctrl+C 或停止事件可中断当前曲线；重新启动时用 `--skip` 指定已完成数。提交账本按数学工作去重，逐曲线 JSONL 可能包含重复运行的记录。
+
+## worktodo、停止与跨后端续算
+
+CPU 与 CUDA 构建都生成 `ecm_stage2.exe`。并存时放在不同目录。GUI 的 `stage2_exe` 可填写其中一个程序的路径；留空会搜索工作流和 GUI 目录中的统一名称、兼容名称和唯一匹配的子包。CPU 版接收与 GPU 相同的 worker 编号、队列事件和停止句柄。命令行也可消费同一份队列。
+
+```powershell
+.\cpu-stage2\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
+```
+
+v3 配置示例。CPU 算术参数可按 worker 覆盖，命令行优先。
+
+```toml
+[stage2]
+cpu.backend = "auto"
+cpu.threads = 4
+cpu.memory_mib = 512
+```
+
+`ECMSTAGE2=` 从任务校验 N 和已知因子，`ECMSTAGE2N=` 从 save 确定 N。队列按有效 save 记录的 skip 和数量选择曲线，使用共享的 B2 和 b2_ratio 规则。CPU 队列当前支持 Edwards；有效的 Montgomery PARAM0 任务交给 CPU 时会报错并保留队列行。D 的 GPU 配置服务于 GPU 规划，CPU 使用自身规划器，显式固定 D 时使用 `--backend gwpoly --d D`。
+
+两端共用队列锁、输入身份、V5 检查点、finished 回执和发布代码。首次正常停止会让已经开始的曲线完成，提交结果后停止领取。异常终止后从最近一次持久化的完整曲线继续。真因子在曲线提交后发布；任务结束时封存 NF，写 finished、推进 worktodo，最后删除检查点。可选 `results_file` 是逐曲线诊断输出。
+
+换后端时，停止原 worker，保留原 worktodo、完整 save、检查点目录和提交输出，使用相同配置与 worker 编号启动另一版程序。任务身份绑定 AID、实际 N、完整 save 的 SHA-256 和 skip。检查点保存完成位置、已完成的并行槽及待发布结果；下一条曲线按接手后端自己的 D、FFT、树和内存计划计算。GPU 成本调优、显存调度与中途的多项式工作区只属于当前执行进程。[共享队列驱动](../../src/ecm/stage2/queue.cpp) · [检查点格式](../../src/io/stage2_checkpoint.cpp) · [双向验证](../../tools/test/test_cpu_stage2_queue.py)
 
 ## 存档与数学边界
 
@@ -73,6 +96,8 @@ GW 后端直接使用保存的 x 和 a24；libecm 设置 A、保存的 x 和 `B1
 0.33.0 的 GW 后端数学、多线程与大 B2 门禁见 [test_cpu_gwpoly_stage2.py](../../tools/test/test_cpu_gwpoly_stage2.py)。证据 `data/experiments/cpu_gw_poly_stage2_20261017/validation_05/` 包含 CPU/GPU1 save 交接、独立小界限因子 oracle、复合环的 Horner/余式验证、三处完整 GMP 投影（含 10232/16272 位实际余因子）、损坏与元数据拒绝、真实停止不发布 NF，以及双文件 CRC 与批次检查。未启用 GW 的构建另通过原 CPU 流程回归。正式 4 GHz 测量见 [CPU GW 多项式性能](../performance/CPU_GWPOLY_STAGE2.md)；本轮早期 3.1 GHz 探索耗时不参与该结论。
 
 318–16272 位余因子、B1=50000 的完整 GPU 基准与 Prime95 历史参考，统一见 [Edwards Stage2 基准](../performance/EDWARDS_STAGE2.md)。其中 CPU NTT/plain 使用 4096 MiB 规划预算，各保留 16 个单次参考样本，CPU 采集已停止，不代表完整双后端矩阵。本节保留下述小位宽、独立冻结版本的验证及性能数据。
+
+0.66.0 的双向接续测试使用两条 M127 曲线。CPU 与 CUDA 分别在第一条开始后收到 GUI 停止事件，接手端从第二条开始，finished 各写一次，两条 NF 各合并成一条 `curves=2` 的提交。独立 CPU 任务发布 Stage2 因子 10007，并将紧随其后的 Stage1 行留在 worktodo。运行证据在 `data/experiments/cpu_stage2_queue_066/qualified/`。GUI v2 自动发现 CPU 子包及兼容 CUDA 文件名的运行日志位于同级 `gui_cpu/` 和 `gui_cuda_legacy/`。
 
 正确性脚本为 [test_edwards_cpu_pipeline.py](../../tools/test/test_edwards_cpu_pipeline.py)。冻结证据在 `data/experiments/edwards_full_pipeline_20261016/`：CPU 标量、多线程、AVX512-IFMA 与 GPU1 RTX4060 的 127/347/2203 位保存点对照，独立 Python `48LCM` 点乘，Stage1/Stage2 真因子，已知因子元数据，存档损坏拒绝，默认/追加输出，写入失败队列保持，以及真实 Stage1 停止恢复和 Stage2 中断。GPU 测试仅用设备 1。
 

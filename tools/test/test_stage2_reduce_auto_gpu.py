@@ -25,7 +25,8 @@ def main():
     for k in ('study','exe','output'):p.add_argument('--'+k,type=Path,required=True)
     a=p.parse_args();source=load(a.study/'plan.json');case=next(c for c in source['cases'] if c['bits']>8192)
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=False);(out/'bin').mkdir();(out/'bin/.gitignore').write_text('*\n')
-    for f in ('ecm_cuda_stage2.exe','gmp-10.dll','build_manifest.json'):shutil.copy2(a.exe.parent/f,out/'bin'/f)
+    shutil.copy2(a.exe,out/'bin/ecm_cuda_stage2.exe')
+    for f in ('gmp-10.dll','build_manifest.json',):shutil.copy2(a.exe.parent/f,out/'bin'/f)
     shutil.copy2(__file__,out/'test_snapshot.py');binary=sha(out/'bin/ecm_cuda_stage2.exe')
     report=dict(complete=False,exe_sha256=binary,calls=[])
     def run(name,profile,curves,minimum=2,backend='auto',learn=True,d=30030,kernel=0):

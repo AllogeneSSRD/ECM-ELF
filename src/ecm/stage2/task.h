@@ -1,5 +1,6 @@
 #pragma once
 #include "types.h"
+#include "ecm/io/stage2_checkpoint.h"
 namespace s2prod {
 struct TaskPaths {
     fs::path cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir;
@@ -11,6 +12,27 @@ struct QueuePolicy {
     std::string finished;
     bool shared_finished = false;
 };
+using QueueReport=std::function<void(const std::string &,bool)>;
+struct CurveQueue {
+    const std::vector<Record> &plan;
+    const fs::path &save,&results,&log,&progress;
+    const TaskDefaults &defaults;
+    stage2_queue::State &state;
+    uint64_t &completed;
+    const QueueReport &report;
+    void commit(uint64_t position,const std::string &outcome) const;
+};
+
+std::string checkpoint_outcome(const Record &,uint64_t b2,const std::string &report);
+struct TaskEngine {
+    const char *name;
+    std::function<void()> begin;
+    std::function<void(const Record &,uint64_t)> validate;
+    std::function<void(Options &,const Record &)> prepare;
+    std::function<void(const Options &,const Record &,uint64_t,uint64_t)> plan;
+    std::function<bool(const CurveQueue &,Options &,uint64_t,uint64_t)> run;
+};
+int run_task_queue(const TaskEngine &,Options,const TaskPaths &,const QueuePolicy &,const TaskDefaults &);
 void append_fatal_log(const std::string& message);
 int run_tasks(Options o,const TaskPaths &paths,const QueuePolicy &cfg,const TaskDefaults &defaults);
 int curve_worker(Options o);

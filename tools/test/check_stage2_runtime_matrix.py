@@ -31,8 +31,9 @@ def audit(study):
             raise ValueError('Exact input differs from default baseline')
         if Path(case['save']).read_bytes()!=Path(old['save']).read_bytes():raise ValueError('Stage1 point changed')
         validate(Path(case['save']),int(case['N_hex'],16),case['b1'],1,case['sigma'],'ed')
-    for name in ('ecm_cuda_stage2.exe','gmp-10.dll'):
-        if (study/'bin'/name).read_bytes()!=(Path(plan['source_exe']).parent/name).read_bytes():
+    source=Path(plan['source_exe'])
+    for name,path in [('ecm_cuda_stage2.exe',source),('gmp-10.dll',source.parent/'gmp-10.dll')]:
+        if (study/'bin'/name).read_bytes()!=path.read_bytes():
             raise ValueError('Frozen executable/dependency differs from the selected build')
     ids=Counter(r['id'] for r in plan['runs'])
     expected=sum(q['completed_count'] for q in plan['queues'])

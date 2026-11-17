@@ -22,7 +22,7 @@ def main():
     for stage in ('stage1','stage2'):
         for arch in (60,70,75,86,89,120):
             folder = out/stage/f'cuda-{stage}-sm{arch}'; folder.mkdir(parents=True)
-            exe = folder/('ecm_cuda.exe' if stage == 'stage1' else 'ecm_cuda_stage2.exe')
+            exe = folder/('ecm_cuda.exe' if stage == 'stage1' else 'ecm_stage2.exe')
             exe.write_bytes(b'never executed image identity fixture')
             images.append(dict(stage=stage, architecture=arch, exe_sha256=sha(exe)))
     static = dict(complete=True, images=images)

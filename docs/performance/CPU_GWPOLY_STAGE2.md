@@ -1,6 +1,21 @@
 # CPU GW 多项式 Stage2 性能
 
-本页维护 0.65.0 本地 DLL 与静态 `gwpoly` 的配对测试，以及 0.33.0 的 Prime95 历史对照。它从 Edwards Stage1 文本 save 直接继续，使用 GWNUM/polymult 的多线程快速多项式算术。使用与构建见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md)，数学见 [多项式 Stage2](../reference/ECM_STAGE2_MATH.md)，保留的开发证据见 [草稿](../development/CPU_GW_POLY_STAGE2_DRAFT.md)。共享底层算术库不等于具有 Prime95 的全部功能或相同性能。
+本页记录本地 DLL 与静态 `gwpoly` 的配对测试，以及 0.33.0 的 Prime95 对照。它从 Edwards Stage1 文本 save 直接继续，使用 GWNUM/polymult 的多线程快速多项式算术。使用与构建见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md)，数学见 [多项式 Stage2](../reference/ECM_STAGE2_MATH.md)，保留的开发证据见 [草稿](../development/CPU_GW_POLY_STAGE2_DRAFT.md)。共享底层算术库不等于具有 Prime95 的全部功能或相同性能。
+
+## 0.66.0 指令集与提前初始化
+
+Windows x64，Ryzen AI 9 HX 370，MSVC Release，GWNUM 31.6，本地 DLL 构建 `6bbf348cf243d3a4`。两组输入都是 Edwards AM、sigma=17、B1=1000 的 Stage1 save，4 线程，预算 512 MiB，进程继承亲和性，未锁频或采样功耗。每个输入先对三种构建分别跑一次 GMP 三点校验，再交替测 DLL 和静态版各 5 条完整 NF。下表为中位秒数。整曲线包含曲线重构、GW 初始化、算术和清理，排除进程启动、读档和发布；init 是整曲线中的子区间。
+
+| 输入 | B2 | D | DLL 整曲线 | 静态整曲线 | DLL init | 实际系数 FFT |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| M127 | 10⁹ | 60060 | 0.6562 | 0.6481 | 0.3194 | FMA3，长度 32 |
+| M2203 | 10⁸ | 30030 | 0.2281 | 0.2397 | 0.1383 | AVX-512，长度 128 |
+
+两组默认外层 polymult 均为 AVX-512。对静态资格构建设置 `CL=/DECM_GWPOLY_TEST_NO_AVX512` 后，两组的外层 polymult 和系数 FFT 均选 FMA3，原始 save、D、B2 和 GMP 检查均相同。这项测试在同一台机器上限制 GWNUM 和 polymult 可用的指令，没有使用第二台物理 AVX2 主机。原始逐曲线数据、三份 EXE 及 DLL 的 SHA-256 在 `data/experiments/cpu_stage2_queue_066/release_isa/summary.json`。
+
+GPU 队列可在上一条曲线使用设备时，提前在主机验证下一条记录、读取调优信息。CPU 队列在读档时已经重建 Edwards 的 A24，执行时核对记录指纹并复用 A24。上表的 init 还包括依赖当前 Q 的 baby 点、F 树、倒数以及工作区分配，这些都会消耗 CPU 和内存带宽。两组 init 占整曲线时间约 49% 和 61%；这个比例不能直接用作可节省时间。
+
+当前保留串行曲线和曲线内多线程。值得单独试验的是在相同 N、承载形式、D、FFT 安全余量和线程预算下复用只读几何或已验证 FFT 计划。验证用同一多曲线 save，对比整队列吞吐量和单进程峰值内存，并检查逐曲线结果、停止与恢复。双工作区并发预建整个 F 树的收益仍待该对照确认。[GW 初始化边界](../../src/ecm/stage2/cpu/gwpoly.cpp) · [GPU 曲线预取与准入](../../src/ecm/stage2/task.cpp)
 
 ## 0.65.0 本地 DLL 与静态链接
 

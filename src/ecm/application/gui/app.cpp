@@ -46,7 +46,7 @@ void draw_worker_log_lines(const std::vector<std::string> &lines,bool follow_out
     while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i) {
         const auto &line=lines[static_cast<size_t>(i)];
         // ANSI already stripped; the events keep the driver timestamp.
-        const bool error=line.find("ERROR")!=line.npos || line.find("WARNING")!=line.npos || line.find("ecm_cuda_stage2:")!=line.npos;
+        const bool error=line.find("ERROR")!=line.npos || line.find("WARNING")!=line.npos || line.find("ecm_cuda_stage2:")!=line.npos || line.find("ecm_stage2:")!=line.npos || line.find("CPU Stage2:")!=line.npos;
         ImGui::PushStyleColor(ImGuiCol_Text,error?ImVec4(1.f,.65f,.46f,1.f):line.find("stage2_phase:")!=line.npos?ImVec4(.78f,.72f,1.f,1.f):ImGui::GetStyleColorVec4(ImGuiCol_Text));
         ImGui::TextUnformatted(line.c_str());
         ImGui::PopStyleColor();

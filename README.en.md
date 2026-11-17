@@ -60,8 +60,8 @@ The chart compares ECM-ELF CUDA (0.62.0) in serial and two-slot modes on the RTX
 | --- | --- | --- |
 | `ecm_cuda.exe` | CUDA Stage1. CGBN supports Edwards and the built-in Montgomery parametrizations. NTT supports Edwards and PARAM0 on full Mersenne numbers or assignments with known factors | Number, expression, or Stage1 queue. Writes `.save` files and checkpoints |
 | `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, TOML, queue and text saves; selectable OpenCL operators |
-| `ecm_cuda_stage2.exe`, `ecm_opencl_stage2.exe` | Standalone GPU polynomial Stage2 | Normalized PARAM0 or Edwards AM saves, directly or through `ECMSTAGE2=` and `ECMSTAGE2N=` |
-| `ecm_cpu_stage2.exe` | Standalone CPU Edwards Stage2 | Reads Edwards text saves directly. See [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) for backends and build options |
+| `ecm_stage2.exe`, `ecm_opencl_stage2.exe` | Standalone GPU polynomial Stage2 | Normalized PARAM0 or Edwards AM saves, directly or through `ECMSTAGE2=` and `ECMSTAGE2N=` |
+| `ecm_stage2.exe` | Edwards Stage2 in the CPU package | Reads saves directly or via worktodo. Whole-curve checkpoints are shared with CUDA. See [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) for backends and build options |
 | `ecm_gui_v2.exe` | Windows graphical frontend | Manages Stage1 and Stage2 workers, queues, logs, and results |
 
 ### Stage1 backends
@@ -100,7 +100,7 @@ A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 
 
 ### Run Stage1 from worktodo
 
-This example assumes `ecm_cuda.exe`, `ecm_cuda_stage2.exe` and `ecm.toml` are in the same directory and commands run there. Merge these keys into an existing TOML if you have one. Create `ecm.toml`:
+This example assumes `ecm_cuda.exe`, `ecm_stage2.exe` and `ecm.toml` are in the same directory and commands run there. Merge these keys into an existing TOML if you have one. Create `ecm.toml`:
 
 ```toml
 config_version = 3
@@ -153,16 +153,16 @@ ECMSTAGE2=1,2,3001,-1,"m0_m3001_1e4.save",1000000
 
 ```powershell
 # Optional: measure complete ECM using the current Stage2 queue and save; leaves the queue untouched
-.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
+.\ecm_stage2.exe --config .\ecm.toml --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
 
 # Consume one queued assignment; after tuning, you may add --tune-profile .\stage2_ecm_tune.toml
-.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
+.\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 
 # Or process the same save directly without the queue (do not run both paths)
-.\ecm_cuda_stage2.exe --save .\m0_m3001_1e4.save --b2 1000000 --device 0
+.\ecm_stage2.exe --save .\m0_m3001_1e4.save --b2 1000000 --device 0
 
 # Optional: measure the NTT component only; this is not a complete ECM tune
-.\ecm_cuda_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
+.\ecm_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
 ```
 
 ECM tune reads the selected worker's Stage2 queue by default. Use `--tune-save FILE --tune-b2 B2` to select a particular save. Load the resulting data for a Stage2 command with `--tune-profile FILE`, or set `[shared] tune_file` for both stages. An explicit B2 can run directly. For Auto B2 cost data requirements, see [Stage2 usage](docs/usage/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md).
@@ -280,11 +280,11 @@ Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PAR
 <a id="stage2"></a>
 ## Separate CUDA Stage2
 
-`ecm_cuda_stage2.exe` consumes a completed Stage1 save; it does not rerun Stage1. Direct invocation and queue examples (replace the filename and B2 with the actual task):
+`ecm_stage2.exe` consumes a completed Stage1 save; it does not rerun Stage1. Direct invocation and queue examples (replace the filename and B2 with the actual task):
 
 ```powershell
-.\ecm_cuda_stage2.exe --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
-.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
+.\ecm_stage2.exe --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
+.\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
 GUI v2 uses the [task prefix](#worktodo-formats) to start the corresponding program. Set `[shared] queue_order` to `"file_order"`, `"stage1_first"`, or `"stage2_first"` and `queue_skip` to `"none"`, `"stage1"`, or `"stage2"`. A nonzero `[stage2] b2_ratio` sets B2 to B1 × ratio. On queue resume, receipts identify completed curves. For a direct save run, use `--skip-curves` and `--curves` to select records. See [Stage2 usage](docs/usage/STAGE2.md) for B2 precedence.

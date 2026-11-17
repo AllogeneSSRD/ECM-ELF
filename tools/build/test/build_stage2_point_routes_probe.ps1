@@ -18,14 +18,14 @@ foreach($inputFile in $manifest.source_hashes.PSObject.Properties) {
 }
 $lines=Get-Content -LiteralPath (Join-Path $base 'build.cmd')
 $compile=@($lines|Where-Object {$_ -like '*/c "src/ecm/stage2/cuda/options.cpp"*'})
-$link=@($lines|Where-Object {$_ -like '*-o "*ecm_cuda_stage2.exe"'})
+$link=@($lines|Where-Object {$_ -like '*-o "*ecm_stage2.exe"'})
 if($compile.Count -ne 1 -or $link.Count -ne 1){throw 'Unknown overlay command structure'}
 $oldObject=Join-Path $base 'src_ecm_stage2_cuda_options.cpp.obj'
 $newObject=Join-Path $output 'point_routes_options.obj'
 $adapter=Join-Path $repo 'tools/experiments/cuda/stage2_point_routes_host.cpp'
 $command=$compile[0].Replace('"src/ecm/stage2/cuda/options.cpp"','"'+$adapter+'"').Replace($oldObject,$newObject)
-$exe=Join-Path $output 'ecm_cuda_stage2.exe'
-$linkCommand=$link[0].Replace($oldObject,$newObject).Replace((Join-Path $base 'ecm_cuda_stage2.exe'),$exe)
+$exe=Join-Path $output 'ecm_stage2.exe'
+$linkCommand=$link[0].Replace($oldObject,$newObject).Replace((Join-Path $base 'ecm_stage2.exe'),$exe)
 if(-not $linkCommand.Contains($exe) -or -not $command.Contains($newObject)){throw 'Could not isolate output'}
 $objects=[ordered]@{}
 foreach($match in [regex]::Matches($link[0],'"([^"]+\.obj)"')) {
@@ -40,7 +40,7 @@ if($LASTEXITCODE){Get-Content -LiteralPath (Join-Path $output 'build.log') -Tail
 foreach($path in $objects.Keys){if((Get-FileHash -LiteralPath $path).Hash -ne $objects[$path]){throw "Reused object changed: $path"}}
 Copy-Item -LiteralPath (Join-Path $base 'gmp-10.dll') -Destination $output
 [ordered]@{complete=$true;kind='isolated_point_route_probe';base=$base;
-    base_exe_sha256=(Get-FileHash -LiteralPath (Join-Path $base 'ecm_cuda_stage2.exe')).Hash;
+    base_exe_sha256=(Get-FileHash -LiteralPath (Join-Path $base 'ecm_stage2.exe')).Hash;
     exe_sha256=(Get-FileHash -LiteralPath $exe).Hash;reused_objects=$objects;
     adapter_sha256=(Get-FileHash -LiteralPath $adapter).Hash;cuda_compiles=0;
     chain_blocks=@(32,64,128);production_unchanged=$true}|

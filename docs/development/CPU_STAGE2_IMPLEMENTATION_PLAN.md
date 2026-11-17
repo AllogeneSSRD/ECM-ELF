@@ -4,6 +4,8 @@
 
 首版可用性的范围为独立 CLI，覆盖构建、读档、查找因子、停止与按曲线续跑。CLI 验收后再评估 GUI、worktodo 和曲线内恢复，优先复用相应的仓库协议。第一阶段已在 0.65.0 跑通，下面的起点描述和分阶段任务保留作为开发记录。当前行为、历史结果和数学推导分别见 [CPU Stage2 用法](../usage/EDWARDS_CPU_STAGE2.md)、[GW 多项式性能](../performance/CPU_GWPOLY_STAGE2.md) 和 [Stage2 数学](../reference/ECM_STAGE2_MATH.md)。
 
+0.66.0 已接入 GUI/worktodo。CPU 与 CUDA 使用同一整曲线检查点，双向接续、首次停止排空和结果发布均有真实 worker 覆盖。下一步性能工作关注同一 N 和计划下可复用的准备数据。[操作与适配边界](../usage/EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)
+
 ## 1. 复用现有实现
 
 - `ecm_cpu_stage2.exe` 已能从 CPU/CUDA Edwards Stage1 文本 save 读取完成点，验证目标 N，重构曲线参数，调用 `gwpoly` 或 libecm，再写逐曲线结果。`gwpoly` 已实现 Montgomery x-only 点生成、批量求逆、F/G 积树、Newton 倒数、模 F 折叠、循环高段 scaled 下降和 GCD。点、底层树和长多项式分别已有并行路径。保留这些代码作为首轮移植的可执行对照。[CLI 入口](../../src/ecm/stage2/edwards/cpu/main.cpp#L150) · [计算入口](../../src/ecm/stage2/cpu/gwpoly.cpp#L370)

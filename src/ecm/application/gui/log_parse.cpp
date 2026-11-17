@@ -703,7 +703,7 @@ ParsedLine parse_line(const std::string &line) {
     // ---- events / errors ---------------------------------------------------
     const bool is_error = starts_with(p, "ERROR") || starts_with(p, "# ERROR") ||
                           starts_with(p, "FATAL") || contains(p, "error:") ||
-                          contains(p, "warning:") || starts_with(p,"WARNING:") || starts_with(p,"ecm_cuda_stage2:");
+                          contains(p, "warning:") || starts_with(p,"WARNING:") || starts_with(p,"ecm_cuda_stage2:") || starts_with(p,"ecm_stage2:") || starts_with(p,"CPU Stage2:");
     if (is_error) {
         out.kind = LogKind::Error;
         return out;

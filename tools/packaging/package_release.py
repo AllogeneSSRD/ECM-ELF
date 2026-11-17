@@ -92,8 +92,33 @@ def stage2_catalog():
     return generator.generate(ROOT,emit=False)['modules']
 
 
+# These two translation units remain grouped in both CUDA module layouts.
+# Width and TPI are the template arguments in the production launch switches.
+COOP_WIDTHS = [(w,32) for w in (160,192,224,256)]
+COOP_KERNELS = {
+    'point_coop_kernels': {
+        'stage2_coop_chain': COOP_WIDTHS + [(256,16)],
+        'stage2_coop_mont_test': COOP_WIDTHS + [(256,16)],
+        'coop_chain': COOP_WIDTHS,
+    },
+    'point_coop_ladder_kernels': {
+        'stage2_coop_ladder': COOP_WIDTHS,
+        'stage2_coop_seed_pair': COOP_WIDTHS,
+    },
+}
+
+
 def verify_stage2_membership(report,layout,catalog):
-    modules=report['modules']
+    modules=[m for m in report['modules'] if m['label'] not in COOP_KERNELS]
+    coop=[m for m in report['modules'] if m['label'] in COOP_KERNELS]
+    if Counter(m['label'] for m in coop)!=Counter(COOP_KERNELS.keys()):
+        raise ValueError('Incomplete cooperative Stage2 object membership')
+    for module in coop:
+        expected=[f'{len(name)}{name}ILi{width}ELi{tpi}EE'
+                  for name,shapes in COOP_KERNELS[module['label']].items() for width,tpi in shapes]
+        actual=[key for entry in module['entries'] for key in expected if key in entry]
+        if len(module['entries'])!=len(expected) or Counter(actual)!=Counter(expected):
+            raise ValueError(f'Incorrect cooperative Stage2 entry membership: {module["label"]}')
     if layout=='isolated':
         expected={m['label']:m['kernel'] for m in catalog}
         if len(modules)!=len(expected) or {m['label'] for m in modules}!=set(expected):raise ValueError('Incomplete isolated Stage2 module membership')
@@ -103,7 +128,22 @@ def verify_stage2_membership(report,layout,catalog):
         if len(modules)!=2 or {m['label'] for m in modules}!={'arithmetic_kernels','transform_kernels'}:raise ValueError('Wrong grouped Stage2 object membership')
         for module in modules:
             group='arithmetic' if module['label']=='arithmetic_kernels' else 'ntt'
-            expected=Counter(m['kernel'] for m in catalog if m['label'].startswith(group+'_'))
+            expected=Counter()
+            for entry in catalog:
+                label=entry['label']
+                if not label.startswith(group+'_'):continue
+                # A grouped wrapper retains every runtime branch in one object.
+                # The isolation inventory counts explicit wrapper instantiations.
+                if label.startswith('arithmetic_ecm_launch_s4_reduce_kernel_'):
+                    expected['s4_reduce_kernel']+=1
+                    if entry['arguments']=='256,false':
+                        expected['s4_warp_reduce_kernel']+=7
+                else:
+                    expected[entry['kernel']]+=1
+                    if label.startswith('arithmetic_ecm_launch_pack_zero_kernel_'):
+                        expected['pack_zero_kernel']+=1  # weighted/unweighted
+                    if label=='ntt_ecm_launch_carry_residual_kernel':
+                        expected['carry_residual_kernel']+=1
             actual=Counter()
             for entry in module['entries']:
                 # NVCC anonymous namespace hashes can end in digits directly
@@ -145,10 +185,11 @@ def inspect_modules(cuda,build,stage,report,cache=None):
             for module in modules:
                 unit=manifest['compile_units'][module['source']]
                 records.append(dict(label=module['label'],object=unit['entry']['output'],kernel=module['kernel'],arguments=module['arguments']))
-        else:
-            for source in manifest['cuda_sources']:
+        for source in manifest['cuda_sources']:
+            label=Path(source).stem
+            if not manifest['module_directory'] or label in COOP_KERNELS:
                 unit=manifest['compile_units'][source]
-                records.append(dict(label=Path(source).stem,object=unit['entry']['output']))
+                records.append(dict(label=label,object=unit['entry']['output']))
     inspector=cuda/'bin/cuobjdump.exe'
     for index,record in enumerate(records,1):
         if index==1 or index%10==0 or index==len(records):
@@ -229,7 +270,7 @@ def main(plan):
     outputs=[path for profile in plan['profiles'] for path in release_paths(out,version,profile)]
     assert_outputs_available(outputs)
     staging=build/'_packages'/uuid.uuid4().hex;staging.mkdir(parents=True)
-    qualified=dict(schema=3,status='build_and_static_images_verified',tests_run=False,version=version,profiles={},gmp_sha256=sha(gmp/'bin/gmp-10.dll'))
+    qualified=dict(schema=4,status='build_and_static_images_verified',tests_run=False,version=version,profiles={},gmp_sha256=sha(gmp/'bin/gmp-10.dll'))
     def copy(src,dst):
         dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dst)
     # A source snapshot includes new/uncommitted implementation files too.
@@ -247,7 +288,7 @@ def main(plan):
         component_records={}
         for filename in opencl_identity['files_sha256']:copy(opencl/filename,folder/filename)
         component_records['opencl']=dict(executable_sha256=sha(opencl/'ecm.exe'),manifest_sha256=sha(opencl/'build_manifest.json'))
-        for stage,exe in [('stage1','ecm_cuda.exe'),('stage2','ecm_cuda_stage2.exe')]:
+        for stage,exe in [('stage1','ecm_cuda.exe'),('stage2','ecm_stage2.exe')]:
             record=read(build/'components'/f'{profile}.{stage}.json');leaf=Path(record['build']);manifest=read(record['manifest'])
             if manifest['role']!='release' or manifest['ptx_architecture']!=ptx:raise ValueError('Wrong release component profile')
             if stage=='stage1':

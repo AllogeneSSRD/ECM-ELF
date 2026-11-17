@@ -148,7 +148,8 @@ def prepare(args):
             raise ValueError('Import version or exact baseline differs')
     old=load(baseline/'plan.json');out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     (out/'bin').mkdir();(out/'inputs').mkdir()
-    for name in ('ecm_cuda_stage2.exe','gmp-10.dll'):shutil.copy2(args.exe.resolve().parent/name,out/'bin'/name)
+    shutil.copy2(args.exe.resolve(),out/'bin/ecm_cuda_stage2.exe')
+    for name in ('gmp-10.dll',):shutil.copy2(args.exe.resolve().parent/name,out/'bin'/name)
     shutil.copy2(__file__,out/'collector_snapshot.py')
     cases=[]
     for source in old['cases']:

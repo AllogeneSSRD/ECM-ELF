@@ -177,7 +177,7 @@ python tools/ecm_dataset/run_production_dataset.py --output run/production
 
 ```text
 build_cuda_cmake/ecm_cuda.exe
-build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe
+build_cuda_cmake/production_stage2/ecm_stage2.exe
 ```
 
 可用 `--stage1 PATH` / `--stage2 PATH` 指定其他构建；运行时使用私有 INI 和输出目录。输出保存点、日志、result JSONL、`runs.json`、`provenance.json`，运行记录只留在指定实验目录，不写数据库。runner 只使用保留的最优 sigma，若无法形成指定正/负对照则报告无候选，不恢复已丢弃的 sigma。**运行后还需用 `ingest` 导入各条 result，才能更新因子分析和最佳 sigma。**
@@ -200,7 +200,7 @@ runner 会确认实际 Stage1 GCD 与准备结果一致，剥离后针对新的�
 
 ```powershell
 python tools/ecm_dataset/run_production_dataset.py --output run/new_candidate `
-  --stage2 build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe `
+  --stage2 build_cuda_cmake/production_stage2/ecm_stage2.exe `
   --factorize-hits --gp $gp
 ```
 

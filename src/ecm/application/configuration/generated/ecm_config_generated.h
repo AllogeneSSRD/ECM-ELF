@@ -50,6 +50,10 @@ inline constexpr int64_t stage2_stage2_device_minimum=-1;
 inline constexpr int64_t stage2_stage2_device_maximum=2147483647;
 inline constexpr int64_t stage2_stage2_ntt_counts_minimum=0;
 inline constexpr int64_t stage2_stage2_ntt_counts_maximum=1;
+inline constexpr int64_t stage2_stage2_cpu_threads_minimum=1;
+inline constexpr int64_t stage2_stage2_cpu_threads_maximum=1024;
+inline constexpr int64_t stage2_stage2_cpu_memory_mib_minimum=1;
+inline constexpr int64_t stage2_stage2_cpu_memory_mib_maximum=1048576;
 inline constexpr int64_t stage2_stage2_opencl_point_chunk_minimum=0;
 inline constexpr int64_t stage2_stage2_opencl_point_chunk_maximum=4096;
 inline constexpr int64_t stage2_stage2_opencl_point_group_minimum=0;
@@ -310,6 +314,9 @@ struct Stage2Values {
     int log_level=-1;
     bool ntt_counts=false;
     std::string gpu_backend="auto";
+    std::string cpu_backend="auto";
+    uint64_t cpu_threads=1;
+    uint64_t cpu_memory_mib=512;
     std::string opencl_point_plan="auto";
     uint64_t opencl_point_chunk=0;
     uint64_t opencl_point_group=0;
@@ -402,6 +409,9 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_log_level",[](Stage2Values&c,const std::string&v){c.log_level=log_level(v);},[](Stage2Values&c,const Stage2Values&v){c.log_level=v.log_level;}},
     {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=boolean(v,"stage2_ntt_counts");},[](Stage2Values&c,const Stage2Values&v){c.ntt_counts=v.ntt_counts;}},
     {"stage2_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="cuda"&&v!="opencl")throw std::runtime_error("stage2_backend must be [auto|cuda|opencl]");c.gpu_backend=v;},[](Stage2Values&c,const Stage2Values&v){c.gpu_backend=v.gpu_backend;}},
+    {"stage2_cpu_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="gwpoly"&&v!="ntt"&&v!="plain")throw std::runtime_error("stage2_cpu_backend must be [auto|gwpoly|ntt|plain]");c.cpu_backend=v;},[](Stage2Values&c,const Stage2Values&v){c.cpu_backend=v.cpu_backend;}},
+    {"stage2_cpu_threads",[](Stage2Values&c,const std::string&v){c.cpu_threads=static_cast<uint64_t>(bounded_integer(v,"stage2_cpu_threads",1,1024));},[](Stage2Values&c,const Stage2Values&v){c.cpu_threads=v.cpu_threads;}},
+    {"stage2_cpu_memory_mib",[](Stage2Values&c,const std::string&v){c.cpu_memory_mib=static_cast<uint64_t>(bounded_integer(v,"stage2_cpu_memory_mib",1,1048576));},[](Stage2Values&c,const Stage2Values&v){c.cpu_memory_mib=v.cpu_memory_mib;}},
     {"stage2_opencl_point_plan",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="device"&&v!="chain"&&v!="cpu")throw std::runtime_error("stage2_opencl_point_plan must be [auto|device|chain|cpu]");c.opencl_point_plan=v;},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_plan=v.opencl_point_plan;}},
     {"stage2_opencl_point_chunk",[](Stage2Values&c,const std::string&v){c.opencl_point_chunk=static_cast<uint64_t>(bounded_integer(v,"stage2_opencl_point_chunk",0,4096));},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_chunk=v.opencl_point_chunk;}},
     {"stage2_opencl_point_group",[](Stage2Values&c,const std::string&v){c.opencl_point_group=static_cast<uint64_t>(bounded_integer(v,"stage2_opencl_point_group",0,4096));},[](Stage2Values&c,const Stage2Values&v){c.opencl_point_group=v.opencl_point_group;}},

@@ -37,7 +37,7 @@ def main():
     assert all(native['inputs'].get(path) == digest for path,digest in inputs.items()), 'native reference identity changed'
     for (stage,arch),digest in release_images.items():
         folder = a.stage1_packages if stage == 'stage1' else a.stage2_packages
-        exe = folder/f'cuda-{stage}-sm{arch}'/('ecm_cuda.exe' if stage == 'stage1' else 'ecm_cuda_stage2.exe')
+        exe = folder/f'cuda-{stage}-sm{arch}'/('ecm_cuda.exe' if stage == 'stage1' else 'ecm_stage2.exe')
         inputs[str(exe)] = sha(exe)
         assert inputs[str(exe)] == digest, 'release image identity changed'
     out = a.output; out.mkdir(parents=True, exist_ok=False)
@@ -123,7 +123,7 @@ def main():
     assert sha(wide['save']) == wide['save_sha256']
     for arch,mode,exe in [(89,'reference',a.native_stage2),
         *[(v,'ptx_jit' if v<80 else 'native_sass' if v==89 else 'compatible_sass',
-           a.stage2_packages/f'cuda-stage2-sm{v}/ecm_cuda_stage2.exe') for v in (60,70,75,86,89)]]:
+           a.stage2_packages/f'cuda-stage2-sm{v}/ecm_stage2.exe') for v in (60,70,75,86,89)]]:
         for name,save,carrier in [('ordinary',a.small_save,0),('carrier',a.small_save,254),('generic8193',wide['save'],0)]:
             args = ['--save',save,'--b2',13230,'--d',210,'--device',a.device,'--curves',1,
                 '--carrier-exponent',carrier,'--short-calibration',0,'--tune-runtime',0,'--factor-only',

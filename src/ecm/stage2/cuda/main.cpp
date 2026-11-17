@@ -15,7 +15,7 @@
 #include "ecm/platform/program_version.h"
 #include "ecm/platform/fingerprint.h"
 #include "../planning/planning.h"
-#include "../task.h"
+#include "../queue_paths.h"
 #include "../input.h"
 #include "../process.h"
 #include "host_policy.h"
@@ -322,9 +322,9 @@ void help() {
         "Explicit B2 required; CUDA tune/Auto B2/relocation/Graph policies are not consumed.\n"
         "CPU batch normalization/GCD; guarded wide AMD points use CPU with OpenCL polynomials.\n";
 #else
-    std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
-        "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
-        "  ecm_cuda_stage2 [--config ecm.toml] [--worktodo FILE] [--worker N] [--once]\n"
+    std::cout << "ecm_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
+        "  ecm_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
+        "  ecm_stage2 [--config ecm.toml] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
         "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
         "         --ntt-counts 0|1 (per-curve NTT length table; TOML stage2_ntt_counts)\n"
@@ -593,28 +593,9 @@ int driver(Options o) {
     else if(!s.stage1_csv.empty())o.stage1_csv=absolute_from(base,s.stage1_csv).string();
     if(!o.stage1_profile.empty())o.stage1_profile=absolute_from(cwd,o.stage1_profile).string();
     else if(!s.stage1_profile.empty())o.stage1_profile=absolute_from(base,s.stage1_profile).string();
-    const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.worktodo) : absolute_from(cwd, o.worktodo);
-    const auto& finished_name=shared_output?s.shared_finished_file:s.finished;
-    if(finished_name.empty())throw std::runtime_error("finished_file must name a file");
-    const fs::path finished = absolute_from(base, finished_name);
-    const fs::path tmp = absolute_from(base, s.save_dir.empty()?cfg.tmp_dir:s.save_dir);
-    const std::string suffix = o.worker == 1 ? "" : "_" + std::to_string(o.worker);
-    const fs::path results = !o.results.empty() ? absolute_from(cwd, o.results) :
-        absolute_from(base, s.results.empty() ? ecm_config::worker_file(ecm_config::defaults::stage2_stage2_results_file,o.worker) : s.results);
-    const bool explicit_results = !o.results.empty() || !s.results.empty();
-    fs::path log;
-    o.log_max_kb=shared_output?s.log_file_max_kb:0;
-    if (!o.log.empty()) log = absolute_from(cwd, o.log);
-    else if (shared_output) { if (!s.shared_log_file.empty()) log = absolute_from(base, s.shared_log_file); }
-    else if (!s.has_log) log = absolute_from(base, ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,o.worker));
-    else if (!s.log.empty()) log = absolute_from(base, s.log);
-    if(o.debug_log) {
-        if(o.debug_file.empty())o.debug_file=absolute_from(base,s.debug_file.empty()?ecm_config::worker_file(ecm_config::defaults::stage2_stage2_debug_log_file,o.worker):s.debug_file).string();
-        else o.debug_file=absolute_from(cwd,o.debug_file).string();
-    }
-    const fs::path legacy_progress=s.progress.empty()?fs::path(worktodo.string()+suffix+".progress"):absolute_from(base,s.progress);
-    const fs::path progress_dir=!s.progress_dir.empty()?absolute_from(base,s.progress_dir):
-        !s.progress.empty()?legacy_progress.parent_path():worktodo.parent_path();
+    const auto paths=task_paths(o,cwd,ini,s,cfg,shared_output);
+    const auto &worktodo=paths.worktodo,&tmp=paths.tmp,&finished=paths.finished,&results=paths.results,
+               &log=paths.log,&legacy_progress=paths.legacy_progress,&progress_dir=paths.progress_dir;
     const int device = selected_device;
     const uint64_t d = o.has_d ? o.d : s.d;
     o.device=device;o.d=d;o.has_d=d!=0;
@@ -709,7 +690,7 @@ int driver(Options o) {
         std::cout << "tune_complete: profile=" << destination.string() << std::endl;
         return 0;
     }
-    return run_tasks(std::move(o),{cwd,ini,worktodo,finished,tmp,results,log,legacy_progress,progress_dir,explicit_results},
+    return run_tasks(std::move(o),paths,
                      {cfg.b2_ratio,cfg.worktodo_priority,cfg.worktodo_skip,cfg.finished,shared_output},
                      {s.b2,s.arena,s.owner_mb});
 }

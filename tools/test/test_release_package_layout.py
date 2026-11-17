@@ -33,9 +33,9 @@ class ReleaseLayout(unittest.TestCase):
         # Exercise the production import/call boundary: assembly fixtures mock
         # this seam and cannot detect a reverted generator API.
         catalog=packaging.stage2_catalog()
-        self.assertEqual(len(catalog),176)
-        self.assertEqual(sum(m['label'].startswith('arithmetic_') for m in catalog),112)
-        self.assertEqual(sum(m['label'].startswith('ntt_') for m in catalog),64)
+        self.assertEqual(len(catalog),202)
+        self.assertEqual(sum(m['label'].startswith('arithmetic_') for m in catalog),120)
+        self.assertEqual(sum(m['label'].startswith('ntt_') for m in catalog),82)
 
     def test_catalog_failure_precedes_payload_work(self):
         plan=dict(build_root=str(self.build),out=str(self.out),gui=str(self.gui),gmp=str(self.gmp),profiles=['cu11.8'])
@@ -65,13 +65,18 @@ class ReleaseLayout(unittest.TestCase):
             self.put(self.gui/name)
         self.put(self.gui/'diagnostics_build_manifest.json',json.dumps(dict(sources_sha256={},files_sha256={'ecm_diagnostics_host.exe':packaging.sha(self.gui/'ecm_diagnostics_host.exe')})))
         for profile,(ptx,sass) in packaging.TARGETS.items():
-            for stage,exe in [('stage1','ecm_cuda.exe'),('stage2','ecm_cuda_stage2.exe')]:
+            for stage,exe in [('stage1','ecm_cuda.exe'),('stage2','ecm_stage2.exe')]:
                 leaf=self.build/profile/stage;binary=self.put(leaf/exe);self.put(leaf/'gmp-10.dll')
                 manifest=dict(role='release',ptx_architecture=ptx,source_hashes={},cuda_root=str(self.root/'cuda'),sha256=packaging.sha(binary))
                 if stage=='stage1':manifest.update(architectures=sass,tiers='',enable_prac=False)
                 else:manifest.update(architecture='sm_'+sass,engine='production',gl_fixed_mode=3,add_sub_mask=1,outer_unroll_u=0,kernel_layout=layout,module_directory=('isolated' if layout=='isolated' else ''))
                 path=self.put(leaf/'manifest.json',json.dumps(manifest))
                 self.put(self.build/'components'/f'{profile}.{stage}.json',json.dumps(dict(build=str(leaf),manifest=str(path),exe=str(binary))))
+
+    def coop_modules(self):
+        return [dict(label=label,entries=[f'.entry _Z{len(kernel)}{kernel}ILi{width}ELi{tpi}EEv()'
+                     for kernel,shapes in kernels.items() for width,tpi in shapes])
+                for label,kernels in packaging.COOP_KERNELS.items()]
 
     def inspect(self,cuda,leaf,stage,report,cache=None):
         self.cache_forces.append(cache.force)
@@ -83,6 +88,7 @@ class ReleaseLayout(unittest.TestCase):
         else:
             modules=[dict(label=label,entries=[f'.entry _Z{len(m["kernel"])}{m["kernel"]}ILi4EEv()' for m in self.catalog() if m['label'].startswith(group+'_')])
                      for label,group in [('arithmetic_kernels','arithmetic'),('transform_kernels','ntt')]]
+        if stage=='stage2':modules.extend(self.coop_modules())
         for module in modules:module['ptx_targets']=['.target sm_'+ptx]
         self.put(report,json.dumps(dict(modules=modules)))
         return packaging.sha(report)
@@ -143,6 +149,7 @@ class ReleaseLayout(unittest.TestCase):
     def test_grouped_membership_rejects_wrong_or_missing_entries(self):
         report=dict(modules=[dict(label='arithmetic_kernels',entries=['.entry _Z15s2g_test_kernelILi4EEv()']),
                              dict(label='transform_kernels',entries=['.entry _ZN53_GLOBAL__N__hash12311tile_kernelILi4EEv()'])])
+        report['modules'].extend(self.coop_modules())
         packaging.verify_stage2_membership(report,'grouped',self.catalog())
         report['modules'][1]['entries']=[]
         with self.assertRaisesRegex(ValueError,'entry membership'):packaging.verify_stage2_membership(report,'grouped',self.catalog())

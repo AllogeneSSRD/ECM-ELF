@@ -21,7 +21,7 @@
 - 发布工具链：`-Cuda118Root`、`-Cuda133Root`、`-VcVars`、`-Gmp`；发布要求同一 vcpkg 通用 GMP，缺失或身份变化即失败。local/dev 保留 `-CudaRoot` 和各自依赖参数。
 - 复用/打包：`-SkipBuild` 仍核对冻结身份；`-SkipPackage` 构建组件后停止。cuobjdump按文件内容、工具和验证器身份缓存，`-ReinspectCuda` 强制复查。输出为 `release/ecm-elf-<版本>-cu11.8/`、`ecm-elf-<版本>-cu13.3/`，ZIP 内保留同名完整目录。所选包已有目录、ZIP 或 SHA256 时不覆盖，重打包指定新的 `-OutDir`；另一个 CUDA 包可发布到同一输出根。
 
-local BAT/PowerShell 输出为 `build_stage1_local/ecm_cuda.exe`、固定的 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；测试／实验默认输出到 `build_dev/`。显式本机/开发目录是最终叶目录。Stage1 和 Stage2 默认 local 使用固定目录。Stage1 仅切换 PRAC 时原地更新配置，普通 CUDA 对象继续按原规则核对复用。其他有效但不兼容的旧 profile 归档到 `build_dev/stage1_local_profiles/` 或 `build_dev/stage2_local_profiles/`。显式 `-BuildDir`/`-Build` 仍拒绝不兼容配置，损坏标记及跨用途/阶段目录不能通过归档跳过验证。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
+local BAT/PowerShell 输出为 `build_stage1_local/ecm_cuda.exe`、固定的 `build_stage2_local/ecm_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；测试／实验默认输出到 `build_dev/`。显式本机/开发目录是最终叶目录。Stage1 和 Stage2 默认 local 使用固定目录。Stage1 仅切换 PRAC 时原地更新配置，普通 CUDA 对象继续按原规则核对复用。其他有效但不兼容的旧 profile 归档到 `build_dev/stage1_local_profiles/` 或 `build_dev/stage2_local_profiles/`。显式 `-BuildDir`/`-Build` 仍拒绝不兼容配置，损坏标记及跨用途/阶段目录不能通过归档跳过验证。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 
 完整参数以各 PS1 的 param 与帮助为准。发布包附英文 `ECM_TOML_REFERENCE.en.md` 和简体中文 `ECM_TOML_REFERENCE.zh-CN.md`。源码、构建、拆分和打包清单保留在构建目录，ZIP 旁保留 SHA256。
 
@@ -47,7 +47,7 @@ Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/
 
 `dev/build_stage2_tree_gpu.ps1` 的原型驱动与根目录 Stage2 生产/开发队列程序不同。实际生产算术和当前限制见 [NTT](../../docs/architecture/NTT.md)、[Stage2使用](../../docs/usage/STAGE2.md)。
 
-独立 CPU Edwards Stage2 使用 `test/build_cpu_stage2.ps1`；默认支持动态加载本地 `build_gwnum_local.ps1 -Stage2` 生成的 DLL 和 libecm 后端，`-GwPoly` 生成静态 GW 对照版。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。
+独立 CPU Edwards Stage2 使用 `build_stage2_cpu_local.ps1`，程序和本地 GWNUM DLL 位于 `build_stage2_cpu_local/`。静态 GW 对照版使用 `test/build_cpu_stage2.ps1 -GwPoly`。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。
 
 OpenCL Stage1 的本机入口为 build_opencl_local.ps1；默认使用隔离的 build_opencl_local/stage1/&lt;key&gt; 叶目录、普通 CXX 及随附生产资源，不启用 CUDA。支持 -BuildDir、-Gmp、-OpenSslRoot、-OpenClRoot、-VcVars。完整发布入口以 `-BuildRole release` 调用它，构建 `<BuildRoot>/opencl-release/ecm.exe`，附带资源、OpenSSL及许可，并与其他组件共用通用vcpkg GMP。两套CUDA包均包含相同OpenCL程序；其内核统一JIT。完整入口也接收 `-OpenSslRoot`、`-OpenClRoot`。资源与加载合同见 [OpenCL](../../docs/architecture/OPENCL.md#资源与-local-构建)。
 

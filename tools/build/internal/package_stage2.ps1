@@ -51,7 +51,7 @@ if (-not $SkipBuild) {
 }
 $manifestPath = Join-Path $Build 'build_manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$exe = Join-Path $Build 'ecm_cuda_stage2.exe'
+$exe = Join-Path $Build 'ecm_stage2.exe'
 if ($manifest.role -ne 'release' -or $manifest.profile_sha256 -ne $buildProfile.Hash -or
     $manifest.engine -ne 'production' -or $manifest.architecture -ne $Arch -or
     $manifest.cuda_root -ne $cuda.Root -or $manifest.toolkit -ne $cuda.VersionText -or
@@ -96,7 +96,7 @@ if ($Stage1Exe) {
     Copy-Item -LiteralPath $Stage1Exe -Destination (Join-Path $OutDir 'ecm_cuda.exe') -Force
 }
 $hashes = [ordered]@{}
-$files = @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt') + $references
+$files = @('ecm_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt') + $references
 . (Join-Path $PSScriptRoot 'diagnostics_payload.ps1')
 $files = @($files + @(Copy-EcmDiagnosticsPayload $repo $Build $OutDir) | Select-Object -Unique)
 foreach ($name in $files) {

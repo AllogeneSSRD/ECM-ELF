@@ -102,8 +102,10 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/stage1/selection.cpp
     src/ecm/stage2/cuda/main.cpp
     src/ecm/stage2/planning/planning.cpp
+    src/ecm/stage2/queue.cpp
     src/ecm/stage2/task.cpp
     src/ecm/stage2/input.cpp
+    src/ecm/stage2/process_control.cpp
     src/ecm/stage2/process.cpp
     src/ecm/stage2/cuda/host_policy.cpp
     src/io/expression.cpp

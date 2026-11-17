@@ -87,7 +87,7 @@
       <Item id="option_stage2_stage2_submission_file" name="仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存在本地忽略文件中。" />
       <Item id="option_stage2_stage2_finished" name="记录共用 worktodo 中已完成或输入错误的 Stage2 任务，保存原任务、结果状态及提交回执。路径必须不同于 Stage1 finished 和活动队列。" />
       <Item id="option_stage2_stage2_log_file" name="指定 Stage2 普通运行日志，追加记录阶段、批次、警告和结束统计。留空关闭普通文件日志，控制台仍输出；未显式指定时，多 worker 自动给默认文件名加编号后缀。" />
-      <Item id="option_stage2_stage2_results_file" name="新 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。" />
+      <Item id="option_stage2_stage2_results_file" name="CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。" />
       <Item id="option_stage2_stage2_debug_log_file" name="指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。" />
       <Item id="option_stage2_stage2_progress_file" name="旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;B1&gt;.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。" />
       <Item id="option_stage2_stage2_progress_dir" name="每任务 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;B1&gt;.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。" />
@@ -97,6 +97,9 @@
       <Item id="option_stage2_stage2_log_level" name="兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 stage2_debug_log。" />
       <Item id="option_stage2_stage2_ntt_counts" name="生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。" />
       <Item id="option_stage2_stage2_backend" name="Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。" />
+      <Item id="option_stage2_stage2_cpu_backend" name="Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。" />
+      <Item id="option_stage2_stage2_cpu_threads" name="每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。" />
+      <Item id="option_stage2_stage2_cpu_memory_mib" name="CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。" />
       <Item id="option_stage2_stage2_opencl_point_plan" name="OpenCL 点生成。auto 从已验证的默认计划起步，可用完整曲线继续调优。device 使用设备点计划（含已验证短批次）；chain 选择连续巨步种子；cpu 使用 GMP 点及 OpenCL 树。手动计划跳过运行时探索。" />
       <Item id="option_stage2_stage2_opencl_point_chunk" name="每条 OpenCL 命令的点数。0 自动；正值锁定分块并关闭运行时计划试探。" />
       <Item id="option_stage2_stage2_opencl_point_group" name="OpenCL 点工作组大小。0 使用后端默认；正值必须符合设备与内核上限。" />

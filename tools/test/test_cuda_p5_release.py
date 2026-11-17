@@ -170,7 +170,7 @@ def main():
         for unit in manifest['compile_units'].values():
             assert sha(unit['entry']['output']) == unit['object_sha256'].lower()
         payload = a.stage2_packages/f'cuda-stage2-sm{arch}'
-        exe = payload/'ecm_cuda_stage2.exe'
+        exe = payload/'ecm_stage2.exe'
         assert sha(exe) == manifest['sha256'].lower() == sha(group/exe.name)
         row = dict(stage='stage2', architecture=arch, exe_sha256=sha(exe),
             manifest_sha256=sha(path), toolkit=manifest['cuda_root'], host_version=manifest['host_version'],

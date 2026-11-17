@@ -10,11 +10,16 @@ def main():
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--cuda-stage2", type=Path)
+    parser.add_argument("--cpu-stage2", type=Path)
     args = parser.parse_args()
     build, out = args.build.resolve(), args.out.resolve()
     out.mkdir(parents=True)
-    for filename in ("ecm.exe", "ecm_opencl_stage2.exe", "ecm_cpu_stage2.exe", "gmp-10.dll"):
+    for filename in ("ecm.exe", "ecm_opencl_stage2.exe", "gmp-10.dll"):
         shutil.copy2(build / filename, out / filename)
+    cpu = args.cpu_stage2 or build / "cpu-stage2/ecm_stage2.exe"
+    if not cpu.is_file() and not args.cpu_stage2:
+        cpu = build / ("ecm_stage2.exe" if (build/"ecm_stage2.exe").is_file() else "ecm_cpu_stage2.exe")
+    shutil.copy2(cpu, out / "ecm_cpu_stage2.exe")
     if args.cuda_stage2:
         shutil.copy2(args.cuda_stage2, out / "ecm_cuda_stage2.exe")
 

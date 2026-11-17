@@ -153,11 +153,11 @@ target = "gpu"  # string: [cpu|gpu]
 # 在本地忽略文件中。
 
 # results_file = ""  # string: <path>
-# Optional per-curve Stage2 JSONL for new GPU queue tasks. Empty disables it for queue runs. Direct
-# save runs use the default filename. Keep the original JSONL until legacy checkpoint migration
-# completes.
-# 新 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁
-# 移完成前保留原 JSONL。
+# Optional per-curve Stage2 JSONL for CPU and GPU queue tasks. Empty disables it for queue runs.
+# Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint
+# migration completes.
+# CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint
+# 迁移完成前保留原 JSONL。
 
 # gpu_device = -1  # int: [-1|0..2^31-1]
 # Stage2 CUDA device ID. -1 inherits Stage1's device; 0 or greater selects a CUDA device explicitly.

@@ -9,6 +9,6 @@ inline constexpr const char *executable="ecm_opencl_stage2";
 #else
 inline constexpr bool opencl=false;
 inline constexpr const char *name="cuda-ntt";
-inline constexpr const char *executable="ecm_cuda_stage2";
+inline constexpr const char *executable="ecm_stage2";
 #endif
 }

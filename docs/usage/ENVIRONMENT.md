@@ -15,7 +15,7 @@
 # 在新开的 PowerShell 中运行，替换保存点、边界和 D。
 $env:NTT_BABY_WHEEL = '0'
 try {
-    .\ecm_cuda_stage2.exe --save .\input.save --device 1 --b2 26000000000 --d 180180
+    .\ecm_stage2.exe --save .\input.save --device 1 --b2 26000000000 --d 180180
 } finally {
     Remove-Item Env:NTT_BABY_WHEEL -ErrorAction SilentlyContinue
 }

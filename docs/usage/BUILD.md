@@ -10,7 +10,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 原生OpenCL Stage2本机入口为 `tools/build/build_stage2_opencl_local.ps1/.bat`，生成 `build_stage2_opencl_local/ecm_opencl_stage2.exe`、GMP DLL与随附 `opencl_resources/{ntt,stage2}`。只需C++、OpenCL头/导入库与GMP，不需要nvcc；可指定 `-Build`、`-OpenClRoot`、`-Gmp`、`-VcVars`，目录由内部忽略文件保护并核对用途。根CMake另提供 `ECM_BUILD_OPENCL_STAGE2=ON`。完整发布入口另用同一 OpenCL release profile 构建两个阶段，随两套 CUDA 包分发程序与资源；单独的 Stage2 CUDA 构建仍只打包 CUDA。
 
-独立 CPU Edwards Stage2 使用新功能入口 `tools/build/test/build_cpu_stage2.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
+独立 CPU Edwards Stage2 使用本机入口 `tools/build/build_stage2_cpu_local.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
 
 | 程序 | 开发 | 本机生产 | 发布生产 |
 | --- | --- | --- | --- |
@@ -19,7 +19,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 cu13.3 聚合模式使用 `SplitCompile=8`，cu11.8及隔离备选使用1。构建入口不自动运行数学、GPU 或性能测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 默认输出固定为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_cuda_stage2.exe` 和 `build_gui_local/ecm_gui.exe`。配置切换和归档规则见[用途与 profile 目录](#用途与-profile-目录)。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 默认输出固定为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_stage2.exe` 和 `build_gui_local/ecm_gui.exe`。配置切换和归档规则见[用途与 profile 目录](#用途与-profile-目录)。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -115,7 +115,7 @@ release入口先自动同步业务配置和GUI v2派生文件，再解析依赖�
 
 `-SkipBuild` 仍核对源码、profile、工具链、依赖、对象和程序身份。`-SkipPackage` 只构建/验证。`-BuildRoot` 默认 `build_cuda_release`；`-OutDir` 默认 `release`，必须与构建目录分离。每个阶段的精确叶目录记录在 `<BuildRoot>/components/cu<版本>.stageN.json`，不按时间扫描“最新程序”。所选包的目录、ZIP 或 SHA256 已存在时均拒绝覆盖，重打包使用新的 `-OutDir`，以保留用户配置和队列。
 
-每个 CUDA 目录内同层包含 OpenCL `ecm.exe`、`ecm_cuda.exe`、`ecm_cuda_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。OpenCL附带 `opencl_resources/`、OpenSSL运行库及许可；两套CUDA包共用相同OpenCL产物，OpenCL内核统一由驱动JIT，不按CUDA版本区分。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、验证缓存、原始日志和计时不进入分发目录。
+每个 CUDA 目录内同层包含 OpenCL `ecm.exe`、`ecm_cuda.exe`、`ecm_stage2.exe`、`ecm_gui_v2.exe`、群阶/诊断助手、唯一通用 `gmp-10.dll`、TOML模板、空队列、语言资源、基础 ELY 四个资源/声明文件、PARI诊断依赖及许可/对应源码。OpenCL附带 `opencl_resources/`、OpenSSL运行库及许可；两套CUDA包共用相同OpenCL产物，OpenCL内核统一由驱动JIT，不按CUDA版本区分。GUI 使用独立版本号；版本文件夹取计算主程序版本。完整包不附原 GUI 或额外宠物皮肤。构建/测试 manifest、验证缓存、原始日志和计时不进入分发目录。
 
 完整入口通过 `build_opencl_local.ps1 -BuildRole release` 在 `<BuildRoot>/opencl-release` 构建独立发布用途的OpenCL worker，使用通用vcpkg GMP并关闭CUDA编译器。可用 `-OpenClRoot`、`-OpenSslRoot` 覆盖头文件/导入库及OpenSSL安装位置。构建前后核对保守源码集合、工具链、依赖和资源身份；`-SkipBuild` 只核对已有产物，不为缺失组件补建。发布程序默认从自身目录查找OpenCL资源，显式 `--kernel-root` 仍优先。OpenCL加载器由用户安装的显卡驱动提供，包内不附厂商驱动。
 

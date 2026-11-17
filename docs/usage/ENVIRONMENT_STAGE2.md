@@ -19,7 +19,7 @@
 $previous = $env:NTT_BABY_WHEEL
 $env:NTT_BABY_WHEEL = '0'
 try {
-    .\ecm_cuda_stage2.exe --save .\curve.save --b2 26000000000 --d 210210 --device 1 --log-level debug
+    .\ecm_stage2.exe --save .\curve.save --b2 26000000000 --d 210210 --device 1 --log-level debug
 } finally {
     $env:NTT_BABY_WHEEL = $previous
 }

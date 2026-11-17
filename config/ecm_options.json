@@ -1543,8 +1543,8 @@
       "worker_suffix": true,
       "empty": "off_for_new_queue_else_default",
       "description": [
-        "Optional per-curve Stage2 JSONL for new GPU queue tasks. Empty disables it for queue runs. Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint migration completes.",
-        "新 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。"
+        "Optional per-curve Stage2 JSONL for CPU and GPU queue tasks. Empty disables it for queue runs. Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint migration completes.",
+        "CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。"
       ]
     },
     {
@@ -1716,6 +1716,62 @@
         "opencl"
       ],
       "parser_override": "enum"
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_cpu_backend",
+      "v2_key": "cpu.backend",
+      "field": "cpu_backend",
+      "type": "string",
+      "parser": "strict",
+      "default": "auto",
+      "domain": "[auto|gwpoly|ntt|plain]",
+      "fx": "CPU_Stage2",
+      "description": [
+        "CPU arithmetic for Edwards continuation. Auto uses GWNUM/polymult when available, then libecm. Override with --backend.",
+        "Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。"
+      ],
+      "values": [
+        "auto",
+        "gwpoly",
+        "ntt",
+        "plain"
+      ],
+      "parser_override": "enum"
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_cpu_threads",
+      "v2_key": "cpu.threads",
+      "field": "cpu_threads",
+      "type": "u64",
+      "parser": "strict",
+      "default": 1,
+      "domain": "[1,1024]",
+      "fx": "CPU_Stage2",
+      "description": [
+        "CPU Stage2 thread count per worker. Override with --threads.",
+        "每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。"
+      ],
+      "minimum": 1,
+      "maximum": 1024
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_cpu_memory_mib",
+      "v2_key": "cpu.memory_mib",
+      "field": "cpu_memory_mib",
+      "type": "u64",
+      "parser": "strict",
+      "default": 512,
+      "domain": "[1,1048576]",
+      "fx": "CPU_Stage2",
+      "description": [
+        "CPU Stage2 arithmetic memory budget in MiB. Override with --memory-mib.",
+        "CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。"
+      ],
+      "minimum": 1,
+      "maximum": 1048576
     },
     {
       "owner": "stage2",
@@ -2627,8 +2683,8 @@
       "fx": "GUI_Stage2_executable",
       "parser": "gui",
       "description": [
-        "Shared executable path for Stage2 workers. Empty searches ecm_cuda_stage2.exe beside the GUI, then a single cuda-stage2* child package, then PATH. Multiple child packages require an explicit path. Each worker receives the same TOML and its own --worker index, using an inherited Stage2 stop event. A current Stage2 build is required; exe remains the separate Stage1 path.",
-        "Stage2 worker共用的程序路径。留空先查找GUI同目录的ecm_cuda_stage2.exe，再查找唯一的cuda-stage2*子包，最后使用PATH；多个子包时须明确指定路径。各worker使用同一TOML和自己的--worker编号，以及继承的Stage2停止事件，需要当前Stage2构建；exe仍保存独立Stage1路径。"
+        "Stage2 executable for CPU, CUDA or OpenCL. Empty searches ecm_stage2.exe, then legacy ecm_cuda_stage2.exe, ecm_cpu_stage2.exe and ecm_opencl_stage2.exe in the workflow and GUI directories. A single matching child package can also be discovered. Set an explicit path to choose between installed packages.",
+        "CPU、CUDA 或 OpenCL 的 Stage2 程序。留空时在工作流和 GUI 目录依次查找 ecm_stage2.exe、ecm_cuda_stage2.exe、ecm_cpu_stage2.exe 和 ecm_opencl_stage2.exe，也支持唯一匹配的子包。安装多个子包时可用路径指定后端。"
       ]
     },
     {
@@ -3557,8 +3613,8 @@
         "type": "string",
         "default": "",
         "description": [
-          "Explicit Stage2 worker executable.",
-          "显式 Stage2 worker 程序路径。"
+          "Explicit path to the CPU, CUDA or OpenCL Stage2 worker.",
+          "指定 CPU、CUDA 或 OpenCL Stage2 worker 的程序路径。"
         ]
       },
       {

@@ -4,7 +4,7 @@ ECM 任务管线（Windows 原生，不需要 WSL）
 分工
 ----
   stage 1 : 我们的驱动   ecm_cuda.exe  读 ECMSTAGE1= 行（队列模式，自带 checkpoint / finished）
-  stage 2 : ecm_cuda_stage2.exe 读共用队列的 ECMSTAGE2= 行；Prime95 可读 ECM=/ECM2= 或交接的 ECMSTAGE2= 行。
+  stage 2 : ecm_stage2.exe 读共用队列的 ECMSTAGE2= 行；Prime95 可读 ECM=/ECM2= 或交接的 ECMSTAGE2= 行。
   生成器  : tools\ecm_worktodo\ecm.py  只生成，不执行；去重/排序/过滤都在它里面
 
 旧流程里的 `wsl` + `sort -t, -k4,4n -u assignment.csv > sorted.csv` 已经取消：

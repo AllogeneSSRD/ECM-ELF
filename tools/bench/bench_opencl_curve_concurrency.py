@@ -58,7 +58,7 @@ def main():
         p.error('Fast saves require B1=2..1000, B2>B1 and even D=6..200000000')
     a.out.mkdir(parents=True)
     binaries = {}
-    for backend, build, name in [('opencl', a.opencl_build, 'ecm_opencl_stage2.exe'), ('cuda', a.cuda_build, 'ecm_cuda_stage2.exe')]:
+    for backend, build, name in [('opencl', a.opencl_build, 'ecm_opencl_stage2.exe'), ('cuda', a.cuda_build, 'ecm_stage2.exe')]:
         if not any(m.startswith(backend) for m in modes):
             continue
         dest = a.out / 'bin' / backend

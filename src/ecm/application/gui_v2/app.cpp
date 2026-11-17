@@ -145,8 +145,8 @@ void App::configure_workers() {
         return ecmgui::file_exists(executable_path(opencl, base)) ? opencl : cuda;
     };
     if (first.empty()) first = installed("ecm_cuda.exe", "ecm.exe");
-    if (second.empty()) second = installed("ecm_cuda_stage2.exe", "ecm_opencl_stage2.exe");
-    workers.worker_exe = executable_path(first, base); workers.stage2_exe = executable_path(second, base);
+    workers.worker_exe = executable_path(first, base);
+    workers.stage2_exe = second.empty() ? ecmgui::adjacent_stage2_exe(base) : executable_path(second, base);
     workers.priority = settings.priority; workers.exit_confirm = settings.exit_confirm;
     workers.graceful_stop_ms = static_cast<unsigned long long>(settings.graceful_stop_ms);
     controller.configure(workers); controller.suppress_autostart();

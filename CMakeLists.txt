@@ -285,7 +285,10 @@ if(ECM_ENABLE_CUDA)
             "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>")
         target_compile_definitions(ecm_cuda_stage2 PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
         target_link_libraries(ecm_cuda_stage2 PRIVATE ${GMP_LIBRARY})
-        set_target_properties(ecm_cuda_stage2 PROPERTIES
+        if(TARGET ecm_cpu_stage2)
+            set_target_properties(ecm_cpu_stage2 PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cpu-stage2")
+        endif()
+        set_target_properties(ecm_cuda_stage2 PROPERTIES OUTPUT_NAME ecm_stage2
             CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
             CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
             CUDA_ARCHITECTURES "${ECM_CUDA_ARCHITECTURES}")
@@ -675,7 +678,7 @@ if(ECM_BUILD_GUI_V2)
 endif()
 
 # Explicit targets must run the guard too (not only the default ALL build).
-foreach(_ecm_config_target ecm ecm_cuda ecm_cuda_stage2 ecm_opencl_stage2 ecm_gui ecm_gui_v2)
+foreach(_ecm_config_target ecm ecm_cuda ecm_cpu_stage2 ecm_cuda_stage2 ecm_opencl_stage2 ecm_gui ecm_gui_v2)
     if(TARGET ${_ecm_config_target})
         add_dependencies(${_ecm_config_target} ecm_config_check)
     endif()

@@ -47,7 +47,7 @@ def main():
     log = proc.stdout+proc.stderr
     (a.output/'rejection.log').write_text(log, encoding='utf-8')
     assert proc.returncode != 0 and 'HostOnly CUDA dependency changed: '+CUDA_INPUT in log, log
-    assert '== compile ' not in log and not (fake/'ecm_cuda_stage2.exe').exists()
+    assert '== compile ' not in log and not (fake/'ecm_stage2.exe').exists()
     assert manifest_path.read_bytes() == original
     result = dict(complete=True, rejected_before_compile=True, source_build_unchanged=True)
     (a.output/'result.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')

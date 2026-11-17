@@ -1,18 +1,18 @@
 # ECM 结果输出
 
-提交格式为 `results.json.txt`。CPU/CUDA Stage1 和 CPU Edwards Stage2 同时维护内部 JSONL，新的 GPU Stage2 队列可选写入 JSONL。Stage1 整批完成后在内存中聚合，统一发布两份最终文件；中途因子只验证并保留在恢复状态中。启用 Stage2 JSONL 时，每完成一条曲线即追加诊断行。验证后的因子立即导出一行 F，固定 curves=1 并保留 sigma。NF 仅在整条任务完成时导出，有 NF 的任务生成一行，曲线数是完成且未找到因子的曲线总数。直接 CLI 运行所选曲线范围视为一个任务。Stage1 NF 的 B2=B1，Stage2 NF 记录最后一条 NF 曲线实际请求的 B2。提交结构参考 Prime95，程序身份如实记录为 ECM-ELF，并附 CRC32；生成文件不触发网络请求。
+提交格式为 `results.json.txt`。CPU/CUDA Stage1 和直接运行 save 的 CPU Stage2 同时维护内部 JSONL。CPU、CUDA 和 OpenCL 的 Stage2 队列可选写入逐曲线 JSONL。Stage1 整批完成后在内存中聚合，统一发布两份最终文件；中途因子只验证并保留在恢复状态中。启用 Stage2 JSONL 时，每完成一条曲线即追加诊断行。验证后的因子立即导出一行 F，固定 curves=1 并保留 sigma。NF 仅在整条任务完成时导出，有 NF 的任务生成一行，曲线数是完成且未找到因子的曲线总数。直接 CLI 运行所选曲线范围视为一个任务。Stage1 NF 的 B2=B1，Stage2 NF 记录最后一条 NF 曲线实际请求的 B2。提交结构参考 Prime95，程序身份如实记录为 ECM-ELF，并附 CRC32；生成文件不触发网络请求。
 
 ## 共用发布接口与实现
 
 Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 [results.h](../../include/ecm/io/results.h) 和 [results.cpp](../../src/io/results.cpp)。公开头包含拥有字符串/集合的 Submission 数据和实际序列化、发布、seal、恢复导出入口；不包含 JSON 解析实现、文件锁、操作系统句柄、文件读写或 CRC 函数体。
 
-`internal_json` 和 `submission_json` 生成协议 JSON 文本。Stage1 的 `publish_stage1_batch` 负责整批排序、去重及双文件发布。新 Stage2 队列调用 `publish_stage2_checkpoint` 发布 ckpt 中的因子和 NF。直接运行 save、CPU Edwards Stage2 和旧队列仍使用 `publish_submission` 和 `seal_submissions`；`refresh_submission_if_owned` 可恢复这些路径的提交账本。
+`internal_json` 和 `submission_json` 生成协议 JSON 文本。Stage1 的 `publish_stage1_batch` 负责整批排序、去重及双文件发布。新 Stage2 队列调用 `publish_stage2_checkpoint` 发布 ckpt 中的因子和 NF。CPU 和 GPU 直接运行 save 以及旧队列使用 `publish_submission` 和 `seal_submissions`；`refresh_submission_if_owned` 可恢复这些路径的提交账本。
 
 contains_stage1_curves 接收结果路径、N、B1、曲线族/param 和 sigma 集合，优先流式核对最终 Stage1 JSONL；文件缺失时兼容旧内部账本。缺项返回 false，损坏报错。锁、旧目录兼容、发布历史恢复、CRC 与聚合规则集中在 CPP。
 
 ## 文件与身份
 
-Stage1 通过 TOML 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，TOML 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 的 `--results` 目前只从 CLI 设置。提交路径的默认值及范围见生成的 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md)。
+Stage1 通过 TOML 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，TOML 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 直接运行 save 的内部结果路径由 `--results` 设置；队列从 TOML 继承逐曲线输出路径，显式 CLI 优先。提交路径的默认值及范围见生成的 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
 各程序默认读取 exe 同目录的 `ecm.toml`，`--config FILE` 显式覆盖。身份键为 `user`、`computer`；空值省略对应 JSON 字段。全局值可由 `[workers.N.shared]` 覆盖，启动时通过 `--worker N` 选择。Edwards CPU Stage2 的 `--user`、`--computer` 最后覆盖 TOML，显式空字符串也生效。Stage2 曲线发布使用[任务配置快照](STAGE2.md)，已记录的 checkpoint 发布内容沿用原身份。
 
@@ -106,13 +106,13 @@ Stage1 不创建逐曲线 `.curve`、`.batch` 或独立 `publication.order`。�
 
 ### Stage2 队列与结果发布
 
-新 GPU 队列把进度与待发布结果存入任务 ckpt。默认只输出最终提交文件；若需要逐曲线诊断，通过 `stage2_results_file` 或 `--results FILE` 启用 JSONL。串行和并行共用 [恢复顺序](../architecture/CHECKPOINT.md#73-恢复与发布)。保存点和剩余队列行仍是续算输入。
+Stage2 队列把进度与待发布结果存入任务 ckpt。默认只输出最终提交文件；若需要逐曲线诊断，通过 `stage2_results_file` 或 `--results FILE` 启用 JSONL。串行和并行共用 [恢复顺序](../architecture/CHECKPOINT.md#73-恢复与发布)。保存点和剩余队列行仍是续算输入。
 
 Stage2 队列续跑使用当前配置的提交路径，`--submission` 可覆盖它。checkpoint 内的因子和已准备好的 NF 行可以补发到新目标，去重范围是该目标文件。同一行因此可以同时出现在旧文件和新文件中。
 
 F 即时单独发布，固定 `curves=1`。无因子曲线在整条任务完成后汇总成一行，参数与时间来自按计划顺序最后一条计入的 NF；各条曲线可以使用不同的 B2、D、P。重复的同一数学曲线在当前 checkpoint 内按实际 B2 去重。独立任务的 NF 提交行只含总数，无法用于跨任务的逐曲线去重。结果写入保留已有文件的字节和行顺序，已提交的 F 按数学身份去重，已准备好的 NF 按确切行重放。任务仍在队列时可通过原 ckpt 补发。任务结束并清理 ckpt 后，最终提交文件就是该任务的归档。
 
-GPU 直接 `--save` 与 CPU Edwards Stage2 继续使用私有 `data/<提交文件名>.ecm-ledger/`。已有 schema 1–4 队列首次恢复时使用原 JSONL 和账本完成一次性迁移。旧版的 `ecm_cpu_stage2.exe --export-results --submission results.json.txt` 可恢复旧账本对应的结果。新队列可以追加到已有 ECM-ELF 提交历史，同路径的旧账本仍供旧任务使用。
+CPU 和 GPU 直接运行 `--save` 时使用私有 `data/<提交文件名>.ecm-ledger/`。已有 schema 1–4 队列首次恢复时使用原 JSONL 和账本完成一次性迁移。CPU 包的 `ecm_stage2.exe --export-results --submission results.json.txt` 可恢复旧账本对应的结果。新队列可以追加到已有 ECM-ELF 提交历史，同路径的旧账本仍供旧任务使用。
 
 ## 隐私与提交检查
 

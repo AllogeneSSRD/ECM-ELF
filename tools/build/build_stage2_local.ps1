@@ -81,7 +81,7 @@ $objectNames = Get-EcmObjectNames $sources
 $objDir = Join-Path $Build '_objects'
 . (Join-Path $PSScriptRoot 'internal/build_directory.ps1')
 Initialize-EcmBuildDirectory $objDir
-$exe = Join-Path $Build 'ecm_cuda_stage2.exe'
+$exe = Join-Path $Build 'ecm_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
 $glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
 $signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", $cuda.VersionText, "split_compile=$SplitCompile", "engine=$Engine", "add_sub_mask=$AddSubMask",
@@ -233,7 +233,7 @@ if (-not $fresh) {
         catch { $reuseLink = $false }
     }
     if (-not $reuseLink) {
-        Write-Host '== link ecm_cuda_stage2.exe =='
+        Write-Host '== link ecm_stage2.exe =='
         $linkTimer = [Diagnostics.Stopwatch]::StartNew()
         $commandFile = Join-Path $objDir 'link.cmd'
         $linkCommand = $line.Substring(($vc.Setup + ' && ').Length)
@@ -329,7 +329,7 @@ Assert-EcmBuildProfile $Build $buildProfile -ReadOnly
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
 $buildTimer.Stop()
 Write-Host '== produced =='
-Write-Host ("   ecm_cuda_stage2.exe: {0:N0} B ({1:N1} MB)" -f (Get-Item $exe).Length, ((Get-Item $exe).Length / 1MB))
+Write-Host ("   ecm_stage2.exe: {0:N0} B ({1:N1} MB)" -f (Get-Item $exe).Length, ((Get-Item $exe).Length / 1MB))
 Write-Host "   executable : $exe"
 Write-Host "   logs       : $objDir"
 Write-Host ("   elapsed    : {0:N1}s" -f $buildTimer.Elapsed.TotalSeconds)

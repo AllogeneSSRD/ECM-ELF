@@ -24,7 +24,8 @@ def main():
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     import shutil
     (out/'bin').mkdir();(out/'bin/.gitignore').write_text('*\n')
-    for name in ('ecm_cuda_stage2.exe','gmp-10.dll','build_manifest.json'):shutil.copy2(a.exe.parent/name,out/'bin'/name)
+    shutil.copy2(a.exe,out/'bin/ecm_cuda_stage2.exe')
+    for name in ('gmp-10.dll','build_manifest.json',):shutil.copy2(a.exe.parent/name,out/'bin'/name)
     shutil.copy2(__file__,out/'test_snapshot.py')
     report=dict(complete=False,exe_sha256=sha(out/'bin/ecm_cuda_stage2.exe'),calls=[],failures=[])
     def run(name,profile,curves,minimum,backend,learn,carrier=0,all_auto=False,chain='32'):

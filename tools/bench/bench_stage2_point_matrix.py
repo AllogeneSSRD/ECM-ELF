@@ -32,7 +32,8 @@ def prepare(a,out):
     if not manifest['complete'] or manifest['exe_sha256'].lower()!=sha(a.exe):raise ValueError('Unverified build')
     for unit in manifest['reused'].values():
         if sha(unit['object'])!=unit['sha256'].lower():raise ValueError('Changed device object')
-    for f in ('ecm_cuda_stage2.exe','gmp-10.dll'):shutil.copy2(a.exe.parent/f,out/'bin'/f)
+    shutil.copy2(a.exe,out/'bin/ecm_cuda_stage2.exe')
+    for f in ('gmp-10.dll',):shutil.copy2(a.exe.parent/f,out/'bin'/f)
     shutil.copy2(a.exe.parent/'manifest.json',out/'build_manifest.json')
     shutil.copy2(a.study/'frozen_tune.toml',out/'initial_tune.toml')
     shutil.copy2(out/'initial_tune.toml',out/'active_tune.toml')

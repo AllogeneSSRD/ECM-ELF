@@ -5,7 +5,7 @@ GENERATION ONLY.  This tool never runs stage 1 or stage 2 and never rewrites a f
 running Prime95 owns; it only turns assignment lines into the work files both consumers read.
 
   stage 1 : ECM-ELF (ecm_cuda.exe, queue mode) reads ECMSTAGE1= lines
-  stage 2 : ECM-ELF (ecm_cuda_stage2.exe) reads ECMSTAGE2= lines
+  stage 2 : ECM-ELF (ecm_stage2.exe) reads ECMSTAGE2= lines
   Prime95 reads ECM=/ECM2= lines or handoff ECMSTAGE2= lines.
 
 INPUT (both prefixes are equivalent; the prefix is only a spelling)

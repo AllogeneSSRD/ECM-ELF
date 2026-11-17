@@ -1081,6 +1081,48 @@ v1 旧键 `stage2.stage2_progress_file`
 
 旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。
 
+<a id="stage2_cpu_backend"></a>
+
+### cpu.backend
+
+```toml
+cpu.backend = "auto"
+```
+
+类型 `string` · 范围 `[auto|gwpoly|ntt|plain]` · Worker 覆盖 `[worker.N] stage2.cpu.backend` · 级别 `高级`。
+
+v1 旧键 `stage2.stage2_cpu_backend`
+
+Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。
+
+<a id="stage2_cpu_memory_mib"></a>
+
+### cpu.memory_mib
+
+```toml
+cpu.memory_mib = 512
+```
+
+类型 `u64` · 范围 `[1,1048576]` · Worker 覆盖 `[worker.N] stage2.cpu.memory_mib` · 级别 `高级`。
+
+v1 旧键 `stage2.stage2_cpu_memory_mib`
+
+CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。
+
+<a id="stage2_cpu_threads"></a>
+
+### cpu.threads
+
+```toml
+cpu.threads = 1
+```
+
+类型 `u64` · 范围 `[1,1024]` · Worker 覆盖 `[worker.N] stage2.cpu.threads` · 级别 `高级`。
+
+v1 旧键 `stage2.stage2_cpu_threads`
+
+每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。
+
 <a id="stage2_auto_carrier"></a>
 
 ### cuda.auto_carrier
@@ -1628,7 +1670,7 @@ results_file = ""
 
 v1 旧键 `stage2.stage2_results_file`
 
-新 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。
+CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint 迁移完成前保留原 JSONL。
 
 <a id="stage2_save_dir"></a>
 
@@ -2112,7 +2154,7 @@ stage2_exe = ""
 
 类型 `string` · 范围 `<exe>` · Worker 覆盖 `不支持` · 级别 `高级`。
 
-Stage2 worker共用的程序路径。留空先查找GUI同目录的ecm_cuda_stage2.exe，再查找唯一的cuda-stage2*子包，最后使用PATH；多个子包时须明确指定路径。各worker使用同一TOML和自己的--worker编号，以及继承的Stage2停止事件，需要当前Stage2构建；exe仍保存独立Stage1路径。
+CPU、CUDA 或 OpenCL 的 Stage2 程序。留空时在工作流和 GUI 目录依次查找 ecm_stage2.exe、ecm_cuda_stage2.exe、ecm_cpu_stage2.exe 和 ecm_opencl_stage2.exe，也支持唯一匹配的子包。安装多个子包时可用路径指定后端。
 
 ### start_tab
 

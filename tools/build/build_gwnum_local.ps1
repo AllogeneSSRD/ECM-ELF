@@ -71,5 +71,5 @@ if ($LASTEXITCODE -ne 0) { throw 'GWNUM DLL build failed.' }
 $dll = Join-Path $BuildDir 'gwnum.dll'
 if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw "Build output missing: $dll" }
 Write-Host "Built $dll"
-if ($Stage2) { Write-Host 'Copy gwnum.dll beside ecm_cpu_stage2.exe and select --backend gwpoly.' }
+if ($Stage2) { Write-Host 'Copy gwnum.dll beside ecm_stage2.exe and select --backend gwpoly.' }
 else { Write-Host 'Copy gwnum.dll beside the Stage1 worker and select --impl gwnum.' }

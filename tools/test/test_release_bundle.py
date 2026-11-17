@@ -34,6 +34,8 @@ def main():
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     report=dict(complete=False,manifest_sha256=sha(args.manifest),collector_sha256=sha(__file__),profiles={},limitations=['Same Windows installation and graphics driver; not a clean OS or old-driver qualification'])
     def persist():(out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
+    stage2 = ('ecm_stage2.exe' if manifest['schema'] >= 4
+              else 'ecm_cuda_stage2.exe')
     for profile,identity in manifest['profiles'].items():
         assert profile in ('cu11.8','cu13.3')
         if manifest['schema']>=2:
@@ -42,7 +44,7 @@ def main():
             assert identity['archive']==f'{directory}-win-x64.zip'
         else:directory=profile
         folder=root/directory;files=identity['files_sha256'];verify(folder,files)
-        for name in ('ecm_cuda.exe','ecm_cuda_stage2.exe','ecm_gui_v2.exe','ecm_group_order_ui.exe','ecm_diagnostics_host.exe','gmp-10.dll','ecm.toml','ecm.toml.example','worktodo.txt','source/release-source.zip'):
+        for name in ('ecm_cuda.exe',stage2,'ecm_gui_v2.exe','ecm_group_order_ui.exe','ecm_diagnostics_host.exe','gmp-10.dll','ecm.toml','ecm.toml.example','worktodo.txt','source/release-source.zip'):
             assert name in files,('missing required payload',profile,name)
         if manifest['schema']>=3:
             for name in ('ecm.exe','libcrypto-3-x64.dll','libssl-3-x64.dll','licenses/OpenSSL.txt'):assert name in files,('missing OpenCL payload',profile,name)
@@ -67,7 +69,7 @@ def main():
         try:verify(folder,bad)
         except ValueError:pass
         else:raise AssertionError('Substituted GMP identity accepted')
-        bad=dict(files);bad.pop('ecm_cuda_stage2.exe')
+        bad=dict(files);bad.pop(stage2)
         try:verify(folder,bad)
         except ValueError:pass
         else:raise AssertionError('Incomplete worker membership accepted')
@@ -77,7 +79,7 @@ def main():
             cwd=out/('unrelated '+profile);cwd.mkdir()
             env={k:v for k,v in os.environ.items() if not k.startswith(('ECM_','NTT_','CUDA_','VK_'))}
             env['PATH']=str(Path(os.environ['SystemRoot'])/'System32');env.pop('VULKAN_SDK',None)
-            workers=('ecm.exe','ecm_cuda.exe','ecm_cuda_stage2.exe') if manifest['schema']>=3 else ('ecm_cuda.exe','ecm_cuda_stage2.exe')
+            workers=('ecm.exe','ecm_cuda.exe',stage2) if manifest['schema']>=3 else ('ecm_cuda.exe',stage2)
             for worker in workers:
                 command=[str(relocated/worker),'--version']
                 proc=subprocess.run(command,cwd=cwd,env=env,capture_output=True,timeout=20)

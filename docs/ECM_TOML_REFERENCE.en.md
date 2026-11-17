@@ -1081,6 +1081,48 @@ Legacy v1 key `stage2.stage2_progress_file`
 
 Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix .progress file. A matching task's completed count and pending receipt are imported into its own .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this task. New progress files use stage2_progress_dir; no arithmetic state is checkpointed.
 
+<a id="stage2_cpu_backend"></a>
+
+### cpu.backend
+
+```toml
+cpu.backend = "auto"
+```
+
+Type `string` · Range `[auto|gwpoly|ntt|plain]` · Worker override `[worker.N] stage2.cpu.backend` · Level `advanced`.
+
+Legacy v1 key `stage2.stage2_cpu_backend`
+
+CPU arithmetic for Edwards continuation. Auto uses GWNUM/polymult when available, then libecm. Override with --backend.
+
+<a id="stage2_cpu_memory_mib"></a>
+
+### cpu.memory_mib
+
+```toml
+cpu.memory_mib = 512
+```
+
+Type `u64` · Range `[1,1048576]` · Worker override `[worker.N] stage2.cpu.memory_mib` · Level `advanced`.
+
+Legacy v1 key `stage2.stage2_cpu_memory_mib`
+
+CPU Stage2 arithmetic memory budget in MiB. Override with --memory-mib.
+
+<a id="stage2_cpu_threads"></a>
+
+### cpu.threads
+
+```toml
+cpu.threads = 1
+```
+
+Type `u64` · Range `[1,1024]` · Worker override `[worker.N] stage2.cpu.threads` · Level `advanced`.
+
+Legacy v1 key `stage2.stage2_cpu_threads`
+
+CPU Stage2 thread count per worker. Override with --threads.
+
 <a id="stage2_auto_carrier"></a>
 
 ### cuda.auto_carrier
@@ -1627,7 +1669,7 @@ Type `string` · Range `<path>` · Worker override `[worker.N] stage2.results_fi
 
 Legacy v1 key `stage2.stage2_results_file`
 
-Optional per-curve Stage2 JSONL for new GPU queue tasks. Empty disables it for queue runs. Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint migration completes.
+Optional per-curve Stage2 JSONL for CPU and GPU queue tasks. Empty disables it for queue runs. Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint migration completes.
 
 <a id="stage2_save_dir"></a>
 
@@ -2111,7 +2153,7 @@ stage2_exe = ""
 
 Type `string` · Range `<exe>` · Worker override `not supported` · Level `advanced`.
 
-Shared executable path for Stage2 workers. Empty searches ecm_cuda_stage2.exe beside the GUI, then a single cuda-stage2* child package, then PATH. Multiple child packages require an explicit path. Each worker receives the same TOML and its own --worker index, using an inherited Stage2 stop event. A current Stage2 build is required; exe remains the separate Stage1 path.
+Stage2 executable for CPU, CUDA or OpenCL. Empty searches ecm_stage2.exe, then legacy ecm_cuda_stage2.exe, ecm_cpu_stage2.exe and ecm_opencl_stage2.exe in the workflow and GUI directories. A single matching child package can also be discovered. Set an explicit path to choose between installed packages.
 
 ### start_tab
 

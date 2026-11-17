@@ -97,7 +97,7 @@ def main():
                 if sha(unit['object'])!=unit['sha256'].lower():raise ValueError('Overlay device object changed')
         shutil.copy2(binary_dir/'manifest.json',out/'build_manifest.json')
     for name in ('ecm_cuda_stage2.exe', 'gmp-10.dll'):
-        shutil.copy2(binary_dir/name, out/'bin'/name)
+        shutil.copy2(a.exe if a.exe and name.endswith('.exe') else binary_dir/name, out/'bin'/name)
     exe = out/'bin/ecm_cuda_stage2.exe'
     if (not a.exe and sha(exe) != plan['exe_sha256']) or sha(out/'bin/gmp-10.dll') != plan['dll_sha256']:
         raise ValueError('Source executable/dependency changed')

@@ -12,6 +12,15 @@
 
 namespace ecm_gpu {
 #ifdef _WIN32
+inline bool cpu_stage2_worker(const std::filesystem::path &exe) {
+    // Image mapping is sufficient to inspect this executable's exported marker.
+    HMODULE image=LoadLibraryExW(exe.c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);
+    if(!image)return false;
+    const bool cpu=GetProcAddress(image,"ecm_cpu_stage2_worker")!=nullptr;
+    FreeLibrary(image);
+    return cpu;
+}
+
 // Driver enumeration only. No context allocation on either adapter.
 inline bool cuda_visible(int index) {
     const auto dll = LoadLibraryExW(L"nvcuda.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -34,9 +43,11 @@ inline BOOL WINAPI awaiting_worker(DWORD event) {
 inline std::optional<int> route(const std::filesystem::path& directory, bool stage2,
                                 bool current_cuda, const std::string& mode, int index) {
 #ifdef _WIN32
-    const auto peer = directory / (current_cuda
+    auto peer = directory / (current_cuda
         ? (stage2 ? L"ecm_opencl_stage2.exe" : L"ecm.exe")
-        : (stage2 ? L"ecm_cuda_stage2.exe" : L"ecm_cuda.exe"));
+        : (stage2 ? L"ecm_stage2.exe" : L"ecm_cuda.exe"));
+    if(stage2 && !current_cuda && (!std::filesystem::is_regular_file(peer) || cpu_stage2_worker(peer)))
+        peer=directory/L"ecm_cuda_stage2.exe"; // Legacy CUDA bundle.
     if (mode == "auto" && !std::filesystem::is_regular_file(peer)) return {};
     const bool cuda = mode == "auto" ? cuda_visible(index) : mode == "cuda";
     if (cuda == current_cuda) return {};

@@ -54,10 +54,16 @@ struct Context {
     Context(const mpz_t modulus,mpz_t f,const Options &opt,Stats &s,size_t max_poly):o(opt),stats(s),n(modulus),factor(f){
         try {
         guessCpuType();
+        int available_flags=CPU_FLAGS;
+#ifdef ECM_GWPOLY_TEST_NO_AVX512
+        // Qualification build: exercise the normal dispatch under an AVX2/FMA3 ceiling.
+        available_flags &= ~(CPU_AVX512F | CPU_AVX512PF | CPU_AVX512DQ | CPU_AVX512VL);
+#endif
         if(o.exponent){Integer m;mpz_set_ui(m.v,1);mpz_mul_2exp(m.v,m.v,o.exponent);mpz_sub_ui(m.v,m.v,1);
             if(!mpz_divisible_p(m.v,n))throw std::runtime_error("GW carrier does not contain actual N");}
         for(unsigned extra=0;extra<16;++extra){
             gwinit(&gw);ready=true;
+            gw.cpu_flags &= available_flags;
             gwset_using_polymult(&gw);gwset_num_threads(&gw,1);gwclear_use_benchmarks(&gw);
             // Select against unreserved capacity. Reserving the polynomial
             // margin subtracts it from EXTRA_BITS; testing it again afterwards
@@ -81,7 +87,7 @@ struct Context {
         binary.resize((static_cast<size_t>(gw.bit_length)+31)/32+8);
         gwuser_init_FFT1(&gw);
         polymult_init(&pm,&gw);pmready=true;
-        polymult_set_cpu_flags(&pm,CPU_FLAGS);polymult_set_max_num_threads(&pm,o.threads);
+        polymult_set_cpu_flags(&pm,available_flags);polymult_set_max_num_threads(&pm,o.threads);
         polymult_default_tuning(&pm,std::max(256,CPU_L2_CACHE_SIZE),std::max(6144,CPU_L3_CACHE_SIZE));
         // polymult launches its own internal tasks. A naked launch_helpers call
         // instead dispatches the caller's user callback, which we do not set.

@@ -286,8 +286,8 @@ Explicit Stage1 worker executable.
 
 默认值：`""`；类型：`string`。
 
-Explicit Stage2 worker executable.
-显式 Stage2 worker 程序路径。
+Explicit path to the CPU, CUDA or OpenCL Stage2 worker.
+指定 CPU、CUDA 或 OpenCL Stage2 worker 的程序路径。
 
 ## worker.count
 

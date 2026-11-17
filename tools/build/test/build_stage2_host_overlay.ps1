@@ -72,8 +72,8 @@ foreach($source in $units.Keys) {
     $entry.command=$command;$entry.output=$object;$entries[$source]=$entry
     $link=$link.Replace($linkObject,$object)
 }
-$exe=Join-Path $output 'ecm_cuda_stage2.exe'
-$link=$link.Replace((Join-Path $worker 'ecm_cuda_stage2.exe'),$exe)
+$exe=Join-Path $output 'ecm_stage2.exe'
+$link=$link.Replace((Join-Path $worker 'ecm_stage2.exe'),$exe)
 if(-not $link.Contains($exe)){throw 'Could not redirect test executable'}
 $commands+=$link;$commands+='exit /b %errorlevel%';$commands+=''
 $batch=Join-Path $output 'build.cmd'

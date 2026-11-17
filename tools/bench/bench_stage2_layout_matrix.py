@@ -104,7 +104,7 @@ def prepare(a):
     source=load(out/'defaults/plan.json')
     (out/'bin').mkdir();(out/'bin/.gitignore').write_text('*\n',encoding='ascii')
     for name in ('ecm_cuda_stage2.exe','gmp-10.dll'):
-        shutil.copy2(Path(source['exe']).parent/name,out/'bin'/name)
+        shutil.copy2(Path(source['exe']) if name.endswith('.exe') else Path(source['exe']).parent/name,out/'bin'/name)
     shutil.copy2(a.seed_profile,out/'initial_tune.toml')
     shutil.copy2(a.seed_profile,out/'active_tune.toml')
     shutil.copy2(__file__,out/'collector_snapshot.py')

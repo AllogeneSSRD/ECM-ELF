@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 namespace ecmgui {
+std::string adjacent_stage2_exe(const std::string &config_dir);
 class WorkerProc;
 class TomlFile;
 const char *state_name(WorkerRunState state);

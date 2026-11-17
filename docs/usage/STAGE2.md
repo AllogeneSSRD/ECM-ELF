@@ -34,7 +34,7 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 ## CUDA 入口
 
-`ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
+`ecm_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 
 直接读档和队列运行启动时均输出 `ECM-ELF x.y.z (Stage2)` 版本横幅，包括 `--dry-run` 和 `--plan-only`；GUI 从这个横幅读取实际 worker 版本。只输出机器数据的内部辅助入口保持其原有格式。
 
@@ -198,7 +198,7 @@ Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `l
 
 `--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`tune.legacy_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
-- [ecm_cuda_stage2_main.cpp](../../src/ecm/stage2/cuda/main.cpp#L175)：`records`；[队列字段](../../src/ecm/stage2/cuda/main.cpp#L395)：`queue_fields`。
+- [存档与队列字段](../../src/ecm/stage2/input.cpp) 由 `records` 和 `queue_fields` 读取；[共享队列驱动](../../src/ecm/stage2/queue.cpp) 负责恢复和发布。
 - [Stage2 进度接口](../../include/ecm/io/stage2_checkpoint.h)与[存储实现](../../src/io/stage2_checkpoint.cpp)：原子进度、结果持久化和旧回执兼容。
 - [ecm_stage2_console.h](../../src/ecm/stage2/console.h)：阶段和内存摘要。
 - [Stage2 管线](../architecture/STAGE2.md)、[Auto B2](../architecture/AUTO_B2.md)、[构建](BUILD.md)。

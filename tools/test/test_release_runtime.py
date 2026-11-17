@@ -91,7 +91,9 @@ def main():
     collector=out/'collector.py';collector.write_bytes(Path(__file__).read_bytes())
     result=dict(complete=False,device=gpu,profiles=profiles,selection=dict(stage=args.stage,tiers=args.tiers,sampling_only=args.sampling_only),
         inputs={str(observer):sha(observer),str(inspector):sha(inspector),str(Path(__file__).resolve()):sha(__file__)},cases=[],samples=[],unverified=['Maxwell hardware','Pascal hardware','old drivers','native sm60','native sm80'])
-    for stage,filename in [('stage1','ecm_cuda.exe'),('stage2','ecm_cuda_stage2.exe')]:
+    stage2_ref = baseline/'stage2/ecm_stage2.exe'
+    if not stage2_ref.exists():stage2_ref=baseline/'stage2/ecm_cuda_stage2.exe'
+    for stage,filename in [('stage1','ecm_cuda.exe'),('stage2',stage2_ref.name)]:
         path=baseline/stage/filename;result['inputs'][str(path)]=sha(path)
     binaries={}
     inspectors={}
@@ -215,7 +217,7 @@ def main():
         assert fixtures,'Stage2 requires generated Stage1 fixtures or --fixtures'
         for fixture in fixtures:
             arguments=['--save',fixture['save'],'--b2',13230,'--d',210,'--device',args.device,'--curves',4,'--carrier-exponent',0,'--short-calibration',0,'--tune-runtime',0,'--factor-only','--results','$RUN/result.jsonl','--log','$RUN/engine.log','--debug-log-file','$RUN/debug.log','--log-level','debug']
-            reference,text,_=invoke(baseline/'stage2/ecm_cuda_stage2.exe','reference/stage2_'+fixture['name'],arguments,observe=False)
+            reference,text,_=invoke(stage2_ref,'reference/stage2_'+fixture['name'],arguments,observe=False)
             expected=[stable(normalize_result(json.loads(line))) for line in (reference/'result.jsonl').read_text().splitlines()]
             leaves=re.findall(r'^target_descent_values: (.*)$',text,re.M)
             for profile in profiles:

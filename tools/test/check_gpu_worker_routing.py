@@ -19,7 +19,7 @@ def main():
                           '[workers.2.stage1]\nstage1_backend="opencl"\n'
                           '[workers.2.stage2]\nstage2_backend="opencl"\n', encoding='utf-8')
         for stage, cuda, opencl in [(1,'ecm_cuda.exe','ecm.exe'),
-                                     (2,'ecm_cuda_stage2.exe','ecm_opencl_stage2.exe')]:
+                                     (2,'ecm_stage2.exe','ecm_opencl_stage2.exe')]:
             query = ['--gpu-info','-d'] if stage == 1 else ['--cost-device-info','--device']
             for exe, worker, override, masked, expected in [
                     (cuda,2,None,False,'opencl'), (opencl,1,None,False,'cuda'),
@@ -62,7 +62,7 @@ def main():
             out.write('stage2_backend="opencl"\nstage2_d=30\n')
         (queue/'input.save').write_text(save_line((1<<127)-1)*3,encoding='utf-8')
         (queue/'worktodo.txt').write_text('ECMSTAGE2=1,2,127,-1,"input.save",300,0,3\n',encoding='utf-8')
-        stop_after_first_start(bundle/'ecm_cuda_stage2.exe',queue)
+        stop_after_first_start(bundle/'ecm_stage2.exe',queue)
         rows = records(queue)
         assert len(rows)==1 and rows[0]['stage2-engine']['name']=='opencl-ntt'
         print('Forwarded GUI stop: one committed OpenCL curve')

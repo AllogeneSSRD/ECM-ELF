@@ -22,7 +22,9 @@ def main():
     def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
     if not data['complete'] or data['failures']:raise ValueError('Study incomplete or failed')
     if len(data['runs'])!=data['expected_invocations']:raise ValueError('Invocation count mismatch')
-    if sha(a.study/'bin/ecm_cpu_stage2.exe')!=data['exe_sha256'] or sha(a.study/'bin/gmp-10.dll')!=data['dll_sha256']:
+    worker=a.study/'bin/ecm_stage2.exe'
+    if not worker.exists():worker=a.study/'bin/ecm_cpu_stage2.exe'
+    if sha(worker)!=data['exe_sha256'] or sha(a.study/'bin/gmp-10.dll')!=data['dll_sha256']:
         raise ValueError('Frozen binary changed')
     if sha(a.study/'source_manifest.json')!=data['source_manifest_sha256']:raise ValueError('Source manifest changed')
     manifest=json.loads((a.study/'source_manifest.json').read_bytes())

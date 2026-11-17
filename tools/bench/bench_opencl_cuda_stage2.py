@@ -74,7 +74,7 @@ def main():
         raise SystemExit('Resume requires an interrupted matrix with a manifest')
     a.out.mkdir(parents=True,exist_ok=a.resume)
     binaries={}
-    for backend,build,name in [('opencl',a.opencl_build,'ecm_opencl_stage2.exe'),('cuda',a.cuda_build,'ecm_cuda_stage2.exe')]:
+    for backend,build,name in [('opencl',a.opencl_build,'ecm_opencl_stage2.exe'),('cuda',a.cuda_build,'ecm_stage2.exe')]:
         dest=a.out/'bin'/backend
         if not a.resume:
             dest.mkdir(parents=True)

@@ -15,6 +15,12 @@ endif()
 file(SHA256 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp" _ecm_source_id)
 foreach(_shared
     include/ecm/stage2_gw_abi.h
+    src/ecm/stage2/queue.cpp
+    src/ecm/stage2/process_control.cpp
+    src/ecm/stage2/input.cpp
+    src/ecm/stage2/queue_paths.h
+    src/io/worktodo.cpp
+    src/io/stage2_checkpoint.cpp
     src/ecm/stage2/cpu/gwpoly_loader.cpp
     include/ecm/io/results.h
     src/io/results.cpp
@@ -42,6 +48,14 @@ if(ECM_CPU_GW_POLY)
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp")
 add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp"
+    "${_ecm_repo}/src/ecm/stage2/queue.cpp"
+    "${_ecm_repo}/src/ecm/stage2/process_control.cpp"
+    "${_ecm_repo}/src/ecm/stage2/input.cpp"
+    "${_ecm_repo}/src/ecm/platform/fingerprint.cpp"
+    "${_ecm_repo}/src/io/stage2_checkpoint.cpp"
+    "${_ecm_repo}/src/io/worktodo.cpp"
+    "${_ecm_repo}/src/io/config.cpp"
+    "${_ecm_repo}/src/ecm/stage1/selection.cpp"
     "${_ecm_repo}/src/io/results.cpp"
     "${_ecm_repo}/src/io/save.cpp"
     "${_ecm_repo}/src/io/files.cpp"
@@ -50,6 +64,12 @@ add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp"
     "${_ecm_repo}/src/ecm/platform/logging.cpp"
     "${_ecm_repo}/src/ecm/application/configuration/runtime.cpp"
     "${_ecm_repo}/src/ecm/platform/stop.cpp")
+set_target_properties(ecm_cpu_stage2 PROPERTIES OUTPUT_NAME ecm_stage2)
+get_filename_component(_ecm_gmp_lib_dir "${GMP_LIBRARY}" DIRECTORY)
+if(EXISTS "${_ecm_gmp_lib_dir}/../bin/gmp-10.dll")
+    add_custom_command(TARGET ecm_cpu_stage2 POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${_ecm_gmp_lib_dir}/../bin/gmp-10.dll" "$<TARGET_FILE_DIR:ecm_cpu_stage2>")
+endif()
 target_compile_features(ecm_cpu_stage2 PRIVATE cxx_std_17)
 # Public host contracts; <ecm.h> remains the third-party libecm header.
 target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include" "${_ecm_repo}/src")
