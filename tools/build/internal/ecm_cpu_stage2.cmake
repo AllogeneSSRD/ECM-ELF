@@ -14,6 +14,8 @@ if(NOT _ecm_build_id)
 endif()
 file(SHA256 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp" _ecm_source_id)
 foreach(_shared
+    include/ecm/stage2_gw_abi.h
+    src/ecm/stage2/cpu/gwpoly_loader.cpp
     include/ecm/io/results.h
     src/io/results.cpp
     src/io/json.h
@@ -54,6 +56,9 @@ target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include" "${_ecm
 target_compile_definitions(ecm_cpu_stage2 PRIVATE _CRT_SECURE_NO_WARNINGS "ECM_BUILD_ID=\"${_ecm_build_id}\"" "ECM_LIBECM_NTT_THRESHOLD=${_ecm_ntt_threshold}")
 target_link_libraries(ecm_cpu_stage2 PRIVATE ecm_cpu_library)
 target_compile_options(ecm_cpu_stage2 PRIVATE /O2 /openmp)
+if(NOT ECM_CPU_GW_POLY)
+    target_sources(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/src/ecm/stage2/cpu/gwpoly_loader.cpp")
+endif()
 if(ECM_CPU_GW_POLY)
     foreach(_library gwnum64 polymult64)
         if(NOT EXISTS "${ECM_GWNUM_ROOT}/${_library}.lib")
@@ -63,6 +68,5 @@ if(ECM_CPU_GW_POLY)
     set_property(TARGET ecm_cpu_stage2 ecm_cpu_library PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)
     target_sources(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/src/ecm/stage2/cpu/gwpoly.cpp")
     target_include_directories(ecm_cpu_stage2 PRIVATE "${ECM_GWNUM_ROOT}")
-    target_compile_definitions(ecm_cpu_stage2 PRIVATE ECM_CPU_HAVE_GWPOLY=1)
     target_link_libraries(ecm_cpu_stage2 PRIVATE "${ECM_GWNUM_ROOT}/polymult64.lib" "${ECM_GWNUM_ROOT}/gwnum64.lib" advapi32)
 endif()

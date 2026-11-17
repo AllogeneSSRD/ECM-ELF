@@ -10,7 +10,8 @@
 #>
 param(
     [string]$GwNumRoot = '.refactor/p95v3106b01.source/gwnum',
-    [string]$BuildDir = 'build_dev/gwnum_local'
+    [string]$BuildDir = 'build_dev/gwnum_local',
+    [switch]$Stage2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,8 +53,17 @@ if (-not (Test-Path -LiteralPath $library -PathType Leaf)) {
     }
 }
 
+if ($Stage2 -and -not (Test-Path (Join-Path $GwNumRoot 'polymult64.lib'))) {
+    Push-Location -LiteralPath $GwNumRoot
+    try {
+        Initialize-EcmBuildDirectory (Join-Path $GwNumRoot 'amd64/release/polymult')
+        & nmake.exe /f compil64 polymult64.lib
+        if ($LASTEXITCODE) { throw 'GWNUM polymult build failed' }
+    } finally { Pop-Location }
+}
+$poly = if ($Stage2) { 'ON' } else { 'OFF' }
 Initialize-EcmBuildDirectory $BuildDir
-& $cmake -S (Join-Path $PSScriptRoot 'gwnum') -B $BuildDir -G 'NMake Makefiles' '-DCMAKE_BUILD_TYPE=Release' "-DECM_GWNUM_ROOT=$GwNumRoot"
+& $cmake -S (Join-Path $PSScriptRoot 'gwnum') -B $BuildDir -G 'NMake Makefiles' '-DCMAKE_BUILD_TYPE=Release' "-DECM_GWNUM_ROOT=$GwNumRoot" "-DECM_GW_STAGE2=$poly"
 if ($LASTEXITCODE -ne 0) { throw 'GWNUM DLL configuration failed.' }
 & $cmake --build $BuildDir --target ecm_gwnum
 if ($LASTEXITCODE -ne 0) { throw 'GWNUM DLL build failed.' }
@@ -61,4 +71,5 @@ if ($LASTEXITCODE -ne 0) { throw 'GWNUM DLL build failed.' }
 $dll = Join-Path $BuildDir 'gwnum.dll'
 if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw "Build output missing: $dll" }
 Write-Host "Built $dll"
-Write-Host 'Copy gwnum.dll beside ecm.exe or ecm_cuda.exe and select --impl gwnum.'
+if ($Stage2) { Write-Host 'Copy gwnum.dll beside ecm_cpu_stage2.exe and select --backend gwpoly.' }
+else { Write-Host 'Copy gwnum.dll beside the Stage1 worker and select --impl gwnum.' }

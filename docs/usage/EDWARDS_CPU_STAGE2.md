@@ -4,7 +4,16 @@ CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=4
 
 ## 构建与运行
 
-Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8 -GwPoly`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP、`.refactor/gmp-ecm` 源码，以及 `.refactor/p95v3106b01.source/gwnum` 中匹配头文件的 `gwnum64.lib` / `polymult64.lib`，不需要 CUDA。GW 构建按这两个本地库使用静态 MSVC CRT（/MT）；不附加 `-GwPoly` 可构建仅有 libecm 的版本。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR` 和 `ECM_GWNUM_ROOT`；根 CMake 提供默认关闭的 `ECM_BUILD_CPU_STAGE2`，并以 `ECM_CPU_GW_POLY=ON` 启用 GW 后端。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。支持 TOML 中的结果身份和提交文件配置；此程序尚未纳入 CUDA 发布包、GUI 或 Stage2 队列入口。
+Windows x64 使用 MSVC、CMake、Ninja、GMP 和本地 GMP-ECM 源码构建 worker。使用 GWNUM 时，在 x64 Developer PowerShell 从仓库根目录构建 31.6 DLL，然后复制到 worker 旁。两个上游 x64 库来自 `.refactor/p95v3106b01.source/gwnum`，可用 `-GwNumRoot` 指定其他本地 31.6 路径。
+
+```powershell
+tools/build/test/build_cpu_stage2.ps1
+tools/build/build_gwnum_local.ps1 -Stage2
+Copy-Item build_dev/gwnum_local/gwnum.dll build_dev/build_cpu_stage2/native/
+build_dev/build_cpu_stage2/native/ecm_cpu_stage2.exe --version
+```
+
+`--version` 显示 worker 版本、加载的 DLL 构建指纹、Stage2 ABI、GWNUM 版本和 CPU 支持的指令集。每条执行 GW 算术的曲线在建计划后记录系数 FFT 描述与外层 polymult 指令集，内部 JSONL 对应 `fft-description` 和 `polymult-isa`。DLL 同时导出 Stage1 ABI v1。静态对照用 `tools/build/test/build_cpu_stage2.ps1 -GwPoly -Build build_dev/build_cpu_stage2_static` 单独构建。CPU worker 支持 TOML 结果配置及独立 CLI。
 
 本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/ecm/stage2/edwards/cpu/main.cpp)、[严格存档读取](../../include/ecm/io/save.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 
@@ -17,7 +26,7 @@ ecm_cpu_stage2.exe --save ed.save --b2 100000000 --results results.jsonl --submi
 
 Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保存的 N 确实等于 2^127−1。一般整数可省略 exponent；梅森余因子必须显式提供 `--exponent P` 和可重复的 `--known-factor DECIMAL`，程序验证 `(2^P−1)/∏known-factors = N`，不会按位宽猜指数。输入存档与结果文件不能指向同一个文件。
 
-`--backend auto|ntt|plain|gwpoly` 默认 auto。启用 GW 构建时，auto 选择 gwpoly；否则沿用 libecm 的 `NTT_SIZE_THRESHOLD=30`，不超过 30 个 GMP limb 使用 NTT，更宽使用 plain。显式选项可覆盖。GW 后端直接调用算术库，由本项目生成点序列、F/G 产品树、Newton 倒数、模 F 折叠和 scaled 下降，不启动 Prime95。
+`--backend auto|ntt|plain|gwpoly` 默认 auto。静态构建或加载到兼容 Stage2 DLL 时，auto 选择 gwpoly。DLL 缺失或只有 Stage1 导出时，显式 gwpoly 报错，auto 沿用 libecm 的 `NTT_SIZE_THRESHOLD=30`，不超过 30 个 GMP limb 使用 NTT，更宽使用 plain。显式选项可覆盖。GW 后端直接调用算术库，由本项目生成点序列、F/G 产品树、Newton 倒数、模 F 折叠和 scaled 下降，不启动 Prime95。
 
 `--threads` 默认 1。gwpoly 在线程间分配点序列与底层产品树，并调用 polymult 的多线程乘法；各线程独立持有 GW 上下文及可能被原地变换的点常量。曲线批次逐条处理。libecm 的此选项仅设置 OpenMP 上限：plain 主路径串行，NTT 只有局部表示转换并行，核心 NTT 并行仍关闭，不能据此宣称四核 Stage2。
 
@@ -55,7 +64,7 @@ GW 后端直接使用保存的 x 和 a24；libecm 设置 A、保存的 x 和 `B1
 
 `--results` 保存逐曲线内部 JSONL，包含引擎、后端、时间、save 行号、真实构建身份和公开 CRC32。libecm 的内部 `fft-length=0`；gwpoly 记录实际 GW FFT 长度，并在 `stage2-engine` 中记录 init/main、最大舍入误差和额外 GMP 校验数。实际 D/P 紧随 B2。这些内部记录不能直接作为手工提交文件。
 
-`--submission` 另存 Prime95 ECM 字段结构的 `results.json.txt`，使用正的参考 FFT 长度、数字平台号及真实 ECM-ELF 程序名；gwpoly 另外输出实际 `stage2-fft-length`，NF 曲线合并为不可变批次，省略内部扩展、CRC32 和 `security-code`。TOML 身份、目标关系检查、账本去重和无算术恢复命令统一见 [ECM 结果输出](ECM_RESULTS.md)。已接受的 Montgomery 批次不等于本后端或 Edwards 的服务器验收，详见结果主题。
+`--submission` 另存 Prime95 ECM 字段结构的 `results.json.txt`，使用正的参考 FFT 长度、数字平台号及真实 ECM-ELF 程序名；gwpoly 另外输出实际 `stage2-fft-length`，NF 曲线合并为不可变批次，按提交字段生成 CRC32，省略内部扩展与 `security-code`。TOML 身份、目标关系检查、账本去重和无算术恢复命令统一见 [ECM 结果输出](ECM_RESULTS.md)。已接受的 Montgomery 批次不等于本后端或 Edwards 的服务器验收，详见结果主题。
 
 这里的实际 Stage2 FFT 长度是 GWNUM 每个系数模运算所用的长度，不是外层多项式次数 P，也不是 GPU 打包多项式的 NTT 长度。
 

@@ -1,8 +1,21 @@
 # CPU GW 多项式 Stage2 性能
 
-本页维护 0.33.0 `gwpoly` 后端的完整 Stage2 性能。它从 Edwards Stage1 文本 save 直接继续，使用 GWNUM/polymult 的多线程快速多项式算术。使用与构建见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md)，数学见 [多项式 Stage2](../reference/ECM_STAGE2_MATH.md)，保留的开发证据见 [草稿](../development/CPU_GW_POLY_STAGE2_DRAFT.md)。共享底层算术库不等于具有 Prime95 的全部功能或相同性能。
+本页维护 0.65.0 本地 DLL 与静态 `gwpoly` 的配对测试，以及 0.33.0 的 Prime95 历史对照。它从 Edwards Stage1 文本 save 直接继续，使用 GWNUM/polymult 的多线程快速多项式算术。使用与构建见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md)，数学见 [多项式 Stage2](../reference/ECM_STAGE2_MATH.md)，保留的开发证据见 [草稿](../development/CPU_GW_POLY_STAGE2_DRAFT.md)。共享底层算术库不等于具有 Prime95 的全部功能或相同性能。
 
-## 结果
+## 0.65.0 本地 DLL 与静态链接
+
+同一 Ryzen AI 9 HX 370、Windows x64，MSVC 19.51 Release，亲和性 `0xAA`，单曲线、512 MiB 规划预算。固定输入为完整梅森数、Edwards AM、sigma=17、B1=1000，均从保存的完成点开始。每格先由两个版本各执行一次三点 GMP 乘积校验，再交替执行各 10 次普通完整 NF，保留全部正式样本。下表为单曲线中位秒数，包含曲线重构、GW 初始化、算术、GCD、检查和引擎清理。读档、进程/DLL 加载和发布另属外层。CPU 功耗、有效时钟和温度未采样。
+
+| 输入 | B2 | D / P | 线程 | 静态 / s | DLL / s | DLL / 静态 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| M127 | 1,000,000,000 | 60060 / 5760 | 1 | 0.6656 | 0.6627 | 0.996 |
+| M127 | 1,000,000,000 | 60060 / 5760 | 4 | 0.5367 | 0.5329 | 0.993 |
+| M2203 | 100,000,000 | 30030 / 2880 | 1 | 0.2640 | 0.2611 | 0.989 |
+| M2203 | 100,000,000 | 30030 / 2880 | 4 | 0.2064 | 0.2047 | 0.992 |
+
+这四格均满足第一阶段 DLL/静态 ≤1.03 的中位耗时目标。小幅差值包含运行波动。M127 的系数 FFT 为 FMA3、长度 32，M2203 为 AVX-512、长度 128，二者的 polymult 均选择 AVX-512。两侧加载相同版本的 GWNUM 31.6，动态版加载的 DLL 构建指纹为 `9bb169d41d5438f0`。每个汇总保存静态 EXE、动态 EXE、GMP DLL、GWNUM DLL、输入 save 的 SHA256 和逐次观测，目录内附冻结二进制。Prime95 同机复测属于下一阶段。[M127 证据](../../data/experiments/cpu_stage2_dll_065/m127_final/summary.json) · [M2203 证据](../../data/experiments/cpu_stage2_dll_065/m2203_final/summary.json) · [配对采集器](../../tools/bench/compare_cpu_stage2_gw.py)
+
+## 0.33.0 与 Prime95 历史对照
 
 正式范围 36/36 次完成，全部为完整 NF；12 个单元各 n=3，没有丢弃首轮。下表为完整 Stage2 的中位秒数，最小/最大值保留在图及 CSV 中。Prime95 每格 n=1。
 

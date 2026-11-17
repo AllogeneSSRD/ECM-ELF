@@ -86,6 +86,12 @@ struct Context {
         // polymult launches its own internal tasks. A naked launch_helpers call
         // instead dispatches the caller's user callback, which we do not set.
         stats.fft_length=gwfftlen(&gw);
+        gwfft_description(&gw,stats.fft_description);
+        // Match the upstream HELPER_POLYMULT_LINE dispatch after tuning.
+        const auto flags = pm.cpu_flags;
+        const char* isa = (flags & CPU_AVX512F) ? "AVX-512" : (flags & CPU_FMA3) ? "FMA3" :
+                          (flags & CPU_AVX) ? "AVX" : "SSE2";
+        std::snprintf(stats.polymult_isa,sizeof(stats.polymult_isa),"%s",isa);
         }catch(...){if(pmready)polymult_done(&pm);if(ready)gwdone(&gw);throw;}
     }
     ~Context(){if(pmready)polymult_done(&pm);for(auto &plan:plans)std::free(plan.second);if(ready)gwdone(&gw);}
@@ -252,7 +258,7 @@ struct Points {
 };
 template<class Function> void parallel_points(Context &parent,size_t count,Function function,size_t min_chunk=256){
     struct Worker {
-        Integer factor;Stats stats;Context context;std::exception_ptr error;
+        Integer factor;Stats stats{};Context context;std::exception_ptr error;
         explicit Worker(Context &p):context(p,factor.v,stats){}
     };
     const size_t threads=std::min<size_t>(parent.o.threads,std::max<size_t>(1,count/min_chunk));
@@ -366,6 +372,23 @@ uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
 }
 }
 
+const char* cpu() {
+    static const std::string description = [] {
+        guessCpuType();
+        std::string name(CPU_BRAND);
+        name.erase(name.find_last_not_of(' ') + 1);
+        name += " supported:";
+        if (CPU_FLAGS & CPU_SSE2) name += " SSE2";
+        if (CPU_FLAGS & CPU_AVX) name += " AVX";
+        if (CPU_FLAGS & CPU_FMA3) name += " FMA3";
+        if (CPU_FLAGS & CPU_AVX2) name += " AVX2";
+        if (CPU_FLAGS & CPU_AVX512F) name += " AVX-512F";
+        return name;
+    }();
+    return description.c_str();
+}
+const char* identity(){return "static gwpoly";}
+const char* load_error(){return nullptr;}
 const char *version(){return GWNUM_VERSION;}
 bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             uint64_t b1,uint64_t b2,const Options &o,Stats &stats){
@@ -509,7 +532,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
 
 void selftest(unsigned threads){
     Integer n,f,x,y,z;mpz_set_ui(n.v,1000003);mpz_mul_ui(n.v,n.v,1000033);
-    Options o;o.threads=threads;Stats stats;Context c(n.v,f.v,o,stats,512);
+    Options o;o.threads=threads;Stats stats{};Context c(n.v,f.v,o,stats,512);
     for(size_t count:{1u,2u,3u,4u,5u,8u,17u,32u,65u,129u,257u}){
         Array roots(c.gw,count);std::vector<uint64_t> expected_roots(count);
         for(size_t i=0;i<count;++i){expected_roots[i]=7919*(i+1)+17;u64togw(&c.gw,expected_roots[i],roots[i]);}

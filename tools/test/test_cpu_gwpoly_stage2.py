@@ -17,15 +17,18 @@ spec=importlib.util.spec_from_file_location('edwards_oracle',ROOT/'tools/test/te
 oracle=importlib.util.module_from_spec(spec);spec.loader.exec_module(oracle)
 
 
+def verify_crc(row):
+    target=str(row['exponent']) if 'exponent' in row else 'N='+str(row['N'])
+    slots=[target,'ECM',','.join(row.get('factors',[])),','.join(row.get('known-factors',[])),str(row['b1']),str(row.get('b2','')),
+           'E'+str(row['Edwards'].get('sigma','')),str(row['fft-length']),'invariant:0',row['program']['name'],row['program']['version'],
+           '','','Windows','x86_64',row['timestamp']]
+    assert row['checksum']==dict(version=1,checksum=f'{zlib.crc32(";".join(slots).encode()):08X}')
+
 def verify(row,n):
     assert row['program']['name']=='ECM-ELF' and re.fullmatch(r'\d+\.\d+\.\d+',row['program']['version'])
     assert row['stage2-engine']['name']=='gwnum-polymult' and row['stage2-engine']['backend']=='gwpoly'
     assert row['errors']['invariant']==0 and 'security-code' not in row
-    target=str(row['exponent']) if 'exponent' in row else 'N='+str(row['N'])
-    slots=[target,'ECM',','.join(row.get('factors',[])),','.join(row.get('known-factors',[])),str(row['b1']),str(row.get('b2','')),
-           'E'+str(row['Edwards']['sigma']),str(row['fft-length']),'invariant:0',row['program']['name'],row['program']['version'],
-           '','','Windows','x86_64',row['timestamp']]
-    assert row['checksum']==dict(version=1,checksum=f'{zlib.crc32(";".join(slots).encode()):08X}')
+    verify_crc(row)
     if row['status']=='F':assert all(1<int(f)<n and n%int(f)==0 for f in row['factors'])
     else:assert row['status']=='NF' and 'factors' not in row
     if row.get('stage')!=1:
@@ -40,7 +43,7 @@ def main():
     p.add_argument('--output',type=Path,required=True);p.add_argument('--gpu',action='store_true')
     p.add_argument('--reference-study',type=Path,help='Optional frozen exact-N study for 10232/16272-bit GMP projection gates')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
-    s1=a.stage1.resolve();s2=a.stage2.resolve();ini=out/'empty.ini';ini.write_text('user=\ncomputer=\n')
+    s1=a.stage1.resolve();s2=a.stage2.resolve();ini=out/'empty.toml';ini.write_text('')
     sha=lambda path:hashlib.sha256(Path(path).read_bytes()).hexdigest()
     report=dict(complete=False,stage1_sha256=sha(s1),stage2_sha256=sha(s2),test_sha256=sha(__file__),checks=[])
     def call(name,cmd,data=None,good=True):
@@ -58,7 +61,7 @@ def main():
         return path
     def run(name,path,n,b2=40000,extra=(),good=True):
         result=out/(name+'.jsonl');submission=out/(name+'.json.txt')
-        call(name,[s2,'--ini',ini,'--save',path,'--backend','gwpoly','--threads',4,'--b2',b2,
+        call(name,[s2,'--config',ini,'--save',path,'--backend','gwpoly','--threads',4,'--b2',b2,
             '--results',result,'--submission',submission,'--gw-check',*extra],good=good)
         rows=[json.loads(line) for line in result.read_text().splitlines()] if result.exists() else []
         for row in rows:verify(row,n)
@@ -67,9 +70,10 @@ def main():
     n=(1<<127)-1;cpu=save('cpu_m127',n,count=2)
     rows=run('batch',cpu,n,extra=['--exponent',127]);assert len(rows)==2 and all(r['status']=='NF' for r in rows)
     public=json.loads((out/'batch.json.txt').read_text());assert public['curves']==2 and public['stage2-fft-length']>0
-    assert not {'checksum','security-code'}&public.keys()
+    verify_crc(public)
+    assert 'security-code' not in public
     auto=out/'automatic.jsonl'
-    call('automatic',[s2,'--ini',ini,'--save',cpu,'--backend','auto','--curves',1,'--b2',40000,
+    call('automatic',[s2,'--config',ini,'--save',cpu,'--backend','auto','--curves',1,'--b2',40000,
         '--results',auto,'--submission',out/'automatic.json.txt'])
     verify(json.loads(auto.read_text()),n)
     for d in (6,30,60,210):
@@ -122,7 +126,7 @@ def main():
     try:
         result=out/'stopped.jsonl'
         with (out/'stopped.log').open('wb') as log:
-            proc=subprocess.Popen(list(map(str,[s2,'--ini',ini,'--save',cpu,'--curves',1,'--backend','gwpoly','--b2',10**12,
+            proc=subprocess.Popen(list(map(str,[s2,'--config',ini,'--save',cpu,'--curves',1,'--backend','gwpoly','--b2',10**12,
                 '--threads',4,'--results',result,'--submission',out/'stopped.json.txt','--stop-handle',event])),
                 close_fds=False,stdout=log,stderr=subprocess.STDOUT,cwd=out)
             time.sleep(.35);kernel.SetEvent(event);assert proc.wait(timeout=60)==130

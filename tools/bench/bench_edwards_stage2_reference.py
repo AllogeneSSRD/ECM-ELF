@@ -159,6 +159,9 @@ def run(a,out):
     if sha(out/'bin/gmp-10.dll')!=report['dll_sha256']:raise ValueError('GMP changed')
     collector=out/('collector_'+sha(__file__)+'.py')
     if not collector.exists():shutil.copy2(__file__,collector)
+    cpu_config=out/'cpu.toml';cpu_config.write_text('',encoding='utf-8')
+    cpu_help=subprocess.check_output([report['binaries']['cpu']['path'],'--help'])
+    cpu_uses_toml=b'--config' in cpu_help
     ini=out/'bench.ini'
     settings='user=\ncomputer=\nstage2_tune_runtime=0\nstage2_auto_carrier=0\n'
     if ini.exists() and ini.read_text()!=settings:raise ValueError('Benchmark INI changed')
@@ -196,7 +199,8 @@ def run(a,out):
                     if prefix.with_suffix('.driver.log').exists():raise ValueError('Unrecorded invocation exists; preserve evidence: '+tag)
                     if sha(case['save'])!=case['save_sha256']:raise ValueError('Input save changed')
                     gpu=engine.startswith('gpu');exe=report['binaries']['gpu' if gpu else 'cpu']['path']
-                    cmd=[exe,'--ini',str(ini),'--save',case['save'],'--b2',str(reference['b2']),'--curves','1',
+                    use_toml=not gpu and cpu_uses_toml
+                    cmd=[exe,'--config' if use_toml else '--ini',str(cpu_config if use_toml else ini),'--save',case['save'],'--b2',str(reference['b2']),'--curves','1',
                          '--results',str(prefix.with_suffix('.jsonl')),'--submission',str(prefix.with_suffix('.json.txt')),
                          '--exponent',str(case['exponent'])]
                     for f in case['known']:cmd+=['--known-factor',str(f)]

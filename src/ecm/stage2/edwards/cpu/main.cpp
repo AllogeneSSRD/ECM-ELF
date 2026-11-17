@@ -6,6 +6,7 @@
 #include "ecm/curve/edwards.h"
 #include "ecm/platform/stop.h"
 #include "../../../application/configuration/generated/ecm_config_generated.h"
+#include "ecm/platform/program_version.h"
 #include <chrono>
 #include <charconv>
 #include <ctime>
@@ -13,9 +14,7 @@
 #include <iostream>
 #include <sstream>
 #include <omp.h>
-#ifdef ECM_CPU_HAVE_GWPOLY
 #include "../../cpu/gwpoly.h"
-#endif
 
 #ifndef ECM_BUILD_ID
 #define ECM_BUILD_ID "development"
@@ -63,6 +62,13 @@ Options options(int argc,char **argv) {
     o.submission=(ini.parent_path()/filename).string();
     for(int i=1;i<argc;++i) {
         std::string key=argv[i];
+        if(key=="--version") {
+            std::cout << ecm_program::name << ' ' << ecm_program::version << " CPU Stage2 " << ECM_BUILD_ID << '\n';
+            if (const char* error = ecm_gwpoly::load_error()) std::cout << error << '\n';
+            else std::cout << ecm_gwpoly::identity() << " GWNUM=" << ecm_gwpoly::version()
+                           << " CPU=" << ecm_gwpoly::cpu() << '\n';
+            std::exit(0);
+        }
         if(key=="--help") {
             std::cout<<"CPU Edwards Stage2\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
                 "[--threads 1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
@@ -70,11 +76,8 @@ Options options(int argc,char **argv) {
                 "--export-results --submission FILE regenerates owned submission output without arithmetic\n"
                 "[--exponent P] [--known-factor DECIMAL (repeatable)] [--user NAME] [--computer NAME] [--aid HEX32]\n"
                 "B2 limit: libecm=1000000000000, gwpoly=1000000000000000\n";
-#ifdef ECM_CPU_HAVE_GWPOLY
-            std::cout<<"auto selects gwpoly\n";
-#else
-            std::cout<<"auto selects libecm NTT/plain; gwpoly requires -GwPoly build\n";
-#endif
+            std::cout<<"--version shows loaded GW build and CPU; auto selects available gwpoly or libecm\n";
+
             std::exit(0);
         }
         if(key=="--dry-run"){o.dry=true;continue;}
@@ -95,15 +98,12 @@ Options options(int argc,char **argv) {
         else throw std::runtime_error("unknown option: "+key);
     }
     uint64_t max_b2=1000000000000ull;
-#ifdef ECM_CPU_HAVE_GWPOLY
-    if(o.backend=="gwpoly" || o.backend=="auto")max_b2=ecm_gwpoly::max_b2;
-#endif
+    if ((o.backend=="gwpoly" || o.gw_selftest) && ecm_gwpoly::load_error())
+        throw std::runtime_error(ecm_gwpoly::load_error());
+    if(o.backend=="gwpoly" || (o.backend=="auto" && !ecm_gwpoly::load_error()))max_b2=ecm_gwpoly::max_b2;
     if((!o.export_only && !o.gw_selftest && (o.save.empty() || !o.b2)) || o.b2>max_b2 || !o.count || !o.threads || o.threads>1024 || !o.memory || o.memory>1048576 ||
        (o.backend!="auto" && o.backend!="ntt" && o.backend!="plain" && o.backend!="gwpoly"))throw std::runtime_error("invalid options; see --help");
     if((o.d || o.gw_check) && o.backend!="gwpoly")throw std::runtime_error("--d/--gw-check require --backend gwpoly");
-#ifndef ECM_CPU_HAVE_GWPOLY
-    if(o.backend=="gwpoly" || o.gw_selftest)throw std::runtime_error("GW polynomial backend not compiled; build with -GwPoly");
-#endif
     if(!o.aid.empty() && (o.aid.size()!=32 || o.aid.find_first_not_of("0123456789abcdefABCDEF")!=o.aid.npos))throw std::runtime_error("AID must contain 32 hex digits");
     if(o.exponent>1000000000 || (!o.known.empty() && !o.exponent))throw std::runtime_error("known factors require --exponent (max 1000000000)");
     if(!o.export_only && !o.gw_selftest && std::filesystem::absolute(o.save).lexically_normal()==std::filesystem::absolute(o.results).lexically_normal())throw std::runtime_error("results must not overwrite save");
@@ -127,7 +127,7 @@ void validate_target(const Options &o,const SavedCurve &r) {
 }
 int stopped(){return ecm_stage1_stop_requested()?1:0;}
 struct Params {ecm_params p;Params(){ecm_init(p);}~Params(){ecm_clear(p);}};
-struct Details {uint64_t d=0,poly_size=0,fft_length=0,checked_values=0;double init=0,main=0,maxerr=0;};
+struct Details {uint64_t d=0,poly_size=0,fft_length=0,checked_values=0;std::string fft_description,polymult_isa;double init=0,main=0,maxerr=0;};
 std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_t f,int stage,double seconds,const Details &details) {
     ecm_results::Submission common;common.exponent=o.exponent;common.sigma=r.sigma;common.b1=r.b1;common.b2=o.b2;
     common.stage=stage;common.known=o.known;common.user=o.user;common.computer=o.computer;common.aid=o.aid;
@@ -136,23 +136,19 @@ std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_
     auto text=ecm_results::internal_json(common,n,details.fft_length,ECM_BUILD_ID);text.resize(text.size()-2);
     std::ostringstream out;out<<text
        <<",\"stage2-engine\":{\"name\":"<<quote(o.backend=="gwpoly"?"gwnum-polymult":"libecm")<<",\"version\":"<<quote(
-#ifdef ECM_CPU_HAVE_GWPOLY
            o.backend=="gwpoly"?ecm_gwpoly::version():
-#endif
            ecm_version())<<",\"backend\":"<<quote(o.backend)
        <<",\"seconds\":"<<std::setprecision(9)<<seconds<<",\"save-line\":"<<r.line<<",\"coverage\":\"requested-B2\"";
-    if(details.fft_length)out<<",\"fft-length\":"<<details.fft_length<<",\"init-seconds\":"<<details.init
+    if(details.fft_length)out<<",\"gw-build\":"<<quote(ecm_gwpoly::identity())<<",\"fft-description\":"<<quote(details.fft_description)<<",\"polymult-isa\":"<<quote(details.polymult_isa)<<",\"fft-length\":"<<details.fft_length<<",\"init-seconds\":"<<details.init
         <<",\"main-seconds\":"<<details.main<<",\"max-roundoff\":"<<details.maxerr<<",\"checked-values\":"<<details.checked_values;
-    out<<"}}\n";
+    out<<"}}";
     return out.str();
 }
 }
 int main(int argc,char **argv) {
     try {
         const auto o=options(argc,argv);
-#ifdef ECM_CPU_HAVE_GWPOLY
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
-#endif
         if(o.export_only) {
             if(!ecm_results::has_result_ledger(o.submission))throw std::runtime_error("no owned submission ledger");
             ecm_results::seal_submissions(o.submission,2,{},true);std::cout<<"submission output regenerated\n";return 0;
@@ -175,12 +171,12 @@ int main(int argc,char **argv) {
             mpz_set_str(n.v,r.n.c_str(),16);mpz_set_str(x.v,r.x.c_str(),16);
             auto selected=o;
             if(selected.backend=="auto"){
-#ifdef ECM_CPU_HAVE_GWPOLY
-                selected.backend="gwpoly";
-#else
-                selected.backend=mpz_size(n.v)<=ECM_LIBECM_NTT_THRESHOLD?"ntt":"plain";
-#endif
+                selected.backend=ecm_gwpoly::load_error() ? (mpz_size(n.v)<=ECM_LIBECM_NTT_THRESHOLD?"ntt":"plain") : "gwpoly";
+
             }
+            std::cout << "selected=" << selected.backend;
+            if (selected.backend=="gwpoly") std::cout << " " << ecm_gwpoly::identity() << " GWNUM=" << ecm_gwpoly::version() << " CPU=" << ecm_gwpoly::cpu();
+            std::cout << std::endl;
             int stage=0;Details details;const auto begin=std::chrono::steady_clock::now();
             if(r.factor){mpz_set(f.v,x.v);stage=1;}
             else {
@@ -188,23 +184,21 @@ int main(int argc,char **argv) {
                 if(setup==Setup::Degenerate)throw std::runtime_error("degenerate saved curve");
                 if(setup==Setup::Factor)stage=1;
                 else {
-#ifdef ECM_CPU_HAVE_GWPOLY
                     if(selected.backend=="gwpoly"){
                         ecm_gwpoly::Options gw;gw.threads=static_cast<unsigned>(o.threads);gw.memory_mib=o.memory;
                         gw.exponent=o.exponent;gw.d=o.d;gw.stop=stopped;gw.check=o.gw_check;ecm_gwpoly::Stats stats;
                         try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;}
                         catch(...){if(stopped())return 130;throw;}
+                        details.fft_description=stats.fft_description;details.polymult_isa=stats.polymult_isa;
                         details.d=stats.d;details.poly_size=stats.poly_size;details.fft_length=stats.fft_length;
                         details.init=stats.init_seconds;details.main=stats.main_seconds;details.maxerr=stats.max_roundoff;details.checked_values=stats.checked_values;
                         std::cout<<"gwpoly: D="<<stats.d<<" P="<<stats.poly_size<<" fft_length="<<stats.fft_length
-                                 <<" blocks="<<stats.blocks<<" giants="<<stats.giants<<" polymults="<<stats.polymults
+                                 <<" fft=\""<<stats.fft_description<<"\" polymult_isa="<<stats.polymult_isa<<" blocks="<<stats.blocks<<" giants="<<stats.giants<<" polymults="<<stats.polymults
                                  <<" init="<<stats.init_seconds<<" main="<<stats.main_seconds<<" maxerr="<<stats.max_roundoff
                                  <<" checked_values="<<stats.checked_values<<" planned_mib="<<stats.estimated_memory_mib
                                  <<" points="<<stats.point_seconds<<" trees="<<stats.tree_seconds<<" folds="<<stats.fold_seconds
                                  <<" descent="<<stats.descent_seconds<<std::endl;
-                    }else
-#endif
-                    {
+                    }else {
                     Params params;auto p=params.p;p->sigma_is_A=1;
                     mpz_mul_ui(p->sigma,a24.v,4);mpz_sub_ui(p->sigma,p->sigma,2);mpz_mod(p->sigma,p->sigma,n.v);
                     mpz_set(p->x,x.v);p->B1done=static_cast<double>(r.b1);set64(p->B2,o.b2);

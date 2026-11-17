@@ -38,14 +38,17 @@ def main():
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     binary=out/'bin';binary.mkdir();exe=binary/a.exe.name
     shutil.copy2(a.exe,exe);shutil.copy2(a.exe.parent/'gmp-10.dll',binary/'gmp-10.dll')
+    plugin=a.exe.parent/'gwnum.dll'
+    if plugin.is_file():shutil.copy2(plugin,binary/plugin.name)
     shutil.copy2(source,out/'reference.snapshot.json')
     shutil.copy2(__file__,out/'collector.snapshot.py')
     root=Path(__file__).resolve().parents[2]
     closure=out/'source';closure.mkdir()
     manifest={}
-    for path in [*sorted((root/'src/core').glob('*.h')),*sorted((root/'src/cpu').glob('*.h')),
-                 root/'src/core/ecm_cpu_stage2_main.cpp',root/'src/core/ecm_stage1_checkpoint_runtime.cpp',
-                 root/'src/cpu/ecm_stage2_gwpoly.cpp',*sorted((root/'tools/build/internal').glob('ecm*stage2.cmake')),
+    for path in [*sorted((root/'src/ecm/stage2/cpu').glob('*.cpp')),
+                 root/'src/ecm/stage2/cpu/gwpoly.h',root/'include/ecm/stage2_gw_abi.h',
+                 root/'src/ecm/stage2/edwards/cpu/main.cpp',root/'src/io/stage1_checkpoint.cpp',
+                 root/'tools/build/gwnum/CMakeLists.txt',*sorted((root/'tools/build/internal').glob('ecm*stage2.cmake')),
                  root/'tools/build/internal/ecm_libecm.cmake',root/'tools/build/test/build_cpu_stage2.ps1',
                  *sorted((root/'.refactor/p95v3106b01.source/gwnum').glob('*.h')),
                  root/'.refactor/p95v3106b01.source/gwnum/gwnum64.lib',
@@ -60,7 +63,10 @@ def main():
         shutil.copy2(static_library,binary/static_library.name)
         manifest['linked/ecm_cpu_library.lib']=sha(binary/static_library.name)
         write(out/'source_manifest.json',manifest)
-    ini=out/'empty.ini';ini.write_text('user=\ncomputer=\n',encoding='utf-8')
+    uses_toml=b'--config' in subprocess.check_output([exe,'--help'])
+    config_option='--config' if uses_toml else '--ini'
+    ini=out/('empty.toml' if uses_toml else 'empty.ini')
+    ini.write_text('' if uses_toml else 'user=\ncomputer=\n',encoding='utf-8')
     cases=[c.copy() for c in plan['cases'] if c['exponent'] in a.exponents]
     if {c['exponent'] for c in cases}!=set(a.exponents):raise ValueError('Missing requested reference inputs')
     inputs=out/'inputs';inputs.mkdir()
@@ -79,7 +85,7 @@ def main():
         _fields_=[('cb',wintypes.DWORD),('faults',wintypes.DWORD)]+[(name,ctypes.c_size_t) for name in ('peak_ws','ws','peak_paged','paged','peak_nonpaged','nonpaged','pagefile','peak_pagefile')]
     memfn=ctypes.WinDLL('psapi').GetProcessMemoryInfo
     memfn.argtypes=[wintypes.HANDLE,ctypes.POINTER(Memory),wintypes.DWORD]
-    report=dict(complete=False,exe_sha256=sha(exe),dll_sha256=sha(binary/'gmp-10.dll'),
+    report=dict(complete=False,gw_plugin_sha256=sha(plugin) if plugin.is_file() else None,exe_sha256=sha(exe),dll_sha256=sha(binary/'gmp-10.dll'),
                 reference_sha256=sha(source),script_sha256=sha(__file__),cases=cases,
                 memory_mib=a.memory_mib,affinity_mask=a.affinity,threads=a.threads,repeats=a.repeats,
                 conditions=dict(cpu='AMD Ryzen AI 9 HX 370',os='Windows 11',clock_ghz=a.cpu_ghz,
@@ -100,7 +106,7 @@ def main():
                     name=f'm{c["exponent"]}_b{r["b2"]}_t{threads}_r{rep+1}'
                     prefix=out/name
                     cmd=list(map(str,[exe,'--save',c['save'],'--curves',1,'--backend','gwpoly','--b2',r['b2'],
-                        '--threads',threads,'--memory-mib',a.memory_mib,'--ini',ini,'--results',prefix.with_suffix('.jsonl'),
+                        '--threads',threads,'--memory-mib',a.memory_mib,config_option,ini,'--results',prefix.with_suffix('.jsonl'),
                         '--submission',prefix.with_suffix('.json.txt'),'--exponent',c['exponent']]))
                     for factor in c['known']:cmd+=['--known-factor',str(factor)]
                     print('RUN',name,flush=True);start=time.perf_counter()
