@@ -113,11 +113,17 @@ checkpoint实现与恢复合同维持原样。Android原有native存档可以覆
 
 [execution.cpp](../../src/ecm/stage1/execution.cpp)按实际任务的 target、曲线与 GPU 算法选择入口。CGBN Montgomery 各 param 共享同一个 `run_mont_stage1`；全宽 NTT 使用独立适配器。CUDA 由构建显式定义 `ECM_HAS_CUDA_STAGE1`。各 workflow 线性编排准备、恢复候选验证、布局接纳或新曲线构造、设备执行、结果收集；不拥有最终save/results发布或队列。
 
+GPU 切片策略在工作行的曲线类型和实际算术模数确定后依次匹配。CUDA 构建可以检查 CGBN 档位、NTT 完整梅森形式和 thread 的 Edwards 位宽上限；OpenCL 构建按自身曲线和位宽能力执行。自动策略恢复时先检查路径中匹配身份的检查点，固定原算术后端。[归一化](../../src/io/normalize.cpp) · [检查点身份](../../src/ecm/stage1/task.cpp)
+
 [Montgomery workflow](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)直接调用CUDA曲线运行时；factory提供设备准备、查询和兼容入口。param在归一化后固定，新sigma只在没有接纳恢复种子时生成。ladder的[构造描述](../../src/ecm/stage1/montgomery/cuda/construction.h)集中param0/2的7-word布局、param3的5-word布局及末点偏移，checkpoint与runtime共用；resident/PRAC仍使用自己的布局合同。不同param不建立完整独立workflow，也不在同一批次混用。
 
 [NTT workflow](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp) 接收 PARAM0 和 Atkin–Morain Edwards。Edwards 使用 `48·lcm(1…B1)`，可运行原生 2XY NAF，也可用 `u=(1+y)/(1−y)` 和 `a24=1/(1−d)` 进入 x-only 阶梯。映射分母的非单位通过 GCD 分类，最终按 Montgomery X/Z 求仿射坐标，与 Edwards save 的约定一致。适配器将剩余活跃曲线转为 slot-major 布局，负责 checkpoint、末点求逆和因子分类。[ladder.cu](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) 负责设备缓冲区、显存准入、正逆变换和 Graph，变换运行时与 CUDA Stage2 共用。[profiles.h](../../src/ecm/stage1/montgomery/cuda/ntt/profiles.h) 提供内置档位，[tune.cpp](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp) 用 ladder 搜索并缓存计划。检查点保存位或 NAF 列游标、活跃曲线掩码和对应算法的规范坐标。卷积后端、tile、pass 和 Graph 配置可在恢复时重新选择。运行范围与用法见 [CUDA 全宽 NTT](../usage/STAGE1.md#cuda-全宽-ntt)。
 
 宽位宽的分段归约可把进位摘要交给下一批打包，设备数据流见 [NTT 架构](NTT.md#stage1-分段进位与-pack-融合)。
+
+### NTT 任务拆批与恢复
+
+NTT 按调优数据和显存预算将一条 worktodo 任务拆成多个子批。所有子批共用一个检查点，恢复时保留已完成结果并继续当前子批。见 [拆批、载荷与恢复示例](CHECKPOINT.md#47-ntt-拆批任务载荷)、[Stage1 NTT 批量调优](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)。
 
 ### CUDA Edwards NTT 主机曲线初始化
 

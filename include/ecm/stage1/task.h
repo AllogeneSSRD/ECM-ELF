@@ -22,6 +22,8 @@ struct Stage1NttOptions {
     unsigned memory_mib = 0;
     std::string tune_file;
     bool tight_weighted_bound = true;
+    bool pad_batch = false;
+    bool observe_batch = false; // Runtime tuning uses normally scheduled task batches.
 };
 
 struct Stage1ExecutionPreferences {
@@ -121,6 +123,8 @@ public:
 };
 
 TaskResult run_stage1_task(const Stage1Request &,const TaskDependencies &);
+// Used while applying a GPU range policy to retain an in-flight NTT task.
+std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request&);
 
 // Project the resolved task identity into the IO naming contract.
 ecm_save::Naming save_naming(const Stage1Options &);

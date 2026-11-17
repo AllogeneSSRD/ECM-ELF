@@ -176,9 +176,10 @@ struct Stage1Values {
     double ckpt_seconds=600;
     int device=0;
     int gpu_param=3;
-    std::string gpu_algorithm="cgbn";
+    std::string gpu_algorithm="ntt[16384:], cgbn[]";
     int cuda_thread_block_size=128;
     std::string ntt_convolution="auto";
+    int ntt_pad_batch=0;
     bool ntt_tight_weighted_bound=true;
     std::string ntt_tune_file="tune.toml";
     int ntt_memory_mib=0;
@@ -265,6 +266,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"gpu_algorithm",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_algorithm,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_algorithm=v.gpu_algorithm;}},
     {"cuda_thread_block_size",[](Stage1Values&c,const std::string&v){c.cuda_thread_block_size=static_cast<int>(bounded_integer(v,"cuda_thread_block_size",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.cuda_thread_block_size=v.cuda_thread_block_size;}},
     {"ntt_convolution",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_convolution,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_convolution=v.ntt_convolution;}},
+    {"ntt_pad_batch",[](Stage1Values&c,const std::string&v){c.ntt_pad_batch=static_cast<int>(bounded_integer(v,"ntt_pad_batch",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.ntt_pad_batch=v.ntt_pad_batch;}},
     {"ntt_tight_weighted_bound",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tight_weighted_bound,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tight_weighted_bound=v.ntt_tight_weighted_bound;}},
     {"ntt_tune_file",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tune_file,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tune_file=v.ntt_tune_file;}},
     {"ntt_memory_mib",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_memory_mib,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_memory_mib=v.ntt_memory_mib;}},

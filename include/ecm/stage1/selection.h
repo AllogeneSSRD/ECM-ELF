@@ -22,6 +22,12 @@ struct CpuImplementationRule {
     std::optional<std::size_t> end_bit;
 };
 
+struct GpuAlgorithmRule {
+    GpuAlgorithm algorithm;
+    std::size_t first_bit;
+    std::optional<std::size_t> end_bit;
+};
+
 struct Selection {
     CurveModel curve = CurveModel::Montgomery;
     ExecutionTarget target = ExecutionTarget::Gpu;
@@ -32,6 +38,7 @@ struct Selection {
     CpuMontgomeryChain cpu_montgomery_chain = CpuMontgomeryChain::Ladder;
     ScalarConstruction scalar_construction = ScalarConstruction::PrimePowerLcm;
     GpuAlgorithm gpu_algorithm = GpuAlgorithm::Cgbn;
+    std::vector<GpuAlgorithmRule> gpu_algorithm_rules;
     int gpu_param = -1; // assigned from the generated config before GPU validation
 };
 
@@ -44,6 +51,8 @@ bool parse_cpu_implementation_policy(std::string_view, Selection&);
 bool parse_simd_reduction(std::string_view,SimdReduction &);
 bool parse_cpu_montgomery_chain(std::string_view, CpuMontgomeryChain&);
 bool parse_gpu_algorithm(std::string_view,GpuAlgorithm &);
+bool parse_gpu_algorithm_policy(std::string_view, Selection&);
+const char* gpu_algorithm_name(GpuAlgorithm);
 bool parse_scalar_construction(std::string_view,ScalarConstruction &);
 std::optional<CpuImplementation> resolve_cpu_implementation(
     const Selection&, std::size_t modulus_bits, std::uint32_t curves, bool has_ifma);

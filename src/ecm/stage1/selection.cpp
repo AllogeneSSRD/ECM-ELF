@@ -39,7 +39,9 @@ bool parse_cpu_implementation(std::string_view value, CpuImplementation &out) {
     return true;
 }
 
-bool parse_cpu_implementation_policy(std::string_view value, Selection& selection) {
+namespace {
+
+std::string normalize_policy(std::string_view value) {
     std::string normalized;
     while (!value.empty()) {
         if (value.substr(0, 3) == "\xEF\xBC\x9A") { // Full-width colon.
@@ -55,29 +57,26 @@ bool parse_cpu_implementation_policy(std::string_view value, Selection& selectio
             normalized += value.front();
         value.remove_prefix(1);
     }
-    CpuImplementation single = CpuImplementation::Auto;
-    if (normalized.empty() || parse_cpu_implementation(normalized, single)) {
-        selection.cpu_implementation = single;
-        selection.cpu_implementation_rules.clear();
-        return true;
-    }
+    return normalized;
+}
 
+template<class Algorithm, class Rule, class Parse>
+bool parse_policy_ranges(std::string_view rest, Parse parse, std::vector<Rule>& rules) {
     const auto parse_bit = [](std::string_view text, std::size_t& bits) {
         const auto end = text.data() + text.size();
         const auto parsed = std::from_chars(text.data(), end, bits);
         return parsed.ec == std::errc{} && parsed.ptr == end && bits > 0;
     };
-    std::vector<CpuImplementationRule> rules;
-    std::string_view rest = normalized;
     for (;;) {
         const auto comma = rest.find(',');
         const auto item = rest.substr(0, comma);
         const auto bracket = item.find('[');
         if (item.empty() || bracket == std::string_view::npos || item.back() != ']')
             return false;
-        CpuImplementationRule rule{CpuImplementation::Auto, 1, std::nullopt};
-        if (!parse_cpu_implementation(item.substr(0, bracket), rule.implementation))
+        Algorithm algorithm{};
+        if (!parse(item.substr(0, bracket), algorithm))
             return false;
+        Rule rule{algorithm, 1, std::nullopt};
         const auto range = item.substr(bracket + 1, item.size() - bracket - 2);
         if (!range.empty()) {
             const auto colon = range.find(':');
@@ -95,7 +94,19 @@ bool parse_cpu_implementation_policy(std::string_view value, Selection& selectio
         if (comma == std::string_view::npos) break;
         rest.remove_prefix(comma + 1);
     }
-    selection.cpu_implementation = CpuImplementation::Auto;
+    return true;
+}
+
+} // namespace
+
+bool parse_cpu_implementation_policy(std::string_view value, Selection& selection) {
+    const auto normalized = normalize_policy(value);
+    CpuImplementation single = CpuImplementation::Auto;
+    std::vector<CpuImplementationRule> rules;
+    if (!normalized.empty() && !parse_cpu_implementation(normalized, single) &&
+        !parse_policy_ranges<CpuImplementation>(normalized, parse_cpu_implementation, rules))
+        return false;
+    selection.cpu_implementation = single;
     selection.cpu_implementation_rules = std::move(rules);
     return true;
 }
@@ -228,6 +239,27 @@ bool parse_gpu_algorithm(std::string_view value, GpuAlgorithm& out) {
     else if (v == "3" || v == "+3" || v == "thread") out = GpuAlgorithm::Thread;
     else return false;
     return true;
+}
+
+bool parse_gpu_algorithm_policy(std::string_view value, Selection& selection) {
+    const auto normalized = normalize_policy(value);
+    GpuAlgorithm single = GpuAlgorithm::Cgbn;
+    std::vector<GpuAlgorithmRule> rules;
+    if (!parse_gpu_algorithm(normalized, single) &&
+        !parse_policy_ranges<GpuAlgorithm>(normalized, parse_gpu_algorithm, rules))
+        return false;
+    selection.gpu_algorithm = single;
+    selection.gpu_algorithm_rules = std::move(rules);
+    return true;
+}
+
+const char* gpu_algorithm_name(GpuAlgorithm algorithm) {
+    switch (algorithm) {
+    case GpuAlgorithm::Cgbn: return "cgbn";
+    case GpuAlgorithm::Ntt: return "ntt";
+    case GpuAlgorithm::Thread: return "thread";
+    }
+    return "unknown";
 }
 
 bool parse_scalar_construction(std::string_view value, ScalarConstruction &out) {

@@ -30,6 +30,8 @@ public:
     }
 };
 enum class BlobRead { Missing, Read, IoFailure };
+bool matches(const std::string& path, const std::string& identity, uint32_t curves,
+             unsigned backups);
 } // namespace ecm_stage1_checkpoint
 
 constexpr unsigned ECM_STAGE1_MAX_BACKUPS = 16;
@@ -63,6 +65,10 @@ public:
     const std::string& path();
     void begin(const std::string& identity, uint32_t curves, bool fixed, uint64_t first_sigma,
                bool defer_payload_validation = false);
+    // A child batch has no physical file or lock of its own. Snapshots are
+    // committed together with the task's completed prefix by the parent.
+    void begin_nested(const std::string& parent_path, uint32_t curves, uint64_t first_sigma,
+                      const std::string& snapshot, std::function<bool(const std::string&)> writer);
     bool pending();
     void validate_pending(const EcmStage1PayloadValidator& validate);
     bool saved_sigma(uint32_t curve, uint64_t& sigma);

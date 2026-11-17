@@ -52,3 +52,19 @@ def progressed(rows):
         elif payload:
             return True
     return False
+
+
+def ntt_inflight(path):
+    """Return the real sigmas and native snapshot inside a Stage1 NTT task."""
+    import struct
+    _, rows = batch(path)
+    payload = rows[0][1]
+    magic = b"NTT-TASK-1"
+    if not payload.startswith(magic):
+        return [sigma for sigma, _ in rows], payload
+    first, preferred, curves, capacity, completed, size = struct.unpack_from(
+        "<QIIIIQ", payload, len(magic))
+    start = len(magic) + struct.calcsize("<QIIIIQ")
+    assert len(rows) == 1 and curves <= capacity <= preferred <= 128
+    assert start + size <= len(payload)
+    return list(range(first + completed, first + completed + curves)), payload[start:start + size]

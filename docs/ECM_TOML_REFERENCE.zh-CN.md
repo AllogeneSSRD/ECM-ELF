@@ -398,12 +398,12 @@ v1 旧键 `stage1.exp_cache`
 ### gpu_algorithm
 
 ```toml
-gpu_algorithm = "cgbn"
+gpu_algorithm = "ntt[16384:], cgbn[]"
 ```
 
-类型 `int|string` · 范围 `[1|2|3|cgbn|ntt|thread]` · Worker 覆盖 `[worker.N] stage1.gpu_algorithm` · 级别 `高级`。
+类型 `int|string` · 范围 `[1|2|3|cgbn|ntt|thread|slice list]` · Worker 覆盖 `[worker.N] stage1.gpu_algorithm` · 级别 `高级`。
 
-CUDA Stage1 GPU 算法，不区分大小写。1/cgbn 选择 CGBN，2/ntt 对完整梅森模数运行 1–128 条曲线，3/thread 由每个 CUDA 线程处理一条 Edwards 曲线，支持最高 1024 bit 的模数。
+Stage1 GPU 算法，不区分大小写。单值 1/cgbn、2/ntt 和 3/thread 显式指定算法。切片列表按实际模数位宽从左到右尝试可用的算法，含下界、不含上界，空括号匹配任意位宽。CUDA NTT 要求完整梅森模数，支持 Edwards 和 Montgomery PARAM0。CUDA thread 支持最高 1024 bit 的 Edwards。OpenCL worker 的 cgbn 规则使用其原有 OpenCL 算法。
 
 <a id="stage1_backend"></a>
 
@@ -578,6 +578,20 @@ ntt.outer_radix_limit = 0
 v1 旧键 `stage1.ntt_outer_max`
 
 每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。
+
+<a id="ntt_pad_batch"></a>
+
+### ntt.pad_batch
+
+```toml
+ntt.pad_batch = 0
+```
+
+类型 `int` · 范围 `[0|1]` · Worker 覆盖 `[worker.N] stage1.ntt.pad_batch` · 级别 `高级`。
+
+v1 旧键 `stage1.ntt_pad_batch`
+
+0 按任务请求的曲线数运行 Stage1 NTT。1 在资源允许时用真实曲线把尾批补齐到优选批量。新增曲线使用独立 sigma，计入结果和符合条件的 Stage2 交接。
 
 <a id="ntt_profile"></a>
 

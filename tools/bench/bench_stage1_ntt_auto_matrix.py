@@ -22,7 +22,8 @@ PLAN_FIELDS = {"length": "length", "bpw": "bpw", "tile_layers": "tile",
 def best_binary(tune, batch):
     columns, *values = tomllib.loads(tune.read_text(encoding="utf-8"))["ntt"]["matrix"]
     rows = [dict(zip(columns, row)) for row in values]
-    candidates = [row for row in rows if row["batch"] == batch and row["length"] > 0
+    candidates = [row for row in rows if row.get("benchmark_kind") != "stage1_runtime"
+                  and row["batch"] == batch and row["length"] > 0
                   and not (row["length"] & (row["length"] - 1)) and row["ntt_type"].startswith("stage1_")]
     return max(candidates, key=lambda row: row["iter_per_s"])
 

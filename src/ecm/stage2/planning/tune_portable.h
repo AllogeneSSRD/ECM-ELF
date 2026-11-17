@@ -178,6 +178,10 @@ inline Word ntt_option(const Fields &f,const char *key) {
 inline constexpr const char *stage2_ntt_type="stage2_convolution";
 inline constexpr const char *linear_ntt_type="stage1_linear";
 inline constexpr const char *weighted_ntt_type="stage1_weighted";
+inline constexpr const char *stage1_runtime_ntt_kind="stage1_runtime";
+inline bool is_runtime_stage1_ntt(const Fields &s) {
+    return s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_runtime_ntt_kind;
+}
 inline bool is_stage1_ntt(const Fields &s) {
     if(!s.count("ntt_type"))return false;
     const auto type=text(s,"ntt_type");
@@ -201,6 +205,17 @@ inline void validate_stage1_ntt(const Fields &s) {
        uint(s,"owned_bytes")>uint(s,"peak_bytes") || uint(s,"peak_bytes")>uint(s,"budget_bytes") ||
        text(s,"forward").empty() || text(s,"inverse").empty())
         throw std::runtime_error("invalid Stage1 NTT measurement");
+    if(is_runtime_stage1_ntt(s)) {
+        const auto curve=text(s,"curve");
+        const auto bits=uint(s,"arithmetic_bits"), window=uint(s,"naf_window"), valid=uint(s,"valid_curves");
+        const auto lcm=uint(s,"lcm_multiplier");
+        if((curve!="edwards" && curve!="mont0") || bits<32 || bits>262144 ||
+           (curve=="edwards" ? lcm!=48 : lcm!=1 && lcm!=12) ||
+           uint(s,"b1")<2 || (window && (curve!="edwards" || window<2 || window>12)) ||
+           !valid || valid>batch || !(real(s,"curves_per_s")>0) ||
+           uint(s,"dataflow")>UINT32_MAX || uint(s,"repeats")>1000000000)
+            throw std::runtime_error("invalid Stage1 NTT production measurement");
+    }
 }
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
 inline bool runtime_observation(const Fields &sample) {
@@ -589,18 +604,35 @@ struct Profile {
         }
         ntt.push_back(std::move(sample));++revision;return true;
     }
-    void update_stage1_ntt(Fields sample) {
+    void update_stage1_ntt(Fields sample,bool fresh=false) {
         validate_stage1_ntt(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown Stage1 NTT condition");
+        const bool runtime=is_runtime_stage1_ntt(sample);
         const auto same=[&](const Fields &old) {
             for(const char *key:{"condition","length","batch","ntt_type","bpw","tile","max_radix_bits",
                                 "passes_forward","forward","inverse","graph_bits","warp_tail"})
+                if(required(old,key)!=required(sample,key))return false;
+            if(is_runtime_stage1_ntt(old)!=runtime)return false;
+            if(runtime)for(const char *key:{"curve","arithmetic_bits","b1","lcm_multiplier","naf_window","valid_curves","dataflow"})
                 if(required(old,key)!=required(sample,key))return false;
             return true;
         };
         const auto at=std::find_if(stage1_ntt.begin(),stage1_ntt.end(),same);
         if(at==stage1_ntt.end())stage1_ntt.push_back(std::move(sample));
-        else if(updated_at(*at)<=updated_at(sample))*at=std::move(sample);
+        else if(!runtime || !fresh) {
+            if(updated_at(*at)<=updated_at(sample))*at=std::move(sample);
+        } else {
+            const auto n=uint(*at,"repeats"), m=uint(sample,"repeats");
+            if(m>1000000000-n)return;
+            for(const char *key:{"iter_per_s","curves_per_s"}) {
+                const auto previous=real(*at,key);
+                (*at)[key]=numeric(previous+(real(sample,key)-previous)*double(m)/double(n+m));
+            }
+            (*at)["repeats"]=std::to_string(n+m);
+            for(const char *key:{"owned_bytes","peak_bytes","budget_bytes"})
+                (*at)[key]=std::to_string(std::max(uint(*at,key),uint(sample,key)));
+            merge_provenance(*at,sample);
+        }
     }
     void update_parallel(Fields sample,bool fresh) {
         const auto key=text(sample,"scope");

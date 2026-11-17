@@ -2,6 +2,7 @@
 #include "io/files.h"
 #include "stage1_binary.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <filesystem>
@@ -164,6 +165,22 @@ std::string ecm_stage1_curve_record(uint32_t curve) {
 }
 
 namespace ecm_stage1_checkpoint {
+bool matches(const std::string& path, const std::string& identity, uint32_t curves,
+             unsigned backups) {
+    if (path.empty()) return false;
+    for (unsigned generation = 0; generation <= std::min(backups, ECM_STAGE1_MAX_BACKUPS); ++generation) {
+        const auto candidate = generation ? ecm_stage1_backup_path(path, generation) : path;
+        std::ifstream file(candidate, std::ios::binary);
+        if (!file) continue;
+        const std::string bytes((std::istreambuf_iterator<char>(file)), {});
+        if (file.bad()) continue;
+        DecodedBatch decoded;
+        const auto status = decode_batch(bytes, identity, curves, decoded);
+        if (status != Decode::Corrupt) return status == Decode::Valid;
+    }
+    return false;
+}
+
 struct Context::State {
     bool active = false;
     std::atomic<unsigned> backup_count{3};
@@ -175,6 +192,7 @@ struct Context::State {
     std::unique_ptr<DecodedBatch> pending_batch;
     std::string pending_path;
     std::vector<std::string> pending_older;
+    std::function<bool(const std::string&)> nested_writer;
     bool batch_fixed = false;
     uint64_t batch_requested_sigma = 0;
     bool payload_validation_pending = false;
@@ -561,8 +579,9 @@ void Context::State::close(bool completed) {
     batch_identity.clear();
     batch_records.clear();
     batch_sigmas.clear();
-    if (completed && !path.empty())
+    if (completed && !path.empty() && !nested_writer)
         this->remove(path);
+    nested_writer = {};
 #ifdef _WIN32
     if (batch_lock != INVALID_HANDLE_VALUE) {
         CloseHandle(batch_lock);
@@ -578,6 +597,8 @@ void Context::State::close(bool completed) {
 }
 
 bool Context::State::flush_batch() {
+    if (nested_writer)
+        return nested_writer(batch_records.front());
     using namespace ecm_stage1_binary;
     std::string body(batch_magic, 8);
     u32(body, 2);
@@ -620,6 +641,7 @@ bool Context::State::sigma_matches(const std::vector<uint64_t>& sigmas) {
 void Context::State::accept_batch(DecodedBatch& decoded, const std::string& path) {
     batch_records.swap(decoded.records);
     batch_sigmas.swap(decoded.sigmas);
+    if (nested_writer) return;
     if (path != batch_path)
         this->mark_bad_primary(batch_path);
     std::cout << "Stage1 batch resume: path=" << path << " curves=" << batch_records.size()
@@ -668,6 +690,24 @@ const std::string& Context::path() {
 void Context::begin(const std::string& identity, uint32_t curves, bool fixed, uint64_t first_sigma,
                     bool defer_payload_validation) {
     state_->begin(identity, curves, fixed, first_sigma, defer_payload_validation);
+}
+
+void Context::begin_nested(const std::string& parent_path, uint32_t curves, uint64_t first_sigma,
+                           const std::string& snapshot, std::function<bool(const std::string&)> writer) {
+    state_->begin({}, curves, true, first_sigma, false);
+    if (parent_path.empty()) return;
+    state_->batch_path = parent_path;
+    state_->nested_writer = std::move(writer);
+    for (uint32_t i = 0; i < curves; ++i)
+        state_->batch_sigmas[i] = first_sigma + i;
+    if (snapshot.empty()) return;
+    auto candidate = std::make_unique<DecodedBatch>();
+    candidate->records.resize(curves);
+    candidate->records[0] = snapshot;
+    candidate->sigmas = state_->batch_sigmas;
+    state_->pending_batch = std::move(candidate);
+    state_->pending_path = parent_path;
+    state_->payload_validation_pending = true;
 }
 
 bool Context::pending() {

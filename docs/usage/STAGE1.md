@@ -4,7 +4,7 @@
 
 正常计算/队列启动输出公共程序名和版本；`--version` 只输出版本后退出，不启动计算。`--gpu-info` 等机器查询保持原输出结构。
 
-`ecm_cuda.exe` 默认使用 NVIDIA CUDA/CGBN 并行处理曲线，也可选择少曲线全宽 NTT。`ecm.exe` 提供 CPU 和 OpenCL 路径；CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md) 为准。
+`ecm_cuda.exe` 按实际模数位宽和后端能力选择 CUDA NTT 或 CGBN。`ecm.exe` 提供 CPU 和 OpenCL 路径。CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [TOML 参考](../ECM_TOML_REFERENCE.zh-CN.md) 为准。
 
 历史覆盖、计时和建表诊断见 [Stage1 环境变量](ENVIRONMENT.md#stage1)。
 
@@ -17,6 +17,19 @@ v3 也可用 `cpu_implementation = "simd[:6144], scalar[:4096], gwnum[4096:], au
 Windows x64 worker 可通过 `--impl gwnum` 或 `[stage1]` 的 `cpu_implementation = "gwnum"` 为 CPU Montgomery PARAM0 加载同目录的 `gwnum.dll`。该路径沿用现有批次存档和结果格式。见 [构建与运行](BUILD.md#cpu-stage1-本地-gwnum-316)。
 
 CPU Montgomery PARAM0 的 IFMA 路径默认使用二进制 ladder。可添加 `--cpu-mont-chain prac`，或在 `[stage1]` 设置 `cpu_montgomery_chain = "prac"`、`target = "cpu"`、`param = "m0"` 和 `cpu_implementation = "simd"`。`cpu_prac_search` 可设为 1～50，默认 7。相同 B1、标量倍数和搜索宽度共用 `exponent_cache_dir` 中的计划。末点分母与模数不互素时用 ladder 复核。构造遇到不可逆分母或奇异曲线时直接走 ladder。续跑检查点时沿用原点乘方式和搜索宽度。
+
+## GPU 算法选择
+
+默认配置为：
+
+```toml
+[stage1]
+gpu_algorithm = "ntt[16384:], cgbn[]"
+```
+
+每条任务先构造实际模数，再从左到右选第一个位宽区间及后端能力都匹配的规则。位宽按剥除已知因子后的模数计算，区间左闭右开。`[]` 等价于 `[:]`，空边界表示不限该侧。默认从 16384 位起优先尝试 NTT，适用的曲线是 Edwards 和 Montgomery PARAM0，模数必须是完整 `2^p−1`。余因子和其他不符合 NTT 条件的输入继续尝试 CGBN。CUDA CGBN 还要求当前构建含有适用的内核档。OpenCL worker 跳过 CUDA 专用的 NTT 和 thread，按原 OpenCL 路径处理 CGBN 规则命中的任务。
+
+若要固定算法，可写单值 `"cgbn"`、`"ntt"`、`"thread"`（也可用 `1`、`2`、`3`）。算法名不区分大小写。单值按指定算法校验，资格不符时报错。CLI `--gpu-algorithm` 可以覆盖单值或规则列表。使用列表恢复任务时，匹配的检查点锁定原来的 GPU 算法。NTT 的调优选择只影响当前后端的计划和批量。
 
 ## 进度前的执行详情
 
@@ -111,11 +124,11 @@ GPU Edwards 使用不带参数化前缀的 sigma，CLI 不接受 `--gpu-param` �
 
 ## CUDA 全宽 NTT
 
-在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 启用 NTT。默认后端为 `"cgbn"`，也可填 `1`。字符串不区分大小写，CLI 用 `--gpu-algorithm` 覆盖此键。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`），每批 1–128 条。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
+在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`）。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
 
 Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机，保留曲线和窗口。若驻留频谱也放不下，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 
-两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `stage1_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)。
+两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `cpu_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)。
 
 ```toml
 config_version = 3
@@ -132,6 +145,18 @@ ntt.profile = 0
 '2^8191-1' | .\ecm_cuda.exe --config .\ecm.toml -sigma 26 -gpucurves 2 -save m0_m8191_256.save 256
 ```
 
+### 任务曲线数与设备批量
+
+`worktodo.txt` 中的曲线数是请求量。NTT 将一条任务依次拆成每批 1–128 条。直接运行时，`-gpucurves 1..128` 明确指定单批大小，超过 128 时自动拆批。省略 `-gpucurves` 时 NTT 运行 1 条。
+
+自动拆批先从共享 `tune.toml` 的有效生产样本选择合适批量，再参考已有合成调优。首次使用没有兼容数据时，通常从 64 条起步，受剩余曲线数和显存约束。较长的任务会用不同大小的**真实批次**观察吞吐，每批仍按任务顺序推进。选型优先使用有重复样本的批量，并在达到实测峰值吞吐 95% 的方案中取最小档。共享表按设备、曲线、NAF 窗口、位宽、B1、标量倍率和 NTT 计划记录样本，包含设备循环的曲线步／秒和从计算准备到末点处理的曲线／秒。后者排除补测计划、写 tune 表和任务最终发布。生产选型无需先运行 `--tune ntt`。
+
+`ntt.pad_batch = 0` 默认精确完成请求量。设为 `1` 时，自动拆批可以在资源和 sigma 范围允许时用新曲线补齐尾批。例如每批 75 条，请求 1000 条时，尾批从 25 条补到 75 条，共完成 1050 条。每条新增曲线使用独立的连续 sigma，计入实际结果和汇总。若 1050 条均产生可保存的点，`.save`、`finished` 和符合条件的 Stage2 交接均包含这 1050 条。交接范围始终以实际保存记录为准。
+
+拆批检查点保存已完成曲线、原始 sigma 起点、当前批量和整数坐标。恢复时沿用已保存的尾批范围，再为其余曲线选型。任务完成后统一追加存档和内部结果、汇总适用的 NF 提交记录，并按交接设置生成 Stage2 队列行。子批次得到的已核验因子可先单独发布。
+
+### NTT 形状与调优
+
 `ntt.profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt.length`、`ntt.bits_per_word`、`ntt.tile` 和 `ntt.outer_radix_limit` 的 0 值使用自动值。`ntt.window_bits = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt.warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
 `ntt.convolution` 默认为 `"auto"`。程序先检查下文所述的 Edwards 短计划，其余情况按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt.length=0` 时使用满足约束的较短长度。`ntt.bits_per_word` 可限定最大 digit 位宽。
@@ -145,8 +170,8 @@ ntt.profile = 0
 `[shared] tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，CUDA 两阶段共用此文件。可在 `[worker.N]` 用 `shared.tune_file` 为该 worker 的两个阶段一并覆盖。如果还在使用旧 Stage1 JSON 路径，改为共享 TOML 路径后重新调优。`ntt.memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 收紧上限。
 
 ```powershell
-.\ecm.exe --config .\ecm.toml --tune ntt
-.\ecm.exe --config .\ecm.toml --tune ntt --bits 8191
+.\ecm_cuda.exe --config .\ecm.toml --tune ntt
+.\ecm_cuda.exe --config .\ecm.toml --tune ntt --bits 8191
 ```
 
 不带 `--bits` 时用 16 个代表指数生成测试形状，覆盖三个默认混合档。调优按实际 NTT 长度升序执行，每个长度内先测适用的 linear，再测 weighted，各自完成批量搜索后才进入下一长度。每个候选先执行 100 步预热，再重置输入计时。共享表保存单曲线及各批量的计划、吞吐和显存，指数只用于生成测试数据。命令输出峰值批量和达到本轮峰值吞吐 95% 的最小实测批量。任务曲线数仍由 `-gpucurves` 或队列行指定。`--tune-exhaustive` 逐一测量 1–128 档。调优使用合成点和短标量，结果只写调优表。
@@ -155,9 +180,9 @@ ntt.profile = 0
 
 16384 点加权 NTT 的单曲线自动调优会实测 tile 12 和 `tile=10, outer_max=2`。显式 tile、outer 或配置档继续约束可用计划，已有匹配的 tune 行可直接复用。需要在已有条件上重新选型时可执行 `--tune ntt --bits <p>`。见 [单曲线调优对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)。
 
-运行时的 `stage1_ntt_selection` 标明自动选型来源。`stage1_ntt_plan` 单独记录同一计划的 `bpw_avg`、`bpw_max`、`U`、`q`，以及正逆向各 pass 的层数、tile 的线程数与动态共享内存、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。
+运行时的 `stage1_ntt_batch_selection` 标明拆批选型来源，`stage1_ntt_batch` 显示本批偏移、总数、实际曲线数和计划容量。`stage1_ntt_production_sample` 报告有效曲线数与实测吞吐。`stage1_ntt_selection` 记录卷积计划来源，`stage1_ntt_plan` 记录 `bpw_avg`、`bpw_max`、`U`、`q`，以及正逆向各 pass 的层数、tile 的线程数与动态共享内存、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。
 
-正常结束按曲线构造生成标准 save 和 Stage1 结果，支持自动交接到 Stage2。检查点保存当前标量位置、活跃曲线位图和两组整数 X/Z，允许切换卷积后端和 NTT 参数续跑。32 条以内继续使用原 NTT 快照格式，33–128 条使用多字位图。CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
+NTT 单批快照保存标量位置、活跃曲线位图和整数坐标，允许在同一路径内切换卷积后端和 NTT 参数续跑。拆批检查点将当前批快照与已完成曲线一起保存，CGBN 与 NTT 各用自己的检查点格式。见 [NTT 算术、选型和实测](../performance/STAGE1_MERSENNE_NTT.md)。
 
 ### 启动详情示例
 
@@ -204,7 +229,7 @@ handoff.worktodo_file = ""
 
 ## 计算与输出
 
-主机生成曲线和指数，GPU 分片推进点乘，主机验证末点、求 GCD 并写入结果。`gpucurves` 是批量，不表示设备同时驻留的曲线数。批量不足可能降低吞吐；适合的批量由位宽、TPI、TPB、SM 数和实际资源占用共同决定。
+主机生成曲线和指数，GPU 分片推进点乘，主机验证末点、求 GCD 并写入结果。`gpucurves` 给出单次命令请求的曲线数，设备实际驻留的曲线数取决于位宽、TPI、TPB、SM 数和资源占用。NTT 请求超过单批上限时按 [设备批量](#任务曲线数与设备批量) 拆分。
 
 CPU Edwards 单曲线、SIMD 和 GPU 路径均在分块边界刷新进度；重定向到文件或 GUI 管道时输出普通文本百分比，不依赖终端控件。
 

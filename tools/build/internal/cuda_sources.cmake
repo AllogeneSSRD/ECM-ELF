@@ -62,6 +62,7 @@ set(ECM_STAGE2_NTT_SOURCES ${ECM_CUDA_NTT_SOURCES})
 set(ECM_STAGE1_CUDA_SOURCES
     ${ECM_CUDA_NTT_SOURCES}
     src/ecm/stage1/montgomery/cuda/ntt/ladder.cu
+    src/ecm/stage1/montgomery/cuda/ntt/batches.cpp
     src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp
     src/ecm/stage1/montgomery/cuda/ntt/tune.cpp
     src/ecm/application/configuration/runtime.cpp

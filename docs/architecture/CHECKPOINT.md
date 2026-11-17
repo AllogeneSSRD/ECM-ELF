@@ -6,7 +6,7 @@
 
 | 对象 | 保存内容 | 恢复粒度 | 是否供另一程序执行 Stage2 |
 | --- | --- | --- | --- |
-| Stage1 批次 checkpoint | 曲线身份、sigma、各后端未完成状态或已完成结果 | CPU 曲线分块、GPU 切片 | 否 |
+| Stage1 任务 checkpoint | 曲线身份、sigma、各后端未完成状态或已完成结果 | CPU 曲线分块、GPU 切片、NTT 已完成子批和当前子批切片 | 否 |
 | Stage1 `.save` | 已完成 Stage1 的归一化点或已发现因子 | 一条完成的曲线 | 依曲线族和消费者能力，见 SAVE |
 | Stage2 队列 checkpoint | 已完成曲线、任务身份、待发布结果 | 完整曲线 | 否，不含曲线内运算状态 |
 | 指数缓存、PRAC 计划、tune profile | 可复用计算或性能资料 | 不代表任务进度 | 否 |
@@ -17,7 +17,7 @@ Stage1 外层统一不代表内部算术状态通用。CUDA ladder、CUDA reside
 
 ### 2.1 物理文件
 
-一个任务使用一个主文件；CPU 曲线记录也封装在其中，不由正常驱动逐曲线创建文件。
+一个任务使用一个主文件。CPU 曲线记录和 NTT 子批进度都封装在其中。
 
 | 曲线 | 任务有原始指数 n | 普通整数、无指数元数据 |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `ckpt_backups` 决定 |
 | `主文件名.lock` | 批次独占锁；Windows 使用无共享打开、关闭时删除；POSIX 使用非阻塞 flock |
 
-来源：[驱动命名与批次边界](../../src/ecm/stage1/task.cpp#L124)、[备份及锁](../../src/io/stage1_checkpoint.cpp)。
+来源：[驱动命名](../../src/ecm/stage1/task.cpp#L229)、[备份及锁](../../src/io/stage1_checkpoint.cpp)。
 
 ### 2.2 内容身份
 
@@ -52,9 +52,11 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | 5 | 执行目标 | `cpu` 或 `gpu` |
 | CPU 附加 1 | 有效 NAF 窗口设置 | 十进制；由驱动加入身份，即使某 CPU 路径不使用它 |
 | CPU 附加 2 | 实现枚举 | 0=auto、1=IFMA SIMD、2=GMP scalar |
-| GPU Montgomery 附加 | GPU 算法选择文本 | `ECM_GPU_STAGE1_ALGO` 的非空值；未设置时为 `ladder` |
+| CUDA NTT 附加 | 公式和 NAF 窗口 | x-only 为 `ntt-v1`，原生 Edwards 为 `ntt-edwards-naf-v1` 加窗口 |
+| CUDA 拆批 NTT 追加 | 任务载荷版本和总曲线数 | 在 NTT 身份末尾追加 `ntt-task-v1` 和十进制总曲线数 |
+| 其他 GPU Montgomery 附加 | CGBN 算法文本 | 由驱动写入有效的 CGBN 算法 |
 
-曲线数另在外层头中比较；各 sigma 在记录头中保存。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i；随机任务采用已存种子。GPU Edwards 的窗口、binary/NAF 模式及倍点变体在载荷内验证。
+一般路径用外层头比较曲线数，并在记录头中保存各 sigma。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i，随机任务采用已存种子。拆批 NTT 的外层固定为一条记录，使用 identity 核对任务总曲线数，从任务载荷恢复起始 sigma。GPU Edwards 的窗口、binary/NAF 模式及倍点变体也可由对应载荷验证。见 [Stage1 身份构造](../../src/ecm/stage1/task.cpp#L245)。
 
 设备编号、GPU 型号、驱动版本、D、B2、输出路径不在该外层身份中。不能据此推断任意设备或后端之间均可恢复：内部布局、构建包含的内核和算法约束仍须满足。CPU auto 切换实际实现的情况还受各后端的分块恢复条件约束。
 
@@ -70,8 +72,8 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 
 - 所有显式 u32/u64 均为无符号小端整数；偏移从文件首字节 0 开始。
 - 字符串和载荷采用“字节长度+原始字节”，不附加 NUL 或换行。
-- I 为 identity 字节数，C 为曲线数，第 i 条载荷长度为 Lᵢ。
-- GPU 批次载荷置于记录 0，其余记录通常 Lᵢ=0，但仍保存各自 sigma。CPU 通常每条记录保存相应曲线状态。
+- I 为 identity 字节数，C 为外层记录数，第 i 条载荷长度为 Lᵢ。拆批 NTT 的 C 固定为 1，其余路径的 C 为曲线数。
+- GPU 批次载荷置于记录 0，其余记录通常 Lᵢ=0，但仍保存各自 sigma。CPU 通常每条记录保存相应曲线状态。拆批 NTT 的唯一外层记录 sigma 为 0。
 
 ### 3.2 文件头与尾
 
@@ -117,6 +119,8 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 | OpenCL Montgomery PARAM3 | 记录 0 包含整批头和数组 | magic `0x45555047`、version 4 | 设备 Montgomery 域；二进制位进度 |
 | CUDA Edwards binary / NAF | 记录 0 包含全部曲线 | `ECMEDB3`／`ECMEDB4`，版本 3／4 | 普通整数，进度为 binary 位或 NAF 列 |
 | CUDA resident / PRAC | 记录 0 包含整批驻留状态 | magic `0x31524d444d434545`、version 1 | Montgomery 域；位进度或素数计划位置 |
+| CUDA NTT 单批 | 记录 0 包含一批算术状态 | `ECMNTTS1`／`ECMNTTS2`／`ECMNTTE1` | 规范投影坐标；x-only 位游标或 Edwards NAF 列游标 |
+| CUDA NTT 拆批任务 | 外层只有记录 0，包含已完成前缀和至多一批算术快照 | `NTT-TASK-1` | 已完成结果、当前批大小和容量、嵌套算术快照 |
 
 正常 Stage1 驱动通过 `ecm-batch-record:<i>` 虚拟地址访问记录。这个文本不是磁盘文件路径；载荷写入会更新对应记录并重新发布**整份外层文件**。单独调用底层 codec 时存在独立文件接口，不等于驱动会自动扫描这些独立文件。
 
@@ -265,11 +269,45 @@ CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存
 
 next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内层 checksum 仅为 data 的标准 FNV-1a 64，初值14695981039346656037；N/S 的 hash 按低 limb 到高 limb 的 GMP 本机 limb 字节计算，因此不构成跨 ABI 的规范数值摘要。模数、指数和计划身份通过头字段比对，外层 CRC 保护整个载荷。恢复要求版本、算法、域、N/S/计划 hash、B1、总长、BITS/TPI、曲线数及 torsion 等匹配。PRAC window 局部采样不产生完整 Stage1 save 或 checkpoint。
 
-### 4.6 CUDA NTT Edwards NAF
-
-外层任务身份包含 `ntt-edwards-naf-v1` 和窗口。记录 0 的载荷以 `ECMNTTE1` 起始，随后是总列数、窗口、已处理列数、活跃曲线位图及规范整数 X/Y/Z。计数和 32 位 limb 均为小端。位图每 32 条曲线用一个字，坐标依次按坐标面、活跃曲线及 limb 排列。续跑从同一 sigma 重建仿射字典与 NAF 编码，允许变更 NTT 卷积和调度参数。x-only 仍使用独立的 bit 游标和 X/Z 点对。
-
 来源：[ResidentCheckpoint 与恢复](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu#L18)、[window 范围](../../src/ecm/stage1/montgomery/cuda/prac/prac_window.inl#L70)。
+
+### 4.6 CUDA NTT 单批算术快照
+
+原生 Edwards 用 `ECMNTTE1`，依次保存总列数、NAF 窗口、已处理列数、活跃曲线位图和 X/Y/Z。x-only 用 `ECMNTTS1`（批内至多 32 条真实曲线）或 `ECMNTTS2`（更多曲线），依次保存总位数、已处理位数、活跃曲线位图和阶梯的两对 X/Z。
+
+计数和 32 位 limb 均为小端。位图每 32 条真实曲线用一个字，坐标依次按坐标面、活跃曲线及 limb 排列。恢复时使用同一 sigma 重建曲线和基点，原生 Edwards 还重建 NAF 编码和仿射字典。快照中的规范整数坐标允许重新选择兼容的卷积、变换和 Graph 参数。见 [NTT 快照读写](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L77)。
+
+### 4.7 NTT 拆批任务载荷
+
+选择 CUDA NTT 的 worktodo 任务按一条工作行的请求曲线数拆批。直接执行时，显式请求超过 128 条也使用拆批调度，较小的直接请求使用指定批量。已匹配的旧式单批队列 checkpoint 继续按该单批格式恢复。调度按设备、调优样本和显存预算为新批选择大小，每批最多 128 条。起始 sigma 只选一次，后续按全任务序号连续分配。尾批默认只运行请求量剩余的曲线。启用 `ntt.pad_batch` 时，资源和 sigma 范围允许就用真实曲线补齐，最多增加 127 条。新增曲线与同批其他曲线共用恢复游标，各自保存结果。显存不足且尚无算术快照时，可以退回请求量剩余的曲线或缩小批量后重试。见 [拆批入口](../../src/ecm/stage1/task.cpp#L371)、[批量选择](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp#L639)、[调度与重试](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp)。
+
+所有子批使用同一个标准命名的 `.ckpt` 及其轮转备份。例如 Edwards M4423、B1=1024 使用 `.e_s1_m4423_1024.ckpt`。V2 外层记录 0 封装以下载荷，偏移从载荷首字节算起。
+
+| 偏移 | 字节数 | 字段 | 内容 |
+| --- | ---: | --- | --- |
+| 0 | 10 | magic | ASCII `NTT-TASK-1`，无 NUL |
+| 10 | 8 | first sigma | 整个任务的起始 sigma |
+| 18 | 4 | preferred | 调度选出的目标批量 |
+| 22 | 4 | curves | 当前子批的真实曲线数，包含已分配的补齐曲线 |
+| 26 | 4 | capacity | 新写入等于 curves。旧档中若更大，恢复只采用原有真实曲线范围 |
+| 30 | 4 | completed | 已完成的真实曲线数，也是当前子批的零基起点 |
+| 34 | 8 | native bytes | 当前子批算术快照的字节数 |
+| 42 | native bytes | native | 上节的单批算术快照。长度为 0 时该子批从头启动 |
+| 42 + native bytes | 变长 | completed results | 按任务顺序存放的已完成结果 |
+
+每条完成记录为 1 字节结果类型、u32 数值长度及相应的无符号小端整数。类型 1 保存真因子，类型 2 保存归一化 Stage2 点（Edwards 保存其对应的 Montgomery 坐标 `u`），类型 3 代表无可交接点的完成状态，数值长度为 0。从零开始数，第 `i` 条记录的 sigma 由 `first sigma + i` 重建。子批启动前先落盘批次范围和容量，周期写入或正常停止再补入算术快照。子批验证成功后，一次原子替换同时追加完成记录并清空当前快照，将 `curves`、`capacity` 和 `native bytes` 置零。下一个子批据此领取新的 sigma 区间。见 [任务载荷编码和验证](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp#L18)、[写入及提交子批](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp#L155)。
+
+任务身份仍使用原始请求量。若请求 1000 条，在调整后的尾批上总计完成 1050 条，尾批写入的 `curves` 已含新增曲线，完成后记录 `completed=1050`。恢复使用同一条原始 worktodo 行，按检查点已有范围继续运行或发布。发布的 `finished` 和 Stage2 交接范围由实际写入 `.save` 的记录数确定。
+
+#### 示例：每批 32 条，第五批运行中停止
+
+假设前四批已完成，GPU 正在处理任务的第 129–160 条曲线。主文件记录 `completed=128`、`preferred=32`、`curves=32`、`capacity=32`，并保存前 128 条的完成记录。当前批的 sigma 为 `first sigma + 128` 至 `first sigma + 159`。
+
+1. **正常停止。** GPU 到达下一个已同步的检查点边界后，回读当前批活跃曲线的坐标和共同游标，再原子替换同一个主文件。例如 Edwards NAF 已安全执行 256 列，快照就记下 `cursor=256`。即使 `ckpt_seconds=0`，正常停止仍会请求这次写入。如果第五批已经完成验证，则持久化为 `completed=160` 的批间状态。见 [GPU 同步边界](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L1168)、[停止与周期写入](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L552)。
+2. **恢复。** 读取并验证有效代，直接采用前 128 条的已完成结果。第 129–160 条沿用保存的批次范围，从第 257 列继续。自动后端规则改动时，匹配的检查点仍可使任务回到原 NTT 路径。如果强制终止，只能使用最后一次成功发布且仍有效的检查点。该代若只有第五批的范围，第五批从头执行，前 128 条仍可直接恢复。见 [自动后端恢复](../../src/io/normalize.cpp#L716)。
+3. **最终发布。** 每个已完成子批的因子可先按单曲线发布。整条任务完成后才统一发布本次的 `.save`、适用的 NF 汇总和 Stage2 交接。若停止发生在末批已持久化与最终发布之间，恢复时直接使用完整结果重试发布。队列提交完成回执后清理检查点和轮转备份。见 [Stage1 结果发布](../../src/ecm/stage1/task.cpp#L398)、[队列回执与清理](../../src/main.cpp#L298)。
+
+恢复时外层或任务载荷损坏可按轮转顺序尝试备份。任务载荷已接受、但嵌套快照未通过算术后端检查时，当前实现报错并保留文件。见 [嵌套 Context](../../src/io/stage1_checkpoint.cpp#L695)。
 
 ## 5. 写入、恢复和清理顺序
 
@@ -280,8 +318,8 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 3. CUDA 先以本后端离线 codec 验证候选载荷，再提交记录和存档 sigma；无载荷时采用已存种子，缺失时才生成。种子选择与参数化分开。种子遍历结束会发布一次外层；CPU codec 也可能写入种子记录。
 4. 后端在安全边界按周期或停止请求写入载荷；写入一条虚拟记录会重新序列化整批。
 5. 算术完成后发布 `.save`；随后写入内部结果账本及对外提交输出。
-6. 这些发布成功后，驱动才结束 completed 批次并删除主 checkpoint、临时文件和各代备份，释放锁。
-7. 队列层再记录 finished、推进 worktodo 和进行受支持的外部交接。它们不是与三个输出文件组成一个跨文件原子事务。
+6. 直接运行在输出发布后清理 checkpoint。队列运行保留它，直到完成回执提交 finished 和 worktodo 变更，再清理主文件和备份。
+7. 外部交接按各自队列或回执执行。这里的原子替换只覆盖单个文件。
 
 只有 sigma、没有非空算术载荷的合法文件是“种子已确定”，**不表示保存了曲线内进度**。异常退出最多退回最后一次完整发布的检查点；0-byte `.save` 可来自可写性预检，不能据此认定 Stage1 完成。
 
@@ -385,6 +423,7 @@ schema 2 的旧 B2 以旧文件的 total、当前或 Auto B2、提交回执候�
 | GPU Edwards V3/V4 | H+68+bytes(N)+52C+Σbytes(fᵢ)+Σbytes(vᵢⱼ) |
 | CPU 各曲线记录 | H+Σ实际编码长度；文本十六进制不能按 limb 二进制大小计算 |
 | 可选 resident/PRAC | H+112+7CK/8 |
+| CUDA NTT 拆批 | H+42+当前子批快照字节数+Σ(5+已完成结果的数值字节数)，其中 C=1 |
 
 GPU 保存前的回传量由后端决定：Montgomery ladder/OpenCL 要取回其整批数组；GPU Edwards 进度回调接收普通坐标，再序列化状态。不能把磁盘大小直接解释为 PCIe 流量。CPU 单曲线更新也发布整批外壳，并非就地修改24-byte记录头。
 
@@ -395,6 +434,7 @@ GPU 保存前的回传量由后端决定：Montgomery ladder/OpenCL 要取回其
 - [容器/旧档离线检查](../../tools/test/stage1_checkpoint_container_test.cpp)：CRC 标准向量、长度、损坏、身份、备份、Edwards 全坐标往返与 V5 导入。
 - [Stage1 完整/停止恢复](../../tools/test/test_stage1_usability.py)、[兼容及队列](../../tools/test/test_stage1_checkpoint_compat.py)。
 - [独立外层解码](../../tools/test/stage1_checkpoint_decode.py)、[Edwards 点与载荷检查](../../tools/test/test_edwards_gpu_pipeline.py)。
+- [NTT 拆批恢复](../../tools/test/test_stage1_ntt_task_batches.py)覆盖保留已完成前缀、恢复批内游标、尾批补齐与单次 Stage2 交接，并逐字节对比中断续跑和连续运行的 save。
 - [GUI 检查点识别](../../src/ecm/application/gui/platform_win32.cpp#L107)：只识别主文件更新时间作为辅助信号，不能代替 worker 完成安全停止。
 
 这些入口说明可复核的范围，不意味着每次构建都已经执行全部验证。新增格式或语义须同时更新写入、读取、身份、错误路径和本文；不要只修改 magic 或文件名。损坏资料和原始实验保留在忽略的 `data/`，不作为正式格式的新规则来源。

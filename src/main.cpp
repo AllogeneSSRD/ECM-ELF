@@ -853,7 +853,10 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
         /* The GPU implementation is chosen at LINK time (ecm.exe = OpenCL glue,
            ecm_cuda.exe = CUDA backend), so ask the backend instead of hardcoding
            "OpenCL" -- the CUDA build used to print "gpu (OpenCL)" here. */
-        if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt)
+        if (!opt.execution.selection.gpu_algorithm_rules.empty())
+            ecm_ts_fprintf(stdout, "gpu backend : %s, Stage1 algorithm policy, device %d\n",
+                           ecm_backend_name(), opt.execution.device_index);
+        else if (opt.execution.selection.gpu_algorithm == ecm_stage1::GpuAlgorithm::Ntt)
             ecm_ts_fprintf(stdout, "gpu backend : CUDA/NTT, %s, device %d\n",
                            opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards
                                ? "Edwards Atkin-Morain" : "Montgomery param0",

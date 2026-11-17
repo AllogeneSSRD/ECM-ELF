@@ -2,6 +2,7 @@
 #include "ladder.h"
 #include "ecm/stage1/ntt_length.h"
 #include "../../../../cuda/ntt/runtime.h"
+#include "../../../edwards/memory.h"
 #include "../../../../../io/files.h"
 #include "../../../../stage2/planning/tune_portable.h"
 #include "ecm/platform/logging.h"
@@ -124,7 +125,7 @@ Fields encode(const Measurement& m, unsigned iterations) {
     return row;
 }
 
-void persist(const std::string& path, const Device& device, std::vector<Fields> rows) {
+void persist(const std::string& path, const Device& device, std::vector<Fields> rows, bool fresh = false) {
     if (path.empty() || rows.empty()) return;
     const auto parent = std::filesystem::path(path).parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent);
@@ -133,7 +134,7 @@ void persist(const std::string& path, const Device& device, std::vector<Fields> 
     const auto condition = std::to_string(db.condition({{"uuid_hex", pt::quoted(device.uuid)}}));
     for (auto& row : rows) {
         row["condition"] = condition;
-        db.update_stage1_ntt(std::move(row));
+        db.update_stage1_ntt(std::move(row), fresh);
     }
     ecm_io::write_atomic(path, db.serialize());
 }
@@ -379,6 +380,101 @@ std::optional<Cached> decode(const Fields& row, const Packing& shape, const Devi
     return Cached{std::move(o), ecm_stage2::tune::real(row,"iter_per_s")};
 }
 
+unsigned naf_window(const ecm_stage1::Stage1Request& request) {
+    return request.options.execution.selection.curve == ecm_stage1::CurveModel::Edwards
+        ? unsigned(request.options.execution.naf_w) : 0;
+}
+
+const char* curve_name(const ecm_stage1::Stage1Request& request) {
+    return request.options.execution.selection.curve == ecm_stage1::CurveModel::Edwards ? "edwards" : "mont0";
+}
+
+unsigned lcm_multiplier(const ecm_stage1::Stage1Request& request) {
+    const auto& selection = request.options.execution.selection;
+    if (selection.curve == ecm_stage1::CurveModel::Edwards) return 48;
+    return selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12 : 1;
+}
+
+Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_edwards) {
+    if (options.automatic && !(native_edwards && options.tight_weighted_bound && !options.length))
+        return candidates_for(p, options);
+    if (options.automatic) {
+        options.weighted = true;
+        try {
+            const auto shape = resolve_packing(p, options, true, WeightedBound::UnsignedProducts);
+            if (shape.needs_unsigned_bound) {
+                options.length = shape.length;
+                Candidates shapes;
+                shapes[Mixed] = Candidate{std::move(options), shape};
+                return shapes;
+            }
+        } catch (const std::invalid_argument&) {
+        }
+        return candidates_for(p, options);
+    }
+    const auto shape = resolve_packing(p, options, true,
+        native_edwards ? WeightedBound::UnsignedProducts : WeightedBound::Conservative);
+    Candidates shapes;
+    shapes[options.weighted ? Weighted : Linear] = Candidate{std::move(options), shape};
+    return shapes;
+}
+
+unsigned production_capacity(const ecm_stage1::Stage1Request& request, const Device& device,
+                             unsigned p, const Candidates& shapes) {
+    const unsigned window = naf_window(request);
+    if (window && (window < 2 || window > 12))
+        throw std::invalid_argument("Edwards NTT NAF requires a window from 2 to 12");
+    if (!std::isfinite(request.b1) || request.b1 < 0 || request.b1 > 5000000000.0)
+        throw std::invalid_argument("invalid Stage1 NTT B1");
+    const size_t words = (p + 31) / 32, entries = window ? 1u << (window - 2) : 0;
+    const auto dictionary_budget = size_t(request.options.execution.naf_memory_mb) * ecm_edwards_memory::mb;
+    unsigned cap = max_batch;
+    bool any = false;
+    for (const auto& candidate : shapes) {
+        if (!candidate) continue;
+        any = true;
+        const auto length = size_t(candidate->shape.length);
+        // Bound the planner's spectra and GPU dictionary workspace before a
+        // batch is created. Runtime allocation remains authoritative.
+        const auto dictionary = entries * (32 * length + 16 * words);
+        const auto per_curve = 88 * length + 128 * words + dictionary;
+        const auto fixed = 160 * length + 32 * words + size_t(request.b1 / 4 + 16);
+        cap = unsigned(std::min<size_t>(cap, device.budget > fixed ? (device.budget - fixed) / per_curve : 0));
+        if (dictionary_budget && dictionary)
+            cap = unsigned(std::min<size_t>(cap, dictionary_budget / dictionary));
+    }
+    if (!any) throw std::invalid_argument("no legal Stage1 NTT packing for the requested parameters");
+    if (entries)
+        if (const auto free = ecm_edwards_memory::host_free_bytes()) {
+            const auto limit = ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib);
+            // A padded host table temporarily has both its old and expanded
+            // lane layouts. Leave room for scalar and dictionary preparation.
+            const size_t fixed = (size_t(request.b1) * 5 + 128 * entries * words);
+            const auto per_curve = (32 * entries + 64) * words;
+            cap = unsigned(std::min<size_t>(cap, limit > fixed ? (limit - fixed) / per_curve : 0));
+        }
+    // The exact allocator may use less than the conservative workspace bound.
+    // Let it diagnose the single-curve limit with its full measurements.
+    return std::max(1u, cap);
+}
+
+struct BatchRate {
+    double rate = 0;
+    unsigned repeats = 0;
+};
+
+unsigned recommended_batch(const std::map<unsigned, BatchRate>& rows, unsigned min_repeats = 1) {
+    double peak = 0;
+    for (const auto& item : rows)
+        if (item.second.repeats >= min_repeats)
+            peak = std::max(peak, item.second.rate);
+    if (peak)
+        for (const auto& item : rows)
+            if (item.second.repeats >= min_repeats && item.second.rate >= near_peak * peak)
+                return item.first;
+    return 0;
+}
+
 } // namespace
 
 std::string tune_shape_descriptor(const Plan& plan) {
@@ -490,6 +586,7 @@ Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
     try {
         const auto db = load(options.tune_file);
         for (const auto& row : db.stage1_ntt) {
+            if (pt::is_runtime_stage1_ntt(row)) continue;
             const auto& condition = db.conditions.at(ecm_stage2::tune::uint(row,"condition"));
             if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid) continue;
             const bool weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
@@ -537,6 +634,108 @@ Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
     ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s length=%u\n",
                    source, p, batch, modes[winner->options.weighted], winner->options.length);
     return winner->options;
+}
+
+unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsigned remaining) {
+    if (!remaining) return 0;
+    const auto& exec = request.options.execution;
+    const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
+    const auto p = unsigned(mpz_sizeinbase(request.modulus, 2)), window = naf_window(request);
+    const auto shapes = production_shapes(p, exec.ntt, window != 0);
+    const auto cap = std::min(remaining, production_capacity(request, device, p, shapes));
+    std::map<unsigned, BatchRate> production, synthetic;
+    using ecm_stage2::tune::uint;
+    using ecm_stage2::tune::real;
+    try {
+        const auto db = load(exec.ntt.tune_file);
+        for (const auto& row : db.stage1_ntt) {
+            const auto& condition = db.conditions.at(uint(row,"condition"));
+            const auto batch = unsigned(uint(row,"batch"));
+            if (batch > cap || !condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid)
+                continue;
+            const bool weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
+            const bool compatible = std::any_of(shapes.begin(), shapes.end(), [&](const auto& shape) {
+                return shape && shape->options.weighted == weighted &&
+                    decode(row, shape->shape, device, batch, shape->options).has_value();
+            });
+            if (!compatible) continue;
+            const bool runtime = pt::is_runtime_stage1_ntt(row);
+            if (runtime && (uint(row,"valid_curves") != batch || uint(row,"arithmetic_bits") != p ||
+                            uint(row,"b1") != uint64_t(std::floor(request.b1 + 0.0001)) ||
+                            uint(row,"lcm_multiplier") != lcm_multiplier(request) ||
+                            uint(row,"naf_window") != window ||
+                            pt::text(row,"curve") != curve_name(request)))
+                continue;
+            auto& value = (runtime ? production : synthetic)[batch];
+            const auto rate = real(row,runtime ? "curves_per_s" : "iter_per_s");
+            const auto repeats = unsigned(uint(row,"repeats"));
+            if ((!value.repeats || rate > value.rate) &&
+                !(runtime && value.repeats >= 2 && repeats < 2))
+                value = {rate, repeats};
+            else if (runtime && value.repeats < 2 && repeats >= 2)
+                value = {rate, repeats};
+        }
+    } catch (const std::exception& e) {
+        ecm_ts_fprintf(stderr, "Stage1 NTT batch tune read: %s\n", e.what());
+    }
+    const unsigned tuned = recommended_batch(synthetic);
+    const unsigned seed = tuned ? tuned : std::min(cap, 64u);
+    unsigned selected = recommended_batch(production, 2);
+    if (!selected) selected = recommended_batch(production);
+    const char* source = selected ? "production" : tuned ? "tune" : "default";
+    if (!selected) selected = seed;
+    // Search a bounded set with real, disjoint curve batches. Leave the final
+    // two batches available for the incumbent and the requested tail policy.
+    if (!exec.ntt.tune_file.empty() && remaining >= 2 * cap + selected) {
+        const std::array<unsigned, 4> candidates{seed, std::max(1u, seed / 2),
+                                               std::min(cap, seed + seed / 2), cap};
+        for (unsigned repetitions : {0u, 1u}) {
+            for (const auto candidate : candidates) {
+                const auto it = production.find(candidate);
+                if ((it == production.end() ? 0 : it->second.repeats) == repetitions) {
+                    selected = candidate;
+                    source = "production_trial";
+                    break;
+                }
+            }
+            if (std::string_view(source) == "production_trial") break;
+        }
+    }
+    ecm_ts_fprintf(stdout, "stage1_ntt_batch_selection: source=%s p=%u remaining=%u batch=%u capacity=%u\n",
+                   source, p, remaining, selected, cap);
+    return selected;
+}
+
+void record_production_sample(const ecm_stage1::Stage1Request& request, const Plan& plan, const Run& run,
+                              unsigned valid, unsigned batch, double compute_seconds) {
+    const auto& exec = request.options.execution;
+    if (!exec.ntt.observe_batch || exec.ntt.tune_file.empty() || !valid || !run.completed_bits || run.device_ms.empty() ||
+        !(run.device_ms.front() > 0) || !(compute_seconds > 0) || request.b1 < 2)
+        return;
+    try {
+        // Device identity is queried by the normal selector as well. Read the
+        // recorded budget from the observed run rather than its teardown state.
+        const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
+        const double rate = double(valid) * run.completed_bits * 1000 / run.device_ms.front();
+        const double compute_rate = valid / compute_seconds;
+        auto row = encode(Measurement{batch, plan, run.device_ms, run.owned_bytes, run.observed_bytes,
+                                      run.budget_bytes}, run.completed_bits);
+        row["benchmark_kind"] = pt::quoted(pt::stage1_runtime_ntt_kind);
+        row["curve"] = pt::quoted(curve_name(request));
+        row["arithmetic_bits"] = std::to_string(mpz_sizeinbase(request.modulus, 2));
+        row["b1"] = std::to_string(uint64_t(std::floor(request.b1 + 0.0001)));
+        row["lcm_multiplier"] = std::to_string(lcm_multiplier(request));
+        row["naf_window"] = std::to_string(naf_window(request));
+        row["valid_curves"] = std::to_string(valid);
+        row["iter_per_s"] = pt::numeric(rate);
+        row["curves_per_s"] = pt::numeric(compute_rate);
+        row["dataflow"] = std::to_string(plan.dataflow);
+        persist(exec.ntt.tune_file, device, {std::move(row)}, true);
+        ecm_ts_fprintf(stdout, "stage1_ntt_production_sample: batch=%u valid_curves=%u iter_per_s=%.3f "
+            "curves_per_s=%.6f compute_seconds=%.6f\n", batch, valid, rate, compute_rate, compute_seconds);
+    } catch (const std::exception& e) {
+        ecm_ts_fprintf(stderr, "Stage1 NTT production tune write: %s\n", e.what());
+    }
 }
 
 } // namespace ecm_mersenne_ntt

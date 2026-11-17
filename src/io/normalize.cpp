@@ -16,6 +16,9 @@
 #include <regex>
 #include <sstream>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -23,10 +26,15 @@
 #ifndef ECM_HAS_CUDA_STAGE1
 #define ECM_HAS_CUDA_STAGE1 0
 #endif
-#if !ECM_HAS_CUDA_STAGE1
+#if ECM_HAS_CUDA_STAGE1
+#include "ecm/stage1/edwards/cuda/api.h"
+#include "ecm/stage1/montgomery/cuda/api.h"
+#else
 #include "ecm/stage1/edwards/opencl/workflow.h"
 #endif
 namespace ecm_stage1_app {
+
+static bool validate_stage1_task(NormalizedStage1Task&, std::string&);
 
 static std::filesystem::path stage1_checkout_root(std::filesystem::path path) {
     for (; !path.empty(); path = path.parent_path()) {
@@ -192,8 +200,7 @@ WorktodoNormalization normalize_worktodo(const std::string& line,
             queue.stage2_line.replace(0, 10, "ECMSTAGE2=");
         }
         apply_curve_preferences(out.options);
-        if (stage1_selection_error(out.options.execution.selection, error) ||
-            stage1_task_error(out.options, out.curves, error, out.modulus))
+        if (!validate_stage1_task(out, error))
             return failure;
         return WorktodoNormalization::Ready;
     } catch (const std::exception& e) {
@@ -241,7 +248,7 @@ bool normalize_direct(const ParsedCli& input, const ecm_stage1::Stage1Options& d
                 id.handoff_c = int32_t(c);
             }
         }
-        if (stage1_selection_error(selection, error) || stage1_task_error(opt, out.curves, error, out.modulus))
+        if (!validate_stage1_task(out, error))
             return false;
         return true;
     } catch (const std::exception& e) {
@@ -279,6 +286,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
                          ecm_stage1::lower_ascii(cfg.ntt_convolution) == "auto",
                          unsigned(cfg.ntt_memory_mib),
                          resolve_rel_local(base, cfg.ntt_tune_file), cfg.ntt_tight_weighted_bound};
+    opt.execution.ntt.pad_batch = cfg.ntt_pad_batch != 0;
     opt.execution.gpu_mul_path = cfg.kernel_mul;
     opt.execution.gpu_sqr_path = cfg.kernel_sqr;
     opt.execution.gpu_add_path = cfg.kernel_add;
@@ -394,9 +402,11 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         if (input.has("-sigma"))
             cfg.sigma = input.fixed_sigma64;
         auto& s = cfg.selection;
-        if (input.has("--gpu-algorithm"))
+        if (input.has("--gpu-algorithm")) {
             s.gpu_algorithm = input.selection.gpu_algorithm;
-        if (s.gpu_algorithm == ecm_stage1::GpuAlgorithm::Thread && input.has("--wg"))
+            s.gpu_algorithm_rules = input.selection.gpu_algorithm_rules;
+        }
+        if (input.has("--wg"))
             cfg.cuda_thread_block_size = cfg.wg_size ? cfg.wg_size : 128;
         if (input.has("--target"))
             s.target = input.selection.target;
@@ -454,6 +464,7 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
                 if (input.has("--gpu-backend") && input.gpu_backend != "auto")
                     throw std::runtime_error("--gpu-backend requires --target gpu");
                 s.gpu_algorithm = ecm_stage1::GpuAlgorithm::Cgbn;
+                s.gpu_algorithm_rules.clear();
             } else {
                 if ((input.has("--impl") && s.cpu_implementation != ecm_stage1::CpuImplementation::Auto) ||
                     (input.has("--reduction") && s.simd_reduction != ecm_stage1::SimdReduction::Auto))
@@ -632,11 +643,6 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
             error = "Edwards Stage1 NTT requires a NAF window from 2 to 12 or 0 for x-only";
             return true;
         }
-        if (curves > ecm_stage1::stage1_ntt_max_curves) {
-            error = "Stage1 NTT supports at most " +
-                std::to_string(ecm_stage1::stage1_ntt_max_curves) + " curves per batch";
-            return true;
-        }
         if (modulus) {
             const auto bits = mpz_sizeinbase(modulus, 2);
             if (bits < 32 || bits > 262144 || mpz_sgn(modulus) <= 0 || mpz_scan0(modulus, 0) != bits) {
@@ -677,6 +683,76 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
         return true;
     }
     return false;
+}
+
+#if ECM_HAS_CUDA_STAGE1
+static const char* cuda_cgbn_policy_error(const ecm_stage1::Selection& selection, mpz_srcptr modulus,
+                                          std::size_t bits) {
+    if (selection.curve == ecm_stage1::CurveModel::Edwards) {
+        uint32_t container, tpi;
+        return ecm_cuda_edwards_tier(bits, container, tpi) ? nullptr : "no compiled Edwards CGBN tier fits";
+    }
+    ecm_cuda_tier tier{};
+    if (bits > UINT32_MAX ||
+        ecm_cuda_tier_list(selection.gpu_param == 0, selection.gpu_param == 2,
+                          uint32_t(bits), &tier, 1, nullptr) <= 0 || bits > tier.bits)
+        return "no compiled Montgomery CGBN tier fits";
+    if (ecm_cuda_fold_build() && (mpz_sgn(modulus) <= 0 || mpz_scan0(modulus, 0) != bits))
+        return "this CGBN fold build requires a full 2^p-1";
+    return nullptr;
+}
+#endif
+
+static bool validate_stage1_task(NormalizedStage1Task& task, std::string& error) {
+    using namespace ecm_stage1;
+    auto& selection = task.options.execution.selection;
+    const auto validate = [&] {
+        return !stage1_selection_error(selection, error) &&
+               !stage1_task_error(task.options, task.curves, error, task.modulus);
+    };
+    bool use_policy = selection.target == ExecutionTarget::Gpu && !selection.gpu_algorithm_rules.empty();
+#if ECM_HAS_CUDA_STAGE1
+    if (use_policy) {
+        if (const auto saved = stage1_checkpoint_gpu_algorithm(task.request())) {
+            selection.gpu_algorithm = *saved;
+            use_policy = false;
+        }
+    }
+#endif
+    if (use_policy) {
+        const auto bits = mpz_sizeinbase(task.modulus, 2);
+        std::string decisions;
+        bool found = false;
+        for (const auto& rule : selection.gpu_algorithm_rules) {
+            if (bits < rule.first_bit || (rule.end_bit && bits >= *rule.end_bit))
+                continue;
+            selection.gpu_algorithm = rule.algorithm;
+            if (validate()) {
+                const char* unavailable = nullptr;
+#if ECM_HAS_CUDA_STAGE1
+                if (rule.algorithm == GpuAlgorithm::Cgbn)
+                    unavailable = cuda_cgbn_policy_error(selection, task.modulus, bits);
+#endif
+                if (!unavailable) {
+                    found = true;
+                    break;
+                }
+                error = unavailable;
+            }
+            if (!decisions.empty()) decisions += ", ";
+            decisions += std::string(gpu_algorithm_name(rule.algorithm)) + ": " + error;
+        }
+        if (!found) {
+            error = "gpu_algorithm policy has no eligible backend for " + std::to_string(bits) + " bits";
+            if (!decisions.empty()) error += " (" + decisions + ")";
+            return false;
+        }
+        error.clear();
+    } else if (!validate()) return false;
+    if (!task.curves && selection.target == ExecutionTarget::Gpu &&
+        selection.gpu_algorithm == GpuAlgorithm::Ntt)
+        task.curves = 1;
+    return true;
 }
 
 void stage1_result_settings(Stage1Options& opt, const EcmQueueConfig& cfg, const std::string& base,

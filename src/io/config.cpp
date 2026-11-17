@@ -37,7 +37,9 @@ bool read_config(const std::string& path, ParsedConfig& parsed, int active_worke
                     else if (key == "lcm")
                         valid = ecm_stage1::parse_scalar_construction(v, s.scalar_construction);
                     else if (key == "gpu_algorithm")
-                        valid = ecm_stage1::parse_gpu_algorithm(v, s.gpu_algorithm);
+                        valid = ecm_stage1::parse_gpu_algorithm_policy(v, s);
+                    else if (key == "ntt_pad_batch")
+                        valid = scratch.ntt_pad_batch == 0 || scratch.ntt_pad_batch == 1;
                     else if (key == "ntt_warp_tail")
                         valid = v == "auto" || v == "true" || v == "false" || v == "0" || v == "1";
                     else if (key == "ntt_convolution") {
@@ -155,7 +157,7 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
         if (worker <= 0)
             break;
     }
-    ecm_stage1::parse_gpu_algorithm(cfg.gpu_algorithm, cfg.selection.gpu_algorithm);
+    ecm_stage1::parse_gpu_algorithm_policy(cfg.gpu_algorithm, cfg.selection);
     cfg.selection.gpu_param = cfg.gpu_param;
     if (cfg.config_version < 3) cfg.handoff_mode.clear();
     else cfg.ntt_tune_file = cfg.shared_tune_file;

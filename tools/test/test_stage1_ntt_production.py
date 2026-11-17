@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-from stage1_checkpoint_decode import batch
+from stage1_checkpoint_decode import ntt_inflight
 from test_edwards_gpu_pipeline import checksum as edwards_checksum, stage1 as edwards_stage1
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stat"))
@@ -35,6 +35,20 @@ def ntt_executions(log):
             if fields["backend"] == "ntt":
                 records.append(fields)
     return records
+
+
+def wait_for_ntt_snapshot(process, checkpoint, magic, cursor_offset):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and process.poll() is None:
+        try:
+            _, payload = ntt_inflight(checkpoint)
+            if (payload.startswith(magic) and len(payload) >= cursor_offset + 4
+                    and struct.unpack_from("<I", payload, cursor_offset)[0]):
+                return
+        except (OSError, AssertionError, ValueError, struct.error):
+            pass
+        time.sleep(0.01)
+    raise AssertionError("did not get an in-flight NTT snapshot")
 
 
 def saved_points(path, p, b1, edwards=False):
@@ -336,10 +350,7 @@ def main():
                                        stdout=log, stderr=log, close_fds=False, env=env,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
             try:
-                deadline = time.monotonic() + 60
-                while time.monotonic() < deadline and process.poll() is None and not checkpoint.exists():
-                    time.sleep(0.01)
-                assert process.poll() is None and checkpoint.is_file()
+                wait_for_ntt_snapshot(process, checkpoint, b"ECMNTTE1", 16)
                 assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
             finally:
                 if process.poll() is None:
@@ -347,9 +358,9 @@ def main():
                     process.wait()
                 kernel.CloseHandle(event)
         assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
-        identity, lanes = batch(checkpoint)
-        assert identity.endswith("|ntt-edwards-naf-v1|6")
-        magic, count, window, cursor, active = struct.unpack_from("<8sIIII", lanes[0][1])
+        saved_sigmas, payload = ntt_inflight(checkpoint)
+        assert saved_sigmas == [sigma]
+        magic, count, window, cursor, active = struct.unpack_from("<8sIIII", payload)
         assert magic == b"ECMNTTE1" and window == 6 and 0 < cursor < count and active == (1 << curves) - 1
         original = config.read_text()
         for incompatible in (0, 8):
@@ -407,6 +418,25 @@ def main():
     assert saved_points(cgbn / "out.save", 4003, 32) == expected
     print("PASS numeric CLI override, direct launch, custom packing, CGBN comparison", flush=True)
 
+    for name, rule, use_ntt in (
+        ("policy_upper_bound", '"ntt[:4003], cgbn[]"', False),
+        ("policy_lower_bound", '"NTT[ 4003 : ], cgbn[]"', True),
+    ):
+        work, cmd = fixture(name, rule)
+        call, data = direct(work, cmd, 4003, 32, 26, 2)
+        assert bool(ntt_executions(run(work, call, text=data))) == use_ntt
+        assert saved_points(work / "out.save", 4003, 32) == expected
+    work, cmd = fixture("policy_no_eligible_route", '"ntt[:4003]"')
+    call, data = direct(work, cmd, 4003, 32, 26, 2)
+    assert "gpu_algorithm policy has no eligible backend for 4003 bits" in run(work, call, text=data, ok=False)
+    assert not (work / "out.save").exists()
+    work, cmd = fixture("policy_ineligible_ntt", '"ntt[], cgbn[]"')
+    call, _ = direct(work, cmd, 127, 32, 26, 2)
+    cofactor = (1 << 127) - 3
+    assert not ntt_executions(run(work, call, text=str(cofactor) + "\n"))
+    assert (work / "out.save").exists()
+    print("PASS GPU policy bounds, strict exhaustion and full-Mersenne admission", flush=True)
+
     work, cmd = fixture("weighted_direct", extra='ntt_convolution = "WeIgHtEd"\nntt_window = 0\n')
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
@@ -463,7 +493,6 @@ def main():
 
     for name, extra, data, curves, reason in (
         ("cofactor", "", "2^65-3\n", 1, "full 2^p-1"),
-        ("too_many_curves", "", "2^127-1\n", 129, "at most 128 curves"),
         ("undersized_transform", "ntt_length = 8\n", "2^4003-1\n", 1, "covering 2*digits+1"),
         ("unsafe_digits", "ntt_bpw = 31\n", "2^4003-1\n", 1, "coefficient bound"),
         ("unsafe_weighted", 'ntt_convolution = "weighted"\nntt_length = 2\n',
@@ -606,10 +635,7 @@ def main():
                                        stdout=log, stderr=log, close_fds=False,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
             try:
-                deadline = time.monotonic() + 60
-                while time.monotonic() < deadline and process.poll() is None and not checkpoint.exists():
-                    time.sleep(0.01)
-                assert process.poll() is None and checkpoint.is_file()
+                wait_for_ntt_snapshot(process, checkpoint, b"ECMNTTS", 12)
                 assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
             finally:
                 if process.poll() is None:
@@ -617,13 +643,13 @@ def main():
                     process.wait()
                 kernel.CloseHandle(event)
         assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
-        identity, lanes = batch(checkpoint)
-        assert identity.endswith("|ntt-v1") and [lane[0] for lane in lanes] == list(range(sigma, sigma + curves))
-        magic, count, cursor = struct.unpack_from("<8sII", lanes[0][1])
-        mask = int.from_bytes(lanes[0][1][16:16 + 4 * ((curves + 31) // 32)], "little")
-        assert magic == (b"ECMNTTS1" if curves <= 32 else b"ECMNTTS2")
-        assert 0 < cursor < count and mask == (1 << curves) - 1
-        assert not lanes[1][1]
+        saved_sigmas, payload = ntt_inflight(checkpoint)
+        width = len(saved_sigmas)
+        assert 0 < width <= curves and saved_sigmas == list(range(sigma, sigma + width))
+        magic, count, cursor = struct.unpack_from("<8sII", payload)
+        mask = int.from_bytes(payload[16:16 + 4 * ((width + 31) // 32)], "little")
+        assert magic == (b"ECMNTTS1" if width <= 32 else b"ECMNTTS2")
+        assert 0 < cursor < count and mask == (1 << width) - 1
         config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
                           .replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"')
                           + "ntt_window = 32\n" + ("ntt_length = 2560\n" if model == "ed" else ""), encoding="utf-8")

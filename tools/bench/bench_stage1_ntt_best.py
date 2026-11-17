@@ -51,8 +51,10 @@ def tune(exe, work, config, p, exhaustive_batches):
     run(exe, work, config, flags, timeout=3600)
     table = tomllib.loads((work / "tune.toml").read_text(encoding="utf-8"))
     columns, *values = table["ntt"]["matrix"]
-    rows = [dict(zip(columns, row)) for row in values]
-    return max(rows, key=lambda row: row["iter_per_s"])
+    rows = (dict(zip(columns, row)) for row in values)
+    return max((row for row in rows if row["ntt_type"].startswith("stage1_")
+                and row.get("benchmark_kind") != "stage1_runtime"),
+               key=lambda row: row["iter_per_s"])
 
 
 def measure(exe, work, config, p, b1, sigma, winner, allow_inactive=False, expected_naf_window=None):

@@ -33,7 +33,8 @@ double milliseconds_since(Clock::time_point start) {
 }
 
 void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t batch,
-                       unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan) {
+                       unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan,
+                       size_t valid = 0) {
     const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
     const char* chain = !edwards ? "ladder" : naf_window ? "naf" : "x-only";
     std::ostringstream details;
@@ -48,6 +49,7 @@ void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t 
             << " ntt_bpw_avg=" << std::fixed << std::setprecision(6) << double(modulus_bits) / plan.digits
             << " ntt_bpw_max=" << plan.bpw << " ntt_u=" << plan.coefficient_bound
             << " ntt_q=" << plan.field_modulus;
+    if (valid && valid != batch) details << " ntt_valid_curves=" << valid;
     log_execution_details(opt, "ntt", details.str());
 }
 
@@ -244,6 +246,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
     ComputationResult result;
     auto phase = FailureSource::Preparation;
     try {
+        const auto compute_started = Clock::now();
         const auto N = request.modulus;
         const size_t p = mpz_sizeinbase(N, 2);
         const unsigned curves = request.curves;
@@ -443,8 +446,16 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
                                                "NTT checkpoint active curve mask differs");
 
+        struct Observation {
+            ecm_mersenne_ntt::Plan plan;
+            ecm_mersenne_ntt::Run run;
+            unsigned valid, batch;
+            double seconds;
+        };
+        std::optional<Observation> observation;
         if (!active.empty()) {
-            const size_t stride = words * active.size();
+            const auto valid = unsigned(active.size());
+            const size_t stride = size_t(words) * valid;
             std::vector<uint32_t> initial((naf_window ? 3 : 6) * stride);
             if (naf_window) {
                 for (size_t i = 0; i < active.size(); ++i) {
@@ -485,10 +496,14 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 std::copy(snapshot.points.begin(), snapshot.points.end(), initial.begin());
             }
 
+            const unsigned batch = valid;
+
             ecm_mersenne_ntt::Control control;
+            ecm_mersenne_ntt::Plan executed_plan{};
             control.resume = snapshot.cursor;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
-                log_ntt_execution(opt, p, active.size(), naf_window, control.resume, plan);
+                executed_plan = plan;
+                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, valid);
                 ecm_ts_fprintf(stdout, "stage1_ntt_plan: device=%d p=%zu curves=%zu length=%u bpw=%u digits=%u "
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
@@ -496,7 +511,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                     "outer_max_layers=%u outer_threads=%u warp_tail=%u graph_bits=%u "
                     "profile=%u source=%s resume=%u bits=%u convolution=%s curve=%s dataflow=%u "
                     "bpw_avg=%.6f bpw_max=%u U=%llu q=%llu\n",
-                    opt.execution.device_index, p, active.size(), plan.length, plan.bpw, plan.digits,
+                    opt.execution.device_index, p, size_t(batch), plan.length, plan.bpw, plan.digits,
                     plan.passes, plan.passes, plan.forward.c_str(), plan.inverse.c_str(),
                     plan.tile, 1u << plan.tile, plan.tile_threads, plan.tile_smem_bytes,
                     plan.inverse_tile_threads, plan.inverse_tile_smem_bytes,
@@ -530,8 +545,10 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             };
 
             phase = FailureSource::Device;
+            const auto plan_started = Clock::now();
             const auto selected = ecm_mersenne_ntt::select_tuned_plan(opt.execution.device_index,
-                unsigned(p), unsigned(active.size()), opt.execution.ntt, naf_window != 0);
+                unsigned(p), batch, opt.execution.ntt, naf_window != 0);
+            const auto plan_ms = milliseconds_since(plan_started);
             if (ecm_stage1_stop_requested()) {
                 result.stop();
                 return result;
@@ -539,13 +556,13 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             ecm_mersenne_ntt::EdwardsNaf naf{naf_window, digits, dictionary, budget, gpu_dictionary, {}};
             if (gpu_dictionary && automatic_dictionary)
                 naf.host_fallback = [&](ecm_mersenne_ntt::Run& run) {
-                    return build_host_naf_fallback(run, N, dictionary, unsigned(active.size()), words, naf_window);
+                    return build_host_naf_fallback(run, N, dictionary, batch, words, naf_window);
                 };
             const double host_init_ms = milliseconds_since(naf_started);
-            const auto run = naf_window ? ecm_mersenne_ntt::edwards_naf(opt.execution.device_index, unsigned(p),
-                unsigned(active.size()), initial, naf, selected, control)
+            auto run = naf_window ? ecm_mersenne_ntt::edwards_naf(opt.execution.device_index, unsigned(p),
+                 batch, initial, naf, selected, control)
                 : ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p),
-                    unsigned(active.size()), initial, packed, count, selected, control);
+                    batch, initial, packed, count, selected, control);
             ecm_ts_fprintf(stdout, "stage1_ntt_memory: owned_bytes=%zu observed_bytes=%zu budget_bytes=%zu\n",
                 run.owned_bytes, run.observed_bytes, run.budget_bytes);
             if (naf_window) {
@@ -565,7 +582,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                     encoding_ms, curve_setup_ms, all_host_points_ms, run.dictionary_device_wall_ms,
                     init_ms - encoding_ms - curve_setup_ms - all_host_points_ms - run.dictionary_device_wall_ms,
                     entries, size_t(host_dictionary_curves) +
-                        (run.dictionary_fallback_host_bytes ? active.size() : 0), active.size());
+                        (run.dictionary_fallback_host_bytes ? batch : 0), size_t(batch));
             }
             ecm_ts_fprintf(stdout, "stage1_ntt_timing: %s=%u device_ms=%.3f wall_ms=%.3f "
                 "setup_ms=%.3f readback_ms=%.3f stopped=%u\n",
@@ -620,6 +637,11 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             }
             if (opt.persistence.ckpt_ms && !checkpoint.path().empty() && control.resume != count)
                 control.checkpoint(count, run.points);
+            if (opt.execution.ntt.observe_batch && !control.resume && fallback.empty() && valid == curves &&
+                std::none_of(run.dictionary_status.begin(), run.dictionary_status.end(),
+                             [](unsigned status) { return status != 0; }))
+                observation = Observation{std::move(executed_plan), std::move(run), valid, batch,
+                                          (milliseconds_since(compute_started) - plan_ms) / 1000};
         }
         auto replay_ntt = opt.execution.ntt;
         if (!fallback.empty() && replay_ntt.weighted && replay_ntt.length &&
@@ -666,9 +688,20 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         result.legacy_code = legacy;
         result.completion = ComputationResult::Completion::Completed;
         result.validate(N);
+        if (observation)
+            ecm_mersenne_ntt::record_production_sample(request, observation->plan, observation->run,
+                                                      observation->valid, observation->batch, observation->seconds);
     } catch (const ecm_stage1_checkpoint::Error& error) {
         result.fail(FailureSource::Persistence);
         ecm_ts_fprintf(stderr, "ERROR: GPU Stage1 NTT checkpoint: %s\n", error.what());
+    } catch (const ecm_mersenne_ntt::BudgetError& error) {
+        if (ecm_stage1_stop_requested()) {
+            result.stop();
+        } else {
+            result.fail(phase);
+            result.retry_smaller_ntt_batch = true;
+            ecm_ts_fprintf(stderr, "ERROR: GPU Stage1 NTT: %s\n", error.what());
+        }
     } catch (const std::exception& error) {
         if (ecm_stage1_stop_requested()) {
             result.stop();

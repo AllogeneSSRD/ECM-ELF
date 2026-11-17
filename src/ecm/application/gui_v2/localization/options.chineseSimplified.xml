@@ -60,9 +60,10 @@
       <Item id="option_stage1_ckpt_seconds" name="设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。" />
       <Item id="option_stage1_device" name="选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。" />
       <Item id="option_stage1_gpu_param" name="选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。" />
-      <Item id="option_stage1_gpu_algorithm" name="CUDA Stage1 GPU 算法，不区分大小写。1/cgbn 选择 CGBN，2/ntt 对完整梅森模数运行 1–128 条曲线，3/thread 由每个 CUDA 线程处理一条 Edwards 曲线，支持最高 1024 bit 的模数。" />
+      <Item id="option_stage1_gpu_algorithm" name="Stage1 GPU 算法，不区分大小写。单值 1/cgbn、2/ntt 和 3/thread 显式指定算法。切片列表按实际模数位宽从左到右尝试可用的算法，含下界、不含上界，空括号匹配任意位宽。CUDA NTT 要求完整梅森模数，支持 Edwards 和 Montgomery PARAM0。CUDA thread 支持最高 1024 bit 的 Edwards。OpenCL worker 的 cgbn 规则使用其原有 OpenCL 算法。" />
       <Item id="option_stage1_cuda_thread_block_size" name="仅用于 CUDA Edwards thread 的线程块大小，可选 32、64、128 或 256。CLI --wg 可覆盖，--wg 0 选择 128。" />
       <Item id="option_stage1_ntt_convolution" name="auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。" />
+      <Item id="option_stage1_ntt_pad_batch" name="0 按任务请求的曲线数运行 Stage1 NTT。1 在资源允许时用真实曲线把尾批补齐到优选批量。新增曲线使用独立 sigma，计入结果和符合条件的 Stage2 交接。" />
       <Item id="option_stage1_ntt_tight_weighted_bound" name="CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的安全短加权计划。false 恢复保守界和实测后端选型。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
       <Item id="option_stage1_ntt_memory_mib" name="Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。" />

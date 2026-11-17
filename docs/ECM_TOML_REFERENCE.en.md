@@ -398,12 +398,12 @@ Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout r
 ### gpu_algorithm
 
 ```toml
-gpu_algorithm = "cgbn"
+gpu_algorithm = "ntt[16384:], cgbn[]"
 ```
 
-Type `int|string` · Range `[1|2|3|cgbn|ntt|thread]` · Worker override `[worker.N] stage1.gpu_algorithm` · Level `advanced`.
+Type `int|string` · Range `[1|2|3|cgbn|ntt|thread|slice list]` · Worker override `[worker.N] stage1.gpu_algorithm` · Level `advanced`.
 
-CUDA Stage1 GPU algorithm, case-insensitive. 1/cgbn selects CGBN, 2/ntt selects NTT on full Mersenne moduli with 1–128 curves, and 3/thread selects one CUDA thread per Edwards curve for moduli up to 1024 bits.
+Stage1 GPU algorithm, case-insensitive. Single values 1/cgbn, 2/ntt and 3/thread explicitly select an algorithm. A slice list tries compatible algorithms from left to right at the actual modulus width, with inclusive starts and exclusive ends. Empty brackets match any width. CUDA NTT requires a full Mersenne modulus and Edwards or Montgomery PARAM0. CUDA thread requires Edwards up to 1024 bits. The cgbn rule uses the linked OpenCL algorithm on an OpenCL worker.
 
 <a id="stage1_backend"></a>
 
@@ -578,6 +578,20 @@ Type `int` · Range `[0,4]` · Worker override `[worker.N] stage1.ntt.outer_radi
 Legacy v1 key `stage1.ntt_outer_max`
 
 Maximum fused radix-2 layers per outer pass. Zero uses the profile.
+
+<a id="ntt_pad_batch"></a>
+
+### ntt.pad_batch
+
+```toml
+ntt.pad_batch = 0
+```
+
+Type `int` · Range `[0|1]` · Worker override `[worker.N] stage1.ntt.pad_batch` · Level `advanced`.
+
+Legacy v1 key `stage1.ntt_pad_batch`
+
+0 runs exactly the requested number of Stage1 NTT curves. 1 rounds the final batch up to the selected size when resources permit. Each extra curve gets a new sigma and is included in the results and any eligible Stage2 handoff.
 
 <a id="ntt_profile"></a>
 

@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "1ef172437b42e495d076239c30fab29e3903498430d59e81133acfea8247ee79",
-    "src/ecm/platform/generated/configuration_defaults.h": "3ffa7a95807894e463d8116dce7ba7c0706afb0f6d9d655e7a042fbe58d14d60",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "3d364b1a788fcd1f5e3871ff09ef10823cad1b9a7043016da97a224d57bfa041",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "a806026738e27fc149d669b9700c55c544d7f20c035472fef82620aae2732c51",
+    "src/ecm/platform/generated/configuration_defaults.h": "202a77bb697bb6e35d29acf5b3d64f88a5f931aff5cc789bebca30416db90e22",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "e8870e1e6e26ecef31c7989b56cb1abbc2acbd7ebd894841438c1507001e76e2",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "d30535faa4e308325ef75b232f0c42a15b3932afd3f9e07399338de71c01a69e",
     "config/ecm.toml.default": "de7a1f709077e21580b6e2e9c550ab795c5e2268d731d523cd1aaa24464bb442",
-    "config/ecm.toml.example": "57dfe3dbc510dc7abf1e303db751ac5915a36fa176878a8ddae39a7a6946df8a",
-    "docs/ECM_TOML_REFERENCE.en.md": "8b0b6254dc25c4390aa918a346a184eb97143e1b4d4490956bb06102baa9f8bb",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "d499b746a89b7ff7d63d9b07f5ea1fd815c47461572d6376c754f785311ac6b9",
-    "config/ecm_options.json": "382db38fcc7c78090a5a4aa0025eaad56bcb47f22d0f43439b0465b1d7311e94",
+    "config/ecm.toml.example": "0a78719f673359c534c7e4d4088e66b9c8dd5f80d6243f4155210b1cb51c9766",
+    "docs/ECM_TOML_REFERENCE.en.md": "9224e296aa60a0f6f31f8361f444659ef627f1e74a7bf906edbe02198a4fa557",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "b4f183c4bde03b82db295a990f22ecb30ff881c2ae76676f35fc4d641573ad07",
+    "config/ecm_options.json": "d1c61d383173f280ed13fe8a0c710b3f50f3b937703c88ed9e54a4ccc346c9c6",
     "tools/gen/generate_ecm_config.py": "a46ae0eaf677ad65796f650433ed05c1283fea90cd9afa3d183344bd3f33dd8a"
   }
 }

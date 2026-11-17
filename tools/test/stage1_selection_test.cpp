@@ -141,6 +141,23 @@ int main() {
     require(parse_cpu_implementation_policy("auto[]", selection) && choose(12511) == CpuImplementation::IfmaSimd,
             "empty brackets must select automatic execution at any width");
 
+    require(parse_gpu_algorithm_policy("NTT[ 16384: ], CgBn[:], thread[:1025]", selection) &&
+                selection.gpu_algorithm_rules.size() == 3 &&
+                selection.gpu_algorithm_rules[0].algorithm == GpuAlgorithm::Ntt &&
+                selection.gpu_algorithm_rules[0].first_bit == 16384 &&
+                !selection.gpu_algorithm_rules[0].end_bit &&
+                selection.gpu_algorithm_rules[1].algorithm == GpuAlgorithm::Cgbn &&
+                selection.gpu_algorithm_rules[1].first_bit == 1 &&
+                !selection.gpu_algorithm_rules[1].end_bit &&
+                selection.gpu_algorithm_rules[2].end_bit == 1025,
+            "GPU rules must retain their order, open bounds and exclusive stop");
+    for (const auto* invalid : {"", "auto[]", "ntt[0:]", "ntt[:1]", "ntt[16384:16384]",
+                               "cgbn[],", "cgbn[],,ntt[]", "ntt[], cgbn"})
+        require(!parse_gpu_algorithm_policy(invalid, selection), "invalid GPU policy was accepted");
+    require(parse_gpu_algorithm_policy("+2", selection) &&
+                selection.gpu_algorithm == GpuAlgorithm::Ntt && selection.gpu_algorithm_rules.empty(),
+            "single GPU algorithm must clear a previously selected policy");
+
     int param = -1;
     require(resolve_gpu_param(3, false, 0, param) && param == 0,
             "sigma prefix must select PARAM0");

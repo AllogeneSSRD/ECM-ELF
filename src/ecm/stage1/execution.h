@@ -96,6 +96,7 @@ struct ComputationResult {
     FailureSource failure = FailureSource::None;
     int legacy_code = ECM_ERROR;
     std::vector<CurveOutcome> curves;
+    bool retry_smaller_ntt_batch = false;
     void set_curve(uint32_t, CurveKind, mpz_srcptr, uint64_t sigma);
     void fail(FailureSource) noexcept;
     void stop() noexcept;

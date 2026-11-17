@@ -6,6 +6,9 @@
 #include "ecm/io/results.h"
 #include "../platform/generated/configuration_defaults.h"
 #include "ecm/platform/logging.h"
+#if ECM_HAS_CUDA_STAGE1
+#include "montgomery/cuda/ntt/batches.h"
+#endif
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -223,6 +226,102 @@ static std::string encode_saved_batch(const Stage1Request& request,
                                 ecm_save_modulus_expression(request.expression, request.modulus));
 }
 
+static std::string checkpoint_path(const Stage1Request& request) {
+    if (request.options.persistence.tmp_dir.empty())
+        return {};
+    ecm_edwards::Integer plus;
+    mpz_add_ui(plus.v, request.modulus, 1);
+    const auto& id = request.options.identity;
+    const auto exponent = id.target_kbnc ? id.handoff_n :
+        (mpz_popcount(plus.v) == 1 ? mpz_scan1(plus.v, 0) : 0);
+    const auto name = "." + save_naming(request.options).curve + "_s1_" +
+        (exponent ? "m" + std::to_string(exponent)
+                  : "bit" + std::to_string(mpz_sizeinbase(request.modulus, 2))) +
+        "_" + std::to_string(uint64_t(request.b1)) + ".ckpt";
+    return (std::filesystem::path(request.options.persistence.tmp_dir) / name)
+        .lexically_normal().make_preferred().string();
+}
+
+static std::string checkpoint_identity(const Stage1Request& request,
+                                       const ExecutionOptions& options, int default_window) {
+    const auto& selection = options.execution.selection;
+    const bool edwards = selection.curve == CurveModel::Edwards;
+    const auto param = selection.target == ExecutionTarget::Gpu ? selection.gpu_param : 0;
+    auto identity = ecm_edwards::hex(request.modulus) + "|" +
+        (edwards ? "ed" : "mont" + std::to_string(param)) + "|" +
+        std::to_string(uint64_t(request.b1)) + "|" +
+        std::to_string(int(selection.scalar_construction)) + "|" +
+        execution_target_name(selection.target);
+    if (selection.target == ExecutionTarget::Cpu) {
+        identity += "|" + std::to_string(options.execution.naf_w ? options.execution.naf_w : default_window) +
+                    "|" + std::to_string(int(selection.cpu_implementation));
+        if (!edwards && selection.cpu_montgomery_chain == CpuMontgomeryChain::Prac)
+            identity += "|prac-v1";
+    } else if (selection.gpu_algorithm == GpuAlgorithm::Ntt) {
+        if (edwards && options.execution.naf_w)
+            identity += "|ntt-edwards-naf-v1|" + std::to_string(options.execution.naf_w);
+        else
+            identity += "|ntt-v1";
+    } else if (selection.gpu_algorithm == GpuAlgorithm::Thread) {
+        identity += "|cuda-edwards-thread-v1";
+    }
+#if !ECM_HAS_CUDA_STAGE1
+    else if (edwards)
+        identity += "|opencl-edwards-naf-v1";
+#endif
+    else if (!edwards)
+        identity += "|" + options.cgbn_algorithm;
+    return identity;
+}
+
+#if ECM_HAS_CUDA_STAGE1
+static std::string ntt_task_identity(const std::string& identity, uint32_t curves) {
+    return identity + "|ntt-task-v1|" + std::to_string(curves);
+}
+
+std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request& request) {
+    const auto path = checkpoint_path(request);
+    if (path.empty()) return {};
+    const auto backups = request.options.persistence.ckpt_backups;
+    std::error_code error;
+    bool has_file = std::filesystem::exists(path, error);
+    for (unsigned i = 1; !has_file && i <= backups; ++i)
+        has_file = std::filesystem::exists(ecm_stage1_backup_path(path, i), error);
+    if (!has_file) return {};
+    auto options = request.options;
+    for (const auto algorithm : {GpuAlgorithm::Ntt, GpuAlgorithm::Cgbn, GpuAlgorithm::Thread}) {
+        options.execution.selection.gpu_algorithm = algorithm;
+        const auto id = checkpoint_identity(request, ExecutionOptions(options), 0);
+        const auto count = !request.curves && algorithm == GpuAlgorithm::Ntt ? 1u : request.curves;
+        if (algorithm == GpuAlgorithm::Ntt &&
+            ecm_stage1_checkpoint::matches(path, ntt_task_identity(id, count), 1, backups))
+            return algorithm;
+        if (ecm_stage1_checkpoint::matches(path, id, count, backups))
+            return algorithm;
+    }
+    return {};
+}
+#endif
+
+static ecm_results::Stage1BatchRecord describe_result(
+    const Stage1Request& request, ecm_results::Submission row, const CurveOutcome& curve,
+    uint32_t index, const std::string& when, const std::string& publication_task,
+    double seconds, const TaskDependencies& deps) {
+    row.publication_task = publication_task;
+    row.sigma = curve.sigma;
+    row.when = when;
+    if (curve.kind == CurveOutcome::Kind::Factor) {
+        row.stage = 1;
+        row.factors.push_back(ecm_results::decimal(curve.value));
+    }
+    std::ostringstream extra;
+    extra << ",\"stage1-engine\":{\"curve\":" << index << ",\"target\":"
+          << ecm_results::quoted(execution_target_name(request.options.execution.selection.target))
+          << ",\"batch-seconds\":" << seconds << ",\"coverage\":\"B1\"}";
+    auto internal = ecm_results::internal_json(row, request.modulus, 0, deps.build_identity(), extra.str());
+    return {std::move(row), std::move(internal)};
+}
+
 TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies& deps) {
     const auto N = request.modulus;
     const double B1 = request.b1, B2 = request.b2;
@@ -269,64 +368,51 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             phase = FailureSource::Publication;
             throw std::runtime_error("cannot prepare Stage1 save destination " + destination);
         }
-        ecm_edwards::Integer plus;
-        mpz_add_ui(plus.v, N, 1);
-        const auto exponent = opt.identity.target_kbnc
-                                  ? opt.identity.handoff_n
-                                  : (mpz_popcount(plus.v) == 1 ? mpz_scan1(plus.v, 0) : 0);
-        const auto name = std::string(base.edwards ? ".e" : ".m" + std::to_string(base.param)) +
-                          "_s1_" +
-                          (exponent ? "m" + std::to_string(exponent)
-                                    : "bit" + std::to_string(mpz_sizeinbase(N, 2))) +
-                          "_" + std::to_string(uint64_t(B1)) + ".ckpt";
-        const auto path = opt.persistence.tmp_dir.empty()
-                              ? std::string{}
-                              : (std::filesystem::path(opt.persistence.tmp_dir) / name)
-                                    .lexically_normal()
-                                    .make_preferred()
-                                    .string();
+        const auto path = checkpoint_path(request);
         if (!path.empty())
             std::filesystem::create_directories(opt.persistence.tmp_dir);
         session.set_backup_limit(opt.persistence.ckpt_backups);
         session.set_path(path);
-        {
-            auto identity = ecm_edwards::hex(N) + "|" +
-                            (base.edwards ? "ed" : "mont" + std::to_string(base.param)) + "|" +
-                            std::to_string(uint64_t(B1)) + "|" +
-                            std::to_string(int(opt.execution.selection.scalar_construction)) + "|" +
-                            ecm_stage1::execution_target_name(opt.execution.selection.target);
-            if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu) {
-                identity += "|" +
-                            std::to_string(opt.execution.naf_w ? opt.execution.naf_w
-                                                               : deps.default_naf_window()) +
-                            "|" + std::to_string(int(selection.cpu_implementation));
-                if (!base.edwards && opt.execution.selection.cpu_montgomery_chain ==
-                                         CpuMontgomeryChain::Prac)
-                    identity += "|prac-v1";
-            } else if (selection.gpu_algorithm == GpuAlgorithm::Ntt) {
-                if (base.edwards && opt.execution.naf_w)
-                    identity += "|ntt-edwards-naf-v1|" + std::to_string(opt.execution.naf_w);
-                else
-                    identity += "|ntt-v1";
-            } else if (selection.gpu_algorithm == GpuAlgorithm::Thread) {
-                identity += "|cuda-edwards-thread-v1";
-            }
-#if !ECM_HAS_CUDA_STAGE1
-            else if (base.edwards)
-                identity += "|opencl-edwards-naf-v1";
+        const auto identity = checkpoint_identity(request, execution,
+            selection.target == ExecutionTarget::Cpu && !opt.execution.naf_w ? deps.default_naf_window() : 0);
+        bool split_ntt = false;
+#if ECM_HAS_CUDA_STAGE1
+        if (selection.target == ExecutionTarget::Gpu && selection.gpu_algorithm == GpuAlgorithm::Ntt) {
+            split_ntt = curves > stage1_ntt_max_curves || opt.persistence.retain_completed_checkpoint;
+            if (split_ntt && curves <= stage1_ntt_max_curves &&
+                ecm_stage1_checkpoint::matches(path, identity, curves, opt.persistence.ckpt_backups))
+                split_ntt = false; // Resume an existing one-batch queue checkpoint.
+        }
 #endif
-            else if (!base.edwards)
-                identity += "|" + execution.cgbn_algorithm;
+        if (!split_ntt)
             session.begin(identity, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&
                               opt.execution.selection.target == ExecutionTarget::Gpu);
-        }
         ecm_save::copy_history(opt.persistence.legacy_save_source, savefilename,
             opt.execution.selection.curve == CurveModel::Edwards ? -1 :
             (opt.execution.selection.target == ExecutionTarget::Gpu ? opt.execution.selection.gpu_param : 0));
         const auto begin = std::chrono::steady_clock::now();
         phase = FailureSource::Execution;
-        out->computation = deps.execute(request, execution, session);
+        const auto result_identity = ecm_edwards::hex(N) + "|" + std::to_string(base.b1) +
+                                     (base.edwards ? "ed" : "mont" + std::to_string(base.param));
+#if ECM_HAS_CUDA_STAGE1
+        if (split_ntt) {
+            out->computation = ecm_cuda_stage1::run_ntt_batches(
+                request, deps, session, ntt_task_identity(identity, curves),
+                [&](const CurveOutcome& factor, uint32_t index) {
+                    const auto key = result_identity + "|early-factor|" + std::to_string(factor.sigma);
+                    const auto task = std::to_string(ecm_io::fingerprint(key));
+                    const auto seconds =
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+                    std::vector<ecm_results::Stage1BatchRecord> early;
+                    early.push_back(describe_result(request, base, factor, index,
+                        ecm_results::utc_timestamp(), task, seconds, deps));
+                    ecm_results::publish_stage1_batch(opt.persistence.results_file,
+                        opt.persistence.submission_file, std::move(early), N, key);
+                });
+        } else
+#endif
+            out->computation = deps.execute(request, execution, session);
         auto& computed = out->computation;
         if (computed.completion != ComputationResult::Completion::Completed) {
             out->status = computed.completion == ComputationResult::Completion::Stopped
@@ -337,7 +423,7 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             return result;
         }
         computed.validate(N);
-        if (computed.curves.size() != curves)
+        if (split_ntt ? computed.curves.size() < curves : computed.curves.size() != curves)
             throw std::runtime_error("Stage1 result count differs from requested curves");
         phase = FailureSource::Publication;
         if (!destination.empty()) {
@@ -350,29 +436,14 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         const auto seconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
         std::vector<ecm_results::Stage1BatchRecord> records;
-        std::string task_identity = ecm_edwards::hex(N) + "|" + std::to_string(base.b1) +
-                                    (base.edwards ? "ed" : "mont" + std::to_string(base.param));
+        auto task_identity = result_identity;
         for (const auto& curve : computed.curves)
             task_identity += "|" + std::to_string(curve.sigma);
         const auto publication_task = std::to_string(ecm_io::fingerprint(task_identity));
         const auto publication_when = ecm_results::utc_timestamp();
-        for (uint32_t i = 0; i < computed.curves.size(); ++i) {
-            auto r = base;
-            r.publication_task = publication_task;
-            r.sigma = computed.curves[i].sigma;
-            r.when = publication_when;
-            if (computed.curves[i].kind == CurveOutcome::Kind::Factor) {
-                r.stage = 1;
-                r.factors.push_back(ecm_results::decimal(computed.curves[i].value));
-            }
-            std::ostringstream extra;
-            extra << ",\"stage1-engine\":{\"curve\":" << i << ",\"target\":"
-                  << ecm_results::quoted(
-                         ecm_stage1::execution_target_name(opt.execution.selection.target))
-                  << ",\"batch-seconds\":" << seconds << ",\"coverage\":\"B1\"}";
-            records.push_back(
-                {r, ecm_results::internal_json(r, N, 0, deps.build_identity(), extra.str())});
-        }
+        for (uint32_t i = 0; i < computed.curves.size(); ++i)
+            records.push_back(describe_result(request, base, computed.curves[i], i,
+                publication_when, publication_task, seconds, deps));
         ecm_results::publish_stage1_batch(opt.persistence.results_file,
                                           opt.persistence.submission_file, std::move(records), N,
                                           task_identity);

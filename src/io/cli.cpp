@@ -71,8 +71,7 @@ void print_usage(const char* prog) {
                  ".ckpt\n"
               << "                       (default: current dir; ecm.exe never writes "
                  "to p95)\n"
-              << "  -gpucurves <n>       Number of ECM curves per launch (Edwards: "
-                 "total curves)\n"
+              << "  -gpucurves <n>       Number of ECM curves (total for Edwards or CUDA NTT)\n"
               << "  --ckpt <sec>         Mid-stage-1 checkpoint interval in seconds, "
                  "for every\n"
               << "                       implementation that has one (GPU, CPU "
@@ -113,7 +112,8 @@ void print_usage(const char* prog) {
                  "only)\n"
               << "  --showkernel         List available " << ecm_backend_name()
               << " kernel paths and exit\n"
-              << "  --gpu-algorithm <1|2|3|cgbn|ntt|thread>  Select the Stage1 GPU algorithm.\n"
+              << "  --gpu-algorithm <1|2|3|cgbn|ntt|thread|slice list>\n"
+              << "                       Select the Stage1 GPU algorithm (e.g. \"ntt[16384:], cgbn[]\").\n"
               << "  --tune ntt          Tune CUDA Stage1 NTT. Use --bits N for one exponent width.\n"
               << "  --tune-exhaustive   With --tune ntt: measure every eligible batch.\n"
               << "  --gpu-info           Report the device this build would use and, "
@@ -346,8 +346,8 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 if (!ecm_stage1::parse_curve_model(value, selection.curve))
                     reject();
             } else if (key == "--gpu-algorithm") {
-                expected = "1|2|3|cgbn|ntt|thread";
-                if (!ecm_stage1::parse_gpu_algorithm(value, selection.gpu_algorithm))
+                expected = "1|2|3|cgbn|ntt|thread or slice list";
+                if (!ecm_stage1::parse_gpu_algorithm_policy(value, selection))
                     reject();
             } else if (key == "--gpu-backend") {
                 expected = "auto|cuda|opencl";
