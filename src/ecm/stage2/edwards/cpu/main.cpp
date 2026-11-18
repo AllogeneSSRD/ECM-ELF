@@ -18,6 +18,7 @@
 #include <sstream>
 #include <omp.h>
 #include "../../cpu/gwpoly.h"
+#include "../../cpu/giant_range.h"
 #include "../../cpu/runtime_tune.h"
 #include "../../queue_paths.h"
 #include "../../launch.h"
@@ -51,7 +52,8 @@ struct Options {
     std::string worktodo,log,cpu_affinity;
     fs::path tune_profile;
     std::optional<ecm_cpu_tune::ThreadLayout> thread_layout;
-    bool tune_runtime=true;
+    bool tune_runtime=true,round_b2=false;
+    uint64_t round_limit=ecm_gwpoly::max_b2;
     uint64_t tune_min_repeats=2,tune_sample_limit=10;
     int log_level=-1;
     bool gui=false,once=false,explicit_results=false;
@@ -101,7 +103,8 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     o.ini=ini.string();
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(launch.lines,o.worker,true));
     o.threads=settings.cpu_threads;o.memory=settings.cpu_memory_mib;o.backend=settings.cpu_backend;
-    o.tune_runtime=settings.tune_runtime;
+    o.tune_runtime=settings.tune_runtime;o.round_b2=settings.b2_round_chain;
+    if(settings.auto_b2 && settings.auto_max)o.round_limit=std::min(o.round_limit,settings.auto_max);
     o.tune_min_repeats=settings.tune_min_repeats;
     o.tune_sample_limit=settings.runtime_samples;
     const auto &tune_name=settings.tune_profile.empty()?settings.shared_tune_file:settings.tune_profile;
@@ -122,7 +125,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         }
         if(key=="--help" || key=="-h") {
             std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
-                "[--threads 1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
+                "[--threads 1] [--b2-round-chain 0|1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
                 "[--tune-runtime 0|1] [--tune-profile FILE] [--tune-min-repeats N] [--tune-runtime-samples N]\n"
                 "--export-results --submission FILE regenerates owned submission output without arithmetic\n"
@@ -148,6 +151,11 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         else if(key=="--backend")o.backend=value;else if(key=="--b2")o.b2=decimal(value);
         else if(key=="--memory-mib")o.memory=decimal(value);else if(key=="--threads")o.threads=decimal(value);
         else if(key=="--skip")o.skip=decimal(value);else if(key=="--curves")o.count=decimal(value);
+        else if(key=="--b2-round-chain"){
+            const auto mode=decimal(value);
+            if(mode>1)throw std::runtime_error("b2-round-chain must be 0 or 1");
+            o.round_b2=mode!=0;
+        }
         else if(key=="--d")o.d=decimal(value);
         else if(key=="--tune-profile")o.tune_profile=value.empty()?fs::path{}:s2prod::absolute_from(fs::current_path(),value);
         else if(key=="--tune-runtime"){
@@ -168,6 +176,8 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     if(o.backend=="gwpoly" || (o.backend=="auto" && !ecm_gwpoly::load_error()))max_b2=ecm_gwpoly::max_b2;
     if((!o.export_only && !o.gw_selftest && (!o.save.empty() && !o.b2)) || o.b2>max_b2 || !o.count || !o.threads || o.threads>1024 || !o.memory || o.memory>1048576 ||
        (o.backend!="auto" && o.backend!="ntt" && o.backend!="plain" && o.backend!="gwpoly"))throw std::runtime_error("invalid options; see --help");
+    if(o.round_b2 && (o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::stage2_abi()<4))
+        throw std::runtime_error("CPU B2 rounding requires gwpoly with Stage2 ABI 4");
     if((o.d || o.gw_check) && o.backend!="gwpoly")throw std::runtime_error("--d/--gw-check require --backend gwpoly");
     if(!o.tune_sample_limit || o.tune_sample_limit>1000 || !o.tune_min_repeats || o.tune_min_repeats>o.tune_sample_limit)
         throw std::runtime_error("tune repeats and sample limit must be in 1..1000, with repeats <= limit");
@@ -207,7 +217,7 @@ int stopped(){
 }
 struct Params {ecm_params p;Params(){ecm_init(p);}~Params(){ecm_clear(p);}};
 struct Details {uint64_t d=0,poly_size=0,fft_length=0,checked_values=0;std::string fft_description,polymult_isa;double init=0,main=0,maxerr=0;};
-std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_t f,int stage,double seconds,const Details &details) {
+std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_t f,int stage,double seconds,const Details &details,uint64_t requested_b2) {
     ecm_results::Submission common;common.exponent=o.exponent;common.sigma=r.sigma;common.b1=r.b1;common.b2=o.b2;
     common.stage=stage;common.known=o.known;common.user=o.user;common.computer=o.computer;common.aid=o.aid;
     if(stage)common.factors.push_back(number(f));
@@ -217,7 +227,9 @@ std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_
        <<",\"stage2-engine\":{\"name\":"<<quote(o.backend=="gwpoly"?"gwnum-polymult":"libecm")<<",\"version\":"<<quote(
            o.backend=="gwpoly"?ecm_gwpoly::version():
            ecm_version())<<",\"backend\":"<<quote(o.backend)
-       <<",\"seconds\":"<<std::setprecision(9)<<seconds<<",\"save-line\":"<<r.line<<",\"coverage\":\"requested-B2\"";
+       <<",\"seconds\":"<<std::setprecision(9)<<seconds<<",\"save-line\":"<<r.line
+       <<",\"coverage\":"<<quote(o.b2>requested_b2?"rounded-B2":"requested-B2");
+    if(o.round_b2)out<<",\"requested-B2\":"<<requested_b2<<",\"actual-B2\":"<<o.b2;
     if(details.fft_length)out<<",\"gw-build\":"<<quote(ecm_gwpoly::identity())<<",\"fft-description\":"<<quote(details.fft_description)<<",\"polymult-isa\":"<<quote(details.polymult_isa)<<",\"fft-length\":"<<details.fft_length<<",\"init-seconds\":"<<details.init
         <<",\"main-seconds\":"<<details.main<<",\"max-roundoff\":"<<details.maxerr<<",\"checked-values\":"<<details.checked_values;
     out<<"}}";
@@ -238,12 +250,15 @@ struct TunePlans {
     uint64_t b1=0,b2=0,exponent=0;
     std::vector<ecm_cpu_tune::Candidate> candidates;
     const std::vector<ecm_cpu_tune::Candidate>& get(const SavedCurve &r,mpz_srcptr n,uint64_t bound,
-                                                   const ecm_gwpoly::Options &gw) {
+                                                   const ecm_gwpoly::Options &gw,const Options &options) {
         if(modulus!=r.n || b1!=r.b1 || b2!=bound || exponent!=gw.exponent) {
             const auto plans=ecm_gwpoly::tune_candidates(n,r.b1,bound,gw);
             std::vector<ecm_cpu_tune::Candidate> next;
-            for(const auto &p:plans)next.push_back({p.d,p.poly_size,p.fft_length,p.fft_exponent,
-                p.max_exponent,p.f_tree_splits,p.planned_mib,p.fft_layout,p.polymult_isa});
+            for(const auto &p:plans) {
+                const auto actual=options.round_b2?ecm_gwpoly::full_block_b2(r.b1,bound,p.d,p.poly_size,options.round_limit):bound;
+                if(actual)next.push_back({p.d,p.poly_size,p.fft_length,p.fft_exponent,
+                    p.max_exponent,p.f_tree_splits,p.planned_mib,p.fft_layout,p.polymult_isa,actual});
+            }
             modulus=r.n;
             candidates=std::move(next);
             b1=r.b1;b2=bound;exponent=gw.exponent;
@@ -351,19 +366,28 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                 }
                 ecm_gwpoly::Stats stats{};
                 std::optional<TuneObservation> observation;
+                const auto apply_plan=[&](const ecm_cpu_tune::Candidate &plan) {
+                    gw.d=plan.d;selected.b2=plan.actual_b2;progress.b2=selected.b2;
+                    if(o.round_b2)log("gwpoly-bounds: requested_B2="+std::to_string(o.b2)+
+                        " actual_B2="+std::to_string(selected.b2)+" D="+std::to_string(gw.d)+
+                        " P="+std::to_string(plan.poly_size),false);
+                };
+                if(o.round_b2 && tune.get(r,n.v,o.b2,gw,o).empty())
+                    throw std::runtime_error("No admitted whole G block endpoint within CPU B2 limit "+std::to_string(o.round_limit));
                 std::error_code tune_error;
                 if(ecm_gwpoly::stage2_abi()>=4 && o.thread_layout && !o.tune_profile.empty() &&
                    (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error))) {
                     try {
-                        const auto &plans=tune.get(r,n.v,o.b2,gw);
+                        const auto &plans=tune.get(r,n.v,o.b2,gw,o);
                         if(!plans.empty()) {
                             ecm_cpu_tune::Key key{ecm_cpu_tune::cpu_identity(ecm_gwpoly::cpu()),ecm_gwpoly::version(),*o.thread_layout,
                                 gw.exponent != 0,gw.exponent ? gw.exponent : mpz_sizeinbase(n.v,2),r.b1,o.b2};
                             const auto d=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
                             const auto plan=std::find_if(plans.begin(),plans.end(),[&](const auto &p){return p.d==d;});
                             if(plan!=plans.end()) {
+                                key.b2=plan->actual_b2;
                                 observation=TuneObservation{std::move(key),*plan};
-                                gw.d=d;
+                                apply_plan(*plan);
                                 if(verbose)log("gwpoly-tune: D="+std::to_string(d)+" P="+std::to_string(plan->poly_size)+
                                     " FFT="+std::to_string(plan->fft_length)+(o.tune_runtime?" runtime":" read-only"),false);
                             }
@@ -374,21 +398,28 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                     }
                 }
                 if(cancel())return false;
+                if(o.round_b2 && !observation)apply_plan(tune.candidates.front());
                 const auto trial_start=std::chrono::steady_clock::now();
                 try {
-                    if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;
+                    if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,selected.b2,gw,stats))stage=2;
                 } catch(const std::exception &error) {
                     if(cancel())return false;
                     if(!observation)throw;
                     std::cerr<<"gwpoly-tune: D="<<gw.d<<" failed, retrying automatic D: "<<error.what()<<'\n';
                     tune.reject(gw.d);
                     observation.reset();
-                    gw.d=0;
+                    if(o.round_b2){
+                        if(tune.candidates.empty())throw;
+                        apply_plan(tune.candidates.front());
+                    }else gw.d=0;
                     stats={};
-                    try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;}
+                    try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,selected.b2,gw,stats))stage=2;}
                     catch(...){if(cancel())return false;throw;}
                 }
                 if(progress.error)std::rethrow_exception(progress.error);
+                if(o.round_b2 && !stage && (stats.d!=gw.d || !stats.poly_size ||
+                   stats.giants%stats.poly_size || stats.giants/stats.poly_size!=stats.blocks))
+                    throw std::runtime_error("GWNUM returned an incomplete rounded G block geometry");
                 const double trial_seconds=std::chrono::duration<double>(
                     std::chrono::steady_clock::now()-trial_start).count();
                 if(o.tune_runtime && !stage && observation &&
@@ -426,8 +457,8 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
     }
     if(stage && (mpz_cmp_ui(f.v,1)<=0 || mpz_cmp(f.v,n.v)>=0 || !mpz_divisible_p(n.v,f.v)))throw std::runtime_error("saturated or invalid factor; no NF published");
     elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
-    json=result(selected,r,n.v,f.v,stage,elapsed,details);
-    report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=o.b2;
+    json=result(selected,r,n.v,f.v,stage,elapsed,details,o.b2);
+    report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=selected.b2;
     report.publication_task=publication_task;report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
     report.publication_order=order;
     report.save_name=std::filesystem::path(o.save).stem().u8string();
@@ -496,7 +527,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
             if(!calculate(selected,row,&record.a24,state.publication_task,record.index,report,json,elapsed,tune,pending,queue.report))return false;
-            const auto outcome=s2prod::checkpoint_outcome(record,b2,ecm_results::submission_json(report,n.v));
+            const auto outcome=s2prod::checkpoint_outcome(record,report.b2,ecm_results::submission_json(report,n.v));
             if(state.reserved.empty())state.reserved.push_back({position});
             queue.commit(position,outcome);
             ++queue.completed;

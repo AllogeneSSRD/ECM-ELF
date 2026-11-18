@@ -138,6 +138,19 @@ def main():
     # recover the same factor as the independent prime-by-prime ladder.
     recovered=run('suffix_factor_replay',hit,hit_n,extra=['--d',30])[0]
     assert recovered['factors']==r['factors'] and 'replay original grid' in (out/'suffix_factor_replay.log').read_text()
+    # The saved point has prime order 127 modulo 10007. At D=30 it is
+    # first represented by 4*30+7, beyond the two centres for B2=45.
+    assert oracle.mont.ladder(127,x,z,a24,hit_n)[1] % 10007 == 0
+    assert run('before_rounded_hit',hit,hit_n,45,['--d',30])[0]['status']=='NF'
+    rounded=run('rounded_hit',hit,hit_n,45,['--d',30,'--b2-round-chain',1])[0]
+    assert (rounded['b2'],rounded['factors'])==(134,['10007'])
+    assert rounded['stage2-engine']['requested-B2']==45 and rounded['stage2-engine']['actual-B2']==134
+    rounded_public=json.loads((out/'rounded_hit.json.txt').read_bytes())
+    verify_crc(rounded_public)
+    assert rounded_public['b2']==134
+    explicit=run('explicit_rounded_hit',hit,hit_n,134,['--d',30])[0]
+    assert explicit['factors']==rounded['factors']
+    run('round_over_limit',cpu,n,b2=10**15,extra=['--d',210,'--b2-round-chain',1],good=False)
     # Small primes represented in the baby wheel have already passed the
     # denominator check. Prime divisors of D require a separate ladder.
     for prime, sigma, order in [(131, 31, 3), (67, 19, 5), (97, 26, 7)]:

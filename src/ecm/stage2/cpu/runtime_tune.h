@@ -33,6 +33,7 @@ struct Candidate {
     unsigned f_tree_splits = 0;
     double planned_mib = 0;
     std::string fft_layout, isa;
+    uint64_t actual_b2 = 0; // Runtime candidate only; persisted in Key::b2.
 };
 
 // Candidates are already admitted for this modulus and budget. The static

@@ -31,6 +31,8 @@ def main():
     parser.add_argument('--cuda', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--device', type=int, default=1)
+    parser.add_argument('--round-cpu', action='store_true',
+                        help='Fill the CPU tail and resume across different actual B2 values')
     args = parser.parse_args()
     folder = args.out.resolve()
     folder.mkdir(parents=True, exist_ok=False)
@@ -43,24 +45,37 @@ def main():
         first, second = (cpu, cuda) if src == 'cpu' else (cuda, cpu)
         case = folder / name
         workflow(case, args.device, src)
+        second_sigma = 18
+        if args.round_cpu:
+            # Equal (N, B1, sigma) must retain two distinct actual-B2 receipts.
+            (case/'points.save').write_text((POINTS.splitlines()[0]+'\n')*2, encoding='utf-8')
+            second_sigma = 17
         task = 'ECMSTAGE2=1,2,127,-1,"points.save",40000,0,2'
         queue = case / 'worktodo.txt'
         queue.write_text(task+'\n', encoding='utf-8')
-        stop_after_first_start(first, case)
+        cpu_flags = ['--b2-round-chain', '1', '--d', '210'] if args.round_cpu else []
+        stop_after_first_start(first, case, cpu_flags if src == 'cpu' else [])
         assert task in queue.read_text() and not (case/'finished.txt').exists()
         checkpoint, = case.rglob('.ecm_ckpt_stage2_*.dat')
         shutil.copyfile(checkpoint, case/'stopped.snapshot')
         assert records(case)[0]['Edwards']['sigma'] == 17
         config = case / 'ecm.toml'
         config.write_text(config.read_text().replace(f'device = "{src}"', f'device = "{dest}"'), encoding='utf-8')
-        log = run(second, case, ['--gui-events','--log-level','batches'], label='resume')
-        assert 'completed=1 remaining=1' in log and 'curve_start: 2/2 record=2 sigma=18' in log
+        resume_flags = cpu_flags if dest == 'cpu' else []
+        log = run(second, case, ['--gui-events','--log-level','batches', *resume_flags], label='resume')
+        assert 'completed=1 remaining=1' in log and f'curve_start: 2/2 record=2 sigma={second_sigma}' in log
         assert not checkpoint.exists() and task not in queue.read_text()
         assert (case/'finished.txt').read_text().count(task)==1
-        assert [row['Edwards']['sigma'] for row in records(case)] == [17,18]
+        rows = records(case)
+        assert [row['Edwards']['sigma'] for row in rows] == [17,second_sigma]
+        if args.round_cpu:
+            cpu_row, gpu_row = rows if src == 'cpu' else reversed(rows)
+            assert cpu_row['stage2-engine']['requested-B2'] == gpu_row['b2'] == 40000
+            assert cpu_row['b2'] == cpu_row['stage2-engine']['actual-B2'] == 41054
         public = [json.loads(line) for line in (case/'results.json.txt').read_text().splitlines() if line]
         assert len(public)==1 and public[0]['status']=='NF' and public[0]['curves']==2
-        summary[name] = {'checkpoint':sha(case/'stopped.snapshot'), 'curves':2}
+        assert public[0]['b2'] == rows[-1]['b2']
+        summary[name] = {'checkpoint':sha(case/'stopped.snapshot'), 'curves':2, 'b2':[r['b2'] for r in rows]}
     case = folder/'cpu_factor'
     workflow(case,args.device,'cpu')
     task = 'ECMSTAGE2N=N/A,"hit.save",40000,0,1'

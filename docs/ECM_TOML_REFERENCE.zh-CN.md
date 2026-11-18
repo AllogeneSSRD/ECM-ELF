@@ -953,7 +953,7 @@ b2_round_chain = false
 
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] b2_round_chain` · 级别 `高级`。
 
-对各运行时D及算术候选，将B2向上补到最小整P点数且尾块可走chain；自动调优按各候选实际工作量比较，实测仍按实际B2分开存储。日志与结果分别保留请求和实际B2。默认0保持界限；整数、实时显存及AutoB2上限仍为硬限制。启动成本探测固定边界，显式ECM标定仍须关闭凑整。CLI --b2-round-chain覆盖当前worker配置。
+按候选 D 向上凑整 B2。CPU gwpoly 在确定高位后缀后补满已有的最后一个 P 点 G 块；CUDA 还要求尾点块能走链。调优按实际 B2 采样，日志与内部结果记录请求和实际界限。默认关闭。整数、内存及启用的 AutoB2 上限仍生效。CUDA 启动探测使用固定界限，显式 ECM 标定要求关闭凑整。CLI --b2-round-chain 覆盖 worker 配置。
 
 <a id="stage2_baby_backend"></a>
 

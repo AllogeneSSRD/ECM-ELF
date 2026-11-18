@@ -78,6 +78,8 @@ tune_file = "tune_gpu1.toml"
 
 `b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
 
+CPU gwpoly 同样读取这个开关，按自己的高位后缀补满最后一个 P 点 G 块。直接读档和队列的结果均使用实际 B2，内部结果另保留请求值。[CPU 整块扩展](EDWARDS_CPU_STAGE2.md#将-b2-扩展到整块)
+
 CUDA的`seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-backend`。它控制8193…16384实际算术bits的paired seed及GPU构建[D]Q，其他情况仍为标量。运行时先完成同形状、R=`tune_min_repeats`次的标量／协作对照，再选最快合格均值；正式tune可复用配对区域。只读模式继续采用已有合格胜者，单独强制协作的未配对记录不足以启用auto。实际`seed_coop`按行记账，NTT表继续共享。详见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_seed_backend)与[自动选型合同](../architecture/AUTO_B2.md#giant-seed自动选型)。
 
 普通高位宽S4可显式设置`reduce_backend="coop32"`，CLI为`--reduce-backend coop32`；默认`scalar`。仅CUDA实际算术8193…16384 bits的普通归约启用协作，小位宽和梅森归约继续原内核。它与seed／baby／giant的auto独立；ECM性能文件分开记录两种归约策略，独立NTT表可共用。当前设备资格、固定D收益和限制见[S4性能](../performance/STAGE2_S4_REDUCTION.md)与[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_reduce_backend)。

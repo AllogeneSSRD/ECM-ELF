@@ -26,7 +26,7 @@ if(ECM_GW_STAGE2)
     target_include_directories(ecm_gwnum PRIVATE "${_gmp}/include")
     target_link_libraries(ecm_gwnum PRIVATE "${_gmp}/lib/gmp.lib" "${ECM_GWNUM_ROOT}/polymult64.lib")
     set(_identity "")
-    foreach(_file "${_cpu}/gwpoly.cpp" "${_cpu}/gwpoly_plugin.cpp" "${_cpu}/gwpoly.h"
+    foreach(_file "${_cpu}/gwpoly.cpp" "${_cpu}/gwpoly_plugin.cpp" "${_cpu}/gwpoly.h" "${_cpu}/giant_range.h"
                   "${ECM_ROOT}/include/ecm/stage2_gw_abi.h" "${ECM_GWNUM_ROOT}/gwnum64.lib"
                   "${ECM_GWNUM_ROOT}/polymult64.lib")
         file(SHA256 "${_file}" _hash)

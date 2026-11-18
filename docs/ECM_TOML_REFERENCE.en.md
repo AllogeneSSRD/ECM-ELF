@@ -953,7 +953,7 @@ b2_round_chain = false
 
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] b2_round_chain` · Level `advanced`.
 
-For each runtime candidate D and arithmetic, increase B2 to the smallest whole-P giant count whose last point chunk can use a chain. Runtime tuning includes that candidate's actual work; measurements remain keyed by actual B2. Logs/results keep requested and actual B2. Default 0 preserves bounds. Overflow, live memory and the AutoB2 maximum remain hard limits. Startup cost probes keep fixed bounds; explicit ECM calibration still requires rounding off. CLI --b2-round-chain overrides this worker TOML.
+Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block after relocation. CUDA also requires a chain-capable final point chunk. Tuning measures each candidate at its actual B2. Logs and internal results retain both bounds. Default false preserves the request. Integer, memory and enabled AutoB2 limits apply. CUDA startup cost probes keep fixed bounds and explicit ECM calibration requires rounding off. CLI --b2-round-chain overrides this worker setting.
 
 <a id="stage2_baby_backend"></a>
 

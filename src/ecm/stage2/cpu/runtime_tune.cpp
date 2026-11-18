@@ -305,10 +305,12 @@ uint64_t select(const fs::path& path, const Key& key, const std::vector<Candidat
         return explore ? candidates.front().d : 0;
     const auto profile = parse_profile(read_profile(path));
     std::vector<const Row*> results(candidates.size(), nullptr);
-    for (const auto& row : profile.rows) {
-        for (std::size_t i = 0; i < candidates.size(); ++i) {
+    auto candidate_key = key;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        candidate_key.b2 = candidates[i].actual_b2;
+        for (const auto& row : profile.rows) {
             if (candidates[i].fft_exponent <= row.plan.max_exponent &&
-                matches(row, key, candidates[i]) &&
+                matches(row, candidate_key, candidates[i]) &&
                 (!results[i] || row.repeats > results[i]->repeats))
                 results[i] = &row;
         }

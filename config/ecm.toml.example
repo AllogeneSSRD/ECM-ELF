@@ -729,15 +729,15 @@ target = "gpu"  # string: [cpu|gpu]
 # 重放可能需要更大工作区。CLI --giant-tail-balance覆盖当前worker配置。
 
 # b2_round_chain = false  # bool: [false|true|0|1]
-# For each runtime candidate D and arithmetic, increase B2 to the smallest whole-P giant count whose
-# last point chunk can use a chain. Runtime tuning includes that candidate's actual work;
-# measurements remain keyed by actual B2. Logs/results keep requested and actual B2. Default 0
-# preserves bounds. Overflow, live memory and the AutoB2 maximum remain hard limits. Startup cost
-# probes keep fixed bounds; explicit ECM calibration still requires rounding off. CLI
-# --b2-round-chain overrides this worker TOML.
-# 对各运行时D及算术候选，将B2向上补到最小整P点数且尾块可走chain；自动调优按各候选实际工作量比较，实
-# 测仍按实际B2分开存储。日志与结果分别保留请求和实际B2。默认0保持界限；整数、实时显存及AutoB2上限仍
-# 为硬限制。启动成本探测固定边界，显式ECM标定仍须关闭凑整。CLI --b2-round-chain覆盖当前worker配置。
+# Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block after relocation.
+# CUDA also requires a chain-capable final point chunk. Tuning measures each candidate at its actual
+# B2. Logs and internal results retain both bounds. Default false preserves the request. Integer,
+# memory and enabled AutoB2 limits apply. CUDA startup cost probes keep fixed bounds and explicit
+# ECM calibration requires rounding off. CLI --b2-round-chain overrides this worker setting.
+# 按候选 D 向上凑整 B2。CPU gwpoly 在确定高位后缀后补满已有的最后一个 P 点 G 块；CUDA 还要求尾点块能
+# 走链。调优按实际 B2 采样，日志与内部结果记录请求和实际界限。默认关闭。整数、内存及启用的 AutoB2 上
+# 限仍生效。CUDA 启动探测使用固定界限，显式 ECM 标定要求关闭凑整。CLI --b2-round-chain 覆盖 worker
+# 配置。
 
 # giant_chain = "64"  # string: [64|32|auto]
 # Points per sequential CUDA thread chain, independent of CUDA block size. 64 preserves the

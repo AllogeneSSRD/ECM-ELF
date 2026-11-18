@@ -1,4 +1,5 @@
 #include "gwpoly.h"
+#include "giant_range.h"
 #include "../../curve/edwards.h"
 extern "C" {
 #include <cpuid.h>
@@ -178,6 +179,17 @@ struct Context {
         u64togw(&gw,1,out[a.size+b.size-2]);
     }
     Array convolution(const Array &a,const Array &b){return convolution(view(a),view(b),0,a.size+b.size-1);}
+    Array scaled_remainder(const Array &h,const Array &inv){
+        // rev_P(H) starts with P-|H| zero coefficients. Truncation leaves
+        // only |H| useful outputs; write them directly in descent order.
+        Array scaled(gw,inv.size);
+        auto input=reverse(h);
+        View output(scaled.v,scaled.v+h.size);
+        std::reverse(output.begin(),output.end());
+        product(input.data(),h.size,inv.v,h.size,output.data(),0,h.size,POLYMULT_MULLO);
+        for(size_t i=h.size;i<scaled.size;++i)u64togw(&gw,0,scaled[i]);
+        return scaled;
+    }
     void scaled_children(const Array &parent,const Array &left,const Array &right,size_t a,size_t b,gwnum *out){
         // Both circular products use the same transformed parent. Wrapped
         // coefficients lie below each requested high interval. Like the
@@ -613,10 +625,18 @@ std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,ui
         degree=phi(candidate)/2;
         const auto required=polymult_safety_margin(degree+1,degree+1)+0.25f;
         if(owner->gw.EXTRA_BITS/2.0f+owner->gw.polymult_safety_margin<=required)continue;
+        // A memory re-plan can settle on a smaller D than the wheel that
+        // selected this FFT. Build the shortest safe FFT for the settled D,
+        // exactly as for a forced wheel. Keep the wheel fixed to avoid a cycle.
+        if(required<owner->gw.polymult_safety_margin){
+            owner.reset();
+            owner=std::make_unique<Context>(n,factor,o,stats,degree,preflight);
+            owner->poll();
+        }
         gwset_polymult_safety_margin(&owner->gw,required);
         stats.d=candidate;
         stats.poly_size=degree;
-        fplan=ftree_plan(static_cast<size_t>(degree),bytes,o.memory_mib,o.threads);
+        fplan=ftree_plan(static_cast<size_t>(degree),double(gwnum_size(&owner->gw)+64),o.memory_mib,o.threads);
         stats.estimated_memory_mib=fplan.bytes/1048576.0;
         if(stats.estimated_memory_mib>o.memory_mib)
             throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
@@ -662,7 +682,8 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
         std::snprintf(plan.polymult_isa, sizeof(plan.polymult_isa), "%s", stats.polymult_isa);
         return plan;
     };
-    if(o.d)return {describe(automatic, owner->gw)};
+    std::vector<TuneCandidate> candidates{describe(automatic,owner->gw)};
+    if(o.d)return candidates;
     owner.reset();
 
     Options forced=o;
@@ -672,9 +693,6 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
         auto context=prepare_plan(n,unused_factor.v,b1,b2,forced,candidate,tree_plan,true);
         return describe(candidate,context->gw);
     };
-    // The automatic search can retain a longer FFT across re-plans. Describe
-    // the exact layout of the D that the runtime worker will pass back.
-    std::vector<TuneCandidate> candidates{inspect(automatic.d)};
     std::vector<std::pair<double,uint64_t>> ranked;
     for(auto d:wheel_choices()){
         if(d==automatic.d)continue;
@@ -691,18 +709,6 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
         }
     }
     return candidates;
-}
-// Preserve this backend's original giant grid, including its rounded last
-// centre. For odd m coprime to D, discarded t=iD +/- j is lifted by powers
-// of m. At the first crossing, m*(first-1/2) <= last+1/2 guarantees a
-// retained centre. Multiples of D (non-unit giant Z) lift by the same rule.
-static uint64_t suffix_first(uint64_t first,uint64_t last,uint64_t d,uint64_t p){
-    if(last<=first)return first;
-    uint64_t m=3;
-    while(std::gcd(m,d)!=1)m+=2;
-    const auto suffix=(last+(m+1)/2)/m;
-    if(suffix<=first || (last-suffix)/p==(last-first)/p)return first;
-    return suffix;
 }
 static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             uint64_t b1,uint64_t b2,const Options &o,Stats &stats,bool allow_suffix,bool &shortened){
@@ -787,9 +793,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         stats.tree_seconds+=init_tree_seconds;
         points.ladder(q,d,base,storage[12]);
         c.check("giant base ladder");
-        const uint64_t original_first=std::max<uint64_t>(1,b1>d/2?(b1-d/2)/d:1);
-        const uint64_t last=(b2+d/2)/d;
-        const auto first=allow_suffix?suffix_first(original_first,last,d,p):original_first;
+        const auto [original_first,first,last]=giant_range(b1,(b2+d/2)/d,d,p,allow_suffix);
         shortened=first>original_first;
         if(shortened)std::printf("gwpoly-range: original_first=%llu first=%llu last=%llu\n",
                                  (unsigned long long)original_first,(unsigned long long)first,(unsigned long long)last);
@@ -863,10 +867,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         auto descent_begin=Clock::now();
         // Scaled remainder: s=rev(H)*inv(rev(F)) mod X^P. Each child takes
         // middle coefficients of s*rev(sibling F), requiring no node inverses.
-        Array padded(c.gw,p);
-        for(size_t i=0;i<p;++i){if(i<h.size)gwcopy(&c.gw,h[i],padded[i]);else u64togw(&c.gw,0,padded[i]);}
-        h=Array();auto forward_scaled=c.convolution(reverse(padded),view(inv),0,p);padded=Array();inv=Array();
-        Array s(c.gw,p);for(size_t i=0;i<p;++i)gwcopy(&c.gw,forward_scaled[p-i-1],s[i]);forward_scaled=Array();
+        Array s=c.scaled_remainder(h,inv);h=Array();inv=Array();
         const double scale_seconds=seconds(descent_begin);
         Array values(c.gw,p);
         const double rebuild_seconds=descend(c,*ftree,s,values,fplan.rebuild?&roots:nullptr);
@@ -921,7 +922,20 @@ void selftest(unsigned threads){
         const auto p=phi(d)/2;
         for(uint64_t last=1;last<=100;++last){
             for(uint64_t original:{uint64_t(1),1+last/4}){
-                const auto suffix=suffix_first(original,last,d,p);
+                const auto b1=original*d+d/2, requested=last*d, limit=200*d;
+                const auto range=giant_range(b1,last,d,p);
+                const auto suffix=range.first;
+                if(requested>b1){
+                    auto end=last;
+                    while(giant_range(b1,end,d,p).size()%p)++end;
+                    const auto actual=full_block_b2(b1,requested,d,p,limit);
+                    if(actual<requested || (actual+d/2)/d!=end ||
+                       full_block_b2(b1,actual,d,p,limit)!=actual ||
+                       (giant_range(b1,end,d,p).size()+p-1)/p!=(range.size()+p-1)/p)
+                        throw std::runtime_error("Invalid rounded G block geometry");
+                    if(end!=last && full_block_b2(b1,requested,d,p,end*d-d/2-1)!=0)
+                        throw std::runtime_error("Rounded B2 exceeds limit");
+                }
                 for(uint64_t i=original;i<suffix;++i){
                     for(uint64_t t=i*d-d/2+1;t<i*d+d/2;++t){
                         if(t!=i*d && std::gcd(t,d)!=1)continue;
@@ -946,15 +960,17 @@ void selftest(unsigned threads){
         auto t=retained_ftree(c,roots,0,count);auto rf=reverse(t->polynomial);
         auto inv=c.inverse(rf,count);
         Array h(c.gw,count);for(size_t i=0;i<count;++i)u64togw(&c.gw,103*(i+3),h[i]);
-        auto forward=c.convolution(reverse(h),view(inv),0,count);Array s(c.gw,count);
-        for(size_t i=0;i<count;++i)gwcopy(&c.gw,forward[count-i-1],s[i]);
-        Array out(c.gw,count);descend(c,*t,s,out);
+        Array out(c.gw,count),rebuilt(c.gw,count);
         auto partial=partial_ftree(c,roots,0,count,3);
-        Array rebuilt(c.gw,count);descend(c,*partial,s,rebuilt,&roots);
-        for(size_t i=0;i<count;++i){
-            mpz_set_ui(y.v,0);for(size_t k=count;k-->0;){mpz_mul_ui(y.v,y.v,expected_roots[i]);mpz_add_ui(y.v,y.v,103*(k+3));mpz_mod(y.v,y.v,n.v);}
-            c.get(x.v,out[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Scaled polynomial descent differs from GMP Horner");
-            c.get(x.v,rebuilt[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Rebuilt F subtree differs from GMP Horner");
+        for(size_t terms:{count,(count+1)/2}){
+            Array s=c.scaled_remainder(Array(c.gw,h.v,terms),inv);
+            descend(c,*t,s,out);
+            descend(c,*partial,s,rebuilt,&roots);
+            for(size_t i=0;i<count;++i){
+                mpz_set_ui(y.v,0);for(size_t k=terms;k-->0;){mpz_mul_ui(y.v,y.v,expected_roots[i]);mpz_add_ui(y.v,y.v,103*(k+3));mpz_mod(y.v,y.v,n.v);}
+                c.get(x.v,out[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Scaled polynomial descent differs from GMP Horner");
+                c.get(x.v,rebuilt[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Rebuilt F subtree differs from GMP Horner");
+            }
         }
         auto product=c.convolution(h,t->polynomial);auto rem=c.remainder(product,t->polynomial,inv);
         for(size_t i=0;i<rem.size;++i){c.get(x.v,rem[i]);if(mpz_sgn(x.v))throw std::runtime_error("Polynomial remainder differs from exact multiple");}
@@ -971,8 +987,7 @@ void selftest(unsigned threads){
             for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
             auto g=product_tree(c,roots,0,leaves,&workspace);
             c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal);
-            auto scaled=c.convolution(reverse(accumulator),view(inv),0,count);Array reversed(c.gw,count);
-            for(size_t i=0;i<count;++i)gwcopy(&c.gw,scaled[count-i-1],reversed[i]);
+            auto reversed=c.scaled_remainder(accumulator,inv);
             descend(c,*t,reversed,out);
             for(size_t i=0;i<count;++i){
                 for(size_t j=0;j<leaves;++j){mpz_set_ui(z.v,expected_roots[i]);mpz_sub_ui(z.v,z.v,1237*(j+5)+97*block);mpz_mul(expected[i]->v,expected[i]->v,z.v);mpz_mod(expected[i]->v,expected[i]->v,n.v);}

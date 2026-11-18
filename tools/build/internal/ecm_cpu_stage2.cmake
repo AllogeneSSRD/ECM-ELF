@@ -22,6 +22,7 @@ foreach(_shared
     src/io/worktodo.cpp
     src/io/stage2_checkpoint.cpp
     src/ecm/stage2/cpu/gwpoly_loader.cpp
+    src/ecm/stage2/cpu/giant_range.h
     src/ecm/stage2/cpu/runtime_tune.h
     src/ecm/stage2/cpu/runtime_tune.cpp
     src/ecm/stage2/cpu/thread_layout.h

@@ -279,6 +279,41 @@ def main():
         assert "batched_progress: batch=" in events and "left=" in events, path
     print("PASS worker tune override, live GWNUM phases and batches, and exact queue completion", flush=True)
 
+    rounded_profile = out / "rounded.toml"
+    rounded = f.save_run("round_train", "--b2-round-chain", 1, "--tune-profile", rounded_profile, curves=6)
+    stored = matrix_rows(read_tune(rounded_profile)["cpu_stage2"])
+    assert {(r["d"], r["b2"]) for r in rounded} == {(r["d"], r["b2"]) for r in stored}
+    assert len({r["b2"] for r in rounded}) > 1 and all(r["b2"] >= B2 for r in rounded)
+    assert all(r["stage2-engine"]["requested-B2"] == B2 and
+               r["stage2-engine"]["actual-B2"] == r["b2"] for r in rounded)
+    fastest = min(stored, key=lambda row: row["mean_seconds"])
+    reused, = f.save_run("round_read_only", "--b2-round-chain", 1, "--tune-profile", rounded_profile, "--tune-runtime", 0)
+    assert (reused["d"], reused["b2"]) == (fastest["d"], fastest["b2"])
+
+    round_queue = out / "round_queue"
+    round_queue.mkdir()
+    round_config = round_queue / "ecm.toml"
+    round_config.write_text(queue_config.read_text().replace("[stage2]", "[stage2]\nb2_round_chain = true"))
+    (round_queue / "points.save").write_text(POINTS)
+    (round_queue / "worktodo.txt").write_text("[Worker #3]\n" + task + "\n")
+    rows = f.finish(f.start("round_queue", "--worker", 3, "--once", "--d", 210,
+                            config=round_config, folder=round_queue))
+    public, = read_results(round_queue / "public.json.txt")
+    assert [row["Edwards"]["sigma"] for row in rows] == [17, 18]
+    assert public["curves"] == 2 and all(row["b2"] == public["b2"] > B2 for row in rows)
+    assert (round_queue / "finished.txt").read_text(encoding="utf-8-sig").count(task) == 1
+    override, = f.finish(f.start("round_override", *f.save_flags(1), "--d", 210,
+                                 "--b2-round-chain", 0, config=round_config))
+    assert override["b2"] == B2 and "actual-B2" not in override["stage2-engine"]
+    capped = round_queue / "capped.toml"
+    capped.write_text(round_config.read_text().replace("[stage2]", f"[stage2]\nauto_b2 = true\nauto_max_b2 = {B2}"))
+    rejected = f.start("round_capped", *f.save_flags(1), "--d", 210, config=capped)
+    assert f.finish(rejected, expected=1) == [] and "whole G block endpoint" in rejected[1].read_text()
+    capped.write_text(capped.read_text().replace(f"auto_max_b2 = {B2}", "auto_max_b2 = 41000"))
+    clamped, = f.finish(f.start("round_inside_last_cell", *f.save_flags(1), "--d", 210, config=capped))
+    assert clamped["b2"] == 41000
+    print("PASS rounded per-D tune identities, queue publication, CLI override and B2 cap", flush=True)
+
     if args.portable_fixture:
         executable = args.portable_fixture.resolve(strict=True)
         assert subprocess.check_output([executable, "--cpu-thread-layout"], timeout=60).strip() == b"true"

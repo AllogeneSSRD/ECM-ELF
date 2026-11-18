@@ -46,6 +46,17 @@ class WindowsJob:
         if not self.api.AssignProcessToJobObject(self.handle, int(process._handle)):
             raise ct.WinError(ct.get_last_error())
 
+    def cap_current_process_tree(self, mib):
+        """Call inside a fresh sampler before launching the benchmark child."""
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x100  # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        limits.process_memory_limit = mib * 1024**2
+        self.api.SetInformationJobObject.argtypes = [wt.HANDLE, ct.c_int, ct.c_void_p, wt.DWORD]
+        if not self.api.SetInformationJobObject(self.handle, 9, ct.byref(limits), ct.sizeof(limits)):
+            raise ct.WinError(ct.get_last_error())
+        if not self.api.AssignProcessToJobObject(self.handle, wt.HANDLE(-1)):
+            raise ct.WinError(ct.get_last_error())
+
     def accounting(self):
         basic, extended = BasicAccounting(), ExtendedLimits()
         for kind, value in ((1, basic), (9, extended)):
@@ -54,7 +65,8 @@ class WindowsJob:
         return {'cpu_seconds': (basic.user + basic.kernel) * 1e-7,
                 'user_seconds': basic.user * 1e-7, 'kernel_seconds': basic.kernel * 1e-7,
                 'processes': basic.processes, 'active_processes': basic.active,
-                'peak_job_commit_bytes': extended.peak_job_memory}
+                'peak_job_commit_bytes': extended.peak_job_memory,
+                'peak_process_commit_bytes': extended.peak_process_memory}
 
     def terminate(self):
         if not self.api.TerminateJobObject(self.handle, 129):
