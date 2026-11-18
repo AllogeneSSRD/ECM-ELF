@@ -71,7 +71,9 @@ int main(int argc, char** argv) {
             out("START: ECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"\n");
             out("stage1_ntt_batch_resume: completed=128 total=1000\n");
             out("stage1_ntt_batch: offset=128 total=1000 curves=32 capacity=32 resumed=1\n");
-            out("Stage1 execution: curve=ed param=e backend=ntt ntt_bits=15919 ntt_type=weighted ntt_length=1280 ntt_bpw=13 naf=12\n");
+            out("Stage1 execution: curve=ed param=e backend=ntt ntt_bits=15919 ntt_type=weighted ntt_length=1024 ntt_bpw=16 naf=12 "
+                "ntt_memory_per_curve_bytes=41867520 ntt_memory_config_mib=6144 ntt_memory_device_bytes=8388608000 "
+                "ntt_naf_memory_mb=4096 max_curves_in_memory=98\n");
             out("stage1_ntt_plan: device=1 p=15919 curves=32 resume=250 bits=1000\n");
             out("stage1_ntt_progress: columns=500/1000 (50.0%%) elapsed=8.000\n");
             HANDLE stop=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(arg_value("--stage1-stop-handle").c_str(),nullptr,10)));

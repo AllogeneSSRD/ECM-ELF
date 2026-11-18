@@ -53,8 +53,10 @@ def main():
         rows = [json.loads(line.split(" text=", 1)[1]) for line in text.splitlines()
                 if line.startswith("worker_summary: index=1 ")]
         lines = rows[-1].splitlines()
-        assert len(lines) == 2 and "M15919 / 已知因子  curves = 1000" in lines[0]
+        assert len(lines) == 3 and "M15919 / 已知因子  curves = 1000" in lines[0]
         assert "Stage2 →" in lines[0] and "CUDA/NTT" in lines[1], lines
+        assert "39.93 MiB/曲线" in lines[2] and "6144 MiB / 8000 MiB" in lines[2], lines
+        assert "最多 98 条 | NAF 4096 MB" in lines[2], lines
         time.sleep(.3)
         capture(hwnd, out / "ntt-wide.png")
         user.SetWindowPos(hwnd, None, 40, 40, 780, 900, 0x14)

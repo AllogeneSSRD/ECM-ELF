@@ -392,6 +392,8 @@
       <Item id="worker.stage1_execution" name="Stage1 execution" />
       <Item id="worker.stage1_kernel_bits" name="Kernel bits" />
       <Item id="worker.stage1_ntt_type" name="NTT type" />
+      <Item id="worker.stage1_ntt_memory" name="NTT memory estimate %.2f MiB/curve | Limit (config / device) %s / %.0f MiB | Max %llu curves" />
+      <Item id="worker.stage1_ntt_memory_auto" name="auto" />
       <Item id="worker.stage1_naf_window" name="NAF window" />
       <Item id="worker.stage1_prac_level" name="PRAC level" />
       <Item id="worker.stage1_x_only" name="x-only" />

@@ -392,6 +392,8 @@
       <Item id="worker.stage1_execution" name="Stage1 执行" />
       <Item id="worker.stage1_kernel_bits" name="内核位宽" />
       <Item id="worker.stage1_ntt_type" name="NTT 类型" />
+      <Item id="worker.stage1_ntt_memory" name="NTT 内存预估 %.2f MiB/曲线 | 上限（设置 / 设备）%s / %.0f MiB | 最多 %llu 条" />
+      <Item id="worker.stage1_ntt_memory_auto" name="自动" />
       <Item id="worker.stage1_naf_window" name="NAF 窗口" />
       <Item id="worker.stage1_prac_level" name="PRAC 等级" />
       <Item id="worker.stage1_x_only" name="仅 x 坐标" />

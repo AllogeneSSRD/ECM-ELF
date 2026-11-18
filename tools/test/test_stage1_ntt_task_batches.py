@@ -201,7 +201,8 @@ def main():
         (out / "summary.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print("PASS", name, flush=True)
 
-    def fixture(name, requested=0, pad=None, tune=None, checkpoint_period=0):
+    def fixture(name, requested=0, pad=None, tune=None, checkpoint_period=0,
+                naf_window=6, extra_stage1=""):
         work = out / name
         work.mkdir()
         database = tune or work / "tune.toml"
@@ -210,9 +211,9 @@ def main():
             f'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
             f'finished_file = "finished.txt"\nlog_file = ""\ntune_file = "{database.as_posix()}"\n'
             f'[stage1]\nparam = "e"\ntarget = "gpu"\ngpu_backend = "cuda"\ngpu_device = {args.device}\n'
-            f'save_dir = "{work.as_posix()}"\nhandoff.mode = "ecm-elf"\nedwards_naf_window_bits = 6\n'
+            f'save_dir = "{work.as_posix()}"\nhandoff.mode = "ecm-elf"\nedwards_naf_window_bits = {naf_window}\n'
             f'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = {checkpoint_period}\n'
-            + (f'gpu_algorithm = "ntt"\nntt.pad_batch = {pad}\n' if pad is not None else ""),
+            + (f'gpu_algorithm = "ntt"\nntt.pad_batch = {pad}\n' if pad is not None else "") + extra_stage1,
             encoding="utf-8",
         )
         if requested:
@@ -252,6 +253,26 @@ def main():
     assert_schedule(schedule, 129, expect_pad=False)
     assert list(saved_points(save, 127, 64, edwards=True)) == list(range(SIGMA, SIGMA + 129))
     passed("direct_splits_129", p=127, launches=schedule, seconds=wall)
+
+    # Reproduce the production cap with a short scalar. At 64 curves the
+    # weighted L=1024 plan fits, while the linear L=2048 plan exceeds NAF memory.
+    for memory, expected in ((6144, (54, 98)), (1024, (14, 25))):
+        work, command, _ = fixture(f"per_plan_capacity_{memory}", pad=0, naf_window=12,
+                                  extra_stage1=f"naf_memory_mb = 4096\nntt.memory_mib = {memory}\n")
+        (work / "worktodo.txt").write_text(f'ECM=1,2,15919,-1,1024,1024,95,{SIGMA},"1782929"\n',
+                                         encoding="ascii")
+        log, wall = run(work, command)
+        selection = log_records(log, "stage1_ntt_batch_selection:")[0]
+        assert tuple(int(selection[f"{mode}_capacity"]) for mode in ("linear", "weighted")) == expected, selection
+        assert int(selection["batch"]) == min(64, expected[1]), selection
+        launch = log_records(log, "Stage1 execution:")[0]
+        assert launch["ntt_type"] == "weighted" and int(launch["ntt_batch"]) > expected[0], launch
+        assert int(launch["ntt_memory_per_curve_bytes"]) == 41867520, launch
+        assert int(launch["ntt_memory_config_mib"]) == memory and int(launch["ntt_naf_memory_mb"]) == 4096, launch
+        assert int(launch["ntt_memory_device_bytes"]) >= int(launch["ntt_batch"]) * 41867520, launch
+        assert int(launch["max_curves_in_memory"]) == expected[1], launch
+        assert_schedule(batch_launches(log), 95, expect_pad=False)
+        passed(f"per_plan_capacity_{memory}", selection=selection, execution=launch, seconds=wall)
 
     work, command, tune = fixture("uninterrupted", CURVES, pad=0)
     log, wall = run(work, command)

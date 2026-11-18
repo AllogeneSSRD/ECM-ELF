@@ -4,6 +4,7 @@
 #include "../../gui/task_display.h"
 #include "stage2_progress.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <iterator>
@@ -131,12 +132,33 @@ inline std::string stage1_execution(const ecmgui::Stage1Execution& execution, bo
 
     static constexpr std::string_view shown[] = {
         "cpu_impl", "kernel_weight", "tpi", "ntt_type", "ntt_bits", "ntt_length", "ntt_bpw", "ntt_shape",
-        "naf", "algorithm", "chain", "prac"
+        "naf", "algorithm", "chain", "prac", "ntt_memory_per_curve_bytes", "ntt_memory_config_mib",
+        "ntt_memory_device_bytes", "ntt_naf_memory_mb", "max_curves_in_memory"
     };
     if (details)
         for (const auto& [key, value] : execution.details)
             if (std::find(std::begin(shown), std::end(shown), key) == std::end(shown))
                 append(key + "=" + value);
+    if (backend == "ntt") {
+        const auto number = [&](const char* key, unsigned long long& value) {
+            const auto s = field(key);
+            const auto parsed = std::from_chars(s.data(), s.data() + s.size(), value);
+            return parsed.ec == std::errc{} && parsed.ptr == s.data() + s.size();
+        };
+        unsigned long long per_curve = 0, configured = 0, device = 0, capacity = 0, naf_mb = 0;
+        if (number("ntt_memory_per_curve_bytes", per_curve) && number("ntt_memory_config_mib", configured) &&
+            number("ntt_memory_device_bytes", device) && number("max_curves_in_memory", capacity)) {
+            constexpr double mib = 1024. * 1024.;
+            const auto config = configured ? std::to_string(configured) + " MiB" : text("worker.stage1_ntt_memory_auto", zh);
+            char summary[256];
+            std::snprintf(summary, sizeof(summary), text("worker.stage1_ntt_memory", zh),
+                          per_curve / mib, config.c_str(), device / mib, capacity);
+            line += "\n";
+            line += summary;
+            if (number("ntt_naf_memory_mb", naf_mb) && naf_mb)
+                line += " | NAF " + std::to_string(naf_mb) + " MB";
+        }
+    }
     return line;
 }
 

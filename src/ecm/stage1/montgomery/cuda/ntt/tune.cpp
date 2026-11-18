@@ -31,6 +31,7 @@ struct Device {
     std::string uuid;
     size_t budget;
     unsigned sm_count;
+    size_t device_budget;
 };
 
 Device device_info(int index, unsigned memory_mib) {
@@ -46,7 +47,7 @@ Device device_info(int index, unsigned memory_mib) {
         uuid += hex[byte >> 4];
         uuid += hex[byte & 15];
     }
-    return {index, uuid, memory_budget(free, memory_mib), unsigned(prop.multiProcessorCount)};
+    return {index, uuid, memory_budget(free, memory_mib), unsigned(prop.multiProcessorCount), memory_budget(free, 0)};
 }
 
 pt::Profile load(const std::filesystem::path& path) {
@@ -420,31 +421,16 @@ Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_e
     return shapes;
 }
 
-unsigned production_capacity(const ecm_stage1::Stage1Request& request, const Device& device,
-                             unsigned p, const Candidates& shapes) {
-    const unsigned window = naf_window(request);
+std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::Stage1Request& request,
+        const Device& device, unsigned p, unsigned window, const Candidates& shapes) {
     if (window && (window < 2 || window > 12))
         throw std::invalid_argument("Edwards NTT NAF requires a window from 2 to 12");
     if (!std::isfinite(request.b1) || request.b1 < 0 || request.b1 > 5000000000.0)
         throw std::invalid_argument("invalid Stage1 NTT B1");
     const size_t words = (p + 31) / 32, entries = window ? 1u << (window - 2) : 0;
-    const auto dictionary_budget = size_t(request.options.execution.naf_memory_mb) * ecm_edwards_memory::mb;
-    unsigned cap = max_batch;
-    bool any = false;
-    for (const auto& candidate : shapes) {
-        if (!candidate) continue;
-        any = true;
-        const auto length = size_t(candidate->shape.length);
-        // Bound the planner's spectra and GPU dictionary workspace before a
-        // batch is created. Runtime allocation remains authoritative.
-        const auto dictionary = entries * (32 * length + 16 * words);
-        const auto per_curve = 88 * length + 128 * words + dictionary;
-        const auto fixed = 160 * length + 32 * words + size_t(request.b1 / 4 + 16);
-        cap = unsigned(std::min<size_t>(cap, device.budget > fixed ? (device.budget - fixed) / per_curve : 0));
-        if (dictionary_budget && dictionary)
-            cap = unsigned(std::min<size_t>(cap, dictionary_budget / dictionary));
-    }
-    if (!any) throw std::invalid_argument("no legal Stage1 NTT packing for the requested parameters");
+    const auto dictionary_mb = request.options.execution.naf_memory_mb;
+    const auto dictionary_budget = size_t(dictionary_mb) * ecm_edwards_memory::mb;
+    size_t host_cap = max_batch;
     if (entries)
         if (const auto free = ecm_edwards_memory::host_free_bytes()) {
             const auto limit = ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib);
@@ -452,11 +438,24 @@ unsigned production_capacity(const ecm_stage1::Stage1Request& request, const Dev
             // lane layouts. Leave room for scalar and dictionary preparation.
             const size_t fixed = (size_t(request.b1) * 5 + 128 * entries * words);
             const auto per_curve = (32 * entries + 64) * words;
-            cap = unsigned(std::min<size_t>(cap, limit > fixed ? (limit - fixed) / per_curve : 0));
+            host_cap = std::min(host_cap, limit > fixed ? (limit - fixed) / per_curve : 0);
         }
-    // The exact allocator may use less than the conservative workspace bound.
-    // Let it diagnose the single-curve limit with its full measurements.
-    return std::max(1u, cap);
+    std::array<BatchMemory, CandidateCount> capacities{};
+    for (unsigned mode = 0; mode < CandidateCount; ++mode) {
+        if (!shapes[mode]) continue;
+        const auto length = size_t(shapes[mode]->shape.length);
+        // The estimate covers spectra and dictionary workspace. The exact
+        // allocator checks actual allocation separately.
+        const auto dictionary = entries * (32 * length + 16 * words);
+        const auto per_curve = 88 * length + 128 * words + dictionary;
+        const auto fixed = 160 * length + 32 * words + size_t(request.b1 / 4 + 16);
+        size_t cap = std::min(host_cap, device.budget > fixed ? (device.budget - fixed) / per_curve : 0);
+        if (dictionary_budget && dictionary)
+            cap = std::min(cap, dictionary_budget / dictionary);
+        capacities[mode] = {per_curve, device.device_budget, request.options.execution.ntt.memory_mib,
+                            window ? dictionary_mb : 0u, unsigned(cap)};
+    }
+    return capacities;
 }
 
 struct BatchRate {
@@ -561,28 +560,31 @@ int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool ex
     }
 }
 
-Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
-                                   const Stage1NttOptions& options, bool native_edwards) {
-    if (!options.automatic) return options;
-    if (native_edwards && options.tight_weighted_bound && !options.length) {
-        auto weighted = options;
-        weighted.automatic = false;
-        weighted.weighted = true;
-        try {
-            const auto shape = resolve_packing(p, weighted, true, WeightedBound::UnsignedProducts);
-            if (shape.needs_unsigned_bound) {
-                // X-only calibration cannot measure this native-only shape.
-                weighted.length = shape.length;
-                ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=edwards_unsigned_bound "
-                               "p=%u batch=%u convolution=weighted length=%u\n", p, batch, shape.length);
-                return weighted;
-            }
-        } catch (const std::invalid_argument&) {
-            // The requested constraints may still admit a linear plan.
-        }
+Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, unsigned p, unsigned batch,
+        const Stage1NttOptions& options, unsigned window, bool require_capacity, BatchMemory& memory) {
+    const auto device = device_info(request.options.execution.device_index, options.memory_mib);
+    auto candidates = production_shapes(p, options, window != 0);
+    const auto capacities = production_capacity(request, device, p, window, candidates);
+    const bool any_fits = std::any_of(capacities.begin(), capacities.end(),
+        [batch](const BatchMemory& capacity) { return capacity.max_curves >= batch; });
+    if (any_fits || (require_capacity && batch > 1)) {
+        for (unsigned mode = 0; mode < CandidateCount; ++mode)
+            if (capacities[mode].max_curves < batch) candidates[mode].reset();
     }
-    const auto device = device_info(index, options.memory_mib);
-    const auto candidates = candidates_for(p, options);
+    if (std::none_of(candidates.begin(), candidates.end(), [](const auto& plan) { return plan.has_value(); }))
+        throw BudgetError("no Stage1 NTT plan fits the batch memory budget");
+    if (!options.automatic) {
+        memory = capacities[options.weighted ? Weighted : Linear];
+        return options;
+    }
+    if (candidates[Mixed] && candidates[Mixed]->shape.needs_unsigned_bound) {
+        // X-only calibration cannot measure this native-only shape.
+        const auto& plan = candidates[Mixed]->options;
+        memory = capacities[Mixed];
+        ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=edwards_unsigned_bound "
+                       "p=%u batch=%u convolution=weighted length=%u\n", p, batch, plan.length);
+        return plan;
+    }
     std::array<std::optional<Cached>, CandidateCount> choices;
     try {
         const auto db = load(options.tune_file);
@@ -628,13 +630,16 @@ Stage1NttOptions select_tuned_plan(int index, unsigned p, unsigned batch,
         ecm_ts_fprintf(stdout, "stage1_ntt_short_tune: batch=%u warmup_iters=%u seconds=%.3f\n",
                        batch, warmup_iterations, now_s() - start);
     }
-    const Cached* winner = nullptr;
-    for (const auto& choice : choices)
-        if (choice && (!winner || choice->rate > winner->rate)) winner = &*choice;
-    if (!winner) throw BudgetError("no safe Stage1 NTT auto plan under the current VRAM budget");
+    unsigned winner_mode = CandidateCount;
+    for (unsigned mode = 0; mode < CandidateCount; ++mode)
+        if (choices[mode] && (winner_mode == CandidateCount || choices[mode]->rate > choices[winner_mode]->rate))
+            winner_mode = mode;
+    if (winner_mode == CandidateCount) throw BudgetError("no safe Stage1 NTT auto plan under the current VRAM budget");
+    const auto& winner = *choices[winner_mode];
+    memory = capacities[winner_mode];
     ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s length=%u\n",
-                   source, p, batch, modes[winner->options.weighted], winner->options.length);
-    return winner->options;
+                   source, p, batch, modes[winner.options.weighted], winner.options.length);
+    return winner.options;
 }
 
 unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsigned remaining) {
@@ -645,7 +650,12 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     const auto target_bits = mpz_sizeinbase(request.modulus, 2);
     const auto window = naf_window(request);
     const auto shapes = production_shapes(p, exec.ntt, window != 0);
-    const auto cap = std::min(remaining, production_capacity(request, device, p, shapes));
+    if (std::none_of(shapes.begin(), shapes.end(), [](const auto& plan) { return plan.has_value(); }))
+        throw std::invalid_argument("no legal Stage1 NTT packing for the requested parameters");
+    const auto capacities = production_capacity(request, device, p, window, shapes);
+    const auto linear_cap = capacities[Linear].max_curves;
+    const auto weighted_cap = std::max(capacities[Weighted].max_curves, capacities[Mixed].max_curves);
+    const auto cap = std::min(remaining, std::max({1u, linear_cap, weighted_cap}));
     std::map<unsigned, BatchRate> production, synthetic;
     using ecm_stage2::tune::uint;
     using ecm_stage2::tune::real;
@@ -657,10 +667,13 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
             if (batch > cap || !condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid)
                 continue;
             const bool weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
-            const bool compatible = std::any_of(shapes.begin(), shapes.end(), [&](const auto& shape) {
-                return shape && shape->options.weighted == weighted &&
+            bool compatible = false;
+            for (unsigned mode = 0; mode < CandidateCount && !compatible; ++mode) {
+                const auto& shape = shapes[mode];
+                compatible = shape && batch <= capacities[mode].max_curves &&
+                    shape->options.weighted == weighted &&
                     decode(row, shape->shape, device, batch, shape->options).has_value();
-            });
+            }
             if (!compatible) continue;
             const bool runtime = pt::is_runtime_stage1_ntt(row);
             if (runtime && (uint(row,"valid_curves") != batch || uint(row,"arithmetic_bits") != p ||
@@ -705,8 +718,9 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
             if (std::string_view(source) == "production_trial") break;
         }
     }
-    ecm_ts_fprintf(stdout, "stage1_ntt_batch_selection: source=%s p=%u remaining=%u batch=%u capacity=%u\n",
-                   source, p, remaining, selected, cap);
+    ecm_ts_fprintf(stdout, "stage1_ntt_batch_selection: source=%s p=%u remaining=%u batch=%u capacity=%u "
+                   "linear_capacity=%u weighted_capacity=%u\n",
+                   source, p, remaining, selected, cap, linear_cap, weighted_cap);
     return selected;
 }
 

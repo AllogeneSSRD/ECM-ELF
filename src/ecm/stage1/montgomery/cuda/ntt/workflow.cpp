@@ -35,6 +35,7 @@ double milliseconds_since(Clock::time_point start) {
 
 void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t batch,
                        unsigned naf_window, unsigned resume, const ecm_mersenne_ntt::Plan& plan,
+                       const ecm_mersenne_ntt::BatchMemory& memory,
                        size_t valid = 0, size_t target_bits = 0) {
     const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
     const char* chain = !edwards ? "ladder" : naf_window ? "naf" : "x-only";
@@ -49,7 +50,12 @@ void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t 
             << " ntt_forward_pass_bits=" << plan.forward << " ntt_inverse_pass_bits=" << plan.inverse
             << " ntt_bpw_avg=" << std::fixed << std::setprecision(6) << double(modulus_bits) / plan.digits
             << " ntt_bpw_max=" << plan.bpw << " ntt_u=" << plan.coefficient_bound
-            << " ntt_q=" << plan.field_modulus;
+            << " ntt_q=" << plan.field_modulus
+            << " ntt_memory_per_curve_bytes=" << memory.per_curve_bytes
+            << " ntt_memory_config_mib=" << memory.configured_mib
+            << " ntt_memory_device_bytes=" << memory.device_budget_bytes
+            << " ntt_naf_memory_mb=" << memory.naf_budget_mb
+            << " max_curves_in_memory=" << memory.max_curves;
     if (valid && valid != batch) details << " ntt_valid_curves=" << valid;
     if (target_bits && target_bits != modulus_bits)
         details << " target_bits=" << target_bits << " carrier_exponent=" << modulus_bits;
@@ -509,10 +515,11 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
 
             ecm_mersenne_ntt::Control control;
             ecm_mersenne_ntt::Plan executed_plan{};
+            ecm_mersenne_ntt::BatchMemory memory;
             control.resume = snapshot.cursor;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
                 executed_plan = plan;
-                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, valid, target_bits);
+                log_ntt_execution(opt, p, batch, naf_window, control.resume, plan, memory, valid, target_bits);
                 ecm_ts_fprintf(stdout, "stage1_ntt_plan: device=%d p=%zu curves=%zu length=%u bpw=%u digits=%u "
                     "forward_passes=%u inverse_passes=%u forward_layers=%s inverse_layers=%s "
                     "tile_layers=%u tile_elements=%u tile_threads=%u tile_smem_bytes=%u "
@@ -560,8 +567,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
 
             phase = FailureSource::Device;
             const auto plan_started = Clock::now();
-            const auto selected = ecm_mersenne_ntt::select_tuned_plan(opt.execution.device_index,
-                unsigned(p), batch, opt.execution.ntt, naf_window != 0);
+            const auto selected = ecm_mersenne_ntt::select_tuned_plan(request, unsigned(p), batch,
+                opt.execution.ntt, naf_window, opt.execution.ntt.observe_batch && !has_checkpoint, memory);
             const auto plan_ms = milliseconds_since(plan_started);
             if (ecm_stage1_stop_requested()) {
                 result.stop();
@@ -671,14 +678,15 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             const auto* begin = lanes_initial.data() + size_t(6) * lane * words;
             const std::vector<uint32_t> initial(begin, begin + 6 * words);
             ecm_mersenne_ntt::Control control;
+            ecm_mersenne_ntt::BatchMemory memory;
             control.describe = [&](const ecm_mersenne_ntt::Plan& plan) {
-                log_ntt_execution(opt, p, 1, 0, control.resume, plan, 0, target_bits);
+                log_ntt_execution(opt, p, 1, 0, control.resume, plan, memory, 0, target_bits);
             };
             control.poll = [](unsigned) {
                 return ecm_mersenne_ntt::Control::Action{false, ecm_stage1_stop_requested()};
             };
-            const auto selected = ecm_mersenne_ntt::select_tuned_plan(opt.execution.device_index,
-                unsigned(p), 1, replay_ntt);
+            const auto selected = ecm_mersenne_ntt::select_tuned_plan(request, unsigned(p), 1,
+                replay_ntt, 0, false, memory);
             const auto run = ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p), 1,
                 initial, packed, binary_count, selected, control);
             if (run.stopped) {

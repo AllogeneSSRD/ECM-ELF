@@ -401,6 +401,14 @@ static void stage1_details(const fs::path& root) {
            compact.find("x-only")!=compact.npos && compact.find('\n')==compact.npos &&
            compact.find("ntt_forward_pass_bits")==compact.npos);
     assert(ecmgui_v2::ui::stage1_execution(execution,false,true).find("ntt_forward_pass_bits=2+3")!=compact.npos);
+    const auto memory = ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted "
+        "ntt_length=1024 ntt_memory_per_curve_bytes=41867520 ntt_memory_config_mib=6144 "
+        "ntt_memory_device_bytes=8388608000 ntt_naf_memory_mb=4096 max_curves_in_memory=98").stage1;
+    const auto estimate = ecmgui_v2::ui::stage1_execution(memory,false,true);
+    assert(estimate.find("39.93 MiB/curve | Limit (config / device) 6144 MiB / 8000 MiB | Max 98 curves | NAF 4096 MB") != estimate.npos);
+    assert(estimate.find("ntt_memory_per_curve_bytes=") == estimate.npos);
+    const auto zh_estimate = ecmgui_v2::ui::stage1_execution(memory,true);
+    assert(zh_estimate.find("39.93 MiB/曲线") != zh_estimate.npos && zh_estimate.find("最多 98 条") != zh_estimate.npos);
     const auto binary=ecmgui::parse_line("Stage1 execution: curve=ed param=e backend=cgbn "
         "kernel_weight=1024 tpi=8 naf=0 algorithm=binary").stage1;
     const auto cgbn=ecmgui_v2::ui::stage1_execution(binary,false);
