@@ -1,4 +1,5 @@
 #include "../../src/ecm/stage2/planning/portable_model.h"
+#include "../../src/ecm/stage2/cpu/thread_layout.h"
 #include <iostream>
 int main(int argc,char **argv) {
     try {
@@ -8,6 +9,27 @@ int main(int argc,char **argv) {
             std::cout<<'[';bool first=true;for(const auto *column:p::matrix_column_order){if(!first)std::cout<<',';first=false;std::cout<<p::quoted(column);}std::cout<<']';
         } else if(argc==2 && std::string(argv[1])=="--ntt-columns") {
             std::cout<<'[';bool first=true;for(const auto *column:p::ntt_matrix_column_order){if(!first)std::cout<<',';first=false;std::cout<<p::quoted(column);}std::cout<<']';
+        } else if(argc==2 && std::string(argv[1])=="--cpu-thread-layout") {
+            using namespace ecm_cpu_tune;
+            std::vector<LogicalCpu> topology;
+            for (unsigned core=0;core<16;++core)
+                for (unsigned smt=0;smt<2;++smt)
+                    topology.push_back({2*core+smt,core,core<8?1u:0u});
+            const auto require=[](bool ok){if(!ok)throw std::runtime_error("CPU thread layout assertion");};
+            ThreadLayout layout;
+            for(const auto &ids:{std::vector<unsigned>{1,3},std::vector<unsigned>{5,7}}) {
+                require(choose_cpus(topology,ids,2,1,layout)==ids);
+                require(layout.threads==ThreadCounts{2,0} && layout.smt_extra==ThreadCounts{});
+            }
+            require(choose_cpus(topology,{},32,1,layout).size()==16);
+            require(layout.threads==ThreadCounts{8,8} && layout.smt_extra==ThreadCounts{});
+            choose_cpus(topology,{0,1,16,17},4,1,layout);
+            require(layout.threads==ThreadCounts{2,2} && layout.smt_extra==ThreadCounts{1,1});
+            choose_cpus(topology,{1,17},2,1,layout);
+            require(layout.threads==ThreadCounts{1,1} && layout.smt_extra==ThreadCounts{});
+            choose_cpus({{16,8,0},{17,8,0}},{},2,1,layout);
+            require(layout.threads==ThreadCounts{0,1} && layout.smt_extra==ThreadCounts{});
+            std::cout<<"true";
         } else if(argc==2 && std::string(argv[1])=="--short-batch") {
             ecm_stage2::ShortNttBatchPolicy policy;
             const auto n=1ull<<19;

@@ -69,3 +69,17 @@ typedef struct {
                              ecm_gw_stage2_stats*, ecm_gw_stage2_phases*,
                              ecm_gw_stage2_progress_fn, void*, char* error, uint32_t error_size);
 } ecm_gw_stage2_api_v3;
+
+/* ABI 4 exposes the admitted coefficient FFT and F-tree memory plan. */
+typedef struct {
+    uint64_t d, poly_size, fft_length, fft_exponent, max_exponent;
+    uint32_t f_tree_splits;
+    double planned_mib;
+    char fft_layout[256], polymult_isa[16];
+} ecm_gw_stage2_tune_plan;
+
+typedef struct {
+    ecm_gw_stage2_api_v3 base;
+    int (*tune_plans)(const ecm_gw_stage2_request*, ecm_gw_stage2_tune_plan*,
+                      uint32_t capacity, char* error, uint32_t error_size);
+} ecm_gw_stage2_api_v4;

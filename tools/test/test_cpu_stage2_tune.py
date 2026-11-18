@@ -24,15 +24,16 @@ matrix = [
 ]
 """
 B1, B2, MEMORY_MIB = 1000, 40000, 512
-TIMINGS = (
-    "mean_seconds", "init_seconds", "main_seconds", "baby_seconds",
-    "ftree_seconds", "reciprocal_seconds", "giant_seconds", "gtree_seconds",
-    "fold_seconds", "scale_seconds", "descent_seconds", "leaf_gcd_seconds",
-)
 
 
 def read_tune(path):
     return tomllib.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def matrix_rows(table):
+    assert table["format"] == 2
+    columns, *rows = table["matrix"]
+    return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
 def read_results(path):
@@ -42,16 +43,18 @@ def read_results(path):
 
 
 def verify_tune(row, memory=MEMORY_MIB):
-    assert row["cpu"] and row["build"] and row["fft_description"] and row["isa"]
-    assert (row["bits"], row["exponent"], row["b1"], row["b2"],
-            row["memory_mib"], row["threads"]) == (127, 127, B1, B2, memory, 1)
+    assert row["cpu"] and row["gw_version"] and row["fft_layout"] and row["polymult_isa"]
+    assert row["version"] and row["updated_at"].endswith("UTC")
+    assert (row["tested_min"], row["tested_max"], row["b1"], row["b2"],
+            row["threads"], row["modulus_mode"]) == (127, 127, B1, B2, [1, 0], "mersenne")
+    assert row["max_exponent"] >= row["tested_max"]
+    assert "smt_extra" not in row
     assert row["d"] >= 6 and row["d"] % 2 == 0
     assert row["p"] == sum(math.gcd(j, row["d"]) == 1 for j in range(1, row["d"] // 2 + 1))
-    assert row["blocks"] > 0 and row["giants"] > 0 and row["fft_length"] > 0
-    assert 0 < row["estimated_memory_mib"] <= memory
-    assert all(math.isfinite(row[key]) and row[key] >= 0 for key in TIMINGS)
-    assert all(row[key] > 0 for key in ("mean_seconds", "init_seconds", "main_seconds",
-                                        "giant_seconds", "gtree_seconds", "fold_seconds"))
+    assert row["f_tree_splits"] == 0 and row["fft_length"] > 0
+    assert 0 < row["planned_mib"] <= memory
+    assert math.isfinite(row["mean_seconds"]) and row["mean_seconds"] > 0
+    assert math.isfinite(row["stddev_seconds"]) and row["stddev_seconds"] >= 0
 
 
 class Fixture:
@@ -112,6 +115,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--portable-fixture", type=Path,
                         help="Compiled stage2_portable_fixture for GPU reader round-trip checks")
+    parser.add_argument("--stage1", type=Path, help="Stage1 executable for cross-exponent reuse checks")
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -138,7 +142,7 @@ def main():
     observed = Counter((row["d"], row["poly-size"], row["fft-length"]) for row in results)
     assert 2 <= len(observed) <= 3, observed
     document = read_tune(f.tune)
-    tuned = document.pop("cpu_stage2")
+    tuned = matrix_rows(document.pop("cpu_stage2"))
     assert document == tomllib.loads(GPU_TOML)
     assert {(row["d"], row["p"], row["fft_length"]) for row in tuned} == set(observed)
     for row in tuned:
@@ -154,14 +158,10 @@ def main():
     forced, = f.save_run("forced", "--d", 210)
     assert forced["d"] == 210
     assert f.tune.read_bytes() == state
-    budget = 256
-    f.save_run("other_budget", "--memory-mib", budget)
-    combined = read_tune(f.tune)["cpu_stage2"]
-    assert [row for row in combined if row["memory_mib"] == MEMORY_MIB] == tuned
-    different, = [row for row in combined if row["memory_mib"] == budget]
-    verify_tune(different, budget)
-    assert different["repeats"] == 1
-    print("PASS read-only fastest reuse, explicit D and memory-specific scope", flush=True)
+    rebudgeted, = f.save_run("other_budget", "--memory-mib", 256, "--tune-runtime", 0)
+    assert rebudgeted["d"] == winner["d"] and f.tune.read_bytes() == state
+    assert "gwpoly-tune: D=" in (out / "other_budget" / "run.log").read_text(encoding="utf-8")
+    print("PASS read-only fastest reuse, explicit D and identical layouts across memory budgets", flush=True)
 
     save_bytes = f.save.read_bytes()
     assert f.finish(f.start("save_alias", *f.save_flags(1), "--tune-profile", f.save), expected=1) == []
@@ -178,16 +178,16 @@ def main():
     print("PASS tune path aliases cannot overwrite input files", flush=True)
 
     shared = out / "concurrent.toml"
-    shared.write_text(GPU_TOML, encoding="utf-8")
+    shared.write_text(GPU_TOML + '\n[[cpu_stage2]]\nlegacy = true\n', encoding="utf-8")
     pair = [f.start(f"writer_{i}", *f.save_flags(1), "--skip", i,
                     "--tune-profile", shared, "--tune-min-repeats", 1)
             for i in range(2)]
     assert all(len(f.finish(run)) == 1 for run in pair)
     concurrent = read_tune(shared)
-    assert sum(row["repeats"] for row in concurrent.pop("cpu_stage2")) == 2
+    assert sum(row["repeats"] for row in matrix_rows(concurrent.pop("cpu_stage2"))) == 2
     assert concurrent == tomllib.loads(GPU_TOML)
-    assert len(read_tune(f.tune)["cpu_stage2"]) == len(combined)
-    print("PASS CLI overrides and concurrent tune writers", flush=True)
+    assert f.tune.read_bytes() == state
+    print("PASS CLI overrides, legacy CPU replacement and concurrent tune writers", flush=True)
 
     queue = out / "queue"
     queue.mkdir()
@@ -209,7 +209,7 @@ def main():
     assert task not in worktodo.read_text(encoding="utf-8-sig")
     assert (queue / "finished.txt").read_text(encoding="utf-8-sig").count(task) == 1
     queue_tune = queue / "tune-cpu.toml"
-    queue_rows = read_tune(queue_tune)["cpu_stage2"]
+    queue_rows = matrix_rows(read_tune(queue_tune)["cpu_stage2"])
     assert not (queue / "tune.toml").exists()
     for row in queue_rows:
         verify_tune(row)
@@ -225,6 +225,7 @@ def main():
 
     if args.portable_fixture:
         executable = args.portable_fixture.resolve(strict=True)
+        assert subprocess.check_output([executable, "--cpu-thread-layout"], timeout=60).strip() == b"true"
         for path in (queue_tune, shared):
             serialized = subprocess.check_output([executable, "--roundtrip", path], timeout=60)
             restored = tomllib.loads(serialized.decode("utf-8"))
@@ -232,7 +233,38 @@ def main():
             assert restored["cpu_stage2"] == current["cpu_stage2"]
             if "ntt" in current:
                 assert "ntt" in restored
+                path.write_bytes(serialized)
+                f.save_run("after_gpu_serialization", "--tune-profile", path, "--tune-runtime-samples", 3)
+                after = read_tune(path)
+                assert sum(row["repeats"] for row in matrix_rows(after.pop("cpu_stage2"))) == 3
+                restored.pop("cpu_stage2")
+                assert after == restored
         print("PASS CPU-only and mixed profiles survive the CUDA profile serializer", flush=True)
+
+    if args.stage1:
+        stage1 = args.stage1.resolve(strict=True)
+        for exponent in (107, 2203):
+            save = out / f"m{exponent}.save"
+            command = [stage1, "--curve", "ed", "--target", "cpu", "--impl", "scalar",
+                       "-d", "1", "-sigma", "17", "-gpucurves", "1", "-save", save,
+                       str(B1), str(B1)]
+            result = subprocess.run(command, input=str((1 << exponent) - 1).encode(), capture_output=True,
+                                    cwd=out, timeout=60)
+            (out / f"m{exponent}.log").write_bytes(result.stdout + result.stderr)
+            assert result.returncode == 0 and save.exists()
+            case = f.start(f"width_{exponent}", "--save", save, "--exponent", exponent,
+                           "--b2", B2, "--curves", 1, "--tune-runtime", 0)
+            row, = f.finish(case)
+            assert row["status"] == "NF"
+            reused = "gwpoly-tune: D=" in case[1].read_text(encoding="utf-8")
+            assert reused == (exponent == 107), (exponent, row)
+        added, = f.finish(f.start("width_observation", "--save", out / "m107.save", "--exponent", 107,
+                                  "--b2", B2, "--curves", 1, "--tune-runtime-samples", 3))
+        updated = matrix_rows(read_tune(f.tune)["cpu_stage2"])
+        assert len(updated) == len(tuned)
+        merged, = [row for row in updated if row["d"] == added["d"]]
+        assert (merged["repeats"], merged["tested_min"], merged["tested_max"]) == (3, 107, 127)
+        print("PASS FFT-tier reuse across exponents and rejection at a different FFT tier", flush=True)
 
     (out / "summary.json").write_text(json.dumps(
         {"curves": sum(observed.values()), "sample_count": sum(row["repeats"] for row in tuned),

@@ -65,8 +65,9 @@ int run(const ecm_gw_stage2_request* r, uint32_t* factor, ecm_gw_stage2_stats* s
     return run_with_phases(r, factor, stats, nullptr, error, capacity);
 }
 
-int tune_candidates(const ecm_gw_stage2_request* r, ecm_gw_stage2_tune_candidate* output,
-                    uint32_t count, char* error, uint32_t capacity) noexcept {
+template<class Plan, class Convert>
+int probe(const ecm_gw_stage2_request* r, Plan* output, uint32_t count,
+          char* error, uint32_t capacity, Convert convert) noexcept {
     return guarded(error, capacity, [&] {
         if (!r || !r->words || !r->n || !output || !count)
             throw std::invalid_argument("Invalid Stage2 planning buffers");
@@ -75,9 +76,21 @@ int tune_candidates(const ecm_gw_stage2_request* r, ecm_gw_stage2_tune_candidate
         if (mpz_cmp_ui(n.v, 2) <= 0) throw std::invalid_argument("Invalid Stage2 modulus");
         const auto candidates = ecm_gwpoly::tune_candidates(n.v, r->b1, r->b2, options(*r));
         const auto copied = std::min<size_t>(candidates.size(), count);
-        std::copy_n(candidates.begin(), copied, output);
+        for (std::size_t i = 0; i < copied; ++i) output[i] = convert(candidates[i]);
         return static_cast<int>(copied);
     });
+}
+
+int tune_candidates(const ecm_gw_stage2_request* r, ecm_gw_stage2_tune_candidate* output,
+                    uint32_t count, char* error, uint32_t capacity) noexcept {
+    return probe(r,output,count,error,capacity,[](const auto& plan) {
+        return ecm_gw_stage2_tune_candidate{plan.d,plan.poly_size,plan.fft_length};
+    });
+}
+
+int tune_plans(const ecm_gw_stage2_request* r, ecm_gw_stage2_tune_plan* output,
+               uint32_t count, char* error, uint32_t capacity) noexcept {
+    return probe(r,output,count,error,capacity,[](const auto& plan) { return plan; });
 }
 
 int selftest(uint32_t threads, char* error, uint32_t capacity) noexcept {
@@ -93,6 +106,10 @@ extern "C" __declspec(dllexport) const ecm_gw_stage2_api* ecm_gw_stage2_get_api(
     static const ecm_gw_stage2_api_v3 v3{
         {{3, sizeof(v3), api.version, api.build, api.cpu, run, selftest},
          run_with_phases, tune_candidates}, run_with_progress};
+    static const ecm_gw_stage2_api_v4 v4{
+        {{{4, sizeof(v4), api.version, api.build, api.cpu, run, selftest},
+          run_with_phases, tune_candidates}, run_with_progress}, tune_plans};
+    if (abi == 4) return &v4.base.base.base;
     if (abi == 3) return &v3.base.base;
     if (abi == 1) return &api;
     if (abi == 2) return &v2.base;

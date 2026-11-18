@@ -1,5 +1,6 @@
 #pragma once
 #include "tune_ecm.h"
+#include "cpu_tune_section.h"
 #include "tune_ntt_profile.h"
 #include "ecm/stage2/probability.h"
 #include "ecm/stage2/planning/stage1_cost.h"
@@ -697,17 +698,14 @@ struct Profile {
         while(std::getline(in,line)) {
             if(first && line.compare(0,3,"\xef\xbb\xbf")==0)line.erase(0,3);first=false;
             const auto trimmed=stage1_cost::trim(line);
-            constexpr std::string_view cpu_header="[[cpu_stage2]]";
-            const bool starts_cpu=trimmed.compare(0,cpu_header.size(),cpu_header)==0;
-            const auto suffix=starts_cpu?stage1_cost::trim(trimmed.substr(cpu_header.size())):std::string{};
-            if(!rows && starts_cpu && (suffix.empty() || suffix[0]=='#')) {
+            if(!rows && is_cpu_tune_section(trimmed)) {
                 finish();
                 table=nullptr;
                 cpu_table=true;
                 out.cpu_stage2_tables+=line+'\n';
                 continue;
             }
-            if(cpu_table && (trimmed.empty() || trimmed[0]!='[')) {
+            if(cpu_table && !is_tune_section(trimmed)) {
                 out.cpu_stage2_tables+=line+'\n';
                 continue;
             }

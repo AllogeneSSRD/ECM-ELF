@@ -13,6 +13,7 @@ struct Plugin {
     const ecm_gw_stage2_api* api{};
     const ecm_gw_stage2_api_v2* api_v2{};
     const ecm_gw_stage2_api_v3* api_v3{};
+    const ecm_gw_stage2_api_v4* api_v4{};
     std::string error;
     Plugin() {
         wchar_t executable[32768];
@@ -38,6 +39,11 @@ struct Plugin {
             const auto v3 = reinterpret_cast<const ecm_gw_stage2_api_v3*>(streamed);
             if (v3->run_with_progress) api_v3 = v3;
         }
+        const auto planned = get(4);
+        if (api_v3 && planned && planned->abi == 4 && planned->size >= sizeof(ecm_gw_stage2_api_v4)) {
+            const auto v4 = reinterpret_cast<const ecm_gw_stage2_api_v4*>(planned);
+            if (v4->tune_plans) api_v4 = v4;
+        }
     }
     ~Plugin() { if (module) FreeLibrary(module); }
 };
@@ -58,7 +64,7 @@ std::vector<uint32_t> encode(mpz_srcptr z, uint32_t words) {
 }
 }
 const char* load_error() { return plugin().api ? nullptr : plugin().error.c_str(); }
-unsigned stage2_abi() { return plugin().api_v3 ? 3 : plugin().api_v2 ? 2 : plugin().api ? 1 : 0; }
+unsigned stage2_abi() { return plugin().api_v4 ? 4 : plugin().api_v3 ? 3 : plugin().api_v2 ? 2 : plugin().api ? 1 : 0; }
 const char* version() { return api().version; }
 const char* cpu() { return api().cpu; }
 const char* identity() { return api().build; }
@@ -94,15 +100,15 @@ bool stage2(mpz_t factor, const mpz_t n, const mpz_t x, const mpz_t a24,
 }
 
 std::vector<TuneCandidate> tune_candidates(mpz_srcptr n, uint64_t b1, uint64_t b2, const Options& o) {
-    auto v2 = plugin().api_v2;
-    if (!v2) return {};
+    const auto v4 = plugin().api_v4;
+    if (!v4) return {};
     const auto words = word_count(n);
     auto modulus = encode(n,words);
     ecm_gw_stage2_request request{words,o.threads,0,b1,b2,o.d,o.exponent,o.memory_mib,
                                   modulus.data(),nullptr,nullptr,o.stop};
     std::array<TuneCandidate,3> candidates{};
     char error[512]{};
-    const int count = v2->tune_candidates(&request,candidates.data(),
+    const int count = v4->tune_plans(&request,candidates.data(),
                                           static_cast<uint32_t>(candidates.size()),error,sizeof(error));
     if (count < 0) throw std::runtime_error(error);
     if (static_cast<size_t>(count) > candidates.size())

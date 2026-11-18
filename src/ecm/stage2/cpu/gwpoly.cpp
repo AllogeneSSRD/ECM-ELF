@@ -88,6 +88,10 @@ struct Context {
         gwerror_checking(&gw,1);
         gwset_polymult_safety_margin(&gw,polymult_safety_margin(max_poly+1,max_poly+1)+0.25f);
         stats.fft_length=gwfftlen(&gw);
+        gwfft_description(&gw,stats.fft_description);
+        const int planned_flags = (gw.cpu_flags & CPU_AVX) && (available_flags & CPU_AVX512F)
+                                 ? available_flags : gw.cpu_flags;
+        set_polymult_isa(planned_flags);
         if(preflight)return;
         binary.resize((static_cast<size_t>(gw.bit_length)+31)/32+8);
         gwuser_init_FFT1(&gw);
@@ -96,13 +100,14 @@ struct Context {
         polymult_default_tuning(&pm,std::max(256,CPU_L2_CACHE_SIZE),std::max(6144,CPU_L3_CACHE_SIZE));
         // polymult launches its own internal tasks. A naked launch_helpers call
         // instead dispatches the caller's user callback, which we do not set.
-        gwfft_description(&gw,stats.fft_description);
-        // Match the upstream HELPER_POLYMULT_LINE dispatch after tuning.
-        const auto flags = pm.cpu_flags;
+        set_polymult_isa(pm.cpu_flags);
+        }catch(...){if(pmready)polymult_done(&pm);if(ready)gwdone(&gw);throw;}
+    }
+    void set_polymult_isa(int flags) {
+        // Match the upstream HELPER_POLYMULT_LINE dispatch.
         const char* isa = (flags & CPU_AVX512F) ? "AVX-512" : (flags & CPU_FMA3) ? "FMA3" :
                           (flags & CPU_AVX) ? "AVX" : "SSE2";
         std::snprintf(stats.polymult_isa,sizeof(stats.polymult_isa),"%s",isa);
-        }catch(...){if(pmready)polymult_done(&pm);if(ready)gwdone(&gw);throw;}
     }
     ~Context(){if(pmready)polymult_done(&pm);for(auto &plan:plans)std::free(plan.second);if(ready)gwdone(&gw);}
     Context(Context &parent,mpz_t f,Stats &s):o(parent.o),stats(s),n(parent.n),factor(f){
@@ -550,6 +555,20 @@ uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget,unsig
     if(!result)throw std::runtime_error("No CPU polynomial plan within memory budget");
     return result;
 }
+
+uint64_t fft_exponent_ceiling(const gwhandle& gw, double margin) {
+    const auto upper = [margin](const gwhandle& fft) {
+        // For base two the rational-word discount can add half a bit per
+        // FFT word. Use that upper envelope here. The actual modulus always
+        // goes through GWNUM's distribution-dependent safety test.
+        const double bpw = fft.fft_max_bits_per_word - fft.safety_margin - margin + 0.5;
+        return static_cast<uint64_t>(std::max(0.0, bpw) * fft.FFTLEN /
+                                     (fft.ZERO_PADDED_FFT ? 2 : 1));
+    };
+    if (gw.GENERAL_MMGW_MOD)
+        return std::min(upper(*gw.cyclic_gwdata), upper(*gw.negacyclic_gwdata));
+    return upper(gw);
+}
 std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,uint64_t b2,
                                       const Options &o,Stats &stats,FTreePlan &fplan,bool preflight=false){
     if(!o.threads || b2<=b1 || b2>max_b2)throw std::runtime_error("Invalid GW polynomial bounds/threads");
@@ -594,7 +613,7 @@ const char* cpu() {
 }
 const char* identity(){return "static gwpoly";}
 const char* load_error(){return nullptr;}
-unsigned stage2_abi(){return 3;}
+unsigned stage2_abi(){return 4;}
 const char *version(){return GWNUM_VERSION;}
 std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options &o){
     Integer unused_factor;
@@ -602,15 +621,26 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
     FTreePlan tree_plan{};
     auto owner=prepare_plan(n,unused_factor.v,b1,b2,o,automatic,tree_plan,true);
     const double bytes=double(gwnum_size(&owner->gw)+64);
+    const auto width = o.exponent ? o.exponent : mpz_sizeinbase(n, 2);
+    const auto describe = [&](const Stats& stats, const gwhandle& gw) {
+        const auto exponent = std::max<uint64_t>(width, gw.n);
+        const double margin = polymult_safety_margin(stats.poly_size+1,stats.poly_size+1)+0.25;
+        TuneCandidate plan{stats.d, stats.poly_size, stats.fft_length, exponent,
+                           std::max(exponent, fft_exponent_ceiling(gw, margin)),
+                           tree_plan.splits, stats.estimated_memory_mib, {}, {}};
+        std::snprintf(plan.fft_layout, sizeof(plan.fft_layout), "%s", stats.fft_description);
+        std::snprintf(plan.polymult_isa, sizeof(plan.polymult_isa), "%s", stats.polymult_isa);
+        return plan;
+    };
+    if(o.d)return {describe(automatic, owner->gw)};
     owner.reset();
-    if(o.d)return {{automatic.d,automatic.poly_size,automatic.fft_length}};
 
     Options forced=o;
     auto inspect=[&](uint64_t d) {
         forced.d=d;
         Stats candidate{};
-        prepare_plan(n,unused_factor.v,b1,b2,forced,candidate,tree_plan,true);
-        return TuneCandidate{candidate.d,candidate.poly_size,candidate.fft_length};
+        auto context=prepare_plan(n,unused_factor.v,b1,b2,forced,candidate,tree_plan,true);
+        return describe(candidate,context->gw);
     };
     // The automatic search can retain a longer FFT across re-plans. Describe
     // the exact layout of the D that the runtime worker will pass back.

@@ -41,7 +41,7 @@ cpu_affinity = ""
 
 Type `string` · Range `[none|auto|<n>,...|<a>-<b>]` · Worker override `[worker.N] cpu_affinity` · Level `advanced`.
 
-Logical CPUs for the Stage1 and Stage2 worker process, including host work for GPU backends. Use zero-based indices and inclusive ranges, e.g. 0,2,4-7. Empty, auto or none applies no ECM-ELF affinity. A worker may override the shared list for both stages.
+Logical CPUs for the worker process, including host work for GPU backends. Use zero-based indices and inclusive ranges, e.g. 0,2,4-7. Empty or auto lets CPU Stage2 select one logical CPU per physical core, preferring performance cores. An explicit list allows SMT if the requested thread count needs siblings in that list. none leaves CPU Stage2 unbound and disables its tune reuse and collection. For other backends, empty, auto and none leave affinity unchanged. A worker may override the shared list for both stages.
 
 <a id="shared_finished_file"></a>
 
@@ -1447,7 +1447,7 @@ stage2_cpu_threads = 1
 
 Type `u64` · Range `[1,1024]` · Worker override `[worker.N] stage2_cpu_threads` · Level `advanced`.
 
-CPU Stage2 thread count per worker. Override with --threads.
+Requested thread count per CPU Stage2 worker, capped by the selected affinity pool. Override with --threads.
 
 <a id="stage2_backend"></a>
 
@@ -1611,7 +1611,7 @@ tune_runtime_enabled = true
 
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] tune_runtime_enabled` · Level `advanced`.
 
-CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.
+CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM records timings in the [cpu_stage2] matrix and can reuse a matching FFT and F-tree plan across widths and memory budgets after preflight. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.
 
 <a id="stage2_tune_runtime_samples"></a>
 

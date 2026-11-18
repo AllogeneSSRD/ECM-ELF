@@ -24,11 +24,16 @@ config_version = 4
 # 共享运行日志超过此上限后归档。1 KB 等于 1000 字节。
 
 # cpu_affinity = ""  # string: [none|auto|<n>,...|<a>-<b>]
-# Logical CPUs for the Stage1 and Stage2 worker process, including host work for GPU backends. Use
-# zero-based indices and inclusive ranges, e.g. 0,2,4-7. Empty, auto or none applies no ECM-ELF
-# affinity. A worker may override the shared list for both stages.
-# Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例
-# 如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。
+# Logical CPUs for the worker process, including host work for GPU backends. Use zero-based indices
+# and inclusive ranges, e.g. 0,2,4-7. Empty or auto lets CPU Stage2 select one logical CPU per
+# physical core, preferring performance cores. An explicit list allows SMT if the requested thread
+# count needs siblings in that list. none leaves CPU Stage2 unbound and disables its tune reuse and
+# collection. For other backends, empty, auto and none leave affinity unchanged. A worker may
+# override the shared list for both stages.
+# worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值
+# 或 auto 让 CPU Stage2 每个物理核选一个逻辑 CPU，优先选性能核。显式列表中的不同物理核用完后，可以使
+# 用列表内的 SMT 兄弟线程。none 由系统调度，CPU Stage2 停用调优复用和采样。其他后端遇到空值、auto 或
+# none 时沿用已有亲和性。可按 worker 同时覆盖两阶段。
 
 # tune_file = "tune.toml"  # string: <path>
 # CUDA Stage1, CUDA Stage2 and CPU GWNUM Stage2 share this file. Defaults to tune.toml beside
@@ -600,8 +605,9 @@ target = "gpu"  # string: [cpu|gpu]
 # Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。
 
 # stage2_cpu_threads = 1  # u64: [1,1024]
-# CPU Stage2 thread count per worker. Override with --threads.
-# 每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。
+# Requested thread count per CPU Stage2 worker, capped by the selected affinity pool. Override with
+# --threads.
+# 每个 CPU Stage2 worker 请求的线程数，以所选亲和性范围可用的线程数为上限。命令行 --threads 可覆盖。
 
 # cpu_memory_mib = 512  # u64: [1,1048576]
 # CPU Stage2 arithmetic memory budget in MiB. Override with --memory-mib.
@@ -875,18 +881,19 @@ target = "gpu"  # string: [cpu|gpu]
 # deviation. Slower observations count too. Row version and UTC update time record provenance only.
 # Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first,
 # then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the
-# fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices
-# across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache
-# failure does not fail a completed curve. false disables single-curve runtime trials, collection
-# and writes. CPU can still read qualified observations. Parallel queue decisions use
-# curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.
+# fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM records timings in the [cpu_stage2]
+# matrix and can reuse a matching FFT and F-tree plan across widths and memory budgets after
+# preflight. Writes are locked and atomic. Cache failure does not fail a completed curve. false
+# disables single-curve runtime trials, collection and writes. CPU can still read qualified
+# observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in
+# opencl_tune_file at fixed geometry.
 # CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存
 # repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计
 # 时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最
-# 快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入
-# [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和
-# 写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在
-# opencl_tune_file 中学习点计划。
+# 快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案
+# 一致时，可跨位宽和内存预算复用。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单
+# 曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几
+# 何，在 opencl_tune_file 中学习点计划。
 
 # curve_concurrency = "serial"  # string: [auto|serial|dual]
 # CUDA Stage2 curve scheduling. auto measures serial and eligible dual-slot modes. serial is the

@@ -23,7 +23,7 @@
 #include "../../launch.h"
 #include "../../../platform/compute_log.h"
 #include "ecm/platform/fingerprint.h"
-#include "ecm/platform/cpu_affinity.h"
+#include "../../cpu/thread_layout.h"
 #include <fstream>
 
 #ifndef ECM_BUILD_ID
@@ -50,6 +50,7 @@ struct Options {
     std::vector<std::string> known;uint64_t b2=0,skip=0,count=UINT64_MAX,exponent=0,memory=512,threads=1;
     std::string worktodo,log,cpu_affinity;
     fs::path tune_profile;
+    std::optional<ecm_cpu_tune::ThreadLayout> thread_layout;
     bool tune_runtime=true;
     uint64_t tune_min_repeats=2,tune_sample_limit=10;
     int log_level=-1;
@@ -228,7 +229,7 @@ int abort_queue_curve(){s2prod::poll_inherited_stop();return s2prod::stop_reques
 struct TuneObservation {
     ecm_cpu_tune::Key key;
     ecm_cpu_tune::Candidate plan;
-    ecm_cpu_tune::Sample sample;
+    double seconds = 0;
 };
 // Keep the most recent exact geometry probe. Scope changes are common between
 // worktodo assignments and uncommon between curves in the same save.
@@ -241,7 +242,8 @@ struct TunePlans {
         if(modulus!=r.n || b1!=r.b1 || b2!=bound || exponent!=gw.exponent) {
             const auto plans=ecm_gwpoly::tune_candidates(n,r.b1,bound,gw);
             std::vector<ecm_cpu_tune::Candidate> next;
-            for(const auto &p:plans)next.push_back({p.d,p.poly_size,p.fft_length});
+            for(const auto &p:plans)next.push_back({p.d,p.poly_size,p.fft_length,p.fft_exponent,
+                p.max_exponent,p.f_tree_splits,p.planned_mib,p.fft_layout,p.polymult_isa});
             modulus=r.n;
             candidates=std::move(next);
             b1=r.b1;b2=bound;exponent=gw.exponent;
@@ -306,7 +308,7 @@ struct CurveProgress {
 void persist_tune(const Options &o,const std::optional<TuneObservation> &pending) {
     if(!pending)return;
     try {
-        ecm_cpu_tune::observe(o.tune_profile,pending->key,pending->plan,pending->sample,o.tune_sample_limit);
+        ecm_cpu_tune::observe(o.tune_profile,pending->key,pending->plan,pending->seconds,o.tune_sample_limit);
     } catch(const std::exception &error) {
         std::cerr<<"gwpoly-tune: cannot save observation: "<<error.what()<<'\n';
     }
@@ -350,23 +352,17 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                 ecm_gwpoly::Stats stats{};
                 std::optional<TuneObservation> observation;
                 std::error_code tune_error;
-                if(ecm_gwpoly::stage2_abi()>=2 && !o.tune_profile.empty() &&
+                if(ecm_gwpoly::stage2_abi()>=4 && o.thread_layout && !o.tune_profile.empty() &&
                    (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error))) {
                     try {
                         const auto &plans=tune.get(r,n.v,o.b2,gw);
                         if(!plans.empty()) {
-                            std::string build=ecm_gwpoly::identity();
-                            if(build=="static gwpoly")build+=std::string(" ")+ECM_BUILD_ID;
-                            auto affinity=o.cpu_affinity;
-                            DWORD_PTR allowed=0,system=0;
-                            if(GetProcessAffinityMask(GetCurrentProcess(),&allowed,&system))
-                                affinity+="|mask="+std::to_string(allowed);
-                            ecm_cpu_tune::Key key{ecm_gwpoly::cpu(),std::move(build),
-                                mpz_sizeinbase(n.v,2),gw.exponent,r.b1,o.b2,gw.memory_mib,gw.threads,std::move(affinity)};
+                            ecm_cpu_tune::Key key{ecm_gwpoly::cpu(),ecm_gwpoly::version(),*o.thread_layout,
+                                gw.exponent != 0,gw.exponent ? gw.exponent : mpz_sizeinbase(n.v,2),r.b1,o.b2};
                             const auto d=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
                             const auto plan=std::find_if(plans.begin(),plans.end(),[&](const auto &p){return p.d==d;});
                             if(plan!=plans.end()) {
-                                observation=TuneObservation{std::move(key),*plan,{}};
+                                observation=TuneObservation{std::move(key),*plan};
                                 gw.d=d;
                                 if(verbose)log("gwpoly-tune: D="+std::to_string(d)+" P="+std::to_string(plan->poly_size)+
                                     " FFT="+std::to_string(plan->fft_length)+(o.tune_runtime?" runtime":" read-only"),false);
@@ -397,12 +393,11 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                     std::chrono::steady_clock::now()-trial_start).count();
                 if(o.tune_runtime && !stage && observation &&
                    stats.d==observation->plan.d && stats.poly_size==observation->plan.poly_size &&
-                   stats.fft_length==observation->plan.fft_length) {
-                    const auto &p=stats.phases;
-                    observation->sample={trial_seconds,stats.init_seconds,stats.main_seconds,
-                        p.baby_seconds,p.ftree_seconds,p.reciprocal_seconds,p.giant_seconds,p.gtree_seconds,
-                        p.fold_seconds,p.scale_seconds,p.descent_seconds,p.leaf_gcd_seconds,stats.estimated_memory_mib,
-                        stats.blocks,stats.giants,stats.fft_description,stats.polymult_isa};
+                   stats.fft_length==observation->plan.fft_length &&
+                   stats.fft_description==observation->plan.fft_layout &&
+                   stats.polymult_isa==observation->plan.isa &&
+                   stats.estimated_memory_mib==observation->plan.planned_mib) {
+                    observation->seconds=trial_seconds;
                     pending=std::move(observation);
                 }
                 details.fft_description=stats.fft_description;details.polymult_isa=stats.polymult_isa;
@@ -537,19 +532,20 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
             standalone=read_launch_config(config,worker,s2prod::executable());
             launch=&standalone;
         }
-        const auto o=options(argc,argv,*launch);
+        auto o=options(argc,argv,*launch);
         stage2_log::level=o.log_level;
         if((o.backend=="gwpoly" || o.backend=="auto") && !ecm_gwpoly::load_error() && !o.dry &&
            !o.export_only && !o.gw_selftest) {
             const auto abi=ecm_gwpoly::stage2_abi();
-            if(abi<2 && !o.tune_profile.empty())
+            if(abi<4 && !o.tune_profile.empty())
                 std::cerr<<"gwpoly-tune: gwnum.dll Stage2 ABI "<<abi
-                         <<" cannot tune; rebuild the DLL with -Stage2 (ABI 2 or newer).\n";
+                         <<" cannot tune; rebuild the DLL with -Stage2 (ABI 4).\n";
             if(abi<3 && (o.gui || stage2_log::enabled(stage2_log::phases)))
                 std::cerr<<"gwpoly-progress: gwnum.dll Stage2 ABI "<<abi
                          <<" cannot stream progress; rebuild the DLL with -Stage2 (ABI 3).\n";
         }
-        if (!o.export_only) ecm_platform::apply_worker_cpu_affinity(o.cpu_affinity);
+        if (!o.export_only && !o.dry)
+            o.thread_layout=ecm_cpu_tune::bind_worker(o.cpu_affinity,o.threads);
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
         if(o.export_only) {
             if(!ecm_results::has_result_ledger(o.submission))throw std::runtime_error("no owned submission ledger");

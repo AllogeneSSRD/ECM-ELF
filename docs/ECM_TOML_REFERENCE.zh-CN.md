@@ -41,7 +41,7 @@ cpu_affinity = ""
 
 类型 `string` · 范围 `[none|auto|<n>,...|<a>-<b>]` · Worker 覆盖 `[worker.N] cpu_affinity` · 级别 `高级`。
 
-Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。
+worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值或 auto 让 CPU Stage2 每个物理核选一个逻辑 CPU，优先选性能核。显式列表中的不同物理核用完后，可以使用列表内的 SMT 兄弟线程。none 由系统调度，CPU Stage2 停用调优复用和采样。其他后端遇到空值、auto 或 none 时沿用已有亲和性。可按 worker 同时覆盖两阶段。
 
 <a id="shared_finished_file"></a>
 
@@ -1448,7 +1448,7 @@ stage2_cpu_threads = 1
 
 类型 `u64` · 范围 `[1,1024]` · Worker 覆盖 `[worker.N] stage2_cpu_threads` · 级别 `高级`。
 
-每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。
+每个 CPU Stage2 worker 请求的线程数，以所选亲和性范围可用的线程数为上限。命令行 --threads 可覆盖。
 
 <a id="stage2_backend"></a>
 
@@ -1612,7 +1612,7 @@ tune_runtime_enabled = true
 
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] tune_runtime_enabled` · 级别 `高级`。
 
-CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入 [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。
+CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案一致时，可跨位宽和内存预算复用。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。
 
 <a id="stage2_tune_runtime_samples"></a>
 

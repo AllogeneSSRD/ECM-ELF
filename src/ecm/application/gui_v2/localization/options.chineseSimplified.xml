@@ -7,7 +7,7 @@
       <Item id="option_shared_shared_log_file" name="共用运行日志。相对路径基于配置目录。空字符串关闭文件日志。" />
       <Item id="option_shared_shared_finished_file" name="两阶段共用的完成记录。相对路径基于配置目录。" />
       <Item id="option_shared_log_file_max_KB" name="共享运行日志超过此上限后归档。1 KB 等于 1000 字节。" />
-      <Item id="option_shared_shared_cpu_affinity" name="Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。" />
+      <Item id="option_shared_shared_cpu_affinity" name="worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值或 auto 让 CPU Stage2 每个物理核选一个逻辑 CPU，优先选性能核。显式列表中的不同物理核用完后，可以使用列表内的 SMT 兄弟线程。none 由系统调度，CPU Stage2 停用调优复用和采样。其他后端遇到空值、auto 或 none 时沿用已有亲和性。可按 worker 同时覆盖两阶段。" />
       <Item id="option_shared_shared_tune_file" name="CUDA Stage1、CUDA Stage2 和 CPU GWNUM Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可覆盖路径。显式留空时关闭自动持久化。" />
       <Item id="option_stage1_param" name="Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。" />
       <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
@@ -102,7 +102,7 @@
       <Item id="option_stage2_stage2_ntt_counts" name="生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。" />
       <Item id="option_stage2_stage2_backend" name="Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。" />
       <Item id="option_stage2_stage2_cpu_backend" name="Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。" />
-      <Item id="option_stage2_stage2_cpu_threads" name="每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。" />
+      <Item id="option_stage2_stage2_cpu_threads" name="每个 CPU Stage2 worker 请求的线程数，以所选亲和性范围可用的线程数为上限。命令行 --threads 可覆盖。" />
       <Item id="option_stage2_stage2_cpu_memory_mib" name="CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。" />
       <Item id="option_stage2_stage2_opencl_point_plan" name="OpenCL 点生成。auto 从已验证的默认计划起步，可用完整曲线继续调优。device 使用设备点计划（含已验证短批次）；chain 选择连续巨步种子；cpu 使用 GMP 点及 OpenCL 树。手动计划跳过运行时探索。" />
       <Item id="option_stage2_stage2_opencl_point_chunk" name="每条 OpenCL 命令的点数。0 自动；正值锁定分块并关闭运行时计划试探。" />
@@ -134,7 +134,7 @@
       <Item id="option_stage2_stage2_prediction_policy" name="model：优先使用精确配对实测；其他输入分别按通用、梅森算术位宽区间预测，满足双侧误差保护及当前显存准入才替换。缺调优资料时使用明确标为估算的4060 Laptop/1800MHz基础模型；未覆盖的NTT/驻留区间保留默认。paired恢复原精确位宽/B2实测收益门禁。B1不作为复用门槛。" />
       <Item id="option_stage2_stage2_tune_arithmetic" name="显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo_file/save配对仍遵循auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。" />
       <Item id="option_stage2_stage2_tune_profile" name="共享调优 TOML。CLI --tune-profile 优先，相对路径以 ecm.toml 所在目录为准。留空且未指定旧成本配置时优先使用 tune.toml，若只有已有的 stage2_ecm_tune.toml 则沿用。通用与梅森算术分别按 arithmetic_bits 查询。" />
-      <Item id="option_stage2_stage2_tune_runtime" name="CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入 [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。" />
+      <Item id="option_stage2_stage2_tune_runtime" name="CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案一致时，可跨位宽和内存预算复用。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。" />
       <Item id="option_stage2_stage2_parallel" name="CUDA Stage2 曲线调度。auto 实测串行和可准入的双槽模式。默认 serial 串行执行，dual 请求双槽并检查显存准入。命令行仍使用 --parallel auto|0|1|2。" />
       <Item id="option_stage2_stage2_parallel_workspace" name="independent 为两个 CUDA Stage2 槽分别分配工作区。leased 允许下一槽先准备和计算 Baby 点，到 F 树前再租用大工作区。auto 比较两种模式，只有租约可准入时直接使用 leased。" />
       <Item id="option_stage2_stage2_parallel_tune_curves" name="CUDA Stage2 每个队列调优窗口的曲线数。2 至 4 条按整窗吞吐比较，5 条及以上还检查中段完成吞吐。" />

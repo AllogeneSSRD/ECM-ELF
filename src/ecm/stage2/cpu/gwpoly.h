@@ -17,7 +17,7 @@ struct Options {
 struct Stats : ecm_gw_stage2_stats {
     ecm_gw_stage2_phases phases{};
 };
-using TuneCandidate = ecm_gw_stage2_tune_candidate;
+using TuneCandidate = ecm_gw_stage2_tune_plan;
 // Baseline first, followed by up to two viable alternatives. Each entry
 // describes the FFT layout that a forced-D run would use.
 std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options&);

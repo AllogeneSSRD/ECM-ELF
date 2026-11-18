@@ -6,10 +6,10 @@
     "src/ecm/application/configuration/generated/ecm_toml_schema.h": "0a1237e608ec1dffcc5ca924836138c2daf3db9e6f83707bfc7d65231be52b78",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "eba054e5caa556f772eed1f345195439414d5d6d16c3867c0a01bd6e88711b94",
     "config/ecm.toml.default": "205f256783e6ea5078f03b78ec36a08ce9ab2cfcc5b2ba96edcac5b6ee143aa1",
-    "config/ecm.toml.example": "c5ee4e7b58887ddfa043b7d558ce46aff3c6742b55e09481b4214c880b842248",
-    "docs/ECM_TOML_REFERENCE.en.md": "2859dd8d68e647602c5530a42a7186c13318092320bb08844838e85979d9cd4a",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "4d49c5e4596437e340788cc9b40a08f0d76d4740f9c4c446fc492a1dbd7565b9",
-    "config/ecm_options.json": "ff4f452fbf8fcf50ed4fd9d214d8d1029fb31d02dedf08b6d9bfcab4364206ff",
+    "config/ecm.toml.example": "a772c9af40fc62b2de44e4eff29f0b034211187c178ff6e7b57913862286fd8c",
+    "docs/ECM_TOML_REFERENCE.en.md": "bd8ae0b71ed8a70122e911d50324cad9562b33fe2254e793cf87e77dc7292fd6",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "25186eaa872b2a36b82afa3341364cdb7812b0b6bb635bb4e22196a832108170",
+    "config/ecm_options.json": "4abcfd7d3a0fc68a87efec77bb7f71657079182820ad4b1dc580b8d2b3b9e574",
     "tools/gen/generate_ecm_config.py": "27ba4d8ff2775508b5a36d692762759a9472d55e65db4f079f6e07f214a4e9c4"
   }
 }

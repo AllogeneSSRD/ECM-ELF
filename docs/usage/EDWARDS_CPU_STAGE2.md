@@ -40,7 +40,7 @@ Giant 横坐标直接写入 P+1 槽的 G 缓冲区，归一化后相邻两根就
 
 完成常规多项式路径时，DLL 的 `gwpoly-phases` 行分别报告 baby 点、F 建树、倒数、giant 点、G 建树、H 折叠、H 缩放、下降和叶积至整体 GCD 的秒数。分段 F 树在下降中重建的时间计入 descent。阶段图使用完整 NF，读档、发布与进程启动在引擎计时之外。[Prime95 阶段对照](../performance/STAGE2.md#宽位单线程阶段耗时)
 
-Stage2 ABI 3 会在曲线内输出规划、baby 点、F 树、倒数、giant 循环、下降和 GCD。设置 `log_level = "phases"` 可查看阶段，`"batches"` 另显示 giant 批次和估算剩余时间。GUI 直接消费同一进度事件，队列模式也写入共享日志。批次进度按本次执行范围计数，命中后重放原范围会重新计数。libecm 仍按曲线报告。
+Stage2 ABI 3 起会在曲线内输出规划、baby 点、F 树、倒数、giant 循环、下降和 GCD。设置 `log_level = "phases"` 可查看阶段，`"batches"` 另显示 giant 批次和估算剩余时间。GUI 直接消费同一进度事件，队列模式也写入共享日志。批次进度按本次执行范围计数，命中后重放原范围会重新计数。libecm 仍按曲线报告。
 
 `--gw-check` 在完整运行中额外使用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶结果比较，适合正确性验证，不计入默认性能测量。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
 
@@ -70,9 +70,13 @@ tune_runtime_sample_limit = 10
 
 路径默认位于 `ecm.toml` 旁，支持 worker 覆盖。CLI `--tune-profile FILE` 优先，相对路径以启动目录为准。CLI 的 `--tune-min-repeats` 和 `--tune-runtime-samples` 可覆盖重复数和每个候选的样本上限。达到上限后保留已有均值。`--tune-runtime 0` 只读复用合格记录。将 `tune_file` 或 `--tune-profile` 显式置空可以停用读写。指定非零 `--d`、`--dry-run` 或 `--gw-check` 时直接走相应执行路径。
 
-CPU 使用独立的 `[[cpu_stage2]]` 表，CUDA Stage1/Stage2 保留自身的表和矩阵。CPU 记录按处理器、GW 构建、目标位宽、承载指数、B1/B2、线程数、亲和性、内存预算、D/P 和实际 FFT 长度匹配。每个候选保存重复次数、平均整曲线用时、FFT 描述和外层指令集、实际块数与 giant 点数、内存规划估值，以及初始化、主循环、baby 点、F 树、倒数、giant 点、G 树、折叠、缩放、下降、叶积与 GCD 的阶段均值。测量包含 GW 执行的初始化和清理，排除调优预检、读写文件和结果发布。初始化和主循环为外层计时。`estimated_memory_mib` 是规划值。
+CPU 与 CUDA 可以共用同一个 `tune.toml`。CPU 使用 `[cpu_stage2]` 的 `format = 2` 矩阵，每行对应一个 CPU 型号、GWNUM 版本、P/E 线程数、模数模式、系数 FFT 布局、polymult 指令集、B1/B2、D/P 和 F 树方案。行内还记录 `planned_mib`、重复次数、整曲线平均耗时、样本标准差、实测位宽区间、程序版本和 UTC 更新时间。计时包含 GW 初始化及清理，排除调优预检、读写文件和结果发布。分项耗时仍在运行日志中。
 
-CPU 与 CUDA 使用同一发布锁写回文件。CPU 运行时调优需要 Stage2 ABI 2 或更新的 DLL，实时进度需要 ABI 3。ABI 1 仍可按自动或指定 D 执行。出现 `gwpoly-tune` 或 `gwpoly-progress` 的 ABI 提示时，用 `tools/build/build_gwnum_local.ps1 -Stage2` 构建本地 DLL，再放到 `ecm_stage2.exe` 旁。共享文件含 CPU 表时，CUDA worker 也应使用支持该表的版本。
+默认每个物理核只分配一个逻辑 CPU，先选 Windows 报告的性能核，再选能效核。相同的两组双 P 核都记为 `threads = [2, 0]`。显式 `cpu_affinity` 列表用完其中的独立物理核后，才会使用列表内的 SMT 兄弟线程。出现这类样本时，矩阵增加 `smt_extra` 列。CPU Stage2 设置 `cpu_affinity = "none"` 时由系统调度，暂停调优读写。
+
+不同位宽或预算可复用同一行。程序先用当前模数、D 和预算检查 FFT 布局、误差余量及 F 树方案，再在合格候选中查表。`max_exponent` 是该系数 FFT 在当前多项式余量下的规划上界，普通模数的内部 FFT 指数可能大于实际位宽。`tested_min`、`tested_max` 记录已有样本的位宽，梅森承载时记录承载指数。`planned_mib` 是规划估值。
+
+CPU 与 CUDA 使用同一发布锁和原子替换。旧 `[[cpu_stage2]]` 样本跳过，首次保存新样本时会替换旧 CPU 表。运行时调优需要 Stage2 ABI 4。较旧 DLL 仍可执行 Stage2，ABI 3 支持实时进度。可用 `tools/build/build_gwnum_local.ps1 -Stage2` 构建新版 DLL，再放到 `ecm_stage2.exe` 旁。共用 tune 文件时，CPU 和 CUDA worker 均应更新到支持新矩阵的版本。
 
 ## worktodo、停止与跨后端续算
 

@@ -24,6 +24,8 @@ foreach(_shared
     src/ecm/stage2/cpu/gwpoly_loader.cpp
     src/ecm/stage2/cpu/runtime_tune.h
     src/ecm/stage2/cpu/runtime_tune.cpp
+    src/ecm/stage2/cpu/thread_layout.h
+    src/ecm/stage2/planning/cpu_tune_section.h
     include/ecm/io/results.h
     src/io/results.cpp
     src/io/json.h
