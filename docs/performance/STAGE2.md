@@ -65,6 +65,8 @@ ECM-ELF 柱高为同一 Edwards 存档两次完整无因子续算的中位数，
 
 ### 宽位单线程阶段耗时
 
+图中记录的是 0.66.8 的宽位矩阵。0.66.9 在相同 B2 和固定 D/P 下的热点对照及 4 GiB 几何复测见 [giant 点、G 树和 H 折叠](CPU_GWPOLY_STAGE2.md#giant-点g-树和-h-折叠)。
+
 ![八个指数下 ECM-ELF 和 Prime95 每条曲线的单线程阶段秒数，M58631 的 Prime95 完整曲线缺测](attachments/stage2-cpu-prime-phases.png)
 
 每个指数上方为 ECM-ELF 0.66.8，下方为 Prime95，每根柱子是一条曲线，各段合计等于柱尾的整曲线秒数。七对完整曲线都以 Prime95 实际完成的 B2 重跑 ECM-ELF。虚线两侧分别源自请求 B2=80 亿、4.5 亿的工作行。M58631 的 Prime95 日志从 93.51% 续算，下方留空；该点 ECM-ELF 按原请求 80 亿测量。Ryzen AI 9 HX 370，双方均为 1T、逻辑 CPU 1；ECM-ELF 规划预算 4096 MiB，Prime95 报告可用内存 4096 MB。ECM-ELF 使用 GWNUM 31.6 本地 DLL `0e7b52c2995e0baf`、自动 D、原矩阵余因子和 Edwards save，B1=1000、sigma=26，采集避让编译。每个点另存一条按原请求 B2 的 CPU 样本。有效频率与功耗未测量。[完整计时与逐块记录](../../data/benchmarks/stage2-cpu-prime-phases.json) · [绘图工具](../../tools/bench/plot_stage2_cpu_phases.py)

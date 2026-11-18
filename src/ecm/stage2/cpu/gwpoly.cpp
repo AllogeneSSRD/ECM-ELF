@@ -130,24 +130,33 @@ struct Context {
     void mul(gwnum a,gwnum b,gwnum out){gwmul3(&gw,a,b,out,GWMUL_PRESERVE_S1|GWMUL_PRESERVE_S2);}
     Array constant(uint64_t x){Array a(gw,1);u64togw(&gw,x,a[0]);return a;}
     Array copy(const Array &a){Array b(gw,a.size);for(size_t i=0;i<a.size;++i)gwcopy(&gw,a[i],b[i]);return b;}
-    Array convolution(View a,View b,size_t first,size_t count,const Array *subtract_from=nullptr){
-        if(a.empty() || b.empty() || !count)throw std::runtime_error("Empty polynomial multiplication");
-        Array out(gw,count);++stats.polymults;
-        polymult_set_num_threads(&pm,a.size()+b.size()<64?1:pm.max_num_threads);
-        const int base_options=POLYMULT_MULMID|POLYMULT_NEXTFFT|(subtract_from?POLYMULT_FNMADD:0);
-        auto &plan=plans[{a.size(),b.size(),count,first,base_options,pm.num_threads}];
+    void product(gwnum *a,size_t a_size,gwnum *b,size_t b_size,gwnum *out,
+                 size_t first,size_t count,int operation,gwnum *subtract_from=nullptr){
+        ++stats.polymults;
+        polymult_set_num_threads(&pm,a_size+b_size<64?1:pm.max_num_threads);
+        const int base_options=operation|POLYMULT_NEXTFFT;
+        auto &plan=plans[{a_size,b_size,count,first,base_options,pm.num_threads}];
         int options=base_options|POLYMULT_SAVE_PLAN;
         if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
-        polymult2(&pm,a.data(),a.size(),b.data(),b.size(),out.v,count,subtract_from?subtract_from->v:nullptr,0,first,
-                  options);
+        polymult2(&pm,a,a_size,b,b_size,out,count,subtract_from,0,first,options);
         plan=pm.plan;
-        check("polynomial convolution");return out;
+        check("polynomial convolution");
     }
-    void monic_coefficients(gwnum *a,size_t a_degree,gwnum *b,size_t b_degree,gwnum *out,bool defer){
+    Array convolution(View a,View b,size_t first,size_t count,const Array *subtract_from=nullptr){
+        if(a.empty() || b.empty() || !count)throw std::runtime_error("Empty polynomial multiplication");
+        Array out(gw,count);
+        const int operation=POLYMULT_MULMID|(subtract_from?POLYMULT_FNMADD:0);
+        product(a.data(),a.size(),b.data(),b.size(),out.v,first,count,operation,
+                subtract_from?subtract_from->v:nullptr);
+        return out;
+    }
+    void monic_coefficients(gwnum *a,size_t a_degree,gwnum *b,size_t b_degree,gwnum *out,bool defer,bool negate_monic=false){
         const size_t degree=a_degree+b_degree;
         ++stats.polymults;
         polymult_set_num_threads(&pm,degree<64?1:pm.max_num_threads);
-        const int base_options=POLYMULT_INVEC1_MONIC|POLYMULT_INVEC2_MONIC|(defer?POLYMULT_NO_UNFFT:POLYMULT_NEXTFFT);
+        const int monic=negate_monic?POLYMULT_INVEC1_MONIC_NEGATE|POLYMULT_INVEC2_MONIC_NEGATE:
+            POLYMULT_INVEC1_MONIC|POLYMULT_INVEC2_MONIC;
+        const int base_options=monic|(defer?POLYMULT_NO_UNFFT:POLYMULT_NEXTFFT);
         auto &plan=plans[{a_degree,b_degree,degree,0,base_options,static_cast<unsigned>(pm.num_threads)}];
         int options=base_options|POLYMULT_SAVE_PLAN;
         if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
@@ -194,6 +203,41 @@ struct Context {
         auto qr=convolution(rt,rv,0,k);auto q=reverse(qr);
         // The monic term of F contributes only at degree and above.
         return convolution(q,View(f.v,f.v+degree),0,degree,&t);
+    }
+
+    void fold(Array &h,Array &workspace,size_t g_degree,const Array &f,View &reciprocal){
+        const size_t degree=f.size-1;
+        if(!h.size){
+            if(g_degree<degree){
+                h=copy(Array(gw,workspace.v,g_degree+1));
+            }else{
+                h=Array(gw,degree);
+                // Monic F and G have the same degree so the quotient is 1.
+                for(size_t i=0;i<degree;++i)
+                    gwsub3o(&gw,workspace[i],f[i],h[i],GWADD_FORCE_NORMALIZE);
+                check("first polynomial fold");
+            }
+            return;
+        }
+
+        // Use the two existing buffers for the low and high parts of H*G.
+        // Even for a short G block, workspace has degree+1 allocated slots.
+        View coefficients(degree+g_degree);
+        std::copy_n(workspace.v,degree,coefficients.begin());
+        std::copy_n(h.v,g_degree,coefficients.begin()+degree);
+        product(workspace.v,g_degree,h.v,degree,coefficients.data(),0,degree+g_degree,
+                     POLYMULT_INVEC1_MONIC);
+
+        // Q is the high g_degree coefficients of the product of the high
+        // block and the reversed truncated reciprocal. Its leading one is
+        // implicit. When g_degree=1 the high block already equals Q.
+        if(g_degree>1)
+            product(h.v,g_degree,reciprocal.data()+degree-g_degree,g_degree-1,
+                         h.v,0,g_degree,POLYMULT_INVEC2_MONIC|POLYMULT_MULHI);
+        // Only the low coefficients of F can contribute here. Keep the
+        // low H*G block intact as the FMA input and overwrite the quotient.
+        product(h.v,g_degree,f.v,degree,h.v,0,degree,
+                     POLYMULT_MULLO|POLYMULT_FNMADD,workspace.v);
     }
     void divisor(gwnum z){
         Integer v;get(v.v,z);mpz_gcd(factor,v.v,n);
@@ -243,6 +287,17 @@ struct Points {
         c.mul(t[8],difference.z,t[10]);c.mul(t[9],difference.x,t[11]);
         gwcopy(&h,t[10],out.x);gwcopy(&h,t[11],out.z);
     }
+    void add_giant(Point p,Point q,Point difference,Point out){
+        auto &gw=c.gw;
+        // These inputs belong to this worker and may keep their forward FFTs.
+        // The two squares omit the same factor of four in the projective output.
+        gwmulmulsub5(&gw,p.x,q.z,p.z,q.x,out.z,GWMUL_FFT_S1234|GWMUL_STARTNEXTFFT);
+        gwmulmulsub5(&gw,p.x,q.x,p.z,q.z,out.x,GWMUL_STARTNEXTFFT);
+        gwsquare2(&gw,out.z,out.z,GWMUL_STARTNEXTFFT);
+        gwsquare2(&gw,out.x,out.x,GWMUL_STARTNEXTFFT);
+        gwmul3(&gw,out.z,difference.x,out.z,GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
+        gwmul3(&gw,out.x,difference.z,out.x,GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
+    }
     void ladder(Point p,uint64_t k,Point out,gwnum a24){
         if(!k){u64togw(&c.gw,1,out.x);u64togw(&c.gw,0,out.z);return;}
         Array storage(c.gw,6);Point a{storage[0],storage[1]},b{storage[2],storage[3]},t{storage[4],storage[5]};
@@ -255,19 +310,27 @@ struct Points {
         copy(a,out);
     }
     void normalize(gwnum *x,gwnum *z,size_t count){
-        Array prefix(c.gw,count);gwcopy(&c.gw,z[0],prefix[0]);
-        for(size_t i=1;i<count;++i)c.mul(prefix[i-1],z[i],prefix[i]);
-        Integer product,inv;c.get(product.v,prefix[count-1]);
+        auto &gw=c.gw;
+        // Multiply each numerator by the product of preceding denominators
+        // while that product is live. Keep the original z values for GCDs.
+        Array prefix(gw,1);
+        gwcopy(&gw,z[0],prefix[0]);
+        for(size_t i=1;i<count;++i){
+            gwmul3(&gw,prefix[0],x[i],x[i],GWMUL_FFT_S1|GWMUL_STARTNEXTFFT);
+            gwmul3(&gw,prefix[0],z[i],prefix[0],GWMUL_FFT_S2|GWMUL_STARTNEXTFFT);
+        }
+        Integer product,inv;c.get(product.v,prefix[0]);
         if(!mpz_invert(inv.v,product.v,c.n)){
             for(size_t i=0;i<count;++i)c.divisor(z[i]);
             throw std::runtime_error("Saturated point denominator; no NF result");
         }
-        Array scratch(c.gw,3);c.put(inv.v,scratch[0]);
-        for(size_t i=count;i-->0;){
-            if(i)c.mul(scratch[0],prefix[i-1],scratch[1]);else gwcopy(&c.gw,scratch[0],scratch[1]);
-            c.mul(x[i],scratch[1],scratch[2]);gwcopy(&c.gw,scratch[2],x[i]);
-            if(i){c.mul(scratch[0],z[i],scratch[2]);gwcopy(&c.gw,scratch[2],scratch[0]);}
+        // Walk the inverse prefix products backward to finish x[i]/z[i].
+        c.put(inv.v,prefix[0]);
+        for(size_t i=count-1;i>0;--i){
+            gwmul3(&gw,prefix[0],x[i],x[i],GWMUL_FFT_S1);
+            gwmul3(&gw,prefix[0],z[i],prefix[0],GWMUL_STARTNEXTFFT);
         }
+        gwmul3(&gw,prefix[0],x[0],x[0],0);
         c.check("batch point normalization");
     }
 };
@@ -321,13 +384,18 @@ std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,boo
         gwnum *row=t->polynomial.v;
         // (X-x)(X-y) = X^2 - (x+y)X + xy.
         const size_t pairs=(count+1)/2;
+        const bool in_place=roots.v+lo==row;
         tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
             for(size_t i=begin;i<end;++i){
                 const auto offset=2*i;
                 auto x=roots[lo+offset];
                 if(offset+1==count){
-                    gwcopy(&worker.gw,x,row[offset]);
+                    if(!in_place)gwcopy(&worker.gw,x,row[offset]);
                     gwsmallmul(&worker.gw,-1,row[offset]);
+                }else if(in_place){
+                    // The two inputs with implicit leading -1 multiply to a
+                    // monic quadratic and may share storage with its output.
+                    worker.monic_coefficients(row+offset,1,row+offset+1,1,row+offset,false,true);
                 }else{
                     auto y=roots[lo+offset+1];
                     worker.mul(x,y,row[offset]);
@@ -566,19 +634,31 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         Array g_workspace(c.gw,g_row_size);
         stats.init_seconds=seconds(begin);main_begin=Clock::now();main_started=true;
         Array h;
+        auto reciprocal=reverse(inv);
         for(uint64_t pos=first;pos<=last;){
             c.poll();const size_t count=static_cast<size_t>(std::min<uint64_t>(p,last-pos+1));
             auto part_begin=Clock::now();
-            Array gx(c.gw,count),gz(c.gw,count);
+            Array gx(c.gw,g_workspace.v,count),gz(c.gw,count);
             parallel_points(c,count,[&](Context &worker,size_t lo,size_t hi){
-                Points ops(worker);Array work(worker.gw,9);Point a{work[0],work[1]},b{work[2],work[3]},v{work[4],work[5]},
-                    local_base{work[6],work[7]};
-                ops.copy(base,local_base);gwcopy(&worker.gw,storage[12],work[8]);
-                ops.ladder(local_base,pos+lo,b,work[8]);ops.ladder(local_base,pos+lo-1,a,work[8]);
-                for(size_t i=lo;i<hi;++i){
-                    gwcopy(&worker.gw,b.x,gx[i]);gwcopy(&worker.gw,b.z,gz[i]);
-                    if(pos+i==1)ops.dbl(local_base,v,work[8]);else ops.add(b,local_base,a,v);
-                    ops.copy(b,a);ops.copy(v,b);if(!(i&127))worker.check();
+                Points ops(worker);
+                Array work(worker.gw,5);
+                Point previous{work[0],work[1]}, local_base{work[2],work[3]};
+                Point current{gx[lo],gz[lo]};
+                auto a24=work[4];
+                ops.copy(base,local_base);
+                gwcopy(&worker.gw,storage[12],a24);
+                ops.ladder(local_base,pos+lo,current,a24);
+                ops.ladder(local_base,pos+lo-1,previous,a24);
+                const bool use_fused=worker.o.exponent &&
+                    (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
+                for(size_t i=lo+1;i<hi;++i){
+                    Point next{gx[i],gz[i]};
+                    if(pos+i==2)ops.dbl(local_base,next,a24);
+                    else if(use_fused)ops.add_giant(current,local_base,previous,next);
+                    else ops.add(current,local_base,previous,next);
+                    previous=current;
+                    current=next;
+                    if(!(i&127))worker.check();
                 }
                 ops.normalize(gx.v+lo,gz.v+lo,hi-lo);
             });gz=Array();stats.point_seconds+=seconds(part_begin);
@@ -590,8 +670,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             }
             part_begin=Clock::now();auto g=tree(c,gx,0,count,false,&g_workspace);gx=Array();stats.tree_seconds+=seconds(part_begin);
             part_begin=Clock::now();
-            if(!h.size){h=c.remainder(g->polynomial,ftree->polynomial,inv);}
-            else {auto product=c.convolution(h,g->polynomial);h=c.remainder(product,ftree->polynomial,inv);}
+            c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal);
             stats.fold_seconds+=seconds(part_begin);
             pos+=count;++stats.blocks;stats.giants+=count;
         }
@@ -651,22 +730,23 @@ void selftest(unsigned threads){
         auto product=c.convolution(h,t->polynomial);auto rem=c.remainder(product,t->polynomial,inv);
         for(size_t i=0;i<rem.size;++i){c.get(x.v,rem[i]);if(mpz_sgn(x.v))throw std::runtime_error("Polynomial remainder differs from exact multiple");}
         // Nonzero remainders across several folds, including packed G workspaces.
-        Array accumulator=c.copy(h),workspace(c.gw,count+1);
+        Array accumulator,workspace(c.gw,count+1);
+        auto reciprocal=reverse(inv);
         std::vector<std::unique_ptr<Integer>> expected;
         for(size_t i=0;i<count;++i){
-            auto value=std::make_unique<Integer>();mpz_set_ui(value->v,0);
-            for(size_t k=count;k-->0;){mpz_mul_ui(value->v,value->v,expected_roots[i]);mpz_add_ui(value->v,value->v,103*(k+3));mpz_mod(value->v,value->v,n.v);}
+            auto value=std::make_unique<Integer>();mpz_set_ui(value->v,1);
             expected.push_back(std::move(value));
         }
-        for(unsigned block=0;block<3;++block){
-            for(size_t j=0;j<count;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
-            auto g=tree(c,roots,0,count,false,&workspace);auto full=c.convolution(accumulator,g->polynomial);
-            accumulator=c.remainder(full,t->polynomial,inv);
+        for(unsigned block=0;block<4;++block){
+            const size_t leaves=block<2?count:block==2?(count+1)/2:1;
+            for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
+            auto g=tree(c,roots,0,leaves,false,&workspace);
+            c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal);
             auto scaled=c.convolution(reverse(accumulator),view(inv),0,count);Array reversed(c.gw,count);
             for(size_t i=0;i<count;++i)gwcopy(&c.gw,scaled[count-i-1],reversed[i]);
             descend(c,*t,reversed,out);
             for(size_t i=0;i<count;++i){
-                for(size_t j=0;j<count;++j){mpz_set_ui(z.v,expected_roots[i]);mpz_sub_ui(z.v,z.v,1237*(j+5)+97*block);mpz_mul(expected[i]->v,expected[i]->v,z.v);mpz_mod(expected[i]->v,expected[i]->v,n.v);}
+                for(size_t j=0;j<leaves;++j){mpz_set_ui(z.v,expected_roots[i]);mpz_sub_ui(z.v,z.v,1237*(j+5)+97*block);mpz_mul(expected[i]->v,expected[i]->v,z.v);mpz_mod(expected[i]->v,expected[i]->v,n.v);}
                 c.get(x.v,out[i]);if(mpz_cmp(x.v,expected[i]->v))throw std::runtime_error("Polynomial fold differs from direct GMP products");
             }
         }
