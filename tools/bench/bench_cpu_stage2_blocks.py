@@ -75,11 +75,19 @@ def measure(folder):
     if case['d'] and row['d'] != case['d']:
         raise ValueError(f"Requested D={case['d']}, measured D={row['d']} in {folder}")
     phases = dict(field.split('=') for field in re.search(r'^gwpoly-phases: (.+)$', log, re.M)[1].split())
-    return dict(actual=row['b2'], d=row['d'], p=row['poly-size'], fft=row['fft-length'],
+    result = dict(actual=row['b2'], d=row['d'], p=row['poly-size'], fft=row['fft-length'],
                 blocks=blocks, giants=points, seconds=engine['seconds'], err=engine['max-roundoff'],
                 phases={k: float(v) for k, v in phases.items()},
                 peak_mib=usage['peak_process_commit_bytes'] / 1024**2, dll=engine['gw-build'],
                 isa=engine['polymult-isa'], fft_description=engine['fft-description'])
+    plan = re.search(r'^gwpoly-plan: ftree=(\w+) bytes_per_value=(\d+) retained_splits=(\d+)', log, re.M)
+    if plan:
+        result['ftree'] = dict(layout=plan[1], bytes_per_value=int(plan[2]), retained_splits=int(plan[3]))
+        rebuild = re.search(r'^gwpoly-descent: ftree_rebuild_seconds=([\d.]+)', log, re.M)
+        if rebuild:
+            # Rebuild is included in phases.descent.
+            result['ftree']['rebuild_seconds'] = float(rebuild[1])
+    return result
 
 
 def main():

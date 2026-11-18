@@ -1,5 +1,7 @@
 # Stage2 性能
 
+262139 位单线程的 F 下降、分段重建和内存实测见 [0.69.8 分段 F 树下降](CPU_GWPOLY_STAGE2.md#0698-分段-f-树下降)。16k 的 H 写回按 B2、内存和折叠子步骤分别计时，见 [H 写回与 F 下降实验](../development/CPU_STAGE2_PLAN_SELECTION.md#基于-0697-的-h-写回与-f-下降实验)。
+
 CPU 单线程 G 树分片在 8k、16k 两种位宽、90 亿与 440 亿 B2 上的整曲线测试，以及 1 GiB、四线程和 262k 对照，见[0.69.7 分片性能](CPU_GWPOLY_STAGE2.md#0697-单线程-g-树分片)。三档同工作量的阶段堆积图见 [0.69.6 与 Prime95](CPU_GWPOLY_STAGE2.md#0696-与-prime95-的同工作量对照)。
 
 [CPU 0.69.6 G 树与 H 折叠](CPU_GWPOLY_STAGE2.md#0696-g-树与-h-折叠) 对照相同实际 B2、D/P 和 FFT 下的阶段耗时、整曲线收益及内存代价。

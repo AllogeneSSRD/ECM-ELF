@@ -190,13 +190,13 @@ struct Context {
         for(size_t i=h.size;i<scaled.size;++i)u64togw(&gw,0,scaled[i]);
         return scaled;
     }
-    void scaled_children(const Array &parent,const Array &left,const Array &right,size_t a,size_t b,gwnum *out){
+    void scaled_children(Array &parent,const Array &left,const Array &right,size_t a,size_t b){
         // Both circular products use the same transformed parent. Wrapped
         // coefficients lie below each requested high interval. Like the
         // upstream F descent the outputs may occupy the parent's own row.
         constexpr int child=POLYMULT_INVEC2_MONIC|POLYMULT_CIRCULAR|POLYMULT_MULHI;
-        polymult_arg args[2]={{right.v,b,out,a,nullptr,parent.size,0,child},
-                              {left.v,a,out+a,b,nullptr,parent.size,0,child}};
+        polymult_arg args[2]={{right.v,b,parent.v,a,nullptr,parent.size,0,child},
+                              {left.v,a,parent.v+a,b,nullptr,parent.size,0,child}};
         polymult_set_num_threads(&pm,parent.size+std::max(a,b)<64?1:pm.max_num_threads);
         // Negative tag distinguishes these two-product plans from product().
         auto &plan=plans[{a,b,parent.size,0,-1,pm.num_threads}];
@@ -276,23 +276,23 @@ struct Tree {
     std::vector<Array> rows;
     explicit Tree(size_t a,size_t b):lo(a),hi(b){}
 };
-std::unique_ptr<Tree> retained_ftree(Context &,const Array &,size_t,size_t,bool need_root=true);
-void descend_node(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots,gwnum scratch,double &rebuild_seconds){
+std::unique_ptr<Tree> retained_ftree(Context &,const Array &,size_t,size_t,bool need_root=true,std::vector<Array> rows={});
+void descend_node(Context &c,const Tree &t,Array &values,const Array *roots,gwnum scratch,double &rebuild_seconds,std::vector<Array> *sibling_rows=nullptr){
     if(!t.left){
-        if(t.hi-t.lo==1){
-            if(s[0]!=values[t.lo])gwcopy(&c.gw,s[0],values[t.lo]);
-            return;
-        }
+        if(t.hi-t.lo==1)return;
         if(!roots)throw std::logic_error("Missing roots for F subtree rebuild");
         // The parent remainder is already available. Only F polynomials
         // strictly below this checkpoint are consumed by descent.
         const auto start=Clock::now();
-        auto segment=retained_ftree(c,*roots,t.lo,t.hi,false);
+        auto segment=retained_ftree(c,*roots,t.lo,t.hi,false,
+                                    sibling_rows ? std::move(*sibling_rows) : std::vector<Array>{});
         rebuild_seconds+=seconds(start);
-        descend_node(c,*segment,s,values,roots,scratch,rebuild_seconds);
+        descend_node(c,*segment,values,roots,scratch,rebuild_seconds);
+        if(sibling_rows)*sibling_rows=std::move(segment->rows);
         return;
     }
     const auto a=t.left->hi-t.left->lo,b=t.right->hi-t.right->lo;
+    Array s(c.gw,values.v+t.lo,a+b);
     if(a==1 && b==1){
         // High coefficient of S*(X-r) mod X^2-1 equals S0-r*S1.
         // Hold the first result until both overlapping inputs have been read.
@@ -302,15 +302,18 @@ void descend_node(Context &c,const Tree &t,const Array &s,Array &values,const Ar
         c.check("scaled leaf pair");
         return;
     }
-    c.scaled_children(s,t.left->polynomial,t.right->polynomial,a,b,values.v+t.lo);
-    Array sl(c.gw,values.v+t.lo,a),sr(c.gw,values.v+t.right->lo,b);
-    descend_node(c,*t.left,sl,values,roots,scratch,rebuild_seconds);
-    descend_node(c,*t.right,sr,values,roots,scratch,rebuild_seconds);
+    c.scaled_children(s,t.left->polynomial,t.right->polynomial,a,b);
+    // Equally sized checkpoint siblings rebuild the same row layout.
+    // Release the spare before returning to their parent's caller.
+    std::vector<Array> spare;
+    auto *reuse=(roots && a==b && !t.left->left && !t.right->left) ? &spare : nullptr;
+    descend_node(c,*t.left,values,roots,scratch,rebuild_seconds,reuse);
+    descend_node(c,*t.right,values,roots,scratch,rebuild_seconds,reuse);
 }
-double descend(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots=nullptr){
+double descend(Context &c,const Tree &t,Array &values,const Array *roots=nullptr){
     Array scratch(c.gw,1);
     double rebuild_seconds=0;
-    descend_node(c,t,s,values,roots,scratch[0],rebuild_seconds);
+    descend_node(c,t,values,roots,scratch[0],rebuild_seconds);
     return rebuild_seconds;
 }
 struct Point {gwnum x,z;};
@@ -511,12 +514,14 @@ std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_
     u64togw(&c.gw,1,row[count]);
     return t;
 }
-std::unique_ptr<Tree> retained_ftree(Context &c,const Array &roots,size_t lo,size_t hi,bool need_root){
-    std::vector<size_t> sizes;tree_layout(lo,hi,0,sizes);
-    // Every internal row stores just the low coefficients of its monic nodes.
-    sizes[0]=need_root?hi-lo+1:0;
-    std::vector<Array> rows;for(auto size:sizes)rows.emplace_back(c.gw,size);
-    std::vector<size_t> offsets(sizes.size());std::vector<std::vector<Tree *>> levels(sizes.size());
+std::unique_ptr<Tree> retained_ftree(Context &c,const Array &roots,size_t lo,size_t hi,bool need_root,std::vector<Array> rows){
+    if(rows.empty()){
+        std::vector<size_t> sizes;tree_layout(lo,hi,0,sizes);
+        // Every internal row stores just the low coefficients of its monic nodes.
+        sizes[0]=need_root?hi-lo+1:0;
+        for(auto size:sizes)rows.emplace_back(c.gw,size);
+    }
+    std::vector<size_t> offsets(rows.size());std::vector<std::vector<Tree *>> levels(rows.size());
     auto t=tree_skeleton(c,lo,hi,0,rows,offsets,levels);t->rows=std::move(rows);
     const size_t first_row=need_root?0:1;
     for(size_t depth=levels.size();depth>first_row;){
@@ -588,8 +593,8 @@ FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget,unsigned threads){
         const double retained=(splits+2.0)*p+2*segments; // includes the baby roots
         const double init=retained+2.0*p+8; // inverse and truncated Newton error
         const double main=retained+4.0*p+8; // inverse, H, G, giant denominators
-        // Scaled parent and output row, plus two rows of headroom for GW allocations.
-        const double descent=retained+4.0*p+chunk*(std::ceil(std::log2(double(chunk)))+3);
+        // The scaled root row becomes the leaf output. Keep two rows of GW allocation headroom.
+        const double descent=retained+3.0*p+chunk*(std::ceil(std::log2(double(chunk)))+3);
         const double peak=estimate(std::max({init,main,descent}));
         if(peak<=limit || (best.bytes>limit && peak<best.bytes))best={true,peak,splits};
     }
@@ -898,11 +903,11 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         auto descent_begin=Clock::now();
         // Scaled remainder: s=rev(H)*inv(rev(F)) mod X^P. Each child takes
         // middle coefficients of s*rev(sibling F), requiring no node inverses.
-        Array s=c.scaled_remainder(h,inv);h=Array();inv=Array();
+        // Parent and child coefficients occupy the same interval of this row.
+        Array values=c.scaled_remainder(h,inv);h=Array();inv=Array();
         const double scale_seconds=seconds(descent_begin);
-        Array values(c.gw,p);
-        const double rebuild_seconds=descend(c,*ftree,s,values,fplan.rebuild?&roots:nullptr);
-        s=Array();ftree.reset();roots=Array();
+        const double rebuild_seconds=descend(c,*ftree,values,fplan.rebuild?&roots:nullptr);
+        ftree.reset();roots=Array();
         stats.descent_seconds=seconds(descent_begin);
         if(o.check){Integer got;for(auto &probe:probes){
             c.get(got.v,values[probe.index]);if(mpz_cmp(got.v,probe.product.v))throw std::runtime_error("Stage2 polynomial differs from direct GMP products");
@@ -991,12 +996,12 @@ void selftest(unsigned threads){
         auto t=retained_ftree(c,roots,0,count);auto rf=reverse(t->polynomial);
         auto inv=c.inverse(rf,count);
         Array h(c.gw,count);for(size_t i=0;i<count;++i)u64togw(&c.gw,103*(i+3),h[i]);
-        Array out(c.gw,count),rebuilt(c.gw,count);
         auto partial=partial_ftree(c,roots,0,count,3);
         for(size_t terms:{count,(count+1)/2}){
-            Array s=c.scaled_remainder(Array(c.gw,h.v,terms),inv);
-            descend(c,*t,s,out);
-            descend(c,*partial,s,rebuilt,&roots);
+            auto out=c.scaled_remainder(Array(c.gw,h.v,terms),inv);
+            auto rebuilt=c.copy(out);
+            descend(c,*t,out);
+            descend(c,*partial,rebuilt,&roots);
             for(size_t i=0;i<count;++i){
                 mpz_set_ui(y.v,0);for(size_t k=terms;k-->0;){mpz_mul_ui(y.v,y.v,expected_roots[i]);mpz_add_ui(y.v,y.v,103*(k+3));mpz_mod(y.v,y.v,n.v);}
                 c.get(x.v,out[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Scaled polynomial descent differs from GMP Horner");
@@ -1029,8 +1034,8 @@ void selftest(unsigned threads){
             }
             auto g=product_tree(c,signed_block?workspace:roots,0,leaves,&workspace,signed_block);
             c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal);
-            auto reversed=c.scaled_remainder(accumulator,inv);
-            descend(c,*t,reversed,out);
+            auto out=c.scaled_remainder(accumulator,inv);
+            descend(c,*t,out);
             for(size_t i=0;i<count;++i){
                 for(size_t j=0;j<leaves;++j){mpz_set_ui(z.v,expected_roots[i]);mpz_sub_ui(z.v,z.v,1237*(j+5)+97*block);mpz_mul(expected[i]->v,expected[i]->v,z.v);mpz_mod(expected[i]->v,expected[i]->v,n.v);}
                 c.get(x.v,out[i]);if(mpz_cmp(x.v,expected[i]->v))throw std::runtime_error("Polynomial fold differs from direct GMP products");
