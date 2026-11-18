@@ -78,6 +78,11 @@ def main():
     verify(json.loads(auto.read_text()),n)
     for d in (6,30,60,210):
         rows=run(f'wheel_{d}',cpu,n,extra=['--d',d,'--curves',1,'--exponent',127]);assert rows[0]['status']=='NF'
+    # M127 at B2=40000 and D=30 has original last=1333. For m=7 the first
+    # retained centre is 191; no terminal point may move beyond that grid.
+    log=(out/'wheel_30.log').read_text()
+    assert 'gwpoly-range: original_first=32 first=191 last=1333' in log
+    assert 'giants=1143 ' in log and 'replay original grid' not in log
     rows=run('packed_threaded',cpu,n,b2=10**8,extra=['--d',60060,'--curves',1,'--exponent',127]);assert rows[0]['stage2-engine']['checked-values']==3
     full_log=(out/'packed_threaded.log').read_text()
     full_mib=float(re.search(r'planned_mib=([\d.]+)',full_log)[1])
@@ -118,6 +123,10 @@ def main():
         _,rz=oracle.mont.ladder(prime,x,z,a24,hit_n);product=product*rz%hit_n
     expected=math.gcd(product,hit_n);assert 1<expected<hit_n
     r=run('stage2_factor',hit,hit_n)[0];assert r['stage']==2 and int(r['factors'][0])%expected==0
+    # Force the shortened grid on a genuine hit. The canonical replay must
+    # recover the same factor as the independent prime-by-prime ladder.
+    recovered=run('suffix_factor_replay',hit,hit_n,extra=['--d',30])[0]
+    assert recovered['factors']==r['factors'] and 'replay original grid' in (out/'suffix_factor_replay.log').read_text()
     # Small primes represented in the baby wheel have already passed the
     # denominator check. Prime divisors of D require a separate ladder.
     for prime, sigma, order in [(131, 31, 3), (67, 19, 5), (97, 26, 7)]:

@@ -29,6 +29,7 @@ using ecm_edwards::Integer;
 using Clock=std::chrono::steady_clock;
 double seconds(Clock::time_point t){return std::chrono::duration<double>(Clock::now()-t).count();}
 struct Hit {};
+struct Saturated : std::runtime_error {using std::runtime_error::runtime_error;};
 struct Context;
 struct Array {
     gwhandle *gw=nullptr;gwnum *v=nullptr;size_t size=0;bool owned=true;
@@ -172,30 +173,36 @@ struct Context {
         u64togw(&gw,1,out[a.size+b.size-2]);
     }
     Array convolution(const Array &a,const Array &b){return convolution(view(a),view(b),0,a.size+b.size-1);}
-    Array scaled_child(const Array &parent,const Array &sibling,size_t count){
-        // In reversed scaled coordinates, only the high child interval of a
-        // cyclic product of length parent.size is needed. Wrapped coefficients
-        // lie below this interval and do not affect the result.
-        Array out(gw,count);++stats.polymults;
-        polymult_set_num_threads(&pm,parent.size+sibling.size<64?1:pm.max_num_threads);
-        const int base=POLYMULT_INVEC2_MONIC|POLYMULT_CIRCULAR|POLYMULT_MULHI|POLYMULT_NEXTFFT;
-        auto &plan=plans[{parent.size,sibling.size-1,count,parent.size,base,static_cast<unsigned>(pm.num_threads)}];
-        int options=base|POLYMULT_SAVE_PLAN;if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
-        polymult2(&pm,parent.v,parent.size,sibling.v,sibling.size-1,out.v,count,nullptr,parent.size,0,options);
-        plan=pm.plan;check("scaled polynomial descent");return out;
+    void scaled_children(const Array &parent,const Array &left,const Array &right,gwnum *out){
+        // Both circular products use the same transformed parent. Wrapped
+        // coefficients lie below each requested high interval. Like the
+        // upstream F descent the outputs may occupy the parent's own row.
+        const auto a=left.size-1,b=right.size-1;
+        constexpr int child=POLYMULT_INVEC2_MONIC|POLYMULT_CIRCULAR|POLYMULT_MULHI;
+        polymult_arg args[2]={{right.v,b,out,a,nullptr,parent.size,0,child},
+                              {left.v,a,out+a,b,nullptr,parent.size,0,child}};
+        polymult_set_num_threads(&pm,parent.size+std::max(a,b)<64?1:pm.max_num_threads);
+        // Negative tag distinguishes these two-product plans from product().
+        auto &plan=plans[{a,b,parent.size,0,-1,pm.num_threads}];
+        int options=POLYMULT_NEXTFFT|POLYMULT_SAVE_PLAN;
+        if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
+        polymult_several(&pm,parent.v,parent.size,args,2,options);
+        plan=pm.plan;stats.polymults+=2;check("scaled polynomial descent");
     }
-    Array inverse(const Array &f,size_t count){
-        // f[0]=1. Newton g <- g*(2-f*g) mod X^k, over Z/NZ.
-        auto g=constant(1);Array two=constant(2),zero=constant(0);
-        gwfft(&gw,two[0],two[0]);gwfft(&gw,zero[0],zero[0]);
-        while(g.size<count){
-            const size_t k=std::min(count,2*g.size);auto fv=view(f);fv.resize(std::min(k,f.size));
-            auto e=convolution(fv,view(g),0,k);
-            for(size_t i=0;i<k;++i){
-                if(!i)gwsub3o(&gw,two[0],e[i],e[i],GWADD_FORCE_NORMALIZE);
-                else gwsub3o(&gw,zero[0],e[i],e[i],GWADD_FORCE_NORMALIZE);
-            }
-            g=convolution(view(g),view(e),0,k);
+    Array inverse(View f,size_t count){
+        // F*g = 1 + X^known * error (mod X^(known+extra)). The existing
+        // inverse stays in place; only -g*error mod X^extra is appended.
+        Array g(gw,count);u64togw(&gw,1,g[0]);
+        Array zero=constant(0);gwfft(&gw,zero[0],zero[0]);
+        for(size_t known=1;known<count;){
+            const auto extra=std::min(known,count-known);
+            Array error(gw,extra);
+            product(f.data(),std::min(f.size(),known+extra),g.v,known,
+                    error.v,known,extra,POLYMULT_MULMID);
+            for(size_t i=0;i<extra;++i)
+                gwsub3o(&gw,zero[0],error[i],error[i],GWADD_FORCE_NORMALIZE);
+            product(g.v,extra,error.v,extra,g.v+known,0,extra,POLYMULT_MULLO);
+            known+=extra;
         }
         return g;
     }
@@ -263,8 +270,8 @@ void descend(Context &c,const Tree &t,const Array &s,Array &values,const Array *
         return;
     }
     const auto a=t.left->hi-t.left->lo,b=t.right->hi-t.right->lo;
-    auto sl=c.scaled_child(s,t.right->polynomial,a);
-    auto sr=c.scaled_child(s,t.left->polynomial,b);
+    c.scaled_children(s,t.left->polynomial,t.right->polynomial,values.v+t.lo);
+    Array sl(c.gw,values.v+t.lo,a),sr(c.gw,values.v+t.right->lo,b);
     descend(c,*t.left,sl,values,roots);descend(c,*t.right,sr,values,roots);
 }
 struct Point {gwnum x,z;};
@@ -325,7 +332,7 @@ struct Points {
         Integer product,inv;c.get(product.v,prefix[0]);
         if(!mpz_invert(inv.v,product.v,c.n)){
             for(size_t i=0;i<count;++i)c.divisor(z[i]);
-            throw std::runtime_error("Saturated point denominator; no NF result");
+            throw Saturated("Saturated point denominator; no NF result");
         }
         // Walk the inverse prefix products backward to finish x[i]/z[i].
         c.put(inv.v,prefix[0]);
@@ -468,8 +475,6 @@ uint64_t phi(uint64_t wheel) {
     for_each_wheel_prime(wheel, [&](uint64_t prime) { result -= result / prime; });
     return result;
 }
-// Retain three splits (at most eight segments), including the segment roots.
-constexpr unsigned retained_splits=3;
 std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size_t hi,unsigned splits){
     auto t=std::make_unique<Tree>(lo,hi);
     if(!splits || hi-lo==1){
@@ -484,19 +489,33 @@ std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size
     }
     return t;
 }
-struct FTreePlan {bool rebuild;double bytes;};
-FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget){
-    const auto levels=std::ceil(std::log2(double(p)));
-    const double full=(p*(levels+18)+256)*bytes;
-    if(full<=double(budget)*1048576 || levels<=retained_splits)return {false,full};
-    constexpr size_t segments=1u<<retained_splits;
-    const size_t chunk=(p+segments-1)/segments;
-    // Upper rows (including monic terms) and saved baby roots are always live.
-    // Main uses the existing transient allowance. Descent rebuilds just one
-    // subtree after releasing the G workspaces; reserve its rows and scratch.
-    const double retained=(retained_splits+2)*p+2*segments;
-    const double temporary=std::max(18.0*p, 12.0*p+chunk*(std::ceil(std::log2(double(chunk)))+4));
-    return {true,(retained+temporary+256)*bytes};
+struct FTreePlan {bool rebuild;double bytes;unsigned splits;};
+FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget,unsigned threads){
+    const auto levels=static_cast<unsigned>(std::ceil(std::log2(double(p))));
+    // Each layer has at most P coefficients plus one monic term per node.
+    // Allow four FFT vectors per worker (two inputs, monic adjustment and
+    // pass scratch), plus twiddles and GW clone/point workspace.
+    const double scratch=polymult_fft_size(2*p+2)*(4.0*128+sizeof(double))*threads;
+    const auto estimate=[&](double slots){
+        return (slots+256+48.0*threads)*bytes*1.06+scratch;
+    };
+    const double full_rows=(levels+3.0)*p;
+    const double limit=double(budget)*1048576;
+    FTreePlan best{false,estimate(full_rows+4.0*p+8),0};
+    if(best.bytes<=limit)return best;
+    // Keep the deepest affordable top rows. Lower segments are rebuilt
+    // individually, after all giant and reciprocal buffers are released.
+    for(unsigned splits=1;splits<levels;++splits){
+        const size_t segments=size_t(1)<<splits,chunk=(p+segments-1)/segments;
+        const double retained=(splits+2.0)*p+2*segments; // includes the baby roots
+        const double init=retained+2.0*p+8; // inverse and truncated Newton error
+        const double main=retained+4.0*p+8; // inverse, H, G, giant denominators
+        // Scaled parent and output row, plus two rows of headroom for GW allocations.
+        const double descent=retained+4.0*p+chunk*(std::ceil(std::log2(double(chunk)))+3);
+        const double peak=estimate(std::max({init,main,descent}));
+        if(peak<=limit || (best.bytes>limit && peak<best.bytes))best={true,peak,splits};
+    }
+    return best;
 }
 const std::vector<uint64_t>& wheel_choices(){
     static const auto choices=[] {
@@ -513,19 +532,19 @@ const std::vector<uint64_t>& wheel_choices(){
     }();
     return choices;
 }
-double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget){
+double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget,unsigned threads){
     const auto p=phi(d)/2;
-    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget);
+    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget,threads);
     if(plan.bytes>double(budget)*1048576)return std::numeric_limits<double>::infinity();
     const double levels=std::ceil(std::log2(double(p)));
     return (plan.rebuild?8:6)*p*levels+(double(b2)/d+p)*(levels+8);
 }
-uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
-    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget)))return forced;
+uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget,unsigned threads){
+    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget,threads)))return forced;
     double best=std::numeric_limits<double>::infinity();
     uint64_t result=0;
     if(!forced)for(auto d:wheel_choices()){
-        const auto cost=wheel_cost(d,b2,bytes,budget);
+        const auto cost=wheel_cost(d,b2,bytes,budget,threads);
         if(cost<best){best=cost;result=d;}
     }
     if(!result)throw std::runtime_error("No CPU polynomial plan within memory budget");
@@ -541,14 +560,14 @@ std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,ui
         auto owner=std::make_unique<Context>(n,factor,o,stats,degree,preflight);
         owner->poll();
         const double bytes=double(gwnum_size(&owner->gw)+64);
-        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib);
+        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib,o.threads);
         degree=phi(candidate)/2;
         const auto required=polymult_safety_margin(degree+1,degree+1)+0.25f;
         if(owner->gw.EXTRA_BITS/2.0f+owner->gw.polymult_safety_margin<=required)continue;
         gwset_polymult_safety_margin(&owner->gw,required);
         stats.d=candidate;
         stats.poly_size=degree;
-        fplan=ftree_plan(static_cast<size_t>(degree),bytes,o.memory_mib);
+        fplan=ftree_plan(static_cast<size_t>(degree),bytes,o.memory_mib,o.threads);
         stats.estimated_memory_mib=fplan.bytes/1048576.0;
         if(stats.estimated_memory_mib>o.memory_mib)
             throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
@@ -598,7 +617,7 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
     std::vector<std::pair<double,uint64_t>> ranked;
     for(auto d:wheel_choices()){
         if(d==automatic.d)continue;
-        const auto cost=wheel_cost(d,b2,bytes,o.memory_mib);
+        const auto cost=wheel_cost(d,b2,bytes,o.memory_mib,o.threads);
         if(std::isfinite(cost))ranked.emplace_back(cost,d);
     }
     std::sort(ranked.begin(),ranked.end());
@@ -612,15 +631,27 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
     }
     return candidates;
 }
-bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
-            uint64_t b1,uint64_t b2,const Options &o,Stats &stats){
+// Preserve this backend's original giant grid, including its rounded last
+// centre. For odd m coprime to D, discarded t=iD +/- j is lifted by powers
+// of m. At the first crossing, m*(first-1/2) <= last+1/2 guarantees a
+// retained centre. Multiples of D (non-unit giant Z) lift by the same rule.
+static uint64_t suffix_first(uint64_t first,uint64_t last,uint64_t d,uint64_t p){
+    if(last<=first)return first;
+    uint64_t m=3;
+    while(std::gcd(m,d)!=1)m+=2;
+    const auto suffix=(last+(m+1)/2)/m;
+    if(suffix<=first || (last-suffix)/p==(last-first)/p)return first;
+    return suffix;
+}
+static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
+            uint64_t b1,uint64_t b2,const Options &o,Stats &stats,bool allow_suffix,bool &shortened){
     stats={};const auto begin=Clock::now();
     FTreePlan fplan{};
     auto owner=prepare_plan(n,factor,b1,b2,o,stats,fplan);
     auto &c=*owner;
     const auto d=stats.d,p=stats.poly_size;
-    std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu\n",
-                fplan.rebuild?"segmented":"full",static_cast<size_t>(gwnum_size(&c.gw))+64);
+    std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu retained_splits=%u\n",
+                fplan.rebuild?"segmented":"full",static_cast<size_t>(gwnum_size(&c.gw))+64,fplan.splits);
     bool main_started=false;auto main_begin=begin;
     try {
         Points points(c);Array storage(c.gw,14);Point q{storage[0],storage[1]},step{storage[2],storage[3]},
@@ -652,7 +683,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         }
         const double baby_seconds=stats.point_seconds;
         auto init_tree_begin=Clock::now();
-        auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,retained_splits):tree(c,roots,0,p,true);
+        auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,fplan.splits):tree(c,roots,0,p,true);
         struct Probe {Integer root,product;size_t index;};
         std::array<Probe,3> probes;
         if(o.check){
@@ -664,15 +695,18 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         }
         if(!fplan.rebuild)roots=Array();
         const auto inverse_begin=Clock::now();
-        Array reversed_f(c.gw,p+1);
-        for(size_t i=0;i<=p;++i)gwcopy(&c.gw,ftree->polynomial[p-i],reversed_f[i]);
-        auto inv=c.inverse(reversed_f,p);reversed_f=Array();
+        auto inv=c.inverse(reverse(ftree->polynomial),p);
         const double inverse_seconds=seconds(inverse_begin);
         const double init_tree_seconds=seconds(init_tree_begin);
         stats.tree_seconds+=init_tree_seconds;
         points.ladder(q,d,base,storage[12]);
         c.check("giant base ladder");
-        const uint64_t first=std::max<uint64_t>(1,b1>d/2?(b1-d/2)/d:1),last=(b2+d/2)/d;
+        const uint64_t original_first=std::max<uint64_t>(1,b1>d/2?(b1-d/2)/d:1);
+        const uint64_t last=(b2+d/2)/d;
+        const auto first=allow_suffix?suffix_first(original_first,last,d,p):original_first;
+        shortened=first>original_first;
+        if(shortened)std::printf("gwpoly-range: original_first=%llu first=%llu last=%llu\n",
+                                 (unsigned long long)original_first,(unsigned long long)first,(unsigned long long)last);
         // Successful baby normalization proved every Z([j]Q) with gcd(j,D)=1
         // invertible modulo the target N. Only prime divisors of D are missing
         // from that proof in the small-prime interval.
@@ -761,11 +795,50 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         if(mpz_cmp_ui(gcd.v,1)==0)return false;
         if(mpz_cmp(gcd.v,n)<0){mpz_set(factor,gcd.v);return true;}
         for(size_t i=0;i<p;++i)c.divisor(values[i]);
-        throw std::runtime_error("Saturated Stage2 polynomial GCD; no NF result");
+        throw Saturated("Saturated Stage2 polynomial GCD; no NF result");
     }catch(const Hit &){if(main_started)stats.main_seconds=seconds(main_begin);else stats.init_seconds=seconds(begin);c.check();return true;}
 }
 
+bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
+            uint64_t b1,uint64_t b2,const Options &o,Stats &stats){
+    bool shortened=false;
+    try{
+        const bool hit=stage2_range(factor,n,x,a24,b1,b2,o,stats,true,shortened);
+        if(!shortened || !hit)return hit;
+    }catch(const Saturated&){
+        if(!shortened)throw;
+    }
+    // A suffix preserves zero support but can group factors differently.
+    // Release the probe's resources and replay the original grid before
+    // reporting any non-unit or factor. Arithmetic/stop errors propagate.
+    std::printf("gwpoly-range: replay original grid\n");
+    mpz_set_ui(factor,0);
+    return stage2_range(factor,n,x,a24,b1,b2,o,stats,false,shortened);
+}
+
 void selftest(unsigned threads){
+    // Independently enumerate discarded witnesses on small grids, including
+    // non-unit giant denominators and both sides of the half-D boundary.
+    for(uint64_t d:{6,10,30,42,210}){
+        const auto p=phi(d)/2;
+        for(uint64_t last=1;last<=100;++last){
+            for(uint64_t original:{uint64_t(1),1+last/4}){
+                const auto suffix=suffix_first(original,last,d,p);
+                for(uint64_t i=original;i<suffix;++i){
+                    for(uint64_t t=i*d-d/2+1;t<i*d+d/2;++t){
+                        if(t!=i*d && std::gcd(t,d)!=1)continue;
+                        bool covered=false;
+                        for(uint64_t multiple=t;multiple<=(last*d+d/2);multiple+=t){
+                            const auto centre=(multiple+d/2)/d;
+                            const bool valid=t==i*d ? multiple%d==0 : std::gcd(multiple,d)==1;
+                            if(centre>=suffix && centre<=last && valid){covered=true;break;}
+                        }
+                        if(!covered)throw std::runtime_error("Missing relocated giant witness");
+                    }
+                }
+            }
+        }
+    }
     Integer n,f,x,y,z;mpz_set_ui(n.v,1000003);mpz_mul_ui(n.v,n.v,1000033);
     Options o;o.threads=threads;Stats stats{};Context c(n.v,f.v,o,stats,512);
     // At 509 roots a lone tail crosses the 128-job batched normalization boundary.
@@ -773,13 +846,12 @@ void selftest(unsigned threads){
         Array roots(c.gw,count);std::vector<uint64_t> expected_roots(count);
         for(size_t i=0;i<count;++i){expected_roots[i]=7919*(i+1)+17;u64togw(&c.gw,expected_roots[i],roots[i]);}
         auto t=tree(c,roots,0,count,true);auto rf=reverse(t->polynomial);
-        Array rfa(c.gw,rf.size());for(size_t i=0;i<rf.size();++i)gwcopy(&c.gw,rf[i],rfa[i]);
-        auto inv=c.inverse(rfa,count);
+        auto inv=c.inverse(rf,count);
         Array h(c.gw,count);for(size_t i=0;i<count;++i)u64togw(&c.gw,103*(i+3),h[i]);
         auto forward=c.convolution(reverse(h),view(inv),0,count);Array s(c.gw,count);
         for(size_t i=0;i<count;++i)gwcopy(&c.gw,forward[count-i-1],s[i]);
         Array out(c.gw,count);descend(c,*t,s,out);
-        auto partial=partial_ftree(c,roots,0,count,retained_splits);
+        auto partial=partial_ftree(c,roots,0,count,3);
         Array rebuilt(c.gw,count);descend(c,*partial,s,rebuilt,&roots);
         for(size_t i=0;i<count;++i){
             mpz_set_ui(y.v,0);for(size_t k=count;k-->0;){mpz_mul_ui(y.v,y.v,expected_roots[i]);mpz_add_ui(y.v,y.v,103*(k+3));mpz_mod(y.v,y.v,n.v);}
