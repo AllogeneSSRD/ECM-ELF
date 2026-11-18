@@ -112,9 +112,14 @@ def main():
         assert remainder==0 and modulus.bit_length()==bits
         path=save(f'cofactor_m{exponent}',f'(2^{exponent}-1)/{factor}',sigma=26)
         for threads in (1,4):
-            row=run(f'cofactor_m{exponent}_t{threads}',path,modulus,b2=70000000,threads=threads,
+            name=f'cofactor_m{exponent}_t{threads}'
+            row=run(name,path,modulus,b2=70000000,threads=threads,
                     extra=['--exponent',exponent,'--known-factor',factor,'--d',13860])[0]
             assert row['status']=='NF' and row['stage2-engine']['checked-values']==3
+            log=(out/(name+'.log')).read_text()
+            blocks=[(int(n),int(w)) for n,w in re.findall(r'gwpoly-gtree: roots=(\d+) tile=(\d+)',log)]
+            assert blocks and blocks[0][0]==row['poly-size'] and blocks[-1][0]<row['poly-size']
+            assert all(width>2 if threads==1 else width==2 for _,width in blocks)
     # GW add/subtract may mutate source FFT states: shared point constants
     # caused a four-thread failure on this large wheel despite a serial pass.
     m347=(1<<347)-1;large_bounds=save('cpu_m347',m347)

@@ -437,50 +437,70 @@ std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_
     t->polynomial=workspace?Array(c.gw,workspace->v,row_size):Array(c.gw,row_size);
     gwnum *row=t->polynomial.v;
     // (X-x)(X-y) = X^2 - (x+y)X + xy.
-    const size_t pairs=(count+1)/2;
     const bool in_place=roots.v+lo==row;
-    tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
-        Array sum(worker.gw,negative_roots?1:0);
-        for(size_t i=begin;i<end;++i){
-            const auto offset=2*i;
-            auto x=roots[lo+offset];
+    auto pair_roots=[&](Context &worker,Array &sum,size_t first,size_t last){
+        for(size_t offset=first;offset<last;offset+=2){
+            const auto x=roots[lo+offset];
             if(offset+1==count){
                 if(!in_place)gwcopy(&worker.gw,x,row[offset]);
                 if(!negative_roots)gwsmallmul(&worker.gw,-1,row[offset]);
             }else if(negative_roots){
-                // For signed affine inputs a and b, (X+a)(X+b) needs ab and a+b.
-                // Keep the sum before overwriting either input of the packed pair.
+                // Keep the sum before overwriting either signed affine input.
                 const auto y=roots[lo+offset+1];
                 gwadd3o(&worker.gw,x,y,sum[0],GWADD_FORCE_NORMALIZE);
                 gwmul3(&worker.gw,x,y,row[offset],GWMUL_STARTNEXTFFT);
                 gwfft(&worker.gw,sum[0],row[offset+1]);
-                if(!(i&127))worker.check("G leaf pairs");
+                if(!(offset&255))worker.check("G leaf pairs");
             }else if(in_place){
-                // The two inputs with implicit leading -1 multiply to a
-                // monic quadratic and may share storage with its output.
                 worker.monic_coefficients(row+offset,1,row+offset+1,1,row+offset,false,true);
             }else{
-                auto y=roots[lo+offset+1];
+                const auto y=roots[lo+offset+1];
                 worker.mul(x,y,row[offset]);
                 gwadd3o(&worker.gw,x,y,row[offset+1],GWADD_FORCE_NORMALIZE);
                 gwsmallmul(&worker.gw,-1,row[offset+1]);
             }
         }
-        worker.check("linear factor pairs");
-    });
-    // Intermediate nodes contain only the coefficients below the leading one.
-    // Each layer therefore occupies exactly count consecutive slots.
-    for(size_t width=2;width<count;width*=2){
+    };
+    const auto merge=[&](Context &worker,size_t offset,size_t width,size_t last,bool defer){
+        if(last-offset<=width)return;
+        const size_t right=std::min(width,last-offset-width);
+        worker.monic_coefficients(row+offset+width,right,row+offset,width,row+offset,defer);
+    };
+
+    // Finish the lower levels of each signed G tile while its coefficients
+    // are cache-local. Whole-curve tests qualified blocks through 20160
+    // roots; larger blocks keep batched level normalization.
+    constexpr size_t max_tiled_roots=20160;
+    size_t tile=2;
+    if(negative_roots && c.o.threads==1 && count<=max_tiled_roots){
+        const auto bytes_per_root=gwnum_size(&c.gw)+64;
+        while(tile<32 && 2*tile*bytes_per_root<=256*1024)tile*=2;
+    }
+    if(negative_roots && c.o.check)
+        std::printf("gwpoly-gtree: roots=%zu tile=%zu\n",count,tile);
+    if(tile==2){
+        tree_jobs(c,(count+1)/2,[&](Context &worker,size_t begin,size_t end){
+            Array sum(worker.gw,negative_roots?1:0);
+            pair_roots(worker,sum,2*begin,std::min(count,2*end));
+            worker.check("linear factor pairs");
+        });
+    }else{
+        Array sum(c.gw,1);
+        for(size_t first=0;first<count;first+=tile){
+            const auto last=std::min(count,first+tile);
+            pair_roots(c,sum,first,last);
+            for(size_t width=2;width<last-first;width*=2)
+                for(size_t offset=first;offset+width<last;offset+=2*width)
+                    merge(c,offset,width,last,false);
+            c.check("G tree tile");
+        }
+    }
+    // Every node stores only the coefficients below its leading one. Left,
+    // right and result can share a range of the packed row.
+    for(size_t width=tile;width<count;width*=2){
         const size_t stride=2*width,jobs=(count+stride-1)/stride;
         tree_jobs(c,jobs,[&](Context &worker,size_t begin,size_t end){
-            for(size_t j=begin;j<end;++j){
-                const size_t offset=j*stride,remaining=count-offset;
-                if(remaining<=width)continue;
-                // polymult permits input/output overlap. Each job owns its
-                // whole output range, including the shorter right operand.
-                const size_t right=std::min(width,remaining-width);
-                worker.monic_coefficients(row+offset+width,right,row+offset,width,row+offset,jobs>=128);
-            }
+            for(size_t j=begin;j<end;++j)merge(worker,j*stride,width,count,jobs>=128);
         });
         if(jobs>=128){
             polymult_set_num_threads(&c.pm,c.pm.max_num_threads);

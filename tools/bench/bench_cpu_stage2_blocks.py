@@ -1,4 +1,4 @@
-"""Pair exact and whole-block CPU Stage2 runs on the 8k/16k Edwards cofactors (Windows)."""
+"""Compare CPU Stage2 block rounding or benchmark two builds at matching geometry (Windows)."""
 import argparse
 import hashlib
 import json
@@ -72,6 +72,8 @@ def measure(folder):
         assert (engine['requested-B2'], engine['actual-B2']) == (case['requested'], row['b2'])
     else:
         assert row['b2'] == case['requested']
+    if case['d'] and row['d'] != case['d']:
+        raise ValueError(f"Requested D={case['d']}, measured D={row['d']} in {folder}")
     phases = dict(field.split('=') for field in re.search(r'^gwpoly-phases: (.+)$', log, re.M)[1].split())
     return dict(actual=row['b2'], d=row['d'], p=row['poly-size'], fft=row['fft-length'],
                 blocks=blocks, giants=points, seconds=engine['seconds'], err=engine['max-roundoff'],
@@ -84,7 +86,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ('exe', 'saves', 'output'):
         parser.add_argument('--' + arg, type=Path, required=True)
-    parser.add_argument('--baseline', type=Path, help='Optional older CPU executable, measured at exact B2')
+    builds = parser.add_mutually_exclusive_group()
+    builds.add_argument('--baseline', type=Path, help='Optional older CPU executable, measured at exact B2')
+    builds.add_argument('--candidate', type=Path, help='Compare a second build to --exe at identical block geometry')
+    parser.add_argument('--compare-at', choices=('exact', 'rounded'), help='Boundary for both builds with --candidate (default: rounded)')
     parser.add_argument('--exponents', nargs='+', type=int, choices=FACTORS, default=[8011, 16319])
     parser.add_argument('--b2', type=int, nargs='+', default=[9_000_000_000, 44_000_000_000])
     parser.add_argument('--cpus', type=int, nargs='+', required=True, help='One logical processor per physical core')
@@ -92,36 +97,46 @@ def main():
     parser.add_argument('--d', type=int, default=0)
     parser.add_argument('--repeats', type=int, default=3)
     args = parser.parse_args()
+    if args.compare_at and not args.candidate:
+        parser.error('--compare-at requires --candidate')
     if args.repeats < 1 or args.memory_mib < 1 or min(args.cpus) < 0 or len(set(args.cpus)) != len(args.cpus):
         parser.error('Expected positive budget/repeats and distinct non-negative CPU indices')
     if min(args.b2) <= 1000 or len(set(args.b2)) != len(args.b2) or len(set(args.exponents)) != len(args.exponents):
         parser.error('Choose distinct exponents and distinct B2 values above B1=1000')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    arms = {'exact': args.exe, 'rounded': args.exe}
+    arms = {'reference': args.exe, 'candidate': args.candidate} if args.candidate else {'exact': args.exe, 'rounded': args.exe}
     if args.baseline:
         arms['baseline'] = args.baseline
     inputs = {e: (args.saves / f'm{e}.save').resolve(strict=True) for e in args.exponents}
     files = [*inputs.values(), *(exe.resolve(strict=True) for exe in arms.values())]
     files.extend(p.with_name('gwnum.dll') for p in list(files) if p.suffix == '.exe' and p.with_name('gwnum.dll').exists())
     (out / 'sha256.json').write_text(json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}, indent=2))
+    geometries = {}
     for rep in range(args.repeats + 1):
         order = list(arms)
         # Alternate A/B; for three binaries rotate which occupies the middle slot.
         if rep:
-            shift = ((rep-1)//2) % len(order)
+            shift = ((rep-1)//2) % len(order) if len(order) > 2 else 0
             order = order[shift:] + order[:shift]
             if rep % 2 == 0:
                 order.reverse()
         for e, save in inputs.items():
             for bound in args.b2:
-                for arm in (order if rep else ['rounded']):
+                for arm in (order if rep or args.candidate else ['rounded']):
                     folder = out / f'm{e}_b{bound}_{arm}_{rep}'
                     folder.mkdir()
-                    case = dict(e=e, save=str(save), exe=str(arms[arm].resolve()), arm=arm, requested=bound,
+                    mode = (args.compare_at or 'rounded') if args.candidate else arm
+                    case = dict(e=e, save=str(save), exe=str(arms[arm].resolve()), arm=mode, requested=bound,
                                 memory=args.memory_mib, cpus=args.cpus, d=args.d, check=rep == 0)
                     (folder / 'input.json').write_text(json.dumps(case))
                     subprocess.run([sys.executable, __file__, '--sample', str(folder)], check=True)
+                    if args.candidate:
+                        sample = json.loads((folder / 'measurement.json').read_bytes())
+                        measured = {k: sample[k] for k in ('actual', 'd', 'p', 'fft', 'blocks', 'giants')}
+                        geometry = geometries.setdefault((e, bound), measured)
+                        if measured != geometry:
+                            raise ValueError(f'Incomparable geometry at {folder}: {geometry} vs {measured}')
 
 
 if __name__ == '__main__':
