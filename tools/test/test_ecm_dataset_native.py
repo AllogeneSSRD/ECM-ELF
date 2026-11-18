@@ -49,7 +49,7 @@ def main():
         (where/'stage1.log').write_bytes(r.stdout+r.stderr);assert r.returncode==0
         assert int(re.search(r'X=(0x[0-9a-fA-F]+)',save.read_text())[1],16)==point['x']
         results=where/'results.jsonl'
-        cmd=[str(exe2),'--save',str(save),'--b2',str(b2),'--d','30','--device','1','--arena-mb','1024',
+        cmd=[str(exe2),'--gpu-backend','cuda','--save',str(save),'--b2',str(b2),'--d','30','--device','1','--arena-mb','1024',
              '--results',str(results),'--log',str(where/'stage2.log')]
         r=subprocess.run(cmd,capture_output=True,cwd=where,env=env,timeout=120);(where/'stage2_driver.log').write_bytes(r.stdout+r.stderr)
         assert r.returncode==0

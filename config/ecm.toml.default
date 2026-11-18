@@ -158,6 +158,12 @@ target = "gpu"  # string: [cpu|gpu]
 # CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint
 # 迁移完成前保留原 JSONL。
 
+# device = "auto"  # string: [auto|cpu|gpu]
+# Execution device in the combined Stage2 program. Auto selects CPU. CPU supports Edwards saves;
+# select GPU for Montgomery. Values are case-insensitive. Override with --target.
+# 统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不
+# 区分大小写，可用 --target 覆盖。
+
 # gpu_device = -1  # int: [-1|0..2^31-1]
 # Stage2 CUDA device ID. -1 inherits Stage1's device; 0 or greater selects a CUDA device explicitly.
 # Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。

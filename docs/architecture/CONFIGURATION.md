@@ -46,9 +46,9 @@ python tools/refactor/migrate_ecm_config.py ecm.toml
 
 ## GPU 后端与 worker
 
-Windows 下，两阶段各自设置 `gpu_backend`，取值为 `"auto" | "cuda" | "opencl"`，默认 `"auto"`。在 `[worker.2]` 写 `stage2.gpu_backend = "opencl"` 和 `stage2.gpu_device = 1`，只改变 worker 2 的 Stage2。命令行 `--gpu-backend` 优先于 TOML。Stage1 的 `target = "cpu"` 直接走 CPU。
+统一 Stage2 入口读取当前 worker 的 TOML 快照，先用 `stage2.device` 选择 CPU 或 GPU，再把同一快照交给对应参数解析器。默认 `auto` 使用 CPU。CPU 支持 Edwards，Montgomery 可在配置中指定 GPU。GPU 曲线子进程直接沿用父进程已确定的 GPU 路径。Stage1 仍由自己的 `target` 选择 CPU 或 GPU。
 
-将同一版本的两个后端放在同目录；Stage1 文件名为 `ecm_cuda.exe`、`ecm.exe`，Stage2 为 `ecm_cuda_stage2.exe`、`ecm_opencl_stage2.exe`。只有一个已安装时 auto 使用该程序。两者均已安装时，auto 先检查指定编号的 CUDA 设备是否对驱动可见，其次选 OpenCL。设备序号属于实际后端，混合厂商系统应按各自的设备清单设置 worker。显式选择缺少的程序会在计算前报错。后端在任务开始前确定，计算、校验、预算或驱动错误沿原路径报告；任务没有隐式重跑。跨后端切换保留命令行、工作目录、标准流、GUI 停止句柄和进程退出码。队列、曲线记录和结果仍由实际计算程序维护。
+Windows 的 GPU 路径再按 `gpu_backend = "auto" | "cuda" | "opencl"` 选实现，默认 `"auto"`。Stage1 程序为 `ecm_cuda.exe` 和 `ecm.exe`，Stage2 为统一的 `ecm_stage2.exe` 和 `ecm_opencl_stage2.exe`。两者同目录时，auto 优先使用对驱动可见的 CUDA 设备，否则选 OpenCL。GPU 序号依实际后端解释。可在 `[worker.2]` 写 `stage2.device = "gpu"`、`stage2.gpu_backend = "opencl"` 和 `stage2.gpu_device = 1` 仅配置该 worker。跨后端切换保留标准流、工作目录、GUI 停止句柄及退出码，由实际执行程序维护队列和结果。
 
 OpenCL Stage2 支持固定 B2、基本 D 规划和显式梅森承载；CUDA tune、Auto B2 及 CUDA 专用内核参数的支持范围见 [OpenCL 生产入口](OPENCL.md#生产-stage2-入口)。
 

@@ -62,8 +62,8 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 | --- | --- | --- |
 | `ecm_cuda.exe` | CUDA Stage1。CGBN 支持 Edwards 和构建中包含的 Montgomery 参数化，NTT 支持 Edwards 和 PARAM0 的完整梅森数或已知因子任务 | 数字、表达式或 Stage1 队列，输出 `.save` 和检查点 |
 | `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、TOML、队列及文本 save；GPU 算子可单独选择 |
-| `ecm_stage2.exe`、`ecm_opencl_stage2.exe` | 独立 GPU 多项式 Stage2 | 直接读取归一化 PARAM0 或 Edwards AM 存档，也可消费 `ECMSTAGE2=` 和 `ECMSTAGE2N=` |
-| `ecm_stage2.exe` | CPU 包的 Edwards Stage2 | 直接读 save 或消费 worktodo，与 CUDA 共用整曲线检查点。后端和构建选项见 [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) |
+| `ecm_stage2.exe` | 统一的 CPU／CUDA Stage2 | 默认 CPU 续算 Edwards AM。GPU 支持 Edwards AM 与 Montgomery PARAM0。两者都可直接读 save 或消费 `ECMSTAGE2=` 和 `ECMSTAGE2N=` |
+| `ecm_opencl_stage2.exe` | OpenCL GPU Stage2 | 与统一版共享 save 和队列格式，独立运行或作为统一版的 OpenCL 后端 |
 | `ecm_gui_v2.exe` | Windows 图形界面 | 管理 Stage1 和 Stage2 worker、队列、日志与结果 |
 
 ### 各 Stage1 后端
@@ -116,6 +116,9 @@ target = "gpu"
 gpu_device = 0
 save_dir = "."
 handoff.mode = "off"
+
+[stage2]
+device = "gpu"
 ```
 
 创建 `worktodo.txt`，其中 `ECM2` 的末尾字段依次为 B1、B2、曲线数；`B2=0` 表示只运行 Stage1：
@@ -161,10 +164,10 @@ ECMSTAGE2=1,2,3001,-1,"m0_m3001_1e4.save",1000000
 .\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 
 # 或跳过队列，直接处理同一 save（不要与上述队列命令重复执行）
-.\ecm_stage2.exe --save .\m0_m3001_1e4.save --b2 1000000 --device 0
+.\ecm_stage2.exe --target gpu --save .\m0_m3001_1e4.save --b2 1000000 --device 0
 
 # 可选：仅测量 NTT 组件，不等同于完整 ECM 调优
-.\ecm_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
+.\ecm_stage2.exe --target gpu --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
 ```
 
 ECM tune 默认使用所选 worker 的 Stage2 队列。也可用 `--tune-save FILE --tune-b2 B2` 指定一个存档。用 `--tune-profile FILE` 临时加载 Stage2 调优数据，或在 `[shared]` 中设置 `tune_file` 供两阶段共用。显式给出 B2 可直接运行。Auto B2 的成本数据要求见 [Stage2 使用](docs/usage/STAGE2.md)及 [Auto B2](docs/architecture/AUTO_B2.md)。
@@ -282,10 +285,10 @@ save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格
 <a id="stage2"></a>
 ## 独立 CUDA Stage2
 
-`ecm_stage2.exe` 消费已经完成的 Stage1 save，不重新执行 Stage1。直接运行示例（将文件名和 B2 换成实际任务）：
+`ecm_stage2.exe` 从已完成的 Stage1 save 续算。用 `[stage2] device = "auto" | "cpu" | "gpu"` 选择设备。默认 `auto` 使用 CPU，Montgomery 存档请选择 GPU。在 `[worker.3]` 写 `stage2.device = "cpu"` 可单独指定 Worker 3 的 Stage2。一次性运行可用 `--target` 覆盖。
 
 ```powershell
-.\ecm_stage2.exe --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
+.\ecm_stage2.exe --target gpu --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
 .\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 

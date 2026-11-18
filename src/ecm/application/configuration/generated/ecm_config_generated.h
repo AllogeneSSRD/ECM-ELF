@@ -322,6 +322,7 @@ struct Stage2Values {
     std::string progress_dir="";
     std::string save_dir="";
     bool debug_log=false;
+    std::string execution_device="auto";
     int device=-1;
     int log_level=-1;
     bool ntt_counts=false;
@@ -418,6 +419,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_progress_dir",[](Stage2Values&c,const std::string&v){c.progress_dir=v;},[](Stage2Values&c,const Stage2Values&v){c.progress_dir=v.progress_dir;}},
     {"stage2_save_dir",[](Stage2Values&c,const std::string&v){c.save_dir=v;},[](Stage2Values&c,const Stage2Values&v){c.save_dir=v.save_dir;}},
     {"stage2_debug_log",[](Stage2Values&c,const std::string&v){c.debug_log=boolean(v,"stage2_debug_log");},[](Stage2Values&c,const Stage2Values&v){c.debug_log=v.debug_log;}},
+    {"stage2_execution_device",[](Stage2Values&c,const std::string&v){const auto normalized=lower(v);if(normalized!="auto"&&normalized!="cpu"&&normalized!="gpu")throw std::runtime_error("stage2_execution_device must be [auto|cpu|gpu]");c.execution_device=normalized;},[](Stage2Values&c,const Stage2Values&v){c.execution_device=v.execution_device;}},
     {"stage2_device",[](Stage2Values&c,const std::string&v){c.device=signed_integer(v,"stage2_device",-1,2147483647);},[](Stage2Values&c,const Stage2Values&v){c.device=v.device;}},
     {"stage2_log_level",[](Stage2Values&c,const std::string&v){c.log_level=log_level(v);},[](Stage2Values&c,const Stage2Values&v){c.log_level=v.log_level;}},
     {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=boolean(v,"stage2_ntt_counts");},[](Stage2Values&c,const Stage2Values&v){c.ntt_counts=v.ntt_counts;}},

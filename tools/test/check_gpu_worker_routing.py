@@ -40,6 +40,8 @@ def main():
                         device = int(match[1])
                 cmd = [str(bundle/exe),'--config',str(config),'--worker',str(worker),
                        *query,str(device)]
+                if stage == 2:
+                    cmd.extend(['--target','gpu'])
                 if override:
                     cmd.extend(['--gpu-backend',override])
                 output = subprocess.check_output(cmd, env=env, cwd=directory, text=True,
@@ -62,7 +64,7 @@ def main():
             out.write('stage2_backend="opencl"\nstage2_d=30\n')
         (queue/'input.save').write_text(save_line((1<<127)-1)*3,encoding='utf-8')
         (queue/'worktodo.txt').write_text('ECMSTAGE2=1,2,127,-1,"input.save",300,0,3\n',encoding='utf-8')
-        stop_after_first_start(bundle/'ecm_stage2.exe',queue)
+        stop_after_first_start(bundle/'ecm_stage2.exe',queue,['--target','gpu'])
         rows = records(queue)
         assert len(rows)==1 and rows[0]['stage2-engine']['name']=='opencl-ntt'
         print('Forwarded GUI stop: one committed OpenCL curve')

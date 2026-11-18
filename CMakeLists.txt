@@ -271,7 +271,7 @@ set(ECM_CUDA_ARCHITECTURES "80" CACHE STRING
 if(ECM_ENABLE_CUDA)
     enable_language(CUDA)
 
-    option(ECM_BUILD_CUDA_STAGE2 "Build standalone Stage1-save CUDA Stage2 driver" OFF)
+    option(ECM_BUILD_CUDA_STAGE2 "Build combined CPU/CUDA Stage2 driver" OFF)
     if(ECM_BUILD_CUDA_STAGE2)
         if(NOT WIN32)
             message(FATAL_ERROR "The minimal ecm_cuda_stage2 process/queue driver currently requires Windows")
@@ -283,8 +283,9 @@ if(ECM_ENABLE_CUDA)
             ${GMP_INCLUDE_DIR}
             ${CMAKE_SOURCE_DIR}/include
             "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>")
-        target_compile_definitions(ecm_cuda_stage2 PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
-        target_link_libraries(ecm_cuda_stage2 PRIVATE ${GMP_LIBRARY})
+        include(tools/build/internal/ecm_stage2_cpu_host.cmake)
+        target_compile_definitions(ecm_cuda_stage2 PRIVATE ECM_STAGE2_COMBINED NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
+        target_link_libraries(ecm_cuda_stage2 PRIVATE ecm_stage2_cpu_host ${GMP_LIBRARY})
         if(TARGET ecm_cpu_stage2)
             set_target_properties(ecm_cpu_stage2 PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cpu-stage2")
         endif()

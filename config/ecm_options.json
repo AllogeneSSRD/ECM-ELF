@@ -1692,6 +1692,26 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_execution_device",
+      "v2_key": "device",
+      "v3_only": true,
+      "template_level": "core",
+      "field": "execution_device",
+      "type": "string",
+      "default": "auto",
+      "domain": "[auto|cpu|gpu]",
+      "fx": "Stage2_device",
+      "parser": "strict",
+      "parser_override": "enum",
+      "values": ["auto", "cpu", "gpu"],
+      "case_insensitive": true,
+      "description": [
+        "Execution device in the combined Stage2 program. Auto selects CPU. CPU supports Edwards saves; select GPU for Montgomery. Values are case-insensitive. Override with --target.",
+        "统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不区分大小写，可用 --target 覆盖。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_device",
       "v2_key": "gpu_device",
       "template_level": "core",

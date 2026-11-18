@@ -272,6 +272,11 @@ function Get-EcmStage2SourceSet([string]$Repo, $Inventory, [string]$Engine, [str
     $cudaDeps = @(Get-EcmSourceClosure $Repo $cudaSources $IncludeDirs -Production:($Engine -eq 'production'))
     $deps = @(Get-EcmSourceClosure $Repo $sources $IncludeDirs -Production:($Engine -eq 'production')) +
         @($Inventory.build_inputs) + @('tools/build/build_stage2_local.ps1')
+    $cpuSources = @('src/ecm/stage2/launch.cpp','src/ecm/stage2/edwards/cpu/main.cpp',
+        'src/ecm/stage2/cpu/gwpoly_loader.cpp','src/ecm/stage2/cpu/runtime_tune.cpp','src/ecm/platform/stop.cpp')
+    $deps += @(Get-EcmSourceClosure $Repo $cpuSources $IncludeDirs -Production:($Engine -eq 'production')) +
+        @('tools/build/internal/stage2_cpu/CMakeLists.txt','tools/build/internal/stage2_cpu_host.ps1',
+          'tools/build/internal/ecm_stage2_cpu_host.cmake','tools/build/internal/ecm_libecm.cmake')
     if ($Modules) { $deps += @($moduleInventory.inputs_sha256.PSObject.Properties.Name) + @((Join-Path $Modules 'modules.json')) }
     return [pscustomobject]@{ Sources = $sources; CudaSources = $cudaSources;
         Dependencies = @($deps | Sort-Object -Unique); CudaDependencies = $cudaDeps }
@@ -297,6 +302,12 @@ function Assert-EcmObjectHashes([string]$BuildDir, $Objects) {
         if (-not $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Object outside build directory: $path" }
         if ($entry.Value -ne (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash) { throw "Build object changed: $($entry.Name)" }
     }
+}
+
+function Assert-EcmStage2CpuLibraries([string]$BuildDir, $Manifest) {
+    $paths = @('cpu-host/ecm_stage2_cpu_host.lib','cpu-host/ecm_cpu_library.lib')
+    if (-not $Manifest.cpu_library_hashes) { throw 'Stage2 build is missing its CPU libraries; rebuild before packaging' }
+    Assert-EcmHashes $Manifest.cpu_library_hashes (Get-EcmSourceHashes $BuildDir $paths) 'Stage2 CPU library changed'
 }
 
 function Assert-EcmBuildUnits([string]$Repo, [string]$BuildDir, $Manifest,

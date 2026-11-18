@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Build the standalone CUDA Stage2 save/queue executable (MSVC + nvcc + GMP).
+Build the combined CPU/CUDA Stage2 executable (MSVC + nvcc + GMP-ECM).
 .DESCRIPTION
 Local builds always use build_stage2_local. A valid incompatible default profile
 is archived under build_dev before rebuilding. Build overrides the final directory;
@@ -104,7 +104,8 @@ foreach ($src in $sources) {
         $buildProfile.CompilePrefix + " -c `"$src`" -o `"$obj`""
     } else {
         $dependencyFlag = if ([version]$vc.Version -lt [version]'14.28') { '/showIncludes' } else { "/sourceDependencies `"$obj.ecm-msvc.json`"" }
-        $buildProfile.HostCompilePrefix + " /c `"$src`" /Fo`"$obj`" $dependencyFlag"
+        $combinedFlag = if ($src -eq 'src/ecm/stage2/cuda/main.cpp') { ' /DECM_STAGE2_COMBINED' } else { '' }
+        $buildProfile.HostCompilePrefix + "$combinedFlag /c `"$src`" /Fo`"$obj`" $dependencyFlag"
     }
     $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
     $compileEntries[$src] = $entry
@@ -142,6 +143,11 @@ if ($HostOnly) {
         if ($unit.object_sha256 -ne (Get-FileHash -LiteralPath $state.object).Hash) { throw "HostOnly CUDA object changed: $src" }
     }
 }
+. (Join-Path $PSScriptRoot 'internal/stage2_cpu_host.ps1')
+Write-Host '== build CPU Stage2 host =='
+$cpuLibraries = @(Build-EcmStage2CpuHost $Build $Gmp $vc $Jobs -Rebuild:$Rebuild)
+$cpuHashes = Get-EcmSourceHashes $Build @('cpu-host/ecm_stage2_cpu_host.lib','cpu-host/ecm_cpu_library.lib')
+$signatureText += "`n" + (($cpuHashes.Keys | ForEach-Object { "$_=$($cpuHashes[$_])" }) -join "`n")
 $fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and $previous -and
     ([IO.File]::ReadAllText((Resolve-Path $signaturePath)) -eq $signatureText) -and
     ($previous.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash)
@@ -221,9 +227,11 @@ if (-not $fresh) {
     Write-Host ("compiled {0} TU(s): wall {1:N1}s (nvcc split compile={2})" -f $compiled, $compileSeconds, $SplitCompile)
     $objArgs = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
     $linkLog = Join-Path $objDir 'link.log'
-    $line = $buildProfile.LinkPrefix + " $objArgs -L `"$Gmp/lib`" -lgmp -o `"$exe`""
+    $cpuArgs = ($cpuLibraries | ForEach-Object { "`"$_`"" }) -join ' '
+    $line = $buildProfile.LinkPrefix + " $objArgs $cpuArgs -Xlinker=/DEFAULTLIB:vcomp -Xlinker=/DEFAULTLIB:advapi32 -L `"$Gmp/lib`" -lgmp -o `"$exe`""
     $linkObjects = [ordered]@{}
     foreach ($object in $objects) { $linkObjects[$object] = (Get-FileHash -LiteralPath $object).Hash }
+    foreach ($library in $cpuLibraries) { $linkObjects[$library] = (Get-FileHash -LiteralPath $library).Hash }
     $linkInputs = [ordered]@{ command = $line; library = $gmpHashes['lib/gmp.lib']; objects = $linkObjects }
     $reuseLink = -not $Rebuild -and $previous -and $previous.link_inputs -and
         (Test-Path -LiteralPath $exe) -and $previous.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash -and
@@ -324,6 +332,7 @@ $manifest = [ordered]@{
     host_only = [bool]$HostOnly
     gmp_root = $Gmp
     gmp_hashes = $gmpHashes
+    cpu_library_hashes = $cpuHashes
 }
 Assert-EcmBuildProfile $Build $buildProfile -ReadOnly
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')

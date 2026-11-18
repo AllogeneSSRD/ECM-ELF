@@ -2,7 +2,7 @@
 
 ## CPU 与 GPU 的共享队列
 
-`queue.cpp` 负责 worktodo 选行、save 校验、任务锁、整曲线检查点的载入与迁移、结果封存和推进队列。路径由 `queue_paths.h` 从同一份 TOML 投影。CUDA/OpenCL 的 `task.cpp` 提供调优、计划预览与子进程执行；CPU worker 在进程内串行领取曲线，使用自己的线程预算和 GWNUM/libecm。两个执行器将验证过的数学结果交给同一个提交入口，V5 身份与算术后端无关。换后端流程和当前支持范围见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)。
+统一入口 `launch.cpp` 先从 TOML 快照 [选择执行设备](CONFIGURATION.md)，再调用 CPU 或 GPU 的参数解析器。`queue.cpp` 负责 worktodo 选行、save 校验、任务锁、整曲线检查点的载入与迁移、结果封存和推进队列。路径由 `queue_paths.h` 从同一份 TOML 投影。CUDA/OpenCL 的 `task.cpp` 提供调优、计划预览与子进程执行；CPU worker 在进程内串行领取曲线，使用自己的线程预算和 GWNUM/libecm。两个执行器将验证过的数学结果交给同一个提交入口。换后端流程和支持范围见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)。
 
 ## CUDA 模块边界
 

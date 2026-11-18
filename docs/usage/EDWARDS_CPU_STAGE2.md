@@ -1,10 +1,10 @@
 # Edwards 统一存档与 CPU Stage2
 
-CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 多曲线文本 save。独立程序 `ecm_stage2.exe` 读取其中的完成点，以 GWNUM/polymult 或 libecm 继续 Stage2；也可继续使用本仓库的 CUDA Stage2。CPU Stage2 不读取旧 Edwards/Prime95 二进制 `.tmp`，不通过 feeder 交接。
+CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 多曲线文本 save。统一的 `ecm_stage2.exe` 默认用 CPU 路径读取完成点，通过 GWNUM/polymult 或 libecm 继续 Stage2。队列中可按 [worker 选择设备](STAGE2.md#选择运行设备)。CPU Stage2 使用文本 save。
 
 ## 构建与运行
 
-Windows x64 使用 MSVC、CMake、Ninja、GMP 和本地 GMP-ECM 源码。常规 PowerShell 可以一并构建 CPU worker 和 Stage2 DLL，输出目录包含同版本 `ecm_stage2.exe`、`gwnum.dll` 和 `gmp-10.dll`。
+Windows x64 统一版使用 MSVC、CMake、Ninja、CUDA、GMP 和本地 GMP-ECM 源码。CPU 路径随 CUDA 版 `ecm_stage2.exe` 构建，`gwnum.dll` 可自行编译并放在程序旁。只需 CPU 的机器也可用下面的本机构建入口，输出包括 `ecm_stage2.exe`、`gwnum.dll` 和 `gmp-10.dll`。
 
 ```powershell
 tools/build/build_stage2_cpu_local.ps1
@@ -13,7 +13,7 @@ tools/build/build_stage2_cpu_local.ps1
 
 该入口使用 `.refactor/p95v3106b01.source/gwnum` 下的 `gwnum64.lib` 和 `polymult64.lib`。若本地尚未生成这两个上游库，先在 x64 Developer PowerShell 运行 `tools/build/build_gwnum_local.ps1 -Stage2`。
 
-`--version` 显示 worker 版本、加载的 DLL 构建指纹、Stage2 ABI、GWNUM 版本和 CPU 支持的指令集。每条执行 GW 算术的曲线在建计划后记录系数 FFT 描述与外层 polymult 指令集，内部 JSONL 对应 `fft-description` 和 `polymult-isa`。DLL 同时导出 Stage1 ABI v1。静态对照用 `tools/build/test/build_cpu_stage2.ps1 -GwPoly -Build build_dev/build_cpu_stage2_static` 单独构建。CPU worker 支持 TOML 结果配置及独立 CLI。
+统一版用 `--target cpu --version` 查看 CPU worker 版本、加载的 DLL 构建指纹、Stage2 ABI、GWNUM 版本和 CPU 支持的指令集。CPU 专用版直接使用 `--version`。每条执行 GW 算术的曲线在建计划后记录系数 FFT 描述与外层 polymult 指令集，内部 JSONL 对应 `fft-description` 和 `polymult-isa`。DLL 同时导出 Stage1 ABI v1。静态对照用 `tools/build/test/build_cpu_stage2.ps1 -GwPoly -Build build_dev/build_cpu_stage2_static` 单独构建。
 
 本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/ecm/stage2/edwards/cpu/main.cpp)、[严格存档读取](../../include/ecm/io/save.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 

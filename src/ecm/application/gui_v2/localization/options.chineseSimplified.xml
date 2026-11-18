@@ -96,6 +96,7 @@
       <Item id="option_stage2_stage2_progress_dir" name="每任务 .ecm_ckpt_stage2_&lt;bits&gt;_&lt;B1&gt;.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。" />
       <Item id="option_stage2_stage2_save_dir" name="指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。" />
       <Item id="option_stage2_stage2_debug_log" name="控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开启本选项也不把全部调试输出刷到控制台。" />
+      <Item id="option_stage2_stage2_execution_device" name="统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不区分大小写，可用 --target 覆盖。" />
       <Item id="option_stage2_stage2_device" name="Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。" />
       <Item id="option_stage2_stage2_log_level" name="兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 stage2_debug_log。" />
       <Item id="option_stage2_stage2_ntt_counts" name="生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。" />

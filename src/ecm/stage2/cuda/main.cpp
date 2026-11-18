@@ -17,6 +17,7 @@
 #include "ecm/platform/fingerprint.h"
 #include "../planning/planning.h"
 #include "../queue_paths.h"
+#include "../launch.h"
 #include "../input.h"
 #include "../process.h"
 #include "host_policy.h"
@@ -75,6 +76,11 @@ Options arguments(int argc, char **argv) {
         };
         auto num = [&]() { return u64(value(), a.c_str()); };
         if (a == "--help" || a == "-h") o.help = true;
+        else if (a == "--target") {
+            const auto target=ecm_config::lower(value());
+            if(target!="gpu" && target!="auto")
+                throw std::runtime_error("This GPU worker requires --target gpu or auto");
+        }
         else if (a == "--gpu-backend") {
             o.gpu_backend=value();
             if(o.gpu_backend!="auto" && o.gpu_backend!="cuda" && o.gpu_backend!="opencl")
@@ -285,14 +291,6 @@ Options arguments(int argc, char **argv) {
 }
 using Settings=ecm_config::Stage2Values;
 
-static std::vector<ecm_config::TomlLine> stage2_config(const fs::path &path,bool explicit_config,int worker) {
-    std::vector<ecm_config::TomlLine> lines;
-    if(!ecm_config::read_toml(path.string(),lines,ecm_config::TomlReadMode::Stage2,nullptr,nullptr,worker) &&
-       (explicit_config || fs::exists(path)))
-        throw std::runtime_error("cannot read explicit TOML: "+path.u8string());
-    return lines;
-}
-
 static void freeze_publication(Options &o,const Settings &settings,const fs::path &config) {
     if(settings.has_submission && settings.submission.empty())throw std::runtime_error("empty submission path");
     const auto path=o.submission.empty()
@@ -407,7 +405,7 @@ static void bind_engine_options(Options &o) {
 #endif
 }
 
-int driver(Options o) {
+int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
     if (o.help) { help(); return 0; }
     if (o.child) {
         if(o.frozen_publication && !o.ini.empty())
@@ -415,10 +413,9 @@ int driver(Options o) {
         if(!o.frozen_publication) {
             // Direct diagnostic probes can invoke the internal worker without
             // its parent. Freeze their config before any curve work, too.
-            const auto ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::absolute(fs::path(o.ini));
-            const auto lines=stage2_config(ini,!o.ini.empty(),o.worker);
-            const auto settings = ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
-            freeze_publication(o,settings,ini);
+            const auto child_config=ecm_stage2::read_launch_config(o.ini,o.worker,executable());
+            const auto settings = ecm_config::read_stage2(ecm_config::cli_entries(child_config.lines,o.worker,true));
+            freeze_publication(o,settings,child_config.path);
             if (o.worker_cpu_affinity.empty()) o.worker_cpu_affinity = settings.shared_cpu_affinity;
         }
         ecm_platform::apply_worker_cpu_affinity(o.worker_cpu_affinity, !o.frozen_publication);
@@ -452,8 +449,13 @@ int driver(Options o) {
     if(o.tune_child)throw std::runtime_error("ecm-tune-worker requires the internal curve-worker mode");
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
     const fs::path cwd = fs::current_path();
-    const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
-    const auto lines=stage2_config(ini,!o.ini.empty(),o.worker);
+    ecm_stage2::LaunchConfig standalone;
+    if (!launch) {
+        standalone=ecm_stage2::read_launch_config(o.ini,o.worker,executable());
+        launch=&standalone;
+    }
+    const auto& ini=launch->path;
+    const auto& lines=launch->lines;
     const auto s=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     o.worker_cpu_affinity = s.shared_cpu_affinity;
     ecm_platform::apply_worker_cpu_affinity(o.worker_cpu_affinity);
@@ -705,7 +707,7 @@ int driver(Options o) {
 } // namespace s2prod
 
 #include "ecm/platform/cuda_loading.h"
-int main(int argc, char **argv) {
+static int run_gpu_stage2(int argc, char **argv, const ecm_stage2::LaunchConfig* launch) {
 #ifndef ECM_STAGE2_OPENCL
     ecm_cuda_default_module_loading();
 #else
@@ -717,11 +719,23 @@ int main(int argc, char **argv) {
     for (int i=1;i<argc;++i) if (std::string(argv[i])=="--gui-queue-protocol") {
         std::puts("ECM_QUEUE_OWNER=1"); return 0;
     }
-    try { return s2prod::driver(s2prod::arguments(argc, argv)); }
+    try { return s2prod::driver(s2prod::arguments(argc, argv),launch); }
     catch (const std::exception &e) {
         const std::string message=std::string(stage2_backend::executable)+": "+e.what();
         std::cerr<<message<<std::endl;
         try {s2prod::append_fatal_log(message);}catch(...){}
         return 2;
     }
+}
+
+#ifdef ECM_STAGE2_COMBINED
+extern "C" __declspec(dllexport) void ecm_combined_stage2_worker() {}
+#endif
+
+int main(int argc, char **argv) {
+#ifdef ECM_STAGE2_COMBINED
+    return ecm_stage2::run_combined_stage2(argc,argv,run_gpu_stage2);
+#else
+    return run_gpu_stage2(argc,argv,nullptr);
+#endif
 }

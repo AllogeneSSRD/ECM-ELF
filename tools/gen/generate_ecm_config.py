@@ -165,8 +165,10 @@ def assignment(o, key=None):
             invalid = "&&".join(f"{dst}!={x}" for x in o["values"])
             code = f"assign_value({dst},v);if({invalid})throw std::runtime_error({message});"
         else:
-            invalid = "&&".join("v!=" + literal(x) for x in o["values"])
-            code = f"if({invalid})throw std::runtime_error({message});{dst}=v;"
+            value = "normalized" if o.get("case_insensitive") else "v"
+            prefix = "const auto normalized=lower(v);" if value != "v" else ""
+            invalid = "&&".join(value + "!=" + literal(x) for x in o["values"])
+            code = f"{prefix}if({invalid})throw std::runtime_error({message});{dst}={value};"
     elif kind == "strict":
         if o["type"] == "string":
             code = f"{dst}=v;"

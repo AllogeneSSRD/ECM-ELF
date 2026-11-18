@@ -60,6 +60,31 @@ def source_paths():
     return sorted((p for p in paths if allowed(p)),key=lambda p:p.as_posix())
 
 
+def libecm_sources(libecm):
+    libecm_files = subprocess.check_output(
+        ['git', 'ls-files', '-z', '--cached'], cwd=libecm).decode('utf-8').split('\0')
+    if 'ecm.h.in' not in libecm_files:
+        raise ValueError('Release packaging requires a GMP-ECM checkout in .refactor/gmp-ecm')
+    return [libecm / name for name in sorted(set(libecm_files) - {''})]
+
+
+def write_release_sources(output, gmp_sources):
+    libecm_files = libecm_sources(ROOT / '.refactor/gmp-ecm')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for path in source_paths():
+            archive.write(path, path.relative_to(ROOT).as_posix())
+        for rel in ['.gitignore','CMakeLists.txt','LICENSE','tools/diag/ensure_bom.ps1','assets/gui_v2/pet_ely.png','assets/gui_v2/pet_ely.json','assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt']:
+            archive.write(ROOT / rel, rel)
+        for filename in CONFIG_REFERENCES:
+            rel = f'docs/{filename}'
+            archive.write(ROOT / rel, rel)
+        for path, rel in gmp_sources:
+            archive.write(path, rel)
+        for path in libecm_files:
+            archive.write(path, path.relative_to(ROOT).as_posix())
+
+
 def verify_inputs(values):
     for name,digest in values.items():
         path=Path(name) if Path(name).is_absolute() else ROOT/name
@@ -275,14 +300,7 @@ def main(plan):
         dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dst)
     # A source snapshot includes new/uncommitted implementation files too.
     source_archive=staging/'release-source.zip'
-    with zipfile.ZipFile(source_archive,'w',zipfile.ZIP_DEFLATED) as archive:
-        for path in source_paths():archive.write(path,path.relative_to(ROOT).as_posix())
-        for rel in ['.gitignore','CMakeLists.txt','LICENSE','tools/diag/ensure_bom.ps1','assets/gui_v2/pet_ely.png','assets/gui_v2/pet_ely.json','assets/gui_v2/CLASSIC-ELY-NOTICE.md','assets/gui_v2/ELYTerminal-LICENSE.txt']:
-            archive.write(ROOT/rel,rel)
-        for filename in CONFIG_REFERENCES:
-            rel=f'docs/{filename}'
-            archive.write(ROOT/rel,rel)
-        for path,rel in gmp_sources:archive.write(path,rel)
+    write_release_sources(source_archive, gmp_sources)
     for profile in plan['profiles']:
         ptx,sass=TARGETS[profile];folder,archive,_=release_paths(staging,version,profile);folder.mkdir()
         component_records={}
@@ -341,6 +359,8 @@ def main(plan):
             copy(ROOT/'docs'/filename,folder/filename)
         copy(ROOT/'LICENSE',folder/'LICENSE')
         for path,filename in gmp_licenses:copy(path,folder/'licenses'/filename)
+        for filename in ('COPYING','COPYING.LIB'):
+            copy(ROOT/'.refactor/gmp-ecm'/filename,folder/'licenses'/f'GMP-ECM-{filename}.txt')
         for source,filename in [('third_party/imgui/LICENSE.txt','ImGui-MIT.txt'),('third_party/gui_v2_pet/LICENSE','Ely-Pet-MIT.txt'),
                                 ('third_party/gui_v2_vulkan/volk/LICENSE.md','Volk-MIT.txt'),('third_party/gui_v2_vulkan/LICENSE.md','Vulkan-Headers-LICENSE.md')]:
             copy(ROOT/source,folder/'licenses'/filename)
@@ -358,5 +378,15 @@ def main(plan):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--plan',type=Path,required=True)
-    main(read(parser.parse_args().plan))
+    parser=argparse.ArgumentParser()
+    mode=parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--plan',type=Path)
+    mode.add_argument('--source-only',type=Path)
+    parser.add_argument('--gmp-root', type=Path)
+    args=parser.parse_args()
+    if args.plan:
+        main(read(args.plan))
+    else:
+        if not args.gmp_root:parser.error('--source-only requires --gmp-root')
+        sources,_=distribution(args.gmp_root.resolve())
+        write_release_sources(args.source_only, sources)

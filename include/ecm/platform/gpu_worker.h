@@ -12,13 +12,21 @@
 
 namespace ecm_gpu {
 #ifdef _WIN32
-inline bool cpu_stage2_worker(const std::filesystem::path &exe) {
+inline bool has_worker_marker(const std::filesystem::path &exe, const char* marker) {
     // Image mapping is sufficient to inspect this executable's exported marker.
     HMODULE image=LoadLibraryExW(exe.c_str(),nullptr,DONT_RESOLVE_DLL_REFERENCES);
     if(!image)return false;
-    const bool cpu=GetProcAddress(image,"ecm_cpu_stage2_worker")!=nullptr;
+    const bool found=GetProcAddress(image,marker)!=nullptr;
     FreeLibrary(image);
-    return cpu;
+    return found;
+}
+
+inline bool cpu_stage2_worker(const std::filesystem::path &exe) {
+    return has_worker_marker(exe,"ecm_cpu_stage2_worker");
+}
+
+inline bool combined_stage2_worker(const std::filesystem::path &exe) {
+    return has_worker_marker(exe,"ecm_combined_stage2_worker");
 }
 
 // Driver enumeration only. No context allocation on either adapter.

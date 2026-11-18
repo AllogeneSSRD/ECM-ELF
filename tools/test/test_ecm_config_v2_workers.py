@@ -124,7 +124,7 @@ stage2.gpu_device = 1
             case.mkdir()
             (case / "ecm.toml").write_text(configuration, encoding="utf-8")
             (case / "worktodo.txt").write_text("[Worker #2]\n", encoding="utf-8")
-            assert "curves_this_run=0 invalid_tasks=0" in run("ecm_cuda_stage2.exe", case, "--once")
+            assert "curves_this_run=0 invalid_tasks=0" in run("ecm_cuda_stage2.exe", case, "--gpu-backend", "cuda", "--once")
         run("ecm_cuda_stage2.exe", invalid, error="unsupported config_version: 4")
     print("Stage1 handoff, OpenCL Stage2 queue, CPU Stage2 config and version rejections passed")
 

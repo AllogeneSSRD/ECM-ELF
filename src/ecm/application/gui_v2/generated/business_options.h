@@ -96,6 +96,7 @@ inline constexpr BusinessOption business_options[]={
     {"stage2","stage2_progress_dir","<dir>","option_stage2_stage2_progress_dir","string",false,false,0,0},
     {"stage2","stage2_save_dir","<dir>","option_stage2_stage2_save_dir","string",false,false,0,0},
     {"stage2","stage2_debug_log","[false|true|0|1]","option_stage2_stage2_debug_log","bool",false,false,0,0},
+    {"stage2","stage2_execution_device","[auto|cpu|gpu]","option_stage2_stage2_execution_device","string",false,false,0,0},
     {"stage2","stage2_device","[-1|0..2^31-1]","option_stage2_stage2_device","int",true,true,-1,2147483647},
     {"stage2","stage2_log_level","[quiet|curve|phases|batches|debug|0..4]","option_stage2_stage2_log_level","int",false,false,0,0},
     {"stage2","stage2_ntt_counts","[false|true|0|1]","option_stage2_stage2_ntt_counts","bool",true,true,0,1},

@@ -455,8 +455,6 @@ Legacy v1 key `stage1.stage1_backend`
 
 Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device indices belong to the selected backend. Override with --gpu-backend.
 
-<a id="device"></a>
-
 ### gpu_device
 
 ```toml
@@ -1340,6 +1338,18 @@ Type `u64` · Range `<x:Z,x=0|x>=6,x%2=0>` · Worker override `[worker.N] stage2
 Legacy v1 key `stage2.stage2_d`
 
 Manual Stage2 step D. 0 selects the shape automatically. Explicit values must be even, at least 6, and satisfy the engine's layout constraints. D affects tree size, batch count, and memory demand; automatic selection is normally suitable.
+
+<a id="stage2_execution_device"></a>
+
+### device
+
+```toml
+device = "auto"
+```
+
+Type `string` · Range `[auto|cpu|gpu]` · Worker override `[worker.N] stage2.device` · Level `core`.
+
+Execution device in the combined Stage2 program. Auto selects CPU. CPU supports Edwards saves; select GPU for Montgomery. Values are case-insensitive. Override with --target.
 
 <a id="stage2_debug_log"></a>
 

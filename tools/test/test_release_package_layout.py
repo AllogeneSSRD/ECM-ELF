@@ -57,6 +57,8 @@ class ReleaseLayout(unittest.TestCase):
                      'tools/build/build_release.ps1']:
             self.put(self.repo/name)
         self.put(self.gmp/'bin/gmp-10.dll')
+        for name in ('ecm.h.in','COPYING','COPYING.LIB'):
+            self.put(self.repo/'.refactor/gmp-ecm'/name)
         for name in ['ecm.exe','gmp-10.dll','libcrypto-3-x64.dll','libssl-3-x64.dll','opencl_resources/test.cl','licenses/OpenSSL.txt']:
             self.put(self.opencl/name)
         self.opencl_files={p.relative_to(self.opencl).as_posix():packaging.sha(p) for p in self.opencl.rglob('*') if p.is_file()}
@@ -101,6 +103,7 @@ class ReleaseLayout(unittest.TestCase):
         with patch.object(packaging,'ROOT',self.repo),patch.object(packaging,'gui_identity'),\
              patch.object(packaging,'verify_opencl',return_value=dict(files_sha256=self.opencl_files)),\
              patch.object(packaging,'distribution',return_value=([],[])),\
+             patch.object(packaging,'libecm_sources',side_effect=lambda root: sorted(root.iterdir())),\
              patch.object(packaging,'source_paths',return_value=[self.repo/'tools/build/build_release.ps1']),\
              patch.object(packaging,'images',return_value={}),\
              patch.object(packaging,'stage2_catalog',side_effect=self.catalog),\
@@ -125,10 +128,12 @@ class ReleaseLayout(unittest.TestCase):
             self.assertEqual([p.name for p in extracted.iterdir()],[folder.name])
             self.assertTrue((extracted/folder.name/'ecm_gui_v2.exe').is_file())
             with zipfile.ZipFile(extracted/folder.name/'source/release-source.zip') as sources:
+                self.assertIn('.refactor/gmp-ecm/ecm.h.in',sources.namelist())
                 for name in ['ECM_TOML_REFERENCE.en.md','ECM_TOML_REFERENCE.zh-CN.md']:
                     expected=(self.repo/'docs'/name).read_bytes()
                     self.assertEqual((extracted/folder.name/name).read_bytes(),expected)
                     self.assertEqual(sources.read(f'docs/{name}'),expected)
+            self.assertTrue((extracted/folder.name/'licenses/GMP-ECM-COPYING.LIB.txt').is_file())
             for name in self.opencl_files:self.assertEqual(packaging.sha(extracted/folder.name/name),self.opencl_files[name])
             before=packaging.sha(archive)
             with self.assertRaisesRegex(ValueError,'already exists'):self.assemble([profile])

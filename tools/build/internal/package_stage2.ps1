@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Build and package the standalone CUDA Stage2 release candidate for one architecture.
+Build and package the combined CPU/CUDA Stage2 release candidate for one architecture.
 .DESCRIPTION
 Builds the production engine with fixed arithmetic defaults, then includes the
 GMP runtime, shared TOML template, empty Stage2 queue and user documentation.
@@ -66,6 +66,7 @@ $includeDirs = @((Join-Path $Gmp 'include'),'include','src','src/ecm/cuda')
 $sourceSet = Get-EcmStage2SourceSet $repo $inventory production $includeDirs
 Assert-EcmHashes $manifest.source_hashes (Get-EcmSourceHashes $repo $sourceSet.Dependencies) 'Build sources changed; rebuild before packaging'
 Assert-EcmBuildUnits $repo $Build $manifest $sourceSet.Sources $includeDirs -Production
+Assert-EcmStage2CpuLibraries $Build $manifest
 if (-not $manifest.gmp_hashes) { throw 'Stage2 build does not record GMP identity; rebuild with the release GMP prefix' }
 foreach ($name in $gmpDependency.Hashes.Keys) {
     if ($manifest.gmp_hashes.$name -ne $gmpDependency.Hashes[$name]) { throw "Stage2 build/release GMP mismatch: $name" }
@@ -90,13 +91,21 @@ if (-not (Test-Path -LiteralPath $queue)) {
 $references = @(Copy-EcmReleaseConfigReferences $repo $OutDir)
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $OutDir -Force
 Copy-Item -LiteralPath $gmpDependency.Copyright -Destination (Join-Path $OutDir 'GMP-COPYRIGHT.txt') -Force
+$source = 'source/release-source.zip'
+& python (Join-Path $repo 'tools/packaging/package_release.py') --source-only (Join-Path $OutDir $source) --gmp-root $Gmp
+if ($LASTEXITCODE) { throw 'Stage2 corresponding source packaging failed' }
 if ($Stage1Exe) {
     $Stage1Exe = Resolve-RepoPath $Stage1Exe
     if (-not (Test-Path -LiteralPath $Stage1Exe)) { throw 'Qualified Stage1 executable not found' }
     Copy-Item -LiteralPath $Stage1Exe -Destination (Join-Path $OutDir 'ecm_cuda.exe') -Force
 }
 $hashes = [ordered]@{}
-$files = @('ecm_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt') + $references
+$files = @('ecm_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt',$source) + $references
+foreach ($name in @('COPYING','COPYING.LIB')) {
+    $notice = "GMP-ECM-$name.txt"
+    Copy-Item -LiteralPath (Join-Path $repo ".refactor/gmp-ecm/$name") -Destination (Join-Path $OutDir $notice) -Force
+    $files += $notice
+}
 . (Join-Path $PSScriptRoot 'diagnostics_payload.ps1')
 $files = @($files + @(Copy-EcmDiagnosticsPayload $repo $Build $OutDir) | Select-Object -Unique)
 foreach ($name in $files) {

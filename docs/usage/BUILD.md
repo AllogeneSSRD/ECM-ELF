@@ -8,9 +8,9 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 ## 构建入口
 
-原生OpenCL Stage2本机入口为 `tools/build/build_stage2_opencl_local.ps1/.bat`，生成 `build_stage2_opencl_local/ecm_opencl_stage2.exe`、GMP DLL与随附 `opencl_resources/{ntt,stage2}`。只需C++、OpenCL头/导入库与GMP，不需要nvcc；可指定 `-Build`、`-OpenClRoot`、`-Gmp`、`-VcVars`，目录由内部忽略文件保护并核对用途。根CMake另提供 `ECM_BUILD_OPENCL_STAGE2=ON`。完整发布入口另用同一 OpenCL release profile 构建两个阶段，随两套 CUDA 包分发程序与资源；单独的 Stage2 CUDA 构建仍只打包 CUDA。
+原生 OpenCL Stage2 本机入口为 `tools/build/build_stage2_opencl_local.ps1/.bat`，生成 `build_stage2_opencl_local/ecm_opencl_stage2.exe`、GMP DLL 与 `opencl_resources/{ntt,stage2}`。依赖 C++、OpenCL 头／导入库和 GMP，可指定 `-Build`、`-OpenClRoot`、`-Gmp`、`-VcVars`。根 CMake 另提供 `ECM_BUILD_OPENCL_STAGE2=ON`。完整发布入口随两套 CUDA 包分发 OpenCL 程序和资源。
 
-独立 CPU Edwards Stage2 使用本机入口 `tools/build/build_stage2_cpu_local.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
+Stage2 本机与发布入口生成统一的 `ecm_stage2.exe`，链接 CPU Edwards 与 CUDA 后端。Windows 构建另需 Ninja 和 `.refactor/gmp-ecm` 源码，运行需安装 MSVC x64 Redistributable（含 OpenMP 运行时）。发布包附 GMP-ECM 源码与许可。CPU 专用本机构建及自编 `gwnum.dll` 见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。
 
 | 程序 | 开发 | 本机生产 | 发布生产 |
 | --- | --- | --- | --- |

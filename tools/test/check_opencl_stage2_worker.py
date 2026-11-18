@@ -78,7 +78,7 @@ def run(exe,folder,args,label='run',expect=0,environment=None):
         raise AssertionError(f'{label}: exit {p.returncode}, expected {expect}; {folder}')
     return (folder/(label+'.log')).read_text(encoding='utf-8')
 
-def stop_after_first_start(exe,folder):
+def stop_after_first_start(exe,folder,args=()):
     # Signal the same inherited event used by the GUI, during the first curve.
     # The driver must finish that curve and commit exactly one receipt.
     kernel=ct.WinDLL('kernel32',use_last_error=True)
@@ -92,7 +92,7 @@ def stop_after_first_start(exe,folder):
         raise ct.WinError(ct.get_last_error())
     startup=subprocess.STARTUPINFO()
     startup.lpAttributeList={'handle_list':[event]}
-    cmd=[str(exe),'--config',str((folder/'ecm.toml').resolve()),'--stage2-stop-handle',str(event)]
+    cmd=[str(exe),'--config',str((folder/'ecm.toml').resolve()),'--stage2-stop-handle',str(event),*args]
     lines=[]
     try:
         p=subprocess.Popen(cmd,cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,

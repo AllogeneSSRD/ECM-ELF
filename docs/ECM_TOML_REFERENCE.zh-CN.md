@@ -455,8 +455,6 @@ v1 旧键 `stage1.stage1_backend`
 
 Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
-<a id="device"></a>
-
 ### gpu_device
 
 ```toml
@@ -1341,6 +1339,18 @@ d = 0
 v1 旧键 `stage2.stage2_d`
 
 手动指定 Stage2 算法步长 D。0 自动选形；非零值除满足偶数且不小于 6 外，还必须满足当前引擎的布局限制。D 会改变树规模、批次数和内存需求，通常保持自动。
+
+<a id="stage2_execution_device"></a>
+
+### device
+
+```toml
+device = "auto"
+```
+
+类型 `string` · 范围 `[auto|cpu|gpu]` · Worker 覆盖 `[worker.N] stage2.device` · 级别 `常用`。
+
+统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不区分大小写，可用 --target 覆盖。
 
 <a id="stage2_debug_log"></a>
 

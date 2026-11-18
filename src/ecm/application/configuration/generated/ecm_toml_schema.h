@@ -97,6 +97,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_progress_dir","string","<dir>","stage2","checkpoint_dir","","stage2","checkpoint_dir",false,false},
     {"stage2","stage2_save_dir","string","<dir>","stage2","save_dir","","stage2","save_dir",false,false},
     {"stage2","stage2_debug_log","bool","[false|true|0|1]","stage2","diagnostics.debug_log","","stage2","diagnostics.debug_log",false,false},
+    {"stage2","stage2_execution_device","string","[auto|cpu|gpu]","stage2","device","","stage2","device",true,false},
     {"stage2","stage2_device","int","[-1|0..2^31-1]","stage2","gpu_device","","stage2","gpu_device",false,false},
     {"stage2","stage2_log_level","int|string","[quiet|curve|phases|batches|debug|0..4]","stage2","log_level","","stage2","log_level",false,false},
     {"stage2","stage2_ntt_counts","bool","[false|true|0|1]","stage2","diagnostics.ntt_length_counts","","stage2","diagnostics.ntt_length_counts",false,false},

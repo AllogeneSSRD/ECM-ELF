@@ -47,7 +47,7 @@ Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/
 
 `dev/build_stage2_tree_gpu.ps1` 的原型驱动与根目录 Stage2 生产/开发队列程序不同。实际生产算术和当前限制见 [NTT](../../docs/architecture/NTT.md)、[Stage2使用](../../docs/usage/STAGE2.md)。
 
-独立 CPU Edwards Stage2 使用 `build_stage2_cpu_local.ps1`，程序和本地 GWNUM DLL 位于 `build_stage2_cpu_local/`。静态 GW 对照版使用 `test/build_cpu_stage2.ps1 -GwPoly`。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。
+Stage2 CUDA 构建生成统一 `ecm_stage2.exe`，内含 CPU Edwards Stage2。CPU 专用版及本地 GWNUM DLL 仍可用 `build_stage2_cpu_local.ps1` 构建，静态 GW 对照版使用 `test/build_cpu_stage2.ps1 -GwPoly`。依赖及运行参数见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)。
 
 OpenCL Stage1 的本机入口为 build_opencl_local.ps1；默认使用隔离的 build_opencl_local/stage1/&lt;key&gt; 叶目录、普通 CXX 及随附生产资源，不启用 CUDA。支持 -BuildDir、-Gmp、-OpenSslRoot、-OpenClRoot、-VcVars。完整发布入口以 `-BuildRole release` 调用它，构建 `<BuildRoot>/opencl-release/ecm.exe`，附带资源、OpenSSL及许可，并与其他组件共用通用vcpkg GMP。两套CUDA包均包含相同OpenCL程序；其内核统一JIT。完整入口也接收 `-OpenSslRoot`、`-OpenClRoot`。资源与加载合同见 [OpenCL](../../docs/architecture/OPENCL.md#资源与-local-构建)。
 

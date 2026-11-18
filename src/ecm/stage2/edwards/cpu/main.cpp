@@ -19,13 +19,14 @@
 #include "../../cpu/gwpoly.h"
 #include "../../cpu/runtime_tune.h"
 #include "../../queue_paths.h"
+#include "../../launch.h"
 #include "../../../platform/compute_log.h"
 #include "ecm/platform/fingerprint.h"
 #include "ecm/platform/cpu_affinity.h"
 #include <fstream>
 
 #ifndef ECM_BUILD_ID
-#define ECM_BUILD_ID "development"
+#define ECM_BUILD_ID ecm_program::version
 #endif
 #ifndef ECM_LIBECM_NTT_THRESHOLD
 #define ECM_LIBECM_NTT_THRESHOLD 30
@@ -91,23 +92,12 @@ void check_tune_path(const Options &o,std::initializer_list<fs::path> resources,
         }
     }
 }
-Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
+Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     Options o;
-    // Snapshot local identity before starting any curve. Explicit CLI values,
-    // including empty names, override the selected global/worker projection.
-    for(int i=1;i<argc;++i) {
-        const std::string key=argv[i];
-        if((key=="--config" || key=="--worker") && i+1<argc) {
-            const std::string value=argv[++i];
-            if(key=="--worker"){const auto n=decimal(value);if(!n || n>1000000)throw std::runtime_error("invalid worker");o.worker=int(n);}
-            else o.ini=value;
-        }
-    }
-    const auto ini=o.ini.empty()?s2prod::executable().parent_path()/"ecm.toml":std::filesystem::path(o.ini);
-    const bool read=ecm_config::read_toml(ini.string(),lines,ecm_config::TomlReadMode::Stage2,nullptr,nullptr,o.worker);
-    if(!read && (!o.ini.empty() || std::filesystem::exists(ini)))throw std::runtime_error("cannot read local TOML");
-    o.ini=std::filesystem::absolute(ini).lexically_normal().string();
-    const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
+    o.worker=launch.worker;
+    const auto& ini=launch.path;
+    o.ini=ini.string();
+    const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(launch.lines,o.worker,true));
     o.threads=settings.cpu_threads;o.memory=settings.cpu_memory_mib;o.backend=settings.cpu_backend;
     o.tune_runtime=settings.tune_runtime;
     o.tune_min_repeats=settings.tune_min_repeats;
@@ -128,7 +118,7 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
                            << " CPU=" << ecm_gwpoly::cpu() << '\n';
             std::exit(0);
         }
-        if(key=="--help") {
+        if(key=="--help" || key=="-h") {
             std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
                 "[--threads 1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
@@ -307,7 +297,7 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                         const auto &plans=tune.get(r,n.v,o.b2,gw);
                         if(!plans.empty()) {
                             std::string build=ecm_gwpoly::identity();
-                            if(build=="static gwpoly")build+=" " ECM_BUILD_ID;
+                            if(build=="static gwpoly")build+=std::string(" ")+ECM_BUILD_ID;
                             auto affinity=o.cpu_affinity;
                             DWORD_PTR allowed=0,system=0;
                             if(GetProcessAffinityMask(GetCurrentProcess(),&allowed,&system))
@@ -418,7 +408,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     s2prod::TaskEngine engine;
     engine.name="CPU Stage2";
     engine.validate=[&](const s2prod::Record &r,uint64_t b2) {
-        if(!r.edwards)throw std::runtime_error("CPU Stage2 requires Edwards saves; queue retained");
+        if(!r.edwards)throw std::runtime_error("CPU Stage2 requires Edwards saves; select stage2.device = \"gpu\" for Montgomery");
         const bool gw=cpu.backend=="gwpoly" || (cpu.backend=="auto" && !ecm_gwpoly::load_error());
         if(b2>(gw?ecm_gwpoly::max_b2:1000000000000ull))
             throw std::runtime_error("requested B2 exceeds the CPU backend limit");
@@ -469,16 +459,26 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
                                   {settings.b2,0,0});
 }
 }
-// GUI and the OpenCL router can identify the CPU package without starting a worker.
-extern "C" __declspec(dllexport) void ecm_cpu_stage2_worker() {}
-
-int main(int argc,char **argv) {
+int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConfig* launch) {
     try {
         for(int i=1;i<argc;++i)if(std::string(argv[i])=="--gui-queue-protocol"){
             std::cout<<"ECM_QUEUE_OWNER=1\n";return 0;
         }
-        std::vector<ecm_config::TomlLine> lines;
-        const auto o=options(argc,argv,lines);
+        LaunchConfig standalone;
+        if (!launch) {
+            std::string config;
+            int worker = 1;
+            for(int i=1;i<argc;++i) {
+                const std::string key=argv[i];
+                if(key!="--config" && key!="--worker")continue;
+                if(++i>=argc)throw std::runtime_error("missing value for "+key);
+                if(key=="--config")config=argv[i];
+                else worker=launch_worker(argv[i]);
+            }
+            standalone=read_launch_config(config,worker,s2prod::executable());
+            launch=&standalone;
+        }
+        const auto o=options(argc,argv,*launch);
         if (!o.export_only) ecm_platform::apply_worker_cpu_affinity(o.cpu_affinity);
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
         if(o.export_only) {
@@ -486,7 +486,7 @@ int main(int argc,char **argv) {
             ecm_results::seal_submissions(o.submission,2,{},true);std::cout<<"submission output regenerated\n";return 0;
         }
         omp_set_num_threads(static_cast<int>(o.threads));
-        if(o.save.empty())return run_queue(o,lines);
+        if(o.save.empty())return run_queue(o,launch->lines);
         auto rows=ecm_edwards::read_saved_curves(o.save);
         if(o.skip>=rows.size())throw std::runtime_error("skip exceeds saved curve count");
         const auto end=o.skip+std::min<uint64_t>(o.count,rows.size()-o.skip);
@@ -517,3 +517,12 @@ int main(int argc,char **argv) {
         return 0;
     }catch(const std::exception &e){std::cerr<<"CPU Stage2: "<<e.what()<<'\n';try{s2prod::append_fatal_log(e.what());}catch(...){}return 1;}
 }
+
+#ifndef ECM_STAGE2_COMBINED
+// The GUI also supports existing CPU-only executables.
+extern "C" __declspec(dllexport) void ecm_cpu_stage2_worker() {}
+
+int main(int argc,char **argv) {
+    return ecm_stage2::run_cpu_stage2(argc,argv);
+}
+#endif

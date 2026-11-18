@@ -1,8 +1,26 @@
 # Stage2 使用
 
-本页说明CUDA与原生OpenCL Stage2，OpenCL支持边界见下节。CPU Edwards 续算入口、GW 多线程多项式与 libecm 后端选择见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两份结果文件及提交字段规则统一见 [ECM 结果输出](ECM_RESULTS.md)。
+统一的 `ecm_stage2.exe` 可在同一队列中为不同 worker 使用 CPU 或 GPU。CPU Edwards 续算及 GWNUM／libecm 选项见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)。两份结果文件及提交字段规则见 [ECM 结果输出](ECM_RESULTS.md)。
 
 实验、归因和性能对照使用的进程环境开关见 [Stage2 点与队列](ENVIRONMENT_STAGE2.md)和 [CUDA NTT 与多项式](ENVIRONMENT_CUDA_NTT.md)。
+
+## 选择运行设备
+
+以下设置让其他 worker 用 GPU 运行 Stage2，Worker 3 用 CPU。取值不区分大小写。省略 `device` 或设为 `"auto"` 时选择 CPU。CPU 只支持 Edwards 存档，Montgomery 续算请选 GPU。Stage1 有独立的设备设置。
+
+```toml
+config_version = 3
+
+[stage2]
+device = "gpu"
+gpu_device = 1
+
+[worker.3]
+stage2.device = "cpu"
+stage2.cpu.threads = 4
+```
+
+队列和直接读档都先选设备，再由对应后端解析命令。用 `--target cpu|gpu|auto` 覆盖本次运行的 TOML 选型，例如执行 `ecm_stage2.exe --target gpu --tune ntt --device 1`。GPU 内部用 `gpu_backend` 选择 CUDA／OpenCL，用 `gpu_device` 或 `--device N` 选择卡号。命令行 `--gpu-backend` 也可显式进入 GPU 路径。
 
 ## 原生 OpenCL 入口
 
@@ -34,7 +52,7 @@ NVIDIA 可由原生 OpenCL 计划选择设备点或 CPU 点；AMD目标超过512
 
 ## CUDA 入口
 
-`ecm_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
+选择 GPU 和 CUDA 后，`ecm_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入。Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 
 直接读档和队列运行启动时均输出 `ECM-ELF x.y.z (Stage2)` 版本横幅，包括 `--dry-run` 和 `--plan-only`；GUI 从这个横幅读取实际 worker 版本。只输出机器数据的内部辅助入口保持其原有格式。
 
@@ -46,10 +64,12 @@ CUDA点算术使用`[stage2]` 中的 `baby_backend="auto"`、`giant_backend="aut
 config_version = 3
 
 [worker.1]
+stage2.device = "gpu"
 stage2.gpu_device = 0
 shared.tune_file = "tune_gpu0.toml"
 
 [worker.2]
+stage2.device = "gpu"
 stage2.gpu_device = 1
 shared.tune_file = "tune_gpu1.toml"
 ```
@@ -64,7 +84,7 @@ CUDA的`seed_backend`默认auto，也可强制scalar／coop32；CLI为`--seed-ba
 
 ## 直接读档
 
-基本参数为 `--save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；具体名字以当前 `--help` 为准。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 开启共享诊断层的附加分解，优先本地 PARI DLL，备选外部 GP，不自动使用 GMP。原始因子先发布，附加诊断未完成不改变成功状态；仅完整且全部已证素才标为分解完成。内部结果保留后端、概率素性及余因子，详见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。
+GPU 直接读档可用 `--target gpu --save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；其余参数见 `--target gpu --help`。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 开启共享诊断层的附加分解，优先本地 PARI DLL，备选外部 GP，不自动使用 GMP。原始因子先发布，附加诊断未完成不改变成功状态；仅完整且全部已证素才标为分解完成。内部结果保留后端、概率素性及余因子，详见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。
 
 接受归一化 Suyama PARAM0 文本记录，以及 GPU Edwards 输出的 `METHOD=ECM-EDWARDS-AM` 记录。Edwards 使用生产 Stage2 引擎并要求显式 B2；存档身份和常数约定见 [输入与表示](../architecture/STAGE2.md#stage1-save-与承载资格)。CPU Edwards 的 Prime95 二进制 `.tmp` 不属于此入口。先验证选择范围中的所有记录，包括 checksum、N、B1、X 和任务匹配；文件损坏不能当作“没有足够曲线”略过。源 save 不修改。校验和通过只说明文件完整。
 

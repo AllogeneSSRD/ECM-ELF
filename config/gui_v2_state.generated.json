@@ -2,10 +2,10 @@
   "sha256": {
     "src/ecm/application/gui_v2/generated/ui_values.h": "fbcdf305cdb9e249f82d4beb3dcc53c999c3eb4ef93bf5f25abe69221cc55cc0",
     "docs/GUI_V2_STATE_REFERENCE.md": "873fc836d1acfabde36e73d58f01cbc8b9dfdca1394f8285569790d255cc8a86",
-    "src/ecm/application/gui_v2/generated/business_options.h": "dc9eab4b80a85ef5664b58c17205138d98b0b9c403d4d87eadcff45240825536",
-    "src/ecm/application/gui_v2/localization/options.english.xml": "bc1b8f258cf1e2f1c2106cf698a1a4980334e952071effe55fc46d530c869406",
-    "src/ecm/application/gui_v2/localization/options.chineseSimplified.xml": "2105c2ad088cd714922ae94dee83a88410095acaa5623d5309101a6d9713bb05",
-    "config/ecm_options.json": "7c6aec29a3a8459f3983331c08107609ebe756833d9c83086d7725dceb34d16a",
+    "src/ecm/application/gui_v2/generated/business_options.h": "4e96a8643b24e64ab0984319417b4068ac18ae5aa3e01233f0b20f7de53a9079",
+    "src/ecm/application/gui_v2/localization/options.english.xml": "18e453ad4aa61acb5114da4e9e448b4a15a685dded6b2b625ccd89102b0c875b",
+    "src/ecm/application/gui_v2/localization/options.chineseSimplified.xml": "f072fe82f1db658d14a15e412d2961cbaf98d1b90a70a272d15759fd22bf2736",
+    "config/ecm_options.json": "cba003a595961e83b0748a888d7d25f9c55bdfd36016f27343a94b3eca10ce06",
     "tools/gen/generate_gui_v2_state.py": "ff09c4658525574c590919b58a455574851a15ca8690751b5e6e994478fb2a9a"
   }
 }

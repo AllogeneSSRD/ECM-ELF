@@ -288,8 +288,11 @@ WorkerView WorkerController::make_worker(int index) const {
     }
     if(w.stage2) {
         const auto stage2=ecmgui::preview_stage2(entries);
-        w.execution_target=ecm_gpu::cpu_stage2_worker(std::filesystem::u8path(w.exe)) ? "cpu" : "gpu";
-        if(stage2.device>=0)w.device=stage2.device;
+        const auto image=std::filesystem::u8path(w.exe);
+        const bool cpu=ecm_gpu::combined_stage2_worker(image) ? stage2.execution_device!="gpu"
+                                                            : ecm_gpu::cpu_stage2_worker(image);
+        w.execution_target=cpu ? "cpu" : "gpu";
+        if(!cpu && stage2.device>=0)w.device=stage2.device;
         if(!shared_log)
             w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
                 path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));

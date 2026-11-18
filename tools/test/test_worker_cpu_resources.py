@@ -113,7 +113,7 @@ stage2.cpu.threads = 2
         error="expected comma-separated CPU indices/ranges")
     if args.gpu_stage2:
         log = run("gpu_stage2", args.gpu_stage2, common,
-                  ["--save", str(save), "--b2", "1000", "--device", str(args.device), "--d", "210", "--curves", "1"])
+                  ["--gpu-backend", "cuda", "--save", str(save), "--b2", "1000", "--device", str(args.device), "--d", "210", "--curves", "1"])
         assert pool in log and "curve_done:" in log, log
     if args.opencl_stage2:
         log = run("opencl_stage2", args.opencl_stage2, common,

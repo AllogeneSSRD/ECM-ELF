@@ -132,6 +132,7 @@ foreach($name in $names) {
             $set=Get-EcmStage2SourceSet $repo $inventory production $includeDirs $manifest.module_directory
             Assert-EcmHashes $manifest.source_hashes (Get-EcmSourceHashes $repo $set.Dependencies) 'Stage2 source identity changed'
             Assert-EcmBuildUnits $repo $record.build $manifest $set.Sources $includeDirs -Production -VerifyJobs $VerifyJobs
+            Assert-EcmStage2CpuLibraries $record.build $manifest
         }
         if((Get-FileHash -LiteralPath (Join-Path $record.build 'gmp-10.dll')).Hash -ne $dependency.Hashes['bin/gmp-10.dll']){throw 'Release runtime GMP mismatch'}
         Write-Host "Verified $name/$stage"

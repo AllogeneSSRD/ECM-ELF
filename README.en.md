@@ -60,8 +60,8 @@ The chart compares ECM-ELF CUDA (0.62.0) in serial and two-slot modes on the RTX
 | --- | --- | --- |
 | `ecm_cuda.exe` | CUDA Stage1. CGBN supports Edwards and the built-in Montgomery parametrizations. NTT supports Edwards and PARAM0 on full Mersenne numbers or assignments with known factors | Number, expression, or Stage1 queue. Writes `.save` files and checkpoints |
 | `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, TOML, queue and text saves; selectable OpenCL operators |
-| `ecm_stage2.exe`, `ecm_opencl_stage2.exe` | Standalone GPU polynomial Stage2 | Normalized PARAM0 or Edwards AM saves, directly or through `ECMSTAGE2=` and `ECMSTAGE2N=` |
-| `ecm_stage2.exe` | Edwards Stage2 in the CPU package | Reads saves directly or via worktodo. Whole-curve checkpoints are shared with CUDA. See [CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md) for backends and build options |
+| `ecm_stage2.exe` | Combined CPU and CUDA Stage2 | CPU handles Edwards AM saves by default. GPU supports Edwards AM and Montgomery PARAM0. Both accept direct saves and `ECMSTAGE2=` or `ECMSTAGE2N=` assignments |
+| `ecm_opencl_stage2.exe` | OpenCL GPU Stage2 | Uses the same save and worktodo formats, either standalone or as the combined worker's OpenCL backend |
 | `ecm_gui_v2.exe` | Windows graphical frontend | Manages Stage1 and Stage2 workers, queues, logs, and results |
 
 ### Stage1 backends
@@ -114,6 +114,9 @@ target = "gpu"
 gpu_device = 0
 save_dir = "."
 handoff.mode = "off"
+
+[stage2]
+device = "gpu"
 ```
 
 Create `worktodo.txt`. The final `ECM2` fields are B1, B2 and curve count; `B2=0` runs Stage1 only:
@@ -159,10 +162,10 @@ ECMSTAGE2=1,2,3001,-1,"m0_m3001_1e4.save",1000000
 .\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 
 # Or process the same save directly without the queue (do not run both paths)
-.\ecm_stage2.exe --save .\m0_m3001_1e4.save --b2 1000000 --device 0
+.\ecm_stage2.exe --target gpu --save .\m0_m3001_1e4.save --b2 1000000 --device 0
 
 # Optional: measure the NTT component only; this is not a complete ECM tune
-.\ecm_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
+.\ecm_stage2.exe --target gpu --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
 ```
 
 ECM tune reads the selected worker's Stage2 queue by default. Use `--tune-save FILE --tune-b2 B2` to select a particular save. Load the resulting data for a Stage2 command with `--tune-profile FILE`, or set `[shared] tune_file` for both stages. An explicit B2 can run directly. For Auto B2 cost data requirements, see [Stage2 usage](docs/usage/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md).
@@ -280,10 +283,10 @@ Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PAR
 <a id="stage2"></a>
 ## Separate CUDA Stage2
 
-`ecm_stage2.exe` consumes a completed Stage1 save; it does not rerun Stage1. Direct invocation and queue examples (replace the filename and B2 with the actual task):
+`ecm_stage2.exe` continues from a completed Stage1 save. Set `[stage2] device = "auto" | "cpu" | "gpu"` to select the execution device. The default `auto` selects CPU. Set `gpu` for Montgomery saves. To change Worker 3 only, set `stage2.device = "cpu"` under `[worker.3]`. Use `--target` for a one-off override.
 
 ```powershell
-.\ecm_stage2.exe --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
+.\ecm_stage2.exe --target gpu --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
 .\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
