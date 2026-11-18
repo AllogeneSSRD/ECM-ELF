@@ -35,7 +35,7 @@ if(ECM_GW_STAGE2)
     endforeach()
     string(SHA256 _hash "${_identity}")
     string(SUBSTRING "${_hash}" 0 16 _hash)
-    target_compile_definitions(ecm_gwnum PRIVATE "ECM_GW_BUILD=\"gwnum.dll Stage2 ABI=1/2 build=${_hash}\"")
+    target_compile_definitions(ecm_gwnum PRIVATE "ECM_GW_BUILD=\"gwnum.dll Stage2 ABI=1/2/3 build=${_hash}\"")
 endif()
 # Match the CRT used by the upstream Windows static library.
 set_target_properties(ecm_gwnum PROPERTIES

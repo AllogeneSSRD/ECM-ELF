@@ -47,3 +47,25 @@ typedef struct {
     int (*tune_candidates)(const ecm_gw_stage2_request*, ecm_gw_stage2_tune_candidate*,
                            uint32_t capacity, char* error, uint32_t error_size);
 } ecm_gw_stage2_api_v2;
+
+typedef enum {
+    ECM_GW_PLAN, ECM_GW_BABY, ECM_GW_FTREE, ECM_GW_INVERSE,
+    ECM_GW_GIANT, ECM_GW_BATCH, ECM_GW_DESCENT, ECM_GW_GCD, ECM_GW_REPLAY
+} ecm_gw_stage2_progress_kind;
+
+typedef struct {
+    uint32_t kind;
+    uint64_t batch, batches, d, poly_size;
+    double elapsed;
+} ecm_gw_stage2_progress;
+
+/* Called synchronously on the calling thread. The event is valid only during
+ * the callback, which must not throw across the DLL boundary. */
+typedef void (*ecm_gw_stage2_progress_fn)(void*, const ecm_gw_stage2_progress*);
+
+typedef struct {
+    ecm_gw_stage2_api_v2 base;
+    int (*run_with_progress)(const ecm_gw_stage2_request*, uint32_t* factor,
+                             ecm_gw_stage2_stats*, ecm_gw_stage2_phases*,
+                             ecm_gw_stage2_progress_fn, void*, char* error, uint32_t error_size);
+} ecm_gw_stage2_api_v3;

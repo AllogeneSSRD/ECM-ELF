@@ -24,9 +24,10 @@ ecm_gwpoly::Options options(const ecm_gw_stage2_request& request) {
     return result;
 }
 
-int run_with_phases(const ecm_gw_stage2_request* r, uint32_t* factor,
-                    ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
-                    char* error, uint32_t capacity) noexcept {
+int run_with_progress(const ecm_gw_stage2_request* r, uint32_t* factor,
+                      ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
+                      ecm_gw_stage2_progress_fn progress, void* context,
+                      char* error, uint32_t capacity) noexcept {
     return guarded(error, capacity, [&] {
         if (!r || !stats || !factor || !r->words || !r->n || !r->x || !r->a24)
             throw std::invalid_argument("Invalid Stage2 buffers");
@@ -40,7 +41,10 @@ int run_with_phases(const ecm_gw_stage2_request* r, uint32_t* factor,
         if (mpz_cmp_ui(n.v, 2) <= 0 || mpz_cmp(x.v, n.v) >= 0 || mpz_cmp(a24.v, n.v) >= 0)
             throw std::invalid_argument("Invalid Stage2 residues");
         ecm_gwpoly::Stats observations{};
-        const bool found = ecm_gwpoly::stage2(f.v, n.v, x.v, a24.v, r->b1, r->b2, options(*r), observations);
+        auto settings=options(*r);
+        settings.progress=progress;
+        settings.progress_context=context;
+        const bool found = ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r->b1,r->b2,settings,observations);
         *stats = observations;
         if (phases) *phases = observations.phases;
         if (!found) return 0;
@@ -48,6 +52,12 @@ int run_with_phases(const ecm_gw_stage2_request* r, uint32_t* factor,
         mpz_export(factor, nullptr, -1, sizeof(uint32_t), 0, 0, f.v);
         return 1;
     });
+}
+
+int run_with_phases(const ecm_gw_stage2_request* r, uint32_t* factor,
+                    ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
+                    char* error, uint32_t capacity) noexcept {
+    return run_with_progress(r,factor,stats,phases,nullptr,nullptr,error,capacity);
 }
 
 int run(const ecm_gw_stage2_request* r, uint32_t* factor, ecm_gw_stage2_stats* stats,
@@ -80,6 +90,10 @@ extern "C" __declspec(dllexport) const ecm_gw_stage2_api* ecm_gw_stage2_get_api(
                                        ECM_GW_BUILD, ecm_gwpoly::cpu(), run, selftest};
     static const ecm_gw_stage2_api_v2 v2{{2, sizeof(v2), api.version, api.build, api.cpu, run, selftest},
                                         run_with_phases, tune_candidates};
+    static const ecm_gw_stage2_api_v3 v3{
+        {{3, sizeof(v3), api.version, api.build, api.cpu, run, selftest},
+         run_with_phases, tune_candidates}, run_with_progress};
+    if (abi == 3) return &v3.base.base;
     if (abi == 1) return &api;
     if (abi == 2) return &v2.base;
     return nullptr;

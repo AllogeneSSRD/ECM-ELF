@@ -195,26 +195,37 @@ def main():
     queue_config.write_text(
         'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
         'finished_file = "finished.txt"\nlog_file = "worker.log"\n'
-        '[stage2]\nstage2_save_dir = "."\ncpu_backend = "gwpoly"\nstage2_cpu_threads = 1\n',
+        '[stage2]\nstage2_save_dir = "."\ncpu_backend = "gwpoly"\nstage2_cpu_threads = 1\n'
+        '[worker.3]\ntune_file = "tune-cpu.toml"\n',
         encoding="utf-8",
     )
     (queue / "points.save").write_text(POINTS, encoding="utf-8")
     task = f'ECMSTAGE2=1,2,127,-1,"points.save",{B2},0,2'
     worktodo = queue / "worktodo.txt"
-    worktodo.write_text(task + "\n", encoding="utf-8")
-    results = f.finish(f.start("queue", "--once", config=queue_config, folder=queue))
+    worktodo.write_text("[Worker #3]\n" + task + "\n", encoding="utf-8")
+    results = f.finish(f.start("queue", "--worker", 3, "--once", "--gui-events",
+                               "--log-level", "batches", config=queue_config, folder=queue))
     assert [row["Edwards"]["sigma"] for row in results] == [17, 18]
     assert task not in worktodo.read_text(encoding="utf-8-sig")
     assert (queue / "finished.txt").read_text(encoding="utf-8-sig").count(task) == 1
-    queue_rows = read_tune(queue / "tune.toml")["cpu_stage2"]
+    queue_tune = queue / "tune-cpu.toml"
+    queue_rows = read_tune(queue_tune)["cpu_stage2"]
+    assert not (queue / "tune.toml").exists()
     for row in queue_rows:
         verify_tune(row)
     assert sum(row["repeats"] for row in queue_rows) == 2
-    print("PASS worktodo runtime observations and exact queue completion", flush=True)
+    for path in (queue / "run.log", queue / "worker.log"):
+        events = path.read_text(encoding="utf-8")
+        for name in ("Plan Stage2", "Generate and normalize", "Build baby-point",
+                     "Prepare polynomial inverse", "Giant points", "Normalize fold", "Accumulate leaf"):
+            assert f"stage2_phase: {name}" in events, (path, name)
+        assert "stage2_real: B1=1000 B2=40000 D=" in events, path
+        assert "batched_progress: batch=" in events and "left=" in events, path
+    print("PASS worker tune override, live GWNUM phases and batches, and exact queue completion", flush=True)
 
     if args.portable_fixture:
         executable = args.portable_fixture.resolve(strict=True)
-        for path in (queue / "tune.toml", shared):
+        for path in (queue_tune, shared):
             serialized = subprocess.check_output([executable, "--roundtrip", path], timeout=60)
             restored = tomllib.loads(serialized.decode("utf-8"))
             current = read_tune(path)

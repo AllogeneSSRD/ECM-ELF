@@ -594,6 +594,7 @@ const char* cpu() {
 }
 const char* identity(){return "static gwpoly";}
 const char* load_error(){return nullptr;}
+unsigned stage2_abi(){return 3;}
 const char *version(){return GWNUM_VERSION;}
 std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options &o){
     Integer unused_factor;
@@ -646,6 +647,13 @@ static uint64_t suffix_first(uint64_t first,uint64_t last,uint64_t d,uint64_t p)
 static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             uint64_t b1,uint64_t b2,const Options &o,Stats &stats,bool allow_suffix,bool &shortened){
     stats={};const auto begin=Clock::now();
+    const auto progress=[&](ecm_gw_stage2_progress_kind kind,uint64_t batch=0,uint64_t batches=0) {
+        if(o.progress) {
+            const ecm_gw_stage2_progress event{kind,batch,batches,stats.d,stats.poly_size,seconds(begin)};
+            o.progress(o.progress_context,&event);
+        }
+    };
+    progress(allow_suffix?ECM_GW_PLAN:ECM_GW_REPLAY);
     FTreePlan fplan{};
     auto owner=prepare_plan(n,factor,b1,b2,o,stats,fplan);
     auto &c=*owner;
@@ -654,6 +662,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                 fplan.rebuild?"segmented":"full",static_cast<size_t>(gwnum_size(&c.gw))+64,fplan.splits);
     bool main_started=false;auto main_begin=begin;
     try {
+        progress(ECM_GW_BABY);
         Points points(c);Array storage(c.gw,14);Point q{storage[0],storage[1]},step{storage[2],storage[3]},
             prev{storage[4],storage[5]},cur{storage[6],storage[7]},next{storage[8],storage[9]},base{storage[10],storage[11]};
         c.put(x,q.x);u64togw(&c.gw,1,q.z);c.put(a24,storage[12]);
@@ -682,6 +691,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             stats.point_seconds+=seconds(t);
         }
         const double baby_seconds=stats.point_seconds;
+        progress(ECM_GW_FTREE);
         auto init_tree_begin=Clock::now();
         auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,fplan.splits):tree(c,roots,0,p,true);
         struct Probe {Integer root,product;size_t index;};
@@ -694,6 +704,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             }
         }
         if(!fplan.rebuild)roots=Array();
+        progress(ECM_GW_INVERSE);
         const auto inverse_begin=Clock::now();
         auto inv=c.inverse(reverse(ftree->polynomial),p);
         const double inverse_seconds=seconds(inverse_begin);
@@ -724,6 +735,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         stats.init_seconds=seconds(begin);main_begin=Clock::now();main_started=true;
         Array h;
         auto reciprocal=reverse(inv);
+        progress(ECM_GW_GIANT);
+        const uint64_t batches=first<=last?1+(last-first)/p:0;
+        auto last_report=main_begin;
         for(uint64_t pos=first;pos<=last;){
             c.poll();const size_t count=static_cast<size_t>(std::min<uint64_t>(p,last-pos+1));
             auto part_begin=Clock::now();
@@ -762,10 +776,15 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal);
             stats.fold_seconds+=seconds(part_begin);
             pos+=count;++stats.blocks;stats.giants+=count;
+            if(o.progress && (stats.blocks==1 || stats.blocks==batches || seconds(last_report)>=1.0)) {
+                progress(ECM_GW_BATCH,stats.blocks,batches);
+                last_report=Clock::now();
+            }
         }
         // The descent only needs F, its reciprocal and the accumulated remainder.
         g_workspace=Array();
         if(!h.size)h=c.constant(1);
+        progress(ECM_GW_DESCENT);
         auto descent_begin=Clock::now();
         // Scaled remainder: s=rev(H)*inv(rev(F)) mod X^P. Each child takes
         // middle coefficients of s*rev(sibling F), requiring no node inverses.
@@ -780,6 +799,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             c.get(got.v,values[probe.index]);if(mpz_cmp(got.v,probe.product.v))throw std::runtime_error("Stage2 polynomial differs from direct GMP products");
             ++stats.checked_values;
         }}
+        progress(ECM_GW_GCD);
         const auto leaf_begin=Clock::now();
         Array product=c.constant(1);
         for(size_t i=0;i<p;++i)c.mul(product[0],values[i],product[0]);

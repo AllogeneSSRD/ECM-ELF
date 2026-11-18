@@ -40,6 +40,8 @@ Giant 横坐标直接写入 P+1 槽的 G 缓冲区，归一化后相邻两根就
 
 完成常规多项式路径时，DLL 的 `gwpoly-phases` 行分别报告 baby 点、F 建树、倒数、giant 点、G 建树、H 折叠、H 缩放、下降和叶积至整体 GCD 的秒数。分段 F 树在下降中重建的时间计入 descent。阶段图使用完整 NF，读档、发布与进程启动在引擎计时之外。[Prime95 阶段对照](../performance/STAGE2.md#宽位单线程阶段耗时)
 
+Stage2 ABI 3 会在曲线内输出规划、baby 点、F 树、倒数、giant 循环、下降和 GCD。设置 `log_level = "phases"` 可查看阶段，`"batches"` 另显示 giant 批次和估算剩余时间。GUI 直接消费同一进度事件，队列模式也写入共享日志。批次进度按本次执行范围计数，命中后重放原范围会重新计数。libecm 仍按曲线报告。
+
 `--gw-check` 在完整运行中额外使用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶结果比较，适合正确性验证，不计入默认性能测量。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
 
 ```powershell
@@ -70,7 +72,7 @@ tune_runtime_sample_limit = 10
 
 CPU 使用独立的 `[[cpu_stage2]]` 表，CUDA Stage1/Stage2 保留自身的表和矩阵。CPU 记录按处理器、GW 构建、目标位宽、承载指数、B1/B2、线程数、亲和性、内存预算、D/P 和实际 FFT 长度匹配。每个候选保存重复次数、平均整曲线用时、FFT 描述和外层指令集、实际块数与 giant 点数、内存规划估值，以及初始化、主循环、baby 点、F 树、倒数、giant 点、G 树、折叠、缩放、下降、叶积与 GCD 的阶段均值。测量包含 GW 执行的初始化和清理，排除调优预检、读写文件和结果发布。初始化和主循环为外层计时。`estimated_memory_mib` 是规划值。
 
-CPU 与 CUDA 使用同一发布锁写回文件。新版 worker 可加载只支持 Stage2 ABI 1 的 GWNUM DLL，继续按自动或指定 D 执行。运行时调优需要当前构建的 DLL 或静态版本。共享文件含 CPU 表时，CUDA worker 也应使用支持该表的版本。
+CPU 与 CUDA 使用同一发布锁写回文件。CPU 运行时调优需要 Stage2 ABI 2 或更新的 DLL，实时进度需要 ABI 3。ABI 1 仍可按自动或指定 D 执行。出现 `gwpoly-tune` 或 `gwpoly-progress` 的 ABI 提示时，用 `tools/build/build_gwnum_local.ps1 -Stage2` 构建本地 DLL，再放到 `ecm_stage2.exe` 旁。共享文件含 CPU 表时，CUDA worker 也应使用支持该表的版本。
 
 ## worktodo、停止与跨后端续算
 

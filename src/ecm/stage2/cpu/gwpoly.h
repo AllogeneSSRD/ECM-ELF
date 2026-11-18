@@ -11,6 +11,8 @@ struct Options {
     unsigned threads=1;
     int (*stop)()=nullptr;
     bool check=false;
+    ecm_gw_stage2_progress_fn progress=nullptr;
+    void* progress_context=nullptr;
 };
 struct Stats : ecm_gw_stage2_stats {
     ecm_gw_stage2_phases phases{};
@@ -22,6 +24,7 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
 const char* cpu();
 const char* identity();
 const char* load_error();
+unsigned stage2_abi();
 // x and a24 are residues modulo the actual N; they are never modified. True
 // means f is a proper divisor of N. Interruption and saturated GCD throw.
 bool stage2(mpz_t f,const mpz_t n,const mpz_t x,const mpz_t a24,

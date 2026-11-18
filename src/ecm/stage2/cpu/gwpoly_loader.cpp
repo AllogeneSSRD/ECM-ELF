@@ -12,6 +12,7 @@ struct Plugin {
     HMODULE module{};
     const ecm_gw_stage2_api* api{};
     const ecm_gw_stage2_api_v2* api_v2{};
+    const ecm_gw_stage2_api_v3* api_v3{};
     std::string error;
     Plugin() {
         wchar_t executable[32768];
@@ -31,6 +32,11 @@ struct Plugin {
         if (header && header->abi == 2 && header->size >= sizeof(ecm_gw_stage2_api_v2)) {
             auto v2 = reinterpret_cast<const ecm_gw_stage2_api_v2*>(header);
             if (v2->run_with_phases && v2->tune_candidates) api_v2 = v2;
+        }
+        const auto streamed = get(3);
+        if (api_v2 && streamed && streamed->abi == 3 && streamed->size >= sizeof(ecm_gw_stage2_api_v3)) {
+            const auto v3 = reinterpret_cast<const ecm_gw_stage2_api_v3*>(streamed);
+            if (v3->run_with_progress) api_v3 = v3;
         }
     }
     ~Plugin() { if (module) FreeLibrary(module); }
@@ -52,6 +58,7 @@ std::vector<uint32_t> encode(mpz_srcptr z, uint32_t words) {
 }
 }
 const char* load_error() { return plugin().api ? nullptr : plugin().error.c_str(); }
+unsigned stage2_abi() { return plugin().api_v3 ? 3 : plugin().api_v2 ? 2 : plugin().api ? 1 : 0; }
 const char* version() { return api().version; }
 const char* cpu() { return api().cpu; }
 const char* identity() { return api().build; }
@@ -73,9 +80,14 @@ bool stage2(mpz_t factor, const mpz_t n, const mpz_t x, const mpz_t a24,
     stats = {};
     char error[512]{};
     auto v2 = plugin().api_v2;
-    const int rc = v2
-        ? v2->run_with_phases(&request,output.data(),&stats,&stats.phases,error,sizeof(error))
-        : api().run(&request,output.data(),&stats,error,sizeof(error));
+    int rc;
+    if (const auto v3 = plugin().api_v3)
+        rc = v3->run_with_progress(&request,output.data(),&stats,&stats.phases,
+                                   o.progress,o.progress_context,error,sizeof(error));
+    else if (v2)
+        rc = v2->run_with_phases(&request,output.data(),&stats,&stats.phases,error,sizeof(error));
+    else
+        rc = api().run(&request,output.data(),&stats,error,sizeof(error));
     if (rc < 0) throw std::runtime_error(error);
     if (rc == 1) mpz_import(factor, words, -1, sizeof(uint32_t), 0, 0, output.data());
     return rc == 1;

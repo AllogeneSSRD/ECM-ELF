@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <exception>
 #include <sstream>
 #include <omp.h>
 #include "../../cpu/gwpoly.h"
@@ -182,6 +183,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         throw std::runtime_error("queue curve selection and target identity come from worktodo");
     if(o.d || o.dry || o.gw_check || o.export_only || o.gw_selftest ||
        o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::load_error())o.tune_profile.clear();
+    if(o.log_level<0)o.log_level=settings.log_level>=0?settings.log_level:stage2_log::phases;
     check_tune_path(o,{fs::u8path(o.ini),fs::u8path(o.save),fs::u8path(o.results),
                       fs::u8path(o.submission),fs::u8path(o.log),s2prod::executable()},
                     {fs::u8path(o.results),fs::u8path(o.submission)});
@@ -251,6 +253,56 @@ struct TunePlans {
                          candidates.end());
     }
 };
+struct CurveProgress {
+    const s2prod::QueueReport &report;
+    const SavedCurve &curve;
+    uint64_t b2;
+    size_t bits;
+    bool batches;
+    double phase_start=0;
+    std::exception_ptr error;
+
+    static void receive(void *context,const ecm_gw_stage2_progress *event) noexcept {
+        auto &stream=*static_cast<CurveProgress*>(context);
+        if(stream.error)return;
+        try { stream.emit(*event); }
+        catch(...) { stream.error=std::current_exception(); }
+    }
+
+    void emit(const ecm_gw_stage2_progress &e) {
+        std::ostringstream out;
+        if(e.kind==ECM_GW_BATCH) {
+            if(!batches || !e.batch || e.batch>e.batches)return;
+            const double time=std::max(0.,e.elapsed-phase_start);
+            out<<"batched_progress: batch="<<e.batch<<'/'<<e.batches<<" t="<<time
+               <<" s left="<<time*(e.batches-e.batch)/e.batch<<" s backend=gwpoly";
+        } else {
+            const char *phase=nullptr;
+            switch(e.kind) {
+            case ECM_GW_PLAN: phase="Plan Stage2"; break;
+            case ECM_GW_BABY: phase="Generate and normalize baby points"; break;
+            case ECM_GW_FTREE: phase="Build baby-point F tree"; break;
+            case ECM_GW_INVERSE: phase="Prepare polynomial inverse"; break;
+            case ECM_GW_GIANT: phase="Giant points, G tree and fold"; break;
+            case ECM_GW_DESCENT: phase="Normalize fold and descend F tree"; break;
+            case ECM_GW_GCD: phase="Accumulate leaf product and GCD"; break;
+            case ECM_GW_REPLAY: phase="Plan Stage2 (full-range replay)"; break;
+            }
+            if(!phase)return;
+            if(e.kind==ECM_GW_BABY) {
+                out<<"stage2_real: B1="<<curve.b1<<" B2="<<b2<<" D="<<e.d<<" P="<<e.poly_size
+                   <<" N_bits="<<bits<<" backend=gwpoly";
+                report(out.str(),false);
+                out.str("");
+            }
+            out<<"stage2_phase: "<<phase<<" previous="<<std::max(0.,e.elapsed-phase_start)
+               <<" s elapsed="<<e.elapsed<<" s";
+            phase_start=e.elapsed;
+        }
+        report(out.str(),false);
+    }
+};
+
 void persist_tune(const Options &o,const std::optional<TuneObservation> &pending) {
     if(!pending)return;
     try {
@@ -261,7 +313,8 @@ void persist_tune(const Options &o,const std::optional<TuneObservation> &pending
 }
 bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_a24,
                const std::string &publication_task,uint64_t order,ecm_results::Submission &report,
-               std::string &json,double &elapsed,TunePlans &tune,std::optional<TuneObservation> &pending) {
+               std::string &json,double &elapsed,TunePlans &tune,std::optional<TuneObservation> &pending,
+               const s2prod::QueueReport &log) {
     const auto cancel=prepared_a24?abort_queue_curve:stopped;
     if(cancel())return false;
     Integer n,x,d,px,py,a24,f;
@@ -289,10 +342,16 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
             if(selected.backend=="gwpoly"){
                 ecm_gwpoly::Options gw;gw.threads=static_cast<unsigned>(o.threads);gw.memory_mib=o.memory;
                 gw.exponent=o.exponent;gw.d=o.d;gw.stop=cancel;gw.check=o.gw_check;
+                CurveProgress progress{log,r,o.b2,mpz_sizeinbase(n.v,2),o.gui || stage2_log::enabled(stage2_log::batches)};
+                if(o.gui || stage2_log::enabled(stage2_log::phases)) {
+                    gw.progress=CurveProgress::receive;
+                    gw.progress_context=&progress;
+                }
                 ecm_gwpoly::Stats stats{};
                 std::optional<TuneObservation> observation;
                 std::error_code tune_error;
-                if(!o.tune_profile.empty() && (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error))) {
+                if(ecm_gwpoly::stage2_abi()>=2 && !o.tune_profile.empty() &&
+                   (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error))) {
                     try {
                         const auto &plans=tune.get(r,n.v,o.b2,gw);
                         if(!plans.empty()) {
@@ -309,8 +368,8 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                             if(plan!=plans.end()) {
                                 observation=TuneObservation{std::move(key),*plan,{}};
                                 gw.d=d;
-                                if(verbose)std::cout<<"gwpoly-tune: D="<<d<<" P="<<plan->poly_size
-                                    <<" FFT="<<plan->fft_length<<(o.tune_runtime?" runtime":" read-only")<<std::endl;
+                                if(verbose)log("gwpoly-tune: D="+std::to_string(d)+" P="+std::to_string(plan->poly_size)+
+                                    " FFT="+std::to_string(plan->fft_length)+(o.tune_runtime?" runtime":" read-only"),false);
                             }
                         }
                     } catch(const std::exception &error) {
@@ -333,6 +392,7 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                     try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;}
                     catch(...){if(cancel())return false;throw;}
                 }
+                if(progress.error)std::rethrow_exception(progress.error);
                 const double trial_seconds=std::chrono::duration<double>(
                     std::chrono::steady_clock::now()-trial_start).count();
                 if(o.tune_runtime && !stage && observation &&
@@ -397,7 +457,6 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
                         fs::path(paths.worktodo.string()+".worker"+std::to_string(cpu.worker)+".stage2.lock")},
                     {paths.results,fs::u8path(cpu.submission)});
     TunePlans tune;
-    stage2_log::level=cpu.log_level>=0?cpu.log_level:settings.log_level>=0?settings.log_level:stage2_log::curve;
     if(cpu.stop_handle) {
         s2prod::inherited_stop_event=reinterpret_cast<HANDLE>(cpu.stop_handle);
         if(WaitForSingleObject(s2prod::inherited_stop_event,0)==WAIT_FAILED)
@@ -441,7 +500,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             SavedCurve row{record.n,hit?s2prod::number(f.v):record.x,record.sigma,record.b1,record.index,hit};
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
-            if(!calculate(selected,row,&record.a24,state.publication_task,record.index,report,json,elapsed,tune,pending))return false;
+            if(!calculate(selected,row,&record.a24,state.publication_task,record.index,report,json,elapsed,tune,pending,queue.report))return false;
             const auto outcome=s2prod::checkpoint_outcome(record,b2,ecm_results::submission_json(report,n.v));
             if(state.reserved.empty())state.reserved.push_back({position});
             queue.commit(position,outcome);
@@ -479,6 +538,17 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
             launch=&standalone;
         }
         const auto o=options(argc,argv,*launch);
+        stage2_log::level=o.log_level;
+        if((o.backend=="gwpoly" || o.backend=="auto") && !ecm_gwpoly::load_error() && !o.dry &&
+           !o.export_only && !o.gw_selftest) {
+            const auto abi=ecm_gwpoly::stage2_abi();
+            if(abi<2 && !o.tune_profile.empty())
+                std::cerr<<"gwpoly-tune: gwnum.dll Stage2 ABI "<<abi
+                         <<" cannot tune; rebuild the DLL with -Stage2 (ABI 2 or newer).\n";
+            if(abi<3 && (o.gui || stage2_log::enabled(stage2_log::phases)))
+                std::cerr<<"gwpoly-progress: gwnum.dll Stage2 ABI "<<abi
+                         <<" cannot stream progress; rebuild the DLL with -Stage2 (ABI 3).\n";
+        }
         if (!o.export_only) ecm_platform::apply_worker_cpu_affinity(o.cpu_affinity);
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
         if(o.export_only) {
@@ -499,13 +569,16 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
         ecm_stage1_install_stop_handler();if(o.stop_handle && !ecm_stage1_set_stop_handle(o.stop_handle))throw std::runtime_error("invalid stop handle");
         std::cout<<"CPU Edwards Stage2 backend="<<o.backend<<" threads="<<o.threads<<" memory_mib="<<o.memory<<" libecm="<<ecm_version()<<std::endl;
         TunePlans tune;
+        const s2prod::QueueReport log=[](const std::string &message,bool error) {
+            (error?std::cerr:std::cout)<<message<<std::endl;
+        };
         for(uint64_t i=o.skip;i<end;++i) {
             ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             const auto &r=rows[i];
             Integer n;mpz_set_str(n.v,r.n.c_str(),16);
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
-            if(!calculate(o,r,nullptr,publication_task,i+1,report,json,elapsed,tune,pending))return 130;
+            if(!calculate(o,r,nullptr,publication_task,i+1,report,json,elapsed,tune,pending,log))return 130;
             ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             ecm_results::publish_submission(o.submission,report,n.v);
             ecm_results::append_text_record(o.results,json);
