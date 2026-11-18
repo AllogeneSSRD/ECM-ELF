@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ecm_cpu_tune {
@@ -13,8 +14,15 @@ struct ThreadLayout {
     ThreadCounts threads{}, smt_extra{};
 };
 
+struct CpuIdentity {
+    std::string name, supported;
+};
+
+CpuIdentity cpu_identity(std::string_view description);
+
 struct Key {
-    std::string cpu, gw_version;
+    CpuIdentity cpu;
+    std::string gw_version;
     ThreadLayout layout;
     bool mersenne = false;
     uint64_t width = 0, b1 = 0, b2 = 0;

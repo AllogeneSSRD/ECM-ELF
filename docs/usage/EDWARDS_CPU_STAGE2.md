@@ -70,13 +70,13 @@ tune_runtime_sample_limit = 10
 
 路径默认位于 `ecm.toml` 旁，支持 worker 覆盖。CLI `--tune-profile FILE` 优先，相对路径以启动目录为准。CLI 的 `--tune-min-repeats` 和 `--tune-runtime-samples` 可覆盖重复数和每个候选的样本上限。达到上限后保留已有均值。`--tune-runtime 0` 只读复用合格记录。将 `tune_file` 或 `--tune-profile` 显式置空可以停用读写。指定非零 `--d`、`--dry-run` 或 `--gw-check` 时直接走相应执行路径。
 
-CPU 与 CUDA 可以共用同一个 `tune.toml`。CPU 使用 `[cpu_stage2]` 的 `format = 2` 矩阵，每行对应一个 CPU 型号、GWNUM 版本、P/E 线程数、模数模式、系数 FFT 布局、polymult 指令集、B1/B2、D/P 和 F 树方案。行内还记录 `planned_mib`、重复次数、整曲线平均耗时、样本标准差、实测位宽区间、程序版本和 UTC 更新时间。计时包含 GW 初始化及清理，排除调优预检、读写文件和结果发布。分项耗时仍在运行日志中。
+CPU 与 CUDA 可以共用同一个 `tune.toml`。CPU 使用 `[cpu_stage2]` 的 `format = 3`，矩阵上方的 `cpu` 和 `supported` 分别记录型号和支持的指令集。不同的型号或指令集组合各占一张矩阵，附加表为 `[cpu_stage2.host.N]`。CPU 与 CUDA 矩阵共用列宽对齐方式。CPU 每行记录 GWNUM 版本、P/E 线程数、模数模式、`polymult_isa`、`fft_length`、B1/B2、D/P、F 树方案、`planned_mib`、重复次数、整曲线平均耗时、样本标准差、实测位宽区间、程序版本和 UTC 更新时间。计时包含 GW 初始化及清理，排除调优预检、读写文件和结果发布。完整 FFT 描述和分项耗时仍在运行日志中。
 
 默认每个物理核只分配一个逻辑 CPU，先选 Windows 报告的性能核，再选能效核。相同的两组双 P 核都记为 `threads = [2, 0]`。显式 `cpu_affinity` 列表用完其中的独立物理核后，才会使用列表内的 SMT 兄弟线程。出现这类样本时，矩阵增加 `smt_extra` 列。CPU Stage2 设置 `cpu_affinity = "none"` 时由系统调度，暂停调优读写。
 
-不同位宽或预算可复用同一行。程序先用当前模数、D 和预算检查 FFT 布局、误差余量及 F 树方案，再在合格候选中查表。`max_exponent` 是该系数 FFT 在当前多项式余量下的规划上界，普通模数的内部 FFT 指数可能大于实际位宽。`tested_min`、`tested_max` 记录已有样本的位宽，梅森承载时记录承载指数。`planned_mib` 是规划估值。
+不同位宽或预算可复用同一行。程序先用当前模数、D 和预算检查 FFT 布局、误差余量及 F 树方案，再按 FFT 长度、polymult 指令集、F 树方案和规划内存等条件匹配。保存新样本前会校验实际 FFT 描述与本次预检一致。`max_exponent` 是该系数 FFT 在当前多项式余量下的规划上界，普通模数的内部 FFT 指数可能大于实际位宽。`tested_min`、`tested_max` 记录已有样本的位宽，梅森承载时记录承载指数。`planned_mib` 是规划估值。
 
-CPU 与 CUDA 使用同一发布锁和原子替换。旧 `[[cpu_stage2]]` 样本跳过，首次保存新样本时会替换旧 CPU 表。运行时调优需要 Stage2 ABI 4。较旧 DLL 仍可执行 Stage2，ABI 3 支持实时进度。可用 `tools/build/build_gwnum_local.ps1 -Stage2` 构建新版 DLL，再放到 `ecm_stage2.exe` 旁。共用 tune 文件时，CPU 和 CUDA worker 均应更新到支持新矩阵的版本。
+CPU 与 CUDA 使用同一发布锁和原子替换。原 `format = 2` 矩阵可以直接读取，下一次合格观测会将现有样本转写为新版。更早的 `[[cpu_stage2]]` 样本跳过。运行时调优需要 Stage2 ABI 4。较旧 DLL 仍可执行 Stage2，ABI 3 支持实时进度。可用 `tools/build/build_gwnum_local.ps1 -Stage2` 构建新版 DLL，再放到 `ecm_stage2.exe` 旁。共用 tune 文件时，CPU 和 CUDA worker 均应更新到支持新矩阵的版本。
 
 ## worktodo、停止与跨后端续算
 

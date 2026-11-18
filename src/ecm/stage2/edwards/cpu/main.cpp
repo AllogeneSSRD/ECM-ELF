@@ -357,7 +357,7 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
                     try {
                         const auto &plans=tune.get(r,n.v,o.b2,gw);
                         if(!plans.empty()) {
-                            ecm_cpu_tune::Key key{ecm_gwpoly::cpu(),ecm_gwpoly::version(),*o.thread_layout,
+                            ecm_cpu_tune::Key key{ecm_cpu_tune::cpu_identity(ecm_gwpoly::cpu()),ecm_gwpoly::version(),*o.thread_layout,
                                 gw.exponent != 0,gw.exponent ? gw.exponent : mpz_sizeinbase(n.v,2),r.b1,o.b2};
                             const auto d=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
                             const auto plan=std::find_if(plans.begin(),plans.end(),[&](const auto &p){return p.d==d;});

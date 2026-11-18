@@ -31,9 +31,39 @@ def read_tune(path):
 
 
 def matrix_rows(table):
-    assert table["format"] == 2
-    columns, *rows = table["matrix"]
-    return [dict(zip(columns, row, strict=True)) for row in rows]
+    assert table["format"] == 3
+    records = []
+    for host in [table, *table.get("host", {}).values()]:
+        columns, *rows = host["matrix"]
+        assert "cpu" not in columns and "supported" not in columns and "fft_layout" not in columns
+        assert columns[columns.index("polymult_isa") + 1] == "fft_length"
+        records.extend(dict(zip(columns, row, strict=True), cpu=host["cpu"], supported=host["supported"])
+                       for row in rows)
+    return records
+
+
+def assert_aligned_cpu_matrices(path):
+    cpu = False
+    edges = []
+    decoder = json.JSONDecoder()
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        if line.startswith("["):
+            cpu = line.startswith(("[cpu_stage2]", "[cpu_stage2.host."))
+            edges = []
+        elif cpu and line.startswith("    ["):
+            at = 5
+            current = []
+            while True:
+                while line[at] == " ":
+                    at += 1
+                _, at = decoder.raw_decode(line, at)
+                current.append(at)
+                if line[at] == "]":
+                    break
+                assert line[at] == ","
+                at += 1
+            assert not edges or current == edges, line
+            edges = current
 
 
 def read_results(path):
@@ -43,7 +73,8 @@ def read_results(path):
 
 
 def verify_tune(row, memory=MEMORY_MIB):
-    assert row["cpu"] and row["gw_version"] and row["fft_layout"] and row["polymult_isa"]
+    assert row["cpu"] and " supported:" not in row["cpu"] and row["supported"]
+    assert row["gw_version"] and row["polymult_isa"]
     assert row["version"] and row["updated_at"].endswith("UTC")
     assert (row["tested_min"], row["tested_max"], row["b1"], row["b2"],
             row["threads"], row["modulus_mode"]) == (127, 127, B1, B2, [1, 0], "mersenne")
@@ -144,6 +175,7 @@ def main():
     document = read_tune(f.tune)
     tuned = matrix_rows(document.pop("cpu_stage2"))
     assert document == tomllib.loads(GPU_TOML)
+    assert_aligned_cpu_matrices(f.tune)
     assert {(row["d"], row["p"], row["fft_length"]) for row in tuned} == set(observed)
     for row in tuned:
         verify_tune(row)
@@ -162,6 +194,30 @@ def main():
     assert rebudgeted["d"] == winner["d"] and f.tune.read_bytes() == state
     assert "gwpoly-tune: D=" in (out / "other_budget" / "run.log").read_text(encoding="utf-8")
     print("PASS read-only fastest reuse, explicit D and identical layouts across memory budgets", flush=True)
+
+    migration = out / "format2.toml"
+    columns = ["cpu", "threads", "gw_version", "modulus_mode", "fft_length", "fft_layout", "polymult_isa",
+               "max_exponent", "b1", "b2", "d", "p", "f_tree_splits", "planned_mib", "repeats", "mean_seconds",
+               "stddev_seconds", "tested_min", "tested_max", "version", "updated_at"]
+    other = {**tuned[0], "cpu": "Fixture secondary processor"}
+    rows = []
+    for row in [*tuned, other]:
+        old = {**row, "cpu": f'{row["cpu"]} supported: {row["supported"]}',
+               "fft_layout": f'{row["polymult_isa"]} FFT length {row["fft_length"]}'}
+        rows.append([old[column] for column in columns])
+    migration.write_text(GPU_TOML + "\n[cpu_stage2]\nformat = 2\nmatrix = [\n" +
+                         "".join(f"    {json.dumps(row)},\n" for row in [columns, *rows]) + "]\n",
+                         encoding="utf-8")
+    original_v2 = migration.read_bytes()
+    from_v2, = f.save_run("format2_read_only", "--tune-profile", migration, "--tune-runtime", 0)
+    assert from_v2["d"] == winner["d"] and migration.read_bytes() == original_v2
+    f.save_run("format2_migrate_at_cap", "--tune-profile", migration)
+    migrated = read_tune(migration)
+    assert sorted(matrix_rows(migrated.pop("cpu_stage2")), key=lambda r: (r["cpu"], r["d"])) == sorted(
+        [*tuned, other], key=lambda r: (r["cpu"], r["d"]))
+    assert migrated == tomllib.loads(GPU_TOML)
+    assert_aligned_cpu_matrices(migration)
+    print("PASS format-2 reuse, capped migration, separate CPUs and aligned new matrices", flush=True)
 
     save_bytes = f.save.read_bytes()
     assert f.finish(f.start("save_alias", *f.save_flags(1), "--tune-profile", f.save), expected=1) == []
@@ -226,13 +282,14 @@ def main():
     if args.portable_fixture:
         executable = args.portable_fixture.resolve(strict=True)
         assert subprocess.check_output([executable, "--cpu-thread-layout"], timeout=60).strip() == b"true"
-        for path in (queue_tune, shared):
+        for path in (queue_tune, shared, migration):
             serialized = subprocess.check_output([executable, "--roundtrip", path], timeout=60)
             restored = tomllib.loads(serialized.decode("utf-8"))
             current = read_tune(path)
             assert restored["cpu_stage2"] == current["cpu_stage2"]
             if "ntt" in current:
                 assert "ntt" in restored
+            if path == shared:
                 path.write_bytes(serialized)
                 f.save_run("after_gpu_serialization", "--tune-profile", path, "--tune-runtime-samples", 3)
                 after = read_tune(path)

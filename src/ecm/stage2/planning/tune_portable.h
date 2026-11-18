@@ -1,6 +1,7 @@
 #pragma once
 #include "tune_ecm.h"
 #include "cpu_tune_section.h"
+#include "tune_matrix_text.h"
 #include "tune_ntt_profile.h"
 #include "ecm/stage2/probability.h"
 #include "ecm/stage2/planning/stage1_cost.h"
@@ -862,9 +863,8 @@ struct Profile {
             std::vector<std::vector<std::string>> matrix(1);
             for(const auto &c:columns)matrix[0].push_back(ecm_stage2::tune::portable::quoted(c));
             for(const auto &s:rows){std::vector<std::string> row;for(const auto &c:columns){const auto at=s.find(c);row.push_back(at==s.end()?"\"\"":compact_literal(at->second));}matrix.push_back(std::move(row));}
-            std::vector<size_t> widths(columns.size());for(const auto &row:matrix)for(size_t i=0;i<row.size();++i)widths[i]=std::max(widths[i],row[i].size());
-            out<<"\n["<<section<<"]\nmatrix = [\n";
-            for(const auto &row:matrix){out<<"    [";for(size_t i=0;i<row.size();++i){if(i)out<<", ";out<<std::setw(int(widths[i]))<<row[i];}out<<"],\n";}out<<"]\n";
+            out<<"\n["<<section<<"]\n";
+            write_aligned_matrix(out,matrix);
         };
         std::map<Word,std::vector<Fields>> groups;
         for(const auto &s:samples){auto row=compact_sample(s);groups[uint(s,"target_bits")].push_back(std::move(row));}
