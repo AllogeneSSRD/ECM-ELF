@@ -143,17 +143,21 @@ struct Context {
         plan=pm.plan;
         check("polynomial convolution");return out;
     }
-    void monic_product(const Array &a,const Array &b,Array &out,bool defer=false){
-        const size_t degree=a.size+b.size-2;++stats.polymults;
+    void monic_coefficients(gwnum *a,size_t a_degree,gwnum *b,size_t b_degree,gwnum *out,bool defer){
+        const size_t degree=a_degree+b_degree;
+        ++stats.polymults;
         polymult_set_num_threads(&pm,degree<64?1:pm.max_num_threads);
         const int base_options=POLYMULT_INVEC1_MONIC|POLYMULT_INVEC2_MONIC|(defer?POLYMULT_NO_UNFFT:POLYMULT_NEXTFFT);
-        auto &plan=plans[{a.size-1,b.size-1,degree,0,base_options,static_cast<unsigned>(pm.num_threads)}];
+        auto &plan=plans[{a_degree,b_degree,degree,0,base_options,static_cast<unsigned>(pm.num_threads)}];
         int options=base_options|POLYMULT_SAVE_PLAN;
         if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
-        polymult(&pm,a.v,a.size-1,b.v,b.size-1,out.v,degree,
-                 options);
+        polymult(&pm,a,a_degree,b,b_degree,out,degree,options);
         plan=pm.plan;
-        u64togw(&gw,1,out[degree]);check("monic polynomial product");
+        check("monic polynomial product");
+    }
+    void monic_product(const Array &a,const Array &b,Array &out,bool defer=false){
+        monic_coefficients(a.v,a.size-1,b.v,b.size-1,out.v,defer);
+        u64togw(&gw,1,out[a.size+b.size-2]);
     }
     Array convolution(const Array &a,const Array &b){return convolution(view(a),view(b),0,a.size+b.size-1);}
     Array scaled_child(const Array &parent,const Array &sibling,size_t count){
@@ -309,35 +313,57 @@ std::unique_ptr<Tree> tree_skeleton(Context &c,size_t lo,size_t hi,size_t depth,
 }
 std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,bool retain,Array *workspace_a,Array *workspace_b){
     if(!retain){
-        const auto count=hi-lo;Array local_a,local_b;
-        if(!workspace_a){local_a=Array(c.gw,2*count);local_b=Array(c.gw,2*count);workspace_a=&local_a;workspace_b=&local_b;}
-        if(!workspace_b || workspace_a->size<2*count || workspace_b->size<2*count)throw std::runtime_error("G tree workspace too small");
-        Array *source=workspace_a,*destination=workspace_b;
-        Array row(c.gw,source->v,2*count);std::vector<size_t> degrees(count,1);
-        for(size_t i=0;i<count;++i){gwcopy(&c.gw,roots[lo+i],row[2*i]);gwsmallmul(&c.gw,-1,row[2*i]);u64togw(&c.gw,1,row[2*i+1]);}
-        while(degrees.size()>1){
-            struct Job {size_t a,da,b,db,out;};std::vector<Job> jobs;std::vector<size_t> next;
-            size_t offset=0,out=0;
-            for(size_t i=0;i<degrees.size();i+=2){
-                const auto a=degrees[i],b=i+1<degrees.size()?degrees[i+1]:0;
-                jobs.push_back({offset,a,offset+a+1,b,out});next.push_back(a+b);
-                offset+=a+1+(b?b+1:0);out+=a+b+1;
-            }
-            Array result(c.gw,destination->v,out);
-            tree_jobs(c,jobs.size(),[&](Context &worker,size_t begin,size_t end){for(size_t j=begin;j<end;++j){
-                const auto &job=jobs[j];Array dest(worker.gw,result.v+job.out,job.da+job.db+1);
-                if(!job.db){for(size_t i=0;i<=job.da;++i)gwcopy(&worker.gw,row[job.a+i],dest[i]);}
-                else {Array a(worker.gw,row.v+job.a,job.da+1),b(worker.gw,row.v+job.b,job.db+1);worker.monic_product(a,b,dest,jobs.size()>=128);}
-            }});
-            if(jobs.size()>=128){
-                View coefficients;coefficients.reserve(count);
-                for(const auto &job:jobs)for(size_t i=0;i<job.da+job.db;++i)coefficients.push_back(result[job.out+i]);
-                polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
-                poly_unfft_fft_coefficients(&c.pm,coefficients.data(),coefficients.size());c.check("G tree coefficient normalization");
-            }
-            row=std::move(result);degrees=std::move(next);std::swap(source,destination);
+        const size_t count=hi-lo, row_size=count+1;
+        Array local_a,local_b;
+        if(!workspace_a){
+            local_a=Array(c.gw,row_size);local_b=Array(c.gw,row_size);
+            workspace_a=&local_a;workspace_b=&local_b;
         }
-        auto t=std::make_unique<Tree>(lo,hi);t->polynomial=Array(c.gw,row.v,count+1);
+        if(!workspace_b || workspace_a->size<row_size || workspace_b->size<row_size)
+            throw std::runtime_error("G tree workspace too small");
+        gwnum *row=workspace_a->v, *next=workspace_b->v;
+        // (X-x)(X-y) = X^2 - (x+y)X + xy.
+        const size_t pairs=(count+1)/2;
+        tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
+            for(size_t i=begin;i<end;++i){
+                const auto offset=2*i;
+                auto x=roots[lo+offset];
+                if(offset+1==count){
+                    gwcopy(&worker.gw,x,row[offset]);
+                    gwsmallmul(&worker.gw,-1,row[offset]);
+                }else{
+                    auto y=roots[lo+offset+1];
+                    worker.mul(x,y,row[offset]);
+                    gwadd3o(&worker.gw,x,y,row[offset+1],GWADD_FORCE_NORMALIZE);
+                    gwsmallmul(&worker.gw,-1,row[offset+1]);
+                }
+            }
+            worker.check("linear factor pairs");
+        });
+        // Intermediate nodes contain only the coefficients below the leading one.
+        // Each layer therefore occupies exactly count consecutive slots.
+        for(size_t width=2;width<count;width*=2){
+            const size_t stride=2*width,jobs=(count+stride-1)/stride;
+            tree_jobs(c,jobs,[&](Context &worker,size_t begin,size_t end){
+                for(size_t j=begin;j<end;++j){
+                    const size_t offset=j*stride,remaining=count-offset;
+                    if(remaining<=width){
+                        for(size_t i=offset;i<count;++i)gwcopy(&worker.gw,row[i],next[i]);
+                    }else{
+                        worker.monic_coefficients(row+offset,width,row+offset+width,
+                            std::min(width,remaining-width),next+offset,jobs>=128);
+                    }
+                }
+            });
+            if(jobs>=128){
+                polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
+                poly_unfft_fft_coefficients(&c.pm,next,count);
+                c.check("G tree coefficient normalization");
+            }
+            std::swap(row,next);
+        }
+        u64togw(&c.gw,1,row[count]);
+        auto t=std::make_unique<Tree>(lo,hi);t->polynomial=Array(c.gw,row,row_size);
         if(local_a.v){t->rows.push_back(std::move(local_a));t->rows.push_back(std::move(local_b));}
         return t;
     }
@@ -539,7 +565,8 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
                 c.check("small-prime ladder");
             });
         }
-        Array g_workspace_a(c.gw,2*p),g_workspace_b(c.gw,2*p);
+        const auto g_row_size=p+1;
+        Array g_workspace_a(c.gw,g_row_size),g_workspace_b(c.gw,g_row_size);
         stats.init_seconds=seconds(begin);main_begin=Clock::now();main_started=true;
         Array h;
         for(uint64_t pos=first;pos<=last;){
@@ -601,7 +628,8 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
 void selftest(unsigned threads){
     Integer n,f,x,y,z;mpz_set_ui(n.v,1000003);mpz_mul_ui(n.v,n.v,1000033);
     Options o;o.threads=threads;Stats stats{};Context c(n.v,f.v,o,stats,512);
-    for(size_t count:{1u,2u,3u,4u,5u,8u,17u,32u,65u,129u,257u}){
+    // At 509 roots a lone tail crosses the 128-job batched normalization boundary.
+    for(size_t count:{1u,2u,3u,4u,5u,8u,17u,32u,65u,129u,257u,509u}){
         Array roots(c.gw,count);std::vector<uint64_t> expected_roots(count);
         for(size_t i=0;i<count;++i){expected_roots[i]=7919*(i+1)+17;u64togw(&c.gw,expected_roots[i],roots[i]);}
         auto t=tree(c,roots,0,count,true);auto rf=reverse(t->polynomial);
@@ -621,7 +649,7 @@ void selftest(unsigned threads){
         auto product=c.convolution(h,t->polynomial);auto rem=c.remainder(product,t->polynomial,inv);
         for(size_t i=0;i<rem.size;++i){c.get(x.v,rem[i]);if(mpz_sgn(x.v))throw std::runtime_error("Polynomial remainder differs from exact multiple");}
         // Nonzero remainders across several folds, including packed G workspaces.
-        Array accumulator=c.copy(h),wa(c.gw,2*count),wb(c.gw,2*count);
+        Array accumulator=c.copy(h),wa(c.gw,count+1),wb(c.gw,count+1);
         std::vector<std::unique_ptr<Integer>> expected;
         for(size_t i=0;i<count;++i){
             auto value=std::make_unique<Integer>();mpz_set_ui(value->v,0);
