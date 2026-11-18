@@ -130,15 +130,15 @@ struct Context {
     void mul(gwnum a,gwnum b,gwnum out){gwmul3(&gw,a,b,out,GWMUL_PRESERVE_S1|GWMUL_PRESERVE_S2);}
     Array constant(uint64_t x){Array a(gw,1);u64togw(&gw,x,a[0]);return a;}
     Array copy(const Array &a){Array b(gw,a.size);for(size_t i=0;i<a.size;++i)gwcopy(&gw,a[i],b[i]);return b;}
-    Array convolution(View a,View b,size_t first,size_t count){
+    Array convolution(View a,View b,size_t first,size_t count,const Array *subtract_from=nullptr){
         if(a.empty() || b.empty() || !count)throw std::runtime_error("Empty polynomial multiplication");
         Array out(gw,count);++stats.polymults;
         polymult_set_num_threads(&pm,a.size()+b.size()<64?1:pm.max_num_threads);
-        const int base_options=POLYMULT_MULMID|POLYMULT_NEXTFFT;
+        const int base_options=POLYMULT_MULMID|POLYMULT_NEXTFFT|(subtract_from?POLYMULT_FNMADD:0);
         auto &plan=plans[{a.size(),b.size(),count,first,base_options,pm.num_threads}];
         int options=base_options|POLYMULT_SAVE_PLAN;
         if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
-        polymult2(&pm,a.data(),a.size(),b.data(),b.size(),out.v,count,nullptr,0,first,
+        polymult2(&pm,a.data(),a.size(),b.data(),b.size(),out.v,count,subtract_from?subtract_from->v:nullptr,0,first,
                   options);
         plan=pm.plan;
         check("polynomial convolution");return out;
@@ -188,9 +188,8 @@ struct Context {
         if(t.size<=degree)return copy(t);
         const size_t k=t.size-degree;auto rt=reverse(t);rt.resize(k);auto rv=view(inv);rv.resize(k);
         auto qr=convolution(rt,rv,0,k);auto q=reverse(qr);
-        auto low=convolution(q,view(f),0,degree);
-        for(size_t i=0;i<degree;++i){gwfft(&gw,t[i],t[i]);gwsub3o(&gw,t[i],low[i],low[i],GWADD_FORCE_NORMALIZE);}
-        return low;
+        // The monic term of F contributes only at degree and above.
+        return convolution(q,View(f.v,f.v+degree),0,degree,&t);
     }
     void divisor(gwnum z){
         Integer v;get(v.v,z);mpz_gcd(factor,v.v,n);
