@@ -8,13 +8,21 @@
 
 配置定义还用于生成 C++ 绑定、[默认值头](../../src/ecm/platform/generated/configuration_defaults.h)、一致性清单和逐键参考。旧名和 worker 覆盖见对应语言的参考页。[中文](../ECM_TOML_REFERENCE.zh-CN.md) · [English](../ECM_TOML_REFERENCE.en.md)
 
+## Worker CPU 资源
+
+`[stage1] cpu.threads` 控制 CPU 算术及其准备工作，`[stage1] gpu.init_threads` 控制 Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 CPU 曲线构造。两项 `0` 均由各后端决定。GPU 构造线程受可用 CPU、曲线数和适用的初始化内存预算约束。`[stage2] cpu.threads` 只控制 CPU Stage2，默认 1。三项都可独立在 `[worker.N]` 覆盖。
+
+`[shared] cpu_affinity` 或 `[worker.N] shared.cpu_affinity` 为同一 worker 的两个阶段设置公共 CPU 集合，包括 GPU 的主机工作和 Stage2 曲线子进程。写法为逻辑 CPU 编号和闭区间，例如 `"0,2,4-7"`。去重后应用集合，空串、`auto` 或 `none` 按系统现有调度运行。Windows 单处理器组使用进程 affinity mask，多组使用默认 CPU Sets，编号为 `组号 × 64 + 组内编号`。Windows 系统或外部约束的 affinity mask 优先于 CPU Sets。Linux 在创建计算线程前应用调度掩码，由计算线程继承。不可用的 CPU 编号会停止启动。应用的集合写入 `worker_cpu_affinity` 启动输出。见 [Windows CPU Sets](https://learn.microsoft.com/en-us/windows/win32/procthread/cpu-sets)。
+
+旧 `stage1.cpu_threads` 和 v1 `stage1.stage1_threads` 继续在同一层为两项新键提供回退。worker 层优先于全局层，同一层内新键优先。`--stage1-threads` 仍可同时覆盖两项，新选项 `--cpu-threads` 或 `--gpu-init-threads` 可以分别覆盖。未设置共享亲和性时，旧 `stage1.cpu_affinity` 继续使用 Stage1 逐线程绑核；显式 `--affinity` 在本次 Stage1 运行中沿用旧语义。
+
 ## 升级旧配置
 
 新文件在首个表头之前写根级整数 `config_version = 3`。读取 v1、v2 时沿用该版的键、取值和路径规则。无版本标记的文件按 v1 读取。版本未知、声明重复或放错分区时，读取器报告文件及行号。
 
 从仓库根目录执行以下命令预览转换。移除 `--preview` 后，工具默认写入同目录的 `ecm.v3.toml`。使用 Python 3.11 或以上版本。旧日志或完成文件有多个目标时，使用 `--log-file`、`--finished-file` 选定共享目标。需要解析相对的旧 Stage1 路径时提供 `--stage1-directory`。旧配置同时启用两路交接时，使用 `--handoff-mode` 选定新模式。
 
-CUDA 两阶段共用 `[shared] tune_file`，worker 可通过 `shared.tune_file` 为两个阶段一并覆盖。默认使用配置目录的 `tune.toml`。旧配置在同一 worker 上选择了不同的路径时，迁移会报告两阶段的有效值。`--tune-file PATH` 可为所有 worker 指定一个共用路径，原调优数据文件保留在原处。
+CUDA 两阶段共用 `[shared] tune_file`，worker 可通过 `shared.tune_file` 为两个阶段一并覆盖。默认使用配置目录的 `tune.toml`。旧配置在同一 worker 上选择了不同的路径时，迁移会报告两阶段的有效值。`--tune-file PATH` 可为所有 worker 指定一个共用路径，原调优数据文件保留在原处。迁移也会将旧 Stage1 线程数补入同层缺失的新键，保留显式的新值。旧 Stage1 绑核规则保留原作用域。
 
 ```powershell
 python tools/refactor/migrate_ecm_config.py ecm.toml --preview

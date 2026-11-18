@@ -365,9 +365,10 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         std::vector<unsigned> fallback;
         const auto dict_started = Clock::now();
         if (edwards) {
-            const unsigned available = std::max(1u, std::thread::hardware_concurrency());
+            const unsigned available = opt.execution.worker_cpu_count ? opt.execution.worker_cpu_count :
+                std::max(1u, std::thread::hardware_concurrency());
             const unsigned automatic = p >= 4096 && curves >= 8 ? 4 : 1;
-            const unsigned requested = opt.execution.stage1_threads ? opt.execution.stage1_threads : automatic;
+            const unsigned requested = opt.execution.gpu_init_threads ? opt.execution.gpu_init_threads : automatic;
             // Reserve complete prefix snapshots plus ordinary GMP temporaries per worker.
             const size_t scratch_bytes = size_t(3 * 64 + 48) * words * sizeof(uint32_t);
             const size_t affordable = host_required < host_limit ? (host_limit - host_required) / scratch_bytes : 0;

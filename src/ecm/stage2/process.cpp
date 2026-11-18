@@ -121,6 +121,8 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
     }
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
+    if (!o.worker_cpu_affinity.empty())
+        cmd += L" --queue-cpu-affinity " + quote(std::wstring(o.worker_cpu_affinity.begin(), o.worker_cpu_affinity.end()));
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
     if(o.groot_layout>=0)arg(L"--groot-layout",uint64_t(o.groot_layout));

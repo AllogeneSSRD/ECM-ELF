@@ -13,6 +13,7 @@ struct ParsedCli {
     ecm_stage1::Selection selection{};
     /* Both CPU curve models share the implementation choice and thread count. */
     uint32_t stage1_threads = 0;         // 0 = auto
+    uint32_t cpu_threads = 0, gpu_init_threads = 0;
     int naf_w = 0;                       // Edwards NAF window; 0 = built-in default
     std::vector<unsigned> affinity_cpus; // Parsed --affinity indices.
     uint32_t gpucurves = 0;

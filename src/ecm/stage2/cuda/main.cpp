@@ -5,6 +5,7 @@
 #include "api.h"
 #include "../backend.h"
 #include "ecm/platform/gpu_worker.h"
+#include "ecm/platform/cpu_affinity.h"
 #ifdef ECM_STAGE2_OPENCL
 #include "../opencl/engine.h"
 #include "io/files.h"
@@ -157,6 +158,7 @@ Options arguments(int argc, char **argv) {
             o.portable_cli.insert(a);
         }
         else if (a == "--fixed-queue-route") o.fixed_queue_route=true;
+        else if (a == "--queue-cpu-affinity") o.worker_cpu_affinity=value();
         else if (a == "--queue-requested-b2") o.queue_requested_b2=num();
         else if (a == "--queue-gpu-start") o.queue_gpu_start=num();
         else if (a == "--queue-gpu-done") o.queue_gpu_done=num();
@@ -415,8 +417,11 @@ int driver(Options o) {
             // its parent. Freeze their config before any curve work, too.
             const auto ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::absolute(fs::path(o.ini));
             const auto lines=stage2_config(ini,!o.ini.empty(),o.worker);
-            freeze_publication(o,ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true)),ini);
+            const auto settings = ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
+            freeze_publication(o,settings,ini);
+            if (o.worker_cpu_affinity.empty()) o.worker_cpu_affinity = settings.shared_cpu_affinity;
         }
+        ecm_platform::apply_worker_cpu_affinity(o.worker_cpu_affinity, !o.frozen_publication);
         bind_engine_options(o);
         if(o.queue_requested_b2 && (!o.fixed_queue_route || o.queue_requested_b2>o.b2))
             throw std::runtime_error("invalid requested B2 for fixed Stage2 queue route");
@@ -430,7 +435,7 @@ int driver(Options o) {
         return curve_worker(o);
     }
     if(o.frozen_publication || o.checkpoint_outcome || o.fixed_queue_route || o.queue_requested_b2 || !o.queue_phase_gate.empty() || o.queue_workspace_lease ||
-       o.queue_gpu_start || o.queue_gpu_done || o.queue_gpu_input)
+       o.queue_gpu_start || o.queue_gpu_done || o.queue_gpu_input || !o.worker_cpu_affinity.empty())
         throw std::runtime_error("Stage2 queue route arguments are internal to curve workers");
     if(o.stop_handle) {
         inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));
@@ -450,6 +455,8 @@ int driver(Options o) {
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
     const auto lines=stage2_config(ini,!o.ini.empty(),o.worker);
     const auto s=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
+    o.worker_cpu_affinity = s.shared_cpu_affinity;
+    ecm_platform::apply_worker_cpu_affinity(o.worker_cpu_affinity);
     const bool shared_output=ecm_config::toml_document_version(lines)>=3;
     std::vector<const char*> inherited;
     if(o.save.empty())inherited.push_back("finished"); // Queue collision protection.

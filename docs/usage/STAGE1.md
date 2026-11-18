@@ -90,7 +90,7 @@ cmake --build $build --config Release --target prepare_prac_cache
 
 `edwards_naf_window_bits` 接受 2～12，自动从 6 开始。`edwards_doubling = 1` 用 2XY，`0` 用 HWCD。指定 `naf_memory_mb` 可压低设备预算。`opencl.workgroup_size` 为 0 时交由运行时决定。Edwards 每工作项处理一条曲线，`opencl.threads_per_integer` 作用于 OpenCL PARAM3。最终 Edwards 文本 save 可交给现有 Stage2。断点续跑沿用检查点中的窗口和倍点公式。 [设备算术与内存](../architecture/OPENCL.md#stage1-曲线执行)
 
-OpenCL 和 CUDA 的一线程一曲线路径共用 `cpu_threads`。设为 0 时，从 1024 条曲线起用最多 4 个主机线程构造曲线和打包初始坐标，更小的批次用 1 个。设为 1 可固定单线程，日志中的 `construction_threads` 显示实际值。
+OpenCL 和 CUDA 的一线程一曲线路径共用 `[stage1] gpu.init_threads`。设为 0 时，从 1024 条曲线起用最多 4 个主机线程构造曲线和打包初始坐标，更小的批次用 1 个。设为 1 可固定单线程，日志中的 `construction_threads` 显示实际值。
 
 Edwards 默认使用 CIOS。模数不超过 512 bit 时，可在 `[stage1]` 为 `opencl.kernel_mul` 和 `opencl.kernel_sqr` 选便携 `"fips"` 或 NVIDIA 的 `"fips_ptx"`。例如，让 RTX 4060 同时使用 PTX 模乘和对称平方：
 
@@ -132,7 +132,7 @@ GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子�
 
 Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机，保留曲线和窗口。若驻留频谱也放不下，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 
-两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `cpu_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)。
+两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `gpu.init_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。CPU Stage1 自身的线程数使用 `cpu.threads`。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)和 [worker CPU 资源](../architecture/CONFIGURATION.md#worker-cpu-资源)。
 
 ```toml
 config_version = 3

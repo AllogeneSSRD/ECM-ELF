@@ -24,6 +24,12 @@ inline constexpr int64_t stage1_progress_average_seconds_minimum=0;
 inline constexpr int64_t stage1_progress_average_seconds_maximum=60;
 inline constexpr int64_t stage1_cpu_prac_search_minimum=1;
 inline constexpr int64_t stage1_cpu_prac_search_maximum=50;
+inline constexpr int64_t stage1_stage1_threads_minimum=0;
+inline constexpr int64_t stage1_stage1_threads_maximum=4294967295;
+inline constexpr int64_t stage1_stage1_cpu_compute_threads_minimum=0;
+inline constexpr int64_t stage1_stage1_cpu_compute_threads_maximum=4294967295;
+inline constexpr int64_t stage1_stage1_gpu_init_threads_minimum=0;
+inline constexpr int64_t stage1_stage1_gpu_init_threads_maximum=4294967295;
 inline constexpr int64_t stage1_edwards_doubling_minimum=0;
 inline constexpr int64_t stage1_edwards_doubling_maximum=1;
 inline constexpr int64_t stage1_naf_memory_mb_minimum=0;
@@ -129,6 +135,7 @@ struct Stage1Values {
     std::string shared_log_file="ecm.log";
     std::string shared_finished_file="worktodo.finished.txt";
     uint64_t log_file_max_kb=10000;
+    std::string shared_cpu_affinity="";
     std::string shared_tune_file="tune.toml";
     std::string param="auto";
     std::string handoff_mode="ecm-elf";
@@ -169,6 +176,8 @@ struct Stage1Values {
     std::string cpu_mont_chain="ladder";
     int cpu_prac_search=7;
     uint32_t stage1_threads=0;
+    uint32_t cpu_compute_threads=0;
+    uint32_t gpu_init_threads=0;
     std::string affinity="";
     std::string save_name_pattern="{curve}_{target}_{b1}.save";
     std::string exp_cache="";
@@ -217,6 +226,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"shared_log_file",[](Stage1Values&c,const std::string&v){c.shared_log_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_log_file=v.shared_log_file;}},
     {"shared_finished_file",[](Stage1Values&c,const std::string&v){c.shared_finished_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_finished_file=v.shared_finished_file;}},
     {"log_file_max_KB",[](Stage1Values&c,const std::string&v){c.log_file_max_kb=static_cast<uint64_t>(bounded_integer(v,"log_file_max_KB",1000,1000000));},[](Stage1Values&c,const Stage1Values&v){c.log_file_max_kb=v.log_file_max_kb;}},
+    {"shared_cpu_affinity",[](Stage1Values&c,const std::string&v){c.shared_cpu_affinity=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_cpu_affinity=v.shared_cpu_affinity;}},
     {"shared_tune_file",[](Stage1Values&c,const std::string&v){c.shared_tune_file=v;},[](Stage1Values&c,const Stage1Values&v){c.shared_tune_file=v.shared_tune_file;}},
     {"param",[](Stage1Values&c,const std::string&v){if(v!="auto"&&v!="e"&&v!="m0"&&v!="m2"&&v!="m3")throw std::runtime_error("param must be [auto|e|m0|m2|m3]");c.param=v;},[](Stage1Values&c,const Stage1Values&v){c.param=v.param;}},
     {"handoff_mode",[](Stage1Values&c,const std::string&v){if(v!="off"&&v!="ecm-elf"&&v!="prime95")throw std::runtime_error("handoff_mode must be [off|ecm-elf|prime95]");c.handoff_mode=v;},[](Stage1Values&c,const Stage1Values&v){c.handoff_mode=v.handoff_mode;}},
@@ -256,7 +266,9 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"reduction",[](Stage1Values&c,const std::string&v){assign_value(c.simd_reduction,v);},[](Stage1Values&c,const Stage1Values&v){c.simd_reduction=v.simd_reduction;}},
     {"cpu_mont_chain",[](Stage1Values&c,const std::string&v){assign_value(c.cpu_mont_chain,v);},[](Stage1Values&c,const Stage1Values&v){c.cpu_mont_chain=v.cpu_mont_chain;}},
     {"cpu_prac_search",[](Stage1Values&c,const std::string&v){c.cpu_prac_search=static_cast<int>(bounded_integer(v,"cpu_prac_search",1,50));},[](Stage1Values&c,const Stage1Values&v){c.cpu_prac_search=v.cpu_prac_search;}},
-    {"stage1_threads",[](Stage1Values&c,const std::string&v){assign_value(c.stage1_threads,v);},[](Stage1Values&c,const Stage1Values&v){c.stage1_threads=v.stage1_threads;}},
+    {"stage1_threads",[](Stage1Values&c,const std::string&v){c.stage1_threads=static_cast<uint32_t>(bounded_integer(v,"stage1_threads",0,4294967295));},[](Stage1Values&c,const Stage1Values&v){c.stage1_threads=v.stage1_threads;}},
+    {"stage1_cpu_compute_threads",[](Stage1Values&c,const std::string&v){c.cpu_compute_threads=static_cast<uint32_t>(bounded_integer(v,"stage1_cpu_compute_threads",0,4294967295));},[](Stage1Values&c,const Stage1Values&v){c.cpu_compute_threads=v.cpu_compute_threads;}},
+    {"stage1_gpu_init_threads",[](Stage1Values&c,const std::string&v){c.gpu_init_threads=static_cast<uint32_t>(bounded_integer(v,"stage1_gpu_init_threads",0,4294967295));},[](Stage1Values&c,const Stage1Values&v){c.gpu_init_threads=v.gpu_init_threads;}},
     {"affinity",[](Stage1Values&c,const std::string&v){assign_value(c.affinity,v);},[](Stage1Values&c,const Stage1Values&v){c.affinity=v.affinity;}},
     {"save_name_pattern",[](Stage1Values&c,const std::string&v){assign_value(c.save_name_pattern,v);},[](Stage1Values&c,const Stage1Values&v){c.save_name_pattern=v.save_name_pattern;}},
     {"exp_cache",[](Stage1Values&c,const std::string&v){assign_value(c.exp_cache,v);},[](Stage1Values&c,const Stage1Values&v){c.exp_cache=v.exp_cache;}},
@@ -377,6 +389,7 @@ struct Stage2Values {
     std::string shared_log_file="ecm.log";
     std::string shared_finished_file="worktodo.finished.txt";
     uint64_t log_file_max_kb=10000;
+    std::string shared_cpu_affinity="";
     std::string shared_tune_file="tune.toml";
     std::string worktodo="worktodo.txt";
     uint64_t b2_ratio=0;
@@ -472,6 +485,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"shared_log_file",[](Stage2Values&c,const std::string&v){c.shared_log_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_log_file=v.shared_log_file;}},
     {"shared_finished_file",[](Stage2Values&c,const std::string&v){c.shared_finished_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_finished_file=v.shared_finished_file;}},
     {"log_file_max_KB",[](Stage2Values&c,const std::string&v){c.log_file_max_kb=static_cast<uint64_t>(bounded_integer(v,"log_file_max_KB",1000,1000000));},[](Stage2Values&c,const Stage2Values&v){c.log_file_max_kb=v.log_file_max_kb;}},
+    {"shared_cpu_affinity",[](Stage2Values&c,const std::string&v){c.shared_cpu_affinity=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_cpu_affinity=v.shared_cpu_affinity;}},
     {"shared_tune_file",[](Stage2Values&c,const std::string&v){c.shared_tune_file=v;},[](Stage2Values&c,const Stage2Values&v){c.shared_tune_file=v.shared_tune_file;}},
     {"worktodo",[](Stage2Values&c,const std::string&v){assign_value(c.worktodo,v);},[](Stage2Values&c,const Stage2Values&v){c.worktodo=v.worktodo;}},
     {"b2_ratio",[](Stage2Values&c,const std::string&v){c.b2_ratio=v.empty()?0:static_cast<uint64_t>(bounded_integer(v,"b2_ratio",0,1000000));},[](Stage2Values&c,const Stage2Values&v){c.b2_ratio=v.b2_ratio;}},

@@ -264,7 +264,8 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     ecm_stage1::Stage1Options opt;
     opt.execution.selection = cfg.selection;
     opt.execution.affinity_cpus = cfg.affinity_cpus;
-    opt.execution.stage1_threads = cfg.stage1_threads;
+    opt.execution.stage1_threads = cfg.cpu_compute_threads;
+    opt.execution.gpu_init_threads = cfg.gpu_init_threads;
     opt.execution.naf_w = cfg.naf_w;
     if (cfg.config_keys.count("edwards_doubling"))
         opt.execution.edwards_doubling = cfg.edwards_doubling;
@@ -377,12 +378,18 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
             cfg.verbose = false;
         if (input.has("-d"))
             cfg.device = input.gpu_device_index;
-        if (input.has("--stage1-threads"))
-            cfg.stage1_threads = input.stage1_threads;
+        if (input.has("--stage1-threads")) {
+            cfg.cpu_compute_threads = input.stage1_threads;
+            cfg.gpu_init_threads = input.stage1_threads;
+        }
+        if (input.has("--cpu-threads")) cfg.cpu_compute_threads = input.cpu_threads;
+        if (input.has("--gpu-init-threads")) cfg.gpu_init_threads = input.gpu_init_threads;
         if (input.has("--naf-w"))
             cfg.naf_w = input.naf_w;
-        if (input.has("--affinity"))
+        if (input.has("--affinity")) {
+            cfg.shared_cpu_affinity.clear();
             cfg.affinity_cpus = input.affinity_cpus;
+        }
         if (input.has("--ckpt"))
             cfg.ckpt_seconds = input.ckpt_seconds;
         if (input.has("--exp-cache"))

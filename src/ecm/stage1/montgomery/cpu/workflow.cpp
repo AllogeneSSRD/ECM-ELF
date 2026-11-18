@@ -397,6 +397,8 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
     const uint32_t tasks = (uint32_t)task_list.size();
     uint32_t nthreads = opt.execution.stage1_threads ? opt.execution.stage1_threads
                                                      : mont_default_threads(curves, use_simd);
+    if (!opt.execution.stage1_threads && opt.execution.worker_cpu_count)
+        nthreads = (std::min)(nthreads, opt.execution.worker_cpu_count);
     if (nthreads > tasks)
         nthreads = tasks;
     if (nthreads < 1)

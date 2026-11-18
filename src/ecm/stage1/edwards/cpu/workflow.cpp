@@ -932,8 +932,13 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     mpz_mul_ui(s, s, 48);
 
     const uint32_t worker_count = use_simd ? (curves - 1) / IFMA_LANES + 1 : curves;
-    const uint32_t requested_workers = (std::min)(worker_count, opt.execution.stage1_threads
-        ? opt.execution.stage1_threads : edwards_default_threads(curves));
+    uint32_t threads = opt.execution.stage1_threads;
+    if (!threads) {
+        threads = edwards_default_threads(curves);
+        if (opt.execution.worker_cpu_count)
+            threads = (std::min)(threads, opt.execution.worker_cpu_count);
+    }
+    const uint32_t requested_workers = (std::min)(worker_count, threads);
     const size_t scalar_bits = mpz_sizeinbase(s, 2);
     if (needs_naf && scalar_bits >= std::numeric_limits<uint32_t>::max()) {
         ecm_ts_fprintf(stderr, "ERROR: CPU Edwards NAF scalar exceeds the supported checkpoint cursor range\n");
@@ -1175,7 +1180,8 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 ecm_ts_fprintf(stdout, "affinity        : %s (worker t -> cpu[%s][t %% %zu])\n",
                                a.c_str(), a.c_str(), opt.execution.affinity_cpus.size());
             } else {
-                ecm_ts_fprintf(stdout, "affinity        : none (OS scheduler)\n");
+                ecm_ts_fprintf(stdout, "affinity        : %s\n", opt.execution.worker_cpu_count ?
+                               "shared worker CPU pool" : "none (OS scheduler)");
             }
             fflush(stdout);
         }

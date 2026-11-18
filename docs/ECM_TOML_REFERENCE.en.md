@@ -31,6 +31,18 @@ Type `string` · Range `<local-computer-name>` · Worker override `[worker.N] sh
 
 Optional local computer name in result output. Keep configured values and generated results outside public Git commits.
 
+<a id="shared_cpu_affinity"></a>
+
+### cpu_affinity
+
+```toml
+cpu_affinity = ""
+```
+
+Type `string` · Range `[none|auto|<n>,...|<a>-<b>]` · Worker override `[worker.N] shared.cpu_affinity` · Level `advanced`.
+
+Logical CPUs for the Stage1 and Stage2 worker process, including host work for GPU backends. Use zero-based indices and inclusive ranges, e.g. 0,2,4-7. Empty, auto or none applies no ECM-ELF affinity. A worker may override the shared list for both stages.
+
 <a id="shared_finished_file"></a>
 
 ### finished_file
@@ -213,6 +225,18 @@ Legacy v1 key `stage1.ckpt_seconds`
 
 Stage1 checkpoint interval in seconds. 0 disables periodic checkpoints; negative values act as 0. Normal stop or Ctrl+C can still request a checkpoint. Actual writes wait for the backend's safe checkpoint boundary.
 
+<a id="stage1_cpu_compute_threads"></a>
+
+### cpu.threads
+
+```toml
+cpu.threads = 0
+```
+
+Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] stage1.cpu.threads` · Level `advanced`.
+
+CPU Stage1 arithmetic and preparation threads. 0 uses the backend's automatic selection. Override with --cpu-threads.
+
 <a id="affinity"></a>
 
 ### cpu_affinity
@@ -221,11 +245,11 @@ Stage1 checkpoint interval in seconds. 0 disables periodic checkpoints; negative
 cpu_affinity = ""
 ```
 
-Type `string` · Range `[none|auto|<n>,...|<a>-<b>]` · Worker override `[worker.N] stage1.cpu_affinity` · Level `advanced`.
+Type `string` · Range `[none|auto|<n>,...|<a>-<b>]` · Worker override `[worker.N] stage1.cpu_affinity` · Level `legacy`.
 
 Legacy v1 key `stage1.affinity`
 
-CPU affinity list/ranges, e.g. 0-7,10. Indices must be 0..1023, with at most 1024 entries. Empty, auto or none leaves threads unpinned. Invalid entries are rejected with their source and allowed grammar, including values hidden by worker/CLI overrides.
+Legacy per-thread CPU Stage1 pinning. Used when shared.cpu_affinity is absent. A Stage1 --affinity CLI override uses the legacy pinning behavior for that invocation.
 
 <a id="impl"></a>
 
@@ -287,11 +311,11 @@ CPU SIMD modular reduction. auto selects for the input; mersenne-fold requires N
 cpu_threads = 0
 ```
 
-Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] stage1.cpu_threads` · Level `advanced`.
+Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] stage1.cpu_threads` · Level `legacy`.
 
 Legacy v1 key `stage1.stage1_threads`
 
-Host worker count for CPU Stage1 and Edwards curve construction in CUDA NTT and one-thread-per-curve CUDA/OpenCL. 0 selects automatically. GPU launch geometry is controlled separately.
+Legacy fallback for cpu.threads and gpu.init_threads in the same scope. A worker-level value overrides global values, and an explicit new key takes priority within the same scope.
 
 <a id="cuda_thread_block_size"></a>
 
@@ -394,6 +418,18 @@ Type `string` · Range `[off|none|0|-|<dir>]` · Worker override `[worker.N] sta
 Legacy v1 key `stage1.exp_cache`
 
 Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout root, or cache/ next to the executable for standalone installs. off, none, 0, or - disables caching. Explicit relative paths use the current working directory. Small B1 values may skip writing the scalar cache.
+
+<a id="stage1_gpu_init_threads"></a>
+
+### gpu.init_threads
+
+```toml
+gpu.init_threads = 0
+```
+
+Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] stage1.gpu.init_threads` · Level `advanced`.
+
+Host curve-construction threads for Edwards CUDA NTT and CUDA/OpenCL one-thread-per-curve Stage1. 0 uses the backend's default. Work is bounded by the available CPUs, curves and memory where applicable. Override with --gpu-init-threads.
 
 ### gpu_algorithm
 

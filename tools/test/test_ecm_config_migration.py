@@ -243,6 +243,29 @@ tune_file = 'gpu1.toml'
         self.assertIn('# formerly separate', text)
         self.assertEqual(migration.upgrade_v3(text, SCHEMA, 'ecm.toml'), text)
 
+    def test_v3_splits_legacy_stage1_threads_by_scope(self):
+        source = '''config_version = 3
+[stage1]
+cpu_threads = 4 # previous shared thread count
+cpu.threads = 2
+cpu_affinity = "0-3"
+[stage2]
+cpu.threads = 1
+[worker.2.stage1]
+gpu.init_threads = 0
+cpu_threads = 3
+'''
+        text = migration.upgrade_v3(source, SCHEMA, 'ecm.toml')
+        data = tomllib.loads(text)
+        self.assertEqual(data['stage1'], {'cpu': {'threads': 2}, 'gpu': {'init_threads': 4}, 'cpu_affinity': '0-3'})
+        self.assertEqual(data['stage2']['cpu']['threads'], 1)
+        self.assertEqual(data['worker']['2']['stage1'], {'cpu': {'threads': 3}, 'gpu': {'init_threads': 0}})
+        self.assertEqual(text.count('# previous shared thread count'), 1)
+        self.assertEqual(migration.upgrade_v3(text, SCHEMA, 'ecm.toml'), text)
+        old = migration.upgrade_v3('config_version = 2\n[stage1]\ncpu_threads = 5\n', SCHEMA, 'ecm.toml')
+        stage1 = tomllib.loads(old)['stage1']
+        self.assertEqual((stage1['cpu']['threads'], stage1['gpu']['init_threads']), (5, 5))
+
 
 if __name__ == "__main__":
     unittest.main()

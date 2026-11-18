@@ -5,6 +5,7 @@
 #include "io/cli.h"
 #include "io/files.h"
 #include "io/normalize.h"
+#include "ecm/platform/cpu_affinity.h"
 #include "sync/backup.h"
 #include "sync/p95.h"
 using ecm_stage1_app::get_exe_dir_local;
@@ -1091,6 +1092,13 @@ int main(int argc, char** argv) {
     ecm_stage1_app::Stage1Settings settings;
     if (!ecm_stage1_app::normalize_settings(parsed, input, paths, settings, error)) {
         std::cerr << error << "\n";
+        return 1;
+    }
+    try {
+        settings.options.execution.worker_cpu_count =
+            ecm_platform::apply_worker_cpu_affinity(settings.config.shared_cpu_affinity);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << '\n';
         return 1;
     }
     if (input.tune_ntt || settings.options.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu) {

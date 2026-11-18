@@ -31,6 +31,18 @@ computer = ""
 
 结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。
 
+<a id="shared_cpu_affinity"></a>
+
+### cpu_affinity
+
+```toml
+cpu_affinity = ""
+```
+
+类型 `string` · 范围 `[none|auto|<n>,...|<a>-<b>]` · Worker 覆盖 `[worker.N] shared.cpu_affinity` · 级别 `高级`。
+
+Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。
+
 <a id="shared_finished_file"></a>
 
 ### finished_file
@@ -213,6 +225,18 @@ v1 旧键 `stage1.ckpt_seconds`
 
 设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。
 
+<a id="stage1_cpu_compute_threads"></a>
+
+### cpu.threads
+
+```toml
+cpu.threads = 0
+```
+
+类型 `u32` · 范围 `<x:Z,0..2^32-1>` · Worker 覆盖 `[worker.N] stage1.cpu.threads` · 级别 `高级`。
+
+CPU Stage1 算术与准备线程数。0 由后端自动选择。命令行 --cpu-threads 可覆盖。
+
 <a id="affinity"></a>
 
 ### cpu_affinity
@@ -221,11 +245,11 @@ v1 旧键 `stage1.ckpt_seconds`
 cpu_affinity = ""
 ```
 
-类型 `string` · 范围 `[none|auto|<n>,...|<a>-<b>]` · Worker 覆盖 `[worker.N] stage1.cpu_affinity` · 级别 `高级`。
+类型 `string` · 范围 `[none|auto|<n>,...|<a>-<b>]` · Worker 覆盖 `[worker.N] stage1.cpu_affinity` · 级别 `旧版`。
 
 v1 旧键 `stage1.affinity`
 
-CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。
+旧版 CPU Stage1 逐线程绑核。未设置 shared.cpu_affinity 时生效。Stage1 命令行 --affinity 仍在本次运行中使用旧绑核方式。
 
 <a id="impl"></a>
 
@@ -287,11 +311,11 @@ CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；mo
 cpu_threads = 0
 ```
 
-类型 `u32` · 范围 `<x:Z,0..2^32-1>` · Worker 覆盖 `[worker.N] stage1.cpu_threads` · 级别 `高级`。
+类型 `u32` · 范围 `<x:Z,0..2^32-1>` · Worker 覆盖 `[worker.N] stage1.cpu_threads` · 级别 `旧版`。
 
 v1 旧键 `stage1.stage1_threads`
 
-设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动选择。GPU 发射几何另行设置。
+同一配置层中 cpu.threads 与 gpu.init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优先。
 
 <a id="cuda_thread_block_size"></a>
 
@@ -394,6 +418,18 @@ exponent_cache_dir = ""
 v1 旧键 `stage1.exp_cache`
 
 指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。
+
+<a id="stage1_gpu_init_threads"></a>
+
+### gpu.init_threads
+
+```toml
+gpu.init_threads = 0
+```
+
+类型 `u32` · 范围 `<x:Z,0..2^32-1>` · Worker 覆盖 `[worker.N] stage1.gpu.init_threads` · 级别 `高级`。
+
+Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。
 
 ### gpu_algorithm
 

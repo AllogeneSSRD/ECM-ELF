@@ -7,6 +7,7 @@
       <Item id="option_shared_shared_log_file" name="共用运行日志。相对路径基于配置目录。空字符串关闭文件日志。" />
       <Item id="option_shared_shared_finished_file" name="两阶段共用的完成记录。相对路径基于配置目录。" />
       <Item id="option_shared_log_file_max_KB" name="共享运行日志超过此上限后归档。1 KB 等于 1000 字节。" />
+      <Item id="option_shared_shared_cpu_affinity" name="Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。" />
       <Item id="option_shared_shared_tune_file" name="CUDA Stage1 和 Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可以为两个阶段一并覆盖路径。显式留空时关闭两阶段的自动持久化。" />
       <Item id="option_stage1_param" name="Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。" />
       <Item id="option_stage1_handoff_mode" name="Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接收方。off 只保留存档，prime95 交给 Prime95。" />
@@ -46,8 +47,10 @@
       <Item id="option_stage1_reduction" name="CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。" />
       <Item id="option_stage1_cpu_mont_chain" name="Montgomery CPU 点乘。prac 要求 target=cpu、curve=mont、impl=simd 和 B1 在 2..4294967295 之间。它与 ladder 使用相同的标量约定及最终 save 格式，各自使用不同的运行中检查点状态。" />
       <Item id="option_stage1_cpu_prac_search" name="CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。" />
-      <Item id="option_stage1_stage1_threads" name="设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动选择。GPU 发射几何另行设置。" />
-      <Item id="option_stage1_affinity" name="CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。" />
+      <Item id="option_stage1_stage1_threads" name="同一配置层中 cpu.threads 与 gpu.init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优先。" />
+      <Item id="option_stage1_stage1_cpu_compute_threads" name="CPU Stage1 算术与准备线程数。0 由后端自动选择。命令行 --cpu-threads 可覆盖。" />
+      <Item id="option_stage1_stage1_gpu_init_threads" name="Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。" />
+      <Item id="option_stage1_affinity" name="旧版 CPU Stage1 逐线程绑核。未设置 shared.cpu_affinity 时生效。Stage1 命令行 --affinity 仍在本次运行中使用旧绑核方式。" />
       <Item id="option_stage1_save_name_pattern" name="统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m&lt;指数&gt;，否则为 bit&lt;实际位数&gt;；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。" />
       <Item id="option_stage1_exp_cache" name="指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。" />
       <Item id="option_stage1_naf_w" name="Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 选择 2XY NAF。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。" />

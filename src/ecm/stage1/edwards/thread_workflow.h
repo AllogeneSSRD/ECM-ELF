@@ -304,8 +304,9 @@ ComputationResult run_stage1(const Stage1Request& request, ExecutionOptions& opt
         const uint32_t np0 = montgomery_inverse(constants.front());
         result.curves.resize(count);
         std::vector<uint64_t> sigmas(count);
-        const unsigned available = std::max(1u, std::thread::hardware_concurrency());
-        const unsigned requested_workers = opt.execution.stage1_threads ? opt.execution.stage1_threads :
+        const unsigned available = opt.execution.worker_cpu_count ? opt.execution.worker_cpu_count :
+            std::max(1u, std::thread::hardware_concurrency());
+        const unsigned requested_workers = opt.execution.gpu_init_threads ? opt.execution.gpu_init_threads :
             count >= 1024 ? 4 : 1;
         const unsigned workers = std::min({available, requested_workers, count});
         const auto setup_start = Clock::now();

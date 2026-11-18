@@ -32,6 +32,8 @@ struct Stage1ExecutionPreferences {
     Selection selection{};
     Stage1NttOptions ntt;
     uint32_t stage1_threads;
+    uint32_t gpu_init_threads = 0;
+    unsigned worker_cpu_count = 0; // 0 leaves the backend's hardware limit in effect.
     std::vector<unsigned> affinity_cpus;
     int naf_w;
     std::optional<int> edwards_doubling;

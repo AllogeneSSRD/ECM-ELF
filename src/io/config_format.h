@@ -351,8 +351,12 @@ inline std::vector<std::string> toml_enum_names(const std::string& conversion) {
 inline std::string toml_binding_value(const TomlLine& line, const TomlOptionMeta& option) {
     const auto source = toml_source_rhs(line);
     const std::string conversion = option.v2_conversion;
-    if (line.config_version == 1 || conversion.empty())
-        return checked_toml_value(source, option);
+    if (line.config_version == 1 || conversion.empty()) {
+        auto value = checked_toml_value(source, option);
+        if (std::string_view(option.key) == "shared_cpu_affinity")
+            (void)affinity_indices(value);
+        return value;
+    }
     char kind = 0;
     const auto value = toml_value(source, kind);
     if (conversion == "bool01" || conversion == "nonzero_bool") {

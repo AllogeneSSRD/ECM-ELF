@@ -95,6 +95,23 @@
     },
     {
       "owner": "stage1",
+      "key": "shared_cpu_affinity",
+      "v3_key": "cpu_affinity",
+      "v3_only": true,
+      "shared_with": ["stage2"],
+      "field": "shared_cpu_affinity",
+      "type": "string",
+      "default": "",
+      "domain": "[none|auto|<n>,...|<a>-<b>]",
+      "fx": "worker_CPU_affinity",
+      "parser": "strict",
+      "description": [
+        "Logical CPUs for the Stage1 and Stage2 worker process, including host work for GPU backends. Use zero-based indices and inclusive ranges, e.g. 0,2,4-7. Empty, auto or none applies no ECM-ELF affinity. A worker may override the shared list for both stages.",
+        "Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "shared_tune_file",
       "v3_only": true,
       "v3_key": "tune_file",
@@ -793,11 +810,50 @@
       "default": 0,
       "domain": "<x:Z,0..2^32-1>",
       "fx": "CPU_threads",
-      "parser": "legacy",
+      "parser": "strict",
+      "template_level": "legacy",
+      "minimum": 0,
+      "maximum": 4294967295,
       "zero": "auto",
       "description": [
-        "Host worker count for CPU Stage1 and Edwards curve construction in CUDA NTT and one-thread-per-curve CUDA/OpenCL. 0 selects automatically. GPU launch geometry is controlled separately.",
-        "设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动选择。GPU 发射几何另行设置。"
+        "Legacy fallback for cpu.threads and gpu.init_threads in the same scope. A worker-level value overrides global values, and an explicit new key takes priority within the same scope.",
+        "同一配置层中 cpu.threads 与 gpu.init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优先。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "stage1_cpu_compute_threads",
+      "v3_key": "cpu.threads",
+      "v3_only": true,
+      "field": "cpu_compute_threads",
+      "type": "u32",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 4294967295,
+      "domain": "<x:Z,0..2^32-1>",
+      "fx": "CPU_Stage1_threads",
+      "parser": "strict",
+      "description": [
+        "CPU Stage1 arithmetic and preparation threads. 0 uses the backend's automatic selection. Override with --cpu-threads.",
+        "CPU Stage1 算术与准备线程数。0 由后端自动选择。命令行 --cpu-threads 可覆盖。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "stage1_gpu_init_threads",
+      "v3_key": "gpu.init_threads",
+      "v3_only": true,
+      "field": "gpu_init_threads",
+      "type": "u32",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 4294967295,
+      "domain": "<x:Z,0..2^32-1>",
+      "fx": "GPU_Stage1_host_init_threads",
+      "parser": "strict",
+      "description": [
+        "Host curve-construction threads for Edwards CUDA NTT and CUDA/OpenCL one-thread-per-curve Stage1. 0 uses the backend's default. Work is bounded by the available CPUs, curves and memory where applicable. Override with --gpu-init-threads.",
+        "Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。"
       ]
     },
     {
@@ -810,13 +866,14 @@
       "domain": "[none|auto|<n>,...|<a>-<b>]",
       "fx": "CPU_affinity",
       "parser": "legacy",
+      "template_level": "legacy",
       "empty": "OS",
       "rules": [
         "n<logical_CPU_count"
       ],
       "description": [
-        "CPU affinity list/ranges, e.g. 0-7,10. Indices must be 0..1023, with at most 1024 entries. Empty, auto or none leaves threads unpinned. Invalid entries are rejected with their source and allowed grammar, including values hidden by worker/CLI overrides.",
-        "CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。"
+        "Legacy per-thread CPU Stage1 pinning. Used when shared.cpu_affinity is absent. A Stage1 --affinity CLI override uses the legacy pinning behavior for that invocation.",
+        "旧版 CPU Stage1 逐线程绑核。未设置 shared.cpu_affinity 时生效。Stage1 命令行 --affinity 仍在本次运行中使用旧绑核方式。"
       ]
     },
     {

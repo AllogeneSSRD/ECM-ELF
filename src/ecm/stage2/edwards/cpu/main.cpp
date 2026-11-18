@@ -18,6 +18,7 @@
 #include "../../queue_paths.h"
 #include "../../../platform/compute_log.h"
 #include "ecm/platform/fingerprint.h"
+#include "ecm/platform/cpu_affinity.h"
 #include <fstream>
 
 #ifndef ECM_BUILD_ID
@@ -41,7 +42,7 @@ void set64(mpz_t x,uint64_t n) {mpz_import(x,1,1,sizeof n,0,0,&n);}
 struct Options {
     std::string save,results="results_cpu_stage2.jsonl",submission,ini,backend="auto",user,computer,aid;
     std::vector<std::string> known;uint64_t b2=0,skip=0,count=UINT64_MAX,exponent=0,memory=512,threads=1;
-    std::string worktodo,log;
+    std::string worktodo,log,cpu_affinity;
     int log_level=-1;
     bool gui=false,once=false,explicit_results=false;
     bool dry=false,export_only=false,gw_selftest=false,gw_check=false;uint64_t d=0;uintptr_t stop_handle=0;int worker=1;
@@ -64,6 +65,7 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
     o.ini=std::filesystem::absolute(ini).lexically_normal().string();
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     o.threads=settings.cpu_threads;o.memory=settings.cpu_memory_mib;o.backend=settings.cpu_backend;
+    o.cpu_affinity=settings.shared_cpu_affinity;
     o.user=settings.result_user;o.computer=settings.result_computer;
     if(settings.has_submission && settings.submission.empty())throw std::runtime_error("empty submission path");
     const auto filename=settings.has_submission?settings.submission:ecm_config::worker_file(settings.submission,o.worker);
@@ -315,6 +317,7 @@ int main(int argc,char **argv) {
         }
         std::vector<ecm_config::TomlLine> lines;
         const auto o=options(argc,argv,lines);
+        if (!o.export_only) ecm_platform::apply_worker_cpu_affinity(o.cpu_affinity);
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
         if(o.export_only) {
             if(!ecm_results::has_result_ledger(o.submission))throw std::runtime_error("no owned submission ledger");

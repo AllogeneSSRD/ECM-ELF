@@ -132,10 +132,14 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
         const auto found = parsed.stage1.find(scope);
         if (found == parsed.stage1.end())
             continue;
+        bool legacy_threads = false, cpu_threads = false, gpu_threads = false;
         for (const auto* binding : found->second.bindings) {
             binding->copy(cfg, found->second.values);
             cfg.config_keys.insert(binding->key);
             const std::string key = binding->key;
+            legacy_threads |= key == "stage1_threads";
+            cpu_threads |= key == "stage1_cpu_compute_threads";
+            gpu_threads |= key == "stage1_gpu_init_threads";
             const auto& selected = found->second;
             if (key == "curve")
                 cfg.selection.curve = selected.selection.curve;
@@ -154,9 +158,15 @@ void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfi
             else if (key == "affinity")
                 cfg.affinity_cpus = selected.affinity_cpus;
         }
+        const auto& values = found->second.values;
+        if (cpu_threads || legacy_threads)
+            cfg.cpu_compute_threads = cpu_threads ? values.cpu_compute_threads : values.stage1_threads;
+        if (legacy_threads && !gpu_threads)
+            cfg.gpu_init_threads = values.stage1_threads;
         if (worker <= 0)
             break;
     }
+    if (cfg.config_keys.count("shared_cpu_affinity")) cfg.affinity_cpus.clear();
     ecm_stage1::parse_gpu_algorithm_policy(cfg.gpu_algorithm, cfg.selection);
     cfg.selection.gpu_param = cfg.gpu_param;
     if (cfg.config_version < 3) cfg.handoff_mode.clear();

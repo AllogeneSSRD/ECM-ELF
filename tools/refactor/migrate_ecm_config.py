@@ -288,9 +288,11 @@ def upgrade_v3(source, schema, path, *, log_file=None, finished_file=None, hando
     tune_keys = {('stage1', 'ntt.tune_file'), ('stage2', 'tune.profile')} if version < 3 else {
         ('shared', 'tune_file'), ('stage1', 'tune_file'), ('stage2', 'tune_file')
     }
-    if version == 3 and tune_file is None and not any(
+    scopes = [global_values, *overrides.values()]
+    has_legacy_threads = any('cpu_threads' in settings['stage1'] for settings in scopes)
+    if version == 3 and tune_file is None and not has_legacy_threads and not any(
         'tune_file' in settings[stage]
-        for settings in [global_values, *overrides.values()] for stage in ('stage1', 'stage2')
+        for settings in scopes for stage in ('stage1', 'stage2')
     ):
         return source
 
@@ -449,6 +451,21 @@ def upgrade_v3(source, schema, path, *, log_file=None, finished_file=None, hando
         else:
             destination = owner = full[0]
             source_key = '.'.join(full[1:])
+        if (owner, source_key) == ('stage1', 'cpu_threads'):
+            worker = destination.startswith('worker.')
+            scope = overrides[destination.split('.', 1)[1]] if worker else global_values
+            targets = [key for key in ('cpu.threads', 'gpu.init_threads') if key not in scope['stage1']]
+            value, comment = split_comment(rhs)
+            for index, key in enumerate(targets):
+                target = f'stage1.{key}' if worker else key
+                emit(destination, target, rhs.strip() if index == 0 else value.strip(), pending if index == 0 else [])
+            if not targets:
+                section_lines = sections.setdefault(destination, [])
+                section_lines.extend(pending)
+                if comment.strip():
+                    section_lines.append(comment.strip())
+            pending.clear()
+            continue
         if (owner, source_key) in tune_keys:
             comments = sections.setdefault(destination, [])
             comments.extend(pending)

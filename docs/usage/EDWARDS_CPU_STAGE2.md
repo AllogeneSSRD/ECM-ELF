@@ -55,11 +55,20 @@ CPU 与 CUDA 构建都生成 `ecm_stage2.exe`。并存时放在不同目录。GU
 v3 配置示例。CPU 算术参数可按 worker 覆盖，命令行优先。
 
 ```toml
+[shared]
+cpu_affinity = "0-7"
+
 [stage2]
 cpu.backend = "auto"
 cpu.threads = 4
 cpu.memory_mib = 512
+
+[worker.2]
+shared.cpu_affinity = "8-15"
+stage2.cpu.threads = 2
 ```
+
+`cpu.threads` 控制每条 CPU Stage2 曲线的计算线程数。`shared.cpu_affinity` 划定 worker 的 CPU 集合，也适用于同编号的 Stage1 和 GPU Stage2 worker。见 [亲和性和线程配置](../architecture/CONFIGURATION.md#worker-cpu-资源)。
 
 `ECMSTAGE2=` 从任务校验 N 和已知因子，`ECMSTAGE2N=` 从 save 确定 N。队列按有效 save 记录的 skip 和数量选择曲线，使用共享的 B2 和 b2_ratio 规则。CPU 队列当前支持 Edwards；有效的 Montgomery PARAM0 任务交给 CPU 时会报错并保留队列行。D 的 GPU 配置服务于 GPU 规划，CPU 使用自身规划器，显式固定 D 时使用 `--backend gwpoly --d D`。
 

@@ -106,7 +106,9 @@ Edwards and CPU arithmetic:
   --reduction <MODE>  CPU SIMD auto|montgomery|mersenne-fold.
                        An explicit reduction requires --impl simd.
   --cpu-mont-chain <C> CPU IFMA Montgomery ladder|prac.
-  --stage1-threads <N> Host threads for CPU Stage1 and CUDA Edwards NTT construction.
+  --cpu-threads <N>   CPU Stage1 threads (0 = auto).
+  --gpu-init-threads <N> CPU threads for supported GPU Edwards curve setup (0 = auto).
+  --stage1-threads <N> Legacy fallback for both thread counts.
                        0 selects automatically; 1 selects serial construction.
   --affinity <LIST>   Logical CPUs, e.g. 0,2,4 or 0-7.
 
@@ -225,6 +227,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
     static const std::set<std::string> values = {"--affinity",
                                                  "--gpu-backend",
                                                  "--stage1-threads",
+                                                 "--cpu-threads", "--gpu-init-threads",
                                                  "--impl",
                                                  "--reduction",
                                                  "--cpu-mont-chain",
@@ -330,6 +333,10 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 input.affinity_cpus = ecm_config::affinity_indices(value);
             } else if (key == "--stage1-threads")
                 input.stage1_threads = uint32_t(integer(0, UINT32_MAX));
+            else if (key == "--cpu-threads")
+                input.cpu_threads = uint32_t(integer(0, UINT32_MAX));
+            else if (key == "--gpu-init-threads")
+                input.gpu_init_threads = uint32_t(integer(0, UINT32_MAX));
             else if (key == "--impl") {
                 expected = "auto|simd|scalar|gwnum";
                 if (!ecm_stage1::parse_cpu_implementation(value, selection.cpu_implementation))

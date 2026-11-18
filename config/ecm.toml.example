@@ -24,6 +24,13 @@ config_version = 3
 # Rotate the shared run log after its size exceeds this limit. 1 KB is 1000 bytes.
 # 共享运行日志超过此上限后归档。1 KB 等于 1000 字节。
 
+# cpu_affinity = ""  # string: [none|auto|<n>,...|<a>-<b>]
+# Logical CPUs for the Stage1 and Stage2 worker process, including host work for GPU backends. Use
+# zero-based indices and inclusive ranges, e.g. 0,2,4-7. Empty, auto or none applies no ECM-ELF
+# affinity. A worker may override the shared list for both stages.
+# Stage1 和 Stage2 worker 进程使用的逻辑 CPU，包括 GPU 后端的主机工作。编号从 0 开始，范围含两端，例
+# 如 0,2,4-7。空值、auto 或 none 不施加 ECM-ELF 亲和性。可按 worker 同时覆盖两阶段。
+
 # tune_file = "tune.toml"  # string: <path>
 # CUDA Stage1 and Stage2 use this file together. Defaults to tune.toml beside ecm.toml. A worker can
 # override the path for both stages. An explicit empty value disables automatic persistence for both
@@ -268,18 +275,28 @@ target = "gpu"  # string: [cpu|gpu]
 # CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。
 
 # cpu_threads = 0  # u32: <x:Z,0..2^32-1>
-# Host worker count for CPU Stage1 and Edwards curve construction in CUDA NTT and
-# one-thread-per-curve CUDA/OpenCL. 0 selects automatically. GPU launch geometry is controlled
-# separately.
-# 设置 CPU Stage1，以及 CUDA NTT 和 CUDA/OpenCL 一线程一曲线路径的 Edwards 主机构造线程数，0 为自动
-# 选择。GPU 发射几何另行设置。
+# Legacy fallback for cpu.threads and gpu.init_threads in the same scope. A worker-level value
+# overrides global values, and an explicit new key takes priority within the same scope.
+# 同一配置层中 cpu.threads 与 gpu.init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优
+# 先。
+
+# cpu.threads = 0  # u32: <x:Z,0..2^32-1>
+# CPU Stage1 arithmetic and preparation threads. 0 uses the backend's automatic selection. Override
+# with --cpu-threads.
+# CPU Stage1 算术与准备线程数。0 由后端自动选择。命令行 --cpu-threads 可覆盖。
+
+# gpu.init_threads = 0  # u32: <x:Z,0..2^32-1>
+# Host curve-construction threads for Edwards CUDA NTT and CUDA/OpenCL one-thread-per-curve Stage1.
+# 0 uses the backend's default. Work is bounded by the available CPUs, curves and memory where
+# applicable. Override with --gpu-init-threads.
+# Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受
+# 可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。
 
 # cpu_affinity = ""  # string: [none|auto|<n>,...|<a>-<b>]
-# CPU affinity list/ranges, e.g. 0-7,10. Indices must be 0..1023, with at most 1024 entries. Empty,
-# auto or none leaves threads unpinned. Invalid entries are rejected with their source and allowed
-# grammar, including values hidden by worker/CLI overrides.
-# CPU 亲和性索引或范围，例如 0-7,10。索引范围 0..1023，最多 1024 项。空值、auto 或 none 不固定线程。
-# 非法项报错并说明来源与允许语法，worker/CLI 覆盖不能掩盖非法显式值。
+# Legacy per-thread CPU Stage1 pinning. Used when shared.cpu_affinity is absent. A Stage1 --affinity
+# CLI override uses the legacy pinning behavior for that invocation.
+# 旧版 CPU Stage1 逐线程绑核。未设置 shared.cpu_affinity 时生效。Stage1 命令行 --affinity 仍在本次运
+# 行中使用旧绑核方式。
 
 # save_name_pattern = "{curve}_{target}_{b1}.save"  # string: <pattern>
 # Automatic Stage1 save filename pattern for CPU and GPU. {curve}=e|m0|m2|m3; {target}=m<exponent>

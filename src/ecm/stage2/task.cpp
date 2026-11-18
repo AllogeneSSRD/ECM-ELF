@@ -108,6 +108,7 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.queue_phase_gate=o.queue_phase_gate;
     request.queue_workspace_lease=o.queue_workspace_lease;
     request.worker=o.worker;
+    request.worker_cpu_affinity=o.worker_cpu_affinity;
     request.engine_log_level=ecm_cuda_stage2_default_log_level()==stage2_log::debug?stage2_log::debug:stage2_log::batches;
     request.observe_selection=[&o](const std::string &text) {
             try {

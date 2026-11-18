@@ -78,6 +78,7 @@ struct CurveProcessRequest {
     std::string queue_phase_gate;
     unsigned queue_workspace_lease=0;
     int worker=0;
+    std::string worker_cpu_affinity;
     // Called synchronously at the original selection-output position, before
     // logging that line; domain validation/cache policy belongs to the caller.
     std::function<void(const std::string &)> observe_selection;
