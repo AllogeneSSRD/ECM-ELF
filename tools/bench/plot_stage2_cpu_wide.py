@@ -13,26 +13,32 @@ DOC = ROOT / "docs/performance"
 PRIME = ROOT / "tools/benchmarks/prime95"
 
 
-def prime_samples(path):
-    """Keep only fresh curves with complete stage timers and a matching completion."""
+def prime_curves(path):
+    """Read each completed curve with its own Stage2 timers and verbose log."""
     blocks = path.read_text(encoding="utf-8-sig").split("ECM on M")[1:]
-    samples = {}
+    seen = set()
     for block in blocks:
         header = re.match(r"(\d+): Edwards curve #1 with s=26, B1=1000, B2=(\d+)", block)
         if not header:
             raise ValueError("Unexpected Prime95 curve header")
         e, requested = map(int, header.groups())
         end = re.search(rf"M{e} completed 1 ECM Edwards curve, B1=1000, B2=(\d+)", block)
-        if not end or e in samples:
+        if not end or e in seen:
             raise ValueError(f"Incomplete or duplicate Prime95 curve M{e}")
+        seen.add(e)
+        block = block[:end.end()]
         timers = []
         for phase in ("init complete", "complete", "GCD complete"):
             matches = re.findall(rf"Stage 2 {phase}\.[^\n]*?[Tt]ime: ([\d.]+) sec", block)
             if len(matches) != 1:
                 raise ValueError(f"Missing or duplicate {phase} timer for M{e}")
             timers.append(float(matches[0]))
-        samples[e] = requested, int(end[1]), sum(timers), "Stage 1 complete." in block
-    return samples
+        yield e, requested, int(end[1]), timers, block
+
+
+def prime_samples(path):
+    return {e: (requested, actual, sum(timers), "Stage 1 complete." in block)
+            for e, requested, actual, timers, block in prime_curves(path)}
 
 
 def main():

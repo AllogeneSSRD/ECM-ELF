@@ -206,7 +206,7 @@ struct Tree {
     std::vector<Array> rows;
     explicit Tree(size_t a,size_t b):lo(a),hi(b){}
 };
-std::unique_ptr<Tree> tree(Context &,const Array &,size_t,size_t,bool,Array *a=nullptr,Array *b=nullptr);
+std::unique_ptr<Tree> tree(Context &,const Array &,size_t,size_t,bool,Array *workspace=nullptr);
 void descend(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots=nullptr){
     if(!t.left){
         if(t.hi-t.lo==1){gwcopy(&c.gw,s[0],values[t.lo]);return;}
@@ -311,17 +311,14 @@ std::unique_ptr<Tree> tree_skeleton(Context &c,size_t lo,size_t hi,size_t depth,
         t->right=tree_skeleton(c,mid,hi,depth+1,rows,offsets,levels);}
     return t;
 }
-std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,bool retain,Array *workspace_a,Array *workspace_b){
+std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,bool retain,Array *workspace){
     if(!retain){
         const size_t count=hi-lo, row_size=count+1;
-        Array local_a,local_b;
-        if(!workspace_a){
-            local_a=Array(c.gw,row_size);local_b=Array(c.gw,row_size);
-            workspace_a=&local_a;workspace_b=&local_b;
-        }
-        if(!workspace_b || workspace_a->size<row_size || workspace_b->size<row_size)
+        if(workspace && workspace->size<row_size)
             throw std::runtime_error("G tree workspace too small");
-        gwnum *row=workspace_a->v, *next=workspace_b->v;
+        auto t=std::make_unique<Tree>(lo,hi);
+        t->polynomial=workspace?Array(c.gw,workspace->v,row_size):Array(c.gw,row_size);
+        gwnum *row=t->polynomial.v;
         // (X-x)(X-y) = X^2 - (x+y)X + xy.
         const size_t pairs=(count+1)/2;
         tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
@@ -347,24 +344,20 @@ std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,boo
             tree_jobs(c,jobs,[&](Context &worker,size_t begin,size_t end){
                 for(size_t j=begin;j<end;++j){
                     const size_t offset=j*stride,remaining=count-offset;
-                    if(remaining<=width){
-                        for(size_t i=offset;i<count;++i)gwcopy(&worker.gw,row[i],next[i]);
-                    }else{
-                        worker.monic_coefficients(row+offset,width,row+offset+width,
-                            std::min(width,remaining-width),next+offset,jobs>=128);
-                    }
+                    if(remaining<=width)continue;
+                    // polymult permits input/output overlap. Each job owns its
+                    // whole output range, including the shorter right operand.
+                    const size_t right=std::min(width,remaining-width);
+                    worker.monic_coefficients(row+offset+width,right,row+offset,width,row+offset,jobs>=128);
                 }
             });
             if(jobs>=128){
                 polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
-                poly_unfft_fft_coefficients(&c.pm,next,count);
+                poly_unfft_fft_coefficients(&c.pm,row,count);
                 c.check("G tree coefficient normalization");
             }
-            std::swap(row,next);
         }
         u64togw(&c.gw,1,row[count]);
-        auto t=std::make_unique<Tree>(lo,hi);t->polynomial=Array(c.gw,row,row_size);
-        if(local_a.v){t->rows.push_back(std::move(local_a));t->rows.push_back(std::move(local_b));}
         return t;
     }
     std::vector<size_t> sizes;tree_layout(lo,hi,0,sizes);
@@ -410,7 +403,7 @@ std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size
     auto t=std::make_unique<Tree>(lo,hi);
     if(!splits || hi-lo==1){
         auto segment=tree(c,roots,lo,hi,false);
-        t->polynomial=c.copy(segment->polynomial);
+        t->polynomial=std::move(segment->polynomial);
     }else{
         const auto mid=lo+(hi-lo)/2;
         t->left=partial_ftree(c,roots,lo,mid,splits-1);
@@ -534,6 +527,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             });
             stats.point_seconds+=seconds(t);
         }
+        const double baby_seconds=stats.point_seconds;
         auto init_tree_begin=Clock::now();
         auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,retained_splits):tree(c,roots,0,p,true);
         struct Probe {Integer root,product;size_t index;};
@@ -546,10 +540,13 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             }
         }
         if(!fplan.rebuild)roots=Array();
+        const auto inverse_begin=Clock::now();
         Array reversed_f(c.gw,p+1);
         for(size_t i=0;i<=p;++i)gwcopy(&c.gw,ftree->polynomial[p-i],reversed_f[i]);
         auto inv=c.inverse(reversed_f,p);reversed_f=Array();
-        stats.tree_seconds+=seconds(init_tree_begin);
+        const double inverse_seconds=seconds(inverse_begin);
+        const double init_tree_seconds=seconds(init_tree_begin);
+        stats.tree_seconds+=init_tree_seconds;
         points.ladder(q,d,base,storage[12]);
         c.check("giant base ladder");
         const uint64_t first=std::max<uint64_t>(1,b1>d/2?(b1-d/2)/d:1),last=(b2+d/2)/d;
@@ -566,7 +563,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             });
         }
         const auto g_row_size=p+1;
-        Array g_workspace_a(c.gw,g_row_size),g_workspace_b(c.gw,g_row_size);
+        Array g_workspace(c.gw,g_row_size);
         stats.init_seconds=seconds(begin);main_begin=Clock::now();main_started=true;
         Array h;
         for(uint64_t pos=first;pos<=last;){
@@ -591,7 +588,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
                     mpz_sub(difference.v,probe.root.v,giant.v);mpz_mul(probe.product.v,probe.product.v,difference.v);mpz_mod(probe.product.v,probe.product.v,n);
                 }}
             }
-            part_begin=Clock::now();auto g=tree(c,gx,0,count,false,&g_workspace_a,&g_workspace_b);gx=Array();stats.tree_seconds+=seconds(part_begin);
+            part_begin=Clock::now();auto g=tree(c,gx,0,count,false,&g_workspace);gx=Array();stats.tree_seconds+=seconds(part_begin);
             part_begin=Clock::now();
             if(!h.size){h=c.remainder(g->polynomial,ftree->polynomial,inv);}
             else {auto product=c.convolution(h,g->polynomial);h=c.remainder(product,ftree->polynomial,inv);}
@@ -599,7 +596,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             pos+=count;++stats.blocks;stats.giants+=count;
         }
         // The descent only needs F, its reciprocal and the accumulated remainder.
-        g_workspace_a=Array();g_workspace_b=Array();
+        g_workspace=Array();
         if(!h.size)h=c.constant(1);
         auto descent_begin=Clock::now();
         // Scaled remainder: s=rev(H)*inv(rev(F)) mod X^P. Each child takes
@@ -608,16 +605,21 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         for(size_t i=0;i<p;++i){if(i<h.size)gwcopy(&c.gw,h[i],padded[i]);else u64togw(&c.gw,0,padded[i]);}
         h=Array();auto forward_scaled=c.convolution(reverse(padded),view(inv),0,p);padded=Array();inv=Array();
         Array s(c.gw,p);for(size_t i=0;i<p;++i)gwcopy(&c.gw,forward_scaled[p-i-1],s[i]);forward_scaled=Array();
+        const double scale_seconds=seconds(descent_begin);
         Array values(c.gw,p);descend(c,*ftree,s,values,fplan.rebuild?&roots:nullptr);s=Array();ftree.reset();roots=Array();
         stats.descent_seconds=seconds(descent_begin);
         if(o.check){Integer got;for(auto &probe:probes){
             c.get(got.v,values[probe.index]);if(mpz_cmp(got.v,probe.product.v))throw std::runtime_error("Stage2 polynomial differs from direct GMP products");
             ++stats.checked_values;
         }}
+        const auto leaf_begin=Clock::now();
         Array product=c.constant(1);
         for(size_t i=0;i<p;++i)c.mul(product[0],values[i],product[0]);
         c.check();Integer gcd;c.get(gcd.v,product[0]);mpz_gcd(gcd.v,gcd.v,n);
         stats.main_seconds=seconds(main_begin);
+        std::printf("gwpoly-phases: baby=%.6f ftree=%.6f reciprocal=%.6f giant=%.6f gtree=%.6f fold=%.6f scale=%.6f descent=%.6f leaf_gcd=%.6f\n",
+                    baby_seconds,init_tree_seconds-inverse_seconds,inverse_seconds,stats.point_seconds-baby_seconds,
+                    stats.tree_seconds-init_tree_seconds,stats.fold_seconds,scale_seconds,stats.descent_seconds-scale_seconds,seconds(leaf_begin));
         if(mpz_cmp_ui(gcd.v,1)==0)return false;
         if(mpz_cmp(gcd.v,n)<0){mpz_set(factor,gcd.v);return true;}
         for(size_t i=0;i<p;++i)c.divisor(values[i]);
@@ -649,7 +651,7 @@ void selftest(unsigned threads){
         auto product=c.convolution(h,t->polynomial);auto rem=c.remainder(product,t->polynomial,inv);
         for(size_t i=0;i<rem.size;++i){c.get(x.v,rem[i]);if(mpz_sgn(x.v))throw std::runtime_error("Polynomial remainder differs from exact multiple");}
         // Nonzero remainders across several folds, including packed G workspaces.
-        Array accumulator=c.copy(h),wa(c.gw,count+1),wb(c.gw,count+1);
+        Array accumulator=c.copy(h),workspace(c.gw,count+1);
         std::vector<std::unique_ptr<Integer>> expected;
         for(size_t i=0;i<count;++i){
             auto value=std::make_unique<Integer>();mpz_set_ui(value->v,0);
@@ -658,7 +660,7 @@ void selftest(unsigned threads){
         }
         for(unsigned block=0;block<3;++block){
             for(size_t j=0;j<count;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
-            auto g=tree(c,roots,0,count,false,&wa,&wb);auto full=c.convolution(accumulator,g->polynomial);
+            auto g=tree(c,roots,0,count,false,&workspace);auto full=c.convolution(accumulator,g->polynomial);
             accumulator=c.remainder(full,t->polynomial,inv);
             auto scaled=c.convolution(reverse(accumulator),view(inv),0,count);Array reversed(c.gw,count);
             for(size_t i=0;i<count;++i)gwcopy(&c.gw,scaled[count-i-1],reversed[i]);
