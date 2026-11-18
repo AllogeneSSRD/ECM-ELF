@@ -79,6 +79,13 @@ def main():
     for d in (6,30,60,210):
         rows=run(f'wheel_{d}',cpu,n,extra=['--d',d,'--curves',1,'--exponent',127]);assert rows[0]['status']=='NF'
     rows=run('packed_threaded',cpu,n,b2=10**8,extra=['--d',60060,'--curves',1,'--exponent',127]);assert rows[0]['stage2-engine']['checked-values']==3
+    full_log=(out/'packed_threaded.log').read_text()
+    full_mib=float(re.search(r'planned_mib=([\d.]+)',full_log)[1])
+    assert 'ftree=full' in full_log
+    constrained=['--d',60060,'--curves',1,'--exponent',127,'--memory-mib',int(full_mib*0.85)]
+    rebuilt=run('segmented_threaded',cpu,n,b2=10**8,extra=constrained)[0]
+    assert 'ftree=segmented' in (out/'segmented_threaded.log').read_text()
+    assert rebuilt['status']==rows[0]['status']=='NF' and rebuilt['stage2-engine']['checked-values']==3
     run('skip',cpu,n,extra=['--skip',1,'--curves',1])
     if a.gpu:
         gpu=save('gpu_m127',n,gpu=True);assert oracle.records(gpu)[0][:4]==oracle.records(cpu)[0][:4]

@@ -28,12 +28,15 @@ def main():
     args = parser.parse_args()
     if min(args.b2, args.memory_mib, args.limit) <= 0:
         parser.error("B2, memory budget and limit must be positive")
-    lines = [line for line in args.worker_log.read_text().splitlines() if line.startswith("gwpoly: ")]
+    log = args.worker_log.read_text()
+    lines = [line for line in log.splitlines() if line.startswith("gwpoly: ")]
     if len(lines) != 1:
         parser.error("expected a single completed GWpoly curve")
     fields = dict(re.findall(r"(\w+)=([^ ]+)", lines[0]))
     selected = int(fields["D"])
-    mib_per_value = float(fields["planned_mib"]) / units(int(fields["P"]))
+    actual = re.search(r"^gwpoly-plan: ftree=\w+ bytes_per_value=(\d+)$", log, re.M)
+    mib_per_value = (int(actual[1]) / 1048576 if actual else
+                     float(fields["planned_mib"]) / units(int(fields["P"])))
     catalog = Path(__file__).resolve().parents[2] / "src/ecm/stage2/planning/d_catalog.h"
     candidates = {int(d) for d in re.findall(r"\{(\d+), (?:true|false)\}", catalog.read_text())}
     candidates.update(w * k for w in (30, 210, 2310, 30030, 510510)
@@ -46,16 +49,21 @@ def main():
         p = phi(d) // 2
         levels = (p - 1).bit_length()
         mib = mib_per_value * units(p)
-        cost = 6*p*levels + (args.b2/d + p)*(levels+8)
-        plans.append((cost, d, p, mib))
+        rebuild = mib > args.memory_mib and levels > 3
+        if rebuild:
+            segment = (p + 7) // 8
+            scratch = max(18*p, 12*p + segment*((segment-1).bit_length()+4))
+            mib = mib_per_value * (5*p + 16 + scratch + 256)
+        cost = (8 if rebuild else 6)*p*levels + (args.b2/d + p)*(levels+8)
+        plans.append((cost, d, p, mib, "segmented" if rebuild else "full"))
     ranked = sorted(plan for plan in plans if plan[3] <= args.memory_mib)
     shown = ranked[:args.limit]
     original = next(plan for plan in plans if plan[1] == selected)
     if original not in shown:
         shown.append(original)
-    print("D\tP\testimated MiB at input FFT\tmodel score\tinput plan")
-    for cost, d, p, mib in shown:
-        print(f"{d}\t{p}\t{mib:.1f}\t{cost:.0f}\t{'*' if d == selected else ''}")
+    print("D\tP\testimated MiB at input FFT\tF tree\tmodel score\tinput D")
+    for cost, d, p, mib, tree in shown:
+        print(f"{d}\t{p}\t{mib:.1f}\t{tree}\t{cost:.0f}\t{'*' if d == selected else ''}")
 
 
 if __name__ == "__main__":

@@ -204,12 +204,18 @@ struct Tree {
     explicit Tree(size_t a,size_t b):lo(a),hi(b){}
 };
 std::unique_ptr<Tree> tree(Context &,const Array &,size_t,size_t,bool,Array *a=nullptr,Array *b=nullptr);
-void descend(Context &c,const Tree &t,const Array &s,Array &values){
-    if(!t.left){gwcopy(&c.gw,s[0],values[t.lo]);return;}
+void descend(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots=nullptr){
+    if(!t.left){
+        if(t.hi-t.lo==1){gwcopy(&c.gw,s[0],values[t.lo]);return;}
+        if(!roots)throw std::logic_error("Missing roots for F subtree rebuild");
+        auto segment=tree(c,*roots,t.lo,t.hi,true);
+        descend(c,*segment,s,values);
+        return;
+    }
     const auto a=t.left->hi-t.left->lo,b=t.right->hi-t.right->lo;
     auto sl=c.scaled_child(s,t.right->polynomial,a);
     auto sr=c.scaled_child(s,t.left->polynomial,b);
-    descend(c,*t.left,sl,values);descend(c,*t.right,sr,values);
+    descend(c,*t.left,sl,values,roots);descend(c,*t.right,sr,values,roots);
 }
 struct Point {gwnum x,z;};
 struct Points {
@@ -373,6 +379,36 @@ uint64_t phi(uint64_t wheel) {
     for_each_wheel_prime(wheel, [&](uint64_t prime) { result -= result / prime; });
     return result;
 }
+// Retain three splits (at most eight segments), including the segment roots.
+constexpr unsigned retained_splits=3;
+std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size_t hi,unsigned splits){
+    auto t=std::make_unique<Tree>(lo,hi);
+    if(!splits || hi-lo==1){
+        auto segment=tree(c,roots,lo,hi,false);
+        t->polynomial=c.copy(segment->polynomial);
+    }else{
+        const auto mid=lo+(hi-lo)/2;
+        t->left=partial_ftree(c,roots,lo,mid,splits-1);
+        t->right=partial_ftree(c,roots,mid,hi,splits-1);
+        t->polynomial=Array(c.gw,hi-lo+1);
+        c.monic_product(t->left->polynomial,t->right->polynomial,t->polynomial);
+    }
+    return t;
+}
+struct FTreePlan {bool rebuild;double bytes;};
+FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget){
+    const auto levels=std::ceil(std::log2(double(p)));
+    const double full=(p*(levels+18)+256)*bytes;
+    if(full<=double(budget)*1048576 || levels<=retained_splits)return {false,full};
+    constexpr size_t segments=1u<<retained_splits;
+    const size_t chunk=(p+segments-1)/segments;
+    // Upper rows (including monic terms) and saved baby roots are always live.
+    // Main uses the existing transient allowance. Descent rebuilds just one
+    // subtree after releasing the G workspaces; reserve its rows and scratch.
+    const double retained=(retained_splits+2)*p+2*segments;
+    const double temporary=std::max(18.0*p, 12.0*p+chunk*(std::ceil(std::log2(double(chunk)))+4));
+    return {true,(retained+temporary+256)*bytes};
+}
 uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
     // Smooth wheels including repeated odd factors; compare actual phi(D)/2.
     std::vector<uint64_t> choices;
@@ -388,9 +424,9 @@ uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
     for(auto d:choices){
         if(d<6 || d%2 || d>20000000)continue;
         const double p=double(phi(d)/2),levels=std::ceil(std::log2(p));
-        const double memory=(p*(levels+18)+256)*bytes;
-        if(memory>double(budget)*1048576)continue;
-        const double cost=6*p*levels+(double(b2)/d+p)*(levels+8);
+        const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget);
+        if(plan.bytes>double(budget)*1048576)continue;
+        const double cost=(plan.rebuild?8:6)*p*levels+(double(b2)/d+p)*(levels+8);
         if(cost<best){best=cost;result=d;}
     }
     if(!result)throw std::runtime_error("No CPU polynomial plan within memory budget");
@@ -439,8 +475,11 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
     if(!owner)throw std::runtime_error("CPU polynomial FFT/memory planning did not converge");
     auto &c=*owner;
     stats.d=d;stats.poly_size=p;
-    stats.estimated_memory_mib=(p*(std::ceil(std::log2(double(p)))+18)+256)*double(gwnum_size(&c.gw)+64)/1048576.0;
+    const auto fplan=ftree_plan(p,double(gwnum_size(&c.gw)+64),o.memory_mib);
+    stats.estimated_memory_mib=fplan.bytes/1048576.0;
     if(stats.estimated_memory_mib>o.memory_mib)throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
+    std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu\n",
+                fplan.rebuild?"segmented":"full",static_cast<size_t>(gwnum_size(&c.gw))+64);
     bool main_started=false;auto main_begin=begin;
     try {
         Points points(c);Array storage(c.gw,14);Point q{storage[0],storage[1]},step{storage[2],storage[3]},
@@ -471,17 +510,17 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             stats.point_seconds+=seconds(t);
         }
         auto init_tree_begin=Clock::now();
-        auto ftree=tree(c,roots,0,p,true);roots=Array();
+        auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,retained_splits):tree(c,roots,0,p,true);
         struct Probe {Integer root,product;size_t index;};
         std::array<Probe,3> probes;
         if(o.check){
             for(size_t i=0;i<probes.size();++i){
                 auto &probe=probes[i];probe.index=std::min<size_t>(p-1,i*(p/2));
-                const Tree *leaf=ftree.get();while(leaf->left)leaf=probe.index<leaf->left->hi?leaf->left.get():leaf->right.get();
-                c.get(probe.root.v,leaf->polynomial[0]);mpz_neg(probe.root.v,probe.root.v);mpz_mod(probe.root.v,probe.root.v,n);
+                c.get(probe.root.v,roots[probe.index]);
                 mpz_set_ui(probe.product.v,1);
             }
         }
+        if(!fplan.rebuild)roots=Array();
         Array reversed_f(c.gw,p+1);
         for(size_t i=0;i<=p;++i)gwcopy(&c.gw,ftree->polynomial[p-i],reversed_f[i]);
         auto inv=c.inverse(reversed_f,p);reversed_f=Array();
@@ -543,7 +582,7 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         for(size_t i=0;i<p;++i){if(i<h.size)gwcopy(&c.gw,h[i],padded[i]);else u64togw(&c.gw,0,padded[i]);}
         h=Array();auto forward_scaled=c.convolution(reverse(padded),view(inv),0,p);padded=Array();inv=Array();
         Array s(c.gw,p);for(size_t i=0;i<p;++i)gwcopy(&c.gw,forward_scaled[p-i-1],s[i]);forward_scaled=Array();
-        Array values(c.gw,p);descend(c,*ftree,s,values);s=Array();ftree.reset();
+        Array values(c.gw,p);descend(c,*ftree,s,values,fplan.rebuild?&roots:nullptr);s=Array();ftree.reset();roots=Array();
         stats.descent_seconds=seconds(descent_begin);
         if(o.check){Integer got;for(auto &probe:probes){
             c.get(got.v,values[probe.index]);if(mpz_cmp(got.v,probe.product.v))throw std::runtime_error("Stage2 polynomial differs from direct GMP products");
@@ -573,9 +612,12 @@ void selftest(unsigned threads){
         auto forward=c.convolution(reverse(h),view(inv),0,count);Array s(c.gw,count);
         for(size_t i=0;i<count;++i)gwcopy(&c.gw,forward[count-i-1],s[i]);
         Array out(c.gw,count);descend(c,*t,s,out);
+        auto partial=partial_ftree(c,roots,0,count,retained_splits);
+        Array rebuilt(c.gw,count);descend(c,*partial,s,rebuilt,&roots);
         for(size_t i=0;i<count;++i){
             mpz_set_ui(y.v,0);for(size_t k=count;k-->0;){mpz_mul_ui(y.v,y.v,expected_roots[i]);mpz_add_ui(y.v,y.v,103*(k+3));mpz_mod(y.v,y.v,n.v);}
             c.get(x.v,out[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Scaled polynomial descent differs from GMP Horner");
+            c.get(x.v,rebuilt[i]);if(mpz_cmp(x.v,y.v))throw std::runtime_error("Rebuilt F subtree differs from GMP Horner");
         }
         auto product=c.convolution(h,t->polynomial);auto rem=c.remainder(product,t->polynomial,inv);
         for(size_t i=0;i<rem.size;++i){c.get(x.v,rem[i]);if(mpz_sgn(x.v))throw std::runtime_error("Polynomial remainder differs from exact multiple");}
