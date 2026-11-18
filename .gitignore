@@ -99,7 +99,8 @@ AGENTS.md
 !/assets/gui_v2/CLASSIC-ELY-NOTICE.md
 !/assets/gui_v2/ELYTerminal-LICENSE.txt
 /tools/benchmarks/prmers_pm1
-/tools/benchmarks/prime95
+/tools/benchmarks/prime95/*
+!/tools/benchmarks/prime95/worktodo_ecm2_cpu_stage2_b1000.txt
 /tools/benchmarks/stage1
 /docs/web
 /cache

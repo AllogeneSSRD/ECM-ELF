@@ -43,7 +43,8 @@ def main():
     p.add_argument('--output',type=Path,required=True);p.add_argument('--gpu',action='store_true')
     p.add_argument('--reference-study',type=Path,help='Optional frozen exact-N study for 10232/16272-bit GMP projection gates')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
-    s1=a.stage1.resolve();s2=a.stage2.resolve();ini=out/'empty.toml';ini.write_text('')
+    s1=a.stage1.resolve();s2=a.stage2.resolve();ini=out/'ecm.toml'
+    ini.write_text('config_version = 4\n',encoding='utf-8')
     sha=lambda path:hashlib.sha256(Path(path).read_bytes()).hexdigest()
     report=dict(complete=False,stage1_sha256=sha(s1),stage2_sha256=sha(s2),test_sha256=sha(__file__),checks=[])
     def call(name,cmd,data=None,good=True):
@@ -53,15 +54,15 @@ def main():
         report['checks'].append(dict(name=name,exit=r.returncode));(out/'summary.json').write_text(json.dumps(report,indent=2)+'\n')
         print('PASS',name,flush=True);return r
     for threads in (1,4):call(f'math_t{threads}',[s2,'--selftest-gwpoly','--threads',threads])
-    def save(name,n,b1=1000,sigma=17,count=1,gpu=False):
+    def save(name,target,b1=1000,sigma=17,count=1,gpu=False):
         path=out/(name+'.save')
         call(name,[s1,'--curve','ed','--target','gpu' if gpu else 'cpu','--impl','auto' if gpu else 'scalar',
-            '-d',1,'-sigma',sigma,'-gpucurves',count,'--tmp-dir',out/(name+'_tmp'),'-save',path,b1,b1],str(n).encode())
+            '-d',1,'-sigma',sigma,'-gpucurves',count,'--tmp-dir',out/(name+'_tmp'),'-save',path,b1,b1],str(target).encode())
         records=oracle.records(path);assert len(records)==count
         return path
-    def run(name,path,n,b2=40000,extra=(),good=True):
+    def run(name,path,n,b2=40000,extra=(),good=True,threads=4):
         result=out/(name+'.jsonl');submission=out/(name+'.json.txt')
-        call(name,[s2,'--config',ini,'--save',path,'--backend','gwpoly','--threads',4,'--b2',b2,
+        call(name,[s2,'--config',ini,'--save',path,'--backend','gwpoly','--threads',threads,'--b2',b2,
             '--results',result,'--submission',submission,'--gw-check',*extra],good=good)
         rows=[json.loads(line) for line in result.read_text().splitlines()] if result.exists() else []
         for row in rows:verify(row,n)
@@ -87,9 +88,11 @@ def main():
     full_log=(out/'packed_threaded.log').read_text()
     full_mib=float(re.search(r'planned_mib=([\d.]+)',full_log)[1])
     assert 'ftree=full' in full_log
+    assert 'ftree_rebuild_seconds=0.000000' in full_log
     constrained=['--d',60060,'--curves',1,'--exponent',127,'--memory-mib',int(full_mib*0.85)]
     rebuilt=run('segmented_threaded',cpu,n,b2=10**8,extra=constrained)[0]
-    assert 'ftree=segmented' in (out/'segmented_threaded.log').read_text()
+    segment_log=(out/'segmented_threaded.log').read_text()
+    assert 'ftree=segmented' in segment_log and float(re.search(r'ftree_rebuild_seconds=([\d.]+)',segment_log)[1])>0
     assert rebuilt['status']==rows[0]['status']=='NF' and rebuilt['stage2-engine']['checked-values']==3
     run('skip',cpu,n,extra=['--skip',1,'--curves',1])
     if a.gpu:
@@ -97,6 +100,14 @@ def main():
         assert run('gpu_save',gpu,n,extra=['--exponent',127])[0]['status']=='NF'
     wider=(1<<2203)-1;wide=save('cpu_m2203',wider)
     assert run('wider_carrier',wide,wider,b2=10**6,extra=['--exponent',2203])[0]['status']=='NF'
+    for exponent, factor, bits in [(8011,80111,7995),(16319,270811405193137,16272)]:
+        modulus, remainder=divmod((1<<exponent)-1,factor)
+        assert remainder==0 and modulus.bit_length()==bits
+        path=save(f'cofactor_m{exponent}',f'(2^{exponent}-1)/{factor}',sigma=26)
+        for threads in (1,4):
+            row=run(f'cofactor_m{exponent}_t{threads}',path,modulus,b2=70000000,threads=threads,
+                    extra=['--exponent',exponent,'--known-factor',factor,'--d',13860])[0]
+            assert row['status']=='NF' and row['stage2-engine']['checked-values']==3
     # GW add/subtract may mutate source FFT states: shared point constants
     # caused a four-thread failure on this large wheel despite a serial pass.
     m347=(1<<347)-1;large_bounds=save('cpu_m347',m347)

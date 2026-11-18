@@ -34,15 +34,17 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 每个 D 先尝试完整 F 树。超出预算时，规划器比较顶部保留层数，保存归一化 baby 根，下降时逐棵重建底层子树。估算分别覆盖初始化、G/H 主循环和下降时同时存活的数组，另外计入线程工作区、多项式 FFT 暂存及分配余量，FFT 安全检查换档后重新计算。`gwpoly-plan` 报告完整或分段布局、单个系数的估计字节和顶部保留分裂次数，`planned_mib` 为布局估值。调优候选与显式 D 均使用同一准入条件。[CPU 规划源码](../../src/ecm/stage2/cpu/gwpoly.cpp)
 
-Newton 倒数只计算每次扩展的新系数。scaled 下降在一次 polymult 调用中用父余式分别乘兄弟 F 多项式，两个孩子共用父变换并直接写入存放最终叶值的数组。在能减少至少一个 G 块时，CPU 只遍历原 giant 网格的高位后缀，保留原终点和小素数检查。日志 `gwpoly-range` 给出原起点、当前起点与终点。后缀发现因子或分母／GCD 饱和时，释放工作区，按完整区间重算后再交付因子或报告错误。中断和舍入错误直接上报。[覆盖与因子恢复](../reference/ECM_STAGE2_RELOCATION.md)
+完整 F 树按层连续保存各首一多项式的低次系数，整棵树的根另存首项 1。分段下降拿到父余式后只重建该段根以下的树行。Newton 倒数只计算每次扩展的新系数。scaled 下降用一次 polymult 调用计算两个孩子，父变换共用，结果直接写入最终叶数组。最后一对线性因子直接用乘加计算两个叶值。
+
+在能减少至少一个 G 块时，CPU 只遍历原 giant 网格的高位后缀，保留原终点和小素数检查。日志 `gwpoly-range` 给出原起点、当前起点与终点。后缀发现因子或分母／GCD 饱和时，释放工作区，按完整区间重算后再交付因子或报告错误。中断和舍入错误直接上报。[覆盖与因子恢复](../reference/ECM_STAGE2_RELOCATION.md)
 
 Giant 横坐标直接写入 P+1 槽的 G 缓冲区，归一化后相邻两根就地生成首一二次因子。上层父节点覆盖两个子节点所在区间，单独的尾节点留在原位。首个满块用 `G−F` 初始化 H，后续块在 G 和 H 中复用乘积、商及余式的空间。分段 F 树的子树根也采用原地合并。最后一次折叠后释放 G 缓冲区，准入继续按上述临时空间余量估算。[宽位内存与耗时对照](../performance/CPU_GWPOLY_STAGE2.md#giant-点g-树和-h-折叠)
 
-完成常规多项式路径时，DLL 的 `gwpoly-phases` 行分别报告 baby 点、F 建树、倒数、giant 点、G 建树、H 折叠、H 缩放、下降和叶积至整体 GCD 的秒数。分段 F 树在下降中重建的时间计入 descent。阶段图使用完整 NF，读档、发布与进程启动在引擎计时之外。[Prime95 阶段对照](../performance/STAGE2.md#宽位单线程阶段耗时)
+完成常规多项式路径时，DLL 的 `gwpoly-phases` 行分别报告 baby 点、F 建树、倒数、giant 点、G 建树、H 折叠、H 缩放、下降和叶积至整体 GCD 的秒数。`gwpoly-descent` 的 `ftree_rebuild_seconds` 是 descent 中用于分段重建的时间，完整 F 树报告零。阶段图使用完整 NF，读档、发布与进程启动在引擎计时之外。[Prime95 阶段对照](../performance/CPU_GWPOLY_STAGE2.md)
 
 Stage2 ABI 3 起会在曲线内输出规划、baby 点、F 树、倒数、giant 循环、下降和 GCD。设置 `log_level = "phases"` 可查看阶段，`"batches"` 另显示 giant 批次和估算剩余时间。GUI 直接消费同一进度事件，队列模式也写入共享日志。批次进度按本次执行范围计数，命中后重放原范围会重新计数。libecm 仍按曲线报告。
 
-`--gw-check` 在完整运行中额外使用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶结果比较，适合正确性验证，不计入默认性能测量。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
+梅森承载在 AVX-512 或 FMA3 上对 baby 和 giant 差分链使用融合乘减。开启 `--gw-check` 时，每个点生成线程用独立的标量梯形算法重算本段首、中、末三个 baby 点，以 GMP 核对射影等式。另用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶值比较；结果中的 `checked-values` 统计这一组叶投影。默认计时关闭校验。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
 
 ```powershell
 ecm_stage2.exe --save ed.save --backend gwpoly --threads 4 --memory-mib 4096 --b2 2600000000000 --exponent 347

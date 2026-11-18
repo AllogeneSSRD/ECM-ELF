@@ -178,11 +178,10 @@ struct Context {
         u64togw(&gw,1,out[a.size+b.size-2]);
     }
     Array convolution(const Array &a,const Array &b){return convolution(view(a),view(b),0,a.size+b.size-1);}
-    void scaled_children(const Array &parent,const Array &left,const Array &right,gwnum *out){
+    void scaled_children(const Array &parent,const Array &left,const Array &right,size_t a,size_t b,gwnum *out){
         // Both circular products use the same transformed parent. Wrapped
         // coefficients lie below each requested high interval. Like the
         // upstream F descent the outputs may occupy the parent's own row.
-        const auto a=left.size-1,b=right.size-1;
         constexpr int child=POLYMULT_INVEC2_MONIC|POLYMULT_CIRCULAR|POLYMULT_MULHI;
         polymult_arg args[2]={{right.v,b,out,a,nullptr,parent.size,0,child},
                               {left.v,a,out+a,b,nullptr,parent.size,0,child}};
@@ -265,19 +264,42 @@ struct Tree {
     std::vector<Array> rows;
     explicit Tree(size_t a,size_t b):lo(a),hi(b){}
 };
-std::unique_ptr<Tree> tree(Context &,const Array &,size_t,size_t,bool,Array *workspace=nullptr);
-void descend(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots=nullptr){
+std::unique_ptr<Tree> retained_ftree(Context &,const Array &,size_t,size_t,bool need_root=true);
+void descend_node(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots,gwnum scratch,double &rebuild_seconds){
     if(!t.left){
-        if(t.hi-t.lo==1){gwcopy(&c.gw,s[0],values[t.lo]);return;}
+        if(t.hi-t.lo==1){
+            if(s[0]!=values[t.lo])gwcopy(&c.gw,s[0],values[t.lo]);
+            return;
+        }
         if(!roots)throw std::logic_error("Missing roots for F subtree rebuild");
-        auto segment=tree(c,*roots,t.lo,t.hi,true);
-        descend(c,*segment,s,values);
+        // The parent remainder is already available. Only F polynomials
+        // strictly below this checkpoint are consumed by descent.
+        const auto start=Clock::now();
+        auto segment=retained_ftree(c,*roots,t.lo,t.hi,false);
+        rebuild_seconds+=seconds(start);
+        descend_node(c,*segment,s,values,roots,scratch,rebuild_seconds);
         return;
     }
     const auto a=t.left->hi-t.left->lo,b=t.right->hi-t.right->lo;
-    c.scaled_children(s,t.left->polynomial,t.right->polynomial,values.v+t.lo);
+    if(a==1 && b==1){
+        // High coefficient of S*(X-r) mod X^2-1 equals S0-r*S1.
+        // Hold the first result until both overlapping inputs have been read.
+        gwmuladd4(&c.gw,s[1],t.right->polynomial[0],s[0],scratch,GWMUL_FFT_S13);
+        gwmuladd4(&c.gw,s[1],t.left->polynomial[0],s[0],values[t.lo+1],0);
+        gwcopy(&c.gw,scratch,values[t.lo]);
+        c.check("scaled leaf pair");
+        return;
+    }
+    c.scaled_children(s,t.left->polynomial,t.right->polynomial,a,b,values.v+t.lo);
     Array sl(c.gw,values.v+t.lo,a),sr(c.gw,values.v+t.right->lo,b);
-    descend(c,*t.left,sl,values,roots);descend(c,*t.right,sr,values,roots);
+    descend_node(c,*t.left,sl,values,roots,scratch,rebuild_seconds);
+    descend_node(c,*t.right,sr,values,roots,scratch,rebuild_seconds);
+}
+double descend(Context &c,const Tree &t,const Array &s,Array &values,const Array *roots=nullptr){
+    Array scratch(c.gw,1);
+    double rebuild_seconds=0;
+    descend_node(c,t,s,values,roots,scratch[0],rebuild_seconds);
+    return rebuild_seconds;
 }
 struct Point {gwnum x,z;};
 struct Points {
@@ -302,7 +324,7 @@ struct Points {
         c.mul(t[8],difference.z,t[10]);c.mul(t[9],difference.x,t[11]);
         gwcopy(&h,t[10],out.x);gwcopy(&h,t[11],out.z);
     }
-    void add_giant(Point p,Point q,Point difference,Point out){
+    void add_fused(Point p,Point q,Point difference,Point out){
         auto &gw=c.gw;
         // These inputs belong to this worker and may keep their forward FFTs.
         // The two squares omit the same factor of four in the projective output.
@@ -376,91 +398,99 @@ template<class Function> void tree_jobs(Context &c,size_t count,Function functio
 }
 void tree_layout(size_t lo,size_t hi,size_t depth,std::vector<size_t> &sizes){
     if(sizes.size()<=depth)sizes.resize(depth+1);
-    sizes[depth]+=hi-lo+1;
+    sizes[depth]+=hi-lo;
     if(hi-lo>1){const auto mid=lo+(hi-lo)/2;tree_layout(lo,mid,depth+1,sizes);tree_layout(mid,hi,depth+1,sizes);}
 }
 std::unique_ptr<Tree> tree_skeleton(Context &c,size_t lo,size_t hi,size_t depth,std::vector<Array> &rows,
                                     std::vector<size_t> &offsets,std::vector<std::vector<Tree *>> &levels){
     auto t=std::make_unique<Tree>(lo,hi);
-    t->polynomial=Array(c.gw,rows[depth].v+offsets[depth],hi-lo+1);offsets[depth]+=hi-lo+1;
+    if(rows[depth].size){
+        const auto count=depth==0?rows[0].size:hi-lo;
+        t->polynomial=Array(c.gw,rows[depth].v+offsets[depth],count);
+        offsets[depth]+=count;
+    }
     levels[depth].push_back(t.get());
     if(hi-lo>1){const auto mid=lo+(hi-lo)/2;
         t->left=tree_skeleton(c,lo,mid,depth+1,rows,offsets,levels);
         t->right=tree_skeleton(c,mid,hi,depth+1,rows,offsets,levels);}
     return t;
 }
-std::unique_ptr<Tree> tree(Context &c,const Array &roots,size_t lo,size_t hi,bool retain,Array *workspace){
-    if(!retain){
-        const size_t count=hi-lo, row_size=count+1;
-        if(workspace && workspace->size<row_size)
-            throw std::runtime_error("G tree workspace too small");
-        auto t=std::make_unique<Tree>(lo,hi);
-        t->polynomial=workspace?Array(c.gw,workspace->v,row_size):Array(c.gw,row_size);
-        gwnum *row=t->polynomial.v;
-        // (X-x)(X-y) = X^2 - (x+y)X + xy.
-        const size_t pairs=(count+1)/2;
-        const bool in_place=roots.v+lo==row;
-        tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
-            for(size_t i=begin;i<end;++i){
-                const auto offset=2*i;
-                auto x=roots[lo+offset];
-                if(offset+1==count){
-                    if(!in_place)gwcopy(&worker.gw,x,row[offset]);
-                    gwsmallmul(&worker.gw,-1,row[offset]);
-                }else if(in_place){
-                    // The two inputs with implicit leading -1 multiply to a
-                    // monic quadratic and may share storage with its output.
-                    worker.monic_coefficients(row+offset,1,row+offset+1,1,row+offset,false,true);
-                }else{
-                    auto y=roots[lo+offset+1];
-                    worker.mul(x,y,row[offset]);
-                    gwadd3o(&worker.gw,x,y,row[offset+1],GWADD_FORCE_NORMALIZE);
-                    gwsmallmul(&worker.gw,-1,row[offset+1]);
-                }
-            }
-            worker.check("linear factor pairs");
-        });
-        // Intermediate nodes contain only the coefficients below the leading one.
-        // Each layer therefore occupies exactly count consecutive slots.
-        for(size_t width=2;width<count;width*=2){
-            const size_t stride=2*width,jobs=(count+stride-1)/stride;
-            tree_jobs(c,jobs,[&](Context &worker,size_t begin,size_t end){
-                for(size_t j=begin;j<end;++j){
-                    const size_t offset=j*stride,remaining=count-offset;
-                    if(remaining<=width)continue;
-                    // polymult permits input/output overlap. Each job owns its
-                    // whole output range, including the shorter right operand.
-                    const size_t right=std::min(width,remaining-width);
-                    worker.monic_coefficients(row+offset+width,right,row+offset,width,row+offset,jobs>=128);
-                }
-            });
-            if(jobs>=128){
-                polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
-                poly_unfft_fft_coefficients(&c.pm,row,count);
-                c.check("G tree coefficient normalization");
+std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_t hi,Array *workspace=nullptr){
+    const size_t count=hi-lo, row_size=count+1;
+    if(workspace && workspace->size<row_size)
+        throw std::runtime_error("G tree workspace too small");
+    auto t=std::make_unique<Tree>(lo,hi);
+    t->polynomial=workspace?Array(c.gw,workspace->v,row_size):Array(c.gw,row_size);
+    gwnum *row=t->polynomial.v;
+    // (X-x)(X-y) = X^2 - (x+y)X + xy.
+    const size_t pairs=(count+1)/2;
+    const bool in_place=roots.v+lo==row;
+    tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
+        for(size_t i=begin;i<end;++i){
+            const auto offset=2*i;
+            auto x=roots[lo+offset];
+            if(offset+1==count){
+                if(!in_place)gwcopy(&worker.gw,x,row[offset]);
+                gwsmallmul(&worker.gw,-1,row[offset]);
+            }else if(in_place){
+                // The two inputs with implicit leading -1 multiply to a
+                // monic quadratic and may share storage with its output.
+                worker.monic_coefficients(row+offset,1,row+offset+1,1,row+offset,false,true);
+            }else{
+                auto y=roots[lo+offset+1];
+                worker.mul(x,y,row[offset]);
+                gwadd3o(&worker.gw,x,y,row[offset+1],GWADD_FORCE_NORMALIZE);
+                gwsmallmul(&worker.gw,-1,row[offset+1]);
             }
         }
-        u64togw(&c.gw,1,row[count]);
-        return t;
+        worker.check("linear factor pairs");
+    });
+    // Intermediate nodes contain only the coefficients below the leading one.
+    // Each layer therefore occupies exactly count consecutive slots.
+    for(size_t width=2;width<count;width*=2){
+        const size_t stride=2*width,jobs=(count+stride-1)/stride;
+        tree_jobs(c,jobs,[&](Context &worker,size_t begin,size_t end){
+            for(size_t j=begin;j<end;++j){
+                const size_t offset=j*stride,remaining=count-offset;
+                if(remaining<=width)continue;
+                // polymult permits input/output overlap. Each job owns its
+                // whole output range, including the shorter right operand.
+                const size_t right=std::min(width,remaining-width);
+                worker.monic_coefficients(row+offset+width,right,row+offset,width,row+offset,jobs>=128);
+            }
+        });
+        if(jobs>=128){
+            polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
+            poly_unfft_fft_coefficients(&c.pm,row,count);
+            c.check("G tree coefficient normalization");
+        }
     }
+    u64togw(&c.gw,1,row[count]);
+    return t;
+}
+std::unique_ptr<Tree> retained_ftree(Context &c,const Array &roots,size_t lo,size_t hi,bool need_root){
     std::vector<size_t> sizes;tree_layout(lo,hi,0,sizes);
+    // Every internal row stores just the low coefficients of its monic nodes.
+    sizes[0]=need_root?hi-lo+1:0;
     std::vector<Array> rows;for(auto size:sizes)rows.emplace_back(c.gw,size);
     std::vector<size_t> offsets(sizes.size());std::vector<std::vector<Tree *>> levels(sizes.size());
     auto t=tree_skeleton(c,lo,hi,0,rows,offsets,levels);t->rows=std::move(rows);
-    for(size_t depth=levels.size();depth-->0;){
+    const size_t first_row=need_root?0:1;
+    for(size_t depth=levels.size();depth>first_row;){
+        --depth;
         auto &nodes=levels[depth];
         tree_jobs(c,nodes.size(),[&](Context &worker,size_t begin,size_t end){for(size_t i=begin;i<end;++i){
             auto &node=*nodes[i];
-            if(node.left)worker.monic_product(node.left->polynomial,node.right->polynomial,node.polynomial,nodes.size()>=128);
-            else {gwcopy(&worker.gw,roots[node.lo],node.polynomial[0]);gwsmallmul(&worker.gw,-1,node.polynomial[0]);u64togw(&worker.gw,1,node.polynomial[1]);}
+            if(node.left)worker.monic_coefficients(node.left->polynomial.v,node.left->hi-node.left->lo,
+                node.right->polynomial.v,node.right->hi-node.right->lo,node.polynomial.v,nodes.size()>=128);
+            else {gwcopy(&worker.gw,roots[node.lo],node.polynomial[0]);gwsmallmul(&worker.gw,-1,node.polynomial[0]);}
         }});
         if(nodes.size()>=128){
-            View coefficients;
-            for(auto node:nodes)for(size_t i=0;i+1<node->polynomial.size;++i)coefficients.push_back(node->polynomial[i]);
             polymult_set_num_threads(&c.pm,c.pm.max_num_threads);
-            poly_unfft_fft_coefficients(&c.pm,coefficients.data(),coefficients.size());c.check("F tree coefficient normalization");
+            poly_unfft_fft_coefficients(&c.pm,t->rows[depth].v,t->rows[depth].size);c.check("F tree coefficient normalization");
         }
     }
+    if(need_root)u64togw(&c.gw,1,t->polynomial[hi-lo]);
     return t;
 }
 template<class Function>
@@ -483,7 +513,7 @@ uint64_t phi(uint64_t wheel) {
 std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size_t hi,unsigned splits){
     auto t=std::make_unique<Tree>(lo,hi);
     if(!splits || hi-lo==1){
-        auto segment=tree(c,roots,lo,hi,false);
+        auto segment=product_tree(c,roots,lo,hi);
         t->polynomial=std::move(segment->polynomial);
     }else{
         const auto mid=lo+(hi-lo)/2;
@@ -711,19 +741,34 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                 const auto first=residues[lo],last=residues[hi-1];
                 ops.ladder(local_q,first,b,work[10]);ops.ladder(local_q,first>1?first-2:1,a,work[10]);
                 size_t index=lo;
+                const bool fused=worker.o.exponent && (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
                 for(uint64_t j=first;j<=last;j+=2){
                     if(std::gcd(j,d)==1){gwcopy(&worker.gw,b.x,roots[index]);gwcopy(&worker.gw,b.z,z[index++]);}
-                    if(j==1)ops.add(local_step,local_q,local_q,v);else ops.add(b,local_step,a,v);
-                    ops.copy(b,a);ops.copy(v,b);if((j&255)==1)worker.check();
+                    if(j==1)ops.add(local_step,local_q,local_q,v);
+                    else if(fused)ops.add_fused(b,local_step,a,v);
+                    else ops.add(b,local_step,a,v);
+                    std::swap(a,b);std::swap(b,v);
+                    if((j&255)==1)worker.check();
                 }
                 ops.normalize(roots.v+lo,z.v+lo,hi-lo);
+                if(o.check){
+                    // Cross-check the odd-step chain against separate ladders,
+                    // including both boundaries of every worker's slice.
+                    Integer root,ref_x,ref_z;
+                    for(const size_t sample:{lo,lo+(hi-lo)/2,hi-1}){
+                        ops.ladder(local_q,residues[sample],v,work[10]);
+                        worker.get(root.v,roots[sample]);worker.get(ref_x.v,v.x);worker.get(ref_z.v,v.z);
+                        mpz_mul(root.v,root.v,ref_z.v);mpz_mod(root.v,root.v,worker.n);
+                        if(mpz_cmp(root.v,ref_x.v))throw std::runtime_error("Baby point differs from direct ladder");
+                    }
+                }
             });
             stats.point_seconds+=seconds(t);
         }
         const double baby_seconds=stats.point_seconds;
         progress(ECM_GW_FTREE);
         auto init_tree_begin=Clock::now();
-        auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,fplan.splits):tree(c,roots,0,p,true);
+        auto ftree=fplan.rebuild?partial_ftree(c,roots,0,p,fplan.splits):retained_ftree(c,roots,0,p);
         struct Probe {Integer root,product;size_t index;};
         std::array<Probe,3> probes;
         if(o.check){
@@ -787,7 +832,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                 for(size_t i=lo+1;i<hi;++i){
                     Point next{gx[i],gz[i]};
                     if(pos+i==2)ops.dbl(local_base,next,a24);
-                    else if(use_fused)ops.add_giant(current,local_base,previous,next);
+                    else if(use_fused)ops.add_fused(current,local_base,previous,next);
                     else ops.add(current,local_base,previous,next);
                     previous=current;
                     current=next;
@@ -801,7 +846,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                     mpz_sub(difference.v,probe.root.v,giant.v);mpz_mul(probe.product.v,probe.product.v,difference.v);mpz_mod(probe.product.v,probe.product.v,n);
                 }}
             }
-            part_begin=Clock::now();auto g=tree(c,gx,0,count,false,&g_workspace);gx=Array();stats.tree_seconds+=seconds(part_begin);
+            part_begin=Clock::now();auto g=product_tree(c,gx,0,count,&g_workspace);gx=Array();stats.tree_seconds+=seconds(part_begin);
             part_begin=Clock::now();
             c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal);
             stats.fold_seconds+=seconds(part_begin);
@@ -823,7 +868,9 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         h=Array();auto forward_scaled=c.convolution(reverse(padded),view(inv),0,p);padded=Array();inv=Array();
         Array s(c.gw,p);for(size_t i=0;i<p;++i)gwcopy(&c.gw,forward_scaled[p-i-1],s[i]);forward_scaled=Array();
         const double scale_seconds=seconds(descent_begin);
-        Array values(c.gw,p);descend(c,*ftree,s,values,fplan.rebuild?&roots:nullptr);s=Array();ftree.reset();roots=Array();
+        Array values(c.gw,p);
+        const double rebuild_seconds=descend(c,*ftree,s,values,fplan.rebuild?&roots:nullptr);
+        s=Array();ftree.reset();roots=Array();
         stats.descent_seconds=seconds(descent_begin);
         if(o.check){Integer got;for(auto &probe:probes){
             c.get(got.v,values[probe.index]);if(mpz_cmp(got.v,probe.product.v))throw std::runtime_error("Stage2 polynomial differs from direct GMP products");
@@ -839,6 +886,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                       stats.tree_seconds-init_tree_seconds,stats.fold_seconds,scale_seconds,
                       stats.descent_seconds-scale_seconds,seconds(leaf_begin)};
         const auto &phases=stats.phases;
+        std::printf("gwpoly-descent: ftree_rebuild_seconds=%.6f\n",rebuild_seconds);
         std::printf("gwpoly-phases: baby=%.6f ftree=%.6f reciprocal=%.6f giant=%.6f gtree=%.6f fold=%.6f scale=%.6f descent=%.6f leaf_gcd=%.6f\n",
                     phases.baby_seconds,phases.ftree_seconds,phases.reciprocal_seconds,phases.giant_seconds,
                     phases.gtree_seconds,phases.fold_seconds,phases.scale_seconds,phases.descent_seconds,phases.leaf_gcd_seconds);
@@ -895,7 +943,7 @@ void selftest(unsigned threads){
     for(size_t count:{1u,2u,3u,4u,5u,8u,17u,32u,65u,129u,257u,509u}){
         Array roots(c.gw,count);std::vector<uint64_t> expected_roots(count);
         for(size_t i=0;i<count;++i){expected_roots[i]=7919*(i+1)+17;u64togw(&c.gw,expected_roots[i],roots[i]);}
-        auto t=tree(c,roots,0,count,true);auto rf=reverse(t->polynomial);
+        auto t=retained_ftree(c,roots,0,count);auto rf=reverse(t->polynomial);
         auto inv=c.inverse(rf,count);
         Array h(c.gw,count);for(size_t i=0;i<count;++i)u64togw(&c.gw,103*(i+3),h[i]);
         auto forward=c.convolution(reverse(h),view(inv),0,count);Array s(c.gw,count);
@@ -921,7 +969,7 @@ void selftest(unsigned threads){
         for(unsigned block=0;block<4;++block){
             const size_t leaves=block<2?count:block==2?(count+1)/2:1;
             for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
-            auto g=tree(c,roots,0,leaves,false,&workspace);
+            auto g=product_tree(c,roots,0,leaves,&workspace);
             c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal);
             auto scaled=c.convolution(reverse(accumulator),view(inv),0,count);Array reversed(c.gw,count);
             for(size_t i=0;i<count;++i)gwcopy(&c.gw,scaled[count-i-1],reversed[i]);
