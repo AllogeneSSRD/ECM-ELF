@@ -115,7 +115,7 @@ tune_file = "tune.toml"
 
 类型 `string` · 范围 `<path>` · Worker 覆盖 `[worker.N] shared.tune_file` · 级别 `常用`。
 
-CUDA Stage1 和 Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可以为两个阶段一并覆盖路径。显式留空时关闭两阶段的自动持久化。
+CUDA Stage1、CUDA Stage2 和 CPU GWNUM Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可覆盖路径。显式留空时关闭自动持久化。
 
 ### user
 
@@ -1904,7 +1904,7 @@ tune.runtime_enabled = true
 
 v1 旧键 `stage2.stage2_tune_runtime`
 
-按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false 关闭单曲线试跑、采集和写回，双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。
+CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 stage2_tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入 [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。
 
 <a id="stage2_tune_runtime_samples"></a>
 

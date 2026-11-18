@@ -1,6 +1,7 @@
 #pragma once
 #include <gmp.h>
 #include <cstdint>
+#include <vector>
 #include "ecm/stage2_gw_abi.h"
 
 namespace ecm_gwpoly {
@@ -11,7 +12,13 @@ struct Options {
     int (*stop)()=nullptr;
     bool check=false;
 };
-using Stats = ecm_gw_stage2_stats;
+struct Stats : ecm_gw_stage2_stats {
+    ecm_gw_stage2_phases phases{};
+};
+using TuneCandidate = ecm_gw_stage2_tune_candidate;
+// Baseline first, followed by up to two viable alternatives. Each entry
+// describes the FFT layout that a forced-D run would use.
+std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options&);
 const char* cpu();
 const char* identity();
 const char* load_error();

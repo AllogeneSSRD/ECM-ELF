@@ -543,6 +543,8 @@ struct Profile {
     Fields metadata;
     std::map<Word,Fields> conditions;
     std::vector<Fields> samples,ntt,stage1_ntt,parallel;
+    // The CPU Stage2 worker owns these rows. CUDA never uses them as evidence.
+    std::string cpu_stage2_tables;
     Word revision=0;
     Word condition(Fields fields) {
         fields.erase("program_version");fields.erase("updated_at");
@@ -680,12 +682,13 @@ struct Profile {
         old["repeats"]=std::to_string(m+n);
         merge_provenance(old,sample);
     }
-    static Profile load(const std::filesystem::path &path) {
+    static Profile load(const std::filesystem::path &path,bool retain_cpu_only=false) {
         std::error_code error;const auto bytes=std::filesystem::file_size(path,error);
         if(error || bytes>64*1048576)throw std::runtime_error("tune summary missing or exceeds 64MiB");
         std::ifstream in(path,std::ios::binary);Profile out;Fields *table=nullptr;std::string line;
         Fields common;std::vector<std::string> columns;bool parameter_table=false,ntt_table=false,parallel_table=false,legacy_ntt=false,rows=false;
         Word table_key=0,row_count=0;std::set<std::string> sections;bool first=true,columns_seen=false,rows_seen=false;
+        bool cpu_table=false;
         auto finish=[&]() {
             if(parameter_table && (!columns_seen || !rows_seen || !row_count || rows))
                 throw std::runtime_error("incomplete tune parameter table");
@@ -693,7 +696,24 @@ struct Profile {
         };
         while(std::getline(in,line)) {
             if(first && line.compare(0,3,"\xef\xbb\xbf")==0)line.erase(0,3);first=false;
-            line=stage1_cost::trim(line);if(line.empty() || line[0]=='#')continue;
+            const auto trimmed=stage1_cost::trim(line);
+            constexpr std::string_view cpu_header="[[cpu_stage2]]";
+            const bool starts_cpu=trimmed.compare(0,cpu_header.size(),cpu_header)==0;
+            const auto suffix=starts_cpu?stage1_cost::trim(trimmed.substr(cpu_header.size())):std::string{};
+            if(!rows && starts_cpu && (suffix.empty() || suffix[0]=='#')) {
+                finish();
+                table=nullptr;
+                cpu_table=true;
+                out.cpu_stage2_tables+=line+'\n';
+                continue;
+            }
+            if(cpu_table && (trimmed.empty() || trimmed[0]!='[')) {
+                out.cpu_stage2_tables+=line+'\n';
+                continue;
+            }
+            cpu_table=false;
+            if(retain_cpu_only)continue;
+            line=trimmed;if(line.empty() || line[0]=='#')continue;
             if(rows) {
                 if(line=="]"){rows=false;continue;}
                 if(line.back()==',')line.pop_back();
@@ -767,6 +787,9 @@ struct Profile {
             }
         }
         finish();
+        if(retain_cpu_only && in.eof())return out;
+        if(in.eof() && out.metadata.empty() && out.conditions.empty() && !out.cpu_stage2_tables.empty() && sections.empty())
+            return out;
         if(!in.eof() || !supported_format(uint(out.metadata,"format")) || required(out.metadata,"unit")!="\"full_stage2\"" ||
            out.conditions.empty())
             throw std::runtime_error("invalid tune header");
@@ -789,6 +812,7 @@ struct Profile {
         // Legacy format-8 conditions included a program version. Transfer it
         // to rows, then merge conditions that now describe the same hardware.
         Profile normalized;normalized.metadata=out.metadata;std::map<Word,Word> remap;
+        normalized.cpu_stage2_tables=std::move(out.cpu_stage2_tables);
         for(const auto &c:out.conditions) {auto fields=c.second;for(const char *key:{"env_giant_seed_coop","env_s4_coop_reduce","env_s4_coop_tpb","env_s4_coop_kernel"})fields.erase(key);remap[c.first]=normalized.condition(fields);}
         std::map<std::string,size_t> merged;
         for(auto s:out.samples) {
@@ -807,6 +831,7 @@ struct Profile {
         normalized.revision=out.revision;return normalized;
     }
     std::string serialize()const {
+        if(conditions.empty() && metadata.empty() && !cpu_stage2_tables.empty())return cpu_stage2_tables;
         std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<(samples.empty()&&parallel.empty()?14:format)<<"\nunit = \"full_stage2\"\n";
         if(metadata.count("error_limit"))out<<"error_limit = "<<compact_literal(metadata.at("error_limit"))<<'\n';
         for(const auto &c:conditions) {
@@ -853,6 +878,7 @@ struct Profile {
         }
         if(!ntt_rows.empty())emit("ntt",std::move(ntt_rows),true);
         if(!parallel.empty())emit("stage2_parallel",parallel,false);
+        if(!cpu_stage2_tables.empty())out<<'\n'<<cpu_stage2_tables;
         return out.str();
     }
 };

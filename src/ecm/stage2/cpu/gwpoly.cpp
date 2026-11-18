@@ -12,6 +12,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <map>
 #include <numeric>
@@ -51,7 +52,8 @@ struct Context {
     std::vector<uint32_t> binary;
     using PlanKey=std::tuple<size_t,size_t,size_t,size_t,int,unsigned>;
     std::map<PlanKey,void *> plans;
-    Context(const mpz_t modulus,mpz_t f,const Options &opt,Stats &s,size_t max_poly):o(opt),stats(s),n(modulus),factor(f){
+    Context(const mpz_t modulus,mpz_t f,const Options &opt,Stats &s,size_t max_poly,bool preflight=false)
+        :o(opt),stats(s),n(modulus),factor(f){
         try {
         guessCpuType();
         int available_flags=CPU_FLAGS;
@@ -84,6 +86,8 @@ struct Context {
         if(!ready)throw std::runtime_error("No safe CPU polynomial FFT length");
         gwerror_checking(&gw,1);
         gwset_polymult_safety_margin(&gw,polymult_safety_margin(max_poly+1,max_poly+1)+0.25f);
+        stats.fft_length=gwfftlen(&gw);
+        if(preflight)return;
         binary.resize((static_cast<size_t>(gw.bit_length)+31)/32+8);
         gwuser_init_FFT1(&gw);
         polymult_init(&pm,&gw);pmready=true;
@@ -91,7 +95,6 @@ struct Context {
         polymult_default_tuning(&pm,std::max(256,CPU_L2_CACHE_SIZE),std::max(6144,CPU_L3_CACHE_SIZE));
         // polymult launches its own internal tasks. A naked launch_helpers call
         // instead dispatches the caller's user callback, which we do not set.
-        stats.fft_length=gwfftlen(&gw);
         gwfft_description(&gw,stats.fft_description);
         // Match the upstream HELPER_POLYMULT_LINE dispatch after tuning.
         const auto flags = pm.cpu_flags;
@@ -495,28 +498,63 @@ FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget){
     const double temporary=std::max(18.0*p, 12.0*p+chunk*(std::ceil(std::log2(double(chunk)))+4));
     return {true,(retained+temporary+256)*bytes};
 }
+const std::vector<uint64_t>& wheel_choices(){
+    static const auto choices=[] {
+        // Smooth wheels including repeated odd factors.
+        std::vector<uint64_t> wheels;
+        for(uint64_t wheel:{30ull,210ull,2310ull,30030ull,510510ull})
+            for(uint64_t k:{1ull,2ull,3ull,4ull,5ull,6ull,7ull,8ull,9ull,11ull,13ull,15ull,21ull,27ull,35ull,45ull,63ull,81ull})
+                if(wheel*k<=20000000 && std::find(wheels.begin(),wheels.end(),wheel*k)==wheels.end())
+                    wheels.push_back(wheel*k);
+        // Intermediate geometries verified on wide cofactors.
+        wheels.push_back(10920);
+        wheels.push_back(43890);
+        return wheels;
+    }();
+    return choices;
+}
+double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget){
+    const auto p=phi(d)/2;
+    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget);
+    if(plan.bytes>double(budget)*1048576)return std::numeric_limits<double>::infinity();
+    const double levels=std::ceil(std::log2(double(p)));
+    return (plan.rebuild?8:6)*p*levels+(double(b2)/d+p)*(levels+8);
+}
 uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
-    // Smooth wheels including repeated odd factors; compare actual phi(D)/2.
-    std::vector<uint64_t> choices;
-    for(uint64_t wheel:{30ull,210ull,2310ull,30030ull,510510ull})
-        for(uint64_t k:{1ull,2ull,3ull,4ull,5ull,6ull,7ull,8ull,9ull,11ull,13ull,15ull,21ull,27ull,35ull,45ull,63ull,81ull})
-            if(wheel*k<=20000000)choices.push_back(wheel*k);
-    // Intermediate geometries verified on wide cofactors. Recheck the
-    // coefficient footprint if the larger polynomial needs a longer FFT.
-    choices.push_back(10920);
-    choices.push_back(43890);
-    if(forced)choices={forced};
-    double best=1e300;uint64_t result=0;
-    for(auto d:choices){
-        if(d<6 || d%2 || d>20000000)continue;
-        const double p=double(phi(d)/2),levels=std::ceil(std::log2(p));
-        const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget);
-        if(plan.bytes>double(budget)*1048576)continue;
-        const double cost=(plan.rebuild?8:6)*p*levels+(double(b2)/d+p)*(levels+8);
+    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget)))return forced;
+    double best=std::numeric_limits<double>::infinity();
+    uint64_t result=0;
+    if(!forced)for(auto d:wheel_choices()){
+        const auto cost=wheel_cost(d,b2,bytes,budget);
         if(cost<best){best=cost;result=d;}
     }
     if(!result)throw std::runtime_error("No CPU polynomial plan within memory budget");
     return result;
+}
+std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,uint64_t b2,
+                                      const Options &o,Stats &stats,FTreePlan &fplan,bool preflight=false){
+    if(!o.threads || b2<=b1 || b2>max_b2)throw std::runtime_error("Invalid GW polynomial bounds/threads");
+    if(o.d && (o.d<6 || o.d%2 || o.d>20000000))throw std::runtime_error("Invalid CPU polynomial wheel D");
+    uint64_t degree=phi(o.d?o.d:30)/2;
+    // A larger FFT can change which wheels fit the coefficient budget.
+    for(unsigned attempt=0;attempt<6;++attempt){
+        auto owner=std::make_unique<Context>(n,factor,o,stats,degree,preflight);
+        owner->poll();
+        const double bytes=double(gwnum_size(&owner->gw)+64);
+        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib);
+        degree=phi(candidate)/2;
+        const auto required=polymult_safety_margin(degree+1,degree+1)+0.25f;
+        if(owner->gw.EXTRA_BITS/2.0f+owner->gw.polymult_safety_margin<=required)continue;
+        gwset_polymult_safety_margin(&owner->gw,required);
+        stats.d=candidate;
+        stats.poly_size=degree;
+        fplan=ftree_plan(static_cast<size_t>(degree),bytes,o.memory_mib);
+        stats.estimated_memory_mib=fplan.bytes/1048576.0;
+        if(stats.estimated_memory_mib>o.memory_mib)
+            throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
+        return owner;
+    }
+    throw std::runtime_error("CPU polynomial FFT/memory planning did not converge");
 }
 }
 
@@ -538,32 +576,49 @@ const char* cpu() {
 const char* identity(){return "static gwpoly";}
 const char* load_error(){return nullptr;}
 const char *version(){return GWNUM_VERSION;}
+std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options &o){
+    Integer unused_factor;
+    Stats automatic{};
+    FTreePlan tree_plan{};
+    auto owner=prepare_plan(n,unused_factor.v,b1,b2,o,automatic,tree_plan,true);
+    const double bytes=double(gwnum_size(&owner->gw)+64);
+    owner.reset();
+    if(o.d)return {{automatic.d,automatic.poly_size,automatic.fft_length}};
+
+    Options forced=o;
+    auto inspect=[&](uint64_t d) {
+        forced.d=d;
+        Stats candidate{};
+        prepare_plan(n,unused_factor.v,b1,b2,forced,candidate,tree_plan,true);
+        return TuneCandidate{candidate.d,candidate.poly_size,candidate.fft_length};
+    };
+    // The automatic search can retain a longer FFT across re-plans. Describe
+    // the exact layout of the D that the runtime worker will pass back.
+    std::vector<TuneCandidate> candidates{inspect(automatic.d)};
+    std::vector<std::pair<double,uint64_t>> ranked;
+    for(auto d:wheel_choices()){
+        if(d==automatic.d)continue;
+        const auto cost=wheel_cost(d,b2,bytes,o.memory_mib);
+        if(std::isfinite(cost))ranked.emplace_back(cost,d);
+    }
+    std::sort(ranked.begin(),ranked.end());
+    const auto attempts=std::min<size_t>(4,ranked.size());
+    for(size_t i=0;i<attempts && candidates.size()<3;++i){
+        try {candidates.push_back(inspect(ranked[i].second));}
+        catch(const std::runtime_error&){
+            if(o.stop && o.stop())throw;
+            // A candidate can require a longer FFT and no longer fit.
+        }
+    }
+    return candidates;
+}
 bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             uint64_t b1,uint64_t b2,const Options &o,Stats &stats){
     stats={};const auto begin=Clock::now();
-    if(!o.threads || b2<=b1 || b2>max_b2)throw std::runtime_error("Invalid GW polynomial bounds/threads");
-    // Probe a real FFT layout before applying the memory budget. A guessed
-    // per-coefficient footprint can otherwise reject a valid small-modulus plan.
-    if(o.d && (o.d<6 || o.d%2 || o.d>20000000))throw std::runtime_error("Invalid CPU polynomial wheel D");
-    uint64_t d=o.d?o.d:30,p=phi(d)/2;
-    std::unique_ptr<Context> owner;
-    for(unsigned attempt=0;attempt<6;++attempt){
-        owner=std::make_unique<Context>(n,factor,o,stats,p);
-        const auto candidate=choose_d(b2,o.d,double(gwnum_size(&owner->gw)+64),o.memory_mib);
-        const auto candidate_p=phi(candidate)/2;
-        const auto required=polymult_safety_margin(candidate_p+1,candidate_p+1)+0.25f;
-        if(owner->gw.EXTRA_BITS/2.0f+owner->gw.polymult_safety_margin>required){
-            gwset_polymult_safety_margin(&owner->gw,required);
-            d=candidate;p=candidate_p;break;
-        }
-        owner.reset();d=candidate;p=candidate_p;
-    }
-    if(!owner)throw std::runtime_error("CPU polynomial FFT/memory planning did not converge");
+    FTreePlan fplan{};
+    auto owner=prepare_plan(n,factor,b1,b2,o,stats,fplan);
     auto &c=*owner;
-    stats.d=d;stats.poly_size=p;
-    const auto fplan=ftree_plan(p,double(gwnum_size(&c.gw)+64),o.memory_mib);
-    stats.estimated_memory_mib=fplan.bytes/1048576.0;
-    if(stats.estimated_memory_mib>o.memory_mib)throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
+    const auto d=stats.d,p=stats.poly_size;
     std::printf("gwpoly-plan: ftree=%s bytes_per_value=%zu\n",
                 fplan.rebuild?"segmented":"full",static_cast<size_t>(gwnum_size(&c.gw))+64);
     bool main_started=false;auto main_begin=begin;
@@ -696,9 +751,13 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
         for(size_t i=0;i<p;++i)c.mul(product[0],values[i],product[0]);
         c.check();Integer gcd;c.get(gcd.v,product[0]);mpz_gcd(gcd.v,gcd.v,n);
         stats.main_seconds=seconds(main_begin);
+        stats.phases={baby_seconds,init_tree_seconds-inverse_seconds,inverse_seconds,stats.point_seconds-baby_seconds,
+                      stats.tree_seconds-init_tree_seconds,stats.fold_seconds,scale_seconds,
+                      stats.descent_seconds-scale_seconds,seconds(leaf_begin)};
+        const auto &phases=stats.phases;
         std::printf("gwpoly-phases: baby=%.6f ftree=%.6f reciprocal=%.6f giant=%.6f gtree=%.6f fold=%.6f scale=%.6f descent=%.6f leaf_gcd=%.6f\n",
-                    baby_seconds,init_tree_seconds-inverse_seconds,inverse_seconds,stats.point_seconds-baby_seconds,
-                    stats.tree_seconds-init_tree_seconds,stats.fold_seconds,scale_seconds,stats.descent_seconds-scale_seconds,seconds(leaf_begin));
+                    phases.baby_seconds,phases.ftree_seconds,phases.reciprocal_seconds,phases.giant_seconds,
+                    phases.gtree_seconds,phases.fold_seconds,phases.scale_seconds,phases.descent_seconds,phases.leaf_gcd_seconds);
         if(mpz_cmp_ui(gcd.v,1)==0)return false;
         if(mpz_cmp(gcd.v,n)<0){mpz_set(factor,gcd.v);return true;}
         for(size_t i=0;i<p;++i)c.divisor(values[i]);

@@ -115,7 +115,7 @@ tune_file = "tune.toml"
 
 Type `string` · Range `<path>` · Worker override `[worker.N] shared.tune_file` · Level `core`.
 
-CUDA Stage1 and Stage2 use this file together. Defaults to tune.toml beside ecm.toml. A worker can override the path for both stages. An explicit empty value disables automatic persistence for both stages.
+CUDA Stage1, CUDA Stage2 and CPU GWNUM Stage2 share this file. Defaults to tune.toml beside ecm.toml. Workers can override the path. An explicit empty value disables automatic persistence.
 
 ### user
 
@@ -1903,7 +1903,7 @@ Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage2.tu
 
 Legacy v1 key `stage2.stage2_tune_runtime`
 
-Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. Parallel queue decisions use stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.
+CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.
 
 <a id="stage2_tune_runtime_samples"></a>
 

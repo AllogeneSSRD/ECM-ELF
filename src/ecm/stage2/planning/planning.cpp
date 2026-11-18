@@ -80,7 +80,7 @@ pt::Profile portable_read(const fs::path &path) {
     try {return pt::Profile::load(path);}
     catch(const pt::UnsupportedFormat &) {
         std::cout<<"tune_profile_reset: incompatible development format; calibration will regenerate "<<path.string()<<std::endl;
-        return {};
+        return pt::Profile::load(path,true);
     }
 }
 using TuneFileStamp=std::array<DWORD,7>;

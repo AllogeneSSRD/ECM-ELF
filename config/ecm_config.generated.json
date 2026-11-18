@@ -4,12 +4,12 @@
     "src/ecm/application/configuration/generated/ecm_config_generated.h": "7fcd733e26035d488649025814d6fa327b8aff71d9b96f4209ca6b5d2cc877a3",
     "src/ecm/platform/generated/configuration_defaults.h": "142c275c50ef167f448dc88808abbf0597ad5d441cf8dccc5bf3cf5966c21445",
     "src/ecm/application/configuration/generated/ecm_toml_schema.h": "5fd1f0f0b59631a8d1628bad0908f4f757f30625cf235878061f62ae7c6be705",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "ff1d36b4448af7103b5249df67168e9d3aa297e3dc7a41211fde518dd0917cd0",
-    "config/ecm.toml.default": "df43c7b6438a3ff5a2f36dc11a93cc18d12c23baaebcf093429f0c946679bacd",
-    "config/ecm.toml.example": "c883283380b75ab2e8e215c01e157d9487a1e86f4b0d7d342e993ffef56befb2",
-    "docs/ECM_TOML_REFERENCE.en.md": "cfa43609c2d610ba8065b993eb51404d591554066072741566e2aa5dd31a5218",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "00bdc3829fdf8a200dfaff111583435e14379f1070daad9fe8cd7cca535fa8a0",
-    "config/ecm_options.json": "2a3f2a6e1d52ad2b7e306a4f8695ae4c45b94ad5211bffa56f6a15178777a70d",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "9a4e4324585303a3a85445549861e7774af2be96758db1ba07c1a192bb58b79a",
+    "config/ecm.toml.default": "8240105b08125d6cda394dc52b083221bdfc59cc1e1ff82241b42bc8eebefd4e",
+    "config/ecm.toml.example": "f6e43041afcd01553637c9ffaa3de7e0d9d39a2db162ea2f9747f80c05032aef",
+    "docs/ECM_TOML_REFERENCE.en.md": "2855886b2d805a1184bd4e202850e0fb61be21c993dc3108b3f8d6f06c0279ae",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "53897129946e2c07efa36a923cab1d536affaa690715f1fe2b912a1d47c8e13f",
+    "config/ecm_options.json": "7c6aec29a3a8459f3983331c08107609ebe756833d9c83086d7725dceb34d16a",
     "tools/gen/generate_ecm_config.py": "a46ae0eaf677ad65796f650433ed05c1283fea90cd9afa3d183344bd3f33dd8a"
   }
 }

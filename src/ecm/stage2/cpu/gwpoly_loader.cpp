@@ -1,5 +1,6 @@
 #include "gwpoly.h"
 #include <windows.h>
+#include <array>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@ namespace {
 struct Plugin {
     HMODULE module{};
     const ecm_gw_stage2_api* api{};
+    const ecm_gw_stage2_api_v2* api_v2{};
     std::string error;
     Plugin() {
         wchar_t executable[32768];
@@ -25,6 +27,11 @@ struct Plugin {
             error = "gwnum.dll lacks compatible Stage2 ABI 1"; return;
         }
         api = table;
+        const auto header = get(2);
+        if (header && header->abi == 2 && header->size >= sizeof(ecm_gw_stage2_api_v2)) {
+            auto v2 = reinterpret_cast<const ecm_gw_stage2_api_v2*>(header);
+            if (v2->run_with_phases && v2->tune_candidates) api_v2 = v2;
+        }
     }
     ~Plugin() { if (module) FreeLibrary(module); }
 };
@@ -32,6 +39,16 @@ const Plugin& plugin() { static const Plugin instance; return instance; }
 const ecm_gw_stage2_api& api() {
     if (!plugin().api) throw std::runtime_error(plugin().error);
     return *plugin().api;
+}
+uint32_t word_count(mpz_srcptr n) {
+    const size_t words = (mpz_sizeinbase(n, 2) + 31) / 32;
+    if (words > UINT32_MAX || mpz_cmp_ui(n,2)<=0) throw std::invalid_argument("Invalid Stage2 modulus");
+    return static_cast<uint32_t>(words);
+}
+std::vector<uint32_t> encode(mpz_srcptr z, uint32_t words) {
+    std::vector<uint32_t> result(words);
+    mpz_export(result.data(), nullptr, -1, sizeof(uint32_t), 0, 0, z);
+    return result;
 }
 }
 const char* load_error() { return plugin().api ? nullptr : plugin().error.c_str(); }
@@ -46,22 +63,38 @@ void selftest(unsigned threads) {
 
 bool stage2(mpz_t factor, const mpz_t n, const mpz_t x, const mpz_t a24,
             uint64_t b1, uint64_t b2, const Options& o, Stats& stats) {
-    const size_t words = (mpz_sizeinbase(n, 2) + 31) / 32;
-    if (words > UINT32_MAX || mpz_sgn(x)<0 || mpz_cmp(x,n)>=0 || mpz_sgn(a24)<0 || mpz_cmp(a24,n)>=0)
+    const auto words = word_count(n);
+    if (mpz_sgn(x)<0 || mpz_cmp(x,n)>=0 || mpz_sgn(a24)<0 || mpz_cmp(a24,n)>=0)
         throw std::invalid_argument("Invalid Stage2 input");
-    auto encode = [&](mpz_srcptr z) {
-        std::vector<uint32_t> result(words);
-        mpz_export(result.data(), nullptr, -1, sizeof(uint32_t), 0, 0, z);
-        return result;
-    };
-    auto modulus = encode(n), point = encode(x), curve = encode(a24);
+    auto modulus = encode(n,words), point = encode(x,words), curve = encode(a24,words);
     std::vector<uint32_t> output(words);
-    ecm_gw_stage2_request request{static_cast<uint32_t>(words), o.threads, o.check,
+    ecm_gw_stage2_request request{words, o.threads, o.check,
         b1,b2,o.d,o.exponent,o.memory_mib,modulus.data(),point.data(),curve.data(),o.stop};
+    stats = {};
     char error[512]{};
-    const int rc = api().run(&request, output.data(), &stats, error, sizeof(error));
+    auto v2 = plugin().api_v2;
+    const int rc = v2
+        ? v2->run_with_phases(&request,output.data(),&stats,&stats.phases,error,sizeof(error))
+        : api().run(&request,output.data(),&stats,error,sizeof(error));
     if (rc < 0) throw std::runtime_error(error);
     if (rc == 1) mpz_import(factor, words, -1, sizeof(uint32_t), 0, 0, output.data());
     return rc == 1;
+}
+
+std::vector<TuneCandidate> tune_candidates(mpz_srcptr n, uint64_t b1, uint64_t b2, const Options& o) {
+    auto v2 = plugin().api_v2;
+    if (!v2) return {};
+    const auto words = word_count(n);
+    auto modulus = encode(n,words);
+    ecm_gw_stage2_request request{words,o.threads,0,b1,b2,o.d,o.exponent,o.memory_mib,
+                                  modulus.data(),nullptr,nullptr,o.stop};
+    std::array<TuneCandidate,3> candidates{};
+    char error[512]{};
+    const int count = v2->tune_candidates(&request,candidates.data(),
+                                          static_cast<uint32_t>(candidates.size()),error,sizeof(error));
+    if (count < 0) throw std::runtime_error(error);
+    if (static_cast<size_t>(count) > candidates.size())
+        throw std::runtime_error("Invalid GWNUM Stage2 candidate count");
+    return {candidates.begin(),candidates.begin()+count};
 }
 }

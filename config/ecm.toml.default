@@ -18,11 +18,10 @@ config_version = 3
 # 共享运行日志超过此上限后归档。1 KB 等于 1000 字节。
 
 # tune_file = "tune.toml"  # string: <path>
-# CUDA Stage1 and Stage2 use this file together. Defaults to tune.toml beside ecm.toml. A worker can
-# override the path for both stages. An explicit empty value disables automatic persistence for both
-# stages.
-# CUDA Stage1 和 Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可以为两个阶段一并
-# 覆盖路径。显式留空时关闭两阶段的自动持久化。
+# CUDA Stage1, CUDA Stage2 and CPU GWNUM Stage2 share this file. Defaults to tune.toml beside
+# ecm.toml. Workers can override the path. An explicit empty value disables automatic persistence.
+# CUDA Stage1、CUDA Stage2 和 CPU GWNUM Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。
+# worker 可覆盖路径。显式留空时关闭自动持久化。
 
 worktodo_file = "worktodo.txt"  # string: <path>
 # Shared queue. ECM, ECM2 and ECMSTAGE1 select Stage1; ECMSTAGE2 and ECMSTAGE2N select Stage2. One

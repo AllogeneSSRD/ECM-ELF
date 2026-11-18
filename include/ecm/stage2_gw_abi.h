@@ -26,3 +26,24 @@ typedef struct {
     int (*selftest)(uint32_t threads, char* error, uint32_t error_size);
 } ecm_gw_stage2_api;
 typedef const ecm_gw_stage2_api* (*ecm_gw_stage2_get_api_fn)(uint32_t);
+
+/* ABI 2 adds complete-curve phase observations and allocation preflight.
+ * The ABI 1 layout and get_api(1) remain available to old workers. */
+typedef struct {
+    double baby_seconds, ftree_seconds, reciprocal_seconds, giant_seconds;
+    double gtree_seconds, fold_seconds, scale_seconds, descent_seconds, leaf_gcd_seconds;
+} ecm_gw_stage2_phases;
+
+typedef struct {
+    uint64_t d, poly_size, fft_length;
+} ecm_gw_stage2_tune_candidate;
+
+typedef struct {
+    ecm_gw_stage2_api base;
+    int (*run_with_phases)(const ecm_gw_stage2_request*, uint32_t* factor,
+                           ecm_gw_stage2_stats*, ecm_gw_stage2_phases*,
+                           char* error, uint32_t error_size);
+    /* Uses n only. Returns the number of candidates written, or -1 on error. */
+    int (*tune_candidates)(const ecm_gw_stage2_request*, ecm_gw_stage2_tune_candidate*,
+                           uint32_t capacity, char* error, uint32_t error_size);
+} ecm_gw_stage2_api_v2;

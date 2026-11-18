@@ -58,6 +58,8 @@ void retire_legacy_stage2_curves(const std::filesystem::path&, const std::string
 void publish_stage1_batch(const std::filesystem::path&, const std::filesystem::path&,
                           std::vector<Stage1BatchRecord>, mpz_srcptr, const std::string&);
 bool has_result_ledger(const std::filesystem::path&);
+std::filesystem::path submission_ledger(const std::filesystem::path&);
+std::filesystem::path legacy_submission_ledger(const std::filesystem::path&);
 bool contains_stage1_curves(const std::filesystem::path&, mpz_srcptr, uint64_t, bool, unsigned,
                             const std::vector<uint64_t>&);
 void publish_submission(const std::filesystem::path&, const Submission&, mpz_srcptr,

@@ -10,11 +10,14 @@
 #include <chrono>
 #include <charconv>
 #include <ctime>
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <omp.h>
 #include "../../cpu/gwpoly.h"
+#include "../../cpu/runtime_tune.h"
 #include "../../queue_paths.h"
 #include "../../../platform/compute_log.h"
 #include "ecm/platform/fingerprint.h"
@@ -29,6 +32,7 @@
 #endif
 namespace {
 using namespace ecm_edwards;
+namespace fs=std::filesystem;
 std::string quote(const std::string &s) {return ecm_results::quoted(s);}
 std::string number(const mpz_t x) {return ecm_results::decimal(x);}
 uint64_t decimal(const std::string& text) {
@@ -43,10 +47,50 @@ struct Options {
     std::string save,results="results_cpu_stage2.jsonl",submission,ini,backend="auto",user,computer,aid;
     std::vector<std::string> known;uint64_t b2=0,skip=0,count=UINT64_MAX,exponent=0,memory=512,threads=1;
     std::string worktodo,log,cpu_affinity;
+    fs::path tune_profile;
+    bool tune_runtime=true;
+    uint64_t tune_min_repeats=2,tune_sample_limit=10;
     int log_level=-1;
     bool gui=false,once=false,explicit_results=false;
     bool dry=false,export_only=false,gw_selftest=false,gw_check=false;uint64_t d=0;uintptr_t stop_handle=0;int worker=1;
 };
+void check_tune_path(const Options &o,std::initializer_list<fs::path> resources,
+                     std::initializer_list<fs::path> results={}) {
+    if(o.tune_profile.empty())return;
+    const auto canonical=[](const fs::path &path) {
+        std::error_code error;
+        const auto resolved=fs::weakly_canonical(fs::absolute(path),error);
+        return error?fs::absolute(path).lexically_normal():resolved;
+    };
+    const auto profile=canonical(o.tune_profile).u8string();
+    const fs::path files[]={fs::u8path(profile),fs::u8path(profile+".publish.tmp"),fs::u8path(profile+".publish.lock")};
+    const auto equal=[](const std::string &a,const std::string &b) {
+        return !ecm_io::file_identity_less(a,b) && !ecm_io::file_identity_less(b,a);
+    };
+    const auto conflict=[] {throw std::runtime_error("tune profile conflicts with a CPU Stage2 input or output");};
+    for(const auto &path:resources) {
+        if(path.empty())continue;
+        const auto resource=canonical(path).u8string();
+        for(const auto &file:files) {
+            std::error_code error;
+            const auto writer=file.u8string();
+            if(fs::equivalent(file,path,error) || equal(writer,resource) ||
+               equal(writer,resource+".publish.lock") || equal(writer,resource+".edit.lock") ||
+               equal(writer,resource+".lock") || equal(writer,resource+".publish.tmp"))conflict();
+        }
+    }
+    for(const auto &path:results) {
+        if(path.empty())continue;
+        const auto ledger=canonical(ecm_results::submission_ledger(path)).u8string();
+        const auto legacy=canonical(ecm_results::legacy_submission_ledger(path)).u8string();
+        for(auto dir=fs::u8path(profile);;) {
+            if(equal(dir.u8string(),ledger) || equal(dir.u8string(),legacy))conflict();
+            auto parent=dir.parent_path();
+            if(parent.empty() || parent==dir)break;
+            dir=std::move(parent);
+        }
+    }
+}
 Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
     Options o;
     // Snapshot local identity before starting any curve. Explicit CLI values,
@@ -65,6 +109,11 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
     o.ini=std::filesystem::absolute(ini).lexically_normal().string();
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     o.threads=settings.cpu_threads;o.memory=settings.cpu_memory_mib;o.backend=settings.cpu_backend;
+    o.tune_runtime=settings.tune_runtime;
+    o.tune_min_repeats=settings.tune_min_repeats;
+    o.tune_sample_limit=settings.runtime_samples;
+    const auto &tune_name=settings.tune_profile.empty()?settings.shared_tune_file:settings.tune_profile;
+    if(!tune_name.empty())o.tune_profile=s2prod::absolute_from(fs::u8path(o.ini).parent_path(),tune_name);
     o.cpu_affinity=settings.shared_cpu_affinity;
     o.user=settings.result_user;o.computer=settings.result_computer;
     if(settings.has_submission && settings.submission.empty())throw std::runtime_error("empty submission path");
@@ -83,6 +132,7 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
             std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
                 "[--threads 1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
+                "[--tune-runtime 0|1] [--tune-profile FILE] [--tune-min-repeats N] [--tune-runtime-samples N]\n"
                 "--export-results --submission FILE regenerates owned submission output without arithmetic\n"
                 "[--exponent P] [--known-factor DECIMAL (repeatable)] [--user NAME] [--computer NAME] [--aid HEX32]\n"
                 "B2 limit: libecm=1000000000000, gwpoly=1000000000000000\n";
@@ -107,6 +157,14 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
         else if(key=="--memory-mib")o.memory=decimal(value);else if(key=="--threads")o.threads=decimal(value);
         else if(key=="--skip")o.skip=decimal(value);else if(key=="--curves")o.count=decimal(value);
         else if(key=="--d")o.d=decimal(value);
+        else if(key=="--tune-profile")o.tune_profile=value.empty()?fs::path{}:s2prod::absolute_from(fs::current_path(),value);
+        else if(key=="--tune-runtime"){
+            const auto mode=decimal(value);
+            if(mode>1)throw std::runtime_error("tune-runtime must be 0 or 1");
+            o.tune_runtime=mode!=0;
+        }
+        else if(key=="--tune-min-repeats")o.tune_min_repeats=decimal(value);
+        else if(key=="--tune-runtime-samples")o.tune_sample_limit=decimal(value);
         else if(key=="--exponent")o.exponent=decimal(value);else if(key=="--known-factor")o.known.push_back(value);
         else if(key=="--user")o.user=value;else if(key=="--computer")o.computer=value;else if(key=="--aid")o.aid=value;
         else if((key=="--stop-handle" || key=="--stage2-stop-handle"))o.stop_handle=decimal(value);
@@ -119,6 +177,8 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
     if((!o.export_only && !o.gw_selftest && (!o.save.empty() && !o.b2)) || o.b2>max_b2 || !o.count || !o.threads || o.threads>1024 || !o.memory || o.memory>1048576 ||
        (o.backend!="auto" && o.backend!="ntt" && o.backend!="plain" && o.backend!="gwpoly"))throw std::runtime_error("invalid options; see --help");
     if((o.d || o.gw_check) && o.backend!="gwpoly")throw std::runtime_error("--d/--gw-check require --backend gwpoly");
+    if(!o.tune_sample_limit || o.tune_sample_limit>1000 || !o.tune_min_repeats || o.tune_min_repeats>o.tune_sample_limit)
+        throw std::runtime_error("tune repeats and sample limit must be in 1..1000, with repeats <= limit");
     if(!o.aid.empty() && (o.aid.size()!=32 || o.aid.find_first_not_of("0123456789abcdefABCDEF")!=o.aid.npos))throw std::runtime_error("AID must contain 32 hex digits");
     if(o.exponent>1000000000 || (!o.known.empty() && !o.exponent))throw std::runtime_error("known factors require --exponent (max 1000000000)");
     if(!o.save.empty() && !o.export_only && !o.gw_selftest && std::filesystem::absolute(o.save).lexically_normal()==std::filesystem::absolute(o.results).lexically_normal())throw std::runtime_error("results must not overwrite save");
@@ -130,6 +190,11 @@ Options options(int argc,char **argv,std::vector<ecm_config::TomlLine> &lines) {
     if(!o.save.empty() && !o.worktodo.empty())throw std::runtime_error("--worktodo conflicts with --save");
     if(o.save.empty() && (o.skip || o.count!=UINT64_MAX || o.exponent || !o.known.empty() || !o.aid.empty()))
         throw std::runtime_error("queue curve selection and target identity come from worktodo");
+    if(o.d || o.dry || o.gw_check || o.export_only || o.gw_selftest ||
+       o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::load_error())o.tune_profile.clear();
+    check_tune_path(o,{fs::u8path(o.ini),fs::u8path(o.save),fs::u8path(o.results),
+                      fs::u8path(o.submission),fs::u8path(o.log),s2prod::executable()},
+                    {fs::u8path(o.results),fs::u8path(o.submission)});
     return o;
 }
 void validate_target(const Options &o,const SavedCurve &r) {
@@ -168,9 +233,45 @@ std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_
 
 // In queue mode the first stop drains an admitted curve, matching the GPU owner.
 int abort_queue_curve(){s2prod::poll_inherited_stop();return s2prod::stop_requests>1;}
+struct TuneObservation {
+    ecm_cpu_tune::Key key;
+    ecm_cpu_tune::Candidate plan;
+    ecm_cpu_tune::Sample sample;
+};
+// Keep the most recent exact geometry probe. Scope changes are common between
+// worktodo assignments and uncommon between curves in the same save.
+struct TunePlans {
+    std::string modulus;
+    uint64_t b1=0,b2=0,exponent=0;
+    std::vector<ecm_cpu_tune::Candidate> candidates;
+    const std::vector<ecm_cpu_tune::Candidate>& get(const SavedCurve &r,mpz_srcptr n,uint64_t bound,
+                                                   const ecm_gwpoly::Options &gw) {
+        if(modulus!=r.n || b1!=r.b1 || b2!=bound || exponent!=gw.exponent) {
+            const auto plans=ecm_gwpoly::tune_candidates(n,r.b1,bound,gw);
+            std::vector<ecm_cpu_tune::Candidate> next;
+            for(const auto &p:plans)next.push_back({p.d,p.poly_size,p.fft_length});
+            modulus=r.n;
+            candidates=std::move(next);
+            b1=r.b1;b2=bound;exponent=gw.exponent;
+        }
+        return candidates;
+    }
+    void reject(uint64_t d) {
+        candidates.erase(std::remove_if(candidates.begin(),candidates.end(),[&](const auto &p){return p.d==d;}),
+                         candidates.end());
+    }
+};
+void persist_tune(const Options &o,const std::optional<TuneObservation> &pending) {
+    if(!pending)return;
+    try {
+        ecm_cpu_tune::observe(o.tune_profile,pending->key,pending->plan,pending->sample,o.tune_sample_limit);
+    } catch(const std::exception &error) {
+        std::cerr<<"gwpoly-tune: cannot save observation: "<<error.what()<<'\n';
+    }
+}
 bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_a24,
                const std::string &publication_task,uint64_t order,ecm_results::Submission &report,
-               std::string &json,double &elapsed) {
+               std::string &json,double &elapsed,TunePlans &tune,std::optional<TuneObservation> &pending) {
     const auto cancel=prepared_a24?abort_queue_curve:stopped;
     if(cancel())return false;
     Integer n,x,d,px,py,a24,f;
@@ -197,9 +298,63 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
         else {
             if(selected.backend=="gwpoly"){
                 ecm_gwpoly::Options gw;gw.threads=static_cast<unsigned>(o.threads);gw.memory_mib=o.memory;
-                gw.exponent=o.exponent;gw.d=o.d;gw.stop=cancel;gw.check=o.gw_check;ecm_gwpoly::Stats stats;
-                try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;}
-                catch(...){if(cancel())return false;throw;}
+                gw.exponent=o.exponent;gw.d=o.d;gw.stop=cancel;gw.check=o.gw_check;
+                ecm_gwpoly::Stats stats{};
+                std::optional<TuneObservation> observation;
+                std::error_code tune_error;
+                if(!o.tune_profile.empty() && (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error))) {
+                    try {
+                        const auto &plans=tune.get(r,n.v,o.b2,gw);
+                        if(!plans.empty()) {
+                            std::string build=ecm_gwpoly::identity();
+                            if(build=="static gwpoly")build+=" " ECM_BUILD_ID;
+                            auto affinity=o.cpu_affinity;
+                            DWORD_PTR allowed=0,system=0;
+                            if(GetProcessAffinityMask(GetCurrentProcess(),&allowed,&system))
+                                affinity+="|mask="+std::to_string(allowed);
+                            ecm_cpu_tune::Key key{ecm_gwpoly::cpu(),std::move(build),
+                                mpz_sizeinbase(n.v,2),gw.exponent,r.b1,o.b2,gw.memory_mib,gw.threads,std::move(affinity)};
+                            const auto d=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
+                            const auto plan=std::find_if(plans.begin(),plans.end(),[&](const auto &p){return p.d==d;});
+                            if(plan!=plans.end()) {
+                                observation=TuneObservation{std::move(key),*plan,{}};
+                                gw.d=d;
+                                if(verbose)std::cout<<"gwpoly-tune: D="<<d<<" P="<<plan->poly_size
+                                    <<" FFT="<<plan->fft_length<<(o.tune_runtime?" runtime":" read-only")<<std::endl;
+                            }
+                        }
+                    } catch(const std::exception &error) {
+                        if(cancel())return false;
+                        std::cerr<<"gwpoly-tune: using automatic D: "<<error.what()<<'\n';
+                    }
+                }
+                if(cancel())return false;
+                const auto trial_start=std::chrono::steady_clock::now();
+                try {
+                    if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;
+                } catch(const std::exception &error) {
+                    if(cancel())return false;
+                    if(!observation)throw;
+                    std::cerr<<"gwpoly-tune: D="<<gw.d<<" failed, retrying automatic D: "<<error.what()<<'\n';
+                    tune.reject(gw.d);
+                    observation.reset();
+                    gw.d=0;
+                    stats={};
+                    try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;}
+                    catch(...){if(cancel())return false;throw;}
+                }
+                const double trial_seconds=std::chrono::duration<double>(
+                    std::chrono::steady_clock::now()-trial_start).count();
+                if(o.tune_runtime && !stage && observation &&
+                   stats.d==observation->plan.d && stats.poly_size==observation->plan.poly_size &&
+                   stats.fft_length==observation->plan.fft_length) {
+                    const auto &p=stats.phases;
+                    observation->sample={trial_seconds,stats.init_seconds,stats.main_seconds,
+                        p.baby_seconds,p.ftree_seconds,p.reciprocal_seconds,p.giant_seconds,p.gtree_seconds,
+                        p.fold_seconds,p.scale_seconds,p.descent_seconds,p.leaf_gcd_seconds,stats.estimated_memory_mib,
+                        stats.blocks,stats.giants,stats.fft_description,stats.polymult_isa};
+                    pending=std::move(observation);
+                }
                 details.fft_description=stats.fft_description;details.polymult_isa=stats.polymult_isa;
                 details.d=stats.d;details.poly_size=stats.poly_size;details.fft_length=stats.fft_length;
                 details.init=stats.init_seconds;details.main=stats.main_seconds;details.maxerr=stats.max_roundoff;details.checked_values=stats.checked_values;
@@ -248,6 +403,10 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     ecm_queue_config_project(lines,cpu.ini,cpu.worker,cfg,inherited);
     const bool shared=ecm_config::toml_document_version(lines)>=3;
     const auto paths=s2prod::task_paths(o,s2prod::fs::current_path(),cpu.ini,settings,cfg,shared);
+    check_tune_path(cpu,{paths.worktodo,paths.finished,paths.results,paths.log,paths.legacy_progress,
+                        fs::path(paths.worktodo.string()+".worker"+std::to_string(cpu.worker)+".stage2.lock")},
+                    {paths.results,fs::u8path(cpu.submission)});
+    TunePlans tune;
     stage2_log::level=cpu.log_level>=0?cpu.log_level:settings.log_level>=0?settings.log_level:stage2_log::curve;
     if(cpu.stop_handle) {
         s2prod::inherited_stop_event=reinterpret_cast<HANDLE>(cpu.stop_handle);
@@ -265,6 +424,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             throw std::runtime_error("requested B2 exceeds the CPU backend limit");
     };
     engine.run=[&](const s2prod::CurveQueue &queue,s2prod::Options &task,uint64_t b2,uint64_t) {
+        check_tune_path(cpu,{queue.save,queue.progress,queue.results,queue.log},{queue.results});
         auto selected=cpu;
         selected.save=queue.save.string();selected.b2=b2;selected.exponent=task.submission_exponent;
         selected.known=task.submission_known;selected.aid=task.submission_aid;
@@ -290,12 +450,14 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             const bool hit=mpz_cmp_ui(f.v,1)>0;
             SavedCurve row{record.n,hit?s2prod::number(f.v):record.x,record.sigma,record.b1,record.index,hit};
             std::string json;ecm_results::Submission report;double elapsed=0;
-            if(!calculate(selected,row,&record.a24,state.publication_task,record.index,report,json,elapsed))return false;
+            std::optional<TuneObservation> pending;
+            if(!calculate(selected,row,&record.a24,state.publication_task,record.index,report,json,elapsed,tune,pending))return false;
             const auto outcome=s2prod::checkpoint_outcome(record,b2,ecm_results::submission_json(report,n.v));
             if(state.reserved.empty())state.reserved.push_back({position});
             queue.commit(position,outcome);
             ++queue.completed;
             if(!queue.results.empty())ecm_results::append_text_record(queue.results,json);
+            persist_tune(selected,pending);
             if(events)queue.report("stage2_result:"+identity+" B1="+std::to_string(record.b1)+" curve_model=ed seconds="+
                 std::to_string(elapsed)+" "+json,false);
             if(events)queue.report("curve_done: "+ordinal+identity+" completed="+std::to_string(state.done)+
@@ -336,15 +498,18 @@ int main(int argc,char **argv) {
         const auto publication_task=std::to_string(ecm_io::fingerprint(task_key));
         ecm_stage1_install_stop_handler();if(o.stop_handle && !ecm_stage1_set_stop_handle(o.stop_handle))throw std::runtime_error("invalid stop handle");
         std::cout<<"CPU Edwards Stage2 backend="<<o.backend<<" threads="<<o.threads<<" memory_mib="<<o.memory<<" libecm="<<ecm_version()<<std::endl;
+        TunePlans tune;
         for(uint64_t i=o.skip;i<end;++i) {
             ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             const auto &r=rows[i];
             Integer n;mpz_set_str(n.v,r.n.c_str(),16);
             std::string json;ecm_results::Submission report;double elapsed=0;
-            if(!calculate(o,r,nullptr,publication_task,i+1,report,json,elapsed))return 130;
+            std::optional<TuneObservation> pending;
+            if(!calculate(o,r,nullptr,publication_task,i+1,report,json,elapsed,tune,pending))return 130;
             ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             ecm_results::publish_submission(o.submission,report,n.v);
             ecm_results::append_text_record(o.results,json);
+            persist_tune(o,pending);
             std::cout<<"completed save-line="<<r.line<<" sigma="<<r.sigma<<" status="<<(report.stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
         }
         ecm_results::check_stage2_outputs(o.results,o.submission,end>o.skip);

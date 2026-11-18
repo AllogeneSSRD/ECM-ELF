@@ -70,4 +70,10 @@ M262139、sigma=26、B1=1000、B2=459428970，1T 绑定逻辑 CPU 1，系数 FFT
 
 D=25410 的单次耗时比 D=30030 多 2.87 秒，仍有约 362 MiB 提交量余量，适合优先验证新的准入估算。D=30030 在相同 B2 和系统硬上限下另跑一条开启 GMP 三点投影的完整曲线，三处均通过，该条剔出性能统计。[25410 实验](../../data/experiments/stage2_cpu_inplace/cap_25410_1/cap.json) · [30030 完整投影](../../data/experiments/stage2_cpu_inplace/cap_30030_1_check/run.log)
 
+### 运行时 D 调优
+
+CPU 的默认 D 和备选 D 使用同一个 GWNUM FFT 安全余量及内存准入函数。预检以静态成本筛选有限数量的备选，再复核每个候选的真实 FFT。当实际 B1/B2 或承载等条件变化时，重新预检。读写阶段与执行阶段分开计时，发布完正常 NF 后保存记录。试用失败时重跑原自动路径，避免候选失败中断队列。
+
+共享文件使用 `[[cpu_stage2]]` 记录 CPU 的执行条件和阶段均值。CUDA 将 CPU 表原样保留。DLL ABI 2 由调用方取得候选和分项计时，旧 ABI 1 仍有原执行入口。M127 的验收输入以六条真实 save 曲线学习 D=210、240、330，每个两次。只读、并发文件更新、预算隔离、队列完成以及 CPU 表经过 CUDA 解析器往返都由正式测试脚本覆盖。CUDA 还以真实曲线更新含 CPU 记录的实验文件，再由 CPU 回写。双方表经过往返后保留，CUDA 重建不兼容 GPU 格式时也保留 CPU 记录。[配置和记录口径](../usage/EDWARDS_CPU_STAGE2.md#运行时调优) · [端到端测试](../../tools/test/test_cpu_stage2_tune.py) · [实际交替写入](../../data/experiments/cpu_stage2_runtime_tune/release_interop/)
+
 最大 D 的这条曲线用时比自动计划少 33.1%，峰值提交量距硬上限约 23 MiB。与 Prime95 固定到相同最终 B2、D/P 和系数 FFT 后，整曲线仍为 43.852 对 27.648 秒；G 阶段为 18.952 对 13.668 秒，折叠为 8.680 对 4.969 秒。两边分别构造 6 块和 5 块。ECM-ELF 的分段重建随 P 增大，H 缩放及下降用时从自动计划的 4.069 秒增至 8.836 秒。下一步应按各阶段同时活跃数组、实际 FFT 临时空间与线程数重算准入上界，先验证有余量的几何，并用短尾、不同 FFT 和 4T 检验最坏峰值。生产规划器继续使用原预算公式。[18480 硬上限记录](../../data/experiments/stage2_cpu_inplace/cap_18480_1/cap.json) · [30030 硬上限记录](../../data/experiments/stage2_cpu_inplace/cap_30030_1/cap.json) · [逐阶段对照](../performance/STAGE2.md#宽位单线程阶段耗时)

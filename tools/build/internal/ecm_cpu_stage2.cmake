@@ -22,6 +22,8 @@ foreach(_shared
     src/io/worktodo.cpp
     src/io/stage2_checkpoint.cpp
     src/ecm/stage2/cpu/gwpoly_loader.cpp
+    src/ecm/stage2/cpu/runtime_tune.h
+    src/ecm/stage2/cpu/runtime_tune.cpp
     include/ecm/io/results.h
     src/io/results.cpp
     src/io/json.h
@@ -51,6 +53,7 @@ add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/stage2/edwards/cpu/main.cpp"
     "${_ecm_repo}/src/ecm/stage2/queue.cpp"
     "${_ecm_repo}/src/ecm/stage2/process_control.cpp"
     "${_ecm_repo}/src/ecm/stage2/input.cpp"
+    "${_ecm_repo}/src/ecm/stage2/cpu/runtime_tune.cpp"
     "${_ecm_repo}/src/ecm/platform/fingerprint.cpp"
     "${_ecm_repo}/src/io/stage2_checkpoint.cpp"
     "${_ecm_repo}/src/io/worktodo.cpp"

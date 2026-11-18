@@ -126,8 +126,8 @@
       "fx": "shared_tune_file",
       "parser": "strict",
       "description": [
-        "CUDA Stage1 and Stage2 use this file together. Defaults to tune.toml beside ecm.toml. A worker can override the path for both stages. An explicit empty value disables automatic persistence for both stages.",
-        "CUDA Stage1 和 Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可以为两个阶段一并覆盖路径。显式留空时关闭两阶段的自动持久化。"
+        "CUDA Stage1, CUDA Stage2 and CPU GWNUM Stage2 share this file. Defaults to tune.toml beside ecm.toml. Workers can override the path. An explicit empty value disables automatic persistence.",
+        "CUDA Stage1、CUDA Stage2 和 CPU GWNUM Stage2 共用此文件，默认使用 ecm.toml 同目录的 tune.toml。worker 可覆盖路径。显式留空时关闭自动持久化。"
       ]
     },
     {
@@ -2390,8 +2390,8 @@
       "fx": "bounded_runtime_sampling_and_path_selection",
       "parser": "strict",
       "description": [
-        "Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. Parallel queue decisions use stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.",
-        "按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；达到stage2_tune_min_repeats后采用实测最快均值。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false 关闭单曲线试跑、采集和写回，双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。"
+        "CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.",
+        "CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 stage2_tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入 [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。"
       ]
     },
     {
