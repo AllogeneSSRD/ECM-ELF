@@ -41,7 +41,7 @@ The chart compares ECM-ELF CUDA NTT (0.63.17) and CGBN on the RTX 4070 Ti and RT
 
 #### RTX 4070 Ti equivalent CPU cores
 
-For each input, the chart compares the fastest measured CGBN or NTT result on the RTX 4070 Ti with Prime95 running on one 4.0 GHz CPU core. The Edwards data cover inputs up to 262,139 bits. See [how equivalent CPU cores are calculated](docs/performance/STAGE1.md#gpu-型号与-cpu-等效核心数).
+For each input, the chart compares the fastest measured CGBN or NTT result on the RTX 4070 Ti with Prime95 running on one 4.0 GHz CPU core. Edwards and Montgomery PARAM0 both cover inputs up to 262,139 bits. See [how equivalent CPU cores are calculated](docs/performance/STAGE1.md#gpu-型号与-cpu-等效核心数).
 
 ![RTX 4070 Ti Stage1 equivalent CPU cores, logarithmic chart](docs/performance/attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
 

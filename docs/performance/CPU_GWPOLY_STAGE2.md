@@ -2,7 +2,7 @@
 
 本页记录本地 DLL 与静态 `gwpoly` 的配对测试，以及 0.33.0 的 Prime95 对照。它从 Edwards Stage1 文本 save 直接继续，使用 GWNUM/polymult 的多线程快速多项式算术。使用与构建见 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md)，数学见 [多项式 Stage2](../reference/ECM_STAGE2_MATH.md)，保留的开发证据见 [草稿](../development/CPU_GW_POLY_STAGE2_DRAFT.md)。共享底层算术库不等于具有 Prime95 的全部功能或相同性能。
 
-0.66.1 在 CPU 点归一化成功后复用小素数的分母检查，适用于 B1 小于 D/2 的曲线。不同位宽、1T/4T 的正式新旧 DLL 对照，以及未接入的建树、折叠、下降候选见 [CPU/CUDA 配对实验](STAGE2.md#0661-cpu-与-cuda-小规模对照)。
+0.66.1 在 Ryzen AI 9 HX 370 上的单线程、四线程实测覆盖 13 个 Edwards 余因子，与两张 GPU 及 Prime95 的逐点结果见 [Stage2 全位宽图表](STAGE2.md#edwards-全位宽对照)。B1 小于 D/2 时的小素数检查优化、新旧 DLL 配对与其余候选见 [CPU/CUDA 小规模对照](STAGE2.md#0661-cpu-与-cuda-小规模对照)。
 
 ## 0.66.0 指令集与提前初始化
 

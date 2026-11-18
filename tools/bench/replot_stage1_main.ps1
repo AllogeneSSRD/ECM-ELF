@@ -39,6 +39,8 @@ try {
         if ($model -eq 'ed') {
             $plotArgs += @('--prime95-stage1', "$prime95/worktodo_ecm_stage1_wide.txt", "$prime95/screen_ed_matrix.log")
         } else {
+            $plotArgs += @('--prime95-stage1', "$prime95/worktodo_ecm_stage1_wide.txt", "$prime95/screen_mont_matrix.log",
+                           '--prime95-stage1-missing', '61')
             foreach ($device in 0, 1) {
                 $plotArgs += @('--cgbn-retest', "$device", "$paired/gpu$device/comparison.json")
             }

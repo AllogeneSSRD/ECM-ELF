@@ -333,6 +333,8 @@ def main():
                         help="Replace matching PRAC points with three-run medians and add their paired ladder points")
     parser.add_argument("--prime95-stage1", type=Path, nargs=2, metavar=("WORKTODO", "SCREEN_LOG"),
                         help="Extend the 4 GHz single-core Prime95 baseline with Stage1-only results")
+    parser.add_argument("--prime95-stage1-missing", type=int, action="append", default=[], metavar="P",
+                        help="Allow zero Stage1 timers for this supplemental Mersenne exponent")
     parser.add_argument("--gmp-ecm-cgbn", type=Path, help="Add the local WSL GMP-ECM GPU PARAM3 build")
     parser.add_argument("--hide-version", action="append", default=[], help="Hide this version in PNGs only")
     parser.add_argument("--hide-ladder-retests", action="store_true", help="Hide the paired ladder markers in PNGs")
@@ -361,7 +363,10 @@ def main():
         prime95_extra = ()
         if args.prime95_stage1:
             curve_type = "Edwards" if curve == "ed" else "Montgomery"
-            prime95_extra = stage1_plot_points(*args.prime95_stage1, curve_type, comparison["target_b1"])
+            prime95_extra = stage1_plot_points(*args.prime95_stage1, curve_type, comparison["target_b1"],
+                                               missing_exponents=args.prime95_stage1_missing)
+        elif args.prime95_stage1_missing:
+            raise ValueError("--prime95-stage1-missing requires --prime95-stage1")
         baselines = [json.loads(path.read_text(encoding="utf-8-sig")) for path in args.cgbn_baseline]
         retests = {device: json.loads(Path(path).read_text(encoding="utf-8-sig")) for device, path in args.cgbn_retest}
         if len(retests) != len(args.cgbn_retest):

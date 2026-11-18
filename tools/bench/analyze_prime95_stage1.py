@@ -61,7 +61,7 @@ def input_scope(path):
     return scope
 
 
-def stage1_plot_points(worktodo, log, curve_type, target_b1):
+def stage1_plot_points(worktodo, log, curve_type, target_b1, missing_exponents=()):
     """Scale a Stage1-only supplement to the main chart's reference bound."""
     expected = {}
     for p, fields in ecm_work_rows(worktodo):
@@ -71,6 +71,9 @@ def stage1_plot_points(worktodo, log, curve_type, target_b1):
         expected[p] = (b1, curves)
     if not expected:
         raise ValueError("No ECM inputs in supplemental worktodo")
+    missing = set(missing_exponents)
+    if unknown := missing - expected.keys():
+        raise ValueError(f"Missing exponents absent from supplemental worktodo: {sorted(unknown)}")
     source = log.read_text(encoding="utf-8-sig")
     samples, workers, seen = defaultdict(list), set(), set()
     for run in parse_log(source):
@@ -93,6 +96,8 @@ def stage1_plot_points(worktodo, log, curve_type, target_b1):
     points = []
     for p, (_, curves) in sorted(expected.items()):
         values = samples[p]
+        if p in missing and not values:
+            continue
         if len(values) != curves:
             raise ValueError(f"Expected {curves} completed Stage1 timers for M{p}, got {len(values)}")
         points.append((p, p, statistics.median(values), min(values), max(values)))

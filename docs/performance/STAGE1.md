@@ -44,7 +44,7 @@ M262139 的 16384 点加权 ladder 在 4070 Ti 上用 45 条，在 4060 Laptop �
 - **RTX 4060 Laptop 历史 NTT** 与本卡 0.62.2 共用 26 个指数、B1 和阶梯计时边界，每指数各测三次。Edwards 最早一版是 0.60.0，Montgomery 是 0.59.9。跨版本曲线体现各版本的实现、计划和并行数。
 - **CGBN 0.63.7** 实线为 Edwards NAF w12 和 PARAM0 PRAC 50。两者沿用 0.62.3 的 13 个 318–16272 位余因子与批量，使用三片滚动提交。PARAM0 实线的三个复测点取 PRAC 中位数，误差线表示三批最小至最大值。配对 ladder 与 0.62.3 数据用于版本吞吐对照。见 [优化前基线](#0637-优化前基线)、[配对复测](#param0-prac-50-与-ladder-的配对复测)和 [CGBN 两卡对照](#cgbn-两卡对照)。
 - **GMP-ECM 7.0.6** 使用 Montgomery PARAM3，沿用 ECM-ELF CGBN 的余因子和 B1。两组主图将这份数据作为跨实现参考，点乘参数化和设备计时边界随实现而异。见 [GMP-ECM CGBN 参考](#gmp-ecm-cgbn-参考)。
-- **Prime95** 使用 4.0 GHz 单核原生 Stage1 计时。Edwards 覆盖 29 个指数，Montgomery 覆盖历史的 13 个指数，每指数三次。历史数据 B1=1,000,000，Edwards 补测按各指数的 B1 归一化。图中按完整梅森指数定位，GWNUM 仍用原始 `k,b,n,c` 设置。日志未记录精确程序版本。见 [CPU 基准和补测](#prime95-单核基准与-b1-外推)。
+- **Prime95** 使用 4.0 GHz 单核原生 Stage1 计时。Edwards 覆盖 29 个指数，Montgomery 覆盖 28 个指数，两者均测到 M262139，每指数三次。历史数据 B1=1,000,000，补测按各指数的 B1 归一化。图中按完整梅森指数定位，GWNUM 使用原始 `k,b,n,c` 设置。日志未记录精确程序版本。见 [CPU 基准和补测](#prime95-单核基准与-b1-外推)。
 
 GPU 用实际批次时间除以设备计划中的活跃曲线数，再乘 `1,000,000 / B1`。NTT 取主循环的 CUDA event 区间，排除曲线构造、指数和 NAF 准备、字典、Graph 构建、末点回读、GCD 和发布。两卡实线取各条件五批的中位数，Prime95 取三次的中位数。阴影为对应样本的最小至最大值。跨版本结果包含点乘实现、计划、并行数和实测 B1 的影响。固定同一形状的 2XY 融合收益见 [第一层频域融合对照](STAGE1_MERSENNE_NTT.md#原生-edwards-2xy-第一层频域融合)。
 
@@ -54,7 +54,7 @@ PARAM0 的 M61 是 B1 标定的例外。初始 sigma 20260945 的点阶整除两
 
 正式运行区间内，整卡利用率至少 50% 的遥测样本中，4070 Ti 为 2610 MHz、15.02–258.89 W（4230 点，功耗上限 285 W），4060 Laptop 为 1500 MHz、3.77–47.15 W（4379 点）。
 
-0.63.17 的四份 `summary.json`、逐批日志和存档在 `data/experiments/stage1_main_matrix_06317/gpu{0,1}/{ed,mont}/`。合并后的绘图 CSV 在 `data/figures/stage1_main_matrix_06317/{ed,mont0}/comparison.csv`。主图和版本图的重绘命令见 [GMP-ECM CGBN 参考](#gmp-ecm-cgbn-参考)。
+0.63.17 的四份 `summary.json`、逐批日志和存档在 `data/experiments/stage1_main_matrix_06317/gpu{0,1}/{ed,mont}/`。合并后的绘图 CSV 在 `data/figures/stage1_prime95_mont_wide_20261117/{ed,mont0}/comparison.csv`。主图和版本图的重绘命令见 [GMP-ECM CGBN 参考](#gmp-ecm-cgbn-参考)。
 
 按 sigma 核对五批中的 69,000 条曲线结果，校验存档及真因子的整除性。PARAM0 的 M61 两卡 128 条曲线的规范末点逐条一致。CPU 整数参考另对拍 5 个 M61 结果，含一个 Edwards 恒等点。Edwards 的 M251 在主循环前剔除了已得因子的曲线，按实发批量折算。正式样本中 x-only 重放次数为零。详情见实验目录的 `audit.json`。
 
@@ -509,9 +509,9 @@ Montgomery 原生运行日志直接记录卡名和 SM 数；Edwards 的 device 0
 
 ### GPU 型号与 CPU 等效核心数
 
-![RTX 4070 Ti 等效 CPU 核心数，13 个共同输入和宽位 Edwards NTT，对数坐标](attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
+![RTX 4070 Ti 等效 CPU 核心数，13 个共同输入和两种曲线的宽位 NTT，对数坐标](attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
 
-![RTX 4070 Ti 等效 CPU 核心数，13 个共同输入和宽位 Edwards NTT，线性坐标](attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-linear.png)
+![RTX 4070 Ti 等效 CPU 核心数，13 个共同输入和两种曲线的宽位 NTT，线性坐标](attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-linear.png)
 
 按梅森指数及曲线族配对。每档从 RTX 4070 Ti 的 ECM-ELF CGBN 和 NTT 实测版本中取最短的折算主循环时间，有重复样本时先取该配置的批次中位数。CGBN 计算余因子，NTT 计算完整梅森数。横轴在 13 个共同输入处标注目标余因子位宽，在宽位段标注完整梅森模数位宽。各曲线使用对应的 Prime95 4.0 GHz 单核中位数，等效核数为 `CPU 秒／曲线 ÷ 最快 GPU 秒／曲线`，两项均折算到 B1=100 万。误差线取三个 CPU 样本的最小值和最大值，GPU 时间固定为所选值。
 
@@ -519,7 +519,7 @@ Montgomery 原生运行日志直接记录卡名和 SM 数；Edwards 的 device 0
 
 13 个输入各占相同曲线数时，左图用 CPU 耗时之和除以 GPU 耗时之和，得到 **Edwards 16.76 核**和 **Montgomery PARAM0 16.35 核**。逐输入范围分别为 9.73～699.19 核和 8.99～464.93 核，随位宽和两端算术实现变化。
 
-Edwards 曲线接续 32749～262139 位的 **7 个宽位 NTT 实测点**。对应的 4070 Ti 最快样本均来自 0.63.17，折合 **9.16～15.42 个 Prime95 单核**，M262139 为 **10.87 核**。Montgomery PARAM0 已有宽位 GPU 计时，Prime95 单核数据目前覆盖到 M16319。
+两条曲线各接续 32749～262139 位的 **7 个宽位 NTT 实测点**。Edwards 的最快样本均来自 0.63.17，折合 **9.16～15.42 个 Prime95 单核**，M262139 为 **10.87 核**。Montgomery PARAM0 的最快样本来自 0.62.4 或 0.63.17，折合 **10.08～14.35 核**，M262139 为 **10.74 核**。
 
 图表读取主图输出的 `ed/comparison.csv` 和 `mont0/comparison.csv`，逐档所选版本、后端和折算耗时记录在输出目录的 `selected.csv`。[绘图脚本](../../tools/bench/plot_stage1_equivalent_cores.py)
 
@@ -598,30 +598,30 @@ B1=11e6/44e6 分别乘以 11/44；例如 M16319 的 Edwards 为 **128.139/512.55
 
 计时读取原生 `Stage 1 complete ... Total time`，排除 Stage2 初始化、主循环及 GCD，也不是整进程墙钟。Prime95 参考源码 `ecm.cpp:7420,7682` 显示其 Stage1 范围覆盖指数/字典处理、主循环、末点检查及向 Montgomery 的转换，曲线初始构造在前。日志显示后续 Stage2 会自动扩大 B2，相关时间不加入本表。
 
-### Edwards 扩展矩阵
+### Edwards 与 Montgomery 扩展矩阵
 
-2026-11-12 的 `tools/benchmarks/prime95/screen_ed_matrix.log` 覆盖 16 个新指数、48 个原生 Stage1 计时。单 worker 绑定逻辑 CPU 1，沿用 4.0 GHz 单核工况。工作行均为 B2=B1，计时截止于 `Stage 1 complete`，其后的独立 Stage1 GCD 单列在日志中。版本和功耗未记入日志。用 `1000000 / B1` 分别缩放三条计时，取中位数和最小／最大值绘图。6 次发现因子的日志值均整除相应梅森数，补跑样本按不同 sigma 计入。
+2026-11-12 的 `tools/benchmarks/prime95/screen_ed_matrix.log` 为 Edwards 提供 16 个新指数、48 次有效计时。2026-11-17 的 `tools/benchmarks/prime95/screen_mont_matrix.log` 为 Montgomery 提供 15 个新指数、45 次有效计时，M61 缺少实测。两份日志均为单 worker 绑定逻辑 CPU 1，沿用 4.0 GHz 单核工况。工作行均为 B2=B1。计时取 `Stage 1 complete`，截止在日志单列的 Stage1 GCD 之前。版本和功耗未记入日志。每个指数按不同 sigma 取三次计时，分别乘 `1000000 / B1` 后用中位数和最小／最大值绘图。两份日志报告的 6 次 Edwards 和 5 次 Montgomery 因子均整除对应梅森数。
 
-| 指数 | B1 | Stage1 FFT | 中位秒／曲线 | 折算秒／曲线 @ B1=100 万 |
+| 指数 | B1 | Stage1 FFT | Edwards 实测／折算秒每条 | Montgomery 实测／折算秒每条 |
 |---:|---:|---|---:|---:|
-| 61 | 5,000,000 | Barrett FMA3／32 | 20.062 | 4.012 |
-| 127 | 5,000,000 | Barrett FMA3／32 | 22.629 | 4.526 |
-| 251 | 5,000,000 | Barrett FMA3／32 | 28.340 | 5.668 |
-| 521 | 3,000,000 | FMA3／32 | 5.500 | 1.833 |
-| 1279 | 3,000,000 | AVX-512／128 | 7.908 | 2.636 |
-| 2539 | 3,000,000 | AVX-512／128 | 7.713 | 2.571 |
-| 4003 | 2,000,000 | AVX-512／256 | 7.598 | 3.799 |
-| 8191 | 1,500,000 | AVX-512／384 | 7.888 | 5.259 |
-| 16001 | 1,000,000 | AVX-512／768 | 9.623 | 9.623 |
-| 32749 | 400,000 | AVX-512／1536 | 7.908 | 19.770 |
-| 58631 | 200,000 | AVX-512／3072 | 8.606 | 43.030 |
-| 65521 | 200,000 | AVX-512／3072 | 8.698 | 43.490 |
-| 106501 | 100,000 | AVX-512／5120 | 7.586 | 75.860 |
-| 131071 | 75,000 | AVX-512／7168 | 8.353 | 111.373 |
-| 225287 | 50,000 | AVX-512／10752 | 9.528 | 190.560 |
-| 262139 | 50,000 | AVX-512／12800 | 11.108 | 222.160 |
+| 61 | 5,000,000 | Barrett FMA3／32 | 20.062／4.012 | — |
+| 127 | 5,000,000 | Barrett FMA3／32 | 22.629／4.526 | 31.490／6.298 |
+| 251 | 5,000,000 | Barrett FMA3／32 | 28.340／5.668 | 34.171／6.834 |
+| 521 | 3,000,000 | FMA3／32 | 5.500／1.833 | 8.873／2.958 |
+| 1279 | 3,000,000 | AVX-512／128 | 7.908／2.636 | 12.594／4.198 |
+| 2539 | 3,000,000 | AVX-512／128 | 7.713／2.571 | 12.698／4.233 |
+| 4003 | 2,000,000 | AVX-512／256 | 7.598／3.799 | 15.313／7.657 |
+| 8191 | 1,500,000 | AVX-512／384 | 7.888／5.259 | 13.607／9.071 |
+| 16001 | 1,000,000 | AVX-512／768 | 9.623／9.623 | 13.922／13.922 |
+| 32749 | 400,000 | AVX-512／1536 | 7.908／19.770 | 11.020／27.550 |
+| 58631 | 200,000 | AVX-512／3072 | 8.606／43.030 | 12.464／62.320 |
+| 65521 | 200,000 | AVX-512／3072 | 8.698／43.490 | 12.683／63.415 |
+| 106501 | 100,000 | AVX-512／5120 | 7.586／75.860 | 10.392／103.920 |
+| 131071 | 75,000 | AVX-512／7168 | 8.353／111.373 | 10.625／141.667 |
+| 225287 | 50,000 | AVX-512／10752 | 9.528／190.560 | 12.237／244.740 |
+| 262139 | 50,000 | AVX-512／12800 | 11.108／222.160 | 14.959／299.180 |
 
-M61–M251 使用 Barrett，三个档位的中位时间为 20.062–28.340 秒。其余 13 档为 5.500–11.108 秒。全部 48 次的原生 Stage1 时间合计 541.449 秒。Edwards 主图由本轮 16 点加原 13 点组成，Montgomery 主图使用原 13 点。补测绘图数据在 `data/figures/stage1_prime95_wide_20261112/ed/comparison.csv`，通过 `--prime95-stage1 WORKTODO SCREEN_LOG` 复算。见 [补测工作行与工况](../../tools/benchmarks/prime95/README.md#stage1-主图补测矩阵)。
+两张主图分别将这 16 和 15 个补测点合并到原来的 13 档。合并后的 CSV 在 `data/figures/stage1_prime95_mont_wide_20261117/{ed,mont0}/comparison.csv`。绘图入口通过 `--prime95-stage1 WORKTODO SCREEN_LOG` 读入补测，Montgomery 另传 `--prime95-stage1-missing 61` 以允许 M61 缺测。见 [补测工作行与工况](../../tools/benchmarks/prime95/README.md#stage1-主图补测矩阵)。
 
 复算入口为 [analyze_prime95_stage1.py](../../tools/bench/analyze_prime95_stage1.py)，Edwards 保持原补测及预热排除参数；Montgomery 使用 `--curve-type Montgomery`，指定各自输出目录以保留独立证据：
 

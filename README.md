@@ -41,7 +41,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集。GPU Stage1 支持 CUDA C
 
 #### RTX 4070 Ti 等效 CPU 核心数
 
-逐档采用 RTX 4070 Ti 上耗时最短的 CGBN 或 NTT 实测结果，与同一输入的 4.0 GHz Prime95 单核耗时比较。Edwards 数据覆盖至 262,139 位。计算口径见 [GPU 型号与 CPU 等效核心数](docs/performance/STAGE1.md#gpu-型号与-cpu-等效核心数)。
+逐档采用 RTX 4070 Ti 上耗时最短的 CGBN 或 NTT 实测结果，与同一输入的 4.0 GHz Prime95 单核耗时比较。Edwards 和 Montgomery PARAM0 均覆盖至 262,139 位。计算口径见 [GPU 型号与 CPU 等效核心数](docs/performance/STAGE1.md#gpu-型号与-cpu-等效核心数)。
 
 ![RTX 4070 Ti Stage1 等效 CPU 核心数，对数图](docs/performance/attachments/stage1-edwards-mont0-rtx4070ti-cpu-cores-log.png)
 
