@@ -178,7 +178,7 @@ def run(args, case: Case, case_input: bytes, arm: Arm, directory: Path) -> dict:
     source = directory / "input.save"
     source.write_bytes(case_input)
     config = directory / "ecm.toml"
-    config.write_text("[stage2]\nstage2_auto_b2 = false\n", encoding="utf-8")
+    config.write_text("config_version=4\n[stage2]\ndevice=\"gpu\"\nauto_b2 = false\n", encoding="utf-8")
     engine_log = directory / "engine.log"
     debug_log = directory / "debug.log"
     results = directory / "result.jsonl"

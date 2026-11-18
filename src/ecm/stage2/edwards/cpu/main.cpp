@@ -408,7 +408,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     s2prod::TaskEngine engine;
     engine.name="CPU Stage2";
     engine.validate=[&](const s2prod::Record &r,uint64_t b2) {
-        if(!r.edwards)throw std::runtime_error("CPU Stage2 requires Edwards saves; select stage2.device = \"gpu\" for Montgomery");
+        if(!r.edwards)throw std::runtime_error("CPU Stage2 requires Edwards saves; set device = \"gpu\" for Montgomery");
         const bool gw=cpu.backend=="gwpoly" || (cpu.backend=="auto" && !ecm_gwpoly::load_error());
         if(b2>(gw?ecm_gwpoly::max_b2:1000000000000ull))
             throw std::runtime_error("requested B2 exceeds the CPU backend limit");

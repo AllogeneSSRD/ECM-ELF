@@ -150,10 +150,10 @@ def main():
         if previous["gpu_model"] != gpu_model or previous["device"] != args.device:
             parser.error("reuse summary must match the selected GPU")
         plans = {group["p"]: group for group in previous["groups"]}
-    config = f'[stage1]\ndevice = {args.device}\ngpu_algorithm = "ntt"\ncurve = "{args.curve}"\ngpu_param = 0\n' \
-             'lcm = "1"\nexp_cache = "off"\nlog_file = ""\nckpt_seconds = 0\n'
+    config = f'config_version = 4\n[shared]\nlog_file = ""\n[stage1]\nstage1_gpu_device = {args.device}\ngpu_algorithm = "ntt"\nparam = "{"e" if args.curve == "ed" else "m0"}"\n' \
+             'montgomery_lcm_multiplier = "1"\nexponent_cache_dir = "off"\ncheckpoint_interval_seconds = 0\n'
     if args.edwards_naf_window is not None:
-        config += f"naf_w = {args.edwards_naf_window}\n"
+        config += f"edwards_naf_window_bits = {args.edwards_naf_window}\n"
     report = dict(version=version, device=args.device, gpu_model=gpu_model, curve=args.curve,
                   sigma=args.sigma if args.sigma is not None else 20260922, rounds=args.rounds,
                   exponents=args.exponents, reference_b1=1000000, groups=[])

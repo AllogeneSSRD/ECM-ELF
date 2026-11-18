@@ -20,13 +20,13 @@ def write_config(folder, window, implementation, device, interval=0, limit_mb=0)
     config = folder / 'ecm.toml'
     execution = ('target = "cpu"\n'
                  f'cpu_implementation = "{implementation}"\n'
-                 'cpu_threads = 2\n') if device is None else (
+                 'stage1_cpu_threads = 2\n') if device is None else (
                  'target = "gpu"\n'
-                 'gpu_backend = "cuda"\n'
+                 'stage1_gpu_backend = "cuda"\n'
                  'gpu_algorithm = "cgbn"\n'
-                 f'gpu_device = {device}\n')
+                 f'stage1_gpu_device = {device}\n')
     config.write_text(
-        'config_version = 3\n'
+        'config_version = 4\n'
         '[shared]\n'
         'worktodo_file = "worktodo.txt"\n'
         'log_file = ""\n'
@@ -36,11 +36,11 @@ def write_config(folder, window, implementation, device, interval=0, limit_mb=0)
         'sigma = 20260922\n'
         f'checkpoint_interval_seconds = {interval}\n'
         'exponent_cache_dir = "off"\n'
-        'handoff.mode = "off"\n'
+        'handoff_mode = "off"\n'
         'verbose = true\n'
         f'edwards_naf_window_bits = {window}\n'
         f'naf_memory_mb = {limit_mb}\n'
-        f'save_dir = {json.dumps(folder.as_posix())}\n', encoding='utf-8')
+        f'stage1_save_dir = {json.dumps(folder.as_posix())}\n', encoding='utf-8')
     return config
 
 

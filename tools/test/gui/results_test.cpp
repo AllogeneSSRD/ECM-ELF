@@ -34,12 +34,12 @@ int main(int argc,char **argv) {
         if(fs::exists(root))throw std::runtime_error("test directory must be fresh");
         fs::create_directories(root);
         const auto config=root/"ecm.toml",first=root/"results.json.txt",second=root/"results.json_2.txt";
-        write(config,"[gui]\nNumWorkers=2\n");
+        write(config,"config_version=4\n[shared]\nworker_count=2\n");
         std::vector<ecm_config::TomlLine> lines;
         check(ecm_config::read_toml(config.u8string(),lines),"read TOML");
         auto paths=result_paths(lines,config.u8string(),2);
         check(paths.size()==2 && paths[0]==first.u8string() && paths[1]==second.u8string(),"default worker paths and shared stage dedup");
-        write(config,"[stage1]\nstage1_submission_file=\"s1.txt\"\n[workers.2.stage2]\nstage2_submission_file=\"custom.txt\"\n");
+        write(config,"config_version=4\n[stage1]\nstage1_submission_file=\"s1.txt\"\n[worker.2]\nstage2_submission_file=\"custom.txt\"\n");
         ecm_config::read_toml(config.u8string(),lines);paths=result_paths(lines,config.u8string(),2);
         check(paths.size()==3 && fs::u8path(paths[0]).filename()=="s1.txt" && fs::u8path(paths[2]).filename()=="custom.txt","explicit paths are not worker-suffixed and overrides apply");
         ResultStore store;store.set_paths({first.u8string(),second.u8string(),first.u8string()});

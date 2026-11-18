@@ -39,7 +39,10 @@ def tables(text):
 
 def invoke(exe,save,out,name,text='',extra=(),b2=40000,d=210,curves=1,device=1,old=False,good=True):
     prefix=out/name;config=prefix.with_suffix('.toml')
-    config.write_text('[shared]\nuser=""\ncomputer=""\n[stage2]\nstage2_short_calibration=false\nstage2_tune_runtime=false\n'+text,encoding='utf-8')
+    settings = ('[shared]\nuser=""\ncomputer=""\n[stage2]\nstage2_short_calibration=false\nstage2_tune_runtime=false\n'
+                if old else
+                'config_version=4\n[shared]\nuser=""\ncomputer=""\n[stage2]\ndevice="gpu"\nshort_calibration=false\ntune_runtime_enabled=false\n')
+    config.write_text(settings + text, encoding='utf-8')
     log=prefix.with_suffix('.engine.log');debug=prefix.with_suffix('.debug.log');result=prefix.with_suffix('.jsonl')
     cmd=list(map(str,[exe,'--config',config,'--save',save,'--b2',b2,'--d',d,'--curves',curves,'--device',device,
         '--short-calibration',0,'--tune-runtime',0,'--factor-only','--results',result,
@@ -77,12 +80,12 @@ def main():
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     exe=a.exe.resolve();ed=a.ed_save.resolve();mont=a.mont_save.resolve()
     report=dict(complete=False,exe_sha256=sha(exe),script_sha256=sha(__file__),device=a.device,runs=[])
-    tests=[('default','',[],False),('toml_on','stage2_ntt_counts=true\n',[],True),
-        ('worker_off','stage2_ntt_counts=true\n[workers.2.stage2]\nstage2_ntt_counts=false\n',['--worker',2],False),
-        ('worker_on','stage2_ntt_counts=false\n[workers.2.stage2]\nstage2_ntt_counts=true\n',['--worker',2],True),
-        ('cli_off','stage2_ntt_counts=true\n',['--ntt-counts',0],False),
-        ('cli_on','stage2_ntt_counts=false\n',['--ntt-counts',1],True),
-        ('quiet_on','stage2_ntt_counts=true\n',['--log-level','quiet'],True)]
+    tests=[('default','',[],False),('toml_on','ntt_length_counts=true\n',[],True),
+        ('worker_off','ntt_length_counts=true\n[worker.2]\nntt_length_counts=false\n',['--worker',2],False),
+        ('worker_on','ntt_length_counts=false\n[worker.2]\nntt_length_counts=true\n',['--worker',2],True),
+        ('cli_off','ntt_length_counts=true\n',['--ntt-counts',0],False),
+        ('cli_on','ntt_length_counts=false\n',['--ntt-counts',1],True),
+        ('quiet_on','ntt_length_counts=true\n',['--log-level','quiet'],True)]
     for name,text,extra,on in tests:
         row=invoke(exe,ed,out,name,text,extra,device=a.device)
         assert bool(row['tables'])==on and bool(row['stdout_tables'])==on
@@ -90,11 +93,11 @@ def main():
             assert (row['leaf_hashes'],row['factors'])==(report['runs'][0]['leaf_hashes'],report['runs'][0]['factors'])
         report['runs'].append(row);print(name,'PASS',flush=True)
     for name,save,curves in [('montgomery',mont,1),('two_curves',ed,2)]:
-        row=invoke(exe,save,out,name,'stage2_ntt_counts=true\n',curves=curves,device=a.device)
+        row=invoke(exe,save,out,name,'ntt_length_counts=true\n',curves=curves,device=a.device)
         assert len(row['tables'])==curves
         if curves==2:assert row['tables'][0]==row['tables'][1] # Geometry repeats, counters reset per child.
         report['runs'].append(row)
-    for name,text,extra in [('bad_toml','stage2_ntt_counts=2\n',[]),('bad_cli','',['--ntt-counts',2])]:
+    for name,text,extra in [('bad_toml','ntt_length_counts=2\n',[]),('bad_cli','',['--ntt-counts',2])]:
         report['runs'].append(invoke(exe,ed,out,name,text,extra,good=False,device=a.device))
     if a.old_exe:
         for name,save in [('old_ed',ed),('old_mont',mont)]:

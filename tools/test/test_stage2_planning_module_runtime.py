@@ -25,7 +25,7 @@ def main():
     for label,exe in binaries.items():
         work=out/label;work.mkdir();saved=work/'points.save';saved.write_text(point+'\n')
         queue=work/'worktodo.txt';queue.write_text('ECMSTAGE2=1,2,127,-1,"points.save",0,0,1\n')
-        ini=work/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n[stage2]\n'
+        ini=work/'ecm.toml';ini.write_text('config_version=4\n[shared]\nuser=""\ncomputer=""\n[stage2]\ndevice="gpu"\n'
             'stage2_b2=40000\nstage2_tune_warmup=false\nstage2_relocation=false\n',encoding='utf8')
         common=[exe,'--config',ini,'--device',a.device,'--batch-mb','16','--arena-mb','128','--owner-budget-mb','32','--relocation','0']
         def run(name,options,success=True):

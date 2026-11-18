@@ -1,5 +1,5 @@
 """Relocated package smoke, without SDK/layers/build output on PATH."""
-import argparse,ctypes,hashlib,json,os,shutil,struct,subprocess,time
+import argparse,ctypes,hashlib,json,os,shutil,struct,subprocess,time,tomllib
 from pathlib import Path
 from win32_probe import window,close,user
 from renderer_probe import renderer_clean
@@ -41,17 +41,20 @@ def main():
         assert order['group_order']=='6277101735386680763835789423165887359574653668381181441896'
         assert 'libpari.dll' not in [name.lower() for name in modules],'Math library must stay outside the GUI process'
     startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-    cases={};cfg=out/'workflow.toml';cfg.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n');original=cfg.read_bytes()
+    cases={};cfg=out/'workflow.toml'
+    cfg.write_text('config_version=4\n[shared]\nworker_count=1\n[worker.1]\nautostart=false\n')
+    original=tomllib.loads(cfg.read_text())
     def run(name,flags,expected=0,show=False,binary=exe):
-        log=out/(name+'.log');cmd=[str(binary),'--config',str(cfg),'--ui-state',str(out/(name+'.toml')),'--diagnostics',str(log),'--frames','12',*flags]
+        log=out/(name+'.log');cmd=[str(binary),'--config',str(cfg),'--diagnostics',str(log),'--frames','12',*flags]
         proc=subprocess.Popen(cmd,cwd=out,env=env,startupinfo=startup,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         if show:hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
         proc.wait(timeout=30);assert proc.returncode==expected,(name,proc.returncode);text=log.read_text(encoding='utf-8')
         assert renderer_clean(text,'dx11') if expected==0 else 'No Vulkan loader available' in text
         cases[name]=dict(exit=proc.returncode);return text
-    assert 'frame: 1' in run('normal',[])
+    assert 'frame: 1' in run('normal',['--theme','light'])
+    assert tomllib.loads(cfg.read_text())['gui']['theme']=='light'
     unicode_config=out/'中文工作流.toml';unicode_config.write_bytes(cfg.read_bytes());unicode_log=out/'unicode.log'
-    run_unicode=subprocess.run([str(exe),'--config',str(unicode_config),'--ui-state',str(out/'unicode-ui.toml'),'--diagnostics',str(unicode_log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
+    run_unicode=subprocess.run([str(exe),'--config',str(unicode_config),'--diagnostics',str(unicode_log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
     assert run_unicode.returncode==0 and 'app: config=' in unicode_log.read_text(encoding='utf-8');cases['unicode-workflow-read']=True
     assert 'No Vulkan loader available' in run('no-loader',['--renderer','vulkan','--no-loader'],1)
     assert 'language=en cjk=0' in run('missing-cjk',['--language','zh','--simulate-missing-cjk'])
@@ -61,17 +64,17 @@ def main():
         assert f'pet_skin: id={skin} ' in run('pet-'+skin,['--pet','--pet-skin',skin],show=True)
     no_pet=out/'without-pet';no_pet.mkdir();shutil.copy2(exe,no_pet/exe.name)
     assert 'pet_error: Pet atlas missing' in run('missing-pet',['--pet'],show=True,binary=no_pet/exe.name)
-    corrupt=out/'corrupt.toml';corrupt.write_text('[state]\nschema=999\n');before=corrupt.read_bytes()
-    log=out/'invalid-state.log';result=subprocess.run([str(exe),'--ui-state',str(corrupt),'--diagnostics',str(log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
-    assert result.returncode==0 and corrupt.read_bytes()==before and 'UI state not loaded' in log.read_text(encoding='utf-8');cases['invalid-state-retained']=True
-    corrupt.write_text('[ui]\ndock="0"\n');before=corrupt.read_bytes()
-    result=subprocess.run([str(exe),'--ui-state',str(corrupt),'--diagnostics',str(out/'invalid-layout.log'),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
+    corrupt=out/'corrupt.toml';corrupt.write_text('config_version=4\n[gui]\nnav_order="0123"\n');before=corrupt.read_bytes()
+    log=out/'invalid-state.log';result=subprocess.run([str(exe),'--config',str(corrupt),'--diagnostics',str(log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
+    assert result.returncode==0 and corrupt.read_bytes()==before and 'GUI preferences could not be loaded' in log.read_text(encoding='utf-8');cases['invalid-state-retained']=True
+    corrupt.write_text('config_version=4\n[gui]\nworkspace_layout="0"\n');before=corrupt.read_bytes()
+    result=subprocess.run([str(exe),'--config',str(corrupt),'--diagnostics',str(out/'invalid-layout.log'),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
     assert result.returncode==0 and corrupt.read_bytes()==before;cases['invalid-layout-retained']=True
     # A persisted file is actually parsed again, not merely left on disk.
-    state=out/'normal.toml';state_before=state.read_text(encoding='utf-8');assert '[ui]' in state_before
-    log=out/'restart.log';result=subprocess.run([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
-    assert result.returncode==0 and 'UI state not loaded' not in log.read_text(encoding='utf-8') and 'UI state not saved' not in log.read_text(encoding='utf-8');cases['restart']=True
-    assert cfg.read_bytes()==original
+    log=out/'restart.log';result=subprocess.run([str(exe),'--config',str(cfg),'--diagnostics',str(log),'--frames','8','--no-nvml'],cwd=out,env=env,startupinfo=startup,timeout=30)
+    assert result.returncode==0 and 'GUI preferences could not be loaded' not in log.read_text(encoding='utf-8');cases['restart']=True
+    current=tomllib.loads(cfg.read_text(encoding='utf-8'))
+    assert all(current[key]==value for key,value in original.items())
     report=dict(passed=True,cases=cases,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),manifest_files_verified=len(manifest['files_sha256']),pe_imports=modules,business_unchanged=True,path_only_system32=True,limits=['Same machine with installed graphics driver and MSVC runtime; not a separate clean OS','No actual driver removal; missing-loader/CJK are explicit fault seams'])
     (out/'result.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
 if __name__=='__main__':main()

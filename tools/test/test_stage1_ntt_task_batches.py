@@ -208,12 +208,12 @@ def main():
         database = tune or work / "tune.toml"
         config = work / "ecm.toml"
         config.write_text(
-            f'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
+            f'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
             f'finished_file = "finished.txt"\nlog_file = ""\ntune_file = "{database.as_posix()}"\n'
-            f'[stage1]\nparam = "e"\ntarget = "gpu"\ngpu_backend = "cuda"\ngpu_device = {args.device}\n'
-            f'save_dir = "{work.as_posix()}"\nhandoff.mode = "ecm-elf"\nedwards_naf_window_bits = {naf_window}\n'
+            f'[stage1]\nparam = "e"\ntarget = "gpu"\nstage1_gpu_backend = "cuda"\nstage1_gpu_device = {args.device}\n'
+            f'stage1_save_dir = "{work.as_posix()}"\nhandoff_mode = "ecm-elf"\nedwards_naf_window_bits = {naf_window}\n'
             f'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = {checkpoint_period}\n'
-            + (f'gpu_algorithm = "ntt"\nntt.pad_batch = {pad}\n' if pad is not None else "") + extra_stage1,
+            + (f'gpu_algorithm = "ntt"\nntt_pad_batch = {pad}\n' if pad is not None else "") + extra_stage1,
             encoding="utf-8",
         )
         if requested:
@@ -258,7 +258,7 @@ def main():
     # weighted L=1024 plan fits, while the linear L=2048 plan exceeds NAF memory.
     for memory, expected in ((6144, (54, 98)), (1024, (14, 25))):
         work, command, _ = fixture(f"per_plan_capacity_{memory}", pad=0, naf_window=12,
-                                  extra_stage1=f"naf_memory_mb = 4096\nntt.memory_mib = {memory}\n")
+                                  extra_stage1=f"naf_memory_mb = 4096\nntt_memory_mib = {memory}\n")
         (work / "worktodo.txt").write_text(f'ECM=1,2,15919,-1,1024,1024,95,{SIGMA},"1782929"\n',
                                          encoding="ascii")
         log, wall = run(work, command)
@@ -344,7 +344,7 @@ def main():
     sigmas, _ = ntt_inflight(work / CHECKPOINT)
     assert sigmas == list(range(SIGMA + interrupted["offset"], SIGMA + resumed_actual))
     config = work / "ecm.toml"
-    config.write_text(config.read_text(encoding="utf-8").replace("ntt.pad_batch = 1", "ntt.pad_batch = 0"),
+    config.write_text(config.read_text(encoding="utf-8").replace("ntt_pad_batch = 1", "ntt_pad_batch = 0"),
                       encoding="utf-8")
     log, wall = run(work, command, "resumed")
     resumed, = batch_launches(log)
@@ -357,7 +357,7 @@ def main():
     work, command, _ = fixture("factors", pad=0)
     config = work / "ecm.toml"
     config.write_text(config.read_text(encoding="utf-8").replace('param = "e"', 'param = "m0"')
-                      + 'ntt.convolution = "linear"\n', encoding="utf-8")
+                      + 'ntt_convolution = "linear"\n', encoding="utf-8")
     todo = work / "worktodo.txt"
     todo.write_text("ECM=1,2,65,-1,40,100,2,30\n", encoding="utf-8")
     log, wall = run(work, command)
@@ -378,10 +378,10 @@ def main():
         (work / "worktodo.txt").write_text(
             f"{expanded_handoff.rsplit(',', 2)[0]},{actual - 1},1\n", encoding="utf-8")
         config = work / "ecm.toml"
-        config.write_text('config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
+        config.write_text('config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
                           'finished_file = "finished.txt"\nlog_file = "stage2.log"\n'
-                          f'[stage2]\ngpu_device = {args.device}\n'
-                          'results_file = "stage2_results.jsonl"\ntune.runtime_enabled = false\n',
+                          f'[stage2]\ndevice = "gpu"\nstage2_gpu_device = {args.device}\n'
+                          'stage2_results_file = "stage2_results.jsonl"\ntune_runtime_enabled = false\n',
                           encoding="utf-8")
         log, wall = run(work, [str(stage2), "--config", str(config), "--device", str(args.device),
                                "--d", "210", "--factor-only"])

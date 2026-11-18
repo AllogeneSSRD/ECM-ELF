@@ -12,6 +12,8 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 Stage2 本机与发布入口生成统一的 `ecm_stage2.exe`，链接 CPU Edwards 与 CUDA 后端。Windows 构建另需 Ninja 和 `.refactor/gmp-ecm` 源码，运行需安装 MSVC x64 Redistributable（含 OpenMP 运行时）。发布包附 GMP-ECM 源码与许可。CPU 专用本机构建及自编 `gwnum.dll` 见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。
 
+GUI 和工作程序共用 v4 `ecm.toml`。更新已有 v3 工作目录时，先保留旧配置，再导出 v4 文件验证。可一并导入原 GUI 偏好。[配置迁移](../architecture/CONFIGURATION.md#升级旧配置)
+
 | 程序 | 开发 | 本机生产 | 发布生产 |
 | --- | --- | --- | --- |
 | Stage1 | `build_stage1_dev` | `build_stage1_local` | `build_stage1_release` |

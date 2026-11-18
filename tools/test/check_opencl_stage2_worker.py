@@ -47,19 +47,22 @@ def save_line(n,sigma=26,b1=20):
 def config(folder,device,arena=512):
     folder.mkdir(parents=True,exist_ok=False)
     path=folder/'ecm.toml'
-    path.write_text(f'''[shared]
-worktodo="worktodo.txt"
+    path.write_text(f'''config_version=4
+[shared]
+worktodo_file="worktodo.txt"
+log_file="worker.log"
+finished_file="finished.txt"
 [stage2]
-stage2_device={device}
+device="gpu"
+stage2_gpu_backend="opencl"
+stage2_gpu_device={device}
 stage2_save_dir="."
-stage2_log_level="phases"
-stage2_arena_mb={arena}
-stage2_auto_carrier=false
-stage2_tune_runtime=false
+log_level="phases"
+arena_mib={arena}
+auto_carrier=false
+tune_runtime_enabled=false
 stage2_results_file="results.jsonl"
-stage2_log_file="worker.log"
-stage2_finished="finished.txt"
-stage2_progress_dir="."
+checkpoint_dir="."
 ''',encoding='utf-8')
     return path
 
@@ -329,7 +332,7 @@ def main():
     second='ECMSTAGE2=1,2,127,-1,"b.save",400,0,1'
     (queue/'worktodo.txt').write_text(first+'\n'+second+'\n',encoding='utf-8')
     # Pin D in TOML so --once and an inherited stop retain identical identity.
-    with (queue/'ecm.toml').open('a',encoding='utf-8') as f:f.write('stage2_d=30\n')
+    with (queue/'ecm.toml').open('a',encoding='utf-8') as f:f.write('d=30\n')
     stop_after_first_start(exe,queue)
     (queue/'worktodo.txt').write_text(second+'\n'+first+'\n',encoding='utf-8')
     run(exe,queue,['--once'],'reordered_first')
@@ -342,10 +345,11 @@ def main():
     # Shared CUDA settings must not leak into the native point timing profile.
     tuning=a.out/'point_runtime_tune'
     ini=config(tuning,a.device)
+    ini.write_text(ini.read_text(encoding='utf-8').replace('[shared]\n','[shared]\ntune_file="cuda.toml"\n'),
+                   encoding='utf-8')
     with ini.open('a',encoding='utf-8') as out:
-        out.write('stage2_reduce_backend="coop32"\nstage2_giant_chain="32"\n'
-                  'stage2_tune_profile="cuda.toml"\n[workers.2.stage2]\n'
-                  'stage2_opencl_tune_profile="native.toml"\nstage2_tune_min_repeats=1\n')
+        out.write('reduce_backend="coop32"\ngiant_chain="32"\n[worker.2]\n'
+                  'opencl_tune_file="native.toml"\ntune_min_repeats=1\n')
     (tuning/'cuda.toml').write_text('# retained CUDA profile\n',encoding='utf-8')
     (tuning/'real.save').write_text(adaptive_line,encoding='utf-8')
     job=['--worker',2,'--save',str((tuning/'real.save').resolve()),'--b2',260000,'--d',2310,'--curves',1,'--factor-only']

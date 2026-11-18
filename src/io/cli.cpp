@@ -70,7 +70,7 @@ Queue input and Stage2 handoff:
     ECMSTAGE2N=[AID,]filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]
   ECMSTAGE2 checks the expected modulus; ECMSTAGE2N reads the full N from the save.
   Both read B1 from the save; omitted/zero count means all records after skip.
-  TOML [stage1] handoff.mode = "ecm-elf" (default), "off", or "prime95".
+  TOML [stage1] handoff_mode = "ecm-elf" (default), "off", or "prime95".
   ECM-ELF handoff appends an eligible ECMSTAGE2 line to the original worker.
   handoff.workers / handoff.worktodo_file select another destination.
   Published counts use the actual saved range, including any extra NTT tail curves.
@@ -123,14 +123,16 @@ Saves and checkpoints:
                        Default: cache/ at the checkout root or beside the executable.
 
 Additional TOML controls:
+  Set config_version = 4 at the root. In [worker.N], use the same flat keys
+  as in their global tables.
   [shared] tune_file selects the common Stage1/Stage2 tuning database.
-  [stage1] ntt.pad_batch = 0 runs the requested count; 1 rounds the tail batch
+  [stage1] ntt_pad_batch = 0 runs the requested count; 1 rounds the tail batch
            up with new sigmas and includes those curves in saves and handoff.
-           ntt.allow_known_factors = 1 permits full-Mersenne arithmetic for
+           ntt_allow_known_factors = 1 permits full-Mersenne arithmetic for
            cofactor assignments; checks and saves use the cofactor. 0 disables it.
-           ntt.convolution = "auto"|"linear"|"weighted" selects convolution.
-           ntt.length, ntt.bits_per_word, ntt.tile, ntt.outer_radix_limit,
-           ntt.window_bits, ntt.warp_tail and ntt.memory_mib control NTT plans.
+           ntt_convolution = "auto"|"linear"|"weighted" selects convolution.
+           ntt_length, ntt_bits_per_word, ntt_tile, ntt_outer_radix_limit,
+           ntt_window_bits, ntt_warp_tail and ntt_memory_mib control NTT plans.
            cuda_montgomery_chain = "ladder"|"prac" selects CGBN PARAM0's chain.
            cuda_prac_search, cpu_prac_search, naf_memory_mb and edwards_doubling
            control PRAC search, NAF memory and Edwards doubling.

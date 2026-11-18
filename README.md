@@ -102,10 +102,10 @@ echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8
 
 ### 使用 worktodo 运行 Stage1
 
-以下示例假设 `ecm_cuda.exe`、`ecm_stage2.exe` 和 `ecm.toml` 位于同一目录，并从该目录运行命令；已有 TOML 时将这些键合并进去。创建 `ecm.toml`：
+以下示例假设 `ecm_cuda.exe`、`ecm_stage2.exe` 和 `ecm.toml` 位于同一目录，并从该目录运行命令。已有 v3 工作流可先[转换为 v4](docs/architecture/CONFIGURATION.md#升级旧配置)。创建 `ecm.toml`：
 
 ```toml
-config_version = 3
+config_version = 4
 
 [shared]
 worktodo_file = "worktodo.txt"
@@ -113,9 +113,9 @@ worktodo_file = "worktodo.txt"
 [stage1]
 param = "m0"
 target = "gpu"
-gpu_device = 0
-save_dir = "."
-handoff.mode = "off"
+stage1_gpu_device = 0
+stage1_save_dir = "."
+handoff_mode = "off"
 
 [stage2]
 device = "gpu"
@@ -149,7 +149,7 @@ ECMSTAGE1=1,2,16319,-1,e_m16319_1e4.save,10000,0,480,"270811405193137"
 
 ### 运行和调优 CUDA Stage2
 
-首条 Stage1 任务无因子完成后，可在同一 `worktodo.txt` 的 `[Worker #1]` 下加入以下任务。这里显式指定 B2，存档名称与实际产物一致。要让后续任务自动投递，可将 `[stage1] handoff.mode` 设为 `"ecm-elf"`。见 [自动交接](docs/usage/STAGE1.md#自动交接到-stage2)。
+首条 Stage1 任务无因子完成后，可在同一 `worktodo.txt` 的 `[Worker #1]` 下加入以下任务。这里显式指定 B2，存档名称与实际产物一致。要让后续任务自动投递，可将 `[stage1] handoff_mode` 设为 `"ecm-elf"`。见 [自动交接](docs/usage/STAGE1.md#自动交接到-stage2)。
 
 ```text
 [Worker #1]
@@ -204,7 +204,7 @@ OpenCL 的内核根目录、二进制缓存、TPI、work-group 及日志诊断�
 一份本地 Montgomery 配置示例：
 
 ```toml
-config_version = 3
+config_version = 4
 
 [shared]
 worktodo_file = "worktodo.txt"
@@ -215,8 +215,8 @@ target = "cpu"
 cpu_implementation = "auto"
 cpu_simd_reduction = "auto"
 montgomery_lcm_multiplier = "1"
-cpu_threads = 0
-save_dir = "saves"
+stage1_cpu_threads = 0
+stage1_save_dir = "saves"
 ```
 
 Edwards 的窗口由 `edwards_naf_window_bits` 控制。显式指定 `cpu_simd_reduction` 须同时选择 `cpu_implementation = "simd"`；`"mersenne-fold"` 要求实际模数是完整梅森数。见 [TOML 参考](docs/ECM_TOML_REFERENCE.zh-CN.md)。
@@ -232,7 +232,7 @@ Edwards 的窗口由 `edwards_naf_window_bits` 控制。显式指定 `cpu_simd_r
 
 `save_name_pattern` 控制自动生成的 CPU 和 GPU 存档名。队列行可通过带曲线前缀的文件名指定存档，单次命令可用 `-save` 指定路径。恢复未完成的 CPU 任务时，重跑原命令读取检查点。
 
-一批 8 条 SIMD 曲线是一个 CPU 调度任务，64 条曲线最多形成 8 个可并行批。`cpu_threads = 0` 自动选线程，显式线程数也受任务数约束。并行进程可通过各自的 `save_dir` 避免同名存档和检查点冲突。
+一批 8 条 SIMD 曲线是一个 CPU 调度任务，64 条曲线最多形成 8 个可并行批。`stage1_cpu_threads = 0` 自动选线程，显式线程数也受任务数约束。并行进程可通过各自的 `save_dir` 避免同名存档和检查点冲突。
 
 显式选择 `simd` 需要 AVX-512 IFMA。调整 TOML 后若实际选项未变，检查 `[worker.N]` 和命令行覆盖。对拍 Stage1 时，固定 N、B1、σ、参数化和标量约定后比较最终点。
 
@@ -269,12 +269,12 @@ Stage1 无因子完成且发布了受支持的保存点时，从 `ECM=`、`ECM2=
 
 ```toml
 [stage1]
-# handoff.mode = "ecm-elf"  # "off" | "ecm-elf" | "prime95"
-# handoff.workers = "2-3"  # 单个编号、列表、范围或 "auto"
-# handoff.worktodo_file = "worktodo-stage2.txt"
+# handoff_mode = "ecm-elf"  # "off" | "ecm-elf" | "prime95"
+# handoff_workers = "2-3"  # 单个编号、列表、范围或 "auto"
+# handoff_worktodo_file = "worktodo-stage2.txt"
 ```
 
-默认 `"ecm-elf"` 在原 worker 的队列末尾追加。可用 `handoff.workers` 或 `handoff.worktodo_file` 改投其他 worker 或队列。`"off"` 只保留 save。`"prime95"` 需要配置 `prime95.worktodo_file` 和 `prime95.save_dir`，兼容任务投递到 `worktodo.add`。Edwards 等不受 Prime95 支持的存档默认交给 ECM-ELF 续算。 [Stage1 交接规则](docs/usage/STAGE1.md#自动交接到-stage2)
+默认 `"ecm-elf"` 在原 worker 的队列末尾追加。可用 `handoff_workers` 或 `handoff_worktodo_file` 改投其他 worker 或队列。`"off"` 只保留 save。`"prime95"` 需要配置 `prime95_worktodo_file` 和 `prime95_save_dir`，兼容任务投递到 `worktodo.add`。Edwards 等不受 Prime95 支持的存档默认交给 ECM-ELF 续算。 [Stage1 交接规则](docs/usage/STAGE1.md#自动交接到-stage2)
 
 ### Save 与 checkpoint 不能互用
 
@@ -285,7 +285,7 @@ save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格
 <a id="stage2"></a>
 ## 独立 CUDA Stage2
 
-`ecm_stage2.exe` 从已完成的 Stage1 save 续算。用 `[stage2] device = "auto" | "cpu" | "gpu"` 选择设备。默认 `auto` 使用 CPU，Montgomery 存档请选择 GPU。在 `[worker.3]` 写 `stage2.device = "cpu"` 可单独指定 Worker 3 的 Stage2。一次性运行可用 `--target` 覆盖。
+`ecm_stage2.exe` 从已完成的 Stage1 save 续算。用 `[stage2] device = "auto" | "cpu" | "gpu"` 选择设备。默认 `auto` 使用 CPU，Montgomery 存档请选择 GPU。在 `[worker.3]` 写 `device = "cpu"` 可单独指定 Worker 3 的 Stage2。一次性运行可用 `--target` 覆盖。
 
 ```powershell
 .\ecm_stage2.exe --target gpu --save .\m0_m3701_260e6.save --b2 26000000000 --device 0
@@ -337,7 +337,7 @@ cmake --build build_opencl --config Release
 
 Android App 位于 `Android/ECM`，提供 OpenCL 设备探测、ECM Stage1 分解、算子微基准、工作队列和本地保存。用 Android Studio 打开该子工程；原生分解需要链接 GMP。运行时动态加载设备厂商的 OpenCL 库，不应将从手机抽取的 `libOpenCL.so` 打包入 APK。构建会同步 `.cl` 内核到 assets；首次编译大型内核可能较慢。入口、16 KB 页设备约束及真机验证见 [Android 总览](Android/README.md)、[ECM 分解说明](Android/ECM/README_ECM_FACTORIZATION.md)、[App 说明](Android/ECM/README.md)。
 
-Windows GUI v2 根据队列为每个 worker 启动对应的 Stage1 或 Stage2 子进程，并显示进度、GPU 指标和结果。配置分区为 `[gui]` 和 `[worker.N]`。见 [GUI v2 使用](docs/usage/GUI_V2.md)。
+Windows GUI v2 根据队列为每个 worker 启动对应的 Stage1 或 Stage2 子进程，并显示进度、GPU 指标和结果。使用同一份 `ecm.toml`，`[gui]` 保存界面和程序路径，`[worker.N]` 以原键名覆盖工作设置。见 [GUI v2 使用](docs/usage/GUI_V2.md)。
 
 - [`ecm_prob`](tools/ecm_prob/README.md)：ECM 成功率、参数化与有效除子模型；预测值须按模型条件解释。
 - [`ecm_report`](tools/ecm_report/README.md)：PrimeNet ECM 进度与结果汇总。

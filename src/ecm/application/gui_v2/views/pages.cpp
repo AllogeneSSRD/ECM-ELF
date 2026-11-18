@@ -31,16 +31,6 @@ std::string option_table(std::string table) {
 const BusinessOption* selected_option(const char* table,const char* key) {
     const auto base=option_table(table);for(const auto& option:business_options)if(base==option.table&&std::string(key)==option.key)return &option;return nullptr;
 }
-ecm_config::TomlAddress editor_address(const ecmgui::TomlFile& config,
-                                      const std::string& table, const std::string& key) {
-    if (config.config_version() >= 2)
-        return ecm_config::toml_versioned_address(table, key, config.config_version());
-    return {table, key, ecm_config::toml_worker(table), ecm_config::toml_option(table, key)};
-}
-std::string_view editor_conversion(const ecmgui::TomlFile& config,
-                                   const ecm_config::TomlOptionMeta* option) {
-    return config.config_version() >= 2 && option ? option->v2_conversion : "";
-}
 bool matches(const std::string& value,const std::string& query) {
     auto lower=[](std::string s){for(auto& c:s)if(static_cast<unsigned char>(c)<128)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return s;};
     return query.empty()||lower(value).find(lower(query))!=std::string::npos;
@@ -102,7 +92,6 @@ void sort_results(std::vector<size_t>& indices,const std::vector<ecmgui::ResultR
 }
 }
 void App::draw_results(bool zh) {
-    const bool history_changed=config_path.empty()&&result_copies.load(state.path);
     if(result_filter.source>=static_cast<int>(results.files().size()))result_filter.source=-1;
     ImGui::TextUnformatted(ecmgui_v2::ui::text("published_results",zh));
     const char* statuses[]{"All","F","NF"}; int status_index=result_filter.status=="F"?1:result_filter.status=="NF"?2:0;
@@ -115,7 +104,7 @@ void App::draw_results(bool zh) {
         ImGui::EndCombo();
     }
     const auto signature=result_filter.status+'\n'+std::to_string(result_filter.stage)+'\n'+std::to_string(result_filter.source)+'\n'+result_filter.search;
-    const bool rebuild=result_view_dirty||history_changed||signature!=result_view_signature;
+    const bool rebuild=result_view_dirty||signature!=result_view_signature;
     if(rebuild){
         result_indices=results.filtered(result_filter);visible_result_ids.clear();
         result_copy_keys.assign(results.rows().size(),{});result_uncopied_count=0;
@@ -412,9 +401,9 @@ void App::draw_gpu(bool zh) {
 }
 bool App::edit_business(const std::string& table,const std::string& key,const std::string& value) {
     if(!ready||controller.busy()){status="Stop workers before editing workflow.";return false;}
-    if(table=="gui"||table.rfind("gui.",0)==0){status="Legacy GUI preferences are preserved; use v2 appearance controls.";return false;}
+    if(table=="gui"){status="Use the GUI preference controls to edit this section.";return false;}
     try {
-        const auto address = editor_address(config, table, key);
+        const auto address = ecm_config::toml_address(table,key);
         if (!address.option)
             throw std::runtime_error("Unknown TOML option: " + table + "." + key);
         const auto binding = config.binding_value(address.section, address.key, value);
@@ -448,7 +437,29 @@ bool App::save_business() {
     if(!ready||controller.busy()){status="Stop workers before saving workflow.";return false;}
     ecmgui::FileStamp current;if(!ecmgui::stamp_file(config_path,current)||!same_stamp(current,config_stamp)){status="Workflow changed externally; reload before saving.";return false;}
     std::string error;if(!config.save(error)){status=error;return false;}
-    const auto path=config_path;return load_config(path);
+    const auto path=config_path;return load_config(path,false);
+}
+bool App::persist_preferences() {
+    try {
+        if(!ready || config_path.empty())throw std::runtime_error("Open a workflow TOML before saving GUI preferences.");
+        ecmgui::FileStamp before,after;
+        ecmgui::stamp_file(config_path,before);
+        ecmgui::TomlFile disk;std::string error;
+        if(!disk.load(config_path,error))throw std::runtime_error(error);
+        state.apply_changes(disk);
+        if(!disk.dirty()){state.mark_saved();return true;}
+        if(!ecmgui::stamp_file(config_path,after) || !same_stamp(before,after))
+            throw std::runtime_error("Workflow changed while preparing GUI preferences. Retry saving.");
+        const bool same_workflow=same_stamp(before,config_stamp);
+        auto draft=config;
+        if(same_workflow && draft.dirty())state.apply_changes(draft);
+        if(!disk.save(error))throw std::runtime_error(error);
+        if(same_workflow) {
+            config=draft.dirty()?std::move(draft):std::move(disk);
+            ecmgui::stamp_file(config_path,config_stamp);
+        }
+        state.mark_saved();return true;
+    } catch(const std::exception& error){status=error.what();return false;}
 }
 std::string App::pause_schedule_error_text(PauseScheduleError error,bool zh) const {
     const char* groups[]{"", "worker", "settings.pause_weekday", "settings.pause_time", "settings.pause_extra_groups", "settings.pause_application"};
@@ -609,18 +620,23 @@ void App::draw_settings(bool zh) {
     auto browse_exe=[&](const char* id,char* value,size_t capacity){if(ImGui::Button(id)){std::string path=value;const char filter[]="Executable\0*.exe\0All\0*.*\0\0";if(ecmgui::browse_for_file(path,ecmgui_v2::ui::text("choose_worker_executable",zh),std::string(filter,sizeof(filter))))std::snprintf(value,capacity,"%s",path.c_str());}};
     browse_exe(ecmgui_v2::ui::text("browse_stage1",zh),stage1_input,sizeof(stage1_input));ImGui::SameLine();browse_exe(ecmgui_v2::ui::text("browse_stage2",zh),stage2_input,sizeof(stage2_input));
     ImGui::EndDisabled();
-    ImGui::BeginDisabled(controller.busy());
-    ImGui::BeginDisabled(workflow_worker_count > 0);
+    ImGui::BeginDisabled(controller.busy() || !ready);
     ImGui::TextWrapped("%s",ui::text("settings.worker_count",zh));
     ImGui::SetNextItemWidth(std::min(240*ImGui::GetStyle().FontScaleDpi,ImGui::GetContentRegionAvail().x));
-    int worker_count = workflow_worker_count > 0 ? workflow_worker_count : state.worker_count;
-    if (ImGui::InputInt("##worker-count", &worker_count))
-        state.worker_count = std::clamp(worker_count, 0, 64);
-    ImGui::EndDisabled();
-    if (workflow_worker_count > 0)
-        ImGui::TextWrapped("%s", ui::text("settings.workflow_worker_count", zh));
+    if (ImGui::InputInt("##worker-count", &worker_count_input))
+        worker_count_input = std::clamp(worker_count_input, 1, 64);
     ImGui::BeginDisabled(config.dirty());
-    if(ImGui::Button(ecmgui_v2::ui::text("apply_worker_settings",zh))){state.worker_stage1_exe=stage1_input;state.worker_stage2_exe=stage2_input;if(ready)configure_workers();toast(ecmgui_v2::ui::text("worker_settings_applied",zh));}
+    if(ImGui::Button(ecmgui_v2::ui::text("apply_worker_settings",zh))){
+        try {
+            auto draft=config;
+            draft.set_int("shared","workflow_worker_count",worker_count_input);
+            draft.set("gui","exe",stage1_input);
+            draft.set("gui","stage2_exe",stage2_input);
+            config=std::move(draft);
+            if(save_business())toast(ecmgui_v2::ui::text("worker_settings_applied",zh));
+            else toast(status,true);
+        }catch(const std::exception& error){status=error.what();toast(status,true);}
+    }
     ImGui::EndDisabled();
     ImGui::EndDisabled();
     }
@@ -666,10 +682,10 @@ void App::draw_settings(bool zh) {
             ImGui::EndCombo();
         }
         ecm_config::TomlAddress address;
-        try { address=editor_address(config,edit_table,edit_key); }
+        try { address=ecm_config::toml_address(edit_table,edit_key); }
         catch(const std::exception&) {} // Input may be incomplete while typing.
         const auto* option=selected_option(address.section.c_str(),address.key.c_str());
-        const auto conversion=editor_conversion(config,address.option);
+        const std::string_view conversion=address.option?address.option->conversion:"";
         const bool converted_enum=conversion.substr(0,5)=="enum:";
         const bool converted_bool=!conversion.empty()&&!converted_enum;
         if(option){

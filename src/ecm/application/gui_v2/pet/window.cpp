@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 
 namespace ecmgui_v2::pet {
 RECT client_bounds(HWND owner) {

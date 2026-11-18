@@ -26,7 +26,7 @@ Stage1 外层统一不代表内部算术状态通用。CUDA ladder、CUDA reside
 
 param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 为完整十进制整数。k·bⁿ+c 任务使用其原始 n 作为命名标签，即使剥离了已知因子；没有这类元数据时，还会识别实际 N 是否为 2ⁿ−1。因此 `m` 命名标签不能代替内容中的完整 N 检查，也不能单独证明原任务是梅森数。
 
-文件位于 `tmp_dir`。未配置有效目录的路径不能获得同等的批次持久化保证。文件名不包含 worker、sigma、曲线数量或后端；同名不同任务需使用不同目录。
+文件位于 `stage1_save_dir`。未配置有效目录的路径不能获得同等的批次持久化保证。文件名不包含 worker、sigma、曲线数量或后端；同名不同任务需使用不同目录。
 
 相关文件如下：
 
@@ -34,7 +34,7 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | --- | --- |
 | 主文件 | 当前已发布批次 |
 | `主文件名.new` | 待发布的完整新文件，不作为自动恢复候选 |
-| `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `ckpt_backups` 决定 |
+| `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `checkpoint_backups` 决定 |
 | `主文件名.lock` | 批次独占锁；Windows 使用无共享打开、关闭时删除；POSIX 使用非阻塞 flock |
 
 来源：[驱动命名](../../src/ecm/stage1/task.cpp#L229)、[备份及锁](../../src/io/stage1_checkpoint.cpp)。
@@ -282,7 +282,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 ### 4.7 NTT 拆批任务载荷
 
-选择 CUDA NTT 的 worktodo 任务按一条工作行的请求曲线数拆批。直接执行时，显式请求超过 128 条也使用拆批调度，较小的直接请求使用指定批量。已匹配的旧式单批队列 checkpoint 继续按该单批格式恢复。调度按设备、调优样本和显存预算为新批选择大小，每批最多 128 条。起始 sigma 只选一次，后续按全任务序号连续分配。尾批默认只运行请求量剩余的曲线。启用 `ntt.pad_batch` 时，资源和 sigma 范围允许就用真实曲线补齐，最多增加 127 条。新增曲线与同批其他曲线共用恢复游标，各自保存结果。显存不足且尚无算术快照时，可以退回请求量剩余的曲线或缩小批量后重试。见 [拆批入口](../../src/ecm/stage1/task.cpp#L371)、[批量选择](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp#L639)、[调度与重试](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp)。
+选择 CUDA NTT 的 worktodo 任务按一条工作行的请求曲线数拆批。直接执行时，显式请求超过 128 条也使用拆批调度，较小的直接请求使用指定批量。已匹配的旧式单批队列 checkpoint 继续按该单批格式恢复。调度按设备、调优样本和显存预算为新批选择大小，每批最多 128 条。起始 sigma 只选一次，后续按全任务序号连续分配。尾批默认只运行请求量剩余的曲线。启用 `ntt_pad_batch` 时，资源和 sigma 范围允许就用真实曲线补齐，最多增加 127 条。新增曲线与同批其他曲线共用恢复游标，各自保存结果。显存不足且尚无算术快照时，可以退回请求量剩余的曲线或缩小批量后重试。见 [拆批入口](../../src/ecm/stage1/task.cpp#L371)、[批量选择](../../src/ecm/stage1/montgomery/cuda/ntt/tune.cpp#L639)、[调度与重试](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp)。
 
 所有子批使用同一个标准命名的 `.ckpt` 及其轮转备份。例如 Edwards M4423、B1=1024 使用 `.e_s1_m4423_1024.ckpt`。V2 外层记录 0 封装以下载荷，偏移从载荷首字节算起。
 
@@ -306,7 +306,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 假设前四批已完成，GPU 正在处理任务的第 129–160 条曲线。主文件记录 `completed=128`、`preferred=32`、`curves=32`、`capacity=32`，并保存前 128 条的完成记录。当前批的 sigma 为 `first sigma + 128` 至 `first sigma + 159`。
 
-1. **正常停止。** GPU 到达下一个已同步的检查点边界后，回读当前批活跃曲线的坐标和共同游标，再原子替换同一个主文件。例如 Edwards NAF 已安全执行 256 列，快照就记下 `cursor=256`。即使 `ckpt_seconds=0`，正常停止仍会请求这次写入。如果第五批已经完成验证，则持久化为 `completed=160` 的批间状态。见 [GPU 同步边界](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L1168)、[停止与周期写入](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L552)。
+1. **正常停止。** GPU 到达下一个已同步的检查点边界后，回读当前批活跃曲线的坐标和共同游标，再原子替换同一个主文件。例如 Edwards NAF 已安全执行 256 列，快照就记下 `cursor=256`。即使 `checkpoint_interval_seconds=0`，正常停止仍会请求这次写入。如果第五批已经完成验证，则持久化为 `completed=160` 的批间状态。见 [GPU 同步边界](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu#L1168)、[停止与周期写入](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L552)。
 2. **恢复。** 读取并验证有效代，直接采用前 128 条的已完成结果。第 129–160 条沿用保存的批次范围，从第 257 列继续。自动后端规则改动时，匹配的检查点仍可使任务回到原 NTT 路径。如果强制终止，只能使用最后一次成功发布且仍有效的检查点。该代若只有第五批的范围，第五批从头执行，前 128 条仍可直接恢复。见 [自动后端恢复](../../src/io/normalize.cpp#L716)。
 3. **最终发布。** 每个已完成子批的因子可先按单曲线发布。整条任务完成后才统一发布本次的 `.save`、适用的 NF 汇总和 Stage2 交接。若停止发生在末批已持久化与最终发布之间，恢复时直接使用完整结果重试发布。队列提交完成回执后清理检查点和轮转备份。见 [Stage1 结果发布](../../src/ecm/stage1/task.cpp#L398)、[队列回执与清理](../../src/main.cpp#L298)。
 
@@ -326,7 +326,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 只有 sigma、没有非空算术载荷的合法文件是“种子已确定”，**不表示保存了曲线内进度**。异常退出最多退回最后一次完整发布的检查点；0-byte `.save` 可来自可写性预检，不能据此认定 Stage1 完成。
 
-`ckpt_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
+`checkpoint_interval_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
 
 来源：[批次发布边界](../../src/ecm/stage1/task.cpp#L124)、[种子持久化](../../src/io/stage1_checkpoint.cpp)、[GPU Edwards 完成状态](../../src/ecm/stage1/edwards/cuda/workflow.cpp)。
 
@@ -367,7 +367,7 @@ Stage2 不保存 NTT、多项式、树、fold 或单曲线内部状态。只在�
 
 ### 7.1 文件名和任务身份
 
-文件名为 `.ecm_ckpt_stage2_<实际N位数>_<B1>.dat`。同位数和 B1 的不同任务依次加 `-1`、`-2` 等后缀；重启按档内身份选回原文件。任务身份与完整性校验仍使用 SHA256。目录由 `stage2_progress_dir` 和使用说明中的路径优先级决定。
+文件名为 `.ecm_ckpt_stage2_<实际N位数>_<B1>.dat`。同位数和 B1 的不同任务依次加 `-1`、`-2` 等后缀；重启按档内身份选回原文件。任务身份与完整性校验仍使用 SHA256。目录由 `checkpoint_dir` 和使用说明中的路径优先级决定。
 
 | 参与任务摘要 | 不参与任务摘要 |
 | --- | --- |

@@ -28,14 +28,16 @@ def main():
     queue=work/'worktodo.txt';queue.write_text('ECM2=1,2,127,-1,20,0,2,26\nECMSTAGE2=1,2,127,-1,points.save,40000,0,2\n')
     config=work/'ecm.toml'
     q=lambda p:json.dumps(str(p))
-    config.write_text('[shared]\nuser=""\ncomputer=""\nworktodo='+q(queue)+'\n[stage1]\ncurve="mont"\ntarget="gpu"\n'
-        f'device={a.device}\ngpu_param=0\nauto_stage2=0\nckpt_seconds=0\nexp_cache="off"\n'
-        'finished='+q(work/'finished_stage1.txt')+'\ntmp_dir='+q(work)+'\nlog_file='+q(work/'stage1.log')+'\n'
+    config.write_text('config_version=4\n[shared]\nuser=""\ncomputer=""\nworktodo_file='+q(queue)+
+        '\nfinished_file='+q(work/'finished.txt')+'\nlog_file='+q(work/'ecm.log')+
+        '\n[stage1]\nparam="m0"\ntarget="gpu"\n'
+        f'stage1_gpu_device={a.device}\nhandoff_mode="off"\ncheckpoint_interval_seconds=0\nexponent_cache_dir="off"\n'
+        'stage1_save_dir='+q(work)+'\n'
         'stage1_results_file='+q(work/'stage1.jsonl')+'\nstage1_submission_file='+q(work/'public.json.txt')+'\n'
-        '[stage2]\nstage2_device='+str(a.device)+'\nstage2_d=210\nstage2_short_calibration=false\nstage2_tune_runtime=false\n'
-        'stage2_auto_carrier=false\nstage2_save_dir='+q(work)+'\nstage2_finished='+q(work/'finished_stage2.txt')+'\n'
-        'stage2_progress_dir='+q(work/'progress')+'\nstage2_log_file='+q(work/'stage2.log')+'\nstage2_results_file='+q(work/'stage2.jsonl')+'\n'
-        'stage2_submission_file='+q(work/'public.json.txt')+'\n[workers.1]\nautostart=0\ngpucurves=2\n',encoding='utf8')
+        '[stage2]\ndevice="gpu"\nstage2_gpu_device='+str(a.device)+'\nd=210\nshort_calibration=false\ntune_runtime_enabled=false\n'
+        'auto_carrier=false\nstage2_save_dir='+q(work)+'\n'
+        'checkpoint_dir='+q(work/'progress')+'\nstage2_results_file='+q(work/'stage2.jsonl')+'\n'
+        'stage2_submission_file='+q(work/'public.json.txt')+'\n[worker.1]\nautostart=false\ngpucurves=2\n',encoding='utf8')
     actual=run('actual',[binaries['controller'],'--real',config,paths['stage1'],paths['stage2']],work)
     assert actual['actual_workers']==2 and actual['queue_empty'] and actual['stage1_to_stage2']
     assert not queue.read_text().strip()

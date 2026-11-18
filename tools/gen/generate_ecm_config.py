@@ -57,7 +57,7 @@ def load_schema():
             schema["options"].append(dict(option, owner=owner, _mirror=True))
     if schema["schema_version"] != 2:
         raise ValueError("unsupported configuration schema")
-    if schema["config_version"] != 3:
+    if schema["config_version"] != 4:
         raise ValueError("unsupported business TOML version")
     seen = set()
     fields = set()
@@ -78,28 +78,18 @@ def load_schema():
         fields.add(field)
     if schema.get("aliases"):
         raise ValueError("legacy configuration aliases are not supported")
-    paths = set()
-    compute_bindings = set()
-    for option in originals:
-        table, key = v2_table(option), v2_key(option)
-        if table in ("shared", "stage1", "stage2"):
-            binding = option["key"]
-            if binding in compute_bindings:
-                raise ValueError(f"duplicate compute binding: {binding}")
-            compute_bindings.add(binding)
-        if not re.fullmatch(r"[a-z][a-zA-Z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)?", key):
-            raise ValueError(f"invalid v2 key: {table}.{key}")
-        path = f"{table}.{key}"
-        if path in paths or any(path.startswith(prior + ".") or prior.startswith(path + ".")
-                                for prior in paths):
-            raise ValueError(f"conflicting v2 key: {path}")
-        paths.add(path)
-        conversion = option.get("v2_conversion", "")
+    keys = set()
+    for option in public_options(schema):
+        table, key = toml_table(option), toml_key(option)
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", key) or key in keys:
+            raise ValueError(f"invalid or duplicate TOML key: {table}.{key}")
+        keys.add(key)
+        conversion = option.get("toml_conversion", "")
         if conversion not in ("", "bool01", "nonzero_bool") and not re.fullmatch(
                 r"enum:[a-z][a-z0-9_]*(?:\|[a-z][a-z0-9_]*)+", conversion):
-            raise ValueError(f"invalid v2 conversion: {path}")
+            raise ValueError(f"invalid TOML conversion: {table}.{key}")
         if option.get("template_level", "advanced") not in ("core", "advanced", "legacy"):
-            raise ValueError(f"invalid template level: {path}")
+            raise ValueError(f"invalid template level: {table}.{key}")
     for entry in schema["options"]:
         description = entry.get("description")
         if not isinstance(description, list) or len(description) != 2 or any(
@@ -262,24 +252,31 @@ def config_table(option):
     return "shared" if option.get("shared_with") else option["owner"]
 
 
-def v2_table(option):
-    return "worker.1" if option["owner"] == "worker" else config_table(option)
+def toml_table(option):
+    return option.get("toml_table", "worker.1" if option["owner"] == "worker" else config_table(option))
 
 
-def v2_key(option):
-    return option.get("v2_key", option["key"])
+def toml_key(option):
+    return option.get("toml_key", option["key"])
 
 
-def v3_table(option):
-    return option.get("v3_table", v2_table(option))
+def public_options(schema):
+    yield from (option for option in schema["options"] if not option.get("_mirror") and toml_key(option))
+    for field in schema["gui_preferences"]["fields"]:
+        domain = field["type"]
+        if "values" in field:
+            domain = "[" + "|".join(map(str, field["values"])) + "]"
+        elif "minimum" in field and "maximum" in field:
+            domain = f"[{field['minimum']}..{field['maximum']}]"
+        elif field["type"] == "bool":
+            domain = "[false|true]"
+        elif field["type"] == "string":
+            domain = f"<string, up to {field.get('max_length', 4096)} bytes>"
+        yield dict(field, owner="gui", parser="strict", global_only=True, domain=domain)
 
 
-def v3_key(option):
-    return option.get("v3_key", v2_key(option))
-
-
-def v2_description_type(option):
-    conversion = option.get("v2_conversion", "")
+def toml_description_type(option):
+    conversion = option.get("toml_conversion", "")
     if conversion.startswith("enum:"):
         return "string", "[" + conversion[5:] + "]"
     if conversion in ("bool01", "nonzero_bool"):
@@ -296,7 +293,7 @@ def toml_literal(option, *, example=False):
         if not (isinstance(value, str) and value.startswith("<") and value.endswith(">")):
             return json.dumps(value, ensure_ascii=False)
     value = option["default"]
-    conversion = option.get("v2_conversion", "")
+    conversion = option.get("toml_conversion", "")
     if conversion.startswith("enum:"):
         return json.dumps(conversion[5:].split("|")[value])
     if conversion in ("bool01", "nonzero_bool"):
@@ -331,7 +328,7 @@ def wrap_toml_comment(description, width=100):
 
 
 def toml_option_lines(option, assignment, languages=(0, 1), inline_comment=""):
-    kind, domain = v2_description_type(option)
+    kind, domain = toml_description_type(option)
     metadata = f"{kind}: {domain}"
     if inline_comment:
         metadata += " | " + inline_comment
@@ -346,22 +343,22 @@ def toml_template(schema, example):
            "# ECM_TOML_REFERENCE.en.md lists advanced settings and worker overrides.",
            "# 高级设置和 worker 覆盖见 ECM_TOML_REFERENCE.zh-CN.md。",
            f"config_version = {schema['config_version']}", ""]
-    originals = [o for o in schema["options"] if not o.get("_mirror")]
+    originals = list(public_options(schema))
     for table in ("shared", "stage1", "stage2", "gui", "worker.1"):
         out.append(f"[{table}]")
-        for option in (o for o in originals if v3_key(o) and v3_table(o) == table and
+        for option in (o for o in originals if toml_key(o) and toml_table(o) == table and
                        (example or o.get("template_level") == "core")):
             # Direct Stage1 uses different defaults when tmp_dir or verbose is absent.
             active = option["key"] in ("worktodo", "curve", "target", "tmp_dir", "verbose")
-            assignment = ("" if active else "# ") + f"{v3_key(option)} = {toml_literal(option, example=True)}"
+            assignment = ("" if active else "# ") + f"{toml_key(option)} = {toml_literal(option, example=True)}"
             out.extend(toml_option_lines(option, assignment))
             out.append("")
     if example:
         out.extend(["# Worker 1 overrides / worker 1 覆盖",
-                    '# shared.queue_order = "stage1_first"', "# stage1.gpu_device = 0",
-                    "# stage2.gpu_device = 0", '# shared.tune_file = "tune_gpu0.toml"', "",
-                    "# [worker.2]", "# stage1.gpu_device = 1", "# stage2.gpu_device = 1",
-                    '# shared.tune_file = "tune_gpu1.toml"'])
+                    '# queue_order = "stage1_first"', "# stage1_gpu_device = 0",
+                    "# stage2_gpu_device = 0", '# tune_file = "tune_gpu0.toml"', "",
+                    "# [worker.2]", "# stage1_gpu_device = 1", "# stage2_gpu_device = 1",
+                    '# tune_file = "tune_gpu1.toml"'])
     return "\n".join(out).rstrip() + "\n\n"
 
 
@@ -371,12 +368,12 @@ REFERENCE_TEXT = {
         "title": "ecm.toml Reference",
         "other_language": "[简体中文](ECM_TOML_REFERENCE.zh-CN.md)",
         "intro": [
-            "Put `config_version = 3` before the first table. A file without a version uses the legacy format. See [configuration migration](architecture/CONFIGURATION.md#升级旧配置).", "",
+            "Put the required `config_version = 4` before the first table. See [configuration migration](architecture/CONFIGURATION.md#升级旧配置).", "",
             "## Tables and precedence", "",
             "- `[shared]` contains settings used by both stages.",
             "- `[stage1]` and `[stage2]` contain settings specific to each stage.",
             "- `[gui]` contains GUI-wide settings. Workers cannot override them.",
-            "- `[worker.N]` configures worker N (1–1000000). Prefix an override with `shared.`, `stage1.` or `stage2.`.", "",
+            "- `[worker.N]` configures worker N (1–1000000). Use the same flat key as in its global table.", "",
             "From lowest to highest priority, the program applies built-in defaults, the global table, the matching worker table and CLI arguments. Duplicate keys or tables, unknown tables, missing values and unclosed strings cause errors. `worktodo.txt` uses separate `[Worker #N]` sections. The program does not read INI files.", "",
             "Each worker validates shared settings and its own stage. The GUI validates shared, GUI and worker settings and previews recognized compute options. See [configuration ownership](architecture/CONFIGURATION.md#按程序职责读取).", "",
             "The shared worktodo path and Stage2 relative paths use the TOML directory. Stage1 usually resolves its paths from the executable directory. See [runtime paths](architecture/CONFIGURATION.md#运行时限制) for details.",
@@ -384,7 +381,6 @@ REFERENCE_TEXT = {
         "metadata": "Type `{kind}` · Range `{domain}` · Worker override `{override}` · Level `{level}`.",
         "levels": {"core": "core", "advanced": "advanced", "legacy": "legacy"},
         "no_override": "not supported",
-        "legacy": "Legacy v1 key",
         "present": "Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.",
         "maintenance": "Maintenance",
         "regenerate": "Edit `config/ecm_options.json` and run `python tools/gen/generate_ecm_config.py`. Commit the schema and generated files together.",
@@ -394,12 +390,12 @@ REFERENCE_TEXT = {
         "title": "ecm.toml 配置参考",
         "other_language": "[English](ECM_TOML_REFERENCE.en.md)",
         "intro": [
-            "在首个表头前写 `config_version = 3`。无版本字段的文件沿用旧格式。见[配置迁移](architecture/CONFIGURATION.md#升级旧配置)。", "",
+            "在首个表头前写必填的 `config_version = 4`。见[配置迁移](architecture/CONFIGURATION.md#升级旧配置)。", "",
             "## 分区与优先级", "",
             "- `[shared]` 存放两阶段共用的设置。",
             "- `[stage1]` 和 `[stage2]` 各自存放本阶段的设置。",
             "- `[gui]` 存放 GUI 全局设置，worker 无法覆盖。",
-            "- `[worker.N]` 存放第 N 个 worker 的设置，N 为 1–1000000。覆盖项使用 `shared.`、`stage1.` 或 `stage2.` 前缀。", "",
+            "- `[worker.N]` 存放第 N 个 worker 的设置，N 为 1–1000000。覆盖项使用与全局分区完全相同的键名。", "",
             "程序依次应用内置默认值、全局分区、对应 worker 分区和命令行参数，后者优先。重复键或表、未知分区、缺失值及未闭合字符串会报错。`worktodo.txt` 使用独立的 `[Worker #N]` 分区。程序不读取 INI 文件。", "",
             "worker 校验共享和本阶段设置。GUI 校验共享、GUI 和 worker 设置，并预览能识别的计算参数。见[配置读取职责](architecture/CONFIGURATION.md#按程序职责读取)。", "",
             "共用 worktodo 与 Stage2 的相对路径基于 TOML 所在目录，其他 Stage1 路径通常基于可执行文件目录。具体规则见[运行时限制](architecture/CONFIGURATION.md#运行时限制)。",
@@ -407,7 +403,6 @@ REFERENCE_TEXT = {
         "metadata": "类型 `{kind}` · 范围 `{domain}` · Worker 覆盖 `{override}` · 级别 `{level}`。",
         "levels": {"core": "常用", "advanced": "高级", "legacy": "旧版"},
         "no_override": "不支持",
-        "legacy": "v1 旧键",
         "present": "显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。",
         "maintenance": "维护",
         "regenerate": "修改 `config/ecm_options.json` 后运行 `python tools/gen/generate_ecm_config.py`，并将定义与生成物一同提交。",
@@ -419,15 +414,15 @@ def toml_reference(schema, language):
     labels = REFERENCE_TEXT[language]
     out = [f"# {labels['title']}", "", "<!-- Generated from config/ecm_options.json. -->", "",
            labels["other_language"], "", *labels["intro"], ""]
-    originals = [o for o in schema["options"] if not o.get("_mirror") and v3_key(o)]
-    occupied_anchors = {v3_key(option).lower() for option in originals}
+    originals = list(public_options(schema))
+    occupied_anchors = {toml_key(option).lower() for option in originals}
     for table in ("shared", "stage1", "stage2", "gui", "worker.1"):
         out.extend([f"## [{table}]", ""])
-        for option in sorted((o for o in originals if v3_table(o) == table), key=v3_key):
-            worker = table in ("shared", "stage1", "stage2") and not option.get("v3_global_only")
-            key = v3_key(option)
-            override = f"[worker.N] {table}.{key}" if worker else labels["no_override"]
-            kind, domain = v2_description_type(option)
+        for option in sorted((o for o in originals if toml_table(o) == table), key=toml_key):
+            worker = table in ("shared", "stage1", "stage2") and not option.get("global_only")
+            key = toml_key(option)
+            override = f"[worker.N] {key}" if worker else labels["no_override"]
+            kind, domain = toml_description_type(option)
             legacy_anchor = option["key"].lower()
             if legacy_anchor not in occupied_anchors:
                 occupied_anchors.add(legacy_anchor)
@@ -436,8 +431,6 @@ def toml_reference(schema, language):
             out.extend([f"### {key}", "",
                         "```toml", f"{key} = {toml_literal(option)}", "```", "",
                         labels["metadata"].format(kind=kind, domain=domain, override=override, level=level), ""])
-            if not option.get("v3_only") and (key != option["key"] or table == "worker.1"):
-                out.extend([f"{labels['legacy']} `{config_table(option)}.{option['key']}`", ""])
             if option.get("present"):
                 out.extend([labels["present"], ""])
             out.extend([option["description"][labels["description_index"]], ""])
@@ -449,21 +442,19 @@ def toml_schema_header(schema):
     out = ["// Generated by tools/gen/generate_ecm_config.py; edit config/ecm_options.json.",
            "#pragma once", "namespace ecm_config {",
            f"inline constexpr int business_config_version={schema['config_version']};",
-           "struct TomlOptionMeta { const char *table, *key, *type, *domain, *v2_table, *v2_key, *v2_conversion, *v3_table, *v3_key; bool v3_only, v3_global_only; };",
+           "struct TomlOptionMeta { const char *table, *key, *type, *domain, *toml_table, *toml_key, *conversion; bool global_only; };",
            "inline constexpr TomlOptionMeta toml_options[]={"]
-    for option in schema["options"]:
-        if not option.get("_mirror"):
-            kind = option["type"]
-            parser = option.get("parser_override", option["parser"])
-            if parser == "auto_integer":
-                kind = "int|string"
-            elif parser in ("log_level", "gui_font"):
-                kind += "|string"
-            out.append("    {" + ",".join(literal(x) for x in
-                       (config_table(option), option["key"], kind, option.get("domain", "valid scalar"),
-                        config_table(option), v2_key(option), option.get("v2_conversion", ""),
-                        option.get("v3_table", config_table(option)), v3_key(option),
-                        option.get("v3_only", False), option.get("v3_global_only", False))) + "},")
+    for option in public_options(schema):
+        kind = option["type"]
+        parser = option.get("parser_override", option["parser"])
+        if parser == "auto_integer":
+            kind = "int|string"
+        elif parser in ("log_level", "gui_font"):
+            kind += "|string"
+        out.append("    {" + ",".join(literal(x) for x in
+                   (config_table(option), option["key"], kind, option["domain"],
+                    toml_table(option), toml_key(option), option.get("toml_conversion", ""),
+                    option.get("global_only", False))) + "},")
     out.extend(["};", "} // namespace ecm_config", ""])
     return "\n".join(out)
 

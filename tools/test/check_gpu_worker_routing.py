@@ -15,9 +15,10 @@ def main():
     bundle = args.bundle.resolve()
     with tempfile.TemporaryDirectory(prefix='ECM backend ') as directory:
         config = Path(directory) / 'workflow config.toml'
-        config.write_text('[stage1]\nstage1_backend="cuda"\n[stage2]\nstage2_backend="cuda"\n'
-                          '[workers.2.stage1]\nstage1_backend="opencl"\n'
-                          '[workers.2.stage2]\nstage2_backend="opencl"\n', encoding='utf-8')
+        config.write_text('config_version=4\n[stage1]\nstage1_gpu_backend="cuda"\n'
+                          '[stage2]\ndevice="gpu"\nstage2_gpu_backend="cuda"\n'
+                          '[worker.2]\nstage1_gpu_backend="opencl"\nstage2_gpu_backend="opencl"\n',
+                          encoding='utf-8')
         for stage, cuda, opencl in [(1,'ecm_cuda.exe','ecm.exe'),
                                      (2,'ecm_stage2.exe','ecm_opencl_stage2.exe')]:
             query = ['--gpu-info','-d'] if stage == 1 else ['--cost-device-info','--device']
@@ -61,7 +62,7 @@ def main():
         queue = Path(directory) / 'queue'
         ini = write_config(queue,args.device)
         with ini.open('a',encoding='utf-8') as out:
-            out.write('stage2_backend="opencl"\nstage2_d=30\n')
+            out.write('d=30\n')
         (queue/'input.save').write_text(save_line((1<<127)-1)*3,encoding='utf-8')
         (queue/'worktodo.txt').write_text('ECMSTAGE2=1,2,127,-1,"input.save",300,0,3\n',encoding='utf-8')
         stop_after_first_start(bundle/'ecm_stage2.exe',queue,['--target','gpu'])

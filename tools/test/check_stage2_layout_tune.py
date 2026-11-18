@@ -43,8 +43,8 @@ def main():
     assert whole % n == 0
     (out / 'points.save').write_text(point * 2, encoding='utf-8')
     config = out / 'ecm.toml'
-    config.write_text('[stage2]\nstage2_auto_carrier=true\nstage2_auto_b2=false\n'
-                      'stage2_tune_runtime=true\nstage2_short_calibration=false\n', encoding='utf-8')
+    config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nauto_carrier=true\nauto_b2=false\n'
+                      'tune_runtime_enabled=true\nshort_calibration=false\n', encoding='utf-8')
     profile = out / 'tune.toml'
     if a.profile:
         profile.write_bytes(a.profile.read_bytes())

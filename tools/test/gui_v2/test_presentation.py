@@ -15,10 +15,10 @@ def main():
     user.SendMessageW.argtypes=[w.HWND,w.UINT,w.WPARAM,w.LPARAM];user.SendMessageW.restype=c.c_ssize_t
     user.IsZoomed.argtypes=[w.HWND];user.IsIconic.argtypes=[w.HWND]
     queue=out/'worktodo.txt';queue.write_text('[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n[Worker #2]\nECMSTAGE1=1,2,521,-1,100,1\n[Worker #3]\nECMSTAGE2=1,2,137,-1,"ed_m137.save",0,0,10\n')
-    cfg=out/'ecm.toml';cfg.write_text('[shared]\nworktodo='+json.dumps(str(queue))+'\n[gui]\nNumWorkers=3\nexit_confirm="stop"\ngraceful_stop_ms=1500\nexe='+json.dumps(str(worker))+'\nstage2_exe='+json.dumps(str(worker))+'\n'+''.join(f'[workers.{i}]\nname="{name}"\nautostart=1\nextra_args="--scenario {scenario}"\n' for i,name,scenario in [(1,'Alpha','v2-presentation'),(2,'Beta','v2-presentation'),(3,'Edwards Stage2','v2-presentation-stage2')]),encoding='utf-8')
-    original=cfg.read_bytes();state=out/'ui.toml';state.write_text('[ui]\npage=0\nlogs=true\ninspector=false\ntheme="'+('light' if a.light else 'dark')+'"\n[window]\ntitle_bar=false\n')
+    cfg=out/'ecm.toml';cfg.write_text('config_version=4\n[shared]\nworker_count=3\nworktodo_file='+json.dumps(str(queue))+'\n[gui]\nexit_confirm="stop"\ngraceful_stop_ms=1500\nstage1_exe='+json.dumps(str(worker))+'\nstage2_exe='+json.dumps(str(worker))+'\npage=0\nlogs=true\ninspector=false\ntheme="'+('light' if a.light else 'dark')+'"\nwindow_title_bar=false\n'+''.join(f'[worker.{i}]\nname="{name}"\nautostart=true\nextra_args="--scenario {scenario}"\n' for i,name,scenario in [(1,'Alpha','v2-presentation'),(2,'Beta','v2-presentation'),(3,'Edwards Stage2','v2-presentation-stage2')]),encoding='utf-8')
+    original=tomllib.loads(cfg.read_text(encoding='utf-8'))
     log=out/'ui.log';startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-    proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app','--no-nvml','--no-pet','--language',a.language,'--ui-scale','1.25'],cwd=out,startupinfo=startup)
+    proc=subprocess.Popen([str(exe),'--config',str(cfg),'--diagnostics',str(log),'--audit-app','--no-nvml','--no-pet','--language',a.language,'--ui-scale','1.25'],cwd=out,startupinfo=startup)
     hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,40,40,1920,1200,0x14);user.ShowWindow(hwnd,4)
     def wait(predicate,seconds=12):
         end=time.monotonic()+seconds
@@ -115,10 +115,13 @@ def main():
     finally:
         if proc.poll() is None:close(proc,hwnd)
     assert proc.returncode==0 and renderer_clean(log.read_text(encoding='utf-8'),'dx11')
-    saved=tomllib.loads(state.read_text(encoding='utf-8'));assert not saved['window']['title_bar'] and cfg.read_bytes()==original and saved['ui']['worker_chart_columns']==2
-    restart_log=out/'restart.log';restart=subprocess.run([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(restart_log),'--audit-app','--frames','8','--no-nvml','--no-pet'],cwd=out,startupinfo=startup,timeout=20)
+    saved=tomllib.loads(cfg.read_text(encoding='utf-8'))
+    assert not saved['gui']['window_title_bar'] and saved['gui']['worker_chart_columns']==2
+    assert all(saved[table]==original[table] for table in ('shared','worker'))
+    assert all(saved['gui'][key]==original['gui'][key] for key in ('stage1_exe','stage2_exe','exit_confirm','graceful_stop_ms'))
+    restart_log=out/'restart.log';restart=subprocess.run([str(exe),'--config',str(cfg),'--diagnostics',str(restart_log),'--audit-app','--frames','8','--no-nvml','--no-pet'],cwd=out,startupinfo=startup,timeout=20)
     assert restart.returncode==0 and 'UI state not loaded' not in restart_log.read_text(encoding='utf-8')
-    assert not tomllib.loads(state.read_text(encoding='utf-8'))['window']['title_bar']
+    assert not tomllib.loads(cfg.read_text(encoding='utf-8'))['gui']['window_title_bar']
     assert layout(restart_log.read_text(encoding='utf-8'))['requested']=='2'
     report=dict(passed=True,language=a.language,theme='light' if a.light else 'dark',workers=3,log_tabs=4,action_first=True,summary_covers_grid=True,table_eta_seconds=True,log_eta_seconds_and_reduced=True,stage2_shape_line=True,giant_batch=True,speed_samples=12,all_worker_charts=True,workspace_scroll=True,speed_in_workspace=True,no_log_chart=True,compact_log_rows=True,per_worker_raw_follow=True,table_selects_log=True,hidden_caption=True,caption_hit_test=True,maximize_restore=True,minimize_restore=True,resize=True,custom_close=True,title_preference_restart=True,business_unchanged=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),scope='Protocol-aware synthetic workers, no real ECM calculation')
     (out/'result.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))

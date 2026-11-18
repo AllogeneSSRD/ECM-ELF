@@ -6,13 +6,13 @@ from renderer_probe import renderer_clean
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--exe',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args()
-    out=a.out.resolve();out.mkdir();exe=a.exe.resolve();state=out/'ui.toml';log=out/'skins.log';cfg=out/'ecm.toml'
-    cfg.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n');business=cfg.read_bytes()
-    state.write_text('[ui]\npage=5\ninspector=false\nlogs=false\nlanguage="en"\n[pet]\nenabled=true\nanimate=false\n')
+    out=a.out.resolve();out.mkdir();exe=a.exe.resolve();log=out/'skins.log';cfg=out/'ecm.toml'
+    cfg.write_text('config_version=4\n[shared]\nworker_count=1\n[gui]\npage=5\ninspector=false\nlogs=false\ndisplay_language="en"\npet_enabled=true\npet_animate=false\n[worker.1]\nautostart=false\n',encoding='utf-8')
+    business=tomllib.loads(cfg.read_text(encoding='utf-8'));business.pop('gui')
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     user.GetGuiResources.argtypes=[c.c_void_p,c.c_ulong];user.GetGuiResources.restype=c.c_ulong
     startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-    proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app','--no-nvml'],cwd=out,startupinfo=startup)
+    proc=subprocess.Popen([str(exe),'--config',str(cfg),'--diagnostics',str(log),'--audit-app','--no-nvml'],cwd=out,startupinfo=startup)
     hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,80,220,1500,1100,0x14);user.ShowWindow(hwnd,4)
     pet=window(proc.pid,'ecm_gui_v2_pet');skins=['classic','miss_pink_elf','herrscher_of_human_ego','hi_love_elf']
     def snapshots(prefix):
@@ -70,20 +70,22 @@ def main():
         assert gdi_after-gdi_before<=2,(gdi_before,gdi_after)
         assert after['private_bytes']-before['private_bytes']<=8*1024*1024,(before,after)
         save=snapshots('usability_sample:')[-1]['save'];click(save)
-        wait(lambda t:state.exists() and tomllib.loads(state.read_text(encoding='utf-8')).get('pet',{}).get('skin')=='hi_love_elf')
+        wait(lambda t:tomllib.loads(cfg.read_text(encoding='utf-8'))['gui'].get('pet_skin')=='hi_love_elf')
     finally:close(proc,hwnd)
     assert proc.returncode==0 and renderer_clean(log.read_text(encoding='utf-8'),'dx11') and 'pet_error:' not in log.read_text(encoding='utf-8')
     restart=out/'restart.log'
-    proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(restart),'--frames','12','--no-nvml'],cwd=out,startupinfo=startup)
+    proc=subprocess.Popen([str(exe),'--config',str(cfg),'--diagnostics',str(restart),'--frames','12','--no-nvml'],cwd=out,startupinfo=startup)
     hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
     try:proc.wait(timeout=20)
     finally:
         if proc.poll() is None:close(proc,hwnd)
     assert proc.returncode==0 and 'pet_skin: id=hi_love_elf ' in restart.read_text(encoding='utf-8')
-    assert tomllib.loads(state.read_text(encoding='utf-8'))['pet']['skin']=='hi_love_elf' and cfg.read_bytes()==business
+    saved=tomllib.loads(cfg.read_text(encoding='utf-8'))
+    assert saved.pop('gui')['pet_skin']=='hi_love_elf' and saved==business
     # A missing optional skin reports the exact asset and disables only the pet.
     missing=out/'missing-skin';missing.mkdir();shutil.copy2(exe,missing/exe.name);missing_log=out/'missing-skin.log'
-    proc=subprocess.Popen([str(missing/exe.name),'--ui-state',str(out/'missing.toml'),'--diagnostics',str(missing_log),'--pet','--pet-skin','miss_pink_elf','--frames','12','--no-nvml'],cwd=out,startupinfo=startup)
+    missing_cfg=out/'missing.toml';missing_cfg.write_text('config_version=4\n',encoding='utf-8')
+    proc=subprocess.Popen([str(missing/exe.name),'--config',str(missing_cfg),'--diagnostics',str(missing_log),'--pet','--pet-skin','miss_pink_elf','--frames','12','--no-nvml'],cwd=out,startupinfo=startup)
     hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
     try:proc.wait(timeout=20)
     finally:

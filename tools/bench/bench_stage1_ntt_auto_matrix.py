@@ -32,7 +32,7 @@ def fixed_config(row):
     mode = row["ntt_type"].removeprefix("stage1_")
     config = f'ntt_convolution = "{mode}"\nntt_warp_tail = "{str(bool(row["warp_tail"])).lower()}"\n'
     if mode == "linear":
-        config += f'ntt_bpw = {row["bpw"]}\n'
+        config += f'ntt_bits_per_word = {row["bpw"]}\n'
     keys = {"length": "length", "tile": "tile", "outer_max": "max_radix_bits", "window": "graph_bits"}
     return config + "".join(f"ntt_{k} = {row[v]}\n" for k, v in keys.items())
 
@@ -53,9 +53,9 @@ def measure_case(exe, probe, out, device, p, boundary, rounds):
     batch = 32 if p <= 32749 else 24
     b1 = 1024 if p > 20000 or p < 128 else 10000
     sigma = 20260922
-    config = (f'[stage1]\ndevice = {device}\ngpu_algorithm = "ntt"\ncurve = "mont"\ngpu_param = 0\n'
-              f'ntt_tune_file = "{tune.as_posix()}"\n'
-              'lcm = "1"\nexp_cache = "off"\nlog_file = ""\nckpt_seconds = 0\n')
+    config = (f'config_version = 4\n[shared]\nlog_file = ""\ntune_file = "{tune.as_posix()}"\n'
+              f'[stage1]\nstage1_gpu_device = {device}\ngpu_algorithm = "ntt"\nparam = "m0"\n'
+              'montgomery_lcm_multiplier = "1"\nexponent_cache_dir = "off"\ncheckpoint_interval_seconds = 0\n')
     flags = ["-sigma", str(sigma), "-gpucurves", str(batch), "-save", "point.save", str(b1), str(b1)]
 
     def trial(name, fixed=None):

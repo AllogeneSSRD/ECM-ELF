@@ -81,11 +81,11 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 
 差分 xADD 使用 6 次模乘，固定差点保证 chain 中的相邻点关系。相邻 seed 可同时得到 [iD]Q 与 [(i+1)D]Q，避免重复计算两个独立 ladder。短块、容量不足或非单位场景仍需保留正确回退。
 
-默认标量seed和chain宽位核在W>128时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用`stage2_giant_chain=32|64|auto`选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。标量chain核位于`src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
+默认标量seed和chain宽位核在W>128时使用32线程CUDA块，其他宽度仍为64线程。每条顺序chain默认生成64点，可用`giant_chain=32|64|auto`选择；CUDA线程块大小与chain点数是两个独立参数。auto通过完整Stage2重复观察评估seed成本和实际并行效率，规则见[Auto B2/tune](AUTO_B2.md#点块与有限链长身份)。标量chain核位于`src/ecm/stage2/cuda/device/giant_chain.cuh`，正式构建记录其依赖与哈希。
 
-`stage2_giant_backend=auto|scalar|coop16|coop32`默认auto，先保留标量，再按[配对选型规则](AUTO_B2.md#协作点后端选型)学习。协作仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Seed、giant短尾及非单位ladder恢复仍走原路线。资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
+`giant_backend=auto|scalar|coop16|coop32`默认auto，先保留标量，再按[配对选型规则](AUTO_B2.md#协作点后端选型)学习。协作仅对128<W≤256、长度2…64的chain分派到64线程块的协作核，每整数分别用16／32线程。16保留固定16384-bit容器；32取覆盖实际W的160／192／224／256词容器。承载时W按p计算。设备坐标仍按实际W存储，适配器校正容器radix，输出保留原Montgomery表示；分段逆与G叶接口不变。Seed、giant短尾及非单位ladder恢复仍走原路线。资格与边界见[协作链性能](../performance/STAGE2_BIT_SCALING.md#11-可选协作giant链)。
 
-`stage2_baby_backend=auto|scalar|coop32`独立控制`device_baby_generate`的ladder，默认auto。auto缺乏合格观察时保留标量，通过有限配对学习选择；coop32显式请求协作。32仅对128<W≤256生效，每点32线程、每块64线程，复用上述四档容量；以现有`g_ladder_cap`分段，在同一输出数组生成相同二进制ladder坐标。模数识别使用点上下文的实际算术模数，承载时不能误用较小的GCD目标N；后续归一化与非单位恢复不变。设备baby路径因预算回退时不启用协作ladder。没有新增坐标缓冲、补齐数组或H2D／D2H。
+`baby_backend=auto|scalar|coop32`独立控制`device_baby_generate`的ladder，默认auto。auto缺乏合格观察时保留标量，通过有限配对学习选择；coop32显式请求协作。32仅对128<W≤256生效，每点32线程、每块64线程，复用上述四档容量；以现有`g_ladder_cap`分段，在同一输出数组生成相同二进制ladder坐标。模数识别使用点上下文的实际算术模数，承载时不能误用较小的GCD目标N；后续归一化与非单位恢复不变。设备baby路径因预算回退时不启用协作ladder。没有新增坐标缓冲、补齐数组或H2D／D2H。
 
 CLI `--baby-backend`／`--giant-backend`覆盖worker TOML；省略对应键时仍可用`NTT_BABY_COOP=0|32`／`NTT_GIANT_COOP=0|16|32`。实际后端进入tune结构身份，不能由ignore environment抹除；规则见[协作点后端选型](AUTO_B2.md#协作点后端选型)。旧cost-profile仍要求两者均为0。启用协作时，必需自检对每种实际TPI各执行一次64乘＋64平方，复用原有四个设备数组。若giant16／baby32同时启用，则分别检查16和32；同为32时只检查一次。每份协作自检新增两次64W词读回，共1024W bytes；输入复用已有设备数据，不增加该自检的输入上传或分配。这不是baby主路径坐标传输。
 
@@ -105,9 +105,9 @@ CUDA 设备 baby 点在 SM89、算术模数至少 31 个 64 位字并且点数�
 
 ### 完整区间点块策略
 
-CUDA完整索引区间为1…I，I=⌊B2/D⌋+2。`stage2_giant_tail_balance` 默认false；开启后保持原坐标容量C、I及G树边界，只在末两块能同时走chain时，从倒数第二块借出整P点。设短尾r=I mod C、有效chain门槛T，借出m=P⌈(T−r)/P⌉，末两块成为C−m、r+m；两者均须在[T,C]内。没有短尾、强制ladder、驻留资格不足或无法借块时保留原划分。未实际借块时，原生计划和新tune观察的tail身份归一为0，保持原成本先验与允许的路由缓存，执行器不因请求开关单独增加同步或命中重放。结果中giant_tail_balance_requested记录许可，giant_tail_balance记录实际借块。压缩调度、工作量和内存生命周期共用 [giant_schedule.h](../../src/ecm/stage2/giant_schedule.h)，最多三个重复区间，不随巨大B2展开点表。
+CUDA完整索引区间为1…I，I=⌊B2/D⌋+2。`giant_tail_balance` 默认false；开启后保持原坐标容量C、I及G树边界，只在末两块能同时走chain时，从倒数第二块借出整P点。设短尾r=I mod C、有效chain门槛T，借出m=P⌈(T−r)/P⌉，末两块成为C−m、r+m；两者均须在[T,C]内。没有短尾、强制ladder、驻留资格不足或无法借块时保留原划分。未实际借块时，原生计划和新tune观察的tail身份归一为0，保持原成本先验与允许的路由缓存，执行器不因请求开关单独增加同步或命中重放。结果中giant_tail_balance_requested记录许可，giant_tail_balance记录实际借块。压缩调度、工作量和内存生命周期共用 [giant_schedule.h](../../src/ecm/stage2/giant_schedule.h)，最多三个重复区间，不随巨大B2展开点表。
 
-`stage2_b2_round_chain` 默认false。开启后，在选定D后将I补到最小的P整数倍，再使末点块达到T；不补满整个坐标块。实际边界取 max(请求B2,(I′−2)D)，日志 `stage2_bounds` 记录两者，结果与覆盖记录使用实际B2。凑整前后均检查原生显存准入，并受Auto B2上限约束；溢出或无法形成chain块时报错。该开关仅支持完整区间，不能与relocation或正式ECM校准同时开启。B2改变后，G树/fold数可以增加，不能把凑整时间当作相同覆盖量的纯算法对照。
+`b2_round_chain` 默认false。开启后，在选定D后将I补到最小的P整数倍，再使末点块达到T；不补满整个坐标块。实际边界取 max(请求B2,(I′−2)D)，日志 `stage2_bounds` 记录两者，结果与覆盖记录使用实际B2。凑整前后均检查原生显存准入，并受Auto B2上限约束；溢出或无法形成chain块时报错。该开关仅支持完整区间，不能与relocation或正式ECM校准同时开启。B2改变后，G树/fold数可以增加，不能把凑整时间当作相同覆盖量的纯算法对照。
 
 新点策略遇到非单位[D]Q或分组乘积时复用原坐标回退；整段探测遇到因子或非单位时，在发布前关闭平衡、恢复64链并重做原完整区间。已有非单位baby点直接执行原策略。必需算术检查排空后才能发布NF或重放结果。发生point策略重放的时间不进入普通tune观察；point_policy_replayed单独记录该情况。当前重放的完整联合工作区预算仍待扩展，所以尾块平衡保持默认关闭。这里的恢复只覆盖当前策略，不是checkpoint。
 
@@ -127,7 +127,7 @@ G 树不会为了填满 P 而扩大已经选定的 B2。若显式比较完整覆
 
 ## 可选 relocation
 
-`stage2_relocation=1` 或 `--relocation 1` 启用保守后缀算法，默认0，CLI 覆盖 TOML。Edwards 和 PARAM0 共用该路径。设原 giant 终点 I=⌊B2/D⌋+2，m 为不整除 D 的最小素数，A=max(1,⌊I/m⌋)；试算仅生成 i=A,…,I，共 I−A+1 点。原 B1/B2、baby 集、补充小素数路径和终端 guard 覆盖保持不变。证明与 GCD=N 反例见 [relocation 固定资料](../reference/ECM_STAGE2_RELOCATION.md)。
+`relocation=1` 或 `--relocation 1` 启用保守后缀算法，默认0，CLI 覆盖 TOML。Edwards 和 PARAM0 共用该路径。设原 giant 终点 I=⌊B2/D⌋+2，m 为不整除 D 的最小素数，A=max(1,⌊I/m⌋)；试算仅生成 i=A,…,I，共 I−A+1 点。原 B1/B2、baby 集、补充小素数路径和终端 guard 覆盖保持不变。证明与 GCD=N 反例见 [relocation 固定资料](../reference/ECM_STAGE2_RELOCATION.md)。
 
 试算经过既有算术检查排空后，只有没有命中且目标 N 上没有非单位时才允许完成 NF。任何真因子、gcd=N、giant/分组/分段求逆非单位都令试算失效：丢弃其因子结果，重放 i=1,…,I，以原算法结果发布。baby 初始化已发现非单位时直接执行原区间，不先做后缀。F 树与 baby 初始化复用；原区间的 inverse、giant/G/fold、下降及 GCD 重新执行。不同区间的叶指纹通常不同，验收比较各自独立参考；重放完成叶必须匹配原算法。原算法只接收真因子块，gcd=N 本身不会发布成因子。
 
@@ -161,7 +161,7 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 
 S4 每个 shape 保留 8 对 GPU 计时事件。按提交顺序查询并回收已完成事件；最旧事件尚未完成时停止查询其后的事件。满环时只等待、累计并释放最旧一槽，保留其他在途工作。收尾仍完整排空，每对事件只累计一次。`NTT_S4_TIMING_FIFO=0` 供同二进制对照恢复满环全排空；生产默认 1。`ring_waits` 记录满环次数，回收粒度改变后不能仅用次数比较等待成本。
 
-`stage2_low_cpu_wait` 默认 false，命令行 `--low-cpu-wait 0|1` 可覆盖；配置支持 `[stage2]` 及 `[workers.N.stage2]`。显式开启选择 CUDA 设备阻塞调度（`NTT_CUDA_WAIT_MODE=4`）及事件退避等待（`NTT_HOST_EVENT_WAIT=1`），同步读回保留原生路径（`NTT_HOST_READBACK_WAIT=0`）。显式关闭选择自动调度0及原事件等待。父进程通过环境传给曲线及 ECM tune 子进程；未显式设置时保留专家环境覆盖。事件与读回前等待的环境开关均接受严格0/1，默认0。配置语法和优先级见 [TOML参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_low_cpu_wait)。
+`low_cpu_wait` 默认 false，命令行 `--low-cpu-wait 0|1` 可覆盖；配置支持 `[stage2]` 及 `[workers.N.stage2]`。显式开启选择 CUDA 设备阻塞调度（`NTT_CUDA_WAIT_MODE=4`）及事件退避等待（`NTT_HOST_EVENT_WAIT=1`），同步读回保留原生路径（`NTT_HOST_READBACK_WAIT=0`）。显式关闭选择自动调度0及原事件等待。父进程通过环境传给曲线及 ECM tune 子进程；未显式设置时保留专家环境覆盖。事件与读回前等待的环境开关均接受严格0/1，默认0。配置语法和优先级见 [TOML参考](../ECM_TOML_REFERENCE.zh-CN.md#stage2_low_cpu_wait)。
 
 事件退避策略先查询完成事件，已完成直接走原同步边界；只有 NotReady 进入休眠重试，其他 CUDA 错误立即返回。请求休眠按 32、64、128、256 µs 退避并封顶。Windows 使用每线程私有高精度 waitable timer，不更改全局定时器分辨率；创建或使用失败则退回原生 CUDA 等待。请求时长不是唤醒延迟保证，系统抖动可能增加完整耗时，因此该模式保留为可选项。
 

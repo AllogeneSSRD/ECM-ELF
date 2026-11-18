@@ -90,13 +90,16 @@ def main():
         config = work / "ecm.toml"
         if "ntt_convolution" not in extra:
             extra += 'ntt_convolution = "linear"\n'
-        config.write_text(f'[shared]\nworktodo = "{(work / "worktodo.txt").as_posix()}"\n'
-                          f'[stage1]\ntarget = "gpu"\ncurve = "{model}"\ngpu_param = 0\n'
-                          f'gpu_algorithm = {algorithm}\ndevice = {args.device}\n'
+        handoff = '' if 'handoff_mode' in extra else 'handoff_mode = "off"\n'
+        param = 'e' if model == 'ed' else 'm0'
+        config.write_text(f'config_version = 4\n[shared]\nworktodo_file = "{(work / "worktodo.txt").as_posix()}"\n'
                           f'log_file = "{(work / "screen.log").as_posix()}"\n'
-                          f'tmp_dir = "{work.as_posix()}"\n'
-                          f'finished = "{(work / "finished.txt").as_posix()}"\n'
-                          'exp_cache = "off"\nckpt_seconds = 0.01\n' + extra, encoding="utf-8")
+                          f'finished_file = "{(work / "finished.txt").as_posix()}"\n'
+                          f'[stage1]\ntarget = "gpu"\nparam = "{param}"\n'
+                          f'gpu_algorithm = {algorithm}\nstage1_gpu_device = {args.device}\n'
+                          f'stage1_save_dir = "{work.as_posix()}"\n'
+                          'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = 0.01\n'
+                          + handoff + extra, encoding="utf-8")
         return work, [str(exe), "--config", str(config)]
 
     def run(work, cmd, label="run", text=None, ok=True, env_override=None):
@@ -126,7 +129,7 @@ def main():
             expected = None
             for kind in (0, naf):
                 required_length = 4096 if p == 65521 and not kind else length
-                extra = f'ntt_convolution = "{mode}"\nntt_length = {required_length}\nntt_window = {window}\nnaf_w = {kind}\n'
+                extra = f'ntt_convolution = "{mode}"\nntt_length = {required_length}\nntt_window_bits = {window}\nedwards_naf_window_bits = {kind}\n'
                 work, cmd = fixture(f"ed_{p}_{b1}_{kind}", extra=extra, model="ed")
                 call, data = direct(work, cmd, p, b1, sigma, curves)
                 log = run(work, call, text=data)
@@ -158,7 +161,7 @@ def main():
                 assert expected == oracle
             print(f"PASS Edwards NTT w{naf} {mode} p={p}, {curves} curves", flush=True)
         work, cmd = fixture("edwards_xonly_reject_short", model="ed",
-                            extra='naf_w = 0\nntt_convolution = "weighted"\nntt_length = 2560\n')
+                            extra='edwards_naf_window_bits = 0\nntt_convolution = "weighted"\nntt_length = 2560\n')
         call, data = direct(work, cmd, 65521, 20, 26, 1)
         assert "unsafe weighted NTT length" in run(work, call, text=data, ok=False)
         assert not (work / "out.save").exists()
@@ -166,7 +169,7 @@ def main():
         for p, bpw, length, fused in ((65521, 26, 2560, False), (65521, 25, 4096, True),
                                      (66067, 0, 4096, True), (63487, 0, 2560, True),
                                      (63493, 0, 2560, False)):
-            extra = f'naf_w = 6\nntt_convolution = "weighted"\nntt_bpw = {bpw}\n'
+            extra = f'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_bits_per_word = {bpw}\n'
             work, cmd = fixture(f"edwards_weighted_auto_{p}_{bpw}", extra=extra, model="ed")
             call, data = direct(work, cmd, p, 20, 26, 1)
             log = run(work, call, text=data)
@@ -178,7 +181,7 @@ def main():
             [sigma] = saved_points(work / "out.save", p, 20, True)
             assert sigma == 26
         work, cmd = fixture("edwards_force_unsafe_weighted", model="ed",
-                            extra='naf_w = 6\nntt_convolution = "weighted"\nntt_length = 2560\n')
+                            extra='edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = 2560\n')
         call, data = direct(work, cmd, 66067, 20, 26, 1)
         assert "unsafe weighted NTT length" in run(work, call, text=data, ok=False)
         assert not (work / "out.save").exists()
@@ -189,8 +192,8 @@ def main():
         p, b1, sigma, curves = 8191, 32, 26, 30
         for length, graph_bits, expects_direct in ((1024, 16, False), (512, 16, True), (512, 0, True)):
             work, cmd = fixture(f"edwards_inverse_input_{length}_{graph_bits}", model="ed",
-                                extra='naf_w = 8\nntt_convolution = "weighted"\n'
-                                      f'ntt_length = {length}\nntt_window = {graph_bits}\n')
+                                extra='edwards_naf_window_bits = 8\nntt_convolution = "weighted"\n'
+                                      f'ntt_length = {length}\nntt_window_bits = {graph_bits}\n')
             call, data = direct(work, cmd, p, b1, sigma, curves)
             log = run(work, call, text=data)
             [execution] = ntt_executions(log)
@@ -210,7 +213,7 @@ def main():
 
         for p, expects_direct in ((3433, True), (3457, False)):
             work, cmd = fixture(f"edwards_inverse_input_128_{p}", model="ed",
-                                extra='naf_w = 8\nntt_convolution = "weighted"\nntt_length = 128\n')
+                                extra='edwards_naf_window_bits = 8\nntt_convolution = "weighted"\nntt_length = 128\n')
             call, data = direct(work, cmd, p, 20, 26, 1)
             log = run(work, call, text=data)
             [execution] = ntt_executions(log)
@@ -229,8 +232,8 @@ def main():
         for length, tile, dataflow_bit in ((8192, 12, FIXED_WIDE_INVERSE), (5120, 10, FIXED_WIDE_FORWARD)):
             for curves, graph_bits in ((23, 16), (24, 16), (24, 0)):
                 work, cmd = fixture(f"edwards_wide_tile_{tile}_{curves}_{graph_bits}", model="ed",
-                                    extra='naf_w = 2\nntt_convolution = "weighted"\n'
-                                          f'ntt_length = {length}\nntt_tile = {tile}\nntt_window = {graph_bits}\n')
+                                    extra='edwards_naf_window_bits = 2\nntt_convolution = "weighted"\n'
+                                          f'ntt_length = {length}\nntt_tile = {tile}\nntt_window_bits = {graph_bits}\n')
                 call, data = direct(work, cmd, p, b1, sigma, curves)
                 log = run(work, call, text=data)
                 [execution] = ntt_executions(log)
@@ -253,15 +256,15 @@ def main():
         default_points = None
         for mode, flags, length, upper in (
             ("default", "", 2560, 13695445919225353215),
-            ("disabled", 'ntt.convolution = "weighted"\nntt.tight_weighted_bound = false\n',
+            ("disabled", 'ntt_convolution = "weighted"\nntt_tight_weighted_bound = false\n',
              4096, 2 * 4096 * (2**16 - 1)**2),
         ):
             work = out / f"edwards_tight_bound_{mode}"
             work.mkdir()
             cfg = work / "ecm.toml"
-            cfg.write_text('config_version = 3\n[shared]\nlog_file = "screen.log"\n'
+            cfg.write_text('config_version = 4\n[shared]\nlog_file = "screen.log"\n'
                            '[stage1]\nparam = "e"\ntarget = "gpu"\ngpu_algorithm = "ntt"\n'
-                           f'gpu_device = {args.device}\nedwards_naf_window_bits = 6\nhandoff.mode = "off"\n' +
+                           f'stage1_gpu_device = {args.device}\nedwards_naf_window_bits = 6\nhandoff_mode = "off"\n' +
                            flags, encoding="utf-8")
             call, data = direct(work, [str(exe), "--config", str(cfg)], 65521, 20, 26, 1)
             log = run(work, call, text=data)
@@ -280,14 +283,14 @@ def main():
                 assert points == default_points
         print("PASS default native auto bound, opt-out, save equality, and mirrored bpw/U/q logging", flush=True)
 
-        work, cmd = fixture("edwards_dictionary_factor", extra="naf_w = 6\n", model="ed")
+        work, cmd = fixture("edwards_dictionary_factor", extra="edwards_naf_window_bits = 6\n", model="ed")
         call, data = direct(work, cmd, 55, 64, 5, 1)
         log = run(work, call, text=data)
         assert saved_points(work / "out.save", 55, 64, True) == {5: 881}
         assert "factor[0]=881" in log
         if args.edwards_dictionary == "gpu":
             assert "backend=gpu" in log
-        work, cmd = fixture("edwards_dictionary_budget", extra="naf_w = 12\nnaf_memory_mb = 1\n", model="ed")
+        work, cmd = fixture("edwards_dictionary_budget", extra="edwards_naf_window_bits = 12\nnaf_memory_mb = 1\n", model="ed")
         call, data = direct(work, cmd, 4253, 40, 26, 2)
         assert "dictionary exceeds" in run(work, call, text=data, ok=False)
         budget_save = work / "out.save"
@@ -297,7 +300,7 @@ def main():
         # spectra and 1,048,576 more for the GPU builder. A 3 MB limit
         # admits the spectra, but only with the host dictionary builder.
         automatic = {key: val for key, val in env.items() if key != "ECM_EDWARDS_NTT_DICTIONARY"}
-        dictionary_config = 'naf_w = 6\nntt_convolution = "weighted"\nntt_length = 2560\n'
+        dictionary_config = 'edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = 2560\n'
         expected = None
         for limit, builder, workspace in ((0, "gpu", 1048576), (3, "host", 0)):
             work, cmd = fixture(f"edwards_auto_dictionary_{limit}mb", model="ed",
@@ -325,7 +328,7 @@ def main():
 
         # The resumed plan uses both deferred pack and frequency fusion just below 4U=q.
         p, b1, sigma, curves = 63487, 4096, 26, 1
-        extra = "naf_w = 6\nsigma = 26\nntt_window = 4\nauto_stage2 = 1\n"
+        extra = "edwards_naf_window_bits = 6\nsigma = 26\nntt_window_bits = 4\nhandoff_mode = \"ecm-elf\"\n"
         work, cmd = fixture("edwards_naf_resume", extra=extra, model="ed")
         config = work / "ecm.toml"
         save = work / f"e_m{p}_{b1}.save"
@@ -364,7 +367,7 @@ def main():
         assert magic == b"ECMNTTE1" and window == 6 and 0 < cursor < count and active == (1 << curves) - 1
         original = config.read_text()
         for incompatible in (0, 8):
-            config.write_text(original.replace("naf_w = 6", f"naf_w = {incompatible}"))
+            config.write_text(original.replace("edwards_naf_window_bits = 6", f"edwards_naf_window_bits = {incompatible}"))
             before = checkpoint.read_bytes()
             assert "checkpoint belongs to different" in run(work, cmd, f"wrong_{incompatible}", ok=False)
             assert checkpoint.read_bytes() == before and todo.read_text() == row
@@ -387,7 +390,7 @@ def main():
               "weighted fused resume and Stage2 handoff")
         return
 
-    work, cmd = fixture("graph", '"NtT"', "ntt_tile = 8\nntt_outer_max = 2\n")
+    work, cmd = fixture("graph", '"NtT"', "ntt_tile = 8\nntt_outer_radix_limit = 2\n")
     call, data = direct(work, cmd, 4003, 128, 4294967311, 4, "--lcm", "12")
     log = run(work, call, text=data)
     mirror = (work / "screen.log").read_text(encoding="utf-8")
@@ -406,7 +409,7 @@ def main():
         s: stage1(s, 128, n, torsion=12)["x"] for s in range(4294967311, 4294967315)}
     print("PASS mixed-case algorithm, explicit plan, Graph, log mirror and 64-bit sigma", flush=True)
 
-    work, cmd = fixture("direct", "1", "ntt_window = 0\nntt_bpw = 27\nntt_length = 1024\n")
+    work, cmd = fixture("direct", "1", "ntt_window_bits = 0\nntt_bits_per_word = 27\nntt_length = 1024\n")
     call, data = direct(work, cmd, 4003, 32, 26, 2, "--gpu-algorithm", "2")
     log = run(work, call, text=data)
     assert "length=1024 bpw=27" in log and "graph_bits=0" in log
@@ -437,7 +440,7 @@ def main():
     assert (work / "out.save").exists()
     print("PASS GPU policy bounds, strict exhaustion and full-Mersenne admission", flush=True)
 
-    work, cmd = fixture("weighted_direct", extra='ntt_convolution = "WeIgHtEd"\nntt_window = 0\n')
+    work, cmd = fixture("weighted_direct", extra='ntt_convolution = "WeIgHtEd"\nntt_window_bits = 0\n')
     call, data = direct(work, cmd, 4003, 32, 26, 2)
     log = run(work, call, text=data)
     assert "length=256 bpw=16" in log and "convolution=weighted" in log and "graph_bits=0" in log
@@ -494,7 +497,7 @@ def main():
     for name, extra, data, curves, reason in (
         ("cofactor", "", "2^65-3\n", 1, "full 2^p-1"),
         ("undersized_transform", "ntt_length = 8\n", "2^4003-1\n", 1, "covering 2*digits+1"),
-        ("unsafe_digits", "ntt_bpw = 31\n", "2^4003-1\n", 1, "coefficient bound"),
+        ("unsafe_digits", "ntt_bits_per_word = 31\n", "2^4003-1\n", 1, "coefficient bound"),
         ("unsafe_weighted", 'ntt_convolution = "weighted"\nntt_length = 2\n',
          "2^4003-1\n", 1, "unsafe weighted NTT length"),
         ("unsafe_radix5", 'ntt_convolution = "weighted"\nntt_length = 2560\n',
@@ -502,7 +505,7 @@ def main():
         ("radix5_over_limit", 'ntt_convolution = "weighted"\nntt_length = 40960\n',
          "2^4003-1\n", 1, "outside the supported domain"),
         ("linear_radix5", 'ntt_length = 2560\n', "2^4003-1\n", 1, "power of two"),
-        ("too_many_passes", "ntt_length = 65536\nntt_tile = 1\nntt_outer_max = 1\n",
+        ("too_many_passes", "ntt_length = 65536\nntt_tile = 1\nntt_outer_radix_limit = 1\n",
          "2^4003-1\n", 1, "more than eight outer passes"),
     ):
         work, cmd = fixture(name, extra=extra)
@@ -607,7 +610,7 @@ def main():
             print(f"PASS {mode} {curves} curves against Python, owned={owned}, observed={observed}", flush=True)
 
     for model, curves in (("mont", 16), ("mont", 32), ("ed", 16), ("mont", 65), ("ed", 128)):
-        work, cmd = fixture(f"resume_{model}_{curves}", extra="auto_stage2 = 1\nntt_tile = 8\n", model=model)
+        work, cmd = fixture(f"resume_{model}_{curves}", extra="handoff_mode = \"ecm-elf\"\nntt_tile = 8\n", model=model)
         p, b1, sigma = 9689, 4096, 26
         prefix = "e" if model == "ed" else "m0"
         save = work / f"{prefix}_m{p}_{b1}.save"
@@ -652,7 +655,7 @@ def main():
         assert 0 < cursor < count and mask == (1 << width) - 1
         config.write_text(config.read_text().replace("ntt_tile = 8", "ntt_tile = 9")
                           .replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"')
-                          + "ntt_window = 32\n" + ("ntt_length = 2560\n" if model == "ed" else ""), encoding="utf-8")
+                          + "ntt_window_bits = 32\n" + ("ntt_length = 2560\n" if model == "ed" else ""), encoding="utf-8")
         log = run(work, cmd, "resume")
         assert f"resume={cursor}" in log and "graph_bits=32" in log and "convolution=weighted" in log
         if model == "ed":

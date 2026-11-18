@@ -33,7 +33,7 @@ def main():
     spec=importlib.util.spec_from_file_location('suyama_ref',ROOT/'tools/stat/suyama_mont_ref.py')
     ref=importlib.util.module_from_spec(spec);spec.loader.exec_module(ref)
     config=out/'ecm.toml'
-    config.write_text('[stage2]\nstage2_auto_b2=false\nstage2_tune_runtime=false\nstage2_short_calibration=false\n',encoding='utf-8')
+    config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nauto_b2=false\ntune_runtime_enabled=false\nshort_calibration=false\n',encoding='utf-8')
     report=dict(complete=False,started_utc=stamp(),exe_sha256=identity,runs=[])
     env={k:v for k,v in os.environ.items() if not k.startswith(('NTT_','ECM_')) and k not in ('CUDA_VISIBLE_DEVICES','CUDA_LAUNCH_BLOCKING')}
     prime127=(1<<127)-1

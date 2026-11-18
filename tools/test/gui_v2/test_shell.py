@@ -1,4 +1,4 @@
-"""Selected renderer platform-window / Controller / sidecar / pet integration."""
+"""Selected renderer platform-window / Controller / preferences / pet integration."""
 import argparse
 import ctypes as c
 from ctypes import wintypes as w
@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import tomllib
 from renderer_probe import renderer_args,renderer_clean
 from win32_probe import window, capture, user, callback_type
 
@@ -29,10 +30,16 @@ def main():
     env=os.environ.copy(); env['VK_LAYER_PATH']=str(args.layers.resolve())
     queue=out/'worktodo.txt'; queue.write_text('[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n[Worker #2]\nECMSTAGE1=1,2,131,-1,100,1\n')
     config=out/'ecm.toml'
-    config.write_text(f'[shared]\nworktodo={json.dumps(str(queue))}\n[gui]\nNumWorkers=2\nexe={json.dumps(str(worker))}\nexit_confirm="ask"\ngraceful_stop_ms=1200\n[workers.1]\nautostart=0\nextra_args="--scenario v2-checkpoint-stop"\n[workers.2]\nautostart=0\nextra_args="--scenario v2-checkpoint-stop"\n')
-    before=hashlib.sha256(config.read_bytes()).hexdigest()
-    log=out/'shell.log'; state=out/'ui.toml'
-    process=subprocess.Popen([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(log),'--no-nvml',*renderer_args(args.renderer),'--audit-app','--multi-viewport','--detach-probe','--pet','--start-worker','1'],cwd=out,env=env,startupinfo=startup)
+    config.write_text(f'config_version=4\n[shared]\nworker_count=2\nworktodo_file={json.dumps(str(queue))}\n[gui]\nstage1_exe={json.dumps(str(worker))}\nexit_confirm="ask"\ngraceful_stop_ms=1200\n[worker.1]\nautostart=false\nextra_args="--scenario v2-checkpoint-stop"\n[worker.2]\nautostart=false\nextra_args="--scenario v2-checkpoint-stop"\n',encoding='utf-8')
+    before=tomllib.loads(config.read_text(encoding='utf-8'))
+    def saved():
+        after=tomllib.loads(config.read_text(encoding='utf-8'))
+        gui=after.pop('gui')
+        assert all(gui[key]==value for key,value in before['gui'].items())
+        assert after=={key:value for key,value in before.items() if key!='gui'}
+        return gui
+    log=out/'shell.log'
+    process=subprocess.Popen([str(exe),'--config',str(config),'--diagnostics',str(log),'--no-nvml',*renderer_args(args.renderer),'--audit-app','--multi-viewport','--detach-probe','--pet','--start-worker','1'],cwd=out,env=env,startupinfo=startup)
     hwnd=window(process.pid,'ecm_gui_v2')
     def wait(pattern, timeout=15):
         end=time.monotonic()+timeout
@@ -100,16 +107,15 @@ def main():
         if process.poll() is None: user.PostMessageW(hwnd,0x8022,3,0); process.wait(timeout=10)
     text=log.read_text(encoding='utf-8')
     assert renderer_clean(text,args.renderer),text
-    assert 'worker_processes=0' in text and state.exists()
+    assert 'worker_processes=0' in text
     assert 'graceful stop requested' in text and 'state Restarting (exit code 5' not in text,text
-    assert hashlib.sha256(config.read_bytes()).hexdigest()==before
-    assert '[pet]' in state.read_text() and 'enabled = true' in state.read_text()
-    # Restart restores a separate sidecar while keeping business config byte-identical.
+    assert saved()['pet_enabled']
+    # Restart restores GUI preferences without changing workflow values.
     restart=out/'restart.log'
-    run=subprocess.run([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(restart),'--frames','10','--no-nvml',*renderer_args(args.renderer)],cwd=out,env=env,startupinfo=startup,timeout=20)
+    run=subprocess.run([str(exe),'--config',str(config),'--diagnostics',str(restart),'--frames','10','--no-nvml',*renderer_args(args.renderer)],cwd=out,env=env,startupinfo=startup,timeout=20)
     assert run.returncode==0 and 'pet: mood=' not in restart.read_text(encoding='utf-8')  # hidden host defers pet work
     assert 'UI state not loaded' not in restart.read_text(encoding='utf-8') and 'UI state not saved' not in restart.read_text(encoding='utf-8')
-    assert hashlib.sha256(config.read_bytes()).hexdigest()==before
+    assert saved()['pet_enabled']
     result=dict(renderer=args.renderer,passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),business_unchanged=True,viewport_survives_main_resize=True,
                 viewport_close_recreate=True,pet_owned_layered_noactivate=True,pet_minimize_restore=True,pet_moods=7,
                 duplicate_consumer_refused=True,close_confirm_cancel_and_graceful=True,sidecar_restart=True,

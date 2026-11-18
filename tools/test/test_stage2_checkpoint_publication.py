@@ -27,8 +27,8 @@ def main():
     assert len(points) == point_count
     (work / "point.save").write_bytes(b"\n".join(points) + b"\n")
     config = work / "ecm.toml"
-    config_text = ('[shared]\nb2_ratio=0\nuser="original"\n[stage2]\nstage2_save_dir="."\n'
-                   'stage2_finished="finished.txt"\nstage2_progress_dir="progress"\n'
+    config_text = ('config_version=4\n[shared]\nuser="original"\nfinished_file="finished.txt"\n'
+                   '[stage2]\ndevice="gpu"\nb2_ratio=0\nstage2_save_dir="."\ncheckpoint_dir="progress"\n'
                    'stage2_submission_file="results.json.txt"\n')
     config.write_text(config_text, encoding="utf-8")
     queue = work / "worktodo.txt"
@@ -93,9 +93,9 @@ def main():
     assert row["curves"] == point_count and crc_valid(row)
 
     new_submission = work / "new-results.json.txt"
-    config.write_text('config_version=3\n[shared]\nuser="after-restart"\nfinished_file="finished.txt"\n'
-                      '[stage2]\nb2_ratio=0\nsave_dir="."\ncheckpoint_dir="progress"\n'
-                      'submission_file="new-results.json.txt"\n', encoding="utf-8")
+    config.write_text('config_version=4\n[shared]\nuser="after-restart"\nfinished_file="finished.txt"\n'
+                      '[stage2]\ndevice="gpu"\nb2_ratio=0\nstage2_save_dir="."\ncheckpoint_dir="progress"\n'
+                      'stage2_submission_file="new-results.json.txt"\n', encoding="utf-8")
     log = run("new-submission-finished-blocked", False)
     assert "curve_start:" not in log and checkpoint.exists()
     assert new_submission.read_bytes() == published

@@ -145,11 +145,6 @@ inline int toml_worker(const std::string& section) {
     return value;
 }
 
-inline bool toml_section(const std::string& section) {
-    return section == "shared" || section == "stage1" || section == "stage2" || section == "gui" ||
-           toml_worker(section) > 0;
-}
-
 inline const TomlOptionMeta* toml_option(const std::string& section, const std::string& key) {
     std::string table = section;
     if (toml_worker(section) > 0) {
@@ -350,8 +345,8 @@ inline std::vector<std::string> toml_enum_names(const std::string& conversion) {
 
 inline std::string toml_binding_value(const TomlLine& line, const TomlOptionMeta& option) {
     const auto source = toml_source_rhs(line);
-    const std::string conversion = option.v2_conversion;
-    if (line.config_version == 1 || conversion.empty()) {
+    const std::string conversion = option.conversion;
+    if (conversion.empty()) {
         auto value = checked_toml_value(source, option);
         if (std::string_view(option.key) == "shared_cpu_affinity")
             (void)affinity_indices(value);
@@ -374,9 +369,9 @@ inline std::string toml_binding_value(const TomlLine& line, const TomlOptionMeta
     throw std::runtime_error("unsupported configuration conversion " + conversion);
 }
 
-// Convert a decoded runtime binding value to a lexical v2 TOML value.
-inline std::string toml_v2_binding_text(const std::string& value, const TomlOptionMeta& option) {
-    const std::string conversion = option.v2_conversion;
+// Convert a decoded runtime binding value to a lexical TOML value.
+inline std::string toml_binding_text(const std::string& value, const TomlOptionMeta& option) {
+    const std::string conversion = option.conversion;
     if (!conversion.empty()) {
         long long index = 0;
         if (!value.empty() && value != "auto") {
@@ -439,41 +434,21 @@ inline TomlPath toml_path(const std::string& source) {
     }
 }
 
-inline std::string toml_path_text(const TomlPath& path, size_t start = 0) {
-    std::string result;
-    for (size_t i = start; i < path.size(); ++i) {
-        if (i != start) result += '.';
-        result += toml_bare_key(path[i]) ? path[i] : ecm_results::json::quote(path[i]);
-    }
-    return result;
-}
-
 struct TomlAddress {
     std::string section, key;
     int worker_scope = 0;
     const TomlOptionMeta* option = nullptr;
 };
 
-inline std::string toml_v2_owner(const TomlPath& path, size_t& offset, int& worker) {
-    if (path.empty())
-        throw std::runtime_error("empty TOML path");
-    const auto& first = path.front();
-    offset = 1;
-    if (first == "shared" || first == "stage1" || first == "stage2" || first == "gui")
-        return first;
-    if (first != "worker")
-        throw std::runtime_error("unknown TOML table: " + first);
-    if (path.size() == 1)
-        return "worker";
-    worker = toml_worker("workers." + path[1]);
-    if (!worker || path[1] != std::to_string(worker))
-        throw std::runtime_error("worker ID must be in 1..1000000");
-    offset = 2;
-    if (path.size() > 2 && (path[2] == "shared" || path[2] == "stage1" || path[2] == "stage2")) {
-        offset = 3;
-        return path[2];
+inline int toml_table_worker(const std::string& table) {
+    if (table == "shared" || table == "stage1" || table == "stage2" || table == "gui")
+        return 0;
+    if (table.compare(0, 7, "worker.") == 0) {
+        const int worker = toml_worker("workers." + table.substr(7));
+        if (worker && table == "worker." + std::to_string(worker))
+            return worker;
     }
-    return "workers.1";
+    throw std::runtime_error("unknown TOML table: " + table);
 }
 
 inline std::string toml_binding_section(const std::string& table, int worker) {
@@ -485,85 +460,29 @@ inline std::string toml_binding_section(const std::string& table, int worker) {
     return section;
 }
 
-inline TomlAddress toml_versioned_address(const TomlPath& path, int version) {
-    TomlAddress address;
-    size_t offset = 0;
-    const auto owner = toml_v2_owner(path, offset, address.worker_scope);
-    if (path.size() <= offset || owner == "worker")
-        throw std::runtime_error("TOML key needs a value within a documented table");
-    address.key = toml_path_text(path, offset);
-    address.section = toml_binding_section(owner, address.worker_scope);
-    if (version >= 3 && ((owner == "stage1" && (address.key == "tune_file" || address.key == "ntt.tune_file")) ||
-                         (owner == "stage2" && (address.key == "tune_file" || address.key == "tune.profile"))))
-        throw std::runtime_error("CUDA tune_file belongs in [shared] or [worker.N] shared.tune_file");
+inline TomlAddress toml_address(const std::string& table, const std::string& source_key) {
+    const auto path = toml_path(source_key);
+    if (path.size() != 1 || path.front().find('.') != std::string::npos)
+        throw std::runtime_error("TOML keys must be flat; use the documented key with underscores");
+    const int worker = toml_table_worker(table);
+    TomlAddress address{toml_binding_section(worker ? "workers.1" : table, worker), path.front(), worker};
     for (const auto& option : toml_options) {
-        const auto table = version >= 3 ? option.v3_table : option.v2_table;
-        const auto key = version >= 3 ? option.v3_key : option.v2_key;
-        if (version < 3 && option.v3_only) continue;
-        if (*key && owner == table && address.key == key) {
-            if (version >= 3 && address.worker_scope && option.v3_global_only)
-                throw std::runtime_error("option belongs to the global table");
-            address.option = &option;
-            address.key = option.key;
-            address.section = toml_binding_section(option.table, address.worker_scope);
-            break;
+        if (address.key != option.toml_key)
+            continue;
+        const std::string_view owner = option.toml_table;
+        if (worker) {
+            if (option.global_only || owner == "gui")
+                throw std::runtime_error(std::string("option belongs in [") + option.toml_table + "]");
+        } else if (table != owner) {
+            throw std::runtime_error(std::string("option belongs in [") + option.toml_table + "]");
         }
+        address.option = &option;
+        address.key = option.key;
+        address.section = toml_binding_section(option.table, worker);
+        break;
     }
     return address;
 }
-
-inline TomlAddress toml_versioned_address(const std::string& source_section, const std::string& source_key,
-                                          int version) {
-    auto path = toml_path(source_section);
-    const auto key = toml_path(source_key);
-    path.insert(path.end(), key.begin(), key.end());
-    return toml_versioned_address(path, version);
-}
-
-// An explicit table, a table defined by a dotted key, and a scalar assignment
-// occupy different positions in the TOML namespace. Keep source positions for
-// diagnostics. Implicit parents of table headers may be declared later.
-struct TomlNamespace {
-    std::map<TomlPath, size_t> tables, dotted, values;
-
-    void declare_table(const TomlPath& path, size_t line) {
-        TomlPath prefix;
-        for (const auto& part : path) {
-            prefix.push_back(part);
-            check(values, prefix, "table conflicts with a value");
-        }
-        check(dotted, path, "table already defined by a dotted key");
-        check(tables, path, "duplicate TOML table");
-        tables.emplace(path, line);
-    }
-
-    void assign(const TomlPath& path, size_t section_size, size_t line) {
-        TomlPath prefix(path.begin(), path.begin() + section_size);
-        for (size_t i = section_size; i + 1 < path.size(); ++i) {
-            prefix.push_back(path[i]);
-            check(values, prefix, "dotted key conflicts with a value");
-            check(tables, prefix, "dotted key redefines a table");
-            dotted.emplace(prefix, line);
-        }
-        check(values, path, "duplicate TOML key");
-        check(tables, path, "value conflicts with a table");
-        check(dotted, path, "value conflicts with a table");
-        const auto child = tables.lower_bound(path);
-        if (child != tables.end() && child->first.size() > path.size() &&
-            std::equal(path.begin(), path.end(), child->first.begin()))
-            throw std::runtime_error("value conflicts with an implicit table (first defined at line " +
-                                     std::to_string(child->second) + ")");
-        values.emplace(path, line);
-    }
-
-private:
-    static void check(const std::map<TomlPath, size_t>& seen, const TomlPath& path, const char* reason) {
-        const auto previous = seen.find(path);
-        if (previous != seen.end())
-            throw std::runtime_error(std::string(reason) + ": " + toml_path_text(path) +
-                                     " (first defined at line " + std::to_string(previous->second) + ")");
-    }
-};
 
 enum class TomlReadMode { Strict, Computation, Stage1, Stage2, Gui };
 inline bool deferred_toml(TomlReadMode mode, const std::string& section) {
@@ -588,12 +507,10 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
         return false;
     lines.clear();
     std::string raw, section, source_section;
-    TomlPath section_path;
     bool first = true;
-    int version = 1;
+    constexpr int version = business_config_version;
     size_t number = 0, version_line = 0;
     std::set<std::string> tables, keys;
-    TomlNamespace v2_namespace;
     while (std::getline(in, raw)) {
         ++number;
         if (!raw.empty() && raw.back() == '\r')
@@ -617,25 +534,17 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
             else if (t[0] == '#')
                 l.kind = TomlLine::Kind::Comment;
             else if (t.front() == '[') {
-                const auto close = version >= 2 ?
-                    toml_unquoted_offset(t, ']', 1) : t.find(']');
+                if (!version_line)
+                    throw std::runtime_error("config_version = 4 must be declared before the first table");
+                const auto close = toml_unquoted_offset(t, ']', 1);
                 if (close == t.npos ||
-                    !trim(t.substr(close + 1)).empty() && trim(t.substr(close + 1)).front() != '#')
+                    (!trim(t.substr(close + 1)).empty() && trim(t.substr(close + 1)).front() != '#'))
                     throw std::runtime_error("invalid TOML table header");
                 source_section = trim(t.substr(1, close - 1));
-                if (version >= 2) {
-                    section_path = toml_path(source_section);
-                    size_t offset = 0;
-                    int worker = 0;
-                    const auto owner = toml_v2_owner(section_path, offset, worker);
-                    v2_namespace.declare_table(section_path, number);
-                    source_section = toml_path_text(section_path);
-                    section = toml_binding_section(owner, worker);
-                } else {
-                    if (!toml_section(source_section) || !tables.insert(source_section).second)
-                        throw std::runtime_error("unknown or duplicate TOML table: " + source_section);
-                    section = source_section;
-                }
+                const int worker = toml_table_worker(source_section);
+                if (!tables.insert(source_section).second)
+                    throw std::runtime_error("duplicate TOML table: " + source_section);
+                section = toml_binding_section(worker ? "workers.1" : source_section, worker);
                 l.kind = TomlLine::Kind::Section;
                 l.source_section = source_section;
                 l.section = section;
@@ -646,9 +555,7 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                     throw std::runtime_error("TOML key needs a table and value");
                 l.source_key = l.key = trim(t.substr(0, eq));
                 l.source_value = diagnostic_value = trim(t.substr(eq + 1));
-                const auto parsed_key = version >= 2 || section.empty() ||
-                    l.source_key == "\"config_version\"" || l.source_key == "'config_version'" ?
-                    toml_path(l.source_key) : TomlPath{l.key};
+                const auto parsed_key = toml_path(l.source_key);
                 if (parsed_key.size() == 1 && parsed_key.front() == "config_version") {
                     if (!section.empty())
                         throw std::runtime_error("config_version must be declared before the first table");
@@ -660,10 +567,8 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                     if (kind != 'i')
                         throw std::runtime_error("config_version must be an integer");
                     const auto decimal = value.front() == '+' ? value.substr(1) : value;
-                    if (decimal == "1") version = 1;
-                    else if (decimal == "2") version = 2;
-                    else if (decimal == std::to_string(business_config_version)) version = business_config_version;
-                    else throw std::runtime_error("unsupported config_version: " + value);
+                    if (decimal != std::to_string(version))
+                        throw std::runtime_error("unsupported config_version: " + value);
                     l.config_version = version;
                     l.kind = TomlLine::Kind::Version;
                     l.value = std::to_string(version);
@@ -673,26 +578,15 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                 }
                 if (section.empty())
                     throw std::runtime_error("TOML key needs a table and value");
-                if (version >= 2) {
-                    auto full_path = section_path;
-                    full_path.insert(full_path.end(), parsed_key.begin(), parsed_key.end());
-                    v2_namespace.assign(full_path, section_path.size(), number);
-                    const auto address = toml_versioned_address(full_path, version);
-                    l.section = address.section;
-                    l.key = address.key;
-                    l.worker_scope = address.worker_scope;
-                    option = address.option;
-                } else {
-                    if (l.key.empty() ||
-                        !(std::isalpha(static_cast<unsigned char>(l.key.front())) || l.key.front() == '_') ||
-                        std::any_of(l.key.begin(), l.key.end(),
-                                    [](unsigned char c) { return !(std::isalnum(c) || c == '_'); }))
-                        throw std::runtime_error("invalid TOML key");
-                    if (!keys.insert(section + "." + l.key).second)
-                        throw std::runtime_error("duplicate TOML key: " + l.key);
-                    option = toml_option(l.section, l.key);
-                    if (option && option->v3_only) option = nullptr;
-                }
+                const auto address = toml_address(source_section, l.source_key);
+                if (!keys.insert(source_section + "." + parsed_key.front()).second)
+                    throw std::runtime_error("duplicate TOML key: " + l.source_key);
+                l.section = address.section;
+                l.key = address.key;
+                l.worker_scope = address.worker_scope;
+                option = address.option;
+                if (!option && l.worker_scope > 0)
+                    throw std::runtime_error("unknown worker option: " + l.source_key);
                 l.recognized = option != nullptr;
                 const bool string_array = option && std::string_view(option->type) == "string_array";
                 if (string_array && !l.source_value.empty() && l.source_value.front() == '[') {
@@ -706,14 +600,10 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                     }
                     diagnostic_value = l.source_value;
                 }
-                // GUI settings are outside the computation projection, except
-                // NumWorkers: Stage1 routing uses it when the destination queue
-                // has no worker sections. Keep its schema/type validation.
                 const bool gui_table =
                     l.section == "gui" ||
                     (l.worker_scope > 0 && l.section.find('.', 8) == std::string::npos);
-                if (mode == TomlReadMode::Computation && gui_table &&
-                    !(l.section == "gui" && l.key == "NumWorkers")) {
+                if (mode == TomlReadMode::Computation && gui_table) {
                     char kind = 0;
                     if (!string_array) (void)toml_value(t.substr(eq + 1), kind);
                     if (!option && ignored_gui)
@@ -724,7 +614,7 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
                     continue;
                 }
                 if ((active_worker > 0 && l.worker_scope > 0 && l.worker_scope != active_worker) ||
-                    (version >= 3 && l.key == "b2_ratio" && mode == TomlReadMode::Stage1) ||
+                    (l.key == "b2_ratio" && mode == TomlReadMode::Stage1) ||
                     deferred_toml(mode, l.section)) {
                     // Foreign enum/type extensions must not gate this program.
                     // Decode supported scalars for optional previews; opaque values
@@ -752,14 +642,17 @@ inline bool read_toml(std::istream& in, const std::string& path, std::vector<Tom
         } catch (const std::exception& e) {
             throw std::runtime_error(config_diagnostic(
                 path, l.line_number, l.worker_scope, l.source_key, diagnostic_value, e.what(),
-                option ? (version >= 2 && *option->v2_conversion ?
-                    "the documented form of " + std::string(version >= 3 ? option->v3_key : option->v2_key) :
+                option ? (*option->conversion ?
+                    "the documented form of " + std::string(option->toml_key) :
                     std::string(option->type) + " " + option->domain) :
-                l.source_key == "config_version" ? "config_version = 1, 2 or 3 at the file root" :
+                l.source_key == "config_version" ? "config_version = 4 at the file root" :
                 "a documented key in this table"));
         }
         lines.push_back(std::move(l));
     }
+    if (!version_line)
+        throw std::runtime_error(config_diagnostic(path, 0, 0, "config_version", "",
+            "missing config_version", "config_version = 4 at the file root"));
     if (config_version) *config_version = version;
     return !in.bad();
 }
@@ -818,7 +711,7 @@ inline Entries preview_entries(const std::vector<TomlLine>& lines, int worker, b
 inline int toml_document_version(const std::vector<TomlLine>& lines) {
     for (const auto& line : lines)
         if (line.kind == TomlLine::Kind::Version) return line.config_version;
-    return 1;
+    return business_config_version;
 }
 
 // Stage1 handoff consumes only these requested receiver fields, not Stage2 arithmetic.
@@ -854,22 +747,16 @@ inline Entries section_entries(const std::vector<TomlLine>& lines, const std::st
     return values;
 }
 
-// The v3 workflow count is authoritative. Old files can still supply the
-// explicit GUI count as a compatibility default for automatic handoff.
+// Shared worker count bounds both GUI workers and automatic handoff.
 inline int configured_workflow_worker_count(const std::vector<TomlLine>& lines,
                                             const std::string& path) {
-    const TomlLine* legacy = nullptr;
     const TomlLine* selected = nullptr;
     for (const auto& line : lines) {
         if (line.kind != TomlLine::Kind::KeyValue || !line.recognized)
             continue;
         if (line.section == "shared" && line.key == "workflow_worker_count")
             selected = &line;
-        else if (line.section == "gui" && line.key == "NumWorkers")
-            legacy = &line;
     }
-    if (!selected)
-        selected = legacy;
     if (!selected)
         return 0;
     const auto& line = *selected;

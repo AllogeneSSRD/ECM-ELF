@@ -82,8 +82,8 @@ def main():
             config = directory / 'ecm.toml'
             queue = directory / 'worktodo.txt'
             queue.write_text('ECMSTAGE2=1,2,127,-1,"prime127.save",13230,0,1\n', encoding='utf-8')
-            config.write_text('[shared]\nworktodo=' + json.dumps(str(queue)) + '\n[stage2]\n'
-                              'stage2_tune_runtime=false\nstage2_short_calibration=false\n', encoding='utf-8')
+            config.write_text('config_version=4\n[shared]\nworktodo_file=' + json.dumps(str(queue)) + '\n[stage2]\ndevice="gpu"\n'
+                              'tune_runtime_enabled=false\nshort_calibration=false\n', encoding='utf-8')
             command = [str(exe), '--config', str(config), '--device', str(a.device), '--d', '210',
                        '--tune-profile', str(directory / 'absent_tune.toml'),
                        '--results', str(directory / 'results.jsonl'),

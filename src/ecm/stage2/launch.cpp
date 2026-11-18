@@ -53,7 +53,7 @@ int ecm_stage2::run_combined_stage2(int argc, char** argv, GpuEntry gpu) {
             }
         }
         if (help)
-            std::cout << "Stage2 target: --target auto|cpu|gpu (TOML: stage2.device; auto selects CPU)\n";
+            std::cout << "Stage2 target: --target auto|cpu|gpu (TOML: [stage2] device; auto selects CPU)\n";
         return target == "gpu" ? gpu(count, args.data(), &launch)
                                : run_cpu_stage2(count, args.data(), &launch);
     } catch (const std::exception& error) {

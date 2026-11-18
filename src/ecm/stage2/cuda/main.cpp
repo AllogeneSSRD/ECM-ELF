@@ -307,7 +307,7 @@ static void freeze_publication(Options &o,const Settings &settings,const fs::pat
 // The schedule bits affect CPU waits, not kernel ordering or arithmetic.
 
 void help() {
-    std::cout<<"GPU worker: --gpu-backend auto|cuda|opencl (worker TOML: stage2_backend)\n";
+    std::cout<<"GPU worker: --gpu-backend auto|cuda|opencl (TOML: stage2_gpu_backend)\n";
 #ifdef ECM_STAGE2_OPENCL
     std::cout<<"ecm_opencl_stage2 - native OpenCL Stage2 using the production save/queue driver\n"
         "  --list-devices (OpenCL indices; not CUDA indices or UUIDs)\n"
@@ -316,7 +316,7 @@ void help() {
         "  --device N --arena-mb MB --batch-mb MB --carrier-exponent P\n"
         "  --plan-only --dry-run --results FILE --submission FILE --ntt-counts 0|1\n"
         "  --tune-runtime 0|1 --tune-min-repeats N --tune-runtime-samples N\n"
-        "  TOML: stage2_opencl_point_plan=auto|device|chain|cpu, stage2_opencl_tune_profile\n"
+        "  TOML: opencl_point_plan=auto|device|chain|cpu, opencl_tune_file\n"
         "D=0 uses the OpenCL basic model and hard owned-payload budget.\n"
         "Queue receipts/checkpoints, curve limits, result validation and stop policy are shared.\n"
         "Explicit B2 required; CUDA tune/Auto B2/relocation/Graph policies are not consumed.\n"
@@ -327,7 +327,7 @@ void help() {
         "  ecm_stage2 [--config ecm.toml] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
         "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
-        "         --ntt-counts 0|1 (per-curve NTT length table; TOML stage2_ntt_counts)\n"
+        "         --ntt-counts 0|1 (per-curve NTT length table; TOML ntt_length_counts)\n"
         "         --relocation 0|1 (optional conservative suffix, original-range replay on hits/nonunits)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --giant-tail-balance 0|1 --b2-round-chain 0|1 --giant-chain 64|32|auto\n"
@@ -352,8 +352,8 @@ void help() {
         "           --tune-runtime-samples N (1..1000, default 10): per-condition/path observation cap.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
-        "           --weighted-ntt 0|1: fuse the first NTT stage into CUDA packing (stage2_weighted_ntt in TOML).\n"
-        "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
+        "           --weighted-ntt 0|1: fuse the first NTT stage into CUDA packing (weighted_ntt in TOML).\n"
+        "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (pack_zero in TOML).\n"
         "           --baby-backend auto|scalar|coop32 --giant-backend auto|scalar|coop16|coop32\n"
         "           --seed-backend auto|scalar|coop32 (paired seeds and GPU [D]Q, >8192 bits)\n"
         "           --reduce-backend auto|scalar|coop32 (ordinary S4, >8192 bits; paired auto)\n"
@@ -379,14 +379,13 @@ void help() {
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
         "       ECMSTAGE2N=[AID,]save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
-        "TOML: [shared] worktodo; [stage2] stage2_finished, stage2_progress_dir, stage2_log_file;\n"
-        "stage2_progress_file imports legacy single-file progress only.\n"
-        "     shared tmp_dir/device/verbose; stage2_save_dir/device overrides; stage2_b2, stage2_d,\n"
-        "     stage2_batch_mb, stage2_arena_mb, stage2_pack_zero, stage2_results_file, stage2_log_level.\n"
-        "     stage2_debug_log=true enables separate diagnostics (stage2_debug_log_file).\n"
+        "TOML v4: [shared] worktodo_file, finished_file, log_file;\n"
+        "     [stage2] device, stage2_gpu_device, stage2_save_dir, checkpoint_dir, b2, d,\n"
+        "     s4_batch_mib, arena_mib, pack_zero, stage2_results_file, log_level.\n"
+        "     debug_log=true enables separate diagnostics (debug_log_file).\n"
         "D=0 chooses automatically; count/curves=0 means all remaining; shortages are clamped.\n"
         "Queue only: resumes completed curves. Ctrl+C finishes current curve; twice stops now.\n"
-        "Missing implicit TOML uses defaults. Worker overrides use [workers.N.stage2].\n";
+        "Missing implicit TOML uses defaults. Worker overrides use the same keys in [worker.N].\n";
 #endif
 }
 

@@ -79,8 +79,8 @@ def main():
     for label,layout,fault in modes:
         directory=out/label; directory.mkdir()
         (directory/'point.save').write_text(point,encoding='utf-8')
-        (directory/'ecm.toml').write_text('[stage2]\nstage2_auto_carrier=false\nstage2_auto_b2=false\n'
-            'stage2_tune_runtime=false\nstage2_short_calibration=false\n',encoding='utf-8')
+        (directory/'ecm.toml').write_text('config_version=4\n[stage2]\ndevice="gpu"\nauto_carrier=false\nauto_b2=false\n'
+            'tune_runtime_enabled=false\nshort_calibration=false\n',encoding='utf-8')
         sentinel=directory/'unused_tune.toml'
         env=base.copy()
         if a.fixtures:

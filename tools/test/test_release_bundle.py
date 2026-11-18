@@ -1,6 +1,6 @@
 """Check complete release directories/ZIPs and relocate them away from the SDK.
 
-Runtime smoke uses only a private copy, empty queues and private UI state. It
+Runtime smoke uses only a private copy and empty queues. It
 does not start compute workers, change clocks or touch the user's configuration.
 """
 import argparse
@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tomllib
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -90,13 +91,17 @@ def main():
             assert proc.returncode==0,(profile,'GMP helper',proc.stderr)
             order=read(response)
             assert order['status']=='complete' and order['backend']=='gmp' and order['group_computed'] and order['point_minimality'],order
-            config=relocated/'ecm.toml';before=sha(config);queue=sha(relocated/'worktodo.txt')
+            config=relocated/'ecm.toml';before=tomllib.loads(config.read_text(encoding='utf-8-sig'))
+            queue=sha(relocated/'worktodo.txt')
             log=cwd/'gui.log';startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-            proc=subprocess.run([str(relocated/'ecm_gui_v2.exe'),'--frames','12','--no-nvml','--no-pet','--ui-state',str(cwd/'ui.toml'),'--diagnostics',str(log)],cwd=cwd,env=env,startupinfo=startup,capture_output=True,timeout=30)
+            proc=subprocess.run([str(relocated/'ecm_gui_v2.exe'),'--frames','12','--no-nvml','--no-pet','--diagnostics',str(log)],cwd=cwd,env=env,startupinfo=startup,capture_output=True,timeout=30)
             assert proc.returncode==0,(profile,'GUI',proc.stderr)
             text=log.read_text(encoding='utf-8')
             assert 'frame: 1' in text and 'worker_processes=0' in text and 'config='+str(config) in text,text[-2000:]
-            assert sha(config)==before and sha(relocated/'worktodo.txt')==queue
+            after=tomllib.loads(config.read_text(encoding='utf-8-sig'))
+            gui_before,gui_after=before.pop('gui',{}),after.pop('gui',{})
+            assert before==after and sha(relocated/'worktodo.txt')==queue
+            assert all(gui_before.get(key)==gui_after.get(key) for key in ('stage1_exe','stage2_exe'))
             record.update(relocated=str(relocated),path_only_system32=True,helper_status=order['status'],gui_no_workers=True)
         report['profiles'][profile]=record;persist();print('PASS bundle',profile,flush=True)
     report['complete']=True;persist()

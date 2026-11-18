@@ -60,10 +60,10 @@ def main():
         for name,rounding,calibration,formal in [('short_on',True,True,False),('short_off',False,True,False),
                 ('short_disabled',True,False,False),('formal_rejected',True,True,True),('formal_fixed',True,True,True)]:
             directory=out/name;directory.mkdir();config=directory/'ecm.toml';profile=directory/'tune.toml'
-            config.write_text('[stage2]\nstage2_b2_round_chain='+str(rounding).lower()+
-                '\nstage2_short_calibration='+str(calibration).lower()+
-                '\nstage2_tune_runtime=false\nstage2_giant_chain="auto"\nstage2_groot_balanced="auto"\n'
-                'stage2_tune_min_repeats=1\nstage2_auto_carrier=false\n')
+            config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nb2_round_chain='+str(rounding).lower()+
+                '\nshort_calibration='+str(calibration).lower()+
+                '\ntune_runtime_enabled=false\nstage2_giant_chain="auto"\ngroot_balanced="auto"\n'
+                'stage2_tune_min_repeats=1\nauto_carrier=false\n')
             common=[str(exe),'--config',str(config),'--device',str(a.device)]
             if formal:
                 command=common+['--tune','ecm','--tune-save',str(saved),'--tune-d','210','--tune-b2','42020',

@@ -163,17 +163,20 @@ def main():
                             folder.mkdir()
                             device=a.cuda_device if backend=='cuda' else a.opencl_device
                             config=folder/'ecm.toml'
-                            config.write_text(f'''[stage2]
-stage2_device={device}
-stage2_log_level="phases"
-stage2_auto_carrier=false
-stage2_tune_runtime=false
-stage2_short_calibration=false
-stage2_arena_mb={a.arena_mb}
-stage2_batch_mb=64
-stage2_fold_mb=640
+                            config.write_text(f'''config_version = 4
+[shared]
+log_file="worker.log"
+[stage2]
+device="gpu"
+stage2_gpu_device={device}
+log_level="phases"
+auto_carrier=false
+tune_runtime_enabled=false
+short_calibration=false
+arena_mib={a.arena_mb}
+s4_batch_mib=64
+fold_resident_mib=640
 stage2_results_file="results.jsonl"
-stage2_log_file="worker.log"
 ''',encoding='utf-8')
                             cmd=[str(binaries[backend]),'--config',str(config.resolve()),'--save',str(frozen.resolve()),
                                  '--device',str(device),'--b2',str(b2),'--d',str(a.d),'--curves','1','--factor-only',

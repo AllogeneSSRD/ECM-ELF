@@ -10,7 +10,8 @@ def main():
     a=p.parse_args();out=a.out.resolve();out.mkdir();env=os.environ.copy();env['VK_LAYER_PATH']=str(a.layers.resolve());log=out/'pet.log'
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     user.ClientToScreen.argtypes=[w.HWND,c.POINTER(w.POINT)];user.ClientToScreen.restype=w.BOOL
-    proc=subprocess.Popen([str(a.exe.resolve()),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--pet','--pet-static','--audit-app','--no-nvml',*renderer_args(a.renderer)],cwd=out,env=env)
+    cfg=out/'ecm.toml';cfg.write_text('config_version=4\n',encoding='utf-8')
+    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(cfg),'--diagnostics',str(log),'--pet','--pet-static','--audit-app','--no-nvml',*renderer_args(a.renderer)],cwd=out,env=env)
     hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,200,0,1000,800,0x14);user.ShowWindow(hwnd,4);pet=window(proc.pid,'ecm_gui_v2_pet');time.sleep(.4)
     def rect(target):
         value=w.RECT();assert user.GetWindowRect(target,c.byref(value));return value

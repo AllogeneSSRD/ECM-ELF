@@ -358,7 +358,7 @@ void App::capture_layout(bool save_docking_layout) {
     int rect[4] = {win_x_, win_y_, win_w_, win_h_};
     ini_.set("gui", "window", int_list(rect, 4));
     if (!ini_.has("shared", "workflow_worker_count"))
-        ini_.set_int("gui", "NumWorkers", num_workers_);
+        ini_.set_int("shared", "workflow_worker_count", num_workers_);
     ini_.set("gui", "language", language_);
     ini_.set_int("gui", "refresh_hz", refresh_hz_);
     ini_.set_int("gui", "gpu_poll_ms", gpu_poll_ms_);
@@ -1768,10 +1768,7 @@ void App::draw_workers_table() {
     if(ImGui::InputInt("##worker_count",&worker_count,0,0) && worker_count!=num_workers_) {
         num_workers_=std::clamp(worker_count,static_cast<int>(ecm_config::limits::gui_NumWorkers_minimum),static_cast<int>(ecm_config::limits::gui_NumWorkers_maximum));
         rebuild_workers();selected_worker_=std::clamp(selected_worker_,0,num_workers_-1);
-        if (ini_.has("shared", "workflow_worker_count"))
-            ini_.set_int("shared","workflow_worker_count",num_workers_);
-        else
-            ini_.set_int("gui","NumWorkers",num_workers_);
+        ini_.set_int("shared","workflow_worker_count",num_workers_);
         std::string error;if(!ini_.save(error))status_=error;
     }
     ImGui::EndDisabled();

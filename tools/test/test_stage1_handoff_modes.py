@@ -1,4 +1,4 @@
-"""Exercise v3 handoff modes with real CPU Stage1 and offline receiver queues."""
+"""Exercise v4 handoff modes with real CPU Stage1 and offline receiver queues."""
 import argparse
 from pathlib import Path
 import shutil
@@ -11,6 +11,9 @@ TASKS = {curve: f'ECMSTAGE1=1,2,127,-1,"{curve}_m127_100.save",2000,0,1'
 
 def verify(build, root):
     root.mkdir(parents=True)
+    worker = build / "ecm.exe"
+    if not worker.is_file():
+        worker = build / "ecm_cuda.exe"
 
     def scenario(name, mode, curve="m0", fallback="ecm-elf", external=False,
                  prime95_paths=True, blocked=False, expected="off", error=None,
@@ -20,9 +23,9 @@ def verify(build, root):
         bin_dir, config_dir, p95 = case / "bin", case / "config", case / "prime95"
         for directory in (bin_dir, config_dir, p95):
             directory.mkdir(parents=True)
-        for filename in ("ecm.exe", "gmp-10.dll"):
-            shutil.copy2(build / filename, bin_dir / filename)
         exe = bin_dir / "ecm.exe"
+        shutil.copy2(worker, exe)
+        shutil.copy2(build / "gmp-10.dll", bin_dir)
         queue, config = config_dir / "worktodo.txt", config_dir / "ecm.toml"
         finished = config_dir / "finished.txt"
         add = p95 / "worktodo.add"
@@ -30,7 +33,7 @@ def verify(build, root):
         target = p95 / "saves" / f"{curve}_m127_100.save"
         if blocked:
             target.mkdir(parents=True)
-        settings = f"""config_version = 3
+        settings = f"""config_version = 4
 [shared]
 worktodo_file = "worktodo.txt"
 finished_file = "finished.txt"
@@ -41,15 +44,15 @@ target = "cpu"
 cpu_implementation = "scalar"
 sigma = 26
 exponent_cache_dir = "off"
-handoff.unsupported = "{fallback}"
+handoff_unsupported = "{fallback}"
 """
         if mode is not None:
-            settings += f'handoff.mode = "{mode}"\n'
+            settings += f'handoff_mode = "{mode}"\n'
         if external:
-            settings += f'handoff.worktodo_file = "{local_queue}"\nhandoff.workers = "2"\n'
+            settings += f'handoff_worktodo_file = "{local_queue}"\nhandoff_workers = "2"\n'
         if prime95_paths:
-            settings += (f'prime95.worktodo_file = "{(p95 / "worktodo.txt").as_posix()}"\n'
-                         f'prime95.save_dir = "{(p95 / "saves").as_posix()}"\n')
+            settings += (f'prime95_worktodo_file = "{(p95 / "worktodo.txt").as_posix()}"\n'
+                         f'prime95_save_dir = "{(p95 / "saves").as_posix()}"\n')
         config.write_text(settings + stage1_extra + overrides, encoding="ascii")
         queue.write_text(TASKS[curve] + "\n" + extra_queue, encoding="ascii")
 
@@ -88,8 +91,8 @@ handoff.unsupported = "{fallback}"
                 # Retry the frozen intent after changing mode and removing P95 paths.
                 assert any((bin_dir / "p95_add_pending.txt.handoff").glob("*.intent"))
                 target.rmdir()
-                config.write_text(settings.split("prime95.worktodo_file")[0].replace(
-                    'handoff.mode = "prime95"', 'handoff.mode = "off"'), encoding="ascii")
+                config.write_text(settings.split("prime95_worktodo_file")[0].replace(
+                    'handoff_mode = "prime95"', 'handoff_mode = "off"'), encoding="ascii")
                 run("restart")
                 run("replay")
             assert target.is_file()
@@ -111,14 +114,14 @@ handoff.unsupported = "{fallback}"
     scenario("local_queue_conflicts_with_config", "ecm-elf", external=True, local_queue="ecm.toml",
              error="Stage2 transfer queue/finished paths conflict")
     scenario("local_auto_eligible_workflow_worker", "ecm-elf", local_receiver=3,
-             shared_extra="worker_count = 4", stage1_extra='handoff.workers = "auto"\n',
-             overrides='[gui]\nworker_count = 5\n[worker.1]\nshared.queue_skip = "stage2"\n'
-                       '[worker.2]\nshared.worktodo_file = "other.txt"\n'
-                       '[worker.4]\nshared.queue_skip = "invalid"\n',
+             shared_extra="worker_count = 4", stage1_extra='handoff_workers = "auto"\n',
+             overrides='[worker.1]\nqueue_skip = "stage2"\n'
+                       '[worker.2]\nworktodo_file = "other.txt"\n'
+                       '[worker.4]\nqueue_skip = "invalid"\n',
              extra_queue="[Worker #5]\n# outside the configured workflow\n")
     scenario("local_auto_without_receiver", "ecm-elf",
              shared_extra='worker_count = 1\nqueue_skip = "stage2"',
-             stage1_extra='handoff.workers = "auto"\n',
+             stage1_extra='handoff_workers = "auto"\n',
              error="automatic Stage2 handoff found no eligible worker")
     print("Stage1 handoff modes: 13 queue scenarios passed")
 

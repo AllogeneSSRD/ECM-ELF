@@ -29,7 +29,7 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 | `{n}` | 有原任务元数据时为原始 n；否则识别完整梅森整数的指数，或使用实际 N 位数 |
 | `{b1}` | 核心 Stage1 自动命名取四舍五入后的整数 B1，至少3个末尾零时压缩，例如 260000000→26e7；GUI worktodo 生成器保留任务中 B1 的原始写法 |
 
-典型名称为 `e_m5351_260e6.save`、`m0_m5351_260e6.save`、`m2_bit4916_1e6.save`。自定义模式没有匹配的构造前缀时会规范/补充前缀；未知花括号 token 报错。自动路径通常落在 `tmp_dir`；CLI 显式 `-save`/`-savea` 路径按其接口保持，不自动从名称改曲线。
+典型名称为 `e_m5351_260e6.save`、`m0_m5351_260e6.save`、`m2_bit4916_1e6.save`。自定义模式没有匹配的构造前缀时会规范/补充前缀；未知花括号 token 报错。自动路径通常落在 `stage1_save_dir`；CLI 显式 `-save`/`-savea` 路径按其接口保持，不自动从名称改曲线。
 
 [GUI worktodo 生成器](../usage/GUI.md#队列生成与交接)按所选曲线类型展开同一默认模式；它不链接 GMP，非梅森目标的 `bit` 位数使用估计值，涉及已知因子或位数边界时须核对预览。核心 Stage1 自动命名仍使用实际 N 位数。
 
@@ -199,7 +199,7 @@ CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且
 
 资格按每条 Stage1 任务应用前缀后的实际构造判断：Montgomery PARAM0/3 可交接；Edwards 和 GPU PARAM2 忽略 Prime95 转移路径。save 文件同步与 worktodo.add 交付由驱动执行，GUI 只显示状态。
 
-普通目录扫描仅做备份；P95 使用独立 `p95_sync_dir`，按实际批次文件与区间交接。先持久保存意图，验证并落盘目标文件，最后发布引用该文件的 `worktodo.add`。目标前缀只能延长。路径、冻结路由、重试和外部确认限制以 [Stage1 使用](../usage/STAGE1.md#检查点与交接) 为准。
+普通目录扫描仅做备份；P95 使用独立 `prime95_save_dir`，按实际批次文件与区间交接。先持久保存意图，验证并落盘目标文件，最后发布引用该文件的 `worktodo.add`。目标前缀只能延长。路径、冻结路由、重试和外部确认限制以 [Stage1 使用](../usage/STAGE1.md#检查点与交接) 为准。
 
 交付失败不回滚完成的 Stage1，任务进入 pending 交付状态供后续重试；不直接改写 Prime95 活动 worktodo.txt。结果/AID/重复交付策略见[Stage1 使用](../usage/STAGE1.md#检查点与交接)和 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 

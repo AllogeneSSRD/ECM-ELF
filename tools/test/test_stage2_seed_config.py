@@ -33,7 +33,7 @@ def main():
     shutil.copy2(__file__,out/'test_snapshot.py')
     identity=sha(out/'bin/ecm_cuda_stage2.exe')
     report=dict(complete=False,component=a.component,exe_sha256=identity,calls=[])
-    key='stage2_'+('seed_backend' if a.component=='seed' else 'reduce_backend')
+    key='seed_backend' if a.component=='seed' else 'reduce_backend'
     cli='--'+('seed-backend' if a.component=='seed' else 'reduce-backend')
     env_key='NTT_GIANT_SEED_COOP' if a.component=='seed' else 'NTT_S4_COOP_REDUCE'
     settings=(('worker','scalar','coop32','0',[],32),
@@ -53,9 +53,9 @@ def main():
         cmd+=['--worktodo',str(queue),'--worker','2','--once','--baby-backend','coop32',
               '--giant-backend','coop32',*extra]
         config=folder/'ecm.toml'
-        config.write_text('[stage2]\nstage2_short_calibration=false\n'+
+        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nshort_calibration=false\n'+
             ((key+'='+json.dumps(global_mode)+'\n') if global_mode else '')+
-            (('[workers.2.stage2]\n'+key+'='+json.dumps(worker_mode)+'\n') if worker_mode else ''))
+            (('[worker.2]\n'+key+'='+json.dumps(worker_mode)+'\n') if worker_mode else ''))
         env=environment();env[env_key]=override
         monitor=TelemetryRecorder(1,folder/'telemetry.jsonl',interval=.2)
         try:

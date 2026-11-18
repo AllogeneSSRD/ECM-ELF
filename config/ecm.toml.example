@@ -1,15 +1,14 @@
 # GENERATED from config/ecm_options.json / 由 config/ecm_options.json 生成
 # ECM_TOML_REFERENCE.en.md lists advanced settings and worker overrides.
 # 高级设置和 worker 覆盖见 ECM_TOML_REFERENCE.zh-CN.md。
-config_version = 3
+config_version = 4
 
 [shared]
 # worker_count = 1  # int: <x:Z,1..64>
 # Workflow worker count for GUI v2 and automatic ECM-ELF handoff within the same queue. Use worker
-# numbers 1 through this count. Automatic handoff excludes workers that skip Stage2. When omitted,
-# an explicit legacy GUI worker_count remains supported.
+# numbers 1 through this count. Automatic handoff excludes workers that queue_skip Stage2.
 # 供 GUI v2 与同队列 ECM-ELF 自动交接共用的 worker 数量，编号从 1 到该数量。自动交接排除跳过 Stage2
-# 的 worker。省略时兼容显式设置的旧 GUI worker_count。
+# 的 worker。
 
 # log_file = "ecm.log"  # string: <path>
 # Shared run log. Relative paths use the configuration directory. An empty string disables file
@@ -20,7 +19,7 @@ config_version = 3
 # Shared completed-work file for both stages. Relative paths use the configuration directory.
 # 两阶段共用的完成记录。相对路径基于配置目录。
 
-# log_file_max_KB = 10000  # u64: [1000..1000000]
+# log_file_max_kb = 10000  # u64: [1000..1000000]
 # Rotate the shared run log after its size exceeds this limit. 1 KB is 1000 bytes.
 # 共享运行日志超过此上限后归档。1 KB 等于 1000 字节。
 
@@ -71,79 +70,79 @@ worktodo_file = "worktodo.txt"  # string: <path>
 # Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。
 # curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。
 
-# handoff.mode = "ecm-elf"  # string: [off|ecm-elf|prime95]
+# handoff_mode = "ecm-elf"  # string: [off|ecm-elf|prime95]
 # Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append
 # the new task at the end of the source worker's queue unless a receiver is configured. Use off to
 # keep the save or prime95 to select Prime95.
 # Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接
 # 收方。off 只保留存档，prime95 交给 Prime95。
 
-# handoff.unsupported = "ecm-elf"  # string: [ecm-elf|keep-save]
+# handoff_unsupported = "ecm-elf"  # string: [ecm-elf|keep-save]
 # Fallback for saves unsupported by the Prime95 protocol.
 # Prime95 协议不支持该存档时使用的后备方式。
 
-# handoff.workers = ""  # string: [<n>|<n>,...|<a>-<b>|auto]
+# handoff_workers = ""  # string: [<n>|<n>,...|<a>-<b>|auto]
 # Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest
-# eligible queue; ties use the lowest ID. For v3 auto within the same queue, an explicit
-# shared.worker_count (or legacy GUI count) defines the candidate range. Candidates must read that
-# queue and allow Stage2. Without a configured range, auto uses existing worker sections or starts
-# from worker 1. An external queue uses its existing sections before falling back to the configured
-# count. Empty keeps the current worker. Unwritable destinations remain pending for retry.
+# eligible queue; ties use the lowest ID. For auto within the same queue, an explicit worker_count
+# defines the candidate range. Candidates must read that queue and allow Stage2. Without a
+# configured range, auto uses existing worker sections or starts from worker 1. An external queue
+# uses its existing sections before falling back to the configured count. Empty keeps the current
+# worker. Unwritable destinations remain pending for retry.
 # Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小
-# 编号。v3 同队列 auto 优先采用显式的 shared.worker_count（兼容 GUI 旧数量），候选须读取该队列并允许
-# Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按
-# 配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。
+# 编号。同队列 auto 优先采用显式的 worker_count，候选须读取该队列并允许 Stage2。未设数量时采用已有分
+# 区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前
+# worker。目标不可写时保留待投递记录。
 
-# handoff.worktodo_file = ""  # string: <path>
-# Destination queue when auto_stage2=1. Empty inherits this worker's effective shared worktodo.
+# handoff_worktodo_file = ""  # string: <path>
+# Destination queue when auto_stage2=1. Empty inherits this worker's effective shared worktodo_file.
 # Accepts an absolute file path or a filename/relative path resolved beside ecm.toml. Save filenames
 # in delivered tasks are absolute. Stage2 finished receipts use the receiving worker's
 # stage2_finished setting from this TOML. Worker sections can override this setting.
-# auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo；可填写绝对文件路径，或相对
-# ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的
-# stage2_finished；worker 分区可覆盖。
+# auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo_file；可填写绝对文件路径，
+# 或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收
+# worker 的 stage2_finished；worker 分区可覆盖。
 
-save_dir = "."  # string: <path>
+stage1_save_dir = "."  # string: <path>
 # Output directory for Stage1 curve saves. Stage2 also searches here when stage2_save_dir is unset.
 # This is not a Stage2 RAM or VRAM budget.
 # 指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此
 # 键不是 Stage2 全部临时显存或内存的预算。
 
-# backup.directory_1 = ""  # string: <path>
-# First destination for Stage1 save synchronization. Empty disables this destination; sync_mode
+# backup_directory_1 = ""  # string: <path>
+# First destination for Stage1 save synchronization. Empty disables this destination; backup_mode
 # controls the files and synchronization policy. Backup only; this path never authorizes publishing
 # a Prime95 task.
-# 指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。 仅用于文件备
+# 指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 backup_mode 决定。 仅用于文件备
 # 份；此路径不作为 Prime95 任务发布依据。
 
-# backup.directory_2 = ""  # string: <path>
+# backup_directory_2 = ""  # string: <path>
 # Second destination for Stage1 save synchronization. Both destinations may be enabled; empty
 # disables only this destination. Backup only; this path never authorizes publishing a Prime95 task.
 # 指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。 仅用于
 # 文件备份；此路径不作为 Prime95 任务发布依据。
 
-# backup.mode = "incremental"  # string: [incremental|full]
+# backup_mode = "incremental"  # string: [incremental|full]
 # Save synchronization after a Stage1 assignment: incremental copies files updated during that
 # assignment; full copies all eligible saves. Startup always performs a full synchronization.
 # 控制 Stage1 任务完成后的存档同步。incremental 仅同步本次任务期间更新的文件；full 同步全部符合条件
 # 的存档。程序启动时仍执行一次完整同步。
 
-# prime95.save_dir = ""  # string: <path>
-# Dedicated save destination for Prime95 handoff; required with p95_worktodo_path. Backup
+# prime95_save_dir = ""  # string: <path>
+# Dedicated save destination for Prime95 handoff; required with prime95_worktodo_file. Backup
 # destinations are independent. Existing published save prefixes must remain unchanged; only
 # complete appended records may extend them.
-# Prime95 交接专用存档目录，启用 p95_worktodo_path 时必须设置。备份目录独立；已发布存档前缀保持不
-# 变，只允许追加完整记录。
+# Prime95 交接专用存档目录，启用 prime95_worktodo_file 时必须设置。备份目录独立；已发布存档前缀保持
+# 不变，只允许追加完整记录。
 
-# prime95.worktodo_file = ""  # string: <path>
-# Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this
-# path and keep saves local; they do not access Prime95 transfer files. Requires p95_sync_dir. The
-# save is validated and published before worktodo.add.
-# 用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路
-# 径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入
-# worktodo.add。
+# prime95_worktodo_file = ""  # string: <path>
+# Prime95 worktodo_file path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore
+# this path and keep saves local; they do not access Prime95 transfer files. Requires
+# prime95_save_dir. The save is validated and published before worktodo_file.add.
+# 用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo_file 路径。Edwards 与 GPU PARAM2 自动忽略此
+# 路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 prime95_save_dir；先验证并发布存档，再
+# 写入 worktodo_file.add。
 
-# prime95.workers = ""  # string: [<n>|<n>,...|<a>-<b>|auto]
+# prime95_workers = ""  # string: [<n>|<n>,...|<a>-<b>|auto]
 # Prime95 workers eligible to receive handoffs: one ID, a comma list, or ranges. The shortest
 # eligible queue is selected. auto reads NumWorkers from prime.txt in the same directory. Empty
 # omits the worker header and uses Prime95's default worker.
@@ -151,13 +150,13 @@ save_dir = "."  # string: <path>
 # 短者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认
 # worker 处理。
 
-# prime95.keep_aid = true  # bool: [false|true|0|1]
+# prime95_keep_aid = true  # bool: [false|true|0|1]
 # Keep PrimeNet assignment IDs in handoffs: 1 retains IDs not known to be invalid; 0 strips all IDs.
 # IDs confirmed invalid by Prime95 logs are always removed to prevent repeated rejection.
 # 控制交接任务是否保留 PrimeNet assignment ID。1 保留未被判定失效的 AID，0 一律去掉；已在 Prime95 日
 # 志中确认失效的 AID 会去掉，以免任务再次被丢弃。
 
-# prime95.recover_lost = true  # bool: [false|true|0|1]
+# prime95_recover_lost = true  # bool: [false|true|0|1]
 # Recover handoffs deleted by Prime95 because of invalid assignment IDs. 1 checks handoff records
 # and Prime95 logs, then reposts confirmed lost assignments without an ID; 0 disables recovery. Only
 # confirmed prior handoffs qualify.
@@ -210,10 +209,10 @@ save_dir = "."  # string: <path>
 
 verbose = true  # bool: [false|true|0|1]
 # Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries;
-# stage2_debug_log independently controls debug logging. Stage1 uses the selected backend's normal
+# debug_log independently controls debug logging. Stage1 uses the selected backend's normal
 # verbosity behavior.
 # 控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由
-# stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
+# debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
 
 curve = ""  # string: [mont|ed|empty]
 # Optional curve override when param is auto. Use mont for Montgomery or ed for Edwards. An omitted
@@ -222,7 +221,7 @@ curve = ""  # string: [mont|ed|empty]
 # param 为 auto 时可用此项指定曲线。mont 为 Montgomery，ed 为 Edwards。省略或留空时按运行模式取默认
 # 值。桌面 OpenCL 支持 1024 bit 以内的 Edwards 和 Montgomery PARAM3。
 
-# gpu_backend = "auto"  # string: [auto|cuda|opencl]
+# stage1_gpu_backend = "auto"  # string: [auto|cuda|opencl]
 # Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the
 # selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device
 # indices belong to the selected backend. Override with --gpu-backend.
@@ -230,34 +229,34 @@ curve = ""  # string: [mont|ed|empty]
 # 要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
 target = "gpu"  # string: [cpu|gpu]
-# Run Stage1 on CPU or GPU. The gpu_backend setting selects CUDA or desktop OpenCL. Both support
-# Edwards within their own width limits.
-# 选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持
-# Edwards。
+# Run Stage1 on CPU or GPU. The stage1_gpu_backend setting selects CUDA or desktop OpenCL. Both
+# support Edwards within their own width limits.
+# 选择 Stage1 在 CPU 或 GPU 执行。stage1_gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内
+# 支持 Edwards。
 
 # cpu_implementation = "auto"  # string: [auto|simd|scalar|gwnum|slice list|empty]
 # Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or
 # an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires
-# AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries
-# each candidate in order on the actual modulus after removing known factors. Overlapping slices are
-# allowed. The first available backend whose slice contains the width is selected. Slices include
-# the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is
-# equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd
-# requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum
-# requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can
-# inherit this TOML policy and leave it inactive.
+# AVX512-IFMA. A list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate
+# in order on the actual modulus after removing known factors. Overlapping slices are allowed. The
+# first available backend whose slice contains the width is selected. Slices include the start and
+# exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to
+# [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires
+# AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires
+# Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can inherit
+# this TOML policy and leave it inactive.
 # 选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实
-# 际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这
-# 样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。
-# 切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用
-# auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。
-# gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此
-# TOML 策略，运行时不启用。
+# 际模数超过 10240 位时要求 AVX512-IFMA。支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样
+# 的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切
+# 片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[]
+# 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum
+# 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策
+# 略，运行时不启用。
 
 # cpu_simd_reduction = "auto"  # string: [auto|montgomery|mersenne-fold]
-# CPU SIMD modular reduction. auto selects for the input; mersenne-fold requires N=2^p-1; montgomery
-# uses general reduction. An explicit reduction requires impl=simd, so it cannot be silently ignored
-# when auto chooses scalar.
+# CPU SIMD modular cpu_simd_reduction. auto selects for the input; mersenne-fold requires N=2^p-1;
+# montgomery uses general cpu_simd_reduction. An explicit cpu_simd_reduction requires impl=simd, so
+# it cannot be silently ignored when auto chooses scalar.
 # CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约
 # 要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。
 
@@ -273,29 +272,17 @@ target = "gpu"  # string: [cpu|gpu]
 # checkpoint.
 # CPU IFMA PRAC 对每个素数尝试的种子数量。恢复 PRAC 检查点时应保持相同搜索宽度。
 
-# cpu_threads = 0  # u32: <x:Z,0..2^32-1>
-# Legacy fallback for cpu.threads and gpu.init_threads in the same scope. A worker-level value
-# overrides global values, and an explicit new key takes priority within the same scope.
-# 同一配置层中 cpu.threads 与 gpu.init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优
-# 先。
-
-# cpu.threads = 0  # u32: <x:Z,0..2^32-1>
+# stage1_cpu_threads = 0  # u32: <x:Z,0..2^32-1>
 # CPU Stage1 arithmetic and preparation threads. 0 uses the backend's automatic selection. Override
 # with --cpu-threads.
 # CPU Stage1 算术与准备线程数。0 由后端自动选择。命令行 --cpu-threads 可覆盖。
 
-# gpu.init_threads = 0  # u32: <x:Z,0..2^32-1>
+# gpu_init_threads = 0  # u32: <x:Z,0..2^32-1>
 # Host curve-construction threads for Edwards CUDA NTT and CUDA/OpenCL one-thread-per-curve Stage1.
 # 0 uses the backend's default. Work is bounded by the available CPUs, curves and memory where
 # applicable. Override with --gpu-init-threads.
 # Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受
 # 可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。
-
-# cpu_affinity = ""  # string: [none|auto|<n>,...|<a>-<b>]
-# Legacy per-thread CPU Stage1 pinning. Used when shared.cpu_affinity is absent. A Stage1 --affinity
-# CLI override uses the legacy pinning behavior for that invocation.
-# 旧版 CPU Stage1 逐线程绑核。未设置 shared.cpu_affinity 时生效。Stage1 命令行 --affinity 仍在本次运
-# 行中使用旧绑核方式。
 
 # save_name_pattern = "{curve}_{target}_{b1}.save"  # string: <pattern>
 # Automatic Stage1 save filename pattern for CPU and GPU. {curve}=e|m0|m2|m3; {target}=m<exponent>
@@ -312,8 +299,8 @@ target = "gpu"  # string: [cpu|gpu]
 # exponent_cache_dir = ""  # string: [off|none|0|-|<dir>]
 # Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout root, or cache/
 # next to the executable for standalone installs. off, none, 0, or - disables caching. Explicit
-# relative paths use the current working directory. Small B1 values may skip writing the scalar
-# cache.
+# relative paths use the current working directory. Small B1 values may queue_skip writing the
+# scalar cache.
 # 指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的
 # cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓
 # 存。
@@ -342,10 +329,11 @@ target = "gpu"  # string: [cpu|gpu]
 # 最大容量。
 
 # montgomery_lcm_multiplier = "1"  # string: [1|12]
-# Montgomery Stage1 scalar is lcm(1..B1) multiplied by 1 or 12. Edwards uses its fixed 48*lcm scalar
-# and rejects 12. This choice changes the output point and must match the Stage2 save convention.
-# Montgomery Stage1 标量是 lcm(1..B1) 乘 1 或 12。Edwards 固定使用 48·lcm，不接受 12。此选择改变输出
-# 点，须与 Stage2 存档约定一致。
+# Montgomery Stage1 scalar is montgomery_lcm_multiplier(1..B1) multiplied by 1 or 12. Edwards uses
+# its fixed 48*montgomery_lcm_multiplier scalar and rejects 12. This choice changes the output point
+# and must match the Stage2 save convention.
+# Montgomery Stage1 标量是 montgomery_lcm_multiplier(1..B1) 乘 1 或 12。Edwards 固定使用
+# 48·montgomery_lcm_multiplier，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。
 
 # sigma = 0  # u64: <x:Z,0..2^64-1>
 # Initial curve sigma. 0 chooses a random value; consecutive curves use sigma+i without 64-bit
@@ -370,7 +358,7 @@ target = "gpu"  # string: [cpu|gpu]
 # 设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或
 # Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。
 
-# gpu_device = 0  # int: <x:Z,0..device_count-1>
+# stage1_gpu_device = 0  # int: <x:Z,0..device_count-1>
 # Zero-based GPU device ID for Stage1. Stage2 inherits it unless stage2_device is explicitly set.
 # IDs refer to the device list exposed by the executable's actual GPU backend.
 # 选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对
@@ -387,96 +375,96 @@ target = "gpu"  # string: [cpu|gpu]
 # Edwards 和 Montgomery PARAM0。CUDA thread 支持最高 1024 bit 的 Edwards。OpenCL worker 的 cgbn 规则
 # 使用其原有 OpenCL 算法。
 
-# cuda.thread_block_size = 128  # int: [32|64|128|256]
+# thread_block_size = 128  # int: [32|64|128|256]
 # CUDA block size for the Edwards thread algorithm only. Use 32, 64, 128 or 256. CLI --wg overrides
 # it; --wg 0 selects 128.
 # 仅用于 CUDA Edwards thread 的线程块大小，可选 32、64、128 或 256。CLI --wg 可覆盖，--wg 0 选择 128
 # 。
 
-# ntt.convolution = "auto"  # string: [auto|linear|weighted]
+# ntt_convolution = "auto"  # string: [auto|linear|weighted]
 # Auto selects the measured backend or calibrates on a cache miss. Explicit modes select exact
 # linear convolution or weighted cyclic convolution (IBDWT). Both use Goldilocks and the same Stage1
 # task and checkpoint format.
 # auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用
 # Goldilocks，共用 Stage1 任务及检查点格式。
 
-# ntt.allow_known_factors = 1  # int: [0|1]
+# ntt_allow_known_factors = 1  # int: [0|1]
 # 1 allows Mersenne assignments with known factors to use NTT arithmetic modulo the full 2^p-1.
 # Construction, factor checks and published saves use the remaining cofactor. 0 excludes this
 # carrier path. Algorithm slice rules still match the cofactor bit width.
 # 1 允许带已知因子的梅森任务使用完整 2^p-1 进行 NTT 运算。曲线构造、因子检查和发布存档使用剩余余因
 # 子。0 禁用此承载路径。算法切片仍按余因子的位宽匹配。
 
-# ntt.pad_batch = 0  # int: [0|1]
+# ntt_pad_batch = 0  # int: [0|1]
 # 0 runs exactly the requested number of Stage1 NTT curves. 1 rounds the final batch up to the
 # selected size when resources permit. Each extra curve gets a new sigma and is included in the
 # results and any eligible Stage2 handoff.
 # 0 按任务请求的曲线数运行 Stage1 NTT。1 在资源允许时用真实曲线把尾批补齐到优选批量。新增曲线使用独
 # 立 sigma，计入结果和符合条件的 Stage2 交接。
 
-# ntt.tight_weighted_bound = true  # bool: [false|true|0|1]
+# ntt_tight_weighted_bound = true  # bool: [false|true|0|1]
 # Use the tighter unsigned coefficient bound for native Edwards NAF in CUDA Stage1. With automatic
 # convolution and length, prefer a safe short weighted plan that needs this bound. False restores
 # the conservative bound and measured backend selection.
 # CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的
 # 安全短加权计划。false 恢复保守界和实测后端选型。
 
-# ntt.memory_mib = 0  # int: [0,1048576]
+# ntt_memory_mib = 0  # int: [0,1048576]
 # Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An
 # explicit cap is also bounded by available VRAM.
 # Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。
 
-# ntt.length = 0  # int: 0, 2^k in [2,65536], or 5*2^k in [2560,20480] (weighted)
+# ntt_length = 0  # int: 0, 2^k in [2,65536], or 5*2^k in [2560,20480] (weighted)
 # Transform length. Zero derives safe lengths, including shorter supported radix-5 shapes for
 # weighted convolution.
 # 变换长度。0 推导安全长度，加权卷积包含支持且更短的 radix-5 形状。
 
-# ntt.bits_per_word = 0  # int: 0 or [16,31]
+# ntt_bits_per_word = 0  # int: 0 or [16,31]
 # Bits per digit. Zero selects the widest exact linear packing or the shortest safe weighted
 # transform. In weighted mode, an explicit value is an upper bound on the largest digit.
 # 每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。
 
-# ntt.profile = 0  # int: [0|1|2]
+# ntt_profile = 0  # int: [0|1|2]
 # Per-length transform profile: 0 automatic, 1 full tile (up to 12 bits), 2 split tile (up to 10
 # bits). Explicit tile and outer overrides take precedence.
 # 按长度选择的变换配置：0 自动，1 大 tile（至多 12 层），2 分块 tile（至多 10 层）。显式 tile 和外层
 # 设置优先。
 
-# ntt.tile = 0  # int: [0,12]
+# ntt_tile = 0  # int: [0,12]
 # Fused tile width in radix-2 layers. Zero uses the profile.
 # 融合 tile 的 radix-2 层数。0 使用所选配置。
 
-# ntt.outer_radix_limit = 0  # int: [0,4]
+# ntt_outer_radix_limit = 0  # int: [0,4]
 # Maximum fused radix-2 layers per outer pass. Zero uses the profile.
 # 每个外部 pass 最多融合的 radix-2 层数。0 使用所选配置。
 
-# ntt.window_bits = -1  # int: [-1,64]
+# ntt_window_bits = -1  # int: [-1,64]
 # Ladder bits per CUDA Graph replay. -1 uses the profile; 0 uses direct launches.
 # 每次 CUDA Graph 重放处理的阶梯位数。-1 使用所选配置，0 使用直接启动。
 
-# ntt.warp_tail = "auto"  # bool|string: [auto|false|true|0|1]
+# ntt_warp_tail = "auto"  # bool|string: [auto|false|true|0|1]
 # Enable warp shuffles for the local tail of the tile transform. Auto uses the selected profile.
 # 用 warp shuffle 处理 tile 变换的局部尾部。auto 使用所选配置。
 
-# opencl.threads_per_integer = 8  # u32: [1|2|4|8|16|32]
+# opencl_threads_per_integer = 8  # u32: [1|2|4|8|16|32]
 # OpenCL threads per integer, subject to limb-layout constraints. CUDA selects TPI by operand width
 # and ignores this key. This is not the CUDA block size.
 # 设置 OpenCL 每个大整数使用的线程数，需满足有效 TPI 与整数 limb 数的布局约束。CUDA 后端自行按位宽选
 # 择 TPI，不使用此键；不要用它调整 CUDA 的线程块大小。
 
-# opencl.workgroup_size = 0  # int: <x:Z,x>=0>
+# opencl_workgroup_size = 0  # int: <x:Z,x>=0>
 # OpenCL work-group size. 0 lets the backend select automatically; explicit values must satisfy
 # device and kernel limits. CUDA ignores this setting.
 # 设置 OpenCL 工作组大小，0 由后端自动选择。显式值必须满足当前设备和内核的限制；CUDA 后端不使用此设
 # 置。
 
-# opencl.kernel_mul = ""  # string: [auto|<id>|<alias>]
+# opencl_kernel_mul = ""  # string: [auto|<id>|<alias>]
 # OpenCL modular multiplication. PARAM3 accepts registered IDs and aliases. Edwards defaults to cios
 # and accepts fips or NVIDIA-only fips_ptx through 512-bit moduli. CUDA ignores this key.
 # 选择 OpenCL 模乘。PARAM3 接受注册的内核 ID 和别名。Edwards 默认 cios，最高 512 bit 可选 fips 或
 # NVIDIA 专用的 fips_ptx。CUDA 忽略此键。
 
-# opencl.kernel_sqr = ""  # string: [auto|<id>|<alias>]
+# opencl_kernel_sqr = ""  # string: [auto|<id>|<alias>]
 # OpenCL modular squaring. PARAM3 accepts registered IDs and aliases. Edwards auto reuses the
 # selected multiplier. Explicit cios selects CIOS, while fips and NVIDIA-only fips_ptx select
 # symmetric FIPS through 512 bits. On one Edwards task, select the same FIPS implementation for both
@@ -485,28 +473,28 @@ target = "gpu"  # string: [cpu|gpu]
 # CIOS，fips 和 NVIDIA 专用的 fips_ptx 在 512 bit 以内使用对称 FIPS。一个 Edwards 任务使用同一种
 # FIPS 实现。CUDA 忽略此键。
 
-# opencl.kernel_add = ""  # string: [auto|<id>|<alias>]
+# opencl_kernel_add = ""  # string: [auto|<id>|<alias>]
 # OpenCL modular-addition kernel ID or alias. Empty or auto lets the backend choose; automatic
 # selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 模加内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 
-# opencl.kernel_sub = ""  # string: [auto|<id>|<alias>]
+# opencl_kernel_sub = ""  # string: [auto|<id>|<alias>]
 # OpenCL modular-subtraction kernel ID or alias. Empty or auto lets the backend choose; automatic
 # selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 模减内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 
-# opencl.kernel_special_mult = ""  # string: [auto|<id>|<alias>]
+# opencl_kernel_special_mult = ""  # string: [auto|<id>|<alias>]
 # OpenCL special-multiplication kernel ID or alias. Empty or auto lets the backend choose; automatic
 # selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 特殊乘法内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 
-# submission_file = "results.json.txt"  # string: <path>
+# stage1_submission_file = "results.json.txt"  # string: <path>
 # Stage1 submission JSON: seal NF once the whole task completes (B2=B1); publish verified factors
 # immediately as individual curves. Private ledgers live under the output directory data/.
 # Stage1 提交 JSON：整条任务完成后合并 NF（B2=B1）；验证后的因子立即单曲线输出。私有账本位于输出目录
 # 的 data/ 下。
 
-# results_file = "stage1_results.jsonl"  # string: <path>
+# stage1_results_file = "stage1_results.jsonl"  # string: <path>
 # Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from
 # submission output.
 # 统一格式的逐曲线 Stage1 内部 JSONL，包含 CRC32 与执行元数据，与提交文件分开。
@@ -518,54 +506,54 @@ target = "gpu"  # string: [cpu|gpu]
 # GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的乘积。设为 0 时由其他设置选择 B2。乘积
 # 超出范围会报错。
 
-# submission_file = "results.json.txt"  # string: <path>
+# stage2_submission_file = "results.json.txt"  # string: <path>
 # Submission-only ECM JSON lines, separate from the internal results JSONL. Uses a reference FFT
 # size from Prime95 mult.asm. Personal identifiers and checksums belong only in local ignored files.
 # 仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存
 # 在本地忽略文件中。
 
-# results_file = ""  # string: <path>
+# stage2_results_file = ""  # string: <path>
 # Optional per-curve Stage2 JSONL for CPU and GPU queue tasks. Empty disables it for queue runs.
 # Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint
 # migration completes.
 # CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint
 # 迁移完成前保留原 JSONL。
 
-# diagnostics.debug_log_file = ""  # string: <path>
-# Separate Stage2 debug log, written only when stage2_debug_log is enabled. Empty restores the
-# default filename. Default names gain a worker suffix; explicit paths are used unchanged.
-# 指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按
-# worker 加后缀，显式指定时按原路径使用。
+# debug_log_file = ""  # string: <path>
+# Separate Stage2 debug log, written only when debug_log is enabled. Empty restores the default
+# filename. Default names gain a worker suffix; explicit paths are used unchanged.
+# 指定 Stage2 独立调试日志文件，仅在 debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加
+# 后缀，显式指定时按原路径使用。
 
 # checkpoint_legacy_file = ""  # string: <path>
 # Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix
 # .progress file. A matching task's completed count and pending receipt are imported into its own
 # .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this
-# task. New progress files use stage2_progress_dir; no arithmetic state is checkpointed.
+# task. New progress files use checkpoint_dir; no arithmetic state is checkpointed.
 # 旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确
 # 认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件
-# 使用 stage2_progress_dir，不保存曲线内部算术状态。
+# 使用 checkpoint_dir，不保存曲线内部算术状态。
 
 # checkpoint_dir = ""  # string: <dir>
 # Directory for per-task .ecm_ckpt_stage2_<bits>_<B1>.dat progress files. Empty uses the legacy
 # progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N,
-# full save contents and skip. On restart the current effective B2/Auto B2 and requested curve count
-# override the checkpoint policy; completed curves retain their actual bounds. A target below the
-# completed count warns and seals all completed work. New checkpoints contain completed curve state
-# and pending submission data. They are removed after publication and queue advancement.
+# full save contents and queue_skip. On restart the current effective B2/Auto B2 and requested curve
+# count override the checkpoint policy; completed curves retain their actual bounds. A target below
+# the completed count warns and seals all completed work. New checkpoints contain completed curve
+# state and pending submission data. They are removed after publication and queue advancement.
 # 每任务 .ecm_ckpt_stage2_<bits>_<B1>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队
-# 列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完
-# 成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态
-# 和待发布结果；结果发布并推进队列后清除。
+# 列目录。任务 ID 绑定 AID、N、完整 save 内容和 queue_skip。重启采用当前有效 B2/Auto B2 及请求曲线
+# 数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成
+# 曲线状态和待发布结果；结果发布并推进队列后清除。
 
-# save_dir = ""  # string: <dir>
+# stage2_save_dir = ""  # string: <dir>
 # Directory searched for saves referenced by Stage2 assignments. Empty inherits tmp_dir; absolute
 # save paths in assignments are used directly. Source saves are read and validated without
 # modification.
 # 指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路
 # 径。程序读取并验证源 save，不修改其内容。
 
-# diagnostics.debug_log = false  # bool: [false|true|0|1]
+# debug_log = false  # bool: [false|true|0|1]
 # Write Stage2 debug details to a separate log: true enables and false disables. verbose=true does
 # not enable debug logging; enabling this option does not send all debug details to the console.
 # 控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，
@@ -577,19 +565,19 @@ target = "gpu"  # string: [cpu|gpu]
 # 统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不
 # 区分大小写，可用 --target 覆盖。
 
-# gpu_device = -1  # int: [-1|0..2^31-1]
+# stage2_gpu_device = -1  # int: [-1|0..2^31-1]
 # Stage2 CUDA device ID. -1 inherits Stage1's device; 0 or greater selects a CUDA device explicitly.
 # Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。
 
 # log_level = "phases"  # int|string: [quiet|curve|phases|batches|debug|0..4]
 # Legacy console level: quiet, curve, phases, batches, and debug map to 0..4. Unset follows verbose.
 # In production, debug enables the separate debug log while normal console detail remains capped at
-# batches. Usually use verbose and stage2_debug_log.
+# batches. Usually use verbose and debug_log.
 # 兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose
 # 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和
-# stage2_debug_log。
+# debug_log。
 
-# diagnostics.ntt_length_counts = false  # bool: [false|true|0|1]
+# ntt_length_counts = false  # bool: [false|true|0|1]
 # Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables
 # collection and output. Counts mathematical transforms (two forwards and one inverse per
 # convolution), including polynomial initialization and main work, excluding Stage1 and independent
@@ -599,27 +587,27 @@ target = "gpu"  # string: [cpu|gpu]
 # 积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。
 # Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。
 
-# gpu_backend = "auto"  # string: [auto|cuda|opencl]
+# stage2_gpu_backend = "auto"  # string: [auto|cuda|opencl]
 # Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the
 # selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device
 # indices belong to the selected backend. Override with --gpu-backend.
 # Windows GPU 工作程序。auto 优先同目录的 CUDA 程序及所选编号可见的 CUDA 设备，其次 OpenCL。显式选择
 # 要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
-# cpu.backend = "auto"  # string: [auto|gwpoly|ntt|plain]
+# cpu_backend = "auto"  # string: [auto|gwpoly|ntt|plain]
 # CPU arithmetic for Edwards continuation. Auto uses GWNUM/polymult when available, then libecm.
 # Override with --backend.
 # Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。
 
-# cpu.threads = 1  # u64: [1,1024]
+# stage2_cpu_threads = 1  # u64: [1,1024]
 # CPU Stage2 thread count per worker. Override with --threads.
 # 每个 CPU Stage2 worker 的线程数。命令行 --threads 可覆盖。
 
-# cpu.memory_mib = 512  # u64: [1,1048576]
+# cpu_memory_mib = 512  # u64: [1,1048576]
 # CPU Stage2 arithmetic memory budget in MiB. Override with --memory-mib.
 # CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。
 
-# opencl.point_plan = "auto"  # string: [auto|device|chain|cpu]
+# opencl_point_plan = "auto"  # string: [auto|device|chain|cpu]
 # OpenCL point generation. Auto starts with the qualified plan and can learn from complete curves.
 # Device selects the device ladder plan (including its qualified short batches); chain requests
 # consecutive giant seeds; cpu uses GMP points with OpenCL trees. Manual settings bypass runtime
@@ -627,34 +615,34 @@ target = "gpu"  # string: [cpu|gpu]
 # OpenCL 点生成。auto 从已验证的默认计划起步，可用完整曲线继续调优。device 使用设备点计划（含已验证
 # 短批次）；chain 选择连续巨步种子；cpu 使用 GMP 点及 OpenCL 树。手动计划跳过运行时探索。
 
-# opencl.point_chunk = 0  # u64: [0..4096]
+# opencl_point_chunk = 0  # u64: [0..4096]
 # Maximum points per OpenCL command. Zero uses automatic sizing. A positive value locks the chunk
 # and disables runtime plan trials.
 # 每条 OpenCL 命令的点数。0 自动；正值锁定分块并关闭运行时计划试探。
 
-# opencl.point_group = 0  # u64: [0..4096]
+# opencl_point_group = 0  # u64: [0..4096]
 # Local OpenCL point work-group size. Zero uses the backend default. Positive sizes must fit both
 # device and kernel limits.
 # OpenCL 点工作组大小。0 使用后端默认；正值必须符合设备与内核上限。
 
-# opencl.point_window = 0  # u64: [0..65536]
+# opencl_point_window = 0  # u64: [0..65536]
 # Giant coordinate staging window in points. Zero uses the backend plan; positive requests are
 # clipped by the budget and G batch boundaries.
 # 巨步坐标暂存窗口点数。0 由后端选型；正值按预算和 G 批次边界调整。
 
-# opencl.short_point_batch = true  # bool: [false|true|0|1]
+# opencl_short_point_batch = true  # bool: [false|true|0|1]
 # Allow qualified short device batches. False disables batched baby ladders and paired giants from
 # the short-batch policy.
 # 允许已验证的短设备批次。关闭后不使用该策略合并 baby 提交及配对 giant。
 
-# opencl.tune_file = "stage2_opencl_tune.toml"  # string: <path>
+# opencl_tune_file = "stage2_opencl_tune.toml"  # string: <path>
 # Native OpenCL point timing profile. Relative to ecm.toml, with per-worker overrides. Empty
-# disables profile learning. Uses stage2_tune_runtime, stage2_tune_min_repeats and
-# stage2_tune_runtime_samples.
+# disables profile learning. Uses tune_runtime_enabled, tune_min_repeats and
+# tune_runtime_sample_limit.
 # 原生 OpenCL 点计划计时文件。相对 ecm.toml，可按 worker 覆盖；空路径关闭学习。共用
-# stage2_tune_runtime、stage2_tune_min_repeats 和 stage2_tune_runtime_samples。
+# tune_runtime_enabled、tune_min_repeats 和 tune_runtime_sample_limit。
 
-# cuda.baby_backend = "auto"  # string: [auto|scalar|coop32]
+# baby_backend = "auto"  # string: [auto|scalar|coop32]
 # Baby point arithmetic: auto retains the scalar baseline until checked runtime comparisons qualify
 # coop32; scalar forces one thread per point; coop32 requests 32 cooperating CUDA threads for
 # arithmetic widths 8193..16384 bits. Unsupported widths or device-baby fallback use scalar. Runtime
@@ -666,7 +654,7 @@ target = "gpu"  # string: [cpu|gpu]
 # 链长比较一个后端候选，再继续D搜索。CLI --baby-backend覆盖当前worker配置；省略此键时保留显式
 # NTT_BABY_COOP。OpenCL仅支持auto/scalar。
 
-# cuda.giant_backend = "auto"  # string: [auto|scalar|coop16|coop32]
+# giant_backend = "auto"  # string: [auto|scalar|coop16|coop32]
 # Giant chain arithmetic: auto keeps scalar until checked comparisons qualify coop32 or coop16, then
 # selects the fastest measured route including point startup checks. At fixed D/layout/chain, try
 # one alternative at a time after baby selection; reuse paired regions by arithmetic width, chain
@@ -681,7 +669,7 @@ target = "gpu"  # string: [cpu|gpu]
 # 8193..16384 bits及合格chain；seed和[D]Q不变。显式scalar/coop16/coop32固定后端。CLI --giant-backend
 # 覆盖当前worker配置；省略时保留显式NTT_GIANT_COOP。OpenCL仅支持auto/scalar。
 
-# cuda.seed_backend = "auto"  # string: [auto|scalar|coop32]
+# seed_backend = "auto"  # string: [auto|scalar|coop32]
 # Giant paired-seed and GPU [D]Q arithmetic: auto keeps scalar until checked, repeated same-shape
 # comparisons qualify coop32, then selects the fastest measured route including point startup
 # checks. At fixed D/layout/chain/baby/giant arithmetic, try one alternative per family before
@@ -698,15 +686,16 @@ target = "gpu"  # string: [cpu|gpu]
 # 也不合并；NTT表仍可复用。CLI --seed-backend覆盖当前worker；省略时保留显式NTT_GIANT_SEED_COOP=0|32
 # 。OpenCL实际为scalar。
 
-# cuda.reduce_backend = "auto"  # string: [auto|scalar|coop32]
-# Ordinary S4 coefficient reduction: auto keeps scalar until repeated same-shape comparisons qualify
-# coop32, then uses the fastest checked total including point startup checks. At fixed
-# D/layout/chain/point backends, it adds at most one missing cooperative variant at a time (two-pass
-# or merged), then extends D after checked comparisons. CUDA arithmetic widths 8193..16384 bits can
-# use shared warp remainders; smaller widths and exact Mersenne reduction keep their kernels. Actual
-# reduce_coop, threads and kernel identity stay separate in ECM timing rows even if environment
-# matching is ignored; standalone NTT tables remain reusable. CLI --reduce-backend overrides this
-# worker key; omission preserves explicit NTT_S4_COOP_REDUCE=0|32. OpenCL uses scalar.
+# reduce_backend = "auto"  # string: [auto|scalar|coop32]
+# Ordinary S4 coefficient cpu_simd_reduction: auto keeps scalar until repeated same-shape
+# comparisons qualify coop32, then uses the fastest checked total including point startup checks. At
+# fixed D/layout/chain/point backends, it adds at most one missing cooperative variant at a time
+# (two-pass or merged), then extends D after checked comparisons. CUDA arithmetic widths 8193..16384
+# bits can use shared warp remainders; smaller widths and exact Mersenne cpu_simd_reduction keep
+# their kernels. Actual reduce_coop, threads and kernel identity stay separate in ECM timing rows
+# even if environment matching is ignored; standalone NTT tables remain reusable. CLI
+# --reduce-backend overrides this worker key; omission preserves explicit NTT_S4_COOP_REDUCE=0|32.
+# OpenCL uses scalar.
 # 普通S4逐系数归约：默认auto，在同形状重复对照合格前保留scalar，再按含点启动检查的实测总耗时选择最快
 # 项。每个算术家族固定D／布局／链长／点后端，每次仅增加一个缺少的协作变体（两遍／合并），完成有效对
 # 照后再继续D搜索。CUDA实际算术8193..16384 bits可使用共享余数；较小位宽和精确梅森归约保持原内核。实
@@ -746,13 +735,13 @@ target = "gpu"  # string: [cpu|gpu]
 
 # giant_chain = "64"  # string: [64|32|auto]
 # Points per sequential CUDA thread chain, independent of CUDA block size. 64 preserves the
-# baseline; 32 explicitly selects shorter chains. auto retains 64 until stage2_tune_min_repeats
-# admitted runtime observations support 32, with bounded useful-curve probes. Policies have separate
-# tune identities. Hit/nonunit replays the legacy 64-point full interval. CLI --giant-chain
-# overrides this worker TOML.
+# baseline; 32 explicitly selects shorter chains. auto retains 64 until tune_min_repeats admitted
+# runtime observations support 32, with bounded useful-curve probes. Policies have separate tune
+# identities. Hit/nonunit replays the legacy 64-point full interval. CLI --giant-chain overrides
+# this worker TOML.
 # 每条CUDA线程链连续生成的点数，与CUDA线程块大小无关。64保留基线，32显式使用短链；auto在满足
-# stage2_tune_min_repeats门槛的准入实测支持32前保留64，并进行有界正常曲线探测。各策略具有独立tune身
-# 份。命中或非单位时按旧64点链重放完整区间。CLI --giant-chain覆盖当前worker配置。
+# tune_min_repeats门槛的准入实测支持32前保留64，并进行有界正常曲线探测。各策略具有独立tune身份。命中
+# 或非单位时按旧64点链重放完整区间。CLI --giant-chain覆盖当前worker配置。
 
 # relocation = false  # bool: [false|true|0|1]
 # Optional production GPU Stage2 conservative relocation. Keeps B2 and the original giant endpoint,
@@ -782,27 +771,27 @@ target = "gpu"  # string: [cpu|gpu]
 # 手动指定 Stage2 算法步长 D。0 自动选形；非零值除满足偶数且不小于 6 外，还必须满足当前引擎的布局限
 # 制。D 会改变树规模、批次数和内存需求，通常保持自动。
 
-# memory.s4_batch_mib = 64  # u64: <x:Z,1..2^20>
+# s4_batch_mib = 64  # u64: <x:Z,1..2^20>
 # Stage2 S4 batch-buffer budget in MiB. Larger budgets may reduce batching overhead but consume more
 # VRAM. This limits the corresponding buffers, not total process VRAM.
 # 设置 Stage2 S4 批次的工作缓冲预算，单位为 MiB。增大预算可能减少分批开销，但会占用更多显存；它只约
 # 束对应批次缓冲，不是整个进程的显存上限。
 
-# memory.arena_mib = 0  # u64: <x:Z,0..2^20>
+# arena_mib = 0  # u64: <x:Z,0..2^20>
 # Stage2 large-workspace budget in MiB, used to plan available NTT shapes. 0 uses environment
 # settings or automatic planning, not zero VRAM. Too little may force smaller shapes or prevent
 # execution. Tables, coordinates, and other modules may allocate additional VRAM.
 # 设置 Stage2 大工作区预算，单位为 MiB，用于规划可用的 NTT 工作形状。0 由运行环境或自动规划决定，不
 # 表示不使用显存；过小可能迫使较小工作形状或使任务无法运行。表、坐标和其他模块仍可能另占显存。
 
-# memory.fold_resident_mib = 640  # u64: <x:Z,0..2^20>
+# fold_resident_mib = 640  # u64: <x:Z,0..2^20>
 # Budget in MiB for keeping fold accumulators on the GPU. 0 disables this residency. Exceeding the
 # budget may fall back to batching, substantially increasing processing and transfer costs.
 # Independent of arena and batch budgets; not a total VRAM limit.
 # 设置 fold 累积结果驻留 GPU 的预算，单位为 MiB。0 关闭这部分驻留；所需空间超过预算时可退回分批路
 # 径，可能显著增加处理和传输开销。此预算与大工作区、批次缓冲分别控制，不是总显存限制。
 
-# diagnostics.decompose_factors = false  # bool: [false|true|0|1]
+# decompose_factors = false  # bool: [false|true|0|1]
 # Further decompose found factors: 1 uses the shared diagnostic service (local PARI DLL first,
 # external GP second); GMP is never selected automatically. 0 keeps only factors extracted and
 # verified by Stage2. Only complete, proven decomposition sets factorization_complete. Unfinished
@@ -811,33 +800,33 @@ target = "gpu"  # string: [cpu|gpu]
 # 只保留 Stage2 已得到并验证的因子。仅完整且全部已证素的分解标为完成；诊断未完成仍保留原始因子与曲线
 # 成功状态。
 
-# diagnostics.skip_prime_attribution = false  # bool: [false|true|0|1]
+# skip_prime_attribution = false  # bool: [false|true|0|1]
 # Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips
 # attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic
-# policy. This does not disable decomposition or change stage2_factorize_hits.
+# policy. This does not disable decomposition or change decompose_factors.
 # 控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提
-# 取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 stage2_factorize_hits。
+# 取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 decompose_factors。
 
 # auto_b2 = false  # bool: [false|true|0|1]
 # Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time including Stage1
 # cost; 0 disables. Requires usable Stage2 costs and positive Stage1 s/curve. B1 never gates tune
-# reuse; stage2_tune_ignore controls other conditions. Memory and carrier divisibility are checked
-# on the current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its
-# original qualification checks.
+# reuse; tune_ignore controls other conditions. Memory and carrier divisibility are checked on the
+# current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its original
+# qualification checks.
 # 所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用
-# Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 stage2_tune_ignore 控制。当
-# 前输入仍检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。
+# Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 tune_ignore 控制。当前输入仍
+# 检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。
 
-# diagnostics.gp = ""  # string: <exe>
+# gp = ""  # string: <exe>
 # External PARI/GP fallback executable for optional factor decomposition. The local PARI DLL is
-# tried first. gp.exe follows Windows executable search rules; a full path is accepted. GP failure
-# preserves partial PARI results and never enables GMP automatically. Dataset scripts retain their
-# separate --gp resolution rules.
-# 指定附加因子分解的外部 PARI/GP 备选程序，默认先使用本地 PARI DLL。gp.exe 按 Windows 程序搜索规则查
-# 找，也接受完整路径。GP 失败保留 PARI 部分结果，不自动使用 GMP；数据集脚本继续使用各自的 --gp 路径
-# 规则。
+# tried first. gp.stage1_exe follows Windows executable search rules; a full path is accepted. GP
+# failure preserves partial PARI results and never enables GMP automatically. Dataset scripts retain
+# their separate --gp resolution rules.
+# 指定附加因子分解的外部 PARI/GP 备选程序，默认先使用本地 PARI DLL。gp.stage1_exe 按 Windows 程序搜
+# 索规则查找，也接受完整路径。GP 失败保留 PARI 部分结果，不自动使用 GMP；数据集脚本继续使用各自的
+# --gp 路径规则。
 
-# diagnostics.factor_timeout_seconds = 30  # u64: <x:Z,1..600>
+# factor_timeout_seconds = 30  # u64: <x:Z,1..600>
 # Timeout in seconds for each external GP fallback decomposition call. Local PARI calls have a
 # 5-second process deadline and a 10-second cumulative session budget per curve worker. Explicit GMP
 # analysis remains bounded to 2 seconds per call. These diagnostics never change the original factor
@@ -845,21 +834,21 @@ target = "gpu"  # string: [cpu|gpu]
 # 设置备选外部 GP 分解调用的超时秒数。本地 PARI 单次进程限 5 秒、单曲线 worker 会话累计限 10 秒；显
 # 式选择 GMP 时单次限 2 秒。附加诊断不改变原始因子或 Stage2 成功状态。
 
-# tune.legacy_cost_profile = ""  # string: <path>
+# tune_legacy_cost_profile = ""  # string: <path>
 # Legacy .cprof cost profile for Auto B2 when stage2_tune_profile is empty. Checks the original
 # binary/device/arithmetic and calibration contract; new full ECM tune does not relax those checks.
 # Empty supplies no legacy profile.
 # stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保持原二进制、设备、算术及标定资格
 # 检查；新的完整 ECM tune 不放宽旧合同。留空不提供旧配置。
 
-# cuda.auto_carrier = true  # bool: [false|true|0|1]
+# auto_carrier = true  # bool: [false|true|0|1]
 # Add M=2^p-1 for validated ECMSTAGE2=1,2,p,-1 saves when N divides M and 2<=p<=16384. Compare
-# ordinary cost at target_bits with Mersenne cost at arithmetic_bits=p, using
-# stage2_prediction_policy. Full M_p already has native Mersenne arithmetic. Explicit carrier
-# options take priority; a cofactor save needs a matching task to infer p.
+# ordinary cost at target_bits with Mersenne cost at arithmetic_bits=p, using prediction_policy.
+# Full M_p already has native Mersenne arithmetic. Explicit carrier options take process_priority; a
+# cofactor save needs a matching task to infer p.
 # 对有效ECMSTAGE2=1,2,p,-1保存点，验证N整除M=2^p-1且2<=p<=16384后加入承载候选。普通成本按target_bits
-# 、梅森成本按arithmetic_bits=p查询，并遵循stage2_prediction_policy；完整M_p已使用原生梅森算术，不重
-# 复加入相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。
+# 、梅森成本按arithmetic_bits=p查询，并遵循prediction_policy；完整M_p已使用原生梅森算术，不重复加入
+# 相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。
 
 # prediction_policy = "model"  # string: [model|paired]
 # model: prefer exact paired measurements, otherwise compare generic and Mersenne arithmetic-width
@@ -870,74 +859,73 @@ target = "gpu"  # string: [cpu|gpu]
 # 准入才替换。缺调优资料时使用明确标为估算的4060 Laptop/1800MHz基础模型；未覆盖的NTT/驻留区间保留默
 # 认。paired恢复原精确位宽/B2实测收益门禁。B1不作为复用门槛。
 
-# tune.arithmetic = "both"  # string: [both|generic|mersenne]
+# tune_arithmetic = "both"  # string: [both|generic|mersenne]
 # Arithmetic families for explicit width-grid ECM tune: both, generic probable-prime N, or Mersenne
 # 2^p-1 arithmetic after stripping proper-exponent inherited factors and small target divisors. p is
 # the requested grid arithmetic width; actual cofactor width is recorded separately. Real
-# worktodo/save pairs continue to follow stage2_auto_carrier. Invalid or factor-producing synthetic
+# worktodo_file/save pairs continue to follow auto_carrier. Invalid or factor-producing synthetic
 # Mersenne fixtures are skipped, never saved as timing measurements.
 # 显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数
 # 继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实
-# worktodo/save配对仍遵循stage2_auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。
+# worktodo_file/save配对仍遵循auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。
 
-# tune.runtime_enabled = true  # bool: [false|true|0|1]
+# tune_runtime_enabled = true  # bool: [false|true|0|1]
 # CUDA accumulates checked no-factor production timings by device, environment and execution shape.
 # Identical complete parameters share one matrix row with repeats, mean time and sample standard
 # deviation. Slower observations count too. Row version and UTC update time record provenance only.
 # Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first,
-# then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked
-# by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D
-# choices across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic.
-# Cache failure does not fail a completed curve. false disables single-curve runtime trials,
-# collection and writes. CPU can still read qualified observations. Parallel queue decisions use
-# stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.
+# then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the
+# fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices
+# across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache
+# failure does not fail a completed curve. false disables single-curve runtime trials, collection
+# and writes. CPU can still read qualified observations. Parallel queue decisions use
+# curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.
 # CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存
 # repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计
-# 时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 stage2_tune_min_repeats 后采
-# 用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入
+# 时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最
+# 快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入
 # [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和
-# 写回，CPU 仍可只读复用合格记录。双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在
-# stage2_opencl_tune_profile 中学习点计划。
+# 写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在
+# opencl_tune_file 中学习点计划。
 
-# cuda.curve_concurrency = "serial"  # string: [auto|serial|dual]
+# curve_concurrency = "serial"  # string: [auto|serial|dual]
 # CUDA Stage2 curve scheduling. auto measures serial and eligible dual-slot modes. serial is the
 # default. dual requests two slots subject to device admission. CLI: --parallel auto|0|1|2.
 # CUDA Stage2 曲线调度。auto 实测串行和可准入的双槽模式。默认 serial 串行执行，dual 请求双槽并检查显
 # 存准入。命令行仍使用 --parallel auto|0|1|2。
 
-# cuda.workspace_policy = "auto"  # string: [auto|independent|leased]
+# workspace_policy = "auto"  # string: [auto|independent|leased]
 # independent gives each CUDA Stage2 slot a workspace. leased lets the second slot prepare and
 # compute baby points before leasing the heavy workspace at the F-tree boundary. auto compares both
 # and uses leased directly if only it fits.
 # independent 为两个 CUDA Stage2 槽分别分配工作区。leased 允许下一槽先准备和计算 Baby 点，到 F 树前
 # 再租用大工作区。auto 比较两种模式，只有租约可准入时直接使用 leased。
 
-# cuda.parallel_tune_curves = 5  # u64: [2..16]
+# parallel_tune_curves = 5  # u64: [2..16]
 # Number of curves in each CUDA Stage2 queue tuning window. Windows of 2 to 4 curves compare
 # full-window throughput. Longer windows also check steady-state completion throughput.
 # CUDA Stage2 每个队列调优窗口的曲线数。2 至 4 条按整窗吞吐比较，5 条及以上还检查中段完成吞吐。
 
-# tune.min_repeats = 2  # u64: [1..1000]
+# tune_min_repeats = 2  # u64: [1..1000]
 # Minimum checked observations required before runtime D, layout and chain candidates are compared
 # or adopted. Also sets the minimum ECM calibration repeat count; --tune-repeats may request more.
 # Default 2; 1 enables faster screening with no measured dispersion. Must not exceed
-# stage2_tune_runtime_samples. Existing observations are retained; increasing this minimum requires
+# tune_runtime_sample_limit. Existing observations are retained; increasing this minimum requires
 # additional evidence. Arithmetic validation is unchanged. CLI: --tune-min-repeats N.
 # 运行时D、布局与链长候选比较和采用所需的最少已校验观察数，同时作为ECM校准最小重复次数；
 # --tune-repeats可要求更多。默认2；设为1用于快速筛查，但无法测得离散程度。不得超过
-# stage2_tune_runtime_samples；已有观察保留，提高门槛后需补足证据。算术验证不变。
+# tune_runtime_sample_limit；已有观察保留，提高门槛后需补足证据。算术验证不变。
 # CLI：--tune-min-repeats N。
 
-# tune.runtime_sample_limit = 10  # u64: [1..1000]
+# tune_runtime_sample_limit = 10  # u64: [1..1000]
 # Maximum independent runtime NF observations per identical complete parameters (including B1) and
 # matching device/environment/arithmetic/path, including slower observations and compatible software
 # versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations,
-# not matrix rows. Different parameter rows are retained. Selection requires stage2_tune_min_repeats
+# not matrix rows. Different parameter rows are retained. Selection requires tune_min_repeats
 # observations. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.
 # 完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其
 # 他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。
-# 达到stage2_tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples
-# N。
+# 达到tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。
 
 # short_ntt_batch_tune = false  # bool: [false|true|0|1]
 # Experimental short NTT batch selection from stage2_tune_profile, for lengths up to 2^19. Minimizes
@@ -948,7 +936,7 @@ target = "gpu"  # string: [cpu|gpu]
 # 批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不
 # 保证完整 Stage2 更快；完成整机验证前默认 false。
 
-# cuda.low_cpu_wait = false  # bool: [false|true|0|1]
+# low_cpu_wait = false  # bool: [false|true|0|1]
 # Opt-in low CPU policy: CUDA blocking device scheduling (4) and bounded event polling. Blocking
 # reads keep their native path; elapsed time may increase.
 # Default false selects auto scheduling (0) and native event waits. CLI --low-cpu-wait 0|1 overrides
@@ -961,7 +949,7 @@ target = "gpu"  # string: [cpu|gpu]
 # 显式配置设置NTT_CUDA_WAIT_MODE、NTT_HOST_EVENT_WAIT，并关闭NTT_HOST_READBACK_WAIT。
 # 未配置时保留专家环境覆盖；读回前休眠可单独实验。
 
-# cuda.pack_zero = true  # bool: [false|true|0|1]
+# pack_zero = true  # bool: [false|true|0|1]
 # Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous,
 # resident gather and reverse inputs. Other shapes use the original packer. CLI --pack-zero
 # overrides this key. Legacy .cprof cost profiles default to false and require false when set
@@ -970,21 +958,21 @@ target = "gpu"  # string: [cpu|gpu]
 # 使用原打包路径。命令行 --pack-zero 优先于本键。旧 .cprof 成本配置默认使用 false，显式配置时也须设
 # 为 false。
 
-# cuda.weighted_ntt = false  # bool: [false|true|0|1]
+# weighted_ntt = false  # bool: [false|true|0|1]
 # Opt-in polynomial convolution for the production CUDA backend. Fuses the first DIF stage into
-# direct digit packing and reconstructs both halves in the final inverse stage. Requires
-# stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path.
-# The TOML preset stays inactive on OpenCL. CLI --weighted-ntt 0|1 overrides this key.
-# 生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用
-# stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行
-# --weighted-ntt 0|1 优先。
+# direct digit packing and reconstructs both halves in the final inverse stage. Requires pack_zero.
+# Calls without cached roots or direct device packing use the full-length path. The TOML preset
+# stays inactive on OpenCL. CLI --weighted-ntt 0|1 overrides this key.
+# 生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 pack_zero
+# 。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt
+# 0|1 优先。
 
-# tune.stage1_cost_file = ""  # string: <path>
+# tune_stage1_cost_file = ""  # string: <path>
 # Checked completed CUDA Stage1 cost anchors, used after explicit seconds/curve and CSV. Matches
 # batch, modulus type and exponent; B1 and missing widths scale by B1 and the dispatched container
-# squared. Device/runtime reuse follows stage2_tune_ignore. This does not run Stage1.
+# squared. Device/runtime reuse follows tune_ignore. This does not run Stage1.
 # 已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1
-# 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。
+# 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 tune_ignore；此文件不启动 Stage1。
 
 # auto_min_b2 = 0  # u64: <x:Z,0..2^63-8193>
 # Auto B2 lower search bound; 0 means B1+1. Unmeasured values may be estimated; explicit task B2
@@ -996,21 +984,22 @@ target = "gpu"  # string: [cpu|gpu]
 # takes precedence.
 # Auto B2 搜索上界；0 为 2.6e12。未测值允许估算，显式任务 B2 优先。
 
-# tune.stage1_batch = 1  # u64: <x:Z,1..2^20>
+# tune_stage1_batch = 1  # u64: <x:Z,1..2^20>
 # Stage1 batch curve count associated with Auto B2 cost estimation. Selects or checks Stage1 cost
 # conditions; it neither starts a Stage1 batch from Stage2 nor changes the assignment's curve count.
 # 指定 Auto B2 成本估算对应的 Stage1 批次曲线数。它用于选择或核对 Stage1 的成本条件，不会让 Stage2
 # 驱动启动该批 Stage1 计算，也不改变任务要处理的曲线数。
 
-# tune.stage1_seconds_per_curve = 0  # double: <x:R,finite,x>=0>
+# tune_stage1_seconds_per_curve = 0  # double: <x:R,finite,x>=0>
 # Stage1 seconds per curve for Auto B2, already amortized for the actual batch. A positive value,
 # including a decimal, overrides the Stage1 cost from tuning data. Set 0 or omit this option to use
 # the configured Stage1 cost sources. Full ECM tune can use a cost CSV or a matching
-# stage1_tune_profile. The legacy component profile uses its own matched Stage1 data. This value is
-# a planning input.
-# 为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 stage1_batch。正值（可填小数）优先于
-# 调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使用成本
-# CSV 或匹配的 stage1_tune_profile。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成本规划。
+# tune_stage1_cost_file. The legacy component profile uses its own matched Stage1 data. This value
+# is a planning input.
+# 为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 tune_stage1_batch。正值（可填小数）
+# 优先于调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使
+# 用成本 CSV 或匹配的 tune_stage1_cost_file。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成
+# 本规划。
 
 # ratio_adjust = 1  # double: <x:R,finite,x>0>
 # Multiplier applied to Stage2 time in the Auto B2 model. 1 leaves it unchanged; greater than 1
@@ -1019,14 +1008,14 @@ target = "gpu"  # string: [cpu|gpu]
 # 将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便
 # 宜；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。
 
-# tune.ignore = "gpu,driver,cuda,backend,environment"  # string: [gpu|driver|cuda|backend|memory|environment],...
+# tune_ignore = "gpu,driver,cuda,backend,environment"  # string: [gpu|driver|cuda|backend|memory|environment],...
 # Comma-separated conditions ignored for profile reuse. Empty enforces every condition. Memory
 # normally matches execution path; arithmetic legality and current memory admission are always
 # checked.
 # 逗号分隔的复用忽略项；留空核对全部条件。memory 默认匹配执行路径。算术合法性及当前显存准入始终检
 # 查。
 
-# tune.budget_seconds = 1800  # u64: <x:Z,1..86400>
+# tune_budget_seconds = 1800  # u64: <x:Z,1..86400>
 # Tuning budget including input preparation, measurements and optional warmups. Start each width/B2
 # at the default model's D, compare neighbors, and follow only measured improvements above 2% plus
 # the MAD noise margin. Reuse completed candidates. Finish an in-flight measurement after the
@@ -1034,7 +1023,7 @@ target = "gpu"  # string: [cpu|gpu]
 # 调优预算，包含输入准备、测量及显式开启的预热。每个位宽/B2 从默认模型的 D 开始比较邻档，仅沿超过 2%
 # 且跨过 MAD 噪声界限的实测收益移动。复用已测候选；到期完成正在运行的测量并保留有效摘要。
 
-# tune.warmup = false  # bool: [false|true|0|1]
+# tune_warmup = false  # bool: [false|true|0|1]
 # 0 starts formal ECM/NTT tuning and startup calibration without a discarded warmup. 1 runs one
 # checked warmup per shape before formal repeats; it consumes the same budget and is excluded from
 # the median/MAD. CLI --tune-warmup 0|1 overrides this key. Mandatory arithmetic checks are always
@@ -1053,21 +1042,22 @@ target = "gpu"  # string: [cpu|gpu]
 # measurement before stopping.
 # 短校准测量预算，不含首次 CUDA 初始化；到期完成当前测量后停止。
 
-# tune.error_limit = 0.08  # double: <x:R,0<x<=1>
+# tune_error_limit = 0.08  # double: <x:R,0<x<=1>
 # Relative error limit for qualifying the nonnegative full-curve cost model by leave-one-out
 # validation. Sparse estimates keep uncertainty labels and cannot override the default D. Local
 # descent compares measured medians and MAD rather than prediction error.
 # 非负完整曲线成本模型的留一验证相对误差门限。稀疏估算保留不确定性标记，不能覆盖默认 D；局部下降比较
 # 实测中位数与 MAD，不用预测误差决定移动。
 
-# tune.stage1_cost_csv = ""  # string: <path>
-# CSV Stage1 s/curve anchors for workflow Auto B2. Columns: container_bits or target_bits, tpi,
-# curves, b1, mhz, seconds_per_curve; optional tpb and exponent. Missing widths may interpolate or
-# extrapolate. Costs are already amortized.
-# 总流程 Auto B2 的 Stage1 秒/曲线 CSV；列为 container_bits 或 target_bits、tpi、curves、b1、mhz、
-# seconds_per_curve；可选 tpb、exponent。缺失位宽可插值或外推，成本已摊销。
+# tune_stage1_cost_csv = ""  # string: <path>
+# CSV Stage1 s/curve anchors for workflow Auto B2. Columns: container_bits or target_bits,
+# opencl_threads_per_integer, curves, b1, mhz, seconds_per_curve; optional tpb and exponent. Missing
+# widths may interpolate or extrapolate. Costs are already amortized.
+# 总流程 Auto B2 的 Stage1 秒/曲线 CSV；列为 container_bits 或 target_bits、
+# opencl_threads_per_integer、curves、b1、mhz、seconds_per_curve；可选 tpb、exponent。缺失位宽可插值
+# 或外推，成本已摊销。
 
-# tune.stage1_cost_mhz = 0  # u64: <x:Z,0..10000>
+# tune_stage1_cost_mhz = 0  # u64: <x:Z,0..10000>
 # Stage1 target frequency for inverse-frequency cost scaling. 0 uses the CSV reference frequency;
 # this does not change GPU clocks.
 # Stage1 成本反频率缩放的目标频率；0 使用 CSV 参考频率，不修改 GPU 时钟。
@@ -1077,7 +1067,7 @@ target = "gpu"  # string: [cpu|gpu]
 # from B1; this is distinct from the full modulus size.
 # Dickman 半光滑成功概率的目标素因子位数；0 根据 B1 推荐，与完整模数位宽不同。
 
-# tune.condition_tag = ""  # string: <text>
+# tune_condition_tag = ""  # string: <text>
 # Optional measurement-condition label, e.g. a fixed clock or power setting. Distinct labels
 # preserve separate fastest summaries; ignored environment allows reuse.
 # 可选测量条件标签，例如固定频率或功耗。不同标签保留独立最快汇总；忽略 environment 时允许复用。
@@ -1108,27 +1098,21 @@ target = "gpu"  # string: [cpu|gpu]
 # recorded.
 # GUI v2 上次成功复制 JSON 结果的 UTC 时间。留空表示尚未记录复制时间。
 
-# worker_count = 1  # int: <x:Z,1..64>
-# Legacy count for workers managed by the GUI. For v3 workflows, shared.worker_count takes
-# precedence when present. Each worker uses its own [worker.N] settings.
-# GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 shared.worker_count 时优先使用该值。各 worker 使
-# 用自己的 [worker.N] 设置。
-
 # stage1_exe = ""  # string: <exe>
 # Stage1 worker executable. Relative paths resolve beside the GUI; bare names can use PATH. Empty
-# searches ecm_cuda.exe then ecm.exe. The worktodo prefix selects this executable or stage2_exe for
-# each worker.
-# Stage1 工作程序。相对路径以 GUI 目录为基准，单独文件名也可经 PATH 查找；留空依次查找 ecm_cuda.exe
-# 、ecm.exe。每个 worker 根据 worktodo 前缀选择此程序或 stage2_exe。
+# searches ecm_cuda.stage1_exe then ecm.stage1_exe. The worktodo_file prefix selects this executable
+# or stage2_exe for each worker.
+# Stage1 工作程序。相对路径以 GUI 目录为基准，单独文件名也可经 PATH 查找；留空依次查找
+# ecm_cuda.stage1_exe、ecm.stage1_exe。每个 worker 根据 worktodo_file 前缀选择此程序或 stage2_exe。
 
 # stage2_exe = ""  # string: <exe>
-# Stage2 executable for CPU, CUDA or OpenCL. Empty searches ecm_stage2.exe, then legacy
-# ecm_cuda_stage2.exe, ecm_cpu_stage2.exe and ecm_opencl_stage2.exe in the workflow and GUI
-# directories. A single matching child package can also be discovered. Set an explicit path to
-# choose between installed packages.
-# CPU、CUDA 或 OpenCL 的 Stage2 程序。留空时在工作流和 GUI 目录依次查找 ecm_stage2.exe、
-# ecm_cuda_stage2.exe、ecm_cpu_stage2.exe 和 ecm_opencl_stage2.exe，也支持唯一匹配的子包。安装多个子
-# 包时可用路径指定后端。
+# Stage2 executable for CPU, CUDA or OpenCL. Empty searches ecm_stage2.stage1_exe, then legacy
+# ecm_cuda_stage2.stage1_exe, ecm_cpu_stage2.stage1_exe and ecm_opencl_stage2.stage1_exe in the
+# workflow and GUI directories. A single matching child package can also be discovered. Set an
+# explicit path to choose between installed packages.
+# CPU、CUDA 或 OpenCL 的 Stage2 程序。留空时在工作流和 GUI 目录依次查找 ecm_stage2.stage1_exe、
+# ecm_cuda_stage2.stage1_exe、ecm_cpu_stage2.stage1_exe 和 ecm_opencl_stage2.stage1_exe，也支持唯一
+# 匹配的子包。安装多个子包时可用路径指定后端。
 
 # language = "english"  # string: <xml-stem>
 # GUI language, specified by the language XML filename stem in localization, without .xml. Missing
@@ -1176,8 +1160,9 @@ target = "gpu"  # string: [cpu|gpu]
 # 不控制计算 kernel 的调度。
 
 # process_priority = "below_normal"  # string: [idle|below_normal|normal|above_normal|high]
-# Priority of worker processes launched by the GUI. below_normal is the default; lower priority
-# makes concurrent desktop use easier. This is not a GPU exclusivity or utilization setting.
+# Priority of worker processes launched by the GUI. below_normal is the default; lower
+# process_priority makes concurrent desktop use easier. This is not a GPU exclusivity or utilization
+# setting.
 # 设置 GUI 启动的 worker 进程优先级。below_normal 为默认，较低优先级便于同时使用电脑；此键不是 GPU
 # 独占或显卡占用率设置。
 
@@ -1229,6 +1214,199 @@ target = "gpu"  # string: [cpu|gpu]
 # 群阶分解界面使用的外部 PARI/GP 备选程序路径。Auto 默认先使用本地 PARI DLL；空值在需要 GP 时从 PATH
 # 查找。此路径仅供 GUI 使用，计算 worker 使用相同诊断层，但 GP 路径独立设置。
 
+# theme = "dark"  # string: [dark|light]
+# Appearance mode, independent of legacy GUI settings.
+# 外观模式，独立于旧 GUI 设置。
+
+# display_language = "en"  # string: [en|zh]
+# UI language; CJK font failure falls back to English.
+# 界面语言；中文字体不可用时回退英文。
+
+# language_file = ""  # string: <string, up to 255 bytes>
+# Interface XML filename in localization/v2 beside the executable. Empty migrates the legacy en/zh
+# selection. Companion options.*.xml files are not selectable interface files.
+# 程序旁localization/v2目录中的界面XML文件名；空值按旧en/zh选择迁移。配套options.*.xml不是可选界面文
+# 件。
+
+# scale = 0  # float: [0..4]
+# Zero selects window DPI; positive values select a fixed interface scale.
+# 零按窗口 DPI 自动计算；正值指定界面比例。
+
+# body_font_size = 15  # int: [10..30]
+# Body and log font size in logical pixels, independently of interface DPI scale. Primary actions
+# and secondary text apply their configured offsets; headings preserve their ratio.
+# 正文与日志字号（逻辑像素），独立于界面 DPI 比例；主要操作与次要说明使用各自偏移，标题保持相对比
+# 例。
+
+# primary_font_offset = 1  # int: [0..6]
+# Primary action font offset from the body size, in logical pixels; secondary buttons and log text
+# keep the body size.
+# 主要操作字号相对正文的偏移（逻辑像素）；次要按钮和日志正文保持正文字号。
+
+# secondary_font_offset = -2  # int: [-6..0]
+# Secondary text font offset from the body size, in logical pixels; the rendered role has a minimum
+# of 8 logical pixels.
+# 次要说明字号相对正文的偏移（逻辑像素）；实际字号最小为 8 逻辑像素。
+
+# worker_chart_columns = 1  # int: [1|2]
+# Curve-time chart columns: 1 for list, 2 for two charts per row; narrow workspaces temporarily use
+# one column without changing the saved choice.
+# 曲线耗时图列数：1为列表，2为每行两图；工作区过窄时临时使用单列，不改变保存的选择。
+
+# gpu_history_seconds = 60  # int: [15|30|60|120]
+# GPU chart time span in seconds, shared by all devices and persisted with UI preferences. Does not
+# change the 500 ms sampling interval.
+# GPU 图表时间范围（秒），所有设备共用并随界面偏好保存；不改变 500 ms 采样间隔。
+
+# stage2_timing_source = "auto"  # string: [auto|previous|tune]
+# Stage2 segment duration source: auto overlays previous completed-curve timings on tune data;
+# previous or tune restricts the source. Missing durations are marked unknown.
+# Stage2区段时长来源：auto按上次完成曲线覆盖tune数据；previous或tune仅使用指定来源，缺项明确标为未
+# 知。
+
+# stage2_timing_profile = ""  # string: <string, up to 4096 bytes>
+# Optional read-only Stage2 tune summary path. Empty uses the workflow stage2_tune_profile, then
+# tune.toml or stage2_ecm_tune.toml next to the workflow/worker. Relative paths use the workflow
+# directory.
+# 可选的只读Stage2 tune摘要路径。空值使用工作流stage2_tune_profile，再查找工作流/worker旁的tune.toml
+# 或stage2_ecm_tune.toml；相对路径基于工作流目录。
+
+# nav_order = "01237456"  # string: <string, up to 8 bytes>
+# Stable page IDs 0..7; ID 5 opens Settings. Legacy seven-page orders append Group Order Factor
+# without resetting the layout.
+# 稳定页面编号0..7；5打开设置。旧七页排序追加群阶分解页，不重置布局。
+
+# page = 0  # int: [0..7]
+# Selected page: 0 workers, 1 results, 2 generator, 3 probability, 4 GPU, 6 components, 7 Group
+# Order Factor; 5 opens Settings.
+# 页面：0任务、1结果、2生成器、3概率、4 GPU、6组件、7群阶分解；5打开设置。
+
+# selected_worker = 1  # int: [1..1024]
+# Selected worker partition.
+# 选中的 worker 分区。
+
+# inspector = true  # bool: [false|true]
+# Show the worker inspector on sufficiently wide windows.
+# 宽窗口显示 worker 检查区。
+
+# logs = true  # bool: [false|true]
+# Enable logs in Workers management; automatic hiding on other views does not change this saved
+# preference.
+# 开启Workers管理页日志；其他视图的自动隐藏不改变此保存偏好。
+
+# follow_log = true  # bool: [false|true]
+# Follow new worker output.
+# 跟随新的 worker 输出。
+
+# raw_log = false  # bool: [false|true]
+# Show raw output instead of classified event lines.
+# 显示原始输出而非分类事件。
+
+# workspace_layout = ""  # string: <string, up to 524288 bytes>
+# Hex encoded ImGui layout; stored only in this sidecar.
+# 十六进制编码的 ImGui 布局，仅存于本侧车。
+
+# window_x = -2147483648  # int: [-2147483648..2147483647]
+# Window x in physical pixels; INT_MIN selects system placement.
+# 窗口物理像素 x；INT_MIN 由系统放置。
+
+# window_y = -2147483648  # int: [-2147483648..2147483647]
+# Window y in physical pixels; INT_MIN selects system placement.
+# 窗口物理像素 y；INT_MIN 由系统放置。
+
+# window_width = 1280  # int: [480..16384]
+# Restored window width in physical pixels.
+# 恢复窗口的物理像素宽度。
+
+# window_height = 850  # int: [360..16384]
+# Restored window height in physical pixels.
+# 恢复窗口的物理像素高度。
+
+# window_title_bar = false  # bool: [false|true]
+# Show the system title bar; hidden by default with window controls in the app top bar. Explicit
+# saved choices are retained.
+# 显示系统标题栏；默认隐藏，窗口按钮位于应用顶栏；保留显式保存的选择。
+
+# window_maximized = false  # bool: [false|true]
+# Restore the maximized state.
+# 恢复最大化状态。
+
+# pet_enabled = false  # bool: [false|true]
+# Show the ELYTerminal-compatible edge companion.
+# 显示兼容 ELYTerminal 行为的窗口边缘宠物。
+
+# pet_animate = true  # bool: [false|true]
+# Animate at the existing GUI cadence; no extra render loop.
+# 按既有 GUI 节奏动画，不另开渲染循环。
+
+# pet_left = 72  # float: [0..16384]
+# Companion offset from the main window left edge in logical units.
+# 宠物相对主窗口左缘的逻辑单位偏移。
+
+# pet_skin = "classic"  # string: [classic|miss_pink_elf|herrscher_of_human_ego|hi_love_elf]
+# ELY appearance. Switches immediately; official battlesuit names are preserved in the selector.
+# ELY 外观，即时切换；选择项使用装甲的完整英文名称。
+
+# right_pages = 0  # int: [0..254]
+# Real pages in the right dock share native horizontal tabs. Closing returns a page to navigation;
+# one real page remains central. Settings bit 5 is cleared when opening old sidecars.
+# 右侧实际页面共用横排标签，关闭后返回导航，至少保留一个实际中央页面；读取旧侧车时移除设置位5。
+
+# right_page = 4  # int: [0..7]
+# Last active real page in the right dock. Legacy Settings ID 5 is remapped on load.
+# 右侧停靠区最后激活的实际页面；读取旧设置编号5时改选实际页面。
+
+# right_visible = true  # bool: [false|true]
+# Compatibility field retained for old sidecars. Right-side pages are always displayed; close their
+# tabs to return them to navigation.
+# 保留以读取旧侧车的兼容字段；右侧页面直接显示，关闭标签即可回到导航。
+
+# smooth_scroll = true  # bool: [false|true]
+# Smooth wheel scrolling in main and detached windows.
+# 主窗口与分离窗口使用平滑滚轮滚动。
+
+# toasts = true  # bool: [false|true]
+# Show non-activating action notifications; errors always remain visible.
+# 显示不抢焦点的操作轻提示；错误提示仍显示。
+
+# external_windows = false  # bool: [false|true]
+# Allow detached native panel windows after restart; default keeps docking and floating inside the
+# main window to avoid the observed slow presentation path.
+# 重启后允许原生独立面板窗；默认在主窗口内停靠/浮动，以规避已观察到的慢呈现路径。
+
+# worker_chart_auto_y = false  # bool: [false|true]
+# Fit curve-time Y bounds to finite samples in the current retained window; off keeps a zero
+# baseline.
+# 曲线耗时Y轴按当前保留窗口的有效样本自动缩放；关闭时从0开始。
+
+# logs_keep_visible = false  # bool: [false|true]
+# Keep enabled logs visible across pages; otherwise follow visible Workers management, with a
+# temporary manual override on other views.
+# 已开启日志跨页保持可见；关闭时跟随可见的Workers管理页，其他视图可临时手动打开。
+
+# nav_collapsed = false  # bool: [false|true]
+# Show only icons in the navigation sidebar.
+# 将左侧导航缩为图标栏。
+
+# nav_expanded_width = 0  # int: [0..16384]
+# Previous expanded navigation width in logical pixels. Zero uses the default width.
+# 上次展开的导航宽度，以逻辑像素计。0 使用默认宽度。
+
+# nav_hide_tab_bar = true  # bool: [false|true]
+# The Navigation tab bar starts hidden by default. The saved choice survives restarts and layout
+# rebuilding.
+# 导航顶部标签栏默认收起，保存的选择在重启及布局重建后保留。
+
+# workspace_hide_tab_bar = true  # bool: [false|true]
+# The Workspace tab bar starts hidden by default. The saved choice survives restarts and layout
+# rebuilding.
+# 工作区顶部标签栏默认收起，保存的选择在重启及布局重建后保留。
+
+# right_hide_tab_bar = false  # bool: [false|true]
+# Remember the right dock Hide tab bar choice. Multiple native tabs remain visible; the choice
+# resumes when one remains.
+# 持久记忆右侧停靠窗Hide tab bar选择；多个原生标签保持可见，恢复单标签时恢复该选择。
+
 [worker.1]
 # name = "Worker #{N}"  # string: <text>
 # Worker display name in the GUI. Unset shows Worker #N, where N is the worker index. Changes only
@@ -1265,13 +1443,13 @@ target = "gpu"  # string: [cpu|gpu]
 # 覆盖任务；直接单次运行的 -gpucurves 是独立命令行参数。
 
 # Worker 1 overrides / worker 1 覆盖
-# shared.queue_order = "stage1_first"
-# stage1.gpu_device = 0
-# stage2.gpu_device = 0
-# shared.tune_file = "tune_gpu0.toml"
+# queue_order = "stage1_first"
+# stage1_gpu_device = 0
+# stage2_gpu_device = 0
+# tune_file = "tune_gpu0.toml"
 
 # [worker.2]
-# stage1.gpu_device = 1
-# stage2.gpu_device = 1
-# shared.tune_file = "tune_gpu1.toml"
+# stage1_gpu_device = 1
+# stage2_gpu_device = 1
+# tune_file = "tune_gpu1.toml"
 

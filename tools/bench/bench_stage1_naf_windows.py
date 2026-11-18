@@ -63,7 +63,7 @@ def run(exe, folder, backend, bits, w, repeat, logical_cpu):
     curves = batch_or_sms if impl else 2 * batch_or_sms * (128 // tpi)
     folder.mkdir()
     config = folder / 'ecm.toml'
-    config.write_text('config_version = 3\n')
+    config.write_text('config_version = 4\n')
     command = [str(exe), '--config', str(config), '--param', 'e', '-sigma', str(SIGMA),
                '-gpucurves', str(curves), '--naf-w', str(w), '--ckpt', '0', '--exp-cache', 'off',
                '--tmp-dir', str(folder), '-save', 'completed.save', '-v', str(b1), '0']

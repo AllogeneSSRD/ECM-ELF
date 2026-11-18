@@ -3,13 +3,13 @@
   "sha256": {
     "src/ecm/application/configuration/generated/ecm_config_generated.h": "d8f35204848e4d89c408a4ab3b44adf24694a9399d97067e135952637e2446d8",
     "src/ecm/platform/generated/configuration_defaults.h": "86b8bc44e0dd4d21f62b4b7ced3c59f495a4facf353b8c9f38573046deb11ea7",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "872967d622af4c47c4441e085d9c06a942adfc9a3916695fa43ca984dd0955b0",
-    "src/ecm/application/configuration/generated/ecm_toml_template.h": "655c992f086f276a96aa66bb3233d03cb080936f51000b4c7b910c506d087183",
-    "config/ecm.toml.default": "be004def4e6884505d289fd3aee9ba810e9c2ec3410ef85e5b6801ee26e8101d",
-    "config/ecm.toml.example": "503d81c9c8c0c214eaaa6212ba56dc9ee5f2ad2e6595a79f16fc5eeee13cf8b6",
-    "docs/ECM_TOML_REFERENCE.en.md": "3fe77dc25ac17cec466c3aca8fa983aef20db16a1d589313ebfb206b28821f82",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "fa1ba5c8471f047870568643af4c66dd9f5adfa77b316754acf163bf1eb2c01c",
-    "config/ecm_options.json": "cba003a595961e83b0748a888d7d25f9c55bdfd36016f27343a94b3eca10ce06",
-    "tools/gen/generate_ecm_config.py": "5f8c670e168051dbf3dab8653291d6e12a807de129f0c249b3af3f0ad4667e7d"
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "0a1237e608ec1dffcc5ca924836138c2daf3db9e6f83707bfc7d65231be52b78",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "eba054e5caa556f772eed1f345195439414d5d6d16c3867c0a01bd6e88711b94",
+    "config/ecm.toml.default": "205f256783e6ea5078f03b78ec36a08ce9ab2cfcc5b2ba96edcac5b6ee143aa1",
+    "config/ecm.toml.example": "c5ee4e7b58887ddfa043b7d558ce46aff3c6742b55e09481b4214c880b842248",
+    "docs/ECM_TOML_REFERENCE.en.md": "2859dd8d68e647602c5530a42a7186c13318092320bb08844838e85979d9cd4a",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "4d49c5e4596437e340788cc9b40a08f0d76d4740f9c4c446fc492a1dbd7565b9",
+    "config/ecm_options.json": "ff4f452fbf8fcf50ed4fd9d214d8d1029fb31d02dedf08b6d9bfcab4364206ff",
+    "tools/gen/generate_ecm_config.py": "27ba4d8ff2775508b5a36d692762759a9472d55e65db4f079f6e07f214a4e9c4"
   }
 }

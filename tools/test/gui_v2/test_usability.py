@@ -1,4 +1,4 @@
-"""Exercise page dragging, live language controls, snapshot charts and sidecar restart."""
+"""Exercise page dragging, live language controls, snapshot charts and preferences on restart."""
 import argparse,ctypes as c,hashlib,json,os,re,subprocess,time,tomllib
 from pathlib import Path
 from renderer_probe import renderer_args,renderer_clean
@@ -9,15 +9,16 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--renderer',choices=['dx11','vulkan'],default='dx11')
     for name in ['exe','out','layers']:parser.add_argument('--'+name,type=Path,required=True)
     args=parser.parse_args();out=args.out.resolve();out.mkdir();exe=args.exe.resolve()
-    cfg=out/'ecm.toml';cfg.write_text('[shared]\nworktodo="worktodo.txt"\nb2_ratio=0\n[stage1]\ntarget="cpu"\n[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n',encoding='utf-8');before=cfg.read_bytes()
-    state=out/'ui.toml';env=os.environ.copy();env['VK_LAYER_PATH']=str(args.layers.resolve())
+    cfg=out/'ecm.toml';cfg.write_text('config_version=4\n[shared]\nworker_count=1\nworktodo_file="worktodo.txt"\n[stage1]\ntarget="cpu"\n[stage2]\nb2_ratio=0\n[worker.1]\nautostart=false\n',encoding='utf-8')
+    before=tomllib.loads(cfg.read_text(encoding='utf-8'))
+    env=os.environ.copy();env['VK_LAYER_PATH']=str(args.layers.resolve())
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p
     assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     logs=[]
     def launch(name,extra=()):
         log=out/(name+'.log');logs.append(log)
         startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-        proc=subprocess.Popen([str(exe),'--config',str(cfg),'--ui-state',str(state),'--diagnostics',str(log),'--audit-app',*renderer_args(args.renderer),'--no-nvml',*extra],cwd=out,env=env,startupinfo=startup)
+        proc=subprocess.Popen([str(exe),'--config',str(cfg),'--diagnostics',str(log),'--audit-app',*renderer_args(args.renderer),'--no-nvml',*extra],cwd=out,env=env,startupinfo=startup)
         hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,60,80,1920,1200,0x14);user.ShowWindow(hwnd,4)
         return proc,hwnd,log
     def snapshots(log):
@@ -54,8 +55,11 @@ def main():
         s=wait(proc,log,lambda v:v['settings']=='1' and int(v['save'].split(',')[1])>0)
         click(hwnd,s['save'])
         end=time.monotonic()+5
-        while not state.exists() and time.monotonic()<end:time.sleep(.05)
-        saved=tomllib.loads(state.read_text(encoding='utf-8'));assert saved['ui']['right_pages']==24 and saved['ui']['language']=='zh'
+        while time.monotonic()<end:
+            saved=tomllib.loads(cfg.read_text(encoding='utf-8')).get('gui',{})
+            if saved.get('right_pages')==24 and saved.get('display_language')=='zh':break
+            time.sleep(.05)
+        else:raise AssertionError('preferences were not saved into ecm.toml')
         # Computation is a dedicated category in the independent settings shell.
         categories=[dict(re.findall(r'(\w+)=([-\d.,]+)',line)) for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('settings_sample:')][-1]
         click(hwnd,categories['category5']);s=wait(proc,log,lambda v:v['settings_category']=='5' and int(v['search'].split(',')[0])>0)
@@ -81,7 +85,8 @@ def main():
         close_tab=[dict(re.findall(r'(\w+)=([-\d.,]+)',line)) for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('navigation_sample:')][-1]
         click(hwnd,close_tab['close3']);s=wait(proc,log,lambda v:v['mask']=='0' and v['page']=='3')
     finally:close(proc,hwnd)
-    assert proc.returncode==0 and cfg.read_bytes()==before
+    after=tomllib.loads(cfg.read_text(encoding='utf-8'));after.pop('gui')
+    assert proc.returncode==0 and after==before
     proc,hwnd,log=launch('font-rescue',['--simulate-missing-cjk','--language','en'])
     try:
         s=wait(proc,log,lambda v:int(v['nav5'].split(',')[0])>0);click(hwnd,s['nav5'])

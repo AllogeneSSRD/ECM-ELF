@@ -38,9 +38,9 @@ def main():
 
     for name,value,extra,expected in cases:
         config=out/(name+'.toml')
-        setting=('stage2_groot_balanced='+value+'\n') if value else ''
-        config.write_text('[stage2]\n'+setting+'stage2_device='+str(a.device)+'\n'
-            'stage2_tune_runtime=0\nstage2_short_calibration=0\n',encoding='utf-8')
+        setting=('groot_balanced='+value+'\n') if value else ''
+        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\n'+setting+'stage2_gpu_device='+str(a.device)+'\n'
+            'tune_runtime_enabled=0\nshort_calibration=0\n',encoding='utf-8')
         command=[str(exe),'--config',str(config),'--save',str(saved),'--b2','13230','--d','210',
                  '--device',str(a.device),'--plan-only',*extra]
         code,text=invoke(name,command)
@@ -54,8 +54,8 @@ def main():
     # An explicit auto in the queue parent must reach its curve child, otherwise
     # the child silently reapplies this forced-true TOML setting.
     queue=out/'worktodo.txt';queue.write_text('ECMSTAGE2=1,2,127,-1,"prime127.save",13230,0,1\n',encoding='utf-8')
-    config=out/'queue.toml';config.write_text('[shared]\nworktodo='+json.dumps(str(queue))+'\n'
-        '[stage2]\nstage2_groot_balanced=1\nstage2_tune_runtime=0\nstage2_short_calibration=0\n',encoding='utf-8')
+    config=out/'queue.toml';config.write_text('config_version=4\n[shared]\nworktodo_file='+json.dumps(str(queue))+'\n'
+        '[stage2]\ndevice="gpu"\ngroot_balanced=1\ntune_runtime_enabled=0\nshort_calibration=0\n',encoding='utf-8')
     results=out/'queue_results.jsonl';debug=out/'queue_debug.log';log=out/'queue_engine.log'
     code,text=invoke('queue_auto',[str(exe),'--config',str(config),'--device',str(a.device),
         '--worker','1','--once','--d','210','--groot-layout','auto','--results',str(results),

@@ -148,7 +148,7 @@ CUDA Edwards NTT 的主机工作线程按 sigma 排序后分段处理，结果�
 
 参数映射中，写 $d=A/B$，其中 $A=2h^2-1$、$B=h^4$。$A_{24}=B/(B-A)$，因此 $d$、$A_{24}$、$x$、$y$ 的四个分母可用前缀积共用一次模逆。求积时额外乘入 $A$，同时确认 $d$ 和 $1-d$ 的单位性。乘积不可逆时，按原构造顺序逐项检查各分母和 $d(1-d)$。同一乘积可能包含不同的真因子，逐项检查可保留原路径找到的确切因子和退化分类。该批量求逆用于提供梅森构造工作区的 CUDA Edwards NTT 路径。[构造实测](../performance/STAGE1_MERSENNE_NTT.md#参数映射的批量求逆)
 
-`[stage1] gpu.init_threads` 或 `--gpu-init-threads` 控制该主机阶段。0 为自动，至少 8 条曲线且模数不少于 4096 位时最多用 4 个工作线程。预算、可用逻辑 CPU 数和曲线数也限制实际线程数。每线程拥有自己的 GMP 工作区，主机字典构造及结果发布仍按原槽位顺序执行。`stage1_ntt_edwards_setup` 记录实际线程数、墙钟时间与归约方式。见 [曲线数学](../../src/ecm/curve/edwards.h) 和 [NTT 主机工作流](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp)。
+`[stage1] gpu_init_threads` 或 `--gpu-init-threads` 控制该主机阶段。0 为自动，至少 8 条曲线且模数不少于 4096 位时最多用 4 个工作线程。预算、可用逻辑 CPU 数和曲线数也限制实际线程数。每线程拥有自己的 GMP 工作区，主机字典构造及结果发布仍按原槽位顺序执行。`stage1_ntt_edwards_setup` 记录实际线程数、墙钟时间与归约方式。见 [曲线数学](../../src/ecm/curve/edwards.h) 和 [NTT 主机工作流](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp)。
 
 ### 其他 GPU 工作流
 
@@ -244,9 +244,9 @@ PRAC 的 `single-compact` 专用体将 xADD 统一到一个调用点，倍点使
 
 ### CUDA CGBN 切片提交
 
-CUDA CGBN 的 Montgomery ladder、resident、PRAC，以及 Edwards NAF 和 binary，在同一 CUDA stream 上按游标顺序提交。通过 `[stage1].cuda_slice_depth` 选择两片或三片滚动提交，或八片组尾等待。滚动提交回收最旧切片的事件和错误快照后补片，并按已完成片的设备计时调整后续长度。组尾等待按窗口平均时间调整片长。各片原地更新同一份设备点缓冲。worker 的显式值覆盖全局设置，两处均省略时使用默认深度 3。
+CUDA CGBN 的 Montgomery ladder、resident、PRAC，以及 Edwards NAF 和 binary，在同一 CUDA stream 上按游标顺序提交。通过 `[stage1] cuda_slice_depth` 选择两片或三片滚动提交，或八片组尾等待。滚动提交回收最旧切片的事件和错误快照后补片，并按已完成片的设备计时调整后续长度。组尾等待按窗口平均时间调整片长。各片原地更新同一份设备点缓冲。worker 的显式值覆盖全局设置，两处均省略时使用默认深度 3。
 
-`[stage1].cuda_low_cpu = 1` 让主机通过阻塞式 CUDA 完成事件等待，在 GPU 执行期间休眠。它适用于各切片深度，也用于 Edwards NAF 字典的完成事件。两项的默认值见 [TOML 配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
+`[stage1] cuda_low_cpu = 1` 让主机通过阻塞式 CUDA 完成事件等待，在 GPU 执行期间休眠。它适用于各切片深度，也用于 Edwards NAF 字典的完成事件。两项的默认值见 [TOML 配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
 主机确认事件并检查 CGBN 错误后才推进已完成游标。周期检查点到期或收到停止请求后暂停补片，回收在途切片并从已确认的游标读回坐标。滚动槽使用固定页主机内存，后续切片在设备运行时仍可读取最旧切片的错误快照。Montgomery 调试 dump 和 PRAC 限时采样保留单片边界，Edwards 独立算术调用保留逐片回调粒度。
 

@@ -18,7 +18,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [ptxas 沙箱编译诊断草稿](development/PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)：CUDA 13.3.73 单文件并行与严格句柄检查的最小复现、因果对照及已验证的串行编译处理。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
 - [ECM 报告工具](../tools/ecm_report/README.md)：PrimeNet 进度导入、两日变化图和按日期及指数范围统计的增长热度图。
-- TOML 配置参考（[中文](ECM_TOML_REFERENCE.zh-CN.md) · [English](ECM_TOML_REFERENCE.en.md)）由配置定义生成，列出所有键的默认值、范围和说明。
+- [配置 v4 与迁移](architecture/CONFIGURATION.md)：GUI 与 worker 共用一份 TOML，worker 覆盖沿用全局键名。逐键参考由配置定义生成。[中文](ECM_TOML_REFERENCE.zh-CN.md) · [English](ECM_TOML_REFERENCE.en.md)
 
 ## 实现
 

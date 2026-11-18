@@ -22,7 +22,7 @@ static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
     assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE",probe.u8string().c_str())==0);
     const auto setup=[&](const std::string& args,bool autostart=false,const fs::path& exe=fs::path{}){
         write(queue,"[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n");
-        write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=1\nexe=\""+(exe.empty()?fixture:exe).generic_u8string()+"\"\nstage2_exe=\""+fixture.generic_u8string()+"\"\n[workers.1]\nautostart="+(autostart?"1":"0")+"\nextra_args='"+args+"'\n");
+        write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nstage1_exe=\""+(exe.empty()?fixture:exe).generic_u8string()+"\"\nstage2_exe=\""+fixture.generic_u8string()+"\"\n[worker.1]\nautostart="+(autostart?"true":"false")+"\nextra_args='"+args+"'\n");
     };
     const auto wait=[&](ecmgui_v2::App& app,const auto& done){
         const auto deadline=GetTickCount64()+15000;
@@ -33,26 +33,26 @@ static void no_protocol_probe(const fs::path& root,const fs::path& fixture){
         return false;
     };
     setup("--scenario v2-checkpoint-stop");
-    {ecmgui_v2::UiState state;state.path=dir/"manual.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
+    {ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
      // A real worker owner blocks dispatch even without the query handshake.
      {ecm_queue::OwnerLease owner(queue.u8string(),1);assert(!app.start(1));}
      {ecm_queue::OwnerLease gui(queue.u8string(),1,".gui-control.lock");assert(!app.start(1));}
      assert(app.start(1));wait(app,[&]{return acquired(app);});
-     ecmgui_v2::UiState second_state;second_state.path=dir/"second.ui.toml";ecmgui_v2::App second(second_state,stdout);second.initialize(cfg.u8string(),true);assert(!second.start(1));
+     ecmgui_v2::UiState second_state;ecmgui_v2::App second(second_state,stdout);second.initialize(cfg.u8string(),true);assert(!second.start(1));
      app.controller.request_stop(1);wait(app,[&]{return !app.controller.busy();});}
     setup("--scenario v2-checkpoint-stop",true);
-    {ecmgui_v2::UiState state;state.path=dir/"auto.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);app.tick();wait(app,[&]{return acquired(app);});
+    {ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);app.tick();wait(app,[&]{return acquired(app);});
      app.controller.request_stop(1);wait(app,[&]{return !app.controller.busy();});}
     setup("--scenario ok --lines 0");
-    {ecmgui_v2::UiState state;state.path=dir/"switch.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(!app.controller.workers()[0].stage2);
+    {ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(!app.controller.workers()[0].stage2);
      write(queue,"[Worker #1]\nECMSTAGE2=1,2,137,-1,\"ed_m137.save\",0,0,10\n");
      assert(app.start(1)&&app.controller.workers()[0].stage2);wait(app,[&]{return acquired(app)&&!app.controller.busy();});}
     setup("--scenario crash-once --lines 0 --marker \""+(dir/"crashed-once").generic_u8string()+"\"");
-    {ecmgui_v2::UiState state;state.path=dir/"restart.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
+    {ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
      wait(app,[&]{return app.controller.workers()[0].restarts()==1&&!app.controller.busy();});}
     for(const auto& exe:{dir/"missing.exe",dir/"invalid.exe"}){
         if(exe.filename()=="invalid.exe")write(exe,"not an executable");setup("",false,exe);
-        ecmgui_v2::UiState state;state.path=dir/"error.ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
+        ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
         assert(!app.start(1)&&app.status.find("CreateProcessW failed")!=app.status.npos);
     }
     assert(!fs::exists(probe));assert(_putenv_s("ECM_TEST_PROTOCOL_PROBE","")==0);
@@ -65,9 +65,9 @@ static void task_watch_dispatch(const fs::path& root,const fs::path& fixture){
     const std::string header="[Worker #1]\n";
     const std::string task="ECMSTAGE1=1,2,127,-1,100,1\n";
     write(queue,header);
-    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=1\nexe=\""+
-        fixture.generic_u8string()+"\"\n[workers.1]\nautostart=0\nextra_args='--scenario v2-checkpoint-stop'\n");
-    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nstage1_exe=\""+
+        fixture.generic_u8string()+"\"\n[worker.1]\nautostart=false\nextra_args='--scenario v2-checkpoint-stop'\n");
+    ecmgui_v2::UiState state;
     ecmgui_v2::App app(state,stdout);
     app.initialize(cfg.u8string(),true);
     const auto worker=[&]() -> const ecmgui::WorkerView& {return app.controller.workers().front();};
@@ -171,16 +171,16 @@ static void scheduled_worker_dispatch(const fs::path& root,const fs::path& fixtu
     fs::create_directories(dir);
     const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt";
     write(queue,"[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n[Worker #2]\nECMSTAGE1=1,2,137,-1,100,1\n");
-    const auto args="\nautostart=0\nextra_args='--scenario v2-checkpoint-stop'\n";
-    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=2\nexe=\""+
-        fixture.generic_u8string()+"\"\npause_schedule = [\n  '#1, 1, 08:30-09:00', # preserve rule note\n] # preserve schedule note\n[workers.1]"+args+"[workers.2]"+args);
+    const auto args="\nautostart=false\nextra_args='--scenario v2-checkpoint-stop'\n";
+    write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\nworker_count=2\n[stage1]\ntarget=\"cpu\"\n[gui]\nstage1_exe=\""+
+        fixture.generic_u8string()+"\"\npause_schedule = [\n  '#1, 1, 08:30-09:00', # preserve rule note\n] # preserve schedule note\n[worker.1]"+args+"[worker.2]"+args);
 
     // Computation readers accept the GUI array and ignore its scheduling semantics.
     for(const auto mode:{ecm_config::TomlReadMode::Computation,ecm_config::TomlReadMode::Stage1,ecm_config::TomlReadMode::Stage2}){
         std::vector<ecm_config::TomlLine> lines;
         assert(ecm_config::read_toml(cfg.u8string(),lines,mode));
     }
-    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::UiState state;
     ecmgui_v2::App app(state,stdout);
     app.initialize(cfg.u8string(),true);
     assert(app.ready);
@@ -253,10 +253,10 @@ static void worker_breaker_recovery(const fs::path& root,const fs::path& fixture
     const auto cfg=dir/"ecm.toml",queue=dir/"worktodo.txt",fixed=dir/"fault-fixed";
     const std::string queued="[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n";
     write(queue,queued);
-    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[gui]\nNumWorkers=1\nexe=\""+fixture.generic_u8string()+
-        "\"\n[workers.1]\nautostart=1\nextra_args='--scenario v2-recover-after-breaker --marker \""+
+    write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\n[gui]\nstage1_exe=\""+fixture.generic_u8string()+
+        "\"\n[worker.1]\nautostart=true\nextra_args='--scenario v2-recover-after-breaker --marker \""+
         fixed.generic_u8string()+"\"'\n");
-    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    ecmgui_v2::UiState state;
     ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);
     const auto worker=[&]() -> const ecmgui::WorkerView& {return app.controller.workers().at(0);};
     const auto wait=[&](ecmgui::WorkerRunState expected){
@@ -293,12 +293,12 @@ static void stage2_raw_times(const fs::path& root,const fs::path& fixture){
     const auto dir=root/"stage2-raw";fs::create_directories(dir);
     const auto cfg=dir/"ecm.toml";
     write(dir/"worktodo.txt","[Worker #1]\nECMSTAGE2=1,2,137,-1,\"fixture.save\",0,0,4\n");
-    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[gui]\nNumWorkers=1\nstage2_exe=\""+fixture.generic_u8string()+"\"\n[workers.1]\nautostart=0\nextra_args=\"--scenario v2-stage2-raw-times\"\n");
+    write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\n[gui]\nstage2_exe=\""+fixture.generic_u8string()+"\"\n[worker.1]\nautostart=false\nextra_args=\"--scenario v2-stage2-raw-times\"\n");
     const auto drain=[](auto& controller,const auto& tick){
         const auto deadline=GetTickCount64()+5000;
         while(controller.busy()&&GetTickCount64()<deadline){tick();Sleep(10);}assert(!controller.busy());
     };
-    {ecmgui_v2::UiState state;state.path=dir/"ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
+    {ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
      drain(app.controller,[&]{app.tick();});const auto& worker=app.controller.workers()[0];
      assert(worker.hist_s_per_curve==(std::vector<float>{10,30,5}));
      assert(worker.progress.s_per_curve==5&&worker.progress.eta_s==5);
@@ -314,9 +314,9 @@ static void stage2_paired_views(const fs::path& root,const fs::path& fixture){
     const auto dir=root/"stage2-paired";fs::create_directories(dir);
     const auto cfg=dir/"ecm.toml";
     write(dir/"worktodo.txt","[Worker #1]\nECMSTAGE2=1,2,137,-1,\"fixture.save\",0,0,5\n");
-    write(cfg,"[shared]\nworktodo=\"worktodo.txt\"\n[gui]\nNumWorkers=1\nstage2_exe=\""+fixture.generic_u8string()+
-        "\"\n[workers.1]\nautostart=0\nextra_args=\"--scenario v2-stage2-paired\"\n");
-    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    write(cfg,"config_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\n[gui]\nstage2_exe=\""+fixture.generic_u8string()+
+        "\"\n[worker.1]\nautostart=false\nextra_args=\"--scenario v2-stage2-paired\"\n");
+    ecmgui_v2::UiState state;
     ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
     const auto worker=[&]() -> const ecmgui::WorkerView& {return app.controller.workers()[0];};
     const auto wait=[&](const auto& predicate){
@@ -357,9 +357,9 @@ static void stage1_ntt_progress(const fs::path& root,const fs::path& fixture) {
     const auto dir=root/"stage1-ntt";fs::create_directories(dir);
     write(dir/"worktodo.txt","[Worker #1]\nECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"\n");
     const auto cfg=dir/"ecm.toml";
-    write(cfg,"[shared]\nworktodo='worktodo.txt'\n[gui]\nNumWorkers=1\nexe='"+fixture.generic_u8string()+
-        "'\n[workers.1]\nautostart=0\nextra_args='--scenario v2-ntt-progress'\n");
-    ecmgui_v2::UiState state;state.path=dir/"ui.toml";
+    write(cfg,"config_version=4\n[shared]\nworktodo_file='worktodo.txt'\n[gui]\nstage1_exe='"+fixture.generic_u8string()+
+        "'\n[worker.1]\nautostart=false\nextra_args='--scenario v2-ntt-progress'\n");
+    ecmgui_v2::UiState state;
     ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.start(1));
     const auto deadline=GetTickCount64()+5000;
     while(!app.controller.workers()[0].stage1_ntt.units&&GetTickCount64()<deadline){app.tick();Sleep(10);}
@@ -376,6 +376,8 @@ static void stage1_ntt_progress(const fs::path& root,const fs::path& fixture) {
 }
 static void stage1_details(const fs::path& root) {
     {
+        std::string error;
+        assert(ecmgui_v2::ui::load_languages(ecmgui::exe_dir()+"/localization/v2",error,"chineseSimplified.xml"));
         ecmgui::WorkerView worker;worker.task="ECM2=1,2,15919,-1,44000000,4400000000,1000,\"1782929\"";
         assert(ecmgui_v2::ui::worker_task(worker,true)=="M15919 / 已知因子  curves = 1000");
         worker.task="ECMSTAGE1=1,2,5351,-1,\"e_m5351_260e6.save\",0,0,300";
@@ -424,10 +426,10 @@ static void stage1_details(const fs::path& root) {
     assert(ladder.find("chain=ladder")!=ladder.npos && ladder.find("x-only")==ladder.npos &&
            ladder.find("NAF=")==ladder.npos);
     const auto path=root/"stage1-details.toml";
-    write(path,"config_version=3\n[shared]\nworker_count=2\n[stage1]\nhandoff.mode='off'\n"
-        "[worker.2]\nstage1.handoff.mode='prime95'\nstage1.handoff.unsupported='ecm-elf'\n"
-        "stage1.handoff.workers='auto'\nstage1.handoff.worktodo_file='local-queue.txt'\n"
-        "stage1.prime95.worktodo_file='prime95.txt'\n");
+    write(path,"config_version=4\n[shared]\nworker_count=2\n[stage1]\nhandoff_mode='off'\n"
+        "[worker.2]\nhandoff_mode='prime95'\nhandoff_unsupported='ecm-elf'\n"
+        "handoff_workers='auto'\nhandoff_worktodo_file='local-queue.txt'\n"
+        "prime95_worktodo_file='prime95.txt'\n");
     ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);
     assert(app.load_config(path.u8string()));
     const auto& workers=app.controller.workers();
@@ -453,33 +455,30 @@ static void stage1_details(const fs::path& root) {
 }
 static void workflow_errors(const fs::path& root){
     const auto path=root/"workflow-error.toml";
-    write(path,"[gui]\nNumWorkers=\"invalid\"\n");
+    write(path,"config_version=4\n[shared]\nworker_count=\"invalid\"\n");
     ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(path.u8string(),true);
-    assert(!app.ready&&app.workflow_load_error.find("NumWorkers")!=std::string::npos);
-    assert(app.workflow_load_error.find(":2")!=std::string::npos&&std::string(app.config_input)==path.u8string());
+    assert(!app.ready&&app.workflow_load_error.find("worker_count")!=std::string::npos);
+    assert(app.workflow_load_error.find(":3")!=std::string::npos&&std::string(app.config_input)==path.u8string());
     const auto error=app.workflow_load_error;app.status="unrelated UI notification";
     assert(app.workflow_load_error==error); // The Workers view keeps the diagnostic.
-    write(path,"[gui]\nNumWorkers=2\n[workers.1]\nautostart=0\n[workers.1.stage2]\nstage2_tune_profile=\"gpu0.toml\"\n"
-        "[workers.2]\nautostart=0\n[workers.2.stage2]\nstage2_tune_profile=\"gpu1.toml\"\n");
+    write(path,"config_version=4\n[shared]\nworker_count=2\n[worker.1]\nautostart=false\ntune_file=\"gpu0.toml\"\n"
+        "[worker.2]\nautostart=false\ntune_file=\"gpu1.toml\"\n");
     assert(app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&app.workflow_load_error.empty());
     write(path,read(path)+"[stage1]\nfuture_stage1=true\ncurve=\"future\"\n[stage2]\n"
-        "stage2_giant_backend=\"future\"\nfuture_stage2=[\"future\"]\n");
+        "giant_backend=\"future\"\nfuture_stage2=[\"future\"]\n");
     assert(app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2);
-    assert(app.edit_business("shared","b2_ratio","40")&&app.save_business());
-    assert(read(path).find("stage2_giant_backend=\"future\"")!=std::string::npos);
-    write(path,"[gui]\nNumWorkers=\"invalid\"\n");
+    assert(app.edit_business("stage2","b2_ratio","40")&&app.save_business());
+    assert(read(path).find("giant_backend=\"future\"")!=std::string::npos);
+    write(path,"config_version=4\n[shared]\nworker_count=\"invalid\"\n");
     assert(!app.load_config(path.u8string())&&app.ready&&app.controller.workers().size()==2&&!app.workflow_load_error.empty());
-    state.worker_count=4;
-    write(path,"config_version=3\n[shared]\nworker_count=2\n[gui]\nworker_count=3\n");
-    assert(app.load_config(path.u8string())&&app.controller.workers().size()==2&&app.workflow_worker_count==2);
-    write(path,"config_version=3\n[shared]\nworker_count=65\n");
+    write(path,"config_version=4\n[shared]\nworker_count=65\n");
     assert(!app.load_config(path.u8string())&&app.controller.workers().size()==2&&app.workflow_worker_count==2);
-    write(path,"config_version=3\n[gui]\nworker_count=3\n");
+    write(path,"config_version=4\n[shared]\nworker_count=3\n");
     assert(app.load_config(path.u8string())&&app.controller.workers().size()==3&&app.workflow_worker_count==3);
-    write(path,"config_version=2\n[gui]\nworker_count=3\n");
-    assert(app.load_config(path.u8string())&&app.controller.workers().size()==4&&app.workflow_worker_count==0);
-    write(path,"config_version=3\n");
-    assert(app.load_config(path.u8string())&&app.controller.workers().size()==4&&app.workflow_worker_count==0);
+    write(path,"config_version=3\n[shared]\nworker_count=4\n");
+    assert(!app.load_config(path.u8string())&&app.controller.workers().size()==3);
+    write(path,"config_version=4\n");
+    assert(app.load_config(path.u8string())&&app.controller.workers().size()==1);
 }
 static void result_table_contract(const fs::path& root){
     const auto row=[](int exponent,int b1,int day,bool factored=false){
@@ -493,9 +492,9 @@ static void result_table_contract(const fs::path& root){
     const auto first=row(100,100,2)+row(10,10,3,true)+row(2,2,1);
     const auto second=row(20,20,4);
     write(a,first);write(b,second);
-    ecmgui_v2::UiState state;state.path=root/"result.ui.toml";ecmgui_v2::App app(state,stdout);
+    ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);
     const auto workflow=root/"result-workflow.toml";
-    write(workflow,"config_version = 2\n[shared]\nworktodo_file = \"worktodo.txt\"\n[gui]\nworker_count = 1\n");
+    write(workflow,"config_version = 4\n[shared]\nworktodo_file = \"worktodo.txt\"\nworker_count = 1\n");
     assert(app.load_config(workflow.u8string()));
     app.results.set_paths({a.u8string(),b.u8string()});assert(app.results.refresh());
     auto* context=ImGui::CreateContext();auto& io=ImGui::GetIO();
@@ -550,7 +549,7 @@ static void result_table_contract(const fs::path& root){
     assert(app.result_uncopied_count==5);
     click_at(app.result_copy_controls[0]);assert(app.result_uncopied_count==5&&app.result_copies.last_copy().empty());
     assert(read(workflow).find("results_last_copy_utc")==std::string::npos);
-    app.config.set("gui","NumWorkers","2");
+    app.config.set("shared","workflow_worker_count","2");
     allow_clipboard=true;
     click_at(app.result_copy_controls[0]);assert(clipboard==row(10,10,3,true)&&app.result_uncopied_count==4);
     assert(!app.result_copies.last_copy().empty());
@@ -559,9 +558,9 @@ static void result_table_contract(const fs::path& root){
     const auto palette=ecmgui_v2::ui::palette(true);
     assert(has_color(ImGui::GetColorU32(palette.success_bg)));
     assert(read(workflow).find("results_last_copy_utc = \""+app.result_copies.last_copy()+"\"")!=std::string::npos);
-    assert(app.config.dirty()&&app.config.get("gui","NumWorkers")=="2");
+    assert(app.config.dirty()&&app.config.get("shared","workflow_worker_count")=="2");
     assert(read(workflow).find("worker_count = 1")!=std::string::npos);
-    ecmgui_v2::UiState restarted_state;restarted_state.path=root/"another-layout.toml";
+    ecmgui_v2::UiState restarted_state;
     ecmgui_v2::App restarted(restarted_state,stdout);
     assert(restarted.load_config(workflow.u8string()));
     assert(restarted.result_copies.last_copy()==app.result_copies.last_copy());
@@ -575,7 +574,29 @@ static void result_table_contract(const fs::path& root){
     ImGui::DestroyContext(context);
     std::cout<<"{\"result_sort_cycle\":true,\"sort_survives_refresh\":true,\"factored_row_both_themes\":true,\"copy_selected_then_new\":true,\"copy_history_restored\":true}\n";
 }
+static void stage2_main_config(const fs::path& root,const fs::path& combined) {
+    assert(!fs::exists(root));
+    fs::create_directories(root);
+    const auto config=root/"ecm.toml";
+    write(config,"config_version = 4\n[shared]\nworker_count = 3\nworktodo_file = \"worktodo.txt\"\n"
+        "[stage2]\ndevice = \"gpu\"\nstage2_gpu_device = 0\n[gui]\nstage2_exe = \""+
+        combined.generic_u8string()+"\"\n[worker.3]\ndevice = \"cPu\"\n");
+    write(root/"worktodo.txt","[Worker #1]\nECMSTAGE2N=first.save,300\n"
+        "[Worker #2]\n[Worker #3]\nECMSTAGE2N=third.save,300\n");
+    ecmgui_v2::UiState state;
+    ecmgui_v2::App app(state,stdout);
+    app.initialize(config.u8string(),true);
+    const auto& workers=app.controller.workers();
+    assert(workers.size()==3&&workers[2].stage2);
+    assert(fs::equivalent(fs::u8path(workers[2].exe),combined));
+    assert(workers[2].execution_target=="cpu"&&!workers[2].duplicate_device);
+    assert(workers[0].execution_target=="gpu");
+}
 int main(int argc,char** argv){
+    if(argc==4&&std::string_view(argv[1])=="--stage2-main-config") {
+        stage2_main_config(fs::absolute(fs::u8path(argv[2])),fs::absolute(fs::u8path(argv[3])));
+        return 0;
+    }
     pause_schedule_rules();
     {ecmgui::WorkerView worker;worker.stage2=true;auto& status=worker.stage2_status;
      const auto apply=[&](const char* line){status.apply(ecmgui::parse_line(line).stage2);};
@@ -776,9 +797,9 @@ int main(int argc,char** argv){
         assert(load_languages(original.u8string(),error));
     }
     const auto cfg=root/"ecm.toml",queue=root/"worktodo.txt";
-    write(cfg,"# preserve comment\n[shared]\nworktodo=\"worktodo.txt\"\n[stage1]\ntarget=\"cpu\"\n[gui]\nNumWorkers=2\nfont_size=\"auto\"\n[workers.1]\nautostart=0\n[workers.2]\nautostart=0\n");
+    write(cfg,"# preserve comment\nconfig_version=4\n[shared]\nworktodo_file=\"worktodo.txt\"\nworker_count=2\n[stage1]\ntarget=\"cpu\"\n[gui]\nfont_size=\"auto\"\n[worker.1]\nautostart=false\n[worker.2]\nautostart=false\n");
     write(queue,"# queue preserved\n[Worker #1]\n[Worker #2]\n");
-    ecmgui_v2::UiState state;state.path=root/"ui.toml";ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.ready);
+    ecmgui_v2::UiState state;ecmgui_v2::App app(state,stdout);app.initialize(cfg.u8string(),true);assert(app.ready);
     const auto original=read(cfg);
     std::strcpy(app.gen_input,"ECM2=1,2,127,-1,100,1,0\n");app.gen_options.use_recommended=false;app.gen_options.curves_fixed=4;app.gen_worker=2;
     assert(app.preview_generator());assert(app.gen_preview.segments.size()==1&&app.gen_preview.segments.front().worker==2);
@@ -788,48 +809,53 @@ int main(int argc,char** argv){
     const auto appended=read(queue);assert(appended.find("ECMSTAGE1=")>appended.find("[Worker #2]"));
     app.gen_options.curve_type="m3";assert(!app.preview_generator());app.gen_options.curve_type="m0";
     assert(!app.edit_business("gui","font_size","20"));assert(!app.edit_business("stage1","not_known","4"));
-    assert(app.edit_business("shared","b2_ratio","20"));assert(!app.start(1));assert(app.save_business());
+    assert(app.edit_business("stage2","b2_ratio","20"));assert(!app.start(1));assert(app.save_business());
     assert(read(cfg).find("# preserve comment")!=std::string::npos&&read(cfg).find("font_size=\"auto\"")!=std::string::npos);
-    assert(app.edit_business("shared","b2_ratio","30"));write(cfg,read(cfg)+"# changed externally\n");assert(!app.save_business());assert(app.load_config(cfg.u8string()));
+    assert(app.edit_business("stage2","b2_ratio","30"));write(cfg,read(cfg)+"# changed externally\n");assert(!app.save_business());assert(app.load_config(cfg.u8string()));
     {
-        const auto v2_path = root / "workflow-v2.toml";
-        write(v2_path, "config_version = 2\n[shared]\nqueue_order = \"file_order\"\n"
-                       "[stage1]\ngpu_device = 0\n"
-                       "[stage2]\ngpu_device = 1\n"
-                       "[worker.2]\nautostart = false\nstage2.gpu_device = 2\n");
+        const auto v4_path = root / "workflow-v4.toml";
+        write(v4_path, "config_version = 4\n[shared]\nqueue_order = \"file_order\"\n"
+                       "[stage1]\nstage1_gpu_device = 0\n"
+                       "[stage2]\nstage2_gpu_device = 1\n"
+                       "[worker.2]\nautostart = false\nstage2_gpu_device = 2\n");
         ecmgui_v2::UiState preferences;
-        ecmgui_v2::App v2(preferences, stdout);
-        assert(v2.load_config(v2_path.u8string()));
-        assert(v2.edit_business("shared", "queue_order", "stage1_first"));
-        assert(v2.edit_business("worker.2", "stage2.gpu_device", "3"));
-        assert(v2.edit_business("worker.2", "autostart", "true"));
-        assert(!v2.edit_business("shared", "queue_order", "unknown"));
-        assert(v2.save_business());
-        const auto saved = read(v2_path);
+        ecmgui_v2::App v4(preferences, stdout);
+        assert(v4.load_config(v4_path.u8string()));
+        assert(v4.edit_business("shared", "queue_order", "stage1_first"));
+        assert(v4.edit_business("worker.2", "stage2_gpu_device", "3"));
+        assert(v4.edit_business("worker.2", "autostart", "true"));
+        assert(!v4.edit_business("shared", "queue_order", "unknown"));
+        assert(v4.save_business());
+        const auto saved = read(v4_path);
         assert(saved.find("queue_order = \"stage1_first\"") != saved.npos &&
-               saved.find("stage2.gpu_device = 3") != saved.npos &&
+               saved.find("stage2_gpu_device = 3") != saved.npos &&
                saved.find("autostart = true") != saved.npos);
-        const auto first = ecmgui::preview_stage1(ecm_config::preview_entries(v2.config.lines(), 2));
-        const auto second = ecmgui::preview_stage2(ecm_config::preview_entries(v2.config.lines(), 2));
+        const auto first = ecmgui::preview_stage1(ecm_config::preview_entries(v4.config.lines(), 2));
+        const auto second = ecmgui::preview_stage2(ecm_config::preview_entries(v4.config.lines(), 2));
         assert(first.device == 0 && second.device == 3);
     }
     using namespace ecmgui::probability_ui;Request request;const auto forward=calculate(request);assert(forward.error.empty());
     auto inverse=request;inverse.solve=Solve::Curves;inverse.target=.75;const auto solved=calculate(inverse);assert(solved.error.empty());assert(cumulative(solved.probability.selected,solved.parameters.curves)>=.75);
     const auto csv=curve_csv(forward);request.parameters.b1=10;assert(curve_csv(forward)==csv);
-    {auto* context=ImGui::CreateContext();ImGui::GetIO().IniFilename=nullptr;
-     assert(app.edit_business("shared","b2_ratio","40")&&app.save_layout_config());
-     assert(!app.config.dirty()&&read(cfg).find("b2_ratio = 40")!=std::string::npos&&fs::exists(state.path));
-     const auto saved_state=read(state.path);const auto saved_config=read(cfg);
+    {auto* context=ImGui::CreateContext();ImGui::GetIO().IniFilename=nullptr;state.ui_theme="light";
+     assert(app.edit_business("stage2","b2_ratio","40")&&app.save_layout_config());
+     const auto saved_config=read(cfg);
+     assert(!app.config.dirty()&&saved_config.find("b2_ratio = 40")!=saved_config.npos&&
+            saved_config.find("theme = \"light\"")!=saved_config.npos);
      assert(app.save_layout_config()&&read(cfg)==saved_config); // Clean workflow is not rewritten.
-     assert(app.edit_business("shared","b2_ratio","50"));write(cfg,saved_config+"# external save conflict\n");
-     assert(!app.save_layout_config()&&read(state.path)==saved_state&&app.config.dirty());
-     assert(app.load_config(cfg.u8string()));state.writable=false;state.notice="fixture read-only sidecar";
-     assert(app.edit_business("shared","b2_ratio","60")&&!app.save_layout_config()&&read(cfg)==saved_config+"# external save conflict\n");
-     state.writable=true;assert(app.load_config(cfg.u8string()));ImGui::DestroyContext(context);}
+     assert(app.edit_business("stage2","b2_ratio","50"));write(cfg,saved_config+"# external save conflict\n");
+     assert(!app.save_layout_config()&&read(cfg)==saved_config+"# external save conflict\n"&&app.config.dirty());
+     state.ui_theme="dark";
+     assert(app.persist_preferences()&&app.config.dirty());
+     const auto merged=read(cfg);
+     assert(merged.find("# external save conflict")!=merged.npos&&merged.find("theme = \"dark\"")!=merged.npos&&
+            merged.find("b2_ratio = 40")!=merged.npos&&merged.find("b2_ratio = 50")==merged.npos);
+     assert(app.load_config(cfg.u8string())&&state.ui_theme=="dark");
+     ImGui::DestroyContext(context);}
     assert(original.find("font_size=\"auto\"")!=std::string::npos);
-    {const auto path=root/"gp-config.toml";write(path,"# preserve GP comment\n[shared]\nb2_ratio=10\n[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n");
+    {const auto path=root/"gp-config.toml";write(path,"# preserve GP comment\nconfig_version=4\n[stage2]\nb2_ratio=10\n[worker.1]\nautostart=false\n");
      ecmgui_v2::UiState preferences;ecmgui_v2::App gp_app(preferences,stdout);assert(gp_app.load_config(path.u8string()));
-     assert(gp_app.edit_business("shared","b2_ratio","25"));gp_app.group_order_input.gp="C:/GP Folder/gp.exe";assert(gp_app.save_group_order_gp());
+     assert(gp_app.edit_business("stage2","b2_ratio","25"));gp_app.group_order_input.gp="C:/GP Folder/gp.exe";assert(gp_app.save_group_order_gp());
      assert(gp_app.config.dirty()&&gp_app.config.get("shared","b2_ratio")=="25");
      const auto saved=read(path);assert(saved.find("b2_ratio=10")!=saved.npos&&saved.find("# preserve GP comment")!=saved.npos&&saved.find("C:/GP Folder/gp.exe")!=saved.npos);
      write(path,saved+"# external edit\n");gp_app.group_order_input.gp="other.exe";assert(!gp_app.save_group_order_gp()&&read(path)==saved+"# external edit\n");}

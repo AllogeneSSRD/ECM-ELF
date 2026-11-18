@@ -360,6 +360,7 @@ void WorkerController::refresh_worker_for_queue(WorkerView &w) {
     trace("worker "+std::to_string(w.index)+": dispatch "+
           (replacement.stage2?"ECMSTAGE2":"ECMSTAGE1"));
     w=std::move(replacement);
+    refresh_device_warnings();
     notify({WorkerNotice::Kind::StageChanged,w.index,{},0});
 }
 void WorkerController::refresh_device_warnings() {

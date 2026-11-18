@@ -17,10 +17,10 @@ HIT = "METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA=17; B1=20; N=0x138b
 def workflow(folder, device, target):
     folder.mkdir()
     (folder / 'ecm.toml').write_text(
-        'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
+        'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
         'finished_file = "finished.txt"\nlog_file = "worker.log"\n'
-        f'[stage2]\ndevice = "{target}"\nsave_dir = "."\ngpu_device = {device}\nd = 210\ncuda.curve_concurrency = "serial"\n'
-        'cpu.threads = 2\ncpu.backend = "gwpoly"\ntune.runtime_enabled = false\nresults_file = "results.jsonl"\n', encoding='utf-8')
+        f'[stage2]\ndevice = "{target}"\nstage2_save_dir = "."\nstage2_gpu_device = {device}\nd = 210\ncurve_concurrency = "serial"\n'
+        'stage2_cpu_threads = 2\ncpu_backend = "gwpoly"\ntune_runtime_enabled = false\nstage2_results_file = "results.jsonl"\n', encoding='utf-8')
     (folder / 'points.save').write_text(POINTS, encoding='utf-8')
     (folder / 'hit.save').write_text(HIT, encoding='utf-8')
 

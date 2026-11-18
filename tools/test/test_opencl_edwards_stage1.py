@@ -41,14 +41,15 @@ def main():
         conf = folder / "ecm.toml"
         mul = "cios" if start_cios else args.mul
         sqr = "cios" if start_cios else args.sqr
+        thread_key = "stage1_cpu_threads" if target == "cpu" else "gpu_init_threads"
         conf.write_text(
-            f'config_version = 3\n[shared]\nlog_file = ""\n[stage1]\nparam = "e"\n'
-            f'target = "{target}"\ngpu_backend = "{"cuda" if cuda else "opencl"}"\ngpu_device = {args.device}\n'
+            f'config_version = 4\n[shared]\nlog_file = ""\n[stage1]\nparam = "e"\n'
+            f'target = "{target}"\nstage1_gpu_backend = "{"cuda" if cuda else "opencl"}"\nstage1_gpu_device = {args.device}\n'
             f'gpu_algorithm = "{"thread" if cuda and target == "gpu" else "cgbn"}"\n'
             f'cpu_implementation = "scalar"\nedwards_doubling = {doubling}\n'
-            f'opencl.kernel_mul = "{mul}"\nopencl.kernel_sqr = "{sqr}"\n'
-            f'naf_memory_mb = {cap}\ncheckpoint_interval_seconds = {period}\ncpu_threads = {threads}\n'
-            f'handoff.mode = "off"\nsave_dir = {json.dumps(folder.as_posix())}\n',
+            f'opencl_kernel_mul = "{mul}"\nopencl_kernel_sqr = "{sqr}"\n'
+            f'naf_memory_mb = {cap}\ncheckpoint_interval_seconds = {period}\n{thread_key} = {threads}\n'
+            f'handoff_mode = "off"\nstage1_save_dir = {json.dumps(folder.as_posix())}\n',
             encoding="ascii",
         )
         return conf

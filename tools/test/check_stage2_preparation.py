@@ -64,10 +64,10 @@ def main():
         (run_dir / 'worktodo.txt').write_text(
             f'ECMSTAGE2=1,2,{a.exponent},-1,"points.save",{a.b2},0,{a.curves},"{((1 << a.exponent)-1)//n}"\n',
             encoding='utf-8')
-        (run_dir / 'ecm.toml').write_text('[stage2]\n'
-            'stage2_auto_carrier = true\nstage2_auto_b2 = false\n'
-            'stage2_tune_runtime = true\nstage2_tune_runtime_samples = 10\n'
-            'stage2_prediction_policy = "model"\nstage2_short_calibration = false\n', encoding='utf-8')
+        (run_dir / 'ecm.toml').write_text('config_version=4\n[stage2]\ndevice="gpu"\n'
+            'auto_carrier = true\nauto_b2 = false\n'
+            'tune_runtime_enabled = true\ntune_runtime_sample_limit = 10\n'
+            'prediction_policy = "model"\nshort_calibration = false\n', encoding='utf-8')
         command = [str(executable.resolve()), '--config', str(run_dir / 'ecm.toml'),
             '--device', str(a.device), '--worktodo', str(run_dir / 'worktodo.txt'), '--once',
             '--batch-mb', '64', '--arena-mb', '0', '--owner-budget-mb', '960',

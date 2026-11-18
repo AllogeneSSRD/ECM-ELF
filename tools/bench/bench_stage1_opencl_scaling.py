@@ -73,11 +73,11 @@ class Collector:
         save = folder / "point.save"
         cfg = folder / "ecm.toml"
         cfg.write_text(
-            'config_version = 3\n[shared]\nlog_file = ""\n[stage1]\n'
-            f'param = "{model}"\ntarget = "gpu"\ngpu_backend = "{backend}"\ngpu_device = {self.args.device}\n'
+            'config_version = 4\n[shared]\nlog_file = ""\n[stage1]\n'
+            f'param = "{model}"\ntarget = "gpu"\nstage1_gpu_backend = "{backend}"\nstage1_gpu_device = {self.args.device}\n'
             'gpu_algorithm = "cgbn"\nedwards_naf_window_bits = 6\nedwards_doubling = 1\n'
-            'opencl.threads_per_integer = 1\nhandoff.mode = "off"\ncheckpoint_interval_seconds = 0\n'
-            f'opencl.workgroup_size = {wg}\nsave_dir = {json.dumps(folder.as_posix())}\n'
+            'opencl_threads_per_integer = 1\nhandoff_mode = "off"\ncheckpoint_interval_seconds = 0\n'
+            f'opencl.workgroup_size = {wg}\nstage1_save_dir = {json.dumps(folder.as_posix())}\n'
             f'exponent_cache_dir = {json.dumps((self.root / "scalar_cache").as_posix())}\n', encoding="ascii")
         seed = str(SIGMA) if model == "e" else f"3:{SIGMA}"
         cmd = [str(self.exe[backend]), "--config", str(cfg), "-sigma", seed, "-gpucurves",

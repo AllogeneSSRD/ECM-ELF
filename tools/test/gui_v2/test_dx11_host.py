@@ -23,7 +23,8 @@ def modules(pid):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--exe',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args();out=a.out.resolve();out.mkdir();log=out/'dx11.log'
     env=os.environ.copy();env.pop('VULKAN_SDK',None);env.pop('VK_LAYER_PATH',None);env.pop('VK_INSTANCE_LAYERS',None)
-    proc=subprocess.Popen([str(a.exe.resolve()),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--no-nvml'],cwd=out,env=env)
+    config=out/'ecm.toml';config.write_text('config_version=4\n')
+    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(config),'--diagnostics',str(log),'--no-nvml'],cwd=out,env=env)
     hwnd=window(proc.pid,'ecm_gui_v2');user.ShowWindow(hwnd,4)
     try:
         end=time.monotonic()+12

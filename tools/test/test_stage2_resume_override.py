@@ -21,8 +21,8 @@ def main():
         work=out/name
         result=subprocess.run(list(map(str,[fixture,work,save,schema,done,960,10000])),capture_output=True,text=True,check=True)
         metadata=json.loads(result.stdout)
-        ini=work/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\nb2_ratio=0\n[stage2]\n'
-            'stage2_save_dir="."\nstage2_finished="finished.txt"\nstage2_progress_dir="progress"\n',encoding='utf-8')
+        ini=work/'ecm.toml';ini.write_text('config_version=4\n[shared]\nuser=""\ncomputer=""\nfinished_file="finished.txt"\n'
+            '[stage2]\ndevice="gpu"\nb2_ratio=0\nstage2_save_dir="."\ncheckpoint_dir="progress"\n',encoding='utf-8')
         return work,metadata
     def task(work,count,b2=20000):
         line=f'ECMSTAGE2=1,2,521,-1,"e_m521_1000.save",{b2},0,{count}\n'

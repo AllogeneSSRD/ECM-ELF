@@ -49,7 +49,7 @@ def main():
             assert result.returncode == 0, result.stdout
         return result.stdout
 
-    common = f'''config_version = 3
+    common = f'''config_version = 4
 [shared]
 log_file = ""
 cpu_affinity = "{third}"
@@ -59,17 +59,17 @@ target = "cpu"
 param = "e"
 cpu_implementation = "scalar"
 edwards_naf_window_bits = 6
-cpu_threads = 4
-gpu.init_threads = 1
+stage1_cpu_threads = 4
+gpu_init_threads = 1
 [stage2]
-cpu.threads = 1
-cpu.backend = "gwpoly"
-tune.runtime_enabled = false
+stage2_cpu_threads = 1
+cpu_backend = "gwpoly"
+tune_runtime_enabled = false
 [worker.2]
-shared.cpu_affinity = "{second}, {first}-{second}"
-stage1.cpu.threads = 1
-stage1.gpu.init_threads = 3
-stage2.cpu.threads = 2
+cpu_affinity = "{second}, {first}-{second}"
+stage1_cpu_threads = 1
+gpu_init_threads = 3
+stage2_cpu_threads = 2
 '''
     stage1 = ["-gpucurves", "4", "-sigma", "26"]
     save = out / "ed.save"
@@ -90,15 +90,12 @@ stage2.cpu.threads = 2
                      [*stage1, "--target", "gpu", "--gpu-backend", "opencl", "-d", str(args.opencl_device),
                       "128", "128"], data="2^127-1\n")
         assert pool in thread and "construction_threads=2" in thread, thread
-    gpu = run("legacy_cli_override", args.stage1, common,
+    gpu = run("cli_override", args.stage1, common,
               [*stage1, "--target", "gpu", "--gpu-algorithm", "ntt", "-d", str(args.device),
                "--gpu-init-threads", "1", "--stage1-threads", "3", "128", "128"], data="2^127-1\n")
     assert "stage1_ntt_edwards_setup: threads=1 " in gpu, gpu
-    legacy = common.replace('stage1.cpu.threads = 1\nstage1.gpu.init_threads = 3', 'stage1.cpu_threads = 2')
-    cpu = run("legacy_worker_cpu", args.stage1, legacy, [*stage1, "128", "128"], data="2^127-1\n")
-    assert re.search(r"Stage1 execution: .*backend=cpu .*\bthreads=2\b", cpu), cpu
-    legacy = legacy.replace(f'shared.cpu_affinity = "{second}, {first}-{second}"', 'shared.cpu_affinity = "none"')
-    gpu = run("legacy_worker_gpu", args.stage1, legacy,
+    no_affinity = common.replace(f'cpu_affinity = "{second}, {first}-{second}"', 'cpu_affinity = "none"')
+    gpu = run("worker_disables_affinity", args.stage1, no_affinity,
               [*stage1, "--target", "gpu", "--gpu-algorithm", "ntt", "-d", str(args.device), "128", "128"],
               data="2^127-1\n")
     assert "worker_cpu_affinity:" not in gpu and "stage1_ntt_edwards_setup: threads=2 " in gpu, gpu
@@ -123,7 +120,7 @@ stage2.cpu.threads = 2
                                                   "device": args.device, "gpu_stage2": bool(args.gpu_stage2),
                                                   "opencl_stage1": bool(args.opencl_stage1),
                                                   "opencl_stage2": bool(args.opencl_stage2)}))
-    print("PASS worker CPU resources, legacy fallback, CLI precedence and affinity")
+    print("PASS worker CPU resources, CLI precedence and affinity")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@
 #include <map>
 
 struct EcmQueueConfig : ecm_config::Stage1Values {
-    int config_version = 1;
+    int config_version = ecm_config::business_config_version;
     // Presence only; raw values/locations remain in ParsedConfig. This keeps
     // explicit configuration distinct from mode-specific omitted-value policy.
     std::set<std::string> config_keys;
@@ -24,7 +24,7 @@ struct ParsedConfig {
         std::vector<const ecm_config::Binding<ecm_config::Stage1Values>*> bindings;
     };
     std::string path;
-    int config_version = 1;
+    int config_version = ecm_config::business_config_version;
     std::vector<ecm_config::TomlLine> lines;
     std::map<int, Stage1Scope> stage1;
 };

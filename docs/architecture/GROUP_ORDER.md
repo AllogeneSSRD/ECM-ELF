@@ -51,7 +51,7 @@ Stage1 `--go` 默认 `--go-backend auto`，可指定 `pari` / `native`、`gp` �
 
 `go`、`go_factor` 与 `go_min_bounds` 仍采用群阶口径；`go_point_order`、`go_point_factor` 和 `go_point_bounds` 只在点阶分析完成后输出。点阶界限按实际 1LCM、12LCM 或 48LCM 调整。`go_status` 保留实际后端、状态、证明资格、`pari_failure` 和 `gp_failure`；群阶与点阶字段不能互换。
 
-Stage2 的 `stage2_factorize_hits` / `--factorize-hits` 开启后使用相同 Auto 策略执行整数分解，不自动执行整套群阶分析。`stage2_gp` / `--gp` 指定备选外部程序，`stage2_factor_timeout` / `--factor-timeout` 只控制 GP 的超时。原始已验证因子先发布，诊断异常不改变原始 `factors`、曲线成功状态和队列回执。内部 `stage2-engine.factor_analysis` 保留 raw、后端、PARI/GP 失败原因、素数幂、证明资格与余因子；仅完整且全部已证素时 `factorization_complete=true`。分量乘积与余因子之积必须等于 raw，诊断日志不可写也不影响发布。
+Stage2 的 `decompose_factors` / `--factorize-hits` 开启后使用相同 Auto 策略执行整数分解，不自动执行整套群阶分析。`gp` / `--gp` 指定备选外部程序，`factor_timeout_seconds` / `--factor-timeout` 只控制 GP 的超时。原始已验证因子先发布，诊断异常不改变原始 `factors`、曲线成功状态和队列回执。内部 `stage2-engine.factor_analysis` 保留 raw、后端、PARI/GP 失败原因、素数幂、证明资格与余因子；仅完整且全部已证素时 `factorization_complete=true`。分量乘积与余因子之积必须等于 raw，诊断日志不可写也不影响发布。
 
 构建、依赖分发和源码许可见[构建说明](../usage/BUILD.md#共享-pari-诊断依赖)。后端协议验收入口为 `tools/test/test_shared_pari.py`；生产调用验证入口为 Stage1 的实际命中及 `test_stage2_factorize_frontend.py`。后者以合成 saved-X 因子进入真实前端和发布流程，不代表额外验证 GPU Stage2 算术。
 

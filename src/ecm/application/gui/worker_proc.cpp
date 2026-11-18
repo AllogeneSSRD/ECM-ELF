@@ -211,12 +211,13 @@ bool WorkerProc::spawn_locked(std::string &err) {
                         CREATE_SUSPENDED;   // assign to the job before it can run
     const BOOL ok = CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, TRUE, flags,
                                    nullptr, cwd.empty() ? nullptr : cwd.c_str(), &si, &pi);
+    const DWORD spawn_error = ok ? ERROR_SUCCESS : GetLastError();
     CloseHandle(wr);
     if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
     if (!ok) {
         CloseHandle(rd);
         CloseHandle(stop_event);
-        err = "CreateProcessW failed (" + std::to_string(GetLastError()) + ")";
+        err = "CreateProcessW failed (" + std::to_string(spawn_error) + "): " + spawn_.exe;
         return false;
     }
 
