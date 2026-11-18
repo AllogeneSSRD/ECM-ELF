@@ -1,7 +1,7 @@
 # GENERATED from config/ecm_options.json / 由 config/ecm_options.json 生成
 # ECM_TOML_REFERENCE.en.md lists advanced settings and worker overrides.
 # 高级设置和 worker 覆盖见 ECM_TOML_REFERENCE.zh-CN.md。
-config_version = 3
+config_version = 4
 
 [shared]
 # log_file = "ecm.log"  # string: <path>
@@ -13,7 +13,7 @@ config_version = 3
 # Shared completed-work file for both stages. Relative paths use the configuration directory.
 # 两阶段共用的完成记录。相对路径基于配置目录。
 
-# log_file_max_KB = 10000  # u64: [1000..1000000]
+# log_file_max_kb = 10000  # u64: [1000..1000000]
 # Rotate the shared run log after its size exceeds this limit. 1 KB is 1000 bytes.
 # 共享运行日志超过此上限后归档。1 KB 等于 1000 字节。
 
@@ -57,14 +57,14 @@ worktodo_file = "worktodo.txt"  # string: <path>
 # Stage1 曲线构造。auto 时，队列任务默认用 Edwards，直接输入在 CPU 上默认用 m0，在 GPU 上默认用 m3。
 # curve 可在 auto 时指定曲线。ECMSTAGE1 的存档类型前缀优先。
 
-# handoff.mode = "ecm-elf"  # string: [off|ecm-elf|prime95]
+# handoff_mode = "ecm-elf"  # string: [off|ecm-elf|prime95]
 # Send successful Stage1 tasks with usable points and no factor to ECM-ELF Stage2 by default. Append
 # the new task at the end of the source worker's queue unless a receiver is configured. Use off to
 # keep the save or prime95 to select Prime95.
 # Stage1 无因子完成且有可用保存点时，默认在原 worker 队列末尾追加 ECM-ELF Stage2 任务。可配置其他接
 # 收方。off 只保留存档，prime95 交给 Prime95。
 
-save_dir = "."  # string: <path>
+stage1_save_dir = "."  # string: <path>
 # Output directory for Stage1 curve saves. Stage2 also searches here when stage2_save_dir is unset.
 # This is not a Stage2 RAM or VRAM budget.
 # 指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此
@@ -84,12 +84,12 @@ save_dir = "."  # string: <path>
 
 verbose = true  # bool: [false|true|0|1]
 # Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries;
-# stage2_debug_log independently controls debug logging. Stage1 uses the selected backend's normal
+# debug_log independently controls debug logging. Stage1 uses the selected backend's normal
 # verbosity behavior.
 # 控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由
-# stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
+# debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
 
-# gpu_backend = "auto"  # string: [auto|cuda|opencl]
+# stage1_gpu_backend = "auto"  # string: [auto|cuda|opencl]
 # Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the
 # selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device
 # indices belong to the selected backend. Override with --gpu-backend.
@@ -97,43 +97,43 @@ verbose = true  # bool: [false|true|0|1]
 # 要求安装对应程序。设备编号按选中后端解释。--gpu-backend 优先。
 
 target = "gpu"  # string: [cpu|gpu]
-# Run Stage1 on CPU or GPU. The gpu_backend setting selects CUDA or desktop OpenCL. Both support
-# Edwards within their own width limits.
-# 选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持
-# Edwards。
+# Run Stage1 on CPU or GPU. The stage1_gpu_backend setting selects CUDA or desktop OpenCL. Both
+# support Edwards within their own width limits.
+# 选择 Stage1 在 CPU 或 GPU 执行。stage1_gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内
+# 支持 Edwards。
 
 # cpu_implementation = "auto"  # string: [auto|simd|scalar|gwnum|slice list|empty]
 # Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or
 # an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires
-# AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries
-# each candidate in order on the actual modulus after removing known factors. Overlapping slices are
-# allowed. The first available backend whose slice contains the width is selected. Slices include
-# the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is
-# equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd
-# requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum
-# requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can
-# inherit this TOML policy and leave it inactive.
+# AVX512-IFMA. A list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate
+# in order on the actual modulus after removing known factors. Overlapping slices are allowed. The
+# first available backend whose slice contains the width is selected. Slices include the start and
+# exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to
+# [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires
+# AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires
+# Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can inherit
+# this TOML policy and leave it inactive.
 # 选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实
-# 际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这
-# 样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。
-# 切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用
-# auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。
-# gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此
-# TOML 策略，运行时不启用。
+# 际模数超过 10240 位时要求 AVX512-IFMA。支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样
+# 的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切
+# 片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[]
+# 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum
+# 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策
+# 略，运行时不启用。
 
-# gpu_device = 0  # int: <x:Z,0..device_count-1>
+# stage1_gpu_device = 0  # int: <x:Z,0..device_count-1>
 # Zero-based GPU device ID for Stage1. Stage2 inherits it unless stage2_device is explicitly set.
 # IDs refer to the device list exposed by the executable's actual GPU backend.
 # 选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对
 # 应各可执行文件实际使用的 GPU 后端设备列表。
 
-# submission_file = "results.json.txt"  # string: <path>
+# stage1_submission_file = "results.json.txt"  # string: <path>
 # Stage1 submission JSON: seal NF once the whole task completes (B2=B1); publish verified factors
 # immediately as individual curves. Private ledgers live under the output directory data/.
 # Stage1 提交 JSON：整条任务完成后合并 NF（B2=B1）；验证后的因子立即单曲线输出。私有账本位于输出目录
 # 的 data/ 下。
 
-# results_file = "stage1_results.jsonl"  # string: <path>
+# stage1_results_file = "stage1_results.jsonl"  # string: <path>
 # Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from
 # submission output.
 # 统一格式的逐曲线 Stage1 内部 JSONL，包含 CRC32 与执行元数据，与提交文件分开。
@@ -145,13 +145,13 @@ target = "gpu"  # string: [cpu|gpu]
 # GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的乘积。设为 0 时由其他设置选择 B2。乘积
 # 超出范围会报错。
 
-# submission_file = "results.json.txt"  # string: <path>
+# stage2_submission_file = "results.json.txt"  # string: <path>
 # Submission-only ECM JSON lines, separate from the internal results JSONL. Uses a reference FFT
 # size from Prime95 mult.asm. Personal identifiers and checksums belong only in local ignored files.
 # 仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存
 # 在本地忽略文件中。
 
-# results_file = ""  # string: <path>
+# stage2_results_file = ""  # string: <path>
 # Optional per-curve Stage2 JSONL for CPU and GPU queue tasks. Empty disables it for queue runs.
 # Direct save runs use the default filename. Keep the original JSONL until legacy checkpoint
 # migration completes.
@@ -164,11 +164,11 @@ target = "gpu"  # string: [cpu|gpu]
 # 统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不
 # 区分大小写，可用 --target 覆盖。
 
-# gpu_device = -1  # int: [-1|0..2^31-1]
+# stage2_gpu_device = -1  # int: [-1|0..2^31-1]
 # Stage2 CUDA device ID. -1 inherits Stage1's device; 0 or greater selects a CUDA device explicitly.
 # Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。
 
-# gpu_backend = "auto"  # string: [auto|cuda|opencl]
+# stage2_gpu_backend = "auto"  # string: [auto|cuda|opencl]
 # Windows GPU worker. Auto prefers an installed CUDA worker with a visible CUDA device at the
 # selected index, then OpenCL. Explicit selection requires that worker beside the executable. Device
 # indices belong to the selected backend. Override with --gpu-backend.
@@ -186,20 +186,14 @@ target = "gpu"  # string: [cpu|gpu]
 # auto_b2 = false  # bool: [false|true|0|1]
 # Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time including Stage1
 # cost; 0 disables. Requires usable Stage2 costs and positive Stage1 s/curve. B1 never gates tune
-# reuse; stage2_tune_ignore controls other conditions. Memory and carrier divisibility are checked
-# on the current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its
-# original qualification checks.
+# reuse; tune_ignore controls other conditions. Memory and carrier divisibility are checked on the
+# current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its original
+# qualification checks.
 # 所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用
-# Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 stage2_tune_ignore 控制。当
-# 前输入仍检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。
+# Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 tune_ignore 控制。当前输入仍
+# 检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。
 
 [gui]
-# worker_count = 1  # int: <x:Z,1..64>
-# Legacy count for workers managed by the GUI. For v3 workflows, shared.worker_count takes
-# precedence when present. Each worker uses its own [worker.N] settings.
-# GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 shared.worker_count 时优先使用该值。各 worker 使
-# 用自己的 [worker.N] 设置。
-
 [worker.1]
 # autostart = false  # bool: [false|true]
 # Start this worker when the GUI opens. The setting applies to GUI startup.

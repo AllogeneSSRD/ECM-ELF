@@ -39,15 +39,15 @@ def main():
         work.mkdir()
         config = work / "ecm.toml"
         config.write_text(
-            'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
+            'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
             'finished_file = "finished.txt"\nlog_file = ""\n'
             f'tune_file = "{(work / "tune.toml").as_posix()}"\n'
-            f'[stage1]\nparam = "{model}"\ntarget = "gpu"\ngpu_backend = "cuda"\n'
-            f'gpu_device = {args.device}\ngpu_algorithm = "{algorithm}"\n'
-            f'save_dir = "{work.as_posix()}"\nhandoff.mode = "ecm-elf"\n'
-            f'edwards_naf_window_bits = {window}\nntt.convolution = "{mode}"\n'
+            f'[stage1]\nparam = "{model}"\ntarget = "gpu"\nstage1_gpu_backend = "cuda"\n'
+            f'stage1_gpu_device = {args.device}\ngpu_algorithm = "{algorithm}"\n'
+            f'stage1_save_dir = "{work.as_posix()}"\nhandoff_mode = "ecm-elf"\n'
+            f'edwards_naf_window_bits = {window}\nntt_convolution = "{mode}"\n'
             'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = 0.01\n'
-            + ("" if allow is None else f"ntt.allow_known_factors = {allow}\n"),
+            + ("" if allow is None else f"ntt_allow_known_factors = {allow}\n"),
             encoding="utf-8",
         )
         (work / "worktodo.txt").write_text(
@@ -131,7 +131,7 @@ def main():
     assert "backend=cgbn" in run(work, command)
     assert inspect(work, n, "e")[0] == reference["e"]
     passed("disabled_policy_uses_cgbn")
-    for value, reason in ((0, "Mersenne carrier"), (2, "ntt.allow_known_factors")):
+    for value, reason in ((0, "Mersenne carrier"), (2, "ntt_allow_known_factors")):
         work, command, _ = fixture(f"rejected_{value}", allow=value)
         before = (work / "worktodo.txt").read_bytes()
         assert reason in run(work, command, success=False)
@@ -180,11 +180,11 @@ def main():
     saved = checkpoint.read_bytes()
     config = work / "ecm.toml"
     config.write_text(config.read_text(encoding="utf-8").replace(
-        "ntt.allow_known_factors = 1", "ntt.allow_known_factors = 0"), encoding="utf-8")
+        "ntt_allow_known_factors = 1", "ntt_allow_known_factors = 0"), encoding="utf-8")
     run(work, command, label="disabled_resume", success=False)
     assert checkpoint.read_bytes() == saved
     config.write_text(config.read_text(encoding="utf-8").replace(
-        "ntt.allow_known_factors = 0", "ntt.allow_known_factors = 1"), encoding="utf-8")
+        "ntt_allow_known_factors = 0", "ntt_allow_known_factors = 1"), encoding="utf-8")
     run(work, command, label="resumed")
     resumed, _ = inspect(work, n, "e", b1=1024, count=130, oracle=False, known=known, p=244)
     full, full_command, _ = fixture("continuous", p=244, known=known, b1=1024, count=130, window=6)
@@ -198,9 +198,9 @@ def main():
         work.mkdir()
         (work / "worktodo.txt").write_text(stage2_handoff + "\n", encoding="utf-8")
         (work / "ecm.toml").write_text(
-            'config_version = 3\n[shared]\nlog_file = ""\n'
-            '[stage1]\nntt.allow_known_factors = 0\n'
-            '[stage2]\nresults_file = "stage2_results.jsonl"\ntune.runtime_enabled = false\n', encoding="utf-8")
+            'config_version = 4\n[shared]\nlog_file = ""\n'
+            '[stage1]\nntt_allow_known_factors = 0\n'
+            '[stage2]\ndevice = "gpu"\nstage2_results_file = "stage2_results.jsonl"\ntune_runtime_enabled = false\n', encoding="utf-8")
         run(work, [stage2, "--config", work / "ecm.toml", "--device", str(args.device),
                    "--d", "210", "--factor-only"])
         rows = [json.loads(row) for row in (work / "stage2_results.jsonl").read_text().splitlines()]

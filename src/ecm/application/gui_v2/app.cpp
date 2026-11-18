@@ -30,7 +30,7 @@ std::string executable_path(const std::string& input, const std::string& base) {
 App::App(UiState& value, FILE* log) : state(value), controller(config), log_(log) {
     if(state.ui_language_file.empty())state.ui_language_file=state.ui_language=="zh"?"chineseSimplified.xml":"english.xml";
     if(ui::language_directory().empty()){std::string error;ui::load_languages(ecmgui::exe_dir()+"/localization/v2",error,state.ui_language_file);if(!error.empty())trace("localization: "+error);}
-    // Read old page/sidecar IDs without keeping Settings in the dock workspace.
+    // Settings opens outside the dock workspace.
     if(state.ui_page==5){state.ui_page=0;open_settings();}
     if(state.ui_right_pages&(1<<5)){state.ui_right_pages&=~(1<<5);reset_layout=true;}
     if((state.ui_right_pages&223)==223){state.ui_right_pages&=~1;reset_layout=true;}
@@ -71,27 +71,22 @@ void App::trace(const std::string& text) {
     if (messages.size() == 4000) messages.pop_front(); messages.push_back(text);
     std::fprintf(log_, "app: %s\n", text.c_str()); std::fflush(log_);
 }
-void App::initialize(const std::string& path, bool disable_nvml) {
+void App::initialize(const std::string& path, bool disable_nvml, bool load_preferences) {
     no_nvml = disable_nvml;
-    if (!path.empty()) load_config(path); else status = "Open a workflow TOML to manage workers.";
+    if (!path.empty()) load_config(path,load_preferences); else status = "Open a workflow TOML to manage workers.";
     if (!no_nvml) {
         if(!gpu.start(500))trace("GPU monitor unavailable: " + gpu.reason());
         else {gpu_details.start(gpu.nvml_source(),gpu.devices());gpu_clocks.start(gpu.nvml_source(),system_clock_query_tool());}
     }
 }
-bool App::load_config(const std::string& input) {
+bool App::load_config(const std::string& input, bool load_preferences) {
     if (controller.busy()) { status = "Stop all workers before changing workflow."; return false; }
     std::snprintf(config_input,sizeof(config_input),"%s",input.c_str());
     try {
         const auto path = std::filesystem::weakly_canonical(std::filesystem::absolute(std::filesystem::u8path(input))).u8string();
-        std::error_code same_error;
-        if (!state.path.empty() && (std::filesystem::equivalent(std::filesystem::u8path(path), state.path, same_error) ||
-            _wcsicmp(std::filesystem::weakly_canonical(std::filesystem::u8path(path)).c_str(), std::filesystem::weakly_canonical(state.path).c_str()) == 0))
-            throw std::runtime_error("Business TOML and UI sidecar must be distinct");
         std::string error; ecmgui::TomlFile candidate;
         if (!candidate.load(path, error)) throw std::runtime_error(error);
-        const int worker_count = candidate.config_version() >= 3 ?
-            ecm_config::configured_workflow_worker_count(candidate.lines(), path) : 0;
+        const int worker_count = ecm_config::configured_workflow_worker_count(candidate.lines(), path);
         const auto pause_rows=ecm_config::toml_string_array(candidate.get("gui","pause_schedule","[]"));
         PauseSchedule schedule;
         PauseScheduleError schedule_error;
@@ -103,6 +98,14 @@ bool App::load_config(const std::string& input) {
             scheduled_paused_.clear();
             scheduled_resume_.clear();
             scheduled_autostart_.clear();
+        }
+        if(load_preferences) {
+            if(!state.load(candidate))trace(state.notice);
+            else {
+                const auto language_file=state.ui_language_file.empty()?
+                    (state.ui_language=="zh"?"chineseSimplified.xml":"english.xml"):state.ui_language_file;
+                if(language_file!=ui::selected_language_file())select_language_file(language_file);
+            }
         }
         config = std::move(candidate); config_path = path; workflow_worker_count = worker_count;
         leases_.clear();log_views_.clear();log_last_worker_=-1;
@@ -121,7 +124,7 @@ bool App::load_config(const std::string& input) {
         configure_workers(); ready = true; gen_valid = false; selected_results.clear(); result_filter=ecmgui::ResultFilter{};result_view_dirty=true;
         ecmgui::stamp_file(config_path, config_stamp); autostart_pending = true;
         results.set_paths(ecmgui::result_paths(config.lines(), config_path, static_cast<int>(controller.workers().size())));
-        result_copies.load(std::filesystem::u8path(config_path),state.path,config.get("gui","results_last_copy_utc"));
+        result_copies.load(std::filesystem::u8path(config_path),{},config.get("gui","results_last_copy_utc"));
         workflow_load_error.clear();status = "Workflow opened."; trace("config=" + path);
         install_pause_schedule(std::move(schedule),schedule_error,pause_rows);
         SYSTEMTIME local_time{};
@@ -135,18 +138,16 @@ void App::configure_workers() {
     ecmgui::WorkerSettings workers;
     workers.stage2_average=false;
     workers.ini_path = config_path;
-    workers.num_workers = workflow_worker_count > 0 ? workflow_worker_count :
-        state.worker_count > 0 ? state.worker_count : settings.NumWorkers;
+    workers.num_workers = std::max(1,workflow_worker_count);
     const auto base = ecmgui::path_dir(config_path);
-    auto first = state.worker_stage1_exe.empty() ? settings.exe : state.worker_stage1_exe;
-    auto second = state.worker_stage2_exe.empty() ? settings.stage2_exe : state.worker_stage2_exe;
+    auto first = settings.exe;
     auto installed = [&](const char* cuda, const char* opencl) {
         if (ecmgui::file_exists(executable_path(cuda, base))) return cuda;
         return ecmgui::file_exists(executable_path(opencl, base)) ? opencl : cuda;
     };
     if (first.empty()) first = installed("ecm_cuda.exe", "ecm.exe");
     workers.worker_exe = executable_path(first, base);
-    workers.stage2_exe = second.empty() ? ecmgui::adjacent_stage2_exe(base) : executable_path(second, base);
+    workers.stage2_exe = settings.stage2_exe.empty() ? ecmgui::adjacent_stage2_exe(base) : executable_path(settings.stage2_exe, base);
     workers.priority = settings.priority; workers.exit_confirm = settings.exit_confirm;
     workers.graceful_stop_ms = static_cast<unsigned long long>(settings.graceful_stop_ms);
     controller.configure(workers); controller.suppress_autostart();
@@ -158,6 +159,7 @@ void App::configure_workers() {
         worker_b2_ratios_[worker.index]=ecmgui::preview_stage2(ecm_config::Entries{entry}).b2_ratio;
     std::snprintf(stage1_input, sizeof(stage1_input), "%s", workers.worker_exe.c_str());
     std::snprintf(stage2_input, sizeof(stage2_input), "%s", workers.stage2_exe.c_str());
+    worker_count_input = workers.num_workers;
 }
 bool App::start(int index,ecmgui::WorkerStart origin) {
     if (!ready || controller.exit_phase() != ecmgui::WorkerController::ExitPhase::Idle) return false;
@@ -324,7 +326,9 @@ void App::tick(const SYSTEMTIME& local_time) {
     resume_scheduled_workers();
     const auto now = GetTickCount64();
     poll_task_watch(now);
-    auto timing_file=state.path;timing_file+=".stage2-timing.json";stage2_history_.load(timing_file);
+    auto timing_file=std::filesystem::u8path(config_path);
+    if(!timing_file.empty())timing_file+=".stage2-timing.json";
+    stage2_history_.load(timing_file);
     const bool poll_tune=now>=stage2_tune_poll_;if(poll_tune)stage2_tune_poll_=now+1000;
     for(const auto& worker:controller.workers())if(worker.stage2){
         const auto device=gpu_details.get(worker.device).uuid;
@@ -471,7 +475,9 @@ bool App::save_preferences(const char* success_key) {
             state.window_maximized=IsZoomed(hwnd)!=FALSE;
             if(!state.window_maximized){RECT rect{};if(GetWindowRect(hwnd,&rect)){state.window_x=rect.left;state.window_y=rect.top;state.window_width=rect.right-rect.left;state.window_height=rect.bottom-rect.top;}}
         }
-        const bool saved=state.save();status=saved?ui::text(success_key,state.ui_language!="en"):state.notice;toast(status,!saved);return saved;
+        const bool saved=persist_preferences();
+        if(saved)status=ui::text(success_key,state.ui_language!="en");
+        toast(status,!saved);return saved;
     }catch(const std::exception& error){status=error.what();toast(status,true);return false;}
 }
 bool App::save_layout_config(){

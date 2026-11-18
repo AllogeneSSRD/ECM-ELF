@@ -37,16 +37,16 @@ def main():
     # B1=20, sigma=26, 318-bit cofactor saves are used in the documented fixture.
     tests = [
         ('default', '', {}, [], expected_default),
-        ('toml_off', 'cuda.pack_zero=false\n', {}, [], 0),
-        ('toml_on', 'cuda.pack_zero=true\n', {}, [], 1),
-        ('worker_off', 'cuda.pack_zero=true\n[worker.2]\nstage2.cuda.pack_zero=false\n', {}, ['--worker','2'], 0),
-        ('worker_on', 'cuda.pack_zero=false\n[worker.2]\nstage2.cuda.pack_zero=true\n', {}, ['--worker','2'], 1),
+        ('toml_off', 'pack_zero=false\n', {}, [], 0),
+        ('toml_on', 'pack_zero=true\n', {}, [], 1),
+        ('worker_off', 'pack_zero=true\n[worker.2]\npack_zero=false\n', {}, ['--worker','2'], 0),
+        ('worker_on', 'pack_zero=false\n[worker.2]\npack_zero=true\n', {}, ['--worker','2'], 1),
         ('retired_env', '', {'NTT_S4_PACK_ZERO':str(1-expected_default)}, [], expected_default),
         ('retired_invalid_env', '', {'NTT_S4_PACK_ZERO':'invalid'}, [], expected_default),
-        ('cli_off', 'cuda.pack_zero=true\n', {'NTT_S4_PACK_ZERO':'1'}, ['--pack-zero','0'], 0),
-        ('cli_on', 'cuda.pack_zero=false\n', {'NTT_S4_PACK_ZERO':'0'}, ['--pack-zero','1'], 1),
+        ('cli_off', 'pack_zero=true\n', {'NTT_S4_PACK_ZERO':'1'}, ['--pack-zero','0'], 0),
+        ('cli_on', 'pack_zero=false\n', {'NTT_S4_PACK_ZERO':'0'}, ['--pack-zero','1'], 1),
         ('legacy_implicit_off', '', {}, ['--cost-profile',str(out/'unused.cprof')], 0),
-        ('bad_toml', 'cuda.pack_zero=2\n', {}, [], None),
+        ('bad_toml', 'pack_zero=2\n', {}, [], None),
         ('bad_cli', '', {}, ['--pack-zero','2'], None),
     ]
     report = dict(binary_sha256=sha(exe), save_sha256=sha(save), tool_sha256=sha(__file__),
@@ -56,7 +56,7 @@ def main():
         if sha(exe)!=report['binary_sha256'] or sha(save)!=report['save_sha256']:
             raise ValueError('binary/input changed')
         config = out/(name+'.toml')
-        config.write_text('config_version=3\n[stage2]\nshort_calibration=false\ntune.runtime_enabled=false\n'+text)
+        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nshort_calibration=false\ntune_runtime_enabled=false\n'+text)
         log, result = out/(name+'.engine.log'), out/(name+'.jsonl')
         env = {k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
         env.update(changes)

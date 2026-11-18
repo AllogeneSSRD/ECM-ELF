@@ -32,7 +32,7 @@ try {
 | `ECM_CUDA_STAGE1_SLICE_DEPTH` | `[stage1] cuda_slice_depth = 2`、`3` 或 `8`。默认 `3`。 |
 | `ECM_PRAC_SEARCH` | `[stage1] cpu_prac_search` 用于 CPU IFMA，`cuda_prac_search` 用于 CUDA CGBN。两者均为 `1…50`，默认 `7`。恢复检查点时沿用原搜索宽度。 |
 | `NTT_GROOT_BALANCED` | `[stage2] groot_balanced = false` 对应 `0`，`true` 对应 `1`。CUDA 也可使用 `--groot-layout 0\|1`，自动模式用 `"auto"`。 |
-| `NTT_S4_PACK_ZERO` | `[stage2] cuda.pack_zero = true\|false` 或 `--pack-zero 0\|1`。生产入口按配置写入引擎所需的有效值。 |
+| `NTT_S4_PACK_ZERO` | `[stage2] pack_zero = true\|false` 或 `--pack-zero 0\|1`。生产入口按配置写入引擎所需的有效值。 |
 
 以下配置与仍可用的环境入口有重叠。迁移脚本时按实际使用的路径选择正式选项。
 
@@ -41,19 +41,19 @@ try {
 | `ECM_GPU_STAGE1_ALGO` | `[stage1] cuda_montgomery_chain` 支持 `ladder`、`prac`。历史 `resident` 实验仍通过环境选择。 |
 | `ECM_EDWARDS_DBL_ALGO` | `[stage1] edwards_doubling` 为新批次选择公式。环境 `4` 对应 TOML `0`（HWCD），`5` 对应 `1`（2XY）。省略 TOML 时，显式环境值还可用于检查旧检查点的公式是否匹配。 |
 | `ECM_PRAC_PLAN_CACHE` | `[stage1] exponent_cache_dir` 是共用指数和计划缓存入口。环境变量可只改 CUDA PRAC 的目录。 |
-| `NTT_BABY_COOP`、`NTT_GIANT_COOP`、`NTT_GIANT_SEED_COOP`、`NTT_S4_COOP_REDUCE` | `[stage2] cuda.baby_backend`、`cuda.giant_backend`、`cuda.seed_backend`、`cuda.reduce_backend`。引擎也读取这些变量，启动器按曲线选型写入有效值。 |
+| `NTT_BABY_COOP`、`NTT_GIANT_COOP`、`NTT_GIANT_SEED_COOP`、`NTT_S4_COOP_REDUCE` | `[stage2] baby_backend`、`giant_backend`、`seed_backend`、`reduce_backend`。引擎也读取这些变量，启动器按曲线选型写入有效值。 |
 | `NTT_S4_COOP_TPB`、`NTT_S4_COOP_KERNEL` | CUDA Stage2 CLI `--reduce-threads`、`--reduce-kernel`。启动器和引擎共用这两个内部参数。 |
-| `NTT_CUDA_WAIT_MODE`、`NTT_HOST_EVENT_WAIT`、`NTT_HOST_READBACK_WAIT` | `[stage2] cuda.low_cpu_wait` 选择生产等待策略。自旋、yield 和逐次回读等待仍可单独实验。 |
-| `NTT_ARENA_CAP_KB`、`NTT_FOLD_DEVICE_MAX_MB` | `[stage2] memory.arena_mib`、`memory.fold_resident_mib`。环境仍可直接指定引擎预算，其中 arena 环境参数以 KiB 计。 |
-| `ECM_OPENCL_POINTS`、`ECM_OPENCL_POINT_CHUNK`、`ECM_OPENCL_POINT_GROUP`、`ECM_OPENCL_POINT_WINDOW`、`ECM_OPENCL_SHORT_POINT_BATCH` | `[stage2] opencl.point_plan`、`opencl.point_chunk`、`opencl.point_group`、`opencl.point_window`、`opencl.short_point_batch`。OpenCL 启动器与引擎通过环境传递部分设置。 |
+| `NTT_CUDA_WAIT_MODE`、`NTT_HOST_EVENT_WAIT`、`NTT_HOST_READBACK_WAIT` | `[stage2] low_cpu_wait` 选择生产等待策略。自旋、yield 和逐次回读等待仍可单独实验。 |
+| `NTT_ARENA_CAP_KB`、`NTT_FOLD_DEVICE_MAX_MB` | `[stage2] arena_mib`、`fold_resident_mib`。环境仍可直接指定引擎预算，其中 arena 环境参数以 KiB 计。 |
+| `ECM_OPENCL_POINTS`、`ECM_OPENCL_POINT_CHUNK`、`ECM_OPENCL_POINT_GROUP`、`ECM_OPENCL_POINT_WINDOW`、`ECM_OPENCL_SHORT_POINT_BATCH` | `[stage2] opencl_point_plan`、`opencl_point_chunk`、`opencl_point_group`、`opencl_point_window`、`opencl_short_point_batch`。OpenCL 启动器与引擎通过环境传递部分设置。 |
 
 以下值由生产启动器写入。独立探针可继续按各自的接口使用环境变量。[Stage2 环境变量](ENVIRONMENT_STAGE2.md) · [CUDA NTT 环境变量](ENVIRONMENT_CUDA_NTT.md)
 
 | 引擎内部环境变量 | 生产配置 |
 |---|---|
 | `NTT_GIANT_CHAIN_BLOCK`、`NTT_GIANT_TAIL_BALANCE` | `[stage2] giant_chain`、`giant_tail_balance` |
-| `NTT_S4_WEIGHTED`、`NTT_S4_BATCH_MB` | `[stage2] cuda.weighted_ntt`、`memory.s4_batch_mib` |
-| `ECM_STAGE2_FTREE_LEASE` | `[stage2] cuda.workspace_policy` |
+| `NTT_S4_WEIGHTED`、`NTT_S4_BATCH_MB` | `[stage2] weighted_ntt`、`s4_batch_mib` |
+| `ECM_STAGE2_FTREE_LEASE` | `[stage2] workspace_policy` |
 
 OpenCL Stage1 早期环境入口也已迁至命令行。当前入口见 [Stage1 CLI](../../src/io/cli.cpp) 和 [运行配置结构](../../include/ecm/application/configuration/runtime.h)。
 
@@ -73,11 +73,11 @@ OpenCL Stage1 早期环境入口也已迁至命令行。当前入口见 [Stage1 
 
 | 变量 | 默认与取值 | 生效条件和用途 |
 |---|---|---|
-| `ECM_GPU_STAGE1_ALGO` | `ladder`，接受 `ladder`、`resident`、`prac` | Montgomery CGBN 点乘链。省略 `stage1.cuda_montgomery_chain` 时读取。PRAC 用于 PARAM0，`resident` 是历史实验入口，取决于所用构建。 |
+| `ECM_GPU_STAGE1_ALGO` | `ladder`，接受 `ladder`、`resident`、`prac` | Montgomery CGBN 点乘链。省略 `cuda_montgomery_chain` 时读取。PRAC 用于 PARAM0，`resident` 是历史实验入口，取决于所用构建。 |
 | `ECM_STAGE1_TPI` | `0` 由程序选择，另可设 `16` 或 `32` | 请求 Montgomery PARAM0 专用 CGBN 调度所用的每整数线程数。需要构建包含对应位宽/TPI 实例。 |
 | `ECM_GPU_DUMP` | 未设置或 `0` 关闭，非零整数打开 | Montgomery 通用 CGBN 路径将 kernel 切片边界状态写到当前目录 `dump.csv`。导出会改变提交方式和计时。 |
 | `ECM_EDWARDS_STAGE1_ALGO` | 省略按 NAF、资源和恢复状态决定。可设 `naf`、`binary` | 固定新批次的 Edwards 算法。`binary` 与显式 `--naf-w` 不可同时指定。 |
-| `ECM_EDWARDS_DBL_ALGO` | `5` 为 2XY（默认），`4` 为 HWCD | Edwards NAF 倍点，省略 `stage1.edwards_doubling` 时读取。恢复沿用检查点的公式。 |
+| `ECM_EDWARDS_DBL_ALGO` | `5` 为 2XY（默认），`4` 为 HWCD | Edwards NAF 倍点，省略 `edwards_doubling` 时读取。恢复沿用检查点的公式。 |
 | `ECM_EDWARDS_HOST_MEMORY_MIB` | 未设置，上限按可用主机内存估算 | Edwards CGBN 主机暂存测试，设无符号 MiB 整数以进一步压低预算。 |
 | `ECM_EDWARDS_GPU_MEMORY_MIB` | 未设置，上限按可用显存与 `naf_memory_mb` 估算 | Edwards CGBN 设备内存测试，设无符号 MiB 整数以进一步压低预算。适用时会缩小窗口或回退 binary，仍不足会报错。 |
 
@@ -100,7 +100,7 @@ OpenCL Stage1 早期环境入口也已迁至命令行。当前入口见 [Stage1 
 | `ECM_PRAC_WINDOW_WARMUP` | `2`，`0…32` | 窗口预热轮数。 |
 | `ECM_PRAC_WINDOW_DUMP` | `0`，可设 `1` | 打印窗口结束时的设备点，供参考实现复核。 |
 
-设置 `ECM_PRAC_WINDOW` 或非基线 `ECM_PRAC_VARIANT` 时须已选 PRAC。如果 TOML 中已有 `stage1.cuda_montgomery_chain`，可以在其中设 `"prac"`。窗口循环不代表完整 B1 的曲线吞吐。实现见 [CUDA PRAC 运行](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu)和[计划生成](../../src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp)。
+设置 `ECM_PRAC_WINDOW` 或非基线 `ECM_PRAC_VARIANT` 时须已选 PRAC。如果 TOML 中已有 `cuda_montgomery_chain`，可以在其中设 `"prac"`。窗口循环不代表完整 B1 的曲线吞吐。实现见 [CUDA PRAC 运行](../../src/ecm/stage1/montgomery/cuda/prac/runtime.cu)和[计划生成](../../src/ecm/stage1/montgomery/prac/ecm_prac_plan.cpp)。
 
 ### Edwards NTT 和 CPU
 

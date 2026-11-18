@@ -22,9 +22,9 @@ def main():
     (work / "point.save").write_bytes(b"\n".join(points) + b"\n")
     config = work / "ecm.toml"
     config.write_text(
-        '[shared]\nuser="base"\ncomputer="base"\nb2_ratio=0\n'
-        '[stage2]\nstage2_save_dir="."\nstage2_finished="finished.txt"\n'
-        '[workers.2.shared]\nuser="用户"\ncomputer=""\n', encoding="utf-8"
+        'config_version=4\n[shared]\nuser="base"\ncomputer="base"\nfinished_file="finished.txt"\n'
+        '[stage2]\ndevice="gpu"\nb2_ratio=0\nstage2_save_dir="."\n'
+        '[worker.2]\nuser="用户"\ncomputer=""\n', encoding="utf-8"
     )
     (work / "worktodo.txt").write_text(
         '[Worker #2]\nECMSTAGE2=1,2,521,-1,"point.save",20000,0,4\n', encoding="utf-8"
@@ -52,7 +52,7 @@ def main():
         reader.start()
         try:
             assert seen.get(timeout=30), "worker stopped before task admission"
-            config.write_text('[shared]\nuser="unterminated\n', encoding="utf-8")
+            config.write_text('config_version=4\n[shared]\nuser="unterminated\n', encoding="utf-8")
             assert child.wait(timeout=180) == 0, work / "run.log"
         finally:
             if child.poll() is None:

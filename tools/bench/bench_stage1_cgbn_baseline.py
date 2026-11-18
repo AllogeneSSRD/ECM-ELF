@@ -78,12 +78,12 @@ def run_case(exe, folder, device, model, case, prior, env, version):
     (folder / "worktodo.initial.txt").write_bytes(work.read_bytes())
     config = folder / "ecm.toml"
     config.write_text(
-        'config_version = 3\n[shared]\nlog_file = ""\nworktodo_file = "worktodo.txt"\n'
-        '[stage1]\ntarget = "gpu"\ngpu_backend = "cuda"\ngpu_algorithm = "cgbn"\n'
-        f'param = "{"e" if model == "ed" else "m0"}"\ngpu_device = {device}\nsigma = {SIGMA}\n'
-        'verbose = true\ncheckpoint_interval_seconds = 0\nhandoff.mode = "off"\n'
+        'config_version = 4\n[shared]\nlog_file = ""\nworktodo_file = "worktodo.txt"\n'
+        '[stage1]\ntarget = "gpu"\nstage1_gpu_backend = "cuda"\ngpu_algorithm = "cgbn"\n'
+        f'param = "{"e" if model == "ed" else "m0"}"\nstage1_gpu_device = {device}\nsigma = {SIGMA}\n'
+        'verbose = true\ncheckpoint_interval_seconds = 0\nhandoff_mode = "off"\n'
         'exponent_cache_dir = "off"\ncuda_low_cpu = false\n'
-        f'cuda_slice_depth = {DEPTH}\nsave_dir = {json.dumps(folder.as_posix())}\n' +
+        f'cuda_slice_depth = {DEPTH}\nstage1_save_dir = {json.dumps(folder.as_posix())}\n' +
         (f'edwards_naf_window_bits = {WINDOW}\nedwards_doubling = 1\n' if model == "ed" else
          'montgomery_lcm_multiplier = "1"\n') +
         (f'cuda_montgomery_chain = "prac"\ncuda_prac_search = {SEARCH}\n'

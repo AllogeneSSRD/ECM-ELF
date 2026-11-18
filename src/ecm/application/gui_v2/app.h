@@ -29,8 +29,8 @@ class App {
 public:
     explicit App(UiState& state, FILE* log);
     ~App();
-    void initialize(const std::string& config, bool no_nvml);
-    bool load_config(const std::string& config);
+    void initialize(const std::string& config, bool no_nvml, bool load_preferences = true);
+    bool load_config(const std::string& config, bool load_preferences = true);
     void configure_workers();
     bool start(int worker,ecmgui::WorkerStart origin=ecmgui::WorkerStart::Manual);
     void start_all();
@@ -50,6 +50,7 @@ public:
     bool move_page(int page,bool right);
     void open_settings(int category=-1);
     bool save_preferences(const char* success_key="message.ui_saved");
+    bool persist_preferences();
     bool save_layout_config();
     void set_logs_visible(bool visible);
     void update_logs_visibility();
@@ -179,6 +180,7 @@ public:
     int navigation_icon_count=0;
     float result_scroll=0;
     char result_search[256]{}, gen_input[65536]{}, config_input[4096]{}, stage1_input[4096]{}, stage2_input[4096]{};
+    int worker_count_input = 1;
     ecmgui::GenOptions gen_options;
     ecmgui::GpuProfile gen_gpu;
     ecmgui::GenResult gen_preview;

@@ -4,7 +4,7 @@ CUDA Stage1 和 Stage2 共用 Goldilocks 域算术、根表与正逆变换调度
 
 ## Stage1 已知因子与梅森承载
 
-梅森任务可保留原始 $M=2^p-1$ 作为 GPU 算术模数，同时令 $C=M/K$ 为实际目标，$K$ 为 worktodo 中已知因子的乘积。默认配置 `ntt.allow_known_factors = 1` 允许这条路径；0 关闭其选型。输入须保留 $k=1,b=2,c=-1,p$ 和已知因子元数据，并验证 $C\mid M$。GPU 算法切片按 $C$ 的位宽匹配，NTT 长度、系数界和显存准入按 $p$ 计算。见 [模数资格](../../include/ecm/stage1/ntt_target.h)。
+梅森任务可保留原始 $M=2^p-1$ 作为 GPU 算术模数，同时令 $C=M/K$ 为实际目标，$K$ 为 worktodo 中已知因子的乘积。默认配置 `ntt_allow_known_factors = 1` 允许这条路径；0 关闭其选型。输入须保留 $k=1,b=2,c=-1,p$ 和已知因子元数据，并验证 $C\mid M$。GPU 算法切片按 $C$ 的位宽匹配，NTT 长度、系数界和显存准入按 $p$ 计算。见 [模数资格](../../include/ecm/stage1/ntt_target.h)。
 
 投影 $\mathbb Z/M\mathbb Z\to\mathbb Z/C\mathbb Z$ 保持加、减、乘和平方。因此，主机构造出的曲线常量、初始坐标和字典可以从 $C$ 提升为 $M$ 中的整数代表，GPU 按原 NTT 路径计算，回读后再投影到 $C$。这些输入在 $C$ 上对应原曲线和 sigma。
 
@@ -76,7 +76,7 @@ $$
 
 原生 Edwards 选择 weighted 且长度为 0 时，按长度递增检查二次幂和支持的 radix-5。候选须满足 $L\le p$、最大 bpw 不超过 31 及用户上限、tile 能在二次幂子变换中执行，并通过系数界。跳过不合格短档后选择第一个通过的长度。强制指定不合格长度时报错。随 $p$ 变化的实际 digit 分布会使准入有间隙。
 
-`ntt.tight_weighted_bound` 默认开启。卷积和长度都为自动时，原生 Edwards 先检查只有收紧界才能准入的短计划。其余形状由常规选型处理，使用 x-only 标定的计划均按保守界准入。若 Edwards 的显式长度只满足无符号界，异常 x-only 重放重新推导长度。启动日志的 $U$ 取执行计划实际使用的整数包络。保守包络为松弛差值预留双倍乘积空间，融合乘加启用时另计加数。 [系数代码](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh) · [选长代码](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
+`ntt_tight_weighted_bound` 默认开启。卷积和长度都为自动时，原生 Edwards 先检查只有收紧界才能准入的短计划。其余形状由常规选型处理，使用 x-only 标定的计划均按保守界准入。若 Edwards 的显式长度只满足无符号界，异常 x-only 重放重新推导长度。启动日志的 $U$ 取执行计划实际使用的整数包络。保守包络为松弛差值预留双倍乘积空间，融合乘加启用时另计加数。 [系数代码](../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh) · [选长代码](../../src/ecm/stage1/montgomery/cuda/ntt/ladder.cu) · [双卡实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
 
 ### Edwards 2XY 第一层频域融合
 
@@ -138,7 +138,7 @@ Stage2 将 S-bit 系数放入足够宽的 Kronecker 槽。最大 operand 含 A �
 
 工作量约为三次 O(L log₂L) 变换加 O(L) pointwise/carry、pack 和系数归约。每 butterfly 的访存/指令取决于融合层数、shared 布局和根缓存；该渐近式不能直接换算 GPU 周期数。
 
-独立生产程序默认使用pack/zero融合：`stage2_pack_zero=true`，可用false或`--pack-zero 0`关闭；共享及 Worker TOML 用法见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#cudapack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)。
+独立生产程序默认使用pack/zero融合：`pack_zero=true`，可用false或`--pack-zero 0`关闭；共享及 Worker TOML 用法见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md#pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/stage2/cuda/device/pack.cuh)。
 
 ## Carry 的完整 digit 检查
 
@@ -162,7 +162,7 @@ Stage2 NTT 性能表的字段、计时边界、tile 级数、外层 radix 与处
 
 Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认。仅满足小字长 FHE 模数的库不能直接替换 Goldilocks64/多精度 carry 管线；适配参考见 [算法资料](../reference/ECM_ALGORITHMS.md)。
 
-Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equiv1\pmod{2^p-1}\) 在单个梅森余数内回卷，Stage2 只在各多项式系数的 S4 归约内使用这个等式。可选 `stage2_weighted_ntt` 在直接设备打包时写出首层 DIF 的普通与加权两半，两个前向 NTT 跳过该层。末层 DIT 同时去权和合并，现有逆变换的归一化提供重建所需的除以二。该后端借用当前 NTT 计划的根表，沿用工作区、carry 和 S4；ECM tune 将两种后端的整曲线样本分开。推导与 GPU1 对照见 [Stage2 根加权 NTT](../performance/NTT_OUTER.md#根加权半长卷积)。
+Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equiv1\pmod{2^p-1}\) 在单个梅森余数内回卷，Stage2 只在各多项式系数的 S4 归约内使用这个等式。可选 `weighted_ntt` 在直接设备打包时写出首层 DIF 的普通与加权两半，两个前向 NTT 跳过该层。末层 DIT 同时去权和合并，现有逆变换的归一化提供重建所需的除以二。该后端借用当前 NTT 计划的根表，沿用工作区、carry 和 S4；ECM tune 将两种后端的整曲线样本分开。推导与 GPU1 对照见 [Stage2 根加权 NTT](../performance/NTT_OUTER.md#根加权半长卷积)。
 
 加权模式下，实验环境变量 `NTT_S4_HALF_INVERSE=1` 对 \(k\ge24\) 尝试半长计划的逆向分解。候选须保持 tile 大小、支持扩一位后的 radix，且 outer 趟数不得增加。最高一趟 DIT 扩一位并融合两半合并，前向计划与 pack 根表沿用原方案。逆向表和暂存容量按实际计划计算，ECM tune 单独记录该实验条件。 [逆向实测](../performance/NTT_OUTER.md#nsight-分项与半长逆向计划)
 
@@ -176,7 +176,7 @@ Stage2 的 Kronecker 槽需要完整线性卷积。Stage1 IBDWT 利用 \(2^p\equ
 
 M=2ˢ−1 时使用 2ˢ≡1 mod M 的折叠归约；点 Montgomery 乘法还需处理 R⁻¹ 对应的旋转/表示转换。承载模式保证 M 能被目标 N 整除，所有因子语义仍在 N 上处理。
 
-普通S4提供`stage2_reduce_backend=auto|scalar|coop32`，默认auto。8193…16384实际算术bits可由一个warp协作处理一个系数：共享归一化除数和余数，可分别减去商乘积的低／高词，或先合并qN对应字及乘积进位，再一次执行余数借位前缀。两者保留相同2-by-1商估计、商校正、全源槽位检查和紧凑输出；auto以配对完整曲线选择。小位宽、精确梅森归约保留原内核。乘积工作量仍为平方复杂度，没有减少NTT长度、系数数或商位数，也没有新增显式设备数组或传输。
+普通S4提供`reduce_backend=auto|scalar|coop32`，默认auto。8193…16384实际算术bits可由一个warp协作处理一个系数：共享归一化除数和余数，可分别减去商乘积的低／高词，或先合并qN对应字及乘积进位，再一次执行余数借位前缀。两者保留相同2-by-1商估计、商校正、全源槽位检查和紧凑输出；auto以配对完整曲线选择。小位宽、精确梅森归约保留原内核。乘积工作量仍为平方复杂度，没有减少NTT长度、系数数或商位数，也没有新增显式设备数组或传输。
 
 动态共享内存为`8[W+(T/32)(2W+4)]` bytes／block，T为线程块大小；默认T=128，可诊断64／96／128。它属于SM片上资源，不是NTT arena预算。ECM成本强制隔离实际后端、线程块和内核身份，NTT表共用；性能与边界见[S4归约报告](../performance/STAGE2_S4_REDUCTION.md)，推导见[数学资料](../reference/ECM_STAGE2_BIT_COMPLEXITY.md#11-精确长除法的-warp-协作组织)。
 
@@ -194,11 +194,11 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 
 ### 实际运行的长度与运算量
 
-生产 Stage2 通过 `stage2_ntt_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 TOML。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
+生产 Stage2 通过 `ntt_length_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 TOML。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
 
 开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数，每次卷积含两个正向与一个逆向，因此 forward=2·convolutions、inverse=convolutions、total=3·convolutions。Graph 重放和物理分块不改变数学变换数；它不是 CUDA kernel 启动数。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
 
-加权后端继续按等价的全长卷积请求计入长度表，另用 `stage2_weighted_ntt` 记录实际执行的加权卷积数。
+加权后端继续按等价的全长卷积请求计入长度表，另用 `weighted_ntt` 记录实际执行的加权卷积数。
 
 兼容行 `ntt_length_counts: log2_length:num_of_ntt` 按 k 升序列出 **L=2ᵏ 的独立数学变换数**；debug 另输出按长度的卷积数。消费旧直方图的分析工具仍可读取此行，新运行需要显式开启上述选项。
 

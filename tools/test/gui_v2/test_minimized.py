@@ -12,8 +12,8 @@ def main():
     startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
     for nvml in [True,False]:
         for index in range(5):
-            base=out/f'{nvml}-{index}';base.mkdir();cfg=base/'ecm.toml';cfg.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n')
-            cmd=[str(a.exe.resolve()),'--config',str(cfg),'--ui-state',str(base/'ui.toml'),'--diagnostics',str(base/'gui.log')]+([] if nvml else ['--no-nvml'])
+            base=out/f'{nvml}-{index}';base.mkdir();cfg=base/'ecm.toml';cfg.write_text('config_version=4\n[worker.1]\nautostart=false\n')
+            cmd=[str(a.exe.resolve()),'--config',str(cfg),'--diagnostics',str(base/'gui.log')]+([] if nvml else ['--no-nvml'])
             proc=subprocess.Popen(cmd,cwd=base,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');tid=user.GetWindowThreadProcessId(hwnd,None);handle=kernel.OpenThread(0x0800,False,tid);assert handle
             try:
                 user.ShowWindow(hwnd,6);time.sleep(2);before=process_sample(proc);thread_before=thread_seconds(handle);start=time.monotonic();time.sleep(3);duration=time.monotonic()-start;after=process_sample(proc);main_cpu=thread_seconds(handle)-thread_before;cpu=after['cpu_seconds']-before['cpu_seconds']

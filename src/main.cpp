@@ -1210,7 +1210,7 @@ int main(int argc, char** argv) {
     const auto B1 = task.b1;
     if (!input.p95_dir_ignored.empty())
         std::cout
-            << "Prime95 transfer path ignored: --p95-dir is obsolete; use TOML prime95.worktodo_file."
+            << "Prime95 transfer path ignored: --p95-dir is obsolete; use TOML prime95_worktodo_file."
             << std::endl;
     auto result = run_stage1_task(task.request(), stage1_tasks(opt));
     const int rc1 = result.task_return();

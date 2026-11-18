@@ -138,16 +138,19 @@ def main():
                             while len(active) < count and next_task < len(inp['saves']):
                                 save = inp['saves'][next_task]; work = folder / f'curve{next_task}'; work.mkdir()
                                 config = work / 'ecm.toml'
-                                config.write_text(f'''[stage2]
-stage2_log_level="phases"
-stage2_arena_mb={a.arena_mb}
-stage2_batch_mb=64
-stage2_fold_mb=640
-stage2_auto_carrier=false
-stage2_tune_runtime=false
-stage2_short_calibration=false
+                                config.write_text(f'''config_version = 4
+[shared]
+log_file="worker.log"
+[stage2]
+device="gpu"
+log_level="phases"
+arena_mib={a.arena_mb}
+s4_batch_mib=64
+fold_resident_mib=640
+auto_carrier=false
+tune_runtime_enabled=false
+short_calibration=false
 stage2_results_file="results.jsonl"
-stage2_log_file="worker.log"
 ''', encoding='utf-8')
                                 cmd = [exe, '--config', str(config.resolve()), '--save', save['path'], '--device', str(device), '--b2', str(a.b2),
                                        '--d', str(a.d), '--curves', '1', '--factor-only', '--carrier-exponent', '0', '--auto-carrier', '0',

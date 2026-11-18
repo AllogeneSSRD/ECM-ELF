@@ -21,9 +21,9 @@ def main():
         case.mkdir()
         config = case / "ecm.toml"
         config.write_text(
-            'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
-            'finished_file = "finished.txt"\n[stage2]\ngpu_backend = "opencl"\n'
-            'tune.runtime_enabled = false\n' + settings,
+            'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
+            'finished_file = "finished.txt"\n[stage2]\ndevice = "gpu"\nstage2_gpu_backend = "opencl"\n'
+            'tune_runtime_enabled = false\n' + settings,
             encoding="utf-8",
         )
         queue = case / "worktodo.txt"
@@ -46,7 +46,7 @@ def main():
         else:
             assert queue.read_bytes() == original and not finished.exists(), name
 
-    run("dormant_cuda_presets", 'cuda.weighted_ntt = true\ncuda.curve_concurrency = "dual"\n',
+    run("dormant_cuda_presets", 'weighted_ntt = true\ncurve_concurrency = "dual"\n',
         [], 0, "invalid_tasks=0")
     run("explicit_weighted", "", ["--weighted-ntt", "1"], 2, "weighted NTT requires")
     run("explicit_parallel", "", ["--parallel", "2"], 2, "does not support --parallel 2")
@@ -59,7 +59,7 @@ def main():
     run("task_b2_invalid", "", [], 1, "source=worktodo", task_b2=99, marked=True)
     run("ratio_precedence", "b2_ratio = 3\n", ["--b2", "400", "--dry-run"], 0,
         "B2=300 D=0 device=0 worker=1 B2_source=b2_ratio", task_b2=200)
-    inactive = '[worker.2]\nstage2.cuda.weighted_ntt = "invalid"\n'
+    inactive = '[worker.2]\nweighted_ntt = "invalid"\n'
     run("worker_skips_unrelated_value", inactive, [], 0, "invalid_tasks=0")
     run("worker_validates_selected_value", inactive, [], 2, "weighted_ntt", worker=2)
     print("PASS: Stage2 backend presets, B2 sources, queue preservation and worker scopes")

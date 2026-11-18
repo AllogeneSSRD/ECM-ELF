@@ -64,9 +64,9 @@ class Fixture:
         self.tune = self.workflow / "shared-profile.toml"
         self.tune.write_text(GPU_TOML, encoding="utf-8")
         self.config.write_text(
-            'config_version = 3\n[shared]\ntune_file = "shared-profile.toml"\n'
-            '[stage2]\ncpu.threads = 1\ncpu.backend = "gwpoly"\ncpu.memory_mib = 512\n'
-            'tune.runtime_enabled = true\ntune.min_repeats = 2\ntune.runtime_sample_limit = 2\n',
+            'config_version = 4\n[shared]\ntune_file = "shared-profile.toml"\n'
+            '[stage2]\nstage2_cpu_threads = 1\ncpu_backend = "gwpoly"\ncpu_memory_mib = 512\n'
+            'tune_runtime_enabled = true\ntune_min_repeats = 2\ntune_runtime_sample_limit = 2\n',
             encoding="utf-8",
         )
         self.save = self.workflow / "points.save"
@@ -193,9 +193,9 @@ def main():
     queue.mkdir()
     queue_config = queue / "ecm.toml"
     queue_config.write_text(
-        'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
+        'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
         'finished_file = "finished.txt"\nlog_file = "worker.log"\n'
-        '[stage2]\nsave_dir = "."\ncpu.backend = "gwpoly"\ncpu.threads = 1\n',
+        '[stage2]\nstage2_save_dir = "."\ncpu_backend = "gwpoly"\nstage2_cpu_threads = 1\n',
         encoding="utf-8",
     )
     (queue / "points.save").write_text(POINTS, encoding="utf-8")

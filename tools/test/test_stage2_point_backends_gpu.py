@@ -49,7 +49,7 @@ def main():
 
     def call(name,body='',extra=(),overrides=None,expected=0,profile=None,runtime=False,minimum=2,budget_fallback=False,expected_giant=0):
         directory=out/name;directory.mkdir();config=directory/'ecm.toml'
-        config.write_text('[stage2]\nstage2_short_calibration=false\nstage2_tune_runtime='+str(runtime).lower()+'\n'+body,encoding='utf-8')
+        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nshort_calibration=false\ntune_runtime_enabled='+str(runtime).lower()+'\n'+body,encoding='utf-8')
         expected_modes=list(expected) if isinstance(expected,(list,tuple)) else [expected]
         command=[str(exe),'--config',str(config),'--save',str(saved),'--curves',str(len(expected_modes)),'--device','1',
                  '--b2','26000000','--d','6006','--carrier-exponent','0','--auto-carrier','0','--groot-layout','0',
@@ -93,55 +93,55 @@ def main():
             queue=out/'ten_curves.save';queue.write_bytes(saved.read_bytes()*10);saved=queue
             for name,extra in ([] if a.scope=='giant-small' else [('fixed',('--b2','51879828')),('rounded',('--b2-round-chain','1'))]):
                 profile=out/(name+'.toml')
-                call(name,'stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',extra=extra,
+                call(name,'baby_backend="auto"\ngiant_backend="auto"\n',extra=extra,
                     profile=profile,runtime=True,expected=[0,0,32,32,32,32,32,32,32,32],expected_giant=[0,0,0,0,32,32,16,16,None,None])
                 measured=[r for r in summaries(tomllib.loads(profile.read_text())) if r['source']=='measured']
                 assert len(measured)==4 and all(r['repeats']>=2 for r in measured) and sum(r['repeats'] for r in measured)==10,measured
                 best=min(measured,key=lambda r:float(r['mean_seconds'])+float(r.get('point_check_seconds',0)))
                 before=sha(profile)
-                call(name+'_readonly','stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',extra=extra,
+                call(name+'_readonly','baby_backend="auto"\ngiant_backend="auto"\n',extra=extra,
                     profile=profile,expected=int(best['baby_coop']),expected_giant=int(best['giant_coop']))
                 assert sha(profile)==before
             # Small baby degree must not disable an independently eligible
             # giant chain when the user explicitly fixes D.
-            call('small_baby_degree','stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',
+            call('small_baby_degree','baby_backend="auto"\ngiant_backend="auto"\n',
                 extra=('--d','2310'),profile=out/'small_P.toml',runtime=True,
                 expected=[0]*8,expected_giant=[0,0,32,32,16,16,None,None])
             if a.scope=='giant-small':report['complete']=True;return
             profile=out/'giant_unpaired.toml'
             for i in range(2):
-                call('forced_giant_'+str(i),'stage2_baby_backend="coop32"\nstage2_giant_backend="coop32"\n',
+                call('forced_giant_'+str(i),'baby_backend="coop32"\ngiant_backend="coop32"\n',
                     extra=('--b2','51879828'),profile=profile,runtime=True,expected=32,expected_giant=32)
             before=sha(profile)
-            call('unpaired_auto','stage2_baby_backend="auto"\nstage2_giant_backend="auto"\n',
+            call('unpaired_auto','baby_backend="auto"\ngiant_backend="auto"\n',
                 extra=('--b2','51879828'),profile=profile)
             assert sha(profile)==before
             report['complete']=True;return
         if a.scope=='fallback':
             for mode in ('auto','scalar','coop32'):
-                call('low_'+mode,'stage2_baby_backend="'+mode+'"\nstage2_giant_backend="coop32"\n')
+                call('low_'+mode,'baby_backend="'+mode+'"\ngiant_backend="coop32"\n')
             report['complete']=True
             return
         if a.scope=='unpaired':
             profile=out/'unpaired.toml'
             for i in range(2):
-                call('forced_'+str(i),'stage2_baby_backend="coop32"\n',profile=profile,runtime=True,expected=32)
+                call('forced_'+str(i),'baby_backend="coop32"\n',profile=profile,runtime=True,expected=32)
             before=sha(profile)
-            call('auto_needs_scalar','stage2_baby_backend="auto"\n',profile=profile)
+            call('auto_needs_scalar','baby_backend="auto"\n',profile=profile)
             assert sha(profile)==before,'read-only auto changed forced measurement evidence'
             report['complete']=True
             return
         if a.scope=='giant':
             for mode in (0,16,32):
-                call('chain_'+str(mode),'stage2_baby_backend="scalar"\nstage2_giant_backend="'+
+                call('chain_'+str(mode),'baby_backend="scalar"\ngiant_backend="'+
                     ('scalar' if not mode else 'coop'+str(mode))+'"\n',extra=('--b2','260000000'),expected_giant=mode)
-            call('short_fallback','stage2_giant_backend="coop32"\n')
+            call('short_fallback','giant_backend="coop32"\n')
             report['complete']=True
             return
         if a.scope in ('formal','giant-formal'):
             giant_auto=a.scope=='giant-formal';neighbor=5460 if giant_auto else 6930
             profile=out/'formal.toml'
-            config=out/'formal_config.toml';config.write_text('[stage2]\nstage2_short_calibration=false\n')
+            config=out/'formal_config.toml';config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nshort_calibration=false\n')
             snapshots=[]
             for name,d in [('paired',6006),('neighbor',neighbor),('incremental',6006)]:
                 directory=out/name;directory.mkdir()
@@ -172,29 +172,29 @@ def main():
             report['complete']=True
             return
         call('default')
-        call('toml_scalar','stage2_baby_backend="scalar"\n')
-        call('toml_coop','stage2_baby_backend="coop32"\n',expected=32)
-        call('cli_over_toml','stage2_baby_backend="coop32"\n',extra=('--baby-backend','scalar'))
-        call('toml_over_environment','stage2_baby_backend="coop32"\n',overrides={'NTT_BABY_COOP':'0'},expected=32)
+        call('toml_scalar','baby_backend="scalar"\n')
+        call('toml_coop','baby_backend="coop32"\n',expected=32)
+        call('cli_over_toml','baby_backend="coop32"\n',extra=('--baby-backend','scalar'))
+        call('toml_over_environment','baby_backend="coop32"\n',overrides={'NTT_BABY_COOP':'0'},expected=32)
         call('legacy_environment',overrides={'NTT_BABY_COOP':'32'},expected=32)
-        call('worker_override','stage2_baby_backend="scalar"\n[workers.2.stage2]\nstage2_baby_backend="coop32"\n',extra=('--worker','2'),expected=32)
-        call('bad_toml','stage2_baby_backend="coop16"\n',expected=None)
+        call('worker_override','baby_backend="scalar"\n[worker.2]\nbaby_backend="coop32"\n',extra=('--worker','2'),expected=32)
+        call('bad_toml','baby_backend="coop16"\n',expected=None)
         call('bad_cli',extra=('--baby-backend','wrong'),expected=None)
-        call('budget_fallback','stage2_baby_backend="coop32"\n',overrides={'NTT_BABY_DEVICE_MAX_MB':'0'},budget_fallback=True)
+        call('budget_fallback','baby_backend="coop32"\n',overrides={'NTT_BABY_DEVICE_MAX_MB':'0'},budget_fallback=True)
         profile=out/'learned.toml';queue=out/'six_curves.save'
         # Create a separate fixture exclusively; retain the frozen source input.
         with queue.open('xb') as target:target.write(saved.read_bytes()*6)
         report['queue_save_sha256']=sha(queue);saved=queue
         modes=[0,0,32,32,32,32]
-        call('learning_queue','stage2_baby_backend="auto"\n',profile=profile,runtime=True,expected=modes)
+        call('learning_queue','baby_backend="auto"\n',profile=profile,runtime=True,expected=modes)
         data=tomllib.loads(profile.read_text(encoding='utf-8'));rows=summaries(data)
         assert len(rows)==2 and {int(r['baby_coop']) for r in rows}=={0,32},rows
         assert {int(r['baby_coop']):int(r['repeats']) for r in rows}=={0:2,32:4},rows
         assert all(float(r['point_check_seconds'])>0 for r in rows)
         before=sha(profile)
-        call('reuse_without_learning','stage2_baby_backend="auto"\n',profile=profile,expected=32)
+        call('reuse_without_learning','baby_backend="auto"\n',profile=profile,expected=32)
         assert sha(profile)==before,'disabled runtime tuning wrote the profile'
-        call('force_scalar_over_profile','stage2_baby_backend="scalar"\n',profile=profile)
+        call('force_scalar_over_profile','baby_backend="scalar"\n',profile=profile)
         report['learning_modes']=modes;report['complete']=True
     except Exception as error:
         report['failures'].append(str(error));raise

@@ -7,12 +7,12 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--renderer',choices=['dx11','vulkan'],default='dx11')
     for name in ['exe','worker','out','layers']:p.add_argument('--'+name,type=Path,required=True)
     a=p.parse_args();out=a.out.resolve();out.mkdir();log=out/'interaction.log';cfg=out/'ecm.toml';worker=a.worker.resolve()
-    cfg.write_text('[gui]\nNumWorkers=1\ngraceful_stop_ms=1200\nexit_confirm="stop"\nexe='+json.dumps(str(worker))+'\n[workers.1]\nautostart=0\nextra_args="--scenario v2-checkpoint-stop"\n');(out/'worktodo.txt').write_text('[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n')
+    cfg.write_text('config_version=4\n[gui]\ngraceful_stop_ms=1200\nexit_confirm="stop"\nstage1_exe='+json.dumps(str(worker))+'\n[worker.1]\nautostart=false\nextra_args="--scenario v2-checkpoint-stop"\n');(out/'worktodo.txt').write_text('[Worker #1]\nECMSTAGE1=1,2,127,-1,100,1\n')
     row={'status':'NF','exponent':127,'worktype':'ECM','b1':100,'b2':100,'Edwards':{},'curves':1,'program':{'name':'ECM-ELF','version':'fixture'},'timestamp':'2026-10-21 00:00:00','checksum':{'version':1,'checksum':'1234ABCD'}}
     records=[json.dumps(row) for _ in range(299)];row['status']='F';row['stage']=1;row['factors']=['233'];records.append(json.dumps(row));(out/'results.json.txt').write_text('\n'.join(records)+'\n')
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     env=os.environ.copy();env['VK_LAYER_PATH']=str(a.layers.resolve());startup=subprocess.STARTUPINFO();startup.dwFlags=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
-    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(cfg),'--ui-state',str(out/'ui.toml'),'--diagnostics',str(log),'--audit-app',*renderer_args(a.renderer),'--no-nvml'],cwd=out,env=env,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,80,200,1500,1000,0x14);user.ShowWindow(hwnd,4)
+    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(cfg),'--diagnostics',str(log),'--audit-app',*renderer_args(a.renderer),'--no-nvml'],cwd=out,env=env,startupinfo=startup);hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,80,200,1500,1000,0x14);user.ShowWindow(hwnd,4)
     def snapshots():
         return [dict(re.findall(r'(\w+)=([-\d.,]+)',line)) for line in log.read_text(encoding='utf-8').splitlines() if line.startswith('interaction_sample:')]
     def wait(predicate):

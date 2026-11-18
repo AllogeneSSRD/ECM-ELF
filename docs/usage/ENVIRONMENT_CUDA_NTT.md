@@ -59,8 +59,8 @@
 | `NTT_S4_BATCH_MB` | 64 | 多项式乘法分块预算，由 Stage2 CLI 或 TOML 解析出的 batch MB 写入。 |
 | `NTT_S4_CHUNK_MAX` | 0 | 额外限制单块的乘法组数。0 使用预算选出的值。 |
 | `NTT_S4_WORKSPACE_BUDGET` | 0 | 按实际工作区字节数决定乘法分块。 |
-| `NTT_S4_PACK_ZERO` | 1 | 生产启动器用 `--pack-zero` 或 TOML `cuda.pack_zero` 的有效值配置内部引擎。旧成本表要求关闭。 |
-| `NTT_S4_WEIGHTED` | 0 | 启用加权 NTT，要求 CUDA 生产引擎和 pack/补零融合。使用 `--weighted-ntt 1` 或 TOML `cuda.weighted_ntt`。 |
+| `NTT_S4_PACK_ZERO` | 1 | 生产启动器用 `--pack-zero` 或 TOML `pack_zero` 的有效值配置内部引擎。旧成本表要求关闭。 |
+| `NTT_S4_WEIGHTED` | 0 | 启用加权 NTT，要求 CUDA 生产引擎和 pack/补零融合。使用 `--weighted-ntt 1` 或 TOML `weighted_ntt`。 |
 | `NTT_S4_HALF_INVERSE` | 0 | 在加权 NTT 且 `k ≥ 24` 时尝试半长逆变换计划。tile 或趟数等条件不满足则回退。 |
 | `NTT_S4_PACK_DIRECT`、`NTT_S4_FLAT_DIRECT` | 1 | 启用设备直接打包及 flat 输入直通。生产固定。 |
 | `NTT_S4_HOSTPACK` | 0 | 使用旧 CPU 打包路径作对照。生产固定。 |

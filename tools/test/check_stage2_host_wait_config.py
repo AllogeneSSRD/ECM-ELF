@@ -24,20 +24,20 @@ def main():
     identity = hashlib.sha256(exe.read_bytes()).hexdigest()
     cases = [
         ('default', '', {}, [], (0,0,None)),
-        ('toml_on', 'stage2_low_cpu_wait=true\n', {}, [], (1,0,4)),
-        ('toml_above_env', 'stage2_low_cpu_wait=false\n', {'NTT_HOST_EVENT_WAIT':'1','NTT_HOST_READBACK_WAIT':'1'}, [], (0,0,0)),
+        ('toml_on', 'low_cpu_wait=true\n', {}, [], (1,0,4)),
+        ('toml_above_env', 'low_cpu_wait=false\n', {'NTT_HOST_EVENT_WAIT':'1','NTT_HOST_READBACK_WAIT':'1'}, [], (0,0,0)),
         ('expert_env', '', {'NTT_HOST_EVENT_WAIT':'1','NTT_HOST_READBACK_WAIT':'1'}, [], (1,1,None)),
         ('expert_blocking', '', {'NTT_CUDA_WAIT_MODE':'4'}, [], (0,0,4)),
-        ('toml_above_blocking', 'stage2_low_cpu_wait=false\n', {'NTT_CUDA_WAIT_MODE':'4'}, [], (0,0,0)),
-        ('cli_above_toml', 'stage2_low_cpu_wait=true\n', {}, ['--low-cpu-wait','0'], (0,0,0)),
-        ('cli_on', 'stage2_low_cpu_wait=false\n', {}, ['--low-cpu-wait','1'], (1,0,4)),
-        ('worker_override', 'stage2_low_cpu_wait=true\n[workers.2.stage2]\nstage2_low_cpu_wait=false\n', {}, ['--worker','2'], (0,0,0)),
-        ('invalid_toml', 'stage2_low_cpu_wait=2\n', {}, [], None),
+        ('toml_above_blocking', 'low_cpu_wait=false\n', {'NTT_CUDA_WAIT_MODE':'4'}, [], (0,0,0)),
+        ('cli_above_toml', 'low_cpu_wait=true\n', {}, ['--low-cpu-wait','0'], (0,0,0)),
+        ('cli_on', 'low_cpu_wait=false\n', {}, ['--low-cpu-wait','1'], (1,0,4)),
+        ('worker_override', 'low_cpu_wait=true\n[worker.2]\nlow_cpu_wait=false\n', {}, ['--worker','2'], (0,0,0)),
+        ('invalid_toml', 'low_cpu_wait=2\n', {}, [], None),
         ('invalid_cli', '', {}, ['--low-cpu-wait','2'], None)]
     rows = []
     for name, value, changes, extra, expected in cases:
         config = out/(name+'.toml')
-        config.write_text('[stage2]\nstage2_tune_runtime=false\nstage2_short_calibration=false\n'+value, encoding='utf-8')
+        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\ntune_runtime_enabled=false\nshort_calibration=false\n'+value, encoding='utf-8')
         result,log,debug = [out/(name+s) for s in ('.jsonl','.log','.debug.log')]
         cmd = [str(exe), '--config', str(config), '--save', str(a.save.resolve()), '--device', str(a.device),
                '--curves', '1', '--b2', '260000000', '--d', '30030', '--factor-only',

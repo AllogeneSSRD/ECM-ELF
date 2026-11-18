@@ -9,12 +9,12 @@ def main():
     p=argparse.ArgumentParser()
     for key in ['exe','out']:p.add_argument('--'+key,type=Path,required=True)
     a=p.parse_args();out=a.out.resolve();out.mkdir();exe=a.exe.resolve()
-    config=out/'ecm.toml';config.write_text('[gui]\nNumWorkers=1\n[workers.1]\nautostart=0\n')
-    original=config.read_bytes();state=out/'ui.toml';log=out/'idle.log'
-    state.write_text('[ui]\nlogs=false\ninspector=false\n[pet]\nenabled=true\nanimate=true\n')
+    config=out/'ecm.toml'
+    config.write_text('config_version=4\n[gui]\nlogs=false\ninspector=false\npet_enabled=true\npet_animate=true\n')
+    log=out/'idle.log'
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p
     user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
-    proc=subprocess.Popen([str(exe),'--config',str(config),'--ui-state',str(state),'--diagnostics',str(log),'--no-nvml','--pet'])
+    proc=subprocess.Popen([str(exe),'--config',str(config),'--diagnostics',str(log),'--no-nvml','--pet'])
     samples=[]
     hwnd=window(proc.pid,'ecm_gui_v2')
     try:
@@ -40,7 +40,7 @@ def main():
         assert wink and 'pet: mood=0 ' in text
         assert log.read_text(encoding='utf-8').count('pet: mood=0 ')<=3,'Floating should not spam transition logs'
     finally:close(proc,hwnd)
-    assert config.read_bytes()==original and renderer_clean(log.read_text(encoding='utf-8'),'dx11')
+    assert renderer_clean(log.read_text(encoding='utf-8'),'dx11')
     report=dict(passed=True,exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),samples=samples,
                 movement_pixels=max(ys)-min(ys),click_response=True,no_compute_or_clock_writes=True)
     (out/'result.json').write_text(json.dumps(report,indent=2),encoding='utf-8')

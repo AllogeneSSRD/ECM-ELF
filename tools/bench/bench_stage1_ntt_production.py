@@ -41,9 +41,9 @@ def run(args, directory, p, curves, preset=None):
     directory.mkdir()
     save = directory / "out.save"
     config = directory / "ecm.toml"
-    lines = ["[stage1]", 'curve = "mont"', "gpu_param = 0", 'lcm = "1"',
-             f"device = {args.device}", 'exp_cache = "off"',
-             'log_file = ""', "ckpt_seconds = 0"]
+    lines = ["config_version = 4", "[shared]", 'log_file = ""', "[stage1]", 'param = "m0"',
+             'montgomery_lcm_multiplier = "1"', f"stage1_gpu_device = {args.device}",
+             'exponent_cache_dir = "off"', "checkpoint_interval_seconds = 0"]
     command = [str(args.exe), "--config", str(config), "-sigma", str(args.sigma),
                "-gpucurves", str(curves), "-save", str(save), str(args.b1), str(args.b1)]
     if preset is None:
@@ -51,7 +51,7 @@ def run(args, directory, p, curves, preset=None):
     else:
         tile, outer, window, warp = preset
         lines += ["gpu_algorithm = 2", 'ntt_convolution = "linear"', "ntt_profile = 1", f"ntt_tile = {tile}",
-                  f"ntt_outer_max = {outer}", f"ntt_window = {window}",
+                  f"ntt_outer_radix_limit = {outer}", f"ntt_window_bits = {window}",
                   f"ntt_warp_tail = {str(warp).lower()}"]
         if args.length:
             lines.append(f"ntt_length = {args.length}")

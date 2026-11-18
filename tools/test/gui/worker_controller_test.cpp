@@ -67,15 +67,15 @@ struct Fixture {
     std::vector<std::string> trace;
     std::vector<WorkerNotice> notices;
     Fixture(const fs::path &root,const fs::path &self,const std::string &name,const std::string &scenario,
-            bool stage2=false,int autostart=0,bool version3=false):directory(root/name) {
+            bool stage2=false,int autostart=0):directory(root/name) {
         fs::create_directories(directory/"bin");
         const auto exe=directory/"bin/fixture.exe";fs::copy_file(self,exe);
         queue=directory/"worktodo.txt";{std::ofstream out(queue);out<<(stage2?"ECMSTAGE2=fixture\n":"ECMSTAGE1=fixture\n");}
         config=directory/"ecm.toml";
         const auto args="--controller-fixture "+scenario+" --queue \""+queue.string()+"\"";
-        {std::ofstream out(config);out<<(version3?"config_version=3\n[shared]\nworktodo_file=":"[shared]\nworktodo=")
-            <<quoted(queue.string())<<(version3?"\n[worker.1]":"\n[workers.1]")<<"\nautostart="
-            <<(version3?(autostart?"true":"false"):std::to_string(autostart))<<"\nextra_args="<<quoted(args)<<"\n";}
+        {std::ofstream out(config);out<<"config_version=4\n[shared]\nworktodo_file="
+            <<quoted(queue.string())<<"\n[worker.1]\nautostart="
+            <<(autostart?"true":"false")<<"\nextra_args="<<quoted(args)<<"\n";}
         std::string error;const bool loaded=ini.load(config.string(),error);check(loaded,error.c_str());
         settings={config.string(),exe.string(),exe.string(),"normal","ask",1,3000};
         controller.set_sinks([this](const std::string &line){trace.push_back(line);},[this](const WorkerNotice &notice){notices.push_back(notice);});
@@ -130,7 +130,7 @@ int main(int argc,char **argv) {
             check(!f.view().stage1_execution.valid(),"Stage1 details leaked into the following task");
         }
         {
-            Fixture f(root,self,"stage-args","ok",false,0,true);
+            Fixture f(root,self,"stage-args","ok");
             f.ini.set("workers.1","stage1_extra_args","--stage-one 7");
             f.ini.set("workers.1","stage2_extra_args","--stage-two 9");
             f.controller.configure(f.settings);
@@ -147,7 +147,7 @@ int main(int argc,char **argv) {
                   "Stage2 received the wrong additional arguments");
         }
         {
-            Fixture f(root,self,"reserved-args","ok",false,0,true);
+            Fixture f(root,self,"reserved-args","ok");
             f.ini.set("workers.1","stage1_extra_args","--worker 2 --config other.toml");
             f.controller.configure(f.settings);
             check(!f.controller.start(1) && f.view().state_text().find("stage1_extra_args: --worker")!=std::string::npos,

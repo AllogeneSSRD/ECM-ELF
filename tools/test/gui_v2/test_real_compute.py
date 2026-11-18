@@ -11,9 +11,13 @@ def main():
         for newer in ([False,True] if iteration%2==0 else [True,False]):
             run=out/f'{iteration}-{"v2" if newer else "v1"}';run.mkdir();(run/'saves').mkdir();cfg=run/'ecm.toml';queue=run/'worktodo.txt';log=run/'screen.log'
             queue.write_text('[Worker #1]\nECMSTAGE1=1,2,991,-1,'+json.dumps(str(run/'saves/m0_991_1e4.save'))+',0,0,8\n')
-            cfg.write_text('[shared]\nworktodo='+json.dumps(str(queue))+'\n[stage1]\ncurve="mont"\ntarget="gpu"\ngpu_param=0\nsigma=10\nauto_stage2=0\nckpt_seconds=0\ntmp_dir='+json.dumps(str(run/'saves'))+'\nlog_file='+json.dumps(str(log))+'\nfinished='+json.dumps(str(run/'finished.txt'))+'\nstage1_submission_file='+json.dumps(str(run/'results.json.txt'))+'\n[gui]\nNumWorkers=1\nrefresh_hz=10\ngpu_poll_ms=500\nexit_confirm="stop"\nexe='+json.dumps(str(worker))+'\n[workers.1]\nautostart=1\n')
+            cfg.write_text('config_version=4\n[shared]\nworktodo_file='+json.dumps(str(queue))+
+                '\nlog_file='+json.dumps(str(log))+'\nfinished_file='+json.dumps(str(run/'finished.txt'))+
+                '\n[stage1]\nparam="m0"\ntarget="gpu"\nsigma=10\nhandoff_mode="off"\ncheckpoint_interval_seconds=0\nstage1_save_dir='+json.dumps(str(run/'saves'))+
+                '\nstage1_submission_file='+json.dumps(str(run/'results.json.txt'))+
+                '\n[gui]\nrefresh_hz=10\ngpu_poll_ms=500\nexit_confirm="stop"\nstage1_exe='+json.dumps(str(worker))+'\n[worker.1]\nautostart=true\n')
             cmd=[str(exe if newer else old),'--config',str(cfg)]
-            if newer:cmd+=['--ui-state',str(run/'ui.toml'),'--diagnostics',str(run/'gui.log')]
+            if newer:cmd+=['--diagnostics',str(run/'gui.log')]
             proc=subprocess.Popen(cmd,cwd=run,startupinfo=startup,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);hwnd=window(proc.pid,'ecm_gui_v2' if newer else 'ecm_gui');user.ShowWindow(hwnd,4);start=time.monotonic()
             try:
                 end=time.monotonic()+60

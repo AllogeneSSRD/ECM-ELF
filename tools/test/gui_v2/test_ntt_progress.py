@@ -23,17 +23,16 @@ def main():
     queue.write_text('[Worker #1]\nECM2=1,2,15919,-1,44000000,4400000000,1000,"1782929"\n')
     config = out / "ecm.toml"
     config.write_text(
-        '[shared]\nworktodo=' + json.dumps(str(queue)) + '\n[gui]\nNumWorkers=1\n'
-        'exit_confirm="stop"\ngraceful_stop_ms=1500\nexe=' + json.dumps(str(args.worker.resolve())) +
-        '\n[workers.1]\nautostart=1\nextra_args="--scenario v2-ntt-progress"\n', encoding="utf-8")
-    state = out / "ui.toml"
-    state.write_text('[ui]\npage=0\nlogs=true\ninspector=false\nlanguage="zh"\n')
+        'config_version=4\n[shared]\nworktodo_file=' + json.dumps(str(queue)) + '\n[gui]\n'
+        'exit_confirm="stop"\ngraceful_stop_ms=1500\nstage1_exe=' + json.dumps(str(args.worker.resolve())) +
+        '\npage=0\nlogs=true\ninspector=false\ndisplay_language="zh"\n'
+        '[worker.1]\nautostart=true\nextra_args="--scenario v2-ntt-progress"\n', encoding="utf-8")
     log = out / "ui.log"
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
     process = subprocess.Popen([str(args.exe.resolve()), "--config", str(config),
-        "--ui-state", str(state), "--diagnostics", str(log), "--audit-app",
+        "--diagnostics", str(log), "--audit-app",
         "--no-nvml", "--no-pet", "--language", "zh"], cwd=out, startupinfo=startup)
     hwnd = None
     try:

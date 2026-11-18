@@ -22,8 +22,9 @@ def main():
         lines.append(f'METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA={sigma}; B1=20; N=0x{n:x}; X=0x{x:x}; STATUS=POINT; CHECKSUM={checksum(n,x,sigma,20,"POINT")};\n')
     saved.write_text(''.join(lines),encoding='utf-8')
     queue=out/'worktodo.txt';task='ECMSTAGE2=1,2,347,-1,points.save,1000000000,0,4\n';queue.write_text(task)
-    ini=out/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n[stage1]\nverbose=true\n[stage2]\n'
-        f'stage2_save_dir={json.dumps(str(out))}\nstage2_finished={json.dumps(str(out/"finished.txt"))}\n')
+    ini=out/'ecm.toml';ini.write_text('config_version=4\n[shared]\nuser=""\ncomputer=""\n'
+        f'finished_file={json.dumps(str(out/"finished.txt"))}\n[stage1]\nverbose=true\n[stage2]\ndevice="gpu"\n'
+        f'stage2_save_dir={json.dumps(str(out))}\n')
     public=out/'results.json.txt';inside=out/'internal.jsonl'
     binary_sha256=hashlib.sha256(a.exe.read_bytes()).hexdigest()
     command=list(map(str,[a.exe.resolve(),'--config',ini,'--device',1,'--once','--worktodo',queue,

@@ -15,9 +15,9 @@ def main():
             work=out/label/case;work.mkdir(parents=True);saved=work/'points.save';saved.write_text('\n'.join(lines)+'\n')
             queue=work/'worktodo.txt';row='ECMSTAGE2=1,2,127,-1,points.save,40000,0,2';queue.write_text(row+'\n')
             internal=work/'internal.jsonl';public=work/'results.json.txt';finished=work/'finished.txt'
-            config=work/'ecm.toml';config.write_text('[shared]\nuser=""\ncomputer=""\n[stage1]\nverbose=true\n[stage2]\n'+
-                f'stage2_save_dir={json.dumps(str(work))}\nstage2_finished={json.dumps(str(finished))}\n'+
-                f'stage2_progress_dir={json.dumps(str(work/"progress"))}\n')
+            config=work/'ecm.toml';config.write_text('config_version=4\n[shared]\nuser=""\ncomputer=""\n'+
+                f'finished_file={json.dumps(str(finished))}\n[stage1]\nverbose=true\n[stage2]\ndevice="gpu"\n'+
+                f'stage2_save_dir={json.dumps(str(work))}\ncheckpoint_dir={json.dumps(str(work/"progress"))}\n')
             args=[exe,'--config',config,'--device',a.device,'--once','--worktodo',queue,'--results',internal,'--submission',public,
                 '--short-calibration','0','--tune-runtime','0','--auto-carrier','0','--d','210','--log',work/'engine.log']
             if case=='dry':args+=['--dry-run']

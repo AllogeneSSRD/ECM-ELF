@@ -6,13 +6,13 @@
 
 ## Worker 与配置
 
-一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`，Stage2 使用 `ecm_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 选择下一行，并按[任务前缀](../../README.md#worktodo-格式)启动对应程序。同一 worker 同时只运行一个程序。CPU 与 CUDA 包可分别使用同名的 `ecm_stage2.exe`，同时安装时通过 Stage2 程序路径选择。留空优先查找统一名称，并兼容旧 CPU、CUDA 名称和 OpenCL worker。[CPU 队列与换后端](EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)
+一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`，Stage2 使用 `ecm_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 选择下一行，并按[任务前缀](../../README.md#worktodo-格式)启动对应程序。同一 worker 同时只运行一个程序。统一的 `ecm_stage2.exe` 可按 worker 选择 CPU 或 GPU。程序路径留空时优先查找统一名称，再搜索独立的 Stage2 程序。[CPU 队列与换后端](EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)
 
-Worker 管理顶部设置 worker 数量、两个阶段的程序路径和共用 TOML。`[gui]` 中的 `exe` 指向 Stage1，`stage2_exe` 指向 Stage2，`NumWorkers` 控制 GUI worker 数量，`priority` 仅控制进程优先级。`[workers.N]` 保存第 N 个 worker 的 GUI 设置。Stage1/Stage2 键分别放在 `[stage1]`、`[stage2]`，共用键放在 `[shared]`；按 worker 覆盖时写入 `[workers.N.stage1]`、`[workers.N.stage2]` 或 `[workers.N.shared]`。配置文件中的 worker 表与 `worktodo.txt` 的 `[Worker #N]` 队列分区使用同一编号，但语法独立。
+Worker 管理使用同一份 v4 TOML。`[gui]` 的 `stage1_exe` 和 `stage2_exe` 指定程序路径，`process_priority` 控制进程优先级。`[shared] worker_count` 指定 worker 数量。全局配置分为 `[shared]`、`[stage1]`、`[stage2]` 和 `[gui]`。`[worker.N]` 保存启动设置和同名的计算配置覆盖项。配置文件中的 worker 表与 `worktodo.txt` 的 `[Worker #N]` 队列分区使用同一编号，但语法独立。
 
-GUI 选择配置前检查文件并保存当前窗口设置，选择后不自动运行。语言、字体和布局保持当前会话设置；计算配置、worker 数量及程序路径从所选 TOML 读取。两阶段共用的 `worktodo` 相对 TOML 目录解析；Stage2 输出也基于 TOML 目录，Stage1 的日志和存档等相对路径基于 Stage1 程序目录。生效配置从工作程序同一投影读取。完整分区与每键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
+GUI 选择配置前检查文件并保存当前窗口设置，选择后不自动运行。语言、字体和布局保持当前会话设置；计算配置、worker 数量及程序路径从所选 TOML 读取。两阶段共用的 `worktodo_file` 相对 TOML 目录解析；Stage2 输出也基于 TOML 目录，Stage1 的日志和存档等相对路径基于 Stage1 程序目录。生效配置从工作程序同一投影读取。完整分区与每键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)。
 
-例如两个 worker 分别选择 Stage1 设备时，可在 `[stage1]` 写 `device = 0`，在 `[workers.2.stage1]` 写 `device = 1`；`worktodo.txt` 中任务仍使用 `[Worker #1]`、`[Worker #2]`。没有 worker 标题的队列行只归 worker 1。GUI 保存 TOML 时保留注释和顺序，并原子替换文件。
+例如两个 worker 分别选择 Stage1 设备时，可在 `[stage1]` 写 `stage1_gpu_device = 0`，在 `[worker.2]` 写 `stage1_gpu_device = 1`；`worktodo.txt` 中任务仍使用 `[Worker #1]`、`[Worker #2]`。没有 worker 标题的队列行只归 worker 1。GUI 保存 TOML 时保留注释和顺序，并原子替换文件。
 
 ### 当前任务摘要
 
@@ -24,7 +24,7 @@ GUI 选择配置前检查文件并保存当前窗口设置，选择后不自动�
 
 worktodo 生成器解析 PrimeNet ECM/ECM2 任务，过滤、去重、排序、检查 save 名称，输出 `ECMSTAGE1=` 行，并按所选 Stage1 设备档位建议曲线批量。写入前展示预览，追加前重新核对目标队列大小/修改时间，避免覆盖外部编辑。目标 worktodo 已有 worker 标签时，新任务写入对应 worker 最后一个分段的末尾；没有对应标签时在文件末尾新建分段。目标文件没有 worker 标签时沿用文件末尾追加。
 
-“曲线选项”每行两项：推荐曲线数与去重勾选框在第一行，块/SM 与目标显卡在第二行。“输出选项”提供覆盖 B1/B2、曲线类型、存档名格式及排序。曲线类型可选 Edwards（`e`）与 Montgomery param0/2/3（`m0`/`m2`/`m3`），初值来自所选 worker 的 Stage1 配置。默认存档名格式为 `{curve}_{target}_{b1}.save`：梅森任务的 target 为 `m<原始指数>`；其他任务为 `bit<估算的有效位数>`，后者需在涉及边界位数或已知因子时核对，生成器也会提示。`{b1}` 保留输入或覆盖值的原始写法；旧 `m{n}_{b1}.save` 仍可作为自定义格式使用，生成器会规范为所选曲线的前缀。Stage1 队列依文件名前缀选择构造方式；Stage2 仍以 save 内容的 METHOD/PARAM 为依据，详见[存档与队列覆盖](../architecture/SAVE.md)。排序可选输入顺序、单个支持字段或 `n,k,b,c` 组合。覆盖 B1 留空时保留原值；填入后预览和追加结果统一采用覆盖值。覆盖 B2 默认为 `0`，会覆盖输入任务原有的 B2；留空才保留原值。`0` 表示使用 Stage2 的 `stage2_b2`；该值也为零且启用 Auto B2 时才自动选取。修改任一选项后需要重新生成预览。
+“曲线选项”每行两项：推荐曲线数与去重勾选框在第一行，块/SM 与目标显卡在第二行。“输出选项”提供覆盖 B1/B2、曲线类型、存档名格式及排序。曲线类型可选 Edwards（`e`）与 Montgomery param0/2/3（`m0`/`m2`/`m3`），初值来自所选 worker 的 Stage1 配置。默认存档名格式为 `{curve}_{target}_{b1}.save`：梅森任务的 target 为 `m<原始指数>`；其他任务为 `bit<估算的有效位数>`，后者需在涉及边界位数或已知因子时核对，生成器也会提示。`{b1}` 保留输入或覆盖值的原始写法；旧 `m{n}_{b1}.save` 仍可作为自定义格式使用，生成器会规范为所选曲线的前缀。Stage1 队列依文件名前缀选择构造方式；Stage2 仍以 save 内容的 METHOD/PARAM 为依据，详见[存档与队列覆盖](../architecture/SAVE.md)。排序可选输入顺序、单个支持字段或 `n,k,b,c` 组合。覆盖 B1 留空时保留原值；填入后预览和追加结果统一采用覆盖值。覆盖 B2 默认为 `0`，会覆盖输入任务原有的 B2；留空才保留原值。`0` 表示使用 Stage2 的 `b2`；该值也为零且启用 Auto B2 时才自动选取。修改任一选项后需要重新生成预览。
 
 GPU 批量建议向实际 Stage1 程序查询所选曲线的编译档位：Montgomery 按 param 选择档位，Edwards 使用其独立档位及一位容器余量；曲线数由 blocks/SM、SM 数及每 block 实例数计算。Edwards 当前查询不提供实际占用率，推荐值仅按界面设置的块/SM 计算。CPU Stage1 目标自动关闭并禁用推荐曲线数，保留任务原有曲线数，也不提供 `m2`/`m3`；选择器据此禁用不可执行的组合。生成器不使用 GMP，剥离已知因子后的位宽为估计下界，精确整数仍由驱动校验。
 

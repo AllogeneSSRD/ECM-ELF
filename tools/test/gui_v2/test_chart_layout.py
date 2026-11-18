@@ -18,13 +18,13 @@ def main():
     mode=p.add_mutually_exclusive_group();mode.add_argument('--single-viewport',action='store_true');mode.add_argument('--multi-viewport',action='store_true')
     a=p.parse_args();out=a.out.resolve();out.mkdir()
     if a.trace and a.renderer!='vulkan':p.error('--trace requires --renderer vulkan')
-    env=os.environ.copy();env['VK_LAYER_PATH']=str(a.layers.resolve());log=out/'layout.log';state=out/'ui.toml'
-    state.write_text(f'[ui]\npage={a.page}\ninspector=false\nlogs=false\n',encoding='utf-8')
+    env=os.environ.copy();env['VK_LAYER_PATH']=str(a.layers.resolve());log=out/'layout.log';cfg=out/'ecm.toml'
+    cfg.write_text(f'config_version=4\n[gui]\npage={a.page}\ninspector=false\nlogs=false\n',encoding='utf-8')
     user.SetThreadDpiAwarenessContext.argtypes=[c.c_void_p];user.SetThreadDpiAwarenessContext.restype=c.c_void_p;assert user.SetThreadDpiAwarenessContext(c.c_void_p(-4))
     extra=[] if a.monitor else ['--no-nvml']
     if a.trace:extra+=['--trace-render']
     extra+=['--multi-viewport' if a.multi_viewport else '--single-viewport']
-    proc=subprocess.Popen([str(a.exe.resolve()),'--ui-state',str(state),'--diagnostics',str(log),*renderer_args(a.renderer),'--audit-app','--audit-performance',*extra],cwd=out,env=env)
+    proc=subprocess.Popen([str(a.exe.resolve()),'--config',str(cfg),'--diagnostics',str(log),*renderer_args(a.renderer),'--audit-app','--audit-performance',*extra],cwd=out,env=env)
     hwnd=window(proc.pid,'ecm_gui_v2');user.SetWindowPos(hwnd,None,80,80,1400,1000,0x14);user.ShowWindow(hwnd,4)
     def pointer(x,y,button=0):user.PostMessageW(hwnd,0x8021,button,(round(y)<<16)|(round(x)&65535));time.sleep(.13)
     result=dict(renderer=a.renderer,exe_sha256=hashlib.sha256(a.exe.read_bytes()).hexdigest(),page=a.page,no_nvml=not a.monitor,single_viewport=not a.multi_viewport,workers_started=False,desktop_refresh_qualified=False)

@@ -1,4 +1,4 @@
-"""Check explicit ECM-ELF v1 configuration export and preview."""
+"""Exercise offline v3 to v4 export with flat worker keys and optional GUI preferences."""
 
 import importlib.util
 import json
@@ -16,255 +16,158 @@ migration = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(migration)
 SCHEMA = json.loads(migration.SCHEMA.read_text(encoding="utf-8"))
 
-OLD = r"""# file introduction
+V3 = r'''# workflow
+config_version = 3 # explicitly selected
+
 [shared]
-worktodo = 'queue#live.txt' # relative to this TOML
-priority = 1
-skip = 2
+worker_count = 3
+worktodo_file = "queue.txt" # main queue
+tune_file = ""
+
 [stage1]
-device = 0
-impl = "gwnum"
-auto_stage2 = +1
-auto_stage2_worktodo = ""
-exp_cache = '..\cache'
-ntt_warp_tail = "0"
-# independent device
+gpu_device = 0
+gpu_backend = "cuda"
+handoff.mode = "ecm-elf"
+cpu_threads = 4
+cpu.threads = 2
+# ntt.allow_known_factors = true
+
 [stage2]
-stage2_device = 1
-stage2_submission_file = ""
-stage2_parallel = "auto"
-stage2_parallel_workspace = 2e0_0
-stage2_opencl_short_point_batch = 0
-stage2_factor_only = 1
+device = "gpu"
+gpu_device = 1
+[stage2.cuda] # tuning
+weighted_ntt = true
+
 [gui]
-NumWorkers = 2
-priority = "normal"
-[workers.2.stage1]
-device = 2
-ntt_length = 8192
-[workers.2.stage2] # worker 2 Stage2
-stage2_device = 3
-[workers.2]
-name = "Blue \"GPU#2\""
-autostart = -2
-[workers.2.shared]
-worktodo = "secondary.txt"
-# trailing comment
+worker_count = 2
+stage2_exe = "ecm_stage2.exe"
+pause_schedule = [
+    "foobar, 3, Mon-Fri, 08:30-17:30", # preserve
+]
+
+[worker.3]
+shared.tune_file = "worker3.toml"
+stage2.device = "cPu"
+stage2.cpu.threads = 3
+[worker.3.stage1.ntt]
+length = 1024
+# end of file
+'''
+
+SIDECAR = r'''[state]
+schema = 1
+[ui]
+theme = "dark"
+language = "zh"
+font_size = 18
+dock = "layout"
+worker = 3
+stage2_tune_file = "timing.toml"
+[window]
+width = 1680
+[pet]
+enabled = false
+[worker]
+count = 1
+stage1_exe = "ecm_cuda.exe"
+stage2_exe = "missing.exe"
+'''
+
+
+class Migration(unittest.TestCase):
+    def migrate(self, source, *, gui_state=None):
+        return migration.migrate(source, SCHEMA, "ecm.toml", gui_state=gui_state)
+
+    def test_business_and_gui_settings(self):
+        output = self.migrate(V3, gui_state=("ui.toml", SIDECAR))
+        parsed = tomllib.loads(output)
+        self.assertEqual(parsed["config_version"], 4)
+        self.assertEqual(parsed["shared"], {
+            "worker_count": 3, "worktodo_file": "queue.txt", "tune_file": "",
+        })
+        self.assertEqual(parsed["stage1"], {
+            "stage1_gpu_device": 0, "stage1_gpu_backend": "cuda", "handoff_mode": "ecm-elf",
+            "stage1_cpu_threads": 2, "gpu_init_threads": 4,
+        })
+        self.assertEqual(parsed["stage2"], {"device": "gpu", "stage2_gpu_device": 1, "weighted_ntt": True})
+        self.assertEqual(parsed["worker"]["3"], {
+            "tune_file": "worker3.toml", "device": "cPu", "stage2_cpu_threads": 3, "ntt_length": 1024,
+        })
+        self.assertEqual(parsed["gui"], {
+            "stage1_exe": "ecm_cuda.exe", "stage2_exe": "ecm_stage2.exe",
+            "pause_schedule": ["foobar, 3, Mon-Fri, 08:30-17:30"], "theme": "dark",
+            "display_language": "zh", "body_font_size": 18, "workspace_layout": "layout",
+            "selected_worker": 3, "stage2_timing_profile": "timing.toml", "window_width": 1680,
+            "pet_enabled": False,
+        })
+        for comment in ("# workflow", "# explicitly selected", "# main queue", "# tuning",
+                        "# preserve", "# end of file", "# ntt_allow_known_factors = true"):
+            self.assertIn(comment, output)
+        self.assertEqual(self.migrate(output), output)
+
+    def test_legacy_folds_follow_specific_values(self):
+        source = """config_version=3
+[stage1]
+cpu_affinity='0-3'
+cpu_threads=8
+[shared]
+cpu_affinity='4'
+[worker.2]
+stage1.cpu_affinity='0-1'
+stage1.cpu_threads=4
+stage1.gpu.init_threads=12
 """
-
-
-class ConfigMigration(unittest.TestCase):
-    def test_migration_and_worker_precedence_inputs(self):
-        new = migration.migrate(OLD, SCHEMA, "ecm.toml")
-        data = tomllib.loads(new)
-        self.assertEqual(data["config_version"], 2)
-        self.assertEqual(data["shared"], {
-            "worktodo_file": "queue#live.txt",
-            "queue_order": "stage1_first",
-            "queue_skip": "stage2",
+        parsed = tomllib.loads(self.migrate(source))
+        self.assertEqual(parsed["shared"], {"cpu_affinity": "4"})
+        self.assertEqual(parsed["stage1"], {"stage1_cpu_threads": 8, "gpu_init_threads": 8})
+        self.assertEqual(parsed["worker"]["2"], {
+            "cpu_affinity": "0-1", "stage1_cpu_threads": 4, "gpu_init_threads": 12,
         })
-        self.assertEqual(data["stage1"], {
-            "gpu_device": 0,
-            "cpu_implementation": "gwnum",
-            "handoff": {"enabled": True, "worktodo_file": ""},
-            "exponent_cache_dir": r"..\cache",
-            "ntt": {"warp_tail": False},
-        })
-        self.assertEqual(data["stage2"], {
-            "gpu_device": 1,
-            "submission_file": "",
-            "cuda": {"curve_concurrency": "auto", "workspace_policy": "leased"},
-            "opencl": {"short_point_batch": False},
-            "diagnostics": {"skip_prime_attribution": True},
-        })
-        self.assertEqual(data["gui"], {"worker_count": 2, "process_priority": "normal"})
-        self.assertEqual(data["worker"]["2"], {
-            "stage1": {"gpu_device": 2, "ntt": {"length": 8192}},
-            "stage2": {"gpu_device": 3},
-            "shared": {"worktodo_file": "secondary.txt"},
-            "name": 'Blue "GPU#2"',
-            "autostart": True,
-        })
-        for comment in ("file introduction", "relative to this TOML", "independent device",
-                        "worker 2 Stage2", "trailing comment"):
-            self.assertIn("# " + comment, new)
-        self.assertIn("worktodo_file = 'queue#live.txt' #", new)
-        self.assertEqual(migration.migrate(new, SCHEMA, "ecm.v2.toml"), new)
 
-    def test_empty_input_explicit_v1_and_bad_input(self):
-        self.assertEqual(tomllib.loads(migration.migrate("", SCHEMA, "empty")), {"config_version": 2})
-        self.assertEqual(migration.migrate("config_version = 1 # pin\n", SCHEMA, "old"),
-                         "config_version = 2 # pin\n")
-        self.assertEqual(migration.migrate("'config_version' = +1\n", SCHEMA, "old"),
-                         "config_version = 2\n")
-        aliases = migration.migrate('[stage2]\nstage2_parallel = " 0.2e1 "\n', SCHEMA, "old")
-        self.assertEqual(tomllib.loads(aliases)["stage2"]["cuda"]["curve_concurrency"], "dual")
-        cases = (
-            ("config_version = \"1\"\n", "config_version"),
-            ("config_version = 7\n", "config_version"),
-            ("config_version = 1\nconfig_version = 2\n", "line 2"),
-            ("[stage1]\nconfig_version = 1\n", "no v2 mapping"),
-            ("[workers.1000001]\nautostart=1\n", "unknown v1 table"),
-            ("[stage2]\nstage2_device=1\nfuture_unknown=2\n", "no v2 mapping"),
-            ("[stage1]\nauto_stage2 = \"\"\n", "expected v1 type int"),
-            ("[stage1]\nauto_stage2 = 2\n", "expected 0 or 1"),
-            ("[stage2]\nstage2_parallel = \"0_2\"\n", "expected auto or an integer"),
-            ("[stage2]\nstage2_parallel = -0\n", "expected auto or an integer"),
-            ("[stage2]\nstage2_parallel = 1.5\n", "expected legacy mode"),
-        )
-        for source, message in cases:
-            with self.subTest(source=source), self.assertRaisesRegex(ValueError, message):
-                migration.migrate(source, SCHEMA, "ecm.toml")
+    def test_invalid_input(self):
+        for source in ("", "config_version=1", "config_version=2", "config_version=5",
+                       'config_version="3"', "config_version=3\n[stage2]\nunknown=true\n"):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                self.migrate(source)
+        with self.assertRaisesRegex(ValueError, "unknown GUI preference ui.typo"):
+            self.migrate(V3, gui_state=("ui.toml", "[ui]\ntypo=1"))
 
-    def test_collision_at_worker_scope(self):
-        schema = {"options": [
-            {"owner": "stage1", "key": key, "type": "int", "parser": "legacy", "v2_key": "same"}
-            for key in ("old_a", "old_b")
-        ]}
-        with self.assertRaisesRegex(ValueError, "also defined on line 2"):
-            migration.migrate("[workers.2.stage1]\nold_a=1\nold_b=2\n", schema, "ecm.toml")
+    def test_quoted_v3_names(self):
+        source = '''"config_version" = +3
+["stage2"]
+"cuda" . "weighted_ntt" = true
+["worker".'3']
+"stage2".device = "cpu"
+'''
+        self.assertEqual(tomllib.loads(self.migrate(source)), {
+            "config_version": 4, "stage2": {"weighted_ntt": True},
+            "worker": {"3": {"device": "cpu"}},
+        })
 
-    def test_cli_preview_export_and_no_overwrite(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "ecm.toml"
-            output = source.with_name("ecm.v2.toml")
-            original = ("\ufeff" + OLD.replace("\n", "\r\n")).encode("utf-8")
+    def test_preview_and_export_keep_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "ecm.toml"
+            output = source.with_name("ecm.v4.toml")
+            original = ("\ufeff" + V3.replace("\n", "\r\n")).encode("utf-8")
             source.write_bytes(original)
 
-            def run(*options):
-                return subprocess.run([sys.executable, str(TOOL), str(source), '--to', '2', *options],
-                                      capture_output=True, check=False, timeout=10)
+            def cli(*flags):
+                return subprocess.run([sys.executable, str(TOOL), str(source), *flags],
+                                      capture_output=True, timeout=10)
 
-            preview = run("--preview")
+            preview = cli("--preview")
             self.assertEqual(preview.returncode, 0, preview.stderr)
             self.assertFalse(output.exists())
-            result = run()
-            self.assertEqual(result.returncode, 0, result.stderr)
+            write = cli()
+            self.assertEqual(write.returncode, 0, write.stderr)
             exported = output.read_bytes()
             self.assertEqual(exported.replace(b"\r\n", b"\n"), preview.stdout)
+            self.assertNotEqual(cli().returncode, 0)
+            self.assertNotEqual(cli("--output", str(source)).returncode, 0)
+            self.assertIn(b"preserve relative paths",
+                          cli("--output", str(source.parent / "elsewhere" / "ecm.toml")).stderr)
             self.assertEqual(source.read_bytes(), original)
-            self.assertNotEqual(run().returncode, 0)
             self.assertEqual(output.read_bytes(), exported)
-            self.assertNotEqual(run("--output", str(source)).returncode, 0)
-            moved = Path(tmp) / "elsewhere" / "ecm.v2.toml"
-            self.assertIn(b"preserve relative paths", run("--output", str(moved)).stderr)
-            self.assertEqual(source.read_bytes(), original)
-
-    def test_v3_upgrade_requires_output_and_route_choices(self):
-        source = '''config_version = 2
-[shared]
-b2_ratio = 15
-[stage1]
-curve = 'mont'
-gpu_montgomery_param = 2
-log_file = 'legacy1.log'
-handoff.enabled = true
-prime95.worktodo_file = 'other.txt'
-[stage2]
-log_file = 'legacy2.log'
-tune.profile = 'stage2.toml'
-[worker.2]
-shared.b2_ratio = 30
-stage1.target = 'cpu'
-'''
-        with self.assertRaisesRegex(ValueError, 'paths differ'):
-            migration.upgrade_v3(source, SCHEMA, 'ecm.toml', stage1_directory=Path.cwd())
-        with self.assertRaisesRegex(ValueError, 'both routes'):
-            migration.upgrade_v3(source, SCHEMA, 'ecm.toml', log_file='ecm.log')
-        with self.assertRaisesRegex(ValueError, 'different CUDA tune paths'):
-            migration.upgrade_v3(source, SCHEMA, 'ecm.toml', log_file='ecm.log', handoff_mode='ecm-elf')
-        converted = migration.upgrade_v3(source, SCHEMA, 'ecm.toml', log_file='ecm.log',
-                                         handoff_mode='ecm-elf', tune_file='combined.toml')
-        data = tomllib.loads(converted)
-        self.assertEqual(data['config_version'], 3)
-        self.assertEqual(data['shared'], {'log_file': 'ecm.log', 'tune_file': 'combined.toml'})
-        self.assertEqual(data['stage1']['param'], 'm2')
-        self.assertEqual(data['stage1']['handoff']['mode'], 'ecm-elf')
-        self.assertEqual(data['stage2'], {'b2_ratio': 15})
-        self.assertEqual(data['worker']['2']['stage1']['param'], 'm0')
-        self.assertEqual(data['worker']['2']['stage2']['b2_ratio'], 30)
-        self.assertEqual(migration.upgrade_v3(converted, SCHEMA, 'ecm.toml'), converted)
-
-    def test_v3_coalesces_identical_tune_paths(self):
-        source = '''config_version = 2
-[stage1]
-ntt.tune_file = 'combined.toml'
-[stage2]
-tune.profile = 'combined.toml'
-'''
-        shared = tomllib.loads(migration.upgrade_v3(source, SCHEMA, 'ecm.toml'))
-        self.assertEqual(shared['shared']['tune_file'], 'combined.toml')
-        self.assertNotIn('tune_file', shared['stage1'])
-        self.assertNotIn('tune_file', shared['stage2'])
-        source += "\n[worker.2]\nstage2.tune.profile = 'gpu1.toml'\n"
-        with self.assertRaisesRegex(ValueError, 'worker 2 has different CUDA tune paths'):
-            migration.upgrade_v3(source, SCHEMA, 'ecm.toml')
-        source += "stage1.ntt.tune_file = 'gpu1.toml'\n"
-        separate = tomllib.loads(migration.upgrade_v3(source, SCHEMA, 'ecm.toml'))
-        self.assertEqual(separate['shared']['tune_file'], 'combined.toml')
-        self.assertEqual(separate['worker']['2']['shared']['tune_file'], 'gpu1.toml')
-
-    def test_v3_legacy_tune_empty_and_auto_are_distinct(self):
-        source = "config_version=2\n[stage1]\nntt.tune_file=''\n[stage2]\ntune.profile=''\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            path = base / 'ecm.toml'
-            with self.assertRaisesRegex(ValueError, r"Stage1 '', Stage2 'tune.toml'"):
-                migration.upgrade_v3(source, SCHEMA, path)
-            path.write_text(source, encoding='utf-8')
-            preview = subprocess.run([sys.executable, str(TOOL), str(path), '--preview', '--tune-file='],
-                                     capture_output=True, check=True, timeout=10)
-            self.assertEqual(tomllib.loads(preview.stdout.decode('utf-8'))['shared']['tune_file'], '')
-            (base / 'stage2_ecm_tune.toml').touch()
-            with self.assertRaisesRegex(ValueError, 'stage2_ecm_tune.toml'):
-                migration.upgrade_v3('config_version=2\n', SCHEMA, path)
-
-    def test_v3_normalizes_previous_staged_tune_keys(self):
-        source = '''config_version = 3
-[stage1]
-tune_file = 'combined.toml' # formerly separate
-param = 'm0'
-[stage2]
-tune_file = './combined.toml'
-b2_ratio = 15
-[stage2.opencl]
-tune_file = 'opencl.toml'
-[worker.2.stage2]
-tune_file = 'gpu1.toml'
-[worker.2.stage1]
-tune_file = 'gpu1.toml'
-'''
-        text = migration.upgrade_v3(source, SCHEMA, 'ecm.toml')
-        data = tomllib.loads(text)
-        self.assertEqual(data['shared']['tune_file'], 'combined.toml')
-        self.assertEqual(data['stage1'], {'param': 'm0'})
-        self.assertEqual(data['stage2'], {'b2_ratio': 15, 'opencl': {'tune_file': 'opencl.toml'}})
-        self.assertEqual(data['worker']['2'], {'shared': {'tune_file': 'gpu1.toml'}})
-        self.assertIn('# formerly separate', text)
-        self.assertEqual(migration.upgrade_v3(text, SCHEMA, 'ecm.toml'), text)
-
-    def test_v3_splits_legacy_stage1_threads_by_scope(self):
-        source = '''config_version = 3
-[stage1]
-cpu_threads = 4 # previous shared thread count
-cpu.threads = 2
-cpu_affinity = "0-3"
-[stage2]
-cpu.threads = 1
-[worker.2.stage1]
-gpu.init_threads = 0
-cpu_threads = 3
-'''
-        text = migration.upgrade_v3(source, SCHEMA, 'ecm.toml')
-        data = tomllib.loads(text)
-        self.assertEqual(data['stage1'], {'cpu': {'threads': 2}, 'gpu': {'init_threads': 4}, 'cpu_affinity': '0-3'})
-        self.assertEqual(data['stage2']['cpu']['threads'], 1)
-        self.assertEqual(data['worker']['2']['stage1'], {'cpu': {'threads': 3}, 'gpu': {'init_threads': 0}})
-        self.assertEqual(text.count('# previous shared thread count'), 1)
-        self.assertEqual(migration.upgrade_v3(text, SCHEMA, 'ecm.toml'), text)
-        old = migration.upgrade_v3('config_version = 2\n[stage1]\ncpu_threads = 5\n', SCHEMA, 'ecm.toml')
-        stage1 = tomllib.loads(old)['stage1']
-        self.assertEqual((stage1['cpu']['threads'], stage1['gpu']['init_threads']), (5, 5))
 
 
 if __name__ == "__main__":

@@ -132,7 +132,11 @@ def main():
         if mode=='ptx':binary=ptx_binaries.get(str(binary),binary)
         folder=out/name;folder.mkdir(parents=True)
         config=folder/'fixture.toml'
-        config.write_text('[stage1]\nauto_stage2=0\nedwards_stage2_transfer=false\n[stage2]\nstage2_short_calibration=false\nstage2_tune_runtime=false\n')
+        if name.startswith('reference/'):
+            config.write_text('[stage1]\nauto_stage2=0\nedwards_stage2_transfer=false\n[stage2]\nstage2_short_calibration=false\nstage2_tune_runtime=false\n')
+        else:
+            config.write_text('config_version=4\n[stage1]\nhandoff_mode="off"\n'
+                              '[stage2]\ndevice="gpu"\nshort_calibration=false\ntune_runtime_enabled=false\n')
         env=base_env|{'CUDA_CACHE_MAXSIZE':str(1024*1024*1024)}
         if mode!='default':env['CUDA_MODULE_LOADING']='LAZY'
         if mode=='ptx':env['CUDA_FORCE_PTX_JIT']='1'

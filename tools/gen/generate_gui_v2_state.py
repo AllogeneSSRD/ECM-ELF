@@ -1,4 +1,4 @@
-"""Generate v2 sidecar defaults/validation/reference from ecm_options.json."""
+"""Generate GUI v2 preference bindings and computation option descriptions."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -11,11 +11,8 @@ SCHEMA = ROOT / 'config/ecm_options.json'
 
 def products():
     full_schema = json.loads(SCHEMA.read_text(encoding='utf-8'))
-    schema = full_schema['gui_v2_sidecar']
+    schema = full_schema['gui_preferences']
     fields = schema['fields']
-    # A TOML table may only be emitted once, even after fields are appended to the schema.
-    tables = list(dict.fromkeys(field['table'] for field in fields))
-    fields = [field for table in tables for field in fields if field['table'] == table]
     types = {'string': 'std::string', 'int': 'int', 'float': 'float', 'bool': 'bool'}
     lines = ['// Generated; edit config/ecm_options.json, not this file.', '#pragma once', '#include <string>', '#include <cmath>', '#include <stdexcept>', '#include <algorithm>',
              'namespace ecmgui_v2 {', 'struct UiValues {']
@@ -34,9 +31,9 @@ def products():
             literal = '(-2147483647 - 1)' if value == -2147483648 else str(value)
             if field['type'] == 'float': literal = f'{float(value)}f'
             lines.append(f'inline constexpr {types[field["type"]]} {field["field"]}_{suffix} = {literal};')
-    lines += ['}', 'template<class V,class F> void visit_ui_fields(V& value,F&& field) {']
+    lines += ['}', 'template<class F> void visit_ui_fields(F&& field) {']
     for field in fields:
-        lines.append(f'    field("{field["table"]}","{field["key"]}",value.{field["field"]});')
+        lines.append(f'    field("{field["key"]}",&UiValues::{field["field"]});')
     lines += ['}', 'inline void validate_ui(const UiValues& v) {']
     for field in fields:
         name = f'v.{field["field"]}'
@@ -50,13 +47,9 @@ def products():
         if field['type'] == 'float': tests.append(f'!std::isfinite({name})')
         if 'values' in field: tests.append('(' + ' && '.join(f'{name} != {json.dumps(x)}' for x in field['values']) + ')')
         if field['type'] == 'string': tests.append(f'{name}.size() > {field.get("max_length", 4096)}')
-        if tests: lines.append(f'    if ({" || ".join(tests)}) throw std::runtime_error("Invalid UI state: {field["table"]}.{field["key"]}");')
+        if tests: lines.append(f'    if ({" || ".join(tests)}) throw std::runtime_error("Invalid GUI preference: {field["key"]}");')
     lines += ['}', '}']
-    reference = ['# GUI v2 侧车配置参考', '', '由 `config/ecm_options.json` 的 `gui_v2_sidecar` 生成。独立 UI 文件不属于业务 TOML；不会写回旧 `[gui]`。', '']
-    for field in fields:
-        reference += [f'## {field["table"]}.{field["key"]}', '', f'默认值：`{json.dumps(field["default"], ensure_ascii=False)}`；类型：`{field["type"]}`。', '', *field['description'], '']
-    result = {'src/ecm/application/gui_v2/generated/ui_values.h': '\n'.join(lines) + '\n',
-              'docs/GUI_V2_STATE_REFERENCE.md': '\n'.join(reference)}
+    result = {'src/ecm/application/gui_v2/generated/ui_values.h': '\n'.join(lines) + '\n'}
     meta=['// Generated; edit config/ecm_options.json.', '#pragma once', 'namespace ecmgui_v2 {',
           'struct BusinessOption { const char *table,*key,*domain,*description_key,*type; bool has_min,has_max; double minimum,maximum; };',
           'inline constexpr BusinessOption business_options[]={']

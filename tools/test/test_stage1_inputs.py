@@ -72,9 +72,12 @@ def main():
         return log,result
     def setup(name,task,*,model='mont',target='cpu',extra='',bits=127):
         case=out/name;case.mkdir();queue=case/'worktodo.txt';queue.write_text(task,encoding='utf-8')
-        ini=case/'ecm.toml';ini.write_text('[shared]\nworktodo='+quoted(queue)+'\n[stage1]\ncurve='+quoted(model)+'\ntarget='+quoted(target)+
-            '\nimpl='+quoted('scalar' if target=='cpu' else 'auto')+'\ngpu_param=0\ndevice='+str(a.device)+
-            '\nexp_cache="off"\nlog_file=""\nckpt_seconds=0\ntmp_dir='+quoted(case)+'\nfinished='+quoted(case/'finished.txt')+'\n'+extra,encoding='utf-8')
+        handoff = '' if 'handoff_mode=' in extra else 'handoff_mode="off"\n'
+        ini=case/'ecm.toml';ini.write_text('config_version=4\n[shared]\nworktodo_file='+quoted(queue)+
+            '\nfinished_file='+quoted(case/'finished.txt')+'\nlog_file=""\n[stage1]\nparam='+quoted('e' if model=='ed' else 'm0')+
+            '\ntarget='+quoted(target)+'\ncpu_implementation='+quoted('scalar' if target=='cpu' else 'auto')+
+            '\nstage1_gpu_device='+str(a.device)+'\nexponent_cache_dir="off"\ncheckpoint_interval_seconds=0\nstage1_save_dir='+
+            quoted(case)+'\n'+handoff+extra,encoding='utf-8')
         return case,queue,ini
     if not a.timings_only:
         for index,(args,key,value) in enumerate([
@@ -87,10 +90,10 @@ def main():
         passed('actionable_cli_diagnostics')
         # Validate global values even when another worker overrides them.
         for bad in [-1, 17, 99]:
-            case,q,ini=setup('invalid_backup_'+str(bad),'# empty\n',extra='ckpt_backups='+str(bad)+'\n')
-            ini.write_text(ini.read_text()+'\n[workers.2.stage1]\nckpt_backups=3\n')
+            case,q,ini=setup('invalid_backup_'+str(bad),'# empty\n',extra='checkpoint_backups='+str(bad)+'\n')
+            ini.write_text(ini.read_text()+'\n[worker.2]\ncheckpoint_backups=3\n')
             log,_=run(case.name,['--config',ini],case,success=False)
-            assert 'key=ckpt_backups' in log and f'value={bad}\n' in log and '0..16' in log
+            assert 'key=checkpoint_backups' in log and f'value={bad}\n' in log and '0..16' in log
             assert q.read_text()=='# empty\n'
         passed('checkpoint_backup_range_before_precedence')
         for name,args in [('invalid_duplicate',['--sigma','bad','--sigma','200','100']),
@@ -108,17 +111,18 @@ def main():
         log,_=run(case.name,['--config',ini,'--gpu-param','0','--sigma','3:200','100'],case,success=False)
         assert 'conflict between -sigma' in log
         passed('explicit_gpu_param_conflict_preserved')
-        for name,extra,args in [('negative_ckpt','ckpt_seconds=-3\n',[]),
-                                ('ckpt_last_alias','ckpt_seconds=2\n',['--ckpt','3','-gpuckpt','0']),
-                                ('ckpt_alias_last','ckpt_seconds=2\n',['-gpuckpt','3','--ckpt','0'])]:
+        for name,extra,args in [('negative_ckpt','checkpoint_interval_seconds=-3\n',[]),
+                                ('ckpt_last_alias','checkpoint_interval_seconds=2\n',['--ckpt','3','-gpuckpt','0']),
+                                ('ckpt_alias_last','checkpoint_interval_seconds=2\n',['-gpuckpt','3','--ckpt','0'])]:
             case,q,ini=setup(name,'# unused\n')
-            ini.write_text(ini.read_text().replace('ckpt_seconds=0',extra.strip()))
+            ini.write_text(ini.read_text().replace('checkpoint_interval_seconds=0',extra.strip()))
             log,_=run(name,['--config',ini,'--sigma','1000','-gpucurves','1',*args,'100'],case,text='2^127-1')
             assert 'ckpt=0s' in log
         passed('checkpoint_disable_and_alias_order')
         for name,cli_empty in [('direct_empty_cli_tmp',True),('direct_empty_toml_tmp',False)]:
             case,q,ini=setup(name,'# unused\n')
-            if not cli_empty:ini.write_text(ini.read_text().replace('tmp_dir='+quoted(case),'tmp_dir=""'))
+            if not cli_empty:
+                ini.write_text(ini.read_text().replace('stage1_save_dir='+quoted(case),'stage1_save_dir=""'))
             run(name,['--config',ini,'--sigma','1000','-gpucurves','1']+(['--tmp-dir',''] if cli_empty else [])+['100'],case,text='2^127-1')
             assert (case/'m0_m127_100.save').is_file()
         passed('direct_empty_tmp_preserves_cwd_persistence')
@@ -143,14 +147,16 @@ def main():
         assert 'INPUT[conflict]' in log and q.read_bytes()==original and not list(case.glob('*.save'))
         passed('task_cli_rejected_before_execution')
         case,q,ini=setup('masked_invalid_config','# empty\n')
-        ini.write_text(ini.read_text().replace('device='+str(a.device),'device=-1')+'\n[workers.1.stage1]\ndevice=0\n')
+        ini.write_text(ini.read_text().replace('stage1_gpu_device='+str(a.device),'stage1_gpu_device=-1')+
+                       '\n[worker.1]\nstage1_gpu_device=0\n')
         log,_=run(case.name,['--config',ini,'-d','0'],case,success=False)
-        assert str(ini) in log and 'key=device' in log and 'value=-1\n' in log and 'expected' in log
+        assert str(ini) in log and 'key=stage1_gpu_device' in log and 'value=-1\n' in log and 'expected' in log
         passed('invalid_explicit_config_not_masked')
-        case,q,ini=setup('masked_invalid_affinity','# empty\n',extra='affinity="0,,1"\n')
-        ini.write_text(ini.read_text()+'\n[workers.1.stage1]\naffinity="0"\n')
+        case,q,ini=setup('masked_invalid_affinity','# empty\n')
+        ini.write_text(ini.read_text().replace('[shared]\n','[shared]\ncpu_affinity="0,,1"\n')+
+                       '\n[worker.1]\ncpu_affinity="0"\n')
         log,_=run(case.name,['--config',ini,'--affinity','1'],case,success=False)
-        assert 'key=affinity' in log and '0,,1' in log and 'expected' in log
+        assert 'key=cpu_affinity' in log and '0,,1' in log and 'expected' in log
         passed('invalid_affinity_not_masked')
         case,q,ini=setup('invalid_execution_combination','ECM=1,2,127,-1,100,0,2,1000\n',target='gpu')
         original=q.read_bytes()
@@ -158,7 +164,7 @@ def main():
         assert 'keys=target,impl,reduction' in log and q.read_bytes()==original and '# ERROR' not in q.read_text()
         passed('explicit_backend_mismatch_preserves_queue')
         case,q,ini=setup('cpu_preset_on_gpu','# empty\n',target='gpu')
-        ini.write_text('config_version=3\n[shared]\nworktodo_file='+quoted(q)+
+        ini.write_text('config_version=4\n[shared]\nworktodo_file='+quoted(q)+
                        '\nlog_file=""\n[stage1]\ntarget="gpu"\nparam="m0"\n'
                        'cpu_implementation="simd[:6144], scalar[], auto[]"\n'
                        'cpu_simd_reduction="montgomery"\ncpu_montgomery_chain="prac"\n')
@@ -166,7 +172,7 @@ def main():
         assert 'execution target : gpu' in log and q.read_text()=='# empty\n'
         passed('cpu_toml_presets_dormant_on_gpu')
         case,q,ini=setup('gpu_preset_on_cpu','ECM=1,2,127,-1,100,0,1,1000\n',
-                         extra='gpu_algorithm="ntt"\nnaf_w=2\n')
+                         extra='gpu_algorithm="ntt"\nedwards_naf_window_bits=2\n')
         original=q.read_bytes()
         log,_=run(case.name+'_explicit',['--config',ini,'--gpu-algorithm','ntt'],case,success=False)
         assert '--gpu-algorithm requires --target gpu' in log and q.read_bytes()==original
@@ -174,7 +180,7 @@ def main():
         assert '1 task(s) processed' in log and not q.read_text().strip()
         passed('gpu_ntt_and_edwards_naf_inactive_on_cpu_montgomery')
         case,q,ini=setup('different_worker_invalid_option','# empty\n')
-        ini.write_text(ini.read_text()+'\n[workers.2.stage1]\nimpl="unknown"\n')
+        ini.write_text(ini.read_text()+'\n[worker.2]\ncpu_implementation="unknown"\n')
         run(case.name,['--config',ini],case)
         log,_=run(case.name+'_worker2',['--config',ini,'--worker','2'],case,success=False)
         assert 'worker=2' in log and q.read_text()=='# empty\n'
@@ -185,12 +191,12 @@ def main():
         assert 'requires target=gpu' in log and 'worktodo retained' in log and q.read_bytes()==original
         passed('current_backend_mismatch_does_not_disable_typed_save')
         case,q,ini=setup('cpu_prac_on_edwards','ECM=1,2,127,-1,100,0,1,1000\n',
-                         model='ed',extra='cpu_mont_chain="prac"\n')
+                         model='ed',extra='cpu_montgomery_chain="prac"\n')
         log,_=run(case.name,['--config',ini],case)
         assert '1 task(s) processed' in log and not q.read_text().strip()
         passed('cpu_montgomery_chain_inactive_on_edwards')
         case,q,ini=setup('no_matching_cpu_policy','ECM=1,2,127,-1,100,0,1,1000\n')
-        ini.write_text('config_version=3\n[shared]\nworktodo_file='+quoted(q)+
+        ini.write_text('config_version=4\n[shared]\nworktodo_file='+quoted(q)+
                        '\nlog_file=""\n[stage1]\ntarget="cpu"\nparam="m0"\n'
                        'cpu_implementation="scalar[200:]"\n')
         original=q.read_bytes()
@@ -230,23 +236,25 @@ def main():
             else:
                 assert len(rows(case/'stage1_results.jsonl'))==2 and '[Worker #2]\n'+future in q.read_text()
             passed(name)
-        case,q,ini=setup('local_stage2','ECM=1,2,127,-1,100,10000,2,7000\n',extra='auto_stage2=1\n')
+        case,q,ini=setup('local_stage2','ECM=1,2,127,-1,100,10000,2,7000\n',extra='handoff_mode="ecm-elf"\n')
         run(case.name,['--config',ini],case)
         assert q.read_text().startswith('ECMSTAGE2=') and ',10000,0,2' in q.read_text()
         passed('normalized_local_stage2_handoff')
-        case,q,ini=setup('p95_failure','ECM=1,2,127,-1,100,10000,2,8000\n')
+        case,q,ini=setup('p95_failure','ECM=1,2,127,-1,100,10000,2,8000\n',extra='handoff_mode="prime95"\n')
         external=case/'prime95';destination=external/'saves';destination.mkdir(parents=True)
         blocked=destination/'m0_m127_100.save';blocked.mkdir()
-        ini.write_text(ini.read_text()+'p95_worktodo_path='+quoted(external/'worktodo.txt')+'\np95_sync_dir='+quoted(destination)+'\n')
+        (external/'worktodo.txt').write_text('',encoding='utf-8')
+        ini.write_text(ini.read_text()+'prime95_worktodo_file='+quoted(external/'worktodo.txt')+'\nprime95_save_dir='+quoted(destination)+'\n')
         log,_=run(case.name,['--config',ini],case)
         assert not q.read_text().strip() and not (external/'worktodo.add').exists() and 'p95_add: pending' in log
         blocked.rmdir();log,_=run(case.name+'_retry',['--config',ini],case)
         assert 'START:' not in log and (external/'worktodo.add').exists() and blocked.is_file()
         assert str(blocked) in (external/'worktodo.add').read_text()
         passed('p95_durable_failure_and_idle_retry')
-        case,q,ini=setup('p95_unreadable_status','ECM=1,2,521,-1,50000,1000000,2,8500\n')
+        case,q,ini=setup('p95_unreadable_status','ECM=1,2,521,-1,50000,1000000,2,8500\n',extra='handoff_mode="prime95"\n')
         external=case/'prime95';external.mkdir()
-        ini.write_text(ini.read_text()+'p95_worktodo_path='+quoted(external/'worktodo.txt')+'\np95_sync_dir='+quoted(external/'saves')+'\n')
+        (external/'worktodo.txt').write_text('',encoding='utf-8')
+        ini.write_text(ini.read_text()+'prime95_worktodo_file='+quoted(external/'worktodo.txt')+'\nprime95_save_dir='+quoted(external/'saves')+'\n')
         unreadable=exe.parent/'p95_add_pending.txt'
         assert not unreadable.exists()
         try:
@@ -260,10 +268,12 @@ def main():
         passed('p95_failure_reporting_survives_unreadable_count')
         # Unsupported constructions ignore Prime95 paths, including an unset sync
         # destination, and must not create transfer files in the external directory.
-        case,q,ini=setup('edwards_ignores_p95','ECM=1,2,127,-1,100,0,2,9000\n',model='ed',extra='p95_worktodo_path="absent-p95/worktodo.txt"\n')
+        case,q,ini=setup('edwards_ignores_p95','ECM=1,2,127,-1,100,0,2,9000\n',model='ed',
+                         extra='handoff_mode="prime95"\nprime95_worktodo_file="absent-p95/worktodo.txt"\n')
         run(case.name,['--config',ini],case);assert not (exe.parent/'absent-p95').exists();passed('unsupported_handoff_remains_local')
         for target in ['cpu','gpu']:
-            case,q,ini=setup('edwards_no_points_'+target,'ECM=1,2,7,-1,100,10000,4,2026\n',model='ed',target=target,extra='auto_stage2=1\n')
+            case,q,ini=setup('edwards_no_points_'+target,'ECM=1,2,7,-1,100,10000,4,2026\n',model='ed',
+                             target=target,extra='handoff_mode="ecm-elf"\n')
             log,_=run(case.name,['--config',ini],case)
             assert 'no Stage2 point' in log and 'curves=0' in log
             assert not q.read_text().strip() and len(rows(case/'stage1_results.jsonl'))==4
@@ -288,8 +298,13 @@ def main():
                                 run(name+'_seed',['--config',ini],case,binary=binary)
                                 assert len(rows(case/'stage1_results.jsonl'))==10000
                                 q.write_text(task)
-                                ini.write_text(ini.read_text()+'save_sync_dir_1='+quoted(case/'backup')+'\n'+
-                                    ('p95_worktodo_path='+quoted(case/'prime95/worktodo.txt')+'\np95_sync_dir='+quoted(case/'prime95/saves')+'\n' if model=='mont' else ''))
+                                config = ini.read_text()+'backup_directory_1='+quoted(case/'backup')+'\n'
+                                if model=='mont':
+                                    (case/'prime95').mkdir()
+                                    (case/'prime95/worktodo.txt').write_text('',encoding='utf-8')
+                                    config=config.replace('handoff_mode="off"','handoff_mode="prime95"')
+                                    config+='prime95_worktodo_file='+quoted(case/'prime95/worktodo.txt')+'\nprime95_save_dir='+quoted(case/'prime95/saves')+'\n'
+                                ini.write_text(config)
                             _,result=run(name,['--config',ini],case,binary=binary)
                             e=result['events'];assert 'save' in e and 'result' in e and 'queue_done' in e,(name,e)
                             report['performance'].append(dict(scenario=scenario,history_rows=10000 if scenario=='history_sync' else 0,

@@ -36,11 +36,11 @@ def run(exe, backend, root, device, bits, n, b1, curves, block, repeat, setup_th
     algo = "thread" if backend == "cuda" else "cgbn"
     arithmetic = "fips_ptx" if bits <= 512 else "cios"
     options = (
-        'config_version = 3\n[shared]\nlog_file = ""\n[stage1]\nparam = "e"\ntarget = "gpu"\n'
-        f'gpu_backend = "{backend}"\ngpu_device = {device}\ngpu_algorithm = "{algo}"\n'
-        'edwards_naf_window_bits = 6\nedwards_doubling = 1\nhandoff.mode = "off"\n'
-        f'cpu_threads = {setup_threads}\n'
-        f'checkpoint_interval_seconds = 0\nsave_dir = {json.dumps(case.as_posix())}\n'
+        'config_version = 4\n[shared]\nlog_file = ""\n[stage1]\nparam = "e"\ntarget = "gpu"\n'
+        f'stage1_gpu_backend = "{backend}"\nstage1_gpu_device = {device}\ngpu_algorithm = "{algo}"\n'
+        'edwards_naf_window_bits = 6\nedwards_doubling = 1\nhandoff_mode = "off"\n'
+        f'gpu_init_threads = {setup_threads}\n'
+        f'checkpoint_interval_seconds = 0\nstage1_save_dir = {json.dumps(case.as_posix())}\n'
         f'exponent_cache_dir = {json.dumps((root / "scalar_cache").as_posix())}\n'
     )
     if backend == "opencl":

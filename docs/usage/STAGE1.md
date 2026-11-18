@@ -12,7 +12,7 @@
 
 CPU Stage1 的实际模数超过 10240 位时，`cpu_implementation = "auto"` 使用 IFMA，单曲线也适用。无可用 IFMA 时任务报错。Edwards 可用 `--impl scalar` 或在 `[stage1]` 设置 `cpu_implementation = "scalar"`，显式运行宽位 GMP `mpz` 二进制点乘。Montgomery CPU 标量的上限为 10240 位。
 
-v3 也可用 `cpu_implementation = "simd[:6144], scalar[:4096], gwnum[4096:], auto[]"`。规则按顺序检查剥除已知因子后的实际模数位宽和后端能力。区间左闭右开，省略边界表示最小值或无上限。`[]` 等价于 `[:]`，空字符串等价于 `auto`。
+也可用 `cpu_implementation = "simd[:6144], scalar[:4096], gwnum[4096:], auto[]"`。规则按顺序检查剥除已知因子后的实际模数位宽和后端能力。区间左闭右开，省略边界表示最小值或无上限。`[]` 等价于 `[:]`，空字符串等价于 `auto`。
 
 全局默认值与当前 worker 的覆盖合并后，按最终 `target` 应用运行选项。GPU 任务保留配置中的 CPU 实现、归约及点乘链预设，CPU 任务保留 GPU 算法预设，切换目标时可复用这些配置。TOML 仍校验当前 worker 的选项值。为 GPU 任务显式指定非默认 `--impl`、`--reduction` 或 `--cpu-mont-chain` 会报错。CPU 任务拒绝显式指定的 `--gpu-algorithm` 和非自动的 `--gpu-backend`。
 
@@ -31,7 +31,7 @@ gpu_algorithm = "ntt[16384:], cgbn[]"
 
 每条任务先构造实际模数，再从左到右选第一个位宽区间及后端能力都匹配的规则。位宽按剥除已知因子后的模数计算，区间左闭右开。`[]` 等价于 `[:]`，空边界表示不限该侧。默认从 16384 位起优先尝试 NTT，适用曲线为 Edwards 和 Montgomery PARAM0。NTT 可计算完整 `2^p−1`，也可为保留原始梅森元数据的余因子任务使用梅森承载。其他不符合条件的输入继续尝试 CGBN。CUDA CGBN 还要求当前构建含有适用的内核档。OpenCL worker 跳过 CUDA 专用的 NTT 和 thread，按原 OpenCL 路径处理 CGBN 规则命中的任务。
 
-`[stage1] ntt.allow_known_factors = 1` 默认允许带已知因子的梅森任务。GPU 按完整梅森数选择 NTT 长度并计算，构造、求逆、因子检查、save 和结果发布使用余因子。0 禁用这条承载路径，自动规则继续尝试后续后端，强制 `ntt` 则报错。规则仍按余因子的实际位宽匹配。例如 M15919 剥除 1782929 后为 15899 位，`"ntt[14336:], cgbn[]"` 可以选用 15919 位承载。原有 CGBN 检查点继续恢复其原后端。见 [梅森承载原理](../architecture/NTT.md#stage1-已知因子与梅森承载)。
+`[stage1] ntt_allow_known_factors = 1` 默认允许带已知因子的梅森任务。GPU 按完整梅森数选择 NTT 长度并计算，构造、求逆、因子检查、save 和结果发布使用余因子。0 禁用这条承载路径，自动规则继续尝试后续后端，强制 `ntt` 则报错。规则仍按余因子的实际位宽匹配。例如 M15919 剥除 1782929 后为 15899 位，`"ntt[14336:], cgbn[]"` 可以选用 15919 位承载。原有 CGBN 检查点继续恢复其原后端。见 [梅森承载原理](../architecture/NTT.md#stage1-已知因子与梅森承载)。
 
 若要固定算法，可写单值 `"cgbn"`、`"ntt"`、`"thread"`（也可用 `1`、`2`、`3`）。算法名不区分大小写。单值按指定算法校验，资格不符时报错。CLI `--gpu-algorithm` 可以覆盖单值或规则列表。使用列表恢复任务时，匹配的检查点锁定原来的 GPU 算法。NTT 的调优选择只影响当前后端的计划和批量。
 
@@ -52,14 +52,14 @@ CUDA Stage1 本机和发布构建都包含 PARAM0 PRAC。默认点乘链为 ladd
 ```toml
 [stage1]
 target = "gpu"
-gpu_backend = "cuda"
+stage1_gpu_backend = "cuda"
 gpu_algorithm = "cgbn"
 param = "m0"
 cuda_montgomery_chain = "prac"
 cuda_prac_search = 50
 ```
 
-`cuda_prac_search` 可设为 1～50，默认 7。PRAC 计划支持整数 B1 2～4,294,967,295；设备控制表占用随 B1 增长。冷启动会生成计划，相同 B1、LCM 模式及搜索宽度可以复用缓存。两个键均可在 `[worker.N]` 下加 `stage1.` 前缀覆盖。使用 `m0_` 存档前缀的队列任务同样适用。混合队列中的 Edwards、PARAM2/3 及 NTT 任务各自使用其原点乘路径。省略 `cuda_montgomery_chain` 时，点乘链仍可由 `ECM_GPU_STAGE1_ALGO` 选择。
+`cuda_prac_search` 可设为 1～50，默认 7。PRAC 计划支持整数 B1 2～4,294,967,295；设备控制表占用随 B1 增长。冷启动会生成计划，相同 B1、LCM 模式及搜索宽度可以复用缓存。两个键均可在 `[worker.N]` 下用相同的键名覆盖。使用 `m0_` 存档前缀的队列任务同样适用。混合队列中的 Edwards、PARAM2/3 及 NTT 任务各自使用其原点乘路径。省略 `cuda_montgomery_chain` 时，点乘链仍可由 `ECM_GPU_STAGE1_ALGO` 选择。
 
 Stage1 save、结果和 Stage2 交接沿用 PARAM0 格式。正在运行的批次应以原点乘链完成；PRAC 恢复还需匹配原搜索宽度及计划。程序拒绝用不匹配的设置恢复检查点。完成当前批次后，可自由为下一批切换点乘链。见 [Stage1 实测](../performance/STAGE1.md#0637-优化前基线)。
 
@@ -82,22 +82,22 @@ cmake --build $build --config Release --target prepare_prac_cache
 
 ### OpenCL Edwards
 
-桌面 `ecm.exe` 可用 OpenCL 在奇数模数上批量运行 Edwards，最高 1024 bit。通过 `param = "e"`、`target = "gpu"` 和 `gpu_backend = "opencl"` 选择后端。直接输入示例使用 OpenCL 编号 1：
+桌面 `ecm.exe` 可用 OpenCL 在奇数模数上批量运行 Edwards，最高 1024 bit。通过 `param = "e"`、`target = "gpu"` 和 `stage1_gpu_backend = "opencl"` 选择后端。直接输入示例使用 OpenCL 编号 1：
 
 ```powershell
 '(2^521-1)' | .\ecm.exe --target gpu --param e --gpu-backend opencl -d 1 --naf-w 6 -sigma 20260922 -gpucurves 256 -savea ed.save 1000 0
 ```
 
-`edwards_naf_window_bits` 接受 2～12，自动从 6 开始。`edwards_doubling = 1` 用 2XY，`0` 用 HWCD。指定 `naf_memory_mb` 可压低设备预算。`opencl.workgroup_size` 为 0 时交由运行时决定。Edwards 每工作项处理一条曲线，`opencl.threads_per_integer` 作用于 OpenCL PARAM3。最终 Edwards 文本 save 可交给现有 Stage2。断点续跑沿用检查点中的窗口和倍点公式。 [设备算术与内存](../architecture/OPENCL.md#stage1-曲线执行)
+`edwards_naf_window_bits` 接受 2～12，自动从 6 开始。`edwards_doubling = 1` 用 2XY，`0` 用 HWCD。指定 `naf_memory_mb` 可压低设备预算。`opencl_workgroup_size` 为 0 时交由运行时决定。Edwards 每工作项处理一条曲线，`opencl_threads_per_integer` 作用于 OpenCL PARAM3。最终 Edwards 文本 save 可交给现有 Stage2。断点续跑沿用检查点中的窗口和倍点公式。 [设备算术与内存](../architecture/OPENCL.md#stage1-曲线执行)
 
-OpenCL 和 CUDA 的一线程一曲线路径共用 `[stage1] gpu.init_threads`。设为 0 时，从 1024 条曲线起用最多 4 个主机线程构造曲线和打包初始坐标，更小的批次用 1 个。设为 1 可固定单线程，日志中的 `construction_threads` 显示实际值。
+OpenCL 和 CUDA 的一线程一曲线路径共用 `[stage1] gpu_init_threads`。设为 0 时，从 1024 条曲线起用最多 4 个主机线程构造曲线和打包初始坐标，更小的批次用 1 个。设为 1 可固定单线程，日志中的 `construction_threads` 显示实际值。
 
-Edwards 默认使用 CIOS。模数不超过 512 bit 时，可在 `[stage1]` 为 `opencl.kernel_mul` 和 `opencl.kernel_sqr` 选便携 `"fips"` 或 NVIDIA 的 `"fips_ptx"`。例如，让 RTX 4060 同时使用 PTX 模乘和对称平方：
+Edwards 默认使用 CIOS。模数不超过 512 bit 时，可在 `[stage1]` 为 `opencl_kernel_mul` 和 `opencl_kernel_sqr` 选便携 `"fips"` 或 NVIDIA 的 `"fips_ptx"`。例如，让 RTX 4060 同时使用 PTX 模乘和对称平方：
 
 ```toml
 [stage1]
-opencl.kernel_mul = "fips_ptx"
-opencl.kernel_sqr = "fips_ptx"
+opencl_kernel_mul = "fips_ptx"
+opencl_kernel_sqr = "fips_ptx"
 ```
 
 平方设为 `"auto"` 时复用模乘，显式 `"cios"` 可固定 CIOS 平方。也可保留 CIOS 模乘，只把平方设为 `"fips"`。一个任务使用同一种 FIPS 实现。CLI 的 `--mul` 和 `--sqr` 可覆盖这两个键。恢复检查点时可以切换算术，日志用 `field_mul` 和 `field_sqr` 标出实际选择。 [4060 Laptop 实测](../performance/STAGE1.md#opencl-edwards-fips)
@@ -110,7 +110,7 @@ opencl.kernel_sqr = "fips_ptx"
 '(2^521-1)' | .\ecm_cuda.exe --target gpu --param e --gpu-algorithm thread -d 1 --wg 128 --naf-w 6 -sigma 20260922 -gpucurves 6144 -savea ed.save 1000 0
 ```
 
-也可在 `[stage1]` 设置 `param = "e"`、`target = "gpu"`、`gpu_backend = "cuda"`、`gpu_algorithm = "thread"`（或 `3`）。`cuda.thread_block_size` 可取 32、64、128 或 256，默认 128，`--wg` 可覆盖。512 bit 以内使用 PTX FIPS 模乘与对称平方，更宽的容器使用 CIOS。日志的 `backend=cuda-thread` 后显示实际容器、TPB、模乘、平方、寄存器、每线程本地存储和 NAF 恢复位置。CUDA thread 检查点由同一路径恢复，完成后的 Edwards save 可交给现有 Stage2。 [设备与检查点布局](../architecture/OPENCL.md#cuda-原生一线程一曲线) · [4060 Laptop 对照](../performance/STAGE1.md#cuda-与-opencl-一线程一曲线)
+也可在 `[stage1]` 设置 `param = "e"`、`target = "gpu"`、`stage1_gpu_backend = "cuda"`、`gpu_algorithm = "thread"`（或 `3`）。`thread_block_size` 可取 32、64、128 或 256，默认 128，`--wg` 可覆盖。512 bit 以内使用 PTX FIPS 模乘与对称平方，更宽的容器使用 CIOS。日志的 `backend=cuda-thread` 后显示实际容器、TPB、模乘、平方、寄存器、每线程本地存储和 NAF 恢复位置。CUDA thread 检查点由同一路径恢复，完成后的 Edwards save 可交给现有 Stage2。 [设备与检查点布局](../architecture/OPENCL.md#cuda-原生一线程一曲线) · [4060 Laptop 对照](../performance/STAGE1.md#cuda-与-opencl-一线程一曲线)
 
 ### 队列与交接
 
@@ -132,17 +132,17 @@ GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子�
 
 Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机，保留曲线和窗口。若驻留频谱也放不下，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 
-两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `gpu.init_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。CPU Stage1 自身的线程数使用 `cpu.threads`。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)和 [worker CPU 资源](../architecture/CONFIGURATION.md#worker-cpu-资源)。
+两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `gpu_init_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。CPU Stage1 自身的线程数使用 `stage1_cpu_threads`。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)和 [worker CPU 资源](../architecture/CONFIGURATION.md#worker-cpu-资源)。
 
 ```toml
-config_version = 3
+config_version = 4
 
 [stage1]
 target = "gpu"
 param = "m0"
 gpu_algorithm = "NTT"
-gpu_device = 1
-ntt.profile = 0
+stage1_gpu_device = 1
+ntt_profile = 0
 ```
 
 ```powershell
@@ -157,23 +157,23 @@ linear 和 weighted 按各自 NTT 长度估算每条曲线的工作区和 NAF �
 
 自动拆批先从共享 `tune.toml` 的有效生产样本选择合适批量，再参考已有合成调优。首次使用没有兼容数据时，通常从 64 条起步，受剩余曲线数和显存约束。较长的任务会用不同大小的**真实批次**观察吞吐，每批仍按任务顺序推进。选型优先使用有重复样本的批量，并在达到实测峰值吞吐 95% 的方案中取最小档。共享表按设备、曲线、NAF 窗口、位宽、B1、标量倍率和 NTT 计划记录样本，包含设备循环的曲线步／秒和从计算准备到末点处理的曲线／秒。后者排除补测计划、写 tune 表和任务最终发布。生产选型无需先运行 `--tune ntt`。
 
-`ntt.pad_batch = 0` 默认精确完成请求量。设为 `1` 时，自动拆批可以在资源和 sigma 范围允许时用新曲线补齐尾批。例如每批 75 条，请求 1000 条时，尾批从 25 条补到 75 条，共完成 1050 条。每条新增曲线使用独立的连续 sigma，计入实际结果和汇总。若 1050 条均产生可保存的点，`.save`、`finished` 和符合条件的 Stage2 交接均包含这 1050 条。交接范围始终以实际保存记录为准。
+`ntt_pad_batch = 0` 默认精确完成请求量。设为 `1` 时，自动拆批可以在资源和 sigma 范围允许时用新曲线补齐尾批。例如每批 75 条，请求 1000 条时，尾批从 25 条补到 75 条，共完成 1050 条。每条新增曲线使用独立的连续 sigma，计入实际结果和汇总。若 1050 条均产生可保存的点，`.save`、`finished` 和符合条件的 Stage2 交接均包含这 1050 条。交接范围始终以实际保存记录为准。
 
 拆批检查点保存已完成曲线、原始 sigma 起点、当前批量和整数坐标。恢复时沿用已保存的尾批范围，再为其余曲线选型。任务完成后统一追加存档和内部结果、汇总适用的 NF 提交记录，并按交接设置生成 Stage2 队列行。子批次得到的已核验因子可先单独发布。
 
 ### NTT 形状与调优
 
-`ntt.profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt.length`、`ntt.bits_per_word`、`ntt.tile` 和 `ntt.outer_radix_limit` 的 0 值使用自动值。`ntt.window_bits = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt.warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
+`ntt_profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt_length`、`ntt_bits_per_word`、`ntt_tile` 和 `ntt_outer_radix_limit` 的 0 值使用自动值。`ntt_window_bits = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt_warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
-`ntt.convolution` 默认为 `"auto"`。程序先检查下文所述的 Edwards 短计划，其余情况按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt.length=0` 时使用满足约束的较短长度。`ntt.bits_per_word` 可限定最大 digit 位宽。
+`ntt_convolution` 默认为 `"auto"`。程序先检查下文所述的 Edwards 短计划，其余情况按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt_length=0` 时使用满足约束的较短长度。`ntt_bits_per_word` 可限定最大 digit 位宽。
 
-加权卷积支持的混合长度为 2560、5120、10240 和 20480。前三档可在相应位宽缩短变换，20480 保留为显式 `ntt.length`。显式 `ntt.tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
+加权卷积支持的混合长度为 2560、5120、10240 和 20480。前三档可在相应位宽缩短变换，20480 保留为显式 `ntt_length`。显式 `ntt_tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。见 [长度阶梯与实测](../performance/STAGE1_MERSENNE_NTT.md#指数位宽与变换长度的阶梯)。
 
-`[stage1]` 下的 `ntt.tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，如果卷积和长度均为自动，程序优先采用只有通过收紧界才可使用的短加权计划，日志来源为 `edwards_unsigned_bound`，跳过这次 x-only 调优表查询。其他自动计划继续用共享表。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt.bits_per_word` 限为 25 或把 `ntt.tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
+`[stage1]` 下的 `ntt_tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，如果卷积和长度均为自动，程序优先采用只有通过收紧界才可使用的短加权计划，日志来源为 `edwards_unsigned_bound`，跳过这次 x-only 调优表查询。其他自动计划继续用共享表。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt_bits_per_word` 限为 25 或把 `ntt_tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
 
-原生 Edwards 加权计划通过四倍系数界检查时，可在频域合并 2XY 倍点的第一层。启用后，`ntt_u` 显示四倍乘积系数上界。超过此界时，原长度仍可单独计算四个乘积。`ntt.tight_weighted_bound = false` 同时关闭频域融合。 [2XY 融合与准入](../architecture/NTT.md#edwards-2xy-第一层频域融合)
+原生 Edwards 加权计划通过四倍系数界检查时，可在频域合并 2XY 倍点的第一层。启用后，`ntt_u` 显示四倍乘积系数上界。超过此界时，原长度仍可单独计算四个乘积。`ntt_tight_weighted_bound = false` 同时关闭频域融合。 [2XY 融合与准入](../architecture/NTT.md#edwards-2xy-第一层频域融合)
 
-`[shared] tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，CUDA 两阶段共用此文件。可在 `[worker.N]` 用 `shared.tune_file` 为该 worker 的两个阶段一并覆盖。如果还在使用旧 Stage1 JSON 路径，改为共享 TOML 路径后重新调优。`ntt.memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 收紧上限。
+`[shared] tune_file` 默认为 `ecm.toml` 旁的 `tune.toml`，CUDA 两阶段共用此文件。可在 `[worker.N]` 用 `tune_file` 为该 worker 的两个阶段一并覆盖。如果还在使用旧 Stage1 JSON 路径，改为共享 TOML 路径后重新调优。`ntt_memory_mib = 0` 允许使用 CUDA 上下文就绪后可用显存的 80%，正数以 MiB 收紧上限。
 
 ```powershell
 .\ecm_cuda.exe --config .\ecm.toml --tune ntt
@@ -204,9 +204,9 @@ stage1_ntt_plan: … bpw_avg=25.594141 bpw_max=26 U=13695445919225353215 q=18446
 
 ## 共用 TOML 与 worker
 
-Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个表头前声明 `config_version = 3`。`--worker N` 选择 TOML 中的 `[worker.N]` 覆盖及 worktodo 中的 `[Worker #N]` 队列分区。覆盖项加所属分区前缀，例如 `stage1.gpu_device`。见[配置参考](../ECM_TOML_REFERENCE.zh-CN.md)和[迁移说明](../architecture/CONFIGURATION.md#升级旧配置)。
+Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个表头前声明 `config_version = 4`。`--worker N` 选择 TOML 中的 `[worker.N]` 覆盖及 worktodo 中的 `[Worker #N]` 队列分区。覆盖项沿用原键名，例如 `stage1_gpu_device`。见 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md) 和 [版本说明](../architecture/CONFIGURATION.md#配置版本)。
 
-v3 的 `finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，以 TOML 所在目录解析。Stage1 的 `save_dir` 仍相对程序目录解析。
+`finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，以 TOML 所在目录解析。`stage1_save_dir` 仍相对程序目录解析。
 
 `ECM=`、`ECM2=` 和 `ECMSTAGE1=` 交给 Stage1，`ECMSTAGE2=` 和 `ECMSTAGE2N=` 交给 Stage2。队列的 Stage1 默认 Edwards，`curve` 或 `param` 可覆盖，`ECMSTAGE1` 的存档类型前缀优先。GUI 根据下一个可运行任务启动对应程序，CLI 只领取本阶段任务。`[shared]` 的 `queue_order` 可选 `"file_order"`、`"stage1_first"` 或 `"stage2_first"`。优先阶段无任务时运行另一阶段。`queue_skip` 可选 `"none"`、`"stage1"` 或 `"stage2"`。不同 worker 可以共用队列文件，每个 worker 同时由一个程序处理。
 
@@ -214,24 +214,24 @@ v3 的 `finished_file`、`log_file` 和 `worktodo_file` 在 `[shared]` 设置，
 
 ## 自动交接到 Stage2
 
-v3 的 `[stage1] handoff.mode` 默认为 `"ecm-elf"`。Stage1 无因子完成且有可用保存点时，将原任务写入完成记录并生成 `ECMSTAGE2=`。投递保留 B2、曲线范围、AID 和已知因子，save 使用实际输出文件的绝对路径。只运行 Stage1 时可设 `handoff.mode = "off"`。
+`[stage1] handoff_mode` 默认为 `"ecm-elf"`。Stage1 无因子完成且有可用保存点时，将原任务写入完成记录并生成 `ECMSTAGE2=`。投递保留 B2、曲线范围、AID 和已知因子，save 使用实际输出文件的绝对路径。只运行 Stage1 时可设 `handoff_mode = "off"`。
 
-`handoff.workers` 留空时保留当前 worker。同一队列内移除已完成的 Stage1 行并追加到该 worker 最后一段末尾。指定外部队列时写入其中的同编号 worker。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。目标缺少分区时创建标签，文件头未标号部分视为 worker 1。同队列的 `"auto"` 优先使用 `[shared] worker_count`，兼容显式 `[gui] worker_count`。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。外部队列优先采用已有分区，缺少分区时按配置数量生成候选。
+`handoff_workers` 留空时保留当前 worker。同一队列内移除已完成的 Stage1 行并追加到该 worker 最后一段末尾。指定外部队列时写入其中的同编号 worker。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。目标缺少分区时创建标签，文件头未标号部分视为 worker 1。同队列的 `"auto"` 使用 `[shared] worker_count` 确定候选范围。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。外部队列优先采用已有分区，缺少分区时按配置数量生成候选。
 
-`handoff.worktodo_file` 留空时使用当前 worker 生效的 `[shared] worktodo_file`。可填写绝对路径或相对 TOML 所在目录的路径。接收端去重使用 `[shared] finished_file`。在 `[worker.N]` 下加 `stage1.` 前缀可覆盖交接设置。
+`handoff_worktodo_file` 留空时使用当前 worker 生效的 `[shared] worktodo_file`。可填写绝对路径或相对 TOML 所在目录的路径。接收端去重使用 `[shared] finished_file`。在 `[worker.N]` 中使用同名键可覆盖交接设置。
 
 例如，将无因子完成的 Stage1 任务交给当前队列的 worker 2 或 3：
 
 ```toml
-config_version = 3
+config_version = 4
 
 [stage1]
-handoff.mode = "ecm-elf"
-handoff.workers = "2-3"
-handoff.worktodo_file = ""
+handoff_mode = "ecm-elf"
+handoff_workers = "2-3"
+handoff_worktodo_file = ""
 ```
 
-改为 `handoff.worktodo_file = "stage2_tasks.txt"` 即投递到同目录另一文件。跨 worker 或跨文件投递先写入源队列旁的 `.stage2_pending_workerN`，再完成源队列行移除；目标不可写时保留待投递记录，下次启动重试。已经存在于目标活动队列或接收端 finished 的相同行不会重复加入。关闭总开关不丢弃已有待投递记录。
+改为 `handoff_worktodo_file = "stage2_tasks.txt"` 即投递到同目录另一文件。跨 worker 或跨文件投递先写入源队列旁的 `.stage2_pending_workerN`，再完成源队列行移除；目标不可写时保留待投递记录，下次启动重试。已经存在于目标活动队列或接收端 finished 的相同行不会重复加入。关闭总开关不丢弃已有待投递记录。
 
 ## 计算与输出
 
@@ -282,17 +282,17 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 ### Prime95 持久交接
 
-交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 忽略 Prime95 转移路径，仅输出说明，不访问转移路径或账本。受支持的 Montgomery PARAM0/3 使用 `prime95.worktodo_file` 指定外部队列，另须配置 `prime95.save_dir` 指定 save 目标目录；`save_sync_dir_1/2` 只用于备份，不作为 P95 文件已就绪的依据。P95 save 读取的 sigma 上限为 2⁶³−1；更宽 sigma 可以进行本地 Stage1，但不能交给该读取协议。
+交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 忽略 Prime95 转移路径，仅输出说明，不访问转移路径或账本。受支持的 Montgomery PARAM0/3 使用 `prime95_worktodo_file` 指定外部队列，另须配置 `prime95_save_dir` 指定 save 目标目录；`save_sync_dir_1/2` 只用于备份，不作为 P95 文件已就绪的依据。P95 save 读取的 sigma 上限为 2⁶³−1；更宽 sigma 可以进行本地 Stage1，但不能交给该读取协议。
 
-成功批次生成规范化的 `ECMSTAGE2` 行，引用 P95 目录中的实际 save 与本批区间。同步先持久保存交接责任和原文件版本，再验证 N、B1、param、sigma、checksum、范围和既有目标前缀，完整发布并落盘目标文件，最后发布并落盘 `worktodo.add`。目标历史只允许延长，不能回退或重排。不同本地历史若使用同一目标文件名，会报前缀冲突并保留待交接记录；应为这些 worker 选择独立 p95_sync_dir 或保存名，不自动拼接并重映射 skip。任务引用的绝对路径须能被 Prime95 进程访问。文件失败不会发布对应任务；文件已就绪而任务写入失败时保留待交接记录，后续合资格任务或初始空队列启动可重试，无须重算 Stage1。关闭 `prime95.worktodo_file` 暂停新的 P95 重试，保留的交接记录在重新启用后仍按原目标和路由投递。
+成功批次生成规范化的 `ECMSTAGE2` 行，引用 P95 目录中的实际 save 与本批区间。同步先持久保存交接责任和原文件版本，再验证 N、B1、param、sigma、checksum、范围和既有目标前缀，完整发布并落盘目标文件，最后发布并落盘 `worktodo.add`。目标历史只允许延长，不能回退或重排。不同本地历史若使用同一目标文件名，会报前缀冲突并保留待交接记录；应为这些 worker 选择独立 p95_sync_dir 或保存名，不自动拼接并重映射 skip。任务引用的绝对路径须能被 Prime95 进程访问。文件失败不会发布对应任务；文件已就绪而任务写入失败时保留待交接记录，后续合资格任务或初始空队列启动可重试，无须重算 Stage1。关闭 `prime95_worktodo_file` 暂停新的 P95 重试，保留的交接记录在重新启用后仍按原目标和路由投递。
 
 待交接记录位于程序目录的 `p95_add_pending.txt.handoff/`，`.intent` 表示仍由本程序承担交付责任，`.done` 保留批次去重依据。不要删除这些记录来清除 GUI 红色提示。旧 `p95_add_pending.txt` 中引用绝对 save 且范围、校验有效的 `ECMSTAGE2` 行会先转为新记录；无法证明保存范围的旧 `ECM/ECM2` 行保持原样并报错，需人工核对，不会猜测文件后继续投递。
 
 “投递成功”表示本程序已持久发布 drop box，不代表 Prime95 已完成接纳。Prime95 不参与本程序的写锁/完成确认，不能承诺跨进程恰好一次。崩溃若发生在发布与确认之间，恢复会检查 add、活动队列和发送账本；仍不能判定时保留 `.sending` 和 intent 并停止该交接，避免盲目重复。计算结果仍保留。`.ready` 保存本次实际尝试发布的完整行集；恢复会先修复发送账本再确认 done。责任文件不可读时保留材料并报错，不能当成空文件。不要让两个独立消费者同时修改 Prime95 活动 `worktodo.txt`。
 
-v3 在 `[stage1]` 设 `handoff.mode = "prime95"` 启用 Prime95 交接。协议不支持但可由本地 Stage2 续算的存档按 `handoff.unsupported = "ecm-elf"` 投递到本地。可设 `"keep-save"` 保留在原地。
+在 `[stage1]` 设 `handoff_mode = "prime95"` 启用 Prime95 交接。协议不支持但可由本地 Stage2 续算的存档按 `handoff_unsupported = "ecm-elf"` 投递到本地。可设 `"keep-save"` 保留在原地。
 
-如果进程在记录交接意图后、完成源队列回执前中断，先沿用原路由恢复该任务，再修改 `handoff.mode`。此时源任务仍可能留在 worktodo 中。
+如果进程在记录交接意图后、完成源队列回执前中断，先沿用原路由恢复该任务，再修改 `handoff_mode`。此时源任务仍可能留在 worktodo 中。
 
 跨 worker 投递前先将记录写入队列旁的 `.stage2_pending_workerN`；目标不可写时保留待投递记录并在下次启动时重试。已经存在于活动队列或 Stage2 finished 的相同行不会重复入队。已有 pending 记录在关闭交接开关后仍会重试。
 

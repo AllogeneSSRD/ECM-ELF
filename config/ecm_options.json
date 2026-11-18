@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "layout_version": 8,
-  "config_version": 3,
+  "config_version": 4,
   "owners": {
     "stage1": "Stage1Values",
     "stage2": "Stage2Values",
@@ -12,9 +12,8 @@
     {
       "owner": "stage1",
       "key": "workflow_worker_count",
-      "v3_key": "worker_count",
-      "v3_only": true,
-      "v3_global_only": true,
+      "toml_key": "worker_count",
+      "global_only": true,
       "shared_with": ["stage2"],
       "field": "workflow_worker_count",
       "type": "int",
@@ -25,19 +24,16 @@
       "fx": "workflow_workers",
       "parser": "strict",
       "description": [
-        "Workflow worker count for GUI v2 and automatic ECM-ELF handoff within the same queue. Use worker numbers 1 through this count. Automatic handoff excludes workers that skip Stage2. When omitted, an explicit legacy GUI worker_count remains supported.",
-        "供 GUI v2 与同队列 ECM-ELF 自动交接共用的 worker 数量，编号从 1 到该数量。自动交接排除跳过 Stage2 的 worker。省略时兼容显式设置的旧 GUI worker_count。"
+        "Workflow worker count for GUI v2 and automatic ECM-ELF handoff within the same queue. Use worker numbers 1 through this count. Automatic handoff excludes workers that queue_skip Stage2.",
+        "供 GUI v2 与同队列 ECM-ELF 自动交接共用的 worker 数量，编号从 1 到该数量。自动交接排除跳过 Stage2 的 worker。"
       ]
     },
     {
       "owner": "stage1",
       "key": "shared_log_file",
-      "v3_only": true,
-      "v3_key": "log_file",
-      "shared_with": [
-        "stage2"
-      ],
-      "v3_global_only": true,
+      "toml_key": "log_file",
+      "global_only": true,
+      "shared_with": ["stage2"],
       "template_level": "core",
       "field": "shared_log_file",
       "type": "string",
@@ -53,12 +49,9 @@
     {
       "owner": "stage1",
       "key": "shared_finished_file",
-      "v3_only": true,
-      "v3_key": "finished_file",
-      "shared_with": [
-        "stage2"
-      ],
-      "v3_global_only": true,
+      "toml_key": "finished_file",
+      "global_only": true,
+      "shared_with": ["stage2"],
       "template_level": "core",
       "field": "shared_finished_file",
       "type": "string",
@@ -74,11 +67,9 @@
     {
       "owner": "stage1",
       "key": "log_file_max_KB",
-      "v3_only": true,
-      "shared_with": [
-        "stage2"
-      ],
-      "v3_global_only": true,
+      "toml_key": "log_file_max_kb",
+      "global_only": true,
+      "shared_with": ["stage2"],
       "template_level": "core",
       "field": "log_file_max_kb",
       "type": "u64",
@@ -96,8 +87,7 @@
     {
       "owner": "stage1",
       "key": "shared_cpu_affinity",
-      "v3_key": "cpu_affinity",
-      "v3_only": true,
+      "toml_key": "cpu_affinity",
       "shared_with": ["stage2"],
       "field": "shared_cpu_affinity",
       "type": "string",
@@ -113,11 +103,8 @@
     {
       "owner": "stage1",
       "key": "shared_tune_file",
-      "v3_only": true,
-      "v3_key": "tune_file",
-      "shared_with": [
-        "stage2"
-      ],
+      "toml_key": "tune_file",
+      "shared_with": ["stage2"],
       "template_level": "core",
       "field": "shared_tune_file",
       "type": "string",
@@ -133,7 +120,6 @@
     {
       "owner": "stage1",
       "key": "param",
-      "v3_only": true,
       "template_level": "core",
       "field": "param",
       "type": "string",
@@ -156,8 +142,6 @@
     {
       "owner": "stage1",
       "key": "handoff_mode",
-      "v3_only": true,
-      "v3_key": "handoff.mode",
       "template_level": "core",
       "field": "handoff_mode",
       "type": "string",
@@ -178,8 +162,6 @@
     {
       "owner": "stage1",
       "key": "handoff_unsupported",
-      "v3_only": true,
-      "v3_key": "handoff.unsupported",
       "field": "handoff_unsupported",
       "type": "string",
       "default": "ecm-elf",
@@ -198,13 +180,11 @@
     {
       "owner": "stage1",
       "key": "worktodo",
-      "v2_key": "worktodo_file",
+      "toml_key": "worktodo_file",
       "template_level": "core",
       "field": "worktodo",
       "type": "string",
-      "shared_with": [
-        "stage2"
-      ],
+      "shared_with": ["stage2"],
       "default": "worktodo.txt",
       "domain": "<path>",
       "fx": "queue(S1)",
@@ -218,7 +198,7 @@
     {
       "owner": "stage1",
       "key": "b2_ratio",
-      "v3_table": "stage2",
+      "toml_table": "stage2",
       "template_level": "core",
       "field": "b2_ratio",
       "type": "u64",
@@ -228,9 +208,7 @@
       "domain": "[0|1..1000000]",
       "fx": "B2(S2)=B1*ratio",
       "parser": "optional_integer",
-      "shared_with": [
-        "stage2"
-      ],
+      "shared_with": ["stage2"],
       "empty": "0",
       "description": [
         "In GPU Stage2, a nonzero ratio sets B2 to the saved B1 times this value for queue and direct save runs. Zero leaves B2 selection to the other settings. Overflow is rejected.",
@@ -240,9 +218,8 @@
     {
       "owner": "stage1",
       "key": "auto_stage2",
-      "v3_key": "",
-      "v2_key": "handoff.enabled",
-      "v2_conversion": "bool01",
+      "toml_key": "",
+      "toml_conversion": "bool01",
       "template_level": "core",
       "field": "auto_stage2",
       "type": "int",
@@ -254,14 +231,14 @@
       "parser": "optional_integer",
       "empty": "0",
       "description": [
-        "On successful Stage1 completion without a factor, write the finished record and create an ECMSTAGE2 task. With the same queue and no receiver list, replace the source row in place. Otherwise use handoff.worktodo_file and handoff.workers.",
-        "Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff.worktodo_file 和 handoff.workers 投递。"
+        "On successful Stage1 completion without a factor, write the finished record and create an ECMSTAGE2 task. With the same queue and no receiver list, replace the source row in place. Otherwise use handoff_worktodo_file and handoff_workers.",
+        "Stage1 无因子完成后写入完成记录并生成 ECMSTAGE2 任务。目标为同一队列且未指定接收 worker 时，原位替换任务行。其他情况按 handoff_worktodo_file 和 handoff_workers 投递。"
       ]
     },
     {
       "owner": "stage1",
       "key": "auto_stage2_workers",
-      "v2_key": "handoff.workers",
+      "toml_key": "handoff_workers",
       "field": "auto_stage2_workers",
       "type": "string",
       "default": "",
@@ -269,14 +246,14 @@
       "fx": "workers(S2)",
       "parser": "strict",
       "description": [
-        "Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest eligible queue; ties use the lowest ID. For v3 auto within the same queue, an explicit shared.worker_count (or legacy GUI count) defines the candidate range. Candidates must read that queue and allow Stage2. Without a configured range, auto uses existing worker sections or starts from worker 1. An external queue uses its existing sections before falling back to the configured count. Empty keeps the current worker. Unwritable destinations remain pending for retry.",
-        "Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小编号。v3 同队列 auto 优先采用显式的 shared.worker_count（兼容 GUI 旧数量），候选须读取该队列并允许 Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。"
+        "Stage2 receiving workers: a single ID, comma list or ranges within 1..1000000. Select the shortest eligible queue; ties use the lowest ID. For auto within the same queue, an explicit worker_count defines the candidate range. Candidates must read that queue and allow Stage2. Without a configured range, auto uses existing worker sections or starts from worker 1. An external queue uses its existing sections before falling back to the configured count. Empty keeps the current worker. Unwritable destinations remain pending for retry.",
+        "Stage2 接收 worker，可填 1..1000000 内单个编号、逗号列表或区间。选合格候选中任务最少者，并列取较小编号。同队列 auto 优先采用显式的 worker_count，候选须读取该队列并允许 Stage2。未设数量时采用已有分区，无分区时从 worker 1 开始。外部队列优先使用已有分区，缺少分区时才按配置数量选择。留空保留当前 worker。目标不可写时保留待投递记录。"
       ]
     },
     {
       "owner": "stage1",
       "key": "auto_stage2_worktodo",
-      "v2_key": "handoff.worktodo_file",
+      "toml_key": "handoff_worktodo_file",
       "field": "auto_stage2_worktodo",
       "type": "string",
       "default": "",
@@ -285,15 +262,15 @@
       "parser": "strict",
       "path_base": "toml_dir",
       "description": [
-        "Destination queue when auto_stage2=1. Empty inherits this worker's effective shared worktodo. Accepts an absolute file path or a filename/relative path resolved beside ecm.toml. Save filenames in delivered tasks are absolute. Stage2 finished receipts use the receiving worker's stage2_finished setting from this TOML. Worker sections can override this setting.",
-        "auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo；可填写绝对文件路径，或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的 stage2_finished；worker 分区可覆盖。"
+        "Destination queue when auto_stage2=1. Empty inherits this worker's effective shared worktodo_file. Accepts an absolute file path or a filename/relative path resolved beside ecm.toml. Save filenames in delivered tasks are absolute. Stage2 finished receipts use the receiving worker's stage2_finished setting from this TOML. Worker sections can override this setting.",
+        "auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo_file；可填写绝对文件路径，或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的 stage2_finished；worker 分区可覆盖。"
       ]
     },
     {
       "owner": "stage1",
       "key": "priority",
-      "v2_key": "queue_order",
-      "v2_conversion": "enum:file_order|stage1_first|stage2_first",
+      "toml_key": "queue_order",
+      "toml_conversion": "enum:file_order|stage1_first|stage2_first",
       "template_level": "core",
       "field": "worktodo_priority",
       "type": "int",
@@ -303,9 +280,7 @@
       "domain": "[0|1|2]",
       "fx": "queue_order",
       "parser": "optional_integer",
-      "shared_with": [
-        "stage2"
-      ],
+      "shared_with": ["stage2"],
       "empty": "0",
       "description": [
         "file_order follows the queue. stage1_first or stage2_first runs the preferred stage until it has no remaining tasks, then selects the other stage.",
@@ -315,8 +290,8 @@
     {
       "owner": "stage1",
       "key": "skip",
-      "v2_key": "queue_skip",
-      "v2_conversion": "enum:none|stage1|stage2",
+      "toml_key": "queue_skip",
+      "toml_conversion": "enum:none|stage1|stage2",
       "template_level": "core",
       "field": "worktodo_skip",
       "type": "int",
@@ -326,9 +301,7 @@
       "domain": "[0|1|2]",
       "fx": "queue_filter",
       "parser": "optional_integer",
-      "shared_with": [
-        "stage2"
-      ],
+      "shared_with": ["stage2"],
       "empty": "0",
       "description": [
         "none allows both stages. stage1 or stage2 leaves that stage's tasks in the queue.",
@@ -338,8 +311,7 @@
     {
       "owner": "stage1",
       "key": "finished",
-      "v3_key": "",
-      "v2_key": "finished_file",
+      "toml_key": "",
       "field": "finished",
       "type": "string",
       "default": "worktodo.finished.txt",
@@ -354,7 +326,7 @@
     {
       "owner": "stage1",
       "key": "log_file",
-      "v3_key": "",
+      "toml_key": "",
       "field": "log_file",
       "type": "string",
       "default": "screen.log",
@@ -372,7 +344,7 @@
     {
       "owner": "stage1",
       "key": "tmp_dir",
-      "v2_key": "save_dir",
+      "toml_key": "stage1_save_dir",
       "template_level": "core",
       "field": "tmp_dir",
       "type": "string",
@@ -388,7 +360,7 @@
     {
       "owner": "stage1",
       "key": "save_sync_dir_1",
-      "v2_key": "backup.directory_1",
+      "toml_key": "backup_directory_1",
       "field": "save_sync_dir_1",
       "type": "string",
       "default": "",
@@ -397,14 +369,14 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "First destination for Stage1 save synchronization. Empty disables this destination; sync_mode controls the files and synchronization policy. Backup only; this path never authorizes publishing a Prime95 task.",
-        "指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。"
+        "First destination for Stage1 save synchronization. Empty disables this destination; backup_mode controls the files and synchronization policy. Backup only; this path never authorizes publishing a Prime95 task.",
+        "指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 backup_mode 决定。 仅用于文件备份；此路径不作为 Prime95 任务发布依据。"
       ]
     },
     {
       "owner": "stage1",
       "key": "save_sync_dir_2",
-      "v2_key": "backup.directory_2",
+      "toml_key": "backup_directory_2",
       "field": "save_sync_dir_2",
       "type": "string",
       "default": "",
@@ -420,7 +392,7 @@
     {
       "owner": "stage1",
       "key": "sync_mode",
-      "v2_key": "backup.mode",
+      "toml_key": "backup_mode",
       "field": "sync_mode",
       "type": "string",
       "default": "incremental",
@@ -435,7 +407,7 @@
     {
       "owner": "stage1",
       "key": "p95_sync_dir",
-      "v2_key": "prime95.save_dir",
+      "toml_key": "prime95_save_dir",
       "field": "p95_sync_dir",
       "type": "string",
       "default": "",
@@ -444,14 +416,14 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "Dedicated save destination for Prime95 handoff; required with p95_worktodo_path. Backup destinations are independent. Existing published save prefixes must remain unchanged; only complete appended records may extend them.",
-        "Prime95 交接专用存档目录，启用 p95_worktodo_path 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。"
+        "Dedicated save destination for Prime95 handoff; required with prime95_worktodo_file. Backup destinations are independent. Existing published save prefixes must remain unchanged; only complete appended records may extend them.",
+        "Prime95 交接专用存档目录，启用 prime95_worktodo_file 时必须设置。备份目录独立；已发布存档前缀保持不变，只允许追加完整记录。"
       ]
     },
     {
       "owner": "stage1",
       "key": "p95_worktodo_path",
-      "v2_key": "prime95.worktodo_file",
+      "toml_key": "prime95_worktodo_file",
       "field": "p95_worktodo_path",
       "type": "string",
       "default": "",
@@ -460,15 +432,14 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files. Requires p95_sync_dir. The save is validated and published before worktodo.add.",
-        "用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 p95_sync_dir；先验证并发布存档，再写入 worktodo.add。"
+        "Prime95 worktodo_file path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files. Requires prime95_save_dir. The save is validated and published before worktodo_file.add.",
+        "用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo_file 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。 需同时配置 prime95_save_dir；先验证并发布存档，再写入 worktodo_file.add。"
       ]
     },
     {
       "owner": "stage1",
       "key": "edwards_stage2_transfer",
-      "v3_key": "",
-      "v2_key": "handoff.edwards_only_enabled",
+      "toml_key": "",
       "template_level": "legacy",
       "field": "edwards_stage2_transfer",
       "type": "bool",
@@ -477,15 +448,14 @@
       "fx": "handoff(local Stage2)",
       "parser": "legacy",
       "description": [
-        "When enabled, a completed Edwards Stage1 task is delivered as ECMSTAGE2 to the receiving worker section of the shared worktodo. Published saves use absolute paths; failed delivery remains pending for retry. auto_stage2 takes precedence when both are set.",
-        "启用后，将已完成的 Edwards Stage1 任务作为 ECMSTAGE2 投递到共用 worktodo 的接收 worker 分区。存档使用绝对路径；投递失败时保留待投递记录。两项同时设置时以 auto_stage2 为准。"
+        "When enabled, a completed Edwards Stage1 task is delivered as ECMSTAGE2 to the receiving worker section of the shared worktodo_file. Published saves use absolute paths; failed delivery remains pending for retry. auto_stage2 takes precedence when both are set.",
+        "启用后，将已完成的 Edwards Stage1 任务作为 ECMSTAGE2 投递到共用 worktodo_file 的接收 worker 分区。存档使用绝对路径；投递失败时保留待投递记录。两项同时设置时以 auto_stage2 为准。"
       ]
     },
     {
       "owner": "stage1",
       "key": "edwards_stage2_worker",
-      "v3_key": "",
-      "v2_key": "handoff.edwards_only_worker",
+      "toml_key": "",
       "template_level": "legacy",
       "field": "edwards_stage2_worker",
       "type": "int",
@@ -494,14 +464,14 @@
       "fx": "worker(local Stage2)",
       "parser": "legacy",
       "description": [
-        "Receiving worker when edwards_stage2_transfer=1. Zero keeps the Stage1 worker number; a positive value selects that worker section of the shared worktodo.",
-        "edwards_stage2_transfer=1 时的接收 worker。0 沿用 Stage1 worker 编号；正数指定共用 worktodo 中的接收分区。"
+        "Receiving worker when edwards_stage2_transfer=1. Zero keeps the Stage1 worker number; a positive value selects that worker section of the shared worktodo_file.",
+        "edwards_stage2_transfer=1 时的接收 worker。0 沿用 Stage1 worker 编号；正数指定共用 worktodo_file 中的接收分区。"
       ]
     },
     {
       "owner": "stage1",
       "key": "p95_add_workers",
-      "v2_key": "prime95.workers",
+      "toml_key": "prime95_workers",
       "field": "p95_add_workers",
       "type": "string",
       "default": "",
@@ -517,7 +487,7 @@
     {
       "owner": "stage1",
       "key": "p95_keep_aid",
-      "v2_key": "prime95.keep_aid",
+      "toml_key": "prime95_keep_aid",
       "field": "p95_keep_aid",
       "type": "bool",
       "default": true,
@@ -532,7 +502,7 @@
     {
       "owner": "stage1",
       "key": "p95_recover_lost",
-      "v2_key": "prime95.recover_lost",
+      "toml_key": "prime95_recover_lost",
       "field": "p95_recover_lost",
       "type": "bool",
       "default": true,
@@ -551,7 +521,10 @@
       "type": "string",
       "default": "ladder",
       "domain": "[ladder|prac]",
-      "values": ["ladder", "prac"],
+      "values": [
+        "ladder",
+        "prac"
+      ],
       "fx": "point_chain(S1 CUDA CGBN PARAM0)",
       "parser": "enum",
       "description": [
@@ -582,7 +555,11 @@
       "field": "cuda_slice_depth",
       "type": "int",
       "default": 3,
-      "values": [2, 3, 8],
+      "values": [
+        2,
+        3,
+        8
+      ],
       "domain": "[2|3|8]",
       "fx": "cuda_cgbn_slice_submission",
       "parser": "enum",
@@ -673,14 +650,13 @@
         "debug:independent"
       ],
       "description": [
-        "Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries; stage2_debug_log independently controls debug logging. Stage1 uses the selected backend's normal verbosity behavior.",
-        "控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由 stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。"
+        "Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries; debug_log independently controls debug logging. Stage1 uses the selected backend's normal verbosity behavior.",
+        "控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由 debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。"
       ]
     },
     {
       "owner": "stage1",
       "key": "curve",
-      "v3_key": "curve",
       "field": "curve_model",
       "type": "string",
       "default": "",
@@ -696,7 +672,7 @@
     {
       "owner": "stage1",
       "key": "stage1_backend",
-      "v2_key": "gpu_backend",
+      "toml_key": "stage1_gpu_backend",
       "template_level": "core",
       "field": "gpu_backend",
       "type": "string",
@@ -726,14 +702,14 @@
       "fx": "execution_target(S1)",
       "parser": "legacy",
       "description": [
-        "Run Stage1 on CPU or GPU. The gpu_backend setting selects CUDA or desktop OpenCL. Both support Edwards within their own width limits.",
-        "选择 Stage1 在 CPU 或 GPU 执行。gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持 Edwards。"
+        "Run Stage1 on CPU or GPU. The stage1_gpu_backend setting selects CUDA or desktop OpenCL. Both support Edwards within their own width limits.",
+        "选择 Stage1 在 CPU 或 GPU 执行。stage1_gpu_backend 选择 CUDA 或桌面 OpenCL。两者均在各自位宽范围内支持 Edwards。"
       ]
     },
     {
       "owner": "stage1",
       "key": "impl",
-      "v2_key": "cpu_implementation",
+      "toml_key": "cpu_implementation",
       "template_level": "core",
       "field": "cpu_implementation",
       "type": "string",
@@ -746,14 +722,14 @@
       ],
       "empty": "default",
       "description": [
-        "Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. In config v3, a list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can inherit this TOML policy and leave it inactive.",
-        "选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。v3 支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。"
+        "Stage1 arithmetic policy when the target is CPU. A single mode forces its usual behavior; auto or an empty value selects by CPU capability and batch size. Above 10240 modulus bits, auto requires AVX512-IFMA. A list such as simd[:6144], scalar[:4096], gwnum[4096:], auto[] tries each candidate in order on the actual modulus after removing known factors. Overlapping slices are allowed. The first available backend whose slice contains the width is selected. Slices include the start and exclude the stop. A missing start means 1, a missing stop means unbounded, and [] is equivalent to [:]. Whitespace is ignored. Use auto[] for an explicit automatic fallback. simd requires AVX512-IFMA. scalar uses GMP and supports widths above 10240 bits only for Edwards. gwnum requires Montgomery PARAM0 and a local gwnum.dll beside the Windows x64 worker. GPU workers can inherit this TOML policy and leave it inactive.",
+        "选中 CPU 时使用的 Stage1 算术策略。单值使用对应后端，auto 或空字符串按 CPU 能力与批量自动选择，实际模数超过 10240 位时要求 AVX512-IFMA。支持 simd[:6144], scalar[:4096], gwnum[4096:], auto[] 这样的切片列表。位宽按剥除已知因子后的实际模数计算。允许区间重叠，依次选择首个满足位宽且可用的后端。切片含起点、不含终点，省略起点按 1 位处理，省略终点表示无上限，[] 等同于 [:]，忽略空白。可用 auto[] 显式回退到自动选择。simd 要求 AVX512-IFMA，scalar 使用 GMP，超过 10240 位时仅支持 Edwards。gwnum 要求 Montgomery PARAM0 和 Windows x64 worker 同目录的本地 gwnum.dll。GPU worker 可继承此 TOML 策略，运行时不启用。"
       ]
     },
     {
       "owner": "stage1",
       "key": "reduction",
-      "v2_key": "cpu_simd_reduction",
+      "toml_key": "cpu_simd_reduction",
       "field": "simd_reduction",
       "type": "string",
       "default": "auto",
@@ -765,14 +741,14 @@
       ],
       "empty": "default",
       "description": [
-        "CPU SIMD modular reduction. auto selects for the input; mersenne-fold requires N=2^p-1; montgomery uses general reduction. An explicit reduction requires impl=simd, so it cannot be silently ignored when auto chooses scalar.",
+        "CPU SIMD modular cpu_simd_reduction. auto selects for the input; mersenne-fold requires N=2^p-1; montgomery uses general cpu_simd_reduction. An explicit cpu_simd_reduction requires impl=simd, so it cannot be silently ignored when auto chooses scalar.",
         "CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要求 impl=simd，避免 auto 选中标量时悄悄忽略设置。"
       ]
     },
     {
       "owner": "stage1",
       "key": "cpu_mont_chain",
-      "v2_key": "cpu_montgomery_chain",
+      "toml_key": "cpu_montgomery_chain",
       "field": "cpu_mont_chain",
       "type": "string",
       "default": "ladder",
@@ -804,7 +780,7 @@
     {
       "owner": "stage1",
       "key": "stage1_threads",
-      "v2_key": "cpu_threads",
+      "toml_key": "",
       "field": "stage1_threads",
       "type": "u32",
       "default": 0,
@@ -816,15 +792,14 @@
       "maximum": 4294967295,
       "zero": "auto",
       "description": [
-        "Legacy fallback for cpu.threads and gpu.init_threads in the same scope. A worker-level value overrides global values, and an explicit new key takes priority within the same scope.",
-        "同一配置层中 cpu.threads 与 gpu.init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优先。"
+        "Legacy fallback for stage2_cpu_threads and gpu_init_threads in the same scope. A worker-level value overrides global values, and an explicit new key takes process_priority within the same scope.",
+        "同一配置层中 stage2_cpu_threads 与 gpu_init_threads 的旧回退值。worker 层优先于全局层，同一层内显式新键优先。"
       ]
     },
     {
       "owner": "stage1",
       "key": "stage1_cpu_compute_threads",
-      "v3_key": "cpu.threads",
-      "v3_only": true,
+      "toml_key": "stage1_cpu_threads",
       "field": "cpu_compute_threads",
       "type": "u32",
       "default": 0,
@@ -841,8 +816,7 @@
     {
       "owner": "stage1",
       "key": "stage1_gpu_init_threads",
-      "v3_key": "gpu.init_threads",
-      "v3_only": true,
+      "toml_key": "gpu_init_threads",
       "field": "gpu_init_threads",
       "type": "u32",
       "default": 0,
@@ -859,7 +833,7 @@
     {
       "owner": "stage1",
       "key": "affinity",
-      "v2_key": "cpu_affinity",
+      "toml_key": "",
       "field": "affinity",
       "type": "string",
       "default": "",
@@ -898,7 +872,7 @@
     {
       "owner": "stage1",
       "key": "exp_cache",
-      "v2_key": "exponent_cache_dir",
+      "toml_key": "exponent_cache_dir",
       "field": "exp_cache",
       "type": "string",
       "default": "",
@@ -912,14 +886,14 @@
         "case:sensitive"
       ],
       "description": [
-        "Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout root, or cache/ next to the executable for standalone installs. off, none, 0, or - disables caching. Explicit relative paths use the current working directory. Small B1 values may skip writing the scalar cache.",
+        "Directory for Stage1 scalar and PRAC caches. Empty uses cache/ at the checkout root, or cache/ next to the executable for standalone installs. off, none, 0, or - disables caching. Explicit relative paths use the current working directory. Small B1 values may queue_skip writing the scalar cache.",
         "指定 Stage1 指数及 PRAC 计划缓存目录。留空使用仓库根目录的 cache/，独立部署使用可执行文件同级的 cache/。off、none、0 或 - 关闭缓存。显式相对路径以进程当前工作目录为基准。较小的 B1 可能不写指数缓存。"
       ]
     },
     {
       "owner": "stage1",
       "key": "naf_w",
-      "v2_key": "edwards_naf_window_bits",
+      "toml_key": "edwards_naf_window_bits",
       "field": "naf_w",
       "type": "int",
       "default": 0,
@@ -956,7 +930,6 @@
     {
       "owner": "stage1",
       "key": "naf_memory_mb",
-      "v2_key": "naf_memory_mb",
       "field": "naf_memory_mb",
       "type": "int",
       "default": 0,
@@ -973,7 +946,7 @@
     {
       "owner": "stage1",
       "key": "lcm",
-      "v2_key": "montgomery_lcm_multiplier",
+      "toml_key": "montgomery_lcm_multiplier",
       "field": "scalar_construction",
       "type": "string",
       "default": "1",
@@ -986,8 +959,8 @@
       ],
       "empty": "default",
       "description": [
-        "Montgomery Stage1 scalar is lcm(1..B1) multiplied by 1 or 12. Edwards uses its fixed 48*lcm scalar and rejects 12. This choice changes the output point and must match the Stage2 save convention.",
-        "Montgomery Stage1 标量是 lcm(1..B1) 乘 1 或 12。Edwards 固定使用 48·lcm，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。"
+        "Montgomery Stage1 scalar is montgomery_lcm_multiplier(1..B1) multiplied by 1 or 12. Edwards uses its fixed 48*montgomery_lcm_multiplier scalar and rejects 12. This choice changes the output point and must match the Stage2 save convention.",
+        "Montgomery Stage1 标量是 montgomery_lcm_multiplier(1..B1) 乘 1 或 12。Edwards 固定使用 48·montgomery_lcm_multiplier，不接受 12。此选择改变输出点，须与 Stage2 存档约定一致。"
       ]
     },
     {
@@ -1016,8 +989,7 @@
     {
       "owner": "stage1",
       "key": "p95_dir",
-      "v3_key": "",
-      "v2_key": "prime95.legacy_directory",
+      "toml_key": "",
       "template_level": "legacy",
       "field": "p95_dir",
       "type": "string",
@@ -1027,14 +999,14 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "Legacy compatibility setting. A nonempty value only produces an optional hint; it does not enable the current Prime95 handoff mechanism. Use p95_worktodo_path to hand off ECMSTAGE2 work.",
-        "保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 p95_worktodo_path。"
+        "Legacy compatibility setting. A nonempty value only produces an optional hint; it does not enable the current Prime95 handoff mechanism. Use prime95_worktodo_file to hand off ECMSTAGE2 work.",
+        "保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 prime95_worktodo_file。"
       ]
     },
     {
       "owner": "stage1",
       "key": "ckpt_backups",
-      "v2_key": "checkpoint_backups",
+      "toml_key": "checkpoint_backups",
       "field": "ckpt_backups",
       "type": "int",
       "default": 3,
@@ -1052,7 +1024,7 @@
     {
       "owner": "stage1",
       "key": "ckpt_seconds",
-      "v2_key": "checkpoint_interval_seconds",
+      "toml_key": "checkpoint_interval_seconds",
       "field": "ckpt_seconds",
       "type": "double",
       "default": 600,
@@ -1073,7 +1045,7 @@
     {
       "owner": "stage1",
       "key": "device",
-      "v2_key": "gpu_device",
+      "toml_key": "stage1_gpu_device",
       "template_level": "core",
       "field": "device",
       "type": "int",
@@ -1089,8 +1061,7 @@
     {
       "owner": "stage1",
       "key": "gpu_param",
-      "v3_key": "",
-      "v2_key": "gpu_montgomery_param",
+      "toml_key": "",
       "field": "gpu_param",
       "type": "int",
       "default": 3,
@@ -1129,7 +1100,7 @@
     {
       "owner": "stage1",
       "key": "cuda_thread_block_size",
-      "v2_key": "cuda.thread_block_size",
+      "toml_key": "thread_block_size",
       "field": "cuda_thread_block_size",
       "type": "int",
       "default": 128,
@@ -1144,7 +1115,6 @@
     {
       "owner": "stage1",
       "key": "ntt_convolution",
-      "v2_key": "ntt.convolution",
       "field": "ntt_convolution",
       "type": "string",
       "default": "auto",
@@ -1159,7 +1129,6 @@
     {
       "owner": "stage1",
       "key": "ntt_allow_known_factors",
-      "v2_key": "ntt.allow_known_factors",
       "field": "ntt_allow_known_factors",
       "type": "int",
       "default": 1,
@@ -1176,7 +1145,6 @@
     {
       "owner": "stage1",
       "key": "ntt_pad_batch",
-      "v2_key": "ntt.pad_batch",
       "field": "ntt_pad_batch",
       "type": "int",
       "default": 0,
@@ -1191,7 +1159,6 @@
     {
       "owner": "stage1",
       "key": "ntt_tight_weighted_bound",
-      "v2_key": "ntt.tight_weighted_bound",
       "field": "ntt_tight_weighted_bound",
       "type": "bool",
       "default": true,
@@ -1206,8 +1173,7 @@
     {
       "owner": "stage1",
       "key": "ntt_tune_file",
-      "v3_key": "",
-      "v2_key": "ntt.tune_file",
+      "toml_key": "",
       "field": "ntt_tune_file",
       "type": "string",
       "default": "tune.toml",
@@ -1222,7 +1188,6 @@
     {
       "owner": "stage1",
       "key": "ntt_memory_mib",
-      "v2_key": "ntt.memory_mib",
       "field": "ntt_memory_mib",
       "type": "int",
       "default": 0,
@@ -1239,7 +1204,6 @@
     {
       "owner": "stage1",
       "key": "ntt_length",
-      "v2_key": "ntt.length",
       "field": "ntt_length",
       "type": "int",
       "default": 0,
@@ -1256,7 +1220,7 @@
     {
       "owner": "stage1",
       "key": "ntt_bpw",
-      "v2_key": "ntt.bits_per_word",
+      "toml_key": "ntt_bits_per_word",
       "field": "ntt_bpw",
       "type": "int",
       "default": 0,
@@ -1273,7 +1237,6 @@
     {
       "owner": "stage1",
       "key": "ntt_profile",
-      "v2_key": "ntt.profile",
       "field": "ntt_profile",
       "type": "int",
       "default": 0,
@@ -1290,7 +1253,6 @@
     {
       "owner": "stage1",
       "key": "ntt_tile",
-      "v2_key": "ntt.tile",
       "field": "ntt_tile",
       "type": "int",
       "default": 0,
@@ -1307,7 +1269,7 @@
     {
       "owner": "stage1",
       "key": "ntt_outer_max",
-      "v2_key": "ntt.outer_radix_limit",
+      "toml_key": "ntt_outer_radix_limit",
       "field": "ntt_outer_max",
       "type": "int",
       "default": 0,
@@ -1324,7 +1286,7 @@
     {
       "owner": "stage1",
       "key": "ntt_window",
-      "v2_key": "ntt.window_bits",
+      "toml_key": "ntt_window_bits",
       "field": "ntt_window",
       "type": "int",
       "default": -1,
@@ -1341,7 +1303,6 @@
     {
       "owner": "stage1",
       "key": "ntt_warp_tail",
-      "v2_key": "ntt.warp_tail",
       "field": "ntt_warp_tail",
       "type": "bool|string",
       "default": "auto",
@@ -1356,7 +1317,7 @@
     {
       "owner": "stage1",
       "key": "tpi",
-      "v2_key": "opencl.threads_per_integer",
+      "toml_key": "opencl_threads_per_integer",
       "field": "tpi",
       "type": "u32",
       "default": 8,
@@ -1375,7 +1336,7 @@
     {
       "owner": "stage1",
       "key": "wg_size",
-      "v2_key": "opencl.workgroup_size",
+      "toml_key": "opencl_workgroup_size",
       "field": "wg_size",
       "type": "int",
       "default": 0,
@@ -1395,7 +1356,7 @@
     {
       "owner": "stage1",
       "key": "kernel_mul",
-      "v2_key": "opencl.kernel_mul",
+      "toml_key": "opencl_kernel_mul",
       "field": "kernel_mul",
       "type": "string",
       "default": "",
@@ -1414,7 +1375,7 @@
     {
       "owner": "stage1",
       "key": "kernel_sqr",
-      "v2_key": "opencl.kernel_sqr",
+      "toml_key": "opencl_kernel_sqr",
       "field": "kernel_sqr",
       "type": "string",
       "default": "",
@@ -1433,7 +1394,7 @@
     {
       "owner": "stage1",
       "key": "kernel_add",
-      "v2_key": "opencl.kernel_add",
+      "toml_key": "opencl_kernel_add",
       "field": "kernel_add",
       "type": "string",
       "default": "",
@@ -1452,7 +1413,7 @@
     {
       "owner": "stage1",
       "key": "kernel_sub",
-      "v2_key": "opencl.kernel_sub",
+      "toml_key": "opencl_kernel_sub",
       "field": "kernel_sub",
       "type": "string",
       "default": "",
@@ -1471,7 +1432,7 @@
     {
       "owner": "stage1",
       "key": "kernel_special_mult",
-      "v2_key": "opencl.kernel_special_mult",
+      "toml_key": "opencl_kernel_special_mult",
       "field": "kernel_special_mult",
       "type": "string",
       "default": "",
@@ -1502,9 +1463,7 @@
         "Optional local result user identity for Stage1 and Stage2. Never put real account values in committed templates or fixtures.",
         "Stage1与Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。"
       ],
-      "shared_with": [
-        "stage1"
-      ]
+      "shared_with": ["stage1"]
     },
     {
       "owner": "stage2",
@@ -1521,14 +1480,11 @@
         "Optional local computer name in result output. Keep configured values and generated results outside public Git commits.",
         "结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。"
       ],
-      "shared_with": [
-        "stage1"
-      ]
+      "shared_with": ["stage1"]
     },
     {
       "owner": "stage2",
       "key": "stage2_submission_file",
-      "v2_key": "submission_file",
       "template_level": "core",
       "field": "submission",
       "type": "string",
@@ -1548,8 +1504,7 @@
     {
       "owner": "stage2",
       "key": "stage2_finished",
-      "v3_key": "",
-      "v2_key": "finished_file",
+      "toml_key": "",
       "field": "finished",
       "type": "string",
       "default": "worktodo.stage2.finished.txt",
@@ -1561,15 +1516,14 @@
       "worker_suffix": false,
       "empty": "invalid",
       "description": [
-        "Record of completed or invalid Stage2 assignments from the shared worktodo. Stores original tasks, result status, and commit receipts. Must be distinct from Stage1 finished and the active queue.",
-        "记录共用 worktodo 中已完成或输入错误的 Stage2 任务，保存原任务、结果状态及提交回执。路径必须不同于 Stage1 finished 和活动队列。"
+        "Record of completed or invalid Stage2 assignments from the shared worktodo_file. Stores original tasks, result status, and commit receipts. Must be distinct from Stage1 finished and the active queue.",
+        "记录共用 worktodo_file 中已完成或输入错误的 Stage2 任务，保存原任务、结果状态及提交回执。路径必须不同于 Stage1 finished 和活动队列。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_log_file",
-      "v3_key": "",
-      "v2_key": "log_file",
+      "toml_key": "",
       "field": "log",
       "type": "string",
       "default": "",
@@ -1588,7 +1542,6 @@
     {
       "owner": "stage2",
       "key": "stage2_results_file",
-      "v2_key": "results_file",
       "template_level": "core",
       "field": "results",
       "type": "string",
@@ -1607,7 +1560,7 @@
     {
       "owner": "stage2",
       "key": "stage2_debug_log_file",
-      "v2_key": "diagnostics.debug_log_file",
+      "toml_key": "debug_log_file",
       "field": "debug_file",
       "type": "string",
       "default": "",
@@ -1618,14 +1571,14 @@
       "worker_suffix": true,
       "empty": "default",
       "description": [
-        "Separate Stage2 debug log, written only when stage2_debug_log is enabled. Empty restores the default filename. Default names gain a worker suffix; explicit paths are used unchanged.",
-        "指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。"
+        "Separate Stage2 debug log, written only when debug_log is enabled. Empty restores the default filename. Default names gain a worker suffix; explicit paths are used unchanged.",
+        "指定 Stage2 独立调试日志文件，仅在 debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_progress_file",
-      "v2_key": "checkpoint_legacy_file",
+      "toml_key": "checkpoint_legacy_file",
       "template_level": "legacy",
       "field": "progress",
       "type": "string",
@@ -1639,14 +1592,14 @@
         "empty!=off"
       ],
       "description": [
-        "Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix .progress file. A matching task's completed count and pending receipt are imported into its own .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this task. New progress files use stage2_progress_dir; no arithmetic state is checkpointed.",
-        "旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 stage2_progress_dir，不保存曲线内部算术状态。"
+        "Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix .progress file. A matching task's completed count and pending receipt are imported into its own .ecm_ckpt_stage2_<bits>_<B1>.dat file. An unrelated legacy task is retained and does not stop this task. New progress files use checkpoint_dir; no arithmetic state is checkpointed.",
+        "旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认回执迁入独立 .ecm_ckpt_stage2_<bits>_<B1>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文件使用 checkpoint_dir，不保存曲线内部算术状态。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_progress_dir",
-      "v2_key": "checkpoint_dir",
+      "toml_key": "checkpoint_dir",
       "field": "progress_dir",
       "type": "string",
       "default": "",
@@ -1655,14 +1608,13 @@
       "parser": "strict",
       "empty": "legacy_progress_parent_or_queue_parent",
       "description": [
-        "Directory for per-task .ecm_ckpt_stage2_<bits>_<B1>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, full save contents and skip. On restart the current effective B2/Auto B2 and requested curve count override the checkpoint policy; completed curves retain their actual bounds. A target below the completed count warns and seals all completed work. New checkpoints contain completed curve state and pending submission data. They are removed after publication and queue advancement.",
-        "每任务 .ecm_ckpt_stage2_<bits>_<B1>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。"
+        "Directory for per-task .ecm_ckpt_stage2_<bits>_<B1>.dat progress files. Empty uses the legacy progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N, full save contents and queue_skip. On restart the current effective B2/Auto B2 and requested curve count override the checkpoint policy; completed curves retain their actual bounds. A target below the completed count warns and seals all completed work. New checkpoints contain completed curve state and pending submission data. They are removed after publication and queue advancement.",
+        "每任务 .ecm_ckpt_stage2_<bits>_<B1>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使用队列目录。任务 ID 绑定 AID、N、完整 save 内容和 queue_skip。重启采用当前有效 B2/Auto B2 及请求曲线数，已完成曲线保留实际界限；请求数小于已完成数时警告并封存全部已完成工作。新 checkpoint 保存已完成曲线状态和待发布结果；结果发布并推进队列后清除。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_save_dir",
-      "v2_key": "save_dir",
       "field": "save_dir",
       "type": "string",
       "default": "",
@@ -1678,7 +1630,7 @@
     {
       "owner": "stage2",
       "key": "stage2_debug_log",
-      "v2_key": "diagnostics.debug_log",
+      "toml_key": "debug_log",
       "field": "debug_log",
       "type": "bool",
       "default": false,
@@ -1693,8 +1645,7 @@
     {
       "owner": "stage2",
       "key": "stage2_execution_device",
-      "v2_key": "device",
-      "v3_only": true,
+      "toml_key": "device",
       "template_level": "core",
       "field": "execution_device",
       "type": "string",
@@ -1703,7 +1654,11 @@
       "fx": "Stage2_device",
       "parser": "strict",
       "parser_override": "enum",
-      "values": ["auto", "cpu", "gpu"],
+      "values": [
+        "auto",
+        "cpu",
+        "gpu"
+      ],
       "case_insensitive": true,
       "description": [
         "Execution device in the combined Stage2 program. Auto selects CPU. CPU supports Edwards saves; select GPU for Montgomery. Values are case-insensitive. Override with --target.",
@@ -1713,7 +1668,7 @@
     {
       "owner": "stage2",
       "key": "stage2_device",
-      "v2_key": "gpu_device",
+      "toml_key": "stage2_gpu_device",
       "template_level": "core",
       "field": "device",
       "type": "int",
@@ -1734,7 +1689,7 @@
     {
       "owner": "stage2",
       "key": "stage2_log_level",
-      "v2_key": "log_level",
+      "toml_key": "log_level",
       "field": "log_level",
       "type": "int",
       "default": -1,
@@ -1750,14 +1705,14 @@
         "normal_file:batches"
       ],
       "description": [
-        "Legacy console level: quiet, curve, phases, batches, and debug map to 0..4. Unset follows verbose. In production, debug enables the separate debug log while normal console detail remains capped at batches. Usually use verbose and stage2_debug_log.",
-        "兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 stage2_debug_log。"
+        "Legacy console level: quiet, curve, phases, batches, and debug map to 0..4. Unset follows verbose. In production, debug enables the separate debug log while normal console detail remains capped at batches. Usually use verbose and debug_log.",
+        "兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 debug_log。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_ntt_counts",
-      "v2_key": "diagnostics.ntt_length_counts",
+      "toml_key": "ntt_length_counts",
       "field": "ntt_counts",
       "type": "bool",
       "default": false,
@@ -1775,7 +1730,7 @@
     {
       "owner": "stage2",
       "key": "stage2_backend",
-      "v2_key": "gpu_backend",
+      "toml_key": "stage2_gpu_backend",
       "template_level": "core",
       "field": "gpu_backend",
       "type": "string",
@@ -1797,7 +1752,7 @@
     {
       "owner": "stage2",
       "key": "stage2_cpu_backend",
-      "v2_key": "cpu.backend",
+      "toml_key": "cpu_backend",
       "field": "cpu_backend",
       "type": "string",
       "parser": "strict",
@@ -1819,7 +1774,6 @@
     {
       "owner": "stage2",
       "key": "stage2_cpu_threads",
-      "v2_key": "cpu.threads",
       "field": "cpu_threads",
       "type": "u64",
       "parser": "strict",
@@ -1836,7 +1790,7 @@
     {
       "owner": "stage2",
       "key": "stage2_cpu_memory_mib",
-      "v2_key": "cpu.memory_mib",
+      "toml_key": "cpu_memory_mib",
       "field": "cpu_memory_mib",
       "type": "u64",
       "parser": "strict",
@@ -1853,7 +1807,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_plan",
-      "v2_key": "opencl.point_plan",
+      "toml_key": "opencl_point_plan",
       "field": "opencl_point_plan",
       "type": "string",
       "parser": "strict",
@@ -1875,7 +1829,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_chunk",
-      "v2_key": "opencl.point_chunk",
+      "toml_key": "opencl_point_chunk",
       "field": "opencl_point_chunk",
       "type": "u64",
       "parser": "strict",
@@ -1892,7 +1846,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_group",
-      "v2_key": "opencl.point_group",
+      "toml_key": "opencl_point_group",
       "field": "opencl_point_group",
       "type": "u64",
       "parser": "strict",
@@ -1909,7 +1863,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_point_window",
-      "v2_key": "opencl.point_window",
+      "toml_key": "opencl_point_window",
       "field": "opencl_point_window",
       "type": "u64",
       "parser": "strict",
@@ -1926,7 +1880,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_short_point_batch",
-      "v2_key": "opencl.short_point_batch",
+      "toml_key": "opencl_short_point_batch",
       "field": "opencl_short_point_batch",
       "type": "bool",
       "parser": "strict",
@@ -1941,8 +1895,7 @@
     {
       "owner": "stage2",
       "key": "stage2_opencl_tune_profile",
-      "v3_key": "opencl.tune_file",
-      "v2_key": "opencl.tune_profile",
+      "toml_key": "opencl_tune_file",
       "field": "opencl_tune_profile",
       "type": "string",
       "parser": "strict",
@@ -1950,18 +1903,17 @@
       "domain": "<path>",
       "fx": "OpenCL_stage2_points",
       "description": [
-        "Native OpenCL point timing profile. Relative to ecm.toml, with per-worker overrides. Empty disables profile learning. Uses stage2_tune_runtime, stage2_tune_min_repeats and stage2_tune_runtime_samples.",
-        "原生 OpenCL 点计划计时文件。相对 ecm.toml，可按 worker 覆盖；空路径关闭学习。共用 stage2_tune_runtime、stage2_tune_min_repeats 和 stage2_tune_runtime_samples。"
+        "Native OpenCL point timing profile. Relative to ecm.toml, with per-worker overrides. Empty disables profile learning. Uses tune_runtime_enabled, tune_min_repeats and tune_runtime_sample_limit.",
+        "原生 OpenCL 点计划计时文件。相对 ecm.toml，可按 worker 覆盖；空路径关闭学习。共用 tune_runtime_enabled、tune_min_repeats 和 tune_runtime_sample_limit。"
       ],
       "empty": "disable"
     },
     {
       "owner": "stage2",
+      "key": "stage2_baby_backend",
+      "toml_key": "baby_backend",
       "type": "string",
       "parser": "strict",
-      "key": "stage2_baby_backend",
-      "v3_key": "cuda.baby_backend",
-      "v2_key": "baby_backend",
       "field": "baby_backend",
       "present": "has_baby_backend",
       "default": "auto",
@@ -1980,11 +1932,10 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_giant_backend",
+      "toml_key": "giant_backend",
       "type": "string",
       "parser": "strict",
-      "key": "stage2_giant_backend",
-      "v3_key": "cuda.giant_backend",
-      "v2_key": "giant_backend",
       "field": "giant_backend",
       "present": "has_giant_backend",
       "default": "auto",
@@ -2004,11 +1955,10 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_seed_backend",
+      "toml_key": "seed_backend",
       "type": "string",
       "parser": "strict",
-      "key": "stage2_seed_backend",
-      "v3_key": "cuda.seed_backend",
-      "v2_key": "seed_backend",
       "field": "seed_backend",
       "present": "has_seed_backend",
       "default": "auto",
@@ -2027,18 +1977,17 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_reduce_backend",
+      "toml_key": "reduce_backend",
       "type": "string",
       "parser": "strict",
-      "key": "stage2_reduce_backend",
-      "v3_key": "cuda.reduce_backend",
-      "v2_key": "reduce_backend",
       "field": "reduce_backend",
       "present": "has_reduce_backend",
       "default": "auto",
       "domain": "[auto|scalar|coop32]",
       "fx": "S4_modular_reduction",
       "description": [
-        "Ordinary S4 coefficient reduction: auto keeps scalar until repeated same-shape comparisons qualify coop32, then uses the fastest checked total including point startup checks. At fixed D/layout/chain/point backends, it adds at most one missing cooperative variant at a time (two-pass or merged), then extends D after checked comparisons. CUDA arithmetic widths 8193..16384 bits can use shared warp remainders; smaller widths and exact Mersenne reduction keep their kernels. Actual reduce_coop, threads and kernel identity stay separate in ECM timing rows even if environment matching is ignored; standalone NTT tables remain reusable. CLI --reduce-backend overrides this worker key; omission preserves explicit NTT_S4_COOP_REDUCE=0|32. OpenCL uses scalar.",
+        "Ordinary S4 coefficient cpu_simd_reduction: auto keeps scalar until repeated same-shape comparisons qualify coop32, then uses the fastest checked total including point startup checks. At fixed D/layout/chain/point backends, it adds at most one missing cooperative variant at a time (two-pass or merged), then extends D after checked comparisons. CUDA arithmetic widths 8193..16384 bits can use shared warp remainders; smaller widths and exact Mersenne cpu_simd_reduction keep their kernels. Actual reduce_coop, threads and kernel identity stay separate in ECM timing rows even if environment matching is ignored; standalone NTT tables remain reusable. CLI --reduce-backend overrides this worker key; omission preserves explicit NTT_S4_COOP_REDUCE=0|32. OpenCL uses scalar.",
         "普通S4逐系数归约：默认auto，在同形状重复对照合格前保留scalar，再按含点启动检查的实测总耗时选择最快项。每个算术家族固定D／布局／链长／点后端，每次仅增加一个缺少的协作变体（两遍／合并），完成有效对照后再继续D搜索。CUDA实际算术8193..16384 bits可使用共享余数；较小位宽和精确梅森归约保持原内核。实际reduce_coop、线程块与内核身份按ECM每行独立记账，即使忽略environment也不混合，独立NTT表继续复用。CLI --reduce-backend覆盖当前worker；省略时保留显式NTT_S4_COOP_REDUCE=0|32。OpenCL实际为scalar。"
       ],
       "values": [
@@ -2051,7 +2000,7 @@
     {
       "owner": "stage2",
       "key": "stage2_groot_balanced",
-      "v2_key": "groot_balanced",
+      "toml_key": "groot_balanced",
       "field": "groot_balanced",
       "type": "bool|string",
       "default": "auto",
@@ -2067,7 +2016,7 @@
     {
       "owner": "stage2",
       "key": "stage2_giant_tail_balance",
-      "v2_key": "giant_tail_balance",
+      "toml_key": "giant_tail_balance",
       "field": "giant_tail_balance",
       "type": "bool",
       "default": false,
@@ -2085,7 +2034,7 @@
     {
       "owner": "stage2",
       "key": "stage2_b2_round_chain",
-      "v2_key": "b2_round_chain",
+      "toml_key": "b2_round_chain",
       "field": "b2_round_chain",
       "type": "bool",
       "default": false,
@@ -2103,7 +2052,7 @@
     {
       "owner": "stage2",
       "key": "stage2_giant_chain",
-      "v2_key": "giant_chain",
+      "toml_key": "giant_chain",
       "field": "giant_chain",
       "type": "string",
       "default": "64",
@@ -2111,14 +2060,14 @@
       "fx": "points_per_chain(S2)",
       "parser": "strict",
       "description": [
-        "Points per sequential CUDA thread chain, independent of CUDA block size. 64 preserves the baseline; 32 explicitly selects shorter chains. auto retains 64 until stage2_tune_min_repeats admitted runtime observations support 32, with bounded useful-curve probes. Policies have separate tune identities. Hit/nonunit replays the legacy 64-point full interval. CLI --giant-chain overrides this worker TOML.",
-        "每条CUDA线程链连续生成的点数，与CUDA线程块大小无关。64保留基线，32显式使用短链；auto在满足stage2_tune_min_repeats门槛的准入实测支持32前保留64，并进行有界正常曲线探测。各策略具有独立tune身份。命中或非单位时按旧64点链重放完整区间。CLI --giant-chain覆盖当前worker配置。"
+        "Points per sequential CUDA thread chain, independent of CUDA block size. 64 preserves the baseline; 32 explicitly selects shorter chains. auto retains 64 until tune_min_repeats admitted runtime observations support 32, with bounded useful-curve probes. Policies have separate tune identities. Hit/nonunit replays the legacy 64-point full interval. CLI --giant-chain overrides this worker TOML.",
+        "每条CUDA线程链连续生成的点数，与CUDA线程块大小无关。64保留基线，32显式使用短链；auto在满足tune_min_repeats门槛的准入实测支持32前保留64，并进行有界正常曲线探测。各策略具有独立tune身份。命中或非单位时按旧64点链重放完整区间。CLI --giant-chain覆盖当前worker配置。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_relocation",
-      "v2_key": "relocation",
+      "toml_key": "relocation",
       "field": "relocation",
       "type": "bool",
       "default": false,
@@ -2136,7 +2085,7 @@
     {
       "owner": "stage2",
       "key": "stage2_b2",
-      "v2_key": "b2",
+      "toml_key": "b2",
       "template_level": "core",
       "field": "b2",
       "type": "u64",
@@ -2153,7 +2102,7 @@
     {
       "owner": "stage2",
       "key": "stage2_d",
-      "v2_key": "d",
+      "toml_key": "d",
       "field": "d",
       "type": "u64",
       "default": 0,
@@ -2172,7 +2121,7 @@
     {
       "owner": "stage2",
       "key": "stage2_batch_mb",
-      "v2_key": "memory.s4_batch_mib",
+      "toml_key": "s4_batch_mib",
       "field": "batch",
       "type": "u64",
       "default": 64,
@@ -2190,7 +2139,7 @@
     {
       "owner": "stage2",
       "key": "stage2_arena_mb",
-      "v2_key": "memory.arena_mib",
+      "toml_key": "arena_mib",
       "field": "arena",
       "type": "u64",
       "default": 0,
@@ -2209,7 +2158,7 @@
     {
       "owner": "stage2",
       "key": "stage2_fold_mb",
-      "v2_key": "memory.fold_resident_mib",
+      "toml_key": "fold_resident_mib",
       "field": "owner_mb",
       "type": "u64",
       "default": 640,
@@ -2232,7 +2181,7 @@
     {
       "owner": "stage2",
       "key": "stage2_factorize_hits",
-      "v2_key": "diagnostics.decompose_factors",
+      "toml_key": "decompose_factors",
       "field": "factorize_hits",
       "type": "bool",
       "default": false,
@@ -2250,7 +2199,7 @@
     {
       "owner": "stage2",
       "key": "stage2_factor_only",
-      "v2_key": "diagnostics.skip_prime_attribution",
+      "toml_key": "skip_prime_attribution",
       "field": "factor_only",
       "type": "bool",
       "default": false,
@@ -2261,14 +2210,14 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-        "Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic policy. This does not disable decomposition or change stage2_factorize_hits.",
-        "控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 stage2_factorize_hits。"
+        "Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic policy. This does not disable decomposition or change decompose_factors.",
+        "控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 decompose_factors。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_auto_b2",
-      "v2_key": "auto_b2",
+      "toml_key": "auto_b2",
       "template_level": "core",
       "field": "auto_b2",
       "type": "bool",
@@ -2280,14 +2229,14 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-        "Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time including Stage1 cost; 0 disables. Requires usable Stage2 costs and positive Stage1 s/curve. B1 never gates tune reuse; stage2_tune_ignore controls other conditions. Memory and carrier divisibility are checked on the current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its original qualification checks.",
-        "所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用 Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 stage2_tune_ignore 控制。当前输入仍检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。"
+        "Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time including Stage1 cost; 0 disables. Requires usable Stage2 costs and positive Stage1 s/curve. B1 never gates tune reuse; tune_ignore controls other conditions. Memory and carrier divisibility are checked on the current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its original qualification checks.",
+        "所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用 Stage2 成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 tune_ignore 控制。当前输入仍检查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_gp",
-      "v2_key": "diagnostics.gp",
+      "toml_key": "gp",
       "field": "gp",
       "type": "string",
       "default": "",
@@ -2298,14 +2247,14 @@
       "effective_default": "gp.exe",
       "path_base": "CreateProcess/PATH",
       "description": [
-        "External PARI/GP fallback executable for optional factor decomposition. The local PARI DLL is tried first. gp.exe follows Windows executable search rules; a full path is accepted. GP failure preserves partial PARI results and never enables GMP automatically. Dataset scripts retain their separate --gp resolution rules.",
-        "指定附加因子分解的外部 PARI/GP 备选程序，默认先使用本地 PARI DLL。gp.exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 失败保留 PARI 部分结果，不自动使用 GMP；数据集脚本继续使用各自的 --gp 路径规则。"
+        "External PARI/GP fallback executable for optional factor decomposition. The local PARI DLL is tried first. gp.stage1_exe follows Windows executable search rules; a full path is accepted. GP failure preserves partial PARI results and never enables GMP automatically. Dataset scripts retain their separate --gp resolution rules.",
+        "指定附加因子分解的外部 PARI/GP 备选程序，默认先使用本地 PARI DLL。gp.stage1_exe 按 Windows 程序搜索规则查找，也接受完整路径。GP 失败保留 PARI 部分结果，不自动使用 GMP；数据集脚本继续使用各自的 --gp 路径规则。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_factor_timeout",
-      "v2_key": "diagnostics.factor_timeout_seconds",
+      "toml_key": "factor_timeout_seconds",
       "field": "factor_timeout",
       "type": "u64",
       "default": 30,
@@ -2323,7 +2272,7 @@
     {
       "owner": "stage2",
       "key": "stage2_cost_profile",
-      "v2_key": "tune.legacy_cost_profile",
+      "toml_key": "tune_legacy_cost_profile",
       "template_level": "legacy",
       "field": "cost_profile",
       "type": "string",
@@ -2340,7 +2289,7 @@
     {
       "owner": "stage2",
       "key": "stage2_auto_carrier",
-      "v2_key": "cuda.auto_carrier",
+      "toml_key": "auto_carrier",
       "field": "auto_carrier",
       "type": "bool",
       "default": true,
@@ -2348,14 +2297,14 @@
       "fx": "Stage2_worktodo_carrier_candidates",
       "parser": "strict",
       "description": [
-        "Add M=2^p-1 for validated ECMSTAGE2=1,2,p,-1 saves when N divides M and 2<=p<=16384. Compare ordinary cost at target_bits with Mersenne cost at arithmetic_bits=p, using stage2_prediction_policy. Full M_p already has native Mersenne arithmetic. Explicit carrier options take priority; a cofactor save needs a matching task to infer p.",
-        "对有效ECMSTAGE2=1,2,p,-1保存点，验证N整除M=2^p-1且2<=p<=16384后加入承载候选。普通成本按target_bits、梅森成本按arithmetic_bits=p查询，并遵循stage2_prediction_policy；完整M_p已使用原生梅森算术，不重复加入相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。"
+        "Add M=2^p-1 for validated ECMSTAGE2=1,2,p,-1 saves when N divides M and 2<=p<=16384. Compare ordinary cost at target_bits with Mersenne cost at arithmetic_bits=p, using prediction_policy. Full M_p already has native Mersenne arithmetic. Explicit carrier options take process_priority; a cofactor save needs a matching task to infer p.",
+        "对有效ECMSTAGE2=1,2,p,-1保存点，验证N整除M=2^p-1且2<=p<=16384后加入承载候选。普通成本按target_bits、梅森成本按arithmetic_bits=p查询，并遵循prediction_policy；完整M_p已使用原生梅森算术，不重复加入相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_prediction_policy",
-      "v2_key": "prediction_policy",
+      "toml_key": "prediction_policy",
       "field": "prediction_policy",
       "type": "string",
       "default": "model",
@@ -2370,7 +2319,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_arithmetic",
-      "v2_key": "tune.arithmetic",
+      "toml_key": "tune_arithmetic",
       "field": "tune_arithmetic",
       "type": "string",
       "default": "both",
@@ -2378,15 +2327,14 @@
       "fx": "synthetic_tune_arithmetic_bands",
       "parser": "strict",
       "description": [
-        "Arithmetic families for explicit width-grid ECM tune: both, generic probable-prime N, or Mersenne 2^p-1 arithmetic after stripping proper-exponent inherited factors and small target divisors. p is the requested grid arithmetic width; actual cofactor width is recorded separately. Real worktodo/save pairs continue to follow stage2_auto_carrier. Invalid or factor-producing synthetic Mersenne fixtures are skipped, never saved as timing measurements.",
-        "显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo/save配对仍遵循stage2_auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。"
+        "Arithmetic families for explicit width-grid ECM tune: both, generic probable-prime N, or Mersenne 2^p-1 arithmetic after stripping proper-exponent inherited factors and small target divisors. p is the requested grid arithmetic width; actual cofactor width is recorded separately. Real worktodo_file/save pairs continue to follow auto_carrier. Invalid or factor-producing synthetic Mersenne fixtures are skipped, never saved as timing measurements.",
+        "显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo_file/save配对仍遵循auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_tune_profile",
-      "v3_key": "",
-      "v2_key": "tune.profile",
+      "toml_key": "",
       "field": "tune_profile",
       "type": "string",
       "default": "",
@@ -2395,14 +2343,14 @@
       "parser": "strict",
       "empty": "legacy_selection",
       "description": [
-        "Shared tune TOML. CLI --tune-profile takes priority. Relative paths resolve beside ecm.toml. If empty and no legacy cost profile is supplied, use tune.toml beside ecm.toml, with stage2_ecm_tune.toml as a fallback when it already exists. Arithmetic-family lookup uses arithmetic_bits independently for generic and Mersenne arithmetic.",
+        "Shared tune TOML. CLI --tune-profile takes process_priority. Relative paths resolve beside ecm.toml. If empty and no legacy cost profile is supplied, use tune.toml beside ecm.toml, with stage2_ecm_tune.toml as a fallback when it already exists. Arithmetic-family lookup uses arithmetic_bits independently for generic and Mersenne arithmetic.",
         "共享调优 TOML。CLI --tune-profile 优先，相对路径以 ecm.toml 所在目录为准。留空且未指定旧成本配置时优先使用 tune.toml，若只有已有的 stage2_ecm_tune.toml 则沿用。通用与梅森算术分别按 arithmetic_bits 查询。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_tune_runtime",
-      "v2_key": "tune.runtime_enabled",
+      "toml_key": "tune_runtime_enabled",
       "field": "tune_runtime",
       "type": "bool",
       "default": true,
@@ -2410,15 +2358,15 @@
       "fx": "bounded_runtime_sampling_and_path_selection",
       "parser": "strict",
       "description": [
-        "CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach stage2_tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use stage2_parallel. OpenCL learns point plans in stage2_opencl_tune_profile at fixed geometry.",
-        "CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 stage2_tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入 [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 stage2_parallel 控制。OpenCL 固定几何，在 stage2_opencl_tune_profile 中学习点计划。"
+        "CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM compares memory-admissible D choices across normal curves and records timings in [[cpu_stage2]]. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.",
+        "CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 在正常曲线中比较通过内存准入的 D，将耗时写入 [[cpu_stage2]]。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_parallel",
-      "v2_key": "cuda.curve_concurrency",
-      "v2_conversion": "enum:auto|serial|dual",
+      "toml_key": "curve_concurrency",
+      "toml_conversion": "enum:auto|serial|dual",
       "field": "parallel",
       "type": "u64",
       "default": 1,
@@ -2435,8 +2383,8 @@
     {
       "owner": "stage2",
       "key": "stage2_parallel_workspace",
-      "v2_key": "cuda.workspace_policy",
-      "v2_conversion": "enum:auto|independent|leased",
+      "toml_key": "workspace_policy",
+      "toml_conversion": "enum:auto|independent|leased",
       "field": "parallel_workspace",
       "type": "u64",
       "default": 0,
@@ -2453,7 +2401,7 @@
     {
       "owner": "stage2",
       "key": "stage2_parallel_tune_curves",
-      "v2_key": "cuda.parallel_tune_curves",
+      "toml_key": "parallel_tune_curves",
       "field": "parallel_tune_curves",
       "type": "u64",
       "default": 5,
@@ -2470,7 +2418,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_min_repeats",
-      "v2_key": "tune.min_repeats",
+      "toml_key": "tune_min_repeats",
       "field": "tune_min_repeats",
       "type": "u64",
       "default": 2,
@@ -2480,14 +2428,14 @@
       "fx": "minimum_checked_ecm_observations_for_selection",
       "parser": "strict",
       "description": [
-        "Minimum checked observations required before runtime D, layout and chain candidates are compared or adopted. Also sets the minimum ECM calibration repeat count; --tune-repeats may request more. Default 2; 1 enables faster screening with no measured dispersion. Must not exceed stage2_tune_runtime_samples. Existing observations are retained; increasing this minimum requires additional evidence. Arithmetic validation is unchanged. CLI: --tune-min-repeats N.",
-        "运行时D、布局与链长候选比较和采用所需的最少已校验观察数，同时作为ECM校准最小重复次数；--tune-repeats可要求更多。默认2；设为1用于快速筛查，但无法测得离散程度。不得超过stage2_tune_runtime_samples；已有观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。"
+        "Minimum checked observations required before runtime D, layout and chain candidates are compared or adopted. Also sets the minimum ECM calibration repeat count; --tune-repeats may request more. Default 2; 1 enables faster screening with no measured dispersion. Must not exceed tune_runtime_sample_limit. Existing observations are retained; increasing this minimum requires additional evidence. Arithmetic validation is unchanged. CLI: --tune-min-repeats N.",
+        "运行时D、布局与链长候选比较和采用所需的最少已校验观察数，同时作为ECM校准最小重复次数；--tune-repeats可要求更多。默认2；设为1用于快速筛查，但无法测得离散程度。不得超过tune_runtime_sample_limit；已有观察保留，提高门槛后需补足证据。算术验证不变。CLI：--tune-min-repeats N。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_tune_runtime_samples",
-      "v2_key": "tune.runtime_sample_limit",
+      "toml_key": "tune_runtime_sample_limit",
       "field": "runtime_samples",
       "type": "u64",
       "default": 10,
@@ -2497,14 +2445,14 @@
       "fx": "bounded_independent_runtime_observations",
       "parser": "strict",
       "description": [
-        "Maximum independent runtime NF observations per identical complete parameters (including B1) and matching device/environment/arithmetic/path, including slower observations and compatible software versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix rows. Different parameter rows are retained. Selection requires stage2_tune_min_repeats observations. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.",
-        "完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。达到stage2_tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。"
+        "Maximum independent runtime NF observations per identical complete parameters (including B1) and matching device/environment/arithmetic/path, including slower observations and compatible software versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix rows. Different parameter rows are retained. Selection requires tune_min_repeats observations. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.",
+        "完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。达到tune_min_repeats次后可用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_short_ntt_batch_tune",
-      "v2_key": "short_ntt_batch_tune",
+      "toml_key": "short_ntt_batch_tune",
       "field": "short_batch_tune",
       "type": "bool",
       "default": false,
@@ -2519,7 +2467,7 @@
     {
       "owner": "stage2",
       "key": "stage2_low_cpu_wait",
-      "v2_key": "cuda.low_cpu_wait",
+      "toml_key": "low_cpu_wait",
       "field": "low_cpu_wait",
       "type": "bool",
       "default": false,
@@ -2535,7 +2483,7 @@
     {
       "owner": "stage2",
       "key": "stage2_pack_zero",
-      "v2_key": "cuda.pack_zero",
+      "toml_key": "pack_zero",
       "field": "pack_zero",
       "type": "bool",
       "default": true,
@@ -2551,7 +2499,7 @@
     {
       "owner": "stage2",
       "key": "stage2_weighted_ntt",
-      "v2_key": "cuda.weighted_ntt",
+      "toml_key": "weighted_ntt",
       "field": "weighted_ntt",
       "type": "bool",
       "default": false,
@@ -2559,15 +2507,14 @@
       "fx": "Stage2_root_weighted_NTT",
       "parser": "strict",
       "description": [
-        "Opt-in polynomial convolution for the production CUDA backend. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires stage2_pack_zero. Calls without cached roots or direct device packing use the full-length path. The TOML preset stays inactive on OpenCL. CLI --weighted-ntt 0|1 overrides this key.",
-        "生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 stage2_pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt 0|1 优先。"
+        "Opt-in polynomial convolution for the production CUDA backend. Fuses the first DIF stage into direct digit packing and reconstructs both halves in the final inverse stage. Requires pack_zero. Calls without cached roots or direct device packing use the full-length path. The TOML preset stays inactive on OpenCL. CLI --weighted-ntt 0|1 overrides this key.",
+        "生产 CUDA 后端可启用的多项式卷积。直接打包时融合首层 DIF，逆变换末层重建高低两半。需启用 pack_zero。没有缓存根表或直接设备打包的调用使用全长路径。OpenCL 不启用该 TOML 预设。命令行 --weighted-ntt 0|1 优先。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage1_tune_profile",
-      "v3_key": "tune.stage1_cost_file",
-      "v2_key": "tune.stage1_profile",
+      "toml_key": "tune_stage1_cost_file",
       "field": "stage1_profile",
       "type": "string",
       "default": "",
@@ -2575,15 +2522,15 @@
       "fx": "AutoB2_measured_S1_cost",
       "empty": "disabled",
       "description": [
-        "Checked completed CUDA Stage1 cost anchors, used after explicit seconds/curve and CSV. Matches batch, modulus type and exponent; B1 and missing widths scale by B1 and the dispatched container squared. Device/runtime reuse follows stage2_tune_ignore. This does not run Stage1.",
-        "已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。"
+        "Checked completed CUDA Stage1 cost anchors, used after explicit seconds/curve and CSV. Matches batch, modulus type and exponent; B1 and missing widths scale by B1 and the dispatched container squared. Device/runtime reuse follows tune_ignore. This does not run Stage1.",
+        "已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 tune_ignore；此文件不启动 Stage1。"
       ],
       "parser": "strict"
     },
     {
       "owner": "stage2",
       "key": "stage2_auto_min_b2",
-      "v2_key": "auto_min_b2",
+      "toml_key": "auto_min_b2",
       "field": "auto_min",
       "type": "u64",
       "default": 0,
@@ -2602,7 +2549,7 @@
     {
       "owner": "stage2",
       "key": "stage2_auto_max_b2",
-      "v2_key": "auto_max_b2",
+      "toml_key": "auto_max_b2",
       "field": "auto_max",
       "type": "u64",
       "default": 0,
@@ -2621,7 +2568,7 @@
     {
       "owner": "stage2",
       "key": "stage1_batch",
-      "v2_key": "tune.stage1_batch",
+      "toml_key": "tune_stage1_batch",
       "field": "stage1_batch",
       "type": "u64",
       "default": 1,
@@ -2638,7 +2585,7 @@
     {
       "owner": "stage2",
       "key": "stage1_seconds_per_curve",
-      "v2_key": "tune.stage1_seconds_per_curve",
+      "toml_key": "tune_stage1_seconds_per_curve",
       "field": "stage1_seconds",
       "type": "double",
       "default": 0,
@@ -2651,14 +2598,14 @@
       "template_comment": true,
       "template_value": "<seconds>",
       "description": [
-        "Stage1 seconds per curve for Auto B2, already amortized for the actual batch. A positive value, including a decimal, overrides the Stage1 cost from tuning data. Set 0 or omit this option to use the configured Stage1 cost sources. Full ECM tune can use a cost CSV or a matching stage1_tune_profile. The legacy component profile uses its own matched Stage1 data. This value is a planning input.",
-        "为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 stage1_batch。正值（可填小数）优先于调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使用成本 CSV 或匹配的 stage1_tune_profile。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成本规划。"
+        "Stage1 seconds per curve for Auto B2, already amortized for the actual batch. A positive value, including a decimal, overrides the Stage1 cost from tuning data. Set 0 or omit this option to use the configured Stage1 cost sources. Full ECM tune can use a cost CSV or a matching tune_stage1_cost_file. The legacy component profile uses its own matched Stage1 data. This value is a planning input.",
+        "为 Auto B2 提供 Stage1 每曲线秒数，按实际批次摊销，无需再除以 tune_stage1_batch。正值（可填小数）优先于调优数据中的 Stage1 成本。设为 0 或省略时，使用已配置的 Stage1 成本来源。完整 ECM tune 可使用成本 CSV 或匹配的 tune_stage1_cost_file。旧组件 profile 使用其自身匹配的 Stage1 数据。该值用于成本规划。"
       ]
     },
     {
       "owner": "stage2",
       "key": "stage2_ratio_adjust",
-      "v2_key": "ratio_adjust",
+      "toml_key": "ratio_adjust",
       "field": "ratio_adjust",
       "type": "double",
       "default": 1,
@@ -2719,7 +2666,7 @@
     {
       "owner": "gui",
       "key": "NumWorkers",
-      "v2_key": "worker_count",
+      "toml_key": "",
       "template_level": "core",
       "field": "NumWorkers",
       "type": "int",
@@ -2730,14 +2677,14 @@
       "minimum": 1,
       "maximum": 64,
       "description": [
-        "Legacy count for workers managed by the GUI. For v3 workflows, shared.worker_count takes precedence when present. Each worker uses its own [worker.N] settings.",
-        "GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 shared.worker_count 时优先使用该值。各 worker 使用自己的 [worker.N] 设置。"
+        "Legacy count for workers managed by the GUI. For v3 workflows, worker_count takes precedence when present. Each worker uses its own [worker.N] settings.",
+        "GUI 管理的 worker 数量的兼容项。v3 工作流显式设置 worker_count 时优先使用该值。各 worker 使用自己的 [worker.N] 设置。"
       ]
     },
     {
       "owner": "gui",
       "key": "exe",
-      "v2_key": "stage1_exe",
+      "toml_key": "stage1_exe",
       "field": "exe",
       "type": "string",
       "default": "",
@@ -2746,8 +2693,8 @@
       "parser": "gui",
       "empty": "beside_GUI_then_PATH",
       "description": [
-        "Stage1 worker executable. Relative paths resolve beside the GUI; bare names can use PATH. Empty searches ecm_cuda.exe then ecm.exe. The worktodo prefix selects this executable or stage2_exe for each worker.",
-        "Stage1 工作程序。相对路径以 GUI 目录为基准，单独文件名也可经 PATH 查找；留空依次查找 ecm_cuda.exe、ecm.exe。每个 worker 根据 worktodo 前缀选择此程序或 stage2_exe。"
+        "Stage1 worker executable. Relative paths resolve beside the GUI; bare names can use PATH. Empty searches ecm_cuda.stage1_exe then ecm.stage1_exe. The worktodo_file prefix selects this executable or stage2_exe for each worker.",
+        "Stage1 工作程序。相对路径以 GUI 目录为基准，单独文件名也可经 PATH 查找；留空依次查找 ecm_cuda.stage1_exe、ecm.stage1_exe。每个 worker 根据 worktodo_file 前缀选择此程序或 stage2_exe。"
       ]
     },
     {
@@ -2760,8 +2707,8 @@
       "fx": "GUI_Stage2_executable",
       "parser": "gui",
       "description": [
-        "Stage2 executable for CPU, CUDA or OpenCL. Empty searches ecm_stage2.exe, then legacy ecm_cuda_stage2.exe, ecm_cpu_stage2.exe and ecm_opencl_stage2.exe in the workflow and GUI directories. A single matching child package can also be discovered. Set an explicit path to choose between installed packages.",
-        "CPU、CUDA 或 OpenCL 的 Stage2 程序。留空时在工作流和 GUI 目录依次查找 ecm_stage2.exe、ecm_cuda_stage2.exe、ecm_cpu_stage2.exe 和 ecm_opencl_stage2.exe，也支持唯一匹配的子包。安装多个子包时可用路径指定后端。"
+        "Stage2 executable for CPU, CUDA or OpenCL. Empty searches ecm_stage2.stage1_exe, then legacy ecm_cuda_stage2.stage1_exe, ecm_cpu_stage2.stage1_exe and ecm_opencl_stage2.stage1_exe in the workflow and GUI directories. A single matching child package can also be discovered. Set an explicit path to choose between installed packages.",
+        "CPU、CUDA 或 OpenCL 的 Stage2 程序。留空时在工作流和 GUI 目录依次查找 ecm_stage2.stage1_exe、ecm_cuda_stage2.stage1_exe、ecm_cpu_stage2.stage1_exe 和 ecm_opencl_stage2.stage1_exe，也支持唯一匹配的子包。安装多个子包时可用路径指定后端。"
       ]
     },
     {
@@ -2890,7 +2837,7 @@
     {
       "owner": "gui",
       "key": "priority",
-      "v2_key": "process_priority",
+      "toml_key": "process_priority",
       "field": "priority",
       "type": "string",
       "default": "below_normal",
@@ -2898,7 +2845,7 @@
       "fx": "worker_priority",
       "parser": "gui",
       "description": [
-        "Priority of worker processes launched by the GUI. below_normal is the default; lower priority makes concurrent desktop use easier. This is not a GPU exclusivity or utilization setting.",
+        "Priority of worker processes launched by the GUI. below_normal is the default; lower process_priority makes concurrent desktop use easier. This is not a GPU exclusivity or utilization setting.",
         "设置 GUI 启动的 worker 进程优先级。below_normal 为默认，较低优先级便于同时使用电脑；此键不是 GPU 独占或显卡占用率设置。"
       ]
     },
@@ -3034,7 +2981,7 @@
     {
       "owner": "worker",
       "key": "autostart",
-      "v2_conversion": "nonzero_bool",
+      "toml_conversion": "nonzero_bool",
       "template_level": "core",
       "field": "autostart",
       "type": "int",
@@ -3067,7 +3014,6 @@
     {
       "owner": "worker",
       "key": "stage1_extra_args",
-      "v3_only": true,
       "field": "stage1_extra_args",
       "type": "string",
       "default": "",
@@ -3082,7 +3028,6 @@
     {
       "owner": "worker",
       "key": "stage2_extra_args",
-      "v3_only": true,
       "field": "stage2_extra_args",
       "type": "string",
       "default": "",
@@ -3116,7 +3061,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_ignore",
-      "v2_key": "tune.ignore",
+      "toml_key": "tune_ignore",
       "field": "tune_ignore",
       "type": "string",
       "default": "gpu,driver,cuda,backend,environment",
@@ -3132,7 +3077,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_budget_seconds",
-      "v2_key": "tune.budget_seconds",
+      "toml_key": "tune_budget_seconds",
       "field": "tune_budget",
       "type": "u64",
       "default": 1800,
@@ -3149,7 +3094,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_warmup",
-      "v2_key": "tune.warmup",
+      "toml_key": "tune_warmup",
       "field": "tune_warmup",
       "type": "bool",
       "default": false,
@@ -3164,7 +3109,7 @@
     {
       "owner": "stage2",
       "key": "stage2_short_calibration",
-      "v2_key": "short_calibration",
+      "toml_key": "short_calibration",
       "field": "short_calibration",
       "type": "bool",
       "default": true,
@@ -3179,7 +3124,7 @@
     {
       "owner": "stage2",
       "key": "stage2_short_calibration_seconds",
-      "v2_key": "short_calibration_seconds",
+      "toml_key": "short_calibration_seconds",
       "field": "short_budget",
       "type": "u64",
       "default": 10,
@@ -3196,7 +3141,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_error_limit",
-      "v2_key": "tune.error_limit",
+      "toml_key": "tune_error_limit",
       "field": "tune_error",
       "type": "double",
       "default": 0.08,
@@ -3212,7 +3157,7 @@
     {
       "owner": "stage2",
       "key": "stage1_cost_csv",
-      "v2_key": "tune.stage1_cost_csv",
+      "toml_key": "tune_stage1_cost_csv",
       "field": "stage1_csv",
       "type": "string",
       "default": "",
@@ -3220,15 +3165,15 @@
       "fx": "portable_tune",
       "parser": "strict",
       "description": [
-        "CSV Stage1 s/curve anchors for workflow Auto B2. Columns: container_bits or target_bits, tpi, curves, b1, mhz, seconds_per_curve; optional tpb and exponent. Missing widths may interpolate or extrapolate. Costs are already amortized.",
-        "总流程 Auto B2 的 Stage1 秒/曲线 CSV；列为 container_bits 或 target_bits、tpi、curves、b1、mhz、seconds_per_curve；可选 tpb、exponent。缺失位宽可插值或外推，成本已摊销。"
+        "CSV Stage1 s/curve anchors for workflow Auto B2. Columns: container_bits or target_bits, opencl_threads_per_integer, curves, b1, mhz, seconds_per_curve; optional tpb and exponent. Missing widths may interpolate or extrapolate. Costs are already amortized.",
+        "总流程 Auto B2 的 Stage1 秒/曲线 CSV；列为 container_bits 或 target_bits、opencl_threads_per_integer、curves、b1、mhz、seconds_per_curve；可选 tpb、exponent。缺失位宽可插值或外推，成本已摊销。"
       ],
       "empty": "none"
     },
     {
       "owner": "stage2",
       "key": "stage1_cost_mhz",
-      "v2_key": "tune.stage1_cost_mhz",
+      "toml_key": "tune_stage1_cost_mhz",
       "field": "stage1_mhz",
       "type": "u64",
       "default": 0,
@@ -3245,7 +3190,7 @@
     {
       "owner": "stage2",
       "key": "stage2_target_factor_bits",
-      "v2_key": "target_factor_bits",
+      "toml_key": "target_factor_bits",
       "field": "factor_bits",
       "type": "u64",
       "default": 0,
@@ -3262,7 +3207,7 @@
     {
       "owner": "stage2",
       "key": "stage2_tune_condition_tag",
-      "v2_key": "tune.condition_tag",
+      "toml_key": "tune_condition_tag",
       "field": "condition_tag",
       "type": "string",
       "default": "",
@@ -3278,7 +3223,6 @@
     {
       "owner": "stage1",
       "key": "stage1_submission_file",
-      "v2_key": "submission_file",
       "template_level": "core",
       "field": "submission",
       "type": "string",
@@ -3298,7 +3242,6 @@
     {
       "owner": "stage1",
       "key": "stage1_results_file",
-      "v2_key": "results_file",
       "template_level": "core",
       "field": "results",
       "type": "string",
@@ -3332,24 +3275,11 @@
     }
   ],
   "aliases": [],
-  "gui_v2_sidecar": {
+  "gui_preferences": {
     "schema_version": 1,
     "fields": [
       {
-        "table": "state",
-        "key": "schema",
-        "field": "state_schema",
-        "type": "int",
-        "default": 1,
-        "description": [
-          "UI sidecar schema; incompatible versions are rejected.",
-          "UI 侧车版本；拒绝不兼容版本。"
-        ],
-        "minimum": 1,
-        "maximum": 1
-      },
-      {
-        "table": "ui",
+        "table": "gui",
         "key": "theme",
         "field": "ui_theme",
         "type": "string",
@@ -3364,8 +3294,8 @@
         ]
       },
       {
-        "table": "ui",
-        "key": "language",
+        "table": "gui",
+        "key": "display_language",
         "field": "ui_language",
         "type": "string",
         "default": "en",
@@ -3379,7 +3309,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "language_file",
         "field": "ui_language_file",
         "type": "string",
@@ -3391,7 +3321,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "scale",
         "field": "ui_scale",
         "type": "float",
@@ -3404,8 +3334,8 @@
         "maximum": 4
       },
       {
-        "table": "ui",
-        "key": "font_size",
+        "table": "gui",
+        "key": "body_font_size",
         "field": "ui_font_size",
         "type": "int",
         "default": 15,
@@ -3417,7 +3347,7 @@
         "maximum": 30
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "primary_font_offset",
         "field": "ui_primary_font_offset",
         "type": "int",
@@ -3430,7 +3360,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "secondary_font_offset",
         "field": "ui_secondary_font_offset",
         "type": "int",
@@ -3443,7 +3373,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "worker_chart_columns",
         "field": "ui_worker_chart_columns",
         "type": "int",
@@ -3458,7 +3388,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "gpu_history_seconds",
         "field": "ui_gpu_history_seconds",
         "type": "int",
@@ -3475,7 +3405,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "stage2_timing_source",
         "field": "ui_stage2_timing_source",
         "type": "string",
@@ -3492,8 +3422,8 @@
         ]
       },
       {
-        "table": "ui",
-        "key": "stage2_tune_file",
+        "table": "gui",
+        "key": "stage2_timing_profile",
         "field": "ui_stage2_tune_file",
         "type": "string",
         "default": "",
@@ -3504,7 +3434,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "nav_order",
         "field": "ui_nav_order",
         "type": "string",
@@ -3517,7 +3447,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "page",
         "field": "ui_page",
         "type": "int",
@@ -3530,8 +3460,8 @@
         "maximum": 7
       },
       {
-        "table": "ui",
-        "key": "worker",
+        "table": "gui",
+        "key": "selected_worker",
         "field": "ui_worker",
         "type": "int",
         "default": 1,
@@ -3543,7 +3473,7 @@
         "maximum": 1024
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "inspector",
         "field": "ui_inspector",
         "type": "bool",
@@ -3554,7 +3484,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "logs",
         "field": "ui_logs",
         "type": "bool",
@@ -3565,7 +3495,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "follow_log",
         "field": "ui_follow_log",
         "type": "bool",
@@ -3576,7 +3506,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "raw_log",
         "field": "ui_raw_log",
         "type": "bool",
@@ -3587,8 +3517,8 @@
         ]
       },
       {
-        "table": "ui",
-        "key": "dock",
+        "table": "gui",
+        "key": "workspace_layout",
         "field": "ui_dock",
         "type": "string",
         "default": "",
@@ -3599,8 +3529,8 @@
         "max_length": 524288
       },
       {
-        "table": "window",
-        "key": "x",
+        "table": "gui",
+        "key": "window_x",
         "field": "window_x",
         "type": "int",
         "default": -2147483648,
@@ -3612,8 +3542,8 @@
         "maximum": 2147483647
       },
       {
-        "table": "window",
-        "key": "y",
+        "table": "gui",
+        "key": "window_y",
         "field": "window_y",
         "type": "int",
         "default": -2147483648,
@@ -3625,8 +3555,8 @@
         "maximum": 2147483647
       },
       {
-        "table": "window",
-        "key": "width",
+        "table": "gui",
+        "key": "window_width",
         "field": "window_width",
         "type": "int",
         "default": 1280,
@@ -3638,8 +3568,8 @@
         "maximum": 16384
       },
       {
-        "table": "window",
-        "key": "height",
+        "table": "gui",
+        "key": "window_height",
         "field": "window_height",
         "type": "int",
         "default": 850,
@@ -3651,8 +3581,8 @@
         "maximum": 16384
       },
       {
-        "table": "window",
-        "key": "title_bar",
+        "table": "gui",
+        "key": "window_title_bar",
         "field": "window_title_bar",
         "type": "bool",
         "default": false,
@@ -3662,8 +3592,8 @@
         ]
       },
       {
-        "table": "window",
-        "key": "maximized",
+        "table": "gui",
+        "key": "window_maximized",
         "field": "window_maximized",
         "type": "bool",
         "default": false,
@@ -3673,30 +3603,8 @@
         ]
       },
       {
-        "table": "worker",
-        "key": "stage1_exe",
-        "field": "worker_stage1_exe",
-        "type": "string",
-        "default": "",
-        "description": [
-          "Explicit Stage1 worker executable.",
-          "显式 Stage1 worker 程序路径。"
-        ]
-      },
-      {
-        "table": "worker",
-        "key": "stage2_exe",
-        "field": "worker_stage2_exe",
-        "type": "string",
-        "default": "",
-        "description": [
-          "Explicit path to the CPU, CUDA or OpenCL Stage2 worker.",
-          "指定 CPU、CUDA 或 OpenCL Stage2 worker 的程序路径。"
-        ]
-      },
-      {
-        "table": "pet",
-        "key": "enabled",
+        "table": "gui",
+        "key": "pet_enabled",
         "field": "pet_enabled",
         "type": "bool",
         "default": false,
@@ -3706,8 +3614,8 @@
         ]
       },
       {
-        "table": "pet",
-        "key": "animate",
+        "table": "gui",
+        "key": "pet_animate",
         "field": "pet_animate",
         "type": "bool",
         "default": true,
@@ -3717,8 +3625,8 @@
         ]
       },
       {
-        "table": "pet",
-        "key": "left",
+        "table": "gui",
+        "key": "pet_left",
         "field": "pet_left",
         "type": "float",
         "default": 72,
@@ -3730,8 +3638,8 @@
         "maximum": 16384
       },
       {
-        "table": "pet",
-        "key": "skin",
+        "table": "gui",
+        "key": "pet_skin",
         "field": "pet_skin",
         "type": "string",
         "default": "classic",
@@ -3747,20 +3655,7 @@
         ]
       },
       {
-        "table": "worker",
-        "key": "count",
-        "field": "worker_count",
-        "type": "int",
-        "default": 0,
-        "minimum": 0,
-        "maximum": 64,
-        "description": [
-          "Number of v2 workers; 0 follows the workflow GUI worker count. Does not modify legacy preferences.",
-          "v2 worker 数量；0 跟随工作流中的数量，不改写旧版偏好。"
-        ]
-      },
-      {
-        "table": "ui",
+        "table": "gui",
         "key": "right_pages",
         "field": "ui_right_pages",
         "type": "int",
@@ -3773,7 +3668,7 @@
         "maximum": 254
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "right_page",
         "field": "ui_right_page",
         "type": "int",
@@ -3786,7 +3681,7 @@
         "maximum": 7
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "right_visible",
         "field": "ui_right_visible",
         "type": "bool",
@@ -3797,7 +3692,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "smooth_scroll",
         "field": "ui_smooth_scroll",
         "type": "bool",
@@ -3808,7 +3703,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "toasts",
         "field": "ui_toasts",
         "type": "bool",
@@ -3819,7 +3714,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "external_windows",
         "field": "ui_external_windows",
         "type": "bool",
@@ -3830,7 +3725,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "worker_chart_auto_y",
         "field": "ui_worker_chart_auto_y",
         "type": "bool",
@@ -3841,7 +3736,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "logs_keep_visible",
         "field": "ui_logs_keep_visible",
         "type": "bool",
@@ -3852,7 +3747,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "nav_collapsed",
         "field": "ui_nav_collapsed",
         "type": "bool",
@@ -3863,7 +3758,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "nav_expanded_width",
         "field": "ui_nav_expanded_width",
         "type": "int",
@@ -3876,7 +3771,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "nav_hide_tab_bar",
         "field": "ui_nav_hide_tab_bar",
         "type": "bool",
@@ -3887,7 +3782,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "workspace_hide_tab_bar",
         "field": "ui_workspace_hide_tab_bar",
         "type": "bool",
@@ -3898,7 +3793,7 @@
         ]
       },
       {
-        "table": "ui",
+        "table": "gui",
         "key": "right_hide_tab_bar",
         "field": "ui_right_hide_tab_bar",
         "type": "bool",

@@ -83,7 +83,7 @@ main → parse_cli → read_config（一次启动快照）→ normalize_settings
 
 `Stage1Request` 借用规范化输入至同步调用结束，`TaskResult` 拥有逐曲线结果及实际保存范围。task调用保存Module编码最终批次，并由发布器在短文件锁内显式返回已提交的METHOD记录区间，完成时强制重读；历史追加、去重或恢复不能用“末尾总数减请求数”代替区间证明。队列成功任务保留 checkpoint 至完成记录与源行提交成功；中断的完成记录优先恢复，无法判断队列提交版本时停止并保留证据。
 
-日志镜像的寿命和外部日志逐行读取由日志 Module 管理，P95 业务解释仍由同步代码负责。`save_sync_dir_1/2` 是独立备份；P95 使用 `p95_sync_dir`，先持久记录交接责任，再验证和发布目标 save，最后发布 worktodo.add。跨进程消费确认的限制和恢复方式见 [Stage1 使用说明](../usage/STAGE1.md#prime95-持久交接)。Stage2 的父任务与曲线子进程职责保持，见 [Stage2](STAGE2.md#父任务与曲线子进程)。
+日志镜像的寿命和外部日志逐行读取由日志 Module 管理，P95 业务解释仍由同步代码负责。`save_sync_dir_1/2` 是独立备份；P95 使用 `prime95_save_dir`，先持久记录交接责任，再验证和发布目标 save，最后发布 worktodo.add。跨进程消费确认的限制和恢复方式见 [Stage1 使用说明](../usage/STAGE1.md#prime95-持久交接)。Stage2 的父任务与曲线子进程职责保持，见 [Stage2](STAGE2.md#父任务与曲线子进程)。
 
 `tools/test/test_main_flow_boundaries.py` 检查当前项目内包含关系、公开/私有方向、旧目录和唯一入口；实际编译依赖与运行行为由构建及 worker 回归验证。编译影响验证使用 `test_host_incremental_boundaries.py`，须在无其他生产构建时运行，它保存并恢复原始源码字节。
 

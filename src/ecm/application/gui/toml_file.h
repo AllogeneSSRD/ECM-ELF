@@ -79,7 +79,7 @@ public:
 private:
     std::string path_;
     std::vector<Line> lines_;
-    int config_version_ = 1;
+    int config_version_ = ecm_config::business_config_version;
     bool loaded_ = false;
     bool dirty_ = false;
 };

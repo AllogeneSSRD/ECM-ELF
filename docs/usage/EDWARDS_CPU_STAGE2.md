@@ -55,13 +55,15 @@ ecm_stage2.exe --save ed.save --backend gwpoly --threads 4 --memory-mib 4096 --b
 CPU 的 `gwpoly` 默认从实际任务学习。自动 D 规划先用实际系数 FFT 和 `--memory-mib` 验证默认 D 及最多两个备选 D。先轮流补足各候选的重复次数，再选平均整曲线用时最短的合格候选。样本来自成功完成的无因子曲线。试用候选遇到算术或分配失败时，本进程将它从当前预检结果移除，以自动 D 重试该条曲线，重试不计入观测。
 
 ```toml
+config_version = 4
+
 [shared]
 tune_file = "tune.toml"
 
 [stage2]
-tune.runtime_enabled = true
-tune.min_repeats = 2
-tune.runtime_sample_limit = 10
+tune_runtime_enabled = true
+tune_min_repeats = 2
+tune_runtime_sample_limit = 10
 ```
 
 路径默认位于 `ecm.toml` 旁，支持 worker 覆盖。CLI `--tune-profile FILE` 优先，相对路径以启动目录为准。CLI 的 `--tune-min-repeats` 和 `--tune-runtime-samples` 可覆盖重复数和每个候选的样本上限。达到上限后保留已有均值。`--tune-runtime 0` 只读复用合格记录。将 `tune_file` 或 `--tune-profile` 显式置空可以停用读写。指定非零 `--d`、`--dry-run` 或 `--gw-check` 时直接走相应执行路径。
@@ -72,29 +74,31 @@ CPU 与 CUDA 使用同一发布锁写回文件。新版 worker 可加载只支�
 
 ## worktodo、停止与跨后端续算
 
-CPU 与 CUDA 构建都生成 `ecm_stage2.exe`。并存时放在不同目录。GUI 的 `stage2_exe` 可填写其中一个程序的路径；留空会搜索工作流和 GUI 目录中的统一名称、兼容名称和唯一匹配的子包。CPU 版接收与 GPU 相同的 worker 编号、队列事件和停止句柄。命令行也可消费同一份队列。
+CPU 与 CUDA 构建都生成 `ecm_stage2.exe`。并存时放在不同目录。GUI 的 `[gui] stage2_exe` 可填写其中一个程序的路径；留空会搜索工作流和 GUI 目录中的统一名称、兼容名称和唯一匹配的子包。CPU 版接收与 GPU 相同的 worker 编号、队列事件和停止句柄。命令行也可消费同一份队列。
 
 ```powershell
 .\cpu-stage2\ecm_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
-v3 配置示例。CPU 算术参数可按 worker 覆盖，命令行优先。
+以下为 v4 配置示例。CPU 算术参数可按 worker 覆盖，命令行优先。
 
 ```toml
+config_version = 4
+
 [shared]
 cpu_affinity = "0-7"
 
 [stage2]
-cpu.backend = "auto"
-cpu.threads = 4
-cpu.memory_mib = 512
+cpu_backend = "auto"
+stage2_cpu_threads = 4
+cpu_memory_mib = 512
 
 [worker.2]
-shared.cpu_affinity = "8-15"
-stage2.cpu.threads = 2
+cpu_affinity = "8-15"
+stage2_cpu_threads = 2
 ```
 
-`cpu.threads` 控制每条 CPU Stage2 曲线的计算线程数。`shared.cpu_affinity` 划定 worker 的 CPU 集合，也适用于同编号的 Stage1 和 GPU Stage2 worker。见 [亲和性和线程配置](../architecture/CONFIGURATION.md#worker-cpu-资源)。
+`stage2_cpu_threads` 控制每条 CPU Stage2 曲线的计算线程数。`cpu_affinity` 划定 worker 的 CPU 集合，也适用于同编号的 Stage1 和 GPU Stage2 worker。见 [亲和性和线程配置](../architecture/CONFIGURATION.md#worker-cpu-资源)。
 
 `ECMSTAGE2=` 从任务校验 N 和已知因子，`ECMSTAGE2N=` 从 save 确定 N。队列按有效 save 记录的 skip 和数量选择曲线，使用共享的 B2 和 b2_ratio 规则。CPU 队列当前支持 Edwards；有效的 Montgomery PARAM0 任务交给 CPU 时会报错并保留队列行。D 的 GPU 配置服务于 GPU 规划，CPU 使用自身规划器，显式固定 D 时使用 `--backend gwpoly --d D`。
 

@@ -20,7 +20,7 @@ arena cap 不足时可淘汰缓存或按次分配；owner 预算/headroom 不足
 
 ### 配置预算与实际占用
 
-`stage2_arena_mb` 是预算上限，不是启动时预分配量，也不表示必须选满这部分显存。通常设备 free 大于 reserve 时，D 规划上限为 **C=min(A, free−reserve)**；A 为正的用户 arena 预算，A=0 时仅使用 free−reserve。默认 reserve=768 MiB。例如 A=6400、free=7106 时，规划 C=6338 MiB，继续提高 A 不增加这次规划的可用空间。依据为 [plan.cpp:78](../../src/ecm/stage2/cuda/plan.cpp#L78)。运行 arena 可重新采用显式用户 cap，因此 `mem_budget.arena_cap` 显示 6400 不等于规划 JSON 的 `arena_cap_bytes` 必须也是 6400；该赋值见 [运行 arena](../../src/ecm/stage2/cuda/engine.cpp#L178)。
+`arena_mib` 是预算上限，不是启动时预分配量，也不表示必须选满这部分显存。通常设备 free 大于 reserve 时，D 规划上限为 **C=min(A, free−reserve)**；A 为正的用户 arena 预算，A=0 时仅使用 free−reserve。默认 reserve=768 MiB。例如 A=6400、free=7106 时，规划 C=6338 MiB，继续提高 A 不增加这次规划的可用空间。依据为 [plan.cpp:78](../../src/ecm/stage2/cuda/plan.cpp#L78)。运行 arena 可重新采用显式用户 cap，因此 `mem_budget.arena_cap` 显示 6400 不等于规划 JSON 的 `arena_cap_bytes` 必须也是 6400；该赋值见 [运行 arena](../../src/ecm/stage2/cuda/engine.cpp#L178)。
 
 所需大工作区由选定 P、算术位宽和实际 packing 共同决定。三缓冲、单 slice、L=2²⁶ 时，**big=3×8×2²⁶ bytes=1536 MiB**；L 增至2²⁷才跳到3072 MiB。同一档内提高预算不会扩大该请求。`ntt_workspace_stats.full_peak_bytes` 还包括 small、table 和 fuse base；独立 S4、giant、fold/frontier 与驱动占用另计。曲线结束的 `arena=a/b` 采用 full peak，而不是仅 big；`fold=a/b` 采用实际启用的 owner 占用，回退时 a=0，b 均保留 TOML 值。投影入口见 [ecm_stage2_console.h:49](../../src/ecm/stage2/console.h#L49)。
 

@@ -1,8 +1,10 @@
 #include "../../../src/ecm/application/gui_v2/ui_state.h"
+#include "../../../src/ecm/application/gui/toml_file.h"
 #include "../../../src/ecm/application/gui_v2/pet/window.h"
 #include "../../../src/ecm/application/gui_v2/generated/pet_skins.h"
 #include <cassert>
 #include <fstream>
+#include <filesystem>
 #include <cstdio>
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
@@ -19,7 +21,10 @@ int main(int argc, char** argv) {
     assert(client.bottom<outer.bottom);const auto client_bottom=ecmgui_v2::pet::place(client,{0,0,1920,1440},1,72);
     assert(client_bottom.bottom&&client_bottom.y+client_bottom.height==client.bottom);DestroyWindow(owner);
     const auto dir = fs::u8path(argv[1]); fs::create_directories(dir);
-    ecmgui_v2::UiState state; state.path = dir / "state.toml";
+    const auto path=dir/fs::u8path("配置.toml");
+    {std::ofstream out(path);out<<"config_version = 4\n[stage2]\nb2 = 40000\n[gui]\nstage1_exe = 'C:/中文/worker.exe' # preserve executable\n";}
+    ecmgui::TomlFile config;std::string error;assert(config.load(path.u8string(),error));
+    ecmgui_v2::UiState state;assert(state.load(config));
     assert(state.pet_skin=="classic");state.pet_skin="hi_love_elf";
     assert(ecmgui_v2::pet::skins.size()==4&&ecmgui_v2::pet::find_skin(state.pet_skin));
     assert(!ecmgui_v2::pet::find_skin("../../arbitrary-image"));
@@ -34,13 +39,14 @@ int main(int argc, char** argv) {
     assert(state.ui_language_file.empty());state.ui_language_file="custom-中文.xml";
     assert(state.ui_worker_chart_columns==1);state.ui_worker_chart_columns=2;
     state.ui_theme = "light"; state.ui_language = "zh"; state.pet_enabled = true; state.pet_left = 126.5f;
-    state.worker_stage1_exe = "C:\\中文\\worker.exe"; state.layout("[Window][Test]\nDockId=0x123\n");
+    state.layout("[Window][Test]\nDockId=0x123\n");
     state.ui_right_pages=(1<<3)|(1<<4);state.ui_right_page=3;state.ui_right_visible=false;state.ui_smooth_scroll=false;state.ui_toasts=false;
-    state.ui_logs_keep_visible=true;state.ui_worker_chart_auto_y=true;state.ui_nav_hide_tab_bar=true;state.ui_workspace_hide_tab_bar=true;state.ui_right_hide_tab_bar=true;
-    assert(state.save());
-    ecmgui_v2::UiState copy; copy.path = state.path; assert(copy.load());
+    state.ui_logs_keep_visible=true;state.ui_worker_chart_auto_y=true;state.ui_nav_hide_tab_bar=false;state.ui_workspace_hide_tab_bar=false;state.ui_right_hide_tab_bar=true;
+    state.apply_changes(config);assert(config.save(error));state.mark_saved();
+    assert(config.load(path.u8string(),error));
+    ecmgui_v2::UiState copy;assert(copy.load(config));
     assert(copy.ui_theme == "light" && copy.ui_language == "zh" && copy.pet_enabled && copy.pet_left == 126.5f);
-    assert(copy.worker_stage1_exe == state.worker_stage1_exe && copy.layout() == state.layout());
+    assert(config.get("gui","exe")=="C:/中文/worker.exe"&&copy.layout()==state.layout());
     assert(copy.ui_external_windows);
     assert(copy.window_title_bar&&copy.ui_nav_order=="40123567");
     assert(copy.ui_font_size==24);
@@ -49,40 +55,20 @@ int main(int argc, char** argv) {
     assert(copy.ui_stage2_timing_source=="tune"&&copy.ui_stage2_tune_file==state.ui_stage2_tune_file);
     assert(copy.ui_language_file=="custom-中文.xml");
     assert(copy.ui_worker_chart_columns==2);
-    assert(copy.ui_logs_keep_visible&&copy.ui_worker_chart_auto_y&&copy.ui_nav_hide_tab_bar&&copy.ui_workspace_hide_tab_bar&&copy.ui_right_hide_tab_bar);
+    assert(copy.ui_logs_keep_visible&&copy.ui_worker_chart_auto_y&&!copy.ui_nav_hide_tab_bar&&!copy.ui_workspace_hide_tab_bar&&copy.ui_right_hide_tab_bar);
     assert(copy.dock_tab_saved[0]&&copy.dock_tab_saved[1]&&copy.dock_tab_saved[2]);
     assert(copy.pet_skin=="hi_love_elf");
     assert(copy.ui_right_pages==24&&copy.ui_right_page==3&&!copy.ui_right_visible&&!copy.ui_smooth_scroll&&!copy.ui_toasts);
-    const auto legacy=dir/"old-sidecar.toml";{std::ofstream out(legacy);out<<"[ui]\nlanguage=\"zh\"\n";}
-    ecmgui_v2::UiState migrated;migrated.path=legacy;assert(migrated.load()&&migrated.ui_right_pages==0&&migrated.ui_smooth_scroll&&migrated.ui_toasts&&!migrated.ui_external_windows&&!migrated.window_title_bar&&migrated.ui_font_size==15&&migrated.ui_gpu_history_seconds==60&&migrated.ui_nav_order=="01237456");
-    {const auto old=dir/"seven-pages.toml";{std::ofstream out(old);out<<"[ui]\nnav_order=\"4012356\"\nright_pages=16\n";}ecmgui_v2::UiState previous;previous.path=old;assert(previous.load()&&previous.ui_nav_order=="40123567"&&previous.ui_right_pages==16);}
-    for(const auto order:{"0012345","012345","0123457"}){
-        const auto invalid_order=dir/(std::string("invalid-order-")+order+".toml");{std::ofstream out(invalid_order);out<<"[ui]\nnav_order=\""<<order<<"\"\n";}
-        ecmgui_v2::UiState bad_order;bad_order.path=invalid_order;assert(!bad_order.load()&&!bad_order.save());
-    }
-    const auto invalid_range=dir/"invalid-gpu-range.toml";{std::ofstream out(invalid_range);out<<"[ui]\ngpu_history_seconds=61\n";}
-    ecmgui_v2::UiState bad_range;bad_range.path=invalid_range;assert(!bad_range.load()&&!bad_range.save());
-    for(int columns:{0,3}){
-        const auto file=dir/("invalid-chart-columns-"+std::to_string(columns)+".toml");{std::ofstream out(file);out<<"[ui]\nworker_chart_columns="<<columns<<"\n";}
-        ecmgui_v2::UiState bad_columns;bad_columns.path=file;assert(!bad_columns.load()&&!bad_columns.save());
-    }
-    assert(migrated.ui_worker_chart_columns==1&&!migrated.ui_logs_keep_visible&&!migrated.ui_worker_chart_auto_y&&!migrated.dock_tab_saved[0]);
-    const auto invalid_font=dir/"invalid-font.toml";{std::ofstream out(invalid_font);out<<"[ui]\nfont_size=31\n";}
-    ecmgui_v2::UiState bad_font;bad_font.path=invalid_font;assert(!bad_font.load()&&!bad_font.save());
-    const auto invalid_offset=dir/"invalid-offset.toml";{std::ofstream out(invalid_offset);out<<"[ui]\nprimary_font_offset=7\n";}
-    ecmgui_v2::UiState bad_offset;bad_offset.path=invalid_offset;assert(!bad_offset.load()&&!bad_offset.save());
     const auto invalid = dir / "invalid.toml";
-    { std::ofstream out(invalid); out << "[state]\nschema=999\n"; }
-    std::ifstream original(invalid,std::ios::binary); const std::string before((std::istreambuf_iterator<char>(original)),{}); original.close();
-    ecmgui_v2::UiState bad; bad.path = invalid; assert(!bad.load() && !bad.save());
-    std::ifstream retained(invalid,std::ios::binary); const std::string after((std::istreambuf_iterator<char>(retained)),{});
-    assert(after == before);
-    const auto invalid_layout=dir/"invalid-layout.toml";
-    {std::ofstream out(invalid_layout);out<<"[ui]\ndock=\"0\"\n";}
-    ecmgui_v2::UiState bad_layout;bad_layout.path=invalid_layout;assert(!bad_layout.load()&&!bad_layout.save());
-    const auto invalid_skin=dir/"invalid-skin.toml";
-    {std::ofstream out(invalid_skin);out<<"[pet]\nskin=\"../../outside\"\n";}
-    ecmgui_v2::UiState bad_skin;bad_skin.path=invalid_skin;assert(!bad_skin.load()&&!bad_skin.save());
+    for(const auto option:{"nav_order='0012345'","nav_order='012345'","nav_order='0123457'",
+                           "gpu_history_seconds=61","worker_chart_columns=0","worker_chart_columns=3",
+                           "body_font_size=31","primary_font_offset=7","workspace_layout='0'",
+                           "pet_skin='../../outside'"}){
+        {std::ofstream out(invalid);out<<"config_version=4\n[gui]\n"<<option<<'\n';}
+        assert(config.load(invalid.u8string(),error));
+        ecmgui_v2::UiState bad;assert(!bad.load(config)&&!bad.writable);
+        assert(!config.dirty());
+    }
     using ecmgui_v2::pet::place;
     const auto top = place({100,400,1300,1200}, {0,0,1920,1440}, 1, 72);
     assert(!top.bottom && top.x == 172 && top.y == 276 && top.width == 112 && top.height == 124);
@@ -103,5 +89,5 @@ int main(int argc, char** argv) {
         const auto y=ecmgui_v2::pet::floating_y(inside,work.top,scale,rise,inside.height);
         assert(y+inside.height==1200-std::lround(rise*scale));
     }
-    std::puts("PASS: sidecar roundtrip, invalid-state retention, Unicode paths, pet work-area/DPI geometry");
+    std::puts("PASS: main TOML preference roundtrip, invalid-value retention, Unicode paths, pet work-area/DPI geometry");
 }

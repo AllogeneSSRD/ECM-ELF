@@ -11,17 +11,17 @@ from test_cpu_stage2_queue import HIT
 def setup(folder, gpu, device=None, worker=None):
     folder.mkdir()
     config = (
-        'config_version = 3\n[shared]\nworktodo_file = "worktodo.txt"\n'
+        'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
         'finished_file = "finished.txt"\nlog_file = ""\ntune_file = ""\n'
-        f'[stage2]\nsave_dir = "."\ngpu_device = {gpu}\nd = 210\n'
-        'gpu_backend = "cuda"\ncpu.backend = "plain"\n'
-        'cuda.curve_concurrency = "serial"\ntune.runtime_enabled = false\n'
-        'results_file = "results.jsonl"\n'
+        f'[stage2]\nstage2_save_dir = "."\nstage2_gpu_device = {gpu}\nd = 210\n'
+        'stage2_gpu_backend = "cuda"\ncpu_backend = "plain"\n'
+        'curve_concurrency = "serial"\ntune_runtime_enabled = false\n'
+        'stage2_results_file = "results.jsonl"\n'
     )
     if device:
         config += f'device = "{device}"\n'
     if worker:
-        config += f'[worker.3]\nstage2.device = "{worker}"\n'
+        config += f'[worker.3]\ndevice = "{worker}"\n'
     (folder / 'ecm.toml').write_text(config, encoding='utf-8')
     (folder / 'hit.save').write_text(HIT, encoding='utf-8')
 

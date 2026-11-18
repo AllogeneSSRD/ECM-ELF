@@ -24,10 +24,10 @@ def run(exe, folder, device, p, b1, curves, window, backend):
     config = folder / "ecm.toml"
     save = folder / "out.save"
     config.write_text(
-        'config_version = 3\n[shared]\nlog_file = ""\n'
-        f'[stage1]\nparam = "e"\ntarget = "gpu"\ngpu_algorithm = "ntt"\ngpu_device = {device}\n'
-        f'edwards_naf_window_bits = {window}\nntt.convolution = "weighted"\nntt.window_bits = 16\n'
-        f'save_dir = "{folder.as_posix()}"\nexponent_cache_dir = "off"\nhandoff.mode = "off"\n')
+        'config_version = 4\n[shared]\nlog_file = ""\n'
+        f'[stage1]\nparam = "e"\ntarget = "gpu"\ngpu_algorithm = "ntt"\nstage1_gpu_device = {device}\n'
+        f'edwards_naf_window_bits = {window}\nntt_convolution = "weighted"\nntt_window_bits = 16\n'
+        f'stage1_save_dir = "{folder.as_posix()}"\nexponent_cache_dir = "off"\nhandoff_mode = "off"\n')
     env = {key: value for key, value in os.environ.items() if not key.startswith(("ECM_", "NTT_"))}
     if backend != "default":
         env["ECM_EDWARDS_NTT_DICTIONARY"] = backend

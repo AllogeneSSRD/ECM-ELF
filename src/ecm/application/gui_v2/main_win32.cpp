@@ -71,7 +71,6 @@ struct Options {
     std::string pet_skin;
     int external_windows=-1;
     std::string config;
-    std::filesystem::path ui_state;
     int start_worker = 0;
     int pet = -1;
     bool pet_static = false;
@@ -229,14 +228,11 @@ struct ImGuiSession {
 int run(const Options& options, int show, FILE* log) {
     ImGui_ImplWin32_EnableDpiAwareness();
     ecmgui_v2::UiState state;
-    state.path = options.ui_state.empty() ? ecmgui_v2::UiState::default_path(options.config) : std::filesystem::absolute(options.ui_state);
     if (!options.config.empty()) {
-        std::error_code error;
-        const auto business = std::filesystem::weakly_canonical(std::filesystem::u8path(options.config));
-        if (std::filesystem::equivalent(business, state.path, error) || _wcsicmp(business.c_str(), std::filesystem::weakly_canonical(state.path).c_str()) == 0)
-            throw std::runtime_error("Business TOML and UI sidecar must be distinct");
+        ecmgui::TomlFile startup_config;
+        std::string error;
+        if (startup_config.load(options.config,error)) state.load(startup_config);
     }
-    state.load();
     if (options.explicit_theme) state.ui_theme = options.settings.light ? "light" : "dark";
     if (options.explicit_language) {state.ui_language = options.settings.chinese ? "zh" : "en";state.ui_language_file=options.settings.chinese?"chineseSimplified.xml":"english.xml";}
     if(state.ui_language_file.empty())state.ui_language_file=state.ui_language=="zh"?"chineseSimplified.xml":"english.xml";
@@ -285,7 +281,7 @@ int run(const Options& options, int show, FILE* log) {
     ecmgui_v2::pet::Window companion(native.hwnd, state, log);
     current_pet=&companion;
     struct ResetPetPointer{~ResetPetPointer(){current_pet=nullptr;}} reset_pet_pointer;
-    app.initialize(options.config, options.no_nvml || show_components); app.test_float = options.detach_probe;
+    app.initialize(options.config, options.no_nvml || show_components, false); app.test_float = options.detach_probe;
     if (!state.notice.empty()) app.trace(state.notice);
     if(!language_error.empty())app.toast(language_error,true);
     if(!fonts.notice.empty()){app.status=fonts.notice;app.trace(fonts.notice);}
@@ -521,7 +517,7 @@ int run(const Options& options, int show, FILE* log) {
         state.window_maximized = IsZoomed(native.hwnd) != FALSE;
         if (!state.window_maximized) { RECT rect{}; GetWindowRect(native.hwnd, &rect); state.window_x = rect.left; state.window_y = rect.top; state.window_width = rect.right - rect.left; state.window_height = rect.bottom - rect.top; }
     }
-    if (!state.save()) app.trace(state.notice);
+    if (app.ready && !show_components && !app.persist_preferences()) app.trace(app.status);
     current_app = nullptr; audit_app = false;
     renderer.shutdown();
     audit_settings = nullptr;
@@ -571,11 +567,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show) {
                 if(!ecmgui_v2::pet::find_skin(options.pet_skin))throw std::runtime_error("Unknown ELY skin: "+options.pet_skin);
             }
             else if ((argument == L"--diagnostics" || argument == L"--frames" || argument == L"--inject-failure" ||
-                      argument == L"--theme" || argument == L"--language" || argument == L"--ui-scale" || argument == L"--config" || argument == L"--ui-state" || argument == L"--start-worker") && i + 1 < args.size()) {
+                      argument == L"--theme" || argument == L"--language" || argument == L"--ui-scale" || argument == L"--config" || argument == L"--start-worker") && i + 1 < args.size()) {
                 const auto value = args[++i];
                 if (argument == L"--diagnostics") options.diagnostics = value;
                 else if (argument == L"--config") options.config = std::filesystem::absolute(value).u8string();
-                else if (argument == L"--ui-state") options.ui_state = value;
                 else if (argument == L"--start-worker") {
                     size_t used = 0; options.start_worker = std::stoi(value, &used);
                     if (used != value.size() || options.start_worker < 1 || options.start_worker > 1024) throw std::runtime_error("Invalid --start-worker");

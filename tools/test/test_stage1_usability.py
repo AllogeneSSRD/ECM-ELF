@@ -77,10 +77,11 @@ def identity_case(exe, out):
     user,computer,aid=(secrets.token_hex(12),secrets.token_hex(12),secrets.token_hex(16))
     task=f'ECM2={aid},1,2,130,-1,20,10000,2,20260922,"3"\n'
     queue=work/'worktodo.txt';queue.write_text('[Worker #2]\n'+task)
-    ini=work/'ecm.toml';ini.write_text(f'[shared]\nuser="{secrets.token_hex(12)}"\ncomputer="{secrets.token_hex(12)}"\n'
-        f'worktodo={toml_string(queue)}\n[stage1]\ncurve="ed"\ntarget="cpu"\nimpl="scalar"\nstage1_threads=1\n'
-        f'finished={toml_string(work/"finished.txt")}\ntmp_dir={toml_string(work)}\nlog_file=""\n'
-        f'[workers.2.shared]\nuser="{user}"\ncomputer="{computer}"\n',encoding='utf-8')
+    ini=work/'ecm.toml';ini.write_text(f'config_version = 4\n[shared]\nuser="{secrets.token_hex(12)}"\ncomputer="{secrets.token_hex(12)}"\n'
+        f'worktodo_file={toml_string(queue)}\nfinished_file={toml_string(work/"finished.txt")}\nlog_file=""\n'
+        f'[stage1]\nparam="e"\ntarget="cpu"\ncpu_implementation="scalar"\nstage1_cpu_threads=1\n'
+        f'stage1_save_dir={toml_string(work)}\nhandoff_mode="off"\n[worker.2]\nuser="{user}"\ncomputer="{computer}"\n',
+        encoding='utf-8')
     p=subprocess.run([str(exe),'--config',str(ini),'--worker','2'],cwd=work,capture_output=True,timeout=120)
     (work/'run.log').write_bytes(p.stdout+p.stderr)
     assert p.returncode==0, 'identity case failed; inspect private evidence log'
@@ -134,7 +135,7 @@ def main():
         work = out/name
         work.mkdir()
         ini = work/'ecm.toml'
-        ini.write_text('[shared]\nuser=""\ncomputer=""\n',encoding='utf-8')
+        ini.write_text('config_version = 4\n[shared]\nuser=""\ncomputer=""\nlog_file=""\n', encoding='utf-8')
         cmd = [exe, '--curve', model, '--target', target,
                '-d', args.device, '-sigma', 20260922, '-gpucurves', count,
                '--tmp-dir', work, '--config', ini, '-save', work/'points.save', b1, b1]
@@ -229,7 +230,8 @@ def main():
                     pending.write_bytes(before)
                     shutil.copy2(work/'stage1_results.jsonl',pending_work/'stage1_results.jsonl')
                     shutil.copy2(work/'points.save',pending_work/'points.save')
-                    ini=pending_work/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n',encoding='utf-8')
+                    ini=pending_work/'ecm.toml'
+                    ini.write_text('config_version = 4\n[shared]\nuser=""\ncomputer=""\nlog_file=""\n',encoding='utf-8')
                     pending_replay=list(replay)
                     for option,value in (('--config',ini),('--tmp-dir',pending_work),('-savea',pending_work/'points.save')):
                         pending_replay[pending_replay.index(option)+1]=value
@@ -245,8 +247,11 @@ def main():
             work=out/name;work.mkdir()
             queue=work/'worktodo.txt';task='ECM2=1,2,347,-1,1000,100000,4,20260922\n';queue.write_text(task)
             blocked=work/'blocked';blocked.write_text('preserved publication failure fixture\n')
-            ini=work/'ecm.toml';ini.write_text(f'[shared]\nworktodo={toml_string(queue)}\n[stage1]\ncurve="{model}"\ntarget="cpu"\nimpl="scalar"\nstage1_threads=2\n'
-                f'finished={toml_string(work/"finished.txt")}\ntmp_dir={toml_string(work)}\nlog_file=""\nstage1_submission_file={toml_string(blocked/"results.json.txt")}\n',encoding='utf-8')
+            param = 'e' if model == 'ed' else 'm0'
+            ini=work/'ecm.toml';ini.write_text(f'config_version = 4\n[shared]\nworktodo_file={toml_string(queue)}\n'
+                f'finished_file={toml_string(work/"finished.txt")}\nlog_file=""\n[stage1]\nparam="{param}"\ntarget="cpu"\n'
+                f'cpu_implementation="scalar"\nstage1_cpu_threads=2\nstage1_save_dir={toml_string(work)}\nhandoff_mode="off"\n'
+                f'stage1_submission_file={toml_string(blocked/"results.json.txt")}\n',encoding='utf-8')
             call(name+'_failed',[exe,'--config',ini],work,good=False)
             assert queue.read_text()==task
             primary=work/f'.{"e" if model=="ed" else "m0"}_s1_m347_1000.ckpt'
@@ -287,12 +292,19 @@ def main():
         queue = work/'worktodo.txt'
         queue.write_text(task)
         ini = work/'ecm.toml'
-        ini.write_text(f'[shared]\nworktodo={toml_string(queue)}\n[stage1]\ncurve="{model}"\ntarget="{target}"\nimpl="{impl}"\ngpu_param={param}\ndevice={args.device}\n'
-                       f'ckpt_seconds=0.001\nckpt_backups=2\nstage1_threads=1\nfinished={toml_string(work/"finished.txt")}\n'
-                       f'tmp_dir={toml_string(work)}\nlog_file=""\np95_worktodo_path={toml_string(work/"absent_prime95"/"worktodo.txt")}\n',encoding='utf-8')
-        # Only Edwards and param2 ignore transfer. Do not hand off other cases.
-        if model != 'ed' and param != 2:
-            ini.write_text(ini.read_text(encoding='utf-8').replace(f'p95_worktodo_path={toml_string(work/"absent_prime95"/"worktodo.txt")}', 'p95_worktodo_path=""'),encoding='utf-8')
+        curve_param = 'e' if model == 'ed' else f'm{param}'
+        # Edwards and PARAM2 may finish with no Prime95 directory. Keep their
+        # saves local in this checkpoint test.
+        if model == 'ed' or param == 2:
+            handoff = ('handoff_mode="prime95"\nhandoff_unsupported="keep-save"\n'
+                       f'prime95_worktodo_file={toml_string(work/"absent_prime95"/"worktodo.txt")}\n')
+        else:
+            handoff = 'handoff_mode="off"\n'
+        ini.write_text(f'config_version = 4\n[shared]\nworktodo_file={toml_string(queue)}\n'
+                       f'finished_file={toml_string(work/"finished.txt")}\nlog_file=""\n[stage1]\n'
+                       f'param="{curve_param}"\ntarget="{target}"\ncpu_implementation="{impl}"\nstage1_gpu_device={args.device}\n'
+                       f'checkpoint_interval_seconds=0.001\ncheckpoint_backups=2\nstage1_cpu_threads=1\n'
+                       f'stage1_save_dir={toml_string(work)}\n'+handoff,encoding='utf-8')
         sa = Security(ctypes.sizeof(Security), None, True)
         event = kernel.CreateEventW(ctypes.byref(sa), True, False, None)
         cmd = [exe, '--config', ini]
@@ -338,7 +350,8 @@ def main():
         call(name+'_reject_target',cmd,work,good=False)
         assert primary.read_bytes()==original
         queue.write_text(task)
-        ini.write_text(ini.read_text(encoding='utf-8').replace('ckpt_seconds=0.001', 'ckpt_seconds=0'),encoding='utf-8')
+        ini.write_text(ini.read_text(encoding='utf-8').replace(
+            'checkpoint_interval_seconds=0.001', 'checkpoint_interval_seconds=0'), encoding='utf-8')
         backup = primary.with_name(primary.stem+'.bak'+primary.suffix)
         assert backup.exists()
         primary.write_bytes(original[:-4]+b'BAD\n')

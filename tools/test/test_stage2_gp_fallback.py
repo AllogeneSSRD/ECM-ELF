@@ -26,7 +26,7 @@ def main():
         save=work/'fixture.save'
         save.write_text(f'METHOD=ECM; PARAM=0; SIGMA=6; B1=2; N=(2^{exponent}-1); X=0x{raw:x}; CHECKSUM={2*6*n*raw%4294967291};\n',encoding='utf-8')
         gp=a.gp.resolve() if mode in ('real','blocked_log') else work/'missing_gp.exe' if mode in ('missing','probable','partial') else a.fixture.resolve()
-        ini=work/'ecm.toml';ini.write_text(f'[shared]\nuser=""\ncomputer=""\n[stage2]\nstage2_factorize_hits=true\nstage2_gp={json.dumps(str(gp))}\nstage2_factor_timeout=1\n',encoding='utf-8')
+        ini=work/'ecm.toml';ini.write_text(f'config_version=4\n[shared]\nuser=""\ncomputer=""\n[stage2]\ndevice="gpu"\ndecompose_factors=true\ngp={json.dumps(str(gp))}\nfactor_timeout_seconds=1\n',encoding='utf-8')
         if mode=='blocked_log':(work/'factor_details').write_text('Deliberate non-directory diagnostic path',encoding='utf-8')
         results=work/'result.jsonl';log=work/'curve.log'
         queue=work/'worktodo.txt';queue.write_text(f'ECMSTAGE2=1,2,{exponent},-1,"fixture.save",3,0,1\n',encoding='utf-8')

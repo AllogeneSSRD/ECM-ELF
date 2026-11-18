@@ -106,7 +106,7 @@ def main():
         case['save'] = str(dest)
         case['save_sha256'] = sha(dest)
     config = out / 'manual.toml'
-    config.write_text('config_version=3\n[stage2]\ndiagnostics.debug_log=false\nshort_calibration=false\ntune.runtime_enabled=false\n')
+    config.write_text('config_version=4\n[stage2]\ndevice="gpu"\ndebug_log=false\nshort_calibration=false\ntune_runtime_enabled=false\n')
     baseline_env = environment(0, a.max_k, a.max_words, a.min_calls, a.diagnostic, a.variant)
     receipt = dict(identity=identity, cases=cases, device=a.device, diagnostic=a.diagnostic,
                    repeats=a.repeats, variant=a.variant, ini_sha256=sha(config), script_sha256=sha(Path(__file__)),

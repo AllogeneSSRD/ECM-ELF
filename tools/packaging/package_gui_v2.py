@@ -52,7 +52,7 @@ def main():
     if local_pari:
         shutil.copy2(ROOT/'third_party/pari-2.17.3/COPYING',licenses/'PARI-GPL-2.0.txt')
         shutil.copy2(ROOT/'src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md',licenses/'PARI-NOTICE.md')
-    (package/'docs').mkdir();shutil.copy2(ROOT/'docs/usage/GUI_V2.md',package/'docs/GUI_V2.md');shutil.copy2(ROOT/'docs/GUI_V2_STATE_REFERENCE.md',package/'docs/GUI_V2_STATE_REFERENCE.md')
+    (package/'docs').mkdir();shutil.copy2(ROOT/'docs/usage/GUI_V2.md',package/'docs/GUI_V2.md')
     shutil.copy2(ROOT/'config/ecm.toml.example',package/'ecm.toml.example')
     for filename in CONFIG_REFERENCES:
         shutil.copy2(ROOT/'docs'/filename,package/filename)
@@ -62,7 +62,7 @@ def main():
            'src/ecm/platform/generated','src/io','include/ecm','third_party/imgui',
            'third_party/imgui_vulkan','third_party/gui_v2_vulkan','third_party/gui_v2_pet',
            'assets/gui_v2','tools/test/gui','tools/test/gui_v2','tools/gen','tools/build','config',
-           'LICENSE','docs/GUI_V2_STATE_REFERENCE.md','docs/usage/GUI_V2.md']
+           'LICENSE','docs/usage/GUI_V2.md']
     tracked=subprocess.check_output(['git','ls-files','-z','--',*roots],cwd=ROOT).decode().split('\0')
     deleted=subprocess.check_output(['git','ls-files','--deleted','-z','--',*roots],cwd=ROOT).decode().split('\0')
     selected=set(tracked)-set(deleted)
@@ -134,7 +134,7 @@ Choose ELY skin in Settings, or --pet --pet-skin miss_pink_elf,
 Skin PNGs are external files in assets/ beside the executable, not embedded.
 Copy or replace a registered atlas and restart; see docs/GUI_V2.md for format.
 Additional unregistered names/IDs still require a rebuilt skin registry.
-UI preferences are independent in LocalAppData; --ui-state overrides the path.
+GUI preferences and worker paths are stored in the [gui] section of the selected ecm.toml.
 UI translations are external UTF-8 XML files under localization/v2/.
 Edit english.xml/chineseSimplified.xml and use Language > Reload localization.
 The options.*.xml files are generated from the configuration schema.

@@ -100,10 +100,10 @@ A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 
 
 ### Run Stage1 from worktodo
 
-This example assumes `ecm_cuda.exe`, `ecm_stage2.exe` and `ecm.toml` are in the same directory and commands run there. Merge these keys into an existing TOML if you have one. Create `ecm.toml`:
+This example assumes `ecm_cuda.exe`, `ecm_stage2.exe` and `ecm.toml` are in the same directory and commands run there. If you already have a v3 workflow, [convert it to v4](docs/architecture/CONFIGURATION.md#升级旧配置) first. Create `ecm.toml`:
 
 ```toml
-config_version = 3
+config_version = 4
 
 [shared]
 worktodo_file = "worktodo.txt"
@@ -111,9 +111,9 @@ worktodo_file = "worktodo.txt"
 [stage1]
 param = "m0"
 target = "gpu"
-gpu_device = 0
-save_dir = "."
-handoff.mode = "off"
+stage1_gpu_device = 0
+stage1_save_dir = "."
+handoff_mode = "off"
 
 [stage2]
 device = "gpu"
@@ -147,7 +147,7 @@ This command consumes Stage1 assignments for the selected worker. The first assi
 
 ### Run and tune CUDA Stage2
 
-After the first Stage1 assignment completes without a factor, add the following line to `[Worker #1]` in the same `worktodo.txt`. Give it the actual save name and the desired B2. To queue Stage2 automatically for future jobs, set `[stage1] handoff.mode` to `"ecm-elf"`. See the [handoff guide](docs/usage/STAGE1.md#自动交接到-stage2).
+After the first Stage1 assignment completes without a factor, add the following line to `[Worker #1]` in the same `worktodo.txt`. Give it the actual save name and the desired B2. To queue Stage2 automatically for future jobs, set `[stage1] handoff_mode` to `"ecm-elf"`. See the [handoff guide](docs/usage/STAGE1.md#自动交接到-stage2).
 
 ```text
 [Worker #1]
@@ -202,7 +202,7 @@ In `[stage1]`, set `target = "cpu"` and choose `param = "m0"` for Suyama PARAM0 
 Example local Montgomery configuration:
 
 ```toml
-config_version = 3
+config_version = 4
 
 [shared]
 worktodo_file = "worktodo.txt"
@@ -213,8 +213,8 @@ target = "cpu"
 cpu_implementation = "auto"
 cpu_simd_reduction = "auto"
 montgomery_lcm_multiplier = "1"
-cpu_threads = 0
-save_dir = "saves"
+stage1_cpu_threads = 0
+stage1_save_dir = "saves"
 ```
 
 `edwards_naf_window_bits` controls the Edwards window. An explicit `cpu_simd_reduction` other than `"auto"` requires `cpu_implementation = "simd"`. The `"mersenne-fold"` reduction requires the actual modulus to be a full Mersenne number. See the [TOML reference](docs/ECM_TOML_REFERENCE.en.md).
@@ -230,7 +230,7 @@ Common CPU recipes:
 
 `save_name_pattern` controls automatically named CPU and GPU saves. A queue entry can name a save with its curve prefix, and a one-off command can specify a path with `-save`. To resume an unfinished CPU job from its checkpoint, rerun the original command.
 
-Each eight-curve SIMD batch is one CPU scheduling task, so 64 curves create at most eight parallel batches. `cpu_threads = 0` selects the thread count automatically. An explicit count is also bounded by the number of tasks. Give concurrent processes separate `save_dir` paths to avoid filename collisions.
+Each eight-curve SIMD batch is one CPU scheduling task, so 64 curves create at most eight parallel batches. `stage1_cpu_threads = 0` selects the thread count automatically. An explicit count is also bounded by the number of tasks. Give concurrent processes separate `save_dir` paths to avoid filename collisions.
 
 Explicit `simd` requires AVX-512 IFMA. If a TOML edit has no effect, check `[worker.N]` and CLI overrides. To cross-check Stage1, compare final points at the same N, B1, sigma, parametrization, and scalar convention.
 
@@ -267,12 +267,12 @@ When Stage1 finishes without a factor and publishes supported saved points, it c
 
 ```toml
 [stage1]
-# handoff.mode = "ecm-elf"  # "off" | "ecm-elf" | "prime95"
-# handoff.workers = "2-3"  # ID, list, range or "auto"
-# handoff.worktodo_file = "worktodo-stage2.txt"
+# handoff_mode = "ecm-elf"  # "off" | "ecm-elf" | "prime95"
+# handoff_workers = "2-3"  # ID, list, range or "auto"
+# handoff_worktodo_file = "worktodo-stage2.txt"
 ```
 
-The default `"ecm-elf"` appends to the source worker's queue. Use `handoff.workers` or `handoff.worktodo_file` to choose another worker or queue. `"off"` keeps the save. `"prime95"` requires `prime95.worktodo_file` and `prime95.save_dir` and delivers compatible tasks to `worktodo.add`. ECM-ELF handles Edwards and other saves that Prime95 cannot accept by default. [Stage1 handoff](docs/usage/STAGE1.md#自动交接到-stage2)
+The default `"ecm-elf"` appends to the source worker's queue. Use `handoff_workers` or `handoff_worktodo_file` to choose another worker or queue. `"off"` keeps the save. `"prime95"` requires `prime95_worktodo_file` and `prime95_save_dir` and delivers compatible tasks to `worktodo.add`. ECM-ELF handles Edwards and other saves that Prime95 cannot accept by default. [Stage1 handoff](docs/usage/STAGE1.md#自动交接到-stage2)
 
 ### Saves and checkpoints are different
 
@@ -283,7 +283,7 @@ Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PAR
 <a id="stage2"></a>
 ## Separate CUDA Stage2
 
-`ecm_stage2.exe` continues from a completed Stage1 save. Set `[stage2] device = "auto" | "cpu" | "gpu"` to select the execution device. The default `auto` selects CPU. Set `gpu` for Montgomery saves. To change Worker 3 only, set `stage2.device = "cpu"` under `[worker.3]`. Use `--target` for a one-off override.
+`ecm_stage2.exe` continues from a completed Stage1 save. Set `[stage2] device = "auto" | "cpu" | "gpu"` to select the execution device. The default `auto` selects CPU. Set `gpu` for Montgomery saves. To change Worker 3 only, set `device = "cpu"` under `[worker.3]`. Use `--target` for a one-off override.
 
 ```powershell
 .\ecm_stage2.exe --target gpu --save .\m0_m3701_260e6.save --b2 26000000000 --device 0

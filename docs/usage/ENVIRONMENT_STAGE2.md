@@ -98,13 +98,13 @@ try {
 | `ECM_STAGE2_QUEUE_D_SEARCH` | `0` | `1` 让双槽 `auto` 评估邻近 D。仅在 D 未固定且未强制使用租约模式时适用。 |
 | `ECM_STAGE2_PHASE_GATE` | 无外置互斥量 | Windows 实验接口，格式为 `掩码:组名`。同组进程共享一个互斥量；组名 1–48 字符，只接受字母、数字、`-` 和 `_`。非零掩码与独立 tune 命令互斥，并关闭曲线运行时学习及启动短校准。手动设置会阻止队列自动双槽和预启动。 |
 | `ECM_STAGE2_PHASE_TRACE` | `0` | `0\|1`。在 debug 日志输出 `stage2_phase_window`，记录起止时间、等待时间和是否加锁，涵盖未加锁阶段。启用 NVTX 跟踪时也会开启阶段标记。 |
-| `ECM_STAGE2_FTREE_LEASE` | `0` | `0\|1`，有 phase gate 组名时允许复用同组大工作区租约。生产 worker 会根据 `cuda.workspace_policy` 的固定队列路线写入或清除该变量，队列对照使用该 TOML 选项。 |
+| `ECM_STAGE2_FTREE_LEASE` | `0` | `0\|1`，有 phase gate 组名时允许复用同组大工作区租约。生产 worker 会根据 `workspace_policy` 的固定队列路线写入或清除该变量，队列对照使用该 TOML 选项。 |
 
 掩码位依次为 Baby `1`、F 树 `2`、逆多项式 `4`、Giant `8`、G 树及 fold `16`、下降 `32`、GCD `64`。例如 `57 = 1+8+16+32`。正常队列测试通过 `ECM_STAGE2_QUEUE_PHASE_MASK` 调整掩码，由程序生成子进程的组名。[双槽用法](STAGE2.md#cuda-双曲线调度) · [流水线默认条件](../../src/ecm/stage2/process.cpp#L35) · [队列准入](../../src/ecm/stage2/task.cpp#L665) · [邻近 D 条件](../../src/ecm/stage2/task.cpp#L895) · [阶段与租约实现](../../src/ecm/stage2/cuda/phase_gate.h#L16)
 
 ## 原生 OpenCL Stage2
 
-仅影响 `ecm_opencl_stage2.exe`。生产启动器会把 `opencl.point_plan`、非零的 `opencl.point_chunk`／`point_group`／`point_window`、关闭的 `opencl.short_point_batch` 和实际生效的调优配置传入环境。因此这些 TOML 值可覆盖同名环境设置。选择 `opencl.point_plan="auto"` 后才进入 `ECM_OPENCL_POINTS` 的显式分支。显式点参数和树实验开关跳过自动点计划比较。AMD 的目标大于 512 bits 时使用 CPU 点，仍在 OpenCL 上运行多项式阶段。
+仅影响 `ecm_opencl_stage2.exe`。生产启动器会把 `opencl_point_plan`、非零的 `opencl_point_chunk`／`point_group`／`point_window`、关闭的 `opencl_short_point_batch` 和实际生效的调优配置传入环境。因此这些 TOML 值可覆盖同名环境设置。选择 `opencl_point_plan="auto"` 后才进入 `ECM_OPENCL_POINTS` 的显式分支。显式点参数和树实验开关跳过自动点计划比较。AMD 的目标大于 512 bits 时使用 CPU 点，仍在 OpenCL 上运行多项式阶段。
 
 | 环境变量 | 未设置时 | 取值和效果 |
 |---|---|---|
@@ -129,9 +129,9 @@ try {
 
 | 环境变量 | 生产来源及用途 |
 |---|---|
-| `ECM_OPENCL_CONFIG_PLAN` | `opencl.point_plan`，传递 `auto`、`cpu`、`device` 或 `chain`。 |
-| `ECM_OPENCL_RUNTIME_PROFILE` | `opencl.tune_file` 解析后的本机路径，仅在运行时学习启用、点计划为 `auto` 且已指定独立 TOML 文件时传递。 |
-| `ECM_OPENCL_RUNTIME_REPEATS` | `tune.min_repeats`，候选需要的实测曲线数，默认 2。内部采样器接受 1–1000。 |
+| `ECM_OPENCL_CONFIG_PLAN` | `opencl_point_plan`，传递 `auto`、`cpu`、`device` 或 `chain`。 |
+| `ECM_OPENCL_RUNTIME_PROFILE` | `opencl_tune_file` 解析后的本机路径，仅在运行时学习启用、点计划为 `auto` 且已指定独立 TOML 文件时传递。 |
+| `ECM_OPENCL_RUNTIME_REPEATS` | `tune_min_repeats`，候选需要的实测曲线数，默认 2。内部采样器接受 1–1000。 |
 | `ECM_OPENCL_RUNTIME_BUDGET` | `tune.runtime_samples`，候选总样本预算，采样器无上游设置时取 10，接受 0–1000。预算至少容纳两组完整对照才发起采样。 |
 
 [OpenCL Stage2 用法](STAGE2.md#原生-opencl-入口) · [配置传递](../../src/ecm/stage2/cuda/main.cpp#L561) · [点计划条件](../../src/ecm/stage2/opencl/engine.cpp#L102) · [点生成及选型](../../src/ecm/stage2/opencl/engine.cpp#L193) · [多项式开关](../../src/ecm/stage2/opencl/engine.cpp#L419) · [学习预算](../../src/ecm/stage2/opencl/point_tune.h#L40)

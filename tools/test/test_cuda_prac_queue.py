@@ -21,17 +21,17 @@ def run(exe, folder, name, env, args=(), success=True):
 
 def write_config(folder, device, chain, search, stage2=False):
     text = [
-        "config_version = 3", "[shared]", 'log_file = ""', 'worktodo_file = "worktodo.txt"',
-        "[stage1]", 'target = "gpu"', 'gpu_backend = "cuda"', 'gpu_algorithm = "cgbn"',
-        'param = "m0"', f"gpu_device = {device}", "sigma = 26", "verbose = true",
-        f'save_dir = "{folder.as_posix()}"', "checkpoint_interval_seconds = 0",
+        "config_version = 4", "[shared]", 'log_file = ""', 'worktodo_file = "worktodo.txt"',
+        "[stage1]", 'target = "gpu"', 'stage1_gpu_backend = "cuda"', 'gpu_algorithm = "cgbn"',
+        'param = "m0"', f"stage1_gpu_device = {device}", "sigma = 26", "verbose = true",
+        f'stage1_save_dir = "{folder.as_posix()}"', "checkpoint_interval_seconds = 0",
         'exponent_cache_dir = "off"', "cuda_slice_depth = 3",
-        'handoff.mode = "ecm-elf"' if stage2 else 'handoff.mode = "off"',
+        'handoff_mode = "ecm-elf"' if stage2 else 'handoff_mode = "off"',
     ]
     if chain is not None:
         text.append(f'cuda_montgomery_chain = "{chain}"')
     if search is not None:
-        text.extend(["[worker.1]", f"stage1.cuda_prac_search = {search}"])
+        text.extend(["[worker.1]", f"cuda_prac_search = {search}"])
     (folder / "ecm.toml").write_text("\n".join(text) + "\n", encoding="ascii")
 
 

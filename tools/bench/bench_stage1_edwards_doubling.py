@@ -36,7 +36,7 @@ def run(exe, folder, device, sms, case, algorithm, repeat):
     curves = blocks * (TPB // tpi)
     folder.mkdir()
     config = folder / "ecm.toml"
-    config.write_text('config_version = 3\n[stage1]\nhandoff.mode = "off"\n')
+    config.write_text('config_version = 4\n[stage1]\nhandoff_mode = "off"\n')
     command = [str(exe), "--config", str(config), "--param", "e", "-sigma", str(SIGMA),
                "--target", "gpu", "--gpu-backend", "cuda", "--gpu-algorithm", "cgbn",
                "-d", str(device), "-gpucurves", str(curves), "--naf-w", str(WINDOW),
