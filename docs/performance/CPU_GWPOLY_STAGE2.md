@@ -4,6 +4,8 @@
 
 0.66.1 在 Ryzen AI 9 HX 370 上的单线程、四线程实测覆盖 13 个 Edwards 余因子，与两张 GPU 及 Prime95 的逐点结果见 [Stage2 全位宽图表](STAGE2.md#edwards-全位宽对照)。B1 小于 D/2 时的小素数检查优化、新旧 DLL 配对与其余候选见 [CPU/CUDA 小规模对照](STAGE2.md#0661-cpu-与-cuda-小规模对照)。
 
+宽位 CPU 规划新增 D=10920、43890 两个候选，仍按 FFT 安全余量和内存预算复核。4 GiB、固定四个物理核心的 M58631 独立样本，自动 D 从 34650 改为 43890，整曲线 46.958 → 37.717 秒，进程峰值工作集 2435 → 2952 MiB。[选型实验、二进制身份与适用范围](../development/CPU_STAGE2_PLAN_SELECTION.md)
+
 ## 0.66.0 指令集与提前初始化
 
 Windows x64，Ryzen AI 9 HX 370，MSVC Release，GWNUM 31.6，本地 DLL 构建 `6bbf348cf243d3a4`。两组输入都是 Edwards AM、sigma=17、B1=1000 的 Stage1 save，4 线程，预算 512 MiB，进程继承亲和性，未锁频或采样功耗。每个输入先对三种构建分别跑一次 GMP 三点校验，再交替测 DLL 和静态版各 5 条完整 NF。下表为中位秒数。整曲线包含曲线重构、GW 初始化、算术和清理，排除进程启动、读档和发布；init 是整曲线中的子区间。

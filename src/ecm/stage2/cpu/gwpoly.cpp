@@ -379,6 +379,10 @@ uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget){
     for(uint64_t wheel:{30ull,210ull,2310ull,30030ull,510510ull})
         for(uint64_t k:{1ull,2ull,3ull,4ull,5ull,6ull,7ull,8ull,9ull,11ull,13ull,15ull,21ull,27ull,35ull,45ull,63ull,81ull})
             if(wheel*k<=20000000)choices.push_back(wheel*k);
+    // Intermediate geometries verified on wide cofactors. Recheck the
+    // coefficient footprint if the larger polynomial needs a longer FFT.
+    choices.push_back(10920);
+    choices.push_back(43890);
     if(forced)choices={forced};
     double best=1e300;uint64_t result=0;
     for(auto d:choices){
@@ -529,6 +533,8 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
             stats.fold_seconds+=seconds(part_begin);
             pos+=count;++stats.blocks;stats.giants+=count;
         }
+        // The descent only needs F, its reciprocal and the accumulated remainder.
+        g_workspace_a=Array();g_workspace_b=Array();
         if(!h.size)h=c.constant(1);
         auto descent_begin=Clock::now();
         // Scaled remainder: s=rev(H)*inv(rev(F)) mod X^P. Each child takes
