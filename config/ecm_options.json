@@ -2036,8 +2036,9 @@
       "key": "stage2_b2_round_chain",
       "toml_key": "b2_round_chain",
       "field": "b2_round_chain",
+      "present": "has_b2_round_chain",
       "type": "bool",
-      "default": false,
+      "default": true,
       "domain": "[false|true|0|1]",
       "fx": "ceil_B2_to_chain_P(S2)",
       "parser": "strict",
@@ -2045,8 +2046,8 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-        "Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block after relocation. CUDA also requires a chain-capable final point chunk. Tuning measures each candidate at its actual B2. Logs and internal results retain both bounds. Default false preserves the request. Integer, memory and enabled AutoB2 limits apply. CUDA startup cost probes keep fixed bounds and explicit ECM calibration requires rounding off. CLI --b2-round-chain overrides this worker setting.",
-        "按候选 D 向上凑整 B2。CPU gwpoly 在确定高位后缀后补满已有的最后一个 P 点 G 块；CUDA 还要求尾点块能走链。调优按实际 B2 采样，日志与内部结果记录请求和实际界限。默认关闭。整数、内存及启用的 AutoB2 上限仍生效。CUDA 启动探测使用固定界限，显式 ECM 标定要求关闭凑整。CLI --b2-round-chain 覆盖 worker 配置。"
+        "Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block after relocation. CUDA also requires a chain-capable final point chunk. Tuning measures each candidate at its actual B2. Logs and internal results retain both bounds. Enabled by default for CPU gwpoly ABI 4 and CUDA full-interval runs. Set false to keep the requested bound. CPU libecm, older DLLs, CUDA relocation and calibration use fixed bounds by default. Integer, memory and enabled AutoB2 limits apply. CUDA startup cost probes keep fixed bounds and explicit ECM calibration requires rounding off. CLI --b2-round-chain overrides this worker setting.",
+        "按候选 D 向上凑整 B2。CPU gwpoly 在确定高位后缀后补满已有的最后一个 P 点 G 块；CUDA 还要求尾点块能走链。调优按实际 B2 采样，日志与内部结果记录请求和实际界限。CPU gwpoly ABI 4 和 CUDA 完整区间默认开启，设为 false 保留请求界限。CPU libecm、旧 DLL、CUDA relocation 和标定默认使用固定界限。整数、内存及启用的 AutoB2 上限仍生效。CUDA 启动探测使用固定界限，显式 ECM 标定要求关闭凑整。CLI --b2-round-chain 覆盖 worker 配置。"
       ]
     },
     {

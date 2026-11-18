@@ -358,7 +358,7 @@ struct Points {
         }
         copy(a,out);
     }
-    void normalize(gwnum *x,gwnum *z,size_t count){
+    void normalize(gwnum *x,gwnum *z,size_t count,bool negate=false){
         auto &gw=c.gw;
         // Multiply each numerator by the product of preceding denominators
         // while that product is live. Keep the original z values for GCDs.
@@ -374,6 +374,8 @@ struct Points {
             throw Saturated("Saturated point denominator; no NF result");
         }
         // Walk the inverse prefix products backward to finish x[i]/z[i].
+        // Giant leaves use X - x/z. Negate the shared inverse once per batch.
+        if(negate)mpz_sub(inv.v,c.n,inv.v);
         c.put(inv.v,prefix[0]);
         for(size_t i=count-1;i>0;--i){
             gwmul3(&gw,prefix[0],x[i],x[i],GWMUL_FFT_S1);
@@ -427,7 +429,7 @@ std::unique_ptr<Tree> tree_skeleton(Context &c,size_t lo,size_t hi,size_t depth,
         t->right=tree_skeleton(c,mid,hi,depth+1,rows,offsets,levels);}
     return t;
 }
-std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_t hi,Array *workspace=nullptr){
+std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_t hi,Array *workspace=nullptr,bool negative_roots=false){
     const size_t count=hi-lo, row_size=count+1;
     if(workspace && workspace->size<row_size)
         throw std::runtime_error("G tree workspace too small");
@@ -438,12 +440,21 @@ std::unique_ptr<Tree> product_tree(Context &c,const Array &roots,size_t lo,size_
     const size_t pairs=(count+1)/2;
     const bool in_place=roots.v+lo==row;
     tree_jobs(c,pairs,[&](Context &worker,size_t begin,size_t end){
+        Array sum(worker.gw,negative_roots?1:0);
         for(size_t i=begin;i<end;++i){
             const auto offset=2*i;
             auto x=roots[lo+offset];
             if(offset+1==count){
                 if(!in_place)gwcopy(&worker.gw,x,row[offset]);
-                gwsmallmul(&worker.gw,-1,row[offset]);
+                if(!negative_roots)gwsmallmul(&worker.gw,-1,row[offset]);
+            }else if(negative_roots){
+                // For signed affine inputs a and b, (X+a)(X+b) needs ab and a+b.
+                // Keep the sum before overwriting either input of the packed pair.
+                const auto y=roots[lo+offset+1];
+                gwadd3o(&worker.gw,x,y,sum[0],GWADD_FORCE_NORMALIZE);
+                gwmul3(&worker.gw,x,y,row[offset],GWMUL_STARTNEXTFFT);
+                gwfft(&worker.gw,sum[0],row[offset+1]);
+                if(!(i&127))worker.check("G leaf pairs");
             }else if(in_place){
                 // The two inputs with implicit leading -1 multiply to a
                 // monic quadratic and may share storage with its output.
@@ -842,15 +853,15 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                     current=next;
                     if(!(i&127))worker.check();
                 }
-                ops.normalize(gx.v+lo,gz.v+lo,hi-lo);
+                ops.normalize(gx.v+lo,gz.v+lo,hi-lo,true);
             });gz=Array();stats.point_seconds+=seconds(part_begin);
             if(o.check){
-                Integer giant,difference;
-                for(size_t i=0;i<count;++i){c.get(giant.v,gx[i]);for(auto &probe:probes){
-                    mpz_sub(difference.v,probe.root.v,giant.v);mpz_mul(probe.product.v,probe.product.v,difference.v);mpz_mod(probe.product.v,probe.product.v,n);
+                Integer negative_giant,difference;
+                for(size_t i=0;i<count;++i){c.get(negative_giant.v,gx[i]);for(auto &probe:probes){
+                    mpz_add(difference.v,probe.root.v,negative_giant.v);mpz_mul(probe.product.v,probe.product.v,difference.v);mpz_mod(probe.product.v,probe.product.v,n);
                 }}
             }
-            part_begin=Clock::now();auto g=product_tree(c,gx,0,count,&g_workspace);gx=Array();stats.tree_seconds+=seconds(part_begin);
+            part_begin=Clock::now();auto g=product_tree(c,gx,0,count,&g_workspace,true);gx=Array();stats.tree_seconds+=seconds(part_begin);
             part_begin=Clock::now();
             c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal);
             stats.fold_seconds+=seconds(part_begin);
@@ -984,8 +995,19 @@ void selftest(unsigned threads){
         }
         for(unsigned block=0;block<4;++block){
             const size_t leaves=block<2?count:block==2?(count+1)/2:1;
-            for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
-            auto g=product_tree(c,roots,0,leaves,&workspace);
+            const bool signed_block=block!=1;
+            if(signed_block){
+                Array denominators(c.gw,leaves);
+                for(size_t j=0;j<leaves;++j){
+                    const auto affine=1237*(j+5)+97*block;
+                    u64togw(&c.gw,(j+2)*affine,workspace[j]);
+                    u64togw(&c.gw,j+2,denominators[j]);
+                }
+                Points(c).normalize(workspace.v,denominators.v,leaves,true);
+            }else{
+                for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
+            }
+            auto g=product_tree(c,signed_block?workspace:roots,0,leaves,&workspace,signed_block);
             c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal);
             auto reversed=c.scaled_remainder(accumulator,inv);
             descend(c,*t,reversed,out);

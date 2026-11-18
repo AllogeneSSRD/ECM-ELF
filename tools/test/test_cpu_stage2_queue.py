@@ -20,7 +20,7 @@ def workflow(folder, device, target):
         'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
         'finished_file = "finished.txt"\nlog_file = "worker.log"\n'
         f'[stage2]\ndevice = "{target}"\nstage2_save_dir = "."\nstage2_gpu_device = {device}\nd = 210\ncurve_concurrency = "serial"\n'
-        'stage2_cpu_threads = 2\ncpu_backend = "gwpoly"\ntune_runtime_enabled = false\nstage2_results_file = "results.jsonl"\n', encoding='utf-8')
+        'stage2_cpu_threads = 2\ncpu_backend = "gwpoly"\nb2_round_chain = false\ntune_runtime_enabled = false\nstage2_results_file = "results.jsonl"\n', encoding='utf-8')
     (folder / 'points.save').write_text(POINTS, encoding='utf-8')
     (folder / 'hit.save').write_text(HIT, encoding='utf-8')
 

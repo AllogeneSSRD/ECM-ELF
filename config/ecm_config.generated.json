@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "d8f35204848e4d89c408a4ab3b44adf24694a9399d97067e135952637e2446d8",
-    "src/ecm/platform/generated/configuration_defaults.h": "86b8bc44e0dd4d21f62b4b7ced3c59f495a4facf353b8c9f38573046deb11ea7",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "17a933ac156cd0b3935e74b558b3c71e457e122b4c1964a86abb19fa3d19fef9",
+    "src/ecm/platform/generated/configuration_defaults.h": "3510af1704661590e62166f13f1f177eb0109c1b9cc1721907c754be65b692d7",
     "src/ecm/application/configuration/generated/ecm_toml_schema.h": "0a1237e608ec1dffcc5ca924836138c2daf3db9e6f83707bfc7d65231be52b78",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "eba054e5caa556f772eed1f345195439414d5d6d16c3867c0a01bd6e88711b94",
     "config/ecm.toml.default": "205f256783e6ea5078f03b78ec36a08ce9ab2cfcc5b2ba96edcac5b6ee143aa1",
-    "config/ecm.toml.example": "1fd84be66f1b64d7e0ad290bd2018f8db2ea0907f9f5ac377335edf2943e8819",
-    "docs/ECM_TOML_REFERENCE.en.md": "a1ef487a70b35a9e205efcd0bde2be6849f7acb3cace631f201662e3a7b70040",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "44a9ec0dccfc44e1bce2276884c0a8e93d0ec1602a2bbf8aac4bdb361854af93",
-    "config/ecm_options.json": "bc4db5e46f1b760702547011cdcc611fd23e5c97c5f87e064cf7321e32a4d855",
+    "config/ecm.toml.example": "1dd5419e9f0d68d4ad4ab72d740116b684af14c14df5b46b8767916881737e44",
+    "docs/ECM_TOML_REFERENCE.en.md": "03225be87fce3ae9b7392facad6b9860ed93f5ce922b4a565b90fabc8360a3b9",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "9745c87adc85c8408602b7074e955509912d3d1e59531beea6c7f5417fcda775",
+    "config/ecm_options.json": "e488ccbec2d88a9cefcf531465f87f1431f550edf09a41c4fb54a56775d55967",
     "tools/gen/generate_ecm_config.py": "27ba4d8ff2775508b5a36d692762759a9472d55e65db4f079f6e07f214a4e9c4"
   }
 }

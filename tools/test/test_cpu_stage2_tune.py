@@ -99,7 +99,7 @@ class Fixture:
         self.tune.write_text(GPU_TOML, encoding="utf-8")
         self.config.write_text(
             'config_version = 4\n[shared]\ntune_file = "shared-profile.toml"\n'
-            '[stage2]\nstage2_cpu_threads = 1\ncpu_backend = "gwpoly"\ncpu_memory_mib = 512\n'
+            '[stage2]\nb2_round_chain = false\nstage2_cpu_threads = 1\ncpu_backend = "gwpoly"\ncpu_memory_mib = 512\n'
             'tune_runtime_enabled = true\ntune_min_repeats = 2\ntune_runtime_sample_limit = 2\n',
             encoding="utf-8",
         )
@@ -251,7 +251,7 @@ def main():
     queue_config.write_text(
         'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
         'finished_file = "finished.txt"\nlog_file = "worker.log"\n'
-        '[stage2]\nstage2_save_dir = "."\ncpu_backend = "gwpoly"\nstage2_cpu_threads = 1\n'
+        '[stage2]\nb2_round_chain = false\nstage2_save_dir = "."\ncpu_backend = "gwpoly"\nstage2_cpu_threads = 1\n'
         '[worker.3]\ntune_file = "tune-cpu.toml"\n',
         encoding="utf-8",
     )
@@ -293,7 +293,7 @@ def main():
     round_queue = out / "round_queue"
     round_queue.mkdir()
     round_config = round_queue / "ecm.toml"
-    round_config.write_text(queue_config.read_text().replace("[stage2]", "[stage2]\nb2_round_chain = true"))
+    round_config.write_text(queue_config.read_text().replace("b2_round_chain = false\n", ""))
     (round_queue / "points.save").write_text(POINTS)
     (round_queue / "worktodo.txt").write_text("[Worker #3]\n" + task + "\n")
     rows = f.finish(f.start("round_queue", "--worker", 3, "--once", "--d", 210,

@@ -104,6 +104,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(launch.lines,o.worker,true));
     o.threads=settings.cpu_threads;o.memory=settings.cpu_memory_mib;o.backend=settings.cpu_backend;
     o.tune_runtime=settings.tune_runtime;o.round_b2=settings.b2_round_chain;
+    bool explicit_rounding=settings.has_b2_round_chain;
     if(settings.auto_b2 && settings.auto_max)o.round_limit=std::min(o.round_limit,settings.auto_max);
     o.tune_min_repeats=settings.tune_min_repeats;
     o.tune_sample_limit=settings.runtime_samples;
@@ -154,7 +155,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         else if(key=="--b2-round-chain"){
             const auto mode=decimal(value);
             if(mode>1)throw std::runtime_error("b2-round-chain must be 0 or 1");
-            o.round_b2=mode!=0;
+            o.round_b2=mode!=0;explicit_rounding=true;
         }
         else if(key=="--d")o.d=decimal(value);
         else if(key=="--tune-profile")o.tune_profile=value.empty()?fs::path{}:s2prod::absolute_from(fs::current_path(),value);
@@ -176,8 +177,11 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     if(o.backend=="gwpoly" || (o.backend=="auto" && !ecm_gwpoly::load_error()))max_b2=ecm_gwpoly::max_b2;
     if((!o.export_only && !o.gw_selftest && (!o.save.empty() && !o.b2)) || o.b2>max_b2 || !o.count || !o.threads || o.threads>1024 || !o.memory || o.memory>1048576 ||
        (o.backend!="auto" && o.backend!="ntt" && o.backend!="plain" && o.backend!="gwpoly"))throw std::runtime_error("invalid options; see --help");
-    if(o.round_b2 && (o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::stage2_abi()<4))
-        throw std::runtime_error("CPU B2 rounding requires gwpoly with Stage2 ABI 4");
+    if(o.round_b2 && (o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::stage2_abi()<4)){
+        if(explicit_rounding && !o.export_only && !o.gw_selftest)
+            throw std::runtime_error("CPU B2 rounding requires gwpoly with Stage2 ABI 4");
+        o.round_b2=false;
+    }
     if((o.d || o.gw_check) && o.backend!="gwpoly")throw std::runtime_error("--d/--gw-check require --backend gwpoly");
     if(!o.tune_sample_limit || o.tune_sample_limit>1000 || !o.tune_min_repeats || o.tune_min_repeats>o.tune_sample_limit)
         throw std::runtime_error("tune repeats and sample limit must be in 1..1000, with repeats <= limit");

@@ -23,7 +23,7 @@ def compiling():
 def measure(folder):
     case = json.loads((folder / 'input.json').read_bytes())
     affinity = ','.join(map(str, case['cpus']))
-    (folder / 'ecm.toml').write_text(f'config_version=4\n[shared]\ncpu_affinity="{affinity}"\n')
+    (folder / 'ecm.toml').write_text(f'config_version=4\n[shared]\ncpu_affinity="{affinity}"\n[stage2]\nb2_round_chain=false\n')
     command = [case['exe'], '--config', 'ecm.toml', '--save', case['save'], '--exponent', case['e'],
                '--curves', 1, '--backend', 'gwpoly',
                '--d', case['d'], '--b2', case['requested'], '--threads', len(case['cpus']),

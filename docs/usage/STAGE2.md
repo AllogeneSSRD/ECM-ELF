@@ -76,7 +76,7 @@ tune_file = "tune_gpu1.toml"
 
 相对路径基于 `ecm.toml` 所在目录。每个 worker 的 CUDA Stage1 和 Stage2 共用选定文件。省略 worker 覆盖时继承 `[shared] tune_file`，默认 `tune.toml`。CLI `--tune-profile` 可为单次 Stage2 命令显式指定输入。示例 GPU 编号按实际设备调整。
 
-`b2_round_chain=true`可同时启用运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
+CUDA 完整区间和 CPU gwpoly 默认启用 `b2_round_chain`。设为 false 或传入 `--b2-round-chain 0` 可使用精确 B2。CUDA 凑整支持运行时自动调优：各D按实际凑整B2准入、比较和记录，均覆盖请求B2。不同实际B2的行保持独立，现有重复数和搜索预算继续生效；细则见[点块与有限链长身份](../architecture/AUTO_B2.md#点块与有限链长身份)。
 
 CPU gwpoly 同样读取这个开关，按自己的高位后缀补满最后一个 P 点 G 块。直接读档和队列的结果均使用实际 B2，内部结果另保留请求值。[CPU 整块扩展](EDWARDS_CPU_STAGE2.md#将-b2-扩展到整块)
 

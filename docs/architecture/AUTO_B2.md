@@ -396,7 +396,7 @@ paired策略及保留的采样摘要估算器可用跨D非负拟合分别估计�
 
 默认 `short_calibration=1`，独立预算10秒。没有合适文件、必要NTT组件缺失，或当前worktodo范围完全不在可复用已测位宽覆盖内时触发；部分覆盖时不因首项宽度外推反复校准。直接读save以该目标作为单项范围。
 
-启动成本探测固定使用已准入的D/B2，校准子进程不继承生产`b2_round_chain`凑整许可。保存B1≥20时，D=210、probe_B2=42020、giant点数为202；正常任务及`--plan-only`之后仍按其生产配置凑整B2。这两个边界分别处理，不把扩大后的探测记成原边界的成绩。显式`--tune ecm`仍拒绝开启凑整，需用`--b2-round-chain 0`关闭。
+启动成本探测固定使用已准入的D/B2，校准子进程不继承生产`b2_round_chain`凑整许可。保存B1≥20时，D=210、probe_B2=42020、giant点数为202；正常任务及`--plan-only`之后仍按其生产配置凑整B2。这两个边界分别处理，不把扩大后的探测记成原边界的成绩。显式 ECM 标定默认固定边界；若配置中明确要求凑整，可用 `--b2-round-chain 0` 覆盖。
 
 校准回执必须匹配预期D、giant点数、执行路径和算术检查。失败时保留证据并报告预期D/B2/点数、实际D/点数、clean、bad、自检数及证据路径；不得放宽校验接纳改变了边界的成绩。复现入口为[凑整隔离回归工具](../../tools/test/test_stage2_calibration_rounding_gpu.py)，实现入口为`src/ecm/stage2/planning/planning.cpp::portable_measure`。
 

@@ -948,12 +948,14 @@ GPU Stage2 在队列及直接读档时将 B2 设为存档 B1 与非零比例的�
 ### b2_round_chain
 
 ```toml
-b2_round_chain = false
+b2_round_chain = true
 ```
 
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] b2_round_chain` · 级别 `高级`。
 
-按候选 D 向上凑整 B2。CPU gwpoly 在确定高位后缀后补满已有的最后一个 P 点 G 块；CUDA 还要求尾点块能走链。调优按实际 B2 采样，日志与内部结果记录请求和实际界限。默认关闭。整数、内存及启用的 AutoB2 上限仍生效。CUDA 启动探测使用固定界限，显式 ECM 标定要求关闭凑整。CLI --b2-round-chain 覆盖 worker 配置。
+显式写入此键时，即使数值与内置默认值相同，也可能覆盖 worker 后缀、路径或环境变量的隐式规则。
+
+按候选 D 向上凑整 B2。CPU gwpoly 在确定高位后缀后补满已有的最后一个 P 点 G 块；CUDA 还要求尾点块能走链。调优按实际 B2 采样，日志与内部结果记录请求和实际界限。CPU gwpoly ABI 4 和 CUDA 完整区间默认开启，设为 false 保留请求界限。CPU libecm、旧 DLL、CUDA relocation 和标定默认使用固定界限。整数、内存及启用的 AutoB2 上限仍生效。CUDA 启动探测使用固定界限，显式 ECM 标定要求关闭凑整。CLI --b2-round-chain 覆盖 worker 配置。
 
 <a id="stage2_baby_backend"></a>
 

@@ -66,7 +66,7 @@ def main():
     uses_toml=b'--config' in subprocess.check_output([exe,'--help'])
     config_option='--config' if uses_toml else '--ini'
     ini=out/('empty.toml' if uses_toml else 'empty.ini')
-    ini.write_text('' if uses_toml else 'user=\ncomputer=\n',encoding='utf-8')
+    ini.write_text('[stage2]\nb2_round_chain = false\n' if uses_toml else 'user=\ncomputer=\n',encoding='utf-8')
     cases=[c.copy() for c in plan['cases'] if c['exponent'] in a.exponents]
     if {c['exponent'] for c in cases}!=set(a.exponents):raise ValueError('Missing requested reference inputs')
     inputs=out/'inputs';inputs.mkdir()

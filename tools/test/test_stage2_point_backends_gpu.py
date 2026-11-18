@@ -49,7 +49,7 @@ def main():
 
     def call(name,body='',extra=(),overrides=None,expected=0,profile=None,runtime=False,minimum=2,budget_fallback=False,expected_giant=0):
         directory=out/name;directory.mkdir();config=directory/'ecm.toml'
-        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nshort_calibration=false\ntune_runtime_enabled='+str(runtime).lower()+'\n'+body,encoding='utf-8')
+        config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nb2_round_chain=false\nshort_calibration=false\ntune_runtime_enabled='+str(runtime).lower()+'\n'+body,encoding='utf-8')
         expected_modes=list(expected) if isinstance(expected,(list,tuple)) else [expected]
         command=[str(exe),'--config',str(config),'--save',str(saved),'--curves',str(len(expected_modes)),'--device','1',
                  '--b2','26000000','--d','6006','--carrier-exponent','0','--auto-carrier','0','--groot-layout','0',

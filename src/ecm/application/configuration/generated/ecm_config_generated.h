@@ -342,7 +342,7 @@ struct Stage2Values {
     std::string reduce_backend="auto";
     std::string groot_balanced="auto";
     bool giant_tail_balance=false;
-    bool b2_round_chain=false;
+    bool b2_round_chain=true;
     std::string giant_chain="64";
     bool relocation=false;
     uint64_t b2=0;
@@ -403,6 +403,7 @@ struct Stage2Values {
     bool has_giant_backend=false;
     bool has_seed_backend=false;
     bool has_reduce_backend=false;
+    bool has_b2_round_chain=false;
     bool has_owner=false;
     bool has_low_cpu_wait=false;
     bool has_pack_zero=false;
@@ -439,7 +440,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_reduce_backend",[](Stage2Values&c,const std::string&v){if(v!="auto"&&v!="scalar"&&v!="coop32")throw std::runtime_error("stage2_reduce_backend must be [auto|scalar|coop32]");c.reduce_backend=v;c.has_reduce_backend=true;},[](Stage2Values&c,const Stage2Values&v){c.reduce_backend=v.reduce_backend;c.has_reduce_backend=v.has_reduce_backend;}},
     {"stage2_groot_balanced",[](Stage2Values&c,const std::string&v){c.groot_balanced=automatic_boolean_text(v,"stage2_groot_balanced");},[](Stage2Values&c,const Stage2Values&v){c.groot_balanced=v.groot_balanced;}},
     {"stage2_giant_tail_balance",[](Stage2Values&c,const std::string&v){c.giant_tail_balance=boolean(v,"stage2_giant_tail_balance");},[](Stage2Values&c,const Stage2Values&v){c.giant_tail_balance=v.giant_tail_balance;}},
-    {"stage2_b2_round_chain",[](Stage2Values&c,const std::string&v){c.b2_round_chain=boolean(v,"stage2_b2_round_chain");},[](Stage2Values&c,const Stage2Values&v){c.b2_round_chain=v.b2_round_chain;}},
+    {"stage2_b2_round_chain",[](Stage2Values&c,const std::string&v){c.b2_round_chain=boolean(v,"stage2_b2_round_chain");c.has_b2_round_chain=true;},[](Stage2Values&c,const Stage2Values&v){c.b2_round_chain=v.b2_round_chain;c.has_b2_round_chain=v.has_b2_round_chain;}},
     {"stage2_giant_chain",[](Stage2Values&c,const std::string&v){c.giant_chain=v;},[](Stage2Values&c,const Stage2Values&v){c.giant_chain=v.giant_chain;}},
     {"stage2_relocation",[](Stage2Values&c,const std::string&v){c.relocation=boolean(v,"stage2_relocation");},[](Stage2Values&c,const Stage2Values&v){c.relocation=v.relocation;}},
     {"stage2_b2",[](Stage2Values&c,const std::string&v){c.b2=static_cast<uint64_t>(bounded_integer(v,"stage2_b2",0,UINT64_MAX));},[](Stage2Values&c,const Stage2Values&v){c.b2=v.b2;}},

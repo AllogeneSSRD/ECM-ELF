@@ -40,17 +40,17 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 ### 将 B2 扩展到整块
 
-`[stage2] b2_round_chain = true` 或 `--b2-round-chain 1` 对 CPU gwpoly 启用整块扩展，默认关闭；CLI 的 0 或 1 优先于 worker 配置。直接读档和 worktodo 共用实现，DLL 需要 Stage2 ABI 4 提供 D/P 预检，静态 gwpoly 同样支持。libecm 的 plain、NTT 后端不支持此开关。
+CPU gwpoly 默认将 B2 扩展到整块。需要精确请求边界时，在 `[stage2]` 中设置 `b2_round_chain = false`，或传入 `--b2-round-chain 0`。CLI 优先于 worker 配置。直接读档和 worktodo 共用实现，DLL 需要 Stage2 ABI 4 提供 D/P 预检，静态 gwpoly 同样支持。能力按 ABI 判断。libecm 的 plain、NTT 和低于 ABI 4 的 DLL 默认使用精确 B2；显式要求它们凑整会报错。
 
 每个已通过内存预检的候选 D 按其 P 和高位后缀单独求实际 B2。若已有 K 个 G 块且尾块不足 P 个点，先将末端向上移尾块缺少的点数，再按新终点复核后缀起点，直到同样的 K 块恰好容纳 K×P 个点。实际 B2 取最后一个中心还能覆盖的最大整数，即 `last×D+D/2−1`，受 CPU 上限 10¹⁵ 和已启用的 AutoB2 上限限制。空网格或原本已满的尾块沿用请求值。显式 D 若无法在上限内补满，会在算术前报错。额外覆盖可以找到请求以外的因子，也会增加 giant 点运算量。CPU 仍需明确的请求 B2，可来自 CLI、配置、工作行或 B2 比率。
 
-日志 `gwpoly-bounds` 记录请求、实际 B2 及 D/P。内部 JSONL 的 `stage2-engine.requested-B2` 和 `actual-B2` 保留二者，顶层 `b2`、公开单曲线结果和完成回执使用实际 B2。队列检查点保留原任务的请求边界。任务末尾的 NF 汇总沿用最后一条计入曲线的实际 B2，逐条界限见内部 JSONL。不同 D 可以得到不同实际界限；tune 每个候选只读取其实际 B2 的样本，兼容已有相同几何的记录。开启开关的示例见[四组整块实验](../performance/CPU_GWPOLY_STAGE2.md)。
+日志 `gwpoly-bounds` 记录请求、实际 B2 及 D/P。内部 JSONL 的 `stage2-engine.requested-B2` 和 `actual-B2` 保留二者，顶层 `b2`、公开单曲线结果和完成回执使用实际 B2。队列检查点保留原任务的请求边界。任务末尾的 NF 汇总沿用最后一条计入曲线的实际 B2，逐条界限见内部 JSONL。不同 D 可以得到不同实际界限；tune 每个候选只读取其实际 B2 的样本，兼容已有相同几何的记录。默认凑整与精确界限的性能对照见[四组整块实验](../performance/CPU_GWPOLY_STAGE2.md)。
 
 ### 多项式执行与阶段计时
 
 H 缩放只计算低段乘积，将输出按下降所需的逆序直接写入系数槽。若仅有一个短 G 块，输入只取 H 的有效长度，缩放余式的其余高次系数补零。
 
-Giant 横坐标直接写入 P+1 槽的 G 缓冲区，归一化后相邻两根就地生成首一二次因子。上层父节点覆盖两个子节点所在区间，单独的尾节点留在原位。首个满块用 `G−F` 初始化 H，后续块在 G 和 H 中复用乘积、商及余式的空间。分段 F 树的子树根也采用原地合并。最后一次折叠后释放 G 缓冲区，准入继续按上述临时空间余量估算。[宽位内存与耗时对照](../performance/CPU_GWPOLY_STAGE2.md#giant-点g-树和-h-折叠)
+Giant 点直接写入 P+1 槽的 G 缓冲区。每段归一化先取分母乘积的负逆元，输出带符号的横坐标。对相邻两项 a、b，就地写入 ab 和 a+b，得到首一二次因子 (X+a)(X+b)。奇数尾保留最后一项。每个建树线程只需一个临时 GW 数。上层父节点覆盖两个子节点所在区间，单独的尾节点留在原位。首个满块用 `G−F` 初始化 H，后续块在 G 和 H 中复用乘积、商及余式的空间。分段 F 树的子树根也采用原地合并。最后一次折叠后释放 G 缓冲区，准入继续按上述临时空间余量估算。[宽位内存与耗时对照](../performance/CPU_GWPOLY_STAGE2.md#giant-点g-树和-h-折叠)
 
 完成常规多项式路径时，DLL 的 `gwpoly-phases` 行分别报告 baby 点、F 建树、倒数、giant 点、G 建树、H 折叠、H 缩放、下降和叶积至整体 GCD 的秒数。`gwpoly-descent` 的 `ftree_rebuild_seconds` 是 descent 中用于分段重建的时间，完整 F 树报告零。阶段图使用完整 NF，读档、发布与进程启动在引擎计时之外。[Prime95 阶段对照](../performance/CPU_GWPOLY_STAGE2.md)
 

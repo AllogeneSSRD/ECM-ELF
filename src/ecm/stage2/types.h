@@ -56,7 +56,8 @@ struct Options {
     bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
     bool relocation=ecm_config::defaults::stage2_stage2_relocation;
     bool giant_tail_balance=ecm_config::defaults::stage2_stage2_giant_tail_balance;
-    bool b2_round_chain=ecm_config::defaults::stage2_stage2_b2_round_chain;
+    // The production driver resolves the configured default. Internal probes and OpenCL use fixed bounds.
+    bool b2_round_chain=false;
     std::string giant_chain=ecm_config::defaults::stage2_stage2_giant_chain;
     unsigned selected_chain=64;
     std::string baby_backend=ecm_config::defaults::stage2_stage2_baby_backend;

@@ -44,7 +44,8 @@ def main():
     p.add_argument('--reference-study',type=Path,help='Optional frozen exact-N study for 10232/16272-bit GMP projection gates')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     s1=a.stage1.resolve();s2=a.stage2.resolve();ini=out/'ecm.toml'
-    ini.write_text('config_version = 4\n',encoding='utf-8')
+    ini.write_text('config_version = 4\n[stage2]\nb2_round_chain = false\n',encoding='utf-8')
+    default_ini=out/'defaults.toml';default_ini.write_text('config_version = 4\n',encoding='utf-8')
     sha=lambda path:hashlib.sha256(Path(path).read_bytes()).hexdigest()
     report=dict(complete=False,stage1_sha256=sha(s1),stage2_sha256=sha(s2),test_sha256=sha(__file__),checks=[])
     def call(name,cmd,data=None,good=True):
@@ -60,9 +61,9 @@ def main():
             '-d',1,'-sigma',sigma,'-gpucurves',count,'--tmp-dir',out/(name+'_tmp'),'-save',path,b1,b1],str(target).encode())
         records=oracle.records(path);assert len(records)==count
         return path
-    def run(name,path,n,b2=40000,extra=(),good=True,threads=4):
+    def run(name,path,n,b2=40000,extra=(),good=True,threads=4,config=None):
         result=out/(name+'.jsonl');submission=out/(name+'.json.txt')
-        call(name,[s2,'--config',ini,'--save',path,'--backend','gwpoly','--threads',threads,'--b2',b2,
+        call(name,[s2,'--config',config or ini,'--save',path,'--backend','gwpoly','--threads',threads,'--b2',b2,
             '--results',result,'--submission',submission,'--gw-check',*extra],good=good)
         rows=[json.loads(line) for line in result.read_text().splitlines()] if result.exists() else []
         for row in rows:verify(row,n)
@@ -77,6 +78,12 @@ def main():
     call('automatic',[s2,'--config',ini,'--save',cpu,'--backend','auto','--curves',1,'--b2',40000,
         '--results',auto,'--submission',out/'automatic.json.txt'])
     verify(json.loads(auto.read_text()),n)
+    plain=out/'plain_default.jsonl'
+    call('default_libecm',[s2,'--config',default_ini,'--backend','plain','--save',cpu,'--b2',40000,
+        '--curves',1,'--results',plain,'--submission',out/'plain_public.json.txt'])
+    assert json.loads(plain.read_bytes())['b2']==40000
+    call('reject_explicit_libecm_round',[s2,'--config',default_ini,'--save',cpu,'--b2',40000,
+        '--backend','plain','--b2-round-chain',1],good=False)
     for d in (6,30,60,210):
         rows=run(f'wheel_{d}',cpu,n,extra=['--d',d,'--curves',1,'--exponent',127]);assert rows[0]['status']=='NF'
     # M127 at B2=40000 and D=30 has original last=1333. For m=7 the first
@@ -142,7 +149,7 @@ def main():
     # first represented by 4*30+7, beyond the two centres for B2=45.
     assert oracle.mont.ladder(127,x,z,a24,hit_n)[1] % 10007 == 0
     assert run('before_rounded_hit',hit,hit_n,45,['--d',30])[0]['status']=='NF'
-    rounded=run('rounded_hit',hit,hit_n,45,['--d',30,'--b2-round-chain',1])[0]
+    rounded=run('rounded_hit',hit,hit_n,45,['--d',30],config=default_ini)[0]
     assert (rounded['b2'],rounded['factors'])==(134,['10007'])
     assert rounded['stage2-engine']['requested-B2']==45 and rounded['stage2-engine']['actual-B2']==134
     rounded_public=json.loads((out/'rounded_hit.json.txt').read_bytes())

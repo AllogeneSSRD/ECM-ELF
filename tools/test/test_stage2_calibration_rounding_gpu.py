@@ -57,13 +57,18 @@ def main():
     write(out/'summary.json',report);shutil.copy2(__file__,out/'test_snapshot.py')
     telemetry=TelemetryRecorder(a.device,out/'telemetry.jsonl',interval=.2)
     try:
-        for name,rounding,calibration,formal in [('short_on',True,True,False),('short_off',False,True,False),
-                ('short_disabled',True,False,False),('formal_rejected',True,True,True),('formal_fixed',True,True,True)]:
+        cases=[('short_on',True,True,False),('short_off',False,True,False),
+                ('short_disabled',True,False,False),('formal_rejected',True,True,True),('formal_fixed',True,True,True)]
+        if not a.expect_bug:
+            cases.extend([('default_on',None,True,False),('formal_default',None,True,True),
+                          ('relocation_default',None,False,False),('relocation_conflict',True,False,False)])
+        for name,rounding,calibration,formal in cases:
             directory=out/name;directory.mkdir();config=directory/'ecm.toml';profile=directory/'tune.toml'
-            config.write_text('config_version=4\n[stage2]\ndevice="gpu"\nb2_round_chain='+str(rounding).lower()+
+            setting='' if rounding is None else '\nb2_round_chain='+str(rounding).lower()
+            config.write_text('config_version=4\n[stage2]\ndevice="gpu"'+setting+
                 '\nshort_calibration='+str(calibration).lower()+
-                '\ntune_runtime_enabled=false\nstage2_giant_chain="auto"\ngroot_balanced="auto"\n'
-                'stage2_tune_min_repeats=1\nauto_carrier=false\n')
+                '\ntune_runtime_enabled=false\ngiant_chain="auto"\ngroot_balanced="auto"\n'
+                'tune_min_repeats=1\nauto_carrier=false\n')
             common=[str(exe),'--config',str(config),'--device',str(a.device)]
             if formal:
                 command=common+['--tune','ecm','--tune-save',str(saved),'--tune-d','210','--tune-b2','42020',
@@ -74,23 +79,28 @@ def main():
                 command=common+['--save',str(saved),*action,'--b2','26000000','--d','6006','--carrier-exponent','0',
                     '--tune-profile',str(profile),'--results',str(directory/'result.jsonl'),
                     '--submission',str(directory/'result.txt'),'--log',str(directory/'engine.log')]
+            if name.startswith('relocation_'):command+=['--relocation','1']
             write(directory/'command.json',command)
             check_gpu_processes(telemetry.monitor,out,directory/'before.json',allowed=allowed)
             with (directory/'console.log').open('wb') as log:
                 result=subprocess.run(command,cwd=directory,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=120)
             check_gpu_processes(telemetry.monitor,out,directory/'after.json',allowed=allowed)
             console=(directory/'console.log').read_text(encoding='utf-8')
-            rejected=name=='formal_rejected'
+            rejected=name in ('formal_rejected','relocation_conflict')
             fails=a.expect_bug and rounding and calibration and not formal
             assert (result.returncode!=0)==(fails or rejected),console
-            if rejected:assert 'B2 rounding is not an ECM calibration grid' in console
+            if name=='formal_rejected':assert 'B2 rounding is not an ECM calibration grid' in console
+            elif name=='relocation_conflict':assert 'requires the complete giant interval' in console
             elif fails:assert 'invalid completed calibration shape' in console
             else:
                 assert 'invalid completed calibration shape' not in console
+                if name=='relocation_default':
+                    plan,=[json.loads(line) for line in console.splitlines() if line.startswith('{"type":"stage2_plan"')]
+                    assert plan['B2']==26000000 and plan['relocation']==1,plan
                 if calibration:
                     measured=[r for r in summaries(tomllib.loads(profile.read_text(encoding='utf-8'))) if r['source']=='measured']
                     assert measured and all(r['b1']==20 and r['b2']==42020 and r['d']==210 for r in measured),measured
-                if rounding and not formal:
+                if (rounding or name=='default_on') and not formal:
                     engine=directory/'engine.log'
                     trace=console+(engine.read_text(encoding='utf-8') if engine.exists() else '')
                     bounds=re.findall(r'stage2_bounds: requested_B2=(\d+) actual_B2=(\d+)',trace)

@@ -521,7 +521,8 @@ int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
     if(!o.portable_cli.count("--giant-chain"))o.giant_chain=s.giant_chain;
     if(!o.portable_cli.count("--giant-tail-balance"))o.giant_tail_balance=s.giant_tail_balance;
     if(!o.portable_cli.count("--groot-layout"))o.groot_layout=ecm_config::automatic_boolean(s.groot_balanced,"stage2_groot_balanced");
-    if(!o.portable_cli.count("--b2-round-chain"))o.b2_round_chain=s.b2_round_chain;
+    if(!o.portable_cli.count("--b2-round-chain"))
+        o.b2_round_chain=s.b2_round_chain && (s.has_b2_round_chain || (!o.relocation && o.tune!="ecm" && !o.tune_child));
 #endif
     configure_giant_policy(o);
     if(o.b2_round_chain && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("B2 rounding is not an ECM calibration grid; disable --b2-round-chain for tune");

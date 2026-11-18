@@ -948,12 +948,14 @@ In GPU Stage2, a nonzero ratio sets B2 to the saved B1 times this value for queu
 ### b2_round_chain
 
 ```toml
-b2_round_chain = false
+b2_round_chain = true
 ```
 
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] b2_round_chain` · Level `advanced`.
 
-Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block after relocation. CUDA also requires a chain-capable final point chunk. Tuning measures each candidate at its actual B2. Logs and internal results retain both bounds. Default false preserves the request. Integer, memory and enabled AutoB2 limits apply. CUDA startup cost probes keep fixed bounds and explicit ECM calibration requires rounding off. CLI --b2-round-chain overrides this worker setting.
+Writing this key explicitly can override implicit worker suffixes, paths or environment settings even when its value equals the built-in default.
+
+Round B2 per candidate D. CPU gwpoly fills the existing last P-point G block after relocation. CUDA also requires a chain-capable final point chunk. Tuning measures each candidate at its actual B2. Logs and internal results retain both bounds. Enabled by default for CPU gwpoly ABI 4 and CUDA full-interval runs. Set false to keep the requested bound. CPU libecm, older DLLs, CUDA relocation and calibration use fixed bounds by default. Integer, memory and enabled AutoB2 limits apply. CUDA startup cost probes keep fixed bounds and explicit ECM calibration requires rounding off. CLI --b2-round-chain overrides this worker setting.
 
 <a id="stage2_baby_backend"></a>
 

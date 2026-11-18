@@ -32,7 +32,7 @@ def main():
     shutil.copy2(args.save, save)
     engines = {'static': args.static.resolve(), 'dll': args.dll.resolve()}
     config = out / 'ecm.toml'
-    config.write_text('config_version = 4\n', encoding='utf-8')
+    config.write_text('config_version = 4\n[stage2]\nb2_round_chain = false\n', encoding='utf-8')
     report = dict(os=platform.platform(), save_sha256=digest(save), b2=args.b2, d=args.d,
                   power='unmeasured', affinity='inherited', repeats=args.repeats, binaries={}, runs=[], cells=[])
     for name, exe in engines.items():
