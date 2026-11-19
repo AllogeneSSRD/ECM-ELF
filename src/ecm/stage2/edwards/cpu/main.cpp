@@ -493,6 +493,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
              <<" memory_mib="<<cpu.memory<<" libecm="<<ecm_version()<<std::endl;
     s2prod::TaskEngine engine;
     engine.name="CPU Stage2";
+    engine.input_max_bits=0;
     engine.validate=[&](const s2prod::Record &r,uint64_t b2) {
         if(!r.edwards)throw std::runtime_error("CPU Stage2 requires Edwards saves; set device = \"gpu\" for Montgomery");
         const bool gw=cpu.backend=="gwpoly" || (cpu.backend=="auto" && !ecm_gwpoly::load_error());

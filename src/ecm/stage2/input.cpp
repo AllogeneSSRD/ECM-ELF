@@ -53,7 +53,7 @@ uint64_t fingerprint(const std::string &s) {
     for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
     return h;
 }
-Record parse_record(std::string line) {
+Record parse_record(std::string line,unsigned input_max_bits) {
     if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
     if (line.find('\0') != line.npos)
         throw std::runtime_error("binary checkpoint is not a METHOD=ECM text save");
@@ -90,8 +90,10 @@ Record parse_record(std::string line) {
     Big n, x, z, chk, factor;
     std::string err;
     if (!ecm_parse_expression(fields["N"], n.z, &err)) throw std::runtime_error("N: " + err);
-    if (mpz_cmp_ui(n.z, 3) <= 0 || !mpz_odd_p(n.z) || mpz_sizeinbase(n.z, 2) > ecm_stage2::max_input_bits)
-        throw std::runtime_error("N must be odd, >3 and at most 16384 bits");
+    if (mpz_cmp_ui(n.z, 3) <= 0 || !mpz_odd_p(n.z) ||
+        (input_max_bits && mpz_sizeinbase(n.z, 2) > input_max_bits))
+        throw std::runtime_error(input_max_bits ?
+            "N must be odd, >3 and at most "+std::to_string(input_max_bits)+" bits" : "N must be odd and >3");
     if (mpz_set_str(x.z, fields["X"].c_str(), 0) || mpz_sgn(x.z) < 0 || mpz_cmp(x.z, n.z) >= 0)
         throw std::runtime_error("X must be an integer in [0,N), decimal or 0x hex");
     if (fields.count("Z") && (mpz_set_str(z.z, fields["Z"].c_str(), 0) || mpz_cmp_ui(z.z, 1)))
@@ -129,7 +131,7 @@ bool comment(const std::string &line) {
     const auto t = trim(line);
     return t.empty() || t[0] == '#' || t[0] == ';';
 }
-std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count) {
+std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count, unsigned input_max_bits) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         if (!fs::exists(path)) throw TaskInputError("save not found: " + path.string());
@@ -145,7 +147,7 @@ std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count)
         ++index;
         if (index <= skip) continue;
         try {
-            auto r = parse_record(line);
+            auto r = parse_record(line,input_max_bits);
             r.offset = static_cast<uint64_t>(offset); r.index = index; r.hash = fingerprint(line);
             out.push_back(std::move(r));
         } catch (const std::runtime_error &e) {
@@ -160,12 +162,12 @@ fs::path absolute_from(const fs::path &base, const std::string &p) {
     fs::path v(p);
     return fs::absolute(v.is_absolute() ? v : base / v).lexically_normal();
 }
-QueueSelection queue_fields(std::string line) {
+QueueSelection queue_fields(std::string line,unsigned input_max_bits) {
     QueueSelection q;
     std::string error;
     if (!ecm_parse_stage2_line(line, q.task, error))
         throw TaskInputError(error);
-    if (q.task.n > ecm_stage2::max_input_bits)
+    if (input_max_bits && q.task.n > input_max_bits)
         throw TaskInputError("worktodo exponent exceeds supported input range");
     q.b2 = u64(q.task.b2_text, "worktodo B2");
     q.skip = q.task.skip_curves;

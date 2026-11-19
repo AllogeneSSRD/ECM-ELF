@@ -447,9 +447,15 @@ static void stage1_details(const fs::path& root) {
     assert(fallback.find("local-queue.txt")!=fallback.npos && fallback.find("prime95.txt")==fallback.npos);
     const auto param3=ecmgui::parse_line("Stage1 execution: curve=mont param=m3 backend=cgbn").stage1;
     const auto prime95=ecmgui_v2::ui::stage1_handoff(plan,param3,false,true);
-    assert(prime95.find("prime95.txt")!=prime95.npos && prime95.find("local-queue.txt")==prime95.npos);
+    assert(prime95.find("prime95.txt")!=prime95.npos && prime95.find("local-queue.txt")!=prime95.npos);
     const auto param2=ecmgui::parse_line("Stage1 execution: curve=mont param=m2 backend=cgbn").stage1;
-    const auto keep=ecmgui_v2::ui::stage1_handoff(plan,param2,false,true);
+    assert(ecmgui_v2::ui::stage1_handoff(direct,param2,false)=="Stage2 → ECM-ELF (Worker2)");
+    const auto fallback_for_param2=ecmgui_v2::ui::stage1_handoff(plan,param2,false,true);
+    assert(fallback_for_param2.find("local-queue.txt")!=fallback_for_param2.npos &&
+           fallback_for_param2.find("prime95.txt")==fallback_for_param2.npos);
+    auto keep_plan=plan;
+    keep_plan.local_fallback=false;
+    const auto keep=ecmgui_v2::ui::stage1_handoff(keep_plan,param2,false,true);
     assert(keep.find("incompatible")!=keep.npos && keep.find("prime95.txt")==keep.npos &&
            keep.find("local-queue.txt")==keep.npos);
 }

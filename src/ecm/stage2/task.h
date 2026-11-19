@@ -1,4 +1,5 @@
 #pragma once
+#include "geometry.h"
 #include "types.h"
 #include "ecm/io/stage2_checkpoint.h"
 namespace s2prod {
@@ -26,6 +27,7 @@ struct CurveQueue {
 std::string checkpoint_outcome(const Record &,uint64_t b2,const std::string &report);
 struct TaskEngine {
     const char *name;
+    unsigned input_max_bits = ecm_stage2::max_input_bits; // Zero leaves size admission to the engine.
     std::function<void()> begin;
     std::function<void(const Record &,uint64_t)> validate;
     std::function<void(Options &,const Record &)> prepare;

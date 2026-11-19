@@ -1,6 +1,6 @@
 # Edwards 统一存档与 CPU Stage2
 
-CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 多曲线文本 save。统一的 `ecm_stage2.exe` 默认用 CPU 路径读取完成点，通过 GWNUM/polymult 或 libecm 继续 Stage2。队列中可按 [worker 选择设备](STAGE2.md#选择运行设备)。CPU Stage2 使用文本 save。
+CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM` 多曲线文本 save。统一的 `ecm_stage2.exe` 默认用 CPU 路径读取完成点，通过 GWNUM/polymult 或 libecm 继续 Stage2。队列中可按 [worker 选择设备](STAGE2.md#选择运行设备)。CPU 队列和直接读档均按 CPU 后端的算术与内存条件接收文本 save。宽位完成曲线实测见 [CPU Stage2 位宽对照](../performance/STAGE2.md#cpu-宽位分区矩阵)。
 
 ## 构建与运行
 

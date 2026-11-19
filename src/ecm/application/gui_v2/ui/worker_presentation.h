@@ -170,12 +170,11 @@ inline std::string stage1_handoff(const ecmgui::Stage1HandoffPlan& plan,
     bool local = plan.local, prime95 = plan.prime95, local_fallback = plan.local_fallback;
     bool fallback_selected = false;
     if (!plan.legacy && execution.valid()) {
-        const bool local_compatible = execution.param == "e" || execution.param == "m0";
         const bool prime95_compatible = execution.param == "m0" || execution.param == "m3";
-        fallback_selected = prime95 && !prime95_compatible && local_fallback && local_compatible;
-        local = (local && local_compatible) || fallback_selected;
+        fallback_selected = prime95 && !prime95_compatible && local_fallback;
+        local = local || fallback_selected;
         prime95 = prime95 && prime95_compatible;
-        local_fallback = prime95 && local_fallback && local_compatible;
+        local_fallback = prime95 && local_fallback;
         if (!local && !prime95)
             return line + text("worker.stage1_handoff_incompatible", zh);
     }

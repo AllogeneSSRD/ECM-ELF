@@ -5,11 +5,7 @@ import shutil
 import subprocess
 
 
-TASKS = {curve: f'ECMSTAGE1=1,2,127,-1,"{curve}_m127_100.save",2000,0,1'
-         for curve in ("e", "m0")}
-
-
-def verify(build, root):
+def verify(build, root, stage2):
     root.mkdir(parents=True)
     worker = build / "ecm.exe"
     if not worker.is_file():
@@ -18,7 +14,7 @@ def verify(build, root):
     def scenario(name, mode, curve="m0", fallback="ecm-elf", external=False,
                  prime95_paths=True, blocked=False, expected="off", error=None,
                  local_queue="receiver.txt", log_file="", shared_extra="", stage1_extra="",
-                 overrides="", extra_queue="", local_receiver=None):
+                 overrides="", extra_queue="", local_receiver=None, exponent=127):
         case = root / name
         bin_dir, config_dir, p95 = case / "bin", case / "config", case / "prime95"
         for directory in (bin_dir, config_dir, p95):
@@ -30,7 +26,9 @@ def verify(build, root):
         finished = config_dir / "finished.txt"
         add = p95 / "worktodo.add"
         (p95 / "worktodo.txt").write_text("", encoding="ascii")
-        target = p95 / "saves" / f"{curve}_m127_100.save"
+        save_name = f"{curve}_m{exponent}_100.save"
+        task = f'ECMSTAGE1=1,2,{exponent},-1,"{save_name}",2000,0,1'
+        target = p95 / "saves" / save_name
         if blocked:
             target.mkdir(parents=True)
         settings = f"""config_version = 4
@@ -54,7 +52,7 @@ handoff_unsupported = "{fallback}"
             settings += (f'prime95_worktodo_file = "{(p95 / "worktodo.txt").as_posix()}"\n'
                          f'prime95_save_dir = "{(p95 / "saves").as_posix()}"\n')
         config.write_text(settings + stage1_extra + overrides, encoding="ascii")
-        queue.write_text(TASKS[curve] + "\n" + extra_queue, encoding="ascii")
+        queue.write_text(task + "\n" + extra_queue, encoding="ascii")
 
         def run(label, error=None):
             process = subprocess.run([str(exe), "--config", str(config), "--worker", "1"],
@@ -69,8 +67,8 @@ handoff_unsupported = "{fallback}"
 
         if error:
             run("rejected", error)
-            assert queue.read_text(encoding="ascii") == TASKS[curve] + "\n" + extra_queue
-            assert not (bin_dir / f"{curve}_m127_100.save").exists()
+            assert queue.read_text(encoding="ascii") == task + "\n" + extra_queue
+            assert not (bin_dir / save_name).exists()
             return
 
         run("first")
@@ -78,10 +76,36 @@ handoff_unsupported = "{fallback}"
         receiver = config_dir / local_queue
         assert "ECMSTAGE1=" not in remaining, remaining
         assert "ECMSTAGE1=" in finished.read_text(encoding="utf-8")
-        assert (bin_dir / f"{curve}_m127_100.save").is_file()
+        assert (bin_dir / save_name).is_file()
         assert (("ECMSTAGE2=" in remaining) == (expected == "in-place" or local_receiver is not None)), remaining
         if local_receiver is not None:
             assert f"[Worker #{local_receiver}]\nECMSTAGE2=" in remaining, remaining
+        if stage2 is not None and name == "local_wide_to_worker_2":
+            handoff, = [line for line in remaining.splitlines() if line.startswith("ECMSTAGE2=")]
+            for device in ("gpu", "cpu"):
+                receiving = case / device
+                receiving.mkdir()
+                receiver_queue = receiving / "worktodo.txt"
+                receiver_queue.write_text(remaining, encoding="utf-8")
+                receiver_config = receiving / "ecm.toml"
+                receiver_config.write_text(
+                    'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
+                    'finished_file = "finished.txt"\nlog_file = ""\n'
+                    f'[stage2]\ndevice = "{device}"\ncpu_backend = "gwpoly"\n'
+                    'b2_round_chain = false\ntune_runtime_enabled = false\nd = 210\n',
+                    encoding="utf-8")
+                proc = subprocess.run([stage2, "--config", receiver_config, "--worker", "2", "--once"],
+                                      cwd=receiving, capture_output=True, text=True, encoding="utf-8",
+                                      errors="replace", timeout=90)
+                output = proc.stdout + proc.stderr
+                (receiving / "run.log").write_text(output, encoding="utf-8")
+                queued = receiver_queue.read_text(encoding="utf-8")
+                if device == "gpu":
+                    assert "worktodo exponent exceeds supported input range" in output, output
+                    assert "# ERROR " + handoff in queued.splitlines(), queued
+                else:
+                    assert proc.returncode == 0 and "curves_this_run=1" in output, output
+                    assert handoff not in queued and handoff in (receiving / "finished.txt").read_text(), output
         assert receiver.is_file() == (expected == "external")
         if expected == "external":
             assert "[Worker #2]\nECMSTAGE2=" in receiver.read_text(encoding="utf-8")
@@ -102,9 +126,13 @@ handoff_unsupported = "{fallback}"
     scenario("default_local", None, expected="in-place")
     scenario("explicit_off", "off")
     scenario("local_in_place", "ecm-elf", expected="in-place")
+    scenario("local_wide_to_worker_2", "ecm-elf", "e", exponent=262139, local_receiver=2,
+             stage1_extra='handoff_workers = "2"\nhandoff_worktodo_file = ""\n')
     scenario("local_external_shared_finished", "ecm-elf", external=True, expected="external")
     scenario("prime95_no_local_duplicate", "prime95", external=True, expected="p95")
     scenario("prime95_fallback", "prime95", "e", prime95_paths=False, expected="in-place")
+    scenario("prime95_wide_fallback", "prime95", "e", exponent=63487,
+             prime95_paths=False, expected="in-place")
     scenario("prime95_keep_save", "prime95", "e", fallback="keep-save", external=True)
     scenario("prime95_missing_path", "prime95", prime95_paths=False,
              error="missing Prime95 queue")
@@ -123,12 +151,13 @@ handoff_unsupported = "{fallback}"
              shared_extra='worker_count = 1\nqueue_skip = "stage2"',
              stage1_extra='handoff_workers = "auto"\n',
              error="automatic Stage2 handoff found no eligible worker")
-    print("Stage1 handoff modes: 13 queue scenarios passed")
+    print("Stage1 handoff modes: 15 queue scenarios passed")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--stage2", type=Path, help="Also exercise GPU rejection and CPU completion of the wide handoff")
     args = parser.parse_args()
-    verify(args.build.resolve(), args.out.resolve())
+    verify(args.build.resolve(), args.out.resolve(), args.stage2.resolve(strict=True) if args.stage2 else None)

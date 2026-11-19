@@ -703,11 +703,10 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     if (!selected) selected = recommended_batch(production);
     const char* source = selected ? "production" : tuned ? "tune" : "default";
     if (!selected) selected = seed;
-    // Search a bounded set with real, disjoint curve batches. Leave the final
-    // two batches available for the incumbent and the requested tail policy.
-    if (!exec.ntt.tune_file.empty() && remaining >= 2 * cap + selected) {
-        const std::array<unsigned, 4> candidates{seed, std::max(1u, seed / 2),
-                                               std::min(cap, seed + seed / 2), cap};
+    // Try capacity first while there is enough work for a full batch and a tail.
+    if (!exec.ntt.tune_file.empty() && remaining > cap) {
+        const std::array<unsigned, 4> candidates{cap, seed, std::max(1u, seed / 2),
+                                               std::min(cap, seed + seed / 2)};
         for (unsigned repetitions : {0u, 1u}) {
             for (const auto candidate : candidates) {
                 const auto it = production.find(candidate);

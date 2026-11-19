@@ -392,8 +392,7 @@ def main():
                 [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", resumed)
                 expected_dataflow = DEFERRED_PACK | EDWARDS_2XY_FREQUENCY
                 assert int(dataflow) & expected_dataflow == expected_dataflow, resumed
-            # M63487 exceeds the current ECM-ELF Stage2 input range.
-            assert not todo.read_text().strip() and not checkpoint.exists()
+            assert todo.read_text().lstrip().startswith("ECMSTAGE2=") and not checkpoint.exists()
             assert saved_points(save, p, b1, True) == reference
             print(f"PASS Edwards NTT resume {old} -> {new} at {cursor}/{count} with matching save", flush=True)
         return

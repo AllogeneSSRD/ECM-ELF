@@ -157,7 +157,7 @@ ntt_profile = 0
 
 linear 和 weighted 按各自 NTT 长度估算每条曲线的工作区和 NAF 字典，分别受显存、字典预算和主机内存限制。自动选批可在任一候选能容纳的范围内选取批量，之后只用能容纳该批量的计划查表或补测。`stage1_ntt_batch_selection` 的 `linear_capacity`、`weighted_capacity` 是各卷积模式估算可容纳的最大曲线数，`capacity` 还受剩余任务量限制。`Stage1 execution:` 记录实际选中计划的每曲线估算、配置和设备额度、NAF 字典预算，以及 `max_curves_in_memory`。
 
-自动拆批先从共享 `tune.toml` 的有效生产样本选择合适批量，再参考已有合成调优。首次使用没有兼容数据时，通常从 64 条起步，受剩余曲线数和显存约束。较长的任务会用不同大小的**真实批次**观察吞吐，每批仍按任务顺序推进。选型优先使用有重复样本的批量，并在达到实测峰值吞吐 95% 的方案中取最小档。共享表按设备、曲线、NAF 窗口、位宽、B1、标量倍率和 NTT 计划记录样本，包含设备循环的曲线步／秒和从计算准备到末点处理的曲线／秒。后者排除补测计划、写 tune 表和任务最终发布。生产选型无需先运行 `--tune ntt`。
+自动拆批先从共享 `tune.toml` 的有效生产样本选择合适批量，再参考已有合成调优。启用调优表时，剩余曲线数大于当前容量即可用真实批次试跑，同等样本数下优先试容量档。例如容量为 128、尚未测过该档时，请求 200 条可先运行 128 条，再运行剩余 72 条。生产选型无需先运行 `--tune ntt`。 [采样与选型规则](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)
 
 `ntt_pad_batch = 0` 默认精确完成请求量。设为 `1` 时，自动拆批可以在资源和 sigma 范围允许时用新曲线补齐尾批。例如每批 75 条，请求 1000 条时，尾批从 25 条补到 75 条，共完成 1050 条。每条新增曲线使用独立的连续 sigma，计入实际结果和汇总。若 1050 条均产生可保存的点，`.save`、`finished` 和符合条件的 Stage2 交接均包含这 1050 条。交接范围始终以实际保存记录为准。
 
@@ -216,7 +216,7 @@ Stage1 与 Stage2 共用 `ecm.toml` 和 `worktodo.txt`。新版 TOML 在首个�
 
 ## 自动交接到 Stage2
 
-`[stage1] handoff_mode` 默认为 `"ecm-elf"`。Stage1 无因子完成且有可用保存点时，将原任务写入完成记录并生成 `ECMSTAGE2=`。投递保留 B2、曲线范围、AID 和已知因子，save 使用实际输出文件的绝对路径。只运行 Stage1 时可设 `handoff_mode = "off"`。
+`[stage1] handoff_mode` 默认为 `"ecm-elf"`。Stage1 无因子完成且有可用保存点时，将原任务写入完成记录并生成 `ECMSTAGE2=`。投递保留 B2、曲线范围、AID 和已知因子，save 使用实际输出文件的绝对路径。Stage2 的位宽、曲线和 sigma 等执行条件由接收端检查。CUDA Stage2 拒绝不支持的输入时，会以 `# ERROR ECMSTAGE2=…` 将原任务保留在队列中，便于调整接收后端或其他参数。只运行 Stage1 时可设 `handoff_mode = "off"`。
 
 `handoff_workers` 留空时保留当前 worker。同一队列内移除已完成的 Stage1 行并追加到该 worker 最后一段末尾。指定外部队列时写入其中的同编号 worker。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。目标缺少分区时创建标签，文件头未标号部分视为 worker 1。同队列的 `"auto"` 使用 `[shared] worker_count` 确定候选范围。候选必须读取此队列并允许 Stage2。未设数量时从队列分区选取，没有分区时默认从 worker 1 开始。外部队列优先采用已有分区，缺少分区时按配置数量生成候选。
 
@@ -292,7 +292,7 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 “投递成功”表示本程序已持久发布 drop box，不代表 Prime95 已完成接纳。Prime95 不参与本程序的写锁/完成确认，不能承诺跨进程恰好一次。崩溃若发生在发布与确认之间，恢复会检查 add、活动队列和发送账本；仍不能判定时保留 `.sending` 和 intent 并停止该交接，避免盲目重复。计算结果仍保留。`.ready` 保存本次实际尝试发布的完整行集；恢复会先修复发送账本再确认 done。责任文件不可读时保留材料并报错，不能当成空文件。不要让两个独立消费者同时修改 Prime95 活动 `worktodo.txt`。
 
-在 `[stage1]` 设 `handoff_mode = "prime95"` 启用 Prime95 交接。协议不支持但可由本地 Stage2 续算的存档按 `handoff_unsupported = "ecm-elf"` 投递到本地。可设 `"keep-save"` 保留在原地。
+在 `[stage1]` 设 `handoff_mode = "prime95"` 启用 Prime95 交接。Prime95 协议不支持的任务按 `handoff_unsupported = "ecm-elf"` 投递到本地 Stage2 队列。可设 `"keep-save"` 保留在原地。
 
 如果进程在记录交接意图后、完成源队列回执前中断，先沿用原路由恢复该任务，再修改 `handoff_mode`。此时源任务仍可能留在 worktodo 中。
 

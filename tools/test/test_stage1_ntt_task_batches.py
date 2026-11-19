@@ -245,12 +245,38 @@ def main():
         assert list(saved_points(work / "direct.save", p, 64, edwards=True)) == [SIGMA]
         passed(f"default_{backend}", p=p, seconds=wall)
 
+    # Establish a small incumbent without trying larger batches.
+    work, command, small_tune = fixture("trial_seed_35", requested=35, pad=0)
+    log, _ = run(work, command)
+    assert [row["curves"] for row in batch_launches(log)] == [35]
+    assert any(row["batch"] == 35 for row in tune_rows(small_tune, EXPONENT))
+
+    work, command, _ = fixture("trial_at_capacity", requested=128, pad=0, tune=small_tune)
+    log, _ = run(work, command)
+    selections = log_records(log, "stage1_ntt_batch_selection:")
+    assert (selections[0]["remaining"], selections[0]["capacity"], selections[0]["batch"]) == ("128", "128", "35")
+    assert all(row["source"] != "production_trial" for row in selections)
+    assert_finished(work, 128)
+
+    work, command, _ = fixture("trial_above_capacity", requested=200, pad=0, tune=small_tune)
+    log, wall = run(work, command)
+    selection = log_records(log, "stage1_ntt_batch_selection:")[0]
+    assert (selection["source"], selection["remaining"], selection["capacity"], selection["batch"]) == (
+        "production_trial", "200", "128", "128"), selection
+    launches = batch_launches(log)
+    assert [row["curves"] for row in launches] == [128, 72], launches
+    assert [int(row["ntt_batch"]) for row in ntt_executions(log)] == [128, 72]
+    assert any(row["batch"] == 128 for row in tune_rows(small_tune, EXPONENT))
+    assert_finished(work, 200)
+    passed("capacity_trial_128_of_200", selection=selection, launches=launches, seconds=wall)
+
     work, command, _ = fixture("direct_split", pad=0)
     save = work / "direct.save"
     log, wall = run(work, [*command, "-gpucurves", "129", "-sigma", str(SIGMA),
                            "-save", str(save), "64", "64"], input="2^127-1\n")
     schedule = batch_launches(log)
     assert_schedule(schedule, 129, expect_pad=False)
+    assert [row["curves"] for row in schedule] == [128, 1], schedule
     assert list(saved_points(save, 127, 64, edwards=True)) == list(range(SIGMA, SIGMA + 129))
     passed("direct_splits_129", p=127, launches=schedule, seconds=wall)
 
@@ -382,9 +408,11 @@ def main():
         (work / "worktodo.txt").write_text(
             f"{expanded_handoff.rsplit(',', 2)[0]},{actual - 1},1\n", encoding="utf-8")
         config = work / "ecm.toml"
+        # Exercise the exact small handoff bound without rounding it to a full chain.
         config.write_text('config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
                           'finished_file = "finished.txt"\nlog_file = "stage2.log"\n'
                           f'[stage2]\ndevice = "gpu"\nstage2_gpu_device = {args.device}\n'
+                          'b2_round_chain = false\n'
                           'stage2_results_file = "stage2_results.jsonl"\ntune_runtime_enabled = false\n',
                           encoding="utf-8")
         log, wall = run(work, [str(stage2), "--config", str(config), "--device", str(args.device),

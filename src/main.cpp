@@ -45,7 +45,6 @@ using ecm_stage1_app::stage1_result_settings;
 #include "ecm/stage1/execution.h"
 #include "ecm/stage1/cpu_runtime.h"
 #include "ecm/stage1/sigma.h"
-#include "ecm/stage2/geometry.h"
 #include "io/config.h"
 #include "io/stage1_checkpoint.h"
 #include "io/worktodo.h"
@@ -273,26 +272,6 @@ static const char* prime95_unsupported(const NormalizedStage1Task& task) {
     if (identity.sigma_fixed &&
         !sigma_batch_fits(identity.fixed_sigma64, task.curves, 1, INT64_MAX))
         return "Prime95 requires sigma in 1..2^63-1";
-    return nullptr;
-}
-
-static const char* local_stage2_unsupported(const QueueItem& item) {
-    const auto& task = item.input;
-    const int param = handoff_param(task.options.execution.selection);
-    if (param != -1 && param != 0)
-        return "ECM-ELF Stage2 supports Edwards and Montgomery PARAM0 saves";
-    if (task.b1 < 2 || mpz_cmp_ui(task.modulus, 3) <= 0 || !mpz_odd_p(task.modulus) ||
-        mpz_sizeinbase(task.modulus, 2) > ecm_stage2::max_input_bits)
-        return "modulus or B1 is outside the ECM-ELF Stage2 input range";
-    const auto& identity = task.options.identity;
-    if (param == 0 && identity.sigma_fixed && identity.fixed_sigma64 < 6)
-        return "ECM-ELF Stage2 requires Montgomery PARAM0 sigma >= 6";
-    EcmStage2Task line;
-    std::string error;
-    if (!ecm_parse_stage2_line(item.stage2_line, line, error))
-        throw std::runtime_error("invalid normalized ECMSTAGE2 assignment: " + error);
-    if (line.n > ecm_stage2::max_input_bits)
-        return "assignment exponent is outside the ECM-ELF Stage2 input range";
     return nullptr;
 }
 
@@ -944,15 +923,13 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                 if (const char* reason = prime95_unsupported(item.input)) {
                     use_local = can_fallback;
                     ecm_ts_fprintf(stdout, "Stage2 handoff: %s; %s\n", reason,
-                                   use_local ? "checking ECM-ELF Stage2" : "retaining Stage1 save");
+                                   use_local ? "routing to the ECM-ELF Stage2 queue" : "retaining Stage1 save");
                 } else {
                     item.p95 = prime95_receiver_config();
                 }
             }
             if (use_local) {
-                if (const char* reason = local_stage2_unsupported(item))
-                    ecm_ts_fprintf(stdout, "Stage2 handoff: %s; retaining Stage1 save\n", reason);
-                else if (local_route_is_external())
+                if (local_route_is_external())
                     item.stage2 = stage2_receiver_config(true);
                 else {
                     item.auto_stage2_line = item.stage2_line;

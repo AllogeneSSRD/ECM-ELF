@@ -118,12 +118,13 @@ std::string checkpoint_nf_key(const Record& r, const std::string& b2) {
 }
 
 void migrate_queue_outcomes(stage2_queue::State& state, const fs::path& save, uint64_t skip,
-                            const fs::path& results, const fs::path& submission, mpz_srcptr n) {
+                            const fs::path& results, const fs::path& submission, mpz_srcptr n,
+                            unsigned input_max_bits) {
     if(!state.pending.empty())
         state.reserved.push_back({state.done,false,std::move(state.pending),state.pending_results});
     const uint64_t extent=state.done+state.reserved.size();
     if(extent) {
-        const auto points=records(save,skip,extent);
+        const auto points=records(save,skip,extent,input_max_bits);
         if(points.size()!=extent)
             throw std::runtime_error("legacy Stage2 progress exceeds available save records");
         const auto receipts=ecm_results::read_legacy_stage2_curves(submission,state.publication_task,n);
@@ -334,7 +335,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         }
         try {
             if(queue) {
-                fields=queue_fields(task_line);
+                fields=queue_fields(task_line,engine.input_max_bits);
                 skip=fields.skip;count=fields.count;
                 if(!o.b2&&fields.b2) {
                     b2=fields.b2;
@@ -351,7 +352,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(!o.dry&&!o.plan_only){fatal_log=log;fatal_log_worker=o.worker;fatal_log_max_kb=o.log_max_kb;}
             if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
-            plan=records(save,skip,count);
+            plan=records(save,skip,count,engine.input_max_bits);
             if(queue && fields.task.modulus_from_save)
                 expected_n=queue_modulus(fields.task,plan.empty()?nullptr:&plan.front());
             if(cfg.b2_ratio && !plan.empty()) {
@@ -424,7 +425,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(!progress_lock.open(lockpath))
                 throw std::runtime_error("another process owns this Stage2 task checkpoint");
             const auto match_legacy=[&](const std::string &line) {
-                const auto old=queue_fields(line);Big n;std::string error;
+                const auto old=queue_fields(line,engine.input_max_bits);Big n;std::string error;
                 return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
             };
             if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state,legacy_bounds))
@@ -450,7 +451,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             const auto previous_auto=state.auto_b2;
             state.submission_path=ecm_io::file_identity(fs::u8path(o.submission));
             if(state.version<5)
-                migrate_queue_outcomes(state,save,skip,results,fs::u8path(o.submission),target.z);
+                migrate_queue_outcomes(state,save,skip,results,fs::u8path(o.submission),target.z,engine.input_max_bits);
             while(!state.reserved.empty() && !state.reserved.back().completed)
                 state.reserved.pop_back();
             // Commit migration before applying policy changes or retiring old receipts.
@@ -473,7 +474,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     " legacy_archived=1 checkpoint="+progress.u8string());
             }
             state.reconfigure(task);
-            if(state.done>plan.size() && records(save,skip,state.done).size()!=state.done)
+            if(state.done>plan.size() && records(save,skip,state.done,engine.input_max_bits).size()!=state.done)
                 throw std::runtime_error("Stage2 completed progress exceeds the available save records");
             state.save(progress);
             ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),state.factors);
