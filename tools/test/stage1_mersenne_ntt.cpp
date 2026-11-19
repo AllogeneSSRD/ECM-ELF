@@ -1,6 +1,7 @@
 // End-to-end Suyama PARAM0 Stage1 driver and independent GMP oracle.
 #include "../../src/ecm/stage1/montgomery/cuda/ntt/ladder.h"
 #include "ecm/platform/program_version.h"
+#include "ecm/stage1/ntt_length.h"
 #include "ecm/stage1/scalar.h"
 #include <algorithm>
 #include <array>
@@ -138,6 +139,10 @@ int check_carries(int device, unsigned p, bool weighted, unsigned length, unsign
     const std::vector<uint8_t> bits={0,1,0,0,1,1,1,0,0};
     const auto graph=run_ladder(device,p,count,input,bits,4,2,weighted,length,0,dataflow,0,square);
     const auto direct=run_ladder(device,p,count,input,bits,0,1,weighted,length,0,dataflow,0,square);
+    if ((dataflow & ecm_mersenne_ntt::SegmentedCarry) &&
+        (!(graph.dataflow & ecm_mersenne_ntt::SegmentedCarry) ||
+         !(direct.dataflow & ecm_mersenne_ntt::SegmentedCarry)))
+        throw std::runtime_error("Requested segmented carry was not exercised");
     if (graph.points!=direct.points) throw std::runtime_error("Graph/direct carry check differed");
     if (dataflow) {
         constexpr unsigned split=4;
@@ -190,7 +195,9 @@ int main(int argc,char** argv) {
     }
     const bool square = argc==4 && !std::strcmp(argv[1],"--check-squares");
     if (argc==4 && (square || !std::strcmp(argv[1],"--check-carries"))) {
-        try { return check_carries(int(num(argv[2],0,63)),unsigned(num(argv[3],32,262144)), weighted,length,dataflow,square); }
+        try { return check_carries(int(num(argv[2],0,63)),
+            unsigned(num(argv[3],ecm_stage1::stage1_ntt_min_exponent,ecm_stage1::stage1_ntt_max_exponent)),
+            weighted,length,dataflow,square); }
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
     }
     if (argc<9 || argc>10) {
@@ -202,7 +209,8 @@ int main(int argc,char** argv) {
     }
     try {
         const int device=int(num(argv[1],0,63));
-        const unsigned p=unsigned(num(argv[2],32,262144)), b1=unsigned(num(argv[3],2,1000000));
+        const unsigned p=unsigned(num(argv[2],ecm_stage1::stage1_ntt_min_exponent,ecm_stage1::stage1_ntt_max_exponent)),
+                       b1=unsigned(num(argv[3],2,1000000));
         const uint64_t sigma=num(argv[4],6,UINT64_MAX);
         const unsigned curves=unsigned(num(argv[5],1,ecm_stage1::stage1_ntt_max_curves));
         const unsigned samples=unsigned(num(argv[6],1,20));

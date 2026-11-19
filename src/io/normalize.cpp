@@ -654,8 +654,9 @@ bool stage1_task_error(const Stage1Options& opt, uint32_t curves, std::string& e
         }
         if (modulus) {
             if (!ecm_stage1::ntt_arithmetic_bits(modulus, opt)) {
-                error = "Stage1 NTT requires a full 2^p-1 or an enabled known-factor Mersenne carrier "
-                        "with 32 <= p <= 262144";
+                error = "Stage1 NTT requires a full 2^p-1 or an enabled known-factor Mersenne carrier with " +
+                        std::to_string(ecm_stage1::stage1_ntt_min_exponent) + " <= p <= " +
+                        std::to_string(ecm_stage1::stage1_ntt_max_exponent);
                 return true;
             }
         }

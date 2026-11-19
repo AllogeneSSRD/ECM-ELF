@@ -212,7 +212,9 @@ inline void validate_stage1_ntt(const Fields &s) {
         const auto bits=uint(s,"arithmetic_bits"), window=uint(s,"naf_window"), valid=uint(s,"valid_curves");
         const auto target=optional_uint(s,"target_bits",bits);
         const auto lcm=uint(s,"lcm_multiplier");
-        if((curve!="edwards" && curve!="mont0") || bits<32 || bits>262144 || target<2 || target>bits ||
+        if((curve!="edwards" && curve!="mont0") ||
+           bits<ecm_stage1::stage1_ntt_min_exponent || bits>ecm_stage1::stage1_ntt_max_exponent ||
+           target<2 || target>bits ||
            (curve=="edwards" ? lcm!=48 : lcm!=1 && lcm!=12) ||
            uint(s,"b1")<2 || (window && (curve!="edwards" || window<2 || window>12)) ||
            !valid || valid>batch || !(real(s,"curves_per_s")>0) ||

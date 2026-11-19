@@ -28,6 +28,21 @@ __device__ inline uint32_t limb_mask(Shape s, unsigned i) {
     return i + 1 == s.words && rest ? (1u << rest) - 1 : 0xffffffffu;
 }
 
+__device__ inline uint32_t linear_product_word(const unsigned long long* digits, Shape s, unsigned bit) {
+    const unsigned k = bit / s.bpw, offset = bit % s.bpw;
+    auto value = digits[k] >> offset;
+    for (unsigned shift = s.bpw - offset, j = k + 1; shift < 32 && j < s.length; shift += s.bpw, ++j)
+        value |= digits[j] << shift;
+    return uint32_t(value);
+}
+
+__device__ inline unsigned long long linear_fold_limb(const unsigned long long* digits, Shape s, unsigned i,
+                                                        uint32_t mask) {
+    const unsigned bit = 32 * i;
+    return static_cast<unsigned long long>(linear_product_word(digits,s,bit) & mask) +
+           (linear_product_word(digits,s,s.p + bit) & mask);
+}
+
 template<bool Routed>
 __device__ inline unsigned output_slot(unsigned out, Cursor cursor) {
     if constexpr (Routed) {

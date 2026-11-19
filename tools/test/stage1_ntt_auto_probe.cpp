@@ -4,6 +4,7 @@
 #include "../../src/ecm/stage1/montgomery/cuda/ntt/tune.h"
 #include "../../src/io/files.h"
 #include "ecm/platform/program_version.h"
+#include "ecm/stage1/ntt_length.h"
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
@@ -27,7 +28,8 @@ int main(int argc, char** argv) {
     try {
         const int device = std::stoi(argv[1]);
         const unsigned p = std::stoul(argv[2]), batch = std::stoul(argv[3]), steps = std::stoul(argv[4]);
-        if (p < 32 || p > 262144 || !batch || batch > ecm_stage1::stage1_ntt_max_curves ||
+        if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
+            !batch || batch > ecm_stage1::stage1_ntt_max_curves ||
             !steps || steps > 1000000)
             throw std::invalid_argument("invalid benchmark width, batch or step count");
         ecm_stage1::Stage1NttOptions options;

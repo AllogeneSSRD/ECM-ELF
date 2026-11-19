@@ -78,7 +78,7 @@ struct Measurement {
 };
 
 unsigned max_exponent(const Plan& plan) {
-    constexpr unsigned supported_max = 262144;
+    constexpr unsigned supported_max = ecm_stage1::stage1_ntt_max_exponent;
     if (plan.weighted) return std::min(supported_max, plan.length * plan.bpw);
     unsigned lo = 0, hi = (plan.length - 1) / 2;
     while (lo < hi) {
@@ -505,8 +505,10 @@ int tune_command(int index, const Stage1NttOptions& options, unsigned p, bool ex
         std::map<unsigned, std::array<std::vector<unsigned>, CandidateCount>> schedule;
         std::map<unsigned, Input> inputs;
         for (const unsigned width : widths) {
-            if (width < 32 || width > 262144)
-                throw std::invalid_argument("--tune ntt --bits requires 32..262144");
+            if (width < ecm_stage1::stage1_ntt_min_exponent || width > ecm_stage1::stage1_ntt_max_exponent)
+                throw std::invalid_argument("--tune ntt --bits requires " +
+                    std::to_string(ecm_stage1::stage1_ntt_min_exponent) + ".." +
+                    std::to_string(ecm_stage1::stage1_ntt_max_exponent));
             auto& input = inputs[width];
             input.candidates = candidates_for(width, options);
             for (unsigned mode = 0; mode < CandidateCount; ++mode) {

@@ -2,6 +2,7 @@
 #include "config_format.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/stage1/gpu_backend.h"
+#include "ecm/stage1/ntt_length.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -81,7 +82,8 @@ GPU execution:
   --gpu-algorithm <A> 1|2|3|cgbn|ntt|thread or a quoted slice list.
                        Default: "ntt[16384:], cgbn[]"; ranges use actual modulus bits.
                        CUDA NTT: full 2^p-1 or a known-factor Mersenne assignment;
-                       32 <= p <= 262144; Edwards or m0.
+                       )" << ecm_stage1::stage1_ntt_min_exponent << " <= p <= "
+              << ecm_stage1::stage1_ntt_max_exponent << R"(; Edwards or m0.
                        CUDA thread: Edwards through 1024 bits.
                        OpenCL: Edwards through 1024 bits or Montgomery PARAM3.
   --gpu-info          Report device and compiled tiers, then exit.

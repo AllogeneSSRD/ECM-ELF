@@ -1,4 +1,5 @@
 #pragma once
+#include "ecm/stage1/ntt_length.h"
 #include "ecm/stage1/task.h"
 
 namespace ecm_stage1 {
@@ -10,11 +11,12 @@ inline unsigned ntt_arithmetic_bits(mpz_srcptr target, const Stage1Options& opti
     const auto& identity = options.identity;
     const auto bits = mpz_sizeinbase(target, 2);
     if (identity.handoff_factors.empty())
-        return bits >= 32 && bits <= 262144 && mpz_scan0(target, 0) == bits ? unsigned(bits) : 0;
+        return bits >= stage1_ntt_min_exponent && bits <= stage1_ntt_max_exponent &&
+               mpz_scan0(target, 0) == bits ? unsigned(bits) : 0;
     const unsigned p = identity.handoff_n;
     if (!options.execution.ntt.allow_known_factors || !identity.target_kbnc ||
         identity.handoff_k_str != "1" || identity.handoff_b != 2 || identity.handoff_c != -1 ||
-        p < 32 || p > 262144)
+        p < stage1_ntt_min_exponent || p > stage1_ntt_max_exponent)
         return 0;
     mpz_t carrier;
     mpz_init_set_ui(carrier, 0);

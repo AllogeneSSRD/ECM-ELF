@@ -1,5 +1,16 @@
 # Stage1 NTT 优化开发记录
 
+## 64 段进位与 524288 位准入
+
+线性和加权路径共用两组各 32 段的进位扫描。线性路径在 digit 进位后读取乘积的高低两段，按梅森模数回卷。大于 262144 位时默认采用分段路径，小档线性选择沿用原先的单块归约。变换最大长度仍为 65536 点。输入、正式执行、调优参数和共享表使用同一指数上限。[执行与显存口径](../architecture/NTT.md#stage1-分段进位与-pack-融合)
+
+- RTX 4070 Ti 和 RTX 4060 Laptop 的 44 组 CUDA 探针覆盖 262139、262144、262145、524287、524288 位。阶梯步和独立平方逐 limb 与 GMP 对照，覆盖直接提交、CUDA Graph、分段写回、延后 pack 和加权缓存路径。探针 SHA-256 为 `976a6fb03bc6a11b67ee138939ce7a9444ef80530d2b65ee1012d0822c719a35`。
+- M524287、B1=7、σ=26 的正式入口使用 65536 点线性和 32768 点加权计划。PARAM0、Edwards x-only 和 Edwards w6 的保存点分别通过独立参考。PARAM0 在 B1=1024 的第 640／1478 列停止，改用加权后读档，最终保存点与不间断加权运行相同。最终构建 SHA-256 为 `10a19ea18cc65685bd9a2406bd588413ff9a3367994870f713f4fd9ab391ca9f`。
+- `--tune ntt --bits 524288` 完成 32768 点调优，524289 位由准入拒绝。宽位 Stage1 可以保存结果，CUDA Stage2 自动交接继续按自身输入范围判断。
+- 正式 Stage1 NTT 回归通过 23 个检查组，覆盖已有窄位、radix-5、128 曲线批量和五组中断续跑。[回归日志](../../data/experiments/stage1_ntt_segments64/regression.log)
+
+[探针、正式构建、保存点和调优日志](../../data/experiments/stage1_ntt_segments64/)
+
 ## 原生 Edwards 2XY NAF 原型
 
 在 Goldilocks NTT 的批量乘积入口上接入 2XY 倍点及有符号仿射加点。第一轮各乘积先独立归约，再在梅森域组合。GMP 在 CPU 构造奇数倍字典并批量归一化，CUDA 建好四份字典频谱后共享给所有 NAF 列。整模字典分母或整模末点走单曲线 x-only 重放。实验入口、计时与显存见 [原生 Edwards NAF](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)，原始日志位于 `data/experiments/edwards_ntt_2xy/`。

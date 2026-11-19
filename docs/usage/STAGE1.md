@@ -128,7 +128,7 @@ GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子�
 
 ## CUDA 全宽 NTT
 
-在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`）。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
+在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。线性和加权卷积均支持梅森承载指数 `32 ≤ p ≤ 524288`，包括完整 `2^p−1` 和保留原指数及已知因子元数据的合格余因子。对 524288 位，保守选长可用 32768 点加权 NTT 或 65536 点线性 NTT。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。[已知因子与分段进位](../architecture/NTT.md#stage1-已知因子与梅森承载)
 
 Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯，2～12 选择原生 2XY NAF 窗口。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机。若驻留频谱也放不下，可为新批次减小窗口或批量。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
 

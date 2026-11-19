@@ -1,12 +1,14 @@
 #pragma once
 
+#include "ecm/stage1/ntt_length.h"
 #include "stage1_ntt_layout.cuh"
 #include "../../src/ecm/stage1/montgomery/cuda/ntt/weighted.cuh"
 
 namespace ecm_mersenne_ntt::stage1_layout {
 
 constexpr unsigned stage1_carry_segment = 256;
-constexpr unsigned stage1_max_segments = 32; // At most 262144 bits.
+constexpr unsigned stage1_max_segments = 64;
+static_assert(stage1_max_segments * stage1_carry_segment * 32 == ecm_stage1::stage1_ntt_max_exponent);
 
 __host__ __device__ constexpr unsigned stage1_segment_count(unsigned words)
 {
@@ -52,9 +54,10 @@ __device__ __forceinline__ uint32_t stage1_summarize_segment(
     return (uint32_t(raw) + unsigned(prefix == 2)) & mask;
 }
 
-// One warp resolves the segment transfers for each consumer CTA. The
-// low end receives the high carry since 2^p == 1 (mod 2^p-1). When all
-// limbs propagate, adding one throughout converts the encoding of M to zero.
+// One warp scans up to two groups of 32 segment transfers per consumer CTA.
+// The upper group inherits the lower group's transfer. The last transfer
+// feeds back into the first segment, with an incoming one if all propagate
+// so the encoding of M becomes zero.
 __device__ __forceinline__ void stage1_segment_corrections(
     unsigned* limits, const unsigned* headers, unsigned segments)
 {
@@ -65,7 +68,19 @@ __device__ __forceinline__ void stage1_segment_corrections(
         const unsigned stop = __ballot_sync(0xffffffffu, tag != 1);
         const unsigned gen = __ballot_sync(0xffffffffu, tag == 2);
         const unsigned prefix = stage1_last_carry(stop & ((1u << lane) - 1), gen);
-        const bool carry = prefix == 2 || (prefix == 1 && (!stop || stage1_last_carry(stop, gen) == 2));
+        unsigned whole = stage1_last_carry(stop, gen);
+        if (segments > 32) {
+            const unsigned upper = lane + 32 < segments ? headers[lane + 32] : 1;
+            const unsigned upper_tag = upper & 3;
+            const unsigned upper_stop = __ballot_sync(0xffffffffu, upper_tag != 1);
+            const unsigned upper_gen = __ballot_sync(0xffffffffu, upper_tag == 2);
+            unsigned upper_prefix = stage1_last_carry(upper_stop & ((1u << lane) - 1), upper_gen);
+            if (upper_prefix == 1) upper_prefix = whole;
+            if (upper_stop) whole = stage1_last_carry(upper_stop, upper_gen);
+            const bool upper_carry = upper_prefix == 2 || (upper_prefix == 1 && whole != 0);
+            limits[lane + 32] = upper_carry ? upper >> 2 : 0;
+        }
+        const bool carry = prefix == 2 || (prefix == 1 && whole != 0);
         limits[lane] = carry ? header >> 2 : 0;
     }
     __syncthreads();
@@ -78,7 +93,9 @@ __device__ __forceinline__ uint32_t stage1_segment_word(
     return (row[word] + unsigned(word % stage1_carry_segment < limit)) & mask;
 }
 
-template<bool Fold, bool Select, bool Routed>
+enum class SegmentInput { Add, Linear, Weighted };
+
+template<SegmentInput Input, bool Select, bool Routed>
 __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* products, unsigned* headers,
                                  Shape s, Sums ops, Cursor cursor) {
     const unsigned op = blockIdx.y / s.curves, curve = blockIdx.y % s.curves;
@@ -88,9 +105,11 @@ __global__ void segment_limb_sums(uint32_t* state, const unsigned long long* pro
     const uint32_t mask = i < s.words ? limb_mask(s,i) : 0;
     unsigned long long value = 0; // Inactive lanes propagate.
     if (i < s.words) {
-        if constexpr (Fold) {
+        if constexpr (Input == SegmentInput::Weighted) {
             const auto* sums = products + size_t(blockIdx.y) * s.words;
             value = weighted_limb(sums,s.words,s.p - 32 * (s.words - 1),i,mask);
+        } else if constexpr (Input == SegmentInput::Linear) {
+            value = linear_fold_limb(products + size_t(blockIdx.y) * s.length, s, i, mask);
         } else {
             const unsigned swap = Select ? 2 * scalar_bit(cursor) : 0;
             value = add_limb(state,s,ops.left.x[op] ^ swap,ops.right.x[op] ^ swap,

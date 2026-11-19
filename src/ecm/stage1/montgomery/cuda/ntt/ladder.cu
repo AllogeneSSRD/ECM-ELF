@@ -190,14 +190,6 @@ void inverse_product_tile(U* out,
 struct Join {
     __device__ unsigned operator()(unsigned lo, unsigned hi) const { return hi == 1 ? lo : hi; }
 };
-__device__ uint32_t extract(const U* digits, Shape s, unsigned bit) {
-    const unsigned k = bit/s.bpw, off = bit%s.bpw;
-    U value = digits[k] >> off;
-    for (unsigned shift = s.bpw-off, j = k+1; shift < 32 && j < s.length; shift += s.bpw, ++j)
-        value |= digits[j] << shift;
-    return uint32_t(value);
-}
-
 // One block per output residue. A thread first summarizes a contiguous limb
 // interval; warp ballots compute its prefix. Feed the high carry back into the
 // low limb (2^p=1). An all-propagate sum is exactly M, represented as zero.
@@ -221,7 +213,7 @@ __global__ void combine(uint32_t* state, const U* products, Shape s, Sums ops, C
             return weighted_limb(sums, s.words, tail_bits, i, mask);
         } else if constexpr(Fold) {
             const auto* digits = products + size_t(blockIdx.x)*s.length;
-            return U(extract(digits,s,i*32) & mask) + (extract(digits,s,s.p+i*32) & mask);
+            return linear_fold_limb(digits,s,i,mask);
         } else {
             return add_limb(state,s,a,b,curve,i,mask,(ops.subtract >> op) & 1);
         }
@@ -287,7 +279,8 @@ size_t memory_budget(size_t free_bytes, unsigned limit_mib) {
 
 Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options, bool prefer_radix5,
                         WeightedBound weighted_bound) {
-    if (p < 32 || p > 262144) throw std::invalid_argument("invalid Stage1 NTT exponent");
+    if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent)
+        throw std::invalid_argument("invalid Stage1 NTT exponent");
     Packing s;
     if (options.weighted) {
         const bool allow_unsigned_bound = weighted_bound == WeightedBound::UnsignedProducts &&
@@ -342,7 +335,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                       const ecm_stage1::Stage1NttOptions& options, const Control* control,
                       unsigned samples, const EdwardsNaf* naf = nullptr) {
     const auto prep = now_s();
-    if (p < 32 || p > 262144 || !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
+    if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
+        !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
         !samples || samples > 20 || count > UINT32_MAX - 64 ||
         (!naf && scalar_words.size() < (size_t(count) + 31) / 32) ||
         (control && control->resume > count))
@@ -399,7 +393,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool early_segments = (curves == 1 && p >= 53249 && (s.length == 2560 || s.length == 5120)) ||
                                 (s.length == 5120 && p >= 106497);
     const bool wide_segments = p > 14 * stage1_carry_segment * 32;
-    if (wide_segments || early_segments) {
+    const auto segment_count = stage1_segment_count(s.words);
+    if (options.weighted ? wide_segments || early_segments : segment_count > 32) {
         defaults |= SegmentedCarry;
         if (mixed || curves == 1) defaults |= DeferredPack;
     }
@@ -477,9 +472,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     result.owned_bytes += result.dictionary_workspace_bytes;
     if (result.owned_bytes > result.budget_bytes)
         throw BudgetError("Stage1 NTT buffers exceed the total VRAM budget");
-    const unsigned segment_count = stage1_segment_count(s.words);
     const size_t header_words = size_t(slots) * curves * segment_count;
-    const bool segmented = (requested & SegmentedCarry) && options.weighted &&
+    const bool segmented = (requested & SegmentedCarry) &&
         header_words * sizeof(unsigned) <= result.budget_bytes - result.owned_bytes;
     if (segmented) {
         result.owned_bytes += header_words * sizeof(unsigned);
@@ -554,7 +548,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (compact_forward && (!forward_input || ctx.t >= 10))
         result.dataflow |= ForwardTileCompact;
     const bool routed = requested & DirectRoute;
-    const bool cached = (requested & CachedCarry) && options.weighted && !segmented;
+    const bool cached = (requested & CachedCarry) && options.weighted && !segmented && s.words <= 32 * threads;
     const bool deferred = segmented && !packed && (requested & DeferredPack);
     if (routed) result.dataflow |= DirectRoute;
     if (packed) result.dataflow |= PackedForward;
@@ -571,11 +565,11 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     const auto weights = options.weighted ? weighted_tables(p, s.length, inverse_scale, coefficient_bits)
                                           : WeightedTables{};
-    const unsigned carry_cache_smem = segmented && (requested & CachedFusedWeightedCarry)
+    const unsigned carry_cache_smem = options.weighted && segmented && (requested & CachedFusedWeightedCarry)
         ? weighted_segment_cache_bytes(weights.limbs) : 0;
     // Keep the shared coefficient tile small enough to allow several CTAs per SM.
     const bool cached_fused = carry_cache_smem && carry_cache_smem <= 16 * 1024;
-    const bool fused_weighted = segmented && (cached_fused || (requested & FusedWeightedCarry));
+    const bool fused_weighted = options.weighted && segmented && (cached_fused || (requested & FusedWeightedCarry));
     if (fused_weighted) result.dataflow |= FusedWeightedCarry;
     if (cached_fused) result.dataflow |= CachedFusedWeightedCarry;
     if (control && control->describe) {
@@ -735,9 +729,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         } else if (pending && mixed)
             pack<true,true,false,true><<<mixed_grid(count),threads,0,q>>>(
                 state.data,dest,s,in,digit_table.data,mixed_fwd.data,radix5_fwd,carry_headers.data,pending);
-        else if (pending)
+        else if (pending && options.weighted)
             pack<true,false,false,true><<<grid(count),threads,0,q>>>(
                 state.data,dest,s,in,digit_table.data,nullptr,{},carry_headers.data,pending);
+        else if (pending)
+            pack<false,false,false,true><<<grid(count),threads,0,q>>>(
+                state.data,dest,s,in,nullptr,nullptr,{},carry_headers.data,pending);
         else if (mixed)
             pack<true,true><<<mixed_grid(count),threads,0,q>>>(state.data,dest,s,in,digit_table.data,
                                                                mixed_fwd.data,radix5_fwd);
@@ -785,7 +782,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             combine<false,select_coords><<<count*curves,threads,0,q>>>(state.data,nullptr,s,ops,cursor);
             return;
         }
-        segment_limb_sums<false,select_coords,false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
+        segment_limb_sums<SegmentInput::Add,select_coords,false><<<segment_grid(count),stage1_carry_segment,0,q>>>(
             state.data,nullptr,carry_headers.data,s,ops,cursor);
         finish_carries(count,ops.out,{},false,pending);
     };
@@ -864,6 +861,15 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             combine<true,false,weighted,route,cached><<<batch,threads,cached ? carry_smem : 0,q>>>(
                 state.data,freq.data,s,reduction,cursor);
         };
+        const auto summarize = [&](auto input) {
+            constexpr auto mode = decltype(input)::value;
+            if (route_output)
+                segment_limb_sums<mode,false,true><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
+                    state.data,freq.data,carry_headers.data,s,reduction,cursor);
+            else
+                segment_limb_sums<mode,false,false><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
+                    state.data,freq.data,carry_headers.data,s,reduction,cursor);
+        };
         constexpr std::true_type yes{};
         constexpr std::false_type no{};
         if (options.weighted) {
@@ -882,24 +888,19 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                 const dim3 limb_grid((s.words + weighted_limb_threads - 1) / weighted_limb_threads, batch);
                 weighted_limb_sums<<<limb_grid,weighted_limb_threads,limb_smem,q>>>(
                     freq.data,inverse.data,inverse_weights.data,digit_table.data,limb_table.data,p,s.words,s.length);
-                if (segmented) {
-                    if (route_output)
-                        segment_limb_sums<true,false,true><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
-                            state.data,freq.data,carry_headers.data,s,reduction,cursor);
-                    else
-                        segment_limb_sums<true,false,false><<<segment_grid(outputs),stage1_carry_segment,0,q>>>(
-                            state.data,freq.data,carry_headers.data,s,reduction,cursor);
-                } else if (route_output && cached) reduce(yes,yes,yes);
+                if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::Weighted>{});
+                else if (route_output && cached) reduce(yes,yes,yes);
                 else if (route_output) reduce(yes,yes,no);
                 else if (cached) reduce(yes,no,yes);
                 else reduce(yes,no,no);
             }
-            if (segmented) finish_carries(outputs,out,cursor,route_output,pending_outputs);
         } else {
             ecm_launch_carry_cone_kernel<6>(EcmCudaLaunch(grid(outputs),threads,0,q),inverse.data,freq.data,s.length,s.bpw,s.length);
-            if (route_output) reduce(no,yes,no);
+            if (segmented) summarize(std::integral_constant<SegmentInput,SegmentInput::Linear>{});
+            else if (route_output) reduce(no,yes,no);
             else reduce(no,no,no);
         }
+        if (segmented) finish_carries(outputs,out,cursor,route_output,pending_outputs);
     };
     auto step=[&](unsigned i) {
         if (square_probe) {
