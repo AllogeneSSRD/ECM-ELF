@@ -1,6 +1,11 @@
 #include "ecm/platform/fingerprint.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <bcrypt.h>
+#else
+#include <memory>
+#include <openssl/evp.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -11,6 +16,7 @@
 // Windows CNG loaded dynamically: no new link dependency for existing builders.
 namespace ecm_stage2 {
 std::string sha256_stream(std::istream &input) {
+#ifdef _WIN32
     struct Cng {
         HMODULE library=nullptr;
         BCRYPT_ALG_HANDLE algorithm=nullptr;
@@ -53,13 +59,26 @@ std::string sha256_stream(std::istream &input) {
     check(api.property(api.algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&length),sizeof(length),&received,0));
     object.resize(length);
     check(api.create(api.algorithm,&api.hash,object.data(),length,nullptr,0,0));
+    auto update=[&](unsigned char *data, size_t size){check(api.update(api.hash,data,static_cast<ULONG>(size),0));};
+#else
+    const auto check=[](int status){if(status!=1)throw std::runtime_error("OpenSSL SHA256 operation failed");};
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(),EVP_MD_CTX_free);
+    if(!context)throw std::runtime_error("OpenSSL SHA256 context unavailable");
+    check(EVP_DigestInit_ex(context.get(),EVP_sha256(),nullptr));
+    auto update=[&](const unsigned char *data,size_t size){check(EVP_DigestUpdate(context.get(),data,size));};
+#endif
     std::vector<unsigned char> buffer(65536);
     while(input) {
         input.read(reinterpret_cast<char*>(buffer.data()),buffer.size());
-        if(input.gcount())check(api.update(api.hash,buffer.data(),static_cast<ULONG>(input.gcount()),0));
+        if(input.gcount())update(buffer.data(),static_cast<size_t>(input.gcount()));
     }
     if(input.bad())throw std::runtime_error("fingerprint input read failed");
-    unsigned char digest[32];check(api.finish(api.hash,digest,sizeof(digest),0));
+    unsigned char digest[32];
+#ifdef _WIN32
+    check(api.finish(api.hash,digest,sizeof(digest),0));
+#else
+    check(EVP_DigestFinal_ex(context.get(),digest,nullptr));
+#endif
     const char *hex="0123456789abcdef";std::string result;
     for(auto c:digest){result+=hex[c>>4];result+=hex[c&15];}
     return result;

@@ -19,11 +19,78 @@
 #include <map>
 #include <sstream>
 #include <string_view>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 namespace s2prod {
 namespace {
 fs::path fatal_log;
 int fatal_log_worker=1;
 uint64_t fatal_log_max_kb=0;
+
+class QueueFileLock {
+#ifdef _WIN32
+    Handle handle_;
+#else
+    int fd_ = -1;
+#endif
+public:
+    QueueFileLock() = default;
+    QueueFileLock(const QueueFileLock&) = delete;
+    QueueFileLock& operator=(const QueueFileLock&) = delete;
+    ~QueueFileLock() {
+#ifndef _WIN32
+        if(fd_ >= 0) close(fd_);
+#endif
+    }
+    bool open(const fs::path &path, bool temporary = true) {
+#ifdef _WIN32
+        const DWORD flags = FILE_ATTRIBUTE_NORMAL | (temporary ? FILE_FLAG_DELETE_ON_CLOSE : 0);
+        handle_.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, flags, nullptr);
+        return handle_.value != INVALID_HANDLE_VALUE;
+#else
+        // Retain the lock inode so competing opens always lock the same file.
+        (void)temporary;
+        fd_ = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        return fd_ >= 0 && flock(fd_, LOCK_EX | LOCK_NB) == 0;
+#endif
+    }
+};
+
+class QueueStopHandler {
+#ifndef _WIN32
+    struct sigaction old_int_{}, old_term_{};
+#endif
+public:
+    QueueStopHandler() {
+#ifdef _WIN32
+        if(!SetConsoleCtrlHandler(console_control, TRUE))
+            throw std::runtime_error("cannot install console stop handler");
+#else
+        struct sigaction action{};
+        action.sa_handler = console_control;
+        sigemptyset(&action.sa_mask);
+        sigaddset(&action.sa_mask, SIGINT);
+        sigaddset(&action.sa_mask, SIGTERM);
+        if(sigaction(SIGINT, &action, &old_int_) != 0)
+            throw std::runtime_error("cannot install Stage2 SIGINT handler");
+        if(sigaction(SIGTERM, &action, &old_term_) != 0) {
+            sigaction(SIGINT, &old_int_, nullptr);
+            throw std::runtime_error("cannot install Stage2 SIGTERM handler");
+        }
+#endif
+    }
+    ~QueueStopHandler() {
+#ifdef _WIN32
+        SetConsoleCtrlHandler(console_control, FALSE);
+#else
+        sigaction(SIGTERM, &old_term_, nullptr);
+        sigaction(SIGINT, &old_int_, nullptr);
+#endif
+    }
+};
 
 void append_log(const fs::path &path,const std::string &message,int worker,uint64_t max_kb) {
     if(max_kb)ecm_append_worker_log(path,worker,max_kb,message.empty()?"\n":message);
@@ -201,23 +268,25 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
     ecm_queue::OwnerLease owner;
     if (queue) owner.acquire(worktodo.u8string(), startup.worker);
     if (queue && startup.selection) throw std::runtime_error("queue curve selection comes from the Stage2 save; use --save for overrides");
-    Handle lock;
+    QueueFileLock lock;
     if (queue) {
         if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
         if (!startup.dry && !startup.plan_only) {
             // Each worker section has one Stage2 consumer. The shared queue edit
             // lock serializes row rewrites across different workers.
             fs::path lockpath(worktodo.string() + ".worker" + std::to_string(startup.worker) + ".stage2.lock");
-            lock.value = CreateFileW(lockpath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
-                                     FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (lock.value == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot lock worktodo worker (another process may own it)");
+            if (!lock.open(lockpath, false)) throw std::runtime_error("cannot lock worktodo worker (another process may own it)");
         }
     }
     auto same_path=[](const fs::path &a,const fs::path &b) {
         if(a.empty()||b.empty())return false;
         std::error_code error;
         if(fs::equivalent(a,b,error)&&!error)return true;
+#ifdef _WIN32
         return upper(a.lexically_normal().string())==upper(b.lexically_normal().string());
+#else
+        return a.lexically_normal()==b.lexically_normal();
+#endif
     };
     // A common TOML may share device/save defaults, never writable queue state.
     std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::u8path(startup.debug_file),fs::u8path(startup.submission)};
@@ -239,8 +308,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             append_log(log,message,startup.worker,startup.log_max_kb);
     };
     report(std::string(ecm_program::name)+" "+ecm_program::version+" ("+engine.name+")");
-    if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
-    struct ControlGuard { ~ControlGuard(){SetConsoleCtrlHandler(console_control,FALSE);} } control_guard;
+    QueueStopHandler control_guard;
     if(engine.begin)engine.begin();
     uint64_t completed=0,failed_tasks=0;
     for (;;) {
@@ -332,7 +400,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         stage2_queue::State state;
         const bool persist=queue&&!o.dry&&!o.plan_only;
         fs::path progress;
-        Handle progress_lock;
+        QueueFileLock progress_lock;
         if(persist) {
             stage2_queue::Task task;
             task.aid=fields.task.aid;task.n=expected_n;
@@ -343,11 +411,9 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             const auto bits=mpz_sizeinbase(target.z,2);
             // Serialize filename allocation, then keep only the selected task lease.
             fs::create_directories(progress_dir);
-            Handle name_lock;
+            QueueFileLock name_lock;
             auto name_lockpath=task.path(progress_dir,bits);name_lockpath+=".name.lock";
-            name_lock.value=CreateFileW(name_lockpath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
-            if(name_lock.value==INVALID_HANDLE_VALUE)throw std::runtime_error("another process is allocating this Stage2 checkpoint name");
+            if(!name_lock.open(name_lockpath))throw std::runtime_error("another process is allocating this Stage2 checkpoint name");
             const auto legacy_bounds=[&] {return ecm_results::legacy_stage2_bounds(fs::u8path(o.submission));};
             auto source=stage2_queue::load_task(progress_dir,bits,task,state,legacy_bounds,&progress);
             for(const auto &path:writable)if(same_path(progress,path))throw std::runtime_error("task checkpoint conflicts with output state");
@@ -355,9 +421,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                (!o.tune_profile.empty()&&same_path(progress,fs::path(o.tune_profile))))
                 throw std::runtime_error("task checkpoint conflicts with input");
             auto lockpath=progress;lockpath+=".lock";
-            progress_lock.value=CreateFileW(lockpath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
-            if(progress_lock.value==INVALID_HANDLE_VALUE)
+            if(!progress_lock.open(lockpath))
                 throw std::runtime_error("another process owns this Stage2 task checkpoint");
             const auto match_legacy=[&](const std::string &line) {
                 const auto old=queue_fields(line);Big n;std::string error;
@@ -370,12 +434,10 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 if(stage2_queue::import_legacy(legacy_progress,task,match_legacy,previous,legacy_bounds) &&
                    previous.run==state.run && previous.publication_task==state.publication_task)source=legacy_progress;
             }
-            Handle legacy_lock;
+            QueueFileLock legacy_lock;
             if(!source.empty() && source!=progress) {
                 auto path=source;path+=".lock";
-                legacy_lock.value=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
-                if(legacy_lock.value==INVALID_HANDLE_VALUE)
+                if(!legacy_lock.open(path))
                     throw std::runtime_error("another process owns this legacy Stage2 checkpoint");
                 if(state.version<5) {
                     const auto previous_run=state.run;
@@ -401,7 +463,11 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     ecm_results::retire_legacy_stage2_curves(fs::u8path(o.submission),state.publication_task,
                         [&](const std::string& key){return state.nf_keys.count(ecm_stage2::sha256_text(key))!=0;});
                 auto archive=source;archive+=".migrated";
+#ifdef _WIN32
                 if(!MoveFileExW(source.c_str(),archive.c_str(),MOVEFILE_WRITE_THROUGH))
+#else
+                if(fs::exists(archive) || !ecm_replace_file(source,archive))
+#endif
                     throw std::runtime_error("cannot archive imported Stage2 checkpoint: "+source.u8string());
                 report("stage2_resume_import: completed="+std::to_string(state.done)+" total="+std::to_string(state.total)+
                     " legacy_archived=1 checkpoint="+progress.u8string());
@@ -476,7 +542,9 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::Remove))
             throw std::runtime_error("task completed but queue could not be advanced; progress retained");
         // A restart after queue advancement can ignore a complete stale state.
-        if(!DeleteFileW(progress.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND)
+        std::error_code removal_error;
+        fs::remove(progress, removal_error);
+        if(removal_error && removal_error!=std::errc::no_such_file_or_directory)
             throw std::runtime_error("task advanced but cannot remove completed progress file");
         report("task_done: requested="+(count?std::to_string(count):"all")+" available="+std::to_string(plan.size())+
                " completed="+std::to_string(state.done));

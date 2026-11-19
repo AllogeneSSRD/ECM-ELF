@@ -11,6 +11,9 @@
 #include <cstdint>
 #include <cerrno>
 #include <sys/stat.h>
+#if defined(__linux__) && defined(ECM_OPENCL_PORTABLE_RESOURCES)
+#include <filesystem>
+#endif
 
 #ifdef _WIN32
 #include <direct.h>
@@ -330,6 +333,10 @@ static std::string portable_kernel_root() {
         const auto slash = exe.find_last_of("/\\");
         if (slash != std::string::npos) return exe.substr(0, slash + 1) + "opencl_resources/";
     }
+#elif defined(__linux__) && defined(ECM_OPENCL_PORTABLE_RESOURCES)
+    std::error_code error;
+    const auto exe = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error) return (exe.parent_path() / "opencl_resources").string() + '/';
 #endif
     return {};
 }

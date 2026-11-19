@@ -446,8 +446,8 @@ int ntt_shape_exactness(const NttShape &sh)
     return 0;
 }
 
-int ntt_shape_maxcoeff(const NttShape &sh, const std::vector<uint64_t> &hA,
-                              const std::vector<uint64_t> &hB, unsigned long long *maxcoeff,
+int ntt_shape_maxcoeff(const NttShape &sh, const std::vector<unsigned long long> &hA,
+                              const std::vector<unsigned long long> &hB, unsigned long long *maxcoeff,
                               unsigned long long *maxcoeff_k, bool *ran,
                               unsigned long long *limbs)
 {

@@ -60,7 +60,8 @@ static int run(int device,int first,int last,int repeats,unsigned long long memo
         const auto n=1ull<<k,om=gl_pow_host(7,(GL_P-1)/n),omi=gl_pow_host(om,GL_P-2);
         const auto scale=gl_pow_host(n,GL_P-2);
         for(size_t shape=0;shape<requested_count;++shape) {
-        const auto slices=requested[shape],words=n*slices;
+        const auto slices=requested[shape];
+        const auto words=n*slices;
         if(slices>(uint64_t)prop.maxGridSize[1])return 2;
         FuseCtx description;fuse_describe(description,n,k,om,omi);
         const auto base=fuse_planned_base_words(description)*8;

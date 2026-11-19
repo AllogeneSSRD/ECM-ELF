@@ -12,6 +12,7 @@
 # Stable build-script bytes for source fingerprints; BAT launchers use cmd CRLF.
 tools/build/**/*.ps1 text eol=lf
 tools/build/*.ps1 text eol=lf
+tools/build/*.sh text eol=lf
 tools/build/**/*.bat text eol=crlf
 tools/build/*.bat text eol=crlf
 

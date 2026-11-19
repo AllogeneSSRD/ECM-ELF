@@ -12,6 +12,8 @@
 #include "stage2_baby_launch.h"
 #include "scale_plain.cuh"
 
+char g_last_state[512] = "none";
+
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
@@ -35,7 +37,6 @@ void s2g_install_crash_handler(void)
 }
 /* host commit charge + device free bytes, one line; also the "last known state" the watchdog
    leaves behind when the driver's watchdog kills us (see the header comment) */
-char g_last_state[512] = "none";
 void s2g_state(const char *what)
 {
     PROCESS_MEMORY_COUNTERS pmc{};
@@ -79,8 +80,8 @@ void s2g_install_crash_handler(void)
 {}
 void s2g_install_terminate(void)
 {}
-void s2g_state(const char *)
-{}
+void s2g_state(const char *what)
+{ std::snprintf(g_last_state, sizeof(g_last_state), "%s", what); }
 void s2g_print_last_state(const char *)
 {}
 #endif
@@ -842,7 +843,7 @@ void fixture() {
     auto check=[&](bool value){++checks;if(!value)++bad;};
     for(uint64_t P:{1ull,48ull,126720ull,138240ull})for(uint64_t nw:{1ull,126ull,258ull}) {
         const uint64_t batch_bytes=16*nw*P;
-        for(uint64_t budget:{1ull,batch_bytes-1,batch_bytes,batch_bytes+1,2*batch_bytes-1,2*batch_bytes}) {
+        for(uint64_t budget:{uint64_t{1},batch_bytes-1,batch_bytes,batch_bytes+1,2*batch_bytes-1,2*batch_bytes}) {
             const auto f=plan(P,nw,budget,true),c=plan(P,nw,budget,false);
             check(f.valid && c.valid && f.points%P==0 && c.points%P==0);
             check(f.coordinate_bytes==std::max(uint64_t(1),budget/batch_bytes)*batch_bytes);

@@ -1507,7 +1507,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     unsigned long long hook_count=out_slots;
     if (!ntt_hook_window(hook,out_slots,hook_count)) return 2;
     const size_t slice_in = (size_t)P * W;               /* u64 words per operand slice */
-    std::vector<uint64_t> hA((size_t)(N * nbatch), 0), hB((size_t)(N * nbatch), 0);
+    std::vector<unsigned long long> hA((size_t)(N * nbatch), 0), hB((size_t)(N * nbatch), 0);
     unsigned long long maxdigit = 0;
     /* with a reduction hook the caller never reads the slot projections, so the assembly kernel
        and its D2H are skipped (NTT_S4_KEEPHOUT=1 restores the old behaviour for the A/B) */
@@ -1922,7 +1922,7 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
        while EVERY coefficient of the product wraps mod p.  Symptom: every slot wrong
        (bad_slots = 2P-1, slot 0 included) with the geometry and the timings unchanged. */
     const double thb_pack = now_s();
-    std::vector<uint64_t> hA(N, 0), hB(N, 0);
+    std::vector<unsigned long long> hA(N, 0), hB(N, 0);
     if (!ntt_pack_operand(sh, wordsA, wordsB, hA.data(), hB.data(), nullptr)) return 5;
     NTT_HBS(t_pack, thb_pack);
 

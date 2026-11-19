@@ -3,6 +3,11 @@
 #include "io/expression.h"
 #include "../../io/config_format.h"
 #include "../../io/files.h"
+#ifndef _WIN32
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include "modulus.h"
 #include "ecm/io/save.h"
 #include "ecm/curve/edwards.h"
@@ -188,13 +193,28 @@ void append(const fs::path &path, const std::string &line) {
         if(!tail.get(last))throw std::runtime_error("cannot inspect append tail: "+path.string());
         separator=last!='\n';
     }
+    const std::string data=(separator?"\n":"")+line+'\n';
+#ifdef _WIN32
     HANDLE h=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(h==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot append: "+path.string());
     LARGE_INTEGER end{};
     if(!SetFilePointerEx(h,end,nullptr,FILE_END)){CloseHandle(h);throw std::runtime_error("cannot seek append file");}
-    const std::string data=(separator?"\n":"")+line+'\n';DWORD written=0;
+    DWORD written=0;
     const bool ok=data.size()<=MAXDWORD && WriteFile(h,data.data(),static_cast<DWORD>(data.size()),&written,nullptr) && written==data.size() && FlushFileBuffers(h);
     CloseHandle(h);
+#else
+    const int fd = ::open(path.c_str(), O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC, 0666);
+    if(fd < 0)throw std::runtime_error("cannot append: "+path.string());
+    size_t offset=0;
+    while(offset<data.size()) {
+        const auto written=::write(fd,data.data()+offset,data.size()-offset);
+        if(written<0 && errno==EINTR)continue;
+        if(written<=0)break;
+        offset+=static_cast<size_t>(written);
+    }
+    const bool flushed=offset==data.size() && fsync(fd)==0;
+    const bool ok=::close(fd)==0 && flushed;
+#endif
     if(!ok)throw std::runtime_error("cannot flush append: "+path.string());
 }
 }

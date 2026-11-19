@@ -49,8 +49,6 @@ void s2g_install_crash_handler();
 void s2g_install_terminate();
 void s2g_state(const char *what);
 void s2g_print_last_state(const char *why);
-#if defined(_WIN32)
 extern char g_last_state[512];
-#endif
 
 namespace stage2_giant_chunk { void fixture(); }

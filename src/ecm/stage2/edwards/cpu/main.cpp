@@ -487,11 +487,8 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
                         fs::path(paths.worktodo.string()+".worker"+std::to_string(cpu.worker)+".stage2.lock")},
                     {paths.results,fs::u8path(cpu.submission)});
     TunePlans tune;
-    if(cpu.stop_handle) {
-        s2prod::inherited_stop_event=reinterpret_cast<HANDLE>(cpu.stop_handle);
-        if(WaitForSingleObject(s2prod::inherited_stop_event,0)==WAIT_FAILED)
-            throw std::runtime_error("invalid inherited Stage2 stop event");
-    }
+    if(cpu.stop_handle && !s2prod::set_inherited_stop(cpu.stop_handle))
+        throw std::runtime_error("invalid inherited Stage2 stop event");
     if(stage2_log::enabled(stage2_log::curve))std::cout<<"CPU Edwards Stage2 backend="<<cpu.backend<<" threads="<<cpu.threads
              <<" memory_mib="<<cpu.memory<<" libecm="<<ecm_version()<<std::endl;
     s2prod::TaskEngine engine;
@@ -623,8 +620,10 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
 }
 
 #ifndef ECM_STAGE2_COMBINED
+#ifdef _WIN32
 // The GUI also supports existing CPU-only executables.
 extern "C" __declspec(dllexport) void ecm_cpu_stage2_worker() {}
+#endif
 
 int main(int argc,char **argv) {
     return ecm_stage2::run_cpu_stage2(argc,argv);

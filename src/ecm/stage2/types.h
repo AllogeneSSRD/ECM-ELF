@@ -2,10 +2,6 @@
 
 // Private normalized invocation/state shared by the Stage2 executable modules.
 // TOML Settings stays in the application; computation modules borrow no parser.
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
 #include "process.h"
 #include <gmp.h>
 #include <filesystem>
@@ -146,5 +142,4 @@ struct RuntimeTuneObservation {
 // These are the only Settings fields consumed by planning/process output.
 // Preserve the original configured console budgets, not a tuned Options budget.
 struct TaskDefaults {uint64_t b2,arena,owner_mb;};
-extern volatile LONG stop_requests;
 }

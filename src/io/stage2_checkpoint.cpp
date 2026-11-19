@@ -1,7 +1,12 @@
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/platform/fingerprint.h"
 #include "io/json.h"
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include "io/files.h"
+#include <unistd.h>
+#endif
 #include <fstream>
 #include <iomanip>
 #include <optional>
@@ -172,9 +177,11 @@ bool State::load(const fs::path& path) {
 }
 
 void State::save(const fs::path& path) const {
+#ifdef _WIN32
     if (!path.parent_path().empty())
         fs::create_directories(path.parent_path());
     const fs::path temp(path.string() + ".tmp." + std::to_string(GetCurrentProcessId()));
+#endif
     std::ostringstream out;
     const bool multiple = reserved.size() > 1;
     const auto &receipt = reserved.size() == 1 ? reserved.front().receipt : pending;
@@ -204,6 +211,7 @@ void State::save(const fs::path& path) const {
     auto bytes = out.str();
     if (self_contained)
         bytes += ecm_stage2::sha256_text(bytes) + '\n';
+#ifdef _WIN32
     HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
@@ -218,6 +226,9 @@ void State::save(const fs::path& path) const {
                             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         throw std::runtime_error("cannot publish Stage2 progress; previous state retained: " +
                                  path.string());
+#else
+    ecm_io::write_atomic(path, bytes, ".tmp." + std::to_string(getpid()));
+#endif
 }
 
 std::string Task::legacy_id() const {

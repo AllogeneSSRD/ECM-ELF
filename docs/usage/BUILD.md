@@ -1,6 +1,6 @@
 # 构建与发布
 
-工具位于 `tools/build/`。从任意目录调用 PS1，或双击 BAT；BAT 转交参数，无参数运行结束后暂停。默认值由 PS1 维护；两个按 CUDA 版本命名的 release BAT 固定传入对应 profile 与 `-Jobs 16`。
+工具位于 `tools/build/`。Windows 从任意目录调用 PS1，或双击 BAT；BAT 转交参数，无参数运行结束后暂停。默认值由 PS1 维护；两个按 CUDA 版本命名的 release BAT 固定传入对应 profile 与 `-Jobs 16`。
 
 工具链查找、依赖路径和测试开关见 [构建与辅助工具环境变量](ENVIRONMENT_TOOLS.md)。
 
@@ -22,6 +22,69 @@ GUI 和工作程序共用 v4 `ecm.toml`。更新已有 v3 工作目录时，先�
 每项均有 `.ps1` 与 `.bat`。完整发布可分别使用 `tools/build/build_release_cu11.8.bat`、`build_release_cu13.3.bat`；`build_release.ps1/.bat` 保留双包总入口。两项阶段 release 入口只重建并验证相应阶段，不生成完整包。Stage1 本机/开发默认8路独立 CUDA TU 并行；Stage2 local 默认 `SplitCompile=8`。发布两阶段默认 `Jobs=16`，Stage2 cu13.3 聚合模式使用 `SplitCompile=8`，cu11.8及隔离备选使用1。构建入口不自动运行数学、GPU 或性能测试。
 
 本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 默认输出固定为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_stage2.exe` 和 `build_gui_local/ecm_gui.exe`。配置切换和归档规则见[用途与 profile 目录](#用途与-profile-目录)。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；完整分发包位于独立 `release/ecm-elf-<版本>-cu<CUDA版本>/` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+
+## WSL 2 本机构建
+
+在 Ubuntu WSL 2 中使用 Linux CMake、GNU Make 和 GCC，输出 x86-64 ELF。CUDA Stage1 需要 Linux CUDA Toolkit 和 `third_party/cgbn/include`。WSL 从 Windows 驱动获取 CUDA 设备。在 WSL 安装 Toolkit 时选择仅含工具链的包。用 `nvidia-smi` 核对设备，再用实际的 Linux `nvcc --version` 核对编译器。 [NVIDIA CUDA on WSL 指南](https://docs.nvidia.com/cuda/wsl-user-guide/index.html#installing-the-cuda-toolkit)
+
+Ubuntu 依赖包括 `build-essential cmake git python3 libgmp-dev libssl-dev ocl-icd-opencl-dev`。CPU Stage2 另需 `autoconf automake libtool` 和 [GMP-ECM 源码](EDWARDS_CPU_STAGE2.md#构建与运行)的 Git checkout。已有的 Windows checkout 可以直接从 `/mnt/d/code/MPA-OpenCl` 构建。
+
+```bash
+cd /mnt/d/code/MPA-OpenCl
+bash tools/build/build_stage1_wsl_local.sh 89
+bash tools/build/build_stage2_wsl_local.sh
+```
+
+- Stage1 输出 `build_stage1_wsl_sm89/ecm_cuda`，使用全档位、PARAM0 PRAC 和 resident 内核。默认从 `/usr/local/cuda/bin/nvcc` 取工具链，`ECM_NVCC` 可指定绝对路径。架构参数默认 89。两条脚本均可通过 `ECM_BUILD_JOBS` 调整并行数，默认 6。
+- Stage2 输出 `build_stage2_wsl_cpu/ecm_stage2`，支持直接读取 Edwards 存档和处理 worktodo。脚本默认从 `.refactor/gmp-ecm` 的 HEAD 提取源码到构建目录，也可传入另一处 GMP-ECM Git checkout。GMP-ECM 通过 Autotools 生成 Linux 配置并启用 OpenMP，CMake 链接 Ubuntu 的 GMP 与生成的 `libecm.a`。Linux CPU worker 支持 `auto`、`plain` 和 `ntt`。
+- Windows CUDA/OpenCL Stage2 CLI 的进程隔离、队列调度与信号由 Win32 实现。CUDA 算术引擎可单独在 Linux 编译和调用。`relocation_probe` 读取单条曲线，参数顺序为 `Nhex Xhex a24hex B1 B2 D device relocation carrier`。
+
+CUDA Stage2 的完整 CLI 移植涉及曲线子进程的清理和输出捕获、GPU 队列的跨进程同步，以及调优文件和环境变量读取。探针直接调用同一个生产算术入口，用于独立检查 WSL 上的 CUDA 计算。 [子进程](../../src/ecm/stage2/process.cpp) · [任务调度](../../src/ecm/stage2/task.cpp) · [规划与调优](../../src/ecm/stage2/planning/planning.cpp)
+
+```bash
+mkdir -p build_stage2_wsl_cuda_probe
+printf '*\n' > build_stage2_wsl_cuda_probe/.gitignore
+cmake -S . -B build_stage2_wsl_cuda_probe -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_COMPILER="${ECM_NVCC:-/usr/local/cuda/bin/nvcc}" \
+    -DECM_CUDA_ARCHITECTURES=89-real -DECM_ENABLE_CUDA=ON \
+    -DECM_BUILD_CUDA_STAGE2_PROBE=ON -DECM_BUILD_TOOLS=OFF
+cmake --build build_stage2_wsl_cuda_probe --target relocation_probe --parallel 4
+```
+
+在独立目录运行 Edwards 交接样例。输入为 `10007 × (2^127−1)`，sigma 17、B1=20，Stage2 的 B2=40000 可找到 10007。`-d 0` 选择 WSL 的 CUDA 设备 0。
+
+```bash
+repo=$PWD
+cd "$(mktemp -d)"
+printf 'config_version = 4\n' > ecm.toml
+printf '%s\n' '10007*(2^127-1)' |
+    "$repo/build_stage1_wsl_sm89/ecm_cuda" --config "$PWD/ecm.toml" \
+        --curve ed --target gpu --gpu-algorithm cgbn -d 0 \
+        -sigma 17 -gpucurves 1 -save stage1.save 20 0
+"$repo/build_stage2_wsl_cpu/ecm_stage2" --config ecm.toml \
+    --save stage1.save --b2 40000 --backend plain \
+    --results stage2.jsonl --submission stage2.json.txt
+```
+
+Stage1 的 `ecm` 目标也可在 Linux 构建。其 OpenCL GPU 路径需要能在 WSL 枚举平台的 ICD。本机 `clinfo -l` 未枚举到平台。可用 `ecm --target cpu` 走 CPU 路径，或使用 `ecm_cuda` 走 NVIDIA CUDA 路径。
+
+## Linux x86-64 发布
+
+从 Ubuntu WSL 2 或同工具链的 Linux x86-64 环境调用以下入口。除了本机构建依赖，发布还使用 Python 3.11+、GNU binutils 的 `readelf` 和 util-linux 的 `flock`。默认配置为 `sm_89` SASS、`compute_89` PTX 和 8 个并行任务。脚本检测实际安装的 Linux CUDA 工具链，通过 `--arch` 和 `--ptx-arch` 选择它支持的目标。`--ptx-arch none` 只生成 SASS。
+
+```bash
+bash tools/build/build_release_linux.sh
+bash tools/build/build_release_linux.sh --skip-build --skip-package
+```
+
+第一条命令构建并打包。第二条只对现有组件做内容验证。构建目录默认为 `build_linux_release/<profile>/`，包目录、`.tar.gz` 和摘要默认为 `release/ecm-elf-<版本>-<profile>-linux-x64*`。使用 `--build-root`、`--out` 指定独立目录。相同名称的发布产物保留原样，重新打包使用新的输出目录。可使用 `--skip-package` 只构建和验证组件。
+
+- Linux 本机 Stage1 与发布共用分档模块生成器。两者均用 GNU Make 并行编译独立的曲线／param／容器单元。发布启用全档及 PARAM0 PRAC。
+- Linux 本机脚本按 CMake/Make 依赖和时间戳增量构建。Linux 发布先按编译命令、编译器依赖文件、源码和对象的 SHA-256 核验，再交给 Make。命令或内容改变的单元重编。新增输入路径时，保守地重新验证依赖选路。各阶段构建完毕后重新核对输入，构建目录保留 `verified-build.json`。Windows 的严格 `HostOnly` 入口由 PowerShell 提供。
+- 发布包含 CUDA Stage1 `ecm_cuda`、OpenCL/CPU Stage1 `ecm`、CPU Edwards Stage2 `ecm_stage2`、随程序查找的 OpenCL 资源、配置模板、所用源码和摘要。完整的 CUDA Stage2 worker 使用 Win32 宿主层，Linux 可用单曲线探针检查计算引擎。探针与 Windows GUI 属于独立构建。
+- 打包核验 ELF、版本、最终程序及全档 Stage1 模块的 CUDA 镜像。运行依赖由目标系统提供，SONAME 和构建机 glibc 版本记录于 `release-manifest.json`。用于其他发行版或显卡时按实际依赖和运行资格验收。
+
+0.69.9 的 `cu12.9-sm89-ptx89` 已在 Ubuntu WSL 2 验证。完整增量重跑复用 301 个单元，三个 ELF 的 SHA-256 一致。解包搬移后，RTX 4070 Ti 和 RTX 4060 Laptop 均通过 SASS 与强制 PTX JIT 用例，CPU Stage1 也通过同一 Edwards 存档用例。包内 CPU Stage2 从这些存档得到因子 10007。记录位于 `data/experiments/linux_release_20261119/`。
 
 ## 默认策略
 

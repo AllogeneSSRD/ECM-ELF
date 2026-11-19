@@ -2,7 +2,11 @@
 
 用户流程、默认策略、工具链和分发内容以 [构建与发布](../../docs/usage/BUILD.md) 为准。
 
-所有构建用途的输出目录在写入产物前创建内部 `.gitignore`（一行 `*`），复用时自动补齐；公共初始化函数位于 `internal/build_directory.ps1`。新入口也应调用它，构建目录无需登记到根 `.gitignore`。profile、SkipBuild 和测试的新目录限制仍独立校验，详见[用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
+Ubuntu WSL 2 入口为 `build_stage1_wsl_local.sh` 和 `build_stage2_wsl_local.sh`。使用 Bash 启动，依赖和运行示例见 [WSL 2 本机构建](../../docs/usage/BUILD.md#wsl-2-本机构建)。
+
+`build_release_linux.sh` 在 Linux x86-64 上构建并核验发布组件，生成带 SHA-256 的 `.tar.gz`。支持 `--arch`、`--ptx-arch`、`--jobs`、`--build-root`、`--out`、`--skip-build` 和 `--skip-package`。 [Linux x86-64 发布](../../docs/usage/BUILD.md#linux-x86-64-发布)
+
+所有构建用途的输出目录在写入产物前创建内部 `.gitignore`（一行 `*`），复用时自动补齐。PowerShell 入口使用 `internal/build_directory.ps1` 初始化目录。profile、SkipBuild 和测试的新目录限制仍独立校验，详见[用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 
 ## 一键入口
 

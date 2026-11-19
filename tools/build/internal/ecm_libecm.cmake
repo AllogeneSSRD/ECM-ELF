@@ -5,6 +5,19 @@ get_filename_component(ECM_LIBECM_SOURCE_DIR "${ECM_LIBECM_SOURCE_DIR}" ABSOLUTE
 if(NOT EXISTS "${ECM_LIBECM_SOURCE_DIR}/ecm.h.in")
     message(FATAL_ERROR "GMP-ECM sources not found: ${ECM_LIBECM_SOURCE_DIR}")
 endif()
+find_package(OpenMP REQUIRED COMPONENTS C CXX)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(ECM_LIBECM_BUILD_DIR "" CACHE PATH "Configured GMP-ECM build with ecm.h and .libs/libecm.a")
+    if(NOT EXISTS "${ECM_LIBECM_BUILD_DIR}/ecm.h" OR NOT EXISTS "${ECM_LIBECM_BUILD_DIR}/.libs/libecm.a")
+        message(FATAL_ERROR "Build native GMP-ECM with --enable-openmp --enable-static, then set ECM_LIBECM_BUILD_DIR (see docs/usage/BUILD.md)")
+    endif()
+    add_library(ecm_cpu_library STATIC IMPORTED)
+    set_target_properties(ecm_cpu_library PROPERTIES
+        IMPORTED_LOCATION "${ECM_LIBECM_BUILD_DIR}/.libs/libecm.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${ECM_LIBECM_BUILD_DIR};${GMP_INCLUDE_DIR}")
+    target_link_libraries(ecm_cpu_library INTERFACE "${GMP_LIBRARY}" OpenMP::OpenMP_CXX)
+    return()
+endif()
 file(READ "${ECM_LIBECM_SOURCE_DIR}/configure.ac" _ecm_configure)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${ECM_LIBECM_SOURCE_DIR}/configure.ac" "${ECM_LIBECM_SOURCE_DIR}/ecm.h.in"
@@ -38,5 +51,4 @@ target_include_directories(ecm_cpu_library PUBLIC "${_ecm_generated}" "${GMP_INC
 target_compile_definitions(ecm_cpu_library PRIVATE _CRT_SECURE_NO_WARNINGS NDEBUG WIN32 _WIN64)
 target_compile_options(ecm_cpu_library PRIVATE /O2 /std:c11 /wd4996)
 target_link_libraries(ecm_cpu_library PUBLIC "${GMP_LIBRARY}")
-find_package(OpenMP REQUIRED COMPONENTS C CXX)
 target_link_libraries(ecm_cpu_library PRIVATE OpenMP::OpenMP_C advapi32)

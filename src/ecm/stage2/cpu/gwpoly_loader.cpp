@@ -1,5 +1,7 @@
 #include "gwpoly.h"
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <array>
 #include <filesystem>
 #include <stdexcept>
@@ -9,12 +11,15 @@
 namespace ecm_gwpoly {
 namespace {
 struct Plugin {
+#ifdef _WIN32
     HMODULE module{};
+#endif
     const ecm_gw_stage2_api* api{};
     const ecm_gw_stage2_api_v2* api_v2{};
     const ecm_gw_stage2_api_v3* api_v3{};
     const ecm_gw_stage2_api_v4* api_v4{};
     std::string error;
+#ifdef _WIN32
     Plugin() {
         wchar_t executable[32768];
         const auto size = GetModuleFileNameW(nullptr, executable, 32768);
@@ -46,6 +51,9 @@ struct Plugin {
         }
     }
     ~Plugin() { if (module) FreeLibrary(module); }
+#else
+    Plugin() : error("The GWNUM Stage2 plugin is available on Windows") {}
+#endif
 };
 const Plugin& plugin() { static const Plugin instance; return instance; }
 const ecm_gw_stage2_api& api() {

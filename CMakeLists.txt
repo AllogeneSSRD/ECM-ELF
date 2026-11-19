@@ -42,7 +42,7 @@ find_package(OpenSSL REQUIRED)
 # Override with -DECM_WINDOWS_GMP_ROOT=<prefix> to use a different GMP.
 set(ECM_WINDOWS_GMP_ROOT "" CACHE PATH
     "Prefix with include/gmp.h and lib/gmp.lib (e.g. vcpkg installed/x64-windows)")
-if(NOT ECM_WINDOWS_GMP_ROOT)
+if(WIN32 AND NOT ECM_WINDOWS_GMP_ROOT)
     set(_ecm_gmp_zen3 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gmp-zen3/dist")
     if(EXISTS "${_ecm_gmp_zen3}/include/gmp.h" AND EXISTS "${_ecm_gmp_zen3}/lib/gmp.lib")
         set(ECM_WINDOWS_GMP_ROOT "${_ecm_gmp_zen3}")
@@ -53,15 +53,19 @@ if(NOT ECM_WINDOWS_GMP_ROOT)
         set(ECM_WINDOWS_GMP_ROOT "D:/code/vcpkg/installed/x64-windows")
     endif()
 endif()
-find_path(GMP_INCLUDE_DIR NAMES gmp.h HINTS "${ECM_WINDOWS_GMP_ROOT}/include")
-find_library(GMP_LIBRARY NAMES gmp libgmp HINTS "${ECM_WINDOWS_GMP_ROOT}/lib")
+if(WIN32 AND ECM_WINDOWS_GMP_ROOT)
+    set(_ecm_gmp_include_hint "${ECM_WINDOWS_GMP_ROOT}/include")
+    set(_ecm_gmp_library_hint "${ECM_WINDOWS_GMP_ROOT}/lib")
+endif()
+find_path(GMP_INCLUDE_DIR NAMES gmp.h HINTS ${_ecm_gmp_include_hint})
+find_library(GMP_LIBRARY NAMES gmp libgmp HINTS ${_ecm_gmp_library_hint})
 # The vcpkg toolchain sets CMAKE_FIND_ROOT_PATH to its own installed/ triplet, so
 # HINTS outside that root are ignored and find_path/find_library would silently
 # return the vcpkg GMP even when ECM_WINDOWS_GMP_ROOT points elsewhere. Pin both
 # to the configured prefix explicitly (an explicit -DGMP_INCLUDE_DIR/-DGMP_LIBRARY
 # on the command line still wins for its own cache entry only if it is inside the
 # prefix; use ECM_WINDOWS_GMP_ROOT to switch GMP builds).
-if(ECM_WINDOWS_GMP_ROOT)
+if(WIN32 AND ECM_WINDOWS_GMP_ROOT)
     if(EXISTS "${ECM_WINDOWS_GMP_ROOT}/include/gmp.h")
         set(GMP_INCLUDE_DIR "${ECM_WINDOWS_GMP_ROOT}/include" CACHE PATH "GMP include directory" FORCE)
     endif()
@@ -70,10 +74,13 @@ if(ECM_WINDOWS_GMP_ROOT)
     endif()
 endif()
 if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
+    if(WIN32)
+        set(_ecm_gmp_help "Install gmp:x64-windows with vcpkg or pass -DECM_WINDOWS_GMP_ROOT=<prefix>")
+    else()
+        set(_ecm_gmp_help "Install the system GMP development package or set GMP_INCLUDE_DIR and GMP_LIBRARY")
+    endif()
     message(FATAL_ERROR
-        "GMP not found (include=${GMP_INCLUDE_DIR}, lib=${GMP_LIBRARY}). "
-        "Install: vcpkg install gmp:x64-windows "
-        "or pass -DECM_WINDOWS_GMP_ROOT=<prefix>")
+        "GMP not found (include=${GMP_INCLUDE_DIR}, lib=${GMP_LIBRARY}). ${_ecm_gmp_help}")
 endif()
 message(STATUS "GMP: include=${GMP_INCLUDE_DIR} lib=${GMP_LIBRARY}")
 
@@ -257,12 +264,17 @@ endif()
 #  Auto-enabled when a CUDA toolkit is present; force off with -DECM_ENABLE_CUDA=OFF.
 #
 include(CheckLanguage)
-check_language(CUDA)
-if(CMAKE_CUDA_COMPILER)
-    option(ECM_ENABLE_CUDA "Build the ecm_cuda (CUDA/CGBN) executable" ON)
-else()
-    message(STATUS "CUDA compiler not found; ecm_cuda target disabled")
-    set(ECM_ENABLE_CUDA OFF)
+if(NOT DEFINED ECM_ENABLE_CUDA OR ECM_ENABLE_CUDA)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        option(ECM_ENABLE_CUDA "Build the ecm_cuda (CUDA/CGBN) executable" ON)
+    else()
+        if(ECM_ENABLE_CUDA)
+            message(FATAL_ERROR "ECM_ENABLE_CUDA requires a CUDA compiler")
+        endif()
+        message(STATUS "CUDA compiler not found; ecm_cuda target disabled")
+        set(ECM_ENABLE_CUDA OFF)
+    endif()
 endif()
 
 set(ECM_CUDA_ARCHITECTURES "80" CACHE STRING
@@ -270,6 +282,21 @@ set(ECM_CUDA_ARCHITECTURES "80" CACHE STRING
 
 if(ECM_ENABLE_CUDA)
     enable_language(CUDA)
+
+    option(ECM_BUILD_CUDA_STAGE2_PROBE "Build the standalone production-engine Stage2 relocation probe" OFF)
+    if(ECM_BUILD_CUDA_STAGE2_PROBE)
+        add_executable(relocation_probe tools/test/stage2_relocation_probe.cpp
+            ${ECM_STAGE2_PRODUCTION_SOURCES})
+        target_include_directories(relocation_probe PRIVATE
+            ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/ecm/cuda
+            "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>")
+        ecm_target_link_gmp(relocation_probe)
+        set_target_properties(relocation_probe PROPERTIES
+            CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
+            CUDA_ARCHITECTURES "${ECM_CUDA_ARCHITECTURES}")
+        target_compile_definitions(relocation_probe PRIVATE
+            NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
+    endif()
 
     option(ECM_BUILD_CUDA_STAGE2 "Build combined CPU/CUDA Stage2 driver" OFF)
     if(ECM_BUILD_CUDA_STAGE2)

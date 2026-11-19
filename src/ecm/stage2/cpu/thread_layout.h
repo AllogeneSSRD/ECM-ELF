@@ -115,5 +115,15 @@ inline std::optional<ThreadLayout> bind_worker(const std::string& spec, uint64_t
         return std::nullopt;
     }
 }
+#elif defined(__linux__)
+inline std::optional<ThreadLayout> bind_worker(const std::string& spec, uint64_t& threads) {
+    const auto selected = ecm_platform::apply_worker_cpu_affinity(spec);
+    if (selected && threads > selected) {
+        std::cerr << "CPU Stage2: using " << selected << " of " << threads
+                  << " requested threads in the configured CPU pool\n";
+        threads = selected;
+    }
+    return std::nullopt;
+}
 #endif
 } // namespace ecm_cpu_tune

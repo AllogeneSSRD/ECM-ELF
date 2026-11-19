@@ -133,15 +133,15 @@ static bool is_prime_u64(uint64_t n) {
         uint64_t e = d;
         while (e) { /* modular exponentiation mod n */
             if (e & 1ull)
-                r = (uint64_t)((unsigned __int64)r * x % n);
-            x = (uint64_t)((unsigned __int64)x * x % n);
+                r = r * x % n;
+            x = x * x % n;
             e >>= 1;
         }
         if (r == 1 || r == n - 1)
             continue;
         bool composite = true;
         for (unsigned k = 1; k < s; ++k) {
-            r = (uint64_t)((unsigned __int64)r * r % n);
+            r = r * r % n;
             if (r == n - 1) {
                 composite = false;
                 break;

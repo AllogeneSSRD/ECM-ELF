@@ -324,7 +324,7 @@ void poly_mul_batch_modN(
     C.chunk_plan_request_peak=std::max(C.chunk_plan_request_peak,request_bytes);
     C.chunk_plan_over_budget+=(request_bytes>budget_bytes);
     const bool chunk_output=g_s4_chunk_output && !g_s4_final_readback;
-    const size_t allocation_need=std::max((size_t)1,
+    const size_t allocation_need=std::max<size_t>(1,
         (size_t)(chunk_output ? chunk : nbatch)*output_slots*W);
     const int memory_category=cat>=0?cat:L.cat;
     if(memory_category>=0 && memory_category<BC_NCAT) {

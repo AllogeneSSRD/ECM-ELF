@@ -17,6 +17,8 @@ tools/build/build_stage2_cpu_local.ps1
 
 本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/ecm/stage2/edwards/cpu/main.cpp)、[严格存档读取](../../include/ecm/io/save.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 
+Ubuntu WSL 2 的 CPU 独立版使用 Linux libecm，支持直接读档和 Edwards worktodo；构建入口与交接示例见 [WSL 2 本机构建](BUILD.md#wsl-2-本机构建)。
+
 典型交接：
 
 ```powershell
