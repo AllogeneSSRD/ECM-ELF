@@ -1000,6 +1000,7 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
             ImGui::TableSetColumnIndex(6);value_cell(progress.speed,p.fg);
             ImGui::TableSetColumnIndex(7);value_cell(progress.eta,p.fg);
             ImGui::TableSetColumnIndex(8);value_cell(std::to_string(worker.tasks_done)+" / "+std::to_string(worker.hits),p.fg);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ui::text("worker.completed_hits_hint",zh));
             const auto summary=worker_summary(worker,zh);worker_summary_texts[worker.index]=summary;
             ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
             const auto row=ImGui::GetCursorScreenPos();worker_row_height=row.y-main_row_top;

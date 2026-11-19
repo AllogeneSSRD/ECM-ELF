@@ -34,6 +34,7 @@
       <Item id="worker.progress" name="Task progress" />
       <Item id="metrics.seconds_per_curve" name="s/curve" />
       <Item id="worker.completed_hits" name="Done / hits" />
+      <Item id="worker.completed_hits_hint" name="Completed queue rows / factors observed in the current GUI Worker record. Repeated factors in one task count once. Reloading the workflow resets these counts; use Results for history. Older Stage1 workers report completions when their queue ends." />
       <Item id="status.stopping" name="Stopping" />
       <Item id="action.stop" name="Stop" />
       <Item id="action.start" name="Start" />

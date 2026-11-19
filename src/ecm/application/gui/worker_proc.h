@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <set>
 
 namespace ecmgui {
 
@@ -73,10 +74,11 @@ public:
         std::vector<std::string> events;   // event layer (timestamped, ANSI-free)
         std::vector<std::string> raw;      // unclassified lines, ANSI-free
         long long progress_lines = 0;
+        long long tasks_done = 0;          // Newly confirmed queue rows, excluding queue-summary duplicates.
         ProgressInfo last_progress;
         std::string last_start_line;       // newest "START: <worktodo line>"
         std::string application_version;    // version reported by the running executable
-        std::vector<HitInfo> hits;         // every hit line seen in this batch (D3 fields)
+        std::vector<HitInfo> hits;         // New distinct factors within the current task.
         // Every `p95_add:` notice seen in this batch (Prime95 handoff, docs 13).
         std::vector<P95Notice> p95;
         // The worker printed "No input number on stdin": its executable predates the
@@ -127,6 +129,8 @@ private:
     bool autostart_ = false;
     bool want_running_ = false;
     bool saw_queue_done_ = false;
+    long long completed_tasks_=0;
+    std::set<std::string> task_factors_;
     Stage2Status stage2_status_;
     Stage1NttStatus stage1_ntt_status_;
     unsigned long long restart_at_ms_ = 0;

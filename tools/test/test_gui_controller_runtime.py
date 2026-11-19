@@ -18,7 +18,7 @@ def main():
         results=[json.loads(v) for v in r.stdout.decode('utf8',errors='replace').splitlines() if v.startswith('{"passed":')]
         assert len(results)==1 and results[0]['passed'];return results[0]
     fixtures=run('fixtures',[binaries['controller'],out/'fixtures'],out)
-    assert fixtures['scenarios']==10 and fixtures['checks']==44 and fixtures['gpu_devices']==0
+    assert fixtures['scenarios']==12 and fixtures['checks']==66 and fixtures['gpu_devices']==0
     work=out/'actual';work.mkdir();paths={}
     for name in ['stage1','stage2']:
         directory=work/name;directory.mkdir();exe=binaries[name]

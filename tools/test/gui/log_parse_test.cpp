@@ -194,6 +194,12 @@ int main() {
         const ParsedLine d = parse_line(TS "===== queue done, 2 task(s) processed =====");
         check(d.queue_done && d.tasks_processed == 2 && d.kind == LogKind::QueueDone,
               "queue completion + task count", std::to_string(d.tasks_processed));
+        const auto task=parse_line(TS "stage1_task_done: processed=2");
+        check(task.task_completed && task.tasks_processed==2 && !task.queue_done,
+              "Stage1 committed task is distinct from queue completion");
+        const auto stage2_task=parse_line(TS "task_done: requested=960 available=960 completed=960");
+        check(stage2_task.task_completed && !stage2_task.queue_done,
+              "Stage2 completion counts one task, with 960 curves");
         check(parse_line(TS "gpu backend : CUDA/CGBN, param0, device 1").kind == LogKind::Event,
               "banner line is an event");
         const auto version=parse_line(TS "ECM-ELF 0.38.0 (Stage1)");

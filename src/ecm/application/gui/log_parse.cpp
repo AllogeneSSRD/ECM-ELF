@@ -517,6 +517,15 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if(starts_with(p,"stage1_task_done:")) {
+        long long processed=0;
+        if(read_kv_int(p,"processed",processed) && processed>0){
+            out.kind=LogKind::Event;
+            out.task_completed=true;
+            out.tasks_processed=processed;
+            return out;
+        }
+    }
     if (parse_stage1_ntt(p, out.stage1_ntt)) {
         out.kind=out.stage1_ntt.kind==Stage1NttEvent::Kind::Progress?LogKind::Progress:LogKind::Raw;
         return out;
@@ -545,6 +554,7 @@ ParsedLine parse_line(const std::string &line) {
         if(tagged!=p.npos){const char* n=p.c_str()+7;read_u64(n,out.stage2.curve);}
         out.queue_done=starts_with(p,"stage2_complete:");
         const auto kind=out.stage2.kind;
+        out.task_completed=kind==Stage2Event::Kind::TaskDone;
         const bool detail=kind==Stage2Event::Kind::Modulus || kind==Stage2Event::Kind::Shape || kind==Stage2Event::Kind::Batch ||
             kind==Stage2Event::Kind::FullWall || kind==Stage2Event::Kind::CurvePrepare || kind==Stage2Event::Kind::GpuFree;
         out.kind=out.queue_done?LogKind::QueueDone:kind==Stage2Event::Kind::CurveFailed?LogKind::Error:detail?LogKind::Raw:LogKind::Event;

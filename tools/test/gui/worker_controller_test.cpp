@@ -27,6 +27,38 @@ static int child(int argc,char **argv) {
     std::cout<<"ECM-ELF 0.0.0 ("<<(stage2?"Stage2":"Stage1")<<")\n";
     if(scenario=="crash")return 9;
     if(scenario=="old"){std::cout<<"No input number on stdin\n";return 1;}
+    if(scenario=="counter-replay") {
+        std::ifstream input(fs::u8path(value(argc,argv,"--replay")));
+        std::cout<<input.rdbuf();
+        return input.bad()?2:0;
+    }
+    if(scenario=="counter-stream") {
+        const auto wait=[](const char* file){
+            const auto deadline=mono_ms()+10000;
+            while(!fs::exists(file)&&mono_ms()<deadline)Sleep(5);
+            if(!fs::exists(file))throw std::runtime_error("counter stream wait timed out");
+        };
+        if(stage2){
+            std::cout<<"stage2_plan: save=f.save requested=960 available=960 completed=0 B2=1000 D=210\n"
+                "curve_start: 1/960 record=1 sigma=26 B1=20\n"
+                "stage2_result: record=1 sigma=26 B1=20 result={\"status\":\"F\",\"factors\":[\"101\"]}\n"
+                "curve_done: 1/960 record=1 completed=1 wall=1\n";
+            wait("next-output");
+            std::cout<<"stage2_result: record=1 sigma=26 B1=20 result={\"status\":\"F\",\"factors\":[\"101\"]}\n"
+                "task_done: requested=960 available=960 completed=960\n"
+                "stage2_complete: curves_this_run=960 invalid_tasks=0\n";
+        }else{
+            std::cout<<"START: ECMSTAGE1=first\ncurve 0 sigma=26 -> factor found\n"
+                "factor[0]=101 curve=0 sigma=26\nFACTOR FOUND aid=N/A task=first\n"
+                "stage1_task_done: processed=1\n";
+            wait("next-output");
+            std::cout<<"factor[0]=101 curve=0 sigma=26\nstage1_task_done: processed=1\n"
+                "START: ECMSTAGE1=second\nfactor[0]=101 curve=0 sigma=27\n"
+                "factor[1]=103 curve=1 sigma=28\nFACTOR FOUND aid=N/A task=second\n"
+                "stage1_task_done: processed=2\n===== queue done, 2 task(s) processed =====\n";
+        }
+        return 0;
+    }
     if(scenario=="stage1-metadata") {
         std::cout<<"START: ECMSTAGE1=first\n"
             "Stage1 execution: curve=ed param=e backend=ntt ntt_type=weighted ntt_length=32 naf=0\n";
@@ -41,7 +73,7 @@ static int child(int argc,char **argv) {
         std::cout<<"START: "<<first<<'\n';
         if(!stage2)std::cout<<"factor[0]=101 curve=0 sigma=26 param=0 curve_model=mont execution_target=gpu\n";
         {std::ofstream out(queue);out<<rest;}
-        if(stage2)std::cout<<"stage2_complete: curves_this_run=1 invalid_tasks=0\n";
+        if(stage2)std::cout<<"task_done: requested=1 available=1 completed=1\nstage2_complete: curves_this_run=1 invalid_tasks=0\n";
         else std::cout<<"===== queue done, 1 task(s) processed =====\n";
         return 0;
     }
@@ -77,13 +109,19 @@ struct Fixture {
             <<quoted(queue.string())<<"\n[worker.1]\nautostart="
             <<(autostart?"true":"false")<<"\nextra_args="<<quoted(args)<<"\n";}
         std::string error;const bool loaded=ini.load(config.string(),error);check(loaded,error.c_str());
-        settings={config.string(),exe.string(),exe.string(),"normal","ask",1,3000};
+        settings.ini_path=config.string();
+        settings.worker_exe=settings.stage2_exe=exe.string();
+        settings.priority="normal";settings.exit_confirm="ask";
+        settings.num_workers=1;settings.graceful_stop_ms=3000;
         controller.set_sinks([this](const std::string &line){trace.push_back(line);},[this](const WorkerNotice &notice){notices.push_back(notice);});
         controller.configure(settings);
+        if(controller.workers().size()!=1)throw std::runtime_error("Controller fixture must own exactly one Worker");
     }
     void wait(const std::function<bool()> &done,int milliseconds=5000) {
         const auto deadline=mono_ms()+milliseconds;
         while(mono_ms()<deadline){controller.tick();if(done())return;std::this_thread::sleep_for(std::chrono::milliseconds(5));}
+        std::cerr<<"Controller timeout: "<<directory.string()<<" tasks="<<view().tasks_done<<" hits="<<view().hits<<'\n';
+        for(const auto& line:view().raw)std::cerr<<line<<'\n';
         throw std::runtime_error("Controller wait timed out");
     }
     const WorkerView &view()const{return controller.workers().front();}
@@ -93,7 +131,11 @@ static int real_workers(const fs::path &config,const std::string &stage1,const s
     TomlFile ini;std::string error;const bool loaded=ini.load(config.string(),error);check(loaded,error.c_str());
     WorkerController controller(ini);std::vector<std::string> trace;
     controller.set_sinks([&](const std::string &line){trace.push_back(line);std::cout<<line<<std::endl;},{});
-    controller.configure({config.string(),stage1,stage2,"normal","stop",1,5000});
+    WorkerSettings settings;
+    settings.ini_path=config.string();settings.worker_exe=stage1;settings.stage2_exe=stage2;
+    settings.priority="normal";settings.exit_confirm="stop";
+    settings.num_workers=1;settings.graceful_stop_ms=5000;
+    controller.configure(settings);
     const auto cfg=ecm_config::read_stage1(ecm_config::cli_entries(ini.lines(),1,true));
     const auto queue=fs::u8path(cfg.worktodo);controller.start_all();const auto deadline=mono_ms()+60000;
     for(;;) {
@@ -115,10 +157,42 @@ static int real_workers(const fs::path &config,const std::string &stage1,const s
 int main(int argc,char **argv) {
     try {
         if(!value(argc,argv,"--worker").empty())return child(argc,argv);
+        if(argc==4 && std::string(argv[1])=="--counter-replay") {
+            const auto root=fs::absolute(argv[2]),self=fs::absolute(argv[0]);
+            Fixture f(root,self,"counter-replay","counter-replay");
+            f.ini.set("workers.1","extra_args","--controller-fixture counter-replay --replay \""+fs::absolute(argv[3]).string()+"\"");
+            f.controller.configure(f.settings);
+            check(f.controller.start(1),"counter replay start failed");
+            f.wait([&]{return !f.controller.busy();});
+            std::cout<<"{\"tasks_done\":"<<f.view().tasks_done<<",\"hits\":"<<f.view().hits<<"}\n";
+            check(f.view().tasks_done==1&&f.view().hits==1,"one completed task with one factor must display 1 / 1");
+            return 0;
+        }
         if(argc==5 && std::string(argv[1])=="--real")return real_workers(fs::absolute(argv[2]),argv[3],argv[4]);
         check(argc==2,"expected fresh output directory");const auto root=fs::absolute(argv[1]),self=fs::absolute(argv[0]);
         check(!fs::exists(root),"output must be fresh");fs::create_directories(root);
         static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<WorkerController &>().workers()[0])>>);
+        {
+            Fixture f(root,self,"counter-stage1","counter-stream");
+            check(f.controller.start(1),"Stage1 counter fixture start failed");
+            f.wait([&]{return contains(f.view().events,"stage1_task_done: processed=1");});
+            check(f.view().running()&&f.view().tasks_done==1&&f.view().hits==1,"Stage1 live counters double-counted a factor or lost task completion");
+            {std::ofstream next(fs::u8path(f.view().working_dir)/"next-output");next<<"next";}
+            f.wait([&]{return f.view().state()==WorkerRunState::QueueEmpty;});
+            check(f.view().tasks_done==2&&f.view().hits==3,"Stage1 summary/duplicate events changed task or factor totals");
+            check(f.controller.start(1),"Stage1 counter restart failed");
+            f.wait([&]{return f.view().state()==WorkerRunState::QueueEmpty;});
+            check(f.view().tasks_done==4&&f.view().hits==6,"counter accumulation lost a manual restart");
+        }
+        {
+            Fixture f(root,self,"counter-stage2","counter-stream",true);
+            check(f.controller.start(1),"Stage2 counter fixture start failed");
+            f.wait([&]{return f.view().hits==1;});
+            check(f.view().tasks_done==0,"completed curve was counted as a completed task");
+            {std::ofstream next(fs::u8path(f.view().working_dir)/"next-output");next<<"next";}
+            f.wait([&]{return f.view().state()==WorkerRunState::QueueEmpty;});
+            check(f.view().tasks_done==1&&f.view().hits==1,"Stage2 repeated factor or curve total inflated counters");
+        }
         {
             Fixture f(root,self,"stage1-metadata","stage1-metadata");
             check(f.controller.start(1),"Stage1 metadata fixture start failed");
@@ -229,10 +303,10 @@ int main(int argc,char **argv) {
             Fixture f(root,self,"mixed","queue-step");{std::ofstream out(f.queue);out<<"ECMSTAGE1=first\nECMSTAGE2=second\nECMSTAGE1=third\n";}
             f.controller.start_all();f.wait([&]{return f.view().state()==WorkerRunState::QueueEmpty && fs::file_size(f.queue)==0;});
             check(contains(f.trace,"dispatch ECMSTAGE2") && contains(f.trace,"dispatch ECMSTAGE1"),"mixed queue phase switch lost");
-            check(f.view().hits==2 && f.view().tasks_done==0 && !f.view().events.empty(),"retained state changed across phases");
+            check(f.view().hits==2 && f.view().tasks_done==3 && !f.view().events.empty(),"retained counters changed across phases");
             int changed=0;for(const auto &n:f.notices)changed+=n.kind==WorkerNotice::Kind::StageChanged;
             check(changed==2,"duplicate mixed dispatch");
         }
-        std::cout<<"{\"passed\":true,\"checks\":"<<checks<<",\"scenarios\":10,\"gpu_devices\":0}\n";return 0;
+        std::cout<<"{\"passed\":true,\"checks\":"<<checks<<",\"scenarios\":12,\"gpu_devices\":0}\n";return 0;
     }catch(const std::exception &e){std::cerr<<"Controller test: "<<e.what()<<'\n';return 1;}
 }

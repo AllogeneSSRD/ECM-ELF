@@ -2,6 +2,7 @@
 #include "task_display.h"
 
 #include <cstdio>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -141,9 +142,6 @@ bool WorkerProc::start(std::string &err, WorkerStart origin) {
         restarts_ = 0;
     }
     want_running_ = true;
-    saw_queue_done_ = false;
-    stage2_status_=Stage2Status{};
-    stage1_ntt_status_={};
     state_ = WorkerRunState::Running;
     state_text_.clear();
     return true;
@@ -237,6 +235,11 @@ bool WorkerProc::spawn_locked(std::string &err) {
     pipe_read_ = rd;
     stop_event_ = stop_event;
     running_ = true;
+    saw_queue_done_ = false;
+    completed_tasks_=0;
+    task_factors_.clear();
+    stage2_status_=Stage2Status{};
+    stage1_ntt_status_={};
     reader_stop_ = false;
     reader_ = std::thread(&WorkerProc::reader_main, this);
     ResumeThread(pi.hThread);
@@ -330,6 +333,12 @@ void WorkerProc::drain(DrainedOutput &out) {
         // GUI window is just noise). Events keep the timestamp, raw does not (the
         // timestamp column is drawn by the UI).
         const ParsedLine pl = parse_line(l);
+        if(!pl.start_line.empty() || pl.stage2.kind==Stage2Event::Kind::Plan) task_factors_.clear();
+        if(pl.task_completed || (pl.queue_done && pl.tasks_processed>=0)) {
+            const auto completed=pl.tasks_processed>=0?pl.tasks_processed:completed_tasks_+1;
+            out.tasks_done+=(std::max)(0LL,completed-completed_tasks_);
+            completed_tasks_=(std::max)(completed_tasks_,completed);
+        }
         if(!pl.application_version.empty())out.application_version=pl.application_version;
         if (!spawn_.stage2) {
             if (!pl.start_line.empty()) {
@@ -354,7 +363,8 @@ void WorkerProc::drain(DrainedOutput &out) {
                 out.stage2_speed_samples.emplace_back(stage2_status_.last_curve_seconds,
                     stage2_status_.last_curve_seconds>0?out.last_progress.s_per_curve:0);
             for(const auto &factor:pl.stage2.factors) {
-                out.hits.push_back(stage2_status_.curve_for(pl.stage2.curve).factor_hit(factor));
+                if(task_factors_.insert(factor).second)
+                    out.hits.push_back(stage2_status_.curve_for(pl.stage2.curve).factor_hit(factor));
             }
         }
         out.raw.push_back(pl.plain);
@@ -370,7 +380,7 @@ void WorkerProc::drain(DrainedOutput &out) {
                 out.events.push_back(pl.text);       // timestamped, ANSI-free
                 if (pl.queue_done) saw_queue_done_ = true;
                 if (!pl.start_line.empty()) out.last_start_line = pl.start_line;
-                if (pl.is_hit) out.hits.push_back(pl.hit);
+                if (!pl.hit.factor.empty() && task_factors_.insert(pl.hit.factor).second) out.hits.push_back(pl.hit);
                 if (pl.p95.valid) out.p95.push_back(pl.p95);
                 break;
             case LogKind::Raw:

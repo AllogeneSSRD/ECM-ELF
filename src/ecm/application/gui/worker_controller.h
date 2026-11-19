@@ -39,8 +39,8 @@ struct WorkerView {
     // Live state (M2).
     ProgressInfo progress;
     long long progress_lines = 0;
-    long long tasks_done = 0;
-    long long hits = 0;
+    long long tasks_done = 0;         // Completed queue rows observed by this GUI's current Worker record.
+    long long hits = 0;               // Distinct factors per task, accumulated across that record.
     std::string task;                 // current worktodo line (from START:)
     bool stage2=false;
     Stage1Execution stage1_execution;

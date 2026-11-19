@@ -511,6 +511,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
 
     if (processed) {
         (*processed)++;
+        ecm_ts_fprintf(stdout, "stage1_task_done: processed=%d\n", *processed);
     }
     return true;
 }

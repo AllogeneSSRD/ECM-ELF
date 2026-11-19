@@ -510,6 +510,7 @@ void WorkerController::tick() {
             }
         }
         w.hits += static_cast<long long>(d.hits.size());
+        w.tasks_done += d.tasks_done;
         for (const HitInfo &h : d.hits) {
             notify({WorkerNotice::Kind::Hit,w.index,h.factor,now});   // highlight the row for 5 s
         }

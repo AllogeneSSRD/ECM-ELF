@@ -162,6 +162,7 @@ struct ParsedLine {
     std::string factor;      // decimal factor of a hit ("factor[i]=<dec>")
     HitInfo hit;             // full D3 hit details (factor + friends)
     bool queue_done = false;
+    bool task_completed = false; // Successful queue-row completion, separate from curve progress.
     long long tasks_processed = -1;
     std::string start_line;  // the worktodo line of a START: event
     P95Notice p95;           // set when the line is a `p95_add:` notice
