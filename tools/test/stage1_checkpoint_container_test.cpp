@@ -90,17 +90,17 @@ static void edwards(ecm_stage1_checkpoint::Context& checkpoint, const fs::path &
     }
     std::vector<uint64_t> sigmas(count,0);std::vector<std::string> records(count);records[0]=payload;
     write(p,v1(identity,sigmas,records));checkpoint.set_path(p);checkpoint.begin(identity,count,false,0);
-    Batch before(count);check(restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false,false,false,-1).restored(),"legacy Edwards restore");
+    Batch before(count);check(restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false).restored(),"legacy Edwards restore");
     const auto bytes=checkpoint_body(before,n.v,scalar.v,b1);
     check(bytes.size()<payload.size() || audit.empty(),"Edwards compactness");
     check(checkpoint.write_blob(ecm_stage1_curve_record(0),bytes),"Edwards binary write");checkpoint.close(false);
     checkpoint.set_path(p);checkpoint.begin(identity,count,false,0);
-    Batch after(count);check(restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),after,n.v,scalar.v,b1,false,false,false,-1).restored(),"binary Edwards restore");
+    Batch after(count);check(restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),after,n.v,scalar.v,b1,false).restored(),"binary Edwards restore");
     check(before.done==after.done && before.sigmas==after.sigmas && before.hit==after.hit,"Edwards metadata changed");
     for(size_t i=0;i<count*9;++i)check(mpz_cmp(before.state[i],after.state[i])==0,"Edwards coordinates changed");
     for(size_t i=0;i<count;++i)check(mpz_cmp(before.factors[i],after.factors[i])==0,"Edwards factor changed");
     mpz_add_ui(scalar.v,scalar.v,2);Batch wrong(count);
-    check(!restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),wrong,n.v,scalar.v,b1,false,false,false,-1).restored(),"scalar fingerprint did not reject");
+    check(!restore_checkpoint(checkpoint, ecm_stage1_curve_record(0),wrong,n.v,scalar.v,b1,false).restored(),"scalar fingerprint did not reject");
     std::cout<<"edwards_payload old_bytes="<<payload.size()<<" new_bytes="<<bytes.size()<<" curves="<<count<<" all_coordinates_equal=1\n";
     checkpoint.close(false);
 }
@@ -122,7 +122,7 @@ static void deferred_restore(ecm_stage1_checkpoint::Context& checkpoint, const f
     check(rejected,"pending payload exposed");unsigned attempts=0;
     checkpoint.validate_pending([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
         ++attempts;Batch candidate(2);
-        if(!decode_checkpoint(records[0],candidate,n.v,scalar.v,1000,false,false,false,-1).restored())return false;
+        if(!decode_checkpoint(records[0],candidate,n.v,scalar.v,1000,false).restored())return false;
         sigmas=candidate.sigmas;return true;
     });
     check(attempts==2 && !checkpoint.pending(),"valid mathematical backup not selected");

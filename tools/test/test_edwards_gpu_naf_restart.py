@@ -16,6 +16,7 @@ def main():
     p.add_argument('--baseline', type=Path, required=True)
     p.add_argument('--stage1', type=Path, required=True)
     p.add_argument('--naf-baseline', type=Path, help='Old seven-tier NAF worker for cross-container V2 restore')
+    p.add_argument('--toml-baseline', action='store_true', help='Use v4 TOML for the supplied baseline workers')
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args(); old = a.baseline.resolve(); new = a.stage1.resolve(); out = a.output.resolve()
@@ -52,13 +53,24 @@ def main():
         task = f'ECM2=1,2,{bits},-1,100000,0,{count}'+(',20260922' if fixed else '')+'\n'
         queue.write_text(task)
         base_ini = f'curve=ed\ntarget=gpu\ndevice={a.device}\nckpt_seconds=0.001\nckpt_backups=2\nworktodo={queue}\nfinished={finished}\ntmp_dir={folder}\nlog_file=\n'
-        ini.write_text(base_ini+f'naf_w={window}\n')
+        base_toml = ('config_version=4\n[shared]\nworktodo_file="worktodo.txt"\n'
+                     'finished_file="finished.txt"\nlog_file=""\n[stage1]\nparam="e"\n'
+                     f'target="gpu"\nstage1_gpu_backend="cuda"\nstage1_gpu_device={a.device}\n'
+                     f'gpu_algorithm="cgbn"\nstage1_save_dir="{folder.as_posix()}"\n'
+                     'checkpoint_interval_seconds=0.001\ncheckpoint_backups=2\nhandoff_mode="off"\n')
+        if source == new or a.toml_baseline:
+            ini.write_text(base_toml + f'edwards_naf_window_bits={window}\n')
+            starter = [str(source), '--config', str(ini)]
+        else:
+            legacy = folder/'legacy.ini'
+            legacy.write_text(base_ini + f'naf_w={window}\n')
+            starter = [str(source), '-ini', str(legacy)]
         sa = Attributes(ctypes.sizeof(Attributes), None, True)
         event = kernel.CreateEventW(ctypes.byref(sa), True, False, None); assert event
         with (out/(name+'_stopped.log')).open('wb') as log:
             child_env = env | ({'ECM_EDWARDS_DBL_ALGO': str(doubling)} if doubling else {})
             if not window:child_env['ECM_EDWARDS_STAGE1_ALGO']='binary'
-            proc = subprocess.Popen([str(source), '-ini', str(ini), '--stage1-stop-handle', str(event)],
+            proc = subprocess.Popen([*starter, '--stage1-stop-handle', str(event)],
                 stdout=log, stderr=subprocess.STDOUT, close_fds=False, creationflags=subprocess.CREATE_NO_WINDOW,
                 env=child_env, cwd=out)
             try:
@@ -87,23 +99,17 @@ def main():
             assert 'container_bits=1024' in (out/(name+'_stopped.log')).read_text(encoding='utf-8')
         assert (data['window'], data['doubling'], data['b1'], data['count']) == (window, doubling, 100000, count)
         assert 0 < data['done'] < data['total']
-        if window:
-            ini.write_text(base_ini+'naf_w=3\n'); before = primary.read_bytes()
-            text = call(name+'_reject_window', [new, '-ini', ini], good=False)
-            assert 'checkpoint algorithm differs' in text and primary.read_bytes() == before and queue.read_text() == task
-        # Default configuration must adopt the stored mode, window and algorithm.
-        ini.write_text(base_ini+'naf_w=0\n')
-        before = primary.read_bytes()
-        text = call(name+'_reject_mode', [new, '-ini', ini], good=False,
-            extra={'ECM_EDWARDS_STAGE1_ALGO': 'binary' if window else 'naf'})
-        assert 'checkpoint algorithm differs' in text and primary.read_bytes() == before and queue.read_text() == task
-        text = call(name+'_resume', [new, '-ini', ini])
+        ini.write_text(base_toml + 'edwards_naf_window_bits=3\n')
+        text = call(name+'_resume', [new, '--config', ini], extra={
+            'ECM_EDWARDS_STAGE1_ALGO': 'binary' if window else 'naf',
+            **({'ECM_EDWARDS_DBL_ALGO': '4' if doubling == 5 else '5'} if window else {}),
+        })
         assert f'window={window} doubling={doubling}' in text and 'GPU Edwards resume:' in text
         if name=='naf_v2_old_tier': assert 'container_bits=768' in text
         assert not queue.read_text().strip() and finished.exists() and not list(folder.glob('.e_s1_*.ckpt'))
         if primary.name.endswith('.gpu.ckpt'):assert primary.read_bytes()==frozen.read_bytes()
         rows = records(next(folder.glob('e_*.save')))
-        assert [r[2] for r in rows] == [r['sigma'] for r in data['rows']]
+        assert [r[2] for r in rows] == sorted(r['sigma'] for r in data['rows'])
         # Binary and NAF have identical affine endpoints; independently validate
         # all rows above, then compare with fresh explicitly selected NAF runs.
         for index, row in enumerate(rows):

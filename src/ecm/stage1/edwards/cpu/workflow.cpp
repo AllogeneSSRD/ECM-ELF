@@ -952,7 +952,7 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     int minimum_window = needs_naf ? 3 : initial_window;
     if (needs_naf && !checkpoint.path().empty()) {
         const auto saved_window = saved_edwards_cpu_window(checkpoint, curves, uint64_t(B1), scalar_bits);
-        if (!saved_window || *saved_window > requested_window) {
+        if (!saved_window) {
             ecm_ts_fprintf(stderr, "ERROR: CPU Edwards partial checkpoint has an incompatible NAF window\n");
             return result;
         }
@@ -960,6 +960,8 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             initial_window = minimum_window = *saved_window;
             if (initial_window != requested_window) {
                 naf = edwards_cached_naf(scalar_key, initial_window);
+                ecm_ts_fprintf(stdout, "CPU Edwards resume NAF: window=%d (requested=%d)\n",
+                               initial_window, requested_window);
             }
         }
     }

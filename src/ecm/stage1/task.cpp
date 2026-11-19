@@ -278,8 +278,17 @@ static CheckpointIdentity checkpoint_identity(const Stage1Request& request,
         std::to_string(int(selection.scalar_construction)) + "|" +
         execution_target_name(selection.target);
     if (selection.target == ExecutionTarget::Cpu) {
-        identity += "|" + std::to_string(options.execution.naf_w ? options.execution.naf_w : default_window) +
-                    "|" + std::to_string(int(selection.cpu_implementation));
+        const auto implementation = "|" + std::to_string(int(selection.cpu_implementation));
+        if (edwards) {
+            // Older envelopes keyed the requested window. The arithmetic
+            // payload already records the actual window used by its cursor.
+            for (unsigned window = 3; window <= 12; ++window)
+                key.compatible.push_back(identity + "|" + std::to_string(window) + implementation);
+            identity += "|edwards-cpu-v2" + implementation;
+        } else {
+            identity += "|" + std::to_string(options.execution.naf_w ? options.execution.naf_w : default_window) +
+                        implementation;
+        }
         if (!edwards && selection.cpu_montgomery_chain == CpuMontgomeryChain::Prac)
             identity += "|prac-v1";
     } else if (selection.gpu_algorithm == GpuAlgorithm::Ntt) {

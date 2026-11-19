@@ -46,7 +46,7 @@ bool save_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const std::stri
     return checkpoint.write_blob(path,body);
 }
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,Batch &b,
-        mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
+        mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed) {
     using namespace ecm_stage1_checkpoint;
         Batch temp(b.count);unsigned window=0;int doubling=0;bool valid=true;
         const bool v3 = text.size() >= 8 && !std::memcmp(text.data(),"ECMEDB3",8);
@@ -121,10 +121,6 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         if(!valid)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         if(fixed)for(uint32_t i=0;i<b.count;++i)
             if(temp.sigmas[i]!=b.sigmas[i])return {RestoreState::Incompatible,"GPU Edwards checkpoint sigma differs from requested sigma"};
-        if((window_fixed && b.window!=window && b.window!=temp.original_window) ||
-           (doubling_fixed && b.doubling!=doubling) ||
-           (mode_fixed>=0 && bool(mode_fixed)!=bool(window)))
-            return {RestoreState::Incompatible,"GPU Edwards checkpoint algorithm differs from explicit NAF/doubling selection"};
         b.window=window;b.original_window=temp.original_window;b.doubling=doubling;
         b.done=temp.done;b.sigmas=temp.sigmas;b.hit=temp.hit;
         for(uint32_t i=0;i<b.count;++i)mpz_set(b.factors[i],temp.factors[i]);
@@ -134,14 +130,14 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
 }
 
 ecm_stage1_checkpoint::RestoreResult restore_checkpoint(ecm_stage1_checkpoint::Context& checkpoint, const std::string &path,Batch &b,
-        mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
+        mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed) {
     using namespace ecm_stage1_checkpoint;
     RestoreResult result;
     for(const auto &candidate:checkpoint.candidates(path)) {
         std::string text;const auto read=checkpoint.read_checkpoint_blob(candidate,text);
         if(read==BlobRead::Missing)continue;
         if(read==BlobRead::IoFailure){result={RestoreState::IoFailure,"cannot read GPU Edwards checkpoint"};continue;}
-        auto decoded=decode_checkpoint(text,b,n,scalar,b1,fixed,window_fixed,doubling_fixed,mode_fixed);
+        auto decoded=decode_checkpoint(text,b,n,scalar,b1,fixed);
         if(decoded.state==RestoreState::Incompatible)return decoded;
         if(!decoded.restored()){result=std::move(decoded);continue;}
         if(candidate!=path)checkpoint.mark_bad_primary(path);

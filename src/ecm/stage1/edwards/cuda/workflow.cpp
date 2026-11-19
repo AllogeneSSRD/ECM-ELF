@@ -201,10 +201,8 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
     auto phase = ecm_stage1::FailureSource::Preparation;
     try {
         (void)n_expr;
-        // Prepare: scalar and explicit algorithm requirements define recovery admission.
+        // The saved cursor belongs to its stored scalar encoding.
         const auto initialization_start = Progress::Clock::now();
-        if (opt.execution.naf_w != 0 && (opt.execution.naf_w < 2 || opt.execution.naf_w > 12))
-            throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
         using namespace ecm_edwards_memory;
         const auto bound = std::floor(b1 + 0.0001);
         if (!std::isfinite(bound) || bound < 0 || bound > 5000000000.0)
@@ -227,34 +225,6 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         if (!opt.persistence.tmp_dir.empty() && !ensure_dir(opt.persistence.tmp_dir))
             throw std::runtime_error("cannot create Edwards save directory");
         Batch batch(curves);
-        batch.window = opt.execution.naf_w ? unsigned(opt.execution.naf_w) : 6;
-        const auto doubling = opt.execution.edwards_doubling.value_or(
-            ecm_config::defaults::stage1_edwards_doubling);
-        batch.doubling = doubling == 1 ? 5 : 4;
-        int mode_fixed = -1;
-        if (const char* mode = std::getenv("ECM_EDWARDS_STAGE1_ALGO")) {
-            const std::string value = mode;
-            if (value != "binary" && value != "naf")
-                throw std::runtime_error("ECM_EDWARDS_STAGE1_ALGO must be binary or naf");
-            mode_fixed = value == "naf" ? 1 : 0;
-            if (!mode_fixed) {
-                if (opt.execution.naf_w)
-                    throw std::runtime_error("binary Edwards mode cannot use --naf-w");
-                batch.window = 0;
-                batch.doubling = 0;
-            }
-        }
-        const char* dbl_env = opt.execution.edwards_doubling
-            ? nullptr : std::getenv("ECM_EDWARDS_DBL_ALGO");
-        if (dbl_env) {
-            if (!batch.window)
-                throw std::runtime_error(
-                    "binary Edwards mode cannot select a NAF doubling algorithm");
-            const std::string value = dbl_env;
-            if (value != "4" && value != "5")
-                throw std::runtime_error("ECM_EDWARDS_DBL_ALGO must be 4 or 5");
-            batch.doubling = value == "5" ? 5 : 4;
-        }
         // Restore candidates: decode first; accept only a compatible construction/layout.
         bool selected_payload = false;
         checkpoint.validate_pending(
@@ -268,15 +238,12 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 if (records[0].empty())
                     return true; // Valid seed-only batch.
                 Batch candidate(curves);
-                candidate.window = batch.window;
-                candidate.doubling = batch.doubling;
                 candidate.sigmas = sigmas;
                 if (opt.identity.sigma_fixed)
                     for (uint32_t i = 0; i < curves; ++i)
                         candidate.sigmas[i] = opt.identity.fixed_sigma64 + i;
                 const auto decoded = decode_checkpoint(
-                    records[0], candidate, n, scalar.v, uint64_t(b1), opt.identity.sigma_fixed,
-                    opt.execution.naf_w != 0, dbl_env != nullptr, mode_fixed);
+                    records[0], candidate, n, scalar.v, uint64_t(b1), opt.identity.sigma_fixed);
                 if (decoded.state == RestoreState::Incompatible ||
                     decoded.state == RestoreState::IoFailure)
                     throw Error(decoded.state, decoded.error);
@@ -310,8 +277,8 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                            batch.done, batch.window, batch.doubling, path.c_str());
         if (!restored && !path.empty()) {
             const auto decoded =
-                restore_checkpoint(checkpoint, path, batch, n, scalar.v, uint64_t(b1), opt.identity.sigma_fixed,
-                                   opt.execution.naf_w != 0, dbl_env != nullptr, mode_fixed);
+                restore_checkpoint(checkpoint, path, batch, n, scalar.v, uint64_t(b1),
+                                   opt.identity.sigma_fixed);
             if (decoded.state == ecm_stage1_checkpoint::RestoreState::Incompatible ||
                 decoded.state == ecm_stage1_checkpoint::RestoreState::IoFailure)
                 throw ecm_stage1_checkpoint::Error(decoded.state, decoded.error);
@@ -330,11 +297,8 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                         .string();
                 Batch saved(curves);
                 saved.sigmas = batch.sigmas;
-                saved.window = batch.window;
-                saved.doubling = batch.doubling;
                 if (restore_checkpoint(checkpoint, legacy, saved, n, scalar.v, uint64_t(b1),
-                                       opt.identity.sigma_fixed, opt.execution.naf_w != 0,
-                                       dbl_env != nullptr, mode_fixed)
+                                       opt.identity.sigma_fixed)
                         .restored()) {
                     if (ecm_results::contains_stage1_curves(opt.persistence.results_file, n,
                                                             uint64_t(b1), true, 0, saved.sigmas))
@@ -362,9 +326,40 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             }
         }
         // Construct only when no compatible saved batch was accepted.
+        bool allow_binary_fallback = false;
         if (!restored) {
             if (!path.empty() && checkpoint.read_blob(path, existing))
                 throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
+            if (opt.execution.naf_w != 0 && (opt.execution.naf_w < 2 || opt.execution.naf_w > 12))
+                throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
+            batch.window = opt.execution.naf_w ? unsigned(opt.execution.naf_w) : 6;
+            const auto doubling = opt.execution.edwards_doubling.value_or(
+                ecm_config::defaults::stage1_edwards_doubling);
+            batch.doubling = doubling == 1 ? 5 : 4;
+            const char* mode = std::getenv("ECM_EDWARDS_STAGE1_ALGO");
+            if (mode) {
+                const std::string value = mode;
+                if (value != "binary" && value != "naf")
+                    throw std::runtime_error("ECM_EDWARDS_STAGE1_ALGO must be binary or naf");
+                if (value == "binary") {
+                    if (opt.execution.naf_w)
+                        throw std::runtime_error("binary Edwards mode cannot use --naf-w");
+                    batch.window = 0;
+                    batch.doubling = 0;
+                }
+            }
+            const char* dbl_env = opt.execution.edwards_doubling
+                ? nullptr : std::getenv("ECM_EDWARDS_DBL_ALGO");
+            if (dbl_env) {
+                if (!batch.window)
+                    throw std::runtime_error("binary Edwards mode cannot select a NAF doubling algorithm");
+                const std::string value = dbl_env;
+                if (value != "4" && value != "5")
+                    throw std::runtime_error("ECM_EDWARDS_DBL_ALGO must be 4 or 5");
+                batch.doubling = value == "5" ? 5 : 4;
+            }
+            allow_binary_fallback = !opt.execution.naf_w && !mode && !dbl_env;
+
             // Sigma selection and curve parameterization are separate operations.
             CurveSigmas selection(opt.identity, ecm_stage1::CurveModel::Edwards);
             for (uint32_t i = 0; i < curves; ++i) {
@@ -399,7 +394,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         }
         EdwardsOptions execution{
             opt.execution.device_index, batch.window, batch.doubling, 0, !restored,
-            !restored && !opt.execution.naf_w && mode_fixed < 0 && !dbl_env,
+            allow_binary_fallback,
             [&](unsigned requested, unsigned selected, size_t required, size_t budget) {
                 if (requested != selected) {
                     batch.original_window = opt.execution.naf_w ? requested : 0;
