@@ -86,6 +86,7 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_save_dir","string","<dir>","stage2","stage2_save_dir","",false},
     {"stage2","stage2_debug_log","bool","[false|true|0|1]","stage2","debug_log","",false},
     {"stage2","stage2_execution_device","string","[auto|cpu|gpu]","stage2","device","",false},
+    {"stage2","stage2_algorithm","string","[gwnum|cpu-ntt|cpu-plain|cpu|gpu|cuda|opencl|slice list]","stage2","stage2_algorithm","",false},
     {"stage2","stage2_device","int","[-1|0..2^31-1]","stage2","stage2_gpu_device","",false},
     {"stage2","stage2_log_level","int|string","[quiet|curve|phases|batches|debug|0..4]","stage2","log_level","",false},
     {"stage2","stage2_ntt_counts","bool","[false|true|0|1]","stage2","ntt_length_counts","",false},

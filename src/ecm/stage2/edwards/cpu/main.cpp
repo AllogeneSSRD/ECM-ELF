@@ -48,6 +48,7 @@ uint64_t decimal(const std::string& text) {
 void set64(mpz_t x,uint64_t n) {mpz_import(x,1,1,sizeof n,0,0,&n);}
 struct Options {
     std::string save,results="results_cpu_stage2.jsonl",submission,ini,backend="auto",user,computer,aid;
+    std::optional<uint64_t> dispatch_row;
     std::vector<std::string> known;uint64_t b2=0,skip=0,count=UINT64_MAX,exponent=0,memory=512,threads=1;
     std::string worktodo,log,cpu_affinity;
     fs::path tune_profile;
@@ -151,7 +152,8 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         else if(key=="--config" || key=="--worker")continue;
         else if(key=="--backend")o.backend=value;else if(key=="--b2")o.b2=decimal(value);
         else if(key=="--memory-mib")o.memory=decimal(value);else if(key=="--threads")o.threads=decimal(value);
-        else if(key=="--skip")o.skip=decimal(value);else if(key=="--curves")o.count=decimal(value);
+        else if(key=="--skip" || key=="--skip-curves")o.skip=decimal(value);else if(key=="--curves")o.count=decimal(value);
+        else if(key=="--stage2-dispatch-row")o.dispatch_row=decimal(value);
         else if(key=="--b2-round-chain"){
             const auto mode=decimal(value);
             if(mode>1)throw std::runtime_error("b2-round-chain must be 0 or 1");
@@ -476,6 +478,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     o.worker=cpu.worker;o.worktodo=cpu.worktodo;o.b2=cpu.b2;o.d=cpu.d;
     o.results=cpu.explicit_results?cpu.results:"";o.submission=cpu.submission;o.log=cpu.log;
     o.dry=cpu.dry;o.once=cpu.once;o.gui_events=cpu.gui;o.parallel=s2prod::ParallelMode::serial;
+    o.dispatch_row=cpu.dispatch_row;
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,cpu.worker,true));
     EcmQueueConfig cfg;
     std::vector<const char*> inherited={"finished"};

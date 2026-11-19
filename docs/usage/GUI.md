@@ -6,7 +6,7 @@
 
 ## Worker 与配置
 
-一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`，Stage2 使用 `ecm_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 选择下一行，并按[任务前缀](../../README.md#worktodo-格式)启动对应程序。同一 worker 同时只运行一个程序。统一的 `ecm_stage2.exe` 可按 worker 选择 CPU 或 GPU。程序路径留空时优先查找统一名称，再搜索独立的 Stage2 程序。[CPU 队列与换后端](EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)
+一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`，Stage2 使用 `ecm_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 选择下一行，并按[任务前缀](../../README.md#worktodo-格式)启动对应程序。同一 worker 同时只运行一个程序。统一的 `ecm_stage2.exe` 可[按任务位宽选择 CPU 或 GPU](STAGE2.md#选择运行设备)，GUI 收到选型结果后更新设备。程序路径留空时优先查找统一名称，再搜索独立的 Stage2 程序。[CPU 队列与换后端](EDWARDS_CPU_STAGE2.md#worktodo停止与跨后端续算)
 
 Worker 管理使用同一份 v4 TOML。`[gui]` 的 `stage1_exe` 和 `stage2_exe` 指定程序路径，`process_priority` 控制进程优先级。`[shared] worker_count` 指定 worker 数量。全局配置分为 `[shared]`、`[stage1]`、`[stage2]` 和 `[gui]`。`[worker.N]` 保存启动设置和同名的计算配置覆盖项。配置文件中的 worker 表与 `worktodo.txt` 的 `[Worker #N]` 队列分区使用同一编号，但语法独立。
 

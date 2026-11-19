@@ -310,7 +310,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
     };
     report(std::string(ecm_program::name)+" "+ecm_program::version+" ("+engine.name+")");
     QueueStopHandler control_guard;
-    if(engine.begin)engine.begin();
+    bool began=false;
     uint64_t completed=0,failed_tasks=0;
     for (;;) {
         poll_inherited_stop();
@@ -331,6 +331,9 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage2,
                 task_line, read_error);
             if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
+            if(startup.dispatch_row &&
+               (read != WorktodoReadResult::Task || fingerprint(task_line)!=*startup.dispatch_row))
+                return DispatchChanged;
             if(read == WorktodoReadResult::Empty)break;
         }
         try {
@@ -391,6 +394,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::MarkError))
                 throw std::runtime_error("cannot mark invalid task; queue changed or rewrite failed");
             ++failed_tasks;
+            if(startup.dispatch_row)return stop_requests?1:DispatchInvalid;
             if(o.once)break;
             continue;
         }
@@ -487,6 +491,10 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 " is below already completed="+std::to_string(state.done)+
                 "; no further curves will run; sealing all completed curves (factor hits reported separately).",true);
         }
+        if(!began) {
+            if(engine.begin)engine.begin();
+            began=true;
+        }
         if(engine.prepare && state.done<plan.size())engine.prepare(o,plan[state.done]);
         const auto curve_results = persist && !explicit_results ? fs::path{} : results;
         if(stage2_log::enabled(stage2_log::curve)||o.gui_events||o.dry) {
@@ -551,6 +559,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                " completed="+std::to_string(state.done));
         worker_options.runtime_prepare_hints=std::move(o.runtime_prepare_hints);
         worker_options.runtime_route_hints=std::move(o.runtime_route_hints);
+        if(startup.dispatch_row)return stop_requests?0:DispatchAdvanced;
         if(o.once||stop_requests)break;
     }
     if(stage2_log::enabled(stage2_log::curve)||startup.dry)

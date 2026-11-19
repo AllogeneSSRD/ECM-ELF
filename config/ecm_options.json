@@ -1661,8 +1661,24 @@
       ],
       "case_insensitive": true,
       "description": [
-        "Execution device in the combined Stage2 program. Auto selects CPU. CPU supports Edwards saves; select GPU for Montgomery. Values are case-insensitive. Override with --target.",
-        "统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不区分大小写，可用 --target 覆盖。"
+        "Execution device in the combined Stage2 program. Auto selects by stage2_algorithm; cpu and gpu pin the device. CPU supports Edwards saves. Override with --target.",
+        "统一 Stage2 程序的执行设备。auto 按 stage2_algorithm 选型，cpu 和 gpu 固定设备。CPU 支持 Edwards 存档。可用 --target 覆盖。"
+      ]
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_algorithm",
+      "field": "algorithm",
+      "template_level": "core",
+      "type": "string",
+      "default": "gwnum[4096:], gpu[:16385], cpu[]",
+      "domain": "[gwnum|cpu-ntt|cpu-plain|cpu|gpu|cuda|opencl|slice list]",
+      "fx": "algorithm(Stage2)",
+      "parser": "strict",
+      "parser_override": "stage2_algorithm_policy",
+      "description": [
+        "Algorithm for each task when device is auto in the combined Stage2 program. Rules are tried left to right at the saved modulus width. Starts are inclusive, ends exclusive and [] matches any width. CPU rules require Edwards; gwnum uses GWNUM/polymult, cpu-ntt and cpu-plain use libecm, cpu uses cpu_backend. gpu uses stage2_gpu_backend. GPU input is limited to 16384 bits.",
+        "统一 Stage2 在 device 为 auto 时按任务选型。按存档实际模数位宽从左到右匹配，含下界、不含上界，[] 匹配任意位宽。CPU 规则要求 Edwards；gwnum 使用 GWNUM/polymult，cpu-ntt 和 cpu-plain 使用 libecm，cpu 读取 cpu_backend。gpu 读取 stage2_gpu_backend，GPU 输入上限为 16384 bit。"
       ]
     },
     {

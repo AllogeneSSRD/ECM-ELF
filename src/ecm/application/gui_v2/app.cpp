@@ -989,7 +989,8 @@ void App::draw_workers(const ui::Settings& active, const ui::Fonts& fonts) {
                 ImGui::EndTooltip();
             }
             ImGui::TableSetColumnIndex(4);ImGui::AlignTextToFramePadding();
-            const auto device=worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device):std::string("CPU");
+            const auto device=worker.execution_target=="gpu"?"GPU"+std::to_string(worker.device)
+                : worker.execution_target=="cpu"?"CPU":zh?"自动":"Auto";
             value_cell(device+" / S"+std::to_string(worker.stage2?2:1)+(worker.duplicate_device?"*":""),worker.stage2?p.stage2:p.stage1);
             if(ImGui::IsItemHovered())ImGui::SetTooltip("%s | Stage %d | %s%s",device.c_str(),worker.stage2?2:1,worker.curve_model.c_str(),worker.duplicate_device?ecmgui_v2::ui::text("worker.shared_gpu_hint",zh):"");
             ImGui::TableSetColumnIndex(5);ImGui::PushStyleColor(ImGuiCol_PlotHistogram,worker.stage2?p.stage2:p.stage1);

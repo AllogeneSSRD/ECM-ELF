@@ -1089,7 +1089,7 @@ device = "auto"
 
 类型 `string` · 范围 `[auto|cpu|gpu]` · Worker 覆盖 `[worker.N] device` · 级别 `常用`。
 
-统一 Stage2 程序的执行设备。auto 选择 CPU。CPU 支持续算 Edwards 存档，Montgomery 请选 gpu。取值不区分大小写，可用 --target 覆盖。
+统一 Stage2 程序的执行设备。auto 按 stage2_algorithm 选型，cpu 和 gpu 固定设备。CPU 支持 Edwards 存档。可用 --target 覆盖。
 
 <a id="stage2_factor_timeout"></a>
 
@@ -1441,6 +1441,16 @@ skip_prime_attribution = false
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] skip_prime_attribution` · 级别 `高级`。
 
 控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 decompose_factors。
+
+### stage2_algorithm
+
+```toml
+stage2_algorithm = "gwnum[4096:], gpu[:16385], cpu[]"
+```
+
+类型 `string` · 范围 `[gwnum|cpu-ntt|cpu-plain|cpu|gpu|cuda|opencl|slice list]` · Worker 覆盖 `[worker.N] stage2_algorithm` · 级别 `常用`。
+
+统一 Stage2 在 device 为 auto 时按任务选型。按存档实际模数位宽从左到右匹配，含下界、不含上界，[] 匹配任意位宽。CPU 规则要求 Edwards；gwnum 使用 GWNUM/polymult，cpu-ntt 和 cpu-plain 使用 libecm，cpu 读取 cpu_backend。gpu 读取 stage2_gpu_backend，GPU 输入上限为 16384 bit。
 
 ### stage2_cpu_threads
 

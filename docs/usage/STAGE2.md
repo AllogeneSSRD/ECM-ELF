@@ -1,18 +1,19 @@
 # Stage2 使用
 
-统一的 `ecm_stage2.exe` 可在同一队列中为不同 worker 使用 CPU 或 GPU。CPU Edwards 续算及 GWNUM／libecm 选项见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)。两份结果文件及提交字段规则见 [ECM 结果输出](ECM_RESULTS.md)。
+统一的 `ecm_stage2.exe` 可让同一 worker 按任务使用 CPU 或 GPU。CPU Edwards 续算及 GWNUM／libecm 选项见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)。两份结果文件及提交字段规则见 [ECM 结果输出](ECM_RESULTS.md)。
 
 实验、归因和性能对照使用的进程环境开关见 [Stage2 点与队列](ENVIRONMENT_STAGE2.md)和 [CUDA NTT 与多项式](ENVIRONMENT_CUDA_NTT.md)。
 
 ## 选择运行设备
 
-以下设置让其他 worker 用 GPU 运行 Stage2，Worker 3 用 CPU。取值不区分大小写。省略 `device` 或设为 `"auto"` 时选择 CPU。CPU 只支持 Edwards 存档，Montgomery 续算请选 GPU。Stage1 有独立的设备设置。
+`device = "auto"` 是统一程序的默认值。每条 worktodo 任务按存档的实际模数（扣除已知因子后的 N）匹配 `stage2_algorithm`，直接使用 `--save` 时以首条选中的曲线为准。同一个 save 批次应使用相同的模数和曲线族。以下是默认规则，Worker 3 单独固定为四线程 CPU。
 
 ```toml
 config_version = 4
 
 [stage2]
-device = "gpu"
+device = "auto"
+stage2_algorithm = "gwnum[4096:], gpu[:16385], cpu[]"
 stage2_gpu_device = 1
 
 [worker.3]
@@ -20,7 +21,15 @@ device = "cpu"
 stage2_cpu_threads = 4
 ```
 
-队列和直接读档都先选设备，再由对应后端解析命令。用 `--target cpu|gpu|auto` 覆盖本次运行的 TOML 选型，例如执行 `ecm_stage2.exe --target gpu --tune ntt --device 1`。GPU 内部用 `stage2_gpu_backend` 选择 CUDA／OpenCL，用 `stage2_gpu_device` 或 `--device N` 选择卡号。命令行 `--gpu-backend` 也可显式进入 GPU 路径。
+规则从左到右取首个可用项，区间含下界、不含上界，`[]` 匹配任意位宽。也可以填写单个算法名。算法名不区分大小写。规则可在 `[worker.N]` 覆盖。
+
+- Edwards 从 4096 bit 起优先使用 `gwnum`（GWNUM/polymult）。4096 bit 以下优先用 GPU。后续规则为缺少 DLL 或 GPU 的 Edwards 环境提供回退。
+- `cpu` 读取 `cpu_backend`，`cpu-ntt` 和 `cpu-plain` 直接选择 libecm。CPU 目前支持 Edwards。兼容的 Montgomery 存档由 GPU 续算。
+- `gpu` 读取 `stage2_gpu_backend`，`cuda` 和 `opencl` 直接指定 GPU 后端。GPU 支持的上限为 16,384 bit，worktodo 中的原始指数也受此上限约束。卡号由 `stage2_gpu_device` 或 `--device N` 指定。
+
+没有可用规则时，程序报告原因并保留当前 worktodo 条目。选型结果打印为 `stage2_algorithm: bits=… selected=… device=…`，CPU 的设备编号为 `-1`。续算仍使用原有的整曲线检查点。
+
+`device = "cpu"` 和 `device = "gpu"` 固定设备，`--target cpu|gpu|auto` 可覆盖 TOML。在自动模式下，`--backend`、`--gpu-backend` 或专用诊断命令显式选择对应后端。GPU 调优示例为 `ecm_stage2.exe --target gpu --tune ntt --device 1`。独立的 CPU 或 OpenCL 程序使用其原有后端配置。
 
 ## 原生 OpenCL 入口
 

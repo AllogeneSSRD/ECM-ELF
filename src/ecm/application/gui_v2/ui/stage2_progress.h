@@ -49,7 +49,8 @@ inline std::string stage2_scope(const ecmgui::WorkerView& w,const ecmgui::Stage2
     std::error_code error;
     if(engine_stamp.empty()){const auto stamp=std::filesystem::last_write_time(std::filesystem::u8path(w.exe),error);engine_stamp=error?"unknown":std::to_string(stamp.time_since_epoch().count());}
     // Sigma differs per curve; duration scope follows the engine, device and shape.
-    return w.exe+"|"+engine_stamp+"|"+device+"|"+std::to_string(w.device)+"|"+s.curve_model+"|"+std::to_string(s.param)+"|"+std::to_string(s.bits)+"|"+std::to_string(s.d)+"|"+std::to_string(s.b1)+"|"+std::to_string(s.b2)+(s.workers==2?"|paired":"");
+    const auto target=w.execution_target=="cpu"?"CPU":device+"|"+std::to_string(w.device);
+    return w.exe+"|"+engine_stamp+"|"+target+"|"+s.curve_model+"|"+std::to_string(s.param)+"|"+std::to_string(s.bits)+"|"+std::to_string(s.d)+"|"+std::to_string(s.b1)+"|"+std::to_string(s.b2)+(s.workers==2?"|paired":"");
 }
 inline std::string stage2_scope(const ecmgui::WorkerView& w,const std::string& device){return stage2_scope(w,w.stage2_status,device);}
 

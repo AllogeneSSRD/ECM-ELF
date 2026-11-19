@@ -49,7 +49,8 @@ inline BOOL WINAPI awaiting_worker(DWORD event) {
 // The selected binary owns the queue, results, stop event and all curve children.
 // Pin the handoff so a config edit or driver change cannot bounce it back.
 inline std::optional<int> route(const std::filesystem::path& directory, bool stage2,
-                                bool current_cuda, const std::string& mode, int index) {
+                                bool current_cuda, const std::string& mode, int index,
+                                const std::wstring& dispatch_args = {}) {
 #ifdef _WIN32
     auto peer = directory / (current_cuda
         ? (stage2 ? L"ecm_opencl_stage2.exe" : L"ecm.exe")
@@ -62,6 +63,7 @@ inline std::optional<int> route(const std::filesystem::path& directory, bool sta
     if (!std::filesystem::is_regular_file(peer))
         throw std::runtime_error("GPU worker is not installed: " + peer.u8string());
     std::wstring command = GetCommandLineW();
+    command += dispatch_args;
     command += cuda ? L" --gpu-backend cuda" : L" --gpu-backend opencl";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);

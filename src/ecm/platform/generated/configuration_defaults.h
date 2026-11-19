@@ -97,6 +97,7 @@ inline constexpr char stage2_stage2_progress_dir[]="";
 inline constexpr char stage2_stage2_save_dir[]="";
 inline constexpr bool stage2_stage2_debug_log=false;
 inline constexpr char stage2_stage2_execution_device[]="auto";
+inline constexpr char stage2_stage2_algorithm[]="gwnum[4096:], gpu[:16385], cpu[]";
 inline constexpr int stage2_stage2_device=-1;
 inline constexpr int stage2_stage2_log_level=-1;
 inline constexpr bool stage2_stage2_ntt_counts=false;

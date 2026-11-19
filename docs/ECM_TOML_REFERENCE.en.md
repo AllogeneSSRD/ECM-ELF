@@ -1089,7 +1089,7 @@ device = "auto"
 
 Type `string` · Range `[auto|cpu|gpu]` · Worker override `[worker.N] device` · Level `core`.
 
-Execution device in the combined Stage2 program. Auto selects CPU. CPU supports Edwards saves; select GPU for Montgomery. Values are case-insensitive. Override with --target.
+Execution device in the combined Stage2 program. Auto selects by stage2_algorithm; cpu and gpu pin the device. CPU supports Edwards saves. Override with --target.
 
 <a id="stage2_factor_timeout"></a>
 
@@ -1440,6 +1440,16 @@ skip_prime_attribution = false
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] skip_prime_attribution` · Level `advanced`.
 
 Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic policy. This does not disable decomposition or change decompose_factors.
+
+### stage2_algorithm
+
+```toml
+stage2_algorithm = "gwnum[4096:], gpu[:16385], cpu[]"
+```
+
+Type `string` · Range `[gwnum|cpu-ntt|cpu-plain|cpu|gpu|cuda|opencl|slice list]` · Worker override `[worker.N] stage2_algorithm` · Level `core`.
+
+Algorithm for each task when device is auto in the combined Stage2 program. Rules are tried left to right at the saved modulus width. Starts are inclusive, ends exclusive and [] matches any width. CPU rules require Edwards; gwnum uses GWNUM/polymult, cpu-ntt and cpu-plain use libecm, cpu uses cpu_backend. gpu uses stage2_gpu_backend. GPU input is limited to 16384 bits.
 
 ### stage2_cpu_threads
 

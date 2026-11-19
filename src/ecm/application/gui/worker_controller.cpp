@@ -289,10 +289,9 @@ WorkerView WorkerController::make_worker(int index) const {
     if(w.stage2) {
         const auto stage2=ecmgui::preview_stage2(entries);
         const auto image=std::filesystem::u8path(w.exe);
-        const bool cpu=ecm_gpu::combined_stage2_worker(image) ? stage2.execution_device!="gpu"
-                                                            : ecm_gpu::cpu_stage2_worker(image);
-        w.execution_target=cpu ? "cpu" : "gpu";
-        if(!cpu && stage2.device>=0)w.device=stage2.device;
+        w.execution_target=ecm_gpu::combined_stage2_worker(image) ? stage2.execution_device
+            : ecm_gpu::cpu_stage2_worker(image) ? "cpu" : "gpu";
+        if(w.execution_target!="cpu" && stage2.device>=0)w.device=stage2.device;
         if(!shared_log)
             w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
                 path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
@@ -430,6 +429,14 @@ void WorkerController::tick() {
         }
         WorkerProc::DrainedOutput d;
         w.proc->drain(d);
+        if(w.stage2) for(const auto& line:d.raw) {
+            int device=0;
+            if(std::sscanf(line.c_str(),"stage2_algorithm: bits=%*u selected=%*s device=%d",&device)==1) {
+                w.execution_target=device<0?"cpu":"gpu";
+                if(device>=0)w.device=device;
+                refresh_device_warnings();
+            }
+        }
         if(!d.application_version.empty())w.application_version=d.application_version;
         w.progress_lines += d.progress_lines;
         if(d.stage1_task_started) {

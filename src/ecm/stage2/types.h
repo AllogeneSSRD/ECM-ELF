@@ -6,6 +6,7 @@
 #include <gmp.h>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,8 @@
 namespace s2prod {
 namespace fs=std::filesystem;
 enum class ParallelMode : unsigned { automatic=0, serial=1, paired=2 };
+// These statuses also cross the native OpenCL companion process boundary.
+enum QueueDispatchStatus { DispatchAdvanced=80, DispatchInvalid, DispatchChanged };
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
 struct Big {
     mpz_t z;
@@ -69,6 +72,7 @@ struct Options {
     bool checkpoint_outcome = false;
     bool gui_events=false;
     uint64_t stop_handle=0;
+    std::optional<uint64_t> dispatch_row;
     uint64_t offset = 0, hash = 0, index = 0;
     bool plan_only = false, tune_options = false;
     std::string tune, tune_file;

@@ -113,6 +113,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--checkpoint-outcome") o.checkpoint_outcome=true;
         else if (a == "--publication-task") o.publication_task=value();
         else if (a == "--stage2-stop-handle") o.stop_handle=num();
+        else if (a == "--stage2-dispatch-row") o.dispatch_row=num();
         else if (a == "--gui-events") o.gui_events=true;
         else if (a == "--b2") o.b2 = num();
         else if (a == "--giant-chain") {o.giant_chain=value();o.portable_cli.insert(a);}
@@ -138,7 +139,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--auto-carrier") {const auto n=num();if(n>1)throw std::runtime_error("auto-carrier must be 0 or 1");o.auto_carrier=n!=0;o.portable_cli.insert(a);}
         else if (a == "--prediction-policy") {o.prediction_policy=value();o.portable_cli.insert(a);}
         else if (a == "--tune-arithmetic") {o.tune_arithmetic=value();o.portable_cli.insert(a);}
-        else if (a == "--skip-curves") { o.skip = num(); o.selection = true; }
+        else if (a == "--skip-curves" || a == "--skip") { o.skip = num(); o.selection = true; }
         else if (a == "--curves") { o.curves = num(); o.selection = true; }
         else if (a == "--batch-mb") { o.batch = num(); o.has_batch = true; }
         else if (a == "--arena-mb") { o.arena = num(); o.has_arena = true; }
@@ -468,8 +469,10 @@ int driver(Options o, const ecm_stage2::LaunchConfig* launch) {
     EcmQueueConfig cfg;
     ecm_queue_config_project(lines,ini.u8string(),o.worker,cfg,inherited);
     const int selected_device=o.device<0?(s.device<0?cfg.device:s.device):o.device;
+    const auto dispatch_args=o.dispatch_row?
+        L" --stage2-dispatch-row "+std::to_wstring(*o.dispatch_row):std::wstring{};
     if (auto routed=ecm_gpu::route(executable().parent_path(),true,!stage2_backend::opencl,
-                                  o.gpu_backend.empty()?s.gpu_backend:o.gpu_backend,selected_device))
+                                  o.gpu_backend.empty()?s.gpu_backend:o.gpu_backend,selected_device,dispatch_args))
         return *routed;
     bind_engine_options(o);
     if(o.cost_device_info) {
