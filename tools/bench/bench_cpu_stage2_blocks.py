@@ -29,8 +29,12 @@ def measure(folder):
                '--d', case['d'], '--b2', case['requested'], '--threads', len(case['cpus']),
                '--memory-mib', case['memory'], '--results', 'result.jsonl', '--submission', 'public.txt',
                '--tune-runtime', 0, '--tune-profile', 'empty-profile.toml']
-    factor = FACTORS[case['e']]
-    if factor is not None:
+    if 'factors' in case:
+        factors = [str(factor) for factor in case['factors']]
+    else:
+        factor = FACTORS[case['e']]
+        factors = [str(factor)] if factor is not None else []
+    for factor in factors:
         command += ['--known-factor', factor]
     if case['arm'] != 'baseline':
         command += ['--b2-round-chain', int(case['arm'] == 'rounded')]
@@ -49,6 +53,7 @@ def measure(folder):
             while True:
                 try:
                     rc = proc.wait(2)
+                    overlap |= compiling()
                     break
                 except subprocess.TimeoutExpired:
                     overlap |= compiling()
@@ -63,8 +68,9 @@ def measure(folder):
     log = (folder / 'worker.log').read_text(encoding='utf-8')
     engine = row['stage2-engine']
     assert f'logical_cpus={affinity}\n' in log
+    assert engine['backend'] == 'gwpoly'
     assert (row['exponent'], row.get('known-factors', []), row['b1'], row['Edwards']['sigma'], row['status']) == (
-        case['e'], [str(factor)] if factor is not None else [], 1000, 26, 'NF')
+        case['e'], factors, case.get('b1', 1000), case.get('sigma', 26), 'NF')
     assert engine['checked-values'] == (3 if case['check'] else 0) and engine['max-roundoff'] <= .4
     blocks, points = map(int, re.search(r'\bblocks=(\d+) giants=(\d+)', log).groups())
     if case['arm'] == 'rounded':

@@ -1,9 +1,11 @@
-"""Rebuild the Edwards small-B2 performance figures from the four frozen studies."""
+"""Plot the Edwards full-width matrix with frozen references and an optional current build."""
 
+import argparse
 import csv
 import hashlib
 import json
 import math
+import re
 import shutil
 from pathlib import Path
 from statistics import median
@@ -14,6 +16,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MultipleLocator
+
+from bench_cpu_stage2_full_width import AFFINITY
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -111,7 +115,42 @@ def collect():
     return rows
 
 
-def plot(rows, scale):
+def add_current(rows, report):
+    version = re.search(r"^ECM-ELF (\d+\.\d+\.\d+) CPU Stage2\b", report["version"])
+    repeats = report["repeats"]
+    if (not version or report["matrix"] != "full" or not report["complete"] or
+            repeats < 1 or len(report["runs"]) != 2 * len(rows) * repeats):
+        raise ValueError("Expected a complete, versioned full-width CPU matrix")
+    for row in rows:
+        saved = hashlib.sha256((CPU / f"{row['bits']}.save").read_bytes()).hexdigest()
+        for threads, cpus in AFFINITY.items():
+            runs = [r for r in report["runs"] if (r["bits"], r["threads"]) == (row["bits"], threads)]
+            if sorted(r["repeat"] for r in runs) != list(range(1, repeats + 1)):
+                raise ValueError(f"Missing current CPU repeat at {row['bits']} bits, {threads}T")
+            for run in runs:
+                if (tuple(run["cpus"]), run["save_sha256"], run["exponent"], run["b1"], run["b2"]) != (
+                    cpus, saved, row["exponent"], row["B1"], row["B2"]
+                ):
+                    raise ValueError(f"Current CPU sample identity mismatch at {row['bits']} bits")
+                if not run["dll"] or run["dll"] not in report["version"]:
+                    raise ValueError(f"Current CPU DLL mismatch at {row['bits']} bits")
+            samples(row, f"current{threads}", [r["seconds"] for r in runs])
+    return version[1]
+
+
+def current_series(version):
+    if not version:
+        return SERIES
+    return SERIES[:6] + (
+        ("Ryzen AI 9 HX 370", "cpu1", "0.66.1   GWpoly 1T", "#6489bb", "o", "--"),
+        ("Ryzen AI 9 HX 370", "cpu4", "0.66.1   GWpoly 4T", "#63a4ac", "s", "--"),
+        ("Ryzen AI 9 HX 370", "current1", f"{version}   GWpoly 1T", "#1856a4", "o", "-"),
+        ("Ryzen AI 9 HX 370", "current4", f"{version}   GWpoly 4T", "#008391", "s", "-"),
+        SERIES[-1],
+    )
+
+
+def plot(rows, scale, figures, version):
     fig, (zoom, full, legend) = plt.subplots(
         1, 3, figsize=(14.5, 5.7), gridspec_kw={"width_ratios": [1.5, 2.4, 1.05]},
         layout="constrained"
@@ -119,7 +158,7 @@ def plot(rows, scale):
     legend.axis("off")
     handles, labels = [], []
     last_device = None
-    for device, key, label, color, marker, style in SERIES:
+    for device, key, label, color, marker, style in current_series(version):
         if device != last_device:
             handles.append(Line2D([], [], linestyle="none"))
             labels.append(device)
@@ -127,7 +166,7 @@ def plot(rows, scale):
         for ax, data in ((zoom, [r for r in rows if r["bits"] <= 4667]), (full, rows)):
             x = [r["bits"] for r in data]
             line, = ax.plot(x, [r[key] for r in data], color=color, marker=marker, ls=style, ms=4,
-                            lw=2 if key.startswith("cpu") else 1.45,
+                            lw=2 if style == "-" else 1.45,
                             markerfacecolor="white" if key == "prime" else color)
             ax.fill_between(x, [r[key + "_min"] for r in data], [r[key + "_max"] for r in data],
                             color=color, alpha=.10, linewidth=0)
@@ -149,7 +188,8 @@ def plot(rows, scale):
         ax.set_axisbelow(True)
     zoom.set_ylabel("Seconds per curve")
     fig.suptitle("Edwards Stage 2   |   13 cofactors, small B2", fontweight="bold")
-    output = FIGURES / f"stage2-edwards-cpu-gpu-full-{scale}.png"
+    suffix = f"-{version}" if version else ""
+    output = figures / f"stage2-edwards-cpu-gpu-full{suffix}-{scale}.png"
     fig.savefig(output, dpi=160)
     fig.savefig(output.with_suffix(".svg"))
     shutil.copyfile(output, ATTACHMENTS / output.name)
@@ -157,16 +197,22 @@ def plot(rows, scale):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--current", type=Path, help="Complete summary.json from bench_cpu_stage2_full_width.py")
+    args = parser.parse_args()
     rows = collect()
-    out = BENCH / "stage2_cpu_full_0661"
-    out.mkdir(exist_ok=True)
+    version = add_current(rows, read_json(args.current)) if args.current else None
+    study = f"stage2_cpu_full_{version.replace('.', '')}" if version else CPU.name
+    out = BENCH / study
+    out.mkdir(parents=True, exist_ok=True)
     with (out / "comparison.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=rows[0])
         writer.writeheader()
         writer.writerows(rows)
-    FIGURES.mkdir(parents=True, exist_ok=True)
+    figures = FIGURES.parent / study
+    figures.mkdir(parents=True, exist_ok=True)
     for scale in ("log", "linear"):
-        plot(rows, scale)
+        plot(rows, scale, figures, version)
 
 
 if __name__ == "__main__":

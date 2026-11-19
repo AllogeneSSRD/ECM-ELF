@@ -86,6 +86,13 @@ def main():
         '--backend','plain','--b2-round-chain',1],good=False)
     for d in (6,30,60,210):
         rows=run(f'wheel_{d}',cpu,n,extra=['--d',d,'--curves',1,'--exponent',127]);assert rows[0]['status']=='NF'
+    # Cross the 512-root threshold, and exercise D with just one of 3 and 5,
+    # as well as a large wheel omitting both small primes.
+    for d,stride in ((3054,2),(3126,6),(2630,10),(2422,2)):
+        name=f'baby_wheel_{d}'
+        row=run(name,cpu,n,extra=['--d',d,'--curves',1,'--exponent',127],threads=1)[0]
+        assert row['status']=='NF' and row['d']==d and row['stage2-engine']['checked-values']==3
+        assert f'gwpoly-baby: stride={stride}\n' in (out/(name+'.log')).read_text()
     # M127 at B2=40000 and D=30 has original last=1333. For m=7 the first
     # retained centre is 191; no terminal point may move beyond that grid.
     log=(out/'wheel_30.log').read_text()
@@ -146,6 +153,11 @@ def main():
         _,rz=oracle.mont.ladder(prime,x,z,a24,hit_n);product=product*rz%hit_n
     expected=math.gcd(product,hit_n);assert 1<expected<hit_n
     r=run('stage2_factor',hit,hit_n)[0];assert r['stage']==2 and int(r['factors'][0])%expected==0
+    # D=6*521 gives 520 roots, and the order 127 divides the denominator
+    # of a retained baby point. Recover that proper divisor before F descent.
+    lane_hit=run('baby_wheel_factor',hit,hit_n,extra=['--d',3126],threads=1)[0]
+    assert lane_hit['stage']==2 and lane_hit['factors']==r['factors']
+    assert 'gwpoly-baby: stride=6\n' in (out/'baby_wheel_factor.log').read_text()
     # Force the shortened grid on a genuine hit. The canonical replay must
     # recover the same factor as the independent prime-by-prime ladder.
     recovered=run('suffix_factor_replay',hit,hit_n,extra=['--d',30])[0]

@@ -144,12 +144,23 @@ struct Context {
                  size_t first,size_t count,int operation,gwnum *subtract_from=nullptr){
         ++stats.polymults;
         polymult_set_num_threads(&pm,a_size+b_size<64?1:pm.max_num_threads);
-        const int base_options=operation|POLYMULT_NEXTFFT;
+        // GWNUM 31.6's SIMD FMA writer reads the zero-padding words even on
+        // unpadded FFTs. Our addends live in GW arrays, whose pointer table
+        // must cover that read at the first coefficient. FFT(1) can instead
+        // be a separately allocated number in the scaled and MMGW layouts.
+        const bool separate_subtract=subtract_from && (gw.GENERAL_MMGW_MOD ||
+            (!gw.ZERO_PADDED_FFT && (gw.k!=1.0 || count*sizeof(gwnum)<GW_LARGE_HEADER_SIZE)));
+        if(separate_subtract)operation &= ~POLYMULT_FNMADD;
+        const int base_options=(operation & POLYMULT_NO_UNFFT) ? operation : operation|POLYMULT_NEXTFFT;
         auto &plan=plans[{a_size,b_size,count,first,base_options,pm.num_threads}];
         int options=base_options|POLYMULT_SAVE_PLAN;
         if(plan){pm.plan=plan;options|=POLYMULT_USE_PLAN;}
-        polymult2(&pm,a,a_size,b,b_size,out,count,subtract_from,0,first,options);
+        polymult2(&pm,a,a_size,b,b_size,out,count,separate_subtract?nullptr:subtract_from,0,first,options);
         plan=pm.plan;
+        if(separate_subtract){
+            for(size_t i=0;i<count;++i)
+                gwsub3o(&gw,subtract_from[i],out[i],out[i],GWADD_FORCE_NORMALIZE);
+        }
         check("polynomial convolution");
     }
     Array convolution(View a,View b,size_t first,size_t count,const Array *subtract_from=nullptr){
@@ -231,7 +242,17 @@ struct Context {
         return convolution(q,View(f.v,f.v+degree),0,degree,&t);
     }
 
-    void fold(Array &h,Array &workspace,size_t g_degree,const Array &f,View &reciprocal){
+    bool supports_deferred_h_fold() const {
+        return o.exponent && gw.k==1.0 && !gw.GENERAL_MOD && !gw.GENERAL_MMGW_MOD &&
+            !gw.ZERO_PADDED_FFT && !gw.NEGACYCLIC_FFT;
+    }
+    bool use_deferred_h_fold(size_t degree) const {
+        if(!supports_deferred_h_fold() || degree*sizeof(gwnum)<GW_LARGE_HEADER_SIZE)return false;
+        // A low remainder coefficient sums products from both H*G and Q*F.
+        const auto required=polymult_safety_margin(2*(degree+1),2*(degree+1))+0.25f;
+        return gw.EXTRA_BITS/2.0f+gw.polymult_safety_margin>required;
+    }
+    void fold(Array &h,Array &workspace,size_t g_degree,const Array &f,View &reciprocal,bool defer_low){
         const size_t degree=f.size-1;
         if(!h.size){
             if(g_degree<degree){
@@ -251,8 +272,16 @@ struct Context {
         View coefficients(degree+g_degree);
         std::copy_n(workspace.v,degree,coefficients.begin());
         std::copy_n(h.v,g_degree,coefficients.begin()+degree);
+        // On a cyclic k=1 transform the low products already have the
+        // Fourier scaling expected of the next FNMADD addend. Reserve
+        // enough headroom to subtract two sums of coefficient products.
+        if(o.check)std::printf("gwpoly-fold: deferred_low=%d\n",defer_low);
         product(workspace.v,g_degree,h.v,degree,coefficients.data(),0,degree+g_degree,
-                     POLYMULT_INVEC1_MONIC);
+                     POLYMULT_INVEC1_MONIC|(defer_low?POLYMULT_NO_UNFFT:0));
+        if(defer_low){
+            poly_unfft_fft_coefficients(&pm,h.v,g_degree);
+            check("polynomial quotient input normalization");
+        }
 
         // Q is the high g_degree coefficients of the product of the high
         // block and the reversed truncated reciprocal. Its leading one is
@@ -770,9 +799,19 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         c.put(x,q.x);u64togw(&c.gw,1,q.z);c.put(a24,storage[12]);
         Array roots(c.gw,p);
         {
-            const auto t=Clock::now();Array z(c.gw,p);points.dbl(q,step,storage[12]);
+            const auto t=Clock::now();Array z(c.gw,p);
+            // A stride dividing D needs only classes coprime to that stride.
+            // Leave short slices on the two-step chain to avoid extra ladders.
+            const auto stride=p/o.threads>=512 ? std::gcd(d,uint64_t{30}) : uint64_t{2};
+            if(o.check)std::printf("gwpoly-baby: stride=%llu\n",static_cast<unsigned long long>(stride));
+            if(stride==2)points.dbl(q,step,storage[12]);
+            else points.ladder(q,stride,step,storage[12]);
             std::vector<uint64_t> residues;residues.reserve(p);
-            for(uint64_t j=1;j<=d/2;j+=2)if(std::gcd(j,d)==1)residues.push_back(j);
+            std::array<std::vector<size_t>,30> lanes;
+            for(uint64_t j=1;j<=d/2;j+=2)if(std::gcd(j,d)==1){
+                if(stride>2)lanes[j%stride].push_back(residues.size());
+                residues.push_back(j);
+            }
             if(residues.size()!=p)throw std::runtime_error("Baby wheel size differs");
             parallel_points(c,p,[&](Context &worker,size_t lo,size_t hi){
                 // GW add/subtract may transform source operands in place to
@@ -780,28 +819,77 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
                 Points ops(worker);Array work(worker.gw,11);Point a{work[0],work[1]},b{work[2],work[3]},v{work[4],work[5]},
                     local_q{work[6],work[7]},local_step{work[8],work[9]};
                 ops.copy(q,local_q);ops.copy(step,local_step);gwcopy(&worker.gw,storage[12],work[10]);
-                const auto first=residues[lo],last=residues[hi-1];
-                ops.ladder(local_q,first,b,work[10]);ops.ladder(local_q,first>1?first-2:1,a,work[10]);
-                size_t index=lo;
                 const bool fused=worker.o.exponent && (worker.gw.cpu_flags & (CPU_AVX512F|CPU_FMA3));
-                for(uint64_t j=first;j<=last;j+=2){
-                    if(std::gcd(j,d)==1){gwcopy(&worker.gw,b.x,roots[index]);gwcopy(&worker.gw,b.z,z[index++]);}
-                    if(j==1)ops.add(local_step,local_q,local_q,v);
-                    else if(fused)ops.add_fused(b,local_step,a,v);
-                    else ops.add(b,local_step,a,v);
-                    std::swap(a,b);std::swap(b,v);
-                    if((j&255)==1)worker.check();
+                if(stride>2){
+                    const std::array<Point,3> scratch{a,b,v};
+                    size_t added=0;
+                    for(const auto &lane:lanes){
+                        auto index=std::lower_bound(lane.begin(),lane.end(),lo);
+                        const auto end=std::lower_bound(index,lane.end(),hi);
+                        if(index==end)continue;
+                        worker.check("baby wheel chain");
+                        const auto first=residues[*index],last=residues[*(end-1)];
+                        Point previous=scratch[0],current{roots[*index],z[*index]};
+                        ops.ladder(local_q,first,current,work[10]);
+                        if(first==last)continue;
+                        // The Montgomery x-coordinate does not depend on sign.
+                        ops.ladder(local_q,first>stride ? first-stride : stride-first,previous,work[10]);
+                        ++index;
+                        // The two preceding points may still occupy scratch
+                        // slots. Rotate through three to keep the output distinct.
+                        size_t scratch_index=1;
+                        for(uint64_t j=first+stride;index!=end;j+=stride){
+                            Point next;
+                            if(j==residues[*index]){
+                                next={roots[*index],z[*index]};
+                                ++index;
+                            }else{
+                                next=scratch[scratch_index];
+                                scratch_index=(scratch_index+1)%scratch.size();
+                            }
+                            if(fused)ops.add_fused(current,local_step,previous,next);
+                            else ops.add(current,local_step,previous,next);
+                            previous=current;
+                            current=next;
+                            if(!(++added&127))worker.check("baby wheel chain");
+                        }
+                    }
+                }else{
+                    const auto first=residues[lo],last=residues[hi-1];
+                    ops.ladder(local_q,first,b,work[10]);ops.ladder(local_q,first>1?first-2:1,a,work[10]);
+                    size_t index=lo;
+                    for(uint64_t j=first;j<=last;j+=2){
+                        if(std::gcd(j,d)==1){gwcopy(&worker.gw,b.x,roots[index]);gwcopy(&worker.gw,b.z,z[index++]);}
+                        if(j==1)ops.add(local_step,local_q,local_q,v);
+                        else if(fused)ops.add_fused(b,local_step,a,v);
+                        else ops.add(b,local_step,a,v);
+                        std::swap(a,b);std::swap(b,v);
+                        if((j&255)==1)worker.check();
+                    }
                 }
                 ops.normalize(roots.v+lo,z.v+lo,hi-lo);
                 if(o.check){
-                    // Cross-check the odd-step chain against separate ladders,
-                    // including both boundaries of every worker's slice.
+                    // Check the retained roots against independent ladders,
+                    // including the boundaries of each lane in this slice.
                     Integer root,ref_x,ref_z;
-                    for(const size_t sample:{lo,lo+(hi-lo)/2,hi-1}){
+                    const auto verify=[&](size_t sample){
                         ops.ladder(local_q,residues[sample],v,work[10]);
                         worker.get(root.v,roots[sample]);worker.get(ref_x.v,v.x);worker.get(ref_z.v,v.z);
                         mpz_mul(root.v,root.v,ref_z.v);mpz_mod(root.v,root.v,worker.n);
                         if(mpz_cmp(root.v,ref_x.v))throw std::runtime_error("Baby point differs from direct ladder");
+                    };
+                    if(stride==2){
+                        for(const size_t sample:{lo,lo+(hi-lo)/2,hi-1})verify(sample);
+                    }else{
+                        for(const auto &lane:lanes){
+                            const auto first=std::lower_bound(lane.begin(),lane.end(),lo);
+                            const auto end=std::lower_bound(first,lane.end(),hi);
+                            if(first!=end){
+                                verify(*first);
+                                verify(first[(end-first)/2]);
+                                verify(end[-1]);
+                            }
+                        }
                     }
                 }
             });
@@ -850,6 +938,10 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
         stats.init_seconds=seconds(begin);main_begin=Clock::now();main_started=true;
         Array h;
         auto reciprocal=reverse(inv);
+        // Wide AVX-512 coefficients benefit from avoiding a normalization
+        // pass. Shorter FFTs and threaded folds keep the fused library path.
+        const bool defer_low=o.threads==1 && (c.pm.cpu_flags & CPU_AVX512F) &&
+                             stats.fft_length>=15360 && c.use_deferred_h_fold(p);
         progress(ECM_GW_GIANT);
         const uint64_t batches=first<=last?1+(last-first)/p:0;
         auto last_report=main_begin;
@@ -888,7 +980,7 @@ static bool stage2_range(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a2
             }
             part_begin=Clock::now();auto g=product_tree(c,gx,0,count,&g_workspace,true);gx=Array();stats.tree_seconds+=seconds(part_begin);
             part_begin=Clock::now();
-            c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal);
+            c.fold(h,g_workspace,g->polynomial.size-1,ftree->polynomial,reciprocal,defer_low);
             stats.fold_seconds+=seconds(part_begin);
             pos+=count;++stats.blocks;stats.giants+=count;
             if(o.progress && (stats.blocks==1 || stats.blocks==batches || seconds(last_report)>=1.0)) {
@@ -951,6 +1043,8 @@ bool stage2(mpz_t factor,const mpz_t n,const mpz_t x,const mpz_t a24,
     return stage2_range(factor,n,x,a24,b1,b2,o,stats,false,shortened);
 }
 
+static void selftest_polynomials(unsigned threads,unsigned long exponent);
+
 void selftest(unsigned threads){
     // Independently enumerate discarded witnesses on small grids, including
     // non-unit giant denominators and both sides of the half-D boundary.
@@ -987,8 +1081,23 @@ void selftest(unsigned threads){
             }
         }
     }
-    Integer n,f,x,y,z;mpz_set_ui(n.v,1000003);mpz_mul_ui(n.v,n.v,1000033);
-    Options o;o.threads=threads;Stats stats{};Context c(n.v,f.v,o,stats,512);
+    selftest_polynomials(threads,0);
+    // (2^{697}-1) is composite and all denominators 2..510 are units.
+    selftest_polynomials(threads,697);
+}
+
+static void selftest_polynomials(unsigned threads,unsigned long exponent){
+    Integer n,f,x,y,z;
+    if(exponent){
+        mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,exponent);mpz_sub_ui(n.v,n.v,1);
+    }else{
+        mpz_set_ui(n.v,1000003);mpz_mul_ui(n.v,n.v,1000033);
+    }
+    Options o;o.threads=threads;o.exponent=exponent;
+    Stats stats{};
+    Context c(n.v,f.v,o,stats,exponent?1024:512);
+    if(c.supports_deferred_h_fold() && !c.use_deferred_h_fold(509))
+        throw std::runtime_error("Self-test carrier lacks margin for deferred H fold");
     // At 509 roots a lone tail crosses the 128-job batched normalization boundary.
     for(size_t count:{1u,2u,3u,4u,5u,8u,17u,32u,65u,129u,257u,509u}){
         Array roots(c.gw,count);std::vector<uint64_t> expected_roots(count);
@@ -1033,7 +1142,7 @@ void selftest(unsigned threads){
                 for(size_t j=0;j<leaves;++j)u64togw(&c.gw,1237*(j+5)+97*block,roots[j]);
             }
             auto g=product_tree(c,signed_block?workspace:roots,0,leaves,&workspace,signed_block);
-            c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal);
+            c.fold(accumulator,workspace,g->polynomial.size-1,t->polynomial,reciprocal,c.use_deferred_h_fold(count));
             auto out=c.scaled_remainder(accumulator,inv);
             descend(c,*t,out);
             for(size_t i=0;i<count;++i){
@@ -1042,6 +1151,12 @@ void selftest(unsigned threads){
             }
         }
     }
-    c.check();std::printf("gwpoly selftest: composite-ring Newton/remainder/scaled-Horner PASS; threads=%u maxerr=%.9g\n",threads,stats.max_roundoff);
+    c.check();
+    if(exponent)
+        std::printf("gwpoly selftest: M%lu Newton/remainder/scaled-Horner PASS; threads=%u deferred_low=%d maxerr=%.9g\n",
+                    exponent,threads,c.use_deferred_h_fold(509),stats.max_roundoff);
+    else
+        std::printf("gwpoly selftest: composite-ring Newton/remainder/scaled-Horner PASS; threads=%u maxerr=%.9g\n",
+                    threads,stats.max_roundoff);
 }
 }
