@@ -149,7 +149,9 @@ CurveKind prepare_edwards_lane(mpz_srcptr n, uint64_t sigma, mpz_ptr factor, uin
     Integer a24, x, inv, den;
     const auto setup = ecm_edwards::construct(d, px, py, a24.v, factor, sigma, n, construction);
     if (setup == Setup::Factor) return CurveKind::Factor;
-    if (setup == Setup::Degenerate) return CurveKind::Degenerate;
+    if (setup != Setup::Ready)
+        return ecm_edwards::construction_is_degenerate(setup, factor, n)
+            ? CurveKind::Degenerate : CurveKind::Failed;
 
     mpz_ui_sub(den.v, 1, py);
     const auto chart = ecm_edwards::inverse(inv.v, den.v, n, factor);
@@ -476,10 +478,14 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             result.set_curve(lane, CurveKind::CompletedWithoutPoint, nullptr, sigmas[lane]);
         };
         for (unsigned i = 0; i < curves; ++i) {
-            if (kinds[i] == CurveKind::Degenerate)
-                throw std::runtime_error("degenerate Atkin-Morain construction on sigma " +
+            if (kinds[i] == CurveKind::Failed)
+                throw std::runtime_error("invalid Atkin-Morain construction on sigma " +
                                          std::to_string(sigmas[i]));
-            if (kinds[i] == CurveKind::Factor) {
+            if (kinds[i] == CurveKind::Degenerate) {
+                ecm_ts_fprintf(stdout, "NTT Edwards skipped degenerate construction: curve=%u sigma=%llu gcd=N\n",
+                               i, static_cast<unsigned long long>(sigmas[i]));
+                result.set_curve(i, CurveKind::Degenerate, nullptr, sigmas[i]);
+            } else if (kinds[i] == CurveKind::Factor) {
                 result.set_curve(i, CurveKind::Factor, factors.data()[i], sigmas[i]);
                 legacy = ECM_FACTOR_FOUND_STEP1;
             } else if (kinds[i] == CurveKind::CompletedWithoutPoint) {

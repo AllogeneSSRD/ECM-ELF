@@ -12,5 +12,10 @@ struct Batch {
     std::vector<uint64_t> sigmas;
     std::vector<int> hit;
     explicit Batch(uint32_t c):count(c),state(size_t(c)*9),factors(c),sigmas(c),hit(c,0){}
+
+    bool degenerate(uint32_t lane) {
+        // A valid curve has unit d. Inactive lanes use d=0 and an identity point.
+        return !hit[lane] && !mpz_sgn(state[size_t(lane) * 9]);
+    }
 };
 }

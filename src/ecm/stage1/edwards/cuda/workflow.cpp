@@ -368,7 +368,6 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 batch.sigmas[i] = checkpoint.sigma(i, selection.next(sigma, i));
             }
             std::string error;
-            uint32_t degenerate_curve = UINT32_MAX;
             const auto available = opt.execution.worker_cpu_count ? opt.execution.worker_cpu_count :
                 std::max(1u, std::thread::hardware_concurrency());
             const auto requested = opt.execution.gpu_init_threads ? opt.execution.gpu_init_threads : 1;
@@ -383,10 +382,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                         result.fail(ecm_stage1::FailureSource::Publication);
                         return false;
                     },
-                    &degenerate_curve, workers)) {
-                if (degenerate_curve < curves)
-                    result.set_curve(degenerate_curve, CurveKind::Degenerate, nullptr,
-                                     batch.sigmas[degenerate_curve]);
+                    workers)) {
                 throw std::runtime_error(error);
             }
             ecm_ts_fprintf(stdout, "stage1_cgbn_edwards_setup: threads=%u ms=%.3f\n", workers,
@@ -475,6 +471,12 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         Integer x, z, g, inv;
         bool found = false;
         for (uint32_t i = 0; i < curves; ++i) {
+            if (batch.degenerate(i)) {
+                ecm_ts_fprintf(stdout, "GPU Edwards skipped degenerate construction: curve=%u sigma=%llu gcd=N\n",
+                               i, static_cast<unsigned long long>(batch.sigmas[i]));
+                result.set_curve(i, CurveKind::Degenerate, nullptr, batch.sigmas[i]);
+                continue;
+            }
             auto* s = batch.state.data() + size_t(i) * 9;
             bool hit = batch.hit[i] != 0;
             if (!hit) {

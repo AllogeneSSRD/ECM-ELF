@@ -121,11 +121,14 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 | CUDA Montgomery ladder | 记录 0 包含整批头和数组 | magic `0x45555047`、version 5 | 切片边界的普通整数；二进制位进度 |
 | OpenCL Montgomery PARAM3 | 记录 0 包含整批头和数组 | magic `0x45555047`、version 4 | 设备 Montgomery 域；二进制位进度 |
 | CUDA Edwards binary / NAF | 记录 0 包含全部曲线 | `ECMEDB3`／`ECMEDB4`，版本 3／4 | 普通整数，进度为 binary 位或 NAF 列 |
+| CUDA thread / OpenCL Edwards | 记录 0 包含全部曲线 | `CUDA_ED_THREAD_V1`／`OCL_ED_NAF_V1` | 设备 Montgomery 域的累加点；NAF 列游标 |
 | CUDA resident / PRAC | 记录 0 包含整批驻留状态 | magic `0x31524d444d434545`、version 1 | Montgomery 域；位进度或素数计划位置 |
 | CUDA NTT 单批 | 记录 0 包含一批算术状态 | `ECMNTTS1`／`ECMNTTS2`／`ECMNTTE1` | 规范投影坐标；x-only 位游标或 Edwards NAF 列游标 |
-| CUDA NTT 拆批任务 | 外层只有记录 0，包含已完成前缀和至多一批算术快照 | `NTT-TASK-1` | 已完成结果、当前批大小和容量、嵌套算术快照 |
+| CUDA NTT 拆批任务 | 外层只有记录 0，包含已处理前缀和至多一批算术快照 | `NTT-TASK-1`／`NTT-TASK-2`／`NTT-TASK-3` | 已处理曲线的结果、当前批大小和容量、嵌套算术快照 |
 
 正常 Stage1 驱动通过 `ecm-batch-record:<i>` 虚拟地址访问记录。这个文本不是磁盘文件路径；载荷写入会更新对应记录并重新发布**整份外层文件**。单独调用底层 codec 时存在独立文件接口，不等于驱动会自动扫描这些独立文件。
+
+CUDA thread 和 OpenCL Edwards 使用同一恢复流程。恢复时按原 sigma 重构每个通道。构造退化的通道使用恒等点占位，读取时同时核对 GCD=N 和保存的恒等累加点。[逐曲线 GPU 检查点实现](../../src/ecm/stage1/edwards/thread_workflow.h)
 
 ### 4.1 CUDA ladder V5 / OpenCL V4 的 72-byte 头
 
@@ -195,7 +198,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 这里两处 FNV 的初值均为 **14695981039346656037**，乘数为 1099511628211。指数指纹覆盖“u32 指数字节数+规范指数字节”；不只是指数数值文本，也不只是位数。完整指数从 B1 重建或由已验证缓存取得，不写入载荷。
 
-恢复验证完整 N、B1、曲线数、指数位数及指纹、进度上界和固定 sigma。程序用 sigma 重构曲线和基点，核对 d 及全部基点状态、构造因子，并验证累加点范围、非全零、XY=ZT 及 Edwards 方程。V4 仅用于显式窗口因内存不足而缩小的批次，满足 `2 ≤ window < original_window ≤ 12`。恢复 V4 可配置原请求或实际窗口，计算使用保存的实际窗口。V3 和 V4 的坐标均为普通整数，恢复时按 N 选择容器。
+恢复验证完整 N、B1、曲线数、指数位数及指纹、进度上界和固定 sigma。程序用 sigma 重构曲线和基点，核对 d 及全部基点状态、构造因子，并验证累加点范围、非全零、XY=ZT 及 Edwards 方程。构造退化通道使用 `hit=0`、`factor=0`、`d=0` 和恒等点。恢复时要求同一 sigma 重构得到退化结果，且累加点仍为恒等点。V4 仅用于显式窗口因内存不足而缩小的批次，满足 `2 ≤ window < original_window ≤ 12`。V3 和 V4 的坐标均为普通整数。恢复时采用保存的窗口，并按 N 选择容器。
 
 大小精确为 **68 + bytes(N) + 52C + Σbytes(fᵢ) + Σbytes(vᵢⱼ)**，j=0..8。外层仍须再加自身开销。NAF 字典、完整指数、GPU 内存布局均不在该公式内。
 
@@ -252,7 +255,7 @@ giant 为 u32 limb 数 m，随后 m 个低 limb 在前的 u32；当前写入零�
 
 CPU Edwards 的外层任务身份仍使用原请求窗口，部分记录的 `dict_size` 对应实际运行窗口。恢复时按部分记录固定实际窗口，以保持列号语义。若内存无法容纳该窗口，可降低 CPU 并发数，预算仍不足则保留存档并退出。
 
-CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存 sigma、返回码 0/1、十六进制 factor，以及带双引号/转义的完整文本 save 行；无可用点时该行可以为空。记录没有独立尾校验，依靠外层 CRC。保存已完成结果是为了发布失败或批次停止后不重复计算已完成曲线。
+CPU 曲线处理完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`，依次保存 sigma、返回码、十六进制 factor，以及带双引号和转义的完整文本 save 行。返回码 0 表示无因子，1 表示真因子，3 表示构造退化。退化记录的 factor 为 0，文本行为空，恢复时重新验证该 sigma 的构造确实得到 GCD=N。记录依靠外层 CRC。发布失败或批次停止后可直接使用已完成的结果。
 
 来源：[CPU Edwards codec](../../src/io/prime95_save.cpp)、[CPU 批次执行与完成记录](../../src/ecm/stage1/edwards/cpu/workflow.cpp)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
 
@@ -293,12 +296,12 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 | 18 | 4 | preferred | 调度选出的目标批量 |
 | 22 | 4 | curves | 当前子批的真实曲线数，包含已分配的补齐曲线 |
 | 26 | 4 | capacity | 新写入等于 curves。旧档中若更大，恢复只采用原有真实曲线范围 |
-| 30 | 4 | completed | 已完成的真实曲线数，也是当前子批的零基起点 |
+| 30 | 4 | completed | 已处理的曲线槽位数（含构造退化），也是当前子批的零基起点 |
 | 34 | 8 | native bytes | 当前子批算术快照的字节数 |
 | 42 | native bytes | native | 上节的单批算术快照。长度为 0 时该子批从头启动 |
 | 42 + native bytes | 变长 | completed results | 按任务顺序存放的已完成结果 |
 
-每条完成记录为 1 字节结果类型、u32 数值长度及相应的无符号小端整数。类型 1 保存真因子，类型 2 保存归一化 Stage2 点（Edwards 保存其对应的 Montgomery 坐标 `u`），类型 3 代表无可交接点的完成状态，数值长度为 0。从零开始数，第 `i` 条记录的 sigma 由 `first sigma + i` 重建。子批启动前先落盘批次范围和容量，周期写入或正常停止再补入算术快照。子批验证成功后，一次原子替换同时追加完成记录并清空当前快照，将 `curves`、`capacity` 和 `native bytes` 置零。下一个子批据此领取新的 sigma 区间。见 [任务载荷编码和验证](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp#L18)、[写入及提交子批](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp#L155)。
+每条完成记录为 1 字节结果类型、u32 数值长度及相应的无符号小端整数。类型 1 保存真因子，类型 2 保存归一化 Stage2 点（Edwards 保存其对应的 Montgomery 坐标 `u`），类型 3 表示算术完成但无可交接点，类型 4 表示 Edwards 构造退化。类型 3 和 4 的数值长度均为 0，类型 4 在恢复时以同一 sigma 重新验证 GCD=N。子批启动前先落盘批次范围和容量，周期写入或正常停止再补入仅含活跃曲线的算术快照。子批验证成功后，一次原子替换同时追加完成记录并清空当前快照，将 `curves`、`capacity` 和 `native bytes` 置零。下一个子批据此领取新的 sigma 区间。见 [任务载荷编码和验证](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp#L18)、[写入及提交子批](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp#L155)。
 
 任务身份仍使用原始请求量。若请求 1000 条，在调整后的尾批上总计完成 1050 条，尾批写入的 `curves` 已含新增曲线，完成后记录 `completed=1050`。恢复使用同一条原始 worktodo 行，按检查点已有范围继续运行或发布。发布的 `finished` 和 Stage2 交接范围由实际写入 `.save` 的记录数确定。
 

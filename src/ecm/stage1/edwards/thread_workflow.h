@@ -114,6 +114,8 @@ inline void finish_curves(ComputationResult& result, FieldLayout& layout,
             found = true;
             continue;
         }
+        if (result.curves[i].kind == CurveKind::Degenerate)
+            continue;
         for (unsigned field = 0; field < 4; ++field)
             layout.unpack(point[field], state.data(), i, field);
         layout.unpack(d.v, base.data(), i, 0);
@@ -160,10 +162,16 @@ inline void prepare_curves(ComputationResult& result, mpz_srcptr n, unsigned lim
         const auto last = uint32_t(uint64_t(count) * (worker + 1) / workers);
         for (uint32_t i = first; i < last; ++i) {
             const auto rc = ecm_edwards::construct(d.v, px.v, py.v, a24.v, factor.v, sigmas[i], n, mersenne.get());
-            if (rc == ecm_edwards::Setup::Degenerate)
-                throw std::runtime_error("degenerate Atkin–Morain sigma=" + std::to_string(sigmas[i]));
-            if (rc == ecm_edwards::Setup::Factor) {
-                result.set_curve(i, CurveKind::Factor, factor.v, sigmas[i]);
+            if (rc != ecm_edwards::Setup::Ready) {
+                if (rc == ecm_edwards::Setup::Factor) {
+                    result.set_curve(i, CurveKind::Factor, factor.v, sigmas[i]);
+                } else if (ecm_edwards::construction_is_degenerate(rc, factor.v, n)) {
+                    ecm_ts_fprintf(stdout, "Thread Edwards skipped degenerate construction: curve=%u sigma=%llu gcd=N\n",
+                                   i, static_cast<unsigned long long>(sigmas[i]));
+                    result.set_curve(i, CurveKind::Degenerate, nullptr, sigmas[i]);
+                } else {
+                    throw std::runtime_error("invalid Atkin-Morain construction sigma=" + std::to_string(sigmas[i]));
+                }
                 for (unsigned j = 0; j < limbs; ++j)
                     base[(2 * size_t(limbs) + j) * count + i] = constants[limbs + j];
             } else {
@@ -257,13 +265,17 @@ ComputationResult run_stage1(const Stage1Request& request, ExecutionOptions& opt
                         return false;
                     const auto code = ecm_edwards::construct(d.v, x.v, y.v, a24.v, factor.v,
                                                             seeds[i], n, mersenne.get());
-                    if (code == ecm_edwards::Setup::Degenerate)
-                        return false;
                     if (code == ecm_edwards::Setup::Factor)
                         continue;
+                    const bool degenerate = ecm_edwards::construction_is_degenerate(code, factor.v, n);
+                    if (code != ecm_edwards::Setup::Ready && !degenerate)
+                        return false;
+                    if (degenerate)
+                        mpz_set_ui(d.v, 0);
                     for (unsigned k = 0; k < 4; ++k)
                         candidate_layout.unpack(point[k], candidate_state.data(), i, k);
-                    if (!ecm_edwards::point_valid(n, d.v, point.data()))
+                    if (!ecm_edwards::point_valid(n, d.v, point.data()) ||
+                        (degenerate && !ecm_edwards::point_is_identity(point.data())))
                         return false;
                 }
             } catch (const std::runtime_error&) {

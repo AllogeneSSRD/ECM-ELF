@@ -1,5 +1,6 @@
 #include "batches.h"
 #include "tune.h"
+#include "ecm/curve/edwards.h"
 #include "ecm/stage1/ntt_target.h"
 #include "../../../edwards/memory.h"
 #include "../../../sigma.h"
@@ -85,8 +86,10 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
         for (uint32_t i = 0; i < completed; ++i) {
             auto& curve = saved.completed.curves[i];
             const auto kind = uint8_t(reader.take(1).front());
+            const bool degenerate = kind == unsigned(CurveKind::Degenerate);
             if (kind != unsigned(CurveKind::Stage2Point) &&
-                kind != unsigned(CurveKind::Factor) && kind != unsigned(CurveKind::CompletedWithoutPoint))
+                kind != unsigned(CurveKind::Factor) && kind != unsigned(CurveKind::CompletedWithoutPoint) &&
+                !degenerate)
                 return false;
             const auto value = reader.take(reader.u32());
             if (value.size() > modulus_bytes)
@@ -94,6 +97,15 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
             curve.kind = static_cast<CurveKind>(kind);
             curve.sigma = saved.sigma(i);
             mpz_import(curve.value, value.size(), -1, 1, 0, 0, value.data());
+            if (degenerate) {
+                if (!value.empty() || request.options.execution.selection.curve != CurveModel::Edwards)
+                    return false;
+                ecm_edwards::Integer d, x, y, a24, gcd;
+                const auto setup = ecm_edwards::construct(d.v, x.v, y.v, a24.v, gcd.v,
+                                                          curve.sigma, request.modulus);
+                if (!ecm_edwards::construction_is_degenerate(setup, gcd.v, request.modulus))
+                    return false;
+            }
             if (curve.kind == CurveKind::Factor && format != legacy_magic) {
                 for (auto* coordinate : {&curve.endpoint.x, &curve.endpoint.z}) {
                     const auto text = reader.take(reader.u32());

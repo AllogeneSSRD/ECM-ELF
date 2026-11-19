@@ -107,6 +107,7 @@ typedef int (*edwards_progress_fn)(void *ctx, const edwards_checkpoint_t *cur);
 //   resume: 非 NULL 且 resume->bitnum>0 时从该累加点继续.
 //   progress: 非 NULL 时每 chunk 回调.
 // 返回: 1=因子, 0=无因子(完成), -1=错误, 2=被 progress 中止 (未完成).
+inline constexpr int edwards_curve_degenerate = 3; // Construction reported gcd=N.
 int edwards_stage1_curve_progress(
     mpz_t factor, mpz_t Qx, mpz_t Qz,
     const mpz_t N, uint64_t sigma, const mpz_t s,

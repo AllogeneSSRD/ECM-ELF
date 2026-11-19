@@ -171,6 +171,35 @@ def main():
         used.update(sigmas)
 
     if args.gpu is not None:
+        # N=137*1009: 677 finds 137 in construction, 679 has d=1,
+        # 680 maps to infinity on the auxiliary curve, and 681 is usable.
+        def cgbn_construction_case(name, sigma, count, workers):
+            path = case(name, f'ECMSTAGE1=1,2,18,-123911,"e_batch_2.save",0,0,{count}',
+                        f'target="gpu"\ngpu_algorithm="cgbn"\nstage1_gpu_device={args.gpu}\n'
+                        f'gpu_init_threads={workers}\nsigma={sigma}', handoff='off')
+            return path, run(stage1, path, 'stage1')
+
+        mixed_cases = [cgbn_construction_case(f'cgbn_degenerate_{workers}', 677, 5, workers)
+                       for workers in (1, 3)]
+        single = ''
+        for sigma in (677, 678, 681):
+            path, _ = cgbn_construction_case(f'cgbn_single_{sigma}', sigma, 1, 1)
+            single += (path / 'e_batch_2.save').read_text()
+        for path, log in mixed_cases:
+            assert all(f'sigma={sigma}' in log for sigma in (679, 680)), log
+            save = path / 'e_batch_2.save'
+            assert save.read_text() == single
+            assert records(save) == [(138233, 137, sigma, 2, 'FACTOR') for sigma in (677, 678, 681)]
+            published = [json.loads(line) for line in (path / 'results.json.txt').read_text().splitlines()]
+            assert [(row['Edwards']['sigma'], row['factors']) for row in published] == [
+                (sigma, ['137']) for sigma in (677, 678, 681)]
+            assert not (path / 'worktodo.txt').read_text().strip()
+
+        path, _ = cgbn_construction_case('cgbn_all_degenerate', 679, 2, 2)
+        assert not (path / 'e_batch_2.save').read_text().strip()
+        assert not (path / 'results.json.txt').exists()
+        assert not (path / 'worktodo.txt').read_text().strip()
+
         for algorithm in ('cgbn', 'ntt'):
             for random in (False, True):
                 path = case(f'{algorithm}_{random}',

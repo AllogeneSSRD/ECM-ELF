@@ -212,7 +212,9 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 CUDA CGBN Edwards NAF 主循环默认使用 2XY。用 `[stage1] edwards_doubling = 0` 可以为新批次选择 HWCD。奇倍点字典仍用 HWCD 生成。对照测试可用 `ECM_EDWARDS_STAGE1_ALGO=binary|naf` 选用 [二进制路径](../../src/ecm/stage1/edwards/cuda/runtime.cpp)或 NAF。未指定时使用 NAF，检查点恢复沿用已存的模式和倍点公式。算术和选择规则见 [Edwards NAF](NAF.md#点字典与执行成本)。
 
-[曲线构造](../../src/ecm/curve/edwards.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
+[曲线构造](../../src/ecm/curve/edwards.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。辅助点在无穷远、有理映射分母不可逆，或 `d(1−d)` 不是单位，都可能使构造失败。GCD 在 1 与 N 之间时记录该曲线的真因子。GCD 等于 N 时，该 σ 在目标模数上退化。CPU、CGBN、NTT、CUDA thread 和 OpenCL 都保留该 σ 的批内索引并继续计算其他曲线。CGBN 和逐曲线 GPU 后端使用恒等状态占位，CPU IFMA 以有效通道填充该槽位，NTT 将该通道移出活跃掩码。退化曲线只记日志，其他曲线按正常流程写入存档和发布结果。无效输入或基点方程校验失败仍报错。
+
+末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化。真因子单独标记。有效曲线在点乘后得到恒等点时写入 `IDENTITY`，表示该曲线已经算完且没有可用的 Stage2 点。
 
 [worker 接入](../../src/ecm/stage1/edwards/cuda/workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。已完成的普通坐标状态通过主机校验后直接补发布。未完成状态使用保存的进度和算法，按 N 选择容器。完整字段、兼容读取和恢复资格见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3v4)。
 

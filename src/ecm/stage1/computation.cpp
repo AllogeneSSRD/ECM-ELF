@@ -215,6 +215,9 @@ void ComputationResult::validate(mpz_srcptr n) const {
             if (mpz_cmp_ui(curve.value, 1) <= 0 || mpz_cmp(curve.value, n) >= 0 ||
                 !mpz_divisible_p(n, curve.value))
                 throw std::runtime_error("invalid Stage1 factor outcome");
+        } else if (curve.kind == Kind::Degenerate) {
+            if (!curve.sigma || mpz_sgn(curve.value))
+                throw std::runtime_error("invalid Stage1 degenerate curve outcome");
         } else if (curve.kind == Kind::Stage2Point || curve.kind == Kind::CompletedWithoutPoint) {
             if (mpz_sgn(curve.value) < 0 || mpz_cmp(curve.value, n) >= 0 ||
                 (curve.kind == Kind::CompletedWithoutPoint && mpz_sgn(curve.value)))

@@ -701,8 +701,10 @@ int edwards_stage1_curve_progress(mpz_t factor, mpz_t Qx, mpz_t Qz,
     const auto setup=ecm_edwards::construct(d,P.x,P.y,a24.v,setup_factor.v,sigma,N);
     if(setup!=ecm_edwards::Setup::Ready) {
         const bool hit=setup==ecm_edwards::Setup::Factor;
+        const bool degenerate=ecm_edwards::construction_is_degenerate(setup,setup_factor.v,N);
         if(hit){if(factor)mpz_set(factor,setup_factor.v);if(Qx)mpz_set(Qx,setup_factor.v);if(Qz)mpz_set_ui(Qz,1);}
-        ed_clear(P);ed_clear(R);mpz_clears(d,g,NULL);return hit?1:-1;
+        ed_clear(P);ed_clear(R);mpz_clears(d,g,NULL);
+        return hit ? 1 : degenerate ? edwards_curve_degenerate : -1;
     }
     mpz_set_ui(P.z,1);mod_mul(P.t,P.x,P.y,N);
 
@@ -745,8 +747,9 @@ int edwards_stage1_curve_progress(mpz_t factor, mpz_t Qx, mpz_t Qz,
 
 int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
                          const mpz_t N, uint64_t sigma, const mpz_t s) {
-    return edwards_stage1_curve_progress(factor, Qx, Qz, N, sigma, s,
-                                         0, nullptr, nullptr, nullptr);
+    const auto rc = edwards_stage1_curve_progress(factor, Qx, Qz, N, sigma, s,
+                                                  0, nullptr, nullptr, nullptr);
+    return rc == edwards_curve_degenerate ? -1 : rc;
 }
 
 // ---------------------------------------------------------------------------

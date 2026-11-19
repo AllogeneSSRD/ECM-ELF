@@ -151,24 +151,65 @@ static void deferred_restore(ecm_stage1_checkpoint::Context& checkpoint, const f
     checkpoint.close(false);
     std::cout<<"deferred_restore=PASS math_backup=1 seed_visibility=1 write_rollback=1 import_rollback=1 invalid_only=1 gpu_runs=0\n";
 }
-static void construction_publication() {
+static void construction_publication(ecm_stage1_checkpoint::Context& checkpoint, const fs::path& dir) {
     using namespace ed_gpu_driver;
-    Integer n,d,x,y,a24,f;mpz_set_ui(n.v,77);uint64_t factor_sigma=0,degenerate_sigma=0;
-    for(uint64_t sigma=1;sigma<200 && (!factor_sigma || !degenerate_sigma);++sigma) {
-        const auto setup=construct(d.v,x.v,y.v,a24.v,f.v,sigma,n.v);
-        if(setup==Setup::Factor && !factor_sigma)factor_sigma=sigma;
-        if(setup==Setup::Degenerate && !degenerate_sigma)degenerate_sigma=sigma;
+    Integer n, scalar, d, x, y, a24, factor;
+    mpz_set_ui(n.v, 137 * 1009);
+    mpz_set_ui(scalar.v, 12345);
+    check(construct(d.v, x.v, y.v, a24.v, factor.v, 677, n.v) == Setup::Factor &&
+          mpz_cmp_ui(factor.v, 137) == 0, "missing construction factor fixture");
+    for (uint64_t sigma : {679, 680}) {
+        check(construct(d.v, x.v, y.v, a24.v, factor.v, sigma, n.v) == Setup::Degenerate &&
+              mpz_cmp(factor.v, n.v) == 0, "missing mathematical degeneracy fixture");
     }
-    check(factor_sigma && degenerate_sigma,"missing Edwards construction fixtures");
-    Batch batch(2);batch.sigmas={factor_sigma,degenerate_sigma};unsigned calls=0;std::string error;
-    check(!initialize(batch,n.v,error,[&](uint32_t lane,mpz_srcptr value) {
-        check(lane==0 && mpz_cmp_ui(value,1)>0 && mpz_cmp(value,n.v)<0 && mpz_divisible_p(n.v,value),"bad construction factor");
-        ++calls;return true;
-    }),"degenerate later curve accepted");
-    check(calls==1 && batch.hit[0] && error.find("degenerate")!=std::string::npos,"earlier Edwards factor not published before failure");
-    Batch blocked(1);blocked.sigmas[0]=factor_sigma;
-    check(!initialize(blocked,n.v,error,[](uint32_t,mpz_srcptr){return false;}),"Edwards publication failure ignored");
-    std::cout<<"edwards_construction_publication=PASS factor_sigma="<<factor_sigma<<" degenerate_sigma="<<degenerate_sigma<<"\n";
+    Batch batch(5);
+    const std::vector<uint64_t> sigmas{677, 679, 680, 681, 677};
+    std::string error;
+    for (unsigned workers : {1, 3}) {
+        Batch attempt(5);
+        attempt.sigmas = sigmas;
+        std::vector<uint32_t> published;
+        check(initialize(attempt, n.v, error, [&](uint32_t lane, mpz_srcptr value) {
+            check(mpz_cmp_ui(value, 137) == 0, "bad construction factor");
+            published.push_back(lane);
+            return true;
+        }, workers), "construction degenerate lane stopped the batch");
+        check(published == std::vector<uint32_t>{0, 4}, "construction factor callbacks missing or unordered");
+        check(construct(d.v, x.v, y.v, a24.v, factor.v, 681, n.v) == Setup::Ready &&
+              !mpz_cmp(attempt.state[27], d.v) && !mpz_cmp(attempt.state[28], x.v) &&
+              !mpz_cmp(attempt.state[29], y.v), "valid curve after degeneracy changed");
+    }
+    batch.sigmas = sigmas;
+    check(initialize(batch, n.v, error), "mixed batch setup");
+    batch.done = 1;
+    fs::create_directories(dir);
+    checkpoint.set_path((dir / "mixed.ckpt").string());
+    checkpoint.begin("ed|mixed", batch.count, false, 0);
+    const auto path = ecm_stage1_curve_record(0);
+    check(save_checkpoint(checkpoint, path, batch, n.v, scalar.v, 2), "mixed checkpoint write");
+    checkpoint.close(false);
+    checkpoint.set_path((dir / "mixed.ckpt").string());
+    checkpoint.begin("ed|mixed", batch.count, false, 0);
+    Batch restored(batch.count);
+    check(restore_checkpoint(checkpoint, path, restored, n.v, scalar.v, 2, false).restored(),
+          "mixed checkpoint restore");
+    check(restored.done == batch.done && restored.sigmas == sigmas && restored.hit == batch.hit,
+          "mixed checkpoint metadata changed");
+    for (size_t i = 0; i < size_t(batch.count) * 9; ++i)
+        check(!mpz_cmp(batch.state[i], restored.state[i]), "mixed checkpoint point changed");
+    // This point satisfies the placeholder equation but is not neutral.
+    mpz_set_ui(restored.state[14], 1);
+    mpz_set_ui(restored.state[15], 0);
+    check(!decode_checkpoint(checkpoint_body(restored, n.v, scalar.v, 2), batch, n.v, scalar.v,
+                             2, false).restored(), "accepted non-neutral skipped lane");
+    checkpoint.close(false);
+    Batch blocked(1);
+    blocked.sigmas[0] = 677;
+    check(!initialize(blocked, n.v, error, [](uint32_t, mpz_srcptr) { return false; }),
+          "Edwards publication failure ignored");
+    Batch invalid(1);
+    check(!initialize(invalid, n.v, error), "invalid sigma accepted as mathematical degeneracy");
+    std::cout << "edwards_construction_publication=PASS N=138233 factor=677 degenerate=679,680\n";
 }
 static void legacy(ecm_stage1_checkpoint::Context& checkpoint, const fs::path &dir,const fs::path &source,const std::string &nh) {
     fs::create_directories(dir);const auto bytes=read(source);check(bytes.size()>80,"legacy source length");
@@ -196,7 +237,7 @@ int main(int argc,char **argv) {
     try {
         check(argc>=2,"output required");const fs::path out=argv[1];
         check(!fs::exists(out),"use a fresh test directory");fs::create_directories(out);
-        container(checkpoint, out/"container");edwards(checkpoint, out/"ed_small",{});edwards(checkpoint, out/"ed_binary",{},false);deferred_restore(checkpoint, out/"deferred");construction_publication();
+        container(checkpoint, out/"container");edwards(checkpoint, out/"ed_small",{});edwards(checkpoint, out/"ed_binary",{},false);deferred_restore(checkpoint, out/"deferred");construction_publication(checkpoint, out/"construction");
         if(argc==5){edwards(checkpoint, out/"ed_audit",argv[2]);legacy(checkpoint, out/"mont_audit",argv[3],argv[4]);}
         std::cout<<"checkpoint_container_checks=PASS\n";return 0;
     }catch(const std::exception &e){checkpoint.close(false);std::cerr<<e.what()<<'\n';return 1;}

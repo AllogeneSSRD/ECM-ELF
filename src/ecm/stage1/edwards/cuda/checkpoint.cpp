@@ -115,8 +115,10 @@ ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,B
         if(!initialize(reference,n,error))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         for(uint32_t i=0;i<b.count && valid;++i) {
             if(reference.hit[i]!=temp.hit[i] || mpz_cmp(reference.factors[i],temp.factors[i])){valid=false;break;}
-            for(unsigned j=0;j<5;++j)if(mpz_cmp(reference.state[size_t(i)*9+j],temp.state[size_t(i)*9+j]))valid=false;
-            if(!point_valid(n,temp.state[size_t(i)*9],temp.state.data()+size_t(i)*9+5))valid=false;
+            auto* saved=temp.state.data()+size_t(i)*9;
+            for(unsigned j=0;j<5;++j)if(mpz_cmp(reference.state[size_t(i)*9+j],saved[j]))valid=false;
+            if(!point_valid(n,saved[0],saved+5))valid=false;
+            if(reference.degenerate(i) && !point_is_identity(saved+5))valid=false;
         }
         if(!valid)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         if(fixed)for(uint32_t i=0;i<b.count;++i)

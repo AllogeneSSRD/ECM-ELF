@@ -14,6 +14,15 @@
 namespace ecm_edwards {
 enum class Setup { Ready, Factor, Degenerate };
 
+// Invalid inputs and failed equation checks do not report gcd = n.
+inline bool construction_is_degenerate(Setup setup, mpz_srcptr gcd, mpz_srcptr n) {
+    return setup == Setup::Degenerate && mpz_cmp_ui(gcd, 1) > 0 && mpz_cmp(gcd, n) == 0;
+}
+
+inline bool point_is_identity(const mpz_t* p) {
+    return !mpz_sgn(p[0]) && !mpz_sgn(p[3]) && mpz_sgn(p[2]) && !mpz_cmp(p[1], p[2]);
+}
+
 // A failed inverse may expose a proper factor. gcd = n instead denotes a
 // degenerate construction, not a factor suitable for publication.
 inline Setup inverse(mpz_t out, const mpz_t value, const mpz_t n, mpz_t factor) {

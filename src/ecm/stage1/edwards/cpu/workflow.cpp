@@ -45,6 +45,14 @@ using ecm_stage1::validate_stage1_factor;
 
 static constexpr int edwards_worker_memory_error = -3;
 
+static void skip_edwards_degenerate(CurveOutcome& out, uint32_t lane, uint64_t sigma) {
+    out.sigma = sigma;
+    out.kind = CurveKind::Degenerate;
+    mpz_set_ui(out.value, 0);
+    ecm_ts_fprintf(stdout, "CPU Edwards skipped degenerate construction: curve=%u sigma=%llu gcd=N\n",
+                   lane, static_cast<unsigned long long>(sigma));
+}
+
 // Classify the computed value directly. Text exists only at checkpoint/final-save encoding.
 static bool classify_edwards_outcome(CurveOutcome& out, mpz_srcptr n, uint64_t sigma, mpz_srcptr qx,
                                      mpz_srcptr qz, mpz_srcptr factor, bool hit) {
@@ -164,10 +172,22 @@ static bool edwards_completed_read(ecm_stage1_checkpoint::Context& checkpoint, u
     uint64_t saved_sigma;
     if (!(in >> tag) || tag != "ECM_EDWARDS_DONE_V1" ||
         !(in >> saved_sigma >> rc >> value >> std::quoted(line)) || (in >> extra) ||
-        saved_sigma != sigma || (rc != 0 && rc != 1) || mpz_set_str(factor, value.c_str(), 16))
+        saved_sigma != sigma || (rc != 0 && rc != 1 && rc != edwards_curve_degenerate) ||
+        mpz_set_str(factor, value.c_str(), 16))
         return false;
     try {
         outcome.sigma = sigma;
+        if (rc == edwards_curve_degenerate) {
+            if (!line.empty() || mpz_sgn(factor))
+                return false;
+            ecm_edwards::Integer d, x, y, a24, gcd;
+            const auto setup = ecm_edwards::construct(d.v, x.v, y.v, a24.v, gcd.v, sigma, n);
+            if (!ecm_edwards::construction_is_degenerate(setup, gcd.v, n))
+                return false;
+            skip_edwards_degenerate(outcome, curve, sigma);
+            rc = 0;
+            return true;
+        }
         if (line.empty()) {
             if (rc != 0)
                 return false;
@@ -194,11 +214,14 @@ static bool edwards_completed_write(ecm_stage1_checkpoint::Context& checkpoint, 
                                     uint64_t sigma, mpz_srcptr n, uint64_t b1,
                                     const CurveOutcome& outcome) {
     const bool hit = outcome.kind == CurveKind::Factor;
-    const auto line = ecm_edwards::save_line(n, outcome.value, sigma, b1, hit, outcome.endpoint,
-                                             outcome.kind == CurveKind::CompletedWithoutPoint);
+    const bool degenerate = outcome.kind == CurveKind::Degenerate;
+    const auto line = degenerate ? std::string{} :
+        ecm_edwards::save_line(n, outcome.value, sigma, b1, hit, outcome.endpoint,
+                              outcome.kind == CurveKind::CompletedWithoutPoint);
     std::ostringstream out;
     out << "ECM_EDWARDS_DONE_V1\n"
-        << sigma << ' ' << int(hit) << ' ' << (hit ? ecm_edwards::hex(outcome.value) : "0") << ' '
+        << sigma << ' ' << (degenerate ? edwards_curve_degenerate : int(hit)) << ' '
+        << (hit ? ecm_edwards::hex(outcome.value) : "0") << ' '
         << std::quoted(line) << '\n';
     return checkpoint.write_blob(ecm_stage1_curve_record(curve), out.str());
 }
@@ -274,10 +297,13 @@ static int edwards_run_one_curve(ecm_stage1_checkpoint::Context& checkpoint, mpz
     if (rc == 0 || rc == 1) {
         if (!classify_edwards_outcome(outcome, N, sigma, Qx, Qz, factor_out, rc == 1))
             rc = ECM_ERROR;
-        if (rc >= 0 && !ckpt_path.empty() &&
-            !edwards_completed_write(checkpoint, idx, sigma, N, uint64_t(B1), outcome))
-            rc = ECM_ERROR;
+    } else if (rc == edwards_curve_degenerate) {
+        skip_edwards_degenerate(outcome, idx, sigma);
+        rc = 0;
     }
+    if (rc >= 0 && !ckpt_path.empty() &&
+        !edwards_completed_write(checkpoint, idx, sigma, N, uint64_t(B1), outcome))
+        rc = ECM_ERROR;
     mpz_clears(Qx, Qz, NULL);
     return rc;
 }
@@ -336,7 +362,7 @@ struct EdSimdProg {
     int window;
     long long last_ms;
     long long interval_ms;
-    std::array<bool, IFMA_LANES> setup_factors{};
+    std::array<bool, IFMA_LANES> inactive{};
     bool write_failed = false;
 };
 
@@ -357,7 +383,7 @@ static int edwards_simd_progress(void* p, size_t bits_done, size_t bits_total, c
             mpz_inits(d, Px, Py, rx, ry, rz, NULL);
             size_t written = 0;
             for (uint32_t k = 0; k < pr->batch_count; k++) {
-                if (pr->setup_factors[k])
+                if (pr->inactive[k])
                     continue;
                 const uint32_t i = pr->batch_first + k;
                 const std::string path = ecm_stage1_curve_record(i);
@@ -457,7 +483,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     // Exceptional setup lanes need scalar factor/error classification before
     // building an affine SIMD dictionary (which requires invertible inputs).
     bool exceptional = false;
-    std::array<bool, IFMA_LANES> setup_factors{};
+    std::array<bool, IFMA_LANES> inactive{};
     uint32_t first_ready = count;
     for (uint32_t k = 0; k < count; ++k) {
         ecm_edwards::Integer d, x, y, a24, f;
@@ -471,7 +497,13 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
                 return ECM_ERROR;
             mpz_set(factors[i], f.v);
             array_found[i] = ECM_FACTOR_FOUND_STEP1;
-            setup_factors[k] = true;
+            inactive[k] = true;
+            if (!opt.persistence.tmp_dir.empty() &&
+                !edwards_completed_write(checkpoint, i, sigmas[i], N, uint64_t(B1), outcomes[i]))
+                return ECM_ERROR;
+        } else if (ecm_edwards::construction_is_degenerate(setup, f.v, N)) {
+            skip_edwards_degenerate(outcomes[i], i, sigmas[i]);
+            inactive[k] = true;
             if (!opt.persistence.tmp_dir.empty() &&
                 !edwards_completed_write(checkpoint, i, sigmas[i], N, uint64_t(B1), outcomes[i]))
                 return ECM_ERROR;
@@ -556,11 +588,11 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
         }
     }
 
-    // Resolved factors borrow an invertible start point; pad with the last lane.
+    // Inactive lanes borrow an invertible start point; pad with the last lane.
     uint64_t sg[IFMA_LANES];
     for (uint32_t k = 0; k < IFMA_LANES; k++) {
         const uint32_t lane = k < count ? k : count - 1;
-        sg[k] = sigmas[first + (setup_factors[lane] ? first_ready : lane)];
+        sg[k] = sigmas[first + (inactive[lane] ? first_ready : lane)];
     }
 
     const int setup_rc = ed_soa_set_curves(&ctx, sg, 8);
@@ -587,7 +619,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
     pr.interval_ms = (long long)opt.persistence.ckpt_ms;
     pr.mc = &ctx.mc;
     pr.window = window;
-    pr.setup_factors = setup_factors;
+    pr.inactive = inactive;
     /* ---- resume: 一批 8 条 lane 必须共用恢复点, 所以仅当**所有** lane 都有有效检查点
        且 bitnum 完全相同时才续跑 (这正是"整批一起被中止、一起落盘"的常态); 否则从头跑。 ---- */
     {
@@ -597,7 +629,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
         uint32_t common_bitnum = 0;
         int all_ok = (count > 0);
         for (uint32_t k = 0; k < count && all_ok; k++) {
-            if (setup_factors[k])
+            if (inactive[k])
                 continue;
             const uint32_t i = first + k;
             const std::string path = ecm_stage1_curve_record(i);
@@ -623,7 +655,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
         }
         if (all_ok && common_bitnum > 0) {
             for (uint32_t k = 0; k < count; k++) {
-                if (!setup_factors[k])
+                if (!inactive[k])
                     continue;
                 mpz_set(rxs[k], rxs[first_ready]);
                 mpz_set(rys[k], rys[first_ready]);
@@ -657,7 +689,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
 
     int rc = 0;
     for (uint32_t k = 0; k < count; k++) {
-        if (setup_factors[k])
+        if (inactive[k])
             continue;
         const uint32_t i = first + k;
         if (mpz_cmp_ui(fac[k], 1) > 0) {

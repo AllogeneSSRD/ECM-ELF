@@ -180,7 +180,8 @@ static void validate_saved_batch(const ecm_save::Range& range, const Stage1Optio
     const bool ed = opt.execution.selection.curve == CurveModel::Edwards;
     std::vector<uint64_t> sigmas;
     for (const auto& curve : result.curves)
-        sigmas.push_back(curve.sigma);
+        if (curve.kind != CurveKind::Degenerate)
+            sigmas.push_back(curve.sigma);
     if (range.records.size() != sigmas.size())
         throw std::runtime_error("saved batch count differs from completed point count");
     ecm_save::validate_batch(range, expected, ed ? uint64_t(bound) : uint64_t(std::llround(bound)),
@@ -212,6 +213,8 @@ static std::string encode_saved_batch(const Stage1Request& request,
         std::string lines;
         ecm_edwards::Integer scalar;
         for (auto& curve : result.curves) {
+            if (curve.kind == CurveKind::Degenerate)
+                continue;
             const bool factor = curve.kind == CurveOutcome::Kind::Factor;
             if (factor && curve.endpoint.x.empty()) {
                 // Construction and dictionary hits have no final endpoint.
@@ -491,17 +494,20 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         const auto publication_task = std::to_string(ecm_io::fingerprint(task_identity));
         const auto publication_when = ecm_results::utc_timestamp();
         for (uint32_t i = 0; i < computed.curves.size(); ++i)
-            records.push_back(describe_result(request, base, computed.curves[i], i,
-                publication_when, publication_task, seconds, deps));
-        ecm_results::publish_stage1_batch(opt.persistence.results_file,
-                                          opt.persistence.submission_file, std::move(records), N,
-                                          task_identity);
+            if (computed.curves[i].kind != CurveKind::Degenerate)
+                records.push_back(describe_result(request, base, computed.curves[i], i,
+                    publication_when, publication_task, seconds, deps));
+        if (!records.empty()) {
+            ecm_results::publish_stage1_batch(opt.persistence.results_file,
+                                              opt.persistence.submission_file, std::move(records), N,
+                                              task_identity);
+            ecm_ts_fprintf(stdout, "Stage1 results: internal=%s submission=%s\n",
+                           opt.persistence.results_file.c_str(),
+                           opt.persistence.submission_file.c_str());
+        }
         if (opt.persistence.retain_completed_checkpoint)
             out->completed_checkpoint = path;
         session.close(!opt.persistence.retain_completed_checkpoint);
-        ecm_ts_fprintf(stdout, "Stage1 results: internal=%s submission=%s\n",
-                       opt.persistence.results_file.c_str(),
-                       opt.persistence.submission_file.c_str());
         out->status = TaskStatus::Completed;
         out->task_return = computed.legacy_code;
         return result;
