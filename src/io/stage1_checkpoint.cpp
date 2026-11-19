@@ -700,14 +700,14 @@ void Context::begin(const std::string& identity, uint32_t curves, bool fixed, ui
     state_->begin(identity, curves, fixed, first_sigma, defer_payload_validation, compatible_identities);
 }
 
-void Context::begin_nested(const std::string& parent_path, uint32_t curves, uint64_t first_sigma,
+void Context::begin_nested(const std::string& parent_path, std::vector<uint64_t> sigmas,
                            const std::string& snapshot, std::function<bool(const std::string&)> writer) {
-    state_->begin({}, curves, true, first_sigma, false, {});
+    const auto curves = static_cast<uint32_t>(sigmas.size());
+    state_->begin({}, curves, false, 0, false, {});
+    state_->batch_sigmas = std::move(sigmas);
     if (parent_path.empty()) return;
     state_->batch_path = parent_path;
     state_->nested_writer = std::move(writer);
-    for (uint32_t i = 0; i < curves; ++i)
-        state_->batch_sigmas[i] = first_sigma + i;
     if (snapshot.empty()) return;
     auto candidate = std::make_unique<DecodedBatch>();
     candidate->records.resize(curves);

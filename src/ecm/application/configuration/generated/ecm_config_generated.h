@@ -193,6 +193,7 @@ struct Stage1Values {
     int device=0;
     int gpu_param=3;
     std::string gpu_algorithm="ntt[16384:], cgbn[]";
+    bool random_sigma=true;
     int cuda_thread_block_size=128;
     std::string ntt_convolution="auto";
     int ntt_allow_known_factors=1;
@@ -284,6 +285,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"device",[](Stage1Values&c,const std::string&v){assign_value(c.device,v);},[](Stage1Values&c,const Stage1Values&v){c.device=v.device;}},
     {"gpu_param",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_param,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_param=v.gpu_param;}},
     {"gpu_algorithm",[](Stage1Values&c,const std::string&v){assign_value(c.gpu_algorithm,v);},[](Stage1Values&c,const Stage1Values&v){c.gpu_algorithm=v.gpu_algorithm;}},
+    {"stage1_random_sigma",[](Stage1Values&c,const std::string&v){c.random_sigma=boolean(v,"stage1_random_sigma");},[](Stage1Values&c,const Stage1Values&v){c.random_sigma=v.random_sigma;}},
     {"cuda_thread_block_size",[](Stage1Values&c,const std::string&v){c.cuda_thread_block_size=static_cast<int>(bounded_integer(v,"cuda_thread_block_size",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.cuda_thread_block_size=v.cuda_thread_block_size;}},
     {"ntt_convolution",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_convolution,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_convolution=v.ntt_convolution;}},
     {"ntt_allow_known_factors",[](Stage1Values&c,const std::string&v){c.ntt_allow_known_factors=static_cast<int>(bounded_integer(v,"ntt_allow_known_factors",0,1));},[](Stage1Values&c,const Stage1Values&v){c.ntt_allow_known_factors=v.ntt_allow_known_factors;}},
@@ -323,6 +325,7 @@ struct Stage2Values {
     std::string progress_dir="";
     std::string save_dir="";
     bool debug_log=false;
+    bool after_factored=false;
     std::string execution_device="auto";
     std::string algorithm="gwnum[4096:], gpu[:16385], cpu[]";
     int device=-1;
@@ -422,6 +425,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_progress_dir",[](Stage2Values&c,const std::string&v){c.progress_dir=v;},[](Stage2Values&c,const Stage2Values&v){c.progress_dir=v.progress_dir;}},
     {"stage2_save_dir",[](Stage2Values&c,const std::string&v){c.save_dir=v;},[](Stage2Values&c,const Stage2Values&v){c.save_dir=v.save_dir;}},
     {"stage2_debug_log",[](Stage2Values&c,const std::string&v){c.debug_log=boolean(v,"stage2_debug_log");},[](Stage2Values&c,const Stage2Values&v){c.debug_log=v.debug_log;}},
+    {"stage2_after_factored",[](Stage2Values&c,const std::string&v){c.after_factored=boolean(v,"stage2_after_factored");},[](Stage2Values&c,const Stage2Values&v){c.after_factored=v.after_factored;}},
     {"stage2_execution_device",[](Stage2Values&c,const std::string&v){const auto normalized=lower(v);if(normalized!="auto"&&normalized!="cpu"&&normalized!="gpu")throw std::runtime_error("stage2_execution_device must be [auto|cpu|gpu]");c.execution_device=normalized;},[](Stage2Values&c,const Stage2Values&v){c.execution_device=v.execution_device;}},
     {"stage2_algorithm",[](Stage2Values&c,const std::string&v){ecm_stage2::parse_algorithm_policy(v);c.algorithm=v;},[](Stage2Values&c,const Stage2Values&v){c.algorithm=v.algorithm;}},
     {"stage2_device",[](Stage2Values&c,const std::string&v){c.device=signed_integer(v,"stage2_device",-1,2147483647);},[](Stage2Values&c,const Stage2Values&v){c.device=v.device;}},

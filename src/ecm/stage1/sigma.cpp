@@ -1,4 +1,5 @@
 #include "sigma.h"
+#include "ecm/stage1/task.h"
 
 #include <gmp.h>
 #include <chrono>
@@ -93,6 +94,16 @@ uint64_t select_curve_sigma(uint64_t saved, bool fixed, uint64_t first, uint32_t
     if (uint64_t(index) > UINT64_MAX - first)
         throw std::invalid_argument("sigma + curve index exceeds 2^64-1");
     return first + index;
+}
+
+CurveSigmas::CurveSigmas(const Stage1Identity& identity)
+    : independent_(identity.random_sigma && !identity.sigma_fixed),
+      first_(identity.sigma_fixed ? identity.fixed_sigma64 : 0) {}
+
+uint64_t CurveSigmas::next(uint64_t saved, uint32_t index) {
+    if (!independent_ && !first_)
+        first_ = saved ? saved : random_sigma53();
+    return select_curve_sigma(saved, !independent_, first_, index);
 }
 
 uint64_t select_batch_sigma(uint64_t saved, bool fixed, uint64_t first,

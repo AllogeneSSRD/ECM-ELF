@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <utility>
@@ -171,18 +172,36 @@ bool ecm_append_save_lines_mont(const std::string& path, const mpz_t n, double b
 // Edwards final text codec.
 namespace ecm_edwards {
 uint64_t save_checksum(const std::string& n, const std::string& x, uint64_t sigma, uint64_t b1,
-                       bool factor) {
+                       bool factor, bool identity) {
     return ecm_io::fingerprint("ECM-EDWARDS-AM|1|48LCM|" + n + "|" + x + "|" +
                                std::to_string(sigma) + "|" + std::to_string(b1) + "|" +
-                               (factor ? "FACTOR" : "POINT"));
+                               (identity ? "IDENTITY" : factor ? "FACTOR" : "POINT"));
 }
 
-std::string save_line(const mpz_t n, const mpz_t x, uint64_t sigma, uint64_t b1, bool factor) {
+static uint64_t endpoint_checksum(uint64_t base, const SavedEndpoint& endpoint) {
+    return ecm_io::fingerprint(std::to_string(base) + "|" + endpoint.x + "|" + endpoint.z);
+}
+
+SavedEndpoint save_endpoint(mpz_srcptr n, mpz_srcptr x, mpz_srcptr z) {
+    Integer reduced_x, reduced_z;
+    mpz_mod(reduced_x.v, x, n);
+    mpz_mod(reduced_z.v, z, n);
+    if (!mpz_sgn(reduced_x.v) && !mpz_sgn(reduced_z.v)) return {};
+    return {hex(reduced_x.v), hex(reduced_z.v)};
+}
+
+std::string save_line(mpz_srcptr n, mpz_srcptr x, uint64_t sigma, uint64_t b1, bool factor,
+                      const SavedEndpoint& endpoint, bool identity) {
     const auto nh = hex(n), xh = hex(x);
-    return "METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA=" + std::to_string(sigma) +
+    const auto checksum = save_checksum(nh, xh, sigma, b1, factor, identity);
+    auto line = "METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA=" + std::to_string(sigma) +
            "; B1=" + std::to_string(b1) + "; N=0x" + nh + "; X=0x" + xh +
-           "; STATUS=" + (factor ? "FACTOR" : "POINT") +
-           "; CHECKSUM=" + std::to_string(save_checksum(nh, xh, sigma, b1, factor)) + ";\n";
+           "; STATUS=" + (identity ? "IDENTITY" : factor ? "FACTOR" : "POINT") +
+           "; CHECKSUM=" + std::to_string(checksum) + ";";
+    if (!endpoint.x.empty())
+        line += " QX=0x" + endpoint.x + "; QZ=0x" + endpoint.z +
+                "; QCHECKSUM=" + std::to_string(endpoint_checksum(checksum, endpoint)) + ";";
+    return line + "\n";
 }
 
 static std::string trim(std::string s) {
@@ -231,7 +250,8 @@ SavedCurve parse_saved_curve(std::string text) {
     if (!r.sigma || r.b1 < 2 || r.b1 > (1ull << 53))
         throw std::runtime_error(
             "invalid SIGMA or B1 (B1 must be exactly representable by libecm)");
-    if (fields["STATUS"] != "POINT" && fields["STATUS"] != "FACTOR")
+    r.identity = fields["STATUS"] == "IDENTITY";
+    if (fields["STATUS"] != "POINT" && fields["STATUS"] != "FACTOR" && !r.identity)
         throw std::runtime_error("invalid save STATUS");
     r.factor = fields["STATUS"] == "FACTOR";
     Integer n, x, z;
@@ -243,11 +263,69 @@ SavedCurve parse_saved_curve(std::string text) {
         throw std::runtime_error("save must be normalized (Z=1)");
     r.n = hex(n.v);
     r.x = hex(x.v);
-    if (decimal(fields["CHECKSUM"]) != save_checksum(r.n, r.x, r.sigma, r.b1, r.factor))
+    const auto checksum = save_checksum(r.n, r.x, r.sigma, r.b1, r.factor, r.identity);
+    if (decimal(fields["CHECKSUM"]) != checksum)
         throw std::runtime_error("save CHECKSUM mismatch");
     if (r.factor && (mpz_cmp_ui(x.v, 1) <= 0 || !mpz_divisible_p(n.v, x.v)))
         throw std::runtime_error("invalid saved factor");
+    if (r.identity && mpz_sgn(x.v))
+        throw std::runtime_error("invalid saved identity");
+    if (fields.count("QX") || fields.count("QZ") || fields.count("QCHECKSUM")) {
+        Integer cofactor, qx, qz;
+        if (!r.factor) throw std::runtime_error("cofactor endpoint requires STATUS=FACTOR");
+        mpz_divexact(cofactor.v, n.v, x.v);
+        if (mpz_set_str(qx.v, fields.at("QX").c_str(), 0) ||
+            mpz_set_str(qz.v, fields.at("QZ").c_str(), 0) ||
+            mpz_sgn(qx.v) < 0 || mpz_sgn(qz.v) < 0 ||
+            mpz_cmp(qx.v, cofactor.v) >= 0 || mpz_cmp(qz.v, cofactor.v) >= 0)
+            throw std::runtime_error("invalid cofactor endpoint coordinates");
+        r.endpoint = save_endpoint(cofactor.v, qx.v, qz.v);
+        if (r.endpoint.x.empty() ||
+            endpoint_checksum(checksum, r.endpoint) != decimal(fields.at("QCHECKSUM")))
+            throw std::runtime_error("cofactor endpoint checksum mismatch");
+    }
     return r;
+}
+
+CofactorBatch cofactor_batch(const std::vector<std::string>& records) {
+    CofactorBatch batch;
+    if (records.empty()) return batch;
+    std::vector<SavedCurve> curves;
+    curves.reserve(records.size());
+    for (const auto& line : records) curves.push_back(parse_saved_curve(line));
+    Integer n, remaining, f, common, x, z, inverse;
+    mpz_set_str(n.v, curves.front().n.c_str(), 16);
+    mpz_set(remaining.v, n.v);
+    for (const auto& curve : curves) {
+        if (curve.n != curves.front().n || curve.b1 != curves.front().b1)
+            throw std::runtime_error("cofactor batch requires a single N and B1");
+        if (!curve.factor) continue;
+        mpz_set_str(f.v, curve.x.c_str(), 16);
+        mpz_gcd(common.v, remaining.v, f.v);
+        if (mpz_cmp_ui(common.v, 1) <= 0) continue;
+        const auto length = mpz_sizeinbase(common.v, 10) + 2;
+        std::string decimal(length, '\0');
+        mpz_get_str(decimal.data(), 10, common.v);
+        decimal.resize(std::strlen(decimal.c_str()));
+        batch.factors.push_back(std::move(decimal));
+        mpz_divexact(remaining.v, remaining.v, common.v);
+    }
+    if (batch.factors.empty() || mpz_cmp_ui(remaining.v, 3) <= 0) return batch;
+    for (const auto& curve : curves) {
+        if (curve.identity) continue;
+        if (curve.factor) {
+            if (curve.endpoint.x.empty()) continue;
+            mpz_set_str(x.v, curve.endpoint.x.c_str(), 16);
+            mpz_set_str(z.v, curve.endpoint.z.c_str(), 16);
+            if (!mpz_invert(inverse.v, z.v, remaining.v)) continue;
+            mpz_mul(x.v, x.v, inverse.v);
+        } else mpz_set_str(x.v, curve.x.c_str(), 16);
+        mpz_mod(x.v, x.v, remaining.v);
+        if (!mpz_sgn(x.v)) continue;
+        batch.lines += save_line(remaining.v, x.v, curve.sigma, curve.b1, false);
+        ++batch.curves;
+    }
+    return batch;
 }
 
 std::vector<SavedCurve> read_saved_curves(const std::string& path) {
@@ -472,12 +550,8 @@ void validate_batch(const Range& range, mpz_srcptr expected, uint64_t expected_b
             throw std::runtime_error("save N/X does not match completed batch");
         uint64_t checksum = 0;
         if (ed) {
-            if (fields.at("METHOD") != "ECM-EDWARDS-AM" || fields.at("SCALAR") != "48LCM" ||
-                integer("VERSION") != 1 ||
-                (fields.at("STATUS") != "POINT" && fields.at("STATUS") != "FACTOR"))
-                throw std::runtime_error("invalid Edwards saved point format");
-            checksum = ecm_edwards::save_checksum(ecm_edwards::hex(n.v), ecm_edwards::hex(x.v),
-                                                  sigma, b1, fields.at("STATUS") == "FACTOR");
+            (void)ecm_edwards::parse_saved_curve(record);
+            continue;
         } else {
             const auto actual_param = fields.count("PARAM") ? integer("PARAM") : 0;
             if (fields.at("METHOD") != "ECM" || actual_param != uint64_t(param))

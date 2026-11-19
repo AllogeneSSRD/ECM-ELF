@@ -28,6 +28,7 @@ std::string checkpoint_outcome(const Record &,uint64_t b2,const std::string &rep
 struct TaskEngine {
     const char *name;
     unsigned input_max_bits = ecm_stage2::max_input_bits; // Zero leaves size admission to the engine.
+    EdwardsPreparation edwards_preparation = EdwardsPreparation::Construct;
     std::function<void()> begin;
     std::function<void(const Record &,uint64_t)> validate;
     std::function<void(Options &,const Record &)> prepare;

@@ -359,7 +359,7 @@ gpu_init_threads = 0
 
 Type `u32` · Range `<x:Z,0..2^32-1>` · Worker override `[worker.N] gpu_init_threads` · Level `advanced`.
 
-Host curve-construction threads for Edwards CUDA NTT and CUDA/OpenCL one-thread-per-curve Stage1. 0 uses the backend's default. Work is bounded by the available CPUs, curves and memory where applicable. Override with --gpu-init-threads.
+Host curve-construction threads for Edwards CUDA CGBN, CUDA NTT and CUDA/OpenCL one-thread-per-curve Stage1. 0 uses the backend's default. Work is bounded by the available CPUs, curves and memory where applicable. Override with --gpu-init-threads.
 
 ### handoff_mode
 
@@ -736,6 +736,18 @@ progress_log_seconds = 60
 Type `double` · Range `<x:R,finite>` · Worker override `[worker.N] progress_log_seconds` · Level `advanced`.
 
 Interval in seconds between Stage1 progress entries in file logs. Positive values limit frequency; 0 suppresses intermediate progress; negative values log every refresh. Completion at 100% is still logged. Console refresh frequency is unchanged.
+
+<a id="stage1_random_sigma"></a>
+
+### random_sigma
+
+```toml
+random_sigma = true
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] random_sigma` · Level `core`.
+
+Choose per-curve random sigmas where supported when no seed is supplied. False draws one random starting sigma and increments it by one per curve. Montgomery GPU batches already use consecutive sigmas. An explicit sigma takes precedence.
 
 ### save_name_pattern
 
@@ -1440,6 +1452,16 @@ skip_prime_attribution = false
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] skip_prime_attribution` · Level `advanced`.
 
 Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic policy. This does not disable decomposition or change decompose_factors.
+
+### stage2_after_factored
+
+```toml
+stage2_after_factored = false
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] stage2_after_factored` · Level `core`.
+
+After an Edwards Stage1 hit, generate a cofactor save and a local ECM-ELF Stage2 assignment from reusable endpoints. Read in the producing worker scope. Default false.
 
 ### stage2_algorithm
 

@@ -38,7 +38,7 @@ using ecm_stage1::CurveKind;
 using ecm_stage1::CurveOutcome;
 using ecm_stage1::ExecutionOptions;
 using ecm_save::format_name;
-using ecm_stage1::select_curve_sigma;
+using ecm_stage1::CurveSigmas;
 
 namespace {
 bool fixed_sigma_batch_exceeds_prime95_range(uint64_t sigma, uint32_t curves) {
@@ -291,6 +291,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
      * mpz-based and has no such limit, but a sigma that works with every consumer is
      * strictly better -- and 2^53 still leaves ~9e15 curves to choose from. */
     std::vector<uint64_t> sigmas(curves);
+    CurveSigmas selection(opt.identity);
     std::atomic<int> checkpoint_failed(0);
     for (uint32_t i = 0; i < curves; i++) {
         const uint64_t fixed_sigma = opt.identity.fixed_sigma64 + i;
@@ -328,12 +329,11 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
             }
             mont_ckpt_clear(&ck);
         }
+        uint64_t saved = adopted ? sigmas[i] : 0;
+        if (!adopted) checkpoint.saved_sigma(i, saved);
+        const auto selected = selection.next(saved, i);
         if (!adopted) {
-            uint64_t saved = 0;
-            checkpoint.saved_sigma(i, saved);
-            sigmas[i] = checkpoint.sigma(
-                i, select_curve_sigma(saved, opt.identity.sigma_fixed,
-                                      opt.identity.fixed_sigma64, i));
+            sigmas[i] = checkpoint.sigma(i, selected);
             if (use_ckpt) {
                 /* Seed record: pins the sigma before any ladder work happens, so a
                    run that is killed while this curve is still queued resumes the

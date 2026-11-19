@@ -79,6 +79,14 @@ def records(path):
         assert int(fields['CHECKSUM']) == checksum(n, x, sigma, b1, fields['STATUS'])
         if fields['STATUS'] == 'FACTOR':
             assert 1 < x < n and n % x == 0
+            if 'QX' in fields:
+                cofactor = n // x
+                qx, qz = (int(fields[key], 0) for key in ('QX', 'QZ'))
+                _, rx, rz = stage1(cofactor, sigma, b1)
+                assert (qx * rz - rx * qz) % cofactor == 0
+        elif fields['STATUS'] == 'IDENTITY':
+            _, _, rz = stage1(n, sigma, b1)
+            assert x == 0 and rz % n == 0
         else:
             _, rx, rz = stage1(n, sigma, b1)
             assert math.gcd(rz, n) == 1 and x*rz % n == rx

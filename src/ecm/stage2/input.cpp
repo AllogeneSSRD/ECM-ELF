@@ -53,7 +53,7 @@ uint64_t fingerprint(const std::string &s) {
     for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
     return h;
 }
-Record parse_record(std::string line,unsigned input_max_bits) {
+Record parse_record(std::string line,unsigned input_max_bits,EdwardsPreparation preparation) {
     if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
     if (line.find('\0') != line.npos)
         throw std::runtime_error("binary checkpoint is not a METHOD=ECM text save");
@@ -76,7 +76,8 @@ Record parse_record(std::string line,unsigned input_max_bits) {
     const bool edwards=upper(fields["METHOD"])=="ECM-EDWARDS-AM";
     if (!edwards && upper(fields["METHOD"]) != "ECM") throw std::runtime_error("save METHOD must be ECM or ECM-EDWARDS-AM");
     if(edwards && (fields.count("PARAM") || fields["VERSION"]!="1" || fields["SCALAR"]!="48LCM" ||
-                   (fields["STATUS"]!="POINT" && fields["STATUS"]!="FACTOR") || !fields.count("CHECKSUM")))
+                   (fields["STATUS"]!="POINT" && fields["STATUS"]!="FACTOR" && fields["STATUS"]!="IDENTITY") ||
+                   !fields.count("CHECKSUM")))
         throw std::runtime_error("invalid Edwards save identity (VERSION=1, SCALAR=48LCM, STATUS and CHECKSUM required; PARAM forbidden)");
     if (fields.count("PARAM") && u64(fields["PARAM"], "PARAM") != 0)
         throw std::runtime_error("only Suyama PARAM=0 text saves are supported");
@@ -99,17 +100,21 @@ Record parse_record(std::string line,unsigned input_max_bits) {
     if (fields.count("Z") && (mpz_set_str(z.z, fields["Z"].c_str(), 0) || mpz_cmp_ui(z.z, 1)))
         throw std::runtime_error("only normalized affine saves (Z=1 or absent) are supported");
     if(edwards) {
-        const bool hit=fields["STATUS"]=="FACTOR";
-        if(u64(fields["CHECKSUM"],"CHECKSUM")!=ecm_edwards::save_checksum(number(n.z),number(x.z),r.sigma,r.b1,hit))
+        r.factor=fields["STATUS"]=="FACTOR";
+        const bool identity=fields["STATUS"]=="IDENTITY";
+        r.skip_stage2=r.factor || identity;
+        if(u64(fields["CHECKSUM"],"CHECKSUM")!=ecm_edwards::save_checksum(number(n.z),number(x.z),r.sigma,r.b1,r.factor,identity))
             throw std::runtime_error("Edwards save CHECKSUM mismatch");
         r.checksum=true;
-        if(hit) {
+        if(r.factor) {
             if(mpz_cmp_ui(x.z,1)<=0 || mpz_cmp(x.z,n.z)>=0 || !mpz_divisible_p(n.z,x.z))
                 throw std::runtime_error("invalid Edwards saved factor");
-        } else {
+        } else if(identity) {
+            if(mpz_sgn(x.z))throw std::runtime_error("invalid Edwards saved identity");
+        } else if(preparation==EdwardsPreparation::Construct) {
             Big d,px,py,a24;
             const auto setup=ecm_edwards::construct(d.z,px.z,py.z,a24.z,factor.z,r.sigma,n.z);
-            if(setup==ecm_edwards::Setup::Factor)mpz_set(x.z,factor.z);
+            if(setup==ecm_edwards::Setup::Factor){r.factor=true;mpz_set(x.z,factor.z);}
             else if(setup!=ecm_edwards::Setup::Ready)throw std::runtime_error("degenerate Edwards curve in save");
             else r.a24=number(a24.z);
         }
@@ -131,7 +136,8 @@ bool comment(const std::string &line) {
     const auto t = trim(line);
     return t.empty() || t[0] == '#' || t[0] == ';';
 }
-std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count, unsigned input_max_bits) {
+std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count, unsigned input_max_bits,
+                            EdwardsPreparation preparation) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         if (!fs::exists(path)) throw TaskInputError("save not found: " + path.string());
@@ -147,7 +153,7 @@ std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count,
         ++index;
         if (index <= skip) continue;
         try {
-            auto r = parse_record(line,input_max_bits);
+            auto r = parse_record(line,input_max_bits,preparation);
             r.offset = static_cast<uint64_t>(offset); r.index = index; r.hash = fingerprint(line);
             out.push_back(std::move(r));
         } catch (const std::runtime_error &e) {

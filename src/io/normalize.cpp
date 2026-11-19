@@ -306,6 +306,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
     opt.persistence.tmp_dir = resolve_rel_local(exe, cfg.tmp_dir);
     opt.identity.sigma_fixed = cfg.sigma != 0;
     opt.identity.fixed_sigma64 = cfg.sigma;
+    opt.identity.random_sigma = cfg.random_sigma;
     stage1_result_settings(opt, cfg, base, worker);
     return opt;
 }

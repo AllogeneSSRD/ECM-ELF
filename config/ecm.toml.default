@@ -127,6 +127,13 @@ target = "gpu"  # string: [cpu|gpu]
 # 选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对
 # 应各可执行文件实际使用的 GPU 后端设备列表。
 
+# random_sigma = true  # bool: [false|true|0|1]
+# Choose per-curve random sigmas where supported when no seed is supplied. False draws one random
+# starting sigma and increments it by one per curve. Montgomery GPU batches already use consecutive
+# sigmas. An explicit sigma takes precedence.
+# 未指定 σ 时，支持的路径逐曲线随机取值。false 时随机抽取一个起点，之后每条曲线递增 1。GPU
+# Montgomery 批次本身就使用连续 σ。显式 σ 优先。
+
 # stage1_submission_file = "results.json.txt"  # string: <path>
 # Stage1 submission JSON: seal NF once the whole task completes (B2=B1); publish verified factors
 # immediately as individual curves. Private ledgers live under the output directory data/.
@@ -157,6 +164,12 @@ target = "gpu"  # string: [cpu|gpu]
 # migration completes.
 # CPU 与 GPU 队列任务的可选逐曲线 JSONL。留空时队列不写，直接运行 save 使用默认文件名。旧 checkpoint
 # 迁移完成前保留原 JSONL。
+
+# stage2_after_factored = false  # bool: [false|true|0|1]
+# After an Edwards Stage1 hit, generate a cofactor save and a local ECM-ELF Stage2 assignment from
+# reusable endpoints. Read in the producing worker scope. Default false.
+# Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的
+# worker 读取。默认关闭。
 
 # device = "auto"  # string: [auto|cpu|gpu]
 # Execution device in the combined Stage2 program. Auto selects by stage2_algorithm; cpu and gpu pin

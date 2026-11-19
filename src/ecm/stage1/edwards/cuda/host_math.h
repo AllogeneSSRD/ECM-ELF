@@ -4,5 +4,6 @@
 #include <functional>
 namespace ed_gpu_driver {
 using ConstructionSink=std::function<bool(uint32_t,mpz_srcptr)>;
-bool initialize(Batch &,mpz_srcptr,std::string &,const ConstructionSink &publish={},uint32_t *degenerate_curve=nullptr);
+bool initialize(Batch &,mpz_srcptr,std::string &,const ConstructionSink &publish={},
+                uint32_t *degenerate_curve=nullptr,unsigned workers=1);
 }

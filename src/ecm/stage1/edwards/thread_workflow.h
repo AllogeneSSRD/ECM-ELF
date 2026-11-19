@@ -126,6 +126,8 @@ inline void finish_curves(ComputationResult& result, FieldLayout& layout,
             result.set_curve(i, CurveKind::CompletedWithoutPoint, nullptr, sigmas[i]);
         } else if (mpz_cmp_ui(factor.v, 1) > 0) {
             result.set_curve(i, CurveKind::Factor, factor.v, sigmas[i]);
+            mpz_add(x.v, point[2], point[1]);
+            result.curves[i].save_factor_endpoint(layout.n, x.v, z.v);
             found = true;
         } else {
             if (!mpz_invert(inverse.v, z.v, layout.n))
@@ -310,11 +312,11 @@ ComputationResult run_stage1(const Stage1Request& request, ExecutionOptions& opt
             count >= 1024 ? 4 : 1;
         const unsigned workers = std::min({available, requested_workers, count});
         const auto setup_start = Clock::now();
+        CurveSigmas selection(opt.identity);
         for (uint32_t i = 0; i < count; ++i) {
             uint64_t sigma = 0;
             checkpoint.saved_sigma(i, sigma);
-            sigmas[i] = checkpoint.sigma(i, select_curve_sigma(
-                sigma, opt.identity.sigma_fixed, opt.identity.fixed_sigma64, i));
+            sigmas[i] = checkpoint.sigma(i, selection.next(sigma, i));
         }
         if (!resumed) {
             for (size_t field : {1u, 2u}) {

@@ -31,6 +31,14 @@ stage2_cpu_threads = 4
 
 `device = "cpu"` 和 `device = "gpu"` 固定设备，`--target cpu|gpu|auto` 可覆盖 TOML。在自动模式下，`--backend`、`--gpu-backend` 或专用诊断命令显式选择对应后端。GPU 调优示例为 `ecm_stage2.exe --target gpu --tune ntt --device 1`。独立的 CPU 或 OpenCL 程序使用其原有后端配置。
 
+## Edwards 命中后续算余因子
+
+`[stage2] stage2_after_factored = true` 让 Stage1 在 Edwards 命中后继续交接本地 Stage2。Stage1 按产生存档的 worker 读取此选项，默认关闭。
+
+Stage1 从原模数剥离本批记录的因子，把可用曲线的终点约化到同一个余因子，然后另存为 `.cofactor-*.save` 并交接。命中曲线自身的终点也参与投影，前提是它在目标余因子上的分母可逆。新队列行保留 B2、AID 与已知因子，并附加本次剥离的因子。原存档保留原模数和 `FACTOR` 标记。余因子无可用点时不生成任务。
+
+直接读取原始 save 时，Stage2 跳过 `FACTOR` 和 `IDENTITY`。命中后续算使用上述余因子存档。
+
 ## 原生 OpenCL 入口
 
 `ecm_opencl_stage2.exe` 共用本页的文本 save、`ECMSTAGE2` 队列任务、结果发布和停止策略。同目录安装两套 worker 时，在 `[stage2]` 设置 `stage2_gpu_backend`，默认 `"auto"` 优先使用可见的 CUDA 设备。先运行 `ecm_opencl_stage2.exe --list-devices`，再按输出填写 `stage2_gpu_device`。OpenCL 和 CUDA 分别编号，OpenCL 还可能在多个 ICD 平台上列出同一设备。

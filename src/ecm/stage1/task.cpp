@@ -1,5 +1,6 @@
 #include "execution.h"
 #include "edwards/memory.h"
+#include "edwards/cpu/ecm_edwards_cpu.h"
 #include "../../io/stage1_checkpoint.h"
 #include "ecm/stage1/selection.h"
 #include "ecm/stage1/ntt_target.h"
@@ -179,8 +180,7 @@ static void validate_saved_batch(const ecm_save::Range& range, const Stage1Optio
     const bool ed = opt.execution.selection.curve == CurveModel::Edwards;
     std::vector<uint64_t> sigmas;
     for (const auto& curve : result.curves)
-        if (curve.kind != CurveOutcome::Kind::CompletedWithoutPoint)
-            sigmas.push_back(curve.sigma);
+        sigmas.push_back(curve.sigma);
     if (range.records.size() != sigmas.size())
         throw std::runtime_error("saved batch count differs from completed point count");
     ecm_save::validate_batch(range, expected, ed ? uint64_t(bound) : uint64_t(std::llround(bound)),
@@ -206,15 +206,32 @@ static std::string save_destination(const Stage1Request& request) {
 }
 
 static std::string encode_saved_batch(const Stage1Request& request,
-                                      const ComputationResult& result) {
+                                      ComputationResult& result) {
     const auto& selection = request.options.execution.selection;
     if (selection.curve == CurveModel::Edwards) {
         std::string lines;
-        for (const auto& curve : result.curves)
-            if (curve.kind != CurveOutcome::Kind::CompletedWithoutPoint)
-                lines += ecm_edwards::save_line(request.modulus, curve.value, curve.sigma,
-                                                uint64_t(request.b1),
-                                                curve.kind == CurveOutcome::Kind::Factor);
+        ecm_edwards::Integer scalar;
+        for (auto& curve : result.curves) {
+            const bool factor = curve.kind == CurveOutcome::Kind::Factor;
+            if (factor && curve.endpoint.x.empty()) {
+                // Construction and dictionary hits have no final endpoint.
+                // Replay only the surviving cofactor, with the original curve.
+                if (!mpz_sgn(scalar.v) && !compute_batch_s(
+                        scalar.v, request.b1, 48, request.options.persistence.exponent_cache_dir))
+                    throw std::runtime_error("cannot rebuild Edwards scalar for cofactor endpoint");
+                ecm_edwards::Integer cofactor, x, z, hit;
+                mpz_divexact(cofactor.v, request.modulus, curve.value);
+                const auto rc = edwards_stage1_curve(hit.v, x.v, z.v, cofactor.v, curve.sigma, scalar.v);
+                if (rc == 0 || (rc == 1 && mpz_divisible_p(z.v, hit.v)))
+                    curve.endpoint = ecm_edwards::save_endpoint(cofactor.v, x.v, z.v);
+                if (curve.endpoint.x.empty())
+                    ecm_ts_fprintf(stdout, "Stage1 cofactor has no recoverable endpoint: sigma=%llu\n",
+                                   static_cast<unsigned long long>(curve.sigma));
+            }
+            lines += ecm_edwards::save_line(request.modulus, curve.value, curve.sigma, uint64_t(request.b1),
+                                            factor, curve.endpoint,
+                                            curve.kind == CurveOutcome::Kind::CompletedWithoutPoint);
+        }
         return lines;
     }
     std::vector<EcmSavePoint> points;

@@ -65,6 +65,8 @@ bool ecm_rewrite_stage2_save(const std::string& line, const std::string& save,
                              std::string& rewritten, std::string& err);
 bool ecm_rewrite_stage2_range(const std::string& line, uint64_t skip, uint32_t count,
                               std::string& rewritten, std::string& err);
+std::string ecm_stage2_cofactor_line(const EcmStage2Task& task, const std::string& save,
+                                    uint32_t curves, const std::vector<std::string>& factors);
 // Snapshot of current-worker Stage1 save assignments. Completion still matches
 // the first identical row in a freshly read file, never a stale line number.
 bool ecm_worktodo_stage1_lines(const std::string& path, int worker, std::vector<std::string>& lines,

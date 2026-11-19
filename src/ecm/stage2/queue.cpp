@@ -124,7 +124,7 @@ void migrate_queue_outcomes(stage2_queue::State& state, const fs::path& save, ui
         state.reserved.push_back({state.done,false,std::move(state.pending),state.pending_results});
     const uint64_t extent=state.done+state.reserved.size();
     if(extent) {
-        const auto points=records(save,skip,extent,input_max_bits);
+        const auto points=records(save,skip,extent,input_max_bits,EdwardsPreparation::ValidateOnly);
         if(points.size()!=extent)
             throw std::runtime_error("legacy Stage2 progress exceeds available save records");
         const auto receipts=ecm_results::read_legacy_stage2_curves(submission,state.publication_task,n);
@@ -324,6 +324,9 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         QueueSelection fields;
         std::vector<Record> plan;
         uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:defaults.b2;
+        std::size_t selected_records=0;
+        uint64_t saved_b1=0;
+        bool edwards_save=false;
         std::string_view b2_source=o.b2?"cli":defaults.b2?"config":o.auto_b2?"auto":"unset";
         if(queue) {
             std::string read_error;
@@ -355,7 +358,12 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(!o.dry&&!o.plan_only){fatal_log=log;fatal_log_worker=o.worker;fatal_log_max_kb=o.log_max_kb;}
             if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
-            plan=records(save,skip,count,engine.input_max_bits);
+            plan=records(save,skip,count,engine.input_max_bits,engine.edwards_preparation);
+            selected_records=plan.size();
+            if(!plan.empty()) {
+                saved_b1=plan.front().b1;
+                edwards_save=plan.front().edwards;
+            }
             if(queue && fields.task.modulus_from_save)
                 expected_n=queue_modulus(fields.task,plan.empty()?nullptr:&plan.front());
             if(cfg.b2_ratio && !plan.empty()) {
@@ -365,6 +373,11 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 b2_source="b2_ratio";
             }
             for(const auto &r:plan) {
+                if(!expected_n.empty()&&r.n!=expected_n)
+                    throw TaskInputError(fields.task.modulus_from_save ?
+                        "ECMSTAGE2N selected save records must have the same N" : "worktodo N differs from save N");
+                if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
+                if(r.skip_stage2)continue;
                 if(engine.validate)engine.validate(r,b2);
                 if(r.edwards && o.auto_b2 && !b2)throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
                 if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192) {
@@ -375,10 +388,6 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                         message+="; OpenCL Stage2 requires a nonzero B2 from --b2, worktodo, [stage2].b2 or b2_ratio";
                     throw std::runtime_error(message);
                 }
-                if(!expected_n.empty()&&r.n!=expected_n)
-                    throw TaskInputError(fields.task.modulus_from_save ?
-                        "ECMSTAGE2N selected save records must have the same N" : "worktodo N differs from save N");
-                if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
                 if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
                 if(o.carrier_exponent) {
                     ecm_stage2::ModulusContext modulus;std::string error;
@@ -386,6 +395,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
                 }
             }
+            plan.erase(std::remove_if(plan.begin(), plan.end(),
+                [](const Record& record) { return record.skip_stage2; }), plan.end());
         } catch(const TaskInputError &e) {
             if(!queue || o.dry || o.plan_only)throw;
             // Record the reason durably before commenting out the original row.
@@ -398,8 +409,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(o.once)break;
             continue;
         }
-        if(count && plan.size()<count)
-            report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(plan.size())+
+        if(count && selected_records<count)
+            report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(selected_records)+
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
         stage2_queue::State state;
@@ -409,8 +420,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
         if(persist) {
             stage2_queue::Task task;
             task.aid=fields.task.aid;task.n=expected_n;
-            task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=plan.size();
-            task.b1=plan.empty()?0:plan.front().b1;
+            task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=selected_records;
+            task.b1=saved_b1;
             task.b2=b2;task.auto_b2=o.auto_b2&&!b2;
             Big target;mpz_set_str(target.z,expected_n.c_str(),16);
             const auto bits=mpz_sizeinbase(target.z,2);
@@ -420,7 +431,29 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             auto name_lockpath=task.path(progress_dir,bits);name_lockpath+=".name.lock";
             if(!name_lock.open(name_lockpath))throw std::runtime_error("another process is allocating this Stage2 checkpoint name");
             const auto legacy_bounds=[&] {return ecm_results::legacy_stage2_bounds(fs::u8path(o.submission));};
+            const auto match_legacy=[&](const std::string &line) {
+                const auto old=queue_fields(line,engine.input_max_bits);Big n;std::string error;
+                return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
+            };
             auto source=stage2_queue::load_task(progress_dir,bits,task,state,legacy_bounds,&progress);
+            if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state,legacy_bounds))
+                source=legacy_progress;
+            const bool skips_records=selected_records!=plan.size();
+            if(!source.empty() && skips_records) {
+                // Earlier workers counted saved factors as completed slots.
+                // Finish their existing checkpoint with the original numbering.
+                plan=records(save,skip,count,engine.input_max_bits,engine.edwards_preparation);
+            } else if(source.empty() && edwards_save) {
+                auto point_task=task;
+                point_task.save_sha256=ecm_stage2::sha256_text("stage2-points-only|"+task.save_sha256);
+                point_task.total=plan.size();
+                fs::path point_progress;
+                source=stage2_queue::load_task(progress_dir,bits,point_task,state,{},&point_progress);
+                if(skips_records || !source.empty()) {
+                    task=std::move(point_task);
+                    progress=std::move(point_progress);
+                }
+            }
             for(const auto &path:writable)if(same_path(progress,path))throw std::runtime_error("task checkpoint conflicts with output state");
             if(same_path(progress,save)||same_path(progress,ini)||same_path(progress,executable())||
                (!o.tune_profile.empty()&&same_path(progress,fs::path(o.tune_profile))))
@@ -428,13 +461,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             auto lockpath=progress;lockpath+=".lock";
             if(!progress_lock.open(lockpath))
                 throw std::runtime_error("another process owns this Stage2 task checkpoint");
-            const auto match_legacy=[&](const std::string &line) {
-                const auto old=queue_fields(line,engine.input_max_bits);Big n;std::string error;
-                return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
-            };
-            if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state,legacy_bounds))
-                source=legacy_progress;
-            else if(source==progress && fs::exists(legacy_progress)) {
+            if(source==progress && fs::exists(legacy_progress)) {
                 stage2_queue::State previous;
                 if(stage2_queue::import_legacy(legacy_progress,task,match_legacy,previous,legacy_bounds) &&
                    previous.run==state.run && previous.publication_task==state.publication_task)source=legacy_progress;
@@ -478,7 +505,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     " legacy_archived=1 checkpoint="+progress.u8string());
             }
             state.reconfigure(task);
-            if(state.done>plan.size() && records(save,skip,state.done,engine.input_max_bits).size()!=state.done)
+            if(state.done>plan.size() &&
+               records(save,skip,state.done,engine.input_max_bits,EdwardsPreparation::ValidateOnly).size()!=state.done)
                 throw std::runtime_error("Stage2 completed progress exceeds the available save records");
             state.save(progress);
             ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),state.factors);

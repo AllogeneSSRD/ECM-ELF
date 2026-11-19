@@ -132,9 +132,10 @@ def main():
     persist()
     save, rows = stage1('stage1_factor', 1009*((1 << 127)-1), b1=1000)
     assert any(row[-1] == 'FACTOR' for row in rows)
+    assert 'QCHECKSUM=' in save.read_text()
     for backend in ('ntt', 'plain'):
         found = stage2('saved_factor_'+backend, save, backend)
-        assert len(found) == len(rows) and any(r.get('stage') == 1 for r in found)
+        assert len(found) == sum(row[-1] == 'POINT' for row in rows)
     # Factor is beyond Stage1; compare both backends to direct prime ladders.
     n = 10007*((1 << 127)-1)
     save, rows = stage1('stage2_factor', n, b1=20, count=1)

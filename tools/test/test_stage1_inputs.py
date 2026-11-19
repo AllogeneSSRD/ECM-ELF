@@ -275,9 +275,9 @@ def main():
             case,q,ini=setup('edwards_no_points_'+target,'ECM=1,2,7,-1,100,10000,4,2026\n',model='ed',
                              target=target,extra='handoff_mode="ecm-elf"\n')
             log,_=run(case.name,['--config',ini],case)
-            assert 'no Stage2 point' in log and 'curves=0' in log
+            assert 'no Stage2 point' in log and 'curves=4' in log
             assert not q.read_text().strip() and len(rows(case/'stage1_results.jsonl'))==4
-            assert ',0,0' in (case/'finished.txt').read_text()
+            assert ',0,4' in (case/'finished.txt').read_text()
             passed('completed_without_stage2_points_'+target)
     if a.baseline:
         baseline=portable(a.baseline.resolve(),'baseline_binary')

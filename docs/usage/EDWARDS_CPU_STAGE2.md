@@ -130,13 +130,15 @@ stage2_cpu_threads = 2
 
 两端共用队列锁、输入身份、V5 检查点、finished 回执和发布代码。首次正常停止会让已经开始的曲线完成，提交结果后停止领取。异常终止后从最近一次持久化的完整曲线继续。真因子在曲线提交后发布；任务结束时封存 NF，写 finished、推进 worktodo，最后删除检查点。可选 `results_file` 是逐曲线诊断输出。
 
+首次启动和断点续跑都会先校验 CPU 队列选中的全部存档记录及校验和，再恢复完成位置。每条曲线开跑前复核对应的存档行，随后才用该曲线的 sigma 构造 $A_{24}$。已完成的记录和存档中的因子记录跳过构造。如果当前曲线退化，worker 会报告存档行号并保留队列和此前已提交的进度。
+
 换后端时，停止原 worker，保留原 worktodo、完整 save、检查点目录和提交输出，使用相同配置与 worker 编号启动另一版程序。任务身份绑定 AID、实际 N、完整 save 的 SHA-256 和 skip。检查点保存完成位置、已完成的并行槽及待发布结果；下一条曲线按接手后端自己的 D、FFT、树和内存计划计算。GPU 成本调优、显存调度与中途的多项式工作区只属于当前执行进程。[共享队列驱动](../../src/ecm/stage2/queue.cpp) · [检查点格式](../../src/io/stage2_checkpoint.cpp) · [双向验证](../../tools/test/test_cpu_stage2_queue.py)
 
 ## 存档与数学边界
 
 CPU/GPU Stage1 的默认文件名均为 `ed_m{位数}_{B1}.save`（遵循配置的名称模板），显式 `-save` 覆盖，`-savea` 原子追加。完整文本发布成功后才删除检查点；写入失败保留任务。旧 CPU 单曲线二进制文件仍可作为备选输出，但不是本流程的正确性交接依据。
 
-记录保存 N、完整 64 位 sigma、B1、规范 X、`POINT|FACTOR` 和数学字段校验。`POINT` 是已完成 `48·lcm(1…B1)` 的 Montgomery 仿射 x；`FACTOR` 的 X 必须是 N 的真因子。分母 GCD=N 的恒等结果没有可继续的点，因此不写 POINT，也不计作 Stage2 完成曲线。无可用记录的空 save 不能提交给 CPU Stage2。
+记录保存 N、完整 64 位 sigma、B1 和数学字段校验。`POINT` 的 X 是已完成 `48·lcm(1…B1)` 的 Montgomery 仿射 x。`FACTOR` 的 X 仍是 N 的真因子，可恢复的投影终点另存为模 `N/X` 的 `QX/QZ`，附独立的 `QCHECKSUM`。构造或准备阶段提前命中时，Stage1 尝试在余因子上补算同一 σ 的终点。无可续算点的完整曲线写为 `IDENTITY`。Stage2 按选中的原始行范围读取，忽略 `FACTOR` 和 `IDENTITY`，余因子续算使用专用投影存档。
 
 读取器校验模型、版本、标量、重复字段、范围和校验和。Stage2 重构 Edwards 参数，并使用
 

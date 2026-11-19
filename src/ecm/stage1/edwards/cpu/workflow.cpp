@@ -39,7 +39,7 @@ using ecm_stage1::CurveKind;
 using ecm_stage1::CurveOutcome;
 using ecm_io::ensure_dir;
 using ecm_stage1::ExecutionOptions;
-using ecm_stage1::select_curve_sigma;
+using ecm_stage1::CurveSigmas;
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::validate_stage1_factor;
 
@@ -55,6 +55,8 @@ static bool classify_edwards_outcome(CurveOutcome& out, mpz_srcptr n, uint64_t s
             return false;
         out.kind = CurveKind::Factor;
         mpz_set(out.value, factor);
+        if (qx && qz && mpz_divisible_p(qz, factor))
+            out.save_factor_endpoint(n, qx, qz);
     } else {
         mpz_gcd(g.v, qz, n);
         if (mpz_cmp(g.v, n) == 0) {
@@ -180,6 +182,8 @@ static bool edwards_completed_read(ecm_stage1_checkpoint::Context& checkpoint, u
         if (rc == 1 && mpz_cmp(outcome.value, factor))
             return false;
         outcome.kind = rc ? CurveKind::Factor : CurveKind::Stage2Point;
+        if (saved.identity) outcome.kind = CurveKind::CompletedWithoutPoint;
+        outcome.endpoint = saved.endpoint;
         return true;
     } catch (const std::exception&) {
         return false;
@@ -190,9 +194,8 @@ static bool edwards_completed_write(ecm_stage1_checkpoint::Context& checkpoint, 
                                     uint64_t sigma, mpz_srcptr n, uint64_t b1,
                                     const CurveOutcome& outcome) {
     const bool hit = outcome.kind == CurveKind::Factor;
-    const auto line = outcome.kind == CurveKind::CompletedWithoutPoint
-                          ? std::string{}
-                          : ecm_edwards::save_line(n, outcome.value, sigma, b1, hit);
+    const auto line = ecm_edwards::save_line(n, outcome.value, sigma, b1, hit, outcome.endpoint,
+                                             outcome.kind == CurveKind::CompletedWithoutPoint);
     std::ostringstream out;
     out << "ECM_EDWARDS_DONE_V1\n"
         << sigma << ' ' << int(hit) << ' ' << (hit ? ecm_edwards::hex(outcome.value) : "0") << ' '
@@ -464,7 +467,7 @@ static int edwards_run_batch_simd_impl(ecm_stage1_checkpoint::Context& checkpoin
             if (first_ready == count)
                 first_ready = k;
         } else if (wide_ifma && setup == ecm_edwards::Setup::Factor) {
-            if (!classify_edwards_outcome(outcomes[i], N, sigmas[i], x.v, y.v, f.v, true))
+            if (!classify_edwards_outcome(outcomes[i], N, sigmas[i], nullptr, nullptr, f.v, true))
                 return ECM_ERROR;
             mpz_set(factors[i], f.v);
             array_found[i] = ECM_FACTOR_FOUND_STEP1;
@@ -1037,40 +1040,31 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
         }
     }
 
-    // 独立随机 sigma 使用全局 rand()/srand()，在启动工作线程前串行生成。
-    // 因此全部在主线程生成后再分发给工作线程.
-    //
+    // Assign and persist sigmas before starting the construction threads.
     std::vector<uint64_t> sigmas(curves);
+    CurveSigmas selection(opt.identity);
     for (uint32_t i = 0; i < curves; i++) {
-        // Fixed sigma → batch start + i (matches -sigma/-gpucurves semantics);
-        // otherwise a fresh Prime95-style random sigma per curve -- 但若该曲线已有合格的
-        // .ckpt 就**采用存档里的 sigma**（存档覆盖参数）。否则每轮都随机出新的 sigma,
-        // 与存档永久不匹配, 自动续跑永远不会发生（这正是"不会自动从 saves/ 续跑"的根因）。
         uint64_t saved = 0;
         checkpoint.saved_sigma(i, saved);
-        sigmas[i] = checkpoint.sigma(
-            i, select_curve_sigma(saved, opt.identity.sigma_fixed,
-                                  opt.identity.fixed_sigma64, i));
-        if (!opt.identity.sigma_fixed) {
-            if (!opt.persistence.tmp_dir.empty()) {
-                const std::string cp = ecm_stage1_curve_record(i);
-                ecm_save_common rcm;
-                uint64_t rsp;
-                uint32_t rebs, rbn, rds;
-                mpz_t dx, dy, rx, ry, rz;
-                mpz_inits(dx, dy, rx, ry, rz, NULL);
-                if (ecm_edwards_read_stage1(checkpoint, cp, rcm, &rsp, &rebs, &rbn, &rds, dx, dy,
-                                            rx, ry, rz) &&
-                    rbn > 0 && rcm.sigma != 0 && rcm.B1 == (uint64_t)B1) {
-                    sigmas[i] = (uint64_t)rcm.sigma;
-                    std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
-                    ecm_ts_fprintf(stdout,
-                                   "  curve %u: found .ckpt -> adopting sigma=%llu (bitnum=%u)\n",
-                                   i + 1, (unsigned long long)rcm.sigma, rbn);
-                }
-                mpz_clears(dx, dy, rx, ry, rz, NULL);
+        if (!saved && !opt.identity.sigma_fixed && !opt.persistence.tmp_dir.empty()) {
+            const std::string cp = ecm_stage1_curve_record(i);
+            ecm_save_common rcm;
+            uint64_t rsp;
+            uint32_t rebs, rbn, rds;
+            mpz_t dx, dy, rx, ry, rz;
+            mpz_inits(dx, dy, rx, ry, rz, NULL);
+            if (ecm_edwards_read_stage1(checkpoint, cp, rcm, &rsp, &rebs, &rbn, &rds, dx, dy,
+                                        rx, ry, rz) &&
+                rbn > 0 && rcm.sigma != 0 && rcm.B1 == (uint64_t)B1) {
+                saved = (uint64_t)rcm.sigma;
+                std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
+                ecm_ts_fprintf(stdout,
+                               "  curve %u: found .ckpt -> adopting sigma=%llu (bitnum=%u)\n",
+                               i + 1, (unsigned long long)rcm.sigma, rbn);
             }
+            mpz_clears(dx, dy, rx, ry, rz, NULL);
         }
+        sigmas[i] = checkpoint.sigma(i, selection.next(saved, i));
     }
     const uint64_t firstsigma = sigmas[0];
 

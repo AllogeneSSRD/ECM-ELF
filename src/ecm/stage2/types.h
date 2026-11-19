@@ -29,10 +29,12 @@ struct Big {
     Big(const Big &) = delete;
     Big &operator=(const Big &) = delete;
 };
+enum class EdwardsPreparation { Construct, ValidateOnly };
 struct Record {
     std::string n, x, a24;
     uint64_t sigma = 0, b1 = 0, offset = 0, hash = 0, index = 0;
-    bool checksum = false, edwards = false;
+    bool checksum = false, edwards = false, factor = false;
+    bool skip_stage2 = false;
 };
 struct PreparedRuntimeProfile;
 struct Options {

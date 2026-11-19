@@ -334,11 +334,11 @@ void persist_tune(const Options &o,const std::optional<TuneObservation> &pending
         std::cerr<<"gwpoly-tune: cannot save observation: "<<error.what()<<'\n';
     }
 }
-bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_a24,
+bool calculate(const Options &o,const SavedCurve &r,bool queued,
                const std::string &publication_task,uint64_t order,ecm_results::Submission &report,
                std::string &json,double &elapsed,TunePlans &tune,std::optional<TuneObservation> &pending,
                const s2prod::QueueReport &log) {
-    const auto cancel=prepared_a24?abort_queue_curve:stopped;
+    const auto cancel=queued?abort_queue_curve:stopped;
     if(cancel())return false;
     Integer n,x,d,px,py,a24,f;
     mpz_set_str(n.v,r.n.c_str(),16);mpz_set_str(x.v,r.x.c_str(),16);
@@ -347,7 +347,7 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
         selected.backend=ecm_gwpoly::load_error() ? (mpz_size(n.v)<=ECM_LIBECM_NTT_THRESHOLD?"ntt":"plain") : "gwpoly";
 
     }
-    const bool verbose=!prepared_a24 || stage2_log::enabled(stage2_log::curve);
+    const bool verbose=!queued || stage2_log::enabled(stage2_log::curve);
     if(verbose) {
         std::cout << "selected=" << selected.backend;
         if(selected.backend=="gwpoly")std::cout<<" "<<ecm_gwpoly::identity()<<" GWNUM="<<ecm_gwpoly::version()<<" CPU="<<ecm_gwpoly::cpu();
@@ -356,10 +356,13 @@ bool calculate(const Options &o,const SavedCurve &r,const std::string *prepared_
     int stage=0;Details details;const auto begin=std::chrono::steady_clock::now();
     if(r.factor){mpz_set(f.v,x.v);stage=1;}
     else {
-        auto setup=Setup::Ready;
-        if(prepared_a24)mpz_set_str(a24.v,prepared_a24->c_str(),16);
-        else setup=construct(d.v,px.v,py.v,a24.v,f.v,r.sigma,n.v);
-        if(setup==Setup::Degenerate)throw std::runtime_error("degenerate saved curve");
+        auto setup=construct(d.v,px.v,py.v,a24.v,f.v,r.sigma,n.v);
+        if(setup==Setup::Degenerate)
+            throw std::runtime_error("degenerate Edwards curve in save record "+std::to_string(r.line));
+        if(queued && setup==Setup::Ready) {
+            mpz_gcd(f.v,x.v,n.v);
+            if(mpz_cmp_ui(f.v,1)>0)setup=Setup::Factor;
+        }
         if(setup==Setup::Factor)stage=1;
         else {
             if(selected.backend=="gwpoly"){
@@ -497,6 +500,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     s2prod::TaskEngine engine;
     engine.name="CPU Stage2";
     engine.input_max_bits=0;
+    engine.edwards_preparation=s2prod::EdwardsPreparation::ValidateOnly;
     engine.validate=[&](const s2prod::Record &r,uint64_t b2) {
         if(!r.edwards)throw std::runtime_error("CPU Stage2 requires Edwards saves; set device = \"gpu\" for Montgomery");
         const bool gw=cpu.backend=="gwpoly" || (cpu.backend=="auto" && !ecm_gwpoly::load_error());
@@ -515,8 +519,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             if(stopped())return false;
             const auto position=state.done;
             const auto &record=queue.plan[position];
-            // The queue already verified the checksum and reconstructed A24 during planning.
-            // Bind that snapshot to the current on-disk record before admitting the curve.
+            // Bind the validated snapshot to the on-disk record before constructing A24.
             save.clear();save.seekg(record.offset);
             std::string line;
             if(!std::getline(save,line) || s2prod::fingerprint(line)!=record.hash)
@@ -524,14 +527,12 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             const auto ordinal=std::to_string(position+1)+"/"+std::to_string(queue.plan.size());
             const auto identity=" record="+std::to_string(record.index)+" sigma="+std::to_string(record.sigma);
             if(events)queue.report("curve_start: "+ordinal+identity+" B1="+std::to_string(record.b1)+" curve_model=ed",false);
-            Integer n,x,f;
-            mpz_set_str(n.v,record.n.c_str(),16);mpz_set_str(x.v,record.x.c_str(),16);
-            mpz_gcd(f.v,x.v,n.v);
-            const bool hit=mpz_cmp_ui(f.v,1)>0;
-            SavedCurve row{record.n,hit?s2prod::number(f.v):record.x,record.sigma,record.b1,record.index,hit};
+            Integer n;
+            mpz_set_str(n.v,record.n.c_str(),16);
+            SavedCurve row{record.n,record.x,record.sigma,record.b1,record.index,record.factor};
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
-            if(!calculate(selected,row,&record.a24,state.publication_task,record.index,report,json,elapsed,tune,pending,queue.report))return false;
+            if(!calculate(selected,row,true,state.publication_task,record.index,report,json,elapsed,tune,pending,queue.report))return false;
             const auto outcome=s2prod::checkpoint_outcome(record,report.b2,ecm_results::submission_json(report,n.v));
             if(state.reserved.empty())state.reserved.push_back({position});
             queue.commit(position,outcome);
@@ -591,7 +592,11 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
         if(o.save.empty())return run_queue(o,launch->lines);
         auto rows=ecm_edwards::read_saved_curves(o.save);
         if(o.skip>=rows.size())throw std::runtime_error("skip exceeds saved curve count");
-        const auto end=o.skip+std::min<uint64_t>(o.count,rows.size()-o.skip);
+        const auto raw_end=o.skip+std::min<uint64_t>(o.count,rows.size()-o.skip);
+        rows.resize(raw_end);
+        rows.erase(std::remove_if(rows.begin()+o.skip, rows.end(),
+            [](const SavedCurve& row) { return row.factor || row.identity; }), rows.end());
+        const auto end=rows.size();
         // Validate the entire selected batch before any computation or publication.
         for(uint64_t i=o.skip;i<end;++i)validate_target(o,rows[i]);
         if(o.dry){std::cout<<"validated "<<end-o.skip<<" curves; B2="<<o.b2<<'\n';return 0;}
@@ -610,7 +615,7 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
             Integer n;mpz_set_str(n.v,r.n.c_str(),16);
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
-            if(!calculate(o,r,nullptr,publication_task,i+1,report,json,elapsed,tune,pending,log))return 130;
+            if(!calculate(o,r,false,publication_task,i+1,report,json,elapsed,tune,pending,log))return 130;
             ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
             ecm_results::publish_submission(o.submission,report,n.v);
             ecm_results::append_text_record(o.results,json);

@@ -59,12 +59,23 @@ def ntt_inflight(path):
     import struct
     _, rows = batch(path)
     payload = rows[0][1]
-    magic = b"NTT-TASK-1"
-    if not payload.startswith(magic):
+    magic = payload[:len(b"NTT-TASK-1")]
+    if magic not in (b"NTT-TASK-1", b"NTT-TASK-2", b"NTT-TASK-3"):
         return [sigma for sigma, _ in rows], payload
     first, preferred, curves, capacity, completed, size = struct.unpack_from(
         "<QIIIIQ", payload, len(magic))
     start = len(magic) + struct.calcsize("<QIIIIQ")
     assert len(rows) == 1 and curves <= capacity <= preferred <= 128
     assert start + size <= len(payload)
-    return list(range(first + completed, first + completed + curves)), payload[start:start + size]
+    def random_sigma(index):
+        mask = (1 << 53) - 1
+        value = (first - 6 + index) % (mask - 5) + 6
+        while True:
+            value = ((value ^ (value >> 30)) * 0xbf58476d1ce4e5b9) & mask
+            value = ((value ^ (value >> 27)) * 0x94d049bb133111eb) & mask
+            value ^= value >> 31
+            if value >= 6:
+                return value
+    indices = range(completed, completed + curves)
+    sigmas = [random_sigma(i) if magic == b"NTT-TASK-3" else first + i for i in indices]
+    return sigmas, payload[start:start + size]

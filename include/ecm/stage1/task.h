@@ -51,6 +51,7 @@ struct Stage1ExecutionPreferences {
 
 struct Stage1Identity {
     bool sigma_fixed=false;
+    bool random_sigma=true;
     uint64_t fixed_sigma64=0;
     bool target_kbnc=false;
     double handoff_k=1.0;

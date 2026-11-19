@@ -8,6 +8,7 @@ import subprocess
 import tomllib
 
 from test_cpu_stage2_queue import HIT, POINTS
+from test_edwards_gpu_pipeline import checksum
 
 
 GPU_TOML = """[profile]
@@ -278,6 +279,47 @@ def main():
         assert "stage2_real: B1=1000 B2=40000 D=" in events, path
         assert "batched_progress: batch=" in events and "left=" in events, path
     print("PASS worker tune override, live GWNUM phases and batches, and exact queue completion", flush=True)
+
+    def lazy_record(sigma, x, status):
+        n = 101 * 103
+        return (f"METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA={sigma}; B1=20; "
+                f"N=0x{n:x}; X=0x{x:x}; STATUS={status}; CHECKSUM={checksum(n, x, sigma, 20, status)};\n")
+
+    construction_factor = lazy_record(2, 1, "POINT")
+    saved_factor = lazy_record(91, 103, "FACTOR")
+    degenerate = lazy_record(91, 1, "POINT")
+    lazy_task = 'ECMSTAGE2N="points.save",40000,0,3'
+
+    def lazy_case(name, tail):
+        folder = out / name
+        folder.mkdir()
+        config = folder / "ecm.toml"
+        config.write_text(queue_config.read_text(encoding="utf-8"), encoding="utf-8")
+        (folder / "points.save").write_text(construction_factor + saved_factor + tail, encoding="utf-8")
+        (folder / "worktodo.txt").write_text(f"[Worker #3]\n{lazy_task}\n", encoding="utf-8")
+        return config, folder
+
+    def lazy_run(name, config, folder, *flags, expected=0):
+        started = f.start(name, "--worker", 3, "--once", "--gui-events", *flags, config=config, folder=folder)
+        return f.finish(started, expected=expected), started[1].read_text(encoding="utf-8")
+
+    bad_checksum = degenerate.rsplit("CHECKSUM=", 1)[0] + "CHECKSUM=0;\n"
+    bad_config, bad = lazy_case("checksum_tail", bad_checksum)
+    rows, log = lazy_run("checksum_tail", bad_config, bad, expected=1)
+    assert not rows and "save record 3: Edwards save CHECKSUM mismatch" in log and "curve_start:" not in log
+
+    lazy_config, lazy = lazy_case("lazy_construction", degenerate)
+    rows, log = lazy_run("lazy_dry_run", lazy_config, lazy, "--dry-run")
+    assert not rows and "available=3 completed=0 remaining=3" in log
+    rows, log = lazy_run("lazy_first_run", lazy_config, lazy, expected=1)
+    assert [(row["stage"], row["factors"]) for row in rows] == [(1, ["101"]), (1, ["103"])]
+    assert "curve_start: 1/3" in log and "curve_start: 3/3" in log
+    assert "degenerate Edwards curve in save record 3" in log
+    assert lazy_task in (lazy / "worktodo.txt").read_text(encoding="utf-8")
+    rows_after_restart, log = lazy_run("lazy_resume", lazy_config, lazy, expected=1)
+    assert rows_after_restart == rows and "completed=2 remaining=1" in log
+    assert "curve_start: 3/3" in log and "curve_start: 1/3" not in log and "curve_start: 2/3" not in log
+    print("PASS upfront checksums, deferred curve construction and checkpoint resume", flush=True)
 
     rounded_profile = out / "rounded.toml"
     rounded = f.save_run("round_train", "--b2-round-chain", 1, "--tune-profile", rounded_profile, curves=6)

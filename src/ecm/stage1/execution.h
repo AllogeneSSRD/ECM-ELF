@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm/stage1/task.h"
+#include "ecm/io/save.h"
 #include "libecm_compat.h"
 #include <vector>
 
@@ -65,6 +66,7 @@ struct CurveOutcome {
     Kind kind = Kind::Failed;
     uint64_t sigma = 0;
     mpz_t value;
+    ecm_edwards::SavedEndpoint endpoint;
 
     CurveOutcome() {
         mpz_init(value);
@@ -74,7 +76,8 @@ struct CurveOutcome {
         mpz_clear(value);
     }
 
-    CurveOutcome(CurveOutcome&& other) noexcept : kind(other.kind), sigma(other.sigma) {
+    CurveOutcome(CurveOutcome&& other) noexcept
+        : kind(other.kind), sigma(other.sigma), endpoint(std::move(other.endpoint)) {
         mpz_init(value);
         mpz_swap(value, other.value);
     }
@@ -82,12 +85,14 @@ struct CurveOutcome {
     CurveOutcome& operator=(CurveOutcome&& other) noexcept {
         kind = other.kind;
         sigma = other.sigma;
+        endpoint = std::move(other.endpoint);
         mpz_swap(value, other.value);
         return *this;
     }
 
     CurveOutcome(const CurveOutcome&) = delete;
     CurveOutcome& operator=(const CurveOutcome&) = delete;
+    void save_factor_endpoint(mpz_srcptr modulus, mpz_srcptr x, mpz_srcptr z);
 };
 
 struct ComputationResult {

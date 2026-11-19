@@ -16,16 +16,33 @@ using namespace ecm_stage1_binary;
 using ecm_stage1_checkpoint::Context;
 using ecm_stage1_checkpoint::Error;
 using ecm_stage1_checkpoint::RestoreState;
-constexpr std::string_view magic = "NTT-TASK-1";
+constexpr std::string_view legacy_magic = "NTT-TASK-1";
+constexpr std::string_view sequential_magic = "NTT-TASK-2";
+constexpr std::string_view random_magic = "NTT-TASK-3";
 
 struct TaskProgress {
     uint64_t first = 0;
     unsigned preferred = 0, curves = 0;
     std::string native, completed_bytes;
     ComputationResult completed;
+    bool random = false;
+
+    uint64_t sigma(uint32_t index) const {
+        if (!random) return first + index;
+        constexpr uint64_t mask = (uint64_t(1) << 53) - 1;
+        uint64_t value = (first - 6 + index) % (mask - 5) + 6;
+        // Cycle-walk a permutation so the task gets distinct 53-bit sigmas
+        // and can reconstruct each one from the seed and its curve index.
+        do {
+            value = ((value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull) & mask;
+            value = ((value ^ (value >> 27)) * 0x94d049bb133111ebull) & mask;
+            value ^= value >> 31;
+        } while (value < 6);
+        return value;
+    }
 
     std::string snapshot() const {
-        std::string bytes(magic);
+        std::string bytes(random ? random_magic : sequential_magic);
         u64(bytes, first);
         u32(bytes, preferred);
         u32(bytes, curves);
@@ -38,12 +55,16 @@ struct TaskProgress {
     }
 };
 
+void append_result(std::string& bytes, const CurveOutcome& curve, std::string& scratch);
+
 bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress& state) {
     try {
         Reader reader(bytes);
-        if (reader.take(magic.size()) != magic)
+        const auto format = reader.take(legacy_magic.size());
+        if (format != legacy_magic && format != sequential_magic && format != random_magic)
             return false;
         TaskProgress saved;
+        saved.random = format == random_magic;
         saved.first = reader.u64();
         saved.preferred = reader.u32();
         saved.curves = reader.u32();
@@ -56,8 +77,10 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
         if (scheduled > UINT32_MAX || scheduled >= uint64_t(request.curves) + stage1_ntt_max_curves ||
             (saved.curves && completed >= request.curves) ||
             !sigma_batch_fits(saved.first, std::max(request.curves, uint32_t(scheduled)), 1) ||
+            (saved.random && (request.options.execution.selection.curve != CurveModel::Edwards ||
+                              saved.first < 6 || saved.first >= (uint64_t(1) << 53))) ||
             (request.options.identity.sigma_fixed &&
-             request.options.identity.fixed_sigma64 != saved.first) ||
+             (saved.random || request.options.identity.fixed_sigma64 != saved.first)) ||
             saved.preferred > stage1_ntt_max_curves || capacity > saved.preferred ||
             saved.curves > capacity || bool(saved.curves) != bool(capacity) ||
             (native_size && !saved.curves) ||
@@ -79,8 +102,17 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
             if (value.size() > modulus_bytes)
                 return false;
             curve.kind = static_cast<CurveKind>(kind);
-            curve.sigma = saved.first + i;
+            curve.sigma = saved.sigma(i);
             mpz_import(curve.value, value.size(), -1, 1, 0, 0, value.data());
+            if (curve.kind == CurveKind::Factor && format != legacy_magic) {
+                for (auto* coordinate : {&curve.endpoint.x, &curve.endpoint.z}) {
+                    const auto text = reader.take(reader.u32());
+                    if (text.size() > 2 * modulus_bytes ||
+                        text.find_first_not_of("0123456789abcdef") != text.npos) return false;
+                    *coordinate = text;
+                }
+                if (curve.endpoint.x.empty() != curve.endpoint.z.empty()) return false;
+            }
             factor |= curve.kind == CurveKind::Factor;
         }
         if (reader.left())
@@ -89,7 +121,11 @@ bool restore(std::string_view bytes, const Stage1Request& request, TaskProgress&
         saved.completed.legacy_code = factor ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
         if (completed)
             saved.completed.validate(request.modulus);
-        saved.completed_bytes = bytes.substr(results_start);
+        if (format == legacy_magic) {
+            std::string scratch(modulus_bytes, '\0');
+            for (const auto& curve : saved.completed.curves)
+                append_result(saved.completed_bytes, curve, scratch);
+        } else saved.completed_bytes = bytes.substr(results_start);
         state = std::move(saved);
         return true;
     } catch (const std::runtime_error&) {
@@ -107,6 +143,12 @@ void append_result(std::string& bytes, const CurveOutcome& curve, std::string& s
     mpz_export(scratch.data(), &length, -1, 1, 0, 0, curve.value);
     u32(bytes, uint32_t(length));
     bytes.append(scratch.data(), length);
+    if (curve.kind == CurveKind::Factor) {
+        for (const auto& coordinate : {&curve.endpoint.x, &curve.endpoint.z}) {
+            u32(bytes, uint32_t(coordinate->size()));
+            bytes += *coordinate;
+        }
+    }
 }
 } // namespace
 
@@ -136,6 +178,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
     if (!state.first) {
         const auto& seed = request.options.identity;
         state.first = select_batch_sigma(0, seed.sigma_fixed, seed.fixed_sigma64, request.curves, 0);
+        state.random = request.options.execution.selection.curve == CurveModel::Edwards &&
+                       !seed.sigma_fixed && seed.random_sigma;
     }
     // Preserve Prime95 eligibility for Montgomery queue tasks whose requested range fits.
     const auto sigma_limit = request.options.persistence.retain_completed_checkpoint &&
@@ -195,14 +239,16 @@ ecm_stage1::ComputationResult run_ntt_batches(
         ecm_ts_fprintf(stdout, "stage1_ntt_batch: offset=%u total=%u curves=%u capacity=%u resumed=%u\n",
                        offset, request.curves, state.curves, state.curves, unsigned(resumed));
         auto options = request.options;
-        options.identity.sigma_fixed = true;
-        options.identity.fixed_sigma64 = state.first + offset;
+        options.identity.sigma_fixed = !state.random;
+        options.identity.fixed_sigma64 = state.random ? 0 : state.sigma(offset);
         options.execution.ntt.observe_batch = true;
         const Stage1Request batch{request.modulus, request.b1, request.b2, state.curves, request.save_file,
                                   request.append_save, request.expression, options};
         ExecutionOptions execution(options);
         Context child;
-        child.begin_nested(session.path(), state.curves, options.identity.fixed_sigma64, state.native,
+        std::vector<uint64_t> sigmas(state.curves);
+        for (uint32_t i = 0; i < state.curves; ++i) sigmas[i] = state.sigma(offset + i);
+        child.begin_nested(session.path(), std::move(sigmas), state.native,
             [&](const std::string& checkpoint) {
                 state.native = checkpoint;
                 return persist();
@@ -225,7 +271,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
         if (result.curves.size() != state.curves)
             throw std::runtime_error("NTT Stage1 batch result has the wrong curve count");
         for (uint32_t i = 0; i < state.curves; ++i) {
-            if (result.curves[i].sigma != state.first + offset + i)
+            if (result.curves[i].sigma != state.sigma(offset + i))
                 throw std::runtime_error("NTT Stage1 batch result has the wrong sigma");
             append_result(state.completed_bytes, result.curves[i], scratch);
         }

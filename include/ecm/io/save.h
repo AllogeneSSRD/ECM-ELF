@@ -99,15 +99,31 @@ void validate_p95_batch(const Range&, mpz_srcptr modulus);
 
 namespace ecm_edwards {
 uint64_t save_checksum(const std::string&, const std::string&, uint64_t sigma, uint64_t b1,
-                       bool factor);
-std::string save_line(mpz_srcptr n, mpz_srcptr x, uint64_t sigma, uint64_t b1, bool factor);
+                       bool factor, bool identity = false);
+
+struct SavedEndpoint {
+    std::string x, z; // Canonical hex; for FACTOR these coordinates are modulo N / X.
+};
+
+std::string save_line(mpz_srcptr n, mpz_srcptr x, uint64_t sigma, uint64_t b1, bool factor,
+                      const SavedEndpoint& endpoint = {}, bool identity = false);
+SavedEndpoint save_endpoint(mpz_srcptr n, mpz_srcptr x, mpz_srcptr z);
 
 struct SavedCurve {
     std::string n, x;
     uint64_t sigma = 0, b1 = 0, line = 0;
     bool factor = false;
+    bool identity = false;
+    SavedEndpoint endpoint;
 };
 
 SavedCurve parse_saved_curve(std::string);
 std::vector<SavedCurve> read_saved_curves(const std::string&);
+
+struct CofactorBatch {
+    std::vector<std::string> factors;
+    std::string lines;
+    uint32_t curves = 0;
+};
+CofactorBatch cofactor_batch(const std::vector<std::string>& records);
 } // namespace ecm_edwards

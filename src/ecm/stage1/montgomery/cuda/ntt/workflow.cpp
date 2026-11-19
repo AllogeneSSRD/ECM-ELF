@@ -380,10 +380,11 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         checkpoint.saved_sigma(0, saved_sigma);
         std::vector<uint64_t> sigmas(curves);
         if (edwards) {
+            CurveSigmas selection(opt.identity);
             for (unsigned i = 0; i < curves; ++i) {
                 uint64_t saved = 0;
                 checkpoint.saved_sigma(i, saved);
-                sigmas[i] = select_curve_sigma(saved, opt.identity.sigma_fixed, opt.identity.fixed_sigma64, i);
+                sigmas[i] = selection.next(saved, i);
             }
         } else {
             const uint64_t first = select_batch_sigma(saved_sigma, opt.identity.sigma_fixed,
@@ -685,6 +686,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                         throw std::runtime_error("degenerate NTT endpoint on sigma " + std::to_string(sigmas[lane]));
                     }
                     result.set_curve(lane, CurveKind::Factor, inv.v, sigmas[lane]);
+                    if (edwards) result.curves[lane].save_factor_endpoint(N, x.v, z.v);
                     legacy = ECM_FACTOR_FOUND_STEP1;
                 } else {
                     mpz_mul(x.v, x.v, inv.v);
@@ -739,6 +741,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 result.set_curve(lane, CurveKind::Stage2Point, x.v, sigmas[lane]);
             } else if (status == ecm_edwards::Setup::Factor) {
                 result.set_curve(lane, CurveKind::Factor, factors[lane], sigmas[lane]);
+                result.curves[lane].save_factor_endpoint(N, x.v, z.v);
                 legacy = ECM_FACTOR_FOUND_STEP1;
             } else {
                 edwards_identity(lane);

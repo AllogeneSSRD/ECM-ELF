@@ -4,6 +4,8 @@
 
 namespace ecm_stage1 {
 
+struct Stage1Identity;
+
 // Validate the complete sequence first + [0, curves), without unsigned wrap.
 bool sigma_batch_fits(uint64_t first, uint32_t curves, uint64_t minimum = 0,
                       uint64_t maximum = UINT64_MAX) noexcept;
@@ -23,6 +25,17 @@ uint32_t random_sigma32(uint32_t curves, uint32_t minimum = 1);
 uint64_t select_curve_sigma(uint64_t saved, bool fixed, uint64_t first, uint32_t index);
 uint64_t select_batch_sigma(uint64_t saved, bool fixed, uint64_t first,
                           uint32_t curves, int param);
+
+// Select in curve index order. Stored sigmas retain their curve identity;
+// if the task needs a random start, curve zero supplies or draws it.
+class CurveSigmas {
+public:
+    explicit CurveSigmas(const Stage1Identity& identity);
+    uint64_t next(uint64_t saved, uint32_t index);
+private:
+    bool independent_;
+    uint64_t first_;
+};
 
 } // namespace ecm_stage1
 

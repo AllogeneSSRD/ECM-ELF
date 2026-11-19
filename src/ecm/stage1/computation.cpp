@@ -175,6 +175,12 @@ ComputationResult take_computation_result(LegacyExecutionResult&& raw, int code,
     return result;
 }
 
+void CurveOutcome::save_factor_endpoint(mpz_srcptr modulus, mpz_srcptr x, mpz_srcptr z) {
+    ecm_edwards::Integer cofactor;
+    mpz_divexact(cofactor.v, modulus, value);
+    endpoint = ecm_edwards::save_endpoint(cofactor.v, x, z);
+}
+
 void ComputationResult::set_curve(uint32_t lane, CurveKind kind, mpz_srcptr value,
                                    uint64_t sigma) {
     auto& curve = curves.at(lane);

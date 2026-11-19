@@ -252,6 +252,7 @@ struct QueueItem : WorktodoStage1Task {
     long long marker = 0;
     std::string auto_stage2_line;
     bool append_stage2 = false;
+    bool after_factored = false;
     const P95TransferConfig* p95 = nullptr;
     const Stage2TransferConfig* stage2 = nullptr;
 };
@@ -392,6 +393,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
         return false;
     }
 
+    bool deliver_stage2 = !found_factor;
     try {
         const auto& range = result.save_range();
         uint64_t total = 0;
@@ -423,6 +425,28 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
                     throw std::runtime_error(error);
                 *handoff = rewritten;
             }
+        const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
+        if (found_factor && edwards && item.after_factored && (stage2 || !auto_stage2_line.empty())) {
+            const auto projection = ecm_edwards::cofactor_batch(range.records);
+            if (projection.curves) {
+                EcmStage2Task assignment;
+                if (!ecm_parse_stage2_line(stage2_line, assignment, error))
+                    throw std::runtime_error(error);
+                const auto identity = ecm_io::fingerprint(stage2_line + "\n" + projection.lines);
+                const auto path = range.path + ".cofactor-" + std::to_string(identity) + ".save";
+                (void)ecm_save::publish_batch(path, projection.lines, false);
+                stage2_line = ecm_stage2_cofactor_line(assignment, path, projection.curves,
+                                                       projection.factors);
+                if (!auto_stage2_line.empty()) auto_stage2_line = stage2_line;
+                deliver_stage2 = true;
+                ecm_ts_fprintf(stdout, "Stage2 cofactor handoff: curves=%u save=%s\n",
+                               projection.curves, path.c_str());
+            } else ecm_ts_fprintf(stdout, "Stage2 cofactor handoff: no usable Edwards endpoint\n");
+        } else if (edwards && !found_factor && std::all_of(range.records.begin(), range.records.end(),
+                       [](const auto& row) { return row.find("; STATUS=IDENTITY;") != row.npos; })) {
+            deliver_stage2 = false;
+            if (count) ecm_ts_fprintf(stdout, "Stage1 completed without usable saved points; no Stage2 handoff\n");
+        }
         if (p95 && !p95->worktodo_path.empty() && !found_factor) {
             if (stage2_line.empty())
                 throw std::runtime_error("P95 handoff lacks a normalized ECMSTAGE2 assignment");
@@ -439,7 +463,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     }
     const auto& completed_line = published_line.empty() ? line : published_line;
     int stage2_receiver = stage2 ? stage2->worker : worker;
-    if (stage2 != nullptr && !found_factor) {
+    if (stage2 != nullptr && deliver_stage2) {
         std::string transfer_error;
         if (!ecm_stage2_transfer_park(*stage2, stage2_line, transfer_error, &stage2_receiver)) {
             ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", transfer_error.c_str());
@@ -450,9 +474,9 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     std::string completion_error;
     if (!ecm_worktodo_store_completion(receipt,
                                        {line, completed_line,
-                                        (!found_factor ? auto_stage2_line : std::string{}),
+                                        (deliver_stage2 ? auto_stage2_line : std::string{}),
                                         finished_path, result.completed_checkpoint(),
-                                        item.append_stage2 && !found_factor && !auto_stage2_line.empty()},
+                                        item.append_stage2 && deliver_stage2 && !auto_stage2_line.empty()},
                                        completion_error)) {
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo retained\n", completion_error.c_str());
         return false;
@@ -464,7 +488,7 @@ static bool run_one(const QueuePaths& paths, const QueueItem& item, int* process
     if (!opt.persistence.tmp_dir.empty() && opt.persistence.tmp_dir != exe_dir)
         ecm_sync::backup_saves(opt.persistence.tmp_dir, sync1, sync2, full_sync, marker);
 
-    if (stage2 != nullptr && !found_factor) {
+    if (stage2 != nullptr && deliver_stage2) {
         size_t remaining = 0;
         std::string transfer_error;
         const bool delivered =
@@ -807,6 +831,8 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
 
     auto opt = settings.options;
     opt.persistence.retain_completed_checkpoint = true;
+    const bool after_factored = ecm_config::read_stage2(ecm_config::selected_entries(
+        parsed_config.lines, worker, {"stage2_after_factored"}, ini)).after_factored;
     // Validate semantic combinations per task, after applying any save prefix.
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
@@ -949,6 +975,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
                     throw std::runtime_error("Prime95 save destination conflicts with a queue or Stage1 output");
             }
         }
+        item.after_factored = after_factored;
         item.marker = current_epoch_seconds();
         if (item.save_assignment) {
             const auto& legacy = item.input.options.persistence.legacy_save_source;

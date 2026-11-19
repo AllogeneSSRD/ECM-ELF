@@ -68,7 +68,7 @@ public:
                const std::vector<std::string>& compatible_identities = {});
     // A child batch has no physical file or lock of its own. Snapshots are
     // committed together with the task's completed prefix by the parent.
-    void begin_nested(const std::string& parent_path, uint32_t curves, uint64_t first_sigma,
+    void begin_nested(const std::string& parent_path, std::vector<uint64_t> sigmas,
                       const std::string& snapshot, std::function<bool(const std::string&)> writer);
     bool pending();
     void validate_pending(const EcmStage1PayloadValidator& validate);

@@ -18,7 +18,7 @@ using ecm_stage1::compute_batch_s;
 using ecm_stage1::CurveKind;
 using ecm_io::ensure_dir;
 using ecm_save::format_name;
-using ecm_stage1::select_curve_sigma;
+using ecm_stage1::CurveSigmas;
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::Stage1Options;
 using ecm_stage1::stdout_is_tty_local;
@@ -33,6 +33,7 @@ using ecm_stage1::validate_stage1_factor;
 #include <iterator>
 #include <cmath>
 #include <stdexcept>
+#include <thread>
 
 #include "checkpoint.h"
 #include "host_math.h"
@@ -365,15 +366,19 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             if (!path.empty() && checkpoint.read_blob(path, existing))
                 throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
             // Sigma selection and curve parameterization are separate operations.
+            CurveSigmas selection(opt.identity);
             for (uint32_t i = 0; i < curves; ++i) {
                 uint64_t sigma = 0;
                 checkpoint.saved_sigma(i, sigma);
-                batch.sigmas[i] = checkpoint.sigma(
-                    i, select_curve_sigma(sigma, opt.identity.sigma_fixed,
-                                          opt.identity.fixed_sigma64, i));
+                batch.sigmas[i] = checkpoint.sigma(i, selection.next(sigma, i));
             }
             std::string error;
             uint32_t degenerate_curve = UINT32_MAX;
+            const auto available = opt.execution.worker_cpu_count ? opt.execution.worker_cpu_count :
+                std::max(1u, std::thread::hardware_concurrency());
+            const auto requested = opt.execution.gpu_init_threads ? opt.execution.gpu_init_threads : 1;
+            const auto workers = std::min({available, requested, curves});
+            const auto setup_started = std::chrono::steady_clock::now();
             if (!initialize(
                     batch, n, error,
                     [&](uint32_t lane, mpz_srcptr factor) {
@@ -383,12 +388,14 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                         result.fail(ecm_stage1::FailureSource::Publication);
                         return false;
                     },
-                    &degenerate_curve)) {
+                    &degenerate_curve, workers)) {
                 if (degenerate_curve < curves)
                     result.set_curve(degenerate_curve, CurveKind::Degenerate, nullptr,
                                      batch.sigmas[degenerate_curve]);
                 throw std::runtime_error(error);
             }
+            ecm_ts_fprintf(stdout, "stage1_cgbn_edwards_setup: threads=%u ms=%.3f\n", workers,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-setup_started).count());
         }
         EdwardsOptions execution{
             opt.execution.device_index, batch.window, batch.doubling, 0, !restored,
@@ -484,8 +491,10 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
                 mpz_mod(z.v, z.v, n);
                 mpz_gcd(g.v, z.v, n);
                 if (mpz_cmp_ui(g.v, 1) > 0 && mpz_cmp(g.v, n) < 0) {
-                    hit = true;
-                    mpz_set(x.v, g.v);
+                    result.set_curve(i, CurveKind::Factor, g.v, batch.sigmas[i]);
+                    result.curves[i].save_factor_endpoint(n, x.v, z.v);
+                    found = true;
+                    continue;
                 } else if (mpz_cmp(g.v, n) == 0) {
                     ecm_ts_fprintf(stdout,
                                    "Edwards identity: sigma=%llu gcd(Qz,N)=N, no Stage2 point\n",

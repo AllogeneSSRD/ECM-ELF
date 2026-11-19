@@ -359,7 +359,7 @@ gpu_init_threads = 0
 
 类型 `u32` · 范围 `<x:Z,0..2^32-1>` · Worker 覆盖 `[worker.N] gpu_init_threads` · 级别 `高级`。
 
-Edwards CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。
+Edwards CUDA CGBN、CUDA NTT 和 CUDA/OpenCL 一线程一曲线 Stage1 的主机构造线程数。0 由后端自动选择。实际线程受可用 CPU、曲线数和适用的内存预算限制。命令行 --gpu-init-threads 可覆盖。
 
 ### handoff_mode
 
@@ -736,6 +736,18 @@ progress_log_seconds = 60
 类型 `double` · 范围 `<x:R,finite>` · Worker 覆盖 `[worker.N] progress_log_seconds` · 级别 `高级`。
 
 控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。
+
+<a id="stage1_random_sigma"></a>
+
+### random_sigma
+
+```toml
+random_sigma = true
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] random_sigma` · 级别 `常用`。
+
+未指定 σ 时，支持的路径逐曲线随机取值。false 时随机抽取一个起点，之后每条曲线递增 1。GPU Montgomery 批次本身就使用连续 σ。显式 σ 优先。
 
 ### save_name_pattern
 
@@ -1441,6 +1453,16 @@ skip_prime_attribution = false
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] skip_prime_attribution` · 级别 `高级`。
 
 控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 decompose_factors。
+
+### stage2_after_factored
+
+```toml
+stage2_after_factored = false
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] stage2_after_factored` · 级别 `常用`。
+
+Edwards Stage1 命中后，从可复用的终点生成余因子存档并交接给本地 ECM-ELF Stage2。按产生存档的 worker 读取。默认关闭。
 
 ### stage2_algorithm
 

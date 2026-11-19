@@ -334,6 +334,28 @@ bool ecm_parse_stage2_line(const std::string& line, EcmStage2Task& task, std::st
                           ecm_queue::stage2_n_prefix : ecm_queue::stage2_prefix, task, err);
 }
 
+std::string ecm_stage2_cofactor_line(const EcmStage2Task& task, const std::string& save,
+                                    uint32_t curves, const std::vector<std::string>& factors) {
+    std::string line = task.modulus_from_save ? "ECMSTAGE2N=" : "ECMSTAGE2=";
+    if (!task.aid.empty()) line += task.aid + ',';
+    if (!task.modulus_from_save)
+        line += task.k + ',' + task.b + ',' + std::to_string(task.n) + ',' + task.c + ',';
+    line += '"';
+    for (const auto ch : save) {
+        line += ch;
+        if (ch == '"') line += ch;
+    }
+    line += "\"," + task.b2_text + ",0," + std::to_string(curves);
+    std::string known;
+    for (const auto* group : {&task.factors, &factors})
+        for (const auto& factor : *group) {
+            if (!known.empty()) known += ',';
+            known += factor;
+        }
+    if (!known.empty()) line += ",\"" + known + '"';
+    return line;
+}
+
 bool ecm_rewrite_stage2_range(const std::string& line, uint64_t skip, uint32_t count,
                               std::string& rewritten, std::string& err) {
     EcmStage2Task task;

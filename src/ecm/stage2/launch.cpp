@@ -181,7 +181,7 @@ int ecm_stage2::run_combined_stage2(int argc, char** argv, GpuEntry gpu) {
             return route;
         };
         if (!save.empty()) {
-            const auto plan = records(absolute_from(cwd, save), skip, 1, 0);
+            const auto plan = records(absolute_from(cwd, save), skip, 1, 0, EdwardsPreparation::ValidateOnly);
             if (plan.empty()) throw std::runtime_error("skip exceeds saved curve count");
             const auto route = select(plan.front(), 0);
             return invoke(route, {});
@@ -211,7 +211,8 @@ int ecm_stage2::run_combined_stage2(int argc, char** argv, GpuEntry gpu) {
             Candidate route{Algorithm::Cpu};
             try {
                 const auto fields = queue_fields(task, 0);
-                const auto plan = records(absolute_from(paths.tmp, fields.task.save_name), fields.skip, 1, 0);
+                const auto plan = records(absolute_from(paths.tmp, fields.task.save_name), fields.skip, 1, 0,
+                                          EdwardsPreparation::ValidateOnly);
                 if (!plan.empty()) route = select(plan.front(), fields.task.n);
             } catch (const TaskInputError&) {
                 // Use the shared queue's durable error handling for malformed tasks.

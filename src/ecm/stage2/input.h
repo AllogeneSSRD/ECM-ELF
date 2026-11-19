@@ -8,9 +8,11 @@ std::string number(const mpz_t z,int base=16);
 uint64_t u64(std::string s,const char *label);
 std::string json_string(const std::string &s);
 uint64_t fingerprint(const std::string &s);
-Record parse_record(std::string line,unsigned input_max_bits=ecm_stage2::max_input_bits);
+Record parse_record(std::string line,unsigned input_max_bits=ecm_stage2::max_input_bits,
+                    EdwardsPreparation edwards=EdwardsPreparation::Construct);
 std::vector<Record> records(const fs::path &path,uint64_t skip,uint64_t count,
-                            unsigned input_max_bits=ecm_stage2::max_input_bits);
+                            unsigned input_max_bits=ecm_stage2::max_input_bits,
+                            EdwardsPreparation edwards=EdwardsPreparation::Construct);
 fs::path absolute_from(const fs::path &base,const std::string &p);
 QueueSelection queue_fields(std::string line,unsigned input_max_bits=ecm_stage2::max_input_bits);
 std::string queue_modulus(const EcmStage2Task &task,const Record *first_record);
