@@ -831,6 +831,7 @@ static int run_worktodo(const ParsedCli& input, Stage1Settings& settings,
 
     auto opt = settings.options;
     opt.persistence.retain_completed_checkpoint = true;
+    opt.identity.sigma_worker = static_cast<uint32_t>(worker);
     const bool after_factored = ecm_config::read_stage2(ecm_config::selected_entries(
         parsed_config.lines, worker, {"stage2_after_factored"}, ini)).after_factored;
     // Validate semantic combinations per task, after applying any save prefix.

@@ -1042,7 +1042,7 @@ ComputationResult run_edwards_stage1(const ecm_stage1::Stage1Request& request,
 
     // Assign and persist sigmas before starting the construction threads.
     std::vector<uint64_t> sigmas(curves);
-    CurveSigmas selection(opt.identity);
+    CurveSigmas selection(opt.identity, ecm_stage1::CurveModel::Edwards);
     for (uint32_t i = 0; i < curves; i++) {
         uint64_t saved = 0;
         checkpoint.saved_sigma(i, saved);

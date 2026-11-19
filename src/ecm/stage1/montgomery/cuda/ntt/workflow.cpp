@@ -380,7 +380,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         checkpoint.saved_sigma(0, saved_sigma);
         std::vector<uint64_t> sigmas(curves);
         if (edwards) {
-            CurveSigmas selection(opt.identity);
+            CurveSigmas selection(opt.identity, CurveModel::Edwards);
             for (unsigned i = 0; i < curves; ++i) {
                 uint64_t saved = 0;
                 checkpoint.saved_sigma(i, saved);

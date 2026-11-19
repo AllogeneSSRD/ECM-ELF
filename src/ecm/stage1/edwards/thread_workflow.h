@@ -312,7 +312,7 @@ ComputationResult run_stage1(const Stage1Request& request, ExecutionOptions& opt
             count >= 1024 ? 4 : 1;
         const unsigned workers = std::min({available, requested_workers, count});
         const auto setup_start = Clock::now();
-        CurveSigmas selection(opt.identity);
+        CurveSigmas selection(opt.identity, CurveModel::Edwards);
         for (uint32_t i = 0; i < count; ++i) {
             uint64_t sigma = 0;
             checkpoint.saved_sigma(i, sigma);

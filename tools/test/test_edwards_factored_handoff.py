@@ -1,6 +1,7 @@
 """Verify Edwards factor endpoints, cofactor Stage2, and Stage1 sigma policy."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
 import os
@@ -21,6 +22,7 @@ def main():
     parser.add_argument('--stage2', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--gpu', type=int)
+    parser.add_argument('--previous-stage1', type=Path, help='Also resume an NTT checkpoint written by this older build')
     args = parser.parse_args()
     out = args.out.resolve()
     stage2 = args.stage2.resolve()
@@ -29,9 +31,9 @@ def main():
     shutil.copy2(args.stage1, stage1)
     shutil.copy2(args.stage1.parent / 'gmp-10.dll', out)
 
-    def run(exe, case, label, *flags):
+    def run(exe, case, label, *flags, input=None):
         process = subprocess.run([exe, '--config', case / 'ecm.toml', *flags], cwd=case,
-                                 capture_output=True, timeout=180)
+                                 input=input, capture_output=True, timeout=180)
         log = (process.stdout + process.stderr).decode('utf-8', 'replace')
         (case / f'{label}.log').write_text(log, encoding='utf-8')
         assert process.returncode == 0, log
@@ -99,6 +101,26 @@ def main():
     def consecutive(sigmas):
         return sigmas == list(range(sigmas[0], sigmas[0] + len(sigmas)))
 
+    def check_mixed(sigmas):
+        # Invert the frozen NTT permutation. All three backends should
+        # produce images of a single consecutive interval of inputs.
+        domain = 1 << 53
+        mask = domain - 1
+        a = pow(0xbf58476d1ce4e5b9, -1, domain)
+        b = pow(0x94d049bb133111eb, -1, domain)
+
+        def inverse(value):
+            while True:
+                value = ((value ^ (value >> 31)) * b) & mask
+                value = ((value ^ (value >> 27)) * a) & mask
+                value ^= value >> 30
+                if value >= 6:
+                    return value
+
+        indices = {inverse(sigma) for sigma in sigmas}
+        assert len(indices) == len(sigmas)
+        assert sum((i - 1 if i > 6 else mask) not in indices for i in indices) == 1
+
     cpu = 'target="cpu"\ncpu_implementation="scalar"\nrandom_sigma=0'
     first_task = 'ECMSTAGE1=1,2,127,-1,"e_sigmas_20.save",1000,0,12'
     second_task = first_task.replace('e_sigmas_20.save', 'e_next_sigmas_20.save')
@@ -113,6 +135,40 @@ def main():
     path = case('cpu_explicit_start', first_task, cpu + '\nsigma=17')
     run(stage1, path, 'stage1')
     assert [row[2] for row in records(path / 'e_sigmas_20.save')] == list(range(17, 29))
+    path = case('cpu_mixed', first_task, cpu.replace('random_sigma=0', 'random_sigma=true'))
+    run(stage1, path, 'stage1')
+    sigmas = [row[2] for row in records(path / 'e_sigmas_20.save')]
+    assert len(sigmas) == 12
+    check_mixed(sigmas)
+    path = case('direct_mixed', first_task, cpu.replace('random_sigma=0', 'random_sigma=true'))
+    save = path / 'e_direct_20.save'
+    run(stage1, path, 'stage1', '--param', 'e', '-gpucurves', '12', '-save', save, '20', '20',
+        input=f'{m127}\n'.encode())
+    sigmas = [row[2] for row in records(save)]
+    assert len(sigmas) == 12
+    check_mixed(sigmas)
+
+    path = case('workers_mixed', '', cpu.replace('random_sigma=0', 'random_sigma=true'), handoff='off')
+    queue = []
+    with (path / 'ecm.toml').open('a', encoding='utf-8') as config:
+        for worker in range(1, 4):
+            directory = path / f'worker{worker}'
+            directory.mkdir()
+            config.write(f'\n[worker.{worker}]\nstage1_save_dir="{directory.as_posix()}"\n')
+            save = directory / 'e_sigmas_20.save'
+            queue.extend([f'[Worker #{worker}]', first_task.replace('e_sigmas_20.save', save.as_posix())])
+    (path / 'worktodo.txt').write_text('\n'.join(queue) + '\n', encoding='utf-8')
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        jobs = [pool.submit(run, stage1, path, f'worker{worker}', '--worker', str(worker))
+                for worker in range(1, 4)]
+        for job in jobs:
+            job.result()
+    used = set()
+    for worker in range(1, 4):
+        sigmas = [row[2] for row in records(path / f'worker{worker}' / 'e_sigmas_20.save')]
+        assert len(sigmas) == 12 and used.isdisjoint(sigmas)
+        check_mixed(sigmas)
+        used.update(sigmas)
 
     if args.gpu is not None:
         for algorithm in ('cgbn', 'ntt'):
@@ -126,33 +182,45 @@ def main():
                 assert f'stage1_{algorithm}_edwards_setup: threads=3' in log, log
                 sigmas = [row[2] for row in records(path / 'e_sigmas_20.save')]
                 assert len(sigmas) == len(set(sigmas)) == 12
-                assert consecutive(sigmas) == (not random)
-                if not random:
-                    assert sigmas[0] != 6
+                if random:
+                    check_mixed(sigmas)
+                else:
+                    assert consecutive(sigmas) and sigmas[0] != 6
 
-        path = case('ntt_random_start_resume', 'ECMSTAGE1=1,2,4423,-1,"e_resume_5000.save",10000,0,8',
-                    f'target="gpu"\ngpu_algorithm="ntt"\nstage1_gpu_device={args.gpu}\n'
-                    'random_sigma=false\nedwards_naf_window_bits=6\ncheckpoint_interval_seconds=0.01')
-        checkpoint = path / '.e_s1_m4423_5000.ckpt'
-        command = [str(stage1), '--config', str(path / 'ecm.toml')]
-        with pausable_process(command, path, os.environ, path / 'stopped.log') as (process, stop):
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline and process.poll() is None:
-                if checkpoint_cursor(checkpoint):
-                    stop()
-                    assert process.wait(timeout=25) != 0
-                    break
-                time.sleep(0.005)
+        def check_resume(name, starter, random):
+            mode = str(random).lower()
+            path = case(name, 'ECMSTAGE1=1,2,4423,-1,"e_resume_5000.save",10000,0,8',
+                        f'target="gpu"\ngpu_algorithm="ntt"\nstage1_gpu_device={args.gpu}\n'
+                        f'random_sigma={mode}\nedwards_naf_window_bits=6\ncheckpoint_interval_seconds=0.01')
+            checkpoint = path / '.e_s1_m4423_5000.ckpt'
+            config = path / 'ecm.toml'
+            command = [str(starter), '--config', str(config)]
+            with pausable_process(command, path, os.environ, path / 'stopped.log') as (process, stop):
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline and process.poll() is None:
+                    if checkpoint_cursor(checkpoint):
+                        stop()
+                        assert process.wait(timeout=25) != 0
+                        break
+                    time.sleep(0.005)
+                else:
+                    raise AssertionError((path / 'stopped.log').read_text(encoding='utf-8', errors='replace'))
+            sigmas, _ = ntt_inflight(checkpoint)
+            assert len(sigmas) == len(set(sigmas)) == 8
+            if random:
+                check_mixed(sigmas)
             else:
-                raise AssertionError((path / 'stopped.log').read_text(encoding='utf-8', errors='replace'))
-        sigmas, _ = ntt_inflight(checkpoint)
-        assert len(sigmas) == len(set(sigmas)) == 8 and consecutive(sigmas)
-        config = path / 'ecm.toml'
-        config.write_text(config.read_text().replace('random_sigma=false', 'random_sigma=true'), encoding='utf-8')
-        log = run(stage1, path, 'resume')
-        assert 'stage1_ntt_batch_resume:' in log
-        saved = (path / 'e_resume_5000.save').read_text()
-        assert [int(value) for value in re.findall(r'; SIGMA=(\d+);', saved)] == sigmas
+                assert consecutive(sigmas)
+                config.write_text(config.read_text().replace('random_sigma=false', 'random_sigma=true'),
+                                  encoding='utf-8')
+            log = run(stage1, path, 'resume')
+            assert 'stage1_ntt_batch_resume:' in log
+            saved = (path / 'e_resume_5000.save').read_text()
+            assert [int(value) for value in re.findall(r'; SIGMA=(\d+);', saved)] == sorted(sigmas)
+
+        check_resume('ntt_random_start_resume', stage1, False)
+        if args.previous_stage1:
+            check_resume('ntt_legacy_mixed_resume', args.previous_stage1.resolve(), True)
 
     print('Edwards factor endpoints, cofactor handoff and sigma policy passed.')
 

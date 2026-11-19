@@ -291,7 +291,7 @@ ComputationResult run_mont_stage1(const ecm_stage1::Stage1Request& request, Exec
      * mpz-based and has no such limit, but a sigma that works with every consumer is
      * strictly better -- and 2^53 still leaves ~9e15 curves to choose from. */
     std::vector<uint64_t> sigmas(curves);
-    CurveSigmas selection(opt.identity);
+    CurveSigmas selection(opt.identity, ecm_stage1::CurveModel::Montgomery);
     std::atomic<int> checkpoint_failed(0);
     for (uint32_t i = 0; i < curves; i++) {
         const uint64_t fixed_sigma = opt.identity.fixed_sigma64 + i;

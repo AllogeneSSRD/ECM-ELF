@@ -126,7 +126,9 @@ Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12
 
 GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子的 Edwards 群阶、点阶及分解通过 [独立 PARI 入口](DATASET.md#edwards群阶与点阶) 计算。CUDA CGBN 默认使用窗口 NAF，`--naf-w 0` 选择窗口 6，显式允许 2..12。CGBN 切片的设备时间目标为约 100 ms，OpenCL 为约 50 ms。CPU 负责构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。自动文件名使用共用模式中的 e 前缀，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 Stage2 读取。
 
-`[stage1] random_sigma = true` 是默认值。未显式提供 σ 时，Edwards 逐曲线分配随机 σ，GPU Montgomery 批次随机选择起点后连续编号。设为 `false` 时，新任务用同一随机函数抽取一次起点，之后每条曲线递增 1。worktodo、命令行或配置指定非零 σ 时，使用该值作为连续区间的起点。恢复时沿用检查点中已选定的 σ。`gpu_init_threads` 控制 GPU Edwards 在主机端构造曲线的并行度，涵盖 CUDA CGBN、CUDA NTT 与 CUDA/OpenCL 一线程一曲线路径。σ 分配在构造前串行完成。
+`[stage1] random_sigma = true` 是默认值。Edwards 新任务混合高分辨率时间、worker 编号和进程内采种计数，抽取一个 53 位任务种子。单次命令使用保留编号 `4294967295`。默认按种子和任务内曲线索引派生 σ，同一任务内互不重复。设为 `false` 时，从同样抽取的随机起点逐条递增 1。跨任务仍可能发生概率性重叠。GPU Montgomery 批次随机选择起点后连续编号。worktodo、命令行或配置指定非零 σ 时，使用该值作为连续区间的起点。恢复时沿用检查点里的 σ 或任务种子。
+
+`gpu_init_threads` 控制 GPU Edwards 在主机端构造曲线的并行度，涵盖 CUDA CGBN、CUDA NTT 与 CUDA/OpenCL 一线程一曲线路径。σ 分配在构造前串行完成。
 
 ## CUDA 全宽 NTT
 

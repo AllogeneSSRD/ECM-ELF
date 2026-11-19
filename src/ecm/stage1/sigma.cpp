@@ -2,6 +2,7 @@
 #include "ecm/stage1/task.h"
 
 #include <gmp.h>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -18,6 +19,18 @@
 #endif
 
 namespace ecm_stage1 {
+
+namespace {
+constexpr uint64_t edwards_sigma_mask = (uint64_t(1) << 53) - 1;
+constexpr uint64_t edwards_sigma_count = edwards_sigma_mask - 5;
+
+// MurmurHash3 finalizer for combining seed inputs.
+uint64_t mix_seed(uint64_t value) noexcept {
+    value = (value ^ (value >> 33)) * 0xff51afd7ed558ccdull;
+    value = (value ^ (value >> 33)) * 0xc4ceb9fe1a85ec53ull;
+    return value ^ (value >> 33);
+}
+}
 
 bool sigma_batch_fits(uint64_t first, uint32_t curves, uint64_t minimum,
                       uint64_t maximum) noexcept {
@@ -86,6 +99,26 @@ uint32_t random_sigma32(uint32_t curves, uint32_t minimum) {
     return sigma;
 }
 
+uint64_t edwards_task_seed(uint32_t worker) {
+    static std::atomic<uint64_t> sequence{0};
+    const auto time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    const auto nonce = sequence.fetch_add(1, std::memory_order_relaxed);
+    const auto mixed_worker = mix_seed(uint64_t(worker) + 0x9e3779b97f4a7c15ull);
+    return 6 + mix_seed(uint64_t(time) ^ mixed_worker ^ mix_seed(nonce)) % edwards_sigma_count;
+}
+
+uint64_t edwards_curve_sigma(uint64_t seed, uint32_t index) noexcept {
+    uint64_t value = (seed - 6 + index) % edwards_sigma_count + 6;
+    // Cycle-walk the original NTT permutation to exclude values 0 through 5.
+    // Existing NTT checkpoint seeds depend on this exact mapping.
+    do {
+        value = ((value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull) & edwards_sigma_mask;
+        value = ((value ^ (value >> 27)) * 0x94d049bb133111ebull) & edwards_sigma_mask;
+        value ^= value >> 31;
+    } while (value < 6);
+    return value;
+}
+
 uint64_t select_curve_sigma(uint64_t saved, bool fixed, uint64_t first, uint32_t index) {
     if (saved)
         return saved;
@@ -96,14 +129,23 @@ uint64_t select_curve_sigma(uint64_t saved, bool fixed, uint64_t first, uint32_t
     return first + index;
 }
 
-CurveSigmas::CurveSigmas(const Stage1Identity& identity)
-    : independent_(identity.random_sigma && !identity.sigma_fixed),
-      first_(identity.sigma_fixed ? identity.fixed_sigma64 : 0) {}
+CurveSigmas::CurveSigmas(const Stage1Identity& identity, CurveModel curve)
+    : edwards_(curve == CurveModel::Edwards),
+      independent_(identity.random_sigma && !identity.sigma_fixed),
+      first_(identity.sigma_fixed ? identity.fixed_sigma64 : 0), worker_(identity.sigma_worker) {}
 
 uint64_t CurveSigmas::next(uint64_t saved, uint32_t index) {
-    if (!independent_ && !first_)
-        first_ = saved ? saved : random_sigma53();
-    return select_curve_sigma(saved, !independent_, first_, index);
+    if (saved) {
+        if (!independent_ && !first_) first_ = saved;
+        return saved;
+    }
+    if (edwards_) {
+        if (!first_) first_ = edwards_task_seed(worker_);
+        if (independent_) return edwards_curve_sigma(first_, index);
+    } else if (!independent_ && !first_) {
+        first_ = random_sigma53();
+    }
+    return select_curve_sigma(0, !independent_, first_, index);
 }
 
 uint64_t select_batch_sigma(uint64_t saved, bool fixed, uint64_t first,

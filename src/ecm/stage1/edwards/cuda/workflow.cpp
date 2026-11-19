@@ -366,7 +366,7 @@ ecm_cuda_stage1::run_edwards_stage1(const ecm_stage1::Stage1Request& request,
             if (!path.empty() && checkpoint.read_blob(path, existing))
                 throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
             // Sigma selection and curve parameterization are separate operations.
-            CurveSigmas selection(opt.identity);
+            CurveSigmas selection(opt.identity, ecm_stage1::CurveModel::Edwards);
             for (uint32_t i = 0; i < curves; ++i) {
                 uint64_t sigma = 0;
                 checkpoint.saved_sigma(i, sigma);

@@ -28,17 +28,7 @@ struct TaskProgress {
     bool random = false;
 
     uint64_t sigma(uint32_t index) const {
-        if (!random) return first + index;
-        constexpr uint64_t mask = (uint64_t(1) << 53) - 1;
-        uint64_t value = (first - 6 + index) % (mask - 5) + 6;
-        // Cycle-walk a permutation so the task gets distinct 53-bit sigmas
-        // and can reconstruct each one from the seed and its curve index.
-        do {
-            value = ((value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull) & mask;
-            value = ((value ^ (value >> 27)) * 0x94d049bb133111ebull) & mask;
-            value ^= value >> 31;
-        } while (value < 6);
-        return value;
+        return random ? edwards_curve_sigma(first, index) : first + index;
     }
 
     std::string snapshot() const {
@@ -177,9 +167,10 @@ ecm_stage1::ComputationResult run_ntt_batches(
         throw std::runtime_error("NTT Stage1 checkpoint requires more available host memory");
     if (!state.first) {
         const auto& seed = request.options.identity;
-        state.first = select_batch_sigma(0, seed.sigma_fixed, seed.fixed_sigma64, request.curves, 0);
-        state.random = request.options.execution.selection.curve == CurveModel::Edwards &&
-                       !seed.sigma_fixed && seed.random_sigma;
+        const bool edwards = request.options.execution.selection.curve == CurveModel::Edwards;
+        state.first = edwards && !seed.sigma_fixed ? edwards_task_seed(seed.sigma_worker) :
+            select_batch_sigma(0, seed.sigma_fixed, seed.fixed_sigma64, request.curves, 0);
+        state.random = edwards && !seed.sigma_fixed && seed.random_sigma;
     }
     // Preserve Prime95 eligibility for Montgomery queue tasks whose requested range fits.
     const auto sigma_limit = request.options.persistence.retain_completed_checkpoint &&
