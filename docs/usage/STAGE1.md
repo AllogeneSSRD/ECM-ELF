@@ -130,7 +130,9 @@ GPU Edwards 用 `--param e` 和不带参数化前缀的 sigma。已知素因子�
 
 在 `[stage1]` 设置 `gpu_algorithm = "ntt"` 或 `2` 可以显式启用 NTT。NTT 支持 Edwards 和 Montgomery PARAM0，要求完整 `2^p−1`（`32 ≤ p ≤ 262144`）。Edwards 使用 `param = "e"` 和固定的 `48·lcm(1…B1)`。Montgomery PARAM0 的 `montgomery_lcm_multiplier` 可设为 `"1"` 或 `"12"`。队列任务通过 `e_` 或 `m0_` save 前缀选择曲线构造。
 
-Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯。将窗口设为 6 可试用原生 2XY NAF，支持 2～12。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机，保留曲线和窗口。若驻留频谱也放不下，可为新批次减小窗口或批量。原生路径使用独立检查点，续跑必须使用相同窗口。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
+Edwards NTT 的 `edwards_naf_window_bits = 0` 选择默认 x-only 阶梯，2～12 选择原生 2XY NAF 窗口。原生路径根据模数位宽、窗口和批量选择主机或 GPU 建表。若仅 GPU 建表的临时缓冲超出显存预算，可自动改用主机。若驻留频谱也放不下，可为新批次减小窗口或批量。两条路径生成同格式的 Edwards save。见 [字典计算和显存口径](../performance/STAGE1_MERSENNE_NTT.md#奇数倍点字典与显存)。
+
+暂停后可以修改 `edwards_naf_window_bits`。已有算术快照的子批次以保存的模式、窗口和游标继续，随后开始的子批次使用新设置。日志 `stage1_ntt_naf_resume` 在窗口不同时列出保存值、配置值和恢复位置，`0` 表示 x-only。已有快照仍需为原窗口提供足够内存。见 [NTT 快照格式](../architecture/CHECKPOINT.md#46-cuda-ntt-单批算术快照)。
 
 两条 Edwards NTT 路径都在主机准备曲线与基点。可用 `gpu_init_threads = 1` 强制串行构造，或设置所需的主机线程数。默认 0 根据位宽和批量自动选择，实际线程数在 `stage1_ntt_edwards_setup` 中记录。CPU Stage1 自身的线程数使用 `stage1_cpu_threads`。见 [主机初始化流程](../architecture/STAGE1.md#cuda-edwards-ntt-主机曲线初始化)和 [worker CPU 资源](../architecture/CONFIGURATION.md#worker-cpu-资源)。
 

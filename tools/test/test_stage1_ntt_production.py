@@ -326,17 +326,6 @@ def main():
         assert not budget_save.exists() or budget_save.stat().st_size == 0
         print("PASS Edwards NTT dictionary fallback keeps the points inside a 3 MB budget", flush=True)
 
-        # The resumed plan uses both deferred pack and frequency fusion just below 4U=q.
-        p, b1, sigma, curves = 63487, 4096, 26, 1
-        extra = "edwards_naf_window_bits = 6\nsigma = 26\nntt_window_bits = 4\nhandoff_mode = \"ecm-elf\"\n"
-        work, cmd = fixture("edwards_naf_resume", extra=extra, model="ed")
-        config = work / "ecm.toml"
-        save = work / f"e_m{p}_{b1}.save"
-        todo = work / "worktodo.txt"
-        row = f'ECMSTAGE1=1,2,{p},-1,"{save.as_posix()}",{10*b1},0,{curves}\n'
-        todo.write_text(row, encoding="ascii")
-        checkpoint = work / f".e_s1_m{p}_{b1}.ckpt"
-
         class Security(ctypes.Structure):
             _fields_ = [("length", wintypes.DWORD), ("descriptor", wintypes.LPVOID),
                         ("inherit", wintypes.BOOL)]
@@ -346,48 +335,67 @@ def main():
         kernel.CreateEventW.restype = wintypes.HANDLE
         kernel.SetEvent.argtypes = [wintypes.HANDLE]
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        event = kernel.CreateEventW(ctypes.byref(Security(ctypes.sizeof(Security), None, True)), True, False, None)
-        assert event
-        with (work / "stop.log").open("wb") as log:
-            process = subprocess.Popen(cmd + ["--stage1-stop-handle", str(event)], cwd=work,
-                                       stdout=log, stderr=log, close_fds=False, env=env,
-                                       creationflags=subprocess.CREATE_NO_WINDOW)
-            try:
-                wait_for_ntt_snapshot(process, checkpoint, b"ECMNTTE1", 16)
-                assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
-                kernel.CloseHandle(event)
-        assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
-        saved_sigmas, payload = ntt_inflight(checkpoint)
-        assert saved_sigmas == [sigma]
-        magic, count, window, cursor, active = struct.unpack_from("<8sIIII", payload)
-        assert magic == b"ECMNTTE1" and window == 6 and 0 < cursor < count and active == (1 << curves) - 1
-        original = config.read_text()
-        for incompatible in (0, 8):
-            config.write_text(original.replace("edwards_naf_window_bits = 6", f"edwards_naf_window_bits = {incompatible}"))
-            before = checkpoint.read_bytes()
-            assert "checkpoint belongs to different" in run(work, cmd, f"wrong_{incompatible}", ok=False)
-            assert checkpoint.read_bytes() == before and todo.read_text() == row
-        config.write_text(original.replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"') +
-                          "ntt_length = 2560\n")
-        resumed = run(work, cmd, "resume")
-        assert f"resume={cursor}" in resumed
-        assert any(record["ntt_resume"] == str(cursor) and record["ntt_type"] == "weighted"
-                   and record["ntt_length"] == "2560"
-                   for record in ntt_executions(resumed)), resumed
-        [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", resumed)
-        expected_dataflow = DEFERRED_PACK | EDWARDS_2XY_FREQUENCY
-        assert int(dataflow) & expected_dataflow == expected_dataflow, resumed
-        assert "ECMSTAGE2=" in todo.read_text() and not checkpoint.exists()
+
+        p, b1, sigma, curves = 63487, 4096, 26, 1
         ref, ref_cmd = fixture("edwards_naf_resume_reference", model="ed")
         call, data = direct(ref, ref_cmd, p, b1, sigma, curves)
         run(ref, call, text=data)
-        assert saved_points(save, p, b1, True) == saved_points(ref / "out.save", p, b1, True)
-        print(f"PASS Edwards NAF column {cursor}/{count}, wrong-mode rejection, linear to 2560-point "
-              "weighted fused resume and Stage2 handoff")
+        reference = saved_points(ref / "out.save", p, b1, True)
+
+        for old, new in ((6, 8), (6, 0), (0, 6)):
+            extra = (f"edwards_naf_window_bits = {old}\nsigma = {sigma}\nntt_window_bits = 4\n"
+                     'handoff_mode = "ecm-elf"\n')
+            work, cmd = fixture(f"edwards_naf_resume_{old}_to_{new}", extra=extra, model="ed")
+            config = work / "ecm.toml"
+            save = work / f"e_m{p}_{b1}.save"
+            todo = work / "worktodo.txt"
+            row = f'ECMSTAGE1=1,2,{p},-1,"{save.as_posix()}",{10*b1},0,{curves}\n'
+            todo.write_text(row, encoding="ascii")
+            checkpoint = work / f".e_s1_m{p}_{b1}.ckpt"
+            magic, cursor_offset = (b"ECMNTTE1", 16) if old else (b"ECMNTTS1", 12)
+            attributes = Security(ctypes.sizeof(Security), None, True)
+            event = kernel.CreateEventW(ctypes.byref(attributes), True, False, None)
+            assert event
+            with (work / "stop.log").open("wb") as log:
+                process = subprocess.Popen(cmd + ["--stage1-stop-handle", str(event)], cwd=work,
+                                           stdout=log, stderr=log, close_fds=False, env=env,
+                                           creationflags=subprocess.CREATE_NO_WINDOW)
+                try:
+                    wait_for_ntt_snapshot(process, checkpoint, magic, cursor_offset)
+                    assert kernel.SetEvent(event) and process.wait(timeout=30) != 0
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                    kernel.CloseHandle(event)
+            assert todo.read_text() == row and (not save.exists() or not save.stat().st_size)
+            saved_sigmas, payload = ntt_inflight(checkpoint)
+            assert saved_sigmas == [sigma] and payload.startswith(magic)
+            count, = struct.unpack_from("<I", payload, 8)
+            cursor, active = struct.unpack_from("<II", payload, cursor_offset)
+            assert 0 < cursor < count and active == (1 << curves) - 1
+            if old:
+                assert struct.unpack_from("<I", payload, 12)[0] == old
+
+            revised = config.read_text().replace(f"edwards_naf_window_bits = {old}", f"edwards_naf_window_bits = {new}")
+            if new == 8:
+                # Resume with deferred pack and frequency fusion just below 4U=q.
+                revised = revised.replace('ntt_convolution = "linear"', 'ntt_convolution = "weighted"') + "ntt_length = 2560\n"
+            config.write_text(revised)
+            resumed = run(work, cmd, "resume")
+            [record] = ntt_executions(resumed)
+            assert record["ntt_resume"] == str(cursor) and record["naf"] == str(old), resumed
+            assert record["chain"] == ("naf" if old else "x-only"), resumed
+            assert f"stage1_ntt_naf_resume: saved_window={old} configured_window={new} cursor={cursor}" in resumed
+            if new == 8:
+                assert record["ntt_type"] == "weighted" and record["ntt_length"] == "2560", resumed
+                [dataflow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", resumed)
+                expected_dataflow = DEFERRED_PACK | EDWARDS_2XY_FREQUENCY
+                assert int(dataflow) & expected_dataflow == expected_dataflow, resumed
+            # M63487 exceeds the current ECM-ELF Stage2 input range.
+            assert not todo.read_text().strip() and not checkpoint.exists()
+            assert saved_points(save, p, b1, True) == reference
+            print(f"PASS Edwards NTT resume {old} -> {new} at {cursor}/{count} with matching save", flush=True)
         return
 
     work, cmd = fixture("graph", '"NtT"', "ntt_tile = 8\nntt_outer_radix_limit = 2\n")

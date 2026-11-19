@@ -243,12 +243,19 @@ static std::string checkpoint_path(const Stage1Request& request) {
         .lexically_normal().make_preferred().string();
 }
 
-static std::string checkpoint_identity(const Stage1Request& request,
-                                       const ExecutionOptions& options, int default_window) {
+struct CheckpointIdentity {
+    std::string current;
+    std::vector<std::string> compatible;
+};
+
+static CheckpointIdentity checkpoint_identity(const Stage1Request& request,
+                                              const ExecutionOptions& options, int default_window) {
     const auto& selection = options.execution.selection;
     const bool edwards = selection.curve == CurveModel::Edwards;
     const auto param = selection.target == ExecutionTarget::Gpu ? selection.gpu_param : 0;
-    auto identity = ecm_edwards::hex(request.modulus) + "|" +
+    CheckpointIdentity key;
+    auto& identity = key.current;
+    identity = ecm_edwards::hex(request.modulus) + "|" +
         (edwards ? "ed" : "mont" + std::to_string(param)) + "|" +
         std::to_string(uint64_t(request.b1)) + "|" +
         std::to_string(int(selection.scalar_construction)) + "|" +
@@ -259,13 +266,17 @@ static std::string checkpoint_identity(const Stage1Request& request,
         if (!edwards && selection.cpu_montgomery_chain == CpuMontgomeryChain::Prac)
             identity += "|prac-v1";
     } else if (selection.gpu_algorithm == GpuAlgorithm::Ntt) {
-        if (edwards && options.execution.naf_w)
-            identity += "|ntt-edwards-naf-v1|" + std::to_string(options.execution.naf_w);
-        else
-            identity += "|ntt-v1";
         const auto p = ntt_arithmetic_bits(request.modulus, request.options);
-        if (p && mpz_scan0(request.modulus, 0) != p)
-            identity += "|ntt-carrier-v1|" + std::to_string(p);
+        const auto carrier = p && mpz_scan0(request.modulus, 0) != p
+            ? "|ntt-carrier-v1|" + std::to_string(p) : std::string{};
+        if (edwards) {
+            // Legacy task identities included the requested encoding. The native payload
+            // already records the encoding used for the active batch.
+            key.compatible.push_back(identity + "|ntt-v1" + carrier);
+            for (unsigned w = 2; w <= 12; ++w)
+                key.compatible.push_back(identity + "|ntt-edwards-naf-v1|" + std::to_string(w) + carrier);
+        }
+        identity += (edwards ? "|ntt-edwards-v2" : "|ntt-v1") + carrier;
     } else if (selection.gpu_algorithm == GpuAlgorithm::Thread) {
         identity += "|cuda-edwards-thread-v1";
     }
@@ -275,12 +286,16 @@ static std::string checkpoint_identity(const Stage1Request& request,
 #endif
     else if (!edwards)
         identity += "|" + options.cgbn_algorithm;
-    return identity;
+    return key;
 }
 
 #if ECM_HAS_CUDA_STAGE1
-static std::string ntt_task_identity(const std::string& identity, uint32_t curves) {
-    return identity + "|ntt-task-v1|" + std::to_string(curves);
+static CheckpointIdentity ntt_task_identity(CheckpointIdentity key, uint32_t curves) {
+    const auto suffix = "|ntt-task-v1|" + std::to_string(curves);
+    key.current += suffix;
+    for (auto& legacy : key.compatible)
+        legacy += suffix;
+    return key;
 }
 
 std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request& request) {
@@ -297,10 +312,12 @@ std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request&
         options.execution.selection.gpu_algorithm = algorithm;
         const auto id = checkpoint_identity(request, ExecutionOptions(options), 0);
         const auto count = !request.curves && algorithm == GpuAlgorithm::Ntt ? 1u : request.curves;
-        if (algorithm == GpuAlgorithm::Ntt &&
-            ecm_stage1_checkpoint::matches(path, ntt_task_identity(id, count), 1, backups))
-            return algorithm;
-        if (ecm_stage1_checkpoint::matches(path, id, count, backups))
+        if (algorithm == GpuAlgorithm::Ntt) {
+            const auto split = ntt_task_identity(id, count);
+            if (ecm_stage1_checkpoint::matches(path, split.current, 1, backups, split.compatible))
+                return algorithm;
+        }
+        if (ecm_stage1_checkpoint::matches(path, id.current, count, backups, id.compatible))
             return algorithm;
     }
     return {};
@@ -377,21 +394,22 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             std::filesystem::create_directories(opt.persistence.tmp_dir);
         session.set_backup_limit(opt.persistence.ckpt_backups);
         session.set_path(path);
-        const auto identity = checkpoint_identity(request, execution,
+        auto identity = checkpoint_identity(request, execution,
             selection.target == ExecutionTarget::Cpu && !opt.execution.naf_w ? deps.default_naf_window() : 0);
         bool split_ntt = false;
 #if ECM_HAS_CUDA_STAGE1
         if (selection.target == ExecutionTarget::Gpu && selection.gpu_algorithm == GpuAlgorithm::Ntt) {
             split_ntt = curves > stage1_ntt_max_curves || opt.persistence.retain_completed_checkpoint;
             if (split_ntt && curves <= stage1_ntt_max_curves &&
-                ecm_stage1_checkpoint::matches(path, identity, curves, opt.persistence.ckpt_backups))
+                ecm_stage1_checkpoint::matches(path, identity.current, curves, opt.persistence.ckpt_backups,
+                                               identity.compatible))
                 split_ntt = false; // Resume an existing one-batch queue checkpoint.
         }
 #endif
         if (!split_ntt)
-            session.begin(identity, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
+            session.begin(identity.current, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&
-                              opt.execution.selection.target == ExecutionTarget::Gpu);
+                              opt.execution.selection.target == ExecutionTarget::Gpu, identity.compatible);
         ecm_save::copy_history(opt.persistence.legacy_save_source, savefilename,
             opt.execution.selection.curve == CurveModel::Edwards ? -1 :
             (opt.execution.selection.target == ExecutionTarget::Gpu ? opt.execution.selection.gpu_param : 0));
@@ -401,8 +419,9 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                                      (base.edwards ? "ed" : "mont" + std::to_string(base.param));
 #if ECM_HAS_CUDA_STAGE1
         if (split_ntt) {
+            const auto split = ntt_task_identity(std::move(identity), curves);
             out->computation = ecm_cuda_stage1::run_ntt_batches(
-                request, deps, session, ntt_task_identity(identity, curves),
+                request, deps, session, split.current, split.compatible,
                 [&](const CurveOutcome& factor, uint32_t index) {
                     const auto key = result_identity + "|early-factor|" + std::to_string(factor.sigma);
                     const auto task = std::to_string(ecm_io::fingerprint(key));

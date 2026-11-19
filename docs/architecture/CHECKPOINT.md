@@ -52,12 +52,12 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | 5 | 执行目标 | `cpu` 或 `gpu` |
 | CPU 附加 1 | 有效 NAF 窗口设置 | 十进制；由驱动加入身份，即使某 CPU 路径不使用它 |
 | CPU 附加 2 | 实现枚举 | 0=auto、1=IFMA SIMD、2=GMP scalar |
-| CUDA NTT 附加 | 公式和 NAF 窗口 | x-only 为 `ntt-v1`，原生 Edwards 为 `ntt-edwards-naf-v1` 加窗口 |
+| CUDA NTT 附加 | 曲线后端 | Montgomery 为 `ntt-v1`，Edwards 为 `ntt-edwards-v2` |
 | CUDA 拆批 NTT 追加 | 任务载荷版本和总曲线数 | 在 NTT 身份末尾追加 `ntt-task-v1` 和十进制总曲线数 |
 | CUDA NTT 梅森承载追加 | 算术模数 | 在公式身份之后追加 `ntt-carrier-v1` 和原始梅森指数 |
 | 其他 GPU Montgomery 附加 | CGBN 算法文本 | 由驱动写入有效的 CGBN 算法 |
 
-一般路径用外层头比较曲线数，并在记录头中保存各 sigma。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i，随机任务采用已存种子。拆批 NTT 的外层固定为一条记录，使用 identity 核对任务总曲线数，从任务载荷恢复起始 sigma。GPU Edwards 的窗口、binary/NAF 模式及倍点变体也可由对应载荷验证。见 [Stage1 身份构造](../../src/ecm/stage1/task.cpp#L245)。
+一般路径用外层头比较曲线数，并在记录头中保存各 sigma。固定 sigma 任务要求每条非零已存 sigma 等于请求起点+i，随机任务采用已存种子。拆批 NTT 的外层固定为一条记录，使用 identity 核对任务总曲线数，从任务载荷恢复起始 sigma。Edwards NTT 的旧身份 `ntt-v1` 和 `ntt-edwards-naf-v1|窗口` 仍可匹配同一任务，写入时使用当前身份。GPU Edwards 的窗口、binary/NAF 模式及倍点变体由对应载荷验证。见 [Stage1 身份构造](../../src/ecm/stage1/task.cpp#L246)。
 
 设备编号、GPU 型号、驱动版本、D、B2、输出路径不在该外层身份中。不能据此推断任意设备或后端之间均可恢复：内部布局、构建包含的内核和算法约束仍须满足。CPU auto 切换实际实现的情况还受各后端的分块恢复条件约束。
 
@@ -278,7 +278,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 原生 Edwards 用 `ECMNTTE1`，依次保存总列数、NAF 窗口、已处理列数、活跃曲线位图和 X/Y/Z。x-only 用 `ECMNTTS1`（批内至多 32 条真实曲线）或 `ECMNTTS2`（更多曲线），依次保存总位数、已处理位数、活跃曲线位图和阶梯的两对 X/Z。
 
-计数和 32 位 limb 均为小端。位图每 32 条真实曲线用一个字，坐标依次按坐标面、活跃曲线及 limb 排列。恢复时使用同一 sigma 重建曲线和基点，原生 Edwards 还重建 NAF 编码和仿射字典。快照中的规范整数坐标允许重新选择兼容的卷积、变换和 Graph 参数。见 [NTT 快照读写](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L77)。
+计数和 32 位 limb 均为小端。位图每 32 条真实曲线用一个字，坐标依次按坐标面、活跃曲线及 limb 排列。恢复时使用同一 sigma 重建曲线和基点，并用快照中的模式及窗口重建标量编码和所需字典，重新核对总位数或列数。游标和点状态对应同一编码的标量前缀。后续没有算术快照的子批使用配置中的窗口。快照中的规范整数坐标允许重新选择兼容的卷积、变换和 Graph 参数。见 [NTT 快照读写](../../src/ecm/stage1/montgomery/cuda/ntt/workflow.cpp#L77)。
 
 ### 4.7 NTT 拆批任务载荷
 
@@ -437,7 +437,7 @@ GPU 保存前的回传量由后端决定：Montgomery ladder/OpenCL 要取回其
 - [容器/旧档离线检查](../../tools/test/stage1_checkpoint_container_test.cpp)：CRC 标准向量、长度、损坏、身份、备份、Edwards 全坐标往返与 V5 导入。
 - [Stage1 完整/停止恢复](../../tools/test/test_stage1_usability.py)、[兼容及队列](../../tools/test/test_stage1_checkpoint_compat.py)。
 - [独立外层解码](../../tools/test/stage1_checkpoint_decode.py)、[Edwards 点与载荷检查](../../tools/test/test_edwards_gpu_pipeline.py)。
-- [NTT 拆批恢复](../../tools/test/test_stage1_ntt_task_batches.py)覆盖保留已完成前缀、恢复批内游标、尾批补齐与单次 Stage2 交接，并逐字节对比中断续跑和连续运行的 save。
+- [NTT 拆批恢复](../../tools/test/test_stage1_ntt_task_batches.py)覆盖保留已完成前缀、按保存的 NAF 窗口恢复批内游标、后续子批切换到新窗口、尾批补齐与单次 Stage2 交接，并逐字节对比中断续跑和连续运行的 save。[NTT 生产测试](../../tools/test/test_stage1_ntt_production.py)覆盖原生 NAF 和 x-only 互换配置后的单批恢复。
 - [GUI 检查点识别](../../src/ecm/application/gui/platform_win32.cpp#L107)：只识别主文件更新时间作为辅助信号，不能代替 worker 完成安全停止。
 
 这些入口说明可复核的范围，不意味着每次构建都已经执行全部验证。新增格式或语义须同时更新写入、读取、身份、错误路径和本文；不要只修改 magic 或文件名。损坏资料和原始实验保留在忽略的 `data/`，不作为正式格式的新规则来源。

@@ -63,27 +63,35 @@ void log_ntt_execution(const ExecutionOptions& opt, size_t modulus_bits, size_t 
 }
 
 struct Snapshot {
+    unsigned count = 0;
     unsigned cursor = 0;
+    unsigned naf_window = 0;
     ActiveLanes lanes;
     std::vector<uint32_t> points;
 };
 
 constexpr std::string_view single_mask_snapshot = "ECMNTTS1";
 constexpr std::string_view multi_mask_snapshot = "ECMNTTS2";
+constexpr std::string_view edwards_naf_snapshot = "ECMNTTE1";
 
-bool read_snapshot(std::string_view bytes, unsigned count, unsigned p, unsigned curves,
-                   unsigned naf_window, Snapshot& out) {
+bool read_snapshot(std::string_view bytes, unsigned p, unsigned curves, bool edwards, Snapshot& out) {
     using ecm_stage1_binary::Reader;
     Reader reader(bytes);
-    const auto magic = naf_window ? std::string_view("ECMNTTE1") :
-                       curves <= 32 ? single_mask_snapshot : multi_mask_snapshot;
     const unsigned mask_words = (curves + 31) / 32;
-    if (reader.left() < magic.size() + (2 + mask_words) * 4 ||
-        reader.take(magic.size()) != magic || reader.u32() != count)
+    if (reader.left() < single_mask_snapshot.size() + (2 + mask_words) * 4)
         return false;
-    if (naf_window && (reader.left() < (2 + mask_words) * 4 || reader.u32() != naf_window))
-        return false;
+    const auto magic = reader.take(single_mask_snapshot.size());
     Snapshot decoded;
+    decoded.count = reader.u32();
+    if (magic == edwards_naf_snapshot) {
+        if (!edwards || reader.left() < (2 + mask_words) * 4)
+            return false;
+        decoded.naf_window = reader.u32();
+        if (decoded.naf_window < 2 || decoded.naf_window > 12)
+            return false;
+    } else if (magic != (curves <= 32 ? single_mask_snapshot : multi_mask_snapshot)) {
+        return false;
+    }
     decoded.cursor = reader.u32();
     for (unsigned word = 0; word < mask_words; ++word) {
         const auto mask = reader.u32();
@@ -93,10 +101,10 @@ bool read_snapshot(std::string_view bytes, unsigned count, unsigned p, unsigned 
         for (unsigned bit = 0; bit < width; ++bit)
             decoded.lanes[base + bit] = (mask >> bit) & 1u;
     }
-    if (decoded.cursor > count || decoded.lanes.none())
+    if (decoded.cursor > decoded.count || decoded.lanes.none())
         return false;
     const unsigned words = (p + 31) / 32;
-    const size_t size = size_t(naf_window ? 3 : 4) * words * decoded.lanes.count();
+    const size_t size = size_t(decoded.naf_window ? 3 : 4) * words * decoded.lanes.count();
     if (reader.left() != size * sizeof(uint32_t))
         return false;
     decoded.points.resize(size);
@@ -115,7 +123,7 @@ bool read_snapshot(std::string_view bytes, unsigned count, unsigned p, unsigned 
 std::string encode_snapshot(unsigned count, unsigned cursor, unsigned curves, const ActiveLanes& lanes,
                             unsigned naf_window, const std::vector<uint32_t>& points) {
     using ecm_stage1_binary::u32;
-    std::string payload(naf_window ? std::string_view("ECMNTTE1") :
+    std::string payload(naf_window ? edwards_naf_snapshot :
                         curves <= 32 ? single_mask_snapshot : multi_mask_snapshot);
     payload.reserve(payload.size() + (2 + (curves + 31) / 32 + points.size()) * 4);
     u32(payload, count);
@@ -262,8 +270,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         const bool carrier = p && mpz_scan0(N, 0) != p;
         const unsigned curves = request.curves;
         const bool edwards = opt.execution.selection.curve == CurveModel::Edwards;
-        const unsigned naf_window = edwards ? unsigned(opt.execution.naf_w) : 0;
-        if (naf_window && (naf_window < 2 || naf_window > 12))
+        const unsigned requested_window = edwards ? unsigned(opt.execution.naf_w) : 0;
+        if (requested_window && (requested_window < 2 || requested_window > 12))
             throw std::invalid_argument("Edwards NTT NAF requires a window from 2 to 12");
         if (!curves || curves > stage1_ntt_max_curves || (!edwards && opt.execution.selection.gpu_param != 0) ||
             !p)
@@ -284,6 +292,48 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             throw std::invalid_argument("Stage1 scalar exceeds the NTT cursor range");
         const unsigned binary_count = unsigned(scalar_bits - 1);
         const unsigned words = unsigned((p + 31) / 32);
+        const auto host_free = edwards ? ecm_edwards_memory::host_free_bytes() : std::nullopt;
+        const size_t host_limit = host_free
+            ? ecm_edwards_memory::usable_bytes(*host_free, 64 * ecm_edwards_memory::mib) : SIZE_MAX;
+        const size_t encoding_bytes = (scalar_bits + 1) * sizeof(int16_t) + edwards_naf_bytes(scalar_bits, true);
+        const auto prepare_naf = [&](unsigned window) {
+            if (encoding_bytes > host_limit)
+                throw ecm_mersenne_ntt::BudgetError("Edwards NTT NAF encoding exceeds available host memory");
+            return edwards_prepare_naf(scalar.v, uint64_t(request.b1), int(window), true);
+        };
+
+        Snapshot snapshot;
+        std::shared_ptr<const EdwardsNafPlan> naf_plan;
+        double restore_encoding_ms = 0;
+        phase = FailureSource::Persistence;
+        checkpoint.validate_pending([&](const auto& records, auto& sigmas) {
+            if (records.size() != curves || sigmas.size() != curves ||
+                (!edwards && !montgomery_sigma_batch_fits(sigmas.front(), curves, 0)))
+                return false;
+            for (unsigned i = 0; i < curves; ++i)
+                if ((edwards ? sigmas[i] == 0 : sigmas[i] != sigmas.front() + i) ||
+                    (i && !records[i].empty()))
+                    return false;
+            Snapshot candidate;
+            if (!read_snapshot(records.front(), unsigned(p), curves, edwards, candidate) ||
+                candidate.count > scalar_bits + 1)
+                return false;
+            const auto encode_started = Clock::now();
+            auto plan = candidate.naf_window ? prepare_naf(candidate.naf_window) : nullptr;
+            if (candidate.count != (plan ? plan->size() : binary_count))
+                return false;
+            if (plan) restore_encoding_ms = milliseconds_since(encode_started);
+            naf_plan = std::move(plan);
+            snapshot = std::move(candidate);
+            return true;
+        });
+        bool has_checkpoint = snapshot.lanes.any();
+        const unsigned naf_window = has_checkpoint ? snapshot.naf_window : requested_window;
+        if (naf_window != requested_window)
+            ecm_ts_fprintf(stdout, "stage1_ntt_naf_resume: saved_window=%u configured_window=%u cursor=%u\n",
+                           naf_window, requested_window, snapshot.cursor);
+        phase = FailureSource::Preparation;
+
         const size_t entries = naf_window ? size_t(1) << (naf_window - 2) : 0;
         bool gpu_dictionary = naf_window && prefer_device_dictionary(p, curves, naf_window);
         bool automatic_dictionary = true;
@@ -300,15 +350,11 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
         const size_t dictionary_slots = !naf_window ? 0 : gpu_dictionary ? 3 : 4 * entries;
         const size_t host_dictionary_words = dictionary_slots * curves * words;
         const size_t host_seed_words = naf_window && !gpu_dictionary ? 3ull * curves * words : 0;
-        const auto host_free = edwards ? ecm_edwards_memory::host_free_bytes() : std::nullopt;
-        const size_t host_limit = host_free
-            ? ecm_edwards_memory::usable_bytes(*host_free, 64 * ecm_edwards_memory::mib) : SIZE_MAX;
         const size_t prep_words = naf_window ? (gpu_dictionary ? entries + 2 * curves : 8 * entries) * words : 0;
         const size_t host_required = (host_dictionary_words + host_seed_words + 6ull * curves * words + prep_words)
-            * sizeof(uint32_t) + (naf_window ? (scalar_bits + 1) * sizeof(int16_t) +
-                edwards_naf_bytes(scalar_bits, true) : 0);
+            * sizeof(uint32_t) + (naf_window ? encoding_bytes : 0);
         std::vector<int16_t> digits;
-        double encoding_ms = 0, curve_setup_ms = 0, host_points_ms = 0;
+        double encoding_ms = restore_encoding_ms, curve_setup_ms = 0, host_points_ms = 0;
         unsigned host_dictionary_curves = 0;
         const auto naf_started = Clock::now();
         if (naf_window) {
@@ -318,30 +364,18 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             if (host_required > host_limit)
                 throw ecm_mersenne_ntt::BudgetError("Edwards NTT NAF preparation exceeds available host memory");
             const auto encode_started = Clock::now();
-            const auto plan = edwards_prepare_naf(scalar.v, uint64_t(request.b1), int(naf_window), true);
-            digits.resize(plan->size());
+            if (!naf_plan) naf_plan = prepare_naf(naf_window);
+            digits.resize(naf_plan->size());
             for (size_t i = 0; i < digits.size(); ++i)
-                digits[i] = int16_t((*plan)[digits.size() - 1 - i]);
-            encoding_ms = milliseconds_since(encode_started);
+                digits[i] = int16_t((*naf_plan)[digits.size() - 1 - i]);
+            naf_plan.reset();
+            encoding_ms += milliseconds_since(encode_started);
         }
         const unsigned count = naf_window ? unsigned(digits.size()) : binary_count;
         std::vector<uint32_t> packed((scalar_bits + 31) / 32);
         mpz_export(packed.data(), nullptr, -1, sizeof(uint32_t), 0, 0, scalar.v);
 
-        Snapshot snapshot;
-        bool has_checkpoint = false;
         phase = FailureSource::Persistence;
-        checkpoint.validate_pending([&](const auto& records, auto& sigmas) {
-            if (records.size() != curves || sigmas.size() != curves ||
-                (!edwards && !montgomery_sigma_batch_fits(sigmas.front(), curves, 0)))
-                return false;
-            for (unsigned i = 0; i < curves; ++i)
-                if ((edwards ? sigmas[i] == 0 : sigmas[i] != sigmas.front() + i) ||
-                    (i && !records[i].empty()))
-                    return false;
-            has_checkpoint = read_snapshot(records.front(), count, unsigned(p), curves, naf_window, snapshot);
-            return has_checkpoint;
-        });
         uint64_t saved_sigma = 0;
         checkpoint.saved_sigma(0, saved_sigma);
         std::vector<uint64_t> sigmas(curves);
@@ -581,7 +615,7 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
                 naf.host_fallback = [&](ecm_mersenne_ntt::Run& run) {
                     return build_host_naf_fallback(run, N, dictionary, batch, words, naf_window);
                 };
-            const double host_init_ms = milliseconds_since(naf_started);
+            const double host_init_ms = milliseconds_since(naf_started) + restore_encoding_ms;
             auto run = naf_window ? ecm_mersenne_ntt::edwards_naf(opt.execution.device_index, unsigned(p),
                  batch, initial, naf, selected, control)
                 : ecm_mersenne_ntt::ladder(opt.execution.device_index, unsigned(p),
@@ -660,7 +694,8 @@ ComputationResult run_ntt_stage1(const Stage1Request& request, ExecutionOptions&
             }
             if (opt.persistence.ckpt_ms && !checkpoint.path().empty() && control.resume != count)
                 control.checkpoint(count, run.points);
-            if (opt.execution.ntt.observe_batch && !control.resume && fallback.empty() && valid == curves &&
+            if (opt.execution.ntt.observe_batch && naf_window == requested_window && !control.resume &&
+                fallback.empty() && valid == curves &&
                 std::none_of(run.dictionary_status.begin(), run.dictionary_status.end(),
                              [](unsigned status) { return status != 0; }))
                 observation = Observation{std::move(executed_plan), std::move(run), valid, batch,

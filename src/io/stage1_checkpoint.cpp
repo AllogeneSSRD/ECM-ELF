@@ -43,7 +43,11 @@ bool replace_file(const std::string& source, const std::string& target) {
 }
 
 Decode decode_batch(const std::string& bytes, const std::string& identity, uint32_t curves,
-                    DecodedBatch& decoded) {
+                    const std::vector<std::string>& compatible_identities, DecodedBatch& decoded) {
+    const auto identity_matches = [&](const std::string& saved) {
+        return saved == identity || std::find(compatible_identities.begin(), compatible_identities.end(),
+                                              saved) != compatible_identities.end();
+    };
     if (ecm_stage1_binary::is_batch(bytes)) {
         using namespace ecm_stage1_binary;
         std::vector<std::string> records;
@@ -83,7 +87,7 @@ Decode decode_batch(const std::string& bytes, const std::string& identity, uint3
             return Decode::Corrupt;
         }
 
-        if (saved_identity != identity || count != curves)
+        if (count != curves || !identity_matches(saved_identity))
             return Decode::Incompatible;
         decoded.records = std::move(records);
         decoded.sigmas = std::move(sigmas);
@@ -106,7 +110,7 @@ Decode decode_batch(const std::string& bytes, const std::string& identity, uint3
     if (!std::getline(in, tag) || tag != "ECM_STAGE1_BATCH_V1" ||
         !std::getline(in, saved_identity) || !(in >> count))
         return Decode::Corrupt;
-    if (saved_identity != identity || count != curves)
+    if (count != curves || !identity_matches(saved_identity))
         return Decode::Incompatible;
     std::vector<std::string> records(curves);
     std::vector<uint64_t> sigmas(curves);
@@ -166,7 +170,7 @@ std::string ecm_stage1_curve_record(uint32_t curve) {
 
 namespace ecm_stage1_checkpoint {
 bool matches(const std::string& path, const std::string& identity, uint32_t curves,
-             unsigned backups) {
+             unsigned backups, const std::vector<std::string>& compatible_identities) {
     if (path.empty()) return false;
     for (unsigned generation = 0; generation <= std::min(backups, ECM_STAGE1_MAX_BACKUPS); ++generation) {
         const auto candidate = generation ? ecm_stage1_backup_path(path, generation) : path;
@@ -175,7 +179,7 @@ bool matches(const std::string& path, const std::string& identity, uint32_t curv
         const std::string bytes((std::istreambuf_iterator<char>(file)), {});
         if (file.bad()) continue;
         DecodedBatch decoded;
-        const auto status = decode_batch(bytes, identity, curves, decoded);
+        const auto status = decode_batch(bytes, identity, curves, compatible_identities, decoded);
         if (status != Decode::Corrupt) return status == Decode::Valid;
     }
     return false;
@@ -187,6 +191,7 @@ struct Context::State {
     std::mutex bad_primary_mutex, batch_mutex;
     std::unordered_set<std::string> bad_primaries;
     std::string batch_path, batch_identity;
+    std::vector<std::string> batch_compatible_identities;
     std::vector<std::string> batch_records;
     std::vector<uint64_t> batch_sigmas;
     std::unique_ptr<DecodedBatch> pending_batch;
@@ -210,7 +215,7 @@ struct Context::State {
     void set_path(const std::string& path);
     const std::string& path();
     void begin(const std::string& identity, uint32_t curves, bool fixed, uint64_t first_sigma,
-               bool defer_payload_validation);
+               bool defer_payload_validation, const std::vector<std::string>& compatible_identities);
     bool pending();
     void validate_pending(const EcmStage1PayloadValidator& validate);
     bool saved_sigma(uint32_t curve, uint64_t& sigma);
@@ -313,7 +318,8 @@ const std::string& Context::State::path() {
 }
 
 void Context::State::begin(const std::string& identity, uint32_t curves, bool fixed,
-                           uint64_t first_sigma, bool defer_payload_validation) {
+                           uint64_t first_sigma, bool defer_payload_validation,
+                           const std::vector<std::string>& compatible_identities) {
     std::lock_guard<std::mutex> lock(batch_mutex);
     if (active)
         throw std::logic_error("checkpoint Context already active");
@@ -328,6 +334,7 @@ void Context::State::begin(const std::string& identity, uint32_t curves, bool fi
         throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
                                            "batch sigma range overflow");
     batch_identity = identity;
+    batch_compatible_identities = compatible_identities;
     batch_records.assign(curves, {});
     batch_sigmas.assign(curves, 0);
     if (batch_path.empty())
@@ -365,7 +372,7 @@ void Context::State::begin(const std::string& identity, uint32_t curves, bool fi
             continue;
         }
         auto decoded = std::make_unique<DecodedBatch>();
-        const auto result = decode_batch(bytes, identity, curves, *decoded);
+        const auto result = decode_batch(bytes, identity, curves, batch_compatible_identities, *decoded);
         if (result == Decode::Corrupt)
             continue;
         if (result == Decode::Incompatible)
@@ -441,7 +448,7 @@ void Context::State::validate_pending(const EcmStage1PayloadValidator& validate)
             continue;
         auto next = std::make_unique<DecodedBatch>();
         const auto parsed =
-            decode_batch(bytes, batch_identity, uint32_t(batch_records.size()), *next);
+            decode_batch(bytes, batch_identity, uint32_t(batch_records.size()), batch_compatible_identities, *next);
         // Older unrelated generations cannot become another task's resume state.
         if (parsed != Decode::Valid || !sigma_matches(next->sigmas))
             continue;
@@ -577,6 +584,7 @@ void Context::State::close(bool completed) {
     const auto path = std::move(batch_path);
     batch_path.clear();
     batch_identity.clear();
+    batch_compatible_identities.clear();
     batch_records.clear();
     batch_sigmas.clear();
     if (completed && !path.empty() && !nested_writer)
@@ -688,13 +696,13 @@ const std::string& Context::path() {
 }
 
 void Context::begin(const std::string& identity, uint32_t curves, bool fixed, uint64_t first_sigma,
-                    bool defer_payload_validation) {
-    state_->begin(identity, curves, fixed, first_sigma, defer_payload_validation);
+                    bool defer_payload_validation, const std::vector<std::string>& compatible_identities) {
+    state_->begin(identity, curves, fixed, first_sigma, defer_payload_validation, compatible_identities);
 }
 
 void Context::begin_nested(const std::string& parent_path, uint32_t curves, uint64_t first_sigma,
                            const std::string& snapshot, std::function<bool(const std::string&)> writer) {
-    state_->begin({}, curves, true, first_sigma, false);
+    state_->begin({}, curves, true, first_sigma, false, {});
     if (parent_path.empty()) return;
     state_->batch_path = parent_path;
     state_->nested_writer = std::move(writer);

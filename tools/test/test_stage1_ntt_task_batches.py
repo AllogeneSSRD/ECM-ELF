@@ -305,13 +305,17 @@ def main():
     assert not (work / "results.json.txt").exists() or (work / "results.json.txt").stat().st_size == 0
     config = work / "ecm.toml"
     config.write_text(config.read_text(encoding="utf-8").replace(
-        'gpu_algorithm = "ntt"', 'gpu_algorithm = "cgbn[]"'), encoding="utf-8")
+        'gpu_algorithm = "ntt"', 'gpu_algorithm = "cgbn[]"').replace(
+        "edwards_naf_window_bits = 6", "edwards_naf_window_bits = 8"), encoding="utf-8")
     log, wall = run(work, command, "resumed")
     resumed = batch_launches(log)
     assert resumed and resumed[0]["resumed"] == 1
     for key in ("offset", "total", "capacity", "curves"):
         assert resumed[0][key] == interrupted[key], (resumed, interrupted)
-    assert int(ntt_executions(log)[0]["ntt_resume"]) == cursor, log[:4000]
+    restored, *fresh = ntt_executions(log)
+    assert int(restored["ntt_resume"]) == cursor and restored["naf"] == "6", log[:4000]
+    assert fresh and all(row["ntt_resume"] == "0" and row["naf"] == "8" for row in fresh), fresh
+    assert f"stage1_ntt_naf_resume: saved_window=6 configured_window=8 cursor={cursor}" in log
     prior = [row for row in batch_launches(read_log(work / "stop.log"))
              if row["offset"] < interrupted["offset"]]
     assert_schedule(prior + resumed, CURVES, expect_pad=False)

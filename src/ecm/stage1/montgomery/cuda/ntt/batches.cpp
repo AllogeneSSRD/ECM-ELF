@@ -113,6 +113,7 @@ void append_result(std::string& bytes, const CurveOutcome& curve, std::string& s
 ecm_stage1::ComputationResult run_ntt_batches(
     const ecm_stage1::Stage1Request& request, const ecm_stage1::TaskDependencies& deps,
     ecm_stage1_checkpoint::Context& session, const std::string& identity,
+    const std::vector<std::string>& compatible_identities,
     const std::function<void(const ecm_stage1::CurveOutcome&, uint32_t)>& publish_factor) {
     using namespace ecm_stage1;
     using namespace ecm_edwards_memory;
@@ -125,7 +126,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
         throw std::runtime_error("NTT Stage1 task exceeds available host memory; reduce total curves");
 
     TaskProgress state;
-    session.begin(identity, 1, false, 0, true);
+    session.begin(identity, 1, false, 0, true, compatible_identities);
     session.validate_pending([&](const auto& records, auto&) {
         return records.size() == 1 && restore(records.front(), request, state);
     });
