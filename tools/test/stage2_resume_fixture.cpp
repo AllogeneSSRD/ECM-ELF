@@ -154,7 +154,7 @@ int main(int argc,char **argv) {
         const auto new_path=dir/"new.dat";
         checkpoint.save(new_path);
         stage2_queue::State restart;
-        check(restart.load(new_path) && restart.version==5 && restart.done==0 &&
+        check(restart.load(new_path) && restart.version==6 && restart.done==0 &&
               restart.reserved[1].completed && restart.latest_nf_position==2 && restart.nf_keys.size()==1);
         restart.complete(restart.reserved.front(),nf('a',10));
         check(restart.done==2 && restart.nf_keys.size()==2 &&

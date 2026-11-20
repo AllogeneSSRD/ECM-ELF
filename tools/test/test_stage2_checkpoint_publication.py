@@ -1,4 +1,4 @@
-"""Exercise Stage2 checkpoint publication, including resuming with a new output path."""
+"""Exercise Stage2 checkpoint publication, including archived output and interrupted acknowledgement."""
 import argparse
 import json
 from pathlib import Path
@@ -52,6 +52,8 @@ def main():
     else:
         cmd.extend(["--device", str(args.device), "--short-calibration", "0",
                     "--tune-runtime", "0", "--auto-carrier", "0", "--parallel", str(args.parallel)])
+        if args.saved_factor:
+            cmd.extend(["--b2-round-chain", "0"])
     if args.d:
         cmd.extend(["--d", str(args.d)])
 
@@ -63,9 +65,8 @@ def main():
         assert (process.returncode == 0) == success, process.stdout
         return process.stdout
 
-    # Block atomic replacement with a directory at the temp path. This occurs
-    # after final NF bytes are saved in the checkpoint and before queue edit.
-    blocked = submission.with_suffix(".txt.new")
+    # Block replacement after the task has checkpointed the current batch.
+    blocked = submission.with_suffix(".txt.publish.tmp")
     blocked.mkdir()
     diagnostics = work / "curves.jsonl"
     log = run("publication-blocked", False,
@@ -77,81 +78,74 @@ def main():
         assert log.count("curve_done:") == point_count, log
     assert queue.read_text(encoding="utf-8") == task
     checkpoint, = (work / "progress").glob("*.dat")
-    assert checkpoint.read_text(encoding="utf-8").startswith(f"5 {point_count} {point_count} ")
+    lines = checkpoint.read_text(encoding="utf-8").splitlines()
+    fields = shlex.split(lines[0])
+    assert fields[:3] == ["6", str(point_count), str(point_count)]
     assert not submission.exists() and not (work / "stage2_results.jsonl").exists()
-    assert not (work / "data" / "results.json.txt.ecm-ledger").exists()
-    if args.diagnostics:
+    assert not (work / "data").exists()
+    if args.diagnostics and not args.saved_factor:
         rows = [json.loads(line) for line in diagnostics.read_bytes().splitlines()]
         assert len(rows) == point_count and all(map(crc_valid, rows))
         diagnostics.unlink()
     blocked.rmdir()
-    if not args.saved_factor:
-        # Block the receipt after atomic replacement. Restart the real worker
-        # with the same checkpoint and require byte-identical publication.
-        run_id = shlex.split(checkpoint.read_text(encoding="utf-8").splitlines()[0])[3]
-        key = ("stage2-nf|" + run_id).encode()
-        fingerprint = 14695981039346656037
-        for byte in key:
-            fingerprint = ((fingerprint ^ byte) * 1099511628211) & ((1 << 64) - 1)
-        writer = work / "data" / "results.json.txt.ecm-publish"
-        blocked_receipt = writer / "receipts" / f"{fingerprint}.done.new"
-        blocked_receipt.mkdir(parents=True)
-        log = run("receipt-blocked", False)
-        assert "cannot create temporary file" in log and "curve_start:" not in log, log
-        assert (writer / "pending").is_file()
-        published_before_ack = submission.read_bytes()
-        blocked_receipt.rmdir()
-    restarted_config = config_text.replace('user="original"', 'user="after-restart"')
-    config.write_text(restarted_config, encoding="utf-8")
-    # Simulate another failure after successful publication but before finished
-    # bookkeeping. Replay must leave the already published line byte-identical.
+
+    # The same on-disk state arises if replacement succeeded and the process was
+    # killed before acknowledging it. Materialize just that checkpointed row.
+    report = shlex.split(lines[-3])[0] if args.saved_factor else fields[13]
+    published = (report + "\n").encode("utf-8")
+    submission.write_bytes(published)
+    config.write_text(config_text.replace('user="original"', 'user="after-restart"'), encoding="utf-8")
     finished = work / "finished.txt"
     finished.mkdir()
     log = run("finished-blocked", False)
     assert "curve_start:" not in log and checkpoint.exists()
-    published = submission.read_bytes()
-    if not args.saved_factor:
-        assert published == published_before_ack and not (writer / "pending").exists()
+    assert submission.read_bytes() == published
     row, = map(json.loads, published.splitlines())
     assert row["status"] == ("F" if args.saved_factor else "NF")
-    assert row["user"] == "original", row
-    assert row["curves"] == point_count and crc_valid(row)
+    assert row["user"] == "original" and row["curves"] == point_count and crc_valid(row)
 
-    new_submission = work / "new-results.json.txt"
-    config.write_text('config_version=4\n[shared]\nuser="after-restart"\nfinished_file="finished.txt"\n'
-                      f'[stage2]\ndevice="{device}"\nb2_ratio=0\nstage2_save_dir="."\ncheckpoint_dir="progress"\n'
-                      'stage2_submission_file="new-results.json.txt"\n', encoding="utf-8")
-    log = run("new-submission-finished-blocked", False)
-    assert "curve_start:" not in log and checkpoint.exists()
-    assert new_submission.read_bytes() == published
-    assert submission.read_bytes() == published
-
-    cli_submission = work / "cli-results.json.txt"
-    cli_override = ("--submission", str(cli_submission))
-    log = run("cli-submission-finished-blocked", False, cli_override)
-    assert "curve_start:" not in log and checkpoint.exists()
-    assert cli_submission.read_bytes() == published
-
+    override = work / "other-results.json.txt"
+    log = run("different-destination", False, ("--submission", str(override)))
+    assert "different submission path" in log and not override.exists() and checkpoint.exists()
     finished.rmdir()
-    log = run("resume", True, cli_override)
+    # The acknowledgement is already durable. Archiving the output before
+    # retrying the worktodo edit cannot re-emit any report.
+    archive = work / "archived-results.json.txt"
+    submission.rename(archive)
+    log = run("resume", True)
     assert "curve_start:" not in log and not checkpoint.exists()
-    assert new_submission.read_bytes() == published and submission.read_bytes() == published
-    assert cli_submission.read_bytes() == published
+    assert archive.read_bytes() == published and not submission.exists()
     assert not queue.read_text().strip()
-    assert not list((work / "data").glob("*.ecm-publish/pending"))
-    assert not (work / "stage2_results.jsonl").exists()
+    assert not (work / "data").exists()
     if not args.saved_factor:
-        submission.rename(work / "archived-results.json.txt")
         prefix = b"manual archive marker\r\n"
         submission.write_bytes(prefix)
         queue.write_text(task, encoding="utf-8")
-        run("after-manual-archive", True, ("--submission", str(submission)))
-        assert (work / "archived-results.json.txt").read_bytes() == published
+        run("after-manual-archive", True)
         current = submission.read_bytes()
         assert current.startswith(prefix)
         fresh, = map(json.loads, current[len(prefix):].splitlines())
         assert fresh["status"] == "NF" and fresh["curves"] == point_count and crc_valid(fresh)
     print(f"Stage2 checkpoint publication passed (parallel={args.parallel}, device={args.device})")
+
+    if args.cpu:
+        # --save uses the same outcome and publication protocol as worktodo.
+        direct = work / "direct.json.txt"
+        direct_task = ["--save", str(work / "point.save"), "--b2", str(args.b2),
+                       "--curves", str(point_count), "--submission", str(direct)]
+        direct_cmd = [value for i, value in enumerate(cmd)
+                      if i not in (cmd.index("--worktodo"), cmd.index("--worktodo") + 1)]
+        direct_blocked = direct.with_suffix(".txt.publish.tmp")
+        direct_blocked.mkdir()
+        failed = subprocess.run(direct_cmd + direct_task, cwd=work, capture_output=True, timeout=180)
+        assert failed.returncode and b"cannot create temporary file" in failed.stderr
+        direct_blocked.rmdir()
+        for _ in range(2):
+            resumed = subprocess.run(direct_cmd + direct_task, cwd=work, capture_output=True, timeout=180)
+            assert resumed.returncode == 0 and b"completed save-line=" not in resumed.stdout, resumed.stdout
+            direct_row, = map(json.loads, direct.read_bytes().splitlines())
+            assert direct_row["status"] == row["status"] and crc_valid(direct_row)
+        assert not (work / "data").exists()
 
 
 if __name__ == "__main__":

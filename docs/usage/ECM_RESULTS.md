@@ -4,7 +4,7 @@
 
 ## 共用发布接口与实现
 
-Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 `internal_json` 和 `submission_json` 生成结果。Stage1 通过 `publish_stage1_batch` 排序并发布整批结果。Stage2 队列通过 `publish_stage2_checkpoint` 发布 ckpt 中的结果。旧档迁移和直接读档的兼容入口见下文。 [结果接口](../../include/ecm/io/results.h) · [发布实现](../../src/io/results.cpp)
+Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 `internal_json` 和 `submission_json` 生成结果。Stage1 通过 `publish_stage1_batch` 排序并发布整批结果。Stage2 任务从 ckpt 发布因子和汇总 NF。 [结果接口](../../include/ecm/io/results.h) · [发布实现](../../src/io/results.cpp)
 
 ## 文件与身份
 
@@ -31,7 +31,7 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 
 内部 JSONL 的公共顺序为 status、目标、worktype、b1/b2、d/poly-size、curves、曲线/sigma、fft-length、因子、程序/系统/时间与 checksum。CPU libecm 和 CUDA 的实际 fft-length 为 0，gwpoly 记录真实 GW 长度。执行诊断集中于 stage1-engine 或 stage2-engine；CUDA 在需要时记录调优样本 tune_observation，旧队列使用 queue_receipt 对账。调优计划及检查计数保留在 stage2-engine。关闭的 relocation/Auto B2 不生成整组零值。
 
-梅森目标用 exponent 与 known-factors 精确表示，不重复存储 N_hex、参考表名称和模型。一般整数保留必要的完整 N。Stage1 每批首行额外携带 stage1-publication 恢复计划，描述配对提交文件及待发布字节；该字段不进入手工提交行。Python 分析入口通过 tools/ecm_report/result_format.py 在内存中兼容旧的 B1/B2、N_hex 等别名。内部文件不直接粘贴到手工提交页面。
+梅森目标用 exponent 与 known-factors 精确表示，不重复存储 N_hex、参考表名称和模型。一般整数保留必要的完整 N。Python 分析入口通过 tools/ecm_report/result_format.py 在内存中兼容旧的 B1/B2、N_hex 等别名。内部文件不直接粘贴到手工提交页面。
 
 提交文件每行一个 JSON 对象，UTF-8、以换行结束：
 
@@ -88,25 +88,21 @@ curves、d、poly-size、stage2-fft-length、status、stage、user、computer、
 
 ### 提交文件与归档
 
-提交文件用于手工提交和归档。发布器在路径锁内保留现有字节，把新结果放在末尾，并通过同目录临时文件完成原子替换。开始手动归档前，先停止写入该路径的 worker，并确认当前发布已完成。保留尚未完成任务的 worktodo、原始 save 和 ckpt。
+提交文件用于手工提交和归档。发布前，任务 ckpt 先保存待追加批次、追加位置和位置前的一小段字节。发布器在路径锁内保留现有字节，用同目录临时文件原子追加。异常重启只检查仍待确认的批次。已经确认的批次即使归档也不会重发。
 
-### Stage2 队列续算
+手动归档前，先停止写入该路径的 worker，并确认当前没有待确认的追加。未完成的任务保留原始 save、worktodo 和 ckpt。程序发布无需 `data/` 下的文件。
 
-schema 5 的任务 ckpt 保存曲线完成进度、NF 去重键、完整因子行，以及本批汇总所需的末条 NF 和已经准备好的最终 NF。队列根据原始 Stage1 save 和任务 ckpt 恢复计算进度。逐曲线 JSONL 是可选诊断输出，旧账本可用于迁移 schema 1–4 的任务。 [Stage2 恢复与发布](../architecture/CHECKPOINT.md#73-恢复与发布) · [ckpt 状态定义](../../include/ecm/io/stage2_checkpoint.h)
+### Stage2 发布
 
-找到并验证的因子先进入 ckpt，再发布为单条 F，固定 `curves=1` 并保留 σ。整条任务完成且至少有一条曲线未找到因子时，汇总发布一条 NF。`curves` 为去重后的已完成无因子曲线数，B2、D、P 取计划顺序中最后计入的一条。若发布中断，重启沿用本批已准备好的结果。任务写入 finished、移除 worktodo 行后，程序清理 ckpt，已完成结果由提交文件或用户归档保存。 [Stage2 队列实现](../../src/ecm/stage2/queue.cpp)
+CPU、CUDA 和 OpenCL 的 worktodo 与 `--save` 使用同一发布流程。任务 ckpt 保存已完成曲线、NF 去重键、完整因子行、最终 NF 和待确认的追加状态。逐曲线 JSONL 可用于诊断，恢复使用原始 Stage1 save 和 ckpt。
+
+验证通过的因子先写入 ckpt，随后单独发布一行 F，固定 `curves=1` 并保留 σ。任务完成后，所有唯一 NF 曲线汇总成一行，B2、D、P 取计划顺序中最后计入的曲线。队列更新 finished 和 worktodo 后清理 ckpt。`--save` 保留完成 ckpt，使相同命令重试可直接确认成功。要有意重算，指定新的 `--submission` 路径或移走该直接任务的完成 ckpt。 [Stage2 恢复与发布](../architecture/CHECKPOINT.md#73-恢复与发布)
 
 ### Stage1 整批发布
 
-Stage1 批次按无符号 64 位 σ 排序，先保存曲线结果，再发布内部 JSONL 和提交行。因子行沿用这个顺序，NF 聚合成一行放在批次因子行之后，B2=B1。NTT 拆批可以在子批完成后提前发布已验证的因子。 [Stage1 批次入口](../../src/ecm/stage1/task.cpp) · [NTT 子批发布](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp)
+Stage1 批次按无符号 64 位 σ 排序。先保存曲线终点，再发布内部 JSONL 和提交行。因子行沿用批次排序，NF 汇总成一行放在因子行之后，B2=B1。NTT 子批可提前发布已验证的因子，整批完成时跳过已发布的因子。
 
-原生 Stage1 text-save 的新批次也按数值 sigma 排序；Stage2 依次读取这些点，因此直接承接该顺序。旧 save 历史不重排。Stage2 内部 JSONL 始终完成一条追加一条，旧 save、手工选择范围或重算记录的顺序仍由实际输入和执行决定。
-
-Stage1 的算术进度保存在批次 ckpt。现有双文件发布还使用内部 JSONL 首行的 `stage1-publication` 冻结本批提交文本和身份。提交失败会保留 ckpt，直到该批发布完成。 [Stage1 发布入口](../../src/io/results.cpp)
-
-### 兼容入口
-
-CPU 和 GPU 的直接 `--save` 入口目前仍通过 `publish_submission` 和 `seal_submissions` 使用旧账本汇总结果。需要按任务 ckpt 续算时，使用 Stage2 worktodo 队列。对保留的旧账本，可显式执行 `ecm_stage2.exe --export-results --submission FILE`。 [直接读档入口](../../src/ecm/stage2/edwards/cpu/main.cpp) · [旧档迁移](../architecture/CHECKPOINT.md#74-旧档的一次性迁移)
+Stage1 保存算术 ckpt 和配套的 `*.publish.ckpt`。后者冻结本批内外两份输出的确切字节和确认状态。发布成功且队列交接完成后清理任务 ckpt。 [Stage1 批次入口](../../src/ecm/stage1/task.cpp) · [发布实现](../../src/io/results.cpp)
 
 ## 隐私与提交检查
 

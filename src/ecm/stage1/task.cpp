@@ -355,9 +355,8 @@ std::optional<GpuAlgorithm> stage1_checkpoint_gpu_algorithm(const Stage1Request&
 
 static ecm_results::Stage1BatchRecord describe_result(
     const Stage1Request& request, ecm_results::Submission row, const CurveOutcome& curve,
-    uint32_t index, const std::string& when, const std::string& publication_task,
+    uint32_t index, const std::string& when,
     double seconds, const TaskDependencies& deps) {
-    row.publication_task = publication_task;
     row.sigma = curve.sigma;
     row.when = when;
     if (curve.kind == CurveOutcome::Kind::Factor) {
@@ -410,8 +409,8 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             same(save_destination(request), opt.persistence.submission_file))
             throw std::runtime_error(
                 "Stage1 save, internal results and submission paths must differ");
-        ecm_results::check_stage1_outputs(opt.persistence.results_file,
-                                          opt.persistence.submission_file);
+        if (opt.persistence.results_file.empty() || opt.persistence.submission_file.empty())
+            throw std::runtime_error("empty Stage1 result output path");
         const auto destination = save_destination(request);
         if (!destination.empty() &&
             !opencl_ecm_check_save_file_writable(destination, saveappend || savefilename.empty())) {
@@ -419,6 +418,9 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             throw std::runtime_error("cannot prepare Stage1 save destination " + destination);
         }
         const auto path = checkpoint_path(request);
+        if (same(path, destination) || same(path, opt.persistence.results_file) ||
+            same(path, opt.persistence.submission_file))
+            throw std::runtime_error("Stage1 arithmetic checkpoint must differ from output paths");
         if (!path.empty())
             std::filesystem::create_directories(opt.persistence.tmp_dir);
         session.set_backup_limit(opt.persistence.ckpt_backups);
@@ -435,7 +437,12 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
                 split_ntt = false; // Resume an existing one-batch queue checkpoint.
         }
 #endif
-        if (!split_ntt)
+        if (split_ntt) {
+#if ECM_HAS_CUDA_STAGE1
+            const auto split = ntt_task_identity(std::move(identity), curves);
+            session.begin(split.current, 1, false, 0, true, split.compatible);
+#endif
+        } else
             session.begin(identity.current, curves, opt.identity.sigma_fixed, opt.identity.fixed_sigma64,
                           deps.defer_gpu_checkpoint_validation &&
                               opt.execution.selection.target == ExecutionTarget::Gpu, identity.compatible);
@@ -446,21 +453,35 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         phase = FailureSource::Execution;
         const auto result_identity = ecm_edwards::hex(N) + "|" + std::to_string(base.b1) +
                                      (base.edwards ? "ed" : "mont" + std::to_string(base.param));
+        const auto publication_checkpoint = ecm_results::stage1_publication_checkpoint(path.empty()
+            ? std::filesystem::u8path(opt.persistence.submission_file + "." +
+                  std::to_string(ecm_io::fingerprint(result_identity)))
+            : std::filesystem::path(path));
+        if (same(publication_checkpoint, destination) ||
+            same(publication_checkpoint, opt.persistence.results_file) ||
+            same(publication_checkpoint, opt.persistence.submission_file))
+            throw std::runtime_error("Stage1 publication checkpoint must differ from output paths");
+        const auto candidates = session.candidates(path);
+        const auto has_arithmetic_checkpoint = [&] {
+            return !path.empty() && std::any_of(candidates.begin(), candidates.end(),
+                [](const auto& candidate) { return std::filesystem::exists(candidate); });
+        };
+        if (!path.empty() && !has_arithmetic_checkpoint())
+            ecm_results::discard_completed_stage1_publication(publication_checkpoint);
 #if ECM_HAS_CUDA_STAGE1
         if (split_ntt) {
-            const auto split = ntt_task_identity(std::move(identity), curves);
             out->computation = ecm_cuda_stage1::run_ntt_batches(
-                request, deps, session, split.current, split.compatible,
+                request, deps, session,
                 [&](const CurveOutcome& factor, uint32_t index) {
                     const auto key = result_identity + "|early-factor|" + std::to_string(factor.sigma);
-                    const auto task = std::to_string(ecm_io::fingerprint(key));
                     const auto seconds =
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
                     std::vector<ecm_results::Stage1BatchRecord> early;
                     early.push_back(describe_result(request, base, factor, index,
-                        ecm_results::utc_timestamp(), task, seconds, deps));
+                        ecm_results::utc_timestamp(), seconds, deps));
                     ecm_results::publish_stage1_batch(opt.persistence.results_file,
-                        opt.persistence.submission_file, std::move(early), N, key);
+                        opt.persistence.submission_file, std::move(early), N, key,
+                        publication_checkpoint, true);
                 });
         } else
 #endif
@@ -491,23 +512,25 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         auto task_identity = result_identity;
         for (const auto& curve : computed.curves)
             task_identity += "|" + std::to_string(curve.sigma);
-        const auto publication_task = std::to_string(ecm_io::fingerprint(task_identity));
         const auto publication_when = ecm_results::utc_timestamp();
         for (uint32_t i = 0; i < computed.curves.size(); ++i)
             if (computed.curves[i].kind != CurveKind::Degenerate)
                 records.push_back(describe_result(request, base, computed.curves[i], i,
-                    publication_when, publication_task, seconds, deps));
+                    publication_when, seconds, deps));
         if (!records.empty()) {
             ecm_results::publish_stage1_batch(opt.persistence.results_file,
                                               opt.persistence.submission_file, std::move(records), N,
-                                              task_identity);
+                                              task_identity, publication_checkpoint);
             ecm_ts_fprintf(stdout, "Stage1 results: internal=%s submission=%s\n",
                            opt.persistence.results_file.c_str(),
                            opt.persistence.submission_file.c_str());
         }
         if (opt.persistence.retain_completed_checkpoint)
             out->completed_checkpoint = path;
-        session.close(!opt.persistence.retain_completed_checkpoint);
+        session.close(!opt.persistence.retain_completed_checkpoint, [&] {
+            if (!has_arithmetic_checkpoint())
+                ecm_results::discard_completed_stage1_publication(publication_checkpoint);
+        });
         out->status = TaskStatus::Completed;
         out->task_return = computed.legacy_code;
         return result;

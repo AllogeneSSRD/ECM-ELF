@@ -5,7 +5,6 @@ printed; fixtures and generated identities stay under the evidence directory.
 """
 import argparse
 import importlib.util
-import shutil
 import json
 import os
 from pathlib import Path
@@ -18,7 +17,6 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 from test_result_output_consistency import crc_valid
-def ledger(path): return path.parent/'data'/(path.name+'.ecm-ledger')
 
 
 def contract(row, allowed):
@@ -27,7 +25,7 @@ def contract(row, allowed):
     assert isinstance(row['fft-length'], int) and row['fft-length'] > 0
     assert isinstance(row['program']['port'], int)
     assert row['program']['name'] == 'ECM-ELF'
-    version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'src/core/ecm_program_version.h').read_text())[1]
+    version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'include/ecm/platform/program_version.h').read_text())[1]
     assert row['program']['version']==version and re.fullmatch(r'\d+\.\d+\.\d+',version)
     if row['status'] == 'NF':
         assert row['Edwards'] == {} and row['curves'] >= 1 and row['b2'] > row['b1']
@@ -92,33 +90,17 @@ def main():
     before=outside.read_bytes()
     run('batch_replay',extra=['--curves',4],destination=(inside,outside))
     assert outside.read_bytes()==before
-    # The archived export stays archived on replay. Explicit export can still
-    # reconstruct it from the retained private receipts.
+    # Acknowledged direct tasks leave their archived output untouched.
     outside.rename(out/'export_archive.json.txt')
     run('archive_replay',extra=['--curves',4],destination=(inside,outside))
-    assert not outside.exists()
-    recovered=subprocess.run(list(map(str,[args.cpu_stage2.resolve(),'--export-results','--submission',outside,'--ini',ini])),cwd=out,capture_output=True)
-    (out/'export_only.log').write_bytes(recovered.stdout+recovered.stderr)
-    assert recovered.returncode==0 and outside.read_bytes()==before
-    checks.append('export_without_arithmetic')
-    # A crash can leave completed curves without a sealed batch. Exercise that
-    # state on a copy, retaining the original evidence and its published count.
-    pending=out/'pending.json.txt'
-    pending_ledger=ledger(pending)
-    shutil.copytree(ledger(outside),pending_ledger)
-    for batch in pending_ledger.glob('*.batch'):batch.unlink()
-    recovered=subprocess.run(list(map(str,[args.cpu_stage2.resolve(),'--export-results','--submission',pending,'--ini',ini])),cwd=out,capture_output=True)
-    (out/'pending_recovery.log').write_bytes(recovered.stdout+recovered.stderr)
-    assert recovered.returncode==0
-    pending_rows=[json.loads(s) for s in pending.read_text().splitlines()]
-    assert len(pending_rows)==1 and pending_rows[0]['curves']==4
-    contract(pending_rows[0],allowed);checks.append('recover_unsealed_completed_curves')
+    assert not outside.exists() and (out/'export_archive.json.txt').read_bytes()==before
+    assert not (out/'data').exists()
     # Previously emitted NF batches remain immutable when new curves finish.
     inside,outside,rows=run('incremental_first',extra=['--curves',2])
-    original=set(outside.read_text().splitlines())
+    original=outside.read_bytes()
     _,_,rows=run('incremental_second',extra=['--skip',2,'--curves',2],destination=(inside,outside))
     assert sum(r['curves'] for r in rows)==4 and len(rows)==2
-    assert original <= set(outside.read_text().splitlines()) and len(set(outside.read_text().splitlines()))==2
+    assert outside.read_bytes().startswith(original)
     # Worker overrides globals; CLI still overrides the selected INI projection.
     scoped={k:secrets.token_hex(12) for k in identity}
     ini.write_text('\n'.join(f'{k}={v}' for k,v in identity.items())+'\n[Worker #2]\n'+
@@ -137,7 +119,7 @@ def main():
     def make_save(name,n,sigma,b1,factor=None):
         if factor is None:
             _,x,z=oracle.stage1(n,sigma,b1);x=x*pow(z,-1,n)%n;status='POINT'
-        else:x=factor;status='FACTOR'
+        else:x=factor;status='POINT'
         path=out/(name+'.save')
         path.write_text(f'METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA={sigma}; B1={b1}; N=0x{n:x}; X=0x{x:x}; STATUS={status}; CHECKSUM={oracle.checksum(n,x,sigma,b1,status)};\n')
         return path
@@ -148,25 +130,8 @@ def main():
     factor_inside,factor_outside,rows=run('stage1_factor',save=factor_save)
     assert rows[0]['stage']==1 and 'b2' not in rows[0]
     first_factor=factor_outside.read_bytes()
-    run('stage1_factor_new_requested_b2',save=factor_save,extra=['--b2',80000],destination=(factor_inside,factor_outside))
+    run('stage1_factor_replay',save=factor_save,destination=(factor_inside,factor_outside))
     assert factor_outside.read_bytes()==first_factor
-    # Keep legacy private receipts; B2 did not belong to their Stage1 work.
-    legacy=out/'legacy_stage1_factor.json.txt';legacy_ledger=Path(str(legacy)+'.ecm-ledger')
-    shutil.copytree(ledger(factor_outside),legacy_ledger)
-    receipt=next(legacy_ledger.glob('*.curve'));line=receipt.read_text().splitlines()[3]
-    receipt.unlink()  # Working copy; the original ledger remains above.
-    def ledger_hash(text):
-        value=14695981039346656037
-        for byte in text.encode():value=((value^byte)*1099511628211)&((1<<64)-1)
-        return value
-    for bound in (40000,80000):
-        key=f'{(1<<29)-1:x}|17|2|{bound}|1|ed|233'
-        body='ECM_SUBMISSION_V1\n'+key+'\nF\n'+line+'\n'
-        (legacy_ledger/(str(ledger_hash(key))+'.curve')).write_bytes((body+str(ledger_hash(body))+'\n').encode())
-    recovered=subprocess.run(list(map(str,[args.cpu_stage2.resolve(),'--export-results','--submission',legacy,'--ini',ini])),cwd=out,capture_output=True)
-    assert recovered.returncode==0
-    _,_,rows=run('legacy_stage1_factor_dedup',save=factor_save,destination=(out/'legacy_factor_internal.jsonl',legacy))
-    assert len(rows)==1 and rows[0]['stage']==1
     stage2_found=False
     for exponent in (29,37,41,43,47,53,59,67):
         try:fixture=make_save('factor_input_'+str(exponent),(1<<exponent)-1,17,2)

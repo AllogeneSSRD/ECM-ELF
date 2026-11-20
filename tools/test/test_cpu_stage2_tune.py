@@ -226,12 +226,17 @@ def main():
     config_bytes = f.config.read_bytes()
     assert f.finish(f.start("config_alias", *f.save_flags(1), "--tune-profile", f.config), expected=1) == []
     assert f.config.read_bytes() == config_bytes
-    folder = out / "ledger_alias"
+    folder = out / "checkpoint_alias"
     folder.mkdir()
-    ledger_marker = folder / "data/public.json.txt.ecm-ledger/format"
-    assert f.finish(f.start("ledger_alias", *f.save_flags(1), "--tune-profile", ledger_marker,
-                            folder=folder), expected=1) == []
-    assert not ledger_marker.exists()
+    previous = set(out.rglob(".ecm_ckpt_stage2_direct_*.dat"))
+    assert len(f.finish(f.start("seed_checkpoint", *f.save_flags(1), folder=folder))) == 1
+    checkpoint, = set(out.rglob(".ecm_ckpt_stage2_direct_*.dat")) - previous
+    checkpoint_bytes = checkpoint.read_bytes()
+    original = (folder / "local.jsonl").read_bytes()
+    f.finish(f.start("checkpoint_alias", *f.save_flags(1), "--tune-profile", checkpoint,
+                     folder=folder), expected=1)
+    assert checkpoint.read_bytes() == checkpoint_bytes
+    assert (folder / "local.jsonl").read_bytes() == original
     print("PASS tune path aliases cannot overwrite input files", flush=True)
 
     shared = out / "concurrent.toml"
@@ -310,15 +315,18 @@ def main():
 
     lazy_config, lazy = lazy_case("lazy_construction", degenerate)
     rows, log = lazy_run("lazy_dry_run", lazy_config, lazy, "--dry-run")
-    assert not rows and "available=3 completed=0 remaining=3" in log
+    assert not rows and "available=2 completed=0 remaining=2" in log
     rows, log = lazy_run("lazy_first_run", lazy_config, lazy, expected=1)
-    assert [(row["stage"], row["factors"]) for row in rows] == [(1, ["101"]), (1, ["103"])]
-    assert "curve_start: 1/3" in log and "curve_start: 3/3" in log
+    assert [(row["stage"], row["factors"]) for row in rows] == [(1, ["101"])]
+    assert "curve_start: 1/2 record=1" in log and "curve_start: 2/2 record=3" in log
+    assert "record=2 sigma=" not in log
     assert "degenerate Edwards curve in save record 3" in log
     assert lazy_task in (lazy / "worktodo.txt").read_text(encoding="utf-8")
+    published = (lazy / "public.json.txt").read_bytes()
     rows_after_restart, log = lazy_run("lazy_resume", lazy_config, lazy, expected=1)
-    assert rows_after_restart == rows and "completed=2 remaining=1" in log
-    assert "curve_start: 3/3" in log and "curve_start: 1/3" not in log and "curve_start: 2/3" not in log
+    assert rows_after_restart == rows and "completed=1 remaining=1" in log
+    assert "curve_start: 2/2 record=3" in log and "curve_start: 1/2" not in log
+    assert (lazy / "public.json.txt").read_bytes() == published
     print("PASS upfront checksums, deferred curve construction and checkpoint resume", flush=True)
 
     rounded_profile = out / "rounded.toml"

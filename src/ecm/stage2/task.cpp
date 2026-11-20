@@ -68,7 +68,6 @@ static CurveProcessRequest curve_request(Options &o,const fs::path &save,const R
     request.pack_zero=o.pack_zero;
     request.weighted_ntt=o.weighted_ntt;
     request.prediction_policy=o.prediction_policy;
-    request.publication_task=o.publication_task;
     request.ratio_adjust=o.ratio_adjust;
     request.receipt=o.receipt;
     request.relocation=o.relocation;
@@ -170,8 +169,6 @@ int curve_worker(Options o) {
     if (o.save.empty() || ((!o.checkpoint_outcome || o.tune_child) && o.results.empty()) ||
         !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
         throw std::runtime_error("incomplete internal curve-worker arguments");
-    if(!o.checkpoint_outcome && !o.tune_child && !o.submission.empty())
-        ecm_results::check_stage2_outputs(o.results,fs::u8path(o.submission));
     const auto read_saved_line=[&] {
         std::ifstream input(o.save,std::ios::binary);
         if(!input)throw std::runtime_error("cannot reread save");
@@ -316,9 +313,7 @@ int curve_worker(Options o) {
     const double seconds=std::chrono::duration<double>(publish_start-start-lock_wait).count();
     double factor_seconds = 0;
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
-    submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
-    submission.publication_order=o.index;
-    submission.save_name=fs::path(o.save).stem().u8string();
+    submission.when=ecm_results::utc_timestamp();
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
     submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
@@ -329,9 +324,6 @@ int curve_worker(Options o) {
     if(submission.stage==1){submission.d=0;submission.poly_size=0;}
     if(o.checkpoint_outcome) {
         std::cout<<"stage2_checkpoint_outcome: "<<checkpoint_outcome(r,o.b2,ecm_results::submission_json(submission,n.z))<<std::endl;
-    } else {
-        ecm_results::check_stage2_outputs(o.results,external_path);
-        ecm_results::publish_submission(external_path,submission,n.z);
     }
     // The primary verified factor is durable before optional decomposition.
     // A failed diagnostic cannot turn a successful curve into a replay/failure.
@@ -648,8 +640,6 @@ QueueWindow run_curve_window(const CurveQueue &queue,Options &o,size_t end,unsig
             const auto &r=queue.plan[next];
             slot->position=next;slot->admitted=slot->released=slot->committed=false;
             if(pipeline)report_start(*slot,"curve_prepare");
-            if(!checkpoint_outcomes && !o.tune_child)
-                ecm_results::check_stage2_outputs(queue.results,fs::u8path(o.submission),persist && state.done>0);
             if(position==state.reserved.size())
                 state.reserved.push_back({next});
             o.runtime_remaining=queue.plan.size()-next;

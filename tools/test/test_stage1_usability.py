@@ -22,7 +22,6 @@ from test_result_output_consistency import crc_valid
 
 def toml_string(value):
     return json.dumps(str(value), ensure_ascii=False)
-def ledger(path): return path.parent/'data'/(path.name+'.ecm-ledger')
 def saved_integer(expression):
     def value(node):
         if isinstance(node,ast.Constant) and type(node.value) is int:return node.value
@@ -103,7 +102,7 @@ def main():
     parser.add_argument('--stage1', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--device', type=int, default=1)
-    parser.add_argument('--cpu-stage2', type=Path, help='also verify the shared submission ledger across stages')
+    parser.add_argument('--cpu-stage2', type=Path, help='also verify the shared atomic submission output across stages')
     parser.add_argument('--gpu-algorithm',choices=('ladder','resident','prac'),default='ladder')
     parser.add_argument('--gpu0-only',action='store_true')
     args = parser.parse_args()
@@ -151,12 +150,12 @@ def main():
         for row in internal:
             verify_result(row)
         assert sum(v['curves'] for v in public) == count
-        assert not ledger(public_path).exists(), 'Stage1 created per-curve receipts'
+        assert not (work/'data').exists(), 'Stage1 created a runtime data directory'
         sigma=lambda row:row.get('Edwards',row.get('GMP-ECM-param3',{})).get('sigma',row.get('sigma'))
         assert [sigma(row) for row in internal]==sorted(sigma(row) for row in internal)
         assert [sigma(row) for row in public if row['status']=='F']==sorted(sigma(row) for row in public if row['status']=='F')
         assert sum(row['curves'] for row in public if row['status']=='NF')==sum(row['status']=='NF' for row in internal)
-        assert 'stage1-publication' in internal[0]
+        assert all('stage1-publication' not in row for row in internal)
         for row in public:
             assert row['fft-length'] > 0 and crc_valid(row) and 'security-code' not in row
             if row['status']=='F':assert row['stage']==1 and row['curves']==1 and 'b2' not in row
@@ -196,7 +195,7 @@ def main():
             for name in ('ed_scalar','ed_factor'):
                 work=out/name;submission=work/'results.json.txt'
                 before=submission.read_bytes()
-                cmd=[stage2,'--save',work/'points.save','--b2',40000,'--curves',4,
+                cmd=[stage2,'--save',work/'points.save','--b2',40000,'--curves',4,'--backend','plain',
                      '--results',work/'stage2_results.jsonl','--submission',submission,'--config',work/'ecm.toml']
                 call(name+'_stage2',cmd,work)
                 rows=[json.loads(v) for v in submission.read_text().splitlines()]
@@ -206,43 +205,10 @@ def main():
                 else:
                     assert len(rows)==4 and submission.read_bytes()==before
                 completed=submission.read_bytes()
-                replay=[exe,'--curve','ed','--target','cpu','--impl','scalar','--stage1-threads',2,
-                        '-sigma',20260922,'-gpucurves',4,'--tmp-dir',work,'--config',work/'ecm.toml',
-                        '-savea',work/'points.save',1000,1000]
-                n=(1<<347)-1 if name=='ed_scalar' else 1009*((1<<127)-1)
-                call(name+'_stage1_replay',replay,work,str(n)+'\n')
-                assert submission.read_bytes()==completed
                 call(name+'_stage2_replay',cmd,work)
                 assert submission.read_bytes()==completed
+                assert not (work/'data').exists()
                 passed(name+'_cross_stage_submission')
-                if name=='ed_scalar':
-                    # Simulate interrupted Stage2 publication on a working copy,
-                    # preserving the completed source ledger and its export.
-                    pending_work=work/'pending_case';pending_work.mkdir()
-                    pending=pending_work/'results.json.txt';pending_ledger=ledger(pending)
-                    shutil.copytree(ledger(submission),pending_ledger)
-                    writer = submission.parent/'data'/(submission.name+'.ecm-publish')
-                    shutil.copytree(writer,pending.parent/'data'/writer.name)
-                    for sealed in pending_ledger.rglob('*.batch'):
-                        if json.loads(sealed.read_text().splitlines()[3])['b2']>1000:sealed.unlink()
-                    # This working copy models NF records never sealed/exported
-                    # by Stage2. A copied durable append history would instead
-                    # describe a completed publication and correctly replay it.
-                    (pending_ledger/'publication.order').unlink(missing_ok=True)
-                    pending.write_bytes(before)
-                    shutil.copy2(work/'stage1_results.jsonl',pending_work/'stage1_results.jsonl')
-                    shutil.copy2(work/'points.save',pending_work/'points.save')
-                    ini=pending_work/'ecm.toml'
-                    ini.write_text('config_version = 4\n[shared]\nuser=""\ncomputer=""\nlog_file=""\n',encoding='utf-8')
-                    pending_replay=list(replay)
-                    for option,value in (('--config',ini),('--tmp-dir',pending_work),('-savea',pending_work/'points.save')):
-                        pending_replay[pending_replay.index(option)+1]=value
-                    call('stage1_with_pending_stage2_nf',pending_replay,pending_work,str(n)+'\n')
-                    assert pending.read_bytes()==before and not list(pending_ledger.rglob('*.batch'))
-                    assert len(list(pending_ledger.rglob('*.curve')))==4
-                    call('pending_stage2_export',[stage2,'--export-results','--submission',pending,'--config',ini],pending_work)
-                    assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==8
-                    passed('stage1_preserves_pending_stage2_nf')
 
         for model in ('ed', 'mont'):
             name='publication_retry_'+model
@@ -363,7 +329,7 @@ def main():
         assert not (work/'absent_prime95').exists()
         if model == 'ed':
             oracle.records(next(work.glob('e_*.save')))
-            assert 'ignored' in log
+            assert 'retaining Stage1 save' in log
         passed(name)
     report['complete'] = True
     (out/'summary.json').write_text(json.dumps(report, indent=2)+'\n')

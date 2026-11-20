@@ -225,7 +225,7 @@ struct Context::State {
     bool write_blob(const std::string& path, const std::string& bytes);
     bool import_payload(const std::string& bytes, uint64_t first_sigma);
     bool import_payload(const std::string& bytes, const std::vector<uint64_t>& sigmas);
-    void close(bool completed);
+    void close(bool completed, const std::function<void()>& after_cleanup = {});
     bool flush_batch();
     size_t record_index(const std::string& path);
     bool sigma_matches(const std::vector<uint64_t>& sigmas);
@@ -575,7 +575,7 @@ bool Context::State::import_payload(const std::string& bytes, const std::vector<
     return true;
 }
 
-void Context::State::close(bool completed) {
+void Context::State::close(bool completed, const std::function<void()>& after_cleanup) {
     active = false;
     pending_batch.reset();
     pending_path.clear();
@@ -589,6 +589,8 @@ void Context::State::close(bool completed) {
     batch_sigmas.clear();
     if (completed && !path.empty() && !nested_writer)
         this->remove(path);
+    if (completed && after_cleanup)
+        after_cleanup();
     nested_writer = {};
 #ifdef _WIN32
     if (batch_lock != INVALID_HANDLE_VALUE) {
@@ -754,7 +756,7 @@ bool Context::import_payload(const std::string& bytes, const std::vector<uint64_
     return state_->import_payload(bytes, sigmas);
 }
 
-void Context::close(bool completed) {
-    state_->close(completed);
+void Context::close(bool completed, const std::function<void()>& after_cleanup) {
+    state_->close(completed, after_cleanup);
 }
 } // namespace ecm_stage1_checkpoint

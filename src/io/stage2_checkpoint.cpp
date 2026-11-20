@@ -1,12 +1,7 @@
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/platform/fingerprint.h"
 #include "io/json.h"
-#ifdef _WIN32
-#include <windows.h>
-#else
 #include "io/files.h"
-#include <unistd.h>
-#endif
 #include <fstream>
 #include <iomanip>
 #include <optional>
@@ -79,7 +74,7 @@ bool State::load(const fs::path& path) {
     if (!file)
         throw std::runtime_error("cannot read Stage2 progress: " + path.u8string());
     std::string bytes((std::istreambuf_iterator<char>(file)), {});
-    if (bytes.compare(0, 2, "5 ") == 0) {
+    if (bytes.compare(0, 2, "5 ") == 0 || bytes.compare(0, 2, "6 ") == 0) {
         constexpr size_t digest_line = 65;
         if (bytes.size() <= digest_line || bytes.back() != '\n' ||
             bytes[bytes.size() - digest_line - 1] != '\n' ||
@@ -92,7 +87,7 @@ bool State::load(const fs::path& path) {
     unsigned schema = 0;
     if (!(in >> schema >> done >> total >> std::quoted(run) >> std::quoted(pending) >>
           std::quoted(identity)) ||
-        (schema < 1 || schema > 5) || done > total ||
+        (schema < 1 || schema > 6) || done > total ||
         (done == total && !pending.empty()) || run.empty())
         throw std::runtime_error("invalid Stage2 progress file; inspect: " + path.string());
     version = schema;
@@ -107,6 +102,9 @@ bool State::load(const fs::path& path) {
     latest_nf_position = 0;
     nf_keys.clear();
     factors.clear();
+    published_factors = 0;
+    nf_published = adopt_v5 = false;
+    append = {};
     if (schema >= 2 && !(in >> std::quoted(pending_results)))
         throw std::runtime_error("missing Stage2 receipt path");
     if (schema >= 2 &&
@@ -136,9 +134,10 @@ bool State::load(const fs::path& path) {
             reserved.push_back(std::move(entry));
         }
     }
-    if (schema == 5) {
+    if (schema >= 5) {
         uint64_t count = 0, nf = 0, hits = 0;
-        if (bytes.compare(0, 2, "5 ") || !pending.empty() || !pending_results.empty() ||
+        if (bytes[0] != '0' + schema || bytes[1] != ' ' ||
+            !pending.empty() || !pending_results.empty() ||
             !(in >> std::quoted(submission_path) >> latest_nf_position >> std::quoted(latest_nf) >>
               std::quoted(final_nf) >> count >> nf >> hits) ||
             count > total - done || nf > total || hits > total - nf ||
@@ -170,6 +169,20 @@ bool State::load(const fs::path& path) {
             factors.push_back(std::move(factor));
         }
     }
+    if (schema == 6) {
+        unsigned final = 0, adopt = 0, pending_append = 0;
+        if (!(in >> published_factors >> final >> adopt >> pending_append >> append.offset >>
+              std::quoted(append.anchor)) ||
+            published_factors > factors.size() || final > 1 || adopt > 1 || pending_append > 1 ||
+            (final && (final_nf.empty() || published_factors != factors.size())) ||
+            (pending_append && (submission_path.empty() ||
+                (published_factors == factors.size() && (final || final_nf.empty())))) ||
+            (!pending_append && (append.offset || !append.anchor.empty())))
+            throw std::runtime_error("invalid Stage2 publication checkpoint");
+        nf_published = final != 0;
+        adopt_v5 = adopt != 0;
+        append.pending = pending_append != 0;
+    }
     in >> std::ws;
     if (!in.eof())
         throw std::runtime_error("trailing data in Stage2 progress file: " + path.string());
@@ -177,17 +190,12 @@ bool State::load(const fs::path& path) {
 }
 
 void State::save(const fs::path& path) const {
-#ifdef _WIN32
-    if (!path.parent_path().empty())
-        fs::create_directories(path.parent_path());
-    const fs::path temp(path.string() + ".tmp." + std::to_string(GetCurrentProcessId()));
-#endif
     std::ostringstream out;
     const bool multiple = reserved.size() > 1;
     const auto &receipt = reserved.size() == 1 ? reserved.front().receipt : pending;
     const auto &results = reserved.size() == 1 ? reserved.front().results : pending_results;
-    const bool self_contained = version == 5;
-    out << (self_contained ? "5 " : multiple ? "4 " : "3 ") << done << ' ' << total << ' ' << std::quoted(run) << ' '
+    const bool self_contained = version >= 5;
+    out << (self_contained ? version : multiple ? 4 : 3) << ' ' << done << ' ' << total << ' ' << std::quoted(run) << ' '
         << std::quoted(self_contained ? std::string{} : receipt) << ' ' << std::quoted(identity) << ' '
         << std::quoted(self_contained ? std::string{} : results) << ' '
         << std::quoted(publication_task) << ' ' << b2 << ' ' << unsigned(auto_b2);
@@ -201,6 +209,10 @@ void State::save(const fs::path& path) const {
             out << '\n' << key;
         for (const auto& factor : factors)
             out << '\n' << std::quoted(factor);
+        if (version >= 6)
+            out << '\n' << published_factors << ' ' << unsigned(nf_published) << ' '
+                << unsigned(adopt_v5) << ' ' << unsigned(append.pending) << ' '
+                << append.offset << ' ' << std::quoted(append.anchor);
     } else if (multiple) {
         out << ' ' << reserved.size();
         for (const auto& entry : reserved)
@@ -211,24 +223,7 @@ void State::save(const fs::path& path) const {
     auto bytes = out.str();
     if (self_contained)
         bytes += ecm_stage2::sha256_text(bytes) + '\n';
-#ifdef _WIN32
-    HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE)
-        throw std::runtime_error("cannot create Stage2 progress file");
-    DWORD written = 0;
-    const bool ok =
-        bytes.size() <= MAXDWORD &&
-        WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
-        written == bytes.size() && FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!ok || !MoveFileExW(temp.c_str(), path.c_str(),
-                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-        throw std::runtime_error("cannot publish Stage2 progress; previous state retained: " +
-                                 path.string());
-#else
-    ecm_io::write_atomic(path, bytes, ".tmp." + std::to_string(getpid()));
-#endif
+    ecm_io::write_atomic(path, bytes);
 }
 
 std::string Task::legacy_id() const {
@@ -252,7 +247,7 @@ void State::reconfigure(const Task& task) {
     const bool mode = task.auto_b2 && !task.b2;
     if (!final_nf.empty() && (total != (std::max)(done, task.total) || b2 != task.b2 || auto_b2 != mode))
         throw std::runtime_error("Stage2 has a staged NF report; finish publication under its original policy");
-    if (version == 5 && !reserved.empty() && task.total < done + reserved.size())
+    if (version >= 5 && !reserved.empty() && task.total < done + reserved.size())
         throw std::runtime_error("Stage2 has completed curves beyond a gap; fill the gap before shrinking the task");
     if (version < 5 && (!pending.empty() || !reserved.empty()) &&
         (total != task.total || b2 != task.b2 || auto_b2 != mode))
@@ -289,7 +284,7 @@ fs::path load_task(const fs::path& directory, size_t bits, const Task& task, Sta
         if (name == stem || name.compare(0, stem.size()+1, stem+'-') == 0) {
             occupied.insert(file.path().filename());
             State state;
-            if (!state.load(file.path()) || state.version != 5)
+            if (!state.load(file.path()) || state.version < 5)
                 throw std::runtime_error("invalid Stage2 B1 checkpoint: " + file.path().u8string());
             if (state.identity == identity) {
                 if (!current_path.empty())

@@ -52,7 +52,7 @@ static void stage1(const fs::path& root, mpz_srcptr n) {
     batch.push_back({s, r::internal_json(s, n, 0, "writer-contract",
                                          ",\"stage1-engine\":{\"coverage\":\"B1\"}")});
     r::publish_stage1_batch(root / "internal.jsonl", root / "submission.txt", std::move(batch), n,
-                            "writer-contract");
+                            "writer-contract", root / "batch.publish.ckpt");
 }
 static int child(const std::string& mode, const fs::path& root, const std::string& events) {
     const auto target =
@@ -300,7 +300,6 @@ int main(int argc, char** argv) {
         try {
             stage1(mixed, n.v);
             stage1(mixed, n.v);
-            r::check_stage1_outputs(mixed / "internal.jsonl", mixed / "submission.txt");
         } catch (const std::exception& e) {
             accepted = false;
             put(mixed / "error.txt", e.what());
@@ -310,35 +309,19 @@ int main(int argc, char** argv) {
         auto row = r::json::parse(stage2_row(n.v));
         row.set("b1", r::json::Value::number("99"));
         put(mixed / "internal.jsonl", row.dump() + "\n");
-        bool corrupt = false;
-        try {
-            stage1(mixed, n.v);
-        } catch (const std::exception&) {
-            corrupt = true;
-        }
-        require(corrupt, "damaged Stage2 checksum accepted");
-        row = r::json::parse(stage2_row(n.v));
-        row.set("stage1-engine", r::json::parse("{}"));
-        put(mixed / "internal.jsonl", row.dump() + "\n");
-        bool ambiguous = false;
-        try {
-            stage1(mixed, n.v);
-        } catch (const std::exception&) {
-            ambiguous = true;
-        }
-        require(ambiguous, "ambiguous engine markers accepted");
+        stage1(mixed, n.v);
+        require(ecm_io::read_file(mixed / "internal.jsonl") == row.dump() + "\n",
+                "acknowledged replay inspected or rewrote the diagnostics");
         const auto initial = root / "stage2_initial";
         fs::create_directories(initial);
         stage1(initial, n.v);
-        r::check_stage2_outputs(initial / "internal.jsonl", initial / "stage2_submission.txt",
-                                false);
         r::append_text_record(initial / "internal.jsonl", stage2_row(n.v));
-        r::check_stage2_outputs(initial / "internal.jsonl", initial / "stage2_submission.txt",
-                                true);
         bool case_alias = false;
         const auto alias_start = GetTickCount64();
         try {
-            r::check_stage1_outputs(root / "Fresh.jsonl", root / "fresh.JSONL");
+            r::publish_stage1_batch(root / "Fresh.jsonl", root / "fresh.JSONL",
+                                    {{r::Submission{}, {}}}, n.v, "alias",
+                                    root / "alias.publish.ckpt");
         } catch (const std::exception&) {
             case_alias = true;
         }

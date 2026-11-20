@@ -76,7 +76,7 @@ int main(int argc,char **argv) {
         r.arena=128;r.owner_mb=32;r.log_level=1;r.engine_log_level=3;r.ntt_counts=true;r.relocation=true;
         r.publication={"public output.txt",u8"用户 \"A\"\\",""};
         r.submission_exponent=127;r.submission_known={"101","103"};r.submission_aid="AID";
-        r.factorize_hits=true;r.gp="gp.exe";r.factor_timeout=5;r.factor_only=true;r.publication_task="task";
+        r.factorize_hits=true;r.gp="gp.exe";r.factor_timeout=5;r.factor_only=true;
         int observed=0;
         r.observe_selection=[&](const std::string &line){require(line.find("fixture")!=line.npos,"selection feedback missing");++observed;};
         r.log_max_kb=1;

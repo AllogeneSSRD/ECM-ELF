@@ -187,7 +187,6 @@ CurveProcess::Impl::Impl(CurveProcessRequest value)
         cmd+=L" --lcm "+quote(fs::path(o.stage1_exponent=="choose12"?"12":"1").wstring());
         cmd+=L" --stage2-ratio-adjust "+real(o.ratio_adjust);
     }
-    if(!o.publication_task.empty())cmd+=L" --publication-task "+quote(fs::path(o.publication_task).wstring());
     if(!o.receipt.empty())cmd+=L" --queue-receipt "+quote(fs::path(o.receipt).wstring());
     if(o.debug_log)cmd+=L" --debug-log-file "+quote(fs::path(o.debug_file).wstring());
     // Preserve readable batch statistics in the file even with a concise console.

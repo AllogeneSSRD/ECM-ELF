@@ -8,7 +8,7 @@
 
 内部 GPU/CPU 算术表示在输出前转换为普通整数。没有命中且分母可逆时，保存的是 Montgomery x-only 归一化坐标 X，隐含 Z=1；Edwards 的点也先转换到对应 Montgomery 曲线。消费者由 N、sigma 和曲线方法重建相应常数。
 
-以下对象不属于 save：完整光滑指数、GPU 字典、ladder 中间点、NTT/多项式、剩余任务进度、整批结果账本。文件名或文件存在不证明完成；可写性预检可能留下空文件。
+以下对象不属于 save：完整光滑指数、GPU 字典、ladder 中间点、NTT/多项式、剩余任务进度、待发布批次状态。文件名或文件存在不证明完成；可写性预检可能留下空文件。
 
 | 数学身份 | 输出/执行信息 |
 | --- | --- |
@@ -98,7 +98,7 @@ Montgomery save **不记录 lcm=1/12**，不能从文件内容反推出原 Stage
 
 CPU/GPU PARAM0 与 GPU PARAM2/3 均保存实际计算模数的表达式；缺少表达式时使用该模数的十进制整数。N、X 和 checksum 必须属于同一模数。本批发现新因子不会改写保存的 N。表达式可包含任务输入的已知因子除法；这些因子在算术开始前已从目标剥离。
 
-命中时的 X 是因子，没有点的继续意义。文本没有独立命中标志；消费者需据算术或其他结果判定。Stage1 结果账本是曲线结果的独立依据，见 [ECM 结果输出](../usage/ECM_RESULTS.md)。
+命中时的 X 是因子，没有点的继续意义。文本没有独立命中标志；消费者需据算术或其他结果判定。Stage1 JSONL 可用于查看每条曲线的计算结果，见 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 
 来源：[模数表达式及 Montgomery 写入](../../src/io/save.cpp)、[CUDA 保存调用](../../src/ecm/stage1/montgomery/cuda/workflow.cpp)、[保存字段校验](../../src/io/save.cpp)。
 

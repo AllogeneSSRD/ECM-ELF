@@ -1,5 +1,6 @@
 #include "ecm/platform/gpu_worker.h"
 #include "ecm/group_order/backends.h"
+#include "ecm/io/results.h"
 #include "ecm/io/save.h"
 #include "ecm/platform/log_file.h"
 #include "io/cli.h"
@@ -289,6 +290,14 @@ static bool finish_record(const QueuePaths& paths) {
     if (!completed.checkpoint.empty()) {
         ecm_stage1_checkpoint::Context cleanup;
         cleanup.remove(completed.checkpoint);
+        std::error_code publication_cleanup;
+        std::filesystem::remove(ecm_results::stage1_publication_checkpoint(completed.checkpoint),
+                                publication_cleanup);
+        if (publication_cleanup) {
+            ecm_ts_fprintf(stderr, "FATAL: cannot remove Stage1 publication checkpoint: %s\n",
+                           publication_cleanup.message().c_str());
+            return false;
+        }
     }
     std::error_code ec;
     std::filesystem::remove(receipt, ec);

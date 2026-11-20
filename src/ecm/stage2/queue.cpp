@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
-#include <map>
 #include <sstream>
 #include <string_view>
 #ifndef _WIN32
@@ -117,143 +116,44 @@ std::string checkpoint_nf_key(const Record& r, const std::string& b2) {
         std::to_string(r.b1)+"|"+b2+(r.edwards?"|ed":"|mont0"));
 }
 
-void migrate_queue_outcomes(stage2_queue::State& state, const fs::path& save, uint64_t skip,
-                            const fs::path& results, const fs::path& submission, mpz_srcptr n,
-                            unsigned input_max_bits) {
-    if(!state.pending.empty())
-        state.reserved.push_back({state.done,false,std::move(state.pending),state.pending_results});
-    const uint64_t extent=state.done+state.reserved.size();
-    if(extent) {
-        const auto points=records(save,skip,extent,input_max_bits,EdwardsPreparation::ValidateOnly);
-        if(points.size()!=extent)
-            throw std::runtime_error("legacy Stage2 progress exceeds available save records");
-        const auto receipts=ecm_results::read_legacy_stage2_curves(submission,state.publication_task,n);
-        std::multimap<std::pair<uint64_t,uint64_t>,const ecm_results::LegacyStage2Curve*> by_point;
-        for(const auto& receipt:receipts)
-            by_point.emplace(std::make_pair(receipt.sigma,receipt.b1),&receipt);
-        // An owned result contains the original B2 and reporting geometry.
-        // When no such receipt exists, the old JSONL can disambiguate a
-        // duplicate whose first submission owner was another task.
-        std::map<fs::path,std::vector<ecm_results::json::Value>> logs;
-        for(uint64_t i=0;i<extent;++i) {
-            const auto& point=points[i];
-            const auto* reservation=i<state.done?nullptr:&state.reserved[i-state.done];
-            const bool confirmed=!reservation || reservation->completed;
-            const auto [first,last]=by_point.equal_range({point.sigma,point.b1});
-            const ecm_results::LegacyStage2Curve* match=nullptr;
-            bool ambiguous=false,has_receipt=false;
-            for(auto it=first;it!=last;++it) {
-                const auto* entry=it->second;
-                if(!entry->owned || entry->edwards!=point.edwards ||
-                   (entry->order && entry->order!=point.index))
-                    continue;
-                if(match && match->report!=entry->report)ambiguous=true;
-                match=entry;
-            }
-            if(!match || ambiguous) {
-                const auto log_path=reservation && !reservation->results.empty()?fs::u8path(reservation->results):
-                    state.pending_results.empty()?results:fs::u8path(state.pending_results);
-                auto [log,fresh]=logs.try_emplace(log_path);
-                if(fresh && fs::exists(log_path)) {
-                    std::ifstream stream(log_path,std::ios::binary);
-                    if(!stream)throw std::runtime_error("cannot read legacy Stage2 JSONL");
-                    std::string line;
-                    while(std::getline(stream,line) && !stream.eof()) {
-                        try {log->second.push_back(ecm_results::json::parse(line));}
-                        catch(const std::runtime_error&) {}
-                    }
-                    if(stream.bad())throw std::runtime_error("cannot read legacy Stage2 JSONL");
-                }
-                for(const auto& row:log->second) {
-                    const auto& engine=row.get("stage2-engine");
-                    if(reservation && !reservation->receipt.empty() &&
-                       row.get("queue_receipt").text()!=reservation->receipt)
-                        continue;
-                    if(engine.get("record").text()!=std::to_string(point.index) ||
-                       engine.get("record_hash").text()!=std::to_string(point.hash))
-                        continue;
-                    const auto sigma=point.edwards?row.get("Edwards").get("sigma").text():row.get("sigma").text();
-                    if(row.has("Edwards")!=point.edwards || sigma!=std::to_string(point.sigma) ||
-                       row.get("b1").text()!=std::to_string(point.b1))
-                        continue;
-                    if(reservation && !reservation->receipt.empty())
-                        has_receipt=true;
-                    match=nullptr;
-                    ambiguous=false;
-                    for(auto it=first;it!=last;++it) {
-                        const auto* entry=it->second;
-                        if(entry->edwards!=point.edwards)continue;
-                        const auto public_row=ecm_results::json::parse(entry->report);
-                        if(row.get("status").text()!=public_row.get("status").text() ||
-                           row.get("factors").dump()!=public_row.get("factors").dump() ||
-                           (public_row.get("stage").text()!="1" &&
-                            row.get("b2").text()!=std::to_string(entry->b2)))
-                            continue;
-                        if(match && match->report!=entry->report)ambiguous=true;
-                        match=entry;
-                    }
-                    if(match && !ambiguous)break;
-                }
-            }
-            if(!match && !ambiguous) {
-                // A verified factor can reach the ledger before the old
-                // worker's JSONL append. Preserve it using its curve identity.
-                for(auto it=first;it!=last;++it) {
-                    const auto* entry=it->second;
-                    if(entry->edwards!=point.edwards ||
-                       ecm_results::json::parse(entry->report).get("status").text()!="F")
-                        continue;
-                    if(match && match->report!=entry->report) {
-                        match=nullptr;
-                        break;
-                    }
-                    match=entry;
-                }
-                if(match && !confirmed && match->b2 && match->b2!=state.b2) {
-                    // The old policy did not uniquely identify this attempt.
-                    match=nullptr;
-                }
-            }
-            if(!match && !ambiguous && confirmed) {
-                // An earlier position in this save may already own the same
-                // mathematical receipt. The old worker deduplicated it.
-                for(auto it=first;it!=last;++it) {
-                    const auto* entry=it->second;
-                    if(!entry->owned || entry->edwards!=point.edwards ||
-                       !entry->order || entry->order>=point.index || entry->b2!=state.b2)
-                        continue;
-                    if(match && match->report!=entry->report)ambiguous=true;
-                    match=entry;
-                }
-            }
-            if(ambiguous || (!match && (confirmed || has_receipt)))
-                throw std::runtime_error("cannot verify legacy Stage2 outcome for save record "+
-                    std::to_string(point.index)+"; retain the old checkpoint, ledger and JSONL");
-            if(!match)continue;
-            const bool factor=ecm_results::json::parse(match->report).get("status").text()=="F";
-            if(factor || (match->owned && !match->sealed))
-                state.record_outcome(i,match->report,checkpoint_nf_key(point,std::to_string(match->b2)));
-            if(reservation)state.reserved[i-state.done].completed=true;
-        }
+void publish_outcomes(stage2_queue::State& state, const fs::path& progress, bool final = false) {
+    const auto save = [&] { state.save(progress); };
+    const auto path = fs::u8path(state.submission_path);
+    while (state.published_factors < state.factors.size()) {
+        const auto& factor = state.factors[state.published_factors];
+        const auto key = ecm_results::factor_identity(factor);
+        const bool duplicate = std::any_of(state.factors.begin(),
+            state.factors.begin() + state.published_factors, [&](const auto& previous) {
+                return ecm_results::factor_identity(previous) == key;
+            });
+        const auto acknowledge = [&] {
+            ++state.published_factors;
+            save();
+        };
+        if (duplicate && !state.append.pending)
+            acknowledge();
+        else
+            ecm_results::append_checkpointed(path, factor + '\n', state.append, save,
+                                             acknowledge, state.adopt_v5);
     }
-    state.advance_completed();
-    state.pending.clear();
-    state.pending_results.clear();
-    for(auto& entry:state.reserved) {
-        entry.receipt.clear();
-        entry.results.clear();
+    if (!final || state.nf_keys.empty() || state.nf_published)
+        return;
+    if (state.final_nf.empty()) {
+        state.final_nf = ecm_results::aggregate_nf(state.latest_nf, state.nf_keys.size());
+        save();
     }
-    state.version=5;
+    ecm_results::append_checkpointed(path, state.final_nf + '\n', state.append, save, [&] {
+        state.nf_published = true;
+        save();
+    }, state.adopt_v5);
 }
 
 } // namespace
 
 void CurveQueue::commit(uint64_t position,const std::string &outcome) const {
-    const auto hits=state.factors.size();
     state.complete(state.reserved.at(position-state.done),outcome);
     state.save(progress);
-    if(state.factors.size()>hits)
-        ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),{state.factors.back()});
+    publish_outcomes(state,progress);
 }
 
 std::string checkpoint_outcome(const Record &record,uint64_t b2,const std::string &report) {
@@ -359,6 +259,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
             plan=records(save,skip,count,engine.input_max_bits,engine.edwards_preparation);
+            if(!queue && plan.empty())
+                throw TaskInputError("skip exceeds saved curve count or save contains no curves");
             selected_records=plan.size();
             if(!plan.empty()) {
                 saved_b1=plan.front().b1;
@@ -414,10 +316,10 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
         stage2_queue::State state;
-        const bool persist=queue&&!o.dry&&!o.plan_only;
+        const bool persist=!o.dry&&!o.plan_only;
         fs::path progress;
         QueueFileLock progress_lock;
-        if(persist) {
+        if(persist && queue) {
             stage2_queue::Task task;
             task.aid=fields.task.aid;task.n=expected_n;
             task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=selected_records;
@@ -430,13 +332,12 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             QueueFileLock name_lock;
             auto name_lockpath=task.path(progress_dir,bits);name_lockpath+=".name.lock";
             if(!name_lock.open(name_lockpath))throw std::runtime_error("another process is allocating this Stage2 checkpoint name");
-            const auto legacy_bounds=[&] {return ecm_results::legacy_stage2_bounds(fs::u8path(o.submission));};
             const auto match_legacy=[&](const std::string &line) {
                 const auto old=queue_fields(line,engine.input_max_bits);Big n;std::string error;
                 return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
             };
-            auto source=stage2_queue::load_task(progress_dir,bits,task,state,legacy_bounds,&progress);
-            if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state,legacy_bounds))
+            auto source=stage2_queue::load_task(progress_dir,bits,task,state,{},&progress);
+            if(source.empty() && stage2_queue::import_legacy(legacy_progress,task,match_legacy,state))
                 source=legacy_progress;
             const bool skips_records=selected_records!=plan.size();
             if(!source.empty() && skips_records) {
@@ -463,7 +364,7 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 throw std::runtime_error("another process owns this Stage2 task checkpoint");
             if(source==progress && fs::exists(legacy_progress)) {
                 stage2_queue::State previous;
-                if(stage2_queue::import_legacy(legacy_progress,task,match_legacy,previous,legacy_bounds) &&
+                if(stage2_queue::import_legacy(legacy_progress,task,match_legacy,previous) &&
                    previous.run==state.run && previous.publication_task==state.publication_task)source=legacy_progress;
             }
             QueueFileLock legacy_lock;
@@ -473,24 +374,24 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                     throw std::runtime_error("another process owns this legacy Stage2 checkpoint");
                 if(state.version<5) {
                     const auto previous_run=state.run;
-                    if(!stage2_queue::import_legacy(source,task,match_legacy,state,legacy_bounds) ||
+                    if(!stage2_queue::import_legacy(source,task,match_legacy,state) ||
                        previous_run!=state.run)
                         throw std::runtime_error("legacy Stage2 checkpoint changed during discovery");
                 }
             }
             const auto previous_total=state.total,previous_b2=state.b2;
             const auto previous_auto=state.auto_b2;
-            state.submission_path=ecm_io::file_identity(fs::u8path(o.submission));
-            if(state.version<5)
-                migrate_queue_outcomes(state,save,skip,results,fs::u8path(o.submission),target.z,engine.input_max_bits);
+            if(state.version<5 && (state.done || !state.pending.empty() || !state.reserved.empty()))
+                throw std::runtime_error("Stage2 checkpoint predates self-contained outcomes; finish it with the version that created it");
+            if(state.version<6) {
+                state.adopt_v5=state.version==5;
+                state.version=6;
+            }
             while(!state.reserved.empty() && !state.reserved.back().completed)
                 state.reserved.pop_back();
             // Commit migration before applying policy changes or retiring old receipts.
             if(!source.empty() && source!=progress) {
                 state.save(progress);
-                if(!state.nf_keys.empty())
-                    ecm_results::retire_legacy_stage2_curves(fs::u8path(o.submission),state.publication_task,
-                        [&](const std::string& key){return state.nf_keys.count(ecm_stage2::sha256_text(key))!=0;});
                 auto archive=source;archive+=".migrated";
 #ifdef _WIN32
                 if(!MoveFileExW(source.c_str(),archive.c_str(),MOVEFILE_WRITE_THROUGH))
@@ -505,9 +406,6 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(state.done>plan.size() &&
                records(save,skip,state.done,engine.input_max_bits,EdwardsPreparation::ValidateOnly).size()!=state.done)
                 throw std::runtime_error("Stage2 completed progress exceeds the available save records");
-            state.save(progress);
-            ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),state.factors,
-                {},0,nullptr,{},state.run,!source.empty());
             if(!source.empty() && (previous_total!=task.total || previous_b2!=task.b2 || previous_auto!=task.auto_b2))
                 report("stage2_resume_override: previous_total="+std::to_string(previous_total)+" requested="+std::to_string(task.total)+
                     " completed="+std::to_string(state.done)+" effective_total="+std::to_string(state.total)+
@@ -516,13 +414,49 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(state.done>plan.size())report("WARNING: requested="+std::to_string(plan.size())+
                 " is below already completed="+std::to_string(state.done)+
                 "; no further curves will run; sealing all completed curves (factor hits reported separately).",true);
+        } else if(persist) {
+            stage2_queue::Task task;
+            task.aid=o.submission_aid;
+            task.skip=skip;
+            task.total=plan.size();
+            task.b2=b2;
+            task.auto_b2=o.auto_b2&&!b2;
+            auto identity=ecm_stage2::sha256_file(save)+"|"+std::to_string(selected_records)+"|"+
+                std::to_string(b2)+"|"+std::to_string(task.auto_b2)+"|"+
+                ecm_io::file_identity(fs::u8path(o.submission))+"|"+std::to_string(o.submission_exponent);
+            for(const auto &known:o.submission_known)identity+="|"+known;
+            task.save_sha256=ecm_stage2::sha256_text(identity);
+            progress=progress_dir/(".ecm_ckpt_stage2_direct_"+task.id()+".dat");
+            for(const auto &path:writable)if(same_path(progress,path))
+                throw std::runtime_error("direct Stage2 checkpoint conflicts with output state");
+            if(same_path(progress,save)||same_path(progress,ini)||same_path(progress,executable())||
+               (!o.tune_profile.empty()&&same_path(progress,fs::path(o.tune_profile))))
+                throw std::runtime_error("direct Stage2 checkpoint conflicts with input");
+            fs::create_directories(progress_dir);
+            auto lockpath=progress;lockpath+=".lock";
+            if(!progress_lock.open(lockpath))
+                throw std::runtime_error("another process owns this direct Stage2 checkpoint");
+            state.load(progress);
+            state.reconfigure(task);
+        }
+        if(persist) {
+            const auto submission=ecm_io::file_identity(fs::u8path(o.submission));
+            if(!state.submission_path.empty() && state.submission_path!=submission)
+                throw std::runtime_error("Stage2 checkpoint belongs to a different submission path");
+            state.submission_path=submission;
+            state.save(progress);
+            publish_outcomes(state,progress,!state.final_nf.empty());
+            if(state.adopt_v5) {
+                state.adopt_v5=false;
+                state.save(progress);
+            }
         }
         if(!began) {
             if(engine.begin)engine.begin();
             began=true;
         }
         if(engine.prepare && state.done<plan.size())engine.prepare(o,plan[state.done]);
-        const auto curve_results = persist && !explicit_results ? fs::path{} : results;
+        const auto curve_results = queue && persist && !explicit_results ? fs::path{} : results;
         if(stage2_log::enabled(stage2_log::curve)||o.gui_events||o.dry) {
             if(o.gui_events && !task_line.empty())std::cout<<"START: "<<task_line<<std::endl;
             std::ostringstream message;
@@ -533,7 +467,6 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(persist)message<<" checkpoint="<<progress.string();
             report(message.str());
         }
-        o.publication_task=persist?state.publication_task:std::to_string(ecm_io::fingerprint(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
         bool task_completed=true;
         if(!o.dry && !o.plan_only) {
             const QueueReport queue_report=report;
@@ -553,17 +486,10 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                 engine.plan(o,r,b2,d);
             }
         }
-        if(task_completed && !o.dry && !o.plan_only && !o.tune_child) {
-            if(persist) {
-                if(!state.nf_keys.empty())
-                    ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),{},
-                        state.latest_nf,state.nf_keys.size(),&state.final_nf,[&]{state.save(progress);},
-                        state.run,!state.final_nf.empty());
-            } else {
-                ecm_results::check_stage2_outputs(results,fs::u8path(o.submission),persist && state.done>0);
-                ecm_results::seal_submissions(fs::u8path(o.submission),2,o.publication_task,true);
-            }
-        }
+        if(!queue && o.dry && task_completed)
+            report("validated "+std::to_string(plan.size())+" curves; B2="+std::to_string(b2));
+        if(task_completed && persist && state.done==state.total)
+            publish_outcomes(state,progress,true);
         if(!queue||o.dry||o.plan_only)break;
         if(state.done<state.total)break;
         std::string current;
@@ -592,6 +518,6 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
     if(stage2_log::enabled(stage2_log::curve)||startup.dry)
         report(std::string(startup.plan_only?"plan_complete":startup.dry?"dry_run_complete":stop_requests?"stage2_stopped":"stage2_complete")+
                ": curves_this_run="+std::to_string(completed)+" invalid_tasks="+std::to_string(failed_tasks));
-    return failed_tasks?1:0;
+    return failed_tasks?1:!queue&&stop_requests?130:0;
 }
 }

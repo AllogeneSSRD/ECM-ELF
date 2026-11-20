@@ -79,6 +79,6 @@ public:
     bool write_blob(const std::string& path, const std::string& bytes);
     bool import_payload(const std::string& bytes, uint64_t first_sigma);
     bool import_payload(const std::string& bytes, const std::vector<uint64_t>& sigmas);
-    void close(bool completed);
+    void close(bool completed, const std::function<void()>& after_cleanup = {});
 };
 } // namespace ecm_stage1_checkpoint

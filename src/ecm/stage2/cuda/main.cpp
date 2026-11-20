@@ -111,7 +111,6 @@ Options arguments(int argc, char **argv) {
         else if (a == "--debug-log-file") { o.debug_file=value(); o.debug_log=true; }
         else if (a == "--queue-receipt") o.receipt=value();
         else if (a == "--checkpoint-outcome") o.checkpoint_outcome=true;
-        else if (a == "--publication-task") o.publication_task=value();
         else if (a == "--stage2-stop-handle") o.stop_handle=num();
         else if (a == "--stage2-dispatch-row") o.dispatch_row=num();
         else if (a == "--gui-events") o.gui_events=true;

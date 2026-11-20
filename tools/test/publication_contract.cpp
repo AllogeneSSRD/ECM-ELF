@@ -41,7 +41,9 @@ int main(int argc, char** argv) {
         const auto internal = dir / "internal.jsonl", submission = dir / "results.txt";
         ecm_edwards::Integer n;
         mpz_set_ui(n.v, 536870911);
-        r::publish_stage1_batch(internal, submission, batch(n.v, 100, 1), n.v, "first");
+        r::publish_stage1_batch(internal, submission, batch(n.v, 100, 1), n.v, "first",
+                                dir / "first.publish.ckpt");
+        const auto checkpoint = dir / "next.publish.ckpt";
         const auto before = ecm_io::read_file(internal);
         const auto before_public = ecm_io::read_file(submission);
         const int fault = mode == "flush-failure" ? 1 : mode == "rename-failure" ? 2
@@ -49,7 +51,7 @@ int main(int argc, char** argv) {
         publication_observe(internal, fault);
         bool failed = false, uncertain = false;
         try {
-            r::publish_stage1_batch(internal, submission, batch(n.v, 200, 2), n.v, "next");
+            r::publish_stage1_batch(internal, submission, batch(n.v, 200, 2), n.v, "next", checkpoint);
         } catch (const ecm_io::PublicationUncertain&) {
             failed = uncertain = true;
         } catch (const std::exception&) {
@@ -68,7 +70,7 @@ int main(int argc, char** argv) {
                     "visible replacement lost uncertain acknowledgement");
         }
         publication_observe(internal, 0);
-        r::publish_stage1_batch(internal, submission, batch(n.v, 200, 2), n.v, "next");
+        r::publish_stage1_batch(internal, submission, batch(n.v, 200, 2), n.v, "next", checkpoint);
         const auto final = ecm_io::read_file(internal);
         require(std::count(final.begin(), final.end(), '\n') == 3, "retry lost or duplicated curves");
         std::cout << "publication_contract: mode=" << mode << " passed=1\n";

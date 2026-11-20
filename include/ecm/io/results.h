@@ -1,4 +1,5 @@
 #pragma once
+#include "ecm/io/publication.h"
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -20,10 +21,7 @@ struct Submission {
     uint32_t b = 2;
     int32_t c = -1;
     std::vector<std::string> factors, known;
-    std::string user, computer, aid, when, publication_task;
-    uint64_t publication_order =
-        0;                 // Position in the selected Stage2 task; not part of the public JSON.
-    std::string save_name; // Private Stage2 receipt namespace, derived from the save filename.
+    std::string user, computer, aid, when;
 };
 
 struct Stage1BatchRecord {
@@ -38,43 +36,15 @@ uint64_t target_exponent(const Submission&, mpz_srcptr);
 std::string submission_json(const Submission&, mpz_srcptr);
 std::string internal_json(Submission, mpz_srcptr, uint64_t, const std::string&,
                           const std::string& extra_fields = {});
-void check_stage1_outputs(const std::filesystem::path&, const std::filesystem::path&);
-void check_stage2_outputs(const std::filesystem::path&, const std::filesystem::path&,
-                          bool resumed = false);
-void publish_stage2_checkpoint(const std::filesystem::path&, const std::vector<std::string>& factors,
-                              const std::string& latest_nf = {}, uint64_t count = 0,
-                              std::string* final_nf = nullptr,
-                              const std::function<void()>& save_checkpoint = {},
-                              const std::string& task = {}, bool resumed = false);
-std::vector<uint64_t> legacy_stage2_bounds(const std::filesystem::path&);
-struct LegacyStage2Curve {
-    uint64_t order, sigma, b1, b2;
-    bool edwards, owned, sealed;
-    std::string report;
-};
-std::vector<LegacyStage2Curve> read_legacy_stage2_curves(const std::filesystem::path&,
-                                                       const std::string& task, mpz_srcptr);
-void retire_legacy_stage2_curves(const std::filesystem::path&, const std::string& task,
-                                 const std::function<bool(const std::string&)>& migrated_nf_key);
+std::string aggregate_nf(const std::string&, uint64_t count);
+std::string factor_identity(const std::string&);
+std::filesystem::path stage1_publication_checkpoint(const std::filesystem::path&);
+void discard_completed_stage1_publication(const std::filesystem::path&);
 void publish_stage1_batch(const std::filesystem::path&, const std::filesystem::path&,
-                          std::vector<Stage1BatchRecord>, mpz_srcptr, const std::string&);
-bool has_result_ledger(const std::filesystem::path&);
-std::filesystem::path submission_ledger(const std::filesystem::path&);
-std::filesystem::path legacy_submission_ledger(const std::filesystem::path&);
-std::filesystem::path submission_publish_state(const std::filesystem::path&);
+                          std::vector<Stage1BatchRecord>, mpz_srcptr, const std::string&,
+                          const std::filesystem::path& checkpoint, bool early = false);
 bool contains_stage1_curves(const std::filesystem::path&, mpz_srcptr, uint64_t, bool, unsigned,
                             const std::vector<uint64_t>&);
-void publish_submission(const std::filesystem::path&, const Submission&, mpz_srcptr,
-                        bool render_now = false);
-void seal_submissions(const std::filesystem::path&, int stage_filter = 0,
-                      const std::string& task = {}, bool whole_task = false);
-void publish_internal_batch(const std::filesystem::path&,
-                            const std::vector<std::pair<std::string, std::string>>&,
-                            bool render_now = true);
-void publish_internal(const std::filesystem::path&, const std::string&, const std::string&,
-                      bool render_now = true);
-void refresh_internal(const std::filesystem::path&);
 // Append one opaque CPU Stage2 result, retaining the previous text de-duplication contract.
 void append_text_record(const std::filesystem::path&, const std::string&);
-void refresh_submission_if_owned(const std::filesystem::path&);
 } // namespace ecm_results

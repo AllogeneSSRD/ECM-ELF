@@ -159,7 +159,7 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 第一次 Ctrl+C 停止启动后续曲线，已运行的曲线可以提交结果后退出。第二次会终止子进程树，尚未写入 ckpt 的曲线下次重算。最终提交完成后才写 finished、移除队列行并清理 ckpt。
 
-恢复旧任务时自动迁移到 schema 5 和 B1 文件名。首次启动时保留旧 JSONL 与提交账本，日志出现 `stage2_resume_import` 后可移走该任务的旧档。共享账本应保留到其余依赖它的任务完成迁移。旧文件发现、归档和新格式的发布顺序见 [Stage2 队列进度格式](../architecture/CHECKPOINT.md#7-stage2-队列进度格式)。
+Stage2 schema 6 ckpt 保存进度、待发布结果和发布确认。直接 `--save` 也使用该恢复流程，并保留完成 ckpt。旧档升级条件见 [Checkpoint](../architecture/CHECKPOINT.md#74-旧档的一次性迁移)。
 
 
 ## TOML 与路径
@@ -238,6 +238,6 @@ Stage2 与 Stage1 共用 `[shared]` 的 `worktodo_file`、`finished_file` 和 `l
 `--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`tune_legacy_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
 - [存档与队列字段](../../src/ecm/stage2/input.cpp) 由 `records` 和 `queue_fields` 读取；[共享队列驱动](../../src/ecm/stage2/queue.cpp) 负责恢复和发布。
-- [Stage2 进度接口](../../include/ecm/io/stage2_checkpoint.h)与[存储实现](../../src/io/stage2_checkpoint.cpp)：原子进度、结果持久化和旧回执兼容。
+- [Stage2 进度接口](../../include/ecm/io/stage2_checkpoint.h)与[存储实现](../../src/io/stage2_checkpoint.cpp)：原子进度与发布状态。
 - [ecm_stage2_console.h](../../src/ecm/stage2/console.h)：阶段和内存摘要。
 - [Stage2 管线](../architecture/STAGE2.md)、[Auto B2](../architecture/AUTO_B2.md)、[构建](BUILD.md)。

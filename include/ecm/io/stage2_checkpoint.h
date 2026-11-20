@@ -1,4 +1,5 @@
 #pragma once
+#include "ecm/io/publication.h"
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
@@ -20,7 +21,7 @@ struct Reservation {
 struct State {
     std::string identity, run, pending, pending_results;
     uint64_t done = 0, total = 0;
-    unsigned version = 5;
+    unsigned version = 6;
     std::string publication_task;
     uint64_t b2 = 0;
     bool auto_b2 = false;
@@ -29,6 +30,9 @@ struct State {
     uint64_t latest_nf_position = 0;
     std::set<std::string> nf_keys;
     std::vector<std::string> factors;
+    uint64_t published_factors = 0;
+    bool nf_published = false, adopt_v5 = false;
+    ecm_results::AppendCheckpoint append;
     bool load(const fs::path& path);
     void save(const fs::path& path) const;
     void reconfigure(const Task& task);

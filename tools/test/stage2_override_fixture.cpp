@@ -3,6 +3,7 @@
 #include "ecm/io/stage2_checkpoint.h"
 #include "ecm/platform/fingerprint.h"
 #include "ecm/io/save.h"
+#include "io/json.h"
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -17,27 +18,32 @@ int main(int argc,char **argv) {
         const std::string schema=argv[3];const uint64_t done=std::stoull(argv[4]),total=std::stoull(argv[5]),b2=std::stoull(argv[6]);
         ecm_edwards::Integer n;mpz_ui_pow_ui(n.v,2,521);mpz_sub_ui(n.v,n.v,1);
         stage2_queue::Task task;task.n=ecm_edwards::hex(n.v);task.save_sha256=ecm_stage2::sha256_file(save);task.total=total;task.b2=b2;
+        task.b1=1000;
         const auto publisher=schema=="v1" || schema=="v2"?task.legacy_id():task.id();
         std::ifstream in(save);std::ofstream internal(out/"stage2_results.jsonl",std::ios::binary);std::string line;
         const bool pending=schema=="pending" || schema=="unconfirmed" || schema=="torn_internal";
         const auto receipt=std::string(32,'e');
-        const auto count=schema=="v5"?0:done+(schema=="v4"?2:schema=="pending" || schema=="torn_internal");
+        const auto count=done+(schema=="v4"?2:schema=="pending");
+        stage2_queue::State current;current.version=5;current.reconfigure(task);
+        current.submission_path=(out/"results.json.txt").u8string();
         for(uint64_t i=0;i<count;++i) {
             if(!std::getline(in,line))throw std::runtime_error("insufficient save rows");
             if(schema=="v4" && i==done)continue;
             const auto at=line.find("SIGMA=");if(at==line.npos)throw std::runtime_error("missing sigma");
             ecm_results::Submission r;r.exponent=521;r.b1=1000;r.b2=b2;r.sigma=std::stoull(line.substr(at+6));
-            r.publication_task=publisher;r.publication_order=i+1;r.save_name=save.stem().u8string();
             r.when=ecm_results::utc_timestamp();
-            ecm_results::publish_submission(out/"results.json.txt",r,n.v,false);
-            if(schema=="torn_internal" && i==done)continue;
+            const auto report=ecm_results::json::parse(ecm_results::submission_json(r,n.v)).dump();
+            current.record_outcome(i,report,ecm_stage2::sha256_text(task.n+"|"+std::to_string(r.sigma)+"|1000|"+std::to_string(b2)+"|ed"));
             internal<<ecm_results::internal_json(r,n.v,0,"checkpoint-override-fixture",
                 ",\"queue_receipt\":"+ecm_results::quoted(i==done?receipt:"seed-"+std::to_string(i))+
                 ",\"stage2-engine\":{\"seeded_resume_fixture\":true}");
         }
         internal.close();if(!internal)throw std::runtime_error("cannot write seeded internal results");
-        if(schema=="sealed")
-            ecm_results::seal_submissions(out/"results.json.txt",2,publisher,true);
+        if(schema=="sealed") {
+            current.final_nf=ecm_results::aggregate_nf(current.latest_nf,current.nf_keys.size());
+            std::ofstream exported(out/"results.json.txt",std::ios::binary);
+            exported<<current.final_nf<<'\n';
+        }
         const auto progress_dir=out/"progress";fs::create_directories(progress_dir);
         fs::path checkpoint;
         if(schema=="v1") {
@@ -56,11 +62,12 @@ int main(int argc,char **argv) {
             if(pending){state.pending=receipt;state.pending_results=(out/"stage2_results.jsonl").string();}
             if(schema=="v4")state.reserved={{done,false,receipt,(out/"stage2_results.jsonl").u8string()},
                 {done+1,true,"second",(out/"stage2_results.jsonl").u8string()}};
-            if(schema=="v5") {
-                state.version=5;
-                state.done=0;
-            }
-            checkpoint=task.legacy_path(progress_dir,521);state.save(checkpoint);
+            checkpoint=task.legacy_path(progress_dir,521);
+            if(schema=="v5" || schema=="sealed") {
+                current.done=done;
+                if(schema=="sealed")current.total=done;
+                current.save(checkpoint);
+            } else state.save(checkpoint);
         }
         std::cout<<"{\"publication_task\":"<<ecm_results::quoted(publisher)<<",\"checkpoint\":"<<ecm_results::quoted(checkpoint.u8string())<<"}\n";
         return 0;

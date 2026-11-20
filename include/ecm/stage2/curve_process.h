@@ -41,7 +41,6 @@ struct CurveProcessRequest {
     bool pack_zero=0;
     bool weighted_ntt=false;
     std::string prediction_policy{};
-    std::string publication_task{};
     double ratio_adjust=0;
     std::string receipt{};
     bool relocation=0;

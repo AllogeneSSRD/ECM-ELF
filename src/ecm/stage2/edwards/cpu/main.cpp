@@ -58,10 +58,9 @@ struct Options {
     uint64_t tune_min_repeats=2,tune_sample_limit=10;
     int log_level=-1;
     bool gui=false,once=false,explicit_results=false;
-    bool dry=false,export_only=false,gw_selftest=false,gw_check=false;uint64_t d=0;uintptr_t stop_handle=0;int worker=1;
+    bool dry=false,gw_selftest=false,gw_check=false;uint64_t d=0;uintptr_t stop_handle=0;int worker=1;
 };
-void check_tune_path(const Options &o,std::initializer_list<fs::path> resources,
-                     std::initializer_list<fs::path> results={}) {
+void check_tune_path(const Options &o,std::initializer_list<fs::path> resources) {
     if(o.tune_profile.empty())return;
     const auto canonical=[](const fs::path &path) {
         std::error_code error;
@@ -83,19 +82,6 @@ void check_tune_path(const Options &o,std::initializer_list<fs::path> resources,
             if(fs::equivalent(file,path,error) || equal(writer,resource) ||
                equal(writer,resource+".publish.lock") || equal(writer,resource+".edit.lock") ||
                equal(writer,resource+".lock") || equal(writer,resource+".publish.tmp"))conflict();
-        }
-    }
-    for(const auto &path:results) {
-        if(path.empty())continue;
-        const auto ledger=canonical(ecm_results::submission_ledger(path)).u8string();
-        const auto legacy=canonical(ecm_results::legacy_submission_ledger(path)).u8string();
-        const auto publication=canonical(ecm_results::submission_publish_state(path)).u8string();
-        for(auto dir=fs::u8path(profile);;) {
-            if(equal(dir.u8string(),ledger) || equal(dir.u8string(),legacy) ||
-               equal(dir.u8string(),publication))conflict();
-            auto parent=dir.parent_path();
-            if(parent.empty() || parent==dir)break;
-            dir=std::move(parent);
         }
     }
 }
@@ -132,7 +118,6 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
                 "[--threads 1] [--b2-round-chain 0|1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
                 "[--tune-runtime 0|1] [--tune-profile FILE] [--tune-min-repeats N] [--tune-runtime-samples N]\n"
-                "--export-results --submission FILE regenerates owned submission output without arithmetic\n"
                 "[--exponent P] [--known-factor DECIMAL (repeatable)] [--user NAME] [--computer NAME] [--aid HEX32]\n"
                 "B2 limit: libecm=1000000000000, gwpoly=1000000000000000\n";
             std::cout<<"--version shows loaded GW build and CPU; auto selects available gwpoly or libecm\n";
@@ -142,7 +127,6 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         if(key=="--gui-events"){o.gui=true;continue;}
         if(key=="--once"){o.once=true;continue;}
         if(key=="--dry-run"){o.dry=true;continue;}
-        if(key=="--export-results"){o.export_only=true;continue;}
         if(key=="--selftest-gwpoly"){o.gw_selftest=true;continue;}
         if(key=="--gw-check"){o.gw_check=true;continue;}
         if(++i>=argc)throw std::runtime_error("missing value for "+key);std::string value=argv[i];
@@ -179,10 +163,10 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     if ((o.backend=="gwpoly" || o.gw_selftest) && ecm_gwpoly::load_error())
         throw std::runtime_error(ecm_gwpoly::load_error());
     if(o.backend=="gwpoly" || (o.backend=="auto" && !ecm_gwpoly::load_error()))max_b2=ecm_gwpoly::max_b2;
-    if((!o.export_only && !o.gw_selftest && (!o.save.empty() && !o.b2)) || o.b2>max_b2 || !o.count || !o.threads || o.threads>1024 || !o.memory || o.memory>1048576 ||
+    if((!o.gw_selftest && (!o.save.empty() && !o.b2)) || o.b2>max_b2 || !o.count || !o.threads || o.threads>1024 || !o.memory || o.memory>1048576 ||
        (o.backend!="auto" && o.backend!="ntt" && o.backend!="plain" && o.backend!="gwpoly"))throw std::runtime_error("invalid options; see --help");
     if(o.round_b2 && (o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::stage2_abi()<4)){
-        if(explicit_rounding && !o.export_only && !o.gw_selftest)
+        if(explicit_rounding && !o.gw_selftest)
             throw std::runtime_error("CPU B2 rounding requires gwpoly with Stage2 ABI 4");
         o.round_b2=false;
     }
@@ -191,7 +175,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         throw std::runtime_error("tune repeats and sample limit must be in 1..1000, with repeats <= limit");
     if(!o.aid.empty() && (o.aid.size()!=32 || o.aid.find_first_not_of("0123456789abcdefABCDEF")!=o.aid.npos))throw std::runtime_error("AID must contain 32 hex digits");
     if(o.exponent>1000000000 || (!o.known.empty() && !o.exponent))throw std::runtime_error("known factors require --exponent (max 1000000000)");
-    if(!o.save.empty() && !o.export_only && !o.gw_selftest && std::filesystem::absolute(o.save).lexically_normal()==std::filesystem::absolute(o.results).lexically_normal())throw std::runtime_error("results must not overwrite save");
+    if(!o.save.empty() && !o.gw_selftest && std::filesystem::absolute(o.save).lexically_normal()==std::filesystem::absolute(o.results).lexically_normal())throw std::runtime_error("results must not overwrite save");
     std::error_code error;
     if(!o.save.empty() && std::filesystem::equivalent(o.save,o.results,error))throw std::runtime_error("results alias the input save");
     if(o.submission.empty())throw std::runtime_error("empty submission path");
@@ -200,12 +184,11 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     if(!o.save.empty() && !o.worktodo.empty())throw std::runtime_error("--worktodo conflicts with --save");
     if(o.save.empty() && (o.skip || o.count!=UINT64_MAX || o.exponent || !o.known.empty() || !o.aid.empty()))
         throw std::runtime_error("queue curve selection and target identity come from worktodo");
-    if(o.d || o.dry || o.gw_check || o.export_only || o.gw_selftest ||
+    if(o.d || o.dry || o.gw_check || o.gw_selftest ||
        o.backend=="ntt" || o.backend=="plain" || ecm_gwpoly::load_error())o.tune_profile.clear();
     if(o.log_level<0)o.log_level=settings.log_level>=0?settings.log_level:stage2_log::phases;
     check_tune_path(o,{fs::u8path(o.ini),fs::u8path(o.save),fs::u8path(o.results),
-                      fs::u8path(o.submission),fs::u8path(o.log),s2prod::executable()},
-                    {fs::u8path(o.results),fs::u8path(o.submission)});
+                      fs::u8path(o.submission),fs::u8path(o.log),s2prod::executable()});
     return o;
 }
 void validate_target(const Options &o,const SavedCurve &r) {
@@ -337,7 +320,7 @@ void persist_tune(const Options &o,const std::optional<TuneObservation> &pending
     }
 }
 bool calculate(const Options &o,const SavedCurve &r,bool queued,
-               const std::string &publication_task,uint64_t order,ecm_results::Submission &report,
+               ecm_results::Submission &report,
                std::string &json,double &elapsed,TunePlans &tune,std::optional<TuneObservation> &pending,
                const s2prod::QueueReport &log) {
     const auto cancel=queued?abort_queue_curve:stopped;
@@ -470,18 +453,20 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
     elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
     json=result(selected,r,n.v,f.v,stage,elapsed,details,o.b2);
     report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=selected.b2;
-    report.publication_task=publication_task;report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
-    report.publication_order=order;
-    report.save_name=std::filesystem::path(o.save).stem().u8string();
+    report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
     report.d=details.d;report.poly_size=details.poly_size;report.stage2_fft_length=details.fft_length;
     if(stage)report.factors.push_back(number(f.v));
     return true;
 }
 
-int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines) {
+int run_tasks(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines) {
     s2prod::Options o;
+    const bool queued=cpu.save.empty();
     o.worker=cpu.worker;o.worktodo=cpu.worktodo;o.b2=cpu.b2;o.d=cpu.d;
-    o.results=cpu.explicit_results?cpu.results:"";o.submission=cpu.submission;o.log=cpu.log;
+    o.save=cpu.save;o.skip=cpu.skip;o.curves=cpu.count==UINT64_MAX?0:cpu.count;
+    o.results=cpu.explicit_results||!queued?cpu.results:"";o.submission=cpu.submission;o.log=cpu.log;
+    o.tune_profile=cpu.tune_profile.u8string();
+    o.submission_exponent=cpu.exponent;o.submission_known=cpu.known;o.submission_aid=cpu.aid;
     o.dry=cpu.dry;o.once=cpu.once;o.gui_events=cpu.gui;o.parallel=s2prod::ParallelMode::serial;
     o.dispatch_row=cpu.dispatch_row;
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,cpu.worker,true));
@@ -492,12 +477,11 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
     const bool shared=ecm_config::toml_document_version(lines)>=3;
     const auto paths=s2prod::task_paths(o,s2prod::fs::current_path(),cpu.ini,settings,cfg,shared);
     check_tune_path(cpu,{paths.worktodo,paths.finished,paths.results,paths.log,paths.legacy_progress,
-                        fs::path(paths.worktodo.string()+".worker"+std::to_string(cpu.worker)+".stage2.lock")},
-                    {paths.results,fs::u8path(cpu.submission)});
+                        fs::path(paths.worktodo.string()+".worker"+std::to_string(cpu.worker)+".stage2.lock")});
     TunePlans tune;
     if(cpu.stop_handle && !s2prod::set_inherited_stop(cpu.stop_handle))
         throw std::runtime_error("invalid inherited Stage2 stop event");
-    if(stage2_log::enabled(stage2_log::curve))std::cout<<"CPU Edwards Stage2 backend="<<cpu.backend<<" threads="<<cpu.threads
+    if(!queued || stage2_log::enabled(stage2_log::curve))std::cout<<"CPU Edwards Stage2 backend="<<cpu.backend<<" threads="<<cpu.threads
              <<" memory_mib="<<cpu.memory<<" libecm="<<ecm_version()<<std::endl;
     s2prod::TaskEngine engine;
     engine.name="CPU Stage2";
@@ -508,9 +492,10 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
         const bool gw=cpu.backend=="gwpoly" || (cpu.backend=="auto" && !ecm_gwpoly::load_error());
         if(b2>(gw?ecm_gwpoly::max_b2:1000000000000ull))
             throw std::runtime_error("requested B2 exceeds the CPU backend limit");
+        if(!queued)validate_target(cpu,{r.n,r.x,r.sigma,r.b1,r.index,r.factor});
     };
     engine.run=[&](const s2prod::CurveQueue &queue,s2prod::Options &task,uint64_t b2,uint64_t) {
-        check_tune_path(cpu,{queue.save,queue.progress,queue.results,queue.log},{queue.results});
+        check_tune_path(cpu,{queue.save,queue.progress,queue.results,queue.log});
         auto selected=cpu;
         selected.save=queue.save.string();selected.b2=b2;selected.exponent=task.submission_exponent;
         selected.known=task.submission_known;selected.aid=task.submission_aid;
@@ -534,13 +519,19 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
             SavedCurve row{record.n,record.x,record.sigma,record.b1,record.index,record.factor};
             std::string json;ecm_results::Submission report;double elapsed=0;
             std::optional<TuneObservation> pending;
-            if(!calculate(selected,row,true,state.publication_task,record.index,report,json,elapsed,tune,pending,queue.report))return false;
+            if(!calculate(selected,row,queued,report,json,elapsed,tune,pending,queue.report))return false;
             const auto outcome=s2prod::checkpoint_outcome(record,report.b2,ecm_results::submission_json(report,n.v));
             if(state.reserved.empty())state.reserved.push_back({position});
             queue.commit(position,outcome);
             ++queue.completed;
-            if(!queue.results.empty())ecm_results::append_text_record(queue.results,json);
+            if(!queue.results.empty())try {
+                ecm_results::append_text_record(queue.results,json);
+            } catch(const std::exception &e) {
+                queue.report("WARNING: optional CPU Stage2 JSONL write failed: "+std::string(e.what()),true);
+            }
             persist_tune(selected,pending);
+            if(!queued)std::cout<<"completed save-line="<<row.line<<" sigma="<<row.sigma
+                <<" status="<<(report.stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
             if(events)queue.report("stage2_result:"+identity+" B1="+std::to_string(record.b1)+" curve_model=ed seconds="+
                 std::to_string(elapsed)+" "+json,false);
             if(events)queue.report("curve_done: "+ordinal+identity+" completed="+std::to_string(state.done)+
@@ -548,7 +539,7 @@ int run_queue(const Options &cpu,const std::vector<ecm_config::TomlLine> &lines)
         }
         return true;
     };
-    return s2prod::run_task_queue(engine,o,paths,{cfg.b2_ratio,cfg.worktodo_priority,cfg.worktodo_skip,cfg.finished,shared},
+    return s2prod::run_task_queue(engine,o,paths,{queued?cfg.b2_ratio:0,cfg.worktodo_priority,cfg.worktodo_skip,cfg.finished,shared},
                                   {settings.b2,0,0});
 }
 }
@@ -574,7 +565,7 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
         auto o=options(argc,argv,*launch);
         stage2_log::level=o.log_level;
         if((o.backend=="gwpoly" || o.backend=="auto") && !ecm_gwpoly::load_error() && !o.dry &&
-           !o.export_only && !o.gw_selftest) {
+           !o.gw_selftest) {
             const auto abi=ecm_gwpoly::stage2_abi();
             if(abi<4 && !o.tune_profile.empty())
                 std::cerr<<"gwpoly-tune: gwnum.dll Stage2 ABI "<<abi
@@ -583,50 +574,11 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
                 std::cerr<<"gwpoly-progress: gwnum.dll Stage2 ABI "<<abi
                          <<" cannot stream progress; rebuild the DLL with -Stage2 (ABI 3).\n";
         }
-        if (!o.export_only && !o.dry)
+        if (!o.dry)
             o.thread_layout=ecm_cpu_tune::bind_worker(o.cpu_affinity,o.threads);
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
-        if(o.export_only) {
-            if(!ecm_results::has_result_ledger(o.submission))throw std::runtime_error("no owned submission ledger");
-            ecm_results::seal_submissions(o.submission,2,{},true);std::cout<<"submission output regenerated\n";return 0;
-        }
         omp_set_num_threads(static_cast<int>(o.threads));
-        if(o.save.empty())return run_queue(o,launch->lines);
-        auto rows=ecm_edwards::read_saved_curves(o.save);
-        if(o.skip>=rows.size())throw std::runtime_error("skip exceeds saved curve count");
-        const auto raw_end=o.skip+std::min<uint64_t>(o.count,rows.size()-o.skip);
-        rows.resize(raw_end);
-        rows.erase(std::remove_if(rows.begin()+o.skip, rows.end(),
-            [](const SavedCurve& row) { return row.factor || row.identity; }), rows.end());
-        const auto end=rows.size();
-        // Validate the entire selected batch before any computation or publication.
-        for(uint64_t i=o.skip;i<end;++i)validate_target(o,rows[i]);
-        if(o.dry){std::cout<<"validated "<<end-o.skip<<" curves; B2="<<o.b2<<'\n';return 0;}
-        std::string task_key=std::to_string(o.b2);
-        for(uint64_t i=o.skip;i<end;++i)task_key+="|"+rows[i].n+"|"+std::to_string(rows[i].sigma)+"|"+std::to_string(rows[i].b1);
-        const auto publication_task=std::to_string(ecm_io::fingerprint(task_key));
-        ecm_stage1_install_stop_handler();if(o.stop_handle && !ecm_stage1_set_stop_handle(o.stop_handle))throw std::runtime_error("invalid stop handle");
-        std::cout<<"CPU Edwards Stage2 backend="<<o.backend<<" threads="<<o.threads<<" memory_mib="<<o.memory<<" libecm="<<ecm_version()<<std::endl;
-        TunePlans tune;
-        const s2prod::QueueReport log=[](const std::string &message,bool error) {
-            (error?std::cerr:std::cout)<<message<<std::endl;
-        };
-        for(uint64_t i=o.skip;i<end;++i) {
-            ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
-            const auto &r=rows[i];
-            Integer n;mpz_set_str(n.v,r.n.c_str(),16);
-            std::string json;ecm_results::Submission report;double elapsed=0;
-            std::optional<TuneObservation> pending;
-            if(!calculate(o,r,false,publication_task,i+1,report,json,elapsed,tune,pending,log))return 130;
-            ecm_results::check_stage2_outputs(o.results,o.submission,i>o.skip);
-            ecm_results::publish_submission(o.submission,report,n.v);
-            ecm_results::append_text_record(o.results,json);
-            persist_tune(o,pending);
-            std::cout<<"completed save-line="<<r.line<<" sigma="<<r.sigma<<" status="<<(report.stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
-        }
-        ecm_results::check_stage2_outputs(o.results,o.submission,end>o.skip);
-        ecm_results::seal_submissions(o.submission,2,publication_task,true);
-        return 0;
+        return run_tasks(o,launch->lines);
     }catch(const std::exception &e){std::cerr<<"CPU Stage2: "<<e.what()<<'\n';try{s2prod::append_fatal_log(e.what());}catch(...){}return 1;}
 }
 

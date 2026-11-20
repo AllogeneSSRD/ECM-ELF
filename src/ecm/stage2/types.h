@@ -38,7 +38,7 @@ struct Record {
 };
 struct PreparedRuntimeProfile;
 struct Options {
-    std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_aid;
+    std::string ini, save, worktodo, results, log, debug_file, receipt,submission,submission_aid;
     std::string worker_cpu_affinity;
     std::string result_user, result_computer;
     bool frozen_publication = false;
