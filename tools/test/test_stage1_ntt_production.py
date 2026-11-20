@@ -25,6 +25,8 @@ EDWARDS_2XY_INVERSE_INPUT = 1 << 16
 TIGHT_CARRY_SPANS = 1 << 17
 FIXED_WIDE_INVERSE = 1 << 18
 FIXED_WIDE_FORWARD = 1 << 19
+SEGMENTED_CARRY = 1 << 5
+CACHED_FUSED_WEIGHTED_CARRY = 1 << 14
 
 
 def ntt_executions(log):
@@ -215,6 +217,25 @@ def main():
         _, x, z = edwards_stage1(n, sigma, b1)
         assert graph_points[sigma] == x * pow(z, -1, n) % n
         print("PASS Edwards 2XY inverse input dispatch, Graph/direct and integer endpoint", flush=True)
+
+        p, b1, sigma = 104729, 16, 26
+        reduction = SEGMENTED_CARRY | CACHED_FUSED_WEIGHTED_CARRY
+        by_batch = {}
+        for batch in (31, 32):
+            work, cmd = fixture(f"edwards_8192_carry_{batch}", model="ed",
+                                extra='edwards_naf_window_bits = 6\nntt_convolution = "weighted"\nntt_length = 8192\n')
+            call, data = direct(work, cmd, p, b1, sigma, batch)
+            log = run(work, call, text=data)
+            [flow] = re.findall(r"stage1_ntt_plan:.*\bdataflow=(\d+)", log)
+            assert int(flow) & reduction == (reduction if batch == 32 else 0), log
+            by_batch[batch] = saved_points(work / "out.save", p, b1, True)
+            assert set(by_batch[batch]) == set(range(sigma, sigma + batch))
+        assert all(by_batch[32][seed] == x for seed, x in by_batch[31].items())
+        n = (1 << p) - 1
+        for seed in (sigma, sigma + 31):
+            _, x, z = edwards_stage1(n, seed, b1)
+            assert by_batch[32][seed] == x * pow(z, -1, n) % n
+        print("PASS 8192-point Edwards carry dispatch, common lanes and integer endpoints", flush=True)
 
         for p, expects_direct in ((3433, True), (3457, False)):
             work, cmd = fixture(f"edwards_inverse_input_128_{p}", model="ed",

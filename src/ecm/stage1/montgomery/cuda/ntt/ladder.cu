@@ -398,8 +398,10 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     // shape amortizes segmentation even with multiple live curves.
     const bool early_segments = (curves == 1 && p >= 53249 && (s.length == 2560 || s.length == 5120)) ||
                                 (s.length == 5120 && p >= 106497);
-    const bool wide_segments = p > 14 * stage1_carry_segment * 32;
     const auto segment_count = stage1_segment_count(s.words);
+    // The 8192-point Edwards batch amortizes cached segment reduction at 13 segments.
+    const bool wide_segments = segment_count > 14 ||
+        (naf && options.weighted && s.length == 8192 && curves >= 32 && segment_count >= 13);
     if (options.weighted ? wide_segments || early_segments : segment_count > 32) {
         defaults |= SegmentedCarry;
         if (mixed || curves == 1) defaults |= DeferredPack;
