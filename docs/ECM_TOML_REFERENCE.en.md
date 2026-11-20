@@ -465,7 +465,7 @@ Auto selects the measured backend or calibrates on a cache miss. Explicit modes 
 ntt_length = 0
 ```
 
-Type `int` · Range `0, 2^k in [2,65536], or 5*2^k in [2560,20480] (weighted)` · Worker override `[worker.N] ntt_length` · Level `advanced`.
+Type `int` · Range `0, 2^k in [2,131072], or 5*2^k in [2560,40960] (weighted)` · Worker override `[worker.N] ntt_length` · Level `advanced`.
 
 Transform length. Zero derives safe lengths, including shorter supported radix-5 shapes for weighted convolution.
 

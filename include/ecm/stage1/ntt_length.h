@@ -4,8 +4,9 @@ namespace ecm_stage1 {
 
 inline constexpr unsigned stage1_ntt_max_curves = 128;
 inline constexpr unsigned stage1_ntt_min_exponent = 32;
-inline constexpr unsigned stage1_ntt_max_exponent = 524288;
-inline constexpr unsigned stage1_ntt_mixed_limit = 32768;
+inline constexpr unsigned stage1_ntt_max_exponent = 1048576;
+inline constexpr unsigned stage1_ntt_max_length = 131072;
+inline constexpr unsigned stage1_ntt_mixed_limit = 40960;
 inline constexpr unsigned stage1_ntt_mixed_min = 2560;
 
 constexpr bool stage1_ntt_power_of_two(unsigned n) {

@@ -183,7 +183,7 @@ int main(int argc,char** argv) {
     if (weighted) { ++argv; --argc; }
     unsigned length=0;
     if (argc > 2 && !std::strcmp(argv[1],"--length")) {
-        try { length=unsigned(num(argv[2],2,65536)); }
+        try { length=unsigned(num(argv[2],2,ecm_stage1::stage1_ntt_max_length)); }
         catch (const std::exception& e) { std::fprintf(stderr,"stage1_ntt: %s\n",e.what()); return 2; }
         argv+=2; argc-=2;
     }

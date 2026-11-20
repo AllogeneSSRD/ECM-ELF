@@ -194,7 +194,7 @@ inline void validate_stage1_ntt(const Fields &s) {
     const auto n=uint(s,"length"), log=uint(s,"log2_length"), batch=uint(s,"batch");
     const auto tile=uint(s,"tile"), bpw=uint(s,"bpw"), radix=uint(s,"max_radix_bits");
     const bool mixed=n<=ecm_stage1::stage1_ntt_mixed_limit && ecm_stage1::stage1_ntt_radix5(unsigned(n));
-    if(!is_stage1_ntt(s) || log<1 || log>16 || n>65536 ||
+    if(!is_stage1_ntt(s) || log<1 || n>ecm_stage1::stage1_ntt_max_length ||
        log!=ecm_stage1::stage1_ntt_length_log(unsigned(n)) ||
        (mixed ? text(s,"ntt_type")!=weighted_ntt_type : n!=(Word(1)<<log)))
         throw std::runtime_error("invalid Stage1 NTT length");

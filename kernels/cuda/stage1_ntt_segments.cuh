@@ -7,7 +7,7 @@
 namespace ecm_mersenne_ntt::stage1_layout {
 
 constexpr unsigned stage1_carry_segment = 256;
-constexpr unsigned stage1_max_segments = 64;
+constexpr unsigned stage1_max_segments = 128;
 static_assert(stage1_max_segments * stage1_carry_segment * 32 == ecm_stage1::stage1_ntt_max_exponent);
 
 __host__ __device__ constexpr unsigned stage1_segment_count(unsigned words)
@@ -54,13 +54,35 @@ __device__ __forceinline__ uint32_t stage1_summarize_segment(
     return (uint32_t(raw) + unsigned(prefix == 2)) & mask;
 }
 
-// One warp scans up to two groups of 32 segment transfers per consumer CTA.
-// The upper group inherits the lower group's transfer. The last transfer
-// feeds back into the first segment, with an incoming one if all propagate
-// so the encoding of M becomes zero.
+// Each wide group scans its segment transfers in parallel. The first
+// non-propagating predecessor in cyclic order determines its carry-in.
 __device__ __forceinline__ void stage1_segment_corrections(
     unsigned* limits, const unsigned* headers, unsigned segments)
 {
+    if (segments > 64) {
+        constexpr unsigned max_groups = stage1_max_segments / 32;
+        __shared__ unsigned transfers[max_groups];
+        const unsigned group = threadIdx.x / 32, lane = threadIdx.x % 32;
+        const unsigned groups = (segments + 31) / 32;
+        const unsigned header = threadIdx.x < segments ? headers[threadIdx.x] : 1;
+        const unsigned tag = header & 3;
+        const unsigned stop = __ballot_sync(0xffffffffu, tag != 1);
+        const unsigned gen = __ballot_sync(0xffffffffu, tag == 2);
+        if (!lane && group < groups) transfers[group] = stage1_last_carry(stop, gen);
+        __syncthreads();
+        if (threadIdx.x < segments) {
+            unsigned prefix = stage1_last_carry(stop & ((1u << lane) - 1), gen);
+            unsigned previous = group;
+            for (unsigned i = 0; prefix == 1 && i < groups; ++i) {
+                previous = previous ? previous - 1 : groups - 1;
+                prefix = transfers[previous];
+            }
+            // An all-propagate ring encodes M, canonicalized to zero.
+            limits[threadIdx.x] = prefix != 0 ? header >> 2 : 0;
+        }
+        __syncthreads();
+        return;
+    }
     if (threadIdx.x < 32) {
         const unsigned lane = threadIdx.x;
         const unsigned header = lane < segments ? headers[lane] : 1;

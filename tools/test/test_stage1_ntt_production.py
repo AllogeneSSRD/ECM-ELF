@@ -146,7 +146,8 @@ def main():
                 if p == 65:
                     assert points == {9: 31} and "factor[0]=31" in log
                 elif p == 35:
-                    assert not points and "Edwards identity: sigma=16" in log
+                    assert points == {16: 0} and "; STATUS=IDENTITY;" in (work / "out.save").read_text()
+                    assert "Edwards identity: sigma=16" in log
                     if kind:
                         main, replay = ntt_executions(log)
                         assert main["chain"] == "naf" and main["naf"] == str(kind)
@@ -488,6 +489,24 @@ def main():
         assert saved_points(work / "out.save", p, b1, edwards=model == "ed") == wide_expected
     print("PASS wide segmented carry and deferred pack against independent Python", flush=True)
 
+    for extended_p, lengths in ((900001, (131072, 40960, 65536)), (1048573, (131072, 65536))):
+        extended_points = None
+        for length in lengths:
+            mode, naf = ("linear", 0) if length == 131072 else ("weighted", 6)
+            extra = (f'ntt_convolution = "{mode}"\nntt_length = {length}\n'
+                     f'edwards_naf_window_bits = {naf}\n')
+            work, cmd = fixture(f"edwards_wide_{extended_p}_{length}", extra=extra, model="ed")
+            call, data = direct(work, cmd, extended_p, 7, sigma, 1)
+            [plan] = ntt_executions(run(work, call, text=data))
+            assert (plan["ntt_bits"], plan["ntt_length"], plan["naf"]) == (str(extended_p), str(length), str(naf))
+            points = saved_points(work / "out.save", extended_p, 7, edwards=True)
+            assert set(points) == {sigma}
+            if extended_points is None:
+                extended_points = points
+            else:
+                assert points == extended_points
+        print(f"PASS wide Edwards x-only and NAF save p={extended_p}, lengths={lengths}", flush=True)
+
     for mode, length in (("linear", 8), ("weighted", 4)):
         work, cmd = fixture(f"factors_{mode}", extra=f'ntt_convolution = "{mode}"\n')
         call, data = direct(work, cmd, 65, 40, 30, 2)
@@ -509,8 +528,9 @@ def main():
          "2^4003-1\n", 1, "unsafe weighted NTT length"),
         ("unsafe_radix5", 'ntt_convolution = "weighted"\nntt_length = 2560\n',
          "2^64001-1\n", 1, "unsafe weighted NTT length"),
-        ("radix5_over_limit", 'ntt_convolution = "weighted"\nntt_length = 40960\n',
+        ("radix5_over_limit", 'ntt_convolution = "weighted"\nntt_length = 81920\n',
          "2^4003-1\n", 1, "outside the supported domain"),
+        ("exponent_over_limit", "", "2^1048577-1\n", 1, "1048576"),
         ("linear_radix5", 'ntt_length = 2560\n', "2^4003-1\n", 1, "power of two"),
         ("too_many_passes", "ntt_length = 65536\nntt_tile = 1\nntt_outer_radix_limit = 1\n",
          "2^4003-1\n", 1, "more than eight outer passes"),
@@ -597,7 +617,8 @@ def main():
     work, cmd = fixture("edwards_identity", model="ed")
     call, data = direct(work, cmd, 35, 128, 16, 1)
     assert "Edwards identity: sigma=16" in run(work, call, text=data)
-    assert not (work / "out.save").exists() or not (work / "out.save").stat().st_size
+    assert saved_points(work / "out.save", 35, 128, edwards=True) == {16: 0}
+    assert "; STATUS=IDENTITY;" in (work / "out.save").read_text()
     print("PASS Edwards factor publication and identity without a Stage2 point", flush=True)
 
     p, b1, sigma = 4423, 32, 26

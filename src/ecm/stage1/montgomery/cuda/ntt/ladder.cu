@@ -287,14 +287,14 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options,
                                           options.tight_weighted_bound;
         const auto usable = [p, &options, allow_unsigned_bound](unsigned length) {
             const unsigned bpw = (p + length - 1) / length;
-            return length <= p && length <= 65536 && bpw <= 31 &&
+            return length <= p && length <= ecm_stage1::stage1_ntt_max_length && bpw <= 31 &&
                 (!options.bpw || bpw <= options.bpw) &&
                 options.tile <= ecm_stage1::stage1_ntt_length_log(ecm_stage1::stage1_ntt_radix2_length(length)) &&
                 (exact_ok_terms(2ull * length, bpw) ||
                  (allow_unsigned_bound && weighted_unsigned_bound(p, length).has_value()));
         };
         s.length = options.length;
-        for (unsigned binary = 2; !s.length && binary <= 65536; binary *= 2) {
+        for (unsigned binary = 2; !s.length && binary <= ecm_stage1::stage1_ntt_max_length; binary *= 2) {
             // The supported mixed length between binary/2 and binary, if any,
             // must pass its own bound before trying the next power of two.
             const unsigned mixed = (binary / 8) * 5;
@@ -324,8 +324,8 @@ Packing resolve_packing(unsigned p, const ecm_stage1::Stage1NttOptions& options,
         s.length = options.length ? options.length : 1;
         if (!options.length)
             while (s.length < 2 * s.digits + 1) s.length *= 2;
-        if ((s.length & (s.length - 1)) || s.length < 2 * s.digits + 1 || s.length > 65536)
-            throw std::invalid_argument("NTT length must be a power of two covering 2*digits+1, at most 65536");
+        if ((s.length & (s.length - 1)) || s.length < 2 * s.digits + 1 || s.length > ecm_stage1::stage1_ntt_max_length)
+            throw std::invalid_argument("NTT length must be a supported power of two covering 2*digits+1");
     }
     return s;
 }
