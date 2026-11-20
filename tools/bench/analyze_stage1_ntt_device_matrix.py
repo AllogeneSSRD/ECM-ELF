@@ -60,7 +60,7 @@ def summaries(reports, plans):
             n = row["batch"]
             if n not in best or row["iter_per_s"] > best[n]["iter_per_s"]:
                 best[n] = row
-        if not best or 1 not in best or any(n < 1 or n > 128 for n in best):
+        if not best or 1 not in best or any(n < 1 or n > 512 for n in best):
             raise ValueError(f"M{p} requires a legal single-curve measurement")
         if mont["batch_search"] == "exhaustive" and sorted(best) != list(range(1, max(best) + 1)):
             raise ValueError(f"M{p} exhaustive search has missing batch sizes")

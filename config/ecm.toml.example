@@ -424,6 +424,12 @@ target = "gpu"  # string: [cpu|gpu]
 # CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。自动选型将通过该界的短加权计划与其他合法计
 # 划一同实测。false 使用保守界。
 
+# ntt_max_batch = 512  # int: [1,512]
+# Maximum curves per new CUDA Stage1 NTT batch in tuning and production. Available memory can lower
+# the limit for each transform and NAF window.
+# CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限
+# 制。
+
 # ntt_memory_mib = 0  # int: [0,1048576]
 # Total Stage1 NTT VRAM budget in MiB. Zero uses 80% of free VRAM after CUDA initialization. An
 # explicit cap is also bounded by available VRAM.

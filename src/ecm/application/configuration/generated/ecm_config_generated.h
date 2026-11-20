@@ -39,6 +39,8 @@ inline constexpr int64_t stage1_ckpt_backups_minimum=0;
 inline constexpr int64_t stage1_ckpt_backups_maximum=16;
 inline constexpr int64_t stage1_ntt_allow_known_factors_minimum=0;
 inline constexpr int64_t stage1_ntt_allow_known_factors_maximum=1;
+inline constexpr int64_t stage1_ntt_max_batch_minimum=1;
+inline constexpr int64_t stage1_ntt_max_batch_maximum=512;
 inline constexpr int64_t stage1_ntt_memory_mib_minimum=0;
 inline constexpr int64_t stage1_ntt_memory_mib_maximum=1048576;
 inline constexpr int64_t stage1_ntt_length_minimum=0;
@@ -202,6 +204,7 @@ struct Stage1Values {
     int ntt_pad_batch=0;
     bool ntt_tight_weighted_bound=true;
     std::string ntt_tune_file="tune.toml";
+    int ntt_max_batch=512;
     int ntt_memory_mib=0;
     int ntt_length=0;
     int ntt_bpw=0;
@@ -294,6 +297,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"ntt_pad_batch",[](Stage1Values&c,const std::string&v){c.ntt_pad_batch=static_cast<int>(bounded_integer(v,"ntt_pad_batch",0,UINT64_MAX));},[](Stage1Values&c,const Stage1Values&v){c.ntt_pad_batch=v.ntt_pad_batch;}},
     {"ntt_tight_weighted_bound",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tight_weighted_bound,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tight_weighted_bound=v.ntt_tight_weighted_bound;}},
     {"ntt_tune_file",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_tune_file,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_tune_file=v.ntt_tune_file;}},
+    {"ntt_max_batch",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_max_batch,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_max_batch=v.ntt_max_batch;}},
     {"ntt_memory_mib",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_memory_mib,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_memory_mib=v.ntt_memory_mib;}},
     {"ntt_length",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_length,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_length=v.ntt_length;}},
     {"ntt_bpw",[](Stage1Values&c,const std::string&v){assign_value(c.ntt_bpw,v);},[](Stage1Values&c,const Stage1Values&v){c.ntt_bpw=v.ntt_bpw;}},

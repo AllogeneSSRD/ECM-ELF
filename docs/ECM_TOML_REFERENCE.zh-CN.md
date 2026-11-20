@@ -469,6 +469,16 @@ ntt_length = 0
 
 变换长度。0 推导安全长度，加权卷积包含支持且更短的 radix-5 形状。
 
+### ntt_max_batch
+
+```toml
+ntt_max_batch = 512
+```
+
+类型 `int` · 范围 `[1,512]` · Worker 覆盖 `[worker.N] ntt_max_batch` · 级别 `高级`。
+
+CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限制。
+
 ### ntt_memory_mib
 
 ```toml

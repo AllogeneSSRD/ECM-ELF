@@ -2,7 +2,7 @@
 
 namespace ecm_stage1 {
 
-inline constexpr unsigned stage1_ntt_max_curves = 128;
+inline constexpr unsigned stage1_ntt_max_curves = 512;
 inline constexpr unsigned naf_tune_span = 64, naf_tune_strata = 8;
 inline constexpr unsigned stage1_ntt_min_exponent = 32;
 inline constexpr unsigned stage1_ntt_max_exponent = 1048576;

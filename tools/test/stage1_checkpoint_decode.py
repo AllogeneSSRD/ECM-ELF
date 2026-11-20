@@ -65,7 +65,7 @@ def ntt_inflight(path):
     first, preferred, curves, capacity, completed, size = struct.unpack_from(
         "<QIIIIQ", payload, len(magic))
     start = len(magic) + struct.calcsize("<QIIIIQ")
-    assert len(rows) == 1 and curves <= capacity <= preferred <= 128
+    assert len(rows) == 1 and curves <= capacity <= preferred <= 512
     assert start + size <= len(payload)
     def random_sigma(index):
         mask = (1 << 53) - 1

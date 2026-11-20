@@ -21,6 +21,7 @@ ecm_stage1::Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request&,
                                              unsigned curves, const ecm_stage1::Stage1NttOptions&,
                                              unsigned naf_window, bool require_capacity, BatchMemory&);
 unsigned production_window(const ecm_stage1::Stage1Request&, unsigned p, bool fixed_batch);
+bool production_batch_fits(const ecm_stage1::Stage1Request&, unsigned p, unsigned window);
 unsigned select_production_batch(const ecm_stage1::Stage1Request&, unsigned remaining);
 void record_production_sample(const ecm_stage1::Stage1Request&, const Plan&, const Run&,
                               unsigned valid, unsigned batch, double compute_seconds);

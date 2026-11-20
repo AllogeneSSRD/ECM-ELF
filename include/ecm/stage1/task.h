@@ -28,6 +28,7 @@ struct Stage1NttOptions {
     enum class MixedLayout { Automatic, Twiddle, Pfa, Coalesced };
     MixedLayout mixed_layout = MixedLayout::Automatic;
     bool runtime_enabled = true;
+    unsigned max_batch = stage1_ntt_max_curves;
 };
 
 struct Stage1ExecutionPreferences {

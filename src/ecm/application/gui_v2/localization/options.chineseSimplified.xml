@@ -71,6 +71,7 @@
       <Item id="option_stage1_ntt_pad_batch" name="0 按任务请求的曲线数运行 Stage1 NTT。1 在资源允许时用真实曲线把尾批补齐到优选批量。新增曲线使用独立 sigma，计入结果和符合条件的 Stage2 交接。" />
       <Item id="option_stage1_ntt_tight_weighted_bound" name="CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。自动选型将通过该界的短加权计划与其他合法计划一同实测。false 使用保守界。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
+      <Item id="option_stage1_ntt_max_batch" name="CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限制。" />
       <Item id="option_stage1_ntt_memory_mib" name="Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。" />
       <Item id="option_stage1_ntt_length" name="变换长度。0 推导安全长度，加权卷积包含支持且更短的 radix-5 形状。" />
       <Item id="option_stage1_ntt_bpw" name="每个数字的位数。0 选择最宽精确线性表示或最短安全加权变换。加权模式下，显式值限制最大 digit 位宽。" />

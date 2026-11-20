@@ -98,7 +98,7 @@ Curve and task:
                        Optional 0:S / 2:S / 3:S prefixes select Montgomery parameters.
                        Edwards uses bare S. PARAM2/3 require S+curves <= 2^32.
   -gpucurves <N>       Direct-run curve count. Queue counts come from each work line.
-                       CUDA NTT: 1..128 is one batch; larger requests split automatically.
+                       CUDA NTT: batch up to ntt_max_batch (default 512); split to fit memory.
                        NTT defaults to one curve when this option is omitted.
   --target <cpu|gpu>   Execution target (default gpu).
   B1 [B2]             B1 is a finite positive bound. B2 is optional, nonnegative.

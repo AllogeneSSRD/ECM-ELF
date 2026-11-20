@@ -38,6 +38,9 @@ bool read_config(const std::string& path, ParsedConfig& parsed, int active_worke
                         valid = ecm_stage1::parse_scalar_construction(v, s.scalar_construction);
                     else if (key == "gpu_algorithm")
                         valid = ecm_stage1::parse_gpu_algorithm_policy(v, s);
+                    else if (key == "ntt_max_batch")
+                        valid = scratch.ntt_max_batch >= ecm_config::limits::stage1_ntt_max_batch_minimum &&
+                                scratch.ntt_max_batch <= ecm_config::limits::stage1_ntt_max_batch_maximum;
                     else if (key == "ntt_pad_batch")
                         valid = scratch.ntt_pad_batch == 0 || scratch.ntt_pad_batch == 1;
                     else if (key == "ntt_warp_tail")

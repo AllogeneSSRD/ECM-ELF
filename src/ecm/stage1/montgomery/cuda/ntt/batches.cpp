@@ -225,7 +225,7 @@ ecm_stage1::ComputationResult run_ntt_batches(
         }
         if (!state.curves) {
             const unsigned left = request.curves - offset;
-            if (left >= state.preferred)
+            if (left >= state.preferred || state.preferred > request.options.execution.ntt.max_batch)
                 state.preferred = ecm_mersenne_ntt::select_production_batch(request, left);
             if (!state.preferred || state.preferred > stage1_ntt_max_curves)
                 throw std::logic_error("invalid NTT Stage1 scheduler batch size");
@@ -240,6 +240,8 @@ ecm_stage1::ComputationResult run_ntt_batches(
         ecm_ts_fprintf(stdout, "stage1_ntt_batch: offset=%u total=%u curves=%u capacity=%u resumed=%u\n",
                        offset, request.curves, state.curves, state.curves, unsigned(resumed));
         auto options = request.options;
+        // Finish a reserved checkpoint batch at its saved width, even after a cap reduction.
+        if (resumed) options.execution.ntt.max_batch = std::max(options.execution.ntt.max_batch, state.curves);
         options.identity.sigma_fixed = !state.random;
         options.identity.fixed_sigma64 = state.random ? 0 : state.sigma(offset);
         options.execution.ntt.observe_batch = true;

@@ -6,7 +6,7 @@ import re
 import subprocess
 import tomllib
 
-from test_stage1_ntt_production import saved_points
+from test_stage1_ntt_production import edwards_stage1, ntt_executions, saved_points
 
 
 def main():
@@ -39,13 +39,50 @@ def main():
         fields, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
         return [dict(zip(fields, row)) for row in values]
 
-    for index, spec in enumerate(("exp=61,length=8", "naf=12-6", "batch=0", "batch=129",
+    for index, spec in enumerate(("exp=61,length=8", "naf=12-6", "batch=0", "batch=513",
                                   "exp=31", "time=0", "ntt,naf=6,naf=7", "typo=1")):
         log = run(f"bad{index}", ["-tune", spec], success=False)
         assert "INPUT[cli]" in log
         if index == 0:
             assert "conflict" in log and "length" in log and "exp" in log
     assert not database.exists()
+
+    for cap in (0, 513):
+        log = run(f"invalid_cap_{cap}", ["-tune", "exp=127,batch=1"], settings=f"ntt_max_batch = {cap}", success=False)
+        assert "ntt_max_batch" in log
+    log = run("above_cap", ["-tune", "exp=127,batch=129"], settings="ntt_max_batch = 128", success=False)
+    assert "exceeds [stage1] ntt_max_batch" in log
+
+    database = out / "wide.toml"
+    wide = ["-tune", "exp=127,naf=6,batch=128-129,time=0.02", "--tune-exhaustive", "32"]
+    run("capped_range", wide, settings="ntt_max_batch = 128\nntt_profile = 1")
+    assert {r["batch"] for r in rows()} == {128}
+    # With only batch 128 in the table the scheduler runs four reference batches.
+    flags = ["--param", "e", "-gpucurves", "512", "-sigma", "20260922", "-save", "out.save", "32", "32"]
+    for name, settings, expected in (("wide_full", "", [512]), ("wide_split", "ntt_max_batch = 128", [128]*4)):
+        log = run(name, flags, stdin="2^127-1\n", settings="edwards_naf_window_bits = 6\n" + settings)
+        assert [int(row["ntt_batch"]) for row in ntt_executions(log)] == expected
+    points = saved_points(out / "wide_full/out.save", 127, 32, edwards=True)
+    assert list(points) == list(range(20260922, 20260922 + 512))
+    modulus = (1 << 127) - 1
+    for sigma, point in points.items():
+        _, x, z = edwards_stage1(modulus, sigma, 32)
+        assert point == x * pow(z, -1, modulus) % modulus, sigma
+    assert points == saved_points(out / "wide_split/out.save", 127, 32, edwards=True)
+    log = run("wide_memory", flags, stdin="2^127-1\n", settings="edwards_naf_window_bits = 6\nnaf_memory_mb = 1")
+    batches = [int(row["ntt_batch"]) for row in ntt_executions(log)]
+    assert sum(batches) == 512 and max(batches) < 128, batches
+    assert points == saved_points(out / "wide_memory/out.save", 127, 32, edwards=True)
+
+    # This weighted radix-5 length needs the native Edwards coefficient bound.
+    database = out / "native_only.toml"
+    native = "ntt_length = 2560\nntt_profile = 1"
+    run("native_only_tune", ["-tune", "exp=65521,naf=6,batch=2,time=0.02", "20"],
+        convolution="weighted", settings=native)
+    log = run("native_only_direct", ["--param", "e", "-gpucurves", "2", "-sigma", "26",
+              "-save", "out.save", "20", "20"], stdin="2^65521-1\n", convolution="weighted", settings=native)
+    record, = ntt_executions(log)
+    assert (record["naf"], record["ntt_length"], record["ntt_batch"]) == ("6", "2560", "2")
 
     database = out / "compact.toml"
     settings = "ntt_profile = 1\nnaf_memory_mb = 3"

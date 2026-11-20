@@ -1203,6 +1203,22 @@
     },
     {
       "owner": "stage1",
+      "key": "ntt_max_batch",
+      "field": "ntt_max_batch",
+      "type": "int",
+      "default": 512,
+      "domain": "[1,512]",
+      "fx": "NTT tune(S1 CUDA)",
+      "parser": "legacy",
+      "minimum": 1,
+      "maximum": 512,
+      "description": [
+        "Maximum curves per new CUDA Stage1 NTT batch in tuning and production. Available memory can lower the limit for each transform and NAF window.",
+        "CUDA Stage1 NTT 调优和生产每个新批次的曲线数上限。各变换长度和 NAF 窗口的实际容量还受内存预算限制。"
+      ]
+    },
+    {
+      "owner": "stage1",
       "key": "ntt_memory_mib",
       "field": "ntt_memory_mib",
       "type": "int",

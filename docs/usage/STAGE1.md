@@ -157,7 +157,7 @@ ntt_profile = 0
 
 ### 任务曲线数与设备批量
 
-`worktodo.txt` 中的曲线数是请求量。NTT 将一条任务依次拆成每批 1–128 条。直接运行时，`-gpucurves 1..128` 明确指定单批大小，超过 128 时自动拆批。省略 `-gpucurves` 时 NTT 运行 1 条。
+`worktodo.txt` 中的曲线数是请求量。NTT 按 `[stage1] ntt_max_batch` 和可用内存分批，上限默认 512，可设为 1–512。直接运行时，`-gpucurves` 指定的曲线数在上限和单批预算内时一次执行，超出时自动拆批。省略 `-gpucurves` 时 NTT 运行 1 条。
 
 linear 和 weighted 按各自 NTT 长度估算每条曲线的工作区和 NAF 字典，分别受显存、字典预算和主机内存限制。自动选批可在任一候选能容纳的范围内选取批量，之后只用能容纳该批量的计划查表或补测。`stage1_ntt_batch_selection` 的 `linear_capacity`、`weighted_capacity` 是各卷积模式估算可容纳的最大曲线数，`capacity` 还受剩余任务量限制。`Stage1 execution:` 记录实际选中计划的每曲线估算、配置和设备额度、NAF 字典预算，以及 `max_curves_in_memory`。
 

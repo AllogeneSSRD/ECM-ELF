@@ -427,16 +427,31 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             std::filesystem::create_directories(opt.persistence.tmp_dir);
         session.set_backup_limit(opt.persistence.ckpt_backups);
         session.set_path(path);
+        const auto candidates = session.candidates(path);
+        const auto has_arithmetic_checkpoint = [&] {
+            return !path.empty() && std::any_of(candidates.begin(), candidates.end(),
+                [](const auto& candidate) { return std::filesystem::exists(candidate); });
+        };
         auto identity = checkpoint_identity(request, execution,
             selection.target == ExecutionTarget::Cpu && !opt.execution.naf_w ? deps.default_naf_window() : 0);
         bool split_ntt = false;
 #if ECM_HAS_CUDA_STAGE1
+        std::optional<unsigned> direct_window;
         if (selection.target == ExecutionTarget::Gpu && selection.gpu_algorithm == GpuAlgorithm::Ntt) {
-            split_ntt = curves > stage1_ntt_max_curves || opt.persistence.retain_completed_checkpoint;
-            if (split_ntt && curves <= stage1_ntt_max_curves &&
-                ecm_stage1_checkpoint::matches(path, identity.current, curves, opt.persistence.ckpt_backups,
-                                               identity.compatible))
-                split_ntt = false; // Resume an existing one-batch queue checkpoint.
+            split_ntt = curves > opt.execution.ntt.max_batch || opt.persistence.retain_completed_checkpoint;
+            if (curves <= stage1_ntt_max_curves && has_arithmetic_checkpoint()) {
+                const auto split = ntt_task_identity(identity, curves);
+                const auto backups = opt.persistence.ckpt_backups;
+                if (ecm_stage1_checkpoint::matches(path, split.current, 1, backups, split.compatible))
+                    split_ntt = true;
+                else if (ecm_stage1_checkpoint::matches(path, identity.current, curves, backups, identity.compatible))
+                    split_ntt = false;
+            } else if (!split_ntt && curves > 1) {
+                // Native NAF can admit shorter weighted lengths than the x-only ladder.
+                const auto p = ntt_arithmetic_bits(N, opt);
+                direct_window = ecm_mersenne_ntt::production_window(request, p, true);
+                split_ntt = !ecm_mersenne_ntt::production_batch_fits(request, p, *direct_window);
+            }
         }
 #endif
         if (split_ntt) {
@@ -463,16 +478,13 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
             same(publication_checkpoint, opt.persistence.results_file) ||
             same(publication_checkpoint, opt.persistence.submission_file))
             throw std::runtime_error("Stage1 publication checkpoint must differ from output paths");
-        const auto candidates = session.candidates(path);
-        const auto has_arithmetic_checkpoint = [&] {
-            return !path.empty() && std::any_of(candidates.begin(), candidates.end(),
-                [](const auto& candidate) { return std::filesystem::exists(candidate); });
-        };
         if (!path.empty() && !has_arithmetic_checkpoint())
             ecm_results::discard_completed_stage1_publication(publication_checkpoint);
 #if ECM_HAS_CUDA_STAGE1
         if (selection.target == ExecutionTarget::Gpu && selection.gpu_algorithm == GpuAlgorithm::Ntt) {
-            if (split_ntt || !has_arithmetic_checkpoint())
+            if (!split_ntt && direct_window)
+                execution.execution.naf_w = *direct_window;
+            else if (split_ntt || !has_arithmetic_checkpoint())
                 execution.execution.naf_w = ecm_mersenne_ntt::production_window(request,
                     ntt_arithmetic_bits(N,opt), !split_ntt);
             const Stage1Request resolved{N,B1,B2,curves,savefilename,saveappend,n_expr,execution};

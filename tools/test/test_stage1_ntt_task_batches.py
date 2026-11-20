@@ -207,12 +207,13 @@ def main():
         work.mkdir()
         database = tune or work / "tune.toml"
         config = work / "ecm.toml"
+        # Keep the 128+tail boundaries used by the scheduling and resume assertions.
         config.write_text(
             f'config_version = 4\n[shared]\nworktodo_file = "worktodo.txt"\n'
             f'finished_file = "finished.txt"\nlog_file = ""\ntune_file = "{database.as_posix()}"\n'
             f'[stage1]\nparam = "e"\ntarget = "gpu"\nstage1_gpu_backend = "cuda"\nstage1_gpu_device = {args.device}\n'
             f'stage1_save_dir = "{work.as_posix()}"\nhandoff_mode = "ecm-elf"\nedwards_naf_window_bits = {naf_window}\n'
-            f'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = {checkpoint_period}\n'
+            f'exponent_cache_dir = "off"\ncheckpoint_interval_seconds = {checkpoint_period}\nntt_max_batch = 128\n'
             + (f'gpu_algorithm = "ntt"\nntt_pad_batch = {pad}\n' if pad is not None else "") + extra_stage1,
             encoding="utf-8",
         )

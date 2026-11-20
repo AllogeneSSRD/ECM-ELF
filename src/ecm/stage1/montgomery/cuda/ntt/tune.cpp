@@ -27,7 +27,6 @@ namespace {
 using ecm_stage1::Stage1NttOptions;
 namespace pt = ecm_stage2::tune::portable;
 using ecm_stage2::tune::Fields;
-constexpr unsigned max_batch = ecm_stage1::stage1_ntt_max_curves;
 constexpr double near_peak = 0.95;
 constexpr const char* modes[] = {"linear", "weighted"};
 
@@ -483,7 +482,8 @@ std::map<unsigned, Candidates> plan_tune_lengths(const Stage1NttOptions& options
 }
 
 std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::Stage1Request& request,
-        const Device& device, unsigned p, unsigned window, const Candidates& shapes) {
+        const Device& device, unsigned p, unsigned window, const Candidates& shapes,
+        bool reserve_dictionary_workspace = true) {
     if (window && (window < 2 || window > 12))
         throw std::invalid_argument("Edwards NTT NAF requires a window from 2 to 12");
     if (!std::isfinite(request.b1) || request.b1 < 0 || request.b1 > 5000000000.0)
@@ -491,7 +491,7 @@ std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::St
     const size_t words = (p + 31) / 32, entries = window ? 1u << (window - 2) : 0;
     const auto dictionary_mb = request.options.execution.naf_memory_mb;
     const auto dictionary_budget = size_t(dictionary_mb) * ecm_edwards_memory::mb;
-    size_t host_cap = max_batch;
+    size_t host_cap = request.options.execution.ntt.max_batch;
     if (entries)
         if (const auto free = ecm_edwards_memory::host_free_bytes()) {
             const auto limit = ecm_edwards_memory::usable_bytes(*free, 64 * ecm_edwards_memory::mib);
@@ -507,7 +507,8 @@ std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::St
         const auto length = size_t(shapes[mode]->shape.length);
         // The estimate covers spectra and dictionary workspace. The exact
         // allocator checks actual allocation separately.
-        const auto dictionary = entries * (32 * length + 16 * words);
+        // A direct batch may use the production host builder when only the spectra fit.
+        const auto dictionary = entries * (32 * length + (reserve_dictionary_workspace ? 16 * words : 0));
         const auto per_curve = 88 * length + 128 * words + dictionary;
         const auto fixed = 160 * length + 32 * words + size_t(request.b1 / 4 + 16);
         size_t cap = std::min(host_cap, device.budget > fixed ? (device.budget - fixed) / per_curve : 0);
@@ -558,10 +559,18 @@ bool compatible_workload(const Fields& row, const ecm_stage1::Stage1Request& req
            (!window || pt::is_stratified_naf(row) || uint(row,"b1") == uint64_t(request.b1));
 }
 
+// The 512-curve preview wrote 0.72.0 rows with the same timing protocol as 0.71.3.
+constexpr std::string_view timing_version(std::string_view version) {
+    if (std::string_view(ecm_program::version) == "0.71.4" &&
+        (version == ecm_program::version || version == "0.72.0"))
+        return "0.71.3";
+    return version;
+}
+
 bool same_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     return compatible_workload(row,request,window) && row.count("benchmark_kind") &&
            pt::text(row,"benchmark_kind") == (window ? pt::stratified_naf_kind : pt::stage1_graph_ntt_kind) &&
-           pt::text(row,"program_version") == ecm_program::version;
+           timing_version(pt::text(row,"program_version")) == timing_version(ecm_program::version);
 }
 
 bool same_dispatch(const Fields& row, unsigned p, const Plan& plan) {
@@ -908,7 +917,7 @@ bool tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
     const auto start = now_s();
     std::ostringstream scope, search;
     if (!grid.batch_explicit) {
-        scope << ecm_program::version << '/' << curve_name(request) << '/' << w << '/' << (p-1)/4096
+        scope << timing_version(ecm_program::version) << '/' << curve_name(request) << '/' << w << '/' << (p-1)/4096
               << '/' << options.profile << '/' << options.tile << '/' << options.outer_max
               << '/' << options.window << '/' << options.warp_tail;
         search << exhaustive << '/' << grid.batch.first;
@@ -1062,6 +1071,8 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
             throw std::invalid_argument("tune exponent outside supported range");
         const bool edwards = task.execution.selection.curve == CurveModel::Edwards;
         if (grid.naf.first && !edwards) throw std::invalid_argument("naf requires Edwards (--param e)");
+        if (grid.batch.first > task.execution.ntt.max_batch)
+            throw std::invalid_argument("requested batch exceeds [stage1] ntt_max_batch");
         const auto device = device_info(task.execution.device_index, task.execution.ntt.memory_mib);
         ecm_ts_fprintf(stdout,"ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
                                "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)\n"
@@ -1083,7 +1094,7 @@ int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_sta
                 if (deadline && now_s() >= deadline) throw TimeLimit{};
                 auto options = task;
                 options.execution.naf_w = int(w);
-                const Stage1Request request{nullptr,b1,b1,max_batch,empty,false,empty,options};
+                const Stage1Request request{nullptr,b1,b1,options.execution.ntt.max_batch,empty,false,empty,options};
                 measured |= tune_width(device,request,width,shapes,grid,naf_samples,exhaustive,deadline);
             }
         }
@@ -1187,7 +1198,7 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
     if (exec.ntt.tune_file.empty() || request.b1 < 2) return configured;
     const bool edwards = exec.selection.curve == CurveModel::Edwards;
     const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
-    const unsigned limit = std::min(request.curves, max_batch);
+    const unsigned limit = std::min(request.curves, exec.ntt.max_batch);
     auto best_window = [&](const pt::Profile& db) -> std::optional<unsigned> {
         std::optional<unsigned> best;
         double fastest = 0;
@@ -1254,6 +1265,15 @@ unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p,
     if (edwards && !configured)
         ecm_ts_fprintf(stdout,"stage1_ntt_naf_selection: p=%u naf=%u source=%s\n",p,selected,best ? "tune" : "default");
     return selected;
+}
+
+bool production_batch_fits(const ecm_stage1::Stage1Request& request, unsigned p, unsigned window) {
+    const auto& exec = request.options.execution;
+    const auto shapes = tune_shapes(p, exec.ntt, window != 0);
+    const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
+    const auto capacities = production_capacity(request, device, p, window, shapes, false);
+    return std::any_of(capacities.begin(), capacities.end(),
+        [&](const BatchMemory& capacity) { return capacity.max_curves >= request.curves; });
 }
 
 unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsigned remaining) {

@@ -469,6 +469,16 @@ Type `int` · Range `0, 2^k in [2,131072], or 5*2^k in [2560,40960] (weighted)` 
 
 Transform length. Zero derives safe lengths, including shorter supported radix-5 shapes for weighted convolution.
 
+### ntt_max_batch
+
+```toml
+ntt_max_batch = 512
+```
+
+Type `int` · Range `[1,512]` · Worker override `[worker.N] ntt_max_batch` · Level `advanced`.
+
+Maximum curves per new CUDA Stage1 NTT batch in tuning and production. Available memory can lower the limit for each transform and NAF window.
+
 ### ntt_memory_mib
 
 ```toml
