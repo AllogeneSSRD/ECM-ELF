@@ -1,16 +1,19 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build the Windows x64 GWNUM Stage1 plugin for local use.
+    Build the Windows x64 GWNUM plugin for local use, with optional Stage2 support.
 .PARAMETER GwNumRoot
     Directory containing the official GWNUM 31.6 headers and gwnum64.lib.
     If the library is absent, build the upstream gwnum64.lib target here.
 .PARAMETER BuildDir
     Directory for the ECM-ELF plugin build. Relative paths are resolved from the repository.
+.PARAMETER GmpRoot
+    GMP installation used by the Stage2 plugin. Defaults to the repository's local GMP build.
 #>
 param(
     [string]$GwNumRoot = '.refactor/p95v3106b01.source/gwnum',
     [string]$BuildDir = 'build_dev/gwnum_local',
+    [string]$GmpRoot = 'third_party/gmp-zen3/dist',
     [switch]$Stage2
 )
 
@@ -19,6 +22,7 @@ $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 if (-not [IO.Path]::IsPathRooted($GwNumRoot)) { $GwNumRoot = Join-Path $repo $GwNumRoot }
 if (-not [IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
+if (-not [IO.Path]::IsPathRooted($GmpRoot)) { $GmpRoot = Join-Path $repo $GmpRoot }
 $GwNumRoot = [IO.Path]::GetFullPath($GwNumRoot)
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 
@@ -62,8 +66,10 @@ if ($Stage2 -and -not (Test-Path (Join-Path $GwNumRoot 'polymult64.lib'))) {
     } finally { Pop-Location }
 }
 $poly = if ($Stage2) { 'ON' } else { 'OFF' }
+$dependencies = @("-DECM_GWNUM_ROOT=$GwNumRoot", "-DECM_GW_STAGE2=$poly")
+if ($Stage2) { $dependencies += "-DECM_GW_GMP_ROOT=$GmpRoot" }
 Initialize-EcmBuildDirectory $BuildDir
-& $cmake -S (Join-Path $PSScriptRoot 'gwnum') -B $BuildDir -G 'NMake Makefiles' '-DCMAKE_BUILD_TYPE=Release' "-DECM_GWNUM_ROOT=$GwNumRoot" "-DECM_GW_STAGE2=$poly"
+& $cmake -S (Join-Path $PSScriptRoot 'gwnum') -B $BuildDir -G 'NMake Makefiles' '-DCMAKE_BUILD_TYPE=Release' @dependencies
 if ($LASTEXITCODE -ne 0) { throw 'GWNUM DLL configuration failed.' }
 & $cmake --build $BuildDir --target ecm_gwnum
 if ($LASTEXITCODE -ne 0) { throw 'GWNUM DLL build failed.' }

@@ -96,6 +96,8 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"stage2","stage2_cpu_backend","string","[auto|gwpoly|ntt|plain]","stage2","cpu_backend","",false},
     {"stage2","stage2_cpu_threads","u64","[1,1024]","stage2","stage2_cpu_threads","",false},
     {"stage2","stage2_cpu_memory_mib","u64","[1,1048576]","stage2","cpu_memory_mib","",false},
+    {"stage2","stage2_cpu_tune_candidates","u64","[1,16]","stage2","cpu_tune_candidates","",false},
+    {"stage2","stage2_cpu_tune_dense_d","bool","[false|true|0|1]","stage2","cpu_tune_dense_d","",false},
     {"stage2","stage2_opencl_point_plan","string","[auto|device|chain|cpu]","stage2","opencl_point_plan","",false},
     {"stage2","stage2_opencl_point_chunk","u64","[0..4096]","stage2","opencl_point_chunk","",false},
     {"stage2","stage2_opencl_point_group","u64","[0..4096]","stage2","opencl_point_group","",false},

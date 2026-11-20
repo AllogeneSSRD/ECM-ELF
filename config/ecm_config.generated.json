@@ -1,15 +1,15 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/ecm/application/configuration/generated/ecm_config_generated.h": "c1fac39ec3e6aa117b02475ab60465c86c3987af54bf2e2aa92356cb86497671",
-    "src/ecm/platform/generated/configuration_defaults.h": "f7e9548676817519c4c0772430e5d66d5bf556ed360cb036bcdd37155e0a0169",
-    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "5ab19b4fba3ecb1c3bbf409a95bb3c2f9d20fb151eb7d091b9048959bd220bd5",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "e2d5842e1144874b6c0648db0472f1f4ad1718481f6ae50ea50a852945982fe7",
+    "src/ecm/platform/generated/configuration_defaults.h": "1b0dbd2afaa7927890c21600837acc506cf022a628c5543e8d4461cf96bc5f6a",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "9ec1704217adac46ed45c882b50e76e8c6241821e8926a6b287631b71643d493",
     "src/ecm/application/configuration/generated/ecm_toml_template.h": "dca7c2ab01bf354de007e218d1a3567a226e1664c30f1d3469d762f86858f278",
     "config/ecm.toml.default": "1dca67ff7d349759cb55f38e2f29866a2dd3cc4f275d199b5730445d2cbcf990",
-    "config/ecm.toml.example": "a7158c4f1b89d3a3fc8f7e173ebbcbe9c69c103ab31c41fd836108f14a1931a4",
-    "docs/ECM_TOML_REFERENCE.en.md": "4fa4589bae54b99a8e5cb4cebc0bff21776f8d81c656160c1dc2c94608b1ebea",
-    "docs/ECM_TOML_REFERENCE.zh-CN.md": "3747106e3f627636e799576bbde41d91474b028004f96e3e018dda095b298bbb",
-    "config/ecm_options.json": "e0fd230d7b65db2bf49c98898ddc0a0fba9a11170641c2faa3ee6ac8475918ad",
+    "config/ecm.toml.example": "8e246d21bff09612fbaa7743668f1b89f5b5eb65d8c6d95e847e3ef16f489b30",
+    "docs/ECM_TOML_REFERENCE.en.md": "2ed041d4639094968894e2b320b34d2b7c62fa2c37a68d6b8cb89dd5cd89445e",
+    "docs/ECM_TOML_REFERENCE.zh-CN.md": "3780965466a347b7fc571485af02eb6411bea1e6c4f51c1e95ae9f87c13e50a8",
+    "config/ecm_options.json": "1eeae610dfe0f260237a748239c05169feb570087e4dc6053fbbbf237cf0bb91",
     "tools/gen/generate_ecm_config.py": "dd4f75e9f663a20e1aff3d4142959e19e0e5730cd29b1b19b4c419e59effb06f"
   }
 }

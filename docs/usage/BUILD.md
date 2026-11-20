@@ -228,6 +228,16 @@ Windows x64 的 `ecm.exe` 与 `ecm_cuda.exe` 默认包含 GWNUM 加载接口。�
 
 独立 CPU Stage2 的 GWNUM／polymult 构建入口见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)。
 
+## Stage2 本地构建与 GWNUM
+
+统一版 Stage2 可以在本机构建时一并生成 `gwnum.dll`。
+
+```powershell
+.\tools\build\build_stage2_local.bat -WithGwDll
+```
+
+该选项通过现有 GWNUM 构建脚本，用与 Stage2 相同的 MSVC 和 GMP 构建插件。默认读取 `.refactor/p95v3106b01.source/gwnum`，并复用已有的 GWNUM／polymult 静态库。输出位于 `build_stage2_local/gwnum.dll`，构建结束会验证相邻的 `ecm_stage2.exe` 能加载它。仅更新主机端时，可在 CUDA 对象通过复用检查的前提下同时加 `-HostOnly`。该选项仅用于本机，发布角色会拒绝它。
+
 ## GMP 与打包
 
 本机/开发默认使用本地 Zen3 GMP；发布默认使用 vcpkg 通用 x64 GMP，缺失时明确报错，不自动回退到 Zen3。自定义 `-Gmp <prefix>` 必须提供匹配的头文件、导入库、DLL 和许可证。Zen3 库使用 BMI2/ADX 等指令，其 CPU 兼容范围由实际构建决定。

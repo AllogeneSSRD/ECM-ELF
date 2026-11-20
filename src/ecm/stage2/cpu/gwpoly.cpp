@@ -602,7 +602,7 @@ std::unique_ptr<Tree> partial_ftree(Context &c,const Array &roots,size_t lo,size
     return t;
 }
 struct FTreePlan {bool rebuild;double bytes;unsigned splits;};
-FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget,unsigned threads){
+FTreePlan ftree_plan(size_t p,double bytes,double budget,unsigned threads,int requested=automatic_tree){
     const auto levels=static_cast<unsigned>(std::ceil(std::log2(double(p))));
     // Each layer has at most P coefficients plus one monic term per node.
     // Allow four FFT vectors per worker (two inputs, monic adjustment and
@@ -612,12 +612,16 @@ FTreePlan ftree_plan(size_t p,double bytes,uint64_t budget,unsigned threads){
         return (slots+256+48.0*threads)*bytes*1.06+scratch;
     };
     const double full_rows=(levels+3.0)*p;
-    const double limit=double(budget)*1048576;
+    const double limit=budget*1048576;
     FTreePlan best{false,estimate(full_rows+4.0*p+8),0};
-    if(best.bytes<=limit)return best;
+    if(requested==0 || (requested==automatic_tree && best.bytes<=limit))return best;
+    if(requested>=static_cast<int>(levels))return {true,std::numeric_limits<double>::infinity(),0};
+    if(requested!=automatic_tree)best={true,std::numeric_limits<double>::infinity(),0};
     // Keep the deepest affordable top rows. Lower segments are rebuilt
     // individually, after all giant and reciprocal buffers are released.
-    for(unsigned splits=1;splits<levels;++splits){
+    const auto first=requested>0?static_cast<unsigned>(requested):1u;
+    const auto end=requested>0?first+1:levels;
+    for(unsigned splits=first;splits<end;++splits){
         const size_t segments=size_t(1)<<splits,chunk=(p+segments-1)/segments;
         const double retained=(splits+2.0)*p+2*segments; // includes the baby roots
         const double init=retained+2.0*p+8; // inverse and truncated Newton error
@@ -644,15 +648,31 @@ const std::vector<uint64_t>& wheel_choices(){
     }();
     return choices;
 }
-double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget,unsigned threads){
+const std::vector<uint64_t>& dense_wheel_choices(){
+    static const auto choices=[] {
+        auto wheels=wheel_choices();
+        constexpr std::array<uint64_t,6> primes{2,3,5,7,11,13};
+        const auto add=[&](auto &self,uint64_t d,size_t first)->void {
+            wheels.push_back(d);
+            for(size_t i=first;i<primes.size();++i)
+                if(d<=20000000/primes[i])self(self,d*primes[i],i);
+        };
+        add(add,30,0);
+        std::sort(wheels.begin(),wheels.end());
+        wheels.erase(std::unique(wheels.begin(),wheels.end()),wheels.end());
+        return wheels;
+    }();
+    return choices;
+}
+double wheel_cost(uint64_t d,uint64_t b2,double bytes,uint64_t budget,unsigned threads,int splits=automatic_tree){
     const auto p=phi(d)/2;
-    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget,threads);
+    const auto plan=ftree_plan(static_cast<size_t>(p),bytes,budget,threads,splits);
     if(plan.bytes>double(budget)*1048576)return std::numeric_limits<double>::infinity();
     const double levels=std::ceil(std::log2(double(p)));
     return (plan.rebuild?8:6)*p*levels+(double(b2)/d+p)*(levels+8);
 }
-uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget,unsigned threads){
-    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget,threads)))return forced;
+uint64_t choose_d(uint64_t b2,uint64_t forced,double bytes,uint64_t budget,unsigned threads,int splits){
+    if(forced && std::isfinite(wheel_cost(forced,b2,bytes,budget,threads,splits)))return forced;
     double best=std::numeric_limits<double>::infinity();
     uint64_t result=0;
     if(!forced)for(auto d:wheel_choices()){
@@ -680,13 +700,15 @@ std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,ui
                                       const Options &o,Stats &stats,FTreePlan &fplan,bool preflight=false){
     if(!o.threads || b2<=b1 || b2>max_b2)throw std::runtime_error("Invalid GW polynomial bounds/threads");
     if(o.d && (o.d<6 || o.d%2 || o.d>20000000))throw std::runtime_error("Invalid CPU polynomial wheel D");
+    if(o.f_tree_splits!=automatic_tree && (!o.d || o.f_tree_splits<segmented_tree || o.f_tree_splits>=64))
+        throw std::runtime_error("A fixed F-tree layout requires a fixed D and valid split count");
     uint64_t degree=phi(o.d?o.d:30)/2;
     // A larger FFT can change which wheels fit the coefficient budget.
     for(unsigned attempt=0;attempt<6;++attempt){
         auto owner=std::make_unique<Context>(n,factor,o,stats,degree,preflight);
         owner->poll();
         const double bytes=double(gwnum_size(&owner->gw)+64);
-        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib,o.threads);
+        const auto candidate=choose_d(b2,o.d,bytes,o.memory_mib,o.threads,o.f_tree_splits);
         degree=phi(candidate)/2;
         const auto required=polymult_safety_margin(degree+1,degree+1)+0.25f;
         if(owner->gw.EXTRA_BITS/2.0f+owner->gw.polymult_safety_margin<=required)continue;
@@ -701,7 +723,7 @@ std::unique_ptr<Context> prepare_plan(mpz_srcptr n,mpz_ptr factor,uint64_t b1,ui
         gwset_polymult_safety_margin(&owner->gw,required);
         stats.d=candidate;
         stats.poly_size=degree;
-        fplan=ftree_plan(static_cast<size_t>(degree),double(gwnum_size(&owner->gw)+64),o.memory_mib,o.threads);
+        fplan=ftree_plan(static_cast<size_t>(degree),double(gwnum_size(&owner->gw)+64),o.memory_mib,o.threads,o.f_tree_splits);
         stats.estimated_memory_mib=fplan.bytes/1048576.0;
         if(stats.estimated_memory_mib>o.memory_mib)
             throw std::runtime_error("Actual GWNUM layout exceeds planned memory budget; choose a smaller D");
@@ -728,9 +750,10 @@ const char* cpu() {
 }
 const char* identity(){return "static gwpoly";}
 const char* load_error(){return nullptr;}
-unsigned stage2_abi(){return 4;}
+unsigned stage2_abi(){return 5;}
 const char *version(){return GWNUM_VERSION;}
 std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options &o){
+    if(o.tune_candidate_limit>max_tune_candidates)throw std::invalid_argument("Invalid CPU Stage2 candidate limit");
     Integer unused_factor;
     Stats automatic{};
     FTreePlan tree_plan{};
@@ -748,16 +771,72 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
         return plan;
     };
     std::vector<TuneCandidate> candidates{describe(automatic,owner->gw)};
-    if(o.d)return candidates;
+    if(o.d || o.tune_candidate_limit==1)return candidates;
     owner.reset();
 
     Options forced=o;
-    auto inspect=[&](uint64_t d) {
+    auto inspect=[&](uint64_t d,int splits=automatic_tree) {
         forced.d=d;
+        forced.f_tree_splits=splits;
         Stats candidate{};
         auto context=prepare_plan(n,unused_factor.v,b1,b2,forced,candidate,tree_plan,true);
         return describe(candidate,context->gw);
     };
+    auto add=[&](uint64_t d,int splits=automatic_tree) {
+        try {candidates.push_back(inspect(d,splits));return true;}
+        catch(const std::runtime_error&){
+            if(o.stop && o.stop())throw;
+            // The required coefficient FFT or F tree may fail admission.
+            return false;
+        }
+    };
+    if(o.tune_candidate_limit){
+        struct Ranked {uint64_t d,blocks;double score;bool segmented;};
+        const auto giant_count=[&](uint64_t d,uint64_t p) {
+            return giant_range(b1,(b2+d/2)/d,d,p).size();
+        };
+        const auto rank=[&](uint64_t d,uint64_t p,bool segmented) {
+            const auto giants=giant_count(d,p);
+            const auto levels=std::ceil(std::log2(double(p)));
+            return Ranked{d,(giants+p-1)/p,(segmented?8:6)*p*levels+(double(giants)+p)*(levels+8),segmented};
+        };
+        std::vector<Ranked> ranked;
+        for(const auto d:o.dense_d?dense_wheel_choices():wheel_choices()){
+            if(d==automatic.d)continue;
+            const auto p=phi(d)/2;
+            const auto plan=ftree_plan(static_cast<size_t>(p),bytes,o.memory_mib,o.threads);
+            if(plan.bytes>double(o.memory_mib)*1048576)continue;
+            ranked.push_back(rank(d,p,plan.rebuild));
+        }
+        std::sort(ranked.begin(),ranked.end(),[](const auto &a,const auto &b){
+            return std::tie(a.score,a.d)<std::tie(b.score,b.d);
+        });
+        const auto baseline=candidates.front();
+        if(baseline.f_tree_splits==0){
+            // Test a layout that releases substantial memory. At the full
+            // budget a very deep segmented tree can be nearly as large as full.
+            const auto reduced=0.65*baseline.planned_mib;
+            const auto slim=ftree_plan(baseline.poly_size,bytes,reduced,o.threads,segmented_tree);
+            if(slim.bytes<=reduced*1048576)add(baseline.d,static_cast<int>(slim.splits));
+        }
+        // Reserve a trial for a larger segmented geometry that reduces G blocks.
+        if(candidates.size()<o.tune_candidate_limit){
+            const auto reference=rank(baseline.d,baseline.poly_size,baseline.f_tree_splits!=0);
+            unsigned attempts=0;
+            for(const auto &plan:ranked){
+                // Fewer blocks alone do not justify a much more expensive tree.
+                if(plan.score>1.5*reference.score)break;
+                if(!plan.segmented || plan.d<=reference.d || plan.blocks>=reference.blocks)continue;
+                if(add(plan.d,segmented_tree) || ++attempts==4)break;
+            }
+        }
+        const size_t attempts=std::min<size_t>(3*o.tune_candidate_limit,ranked.size());
+        for(size_t i=0;i<attempts && candidates.size()<o.tune_candidate_limit;++i){
+            const auto d=ranked[i].d;
+            if(std::none_of(candidates.begin(),candidates.end(),[&](const auto &plan){return plan.d==d;}))add(d);
+        }
+        return candidates;
+    }
     std::vector<std::pair<double,uint64_t>> ranked;
     for(auto d:wheel_choices()){
         if(d==automatic.d)continue;
@@ -767,11 +846,7 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,
     std::sort(ranked.begin(),ranked.end());
     const auto attempts=std::min<size_t>(4,ranked.size());
     for(size_t i=0;i<attempts && candidates.size()<3;++i){
-        try {candidates.push_back(inspect(ranked[i].second));}
-        catch(const std::runtime_error&){
-            if(o.stop && o.stop())throw;
-            // A candidate can require a longer FFT and no longer fit.
-        }
+        add(ranked[i].second);
     }
     return candidates;
 }

@@ -6,6 +6,8 @@
 
 namespace ecm_gwpoly {
 inline constexpr uint64_t max_b2=1000000000000000ull;
+inline constexpr int automatic_tree=-1, segmented_tree=-2;
+inline constexpr unsigned max_tune_candidates=16;
 struct Options {
     uint64_t d=0,exponent=0,memory_mib=512;
     unsigned threads=1;
@@ -13,13 +15,15 @@ struct Options {
     bool check=false;
     ecm_gw_stage2_progress_fn progress=nullptr;
     void* progress_context=nullptr;
+    int f_tree_splits=automatic_tree;
+    unsigned tune_candidate_limit=0; // Zero uses the ABI 4 search.
+    bool dense_d=false;
 };
 struct Stats : ecm_gw_stage2_stats {
     ecm_gw_stage2_phases phases{};
 };
 using TuneCandidate = ecm_gw_stage2_tune_plan;
-// Baseline first, followed by up to two viable alternatives. Each entry
-// describes the FFT layout that a forced-D run would use.
+// Baseline first, followed by admitted D and F-tree alternatives.
 std::vector<TuneCandidate> tune_candidates(mpz_srcptr n,uint64_t b1,uint64_t b2,const Options&);
 const char* cpu();
 const char* identity();

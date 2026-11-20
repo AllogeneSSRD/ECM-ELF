@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,8 +39,8 @@ struct Candidate {
 
 // Candidates are already admitted for this modulus and budget. The static
 // planner's winner comes first and breaks ties in exploration and selection.
-uint64_t select(const std::filesystem::path&, const Key&, const std::vector<Candidate>&,
-                uint64_t min_repeats, bool explore);
+std::optional<std::size_t> select(const std::filesystem::path&, const Key&, const std::vector<Candidate>&,
+                                  uint64_t min_repeats, bool explore);
 void observe(const std::filesystem::path&, const Key&, const Candidate&, double seconds,
              uint64_t sample_limit);
 } // namespace ecm_cpu_tune

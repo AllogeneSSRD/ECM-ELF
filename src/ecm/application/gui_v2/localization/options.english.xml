@@ -107,6 +107,8 @@
       <Item id="option_stage2_stage2_cpu_backend" name="CPU arithmetic for Edwards continuation. Auto uses GWNUM/polymult when available, then libecm. Override with --backend." />
       <Item id="option_stage2_stage2_cpu_threads" name="Requested thread count per CPU Stage2 worker, capped by the selected affinity pool. Override with --threads." />
       <Item id="option_stage2_stage2_cpu_memory_mib" name="CPU Stage2 arithmetic memory budget in MiB. Override with --memory-mib." />
+      <Item id="option_stage2_stage2_cpu_tune_candidates" name="Maximum GWNUM Stage2 plans considered for one workload, including the baseline and alternative D and F-tree layouts. 1 keeps only the baseline. ABI 4 can return up to three D choices. Override with --cpu-tune-candidates." />
+      <Item id="option_stage2_stage2_cpu_tune_dense_d" name="Enumerate intermediate D values for GWNUM Stage2 tuning on ABI 5. Disable to search the original wheels. Override with --cpu-tune-dense-d 0|1." />
       <Item id="option_stage2_stage2_opencl_point_plan" name="OpenCL point generation. Auto starts with the qualified plan and can learn from complete curves. Device selects the device ladder plan (including its qualified short batches); chain requests consecutive giant seeds; cpu uses GMP points with OpenCL trees. Manual settings bypass runtime exploration." />
       <Item id="option_stage2_stage2_opencl_point_chunk" name="Maximum points per OpenCL command. Zero uses automatic sizing. A positive value locks the chunk and disables runtime plan trials." />
       <Item id="option_stage2_stage2_opencl_point_group" name="Local OpenCL point work-group size. Zero uses the backend default. Positive sizes must fit both device and kernel limits." />

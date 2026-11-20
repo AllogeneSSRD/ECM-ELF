@@ -107,6 +107,7 @@ int ecm_stage2::run_combined_stage2(int argc, char** argv, GpuEntry gpu) {
                      option == "--list-devices")
                 gpu_command = true;
             else if (option == "--backend" || option == "--threads" || option == "--memory-mib" ||
+                     option == "--f-tree-splits" || option == "--cpu-tune-candidates" || option == "--cpu-tune-dense-d" ||
                      option == "--gw-check" || option == "--selftest-gwpoly")
                 cpu_command = true;
             else if (option == "--once") once = true;

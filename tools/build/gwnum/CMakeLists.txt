@@ -21,10 +21,11 @@ target_link_libraries(ecm_gwnum PRIVATE "${ECM_GWNUM_ROOT}/gwnum64.lib" advapi32
 option(ECM_GW_STAGE2 "Include the Edwards Stage2 polynomial engine" OFF)
 if(ECM_GW_STAGE2)
     set(_cpu "${ECM_ROOT}/src/ecm/stage2/cpu")
-    set(_gmp "${ECM_ROOT}/third_party/gmp-zen3/dist")
+    set(ECM_GW_GMP_ROOT "${ECM_ROOT}/third_party/gmp-zen3/dist"
+        CACHE PATH "GMP installation for the Stage2 plugin")
     target_sources(ecm_gwnum PRIVATE "${_cpu}/gwpoly.cpp" "${_cpu}/gwpoly_plugin.cpp")
-    target_include_directories(ecm_gwnum PRIVATE "${_gmp}/include")
-    target_link_libraries(ecm_gwnum PRIVATE "${_gmp}/lib/gmp.lib" "${ECM_GWNUM_ROOT}/polymult64.lib")
+    target_include_directories(ecm_gwnum PRIVATE "${ECM_GW_GMP_ROOT}/include")
+    target_link_libraries(ecm_gwnum PRIVATE "${ECM_GW_GMP_ROOT}/lib/gmp.lib" "${ECM_GWNUM_ROOT}/polymult64.lib")
     set(_identity "")
     foreach(_file "${_cpu}/gwpoly.cpp" "${_cpu}/gwpoly_plugin.cpp" "${_cpu}/gwpoly.h" "${_cpu}/giant_range.h"
                   "${ECM_ROOT}/include/ecm/stage2_gw_abi.h" "${ECM_GWNUM_ROOT}/gwnum64.lib"
@@ -35,7 +36,7 @@ if(ECM_GW_STAGE2)
     endforeach()
     string(SHA256 _hash "${_identity}")
     string(SUBSTRING "${_hash}" 0 16 _hash)
-    target_compile_definitions(ecm_gwnum PRIVATE "ECM_GW_BUILD=\"gwnum.dll Stage2 ABI=1/2/3/4 build=${_hash}\"")
+    target_compile_definitions(ecm_gwnum PRIVATE "ECM_GW_BUILD=\"gwnum.dll Stage2 ABI=1/2/3/4/5 build=${_hash}\"")
 endif()
 # Match the CRT used by the upstream Windows static library.
 set_target_properties(ecm_gwnum PROPERTIES

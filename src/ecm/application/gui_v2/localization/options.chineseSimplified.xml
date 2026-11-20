@@ -107,6 +107,8 @@
       <Item id="option_stage2_stage2_cpu_backend" name="Edwards CPU 续算的算术后端。auto 优先使用 GWNUM/polymult，其次是 libecm。命令行 --backend 可覆盖。" />
       <Item id="option_stage2_stage2_cpu_threads" name="每个 CPU Stage2 worker 请求的线程数，以所选亲和性范围可用的线程数为上限。命令行 --threads 可覆盖。" />
       <Item id="option_stage2_stage2_cpu_memory_mib" name="CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。" />
+      <Item id="option_stage2_stage2_cpu_tune_candidates" name="一个 GWNUM Stage2 条件最多比较的计划数，包含默认计划、备选 D 和 F 树布局。1 只保留默认计划。ABI 4 最多提供三个 D。命令行 --cpu-tune-candidates 可覆盖。" />
+      <Item id="option_stage2_stage2_cpu_tune_dense_d" name="用 ABI 5 调优 GWNUM Stage2 时枚举更细的 D 档位。关闭后使用原有轮候选。命令行 --cpu-tune-dense-d 0|1 可覆盖。" />
       <Item id="option_stage2_stage2_opencl_point_plan" name="OpenCL 点生成。auto 从已验证的默认计划起步，可用完整曲线继续调优。device 使用设备点计划（含已验证短批次）；chain 选择连续巨步种子；cpu 使用 GMP 点及 OpenCL 树。手动计划跳过运行时探索。" />
       <Item id="option_stage2_stage2_opencl_point_chunk" name="每条 OpenCL 命令的点数。0 自动；正值锁定分块并关闭运行时计划试探。" />
       <Item id="option_stage2_stage2_opencl_point_group" name="OpenCL 点工作组大小。0 使用后端默认；正值必须符合设备与内核上限。" />

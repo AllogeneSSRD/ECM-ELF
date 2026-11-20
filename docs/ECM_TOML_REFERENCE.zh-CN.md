@@ -1031,6 +1031,30 @@ cpu_memory_mib = 512
 
 CPU Stage2 算术内存预算，单位为 MiB。命令行 --memory-mib 可覆盖。
 
+<a id="stage2_cpu_tune_candidates"></a>
+
+### cpu_tune_candidates
+
+```toml
+cpu_tune_candidates = 5
+```
+
+类型 `u64` · 范围 `[1,16]` · Worker 覆盖 `[worker.N] cpu_tune_candidates` · 级别 `高级`。
+
+一个 GWNUM Stage2 条件最多比较的计划数，包含默认计划、备选 D 和 F 树布局。1 只保留默认计划。ABI 4 最多提供三个 D。命令行 --cpu-tune-candidates 可覆盖。
+
+<a id="stage2_cpu_tune_dense_d"></a>
+
+### cpu_tune_dense_d
+
+```toml
+cpu_tune_dense_d = true
+```
+
+类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] cpu_tune_dense_d` · 级别 `高级`。
+
+用 ABI 5 调优 GWNUM Stage2 时枚举更细的 D 档位。关闭后使用原有轮候选。命令行 --cpu-tune-dense-d 0|1 可覆盖。
+
 <a id="stage2_parallel"></a>
 
 ### curve_concurrency

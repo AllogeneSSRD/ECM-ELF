@@ -298,11 +298,11 @@ std::string encode(const std::vector<Row>& rows) {
 }
 } // namespace
 
-uint64_t select(const fs::path& path, const Key& key, const std::vector<Candidate>& candidates,
-                uint64_t min_repeats, bool explore) {
-    if (candidates.empty()) return 0;
+std::optional<std::size_t> select(const fs::path& path, const Key& key, const std::vector<Candidate>& candidates,
+                                  uint64_t min_repeats, bool explore) {
+    if (candidates.empty()) return {};
     if (path.empty() || (explore && candidates.size() == 1))
-        return explore ? candidates.front().d : 0;
+        return explore ? std::optional<std::size_t>{0} : std::nullopt;
     const auto profile = parse_profile(read_profile(path));
     std::vector<const Row*> results(candidates.size(), nullptr);
     auto candidate_key = key;
@@ -319,15 +319,15 @@ uint64_t select(const fs::path& path, const Key& key, const std::vector<Candidat
         const auto next = std::min_element(results.begin(), results.end(), [](const Row* a, const Row* b) {
             return (a ? a->repeats : 0) < (b ? b->repeats : 0);
         });
-        if (!*next || (*next)->repeats < min_repeats) return candidates[next - results.begin()].d;
+        if (!*next || (*next)->repeats < min_repeats) return next - results.begin();
     }
     double fastest = std::numeric_limits<double>::infinity();
-    uint64_t winner = explore ? candidates.front().d : 0;
+    auto winner = explore ? std::optional<std::size_t>{0} : std::nullopt;
     for (std::size_t i = 0; i < results.size(); ++i) {
         const auto measured = results[i];
         if (measured && measured->repeats >= min_repeats && measured->mean_seconds < fastest) {
             fastest = measured->mean_seconds;
-            winner = candidates[i].d;
+            winner = i;
         }
     }
     return winner;

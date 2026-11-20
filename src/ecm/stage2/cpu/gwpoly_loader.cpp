@@ -2,7 +2,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include <array>
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -18,6 +18,7 @@ struct Plugin {
     const ecm_gw_stage2_api_v2* api_v2{};
     const ecm_gw_stage2_api_v3* api_v3{};
     const ecm_gw_stage2_api_v4* api_v4{};
+    const ecm_gw_stage2_api_v5* api_v5{};
     std::string error;
 #ifdef _WIN32
     Plugin() {
@@ -49,6 +50,11 @@ struct Plugin {
             const auto v4 = reinterpret_cast<const ecm_gw_stage2_api_v4*>(planned);
             if (v4->tune_plans) api_v4 = v4;
         }
+        const auto tunable = get(5);
+        if (api_v4 && tunable && tunable->abi == 5 && tunable->size >= sizeof(ecm_gw_stage2_api_v5)) {
+            const auto v5 = reinterpret_cast<const ecm_gw_stage2_api_v5*>(tunable);
+            if (v5->run_plan && v5->search_plans) api_v5 = v5;
+        }
     }
     ~Plugin() { if (module) FreeLibrary(module); }
 #else
@@ -72,7 +78,7 @@ std::vector<uint32_t> encode(mpz_srcptr z, uint32_t words) {
 }
 }
 const char* load_error() { return plugin().api ? nullptr : plugin().error.c_str(); }
-unsigned stage2_abi() { return plugin().api_v4 ? 4 : plugin().api_v3 ? 3 : plugin().api_v2 ? 2 : plugin().api ? 1 : 0; }
+unsigned stage2_abi() { return plugin().api_v5 ? 5 : plugin().api_v4 ? 4 : plugin().api_v3 ? 3 : plugin().api_v2 ? 2 : plugin().api ? 1 : 0; }
 const char* version() { return api().version; }
 const char* cpu() { return api().cpu; }
 const char* identity() { return api().build; }
@@ -95,7 +101,13 @@ bool stage2(mpz_t factor, const mpz_t n, const mpz_t x, const mpz_t a24,
     char error[512]{};
     auto v2 = plugin().api_v2;
     int rc;
-    if (const auto v3 = plugin().api_v3)
+    if (const auto v5 = plugin().api_v5) {
+        const ecm_gw_stage2_request_v5 planned{request,o.f_tree_splits,0,0};
+        rc = v5->run_plan(&planned,output.data(),&stats,&stats.phases,
+                          o.progress,o.progress_context,error,sizeof(error));
+    } else if (o.f_tree_splits != automatic_tree) {
+        throw std::runtime_error("Explicit F-tree layouts require GWNUM Stage2 ABI 5");
+    } else if (const auto v3 = plugin().api_v3)
         rc = v3->run_with_progress(&request,output.data(),&stats,&stats.phases,
                                    o.progress,o.progress_context,error,sizeof(error));
     else if (v2)
@@ -114,13 +126,19 @@ std::vector<TuneCandidate> tune_candidates(mpz_srcptr n, uint64_t b1, uint64_t b
     auto modulus = encode(n,words);
     ecm_gw_stage2_request request{words,o.threads,0,b1,b2,o.d,o.exponent,o.memory_mib,
                                   modulus.data(),nullptr,nullptr,o.stop};
-    std::array<TuneCandidate,3> candidates{};
+    const auto v5 = plugin().api_v5;
+    const unsigned limit = o.tune_candidate_limit ? o.tune_candidate_limit : 3;
+    if (limit > max_tune_candidates) throw std::invalid_argument("Invalid GWNUM Stage2 candidate limit");
+    std::vector<TuneCandidate> candidates(v5 ? limit : (std::min)(limit,3u));
     char error[512]{};
-    const int count = v4->tune_plans(&request,candidates.data(),
-                                          static_cast<uint32_t>(candidates.size()),error,sizeof(error));
+    const auto capacity = static_cast<uint32_t>(candidates.size());
+    const ecm_gw_stage2_request_v5 search{request,o.f_tree_splits,o.tune_candidate_limit,o.dense_d};
+    const int count = v5 ? v5->search_plans(&search,candidates.data(),capacity,error,sizeof(error))
+                         : v4->tune_plans(&request,candidates.data(),capacity,error,sizeof(error));
     if (count < 0) throw std::runtime_error(error);
     if (static_cast<size_t>(count) > candidates.size())
         throw std::runtime_error("Invalid GWNUM Stage2 candidate count");
-    return {candidates.begin(),candidates.begin()+count};
+    candidates.resize(count);
+    return candidates;
 }
 }

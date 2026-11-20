@@ -1853,6 +1853,38 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_cpu_tune_candidates",
+      "toml_key": "cpu_tune_candidates",
+      "field": "cpu_tune_candidates",
+      "type": "u64",
+      "parser": "strict",
+      "default": 5,
+      "domain": "[1,16]",
+      "fx": "CPU_Stage2",
+      "description": [
+        "Maximum GWNUM Stage2 plans considered for one workload, including the baseline and alternative D and F-tree layouts. 1 keeps only the baseline. ABI 4 can return up to three D choices. Override with --cpu-tune-candidates.",
+        "一个 GWNUM Stage2 条件最多比较的计划数，包含默认计划、备选 D 和 F 树布局。1 只保留默认计划。ABI 4 最多提供三个 D。命令行 --cpu-tune-candidates 可覆盖。"
+      ],
+      "minimum": 1,
+      "maximum": 16
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_cpu_tune_dense_d",
+      "toml_key": "cpu_tune_dense_d",
+      "field": "cpu_tune_dense_d",
+      "type": "bool",
+      "parser": "strict",
+      "default": true,
+      "domain": "[false|true|0|1]",
+      "fx": "CPU_Stage2",
+      "description": [
+        "Enumerate intermediate D values for GWNUM Stage2 tuning on ABI 5. Disable to search the original wheels. Override with --cpu-tune-dense-d 0|1.",
+        "用 ABI 5 调优 GWNUM Stage2 时枚举更细的 D 档位。关闭后使用原有轮候选。命令行 --cpu-tune-dense-d 0|1 可覆盖。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_opencl_point_plan",
       "toml_key": "opencl_point_plan",
       "field": "opencl_point_plan",

@@ -1031,6 +1031,30 @@ Type `u64` · Range `[1,1048576]` · Worker override `[worker.N] cpu_memory_mib`
 
 CPU Stage2 arithmetic memory budget in MiB. Override with --memory-mib.
 
+<a id="stage2_cpu_tune_candidates"></a>
+
+### cpu_tune_candidates
+
+```toml
+cpu_tune_candidates = 5
+```
+
+Type `u64` · Range `[1,16]` · Worker override `[worker.N] cpu_tune_candidates` · Level `advanced`.
+
+Maximum GWNUM Stage2 plans considered for one workload, including the baseline and alternative D and F-tree layouts. 1 keeps only the baseline. ABI 4 can return up to three D choices. Override with --cpu-tune-candidates.
+
+<a id="stage2_cpu_tune_dense_d"></a>
+
+### cpu_tune_dense_d
+
+```toml
+cpu_tune_dense_d = true
+```
+
+Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] cpu_tune_dense_d` · Level `advanced`.
+
+Enumerate intermediate D values for GWNUM Stage2 tuning on ABI 5. Disable to search the original wheels. Override with --cpu-tune-dense-d 0|1.
+
 <a id="stage2_parallel"></a>
 
 ### curve_concurrency

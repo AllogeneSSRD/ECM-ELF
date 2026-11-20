@@ -107,6 +107,8 @@ inline constexpr BusinessOption business_options[]={
     {"stage2","stage2_cpu_backend","[auto|gwpoly|ntt|plain]","option_stage2_stage2_cpu_backend","string",false,false,0,0},
     {"stage2","stage2_cpu_threads","[1,1024]","option_stage2_stage2_cpu_threads","u64",true,true,1,1024},
     {"stage2","stage2_cpu_memory_mib","[1,1048576]","option_stage2_stage2_cpu_memory_mib","u64",true,true,1,1048576},
+    {"stage2","stage2_cpu_tune_candidates","[1,16]","option_stage2_stage2_cpu_tune_candidates","u64",true,true,1,16},
+    {"stage2","stage2_cpu_tune_dense_d","[false|true|0|1]","option_stage2_stage2_cpu_tune_dense_d","bool",false,false,0,0},
     {"stage2","stage2_opencl_point_plan","[auto|device|chain|cpu]","option_stage2_stage2_opencl_point_plan","string",false,false,0,0},
     {"stage2","stage2_opencl_point_chunk","[0..4096]","option_stage2_stage2_opencl_point_chunk","u64",true,true,0,4096},
     {"stage2","stage2_opencl_point_group","[0..4096]","option_stage2_stage2_opencl_point_group","u64",true,true,0,4096},

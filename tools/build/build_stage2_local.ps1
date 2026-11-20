@@ -9,6 +9,8 @@ BuildRoot explicitly retains the profile hierarchy under the requested root.
 Incompatible profiles in explicit directories are refused, never overwritten.
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -Arch sm_89
+.EXAMPLE
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -WithGwDll
 #>
 param(
     [string]$Build = '',
@@ -28,11 +30,13 @@ param(
     [string]$CudaRoot = '',
     [string]$VcVars = '',
     [switch]$HostOnly,
+    [switch]$WithGwDll,
     [string]$ResultFile = '',
     [switch]$Rebuild
 )
 $ErrorActionPreference = 'Stop'
 if ($HostOnly -and $Rebuild) { throw 'HostOnly and Rebuild are mutually exclusive' }
+if ($WithGwDll -and $BuildRole -eq 'release') { throw 'WithGwDll is for local use only' }
 if (-not $PSBoundParameters.ContainsKey('AddSubMask') -and $Engine -eq 'production') { $AddSubMask = 1 }
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
@@ -272,6 +276,23 @@ foreach ($name in $gmpHashes.Keys) {
     if ((Get-FileHash -LiteralPath (Join-Path $Gmp $name)).Hash -ne $gmpHashes[$name]) { throw "GMP changed during build: $name" }
 }
 Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $Build -Force
+if ($WithGwDll) {
+    $gwBuild = Join-Path $Build 'gwnum-build'
+    Initialize-EcmBuildDirectory $gwBuild
+    $gwScript = Join-Path $PSScriptRoot 'build_gwnum_local.ps1'
+    $gwCommand = Join-Path $gwBuild 'build_plugin.cmd'
+    $gwLine = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}" -Stage2 -BuildDir "{1}" -GmpRoot "{2}"' -f $gwScript,$gwBuild,$Gmp
+    [IO.File]::WriteAllText($gwCommand,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$gwLine`r`n", [Text.UTF8Encoding]::new($false))
+    $gwLog = Join-Path $gwBuild 'build_plugin.log'
+    & cmd.exe /d /c $gwCommand 2>&1 | Out-File -LiteralPath $gwLog -Encoding utf8
+    if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath $gwLog -Tail 40; throw 'Local GWNUM Stage2 build failed' }
+    Copy-Item -LiteralPath (Join-Path $gwBuild 'gwnum.dll') -Destination $Build -Force
+    $gwVersion = & $exe --target cpu --version | Out-String
+    if ($LASTEXITCODE -ne 0 -or $gwVersion -notmatch '(?m)^gwnum\.dll Stage2 ABI=') {
+        throw "Stage2 failed to load the local GWNUM DLL: $gwVersion"
+    }
+    Write-Host $gwVersion.Trim()
+}
 # The queue driver is built without CMake; build the same diagnostic host target.
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test/build_diagnostics.ps1') -Build (Join-Path $Build 'diagnostics-build') -GmpRoot $Gmp -VcVars $vc.VcVars
 if ($LASTEXITCODE) { throw 'Stage2 diagnostic host build failed' }

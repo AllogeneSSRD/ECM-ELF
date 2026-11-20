@@ -24,10 +24,10 @@ ecm_gwpoly::Options options(const ecm_gw_stage2_request& request) {
     return result;
 }
 
-int run_with_progress(const ecm_gw_stage2_request* r, uint32_t* factor,
-                      ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
-                      ecm_gw_stage2_progress_fn progress, void* context,
-                      char* error, uint32_t capacity) noexcept {
+int run_stage2(const ecm_gw_stage2_request* r, uint32_t* factor,
+               ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
+               ecm_gw_stage2_progress_fn progress, void* context,
+               char* error, uint32_t capacity, int splits) noexcept {
     return guarded(error, capacity, [&] {
         if (!r || !stats || !factor || !r->words || !r->n || !r->x || !r->a24)
             throw std::invalid_argument("Invalid Stage2 buffers");
@@ -42,6 +42,7 @@ int run_with_progress(const ecm_gw_stage2_request* r, uint32_t* factor,
             throw std::invalid_argument("Invalid Stage2 residues");
         ecm_gwpoly::Stats observations{};
         auto settings=options(*r);
+        settings.f_tree_splits=splits;
         settings.progress=progress;
         settings.progress_context=context;
         const bool found = ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r->b1,r->b2,settings,observations);
@@ -52,6 +53,21 @@ int run_with_progress(const ecm_gw_stage2_request* r, uint32_t* factor,
         mpz_export(factor, nullptr, -1, sizeof(uint32_t), 0, 0, f.v);
         return 1;
     });
+}
+
+int run_with_progress(const ecm_gw_stage2_request* r, uint32_t* factor,
+                      ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
+                      ecm_gw_stage2_progress_fn progress, void* context,
+                      char* error, uint32_t capacity) noexcept {
+    return run_stage2(r,factor,stats,phases,progress,context,error,capacity,ecm_gwpoly::automatic_tree);
+}
+
+int run_plan(const ecm_gw_stage2_request_v5* r, uint32_t* factor,
+             ecm_gw_stage2_stats* stats, ecm_gw_stage2_phases* phases,
+             ecm_gw_stage2_progress_fn progress, void* context,
+             char* error, uint32_t capacity) noexcept {
+    return run_stage2(r?&r->base:nullptr,factor,stats,phases,progress,context,error,capacity,
+                      r?r->f_tree_splits:ecm_gwpoly::automatic_tree);
 }
 
 int run_with_phases(const ecm_gw_stage2_request* r, uint32_t* factor,
@@ -67,14 +83,21 @@ int run(const ecm_gw_stage2_request* r, uint32_t* factor, ecm_gw_stage2_stats* s
 
 template<class Plan, class Convert>
 int probe(const ecm_gw_stage2_request* r, Plan* output, uint32_t count,
-          char* error, uint32_t capacity, Convert convert) noexcept {
+          char* error, uint32_t capacity, Convert convert,
+          const ecm_gw_stage2_request_v5* search=nullptr) noexcept {
     return guarded(error, capacity, [&] {
         if (!r || !r->words || !r->n || !output || !count)
             throw std::invalid_argument("Invalid Stage2 planning buffers");
         ecm_edwards::Integer n;
         mpz_import(n.v, r->words, -1, sizeof(uint32_t), 0, 0, r->n);
         if (mpz_cmp_ui(n.v, 2) <= 0) throw std::invalid_argument("Invalid Stage2 modulus");
-        const auto candidates = ecm_gwpoly::tune_candidates(n.v, r->b1, r->b2, options(*r));
+        auto settings=options(*r);
+        if (search) {
+            settings.f_tree_splits=search->f_tree_splits;
+            settings.tune_candidate_limit=std::min(count,search->tune_candidates);
+            settings.dense_d=search->dense_d!=0;
+        }
+        const auto candidates = ecm_gwpoly::tune_candidates(n.v, r->b1, r->b2, settings);
         const auto copied = std::min<size_t>(candidates.size(), count);
         for (std::size_t i = 0; i < copied; ++i) output[i] = convert(candidates[i]);
         return static_cast<int>(copied);
@@ -93,6 +116,11 @@ int tune_plans(const ecm_gw_stage2_request* r, ecm_gw_stage2_tune_plan* output,
     return probe(r,output,count,error,capacity,[](const auto& plan) { return plan; });
 }
 
+int search_plans(const ecm_gw_stage2_request_v5* r, ecm_gw_stage2_tune_plan* output,
+                 uint32_t count, char* error, uint32_t capacity) noexcept {
+    return probe(r?&r->base:nullptr,output,count,error,capacity,[](const auto& plan) { return plan; },r);
+}
+
 int selftest(uint32_t threads, char* error, uint32_t capacity) noexcept {
     return guarded(error, capacity, [&] { ecm_gwpoly::selftest(threads); return 0; });
 }
@@ -109,6 +137,10 @@ extern "C" __declspec(dllexport) const ecm_gw_stage2_api* ecm_gw_stage2_get_api(
     static const ecm_gw_stage2_api_v4 v4{
         {{{4, sizeof(v4), api.version, api.build, api.cpu, run, selftest},
           run_with_phases, tune_candidates}, run_with_progress}, tune_plans};
+    static const ecm_gw_stage2_api_v5 v5{
+        {{{{5, sizeof(v5), api.version, api.build, api.cpu, run, selftest},
+           run_with_phases, tune_candidates}, run_with_progress}, tune_plans}, run_plan, search_plans};
+    if (abi == 5) return &v5.base.base.base.base;
     if (abi == 4) return &v4.base.base.base;
     if (abi == 3) return &v3.base.base;
     if (abi == 1) return &api;

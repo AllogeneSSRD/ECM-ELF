@@ -56,6 +56,9 @@ struct Options {
     bool tune_runtime=true,round_b2=false;
     uint64_t round_limit=ecm_gwpoly::max_b2;
     uint64_t tune_min_repeats=2,tune_sample_limit=10;
+    unsigned tune_candidate_limit=5;
+    bool tune_dense_d=true;
+    int f_tree_splits=ecm_gwpoly::automatic_tree;
     int log_level=-1;
     bool gui=false,once=false,explicit_results=false;
     bool dry=false,gw_selftest=false,gw_check=false;uint64_t d=0;uintptr_t stop_handle=0;int worker=1;
@@ -97,6 +100,8 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
     if(settings.auto_b2 && settings.auto_max)o.round_limit=std::min(o.round_limit,settings.auto_max);
     o.tune_min_repeats=settings.tune_min_repeats;
     o.tune_sample_limit=settings.runtime_samples;
+    o.tune_candidate_limit=static_cast<unsigned>(settings.cpu_tune_candidates);
+    o.tune_dense_d=settings.cpu_tune_dense_d;
     const auto &tune_name=settings.tune_profile.empty()?settings.shared_tune_file:settings.tune_profile;
     if(!tune_name.empty())o.tune_profile=s2prod::absolute_from(fs::u8path(o.ini).parent_path(),tune_name);
     o.cpu_affinity=settings.shared_cpu_affinity;
@@ -117,6 +122,7 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
             std::cout<<"CPU Edwards Stage2\n[--config FILE] [--worker N] [--worktodo FILE] [--once] [--stage2-stop-handle HANDLE]\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
                 "[--threads 1] [--b2-round-chain 0|1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
+                "[--f-tree-splits auto|segmented|0..63 (with --d)] [--cpu-tune-candidates 1..16] [--cpu-tune-dense-d 0|1]\n"
                 "[--tune-runtime 0|1] [--tune-profile FILE] [--tune-min-repeats N] [--tune-runtime-samples N]\n"
                 "[--exponent P] [--known-factor DECIMAL (repeatable)] [--user NAME] [--computer NAME] [--aid HEX32]\n"
                 "B2 limit: libecm=1000000000000, gwpoly=1000000000000000\n";
@@ -146,6 +152,25 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
             o.round_b2=mode!=0;explicit_rounding=true;
         }
         else if(key=="--d")o.d=decimal(value);
+        else if(key=="--f-tree-splits"){
+            if(value=="auto")o.f_tree_splits=ecm_gwpoly::automatic_tree;
+            else if(value=="segmented")o.f_tree_splits=ecm_gwpoly::segmented_tree;
+            else{
+                const auto splits=decimal(value);
+                if(splits>63)throw std::runtime_error("F-tree splits must be in 0..63");
+                o.f_tree_splits=static_cast<int>(splits);
+            }
+        }
+        else if(key=="--cpu-tune-candidates"){
+            const auto limit=decimal(value);
+            if(!limit || limit>ecm_gwpoly::max_tune_candidates)throw std::runtime_error("CPU tune candidates must be in 1..16");
+            o.tune_candidate_limit=static_cast<unsigned>(limit);
+        }
+        else if(key=="--cpu-tune-dense-d"){
+            const auto mode=decimal(value);
+            if(mode>1)throw std::runtime_error("CPU tune dense D must be 0 or 1");
+            o.tune_dense_d=mode!=0;
+        }
         else if(key=="--tune-profile")o.tune_profile=value.empty()?fs::path{}:s2prod::absolute_from(fs::current_path(),value);
         else if(key=="--tune-runtime"){
             const auto mode=decimal(value);
@@ -171,6 +196,8 @@ Options options(int argc,char **argv,const ecm_stage2::LaunchConfig& launch) {
         o.round_b2=false;
     }
     if((o.d || o.gw_check) && o.backend!="gwpoly")throw std::runtime_error("--d/--gw-check require --backend gwpoly");
+    if(o.f_tree_splits!=ecm_gwpoly::automatic_tree && (!o.d || ecm_gwpoly::stage2_abi()<5))
+        throw std::runtime_error("--f-tree-splits requires --d and GWNUM Stage2 ABI 5");
     if(!o.tune_sample_limit || o.tune_sample_limit>1000 || !o.tune_min_repeats || o.tune_min_repeats>o.tune_sample_limit)
         throw std::runtime_error("tune repeats and sample limit must be in 1..1000, with repeats <= limit");
     if(!o.aid.empty() && (o.aid.size()!=32 || o.aid.find_first_not_of("0123456789abcdefABCDEF")!=o.aid.npos))throw std::runtime_error("AID must contain 32 hex digits");
@@ -256,8 +283,10 @@ struct TunePlans {
         }
         return candidates;
     }
-    void reject(uint64_t d) {
-        candidates.erase(std::remove_if(candidates.begin(),candidates.end(),[&](const auto &p){return p.d==d;}),
+    void reject(const ecm_cpu_tune::Candidate& rejected) {
+        candidates.erase(std::remove_if(candidates.begin(),candidates.end(),[&](const auto &p){
+            return p.d==rejected.d && p.f_tree_splits==rejected.f_tree_splits;
+        }),
                          candidates.end());
     }
 };
@@ -353,6 +382,13 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
             if(selected.backend=="gwpoly"){
                 ecm_gwpoly::Options gw;gw.threads=static_cast<unsigned>(o.threads);gw.memory_mib=o.memory;
                 gw.exponent=o.exponent;gw.d=o.d;gw.stop=cancel;gw.check=o.gw_check;
+                gw.f_tree_splits=o.f_tree_splits;
+                const auto abi=ecm_gwpoly::stage2_abi();
+                std::error_code tune_error;
+                const bool use_profile=abi>=4 && o.thread_layout && !o.tune_profile.empty() &&
+                    (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error));
+                gw.tune_candidate_limit=use_profile?o.tune_candidate_limit:1;
+                gw.dense_d=o.tune_dense_d;
                 CurveProgress progress{log,r,o.b2,mpz_sizeinbase(n.v,2),o.gui || stage2_log::enabled(stage2_log::batches)};
                 if(o.gui || stage2_log::enabled(stage2_log::phases)) {
                     gw.progress=CurveProgress::receive;
@@ -362,28 +398,28 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
                 std::optional<TuneObservation> observation;
                 const auto apply_plan=[&](const ecm_cpu_tune::Candidate &plan) {
                     gw.d=plan.d;selected.b2=plan.actual_b2;progress.b2=selected.b2;
+                    if(abi>=5)gw.f_tree_splits=static_cast<int>(plan.f_tree_splits);
                     if(o.round_b2)log("gwpoly-bounds: requested_B2="+std::to_string(o.b2)+
                         " actual_B2="+std::to_string(selected.b2)+" D="+std::to_string(gw.d)+
                         " P="+std::to_string(plan.poly_size),false);
                 };
                 if(o.round_b2 && tune.get(r,n.v,o.b2,gw,o).empty())
                     throw std::runtime_error("No admitted whole G block endpoint within CPU B2 limit "+std::to_string(o.round_limit));
-                std::error_code tune_error;
-                if(ecm_gwpoly::stage2_abi()>=4 && o.thread_layout && !o.tune_profile.empty() &&
-                   (o.tune_runtime || fs::is_regular_file(o.tune_profile,tune_error))) {
+                if(use_profile) {
                     try {
                         const auto &plans=tune.get(r,n.v,o.b2,gw,o);
                         if(!plans.empty()) {
                             ecm_cpu_tune::Key key{ecm_cpu_tune::cpu_identity(ecm_gwpoly::cpu()),ecm_gwpoly::version(),*o.thread_layout,
                                 gw.exponent != 0,gw.exponent ? gw.exponent : mpz_sizeinbase(n.v,2),r.b1,o.b2};
-                            const auto d=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
-                            const auto plan=std::find_if(plans.begin(),plans.end(),[&](const auto &p){return p.d==d;});
-                            if(plan!=plans.end()) {
-                                key.b2=plan->actual_b2;
-                                observation=TuneObservation{std::move(key),*plan};
-                                apply_plan(*plan);
-                                if(verbose)log("gwpoly-tune: D="+std::to_string(d)+" P="+std::to_string(plan->poly_size)+
-                                    " FFT="+std::to_string(plan->fft_length)+(o.tune_runtime?" runtime":" read-only"),false);
+                            const auto index=ecm_cpu_tune::select(o.tune_profile,key,plans,o.tune_min_repeats,o.tune_runtime);
+                            if(index) {
+                                const auto &plan=plans[*index];
+                                key.b2=plan.actual_b2;
+                                observation=TuneObservation{std::move(key),plan};
+                                apply_plan(plan);
+                                if(verbose)log("gwpoly-tune: D="+std::to_string(plan.d)+" P="+std::to_string(plan.poly_size)+
+                                    " FFT="+std::to_string(plan.fft_length)+(o.tune_runtime?" runtime":" read-only")+
+                                    " f_tree_splits="+std::to_string(plan.f_tree_splits),false);
                             }
                         }
                     } catch(const std::exception &error) {
@@ -400,12 +436,12 @@ bool calculate(const Options &o,const SavedCurve &r,bool queued,
                     if(cancel())return false;
                     if(!observation)throw;
                     std::cerr<<"gwpoly-tune: D="<<gw.d<<" failed, retrying automatic D: "<<error.what()<<'\n';
-                    tune.reject(gw.d);
+                    tune.reject(observation->plan);
                     observation.reset();
                     if(o.round_b2){
                         if(tune.candidates.empty())throw;
                         apply_plan(tune.candidates.front());
-                    }else gw.d=0;
+                    }else {gw.d=0;gw.f_tree_splits=ecm_gwpoly::automatic_tree;}
                     stats={};
                     try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,selected.b2,gw,stats))stage=2;}
                     catch(...){if(cancel())return false;throw;}
@@ -570,6 +606,8 @@ int ecm_stage2::run_cpu_stage2(int argc,char **argv,const ecm_stage2::LaunchConf
             if(abi<4 && !o.tune_profile.empty())
                 std::cerr<<"gwpoly-tune: gwnum.dll Stage2 ABI "<<abi
                          <<" cannot tune; rebuild the DLL with -Stage2 (ABI 4).\n";
+            if(abi==4 && !o.tune_profile.empty())
+                std::cerr<<"gwpoly-tune: loaded ABI 4; joint D/F-tree and dense D search require ABI 5.\n";
             if(abi<3 && (o.gui || stage2_log::enabled(stage2_log::phases)))
                 std::cerr<<"gwpoly-progress: gwnum.dll Stage2 ABI "<<abi
                          <<" cannot stream progress; rebuild the DLL with -Stage2 (ABI 3).\n";

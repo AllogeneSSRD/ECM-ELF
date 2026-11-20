@@ -83,3 +83,19 @@ typedef struct {
     int (*tune_plans)(const ecm_gw_stage2_request*, ecm_gw_stage2_tune_plan*,
                       uint32_t capacity, char* error, uint32_t error_size);
 } ecm_gw_stage2_api_v4;
+
+/* ABI 5 lets runtime tuning execute the exact F-tree layout it tested. */
+typedef struct {
+    ecm_gw_stage2_request base;
+    int32_t f_tree_splits; /* -1 automatic, -2 segmented, 0 full, >0 fixed splits. */
+    uint32_t tune_candidates, dense_d;
+} ecm_gw_stage2_request_v5;
+
+typedef struct {
+    ecm_gw_stage2_api_v4 base;
+    int (*run_plan)(const ecm_gw_stage2_request_v5*, uint32_t* factor,
+                    ecm_gw_stage2_stats*, ecm_gw_stage2_phases*,
+                    ecm_gw_stage2_progress_fn, void*, char* error, uint32_t error_size);
+    int (*search_plans)(const ecm_gw_stage2_request_v5*, ecm_gw_stage2_tune_plan*,
+                        uint32_t capacity, char* error, uint32_t error_size);
+} ecm_gw_stage2_api_v5;

@@ -4,6 +4,7 @@ from collections import Counter
 import json
 import math
 from pathlib import Path
+import re
 import subprocess
 import tomllib
 
@@ -83,7 +84,7 @@ def verify_tune(row, memory=MEMORY_MIB):
     assert "smt_extra" not in row
     assert row["d"] >= 6 and row["d"] % 2 == 0
     assert row["p"] == sum(math.gcd(j, row["d"]) == 1 for j in range(1, row["d"] // 2 + 1))
-    assert row["f_tree_splits"] == 0 and row["fft_length"] > 0
+    assert 0 <= row["f_tree_splits"] < 64 and row["fft_length"] > 0
     assert 0 < row["planned_mib"] <= memory
     assert math.isfinite(row["mean_seconds"]) and row["mean_seconds"] > 0
     assert math.isfinite(row["stddev_seconds"]) and row["stddev_seconds"] >= 0
@@ -101,6 +102,7 @@ class Fixture:
         self.config.write_text(
             'config_version = 4\n[shared]\ntune_file = "shared-profile.toml"\n'
             '[stage2]\nb2_round_chain = false\nstage2_cpu_threads = 1\ncpu_backend = "gwpoly"\ncpu_memory_mib = 512\n'
+            'cpu_tune_candidates = 3\ncpu_tune_dense_d = false\n'
             'tune_runtime_enabled = true\ntune_min_repeats = 2\ntune_runtime_sample_limit = 2\n',
             encoding="utf-8",
         )
@@ -171,16 +173,19 @@ def main():
     assert len(results) == 6 and all(row["status"] == "NF" for row in results)
     assert [row["stage2-engine"]["save-line"] for row in results] == list(range(1, 7))
     assert all(row["b2"] == B2 for row in results)
-    observed = Counter((row["d"], row["poly-size"], row["fft-length"]) for row in results)
+    splits = map(int, re.findall(r"retained_splits=(\d+)", (out / "train" / "run.log").read_text(encoding="utf-8")))
+    observed = Counter((row["d"], row["poly-size"], row["fft-length"], split)
+                       for row, split in zip(results, splits, strict=True))
     assert 2 <= len(observed) <= 3, observed
     document = read_tune(f.tune)
     tuned = matrix_rows(document.pop("cpu_stage2"))
     assert document == tomllib.loads(GPU_TOML)
     assert_aligned_cpu_matrices(f.tune)
-    assert {(row["d"], row["p"], row["fft_length"]) for row in tuned} == set(observed)
+    assert {(row["d"], row["p"], row["fft_length"], row["f_tree_splits"]) for row in tuned} == set(observed)
     for row in tuned:
         verify_tune(row)
-        assert row["repeats"] == min(2, observed[(row["d"], row["p"], row["fft_length"])]) == 2
+        shape = (row["d"], row["p"], row["fft_length"], row["f_tree_splits"])
+        assert row["repeats"] == min(2, observed[shape]) == 2
     print("PASS fixed workload, candidate cycling, phase schema and preserved GPU profile", flush=True)
 
     state = f.tune.read_bytes()
@@ -195,6 +200,42 @@ def main():
     assert rebudgeted["d"] == winner["d"] and f.tune.read_bytes() == state
     assert "gwpoly-tune: D=" in (out / "other_budget" / "run.log").read_text(encoding="utf-8")
     print("PASS read-only fastest reuse, explicit D and identical layouts across memory budgets", flush=True)
+
+    version = subprocess.check_output([f.executable, "--version"], text=True, timeout=30)
+    if "CPU Stage2" not in version:
+        version = subprocess.check_output([f.executable, "--target", "cpu", "--version"], text=True, timeout=30)
+    if "ABI=1/2/3/4/5" in version or "static gwpoly" in version:
+        for mode, splits in [(0, 0), (2, 2)]:
+            explicit = f.start(f"fixed_tree_{mode}", *f.save_flags(1), "--d", 210,
+                               "--f-tree-splits", mode, "--gw-check")
+            row, = f.finish(explicit)
+            assert row["status"] == "NF" and row["stage2-engine"]["checked-values"] == 3
+            assert f"retained_splits={splits}" in explicit[1].read_text(encoding="utf-8")
+
+        joint = out / "joint.toml"
+        flags = ("--save", f.save, "--exponent", 127, "--b2", 40_000_000,
+                 "--tune-profile", joint, "--tune-min-repeats", 1, "--cpu-tune-candidates", 2)
+        assert len(f.finish(f.start("train_same_d", *flags, "--curves", 2))) == 2
+        table = read_tune(joint)["cpu_stage2"]
+        cols, *rows = table["matrix"]
+        d_column, split_column, mean_column = map(cols.index, ("d", "f_tree_splits", "mean_seconds"))
+        assert len(rows) == 2 and rows[0][d_column] == rows[1][d_column]
+        assert rows[0][split_column] == 0 and rows[1][split_column] > 0
+        rows[0][mean_column], rows[1][mean_column] = 2.0, 1.0
+        joint.write_text('[cpu_stage2]\nformat = 3\n' +
+                         f'cpu = {json.dumps(table["cpu"])}\nsupported = {json.dumps(table["supported"])}\n' +
+                         'matrix = [\n' + ''.join(f'    {json.dumps(row)},\n' for row in [cols, *rows]) + ']\n',
+                         encoding="utf-8")
+        reuse = f.start("reuse_segmented_same_d", *flags, "--tune-runtime", 0, "--curves", 1)
+        assert len(f.finish(reuse)) == 1
+        log = reuse[1].read_text(encoding="utf-8")
+        assert f'retained_splits={rows[1][split_column]}' in log
+        assert f' f_tree_splits={rows[1][split_column]}' in log
+        expanded = out / "expanded.toml"
+        assert len(f.finish(f.start("train_expanded", *flags, "--tune-profile", expanded,
+                                    "--cpu-tune-candidates", 6, "--cpu-tune-dense-d", 1, "--curves", 6))) == 6
+        assert len(matrix_rows(read_tune(expanded)["cpu_stage2"])) == 6
+        print("PASS ABI 5 fixed layouts, separate same-D samples, read-only reuse and six candidates", flush=True)
 
     migration = out / "format2.toml"
     columns = ["cpu", "threads", "gw_version", "modulus_mode", "fft_length", "fft_layout", "polymult_isa",
@@ -214,8 +255,10 @@ def main():
     assert from_v2["d"] == winner["d"] and migration.read_bytes() == original_v2
     f.save_run("format2_migrate_at_cap", "--tune-profile", migration)
     migrated = read_tune(migration)
-    assert sorted(matrix_rows(migrated.pop("cpu_stage2")), key=lambda r: (r["cpu"], r["d"])) == sorted(
-        [*tuned, other], key=lambda r: (r["cpu"], r["d"]))
+    def order(row):
+        return row["cpu"], row["d"], row["f_tree_splits"]
+
+    assert sorted(matrix_rows(migrated.pop("cpu_stage2")), key=order) == sorted([*tuned, other], key=order)
     assert migrated == tomllib.loads(GPU_TOML)
     assert_aligned_cpu_matrices(migration)
     print("PASS format-2 reuse, capped migration, separate CPUs and aligned new matrices", flush=True)
@@ -404,7 +447,7 @@ def main():
                                   "--b2", B2, "--curves", 1, "--tune-runtime-samples", 3))
         updated = matrix_rows(read_tune(f.tune)["cpu_stage2"])
         assert len(updated) == len(tuned)
-        merged, = [row for row in updated if row["d"] == added["d"]]
+        merged, = [row for row in updated if row["d"] == added["d"] and row["repeats"] == 3]
         assert (merged["repeats"], merged["tested_min"], merged["tested_max"]) == (3, 107, 127)
         print("PASS FFT-tier reuse across exponents and rejection at a different FFT tier", flush=True)
 
