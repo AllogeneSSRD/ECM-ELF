@@ -50,6 +50,9 @@ def main():
     def export(path,good=True):
         result=subprocess.run([str(exe),'--export-submission',str(path)],capture_output=True)
         assert (result.returncode==0)==good,(path,result.stderr)
+    # Explicit export seeds the legacy order fixture. Normal publication
+    # deliberately does not mirror the entire output into a history file.
+    export(out/'run/alternating.json.txt')
     path,ledger=copied_case('partial_append');expected=path.read_bytes()
     path.write_bytes(expected[:expected.index(b'\n')+21]);export(path)
     checks['partial_append_recovery']=path.read_bytes()==expected

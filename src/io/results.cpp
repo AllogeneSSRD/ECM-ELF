@@ -15,6 +15,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -245,18 +246,6 @@ static bool stage2_internal_row(const json::Value& row) {
     return stage2;
 }
 
-static bool internal_has_stage2(const std::filesystem::path& path) {
-    if (!std::filesystem::exists(path))
-        return false;
-    std::istringstream input(ecm_io::read_file(path));
-    std::string line;
-    bool stage2 = false;
-    while (std::getline(input, line))
-        if (!line.empty())
-            stage2 = stage2_internal_row(json::parse(line)) || stage2;
-    return stage2;
-}
-
 std::string submission_json(const Submission& r, const mpz_t n) {
     const bool hit = !r.factors.empty();
     if (!r.curves || r.b1 < 2 ||
@@ -434,6 +423,12 @@ std::filesystem::path submission_ledger(const std::filesystem::path& path) {
     return path.parent_path() / "data" / (path.filename().string() + ".ecm-ledger");
 }
 
+std::filesystem::path submission_publish_state(const std::filesystem::path& path) {
+    const auto canonical = std::filesystem::u8path(ecm_io::file_identity(path));
+    return canonical.parent_path() / "data" /
+           std::filesystem::u8path(canonical.filename().u8string() + ".ecm-publish");
+}
+
 bool has_result_ledger(const std::filesystem::path& path) {
     return std::filesystem::exists(submission_ledger(path) / "format") ||
            std::filesystem::exists(legacy_submission_ledger(path) / "format");
@@ -476,6 +471,11 @@ std::vector<std::unique_ptr<ecm_io::FileLock>> lock_result_pair(const fs::path& 
 struct SubmissionEntry {
     std::string key, group, json;
 };
+
+void write_submission_entry(const fs::path& path, const SubmissionEntry& entry) {
+    const auto body = "ECM_SUBMISSION_V1\n" + entry.key + '\n' + entry.group + '\n' + entry.json + '\n';
+    ecm_io::write_atomic(path, body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
+}
 
 SubmissionEntry read_submission_entry(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -548,10 +548,166 @@ std::string read_submission_bytes(const fs::path& path) {
 
 namespace {
 std::string stage1_factor_identity(const json::Value&);
+std::string stage2_factor_identity(const json::Value&);
 uint64_t result_sigma(const json::Value&);
 bool stage1_modulus_matches(const json::Value&, mpz_srcptr);
 
-bool owned_submission(const std::string& text, bool stage1_only = false) {
+struct ExportRow {
+    std::string key, line;
+    bool nf = false;
+};
+
+fs::path export_receipt(const fs::path& state, const std::string& key) {
+    return state / "receipts" / (std::to_string(ecm_io::fingerprint(key)) + ".done");
+}
+
+std::optional<std::string> committed_export(const fs::path& state, const std::string& key) {
+    const auto receipt = export_receipt(state, key);
+    if (!fs::exists(receipt))
+        return std::nullopt;
+    const auto entry = read_submission_entry(receipt);
+    const auto value = json::parse(entry.json);
+    if (entry.key != "export" || entry.group != "COMMITTED" ||
+        value.get("id").text() != key || value.get("line").type != 's')
+        throw std::runtime_error("invalid submission receipt: " + receipt.u8string());
+    return value.get("line").text();
+}
+
+json::Value export_key(const std::string& id, const std::string& line = {}) {
+    json::Value key;
+    key.type = 'o';
+    key.set("id", json::Value::string(id));
+    key.set("line", json::Value::string(line));
+    return key;
+}
+
+void commit_export_key(const fs::path& state, const json::Value& key) {
+    const auto id = key.get("id").text();
+    if (!committed_export(state, id))
+        write_submission_entry(export_receipt(state, id), {"export", "COMMITTED", key.dump()});
+}
+
+constexpr size_t export_anchor_bytes = 256;
+
+// Caller holds the submission writer lock for preparation, recovery and commit.
+void finish_export(const fs::path& path, const fs::path& state, const json::Value& intent,
+                   std::optional<std::string> actual = std::nullopt) {
+    const auto offset = std::stoull(intent.get("offset").text());
+    const auto tail = intent.get("tail").text();
+    const auto anchor = intent.get("anchor").text();
+    const auto& keys = intent.get("keys");
+    if (tail.empty() || tail.back() != '\n' || keys.type != 'a' || keys.items.empty() ||
+        anchor.size() != (std::min)(offset, uint64_t(export_anchor_bytes)) ||
+        std::any_of(keys.items.begin(), keys.items.end(), [](const auto& key) {
+            return key.get("id").type != 's' || key.get("id").scalar.empty() ||
+                   key.get("line").type != 's';
+        }))
+        throw std::runtime_error("invalid pending submission append");
+    if (std::all_of(keys.items.begin(), keys.items.end(),
+                    [&](const auto& key) { return committed_export(state, key.get("id").text()).has_value(); })) {
+        fs::remove(state / "pending");
+        return;
+    }
+    if (!actual)
+        actual = read_submission_bytes(path);
+    if (actual->size() == offset &&
+        actual->compare(actual->size() - anchor.size(), anchor.size(), anchor) == 0) {
+        *actual += tail;
+        ecm_io::write_atomic(path, *actual, ".new");
+    } else if (offset > actual->size() || actual->compare(size_t(offset), tail.size(), tail) != 0) {
+        throw std::runtime_error("cannot recover pending submission append at byte " +
+                                 std::to_string(offset) + ": " + path.u8string());
+    }
+    for (const auto& key : keys.items)
+        commit_export_key(state, key);
+    fs::remove(state / "pending");
+}
+
+void recover_export(const fs::path& path, const fs::path& state) {
+    const auto pending = state / "pending";
+    if (!fs::exists(pending))
+        return;
+    const auto record = read_submission_entry(pending);
+    if (record.key != "export" || record.group != "PENDING")
+        throw std::runtime_error("invalid pending submission receipt: " + pending.u8string());
+    finish_export(path, state, json::parse(record.json));
+}
+
+// Exact lookup is used only to adopt reports from an in-flight legacy checkpoint.
+bool contains_export_line(const std::string& bytes, const std::string& line) {
+    for (auto at = bytes.find(line); at != bytes.npos; at = bytes.find(line, at + 1))
+        if ((at == 0 || bytes[at - 1] == '\n') &&
+            (at + line.size() == bytes.size() || bytes[at + line.size()] == '\n' ||
+             bytes.compare(at + line.size(), 2, "\r\n") == 0))
+            return true;
+    return false;
+}
+
+void append_export(const fs::path& path, const std::vector<ExportRow>& rows,
+                   bool adopt_legacy = false) {
+    const auto state = submission_publish_state(path);
+    recover_export(path, state);
+    json::Value keys;
+    keys.type = 'a';
+    std::set<std::string> selected;
+    std::string tail;
+    std::optional<std::string> actual;
+    for (const auto& row : rows) {
+        if (!selected.insert(row.key).second || committed_export(state, row.key))
+            continue;
+        const auto key = export_key(row.key, row.nf ? row.line : std::string{});
+        if (adopt_legacy) {
+            if (!actual)
+                actual = read_submission_bytes(path);
+            if (contains_export_line(*actual, row.line)) {
+                if (row.nf)
+                    commit_export_key(state, export_key("nf-line|" + row.line));
+                commit_export_key(state, key);
+                continue;
+            }
+        }
+        keys.items.push_back(key);
+        if (row.nf)
+            keys.items.push_back(export_key("nf-line|" + row.line));
+        tail += row.line + '\n';
+    }
+    if (tail.empty())
+        return;
+    if (!actual)
+        actual = read_submission_bytes(path);
+    if (!actual->empty() && actual->back() != '\n')
+        tail.insert(tail.begin(), '\n');
+    json::Value intent;
+    intent.type = 'o';
+    intent.set("offset", json::Value::number(std::to_string(actual->size())));
+    intent.set("anchor", json::Value::string(actual->substr(actual->size() -
+        (std::min)(actual->size(), export_anchor_bytes))));
+    intent.set("tail", json::Value::string(std::move(tail)));
+    intent.set("keys", std::move(keys));
+    write_submission_entry(state / "pending", {"export", "PENDING", intent.dump()});
+    finish_export(path, state, intent, std::move(*actual));
+}
+
+std::string distinct_nf(const fs::path& path, const std::string& key, std::string line) {
+    const auto state = submission_publish_state(path);
+    if (const auto committed = committed_export(state, key))
+        return *committed;
+    if (!committed_export(state, "nf-line|" + line))
+        return line;
+    auto row = json::parse(line);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    do {
+        if (std::chrono::steady_clock::now() > deadline)
+            throw std::runtime_error("system clock did not advance for NF report");
+        row.set("timestamp", json::Value::string(utc_timestamp()));
+        line = with_result_checksum(row.dump());
+        if (!committed_export(state, "nf-line|" + line))
+            return line;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (true);
+}
+
+bool owned_submission(const std::string& text) {
     std::istringstream in(text);
     std::string line;
     bool found = false;
@@ -564,8 +720,6 @@ bool owned_submission(const std::string& text, bool stage1_only = false) {
         if (row.type != 'o' || row.get("program").get("name").text() != ecm_program::name ||
             row.get("worktype").text() != "ECM" ||
             (row.get("status").text() != "NF" && row.get("status").text() != "F") ||
-            (stage1_only && row.get("stage").text() != "1" &&
-             row.get("b1").text() != row.get("b2").text()) ||
             row.get("checksum").dump() !=
                 json::parse(with_result_checksum(line)).get("checksum").dump())
             return false;
@@ -663,16 +817,8 @@ void append_submissions(const fs::path& path, const fs::path& ledger) {
             "ECM_SUBMISSION_V1\npublication-order\nORDER\n" + json::quote(ordered) + '\n';
         ecm_io::write_atomic(order_path, body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
     }
-    if (actual.size() != ordered.size() || !fs::exists(path)) {
-        std::ofstream out(path, std::ios::binary | std::ios::app);
-        if (!out)
-            throw std::runtime_error("cannot append submission output");
-        out.write(ordered.data() + actual.size(),
-                  static_cast<std::streamsize>(ordered.size() - actual.size()));
-        out.close();
-        if (!out)
-            throw std::runtime_error("cannot finish submission output append");
-    }
+    if (actual.size() != ordered.size() || !fs::exists(path))
+        ecm_io::write_atomic(path, ordered, ".new");
 }
 
 uint64_t submission_order(const SubmissionEntry& entry) {
@@ -689,6 +835,8 @@ uint64_t submission_order(const SubmissionEntry& entry) {
 void seal_submissions(const fs::path& path, int stage_filter, const std::string& task,
                       bool whole_task) {
     auto lock = lock_result(path);
+    const bool explicit_export = task.empty();
+    recover_export(path, submission_publish_state(path));
     const auto ledger = migrate_result_ledger(path);
     if (!fs::exists(ledger / "format"))
         return;
@@ -774,13 +922,16 @@ void seal_submissions(const fs::path& path, int stage_filter, const std::string&
             }
         }
         const auto key = std::to_string(ecm_io::fingerprint(ids));
-        const auto body = "ECM_SUBMISSION_V1\n" + key + '\n' + ids + '\n' + json + '\n';
-        ecm_io::write_atomic(entries.front().directory / (key + ".batch"),
-                    body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
+        if (!explicit_export) {
+            const auto id = "direct-nf|" + ids;
+            json = distinct_nf(path, id, std::move(json));
+            append_export(path, {{id, json, true}});
+        }
+        write_submission_entry(entries.front().directory / (key + ".batch"), {key, ids, json});
         lines.insert(json);
-        append_submissions(path, ledger);
     }
-    append_submissions(path, ledger);
+    if (explicit_export)
+        append_submissions(path, ledger);
 }
 
 void refresh_submission_if_owned(const fs::path& path) {
@@ -796,10 +947,6 @@ void refresh_submission_if_owned(const fs::path& path) {
 fs::path prepare_submission_ledger(const fs::path& path) {
     const auto ledger = migrate_result_ledger(path);
     if (!fs::exists(ledger / "format")) {
-        // Never replace an unrelated Prime95/manual result file.
-        if (fs::exists(path) && !owned_submission(read_submission_bytes(path)))
-            throw std::runtime_error(
-                "submission file has no owned ledger; select a fresh output path");
         fs::create_directories(ledger);
         ecm_io::write_atomic(ledger / "format", "ECM_SUBMISSION_LEDGER_V1\n", ".new");
     }
@@ -807,20 +954,9 @@ fs::path prepare_submission_ledger(const fs::path& path) {
     return ledger;
 }
 
-void ensure_submission_output(const fs::path& path) {
-    auto lock = lock_result(path);
-    append_submissions(path, prepare_submission_ledger(path));
-}
-
-void check_stage2_outputs(const fs::path& internal, const fs::path& submission, bool resumed) {
-    if (has_result_ledger(submission))
-        return;
-    auto locks = lock_result_pair(internal, submission);
-    if (resumed || internal_has_stage2(internal) ||
-        (fs::exists(submission) && fs::file_size(submission) &&
-         !owned_submission(read_submission_bytes(submission), true)))
-        throw std::runtime_error(
-            "Stage2 result ledger is missing; restore its data directory before continuing");
+void check_stage2_outputs(const fs::path& internal, const fs::path& submission, bool) {
+    if (!internal.empty() && ecm_io::same_file_resource(internal.u8string(), submission.u8string()))
+        throw std::runtime_error("result output paths must differ");
 }
 
 std::vector<uint64_t> legacy_stage2_bounds(const fs::path& submission) {
@@ -934,6 +1070,7 @@ void publish_submission(const fs::path& path, const Submission& r, const mpz_t n
     auto line = submission_json(r, n);
     line.pop_back();
     auto lock = lock_result(path);
+    recover_export(path, submission_publish_state(path));
     const auto ledger = prepare_submission_ledger(path);
     auto key = ecm_edwards::hex(n) + "|" + std::to_string(r.sigma) + "|" + std::to_string(r.b1) +
                "|" + std::to_string(r.b2) + "|" + std::to_string(r.stage) + "|" +
@@ -981,24 +1118,20 @@ void publish_submission(const fs::path& path, const Submission& r, const mpz_t n
         for (const auto& file : fs::recursive_directory_iterator(ledger))
             if (file.path().extension() == ".curve") {
                 const auto previous = read_submission_entry(file.path());
-                if (previous.group == "F" && stage1_factor_key(previous.key) == key) {
-                    if (render_now || !r.factors.empty())
-                        append_submissions(path, ledger);
+                if (previous.group == "F" && stage1_factor_key(previous.key) == key)
                     return;
-                }
             }
     }
     if (fs::exists(entry)) {
         if (read_submission_entry(entry).key != key)
             throw std::runtime_error("submission ledger identity collision");
     } else {
-        const auto body = "ECM_SUBMISSION_V1\n" + key + '\n' + group_line + '\n' + line + '\n';
-        ecm_io::write_atomic(entry, body + std::to_string(ecm_io::fingerprint(body)) + '\n', ".new");
+        if (!r.factors.empty())
+            append_export(path, {{"factor|" + stage2_factor_identity(json::parse(line)), line}});
+        else if (render_now)
+            append_export(path, {{"direct-single|" + key, line, true}});
+        write_submission_entry(entry, {key, group_line, line});
     }
-    // Factors publish immediately; NF waits for whole-task completion.
-    // Immutable batches prevent cumulative counts being credited twice.
-    if (render_now || !r.factors.empty())
-        append_submissions(path, ledger);
 }
 
 // Internal receipts carry a monotone export order, independent of sigma and
@@ -1266,7 +1399,8 @@ bool contains_stage1_output(const fs::path& path, mpz_srcptr n, uint64_t b1, boo
 }
 
 json::Value checked_stage1_plan(const json::Value& value) {
-    if (value.type != 'o' || value.get("version").text() != "1")
+    const auto version = value.get("version").text();
+    if (value.type != 'o' || (version != "1" && version != "2"))
         throw std::runtime_error("unsupported Stage1 publication plan");
     auto body = value;
     const auto checksum = body.get("hash").text();
@@ -1279,88 +1413,88 @@ json::Value checked_stage1_plan(const json::Value& value) {
 }
 
 void replay_stage1_plan(const json::Value& plan, const fs::path& internal,
-                        const fs::path& submission, std::string& actual) {
-    if (plan.get("submission").text() != result_pair_identity(internal, submission))
-        throw std::runtime_error("Stage1 publication plan belongs to another submission path");
-    const auto offset = std::stoull(plan.get("offset").text());
+                        const fs::path& submission) {
+    const bool legacy = plan.get("version").text() == "1";
+    if (plan.get("submission").text() != result_pair_identity(internal, submission)) {
+        if (!legacy)
+            throw std::runtime_error("current Stage1 append belongs to a different submission path");
+        return;
+    }
     const auto tail = plan.get("append").text();
-    if (offset > actual.size() ||
-        plan.get("prefix-hash").text() !=
-            std::to_string(ecm_io::fingerprint(actual.substr(0, size_t(offset)))))
-        throw std::runtime_error("Stage1 submission history differs from committed batch");
-    const auto available = (std::min)(tail.size(), actual.size() - size_t(offset));
-    if (actual.compare(size_t(offset), available, tail, 0, available))
-        throw std::runtime_error("Stage1 submission suffix differs from committed batch");
-    if (available < tail.size())
-        actual += tail.substr(available);
+    if (legacy) {
+        // Only the matching in-flight V1 batch can be recovered automatically.
+        // A moved or pruned historical export is never rebuilt here.
+        const auto actual = read_submission_bytes(submission);
+        const auto offset = std::stoull(plan.get("offset").text());
+        if (offset > actual.size() ||
+            (actual.size() != offset && actual.compare(size_t(offset), tail.size(), tail)) ||
+            plan.get("prefix-hash").text() !=
+                std::to_string(ecm_io::fingerprint(actual.substr(0, size_t(offset)))))
+            return;
+    }
+    std::vector<ExportRow> rows;
+    std::istringstream lines(tail);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.empty())
+            continue;
+        const auto row = json::parse(line);
+        if (!owned_submission(line))
+            throw std::runtime_error("invalid prepared Stage1 submission");
+        const auto factor = stage2_factor_identity(row);
+        if (factor.empty()) {
+            const auto key = "stage1-nf|" + plan.get("identity").text();
+            if (!legacy)
+                line = distinct_nf(submission, key, std::move(line));
+            rows.push_back({key, std::move(line), true});
+        } else {
+            rows.push_back({"factor|" + factor, std::move(line)});
+        }
+    }
+    append_export(submission, rows, legacy);
 }
 } // namespace
 
 void publish_stage2_checkpoint(const fs::path& path, const std::vector<std::string>& factor_reports,
                                const std::string& latest_nf, uint64_t count,
                                std::string* final_nf,
-                               const std::function<void()>& save_checkpoint) {
+                               const std::function<void()>& save_checkpoint,
+                               const std::string& task, bool resumed) {
     auto lock = lock_result(path);
-    if (has_result_ledger(path)) {
-        const auto ledger = migrate_result_ledger(path);
-        require_ledger_format(ledger, "ECM_SUBMISSION_LEDGER_V1");
-        append_submissions(path, ledger);
-    }
-    auto actual = read_submission_bytes(path);
-    if (!actual.empty() && !owned_submission(actual))
-        throw std::runtime_error("Stage2 submission file is not an owned ECM result");
-    std::set<std::string> reports, factors;
-    std::istringstream exported(actual);
-    std::string line;
-    while (std::getline(exported, line)) {
-        if (line.empty() || line == "\r")
-            continue;
-        const auto row = json::parse(line);
-        reports.insert(row.dump());
-        const auto key = stage2_factor_identity(row);
-        if (!key.empty())
-            factors.insert(key);
-    }
-    std::string tail;
+    recover_export(path, submission_publish_state(path));
+    std::vector<ExportRow> rows;
+    rows.reserve(factor_reports.size() + bool(count));
     for (const auto& factor : factor_reports) {
-        const auto key = stage2_factor_identity(json::parse(factor));
+        const auto row = json::parse(factor);
+        const auto key = stage2_factor_identity(row);
         if (key.empty() || !owned_submission(factor))
             throw std::runtime_error("invalid Stage2 checkpoint factor report");
-        if (factors.insert(key).second)
-            tail += factor + '\n';
+        rows.push_back({"factor|" + key, row.dump()});
     }
     if (count) {
         if (!final_nf || !save_checkpoint)
             throw std::runtime_error("Stage2 NF publication needs a checkpoint");
+        const auto key = "stage2-nf|" + (task.empty() ? latest_nf + '|' + std::to_string(count) : task);
         if (final_nf->empty()) {
             auto row = json::parse(latest_nf);
             if (row.get("status").text() != "NF" || !owned_submission(latest_nf))
                 throw std::runtime_error("invalid Stage2 checkpoint NF report");
             row.set("curves", json::Value::number(std::to_string(count)));
-            auto candidate = with_result_checksum(row.dump());
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-            while (reports.count(candidate)) {
-                if (std::chrono::steady_clock::now() > deadline)
-                    throw std::runtime_error("system clock did not advance for Stage2 NF report");
-                row.set("timestamp", json::Value::string(utc_timestamp()));
-                candidate = with_result_checksum(row.dump());
-                if (reports.count(candidate))
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            }
-            *final_nf = std::move(candidate);
+            *final_nf = distinct_nf(path, key, with_result_checksum(row.dump()));
             save_checkpoint();
         }
-        if (!owned_submission(*final_nf) ||
-            json::parse(*final_nf).get("curves").text() != std::to_string(count))
+        const auto staged = json::parse(*final_nf);
+        if (!owned_submission(*final_nf) || staged.get("status").text() != "NF" ||
+            staged.get("curves").text() != std::to_string(count))
             throw std::runtime_error("invalid staged Stage2 NF report");
-        if (!reports.count(json::parse(*final_nf).dump()))
-            tail += *final_nf + '\n';
+        auto line = distinct_nf(path, key, staged.dump());
+        if (line != staged.dump()) {
+            *final_nf = line;
+            save_checkpoint();
+        }
+        rows.push_back({key, std::move(line), true});
     }
-    if (!tail.empty()) {
-        if (!actual.empty() && actual.back() != '\n')
-            actual += '\n';
-        ecm_io::write_atomic(path, actual + tail, ".new");
-    }
+    append_export(path, rows, resumed);
 }
 
 void check_stage1_outputs(const fs::path& internal, const fs::path& submission) {
@@ -1368,15 +1502,8 @@ void check_stage1_outputs(const fs::path& internal, const fs::path& submission) 
         throw std::runtime_error("empty Stage1 result output path");
     if (!fs::exists(internal) && has_result_ledger(internal))
         refresh_internal(internal);
-    if (!fs::exists(submission) && has_result_ledger(submission))
-        refresh_submission_if_owned(submission);
     auto locks = lock_result_pair(internal, submission);
-    // Early ownership check only. The complete history is checked once under
-    // the writer locks when the finished batch is committed.
-    const auto rows = stage1_rows(internal, {}, true);
-    if (!rows && fs::exists(submission) && fs::file_size(submission) &&
-        !has_result_ledger(submission))
-        throw std::runtime_error("Stage1 submission has no owned internal result history");
+    stage1_rows(internal, {}, true);
 }
 
 void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
@@ -1403,23 +1530,7 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
             throw std::runtime_error("Stage1 internal record differs from submission");
     }
     auto locks = lock_result_pair(internal, submission);
-    auto actual = read_submission_bytes(submission);
-    const auto original = actual;
-    // A prior Stage2 commit may have a partially appended export. Reading its
-    // single order file is sufficient; Stage1 never enumerates curve receipts.
-    const auto order = submission_ledger(submission) / "publication.order";
-    const auto legacy_order = legacy_submission_ledger(submission) / "publication.order";
-    const auto owned_order = fs::exists(order) ? order : legacy_order;
-    if (fs::exists(owned_order)) {
-        const auto entry = read_submission_entry(owned_order);
-        if (entry.key != "publication-order" || entry.group != "ORDER")
-            throw std::runtime_error("invalid submission publication history");
-        const auto history = json::parse(entry.json).text();
-        if (actual.size() < history.size() && history.compare(0, actual.size(), actual) == 0)
-            actual = history;
-        else if (actual.compare(0, history.size(), history))
-            throw std::runtime_error("submission output differs from publication history");
-    }
+    recover_export(submission, submission_publish_state(submission));
     const auto request_count = records.size();
     std::string sigma_identity;
     for (const auto& record : records)
@@ -1428,30 +1539,26 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
     for (size_t i = 0; i < records.size(); ++i)
         requested.emplace(records[i].submission.sigma, i);
     std::vector<bool> covered(records.size(), false);
-    bool already = false;
-    const auto rows = stage1_rows(internal, [&](const json::Value& row) {
+    std::optional<json::Value> prepared;
+    stage1_rows(internal, [&](const json::Value& row) {
         const auto found = requested.find(result_sigma(row));
         if (found != requested.end() &&
             stage1_work_matches(row, records[found->second].submission, n))
             covered[found->second] = true;
         if (row.has("stage1-publication")) {
-            const auto plan = checked_stage1_plan(row.get("stage1-publication"));
-            replay_stage1_plan(plan, internal, submission, actual);
-            if (plan.get("identity").text() == identity) {
-                if (plan.get("count").text() != std::to_string(records.size()) ||
-                    plan.get("sigmas").text() != sigma_identity)
-                    throw std::runtime_error("Stage1 batch identity collision");
-                already = true;
-            }
+            auto plan = checked_stage1_plan(row.get("stage1-publication"));
+            if (plan.get("identity").text() != identity)
+                return;
+            if (prepared || plan.get("count").text() != std::to_string(records.size()) ||
+                plan.get("sigmas").text() != sigma_identity)
+                throw std::runtime_error("Stage1 batch identity collision");
+            prepared = std::move(plan);
         }
     });
-    if (!rows && !actual.empty() && !has_result_ledger(submission))
-        throw std::runtime_error("Stage1 submission has no owned internal result history");
-    if (already) {
+    if (prepared) {
         if (std::find(covered.begin(), covered.end(), false) != covered.end())
             throw std::runtime_error("committed Stage1 internal batch is incomplete");
-        if (actual != original || !fs::exists(submission))
-            ecm_io::write_atomic(submission, actual, ".new");
+        replay_stage1_plan(*prepared, internal, submission);
         return;
     }
     std::vector<Stage1BatchRecord> fresh;
@@ -1459,28 +1566,10 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
         if (!covered[i])
             fresh.push_back(std::move(records[i]));
     records = std::move(fresh);
-    if (records.empty()) {
-        if (!fs::exists(submission))
-            throw std::runtime_error(
-                "legacy submission export is missing; restore its owned ledger first");
-        if (actual != original)
-            ecm_io::write_atomic(submission, actual, ".new");
+    if (records.empty())
         return;
-    }
     // Per-curve work and all aggregation stay in memory. NF remains one batch
     // report; only factor reports carry sigma in the submission protocol.
-    std::set<std::string> existing_factors;
-    std::set<std::string> existing_reports;
-    std::istringstream exported(actual);
-    std::string exported_line;
-    while (std::getline(exported, exported_line))
-        if (!exported_line.empty()) {
-            const auto row = json::parse(exported_line);
-            existing_reports.insert(row.dump());
-            const auto key = stage1_factor_identity(row);
-            if (!key.empty())
-                existing_factors.insert(key);
-        }
     std::string tail;
     Submission nf;
     uint64_t nf_count = 0;
@@ -1488,36 +1577,19 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
         if (record.submission.factors.empty()) {
             nf = record.submission;
             ++nf_count;
-        } else {
-            const auto line = submission_json(record.submission, n);
-            if (existing_factors.insert(stage1_factor_identity(json::parse(line))).second)
-                tail += line;
-        }
+        } else
+            tail += submission_json(record.submission, n);
     }
     if (nf_count) {
         nf.curves = nf_count;
-        auto report = submission_json(nf, n);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (existing_reports.count(json::parse(report).dump())) {
-            if (std::chrono::steady_clock::now() > deadline)
-                throw std::runtime_error("system clock did not advance for NF report");
-            nf.when = utc_timestamp();
-            report = submission_json(nf, n);
-            if (existing_reports.count(json::parse(report).dump()))
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        tail += report;
+        tail += submission_json(nf, n);
     }
-    if (!actual.empty() && actual.back() != '\n')
-        tail = '\n' + tail;
     auto plan = json::parse("{}");
-    plan.set("version", json::Value::number("1"));
+    plan.set("version", json::Value::number("2"));
     plan.set("identity", json::Value::string(identity));
     plan.set("count", json::Value::number(std::to_string(request_count)));
     plan.set("sigmas", json::Value::string(sigma_identity));
     plan.set("submission", json::Value::string(result_pair_identity(internal, submission)));
-    plan.set("offset", json::Value::number(std::to_string(actual.size())));
-    plan.set("prefix-hash", json::Value::string(std::to_string(ecm_io::fingerprint(actual))));
     plan.set("append", json::Value::string(tail));
     plan.set("hash", json::Value::string(std::to_string(ecm_io::fingerprint(plan.dump()))));
     std::string output = read_submission_bytes(internal);
@@ -1529,11 +1601,9 @@ void publish_stage1_batch(const fs::path& internal, const fs::path& submission,
             row.set("stage1-publication", plan);
         output += with_result_checksum(row.dump()) + '\n';
     }
-    // The first final file carries the tiny, checksummed batch commit plan.
-    // A crash before the second replacement can therefore finish publication
-    // from the existing final output, without per-curve receipts or a journal.
+    // The internal batch freezes the outgoing rows even if the process stops
+    // before the submission writer can persist its append intent.
     ecm_io::write_atomic(internal, output, ".new");
-    actual += tail;
-    ecm_io::write_atomic(submission, actual, ".new");
+    replay_stage1_plan(plan, internal, submission);
 }
 } // namespace ecm_results

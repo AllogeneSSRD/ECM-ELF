@@ -40,6 +40,7 @@ ecm.toml
 *.json_*.txt*
 *.ckpt*
 *.ecm-ledger*
+*.ecm-publish/
 
 # Local dependencies, datasets, and generated documentation content.
 /third_party/*

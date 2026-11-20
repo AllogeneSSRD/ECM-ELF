@@ -63,7 +63,7 @@ def main():
     ini.write_text('\n'.join(f'{k}={v}' for k, v in identity.items())+'\n', encoding='utf-8')
     internal, submission = out/'internal.jsonl', out/'results.json.txt'
     checks=[]
-    def run(name, extra=(), save=None, good=True, gpu=False, destination=None,gpu_d=210):
+    def run(name, extra=(), save=None, good=True, gpu=False, destination=None,gpu_d=210, prefix=b''):
         inside, outside=destination or (out/(name+'.jsonl'),out/(name+'.json.txt'))
         command=[args.cuda_stage2.resolve() if gpu else args.cpu_stage2.resolve(),
                  '--save', save or args.fixture.resolve(), '--b2', 40000, '--curves', 1,
@@ -74,7 +74,9 @@ def main():
         assert (proc.returncode==0)==good, name+' failed; inspect ignored evidence log'
         if not good:
             checks.append(name);return inside,outside,[]
-        rows=[json.loads(line) for line in outside.read_text(encoding='utf-8').splitlines() if line.strip()] if outside.exists() else []
+        raw = outside.read_bytes() if outside.exists() else b''
+        assert raw.startswith(prefix)
+        rows = [json.loads(line) for line in raw[len(prefix):].splitlines() if line.strip()]
         for r in rows:contract(r,allowed)
         checks.append(name)
         return inside,outside,rows
@@ -90,13 +92,11 @@ def main():
     before=outside.read_bytes()
     run('batch_replay',extra=['--curves',4],destination=(inside,outside))
     assert outside.read_bytes()==before
-    # Damaged exported text can be reconstructed from private immutable entries.
-    shutil.copy2(outside,out/'export_before_fault.json.txt')
-    outside.write_bytes(b'broken export\n')
-    shutil.copy2(outside,out/'export_fault_snapshot.json.txt')
-    run('batch_recover',extra=['--curves',4],destination=(inside,outside))
-    assert outside.read_bytes()==before
-    outside.write_bytes(b'broken export\n')
+    # The archived export stays archived on replay. Explicit export can still
+    # reconstruct it from the retained private receipts.
+    outside.rename(out/'export_archive.json.txt')
+    run('archive_replay',extra=['--curves',4],destination=(inside,outside))
+    assert not outside.exists()
     recovered=subprocess.run(list(map(str,[args.cpu_stage2.resolve(),'--export-results','--submission',outside,'--ini',ini])),cwd=out,capture_output=True)
     (out/'export_only.log').write_bytes(recovered.stdout+recovered.stderr)
     assert recovered.returncode==0 and outside.read_bytes()==before
@@ -163,6 +163,8 @@ def main():
         key=f'{(1<<29)-1:x}|17|2|{bound}|1|ed|233'
         body='ECM_SUBMISSION_V1\n'+key+'\nF\n'+line+'\n'
         (legacy_ledger/(str(ledger_hash(key))+'.curve')).write_bytes((body+str(ledger_hash(body))+'\n').encode())
+    recovered=subprocess.run(list(map(str,[args.cpu_stage2.resolve(),'--export-results','--submission',legacy,'--ini',ini])),cwd=out,capture_output=True)
+    assert recovered.returncode==0
     _,_,rows=run('legacy_stage1_factor_dedup',save=factor_save,destination=(out/'legacy_factor_internal.jsonl',legacy))
     assert len(rows)==1 and rows[0]['stage']==1
     stage2_found=False
@@ -189,10 +191,10 @@ def main():
         assert rows[0]['stage']==1 and 'd' not in rows[0] and 'poly-size' not in rows[0]
         _,_,rows=run('cuda_stage2_factor',gpu=True,save=fixture)
         assert any(r.get('stage')==2 for r in rows)
-    # Existing non-owned exports and aliases cannot be silently overwritten.
-    foreign=out/'foreign.json.txt';foreign.write_text('foreign data\n')
-    run('foreign_reject',destination=(out/'foreign_internal.jsonl',foreign),good=False)
-    assert foreign.read_text()=='foreign data\n'
+    # Existing bytes are opaque to publication. Input/output aliases are still invalid.
+    foreign=out/'foreign.json.txt';prefix=b'foreign data\r\n';foreign.write_bytes(prefix)
+    _,_,rows=run('foreign_append',destination=(out/'foreign_internal.jsonl',foreign),prefix=prefix)
+    assert len(rows)==1
     run('alias_reject',extra=['--submission',args.fixture.resolve()],good=False)
     (out/'summary.json').write_text(json.dumps(dict(complete=True,official_ecm_rows=len(ecm),checks=checks))+'\n')
     print('PASS:',len(checks),'dual-output checks; no server request; private samples not copied')

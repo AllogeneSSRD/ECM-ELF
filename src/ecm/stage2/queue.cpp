@@ -488,9 +488,6 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             // Commit migration before applying policy changes or retiring old receipts.
             if(!source.empty() && source!=progress) {
                 state.save(progress);
-                // Materialize old sealed batches before reporting that their
-                // source can be removed. Pending NF now belongs to the ckpt.
-                ecm_results::refresh_submission_if_owned(fs::u8path(o.submission));
                 if(!state.nf_keys.empty())
                     ecm_results::retire_legacy_stage2_curves(fs::u8path(o.submission),state.publication_task,
                         [&](const std::string& key){return state.nf_keys.count(ecm_stage2::sha256_text(key))!=0;});
@@ -509,7 +506,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
                records(save,skip,state.done,engine.input_max_bits,EdwardsPreparation::ValidateOnly).size()!=state.done)
                 throw std::runtime_error("Stage2 completed progress exceeds the available save records");
             state.save(progress);
-            ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),state.factors);
+            ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),state.factors,
+                {},0,nullptr,{},state.run,!source.empty());
             if(!source.empty() && (previous_total!=task.total || previous_b2!=task.b2 || previous_auto!=task.auto_b2))
                 report("stage2_resume_override: previous_total="+std::to_string(previous_total)+" requested="+std::to_string(task.total)+
                     " completed="+std::to_string(state.done)+" effective_total="+std::to_string(state.total)+
@@ -559,7 +557,8 @@ int run_task_queue(const TaskEngine &engine,Options worker_options,const TaskPat
             if(persist) {
                 if(!state.nf_keys.empty())
                     ecm_results::publish_stage2_checkpoint(fs::u8path(state.submission_path),{},
-                        state.latest_nf,state.nf_keys.size(),&state.final_nf,[&]{state.save(progress);});
+                        state.latest_nf,state.nf_keys.size(),&state.final_nf,[&]{state.save(progress);},
+                        state.run,!state.final_nf.empty());
             } else {
                 ecm_results::check_stage2_outputs(results,fs::u8path(o.submission),persist && state.done>0);
                 ecm_results::seal_submissions(fs::u8path(o.submission),2,o.publication_task,true);

@@ -333,14 +333,8 @@ int main(int argc, char** argv) {
         r::check_stage2_outputs(initial / "internal.jsonl", initial / "stage2_submission.txt",
                                 false);
         r::append_text_record(initial / "internal.jsonl", stage2_row(n.v));
-        bool missing_ledger = false;
-        try {
-            r::check_stage2_outputs(initial / "internal.jsonl", initial / "stage2_submission.txt",
-                                    false);
-        } catch (const std::exception&) {
-            missing_ledger = true;
-        }
-        require(missing_ledger, "missing Stage2 ledger accepted after Stage2 output");
+        r::check_stage2_outputs(initial / "internal.jsonl", initial / "stage2_submission.txt",
+                                true);
         bool case_alias = false;
         const auto alias_start = GetTickCount64();
         try {

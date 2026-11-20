@@ -221,12 +221,14 @@ def main():
                     pending_work=work/'pending_case';pending_work.mkdir()
                     pending=pending_work/'results.json.txt';pending_ledger=ledger(pending)
                     shutil.copytree(ledger(submission),pending_ledger)
+                    writer = submission.parent/'data'/(submission.name+'.ecm-publish')
+                    shutil.copytree(writer,pending.parent/'data'/writer.name)
                     for sealed in pending_ledger.rglob('*.batch'):
                         if json.loads(sealed.read_text().splitlines()[3])['b2']>1000:sealed.unlink()
                     # This working copy models NF records never sealed/exported
                     # by Stage2. A copied durable append history would instead
                     # describe a completed publication and correctly replay it.
-                    (pending_ledger/'publication.order').unlink()
+                    (pending_ledger/'publication.order').unlink(missing_ok=True)
                     pending.write_bytes(before)
                     shutil.copy2(work/'stage1_results.jsonl',pending_work/'stage1_results.jsonl')
                     shutil.copy2(work/'points.save',pending_work/'points.save')

@@ -89,8 +89,10 @@ void check_tune_path(const Options &o,std::initializer_list<fs::path> resources,
         if(path.empty())continue;
         const auto ledger=canonical(ecm_results::submission_ledger(path)).u8string();
         const auto legacy=canonical(ecm_results::legacy_submission_ledger(path)).u8string();
+        const auto publication=canonical(ecm_results::submission_publish_state(path)).u8string();
         for(auto dir=fs::u8path(profile);;) {
-            if(equal(dir.u8string(),ledger) || equal(dir.u8string(),legacy))conflict();
+            if(equal(dir.u8string(),ledger) || equal(dir.u8string(),legacy) ||
+               equal(dir.u8string(),publication))conflict();
             auto parent=dir.parent_path();
             if(parent.empty() || parent==dir)break;
             dir=std::move(parent);

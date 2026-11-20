@@ -1,14 +1,10 @@
 # ECM 结果输出
 
-提交格式为 `results.json.txt`。CPU/CUDA Stage1 和直接运行 save 的 CPU Stage2 同时维护内部 JSONL。CPU、CUDA 和 OpenCL 的 Stage2 队列可选写入逐曲线 JSONL。Stage1 整批完成后在内存中聚合，统一发布两份最终文件；中途因子只验证并保留在恢复状态中。启用 Stage2 JSONL 时，每完成一条曲线即追加诊断行。验证后的因子立即导出一行 F，固定 curves=1 并保留 sigma。NF 仅在整条任务完成时导出，有 NF 的任务生成一行，曲线数是完成且未找到因子的曲线总数。直接 CLI 运行所选曲线范围视为一个任务。Stage1 NF 的 B2=B1，Stage2 NF 记录最后一条 NF 曲线实际请求的 B2。提交结构参考 Prime95，程序身份如实记录为 ECM-ELF，并附 CRC32；生成文件不触发网络请求。
+默认提交文件为 `results.json.txt`，每行一条可供手工提交的 ECM 结果。Stage1 同时写入内部 JSONL，Stage2 队列可选写入逐曲线诊断 JSONL。Stage2 队列将已完成曲线、因子和待发布的 NF 保存在任务 ckpt。程序本地生成结果，由用户决定何时提交。
 
 ## 共用发布接口与实现
 
-Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 [results.h](../../include/ecm/io/results.h) 和 [results.cpp](../../src/io/results.cpp)。公开头包含拥有字符串/集合的 Submission 数据和实际序列化、发布、seal、恢复导出入口；不包含 JSON 解析实现、文件锁、操作系统句柄、文件读写或 CRC 函数体。
-
-`internal_json` 和 `submission_json` 生成协议 JSON 文本。Stage1 的 `publish_stage1_batch` 负责整批排序、去重及双文件发布。新 Stage2 队列调用 `publish_stage2_checkpoint` 发布 ckpt 中的因子和 NF。CPU 和 GPU 直接运行 save 以及旧队列使用 `publish_submission` 和 `seal_submissions`；`refresh_submission_if_owned` 可恢复这些路径的提交账本。
-
-contains_stage1_curves 接收结果路径、N、B1、曲线族/param 和 sigma 集合，优先流式核对最终 Stage1 JSONL；文件缺失时兼容旧内部账本。缺项返回 false，损坏报错。锁、旧目录兼容、发布历史恢复、CRC 与聚合规则集中在 CPP。
+Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 `internal_json` 和 `submission_json` 生成结果。Stage1 通过 `publish_stage1_batch` 排序并发布整批结果。Stage2 队列通过 `publish_stage2_checkpoint` 发布 ckpt 中的结果。旧档迁移和直接读档的兼容入口见下文。 [结果接口](../../include/ecm/io/results.h) · [发布实现](../../src/io/results.cpp)
 
 ## 文件与身份
 
@@ -27,11 +23,9 @@ computer = ""
 stage2_submission_file = "results.json.txt"
 ```
 
-TOML 相对输出路径基于 TOML 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。参加共同锁协议的 Stage1、Stage2 写入者可共享结果路径，发布操作按资源独占锁串行执行；不支持新旧协议的写入者混跑。输入 save、内部结果与提交文件必须不同。GUI 的 [Result 面板](GUI.md#result) 只读这些提交文件，提供筛选和原文复制，不参与结果写入或账本维护。
+TOML 相对输出路径基于 TOML 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀。Stage1 与 Stage2 使用同一版本的写入协议时可共享提交路径，发布按路径锁串行执行。输入 save、内部结果与提交文件使用不同路径。GUI 的 Result 面板读取提交文件，提供筛选和原文复制。 [GUI 结果面板](GUI.md#result)
 
 AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../include/ecm/platform/program_version.h) 统一维护。Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果的 source-build 直接记录当前可执行文件 SHA256，构建清单另存编译条件。
-
-版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。[独立 Stage1 NTT 实验入口](../performance/STAGE1_MERSENNE_NTT.md)随 `0.59.0` 引入，后续对该路径的优化只递增 z。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
 ## 提交字段与参考 FFT
 
@@ -92,31 +86,31 @@ curves、d、poly-size、stage2-fft-length、status、stage、user、computer、
 
 ## 去重、批次与恢复
 
+### 提交文件与归档
+
+提交文件用于手工提交和归档。发布器在路径锁内保留现有字节，把新结果放在末尾，并通过同目录临时文件完成原子替换。开始手动归档前，先停止写入该路径的 worker，并确认当前发布已完成。保留尚未完成任务的 worktodo、原始 save 和 ckpt。
+
+### Stage2 队列续算
+
+schema 5 的任务 ckpt 保存曲线完成进度、NF 去重键、完整因子行，以及本批汇总所需的末条 NF 和已经准备好的最终 NF。队列根据原始 Stage1 save 和任务 ckpt 恢复计算进度。逐曲线 JSONL 是可选诊断输出，旧账本可用于迁移 schema 1–4 的任务。 [Stage2 恢复与发布](../architecture/CHECKPOINT.md#73-恢复与发布) · [ckpt 状态定义](../../include/ecm/io/stage2_checkpoint.h)
+
+找到并验证的因子先进入 ckpt，再发布为单条 F，固定 `curves=1` 并保留 σ。整条任务完成且至少有一条曲线未找到因子时，汇总发布一条 NF。`curves` 为去重后的已完成无因子曲线数，B2、D、P 取计划顺序中最后计入的一条。若发布中断，重启沿用本批已准备好的结果。任务写入 finished、移除 worktodo 行后，程序清理 ckpt，已完成结果由提交文件或用户归档保存。 [Stage2 队列实现](../../src/ecm/stage2/queue.cpp)
+
 ### Stage1 整批发布
 
-Stage1 不创建逐曲线 `.curve`、`.batch` 或独立 `publication.order`。逐曲线结果在内存中排序、验证和聚合，整批结束时发布 `stage1_results.jsonl` 与 `results.json.txt`；save 和 checkpoint 继续保留原有职责。内部 JSONL 的本批行按无符号 64 位 sigma 升序排列；提交因子行按同一顺序排列，NF 聚合成一行放在本批因子行之后。NF 没有 sigma，不能按逐曲线方式排序。历史批次保持原字节及顺序，不作全文件重排。
+Stage1 批次按无符号 64 位 σ 排序，先保存曲线结果，再发布内部 JSONL 和提交行。因子行沿用这个顺序，NF 聚合成一行放在批次因子行之后，B2=B1。NTT 拆批可以在子批完成后提前发布已验证的因子。 [Stage1 批次入口](../../src/ecm/stage1/task.cpp) · [NTT 子批发布](../../src/ecm/stage1/montgomery/cuda/ntt/batches.cpp)
 
 原生 Stage1 text-save 的新批次也按数值 sigma 排序；Stage2 依次读取这些点，因此直接承接该顺序。旧 save 历史不重排。Stage2 内部 JSONL 始终完成一条追加一条，旧 save、手工选择范围或重算记录的顺序仍由实际输入和执行决定。
 
-两份最终文件不能作为单个文件系统事务替换。内部本批首行的 `stage1-publication` 保存版本、完整性散列、批次身份与 sigma 集合、相对提交路径、旧提交前缀长度/散列及本批提交文本。持有两个输出锁后，发布器流式验证内部历史与 CRC，先原子替换内部结果，再原子替换提交文件。第二步失败时 checkpoint 不清理；重试验证计划并补齐缺失或部分提交，不重复计数。已提交内部批次缺行、计划损坏或提交文件偏离已确认前缀均报错，不覆盖损坏证据。
+Stage1 的算术进度保存在批次 ckpt。现有双文件发布还使用内部 JSONL 首行的 `stage1-publication` 冻结本批提交文本和身份。提交失败会保留 ckpt，直到该批发布完成。 [Stage1 发布入口](../../src/io/results.cpp)
 
-短期独占锁及同目录 `.new` 原子替换文件仍会存在；它们不是逐曲线回执。任务成功后才移除算术 checkpoint。内部最终文件同时承担发布恢复依据，需与提交文件一同归档；保持二者相对位置可整体移动目录。更改配对文件名、只保留一份历史或跨磁盘改变配对位置前应另选全新输出。CRC32 只保护规范字段，发布计划的独立散列校验计划自身，不是加密签名。
+### 兼容入口
 
-旧内部与提交账本仍可恢复旧记录；正常 Stage1 发布不遍历旧逐曲线目录。最终内部文件缺失时，预检可从其旧归属账本恢复；旧账本不包含新整批输出，不得用旧账本单独重建新历史。内部最终文件存在时以它为准，不能使用旧版程序的内部导出命令覆盖它。已有数学曲线按 N、曲线族、param、sigma、B1 去重；已在旧提交中即时导出的 Stage1 因子也不会重复发布。
-
-### Stage2 队列与结果发布
-
-Stage2 队列把进度与待发布结果存入任务 ckpt。默认只输出最终提交文件；若需要逐曲线诊断，通过 `stage2_results_file` 或 `--results FILE` 启用 JSONL。串行和并行共用 [恢复顺序](../architecture/CHECKPOINT.md#73-恢复与发布)。保存点和剩余队列行仍是续算输入。
-
-Stage2 队列续跑使用当前配置的提交路径，`--submission` 可覆盖它。checkpoint 内的因子和已准备好的 NF 行可以补发到新目标，去重范围是该目标文件。同一行因此可以同时出现在旧文件和新文件中。
-
-F 即时单独发布，固定 `curves=1`。无因子曲线在整条任务完成后汇总成一行，参数与时间来自按计划顺序最后一条计入的 NF；各条曲线可以使用不同的 B2、D、P。重复的同一数学曲线在当前 checkpoint 内按实际 B2 去重。独立任务的 NF 提交行只含总数，无法用于跨任务的逐曲线去重。结果写入保留已有文件的字节和行顺序，已提交的 F 按数学身份去重，已准备好的 NF 按确切行重放。任务仍在队列时可通过原 ckpt 补发。任务结束并清理 ckpt 后，最终提交文件就是该任务的归档。
-
-CPU 和 GPU 直接运行 `--save` 时使用私有 `data/<提交文件名>.ecm-ledger/`。已有 schema 1–4 队列首次恢复时使用原 JSONL 和账本完成一次性迁移。CPU 包的 `ecm_stage2.exe --export-results --submission results.json.txt` 可恢复旧账本对应的结果。新队列可以追加到已有 ECM-ELF 提交历史，同路径的旧账本仍供旧任务使用。
+CPU 和 GPU 的直接 `--save` 入口目前仍通过 `publish_submission` 和 `seal_submissions` 使用旧账本汇总结果。需要按任务 ckpt 续算时，使用 Stage2 worktodo 队列。对保留的旧账本，可显式执行 `ecm_stage2.exe --export-results --submission FILE`。 [直接读档入口](../../src/ecm/stage2/edwards/cpu/main.cpp) · [旧档迁移](../architecture/CHECKPOINT.md#74-旧档的一次性迁移)
 
 ## 隐私与提交检查
 
-真实 user、computer、aid、checksum/security-code 值仅留在本地。仓库忽略运行时 `*.ini`、`*.jsonl*`、`*.json.txt*`、worker 后缀 `*.json_*.txt*`、`*.ckpt*` 及私有 `*.ecm-ledger*`；受控模板只含空身份。原始 Prime95 样本只在内存中做结构比较，测试身份在运行时随机产生，原始结果、日志和测试样本均写入忽略的 `data/experiments/`。
+真实 user、computer、aid、checksum/security-code 值仅留在本地。提交到 Git 的配置模板使用空身份。原始结果、日志和实验样本保存在仓库忽略目录。
 
 提交 Git 前运行 [check_result_privacy.py](../../tools/test/check_result_privacy.py)，通过 `--reference-results` 指定本地正式样本、内部结果，通过可重复的 `--config` 指定实际配置。它检查暂存新增行是否含这些私有值，并拒绝暂存运行时结果文件；只输出通过或失败，不打印匹配值。这个检查依赖提供的本地输入集合，不能替代对新增内容的审阅。
 
@@ -136,12 +130,6 @@ CPU 和 GPU 直接运行 `--save` 时使用私有 `data/<提交文件名>.ecm-le
 
 ## 验证与边界
 
-[结果生命周期回归](../../tools/test/test_result_output_consistency.py) 覆盖内部导出顺序、两阶段跨任务追加、F/NF 混排、原文件对象保留、部分追加恢复、发布历史完整性、NF 任务隔离、完成前不导出、即时单曲线 F、最终 CRC、旧位置迁移、重复回执和不完整 JSON 回执拒绝。[双格式测试](../../tools/test/test_ecm_submission.py) 对照本地正式样本结构，验证 CPU/GPU1 F/NF、TOML、合并、去重、恢复、FFT 和参数顺序。[Stage1 流程验收](../../tools/test/test_stage1_usability.py) 覆盖 CPU/CUDA、检查点恢复及跨 Stage2 共用账本。测试数据与实际身份只保存在忽略目录；这些检查均为离线验证，不代表新增服务器验收。
-
-0.38.0 的本地验收证据在 `data/experiments/result_output_audit_20261018/validation_manifest.json`：27 项 Stage1 流程检查、22 项双格式检查、plain/NTT/gwpoly 各 4 条 NF，以及 GPU1 停止一条后恢复剩余三条的整任务发布检查。完整位宽 local 程序另在 GPU1 上验证 1279、8191、11213、16381 位各两条 Edwards 曲线，与独立 Python 末点/因子校验及 CRC 一致。GUI 结果存储也拒绝新旧位置的 CLI 账本。以上为功能验证，不作性能结论。
-
-生产只读快照中，Stage1 JSONL 与 save 的 960 个 sigma 完全相同；原账本写入时间顺序与 save 一致。207 条旧 CUDA 内部行经审阅工具压缩为 492558 字节，原为 759226 字节，约减少 35.1%；37 条结构化调优观察保持一致。960 条 Stage1、207 条 Stage2 和 12 行补齐 checksum 的提交副本全部通过独立 CRC 校验。副本保留历史版本与时间，原始文件不改写，既有已接受批次不得重复提交。
+离线回归覆盖批次顺序、因子与 NF 发布、归档后追加、发布中断重试以及提交字段和 CRC。 [Stage1 批次测试](../../tools/test/result_batch_contract.cpp) · [Stage2 队列发布测试](../../tools/test/test_stage2_checkpoint_publication.py) · [提交字段测试](../../tools/test/test_ecm_submission.py)
 
 PrimeNet v5 API 0.97 描述的是 `ar` 请求字段与结果类型，不是现代手工提交 JSON 的完整规范；结构还需对照 Prime95 生成器及正式样本。[固定源码与 API 研究](../reference/ECM_RESULT_JSON.md) 列出依据。上述 Montgomery NF 批次已有用户提供的服务器接受回执；Edwards、因子结果及其他提交入口仍需各自验证。AutoPrimeNet 的固定程序名扫描规则未修改。
-
-实现入口：[提交序列化](../../src/io/results.cpp) 的 `submission_json`、[账本与原子导出](../../src/io/results.cpp) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。

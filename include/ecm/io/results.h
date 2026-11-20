@@ -44,7 +44,8 @@ void check_stage2_outputs(const std::filesystem::path&, const std::filesystem::p
 void publish_stage2_checkpoint(const std::filesystem::path&, const std::vector<std::string>& factors,
                               const std::string& latest_nf = {}, uint64_t count = 0,
                               std::string* final_nf = nullptr,
-                              const std::function<void()>& save_checkpoint = {});
+                              const std::function<void()>& save_checkpoint = {},
+                              const std::string& task = {}, bool resumed = false);
 std::vector<uint64_t> legacy_stage2_bounds(const std::filesystem::path&);
 struct LegacyStage2Curve {
     uint64_t order, sigma, b1, b2;
@@ -60,6 +61,7 @@ void publish_stage1_batch(const std::filesystem::path&, const std::filesystem::p
 bool has_result_ledger(const std::filesystem::path&);
 std::filesystem::path submission_ledger(const std::filesystem::path&);
 std::filesystem::path legacy_submission_ledger(const std::filesystem::path&);
+std::filesystem::path submission_publish_state(const std::filesystem::path&);
 bool contains_stage1_curves(const std::filesystem::path&, mpz_srcptr, uint64_t, bool, unsigned,
                             const std::vector<uint64_t>&);
 void publish_submission(const std::filesystem::path&, const Submission&, mpz_srcptr,
