@@ -1,6 +1,6 @@
 # Edwards Stage1 的窗口 NAF
 
-NAF 是 **Non-Adjacent Form**（非相邻形式）。窗口 NAF 把标量的二进制表示重编码为带符号的奇数数字，使大部分列只做倍点。CPU GMP、CPU IFMA 和 CUDA CGBN 均可在 Edwards 点坐标上运行该算法。Edwards CUDA NTT 默认映射到 Montgomery x-only 阶梯，也可显式指定窗口运行实验性的 2XY NAF。见 [NTT 的原生 Edwards NAF 数据流](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
+NAF 是 **Non-Adjacent Form**（非相邻形式）。窗口 NAF 把标量的二进制表示重编码为带符号的奇数数字，使大部分列只做倍点。CPU GMP、CPU IFMA 和 CUDA CGBN 均可在 Edwards 点坐标上运行该算法。Edwards CUDA NTT 按 tune 表选取原生 2XY NAF 窗口，也可固定窗口。自动窗没有可用测量时回退至 Montgomery x-only 阶梯。见 [NTT 的原生 Edwards NAF 数据流](../performance/STAGE1_MERSENNE_NTT.md#原生-edwards-naf-的参考数据流)。
 
 ## 从标量到点乘
 

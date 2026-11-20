@@ -4,12 +4,65 @@
 #include "ecm/stage1/gpu_backend.h"
 #include "ecm/stage1/ntt_length.h"
 #include <cmath>
+#include <cctype>
 #include <cstring>
 #include <iostream>
 #include <limits>
 #include <set>
 
 namespace ecm_stage1_app {
+namespace {
+void parse_tune(std::string spec, ecm_stage1::NttTuneGrid& grid) {
+    using namespace ecm_stage1;
+    if (spec.empty() || spec == "ntt") return;
+    if (spec.rfind("ntt,", 0) == 0) spec.erase(0, 4);
+    else if (spec.front() == ',') spec.erase(0, 1);
+    std::set<std::string> keys;
+    size_t pos = 0;
+    do {
+        const auto end = spec.find(',', pos);
+        const auto field = spec.substr(pos, end - pos);
+        const auto eq = field.find('=');
+        const auto key = field.substr(0, eq);
+        if (eq == field.npos || !keys.insert(key).second)
+            throw std::invalid_argument("expected unique key=value in tune");
+        const auto value = field.substr(eq + 1);
+        auto range = [&](unsigned lo, unsigned hi) {
+            const auto number = [&](const std::string& s) {
+                if (s.empty() || s.find_first_not_of("0123456789") != s.npos)
+                    throw std::invalid_argument("invalid tune " + key);
+                const auto n = std::stoull(s);
+                if (n < lo || n > hi) throw std::invalid_argument("out of range: " + key);
+                return unsigned(n);
+            };
+            const auto dash = value.find('-');
+            const unsigned first = number(value.substr(0, dash));
+            const unsigned last = dash == value.npos ? first : number(value.substr(dash + 1));
+            if (first > last) throw std::invalid_argument("reversed tune range: " + key);
+            return TuneRange{first, last};
+        };
+        if (value.empty()) {
+            if (key != "exp" && key != "length" && key != "naf" && key != "batch" && key != "time")
+                throw std::invalid_argument("unknown tune field: " + key);
+        } else if (key == "exp") grid.exp = range(stage1_ntt_min_exponent, stage1_ntt_max_exponent);
+        else if (key == "length") grid.length = range(2, stage1_ntt_max_length);
+        else if (key == "naf") grid.naf = value == "0" ? TuneRange{} : range(2, 12);
+        else if (key == "batch") grid.batch = range(1, stage1_ntt_max_curves);
+        else if (key == "time") {
+            size_t used = 0;
+            const double ms = std::round(100 * std::stod(value, &used));
+            if (value.find_first_not_of("0123456789.") != value.npos || used != value.size() ||
+                !std::isfinite(ms) || ms < 1 || ms > UINT32_MAX)
+                throw std::invalid_argument("time must give a positive representable duration in ms");
+            grid.group_ms = unsigned(ms);
+        } else throw std::invalid_argument("unknown tune field: " + key);
+        if (end == spec.npos) break;
+        pos = end + 1;
+    } while (true);
+    if (keys.count("exp") && keys.count("length")) throw std::invalid_argument("tune conflict: exp and length");
+}
+} // namespace
+
 void print_usage(const char* prog) {
     const char* name = prog;
     if (name != nullptr) {
@@ -30,7 +83,7 @@ void print_usage(const char* prog) {
               << "Usage:\n"
               << "  " << name << " [--config FILE] [--worker N]          Run the Stage1 queue\n"
               << "  echo '<N>' | " << name << " [options] B1 [B2]    Run Stage1 on stdin\n"
-              << "  " << name << " --tune ntt [--bits P] [options]    Tune CUDA Stage1 NTT\n"
+              << "  " << name << " -tune [ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N]\n"
               << R"(
 Curve and task:
   --param <e|m0|m2|m3>  Curve construction: Edwards or Montgomery PARAM0/2/3.
@@ -90,7 +143,8 @@ GPU execution:
                        Honors -d, --param and --curve.
   --bits <P>          With --gpu-info, select one operand width (0 = all tiers).
                        With --tune ntt, select one exponent width (0 = full grid).
-  --tune ntt          Search linear/weighted NTT plans and batches through 128 curves.
+  -tune, --tune       Optional ntt,exp=P or length=L,naf=W,batch=B,time=N.
+                       P,L,W,B accept inclusive min-max. Groups target 100*N ms.
                        Optional positional B1 defaults to 128. Use --param e --naf-w W for Edwards NAF.
                        Store and reuse measured configurations in the shared TOML tune_file.
   --tune-exhaustive   With --tune ntt, measure every eligible batch size.
@@ -100,7 +154,7 @@ GPU execution:
 Edwards and CPU arithmetic:
   --naf-w <W>         Edwards window: 0 or 2..12 (CPU: 0 or 3..12).
                        0 starts at CPU w12 or CGBN/OpenCL/thread w6.
-                       CUDA NTT: 0 selects x-only; 2..12 selects native 2XY NAF.
+                       CUDA NTT: 0 picks the measured NAF window; 2..12 fixes the window.
                        Fresh CPU/CGBN/OpenCL tasks may lower W to fit memory.
   --lcm <1|12>        Montgomery scalar multiplier; default 1.
                        Edwards uses its fixed 48*lcm(1..B1) scalar.
@@ -213,7 +267,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                    "--go",
                                                    "--showkernel",
                                                    "--gpu-info",
-                                                   "--tune-exhaustive",
+                                                   "-tune", "--tune", "--tune-exhaustive",
                                                    "--sliced",
                                                    "--sliced-t16",
                                                    "--local",
@@ -261,7 +315,6 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                  "--add",
                                                  "--sub",
                                                  "--special-mult",
-                                                 "--tune",
                                                  "--tune-seconds",
                                                  "--bits",
                                                  "--config",
@@ -282,7 +335,17 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
         std::string value, expected = "known option (use --help)";
         try {
             const auto reject = [] { throw std::runtime_error("invalid value"); };
-            if (values.count(key)) {
+            if (key == "-tune" || key == "--tune") {
+                expected = "[ntt][,exp=P|,length=L][,naf=W][,batch=B][,time=N]";
+                if (input.tune_ntt) throw std::invalid_argument("duplicate tune option");
+                if (i + 1 < argc) {
+                    const std::string next = argv[i + 1];
+                    if (next.empty() || (next.front() != '-' &&
+                        (std::isalpha(static_cast<unsigned char>(next.front())) || next.front() == ',')))
+                        value = argv[++i];
+                }
+                parse_tune(ecm_stage1::lower_ascii(value), input.tune_grid);
+            } else if (values.count(key)) {
                 expected = "one value after " + key;
                 if (i + 1 == argc)
                     reject();
@@ -447,10 +510,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 input.gpu_sub_path = value;
             else if (key == "--special-mult")
                 input.gpu_special_mult_path = value;
-            else if (key == "--tune") {
-                expected = "ntt";
-                if (ecm_stage1::lower_ascii(value) != "ntt")
-                    reject();
+            else if (key == "-tune" || key == "--tune") {
                 input.tune_ntt = true;
             } else if (key == "--tune-exhaustive")
                 input.tune_exhaustive = true;

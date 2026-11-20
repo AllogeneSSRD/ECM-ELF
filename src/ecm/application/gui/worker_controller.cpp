@@ -82,7 +82,7 @@ bool reserved_worker_arg(std::string_view arg) {
     static constexpr std::string_view reserved[] = {
         "--config", "--worker", "--worktodo", "--stage1-stop-handle", "--stage2-stop-handle",
         "--stop-handle", "--gui-queue-protocol", "-h", "--help", "/?", "--version", "--gpu-info", "--showkernel",
-        "--tune", "--save", "-save", "-savea", "--curve-worker", "--ecm-tune-worker",
+        "-tune", "--tune", "--save", "-save", "-savea", "--curve-worker", "--ecm-tune-worker",
         "--cost-device-info", "--check-stage1-tune-profile", "--plan-only", "--dry-run",
         "--fixed-queue-route", "--publication-task"
     };

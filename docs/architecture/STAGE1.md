@@ -123,7 +123,7 @@ GPU 切片策略在工作行的曲线类型和实际目标模数确定后依次�
 
 ### NTT 任务拆批与恢复
 
-NTT 按调优数据和显存预算将一条 worktodo 任务拆成多个子批。所有子批共用一个检查点，恢复时保留已完成结果并继续当前子批。见 [拆批、载荷与恢复示例](CHECKPOINT.md#47-ntt-拆批任务载荷)、[Stage1 NTT 批量调优](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)。
+NTT 按调优数据和显存预算将一条 worktodo 任务拆成多个子批。所有子批共用一个检查点，恢复时保留已完成结果并继续当前子批。见 [拆批、载荷与恢复示例](CHECKPOINT.md#47-ntt-拆批任务载荷)、[Stage1 NTT 批量调优](../usage/TUNE.md#生产选型)。
 
 ### CUDA Edwards NTT 主机曲线初始化
 

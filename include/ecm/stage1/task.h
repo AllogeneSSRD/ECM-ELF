@@ -27,6 +27,7 @@ struct Stage1NttOptions {
     bool allow_known_factors = true;
     enum class MixedLayout { Automatic, Twiddle, Pfa, Coalesced };
     MixedLayout mixed_layout = MixedLayout::Automatic;
+    bool runtime_enabled = true;
 };
 
 struct Stage1ExecutionPreferences {

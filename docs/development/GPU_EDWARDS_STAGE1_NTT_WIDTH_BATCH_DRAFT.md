@@ -1,8 +1,20 @@
 # GPU NTT Stage1 Edwards1：扩宽与批量调优规划
 
+## 0.71.1 指数区间调度验收
+
+RTX 4070 Ti 和 RTX 4060 Laptop 均通过范围调优回归。固定线性卷积时，`exp=3554-3560` 冷表和热表各调度两档。自动卷积在 `66049-66051` 内能找到 p=66050 的孤立 2560 点计划。两卡均核对了 `2000-1000000` 在四个默认 NAF 窗口下各有 25 个卷积族与长度组合。[回归入口](../../tools/test/test_stage1_ntt_tune_grid.py) · [双卡日志](../../data/experiments/stage1_ntt_range_0711/)
+
+RTX 4070 Ti 对同一完整指数区间执行了两遍实际调优，使用 B1=16、w=6、batch=1、profile=1、time=0.01。两遍均调度 25 个组合，空表新增 61 条测量且复用 0 条，热表新增 0 条且复用 61 条。[冷表日志](../../data/experiments/stage1_ntt_range_0711/full_range/cold.log) · [热表日志](../../data/experiments/stage1_ntt_range_0711/full_range/hot.log)
+
+## 0.71.0 命令与生产选窗验收
+
+Stage1 在生产选批之前解析自动窗口，显式调优和缺档补测共用候选、计时和写表流程。分组计时沿用生产的 Graph 与 NAF 零列调度。命令、兼容条件和尺寸表见 [TUNE.md](../usage/TUNE.md)。
+
+RTX 4070 Ti 与 RTX 4060 Laptop 分别使用独立的 tune 文件验证范围冲突、窗口与批量闭区间、五种 Graph 上限、25／100／200 ms 采样、热表复用和禁写。M61 在 B1=20 自动补测四个窗口，缓存命中后的文件逐字节相同，保存点与同一 sigma 的 x-only 路径一致。M900001 在 128 MiB 预算下覆盖线性、加权二次幂和三种混合实现。两份最终矩阵均通过 Stage2 读取器逐字段往返校验；旧 20／50 ms 表也通过只读生产选窗验收。[验收入口](../../tools/test/test_stage1_ntt_tune_grid.py) · [4070 Ti 证据](../../data/experiments/stage1_tune_grid/gpu0_verified/) · [4060 Laptop 证据](../../data/experiments/stage1_tune_grid/gpu1_verified/)
+
 ## 0.70.1 调优验收
 
-调优现在使用生产分派计算每个 p 的合法长度、算术路径和容量。混合计划有三个独立实现可选，实测及缓存命中均显示 dataflow。阶段间共享的 tune 表保留实测的全部参数配置。原生 NAF 使用同一条探针曲线的仿射奇数倍表复制到各 lane，取真实标量中段比较变体。完整任务的建表、逐曲线构造与端点发布仍由生产回归覆盖。[运行方式](../usage/STAGE1.md#ntt-形状与调优) · [计时口径](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)
+调优现在使用生产分派计算每个 p 的合法长度、算术路径和容量。混合计划有三个独立实现可选，实测及缓存命中均显示 dataflow。阶段间共享的 tune 表保留实测的全部参数配置。原生 NAF 使用同一条探针曲线的仿射奇数倍表复制到各 lane，取真实标量中段比较变体。完整任务的建表、逐曲线构造与端点发布仍由生产回归覆盖。[运行方式](../usage/STAGE1.md#ntt-形状与调优) · [计时口径](../usage/TUNE.md#生产选型)
 
 M63487、Edwards w6、B1=32、总显存预算 256 MiB、字典限额 6 MB。RTX 4070 Ti／RTX 4060 Laptop 的冷表各新增 30／39 格，调优段墙钟 5.999／8.838 秒。立即重跑各复用 30／39 格，耗时 0.007／0.009 秒，表文件逐字节相同。两卡粗筛精调和随后补齐的预算内逐批穷举选出相同峰值与 95% 档，均为 2560 点、3 条。穷举复用此前已测的格。6→12 MB 分别新增 38／32 格，12→4 MB 都复用 25 格、零新增。相同分派的 M63485 两卡均零新增；M63493 跨过 2XY 融合门限，两卡分别新增 44／38 格、复用 1 格。B1 改为 64 并设置一秒软限时，两卡分别写回 11／10 格，续跑验证已有行可用。生产选型与固定线性的最终 save 坐标一致。阶段二的共享表读写器对同期两份表逐字段往返一致，篡改计时步数的行被拒绝。[双卡验收脚本](../../tools/test/test_stage1_ntt_budget.py) · [4070 Ti 原始结果](../../data/experiments/stage1_budget_tune/final_gpu0_budget/) · [4060 Laptop 原始结果](../../data/experiments/stage1_budget_tune/final_gpu1_budget/)
 
@@ -14,7 +26,7 @@ M900001、w6、B1=16 的总显存预算测试中，不另限制字典。128 MiB 
 
 ## 0.70.0 实施结果
 
-CUDA Stage1 已支持 `32 ≤ p ≤ 1048576`，最大二次幂变换为 131072 点，新增的加权混合长度为 40960 点（5 × 8192）。65–128 段由最多四个 warp 并行求组摘要，进位同时覆盖线性回卷、加权归约和延后到 pack 的写回。配置、执行、共享 tune 以及 GMP 探针使用同一组长度约束。逐指数复算 1048545 个输入、三种选长结果及 22 个尺寸行，详见[完整尺寸表](../performance/STAGE1_MERSENNE_NTT.md#ntt-and-transform-sizes)。
+CUDA Stage1 已支持 `32 ≤ p ≤ 1048576`，最大二次幂变换为 131072 点，新增的加权混合长度为 40960 点（5 × 8192）。65–128 段由最多四个 warp 并行求组摘要，进位同时覆盖线性回卷、加权归约和延后到 pack 的写回。配置、执行、共享 tune 以及 GMP 探针使用同一组长度约束。逐指数复算 1048545 个输入、三种选长结果及 22 个尺寸行，详见[完整尺寸表](../usage/TUNE.md#ntt-and-transform-sizes)。
 
 - 双卡 GMP 探针各通过 28 组算术检查，含 524288／524289、786432／786433、900001、1048575／1048576 位，分别跑线性及加权的阶梯与独立平方。每组四路边界状态，覆盖 Graph／直接提交和跨数据流恢复。另有八次超界输入拒绝。宽档合并访存 PFA 的同步检查通过。[算术对拍与验证日志](../../data/experiments/stage1_ntt_128segments/)
 - 生产 worker 在 M1048573 上使用 131072 点线性 x-only 和 65536 点加权 w6 得到相同的 Edwards save。在 M900001 的 w6、B1=512 上，第 388／745 列中断，从 131072 点线性切换至 40960 点加权续跑，保存点与连续运行一致。已知因子任务 `M786417/7` 的 CPU GMP 标量、CUDA 线性与加权路径得到相同的规范坐标。40960 和 131072 点的 `--tune ntt` 行均通过校验并写入共享表。[宽档生产与调优检查](../../data/experiments/stage1_ntt_128segments/qualify.py) · [已知因子对照](../../data/experiments/stage1_ntt_128segments/cofactor.py)
@@ -42,7 +54,7 @@ M1046305、sigma=9、B1=B2=8 时，CPU GMP 标量和两种卷积的原生 Edward
 
 用 `p` 表示梅森承载指数，`W=ceil(p/32)` 表示 32 位 limb 数，`S=ceil(W/256)` 表示分段进位的段数，`N` 表示 NTT 点数。含已知因子的任务同时记录实际余因子位宽。**32 个段覆盖 262144 位，64 个段覆盖 524288 位**。32 段以内由一个 warp 扫一组段摘要，33–64 段再扫描高半组并传递低组进位。段数由承载位宽决定，同一个 `N=32768` 既可用于线性卷积，也可在约 52 万位用于加权卷积，此时需要 64 段。较小输入能否走分段路径还取决于卷积、批量和计划。[进位实现](../../kernels/cuda/stage1_ntt_segments.cuh#L64) · [生产分派](../architecture/NTT.md#stage1-分段进位与-pack-融合)
 
-完整尺寸表只维护在 [NTT and transform sizes](../performance/STAGE1_MERSENNE_NTT.md#ntt-and-transform-sizes)。当前二次幂变换最长 65536 点，混合加权长度为 2560、5120、10240、20480。二次幂的 radix、tile 和 outer pass 属于执行形状。混合长度把五点变换与五条二次幂子变换组合起来，可用带 twiddle 的 radix-5 或 Good–Thomas PFA。PFA 省去跨两因子的 twiddle 乘法，但需要在 pack 和逆向写回时置换，二者可以同长度对测。[混合长度准入](../../include/ecm/stage1/ntt_length.h) · [五点变换](../../kernels/cuda/stage1_ntt_radix5.cuh)
+完整尺寸表只维护在 [NTT and transform sizes](../usage/TUNE.md#ntt-and-transform-sizes)。当前二次幂变换最长 65536 点，混合加权长度为 2560、5120、10240、20480。二次幂的 radix、tile 和 outer pass 属于执行形状。混合长度把五点变换与五条二次幂子变换组合起来，可用带 twiddle 的 radix-5 或 Good–Thomas PFA。PFA 省去跨两因子的 twiddle 乘法，但需要在 pack 和逆向写回时置换，二者可以同长度对测。[混合长度准入](../../include/ecm/stage1/ntt_length.h) · [五点变换](../../kernels/cuda/stage1_ntt_radix5.cuh)
 
 | 次序 | 输入与候选 | 需回答的问题及通过条件 |
 | --- | --- | --- |

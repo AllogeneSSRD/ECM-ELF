@@ -270,7 +270,10 @@ __global__ void route(uint32_t* state, Shape s, Cursor cursor) {
     state[limb(s,2*(1-bit),curve,j)] = state[limb(s,XA,curve,j)];
     state[limb(s,2*(1-bit)+1,curve,j)] = state[limb(s,ZA,curve,j)];
 }
-__global__ void advance(unsigned* start, unsigned window) { *start += window; }
+__global__ void advance(unsigned* start, unsigned window, unsigned wrap) {
+    const unsigned next = *start + window;
+    *start = next == wrap ? 0 : next;
+}
 } // namespace
 
 size_t memory_budget(size_t free_bytes, unsigned limit_mib) {
@@ -1134,13 +1137,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     Graph full, tail, warm_tail;
     std::array<Graph, 7> zero_graphs;
+    const unsigned scalar_count = count;
     auto capture=[&](Graph& graph, unsigned count) {
         CK(cudaStreamBeginCapture(q,cudaStreamCaptureModeThreadLocal));
         for (unsigned i=0;i<count;++i) {
             if (naf) edwards_step(0);
             else step(i);
         }
-        if (!naf) advance<<<1,1,0,q>>>(start.data,count);
+        if (!naf) advance<<<1,1,0,q>>>(start.data,count,control && control->sample_target_ms ? scalar_count : 0);
         CK(cudaStreamEndCapture(q,&graph.graph));
         CK(cudaGraphInstantiateWithFlags(&graph.exec,graph.graph,0));
         CK(cudaGraphUpload(graph.exec,q));
@@ -1176,8 +1180,8 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     }
     const unsigned target_ms = control ? control->sample_target_ms : 0;
     const unsigned groups = samples;
-    double group_ms = 0;
-    for (unsigned sample=0; sample<samples; ++sample) {
+    std::vector<uint32_t> pilot, group_endpoint;
+    for (unsigned sample=0; sample<groups + (target_ms ? 2 : 0); ++sample) {
         if (target_ms && control->poll && control->poll(0).stop) {
             result.stopped = true;
             break;
@@ -1186,72 +1190,78 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         CK(cudaStreamSynchronize(q));
         const double wall=now_s();
         CK(cudaEventRecord(begin.value,q));
-        unsigned cursor = resume;
-        unsigned next_poll = resume;
-        unsigned zero_end = resume;
-        while (cursor < count) {
-            if (!target_ms && control && control->poll && cursor >= next_poll) {
-                CK(cudaEventRecord(boundary.value,q));
-                CK(cudaEventSynchronize(boundary.value));
-                const auto action = control->poll(cursor);
-                if (action.save && control->checkpoint) {
-                    CK(cudaMemcpy(result.points.data(),state.data,result.points.size()*4,cudaMemcpyDeviceToHost));
-                    control->checkpoint(cursor, result.points);
-                }
-                if (action.stop) {
-                    result.stopped = true;
-                    break;
-                }
-                next_poll = cursor + (window ? std::max(window, 128u) : 128u);
-            }
-            if (naf) {
-                const int digit = naf->digits[cursor];
-                if (!digit && window) {
-                    if (zero_end <= cursor) {
-                        zero_end = cursor + 1;
-                        while (zero_end < count && zero_end - cursor < window && !naf->digits[zero_end])
-                            ++zero_end;
+        const bool timed_group = target_ms && sample && sample <= groups;
+        const unsigned blocks = timed_group ? result.blocks_per_sample : 1;
+        auto replay = [&] {
+            unsigned cursor = resume;
+            unsigned next_poll = resume;
+            unsigned zero_end = resume;
+            while (cursor < count) {
+                if (!target_ms && control && control->poll && cursor >= next_poll) {
+                    CK(cudaEventRecord(boundary.value,q));
+                    CK(cudaEventSynchronize(boundary.value));
+                    const auto action = control->poll(cursor);
+                    if (action.save && control->checkpoint) {
+                        CK(cudaMemcpy(result.points.data(),state.data,result.points.size()*4,cudaMemcpyDeviceToHost));
+                        control->checkpoint(cursor, result.points);
                     }
-                    unsigned i = 0;
-                    while ((2u << i) <= zero_end - cursor) ++i;
-                    CK(cudaGraphLaunch(zero_graphs[i].exec,q));
-                    cursor += 1u << i;
-                } else {
-                    edwards_step(digit);
-                    ++cursor;
+                    if (action.stop) {
+                        result.stopped = true;
+                        break;
+                    }
+                    next_poll = cursor + (window ? std::max(window, 128u) : 128u);
                 }
-            } else if (!window) {
-                step(cursor - resume);
-                ++cursor;
-            } else if (count - cursor >= window) {
-                CK(cudaGraphLaunch(full.exec,q));
-                cursor += window;
-            } else {
-                CK(cudaGraphLaunch(tail.exec,q));
-                cursor = count;
+                if (naf) {
+                    const int digit = naf->digits[cursor];
+                    if (!digit && window) {
+                        if (zero_end <= cursor) {
+                            zero_end = cursor + 1;
+                            while (zero_end < count && zero_end - cursor < window && !naf->digits[zero_end])
+                                ++zero_end;
+                        }
+                        unsigned i = 0;
+                        while ((2u << i) <= zero_end - cursor) ++i;
+                        CK(cudaGraphLaunch(zero_graphs[i].exec,q));
+                        cursor += 1u << i;
+                    } else {
+                        edwards_step(digit);
+                        ++cursor;
+                    }
+                } else if (!window) {
+                    step(cursor - resume);
+                    ++cursor;
+                } else if (count - cursor >= window) {
+                    CK(cudaGraphLaunch(full.exec,q));
+                    cursor += window;
+                } else {
+                    CK(cudaGraphLaunch(tail.exec,q));
+                    cursor = count;
+                }
             }
+            result.completed_bits = cursor;
+        };
+        for (unsigned block = 0; block < blocks; ++block) {
+            replay();
+            if (result.stopped) break;
         }
-        result.completed_bits = cursor;
         CK(cudaEventRecord(end.value,q));
         CK(cudaEventSynchronize(end.value));
         result.wall_ms.push_back((now_s()-wall)*1000);
         float ms=0; CK(cudaEventElapsedTime(&ms,begin.value,end.value));
-        if (!target_ms) result.device_ms.push_back(ms);
+        if (!target_ms || timed_group) result.device_ms.push_back(ms);
         else if (!sample) {
-            result.blocks_per_sample = unsigned(std::clamp(std::ceil(target_ms / std::max(0.001, double(ms))), 1., 64.));
-            samples = 2 + groups * result.blocks_per_sample; // Exclude pilot and final block.
-        } else if (sample + 1 < samples) {
-            group_ms += ms;
-            if (sample % result.blocks_per_sample == 0) {
-                result.device_ms.push_back(group_ms);
-                group_ms = 0;
-            }
+            const double wanted = std::ceil(target_ms / std::max(0.001, double(ms)));
+            result.blocks_per_sample = unsigned(std::clamp(wanted, 1., double(UINT32_MAX / std::max(1u, count))));
         }
         const double read=now_s();
         std::vector<uint32_t> got(checkpoint_slots*stride);
         CK(cudaMemcpy(got.data(),state.data,got.size()*4,cudaMemcpyDeviceToHost));
         result.readback_seconds+=now_s()-read;
-        if (sample && got!=result.points) throw std::runtime_error("nondeterministic NTT Stage1 endpoint");
+        if (target_ms && !sample) pilot = got;
+        if (timed_group && sample == 1) group_endpoint = got;
+        const auto& expected = !target_ms ? result.points : timed_group ? group_endpoint : pilot;
+        if (sample && !result.stopped && got != expected)
+            throw std::runtime_error("nondeterministic NTT Stage1 endpoint");
         result.points=std::move(got);
     }
     observe_memory();

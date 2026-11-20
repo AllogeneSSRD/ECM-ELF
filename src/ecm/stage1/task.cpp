@@ -10,6 +10,8 @@
 #include "ecm/platform/logging.h"
 #if ECM_HAS_CUDA_STAGE1
 #include "montgomery/cuda/ntt/batches.h"
+#include "montgomery/cuda/ntt/tune.h"
+#include "ecm/platform/stop.h"
 #endif
 #include <chrono>
 #include <filesystem>
@@ -469,9 +471,15 @@ TaskResult run_stage1_task(const Stage1Request& request, const TaskDependencies&
         if (!path.empty() && !has_arithmetic_checkpoint())
             ecm_results::discard_completed_stage1_publication(publication_checkpoint);
 #if ECM_HAS_CUDA_STAGE1
-        if (split_ntt) {
-            out->computation = ecm_cuda_stage1::run_ntt_batches(
-                request, deps, session,
+        if (selection.target == ExecutionTarget::Gpu && selection.gpu_algorithm == GpuAlgorithm::Ntt) {
+            if (split_ntt || !has_arithmetic_checkpoint())
+                execution.execution.naf_w = ecm_mersenne_ntt::production_window(request,
+                    ntt_arithmetic_bits(N,opt), !split_ntt);
+            const Stage1Request resolved{N,B1,B2,curves,savefilename,saveappend,n_expr,execution};
+            if (ecm_stage1_stop_requested()) out->computation.stop();
+            else if (!split_ntt) out->computation = deps.execute(resolved, execution, session);
+            else out->computation = ecm_cuda_stage1::run_ntt_batches(
+                resolved, deps, session,
                 [&](const CurveOutcome& factor, uint32_t index) {
                     const auto key = result_identity + "|early-factor|" + std::to_string(factor.sigma);
                     const auto seconds =

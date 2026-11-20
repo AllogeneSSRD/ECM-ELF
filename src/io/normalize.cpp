@@ -288,6 +288,7 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
                          ecm_stage1::lower_ascii(cfg.ntt_convolution) == "auto",
                          unsigned(cfg.ntt_memory_mib),
                          resolve_rel_local(base, cfg.ntt_tune_file), cfg.ntt_tight_weighted_bound};
+    opt.execution.ntt.runtime_enabled = cfg.ntt_tune_runtime;
     opt.execution.ntt.pad_batch = cfg.ntt_pad_batch != 0;
     opt.execution.ntt.allow_known_factors = cfg.ntt_allow_known_factors != 0;
     opt.execution.gpu_mul_path = cfg.kernel_mul;
@@ -313,6 +314,14 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
 
 bool validate_cli_mode(const ParsedCli& input, std::string& error) {
     const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels && !input.tune_ntt;
+    if (input.tune_ntt && input.has("--bits") && (input.tune_grid.exp.first || input.tune_grid.length.first)) {
+        error = "tune conflict: --bits and exp/length";
+        return false;
+    }
+    if (input.tune_grid.naf.first && input.has("--naf-w")) {
+        error = "tune conflict: naf and --naf-w";
+        return false;
+    }
     if (((input.tune_exhaustive || input.tune_seconds) && !input.tune_ntt) ||
         (input.tune_ntt && (input.pos.size() > 1 || input.show_gpu_info || input.show_kernels ||
                            input.has("-gpucurves") || input.has("-save") || input.has("-savea")))) {
@@ -432,7 +441,7 @@ bool normalize_settings(const ParsedConfig& parsed, const ParsedCli& input, cons
         }
         const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels && !input.tune_ntt;
         const bool configured_curve = cfg.config_keys.count("curve") && !cfg.curve_model.empty();
-        if (queue && !s.strict_param && !configured_curve)
+        if ((queue || input.tune_ntt) && !s.strict_param && !configured_curve)
             s.curve = ecm_stage1::CurveModel::Edwards;
         if (input.has("--curve"))
             s.curve = input.selection.curve;

@@ -119,6 +119,10 @@ bool read_config(const std::string& path, ParsedConfig& parsed, int active_worke
 void project_stage1_config(const ParsedConfig& parsed, int worker, EcmQueueConfig& cfg) {
     cfg = EcmQueueConfig{};
     cfg.config_version = parsed.config_version;
+    ecm_config::Stage2Values tuning;
+    ecm_config::apply(tuning, ecm_config::selected_entries(parsed.lines, worker, {"stage2_tune_runtime"}, parsed.path),
+                      ecm_config::stage2_bindings);
+    cfg.ntt_tune_runtime = tuning.tune_runtime;
     // Defaults are supplied at projection time, never inferred from absent keys.
     ecm_stage1::parse_curve_model(cfg.curve_model, cfg.selection.curve);
     ecm_stage1::parse_execution_target(cfg.execution_target, cfg.selection.target);

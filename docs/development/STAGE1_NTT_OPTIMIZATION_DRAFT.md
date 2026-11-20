@@ -61,7 +61,7 @@ GPU1 上分别用线性和加权后端对比 0.59.3，沿用 B1=256 的六位宽
 
 - `ecm.exe --tune ntt` 由 CUDA worker 独立执行。两种后端使用同批合成整数状态，先粗搜并确认平台区，再细测区间和峰值肩部；同一批量下候选必须得到相同的两组 X/Z。调优按吞吐给出峰值与 95% 推荐，生产自动模式按任务实际活跃曲线数选卷积，不改变 sigma 的安排。
 - 生产批次容量提高到 32，检查点继续使用原有的 32 位活跃掩码和整数 X/Z。GPU1 在 M4423、B1=32 对 16／32 条两种卷积各自用独立 Python 对拍。M9689、B1=4096 的两组真实队列在 bit 128/5924 中断，换用 weighted、tile 9 和 32 位 Graph 窗口恢复，save 与不中断的 linear 一致，并完成 Stage2 交接。
-- GPU1 的实测和可复用 tune 记录在 `data/experiments/stage1_ntt_batch_tune_0596/`。验收入口为 [生产对拍](../../tools/test/test_stage1_ntt_production.py) 和 [自动选型测试](../../tools/test/test_stage1_ntt_tune.py)。使用方式及结果见 [Stage1 NTT 调优与显存](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)。
+- GPU1 的实测和可复用 tune 记录在 `data/experiments/stage1_ntt_batch_tune_0596/`。验收入口为 [生产对拍](../../tools/test/test_stage1_ntt_production.py) 和 [自动选型测试](../../tools/test/test_stage1_ntt_tune.py)。使用方式及结果见 [Stage1 NTT 调优与显存](../usage/TUNE.md#生产选型)。
 
 ## 0.59.8 共享 NTT 调优矩阵
 

@@ -325,7 +325,7 @@ edwards_naf_window_bits = 0
 
 类型 `int` · 范围 `[0|2..12]; CPU: [0|3..12]` · Worker 覆盖 `[worker.N] edwards_naf_window_bits` · 级别 `高级`。
 
-Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 选择 x-only，2～12 选择 2XY NAF。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。
+Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 按兼容实测吞吐选择窗口，无记录可用时回退 x-only，2～12 固定 2XY NAF 窗口。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。
 
 <a id="exp_cache"></a>
 
@@ -1670,7 +1670,7 @@ tune_runtime_enabled = true
 
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] tune_runtime_enabled` · 级别 `高级`。
 
-CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案一致时，可跨位宽和内存预算复用。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。
+CUDA Stage1 NTT 在生产前补测缺失位宽，关闭时只读选型。Stage2 CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案一致时，可跨位宽和内存预算复用。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。
 
 <a id="stage2_tune_runtime_samples"></a>
 

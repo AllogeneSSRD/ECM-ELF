@@ -16,10 +16,11 @@ struct BatchMemory {
 };
 std::string tune_shape_descriptor(const Plan& plan);
 
-int tune_command(const ecm_stage1::Stage1Options&, double b1, unsigned p, bool exhaustive, unsigned seconds);
+int tune_command(const ecm_stage1::Stage1Options&, double b1, const ecm_stage1::NttTuneGrid&, bool exhaustive, unsigned seconds);
 ecm_stage1::Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p,
                                              unsigned curves, const ecm_stage1::Stage1NttOptions&,
                                              unsigned naf_window, bool require_capacity, BatchMemory&);
+unsigned production_window(const ecm_stage1::Stage1Request&, unsigned p, bool fixed_batch);
 unsigned select_production_batch(const ecm_stage1::Stage1Request&, unsigned remaining);
 void record_production_sample(const ecm_stage1::Stage1Request&, const Plan&, const Run&,
                               unsigned valid, unsigned batch, double compute_seconds);

@@ -180,6 +180,7 @@ inline Word ntt_option(const Fields &f,const char *key) {
 inline constexpr const char *stage2_ntt_type="stage2_convolution";
 inline constexpr const char *linear_ntt_type="stage1_linear";
 inline constexpr const char *weighted_ntt_type="stage1_weighted";
+inline constexpr const char *stage1_graph_ntt_kind="stage1_graph_replay";
 inline constexpr const char *stage1_runtime_ntt_kind="stage1_runtime";
 inline bool is_runtime_stage1_ntt(const Fields &s) {
     return s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_runtime_ntt_kind;
@@ -226,10 +227,12 @@ inline void validate_stage1_ntt(const Fields &s) {
         const auto steps=uint(s,"timed_steps"), block=uint(s,"block_steps"), target=uint(s,"sample_target_ms");
         const auto curve=text(s,"curve");
         const auto ms=real(s,"median_ms");
-        if(!block || block>64 || !steps || steps>64*block || steps%block ||
+        const auto groups=uint(s,"repeats");
+        const bool grouped=s.count("benchmark_kind") && text(s,"benchmark_kind")==stage1_graph_ntt_kind;
+        if(!block || block>64 || !steps || steps>UINT32_MAX || steps%block || (!grouped && steps>64*block) ||
            width<ecm_stage1::stage1_ntt_min_exponent || width>ecm_stage1::stage1_ntt_max_exponent ||
-           uint(s,"segments")!=(width+8191)/8192 || (target!=20 && target!=50) ||
-           uint(s,"repeats")!=(target==20 ? 3u : 5u) || !uint(s,"carry_bits") || uint(s,"carry_bits")>64 ||
+           uint(s,"segments")!=(width+8191)/8192 || (grouped ? !target || target>UINT32_MAX : target!=20 && target!=50) ||
+           (grouped ? groups!=3 && groups!=5 : groups!=(target==20 ? 3u : 5u)) || !uint(s,"carry_bits") || uint(s,"carry_bits")>64 ||
            uint(s,"uniform_digits")>1 || uint(s,"dataflow")>UINT32_MAX ||
            (window && (curve!="edwards" || window<2 || window>12)) || uint(s,"b1")<2 ||
            (curve!="edwards" && curve!="mont0") || !(ms>0) ||
@@ -637,8 +640,9 @@ struct Profile {
                 if(required(old,key)!=required(sample,key))return false;
             if(is_runtime_stage1_ntt(old)!=runtime)return false;
             if(old.count("sample_target_ms")!=sample.count("sample_target_ms"))return false;
+            if(sample.count("sample_target_ms") && old.count("benchmark_kind")!=sample.count("benchmark_kind"))return false;
             if(sample.count("sample_target_ms"))
-                for(const char *key:{"sample_target_ms","curve","b1","naf_window","segments","carry_bits",
+                for(const char *key:{"repeats","sample_target_ms","curve","b1","naf_window","segments","carry_bits",
                                      "uniform_digits","dataflow","program_version"})
                     if(required(old,key)!=required(sample,key))return false;
             if(sample.count("sample_target_ms") && (uint(old,"reference_bits")+4095)/4096!=

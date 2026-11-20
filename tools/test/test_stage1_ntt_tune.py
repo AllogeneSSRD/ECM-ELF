@@ -44,7 +44,7 @@ matrix = [
         config.write_text(cfg, encoding="utf-8")
         process = subprocess.run([str(exe), "--config", str(config), *flags], input=expression,
                                  cwd=directory, text=True, encoding="utf-8", errors="replace",
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
         (directory / "run.log").write_text(process.stdout, encoding="utf-8")
         assert (process.returncode == 0) == ok, (name, process.stdout[-2000:])
         return process.stdout
@@ -52,14 +52,14 @@ matrix = [
     flags = ["-gpucurves", str(curves), "-sigma", "26", "-save", "out.save", str(b1), str(b1)]
     expression = f"2^{p}-1\n"
     first = run("first", flags, expression=expression)
-    assert "source=short_tune" in first
+    assert "stage1_ntt_runtime_tune:" in first and "source=tune" in first
     old = database.read_bytes()
     assert "source=tune" in run("cached", flags, expression=expression)
     assert "source=tune" in run("same_packing", flags, expression="2^4421-1\n")
     assert database.read_bytes() == old
     assert saved_points(out / "first/out.save", p, b1) == saved_points(out / "cached/out.save", p, b1)
     assert len(saved_points(out / "cached/out.save", p, b1)) == curves
-    print("PASS default auto short tune, durable cache hit and exact task curve count", flush=True)
+    print("PASS default runtime tune, durable cache hit and exact task curve count", flush=True)
 
     mirror = out / "screen.log"
     config = fixture.replace('log_file = ""', f'log_file = "{mirror.as_posix()}"')
@@ -107,11 +107,12 @@ matrix = [
     wide = f"2^{p}-1\n"
     one_curve = [*flags[:1], "1", *flags[2:]]
     assert "length=4096" in run("seed_binary", one_curve, cfg=fixture + "ntt_length = 4096\n", expression=wide)
-    assert "source=short_tune" in run("add_mixed_to_binary", one_curve, expression=wide)
+    added = run("add_mixed_to_binary", one_curve, expression=wide)
+    assert "source=short_tune" in added or "stage1_ntt_runtime_tune:" in added
     columns, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
     rows = [dict(zip(columns, row)) for row in values]
     assert any(row["ntt_type"] == "stage2_convolution" for row in rows)
-    mixed, = [row for row in rows if row["length"] == 2560 and row["batch"] == 1]
+    mixed = next(row for row in rows if row["length"] == 2560 and row["batch"] == 1)
     assert mixed["ntt_type"] == "stage1_weighted" and mixed["log2_length"] == 11
     assert mixed["forward"].startswith("r5+") and mixed["inverse"].endswith("+r5")
     cached = database.read_bytes()
@@ -123,7 +124,9 @@ matrix = [
     assert saved_points(out / "mixed_default/out.save", p, b1) == saved_points(out / "seed_binary/out.save", p, b1)
     print("PASS default radix-5, explicit tile fallback, short tune with an existing binary row and cache reuse", flush=True)
 
-    log = run("full_mixed", ["--tune", "ntt", "--bits", str(p)])
+    # This matrix checks mixed-layout coverage at every shortlisted batch.
+    # The preceding full matrix already verifies the default timing and reuse.
+    log = run("full_mixed", ["--tune", f"ntt,exp={p},time=0.25"])
     lengths = [int(n) for n in re.findall(r"^(?:\[[^\n]*\] )?Best (\d+) \d+ [01]:", log, re.M)]
     assert len(lengths) == 1
     assert {2560,4096} < {int(n) for n in re.findall(r"stage1_ntt_plan: p=58631 length=(\d+)", log)}

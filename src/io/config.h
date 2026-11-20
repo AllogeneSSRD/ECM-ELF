@@ -7,6 +7,7 @@
 #include <map>
 
 struct EcmQueueConfig : ecm_config::Stage1Values {
+    bool ntt_tune_runtime = true;
     int config_version = ecm_config::business_config_version;
     // Presence only; raw values/locations remain in ParsedConfig. This keeps
     // explicit configuration distinct from mode-specific omitted-value policy.

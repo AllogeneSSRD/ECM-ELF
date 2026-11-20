@@ -158,7 +158,7 @@ tile 在 shared 中融合若干层，outer 按 radix/pass 分解大变换，缓�
 
 `NTT_FUSE_JOINT=1` 默认关闭，在相同受支持条件下包含中段M6，并选k23 tile11/M6、k25 tile12/M7；其他长度不变。当前1428算子样本与80条固定D曲线仅显示约0.19%的额外矩阵收益，未启用默认。[准备与同步报告](../performance/STAGE2_PREPARATION.md)说明默认关闭的 `NTT_HOST_TRACE=1` 诊断范围，以及后续pack/补零融合的证据。
 
-Stage2 NTT 性能表的字段、计时边界、tile 级数、外层 radix 与处理趟数，以及摘要如何影响 D/P 选型，统一见 [NTT 性能摘要表](AUTO_B2.md#ntt-性能摘要表)。Stage2 的这项调优用于校准成本。Stage1 的批量和形状调优见 [批量调优与显存](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)。
+Stage2 NTT 性能表的字段、计时边界、tile 级数、外层 radix 与处理趟数，以及摘要如何影响 D/P 选型，统一见 [NTT 性能摘要表](AUTO_B2.md#ntt-性能摘要表)。Stage2 的这项调优用于校准成本。Stage1 的批量和形状调优见 [批量调优与显存](../usage/TUNE.md#生产选型)。
 
 Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认。仅满足小字长 FHE 模数的库不能直接替换 Goldilocks64/多精度 carry 管线；适配参考见 [算法资料](../reference/ECM_ALGORITHMS.md)。
 

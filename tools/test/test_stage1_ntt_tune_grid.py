@@ -1,0 +1,140 @@
+"""Check the Stage1 tune grid, timed groups and read-only/runtime production selection."""
+import argparse
+from pathlib import Path
+import re
+import subprocess
+import tomllib
+
+from test_stage1_ntt_production import saved_points
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--exe", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--device", type=int, default=0)
+    args = parser.parse_args()
+    exe = args.exe.resolve(strict=True)
+    out = args.output.resolve()
+    out.mkdir(parents=True)
+    database = out / "tune.toml"
+
+    def run(name, flags, *, stdin=None, runtime=False, settings="", convolution="linear", success=True):
+        directory = out / name
+        directory.mkdir()
+        cfg = directory / "ecm.toml"
+        cfg.write_text(f'config_version = 4\n[shared]\nlog_file = ""\ntune_file = "{database.as_posix()}"\n'
+                       f'[stage1]\ntarget = "gpu"\ngpu_algorithm = "ntt"\nstage1_gpu_device = {args.device}\n'
+                       f'ntt_convolution = "{convolution}"\nexponent_cache_dir = "off"\nhandoff_mode = "off"\n{settings}\n'
+                       f'[stage2]\ntune_runtime_enabled = {str(runtime).lower()}\n', encoding="utf-8")
+        result = subprocess.run([str(exe), "--config", str(cfg), *flags], input=stdin, cwd=directory,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", timeout=240)
+        (directory / "run.log").write_text(result.stdout, encoding="utf-8")
+        assert (result.returncode == 0) == success, (name, result.stdout[-2500:])
+        return result.stdout
+
+    def rows():
+        fields, *values = tomllib.loads(database.read_text(encoding="utf-8"))["ntt"]["matrix"]
+        return [dict(zip(fields, row)) for row in values]
+
+    for index, spec in enumerate(("exp=61,length=8", "naf=12-6", "batch=0", "batch=129",
+                                  "exp=31", "time=0", "ntt,naf=6,naf=7", "typo=1")):
+        log = run(f"bad{index}", ["-tune", spec], success=False)
+        assert "INPUT[cli]" in log
+        if index == 0:
+            assert "conflict" in log and "length" in log and "exp" in log
+    assert not database.exists()
+
+    database = out / "range.toml"
+    crossing = ["-tune", "ntt,exp=3554-3560,naf=6,batch=1,time=0.01", "16"]
+    for name in ("crossing_cold", "crossing_hot"):
+        log = run(name, crossing, settings="ntt_profile = 1")
+        assert re.findall(r"stage1_ntt_plan: p=(\d+) length=(\d+)", log) == [
+            ("3554", "256"), ("3557", "512")], log
+        summaries = re.findall(r"stage1_ntt_tune: p=\d+ measured=(\d+) reused=(\d+)", log)
+        assert len(summaries) == 2
+        if name == "crossing_cold":
+            assert all(int(measured) and int(reused) == 0 for measured, reused in summaries)
+        else:
+            assert all(int(measured) == 0 and int(reused) for measured, reused in summaries)
+
+    def planned(log):
+        return [(int(p), int(length), int(w)) for p, length, w in re.findall(
+            r"stage1_ntt_plan: p=(\d+) length=(\d+) bpw=\d+ naf=(\d+)", log)]
+
+    # The shortest native weighted length drops at this isolated even exponent.
+    isolated = run("isolated", ["-tune", "exp=66049-66051,naf=6,batch=1,time=0.01", "16"],
+                   convolution="auto", settings="ntt_profile = 1")
+    assert planned(isolated) == [(66049, 8192, 6), (66049, 4096, 6), (66050, 2560, 6)]
+
+    # Exercise the entire reported range. An infeasible batch exposes the full
+    # production admission plan without benchmarking a hundred matrices.
+    broad = run("broad", ["-tune", "ntt,exp=2000-1000000,batch=128"],
+                convolution="auto", settings="ntt_memory_mib = 1", success=False)
+    expected = sorted([2**i for i in range(8, 18)] + [2**i for i in range(7, 17)]
+                      + [2560, 5120, 10240, 20480, 40960])
+    for window in (6, 8, 10, 12):
+        assert sorted(n for p, n, w in planned(broad) if w == window) == expected
+    assert "stage1_ntt_reuse" not in broad and "fits the requested grid" in broad
+
+    database = out / "tune.toml"
+    spec = "ntt,exp=61-62,naf=6-7,batch=1-2"
+    run("grid", ["-tune", spec, "16"])
+    data = rows()
+    assert {r["naf_window"] for r in data} == {6, 7}
+    assert {r["batch"] for r in data} == {1, 2}
+    assert {r["graph_bits"] for r in data} == {4, 8, 16, 32, 64}
+    assert {r["repeats"] for r in data} == {3, 5}
+    for row in data:
+        assert row["sample_target_ms"] == 100 and 61 <= row["reference_bits"] <= 62
+        rate = 1000 * row["batch"] * row["timed_steps"] / row["median_ms"]
+        assert abs(row["iter_per_s"] / rate - 1) < 1e-8
+    snapshot = database.read_bytes()
+    hot = run("hot", ["--tune", spec, "16"])
+    assert "measured=0 " in hot and database.read_bytes() == snapshot
+    run("stronger", ["-tune", "exp=61,naf=6,batch=1,time=2", "16"])
+    stronger = [r for r in rows() if r["sample_target_ms"] == 200]
+    assert {r["repeats"] for r in stronger} == {3, 5}
+    assert all(r["batch"] == 1 and r["naf_window"] == 6 for r in stronger)
+
+    production = ["--param", "e", "-sigma", "26", "-gpucurves", "1", "-save", "result.save"]
+    snapshot = database.read_bytes()
+    cached = run("production", production + ["16"], stdin="2^61-1\n")
+    best = max((r for r in rows() if r["batch"] == 1), key=lambda r: r["iter_per_s"])
+    assert f'naf={best["naf_window"]} source=tune' in cached
+    assert database.read_bytes() == snapshot and "stage1_ntt_runtime_tune:" not in cached
+    cold = run("read_only", production + ["20"], stdin="2^61-1\n")
+    assert "naf=0 source=default" in cold and database.read_bytes() == snapshot
+    learned = run("runtime", production + ["20"], stdin="2^61-1\n", runtime=True,
+                  settings="ntt_profile = 1")
+    assert "stage1_ntt_runtime_tune:" in learned
+    assert {r["naf_window"] for r in rows() if r["b1"] == 20} == {6, 8, 10, 12}
+    assert saved_points(out/"read_only/result.save", 61, 20, True) == saved_points(
+        out/"runtime/result.save", 61, 20, True)
+    snapshot = database.read_bytes()
+    replay = run("runtime_hit", production + ["20"], stdin="2^61-1\n", runtime=True,
+                 settings="ntt_profile = 1")
+    assert "stage1_ntt_runtime_tune:" not in replay and database.read_bytes() == snapshot
+    log = run("length", ["-tune", ",length=8-9,naf=6,batch=2", "16"], settings="ntt_profile = 1")
+    assert set(re.findall(r"stage1_ntt_plan: p=\d+ length=(\d+)", log)) == {"8"}
+    run("mont", ["--param", "m0", "-tune", "ntt,exp=127,naf=,batch=1,time=0.25", "16"])
+    mont = [r for r in rows() if r["curve"] == "mont0"]
+    assert {r["repeats"] for r in mont} == {3, 5} and all(r["sample_target_ms"] == 25 for r in mont)
+    assert {r["graph_bits"] for r in mont} == {4, 8, 16, 32, 64}
+    run("default_windows", ["-tune", "exp=61,batch=1,time=0.01", "32"],
+        settings="edwards_naf_window_bits = 3\nntt_profile = 1")
+    assert {r["naf_window"] for r in rows() if r["b1"] == 32} == {6, 8, 10, 12}
+    wide = run("wide", ["-tune", "exp=900001,naf=6,batch=1,time=0.25", "16"],
+               convolution="auto", settings="ntt_memory_mib = 128")
+    assert "Best " in wide
+    candidates = [r for r in rows() if r["reference_bits"] == 900001]
+    assert {r["length"] for r in candidates} == {40960, 65536, 131072}
+    assert {r["dataflow"] & 384 for r in candidates if r["length"] == 40960} == {0, 128, 384}
+    bare = run("bare", ["-tune", "--tune-seconds", "1"], settings="ntt_profile = 1")
+    assert "stage1_ntt_plan: p=32" in bare and "status=time_limit" in bare
+    print(f"PASS GPU {args.device}: CLI, bounds, Graph grid, timing, cache, runtime and endpoints")
+
+
+if __name__ == "__main__":
+    main()

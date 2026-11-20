@@ -314,10 +314,11 @@ target = "gpu"  # string: [cpu|gpu]
 
 # edwards_naf_window_bits = 0  # int: [0|2..12]; CPU: [0|3..12]
 # Requested Edwards NAF window. 0 starts at 12 for CPU and 6 for CUDA CGBN or OpenCL. With CUDA NTT,
-# 0 selects x-only and 2–12 selects 2XY NAF. CPU, CGBN and OpenCL can lower the window for a fresh
-# task to fit the memory budget.
-# Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 选择
-# x-only，2～12 选择 2XY NAF。CPU、CGBN 和 OpenCL 可根据内存预算为新任务自动降窗。
+# 0 selects the fastest compatible measured NAF window (x-only fallback). Values 2–12 fix the 2XY
+# NAF window. CPU, CGBN and OpenCL can lower the window for a fresh task to fit the memory budget.
+# Edwards NAF 请求窗口。0 在 CPU 从 12 开始，在 CUDA CGBN 和 OpenCL 从 6 开始。CUDA NTT 中 0 按兼容
+# 实测吞吐选择窗口，无记录可用时回退 x-only，2～12 固定 2XY NAF 窗口。CPU、CGBN 和 OpenCL 可根据内存
+# 预算为新任务自动降窗。
 
 # edwards_doubling = 1  # int: [0|1]
 # Doubling formula for new CUDA CGBN and OpenCL Edwards NAF batches. 0 selects HWCD, 1 selects 2XY
@@ -916,24 +917,25 @@ target = "gpu"  # string: [cpu|gpu]
 # worktodo_file/save配对仍遵循auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。
 
 # tune_runtime_enabled = true  # bool: [false|true|0|1]
-# CUDA accumulates checked no-factor production timings by device, environment and execution shape.
-# Identical complete parameters share one matrix row with repeats, mean time and sample standard
-# deviation. Slower observations count too. Row version and UTC update time record provenance only.
-# Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first,
-# then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the
-# fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM records timings in the [cpu_stage2]
-# matrix and can reuse a matching FFT and F-tree plan across widths and memory budgets after
-# preflight. Writes are locked and atomic. Cache failure does not fail a completed curve. false
-# disables single-curve runtime trials, collection and writes. CPU can still read qualified
-# observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in
-# opencl_tune_file at fixed geometry.
-# CUDA 按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存
-# repeats、平均耗时和样本标准差，包含较慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计
-# 时。model 选型优先试跑合法梅森承载，再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最
-# 快均值。B1 不限制 CUDA 成本复用。CPU GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案
-# 一致时，可跨位宽和内存预算复用。写入使用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单
-# 曲线试跑、采集和写回，CPU 仍可只读复用合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几
-# 何，在 opencl_tune_file 中学习点计划。
+# CUDA Stage1 NTT tunes missing widths before production and uses read-only selection when disabled.
+# Stage2 CUDA accumulates checked no-factor production timings by device, environment and execution
+# shape. Identical complete parameters share one matrix row with repeats, mean time and sample
+# standard deviation. Slower observations count too. Row version and UTC update time record
+# provenance only. Software upgrades retain compatible timings. Model selection tests a legal
+# Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach
+# tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM
+# records timings in the [cpu_stage2] matrix and can reuse a matching FFT and F-tree plan across
+# widths and memory budgets after preflight. Writes are locked and atomic. Cache failure does not
+# fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can
+# still read qualified observations. Parallel queue decisions use curve_concurrency. OpenCL learns
+# point plans in opencl_tune_file at fixed geometry.
+# CUDA Stage1 NTT 在生产前补测缺失位宽，关闭时只读选型。Stage2 CUDA 按设备、环境与执行形状累计通过检
+# 查的无因子生产计时。完全相同参数合并为一条 matrix 记录，保存 repeats、平均耗时和样本标准差，包含较
+# 慢观察。行内版本与 UTC 更新时间仅记录来源，程序升级保留兼容计时。model 选型优先试跑合法梅森承载，
+# 再比较普通路径和有希望的 D。达到 tune_min_repeats 后采用实测最快均值。B1 不限制 CUDA 成本复用。CPU
+# GWNUM 把耗时写入 [cpu_stage2] 矩阵。预检确认 FFT 和 F 树方案一致时，可跨位宽和内存预算复用。写入使
+# 用共享锁和原子替换，缓存失败不影响已完成的曲线。false 关闭单曲线试跑、采集和写回，CPU 仍可只读复用
+# 合格记录。双槽队列由 curve_concurrency 控制。OpenCL 固定几何，在 opencl_tune_file 中学习点计划。
 
 # curve_concurrency = "serial"  # string: [auto|serial|dual]
 # CUDA Stage2 curve scheduling. auto measures serial and eligible dual-slot modes. serial is the

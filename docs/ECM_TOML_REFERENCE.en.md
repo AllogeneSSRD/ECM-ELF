@@ -325,7 +325,7 @@ edwards_naf_window_bits = 0
 
 Type `int` · Range `[0|2..12]; CPU: [0|3..12]` · Worker override `[worker.N] edwards_naf_window_bits` · Level `advanced`.
 
-Requested Edwards NAF window. 0 starts at 12 for CPU and 6 for CUDA CGBN or OpenCL. With CUDA NTT, 0 selects x-only and 2–12 selects 2XY NAF. CPU, CGBN and OpenCL can lower the window for a fresh task to fit the memory budget.
+Requested Edwards NAF window. 0 starts at 12 for CPU and 6 for CUDA CGBN or OpenCL. With CUDA NTT, 0 selects the fastest compatible measured NAF window (x-only fallback). Values 2–12 fix the 2XY NAF window. CPU, CGBN and OpenCL can lower the window for a fresh task to fit the memory budget.
 
 <a id="exp_cache"></a>
 
@@ -1669,7 +1669,7 @@ tune_runtime_enabled = true
 
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] tune_runtime_enabled` · Level `advanced`.
 
-CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM records timings in the [cpu_stage2] matrix and can reuse a matching FFT and F-tree plan across widths and memory budgets after preflight. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.
+CUDA Stage1 NTT tunes missing widths before production and uses read-only selection when disabled. Stage2 CUDA accumulates checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation. Slower observations count too. Row version and UTC update time record provenance only. Software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. Candidates that reach tune_min_repeats are ranked by the fastest mean. B1 does not gate CUDA cost reuse. CPU GWNUM records timings in the [cpu_stage2] matrix and can reuse a matching FFT and F-tree plan across widths and memory budgets after preflight. Writes are locked and atomic. Cache failure does not fail a completed curve. false disables single-curve runtime trials, collection and writes. CPU can still read qualified observations. Parallel queue decisions use curve_concurrency. OpenCL learns point plans in opencl_tune_file at fixed geometry.
 
 <a id="stage2_tune_runtime_samples"></a>
 

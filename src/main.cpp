@@ -1177,8 +1177,11 @@ int main(int argc, char** argv) {
     if (input.tune_ntt) {
         if (!open_direct_log({settings.options.execution.ntt.tune_file})) return 1;
 #if ECM_HAS_CUDA_STAGE1
+        auto grid = input.tune_grid;
+        if (input.has("--naf-w") && input.naf_w) grid.naf = {unsigned(input.naf_w), unsigned(input.naf_w)};
+        if (input.gpu_info_bits) grid.exp = {input.gpu_info_bits, input.gpu_info_bits};
         return ecm_mersenne_ntt::tune_command(settings.options, input.pos.empty() ? 128 : input.b1,
-            input.gpu_info_bits, input.tune_exhaustive, input.tune_seconds);
+            grid, input.tune_exhaustive, input.tune_seconds);
 #else
         std::cerr << "Stage1 NTT tune requires the CUDA worker\n";
         return 1;

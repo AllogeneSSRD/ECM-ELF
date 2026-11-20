@@ -80,16 +80,19 @@ struct Measurement {
     double throughput() const { return 1000.0 * batch / time(); }
 };
 
-unsigned max_exponent(const Plan& plan) {
-    constexpr unsigned supported_max = ecm_stage1::stage1_ntt_max_exponent;
-    if (plan.weighted) return std::min(supported_max, plan.length * plan.bpw);
-    unsigned lo = 0, hi = (plan.length - 1) / 2;
+unsigned linear_exponent_limit(unsigned length, unsigned bpw) {
+    unsigned lo = 0, hi = (length - 1) / 2;
     while (lo < hi) {
         const unsigned mid = lo + (hi - lo + 1) / 2;
-        if (exact_ok_terms(mid, plan.bpw)) lo = mid;
+        if (exact_ok_terms(mid, bpw)) lo = mid;
         else hi = mid - 1;
     }
-    return std::min(supported_max, lo * plan.bpw);
+    return lo * bpw;
+}
+
+unsigned max_exponent(const Plan& plan) {
+    const unsigned limit = plan.weighted ? plan.length * plan.bpw : linear_exponent_limit(plan.length, plan.bpw);
+    return std::min(ecm_stage1::stage1_ntt_max_exponent, limit);
 }
 
 void print_measurement(const Measurement& m, unsigned target) {
@@ -352,6 +355,75 @@ Candidates production_shapes(unsigned p, Stage1NttOptions options, bool native_e
     return shapes;
 }
 
+Candidates tune_shapes(unsigned p, const Stage1NttOptions& options, bool native_edwards) {
+    try { return production_shapes(p, options, native_edwards); }
+    catch (const std::invalid_argument&) { return {}; }
+}
+
+std::map<unsigned, Candidates> plan_tune_lengths(const Stage1NttOptions& options,
+        const ecm_stage1::NttTuneGrid& grid, bool native_edwards, double deadline) {
+    using namespace ecm_stage1;
+    const auto range = grid.exp.first ? grid.exp : TuneRange{stage1_ntt_min_exponent, stage1_ntt_max_exponent};
+    if (range.first == range.last) return {{range.first, tune_shapes(range.first, options, native_edwards)}};
+
+    std::map<unsigned, Candidates> plan;
+    auto add_first = [&](unsigned mode, unsigned length, unsigned first, unsigned last) {
+        if (!grid.length.contains(length)) return;
+        for (unsigned p = std::max(first, range.first); p <= std::min(last, range.last); ++p) {
+            if (ecm_stage1_stop_requested()) throw Cancelled();
+            if (deadline && now_s() >= deadline) throw TimeLimit{};
+            auto shapes = tune_shapes(p, options, native_edwards);
+            if (shapes[mode] && shapes[mode]->shape.length == length) {
+                plan[p][mode] = std::move(shapes[mode]);
+                break;
+            }
+        }
+    };
+
+    std::set<unsigned> lengths;
+    for (unsigned n = 2; n <= stage1_ntt_max_length; n *= 2) {
+        lengths.insert(n);
+        if (stage1_ntt_supported_radix5(5 * n)) lengths.insert(5 * n);
+    }
+    unsigned previous_linear = 0, previous_binary = 0, previous_weighted = 0;
+    for (unsigned length : lengths) {
+        if (options.length && options.length != length) continue;
+        const bool mixed = stage1_ntt_supported_radix5(length);
+        if (!mixed && (options.automatic || !options.weighted)) {
+            unsigned limit = 0;
+            for (unsigned b = 16; b <= 31; ++b)
+                if (!options.bpw || options.bpw == b)
+                    limit = std::max(limit, linear_exponent_limit(length, b));
+            // Linear packing selects its shortest length before applying the tile constraint.
+            const unsigned first = std::max(range.first, previous_linear + 1);
+            if (first <= limit) add_first(Linear, length, first, first);
+            previous_linear = limit;
+        }
+        if ((!options.automatic && !options.weighted) || options.tile > tile_log(length)) continue;
+
+        // Below 'guaranteed' this length always fits. For native unsigned products,
+        // even the narrow digits contribute at least L*(2^floor(p/L)-1)^2.
+        // Only the band between these bounds can contain isolated admissible p.
+        const unsigned max_bpw = options.bpw ? options.bpw : 31;
+        unsigned safe_bits = max_bpw;
+        while (safe_bits && !exact_ok_terms(2ull * length, safe_bits)) --safe_bits;
+        const unsigned guaranteed = length * safe_bits;
+        unsigned possible = guaranteed;
+        if (native_edwards && options.tight_weighted_bound && safe_bits < max_bpw) {
+            unsigned narrow_bits = safe_bits;
+            while (narrow_bits < max_bpw && exact_ok_terms(length, narrow_bits + 1)) ++narrow_bits;
+            possible = std::min(length * max_bpw, length * (narrow_bits + 1) - 1);
+        }
+        // Automatic binary plans compete only with shorter powers of two. Mixed
+        // plans and forced weighted convolution compete with every shorter length.
+        const unsigned previous = options.automatic && !mixed ? previous_binary : previous_weighted;
+        add_first(mixed ? Mixed : Weighted, length, std::max(length, previous + 1), possible);
+        previous_weighted = std::max(previous_weighted, guaranteed);
+        if (!mixed) previous_binary = std::max(previous_binary, guaranteed);
+    }
+    return plan;
+}
+
 std::array<BatchMemory, CandidateCount> production_capacity(const ecm_stage1::Stage1Request& request,
         const Device& device, unsigned p, unsigned window, const Candidates& shapes) {
     if (window && (window < 2 || window > 12))
@@ -421,11 +493,16 @@ Plan describe(const Device& device, unsigned p, unsigned batch, const Stage1NttO
     return plan;
 }
 
-bool same_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
+bool compatible_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
     using ecm_stage2::tune::uint;
-    return row.count("sample_target_ms") && pt::text(row,"program_version") == ecm_program::version &&
-           pt::text(row,"curve") == curve_name(request) && uint(row,"naf_window") == window &&
-           (!window || uint(row,"b1") == uint64_t(request.b1));
+    return row.count("sample_target_ms") && pt::text(row,"curve") == curve_name(request) &&
+           uint(row,"naf_window") == window && (!window || uint(row,"b1") == uint64_t(request.b1));
+}
+
+bool same_workload(const Fields& row, const ecm_stage1::Stage1Request& request, unsigned window) {
+    return compatible_workload(row,request,window) && row.count("benchmark_kind") &&
+           pt::text(row,"benchmark_kind") == pt::stage1_graph_ntt_kind &&
+           pt::text(row,"program_version") == ecm_program::version;
 }
 
 bool same_dispatch(const Fields& row, unsigned p, const Plan& plan) {
@@ -458,6 +535,7 @@ class TuneMatrix {
     const Device& device_;
     const ecm_stage1::Stage1Request& request_;
     unsigned p_, window_;
+    unsigned group_ms_;
     double deadline_;
     std::optional<Calibration> calibration_;
     std::vector<Fields> history_, legacy_, pending_;
@@ -465,8 +543,8 @@ class TuneMatrix {
 public:
     unsigned measured = 0;
     TuneMatrix(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p,
-               unsigned window, const pt::Profile& db, double deadline = 0)
-        : device_(device), request_(request), p_(p), window_(window), deadline_(deadline) {
+               unsigned window, const pt::Profile& db, unsigned group_ms = 100, double deadline = 0)
+        : device_(device), request_(request), p_(p), window_(window), group_ms_(group_ms), deadline_(deadline) {
         for (const auto& row : db.stage1_ntt) {
             const auto& condition = db.conditions.at(ecm_stage2::tune::uint(row,"condition"));
             if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid ||
@@ -493,7 +571,7 @@ public:
         using ecm_stage2::tune::uint;
         for (const auto& row : history_) {
             const auto b = unsigned(uint(row,"batch"));
-            if (b <= 1 || b >= cap || uint(row,"sample_target_ms") != 20 ||
+            if (b <= 1 || b >= cap || uint(row,"repeats") != 3 ||
                 uint(row,"length") != options.length || uint(row,"peak_bytes") > device_.budget ||
                 (pt::text(row,"ntt_type") == pt::weighted_ntt_type) != options.weighted) continue;
             if (!reusable_dispatch(row,device_,p_,b,options,window_)) continue;
@@ -507,7 +585,8 @@ public:
         persist(request_.options.execution.ntt.tune_file, device_, pending_);
         pending_.clear();
     }
-    Score sample(const Stage1NttOptions& options, unsigned batch, unsigned target) {
+    Score sample(const Stage1NttOptions& options, unsigned batch, unsigned groups) {
+        const unsigned target = group_ms_;
         if (ecm_stage1_stop_requested()) throw Cancelled();
         try {
             auto plan = describe(device_, p_, batch, options, window_);
@@ -517,7 +596,7 @@ public:
                     const auto& row = rows[i];
                     if (uint(row,"length") != plan.length || uint(row,"bpw") != plan.bpw ||
                         (pt::text(row,"ntt_type") == pt::weighted_ntt_type) != plan.weighted ||
-                        uint(row,"sample_target_ms") != target || uint(row,"batch") != batch ||
+                        uint(row,"sample_target_ms") < target || uint(row,"repeats") != groups || uint(row,"batch") != batch ||
                         uint(row,"peak_bytes") > device_.budget || !same_dispatch(row,p_,plan)) continue;
                     if (previous && hits_.insert(i).second)
                         ecm_ts_fprintf(stdout,"stage1_ntt_reuse: length=%u batch=%u dataflow=%u tile=%u "
@@ -536,8 +615,9 @@ public:
                 if (window_) calibration_->native(window_, uint64_t(request_.b1),
                     size_t(request_.options.execution.naf_memory_mb) * ecm_edwards_memory::mb);
             }
-            const auto m = calibration_->measure(batch, options, target == 20 ? 3 : 5, target);
+            const auto m = calibration_->measure(batch, options, groups, target);
             auto row = encode(m, m.steps);
+            row["benchmark_kind"] = pt::quoted(pt::stage1_graph_ntt_kind);
             row["sample_target_ms"] = std::to_string(target);
             row["reference_bits"] = std::to_string(p_);
             row["timed_steps"] = std::to_string(m.steps);
@@ -585,7 +665,7 @@ struct Family {
 
 void refine_batch(TuneMatrix& matrix, Family& f, unsigned batch, std::map<unsigned,Score>& finals) {
     if (f.best.count(batch)) return;
-    auto best = matrix.sample(f.options,batch,50);
+    auto best = matrix.sample(f.options,batch,5);
     if (!best.rate) return;
     const auto base = best.plan;
     std::vector<Stage1NttOptions> trials;
@@ -602,30 +682,35 @@ void refine_batch(TuneMatrix& matrix, Family& f, unsigned batch, std::map<unsign
         auto alt=o; alt.outer_max=base.outer_max==2 ? 4 : 2; trials.push_back(alt);
     }
     if (!o.profile && o.window<0) {
-        auto alt=o; alt.window=base.window==16 ? 32 : 16; trials.push_back(alt);
+        for (int steps : {4, 8, 16, 32, 64}) {
+            if (unsigned(steps) == base.window) continue;
+            auto alt = o;
+            alt.window = steps;
+            trials.push_back(alt);
+        }
     }
     for (const auto& alt : trials) {
-        auto score = matrix.sample(alt,batch,50);
+        auto score = matrix.sample(alt,batch,5);
         if (score.rate>best.rate) best = score;
     }
     f.keep(best);
     if (best.rate>finals[batch].rate) finals[batch]=best;
 }
 
-void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p, bool exhaustive, double deadline) {
+bool tune_width(const Device& device, const ecm_stage1::Stage1Request& request, unsigned p,
+                const Candidates& shapes, const ecm_stage1::NttTuneGrid& grid, bool exhaustive, double deadline) {
     using Layout = Stage1NttOptions::MixedLayout;
     const auto& options = request.options.execution.ntt;
     const auto w = naf_window(request);
-    const auto shapes = production_shapes(p, options, w != 0);
     const auto caps = production_capacity(request,device,p,w,shapes);
     std::vector<Family> families;
     for (unsigned mode=0; mode<CandidateCount; ++mode) {
         if (!shapes[mode]) continue;
         const auto& shape = *shapes[mode];
-        const unsigned cap = caps[mode].max_curves;
+        const unsigned cap = std::min(caps[mode].max_curves, grid.batch.last);
         ecm_ts_fprintf(stdout,"stage1_ntt_plan: p=%u length=%u bpw=%u naf=%u capacity=%u%s\n",
             p,shape.shape.length,shape.shape.bpw,w,cap,cap ? "" : " reason=memory_budget");
-        if (!cap) continue;
+        if (cap < grid.batch.first) continue;
         if (mode == Mixed) {
             for (auto layout : {Layout::Twiddle,Layout::Pfa,Layout::Coalesced}) {
                 auto o = shape.options;
@@ -634,21 +719,22 @@ void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
             }
         } else families.push_back({shape.options, cap});
     }
-    TuneMatrix matrix(device, request, p, w, load(options.tune_file), deadline);
+    if (families.empty()) return false;
+    TuneMatrix matrix(device, request, p, w, load(options.tune_file), grid.group_ms, deadline);
     const auto start = now_s();
     try {
         double single = 0, peak = 0;
         for (auto& f : families) {
             // If the estimated upper endpoint fails actual admission, bisect
             // against a measured lower endpoint before ranking the family.
-            for (auto b : std::set<unsigned>{1, matrix.interior(f.options,f.cap), f.cap}) {
-                auto score = matrix.sample(f.options,b,20);
+            for (auto b : std::set<unsigned>{grid.batch.first, std::max(grid.batch.first, matrix.interior(f.options,f.cap)), f.cap}) {
+                auto score = matrix.sample(f.options,b,3);
                 f.keep(score);
                 if (!score.rate) {
-                    unsigned lo = f.best.empty() ? 0 : f.best.rbegin()->first, hi = b;
+                    unsigned lo = f.best.empty() ? grid.batch.first-1 : f.best.rbegin()->first, hi = b;
                     while (hi > lo + 1) {
                         const unsigned mid = lo + (hi-lo)/2;
-                        auto test = matrix.sample(f.options,mid,20);
+                        auto test = matrix.sample(f.options,mid,3);
                         f.keep(test);
                         if (test.rate) lo = mid;
                         else hi = mid;
@@ -657,6 +743,7 @@ void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
                     break;
                 }
             }
+            if (f.best.count(grid.batch.first)) f.single = f.best.at(grid.batch.first);
             single = std::max(single,f.single.rate);
             peak = std::max(peak,f.peak.rate);
         }
@@ -671,9 +758,9 @@ void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
                 f.best.clear();
                 continue;
             }
-            std::set<unsigned> grid{1,f.peak.batch,f.cap};
-            for (unsigned b=2; b<=f.cap; b=exhaustive ? b+1 : 2*b) grid.insert(b);
-            for (auto batch : grid) rounds[batch].push_back(&f);
+            std::set<unsigned> batches{grid.batch.first,f.peak.batch,f.cap};
+            for (unsigned b=grid.batch.first; b<=f.cap; b=exhaustive ? b+1 : 2*b) batches.insert(b);
+            for (auto batch : batches) rounds[batch].push_back(&f);
             f.best.clear();
             f.peak = {};
             f.single = {};
@@ -691,8 +778,8 @@ void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
                 if (f.best.empty() || !f.peak.batch) continue;
                 const unsigned center=f.peak.batch;
                 for (unsigned b : {center-1,center+1})
-                    if (b && b<=f.cap) refine_batch(matrix,f,b,finals);
-                unsigned low=0, high=f.peak.batch;
+                    if (b>=grid.batch.first && b<=f.cap) refine_batch(matrix,f,b,finals);
+                unsigned low=grid.batch.first-1, high=f.peak.batch;
                 for (const auto& item : f.best) {
                     if (item.second.rate >= near_peak*f.peak.rate) { high=item.first; break; }
                     low=item.first;
@@ -705,7 +792,7 @@ void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
                 }
             }
         }
-        if (finals.empty()) throw BudgetError("no safe NTT backend for current memory budget");
+        if (finals.empty()) { matrix.flush(); return false; }
         const auto best = std::max_element(finals.begin(),finals.end(),[](const auto& a,const auto& b){
             return a.second.rate<b.second.rate;
         });
@@ -731,6 +818,7 @@ void tune_width(const Device& device, const ecm_stage1::Stage1Request& request, 
     matrix.flush();
     ecm_ts_fprintf(stdout,"stage1_ntt_tune: p=%u measured=%u reused=%zu seconds=%.3f\n",
                    p,matrix.measured,matrix.reused(),now_s()-start);
+    return true;
 }
 
 } // namespace
@@ -744,26 +832,43 @@ std::string tune_shape_descriptor(const Plan& plan) {
            std::to_string(unsigned(plan.warp_tail)) + ':' + forward + ':' + inverse;
 }
 
-int tune_command(const ecm_stage1::Stage1Options& task, double b1, unsigned p, bool exhaustive, unsigned seconds) {
+int tune_command(const ecm_stage1::Stage1Options& task, double b1, const ecm_stage1::NttTuneGrid& grid,
+                 bool exhaustive, unsigned seconds) {
+    using namespace ecm_stage1;
     try {
         if (!(b1 >= 2 && b1 <= 5000000000.0)) throw std::invalid_argument("invalid tune B1");
+        if (grid.exp.last > stage1_ntt_max_exponent || (grid.exp.first && grid.exp.first < stage1_ntt_min_exponent))
+            throw std::invalid_argument("tune exponent outside supported range");
+        const bool edwards = task.execution.selection.curve == CurveModel::Edwards;
+        if (grid.naf.first && !edwards) throw std::invalid_argument("naf requires Edwards (--param e)");
         const auto device = device_info(task.execution.device_index, task.execution.ntt.memory_mib);
         ecm_ts_fprintf(stdout,"ntt_type = convolution:tile_bits:max_radix_bits:graph_bits:"
                                "warp_tail:forward_pass_bits:inverse_pass_bits (0=linear, 1=weighted)\n"
                                "length max_exp ntt_type batch iter/s\n");
-        std::vector<unsigned> widths{61,127,251,521,1279,2539,4003,8191,16001,32749,
-            58631,65521,115201,131071,225287,262139,524309,900001,1048573};
-        if (p) widths = {p};
+        std::vector<unsigned> windows;
+        if (!edwards) windows = {0};
+        else if (grid.naf.first) {
+            for (unsigned w=grid.naf.first; w<=grid.naf.last; ++w) windows.push_back(w);
+        } else windows = {6,8,10,12};
+
         const std::string empty;
         const double deadline = seconds ? now_s()+seconds : 0;
-        const ecm_stage1::Stage1Request request{nullptr,b1,b1,max_batch,empty,false,empty,task};
-        for (unsigned width : widths) {
-            if (width < ecm_stage1::stage1_ntt_min_exponent || width > ecm_stage1::stage1_ntt_max_exponent)
-                throw std::invalid_argument("--tune ntt --bits outside supported exponent range");
-            tune_width(device,request,width,exhaustive,deadline);
+        bool measured = false;
+        const auto plan = plan_tune_lengths(task.execution.ntt, grid, edwards, deadline);
+        for (const auto& [width, shapes] : plan) {
+            for (unsigned w : windows) {
+                if (ecm_stage1_stop_requested()) throw Cancelled();
+                if (deadline && now_s() >= deadline) throw TimeLimit{};
+                auto options = task;
+                options.execution.naf_w = int(w);
+                const Stage1Request request{nullptr,b1,b1,max_batch,empty,false,empty,options};
+                measured |= tune_width(device,request,width,shapes,grid,exhaustive,deadline);
+            }
         }
+        if (!measured) throw BudgetError("no matching Stage1 NTT length, width or batch fits the requested grid");
         return 0;
     } catch (const TimeLimit&) {
+        ecm_ts_fprintf(stdout,"stage1_ntt_grid: status=time_limit\n");
         return 0;
     } catch (const std::exception& e) {
         ecm_ts_fprintf(stderr, "ERROR: %s\n", e.what());
@@ -792,7 +897,7 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
     using ecm_stage2::tune::uint;
     for (const auto& row : db.stage1_ntt) {
         if (pt::is_runtime_stage1_ntt(row)) continue;
-        const bool current = same_workload(row,request,window);
+        const bool current = compatible_workload(row,request,window);
         if (!current && (row.count("sample_target_ms") || window)) continue;
         const auto& condition = db.conditions.at(uint(row,"condition"));
         if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid) continue;
@@ -803,7 +908,7 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
             auto sample = decode(row,plan->shape,device,batch,plan->options);
             if (!sample) continue;
             if (current && !reusable_dispatch(row,device,p,batch,sample->options,window)) continue;
-            const unsigned q = current ? unsigned(uint(row,"sample_target_ms")) : 0;
+            const unsigned q = current ? unsigned(uint(row,"repeats")) : 0;
             if (!choices[mode] || q>quality[mode] || (q==quality[mode] && sample->rate>choices[mode]->rate)) {
                 choices[mode]=std::move(sample);
                 quality[mode]=q;
@@ -820,13 +925,13 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
     }
     TuneMatrix matrix(device,request,p,window,db);
     for (unsigned mode=0; mode<CandidateCount; ++mode) {
-        if (!candidates[mode] || quality[mode]) continue;
+        if (!options.runtime_enabled || !candidates[mode] || quality[mode]) continue;
         const auto plan=choices[mode] ? choices[mode]->options : candidates[mode]->options;
         choices[mode].reset();
-        auto row=matrix.sample(plan,batch,20);
+        auto row=matrix.sample(plan,batch,3);
         if (!row.rate) continue;
         choices[mode]=Cached{fixed_plan(plan,row.plan),row.rate};
-        quality[mode]=20;
+        quality[mode]=3;
         source="short_tune";
     }
     try { matrix.flush(); }
@@ -836,12 +941,94 @@ Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request& request, uns
         if (choices[mode] && (winner_mode == CandidateCount || quality[mode] > quality[winner_mode] ||
             (quality[mode] == quality[winner_mode] && choices[mode]->rate > choices[winner_mode]->rate)))
             winner_mode = mode;
+    if (winner_mode == CandidateCount && !options.runtime_enabled) {
+        for (auto mode : {Mixed, Weighted, Linear}) {
+            if (!candidates[mode]) continue;
+            memory = capacities[mode];
+            return candidates[mode]->options;
+        }
+    }
     if (winner_mode == CandidateCount) throw BudgetError("no safe Stage1 NTT auto plan under the current VRAM budget");
     const auto& winner = *choices[winner_mode];
     memory = capacities[winner_mode];
     ecm_ts_fprintf(stdout, "stage1_ntt_selection: source=%s p=%u batch=%u convolution=%s length=%u\n",
                    source, p, batch, modes[winner.options.weighted], winner.options.length);
     return winner.options;
+}
+
+unsigned production_window(const ecm_stage1::Stage1Request& request, unsigned p, bool fixed_batch) {
+    using namespace ecm_stage1;
+    using ecm_stage2::tune::uint;
+    const auto& exec = request.options.execution;
+    const unsigned configured = naf_window(request);
+    if (exec.ntt.tune_file.empty() || request.b1 < 2) return configured;
+    const bool edwards = exec.selection.curve == CurveModel::Edwards;
+    const auto device = device_info(exec.device_index, exec.ntt.memory_mib);
+    const unsigned limit = std::min(request.curves, max_batch);
+    auto best_window = [&](const pt::Profile& db) -> std::optional<unsigned> {
+        std::optional<unsigned> best;
+        double fastest = 0;
+        std::map<unsigned,std::array<BatchMemory,CandidateCount>> capacities;
+        std::map<unsigned,Candidates> shapes;
+        for (const auto& row : db.stage1_ntt) {
+            const bool runtime = pt::is_runtime_stage1_ntt(row);
+            if (!runtime && !row.count("sample_target_ms")) continue;
+            const auto w = unsigned(uint(row,"naf_window")), batch = unsigned(uint(row,"batch"));
+            if ((configured && w != configured) || (!edwards && w) || (edwards && !w && !configured) ||
+                batch > limit || (fixed_batch && batch != limit)) continue;
+            if (runtime) {
+                if (pt::text(row,"curve") != curve_name(request) || uint(row,"b1") != uint64_t(request.b1) ||
+                    uint(row,"arithmetic_bits") != p || uint(row,"valid_curves") != batch ||
+                    uint(row,"lcm_multiplier") != lcm_multiplier(request) ||
+                    pt::optional_uint(row,"target_bits",p) != mpz_sizeinbase(request.modulus,2)) continue;
+            } else if (!compatible_workload(row,request,w)) continue;
+            const auto& condition = db.conditions.at(uint(row,"condition"));
+            if (!condition.count("uuid_hex") || pt::text(condition,"uuid_hex") != device.uuid) continue;
+            if (!runtime && (uint(row,"reference_bits")-1)/4096 != (p-1)/4096) continue;
+            if (ecm_stage2::tune::real(row,"iter_per_s") <= fastest) continue;
+            if (!shapes.count(w)) {
+                shapes[w] = production_shapes(p,exec.ntt,w != 0);
+                capacities[w] = production_capacity(request,device,p,w,shapes.at(w));
+            }
+            for (unsigned mode=0; mode<CandidateCount; ++mode) {
+                const auto& candidate = shapes.at(w)[mode];
+                if (!candidate || batch > capacities.at(w)[mode].max_curves ||
+                    candidate->options.weighted != (pt::text(row,"ntt_type") == pt::weighted_ntt_type)) continue;
+                auto decoded = decode(row,candidate->shape,device,batch,candidate->options);
+                if (!decoded || (!runtime && !reusable_dispatch(row,device,p,batch,decoded->options,w))) continue;
+                const double rate = decoded->rate;
+                if (rate > fastest) { fastest = rate; best = w; }
+            }
+        }
+        return best;
+    };
+    pt::Profile db;
+    try { db = load(exec.ntt.tune_file); }
+    catch (const std::exception& e) {
+        ecm_ts_fprintf(stderr,"Stage1 NTT tune read: %s\n",e.what());
+        return configured;
+    }
+    auto best = best_window(db);
+    if (!best && exec.ntt.runtime_enabled) {
+        NttTuneGrid grid;
+        grid.batch = {fixed_batch ? limit : 1u, limit};
+        std::vector<unsigned> windows{configured};
+        if (edwards && !configured) windows = {6,8,10,12};
+        ecm_ts_fprintf(stdout,"stage1_ntt_runtime_tune: p=%u batch=%u-%u\n",p,grid.batch.first,limit);
+        for (unsigned w : windows) {
+            auto options = request.options;
+            options.execution.naf_w = int(w);
+            const Stage1Request trial{request.modulus,request.b1,request.b2,request.curves,request.save_file,
+                                      request.append_save,request.expression,options};
+            try { tune_width(device,trial,p,tune_shapes(p,exec.ntt,w != 0),grid,false,0); }
+            catch (const Cancelled&) { return configured; }
+        }
+        best = best_window(load(exec.ntt.tune_file));
+    }
+    const unsigned selected = best.value_or(configured);
+    if (edwards && !configured)
+        ecm_ts_fprintf(stdout,"stage1_ntt_naf_selection: p=%u naf=%u source=%s\n",p,selected,best ? "tune" : "default");
+    return selected;
 }
 
 unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsigned remaining) {
@@ -870,7 +1057,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
                 continue;
             const bool weighted = pt::text(row,"ntt_type") == pt::weighted_ntt_type;
             const bool modern = row.count("sample_target_ms") != 0;
-            if (modern && !same_workload(row,request,window)) continue;
+            if (modern && !compatible_workload(row,request,window)) continue;
             if (!modern && window && !pt::is_runtime_stage1_ntt(row)) continue;
             bool compatible = false;
             for (unsigned mode = 0; mode < CandidateCount && !compatible; ++mode) {
@@ -888,7 +1075,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
                             uint(row,"naf_window") != window ||
                             pt::text(row,"curve") != curve_name(request)))
                 continue;
-            auto& value = (runtime ? production : modern && uint(row,"sample_target_ms")>=50 ? refined : synthetic)[batch];
+            auto& value = (runtime ? production : modern && uint(row,"repeats")==5 ? refined : synthetic)[batch];
             const auto rate = real(row,runtime ? "curves_per_s" : "iter_per_s");
             const auto repeats = unsigned(uint(row,"repeats"));
             if ((!value.repeats || rate > value.rate) &&
@@ -907,7 +1094,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
     const char* source = selected ? "production" : tuned ? "tune" : "default";
     if (!selected) selected = seed;
     // Try capacity first while there is enough work for a full batch and a tail.
-    if (!exec.ntt.tune_file.empty() && remaining > cap) {
+    if (exec.ntt.runtime_enabled && !exec.ntt.tune_file.empty() && remaining > cap) {
         const std::array<unsigned, 4> candidates{cap, seed, std::max(1u, seed / 2),
                                                std::min(cap, seed + seed / 2)};
         for (unsigned repetitions : {0u, 1u}) {
@@ -931,7 +1118,7 @@ unsigned select_production_batch(const ecm_stage1::Stage1Request& request, unsig
 void record_production_sample(const ecm_stage1::Stage1Request& request, const Plan& plan, const Run& run,
                               unsigned valid, unsigned batch, double compute_seconds) {
     const auto& exec = request.options.execution;
-    if (!exec.ntt.observe_batch || exec.ntt.tune_file.empty() || !valid || !run.completed_bits || run.device_ms.empty() ||
+    if (!exec.ntt.runtime_enabled || !exec.ntt.observe_batch || exec.ntt.tune_file.empty() || !valid || !run.completed_bits || run.device_ms.empty() ||
         !(run.device_ms.front() > 0) || !(compute_seconds > 0) || request.b1 < 2)
         return;
     try {

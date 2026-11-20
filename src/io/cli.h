@@ -2,6 +2,7 @@
 #include "ecm/application/configuration/runtime.h"
 #include "ecm/stage1/selection.h"
 #include "ecm/group_order/backends.h"
+#include "ecm/stage1/ntt_length.h"
 #include <map>
 #include <vector>
 
@@ -35,6 +36,7 @@ struct ParsedCli {
     std::string gpu_special_mult_path;
     bool show_kernels = false;
     bool tune_ntt = false, tune_exhaustive = false;
+    ecm_stage1::NttTuneGrid tune_grid;
     unsigned tune_seconds = 0;
     bool show_gpu_info = false; // --gpu-info: report tiers/occupancy and exit
     uint32_t gpu_info_bits = 0; // --bits N: only the tier that N would pick (0 = all)
