@@ -1,10 +1,12 @@
-# Group Order Factor helper dependency
+# Group Order Factor dependencies
 
-`ecm_gui_v2.exe` calls the configured or PATH-discovered PARI/GP directly for
-order analysis. Only local CPU/GMP execution (explicit or Auto fallback) starts
-`ecm_group_order_ui.exe`. The helper dynamically links `gmp-10.dll` and can load the optional local
-`libpari.dll` plus `pari-data/seadata/`. The GUI itself loads neither math
-library. A working external GP does not require any local helper/library.
+`ecm_gui_v2.exe` runs local analysis in a child instance using `--group-order`.
+PARI DLL requests run in another child instance using `--pari-host`. These modes
+dispatch before window creation, configuration loading, GPU monitoring and pets.
+The executable delay-loads `gmp-10.dll`; the analysis children load GMP and the
+optional `libpari.dll` plus `pari-data/seadata/`. The parent controls cancellation,
+memory and time limits. A working external GP can be called directly with only
+the GUI executable and language files installed.
 The GP executable is configured separately and is not redistributed; the
 native PARI library and SEA tables are included in the full candidate.
 
@@ -13,7 +15,7 @@ Its build selects x86_64 Zen3 assembly/BMI2 kernels; do not qualify this DLL for
 all Windows x64 CPUs from this candidate's tests. The package records the DLL
 SHA256 and includes the actual local GMP source tree and build configuration in
 its source archive. GMP may be rebuilt and the external DLL replaced; a matching
-header/import library/runtime set is required when rebuilding the helper.
+header/import library/runtime set is required when rebuilding the GUI.
 
 GMP is copyright the Free Software Foundation and contributors. Its source
 README offers LGPL v3 or later, or GPL v2 or later. This distribution includes

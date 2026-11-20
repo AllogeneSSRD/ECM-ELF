@@ -3,6 +3,8 @@
 #include "render/render_host.h"
 #include "ui/widgets.h"
 #include "app.h"
+#include "group_order_runner.h"
+#include "../../diagnostics/pari_host.h"
 #include "pet/window.h"
 #include "pet/catalog.h"
 #include "ui/scroll.h"
@@ -538,6 +540,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int show) {
         auto argv = CommandLineToArgvW(GetCommandLineW(), &count);
         if (!argv) throw std::runtime_error("CommandLineToArgvW failed");
         std::vector<std::wstring> args(argv + 1, argv + count); LocalFree(argv);
+        if(!args.empty() && args.front()==L"--group-order")
+            return args.size()==3?ecmgui_v2::run_group_order_request(args[1],args[2]):2;
+        if(!args.empty() && args.front()==L"--pari-host")
+            return args.size()==2?ecm_diagnostics::run_pari_request(args[1]):2;
         for (size_t i = 0; i < args.size(); ++i) {
             const auto argument = args[i];
             if (argument == L"--version") { console(std::string("ECM-ELF GUI v2 ") + ecmgui_v2::version + " (DX11 default; Vulkan optional)\n"); return 0; }

@@ -1,4 +1,5 @@
 #include "pari_native.h"
+#include "pari_host.h"
 #include "pari_protocol.h"
 #include <fstream>
 #include <iostream>
@@ -6,13 +7,12 @@
 
 // One request per process: PARI's global stack/errors cannot escape into a
 // worker or the GUI. The parent owns cancellation, memory and time limits.
-int wmain(int argc,wchar_t** argv){
+int ecm_diagnostics::run_pari_request(const std::filesystem::path& file){
     namespace p=ecm_diagnostics::pari_protocol;using V=p::V;
-    if(argc!=2)return 2;
     const auto publish=[](V value){value.set("protocol",V::number("2"));std::cout<<value.dump()<<std::endl;};
     try{
-        if(std::filesystem::file_size(argv[1])>65536)throw std::runtime_error("PARI request exceeds limit");
-        std::ifstream input(argv[1],std::ios::binary);if(!input)throw std::runtime_error("Cannot read PARI request");std::string raw{std::istreambuf_iterator<char>(input),{}};const auto request=ecm_results::json::parse(raw);
+        if(std::filesystem::file_size(file)>65536)throw std::runtime_error("PARI request exceeds limit");
+        std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read PARI request");std::string raw{std::istreambuf_iterator<char>(input),{}};const auto request=ecm_results::json::parse(raw);
         wchar_t path[32768];const auto size=GetModuleFileNameW(nullptr,path,32768);if(!size||size==32768)throw std::runtime_error("Cannot locate PARI host");
         ecm_diagnostics::NativeOrder engine(std::filesystem::path(path).parent_path());
         if(!engine.available()){auto error=p::object();error.set("error",V::string(engine.failure()));publish(error);return 3;}

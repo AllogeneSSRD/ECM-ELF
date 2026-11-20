@@ -269,7 +269,8 @@ def gui_identity(gui,gmp):
     if not identity.get('gmp_hashes'):raise ValueError('GUI build lacks coherent GMP identity')
     for filename,digest in identity['gmp_hashes'].items():
         if sha(gmp/filename).lower()!=digest.lower():raise ValueError(f'GUI GMP input changed: {filename}')
-    for name,key in [('ecm_gui_v2.exe','exe_sha256'),('ecm_group_order_ui.exe','group_order_helper_sha256'),
+    if not identity.get('group_order_embedded'):raise ValueError('GUI must include self-hosted Group Order analysis')
+    for name,key in [('ecm_gui_v2.exe','exe_sha256'),
                      ('ecm_diagnostics_host.exe','diagnostics_host_sha256'),('gmp-10.dll','group_order_runtime_sha256')]:
         if sha(gui/name)!=identity[key]:raise ValueError(f'GUI component changed: {name}')
     if sha(gui/'gmp-10.dll')!=sha(gmp/'bin/gmp-10.dll'):raise ValueError('GUI runtime DLL differs from vcpkg')
@@ -340,7 +341,7 @@ def main(plan):
             copy(binary,folder/exe)
             component_records[stage]=dict(executable_sha256=sha(binary),manifest_sha256=sha(record['manifest']),images=image)
             if stage=='stage2':component_records[stage]['kernel_layout']=layout
-        for filename in ['ecm_gui_v2.exe','ecm_group_order_ui.exe','gmp-10.dll']:
+        for filename in ['ecm_gui_v2.exe','gmp-10.dll']:
             copy(gui/filename,folder/filename)
         diagnostic=read(gui/'diagnostics_build_manifest.json')
         if diagnostic.get('gmp_prefix') and Path(diagnostic['gmp_prefix']).resolve()!=gmp:raise ValueError('Diagnostic host GMP differs')

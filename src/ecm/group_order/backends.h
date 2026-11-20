@@ -17,6 +17,7 @@ struct Settings {
     uint64_t gp_stack_bytes = 128 * 1024 * 1024;
     // Empty resolves the host beside the calling executable, never the CWD/PATH.
     std::string pari_host;
+    std::vector<std::string> pari_host_arguments;
     uint64_t pari_timeout_ms = 5000;
     uint64_t native_total_ms = 10000;
     ecm_group_order::Limits native;

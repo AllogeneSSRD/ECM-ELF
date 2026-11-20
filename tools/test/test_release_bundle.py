@@ -45,7 +45,7 @@ def main():
             assert identity['archive']==f'{directory}-win-x64.zip'
         else:directory=profile
         folder=root/directory;files=identity['files_sha256'];verify(folder,files)
-        for name in ('ecm_cuda.exe',stage2,'ecm_gui_v2.exe','ecm_group_order_ui.exe','ecm_diagnostics_host.exe','gmp-10.dll','ecm.toml','ecm.toml.example','worktodo.txt','source/release-source.zip'):
+        for name in ('ecm_cuda.exe',stage2,'ecm_gui_v2.exe','ecm_diagnostics_host.exe','gmp-10.dll','ecm.toml','ecm.toml.example','worktodo.txt','source/release-source.zip'):
             assert name in files,('missing required payload',profile,name)
         if manifest['schema']>=3:
             for name in ('ecm.exe','libcrypto-3-x64.dll','libssl-3-x64.dll','licenses/OpenSSL.txt'):assert name in files,('missing OpenCL payload',profile,name)
@@ -87,7 +87,7 @@ def main():
                 assert proc.returncode==0 and manifest['version'] in proc.stdout.decode(errors='replace'),(profile,worker,proc.returncode)
             request=cwd/'request.json';response=cwd/'response.json'
             request.write_text(json.dumps(dict(factor='1009',sigma='26',profile=0,backend=3,gp='')))
-            proc=subprocess.run([str(relocated/'ecm_group_order_ui.exe'),str(request),str(response)],cwd=cwd,env=env,capture_output=True,timeout=20)
+            proc=subprocess.run([str(relocated/'ecm_gui_v2.exe'),'--group-order',str(request),str(response)],cwd=cwd,env=env,capture_output=True,timeout=20)
             assert proc.returncode==0,(profile,'GMP helper',proc.stderr)
             order=read(response)
             assert order['status']=='complete' and order['backend']=='gmp' and order['group_computed'] and order['point_minimality'],order

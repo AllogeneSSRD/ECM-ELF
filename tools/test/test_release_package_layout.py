@@ -63,7 +63,7 @@ class ReleaseLayout(unittest.TestCase):
             self.put(self.opencl/name)
         self.opencl_files={p.relative_to(self.opencl).as_posix():packaging.sha(p) for p in self.opencl.rglob('*') if p.is_file()}
         self.put(self.opencl/'build_manifest.json','{}')
-        for name in ['ecm_gui_v2.exe','ecm_group_order_ui.exe','gmp-10.dll','ecm_diagnostics_host.exe','localization/v2/en.xml']:
+        for name in ['ecm_gui_v2.exe','gmp-10.dll','ecm_diagnostics_host.exe','localization/v2/en.xml']:
             self.put(self.gui/name)
         self.put(self.gui/'diagnostics_build_manifest.json',json.dumps(dict(sources_sha256={},files_sha256={'ecm_diagnostics_host.exe':packaging.sha(self.gui/'ecm_diagnostics_host.exe')})))
         for profile,(ptx,sass) in packaging.TARGETS.items():

@@ -109,7 +109,7 @@ elseif (Test-Path -LiteralPath (Join-Path $repo 'SOURCE_IDENTITY.json')) {
 }
 [ordered]@{schema=1;program_version=$programVersion;version_banner=$versionBanner;exe_sha256=(Get-FileHash -LiteralPath $binary).Hash.ToLowerInvariant();
     diagnostics_host_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_diagnostics_host.exe')).Hash.ToLowerInvariant();
-    group_order_helper_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_group_order_ui.exe')).Hash.ToLowerInvariant();
+    group_order_embedded=$true;
     group_order_runtime_sha256=(Get-FileHash -LiteralPath (Join-Path $BuildDir 'gmp-10.dll')).Hash.ToLowerInvariant();
     native_pari_enabled=(-not $WithoutLocalPari);
     gmp_root=$GmpRoot;gmp_hashes=$(if($gmpIdentity){$gmpIdentity.Hashes}else{$null});base_pet_only=[bool]$BasePetOnly;

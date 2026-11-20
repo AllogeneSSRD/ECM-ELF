@@ -10,7 +10,7 @@ GUI v2 独立 BAT、`internal/build_gui_v2.ps1` 包装和测试构建共用 `too
 
 完整 CUDA 发布由 `tools/build/build_release.ps1/.bat` 构建，使用独立 `gui-v2-release` 目录、统一 vcpkg 通用 GMP，并只启用基础 Classic ELY 注册项和资源。两个 CUDA 包各自包含完整 GUI v2、群阶/诊断助手和相邻计算 worker。发布不会直接拾取已有 local GUI 候选；入口核对 GMP头/库/DLL、源码和程序身份。下面的独立 local/GUI-only 入口保留完整皮肤候选及其本地依赖条件，完整发布的目录、工具链和载荷以[构建与发布](BUILD.md)为准。
 
-运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、群阶分析助手 `ecm_group_order_ui.exe`、`gmp-10.dll`、本地 `libpari.dll` 及 `pari-data/`。准备本地PARI依赖时，运行 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3安装目录> --archive <原始源码tar.gz>`，脚本验证固定源码摘要、复制Win64库/已配置头文件/SEA数据并记录身份；默认位置 `third_party/pari-2.17.3` 由Git忽略。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。独立 helper 默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
+运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`、`gmp-10.dll`、本地 `libpari.dll` 及 `pari-data/`。准备本地PARI依赖时，运行 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3安装目录> --archive <原始源码tar.gz>`，脚本验证固定源码摘要、复制Win64库/已配置头文件/SEA数据并记录身份；默认位置 `third_party/pari-2.17.3` 由Git忽略。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；测试夹具不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake、GMP 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。本地数学运行时默认复用 `third_party/gmp-zen3/dist`；本机候选的 Zen3/BMI2 DLL 不能据此声明适用于所有 x64 CPU，依赖和源码交付见 [说明](../../src/ecm/application/gui_v2/GROUP_ORDER_DEPENDENCY.md)。
 
 运行要求Windows 10 1903+ / Windows 11 x64、匹配的Microsoft Visual C++ x64 runtime和DX11驱动；硬件不支持时尝试系统WARP。默认启动不初始化Vulkan、不加载Vulkan loader，也不需要Vulkan SDK。构建仍携带可选后端的固定头文件与Volk。
 
@@ -173,9 +173,9 @@ Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚�
 
 合数输入先自动分解为素数幂，按每个不同素因子 p 分别重建同一曲线身份并显示 `#E(F_p)`、`ord(P)` 及其分解；输入分解中的幂次 e 只记录重复次数，不将其解释为扩域 F_(p^e)，也不声称得到模合数环上的总群阶或总点阶。结果仍可鼠标选取和复制。遇到特征 2/3 或当前参数在某个素域退化时，仅该分量未完成，保留其他分量。预算不足时保留已分出的素因子和以方括号标出的输入余因子，整体状态为部分完成；不会将未分解余因子当作素数。
 
-`Auto`使用与 Stage1/Stage2 相同的共享诊断层，先启动本地 PARI DLL，缺失、无法加载或资源不足时再尝试 GP，不自动使用 GMP。显式“本地 PARI DLL”不调用 GP；显式“GMP”保留原有有界算法。显式“PARI/GP”直接运行外部 GP，不需要本地助手。GUI 助手缺失时 Auto 仍可尝试可用的 GP。界面打开或切换算法不启动分析。
+`Auto`使用与 Stage1/Stage2 相同的共享诊断层，先启动本地 PARI DLL，缺失、无法加载或资源不足时再尝试 GP，不自动使用 GMP。显式“本地 PARI DLL”不调用 GP；显式“GMP”保留原有有界算法。显式“PARI/GP”直接运行外部 GP。缺少本地数学运行时时 Auto 仍可尝试可用的 GP。界面打开或切换算法不启动分析。
 
-本地路线为 GUI → `ecm_group_order_ui.exe` → `ecm_diagnostics_host.exe` → PARI DLL。每个 DLL 请求最多 5 秒，本页本地会话累计 5 秒；PARI 进程内存上限 512 MiB。备选 GP 截止 30 秒、栈 128 MiB，整个异步请求截止 45 秒，取消或退出回收子进程。群阶、分解、素性证明和点阶验证范围统一见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。≤192 bit 是已接入的素域范围，不保证任意输入都在 5 秒内完成。超时保留已核验字段与余因子。
+本地路线为 GUI → 自身 `--group-order` 子进程 → 自身 `--pari-host` 子进程 → PARI DLL。分析和 PARI 入口均在创建窗口、读取工作流与初始化 GPU 前分派。每个 DLL 请求最多 5 秒，本页本地会话累计 5 秒；PARI 进程内存上限 512 MiB。备选 GP 截止 30 秒、栈 128 MiB，整个异步请求截止 45 秒，取消或退出回收子进程。群阶、分解、素性证明和点阶验证范围统一见[群阶模块](../architecture/GROUP_ORDER.md#共享后端选择与进程隔离)。≤192 bit 是已接入的素域范围，不保证任意输入都在 5 秒内完成。超时保留已核验字段与余因子。
 
 GP证明模数及分解因子素性，检查点消去及最小性；GUI独立检查协议完成、分解乘积、点阶因子包含关系和Hasse界。数学错误不会伪装为GP不可用而自动回退。结果保留输入快照、实际后端、状态及未完成原因；未执行素性检查时明确显示“未检查”，部分分解显示剩余余因子。`complete`与全部素性已证明是不同条件，CPU大整数的概率素性仍明确标为未证明。状态、实际后端与整体证明资格合并为一行，模数素性及GP回退原因在该行悬停查看。群阶与点阶各用两行：`群阶 #E(F_p): 数值` / `点阶 ord(P): 数值`，下一行缩进显示`= 2^2 × 3 × 83`等乘法分解式；省略指数1，不逐项标注素性。`[n]`表示尚未分解的余因子，不能当作素数。群阶与点阶共用无边框、透明背景的只读文本区，支持鼠标跨行选择和Ctrl+C复制选中部分；输入不能改写结果，整块高度按正文和自动换行计算，长整数与分解式随容器换行。复制结果为输入快照、状态/后端和两组数学表达式的纯文本，不包含逐因子素性或内部JSON字段；完整证明元数据仍保留在内部分析结果。每次计算结束独立弹出Toast，重复计算也提示；部分完成、资源限制、非法输入和启动失败均提示未完成，取消单独提示。群阶导航与计算按钮使用无外框、两行排列加减乘等号的运算图标，可在图标图鉴预览。
 
@@ -183,7 +183,7 @@ GP证明模数及分解因子素性，检查点消去及最小性；GUI独立检
 
 页面自动扫描当前工作流目录中的`*result*.txt`，并纳入工作流已配置的结果文件；未载入工作流时扫描GUI程序目录。因此`results.json.txt`和`results.json_2.txt`会分别出现在来源下拉列表；也可用“选择结果文件”打开其他目录的TXT/JSON/JSONL，再用“重新扫描”刷新。每行必须是独立JSON对象，只导入`status=F`、`worktype=ECM`且包含可识别sigma的因子；支持普通Montgomery的顶层sigma/param、`Edwards.sigma`及`GMP-ECM-param3.sigma`，每个因子分别列出。点击记录填入p、sigma和算法，不会自动开始计算或改写来源。NF、缺失/越界sigma、冲突曲线标记和不支持的构造会跳过并显示计数；该导入不验证结果CRC或代替因子证明。单文件上限32MiB、20000个因子。
 
-本地分析需要同目录的 `ecm_group_order_ui.exe`、`ecm_diagnostics_host.exe`、匹配的 `gmp-10.dll`、`libpari.dll` 和 `pari-data/seadata`。DLL 或数据缺失、ABI 不匹配时，Auto 尝试 GP；显式本地模式报告未完成，不暗中使用 GMP。只有手动选择 GMP 才使用原有 20 万 BSGS 表项/每次 2 秒算法，超过 64 位仍仅给出 probable 素性分类。仅使用外部 GP 可省略全部本地助手和数学库。外部 gp.exe 不随包分发。分析不启动计算 worker、不写队列、不修改 GPU 频率。后端验收使用 `tools/test/test_shared_pari.py`，GUI 数学对照使用 `test_group_order_backend.py` 与 `test_native_order.py`，实际界面验证使用 `test_group_order.py`。
+本地分析需要主 GUI 及同目录匹配的 `gmp-10.dll`、`libpari.dll` 和 `pari-data/seadata`。GMP 延迟加载；计算程序使用的共享诊断助手仍由构建和正式发布流程提供。DLL 或数据缺失、ABI 不匹配时，Auto 尝试 GP；显式本地模式报告未完成，不暗中使用 GMP。只有手动选择 GMP 才使用原有 20 万 BSGS 表项/每次 2 秒算法，超过 64 位仍仅给出 probable 素性分类。仅使用外部 GP 时可部署 GUI 和语言文件。外部 gp.exe 不随包分发。分析不启动计算 worker、不写队列、不修改 GPU 频率。后端验收使用 `tools/test/test_shared_pari.py`，GUI 数学对照使用 `test_group_order_backend.py` 与 `test_native_order.py`，实际界面验证使用 `test_group_order.py`。
 
 ## 安装与替换皮肤
 

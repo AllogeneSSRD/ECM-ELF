@@ -26,16 +26,17 @@ def main():
     assert not list(package.rglob('vulkan-1.dll')) and not list(package.rglob('*validation*.dll'))
     windows=ctypes.create_unicode_buffer(32768);assert ctypes.WinDLL('kernel32').GetWindowsDirectoryW(windows,len(windows))
     env=os.environ.copy();env['PATH']=str(Path(windows.value)/'System32');env.pop('VULKAN_SDK',None);env.pop('VK_LAYER_PATH',None);env.pop('VK_INSTANCE_LAYERS',None)
-    assert manifest['group_order_helper'] and not manifest['pari_gp_redistributed']
-    helper=package/'ecm_group_order_ui.exe';assert 'gmp-10.dll' in [name.lower() for name in imports(helper)]
+    assert manifest['group_order_embedded'] and not manifest['pari_gp_redistributed']
+    helper=exe
+    assert not (package/'ecm_group_order_ui.exe').exists()
     request=out/'order-request.json';response=out/'order-response.json'
     request.write_text(json.dumps(dict(factor='1009',sigma='26',profile=0,backend=2,gp='')),encoding='utf-8')
-    subprocess.run([str(helper),str(request),str(response)],cwd=out,env=env,check=True,timeout=15)
+    subprocess.run([str(helper),'--group-order',str(request),str(response)],cwd=out,env=env,check=True,timeout=15)
     order=json.loads(response.read_text());assert order['status']=='complete' and order['backend']=='pari' and order['point_minimality']
     if manifest.get('native_pari_library'):
         assert order['native_engine']=='pari' and order['all_proven']
         request.write_text(json.dumps(dict(factor='6277101735386680763835789423207666416083908700390324961279',sigma='26',profile=0,backend=2,gp='')),encoding='utf-8')
-        subprocess.run([str(helper),str(request),str(response)],cwd=out,env=env,check=True,timeout=8)
+        subprocess.run([str(helper),'--group-order',str(request),str(response)],cwd=out,env=env,check=True,timeout=8)
         order=json.loads(response.read_text())
         assert order['status']=='complete' and order['native_engine']=='pari' and order['all_proven']
         assert order['group_order']=='6277101735386680763835789423165887359574653668381181441896'

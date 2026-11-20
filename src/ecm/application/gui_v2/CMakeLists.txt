@@ -133,21 +133,16 @@ add_dependencies(ecm_gui_v2_gpu_clock_test ecm_gui_v2_localization ecm_gui_v2_fa
 target_link_libraries(ecm_gui_v2_gpu_clock_test PRIVATE ecm_gui_v2_models ecm_gui_v2_backend dwmapi)
 target_compile_options(ecm_gui_v2_gpu_clock_test PRIVATE /utf-8 /EHsc /UNDEBUG)
 
-# CPU diagnostics live in a separate cancellable process; the GUI stays GMP-free.
+# Analysis runs in cancellable child instances of the GUI executable.
 if(NOT TARGET ecm_group_order)
     add_subdirectory("${ECM_GUI_V2_ROOT}/src/ecm/group_order" "${CMAKE_BINARY_DIR}/group_order_core")
 endif()
-add_executable(ecm_group_order_ui group_order_runner.cpp group_order_job.cpp
-    "${ECM_GUI_V2_ROOT}/src/ecm/group_order/backends.cpp")
-target_compile_features(ecm_group_order_ui PRIVATE cxx_std_17)
-target_compile_definitions(ecm_group_order_ui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
-target_compile_options(ecm_group_order_ui PRIVATE /utf-8 /EHsc)
-target_link_options(ecm_group_order_ui PRIVATE /MANIFEST:EMBED "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")
-set_property(TARGET ecm_group_order_ui APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.manifest")
-target_link_libraries(ecm_group_order_ui PRIVATE ecm_group_order)
-add_custom_command(TARGET ecm_group_order_ui POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${ECM_GROUP_ORDER_GMP_ROOT}/bin/gmp-10.dll" "$<TARGET_FILE_DIR:ecm_group_order_ui>")
-add_dependencies(ecm_gui_v2 ecm_group_order_ui)
+target_sources(ecm_gui_v2 PRIVATE group_order_runner.cpp
+    "${ECM_GUI_V2_ROOT}/src/ecm/group_order/backends.cpp"
+    "${ECM_GUI_V2_ROOT}/src/ecm/diagnostics/pari_host.cpp"
+    "${ECM_GUI_V2_ROOT}/src/ecm/diagnostics/pari_native.cpp")
+target_link_libraries(ecm_gui_v2 PRIVATE ecm_group_order delayimp)
+target_link_options(ecm_gui_v2 PRIVATE /DELAYLOAD:gmp-10.dll)
 
 option(ECM_GUI_V2_LOCAL_PARI "Bundle the native PARI library and SEA tables" ON)
 set(ECM_DIAGNOSTICS_LOCAL_PARI ${ECM_GUI_V2_LOCAL_PARI} CACHE BOOL "Bundle local PARI" FORCE)
@@ -155,12 +150,12 @@ set(ECM_DIAGNOSTICS_GMP_ROOT "${ECM_GROUP_ORDER_GMP_ROOT}" CACHE PATH "Diagnosti
 if(NOT TARGET ecm_diagnostics_host)
     add_subdirectory("${ECM_GUI_V2_ROOT}/src/ecm/diagnostics" "${CMAKE_BINARY_DIR}/diagnostics")
 endif()
-add_dependencies(ecm_group_order_ui ecm_diagnostics_runtime)
+add_dependencies(ecm_gui_v2 ecm_diagnostics_runtime)
 add_executable(ecm_gui_v2_group_order_test EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/group_order_test.cpp" group_order_job.cpp)
 target_compile_features(ecm_gui_v2_group_order_test PRIVATE cxx_std_17)
 target_include_directories(ecm_gui_v2_group_order_test PRIVATE "${ECM_GUI_V2_ROOT}/include" "${ECM_GUI_V2_ROOT}/src")
 target_compile_definitions(ecm_gui_v2_group_order_test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 target_compile_options(ecm_gui_v2_group_order_test PRIVATE /utf-8 /EHsc /UNDEBUG)
-add_dependencies(ecm_gui_v2_group_order_test ecm_group_order_ui)
+add_dependencies(ecm_gui_v2_group_order_test ecm_gui_v2)
 add_executable(ecm_gui_v2_native_timeout_fixture EXCLUDE_FROM_ALL "${ECM_GUI_V2_ROOT}/tools/test/gui_v2/native_order_timeout_fixture.cpp")
 target_compile_features(ecm_gui_v2_native_timeout_fixture PRIVATE cxx_std_17)

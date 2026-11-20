@@ -114,11 +114,11 @@ int main(int argc,char**argv){
         assert(job.result.get("reason").text().find("five-second")!=std::string::npos);
         input={"3436193553215096358758503","1955774944",gp,0,2};
     }
-    {const auto local=root/"gmp-only";fs::create_directories(local);fs::copy_file(helper,local/"ecm_group_order_ui.exe");fs::copy_file(fs::u8path(helper).parent_path()/"gmp-10.dll",local/"gmp-10.dll");
-     assert(job.start(input,(local/"ecm_group_order_ui.exe").u8string()));wait(job);
+    {const auto local=root/"gmp-only";fs::create_directories(local);fs::copy_file(helper,local/"ecm_gui_v2.exe");fs::copy_file(fs::u8path(helper).parent_path()/"gmp-10.dll",local/"gmp-10.dll");
+     assert(job.start(input,(local/"ecm_gui_v2.exe").u8string()));wait(job);
      assert(job.result.get("native_engine").text()=="pari"&&!job.result.get("native_failure").text().empty());
      assert(job.result.get("status").text()=="resource_limit"&&ui::order_native_limited(job.result));
-     input.backend=3;assert(job.start(input,(local/"ecm_group_order_ui.exe").u8string()));wait(job);assert(job.result.get("native_engine").text()=="gmp"&&job.result.get("status").text()=="resource_limit");}
+     input.backend=3;assert(job.start(input,(local/"ecm_gui_v2.exe").u8string()));wait(job);assert(job.result.get("native_engine").text()=="gmp"&&job.result.get("status").text()=="resource_limit");}
     input.backend=0;assert(job.start(input,missing));wait(job);
     assert(job.result.get("status").text()=="complete"&&!ui::order_native_limited(job.result)&&job.result.get("all_proven").scalar=="true");
     assert(job.result.get("group_order").text()=="3436193553215760556775100"&&job.result.get("point_order").text()=="286349462767980046397925");

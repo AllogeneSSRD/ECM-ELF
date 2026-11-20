@@ -69,7 +69,7 @@ void App::draw_group_order(bool zh){
         auto request=group_order_input;
         if(!request.gp.empty()&&fs::u8path(request.gp).is_relative()){
             const auto path=fs::u8path(base)/fs::u8path(request.gp);if(request.gp.find_first_of("/\\")!=std::string::npos||fs::exists(path))request.gp=path.lexically_normal().u8string();}
-        const bool started=group_order_job.start(request,ecmgui::exe_dir()+"/ecm_group_order_ui.exe");
+        const bool started=group_order_job.start(request,order_executable());
         if(started&&request.gp==group_order_input.gp&&!group_order_job.snapshot.gp.empty())group_order_input.gp=group_order_job.snapshot.gp;
         // GP-only refusal can finish synchronously; poll() has no process to observe.
         if(!group_order_job.busy())notify_group_order();

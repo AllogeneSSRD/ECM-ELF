@@ -22,6 +22,11 @@ static std::string executable_in_path(const fs::path&name){
     }return {};
 }
 std::string find_order_gp(){return executable_in_path(L"gp.exe");}
+std::string order_executable(){
+    wchar_t path[32768];const auto size=GetModuleFileNameW(nullptr,path,32768);
+    if(!size||size==32768)throw std::runtime_error("Cannot locate GUI analysis executable");
+    return fs::path(std::wstring(path,size)).u8string();
+}
 bool valid_order_input(const OrderInput&i,std::string&error){
     error.clear();const auto nonzero=i.factor.find_first_not_of('0');
     if(!digits(i.factor)||i.factor.size()>1234||nonzero==i.factor.npos||(i.factor.size()-nonzero==1&&i.factor[nonzero]=='1')){error="Factor must be a decimal integer >1 (maximum 4096 bits)";return false;}
@@ -80,6 +85,8 @@ bool GroupOrderJob::start(const OrderInput&i,const std::string&helper){
 void GroupOrderJob::launch(bool gp){
     gp_phase_=gp;phase_started_=GetTickCount64();
     try{
+        if(!gp&&!fs::is_regular_file(fs::u8path(helper_).parent_path()/L"gmp-10.dll"))
+            throw std::runtime_error("Local analysis runtime missing beside "+helper_+": gmp-10.dll");
         wchar_t directory[MAX_PATH],name[MAX_PATH];if(!GetTempPathW(MAX_PATH,directory)||!GetTempFileNameW(directory,L"ego",0,name))throw std::runtime_error("Cannot create analysis request");request_=name;
         if(!GetTempFileNameW(directory,L"ego",0,name))throw std::runtime_error("Cannot create analysis output");output_=name;
         go_json::Value request;request.type='o';request.set("factor",go_json::Value::string(snapshot.factor));request.set("sigma",go_json::Value::string(snapshot.sigma));request.set("gp",go_json::Value::string(snapshot.gp));request.set("profile",go_json::Value::number(std::to_string(snapshot.profile)));request.set("backend",go_json::Value::number(std::to_string(snapshot.backend)));
@@ -87,7 +94,7 @@ void GroupOrderJob::launch(bool gp){
         job_=CreateJobObjectW(nullptr,nullptr);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if(!gp){limits.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_PROCESS_MEMORY;limits.ProcessMemoryLimit=512ull*1024*1024;}
         if(!job_||!SetInformationJobObject(job_,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))throw std::runtime_error("Cannot isolate analysis process");
-        const auto exe=fs::u8path(gp?snapshot.gp:helper_).wstring();auto cmd=quote(exe)+(gp?L" -q -f -s 134217728 "+quote(request_):L" "+quote(request_)+L" "+quote(output_));STARTUPINFOW si{sizeof(si)};PROCESS_INFORMATION pi{};
+        const auto exe=fs::u8path(gp?snapshot.gp:helper_).wstring();auto cmd=quote(exe)+(gp?L" -q -f -s 134217728 "+quote(request_):L" --group-order "+quote(request_)+L" "+quote(output_));STARTUPINFOW si{sizeof(si)};PROCESS_INFORMATION pi{};
         HANDLE capture=INVALID_HANDLE_VALUE,input=INVALID_HANDLE_VALUE;
         if(gp){SECURITY_ATTRIBUTES sa{sizeof(sa),nullptr,TRUE};capture=CreateFileW(output_.c_str(),GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_TEMPORARY,nullptr);
             if(capture!=INVALID_HANDLE_VALUE)SetHandleInformation(capture,HANDLE_FLAG_INHERIT,HANDLE_FLAG_INHERIT);
@@ -96,7 +103,7 @@ void GroupOrderJob::launch(bool gp){
             si.dwFlags=STARTF_USESTDHANDLES;si.hStdInput=input;si.hStdOutput=si.hStdError=capture;}
         const bool launched=CreateProcessW(exe.c_str(),cmd.data(),nullptr,nullptr,gp?TRUE:FALSE,CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,nullptr,&si,&pi)!=FALSE;const auto code=GetLastError();
         if(capture!=INVALID_HANDLE_VALUE)CloseHandle(capture);if(input!=INVALID_HANDLE_VALUE)CloseHandle(input);
-        if(!launched)throw std::runtime_error((gp?"Cannot start PARI/GP: ":"Local analysis helper missing or cannot start: ")+fs::u8path(gp?snapshot.gp:helper_).u8string()+" (Windows "+std::to_string(code)+")");
+        if(!launched)throw std::runtime_error((gp?"Cannot start PARI/GP: ":"Cannot start local analysis: ")+fs::u8path(gp?snapshot.gp:helper_).u8string()+" (Windows "+std::to_string(code)+")");
         process_=pi.hProcess;
         if(!AssignProcessToJobObject(job_,process_)){TerminateProcess(process_,1);CloseHandle(pi.hThread);throw std::runtime_error("Cannot contain analysis process");}
         if(ResumeThread(pi.hThread)==DWORD(-1)){CloseHandle(pi.hThread);throw std::runtime_error("Cannot resume analysis process");}CloseHandle(pi.hThread);

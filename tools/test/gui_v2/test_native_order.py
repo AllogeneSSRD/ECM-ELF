@@ -24,7 +24,7 @@ def main():
     def run(case,backend,stem):
         request=out/(stem+'-in.json');response=out/(stem+'-out.json')
         request.write_text(json.dumps(dict(factor=case['factor'],sigma=case['sigma'],profile=case['profile'],backend=backend,gp=str(gp) if backend==1 else str(out/'absent-gp.exe'))))
-        start=time.perf_counter();proc=subprocess.run([str(helper),str(request),str(response)],env=env,capture_output=True,timeout=40 if backend==1 else 8)
+        start=time.perf_counter();proc=subprocess.run([str(helper),'--group-order',str(request),str(response)],env=env,capture_output=True,timeout=40 if backend==1 else 8)
         wall=(time.perf_counter()-start)*1000
         (out/(stem+'-stderr.txt')).write_bytes(proc.stderr);value=json.loads(response.read_text())
         assert proc.returncode in ([0] if backend==1 else [0,124]),(stem,proc.returncode,value)

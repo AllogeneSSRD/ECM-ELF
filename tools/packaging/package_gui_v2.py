@@ -17,7 +17,8 @@ def main():
     shutil.copy2(ROOT/'assets/gui_v2/skins/README.md',package/'assets/ELY-skins-NOTICE.md')
     build_identity=exe.with_name('gui_v2_build_manifest.json');identity=json.loads(build_identity.read_text(encoding='utf-8-sig'))
     assert identity['exe_sha256']==hashlib.sha256(exe.read_bytes()).hexdigest(),'Build manifest does not match executable'
-    for name,key in [('ecm_diagnostics_host.exe','diagnostics_host_sha256'),('ecm_group_order_ui.exe','group_order_helper_sha256'),('gmp-10.dll','group_order_runtime_sha256')]:
+    assert identity.get('group_order_embedded'),'Build must include self-hosted Group Order analysis'
+    for name,key in [('ecm_diagnostics_host.exe','diagnostics_host_sha256'),('gmp-10.dll','group_order_runtime_sha256')]:
         dependency=exe.with_name(name)
         assert hashlib.sha256(dependency.read_bytes()).hexdigest()==identity[key],f'Build manifest does not match {name}'
         shutil.copy2(dependency,package/name)
@@ -85,7 +86,7 @@ def main():
     selected.update(['src/ecm/application/gui_v2/app.manifest','tools/packaging/package_gui_v2.py','tools/test/diagnostics_probe.cpp',
                      'tools/build/package_gui_v2.ps1','tools/packaging/diagnostics_runtime.py','tools/build/test/build_diagnostics.ps1','tools/test/gui_v2/test_package.py','tools/test/gui_v2/test_failure_shutdown.py'])
     selected.update(['tools/test/gui_v2/group_order_test.cpp','tools/test/gui_v2/test_group_order.py','tools/test/gui_v2/test_workspace_policy.py',
-                     'tools/test/gui_v2/test_native_order.py','tools/build/test/prepare_gui_v2_pari.py',
+                     'tools/test/gui_v2/test_native_order.py','tools/test/gui_v2/test_embedded_order.py','tools/build/test/prepare_gui_v2_pari.py',
                      'tools/test/gui_v2/native_order_timeout_fixture.cpp',
                      'tools/test/gui_v2/test_group_order_backend.py','tools/test/gui_v2/pet_behavior_test.cpp',
                      'tools/test/gui_v2/test_pet_idle.py','tools/build/test/build_pet_behavior.ps1',
@@ -113,8 +114,8 @@ validation layer, Electron or browser runtime is required.
 
 This GUI-only package contains no compute worker and never replaces ecm_gui.exe.
 Group Order Factor defaults to the shared PARI DLL engine, with external GP
-as fallback. It uses ecm_group_order_ui.exe, ecm_diagnostics_host.exe and
-gmp-10.dll. The PARI engine uses libpari.dll and pari-data/ without gp.exe
+as fallback. Analysis and PARI requests run in cancellable child instances of
+ecm_gui_v2.exe, using gmp-10.dll, libpari.dll and pari-data/ without gp.exe
 or a configured GP path. The original GMP algorithm is explicit-only. Native analysis has a five-second process deadline
 and preserves atomic checkpoints on timeout. PARI source archive, configured
 headers and matching data are in source/; license and identity are in licenses/
@@ -161,7 +162,7 @@ Clean Vulkan validation and CPU timings do not qualify actual desktop refresh.
 '''
     (package/'README.txt').write_text(readme,encoding='utf-8')
     files={p.relative_to(package).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(package.rglob('*')) if p.is_file()}
-    manifest=dict(kind='independent-gui-only-candidate',version=version,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),source_has_uncommitted_changes=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),includes_local_untracked_assets=True,files_sha256=files,worker_protocol_required=1,development_sdk_required=False,default_renderer='dx11',optional_renderer='vulkan',pet_skins=['classic']+[skin['id'] for skin in skin_catalog['skins']],system_requirements=['Windows x64','Direct3D 11 driver or system WARP','MSVC x64 runtime','Group Order helper GMP DLL: local Zen3/BMI2 candidate'],optional_vulkan_requirement='Vulkan 1.1 loader/graphics/present/swapchain; desktop freeze unresolved',contains_compute_workers=False,group_order_helper=True,pari_gp_redistributed=False,native_pari_library=local_pari,native_modulus_bits=192 if local_pari else None,native_deadline_ms=5000)
+    manifest=dict(kind='independent-gui-only-candidate',version=version,source_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT).decode().strip(),source_has_uncommitted_changes=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),includes_local_untracked_assets=True,files_sha256=files,worker_protocol_required=1,development_sdk_required=False,default_renderer='dx11',optional_renderer='vulkan',pet_skins=['classic']+[skin['id'] for skin in skin_catalog['skins']],system_requirements=['Windows x64','Direct3D 11 driver or system WARP','MSVC x64 runtime','Group Order GMP DLL: local Zen3/BMI2 candidate'],optional_vulkan_requirement='Vulkan 1.1 loader/graphics/present/swapchain; desktop freeze unresolved',contains_compute_workers=False,group_order_embedded=True,pari_gp_redistributed=False,native_pari_library=local_pari,native_modulus_bits=192 if local_pari else None,native_deadline_ms=5000)
     (package/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');archive=out/(package.name+'.zip')
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
         for path in sorted(package.rglob('*')):

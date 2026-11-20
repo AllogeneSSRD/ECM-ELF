@@ -323,7 +323,7 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 
 Stage1、Stage2 与 GUI v2 默认采用 PARI DLL → 外部 GP 的诊断顺序；GMP 分析仅显式选择。实际 ECM 运算后端不变。完整本机构建需要准备 `third_party/pari-2.17.3/`；准备命令为 `python tools/build/test/prepare_gui_v2_pari.py --installed <PARI-2.17.3目录> --archive <原始源码tar.gz>`，版本和文件摘要由 provenance 校验。
 
-共享助手的 CMake 入口为 `src/ecm/diagnostics/`，生成 `ecm_diagnostics_host.exe`。主工程 Stage1/OpenCL/CMake Stage2 的目标自动依赖它；独立 Stage2 队列构建调用同一目标，使用与 worker 一致的 GMP 安装前缀。测试入口为 `tools/build/test/build_diagnostics.ps1 -Build <独立目录>`；可显式构建 `ecm_diagnostics_probe` 进行协议与故障验收。GUI v2 使用相同目标，保留独立的合数输入协调助手 `ecm_group_order_ui.exe`。
+共享助手的 CMake 入口为 `src/ecm/diagnostics/`，生成 `ecm_diagnostics_host.exe`。主工程 Stage1/OpenCL/CMake Stage2 的目标自动依赖它；独立 Stage2 队列构建调用同一目标，使用与 worker 一致的 GMP 安装前缀。测试入口为 `tools/build/test/build_diagnostics.ps1 -Build <独立目录>`；可显式构建 `ecm_diagnostics_probe` 进行协议与故障验收。GUI v2 将合数输入协调和同一 PARI 请求实现编入 `ecm_gui_v2.exe`，使用自身的子进程入口执行分析。GUI 构建和完整发布仍提供计算程序使用的共享诊断助手。
 
 本地输出附带助手、GMP、PARI DLL、`pari-data/seadata`、许可证和 `diagnostics-source.zip`，并生成逐文件及源码摘要的 `diagnostics_build_manifest.json`。Stage1/Stage2 发布打包核对该冻结身份，再将完整依赖纳入 ZIP，支持受限的相对目录路径；不打包用户配置、队列或日志。PARI 原始源码、配置头文件及 SEA 数据声明随包保留；没有 gp.exe。只复制计算 EXE 不构成完整的 DLL 诊断部署。
 

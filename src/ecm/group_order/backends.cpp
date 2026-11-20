@@ -86,6 +86,7 @@ ProcessResult execute_process(const Settings&s,const std::string&body,bool pari=
     startup.hStdOutput=startup.hStdError=output.value;startup.hStdInput=input.value;
     PROCESS_INFORMATION info{};
     auto command=process_quote(pari?host_path(s).wstring():std::filesystem::u8path(s.gp).wstring())+(pari?L" ":L" -q -f ");
+    if(pari)for(const auto& argument:s.pari_host_arguments)command+=process_quote(std::filesystem::u8path(argument).wstring())+L" ";
     if(!pari&&s.gp_stack_bytes)command+=L"-s "+std::to_wstring(s.gp_stack_bytes)+L" ";
     command+=process_quote(temporary.script.wstring());
     if(!CreateProcessW(nullptr,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|CREATE_SUSPENDED,nullptr,nullptr,&startup,&info)){

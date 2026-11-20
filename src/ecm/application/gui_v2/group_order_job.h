@@ -9,6 +9,7 @@ struct OrderInput {std::string factor,sigma,gp;int profile=0,backend=0;};
 inline unsigned order_sigma_minimum(int profile){return profile==0?6u:1u;}
 bool valid_order_input(const OrderInput&,std::string& error);
 std::string find_order_gp();
+std::string order_executable();
 struct OrderRecord {OrderInput input;std::string label,source;size_t line=0;};
 std::vector<OrderRecord> read_order_records(const std::string& path,std::string& error);
 std::vector<std::string> discover_order_files(const std::string& directory,const std::vector<std::string>& configured={});

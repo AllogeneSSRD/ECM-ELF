@@ -15,7 +15,7 @@ def main():
             for backend in [1,2]:
                 stem=f'{prime}-{profile}-{backend}';req=out/(stem+'-in.json');res=out/(stem+'-out.json')
                 req.write_text(json.dumps(dict(factor=prime,sigma='26',profile=profile,backend=backend,gp=str(gp))),encoding='utf-8')
-                run=subprocess.run([str(helper),str(req),str(res)],capture_output=True,timeout=45)
+                run=subprocess.run([str(helper),'--group-order',str(req),str(res)],capture_output=True,timeout=45)
                 assert run.returncode==0,(stem,run.stderr);r=json.loads(res.read_text());pair.append(r)
                 assert r['status']=='complete' and r['group_computed'] and r['point_minimality'],(stem,r)
                 assert r['backend']==('gp' if backend==1 else 'pari'),r
@@ -33,7 +33,7 @@ def main():
             for backend in [1,2]:
                 stem=f'composite-{modulus}-{profile}-{backend}';req=out/(stem+'-in.json');res=out/(stem+'-out.json')
                 req.write_text(json.dumps(dict(factor=modulus,sigma='26',profile=profile,backend=backend,gp=str(gp))),encoding='utf-8')
-                run=subprocess.run([str(helper),str(req),str(res)],capture_output=True,timeout=45)
+                run=subprocess.run([str(helper),'--group-order',str(req),str(res)],capture_output=True,timeout=45)
                 assert run.returncode==0,(stem,run.stderr);r=json.loads(res.read_text());pair.append(r)
                 assert r['status']==('partial' if modulus=='2018' else 'complete'),r
                 assert 'group_order' not in r and 'point_order' not in r,r
@@ -48,7 +48,7 @@ def main():
     # Rho budget leaves this hard composite unresolved, but p=101 remains usable.
     n=101*((1<<127)-1)*((1<<107)-1);req=out/'partial-in.json';res=out/'partial-out.json'
     req.write_text(json.dumps(dict(factor=str(n),sigma='26',profile=0,backend=2,gp='')))
-    run=subprocess.run([str(helper),str(req),str(res)],capture_output=True,timeout=15)
+    run=subprocess.run([str(helper),'--group-order',str(req),str(res)],capture_output=True,timeout=15)
     partial=json.loads(res.read_text());assert run.returncode in (0,124) and partial['status'] in ('partial','complete'),partial
     product=int(partial['input_cofactor'])
     for f in partial['input_factors']:product*=int(f['prime'])**int(f['exponent'])

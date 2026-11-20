@@ -31,6 +31,7 @@ def main():
         while 'frame: 1' not in log.read_text(encoding='utf-8'):
             assert proc.poll() is None and time.monotonic()<end;time.sleep(.05)
         loaded=modules(proc.pid);assert 'd3d11.dll' in loaded and 'dxgi.dll' in loaded
+        assert 'gmp-10.dll' not in loaded and 'libpari.dll' not in loaded
         assert 'vulkan-1.dll' not in loaded and 'nvoglv64.dll' not in loaded
         for x,y,width,height in [(80,80,1400,1000),(100,100,900,700),(80,80,1400,1000)]:
             assert user.SetWindowPos(hwnd,None,x,y,width,height,0x14);time.sleep(.2)

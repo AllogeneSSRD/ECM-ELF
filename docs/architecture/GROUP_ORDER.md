@@ -57,7 +57,7 @@ Stage2 的 `decompose_factors` / `--factorize-hits` 开启后使用相同 Auto �
 
 ## GUI v2 分析入口
 
-GUI 的 Auto 和本地模式由 `ecm_group_order_ui.exe` 调用同一个 `Session`，与 worker 共用 DLL 引擎、后端策略和验证；主界面保持 GMP/PARI 无依赖。显式 PARI/GP 仍可直接启动外部 GP，因此 GP-only 部署不要求本地助手。Auto 在 GUI 助手缺失但 GP 可用时也允许直接尝试 GP；不会因此切换 GMP。显式 GMP 由 GUI 助手运行原数学核心。
+GUI 的 Auto 和本地模式由 `ecm_gui_v2.exe --group-order` 子进程调用同一个 `Session`，PARI 请求由 `ecm_gui_v2.exe --pari-host` 子进程执行，与 worker 共用 DLL 引擎、后端策略和验证。两种模式都在界面初始化前分派。GMP 使用延迟加载，主界面只在分析子进程中执行数学运算。显式 PARI/GP 可直接启动外部 GP，因此 GP-only 部署可只放置 GUI 和语言文件。Auto 在本地运行时缺失但 GP 可用时也允许直接尝试 GP。显式 GMP 在自身分析子进程中运行原数学核心。计算程序继续使用共用的 `ecm_diagnostics_host.exe`。
 
 合数输入先做有界分解，再按每个不同素因子分析同一曲线身份；幂次只表示输入中重复次数，不声明得到模合数环或扩域的群阶。便宜分解得到的小素分量优先分析，避免难余因子阻塞已有结果；保留各分量完成状态、证明资格及余因子。底层 `Session::group` 仍要求素数模数 >3，特征 2/3 或退化构造只影响对应分量。
 

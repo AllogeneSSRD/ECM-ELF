@@ -1,4 +1,5 @@
 #include "group_order_job.h"
+#include "group_order_runner.h"
 #include "group_order_result.h"
 #include "../../group_order/backends.h"
 #include <filesystem>
@@ -22,14 +23,17 @@ void save(const std::filesystem::path&path,const j::Value&value){
 }
 
 }
-int wmain(int argc,wchar_t**argv){
-    if(argc!=3)return 2;j::Value out;out.type='o';out.set("protocol",j::Value::number("1"));
+int ecmgui_v2::run_group_order_request(const std::filesystem::path& input,const std::filesystem::path& output){
+    j::Value out;out.type='o';out.set("protocol",j::Value::number("1"));
     try{
-        if(std::filesystem::file_size(argv[1])>65536)throw std::runtime_error("Request exceeds limit");std::ifstream in(argv[1],std::ios::binary);if(!in)throw std::runtime_error("Cannot read request");std::string raw{std::istreambuf_iterator<char>(in),{}};auto v=j::parse(raw);
+        if(std::filesystem::file_size(input)>65536)throw std::runtime_error("Request exceeds limit");std::ifstream in(input,std::ios::binary);if(!in)throw std::runtime_error("Cannot read request");std::string raw{std::istreambuf_iterator<char>(in),{}};auto v=j::parse(raw);
         ecmgui_v2::OrderInput i{v.get("factor").text(),v.get("sigma").text(),v.get("gp").text(),std::stoi(v.get("profile").text()),std::stoi(v.get("backend").text())};std::string error;if(!ecmgui_v2::valid_order_input(i,error))throw std::runtime_error(error);
         g::CurveRequest request;request.prime=g::Integer(i.factor);request.sigma=std::stoull(i.sigma);request.family=i.profile==1?g::Family::Edwards:g::Family::Montgomery;request.parameter=i.profile==1?-1:i.profile==3?1:i.profile==5?2:i.profile==4?3:0;
         ecm_diagnostics::Settings settings;settings.backend=i.backend==1?ecm_diagnostics::Backend::Gp:i.backend==2?ecm_diagnostics::Backend::Native:i.backend==3?ecm_diagnostics::Backend::Gmp:ecm_diagnostics::Backend::Auto;settings.gp=i.gp.empty()?"gp":i.gp;settings.native_total_ms=5000;
-        const auto output=std::filesystem::path(argv[2]);
+        wchar_t executable[32768];const auto length=GetModuleFileNameW(nullptr,executable,32768);
+        if(!length||length==32768)throw std::runtime_error("Cannot locate GUI analysis executable");
+        settings.pari_host=std::filesystem::path(executable).u8string();
+        settings.pari_host_arguments={"--pari-host"};
         out.set("status",str("resource_limit"));out.set("backend",str(ecm_diagnostics::name(settings.backend)));out.set("reason",str("analysis initialization in progress"));save(output,out);
         ecm_diagnostics::Session session(settings);
         if(g::classify_prime(request.prime)!=g::Primality::Composite||mpz_cmp_ui(request.prime.v,2)<0)out=analysis(session.group(request));
@@ -53,5 +57,5 @@ int wmain(int argc,wchar_t**argv){
             analyze_known();split.all_proven=mpz_cmp_ui(split.cofactor.v,1)==0&&std::all_of(split.factors.begin(),split.factors.end(),[](const auto& p){return p.primality==g::Primality::Proven;});out=batch();
         }
     }catch(const std::exception&e){out.set("error",str(e.what()));}
-    try{save(argv[2],out);}catch(...){return 3;}return out.has("error")?1:0;
+    try{save(output,out);}catch(...){return 3;}return out.has("error")?1:0;
 }
