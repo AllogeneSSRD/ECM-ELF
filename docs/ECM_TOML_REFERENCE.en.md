@@ -519,7 +519,7 @@ ntt_tight_weighted_bound = true
 
 Type `bool` · Range `[false|true|0|1]` · Worker override `[worker.N] ntt_tight_weighted_bound` · Level `advanced`.
 
-Use the tighter unsigned coefficient bound for native Edwards NAF in CUDA Stage1. With automatic convolution and length, prefer a safe short weighted plan that needs this bound. False restores the conservative bound and measured backend selection.
+Use the tighter unsigned coefficient bound for native Edwards NAF in CUDA Stage1. Automatic selection benchmarks eligible shorter weighted plans alongside the other safe shapes. False uses the conservative bound.
 
 ### ntt_tile
 

@@ -9,6 +9,7 @@
 #include "../../../../../../kernels/cuda/stage1_ntt_layout.cuh"
 #include "../../../../../../kernels/cuda/stage1_ntt_segments.cuh"
 #include <array>
+#include <cmath>
 #include <stdexcept>
 #include <type_traits>
 
@@ -338,13 +339,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (p < ecm_stage1::stage1_ntt_min_exponent || p > ecm_stage1::stage1_ntt_max_exponent ||
         !curves || curves > ecm_stage1::stage1_ntt_max_curves || options.window < -1 || options.window > 64 ||
         !samples || samples > 20 || count > UINT32_MAX - 64 ||
-        (!naf && scalar_words.size() < (size_t(count) + 31) / 32) ||
+        (!naf && !(control && control->describe_only) && scalar_words.size() < (size_t(count) + 31) / 32) ||
         (control && control->resume > count))
         throw std::invalid_argument("invalid Mersenne NTT Stage1 shape or scalar");
     Shape s{p, (p+31)/32, curves, 0, 0, 0};
     const size_t stride = size_t(s.words)*curves;
     const unsigned initial_slots = naf ? 3 : 6, checkpoint_slots = naf ? 3 : 4;
-    if (initial.size() != initial_slots*stride) throw std::invalid_argument("invalid Stage1 initial points");
+    const bool describe_only = control && control->describe_only;
+    if (!describe_only && initial.size() != initial_slots*stride) throw std::invalid_argument("invalid Stage1 initial points");
     auto check_residues = [&](const std::vector<uint32_t>& values) {
         const unsigned top = p%32 ? (1u << (p%32))-1 : UINT32_MAX;
         for (size_t offset = 0; offset < values.size(); offset += s.words) {
@@ -361,7 +363,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
             control->warmup_iterations || control->modular_square_probe)
             throw std::invalid_argument("invalid Edwards NTT NAF request");
         entries = 1u << (naf->window - 2);
-        if (naf->dictionary.size() != (naf->build_dictionary ? 3 : 4 * entries) * stride)
+        if (!describe_only && naf->dictionary.size() != (naf->build_dictionary ? 3 : 4 * entries) * stride)
             throw std::invalid_argument("invalid Edwards NTT NAF dictionary size");
         for (int digit : naf->digits)
             if (digit && (digit % 2 == 0 || unsigned(std::abs(digit)) >= 2 * entries))
@@ -407,6 +409,12 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     if (naf) defaults |= Edwards2XYFrequency | Edwards2XYInverseInput | TightCarrySpans |
                          FixedWideInverse | FixedWideForward;
     unsigned requested = control ? control->experimental_dataflow.value_or(defaults) : 0;
+    using Layout = ecm_stage1::Stage1NttOptions::MixedLayout;
+    if (mixed && options.mixed_layout != Layout::Automatic) {
+        requested &= ~(PfaRadix5 | CoalescedRadix5);
+        if (options.mixed_layout != Layout::Twiddle) requested |= PfaRadix5;
+        if (options.mixed_layout == Layout::Coalesced) requested |= CoalescedRadix5;
+    }
     if (naf) requested &= ~(FusedMultiplyAdd | LooseDifference | DirectRoute);
     const bool pfa = mixed && (requested & PfaRadix5);
     const bool coalesced = pfa && (requested & CoalescedRadix5);
@@ -438,7 +446,6 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const FuseOverrides overrides{options.tile ? int(options.tile) : profile.tile,
         options.outer_max ? int(options.outer_max) : profile.outer,
         options.warp_tail >= 0 ? options.warp_tail != 0 : profile.warp_tail};
-    Stream stream; const auto q=stream.value;
     const U omega=gl_pow_host(7,(GL_P-1)/s.length), inv=gl_pow_host(omega,GL_P-2);
     const U omega2 = gl_pow_host(omega, planes), inv2 = gl_pow_host(inv, planes);
     const U inverse_scale = gl_pow_host(s.length, GL_P - 2);
@@ -494,7 +501,6 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
     const bool fma = (requested & FusedMultiplyAdd) &&
         (loose ? 2 : 1) * terms <= (GL_P - 1 - digit_max) / digit_max / digit_max;
     if (fma) result.dataflow |= FusedMultiplyAdd;
-    fuse_init(ctx,width,log,omega2,inv2,true,resolved);
     if (!ctx.t) throw std::invalid_argument("Stage1 NTT requires an inverse tile");
     const bool warp_tile = ctx.warp_tail && ctx.t >= 5;
     const bool inverse_warp_input = warp_tile && ctx.t >= 6 && (requested & InverseWarpInput);
@@ -583,6 +589,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
                   unsigned(ctx.passes_fwd) + unsigned(mixed),
                   warp_tile || short_inverse, profile.source, options.weighted, {}, {}, result.dataflow};
         plan.field_modulus = GL_P;
+        plan.carry_bits = coefficient_bits;
         if (unsigned_bound)
             plan.coefficient_bound = (frequency_double ? 4 : 1) * *unsigned_bound;
         else
@@ -595,6 +602,9 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         if (mixed) plan.inverse += plan.inverse.empty() ? "r5" : "+r5";
         control->describe(plan);
     }
+    if (describe_only) return result;
+    Stream stream; const auto q=stream.value;
+    fuse_init(ctx,width,log,omega2,inv2,true,resolved);
     const size_t carry_smem = size_t((s.words + threads - 1) / threads) * threads * sizeof(uint32_t);
     const auto select_packed_kernel = [warp_tile, forward_input](auto weight) {
         constexpr bool weighted = decltype(weight)::value;
@@ -1164,7 +1174,14 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         } else for (unsigned i=0;i<warmup;++i) step(i);
         CK(cudaStreamSynchronize(q));
     }
+    const unsigned target_ms = control ? control->sample_target_ms : 0;
+    const unsigned groups = samples;
+    double group_ms = 0;
     for (unsigned sample=0; sample<samples; ++sample) {
+        if (target_ms && control->poll && control->poll(0).stop) {
+            result.stopped = true;
+            break;
+        }
         reset();
         CK(cudaStreamSynchronize(q));
         const double wall=now_s();
@@ -1173,7 +1190,7 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         unsigned next_poll = resume;
         unsigned zero_end = resume;
         while (cursor < count) {
-            if (control && control->poll && cursor >= next_poll) {
+            if (!target_ms && control && control->poll && cursor >= next_poll) {
                 CK(cudaEventRecord(boundary.value,q));
                 CK(cudaEventSynchronize(boundary.value));
                 const auto action = control->poll(cursor);
@@ -1219,7 +1236,17 @@ static Run run_ladder(int device, unsigned p, unsigned curves, const std::vector
         CK(cudaEventSynchronize(end.value));
         result.wall_ms.push_back((now_s()-wall)*1000);
         float ms=0; CK(cudaEventElapsedTime(&ms,begin.value,end.value));
-        result.device_ms.push_back(ms);
+        if (!target_ms) result.device_ms.push_back(ms);
+        else if (!sample) {
+            result.blocks_per_sample = unsigned(std::clamp(std::ceil(target_ms / std::max(0.001, double(ms))), 1., 64.));
+            samples = 2 + groups * result.blocks_per_sample; // Exclude pilot and final block.
+        } else if (sample + 1 < samples) {
+            group_ms += ms;
+            if (sample % result.blocks_per_sample == 0) {
+                result.device_ms.push_back(group_ms);
+                group_ms = 0;
+            }
+        }
         const double read=now_s();
         std::vector<uint32_t> got(checkpoint_slots*stride);
         CK(cudaMemcpy(got.data(),state.data,got.size()*4,cudaMemcpyDeviceToHost));

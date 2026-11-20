@@ -221,6 +221,22 @@ inline void validate_stage1_ntt(const Fields &s) {
            uint(s,"dataflow")>UINT32_MAX || uint(s,"repeats")>1000000000)
             throw std::runtime_error("invalid Stage1 NTT production measurement");
     }
+    if(s.count("sample_target_ms")) {
+        const auto window=uint(s,"naf_window"), width=uint(s,"reference_bits");
+        const auto steps=uint(s,"timed_steps"), block=uint(s,"block_steps"), target=uint(s,"sample_target_ms");
+        const auto curve=text(s,"curve");
+        const auto ms=real(s,"median_ms");
+        if(!block || block>64 || !steps || steps>64*block || steps%block ||
+           width<ecm_stage1::stage1_ntt_min_exponent || width>ecm_stage1::stage1_ntt_max_exponent ||
+           uint(s,"segments")!=(width+8191)/8192 || (target!=20 && target!=50) ||
+           uint(s,"repeats")!=(target==20 ? 3u : 5u) || !uint(s,"carry_bits") || uint(s,"carry_bits")>64 ||
+           uint(s,"uniform_digits")>1 || uint(s,"dataflow")>UINT32_MAX ||
+           (window && (curve!="edwards" || window<2 || window>12)) || uint(s,"b1")<2 ||
+           (curve!="edwards" && curve!="mont0") || !(ms>0) ||
+           std::abs(real(s,"iter_per_s")*ms/(1000.*batch*steps)-1)>1e-9 ||
+           real(s,"stddev_seconds")<0)
+            throw std::runtime_error("invalid Stage1 tune window");
+    }
 }
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
 inline bool runtime_observation(const Fields &sample) {
@@ -620,6 +636,13 @@ struct Profile {
                                 "passes_forward","forward","inverse","graph_bits","warp_tail"})
                 if(required(old,key)!=required(sample,key))return false;
             if(is_runtime_stage1_ntt(old)!=runtime)return false;
+            if(old.count("sample_target_ms")!=sample.count("sample_target_ms"))return false;
+            if(sample.count("sample_target_ms"))
+                for(const char *key:{"sample_target_ms","curve","b1","naf_window","segments","carry_bits",
+                                     "uniform_digits","dataflow","program_version"})
+                    if(required(old,key)!=required(sample,key))return false;
+            if(sample.count("sample_target_ms") && (uint(old,"reference_bits")+4095)/4096!=
+               (uint(sample,"reference_bits")+4095)/4096)return false;
             if(runtime)for(const char *key:{"curve","arithmetic_bits","b1","lcm_multiplier","naf_window","valid_curves","dataflow"})
                 if(required(old,key)!=required(sample,key))return false;
             if(runtime && optional_uint(old,"target_bits",uint(old,"arithmetic_bits"))!=

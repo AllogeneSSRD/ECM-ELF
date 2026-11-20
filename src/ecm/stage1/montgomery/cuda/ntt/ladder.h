@@ -15,6 +15,7 @@ struct Plan {
     std::string forward, inverse;
     unsigned dataflow = 0;
     unsigned long long coefficient_bound = 0, field_modulus = 0;
+    unsigned carry_bits = 64;
 };
 
 struct BudgetError : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -47,6 +48,8 @@ struct Control {
     std::function<void(unsigned, const std::vector<uint32_t>&)> checkpoint;
     std::optional<unsigned> experimental_dataflow;
     bool modular_square_probe = false;
+    bool describe_only = false;
+    unsigned sample_target_ms = 0; // Tune only. Group repeated fixed-cursor blocks after a pilot.
 };
 
 // Initial slots (slot-major, then curve, then little-endian uint32 limbs):
@@ -67,6 +70,7 @@ struct Run {
     std::vector<uint32_t> dictionary_factors;
     unsigned length = 0, digit_bits = 0, passes = 0, tile = 0, completed_bits = 0;
     unsigned dataflow = 0;
+    unsigned blocks_per_sample = 1;
     bool stopped = false;
     size_t owned_bytes = 0, observed_bytes = 0, budget_bytes = 0;
 };

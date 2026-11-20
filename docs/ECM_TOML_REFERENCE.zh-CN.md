@@ -519,7 +519,7 @@ ntt_tight_weighted_bound = true
 
 类型 `bool` · 范围 `[false|true|0|1]` · Worker 覆盖 `[worker.N] ntt_tight_weighted_bound` · 级别 `高级`。
 
-CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的安全短加权计划。false 恢复保守界和实测后端选型。
+CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。自动选型将通过该界的短加权计划与其他合法计划一同实测。false 使用保守界。
 
 ### ntt_tile
 

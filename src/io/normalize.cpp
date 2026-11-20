@@ -313,8 +313,8 @@ static ecm_stage1::Stage1Options normalize_options(const EcmQueueConfig& cfg,
 
 bool validate_cli_mode(const ParsedCli& input, std::string& error) {
     const bool queue = input.pos.empty() && !input.show_gpu_info && !input.show_kernels && !input.tune_ntt;
-    if ((input.tune_exhaustive && !input.tune_ntt) ||
-        (input.tune_ntt && (!input.pos.empty() || input.show_gpu_info || input.show_kernels ||
+    if (((input.tune_exhaustive || input.tune_seconds) && !input.tune_ntt) ||
+        (input.tune_ntt && (input.pos.size() > 1 || input.show_gpu_info || input.show_kernels ||
                            input.has("-gpucurves") || input.has("-save") || input.has("-savea")))) {
         error = "--tune ntt is a separate mode; use --bits to select a width";
         return false;

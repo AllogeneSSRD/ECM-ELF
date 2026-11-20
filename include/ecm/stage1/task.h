@@ -25,6 +25,8 @@ struct Stage1NttOptions {
     bool pad_batch = false;
     bool observe_batch = false; // Runtime tuning uses normally scheduled task batches.
     bool allow_known_factors = true;
+    enum class MixedLayout { Automatic, Twiddle, Pfa, Coalesced };
+    MixedLayout mixed_layout = MixedLayout::Automatic;
 };
 
 struct Stage1ExecutionPreferences {

@@ -91,8 +91,10 @@ GPU execution:
   --bits <P>          With --gpu-info, select one operand width (0 = all tiers).
                        With --tune ntt, select one exponent width (0 = full grid).
   --tune ntt          Search linear/weighted NTT plans and batches through 128 curves.
-                       Store measurements in the shared TOML tune_file.
+                       Optional positional B1 defaults to 128. Use --param e --naf-w W for Edwards NAF.
+                       Store and reuse measured configurations in the shared TOML tune_file.
   --tune-exhaustive   With --tune ntt, measure every eligible batch size.
+  --tune-seconds <N>  Stop starting new measurements after N seconds. Save completed rows.
   --showkernel        List available backend kernel paths, then exit.
 
 Edwards and CPU arithmetic:
@@ -260,6 +262,7 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                                                  "--sub",
                                                  "--special-mult",
                                                  "--tune",
+                                                 "--tune-seconds",
                                                  "--bits",
                                                  "--config",
                                                  "--worker",
@@ -451,6 +454,8 @@ int parse_cli(int argc, char** argv, ParsedCli& input) {
                 input.tune_ntt = true;
             } else if (key == "--tune-exhaustive")
                 input.tune_exhaustive = true;
+            else if (key == "--tune-seconds")
+                input.tune_seconds = unsigned(integer(1, UINT32_MAX));
             else if (key == "--bits")
                 input.gpu_info_bits = uint32_t(integer(0, 100000000));
             else if (key == "--config")

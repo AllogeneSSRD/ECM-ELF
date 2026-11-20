@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import time
+import tomllib
 
 from stage1_checkpoint_decode import ntt_inflight
 from test_edwards_gpu_pipeline import checksum as edwards_checksum, stage1 as edwards_stage1
@@ -271,12 +272,25 @@ def main():
             log = run(work, call, text=data)
             [plan] = ntt_executions(log)
             assert plan == ntt_executions((work / "screen.log").read_text(encoding="utf-8"))[0]
-            assert plan["ntt_type"] == "weighted" and int(plan["ntt_length"]) == length
-            assert plan["ntt_bpw_avg"] == f"{65521 / length:.6f}"
-            assert plan["ntt_bpw"] == plan["ntt_bpw_max"] == str((65521 + length - 1) // length)
-            assert int(plan["ntt_u"]) == upper and int(plan["ntt_q"]) == 2**64 - 2**32 + 1
-            assert ("source=edwards_unsigned_bound" in log) == (mode == "default")
-            assert not (work / "tune.toml").exists()
+            if mode == "default":
+                assert "source=short_tune" in log
+                columns, *values = tomllib.loads((work / "tune.toml").read_text(encoding="utf-8"))["ntt"]["matrix"]
+                rows = [dict(zip(columns,row)) for row in values]
+                assert any(r["length"] == 2560 and r["naf_window"] == 6 for r in rows)
+                winner = max(rows, key=lambda r: r["iter_per_s"])
+                assert int(plan["ntt_length"]) == winner["length"]
+                assert int(plan["ntt_bpw"]) == winner["bpw"]
+                assert plan["ntt_type"] == winner["ntt_type"].removeprefix("stage1_")
+                if winner["length"] == length:
+                    assert int(plan["ntt_u"]) == upper
+            else:
+                assert plan["ntt_type"] == "weighted" and int(plan["ntt_length"]) == length
+                assert int(plan["ntt_u"]) == upper
+                assert not (work / "tune.toml").exists()
+            digits = int(plan["ntt_digits"])
+            assert plan["ntt_bpw_avg"] == f"{65521 / digits:.6f}"
+            assert plan["ntt_bpw"] == plan["ntt_bpw_max"] == str((65521 + digits - 1) // digits)
+            assert int(plan["ntt_q"]) == 2**64 - 2**32 + 1
             points = saved_points(work / "out.save", 65521, 20, True)
             if default_points is None:
                 default_points = points

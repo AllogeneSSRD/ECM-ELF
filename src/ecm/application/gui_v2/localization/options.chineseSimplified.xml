@@ -69,7 +69,7 @@
       <Item id="option_stage1_ntt_convolution" name="auto 按测量选型，缺失时短调优；也可显式选择精确线性卷积或加权循环卷积（IBDWT）。两者都使用 Goldilocks，共用 Stage1 任务及检查点格式。" />
       <Item id="option_stage1_ntt_allow_known_factors" name="1 允许带已知因子的梅森任务使用完整 2^p-1 进行 NTT 运算。曲线构造、因子检查和发布存档使用剩余余因子。0 禁用此承载路径。算法切片仍按余因子的位宽匹配。" />
       <Item id="option_stage1_ntt_pad_batch" name="0 按任务请求的曲线数运行 Stage1 NTT。1 在资源允许时用真实曲线把尾批补齐到优选批量。新增曲线使用独立 sigma，计入结果和符合条件的 Stage2 交接。" />
-      <Item id="option_stage1_ntt_tight_weighted_bound" name="CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。卷积和长度均为自动时，优先选择需通过该界的安全短加权计划。false 恢复保守界和实测后端选型。" />
+      <Item id="option_stage1_ntt_tight_weighted_bound" name="CUDA Stage1 的原生 Edwards NAF 使用更紧的无符号系数界。自动选型将通过该界的短加权计划与其他合法计划一同实测。false 使用保守界。" />
       <Item id="option_stage1_ntt_tune_file" name="共享调优 TOML。Stage1 NTT 计划写入单个 [ntt] 矩阵，与 Stage2 调优数据共存。路径相对配置目录。留空关闭持久化。" />
       <Item id="option_stage1_ntt_memory_mib" name="Stage1 NTT 总显存预算（MiB）。0 使用 CUDA 初始化后空闲显存的 80%；显式预算也受空闲显存限制。" />
       <Item id="option_stage1_ntt_length" name="变换长度。0 推导安全长度，加权卷积包含支持且更短的 radix-5 形状。" />

@@ -171,11 +171,11 @@ linear 和 weighted 按各自 NTT 长度估算每条曲线的工作区和 NAF �
 
 `ntt_profile = 0` 按设备、NTT 长度和活跃曲线数选型；1 选择大 tile，2 选择分块 tile。`ntt_length`、`ntt_bits_per_word`、`ntt_tile` 和 `ntt_outer_radix_limit` 的 0 值使用自动值。`ntt_window_bits = -1` 使用配置档的 Graph 窗口，0 使用直接提交；`ntt_warp_tail = "auto"` 使用配置档的 warp 尾层设置。显式参数覆盖所选档位；长度和数字宽度仍须通过精确性检查。
 
-`ntt_convolution` 默认为 `"auto"`。程序先检查下文所述的 Edwards 短计划，其余情况按设备、长度、digit 位宽、活跃曲线数和显式计划参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt_length=0` 时使用满足约束的较短长度。`ntt_bits_per_word` 可限定最大 digit 位宽。
+`ntt_convolution` 默认为 `"auto"`。程序按当前曲线、预算、实际算术分派和显式参数查共享表。可选形状包括线性、加权二次幂，以及能够缩短变换的加权 radix-5。首次遇到可用的混合长度时，会短测缺失的候选并按实测吞吐选择，即使已有二次幂记录也会补测。不同指数的兼容 NTT 形状可以共用记录。`"linear"` 固定使用定宽线性卷积，`"weighted"` 固定使用精确 IBDWT 加权循环卷积，并在 `ntt_length=0` 时使用满足约束的较短长度。`ntt_bits_per_word` 可限定最大 digit 位宽。
 
 加权卷积支持的混合长度为 2560、5120、10240、20480 和 40960。五档均可自动选长或显式指定。固定加权、采用保守界和自动 tile 时，393217–491520 位选 20480 点，786433–942080 位选 40960 点；原生 Edwards NAF 开启收紧界时按单独的边界选长。显式 `ntt_tile` 以二次幂子变换的层数为上限。日志以 `r5` 表示 radix-5 pass。[完整尺寸表](../performance/STAGE1_MERSENNE_NTT.md#ntt-and-transform-sizes)
 
-`[stage1]` 下的 `ntt_tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，如果卷积和长度均为自动，程序优先采用只有通过收紧界才可使用的短加权计划，日志来源为 `edwards_unsigned_bound`，跳过这次 x-only 调优表查询。其他自动计划继续用共享表。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt_bits_per_word` 限为 25 或把 `ntt_tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
+`[stage1]` 下的 `ntt_tight_weighted_bound` 默认为 `true`。启用原生 Edwards 2XY NAF 后，自动选型将通过收紧界的短加权计划和其他合法计划一同按 NAF 列吞吐比较。固定 `"weighted"` 且长度为 0 时，程序选择通过检查的最短长度。M65521 可用 2560 点，把 `ntt_bits_per_word` 限为 25 或把 `ntt_tight_weighted_bound` 设为 `false`，加权计划改用 4096 点。强制指定不合格长度时报错。x-only 和异常曲线的 x-only 重放按保守界准入。 [配置参考](../ECM_TOML_REFERENCE.zh-CN.md#ntt_tight_weighted_bound) · [系数界](../architecture/NTT.md#stage1-加权卷积的无符号系数界) · [实测](../performance/STAGE1_MERSENNE_NTT.md#双卡加权自动选长矩阵)
 
 原生 Edwards 加权计划通过四倍系数界检查时，可在频域合并 2XY 倍点的第一层。启用后，`ntt_u` 显示四倍乘积系数上界。超过此界时，原长度仍可单独计算四个乘积。`ntt_tight_weighted_bound = false` 同时关闭频域融合。 [2XY 融合与准入](../architecture/NTT.md#edwards-2xy-第一层频域融合)
 
@@ -186,11 +186,7 @@ linear 和 weighted 按各自 NTT 长度估算每条曲线的工作区和 NAF �
 .\ecm_cuda.exe --config .\ecm.toml --tune ntt --bits 8191
 ```
 
-不带 `--bits` 时用 16 个代表指数生成测试形状，覆盖三个默认混合档。调优按实际 NTT 长度升序执行，每个长度内先测适用的 linear，再测 weighted，各自完成批量搜索后才进入下一长度。每个候选先执行 100 步预热，再重置输入计时。共享表保存单曲线及各批量的计划、吞吐和显存，指数只用于生成测试数据。命令输出峰值批量和达到本轮峰值吞吐 95% 的最小实测批量。任务曲线数仍由 `-gpucurves` 或队列行指定。`--tune-exhaustive` 逐一测量 1–128 档。调优使用合成点和短标量，结果只写调优表。
-
-调优控制台与 `log_file` 开头单独列出 `ntt_type` 的字段名，实测行使用 `length max_exp ntt_type batch iter/s` 格式。`max_exp` 是该打包参数的安全指数上限。`ntt_type` 依次编码卷积（0=linear，1=weighted）、tile 位数、外层 radix 上限、Graph 位数、warp 尾层开关、正向各趟的层数和逆向各趟的层数。每个实测形状以 `Best` 标记峰值吞吐，推荐档与峰值档不同时另显示 `95%` 行。
-
-16384 点加权 NTT 的单曲线自动调优会实测 tile 12 和 `tile=10, outer_max=2`。显式 tile、outer 或配置档继续约束可用计划，已有匹配的 tune 行可直接复用。需要在已有条件上重新选型时可执行 `--tune ntt --bits <p>`。见 [单曲线调优对照](../performance/STAGE1_MERSENNE_NTT.md#加权归约与-16384-点单曲线调优)。
+可用 `--tune ntt --bits 65521 --param e --naf-w 6 128` 按 B1=128 调优原生 Edwards。末尾 B1 可省略，默认 128。省略 `--bits` 会依次规划 19 个代表指数，最大 1048573。输出包括各长度容量、单曲线最快方案、并行峰值、达到峰值 95% 的最小实测批量，以及新增测量和缓存命中数。显式配置的卷积、长度、tile、outer、Graph 或 profile 仍约束搜索。`--tune-exhaustive` 逐一测量各候选在预算内的批量。`--tune-seconds N` 限制启动新测量的墙钟时间，进行中的测量会完成并写表。再次执行相同命令可接着补测。生产任务的曲线数由 `-gpucurves` 或队列行指定。[计时与跨指数复用](../performance/STAGE1_MERSENNE_NTT.md#批量调优与显存)
 
 运行时的 `stage1_ntt_batch_selection` 标明拆批选型来源，`stage1_ntt_batch` 显示本批偏移、总数、实际曲线数和计划容量。`stage1_ntt_production_sample` 报告有效曲线数与实测吞吐。`stage1_ntt_selection` 记录卷积计划来源，`stage1_ntt_plan` 记录 `bpw_avg`、`bpw_max`、`U`、`q`，以及正逆向各 pass 的层数、tile 的线程数与动态共享内存、外层融合上限和 Graph 窗口。`stage1_ntt_memory` 记录显式分配、观测增量和预算。控制台与 `log_file` 同时记录计划和计时。
 

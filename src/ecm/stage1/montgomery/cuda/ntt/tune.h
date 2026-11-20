@@ -16,7 +16,7 @@ struct BatchMemory {
 };
 std::string tune_shape_descriptor(const Plan& plan);
 
-int tune_command(int device, const ecm_stage1::Stage1NttOptions&, unsigned p, bool exhaustive);
+int tune_command(const ecm_stage1::Stage1Options&, double b1, unsigned p, bool exhaustive, unsigned seconds);
 ecm_stage1::Stage1NttOptions select_tuned_plan(const ecm_stage1::Stage1Request&, unsigned p,
                                              unsigned curves, const ecm_stage1::Stage1NttOptions&,
                                              unsigned naf_window, bool require_capacity, BatchMemory&);
