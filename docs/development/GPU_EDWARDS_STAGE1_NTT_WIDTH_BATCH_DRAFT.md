@@ -1,5 +1,9 @@
 # GPU NTT Stage1 Edwards1：扩宽与批量调优规划
 
+## 0.71.3 默认并行数保留验证
+
+固定线性卷积、p=2000、B1=16、w=6、profile=1、time=0.05，省略 batch。两卡的实际容量都是 128。每张卡冷表均测量 18 条，落盘 5 条粗测或精测记录。RTX 4070 Ti 只保留批量 1、118、128，RTX 4060 Laptop 只保留 1、115、128。两卡的峰值均出现在 128，热表各复用 5 条、零新增，表文件逐字节相同。[4070 Ti 冷热日志](../../data/experiments/ntt_compact_0713/cap128_gpu0/) · [4060 Laptop 冷热日志](../../data/experiments/ntt_compact_0713/cap128_gpu1/) · [组别含义](../usage/TUNE.md#采样与吞吐)
+
 ## 0.71.2 Edwards NAF 分段采样与跨 B1 选型
 
 以 M63487、线性 8192 点、tile 12、outer 4 为固定条件，在 RTX 4070 Ti 和 RTX 4060 Laptop 上分别建立 B1=100、500、10000 的独立空表。每张表比较 w=6、7、8，batch=1、2，每个 Graph 4、8、16、32、64 步。每个 B1 含 6 条粗测和 30 条精测，正式组分别为 3、5 组，每组目标 100 ms。吞吐分母只加正式组回放的 CUDA event 时间。驱动 610.88，sm89 构建 SHA-256 为 `280ef2de401dc71d350e094d2a91f14a875d29c7e11856bfa7228449b816a40d`。[验证入口](../../tools/test/test_stage1_ntt_naf_sampling.py) · [字段与计时](../usage/TUNE.md#采样与吞吐)

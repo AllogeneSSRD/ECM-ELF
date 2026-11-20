@@ -34,7 +34,7 @@ def main():
         return result.stdout
 
     def tune(name, p, limit, exhaustive=False):
-        flags = ["--tune", "ntt", "--bits", str(p), "--naf-w", "6", "32"]
+        flags = ["--tune", "ntt,batch=1-128", "--bits", str(p), "--naf-w", "6", "32"]
         if exhaustive:
             flags.insert(2, "--tune-exhaustive")
         log = run(name, limit, flags)
@@ -90,7 +90,7 @@ def main():
         assert int(actual[key]) == winner[column]
     run("linear", 6, flags, expression, 'ntt_convolution = "linear"\n')
     assert saved_points(out/"production/out.save",p,32,True) == saved_points(out/"linear/out.save",p,32,True)
-    stronger = ["--tune","ntt,time=2","--bits",str(p),"--naf-w","6"]
+    stronger = ["--tune","ntt,batch=1-128,time=2","--bits",str(p),"--naf-w","6"]
     limited = run("wall_budget", 6, [*stronger,"--tune-seconds","1","64"])
     assert "status=time_limit" in limited
     partial = [r for r in rows() if r["b1"] == 64]

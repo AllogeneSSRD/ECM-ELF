@@ -47,7 +47,10 @@ void parse_tune(std::string spec, ecm_stage1::NttTuneGrid& grid) {
         } else if (key == "exp") grid.exp = range(stage1_ntt_min_exponent, stage1_ntt_max_exponent);
         else if (key == "length") grid.length = range(2, stage1_ntt_max_length);
         else if (key == "naf") grid.naf = value == "0" ? TuneRange{} : range(2, 12);
-        else if (key == "batch") grid.batch = range(1, stage1_ntt_max_curves);
+        else if (key == "batch") {
+            grid.batch = range(1, stage1_ntt_max_curves);
+            grid.batch_explicit = true;
+        }
         else if (key == "time") {
             size_t used = 0;
             const double ms = std::round(100 * std::stod(value, &used));

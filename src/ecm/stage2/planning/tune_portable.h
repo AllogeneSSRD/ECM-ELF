@@ -254,6 +254,12 @@ inline void validate_stage1_ntt(const Fields &s) {
            real(s,"stddev_seconds")<0)
             throw std::runtime_error("invalid Stage1 tune window");
     }
+    if(s.count("batch_scope") || s.count("batch_search") || s.count("batch_roles")) {
+        const auto roles=optional_uint(s,"batch_roles",0);
+        if(!s.count("sample_target_ms") || !s.count("batch_scope") || text(s,"batch_scope").empty() ||
+           roles>15 || ((roles&1) && batch!=1))
+            throw std::runtime_error("invalid Stage1 batch selection");
+    }
 }
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
 inline bool runtime_observation(const Fields &sample) {
@@ -653,6 +659,8 @@ struct Profile {
                                 "passes_forward","forward","inverse","graph_bits","warp_tail"})
                 if(required(old,key)!=required(sample,key))return false;
             if(is_runtime_stage1_ntt(old)!=runtime)return false;
+            if(old.count("batch_scope")!=sample.count("batch_scope") ||
+               (sample.count("batch_scope") && required(old,"batch_scope")!=required(sample,"batch_scope")))return false;
             if(old.count("sample_target_ms")!=sample.count("sample_target_ms"))return false;
             if(old.count("benchmark_kind")!=sample.count("benchmark_kind") ||
                (sample.count("benchmark_kind") && required(old,"benchmark_kind")!=required(sample,"benchmark_kind")))return false;

@@ -47,6 +47,44 @@ def main():
             assert "conflict" in log and "length" in log and "exp" in log
     assert not database.exists()
 
+    database = out / "compact.toml"
+    settings = "ntt_profile = 1\nnaf_memory_mb = 3"
+    automatic = ["-tune", "ntt,exp=3557,naf=6,batch=,time=0.05", "--tune-exhaustive", "16"]
+    cold = run("compact", automatic, settings=settings)
+    compact = rows()
+    reports = dict((role, int(b)) for role, b in re.findall(r"(Single|Max|Best|95%) \d+ \d+ \S+ (\d+)c ", cold))
+    assert set(reports) == {"Single", "Max", "Best", "95%"}
+    assert reports["Single"] == 1 and reports["Max"] == int(re.search(r"capacity=(\d+)", cold)[1]) > 4
+    assert {r["batch"] for r in compact} == set(reports.values())
+    for role, bit in (("Single", 1), ("Max", 2), ("Best", 4), ("95%", 8)):
+        assert [r["batch"] for r in compact if r["batch_roles"] & bit] == [reports[role]]
+    snapshot = database.read_bytes()
+    hot = run("compact_hot", automatic, settings=settings)
+    assert "measured=0 " in hot and database.read_bytes() == snapshot
+    assert re.findall(r"(?:Single|Max|Best|95%) [^\n]+", hot) == re.findall(r"(?:Single|Max|Best|95%) [^\n]+", cold)
+    compatible = [arg.replace("3557", "3558") for arg in automatic[:-1]] + ["500"]
+    reused = run("compact_other_p_b1", compatible, settings=settings)
+    assert "measured=0 " in reused and "stage1_ntt_naf_sample" not in reused and database.read_bytes() == snapshot
+
+    explicit = ["-tune", "ntt,exp=3557,naf=6,batch=1-128,time=0.05", "--tune-exhaustive", "16"]
+    run("compact_explicit", explicit, settings=settings)
+    manual = [r for r in rows() if not r["batch_scope"]]
+    assert {r["batch"] for r in manual if r["repeats"] == 5} == set(range(1,reports["Max"]+1))
+    run("compact_grow", automatic, settings=settings.replace("mb = 3", "mb = 5"))
+    assert len({r["batch"] for r in rows() if r["batch_scope"]}) <= 4
+    assert [r for r in rows() if not r["batch_scope"]] == manual
+
+    database = out / "interrupted.toml"
+    timed = ["-tune", "ntt,exp=3557,naf=6,time=1", "--tune-exhaustive"]
+    stopped = run("compact_stop", [*timed, "--tune-seconds", "2", "16"], settings=settings)
+    assert "status=time_limit" in stopped and len({r["batch"] for r in rows()}) <= 4
+    checkpoints = list(out.glob("interrupted.toml.*.partial"))
+    assert len(checkpoints) == 1
+    resumed = run("compact_resume", [*timed, "16"], settings=settings)
+    counts = re.search(r"measured=(\d+) reused=(\d+)", resumed)
+    assert counts and all(int(n) > 0 for n in counts.groups())
+    assert len({r["batch"] for r in rows()}) <= 4 and not checkpoints[0].exists()
+
     database = out / "range.toml"
     crossing = ["-tune", "ntt,exp=3554-3560,naf=6,batch=1,time=0.01", "16"]
     for name in ("crossing_cold", "crossing_hot"):
